@@ -15,6 +15,9 @@ func ContextWithRequestID(ctx context.Context, requestID string) context.Context
 
 // RequestID 从 ctx 中读取请求 ID；如果不存在，则返回空字符串。
 func RequestID(ctx context.Context) string {
-	requestID := ctx.Value(requestIDKey{}).(string)
+	requestID, ok := ctx.Value(requestIDKey{}).(string)
+	if !ok {
+		return ""
+	}
 	return requestID
 }

@@ -18,7 +18,7 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	cfg := config.Load()
-	handler := httpapi.NewRouter()
+	handler := httpapi.NewRouter(logger)
 
 	server := &http.Server{
 		Addr:         cfg.HTTPAddr,

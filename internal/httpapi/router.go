@@ -1,7 +1,7 @@
 package httpapi
 
 import (
-	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -10,16 +10,34 @@ import (
 	"github.com/ThankCat/unio-api/internal/middleware"
 )
 
-func NewRouter() http.Handler {
+func NewRouter(logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
+	r.Use(middleware.Logger(logger))
+	r.Use(middleware.Recoverer(logger))
+
+	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		_ = httpx.WriteError(
+			w,
+			http.StatusNotFound,
+			"not_found",
+			"route not found",
+		)
+	})
+	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+		_ = httpx.WriteError(
+			w,
+			http.StatusMethodNotAllowed,
+			"method_not_allowed",
+			"method not allowed",
+		)
+	})
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Printf("RequestID is %v\n", httpx.RequestID(r.Context()))
-
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_ = httpx.WriteJSON(w, http.StatusOK, map[string]string{
+			"status": "ok",
+		})
 	})
 
 	return r
