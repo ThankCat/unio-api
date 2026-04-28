@@ -10,6 +10,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/middleware"
 )
 
+// NewRouter 创建 API server 使用的 HTTP handler。
 func NewRouter(logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 

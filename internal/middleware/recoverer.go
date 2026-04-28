@@ -7,6 +7,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/httpx"
 )
 
+// Recoverer 捕获 handler 中的 panic，记录错误日志，并返回统一的 500 JSON 响应。
 func Recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
