@@ -588,3 +588,34 @@ DTO 是 Data Transfer Object。
 - 不过度复杂化
 - 涉及取舍时解释原因
 - 能给建议时给明确建议
+
+## 代码提交规则
+
+请生成符合以下规范的 Git 中文提交信息：
+
+**格式要求：**
+
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+- `type` 必须是以下之一：feat / fix / docs / style / refactor / test / chore
+- `scope` 可选，表示影响范围（如模块名）
+- `subject` 一行总结（不超过 50 字符，不以句号结尾）
+- `body` 可选，描述变更原因和细节（每行不超过 72 字符）
+- `footer` 可选，用于标注 BREAKING CHANGE 或 issue（如 Closes #123）
+
+**示例：**
+
+```
+feat(browser): add tab switch support
+
+implement tab matching by title and url
+support include and equal modes
+
+Closes #12
+```
