@@ -12,6 +12,8 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/config"
 	"github.com/ThankCat/unio-api/internal/httpapi"
+	"github.com/ThankCat/unio-api/internal/redis"
+	"github.com/ThankCat/unio-api/internal/store"
 )
 
 func main() {
@@ -25,6 +27,27 @@ func main() {
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.Log.Level}))
+
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer startupCancel()
+
+	// DB 启动期先检查数据库可用，避免服务带病启动。
+	pgPool, err := store.OpenPostgres(startupCtx, cfg.DB.URL)
+	if err != nil {
+		logger.Error("open postgres failed", "error", err)
+		os.Exit(1)
+	}
+	defer pgPool.Close()
+	logger.Info("postgres connected")
+
+	// Redis
+	redisClient, err := redis.OpenRedis(startupCtx, cfg.Redis)
+	if err != nil {
+		logger.Error("open redis failed", "error", err)
+		os.Exit(1)
+	}
+	defer redisClient.Close()
+	logger.Info("redis connected", "addr", cfg.Redis.Addr, "db", cfg.Redis.DB)
 
 	handler := httpapi.NewRouter(logger)
 	server := &http.Server{
