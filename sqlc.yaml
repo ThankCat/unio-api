@@ -1,10 +1,10 @@
-version: 2
+version: "2"
 sql:
   - engine: postgresql
-    schema: migrations # 让 sqlc 从 migration SQL 理解表结构
-    queries: sql/queries # 业务 SQL 查询放这里
+    schema: migrations
+    queries: sql/queries
     gen:
       go:
         package: sqlc
-        out: internal/store/sqlc # 生成代码放内部 store 层
-        sql_package: pgx/v5 # pgx 技术栈
+        out: internal/store/sqlc
+        sql_package: pgx/v5

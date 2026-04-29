@@ -32,7 +32,6 @@ func TestSchemaHealthChecksQueries(t *testing.T) {
 	}
 
 	queries := sqlc.New(pool)
-
 	name := fmt.Sprintf("sqlc-test-%d", time.Now().UnixNano())
 
 	created, err := queries.CreateSchemaHealthCheck(ctx, name)
