@@ -1,12 +1,15 @@
-package sqlc
+package sqlc_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/ThankCat/unio-api/internal/store/sqlc"
 )
 
 func TestSchemaHealthChecksQueries(t *testing.T) {
@@ -28,9 +31,9 @@ func TestSchemaHealthChecksQueries(t *testing.T) {
 		t.Fatalf("ping postgres: %v", err)
 	}
 
-	queries := New(pool)
+	queries := sqlc.New(pool)
 
-	name := "sqlc-test"
+	name := fmt.Sprintf("sqlc-test-%d", time.Now().UnixNano())
 
 	created, err := queries.CreateSchemaHealthCheck(ctx, name)
 	if err != nil {
@@ -42,7 +45,7 @@ func TestSchemaHealthChecksQueries(t *testing.T) {
 		t.Fatalf("get schema health check by name: %v", err)
 	}
 
-	if got.ID != created.ID {
+	if created.ID != got.ID {
 		t.Fatalf("expected id %d, got %d", created.ID, got.ID)
 	}
 

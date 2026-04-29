@@ -8,6 +8,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/httpx"
 )
 
+// TODO: 在实现 SSE 前补齐 http.Flusher 等可选接口的转发。
 type statusRecorder struct {
 	http.ResponseWriter
 	status      int

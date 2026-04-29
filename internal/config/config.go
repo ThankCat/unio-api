@@ -55,7 +55,7 @@ func Load() (Config, error) {
 			URL: getEnv("DATABASE_URL", ""),
 		},
 		Redis: RedisConfig{
-			Addr:     getEnv("REDIS_ADDR", "localhost:6379"),
+			Addr:     getEnv("REDIS_ADDR", "localhost:6380"),
 			Password: getEnv("REDIS_PASSWORD", ""),
 			DB:       redisDB,
 		},
