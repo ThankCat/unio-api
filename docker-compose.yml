@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: unio-postgres
+    environment:
+      POSTGRES_DB: unio
+      POSTGRES_USER: unio
+      POSTGRES_PASSWORD: unio_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      # 本地开发数据持久化，避免容器重启后数据丢失。
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U unio -d unio"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: unio-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    volumes:
+      # Redis AOF 数据持久化；计费最终事实仍然不能依赖 Redis。
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD","redis-cli","ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
+  redis_data:
