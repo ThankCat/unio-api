@@ -15,13 +15,20 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	bootstrapLogger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		bootstrapLogger.Error("load config failed", "error", err)
+
+		os.Exit(1)
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.Log.Level}))
+
 	handler := httpapi.NewRouter(logger)
-
 	server := &http.Server{
-		Addr:         cfg.HTTPAddr,
+		Addr:         cfg.HTTP.Addr,
 		Handler:      handler,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
@@ -31,7 +38,7 @@ func main() {
 	errCh := make(chan error, 1)
 
 	go func() {
-		logger.Info("server starting", "addr", cfg.HTTPAddr)
+		logger.Info("server starting", "addr", cfg.HTTP.Addr)
 
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
