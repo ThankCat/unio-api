@@ -8,8 +8,39 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type ApiKey struct {
+	ID         int64
+	ProjectID  int64
+	Name       string
+	KeyPrefix  string
+	KeyHash    string
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type Project struct {
+	ID        int64
+	UserID    int64
+	Name      string
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
 type SchemaHealthCheck struct {
 	ID        int64
 	Name      string
 	CreatedAt pgtype.Timestamptz
+}
+
+type User struct {
+	ID           int64
+	Email        string
+	PasswordHash string
+	DisplayName  string
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
