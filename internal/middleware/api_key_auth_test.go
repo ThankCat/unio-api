@@ -78,10 +78,11 @@ func TestAPIKeyAuthAuthenticatorError(t *testing.T) {
 	}
 }
 
-// TODO:需要理解这个测试方法
 func TestAPIKeyAuthSuccess(t *testing.T) {
 	expectedPrincipal := &auth.APIKeyPrincipal{
-		// 这里按你项目里 APIKeyPrincipal 的真实字段填
+		APIKeyID:  1,
+		ProjectID: 1,
+		KeyPrefix: "unio_sk_XhE8wL5D",
 	}
 
 	authenticator := &fakeAPIKeyAuthenticator{
