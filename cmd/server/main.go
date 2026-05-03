@@ -10,10 +10,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ThankCat/unio-api/internal/auth"
 	"github.com/ThankCat/unio-api/internal/config"
 	"github.com/ThankCat/unio-api/internal/httpapi"
 	"github.com/ThankCat/unio-api/internal/redis"
 	"github.com/ThankCat/unio-api/internal/store"
+	"github.com/ThankCat/unio-api/internal/store/sqlc"
 )
 
 func main() {
@@ -49,7 +51,12 @@ func main() {
 	defer redisClient.Close()
 	logger.Info("redis connected", "addr", cfg.Redis.Addr, "db", cfg.Redis.DB)
 
-	handler := httpapi.NewRouter(logger)
+	queries := sqlc.New(pgPool)
+	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
+	handler := httpapi.NewRouter(httpapi.RouterDeps{
+		Logger:              logger,
+		APIKeyAuthenticator: apiKeyAuthenticator,
+	})
 	server := &http.Server{
 		Addr:         cfg.HTTP.Addr,
 		Handler:      handler,

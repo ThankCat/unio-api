@@ -10,13 +10,18 @@ import (
 	"github.com/ThankCat/unio-api/internal/middleware"
 )
 
+type RouterDeps struct {
+	Logger              *slog.Logger
+	APIKeyAuthenticator middleware.APIKeyAuthenticator
+}
+
 // NewRouter 创建 API server 使用的 HTTP handler。
-func NewRouter(logger *slog.Logger) http.Handler {
+func NewRouter(deps RouterDeps) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
-	r.Use(middleware.Logger(logger))
-	r.Use(middleware.Recoverer(logger))
+	r.Use(middleware.Logger(deps.Logger))
+	r.Use(middleware.Recoverer(deps.Logger))
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		_ = httpx.WriteError(
@@ -38,6 +43,17 @@ func NewRouter(logger *slog.Logger) http.Handler {
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		_ = httpx.WriteJSON(w, http.StatusOK, map[string]string{
 			"status": "ok",
+		})
+	})
+
+	r.Route("/v1", func(r chi.Router) {
+		r.Use(middleware.APIKeyAuth(deps.APIKeyAuthenticator))
+
+		r.Get("/models", func(w http.ResponseWriter, r *http.Request) {
+			_ = httpx.WriteJSON(w, http.StatusOK, map[string]any{
+				"object": "list",
+				"data":   []any{},
+			})
 		})
 	})
 
