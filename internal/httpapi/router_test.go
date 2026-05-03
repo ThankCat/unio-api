@@ -193,3 +193,32 @@ func TestRouterModelsSuccess(t *testing.T) {
 		t.Fatalf("expected token %q, got %q", "unio_sk_test", authenticator.token)
 	}
 }
+
+func TestRouterModelsRequiresAPIKey(t *testing.T) {
+	authenticator := &fakeAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{
+			APIKeyID:  1,
+			ProjectID: 1,
+			KeyPrefix: "unio_sk_test",
+		},
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	handler := NewRouter(RouterDeps{
+		APIKeyAuthenticator: authenticator,
+		Logger:              logger,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+
+	if authenticator.token != "" {
+		t.Fatalf("expected authenticator not to receive token, got %q", authenticator.token)
+	}
+}
