@@ -1,5 +1,13 @@
 # AGENT.md — Unio API 项目指南
 
+## 重要提示
+- 没有得到用户允许, 不得私自修改代码
+- 你只能做 review 和测试检查
+- 你提供的代码必须添加注释
+- 注释规则:
+  - 复杂逻辑添加注释
+  - 接口, 结构体, 方法 必须添加注释
+
 ## 项目身份
 
 项目名称：
@@ -288,8 +296,8 @@ Provider adapter 应该隐藏上游差异。
 
 ```go
 type Provider interface {
-    ChatCompletions(ctx context.Context, req ChatRequest) (*ChatResponse, error)
-    StreamChatCompletions(ctx context.Context, req ChatRequest) (ChatStream, error)
+  ChatCompletions(ctx context.Context, req ChatRequest) (*ChatResponse, error)
+  StreamChatCompletions(ctx context.Context, req ChatRequest) (ChatStream, error)
 }
 ```
 
@@ -550,7 +558,6 @@ DTO 是 Data Transfer Object。
 教学时假设：
 
 - 不是完全编程零基础。
-- 需要对代码添加注释
 - 还没有大型 Go 后端系统经验。
 - 需要清楚解释 Go 工程化实践。
 - 需要重点解释：
