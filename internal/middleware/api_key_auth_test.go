@@ -9,12 +9,14 @@ import (
 	"github.com/ThankCat/unio-api/internal/auth"
 )
 
+// fakeAPIKeyAuthenticator 是 middleware 测试使用的认证器替身。
 type fakeAPIKeyAuthenticator struct {
 	principal *auth.APIKeyPrincipal
 	err       error
 	token     string
 }
 
+// AuthenticateAPIKey 记录收到的明文 token，并返回测试预设的认证结果。
 func (a *fakeAPIKeyAuthenticator) AuthenticateAPIKey(rctx context.Context, plaintext string) (*auth.APIKeyPrincipal, error) {
 	a.token = plaintext
 	return a.principal, a.err

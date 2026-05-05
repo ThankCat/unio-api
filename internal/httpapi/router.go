@@ -1,10 +1,8 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -12,6 +10,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/middleware"
 )
 
+// RouterDeps 保存构建 HTTP router 所需的外部依赖。
 type RouterDeps struct {
 	Logger              *slog.Logger
 	APIKeyAuthenticator middleware.APIKeyAuthenticator
@@ -51,52 +50,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(deps.APIKeyAuthenticator))
 
-		r.Get("/models", func(w http.ResponseWriter, r *http.Request) {
-			_ = httpx.WriteJSON(w, http.StatusOK, map[string]any{
-				"object": "list",
-				"data":   []any{},
-			})
-		})
-
-		r.Post("/chat/completions", func(w http.ResponseWriter, r *http.Request) {
-			var req ChatCompletionRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				_ = httpx.WriteError(w, http.StatusBadRequest, "invalid_request", "invalid json body")
-				return
-			}
-
-			if req.Model == "" {
-				_ = httpx.WriteError(w, http.StatusBadRequest, "invalid_request", "model is required")
-				return
-			}
-
-			if len(req.Messages) == 0 {
-				_ = httpx.WriteError(w, http.StatusBadRequest, "invalid_request", "messages is required")
-				return
-			}
-
-			_ = httpx.WriteJSON(w, http.StatusOK, ChatCompletionResponse{
-				ID:      "chatcmpl_mock",
-				Object:  "chat.completion",
-				Created: time.Now().Unix(),
-				Model:   req.Model,
-				Choices: []ChatCompletionChoice{
-					{
-						Index: 0,
-						Message: ChatMessage{
-							Role:    "assistant",
-							Content: "mock response",
-						},
-						FinishReason: "stop",
-					},
-				},
-				Usage: ChatCompletionUsage{
-					PromptTokens:     0,
-					CompletionTokens: 0,
-					TotalTokens:      0,
-				},
-			})
-		})
+		r.Get("/models", handleModels)
+		r.Post("/chat/completions", handleChatCompletions)
 	})
 
 	return r

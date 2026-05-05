@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// Config 保存服务启动所需的全部配置。
 type Config struct {
 	HTTP  HTTPConfig
 	Log   LogConfig
@@ -15,24 +16,29 @@ type Config struct {
 	Redis RedisConfig
 }
 
+// HTTPConfig 保存 HTTP server 监听配置。
 type HTTPConfig struct {
 	Addr string
 }
 
+// LogConfig 保存结构化日志配置。
 type LogConfig struct {
 	Level slog.Level
 }
 
+// DBConfig 保存 PostgreSQL 连接配置。
 type DBConfig struct {
 	URL string
 }
 
+// RedisConfig 保存 Redis client 连接配置。
 type RedisConfig struct {
 	Addr     string
 	Password string
 	DB       int
 }
 
+// Load 从环境变量加载配置，并对需要解析的字段做启动期校验。
 func Load() (Config, error) {
 	redisDB, err := getEnvInt("REDIS_DB", 0)
 	if err != nil {
@@ -62,6 +68,7 @@ func Load() (Config, error) {
 	}, nil
 }
 
+// getEnv 读取字符串环境变量；未设置时返回 fallback。
 func getEnv(key string, fallback string) string {
 	value := os.Getenv(key)
 	if value == "" {

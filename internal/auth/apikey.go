@@ -11,32 +11,37 @@ import (
 )
 
 var (
-	ErrMissingAPIKey  = errors.New("missing api key")
-	ErrInvalidAPIKey  = errors.New("invalid api key")
-	ErrAPIKeyRevoked  = errors.New("api key revoked")
+	// ErrMissingAPIKey 表示请求没有提供 API Key。
+	ErrMissingAPIKey = errors.New("missing api key")
+	// ErrInvalidAPIKey 表示 API Key 不存在或无法匹配。
+	ErrInvalidAPIKey = errors.New("invalid api key")
+	// ErrAPIKeyRevoked 表示 API Key 已被永久吊销。
+	ErrAPIKeyRevoked = errors.New("api key revoked")
+	// ErrAPIKeyDisabled 表示 API Key 被临时禁用。
 	ErrAPIKeyDisabled = errors.New("api key disabled")
-	ErrAPIKeyExpired  = errors.New("api key expired")
+	// ErrAPIKeyExpired 表示 API Key 已经过期。
+	ErrAPIKeyExpired = errors.New("api key expired")
 )
 
-// APIKeyPrincipal 表示 API Key 认证成功后的请求身份
+// APIKeyPrincipal 表示 API Key 认证成功后的请求身份。
 type APIKeyPrincipal struct {
 	APIKeyID  int64
 	ProjectID int64
 	KeyPrefix string
 }
 
-// APIKeyStore 定义 API Key 认证所需的存储查询能力
+// APIKeyStore 定义 API Key 认证所需的存储查询能力。
 type APIKeyStore interface {
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (sqlc.ApiKey, error)
 }
 
-// APIKeyAuthenticator 负责校验 API Key 并生成认证身份
+// APIKeyAuthenticator 负责校验 API Key 并生成认证身份。
 type APIKeyAuthenticator struct {
 	store APIKeyStore
 	now   func() time.Time
 }
 
-// NewAPIKeyAuthenticator 创建 APIKeyAuthenticator
+// NewAPIKeyAuthenticator 创建 APIKeyAuthenticator。
 func NewAPIKeyAuthenticator(store APIKeyStore) *APIKeyAuthenticator {
 	return &APIKeyAuthenticator{
 		store: store,

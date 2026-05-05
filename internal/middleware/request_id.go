@@ -23,6 +23,7 @@ func RequestID(next http.Handler) http.Handler {
 	})
 }
 
+// newRequestID 生成 16 字节随机请求 ID；随机源失败时返回兜底值。
 func newRequestID() string {
 	var b [16]byte
 
