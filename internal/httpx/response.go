@@ -30,11 +30,11 @@ func WriteJSON(w http.ResponseWriter, status int, v any) error {
 
 // WriteError 写入统一格式的 JSON 错误响应。
 func WriteError(w http.ResponseWriter, status int, code string, message string) error {
-	errbody := ErrorResponse{
+	errBody := ErrorResponse{
 		Error: ErrorBody{
 			Code:    code,
 			Message: message,
 		},
 	}
-	return WriteJSON(w, status, errbody)
+	return WriteJSON(w, status, errBody)
 }

@@ -1,17 +1,21 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ThankCat/unio-api/internal/auth"
 	"github.com/ThankCat/unio-api/internal/httpx"
 )
+
+var logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 type fakeAPIKeyAuthenticator struct {
 	principal *auth.APIKeyPrincipal
@@ -25,7 +29,6 @@ func (a *fakeAPIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaint
 }
 
 func TestRouterHealthz(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	handle := NewRouter(RouterDeps{
 		Logger: logger,
 		APIKeyAuthenticator: &fakeAPIKeyAuthenticator{
@@ -63,7 +66,6 @@ func TestRouterHealthz(t *testing.T) {
 }
 
 func TestRouterNotFound(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	handle := NewRouter(RouterDeps{
 		Logger: logger,
 		APIKeyAuthenticator: &fakeAPIKeyAuthenticator{
@@ -104,7 +106,6 @@ func TestRouterNotFound(t *testing.T) {
 }
 
 func TestRouterMethodNotAllowed(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	handle := NewRouter(RouterDeps{
 		Logger: logger,
 		APIKeyAuthenticator: &fakeAPIKeyAuthenticator{
@@ -145,7 +146,6 @@ func TestRouterMethodNotAllowed(t *testing.T) {
 }
 
 func TestRouterRequestID(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	handle := NewRouter(RouterDeps{
 		Logger: logger,
 		APIKeyAuthenticator: &fakeAPIKeyAuthenticator{
@@ -220,5 +220,176 @@ func TestRouterModelsRequiresAPIKey(t *testing.T) {
 
 	if authenticator.token != "" {
 		t.Fatalf("expected authenticator not to receive token, got %q", authenticator.token)
+	}
+}
+
+func TestRouterV1ChatCompletionWithMissingAPIKey(t *testing.T) {
+	authenticator := &fakeAPIKeyAuthenticator{principal: &auth.APIKeyPrincipal{
+		APIKeyID:  1,
+		ProjectID: 1,
+		KeyPrefix: "unio_sk_test",
+	}}
+
+	handler := NewRouter(RouterDeps{
+		Logger:              logger,
+		APIKeyAuthenticator: authenticator,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestRouterV1ChatCompletionWithAPIKey(t *testing.T) {
+	authenticator := &fakeAPIKeyAuthenticator{principal: &auth.APIKeyPrincipal{
+		APIKeyID:  1,
+		ProjectID: 1,
+		KeyPrefix: "unio_sk_test",
+	}}
+
+	handler := NewRouter(RouterDeps{
+		Logger:              logger,
+		APIKeyAuthenticator: authenticator,
+	})
+
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	if err := json.NewEncoder(buf).Encode(reqBody); err != nil {
+		t.Fatalf("encode request body: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+}
+
+func TestRouterV1ChatCompletionWithInvalidBody(t *testing.T) {
+	authenticator := &fakeAPIKeyAuthenticator{principal: &auth.APIKeyPrincipal{
+		APIKeyID:  1,
+		ProjectID: 1,
+		KeyPrefix: "unio_sk_test",
+	}}
+
+	handler := NewRouter(RouterDeps{
+		Logger:              logger,
+		APIKeyAuthenticator: authenticator,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{"))
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+
+	recBody := httpx.ErrorResponse{}
+	if err := json.NewDecoder(rec.Body).Decode(&recBody); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+
+	if recBody.Error.Code != "invalid_request" {
+		t.Fatalf("expected error code %q, got %q", "invalid_request", recBody.Error.Code)
+	}
+	if recBody.Error.Message != "invalid json body" {
+		t.Fatalf("expected message %q, got %q", "invalid json body", recBody.Error.Message)
+	}
+
+}
+
+func TestRouterV1ChatCompletionWithMissingModel(t *testing.T) {
+	authenticator := &fakeAPIKeyAuthenticator{principal: &auth.APIKeyPrincipal{
+		APIKeyID:  1,
+		ProjectID: 1,
+		KeyPrefix: "unio_sk_test",
+	}}
+	handler := NewRouter(RouterDeps{
+		Logger:              logger,
+		APIKeyAuthenticator: authenticator,
+	})
+
+	reqBody := ChatCompletionRequest{}
+
+	buf := new(bytes.Buffer)
+	if err := json.NewEncoder(buf).Encode(reqBody); err != nil {
+		t.Fatalf("encode request body: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+
+	recBody := httpx.ErrorResponse{}
+	if err := json.NewDecoder(rec.Body).Decode(&recBody); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+
+	if recBody.Error.Code != "invalid_request" {
+		t.Fatalf("expected error code %q, got %q", "invalid_request", recBody.Error.Code)
+	}
+
+	if recBody.Error.Message != "model is required" {
+		t.Fatalf("expected message %q, got %q", "model is required", recBody.Error.Message)
+	}
+}
+
+func TestRouterV1ChatCompletionWithMissingMessage(t *testing.T) {
+	authenticator := &fakeAPIKeyAuthenticator{principal: &auth.APIKeyPrincipal{APIKeyID: 1, ProjectID: 1, KeyPrefix: "unio_sk_test"}}
+	handler := NewRouter(RouterDeps{
+		Logger:              logger,
+		APIKeyAuthenticator: authenticator,
+	})
+
+	reqBody := ChatCompletionRequest{
+		Model:    "openai/gpt-4.1",
+		Messages: []ChatMessage{},
+	}
+	buf := new(bytes.Buffer)
+	if err := json.NewEncoder(buf).Encode(reqBody); err != nil {
+		t.Fatalf("encode request body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+
+	recBody := httpx.ErrorResponse{}
+	if err := json.NewDecoder(rec.Body).Decode(&recBody); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+	if recBody.Error.Code != "invalid_request" {
+		t.Fatalf("expected error code %q, got %q", "invalid_request", recBody.Error.Code)
+	}
+	if recBody.Error.Message != "messages is required" {
+		t.Fatalf("expected message %q, got %q", "messages is required", recBody.Error.Message)
 	}
 }
