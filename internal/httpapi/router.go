@@ -12,8 +12,9 @@ import (
 
 // RouterDeps 保存构建 HTTP router 所需的外部依赖。
 type RouterDeps struct {
-	Logger              *slog.Logger
-	APIKeyAuthenticator middleware.APIKeyAuthenticator
+	Logger                *slog.Logger
+	APIKeyAuthenticator   middleware.APIKeyAuthenticator
+	ChatCompletionService ChatCompletionService
 }
 
 // NewRouter 创建 API server 使用的 HTTP handler。
@@ -51,7 +52,11 @@ func NewRouter(deps RouterDeps) http.Handler {
 		r.Use(middleware.APIKeyAuth(deps.APIKeyAuthenticator))
 
 		r.Get("/models", handleModels)
-		r.Post("/chat/completions", handleChatCompletions)
+
+		chatHandler := &chatCompletionsHandler{
+			service: deps.ChatCompletionService,
+		}
+		r.Method(http.MethodPost, "/chat/completions", chatHandler)
 	})
 
 	return r

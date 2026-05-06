@@ -54,8 +54,9 @@ func main() {
 	queries := sqlc.New(pgPool)
 	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
 	handler := httpapi.NewRouter(httpapi.RouterDeps{
-		Logger:              logger,
-		APIKeyAuthenticator: apiKeyAuthenticator,
+		Logger:                logger,
+		APIKeyAuthenticator:   apiKeyAuthenticator,
+		ChatCompletionService: httpapi.NewMockChatCompletionService(), // TODO: 后续需要真实请求替换
 	})
 	server := &http.Server{
 		Addr:         cfg.HTTP.Addr,

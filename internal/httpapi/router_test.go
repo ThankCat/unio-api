@@ -1,16 +1,45 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/ThankCat/unio-api/internal/auth"
 	"github.com/ThankCat/unio-api/internal/httpx"
 )
 
+// routerTestAPIKeyAuthenticator 是 router 通用测试使用的 API Key 认证器。
+type routerTestAPIKeyAuthenticator struct {
+	principal *auth.APIKeyPrincipal
+	err       error
+	token     string
+}
+
+// AuthenticateAPIKey 记录收到的 token，并返回测试预设的认证结果。
+func (a *routerTestAPIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext string) (*auth.APIKeyPrincipal, error) {
+	a.token = plaintext
+	return a.principal, a.err
+}
+
 func TestRouterHealthz(t *testing.T) {
-	handle := newTestRouter(newSuccessfulAuthenticator())
+	authenticator := &routerTestAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{
+			APIKeyID:  1,
+			ProjectID: 1,
+			KeyPrefix: "unio_sk_test",
+		},
+	}
+	handle := NewRouter(RouterDeps{
+		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
+		APIKeyAuthenticator:   authenticator,
+		ChatCompletionService: NewMockChatCompletionService(),
+	})
+
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
 
@@ -33,7 +62,19 @@ func TestRouterHealthz(t *testing.T) {
 }
 
 func TestRouterNotFound(t *testing.T) {
-	handle := newTestRouter(newSuccessfulAuthenticator())
+	authenticator := &routerTestAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{
+			APIKeyID:  1,
+			ProjectID: 1,
+			KeyPrefix: "unio_sk_test",
+		},
+	}
+	handle := NewRouter(RouterDeps{
+		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
+		APIKeyAuthenticator:   authenticator,
+		ChatCompletionService: NewMockChatCompletionService(),
+	})
+
 	req := httptest.NewRequest(http.MethodGet, "/not-found", nil)
 	rec := httptest.NewRecorder()
 
@@ -64,7 +105,19 @@ func TestRouterNotFound(t *testing.T) {
 }
 
 func TestRouterMethodNotAllowed(t *testing.T) {
-	handle := newTestRouter(newSuccessfulAuthenticator())
+	authenticator := &routerTestAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{
+			APIKeyID:  1,
+			ProjectID: 1,
+			KeyPrefix: "unio_sk_test",
+		},
+	}
+	handle := NewRouter(RouterDeps{
+		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
+		APIKeyAuthenticator:   authenticator,
+		ChatCompletionService: NewMockChatCompletionService(),
+	})
+
 	req := httptest.NewRequest(http.MethodPost, "/healthz", nil)
 	rec := httptest.NewRecorder()
 
@@ -95,7 +148,19 @@ func TestRouterMethodNotAllowed(t *testing.T) {
 }
 
 func TestRouterRequestID(t *testing.T) {
-	handle := newTestRouter(newSuccessfulAuthenticator())
+	authenticator := &routerTestAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{
+			APIKeyID:  1,
+			ProjectID: 1,
+			KeyPrefix: "unio_sk_test",
+		},
+	}
+	handle := NewRouter(RouterDeps{
+		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
+		APIKeyAuthenticator:   authenticator,
+		ChatCompletionService: NewMockChatCompletionService(),
+	})
+
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
 

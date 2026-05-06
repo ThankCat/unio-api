@@ -1,15 +1,25 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/ThankCat/unio-api/internal/httpx"
 )
 
-// handleChatCompletions 解析并校验 chat completions 请求，暂时返回 mock 响应。
-func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+// ChatCompletionService 定义 chat completions handler 依赖的业务能力。
+type ChatCompletionService interface {
+	CreateChatCompletion(ctx context.Context, req ChatCompletionRequest) (*ChatCompletionResponse, error)
+}
+
+// chatCompletionsHandler 处理 OpenAI-compatible chat completions 请求。
+type chatCompletionsHandler struct {
+	service ChatCompletionService
+}
+
+// ServeHTTP 解析请求、调用 service，并写出 HTTP 响应。
+func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var req ChatCompletionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		_ = httpx.WriteError(w, http.StatusBadRequest, "invalid_request", "invalid json body")
@@ -26,25 +36,12 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = httpx.WriteJSON(w, http.StatusOK, ChatCompletionResponse{
-		ID:      "chatcmpl_mock",
-		Object:  "chat.completion",
-		Created: time.Now().Unix(),
-		Model:   req.Model,
-		Choices: []ChatCompletionChoice{
-			{
-				Index: 0,
-				Message: ChatMessage{
-					Role:    "assistant",
-					Content: "mock response",
-				},
-				FinishReason: "stop",
-			},
-		},
-		Usage: ChatCompletionUsage{
-			PromptTokens:     0,
-			CompletionTokens: 0,
-			TotalTokens:      0,
-		},
-	})
+	resp, err := h.service.CreateChatCompletion(r.Context(), req)
+	if err != nil {
+		_ = httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "chat completion failed")
+		return
+	}
+
+	_ = httpx.WriteJSON(w, http.StatusOK, resp)
+
 }
