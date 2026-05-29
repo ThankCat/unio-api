@@ -11,6 +11,8 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
+	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 )
 
 // StreamChatCompletion 编排流式 chat completion 请求，并通过 emit 写出 OpenAI-compatible SSE chunk。
@@ -38,10 +40,21 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 		return err
 	}
 
-	plan, err := s.router.PlanChat(ctx, routing.ChatRouteRequest{
+	// outcome 默认 failed，仅在成功/取消路径覆盖；defer 保证每个流式请求只计数一次。
+	outcome := metrics.ChatOutcomeFailed
+	defer func() {
+		s.recordChatRequest(true, outcome)
+	}()
+
+	ctx, span := startGatewaySpan(ctx, "gateway.chat_stream")
+	defer span.End()
+
+	planCtx, planSpan := startGatewaySpan(ctx, "gateway.routing")
+	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
 		ProjectID: principal.ProjectID,
 		ModelID:   req.Model,
 	})
+	endGatewaySpan(planSpan, err)
 	if err != nil {
 		s.markRequestRecordFailed(ctx, requestRecord, routingFailureCode(err), err)
 		return err
@@ -52,6 +65,12 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 	authorizationCreated := false
 
 	for index, candidate := range plan.Candidates {
+		// channel 熔断 open 时跳过该 channel，尝试下一个同模型 channel。
+		channelKey := metricsID(candidate.Channel.ID)
+		if !s.breakerAllow(channelKey) {
+			continue
+		}
+
 		// 每个 stream candidate 也必须先创建 attempt。
 		// stream 的失败可能发生在首 chunk 前、首 chunk 后或客户端取消时，提前记录 attempt 才能审计这些状态。
 		attemptRecord, err := s.createAttemptRecord(ctx, requestRecord, index, candidate)
@@ -109,6 +128,10 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 		// 如果上游 final usage chunk 没有 model，则退回 routing 选中的 upstream model。
 		upstreamResponseModel := candidate.UpstreamModel
 
+		// upstreamMeta 记录上游流式调用的真实 status code 和 request id。
+		// 它随 final usage chunk 一起到达，用于结算时写入 request attempt 渠道审计字段。
+		var upstreamMeta adapter.UpstreamMetadata
+
 		// settleStreamFinalUsage 使用 final usage 结算流式请求。
 		// stream 结算不能依赖原始请求 ctx，因为客户端可能已经断开；
 		// 只要上游已经返回 final usage，平台就有准确账务事实，必须尽力完成结算。
@@ -120,12 +143,16 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 				)
 			}
 
+			s.recordRoutingSelected(candidate.ProviderID, candidate.Channel.ID, req.Model)
+			logfields.SetRoute(ctx, req.Model, metricsID(candidate.ProviderID), metricsID(candidate.Channel.ID))
+
 			// 客户端断开会取消原始请求 ctx；结算属于服务端账务收口，
 			// 不能因为客户端不再读取响应就放弃扣费。
 			settlementCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 
-			return s.chatSettlement.SettleSuccessfulChat(settlementCtx, ChatSettlementParams{
+			settleCtx, settleSpan := startGatewaySpan(settlementCtx, "gateway.settlement")
+			settleErr := s.chatSettlement.SettleSuccessfulChat(settleCtx, ChatSettlementParams{
 				RequestRecord:         requestRecord,
 				AttemptRecord:         attemptRecord,
 				Principal:             principal,
@@ -135,12 +162,19 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 				FinalProviderID:       candidate.ProviderID,
 				FinalChannelID:        candidate.Channel.ID,
 				UpstreamResponseModel: upstreamResponseModel,
+				UpstreamStatusCode:    upstreamMeta.StatusCode,
+				UpstreamRequestID:     upstreamRequestIDPtr(upstreamMeta.RequestID),
 				Usage:                 *finalUsage,
 				UsageSource:           ChatSettlementUsageSourceUpstreamStream,
 			})
+			endSettlementSpan(settleSpan, settleErr)
+			s.recordSettlement(settlementOutcomeFromErr(settleErr))
+			return settleErr
 		}
 
-		err = streamAdapter.StreamChatCompletions(ctx, candidate.Channel, adapter.ChatRequest{
+		streamCtx, streamSpan := startGatewaySpan(ctx, "adapter.stream_chat_completions", upstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
+		upstreamStart := time.Now()
+		err = streamAdapter.StreamChatCompletions(streamCtx, candidate.Channel, adapter.ChatRequest{
 			Model:            candidate.UpstreamModel,
 			Messages:         messages,
 			Temperature:      req.Temperature,
@@ -161,10 +195,17 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 					upstreamResponseModel = chunk.Model
 				}
 
+				if chunk.Upstream != nil {
+					upstreamMeta = *chunk.Upstream
+				}
+
 				return nil
 			}
 
-			emitted = true
+			if !emitted {
+				emitted = true
+				s.recordStreamEvent(metrics.StreamEventStarted)
+			}
 
 			return emit(gatewayapi.ChatCompletionStreamResponse{
 				ID:      chunk.ID,
@@ -183,6 +224,9 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 				},
 			})
 		})
+		s.recordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
+		endGatewaySpan(streamSpan, err)
+		s.recordChannelHealth(channelKey, err)
 
 		if err != nil {
 			// 有 final usage 时优先结算：这说明上游已经给出准确 token 用量。
@@ -214,6 +258,8 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 					return releaseErr
 				}
 
+				outcome = metrics.ChatOutcomeCanceled
+				s.recordStreamEvent(metrics.StreamEventCanceled)
 				s.markRequestCanceled(ctx, requestRecord, attemptRecord, err)
 				return err
 			}
@@ -270,6 +316,7 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 				return releaseErr
 			}
 
+			s.recordStreamEvent(metrics.StreamEventMissingUsage)
 			s.markAttemptRecordFailed(ctx, attemptRecord, "stream_usage_missing", err)
 			s.markRequestRecordFailed(ctx, requestRecord, "stream_usage_missing", err)
 			return err
@@ -282,6 +329,8 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 			}
 		}
 
+		outcome = metrics.ChatOutcomeSuccess
+		s.recordStreamEvent(metrics.StreamEventCompleted)
 		return nil
 	}
 

@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
+	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
 )
 
 const maxRequestIDLength = 128
@@ -21,6 +22,9 @@ func RequestID(next http.Handler) http.Handler {
 		w.Header().Set(httpx.HeaderRequestID, requestID)
 
 		ctx := httpx.ContextWithRequestID(r.Context(), requestID)
+		// 在请求最外层安装结构化日志字段集合，correlation_id 即 HTTP 请求 ID；
+		// 下游认证和 gateway 会向同一个 *Fields 填充 user/project/api_key/request_id/route。
+		ctx, _ = logfields.NewContext(ctx, requestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

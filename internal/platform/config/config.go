@@ -17,8 +17,28 @@ type Config struct {
 	Log       LogConfig
 	DB        DBConfig
 	Redis     RedisConfig
-	RateLimit RateLimitConfig
-	Worker    WorkerConfig
+	RateLimit      RateLimitConfig
+	Worker         WorkerConfig
+	Tracing        TracingConfig
+	CircuitBreaker CircuitBreakerConfig
+}
+
+// CircuitBreakerConfig 保存 channel 熔断器阈值；默认启用并使用保守阈值。
+type CircuitBreakerConfig struct {
+	Enabled      bool
+	Window       time.Duration
+	MinRequests  int
+	FailureRatio float64
+	OpenDuration time.Duration
+}
+
+// TracingConfig 保存 OpenTelemetry trace 导出配置；默认关闭（opt-in）。
+type TracingConfig struct {
+	Enabled     bool
+	Endpoint    string
+	Insecure    bool
+	ServiceName string
+	SampleRatio float64
 }
 
 // HTTPConfig 保存 HTTP server 监听配置。
@@ -208,6 +228,46 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	tracingEnabled, err := getEnvBool("OTEL_TRACING_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+
+	tracingInsecure, err := getEnvBool("OTEL_EXPORTER_OTLP_INSECURE", true)
+	if err != nil {
+		return Config{}, err
+	}
+
+	tracingSampleRatio, err := getEnvFloat("OTEL_TRACES_SAMPLER_RATIO", 1.0)
+	if err != nil {
+		return Config{}, err
+	}
+
+	circuitBreakerEnabled, err := getEnvBool("CIRCUIT_BREAKER_ENABLED", true)
+	if err != nil {
+		return Config{}, err
+	}
+
+	circuitBreakerWindow, err := getEnvDuration("CIRCUIT_BREAKER_WINDOW", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
+	circuitBreakerMinRequests, err := getEnvInt("CIRCUIT_BREAKER_MIN_REQUESTS", 20)
+	if err != nil {
+		return Config{}, err
+	}
+
+	circuitBreakerFailureRatio, err := getEnvFloat("CIRCUIT_BREAKER_FAILURE_RATIO", 0.5)
+	if err != nil {
+		return Config{}, err
+	}
+
+	circuitBreakerOpenDuration, err := getEnvDuration("CIRCUIT_BREAKER_OPEN_DURATION", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		HTTP: HTTPConfig{
 			Addr:            getEnv("HTTP_ADDR", ":8520"),
@@ -251,6 +311,20 @@ func Load() (Config, error) {
 			SettlementRecoveryLockTTL:       workerSettlementRecoveryLockTTL,
 			SettlementRecoveryInitialDelay:  workerSettlementRecoveryInitialDelay,
 			SettlementRecoverySettleTimeout: workerSettlementRecoverySettleTimeout,
+		},
+		Tracing: TracingConfig{
+			Enabled:     tracingEnabled,
+			Endpoint:    getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+			Insecure:    tracingInsecure,
+			ServiceName: getEnv("OTEL_SERVICE_NAME", "unio-gateway"),
+			SampleRatio: tracingSampleRatio,
+		},
+		CircuitBreaker: CircuitBreakerConfig{
+			Enabled:      circuitBreakerEnabled,
+			Window:       circuitBreakerWindow,
+			MinRequests:  circuitBreakerMinRequests,
+			FailureRatio: circuitBreakerFailureRatio,
+			OpenDuration: circuitBreakerOpenDuration,
 		},
 	}, nil
 }
@@ -319,6 +393,44 @@ func getEnvInt64(key string, fallback int64) (int64, error) {
 	}
 
 	return n, nil
+}
+
+// getEnvBool 读取布尔配置；格式错误时让启动流程尽早失败。
+func getEnvBool(key string, fallback bool) (bool, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+
+	b, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, failure.Wrap(
+			failure.CodeConfigInvalid,
+			err,
+			failure.WithMessage(fmt.Sprintf("parse %s as bool", key)),
+		)
+	}
+
+	return b, nil
+}
+
+// getEnvFloat 读取浮点配置；格式错误时让启动流程尽早失败。
+func getEnvFloat(key string, fallback float64) (float64, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+
+	f, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, failure.Wrap(
+			failure.CodeConfigInvalid,
+			err,
+			failure.WithMessage(fmt.Sprintf("parse %s as float", key)),
+		)
+	}
+
+	return f, nil
 }
 
 // parseLogLevel 将环境变量中的日志级别转换为 slog.Level。

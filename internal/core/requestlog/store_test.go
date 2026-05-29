@@ -313,8 +313,23 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 		t.Fatal("expected completed_at to be set")
 	}
 
+	// succeeded 是终态，不能再转 failed（GAP-7-003 状态机守卫）。
+	// 失败字段映射在一个独立的 running attempt 上验证。
+	failingAttempt, err := store.CreateAttempt(ctx, CreateAttemptParams{
+		RequestRecordID: record.ID,
+		AttemptIndex:    1,
+		ProviderID:      providerID,
+		ChannelID:       channelID,
+		AdapterKey:      "openai",
+		UpstreamModel:   "deepseek-v4-pro",
+		StartedAt:       time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("create failing attempt: %v", err)
+	}
+
 	failed, err := store.MarkAttemptFailed(ctx, MarkAttemptFailedParams{
-		ID:                  attempt.ID,
+		ID:                  failingAttempt.ID,
 		UpstreamStatusCode:  intValuePtr(502),
 		UpstreamRequestID:   stringValuePtr("failed-upstream-request-id"),
 		ErrorCode:           "upstream_bad_gateway",

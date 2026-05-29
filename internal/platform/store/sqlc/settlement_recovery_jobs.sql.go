@@ -40,7 +40,7 @@ SET
     last_attempted_at = $3,
     updated_at = $3
 WHERE settlement_recovery_jobs.id = (SELECT candidate.id FROM candidate)
-RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
+RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, upstream_status_code, upstream_request_id, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
 `
 
 type ClaimNextSettlementRecoveryJobParams struct {
@@ -64,6 +64,8 @@ func (q *Queries) ClaimNextSettlementRecoveryJob(ctx context.Context, arg ClaimN
 		&i.ProviderID,
 		&i.ChannelID,
 		&i.UpstreamResponseModel,
+		&i.UpstreamStatusCode,
+		&i.UpstreamRequestID,
 		&i.UsagePromptTokens,
 		&i.UsageCompletionTokens,
 		&i.UsageTotalTokens,
@@ -108,6 +110,8 @@ INSERT INTO settlement_recovery_jobs (
     provider_id,
     channel_id,
     upstream_response_model,
+    upstream_status_code,
+    upstream_request_id,
     usage_prompt_tokens,
     usage_completion_tokens,
     usage_total_tokens,
@@ -153,8 +157,10 @@ VALUES (
            $23,
            $24,
            $25,
+           $26,
+           $27,
            'pending',
-           $26
+           $28
        )
 ON CONFLICT (request_record_id) DO UPDATE
 SET updated_at = settlement_recovery_jobs.updated_at
@@ -166,6 +172,8 @@ WHERE settlement_recovery_jobs.user_id = EXCLUDED.user_id
   AND settlement_recovery_jobs.provider_id = EXCLUDED.provider_id
   AND settlement_recovery_jobs.channel_id = EXCLUDED.channel_id
   AND settlement_recovery_jobs.upstream_response_model = EXCLUDED.upstream_response_model
+  AND settlement_recovery_jobs.upstream_status_code = EXCLUDED.upstream_status_code
+  AND settlement_recovery_jobs.upstream_request_id IS NOT DISTINCT FROM EXCLUDED.upstream_request_id
   AND settlement_recovery_jobs.usage_prompt_tokens = EXCLUDED.usage_prompt_tokens
   AND settlement_recovery_jobs.usage_completion_tokens = EXCLUDED.usage_completion_tokens
   AND settlement_recovery_jobs.usage_total_tokens = EXCLUDED.usage_total_tokens
@@ -182,7 +190,7 @@ WHERE settlement_recovery_jobs.user_id = EXCLUDED.user_id
   AND settlement_recovery_jobs.formula_version = EXCLUDED.formula_version
   AND settlement_recovery_jobs.estimated_amount = EXCLUDED.estimated_amount
   AND settlement_recovery_jobs.authorized_amount = EXCLUDED.authorized_amount
-RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
+RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, upstream_status_code, upstream_request_id, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
 `
 
 type CreateSettlementRecoveryJobParams struct {
@@ -195,6 +203,8 @@ type CreateSettlementRecoveryJobParams struct {
 	ProviderID            int64
 	ChannelID             int64
 	UpstreamResponseModel string
+	UpstreamStatusCode    int32
+	UpstreamRequestID     pgtype.Text
 	UsagePromptTokens     int64
 	UsageCompletionTokens int64
 	UsageTotalTokens      int64
@@ -226,6 +236,8 @@ func (q *Queries) CreateSettlementRecoveryJob(ctx context.Context, arg CreateSet
 		arg.ProviderID,
 		arg.ChannelID,
 		arg.UpstreamResponseModel,
+		arg.UpstreamStatusCode,
+		arg.UpstreamRequestID,
 		arg.UsagePromptTokens,
 		arg.UsageCompletionTokens,
 		arg.UsageTotalTokens,
@@ -256,6 +268,8 @@ func (q *Queries) CreateSettlementRecoveryJob(ctx context.Context, arg CreateSet
 		&i.ProviderID,
 		&i.ChannelID,
 		&i.UpstreamResponseModel,
+		&i.UpstreamStatusCode,
+		&i.UpstreamRequestID,
 		&i.UsagePromptTokens,
 		&i.UsageCompletionTokens,
 		&i.UsageTotalTokens,
@@ -290,7 +304,7 @@ func (q *Queries) CreateSettlementRecoveryJob(ctx context.Context, arg CreateSet
 }
 
 const getSettlementRecoveryJobByRequest = `-- name: GetSettlementRecoveryJobByRequest :one
-SELECT id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
+SELECT id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, upstream_status_code, upstream_request_id, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
 FROM settlement_recovery_jobs
 WHERE request_record_id = $1
 `
@@ -310,6 +324,8 @@ func (q *Queries) GetSettlementRecoveryJobByRequest(ctx context.Context, request
 		&i.ProviderID,
 		&i.ChannelID,
 		&i.UpstreamResponseModel,
+		&i.UpstreamStatusCode,
+		&i.UpstreamRequestID,
 		&i.UsagePromptTokens,
 		&i.UsageCompletionTokens,
 		&i.UsageTotalTokens,
@@ -374,7 +390,7 @@ SET
     completed_at = $4,
     updated_at = $4
 WHERE settlement_recovery_jobs.id = (SELECT candidate.id FROM candidate)
-RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
+RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, upstream_status_code, upstream_request_id, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
 `
 
 type MarkExhaustedSettlementRecoveryJobDeadParams struct {
@@ -406,6 +422,8 @@ func (q *Queries) MarkExhaustedSettlementRecoveryJobDead(ctx context.Context, ar
 		&i.ProviderID,
 		&i.ChannelID,
 		&i.UpstreamResponseModel,
+		&i.UpstreamStatusCode,
+		&i.UpstreamRequestID,
 		&i.UsagePromptTokens,
 		&i.UsageCompletionTokens,
 		&i.UsageTotalTokens,
@@ -455,7 +473,7 @@ WHERE settlement_recovery_jobs.id = $5
   AND settlement_recovery_jobs.locked_by = $6
   AND settlement_recovery_jobs.locked_until = $7
   AND settlement_recovery_jobs.attempt_count = $8
-RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
+RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, upstream_status_code, upstream_request_id, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
 `
 
 type MarkSettlementRecoveryJobDeadParams struct {
@@ -493,6 +511,8 @@ func (q *Queries) MarkSettlementRecoveryJobDead(ctx context.Context, arg MarkSet
 		&i.ProviderID,
 		&i.ChannelID,
 		&i.UpstreamResponseModel,
+		&i.UpstreamStatusCode,
+		&i.UpstreamRequestID,
 		&i.UsagePromptTokens,
 		&i.UsageCompletionTokens,
 		&i.UsageTotalTokens,
@@ -543,7 +563,7 @@ WHERE settlement_recovery_jobs.id = $6
   AND settlement_recovery_jobs.locked_until = $8
   AND settlement_recovery_jobs.attempt_count = $9
   AND settlement_recovery_jobs.attempt_count < settlement_recovery_jobs.max_attempts
-RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
+RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, upstream_status_code, upstream_request_id, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
 `
 
 type MarkSettlementRecoveryJobRetryParams struct {
@@ -583,6 +603,8 @@ func (q *Queries) MarkSettlementRecoveryJobRetry(ctx context.Context, arg MarkSe
 		&i.ProviderID,
 		&i.ChannelID,
 		&i.UpstreamResponseModel,
+		&i.UpstreamStatusCode,
+		&i.UpstreamRequestID,
 		&i.UsagePromptTokens,
 		&i.UsageCompletionTokens,
 		&i.UsageTotalTokens,
@@ -627,14 +649,14 @@ WITH updated AS (
         updated_at = $1
     WHERE settlement_recovery_jobs.id = $2
       AND settlement_recovery_jobs.status IN ('pending', 'running')
-    RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
+    RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, upstream_status_code, upstream_request_id, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
 )
-SELECT id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
+SELECT id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, upstream_status_code, upstream_request_id, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
 FROM updated
 
 UNION ALL
 
-SELECT settlement_recovery_jobs.id, settlement_recovery_jobs.user_id, settlement_recovery_jobs.request_record_id, settlement_recovery_jobs.attempt_id, settlement_recovery_jobs.reservation_id, settlement_recovery_jobs.response_model_id, settlement_recovery_jobs.model_id, settlement_recovery_jobs.provider_id, settlement_recovery_jobs.channel_id, settlement_recovery_jobs.upstream_response_model, settlement_recovery_jobs.usage_prompt_tokens, settlement_recovery_jobs.usage_completion_tokens, settlement_recovery_jobs.usage_total_tokens, settlement_recovery_jobs.usage_cached_tokens, settlement_recovery_jobs.usage_reasoning_tokens, settlement_recovery_jobs.usage_source, settlement_recovery_jobs.price_id, settlement_recovery_jobs.currency, settlement_recovery_jobs.pricing_unit, settlement_recovery_jobs.input_price, settlement_recovery_jobs.output_price, settlement_recovery_jobs.cached_input_price, settlement_recovery_jobs.reasoning_output_price, settlement_recovery_jobs.formula_version, settlement_recovery_jobs.estimated_amount, settlement_recovery_jobs.authorized_amount, settlement_recovery_jobs.status, settlement_recovery_jobs.attempt_count, settlement_recovery_jobs.max_attempts, settlement_recovery_jobs.next_run_at, settlement_recovery_jobs.locked_by, settlement_recovery_jobs.locked_until, settlement_recovery_jobs.last_error_code, settlement_recovery_jobs.last_error_message, settlement_recovery_jobs.last_internal_error_detail, settlement_recovery_jobs.last_attempted_at, settlement_recovery_jobs.completed_at, settlement_recovery_jobs.created_at, settlement_recovery_jobs.updated_at
+SELECT settlement_recovery_jobs.id, settlement_recovery_jobs.user_id, settlement_recovery_jobs.request_record_id, settlement_recovery_jobs.attempt_id, settlement_recovery_jobs.reservation_id, settlement_recovery_jobs.response_model_id, settlement_recovery_jobs.model_id, settlement_recovery_jobs.provider_id, settlement_recovery_jobs.channel_id, settlement_recovery_jobs.upstream_response_model, settlement_recovery_jobs.upstream_status_code, settlement_recovery_jobs.upstream_request_id, settlement_recovery_jobs.usage_prompt_tokens, settlement_recovery_jobs.usage_completion_tokens, settlement_recovery_jobs.usage_total_tokens, settlement_recovery_jobs.usage_cached_tokens, settlement_recovery_jobs.usage_reasoning_tokens, settlement_recovery_jobs.usage_source, settlement_recovery_jobs.price_id, settlement_recovery_jobs.currency, settlement_recovery_jobs.pricing_unit, settlement_recovery_jobs.input_price, settlement_recovery_jobs.output_price, settlement_recovery_jobs.cached_input_price, settlement_recovery_jobs.reasoning_output_price, settlement_recovery_jobs.formula_version, settlement_recovery_jobs.estimated_amount, settlement_recovery_jobs.authorized_amount, settlement_recovery_jobs.status, settlement_recovery_jobs.attempt_count, settlement_recovery_jobs.max_attempts, settlement_recovery_jobs.next_run_at, settlement_recovery_jobs.locked_by, settlement_recovery_jobs.locked_until, settlement_recovery_jobs.last_error_code, settlement_recovery_jobs.last_error_message, settlement_recovery_jobs.last_internal_error_detail, settlement_recovery_jobs.last_attempted_at, settlement_recovery_jobs.completed_at, settlement_recovery_jobs.created_at, settlement_recovery_jobs.updated_at
 FROM settlement_recovery_jobs
 WHERE settlement_recovery_jobs.id = $2
   AND settlement_recovery_jobs.status = 'succeeded'
@@ -657,6 +679,8 @@ type MarkSettlementRecoveryJobSucceededRow struct {
 	ProviderID              int64
 	ChannelID               int64
 	UpstreamResponseModel   string
+	UpstreamStatusCode      int32
+	UpstreamRequestID       pgtype.Text
 	UsagePromptTokens       int64
 	UsageCompletionTokens   int64
 	UsageTotalTokens        int64
@@ -703,6 +727,8 @@ func (q *Queries) MarkSettlementRecoveryJobSucceeded(ctx context.Context, arg Ma
 		&i.ProviderID,
 		&i.ChannelID,
 		&i.UpstreamResponseModel,
+		&i.UpstreamStatusCode,
+		&i.UpstreamRequestID,
 		&i.UsagePromptTokens,
 		&i.UsageCompletionTokens,
 		&i.UsageTotalTokens,

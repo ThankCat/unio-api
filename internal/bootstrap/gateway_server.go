@@ -6,6 +6,8 @@ import (
 	"net/http"
 
 	"github.com/ThankCat/unio-api/internal/platform/config"
+	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-api/internal/platform/observability/tracing"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-api/internal/service/gateway"
 	"github.com/redis/go-redis/v9"
@@ -28,10 +30,33 @@ type GatewayServerAppDeps struct {
 // GatewayServerApp 表示当前 gateway-server 进程已经装配完成的 HTTP 应用。
 type GatewayServerApp struct {
 	Handler http.Handler
+
+	tracer *tracing.Provider
+}
+
+// Shutdown 释放 app 持有的可观测性资源（flush trace exporter）。
+// 未启用 tracing 时为安全空操作。
+func (a *GatewayServerApp) Shutdown(ctx context.Context) error {
+	if a == nil {
+		return nil
+	}
+
+	return a.tracer.Shutdown(ctx)
 }
 
 // NewGatewayServerApp 装配当前 gateway-server 进程的业务应用。
 func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*GatewayServerApp, error) {
+	tracerProvider, err := tracing.Setup(ctx, tracing.Options{
+		Enabled:     deps.Config.Tracing.Enabled,
+		Endpoint:    deps.Config.Tracing.Endpoint,
+		Insecure:    deps.Config.Tracing.Insecure,
+		ServiceName: deps.Config.Tracing.ServiceName,
+		SampleRatio: deps.Config.Tracing.SampleRatio,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	queries := sqlc.New(deps.DB)
 
 	chatRouter, err := NewChatRouter(queries)
@@ -50,12 +75,16 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		return nil, err
 	}
 
+	metricsRecorder := metrics.New()
+
 	chatCompletionService := NewChatGateway(
 		deps.DB,
 		queries,
 		chatRouter,
 		adapterRegistry,
 		deps.Config.Worker,
+		deps.Config.CircuitBreaker,
+		metricsRecorder,
 	)
 
 	handler := NewHTTPHandler(
@@ -64,7 +93,11 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		deps.Redis,
 		deps.Config,
 		chatCompletionService,
+		metricsRecorder,
 	)
 
-	return &GatewayServerApp{Handler: handler}, nil
+	return &GatewayServerApp{
+		Handler: handler,
+		tracer:  tracerProvider,
+	}, nil
 }

@@ -91,19 +91,12 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req a
 
 	upstreamResp, err := a.client.Do(request)
 	if err != nil {
-		return nil, failure.Wrap(
-			failure.CodeAdapterSendRequestFailed,
-			err,
-			failure.WithMessage("openai adapter send chat completion request"),
-		)
+		return nil, newUpstreamSendError(err, "send chat completion request")
 	}
 	defer upstreamResp.Body.Close()
 
 	if upstreamResp.StatusCode < http.StatusOK || upstreamResp.StatusCode >= http.StatusMultipleChoices {
-		return nil, failure.New(
-			failure.CodeAdapterUpstreamStatus,
-			failure.WithMessage(fmt.Sprintf("openai adapter upstream status %d", upstreamResp.StatusCode)),
-		)
+		return nil, newUpstreamStatusError(upstreamResp, "upstream")
 	}
 
 	var upstreamRespBody chatCompletionResponse
@@ -132,6 +125,10 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req a
 		Model:   upstreamRespBody.Model,
 		Content: upstreamRespBody.Choices[0].Message.Content,
 		Usage:   usage,
+		Upstream: adapter.UpstreamMetadata{
+			StatusCode: upstreamResp.StatusCode,
+			RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
+		},
 	}, nil
 }
 
@@ -205,19 +202,12 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 
 	upstreamResp, err := a.client.Do(request)
 	if err != nil {
-		return failure.Wrap(
-			failure.CodeAdapterSendRequestFailed,
-			err,
-			failure.WithMessage("openai adapter send stream chat completion request"),
-		)
+		return newUpstreamSendError(err, "send stream chat completion request")
 	}
 	defer upstreamResp.Body.Close()
 
 	if upstreamResp.StatusCode < http.StatusOK || upstreamResp.StatusCode >= http.StatusMultipleChoices {
-		return failure.New(
-			failure.CodeAdapterUpstreamStatus,
-			failure.WithMessage(fmt.Sprintf("openai adapter upstream stream status %d", upstreamResp.StatusCode)),
-		)
+		return newUpstreamStatusError(upstreamResp, "upstream stream")
 	}
 
 	streamReader := adaptersse.NewReader(upstreamResp.Body, adaptersse.Config{
@@ -251,6 +241,10 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 					ID:    streamResp.ID,
 					Model: streamResp.Model,
 					Usage: &usage,
+					Upstream: &adapter.UpstreamMetadata{
+						StatusCode: upstreamResp.StatusCode,
+						RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
+					},
 				}); err != nil {
 					return failure.Wrap(
 						failure.CodeAdapterEmitFailed,

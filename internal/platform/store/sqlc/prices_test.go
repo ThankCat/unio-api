@@ -125,6 +125,9 @@ func TestFindActivePriceForModelFiltersAndOrders(t *testing.T) {
 	active := priceParams(modelID, now)
 	active.InputPrice = numeric(3)
 	active.EffectiveFrom = timestamptz(now.Add(-30 * time.Minute))
+	// active 与 future 都是 enabled 价格，受排他约束不能重叠：
+	// 将 active 的生效窗口收口到 future 的开始时间，二者相邻不重叠。
+	active.EffectiveTo = timestamptz(now.Add(time.Hour))
 	want := createPriceForTest(t, ctx, queries, active)
 
 	got, err := queries.FindActivePriceForModel(ctx, sqlc.FindActivePriceForModelParams{

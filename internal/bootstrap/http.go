@@ -8,6 +8,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/platform/config"
+	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/redis/go-redis/v9"
@@ -20,6 +21,7 @@ func NewHTTPHandler(
 	redisClient redis.Cmdable,
 	cfg config.Config,
 	chatCompletionService gatewayapi.ChatCompletionService,
+	metricsRecorder *metrics.Metrics,
 ) http.Handler {
 	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
 	modelCatalogService := modelcatalog.NewService(queries)
@@ -27,7 +29,7 @@ func NewHTTPHandler(
 	rateLimitStore := ratelimit.NewRedisStore(redisClient, cfg.Redis.KeyNamespace)
 	rateLimiter := ratelimit.NewLimiter(rateLimitStore)
 
-	return gatewayapi.NewRouter(gatewayapi.RouterDeps{
+	deps := gatewayapi.RouterDeps{
 		Logger:              logger,
 		APIKeyAuthenticator: apiKeyAuthenticator,
 		RateLimiter:         rateLimiter,
@@ -38,5 +40,13 @@ func NewHTTPHandler(
 
 		ChatCompletionService: chatCompletionService,
 		ModelCatalogService:   modelCatalogService,
-	})
+	}
+
+	if metricsRecorder != nil {
+		deps.HTTPMetrics = metricsRecorder
+		deps.RateLimitMetrics = metricsRecorder
+		deps.MetricsHandler = metricsRecorder.Handler()
+	}
+
+	return gatewayapi.NewRouter(deps)
 }

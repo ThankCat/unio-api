@@ -8,6 +8,7 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
+	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
 )
 
 // APIKeyAuthenticator 定义 middleware 调用认证服务所需的最小能力。
@@ -44,6 +45,7 @@ func APIKeyAuth(authenticator APIKeyAuthenticator) func(http.Handler) http.Handl
 			}
 
 			ctx := auth.ContextWithAPIKeyPrincipal(r.Context(), principal)
+			logfields.SetIdentity(ctx, principal.UserID, principal.ProjectID, principal.APIKeyID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

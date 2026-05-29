@@ -111,5 +111,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 关闭可观测性资源（flush 未导出的 trace span）。
+	if err := app.Shutdown(ctx); err != nil {
+		logger.Error("app shutdown failed", failure.LogArgs(err)...)
+	}
+
 	logger.Info("server stopped")
 }

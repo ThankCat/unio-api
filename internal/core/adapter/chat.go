@@ -55,6 +55,10 @@ type ChatResponse struct {
 	Model   string
 	Content string
 	Usage   ChatUsage
+
+	// Upstream 是本次上游成功调用的可审计元信息（HTTP 状态码、上游 request id）。
+	// gateway 在结算时写入 request attempt，用于渠道审计和 observability。
+	Upstream UpstreamMetadata
 }
 
 // ChatUsage 表示 adapter 从上游响应中解析出的 token 用量。
@@ -86,4 +90,9 @@ type ChatStreamChunk struct {
 	// Usage 只在 provider 返回 final usage stream chunk 时设置。
 	// 普通内容 chunk 必须为 nil。
 	Usage *ChatUsage
+
+	// Upstream 是本次上游流式调用的可审计元信息。
+	// 流式 adapter 在发出 final usage chunk 时一并附带；普通内容 chunk 必须为 nil。
+	// gateway 用它在流式结算时写入真实 upstream status/request id。
+	Upstream *UpstreamMetadata
 }

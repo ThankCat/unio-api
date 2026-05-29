@@ -102,8 +102,25 @@ type ChatSettlementParams struct {
 	FinalProviderID       int64
 	FinalChannelID        int64
 	UpstreamResponseModel string
-	Usage                 adapter.ChatUsage
-	UsageSource           ChatSettlementUsageSource
+
+	// UpstreamStatusCode 是上游成功响应的 HTTP 状态码，写入 request attempt 用于渠道审计。
+	// 必须落在 [100,599]，否则 request_attempts 的 CHECK 约束会拒绝写入。
+	UpstreamStatusCode int
+
+	// UpstreamRequestID 是上游返回的请求 ID；nil 表示上游未提供。
+	UpstreamRequestID *string
+
+	Usage       adapter.ChatUsage
+	UsageSource ChatSettlementUsageSource
+}
+
+// upstreamRequestIDPtr 把上游 request id 字符串转成可选指针，空串视为上游未提供。
+func upstreamRequestIDPtr(requestID string) *string {
+	if requestID == "" {
+		return nil
+	}
+
+	return &requestID
 }
 
 // SettleSuccessfulChat 对一次成功的 chat 请求执行结算。
@@ -171,12 +188,13 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	txRequestLog := requestlog.NewStore(txQueries)
 	usage := params.Usage
 
-	// TODO(阶段8/production): [GAP-8-001] adapter 成功响应缺少真实 upstream status/request id 会影响渠道审计精度；接入 provider error classification / adapter metadata 时；从 adapter response metadata 写入真实 upstream_status_code 和 upstream_request_id。
+	// 从 adapter response metadata 写入真实 upstream status code 和 request id，
+	// 用于渠道审计和 observability，而不是固定写 200/NULL。
 	_, err = txRequestLog.MarkAttemptSucceeded(ctx, requestlog.MarkAttemptSucceededParams{
 		ID:                    params.AttemptRecord.ID,
 		UpstreamResponseModel: params.UpstreamResponseModel,
-		UpstreamStatusCode:    200,
-		UpstreamRequestID:     nil,
+		UpstreamStatusCode:    params.UpstreamStatusCode,
+		UpstreamRequestID:     params.UpstreamRequestID,
 		CompletedAt:           now,
 	})
 	if err != nil {
@@ -672,8 +690,11 @@ func ensureSettlementAttemptMatches(ctx context.Context, queries *sqlc.Queries, 
 		if !requiredTextMatches(attempt.UpstreamResponseModel, params.UpstreamResponseModel) {
 			return chatSettlementIdempotencyConflict("attempt upstream response model mismatch")
 		}
-		if !requiredInt4Matches(attempt.UpstreamStatusCode, 200) {
+		if !requiredInt4Matches(attempt.UpstreamStatusCode, int32(params.UpstreamStatusCode)) {
 			return chatSettlementIdempotencyConflict("attempt upstream status mismatch")
+		}
+		if !optionalTextMatches(attempt.UpstreamRequestID, params.UpstreamRequestID) {
+			return chatSettlementIdempotencyConflict("attempt upstream request id mismatch")
 		}
 
 		return nil
@@ -740,6 +761,16 @@ func ensureSettlementWriteOffMatches(ctx context.Context, queries *sqlc.Queries,
 
 func requiredInt4Matches(value pgtype.Int4, want int32) bool {
 	return value.Valid && value.Int32 == want
+}
+
+// optionalTextMatches 校验可空 TEXT 列是否与可选字符串一致。
+// 两者都缺失视为一致；一有一无或值不同视为不一致。
+func optionalTextMatches(value pgtype.Text, want *string) bool {
+	if want == nil {
+		return !value.Valid
+	}
+
+	return value.Valid && value.String == *want
 }
 
 func chatSettlementSameNumeric(left pgtype.Numeric, right pgtype.Numeric) bool {

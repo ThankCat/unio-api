@@ -587,6 +587,7 @@ func TestLedgerReservationCreateGetAndUniqueness(t *testing.T) {
 		RequestRecordID:  requestRecord.ID,
 		Currency:         "USD",
 		AuthorizedAmount: numeric(40),
+		EstimatedAmount:  numeric(40),
 		IdempotencyKey:   fmt.Sprintf("reservation-idempotency-%d", time.Now().UnixNano()),
 		Reason:           "test reservation",
 	})
@@ -636,6 +637,7 @@ func TestLedgerReservationCreateGetAndUniqueness(t *testing.T) {
 		RequestRecordID:  requestRecord.ID,
 		Currency:         "USD",
 		AuthorizedAmount: numeric(1),
+		EstimatedAmount:  numeric(1),
 		IdempotencyKey:   fmt.Sprintf("reservation-duplicate-request-%d", time.Now().UnixNano()),
 		Reason:           "duplicate request reservation",
 	})
@@ -660,6 +662,7 @@ func TestLedgerReservationRequiresMatchingRequestUser(t *testing.T) {
 		RequestRecordID:  requestRecord.ID,
 		Currency:         "USD",
 		AuthorizedAmount: numeric(1),
+		EstimatedAmount:  numeric(1),
 		IdempotencyKey:   fmt.Sprintf("reservation-user-mismatch-%d", time.Now().UnixNano()),
 		Reason:           "mismatched request user",
 	})
@@ -697,6 +700,7 @@ func TestCaptureReservedBalanceAndReservation(t *testing.T) {
 		RequestRecordID:  requestRecord.ID,
 		Currency:         "USD",
 		AuthorizedAmount: numeric(40),
+		EstimatedAmount:  numeric(40),
 		IdempotencyKey:   fmt.Sprintf("capture-reservation-%d", time.Now().UnixNano()),
 		Reason:           "test capture reservation",
 	})
@@ -787,6 +791,7 @@ func TestReleaseReservedBalanceAndReservation(t *testing.T) {
 		RequestRecordID:  requestRecord.ID,
 		Currency:         "USD",
 		AuthorizedAmount: numeric(30),
+		EstimatedAmount:  numeric(30),
 		IdempotencyKey:   fmt.Sprintf("release-reservation-%d", time.Now().UnixNano()),
 		Reason:           "test release reservation",
 	})
@@ -840,6 +845,7 @@ func TestCaptureLedgerReservationRequiresMatchingLedgerEntry(t *testing.T) {
 		RequestRecordID:  requestRecord.ID,
 		Currency:         "USD",
 		AuthorizedAmount: numeric(10),
+		EstimatedAmount:  numeric(10),
 		IdempotencyKey:   fmt.Sprintf("capture-fk-reservation-%d", time.Now().UnixNano()),
 		Reason:           "test capture ledger entry foreign key",
 	})

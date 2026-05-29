@@ -38,9 +38,12 @@ type ChatCompletionService struct {
 	requestLog      requestlog.Service
 	chatSettlement  ChatSettlementExecutor
 	chatAuthorizer  ChatAuthorizer
+	metrics         MetricsRecorder
+	breaker         ChannelBreaker
 }
 
 // NewChatCompletionService 创建聊天补全 gateway service。
+// metricsRecorder 和 breaker 均可为 nil，分别表示不采集业务指标、不启用 channel 熔断。
 func NewChatCompletionService(
 	router ChatRouter,
 	registry AdapterRegistry,
@@ -48,6 +51,8 @@ func NewChatCompletionService(
 	requestLog requestlog.Service,
 	chatSettlement ChatSettlementExecutor,
 	chatAuthorizer ChatAuthorizer,
+	metricsRecorder MetricsRecorder,
+	breaker ChannelBreaker,
 ) *ChatCompletionService {
 	if retryClassifier == nil {
 		retryClassifier = NeverRetryClassifier{}
@@ -68,5 +73,7 @@ func NewChatCompletionService(
 		requestLog:      requestLog,
 		chatSettlement:  chatSettlement,
 		chatAuthorizer:  chatAuthorizer,
+		metrics:         metricsRecorder,
+		breaker:         breaker,
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
+	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
 )
 
 // statusRecorder 记录 handler 写出的 HTTP 状态码，供请求日志使用。
@@ -49,15 +50,24 @@ func Logger(logger *slog.Logger) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(recorder, r)
 
-			logger.InfoContext(
-				r.Context(),
-				"http request",
+			// 基础访问字段只包含方法、路径、状态码和耗时；
+			// 不记录请求体、用户 prompt、API key 或上游 Authorization。
+			args := []any{
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", recorder.status,
 				"duration_ms", time.Since(start).Milliseconds(),
-				"request_id", httpx.RequestID(r.Context()),
-			)
+			}
+
+			// 统一结构化字段（correlation_id、request_id、user/project/api_key、model/provider/channel）
+			// 由下游中间件和 gateway 填充到同一个 *logfields.Fields。
+			if fields, ok := logfields.FromContext(r.Context()); ok {
+				args = append(args, fields.Attrs()...)
+			} else {
+				args = append(args, "correlation_id", httpx.RequestID(r.Context()))
+			}
+
+			logger.InfoContext(r.Context(), "http request", args...)
 		})
 	}
 }

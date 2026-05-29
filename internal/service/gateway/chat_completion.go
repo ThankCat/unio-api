@@ -11,6 +11,8 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
+	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 )
 
 // CreateChatCompletion 编排非流式 chat completion 请求，并返回 OpenAI-compatible HTTP DTO。
@@ -37,10 +39,22 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		return nil, err
 	}
 
-	plan, err := s.router.PlanChat(ctx, routing.ChatRouteRequest{
+	// outcome 默认 failed，仅在成功/取消路径覆盖；
+	// defer 保证每个被编排的请求只计数一次，且不遗漏任何提前返回的失败分支。
+	outcome := metrics.ChatOutcomeFailed
+	defer func() {
+		s.recordChatRequest(false, outcome)
+	}()
+
+	ctx, span := startGatewaySpan(ctx, "gateway.chat_completion")
+	defer span.End()
+
+	planCtx, planSpan := startGatewaySpan(ctx, "gateway.routing")
+	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
 		ProjectID: principal.ProjectID,
 		ModelID:   req.Model,
 	})
+	endGatewaySpan(planSpan, err)
 	if err != nil {
 		s.markRequestRecordFailed(ctx, requestRecord, routingFailureCode(err), err)
 		return nil, err
@@ -51,6 +65,13 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 	authorizationCreated := false
 
 	for index, candidate := range plan.Candidates {
+		// channel 处于熔断 open 状态时直接跳过，尝试下一个同模型 channel；
+		// 跳过不产生上游调用，也不写 attempt（attempt_index 允许出现空洞）。
+		channelKey := metricsID(candidate.Channel.ID)
+		if !s.breakerAllow(channelKey) {
+			continue
+		}
+
 		// 每个 candidate 都先创建 attempt，再调用 adapter。
 		// 这样即使后续 fallback，也能在 request_attempts 里还原完整尝试链路。
 		attemptRecord, err := s.createAttemptRecord(ctx, requestRecord, index, candidate)
@@ -95,7 +116,9 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 			authorizationCreated = true
 		}
 
-		adapterResp, err := chatAdapter.ChatCompletions(ctx, candidate.Channel, adapter.ChatRequest{
+		adapterCtx, adapterSpan := startGatewaySpan(ctx, "adapter.chat_completions", upstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
+		upstreamStart := time.Now()
+		adapterResp, err := chatAdapter.ChatCompletions(adapterCtx, candidate.Channel, adapter.ChatRequest{
 			Model:            candidate.UpstreamModel,
 			Messages:         messages,
 			Temperature:      req.Temperature,
@@ -106,6 +129,9 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 			Stop:             req.Stop,
 			User:             req.User,
 		})
+		s.recordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
+		endGatewaySpan(adapterSpan, err)
+		s.recordChannelHealth(channelKey, err)
 		if err != nil {
 			// 客户端取消不是上游失败，也不应该触发 fallback。
 			// 此时还没有进入 settlement，不会写 usage、price snapshot 或 ledger。
@@ -115,6 +141,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 					return nil, releaseErr
 				}
 
+				outcome = metrics.ChatOutcomeCanceled
 				s.markRequestCanceled(ctx, requestRecord, attemptRecord, err)
 				return nil, err
 			}
@@ -134,9 +161,13 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 			continue
 		}
 
+		s.recordRoutingSelected(candidate.ProviderID, candidate.Channel.ID, req.Model)
+		logfields.SetRoute(ctx, req.Model, metricsID(candidate.ProviderID), metricsID(candidate.Channel.ID))
+
 		// 非流式成功请求的账务事实必须在 settlement 事务内一起提交。
 		// 这里不能先返回 HTTP response 再异步扣费，否则 usage、price snapshot、ledger 和 request status 会出现不一致窗口。
-		if err := s.chatSettlement.SettleSuccessfulChat(ctx, ChatSettlementParams{
+		settleCtx, settleSpan := startGatewaySpan(ctx, "gateway.settlement")
+		settleErr := s.chatSettlement.SettleSuccessfulChat(settleCtx, ChatSettlementParams{
 			RequestRecord:         requestRecord,
 			AttemptRecord:         attemptRecord,
 			Principal:             principal,
@@ -146,14 +177,19 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 			FinalProviderID:       candidate.ProviderID,
 			FinalChannelID:        candidate.Channel.ID,
 			UpstreamResponseModel: adapterResp.Model,
+			UpstreamStatusCode:    adapterResp.Upstream.StatusCode,
+			UpstreamRequestID:     upstreamRequestIDPtr(adapterResp.Upstream.RequestID),
 			Usage:                 adapterResp.Usage,
 			UsageSource:           ChatSettlementUsageSourceUpstreamResponse,
-		}); err != nil {
-			if !IsChatSettlementRecoveryScheduled(err) {
-				s.markRequestRecordFailed(ctx, requestRecord, "chat_settlement_failed", err)
-				return nil, err
-			}
+		})
+		endSettlementSpan(settleSpan, settleErr)
+		s.recordSettlement(settlementOutcomeFromErr(settleErr))
+		if settleErr != nil && !IsChatSettlementRecoveryScheduled(settleErr) {
+			s.markRequestRecordFailed(ctx, requestRecord, "chat_settlement_failed", settleErr)
+			return nil, settleErr
 		}
+
+		outcome = metrics.ChatOutcomeSuccess
 
 		return &gatewayapi.ChatCompletionResponse{
 			ID:      adapterResp.ID,

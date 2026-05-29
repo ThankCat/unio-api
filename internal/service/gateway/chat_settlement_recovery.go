@@ -131,6 +131,8 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 		ProviderID:            params.FinalProviderID,
 		ChannelID:             params.FinalChannelID,
 		UpstreamResponseModel: params.UpstreamResponseModel,
+		UpstreamStatusCode:    int32(params.UpstreamStatusCode),
+		UpstreamRequestID:     chatSettlementOptionalText(params.UpstreamRequestID),
 		UsagePromptTokens:     int64(params.Usage.PromptTokens),
 		UsageCompletionTokens: int64(params.Usage.CompletionTokens),
 		UsageTotalTokens:      int64(params.Usage.TotalTokens),
@@ -271,6 +273,8 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 		FinalProviderID:       job.ProviderID,
 		FinalChannelID:        job.ChannelID,
 		UpstreamResponseModel: job.UpstreamResponseModel,
+		UpstreamStatusCode:    int(job.UpstreamStatusCode),
+		UpstreamRequestID:     chatSettlementTextPtr(job.UpstreamRequestID),
 		Usage:                 usage,
 		UsageSource:           ChatSettlementUsageSource(job.UsageSource),
 	}, nil
@@ -405,6 +409,15 @@ func chatSettlementTextPtr(s pgtype.Text) *string {
 	}
 
 	return &s.String
+}
+
+// chatSettlementOptionalText 把可选字符串转换成可空 TEXT 列值。
+func chatSettlementOptionalText(s *string) pgtype.Text {
+	if s == nil {
+		return pgtype.Text{Valid: false}
+	}
+
+	return pgtype.Text{String: *s, Valid: true}
 }
 
 func chatSettlementInt64Ptr(i pgtype.Int8) *int64 {

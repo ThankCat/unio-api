@@ -19,15 +19,15 @@
 下一次学习时，优先阅读：
 
 ```text
-internal/adapter/sse
+internal/core/adapter/sse
 ```
 
 建议阅读顺序：
 
-1. [reader.go](../../../internal/adapter/sse/reader.go)
-2. [reader_test.go](../../../internal/adapter/sse/reader_test.go)
-3. [openai/chat.go](../../../internal/adapter/openai/chat.go)
-4. [openai/chat_test.go](../../../internal/adapter/openai/chat_test.go)
+1. [reader.go](../../../internal/core/adapter/sse/reader.go)
+2. [reader_test.go](../../../internal/core/adapter/sse/reader_test.go)
+3. [openai/chat.go](../../../internal/core/adapter/openai/chat.go)
+4. [openai/chat_test.go](../../../internal/core/adapter/openai/chat_test.go)
 
 ## 学习目标
 
@@ -38,7 +38,7 @@ internal/adapter/sse
 1. SSE event 的边界是空行，不是一行 `data:`。
 2. 一个 event 可以有多行 `data:`，读取后要用 `\n` 合并。
 3. `event`、`id`、`retry` 是协议字段，OpenAI adapter 当前主要消费 `data`。
-4. `internal/adapter/sse` 返回稳定错误，避免第三方库错误类型污染 adapter/gateway 契约。
+4. `internal/core/adapter/sse` 返回稳定错误，避免第三方库错误类型污染 adapter/gateway 契约。
 5. OpenAI adapter 只做 provider-specific JSON decode 和 DTO 映射，不负责通用 SSE 协议解析。
 6. 客户可见错误仍由 HTTP 层统一映射，不能透传 parser 内部错误。
 

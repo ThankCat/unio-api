@@ -45,6 +45,101 @@ func TestLoadInvalidRedisDB(t *testing.T) {
 	assertConfigFailure(t, err, failure.CodeConfigInvalid)
 }
 
+func TestLoadTracingDefaultsDisabled(t *testing.T) {
+	t.Setenv("OTEL_TRACING_ENABLED", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if cfg.Tracing.Enabled {
+		t.Fatal("expected tracing disabled by default")
+	}
+	if cfg.Tracing.ServiceName != "unio-gateway" {
+		t.Fatalf("expected default service name unio-gateway, got %q", cfg.Tracing.ServiceName)
+	}
+	if cfg.Tracing.SampleRatio != 1.0 {
+		t.Fatalf("expected default sample ratio 1.0, got %v", cfg.Tracing.SampleRatio)
+	}
+}
+
+func TestLoadTracingFromEnv(t *testing.T) {
+	t.Setenv("OTEL_TRACING_ENABLED", "true")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4318")
+	t.Setenv("OTEL_TRACES_SAMPLER_RATIO", "0.25")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if !cfg.Tracing.Enabled {
+		t.Fatal("expected tracing enabled")
+	}
+	if cfg.Tracing.Endpoint != "localhost:4318" {
+		t.Fatalf("expected endpoint localhost:4318, got %q", cfg.Tracing.Endpoint)
+	}
+	if cfg.Tracing.SampleRatio != 0.25 {
+		t.Fatalf("expected sample ratio 0.25, got %v", cfg.Tracing.SampleRatio)
+	}
+}
+
+func TestLoadInvalidTracingEnabled(t *testing.T) {
+	t.Setenv("OTEL_TRACING_ENABLED", "notabool")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	assertConfigFailure(t, err, failure.CodeConfigInvalid)
+}
+
+func TestLoadInvalidTracingSampleRatio(t *testing.T) {
+	t.Setenv("OTEL_TRACES_SAMPLER_RATIO", "notafloat")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	assertConfigFailure(t, err, failure.CodeConfigInvalid)
+}
+
+func TestLoadCircuitBreakerDefaults(t *testing.T) {
+	t.Setenv("CIRCUIT_BREAKER_ENABLED", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if !cfg.CircuitBreaker.Enabled {
+		t.Fatal("expected circuit breaker enabled by default")
+	}
+	if cfg.CircuitBreaker.MinRequests != 20 {
+		t.Fatalf("expected default min requests 20, got %d", cfg.CircuitBreaker.MinRequests)
+	}
+	if cfg.CircuitBreaker.FailureRatio != 0.5 {
+		t.Fatalf("expected default failure ratio 0.5, got %v", cfg.CircuitBreaker.FailureRatio)
+	}
+}
+
+func TestLoadCircuitBreakerDisabledFromEnv(t *testing.T) {
+	t.Setenv("CIRCUIT_BREAKER_ENABLED", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if cfg.CircuitBreaker.Enabled {
+		t.Fatal("expected circuit breaker disabled from env")
+	}
+}
+
 func TestLoadLogLevelDebug(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "debug")
 

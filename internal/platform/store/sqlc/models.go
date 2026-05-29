@@ -257,6 +257,8 @@ type SettlementRecoveryJob struct {
 	ProviderID              int64
 	ChannelID               int64
 	UpstreamResponseModel   string
+	UpstreamStatusCode      int32
+	UpstreamRequestID       pgtype.Text
 	UsagePromptTokens       int64
 	UsageCompletionTokens   int64
 	UsageTotalTokens        int64

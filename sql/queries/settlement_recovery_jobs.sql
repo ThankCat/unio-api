@@ -10,6 +10,8 @@ INSERT INTO settlement_recovery_jobs (
     provider_id,
     channel_id,
     upstream_response_model,
+    upstream_status_code,
+    upstream_request_id,
     usage_prompt_tokens,
     usage_completion_tokens,
     usage_total_tokens,
@@ -39,6 +41,8 @@ VALUES (
            sqlc.arg(provider_id),
            sqlc.arg(channel_id),
            sqlc.arg(upstream_response_model),
+           sqlc.arg(upstream_status_code),
+           sqlc.arg(upstream_request_id),
            sqlc.arg(usage_prompt_tokens),
            sqlc.arg(usage_completion_tokens),
            sqlc.arg(usage_total_tokens),
@@ -68,6 +72,8 @@ WHERE settlement_recovery_jobs.user_id = EXCLUDED.user_id
   AND settlement_recovery_jobs.provider_id = EXCLUDED.provider_id
   AND settlement_recovery_jobs.channel_id = EXCLUDED.channel_id
   AND settlement_recovery_jobs.upstream_response_model = EXCLUDED.upstream_response_model
+  AND settlement_recovery_jobs.upstream_status_code = EXCLUDED.upstream_status_code
+  AND settlement_recovery_jobs.upstream_request_id IS NOT DISTINCT FROM EXCLUDED.upstream_request_id
   AND settlement_recovery_jobs.usage_prompt_tokens = EXCLUDED.usage_prompt_tokens
   AND settlement_recovery_jobs.usage_completion_tokens = EXCLUDED.usage_completion_tokens
   AND settlement_recovery_jobs.usage_total_tokens = EXCLUDED.usage_total_tokens

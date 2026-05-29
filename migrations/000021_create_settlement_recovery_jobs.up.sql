@@ -30,6 +30,12 @@ CREATE TABLE settlement_recovery_jobs (
     -- upstream_response_model: 上游响应里的模型名。--
     upstream_response_model TEXT NOT NULL CHECK (upstream_response_model <> ''),
 
+    -- upstream_status_code: 上游成功响应的 HTTP 状态码，worker 重放 settlement 时写回 attempt。--
+    upstream_status_code INTEGER NOT NULL CHECK (upstream_status_code >= 100 AND upstream_status_code <= 599),
+
+    -- upstream_request_id: 上游返回的请求 ID，NULL 表示上游未提供。--
+    upstream_request_id TEXT CHECK (upstream_request_id IS NULL OR upstream_request_id <> ''),
+
     -- usage_prompt_tokens: 本次请求输入 token 数。--
     usage_prompt_tokens BIGINT NOT NULL CHECK (usage_prompt_tokens >= 0),
 

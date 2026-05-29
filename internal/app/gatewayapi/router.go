@@ -22,6 +22,15 @@ type RouterDeps struct {
 	RateLimitWindow        time.Duration
 	ModelCatalogService    ModelCatalogService
 	RateLimitFailurePolicy string
+
+	// HTTPMetrics 记录 HTTP 层请求指标；nil 表示不采集。
+	HTTPMetrics httpmw.MetricsRecorder
+
+	// RateLimitMetrics 记录限流判定指标；nil 表示不采集。
+	RateLimitMetrics middleware.RateLimitMetricsRecorder
+
+	// MetricsHandler 暴露 Prometheus /metrics；nil 表示不挂载该端点。
+	MetricsHandler http.Handler
 }
 
 // NewRouter 创建 API server 使用的 HTTP handler。
@@ -29,8 +38,14 @@ func NewRouter(deps RouterDeps) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(httpmw.RequestID)
+	r.Use(httpmw.Tracing)
+	r.Use(httpmw.Metrics(deps.HTTPMetrics))
 	r.Use(httpmw.Logger(deps.Logger))
 	r.Use(httpmw.Recoverer(deps.Logger))
+
+	if deps.MetricsHandler != nil {
+		r.Handle("/metrics", deps.MetricsHandler)
+	}
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		_ = httpx.WriteError(
@@ -62,6 +77,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 			Window:        deps.RateLimitWindow,
 			FailurePolicy: middleware.RateLimitFailurePolicy(deps.RateLimitFailurePolicy),
 			Logger:        deps.Logger,
+			Metrics:       deps.RateLimitMetrics,
 		}))
 
 		modelsHandler := &modelsHandler{

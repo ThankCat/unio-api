@@ -408,6 +408,10 @@ func chatResponse(content string) *adapter.ChatResponse {
 			CompletionTokens: 11,
 			TotalTokens:      21,
 		},
+		Upstream: adapter.UpstreamMetadata{
+			StatusCode: 200,
+			RequestID:  "req-nonstream-1",
+		},
 	}
 }
 
@@ -422,6 +426,10 @@ func streamUsageChunk(model string) adapter.ChatStreamChunk {
 			TotalTokens:      21,
 			CachedTokens:     3,
 			ReasoningTokens:  2,
+		},
+		Upstream: &adapter.UpstreamMetadata{
+			StatusCode: 200,
+			RequestID:  "req-stream-1",
 		},
 	}
 }
@@ -450,6 +458,8 @@ func newChatCompletionServiceForTestWithAuthorizer(router ChatRouter, registry A
 		requestLog,
 		settlement,
 		authorizer,
+		nil,
+		nil,
 	)
 }
 
@@ -565,6 +575,12 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	}
 	if settlementParams.UpstreamResponseModel != "gpt-4.1" {
 		t.Fatalf("expected upstream response model %q, got %q", "gpt-4.1", settlementParams.UpstreamResponseModel)
+	}
+	if settlementParams.UpstreamStatusCode != 200 {
+		t.Fatalf("expected settlement upstream status 200, got %d", settlementParams.UpstreamStatusCode)
+	}
+	if settlementParams.UpstreamRequestID == nil || *settlementParams.UpstreamRequestID != "req-nonstream-1" {
+		t.Fatalf("expected settlement upstream request id %q, got %v", "req-nonstream-1", settlementParams.UpstreamRequestID)
 	}
 	if settlementParams.Usage.TotalTokens != 21 {
 		t.Fatalf("expected settlement total tokens %d, got %d", 21, settlementParams.Usage.TotalTokens)
@@ -1291,6 +1307,12 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 	}
 	if settlement.params[0].UpstreamResponseModel != "gpt-4.1" {
 		t.Fatalf("expected settlement upstream model %q, got %q", "gpt-4.1", settlement.params[0].UpstreamResponseModel)
+	}
+	if settlement.params[0].UpstreamStatusCode != 200 {
+		t.Fatalf("expected stream settlement upstream status 200, got %d", settlement.params[0].UpstreamStatusCode)
+	}
+	if settlement.params[0].UpstreamRequestID == nil || *settlement.params[0].UpstreamRequestID != "req-stream-1" {
+		t.Fatalf("expected stream settlement upstream request id %q, got %v", "req-stream-1", settlement.params[0].UpstreamRequestID)
 	}
 	if settlement.params[0].Usage.CachedTokens != 3 {
 		t.Fatalf("expected cached tokens %d, got %d", 3, settlement.params[0].Usage.CachedTokens)

@@ -386,6 +386,8 @@ func (d *chatSettlementDBDeps) params() ChatSettlementParams {
 		FinalProviderID:       d.providerID,
 		FinalChannelID:        d.channelID,
 		UpstreamResponseModel: "gpt-4.1",
+		UpstreamStatusCode:    200,
+		UpstreamRequestID:     upstreamRequestIDPtr("req-settlement-1"),
 		Usage: adapter.ChatUsage{
 			PromptTokens:     10,
 			CompletionTokens: 5,
@@ -552,6 +554,23 @@ func attemptStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attemp
 	return status
 }
 
+// attemptUpstreamMetadata 查询 request attempt 写入的真实上游 status code 和 request id。
+func attemptUpstreamMetadata(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attemptID int64) (int, string) {
+	t.Helper()
+
+	var statusCode pgtype.Int4
+	var requestID pgtype.Text
+	if err := pool.QueryRow(ctx, `
+		SELECT upstream_status_code, upstream_request_id
+		FROM request_attempts
+		WHERE id = $1
+	`, attemptID).Scan(&statusCode, &requestID); err != nil {
+		t.Fatalf("query attempt upstream metadata: %v", err)
+	}
+
+	return int(statusCode.Int32), requestID.String
+}
+
 // testNumeric 创建测试用 pgtype.Numeric。
 func testNumeric(value int64, exp int32) pgtype.Numeric {
 	return pgtype.Numeric{Int: big.NewInt(value), Exp: exp, Valid: true}
@@ -665,6 +684,14 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 		t.Fatalf("expected attempt succeeded, got %q", status)
 	}
 
+	gotStatusCode, gotRequestID := attemptUpstreamMetadata(t, deps.ctx, deps.pool, deps.attemptRecord.ID)
+	if gotStatusCode != 200 {
+		t.Fatalf("expected attempt upstream status 200, got %d", gotStatusCode)
+	}
+	if gotRequestID != "req-settlement-1" {
+		t.Fatalf("expected attempt upstream request id %q, got %q", "req-settlement-1", gotRequestID)
+	}
+
 	if len(billingCalculator.usages) != 1 || len(billingCalculator.prices) != 1 {
 		t.Fatalf("expected one billing calculation, got usages=%d prices=%d", len(billingCalculator.usages), len(billingCalculator.prices))
 	}
@@ -685,6 +712,13 @@ func TestChatSettlementUsesAuthorizationPriceWhenActivePriceChanges(t *testing.T
 	deps := newChatSettlementDBDeps(t)
 	params := deps.params()
 
+	// prices 排他约束不允许同一模型存在重叠的 enabled 生效窗口。
+	// 先收口 seed 价格窗口，再新增一个相邻的 enabled 价格，模拟“当前生效价格已变更”。
+	priceChangeAt := time.Now()
+	if _, err := deps.pool.Exec(deps.ctx, `UPDATE prices SET effective_to = $2 WHERE id = $1`, deps.priceID, priceChangeAt); err != nil {
+		t.Fatalf("close seed price window: %v", err)
+	}
+
 	newPrice, err := deps.queries.CreatePrice(deps.ctx, sqlc.CreatePriceParams{
 		ModelID:              deps.modelID,
 		Currency:             "USD",
@@ -694,7 +728,7 @@ func TestChatSettlementUsesAuthorizationPriceWhenActivePriceChanges(t *testing.T
 		CachedInputPrice:     testNumeric(49_0000000000, -10),
 		ReasoningOutputPrice: testNumeric(299_0000000000, -10),
 		Status:               "enabled",
-		EffectiveFrom:        pgtype.Timestamptz{Time: time.Now().Add(-time.Minute), Valid: true},
+		EffectiveFrom:        pgtype.Timestamptz{Time: priceChangeAt, Valid: true},
 		EffectiveTo:          pgtype.Timestamptz{Valid: false},
 	})
 	if err != nil {
@@ -751,8 +785,10 @@ func TestChatSettlementUsesAttemptTimeCostPriceWhenActiveCostChanges(t *testing.
 		CachedInputCost:     testNumeric(49_0000000000, -10),
 		ReasoningOutputCost: testNumeric(299_0000000000, -10),
 		Status:              "enabled",
-		EffectiveFrom:       pgtype.Timestamptz{Time: params.AttemptRecord.StartedAt.Add(time.Nanosecond), Valid: true},
-		EffectiveTo:         pgtype.Timestamptz{Valid: false},
+		// 必须明显晚于 attempt 时间：PostgreSQL timestamptz 精度是微秒，
+		// 纳秒级偏移会被舍入到同一时刻，导致按 effective_from DESC 误选这条更新的成本价。
+		EffectiveFrom: pgtype.Timestamptz{Time: params.AttemptRecord.StartedAt.Add(time.Minute), Valid: true},
+		EffectiveTo:   pgtype.Timestamptz{Valid: false},
 	})
 	if err != nil {
 		t.Fatalf("create replacement cost price: %v", err)

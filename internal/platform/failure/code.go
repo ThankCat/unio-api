@@ -59,6 +59,9 @@ const (
 
 	// CategoryBootstrap 表示启动装配或 preflight 检查错误。
 	CategoryBootstrap Category = "bootstrap"
+
+	// CategoryObservability 表示可观测性基础设施（tracing/metrics 导出器）初始化错误。
+	CategoryObservability Category = "observability"
 )
 
 // Category 从错误码前缀推导错误分类，例如 config_invalid => config。
@@ -309,4 +312,9 @@ const (
 
 	// CodeBootstrapProviderAdapterCapabilityMissing 表示启用 provider 配置的 adapter 缺少当前进程要求的能力。
 	CodeBootstrapProviderAdapterCapabilityMissing Code = "bootstrap_provider_adapter_capability_missing"
+)
+
+const (
+	// CodeObservabilityTracerInitFailed 表示 OpenTelemetry tracer/exporter 初始化失败。
+	CodeObservabilityTracerInitFailed Code = "observability_tracer_init_failed"
 )

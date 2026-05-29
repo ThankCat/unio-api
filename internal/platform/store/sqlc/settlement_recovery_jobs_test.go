@@ -94,6 +94,8 @@ func settlementRecoveryJobParams(f settlementRecoveryFixture, nextRunAt time.Tim
 		ProviderID:            f.providerID,
 		ChannelID:             f.channelID,
 		UpstreamResponseModel: "gpt-4.1",
+		UpstreamStatusCode:    200,
+		UpstreamRequestID:     pgtype.Text{String: "req-recovery-1", Valid: true},
 		UsagePromptTokens:     10,
 		UsageCompletionTokens: 5,
 		UsageTotalTokens:      15,

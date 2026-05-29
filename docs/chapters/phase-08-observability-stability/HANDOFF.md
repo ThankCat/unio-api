@@ -1,97 +1,114 @@
-# Phase 8 Handoff - Failure Foundation
+# Phase 8 Handoff
 
-更新时间：2026-05-21
+更新时间：2026-05-29
 
-## 当前状态
+## 当前进度
 
-结构化 Failure 基础已经接入项目主链路。
+阶段 8 五节中已完成四节，只剩 TASK-8.05。
 
-已完成：
+| 任务 | 状态 | 摘要 |
+| --- | --- | --- |
+| TASK-8.01 | done | adapter metadata + provider error 结构化分类 |
+| TASK-8.02 | done | Prometheus metrics |
+| TASK-8.03 | done | structured logs + OpenTelemetry |
+| TASK-8.04 | done | retry/fallback + channel 熔断 |
+| TASK-8.05 | planned | HTTP SSE Writer（下一节，关联 GAP-8-002） |
 
-1. 新增 `internal/failure`，统一承载稳定 `Code`、`Category`、message、cause 和少量安全 fields。
-2. `failure.Code` 使用 `<category>_<reason>` 格式，`Category` 从第一个 `_` 前缀推导。
-3. `failure.LogArgs` 已用于启动错误日志和 rate limit 故障日志。
-4. Config、HTTP JSON、Postgres、Redis、auth、apikey、ratelimit、routing、credential、modelcatalog、adapter、SSE、billing、ledger、requestlog 和 gateway 关键错误已接入 failure。
-5. 原有 sentinel error 继续保留，并作为 `failure.Wrap` 的 cause，因此 `errors.Is` 判断仍然可用。
-6. `request_records.error_code` 和 `request_attempts.error_code` 已优先使用 `failure.CodeOf(err)`。
-7. 测试已调整为断言 `failure.CodeOf`、`failure.CategoryOf` 和 `errors.Is`，不再依赖完整错误字符串。
+## 已完成内容（今天）
 
-## 重要规范
+### 入场前先修了阶段 7 遗留的红
 
-以后新增错误时遵循：
-
-1. 需要跨模块传播、日志记录、写入 request/attempt error_code、参与 retry/fallback 判断的错误，必须定义 `failure.Code`。
-2. 模块内可以保留 `ErrXxx` sentinel，但返回给上层时要使用 `failure.Wrap(code, ErrXxx, ...)`。
-3. `failure.WithMessage` 是内部诊断消息，不是用户可见文案。
-4. `failure.WithField` 只放少量安全、确实需要检索的字段；不要为每个模块维护一套 Field 常量。
-5. HTTP 层负责把内部 failure 映射成安全的 OpenAI-compatible error，不直接暴露 `err.Error()`。
-6. 日志记录错误时用 `failure.LogArgs(err)`，不要手写分散的 `error_code`、`error_category`。
-7. 测试优先断言稳定 code/category 和 cause，不断言完整错误字符串。
-
-## 仍需注意
-
-这次只是 Failure 基础，不等于阶段 8 完成。
-
-仍未完成：
-
-1. Provider 原始错误 body 的脱敏解析和 metadata contract。
-2. retry/fallback 基于 provider 错误类型的精细分类。
-3. channel health 根据错误率降权或熔断。
-4. SSE Writer、heartbeat 和更完整的 stream observability。
-
-相关 GAP：
-
-1. [GAP-8-001](../../production/TODO_REGISTER.md#gap-8-001)
-2. [GAP-8-002](../../production/TODO_REGISTER.md#gap-8-002)
-
-说明：
+这些是集成测试（无 `DATABASE_URL` 时 skip，平时没暴露）与阶段 7 已落地 schema 的脱节，全部是测试侧修复：
 
 ```text
-GAP-7-006 已在 2026-05-29 关闭：Chat Completions SSE 已开始后会写出 OpenAI-compatible data-only error chunk，并且不写 [DONE]。
-阶段 8 后续只增强项目级 SSE Writer、metrics、日志和 observability，不再阻塞阶段 7。
+requestlog 状态机：succeeded 后不能转 failed（GAP-7-003），失败映射改到独立 running attempt。
+ledger reservation：补 estimated_amount（GAP-7-014 拆分 estimated/authorized）。
+prices 排他约束：测试创建了重叠 enabled 生效窗口（GAP-7-010），改为相邻/收口窗口。
+cost price：+1ns 偏移低于 PostgreSQL timestamptz 微秒精度，改为 +time.Minute。
 ```
 
-## 建议阅读顺序
+### TASK-8.01 adapter metadata 与 provider error classification
 
-1. [internal/failure/code.go](../../../internal/failure/code.go)
-2. [internal/failure/failure.go](../../../internal/failure/failure.go)
-3. [internal/failure/log.go](../../../internal/failure/log.go)
-4. [internal/config/config.go](../../../internal/config/config.go)
-5. [internal/httpx/json.go](../../../internal/httpx/json.go)
-6. [internal/routing/router.go](../../../internal/routing/router.go)
-7. [internal/adapter/openai/chat.go](../../../internal/adapter/openai/chat.go)
-8. [internal/gateway/chat_request_record.go](../../../internal/gateway/chat_request_record.go)
+```text
+internal/core/adapter/upstream_error.go
+= UpstreamErrorCategory（auth/permission/rate_limit/bad_request/timeout/canceled/server_error/unknown）
+= UpstreamMetadata{StatusCode, RequestID} + UpstreamError（cause 仍是 *failure.Failure，CodeOf/errors.Is 不变）
+= UpstreamCategoryOf / UpstreamMetadataOf
+internal/core/adapter/openai/errors.go = status/网络错误 → category，读 X-Request-Id
+gateway ProviderErrorClassifier = 按 category 判定 retryable（rate_limit/timeout/server_error 可 fallback）
+GAP-8-001 已关闭：ChatResponse/ChatStreamChunk 增加 Upstream，settlement 写真实 upstream status/request id，
+  settlement_recovery_jobs 新增 upstream_status_code/upstream_request_id 列，重放写回一致。
+```
+
+### TASK-8.02 Prometheus metrics
+
+```text
+internal/platform/observability/metrics
+= HTTP（计数/耗时/状态）、gateway 请求结果、routing 选中、上游调用+错误分类+耗时、
+  结算结果、流式事件、限流判定 + Go runtime/process 采集器。
+/metrics 挂 gateway 根路由（不经 /v1 鉴权）。
+business 指标在 gateway service 层 + 中间件层采集，核心 adapter/routing/billing 包不感知 metrics。
+project_id 等高基数维度不作为 label（按 request_records/usage_records 聚合）。
+```
+
+### TASK-8.03 structured logs + OpenTelemetry
+
+```text
+internal/platform/observability/logfields
+= 按请求传播的可变 *Fields（context 内指针）；request_id 中间件安装（correlation_id=HTTP X-Request-ID），
+  认证中间件填 user/project/api_key，gateway 填业务 request_id 和 model/provider/channel，HTTP Logger 输出统一字段。
+= 脱敏：访问日志不记录请求体/prompt/API key/Authorization/credential（有测试覆盖）。
+internal/platform/observability/tracing
+= Setup 默认关闭（opt-in OTLP HTTP）；httpmw.Tracing 建 server span（ServeHTTP 后 SetName 补路由模板）；
+  gateway 拆分 gateway.chat_completion(.stream) / gateway.routing / adapter.* / gateway.settlement span，同属一条 trace。
+= provider 在 NewGatewayServerApp 安装，main 优雅关闭时 flush。
+```
+
+### TASK-8.04 retry + circuit breaker
+
+```text
+retry/fallback 在 8.01 已落地（ProviderErrorClassifier）。
+internal/service/gateway/channel_breaker.go = 进程内 channel 熔断器（固定窗口错误率 + closed/open/half-open 状态机）。
+gateway 拿到 route plan 后跳过 open channel（fallback 下一个同模型 channel），每次尝试后按 category 记录健康：
+  timeout/server_error/rate_limit/auth/permission 计 channel 故障，bad_request/canceled 不计。
+核心 routing 保持纯 DB 查询，熔断过滤在 service 层。默认启用，阈值可配置。
+跨实例共享健康 + 后台手动恢复 → 阶段 9 admin。
+```
+
+## 重要边界与约定（继续开发请遵守）
+
+```text
+1. 可观测性依赖只停在 app/service/中间件边界；核心 adapter/routing/billing/ledger 包不感知 metrics/tracing。
+2. metrics label 只用 admin 可控、取值有界的维度；不放 project_id/api key/prompt/raw URL/request_id。
+3. 日志/trace 不记录 prompt、API key、credential、上游 Authorization。
+4. metrics recorder、tracing、channel breaker 在 gateway 内均为可选（nil 安全）。
+5. tracing 默认关闭；真实导出需 OTLP collector，单测用内存 span recorder（tracetest）验证。
+```
+
+## 下一步：TASK-8.05 HTTP SSE Writer
+
+当前 stream 写出只靠 [httpx.WriteSSE](../../../internal/platform/httpx/response.go) 的 data-only helper（关联 [GAP-8-002](../../production/TODO_REGISTER.md#gap-8-002)）。
+
+目标（详见 [PLAN.md](PLAN.md#task-8-05-http-sse-writer)）：
+
+```text
+抽出项目级 SSE Writer：支持 data / event / id / retry / comment heartbeat、多行 data 拆分、
+写出前检查 request context、flush 失败返回稳定错误、写出后错误事件，覆盖客户端取消。
+注意：项目级 SSE Reader 已在 internal/core/adapter/sse，Writer 优先只在 HTTP 层使用，不污染 gateway/adapter contract。
+```
+
+建议阅读顺序：
+
+1. [internal/platform/httpx/response.go](../../../internal/platform/httpx/response.go)（当前 WriteSSE）
+2. [internal/core/adapter/sse/reader.go](../../../internal/core/adapter/sse/reader.go)（已有 Reader 风格参考）
+3. [internal/app/gatewayapi/chat_completions_handler.go](../../../internal/app/gatewayapi/chat_completions_handler.go)（SSE 写出调用方）
 
 ## 验证命令
 
 ```bash
-go test ./...
+DATABASE_URL=postgres://unio:***@localhost:5432/unio?sslmode=disable go test ./...
+go vet ./...
+git diff --check
 ```
 
-最近一次验证：2026-05-21，通过。
-
-手动启动错误日志验证：
-
-```bash
-REDIS_DB=abc go run ./cmd/server
-```
-
-期望看到：
-
-```text
-error="parse REDIS_DB as int" error_code=config_invalid error_category=config
-```
-
-## 下一步
-
-如果继续阶段 8：
-
-```text
-TASK-8.01 adapter metadata 和 provider error classification
-```
-
-如果回到阶段 7 主线：
-
-```text
-7.17 余额预检查与预授权最小闭环
-```
+最近一次验证：2026-05-29，24 包全绿。

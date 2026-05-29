@@ -11,6 +11,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
 )
 
 const maxRequestLogInternalErrorDetailBytes = 2048
@@ -23,6 +24,9 @@ func (s *ChatCompletionService) createRequestRecord(ctx context.Context, princip
 	if err != nil {
 		return requestlog.RequestRecord{}, err
 	}
+
+	// 把业务 request_id 写入结构化日志字段，使其与 HTTP correlation_id 在同一条访问日志可关联。
+	logfields.SetRequestID(ctx, requestID)
 
 	record, err := s.requestLog.CreateRequest(ctx, requestlog.CreateRequestParams{
 		RequestID:        requestID,
