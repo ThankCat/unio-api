@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai/normalizer"
+	"github.com/ThankCat/unio-api/internal/core/adapter/openai/streamtranslate"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
@@ -28,7 +28,7 @@ func adapterChatRequestWithParams() adapter.ChatRequest {
 	return adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Content: jsonContent("hello")},
 		},
 		Temperature:      &temperature,
 		TopP:             &topP,
@@ -99,7 +99,7 @@ func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 			ID:    "chatcmpl_test",
 			Model: "gpt-4.1",
 			Choices: []chatChoice{
-				{Message: chatMessage{Role: "assistant", Content: "hello from fake upstream"}},
+				{Message: chatMessage{Role: "assistant", Content: jsonContent("hello from fake upstream")}},
 			},
 			Usage: &chatCompletionUsage{
 				PromptTokens:     intPtr(11),
@@ -149,7 +149,7 @@ func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 	if gotRequestBody.Messages[0].Role != "user" {
 		t.Fatalf("got role %q, want %q", gotRequestBody.Messages[0].Role, "user")
 	}
-	if gotRequestBody.Messages[0].Content != "hello" {
+	if wireMessageContentString(gotRequestBody.Messages[0].Content) != "hello" {
 		t.Fatalf("got %q, want %q", gotRequestBody.Messages[0].Content, "hello")
 	}
 	assertUpstreamChatRequestParams(t, gotRequestBody)
@@ -234,7 +234,7 @@ func TestAdapterChatCompletionsReturnsErrorForMissingUsage(t *testing.T) {
 			}, adapter.ChatRequest{
 				Model: "gpt-4.1",
 				Messages: []adapter.ChatMessage{
-					{Role: "user", Content: "hello"},
+					{Role: "user", Content: jsonContent("hello")},
 				},
 			})
 			if err == nil {
@@ -263,7 +263,7 @@ func TestAdapterChatCompletionsReturnsErrorForUpstreamStatus(t *testing.T) {
 	}, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Content: jsonContent("hello")},
 		},
 	})
 	if err == nil {
@@ -293,7 +293,7 @@ func TestAdapterChatCompletionsUsesChannelTimeout(t *testing.T) {
 		},
 		adapter.ChatRequest{Model: "gpt-4.1",
 			Messages: []adapter.ChatMessage{
-				{Role: "user", Content: "hello"},
+				{Role: "user", Content: jsonContent("hello")},
 			}})
 
 	if err == nil {
@@ -469,7 +469,7 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 		t.Fatalf("got role %q, want %q", gotRequestBody.Messages[0].Role, "user")
 	}
 
-	if gotRequestBody.Messages[0].Content != "hello" {
+	if wireMessageContentString(gotRequestBody.Messages[0].Content) != "hello" {
 		t.Fatalf("got content %q, want %q", gotRequestBody.Messages[0].Content, "hello")
 	}
 	assertUpstreamChatRequestParams(t, gotRequestBody)
@@ -569,7 +569,7 @@ func TestAdapterStreamChatCompletionsParsesMultilineSSEEvent(t *testing.T) {
 	}, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Content: jsonContent("hello")},
 		},
 	}, func(chunk adapter.ChatStreamChunk) error {
 		got = append(got, chunk)
@@ -617,7 +617,7 @@ func TestAdapterStreamChatCompletionsParsesOpenAIRawSSEFixture(t *testing.T) {
 	}, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Content: jsonContent("hello")},
 		},
 	}, func(chunk adapter.ChatStreamChunk) error {
 		got = append(got, chunk)
@@ -689,7 +689,7 @@ func TestAdapterStreamChatCompletionsParsesDeepSeekUsageTail(t *testing.T) {
 	}, adapter.ChatRequest{
 		Model: "deepseek-v4-pro",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hi"},
+			{Role: "user", Content: jsonContent("hi")},
 		},
 	}, func(chunk adapter.ChatStreamChunk) error {
 		got = append(got, chunk)
@@ -744,7 +744,7 @@ func TestAdapterStreamChatCompletionsForwardsDeepSeekReasoningContent(t *testing
 	}, adapter.ChatRequest{
 		Model: "deepseek-v4-pro",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hi"},
+			{Role: "user", Content: jsonContent("hi")},
 		},
 	}, func(chunk adapter.ChatStreamChunk) error {
 		got = append(got, chunk)
@@ -757,11 +757,11 @@ func TestAdapterStreamChatCompletionsForwardsDeepSeekReasoningContent(t *testing
 	if len(got) != 5 {
 		t.Fatalf("got %d chunks, want 5", len(got))
 	}
-	if got[1].Content != "We" {
-		t.Fatalf("got chunk[1].Content %q, want We", got[1].Content)
+	if got[1].ReasoningContent == nil || *got[1].ReasoningContent != "We" {
+		t.Fatalf("got chunk[1].ReasoningContent %+v, want We", got[1].ReasoningContent)
 	}
-	if got[2].Content != " are" {
-		t.Fatalf("got chunk[2].Content %q, want  are", got[2].Content)
+	if got[2].ReasoningContent == nil || *got[2].ReasoningContent != " are" {
+		t.Fatalf("got chunk[2].ReasoningContent %+v, want  are", got[2].ReasoningContent)
 	}
 	if got[4].Usage == nil || got[4].Usage.TotalTokens != 9 {
 		t.Fatalf("got final usage %+v, want total_tokens=9", got[4].Usage)
@@ -781,7 +781,7 @@ func TestAdapterStreamChatCompletionsDoesNotForwardReasoningWithoutDeepSeekNorma
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client(), normalizer.NewRegistry(normalizer.Default{}))
+	openAIAdapter := NewAdapter(server.Client(), streamtranslate.NewRegistry(streamtranslate.Default{}))
 
 	got := make([]adapter.ChatStreamChunk, 0)
 	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
@@ -792,7 +792,7 @@ func TestAdapterStreamChatCompletionsDoesNotForwardReasoningWithoutDeepSeekNorma
 	}, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hi"},
+			{Role: "user", Content: jsonContent("hi")},
 		},
 	}, func(chunk adapter.ChatStreamChunk) error {
 		got = append(got, chunk)
@@ -806,7 +806,7 @@ func TestAdapterStreamChatCompletionsDoesNotForwardReasoningWithoutDeepSeekNorma
 		t.Fatalf("got %d chunks, want 1", len(got))
 	}
 	if got[0].Content != "" {
-		t.Fatalf("got content %q, want empty content without deepseek normalizer", got[0].Content)
+		t.Fatalf("got content %q, want empty content without deepseek translator", got[0].Content)
 	}
 }
 
@@ -846,7 +846,7 @@ func TestAdapterStreamChatCompletionsParsesLargeSSEEvent(t *testing.T) {
 	}, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Content: jsonContent("hello")},
 		},
 	}, func(chunk adapter.ChatStreamChunk) error {
 		got = append(got, chunk)
@@ -879,7 +879,7 @@ func TestAdapterStreamChatCompletionsReturnsErrorForUpstreamStatus(t *testing.T)
 	}, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Content: jsonContent("hello")},
 		},
 	}, func(chunk adapter.ChatStreamChunk) error {
 		t.Fatalf("unexpected stream chunk: %+v", chunk)
@@ -912,7 +912,7 @@ func TestAdapterStreamChatCompletionsReturnsErrorForBadSSEJSON(t *testing.T) {
 	}, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Content: jsonContent("hello")},
 		},
 	}, func(chunk adapter.ChatStreamChunk) error {
 		t.Fatalf("unexpected stream chunk: %+v", chunk)
@@ -973,7 +973,7 @@ func TestAdapterStreamChatCompletionsStopsWhenEmitReturnsError(t *testing.T) {
 	}, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Content: jsonContent("hello")},
 		},
 	}, func(chunk adapter.ChatStreamChunk) error {
 		emitCalls++
@@ -1049,7 +1049,7 @@ func TestAdapterStreamChatCompletionsStopsAtDone(t *testing.T) {
 	}, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Content: jsonContent("hello")},
 		},
 	}, func(chunk adapter.ChatStreamChunk) error {
 		got = append(got, chunk)

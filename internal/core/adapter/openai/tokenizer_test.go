@@ -13,8 +13,8 @@ func TestAdapterCountChatInputTokensCountsMessages(t *testing.T) {
 	got, err := openAIAdapter.CountChatInputTokens(adapter.ChatInputTokenizeRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "system", Content: "You are concise."},
-			{Role: "user", Content: "Hello"},
+			{Role: "system", Content: jsonContent("You are concise.")},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 	})
 	if err != nil {
@@ -31,7 +31,7 @@ func TestAdapterCountChatInputTokensRejectsEmptyModel(t *testing.T) {
 	_, err := openAIAdapter.CountChatInputTokens(adapter.ChatInputTokenizeRequest{
 		Model: " ",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 	})
 	if failure.CodeOf(err) != failure.CodeAdapterTokenizeFailed {

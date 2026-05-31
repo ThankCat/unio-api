@@ -53,3 +53,46 @@ C1~C4 done 表示 chat/reasoning/stream usage 等核心 drop-in 能力就绪；*
 6. [DECISIONS.md](../../production/DECISIONS.md) 含 OpenAI-first ADR（DEC-005）。
 7. Phase 4 text-only MVP 边界已标注由 Phase 9 取代。
 8. 文档中不再单独定义 Normalizer 架构；统一称为 adapter 响应翻译 / stream translate。
+
+---
+
+## 验收记录
+
+**日期**：2026-05-31  
+**结论**：**通过**（C1~C6 + DeepSeek E2E；C8 明确 deferred）
+
+### 自动化验证命令
+
+```bash
+go test ./internal/app/gatewayapi/... ./internal/core/adapter/... ./internal/service/gateway/... -count=1
+go test ./internal/... -count=1
+go vet ./internal/...
+go build ./cmd/gateway-server ./cmd/worker-server
+```
+
+以上命令于 2026-05-31 全部通过。
+
+### 验收项核对
+
+| 类别 | 项 | 结果 |
+| --- | --- | --- |
+| 产品 | OpenAI SDK drop-in（C1~C4） | ✅ Go SDK 形状 + HTTP handler 黑盒 |
+| 产品 | 无 vendor 字段对外暴露 | ✅ |
+| 产品 | Compatibility Matrix 三态 | ✅ |
+| 产品 | gateway 无 vendor 分支 | ✅（生产代码无 deepseek 分支） |
+| 功能 C1~C4 | 参数透传 / include_usage / reasoning 双字段 / usage details | ✅ |
+| 功能 C1~C4 | streamtranslate 替代 normalizer | ✅ |
+| DS-01~07 | DeepSeek E2E | ✅ 8 个测试全绿 |
+| C5~C6 | tools / response_format typed | ✅ |
+| 生产 | Reject 400 / settlement 内部 usage | ✅ |
+| GAP | GAP-9-001~004 | ✅ 全部 done |
+| 阻断 | RELEASE_BLOCKERS | ✅ 无 P0 |
+
+### 已知 deferred（不阻断阶段 done）
+
+| 项 | 说明 |
+| --- | --- |
+| Python OpenAI SDK 实机黑盒 | ✅ 2026-05-31 本地 `127.0.0.1:8520` 6/6 通过（见 `tests/openai_sdk_blackbox/run_acceptance.py`） |
+| C8 高级字段 | `logprobs`、`n`、`seed` 等待后续迭代 |
+| 流式 tool_calls 增量 typed | 当前 RawMessage passthrough，多数 SDK 场景足够 |
+

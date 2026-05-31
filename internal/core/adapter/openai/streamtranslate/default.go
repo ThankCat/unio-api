@@ -1,18 +1,16 @@
-package normalizer
+package streamtranslate
+
+import "encoding/json"
 
 const DefaultKey Key = "default"
 
-// Default 是 OpenAI-compatible 协议的基线 Normalizer。
+// Default 是 OpenAI-compatible 协议的基线 stream translator。
 type Default struct{}
 
 func (Default) Key() Key { return DefaultKey }
 
-// NormalizeStreamEvent 把单个上游 SSE event 转成 0..N 个内部 stream event。
-// 基线规则：
-// 1. 先输出 content/role/finish_reason 事件；
-// 2. 只要 usage 非 nil 就追加 usage 事件（不要求 choices 为空）；
-// 3. 跳过无 role/content/reasoning/finish_reason 的空心跳。
-func (Default) NormalizeStreamEvent(in StreamInput) ([]StreamEvent, error) {
+// TranslateStreamEvent 把单个上游 SSE event 转成 0..N 个内部 stream event。
+func (Default) TranslateStreamEvent(in StreamInput) ([]StreamEvent, error) {
 	out := make([]StreamEvent, 0, len(in.Choices)+1)
 
 	for _, choice := range in.Choices {
@@ -21,11 +19,13 @@ func (Default) NormalizeStreamEvent(in StreamInput) ([]StreamEvent, error) {
 		}
 
 		out = append(out, StreamEvent{
-			ID:           in.ID,
-			Model:        in.Model,
-			Role:         choice.Role,
-			Content:      choice.Content,
-			FinishReason: choice.FinishReason,
+			ID:               in.ID,
+			Model:            in.Model,
+			Role:             choice.Role,
+			Content:          choice.Content,
+			ReasoningContent: choice.ReasoningContent,
+			ToolCalls:        append(json.RawMessage(nil), choice.ToolCalls...),
+			FinishReason:     choice.FinishReason,
 		})
 	}
 
@@ -45,5 +45,6 @@ func isSkippableStreamChoice(choice StreamChoice) bool {
 	return choice.Role == "" &&
 		choice.Content == "" &&
 		choice.ReasoningContent == "" &&
+		len(choice.ToolCalls) == 0 &&
 		choice.FinishReason == nil
 }

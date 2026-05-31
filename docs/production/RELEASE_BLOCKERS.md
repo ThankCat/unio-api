@@ -4,11 +4,9 @@
 
 ## 当前阻断项
 
-| ID | GAP | 阶段 | 阻断原因 | 关联任务 |
-| --- | --- | --- | --- | --- |
-| RB-9-001 | [GAP-9-001](TODO_REGISTER.md#gap-9-001) | 阶段 9 | 公开 Chat Completions 请求字段 silent drop，破坏 OpenAI drop-in 替换承诺。 | [TASK-9.02](../chapters/phase-09-openai-protocol-parity/PLAN.md#task-9-02-request-no-silent-drop) |
-| RB-9-002 | [GAP-9-002](TODO_REGISTER.md#gap-9-002) | 阶段 9 | 对外响应缺少 reasoning_content、usage details 等 OpenAI 字段；非流式只返回 content。 | [TASK-9.03](../chapters/phase-09-openai-protocol-parity/PLAN.md#task-9-03-public-openai-dto) |
-| RB-9-003 | [GAP-9-003](TODO_REGISTER.md#gap-9-003) | 阶段 9 | 流式响应翻译未对齐 OpenAI chunk 语义；过渡 normalizer 将 reasoning 合并进 content。 | [TASK-9.07](../chapters/phase-09-openai-protocol-parity/PLAN.md#task-9-07-stream-response-translate) |
+当前无 P0 release blocker。Phase 9 GAP-9-001~004 已全部关闭。
+
+下一阶段阻断可能来自 TASK-9.12/9.14 黑盒验收失败项，验收后按需登记。
 
 ## 使用规则
 

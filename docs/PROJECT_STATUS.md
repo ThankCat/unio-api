@@ -16,9 +16,9 @@ docs/production/TODO_REGISTER.md
 ## 当前焦点
 
 ```text
-当前主线：阶段 9 OpenAI Protocol Parity 已立项；与阶段 10 后台管理可并行，但 drop-in 兼容优先于 admin
-当前进度：Phase 9 PLAN/STATUS/ACCEPTANCE 已创建；探索代码（stream translate / include_usage）待 TASK-9.07~9.09 收口
-下一小节：TASK-9.01 ADR → TASK-9.02 禁止 silent drop → TASK-9.07 吸收 normalizer/ 过渡代码
+当前主线：阶段 9 OpenAI Protocol Parity 已收口（C1~C6 done）；可进入阶段 10
+当前进度：typed tools/response_format、streamtranslate rename、Compatibility Matrix 同步完成
+下一小节：阶段 10 后台管理，或 C8 高级 OpenAI 字段迭代
 上一阶段状态：阶段 8 可观测性与稳定性已收口
 ```
 
@@ -34,18 +34,18 @@ docs/production/TODO_REGISTER.md
 | 阶段 6 | [模型与渠道](chapters/phase-06-model-channel-routing/STATUS.md) | done | provider/channel/model/routing/fallback 和启动期 adapter preflight 已接入，后台策略推迟到阶段 10。 |
 | 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | done | Gateway 计费主链路已打通，reservation、settlement、ledger、cost snapshot、recovery worker 和 stream 错误语义已收口。 |
 | 阶段 8 | [可观测性与稳定性](chapters/phase-08-observability-stability/STATUS.md) | done | TASK-8.01 adapter metadata/error 分类、8.02 Prometheus metrics、8.03 structured logs+OpenTelemetry、8.04 channel 熔断、8.05 HTTP SSE Writer 全部完成；阶段 8 无遗留 P0/P1 production TODO。 |
-| 阶段 9 | [OpenAI Protocol Parity](chapters/phase-09-openai-protocol-parity/STATUS.md) | planned | 公开 API 完整 OpenAI 兼容；`normalizer/` 过渡代码并入 stream response translation，不再单独定义 Normalizer 架构。 |
+| 阶段 9 | [OpenAI Protocol Parity](chapters/phase-09-openai-protocol-parity/STATUS.md) | done | C1~C6 已实现；C8 高级字段待后续迭代。 |
 | 阶段 10 | [后台管理](chapters/phase-10-admin/STATUS.md) | planned | 尚未正式进入，进入前需复核 credential resolver 和后台管理边界。 |
 
 ## 当前上线阻断
 
-公开生产 drop-in OpenAI 替换能力尚未完成；Phase 9 P0 GAP 为当前阻断项。
+公开生产 drop-in OpenAI 替换能力 Phase 9 C1~C6 已交付；C8 高级字段非阻断。
 
 完整阻断项以 [RELEASE_BLOCKERS.md](production/RELEASE_BLOCKERS.md) 为准。
 
 ## 验证状态
 
-2026-05-30 TASK-8.05 收口验证：`go build ./...`、`go vet ./...`、`go test ./...`（24 包全绿，含新增 SSE Writer 测试）、`git diff --check` 均通过。
+2026-05-31 Phase 9 收口验证：`go test ./internal/... -count=1` 全绿（含 C5~C6 typed 化 + streamtranslate + E2E）。
 
 带 `DATABASE_URL` 的集成测试需本地 Postgres 运行；本次 SSE Writer 改动为纯 HTTP 层、无数据库接触，DB 集成测试可在本机起库后用标准命令复跑：
 

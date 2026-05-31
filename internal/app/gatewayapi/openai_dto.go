@@ -1,5 +1,7 @@
 package gatewayapi
 
+import "encoding/json"
+
 // ChatCompletionRequest 表示 OpenAI-compatible chat completions 请求体。
 type ChatCompletionRequest struct {
 	Model string `json:"model"`
@@ -33,6 +35,21 @@ type ChatCompletionRequest struct {
 
 	// 终端用户标识。一般用于审计、风控或上游服务追踪。
 	User *string `json:"user,omitempty"`
+
+	// MaxCompletionTokens 是 OpenAI 新版最大输出 token（含 reasoning）。
+	MaxCompletionTokens *int `json:"max_completion_tokens,omitempty"`
+
+	// ReasoningEffort 是 reasoning 模型推理强度（如 low/medium/high）。
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
+	// Tools / ToolChoice / ResponseFormat 为 OpenAI 请求字段。
+	Tools               []ChatCompletionTool            `json:"tools,omitempty"`
+	ToolChoice          json.RawMessage                 `json:"tool_choice,omitempty"`
+	ParallelToolCalls   *bool                           `json:"parallel_tool_calls,omitempty"`
+	ResponseFormat      *ChatCompletionResponseFormat   `json:"response_format,omitempty"`
+
+	// Extensions 保留未显式建模的顶层 JSON 字段；由 UnmarshalJSON 填充。
+	Extensions map[string]json.RawMessage `json:"-"`
 }
 
 // ChatCompletionStreamOptions 表示 OpenAI-compatible stream_options 请求参数。
@@ -42,7 +59,7 @@ type ChatCompletionStreamOptions struct {
 }
 
 // StreamIncludeUsage 判断客户端是否请求在流式响应中返回 usage。
-func (req ChatCompletionRequest) StreamIncludeUsage() bool {
+func (req *ChatCompletionRequest) StreamIncludeUsage() bool {
 	return req.StreamOptions != nil &&
 		req.StreamOptions.IncludeUsage != nil &&
 		*req.StreamOptions.IncludeUsage
@@ -50,8 +67,15 @@ func (req ChatCompletionRequest) StreamIncludeUsage() bool {
 
 // ChatMessage 表示 chat completions 请求或响应中的一条消息。
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role string `json:"role"`
+	// Content 是 OpenAI content 原样 JSON（string 或 array）。
+	Content json.RawMessage `json:"content,omitempty"`
+	// ReasoningContent 是 reasoning 模型思考过程；assistant 多轮历史需回传 upstream。
+	ReasoningContent *string `json:"reasoning_content,omitempty"`
+	// ToolCallID 是 tool role 消息关联的 call id。
+	ToolCallID *string `json:"tool_call_id,omitempty"`
+	// ToolCalls 是 assistant 消息上的 tool_calls 列表。
+	ToolCalls []ChatCompletionToolCall `json:"tool_calls,omitempty"`
 }
 
 // ChatCompletionResponse 表示 OpenAI-compatible chat completions 响应体。
@@ -73,9 +97,25 @@ type ChatCompletionChoice struct {
 
 // ChatCompletionUsage 表示 chat completions 请求的 token 用量统计。
 type ChatCompletionUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens            int                              `json:"prompt_tokens"`
+	CompletionTokens        int                              `json:"completion_tokens"`
+	TotalTokens             int                              `json:"total_tokens"`
+	PromptTokensDetails     *ChatCompletionPromptDetails     `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *ChatCompletionCompletionDetails `json:"completion_tokens_details,omitempty"`
+}
+
+// ChatCompletionPromptDetails 是 OpenAI prompt_tokens_details。
+type ChatCompletionPromptDetails struct {
+	CachedTokens int `json:"cached_tokens,omitempty"`
+	AudioTokens  int `json:"audio_tokens,omitempty"`
+}
+
+// ChatCompletionCompletionDetails 是 OpenAI completion_tokens_details。
+type ChatCompletionCompletionDetails struct {
+	ReasoningTokens          int `json:"reasoning_tokens,omitempty"`
+	AcceptedPredictionTokens int `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int `json:"rejected_prediction_tokens,omitempty"`
+	AudioTokens              int `json:"audio_tokens,omitempty"`
 }
 
 // ChatCompletionStreamResponse 表示 OpenAI-compatible chat completions 流式响应中的一条 chunk。
@@ -86,6 +126,9 @@ type ChatCompletionStreamResponse struct {
 	Model   string                       `json:"model"`
 	Choices []ChatCompletionStreamChoice `json:"choices"`
 	Usage   *ChatCompletionUsage         `json:"usage,omitempty"`
+
+	// EmitUsageAsNull 为 true 时写出 "usage": null（见 MarshalJSON）。
+	EmitUsageAsNull bool `json:"-"`
 }
 
 // ChatCompletionStreamChoice 表示流式响应中的一个候选增量。
@@ -97,6 +140,20 @@ type ChatCompletionStreamChoice struct {
 
 // ChatCompletionStreamDelta 表示流式响应里本次增量返回的消息内容。
 type ChatCompletionStreamDelta struct {
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Role             string  `json:"role,omitempty"`
+	Content          string  `json:"content,omitempty"`
+	ReasoningContent *string         `json:"reasoning_content,omitempty"`
+	ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
+}
+
+// ContentString 从 Content 提取纯文本；string 时直接返回，array 时返回空（9.17 再完善估算）。
+func (m ChatMessage) ContentString() string {
+	if len(m.Content) == 0 {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(m.Content, &text); err == nil {
+		return text
+	}
+	return ""
 }

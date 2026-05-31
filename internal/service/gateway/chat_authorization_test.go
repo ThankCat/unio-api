@@ -120,8 +120,8 @@ func TestChatAuthorizationUsesAdapterInputTokenizer(t *testing.T) {
 		Request: gatewayapi.ChatCompletionRequest{
 			Model: "openai/gpt-4.1",
 			Messages: []gatewayapi.ChatMessage{
-				{Role: "system", Content: "Be concise."},
-				{Role: "user", Content: "Hello"},
+				{Role: "system", Content: jsonContent("Be concise.")},
+				{Role: "user", Content: jsonContent("Hello")},
 			},
 			MaxTokens: &maxTokens,
 		},
@@ -139,7 +139,7 @@ func TestChatAuthorizationUsesAdapterInputTokenizer(t *testing.T) {
 	if tokenizer.req.Model != "gpt-4.1" {
 		t.Fatalf("expected tokenizer model %q, got %q", "gpt-4.1", tokenizer.req.Model)
 	}
-	if len(tokenizer.req.Messages) != 2 || tokenizer.req.Messages[1].Content != "Hello" {
+	if len(tokenizer.req.Messages) != 2 || tokenizer.req.Messages[1].ContentString() != "Hello" {
 		t.Fatalf("unexpected tokenizer messages: %#v", tokenizer.req.Messages)
 	}
 	if billingService.estimate.PromptTokens != 321 {
@@ -170,7 +170,7 @@ func TestChatAuthorizationFailsWhenTokenizerIsMissing(t *testing.T) {
 		Principal:     &auth.APIKeyPrincipal{UserID: 12},
 		Request: gatewayapi.ChatCompletionRequest{
 			Model:    "openai/gpt-4.1",
-			Messages: []gatewayapi.ChatMessage{{Role: "user", Content: "Hello"}},
+			Messages: []gatewayapi.ChatMessage{{Role: "user", Content: jsonContent("Hello")}},
 		},
 		ModelDBID:     55,
 		AdapterKey:    "openai",
@@ -196,7 +196,7 @@ func TestChatAuthorizationWrapsTokenizerFailure(t *testing.T) {
 		Principal:     &auth.APIKeyPrincipal{UserID: 12},
 		Request: gatewayapi.ChatCompletionRequest{
 			Model:    "openai/gpt-4.1",
-			Messages: []gatewayapi.ChatMessage{{Role: "user", Content: "Hello"}},
+			Messages: []gatewayapi.ChatMessage{{Role: "user", Content: jsonContent("Hello")}},
 		},
 		ModelDBID:     55,
 		AdapterKey:    "openai",

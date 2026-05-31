@@ -28,7 +28,7 @@ func (a *Adapter) CountChatInputTokens(req adapter.ChatInputTokenizeRequest) (in
 			return 0, err
 		}
 
-		contentTokens, err := countTextTokens(codec, msg.Content)
+		contentTokens, err := countTextTokens(codec, msg.ContentString())
 		if err != nil {
 			return 0, err
 		}

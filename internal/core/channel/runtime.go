@@ -9,6 +9,6 @@ type Runtime struct {
 	APIKey  string
 	Timeout time.Duration
 
-	// ProviderSlug 是业务 provider 标识，供 adapter 选择 Normalizer；由 routing 注入。
+	// ProviderSlug 是业务 provider 标识，供 adapter 选择 stream translator；由 routing 注入。
 	ProviderSlug string
 }

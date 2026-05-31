@@ -1,5 +1,7 @@
 package openai
 
+import "encoding/json"
+
 type chatCompletionRequest struct {
 	Model         string             `json:"model"`
 	Messages      []chatMessage      `json:"messages"`
@@ -13,6 +15,16 @@ type chatCompletionRequest struct {
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
 	Stop             []string `json:"stop,omitempty"`
 	User             *string  `json:"user,omitempty"`
+	ReasoningEffort   *string              `json:"reasoning_effort,omitempty"`
+	Tools             json.RawMessage      `json:"tools,omitempty"`
+	ToolChoice        json.RawMessage      `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool                `json:"parallel_tool_calls,omitempty"`
+	ResponseFormat    *chatResponseFormat  `json:"response_format,omitempty"`
+}
+
+type chatResponseFormat struct {
+	Type       string          `json:"type"`
+	JSONSchema json.RawMessage `json:"json_schema,omitempty"`
 }
 
 // chatStreamOptions 表示 OpenAI stream_options 请求参数。
@@ -21,8 +33,11 @@ type chatStreamOptions struct {
 }
 
 type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role             string          `json:"role"`
+	Content          json.RawMessage `json:"content,omitempty"`
+	ReasoningContent *string         `json:"reasoning_content,omitempty"`
+	ToolCallID       *string         `json:"tool_call_id,omitempty"`
+	ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
 }
 
 type chatCompletionResponse struct {
@@ -33,7 +48,8 @@ type chatCompletionResponse struct {
 }
 
 type chatChoice struct {
-	Message chatMessage `json:"message"`
+	Message      chatMessage `json:"message"`
+	FinishReason string      `json:"finish_reason,omitempty"`
 }
 
 type chatCompletionStreamResponse struct {
@@ -49,9 +65,10 @@ type chatStreamChoice struct {
 }
 
 type chatStreamDelta struct {
-	Role             string  `json:"role"`
-	Content          string  `json:"content"`
-	ReasoningContent *string `json:"reasoning_content"`
+	Role             string          `json:"role"`
+	Content          string          `json:"content"`
+	ReasoningContent *string         `json:"reasoning_content"`
+	ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
 }
 
 type chatCompletionUsage struct {

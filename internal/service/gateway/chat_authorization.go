@@ -243,17 +243,13 @@ func (s *ChatAuthorizationService) ReleaseChatForBillingException(ctx context.Co
 }
 
 func chatInputMessages(messages []gatewayapi.ChatMessage) []adapter.ChatMessage {
-	out := make([]adapter.ChatMessage, 0, len(messages))
-	for _, msg := range messages {
-		out = append(out, adapter.ChatMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
-	}
-	return out
+	return mapGatewayMessagesToAdapter(messages)
 }
 
 func estimateMaxCompletionTokens(req gatewayapi.ChatCompletionRequest) int64 {
+	if req.MaxCompletionTokens != nil && *req.MaxCompletionTokens > 0 {
+		return int64(*req.MaxCompletionTokens)
+	}
 	if req.MaxTokens != nil {
 		return int64(*req.MaxTokens)
 	}

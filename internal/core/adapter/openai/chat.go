@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai/normalizer"
+	"github.com/ThankCat/unio-api/internal/core/adapter/openai/streamtranslate"
 	adaptersse "github.com/ThankCat/unio-api/internal/core/adapter/sse"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
@@ -23,22 +23,22 @@ const (
 // Adapter 调用 OpenAI-compatible 上游接口。
 type Adapter struct {
 	client      *http.Client
-	normalizers *normalizer.Registry
+	translators *streamtranslate.Registry
 }
 
 // NewAdapter 创建 OpenAI-compatible adapter。
-func NewAdapter(client *http.Client, normalizers *normalizer.Registry) *Adapter {
+func NewAdapter(client *http.Client, translators *streamtranslate.Registry) *Adapter {
 	if client == nil {
 		client = http.DefaultClient
 	}
 
-	if normalizers == nil {
-		normalizers = normalizer.NewRegistry(normalizer.Default{})
+	if translators == nil {
+		translators = streamtranslate.NewRegistry(streamtranslate.Default{})
 	}
 
 	return &Adapter{
 		client:      client,
-		normalizers: normalizers,
+		translators: translators,
 	}
 }
 
@@ -59,27 +59,8 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req a
 
 	url := strings.TrimRight(ch.BaseURL, "/") + "/chat/completions"
 
-	messages := make([]chatMessage, 0, len(req.Messages))
-	for _, msg := range req.Messages {
-		messages = append(messages, chatMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
-	}
-
-	upstreamReqBody := chatCompletionRequest{
-		Model:            req.Model,
-		Messages:         messages,
-		Temperature:      req.Temperature,
-		TopP:             req.TopP,
-		MaxTokens:        req.MaxTokens,
-		PresencePenalty:  req.PresencePenalty,
-		FrequencyPenalty: req.FrequencyPenalty,
-		Stop:             req.Stop,
-		User:             req.User,
-	}
-	buf := new(bytes.Buffer)
-	if err := json.NewEncoder(buf).Encode(upstreamReqBody); err != nil {
+	buf, err := encodeRequestBody(req, false)
+	if err != nil {
 		return nil, failure.Wrap(
 			failure.CodeAdapterEncodeRequestFailed,
 			err,
@@ -129,10 +110,22 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req a
 		return nil, err
 	}
 
+	toolCalls, err := wireToolCallsToAdapter(upstreamRespBody.Choices[0].Message.ToolCalls)
+	if err != nil {
+		return nil, failure.Wrap(
+			failure.CodeAdapterDecodeResponseFailed,
+			err,
+			failure.WithMessage("openai adapter decode chat completion tool_calls"),
+		)
+	}
+
 	return &adapter.ChatResponse{
-		ID:      upstreamRespBody.ID,
-		Model:   upstreamRespBody.Model,
-		Content: upstreamRespBody.Choices[0].Message.Content,
+		ID:               upstreamRespBody.ID,
+		Model:            upstreamRespBody.Model,
+		Content:          wireMessageContentString(upstreamRespBody.Choices[0].Message.Content),
+		ReasoningContent: upstreamRespBody.Choices[0].Message.ReasoningContent,
+		ToolCalls:        toolCalls,
+		FinishReason:     upstreamFinishReason(upstreamRespBody.Choices[0]),
 		Usage:   usage,
 		Upstream: adapter.UpstreamMetadata{
 			StatusCode: upstreamResp.StatusCode,
@@ -165,31 +158,8 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 
 	url := strings.TrimRight(ch.BaseURL, "/") + "/chat/completions"
 
-	messages := make([]chatMessage, 0, len(req.Messages))
-	for _, msg := range req.Messages {
-		messages = append(messages, chatMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
-	}
-
-	upstreamReqBody := chatCompletionRequest{
-		Model:            req.Model,
-		Messages:         messages,
-		Stream:           true,
-		Temperature:      req.Temperature,
-		TopP:             req.TopP,
-		MaxTokens:        req.MaxTokens,
-		PresencePenalty:  req.PresencePenalty,
-		FrequencyPenalty: req.FrequencyPenalty,
-		Stop:             req.Stop,
-		User:             req.User,
-		StreamOptions: &chatStreamOptions{
-			IncludeUsage: true,
-		},
-	}
-	buf := new(bytes.Buffer)
-	if err := json.NewEncoder(buf).Encode(upstreamReqBody); err != nil {
+	buf, err := encodeRequestBody(req, true)
+	if err != nil {
 		return failure.Wrap(
 			failure.CodeAdapterEncodeRequestFailed,
 			err,
@@ -239,25 +209,27 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 			)
 		}
 
-		norm := a.normalizers.Resolve(ch.ProviderSlug)
+		translator := a.translators.Resolve(ch.ProviderSlug)
 
 		streamIn, err := streamInputFromResponse(streamResp)
 		if err != nil {
 			return err
 		}
 
-		events, err := norm.NormalizeStreamEvent(streamIn)
+		events, err := translator.TranslateStreamEvent(streamIn)
 		if err != nil {
 			return err
 		}
 
 		for _, event := range events {
 			chunk := adapter.ChatStreamChunk{
-				ID:           event.ID,
-				Model:        event.Model,
-				Role:         event.Role,
-				Content:      event.Content,
-				FinishReason: event.FinishReason,
+				ID:               event.ID,
+				Model:            event.Model,
+				Role:             event.Role,
+				Content:          event.Content,
+				ReasoningContent: stringPtrOrNil(event.ReasoningContent),
+				ToolCalls:        cloneRawMessage(event.ToolCalls),
+				FinishReason:     event.FinishReason,
 			}
 
 			if event.Usage != nil {
@@ -290,9 +262,9 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	return nil
 }
 
-// streamInputFromResponse 将上游 stream JSON DTO 转成 normalizer 输入。
-func streamInputFromResponse(streamResp chatCompletionStreamResponse) (normalizer.StreamInput, error) {
-	in := normalizer.StreamInput{
+// streamInputFromResponse 将上游 stream JSON DTO 转成 stream translator 输入。
+func streamInputFromResponse(streamResp chatCompletionStreamResponse) (streamtranslate.StreamInput, error) {
+	in := streamtranslate.StreamInput{
 		ID:    streamResp.ID,
 		Model: streamResp.Model,
 	}
@@ -300,7 +272,7 @@ func streamInputFromResponse(streamResp chatCompletionStreamResponse) (normalize
 	if streamResp.Usage != nil {
 		usage, err := chatUsageFromOpenAI(streamResp.Usage)
 		if err != nil {
-			return normalizer.StreamInput{}, err
+			return streamtranslate.StreamInput{}, err
 		}
 
 		in.Usage = &usage
@@ -310,11 +282,12 @@ func streamInputFromResponse(streamResp chatCompletionStreamResponse) (normalize
 		return in, nil
 	}
 
-	in.Choices = make([]normalizer.StreamChoice, 0, len(streamResp.Choices))
+	in.Choices = make([]streamtranslate.StreamChoice, 0, len(streamResp.Choices))
 	for _, choice := range streamResp.Choices {
-		streamChoice := normalizer.StreamChoice{
+		streamChoice := streamtranslate.StreamChoice{
 			Role:         choice.Delta.Role,
 			Content:      choice.Delta.Content,
+			ToolCalls:    cloneRawMessage(choice.Delta.ToolCalls),
 			FinishReason: choice.FinishReason,
 		}
 		if choice.Delta.ReasoningContent != nil {

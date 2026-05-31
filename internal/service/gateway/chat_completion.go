@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
-	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
@@ -17,14 +16,6 @@ import (
 
 // CreateChatCompletion 编排非流式 chat completion 请求，并返回 OpenAI-compatible HTTP DTO。
 func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req gatewayapi.ChatCompletionRequest) (*gatewayapi.ChatCompletionResponse, error) {
-	messages := make([]adapter.ChatMessage, 0, len(req.Messages))
-	for _, msg := range req.Messages {
-		messages = append(messages, adapter.ChatMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
-	}
-
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
 		return nil, failure.Wrap(
@@ -118,17 +109,8 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 
 		adapterCtx, adapterSpan := startGatewaySpan(ctx, "adapter.chat_completions", upstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 		upstreamStart := time.Now()
-		adapterResp, err := chatAdapter.ChatCompletions(adapterCtx, candidate.Channel, adapter.ChatRequest{
-			Model:            candidate.UpstreamModel,
-			Messages:         messages,
-			Temperature:      req.Temperature,
-			TopP:             req.TopP,
-			MaxTokens:        req.MaxTokens,
-			PresencePenalty:  req.PresencePenalty,
-			FrequencyPenalty: req.FrequencyPenalty,
-			Stop:             req.Stop,
-			User:             req.User,
-		})
+		adapterResp, err := chatAdapter.ChatCompletions(adapterCtx, candidate.Channel,
+			mapGatewayRequestToAdapter(req, candidate.UpstreamModel))
 		s.recordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 		endGatewaySpan(adapterSpan, err)
 		s.recordChannelHealth(channelKey, err)
@@ -191,27 +173,9 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 
 		outcome = metrics.ChatOutcomeSuccess
 
-		return &gatewayapi.ChatCompletionResponse{
-			ID:      adapterResp.ID,
-			Object:  "chat.completion",
-			Created: time.Now().Unix(),
-			Model:   req.Model,
-			Choices: []gatewayapi.ChatCompletionChoice{
-				{
-					Index: 0,
-					Message: gatewayapi.ChatMessage{
-						Role:    "assistant",
-						Content: adapterResp.Content,
-					},
-					FinishReason: "stop",
-				},
-			},
-			Usage: gatewayapi.ChatCompletionUsage{
-				PromptTokens:     adapterResp.Usage.PromptTokens,
-				CompletionTokens: adapterResp.Usage.CompletionTokens,
-				TotalTokens:      adapterResp.Usage.TotalTokens,
-			},
-		}, nil
+		resp := mapAdapterResponseToGateway(req.Model, *adapterResp)
+		resp.Created = time.Now().Unix()
+		return &resp, nil
 	}
 
 	if lastErr != nil {

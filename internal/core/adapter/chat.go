@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/ThankCat/unio-api/internal/core/channel"
 )
@@ -30,6 +31,8 @@ type ChatRequest struct {
 	// MaxTokens 控制最大输出 token 数；nil 表示调用方没有传该参数。
 	MaxTokens *int
 
+	MaxCompletionTokens *int
+
 	// PresencePenalty 降低重复主题倾向；nil 表示调用方没有传该参数。
 	PresencePenalty *float64
 
@@ -41,20 +44,52 @@ type ChatRequest struct {
 
 	// User 是终端用户标识，用于上游审计或风控；nil 表示调用方没有传该参数。
 	User *string
+
+	// ReasoningEffort 是 reasoning 模型推理强度。
+	ReasoningEffort *string
+
+	// Tools / ToolChoice / ResponseFormat 为 OpenAI 请求字段，由 adapter wire 透传 upstream。
+	Tools             []ChatTool
+	ToolChoice        json.RawMessage
+	ParallelToolCalls *bool
+	ResponseFormat    *ChatResponseFormat
+
+	// Extensions 是 gateway 层保留的 vendor 扩展（如 thinking）。
+	Extensions map[string]json.RawMessage
 }
 
 // ChatMessage 表示 adapter 层的单条聊天消息。
 type ChatMessage struct {
-	Role    string
-	Content string
+	Role             string
+	Content          json.RawMessage
+	ReasoningContent *string
+	ToolCallID       *string
+	ToolCalls        []ChatToolCall
+}
+
+// ContentString 从 Content 提取纯文本；仅当 content 为 JSON string 时返回文本。
+func (m ChatMessage) ContentString() string {
+	if len(m.Content) == 0 {
+		return ""
+	}
+
+	var text string
+	if err := json.Unmarshal(m.Content, &text); err == nil {
+		return text
+	}
+
+	return ""
 }
 
 // ChatResponse 是聊天补全 adapter 返回给 gateway 的内部响应 DTO。
 type ChatResponse struct {
-	ID      string
-	Model   string
-	Content string
-	Usage   ChatUsage
+	ID               string
+	Model            string
+	Content          string
+	ReasoningContent *string
+	ToolCalls        []ChatToolCall
+	FinishReason     string
+	Usage            ChatUsage
 
 	// Upstream 是本次上游成功调用的可审计元信息（HTTP 状态码、上游 request id）。
 	// gateway 在结算时写入 request attempt，用于渠道审计和 observability。
@@ -81,11 +116,13 @@ type ChatUsage struct {
 
 // ChatStreamChunk 表示 adapter 返回给 gateway 的一段聊天补全流式内容。
 type ChatStreamChunk struct {
-	ID           string
-	Model        string
-	Role         string
-	Content      string
-	FinishReason *string
+	ID               string
+	Model            string
+	Role             string
+	Content          string
+	ReasoningContent *string
+	ToolCalls        json.RawMessage
+	FinishReason     *string
 
 	// Usage 只在 provider 返回 final usage stream chunk 时设置。
 	// 普通内容 chunk 必须为 nil。

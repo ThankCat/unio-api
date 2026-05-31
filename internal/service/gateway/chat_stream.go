@@ -17,14 +17,6 @@ import (
 
 // StreamChatCompletion 编排流式 chat completion 请求，并通过 emit 写出 OpenAI-compatible SSE chunk。
 func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req gatewayapi.ChatCompletionRequest, emit func(gatewayapi.ChatCompletionStreamResponse) error) error {
-	messages := make([]adapter.ChatMessage, 0, len(req.Messages))
-	for _, msg := range req.Messages {
-		messages = append(messages, adapter.ChatMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
-	}
-
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
 		return failure.Wrap(
@@ -177,17 +169,9 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 
 		streamCtx, streamSpan := startGatewaySpan(ctx, "adapter.stream_chat_completions", upstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 		upstreamStart := time.Now()
-		err = streamAdapter.StreamChatCompletions(streamCtx, candidate.Channel, adapter.ChatRequest{
-			Model:            candidate.UpstreamModel,
-			Messages:         messages,
-			Temperature:      req.Temperature,
-			TopP:             req.TopP,
-			MaxTokens:        req.MaxTokens,
-			PresencePenalty:  req.PresencePenalty,
-			FrequencyPenalty: req.FrequencyPenalty,
-			Stop:             req.Stop,
-			User:             req.User,
-		}, func(chunk adapter.ChatStreamChunk) error {
+		err = streamAdapter.StreamChatCompletions(streamCtx, candidate.Channel,
+			mapGatewayRequestToAdapter(req, candidate.UpstreamModel),
+			func(chunk adapter.ChatStreamChunk) error {
 			if chunk.ID != "" {
 				streamResponseID = chunk.ID
 			}
@@ -214,22 +198,9 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 				s.recordStreamEvent(metrics.StreamEventStarted)
 			}
 
-			return emit(gatewayapi.ChatCompletionStreamResponse{
-				ID:      chunk.ID,
-				Object:  "chat.completion.chunk",
-				Created: time.Now().Unix(),
-				Model:   req.Model,
-				Choices: []gatewayapi.ChatCompletionStreamChoice{
-					{
-						Index: 0,
-						Delta: gatewayapi.ChatCompletionStreamDelta{
-							Role:    chunk.Role,
-							Content: chunk.Content,
-						},
-						FinishReason: chunk.FinishReason,
-					},
-				},
-			})
+			chunkResp := mapAdapterStreamChunkToGateway(req.Model, chunk, req.StreamIncludeUsage())
+			chunkResp.Created = time.Now().Unix()
+			return emit(chunkResp)
 		})
 		s.recordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 		endGatewaySpan(streamSpan, err)
@@ -377,16 +348,13 @@ func emitClientStreamUsage(
 		streamID = "chatcmpl_unio"
 	}
 
+	usageResp := mapAdapterUsageToGateway(usage)
 	return emit(gatewayapi.ChatCompletionStreamResponse{
 		ID:      streamID,
 		Object:  "chat.completion.chunk",
 		Created: time.Now().Unix(),
 		Model:   req.Model,
 		Choices: []gatewayapi.ChatCompletionStreamChoice{},
-		Usage: &gatewayapi.ChatCompletionUsage{
-			PromptTokens:     usage.PromptTokens,
-			CompletionTokens: usage.CompletionTokens,
-			TotalTokens:      usage.TotalTokens,
-		},
+		Usage:   &usageResp,
 	})
 }

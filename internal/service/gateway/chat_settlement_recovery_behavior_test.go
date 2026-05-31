@@ -30,7 +30,7 @@ func TestChatCompletionServiceCreateChatCompletionReturnsResponseWhenRecoverySch
 	if err != nil {
 		t.Fatalf("expected response after recovery scheduled, got err: %v", err)
 	}
-	if got == nil || got.Choices[0].Message.Content != "adapter response" {
+	if got == nil || got.Choices[0].Message.ContentString() != "adapter response" {
 		t.Fatalf("expected adapter response to be returned, got %#v", got)
 	}
 	if len(settlement.params) != 1 {

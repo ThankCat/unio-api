@@ -48,7 +48,7 @@ func TestAdapterChatCompletionsClassifiesUpstreamStatus(t *testing.T) {
 			}, adapter.ChatRequest{
 				Model: "gpt-4.1",
 				Messages: []adapter.ChatMessage{
-					{Role: "user", Content: "hello"},
+					{Role: "user", Content: jsonContent("hello")},
 				},
 			})
 			if err == nil {
@@ -101,7 +101,7 @@ func TestAdapterChatCompletionsClassifiesTimeoutAsUpstreamCategory(t *testing.T)
 	}, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Content: jsonContent("hello")},
 		},
 	})
 	if err == nil {
@@ -157,7 +157,7 @@ func TestAdapterChatCompletionsClassifiesCanceledAsUpstreamCategory(t *testing.T
 	}, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Content: jsonContent("hello")},
 		},
 	})
 	if err == nil {
@@ -203,7 +203,7 @@ func TestAdapterChatCompletionsPopulatesSuccessMetadata(t *testing.T) {
 	}, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Content: jsonContent("hello")},
 		},
 	})
 	if err != nil {
@@ -246,7 +246,7 @@ func TestAdapterStreamChatCompletionsPopulatesUsageChunkMetadata(t *testing.T) {
 	}, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Content: jsonContent("hello")},
 		},
 	}, func(chunk adapter.ChatStreamChunk) error {
 		if chunk.Usage != nil {
@@ -290,7 +290,7 @@ func TestAdapterStreamChatCompletionsClassifiesUpstreamStatus(t *testing.T) {
 	}, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Content: jsonContent("hello")},
 		},
 	}, func(chunk adapter.ChatStreamChunk) error {
 		t.Fatalf("unexpected stream chunk: %+v", chunk)

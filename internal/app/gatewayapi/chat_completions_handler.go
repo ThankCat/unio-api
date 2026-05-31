@@ -37,6 +37,14 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	var req ChatCompletionRequest
 
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		var rejectErr *chatRequestRejectError
+		if errors.As(err, &rejectErr) {
+			writeChatValidationError(w, &chatValidationError{
+				param:   rejectErr.param,
+				message: rejectErr.message,
+			})
+			return
+		}
 		writeJSONDecodeError(w, err)
 		return
 	}
@@ -219,16 +227,17 @@ func validateChatCompletionRequest(req ChatCompletionRequest) *chatValidationErr
 		if !isSupportedChatRole(msg.Role) {
 			return &chatValidationError{
 				param:   roleParam,
-				message: "message role must be one of system, user, assistant",
+				message: "message role must be one of system, user, assistant, developer, tool",
 			}
 		}
 
-		if strings.TrimSpace(msg.Content) == "" {
-			return &chatValidationError{
-				param:   fmt.Sprintf("messages.%d.content", i),
-				message: "message content is required",
-			}
+		if validationErr := validateChatMessageContent(msg, i); validationErr != nil {
+			return validationErr
 		}
+	}
+
+	if req.MaxCompletionTokens != nil && *req.MaxCompletionTokens <= 0 {
+		return &chatValidationError{param: "max_completion_tokens", message: "max_completion_tokens must be greater than 0"}
 	}
 
 	if req.Temperature != nil && (*req.Temperature < 0 || *req.Temperature > 2) {
@@ -275,16 +284,6 @@ func validateChatCompletionRequest(req ChatCompletionRequest) *chatValidationErr
 	}
 
 	return nil
-}
-
-// isSupportedChatRole 判断当前 text-only MVP 支持的 chat role。
-func isSupportedChatRole(role string) bool {
-	switch role {
-	case "system", "user", "assistant":
-		return true
-	default:
-		return false
-	}
 }
 
 // writeChatValidationError 将 chat validation 错误写成 OpenAI-compatible error。

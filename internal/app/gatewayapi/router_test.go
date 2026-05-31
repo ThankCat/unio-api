@@ -77,7 +77,7 @@ func (s *routerTestChatCompletionService) CreateChatCompletion(ctx context.Conte
 				Index: 0,
 				Message: ChatMessage{
 					Role:    "assistant",
-					Content: "mock response",
+					Content: jsonContent("mock response"),
 				},
 				FinishReason: "stop",
 			},

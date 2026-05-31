@@ -321,7 +321,7 @@ func contextWithPrincipal(projectID int64) context.Context {
 func chatRequest() gatewayapi.ChatCompletionRequest {
 	return gatewayapi.ChatCompletionRequest{
 		Model:    "openai/gpt-4.1",
-		Messages: []gatewayapi.ChatMessage{{Role: "user", Content: "hello"}},
+		Messages: []gatewayapi.ChatMessage{{Role: "user", Content: jsonContent("hello")}},
 	}
 }
 
@@ -508,14 +508,14 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	if fakeAdapter.ch.ID != 123 {
 		t.Fatalf("expected channel id %d, got %d", int64(123), fakeAdapter.ch.ID)
 	}
-	if fakeAdapter.chatReq.Messages[0].Content != "hello" {
+	if fakeAdapter.chatReq.Messages[0].ContentString() != "hello" {
 		t.Fatalf("expected message content %q, got %q", "hello", fakeAdapter.chatReq.Messages[0].Content)
 	}
 	assertAdapterChatRequestParams(t, fakeAdapter.chatReq)
 	if got.Model != "openai/gpt-4.1" {
 		t.Fatalf("expected response model %q, got %q", "openai/gpt-4.1", got.Model)
 	}
-	if got.Choices[0].Message.Content != "adapter response" {
+	if got.Choices[0].Message.ContentString() != "adapter response" {
 		t.Fatalf("expected content %q, got %q", "adapter response", got.Choices[0].Message.Content)
 	}
 	if got.Usage.TotalTokens != 21 {
@@ -947,7 +947,7 @@ func TestChatCompletionServiceCreateChatCompletionFallsBackOnRetryableAdapterErr
 	if classifier.called != 1 {
 		t.Fatalf("expected retry classifier to be called once, got %d", classifier.called)
 	}
-	if got.Choices[0].Message.Content != "fallback response" {
+	if got.Choices[0].Message.ContentString() != "fallback response" {
 		t.Fatalf("expected fallback response, got %q", got.Choices[0].Message.Content)
 	}
 	if len(requestLog.createAttempts) != 2 {

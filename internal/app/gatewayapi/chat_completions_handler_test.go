@@ -61,7 +61,7 @@ func TestRouterV1ChatCompletionWithAPIKey(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 	}
 
@@ -366,7 +366,7 @@ func TestRouterV1ChatCompletionCallsService(t *testing.T) {
 					Index: 0,
 					Message: ChatMessage{
 						Role:    "assistant",
-						Content: "mock response",
+						Content: jsonContent("mock response"),
 					},
 					FinishReason: "stop",
 				},
@@ -380,7 +380,7 @@ func TestRouterV1ChatCompletionCallsService(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 	}
 	if err := json.NewEncoder(buf).Encode(reqBody); err != nil {
@@ -474,7 +474,7 @@ func TestRouterV1ChatCompletionMapsRoutingErrors(t *testing.T) {
 			reqBody := ChatCompletionRequest{
 				Model: "openai/gpt-4.1",
 				Messages: []ChatMessage{
-					{Role: "user", Content: "Hello"},
+					{Role: "user", Content: jsonContent("Hello")},
 				},
 			}
 			if err := json.NewEncoder(buf).Encode(reqBody); err != nil {
@@ -529,7 +529,7 @@ func TestRouterV1ChatCompletionMapsInsufficientQuota(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 	}
 	if err := json.NewEncoder(buf).Encode(reqBody); err != nil {
@@ -581,7 +581,7 @@ func TestRouterV1ChatCompletionPreservesExplicitZeroTemperature(t *testing.T) {
 					Index: 0,
 					Message: ChatMessage{
 						Role:    "assistant",
-						Content: "mock response",
+						Content: jsonContent("mock response"),
 					},
 					FinishReason: "stop",
 				},
@@ -594,7 +594,7 @@ func TestRouterV1ChatCompletionPreservesExplicitZeroTemperature(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		Temperature: &zero,
 	}
@@ -631,7 +631,7 @@ func TestRouterV1ChatCompletionWithInvalidTemperature(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		Temperature: float64Ptr(2.1),
 	}
@@ -643,7 +643,7 @@ func TestRouterV1ChatCompletionWithInvalidTopP(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		TopP: float64Ptr(1.1),
 	}
@@ -655,7 +655,7 @@ func TestRouterV1ChatCompletionWithInvalidMaxTokens(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		MaxTokens: intPtr(0),
 	}
@@ -667,7 +667,7 @@ func TestRouterV1ChatCompletionWithWhitespaceModel(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "   ",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 	}
 
@@ -678,7 +678,7 @@ func TestRouterV1ChatCompletionWithMissingMessageRole(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Content: "Hello"},
+			{Content: jsonContent("Hello")},
 		},
 	}
 
@@ -689,18 +689,29 @@ func TestRouterV1ChatCompletionWithUnsupportedMessageRole(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "tool", Content: "Hello"},
+			{Role: "function", Content: jsonContent("Hello")},
 		},
 	}
 
-	assertChatCompletionInvalidRequest(t, reqBody, "message role must be one of system, user, assistant", "messages.0.role")
+	assertChatCompletionInvalidRequest(t, reqBody, "message role must be one of system, user, assistant, developer, tool", "messages.0.role")
+}
+
+func TestRouterV1ChatCompletionWithToolRoleRequiresToolCallID(t *testing.T) {
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "tool", Content: jsonContent("result")},
+		},
+	}
+
+	assertChatCompletionInvalidRequest(t, reqBody, "tool message requires tool_call_id", "messages.0.tool_call_id")
 }
 
 func TestRouterV1ChatCompletionWithEmptyMessageContent(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "   "},
+			{Role: "user", Content: jsonContent("   ")},
 		},
 	}
 
@@ -711,7 +722,7 @@ func TestRouterV1ChatCompletionWithInvalidPresencePenalty(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		PresencePenalty: float64Ptr(2.1),
 	}
@@ -723,7 +734,7 @@ func TestRouterV1ChatCompletionWithInvalidFrequencyPenalty(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		FrequencyPenalty: float64Ptr(-2.1),
 	}
@@ -735,7 +746,7 @@ func TestRouterV1ChatCompletionWithTooManyStopSequences(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		Stop: []string{"a", "b", "c", "d", "e"},
 	}
@@ -747,7 +758,7 @@ func TestRouterV1ChatCompletionWithEmptyStopSequence(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		Stop: []string{"END", "   "},
 	}
@@ -759,7 +770,7 @@ func TestRouterV1ChatCompletionWithEmptyUser(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		User: stringPtr("   "),
 	}
@@ -771,7 +782,7 @@ func TestRouterV1ChatCompletionWithTooLongUser(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		User: stringPtr(strings.Repeat("a", maxUserLength+1)),
 	}
@@ -861,7 +872,7 @@ func TestChatCompletionMissingModelReturnsOpenAIError(t *testing.T) {
 	// 发送缺少 model 的请求。
 	reqBody := ChatCompletionRequest{
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 	}
 	buf := new(bytes.Buffer)
@@ -993,7 +1004,7 @@ func TestRouterV1ChatCompletionWithStreamTrueWritesSSE(t *testing.T) {
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		Stream: &stream,
 	}
@@ -1064,7 +1075,7 @@ func TestRouterV1ChatCompletionWithStreamTrueWritesSSE(t *testing.T) {
 		t.Fatalf("expected message role %q, got %q", "user", service.req.Messages[0].Role)
 	}
 
-	if service.req.Messages[0].Content != "Hello" {
+	if service.req.Messages[0].ContentString() != "Hello" {
 		t.Fatalf("expected message content %q, got %q", "Hello", service.req.Messages[0].Content)
 	}
 }
@@ -1085,7 +1096,7 @@ func TestRouterV1ChatCompletionStreamReturnsJSONErrorBeforeFirstChunk(t *testing
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		Stream: &stream,
 	}
@@ -1143,7 +1154,7 @@ func TestRouterV1ChatCompletionStreamMapsRoutingErrorBeforeFirstChunk(t *testing
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		Stream: &stream,
 	}
@@ -1195,7 +1206,7 @@ func TestRouterV1ChatCompletionStreamMapsInsufficientQuotaBeforeFirstChunk(t *te
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		Stream: &stream,
 	}
@@ -1267,7 +1278,7 @@ func TestRouterV1ChatCompletionStreamWritesSSEErrorAfterChunkStarted(t *testing.
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 		Messages: []ChatMessage{
-			{Role: "user", Content: "Hello"},
+			{Role: "user", Content: jsonContent("Hello")},
 		},
 		Stream: &stream,
 	}

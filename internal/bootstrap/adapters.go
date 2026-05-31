@@ -5,16 +5,16 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai/normalizer"
+	"github.com/ThankCat/unio-api/internal/core/adapter/openai/streamtranslate"
 )
 
 // NewAdapterRegistry 创建当前 server 进程支持的 adapter registry。
 func NewAdapterRegistry(client *http.Client) (*adapter.Registry, error) {
-	norms := normalizer.NewRegistry(
-		normalizer.Default{},
-		normalizer.DeepSeek{},
+	translators := streamtranslate.NewRegistry(
+		streamtranslate.Default{},
+		streamtranslate.DeepSeek{},
 	)
-	openaiAdapter := openai.NewAdapter(client, norms)
+	openaiAdapter := openai.NewAdapter(client, translators)
 	return adapter.NewRegistry(adapter.Registration{
 		Key:                "openai",
 		Chat:               openaiAdapter,
