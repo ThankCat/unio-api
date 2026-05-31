@@ -111,6 +111,8 @@
 2. 暂不支持 multimodal content。
 3. 已透传字段继续保持与 [TASK-5.01](../phase-05-adapter-boundary/PLAN.md#task-5-01-chat-parameter-contract) 的 adapter contract 一致。
 
+完整 OpenAI parity（请求不 silent drop、响应 reasoning/tools/usage details、stream translate 收口）由 [Phase 9](../phase-09-openai-protocol-parity/PLAN.md) 负责；Phase 4 text-only MVP 在 Phase 9 done 后视为被 parity 层取代。
+
 验证方式：
 
 ```bash

@@ -21,6 +21,9 @@ var (
 
 	// ErrModelNotAvailable 表示模型存在但当前 project 不允许使用。
 	ErrModelNotAvailable = errors.New("model not available for project")
+
+	// ErrChannelCredentialMissing 表示 channel 未配置加密凭据。
+	ErrChannelCredentialMissing = errors.New("channel credential missing")
 )
 
 // ChatRouteRequest 表示一次 routing 选择所需上下文。
@@ -51,28 +54,28 @@ type Store interface {
 	FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteCandidatesParams) ([]sqlc.FindRouteCandidatesRow, error)
 }
 
-// CredentialResolver 根据 channel 保存的凭据引用解析出上游 API key。
-type CredentialResolver interface {
-	Resolve(ctx context.Context, credentialRef string) (string, error)
+// CredentialDecryptor 把 channel 入库密文解出上游明文 API key。
+type CredentialDecryptor interface {
+	Decrypt(ciphertext []byte) (string, error)
 }
 
 // Router 负责根据 project 和 requested model 选择可用 channel。
 type Router struct {
-	store              Store
-	credentialResolver CredentialResolver
-	defaultTimeout     time.Duration
+	store               Store
+	credentialDecryptor CredentialDecryptor
+	defaultTimeout      time.Duration
 }
 
 // NewRouter 创建 routing router。
-func NewRouter(store Store, credentialResolver CredentialResolver, defaultTimeout time.Duration) *Router {
+func NewRouter(store Store, credentialDecryptor CredentialDecryptor, defaultTimeout time.Duration) *Router {
 	if defaultTimeout <= 0 {
 		defaultTimeout = defaultChannelTimeout
 	}
 
 	return &Router{
-		store:              store,
-		credentialResolver: credentialResolver,
-		defaultTimeout:     defaultTimeout,
+		store:               store,
+		credentialDecryptor: credentialDecryptor,
+		defaultTimeout:      defaultTimeout,
 	}
 }
 
@@ -99,7 +102,7 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 }
 
 func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest) ([]sqlc.FindRouteCandidatesRow, error) {
-	// TODO(阶段6/production): [GAP-6-005] routing 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束或专属 channel 策略；阶段 7 authorization/余额冻结和阶段 9 项目策略管理前；预算约束进入 reservation，project 禁用和 project_channel policy 进入后台管理策略。
+	// TODO(阶段6/production): [GAP-6-005] routing 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束或专属 channel 策略；阶段 7 authorization/余额冻结和阶段 10 项目策略管理前；预算约束进入 reservation，project 禁用和 project_channel policy 进入后台管理策略。
 	rows, err := r.store.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: req.ModelID,
 		ProjectID:        req.ProjectID,
@@ -165,12 +168,20 @@ func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest) ([
 }
 
 func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRouteCandidatesRow) (ChatRouteCandidate, error) {
-	apiKey, err := r.credentialResolver.Resolve(ctx, row.CredentialRef)
+	if len(row.CredentialEncrypted) == 0 {
+		return ChatRouteCandidate{}, failure.Wrap(
+			failure.CodeCredentialCiphertextInvalid,
+			ErrChannelCredentialMissing,
+			failure.WithMessage(ErrChannelCredentialMissing.Error()),
+		)
+	}
+
+	apiKey, err := r.credentialDecryptor.Decrypt(row.CredentialEncrypted)
 	if err != nil {
 		return ChatRouteCandidate{}, failure.Wrap(
 			failure.CodeRoutingCredentialResolveFailed,
 			err,
-			failure.WithMessage("resolve channel credential"),
+			failure.WithMessage("decrypt channel credential"),
 		)
 	}
 
@@ -184,10 +195,11 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		ProviderID: row.ProviderID,
 		AdapterKey: row.AdapterKey,
 		Channel: channel.Runtime{
-			ID:      row.ChannelID,
-			BaseURL: row.BaseUrl,
-			APIKey:  apiKey,
-			Timeout: timeout,
+			ID:           row.ChannelID,
+			BaseURL:      row.BaseUrl,
+			APIKey:       apiKey,
+			Timeout:      timeout,
+			ProviderSlug: row.ProviderSlug,
 		},
 		UpstreamModel: row.UpstreamModel,
 	}, nil

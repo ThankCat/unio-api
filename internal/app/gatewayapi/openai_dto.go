@@ -10,6 +10,9 @@ type ChatCompletionRequest struct {
 	// 是否启用流式响应。流式响应指服务端逐段返回内容，而不是一次性返回完整结果。
 	Stream *bool `json:"stream,omitempty"`
 
+	// StreamOptions 是流式响应选项；当前仅支持 include_usage。
+	StreamOptions *ChatCompletionStreamOptions `json:"stream_options,omitempty"`
+
 	// 采样温度，控制输出随机性。
 	Temperature *float64 `json:"temperature,omitempty"`
 
@@ -30,6 +33,19 @@ type ChatCompletionRequest struct {
 
 	// 终端用户标识。一般用于审计、风控或上游服务追踪。
 	User *string `json:"user,omitempty"`
+}
+
+// ChatCompletionStreamOptions 表示 OpenAI-compatible stream_options 请求参数。
+type ChatCompletionStreamOptions struct {
+	// IncludeUsage 为 true 时，成功结束的流式响应会在 [DONE] 前追加一条 usage chunk。
+	IncludeUsage *bool `json:"include_usage,omitempty"`
+}
+
+// StreamIncludeUsage 判断客户端是否请求在流式响应中返回 usage。
+func (req ChatCompletionRequest) StreamIncludeUsage() bool {
+	return req.StreamOptions != nil &&
+		req.StreamOptions.IncludeUsage != nil &&
+		*req.StreamOptions.IncludeUsage
 }
 
 // ChatMessage 表示 chat completions 请求或响应中的一条消息。
@@ -69,6 +85,7 @@ type ChatCompletionStreamResponse struct {
 	Created int64                        `json:"created"`
 	Model   string                       `json:"model"`
 	Choices []ChatCompletionStreamChoice `json:"choices"`
+	Usage   *ChatCompletionUsage         `json:"usage,omitempty"`
 }
 
 // ChatCompletionStreamChoice 表示流式响应中的一个候选增量。

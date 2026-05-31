@@ -13,14 +13,15 @@ import (
 
 // Config 保存服务启动所需的全部配置。
 type Config struct {
-	HTTP      HTTPConfig
-	Log       LogConfig
-	DB        DBConfig
-	Redis     RedisConfig
+	HTTP           HTTPConfig
+	Log            LogConfig
+	DB             DBConfig
+	Redis          RedisConfig
 	RateLimit      RateLimitConfig
 	Worker         WorkerConfig
 	Tracing        TracingConfig
 	CircuitBreaker CircuitBreakerConfig
+	Credential     CredentialConfig
 }
 
 // CircuitBreakerConfig 保存 channel 熔断器阈值；默认启用并使用保守阈值。
@@ -30,6 +31,12 @@ type CircuitBreakerConfig struct {
 	MinRequests  int
 	FailureRatio float64
 	OpenDuration time.Duration
+}
+
+// CredentialConfig 保存上游凭据解密密钥；值为 base64 编码的 32 字节 AES-256 key。
+type CredentialConfig struct {
+	// MasterKey 来自 CREDENTIAL_MASTER_KEY；空值表示未配置。
+	MasterKey string
 }
 
 // TracingConfig 保存 OpenTelemetry trace 导出配置；默认关闭（opt-in）。
@@ -325,6 +332,9 @@ func Load() (Config, error) {
 			MinRequests:  circuitBreakerMinRequests,
 			FailureRatio: circuitBreakerFailureRatio,
 			OpenDuration: circuitBreakerOpenDuration,
+		},
+		Credential: CredentialConfig{
+			MasterKey: getEnv("CREDENTIAL_MASTER_KEY", ""),
 		},
 	}, nil
 }

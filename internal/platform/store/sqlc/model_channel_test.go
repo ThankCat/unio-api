@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -77,12 +78,17 @@ func insertChannel(t *testing.T, ctx context.Context, tx pgx.Tx, providerID int6
 		timeout = *timeoutMS
 	}
 
+	credentialEncrypted, err := credential.EncryptFixedTestCredential("sk-test-" + name)
+	if err != nil {
+		t.Fatalf("encrypt channel credential for %q: %v", name, err)
+	}
+
 	var id int64
-	err := tx.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, name, base_url, credential_ref, status, priority, timeout_ms)
+	err = tx.QueryRow(ctx, `
+		INSERT INTO channels (provider_id, name, base_url, credential_encrypted, status, priority, timeout_ms)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id
-	`, providerID, name, "https://"+name+".example.test/v1", "secret://"+name, status, priority, timeout).Scan(&id)
+	`, providerID, name, "https://"+name+".example.test/v1", credentialEncrypted, status, priority, timeout).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert channel %q: %v", name, err)
 	}
@@ -391,8 +397,8 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 	if first.ProviderSlug != fmt.Sprintf("routing-openai-%d", suffix) {
 		t.Fatalf("expected provider slug for enabled provider, got %q", first.ProviderSlug)
 	}
-	if first.CredentialRef != "secret://"+fmt.Sprintf("routing-primary-%d", suffix) {
-		t.Fatalf("expected primary credential ref, got %q", first.CredentialRef)
+	if len(first.CredentialEncrypted) == 0 {
+		t.Fatal("expected encrypted credential on route candidate")
 	}
 	if !first.TimeoutMs.Valid || first.TimeoutMs.Int32 != timeoutMS {
 		t.Fatalf("expected timeout_ms %d, got valid=%v value=%d", timeoutMS, first.TimeoutMs.Valid, first.TimeoutMs.Int32)

@@ -39,7 +39,7 @@ func TestAdapterChatCompletionsClassifiesUpstreamStatus(t *testing.T) {
 			}))
 			defer server.Close()
 
-			openAIAdapter := NewAdapter(server.Client())
+			openAIAdapter := newTestAdapter(server.Client())
 
 			_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
 				BaseURL: server.URL + "/v1",
@@ -92,7 +92,7 @@ func TestAdapterChatCompletionsClassifiesTimeoutAsUpstreamCategory(t *testing.T)
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",
@@ -142,7 +142,7 @@ func TestAdapterChatCompletionsClassifiesCanceledAsUpstreamCategory(t *testing.T
 	defer server.Close()
 	defer close(release)
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -194,7 +194,7 @@ func TestAdapterChatCompletionsPopulatesSuccessMetadata(t *testing.T) {
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	got, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",
@@ -236,7 +236,7 @@ func TestAdapterStreamChatCompletionsPopulatesUsageChunkMetadata(t *testing.T) {
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	var usageChunk *adapter.ChatStreamChunk
 	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
@@ -281,7 +281,7 @@ func TestAdapterStreamChatCompletionsClassifiesUpstreamStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",

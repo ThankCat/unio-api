@@ -132,6 +132,9 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 		// 它随 final usage chunk 一起到达，用于结算时写入 request attempt 渠道审计字段。
 		var upstreamMeta adapter.UpstreamMetadata
 
+		// streamResponseID 用于客户端可见的 stream chunk id 和最终 usage chunk。
+		streamResponseID := ""
+
 		// settleStreamFinalUsage 使用 final usage 结算流式请求。
 		// stream 结算不能依赖原始请求 ctx，因为客户端可能已经断开；
 		// 只要上游已经返回 final usage，平台就有准确账务事实，必须尽力完成结算。
@@ -185,6 +188,10 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 			Stop:             req.Stop,
 			User:             req.User,
 		}, func(chunk adapter.ChatStreamChunk) error {
+			if chunk.ID != "" {
+				streamResponseID = chunk.ID
+			}
+
 			if chunk.Usage != nil {
 				// usage chunk 是 adapter 给 gateway 的内部控制事件，不是用户可见内容。
 				// 这里不能设置 emitted，也不能写出 SSE，否则客户端会收到空 choices chunk。
@@ -329,6 +336,12 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 			}
 		}
 
+		if req.StreamIncludeUsage() {
+			if err := emitClientStreamUsage(emit, req, streamResponseID, *finalUsage); err != nil {
+				return err
+			}
+		}
+
 		outcome = metrics.ChatOutcomeSuccess
 		s.recordStreamEvent(metrics.StreamEventCompleted)
 		return nil
@@ -351,4 +364,29 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 	)
 	s.markRequestRecordFailed(ctx, requestRecord, "no_available_channel", err)
 	return err
+}
+
+// emitClientStreamUsage 在流式成功结算后，按 OpenAI 约定向客户端写出 usage chunk。
+func emitClientStreamUsage(
+	emit func(gatewayapi.ChatCompletionStreamResponse) error,
+	req gatewayapi.ChatCompletionRequest,
+	streamID string,
+	usage adapter.ChatUsage,
+) error {
+	if streamID == "" {
+		streamID = "chatcmpl_unio"
+	}
+
+	return emit(gatewayapi.ChatCompletionStreamResponse{
+		ID:      streamID,
+		Object:  "chat.completion.chunk",
+		Created: time.Now().Unix(),
+		Model:   req.Model,
+		Choices: []gatewayapi.ChatCompletionStreamChoice{},
+		Usage: &gatewayapi.ChatCompletionUsage{
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			TotalTokens:      usage.TotalTokens,
+		},
+	})
 }

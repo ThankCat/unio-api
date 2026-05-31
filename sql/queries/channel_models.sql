@@ -19,7 +19,7 @@ SELECT
     p.adapter AS adapter_key,
     c.id AS channel_id,
     c.base_url,
-    c.credential_ref,
+    c.credential_encrypted,
     c.timeout_ms,
     c.priority,
     cm.upstream_model

@@ -321,6 +321,22 @@ Provider / upstream 错误规则：
 - Gateway 只消费 adapter 返回的稳定 failure 分类，不解析 provider 原始错误 body。
 - 用户可见错误由 HTTP 层统一映射；provider 原始错误只能进入后续脱敏后的内部日志、request log 内部字段或 observability metadata。
 
+## OpenAI 公开契约与 Adapter 响应翻译
+
+产品目标：客户只修改 `base_url` 和 `api_key`，现有 OpenAI SDK / Agent 框架即可 drop-in 使用 Unio Gateway。
+
+硬规则：
+
+- **对外契约以 OpenAI Chat Completions 为准**；上游厂商 JSON 只存在于 adapter wire 层，不得泄漏到 gateway 编排或公开响应。
+- **adapter contract 使用 OpenAI 语义**，不是 vendor 字段定义；vendor 差异只在 adapter 内通过 request map、response map、stream translate 消化。
+- **完整链路**：用户 OpenAI 请求 → routing 选模型 → adapter 请求翻译 → upstream → adapter 响应翻译 → gateway 返回 OpenAI 响应。
+- **禁止 silent drop**：客户端传入的 OpenAI 或已登记 vendor extension 字段，不得在 JSON decode 或 gateway→adapter 映射阶段被窄 struct 静默丢弃；不支持的能力必须明确 400 或写入 Compatibility Matrix 的 Reject。
+- **Gateway 不得写 vendor 分支**；不得把 `reasoning_content` 长期合并进 `content` 作为最终对外语义。
+- **`normalizer/` 等过渡实现不是独立架构层**；stream 差异必须收口为 adapter 内的 stream response translation，文档与代码统一使用该名称。
+- Phase 4 text-only MVP 边界在 OpenAI parity 阶段完成后视为被 parity 层取代，而不是长期并存两套公开语义。
+
+详细字段矩阵、DeepSeek 映射和任务拆解见 `docs/chapters/phase-09-openai-protocol-parity/`。
+
 ## 技术栈
 
 后端：

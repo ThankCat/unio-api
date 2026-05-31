@@ -231,3 +231,46 @@ TASK-7.20 落地成本价与 cost snapshot，不做倍率系统。
 后续 Admin API 第一版直接填写 input/output/cached/reasoning 的明确金额。
 如果未来确有批量调价或代理运营需求，再另做倍率/折扣的产品决策；即使未来引入，也只能作为后台辅助工具，结算层仍只消费明确金额和快照。
 ```
+
+## DEC-005 OpenAI-first 公开契约与 adapter 响应翻译
+
+状态：accepted
+
+决策：
+
+```text
+Unio Gateway 对外 `/v1/chat/completions` 以 OpenAI Chat Completions 为唯一客户契约。
+上游厂商 JSON 只存在于 adapter wire 层；gateway 不做 vendor 分支。
+
+厂商差异统一在 adapter 内完成：
+  请求翻译：OpenAI request → upstream wire
+  非流式响应翻译：upstream wire → OpenAI response
+  流式响应翻译：upstream SSE → OpenAI chunk（吸收原 normalizer/ 过渡代码）
+
+不再单独维护 Normalizer 作为架构层；文档与代码统一称为 stream response translation。
+```
+
+适配原则：
+
+```text
+1. 能完整适配 OpenAI 的必须实现。
+2. 上游字段名不同但语义等价，映射到 OpenAI 字段。
+3. vendor extension 允许 passthrough。
+4. 确实无法适配且无等价语义，明确 Reject（400）并写入 Compatibility Matrix。
+5. 禁止 silent drop。
+```
+
+原因：
+
+```text
+产品目标是客户只改 base_url 和 api_key；若对外暴露 vendor 字段或在 gateway 写 vendor 分支，
+会导致 SDK/Agent 框架无法 drop-in，且每接一个 upstream 都要污染 gateway 编排与计费层。
+```
+
+影响：
+
+```text
+Phase 9 全链路实现与验收以 docs/chapters/phase-09-openai-protocol-parity/ 为准。
+DeepSeek 作为第一个 upstream 全链路验收（TASK-9.14），不是第一个 special case patch 点。
+关联任务：../chapters/phase-09-openai-protocol-parity/PLAN.md
+```

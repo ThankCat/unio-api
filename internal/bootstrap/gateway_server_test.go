@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
@@ -194,6 +195,9 @@ func newGatewayServerAppTestConfig() config.Config {
 			DefaultLimit:  60,
 			DefaultWindow: time.Minute,
 			FailurePolicy: "fail_closed",
+		},
+		Credential: config.CredentialConfig{
+			MasterKey: credential.FixedTestMasterKeyBase64,
 		},
 	}
 }

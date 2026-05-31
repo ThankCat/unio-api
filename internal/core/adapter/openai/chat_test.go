@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
+	"github.com/ThankCat/unio-api/internal/core/adapter/openai/normalizer"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
@@ -119,7 +120,7 @@ func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	selectedChannel := channel.Runtime{
 		ID:      123,
@@ -224,7 +225,7 @@ func TestAdapterChatCompletionsReturnsErrorForMissingUsage(t *testing.T) {
 			}))
 			defer server.Close()
 
-			openAIAdapter := NewAdapter(server.Client())
+			openAIAdapter := newTestAdapter(server.Client())
 
 			_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
 				BaseURL: server.URL + "/v1",
@@ -253,7 +254,7 @@ func TestAdapterChatCompletionsReturnsErrorForUpstreamStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",
@@ -281,7 +282,7 @@ func TestAdapterChatCompletionsUsesChannelTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.ChatCompletions(
 		context.Background(),
@@ -427,7 +428,7 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 	selectedChannel := channel.Runtime{
 		ID:      123,
 		BaseURL: server.URL + "/v1",
@@ -558,7 +559,7 @@ func TestAdapterStreamChatCompletionsParsesMultilineSSEEvent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	got := make([]adapter.ChatStreamChunk, 0)
 	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
@@ -606,7 +607,7 @@ func TestAdapterStreamChatCompletionsParsesOpenAIRawSSEFixture(t *testing.T) {
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	got := make([]adapter.ChatStreamChunk, 0)
 	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
@@ -658,6 +659,157 @@ func TestAdapterStreamChatCompletionsParsesOpenAIRawSSEFixture(t *testing.T) {
 	}
 }
 
+func TestAdapterStreamChatCompletionsParsesDeepSeekUsageTail(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		rawEvents := []string{
+			`data: {"id":"chatcmpl-deepseek","object":"chat.completion.chunk","created":1710000000,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"role":"assistant","content":null,"reasoning_content":""},"finish_reason":null}],"usage":null}` + "\n\n",
+			`data: {"id":"chatcmpl-deepseek","object":"chat.completion.chunk","created":1710000001,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"content":"hi","reasoning_content":null},"finish_reason":null}],"usage":null}` + "\n\n",
+			`data: {"id":"chatcmpl-deepseek","object":"chat.completion.chunk","created":1710000002,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"content":"","reasoning_content":null},"finish_reason":"length"}],"usage":{"prompt_tokens":6,"completion_tokens":20,"total_tokens":26,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":20}}}` + "\n\n",
+			"data: [DONE]\n\n",
+		}
+
+		for _, event := range rawEvents {
+			if _, err := w.Write([]byte(event)); err != nil {
+				t.Fatalf("write deepseek fixture event: %v", err)
+			}
+		}
+	}))
+	defer server.Close()
+
+	openAIAdapter := newTestAdapter(server.Client())
+
+	got := make([]adapter.ChatStreamChunk, 0)
+	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+		ProviderSlug: "deepseek",
+		BaseURL:      server.URL + "/v1",
+		APIKey:       "test-secret",
+		Timeout:      30 * time.Second,
+	}, adapter.ChatRequest{
+		Model: "deepseek-v4-pro",
+		Messages: []adapter.ChatMessage{
+			{Role: "user", Content: "hi"},
+		},
+	}, func(chunk adapter.ChatStreamChunk) error {
+		got = append(got, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(got) != 4 {
+		t.Fatalf("got %d chunks, want 4", len(got))
+	}
+	if got[1].Content != "hi" {
+		t.Fatalf("got content %q, want hi", got[1].Content)
+	}
+	if got[2].FinishReason == nil || *got[2].FinishReason != "length" {
+		t.Fatalf("got finish reason %+v, want length", got[2].FinishReason)
+	}
+	if got[3].Usage == nil || got[3].Usage.TotalTokens != 26 {
+		t.Fatalf("got final usage %+v, want total_tokens=26", got[3].Usage)
+	}
+}
+
+func TestAdapterStreamChatCompletionsForwardsDeepSeekReasoningContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		rawEvents := []string{
+			`data: {"id":"chatcmpl-deepseek","object":"chat.completion.chunk","created":1710000000,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"role":"assistant","content":null,"reasoning_content":""},"finish_reason":null}],"usage":null}` + "\n\n",
+			`data: {"id":"chatcmpl-deepseek","object":"chat.completion.chunk","created":1710000001,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"content":null,"reasoning_content":"We"},"finish_reason":null}],"usage":null}` + "\n\n",
+			`data: {"id":"chatcmpl-deepseek","object":"chat.completion.chunk","created":1710000002,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"content":null,"reasoning_content":" are"},"finish_reason":null}],"usage":null}` + "\n\n",
+			`data: {"id":"chatcmpl-deepseek","object":"chat.completion.chunk","created":1710000003,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"content":"","reasoning_content":null},"finish_reason":"length"}],"usage":{"prompt_tokens":6,"completion_tokens":3,"total_tokens":9,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":3}}}` + "\n\n",
+			"data: [DONE]\n\n",
+		}
+
+		for _, event := range rawEvents {
+			if _, err := w.Write([]byte(event)); err != nil {
+				t.Fatalf("write deepseek reasoning fixture event: %v", err)
+			}
+		}
+	}))
+	defer server.Close()
+
+	openAIAdapter := newTestAdapter(server.Client())
+
+	got := make([]adapter.ChatStreamChunk, 0)
+	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+		ProviderSlug: "deepseek",
+		BaseURL:      server.URL + "/v1",
+		APIKey:       "test-secret",
+		Timeout:      30 * time.Second,
+	}, adapter.ChatRequest{
+		Model: "deepseek-v4-pro",
+		Messages: []adapter.ChatMessage{
+			{Role: "user", Content: "hi"},
+		},
+	}, func(chunk adapter.ChatStreamChunk) error {
+		got = append(got, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(got) != 5 {
+		t.Fatalf("got %d chunks, want 5", len(got))
+	}
+	if got[1].Content != "We" {
+		t.Fatalf("got chunk[1].Content %q, want We", got[1].Content)
+	}
+	if got[2].Content != " are" {
+		t.Fatalf("got chunk[2].Content %q, want  are", got[2].Content)
+	}
+	if got[4].Usage == nil || got[4].Usage.TotalTokens != 9 {
+		t.Fatalf("got final usage %+v, want total_tokens=9", got[4].Usage)
+	}
+}
+
+func TestAdapterStreamChatCompletionsDoesNotForwardReasoningWithoutDeepSeekNormalizer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		if _, err := w.Write([]byte(`data: {"id":"chatcmpl-openai","object":"chat.completion.chunk","created":1710000000,"model":"gpt-4.1","choices":[{"index":0,"delta":{"content":"","reasoning_content":"hidden"}}],"usage":null}` + "\n\n")); err != nil {
+			t.Fatalf("write fixture event: %v", err)
+		}
+		if _, err := w.Write([]byte("data: [DONE]\n\n")); err != nil {
+			t.Fatalf("write done chunk: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	openAIAdapter := NewAdapter(server.Client(), normalizer.NewRegistry(normalizer.Default{}))
+
+	got := make([]adapter.ChatStreamChunk, 0)
+	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+		ProviderSlug: "openai",
+		BaseURL:      server.URL + "/v1",
+		APIKey:       "test-secret",
+		Timeout:      30 * time.Second,
+	}, adapter.ChatRequest{
+		Model: "gpt-4.1",
+		Messages: []adapter.ChatMessage{
+			{Role: "user", Content: "hi"},
+		},
+	}, func(chunk adapter.ChatStreamChunk) error {
+		got = append(got, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("got %d chunks, want 1", len(got))
+	}
+	if got[0].Content != "" {
+		t.Fatalf("got content %q, want empty content without deepseek normalizer", got[0].Content)
+	}
+}
+
 func TestAdapterStreamChatCompletionsParsesLargeSSEEvent(t *testing.T) {
 	largeContent := strings.Repeat("x", 1024*1024+128)
 
@@ -684,7 +836,7 @@ func TestAdapterStreamChatCompletionsParsesLargeSSEEvent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	got := make([]adapter.ChatStreamChunk, 0)
 	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
@@ -718,7 +870,7 @@ func TestAdapterStreamChatCompletionsReturnsErrorForUpstreamStatus(t *testing.T)
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",
@@ -751,7 +903,7 @@ func TestAdapterStreamChatCompletionsReturnsErrorForBadSSEJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",
@@ -811,7 +963,7 @@ func TestAdapterStreamChatCompletionsStopsWhenEmitReturnsError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	emitCalls := 0
 	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
@@ -887,7 +1039,7 @@ func TestAdapterStreamChatCompletionsStopsAtDone(t *testing.T) {
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client())
+	openAIAdapter := newTestAdapter(server.Client())
 
 	got := make([]adapter.ChatStreamChunk, 0)
 	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{

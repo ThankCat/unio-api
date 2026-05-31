@@ -19,7 +19,7 @@
 | [README.md](README.md) | 文档入口和阅读顺序。 |
 | [PROJECT_STATUS.md](PROJECT_STATUS.md) | 当前全局状态。只记录阶段完成度、当前阻断项和下一步。 |
 | [architecture/PROJECT_STRUCTURE.md](architecture/PROJECT_STRUCTURE.md) | 全服务目标目录结构、分层职责、依赖方向和部署关系。 |
-| [chapters](chapters/README.md) | 每个阶段的详细计划、状态、验收标准和交接内容。 |
+| [chapters](chapters/README.md) | 每个阶段的详细计划、状态和验收标准。 |
 | [production/TODO_REGISTER.md](production/TODO_REGISTER.md) | 全局生产欠账登记表。每个代码 TODO 必须有 GAP 编号并链接回章节任务。 |
 | [production/DECISIONS.md](production/DECISIONS.md) | 重大架构和商业规则决策记录。 |
 | [production/RELEASE_BLOCKERS.md](production/RELEASE_BLOCKERS.md) | 当前上线阻断项。 |
@@ -46,10 +46,4 @@
 | [STATUS.md](chapters/phase-07-billing-ledger/STATUS.md) | 本阶段当前状态，区分 done / in_progress / todo / deferred。 |
 | [ACCEPTANCE.md](chapters/phase-07-billing-ledger/ACCEPTANCE.md) | 本阶段验收标准，区分功能验收、生产验收、测试验收和文档验收。 |
 
-需要考试、交接或专项审计时，可以额外添加：
-
-| 文件 | 使用时机 |
-| --- | --- |
-| [HANDOFF.md](chapters/phase-07-billing-ledger/HANDOFF.md) | 阶段交接或上下文恢复时使用。 |
-| EXAM.md | 阶段考试时使用。 |
-| AUDIT.md | 专项审计时使用。 |
+阶段专属技术参考（如 OpenAI 字段矩阵）可放在同目录额外 markdown 中。已完成阶段不再保留 HANDOFF 等临时交接文档。

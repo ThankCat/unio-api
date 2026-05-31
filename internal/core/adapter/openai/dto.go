@@ -49,8 +49,9 @@ type chatStreamChoice struct {
 }
 
 type chatStreamDelta struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role             string  `json:"role"`
+	Content          string  `json:"content"`
+	ReasoningContent *string `json:"reasoning_content"`
 }
 
 type chatCompletionUsage struct {

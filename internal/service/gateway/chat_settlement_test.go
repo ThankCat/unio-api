@@ -13,6 +13,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/apikey"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/billing"
+	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
@@ -420,12 +421,17 @@ func insertChatSettlementProvider(t *testing.T, ctx context.Context, pool *pgxpo
 func insertChatSettlementChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, providerID int64, suffix int64) int64 {
 	t.Helper()
 
+	credentialEncrypted, err := credential.EncryptFixedTestCredential("sk-chat-settlement-test")
+	if err != nil {
+		t.Fatalf("encrypt channel credential: %v", err)
+	}
+
 	var id int64
-	err := pool.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, name, base_url, credential_ref, status, priority, timeout_ms)
+	err = pool.QueryRow(ctx, `
+		INSERT INTO channels (provider_id, name, base_url, credential_encrypted, status, priority, timeout_ms)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id
-	`, providerID, fmt.Sprintf("chat-settlement-channel-%d", suffix), "https://example.test/v1", "secret://chat-settlement", "enabled", 10, 30000).Scan(&id)
+	`, providerID, fmt.Sprintf("chat-settlement-channel-%d", suffix), "https://example.test/v1", credentialEncrypted, "enabled", 10, 30000).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}

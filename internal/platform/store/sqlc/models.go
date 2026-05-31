@@ -23,16 +23,16 @@ type ApiKey struct {
 }
 
 type Channel struct {
-	ID            int64
-	ProviderID    int64
-	Name          string
-	BaseUrl       string
-	CredentialRef string
-	Status        string
-	Priority      int32
-	TimeoutMs     pgtype.Int4
-	CreatedAt     pgtype.Timestamptz
-	UpdatedAt     pgtype.Timestamptz
+	ID                  int64
+	ProviderID          int64
+	Name                string
+	BaseUrl             string
+	CredentialEncrypted []byte
+	Status              string
+	Priority            int32
+	TimeoutMs           pgtype.Int4
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
 }
 
 type ChannelCostPrice struct {

@@ -31,7 +31,7 @@ SELECT
     p.adapter AS adapter_key,
     c.id AS channel_id,
     c.base_url,
-    c.credential_ref,
+    c.credential_encrypted,
     c.timeout_ms,
     c.priority,
     cm.upstream_model
@@ -73,17 +73,17 @@ type FindRouteCandidatesParams struct {
 }
 
 type FindRouteCandidatesRow struct {
-	ModelDbID        int64
-	RequestedModelID string
-	ProviderID       int64
-	ProviderSlug     string
-	AdapterKey       string
-	ChannelID        int64
-	BaseUrl          string
-	CredentialRef    string
-	TimeoutMs        pgtype.Int4
-	Priority         int32
-	UpstreamModel    string
+	ModelDbID           int64
+	RequestedModelID    string
+	ProviderID          int64
+	ProviderSlug        string
+	AdapterKey          string
+	ChannelID           int64
+	BaseUrl             string
+	CredentialEncrypted []byte
+	TimeoutMs           pgtype.Int4
+	Priority            int32
+	UpstreamModel       string
 }
 
 // FindRouteCandidates 按请求模型和项目策略查找可用 channel 路由候选。
@@ -104,7 +104,7 @@ func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidat
 			&i.AdapterKey,
 			&i.ChannelID,
 			&i.BaseUrl,
-			&i.CredentialRef,
+			&i.CredentialEncrypted,
 			&i.TimeoutMs,
 			&i.Priority,
 			&i.UpstreamModel,

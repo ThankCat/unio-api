@@ -47,27 +47,25 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	}
 
 	if req.Stream != nil && *req.Stream {
-		if _, ok := w.(http.Flusher); !ok {
+		sw, err := httpx.NewSSEWriter(r.Context(), w, httpx.SSEWriterConfig{})
+		if err != nil {
+			// 唯一可能的构造错误是底层 writer 不支持 flush，此时还没写任何 SSE，可退回 JSON error。
 			_ = httpx.WriteError(w, http.StatusInternalServerError, "streaming_unsupported", "streaming unsupported")
 			return
 		}
 
-		streamStarted := false
-
-		err := h.service.StreamChatCompletion(r.Context(), req, func(chunk ChatCompletionStreamResponse) error {
-			payload, err := json.Marshal(chunk)
-			if err != nil {
-				return err
+		err = h.service.StreamChatCompletion(r.Context(), req, func(chunk ChatCompletionStreamResponse) error {
+			payload, marshalErr := json.Marshal(chunk)
+			if marshalErr != nil {
+				return marshalErr
 			}
 
-			// 从这里开始，响应已经进入 SSE 写出路径；后续不能再退回普通 JSON error。
-			streamStarted = true
-			return httpx.WriteSSE(w, payload)
+			return sw.WriteData(payload)
 		})
 		if err != nil {
-			if streamStarted {
+			if sw.Started() {
 				// SSE 已经开始后不能再返回普通 JSON error，只能尽力写出 data-only error chunk。
-				writeChatStreamError(w, req, err)
+				writeChatStreamError(sw, req, err)
 				return
 			}
 
@@ -81,7 +79,7 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			return
 		}
 
-		_ = httpx.WriteSSE(w, []byte("[DONE]"))
+		_ = sw.WriteData([]byte("[DONE]"))
 		return
 	}
 
@@ -98,7 +96,6 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	}
 
 	_ = httpx.WriteJSON(w, http.StatusOK, resp)
-
 }
 
 // stringPtr 返回字符串指针，用于构造 optional 字段。
@@ -303,7 +300,7 @@ func writeChatValidationError(w http.ResponseWriter, validationErr *chatValidati
 }
 
 // writeChatStreamError 在 SSE 已开始后写出 OpenAI-compatible data-only error chunk。
-func writeChatStreamError(w http.ResponseWriter, req ChatCompletionRequest, err error) {
+func writeChatStreamError(sw *httpx.SSEWriter, req ChatCompletionRequest, err error) {
 	resp := mapChatServiceError(
 		req,
 		err,
@@ -325,5 +322,5 @@ func writeChatStreamError(w http.ResponseWriter, req ChatCompletionRequest, err 
 		return
 	}
 
-	_ = httpx.WriteSSE(w, payload)
+	_ = sw.WriteData(payload)
 }

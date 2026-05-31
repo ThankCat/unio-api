@@ -1,10 +1,10 @@
-# Phase 9 Plan - 后台管理
+# Phase 10 Plan - 后台管理
 
 ## 目标
 
 提供后台管理能力，让 user、project、API key、provider、channel、model、price、request logs 和 billing logs 可以被安全管理。
 
-阶段 9 不是“做几个 CRUD 页面”，而是把前面阶段的数据库业务数据真正变成可运营系统：
+阶段 10 不是“做几个 CRUD 页面”，而是把前面阶段的数据库业务数据真正变成可运营系统：
 
 1. 管理员可以管理用户和项目。
 2. 用户或管理员可以管理 API key。

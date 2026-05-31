@@ -101,6 +101,8 @@ func fallbackEncoding(model string) (tiktoken.Encoding, bool) {
 	case hasModelPrefix(model, "gpt-4"),
 		hasModelPrefix(model, "gpt-3.5"):
 		return tiktoken.Cl100kBase, true
+	case hasModelPrefix(model, "deepseek"):
+		return tiktoken.Cl100kBase, true
 	default:
 		return "", false
 	}

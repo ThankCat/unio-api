@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
+	"github.com/ThankCat/unio-api/internal/core/adapter/openai/normalizer"
 	adaptersse "github.com/ThankCat/unio-api/internal/core/adapter/sse"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
@@ -21,16 +22,24 @@ const (
 
 // Adapter 调用 OpenAI-compatible 上游接口。
 type Adapter struct {
-	client *http.Client
+	client      *http.Client
+	normalizers *normalizer.Registry
 }
 
 // NewAdapter 创建 OpenAI-compatible adapter。
-func NewAdapter(client *http.Client) *Adapter {
+func NewAdapter(client *http.Client, normalizers *normalizer.Registry) *Adapter {
 	if client == nil {
 		client = http.DefaultClient
 	}
 
-	return &Adapter{client: client}
+	if normalizers == nil {
+		normalizers = normalizer.NewRegistry(normalizer.Default{})
+	}
+
+	return &Adapter{
+		client:      client,
+		normalizers: normalizers,
+	}
 }
 
 // ChatCompletions 调用上游 /chat/completions，并转换为统一 adapter 响应。
@@ -230,55 +239,43 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 			)
 		}
 
-		if len(streamResp.Choices) == 0 {
-			if streamResp.Usage != nil {
-				usage, err := chatUsageFromOpenAI(streamResp.Usage)
-				if err != nil {
-					return err
-				}
+		norm := a.normalizers.Resolve(ch.ProviderSlug)
 
-				if err := emit(adapter.ChatStreamChunk{
-					ID:    streamResp.ID,
-					Model: streamResp.Model,
-					Usage: &usage,
-					Upstream: &adapter.UpstreamMetadata{
-						StatusCode: upstreamResp.StatusCode,
-						RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
-					},
-				}); err != nil {
-					return failure.Wrap(
-						failure.CodeAdapterEmitFailed,
-						err,
-						failure.WithMessage("openai adapter send stream usage chunk"),
-					)
+		streamIn, err := streamInputFromResponse(streamResp)
+		if err != nil {
+			return err
+		}
+
+		events, err := norm.NormalizeStreamEvent(streamIn)
+		if err != nil {
+			return err
+		}
+
+		for _, event := range events {
+			chunk := adapter.ChatStreamChunk{
+				ID:           event.ID,
+				Model:        event.Model,
+				Role:         event.Role,
+				Content:      event.Content,
+				FinishReason: event.FinishReason,
+			}
+
+			if event.Usage != nil {
+				usage := *event.Usage
+				chunk.Usage = &usage
+				chunk.Upstream = &adapter.UpstreamMetadata{
+					StatusCode: upstreamResp.StatusCode,
+					RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
 				}
 			}
 
-			continue
-		}
-
-		choice := streamResp.Choices[0]
-
-		// 上游可能发送空 delta 作为 stream 心跳或占位事件；这类 chunk 没有用户可见内容，
-		// 也不携带结束原因，直接跳过，避免污染下游 SSE。
-		if choice.Delta.Role == "" && choice.Delta.Content == "" && choice.FinishReason == nil {
-			continue
-		}
-
-		chunk := adapter.ChatStreamChunk{
-			ID:           streamResp.ID,
-			Model:        streamResp.Model,
-			Role:         choice.Delta.Role,
-			Content:      choice.Delta.Content,
-			FinishReason: choice.FinishReason,
-		}
-
-		if err := emit(chunk); err != nil {
-			return failure.Wrap(
-				failure.CodeAdapterEmitFailed,
-				err,
-				failure.WithMessage("openai adapter send stream chunk"),
-			)
+			if err := emit(chunk); err != nil {
+				return failure.Wrap(
+					failure.CodeAdapterEmitFailed,
+					err,
+					failure.WithMessage("openai adapter send stream chunk"),
+				)
+			}
 		}
 	}
 
@@ -291,6 +288,43 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	}
 
 	return nil
+}
+
+// streamInputFromResponse 将上游 stream JSON DTO 转成 normalizer 输入。
+func streamInputFromResponse(streamResp chatCompletionStreamResponse) (normalizer.StreamInput, error) {
+	in := normalizer.StreamInput{
+		ID:    streamResp.ID,
+		Model: streamResp.Model,
+	}
+
+	if streamResp.Usage != nil {
+		usage, err := chatUsageFromOpenAI(streamResp.Usage)
+		if err != nil {
+			return normalizer.StreamInput{}, err
+		}
+
+		in.Usage = &usage
+	}
+
+	if len(streamResp.Choices) == 0 {
+		return in, nil
+	}
+
+	in.Choices = make([]normalizer.StreamChoice, 0, len(streamResp.Choices))
+	for _, choice := range streamResp.Choices {
+		streamChoice := normalizer.StreamChoice{
+			Role:         choice.Delta.Role,
+			Content:      choice.Delta.Content,
+			FinishReason: choice.FinishReason,
+		}
+		if choice.Delta.ReasoningContent != nil {
+			streamChoice.ReasoningContent = *choice.Delta.ReasoningContent
+		}
+
+		in.Choices = append(in.Choices, streamChoice)
+	}
+
+	return in, nil
 }
 
 // chatUsageFromOpenAI 将 OpenAI usage DTO 转成 adapter 内部 usage DTO。

@@ -1334,6 +1334,62 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 	}
 }
 
+func TestChatCompletionServiceStreamChatCompletionEmitsClientUsageWhenRequested(t *testing.T) {
+	fakeAdapter := &fakeChatAdapter{
+		streamResp: []adapter.ChatStreamChunk{
+			{
+				ID:      "chatcmpl_mock",
+				Model:   "gpt-4.1",
+				Role:    "assistant",
+				Content: "mock response",
+			},
+			streamUsageChunk("gpt-4.1"),
+		},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
+		&fakeAdapterRegistry{
+			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+				"openai": fakeAdapter,
+			},
+		},
+		nil,
+		newFakeRequestLogService(),
+		newChatCompletionSettlementForTest(),
+		&fakeChatAuthorizer{authorization: ChatAuthorization{ReservationID: 8820}},
+	)
+
+	req := chatRequest()
+	includeUsage := true
+	req.StreamOptions = &gatewayapi.ChatCompletionStreamOptions{
+		IncludeUsage: &includeUsage,
+	}
+
+	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
+	err := service.StreamChatCompletion(contextWithPrincipal(42), req, func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+		chunks = append(chunks, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamChatCompletion returned err: %v", err)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if chunks[1].Usage == nil {
+		t.Fatal("expected final chunk to include usage")
+	}
+	if chunks[1].Usage.PromptTokens != 10 || chunks[1].Usage.CompletionTokens != 11 || chunks[1].Usage.TotalTokens != 21 {
+		t.Fatalf("unexpected client usage %#v", chunks[1].Usage)
+	}
+	if len(chunks[1].Choices) != 0 {
+		t.Fatalf("expected empty choices on usage chunk, got %d", len(chunks[1].Choices))
+	}
+	if chunks[1].ID != "chatcmpl_mock" {
+		t.Fatalf("expected usage chunk id %q, got %q", "chatcmpl_mock", chunks[1].ID)
+	}
+}
+
 func TestChatCompletionServiceStreamChatCompletionReturnsMissingAdapterWithoutRetry(t *testing.T) {
 	classifier := &fakeRetryClassifier{retryable: true}
 	service := newChatCompletionServiceForTest(

@@ -107,6 +107,9 @@ const (
 
 	// CodeHTTPResponseWriteFailed 表示 HTTP 响应写出失败。
 	CodeHTTPResponseWriteFailed Code = "http_response_write_failed"
+
+	// CodeHTTPClientDisconnected 表示客户端连接已断开。
+	CodeHTTPClientDisconnected Code = "http_client_disconnected"
 )
 
 const (
@@ -191,6 +194,18 @@ const (
 
 	// CodeCredentialNotFound 表示 credential_ref 找不到对应凭据。
 	CodeCredentialNotFound Code = "credential_not_found"
+
+	// CodeCredentialMasterKeyInvalid 表示 CREDENTIAL_MASTER_KEY 格式或长度非法。
+	CodeCredentialMasterKeyInvalid Code = "credential_master_key_invalid"
+
+	// CodeCredentialEncryptFailed 表示上游凭据加密失败。
+	CodeCredentialEncryptFailed Code = "credential_encrypt_failed"
+
+	// CodeCredentialDecryptFailed 表示上游凭据解密失败（含密文被篡改）。
+	CodeCredentialDecryptFailed Code = "credential_decrypt_failed"
+
+	// CodeCredentialCiphertextInvalid 表示入库密文长度或格式非法。
+	CodeCredentialCiphertextInvalid Code = "credential_ciphertext_invalid"
 )
 
 const (

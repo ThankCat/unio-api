@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/apikey"
+	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -122,12 +123,17 @@ func createProviderChannel(t *testing.T, ctx context.Context, tx pgx.Tx) (int64,
 		t.Fatalf("insert provider: %v", err)
 	}
 
+	credentialEncrypted, err := credential.EncryptFixedTestCredential("sk-requestlog-test")
+	if err != nil {
+		t.Fatalf("encrypt channel credential: %v", err)
+	}
+
 	var channelID int64
 	err = tx.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, name, base_url, credential_ref, status, priority, timeout_ms)
+		INSERT INTO channels (provider_id, name, base_url, credential_encrypted, status, priority, timeout_ms)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id
-	`, providerID, fmt.Sprintf("requestlog-channel-%d", suffix), "https://api.example.test/v1", "secret://requestlog", "enabled", 10, nil).Scan(&channelID)
+	`, providerID, fmt.Sprintf("requestlog-channel-%d", suffix), "https://api.example.test/v1", credentialEncrypted, "enabled", 10, nil).Scan(&channelID)
 	if err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}

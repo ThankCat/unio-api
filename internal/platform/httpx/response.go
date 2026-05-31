@@ -49,52 +49,6 @@ func WriteJSON(w http.ResponseWriter, status int, v any) error {
 	return nil
 }
 
-// WriteSSE 将一条 SSE 数据写入响应，并立即 flush 给客户端。
-func WriteSSE(w http.ResponseWriter, data []byte) error {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		return failure.Wrap(
-			failure.CodeHTTPStreamingUnsupported,
-			ErrStreamingUnsupported,
-			failure.WithMessage(ErrStreamingUnsupported.Error()),
-		)
-	}
-
-	header := w.Header()
-	header.Set("Content-Type", ContentTypeSSE)
-	header.Set("Cache-Control", "no-cache")
-	header.Set("X-Accel-Buffering", "no")
-
-	// TODO(阶段8/production): [GAP-8-002] HTTP SSE 写出当前只有 data-only helper，尚未抽象 event/id/retry/heartbeat 和写出后错误事件；阶段 8 stream observability 或新增 SSE endpoint 时；抽出项目级 SSE Writer 并覆盖多行 data、event/error、heartbeat、flush/context 失败。
-	// SSE 的一条事件以空行结束；OpenAI-compatible stream 常用 data 行承载 JSON。
-	if _, err := w.Write([]byte("data: ")); err != nil {
-		return failure.Wrap(
-			failure.CodeHTTPResponseWriteFailed,
-			err,
-			failure.WithMessage("write sse response"),
-		)
-	}
-
-	if _, err := w.Write(data); err != nil {
-		return failure.Wrap(
-			failure.CodeHTTPResponseWriteFailed,
-			err,
-			failure.WithMessage("write sse response"),
-		)
-	}
-
-	if _, err := w.Write([]byte("\n\n")); err != nil {
-		return failure.Wrap(
-			failure.CodeHTTPResponseWriteFailed,
-			err,
-			failure.WithMessage("write sse response"),
-		)
-	}
-
-	flusher.Flush()
-	return nil
-}
-
 // WriteError 写入统一格式的 JSON 错误响应。
 func WriteError(w http.ResponseWriter, status int, code string, message string) error {
 	return WriteOpenAIError(w, status, code, message, "api_error", nil)

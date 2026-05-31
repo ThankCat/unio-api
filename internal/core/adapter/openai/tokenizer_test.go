@@ -8,7 +8,7 @@ import (
 )
 
 func TestAdapterCountChatInputTokensCountsMessages(t *testing.T) {
-	openAIAdapter := NewAdapter(nil)
+	openAIAdapter := newTestAdapter(nil)
 
 	got, err := openAIAdapter.CountChatInputTokens(adapter.ChatInputTokenizeRequest{
 		Model: "gpt-4.1",
@@ -26,7 +26,7 @@ func TestAdapterCountChatInputTokensCountsMessages(t *testing.T) {
 }
 
 func TestAdapterCountChatInputTokensRejectsEmptyModel(t *testing.T) {
-	openAIAdapter := NewAdapter(nil)
+	openAIAdapter := newTestAdapter(nil)
 
 	_, err := openAIAdapter.CountChatInputTokens(adapter.ChatInputTokenizeRequest{
 		Model: " ",

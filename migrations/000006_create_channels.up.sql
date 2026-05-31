@@ -12,8 +12,8 @@ CREATE TABLE channels (
     -- base_url: 上游 API 基础地址。--
     base_url TEXT NOT NULL,
 
-    -- credential_ref: 凭据引用，不保存密钥明文。--
-    credential_ref TEXT NOT NULL,
+    -- credential_encrypted: AES-256-GCM 加密后的上游 API key（nonce‖ciphertext‖tag）。--
+    credential_encrypted BYTEA NOT NULL,
 
     -- status: channel 启停状态。--
     status TEXT NOT NULL CHECK (status IN ('enabled', 'disabled')),

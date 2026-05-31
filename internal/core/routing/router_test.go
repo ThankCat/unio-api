@@ -1,11 +1,13 @@
 package routing
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -41,46 +43,64 @@ func (s *fakeStore) ProjectCanUseModel(ctx context.Context, arg sqlc.ProjectCanU
 	return s.projectCanUse, s.projectCanUseErr
 }
 
-// fakeCredentialResolver 是 routing 测试使用的凭据解析器替身。
-type fakeCredentialResolver struct {
-	credentialRefs []string
-	apiKey         string
-	err            error
+// fakeCredentialDecryptor 是 routing 测试使用的凭据解密替身。
+type fakeCredentialDecryptor struct {
+	ciphertexts [][]byte
+	apiKey      string
+	err         error
 }
 
-// Resolve 记录凭据引用，并返回测试预设 API key。
-func (r *fakeCredentialResolver) Resolve(ctx context.Context, credentialRef string) (string, error) {
-	r.credentialRefs = append(r.credentialRefs, credentialRef)
-	return r.apiKey, r.err
+// Decrypt 记录密文，并返回测试预设 API key。
+func (d *fakeCredentialDecryptor) Decrypt(ciphertext []byte) (string, error) {
+	d.ciphertexts = append(d.ciphertexts, append([]byte(nil), ciphertext...))
+	if d.err != nil {
+		return "", d.err
+	}
+
+	return d.apiKey, nil
+}
+
+func mustEncryptTestCredential(t *testing.T, plaintext string) []byte {
+	t.Helper()
+
+	encrypted, err := credential.EncryptFixedTestCredential(plaintext)
+	if err != nil {
+		t.Fatalf("encrypt test credential: %v", err)
+	}
+
+	return encrypted
 }
 
 func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
+	primaryEncrypted := mustEncryptTestCredential(t, "secret://openai/main")
+	backupEncrypted := mustEncryptTestCredential(t, "secret://openai/backup")
+
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
-				RequestedModelID: "openai/gpt-4.1",
-				ProviderID:       11,
-				AdapterKey:       "openai",
-				ChannelID:        123,
-				BaseUrl:          "https://api.openai.example/v1",
-				CredentialRef:    "secret://openai/main",
-				TimeoutMs:        pgtype.Int4{Int32: 15000, Valid: true},
-				UpstreamModel:    "gpt-4.1",
+				RequestedModelID:    "openai/gpt-4.1",
+				ProviderID:          11,
+				AdapterKey:          "openai",
+				ChannelID:           123,
+				BaseUrl:             "https://api.openai.example/v1",
+				CredentialEncrypted: primaryEncrypted,
+				TimeoutMs:           pgtype.Int4{Int32: 15000, Valid: true},
+				UpstreamModel:       "gpt-4.1",
 			},
 			{
-				RequestedModelID: "openai/gpt-4.1",
-				ProviderID:       11,
-				AdapterKey:       "openai",
-				ChannelID:        456,
-				BaseUrl:          "https://backup.openai.example/v1",
-				CredentialRef:    "secret://openai/backup",
-				TimeoutMs:        pgtype.Int4{Int32: 30000, Valid: true},
-				UpstreamModel:    "gpt-4.1",
+				RequestedModelID:    "openai/gpt-4.1",
+				ProviderID:          11,
+				AdapterKey:          "openai",
+				ChannelID:           456,
+				BaseUrl:             "https://backup.openai.example/v1",
+				CredentialEncrypted: backupEncrypted,
+				TimeoutMs:           pgtype.Int4{Int32: 30000, Valid: true},
+				UpstreamModel:       "gpt-4.1",
 			},
 		},
 	}
-	credentialResolver := &fakeCredentialResolver{apiKey: "resolved-secret"}
-	router := NewRouter(store, credentialResolver, 30*time.Second)
+	decryptor := &fakeCredentialDecryptor{apiKey: "resolved-secret"}
+	router := NewRouter(store, decryptor, 30*time.Second)
 
 	got, err := router.PlanChat(context.Background(), ChatRouteRequest{
 		ProjectID: 42,
@@ -96,14 +116,14 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	if store.params.RequestedModelID != "openai/gpt-4.1" {
 		t.Fatalf("expected requested model %q, got %q", "openai/gpt-4.1", store.params.RequestedModelID)
 	}
-	wantCredentialRefs := []string{"secret://openai/main", "secret://openai/backup"}
-	if len(credentialResolver.credentialRefs) != len(wantCredentialRefs) {
-		t.Fatalf("expected %d credential refs, got %#v", len(wantCredentialRefs), credentialResolver.credentialRefs)
+	if len(decryptor.ciphertexts) != 2 {
+		t.Fatalf("expected 2 credential decrypt calls, got %d", len(decryptor.ciphertexts))
 	}
-	for i, want := range wantCredentialRefs {
-		if credentialResolver.credentialRefs[i] != want {
-			t.Fatalf("expected credential ref %q at index %d, got %q", want, i, credentialResolver.credentialRefs[i])
-		}
+	if !bytes.Equal(decryptor.ciphertexts[0], primaryEncrypted) {
+		t.Fatal("expected primary encrypted credential to be decrypted")
+	}
+	if !bytes.Equal(decryptor.ciphertexts[1], backupEncrypted) {
+		t.Fatal("expected backup encrypted credential to be decrypted")
 	}
 
 	if got.RequestedModel != "openai/gpt-4.1" {
@@ -149,16 +169,16 @@ func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
-				AdapterKey:    "openai",
-				ChannelID:     123,
-				BaseUrl:       "https://api.openai.example/v1",
-				CredentialRef: "secret://openai/main",
-				TimeoutMs:     pgtype.Int4{Valid: false},
-				UpstreamModel: "gpt-4.1",
+				AdapterKey:          "openai",
+				ChannelID:           123,
+				BaseUrl:             "https://api.openai.example/v1",
+				CredentialEncrypted: mustEncryptTestCredential(t, "secret://openai/main"),
+				TimeoutMs:           pgtype.Int4{Valid: false},
+				UpstreamModel:       "gpt-4.1",
 			},
 		},
 	}
-	router := NewRouter(store, &fakeCredentialResolver{apiKey: "resolved-secret"}, 0)
+	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 0)
 
 	got, err := router.PlanChat(context.Background(), ChatRouteRequest{
 		ProjectID: 42,
@@ -178,7 +198,7 @@ func TestRouterPlanChatReturnsNoAvailableChannel(t *testing.T) {
 		modelExists:   true,
 		projectCanUse: true,
 	}
-	router := NewRouter(store, &fakeCredentialResolver{apiKey: "resolved-secret"}, 30*time.Second)
+	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
 		ProjectID: 42,
@@ -200,7 +220,7 @@ func TestRouterPlanChatReturnsNoAvailableChannel(t *testing.T) {
 
 func TestRouterPlanChatReturnsModelNotFound(t *testing.T) {
 	store := &fakeStore{modelExists: false}
-	router := NewRouter(store, &fakeCredentialResolver{apiKey: "resolved-secret"}, 30*time.Second)
+	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
 		ProjectID: 42,
@@ -219,7 +239,7 @@ func TestRouterPlanChatReturnsModelNotAvailable(t *testing.T) {
 		modelExists:   true,
 		projectCanUse: false,
 	}
-	router := NewRouter(store, &fakeCredentialResolver{apiKey: "resolved-secret"}, 30*time.Second)
+	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
 		ProjectID: 42,
@@ -232,7 +252,7 @@ func TestRouterPlanChatReturnsModelNotAvailable(t *testing.T) {
 
 func TestRouterPlanChatReturnsStoreError(t *testing.T) {
 	storeErr := errors.New("database unavailable")
-	router := NewRouter(&fakeStore{err: storeErr}, &fakeCredentialResolver{apiKey: "resolved-secret"}, 30*time.Second)
+	router := NewRouter(&fakeStore{err: storeErr}, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
 		ProjectID: 42,
@@ -243,27 +263,51 @@ func TestRouterPlanChatReturnsStoreError(t *testing.T) {
 	}
 }
 
-func TestRouterPlanChatReturnsCredentialResolverError(t *testing.T) {
-	resolveErr := errors.New("secret manager unavailable")
+func TestRouterPlanChatReturnsCredentialDecryptError(t *testing.T) {
+	decryptErr := errors.New("decrypt unavailable")
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
-				AdapterKey:    "openai",
-				ChannelID:     123,
-				BaseUrl:       "https://api.openai.example/v1",
-				CredentialRef: "secret://openai/main",
-				TimeoutMs:     pgtype.Int4{Int32: 15000, Valid: true},
-				UpstreamModel: "gpt-4.1",
+				AdapterKey:          "openai",
+				ChannelID:           123,
+				BaseUrl:             "https://api.openai.example/v1",
+				CredentialEncrypted: mustEncryptTestCredential(t, "secret://openai/main"),
+				TimeoutMs:           pgtype.Int4{Int32: 15000, Valid: true},
+				UpstreamModel:       "gpt-4.1",
 			},
 		},
 	}
-	router := NewRouter(store, &fakeCredentialResolver{err: resolveErr}, 30*time.Second)
+	router := NewRouter(store, &fakeCredentialDecryptor{err: decryptErr}, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
 		ProjectID: 42,
 		ModelID:   "openai/gpt-4.1",
 	})
-	if !errors.Is(err, resolveErr) {
-		t.Fatalf("expected credential resolver error, got %v", err)
+	if !errors.Is(err, decryptErr) {
+		t.Fatalf("expected credential decrypt error, got %v", err)
+	}
+}
+
+func TestRouterPlanChatReturnsMissingCredentialError(t *testing.T) {
+	store := &fakeStore{
+		rows: []sqlc.FindRouteCandidatesRow{
+			{
+				AdapterKey:          "openai",
+				ChannelID:           123,
+				BaseUrl:             "https://api.openai.example/v1",
+				CredentialEncrypted: nil,
+				TimeoutMs:           pgtype.Int4{Int32: 15000, Valid: true},
+				UpstreamModel:       "gpt-4.1",
+			},
+		},
+	}
+	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
+
+	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		ProjectID: 42,
+		ModelID:   "openai/gpt-4.1",
+	})
+	if !errors.Is(err, ErrChannelCredentialMissing) {
+		t.Fatalf("expected ErrChannelCredentialMissing, got %v", err)
 	}
 }
