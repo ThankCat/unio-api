@@ -1,10 +1,11 @@
-package adapter
+package openai
 
 import (
 	"context"
 	"errors"
 	"testing"
 
+	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 )
 
@@ -20,14 +21,14 @@ func (a *registryTestChatAdapter) ChatCompletions(ctx context.Context, ch channe
 type registryTestStreamChatAdapter struct{}
 
 // StreamChatCompletions 实现 StreamChatAdapter，registry 测试不关心实际流式内容。
-func (a *registryTestStreamChatAdapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest, emit func(ChatStreamChunk) error) error {
-	return nil
+func (a *registryTestStreamChatAdapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest, emit func(ChatStreamChunk) error) (adapter.StreamOutcome, error) {
+	return adapter.StreamOutcome{}, nil
 }
 
 // registryTestChatInputTokenizer 是 registry 测试使用的输入 tokenizer 替身。
 type registryTestChatInputTokenizer struct{}
 
-func (t *registryTestChatInputTokenizer) CountChatInputTokens(req ChatInputTokenizeRequest) (int64, error) {
+func (t *registryTestChatInputTokenizer) CountChatInputTokens(req ChatRequest) (int64, error) {
 	return 0, nil
 }
 

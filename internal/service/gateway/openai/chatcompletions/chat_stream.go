@@ -1,4 +1,4 @@
-package gateway
+package chatcompletions
 
 import (
 	"context"
@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
+	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
 	"github.com/ThankCat/unio-api/internal/core/auth"
+	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
@@ -43,8 +45,9 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 
 	planCtx, planSpan := startGatewaySpan(ctx, "gateway.routing")
 	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
-		ProjectID: principal.ProjectID,
-		ModelID:   req.Model,
+		ProjectID:       principal.ProjectID,
+		ModelID:         req.Model,
+		IngressProtocol: routing.ProtocolOpenAI,
 	})
 	endGatewaySpan(planSpan, err)
 	if err != nil {
@@ -52,11 +55,31 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 		return err
 	}
 
-	var lastErr error
-	var authorization ChatAuthorization
-	authorizationCreated := false
+	candidatePlan, err := s.prepareChatCandidates(ctx, req, plan.Candidates, true)
+	if err != nil {
+		s.markRequestRecordFailed(ctx, requestRecord, routingFailureCode(err), err)
+		return err
+	}
 
-	for index, candidate := range plan.Candidates {
+	firstCandidate := candidatePlan.Candidates[0].Route
+	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, ChatAuthorizeParams{
+		RequestRecord:       requestRecord,
+		Principal:           principal,
+		ModelDBID:           firstCandidate.ModelDBID,
+		InputTokens:         candidatePlan.ConservativeInputTokens,
+		MaxCompletionTokens: estimateMaxCompletionTokens(req),
+	})
+	if err != nil {
+		s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_failed", err)
+		return err
+	}
+
+	var lastErr error
+
+	for _, prepared := range candidatePlan.Candidates {
+		index := prepared.RouteIndex
+		candidate := prepared.Route
+
 		// channel 熔断 open 时跳过该 channel，尝试下一个同模型 channel。
 		channelKey := metricsID(candidate.Channel.ID)
 		if !s.breakerAllow(channelKey) {
@@ -67,6 +90,11 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 		// stream 的失败可能发生在首 chunk 前、首 chunk 后或客户端取消时，提前记录 attempt 才能审计这些状态。
 		attemptRecord, err := s.createAttemptRecord(ctx, requestRecord, index, candidate)
 		if err != nil {
+			if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+				s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+				return releaseErr
+			}
+
 			s.markRequestRecordFailed(ctx, requestRecord, "request_attempt_create_failed", err)
 			return err
 		}
@@ -89,52 +117,28 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 			return err
 		}
 
-		if !authorizationCreated {
-			authorization, err = s.chatAuthorizer.AuthorizeChat(ctx, ChatAuthorizeParams{
-				RequestRecord: requestRecord,
-				Principal:     principal,
-				Request:       req,
-				ModelDBID:     candidate.ModelDBID,
-				AdapterKey:    candidate.AdapterKey,
-				UpstreamModel: candidate.UpstreamModel,
-			})
-			if err != nil {
-				s.markAttemptRecordFailed(ctx, attemptRecord, "chat_authorization_failed", err)
-				s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_failed", err)
-				return err
-			}
-
-			authorizationCreated = true
-		}
-
 		// emitted 表示是否已经尝试向客户端写出过 SSE chunk。
 		// 一旦写出开始，就不能再 fallback 到其他 channel，否则同一个 SSE 响应会混入不同上游的内容。
 		emitted := false
 
-		// finalUsage 是流式请求能否进入账务结算的唯一依据。
-		// 只要上游返回 final usage，就说明本次请求已有可审计的准确 token 用量；
-		// 没有 final usage 时不能猜测扣费，只能记录 failed/canceled 状态。
+		// finalUsage 只用于按 OpenAI 协议向客户输出 include_usage chunk。
+		// 账务结算只消费 adapter 同次解析返回的 StreamOutcome.Facts。
 		var finalUsage *adapter.ChatUsage
 
-		// upstreamResponseModel 优先使用 final usage chunk 携带的 model。
-		// 如果上游 final usage chunk 没有 model，则退回 routing 选中的 upstream model。
-		upstreamResponseModel := candidate.UpstreamModel
-
-		// upstreamMeta 记录上游流式调用的真实 status code 和 request id。
-		// 它随 final usage chunk 一起到达，用于结算时写入 request attempt 渠道审计字段。
-		var upstreamMeta adapter.UpstreamMetadata
+		// streamFacts 是 adapter 在流式解析结束时返回的不可变结算事实。
+		var streamFacts *adapter.ResponseFacts
 
 		// streamResponseID 用于客户端可见的 stream chunk id 和最终 usage chunk。
 		streamResponseID := ""
 
-		// settleStreamFinalUsage 使用 final usage 结算流式请求。
+		// settleStreamFacts 使用 adapter 最终 facts 结算流式请求。
 		// stream 结算不能依赖原始请求 ctx，因为客户端可能已经断开；
 		// 只要上游已经返回 final usage，平台就有准确账务事实，必须尽力完成结算。
-		settleStreamFinalUsage := func() error {
-			if finalUsage == nil {
+		settleStreamFacts := func() error {
+			if streamFacts == nil {
 				return failure.New(
 					failure.CodeGatewayStreamUsageMissing,
-					failure.WithMessage("gateway stream final usage is missing"),
+					failure.WithMessage("gateway stream response facts are missing"),
 				)
 			}
 
@@ -147,20 +151,22 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 			defer cancel()
 
 			settleCtx, settleSpan := startGatewaySpan(settlementCtx, "gateway.settlement")
+			responseID := streamResponseID
+			if responseID == "" {
+				responseID = streamFacts.UpstreamResponseID
+			}
 			settleErr := s.chatSettlement.SettleSuccessfulChat(settleCtx, ChatSettlementParams{
-				RequestRecord:         requestRecord,
-				AttemptRecord:         attemptRecord,
-				Principal:             principal,
-				Authorization:         authorization,
-				ResponseModelID:       req.Model,
-				ModelDBID:             candidate.ModelDBID,
-				FinalProviderID:       candidate.ProviderID,
-				FinalChannelID:        candidate.Channel.ID,
-				UpstreamResponseModel: upstreamResponseModel,
-				UpstreamStatusCode:    upstreamMeta.StatusCode,
-				UpstreamRequestID:     upstreamRequestIDPtr(upstreamMeta.RequestID),
-				Usage:                 *finalUsage,
-				UsageSource:           ChatSettlementUsageSourceUpstreamStream,
+				RequestRecord:    requestRecord,
+				AttemptRecord:    attemptRecord,
+				Principal:        principal,
+				Authorization:    authorization,
+				ResponseProtocol: requestlog.ProtocolOpenAI,
+				ResponseID:       responseID,
+				ResponseModelID:  req.Model,
+				ModelDBID:        candidate.ModelDBID,
+				FinalProviderID:  candidate.ProviderID,
+				FinalChannelID:   candidate.Channel.ID,
+				Facts:            *streamFacts,
 			})
 			endSettlementSpan(settleSpan, settleErr)
 			s.recordSettlement(settlementOutcomeFromErr(settleErr))
@@ -169,39 +175,33 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 
 		streamCtx, streamSpan := startGatewaySpan(ctx, "adapter.stream_chat_completions", upstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 		upstreamStart := time.Now()
-		err = streamAdapter.StreamChatCompletions(streamCtx, candidate.Channel,
+		streamOutcome, streamErr := streamAdapter.StreamChatCompletions(streamCtx, candidate.Channel,
 			mapGatewayRequestToAdapter(req, candidate.UpstreamModel),
-			func(chunk adapter.ChatStreamChunk) error {
-			if chunk.ID != "" {
-				streamResponseID = chunk.ID
-			}
-
-			if chunk.Usage != nil {
-				// usage chunk 是 adapter 给 gateway 的内部控制事件，不是用户可见内容。
-				// 这里不能设置 emitted，也不能写出 SSE，否则客户端会收到空 choices chunk。
-				usage := *chunk.Usage
-				finalUsage = &usage
-
-				if chunk.Model != "" {
-					upstreamResponseModel = chunk.Model
+			func(chunk openai.ChatStreamChunk) error {
+				if chunk.ID != "" {
+					streamResponseID = chunk.ID
 				}
 
-				if chunk.Upstream != nil {
-					upstreamMeta = *chunk.Upstream
+				if chunk.Usage != nil {
+					// usage chunk 是 adapter 给 gateway 的内部控制事件，不是用户可见内容。
+					// 这里不能设置 emitted，也不能写出 SSE，否则客户端会收到空 choices chunk。
+					usage := *chunk.Usage
+					finalUsage = &usage
+
+					return nil
 				}
 
-				return nil
-			}
+				if !emitted {
+					emitted = true
+					s.recordStreamEvent(metrics.StreamEventStarted)
+				}
 
-			if !emitted {
-				emitted = true
-				s.recordStreamEvent(metrics.StreamEventStarted)
-			}
-
-			chunkResp := mapAdapterStreamChunkToGateway(req.Model, chunk, req.StreamIncludeUsage())
-			chunkResp.Created = time.Now().Unix()
-			return emit(chunkResp)
-		})
+				chunkResp := mapAdapterStreamChunkToGateway(req.Model, chunk, req.StreamIncludeUsage())
+				chunkResp.Created = time.Now().Unix()
+				return emit(chunkResp)
+			})
+		streamFacts = streamOutcome.Facts
+		err = streamErr
 		s.recordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 		endGatewaySpan(streamSpan, err)
 		s.recordChannelHealth(channelKey, err)
@@ -209,8 +209,8 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 		if err != nil {
 			// 有 final usage 时优先结算：这说明上游已经给出准确 token 用量。
 			// 即使后续发生客户端取消、连接尾部错误或 adapter 返回错误，也不能让已产生成本的请求免费。
-			if finalUsage != nil {
-				if settleErr := settleStreamFinalUsage(); settleErr != nil {
+			if streamFacts != nil {
+				if settleErr := settleStreamFacts(); settleErr != nil {
 					if !IsChatSettlementRecoveryScheduled(settleErr) {
 						s.markRequestRecordFailed(ctx, requestRecord, "stream_chat_settlement_failed", settleErr)
 						return settleErr
@@ -276,7 +276,7 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 			continue
 		}
 
-		if finalUsage == nil {
+		if streamFacts == nil || finalUsage == nil {
 			// adapter 正常结束但没有 final usage，不能把它当作可计费成功请求。
 			// 这类请求可能是上游不支持 include_usage、代理吞掉尾包，或 parser 漏解析。
 			err := failure.New(
@@ -300,7 +300,7 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 			return err
 		}
 
-		if settleErr := settleStreamFinalUsage(); settleErr != nil {
+		if settleErr := settleStreamFacts(); settleErr != nil {
 			if !IsChatSettlementRecoveryScheduled(settleErr) {
 				s.markRequestRecordFailed(ctx, requestRecord, "stream_chat_settlement_failed", settleErr)
 				return settleErr
@@ -326,6 +326,11 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 
 		s.markRequestRecordFailed(ctx, requestRecord, "stream_adapter_error", lastErr)
 		return lastErr
+	}
+
+	if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+		s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+		return releaseErr
 	}
 
 	err = failure.Wrap(

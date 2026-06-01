@@ -7,7 +7,8 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-api/internal/service/gateway"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
+	gateway "github.com/ThankCat/unio-api/internal/service/gateway/openai/chatcompletions"
 )
 
 // NewChatGateway 创建当前 server 进程使用的 chat gateway service。
@@ -16,11 +17,15 @@ func NewChatGateway(
 	db gateway.ChatTxBeginner,
 	queries *sqlc.Queries,
 	router gateway.ChatRouter,
-	registry gateway.AdapterRegistry,
+	registry *lifecycle.AdapterRegistry,
 	workerConfig config.WorkerConfig,
 	breakerConfig config.CircuitBreakerConfig,
 	metricsRecorder *metrics.Metrics,
 ) *gateway.ChatCompletionService {
+	if registry == nil {
+		panic("bootstrap: lifecycle adapter registry is required")
+	}
+
 	requestLogStore := requestlog.NewStore(queries)
 	ledgerService := ledger.NewService(db, queries)
 	chatSettlementService := gateway.NewChatSettlementService(
@@ -42,8 +47,8 @@ func NewChatGateway(
 		queries,
 		billing.Service{},
 		ledgerService,
-		registry,
 	)
+	candidatePreparer := lifecycle.NewExecutor(registry)
 
 	// 避免 typed-nil 接口陷阱：nil *metrics.Metrics 必须以 nil 接口传入，
 	// 否则 service 内的 nil 判断会失效并在调用时 panic。
@@ -65,7 +70,8 @@ func NewChatGateway(
 
 	return gateway.NewChatCompletionService(
 		router,
-		registry,
+		registry.OpenAI,
+		candidatePreparer,
 		gateway.ProviderErrorClassifier{},
 		requestLogStore,
 		chatSettlementExecutor,

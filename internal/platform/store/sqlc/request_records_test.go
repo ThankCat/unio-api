@@ -77,7 +77,11 @@ func createRequestRecordForTest(t *testing.T, ctx context.Context, queries *sqlc
 		ProjectID:           identity.project.ID,
 		ApiKeyID:            identity.apiKey.ID,
 		RequestedModelID:    "deepseek-v4-pro",
+		IngressProtocol:     "openai",
+		Operation:           "chat_completions",
 		ResponseModelID:     pgtype.Text{Valid: false},
+		ResponseProtocol:    pgtype.Text{Valid: false},
+		ResponseID:          pgtype.Text{Valid: false},
 		Stream:              false,
 		Status:              "pending",
 		FinalProviderID:     pgtype.Int8{Valid: false},
@@ -85,6 +89,9 @@ func createRequestRecordForTest(t *testing.T, ctx context.Context, queries *sqlc
 		ErrorCode:           pgtype.Text{Valid: false},
 		ErrorMessage:        pgtype.Text{Valid: false},
 		InternalErrorDetail: pgtype.Text{Valid: false},
+		DeliveryStatus:      "not_started",
+		ResponseStartedAt:   pgtype.Timestamptz{Valid: false},
+		ResponseCompletedAt: pgtype.Timestamptz{Valid: false},
 		StartedAt:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		CompletedAt:         pgtype.Timestamptz{Valid: false},
 	})
@@ -107,7 +114,7 @@ func TestRequestRecordLifecycle(t *testing.T) {
 
 	identity := createRequestRecordIdentity(t, ctx, queries)
 	suffix := time.Now().UnixNano()
-	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("request-record-provider-%d", suffix), "openai", "enabled")
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("request-record-provider-%d", suffix), "enabled")
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("request-record-channel-%d", suffix), "enabled", 10, nil)
 
 	record := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("request-record-%d", suffix))
@@ -128,11 +135,13 @@ func TestRequestRecordLifecycle(t *testing.T) {
 
 	completedAt := time.Now()
 	succeeded, err := queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
-		ResponseModelID: pgtype.Text{String: "deepseek-v4-pro", Valid: true},
-		FinalProviderID: pgtype.Int8{Int64: providerID, Valid: true},
-		FinalChannelID:  pgtype.Int8{Int64: channelID, Valid: true},
-		CompletedAt:     pgtype.Timestamptz{Time: completedAt, Valid: true},
-		RequestRecordID: record.ID,
+		ResponseModelID:  pgtype.Text{String: "deepseek-v4-pro", Valid: true},
+		ResponseProtocol: pgtype.Text{String: "openai", Valid: true},
+		ResponseID:       pgtype.Text{String: "chatcmpl-request-record", Valid: true},
+		FinalProviderID:  pgtype.Int8{Int64: providerID, Valid: true},
+		FinalChannelID:   pgtype.Int8{Int64: channelID, Valid: true},
+		CompletedAt:      pgtype.Timestamptz{Time: completedAt, Valid: true},
+		RequestRecordID:  record.ID,
 	})
 	if err != nil {
 		t.Fatalf("mark request succeeded: %v", err)
@@ -182,9 +191,9 @@ func TestRequestRecordStateMachineKeepsTerminalFacts(t *testing.T) {
 
 	identity := createRequestRecordIdentity(t, ctx, queries)
 	suffix := time.Now().UnixNano()
-	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("request-state-provider-%d", suffix), "openai", "enabled")
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("request-state-provider-%d", suffix), "enabled")
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("request-state-channel-%d", suffix), "enabled", 10, nil)
-	otherProviderID := insertProvider(t, ctx, tx, fmt.Sprintf("request-state-provider-other-%d", suffix), "openai", "enabled")
+	otherProviderID := insertProvider(t, ctx, tx, fmt.Sprintf("request-state-provider-other-%d", suffix), "enabled")
 	otherChannelID := insertChannel(t, ctx, tx, otherProviderID, fmt.Sprintf("request-state-channel-other-%d", suffix), "enabled", 20, nil)
 
 	record := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("request-state-%d", suffix))
@@ -193,22 +202,26 @@ func TestRequestRecordStateMachineKeepsTerminalFacts(t *testing.T) {
 	}
 
 	firstSucceeded, err := queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
-		ResponseModelID: pgtype.Text{String: "deepseek-v4-pro", Valid: true},
-		FinalProviderID: pgtype.Int8{Int64: providerID, Valid: true},
-		FinalChannelID:  pgtype.Int8{Int64: channelID, Valid: true},
-		CompletedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
-		RequestRecordID: record.ID,
+		ResponseModelID:  pgtype.Text{String: "deepseek-v4-pro", Valid: true},
+		ResponseProtocol: pgtype.Text{String: "openai", Valid: true},
+		ResponseID:       pgtype.Text{String: "chatcmpl-request-state", Valid: true},
+		FinalProviderID:  pgtype.Int8{Int64: providerID, Valid: true},
+		FinalChannelID:   pgtype.Int8{Int64: channelID, Valid: true},
+		CompletedAt:      pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		RequestRecordID:  record.ID,
 	})
 	if err != nil {
 		t.Fatalf("mark request succeeded: %v", err)
 	}
 
 	repeatedSucceeded, err := queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
-		ResponseModelID: pgtype.Text{String: "should-not-overwrite", Valid: true},
-		FinalProviderID: pgtype.Int8{Int64: otherProviderID, Valid: true},
-		FinalChannelID:  pgtype.Int8{Int64: otherChannelID, Valid: true},
-		CompletedAt:     pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
-		RequestRecordID: record.ID,
+		ResponseModelID:  pgtype.Text{String: "should-not-overwrite", Valid: true},
+		ResponseProtocol: pgtype.Text{String: "anthropic", Valid: true},
+		ResponseID:       pgtype.Text{String: "should-not-overwrite", Valid: true},
+		FinalProviderID:  pgtype.Int8{Int64: otherProviderID, Valid: true},
+		FinalChannelID:   pgtype.Int8{Int64: otherChannelID, Valid: true},
+		CompletedAt:      pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+		RequestRecordID:  record.ID,
 	})
 	if err != nil {
 		t.Fatalf("repeat mark request succeeded: %v", err)
@@ -255,20 +268,27 @@ func TestRequestRecordRejectsDuplicateRequestID(t *testing.T) {
 	createRequestRecordForTest(t, ctx, queries, identity, requestID)
 
 	_, err := queries.CreateRequestRecord(ctx, sqlc.CreateRequestRecordParams{
-		RequestID:        requestID,
-		UserID:           identity.user.ID,
-		ProjectID:        identity.project.ID,
-		ApiKeyID:         identity.apiKey.ID,
-		RequestedModelID: "deepseek-v4-pro",
-		ResponseModelID:  pgtype.Text{Valid: false},
-		Stream:           false,
-		Status:           "pending",
-		FinalProviderID:  pgtype.Int8{Valid: false},
-		FinalChannelID:   pgtype.Int8{Valid: false},
-		ErrorCode:        pgtype.Text{Valid: false},
-		ErrorMessage:     pgtype.Text{Valid: false},
-		StartedAt:        pgtype.Timestamptz{Time: time.Now(), Valid: true},
-		CompletedAt:      pgtype.Timestamptz{Valid: false},
+		RequestID:           requestID,
+		UserID:              identity.user.ID,
+		ProjectID:           identity.project.ID,
+		ApiKeyID:            identity.apiKey.ID,
+		RequestedModelID:    "deepseek-v4-pro",
+		IngressProtocol:     "openai",
+		Operation:           "chat_completions",
+		ResponseModelID:     pgtype.Text{Valid: false},
+		ResponseProtocol:    pgtype.Text{Valid: false},
+		ResponseID:          pgtype.Text{Valid: false},
+		Stream:              false,
+		Status:              "pending",
+		FinalProviderID:     pgtype.Int8{Valid: false},
+		FinalChannelID:      pgtype.Int8{Valid: false},
+		ErrorCode:           pgtype.Text{Valid: false},
+		ErrorMessage:        pgtype.Text{Valid: false},
+		DeliveryStatus:      "not_started",
+		ResponseStartedAt:   pgtype.Timestamptz{Valid: false},
+		ResponseCompletedAt: pgtype.Timestamptz{Valid: false},
+		StartedAt:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		CompletedAt:         pgtype.Timestamptz{Valid: false},
 	})
 	if err == nil {
 		t.Fatal("expected duplicate request_id error")
@@ -284,7 +304,7 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 
 	identity := createRequestRecordIdentity(t, ctx, queries)
 	suffix := time.Now().UnixNano()
-	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("request-attempt-provider-%d", suffix), "openai", "enabled")
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("request-attempt-provider-%d", suffix), "enabled")
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("request-attempt-channel-%d", suffix), "enabled", 10, nil)
 	record := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("request-attempt-%d", suffix))
 
@@ -295,6 +315,7 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 		ChannelID:             channelID,
 		AdapterKey:            "openai",
 		UpstreamModel:         "deepseek-v4-pro",
+		UpstreamProtocol:      "openai",
 		UpstreamResponseModel: pgtype.Text{Valid: false},
 		Status:                "running",
 		UpstreamStatusCode:    pgtype.Int4{Valid: false},
@@ -315,6 +336,7 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 		ChannelID:             channelID,
 		AdapterKey:            "openai",
 		UpstreamModel:         "deepseek-v4-pro",
+		UpstreamProtocol:      "openai",
 		UpstreamResponseModel: pgtype.Text{Valid: false},
 		Status:                "running",
 		UpstreamStatusCode:    pgtype.Int4{Valid: false},
@@ -330,9 +352,13 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 
 	completedAt := pgtype.Timestamptz{Time: time.Now(), Valid: true}
 	succeeded, err := queries.MarkRequestAttemptSucceeded(ctx, sqlc.MarkRequestAttemptSucceededParams{
+		UpstreamResponseID:    pgtype.Text{String: "chatcmpl-request-attempt", Valid: true},
 		UpstreamResponseModel: pgtype.Text{String: "deepseek-v4-pro-actual", Valid: true},
+		UpstreamFinishReason:  pgtype.Text{String: "stop", Valid: true},
+		FinishClass:           pgtype.Text{String: "stop", Valid: true},
 		UpstreamStatusCode:    pgtype.Int4{Int32: 200, Valid: true},
 		UpstreamRequestID:     pgtype.Text{String: "upstream-request-id", Valid: true},
+		UsageMappingVersion:   pgtype.Text{String: "openai_chat_usage_v1", Valid: true},
 		CompletedAt:           completedAt,
 		AttemptID:             firstAttempt.ID,
 	})
@@ -383,6 +409,7 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 		ChannelID:             channelID,
 		AdapterKey:            "openai",
 		UpstreamModel:         "deepseek-v4-pro",
+		UpstreamProtocol:      "openai",
 		UpstreamResponseModel: pgtype.Text{Valid: false},
 		Status:                "running",
 		UpstreamStatusCode:    pgtype.Int4{Valid: false},
@@ -406,7 +433,7 @@ func TestRequestAttemptStateMachineKeepsTerminalFacts(t *testing.T) {
 
 	identity := createRequestRecordIdentity(t, ctx, queries)
 	suffix := time.Now().UnixNano()
-	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("attempt-state-provider-%d", suffix), "openai", "enabled")
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("attempt-state-provider-%d", suffix), "enabled")
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("attempt-state-channel-%d", suffix), "enabled", 10, nil)
 	record := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("attempt-state-%d", suffix))
 
@@ -417,6 +444,7 @@ func TestRequestAttemptStateMachineKeepsTerminalFacts(t *testing.T) {
 		ChannelID:             channelID,
 		AdapterKey:            "openai",
 		UpstreamModel:         "deepseek-v4-pro",
+		UpstreamProtocol:      "openai",
 		UpstreamResponseModel: pgtype.Text{Valid: false},
 		Status:                "running",
 		UpstreamStatusCode:    pgtype.Int4{Valid: false},
@@ -431,9 +459,13 @@ func TestRequestAttemptStateMachineKeepsTerminalFacts(t *testing.T) {
 	}
 
 	firstSucceeded, err := queries.MarkRequestAttemptSucceeded(ctx, sqlc.MarkRequestAttemptSucceededParams{
+		UpstreamResponseID:    pgtype.Text{String: "chatcmpl-attempt-state", Valid: true},
 		UpstreamResponseModel: pgtype.Text{String: "deepseek-v4-pro-actual", Valid: true},
+		UpstreamFinishReason:  pgtype.Text{String: "stop", Valid: true},
+		FinishClass:           pgtype.Text{String: "stop", Valid: true},
 		UpstreamStatusCode:    pgtype.Int4{Int32: 200, Valid: true},
 		UpstreamRequestID:     pgtype.Text{String: "upstream-request-id", Valid: true},
+		UsageMappingVersion:   pgtype.Text{String: "openai_chat_usage_v1", Valid: true},
 		CompletedAt:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		AttemptID:             attempt.ID,
 	})
@@ -442,9 +474,13 @@ func TestRequestAttemptStateMachineKeepsTerminalFacts(t *testing.T) {
 	}
 
 	repeatedSucceeded, err := queries.MarkRequestAttemptSucceeded(ctx, sqlc.MarkRequestAttemptSucceededParams{
+		UpstreamResponseID:    pgtype.Text{String: "should-not-overwrite", Valid: true},
 		UpstreamResponseModel: pgtype.Text{String: "should-not-overwrite", Valid: true},
+		UpstreamFinishReason:  pgtype.Text{String: "should-not-overwrite", Valid: true},
+		FinishClass:           pgtype.Text{String: "other", Valid: true},
 		UpstreamStatusCode:    pgtype.Int4{Int32: 201, Valid: true},
 		UpstreamRequestID:     pgtype.Text{String: "should-not-overwrite", Valid: true},
+		UsageMappingVersion:   pgtype.Text{String: "should-not-overwrite", Valid: true},
 		CompletedAt:           pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
 		AttemptID:             attempt.ID,
 	})

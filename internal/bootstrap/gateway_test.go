@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
@@ -23,26 +22,17 @@ func (r fakeChatGatewayRouter) PlanChat(ctx context.Context, req routing.ChatRou
 	return routing.ChatRoutePlan{}, nil
 }
 
-type fakeChatGatewayRegistry struct{}
-
-func (r fakeChatGatewayRegistry) Chat(adapterKey string) (adapter.ChatAdapter, bool) {
-	return nil, false
-}
-
-func (r fakeChatGatewayRegistry) StreamChat(adapterKey string) (adapter.StreamChatAdapter, bool) {
-	return nil, false
-}
-
-func (r fakeChatGatewayRegistry) ChatInputTokenizer(adapterKey string) (adapter.ChatInputTokenizer, bool) {
-	return nil, false
-}
-
 func TestNewChatGatewayBuildsService(t *testing.T) {
+	registry, err := NewAdapterRegistry(nil)
+	if err != nil {
+		t.Fatalf("NewAdapterRegistry returned error: %v", err)
+	}
+
 	service := NewChatGateway(
 		fakeChatGatewayDB{},
 		&sqlc.Queries{},
 		fakeChatGatewayRouter{},
-		fakeChatGatewayRegistry{},
+		registry,
 		config.WorkerConfig{},
 		config.CircuitBreakerConfig{},
 		nil,

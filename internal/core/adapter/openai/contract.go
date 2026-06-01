@@ -1,23 +1,24 @@
-package adapter
+package openai
 
 import (
 	"context"
 	"encoding/json"
 
+	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 )
 
-// ChatAdapter 定义聊天补全 adapter 需要提供的协议转换和上游调用能力。
+// ChatAdapter 定义 OpenAI 协议族聊天补全 adapter 需要提供的协议转换和上游调用能力。
 type ChatAdapter interface {
 	ChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest) (*ChatResponse, error)
 }
 
-// StreamChatAdapter 定义聊天补全流式 adapter 能力。
+// StreamChatAdapter 定义 OpenAI 协议族聊天补全流式 adapter 能力。
 type StreamChatAdapter interface {
-	StreamChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest, emit func(ChatStreamChunk) error) error
+	StreamChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest, emit func(ChatStreamChunk) error) (adapter.StreamOutcome, error)
 }
 
-// ChatRequest 是 gateway 传给聊天补全 adapter 的内部请求 DTO。
+// ChatRequest 是 gateway 传给 OpenAI 协议族聊天补全 adapter 的内部请求 DTO。
 type ChatRequest struct {
 	Model    string
 	Messages []ChatMessage
@@ -58,7 +59,7 @@ type ChatRequest struct {
 	Extensions map[string]json.RawMessage
 }
 
-// ChatMessage 表示 adapter 层的单条聊天消息。
+// ChatMessage 表示 OpenAI 协议族 adapter 层的单条聊天消息。
 type ChatMessage struct {
 	Role             string
 	Content          json.RawMessage
@@ -81,7 +82,7 @@ func (m ChatMessage) ContentString() string {
 	return ""
 }
 
-// ChatResponse 是聊天补全 adapter 返回给 gateway 的内部响应 DTO。
+// ChatResponse 是 OpenAI 协议族聊天补全 adapter 返回给 gateway 的内部响应 DTO。
 type ChatResponse struct {
 	ID               string
 	Model            string
@@ -89,32 +90,18 @@ type ChatResponse struct {
 	ReasoningContent *string
 	ToolCalls        []ChatToolCall
 	FinishReason     string
-	Usage            ChatUsage
+	Usage            adapter.ChatUsage
 
 	// Upstream 是本次上游成功调用的可审计元信息（HTTP 状态码、上游 request id）。
 	// gateway 在结算时写入 request attempt，用于渠道审计和 observability。
-	Upstream UpstreamMetadata
+	Upstream adapter.UpstreamMetadata
+
+	// Facts 是本次响应的协议无关账务审计事实，与 Content/ToolCalls/Usage 在同一次解析中产生。
+	// settlement、recovery 和审计后续只消费 Facts，不反向解析公开响应。
+	Facts adapter.ResponseFacts
 }
 
-// ChatUsage 表示 adapter 从上游响应中解析出的 token 用量。
-type ChatUsage struct {
-	// PromptTokens 是输入 prompt token 总数。
-	PromptTokens int
-
-	// CompletionTokens 是输出 completion token 总数，包含 reasoning tokens。
-	CompletionTokens int
-
-	// TotalTokens 是本次请求总 token 数，通常等于 PromptTokens + CompletionTokens。
-	TotalTokens int
-
-	// CachedTokens 是 prompt tokens 中命中上游 prompt cache 的数量。
-	CachedTokens int
-
-	// ReasoningTokens 是 completion tokens 中用于模型内部推理的数量。
-	ReasoningTokens int
-}
-
-// ChatStreamChunk 表示 adapter 返回给 gateway 的一段聊天补全流式内容。
+// ChatStreamChunk 表示 OpenAI 协议族 adapter 返回给 gateway 的一段聊天补全流式内容。
 type ChatStreamChunk struct {
 	ID               string
 	Model            string
@@ -126,10 +113,10 @@ type ChatStreamChunk struct {
 
 	// Usage 只在 provider 返回 final usage stream chunk 时设置。
 	// 普通内容 chunk 必须为 nil。
-	Usage *ChatUsage
+	Usage *adapter.ChatUsage
 
 	// Upstream 是本次上游流式调用的可审计元信息。
 	// 流式 adapter 在发出 final usage chunk 时一并附带；普通内容 chunk 必须为 nil。
 	// gateway 用它在流式结算时写入真实 upstream status/request id。
-	Upstream *UpstreamMetadata
+	Upstream *adapter.UpstreamMetadata
 }

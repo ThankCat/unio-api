@@ -43,7 +43,7 @@ func NewAdapter(client *http.Client, translators *streamtranslate.Registry) *Ada
 }
 
 // ChatCompletions 调用上游 /chat/completions，并转换为统一 adapter 响应。
-func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req adapter.ChatRequest) (*adapter.ChatResponse, error) {
+func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest) (*ChatResponse, error) {
 	if ch.BaseURL == "" {
 		return nil, failure.New(
 			failure.CodeAdapterChannelInvalid,
@@ -119,32 +119,39 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req a
 		)
 	}
 
-	return &adapter.ChatResponse{
+	finishReason := upstreamFinishReason(upstreamRespBody.Choices[0])
+	meta := adapter.UpstreamMetadata{
+		StatusCode: upstreamResp.StatusCode,
+		RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
+	}
+
+	return &ChatResponse{
 		ID:               upstreamRespBody.ID,
 		Model:            upstreamRespBody.Model,
 		Content:          wireMessageContentString(upstreamRespBody.Choices[0].Message.Content),
 		ReasoningContent: upstreamRespBody.Choices[0].Message.ReasoningContent,
 		ToolCalls:        toolCalls,
-		FinishReason:     upstreamFinishReason(upstreamRespBody.Choices[0]),
-		Usage:   usage,
-		Upstream: adapter.UpstreamMetadata{
-			StatusCode: upstreamResp.StatusCode,
-			RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
-		},
+		FinishReason:     finishReason,
+		Usage:            usage,
+		Upstream:         meta,
+		Facts:            responseFactsNonStream(upstreamRespBody.ID, upstreamRespBody.Model, finishReason, usage, meta),
 	}, nil
 }
 
 // StreamChatCompletions 调用上游 /chat/completions stream，并转换为统一 adapter chunk。
-func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req adapter.ChatRequest, emit func(adapter.ChatStreamChunk) error) error {
+//
+// 上游 [DONE] 只作为内部成功终态被截留，不直接 emit 给客户。调用方必须先持久化
+// outcome 中的 immutable facts 并完成 settlement 或 durable recovery 接管，再写出客户 [DONE]。
+func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest, emit func(ChatStreamChunk) error) (adapter.StreamOutcome, error) {
 	if emit == nil {
-		return failure.New(
+		return adapter.StreamOutcome{}, failure.New(
 			failure.CodeAdapterEmitFailed,
 			failure.WithMessage("openai adapter stream emit is nil"),
 		)
 	}
 
 	if ch.BaseURL == "" {
-		return failure.New(
+		return adapter.StreamOutcome{}, failure.New(
 			failure.CodeAdapterChannelInvalid,
 			failure.WithMessage("openai adapter channel base url is empty"),
 		)
@@ -160,7 +167,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 
 	buf, err := encodeRequestBody(req, true)
 	if err != nil {
-		return failure.Wrap(
+		return adapter.StreamOutcome{}, failure.Wrap(
 			failure.CodeAdapterEncodeRequestFailed,
 			err,
 			failure.WithMessage("openai adapter encode stream chat completion request"),
@@ -169,7 +176,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, buf)
 	if err != nil {
-		return failure.Wrap(
+		return adapter.StreamOutcome{}, failure.Wrap(
 			failure.CodeAdapterCreateRequestFailed,
 			err,
 			failure.WithMessage("openai adapter create stream chat completion request"),
@@ -181,13 +188,23 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 
 	upstreamResp, err := a.client.Do(request)
 	if err != nil {
-		return newUpstreamSendError(err, "send stream chat completion request")
+		return adapter.StreamOutcome{}, newUpstreamSendError(err, "send stream chat completion request")
 	}
 	defer upstreamResp.Body.Close()
 
 	if upstreamResp.StatusCode < http.StatusOK || upstreamResp.StatusCode >= http.StatusMultipleChoices {
-		return newUpstreamStatusError(upstreamResp, "upstream stream")
+		return adapter.StreamOutcome{}, newUpstreamStatusError(upstreamResp, "upstream stream")
 	}
+
+	meta := adapter.UpstreamMetadata{
+		StatusCode: upstreamResp.StatusCode,
+		RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
+	}
+	var responseID string
+	var upstreamModel string
+	var rawFinish string
+	var finalUsage *adapter.ChatUsage
+	terminalReceived := false
 
 	streamReader := adaptersse.NewReader(upstreamResp.Body, adaptersse.Config{
 		MaxLineBytes:  maxOpenAIStreamEventBytes,
@@ -197,12 +214,13 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	for streamReader.Next() {
 		payload := bytes.TrimSpace(streamReader.Event().Data)
 		if bytes.Equal(payload, []byte("[DONE]")) {
+			terminalReceived = true
 			break
 		}
 
 		var streamResp chatCompletionStreamResponse
 		if err := json.Unmarshal(payload, &streamResp); err != nil {
-			return failure.Wrap(
+			return streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta), failure.Wrap(
 				failure.CodeAdapterDecodeResponseFailed,
 				err,
 				failure.WithMessage("openai adapter decode stream chunk"),
@@ -213,16 +231,26 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 
 		streamIn, err := streamInputFromResponse(streamResp)
 		if err != nil {
-			return err
+			return streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta), err
 		}
 
 		events, err := translator.TranslateStreamEvent(streamIn)
 		if err != nil {
-			return err
+			return streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta), err
 		}
 
 		for _, event := range events {
-			chunk := adapter.ChatStreamChunk{
+			if event.ID != "" {
+				responseID = event.ID
+			}
+			if event.Model != "" {
+				upstreamModel = event.Model
+			}
+			if event.FinishReason != nil {
+				rawFinish = *event.FinishReason
+			}
+
+			chunk := ChatStreamChunk{
 				ID:               event.ID,
 				Model:            event.Model,
 				Role:             event.Role,
@@ -234,15 +262,14 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 
 			if event.Usage != nil {
 				usage := *event.Usage
+				finalUsage = &usage
 				chunk.Usage = &usage
-				chunk.Upstream = &adapter.UpstreamMetadata{
-					StatusCode: upstreamResp.StatusCode,
-					RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
-				}
+				upstream := meta
+				chunk.Upstream = &upstream
 			}
 
 			if err := emit(chunk); err != nil {
-				return failure.Wrap(
+				return streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta), failure.Wrap(
 					failure.CodeAdapterEmitFailed,
 					err,
 					failure.WithMessage("openai adapter send stream chunk"),
@@ -252,14 +279,22 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	}
 
 	if err := streamReader.Err(); err != nil {
-		return failure.Wrap(
+		return streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta), failure.Wrap(
 			failure.CodeAdapterReadStreamFailed,
 			err,
 			failure.WithMessage("openai adapter read stream event"),
 		)
 	}
 
-	return nil
+	outcome := streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta)
+	if !terminalReceived {
+		return outcome, failure.New(
+			failure.CodeAdapterReadStreamFailed,
+			failure.WithMessage("openai adapter stream ended before [DONE]"),
+		)
+	}
+
+	return outcome, nil
 }
 
 // streamInputFromResponse 将上游 stream JSON DTO 转成 stream translator 输入。

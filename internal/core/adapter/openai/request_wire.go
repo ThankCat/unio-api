@@ -3,12 +3,10 @@ package openai
 import (
 	"bytes"
 	"encoding/json"
-
-	"github.com/ThankCat/unio-api/internal/core/adapter"
 )
 
 // buildChatCompletionRequestBody 将 adapter 请求编码为 upstream wire JSON，并 merge Extensions。
-func buildChatCompletionRequestBody(req adapter.ChatRequest, stream bool) ([]byte, error) {
+func buildChatCompletionRequestBody(req ChatRequest, stream bool) ([]byte, error) {
 	wire := chatCompletionRequest{
 		Model:            req.Model,
 		Messages:         adapterMessagesToWire(req.Messages),
@@ -43,7 +41,7 @@ func buildChatCompletionRequestBody(req adapter.ChatRequest, stream bool) ([]byt
 	return mergeJSONObjects(base, req.Extensions)
 }
 
-func resolveWireMaxTokens(req adapter.ChatRequest) *int {
+func resolveWireMaxTokens(req ChatRequest) *int {
 	if req.MaxCompletionTokens != nil {
 		return req.MaxCompletionTokens
 	}
@@ -51,7 +49,7 @@ func resolveWireMaxTokens(req adapter.ChatRequest) *int {
 	return req.MaxTokens
 }
 
-func adapterMessagesToWire(messages []adapter.ChatMessage) []chatMessage {
+func adapterMessagesToWire(messages []ChatMessage) []chatMessage {
 	out := make([]chatMessage, 0, len(messages))
 	for _, msg := range messages {
 		wire := chatMessage{
@@ -92,7 +90,7 @@ func mergeJSONObjects(base []byte, extensions map[string]json.RawMessage) ([]byt
 	return json.Marshal(merged)
 }
 
-func encodeRequestBody(req adapter.ChatRequest, stream bool) (*bytes.Buffer, error) {
+func encodeRequestBody(req ChatRequest, stream bool) (*bytes.Buffer, error) {
 	body, err := buildChatCompletionRequestBody(req, stream)
 	if err != nil {
 		return nil, err

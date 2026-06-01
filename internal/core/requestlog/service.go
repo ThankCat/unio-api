@@ -16,6 +16,32 @@ const (
 	RequestStatusCanceled  RequestStatus = "canceled"
 )
 
+// Protocol 表示公开 ingress 或上游调用使用的协议族。
+type Protocol string
+
+const (
+	ProtocolOpenAI    Protocol = "openai"
+	ProtocolAnthropic Protocol = "anthropic"
+)
+
+// Operation 表示公开 Gateway API 操作。
+type Operation string
+
+const (
+	OperationChatCompletions Operation = "chat_completions"
+	OperationMessages        Operation = "messages"
+)
+
+// DeliveryStatus 表示客户响应交付状态，与 settlement 状态分开记录。
+type DeliveryStatus string
+
+const (
+	DeliveryStatusNotStarted  DeliveryStatus = "not_started"
+	DeliveryStatusInProgress  DeliveryStatus = "in_progress"
+	DeliveryStatusCompleted   DeliveryStatus = "completed"
+	DeliveryStatusInterrupted DeliveryStatus = "interrupted"
+)
+
 // AttemptStatus 表示一次上游 channel 尝试的生命周期状态。
 type AttemptStatus string
 
@@ -33,6 +59,8 @@ type CreateRequestParams struct {
 	ProjectID        int64
 	APIKeyID         int64
 	RequestedModelID string
+	IngressProtocol  Protocol
+	Operation        Operation
 	Stream           bool
 	StartedAt        time.Time
 }
@@ -45,7 +73,11 @@ type RequestRecord struct {
 	ProjectID           int64
 	APIKeyID            int64
 	RequestedModelID    string
+	IngressProtocol     Protocol
+	Operation           Operation
 	ResponseModelID     *string
+	ResponseProtocol    *string
+	ResponseID          *string
 	Stream              bool
 	Status              RequestStatus
 	FinalProviderID     *int64
@@ -53,17 +85,22 @@ type RequestRecord struct {
 	ErrorCode           *string
 	ErrorMessage        *string
 	InternalErrorDetail *string
+	DeliveryStatus      DeliveryStatus
+	ResponseStartedAt   *time.Time
+	ResponseCompletedAt *time.Time
 	StartedAt           time.Time
 	CompletedAt         *time.Time
 }
 
 // MarkRequestSucceededParams 表示标记请求成功所需的最终事实。
 type MarkRequestSucceededParams struct {
-	ID              int64
-	ResponseModelID string
-	FinalProviderID int64
-	FinalChannelID  int64
-	CompletedAt     time.Time
+	ID               int64
+	ResponseModelID  string
+	ResponseProtocol Protocol
+	ResponseID       string
+	FinalProviderID  int64
+	FinalChannelID   int64
+	CompletedAt      time.Time
 }
 
 // MarkRequestFailedParams 表示标记请求失败所需的错误事实。
@@ -86,13 +123,14 @@ type MarkRequestCanceledParams struct {
 
 // CreateAttemptParams 表示创建 request attempt 所需的上游尝试事实。
 type CreateAttemptParams struct {
-	RequestRecordID int64
-	AttemptIndex    int
-	ProviderID      int64
-	ChannelID       int64
-	AdapterKey      string
-	UpstreamModel   string
-	StartedAt       time.Time
+	RequestRecordID  int64
+	AttemptIndex     int
+	ProviderID       int64
+	ChannelID        int64
+	AdapterKey       string
+	UpstreamModel    string
+	UpstreamProtocol Protocol
+	StartedAt        time.Time
 }
 
 // AttemptRecord 表示一次上游 channel 尝试记录。
@@ -104,13 +142,20 @@ type AttemptRecord struct {
 	ChannelID             int64
 	AdapterKey            string
 	UpstreamModel         string
+	UpstreamProtocol      Protocol
+	UpstreamResponseID    *string
 	UpstreamResponseModel *string
+	UpstreamFinishReason  *string
+	FinishClass           *string
 	Status                AttemptStatus
 	UpstreamStatusCode    *int
 	UpstreamRequestID     *string
 	ErrorCode             *string
 	ErrorMessage          *string
 	InternalErrorDetail   *string
+	ResponseStartedAt     *time.Time
+	FinalUsageReceived    bool
+	UsageMappingVersion   *string
 	StartedAt             time.Time
 	CompletedAt           *time.Time
 }
@@ -118,9 +163,13 @@ type AttemptRecord struct {
 // MarkAttemptSucceededParams 表示标记上游尝试成功所需的最终事实。
 type MarkAttemptSucceededParams struct {
 	ID                    int64
+	UpstreamResponseID    string
 	UpstreamResponseModel string
+	UpstreamFinishReason  string
+	FinishClass           string
 	UpstreamStatusCode    int
 	UpstreamRequestID     *string
+	UsageMappingVersion   string
 	CompletedAt           time.Time
 }
 

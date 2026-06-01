@@ -1,4 +1,4 @@
-package gatewayapi
+package openai
 
 import (
 	"context"
@@ -17,6 +17,11 @@ type ModelCatalogService interface {
 // modelsHandler 处理 OpenAI-compatible models API。
 type modelsHandler struct {
 	service ModelCatalogService
+}
+
+// NewModelsHandler 构造 OpenAI models HTTP handler，供 gatewayapi router 挂载。
+func NewModelsHandler(service ModelCatalogService) http.HandlerFunc {
+	return (&modelsHandler{service: service}).handleModels
 }
 
 // modelsResponse 表示 OpenAI-compatible 模型列表响应。

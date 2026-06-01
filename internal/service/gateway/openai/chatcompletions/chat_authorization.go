@@ -1,12 +1,10 @@
-package gateway
+package chatcompletions
 
 import (
 	"context"
 	"fmt"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
-	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/billing"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
@@ -31,14 +29,13 @@ type ChatAuthorizer interface {
 }
 
 // ChatAuthorizeParams 表示一次 chat 请求冻结余额所需的业务事实。
-// 它由 ChatCompletionService 在 request record 和 route plan 创建后组装。
+// 它由 ChatCompletionService 在 request record 和保守 fallback plan 创建后组装。
 type ChatAuthorizeParams struct {
-	RequestRecord requestlog.RequestRecord
-	Principal     *auth.APIKeyPrincipal
-	Request       gatewayapi.ChatCompletionRequest
-	ModelDBID     int64
-	AdapterKey    string
-	UpstreamModel string
+	RequestRecord       requestlog.RequestRecord
+	Principal           *auth.APIKeyPrincipal
+	ModelDBID           int64
+	InputTokens         int64
+	MaxCompletionTokens int64
 }
 
 // ChatReleaseBillingExceptionParams 表示异常释放 chat 冻结余额所需参数。
@@ -97,11 +94,10 @@ type ChatAuthorizationService struct {
 	priceStore ChatAuthorizationPriceStore
 	billing    ChatAuthorizationBilling
 	ledger     ChatAuthorizationLedger
-	registry   AdapterRegistry
 }
 
 // NewChatAuthorizationService 创建 chat 余额冻结 service。
-func NewChatAuthorizationService(priceStore ChatAuthorizationPriceStore, billing ChatAuthorizationBilling, ledger ChatAuthorizationLedger, registry AdapterRegistry) *ChatAuthorizationService {
+func NewChatAuthorizationService(priceStore ChatAuthorizationPriceStore, billing ChatAuthorizationBilling, ledger ChatAuthorizationLedger) *ChatAuthorizationService {
 	if priceStore == nil {
 		panic("gateway: chat authorization price store is required")
 	}
@@ -111,15 +107,11 @@ func NewChatAuthorizationService(priceStore ChatAuthorizationPriceStore, billing
 	if ledger == nil {
 		panic("gateway: chat authorization ledger is required")
 	}
-	if registry == nil {
-		panic("gateway: adapter registry is required")
-	}
 
 	return &ChatAuthorizationService{
 		priceStore: priceStore,
 		billing:    billing,
 		ledger:     ledger,
-		registry:   registry,
 	}
 }
 
@@ -143,34 +135,11 @@ func (s *ChatAuthorizationService) AuthorizeChat(ctx context.Context, params Cha
 
 	authorizationPrice := customerPriceSnapshotFromActivePrice(price)
 
-	tokenizer, ok := s.registry.ChatInputTokenizer(params.AdapterKey)
-	if !ok {
-		return ChatAuthorization{}, failure.New(
-			failure.CodeGatewayChatAuthorizationFailed,
-			failure.WithMessage("chat input tokenizer is not registered"),
-			failure.WithField("adapter_key", params.AdapterKey),
-		)
-	}
-
-	inputTokens, err := tokenizer.CountChatInputTokens(adapter.ChatInputTokenizeRequest{
-		Model:    params.UpstreamModel,
-		Messages: chatInputMessages(params.Request.Messages),
-	})
-	if err != nil {
-		return ChatAuthorization{}, failure.Wrap(
-			failure.CodeGatewayChatAuthorizationFailed,
-			err,
-			failure.WithMessage("count chat input tokens"),
-			failure.WithField("adapter_key", params.AdapterKey),
-			failure.WithField("upstream_model", params.UpstreamModel),
-		)
-	}
-
 	// 这里是控损估算，不是最终 usage；但价格必须和最终 settlement 使用同一份。
 	settlement, err := s.billing.EstimateAuthorizationAmount(
 		billing.AuthorizationEstimate{
-			PromptTokens:        inputTokens,
-			MaxCompletionTokens: estimateMaxCompletionTokens(params.Request),
+			InputTokens:         params.InputTokens,
+			MaxCompletionTokens: params.MaxCompletionTokens,
 		},
 		authorizationPrice,
 	)
@@ -242,31 +211,19 @@ func (s *ChatAuthorizationService) ReleaseChatForBillingException(ctx context.Co
 	return err
 }
 
-func chatInputMessages(messages []gatewayapi.ChatMessage) []adapter.ChatMessage {
-	return mapGatewayMessagesToAdapter(messages)
-}
-
-func estimateMaxCompletionTokens(req gatewayapi.ChatCompletionRequest) int64 {
-	if req.MaxCompletionTokens != nil && *req.MaxCompletionTokens > 0 {
-		return int64(*req.MaxCompletionTokens)
-	}
-	if req.MaxTokens != nil {
-		return int64(*req.MaxTokens)
-	}
-	return defaultAuthorizationMaxCompletionTokens
-}
-
 // customerPriceSnapshotFromActivePrice 把当前生效售价转换为冻结和结算共用的客户售价快照。
 // 这样请求过程中价格变化时，最终扣费仍使用 authorization 时看到的同一份价格。
 func customerPriceSnapshotFromActivePrice(price sqlc.Price) billing.CustomerPriceSnapshot {
 	return billing.CustomerPriceSnapshot{
-		Currency:             price.Currency,
-		PricingUnit:          price.PricingUnit,
-		InputPrice:           price.InputPrice,
-		OutputPrice:          price.OutputPrice,
-		CachedInputPrice:     price.CachedInputPrice,
-		ReasoningOutputPrice: price.ReasoningOutputPrice,
-		FormulaVersion:       billing.FormulaVersionV1,
+		Currency:               price.Currency,
+		PricingUnit:            price.PricingUnit,
+		UncachedInputPrice:     price.UncachedInputPrice,
+		CacheReadInputPrice:    price.CacheReadInputPrice,
+		CacheWrite5mInputPrice: price.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice: price.CacheWrite1hInputPrice,
+		OutputPrice:            price.OutputPrice,
+		ReasoningOutputPrice:   price.ReasoningOutputPrice,
+		FormulaVersion:         billing.FormulaVersionV1,
 	}
 }
 

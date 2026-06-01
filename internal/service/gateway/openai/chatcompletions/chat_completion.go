@@ -1,4 +1,4 @@
-package gateway
+package chatcompletions
 
 import (
 	"context"
@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
 	"github.com/ThankCat/unio-api/internal/core/auth"
+	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
@@ -42,8 +43,9 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 
 	planCtx, planSpan := startGatewaySpan(ctx, "gateway.routing")
 	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
-		ProjectID: principal.ProjectID,
-		ModelID:   req.Model,
+		ProjectID:       principal.ProjectID,
+		ModelID:         req.Model,
+		IngressProtocol: routing.ProtocolOpenAI,
 	})
 	endGatewaySpan(planSpan, err)
 	if err != nil {
@@ -51,11 +53,31 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		return nil, err
 	}
 
-	var lastErr error
-	var authorization ChatAuthorization
-	authorizationCreated := false
+	candidatePlan, err := s.prepareChatCandidates(ctx, req, plan.Candidates, false)
+	if err != nil {
+		s.markRequestRecordFailed(ctx, requestRecord, routingFailureCode(err), err)
+		return nil, err
+	}
 
-	for index, candidate := range plan.Candidates {
+	firstCandidate := candidatePlan.Candidates[0].Route
+	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, ChatAuthorizeParams{
+		RequestRecord:       requestRecord,
+		Principal:           principal,
+		ModelDBID:           firstCandidate.ModelDBID,
+		InputTokens:         candidatePlan.ConservativeInputTokens,
+		MaxCompletionTokens: estimateMaxCompletionTokens(req),
+	})
+	if err != nil {
+		s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_failed", err)
+		return nil, err
+	}
+
+	var lastErr error
+
+	for _, prepared := range candidatePlan.Candidates {
+		index := prepared.RouteIndex
+		candidate := prepared.Route
+
 		// channel 处于熔断 open 状态时直接跳过，尝试下一个同模型 channel；
 		// 跳过不产生上游调用，也不写 attempt（attempt_index 允许出现空洞）。
 		channelKey := metricsID(candidate.Channel.ID)
@@ -67,6 +89,11 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		// 这样即使后续 fallback，也能在 request_attempts 里还原完整尝试链路。
 		attemptRecord, err := s.createAttemptRecord(ctx, requestRecord, index, candidate)
 		if err != nil {
+			if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+				s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+				return nil, releaseErr
+			}
+
 			s.markRequestRecordFailed(ctx, requestRecord, "request_attempt_create_failed", err)
 			return nil, err
 		}
@@ -87,24 +114,6 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 			s.markRequestRecordFailed(ctx, requestRecord, "adapter_not_registered", err)
 
 			return nil, err
-		}
-
-		if !authorizationCreated {
-			authorization, err = s.chatAuthorizer.AuthorizeChat(ctx, ChatAuthorizeParams{
-				RequestRecord: requestRecord,
-				Principal:     principal,
-				Request:       req,
-				ModelDBID:     candidate.ModelDBID,
-				AdapterKey:    candidate.AdapterKey,
-				UpstreamModel: candidate.UpstreamModel,
-			})
-			if err != nil {
-				s.markAttemptRecordFailed(ctx, attemptRecord, "chat_authorization_failed", err)
-				s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_failed", err)
-				return nil, err
-			}
-
-			authorizationCreated = true
 		}
 
 		adapterCtx, adapterSpan := startGatewaySpan(ctx, "adapter.chat_completions", upstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
@@ -150,19 +159,17 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		// 这里不能先返回 HTTP response 再异步扣费，否则 usage、price snapshot、ledger 和 request status 会出现不一致窗口。
 		settleCtx, settleSpan := startGatewaySpan(ctx, "gateway.settlement")
 		settleErr := s.chatSettlement.SettleSuccessfulChat(settleCtx, ChatSettlementParams{
-			RequestRecord:         requestRecord,
-			AttemptRecord:         attemptRecord,
-			Principal:             principal,
-			Authorization:         authorization,
-			ResponseModelID:       req.Model,
-			ModelDBID:             candidate.ModelDBID,
-			FinalProviderID:       candidate.ProviderID,
-			FinalChannelID:        candidate.Channel.ID,
-			UpstreamResponseModel: adapterResp.Model,
-			UpstreamStatusCode:    adapterResp.Upstream.StatusCode,
-			UpstreamRequestID:     upstreamRequestIDPtr(adapterResp.Upstream.RequestID),
-			Usage:                 adapterResp.Usage,
-			UsageSource:           ChatSettlementUsageSourceUpstreamResponse,
+			RequestRecord:    requestRecord,
+			AttemptRecord:    attemptRecord,
+			Principal:        principal,
+			Authorization:    authorization,
+			ResponseProtocol: requestlog.ProtocolOpenAI,
+			ResponseID:       adapterResp.ID,
+			ResponseModelID:  req.Model,
+			ModelDBID:        candidate.ModelDBID,
+			FinalProviderID:  candidate.ProviderID,
+			FinalChannelID:   candidate.Channel.ID,
+			Facts:            adapterResp.Facts,
 		})
 		endSettlementSpan(settleSpan, settleErr)
 		s.recordSettlement(settlementOutcomeFromErr(settleErr))
@@ -186,6 +193,11 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 
 		s.markRequestRecordFailed(ctx, requestRecord, "adapter_error", lastErr)
 		return nil, lastErr
+	}
+
+	if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+		s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+		return nil, releaseErr
 	}
 
 	err = failure.Wrap(

@@ -11,7 +11,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-api/internal/service/gateway"
+	gateway "github.com/ThankCat/unio-api/internal/service/gateway/openai/chatcompletions"
 )
 
 // WorkerServerAppDB 定义 worker server app 构建时需要的数据库能力。

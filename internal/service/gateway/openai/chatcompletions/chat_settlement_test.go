@@ -1,4 +1,4 @@
-package gateway
+package chatcompletions
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
+	coreusage "github.com/ThankCat/unio-api/internal/core/usage"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
@@ -25,9 +26,9 @@ import (
 
 // fakeChatBillingCalculator 是 chat settlement 测试使用的 billing calculator 替身。
 type fakeChatBillingCalculator struct {
-	usages     []billing.Usage
+	usages     []coreusage.Facts
 	prices     []billing.CustomerPriceSnapshot
-	costUsages []billing.Usage
+	costUsages []coreusage.Facts
 	costs      []billing.ProviderCostSnapshot
 	charge     billing.CustomerCharge
 	cost       billing.ProviderCost
@@ -43,8 +44,8 @@ type fakeChatLedgerCapturer struct {
 }
 
 // CalculateCustomerCharge 记录 billing 入参，并返回测试预设客户扣费结果。
-func (c *fakeChatBillingCalculator) CalculateCustomerCharge(usage billing.Usage, price billing.CustomerPriceSnapshot) (billing.CustomerCharge, error) {
-	c.usages = append(c.usages, usage)
+func (c *fakeChatBillingCalculator) CalculateCustomerCharge(facts coreusage.Facts, price billing.CustomerPriceSnapshot) (billing.CustomerCharge, error) {
+	c.usages = append(c.usages, facts)
 	c.prices = append(c.prices, price)
 	if c.err != nil {
 		return billing.CustomerCharge{}, c.err
@@ -54,8 +55,8 @@ func (c *fakeChatBillingCalculator) CalculateCustomerCharge(usage billing.Usage,
 }
 
 // CalculateProviderCost 记录 billing 入参，并返回测试预设平台成本结果。
-func (c *fakeChatBillingCalculator) CalculateProviderCost(usage billing.Usage, cost billing.ProviderCostSnapshot) (billing.ProviderCost, error) {
-	c.costUsages = append(c.costUsages, usage)
+func (c *fakeChatBillingCalculator) CalculateProviderCost(facts coreusage.Facts, cost billing.ProviderCostSnapshot) (billing.ProviderCost, error) {
+	c.costUsages = append(c.costUsages, facts)
 	c.costs = append(c.costs, cost)
 	if c.err != nil {
 		return billing.ProviderCost{}, c.err
@@ -249,9 +250,9 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 		ModelID:              d.modelID,
 		Currency:             "USD",
 		PricingUnit:          billing.PricingUnitPer1MTokens,
-		InputPrice:           testNumeric(2_0000000000, -10),
+		UncachedInputPrice:           testNumeric(2_0000000000, -10),
 		OutputPrice:          testNumeric(8_0000000000, -10),
-		CachedInputPrice:     testNumeric(5000000000, -10),
+		CacheReadInputPrice:     testNumeric(5000000000, -10),
 		ReasoningOutputPrice: testNumeric(12_0000000000, -10),
 		Status:               "enabled",
 		EffectiveFrom:        pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
@@ -267,9 +268,9 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 		ModelID:             d.modelID,
 		Currency:            "USD",
 		PricingUnit:         billing.PricingUnitPer1MTokens,
-		InputCost:           testNumeric(1_0000000000, -10),
+		UncachedInputCost:           testNumeric(1_0000000000, -10),
 		OutputCost:          testNumeric(4_0000000000, -10),
-		CachedInputCost:     testNumeric(2500000000, -10),
+		CacheReadInputCost:     testNumeric(2500000000, -10),
 		ReasoningOutputCost: testNumeric(6_0000000000, -10),
 		Status:              "enabled",
 		EffectiveFrom:       pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
@@ -286,13 +287,18 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 		ProjectID:        project.ID,
 		ApiKeyID:         apiKey.ID,
 		RequestedModelID: "openai/gpt-4.1",
+		IngressProtocol:  string(requestlog.ProtocolOpenAI),
+		Operation:        string(requestlog.OperationChatCompletions),
 		ResponseModelID:  pgtype.Text{Valid: false},
+		ResponseProtocol: pgtype.Text{Valid: false},
+		ResponseID:       pgtype.Text{Valid: false},
 		Stream:           false,
 		Status:           string(requestlog.RequestStatusRunning),
 		FinalProviderID:  pgtype.Int8{Valid: false},
 		FinalChannelID:   pgtype.Int8{Valid: false},
 		ErrorCode:        pgtype.Text{Valid: false},
 		ErrorMessage:     pgtype.Text{Valid: false},
+		DeliveryStatus:   string(requestlog.DeliveryStatusNotStarted),
 		StartedAt:        pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		CompletedAt:      pgtype.Timestamptz{Valid: false},
 	})
@@ -308,6 +314,7 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 		ChannelID:             d.channelID,
 		AdapterKey:            "openai",
 		UpstreamModel:         "gpt-4.1",
+		UpstreamProtocol:      string(requestlog.ProtocolOpenAI),
 		UpstreamResponseModel: pgtype.Text{Valid: false},
 		Status:                string(requestlog.AttemptStatusRunning),
 		UpstreamStatusCode:    pgtype.Int4{Valid: false},
@@ -382,21 +389,39 @@ func (d *chatSettlementDBDeps) params() ChatSettlementParams {
 			PriceID:          d.priceID,
 			Price:            chatSettlementAuthorizationPrice(),
 		},
-		ResponseModelID:       "openai/gpt-4.1",
-		ModelDBID:             d.modelID,
-		FinalProviderID:       d.providerID,
-		FinalChannelID:        d.channelID,
-		UpstreamResponseModel: "gpt-4.1",
-		UpstreamStatusCode:    200,
-		UpstreamRequestID:     upstreamRequestIDPtr("req-settlement-1"),
+		ResponseProtocol: requestlog.ProtocolOpenAI,
+		ResponseID:       "chatcmpl-settlement-1",
+		ResponseModelID:  "openai/gpt-4.1",
+		ModelDBID:        d.modelID,
+		FinalProviderID:  d.providerID,
+		FinalChannelID:   d.channelID,
+		Facts:            chatSettlementFacts(coreusage.SourceUpstreamResponse),
+	}
+}
+
+// chatSettlementFacts 返回 settlement 测试使用的 OpenAI 不可变响应事实。
+func chatSettlementFacts(source coreusage.Source) adapter.ResponseFacts {
+	return adapter.ResponseFacts{
+		UpstreamProtocol:   string(requestlog.ProtocolOpenAI),
+		UpstreamResponseID: "chatcmpl-settlement-1",
+		UpstreamModel:      "gpt-4.1",
+		Finish: adapter.FinishFacts{
+			Class:     adapter.FinishStop,
+			RawReason: "stop",
+		},
 		Usage: adapter.ChatUsage{
 			PromptTokens:     10,
 			CompletionTokens: 5,
 			TotalTokens:      15,
 			CachedTokens:     3,
 			ReasoningTokens:  2,
+		}.ToUsageFacts(),
+		UsageSource:         source,
+		UsageMappingVersion: "openai.v1",
+		Metadata: adapter.UpstreamMetadata{
+			StatusCode: 200,
+			RequestID:  "req-settlement-1",
 		},
-		UsageSource: ChatSettlementUsageSourceUpstreamResponse,
 	}
 }
 
@@ -406,10 +431,10 @@ func insertChatSettlementProvider(t *testing.T, ctx context.Context, pool *pgxpo
 
 	var id int64
 	err := pool.QueryRow(ctx, `
-		INSERT INTO providers (slug, name, adapter, status)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO providers (slug, name, status)
+		VALUES ($1, $2, $3)
 		RETURNING id
-	`, fmt.Sprintf("chat-settlement-provider-%d", suffix), "Chat Settlement Provider", "openai", "enabled").Scan(&id)
+	`, fmt.Sprintf("chat-settlement-provider-%d", suffix), "Chat Settlement Provider", "enabled").Scan(&id)
 	if err != nil {
 		t.Fatalf("insert provider: %v", err)
 	}
@@ -428,8 +453,8 @@ func insertChatSettlementChannel(t *testing.T, ctx context.Context, pool *pgxpoo
 
 	var id int64
 	err = pool.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, name, base_url, credential_encrypted, status, priority, timeout_ms)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms)
+		VALUES ($1, $2, 'openai', 'openai', $3, $4, $5, $6, $7)
 		RETURNING id
 	`, providerID, fmt.Sprintf("chat-settlement-channel-%d", suffix), "https://example.test/v1", credentialEncrypted, "enabled", 10, 30000).Scan(&id)
 	if err != nil {
@@ -485,9 +510,9 @@ func chatSettlementAuthorizationPrice() billing.CustomerPriceSnapshot {
 	return billing.CustomerPriceSnapshot{
 		Currency:             "USD",
 		PricingUnit:          billing.PricingUnitPer1MTokens,
-		InputPrice:           testNumeric(2_0000000000, -10),
+		UncachedInputPrice:           testNumeric(2_0000000000, -10),
 		OutputPrice:          testNumeric(8_0000000000, -10),
-		CachedInputPrice:     testNumeric(5000000000, -10),
+		CacheReadInputPrice:     testNumeric(5000000000, -10),
 		ReasoningOutputPrice: testNumeric(12_0000000000, -10),
 		FormulaVersion:       billing.FormulaVersionV1,
 	}
@@ -496,9 +521,11 @@ func chatSettlementAuthorizationPrice() billing.CustomerPriceSnapshot {
 // chatSettlementProviderCost 返回当前测试 usage 和成本价对应的平台成本分项。
 func chatSettlementProviderCost() billing.ProviderCost {
 	return billing.ProviderCost{
-		InputCostAmount:           testNumeric(70000, -10),
+		UncachedInputCostAmount:           testNumeric(70000, -10),
 		OutputCostAmount:          testNumeric(120000, -10),
-		CachedInputCostAmount:     testNumeric(7500, -10),
+		CacheReadInputCostAmount:     testNumeric(7500, -10),
+		CacheWrite5mInputCostAmount: testNumeric(0, -10),
+		CacheWrite1hInputCostAmount: testNumeric(0, -10),
 		ReasoningOutputCostAmount: testNumeric(120000, -10),
 		TotalCostAmount:           testNumeric(317500, -10),
 		Currency:                  "USD",
@@ -665,13 +692,13 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 	if costSnapshot.UpstreamModel != "gpt-4.1" {
 		t.Fatalf("expected upstream model gpt-4.1, got %q", costSnapshot.UpstreamModel)
 	}
-	assertNumericEqual(t, costSnapshot.InputCost, testNumeric(1_0000000000, -10))
+	assertNumericEqual(t, costSnapshot.UncachedInputCost, testNumeric(1_0000000000, -10))
 	assertNumericEqual(t, costSnapshot.OutputCost, testNumeric(4_0000000000, -10))
-	assertNumericEqual(t, costSnapshot.CachedInputCost, testNumeric(2500000000, -10))
+	assertNumericEqual(t, costSnapshot.CacheReadInputCost, testNumeric(2500000000, -10))
 	assertNumericEqual(t, costSnapshot.ReasoningOutputCost, testNumeric(6_0000000000, -10))
-	assertNumericEqual(t, costSnapshot.InputCostAmount, chatSettlementProviderCost().InputCostAmount)
+	assertNumericEqual(t, costSnapshot.UncachedInputCostAmount, chatSettlementProviderCost().UncachedInputCostAmount)
 	assertNumericEqual(t, costSnapshot.OutputCostAmount, chatSettlementProviderCost().OutputCostAmount)
-	assertNumericEqual(t, costSnapshot.CachedInputCostAmount, chatSettlementProviderCost().CachedInputCostAmount)
+	assertNumericEqual(t, costSnapshot.CacheReadInputCostAmount, chatSettlementProviderCost().CacheReadInputCostAmount)
 	assertNumericEqual(t, costSnapshot.ReasoningOutputCostAmount, chatSettlementProviderCost().ReasoningOutputCostAmount)
 	assertNumericEqual(t, costSnapshot.TotalCostAmount, chatSettlementProviderCost().TotalCostAmount)
 
@@ -729,9 +756,9 @@ func TestChatSettlementUsesAuthorizationPriceWhenActivePriceChanges(t *testing.T
 		ModelID:              deps.modelID,
 		Currency:             "USD",
 		PricingUnit:          billing.PricingUnitPer1MTokens,
-		InputPrice:           testNumeric(99_0000000000, -10),
+		UncachedInputPrice:           testNumeric(99_0000000000, -10),
 		OutputPrice:          testNumeric(199_0000000000, -10),
-		CachedInputPrice:     testNumeric(49_0000000000, -10),
+		CacheReadInputPrice:     testNumeric(49_0000000000, -10),
 		ReasoningOutputPrice: testNumeric(299_0000000000, -10),
 		Status:               "enabled",
 		EffectiveFrom:        pgtype.Timestamptz{Time: priceChangeAt, Valid: true},
@@ -763,17 +790,17 @@ func TestChatSettlementUsesAuthorizationPriceWhenActivePriceChanges(t *testing.T
 		t.Fatalf("expected settlement not to use replacement price id %d", newPrice.ID)
 	}
 
-	assertNumericEqual(t, snapshot.InputPrice, params.Authorization.Price.InputPrice)
+	assertNumericEqual(t, snapshot.UncachedInputPrice, params.Authorization.Price.UncachedInputPrice)
 	assertNumericEqual(t, snapshot.OutputPrice, params.Authorization.Price.OutputPrice)
-	assertNumericEqual(t, snapshot.CachedInputPrice, params.Authorization.Price.CachedInputPrice)
+	assertNumericEqual(t, snapshot.CacheReadInputPrice, params.Authorization.Price.CacheReadInputPrice)
 	assertNumericEqual(t, snapshot.ReasoningOutputPrice, params.Authorization.Price.ReasoningOutputPrice)
 
 	if len(billingCalculator.prices) != 1 {
 		t.Fatalf("expected one billing price, got %d", len(billingCalculator.prices))
 	}
-	assertNumericEqual(t, billingCalculator.prices[0].InputPrice, params.Authorization.Price.InputPrice)
+	assertNumericEqual(t, billingCalculator.prices[0].UncachedInputPrice, params.Authorization.Price.UncachedInputPrice)
 	assertNumericEqual(t, billingCalculator.prices[0].OutputPrice, params.Authorization.Price.OutputPrice)
-	assertNumericEqual(t, billingCalculator.prices[0].CachedInputPrice, params.Authorization.Price.CachedInputPrice)
+	assertNumericEqual(t, billingCalculator.prices[0].CacheReadInputPrice, params.Authorization.Price.CacheReadInputPrice)
 	assertNumericEqual(t, billingCalculator.prices[0].ReasoningOutputPrice, params.Authorization.Price.ReasoningOutputPrice)
 }
 
@@ -786,9 +813,9 @@ func TestChatSettlementUsesAttemptTimeCostPriceWhenActiveCostChanges(t *testing.
 		ModelID:             deps.modelID,
 		Currency:            "USD",
 		PricingUnit:         billing.PricingUnitPer1MTokens,
-		InputCost:           testNumeric(99_0000000000, -10),
+		UncachedInputCost:           testNumeric(99_0000000000, -10),
 		OutputCost:          testNumeric(199_0000000000, -10),
-		CachedInputCost:     testNumeric(49_0000000000, -10),
+		CacheReadInputCost:     testNumeric(49_0000000000, -10),
 		ReasoningOutputCost: testNumeric(299_0000000000, -10),
 		Status:              "enabled",
 		// 必须明显晚于 attempt 时间：PostgreSQL timestamptz 精度是微秒，
@@ -821,7 +848,7 @@ func TestChatSettlementUsesAttemptTimeCostPriceWhenActiveCostChanges(t *testing.
 	if costSnapshot.CostPriceID == newCostPrice.ID {
 		t.Fatalf("expected settlement not to use replacement cost price id %d", newCostPrice.ID)
 	}
-	assertNumericEqual(t, costSnapshot.InputCost, testNumeric(1_0000000000, -10))
+	assertNumericEqual(t, costSnapshot.UncachedInputCost, testNumeric(1_0000000000, -10))
 	assertNumericEqual(t, costSnapshot.OutputCost, testNumeric(4_0000000000, -10))
 }
 

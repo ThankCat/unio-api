@@ -1,6 +1,6 @@
 # Project Status
 
-更新时间：2026-06-01
+更新时间：2026-06-02
 
 本文档只记录全局当前状态、阶段索引、上线阻断和下一步。
 
@@ -16,9 +16,9 @@ docs/production/TODO_REGISTER.md
 ## 当前焦点
 
 ```text
-当前主线：阶段 10 双协议 Gateway 全链路改造已完成规划，可进入实现
-当前进度：TASK-10.01 ADR 与范围冻结已完成；双协议架构、ResponseFacts、字段矩阵、DeepSeek 双协议 mapping 和验收标准已落文档；DeepSeek Anthropic mapping 已按 2026-06-01 官方兼容表刷新
-下一小节：TASK-10.02 目录迁移与依赖方向整理
+当前主线：阶段 10 双协议 Gateway 全链路改造已进入实现
+当前进度：双协议 ingress + adapter 已打通；10.10A stream 契约（StreamOutcome）、10.10B-1 双协议 registry/preflight/routing、10.10B-2a 共享候选准备 executor（OpenAI 已接线）已完成。10.12A 进行中：usage_records facts 化 + usage_line_items + request/attempt/recovery 相关 schema 已改；OpenAI chat_settlement/recovery 生产代码已只消费 ResponseFacts/usage.Facts；go build 通过。测试欠账（10.12B）：chatcompletions 单测仍引用旧 usage 列、sqlc/ledger 集成 helper 缺 ingress_protocol 等
+下一小节：TASK-10.12B 本地 down→up、sqlc generate、对齐 settlement/sqlc/ledger 测试并账务回归全绿；随后 TASK-10.10B-2b Anthropic service/handler + 共享 attempt/delivery lifecycle
 上一阶段状态：阶段 9 OpenAI Protocol Parity 已收口
 ```
 
@@ -35,7 +35,7 @@ docs/production/TODO_REGISTER.md
 | 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | done | Gateway 计费主链路已打通，reservation、settlement、ledger、cost snapshot、recovery worker 和 stream 错误语义已收口。 |
 | 阶段 8 | [可观测性与稳定性](chapters/phase-08-observability-stability/STATUS.md) | done | TASK-8.01 adapter metadata/error 分类、8.02 Prometheus metrics、8.03 structured logs+OpenTelemetry、8.04 channel 熔断、8.05 HTTP SSE Writer 全部完成；阶段 8 无遗留 P0/P1 production TODO。 |
 | 阶段 9 | [OpenAI Protocol Parity](chapters/phase-09-openai-protocol-parity/STATUS.md) | done | C1~C6 已实现；C8 高级字段并入阶段 10 全量 OpenAI 契约，不再作为长期可选项。 |
-| 阶段 10 | [双协议 Gateway 全链路改造](chapters/phase-10-dual-protocol-gateway/STATUS.md) | partial | TASK-10.01 ADR 已完成；OpenAI Chat Completions + Anthropic Messages 双协议、DeepSeek 双入口、统一 ResponseFacts 和共享 lifecycle 已完成规划。 |
+| 阶段 10 | [双协议 Gateway 全链路改造](chapters/phase-10-dual-protocol-gateway/STATUS.md) | partial | 双协议 adapter + ingress 已通；lifecycle 候选准备与双协议 bootstrap 已接线；10.12A schema + OpenAI facts settlement 生产路径已落地。待办：10.12B 测试/sqlc 全绿、10.10B-2b Anthropic 接线、10.11 错误渲染、10.13/10.14 SDK、10.15 复核。 |
 | 阶段 11 | [后台管理](chapters/phase-11-admin/STATUS.md) | planned | 原阶段 10 已顺延，进入前需复核 credential resolver 和后台管理边界。 |
 
 ## 当前上线阻断
@@ -46,9 +46,25 @@ docs/production/TODO_REGISTER.md
 
 ## 验证状态
 
-2026-05-31 Phase 9 收口验证：`go test ./internal/... -count=1` 全绿（含 C5~C6 typed 化 + streamtranslate + E2E）。
+2026-06-02 Phase 10（10.10B-2a + 10.12A 合并工作区）：
 
-带 `DATABASE_URL` 的集成测试需本地 Postgres 运行；本次 SSE Writer 改动为纯 HTTP 层、无数据库接触，DB 集成测试可在本机起库后用标准命令复跑：
+```bash
+go build ./internal/... ./cmd/...   # 通过
+go vet ./internal/... ./cmd/...     # 通过（与 build 范围一致）
+go test ./internal/... ./cmd/...    # 未全绿，见下
+```
+
+当前 `go test` 失败包（10.12B 待修）：
+
+- `internal/service/gateway/openai/chatcompletions`：测试仍引用旧 `UsageRecord.PromptTokens` 等列（schema 已改为 facts 列）。
+- `internal/platform/store/sqlc`：`usage_line_items` / `ingress_protocol` 相关 helper 与集成用例待对齐。
+- `internal/core/ledger`：测试 insert `request_records` 缺必填 `ingress_protocol`。
+
+约 29 个其它 internal 包（含 `lifecycle`、`bootstrap`、`adapter/*`、`billing`）已通过。
+
+仓库级 `go test ./...` 仍会被既有 `seed/` 目录双 `main` 阻断，与 Phase 10 无关。
+
+带 `DATABASE_URL` 的集成测试需本地 Postgres；10.12A 已改多张表源 migration，本地库需先 down→改→up 再跑 sqlc/DB 测试。
 
 ```bash
 DATABASE_URL=postgres://unio:***@localhost:5432/unio?sslmode=disable go test ./...
@@ -58,7 +74,7 @@ git diff --check
 
 ## 下一步
 
-进入阶段 10 双协议 Gateway 全链路改造前先执行：
+继续 TASK-10.12A facts schema 与 settlement/recovery 迁移前先执行：
 
 ```bash
 rg -n "TODO|GAP-" AGENTS.md docs cmd internal migrations sql

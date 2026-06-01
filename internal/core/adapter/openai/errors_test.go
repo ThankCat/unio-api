@@ -45,9 +45,9 @@ func TestAdapterChatCompletionsClassifiesUpstreamStatus(t *testing.T) {
 				BaseURL: server.URL + "/v1",
 				APIKey:  "test-secret",
 				Timeout: 30 * time.Second,
-			}, adapter.ChatRequest{
+			}, ChatRequest{
 				Model: "gpt-4.1",
-				Messages: []adapter.ChatMessage{
+				Messages: []ChatMessage{
 					{Role: "user", Content: jsonContent("hello")},
 				},
 			})
@@ -98,9 +98,9 @@ func TestAdapterChatCompletionsClassifiesTimeoutAsUpstreamCategory(t *testing.T)
 		BaseURL: server.URL + "/v1",
 		APIKey:  "test-secret",
 		Timeout: 50 * time.Millisecond,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hello")},
 		},
 	})
@@ -154,9 +154,9 @@ func TestAdapterChatCompletionsClassifiesCanceledAsUpstreamCategory(t *testing.T
 		BaseURL: server.URL + "/v1",
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hello")},
 		},
 	})
@@ -200,9 +200,9 @@ func TestAdapterChatCompletionsPopulatesSuccessMetadata(t *testing.T) {
 		BaseURL: server.URL + "/v1",
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hello")},
 		},
 	})
@@ -238,17 +238,17 @@ func TestAdapterStreamChatCompletionsPopulatesUsageChunkMetadata(t *testing.T) {
 
 	openAIAdapter := newTestAdapter(server.Client())
 
-	var usageChunk *adapter.ChatStreamChunk
-	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+	var usageChunk *ChatStreamChunk
+	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hello")},
 		},
-	}, func(chunk adapter.ChatStreamChunk) error {
+	}, func(chunk ChatStreamChunk) error {
 		if chunk.Usage != nil {
 			copied := chunk
 			usageChunk = &copied
@@ -283,16 +283,16 @@ func TestAdapterStreamChatCompletionsClassifiesUpstreamStatus(t *testing.T) {
 
 	openAIAdapter := newTestAdapter(server.Client())
 
-	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hello")},
 		},
-	}, func(chunk adapter.ChatStreamChunk) error {
+	}, func(chunk ChatStreamChunk) error {
 		t.Fatalf("unexpected stream chunk: %+v", chunk)
 		return nil
 	})

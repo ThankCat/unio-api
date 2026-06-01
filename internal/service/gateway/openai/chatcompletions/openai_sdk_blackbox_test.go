@@ -1,4 +1,4 @@
-package gateway
+package chatcompletions
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
+	gatewayopenai "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
 )
@@ -39,7 +40,7 @@ func TestOpenAISDKBlackboxHTTPNonStream(t *testing.T) {
 		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	var body gatewayapi.ChatCompletionResponse
+	var body gatewayopenai.ChatCompletionResponse
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}

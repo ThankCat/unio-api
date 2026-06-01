@@ -4,9 +4,11 @@ INSERT INTO prices (
     model_id,
     currency,
     pricing_unit,
-    input_price,
+    uncached_input_price,
+    cache_read_input_price,
+    cache_write_5m_input_price,
+    cache_write_1h_input_price,
     output_price,
-    cached_input_price,
     reasoning_output_price,
     status,
     effective_from,
@@ -16,45 +18,21 @@ VALUES (
     sqlc.arg(model_id),
     sqlc.arg(currency),
     sqlc.arg(pricing_unit),
-    sqlc.arg(input_price),
+    sqlc.arg(uncached_input_price),
+    sqlc.arg(cache_read_input_price),
+    sqlc.arg(cache_write_5m_input_price),
+    sqlc.arg(cache_write_1h_input_price),
     sqlc.arg(output_price),
-    sqlc.arg(cached_input_price),
     sqlc.arg(reasoning_output_price),
     sqlc.arg(status),
     sqlc.arg(effective_from),
     sqlc.arg(effective_to)
 )
-RETURNING
-    id,
-    model_id,
-    currency,
-    pricing_unit,
-    input_price,
-    output_price,
-    cached_input_price,
-    reasoning_output_price,
-    status,
-    effective_from,
-    effective_to,
-    created_at,
-    updated_at;
+RETURNING *;
 
 -- name: FindActivePriceForModel :one
 -- FindActivePriceForModel 查找指定模型在指定时间生效的客户侧售卖价。
-SELECT
-    id,
-    model_id,
-    currency,
-    pricing_unit,
-    input_price,
-    output_price,
-    cached_input_price,
-    reasoning_output_price,
-    status,
-    effective_from,
-    effective_to,
-    created_at,
-    updated_at
+SELECT *
 FROM prices
 WHERE model_id = sqlc.arg(model_id)
     AND status = 'enabled'

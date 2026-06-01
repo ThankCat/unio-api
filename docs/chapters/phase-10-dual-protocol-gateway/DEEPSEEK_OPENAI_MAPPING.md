@@ -30,34 +30,42 @@ Adapter:  internal/core/adapter/openai/deepseek
 
 Phase 10 关闭前不允许保留 `Verify`。
 
+黑盒冻结记录（2026-06-01，DeepSeek OpenAI endpoint `https://api.deepseek.com`，最小请求验证）：
+
+- 两个 `Verify`（`parallel_tool_calls`、`safety_identifier`）已冻结为 `No-op`（见下表）。
+- 修正与实测不符项：`user` 纯 text content 数组 DeepSeek 实际接受（200），由 `Reject` 改为 `Pass`；含 `image_url`/`input_audio`/`file` 的多模态数组仍前置 `Reject`。
+- 确认硬 400 项（必须在调上游前 Reject，否则 DeepSeek 直接 400）：`n>1`、`tools[].type=custom`、`response_format.type=json_schema`。
+- 确认 usage 形状：`prompt_tokens = prompt_cache_hit_tokens + prompt_cache_miss_tokens`；reasoning 走 `completion_tokens_details.reasoning_tokens`；`deepseek-reasoner` 返回独立 `message.reasoning_content`。
+- 注意：`deepseek-chat`/`deepseek-reasoner` 的响应 `model` 实际回 `deepseek-v4-flash`（DeepSeek 侧重映射）；response map 仍把客户可见 `model` 恢复为 Unio catalog model，审计记录显式 upstream model。
+
 ## 2. 请求映射
 
 | OpenAI 客户字段 | DeepSeek wire | 策略 | 说明 |
 | --- | --- | --- | --- |
 | `model` | `model` | `Adapt` | 使用 routing 选中的 upstream model。 |
 | `messages` | `messages` | `Adapt` | DeepSeek 只接受明确支持的 role 和 string content。 |
-| `audio` | - | `Reject` | DeepSeek Chat Completion 未声明 audio output。 |
+| `audio` | - | `Reject` | 黑盒(2026-06-01)：DeepSeek 200 但只产文本，静默忽略会误导客户以为拿到 audio 输出，前置 Reject。 |
 | `frequency_penalty` | `frequency_penalty` | `No-op` | DeepSeek 文档标记 deprecated、不再生效。 |
 | `function_call` | `tool_choice` | `Adapt` | legacy function choice 转换为 tool choice；无法无损转换时 Reject。 |
 | `functions` | `tools` | `Adapt` | legacy function list 转换为 function tools。 |
-| `logit_bias` | - | `Reject` | 上游未声明。 |
+| `logit_bias` | 同名 | `No-op` | 黑盒(2026-06-01)：DeepSeek 200 静默忽略；作为软偏置透传无害，记录 No-op。 |
 | `logprobs` | `logprobs` | `Pass` | 与 `top_logprobs` 配套。 |
 | `max_completion_tokens` | `max_tokens` | `Adapt` | DeepSeek 使用 `max_tokens`。与客户同时传 `max_tokens` 时必须校验冲突。 |
 | `max_tokens` | `max_tokens` | `Pass` | deprecated OpenAI 字段仍显式支持。 |
-| `metadata` | - | `Reject` | 上游未声明。 |
+| `metadata` | 同名 | `No-op` | 黑盒(2026-06-01)：DeepSeek 200 静默忽略；纯 metadata 透传无害，记录 No-op。 |
 | `modalities` | - | `Adapt` | 仅允许省略或明确 `["text"]`；其他值 Reject。 |
 | `n` | - | `Reject` | 上游未声明多 choice。 |
-| `parallel_tool_calls` | - | `Verify` | 黑盒确认 DeepSeek 是否支持以及缺省语义。 |
-| `prediction` | - | `Reject` | 上游未声明。 |
+| `parallel_tool_calls` | `parallel_tool_calls` | `No-op` | 黑盒(2026-06-01)：传 true/false 均 200，但传 false 仍返回并行 tool_calls，DeepSeek 不生效；转发无害，记录为 No-op。 |
+| `prediction` | 同名 | `No-op` | 黑盒(2026-06-01)：DeepSeek 200 静默忽略；忽略仅失去加速、输出仍正确，记录 No-op。 |
 | `presence_penalty` | `presence_penalty` | `No-op` | DeepSeek 文档标记 deprecated、不再生效。 |
-| `prompt_cache_key` | - | `Reject` | DeepSeek cache 隔离字段是 `user_id`，不能假设语义等价。 |
-| `prompt_cache_retention` | - | `Reject` | 上游未声明。 |
+| `prompt_cache_key` | 同名 | `No-op` | 黑盒(2026-06-01)：DeepSeek 200 静默忽略；记录 No-op，不假设与 DeepSeek 自身 cache 语义等价。 |
+| `prompt_cache_retention` | 同名 | `No-op` | 黑盒(2026-06-01)：DeepSeek 200 静默忽略，记录 No-op。 |
 | `reasoning_effort` | `reasoning_effort` | `Adapt` | DeepSeek 接受 `high`、`max`，并兼容映射 `low`/`medium`→`high`、`xhigh`→`max`。 |
 | `response_format.type=text` | `response_format.type=text` | `Pass` | |
 | `response_format.type=json_object` | 同名 | `Pass` | 客户 prompt 仍需要求 JSON。 |
 | `response_format.type=json_schema` | - | `Reject` | DeepSeek 文档未声明 schema 模式。 |
-| `safety_identifier` | `user_id` | `Verify` | 需要确定与 legacy `user` 并存时的优先级。 |
-| `seed` | - | `Reject` | 上游未声明。 |
+| `safety_identifier` | - | `No-op` | 黑盒(2026-06-01)：DeepSeek 接受但忽略（200，不影响结果），与 `user` 无 wire 冲突；记录为 No-op，不映射为 user_id。 |
+| `seed` | 同名 | `No-op` | 黑盒(2026-06-01)：DeepSeek 200 静默忽略；seed 本就是 best-effort，记录 No-op。 |
 | `service_tier` | - | `Reject` | 上游未声明。 |
 | `stop` | `stop` | `Pass` | 支持 string 或 string 数组，最多 16 条。 |
 | `store` | - | `Reject` | 上游未声明。 |
@@ -71,7 +79,7 @@ Phase 10 关闭前不允许保留 `Verify`。
 | `top_logprobs` | `top_logprobs` | `Pass` | 依赖 `logprobs=true`。 |
 | `top_p` | `top_p` | `Pass` | thinking 模式下如无效果，矩阵与测试要明确。 |
 | `user` | `user_id` | `Adapt` | 校验 DeepSeek `user_id` 字符集与长度。 |
-| `verbosity` | - | `Reject` | 上游未声明。 |
+| `verbosity` | 同名 | `No-op` | 黑盒(2026-06-01)：DeepSeek 200 静默忽略，记录 No-op。 |
 | `web_search_options` | - | `Reject` | 上游未声明。 |
 | extension `thinking.type` | `thinking.type` | `Pass` | `enabled` 或 `disabled`。 |
 
@@ -82,7 +90,8 @@ Phase 10 关闭前不允许保留 `Verify`。
 | `developer` role | `system` role | `Adapt` |
 | `system` role | `system` role | `Pass` |
 | `user` string content | 同名 | `Pass` |
-| `user` content part array | - | `Reject` |
+| `user` content part array（纯 text part） | 同名 | `Pass` |
+| `user` content part array（image_url/input_audio/file） | - | `Reject` |
 | `assistant.content` | 同名 | `Pass` |
 | `assistant.reasoning_content` extension | 同名 | `Pass` |
 | `assistant.tool_calls[].type=function` | 同名 | `Pass` |

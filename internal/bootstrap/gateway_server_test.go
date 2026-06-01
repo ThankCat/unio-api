@@ -19,7 +19,7 @@ import (
 )
 
 type fakeGatewayServerAppDB struct {
-	rows       []sqlc.ListEnabledProviderAdaptersRow
+	rows       []sqlc.ListEnabledChannelAdaptersRow
 	queryErr   error
 	queryCount int
 }
@@ -51,7 +51,7 @@ func (r fakeGatewayServerAppRow) Scan(dest ...any) error {
 }
 
 type fakeGatewayServerAppRows struct {
-	rows   []sqlc.ListEnabledProviderAdaptersRow
+	rows   []sqlc.ListEnabledChannelAdaptersRow
 	index  int
 	closed bool
 }
@@ -90,27 +90,32 @@ func (r *fakeGatewayServerAppRows) Scan(dest ...any) error {
 	if r.index < 0 || r.index >= len(r.rows) {
 		return errors.New("fake server app rows scan called without current row")
 	}
-	if len(dest) != 3 {
-		return fmt.Errorf("expected 3 scan destinations, got %d", len(dest))
+	if len(dest) != 4 {
+		return fmt.Errorf("expected 4 scan destinations, got %d", len(dest))
 	}
 
-	id, ok := dest[0].(*int64)
+	channelID, ok := dest[0].(*int64)
 	if !ok {
 		return fmt.Errorf("expected destination 0 to be *int64, got %T", dest[0])
 	}
-	slug, ok := dest[1].(*string)
+	protocol, ok := dest[1].(*string)
 	if !ok {
 		return fmt.Errorf("expected destination 1 to be *string, got %T", dest[1])
 	}
-	adapter, ok := dest[2].(*string)
+	adapterKey, ok := dest[2].(*string)
 	if !ok {
 		return fmt.Errorf("expected destination 2 to be *string, got %T", dest[2])
 	}
+	providerSlug, ok := dest[3].(*string)
+	if !ok {
+		return fmt.Errorf("expected destination 3 to be *string, got %T", dest[3])
+	}
 
 	row := r.rows[r.index]
-	*id = row.ID
-	*slug = row.Slug
-	*adapter = row.Adapter
+	*channelID = row.ChannelID
+	*protocol = row.Protocol
+	*adapterKey = row.AdapterKey
+	*providerSlug = row.ProviderSlug
 	return nil
 }
 
@@ -120,7 +125,7 @@ func (r *fakeGatewayServerAppRows) Values() ([]any, error) {
 	}
 
 	row := r.rows[r.index]
-	return []any{row.ID, row.Slug, row.Adapter}, nil
+	return []any{row.ChannelID, row.Protocol, row.AdapterKey, row.ProviderSlug}, nil
 }
 
 func (r *fakeGatewayServerAppRows) RawValues() [][]byte {
@@ -133,8 +138,9 @@ func (r *fakeGatewayServerAppRows) Conn() *pgx.Conn {
 
 func TestNewGatewayServerAppBuildsHandlerAfterProviderPreflight(t *testing.T) {
 	db := &fakeGatewayServerAppDB{
-		rows: []sqlc.ListEnabledProviderAdaptersRow{
-			{ID: 1, Slug: "openai", Adapter: "openai"},
+		rows: []sqlc.ListEnabledChannelAdaptersRow{
+			{ChannelID: 1, Protocol: "openai", AdapterKey: "deepseek", ProviderSlug: "deepseek"},
+			{ChannelID: 2, Protocol: "anthropic", AdapterKey: "deepseek", ProviderSlug: "deepseek"},
 		},
 	}
 
@@ -167,8 +173,8 @@ func TestNewGatewayServerAppBuildsHandlerAfterProviderPreflight(t *testing.T) {
 
 func TestNewGatewayServerAppReturnsProviderAdapterPreflightError(t *testing.T) {
 	db := &fakeGatewayServerAppDB{
-		rows: []sqlc.ListEnabledProviderAdaptersRow{
-			{ID: 1, Slug: "unknown", Adapter: "unknown"},
+		rows: []sqlc.ListEnabledChannelAdaptersRow{
+			{ChannelID: 1, Protocol: "openai", AdapterKey: "unknown", ProviderSlug: "unknown"},
 		},
 	}
 

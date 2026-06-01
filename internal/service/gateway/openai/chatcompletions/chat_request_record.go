@@ -1,4 +1,4 @@
-package gateway
+package chatcompletions
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
@@ -34,6 +34,8 @@ func (s *ChatCompletionService) createRequestRecord(ctx context.Context, princip
 		ProjectID:        principal.ProjectID,
 		APIKeyID:         principal.APIKeyID,
 		RequestedModelID: req.Model,
+		IngressProtocol:  requestlog.ProtocolOpenAI,
+		Operation:        requestlog.OperationChatCompletions,
 		Stream:           stream,
 		StartedAt:        time.Now(),
 	})
@@ -53,43 +55,20 @@ func (s *ChatCompletionService) createRequestRecord(ctx context.Context, princip
 // attempt 记录 fallback 链路中的单次 provider/channel 调用，必须先于 adapter 调用创建。
 func (s *ChatCompletionService) createAttemptRecord(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate) (requestlog.AttemptRecord, error) {
 	attempt, err := s.requestLog.CreateAttempt(ctx, requestlog.CreateAttemptParams{
-		RequestRecordID: requestRecord.ID,
-		AttemptIndex:    attemptIndex,
-		ProviderID:      candidate.ProviderID,
-		ChannelID:       candidate.Channel.ID,
-		AdapterKey:      candidate.AdapterKey,
-		UpstreamModel:   candidate.UpstreamModel,
-		StartedAt:       time.Now(),
+		RequestRecordID:  requestRecord.ID,
+		AttemptIndex:     attemptIndex,
+		ProviderID:       candidate.ProviderID,
+		ChannelID:        candidate.Channel.ID,
+		AdapterKey:       candidate.AdapterKey,
+		UpstreamModel:    candidate.UpstreamModel,
+		UpstreamProtocol: requestlog.Protocol(candidate.Protocol),
+		StartedAt:        time.Now(),
 	})
 	if err != nil {
 		return requestlog.AttemptRecord{}, err
 	}
 
 	return attempt, nil
-}
-
-// markRequestRecordSucceeded 把请求标记为成功，并记录最终响应模型和 provider/channel。
-func (s *ChatCompletionService) markRequestRecordSucceeded(ctx context.Context, requestRecord requestlog.RequestRecord, req gatewayapi.ChatCompletionRequest, candidate routing.ChatRouteCandidate) error {
-	_, err := s.requestLog.MarkRequestSucceeded(ctx, requestlog.MarkRequestSucceededParams{
-		ID:              requestRecord.ID,
-		ResponseModelID: req.Model,
-		FinalProviderID: candidate.ProviderID,
-		FinalChannelID:  candidate.Channel.ID,
-		CompletedAt:     time.Now(),
-	})
-	return err
-}
-
-// markAttemptRecordSucceeded 把一次上游尝试标记为成功，并记录上游实际响应模型。
-func (s *ChatCompletionService) markAttemptRecordSucceeded(ctx context.Context, attempt requestlog.AttemptRecord, upstreamModel string) error {
-	_, err := s.requestLog.MarkAttemptSucceeded(ctx, requestlog.MarkAttemptSucceededParams{
-		ID:                    attempt.ID,
-		UpstreamResponseModel: upstreamModel,
-		UpstreamStatusCode:    200,
-		UpstreamRequestID:     nil,
-		CompletedAt:           time.Now(),
-	})
-	return err
 }
 
 // routingFailureCode 将 routing 内部错误转换成 request_records.error_code。

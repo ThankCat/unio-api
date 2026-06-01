@@ -1,4 +1,4 @@
-package gateway
+package chatcompletions
 
 import (
 	"context"
@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/billing"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
+	"github.com/ThankCat/unio-api/internal/core/usage"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 )
@@ -32,8 +33,8 @@ type ChatLedgerCapturer interface {
 
 // ChatBillingCalculator 定义 chat settlement 计算请求金额所需能力。
 type ChatBillingCalculator interface {
-	CalculateCustomerCharge(usage billing.Usage, price billing.CustomerPriceSnapshot) (billing.CustomerCharge, error)
-	CalculateProviderCost(usage billing.Usage, cost billing.ProviderCostSnapshot) (billing.ProviderCost, error)
+	CalculateCustomerCharge(facts usage.Facts, price billing.CustomerPriceSnapshot) (billing.CustomerCharge, error)
+	CalculateProviderCost(facts usage.Facts, cost billing.ProviderCostSnapshot) (billing.ProviderCost, error)
 }
 
 // ChatSettlementService 负责 chat 请求成功后的 usage、price snapshot 和 ledger 结算。
@@ -67,51 +68,112 @@ func NewChatSettlementService(db ChatTxBeginner, queries *sqlc.Queries, billingC
 	}
 }
 
-// ChatSettlementUsageSource 表示 usage_records.source 的业务来源。
-// 它用于区分 usage 是来自非流式 response，还是来自流式 final usage chunk。
-type ChatSettlementUsageSource string
+// ChatSettlementParams 表示一次成功 chat 请求结算所需的事实。
+// 非流式与流式都只消费 adapter 同次解析产生的不可变 ResponseFacts。
+type ChatSettlementParams struct {
+	RequestRecord    requestlog.RequestRecord
+	AttemptRecord    requestlog.AttemptRecord
+	Principal        *auth.APIKeyPrincipal
+	Authorization    ChatAuthorization
+	ResponseProtocol requestlog.Protocol
+	ResponseID       string
+	ResponseModelID  string
+	ModelDBID        int64
+	FinalProviderID  int64
+	FinalChannelID   int64
+	Facts            adapter.ResponseFacts
+}
 
-const (
-	// ChatSettlementUsageSourceUpstreamResponse 表示 usage 来自非流式上游响应。
-	ChatSettlementUsageSourceUpstreamResponse ChatSettlementUsageSource = "upstream_response"
+// validateChatSettlementFacts 校验 adapter 交给 settlement 的不可变事实。
+func validateChatSettlementFacts(params ChatSettlementParams) error {
+	facts := params.Facts
+	if !facts.UsageSource.Valid() {
+		return failure.New(
+			failure.CodeGatewayChatSettlementFailed,
+			failure.WithMessage("chat settlement usage source is invalid"),
+			failure.WithField("usage_source", string(facts.UsageSource)),
+		)
+	}
+	if !facts.Usage.Valid() {
+		return failure.New(
+			failure.CodeGatewayChatSettlementFailed,
+			failure.WithMessage("chat settlement usage facts are invalid"),
+		)
+	}
+	if params.ResponseProtocol == "" || params.ResponseID == "" ||
+		facts.UpstreamProtocol == "" || facts.UpstreamResponseID == "" ||
+		facts.UpstreamModel == "" || facts.UsageMappingVersion == "" ||
+		facts.Metadata.StatusCode < 100 || facts.Metadata.StatusCode > 599 {
+		return failure.New(
+			failure.CodeGatewayChatSettlementFailed,
+			failure.WithMessage("chat settlement response facts are incomplete"),
+		)
+	}
+	if !validSettlementFinishClass(facts.Finish.Class) {
+		return failure.New(
+			failure.CodeGatewayChatSettlementFailed,
+			failure.WithMessage("chat settlement finish class is invalid"),
+			failure.WithField("finish_class", string(facts.Finish.Class)),
+		)
+	}
 
-	// ChatSettlementUsageSourceUpstreamStream 表示 usage 来自流式 final usage chunk。
-	ChatSettlementUsageSourceUpstreamStream ChatSettlementUsageSource = "upstream_stream"
-)
+	return nil
+}
 
-// Valid 判断 usage source 是否是当前数据库允许的稳定枚举值。
-func (s ChatSettlementUsageSource) Valid() bool {
-	switch s {
-	case ChatSettlementUsageSourceUpstreamResponse,
-		ChatSettlementUsageSourceUpstreamStream:
+func validSettlementFinishClass(class adapter.FinishClass) bool {
+	switch class {
+	case adapter.FinishStop,
+		adapter.FinishLength,
+		adapter.FinishToolUse,
+		adapter.FinishContentFilter,
+		adapter.FinishRefusal,
+		adapter.FinishPause,
+		adapter.FinishOther:
 		return true
 	default:
 		return false
 	}
 }
 
-// ChatSettlementParams 表示一次成功 chat 请求结算所需的事实。
-// 非流式 usage 来自 adapter.ChatResponse；流式 usage 来自 final usage stream chunk。
-type ChatSettlementParams struct {
-	RequestRecord         requestlog.RequestRecord
-	AttemptRecord         requestlog.AttemptRecord
-	Principal             *auth.APIKeyPrincipal
-	Authorization         ChatAuthorization
-	ResponseModelID       string
-	ModelDBID             int64
-	FinalProviderID       int64
-	FinalChannelID        int64
-	UpstreamResponseModel string
+// createSettlementUsageRecord 保存协议无关 usage facts。
+func createSettlementUsageRecord(ctx context.Context, queries *sqlc.Queries, requestRecordID int64, facts adapter.ResponseFacts) (sqlc.UsageRecord, error) {
+	u := facts.Usage
+	return queries.CreateUsageRecord(ctx, sqlc.CreateUsageRecordParams{
+		RequestRecordID:              requestRecordID,
+		UncachedInputTokens:          u.UncachedInputTokens.Value,
+		UncachedInputTokensState:     string(u.UncachedInputTokens.State),
+		CacheReadInputTokens:         u.CacheReadInputTokens.Value,
+		CacheReadInputTokensState:    string(u.CacheReadInputTokens.State),
+		CacheWrite5mInputTokens:      u.CacheWrite5mInputTokens.Value,
+		CacheWrite5mInputTokensState: string(u.CacheWrite5mInputTokens.State),
+		CacheWrite1hInputTokens:      u.CacheWrite1hInputTokens.Value,
+		CacheWrite1hInputTokensState: string(u.CacheWrite1hInputTokens.State),
+		OutputTokensTotal:            u.OutputTokensTotal.Value,
+		OutputTokensTotalState:       string(u.OutputTokensTotal.State),
+		ReasoningOutputTokens:        u.ReasoningOutputTokens.Value,
+		ReasoningOutputTokensState:   string(u.ReasoningOutputTokens.State),
+		UsageSource:                  string(facts.UsageSource),
+		UsageMappingVersion:          facts.UsageMappingVersion,
+	})
+}
 
-	// UpstreamStatusCode 是上游成功响应的 HTTP 状态码，写入 request attempt 用于渠道审计。
-	// 必须落在 [100,599]，否则 request_attempts 的 CHECK 约束会拒绝写入。
-	UpstreamStatusCode int
+// createSettlementUsageLineItems 保存已登记的附加计量事实。
+func createSettlementUsageLineItems(ctx context.Context, queries *sqlc.Queries, usageRecordID int64, items []usage.MeteredItem) error {
+	for _, item := range items {
+		if _, err := queries.CreateUsageLineItem(ctx, sqlc.CreateUsageLineItemParams{
+			UsageRecordID: usageRecordID,
+			Kind:          string(item.Kind),
+			Quantity:      item.Quantity,
+		}); err != nil {
+			return failure.Wrap(
+				failure.CodeGatewayChatSettlementFailed,
+				err,
+				failure.WithMessage("create usage line item"),
+			)
+		}
+	}
 
-	// UpstreamRequestID 是上游返回的请求 ID；nil 表示上游未提供。
-	UpstreamRequestID *string
-
-	Usage       adapter.ChatUsage
-	UsageSource ChatSettlementUsageSource
+	return nil
 }
 
 // upstreamRequestIDPtr 把上游 request id 字符串转成可选指针，空串视为上游未提供。
@@ -149,12 +211,8 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		)
 	}
 
-	if !params.UsageSource.Valid() {
-		return failure.New(
-			failure.CodeGatewayChatSettlementFailed,
-			failure.WithMessage("chat settlement usage source is invalid"),
-			failure.WithField("usage_source", string(params.UsageSource)),
-		)
+	if err := validateChatSettlementFacts(params); err != nil {
+		return err
 	}
 
 	switch requestlog.RequestStatus(lockedRequest.Status) {
@@ -186,15 +244,19 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	}
 
 	txRequestLog := requestlog.NewStore(txQueries)
-	usage := params.Usage
+	facts := params.Facts
 
 	// 从 adapter response metadata 写入真实 upstream status code 和 request id，
 	// 用于渠道审计和 observability，而不是固定写 200/NULL。
 	_, err = txRequestLog.MarkAttemptSucceeded(ctx, requestlog.MarkAttemptSucceededParams{
 		ID:                    params.AttemptRecord.ID,
-		UpstreamResponseModel: params.UpstreamResponseModel,
-		UpstreamStatusCode:    params.UpstreamStatusCode,
-		UpstreamRequestID:     params.UpstreamRequestID,
+		UpstreamResponseID:    facts.UpstreamResponseID,
+		UpstreamResponseModel: facts.UpstreamModel,
+		UpstreamFinishReason:  facts.Finish.RawReason,
+		FinishClass:           string(facts.Finish.Class),
+		UpstreamStatusCode:    facts.Metadata.StatusCode,
+		UpstreamRequestID:     upstreamRequestIDPtr(facts.Metadata.RequestID),
+		UsageMappingVersion:   facts.UsageMappingVersion,
 		CompletedAt:           now,
 	})
 	if err != nil {
@@ -205,21 +267,17 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		)
 	}
 
-	_, err = txQueries.CreateUsageRecord(ctx, sqlc.CreateUsageRecordParams{
-		RequestRecordID:  params.RequestRecord.ID,
-		PromptTokens:     int64(usage.PromptTokens),
-		CompletionTokens: int64(usage.CompletionTokens),
-		TotalTokens:      int64(usage.TotalTokens),
-		CachedTokens:     int64(usage.CachedTokens),
-		ReasoningTokens:  int64(usage.ReasoningTokens),
-		Source:           string(params.UsageSource),
-	})
+	usageRecord, err := createSettlementUsageRecord(ctx, txQueries, params.RequestRecord.ID, facts)
 	if err != nil {
 		return failure.Wrap(
 			failure.CodeGatewayChatSettlementFailed,
 			err,
-			failure.WithMessage("find active price for model"),
+			failure.WithMessage("create usage record"),
 		)
+	}
+
+	if err := createSettlementUsageLineItems(ctx, txQueries, usageRecord.ID, facts.Usage.ServerToolUsage); err != nil {
+		return err
 	}
 
 	if params.Authorization.PriceID <= 0 {
@@ -233,37 +291,33 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 
 	// 将 authorization 使用的价格复制成请求级快照，保证冻结和结算使用同一份价格。
 	snapshot, err := txQueries.CreatePriceSnapshot(ctx, sqlc.CreatePriceSnapshotParams{
-		RequestRecordID:      params.RequestRecord.ID,
-		PriceID:              pgtype.Int8{Int64: params.Authorization.PriceID, Valid: true},
-		Currency:             authorizationPrice.Currency,
-		PricingUnit:          authorizationPrice.PricingUnit,
-		InputPrice:           authorizationPrice.InputPrice,
-		OutputPrice:          authorizationPrice.OutputPrice,
-		CachedInputPrice:     authorizationPrice.CachedInputPrice,
-		ReasoningOutputPrice: authorizationPrice.ReasoningOutputPrice,
-		FormulaVersion:       authorizationPrice.FormulaVersion,
+		RequestRecordID:        params.RequestRecord.ID,
+		PriceID:                pgtype.Int8{Int64: params.Authorization.PriceID, Valid: true},
+		Currency:               authorizationPrice.Currency,
+		PricingUnit:            authorizationPrice.PricingUnit,
+		UncachedInputPrice:     authorizationPrice.UncachedInputPrice,
+		CacheReadInputPrice:    authorizationPrice.CacheReadInputPrice,
+		CacheWrite5mInputPrice: authorizationPrice.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice: authorizationPrice.CacheWrite1hInputPrice,
+		OutputPrice:            authorizationPrice.OutputPrice,
+		ReasoningOutputPrice:   authorizationPrice.ReasoningOutputPrice,
+		FormulaVersion:         authorizationPrice.FormulaVersion,
 	})
 	if err != nil {
 		return err
 	}
 
-	billingUsage := billing.Usage{
-		PromptTokens:     int64(usage.PromptTokens),
-		CompletionTokens: int64(usage.CompletionTokens),
-		TotalTokens:      int64(usage.TotalTokens),
-		CachedTokens:     int64(usage.CachedTokens),
-		ReasoningTokens:  int64(usage.ReasoningTokens),
-	}
-
 	// 计算用户本次请求的花费。
-	charge, err := s.billingCalculator.CalculateCustomerCharge(billingUsage, billing.CustomerPriceSnapshot{
-		Currency:             snapshot.Currency,
-		PricingUnit:          snapshot.PricingUnit,
-		InputPrice:           snapshot.InputPrice,
-		OutputPrice:          snapshot.OutputPrice,
-		CachedInputPrice:     snapshot.CachedInputPrice,
-		ReasoningOutputPrice: snapshot.ReasoningOutputPrice,
-		FormulaVersion:       snapshot.FormulaVersion,
+	charge, err := s.billingCalculator.CalculateCustomerCharge(facts.Usage, billing.CustomerPriceSnapshot{
+		Currency:               snapshot.Currency,
+		PricingUnit:            snapshot.PricingUnit,
+		UncachedInputPrice:     snapshot.UncachedInputPrice,
+		CacheReadInputPrice:    snapshot.CacheReadInputPrice,
+		CacheWrite5mInputPrice: snapshot.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice: snapshot.CacheWrite1hInputPrice,
+		OutputPrice:            snapshot.OutputPrice,
+		ReasoningOutputPrice:   snapshot.ReasoningOutputPrice,
+		FormulaVersion:         snapshot.FormulaVersion,
 	})
 	if err != nil {
 		return err
@@ -284,14 +338,16 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	}
 
 	// 计算平台本次调用上游的实际成本。
-	providerCost, err := s.billingCalculator.CalculateProviderCost(billingUsage, billing.ProviderCostSnapshot{
-		Currency:            costPrice.Currency,
-		PricingUnit:         costPrice.PricingUnit,
-		InputCost:           costPrice.InputCost,
-		OutputCost:          costPrice.OutputCost,
-		CachedInputCost:     costPrice.CachedInputCost,
-		ReasoningOutputCost: costPrice.ReasoningOutputCost,
-		FormulaVersion:      billing.FormulaVersionV1,
+	providerCost, err := s.billingCalculator.CalculateProviderCost(facts.Usage, billing.ProviderCostSnapshot{
+		Currency:              costPrice.Currency,
+		PricingUnit:           costPrice.PricingUnit,
+		UncachedInputCost:     costPrice.UncachedInputCost,
+		CacheReadInputCost:    costPrice.CacheReadInputCost,
+		CacheWrite5mInputCost: costPrice.CacheWrite5mInputCost,
+		CacheWrite1hInputCost: costPrice.CacheWrite1hInputCost,
+		OutputCost:            costPrice.OutputCost,
+		ReasoningOutputCost:   costPrice.ReasoningOutputCost,
+		FormulaVersion:        billing.FormulaVersionV1,
 	})
 	if err != nil {
 		return failure.Wrap(
@@ -303,24 +359,28 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 
 	// 写入成本快照
 	_, err = txQueries.CreateCostSnapshot(ctx, sqlc.CreateCostSnapshotParams{
-		RequestRecordID:           params.RequestRecord.ID,
-		CostPriceID:               costPrice.ID,
-		ProviderID:                params.FinalProviderID,
-		ChannelID:                 params.FinalChannelID,
-		ModelID:                   params.ModelDBID,
-		UpstreamModel:             params.AttemptRecord.UpstreamModel,
-		Currency:                  costPrice.Currency,
-		PricingUnit:               costPrice.PricingUnit,
-		InputCost:                 costPrice.InputCost,
-		OutputCost:                costPrice.OutputCost,
-		CachedInputCost:           costPrice.CachedInputCost,
-		ReasoningOutputCost:       costPrice.ReasoningOutputCost,
-		InputCostAmount:           providerCost.InputCostAmount,
-		OutputCostAmount:          providerCost.OutputCostAmount,
-		CachedInputCostAmount:     providerCost.CachedInputCostAmount,
-		ReasoningOutputCostAmount: providerCost.ReasoningOutputCostAmount,
-		TotalCostAmount:           providerCost.TotalCostAmount,
-		FormulaVersion:            providerCost.FormulaVersion,
+		RequestRecordID:             params.RequestRecord.ID,
+		CostPriceID:                 costPrice.ID,
+		ProviderID:                  params.FinalProviderID,
+		ChannelID:                   params.FinalChannelID,
+		ModelID:                     params.ModelDBID,
+		UpstreamModel:               params.AttemptRecord.UpstreamModel,
+		Currency:                    costPrice.Currency,
+		PricingUnit:                 costPrice.PricingUnit,
+		UncachedInputCost:           costPrice.UncachedInputCost,
+		CacheReadInputCost:          costPrice.CacheReadInputCost,
+		CacheWrite5mInputCost:       costPrice.CacheWrite5mInputCost,
+		CacheWrite1hInputCost:       costPrice.CacheWrite1hInputCost,
+		OutputCost:                  costPrice.OutputCost,
+		ReasoningOutputCost:         costPrice.ReasoningOutputCost,
+		UncachedInputCostAmount:     providerCost.UncachedInputCostAmount,
+		CacheReadInputCostAmount:    providerCost.CacheReadInputCostAmount,
+		CacheWrite5mInputCostAmount: providerCost.CacheWrite5mInputCostAmount,
+		CacheWrite1hInputCostAmount: providerCost.CacheWrite1hInputCostAmount,
+		OutputCostAmount:            providerCost.OutputCostAmount,
+		ReasoningOutputCostAmount:   providerCost.ReasoningOutputCostAmount,
+		TotalCostAmount:             providerCost.TotalCostAmount,
+		FormulaVersion:              providerCost.FormulaVersion,
 	})
 	if err != nil {
 		return failure.Wrap(
@@ -355,11 +415,13 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	}
 
 	_, err = txRequestLog.MarkRequestSucceeded(ctx, requestlog.MarkRequestSucceededParams{
-		ID:              params.RequestRecord.ID,
-		ResponseModelID: params.ResponseModelID,
-		FinalProviderID: params.FinalProviderID,
-		FinalChannelID:  params.FinalChannelID,
-		CompletedAt:     now,
+		ID:               params.RequestRecord.ID,
+		ResponseModelID:  params.ResponseModelID,
+		ResponseProtocol: params.ResponseProtocol,
+		ResponseID:       params.ResponseID,
+		FinalProviderID:  params.FinalProviderID,
+		FinalChannelID:   params.FinalChannelID,
+		CompletedAt:      now,
 	})
 	if err != nil {
 		return err
@@ -395,7 +457,19 @@ func (s *ChatSettlementService) ensureIdempotentSuccessfulChat(ctx context.Conte
 		)
 	}
 
-	if err := ensureSettlementUsageMatches(usageRecord, params.Usage, params.UsageSource); err != nil {
+	if err := ensureSettlementUsageMatches(usageRecord, params.Facts); err != nil {
+		return err
+	}
+
+	lineItems, err := queries.ListUsageLineItemsByUsageRecord(ctx, usageRecord.ID)
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("lookup idempotent chat settlement usage line items"),
+		)
+	}
+	if err := ensureSettlementUsageLineItemsMatch(lineItems, params.Facts.Usage.ServerToolUsage); err != nil {
 		return err
 	}
 
@@ -412,22 +486,18 @@ func (s *ChatSettlementService) ensureIdempotentSuccessfulChat(ctx context.Conte
 		return err
 	}
 
-	billingUsage := billing.Usage{
-		PromptTokens:     usageRecord.PromptTokens,
-		CompletionTokens: usageRecord.CompletionTokens,
-		TotalTokens:      usageRecord.TotalTokens,
-		CachedTokens:     usageRecord.CachedTokens,
-		ReasoningTokens:  usageRecord.ReasoningTokens,
-	}
+	billingUsage := settlementUsageFactsFromRecord(usageRecord, lineItems)
 
 	charge, err := s.billingCalculator.CalculateCustomerCharge(billingUsage, billing.CustomerPriceSnapshot{
-		Currency:             snapshot.Currency,
-		PricingUnit:          snapshot.PricingUnit,
-		InputPrice:           snapshot.InputPrice,
-		OutputPrice:          snapshot.OutputPrice,
-		CachedInputPrice:     snapshot.CachedInputPrice,
-		ReasoningOutputPrice: snapshot.ReasoningOutputPrice,
-		FormulaVersion:       snapshot.FormulaVersion,
+		Currency:               snapshot.Currency,
+		PricingUnit:            snapshot.PricingUnit,
+		UncachedInputPrice:     snapshot.UncachedInputPrice,
+		CacheReadInputPrice:    snapshot.CacheReadInputPrice,
+		CacheWrite5mInputPrice: snapshot.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice: snapshot.CacheWrite1hInputPrice,
+		OutputPrice:            snapshot.OutputPrice,
+		ReasoningOutputPrice:   snapshot.ReasoningOutputPrice,
+		FormulaVersion:         snapshot.FormulaVersion,
 	})
 	if err != nil {
 		return failure.Wrap(
@@ -447,13 +517,15 @@ func (s *ChatSettlementService) ensureIdempotentSuccessfulChat(ctx context.Conte
 	}
 
 	providerCost, err := s.billingCalculator.CalculateProviderCost(billingUsage, billing.ProviderCostSnapshot{
-		Currency:            costSnapshot.Currency,
-		PricingUnit:         costSnapshot.PricingUnit,
-		InputCost:           costSnapshot.InputCost,
-		OutputCost:          costSnapshot.OutputCost,
-		CachedInputCost:     costSnapshot.CachedInputCost,
-		ReasoningOutputCost: costSnapshot.ReasoningOutputCost,
-		FormulaVersion:      costSnapshot.FormulaVersion,
+		Currency:              costSnapshot.Currency,
+		PricingUnit:           costSnapshot.PricingUnit,
+		UncachedInputCost:     costSnapshot.UncachedInputCost,
+		CacheReadInputCost:    costSnapshot.CacheReadInputCost,
+		CacheWrite5mInputCost: costSnapshot.CacheWrite5mInputCost,
+		CacheWrite1hInputCost: costSnapshot.CacheWrite1hInputCost,
+		OutputCost:            costSnapshot.OutputCost,
+		ReasoningOutputCost:   costSnapshot.ReasoningOutputCost,
+		FormulaVersion:        costSnapshot.FormulaVersion,
 	})
 	if err != nil {
 		return failure.Wrap(
@@ -498,6 +570,12 @@ func ensureSettlementRequestMatches(request sqlc.RequestRecord, params ChatSettl
 	if !requiredTextMatches(request.ResponseModelID, params.ResponseModelID) {
 		return chatSettlementIdempotencyConflict("response model mismatch")
 	}
+	if !requiredTextMatches(request.ResponseProtocol, string(params.ResponseProtocol)) {
+		return chatSettlementIdempotencyConflict("response protocol mismatch")
+	}
+	if !requiredTextMatches(request.ResponseID, params.ResponseID) {
+		return chatSettlementIdempotencyConflict("response id mismatch")
+	}
 	if !requiredInt8Matches(request.FinalProviderID, params.FinalProviderID) {
 		return chatSettlementIdempotencyConflict("final provider mismatch")
 	}
@@ -521,9 +599,11 @@ func ensureSettlementPriceSnapshotMatches(snapshot sqlc.PriceSnapshot, authoriza
 		snapshot.FormulaVersion != price.FormulaVersion {
 		return chatSettlementIdempotencyConflict("price snapshot metadata mismatch")
 	}
-	if !chatSettlementSameNumeric(snapshot.InputPrice, price.InputPrice) ||
+	if !chatSettlementSameNumeric(snapshot.UncachedInputPrice, price.UncachedInputPrice) ||
+		!chatSettlementSameNumeric(snapshot.CacheReadInputPrice, price.CacheReadInputPrice) ||
+		!chatSettlementSameNumeric(snapshot.CacheWrite5mInputPrice, price.CacheWrite5mInputPrice) ||
+		!chatSettlementSameNumeric(snapshot.CacheWrite1hInputPrice, price.CacheWrite1hInputPrice) ||
 		!chatSettlementSameNumeric(snapshot.OutputPrice, price.OutputPrice) ||
-		!chatSettlementSameNumeric(snapshot.CachedInputPrice, price.CachedInputPrice) ||
 		!chatSettlementSameNumeric(snapshot.ReasoningOutputPrice, price.ReasoningOutputPrice) {
 		return chatSettlementIdempotencyConflict("price snapshot amount mismatch")
 	}
@@ -554,9 +634,11 @@ func ensureSettlementCostSnapshotMatches(snapshot sqlc.CostSnapshot, params Chat
 		return chatSettlementIdempotencyConflict("cost snapshot metadata mismatch")
 	}
 
-	if !chatSettlementSameNumeric(snapshot.InputCostAmount, cost.InputCostAmount) ||
+	if !chatSettlementSameNumeric(snapshot.UncachedInputCostAmount, cost.UncachedInputCostAmount) ||
+		!chatSettlementSameNumeric(snapshot.CacheReadInputCostAmount, cost.CacheReadInputCostAmount) ||
+		!chatSettlementSameNumeric(snapshot.CacheWrite5mInputCostAmount, cost.CacheWrite5mInputCostAmount) ||
+		!chatSettlementSameNumeric(snapshot.CacheWrite1hInputCostAmount, cost.CacheWrite1hInputCostAmount) ||
 		!chatSettlementSameNumeric(snapshot.OutputCostAmount, cost.OutputCostAmount) ||
-		!chatSettlementSameNumeric(snapshot.CachedInputCostAmount, cost.CachedInputCostAmount) ||
 		!chatSettlementSameNumeric(snapshot.ReasoningOutputCostAmount, cost.ReasoningOutputCostAmount) ||
 		!chatSettlementSameNumeric(snapshot.TotalCostAmount, cost.TotalCostAmount) {
 		return chatSettlementIdempotencyConflict("cost snapshot amount mismatch")
@@ -684,17 +766,29 @@ func ensureSettlementAttemptMatches(ctx context.Context, queries *sqlc.Queries, 
 			return chatSettlementIdempotencyConflict("attempt status mismatch")
 		}
 		if attempt.AdapterKey != params.AttemptRecord.AdapterKey ||
-			attempt.UpstreamModel != params.AttemptRecord.UpstreamModel {
+			attempt.UpstreamModel != params.AttemptRecord.UpstreamModel ||
+			attempt.UpstreamProtocol != params.Facts.UpstreamProtocol {
 			return chatSettlementIdempotencyConflict("attempt upstream request mismatch")
 		}
-		if !requiredTextMatches(attempt.UpstreamResponseModel, params.UpstreamResponseModel) {
+		if !requiredTextMatches(attempt.UpstreamResponseID, params.Facts.UpstreamResponseID) {
+			return chatSettlementIdempotencyConflict("attempt upstream response id mismatch")
+		}
+		if !requiredTextMatches(attempt.UpstreamResponseModel, params.Facts.UpstreamModel) {
 			return chatSettlementIdempotencyConflict("attempt upstream response model mismatch")
 		}
-		if !requiredInt4Matches(attempt.UpstreamStatusCode, int32(params.UpstreamStatusCode)) {
+		if !requiredTextMatches(attempt.UpstreamFinishReason, params.Facts.Finish.RawReason) ||
+			!requiredTextMatches(attempt.FinishClass, string(params.Facts.Finish.Class)) {
+			return chatSettlementIdempotencyConflict("attempt finish facts mismatch")
+		}
+		if !requiredInt4Matches(attempt.UpstreamStatusCode, int32(params.Facts.Metadata.StatusCode)) {
 			return chatSettlementIdempotencyConflict("attempt upstream status mismatch")
 		}
-		if !optionalTextMatches(attempt.UpstreamRequestID, params.UpstreamRequestID) {
+		if !optionalTextMatches(attempt.UpstreamRequestID, upstreamRequestIDPtr(params.Facts.Metadata.RequestID)) {
 			return chatSettlementIdempotencyConflict("attempt upstream request id mismatch")
+		}
+		if !attempt.FinalUsageReceived ||
+			!requiredTextMatches(attempt.UsageMappingVersion, params.Facts.UsageMappingVersion) {
+			return chatSettlementIdempotencyConflict("attempt usage mapping mismatch")
 		}
 
 		return nil
@@ -703,21 +797,71 @@ func ensureSettlementAttemptMatches(ctx context.Context, queries *sqlc.Queries, 
 	return chatSettlementIdempotencyConflict("settlement attempt not found")
 }
 
-// ensureSettlementUsageMatches 校验 usage record 是否和本次上游 usage 一致。
-func ensureSettlementUsageMatches(row sqlc.UsageRecord, usage adapter.ChatUsage, source ChatSettlementUsageSource) error {
-	if row.PromptTokens != int64(usage.PromptTokens) ||
-		row.CompletionTokens != int64(usage.CompletionTokens) ||
-		row.TotalTokens != int64(usage.TotalTokens) ||
-		row.CachedTokens != int64(usage.CachedTokens) ||
-		row.ReasoningTokens != int64(usage.ReasoningTokens) {
+// ensureSettlementUsageMatches 校验 usage record 是否和本次上游 usage facts 一致。
+func ensureSettlementUsageMatches(row sqlc.UsageRecord, facts adapter.ResponseFacts) error {
+	u := facts.Usage
+	if row.UncachedInputTokens != u.UncachedInputTokens.Value ||
+		row.UncachedInputTokensState != string(u.UncachedInputTokens.State) ||
+		row.CacheReadInputTokens != u.CacheReadInputTokens.Value ||
+		row.CacheReadInputTokensState != string(u.CacheReadInputTokens.State) ||
+		row.CacheWrite5mInputTokens != u.CacheWrite5mInputTokens.Value ||
+		row.CacheWrite5mInputTokensState != string(u.CacheWrite5mInputTokens.State) ||
+		row.CacheWrite1hInputTokens != u.CacheWrite1hInputTokens.Value ||
+		row.CacheWrite1hInputTokensState != string(u.CacheWrite1hInputTokens.State) ||
+		row.OutputTokensTotal != u.OutputTokensTotal.Value ||
+		row.OutputTokensTotalState != string(u.OutputTokensTotal.State) ||
+		row.ReasoningOutputTokens != u.ReasoningOutputTokens.Value ||
+		row.ReasoningOutputTokensState != string(u.ReasoningOutputTokens.State) {
 		return chatSettlementIdempotencyConflict("usage mismatch")
 	}
 
-	if row.Source != string(source) {
+	if row.UsageSource != string(facts.UsageSource) ||
+		row.UsageMappingVersion != facts.UsageMappingVersion {
 		return chatSettlementIdempotencyConflict("usage source mismatch")
 	}
 
 	return nil
+}
+
+// ensureSettlementUsageLineItemsMatch 校验受控附加计量事实是否和重放 facts 一致。
+func ensureSettlementUsageLineItemsMatch(rows []sqlc.UsageLineItem, items []usage.MeteredItem) error {
+	if len(rows) != len(items) {
+		return chatSettlementIdempotencyConflict("usage line item count mismatch")
+	}
+
+	want := make(map[usage.MeteredKind]int64, len(items))
+	for _, item := range items {
+		want[item.Kind] = item.Quantity
+	}
+	for _, row := range rows {
+		quantity, ok := want[usage.MeteredKind(row.Kind)]
+		if !ok || quantity != row.Quantity {
+			return chatSettlementIdempotencyConflict("usage line item mismatch")
+		}
+	}
+
+	return nil
+}
+
+// settlementUsageFactsFromRecord 将数据库 usage 行还原为 billing 消费的协议无关 facts。
+func settlementUsageFactsFromRecord(row sqlc.UsageRecord, lineItems []sqlc.UsageLineItem) usage.Facts {
+	items := make([]usage.MeteredItem, 0, len(lineItems))
+	for _, item := range lineItems {
+		items = append(items, usage.MeteredItem{
+			Kind:     usage.MeteredKind(item.Kind),
+			Quantity: item.Quantity,
+		})
+	}
+
+	return usage.Facts{
+		UncachedInputTokens:     usage.TokenCount{Value: row.UncachedInputTokens, State: usage.CountState(row.UncachedInputTokensState)},
+		CacheReadInputTokens:    usage.TokenCount{Value: row.CacheReadInputTokens, State: usage.CountState(row.CacheReadInputTokensState)},
+		CacheWrite5mInputTokens: usage.TokenCount{Value: row.CacheWrite5mInputTokens, State: usage.CountState(row.CacheWrite5mInputTokensState)},
+		CacheWrite1hInputTokens: usage.TokenCount{Value: row.CacheWrite1hInputTokens, State: usage.CountState(row.CacheWrite1hInputTokensState)},
+		OutputTokensTotal:       usage.TokenCount{Value: row.OutputTokensTotal, State: usage.CountState(row.OutputTokensTotalState)},
+		ReasoningOutputTokens:   usage.TokenCount{Value: row.ReasoningOutputTokens, State: usage.CountState(row.ReasoningOutputTokensState)},
+		ServerToolUsage:         items,
+	}
 }
 
 // ensureSettlementWriteOffMatches 校验 actual 超过 authorized 时的平台核销事实。

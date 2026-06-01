@@ -1,4 +1,4 @@
-package gateway
+package chatcompletions
 
 import (
 	"context"
@@ -7,14 +7,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
+	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
 // fakeChatRouter 是 gateway 测试使用的 routing 替身。
@@ -37,27 +39,27 @@ type fakeAdapterRegistry struct {
 	chatKeys               []string
 	streamChatKeys         []string
 	chatInputTokenizerKeys []string
-	chatAdapters           map[string]adapter.ChatAdapter
-	streamChatAdapters     map[string]adapter.StreamChatAdapter
-	chatInputTokenizers    map[string]adapter.ChatInputTokenizer
+	chatAdapters           map[string]openai.ChatAdapter
+	streamChatAdapters     map[string]openai.StreamChatAdapter
+	chatInputTokenizers    map[string]openai.ChatInputTokenizer
 }
 
 // Chat 记录 adapter key，并按 key 返回测试预设非流式 adapter。
-func (r *fakeAdapterRegistry) Chat(adapterKey string) (adapter.ChatAdapter, bool) {
+func (r *fakeAdapterRegistry) Chat(adapterKey string) (openai.ChatAdapter, bool) {
 	r.chatKeys = append(r.chatKeys, adapterKey)
 	chatAdapter, ok := r.chatAdapters[adapterKey]
 	return chatAdapter, ok
 }
 
 // StreamChat 记录 adapter key，并按 key 返回测试预设流式 adapter。
-func (r *fakeAdapterRegistry) StreamChat(adapterKey string) (adapter.StreamChatAdapter, bool) {
+func (r *fakeAdapterRegistry) StreamChat(adapterKey string) (openai.StreamChatAdapter, bool) {
 	r.streamChatKeys = append(r.streamChatKeys, adapterKey)
 	streamChatAdapter, ok := r.streamChatAdapters[adapterKey]
 	return streamChatAdapter, ok
 }
 
 // ChatInputTokenizer 记录 adapter key，并按 key 返回测试预设输入 tokenizer。
-func (r *fakeAdapterRegistry) ChatInputTokenizer(adapterKey string) (adapter.ChatInputTokenizer, bool) {
+func (r *fakeAdapterRegistry) ChatInputTokenizer(adapterKey string) (openai.ChatInputTokenizer, bool) {
 	r.chatInputTokenizerKeys = append(r.chatInputTokenizerKeys, adapterKey)
 	tokenizer, ok := r.chatInputTokenizers[adapterKey]
 	return tokenizer, ok
@@ -90,6 +92,7 @@ type fakeRequestLogService struct {
 	markAttemptSucceededArgs []requestlog.MarkAttemptSucceededParams
 	markAttemptFailedArgs    []requestlog.MarkAttemptFailedParams
 	markAttemptCanceledArgs  []requestlog.MarkAttemptCanceledParams
+	createAttemptErr         error
 }
 
 // fakeChatSettlementExecutor 是 gateway 测试使用的 chat settlement 替身。
@@ -107,6 +110,28 @@ type fakeChatAuthorizer struct {
 	authorizeErr                  error
 	releaseErr                    error
 	releaseBillingExceptionErr    error
+}
+
+// passthroughCandidatePreparer 是通用 service 测试使用的候选计划替身。
+//
+// 共享 executor 的 capability、熔断与保守估算行为由 lifecycle 包单测覆盖；
+// service 测试默认保留 routing 顺序并提供固定估算，聚焦协议编排行为。
+type passthroughCandidatePreparer struct {
+	inputTokens int64
+}
+
+func (p passthroughCandidatePreparer) PrepareCandidates(_ context.Context, params lifecycle.PrepareCandidatesParams) (lifecycle.CandidatePlan, error) {
+	plan := lifecycle.CandidatePlan{
+		Candidates:              make([]lifecycle.Candidate, 0, len(params.Candidates)),
+		ConservativeInputTokens: p.inputTokens,
+	}
+	for index, candidate := range params.Candidates {
+		plan.Candidates = append(plan.Candidates, lifecycle.Candidate{
+			RouteIndex: index,
+			Route:      candidate,
+		})
+	}
+	return plan, nil
 }
 
 // newFakeRequestLogService 创建测试用 requestlog.Service。
@@ -217,6 +242,9 @@ func (s *fakeRequestLogService) MarkRequestCanceled(ctx context.Context, params 
 // CreateAttempt 记录创建 request attempt 的参数并返回 running 记录。
 func (s *fakeRequestLogService) CreateAttempt(ctx context.Context, params requestlog.CreateAttemptParams) (requestlog.AttemptRecord, error) {
 	s.createAttempts = append(s.createAttempts, params)
+	if s.createAttemptErr != nil {
+		return requestlog.AttemptRecord{}, s.createAttemptErr
+	}
 
 	id := s.nextAttemptID
 	s.nextAttemptID++
@@ -267,18 +295,18 @@ func (s *fakeRequestLogService) MarkAttemptCanceled(ctx context.Context, params 
 // fakeChatAdapter 是 gateway 测试使用的 adapter 替身。
 type fakeChatAdapter struct {
 	chatCalled   int
-	chatReq      adapter.ChatRequest
-	chatResp     *adapter.ChatResponse
+	chatReq      openai.ChatRequest
+	chatResp     *openai.ChatResponse
 	chatErr      error
 	streamCalled int
-	streamReq    adapter.ChatRequest
-	streamResp   []adapter.ChatStreamChunk
+	streamReq    openai.ChatRequest
+	streamResp   []openai.ChatStreamChunk
 	streamErr    error
 	ch           channel.Runtime
 }
 
 // ChatCompletions 记录 gateway 传入的请求，并返回测试预设响应。
-func (a *fakeChatAdapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req adapter.ChatRequest) (*adapter.ChatResponse, error) {
+func (a *fakeChatAdapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req openai.ChatRequest) (*openai.ChatResponse, error) {
 	a.chatCalled++
 	a.chatReq = req
 	a.ch = ch
@@ -287,22 +315,22 @@ func (a *fakeChatAdapter) ChatCompletions(ctx context.Context, ch channel.Runtim
 }
 
 // StreamChatCompletions 记录 gateway 传入的流式请求，并逐个发出测试预设 chunk。
-func (a *fakeChatAdapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req adapter.ChatRequest, emit func(adapter.ChatStreamChunk) error) error {
+func (a *fakeChatAdapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req openai.ChatRequest, emit func(openai.ChatStreamChunk) error) (adapter.StreamOutcome, error) {
 	a.streamCalled++
 	a.streamReq = req
 	a.ch = ch
 
 	if a.streamErr != nil && len(a.streamResp) == 0 {
-		return a.streamErr
+		return adapter.StreamOutcome{}, a.streamErr
 	}
 
 	for _, chunk := range a.streamResp {
 		if err := emit(chunk); err != nil {
-			return err
+			return adapter.StreamOutcome{}, err
 		}
 	}
 
-	return a.streamErr
+	return adapter.StreamOutcome{}, a.streamErr
 }
 
 // contextWithPrincipal 创建带 API key principal 的测试 context。
@@ -347,7 +375,7 @@ func chatRequestWithParams() gatewayapi.ChatCompletionRequest {
 }
 
 // assertAdapterChatRequestParams 断言 gateway 没有丢弃 HTTP DTO 中的可透传参数。
-func assertAdapterChatRequestParams(t *testing.T, req adapter.ChatRequest) {
+func assertAdapterChatRequestParams(t *testing.T, req openai.ChatRequest) {
 	t.Helper()
 
 	if req.Temperature == nil || *req.Temperature != 0 {
@@ -398,8 +426,8 @@ func routeCandidate(adapterKey string, channelID int64, upstreamModel string) ro
 }
 
 // chatResponse 创建测试用 adapter 响应。
-func chatResponse(content string) *adapter.ChatResponse {
-	return &adapter.ChatResponse{
+func chatResponse(content string) *openai.ChatResponse {
+	return &openai.ChatResponse{
 		ID:      "chatcmpl_provider_test",
 		Model:   "gpt-4.1",
 		Content: content,
@@ -416,8 +444,8 @@ func chatResponse(content string) *adapter.ChatResponse {
 }
 
 // streamUsageChunk 创建测试用 stream final usage chunk。
-func streamUsageChunk(model string) adapter.ChatStreamChunk {
-	return adapter.ChatStreamChunk{
+func streamUsageChunk(model string) openai.ChatStreamChunk {
+	return openai.ChatStreamChunk{
 		ID:    "chatcmpl_mock",
 		Model: model,
 		Usage: &adapter.ChatUsage{
@@ -454,6 +482,7 @@ func newChatCompletionServiceForTestWithAuthorizer(router ChatRouter, registry A
 	return NewChatCompletionService(
 		router,
 		registry,
+		passthroughCandidatePreparer{inputTokens: 1},
 		retryClassifier,
 		requestLog,
 		settlement,
@@ -471,7 +500,7 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 		plan: routePlan(routeCandidate("openai", 123, "gpt-4.1")),
 	}
 	registry := &fakeAdapterRegistry{
-		chatAdapters: map[string]adapter.ChatAdapter{
+		chatAdapters: map[string]openai.ChatAdapter{
 			"openai": fakeAdapter,
 		},
 	}
@@ -591,6 +620,12 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	if authorizer.authorizeParams[0].ModelDBID != 1123 {
 		t.Fatalf("expected authorization model db id %d, got %d", int64(1123), authorizer.authorizeParams[0].ModelDBID)
 	}
+	if authorizer.authorizeParams[0].InputTokens != 1 {
+		t.Fatalf("expected candidate plan input token estimate %d, got %d", int64(1), authorizer.authorizeParams[0].InputTokens)
+	}
+	if authorizer.authorizeParams[0].MaxCompletionTokens != 128 {
+		t.Fatalf("expected max completion tokens %d, got %d", int64(128), authorizer.authorizeParams[0].MaxCompletionTokens)
+	}
 	if settlementParams.Authorization.ReservationID != 7788 {
 		t.Fatalf("expected settlement authorization reservation id %d, got %d", int64(7788), settlementParams.Authorization.ReservationID)
 	}
@@ -606,7 +641,7 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotCallAdapterOnRoutingErr
 	service := newChatCompletionServiceForTest(
 		&fakeChatRouter{err: routingErr},
 		&fakeAdapterRegistry{
-			chatAdapters: map[string]adapter.ChatAdapter{
+			chatAdapters: map[string]openai.ChatAdapter{
 				"openai": fakeAdapter,
 			},
 		},
@@ -722,7 +757,7 @@ func TestChatCompletionServiceCreateChatCompletionMarksRequestFailedOnSettlement
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
-			chatAdapters: map[string]adapter.ChatAdapter{
+			chatAdapters: map[string]openai.ChatAdapter{
 				"openai": fakeAdapter,
 			},
 		},
@@ -765,7 +800,7 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotCallAdapterWhenAuthoriz
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
-			chatAdapters: map[string]adapter.ChatAdapter{
+			chatAdapters: map[string]openai.ChatAdapter{
 				"openai": fakeAdapter,
 			},
 		},
@@ -797,17 +832,53 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotCallAdapterWhenAuthoriz
 	if len(settlement.params) != 0 {
 		t.Fatalf("expected settlement not to be called, got %d", len(settlement.params))
 	}
-	if len(requestLog.markAttemptFailedArgs) != 1 {
-		t.Fatalf("expected attempt to fail once, got %d", len(requestLog.markAttemptFailedArgs))
+	if len(requestLog.createAttempts) != 0 {
+		t.Fatalf("expected no attempt before authorization succeeds, got %d", len(requestLog.createAttempts))
 	}
-	if requestLog.markAttemptFailedArgs[0].ErrorCode != "chat_authorization_failed" {
-		t.Fatalf("expected attempt error code %q, got %q", "chat_authorization_failed", requestLog.markAttemptFailedArgs[0].ErrorCode)
+	if len(requestLog.markAttemptFailedArgs) != 0 {
+		t.Fatalf("expected no failed attempt before authorization succeeds, got %d", len(requestLog.markAttemptFailedArgs))
 	}
 	if len(requestLog.markRequestFailedArgs) != 1 {
 		t.Fatalf("expected request to fail once, got %d", len(requestLog.markRequestFailedArgs))
 	}
 	if requestLog.markRequestFailedArgs[0].ErrorCode != "chat_authorization_failed" {
 		t.Fatalf("expected request error code %q, got %q", "chat_authorization_failed", requestLog.markRequestFailedArgs[0].ErrorCode)
+	}
+}
+
+func TestChatCompletionServiceCreateChatCompletionReleasesAuthorizationWhenAttemptCreateFails(t *testing.T) {
+	attemptErr := errors.New("create attempt failed")
+	fakeAdapter := &fakeChatAdapter{chatResp: chatResponse("should not call")}
+	requestLog := newFakeRequestLogService()
+	requestLog.createAttemptErr = attemptErr
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 7711},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
+		&fakeAdapterRegistry{
+			chatAdapters: map[string]openai.ChatAdapter{
+				"openai": fakeAdapter,
+			},
+		},
+		nil,
+		requestLog,
+		newChatCompletionSettlementForTest(),
+		authorizer,
+	)
+
+	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
+	if !errors.Is(err, attemptErr) {
+		t.Fatalf("expected attempt creation error, got %v", err)
+	}
+	if fakeAdapter.chatCalled != 0 {
+		t.Fatalf("expected no adapter call after attempt creation failure, got %d", fakeAdapter.chatCalled)
+	}
+	if len(authorizer.releaseParams) != 1 || authorizer.releaseParams[0].ReservationID != 7711 {
+		t.Fatalf("expected reservation 7711 to be released, got %#v", authorizer.releaseParams)
+	}
+	if len(requestLog.markRequestFailedArgs) != 1 || requestLog.markRequestFailedArgs[0].ErrorCode != "request_attempt_create_failed" {
+		t.Fatalf("expected request_attempt_create_failed, got %#v", requestLog.markRequestFailedArgs)
 	}
 }
 
@@ -818,7 +889,7 @@ func TestChatCompletionServiceCreateChatCompletionReturnsMissingAdapterWithoutRe
 	authorizer := newChatCompletionAuthorizerForTest()
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("missing", 123, "gpt-4.1"))},
-		&fakeAdapterRegistry{chatAdapters: map[string]adapter.ChatAdapter{}},
+		&fakeAdapterRegistry{chatAdapters: map[string]openai.ChatAdapter{}},
 		classifier,
 		requestLog,
 		settlement,
@@ -835,11 +906,11 @@ func TestChatCompletionServiceCreateChatCompletionReturnsMissingAdapterWithoutRe
 	if len(settlement.params) != 0 {
 		t.Fatalf("expected settlement not to be called, got %d calls", len(settlement.params))
 	}
-	if len(authorizer.authorizeParams) != 0 {
-		t.Fatalf("expected missing adapter not to authorize balance, got %d authorizations", len(authorizer.authorizeParams))
+	if len(authorizer.authorizeParams) != 1 {
+		t.Fatalf("expected one authorization before defensive adapter lookup, got %d", len(authorizer.authorizeParams))
 	}
-	if len(authorizer.releaseParams) != 0 {
-		t.Fatalf("expected no authorization release when nothing was authorized, got %d", len(authorizer.releaseParams))
+	if len(authorizer.releaseParams) != 1 {
+		t.Fatalf("expected authorization release after defensive adapter lookup fails, got %d", len(authorizer.releaseParams))
 	}
 	if len(requestLog.createAttempts) != 1 {
 		t.Fatalf("expected one attempt for missing adapter, got %d", len(requestLog.createAttempts))
@@ -876,7 +947,7 @@ func TestChatCompletionServiceCreateChatCompletionReleasesAuthorizationWhenFallb
 			routeCandidate("missing-secondary", 102, "gpt-4.1"),
 		)},
 		&fakeAdapterRegistry{
-			chatAdapters: map[string]adapter.ChatAdapter{
+			chatAdapters: map[string]openai.ChatAdapter{
 				"openai-primary": firstAdapter,
 			},
 		},
@@ -923,7 +994,7 @@ func TestChatCompletionServiceCreateChatCompletionFallsBackOnRetryableAdapterErr
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
 		)},
 		&fakeAdapterRegistry{
-			chatAdapters: map[string]adapter.ChatAdapter{
+			chatAdapters: map[string]openai.ChatAdapter{
 				"openai-primary":   firstAdapter,
 				"openai-secondary": secondAdapter,
 			},
@@ -999,7 +1070,7 @@ func TestChatCompletionServiceCreateChatCompletionReleasesAuthorizationWhenAllRe
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
 		)},
 		&fakeAdapterRegistry{
-			chatAdapters: map[string]adapter.ChatAdapter{
+			chatAdapters: map[string]openai.ChatAdapter{
 				"openai-primary":   firstAdapter,
 				"openai-secondary": secondAdapter,
 			},
@@ -1058,7 +1129,7 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotFallbackOnNonRetryableA
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
 		)},
 		&fakeAdapterRegistry{
-			chatAdapters: map[string]adapter.ChatAdapter{
+			chatAdapters: map[string]openai.ChatAdapter{
 				"openai-primary":   firstAdapter,
 				"openai-secondary": secondAdapter,
 			},
@@ -1118,7 +1189,7 @@ func TestChatCompletionServiceCreateChatCompletionReturnsReleaseErrorWhenAdapter
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai-primary", 101, "gpt-4.1"))},
 		&fakeAdapterRegistry{
-			chatAdapters: map[string]adapter.ChatAdapter{
+			chatAdapters: map[string]openai.ChatAdapter{
 				"openai-primary": firstAdapter,
 			},
 		},
@@ -1164,7 +1235,7 @@ func TestChatCompletionServiceCreateChatCompletionMarksCanceledWithoutFallback(t
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
 		)},
 		&fakeAdapterRegistry{
-			chatAdapters: map[string]adapter.ChatAdapter{
+			chatAdapters: map[string]openai.ChatAdapter{
 				"openai-primary":   firstAdapter,
 				"openai-secondary": secondAdapter,
 			},
@@ -1219,7 +1290,7 @@ func TestChatCompletionServiceCreateChatCompletionMarksCanceledWithoutFallback(t
 
 func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testing.T) {
 	fakeAdapter := &fakeChatAdapter{
-		streamResp: []adapter.ChatStreamChunk{
+		streamResp: []openai.ChatStreamChunk{
 			{
 				ID:      "chatcmpl_mock",
 				Model:   "gpt-4.1",
@@ -1233,7 +1304,7 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 		plan: routePlan(routeCandidate("openai", 123, "gpt-4.1")),
 	}
 	registry := &fakeAdapterRegistry{
-		streamChatAdapters: map[string]adapter.StreamChatAdapter{
+		streamChatAdapters: map[string]openai.StreamChatAdapter{
 			"openai": fakeAdapter,
 		},
 	}
@@ -1336,7 +1407,7 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 
 func TestChatCompletionServiceStreamChatCompletionEmitsClientUsageWhenRequested(t *testing.T) {
 	fakeAdapter := &fakeChatAdapter{
-		streamResp: []adapter.ChatStreamChunk{
+		streamResp: []openai.ChatStreamChunk{
 			{
 				ID:      "chatcmpl_mock",
 				Model:   "gpt-4.1",
@@ -1349,7 +1420,7 @@ func TestChatCompletionServiceStreamChatCompletionEmitsClientUsageWhenRequested(
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
-			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+			streamChatAdapters: map[string]openai.StreamChatAdapter{
 				"openai": fakeAdapter,
 			},
 		},
@@ -1394,7 +1465,7 @@ func TestChatCompletionServiceStreamChatCompletionReturnsMissingAdapterWithoutRe
 	classifier := &fakeRetryClassifier{retryable: true}
 	service := newChatCompletionServiceForTest(
 		&fakeChatRouter{plan: routePlan(routeCandidate("missing", 123, "gpt-4.1"))},
-		&fakeAdapterRegistry{streamChatAdapters: map[string]adapter.StreamChatAdapter{}},
+		&fakeAdapterRegistry{streamChatAdapters: map[string]openai.StreamChatAdapter{}},
 		classifier,
 		newFakeRequestLogService(),
 		newChatCompletionSettlementForTest(),
@@ -1414,7 +1485,7 @@ func TestChatCompletionServiceStreamChatCompletionReturnsMissingAdapterWithoutRe
 func TestChatCompletionServiceStreamChatCompletionDoesNotCallAdapterWhenAuthorizationFails(t *testing.T) {
 	authorizationErr := errors.New("stream authorization failed")
 	fakeAdapter := &fakeChatAdapter{
-		streamResp: []adapter.ChatStreamChunk{
+		streamResp: []openai.ChatStreamChunk{
 			{Content: "should not emit"},
 			streamUsageChunk("gpt-4.1"),
 		},
@@ -1425,7 +1496,7 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotCallAdapterWhenAuthoriz
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
-			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+			streamChatAdapters: map[string]openai.StreamChatAdapter{
 				"openai": fakeAdapter,
 			},
 		},
@@ -1454,17 +1525,61 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotCallAdapterWhenAuthoriz
 	if len(settlement.params) != 0 {
 		t.Fatalf("expected settlement not to be called, got %d", len(settlement.params))
 	}
-	if len(requestLog.markAttemptFailedArgs) != 1 {
-		t.Fatalf("expected stream attempt to fail once, got %d", len(requestLog.markAttemptFailedArgs))
+	if len(requestLog.createAttempts) != 0 {
+		t.Fatalf("expected no stream attempt before authorization succeeds, got %d", len(requestLog.createAttempts))
 	}
-	if requestLog.markAttemptFailedArgs[0].ErrorCode != "chat_authorization_failed" {
-		t.Fatalf("expected attempt error code %q, got %q", "chat_authorization_failed", requestLog.markAttemptFailedArgs[0].ErrorCode)
+	if len(requestLog.markAttemptFailedArgs) != 0 {
+		t.Fatalf("expected no failed stream attempt before authorization succeeds, got %d", len(requestLog.markAttemptFailedArgs))
 	}
 	if len(requestLog.markRequestFailedArgs) != 1 {
 		t.Fatalf("expected stream request to fail once, got %d", len(requestLog.markRequestFailedArgs))
 	}
 	if requestLog.markRequestFailedArgs[0].ErrorCode != "chat_authorization_failed" {
 		t.Fatalf("expected request error code %q, got %q", "chat_authorization_failed", requestLog.markRequestFailedArgs[0].ErrorCode)
+	}
+}
+
+func TestChatCompletionServiceStreamChatCompletionReleasesAuthorizationWhenAttemptCreateFails(t *testing.T) {
+	attemptErr := errors.New("create stream attempt failed")
+	fakeAdapter := &fakeChatAdapter{
+		streamResp: []openai.ChatStreamChunk{
+			{Content: "should not emit"},
+			streamUsageChunk("gpt-4.1"),
+		},
+	}
+	requestLog := newFakeRequestLogService()
+	requestLog.createAttemptErr = attemptErr
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 9900},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
+		&fakeAdapterRegistry{
+			streamChatAdapters: map[string]openai.StreamChatAdapter{
+				"openai": fakeAdapter,
+			},
+		},
+		nil,
+		requestLog,
+		newChatCompletionSettlementForTest(),
+		authorizer,
+	)
+
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+		t.Fatalf("expected no stream chunk after attempt creation failure, got %#v", chunk)
+		return nil
+	})
+	if !errors.Is(err, attemptErr) {
+		t.Fatalf("expected stream attempt creation error, got %v", err)
+	}
+	if fakeAdapter.streamCalled != 0 {
+		t.Fatalf("expected no stream adapter call after attempt creation failure, got %d", fakeAdapter.streamCalled)
+	}
+	if len(authorizer.releaseParams) != 1 || authorizer.releaseParams[0].ReservationID != 9900 {
+		t.Fatalf("expected reservation 9900 to be released, got %#v", authorizer.releaseParams)
+	}
+	if len(requestLog.markRequestFailedArgs) != 1 || requestLog.markRequestFailedArgs[0].ErrorCode != "request_attempt_create_failed" {
+		t.Fatalf("expected request_attempt_create_failed, got %#v", requestLog.markRequestFailedArgs)
 	}
 }
 
@@ -1482,7 +1597,7 @@ func TestChatCompletionServiceStreamChatCompletionReleasesAuthorizationWhenFallb
 			routeCandidate("missing-secondary", 102, "gpt-4.1"),
 		)},
 		&fakeAdapterRegistry{
-			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+			streamChatAdapters: map[string]openai.StreamChatAdapter{
 				"openai-primary": firstAdapter,
 			},
 		},
@@ -1520,7 +1635,7 @@ func TestChatCompletionServiceStreamChatCompletionReleasesAuthorizationOnNonRetr
 	upstreamErr := errors.New("invalid stream upstream request")
 	firstAdapter := &fakeChatAdapter{streamErr: upstreamErr}
 	secondAdapter := &fakeChatAdapter{
-		streamResp: []adapter.ChatStreamChunk{
+		streamResp: []openai.ChatStreamChunk{
 			{Content: "should not fallback"},
 			streamUsageChunk("gpt-4.1"),
 		},
@@ -1537,7 +1652,7 @@ func TestChatCompletionServiceStreamChatCompletionReleasesAuthorizationOnNonRetr
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
 		)},
 		&fakeAdapterRegistry{
-			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+			streamChatAdapters: map[string]openai.StreamChatAdapter{
 				"openai-primary":   firstAdapter,
 				"openai-secondary": secondAdapter,
 			},
@@ -1589,7 +1704,7 @@ func TestChatCompletionServiceStreamChatCompletionReleasesAuthorizationOnNonRetr
 
 func TestChatCompletionServiceStreamChatCompletionFailsWithoutFinalUsage(t *testing.T) {
 	fakeAdapter := &fakeChatAdapter{
-		streamResp: []adapter.ChatStreamChunk{
+		streamResp: []openai.ChatStreamChunk{
 			{
 				ID:      "chatcmpl_mock",
 				Model:   "gpt-4.1",
@@ -1606,7 +1721,7 @@ func TestChatCompletionServiceStreamChatCompletionFailsWithoutFinalUsage(t *test
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
-			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+			streamChatAdapters: map[string]openai.StreamChatAdapter{
 				"openai": fakeAdapter,
 			},
 		},
@@ -1668,7 +1783,7 @@ func TestChatCompletionServiceStreamChatCompletionFailsWithoutFinalUsage(t *test
 func TestChatCompletionServiceStreamChatCompletionMarksRequestFailedOnSettlementError(t *testing.T) {
 	settlementErr := errors.New("stream settlement failed")
 	fakeAdapter := &fakeChatAdapter{
-		streamResp: []adapter.ChatStreamChunk{
+		streamResp: []openai.ChatStreamChunk{
 			{
 				ID:      "chatcmpl_mock",
 				Model:   "gpt-4.1",
@@ -1686,7 +1801,7 @@ func TestChatCompletionServiceStreamChatCompletionMarksRequestFailedOnSettlement
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
-			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+			streamChatAdapters: map[string]openai.StreamChatAdapter{
 				"openai": fakeAdapter,
 			},
 		},
@@ -1728,7 +1843,7 @@ func TestChatCompletionServiceStreamChatCompletionMarksRequestFailedOnSettlement
 func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithAdapterError(t *testing.T) {
 	upstreamErr := errors.New("stream tail error after usage")
 	fakeAdapter := &fakeChatAdapter{
-		streamResp: []adapter.ChatStreamChunk{
+		streamResp: []openai.ChatStreamChunk{
 			{
 				ID:      "chatcmpl_mock",
 				Model:   "gpt-4.1",
@@ -1747,7 +1862,7 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithAdap
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
-			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+			streamChatAdapters: map[string]openai.StreamChatAdapter{
 				"openai": fakeAdapter,
 			},
 		},
@@ -1796,7 +1911,7 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithAdap
 
 func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithClientCancel(t *testing.T) {
 	fakeAdapter := &fakeChatAdapter{
-		streamResp: []adapter.ChatStreamChunk{
+		streamResp: []openai.ChatStreamChunk{
 			{
 				ID:      "chatcmpl_mock",
 				Model:   "gpt-4.1",
@@ -1819,10 +1934,10 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithClie
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
 		)},
 		&fakeAdapterRegistry{
-			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+			streamChatAdapters: map[string]openai.StreamChatAdapter{
 				"openai-primary": fakeAdapter,
 				"openai-secondary": &fakeChatAdapter{
-					streamResp: []adapter.ChatStreamChunk{
+					streamResp: []openai.ChatStreamChunk{
 						{Content: "should not fallback"},
 						streamUsageChunk("gpt-4.1"),
 					},
@@ -1877,7 +1992,7 @@ func TestChatCompletionServiceStreamChatCompletionFallsBackBeforeFirstChunk(t *t
 	upstreamErr := errors.New("temporary stream upstream error")
 	firstAdapter := &fakeChatAdapter{streamErr: upstreamErr}
 	secondAdapter := &fakeChatAdapter{
-		streamResp: []adapter.ChatStreamChunk{
+		streamResp: []openai.ChatStreamChunk{
 			{
 				ID:      "chatcmpl_mock",
 				Model:   "gpt-4.1",
@@ -1899,7 +2014,7 @@ func TestChatCompletionServiceStreamChatCompletionFallsBackBeforeFirstChunk(t *t
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
 		)},
 		&fakeAdapterRegistry{
-			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+			streamChatAdapters: map[string]openai.StreamChatAdapter{
 				"openai-primary":   firstAdapter,
 				"openai-secondary": secondAdapter,
 			},
@@ -1974,7 +2089,7 @@ func TestChatCompletionServiceStreamChatCompletionFallsBackBeforeFirstChunk(t *t
 func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk(t *testing.T) {
 	upstreamErr := errors.New("stream failed after first chunk")
 	firstAdapter := &fakeChatAdapter{
-		streamResp: []adapter.ChatStreamChunk{
+		streamResp: []openai.ChatStreamChunk{
 			{
 				ID:      "chatcmpl_mock",
 				Model:   "gpt-4.1",
@@ -1985,7 +2100,7 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 		streamErr: upstreamErr,
 	}
 	secondAdapter := &fakeChatAdapter{
-		streamResp: []adapter.ChatStreamChunk{
+		streamResp: []openai.ChatStreamChunk{
 			{
 				ID:      "chatcmpl_mock",
 				Model:   "gpt-4.1",
@@ -2005,7 +2120,7 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
 		)},
 		&fakeAdapterRegistry{
-			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+			streamChatAdapters: map[string]openai.StreamChatAdapter{
 				"openai-primary":   firstAdapter,
 				"openai-secondary": secondAdapter,
 			},
@@ -2074,7 +2189,7 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 func TestChatCompletionServiceStreamChatCompletionMarksCanceledWithoutFallback(t *testing.T) {
 	firstAdapter := &fakeChatAdapter{streamErr: context.Canceled}
 	secondAdapter := &fakeChatAdapter{
-		streamResp: []adapter.ChatStreamChunk{
+		streamResp: []openai.ChatStreamChunk{
 			{
 				ID:      "chatcmpl_mock",
 				Model:   "gpt-4.1",
@@ -2094,7 +2209,7 @@ func TestChatCompletionServiceStreamChatCompletionMarksCanceledWithoutFallback(t
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
 		)},
 		&fakeAdapterRegistry{
-			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+			streamChatAdapters: map[string]openai.StreamChatAdapter{
 				"openai-primary":   firstAdapter,
 				"openai-secondary": secondAdapter,
 			},

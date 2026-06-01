@@ -1,4 +1,4 @@
-package gateway
+package chatcompletions
 
 import "github.com/ThankCat/unio-api/internal/core/adapter"
 

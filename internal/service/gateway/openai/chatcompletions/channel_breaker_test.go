@@ -1,11 +1,14 @@
-package gateway
+package chatcompletions
 
 import (
 	"errors"
 	"testing"
 	"time"
 
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
+	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
 
@@ -76,6 +79,30 @@ func TestChannelCircuitBreakerHalfOpenRecovers(t *testing.T) {
 	b.RecordSuccess(key)
 	if !b.Allow(key) {
 		t.Fatal("breaker should close after successful probe")
+	}
+}
+
+func TestChannelCircuitBreakerAvailableDoesNotReserveHalfOpenProbe(t *testing.T) {
+	b, clock := newTestBreaker(ChannelCircuitBreakerConfig{
+		Window:       time.Minute,
+		MinRequests:  2,
+		FailureRatio: 0.5,
+		OpenDuration: 10 * time.Second,
+	})
+
+	key := "1"
+	b.RecordFailure(key)
+	b.RecordFailure(key)
+
+	*clock = clock.Add(11 * time.Second)
+	if !b.Available(key) || !b.Available(key) {
+		t.Fatal("read-only availability should report the cooled-down channel without reserving its probe")
+	}
+	if !b.Allow(key) {
+		t.Fatal("first real attempt should reserve the half-open probe")
+	}
+	if b.Allow(key) {
+		t.Fatal("concurrent real attempt should not reserve a second half-open probe")
 	}
 }
 
@@ -162,6 +189,10 @@ func (f *fakeChannelBreaker) Allow(channelKey string) bool {
 	return !f.denied[channelKey]
 }
 
+func (f *fakeChannelBreaker) Available(channelKey string) bool {
+	return !f.denied[channelKey]
+}
+
 func (f *fakeChannelBreaker) RecordSuccess(channelKey string) {
 	f.successes = append(f.successes, channelKey)
 }
@@ -174,6 +205,7 @@ func newChatCompletionServiceWithBreaker(registry AdapterRegistry, router ChatRo
 	return NewChatCompletionService(
 		router,
 		registry,
+		passthroughCandidatePreparer{inputTokens: 1},
 		ProviderErrorClassifier{},
 		newFakeRequestLogService(),
 		newChatCompletionSettlementForTest(),
@@ -191,7 +223,7 @@ func TestChatCompletionSkipsOpenChannel(t *testing.T) {
 		routeCandidate("openai", 456, "gpt-4.1"),
 	)}
 	registry := &fakeAdapterRegistry{
-		chatAdapters: map[string]adapter.ChatAdapter{"openai": fakeAdapter},
+		chatAdapters: map[string]openai.ChatAdapter{"openai": fakeAdapter},
 	}
 	service := newChatCompletionServiceWithBreaker(registry, router, breaker)
 
@@ -221,7 +253,7 @@ func TestChatCompletionRecordsChannelFailure(t *testing.T) {
 	fakeAdapter := &fakeChatAdapter{chatErr: upstreamErr}
 	router := &fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))}
 	registry := &fakeAdapterRegistry{
-		chatAdapters: map[string]adapter.ChatAdapter{"openai": fakeAdapter},
+		chatAdapters: map[string]openai.ChatAdapter{"openai": fakeAdapter},
 	}
 	service := newChatCompletionServiceWithBreaker(registry, router, breaker)
 
@@ -234,5 +266,88 @@ func TestChatCompletionRecordsChannelFailure(t *testing.T) {
 	}
 	if len(breaker.successes) != 0 {
 		t.Fatalf("expected no successes, got %#v", breaker.successes)
+	}
+}
+
+func TestChatCompletionReleasesAuthorizationWhenBreakerRaceDeniesAllCandidates(t *testing.T) {
+	breaker := &fakeChannelBreaker{denied: map[string]bool{"123": true}}
+	fakeAdapter := &fakeChatAdapter{chatResp: chatResponse("should not call")}
+	requestLog := newFakeRequestLogService()
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 8899},
+	}
+	service := NewChatCompletionService(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
+		&fakeAdapterRegistry{
+			chatAdapters: map[string]openai.ChatAdapter{"openai": fakeAdapter},
+		},
+		passthroughCandidatePreparer{inputTokens: 1},
+		ProviderErrorClassifier{},
+		requestLog,
+		newChatCompletionSettlementForTest(),
+		authorizer,
+		nil,
+		breaker,
+	)
+
+	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
+	if !errors.Is(err, routing.ErrNoAvailableChannel) {
+		t.Fatalf("expected ErrNoAvailableChannel, got %v", err)
+	}
+	if fakeAdapter.chatCalled != 0 {
+		t.Fatalf("expected no adapter call after breaker race, got %d", fakeAdapter.chatCalled)
+	}
+	if len(requestLog.createAttempts) != 0 {
+		t.Fatalf("expected no attempt after breaker race, got %d", len(requestLog.createAttempts))
+	}
+	if len(authorizer.authorizeParams) != 1 {
+		t.Fatalf("expected one request authorization, got %d", len(authorizer.authorizeParams))
+	}
+	if len(authorizer.releaseParams) != 1 || authorizer.releaseParams[0].ReservationID != 8899 {
+		t.Fatalf("expected reservation 8899 to be released, got %#v", authorizer.releaseParams)
+	}
+}
+
+func TestStreamChatCompletionReleasesAuthorizationWhenBreakerRaceDeniesAllCandidates(t *testing.T) {
+	breaker := &fakeChannelBreaker{denied: map[string]bool{"123": true}}
+	fakeAdapter := &fakeChatAdapter{
+		streamResp: []openai.ChatStreamChunk{streamUsageChunk("gpt-4.1")},
+	}
+	requestLog := newFakeRequestLogService()
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 9909},
+	}
+	service := NewChatCompletionService(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
+		&fakeAdapterRegistry{
+			streamChatAdapters: map[string]openai.StreamChatAdapter{"openai": fakeAdapter},
+		},
+		passthroughCandidatePreparer{inputTokens: 1},
+		ProviderErrorClassifier{},
+		requestLog,
+		newChatCompletionSettlementForTest(),
+		authorizer,
+		nil,
+		breaker,
+	)
+
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+		t.Fatalf("expected no stream chunk after breaker race, got %#v", chunk)
+		return nil
+	})
+	if !errors.Is(err, routing.ErrNoAvailableChannel) {
+		t.Fatalf("expected ErrNoAvailableChannel, got %v", err)
+	}
+	if fakeAdapter.streamCalled != 0 {
+		t.Fatalf("expected no stream adapter call after breaker race, got %d", fakeAdapter.streamCalled)
+	}
+	if len(requestLog.createAttempts) != 0 {
+		t.Fatalf("expected no stream attempt after breaker race, got %d", len(requestLog.createAttempts))
+	}
+	if len(authorizer.authorizeParams) != 1 {
+		t.Fatalf("expected one stream authorization, got %d", len(authorizer.authorizeParams))
+	}
+	if len(authorizer.releaseParams) != 1 || authorizer.releaseParams[0].ReservationID != 9909 {
+		t.Fatalf("expected reservation 9909 to be released, got %#v", authorizer.releaseParams)
 	}
 }

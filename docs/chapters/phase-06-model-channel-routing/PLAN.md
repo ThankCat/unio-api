@@ -115,11 +115,11 @@
 3. credential resolver 和 chat routing 构建已从 `cmd/gateway-server/main.go` 迁入 `internal/bootstrap`。
 4. chat gateway、request log、settlement、billing calculator 和 ledger service 构建已从 `cmd/gateway-server/main.go` 迁入 `internal/bootstrap`。
 5. API key auth、model catalog、rate limit 和 HTTP router 构建已从 `cmd/gateway-server/main.go` 迁入 `internal/bootstrap`。
-6. 启动时读取数据库中 enabled provider 的 adapter key。
-7. 启动时校验 adapter registry 同时具备 chat 和 stream chat 能力。
-8. preflight 失败时返回 `bootstrap_*` failure code，并携带 provider_id、provider_slug、adapter_key 和 capability 安全字段。
+6. 启动时读取数据库中 enabled channel 的 `protocol + adapter_key` 复合绑定。
+7. 启动时校验复合绑定存在于双协议 adapter registry；具体 operation capability 由阶段 10 lifecycle 过滤。
+8. preflight 失败时返回 `bootstrap_*` failure code，并携带 channel_id、provider_slug、protocol、adapter_key 和 capability 安全字段。
 9. server app wiring 已收敛到 `internal/bootstrap.NewGatewayServerApp`，`cmd/gateway-server/main.go` 只保留 config、资源启动、HTTP server lifecycle 和退出信号处理。
-10. 阶段 10 会把 runtime 绑定升级为 channel.protocol + channel.adapter_key；后台写入 registry 校验推迟到阶段 11 provider/channel CRUD。
+10. 阶段 10 已把 runtime 绑定升级为 channel.protocol + channel.adapter_key；后台写入 registry 校验推迟到阶段 11 provider/channel CRUD。
 
 计划实现：
 

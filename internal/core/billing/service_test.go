@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"testing"
 
+	coreusage "github.com/ThankCat/unio-api/internal/core/usage"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -18,14 +19,34 @@ func nullNumeric() pgtype.Numeric {
 	return pgtype.Numeric{Valid: false}
 }
 
+type testUsage struct {
+	PromptTokens     int64
+	CompletionTokens int64
+	TotalTokens      int64
+	CachedTokens     int64
+	ReasoningTokens  int64
+}
+
+// testUsageFacts 把旧 OpenAI 形状的测试输入映射成协议无关 facts，便于验证金额兼容性。
+func testUsageFacts(u testUsage) coreusage.Facts {
+	return coreusage.Facts{
+		UncachedInputTokens:     coreusage.KnownTokens(u.PromptTokens - u.CachedTokens),
+		CacheReadInputTokens:    coreusage.KnownTokens(u.CachedTokens),
+		CacheWrite5mInputTokens: coreusage.NotApplicableTokens(),
+		CacheWrite1hInputTokens: coreusage.NotApplicableTokens(),
+		OutputTokensTotal:       coreusage.KnownTokens(u.CompletionTokens),
+		ReasoningOutputTokens:   coreusage.KnownTokens(u.ReasoningTokens),
+	}
+}
+
 // defaultCustomerPriceSnapshot 返回一份支持 token_v1 的基础客户售价快照。
 func defaultCustomerPriceSnapshot() CustomerPriceSnapshot {
 	return CustomerPriceSnapshot{
 		Currency:             "USD",
 		PricingUnit:          PricingUnitPer1MTokens,
-		InputPrice:           numeric(2_0000000000, -10),
+		UncachedInputPrice:   numeric(2_0000000000, -10),
 		OutputPrice:          numeric(8_0000000000, -10),
-		CachedInputPrice:     numeric(5000000000, -10),
+		CacheReadInputPrice:  numeric(5000000000, -10),
 		ReasoningOutputPrice: numeric(12_0000000000, -10),
 		FormulaVersion:       FormulaVersionV1,
 	}
@@ -36,9 +57,9 @@ func defaultProviderCostSnapshot() ProviderCostSnapshot {
 	return ProviderCostSnapshot{
 		Currency:            "USD",
 		PricingUnit:         PricingUnitPer1MTokens,
-		InputCost:           numeric(1_0000000000, -10),
+		UncachedInputCost:   numeric(1_0000000000, -10),
 		OutputCost:          numeric(4_0000000000, -10),
-		CachedInputCost:     numeric(2_000000000, -10),
+		CacheReadInputCost:  numeric(2_000000000, -10),
 		ReasoningOutputCost: numeric(6_0000000000, -10),
 		FormulaVersion:      FormulaVersionV1,
 	}
@@ -64,13 +85,13 @@ func assertNumeric(t *testing.T, got pgtype.Numeric, wantInt int64, wantExp int3
 
 // TestCalculateCustomerChargeChargesTokenClassesSeparately 验证客户扣费按普通、缓存和 reasoning token 分别计费。
 func TestCalculateCustomerChargeChargesTokenClassesSeparately(t *testing.T) {
-	settlement, err := (Service{}).CalculateCustomerCharge(Usage{
+	settlement, err := (Service{}).CalculateCustomerCharge(testUsageFacts(testUsage{
 		PromptTokens:     1000,
 		CompletionTokens: 500,
 		TotalTokens:      1500,
 		CachedTokens:     200,
 		ReasoningTokens:  100,
-	}, defaultCustomerPriceSnapshot())
+	}), defaultCustomerPriceSnapshot())
 	if err != nil {
 		t.Fatalf("calculate customer charge: %v", err)
 	}
@@ -89,16 +110,16 @@ func TestCalculateCustomerChargeChargesTokenClassesSeparately(t *testing.T) {
 // TestCalculateCustomerChargeFallsBackToBasePricesForNullSpecialPrices 验证客户扣费在特殊价格未配置时回退到普通输入/输出价格。
 func TestCalculateCustomerChargeFallsBackToBasePricesForNullSpecialPrices(t *testing.T) {
 	price := defaultCustomerPriceSnapshot()
-	price.CachedInputPrice = nullNumeric()
+	price.CacheReadInputPrice = nullNumeric()
 	price.ReasoningOutputPrice = nullNumeric()
 
-	settlement, err := (Service{}).CalculateCustomerCharge(Usage{
+	settlement, err := (Service{}).CalculateCustomerCharge(testUsageFacts(testUsage{
 		PromptTokens:     1000,
 		CompletionTokens: 500,
 		TotalTokens:      1500,
 		CachedTokens:     200,
 		ReasoningTokens:  100,
-	}, price)
+	}), price)
 	if err != nil {
 		t.Fatalf("calculate customer charge: %v", err)
 	}
@@ -112,11 +133,11 @@ func TestCalculateCustomerChargeDefaultsEmptyFormulaVersion(t *testing.T) {
 	price := defaultCustomerPriceSnapshot()
 	price.FormulaVersion = ""
 
-	settlement, err := (Service{}).CalculateCustomerCharge(Usage{
+	settlement, err := (Service{}).CalculateCustomerCharge(testUsageFacts(testUsage{
 		PromptTokens:     100,
 		CompletionTokens: 50,
 		TotalTokens:      150,
-	}, price)
+	}), price)
 	if err != nil {
 		t.Fatalf("calculate customer charge: %v", err)
 	}
@@ -129,15 +150,15 @@ func TestCalculateCustomerChargeDefaultsEmptyFormulaVersion(t *testing.T) {
 // TestCalculateCustomerChargeRoundsToAmountScale 验证客户扣费金额会四舍五入到 NUMERIC(20,10) 对应的小数位。
 func TestCalculateCustomerChargeRoundsToAmountScale(t *testing.T) {
 	price := defaultCustomerPriceSnapshot()
-	price.InputPrice = numeric(5, -5)
+	price.UncachedInputPrice = numeric(5, -5)
 	price.OutputPrice = numeric(0, 0)
-	price.CachedInputPrice = nullNumeric()
+	price.CacheReadInputPrice = nullNumeric()
 	price.ReasoningOutputPrice = nullNumeric()
 
-	settlement, err := (Service{}).CalculateCustomerCharge(Usage{
+	settlement, err := (Service{}).CalculateCustomerCharge(testUsageFacts(testUsage{
 		PromptTokens: 1,
 		TotalTokens:  1,
-	}, price)
+	}), price)
 	if err != nil {
 		t.Fatalf("calculate customer charge: %v", err)
 	}
@@ -148,13 +169,13 @@ func TestCalculateCustomerChargeRoundsToAmountScale(t *testing.T) {
 
 // TestCalculateProviderCostReturnsCostBreakdown 验证平台成本会保存四类 token 的成本分项和总成本。
 func TestCalculateProviderCostReturnsCostBreakdown(t *testing.T) {
-	cost, err := (Service{}).CalculateProviderCost(Usage{
+	cost, err := (Service{}).CalculateProviderCost(testUsageFacts(testUsage{
 		PromptTokens:     1000,
 		CompletionTokens: 500,
 		TotalTokens:      1500,
 		CachedTokens:     200,
 		ReasoningTokens:  100,
-	}, defaultProviderCostSnapshot())
+	}), defaultProviderCostSnapshot())
 	if err != nil {
 		t.Fatalf("calculate provider cost: %v", err)
 	}
@@ -167,8 +188,8 @@ func TestCalculateProviderCostReturnsCostBreakdown(t *testing.T) {
 	}
 
 	// input=(800*1)/1M, cached=(200*0.2)/1M, output=(400*4)/1M, reasoning=(100*6)/1M。
-	assertNumeric(t, cost.InputCostAmount, 8_000000, -10)
-	assertNumeric(t, cost.CachedInputCostAmount, 400000, -10)
+	assertNumeric(t, cost.UncachedInputCostAmount, 8_000000, -10)
+	assertNumeric(t, cost.CacheReadInputCostAmount, 400000, -10)
 	assertNumeric(t, cost.OutputCostAmount, 16_000000, -10)
 	assertNumeric(t, cost.ReasoningOutputCostAmount, 6_000000, -10)
 	assertNumeric(t, cost.TotalCostAmount, 30_400000, -10)
@@ -177,23 +198,23 @@ func TestCalculateProviderCostReturnsCostBreakdown(t *testing.T) {
 // TestCalculateProviderCostFallsBackToBaseCostsForNullSpecialCosts 验证特殊成本未配置时回退到普通输入/输出成本。
 func TestCalculateProviderCostFallsBackToBaseCostsForNullSpecialCosts(t *testing.T) {
 	costSnapshot := defaultProviderCostSnapshot()
-	costSnapshot.CachedInputCost = nullNumeric()
+	costSnapshot.CacheReadInputCost = nullNumeric()
 	costSnapshot.ReasoningOutputCost = nullNumeric()
 
-	cost, err := (Service{}).CalculateProviderCost(Usage{
+	cost, err := (Service{}).CalculateProviderCost(testUsageFacts(testUsage{
 		PromptTokens:     1000,
 		CompletionTokens: 500,
 		TotalTokens:      1500,
 		CachedTokens:     200,
 		ReasoningTokens:  100,
-	}, costSnapshot)
+	}), costSnapshot)
 	if err != nil {
 		t.Fatalf("calculate provider cost: %v", err)
 	}
 
 	// cached 回退 input=1，reasoning 回退 output=4，总成本为 0.0030000000。
-	assertNumeric(t, cost.InputCostAmount, 8_000000, -10)
-	assertNumeric(t, cost.CachedInputCostAmount, 2_000000, -10)
+	assertNumeric(t, cost.UncachedInputCostAmount, 8_000000, -10)
+	assertNumeric(t, cost.CacheReadInputCostAmount, 2_000000, -10)
 	assertNumeric(t, cost.OutputCostAmount, 16_000000, -10)
 	assertNumeric(t, cost.ReasoningOutputCostAmount, 4_000000, -10)
 	assertNumeric(t, cost.TotalCostAmount, 30_000000, -10)
@@ -202,7 +223,7 @@ func TestCalculateProviderCostFallsBackToBaseCostsForNullSpecialCosts(t *testing
 // TestEstimateAuthorizationAmountUsesHigherCompletionPrice 验证冻结金额按 output/reasoning 中更贵的 completion 价格计算。
 func TestEstimateAuthorizationAmountUsesHigherCompletionPrice(t *testing.T) {
 	settlement, err := (Service{}).EstimateAuthorizationAmount(AuthorizationEstimate{
-		PromptTokens:        1000,
+		InputTokens:         1000,
 		MaxCompletionTokens: 500,
 	}, defaultCustomerPriceSnapshot())
 	if err != nil {
@@ -226,7 +247,7 @@ func TestEstimateAuthorizationAmountFallsBackToOutputPrice(t *testing.T) {
 	price.ReasoningOutputPrice = nullNumeric()
 
 	settlement, err := (Service{}).EstimateAuthorizationAmount(AuthorizationEstimate{
-		PromptTokens:        1000,
+		InputTokens:         1000,
 		MaxCompletionTokens: 500,
 	}, price)
 	if err != nil {
@@ -245,7 +266,7 @@ func TestEstimateAuthorizationAmountRejectsInvalidEstimate(t *testing.T) {
 	}{
 		{
 			name:     "negative prompt tokens",
-			estimate: AuthorizationEstimate{PromptTokens: -1},
+			estimate: AuthorizationEstimate{InputTokens: -1},
 		},
 		{
 			name:     "negative max completion tokens",
@@ -267,23 +288,27 @@ func TestEstimateAuthorizationAmountRejectsInvalidEstimate(t *testing.T) {
 func TestCalculateCustomerChargeRejectsInvalidUsage(t *testing.T) {
 	tests := []struct {
 		name  string
-		usage Usage
+		usage coreusage.Facts
 	}{
 		{
 			name:  "negative prompt tokens",
-			usage: Usage{PromptTokens: -1},
+			usage: testUsageFacts(testUsage{PromptTokens: -1}),
 		},
 		{
-			name:  "total token mismatch",
-			usage: Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 16},
+			name: "unknown output tokens",
+			usage: func() coreusage.Facts {
+				facts := testUsageFacts(testUsage{PromptTokens: 10, CompletionTokens: 5})
+				facts.OutputTokensTotal = coreusage.UnknownTokens()
+				return facts
+			}(),
 		},
 		{
 			name:  "cached tokens exceed prompt tokens",
-			usage: Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15, CachedTokens: 11},
+			usage: testUsageFacts(testUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15, CachedTokens: 11}),
 		},
 		{
 			name:  "reasoning tokens exceed completion tokens",
-			usage: Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15, ReasoningTokens: 6},
+			usage: testUsageFacts(testUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15, ReasoningTokens: 6}),
 		},
 	}
 
@@ -299,7 +324,7 @@ func TestCalculateCustomerChargeRejectsInvalidUsage(t *testing.T) {
 
 // TestCalculateCustomerChargeRejectsInvalidRate 验证客户售价快照缺少必填单价或含负数时会失败。
 func TestCalculateCustomerChargeRejectsInvalidRate(t *testing.T) {
-	validUsage := Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}
+	validUsage := testUsageFacts(testUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15})
 
 	tests := []struct {
 		name  string
@@ -317,7 +342,7 @@ func TestCalculateCustomerChargeRejectsInvalidRate(t *testing.T) {
 			name: "missing input price",
 			price: func() CustomerPriceSnapshot {
 				price := defaultCustomerPriceSnapshot()
-				price.InputPrice = nullNumeric()
+				price.UncachedInputPrice = nullNumeric()
 				return price
 			}(),
 		},
@@ -333,7 +358,7 @@ func TestCalculateCustomerChargeRejectsInvalidRate(t *testing.T) {
 			name: "negative cached input price",
 			price: func() CustomerPriceSnapshot {
 				price := defaultCustomerPriceSnapshot()
-				price.CachedInputPrice = numeric(-1, 0)
+				price.CacheReadInputPrice = numeric(-1, 0)
 				return price
 			}(),
 		},
@@ -354,7 +379,7 @@ func TestCalculateCustomerChargeRejectsUnsupportedPricingUnit(t *testing.T) {
 	price := defaultCustomerPriceSnapshot()
 	price.PricingUnit = "per_token"
 
-	_, err := (Service{}).CalculateCustomerCharge(Usage{PromptTokens: 10, TotalTokens: 10}, price)
+	_, err := (Service{}).CalculateCustomerCharge(testUsageFacts(testUsage{PromptTokens: 10, TotalTokens: 10}), price)
 	if !errors.Is(err, ErrUnsupportedPricingUnit) {
 		t.Fatalf("expected ErrUnsupportedPricingUnit, got %v", err)
 	}
@@ -365,7 +390,7 @@ func TestCalculateCustomerChargeRejectsUnsupportedFormula(t *testing.T) {
 	price := defaultCustomerPriceSnapshot()
 	price.FormulaVersion = "token_v2"
 
-	_, err := (Service{}).CalculateCustomerCharge(Usage{PromptTokens: 10, TotalTokens: 10}, price)
+	_, err := (Service{}).CalculateCustomerCharge(testUsageFacts(testUsage{PromptTokens: 10, TotalTokens: 10}), price)
 	if !errors.Is(err, ErrUnsupportedFormula) {
 		t.Fatalf("expected ErrUnsupportedFormula, got %v", err)
 	}

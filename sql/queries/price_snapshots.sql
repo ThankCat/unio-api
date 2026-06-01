@@ -5,49 +5,31 @@ INSERT INTO price_snapshots (
     price_id,
     currency,
     pricing_unit,
-    input_price,
+    uncached_input_price,
+    cache_read_input_price,
+    cache_write_5m_input_price,
+    cache_write_1h_input_price,
     output_price,
-    cached_input_price,
     reasoning_output_price,
     formula_version
 )
 VALUES (
-           sqlc.arg(request_record_id),
-           sqlc.arg(price_id),
-           sqlc.arg(currency),
-           sqlc.arg(pricing_unit),
-           sqlc.arg(input_price),
-           sqlc.arg(output_price),
-           sqlc.arg(cached_input_price),
-           sqlc.arg(reasoning_output_price),
-           sqlc.arg(formula_version)
-       )
-RETURNING
-    id,
-    request_record_id,
-    price_id,
-    currency,
-    pricing_unit,
-    input_price,
-    output_price,
-    cached_input_price,
-    reasoning_output_price,
-    formula_version,
-    created_at;
+    sqlc.arg(request_record_id),
+    sqlc.arg(price_id),
+    sqlc.arg(currency),
+    sqlc.arg(pricing_unit),
+    sqlc.arg(uncached_input_price),
+    sqlc.arg(cache_read_input_price),
+    sqlc.arg(cache_write_5m_input_price),
+    sqlc.arg(cache_write_1h_input_price),
+    sqlc.arg(output_price),
+    sqlc.arg(reasoning_output_price),
+    sqlc.arg(formula_version)
+)
+RETURNING *;
 
 -- name: GetPriceSnapshotByRequest :one
 -- GetPriceSnapshotByRequest 按请求 ID 读取客户售价快照。
-SELECT
-    id,
-    request_record_id,
-    price_id,
-    currency,
-    pricing_unit,
-    input_price,
-    output_price,
-    cached_input_price,
-    reasoning_output_price,
-    formula_version,
-    created_at
+SELECT *
 FROM price_snapshots
 WHERE request_record_id = sqlc.arg(request_record_id);

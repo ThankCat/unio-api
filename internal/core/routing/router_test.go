@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/credential"
+	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -103,8 +104,9 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	router := NewRouter(store, decryptor, 30*time.Second)
 
 	got, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID: 42,
-		ModelID:   "openai/gpt-4.1",
+		ProjectID:       42,
+		ModelID:         "openai/gpt-4.1",
+		IngressProtocol: ProtocolOpenAI,
 	})
 	if err != nil {
 		t.Fatalf("PlanChat returned error: %v", err)
@@ -115,6 +117,9 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	}
 	if store.params.RequestedModelID != "openai/gpt-4.1" {
 		t.Fatalf("expected requested model %q, got %q", "openai/gpt-4.1", store.params.RequestedModelID)
+	}
+	if store.params.IngressProtocol != ProtocolOpenAI {
+		t.Fatalf("expected ingress protocol %q, got %q", ProtocolOpenAI, store.params.IngressProtocol)
 	}
 	if len(decryptor.ciphertexts) != 2 {
 		t.Fatalf("expected 2 credential decrypt calls, got %d", len(decryptor.ciphertexts))
@@ -181,8 +186,9 @@ func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 0)
 
 	got, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID: 42,
-		ModelID:   "openai/gpt-4.1",
+		ProjectID:       42,
+		ModelID:         "openai/gpt-4.1",
+		IngressProtocol: ProtocolOpenAI,
 	})
 	if err != nil {
 		t.Fatalf("PlanChat returned error: %v", err)
@@ -201,8 +207,9 @@ func TestRouterPlanChatReturnsNoAvailableChannel(t *testing.T) {
 	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID: 42,
-		ModelID:   "openai/gpt-4.1",
+		ProjectID:       42,
+		ModelID:         "openai/gpt-4.1",
+		IngressProtocol: ProtocolOpenAI,
 	})
 	if !errors.Is(err, ErrNoAvailableChannel) {
 		t.Fatalf("expected ErrNoAvailableChannel, got %v", err)
@@ -223,8 +230,9 @@ func TestRouterPlanChatReturnsModelNotFound(t *testing.T) {
 	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID: 42,
-		ModelID:   "openai/missing",
+		ProjectID:       42,
+		ModelID:         "openai/missing",
+		IngressProtocol: ProtocolOpenAI,
 	})
 	if !errors.Is(err, ErrModelNotFound) {
 		t.Fatalf("expected ErrModelNotFound, got %v", err)
@@ -242,8 +250,9 @@ func TestRouterPlanChatReturnsModelNotAvailable(t *testing.T) {
 	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID: 42,
-		ModelID:   "openai/gpt-4.1",
+		ProjectID:       42,
+		ModelID:         "openai/gpt-4.1",
+		IngressProtocol: ProtocolOpenAI,
 	})
 	if !errors.Is(err, ErrModelNotAvailable) {
 		t.Fatalf("expected ErrModelNotAvailable, got %v", err)
@@ -255,8 +264,9 @@ func TestRouterPlanChatReturnsStoreError(t *testing.T) {
 	router := NewRouter(&fakeStore{err: storeErr}, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID: 42,
-		ModelID:   "openai/gpt-4.1",
+		ProjectID:       42,
+		ModelID:         "openai/gpt-4.1",
+		IngressProtocol: ProtocolOpenAI,
 	})
 	if !errors.Is(err, storeErr) {
 		t.Fatalf("expected store error, got %v", err)
@@ -280,8 +290,9 @@ func TestRouterPlanChatReturnsCredentialDecryptError(t *testing.T) {
 	router := NewRouter(store, &fakeCredentialDecryptor{err: decryptErr}, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID: 42,
-		ModelID:   "openai/gpt-4.1",
+		ProjectID:       42,
+		ModelID:         "openai/gpt-4.1",
+		IngressProtocol: ProtocolOpenAI,
 	})
 	if !errors.Is(err, decryptErr) {
 		t.Fatalf("expected credential decrypt error, got %v", err)
@@ -304,10 +315,31 @@ func TestRouterPlanChatReturnsMissingCredentialError(t *testing.T) {
 	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID: 42,
-		ModelID:   "openai/gpt-4.1",
+		ProjectID:       42,
+		ModelID:         "openai/gpt-4.1",
+		IngressProtocol: ProtocolOpenAI,
 	})
 	if !errors.Is(err, ErrChannelCredentialMissing) {
 		t.Fatalf("expected ErrChannelCredentialMissing, got %v", err)
+	}
+}
+
+func TestRouterPlanChatRejectsInvalidIngressProtocolBeforeQuery(t *testing.T) {
+	store := &fakeStore{}
+	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
+
+	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		ProjectID:       42,
+		ModelID:         "openai/gpt-4.1",
+		IngressProtocol: "unknown",
+	})
+	if !errors.Is(err, ErrIngressProtocolInvalid) {
+		t.Fatalf("expected ErrIngressProtocolInvalid, got %v", err)
+	}
+	if got := failure.CodeOf(err); got != failure.CodeRoutingProtocolInvalid {
+		t.Fatalf("expected code %q, got %q", failure.CodeRoutingProtocolInvalid, got)
+	}
+	if store.params != (sqlc.FindRouteCandidatesParams{}) {
+		t.Fatalf("expected store query to be skipped, got %#v", store.params)
 	}
 }

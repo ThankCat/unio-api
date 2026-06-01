@@ -15,17 +15,31 @@ CREATE TABLE prices (
     -- pricing_unit: 计价单位。--
     pricing_unit TEXT NOT NULL CHECK (pricing_unit = 'per_1m_tokens'),
 
-    -- input_price: 每计价单位输入 token 售价。--
-    input_price NUMERIC(20, 10) NOT NULL CHECK (input_price >= 0),
+    -- uncached_input_price: 每计价单位未缓存输入 token 售价。--
+    uncached_input_price NUMERIC(20, 10) NOT NULL CHECK (uncached_input_price >= 0),
 
-    -- output_price: 每计价单位输出 token 售价。--
+    -- cache_read_input_price: 每计价单位缓存读取输入 token 售价。--
+    cache_read_input_price NUMERIC(20, 10) CHECK (
+        cache_read_input_price IS NULL OR cache_read_input_price >= 0
+    ),
+
+    -- cache_write_5m_input_price: 每计价单位 5 分钟缓存写入输入 token 售价。--
+    cache_write_5m_input_price NUMERIC(20, 10) CHECK (
+        cache_write_5m_input_price IS NULL OR cache_write_5m_input_price >= 0
+    ),
+
+    -- cache_write_1h_input_price: 每计价单位 1 小时缓存写入输入 token 售价。--
+    cache_write_1h_input_price NUMERIC(20, 10) CHECK (
+        cache_write_1h_input_price IS NULL OR cache_write_1h_input_price >= 0
+    ),
+
+    -- output_price: 每计价单位权威输出 token 售价。--
     output_price NUMERIC(20, 10) NOT NULL CHECK (output_price >= 0),
 
-    -- cached_input_price: 每计价单位缓存输入 token 售价。--
-    cached_input_price NUMERIC(20, 10) CHECK (cached_input_price IS NULL OR cached_input_price >= 0),
-
     -- reasoning_output_price: 每计价单位 reasoning 输出 token 售价。--
-    reasoning_output_price NUMERIC(20, 10) CHECK (reasoning_output_price IS NULL OR reasoning_output_price >= 0),
+    reasoning_output_price NUMERIC(20, 10) CHECK (
+        reasoning_output_price IS NULL OR reasoning_output_price >= 0
+    ),
 
     -- status: 价格启停状态。--
     status TEXT NOT NULL CHECK (status IN ('enabled', 'disabled')),

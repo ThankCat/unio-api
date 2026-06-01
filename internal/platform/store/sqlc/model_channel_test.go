@@ -53,15 +53,17 @@ func newModelChannelTestTx(t *testing.T) (context.Context, pgx.Tx, *sqlc.Queries
 }
 
 // insertProvider 插入测试 provider，并返回数据库主键。
-func insertProvider(t *testing.T, ctx context.Context, tx pgx.Tx, slug string, adapter string, status string) int64 {
+//
+// Phase 10 起 provider 不再持有 adapter 绑定；adapter_key 已下沉到 channel。
+func insertProvider(t *testing.T, ctx context.Context, tx pgx.Tx, slug string, status string) int64 {
 	t.Helper()
 
 	var id int64
 	err := tx.QueryRow(ctx, `
-		INSERT INTO providers (slug, name, adapter, status)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO providers (slug, name, status)
+		VALUES ($1, $2, $3)
 		RETURNING id
-	`, slug, slug, adapter, status).Scan(&id)
+	`, slug, slug, status).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert provider %q: %v", slug, err)
 	}
@@ -69,8 +71,15 @@ func insertProvider(t *testing.T, ctx context.Context, tx pgx.Tx, slug string, a
 	return id
 }
 
-// insertChannel 插入测试 channel，并返回数据库主键。
+// insertChannel 插入测试 channel（默认 protocol=openai、adapter_key=openai），并返回数据库主键。
 func insertChannel(t *testing.T, ctx context.Context, tx pgx.Tx, providerID int64, name string, status string, priority int32, timeoutMS *int32) int64 {
+	t.Helper()
+
+	return insertChannelWithBinding(t, ctx, tx, providerID, name, "openai", "openai", status, priority, timeoutMS)
+}
+
+// insertChannelWithBinding 插入指定 protocol 与 adapter_key 的测试 channel，用于验证同协议路由过滤。
+func insertChannelWithBinding(t *testing.T, ctx context.Context, tx pgx.Tx, providerID int64, name string, protocol string, adapterKey string, status string, priority int32, timeoutMS *int32) int64 {
 	t.Helper()
 
 	var timeout any
@@ -85,10 +94,10 @@ func insertChannel(t *testing.T, ctx context.Context, tx pgx.Tx, providerID int6
 
 	var id int64
 	err = tx.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, name, base_url, credential_encrypted, status, priority, timeout_ms)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id
-	`, providerID, name, "https://"+name+".example.test/v1", credentialEncrypted, status, priority, timeout).Scan(&id)
+	`, providerID, name, protocol, adapterKey, "https://"+name+".example.test/v1", credentialEncrypted, status, priority, timeout).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert channel %q: %v", name, err)
 	}
@@ -268,7 +277,7 @@ func TestListAvailableModelsForProjectFiltersDisabledRelations(t *testing.T) {
 	suffix := time.Now().UnixNano()
 	timeoutMS := int32(30000)
 
-	enabledProviderID := insertProvider(t, ctx, tx, fmt.Sprintf("catalog-openai-%d", suffix), "openai", "enabled")
+	enabledProviderID := insertProvider(t, ctx, tx, fmt.Sprintf("catalog-openai-%d", suffix), "enabled")
 	enabledChannelID := insertChannel(t, ctx, tx, enabledProviderID, fmt.Sprintf("catalog-openai-main-%d", suffix), "enabled", 10, &timeoutMS)
 	duplicateChannelID := insertChannel(t, ctx, tx, enabledProviderID, fmt.Sprintf("catalog-openai-backup-%d", suffix), "enabled", 20, &timeoutMS)
 
@@ -290,7 +299,7 @@ func TestListAvailableModelsForProjectFiltersDisabledRelations(t *testing.T) {
 	disabledChannelModelID := insertModel(t, ctx, tx, disabledChannelModel, "openai", "enabled")
 	insertChannelModel(t, ctx, tx, disabledChannelID, disabledChannelModelID, "catalog-disabled-channel", "enabled")
 
-	disabledProviderID := insertProvider(t, ctx, tx, fmt.Sprintf("catalog-disabled-provider-%d", suffix), "openai", "disabled")
+	disabledProviderID := insertProvider(t, ctx, tx, fmt.Sprintf("catalog-disabled-provider-%d", suffix), "disabled")
 	disabledProviderChannelID := insertChannel(t, ctx, tx, disabledProviderID, fmt.Sprintf("catalog-disabled-provider-channel-%d", suffix), "enabled", 1, &timeoutMS)
 	disabledProviderModel := fmt.Sprintf("openai/catalog-disabled-provider-%d", suffix)
 	disabledProviderModelID := insertModel(t, ctx, tx, disabledProviderModel, "openai", "enabled")
@@ -344,7 +353,7 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 	suffix := time.Now().UnixNano()
 	timeoutMS := int32(15000)
 
-	enabledProviderID := insertProvider(t, ctx, tx, fmt.Sprintf("routing-openai-%d", suffix), "openai", "enabled")
+	enabledProviderID := insertProvider(t, ctx, tx, fmt.Sprintf("routing-openai-%d", suffix), "enabled")
 	requestedModel := fmt.Sprintf("openai/routing-gpt-%d", suffix)
 	modelID := insertModel(t, ctx, tx, requestedModel, "openai", "enabled")
 
@@ -354,7 +363,7 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 	disabledChannelID := insertChannel(t, ctx, tx, enabledProviderID, fmt.Sprintf("routing-disabled-channel-%d", suffix), "disabled", 0, &timeoutMS)
 	disabledMappingChannelID := insertChannel(t, ctx, tx, enabledProviderID, fmt.Sprintf("routing-disabled-mapping-%d", suffix), "enabled", 0, &timeoutMS)
 
-	disabledProviderID := insertProvider(t, ctx, tx, fmt.Sprintf("routing-disabled-provider-%d", suffix), "openai", "disabled")
+	disabledProviderID := insertProvider(t, ctx, tx, fmt.Sprintf("routing-disabled-provider-%d", suffix), "disabled")
 	disabledProviderChannelID := insertChannel(t, ctx, tx, disabledProviderID, fmt.Sprintf("routing-disabled-provider-channel-%d", suffix), "enabled", 0, &timeoutMS)
 
 	insertChannelModel(t, ctx, tx, fallbackChannelID, modelID, "gpt-routing-fallback", "enabled")
@@ -366,6 +375,7 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 
 	got, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: requestedModel,
+		IngressProtocol:  "openai",
 		ProjectID:        1,
 	})
 	if err != nil {
@@ -410,6 +420,7 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 
 	disabledModelCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: disabledModel,
+		IngressProtocol:  "openai",
 		ProjectID:        1,
 	})
 	if err != nil {
@@ -421,6 +432,7 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 
 	unknownCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: fmt.Sprintf("openai/routing-unknown-%d", suffix),
+		IngressProtocol:  "openai",
 		ProjectID:        1,
 	})
 	if err != nil {
@@ -439,7 +451,7 @@ func TestProjectModelPolicyDeniedFiltersCatalogAndRouting(t *testing.T) {
 	timeoutMS := int32(15000)
 	projectID := createProjectForModelPolicy(t, ctx, queries, suffix)
 
-	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("policy-deny-provider-%d", suffix), "openai", "enabled")
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("policy-deny-provider-%d", suffix), "enabled")
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("policy-deny-channel-%d", suffix), "enabled", 10, &timeoutMS)
 
 	visibleModel := fmt.Sprintf("openai/policy-visible-%d", suffix)
@@ -464,6 +476,7 @@ func TestProjectModelPolicyDeniedFiltersCatalogAndRouting(t *testing.T) {
 
 	visibleCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: visibleModel,
+		IngressProtocol:  "openai",
 		ProjectID:        projectID,
 	})
 	if err != nil {
@@ -475,6 +488,7 @@ func TestProjectModelPolicyDeniedFiltersCatalogAndRouting(t *testing.T) {
 
 	deniedCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: deniedModel,
+		IngressProtocol:  "openai",
 		ProjectID:        projectID,
 	})
 	if err != nil {
@@ -493,7 +507,7 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 	timeoutMS := int32(15000)
 	projectID := createProjectForModelPolicy(t, ctx, queries, suffix)
 
-	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("policy-allow-provider-%d", suffix), "openai", "enabled")
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("policy-allow-provider-%d", suffix), "enabled")
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("policy-allow-channel-%d", suffix), "enabled", 10, &timeoutMS)
 
 	allowedModel := fmt.Sprintf("openai/policy-allowed-%d", suffix)
@@ -518,6 +532,7 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 
 	allowedCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: allowedModel,
+		IngressProtocol:  "openai",
 		ProjectID:        projectID,
 	})
 	if err != nil {
@@ -529,6 +544,7 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 
 	inheritedCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: inheritedModel,
+		IngressProtocol:  "openai",
 		ProjectID:        projectID,
 	})
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
+	gatewayopenai "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/platform/config"
@@ -20,7 +21,7 @@ func NewHTTPHandler(
 	queries *sqlc.Queries,
 	redisClient redis.Cmdable,
 	cfg config.Config,
-	chatCompletionService gatewayapi.ChatCompletionService,
+	chatCompletionService gatewayopenai.ChatCompletionService,
 	metricsRecorder *metrics.Metrics,
 ) http.Handler {
 	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)

@@ -1,11 +1,12 @@
-package gateway
+package chatcompletions
 
 import (
 	"context"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
+	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
 // ChatRouter 定义 gateway 为 chat 请求生成有序 route plan 所需的 routing 能力。
@@ -15,9 +16,9 @@ type ChatRouter interface {
 
 // AdapterRegistry 定义 gateway 根据 routing 返回的 adapter key 查找具体 adapter 的能力。
 type AdapterRegistry interface {
-	Chat(adapterKey string) (adapter.ChatAdapter, bool)
-	StreamChat(adapterKey string) (adapter.StreamChatAdapter, bool)
-	ChatInputTokenizer(adapterKey string) (adapter.ChatInputTokenizer, bool)
+	Chat(adapterKey string) (openai.ChatAdapter, bool)
+	StreamChat(adapterKey string) (openai.StreamChatAdapter, bool)
+	ChatInputTokenizer(adapterKey string) (openai.ChatInputTokenizer, bool)
 }
 
 // RetryClassifier 定义 gateway 判断一次上游错误是否允许尝试下一个同模型 channel 的能力。
@@ -34,6 +35,7 @@ type ChatSettlementExecutor interface {
 type ChatCompletionService struct {
 	router          ChatRouter
 	registry        AdapterRegistry
+	candidates      lifecycle.CandidatePreparer
 	retryClassifier RetryClassifier
 	requestLog      requestlog.Service
 	chatSettlement  ChatSettlementExecutor
@@ -47,6 +49,7 @@ type ChatCompletionService struct {
 func NewChatCompletionService(
 	router ChatRouter,
 	registry AdapterRegistry,
+	candidates lifecycle.CandidatePreparer,
 	retryClassifier RetryClassifier,
 	requestLog requestlog.Service,
 	chatSettlement ChatSettlementExecutor,
@@ -56,6 +59,9 @@ func NewChatCompletionService(
 ) *ChatCompletionService {
 	if retryClassifier == nil {
 		retryClassifier = NeverRetryClassifier{}
+	}
+	if candidates == nil {
+		panic("gateway: lifecycle candidate preparer is required")
 	}
 	if requestLog == nil {
 		panic("gateway: request log service is required")
@@ -69,6 +75,7 @@ func NewChatCompletionService(
 	return &ChatCompletionService{
 		router:          router,
 		registry:        registry,
+		candidates:      candidates,
 		retryClassifier: retryClassifier,
 		requestLog:      requestLog,
 		chatSettlement:  chatSettlement,

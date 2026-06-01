@@ -1,4 +1,4 @@
-package gateway
+package chatcompletions
 
 import (
 	"testing"
@@ -7,7 +7,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
+	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
 )
 
 // TestChatCompletionServiceCreatesSpanHierarchy 验证非流式成功请求产生 gateway/routing/adapter/settlement span，
@@ -22,11 +22,12 @@ func TestChatCompletionServiceCreatesSpanHierarchy(t *testing.T) {
 	fakeAdapter := &fakeChatAdapter{chatResp: chatResponse("ok")}
 	router := &fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))}
 	registry := &fakeAdapterRegistry{
-		chatAdapters: map[string]adapter.ChatAdapter{"openai": fakeAdapter},
+		chatAdapters: map[string]openai.ChatAdapter{"openai": fakeAdapter},
 	}
 	service := NewChatCompletionService(
 		router,
 		registry,
+		passthroughCandidatePreparer{inputTokens: 1},
 		ProviderErrorClassifier{},
 		newFakeRequestLogService(),
 		newChatCompletionSettlementForTest(),

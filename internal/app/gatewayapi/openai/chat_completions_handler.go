@@ -1,4 +1,4 @@
-package gatewayapi
+package openai
 
 import (
 	"context"
@@ -30,6 +30,11 @@ type ChatCompletionService interface {
 // chatCompletionsHandler 处理 OpenAI-compatible chat completions 请求。
 type chatCompletionsHandler struct {
 	service ChatCompletionService
+}
+
+// NewChatCompletionsHandler 构造 OpenAI chat completions HTTP handler，供 gatewayapi router 挂载。
+func NewChatCompletionsHandler(service ChatCompletionService) http.Handler {
+	return &chatCompletionsHandler{service: service}
 }
 
 // ServeHTTP 解析请求、调用 service，并写出 HTTP 响应。
@@ -147,6 +152,20 @@ func mapChatServiceError(req ChatCompletionRequest, err error, fallbackCode stri
 			errorType: "insufficient_quota",
 			param:     nil,
 		}
+	case failure.CodeOf(err) == failure.CodeAdapterRequestUnsupported:
+		// adapter 在调用上游前明确拒绝当前 provider 无法保持语义的字段。
+		param := chatErrorFieldParam(err)
+		message := "This model does not support one of the request parameters."
+		if param != nil {
+			message = fmt.Sprintf("This model does not support the parameter: %s.", *param)
+		}
+		return chatServiceErrorResponse{
+			status:    http.StatusBadRequest,
+			code:      "unsupported_parameter",
+			message:   message,
+			errorType: "invalid_request_error",
+			param:     param,
+		}
 	case errors.Is(err, routing.ErrModelNotFound), errors.Is(err, routing.ErrModelNotAvailable):
 		return chatServiceErrorResponse{
 			status:    http.StatusNotFound,
@@ -172,6 +191,20 @@ func mapChatServiceError(req ChatCompletionRequest, err error, fallbackCode stri
 			param:     nil,
 		}
 	}
+}
+
+// chatErrorFieldParam 从内部 failure 中提取安全的 "param" 字段，用于在 OpenAI 错误响应中定位字段。
+func chatErrorFieldParam(err error) *string {
+	for _, field := range failure.FieldsOf(err) {
+		if field.Key != "param" {
+			continue
+		}
+		if value, ok := field.Value.(string); ok && value != "" {
+			return stringPtr(value)
+		}
+	}
+
+	return nil
 }
 
 // writeJSONDecodeError 将 JSON decode 错误转换成 OpenAI-compatible 错误响应。

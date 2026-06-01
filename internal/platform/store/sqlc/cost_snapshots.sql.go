@@ -21,13 +21,17 @@ INSERT INTO cost_snapshots (
     upstream_model,
     currency,
     pricing_unit,
-    input_cost,
+    uncached_input_cost,
+    cache_read_input_cost,
+    cache_write_5m_input_cost,
+    cache_write_1h_input_cost,
     output_cost,
-    cached_input_cost,
     reasoning_output_cost,
-    input_cost_amount,
+    uncached_input_cost_amount,
+    cache_read_input_cost_amount,
+    cache_write_5m_input_cost_amount,
+    cache_write_1h_input_cost_amount,
     output_cost_amount,
-    cached_input_cost_amount,
     reasoning_output_cost_amount,
     total_cost_amount,
     formula_version
@@ -50,50 +54,38 @@ VALUES (
     $15,
     $16,
     $17,
-    $18
+    $18,
+    $19,
+    $20,
+    $21,
+    $22
 )
-RETURNING
-    id,
-    request_record_id,
-    cost_price_id,
-    provider_id,
-    channel_id,
-    model_id,
-    upstream_model,
-    currency,
-    pricing_unit,
-    input_cost,
-    output_cost,
-    cached_input_cost,
-    reasoning_output_cost,
-    input_cost_amount,
-    output_cost_amount,
-    cached_input_cost_amount,
-    reasoning_output_cost_amount,
-    total_cost_amount,
-    formula_version,
-    created_at
+RETURNING id, request_record_id, cost_price_id, provider_id, channel_id, model_id, upstream_model, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, uncached_input_cost_amount, cache_read_input_cost_amount, cache_write_5m_input_cost_amount, cache_write_1h_input_cost_amount, output_cost_amount, reasoning_output_cost_amount, total_cost_amount, formula_version, created_at
 `
 
 type CreateCostSnapshotParams struct {
-	RequestRecordID           int64
-	CostPriceID               int64
-	ProviderID                int64
-	ChannelID                 int64
-	ModelID                   int64
-	UpstreamModel             string
-	Currency                  string
-	PricingUnit               string
-	InputCost                 pgtype.Numeric
-	OutputCost                pgtype.Numeric
-	CachedInputCost           pgtype.Numeric
-	ReasoningOutputCost       pgtype.Numeric
-	InputCostAmount           pgtype.Numeric
-	OutputCostAmount          pgtype.Numeric
-	CachedInputCostAmount     pgtype.Numeric
-	ReasoningOutputCostAmount pgtype.Numeric
-	TotalCostAmount           pgtype.Numeric
-	FormulaVersion            string
+	RequestRecordID             int64
+	CostPriceID                 int64
+	ProviderID                  int64
+	ChannelID                   int64
+	ModelID                     int64
+	UpstreamModel               string
+	Currency                    string
+	PricingUnit                 string
+	UncachedInputCost           pgtype.Numeric
+	CacheReadInputCost          pgtype.Numeric
+	CacheWrite5mInputCost       pgtype.Numeric
+	CacheWrite1hInputCost       pgtype.Numeric
+	OutputCost                  pgtype.Numeric
+	ReasoningOutputCost         pgtype.Numeric
+	UncachedInputCostAmount     pgtype.Numeric
+	CacheReadInputCostAmount    pgtype.Numeric
+	CacheWrite5mInputCostAmount pgtype.Numeric
+	CacheWrite1hInputCostAmount pgtype.Numeric
+	OutputCostAmount            pgtype.Numeric
+	ReasoningOutputCostAmount   pgtype.Numeric
+	TotalCostAmount             pgtype.Numeric
+	FormulaVersion              string
 }
 
 // CreateCostSnapshot 创建一次请求结算使用的上游成本价快照和实际成本事实。
@@ -107,13 +99,17 @@ func (q *Queries) CreateCostSnapshot(ctx context.Context, arg CreateCostSnapshot
 		arg.UpstreamModel,
 		arg.Currency,
 		arg.PricingUnit,
-		arg.InputCost,
+		arg.UncachedInputCost,
+		arg.CacheReadInputCost,
+		arg.CacheWrite5mInputCost,
+		arg.CacheWrite1hInputCost,
 		arg.OutputCost,
-		arg.CachedInputCost,
 		arg.ReasoningOutputCost,
-		arg.InputCostAmount,
+		arg.UncachedInputCostAmount,
+		arg.CacheReadInputCostAmount,
+		arg.CacheWrite5mInputCostAmount,
+		arg.CacheWrite1hInputCostAmount,
 		arg.OutputCostAmount,
-		arg.CachedInputCostAmount,
 		arg.ReasoningOutputCostAmount,
 		arg.TotalCostAmount,
 		arg.FormulaVersion,
@@ -129,13 +125,17 @@ func (q *Queries) CreateCostSnapshot(ctx context.Context, arg CreateCostSnapshot
 		&i.UpstreamModel,
 		&i.Currency,
 		&i.PricingUnit,
-		&i.InputCost,
+		&i.UncachedInputCost,
+		&i.CacheReadInputCost,
+		&i.CacheWrite5mInputCost,
+		&i.CacheWrite1hInputCost,
 		&i.OutputCost,
-		&i.CachedInputCost,
 		&i.ReasoningOutputCost,
-		&i.InputCostAmount,
+		&i.UncachedInputCostAmount,
+		&i.CacheReadInputCostAmount,
+		&i.CacheWrite5mInputCostAmount,
+		&i.CacheWrite1hInputCostAmount,
 		&i.OutputCostAmount,
-		&i.CachedInputCostAmount,
 		&i.ReasoningOutputCostAmount,
 		&i.TotalCostAmount,
 		&i.FormulaVersion,
@@ -145,27 +145,7 @@ func (q *Queries) CreateCostSnapshot(ctx context.Context, arg CreateCostSnapshot
 }
 
 const getCostSnapshotByRequest = `-- name: GetCostSnapshotByRequest :one
-SELECT
-    id,
-    request_record_id,
-    cost_price_id,
-    provider_id,
-    channel_id,
-    model_id,
-    upstream_model,
-    currency,
-    pricing_unit,
-    input_cost,
-    output_cost,
-    cached_input_cost,
-    reasoning_output_cost,
-    input_cost_amount,
-    output_cost_amount,
-    cached_input_cost_amount,
-    reasoning_output_cost_amount,
-    total_cost_amount,
-    formula_version,
-    created_at
+SELECT id, request_record_id, cost_price_id, provider_id, channel_id, model_id, upstream_model, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, uncached_input_cost_amount, cache_read_input_cost_amount, cache_write_5m_input_cost_amount, cache_write_1h_input_cost_amount, output_cost_amount, reasoning_output_cost_amount, total_cost_amount, formula_version, created_at
 FROM cost_snapshots
 WHERE request_record_id = $1
 `
@@ -184,13 +164,17 @@ func (q *Queries) GetCostSnapshotByRequest(ctx context.Context, requestRecordID 
 		&i.UpstreamModel,
 		&i.Currency,
 		&i.PricingUnit,
-		&i.InputCost,
+		&i.UncachedInputCost,
+		&i.CacheReadInputCost,
+		&i.CacheWrite5mInputCost,
+		&i.CacheWrite1hInputCost,
 		&i.OutputCost,
-		&i.CachedInputCost,
 		&i.ReasoningOutputCost,
-		&i.InputCostAmount,
+		&i.UncachedInputCostAmount,
+		&i.CacheReadInputCostAmount,
+		&i.CacheWrite5mInputCostAmount,
+		&i.CacheWrite1hInputCostAmount,
 		&i.OutputCostAmount,
-		&i.CachedInputCostAmount,
 		&i.ReasoningOutputCostAmount,
 		&i.TotalCostAmount,
 		&i.FormulaVersion,

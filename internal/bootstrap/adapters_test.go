@@ -1,23 +1,40 @@
 package bootstrap
 
-import "testing"
+import (
+	"testing"
 
-func TestNewAdapterRegistryRegistersOpenAIChatCapabilities(t *testing.T) {
+	"github.com/ThankCat/unio-api/internal/core/routing"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
+)
+
+func TestNewAdapterRegistryRegistersDeepSeekDualProtocolCapabilities(t *testing.T) {
 	registry, err := NewAdapterRegistry(nil)
 	if err != nil {
 		t.Fatalf("NewAdapterRegistry returned error: %v", err)
 	}
 
-	if !registry.HasChat("openai") {
-		t.Fatal("expected openai chat capability to be registered")
+	if !registry.OpenAI.HasChat("deepseek") {
+		t.Fatal("expected deepseek openai chat capability to be registered")
 	}
-	if !registry.HasStreamChat("openai") {
-		t.Fatal("expected openai stream chat capability to be registered")
+	if !registry.OpenAI.HasStreamChat("deepseek") {
+		t.Fatal("expected deepseek openai stream chat capability to be registered")
 	}
-	if registry.HasChat("missing") {
-		t.Fatal("expected unknown chat capability to be absent")
+	if !registry.OpenAI.HasChatInputTokenizer("deepseek") {
+		t.Fatal("expected deepseek openai chat input tokenizer to be registered")
 	}
-	if registry.HasStreamChat("missing") {
-		t.Fatal("expected unknown stream chat capability to be absent")
+	if !registry.Anthropic.HasMessages("deepseek") {
+		t.Fatal("expected deepseek anthropic messages capability to be registered")
+	}
+	if !registry.Anthropic.HasStreamMessages("deepseek") {
+		t.Fatal("expected deepseek anthropic stream messages capability to be registered")
+	}
+	if !registry.Anthropic.HasMessagesInputTokenizer("deepseek") {
+		t.Fatal("expected deepseek anthropic messages input tokenizer to be registered")
+	}
+	if registry.Has(routing.ProtocolOpenAI, "missing", lifecycle.AdapterCapabilityNonStream) {
+		t.Fatal("expected unknown openai capability to be absent")
+	}
+	if registry.Has("missing", "deepseek", lifecycle.AdapterCapabilityNonStream) {
+		t.Fatal("expected unknown protocol capability to be absent")
 	}
 }

@@ -4,39 +4,30 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	tiktoken "github.com/tiktoken-go/tokenizer"
 )
 
-const (
-	chatTokensPerMessage = 3
-	chatReplyPrimer      = 3
-)
-
 // CountChatInputTokens 估算 OpenAI-compatible chat 请求的输入 token。
-func (a *Adapter) CountChatInputTokens(req adapter.ChatInputTokenizeRequest) (int64, error) {
+//
+// 这里按即将发送的完整 wire JSON 估算，覆盖 messages、tools、response_format 和
+// vendor extensions。authorization 可以偏保守，但不能因只统计 messages 低估平台风险。
+func (a *Adapter) CountChatInputTokens(req ChatRequest) (int64, error) {
 	codec, err := chatCodec(req.Model)
 	if err != nil {
 		return 0, err
 	}
 
-	total := int64(chatReplyPrimer)
-	for _, msg := range req.Messages {
-		roleTokens, err := countTextTokens(codec, msg.Role)
-		if err != nil {
-			return 0, err
-		}
-
-		contentTokens, err := countTextTokens(codec, msg.ContentString())
-		if err != nil {
-			return 0, err
-		}
-
-		total += int64(chatTokensPerMessage) + roleTokens + contentTokens
+	body, err := buildChatCompletionRequestBody(req, false)
+	if err != nil {
+		return 0, failure.Wrap(
+			failure.CodeAdapterTokenizeFailed,
+			err,
+			failure.WithMessage("openai tokenizer build wire request"),
+		)
 	}
 
-	return total, nil
+	return countTextTokens(codec, string(body))
 }
 
 func chatCodec(model string) (tiktoken.Codec, error) {

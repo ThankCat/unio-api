@@ -13,7 +13,7 @@ import (
 
 const findRouteCandidates = `-- name: FindRouteCandidates :many
 WITH project_scope AS (
-    SELECT $2::BIGINT AS project_id
+    SELECT $3::BIGINT AS project_id
 ),
 project_policy_mode AS (
     SELECT EXISTS (
@@ -28,7 +28,8 @@ SELECT
     m.model_id AS requested_model_id,
     p.id AS provider_id,
     p.slug AS provider_slug,
-    p.adapter AS adapter_key,
+    c.adapter_key AS adapter_key,
+    c.protocol AS protocol,
     c.id AS channel_id,
     c.base_url,
     c.credential_encrypted,
@@ -41,6 +42,7 @@ JOIN channels c ON c.id = cm.channel_id
 JOIN providers p ON p.id = c.provider_id
 JOIN project_scope ps ON ps.project_id > 0
 WHERE m.model_id = $1
+  AND c.protocol = $2
   AND m.status = 'enabled'
   AND cm.status = 'enabled'
   AND c.status = 'enabled'
@@ -69,6 +71,7 @@ ORDER BY
 
 type FindRouteCandidatesParams struct {
 	RequestedModelID string
+	IngressProtocol  string
 	ProjectID        int64
 }
 
@@ -78,6 +81,7 @@ type FindRouteCandidatesRow struct {
 	ProviderID          int64
 	ProviderSlug        string
 	AdapterKey          string
+	Protocol            string
 	ChannelID           int64
 	BaseUrl             string
 	CredentialEncrypted []byte
@@ -88,7 +92,7 @@ type FindRouteCandidatesRow struct {
 
 // FindRouteCandidates 按请求模型和项目策略查找可用 channel 路由候选。
 func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidatesParams) ([]FindRouteCandidatesRow, error) {
-	rows, err := q.db.Query(ctx, findRouteCandidates, arg.RequestedModelID, arg.ProjectID)
+	rows, err := q.db.Query(ctx, findRouteCandidates, arg.RequestedModelID, arg.IngressProtocol, arg.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +106,7 @@ func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidat
 			&i.ProviderID,
 			&i.ProviderSlug,
 			&i.AdapterKey,
+			&i.Protocol,
 			&i.ChannelID,
 			&i.BaseUrl,
 			&i.CredentialEncrypted,

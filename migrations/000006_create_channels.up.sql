@@ -9,6 +9,12 @@ CREATE TABLE channels (
     -- name: provider 内 channel 名称。--
     name TEXT NOT NULL,
 
+    -- protocol: channel 对外协议族，决定 ingress 路由与 adapter 协议族；routing 只命中同协议 channel。--
+    protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
+
+    -- adapter_key: channel 运行时绑定的 adapter 注册键，routing 据此解析具体 adapter，不再从 provider 派生。--
+    adapter_key TEXT NOT NULL,
+
     -- base_url: 上游 API 基础地址。--
     base_url TEXT NOT NULL,
 
@@ -43,3 +49,6 @@ CREATE INDEX idx_channels_provider_id ON channels (provider_id);
 
 -- routing 会按优先级稳定选择 channel。
 CREATE INDEX idx_channels_priority ON channels (priority, id);
+
+-- routing 会按 ingress protocol 过滤同协议 channel。
+CREATE INDEX idx_channels_protocol ON channels (protocol);

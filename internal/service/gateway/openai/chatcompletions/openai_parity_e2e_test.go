@@ -1,4 +1,4 @@
-package gateway
+package chatcompletions
 
 import (
 	"encoding/json"
@@ -8,8 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
-	"github.com/ThankCat/unio-api/internal/core/adapter"
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
 	openaiadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai"
 	"github.com/ThankCat/unio-api/internal/core/adapter/openai/streamtranslate"
 	"github.com/ThankCat/unio-api/internal/core/channel"
@@ -45,7 +44,7 @@ func newMockUpstream(t *testing.T, respond func(w http.ResponseWriter)) *mockUps
 
 func newOpenAIAdapterRegistry(client *http.Client) AdapterRegistry {
 	openAIAdapter := openaiadapter.NewAdapter(client, streamtranslate.NewRegistry(streamtranslate.Default{}, streamtranslate.DeepSeek{}))
-	reg, err := adapter.NewRegistry(adapter.Registration{
+	reg, err := openaiadapter.NewRegistry(openaiadapter.Registration{
 		Key:        "openai",
 		Chat:       openAIAdapter,
 		StreamChat: openAIAdapter,

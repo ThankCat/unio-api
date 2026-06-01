@@ -1,4 +1,4 @@
-package gateway
+package chatcompletions
 
 import "encoding/json"
 

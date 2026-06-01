@@ -1,4 +1,4 @@
-package gatewayapi
+package openai
 
 import "encoding/json"
 

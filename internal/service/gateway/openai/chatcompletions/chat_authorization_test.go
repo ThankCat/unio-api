@@ -1,18 +1,14 @@
-package gateway
+package chatcompletions
 
 import (
 	"context"
-	"errors"
 	"math/big"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
-	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/billing"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -60,37 +56,7 @@ func (l *chatAuthorizationLedger) ReleaseWithBillingException(ctx context.Contex
 	return ledger.Reservation{}, nil
 }
 
-type chatAuthorizationRegistry struct {
-	tokenizerKey string
-	tokenizer    adapter.ChatInputTokenizer
-	ok           bool
-}
-
-func (r *chatAuthorizationRegistry) Chat(adapterKey string) (adapter.ChatAdapter, bool) {
-	return nil, false
-}
-
-func (r *chatAuthorizationRegistry) StreamChat(adapterKey string) (adapter.StreamChatAdapter, bool) {
-	return nil, false
-}
-
-func (r *chatAuthorizationRegistry) ChatInputTokenizer(adapterKey string) (adapter.ChatInputTokenizer, bool) {
-	r.tokenizerKey = adapterKey
-	return r.tokenizer, r.ok
-}
-
-type chatAuthorizationTokenizer struct {
-	req    adapter.ChatInputTokenizeRequest
-	tokens int64
-	err    error
-}
-
-func (t *chatAuthorizationTokenizer) CountChatInputTokens(req adapter.ChatInputTokenizeRequest) (int64, error) {
-	t.req = req
-	return t.tokens, t.err
-}
-
-func TestChatAuthorizationUsesAdapterInputTokenizer(t *testing.T) {
+func TestChatAuthorizationUsesConservativeInputEstimate(t *testing.T) {
 	amount := gatewayTestNumeric(12345, -4)
 	priceStore := &chatAuthorizationPriceStore{price: sqlc.Price{
 		ID:          99,
@@ -109,41 +75,21 @@ func TestChatAuthorizationUsesAdapterInputTokenizer(t *testing.T) {
 			AuthorizedAmount: amount,
 		},
 	}
-	tokenizer := &chatAuthorizationTokenizer{tokens: 321}
-	registry := &chatAuthorizationRegistry{tokenizer: tokenizer, ok: true}
-	service := NewChatAuthorizationService(priceStore, billingService, ledgerService, registry)
+	service := NewChatAuthorizationService(priceStore, billingService, ledgerService)
 
-	maxTokens := 128
 	authorization, err := service.AuthorizeChat(context.Background(), ChatAuthorizeParams{
-		RequestRecord: requestlog.RequestRecord{ID: 44},
-		Principal:     &auth.APIKeyPrincipal{UserID: 12},
-		Request: gatewayapi.ChatCompletionRequest{
-			Model: "openai/gpt-4.1",
-			Messages: []gatewayapi.ChatMessage{
-				{Role: "system", Content: jsonContent("Be concise.")},
-				{Role: "user", Content: jsonContent("Hello")},
-			},
-			MaxTokens: &maxTokens,
-		},
-		ModelDBID:     55,
-		AdapterKey:    "openai",
-		UpstreamModel: "gpt-4.1",
+		RequestRecord:       requestlog.RequestRecord{ID: 44},
+		Principal:           &auth.APIKeyPrincipal{UserID: 12},
+		ModelDBID:           55,
+		InputTokens:         321,
+		MaxCompletionTokens: 128,
 	})
 	if err != nil {
 		t.Fatalf("AuthorizeChat returned error: %v", err)
 	}
 
-	if registry.tokenizerKey != "openai" {
-		t.Fatalf("expected tokenizer key %q, got %q", "openai", registry.tokenizerKey)
-	}
-	if tokenizer.req.Model != "gpt-4.1" {
-		t.Fatalf("expected tokenizer model %q, got %q", "gpt-4.1", tokenizer.req.Model)
-	}
-	if len(tokenizer.req.Messages) != 2 || tokenizer.req.Messages[1].ContentString() != "Hello" {
-		t.Fatalf("unexpected tokenizer messages: %#v", tokenizer.req.Messages)
-	}
-	if billingService.estimate.PromptTokens != 321 {
-		t.Fatalf("expected prompt token estimate %d, got %d", 321, billingService.estimate.PromptTokens)
+	if billingService.estimate.InputTokens != 321 {
+		t.Fatalf("expected input token estimate %d, got %d", 321, billingService.estimate.InputTokens)
 	}
 	if billingService.estimate.MaxCompletionTokens != 128 {
 		t.Fatalf("expected max completion tokens %d, got %d", 128, billingService.estimate.MaxCompletionTokens)
@@ -153,60 +99,6 @@ func TestChatAuthorizationUsesAdapterInputTokenizer(t *testing.T) {
 	}
 	if authorization.ReservationID != 7001 || authorization.PriceID != 99 {
 		t.Fatalf("unexpected authorization: %#v", authorization)
-	}
-}
-
-func TestChatAuthorizationFailsWhenTokenizerIsMissing(t *testing.T) {
-	priceStore := &chatAuthorizationPriceStore{price: sqlc.Price{ID: 99, Currency: "USD", PricingUnit: billing.PricingUnitPer1MTokens}}
-	service := NewChatAuthorizationService(
-		priceStore,
-		&chatAuthorizationBilling{},
-		&chatAuthorizationLedger{},
-		&chatAuthorizationRegistry{ok: false},
-	)
-
-	_, err := service.AuthorizeChat(context.Background(), ChatAuthorizeParams{
-		RequestRecord: requestlog.RequestRecord{ID: 44},
-		Principal:     &auth.APIKeyPrincipal{UserID: 12},
-		Request: gatewayapi.ChatCompletionRequest{
-			Model:    "openai/gpt-4.1",
-			Messages: []gatewayapi.ChatMessage{{Role: "user", Content: jsonContent("Hello")}},
-		},
-		ModelDBID:     55,
-		AdapterKey:    "openai",
-		UpstreamModel: "gpt-4.1",
-	})
-	if failure.CodeOf(err) != failure.CodeGatewayChatAuthorizationFailed {
-		t.Fatalf("expected failure code %q, got %q", failure.CodeGatewayChatAuthorizationFailed, failure.CodeOf(err))
-	}
-}
-
-func TestChatAuthorizationWrapsTokenizerFailure(t *testing.T) {
-	tokenizeErr := errors.New("tokenizer failed")
-	priceStore := &chatAuthorizationPriceStore{price: sqlc.Price{ID: 99, Currency: "USD", PricingUnit: billing.PricingUnitPer1MTokens}}
-	service := NewChatAuthorizationService(
-		priceStore,
-		&chatAuthorizationBilling{},
-		&chatAuthorizationLedger{},
-		&chatAuthorizationRegistry{tokenizer: &chatAuthorizationTokenizer{err: tokenizeErr}, ok: true},
-	)
-
-	_, err := service.AuthorizeChat(context.Background(), ChatAuthorizeParams{
-		RequestRecord: requestlog.RequestRecord{ID: 44},
-		Principal:     &auth.APIKeyPrincipal{UserID: 12},
-		Request: gatewayapi.ChatCompletionRequest{
-			Model:    "openai/gpt-4.1",
-			Messages: []gatewayapi.ChatMessage{{Role: "user", Content: jsonContent("Hello")}},
-		},
-		ModelDBID:     55,
-		AdapterKey:    "openai",
-		UpstreamModel: "gpt-4.1",
-	})
-	if failure.CodeOf(err) != failure.CodeGatewayChatAuthorizationFailed {
-		t.Fatalf("expected failure code %q, got %q", failure.CodeGatewayChatAuthorizationFailed, failure.CodeOf(err))
-	}
-	if !errors.Is(err, tokenizeErr) {
-		t.Fatalf("expected wrapped tokenizer error, got %v", err)
 	}
 }
 

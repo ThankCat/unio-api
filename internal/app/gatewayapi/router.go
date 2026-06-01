@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/ThankCat/unio-api/internal/app/gatewayapi/middleware"
+	"github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
 	"github.com/ThankCat/unio-api/internal/platform/httpmw"
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
 )
@@ -16,11 +17,11 @@ import (
 type RouterDeps struct {
 	Logger                 *slog.Logger
 	APIKeyAuthenticator    middleware.APIKeyAuthenticator
-	ChatCompletionService  ChatCompletionService
+	ChatCompletionService  openai.ChatCompletionService
 	RateLimiter            middleware.RateLimiter
 	RateLimitLimit         int64
 	RateLimitWindow        time.Duration
-	ModelCatalogService    ModelCatalogService
+	ModelCatalogService    openai.ModelCatalogService
 	RateLimitFailurePolicy string
 
 	// HTTPMetrics 记录 HTTP 层请求指标；nil 表示不采集。
@@ -80,15 +81,9 @@ func NewRouter(deps RouterDeps) http.Handler {
 			Metrics:       deps.RateLimitMetrics,
 		}))
 
-		modelsHandler := &modelsHandler{
-			service: deps.ModelCatalogService,
-		}
-		r.Get("/models", modelsHandler.handleModels)
+		r.Get("/models", openai.NewModelsHandler(deps.ModelCatalogService))
 
-		chatHandler := &chatCompletionsHandler{
-			service: deps.ChatCompletionService,
-		}
-		r.Method(http.MethodPost, "/chat/completions", chatHandler)
+		r.Method(http.MethodPost, "/chat/completions", openai.NewChatCompletionsHandler(deps.ChatCompletionService))
 	})
 
 	return r

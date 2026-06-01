@@ -1,4 +1,4 @@
-package gatewayapi
+package openai
 
 import (
 	"fmt"
@@ -9,6 +9,13 @@ import (
 func validateChatMessageContent(msg ChatMessage, index int) *chatValidationError {
 	param := fmt.Sprintf("messages.%d.content", index)
 
+	// 先对 content union 做结构化校验（string 或 content part 数组）；
+	// 畸形结构或当前范围不支持的多模态 part 在此前置拒绝。
+	state, contentErr := validateMessageContent(msg.Content, index)
+	if contentErr != nil {
+		return contentErr
+	}
+
 	switch msg.Role {
 	case "tool":
 		if msg.ToolCallID == nil || strings.TrimSpace(*msg.ToolCallID) == "" {
@@ -17,7 +24,7 @@ func validateChatMessageContent(msg ChatMessage, index int) *chatValidationError
 				message: "tool message requires tool_call_id",
 			}
 		}
-		if len(msg.Content) == 0 {
+		if !state.hasContent {
 			return &chatValidationError{param: param, message: "tool message content is required"}
 		}
 	case "assistant":
@@ -27,7 +34,7 @@ func validateChatMessageContent(msg ChatMessage, index int) *chatValidationError
 		if msg.ReasoningContent != nil && strings.TrimSpace(*msg.ReasoningContent) != "" {
 			return nil
 		}
-		if strings.TrimSpace(msg.ContentString()) != "" {
+		if state.hasContent {
 			return nil
 		}
 		return &chatValidationError{
@@ -35,7 +42,7 @@ func validateChatMessageContent(msg ChatMessage, index int) *chatValidationError
 			message: "assistant message requires content, reasoning_content, or tool_calls",
 		}
 	default:
-		if strings.TrimSpace(msg.ContentString()) == "" {
+		if !state.hasContent {
 			return &chatValidationError{param: param, message: "message content is required"}
 		}
 	}

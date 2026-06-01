@@ -21,8 +21,23 @@ CREATE TABLE request_attempts (
     -- upstream_model: 本次尝试发送给上游的模型名。--
     upstream_model TEXT NOT NULL,
 
+    -- upstream_protocol: 本次尝试调用上游时使用的协议族。--
+    upstream_protocol TEXT NOT NULL CHECK (upstream_protocol IN ('openai', 'anthropic')),
+
+    -- upstream_response_id: provider 返回的响应 ID，与客户可见 response_id 分列。--
+    upstream_response_id TEXT CHECK (upstream_response_id IS NULL OR upstream_response_id <> ''),
+
     -- upstream_response_model: 上游响应里的模型名。--
     upstream_response_model TEXT,
+
+    -- upstream_finish_reason: provider 返回的原始结束原因，仅用于审计。--
+    upstream_finish_reason TEXT,
+
+    -- finish_class: 协议无关的稳定结束分类。--
+    finish_class TEXT CHECK (
+        finish_class IS NULL
+            OR finish_class IN ('stop', 'length', 'tool_use', 'content_filter', 'refusal', 'pause', 'other')
+    ),
 
     -- status: attempt 状态机状态。--
     status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'canceled')),
@@ -41,6 +56,15 @@ CREATE TABLE request_attempts (
 
     -- internal_error_detail: 仅供内部排查的截断错误详情。--
     internal_error_detail TEXT,
+
+    -- response_started_at: 上游开始返回响应的时间，未知时为空。--
+    response_started_at TIMESTAMPTZ,
+
+    -- final_usage_received: 是否已经收到可用于 settlement 的最终 usage。--
+    final_usage_received BOOLEAN NOT NULL DEFAULT FALSE,
+
+    -- usage_mapping_version: 将协议 usage 映射成统一 facts 的规则版本。--
+    usage_mapping_version TEXT CHECK (usage_mapping_version IS NULL OR usage_mapping_version <> ''),
 
     -- started_at: attempt 开始时间。--
     started_at TIMESTAMPTZ NOT NULL,

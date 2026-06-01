@@ -1,10 +1,8 @@
-package gateway
+package chatcompletions
 
 import (
 	"context"
 	"errors"
-	"math"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -14,6 +12,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/billing"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
+	"github.com/ThankCat/unio-api/internal/core/usage"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 )
@@ -106,12 +105,8 @@ func (e *RecoverableChatSettlementExecutor) SettleSuccessfulChat(ctx context.Con
 
 // CreatePendingChatSettlementRecoveryJob 保存 worker 重放 settlement 所需的最小事实。
 func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx context.Context, params ChatSettlementParams) (sqlc.SettlementRecoveryJob, error) {
-	if !params.UsageSource.Valid() {
-		return sqlc.SettlementRecoveryJob{}, failure.New(
-			failure.CodeGatewayChatSettlementFailed,
-			failure.WithMessage("chat settlement recovery usage source is invalid"),
-			failure.WithField("usage_source", string(params.UsageSource)),
-		)
+	if err := validateChatSettlementFacts(params); err != nil {
+		return sqlc.SettlementRecoveryJob{}, err
 	}
 	if params.Authorization.PriceID <= 0 {
 		return sqlc.SettlementRecoveryJob{}, failure.New(
@@ -121,34 +116,54 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 	}
 
 	price := params.Authorization.Price
+	facts := params.Facts
+	serverWebSearchRequests, serverWebFetchRequests := settlementRecoveryServerToolQuantities(facts.Usage.ServerToolUsage)
 	job, err := s.queries.CreateSettlementRecoveryJob(ctx, sqlc.CreateSettlementRecoveryJobParams{
-		UserID:                params.RequestRecord.UserID,
-		RequestRecordID:       params.RequestRecord.ID,
-		AttemptID:             params.AttemptRecord.ID,
-		ReservationID:         params.Authorization.ReservationID,
-		ResponseModelID:       params.ResponseModelID,
-		ModelID:               params.ModelDBID,
-		ProviderID:            params.FinalProviderID,
-		ChannelID:             params.FinalChannelID,
-		UpstreamResponseModel: params.UpstreamResponseModel,
-		UpstreamStatusCode:    int32(params.UpstreamStatusCode),
-		UpstreamRequestID:     chatSettlementOptionalText(params.UpstreamRequestID),
-		UsagePromptTokens:     int64(params.Usage.PromptTokens),
-		UsageCompletionTokens: int64(params.Usage.CompletionTokens),
-		UsageTotalTokens:      int64(params.Usage.TotalTokens),
-		UsageCachedTokens:     int64(params.Usage.CachedTokens),
-		UsageReasoningTokens:  int64(params.Usage.ReasoningTokens),
-		UsageSource:           string(params.UsageSource),
-		PriceID:               params.Authorization.PriceID,
-		Currency:              price.Currency,
-		PricingUnit:           price.PricingUnit,
-		InputPrice:            price.InputPrice,
-		OutputPrice:           price.OutputPrice,
-		CachedInputPrice:      price.CachedInputPrice,
-		ReasoningOutputPrice:  price.ReasoningOutputPrice,
-		FormulaVersion:        price.FormulaVersion,
-		EstimatedAmount:       params.Authorization.EstimatedAmount,
-		AuthorizedAmount:      params.Authorization.AuthorizedAmount,
+		UserID:                            params.RequestRecord.UserID,
+		RequestRecordID:                   params.RequestRecord.ID,
+		AttemptID:                         params.AttemptRecord.ID,
+		ReservationID:                     params.Authorization.ReservationID,
+		ResponseProtocol:                  string(params.ResponseProtocol),
+		ResponseID:                        params.ResponseID,
+		ResponseModelID:                   params.ResponseModelID,
+		ModelID:                           params.ModelDBID,
+		ProviderID:                        params.FinalProviderID,
+		ChannelID:                         params.FinalChannelID,
+		UpstreamProtocol:                  facts.UpstreamProtocol,
+		UpstreamResponseID:                facts.UpstreamResponseID,
+		UpstreamModel:                     facts.UpstreamModel,
+		FinishClass:                       string(facts.Finish.Class),
+		UpstreamFinishReason:              facts.Finish.RawReason,
+		UpstreamStatusCode:                int32(facts.Metadata.StatusCode),
+		UpstreamRequestID:                 chatSettlementOptionalText(upstreamRequestIDPtr(facts.Metadata.RequestID)),
+		UsageUncachedInputTokens:          facts.Usage.UncachedInputTokens.Value,
+		UsageUncachedInputTokensState:     string(facts.Usage.UncachedInputTokens.State),
+		UsageCacheReadInputTokens:         facts.Usage.CacheReadInputTokens.Value,
+		UsageCacheReadInputTokensState:    string(facts.Usage.CacheReadInputTokens.State),
+		UsageCacheWrite5mInputTokens:      facts.Usage.CacheWrite5mInputTokens.Value,
+		UsageCacheWrite5mInputTokensState: string(facts.Usage.CacheWrite5mInputTokens.State),
+		UsageCacheWrite1hInputTokens:      facts.Usage.CacheWrite1hInputTokens.Value,
+		UsageCacheWrite1hInputTokensState: string(facts.Usage.CacheWrite1hInputTokens.State),
+		UsageOutputTokensTotal:            facts.Usage.OutputTokensTotal.Value,
+		UsageOutputTokensTotalState:       string(facts.Usage.OutputTokensTotal.State),
+		UsageReasoningOutputTokens:        facts.Usage.ReasoningOutputTokens.Value,
+		UsageReasoningOutputTokensState:   string(facts.Usage.ReasoningOutputTokens.State),
+		UsageServerWebSearchRequests:      serverWebSearchRequests,
+		UsageServerWebFetchRequests:       serverWebFetchRequests,
+		UsageSource:                       string(facts.UsageSource),
+		UsageMappingVersion:               facts.UsageMappingVersion,
+		PriceID:                           params.Authorization.PriceID,
+		Currency:                          price.Currency,
+		PricingUnit:                       price.PricingUnit,
+		UncachedInputPrice:                price.UncachedInputPrice,
+		CacheReadInputPrice:               price.CacheReadInputPrice,
+		CacheWrite5mInputPrice:            price.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:            price.CacheWrite1hInputPrice,
+		OutputPrice:                       price.OutputPrice,
+		ReasoningOutputPrice:              price.ReasoningOutputPrice,
+		FormulaVersion:                    price.FormulaVersion,
+		EstimatedAmount:                   params.Authorization.EstimatedAmount,
+		AuthorizedAmount:                  params.Authorization.AuthorizedAmount,
 		NextRunAt: pgtype.Timestamptz{
 			Time:  time.Now().Add(s.nextRunDelay),
 			Valid: true,
@@ -167,6 +182,19 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 	}
 
 	return job, nil
+}
+
+func settlementRecoveryServerToolQuantities(items []usage.MeteredItem) (webSearchRequests int64, webFetchRequests int64) {
+	for _, item := range items {
+		switch item.Kind {
+		case usage.MeteredServerWebSearchRequest:
+			webSearchRequests = item.Quantity
+		case usage.MeteredServerWebFetchRequest:
+			webFetchRequests = item.Quantity
+		}
+	}
+
+	return webSearchRequests, webFetchRequests
 }
 
 // MarkChatSettlementRecoveryJobSucceeded 标记 recovery job 已由正常 settlement 收口。
@@ -235,11 +263,6 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 		return ChatSettlementParams{}, err
 	}
 
-	usage, err := chatSettlementRecoveryUsageFromJob(job)
-	if err != nil {
-		return ChatSettlementParams{}, err
-	}
-
 	requestRecord := chatSettlementRecoveryRequestRecordFromSQLC(requestRow)
 	attemptRecord := chatSettlementRecoveryAttemptRecordFromSQLC(attemptRow)
 
@@ -259,24 +282,24 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 			Currency:         job.Currency,
 			PriceID:          job.PriceID,
 			Price: billing.CustomerPriceSnapshot{
-				Currency:             job.Currency,
-				PricingUnit:          job.PricingUnit,
-				InputPrice:           job.InputPrice,
-				OutputPrice:          job.OutputPrice,
-				CachedInputPrice:     job.CachedInputPrice,
-				ReasoningOutputPrice: job.ReasoningOutputPrice,
-				FormulaVersion:       job.FormulaVersion,
+				Currency:               job.Currency,
+				PricingUnit:            job.PricingUnit,
+				UncachedInputPrice:     job.UncachedInputPrice,
+				CacheReadInputPrice:    job.CacheReadInputPrice,
+				CacheWrite5mInputPrice: job.CacheWrite5mInputPrice,
+				CacheWrite1hInputPrice: job.CacheWrite1hInputPrice,
+				OutputPrice:            job.OutputPrice,
+				ReasoningOutputPrice:   job.ReasoningOutputPrice,
+				FormulaVersion:         job.FormulaVersion,
 			},
 		},
-		ResponseModelID:       job.ResponseModelID,
-		ModelDBID:             job.ModelID,
-		FinalProviderID:       job.ProviderID,
-		FinalChannelID:        job.ChannelID,
-		UpstreamResponseModel: job.UpstreamResponseModel,
-		UpstreamStatusCode:    int(job.UpstreamStatusCode),
-		UpstreamRequestID:     chatSettlementTextPtr(job.UpstreamRequestID),
-		Usage:                 usage,
-		UsageSource:           ChatSettlementUsageSource(job.UsageSource),
+		ResponseProtocol: requestlog.Protocol(job.ResponseProtocol),
+		ResponseID:       job.ResponseID,
+		ResponseModelID:  job.ResponseModelID,
+		ModelDBID:        job.ModelID,
+		FinalProviderID:  job.ProviderID,
+		FinalChannelID:   job.ChannelID,
+		Facts:            chatSettlementRecoveryFactsFromJob(job),
 	}, nil
 }
 
@@ -304,47 +327,45 @@ func (s *ChatSettlementRecoveryService) loadRecoveryAttempt(ctx context.Context,
 	)
 }
 
-func chatSettlementRecoveryUsageFromJob(job sqlc.SettlementRecoveryJob) (adapter.ChatUsage, error) {
-	promptTokens, err := int64ToChatUsageInt(job.UsagePromptTokens, "usage_prompt_tokens")
-	if err != nil {
-		return adapter.ChatUsage{}, err
+func chatSettlementRecoveryFactsFromJob(job sqlc.SettlementRecoveryJob) adapter.ResponseFacts {
+	serverToolUsage := make([]usage.MeteredItem, 0, 2)
+	if job.UsageServerWebSearchRequests > 0 {
+		serverToolUsage = append(serverToolUsage, usage.MeteredItem{
+			Kind:     usage.MeteredServerWebSearchRequest,
+			Quantity: job.UsageServerWebSearchRequests,
+		})
 	}
-	completionTokens, err := int64ToChatUsageInt(job.UsageCompletionTokens, "usage_completion_tokens")
-	if err != nil {
-		return adapter.ChatUsage{}, err
-	}
-	totalTokens, err := int64ToChatUsageInt(job.UsageTotalTokens, "usage_total_tokens")
-	if err != nil {
-		return adapter.ChatUsage{}, err
-	}
-	cachedTokens, err := int64ToChatUsageInt(job.UsageCachedTokens, "usage_cached_tokens")
-	if err != nil {
-		return adapter.ChatUsage{}, err
-	}
-	reasoningTokens, err := int64ToChatUsageInt(job.UsageReasoningTokens, "usage_reasoning_tokens")
-	if err != nil {
-		return adapter.ChatUsage{}, err
+	if job.UsageServerWebFetchRequests > 0 {
+		serverToolUsage = append(serverToolUsage, usage.MeteredItem{
+			Kind:     usage.MeteredServerWebFetchRequest,
+			Quantity: job.UsageServerWebFetchRequests,
+		})
 	}
 
-	return adapter.ChatUsage{
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		TotalTokens:      totalTokens,
-		CachedTokens:     cachedTokens,
-		ReasoningTokens:  reasoningTokens,
-	}, nil
-}
-
-func int64ToChatUsageInt(value int64, field string) (int, error) {
-	if strconv.IntSize == 32 && (value > math.MaxInt32 || value < math.MinInt32) {
-		return 0, failure.New(
-			failure.CodeGatewayChatSettlementFailed,
-			failure.WithMessage("settlement recovery usage value overflows int"),
-			failure.WithField("field", field),
-		)
+	return adapter.ResponseFacts{
+		UpstreamProtocol:   job.UpstreamProtocol,
+		UpstreamResponseID: job.UpstreamResponseID,
+		UpstreamModel:      job.UpstreamModel,
+		Finish: adapter.FinishFacts{
+			Class:     adapter.FinishClass(job.FinishClass),
+			RawReason: job.UpstreamFinishReason,
+		},
+		Usage: usage.Facts{
+			UncachedInputTokens:     usage.TokenCount{Value: job.UsageUncachedInputTokens, State: usage.CountState(job.UsageUncachedInputTokensState)},
+			CacheReadInputTokens:    usage.TokenCount{Value: job.UsageCacheReadInputTokens, State: usage.CountState(job.UsageCacheReadInputTokensState)},
+			CacheWrite5mInputTokens: usage.TokenCount{Value: job.UsageCacheWrite5mInputTokens, State: usage.CountState(job.UsageCacheWrite5mInputTokensState)},
+			CacheWrite1hInputTokens: usage.TokenCount{Value: job.UsageCacheWrite1hInputTokens, State: usage.CountState(job.UsageCacheWrite1hInputTokensState)},
+			OutputTokensTotal:       usage.TokenCount{Value: job.UsageOutputTokensTotal, State: usage.CountState(job.UsageOutputTokensTotalState)},
+			ReasoningOutputTokens:   usage.TokenCount{Value: job.UsageReasoningOutputTokens, State: usage.CountState(job.UsageReasoningOutputTokensState)},
+			ServerToolUsage:         serverToolUsage,
+		},
+		UsageSource:         usage.Source(job.UsageSource),
+		UsageMappingVersion: job.UsageMappingVersion,
+		Metadata: adapter.UpstreamMetadata{
+			StatusCode: int(job.UpstreamStatusCode),
+			RequestID:  chatSettlementText(job.UpstreamRequestID),
+		},
 	}
-
-	return int(value), nil
 }
 
 func chatSettlementRecoveryRequestRecordFromSQLC(row sqlc.RequestRecord) requestlog.RequestRecord {
@@ -355,7 +376,11 @@ func chatSettlementRecoveryRequestRecordFromSQLC(row sqlc.RequestRecord) request
 		ProjectID:           row.ProjectID,
 		APIKeyID:            row.ApiKeyID,
 		RequestedModelID:    row.RequestedModelID,
+		IngressProtocol:     requestlog.Protocol(row.IngressProtocol),
+		Operation:           requestlog.Operation(row.Operation),
 		ResponseModelID:     chatSettlementTextPtr(row.ResponseModelID),
+		ResponseProtocol:    chatSettlementTextPtr(row.ResponseProtocol),
+		ResponseID:          chatSettlementTextPtr(row.ResponseID),
 		Stream:              row.Stream,
 		Status:              requestlog.RequestStatus(row.Status),
 		FinalProviderID:     chatSettlementInt64Ptr(row.FinalProviderID),
@@ -363,6 +388,9 @@ func chatSettlementRecoveryRequestRecordFromSQLC(row sqlc.RequestRecord) request
 		ErrorCode:           chatSettlementTextPtr(row.ErrorCode),
 		ErrorMessage:        chatSettlementTextPtr(row.ErrorMessage),
 		InternalErrorDetail: chatSettlementTextPtr(row.InternalErrorDetail),
+		DeliveryStatus:      requestlog.DeliveryStatus(row.DeliveryStatus),
+		ResponseStartedAt:   chatSettlementTimePtr(row.ResponseStartedAt),
+		ResponseCompletedAt: chatSettlementTimePtr(row.ResponseCompletedAt),
 		StartedAt:           row.StartedAt.Time,
 		CompletedAt:         chatSettlementTimePtr(row.CompletedAt),
 	}
@@ -377,13 +405,20 @@ func chatSettlementRecoveryAttemptRecordFromSQLC(row sqlc.RequestAttempt) reques
 		ChannelID:             row.ChannelID,
 		AdapterKey:            row.AdapterKey,
 		UpstreamModel:         row.UpstreamModel,
+		UpstreamProtocol:      requestlog.Protocol(row.UpstreamProtocol),
+		UpstreamResponseID:    chatSettlementTextPtr(row.UpstreamResponseID),
 		UpstreamResponseModel: chatSettlementTextPtr(row.UpstreamResponseModel),
+		UpstreamFinishReason:  chatSettlementTextPtr(row.UpstreamFinishReason),
+		FinishClass:           chatSettlementTextPtr(row.FinishClass),
 		Status:                requestlog.AttemptStatus(row.Status),
 		UpstreamStatusCode:    chatSettlementIntPtr(row.UpstreamStatusCode),
 		UpstreamRequestID:     chatSettlementTextPtr(row.UpstreamRequestID),
 		ErrorCode:             chatSettlementTextPtr(row.ErrorCode),
 		ErrorMessage:          chatSettlementTextPtr(row.ErrorMessage),
 		InternalErrorDetail:   chatSettlementTextPtr(row.InternalErrorDetail),
+		ResponseStartedAt:     chatSettlementTimePtr(row.ResponseStartedAt),
+		FinalUsageReceived:    row.FinalUsageReceived,
+		UsageMappingVersion:   chatSettlementTextPtr(row.UsageMappingVersion),
 		StartedAt:             row.StartedAt.Time,
 		CompletedAt:           chatSettlementTimePtr(row.CompletedAt),
 	}
@@ -409,6 +444,14 @@ func chatSettlementTextPtr(s pgtype.Text) *string {
 	}
 
 	return &s.String
+}
+
+func chatSettlementText(s pgtype.Text) string {
+	if !s.Valid {
+		return ""
+	}
+
+	return s.String
 }
 
 // chatSettlementOptionalText 把可选字符串转换成可空 TEXT 列值。

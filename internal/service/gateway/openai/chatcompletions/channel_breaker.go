@@ -1,15 +1,20 @@
-package gateway
+package chatcompletions
 
 import (
 	"sync"
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
+	"github.com/ThankCat/unio-api/internal/core/routing"
 )
 
 // ChannelBreaker 定义 gateway 在选择 channel 时所需的熔断能力。
 // 由 ChannelCircuitBreaker 实现；nil 表示不启用熔断（始终放行、不记录）。
 type ChannelBreaker interface {
+	// Available 只读判断某个 channel 当前是否可能进入 fallback plan。
+	// 它不占用 half-open 探测名额；真正尝试前必须继续调用 Allow。
+	Available(channelKey string) bool
+
 	// Allow 判断某个 channel 当前是否允许尝试。
 	// open 状态返回 false；到达探测时机或 half-open 时放行一次探测请求。
 	Allow(channelKey string) bool
@@ -93,6 +98,22 @@ func NewChannelCircuitBreaker(cfg ChannelCircuitBreakerConfig) *ChannelCircuitBr
 		cfg:   cfg,
 		now:   time.Now,
 		items: make(map[string]*channelBreakerState),
+	}
+}
+
+// Available 只读判断 channel 是否可进入 fallback plan，不推进熔断状态。
+func (b *ChannelCircuitBreaker) Available(channelKey string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	s := b.stateForLocked(channelKey)
+	switch s.state {
+	case circuitOpen:
+		return b.now().Sub(s.openedAt) >= b.cfg.OpenDuration
+	case circuitHalfOpen:
+		return !s.halfOpenInFlight
+	default:
+		return true
 	}
 }
 
@@ -197,6 +218,15 @@ func (b *ChannelCircuitBreaker) closeLocked(s *channelBreakerState) {
 	s.failures = 0
 	s.successes = 0
 	s.halfOpenInFlight = false
+}
+
+// candidateAvailable 在启用熔断时只读判断候选是否可进入保守 fallback plan。
+func (s *ChatCompletionService) candidateAvailable(candidate routing.ChatRouteCandidate) bool {
+	if s.breaker == nil {
+		return true
+	}
+
+	return s.breaker.Available(metricsID(candidate.Channel.ID))
 }
 
 // breakerAllow 在启用熔断时判断是否允许尝试该 channel；未启用时始终放行。

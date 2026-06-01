@@ -3,6 +3,7 @@ package billing
 import (
 	"math/big"
 
+	"github.com/ThankCat/unio-api/internal/core/usage"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
 
@@ -10,8 +11,9 @@ import (
 type Service struct{}
 
 // CalculateCustomerCharge 根据 usage 和客户侧售价快照计算本次请求应扣金额。
-func (s Service) CalculateCustomerCharge(usage Usage, price CustomerPriceSnapshot) (CustomerCharge, error) {
-	if err := validateUsage(usage); err != nil {
+func (s Service) CalculateCustomerCharge(facts usage.Facts, price CustomerPriceSnapshot) (CustomerCharge, error) {
+	billableUsage, err := normalizeUsageFacts(facts)
+	if err != nil {
 		return CustomerCharge{}, err
 	}
 
@@ -20,7 +22,7 @@ func (s Service) CalculateCustomerCharge(usage Usage, price CustomerPriceSnapsho
 		return CustomerCharge{}, err
 	}
 
-	amounts := calculateTokenAmountBreakdown(usage, rates)
+	amounts := calculateTokenAmountBreakdown(billableUsage, rates)
 
 	return CustomerCharge{
 		Amount:         ratToNumeric(amounts.TotalAmount, amountDecimalScale),
@@ -30,8 +32,9 @@ func (s Service) CalculateCustomerCharge(usage Usage, price CustomerPriceSnapsho
 }
 
 // CalculateProviderCost 根据 usage 和 provider/channel 成本价快照计算本次请求的平台成本分项。
-func (s Service) CalculateProviderCost(usage Usage, cost ProviderCostSnapshot) (ProviderCost, error) {
-	if err := validateUsage(usage); err != nil {
+func (s Service) CalculateProviderCost(facts usage.Facts, cost ProviderCostSnapshot) (ProviderCost, error) {
+	billableUsage, err := normalizeUsageFacts(facts)
+	if err != nil {
 		return ProviderCost{}, err
 	}
 
@@ -40,22 +43,24 @@ func (s Service) CalculateProviderCost(usage Usage, cost ProviderCostSnapshot) (
 		return ProviderCost{}, err
 	}
 
-	amounts := calculateTokenAmountBreakdown(usage, rates)
+	amounts := calculateTokenAmountBreakdown(billableUsage, rates)
 
 	return ProviderCost{
-		InputCostAmount:           ratToNumeric(amounts.InputAmount, amountDecimalScale),
-		OutputCostAmount:          ratToNumeric(amounts.OutputAmount, amountDecimalScale),
-		CachedInputCostAmount:     ratToNumeric(amounts.CachedInputAmount, amountDecimalScale),
-		ReasoningOutputCostAmount: ratToNumeric(amounts.ReasoningOutputAmount, amountDecimalScale),
-		TotalCostAmount:           ratToNumeric(amounts.TotalAmount, amountDecimalScale),
-		Currency:                  rates.Currency,
-		FormulaVersion:            rates.FormulaVersion,
+		UncachedInputCostAmount:     ratToNumeric(amounts.UncachedInputAmount, amountDecimalScale),
+		CacheReadInputCostAmount:    ratToNumeric(amounts.CacheReadInputAmount, amountDecimalScale),
+		CacheWrite5mInputCostAmount: ratToNumeric(amounts.CacheWrite5mInputAmount, amountDecimalScale),
+		CacheWrite1hInputCostAmount: ratToNumeric(amounts.CacheWrite1hInputAmount, amountDecimalScale),
+		OutputCostAmount:            ratToNumeric(amounts.OutputAmount, amountDecimalScale),
+		ReasoningOutputCostAmount:   ratToNumeric(amounts.ReasoningOutputAmount, amountDecimalScale),
+		TotalCostAmount:             ratToNumeric(amounts.TotalAmount, amountDecimalScale),
+		Currency:                    rates.Currency,
+		FormulaVersion:              rates.FormulaVersion,
 	}, nil
 }
 
 // EstimateAuthorizationAmount 根据预估最大 token 用量计算调用上游前需要冻结的金额。
 func (s Service) EstimateAuthorizationAmount(estimate AuthorizationEstimate, price CustomerPriceSnapshot) (CustomerCharge, error) {
-	if estimate.PromptTokens < 0 || estimate.MaxCompletionTokens < 0 {
+	if estimate.InputTokens < 0 || estimate.MaxCompletionTokens < 0 {
 		return CustomerCharge{}, failure.Wrap(
 			failure.CodeBillingInvalidUsage,
 			ErrInvalidUsage,
@@ -68,10 +73,14 @@ func (s Service) EstimateAuthorizationAmount(estimate AuthorizationEstimate, pri
 		return CustomerCharge{}, err
 	}
 
+	maxInputRate := maxRat(
+		maxRat(rates.UncachedInputRate, rates.CacheReadInputRate),
+		maxRat(rates.CacheWrite5mInputRate, rates.CacheWrite1hInputRate),
+	)
 	maxCompletionRate := maxRat(rates.OutputRate, rates.ReasoningOutputRate)
 
 	amount := new(big.Rat)
-	amount.Add(amount, tokenCost(rates.InputRate, estimate.PromptTokens))
+	amount.Add(amount, tokenCost(maxInputRate, estimate.InputTokens))
 	amount.Add(amount, tokenCost(maxCompletionRate, estimate.MaxCompletionTokens))
 	amount.Quo(amount, big.NewRat(1_000_000, 1))
 
@@ -82,75 +91,92 @@ func (s Service) EstimateAuthorizationAmount(estimate AuthorizationEstimate, pri
 	}, nil
 }
 
-// validateUsage 校验 usage token 约束，保持和 usage_records 表约束一致。
-func validateUsage(usage Usage) error {
-	if usage.PromptTokens < 0 || usage.CompletionTokens < 0 || usage.TotalTokens < 0 || usage.CachedTokens < 0 || usage.ReasoningTokens < 0 {
-		return failure.Wrap(
-			failure.CodeBillingInvalidUsage,
-			ErrInvalidUsage,
-			failure.WithMessage(ErrInvalidUsage.Error()),
-		)
-	}
-
-	if usage.TotalTokens != usage.PromptTokens+usage.CompletionTokens {
-		return failure.Wrap(
-			failure.CodeBillingInvalidUsage,
-			ErrInvalidUsage,
-			failure.WithMessage(ErrInvalidUsage.Error()),
-		)
-	}
-
-	if usage.CachedTokens > usage.PromptTokens {
-		return failure.Wrap(
-			failure.CodeBillingInvalidUsage,
-			ErrInvalidUsage,
-			failure.WithMessage(ErrInvalidUsage.Error()),
-		)
-	}
-
-	if usage.ReasoningTokens > usage.CompletionTokens {
-		return failure.Wrap(
-			failure.CodeBillingInvalidUsage,
-			ErrInvalidUsage,
-			failure.WithMessage(ErrInvalidUsage.Error()),
-		)
-	}
-
-	return nil
+// billableUsage 是当前 token_v1 公式消费的协议无关 token 数。
+type billableUsage struct {
+	UncachedInputTokens     int64
+	CacheReadInputTokens    int64
+	CacheWrite5mInputTokens int64
+	CacheWrite1hInputTokens int64
+	OutputTokensTotal       int64
+	ReasoningOutputTokens   int64
 }
 
-// tokenAmountBreakdown 表示四类 token 分别计算出的金额。
+// normalizeUsageFacts 校验 usage facts 并把 not_applicable 安全转换成 0。
+//
+// unknown 不得静默按 0 计费；只要当前公式需要的任一维度 unknown，就拒绝 settlement。
+func normalizeUsageFacts(facts usage.Facts) (billableUsage, error) {
+	if !facts.Valid() {
+		return billableUsage{}, failure.Wrap(
+			failure.CodeBillingInvalidUsage,
+			ErrInvalidUsage,
+			failure.WithMessage(ErrInvalidUsage.Error()),
+		)
+	}
+
+	uncachedInput, uncachedInputOK := facts.UncachedInputTokens.BillableValue()
+	cacheReadInput, cacheReadInputOK := facts.CacheReadInputTokens.BillableValue()
+	cacheWrite5mInput, cacheWrite5mInputOK := facts.CacheWrite5mInputTokens.BillableValue()
+	cacheWrite1hInput, cacheWrite1hInputOK := facts.CacheWrite1hInputTokens.BillableValue()
+	outputTotal, outputTotalOK := facts.OutputTokensTotal.BillableValue()
+	reasoningOutput, reasoningOutputOK := facts.ReasoningOutputTokens.BillableValue()
+	if !uncachedInputOK || !cacheReadInputOK || !cacheWrite5mInputOK ||
+		!cacheWrite1hInputOK || !outputTotalOK || !reasoningOutputOK {
+		return billableUsage{}, failure.Wrap(
+			failure.CodeBillingInvalidUsage,
+			ErrInvalidUsage,
+			failure.WithMessage(ErrInvalidUsage.Error()),
+		)
+	}
+
+	return billableUsage{
+		UncachedInputTokens:     uncachedInput,
+		CacheReadInputTokens:    cacheReadInput,
+		CacheWrite5mInputTokens: cacheWrite5mInput,
+		CacheWrite1hInputTokens: cacheWrite1hInput,
+		OutputTokensTotal:       outputTotal,
+		ReasoningOutputTokens:   reasoningOutput,
+	}, nil
+}
+
+// tokenAmountBreakdown 表示协议无关 token 维度分别计算出的金额。
 type tokenAmountBreakdown struct {
-	InputAmount           *big.Rat
-	OutputAmount          *big.Rat
-	CachedInputAmount     *big.Rat
-	ReasoningOutputAmount *big.Rat
-	TotalAmount           *big.Rat
+	UncachedInputAmount     *big.Rat
+	CacheReadInputAmount    *big.Rat
+	CacheWrite5mInputAmount *big.Rat
+	CacheWrite1hInputAmount *big.Rat
+	OutputAmount            *big.Rat
+	ReasoningOutputAmount   *big.Rat
+	TotalAmount             *big.Rat
 }
 
-// calculateTokenAmountBreakdown 按 token_v1 公式计算四类 token 的金额分项。
-func calculateTokenAmountBreakdown(usage Usage, rates tokenRates) tokenAmountBreakdown {
-	uncachedPrompt := usage.PromptTokens - usage.CachedTokens
-	normalCompletion := usage.CompletionTokens - usage.ReasoningTokens
+// calculateTokenAmountBreakdown 按 token_v1 公式计算各 token 维度的金额分项。
+func calculateTokenAmountBreakdown(usage billableUsage, rates tokenRates) tokenAmountBreakdown {
+	normalOutput := usage.OutputTokensTotal - usage.ReasoningOutputTokens
 
-	inputAmount := tokenAmount(rates.InputRate, uncachedPrompt)
-	cachedInputAmount := tokenAmount(rates.CachedInputRate, usage.CachedTokens)
-	outputAmount := tokenAmount(rates.OutputRate, normalCompletion)
-	reasoningOutputAmount := tokenAmount(rates.ReasoningOutputRate, usage.ReasoningTokens)
+	uncachedInputAmount := tokenAmount(rates.UncachedInputRate, usage.UncachedInputTokens)
+	cacheReadInputAmount := tokenAmount(rates.CacheReadInputRate, usage.CacheReadInputTokens)
+	cacheWrite5mInputAmount := tokenAmount(rates.CacheWrite5mInputRate, usage.CacheWrite5mInputTokens)
+	cacheWrite1hInputAmount := tokenAmount(rates.CacheWrite1hInputRate, usage.CacheWrite1hInputTokens)
+	outputAmount := tokenAmount(rates.OutputRate, normalOutput)
+	reasoningOutputAmount := tokenAmount(rates.ReasoningOutputRate, usage.ReasoningOutputTokens)
 
 	// 调用方决定只使用总额，还是连同分项一起写入成本快照。
 	totalAmount := new(big.Rat)
-	totalAmount.Add(totalAmount, inputAmount)
-	totalAmount.Add(totalAmount, cachedInputAmount)
+	totalAmount.Add(totalAmount, uncachedInputAmount)
+	totalAmount.Add(totalAmount, cacheReadInputAmount)
+	totalAmount.Add(totalAmount, cacheWrite5mInputAmount)
+	totalAmount.Add(totalAmount, cacheWrite1hInputAmount)
 	totalAmount.Add(totalAmount, outputAmount)
 	totalAmount.Add(totalAmount, reasoningOutputAmount)
 
 	return tokenAmountBreakdown{
-		InputAmount:           inputAmount,
-		OutputAmount:          outputAmount,
-		CachedInputAmount:     cachedInputAmount,
-		ReasoningOutputAmount: reasoningOutputAmount,
-		TotalAmount:           totalAmount,
+		UncachedInputAmount:     uncachedInputAmount,
+		CacheReadInputAmount:    cacheReadInputAmount,
+		CacheWrite5mInputAmount: cacheWrite5mInputAmount,
+		CacheWrite1hInputAmount: cacheWrite1hInputAmount,
+		OutputAmount:            outputAmount,
+		ReasoningOutputAmount:   reasoningOutputAmount,
+		TotalAmount:             totalAmount,
 	}
 }
 
