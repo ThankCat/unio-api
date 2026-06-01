@@ -124,8 +124,10 @@
 2. `response_format` typed（`json_object` + `json_schema` RawMessage passthrough）。
 3. 流式 `delta.tool_calls` 仍用 RawMessage 保留增量语义。
 
-### C8 待后续
+### C8 并入 Phase 10
 
-`logprobs`、`n`、`seed`、multimodal 完整校验等按优先级迭代。
+`logprobs`、`n`、`seed`、multimodal 完整校验等并入
+[Phase 10 OpenAI Chat Completions Matrix](../phase-10-dual-protocol-gateway/OPENAI_CHAT_COMPLETIONS_MATRIX.md)
+全量收口，不再作为长期可选项。
 
 **注意**：流式 tool_calls 增量合并（OpenAI index 语义）未做完整 typed 建模，当前 RawMessage passthrough 对多数 SDK 场景足够。

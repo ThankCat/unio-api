@@ -1,10 +1,10 @@
-# Phase 10 Plan - 后台管理
+# Phase 11 Plan - 后台管理
 
 ## 目标
 
 提供后台管理能力，让 user、project、API key、provider、channel、model、price、request logs 和 billing logs 可以被安全管理。
 
-阶段 10 不是“做几个 CRUD 页面”，而是把前面阶段的数据库业务数据真正变成可运营系统：
+阶段 11 不是“做几个 CRUD 页面”，而是把前面阶段的数据库业务数据真正变成可运营系统：
 
 1. 管理员可以管理用户和项目。
 2. 用户或管理员可以管理 API key。
@@ -19,7 +19,7 @@
 | --- | --- |
 | [internal/core/auth](../../../internal/core/auth) | customer API key auth 已存在，后台 admin auth 需要独立设计。 |
 | [internal/core/apikey](../../../internal/core/apikey) | API key 管理 service。 |
-| [internal/core/credential/resolver.go](../../../internal/core/credential/resolver.go) | credential_ref 解析边界。 |
+| [internal/core/credential](../../../internal/core/credential) | credential_ref 解析边界。 |
 | [internal/core/routing](../../../internal/core/routing) | 后台 channel/model 变更影响 routing。 |
 | [internal/core/modelcatalog](../../../internal/core/modelcatalog) | 后台模型可见性影响 `/v1/models`。 |
 | [internal/service/gateway](../../../internal/service/gateway) | request log 和 billing log 查询的事实来源。 |
@@ -27,8 +27,8 @@
 
 ## 任务
 
-<a id="task-9-01-admin-auth"></a>
-### TASK-9.01 Admin auth
+<a id="task-11-01-admin-auth"></a>
+### TASK-11.01 Admin auth
 
 状态：planned
 
@@ -53,8 +53,8 @@
 2. customer API key 不能访问后台。
 3. 后台 JWT 不能用于 `/v1/chat/completions`。
 
-<a id="task-9-02-credential-management"></a>
-### TASK-9.02 Credential 管理
+<a id="task-11-02-credential-management"></a>
+### TASK-11.02 Credential 管理
 
 状态：planned
 
@@ -79,8 +79,8 @@
 - [GAP-6-001](../../production/TODO_REGISTER.md#gap-6-001)
 
 
-<a id="task-9-03-provider-channel-admin"></a>
-### TASK-9.03 Provider/channel/model/price 管理
+<a id="task-11-03-provider-channel-admin"></a>
+### TASK-11.03 Provider/channel/model/price 管理
 
 状态：planned
 
@@ -92,8 +92,8 @@
 
 计划实现：
 
-1. provider CRUD，写入前校验 adapter key 是否存在。
-2. channel CRUD，支持 enabled、priority、base_url、credential_ref、health。
+1. provider CRUD。
+2. channel CRUD，支持 protocol、adapter_key、enabled、priority、base_url、credential_ref、health。
 3. model CRUD，支持 enabled、owned_by。
 4. channel_model CRUD，支持 upstream_model、enabled。
 5. price CRUD，支持 pricing_unit、currency、effective_from/to。
@@ -106,8 +106,8 @@
 2. [TASK-6.04](../phase-06-model-channel-routing/PLAN.md#task-6-04-routing-policy)
 3. [TASK-7.22](../phase-07-billing-ledger/PLAN.md#task-7-22-price-effective-window)
 
-<a id="task-9-04-request-billing-dashboard"></a>
-### TASK-9.04 Request 与 billing dashboard
+<a id="task-11-04-request-billing-dashboard"></a>
+### TASK-11.04 Request 与 billing dashboard
 
 状态：planned
 
@@ -135,8 +135,8 @@
 3. [TASK-7.21](../phase-07-billing-ledger/PLAN.md#task-7-21-error-usage-audit)
 4. [TASK-8.02](../phase-08-observability-stability/PLAN.md#task-8-02-metrics)
 
-<a id="task-9-05-customer-project-billing-controls"></a>
-### TASK-9.05 客户、项目与预算控制
+<a id="task-11-05-customer-project-billing-controls"></a>
+### TASK-11.05 客户、项目与预算控制
 
 状态：planned
 

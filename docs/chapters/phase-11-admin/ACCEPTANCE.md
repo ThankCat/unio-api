@@ -1,10 +1,10 @@
-# Phase 10 Acceptance
+# Phase 11 Acceptance
 
 ## 功能验收
 
 1. 管理员可以登录后台。
 2. 可以管理用户、project、API key。
-3. 可以管理 provider、channel、model、price。
+3. 可以管理 provider、带 protocol/adapter_key 的 channel、model、price。
 4. 可以查看 request logs 和 billing logs。
 5. 后台变更能影响 routing 和 `/v1/models`。
 
@@ -27,4 +27,3 @@
 
 1. 后台权限模型写入章节文档。
 2. credential 管理方案写入决策文档。
-

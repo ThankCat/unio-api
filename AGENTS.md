@@ -41,7 +41,7 @@ unio-web
 ```text
 /v1/*
 = 客户程序调用
-= OpenAI-compatible
+= OpenAI Chat Completions 与 Anthropic Messages 原生协议
 = opaque API key 认证
 
 /admin/v1/*
@@ -191,6 +191,9 @@ docs/production/DECISIONS.md
 
 docs/production/THIRD_PARTY_POLICY.md
 = 第三方库选择原则。
+
+docs/protocol/*
+= OpenAI、Anthropic 等公开接口的原始参考或带来源日期的官方摘要快照；章节字段矩阵必须逐项消费，不允许只做 MVP 子集。
 ```
 
 `AGENTS.md` 不写章节任务清单。章节内容新增、拆分或收口时，优先维护对应 `docs/chapters/phase-xx-*`。
@@ -280,7 +283,7 @@ Provider、channel、model、price、fallback、health 和 rate policy 属于业
 - Billing / ledger 必须记录 request、model、provider、channel、price snapshot 和 usage，不能只记录“请求成功”。
 - Billing / ledger 底层不能用“倍率”替代金额事实；第一版价格体系不支持倍率，结算必须使用明确的客户售价、成本价和请求级快照。
 - Redis 不能作为金额或余额的最终事实来源。
-- OpenAI-compatible endpoint 不能无脑透传上游错误 body。
+- 公开 Gateway endpoint 不能无脑透传上游错误 body。
 - 用户 API key、后台 admin auth、用户后台 console auth 不能混用。
 
 计费与余额商业规则：
@@ -311,7 +314,7 @@ Provider、channel、model、price、fallback、health 和 rate policy 属于业
 - `failure.WithMessage` 用于内部诊断消息，不等于用户可见文案。
 - `failure.WithField` 只用于确实需要结构化检索的少量安全字段；不要为每个模块预定义 Field 常量，也不要把 API key、credential、上游原始 body、SQL 细节等敏感信息放进 fields。
 - 日志记录错误时使用 `failure.LogArgs(err)`，统一输出 `error`、`error_code`、`error_category` 和安全 fields。
-- HTTP 层必须把内部 failure 映射成安全的 OpenAI-compatible 错误响应，不能直接把 `err.Error()` 暴露给用户。
+- HTTP 层必须把内部 failure 映射成安全的协议原生错误响应，不能直接把 `err.Error()` 暴露给用户。
 - `request_records.error_code` 和 `request_attempts.error_code` 优先使用 `failure.CodeOf(err)`；没有 failure code 时才能使用本地 fallback code。
 - 测试应优先断言 `failure.CodeOf`、`failure.CategoryOf` 和 `errors.Is`，不要依赖完整错误字符串。
 
@@ -321,21 +324,31 @@ Provider / upstream 错误规则：
 - Gateway 只消费 adapter 返回的稳定 failure 分类，不解析 provider 原始错误 body。
 - 用户可见错误由 HTTP 层统一映射；provider 原始错误只能进入后续脱敏后的内部日志、request log 内部字段或 observability metadata。
 
-## OpenAI 公开契约与 Adapter 响应翻译
+## 双协议公开契约与 Adapter 响应翻译
 
-产品目标：客户只修改 `base_url` 和 `api_key`，现有 OpenAI SDK / Agent 框架即可 drop-in 使用 Unio Gateway。
+产品目标：客户只修改 `base_url` 和 `api_key`，现有 OpenAI SDK 或 Anthropic SDK 即可按对应协议 drop-in 使用 Unio Gateway。
 
 硬规则：
 
-- **对外契约以 OpenAI Chat Completions 为准**；上游厂商 JSON 只存在于 adapter wire 层，不得泄漏到 gateway 编排或公开响应。
-- **adapter contract 使用 OpenAI 语义**，不是 vendor 字段定义；vendor 差异只在 adapter 内通过 request map、response map、stream translate 消化。
-- **完整链路**：用户 OpenAI 请求 → routing 选模型 → adapter 请求翻译 → upstream → adapter 响应翻译 → gateway 返回 OpenAI 响应。
-- **禁止 silent drop**：客户端传入的 OpenAI 或已登记 vendor extension 字段，不得在 JSON decode 或 gateway→adapter 映射阶段被窄 struct 静默丢弃；不支持的能力必须明确 400 或写入 Compatibility Matrix 的 Reject。
+- **对外维护两个独立协议族**：OpenAI Chat Completions 与 Anthropic Messages 分别维护 HTTP DTO、adapter contract、响应 DTO、stream event 和公开错误结构，不强行合并成一套大 DTO。
+- **协议族根目录放复用逻辑**：`adapter/openai` 与 `adapter/anthropic` 放各自协议族稳定能力；具体 provider 在 `adapter/openai/<provider>` 与 `adapter/anthropic/<provider>` 下实现差异。
+- **DeepSeek 双协议实现**：DeepSeek 同时提供 OpenAI 与 Anthropic endpoint 时，分别实现 `adapter/openai/deepseek` 和 `adapter/anthropic/deepseek`。
+- **完整链路**：用户协议请求 → routing 按 ingress protocol 选 channel → provider adapter 请求翻译 → upstream → provider adapter 响应翻译 → 原生协议响应返回用户。
+- **账务审计统一事实**：adapter 在同一次响应解析中同时生成协议原生响应与 `ResponseFacts`；settlement、recovery 和审计只消费统一事实，不反向解析公开响应。
+- **共享 Lifecycle Executor**：API key 身份、request record、routing、channel 熔断、余额冻结、attempt、retry/fallback、settlement、recovery、metrics、tracing 和 delivery audit 复用共享 lifecycle。
+- **同协议 routing**：第一版 OpenAI ingress 只命中 OpenAI channel，Anthropic ingress 只命中 Anthropic channel；禁止隐式跨协议 bridge。
+- **Adapter capability 独立注册**：同一个 `(protocol, adapter_key)` 下分别登记非流式、流式和内部输入 tokenizer；不定义 `FullChatAdapter`、`FullMessagesAdapter` 等强制组合接口。SQL 先按协议筛选，lifecycle 再按 registry capability 过滤。
+- **Tokenizer 按协议族定义**：OpenAI tokenizer 消费 OpenAI Chat Completions DTO，Anthropic tokenizer 消费 Anthropic Messages DTO；共享 lifecycle 只调用候选级估算 closure，不接触协议 DTO。
+- **Tokenizer 按具体协议 adapter 独立实现**：同一个 provider 同时支持 OpenAI 与 Anthropic 时，必须分别在 `adapter/openai/<provider>` 和 `adapter/anthropic/<provider>` 实现对应 tokenizer；不能通过共享 provider tokenizer facade 把两套 wire framing、字段校验或估算返回语义重新揉成一套。
+- **预授权保守估算**：同协议 fallback 可能命中不同 adapter；authorization 必须对可用候选使用各自 wire 对应 tokenizer，并按保守 token 估算冻结余额。
+- **retry 归 lifecycle**：adapter 一次调用只允许发起一次真实 upstream HTTP 请求；每次 retry 或 fallback 必须创建新的 request attempt。
+- **生产 adapter 不使用官方 Go SDK**：自行维护 wire DTO、HTTP、响应解析和 SSE 翻译；官方 SDK 只用于黑盒验收。
+- **禁止 silent drop**：客户端传入的协议字段或已登记 vendor extension，不得在 JSON decode、gateway→adapter 映射或 provider wire 转换阶段被窄 struct 静默丢弃；不支持的能力必须明确 400 或写入 Compatibility Matrix 的 Reject。
 - **Gateway 不得写 vendor 分支**；不得把 `reasoning_content` 长期合并进 `content` 作为最终对外语义。
-- **`normalizer/` 等过渡实现不是独立架构层**；stream 差异必须收口为 adapter 内的 stream response translation，文档与代码统一使用该名称。
+- **`normalizer/`、`streamtranslate/` 等过渡实现不是独立架构层**；stream 差异必须收口到对应 provider adapter。
 - Phase 4 text-only MVP 边界在 OpenAI parity 阶段完成后视为被 parity 层取代，而不是长期并存两套公开语义。
 
-详细字段矩阵、DeepSeek 映射和任务拆解见 `docs/chapters/phase-09-openai-protocol-parity/`。
+详细字段矩阵、DeepSeek 双协议映射和任务拆解见 `docs/chapters/phase-10-dual-protocol-gateway/`。
 
 ## 技术栈
 

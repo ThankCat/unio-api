@@ -1,6 +1,6 @@
 # Project Structure - Unio API 全服务目录方案
 
-更新时间：2026-05-28
+更新时间：2026-06-01
 
 本文档记录 Unio API 后端仓库的全服务目标目录结构、分层职责和依赖方向。
 
@@ -89,17 +89,28 @@ workers
 │   ├── app
 │   │   ├── gatewayapi
 │   │   │   ├── router.go
-│   │   │   ├── response.go
-│   │   │   ├── chatcompletions
-│   │   │   │   ├── handler.go
-│   │   │   │   ├── dto.go
-│   │   │   │   └── stream.go
-│   │   │   ├── models
-│   │   │   │   ├── handler.go
-│   │   │   │   └── dto.go
-│   │   │   └── middleware
-│   │   │       ├── api_key_auth.go
-│   │   │       └── rate_limit.go
+│   │   │   ├── middleware
+│   │   │   │   ├── api_key_auth.go
+│   │   │   │   └── rate_limit.go
+│   │   │   ├── openai
+│   │   │   │   ├── response.go
+│   │   │   │   ├── chatcompletions
+│   │   │   │   │   ├── handler.go
+│   │   │   │   │   ├── dto.go
+│   │   │   │   │   ├── decode.go
+│   │   │   │   │   ├── validation.go
+│   │   │   │   │   └── stream.go
+│   │   │   │   └── models
+│   │   │   │       ├── handler.go
+│   │   │   │       └── dto.go
+│   │   │   └── anthropic
+│   │   │       ├── response.go
+│   │   │       └── messages
+│   │   │           ├── handler.go
+│   │   │           ├── dto.go
+│   │   │           ├── decode.go
+│   │   │           ├── validation.go
+│   │   │           └── stream.go
 │   │   │
 │   │   ├── adminapi
 │   │   │   ├── router.go
@@ -149,13 +160,20 @@ workers
 │   │
 │   ├── service
 │   │   ├── gateway
-│   │   │   ├── chat_completion.go
-│   │   │   ├── chat_stream.go
-│   │   │   ├── chat_authorization.go
-│   │   │   ├── chat_request_record.go
-│   │   │   ├── chat_settlement.go
-│   │   │   ├── chat_settlement_recovery.go
-│   │   │   └── service.go
+│   │   │   ├── lifecycle
+│   │   │   │   ├── executor.go
+│   │   │   │   ├── authorization.go
+│   │   │   │   ├── attempt.go
+│   │   │   │   ├── fallback.go
+│   │   │   │   ├── settlement.go
+│   │   │   │   ├── recovery.go
+│   │   │   │   ├── delivery.go
+│   │   │   │   ├── metrics.go
+│   │   │   │   └── tracing.go
+│   │   │   ├── openai
+│   │   │   │   └── chatcompletions
+│   │   │   └── anthropic
+│   │   │       └── messages
 │   │   │
 │   │   ├── admin
 │   │   │   ├── providers
@@ -190,8 +208,25 @@ workers
 │   │   ├── modelcatalog
 │   │   ├── routing
 │   │   ├── adapter
+│   │   │   ├── facts.go
+│   │   │   ├── registry.go
+│   │   │   ├── upstream_error.go
+│   │   │   ├── upstreamhttp
+│   │   │   ├── sse
 │   │   │   ├── openai
-│   │   │   └── sse
+│   │   │   │   ├── contract.go
+│   │   │   │   ├── dto.go
+│   │   │   │   ├── request.go
+│   │   │   │   ├── response.go
+│   │   │   │   ├── stream.go
+│   │   │   │   └── deepseek
+│   │   │   └── anthropic
+│   │   │       ├── contract.go
+│   │   │       ├── dto.go
+│   │   │       ├── request.go
+│   │   │       ├── response.go
+│   │   │       ├── stream.go
+│   │   │       └── deepseek
 │   │   └── credential
 │   │
 │   └── platform
@@ -267,7 +302,7 @@ worker runner
 `app` 是入口适配层。
 
 ```text
-app/gatewayapi = /v1/* HTTP handler、DTO、router、middleware
+app/gatewayapi = /v1/* 双协议 HTTP handler、DTO、router、middleware
 app/adminapi   = /admin/v1/* HTTP handler、DTO、router、middleware
 app/consoleapi = /console/v1/* HTTP handler、DTO、router、middleware
 app/workers    = worker job loop、claim、runner、调度入口
@@ -415,7 +450,40 @@ Gateway API：
 /v1/*
 ```
 
-服务客户程序调用，OpenAI-compatible，使用 opaque API key 认证。
+服务客户程序调用，使用 opaque API key 认证。
+
+当前公开协议族：
+
+```text
+OpenAI:
+  POST /v1/chat/completions
+
+Anthropic:
+  POST /v1/messages
+```
+
+目录边界：
+
+```text
+app/gatewayapi/openai
+= OpenAI HTTP DTO、decode、validation、encode、SSE 和错误响应。
+
+app/gatewayapi/anthropic
+= Anthropic HTTP DTO、decode、validation、encode、SSE 和错误响应。
+
+service/gateway/lifecycle
+= API key 身份之后的 request、routing、authorization、attempt、fallback、
+   settlement、recovery、metrics、tracing 和 delivery audit。
+
+core/adapter/openai/deepseek
+= DeepSeek OpenAI endpoint 的请求与响应转换。
+
+core/adapter/anthropic/deepseek
+= DeepSeek Anthropic endpoint 的请求与响应转换。
+```
+
+请求协议和响应协议保持分离；账务、审计和商业生命周期按统一事实复用。详细方案见
+[Phase 10 Architecture](../chapters/phase-10-dual-protocol-gateway/ARCHITECTURE.md)。
 
 Admin API：
 
@@ -437,7 +505,10 @@ Admin API 和 Console API 不能绕过 `core/billing`、`core/ledger`、`core/ro
 
 ## 当前结构状态
 
-当前代码已经按本文档的 `cmd`、`app`、`service`、`core`、`platform` 分层完成迁移。
+当前代码已经按本文档的 `cmd`、`app`、`service`、`core`、`platform` 主分层完成迁移。
+
+Phase 10 将在主分层不变的前提下，把 `gatewayapi`、`service/gateway` 与 `core/adapter`
+继续按 OpenAI / Anthropic 协议族整理。当前代码尚未完成这一轮目录迁移。
 
 后续新增代码必须直接进入目标目录，不再使用迁移前的旧路径。
 

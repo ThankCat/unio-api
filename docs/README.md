@@ -11,6 +11,7 @@
 5. 检查生产欠账时，阅读 [production/TODO_REGISTER.md](production/TODO_REGISTER.md)。
 6. 涉及重大取舍时，阅读 [production/DECISIONS.md](production/DECISIONS.md)。
 7. 选择第三方库或决定是否手写基础设施时，阅读 [production/THIRD_PARTY_POLICY.md](production/THIRD_PARTY_POLICY.md)。
+8. 实现公开协议时，阅读 [protocol](protocol) 下保存的接口原始参考或官方摘要快照，并从对应章节的字段矩阵逐项收口。
 
 ## 目录职责
 
@@ -24,6 +25,7 @@
 | [production/DECISIONS.md](production/DECISIONS.md) | 重大架构和商业规则决策记录。 |
 | [production/RELEASE_BLOCKERS.md](production/RELEASE_BLOCKERS.md) | 当前上线阻断项。 |
 | [production/THIRD_PARTY_POLICY.md](production/THIRD_PARTY_POLICY.md) | 第三方库选择原则。 |
+| [protocol](protocol) | OpenAI、Anthropic 等公开接口的原始参考或带来源日期的官方摘要快照，由阶段字段矩阵逐项消费。 |
 
 ## TODO 追踪规则
 

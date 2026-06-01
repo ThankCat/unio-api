@@ -232,9 +232,9 @@ TASK-7.20 落地成本价与 cost snapshot，不做倍率系统。
 如果未来确有批量调价或代理运营需求，再另做倍率/折扣的产品决策；即使未来引入，也只能作为后台辅助工具，结算层仍只消费明确金额和快照。
 ```
 
-## DEC-005 OpenAI-first 公开契约与 adapter 响应翻译
+## DEC-009 OpenAI-first 公开契约与 adapter 响应翻译
 
-状态：accepted
+状态：superseded by DEC-010
 
 决策：
 
@@ -273,4 +273,178 @@ Unio Gateway 对外 `/v1/chat/completions` 以 OpenAI Chat Completions 为唯一
 Phase 9 全链路实现与验收以 docs/chapters/phase-09-openai-protocol-parity/ 为准。
 DeepSeek 作为第一个 upstream 全链路验收（TASK-9.14），不是第一个 special case patch 点。
 关联任务：../chapters/phase-09-openai-protocol-parity/PLAN.md
+```
+
+## DEC-010 双协议公开入口、协议原生响应与统一事实
+
+状态：accepted
+
+决策：
+
+```text
+Unio Gateway 从 OpenAI Chat Completions 单协议公开入口升级为两个公开协议族：
+
+OpenAI:
+  POST /v1/chat/completions
+
+Anthropic:
+  POST /v1/messages
+
+两套协议分别维护 HTTP DTO、adapter contract、provider wire DTO、响应 DTO、
+stream event 和公开错误结构，不强行转换为一套“大一统聊天 DTO”。
+
+共享能力收口到 gateway lifecycle：
+  API key 身份
+  request record
+  routing
+  channel 熔断
+  authorization
+  attempt
+  retry / fallback
+  settlement
+  recovery
+  metrics / tracing
+  delivery audit
+
+adapter 每次解析 upstream response 时同时生成：
+  1. 协议原生响应或 stream event，返回对应 SDK。
+  2. ResponseFacts，进入审计、settlement 和 recovery。
+
+成功交付边界：
+  非流式响应只能在 immutable recovery facts 已持久化后返回。
+  流式终态 `[DONE]` 或 `message_stop` 只能在 immutable recovery facts 已持久化后写出。
+  首次 settlement 失败但 recovery job 已持久化时，可以按 pending recovery 成功交付；
+  recovery facts 无法持久化时，不能向客户宣告成功完成。
+```
+
+Provider 双协议规则：
+
+```text
+provider 只表达业务服务商身份。
+channel 使用 protocol + adapter_key 绑定具体协议实现。
+
+DeepSeek:
+  channel.protocol=openai,    adapter_key=deepseek
+  channel.protocol=anthropic, adapter_key=deepseek
+
+对应代码：
+  adapter/openai/deepseek
+  adapter/anthropic/deepseek
+
+同一个 (protocol, adapter_key) 下分别登记：
+  non_stream
+  stream
+  input_tokenizer
+
+不定义 FullChatAdapter、FullMessagesAdapter 等强制组合接口。
+三个 capability 分别注册、分别做编译期断言、分别参与 routing 过滤。
+
+tokenizer 接口按协议族定义：
+  openai.ChatInputTokenizer       → 消费 OpenAI ChatCompletionRequest
+  anthropic.MessagesInputTokenizer → 消费 Anthropic MessageRequest
+
+同一个 provider 的不同协议入口必须分别实现 tokenizer：
+  adapter/openai/deepseek/tokenizer.go
+  adapter/anthropic/deepseek/tokenizer.go
+
+两个实现分别按各自 DeepSeek wire 请求估算，不共享 provider tokenizer facade，
+不把 OpenAI messages 和 Anthropic content blocks 归一成一套中间 DTO。
+如果实现稳定后确认底层纯文本编码 primitive 完全一致，可以提取窄工具；
+协议 framing、字段校验、估算入口和返回语义仍留在各自 protocol adapter。
+
+共享 lifecycle 不消费协议 DTO，只调用协议 service 提供的候选级估算 closure。
+```
+
+Routing 规则：
+
+```text
+第一版只允许同协议 routing 和 fallback：
+  OpenAI ingress    → OpenAI upstream channel
+  Anthropic ingress → Anthropic upstream channel
+
+不得隐式做 OpenAI ↔ Anthropic 跨协议桥接。
+未来需要 bridge 时，必须另做字段损失矩阵、模型能力矩阵、计费映射和黑盒验收。
+
+routing SQL 只按数据库 channel.protocol 选择同协议候选。
+lifecycle 再按内存 registry capability 和熔断状态过滤候选。
+authorization 对可用 fallback candidates 使用各自 tokenizer，并按保守 token 结果冻结余额。
+```
+
+原因：
+
+```text
+OpenAI Chat Completions 与 Anthropic Messages 的 system、messages、content block、
+tools、thinking、usage、stream 和错误结构差异明显。
+
+如果强行统一请求和响应 DTO，会产生大量 nullable 字段、map[string]any 和 vendor 分支，
+并让 billing 依赖协议细节。
+
+商业生命周期和账务事实可以稳定复用，因此应统一 lifecycle 与 ResponseFacts，
+而不是统一公开协议 DTO。
+```
+
+影响：
+
+```text
+Phase 10 按 docs/chapters/phase-10-dual-protocol-gateway/ 实现。
+原阶段 10 后台管理顺延为阶段 11。
+DEC-009 的 OpenAI-first 原则保留为历史决策，其中“gateway 不写 vendor 分支”
+和“响应翻译收口 adapter”继续有效；“唯一客户契约”由本决策替代。
+```
+
+## DEC-011 生产 Adapter 不使用官方 Go SDK，retry 归 lifecycle
+
+状态：accepted
+
+决策：
+
+```text
+生产 adapter 不引入 OpenAI 或 Anthropic 官方 Go SDK。
+
+adapter 自行维护：
+  provider wire DTO
+  outbound HTTP
+  response decode
+  SSE translation
+  usage → ResponseFacts
+  provider error → UpstreamError
+
+adapter 一次调用只允许发送一次真实 upstream HTTP 请求。
+retry 和 fallback 由 gateway lifecycle 决定。
+每次真实上游调用都必须对应一条 request_attempt。
+```
+
+允许共享：
+
+```text
+adapter/upstreamhttp
+  outbound HTTP primitive、body limit、连接关闭、安全 metadata 提取
+
+adapter/sse
+  SSE reader primitive
+```
+
+不允许共享成模糊大包：
+
+```text
+common
+util
+helper
+```
+
+原因：
+
+```text
+SDK 能减少部分请求和响应样板代码，但无法替代 provider 显式转换、禁止 silent drop、
+ResponseFacts、审计、settlement、fallback 和 recovery。
+
+SDK 默认 retry 或 SDK 类型泄漏会让真实 upstream 调用次数、成本、熔断和审计不一致。
+Unio 需要自己掌握 wire 边界。
+```
+
+影响：
+
+```text
+OpenAI 和 Anthropic SDK 仍可作为 Phase 10 黑盒验收客户端使用，
+但不进入生产 adapter 依赖图。
 ```

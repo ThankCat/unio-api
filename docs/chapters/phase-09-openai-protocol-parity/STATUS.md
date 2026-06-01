@@ -4,7 +4,7 @@
 
 ## 阶段判断
 
-Phase 9 C1~C6 核心 OpenAI parity 已实现并通过黑盒/E2E 测试；`go test ./internal/...` 全绿。C8 高级字段（logprobs、seed 等）留待后续迭代。
+Phase 9 C1~C6 核心 OpenAI parity 已实现并通过黑盒/E2E 测试；`go test ./internal/...` 全绿。C8 高级字段（logprobs、seed 等）并入 Phase 10 全量协议改造。
 
 | 来源 | 内容 | Phase 9 收口 |
 | --- | --- | --- |
@@ -15,7 +15,7 @@ Phase 9 C1~C6 核心 OpenAI parity 已实现并通过黑盒/E2E 测试；`go tes
 
 | 任务 | 状态 | 说明 |
 | --- | --- | --- |
-| TASK-9.01 | done | DEC-005 + 协议/链路/矩阵文档。 |
+| TASK-9.01 | done | DEC-009 + 协议/链路/矩阵文档；后续由 DEC-010 扩展为双协议。 |
 | TASK-9.02 | done | 双轨 decode + Reject + Extensions passthrough。 |
 | TASK-9.03 | done | 公开 DTO 完整 OpenAI 形状。 |
 | TASK-9.04 | done | adapter contract OpenAI 语义。 |
@@ -48,7 +48,7 @@ Phase 9 C1~C6 核心 OpenAI parity 已实现并通过黑盒/E2E 测试；`go tes
 go test ./internal/... -count=1   # 2026-05-31 全绿
 ```
 
-## 后续（C8 / 可选）
+## 后续（C8 / Phase 10 全量收口）
 
-1. 可选 Python OpenAI SDK 实机脚本（`UNIO_BASE_URL`）。
-2. C8：`logprobs`、`n`、`seed`、multimodal 校验增强。
+1. Phase 10 TASK-10.13 重建 OpenAI SDK 全量黑盒套件；历史可选脚本不继续作为验收入口。
+2. C8：`logprobs`、`n`、`seed`、multimodal 等高级字段并入 Phase 10，不再作为长期可选项。

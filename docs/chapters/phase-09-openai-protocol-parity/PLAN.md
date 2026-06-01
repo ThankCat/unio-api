@@ -79,7 +79,7 @@ Phase 4 的 text-only 边界在 Phase 9 完成后视为 **被 parity 层取代**
 | [internal/core/adapter/chat.go](../../../internal/core/adapter/chat.go) | adapter 内部 OpenAI 语义 contract。 |
 | [internal/core/adapter/openai/chat.go](../../../internal/core/adapter/openai/chat.go) | 上游 HTTP、request/response/stream 主流程。 |
 | [internal/core/adapter/openai/dto.go](../../../internal/core/adapter/openai/dto.go) | upstream wire DTO。 |
-| [internal/core/adapter/openai/normalizer/](../../../internal/core/adapter/openai/normalizer/) | **过渡实现**；TASK-9.07 吸收/refactor 为 stream translate。 |
+| `internal/core/adapter/openai/normalizer/`（历史路径，已移除） | **过渡实现**；TASK-9.07 吸收/refactor 为 stream translate。 |
 | [internal/service/gateway/chat_completion.go](../../../internal/service/gateway/chat_completion.go) | 非流式 gateway 编排。 |
 | [internal/service/gateway/chat_stream.go](../../../internal/service/gateway/chat_stream.go) | 流式 gateway 编排。 |
 | [docs/production/DECISIONS.md](../../production/DECISIONS.md) | OpenAI-first 兼容策略 ADR。 |
@@ -100,7 +100,7 @@ Phase 4 的 text-only 边界在 Phase 9 完成后视为 **被 parity 层取代**
 
 计划实现：
 
-1. ~~在 [docs/production/DECISIONS.md](../../production/DECISIONS.md) 记录 OpenAI-first 原则。~~ → [DEC-005](../../production/DECISIONS.md#dec-005-openai-first-公开契约与-adapter-响应翻译)
+1. ~~在 [docs/production/DECISIONS.md](../../production/DECISIONS.md) 记录 OpenAI-first 原则。~~ → [DEC-009](../../production/DECISIONS.md#dec-009-openai-first-公开契约与-adapter-响应翻译)（后续由 DEC-010 扩展为双协议）
 2. 明确三层 DTO 职责：gatewayapi / adapter contract / upstream wire。
 3. 明确 Normalizer 不再作为独立架构层维护；统一称为 adapter 响应翻译。
 4. 定义 Capability Matrix 与 Supported / Passthrough / Rejected 三态。

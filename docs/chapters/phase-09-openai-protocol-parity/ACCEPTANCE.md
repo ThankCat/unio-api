@@ -50,7 +50,7 @@ C1~C4 done 表示 chat/reasoning/stream usage 等核心 drop-in 能力就绪；*
 3. [END_TO_END_PIPELINE.md](END_TO_END_PIPELINE.md) 覆盖完整七步链路。
 4. [DEEPSEEK_UPSTREAM.md](DEEPSEEK_UPSTREAM.md) 覆盖 DeepSeek 请求/响应映射与 DS-01~07 用例。
 5. [COMPATIBILITY_MATRIX.md](COMPATIBILITY_MATRIX.md) 与实现状态同步。
-6. [DECISIONS.md](../../production/DECISIONS.md) 含 OpenAI-first ADR（DEC-005）。
+6. [DECISIONS.md](../../production/DECISIONS.md) 含 OpenAI-first ADR（DEC-009，后续由 DEC-010 扩展为双协议）。
 7. Phase 4 text-only MVP 边界已标注由 Phase 9 取代。
 8. 文档中不再单独定义 Normalizer 架构；统一称为 adapter 响应翻译 / stream translate。
 
@@ -92,7 +92,6 @@ go build ./cmd/gateway-server ./cmd/worker-server
 
 | 项 | 说明 |
 | --- | --- |
-| Python OpenAI SDK 实机黑盒 | ✅ 2026-05-31 本地 `127.0.0.1:8520` 6/6 通过（见 `tests/openai_sdk_blackbox/run_acceptance.py`） |
-| C8 高级字段 | `logprobs`、`n`、`seed` 等待后续迭代 |
+| Python OpenAI SDK 实机黑盒 | ✅ 2026-05-31 本地 `127.0.0.1:8520` 6/6 通过；Phase 10 由 TASK-10.13 重建全量黑盒套件 |
+| C8 高级字段 | `logprobs`、`n`、`seed` 等并入 [Phase 10](../phase-10-dual-protocol-gateway/PLAN.md) 全量收口 |
 | 流式 tool_calls 增量 typed | 当前 RawMessage passthrough，多数 SDK 场景足够 |
-

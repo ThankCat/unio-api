@@ -4,7 +4,11 @@
 
 DeepSeek 官方 API 为 **OpenAI-compatible Chat Completions**（`base_url=https://api.deepseek.com`）。
 
-Unio 中 DeepSeek 走 `providers.adapter=openai` + `ProviderSlug=deepseek` 的 adapter 翻译规则，**不对客户暴露 DeepSeek 协议**。
+Phase 9 历史实现中，DeepSeek 走 `providers.adapter=openai` + `ProviderSlug=deepseek`
+的 adapter 翻译规则，**不对客户暴露 DeepSeek 协议**。
+
+Phase 10 会把 runtime adapter 绑定迁移为 `channels.protocol` + `channels.adapter_key`，
+并将 DeepSeek OpenAI 翻译收口到 `adapter/openai/deepseek`。
 
 全链路见 [END_TO_END_PIPELINE.md](END_TO_END_PIPELINE.md)。
 

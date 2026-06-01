@@ -48,7 +48,8 @@ ACCEPTANCE.md
 | 阶段 7 | [PLAN](phase-07-billing-ledger/PLAN.md) | [STATUS](phase-07-billing-ledger/STATUS.md) | [ACCEPTANCE](phase-07-billing-ledger/ACCEPTANCE.md) |
 | 阶段 8 | [PLAN](phase-08-observability-stability/PLAN.md) | [STATUS](phase-08-observability-stability/STATUS.md) | [ACCEPTANCE](phase-08-observability-stability/ACCEPTANCE.md) |
 | 阶段 9 | [PLAN](phase-09-openai-protocol-parity/PLAN.md) | [STATUS](phase-09-openai-protocol-parity/STATUS.md) | [ACCEPTANCE](phase-09-openai-protocol-parity/ACCEPTANCE.md) |
-| 阶段 10 | [PLAN](phase-10-admin/PLAN.md) | [STATUS](phase-10-admin/STATUS.md) | [ACCEPTANCE](phase-10-admin/ACCEPTANCE.md) |
+| 阶段 10 | [PLAN](phase-10-dual-protocol-gateway/PLAN.md) | [STATUS](phase-10-dual-protocol-gateway/STATUS.md) | [ACCEPTANCE](phase-10-dual-protocol-gateway/ACCEPTANCE.md) |
+| 阶段 11 | [PLAN](phase-11-admin/PLAN.md) | [STATUS](phase-11-admin/STATUS.md) | [ACCEPTANCE](phase-11-admin/ACCEPTANCE.md) |
 
 ## 状态定义
 

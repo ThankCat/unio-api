@@ -25,7 +25,7 @@
 | [sql/queries/project_model_policies.sql](../../../sql/queries/project_model_policies.sql) | project 模型可见性策略查询。 |
 | [internal/core/modelcatalog/catalog.go](../../../internal/core/modelcatalog/catalog.go) | model catalog service。 |
 | [internal/core/routing/router.go](../../../internal/core/routing/router.go) | routing service。 |
-| [internal/core/credential/resolver.go](../../../internal/core/credential/resolver.go) | credential_ref 解析边界。 |
+| [internal/core/credential](../../../internal/core/credential) | credential_ref 解析边界。 |
 | [internal/core/channel/runtime.go](../../../internal/core/channel/runtime.go) | 传给 adapter 的运行时 channel 参数。 |
 
 ## 任务
@@ -85,7 +85,7 @@
 计划处理时机：
 
 ```text
-阶段 10 前置小节，进入后台 channel 管理和凭据管理前。
+阶段 11 前置小节，进入后台 channel 管理和凭据管理前。
 ```
 
 关联 GAP：
@@ -119,11 +119,11 @@
 7. 启动时校验 adapter registry 同时具备 chat 和 stream chat 能力。
 8. preflight 失败时返回 `bootstrap_*` failure code，并携带 provider_id、provider_slug、adapter_key 和 capability 安全字段。
 9. server app wiring 已收敛到 `internal/bootstrap.NewGatewayServerApp`，`cmd/gateway-server/main.go` 只保留 config、资源启动、HTTP server lifecycle 和退出信号处理。
-10. 后台写入 provider.adapter 的 registry 校验推迟到阶段 10 provider CRUD。
+10. 阶段 10 会把 runtime 绑定升级为 channel.protocol + channel.adapter_key；后台写入 registry 校验推迟到阶段 11 provider/channel CRUD。
 
 计划实现：
 
-1. 阶段 10 后台 provider CRUD 写入 provider.adapter 时校验 adapter key 必须存在于 registry。
+1. 阶段 11 后台 provider/channel CRUD 写入 channel.protocol + channel.adapter_key 时校验 adapter 必须存在于对应协议 registry。
 
 关联 GAP：
 
@@ -157,7 +157,7 @@
 计划实现：
 
 1. 阶段 7 reservation/余额冻结 统一处理预算约束。
-2. 阶段 10 项目策略管理处理 project 禁用、专属 channel 和后台配置入口。
+2. 阶段 11 项目策略管理处理 project 禁用、专属 channel 和后台配置入口。
 
 关联 GAP：
 
