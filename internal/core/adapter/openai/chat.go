@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai/streamtranslate"
 	adaptersse "github.com/ThankCat/unio-api/internal/core/adapter/sse"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
@@ -21,24 +20,22 @@ const (
 )
 
 // Adapter 调用 OpenAI-compatible 上游接口。
+//
+// 流式响应翻译是 OpenAI 协议族的基线能力，直接内联在本 adapter；provider 专属的 stream 差异
+// 由对应 provider adapter（如 adapter/openai/deepseek）在调用 base 前后收口，不再经过独立的
+// stream translator 抽象层（AGENTS：streamtranslate 不是独立架构层）。
 type Adapter struct {
-	client      *http.Client
-	translators *streamtranslate.Registry
+	client *http.Client
 }
 
 // NewAdapter 创建 OpenAI-compatible adapter。
-func NewAdapter(client *http.Client, translators *streamtranslate.Registry) *Adapter {
+func NewAdapter(client *http.Client) *Adapter {
 	if client == nil {
 		client = http.DefaultClient
 	}
 
-	if translators == nil {
-		translators = streamtranslate.NewRegistry(streamtranslate.Default{})
-	}
-
 	return &Adapter{
-		client:      client,
-		translators: translators,
+		client: client,
 	}
 }
 
@@ -125,16 +122,24 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 		RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
 	}
 
+	choice := upstreamRespBody.Choices[0]
 	return &ChatResponse{
-		ID:               upstreamRespBody.ID,
-		Model:            upstreamRespBody.Model,
-		Content:          wireMessageContentString(upstreamRespBody.Choices[0].Message.Content),
-		ReasoningContent: upstreamRespBody.Choices[0].Message.ReasoningContent,
-		ToolCalls:        toolCalls,
-		FinishReason:     finishReason,
-		Usage:            usage,
-		Upstream:         meta,
-		Facts:            responseFactsNonStream(upstreamRespBody.ID, upstreamRespBody.Model, finishReason, usage, meta),
+		ID:                upstreamRespBody.ID,
+		Model:             upstreamRespBody.Model,
+		Content:           wireMessageContentString(choice.Message.Content),
+		ReasoningContent:  choice.Message.ReasoningContent,
+		ToolCalls:         toolCalls,
+		FinishReason:      finishReason,
+		Usage:             usage,
+		Created:           upstreamRespBody.Created,
+		ServiceTier:       upstreamRespBody.ServiceTier,
+		SystemFingerprint: upstreamRespBody.SystemFingerprint,
+		Refusal:           choice.Message.Refusal,
+		Annotations:       cloneRawMessage(choice.Message.Annotations),
+		Audio:             cloneRawMessage(choice.Message.Audio),
+		Logprobs:          cloneRawMessage(choice.Logprobs),
+		Upstream:          meta,
+		Facts:             responseFactsNonStream(upstreamRespBody.ID, upstreamRespBody.Model, finishReason, usage, meta),
 	}, nil
 }
 
@@ -227,45 +232,24 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 			)
 		}
 
-		translator := a.translators.Resolve(ch.ProviderSlug)
-
-		streamIn, err := streamInputFromResponse(streamResp)
+		chunks, err := streamChunksFromResponse(streamResp, meta)
 		if err != nil {
 			return streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta), err
 		}
 
-		events, err := translator.TranslateStreamEvent(streamIn)
-		if err != nil {
-			return streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta), err
-		}
-
-		for _, event := range events {
-			if event.ID != "" {
-				responseID = event.ID
+		for _, chunk := range chunks {
+			if chunk.ID != "" {
+				responseID = chunk.ID
 			}
-			if event.Model != "" {
-				upstreamModel = event.Model
+			if chunk.Model != "" {
+				upstreamModel = chunk.Model
 			}
-			if event.FinishReason != nil {
-				rawFinish = *event.FinishReason
+			if chunk.FinishReason != nil {
+				rawFinish = *chunk.FinishReason
 			}
-
-			chunk := ChatStreamChunk{
-				ID:               event.ID,
-				Model:            event.Model,
-				Role:             event.Role,
-				Content:          event.Content,
-				ReasoningContent: stringPtrOrNil(event.ReasoningContent),
-				ToolCalls:        cloneRawMessage(event.ToolCalls),
-				FinishReason:     event.FinishReason,
-			}
-
-			if event.Usage != nil {
-				usage := *event.Usage
+			if chunk.Usage != nil {
+				usage := *chunk.Usage
 				finalUsage = &usage
-				chunk.Usage = &usage
-				upstream := meta
-				chunk.Upstream = &upstream
 			}
 
 			if err := emit(chunk); err != nil {
@@ -297,42 +281,69 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	return outcome, nil
 }
 
-// streamInputFromResponse 将上游 stream JSON DTO 转成 stream translator 输入。
-func streamInputFromResponse(streamResp chatCompletionStreamResponse) (streamtranslate.StreamInput, error) {
-	in := streamtranslate.StreamInput{
-		ID:    streamResp.ID,
-		Model: streamResp.Model,
+// streamChunksFromResponse 把上游单个 stream SSE event 转成 0..N 个内部 chunk。
+//
+// 这是 OpenAI 协议族的基线流式翻译：跳过纯空 delta（心跳/占位），其余每个 choice delta 产出一个
+// 内容 chunk；若 event 携带 final usage，再追加一个仅含 usage 的内部控制 chunk（附 upstream 元信息）。
+func streamChunksFromResponse(streamResp chatCompletionStreamResponse, meta adapter.UpstreamMetadata) ([]ChatStreamChunk, error) {
+	chunks := make([]ChatStreamChunk, 0, len(streamResp.Choices)+1)
+
+	for _, choice := range streamResp.Choices {
+		if isSkippableStreamDelta(choice) {
+			continue
+		}
+
+		reasoning := ""
+		if choice.Delta.ReasoningContent != nil {
+			reasoning = *choice.Delta.ReasoningContent
+		}
+
+		chunks = append(chunks, ChatStreamChunk{
+			ID:                streamResp.ID,
+			Model:             streamResp.Model,
+			Role:              choice.Delta.Role,
+			Content:           choice.Delta.Content,
+			ReasoningContent:  stringPtrOrNil(reasoning),
+			ToolCalls:         cloneRawMessage(choice.Delta.ToolCalls),
+			FinishReason:      choice.FinishReason,
+			Created:           streamResp.Created,
+			ServiceTier:       streamResp.ServiceTier,
+			SystemFingerprint: streamResp.SystemFingerprint,
+			Index:             choice.Index,
+			Logprobs:          cloneRawMessage(choice.Logprobs),
+			Refusal:           choice.Delta.Refusal,
+			FunctionCall:      cloneRawMessage(choice.Delta.FunctionCall),
+		})
 	}
 
 	if streamResp.Usage != nil {
 		usage, err := chatUsageFromOpenAI(streamResp.Usage)
 		if err != nil {
-			return streamtranslate.StreamInput{}, err
+			return nil, err
 		}
 
-		in.Usage = &usage
+		upstream := meta
+		chunks = append(chunks, ChatStreamChunk{
+			ID:       streamResp.ID,
+			Model:    streamResp.Model,
+			Usage:    &usage,
+			Upstream: &upstream,
+		})
 	}
 
-	if len(streamResp.Choices) == 0 {
-		return in, nil
-	}
+	return chunks, nil
+}
 
-	in.Choices = make([]streamtranslate.StreamChoice, 0, len(streamResp.Choices))
-	for _, choice := range streamResp.Choices {
-		streamChoice := streamtranslate.StreamChoice{
-			Role:         choice.Delta.Role,
-			Content:      choice.Delta.Content,
-			ToolCalls:    cloneRawMessage(choice.Delta.ToolCalls),
-			FinishReason: choice.FinishReason,
-		}
-		if choice.Delta.ReasoningContent != nil {
-			streamChoice.ReasoningContent = *choice.Delta.ReasoningContent
-		}
-
-		in.Choices = append(in.Choices, streamChoice)
-	}
-
-	return in, nil
+// isSkippableStreamDelta 判断 choice delta 是否为纯空增量（无任何可承载内容、元信息或终止原因）。
+func isSkippableStreamDelta(choice chatStreamChoice) bool {
+	return choice.Delta.Role == "" &&
+		choice.Delta.Content == "" &&
+		(choice.Delta.ReasoningContent == nil || *choice.Delta.ReasoningContent == "") &&
+		len(choice.Delta.ToolCalls) == 0 &&
+		(choice.Delta.Refusal == nil || *choice.Delta.Refusal == "") &&
+		len(choice.Delta.FunctionCall) == 0 &&
+		len(choice.Logprobs) == 0 &&
+		choice.FinishReason == nil
 }
 
 // chatUsageFromOpenAI 将 OpenAI usage DTO 转成 adapter 内部 usage DTO。

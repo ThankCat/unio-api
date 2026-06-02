@@ -16,10 +16,10 @@ docs/production/TODO_REGISTER.md
 ## 当前焦点
 
 ```text
-当前主线：阶段 10 双协议 Gateway 全链路改造已进入实现
-当前进度：双协议 ingress + adapter 已打通；10.10A stream 契约（StreamOutcome）、10.10B-1 双协议 registry/preflight/routing、10.10B-2a 共享候选准备 executor（OpenAI 已接线）已完成。10.12A 进行中：usage_records facts 化 + usage_line_items + request/attempt/recovery 相关 schema 已改；OpenAI chat_settlement/recovery 生产代码已只消费 ResponseFacts/usage.Facts；go build 通过。测试欠账（10.12B）：chatcompletions 单测仍引用旧 usage 列、sqlc/ledger 集成 helper 缺 ingress_protocol 等
-下一小节：TASK-10.12B 本地 down→up、sqlc generate、对齐 settlement/sqlc/ledger 测试并账务回归全绿；随后 TASK-10.10B-2b Anthropic service/handler + 共享 attempt/delivery lifecycle
-上一阶段状态：阶段 9 OpenAI Protocol Parity 已收口
+当前主线：阶段 10 双协议 Gateway 全链路改造收口阶段
+当前进度：双协议 ingress + adapter + 共享 lifecycle + SDK 黑盒回归 + durable closeout 全部完成；**2026-06-02 TASK-10.05 架构 B 终局泛型化已收口**——抽出 `lifecycle.RequestLifecycle` 集中承载协议无关 channel breaker / authorization release / metrics / request log 全部实现，两侧 service 的 thin wrapper 改为 1-line forward，消除 ~290 行字面相同的两侧复制代码。`go vet` + `go build` + `go test ./internal/...` + `go test -tags=blackbox`（OpenAI SDK 16 + Anthropic SDK 14 用例）全部通过。
+下一小节：阶段 10 ACCEPTANCE sign-off + 阶段 11（后台管理）启动复核；可选回归（DS-OAI-05/06/08、DS-ANT-15）排到适当窗口
+上一阶段状态：阶段 9 OpenAI Protocol Parity 已收口；阶段 10 双协议 Gateway 主线 + 共享 lifecycle 终局已收口
 ```
 
 ## 阶段总览
@@ -35,7 +35,7 @@ docs/production/TODO_REGISTER.md
 | 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | done | Gateway 计费主链路已打通，reservation、settlement、ledger、cost snapshot、recovery worker 和 stream 错误语义已收口。 |
 | 阶段 8 | [可观测性与稳定性](chapters/phase-08-observability-stability/STATUS.md) | done | TASK-8.01 adapter metadata/error 分类、8.02 Prometheus metrics、8.03 structured logs+OpenTelemetry、8.04 channel 熔断、8.05 HTTP SSE Writer 全部完成；阶段 8 无遗留 P0/P1 production TODO。 |
 | 阶段 9 | [OpenAI Protocol Parity](chapters/phase-09-openai-protocol-parity/STATUS.md) | done | C1~C6 已实现；C8 高级字段并入阶段 10 全量 OpenAI 契约，不再作为长期可选项。 |
-| 阶段 10 | [双协议 Gateway 全链路改造](chapters/phase-10-dual-protocol-gateway/STATUS.md) | partial | 双协议 adapter + ingress 已通；lifecycle 候选准备与双协议 bootstrap 已接线；10.12A schema + OpenAI facts settlement 生产路径已落地。待办：10.12B 测试/sqlc 全绿、10.10B-2b Anthropic 接线、10.11 错误渲染、10.13/10.14 SDK、10.15 复核。 |
+| 阶段 10 | [双协议 Gateway 全链路改造](chapters/phase-10-dual-protocol-gateway/STATUS.md) | partial | 双协议 adapter + ingress 已通；共享 lifecycle（候选准备/熔断/retry/metrics/tracing/authorization/settlement/recovery/request log helpers）已抽出并被 OpenAI + Anthropic 共用；`/v1/chat/completions` 与 `/v1/messages` 均端到端接线并有 parity e2e；10.12 facts schema + 账务回归全绿；10.11 双协议错误与安全输出已收口（上游分类映射 + 脱敏 + anthropic-beta 宽进接受/出站 Drop，DEC-013）；10.15 命名与冗余复核已收口；10.13 OpenAI SDK 黑盒验收已收口（14 mock + 2 真实 DeepSeek smoke）；10.14 Anthropic SDK 黑盒验收已收口（12 mock + 2 真实 DeepSeek Anthropic endpoint smoke）；10.10 durable closeout 终局已收口（fallback 同步终态推进契约黑盒实证）；**10.05 共享 Lifecycle Executor 架构 B 终局已收口（2026-06-02，抽出 `lifecycle.RequestLifecycle` 集中承载协议无关 channel breaker/release/metrics/request log 全部实现，两侧 service 的 thin wrapper 改为 1-line forward，消除 ~290 行字面相同复制代码；nil-safe 纯只读/指标方法保留单元测试灵活性）**。待办：阶段 10 ACCEPTANCE sign-off + 可选回归（DS-OAI-05/06/08、DS-ANT-15）。 |
 | 阶段 11 | [后台管理](chapters/phase-11-admin/STATUS.md) | planned | 原阶段 10 已顺延，进入前需复核 credential resolver 和后台管理边界。 |
 
 ## 当前上线阻断
@@ -46,35 +46,23 @@ docs/production/TODO_REGISTER.md
 
 ## 验证状态
 
-2026-06-02 Phase 10（10.10B-2a + 10.12A 合并工作区）：
+2026-06-02 Phase 10（DEC-012 双侧 + TASK-10.12B 收口后）：本地库已 `drop`→`up` 重建到新 facts schema，`sqlc generate` 无 drift。
 
 ```bash
 go build ./internal/... ./cmd/...   # 通过
-go vet ./internal/... ./cmd/...     # 通过（与 build 范围一致）
-go test ./internal/... ./cmd/...    # 未全绿，见下
+go vet ./internal/... ./cmd/...     # 通过
+DATABASE_URL=postgres://unio:***@localhost:5432/unio?sslmode=disable \
+  go test ./internal/...            # 全绿（含 ledger/sqlc/chatcompletions 集成测试）
+git diff --check                    # 通过
 ```
-
-当前 `go test` 失败包（10.12B 待修）：
-
-- `internal/service/gateway/openai/chatcompletions`：测试仍引用旧 `UsageRecord.PromptTokens` 等列（schema 已改为 facts 列）。
-- `internal/platform/store/sqlc`：`usage_line_items` / `ingress_protocol` 相关 helper 与集成用例待对齐。
-- `internal/core/ledger`：测试 insert `request_records` 缺必填 `ingress_protocol`。
-
-约 29 个其它 internal 包（含 `lifecycle`、`bootstrap`、`adapter/*`、`billing`）已通过。
 
 仓库级 `go test ./...` 仍会被既有 `seed/` 目录双 `main` 阻断，与 Phase 10 无关。
 
-带 `DATABASE_URL` 的集成测试需本地 Postgres；10.12A 已改多张表源 migration，本地库需先 down→改→up 再跑 sqlc/DB 测试。
-
-```bash
-DATABASE_URL=postgres://unio:***@localhost:5432/unio?sslmode=disable go test ./...
-go vet ./...
-git diff --check
-```
+带 `DATABASE_URL` 的集成测试需本地 Postgres；改表源 migration 后，本地库需先 `drop`/`down`→`up` 再跑 sqlc/DB 测试。
 
 ## 下一步
 
-继续 TASK-10.12A facts schema 与 settlement/recovery 迁移前先执行：
+进入阶段 10 ACCEPTANCE sign-off / 可选回归 / 阶段 11 启动复核前先执行：
 
 ```bash
 rg -n "TODO|GAP-" AGENTS.md docs cmd internal migrations sql
@@ -100,4 +88,4 @@ docs/production/DECISIONS.md
 docs/production/RELEASE_BLOCKERS.md
 ```
 
-阶段 11 后台管理在 Phase 10 双协议 Gateway 链路稳定后进入实现。Phase 10 已完成 TASK-10.01 ADR，下一步从 TASK-10.02 开始，按小节推进目录迁移、schema、lifecycle、两个协议和 DeepSeek 双入口。
+阶段 11 后台管理在 Phase 10 双协议 Gateway 链路稳定后进入实现。Phase 10 当前主线：DEC-012 协议为先 Drop（双侧）、TASK-10.12 facts 账务回归、TASK-10.10B-2b（Anthropic service/handler + 共享 lifecycle + e2e parity）、TASK-10.11（双协议错误与安全输出 + DEC-013 anthropic-beta 宽进）、TASK-10.15（命名与冗余复核）、TASK-10.13（OpenAI SDK 黑盒验收）、TASK-10.14（Anthropic SDK 黑盒验收）与 **TASK-10.10 durable closeout 终局（fallback 同步终态推进契约黑盒实证）** 与 **10.05 架构 B 终局（`lifecycle.RequestLifecycle` thin wrapper 收口）** 均已完成。下一步：阶段 10 ACCEPTANCE sign-off + 可选回归（DS-OAI-05/06/08、DS-ANT-15）+ 阶段 11 启动复核。

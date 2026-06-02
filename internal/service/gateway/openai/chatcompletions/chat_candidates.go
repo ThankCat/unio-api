@@ -3,7 +3,7 @@ package chatcompletions
 import (
 	"context"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
@@ -70,5 +70,5 @@ func estimateMaxCompletionTokens(req gatewayapi.ChatCompletionRequest) int64 {
 	if req.MaxTokens != nil {
 		return int64(*req.MaxTokens)
 	}
-	return defaultAuthorizationMaxCompletionTokens
+	return lifecycle.DefaultAuthorizationMaxCompletionTokens
 }

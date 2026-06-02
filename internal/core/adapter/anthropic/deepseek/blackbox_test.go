@@ -29,7 +29,7 @@ func newBlackboxAdapter(t *testing.T) (*Adapter, channel.Runtime) {
 		t.Skip("DEEPSEEK_API_KEY is not set")
 	}
 
-	a := NewAdapter(&http.Client{Timeout: 30 * time.Second})
+	a := NewAdapter(&http.Client{Timeout: 30 * time.Second}, nil)
 	runtime := channel.Runtime{
 		BaseURL:      "https://api.deepseek.com/anthropic",
 		APIKey:       apiKey,

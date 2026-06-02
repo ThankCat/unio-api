@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	openaiadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai/streamtranslate"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/core/routing"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
 // mockUpstream 记录最后一次 upstream chat/completions 请求体。
@@ -43,7 +43,7 @@ func newMockUpstream(t *testing.T, respond func(w http.ResponseWriter)) *mockUps
 }
 
 func newOpenAIAdapterRegistry(client *http.Client) AdapterRegistry {
-	openAIAdapter := openaiadapter.NewAdapter(client, streamtranslate.NewRegistry(streamtranslate.Default{}, streamtranslate.DeepSeek{}))
+	openAIAdapter := openaiadapter.NewAdapter(client)
 	reg, err := openaiadapter.NewRegistry(openaiadapter.Registration{
 		Key:        "openai",
 		Chat:       openAIAdapter,
@@ -73,7 +73,7 @@ func newParityService(t *testing.T, upstream *mockUpstream) (*ChatCompletionServ
 		nil,
 		newFakeRequestLogService(),
 		settlement,
-		&fakeChatAuthorizer{authorization: ChatAuthorization{ReservationID: 9001}},
+		&fakeChatAuthorizer{authorization: lifecycle.ChatAuthorization{ReservationID: 9001}},
 	)
 
 	return service, settlement
@@ -161,6 +161,88 @@ func TestOpenAISDKShapeNonStreamChatC1(t *testing.T) {
 	}
 }
 
+// TestOpenAISDKShapeNonStreamPreservesResponseFields 验证非流式响应顶层/choice/message 全量字段
+// 端到端贯通到客户响应（created/service_tier/system_fingerprint/refusal/annotations/audio/logprobs）。
+func TestOpenAISDKShapeNonStreamPreservesResponseFields(t *testing.T) {
+	upstream := newMockUpstream(t, func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		body := `{
+			"id": "chatcmpl-deepseek",
+			"object": "chat.completion",
+			"created": 1710000123,
+			"model": "deepseek-v4-pro",
+			"service_tier": "default",
+			"system_fingerprint": "fp_ds_1",
+			"choices": [{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "hi",
+					"refusal": "no",
+					"annotations": [{"type": "url_citation", "url_citation": {"url": "https://x"}}],
+					"audio": {"id": "audio_1"}
+				},
+				"finish_reason": "stop",
+				"logprobs": {"content": [{"token": "hi"}]}
+			}],
+			"usage": ` + deepseekUsageJSON() + `
+		}`
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatalf("write upstream body: %v", err)
+		}
+	})
+	defer upstream.server.Close()
+
+	service, _ := newParityService(t, upstream)
+
+	var req gatewayapi.ChatCompletionRequest
+	if err := json.Unmarshal([]byte(`{
+		"model": "deepseek/deepseek-v4-pro",
+		"messages": [{"role": "user", "content": "hi"}]
+	}`), &req); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+
+	got, err := service.CreateChatCompletion(contextWithPrincipal(42), req)
+	if err != nil {
+		t.Fatalf("CreateChatCompletion returned err: %v", err)
+	}
+
+	if got.Created != 1710000123 {
+		t.Fatalf("created = %d, want 1710000123", got.Created)
+	}
+	if got.ServiceTier == nil || *got.ServiceTier != "default" {
+		t.Fatalf("service_tier = %#v", got.ServiceTier)
+	}
+	if got.SystemFingerprint == nil || *got.SystemFingerprint != "fp_ds_1" {
+		t.Fatalf("system_fingerprint = %#v", got.SystemFingerprint)
+	}
+	choice := got.Choices[0]
+	if choice.Message.Refusal == nil || *choice.Message.Refusal != "no" {
+		t.Fatalf("refusal = %#v", choice.Message.Refusal)
+	}
+	if !strings.Contains(string(choice.Message.Annotations), "url_citation") {
+		t.Fatalf("annotations = %s", choice.Message.Annotations)
+	}
+	if !strings.Contains(string(choice.Message.Audio), "audio_1") {
+		t.Fatalf("audio = %s", choice.Message.Audio)
+	}
+	if !strings.Contains(string(choice.Logprobs), "token") {
+		t.Fatalf("logprobs = %s", choice.Logprobs)
+	}
+
+	// 客户端 JSON 序列化必须真实带上这些字段（faithful OpenAI 形状）。
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	for _, key := range []string{`"created":1710000123`, `"service_tier":"default"`, `"system_fingerprint":"fp_ds_1"`, `"refusal":"no"`, `"annotations"`, `"audio"`, `"logprobs"`} {
+		if !strings.Contains(string(encoded), key) {
+			t.Fatalf("serialized response missing %q: %s", key, encoded)
+		}
+	}
+}
+
 // TestOpenAISDKShapeStreamIncludeUsageC2 模拟 OpenAI SDK stream + include_usage（C2）。
 func TestOpenAISDKShapeStreamIncludeUsageC2(t *testing.T) {
 	upstream := newMockUpstream(t, func(w http.ResponseWriter) {
@@ -201,8 +283,75 @@ func TestOpenAISDKShapeStreamIncludeUsageC2(t *testing.T) {
 	if chunks[2].Usage == nil || chunks[2].Usage.TotalTokens != 26 {
 		t.Fatalf("got usage chunk %+v, want total_tokens=26", chunks[2].Usage)
 	}
-	if len(settlement.params) != 1 || settlement.params[0].Usage.ReasoningTokens != 20 {
-		t.Fatalf("expected settlement reasoning_tokens=20, got %+v", settlement.params)
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected one settlement, got %d", len(settlement.params))
+	}
+	if v, ok := settlement.params[0].Facts.Usage.ReasoningOutputTokens.BillableValue(); !ok || v != 20 {
+		t.Fatalf("expected settlement reasoning output tokens=20, got %d (ok=%v)", v, ok)
+	}
+}
+
+// TestOpenAISDKShapeStreamPreservesChunkFields 验证流式 chunk/choice/delta 全量字段端到端贯通到
+// 客户 chunk（created 透传上游、service_tier、system_fingerprint、delta.refusal、choice.logprobs）。
+func TestOpenAISDKShapeStreamPreservesChunkFields(t *testing.T) {
+	upstream := newMockUpstream(t, func(w http.ResponseWriter) {
+		writeDeepSeekStreamEvents(t, w, []string{
+			`data: {"id":"chatcmpl-deepseek","object":"chat.completion.chunk","created":1710020001,"model":"deepseek-v4-pro","service_tier":"default","system_fingerprint":"fp_ds_stream","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"logprobs":{"content":[{"token":"hi"}]},"finish_reason":null}],"usage":null}` + "\n\n",
+			`data: {"id":"chatcmpl-deepseek","object":"chat.completion.chunk","created":1710020002,"model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"refusal":"no"},"finish_reason":"stop"}],"usage":` + deepseekUsageJSON() + `}` + "\n\n",
+			"data: [DONE]\n\n",
+		})
+	})
+	defer upstream.server.Close()
+
+	service, _ := newParityService(t, upstream)
+
+	var req gatewayapi.ChatCompletionRequest
+	if err := json.Unmarshal([]byte(`{
+		"model": "deepseek/deepseek-v4-pro",
+		"messages": [{"role": "user", "content": "hi"}],
+		"stream": true
+	}`), &req); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+
+	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
+	if err := service.StreamChatCompletion(contextWithPrincipal(42), req, func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+		chunks = append(chunks, chunk)
+		return nil
+	}); err != nil {
+		t.Fatalf("StreamChatCompletion returned err: %v", err)
+	}
+
+	if len(chunks) != 2 {
+		t.Fatalf("got %d client chunks, want 2", len(chunks))
+	}
+
+	first := chunks[0]
+	if first.Created != 1710020001 {
+		t.Fatalf("first chunk created = %d, want upstream 1710020001", first.Created)
+	}
+	if first.ServiceTier == nil || *first.ServiceTier != "default" {
+		t.Fatalf("service_tier = %#v", first.ServiceTier)
+	}
+	if first.SystemFingerprint == nil || *first.SystemFingerprint != "fp_ds_stream" {
+		t.Fatalf("system_fingerprint = %#v", first.SystemFingerprint)
+	}
+	if !strings.Contains(string(first.Choices[0].Logprobs), "token") {
+		t.Fatalf("logprobs = %s", first.Choices[0].Logprobs)
+	}
+	if second := chunks[1]; second.Choices[0].Delta.Refusal == nil || *second.Choices[0].Delta.Refusal != "no" {
+		t.Fatalf("refusal = %#v", chunks[1].Choices[0].Delta.Refusal)
+	}
+
+	// 序列化客户 chunk 必须真实带上这些字段。
+	encoded, err := json.Marshal(first)
+	if err != nil {
+		t.Fatalf("marshal chunk: %v", err)
+	}
+	for _, key := range []string{`"created":1710020001`, `"service_tier":"default"`, `"system_fingerprint":"fp_ds_stream"`, `"logprobs"`} {
+		if !strings.Contains(string(encoded), key) {
+			t.Fatalf("serialized chunk missing %q: %s", key, encoded)
+		}
 	}
 }
 
@@ -478,11 +627,11 @@ func TestDeepSeekDS07SettlementUsage(t *testing.T) {
 	if len(settlement.params) != 1 {
 		t.Fatalf("expected one settlement, got %d", len(settlement.params))
 	}
-	if settlement.params[0].Usage.TotalTokens != 26 {
-		t.Fatalf("got total tokens %d, want 26", settlement.params[0].Usage.TotalTokens)
+	if v, ok := settlement.params[0].Facts.Usage.OutputTokensTotal.BillableValue(); !ok || v != 20 {
+		t.Fatalf("got output tokens %d, want 20 (ok=%v)", v, ok)
 	}
-	if settlement.params[0].Usage.ReasoningTokens != 20 {
-		t.Fatalf("got reasoning tokens %d, want 20", settlement.params[0].Usage.ReasoningTokens)
+	if v, ok := settlement.params[0].Facts.Usage.ReasoningOutputTokens.BillableValue(); !ok || v != 20 {
+		t.Fatalf("got reasoning tokens %d, want 20 (ok=%v)", v, ok)
 	}
 }
 

@@ -435,7 +435,7 @@ helper
 原因：
 
 ```text
-SDK 能减少部分请求和响应样板代码，但无法替代 provider 显式转换、禁止 silent drop、
+SDK 能减少部分请求和响应样板代码，但无法替代 provider 显式转换、出站 allowlist、
 ResponseFacts、审计、settlement、fallback 和 recovery。
 
 SDK 默认 retry 或 SDK 类型泄漏会让真实 upstream 调用次数、成本、熔断和审计不一致。
@@ -447,4 +447,136 @@ Unio 需要自己掌握 wire 边界。
 ```text
 OpenAI 和 Anthropic SDK 仍可作为 Phase 10 黑盒验收客户端使用，
 但不进入生产 adapter 依赖图。
+```
+
+## DEC-012 协议为先与 Provider 映射 Drop 策略
+
+状态：accepted
+
+决策：
+
+```text
+Unio Gateway 以 ingress 客户协议为对外契约边界，provider 差异在 adapter 出站/入站
+映射层消化，默认不因「当前 channel 无法转换某合法协议字段」而 400。
+
+两层边界：
+
+1. Ingress 协议校验（gatewayapi）
+   - 只校验客户协议 JSON 结构、类型、必填与 union 合法性。
+   - 非法协议请求返回协议原生 400。
+   - 合法 OpenAI / Anthropic 字段必须进入 typed DTO 或登记 extension，禁止 decode 阶段
+     因 provider 能力而丢弃。
+
+2. Provider 出站映射（adapter → upstream wire）
+   - 只允许 mapping 表标记为 Pass / Adapt 的字段进入 upstream body。
+   - 无法转换或无 upstream 对应项 → Drop：不写入 upstream JSON。
+   - 禁止 Extensions 无脑 merge 进 upstream；禁止把 Drop 字段透传给上游赌其忽略。
+
+3. Provider 入站映射（upstream wire → 客户协议）
+   - 只填充 ingress 协议 DTO 需要的字段。
+   - 协议不需要或无法映射的上游字段 → Drop，不进入公开响应。
+   - 账务、审计、settlement 所需事实走 ResponseFacts / usage.Facts，不污染公开 DTO。
+
+Provider mapping 策略表只允许：
+  Pass | Adapt | Drop
+
+Drop 不是 silent drop：
+  - request_attempt 或 structured log 必须记录 dropped_request_fields（内部字段名）。
+  - 可选 debug 开关向管理员暴露 drop 摘要；默认不对客户返回 drop 列表。
+
+Reject（400）仅保留于：
+  - ingress 协议非法
+  - auth / billing / routing / rate limit 等业务拒绝
+  - 上游 hard failure 且无法映射为协议原生成功响应
+```
+
+原因：
+
+```text
+客户按 OpenAI 或 Anthropic SDK 传参时，期望的是「协议收下了」而不是「因后端
+provider 不支持某字段而 400」。把无法转换的字段 Drop 在出站边界，可同时：
+
+1. 避免 upstream 未来变严格时对未知字段报 400。
+2. 保持公开协议 drop-in 体验。
+3. 通过内部 dropped_fields 审计保留可追踪性。
+
+ResponseFacts 旁路保证 billing 不依赖「公开响应里是否出现某 usage 维度」。
+```
+
+影响：
+
+```text
+docs/chapters/phase-10-dual-protocol-gateway/DEEPSEEK_*_MAPPING.md
+  Reject / No-op / Ignored 收口为 Drop；Pass / Adapt 规则保留。
+
+docs/chapters/phase-10-dual-protocol-gateway/OPENAI_CHAT_COMPLETIONS_MATRIX.md
+docs/chapters/phase-10-dual-protocol-gateway/ANTHROPIC_MESSAGES_MATRIX.md
+  矩阵只负责 ingress Typed / Passthrough；provider Drop 见 mapping。
+
+AGENTS.md
+  「禁止 silent drop」改为「禁止 decode 丢字段；provider 层 Drop 必须登记 mapping 并写内部审计」。
+
+生产代码（待实现）：
+  - 移除 adapter 层 CodeAdapterRequestUnsupported 作为默认手段。
+  - buildUpstreamWire 改为出站白名单，不再 mergeJSONObjects(Extensions) 全量透传。
+  - gatewayapi decode 层移除 service_tier / store / web_search_options 等 provider 级 Reject。
+  - 黑盒 DS-OAI-09 / DS-ANT-09 改为断言 upstream body 不含 dropped 字段且请求仍 200。
+
+DEC-010 双协议边界、ResponseFacts 与 lifecycle 不变；本决策只改 provider 映射语义。
+```
+
+## DEC-013 协议 beta header 宽进接受与出站 Drop
+
+状态：accepted
+
+决策：
+
+```text
+Unio Gateway 对 provider 协议 beta header（当前 Anthropic `anthropic-beta`）采用宽进策略：
+
+1. ingress 接受任意 beta（含未登记值、逗号分隔多值、看似畸形的 token），不再因登记
+   allow-list 而 400；这是 DEC-012「协议为先，不因 provider 能力 Reject」在 header 维度的
+   延伸。
+2. provider 出站映射层按 mapping 处理：当前 DeepSeek Anthropic endpoint 忽略所有 beta 且
+   出站不发送，按 Drop 处理。
+3. Drop 不静默：handler 以脱敏 Debug 日志记录 `dropped_beta_headers`（仅 beta 能力名，
+   非敏感）；绝不在公开响应里假装某 beta 已生效。
+4. 未来接入真实 Anthropic 1P adapter（直连 Anthropic）时，应改为按登记表把支持的 beta
+   Pass 转发到 upstream `anthropic-beta`，无法支持的继续 Drop。
+
+红线：beta 永远只作为协议透传/Drop 的输入，不得反向影响账务事实或被当成已生效能力。
+```
+
+原因：
+
+```text
+1. drop-in 兼容是产品北极星：真实 Anthropic SDK / Claude Code 会默认携带 beta header，
+   且 Anthropic beta 列表更新频繁。硬编码 allow-list + 未知即 400 会在客户毫无过错时拒绝
+   合法请求，并在每次 Anthropic 发布新 beta 后需要重新部署才能解除阻断。
+2. 与 DEC-012 一致：body 不支持字段走 Drop + 审计而非 400，beta header 不应是唯一例外。
+3. 对当前唯一 provider（DeepSeek）而言转发与否对行为无影响（全忽略），因此「拒绝客户」没有
+   任何收益，只有破坏兼容的代价。
+4. 对照业界（OpenRouter）：其聚合网关用 `x-anthropic-beta`，pass-through 已支持的 beta、
+   strip 不支持的（如 strict 未带 structured-outputs 头时剥字段照常路由），同样不因 beta 400。
+   我们公开面本身就是 Anthropic 协议，故保留原生 `anthropic-beta` 头名，但采用同样的宽进语义。
+```
+
+影响：
+
+```text
+docs/chapters/phase-10-dual-protocol-gateway/ACCEPTANCE.md
+  安全验收 4 由「未知 beta → ingress 400」改为「beta 一律接受、出站 Drop + 脱敏审计」。
+
+docs/chapters/phase-10-dual-protocol-gateway/ANTHROPIC_MESSAGES_MATRIX.md
+  anthropic-beta 行由 IngressReject 改为 Passthrough（接受任意值，provider Drop）。
+
+docs/chapters/phase-10-dual-protocol-gateway/DEEPSEEK_ANTHROPIC_MAPPING.md
+  anthropic-beta 说明由「ingress 仅接受登记 beta」改为「ingress 接受任意 beta（DEC-013）」。
+
+生产代码：
+  - app/gatewayapi/anthropic/messages/handler.go 删除 registeredAnthropicBetas 登记表与
+    400 校验；NewMessagesHandler 注入 *slog.Logger，新增 auditIgnoredBetaHeaders 脱敏审计。
+  - 测试由「拒绝未登记 beta」改为「接受任意 beta（含未登记/逗号列表）并继续调用 service」。
+
+取代 TASK-10.11 实现期间「ingress 仅接受登记 beta」的临时设计；DEC-010 / DEC-012 边界不变。
 ```

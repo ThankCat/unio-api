@@ -1,22 +1,12 @@
 package messages
 
-import (
-	"encoding/json"
-	"fmt"
-)
+import "encoding/json"
 
-// messageRequestRejectError 表示 ingress 明确 Reject 的顶层请求字段（未登记扩展）。
-type messageRequestRejectError struct {
-	param   string
-	message string
-}
-
-func (e *messageRequestRejectError) Error() string {
-	return e.message
-}
-
-// knownMessageFields 是当前 MessageRequest 已建模的顶层 JSON 字段。
-// 新增 typed 字段时必须同步更新，否则会被误收进 Extensions。
+// knownMessageFields 是当前 MessageRequest 已建模的 typed 顶层 JSON 字段。
+//
+// 只列出 struct 已建模的字段；新增 typed 字段时必须同步更新。未列出的合法顶层字段
+// （如 mcp_servers / service_tier / container / inference_geo / output_config）按 DEC-012
+// 进入 Extensions，由 adapter 出站 Drop，而不是在 ingress silent drop 或 Reject。
 var knownMessageFields = map[string]struct{}{
 	"model":          {},
 	"messages":       {},
@@ -31,33 +21,16 @@ var knownMessageFields = map[string]struct{}{
 	"thinking":       {},
 	"tool_choice":    {},
 	"tools":          {},
-	"output_config":  {},
-	"service_tier":   {},
-	"container":      {},
-	"inference_geo":  {},
 }
 
-// rejectedMessageFields 是 ingress 明确 Reject 的顶层字段。
-// mcp_servers 在 DeepSeek 兼容文档中登记但被忽略；未作为登记扩展开放前明确 Reject，
-// 避免客户误以为 MCP server 生效。
-var rejectedMessageFields = map[string]struct{}{
-	"mcp_servers": {},
-}
-
-// UnmarshalJSON 实现 decode 双轨：typed 字段 + Extensions，禁止 silent drop。
+// UnmarshalJSON 实现 decode 双轨：typed 字段 + Extensions。
+//
+// 按 DEC-012「协议为先」，ingress 只校验协议合法性，不因 provider 能力 Reject 合法 Anthropic
+// 字段。未显式建模的合法顶层字段保留进 Extensions，provider 无法转换时由 adapter 出站 Drop。
 func (req *MessageRequest) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
-	}
-
-	for key := range raw {
-		if _, rejected := rejectedMessageFields[key]; rejected {
-			return &messageRequestRejectError{
-				param:   key,
-				message: fmt.Sprintf("unsupported parameter: %s", key),
-			}
-		}
 	}
 
 	// alias 技巧：避免 UnmarshalJSON 递归调用自身。

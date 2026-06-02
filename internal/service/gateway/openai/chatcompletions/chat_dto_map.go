@@ -3,7 +3,7 @@ package chatcompletions
 import (
 	"encoding/json"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
 )
@@ -80,22 +80,40 @@ func mapGatewayRequestToAdapter(req gatewayapi.ChatCompletionRequest, upstreamMo
 		extensions[k] = append(json.RawMessage(nil), v...)
 	}
 	return openai.ChatRequest{
-		Model:               upstreamModel,
-		Messages:            mapGatewayMessagesToAdapter(req.Messages),
-		Temperature:         req.Temperature,
-		TopP:                req.TopP,
-		MaxTokens:           req.MaxTokens,
-		MaxCompletionTokens: req.MaxCompletionTokens,
-		PresencePenalty:     req.PresencePenalty,
-		FrequencyPenalty:    req.FrequencyPenalty,
-		Stop:                req.Stop,
-		User:                req.User,
-		ReasoningEffort:     req.ReasoningEffort,
-		Tools:               mapGatewayToolsToAdapter(req.Tools),
-		ToolChoice:          cloneRawMessage(req.ToolChoice),
-		ParallelToolCalls:   req.ParallelToolCalls,
-		ResponseFormat:      mapGatewayResponseFormatToAdapter(req.ResponseFormat),
-		Extensions:          extensions,
+		Model:                upstreamModel,
+		Messages:             mapGatewayMessagesToAdapter(req.Messages),
+		Temperature:          req.Temperature,
+		TopP:                 req.TopP,
+		MaxTokens:            req.MaxTokens,
+		MaxCompletionTokens:  req.MaxCompletionTokens,
+		PresencePenalty:      req.PresencePenalty,
+		FrequencyPenalty:     req.FrequencyPenalty,
+		Stop:                 req.Stop,
+		User:                 req.User,
+		ReasoningEffort:      req.ReasoningEffort,
+		Tools:                mapGatewayToolsToAdapter(req.Tools),
+		ToolChoice:           cloneRawMessage(req.ToolChoice),
+		ParallelToolCalls:    req.ParallelToolCalls,
+		ResponseFormat:       mapGatewayResponseFormatToAdapter(req.ResponseFormat),
+		N:                    req.N,
+		Seed:                 req.Seed,
+		Logprobs:             req.Logprobs,
+		TopLogprobs:          req.TopLogprobs,
+		LogitBias:            cloneRawMessage(req.LogitBias),
+		Modalities:           req.Modalities,
+		Audio:                cloneRawMessage(req.Audio),
+		Prediction:           cloneRawMessage(req.Prediction),
+		Metadata:             cloneRawMessage(req.Metadata),
+		WebSearchOptions:     cloneRawMessage(req.WebSearchOptions),
+		Store:                req.Store,
+		ServiceTier:          req.ServiceTier,
+		Verbosity:            req.Verbosity,
+		PromptCacheKey:       req.PromptCacheKey,
+		PromptCacheRetention: req.PromptCacheRetention,
+		SafetyIdentifier:     req.SafetyIdentifier,
+		FunctionCall:         cloneRawMessage(req.FunctionCall),
+		Functions:            cloneRawMessage(req.Functions),
+		Extensions:           extensions,
 	}
 }
 
@@ -155,20 +173,27 @@ func mapAdapterResponseToGateway(reqModel string, resp openai.ChatResponse) gate
 		Role:             "assistant",
 		ReasoningContent: resp.ReasoningContent,
 		ToolCalls:        mapAdapterToolCallsToGateway(resp.ToolCalls),
+		Refusal:          resp.Refusal,
+		Annotations:      cloneRawMessage(resp.Annotations),
+		Audio:            cloneRawMessage(resp.Audio),
 	}
 	if resp.Content != "" {
 		msg.Content = jsonStringContent(resp.Content)
 	}
 	return gatewayapi.ChatCompletionResponse{
-		ID:     resp.ID,
-		Object: "chat.completion",
-		Model:  reqModel,
+		ID:      resp.ID,
+		Object:  "chat.completion",
+		Created: resp.Created,
+		Model:   reqModel,
 		Choices: []gatewayapi.ChatCompletionChoice{{
 			Index:        0,
 			Message:      msg,
 			FinishReason: finishReason,
+			Logprobs:     cloneRawMessage(resp.Logprobs),
 		}},
-		Usage: mapAdapterUsageToGateway(resp.Usage),
+		Usage:             mapAdapterUsageToGateway(resp.Usage),
+		ServiceTier:       resp.ServiceTier,
+		SystemFingerprint: resp.SystemFingerprint,
 	}
 }
 
@@ -178,18 +203,24 @@ func mapAdapterStreamChunkToGateway(reqModel string, chunk openai.ChatStreamChun
 		Content:          chunk.Content,
 		ReasoningContent: chunk.ReasoningContent,
 		ToolCalls:        cloneRawMessage(chunk.ToolCalls),
+		Refusal:          chunk.Refusal,
+		FunctionCall:     cloneRawMessage(chunk.FunctionCall),
 	}
 
 	return gatewayapi.ChatCompletionStreamResponse{
 		ID:              chunk.ID,
 		Object:          "chat.completion.chunk",
+		Created:         chunk.Created,
 		Model:           reqModel,
 		EmitUsageAsNull: emitUsageNull,
 		Choices: []gatewayapi.ChatCompletionStreamChoice{{
-			Index:        0,
+			Index:        chunk.Index,
 			Delta:        delta,
 			FinishReason: chunk.FinishReason,
+			Logprobs:     cloneRawMessage(chunk.Logprobs),
 		}},
+		ServiceTier:       chunk.ServiceTier,
+		SystemFingerprint: chunk.SystemFingerprint,
 	}
 }
 

@@ -42,7 +42,7 @@ func TestAdapterRegistryResolvesCapabilitiesByProtocolAndKey(t *testing.T) {
 }
 
 func TestAdapterRegistryFilterCandidatesPreservesRoutingOrder(t *testing.T) {
-	openAIDeepSeek := openaideepseek.NewAdapter(nil)
+	openAIDeepSeek := openaideepseek.NewAdapter(nil, nil)
 	openAIRegistry, err := openai.NewRegistry(
 		openai.Registration{
 			Key:                "complete",
@@ -127,7 +127,7 @@ func TestNewAdapterRegistryRejectsMissingProtocolRegistry(t *testing.T) {
 func newTestAdapterRegistry(t *testing.T) *AdapterRegistry {
 	t.Helper()
 
-	openAIDeepSeek := openaideepseek.NewAdapter(nil)
+	openAIDeepSeek := openaideepseek.NewAdapter(nil, nil)
 	openAIRegistry, err := openai.NewRegistry(openai.Registration{
 		Key:                "deepseek",
 		Chat:               openAIDeepSeek,
@@ -138,7 +138,7 @@ func newTestAdapterRegistry(t *testing.T) *AdapterRegistry {
 		t.Fatalf("openai.NewRegistry returned error: %v", err)
 	}
 
-	anthropicDeepSeek := anthropicdeepseek.NewAdapter(nil)
+	anthropicDeepSeek := anthropicdeepseek.NewAdapter(nil, nil)
 	anthropicRegistry, err := anthropic.NewRegistry(anthropic.Registration{
 		Key:                    "deepseek",
 		Messages:               anthropicDeepSeek,

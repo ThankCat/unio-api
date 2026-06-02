@@ -3,180 +3,17 @@ package chatcompletions
 import (
 	"errors"
 	"testing"
-	"time"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
-// newTestBreaker 创建一个使用可控时钟的熔断器。
-func newTestBreaker(cfg ChannelCircuitBreakerConfig) (*ChannelCircuitBreaker, *time.Time) {
-	b := NewChannelCircuitBreaker(cfg)
-	clock := time.Now()
-	b.now = func() time.Time { return clock }
-
-	return b, &clock
-}
-
-func TestChannelCircuitBreakerTripsAfterThreshold(t *testing.T) {
-	b, _ := newTestBreaker(ChannelCircuitBreakerConfig{
-		Window:       time.Minute,
-		MinRequests:  4,
-		FailureRatio: 0.5,
-		OpenDuration: 10 * time.Second,
-	})
-
-	key := "1"
-	// 未达到 MinRequests 时不熔断。
-	b.RecordFailure(key)
-	b.RecordFailure(key)
-	b.RecordFailure(key)
-	if !b.Allow(key) {
-		t.Fatal("breaker should stay closed below MinRequests")
-	}
-
-	// 第 4 次失败：total=4 >= MinRequests，ratio=1.0 >= 0.5 → 熔断。
-	b.RecordFailure(key)
-	if b.Allow(key) {
-		t.Fatal("breaker should be open after crossing failure threshold")
-	}
-}
-
-func TestChannelCircuitBreakerHalfOpenRecovers(t *testing.T) {
-	b, clock := newTestBreaker(ChannelCircuitBreakerConfig{
-		Window:       time.Minute,
-		MinRequests:  2,
-		FailureRatio: 0.5,
-		OpenDuration: 10 * time.Second,
-	})
-
-	key := "1"
-	b.RecordFailure(key)
-	b.RecordFailure(key)
-	if b.Allow(key) {
-		t.Fatal("breaker should be open")
-	}
-
-	// 冷却未到，仍然拒绝。
-	*clock = clock.Add(5 * time.Second)
-	if b.Allow(key) {
-		t.Fatal("breaker should stay open within cooldown")
-	}
-
-	// 冷却到达，放行一次半开探测，且并发探测被拒绝。
-	*clock = clock.Add(6 * time.Second)
-	if !b.Allow(key) {
-		t.Fatal("breaker should allow a half-open probe after cooldown")
-	}
-	if b.Allow(key) {
-		t.Fatal("breaker should deny concurrent half-open probe")
-	}
-
-	// 探测成功 → 恢复闭合。
-	b.RecordSuccess(key)
-	if !b.Allow(key) {
-		t.Fatal("breaker should close after successful probe")
-	}
-}
-
-func TestChannelCircuitBreakerAvailableDoesNotReserveHalfOpenProbe(t *testing.T) {
-	b, clock := newTestBreaker(ChannelCircuitBreakerConfig{
-		Window:       time.Minute,
-		MinRequests:  2,
-		FailureRatio: 0.5,
-		OpenDuration: 10 * time.Second,
-	})
-
-	key := "1"
-	b.RecordFailure(key)
-	b.RecordFailure(key)
-
-	*clock = clock.Add(11 * time.Second)
-	if !b.Available(key) || !b.Available(key) {
-		t.Fatal("read-only availability should report the cooled-down channel without reserving its probe")
-	}
-	if !b.Allow(key) {
-		t.Fatal("first real attempt should reserve the half-open probe")
-	}
-	if b.Allow(key) {
-		t.Fatal("concurrent real attempt should not reserve a second half-open probe")
-	}
-}
-
-func TestChannelCircuitBreakerReopensOnProbeFailure(t *testing.T) {
-	b, clock := newTestBreaker(ChannelCircuitBreakerConfig{
-		Window:       time.Minute,
-		MinRequests:  2,
-		FailureRatio: 0.5,
-		OpenDuration: 10 * time.Second,
-	})
-
-	key := "1"
-	b.RecordFailure(key)
-	b.RecordFailure(key)
-
-	*clock = clock.Add(11 * time.Second)
-	if !b.Allow(key) {
-		t.Fatal("breaker should allow a half-open probe")
-	}
-
-	// 探测失败 → 重新熔断。
-	b.RecordFailure(key)
-	if b.Allow(key) {
-		t.Fatal("breaker should re-open after a failed probe")
-	}
-}
-
-func TestChannelCircuitBreakerWindowResetsCounts(t *testing.T) {
-	b, clock := newTestBreaker(ChannelCircuitBreakerConfig{
-		Window:       time.Minute,
-		MinRequests:  3,
-		FailureRatio: 0.9,
-		OpenDuration: 10 * time.Second,
-	})
-
-	key := "1"
-	b.RecordFailure(key)
-	b.RecordFailure(key)
-
-	// 跨过窗口后计数清零，旧失败不再累计触发熔断。
-	*clock = clock.Add(2 * time.Minute)
-	b.RecordFailure(key)
-	if !b.Allow(key) {
-		t.Fatal("breaker should stay closed after window reset clears old failures")
-	}
-}
-
-func TestIsChannelFaultError(t *testing.T) {
-	faulty := []adapter.UpstreamErrorCategory{
-		adapter.UpstreamErrorTimeout,
-		adapter.UpstreamErrorServer,
-		adapter.UpstreamErrorRateLimit,
-		adapter.UpstreamErrorAuth,
-		adapter.UpstreamErrorPermission,
-	}
-	for _, category := range faulty {
-		err := adapter.NewUpstreamError(category, adapter.UpstreamMetadata{}, failure.New(failure.CodeAdapterUpstreamStatus))
-		if !isChannelFaultError(err) {
-			t.Errorf("category %q should be channel fault", category)
-		}
-	}
-
-	notFaulty := []error{
-		nil,
-		adapter.NewUpstreamError(adapter.UpstreamErrorBadRequest, adapter.UpstreamMetadata{}, failure.New(failure.CodeAdapterUpstreamStatus)),
-		adapter.NewUpstreamError(adapter.UpstreamErrorCanceled, adapter.UpstreamMetadata{}, failure.New(failure.CodeAdapterUpstreamStatus)),
-		errors.New("non-upstream error"),
-	}
-	for _, err := range notFaulty {
-		if isChannelFaultError(err) {
-			t.Errorf("error %v should not be channel fault", err)
-		}
-	}
-}
+// 纯熔断器单测（ChannelCircuitBreaker / IsChannelFaultError）在 lifecycle/breaker_test.go；
+// 本文件只保留熔断在 chat 编排 fallback 链路中的集成行为。
 
 // fakeChannelBreaker 是 gateway 集成测试用的熔断器替身。
 type fakeChannelBreaker struct {
@@ -201,15 +38,15 @@ func (f *fakeChannelBreaker) RecordFailure(channelKey string) {
 	f.failures = append(f.failures, channelKey)
 }
 
-func newChatCompletionServiceWithBreaker(registry AdapterRegistry, router ChatRouter, breaker ChannelBreaker) *ChatCompletionService {
+func newChatCompletionServiceWithBreaker(registry AdapterRegistry, router ChatRouter, breaker lifecycle.ChannelBreaker) *ChatCompletionService {
 	return NewChatCompletionService(
 		router,
 		registry,
 		passthroughCandidatePreparer{inputTokens: 1},
-		ProviderErrorClassifier{},
+		lifecycle.ProviderErrorClassifier{},
 		newFakeRequestLogService(),
 		newChatCompletionSettlementForTest(),
-		&fakeChatAuthorizer{authorization: ChatAuthorization{ReservationID: 1}},
+		&fakeChatAuthorizer{authorization: lifecycle.ChatAuthorization{ReservationID: 1}},
 		nil,
 		breaker,
 	)
@@ -274,7 +111,7 @@ func TestChatCompletionReleasesAuthorizationWhenBreakerRaceDeniesAllCandidates(t
 	fakeAdapter := &fakeChatAdapter{chatResp: chatResponse("should not call")}
 	requestLog := newFakeRequestLogService()
 	authorizer := &fakeChatAuthorizer{
-		authorization: ChatAuthorization{ReservationID: 8899},
+		authorization: lifecycle.ChatAuthorization{ReservationID: 8899},
 	}
 	service := NewChatCompletionService(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
@@ -282,7 +119,7 @@ func TestChatCompletionReleasesAuthorizationWhenBreakerRaceDeniesAllCandidates(t
 			chatAdapters: map[string]openai.ChatAdapter{"openai": fakeAdapter},
 		},
 		passthroughCandidatePreparer{inputTokens: 1},
-		ProviderErrorClassifier{},
+		lifecycle.ProviderErrorClassifier{},
 		requestLog,
 		newChatCompletionSettlementForTest(),
 		authorizer,
@@ -315,7 +152,7 @@ func TestStreamChatCompletionReleasesAuthorizationWhenBreakerRaceDeniesAllCandid
 	}
 	requestLog := newFakeRequestLogService()
 	authorizer := &fakeChatAuthorizer{
-		authorization: ChatAuthorization{ReservationID: 9909},
+		authorization: lifecycle.ChatAuthorization{ReservationID: 9909},
 	}
 	service := NewChatCompletionService(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
@@ -323,7 +160,7 @@ func TestStreamChatCompletionReleasesAuthorizationWhenBreakerRaceDeniesAllCandid
 			streamChatAdapters: map[string]openai.StreamChatAdapter{"openai": fakeAdapter},
 		},
 		passthroughCandidatePreparer{inputTokens: 1},
-		ProviderErrorClassifier{},
+		lifecycle.ProviderErrorClassifier{},
 		requestLog,
 		newChatCompletionSettlementForTest(),
 		authorizer,

@@ -2,7 +2,6 @@ package messages
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 )
 
@@ -39,19 +38,16 @@ func TestMessageRequestDecodeKeepsTypedAndExtensions(t *testing.T) {
 	}
 }
 
-func TestMessageRequestDecodeRejectsMCPServers(t *testing.T) {
+func TestMessageRequestDecodeKeepsMCPServersExtension(t *testing.T) {
 	var req MessageRequest
 	err := json.Unmarshal([]byte(`{"model":"x","max_tokens":1,"messages":[{"role":"user","content":"hi"}],"mcp_servers":[]}`), &req)
-	if err == nil {
-		t.Fatal("expected reject error for mcp_servers")
+	if err != nil {
+		t.Fatalf("unexpected decode error: %v", err)
 	}
 
-	var rejectErr *messageRequestRejectError
-	if !errors.As(err, &rejectErr) {
-		t.Fatalf("expected messageRequestRejectError, got %T", err)
-	}
-	if rejectErr.param != "mcp_servers" {
-		t.Fatalf("param = %q, want mcp_servers", rejectErr.param)
+	// DEC-012：mcp_servers 是合法 Anthropic 字段，ingress 放行进 Extensions，由 adapter 出站 Drop。
+	if !req.HasExtension("mcp_servers") {
+		t.Fatalf("expected mcp_servers preserved as extension, got %#v", req.Extensions)
 	}
 }
 

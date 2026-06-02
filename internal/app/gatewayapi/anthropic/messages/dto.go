@@ -44,19 +44,11 @@ type MessageRequest struct {
 	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
 	Tools      json.RawMessage `json:"tools,omitempty"`
 
-	// OutputConfig 是 effort 与 structured output format 配置。
-	OutputConfig json.RawMessage `json:"output_config,omitempty"`
-
-	// ServiceTier 是服务等级（auto / standard_only）。
-	ServiceTier *string `json:"service_tier,omitempty"`
-
-	// Container 是 code execution container ID。
-	Container *string `json:"container,omitempty"`
-
-	// InferenceGeo 是推理区域偏好。
-	InferenceGeo *string `json:"inference_geo,omitempty"`
-
 	// Extensions 保留未显式建模的顶层 JSON 字段；由 UnmarshalJSON 填充，禁止 silent drop。
+	//
+	// service_tier / container / inference_geo / output_config / mcp_servers 等 provider
+	// 能力相关字段不在 gateway→adapter 契约里建模，按 DEC-012 进入 Extensions 透传给 adapter，
+	// adapter 无法转换时出站 Drop（见 knownMessageFields 与 decode.go 注释）。
 	Extensions map[string]json.RawMessage `json:"-"`
 }
 

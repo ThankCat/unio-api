@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
-	gatewayopenai "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
+	gatewayopenai "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
 )

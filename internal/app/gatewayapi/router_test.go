@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/app/gatewayapi/middleware"
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
+	gatewaychat "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
+	gatewaymodels "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/models"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
@@ -73,37 +74,37 @@ func (l *routerTestRateLimiter) Allow(ctx context.Context, subject string, limit
 type routerTestChatCompletionService struct{}
 
 // CreateChatCompletion 返回固定响应，避免 router 测试依赖 gateway/provider 组合。
-func (s *routerTestChatCompletionService) CreateChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (*openai.ChatCompletionResponse, error) {
-	return &openai.ChatCompletionResponse{
+func (s *routerTestChatCompletionService) CreateChatCompletion(ctx context.Context, req gatewaychat.ChatCompletionRequest) (*gatewaychat.ChatCompletionResponse, error) {
+	return &gatewaychat.ChatCompletionResponse{
 		ID:      "chatcmpl_test",
 		Object:  "chat.completion",
 		Created: time.Now().Unix(),
 		Model:   req.Model,
-		Choices: []openai.ChatCompletionChoice{
+		Choices: []gatewaychat.ChatCompletionChoice{
 			{
 				Index: 0,
-				Message: openai.ChatMessage{
+				Message: gatewaychat.ChatMessage{
 					Role:    "assistant",
 					Content: jsonContent("mock response"),
 				},
 				FinishReason: "stop",
 			},
 		},
-		Usage: openai.ChatCompletionUsage{},
+		Usage: gatewaychat.ChatCompletionUsage{},
 	}, nil
 }
 
 // StreamChatCompletion 发出固定流式响应，避免 router 测试依赖 gateway/adapter 组合。
-func (s *routerTestChatCompletionService) StreamChatCompletion(ctx context.Context, req openai.ChatCompletionRequest, emit func(openai.ChatCompletionStreamResponse) error) error {
-	return emit(openai.ChatCompletionStreamResponse{
+func (s *routerTestChatCompletionService) StreamChatCompletion(ctx context.Context, req gatewaychat.ChatCompletionRequest, emit func(gatewaychat.ChatCompletionStreamResponse) error) error {
+	return emit(gatewaychat.ChatCompletionStreamResponse{
 		ID:      "chatcmpl_mock",
 		Object:  "chat.completion.chunk",
 		Created: time.Now().Unix(),
 		Model:   req.Model,
-		Choices: []openai.ChatCompletionStreamChoice{
+		Choices: []gatewaychat.ChatCompletionStreamChoice{
 			{
 				Index: 0,
-				Delta: openai.ChatCompletionStreamDelta{
+				Delta: gatewaychat.ChatCompletionStreamDelta{
 					Role:    "assistant",
 					Content: "mock response",
 				},
@@ -114,7 +115,7 @@ func (s *routerTestChatCompletionService) StreamChatCompletion(ctx context.Conte
 }
 
 // newTestRouter 创建带默认测试依赖的 router。
-func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService openai.ChatCompletionService, limiter middleware.RateLimiter, modelCatalogServices ...openai.ModelCatalogService) http.Handler {
+func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService gatewaychat.ChatCompletionService, limiter middleware.RateLimiter, modelCatalogServices ...gatewaymodels.ModelCatalogService) http.Handler {
 	if chatService == nil {
 		chatService = &routerTestChatCompletionService{}
 	}
@@ -123,7 +124,7 @@ func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService ope
 		limiter = newAllowingRateLimiter()
 	}
 
-	modelCatalogService := openai.ModelCatalogService(&routerTestModelCatalogService{})
+	modelCatalogService := gatewaymodels.ModelCatalogService(&routerTestModelCatalogService{})
 	if len(modelCatalogServices) > 0 && modelCatalogServices[0] != nil {
 		modelCatalogService = modelCatalogServices[0]
 	}

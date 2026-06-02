@@ -107,6 +107,12 @@ type StreamError struct {
 
 func (StreamError) EventName() string { return "error" }
 
+// StreamFrame 是 service 层交给 HTTP 层写出的一个 Anthropic 原生 SSE 事件帧。
+type StreamFrame struct {
+	EventType string
+	Data      json.RawMessage
+}
+
 // EncodeStreamEvent 把一个具名事件编码为 Anthropic SSE 帧（含结尾空行）。
 func EncodeStreamEvent(ev StreamEvent) ([]byte, error) {
 	data, err := json.Marshal(ev)

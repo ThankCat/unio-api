@@ -4,14 +4,15 @@ import (
 	"errors"
 	"testing"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
 func TestChatCompletionServiceCreateChatCompletionReturnsResponseWhenRecoveryScheduled(t *testing.T) {
 	settlementCause := errors.New("commit failed after usage")
-	settlement := &fakeChatSettlementExecutor{err: chatSettlementRecoveryScheduled(1, settlementCause)}
-	authorizer := &fakeChatAuthorizer{authorization: ChatAuthorization{ReservationID: 7702}}
+	settlement := &fakeChatSettlementExecutor{err: lifecycle.ChatSettlementRecoveryScheduledError(1, settlementCause)}
+	authorizer := &fakeChatAuthorizer{authorization: lifecycle.ChatAuthorization{ReservationID: 7702}}
 	requestLog := newFakeRequestLogService()
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
@@ -46,8 +47,8 @@ func TestChatCompletionServiceCreateChatCompletionReturnsResponseWhenRecoverySch
 
 func TestChatCompletionServiceStreamReturnsNilWhenRecoveryScheduledAfterFinalUsage(t *testing.T) {
 	settlementCause := errors.New("stream settlement commit failed")
-	settlement := &fakeChatSettlementExecutor{err: chatSettlementRecoveryScheduled(1, settlementCause)}
-	authorizer := &fakeChatAuthorizer{authorization: ChatAuthorization{ReservationID: 8831}}
+	settlement := &fakeChatSettlementExecutor{err: lifecycle.ChatSettlementRecoveryScheduledError(1, settlementCause)}
+	authorizer := &fakeChatAuthorizer{authorization: lifecycle.ChatAuthorization{ReservationID: 8831}}
 	requestLog := newFakeRequestLogService()
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
@@ -85,7 +86,7 @@ func TestChatCompletionServiceStreamReturnsNilWhenRecoveryScheduledAfterFinalUsa
 func TestChatCompletionServiceStreamKeepsTailErrorWhenRecoveryScheduled(t *testing.T) {
 	upstreamErr := errors.New("tail read failed")
 	settlementCause := errors.New("settlement failed after tail usage")
-	settlement := &fakeChatSettlementExecutor{err: chatSettlementRecoveryScheduled(1, settlementCause)}
+	settlement := &fakeChatSettlementExecutor{err: lifecycle.ChatSettlementRecoveryScheduledError(1, settlementCause)}
 	requestLog := newFakeRequestLogService()
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
@@ -103,7 +104,7 @@ func TestChatCompletionServiceStreamKeepsTailErrorWhenRecoveryScheduled(t *testi
 		nil,
 		requestLog,
 		settlement,
-		&fakeChatAuthorizer{authorization: ChatAuthorization{ReservationID: 8841}},
+		&fakeChatAuthorizer{authorization: lifecycle.ChatAuthorization{ReservationID: 8841}},
 	)
 
 	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {

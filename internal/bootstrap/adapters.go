@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter/anthropic"
@@ -14,8 +15,11 @@ import (
 //
 // 当前进程同时支持 DeepSeek 的 OpenAI 与 Anthropic 协议族 adapter。
 // 两侧 channels.adapter_key 都是 "deepseek"，由 channel.protocol 组成运行时复合键。
-func NewAdapterRegistry(client *http.Client) (*lifecycle.AdapterRegistry, error) {
-	openAIDeepSeekAdapter := openaideepseek.NewAdapter(client)
+//
+// logger 注入到各 provider adapter，用于记录按 DEC-012 出站 Drop 的请求字段；传 nil 时
+// adapter 内部回退到 slog 默认 logger。
+func NewAdapterRegistry(client *http.Client, logger *slog.Logger) (*lifecycle.AdapterRegistry, error) {
+	openAIDeepSeekAdapter := openaideepseek.NewAdapter(client, logger)
 	openAIRegistry, err := openai.NewRegistry(openai.Registration{
 		Key:                "deepseek",
 		Chat:               openAIDeepSeekAdapter,
@@ -26,7 +30,7 @@ func NewAdapterRegistry(client *http.Client) (*lifecycle.AdapterRegistry, error)
 		return nil, err
 	}
 
-	anthropicDeepSeekAdapter := anthropicdeepseek.NewAdapter(client)
+	anthropicDeepSeekAdapter := anthropicdeepseek.NewAdapter(client, logger)
 	anthropicRegistry, err := anthropic.NewRegistry(anthropic.Registration{
 		Key:                    "deepseek",
 		Messages:               anthropicDeepSeekAdapter,

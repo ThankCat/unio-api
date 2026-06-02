@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai/streamtranslate"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
@@ -179,6 +178,86 @@ func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 	}
 	if got.Usage.ReasoningTokens != 3 {
 		t.Fatalf("got reasoning_tokens %d, want 3", got.Usage.ReasoningTokens)
+	}
+}
+
+// TestAdapterChatCompletionsPreservesResponseFields 验证非流式响应的顶层 / choice / message
+// 全量字段（created/service_tier/system_fingerprint/refusal/annotations/audio/logprobs）被
+// 完整解码进 ChatResponse，不被静默丢弃（矩阵 §5，DEC-012 协议为先）。
+func TestAdapterChatCompletionsPreservesResponseFields(t *testing.T) {
+	body := `{
+		"id": "chatcmpl_fields",
+		"object": "chat.completion",
+		"created": 1710000123,
+		"model": "gpt-4.1",
+		"service_tier": "default",
+		"system_fingerprint": "fp_abc123",
+		"choices": [
+			{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "hi",
+					"refusal": "no can do",
+					"annotations": [{"type": "url_citation", "url_citation": {"url": "https://x"}}],
+					"audio": {"id": "audio_1", "transcript": "hi"}
+				},
+				"finish_reason": "stop",
+				"logprobs": {"content": [{"token": "hi"}]}
+			}
+		],
+		"usage": {
+			"prompt_tokens": 5,
+			"completion_tokens": 2,
+			"total_tokens": 7,
+			"prompt_tokens_details": {"cached_tokens": 0},
+			"completion_tokens_details": {"reasoning_tokens": 0}
+		}
+	}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatalf("write response body: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	openAIAdapter := newTestAdapter(server.Client())
+
+	got, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
+		BaseURL: server.URL + "/v1",
+		APIKey:  "test-secret",
+		Timeout: 30 * time.Second,
+	}, ChatRequest{
+		Model:    "gpt-4.1",
+		Messages: []ChatMessage{{Role: "user", Content: jsonContent("hello")}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got.Created != 1710000123 {
+		t.Fatalf("created = %d, want 1710000123", got.Created)
+	}
+	if got.ServiceTier == nil || *got.ServiceTier != "default" {
+		t.Fatalf("service_tier = %#v", got.ServiceTier)
+	}
+	if got.SystemFingerprint == nil || *got.SystemFingerprint != "fp_abc123" {
+		t.Fatalf("system_fingerprint = %#v", got.SystemFingerprint)
+	}
+	if got.Refusal == nil || *got.Refusal != "no can do" {
+		t.Fatalf("refusal = %#v", got.Refusal)
+	}
+	if !json.Valid(got.Annotations) || !strings.Contains(string(got.Annotations), "url_citation") {
+		t.Fatalf("annotations = %s", got.Annotations)
+	}
+	if !json.Valid(got.Audio) || !strings.Contains(string(got.Audio), "audio_1") {
+		t.Fatalf("audio = %s", got.Audio)
+	}
+	if !json.Valid(got.Logprobs) || !strings.Contains(string(got.Logprobs), "token") {
+		t.Fatalf("logprobs = %s", got.Logprobs)
 	}
 }
 
@@ -667,6 +746,66 @@ func TestAdapterStreamChatCompletionsParsesOpenAIRawSSEFixture(t *testing.T) {
 	}
 }
 
+// TestAdapterStreamChatCompletionsPreservesChunkFields 验证流式 chunk/choice/delta 全量字段
+// （created/service_tier/system_fingerprint/index/logprobs/delta.refusal）被解码进 ChatStreamChunk。
+func TestAdapterStreamChatCompletionsPreservesChunkFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		rawEvents := []string{
+			`data: {"id":"chatcmpl-fields","object":"chat.completion.chunk","created":1710009999,"model":"gpt-4.1","service_tier":"default","system_fingerprint":"fp_stream","choices":[{"index":2,"delta":{"role":"assistant","refusal":"no"},"logprobs":{"content":[{"token":"x"}]},"finish_reason":null}]}` + "\n\n",
+			`data: {"id":"chatcmpl-fields","object":"chat.completion.chunk","created":1710010000,"model":"gpt-4.1","choices":[{"index":2,"delta":{"content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}` + "\n\n",
+			"data: [DONE]\n\n",
+		}
+		for _, event := range rawEvents {
+			if _, err := w.Write([]byte(event)); err != nil {
+				t.Fatalf("write fixture event: %v", err)
+			}
+		}
+	}))
+	defer server.Close()
+
+	openAIAdapter := newTestAdapter(server.Client())
+
+	got := make([]ChatStreamChunk, 0)
+	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+		BaseURL: server.URL + "/v1",
+		APIKey:  "test-secret",
+		Timeout: 30 * time.Second,
+	}, ChatRequest{
+		Model:    "gpt-4.1",
+		Messages: []ChatMessage{{Role: "user", Content: jsonContent("hi")}},
+	}, func(chunk ChatStreamChunk) error {
+		got = append(got, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(got) < 1 {
+		t.Fatalf("got %d chunks, want >=1", len(got))
+	}
+	first := got[0]
+	if first.Created != 1710009999 {
+		t.Fatalf("created = %d, want 1710009999", first.Created)
+	}
+	if first.ServiceTier == nil || *first.ServiceTier != "default" {
+		t.Fatalf("service_tier = %#v", first.ServiceTier)
+	}
+	if first.SystemFingerprint == nil || *first.SystemFingerprint != "fp_stream" {
+		t.Fatalf("system_fingerprint = %#v", first.SystemFingerprint)
+	}
+	if first.Index != 2 {
+		t.Fatalf("index = %d, want 2", first.Index)
+	}
+	if first.Refusal == nil || *first.Refusal != "no" {
+		t.Fatalf("refusal = %#v", first.Refusal)
+	}
+	if !strings.Contains(string(first.Logprobs), "token") {
+		t.Fatalf("logprobs = %s", first.Logprobs)
+	}
+}
+
 func TestAdapterStreamChatCompletionsParsesDeepSeekUsageTail(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -795,7 +934,7 @@ func TestAdapterStreamChatCompletionsDoesNotForwardReasoningWithoutDeepSeekNorma
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client(), streamtranslate.NewRegistry(streamtranslate.Default{}))
+	openAIAdapter := NewAdapter(server.Client())
 
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{

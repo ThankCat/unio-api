@@ -11,13 +11,13 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-	gateway "github.com/ThankCat/unio-api/internal/service/gateway/openai/chatcompletions"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
 // WorkerServerAppDB 定义 worker server app 构建时需要的数据库能力。
 type WorkerServerAppDB interface {
 	sqlc.DBTX
-	gateway.ChatTxBeginner
+	lifecycle.ChatTxBeginner
 }
 
 // WorkerServerAppDeps 表示构建 worker server app 需要的进程级依赖。
@@ -36,13 +36,13 @@ type WorkerServerApp struct {
 func NewWorkerServerApp(_ context.Context, deps WorkerServerAppDeps) (*WorkerServerApp, error) {
 	queries := sqlc.New(deps.DB)
 	ledgerService := ledger.NewService(deps.DB, queries)
-	chatSettlementService := gateway.NewChatSettlementService(
+	chatSettlementService := lifecycle.NewChatSettlementService(
 		deps.DB,
 		queries,
 		billing.Service{},
 		ledgerService,
 	)
-	chatSettlementRecoveryService := gateway.NewChatSettlementRecoveryService(queries, chatSettlementService)
+	chatSettlementRecoveryService := lifecycle.NewChatSettlementRecoveryService(queries, chatSettlementService)
 
 	settlementRecoveryWorker := workers.NewSettlementRecoveryWorker(
 		queries,

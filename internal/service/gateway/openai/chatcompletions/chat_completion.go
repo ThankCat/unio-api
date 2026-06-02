@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"time"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
 // CreateChatCompletion 编排非流式 chat completion 请求，并返回 OpenAI-compatible HTTP DTO。
@@ -38,29 +39,29 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		s.recordChatRequest(false, outcome)
 	}()
 
-	ctx, span := startGatewaySpan(ctx, "gateway.chat_completion")
+	ctx, span := lifecycle.StartGatewaySpan(ctx, "gateway.chat_completion")
 	defer span.End()
 
-	planCtx, planSpan := startGatewaySpan(ctx, "gateway.routing")
+	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
 	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
 		ProjectID:       principal.ProjectID,
 		ModelID:         req.Model,
 		IngressProtocol: routing.ProtocolOpenAI,
 	})
-	endGatewaySpan(planSpan, err)
+	lifecycle.EndGatewaySpan(planSpan, err)
 	if err != nil {
-		s.markRequestRecordFailed(ctx, requestRecord, routingFailureCode(err), err)
+		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return nil, err
 	}
 
 	candidatePlan, err := s.prepareChatCandidates(ctx, req, plan.Candidates, false)
 	if err != nil {
-		s.markRequestRecordFailed(ctx, requestRecord, routingFailureCode(err), err)
+		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return nil, err
 	}
 
 	firstCandidate := candidatePlan.Candidates[0].Route
-	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, ChatAuthorizeParams{
+	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:       requestRecord,
 		Principal:           principal,
 		ModelDBID:           firstCandidate.ModelDBID,
@@ -80,7 +81,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 
 		// channel 处于熔断 open 状态时直接跳过，尝试下一个同模型 channel；
 		// 跳过不产生上游调用，也不写 attempt（attempt_index 允许出现空洞）。
-		channelKey := metricsID(candidate.Channel.ID)
+		channelKey := lifecycle.MetricsID(candidate.Channel.ID)
 		if !s.breakerAllow(channelKey) {
 			continue
 		}
@@ -116,12 +117,12 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 			return nil, err
 		}
 
-		adapterCtx, adapterSpan := startGatewaySpan(ctx, "adapter.chat_completions", upstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
+		adapterCtx, adapterSpan := lifecycle.StartGatewaySpan(ctx, "adapter.chat_completions", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 		upstreamStart := time.Now()
 		adapterResp, err := chatAdapter.ChatCompletions(adapterCtx, candidate.Channel,
 			mapGatewayRequestToAdapter(req, candidate.UpstreamModel))
 		s.recordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
-		endGatewaySpan(adapterSpan, err)
+		lifecycle.EndGatewaySpan(adapterSpan, err)
 		s.recordChannelHealth(channelKey, err)
 		if err != nil {
 			// 客户端取消不是上游失败，也不应该触发 fallback。
@@ -153,12 +154,12 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		}
 
 		s.recordRoutingSelected(candidate.ProviderID, candidate.Channel.ID, req.Model)
-		logfields.SetRoute(ctx, req.Model, metricsID(candidate.ProviderID), metricsID(candidate.Channel.ID))
+		logfields.SetRoute(ctx, req.Model, lifecycle.MetricsID(candidate.ProviderID), lifecycle.MetricsID(candidate.Channel.ID))
 
 		// 非流式成功请求的账务事实必须在 settlement 事务内一起提交。
 		// 这里不能先返回 HTTP response 再异步扣费，否则 usage、price snapshot、ledger 和 request status 会出现不一致窗口。
-		settleCtx, settleSpan := startGatewaySpan(ctx, "gateway.settlement")
-		settleErr := s.chatSettlement.SettleSuccessfulChat(settleCtx, ChatSettlementParams{
+		settleCtx, settleSpan := lifecycle.StartGatewaySpan(ctx, "gateway.settlement")
+		settleErr := s.chatSettlement.SettleSuccessfulChat(settleCtx, lifecycle.ChatSettlementParams{
 			RequestRecord:    requestRecord,
 			AttemptRecord:    attemptRecord,
 			Principal:        principal,
@@ -171,9 +172,9 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 			FinalChannelID:   candidate.Channel.ID,
 			Facts:            adapterResp.Facts,
 		})
-		endSettlementSpan(settleSpan, settleErr)
-		s.recordSettlement(settlementOutcomeFromErr(settleErr))
-		if settleErr != nil && !IsChatSettlementRecoveryScheduled(settleErr) {
+		lifecycle.EndSettlementSpan(settleSpan, settleErr)
+		s.recordSettlement(lifecycle.SettlementOutcomeFromErr(settleErr))
+		if settleErr != nil && !lifecycle.IsChatSettlementRecoveryScheduled(settleErr) {
 			s.markRequestRecordFailed(ctx, requestRecord, "chat_settlement_failed", settleErr)
 			return nil, settleErr
 		}
@@ -181,7 +182,10 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		outcome = metrics.ChatOutcomeSuccess
 
 		resp := mapAdapterResponseToGateway(req.Model, *adapterResp)
-		resp.Created = time.Now().Unix()
+		// 优先透传上游 created；仅当上游未返回（0）时回退本地时间，保持 OpenAI 形状有值。
+		if resp.Created == 0 {
+			resp.Created = time.Now().Unix()
+		}
 		return &resp, nil
 	}
 
@@ -205,7 +209,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		routing.ErrNoAvailableChannel,
 		failure.WithMessage(routing.ErrNoAvailableChannel.Error()),
 	)
-	s.markRequestRecordFailed(ctx, requestRecord, routingFailureCode(err), err)
+	s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 
 	return nil, err
 }

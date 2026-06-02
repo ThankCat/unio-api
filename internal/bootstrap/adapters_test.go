@@ -8,7 +8,7 @@ import (
 )
 
 func TestNewAdapterRegistryRegistersDeepSeekDualProtocolCapabilities(t *testing.T) {
-	registry, err := NewAdapterRegistry(nil)
+	registry, err := NewAdapterRegistry(nil, nil)
 	if err != nil {
 		t.Fatalf("NewAdapterRegistry returned error: %v", err)
 	}

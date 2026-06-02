@@ -9,14 +9,14 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-api/internal/platform/observability/tracing"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-	gateway "github.com/ThankCat/unio-api/internal/service/gateway/openai/chatcompletions"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 	"github.com/redis/go-redis/v9"
 )
 
 // GatewayServerAppDB 定义 gateway server app 构建时需要的数据库能力。
 type GatewayServerAppDB interface {
 	sqlc.DBTX
-	gateway.ChatTxBeginner
+	lifecycle.ChatTxBeginner
 }
 
 // GatewayServerAppDeps 表示构建 gateway server app 需要的进程级依赖。
@@ -64,7 +64,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		return nil, err
 	}
 
-	adapterRegistry, err := NewAdapterRegistry(http.DefaultClient)
+	adapterRegistry, err := NewAdapterRegistry(http.DefaultClient, deps.Logger)
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +86,15 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		deps.Config.CircuitBreaker,
 		metricsRecorder,
 	)
+	messagesService := NewMessagesGateway(
+		deps.DB,
+		queries,
+		chatRouter,
+		adapterRegistry,
+		deps.Config.Worker,
+		deps.Config.CircuitBreaker,
+		metricsRecorder,
+	)
 
 	handler := NewHTTPHandler(
 		deps.Logger,
@@ -93,6 +102,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		deps.Redis,
 		deps.Config,
 		chatCompletionService,
+		messagesService,
 		metricsRecorder,
 	)
 

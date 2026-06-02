@@ -145,23 +145,37 @@ func TestUsageRecordRejectsInvalidFacts(t *testing.T) {
 	}
 }
 
-func TestUsageLineItemRejectsUnregisteredKindAndDuplicate(t *testing.T) {
+func TestUsageLineItemRejectsUnregisteredKind(t *testing.T) {
 	ctx, _, queries, cleanup := newModelChannelTestTx(t)
 	defer cleanup()
 
 	identity := createRequestRecordIdentity(t, ctx, queries)
-	requestRecord := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("usage-line-item-%d", time.Now().UnixNano()))
+	requestRecord := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("usage-line-item-kind-%d", time.Now().UnixNano()))
 	record, err := queries.CreateUsageRecord(ctx, usageRecordParams(requestRecord.ID))
 	if err != nil {
 		t.Fatalf("create usage record: %v", err)
 	}
 
+	// 未登记 kind 必须 CHECK 违反；该违反会中止当前事务，因此独立用例验证，
+	// 不与后续 insert 共享同一事务（否则 25P02 aborted）。
 	if _, err := queries.CreateUsageLineItem(ctx, sqlc.CreateUsageLineItemParams{
 		UsageRecordID: record.ID,
 		Kind:          "provider_arbitrary_key",
 		Quantity:      1,
 	}); !isCheckViolation(err) {
 		t.Fatalf("expected unregistered kind check violation, got %v", err)
+	}
+}
+
+func TestUsageLineItemRejectsDuplicate(t *testing.T) {
+	ctx, _, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	identity := createRequestRecordIdentity(t, ctx, queries)
+	requestRecord := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("usage-line-item-dup-%d", time.Now().UnixNano()))
+	record, err := queries.CreateUsageRecord(ctx, usageRecordParams(requestRecord.ID))
+	if err != nil {
+		t.Fatalf("create usage record: %v", err)
 	}
 
 	params := sqlc.CreateUsageLineItemParams{

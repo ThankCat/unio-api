@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
 	"github.com/ThankCat/unio-api/internal/core/auth"
@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
 // StreamChatCompletion 编排流式 chat completion 请求，并通过 emit 写出 OpenAI-compatible SSE chunk。
@@ -40,29 +41,29 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 		s.recordChatRequest(true, outcome)
 	}()
 
-	ctx, span := startGatewaySpan(ctx, "gateway.chat_stream")
+	ctx, span := lifecycle.StartGatewaySpan(ctx, "gateway.chat_stream")
 	defer span.End()
 
-	planCtx, planSpan := startGatewaySpan(ctx, "gateway.routing")
+	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
 	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
 		ProjectID:       principal.ProjectID,
 		ModelID:         req.Model,
 		IngressProtocol: routing.ProtocolOpenAI,
 	})
-	endGatewaySpan(planSpan, err)
+	lifecycle.EndGatewaySpan(planSpan, err)
 	if err != nil {
-		s.markRequestRecordFailed(ctx, requestRecord, routingFailureCode(err), err)
+		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
 	}
 
 	candidatePlan, err := s.prepareChatCandidates(ctx, req, plan.Candidates, true)
 	if err != nil {
-		s.markRequestRecordFailed(ctx, requestRecord, routingFailureCode(err), err)
+		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
 	}
 
 	firstCandidate := candidatePlan.Candidates[0].Route
-	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, ChatAuthorizeParams{
+	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:       requestRecord,
 		Principal:           principal,
 		ModelDBID:           firstCandidate.ModelDBID,
@@ -81,7 +82,7 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 		candidate := prepared.Route
 
 		// channel 熔断 open 时跳过该 channel，尝试下一个同模型 channel。
-		channelKey := metricsID(candidate.Channel.ID)
+		channelKey := lifecycle.MetricsID(candidate.Channel.ID)
 		if !s.breakerAllow(channelKey) {
 			continue
 		}
@@ -143,19 +144,19 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 			}
 
 			s.recordRoutingSelected(candidate.ProviderID, candidate.Channel.ID, req.Model)
-			logfields.SetRoute(ctx, req.Model, metricsID(candidate.ProviderID), metricsID(candidate.Channel.ID))
+			logfields.SetRoute(ctx, req.Model, lifecycle.MetricsID(candidate.ProviderID), lifecycle.MetricsID(candidate.Channel.ID))
 
 			// 客户端断开会取消原始请求 ctx；结算属于服务端账务收口，
 			// 不能因为客户端不再读取响应就放弃扣费。
 			settlementCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 
-			settleCtx, settleSpan := startGatewaySpan(settlementCtx, "gateway.settlement")
+			settleCtx, settleSpan := lifecycle.StartGatewaySpan(settlementCtx, "gateway.settlement")
 			responseID := streamResponseID
 			if responseID == "" {
 				responseID = streamFacts.UpstreamResponseID
 			}
-			settleErr := s.chatSettlement.SettleSuccessfulChat(settleCtx, ChatSettlementParams{
+			settleErr := s.chatSettlement.SettleSuccessfulChat(settleCtx, lifecycle.ChatSettlementParams{
 				RequestRecord:    requestRecord,
 				AttemptRecord:    attemptRecord,
 				Principal:        principal,
@@ -168,12 +169,12 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 				FinalChannelID:   candidate.Channel.ID,
 				Facts:            *streamFacts,
 			})
-			endSettlementSpan(settleSpan, settleErr)
-			s.recordSettlement(settlementOutcomeFromErr(settleErr))
+			lifecycle.EndSettlementSpan(settleSpan, settleErr)
+			s.recordSettlement(lifecycle.SettlementOutcomeFromErr(settleErr))
 			return settleErr
 		}
 
-		streamCtx, streamSpan := startGatewaySpan(ctx, "adapter.stream_chat_completions", upstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
+		streamCtx, streamSpan := lifecycle.StartGatewaySpan(ctx, "adapter.stream_chat_completions", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 		upstreamStart := time.Now()
 		streamOutcome, streamErr := streamAdapter.StreamChatCompletions(streamCtx, candidate.Channel,
 			mapGatewayRequestToAdapter(req, candidate.UpstreamModel),
@@ -197,13 +198,16 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 				}
 
 				chunkResp := mapAdapterStreamChunkToGateway(req.Model, chunk, req.StreamIncludeUsage())
-				chunkResp.Created = time.Now().Unix()
+				// 优先透传上游 chunk created；仅当上游未给出（0）时回退本地时间。
+				if chunkResp.Created == 0 {
+					chunkResp.Created = time.Now().Unix()
+				}
 				return emit(chunkResp)
 			})
 		streamFacts = streamOutcome.Facts
 		err = streamErr
 		s.recordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
-		endGatewaySpan(streamSpan, err)
+		lifecycle.EndGatewaySpan(streamSpan, err)
 		s.recordChannelHealth(channelKey, err)
 
 		if err != nil {
@@ -211,7 +215,7 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 			// 即使后续发生客户端取消、连接尾部错误或 adapter 返回错误，也不能让已产生成本的请求免费。
 			if streamFacts != nil {
 				if settleErr := settleStreamFacts(); settleErr != nil {
-					if !IsChatSettlementRecoveryScheduled(settleErr) {
+					if !lifecycle.IsChatSettlementRecoveryScheduled(settleErr) {
 						s.markRequestRecordFailed(ctx, requestRecord, "stream_chat_settlement_failed", settleErr)
 						return settleErr
 					}
@@ -301,7 +305,7 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 		}
 
 		if settleErr := settleStreamFacts(); settleErr != nil {
-			if !IsChatSettlementRecoveryScheduled(settleErr) {
+			if !lifecycle.IsChatSettlementRecoveryScheduled(settleErr) {
 				s.markRequestRecordFailed(ctx, requestRecord, "stream_chat_settlement_failed", settleErr)
 				return settleErr
 			}

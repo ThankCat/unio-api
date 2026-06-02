@@ -343,7 +343,7 @@ Provider / upstream 错误规则：
 - **预授权保守估算**：同协议 fallback 可能命中不同 adapter；authorization 必须对可用候选使用各自 wire 对应 tokenizer，并按保守 token 估算冻结余额。
 - **retry 归 lifecycle**：adapter 一次调用只允许发起一次真实 upstream HTTP 请求；每次 retry 或 fallback 必须创建新的 request attempt。
 - **生产 adapter 不使用官方 Go SDK**：自行维护 wire DTO、HTTP、响应解析和 SSE 翻译；官方 SDK 只用于黑盒验收。
-- **禁止 silent drop**：客户端传入的协议字段或已登记 vendor extension，不得在 JSON decode、gateway→adapter 映射或 provider wire 转换阶段被窄 struct 静默丢弃；不支持的能力必须明确 400 或写入 Compatibility Matrix 的 Reject。
+- **协议为先（DEC-012）**：ingress 禁止 decode 丢字段；合法协议字段进入 adapter contract。provider 出站只允许 Pass/Adapt 写入 upstream，无法转换则 **Drop**（不进入 upstream body）并记内部 `dropped_*_fields`；响应只填充 ingress 协议 DTO，账务走 `ResponseFacts`。provider 映射层默认不因 channel 能力 400；仅 ingress 协议非法、auth/billing/routing 失败或 upstream hard failure 可 Reject。
 - **Gateway 不得写 vendor 分支**；不得把 `reasoning_content` 长期合并进 `content` 作为最终对外语义。
 - **`normalizer/`、`streamtranslate/` 等过渡实现不是独立架构层**；stream 差异必须收口到对应 provider adapter。
 - Phase 4 text-only MVP 边界在 OpenAI parity 阶段完成后视为被 parity 层取代，而不是长期并存两套公开语义。

@@ -23,7 +23,7 @@ func (r fakeChatGatewayRouter) PlanChat(ctx context.Context, req routing.ChatRou
 }
 
 func TestNewChatGatewayBuildsService(t *testing.T) {
-	registry, err := NewAdapterRegistry(nil)
+	registry, err := NewAdapterRegistry(nil, nil)
 	if err != nil {
 		t.Fatalf("NewAdapterRegistry returned error: %v", err)
 	}

@@ -4,9 +4,10 @@ import (
 	"testing"
 	"time"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai"
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
 // fakeMetricsRecorder 捕获 gateway 上报的业务指标调用，供传播测试断言。
@@ -67,10 +68,10 @@ func TestChatCompletionServiceRecordsSuccessMetrics(t *testing.T) {
 		router,
 		registry,
 		passthroughCandidatePreparer{inputTokens: 1},
-		ProviderErrorClassifier{},
+		lifecycle.ProviderErrorClassifier{},
 		newFakeRequestLogService(),
 		newChatCompletionSettlementForTest(),
-		&fakeChatAuthorizer{authorization: ChatAuthorization{ReservationID: 1}},
+		&fakeChatAuthorizer{authorization: lifecycle.ChatAuthorization{ReservationID: 1}},
 		recorder,
 		nil,
 	)
@@ -110,10 +111,10 @@ func TestChatCompletionServiceRecordsStreamSuccessMetrics(t *testing.T) {
 		router,
 		registry,
 		passthroughCandidatePreparer{inputTokens: 1},
-		ProviderErrorClassifier{},
+		lifecycle.ProviderErrorClassifier{},
 		newFakeRequestLogService(),
 		newChatCompletionSettlementForTest(),
-		&fakeChatAuthorizer{authorization: ChatAuthorization{ReservationID: 1}},
+		&fakeChatAuthorizer{authorization: lifecycle.ChatAuthorization{ReservationID: 1}},
 		recorder,
 		nil,
 	)

@@ -21,27 +21,23 @@ type AdapterRegistry interface {
 	ChatInputTokenizer(adapterKey string) (openai.ChatInputTokenizer, bool)
 }
 
-// RetryClassifier 定义 gateway 判断一次上游错误是否允许尝试下一个同模型 channel 的能力。
-type RetryClassifier interface {
-	IsRetryable(err error) bool
-}
-
-// ChatSettlementExecutor 定义 chat 成功后提交 usage、price snapshot 和 ledger 结算事务的能力。
-type ChatSettlementExecutor interface {
-	SettleSuccessfulChat(ctx context.Context, params ChatSettlementParams) error
-}
-
 // ChatCompletionService 编排 chat completion 请求的 routing、adapter 调用、request log 和结算。
+//
+// 协议无关基础设施（request log / metrics / breaker / chat authorizer 的 release 流程 + ad-hoc
+// code 文案 + ingress 协议常量）由 lifecycle.RequestLifecycle 统一承担，在构造时立即 bundle，
+// 由本文件内部 helper lc() 返回。两侧 service 的 thin wrapper（channel_breaker /
+// chat_authorization / chat_metrics / chat_request_record）都改为 1-line forward 到 lifecycle。
 type ChatCompletionService struct {
 	router          ChatRouter
 	registry        AdapterRegistry
 	candidates      lifecycle.CandidatePreparer
-	retryClassifier RetryClassifier
+	retryClassifier lifecycle.RetryClassifier
 	requestLog      requestlog.Service
-	chatSettlement  ChatSettlementExecutor
-	chatAuthorizer  ChatAuthorizer
-	metrics         MetricsRecorder
-	breaker         ChannelBreaker
+	chatSettlement  lifecycle.ChatSettlementExecutor
+	chatAuthorizer  lifecycle.ChatAuthorizer
+	metrics         lifecycle.MetricsRecorder
+	breaker         lifecycle.ChannelBreaker
+	lifecycle       *lifecycle.RequestLifecycle
 }
 
 // NewChatCompletionService 创建聊天补全 gateway service。
@@ -50,15 +46,15 @@ func NewChatCompletionService(
 	router ChatRouter,
 	registry AdapterRegistry,
 	candidates lifecycle.CandidatePreparer,
-	retryClassifier RetryClassifier,
+	retryClassifier lifecycle.RetryClassifier,
 	requestLog requestlog.Service,
-	chatSettlement ChatSettlementExecutor,
-	chatAuthorizer ChatAuthorizer,
-	metricsRecorder MetricsRecorder,
-	breaker ChannelBreaker,
+	chatSettlement lifecycle.ChatSettlementExecutor,
+	chatAuthorizer lifecycle.ChatAuthorizer,
+	metricsRecorder lifecycle.MetricsRecorder,
+	breaker lifecycle.ChannelBreaker,
 ) *ChatCompletionService {
 	if retryClassifier == nil {
-		retryClassifier = NeverRetryClassifier{}
+		retryClassifier = lifecycle.NeverRetryClassifier{}
 	}
 	if candidates == nil {
 		panic("gateway: lifecycle candidate preparer is required")
@@ -72,6 +68,7 @@ func NewChatCompletionService(
 	if chatAuthorizer == nil {
 		panic("gateway: chat authorizer service is required")
 	}
+
 	return &ChatCompletionService{
 		router:          router,
 		registry:        registry,
@@ -82,5 +79,28 @@ func NewChatCompletionService(
 		chatAuthorizer:  chatAuthorizer,
 		metrics:         metricsRecorder,
 		breaker:         breaker,
+		lifecycle: lifecycle.NewRequestLifecycle(lifecycle.RequestLifecycleParams{
+			RequestLog:      requestLog,
+			Authorizer:      chatAuthorizer,
+			Metrics:         metricsRecorder,
+			Breaker:         breaker,
+			IngressProtocol: requestlog.ProtocolOpenAI,
+			Operation:       requestlog.OperationChatCompletions,
+			SafeMessage:     chatCompletionsSafeMessage,
+		}),
 	}
+}
+
+// chatCompletionsSafeMessage 把 chat-completion 编排专用 ad-hoc string code 映射成可展示文案；
+// 返回空串表示「此 code 不在本协议族 ad-hoc 集合内」，由 lifecycle 兜底到 BaseSafeRequestLogErrorMessage。
+func chatCompletionsSafeMessage(code string) string {
+	switch code {
+	case "chat_authorization_failed":
+		return "Request authorization failed."
+	case "chat_authorization_release_failed":
+		return "Request billing cleanup failed."
+	case "chat_settlement_failed", "stream_chat_settlement_failed":
+		return "Request settlement failed."
+	}
+	return ""
 }

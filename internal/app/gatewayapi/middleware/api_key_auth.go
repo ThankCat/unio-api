@@ -20,7 +20,7 @@ type APIKeyAuthenticator interface {
 func APIKeyAuth(authenticator APIKeyAuthenticator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token := bearerToken(r.Header.Get("Authorization"))
+			token := apiKeyToken(r)
 			if token == "" {
 				_ = httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing api key")
 				return
@@ -49,6 +49,15 @@ func APIKeyAuth(authenticator APIKeyAuthenticator) func(http.Handler) http.Handl
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// apiKeyToken 从 Anthropic x-api-key 或 OpenAI Bearer Authorization 提取客户 API key。
+func apiKeyToken(r *http.Request) string {
+	if token := strings.TrimSpace(r.Header.Get("x-api-key")); token != "" {
+		return token
+	}
+
+	return bearerToken(r.Header.Get("Authorization"))
 }
 
 // bearerToken 从 Authorization header 中提取 Bearer token；格式不匹配时返回空字符串。

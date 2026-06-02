@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
 // TestChatCompletionServiceCreatesSpanHierarchy 验证非流式成功请求产生 gateway/routing/adapter/settlement span，
@@ -28,10 +29,10 @@ func TestChatCompletionServiceCreatesSpanHierarchy(t *testing.T) {
 		router,
 		registry,
 		passthroughCandidatePreparer{inputTokens: 1},
-		ProviderErrorClassifier{},
+		lifecycle.ProviderErrorClassifier{},
 		newFakeRequestLogService(),
 		newChatCompletionSettlementForTest(),
-		&fakeChatAuthorizer{authorization: ChatAuthorization{ReservationID: 1}},
+		&fakeChatAuthorizer{authorization: lifecycle.ChatAuthorization{ReservationID: 1}},
 		nil,
 		nil,
 	)
