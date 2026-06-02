@@ -17,9 +17,11 @@ INSERT INTO channel_cost_prices (
     model_id,
     currency,
     pricing_unit,
-    input_cost,
+    uncached_input_cost,
+    cache_read_input_cost,
+    cache_write_5m_input_cost,
+    cache_write_1h_input_cost,
     output_cost,
-    cached_input_cost,
     reasoning_output_cost,
     status,
     effective_from,
@@ -36,37 +38,27 @@ VALUES (
     $8,
     $9,
     $10,
-    $11
+    $11,
+    $12,
+    $13
 )
-RETURNING
-    id,
-    channel_id,
-    model_id,
-    currency,
-    pricing_unit,
-    input_cost,
-    output_cost,
-    cached_input_cost,
-    reasoning_output_cost,
-    status,
-    effective_from,
-    effective_to,
-    created_at,
-    updated_at
+RETURNING id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at
 `
 
 type CreateChannelCostPriceParams struct {
-	ChannelID           int64
-	ModelID             int64
-	Currency            string
-	PricingUnit         string
-	InputCost           pgtype.Numeric
-	OutputCost          pgtype.Numeric
-	CachedInputCost     pgtype.Numeric
-	ReasoningOutputCost pgtype.Numeric
-	Status              string
-	EffectiveFrom       pgtype.Timestamptz
-	EffectiveTo         pgtype.Timestamptz
+	ChannelID             int64
+	ModelID               int64
+	Currency              string
+	PricingUnit           string
+	UncachedInputCost     pgtype.Numeric
+	CacheReadInputCost    pgtype.Numeric
+	CacheWrite5mInputCost pgtype.Numeric
+	CacheWrite1hInputCost pgtype.Numeric
+	OutputCost            pgtype.Numeric
+	ReasoningOutputCost   pgtype.Numeric
+	Status                string
+	EffectiveFrom         pgtype.Timestamptz
+	EffectiveTo           pgtype.Timestamptz
 }
 
 // CreateChannelCostPrice 创建 channel/model 上游成本价配置。
@@ -76,9 +68,11 @@ func (q *Queries) CreateChannelCostPrice(ctx context.Context, arg CreateChannelC
 		arg.ModelID,
 		arg.Currency,
 		arg.PricingUnit,
-		arg.InputCost,
+		arg.UncachedInputCost,
+		arg.CacheReadInputCost,
+		arg.CacheWrite5mInputCost,
+		arg.CacheWrite1hInputCost,
 		arg.OutputCost,
-		arg.CachedInputCost,
 		arg.ReasoningOutputCost,
 		arg.Status,
 		arg.EffectiveFrom,
@@ -91,9 +85,11 @@ func (q *Queries) CreateChannelCostPrice(ctx context.Context, arg CreateChannelC
 		&i.ModelID,
 		&i.Currency,
 		&i.PricingUnit,
-		&i.InputCost,
+		&i.UncachedInputCost,
+		&i.CacheReadInputCost,
+		&i.CacheWrite5mInputCost,
+		&i.CacheWrite1hInputCost,
 		&i.OutputCost,
-		&i.CachedInputCost,
 		&i.ReasoningOutputCost,
 		&i.Status,
 		&i.EffectiveFrom,
@@ -105,21 +101,7 @@ func (q *Queries) CreateChannelCostPrice(ctx context.Context, arg CreateChannelC
 }
 
 const findActiveChannelCostPrice = `-- name: FindActiveChannelCostPrice :one
-SELECT
-    id,
-    channel_id,
-    model_id,
-    currency,
-    pricing_unit,
-    input_cost,
-    output_cost,
-    cached_input_cost,
-    reasoning_output_cost,
-    status,
-    effective_from,
-    effective_to,
-    created_at,
-    updated_at
+SELECT id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at
 FROM channel_cost_prices
 WHERE channel_id = $1
     AND model_id = $2
@@ -149,9 +131,11 @@ func (q *Queries) FindActiveChannelCostPrice(ctx context.Context, arg FindActive
 		&i.ModelID,
 		&i.Currency,
 		&i.PricingUnit,
-		&i.InputCost,
+		&i.UncachedInputCost,
+		&i.CacheReadInputCost,
+		&i.CacheWrite5mInputCost,
+		&i.CacheWrite1hInputCost,
 		&i.OutputCost,
-		&i.CachedInputCost,
 		&i.ReasoningOutputCost,
 		&i.Status,
 		&i.EffectiveFrom,

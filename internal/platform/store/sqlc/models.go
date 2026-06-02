@@ -26,6 +26,8 @@ type Channel struct {
 	ID                  int64
 	ProviderID          int64
 	Name                string
+	Protocol            string
+	AdapterKey          string
 	BaseUrl             string
 	CredentialEncrypted []byte
 	Status              string
@@ -36,20 +38,22 @@ type Channel struct {
 }
 
 type ChannelCostPrice struct {
-	ID                  int64
-	ChannelID           int64
-	ModelID             int64
-	Currency            string
-	PricingUnit         string
-	InputCost           pgtype.Numeric
-	OutputCost          pgtype.Numeric
-	CachedInputCost     pgtype.Numeric
-	ReasoningOutputCost pgtype.Numeric
-	Status              string
-	EffectiveFrom       pgtype.Timestamptz
-	EffectiveTo         pgtype.Timestamptz
-	CreatedAt           pgtype.Timestamptz
-	UpdatedAt           pgtype.Timestamptz
+	ID                    int64
+	ChannelID             int64
+	ModelID               int64
+	Currency              string
+	PricingUnit           string
+	UncachedInputCost     pgtype.Numeric
+	CacheReadInputCost    pgtype.Numeric
+	CacheWrite5mInputCost pgtype.Numeric
+	CacheWrite1hInputCost pgtype.Numeric
+	OutputCost            pgtype.Numeric
+	ReasoningOutputCost   pgtype.Numeric
+	Status                string
+	EffectiveFrom         pgtype.Timestamptz
+	EffectiveTo           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
 }
 
 type ChannelModel struct {
@@ -63,26 +67,30 @@ type ChannelModel struct {
 }
 
 type CostSnapshot struct {
-	ID                        int64
-	RequestRecordID           int64
-	CostPriceID               int64
-	ProviderID                int64
-	ChannelID                 int64
-	ModelID                   int64
-	UpstreamModel             string
-	Currency                  string
-	PricingUnit               string
-	InputCost                 pgtype.Numeric
-	OutputCost                pgtype.Numeric
-	CachedInputCost           pgtype.Numeric
-	ReasoningOutputCost       pgtype.Numeric
-	InputCostAmount           pgtype.Numeric
-	OutputCostAmount          pgtype.Numeric
-	CachedInputCostAmount     pgtype.Numeric
-	ReasoningOutputCostAmount pgtype.Numeric
-	TotalCostAmount           pgtype.Numeric
-	FormulaVersion            string
-	CreatedAt                 pgtype.Timestamptz
+	ID                          int64
+	RequestRecordID             int64
+	CostPriceID                 int64
+	ProviderID                  int64
+	ChannelID                   int64
+	ModelID                     int64
+	UpstreamModel               string
+	Currency                    string
+	PricingUnit                 string
+	UncachedInputCost           pgtype.Numeric
+	CacheReadInputCost          pgtype.Numeric
+	CacheWrite5mInputCost       pgtype.Numeric
+	CacheWrite1hInputCost       pgtype.Numeric
+	OutputCost                  pgtype.Numeric
+	ReasoningOutputCost         pgtype.Numeric
+	UncachedInputCostAmount     pgtype.Numeric
+	CacheReadInputCostAmount    pgtype.Numeric
+	CacheWrite5mInputCostAmount pgtype.Numeric
+	CacheWrite1hInputCostAmount pgtype.Numeric
+	OutputCostAmount            pgtype.Numeric
+	ReasoningOutputCostAmount   pgtype.Numeric
+	TotalCostAmount             pgtype.Numeric
+	FormulaVersion              string
+	CreatedAt                   pgtype.Timestamptz
 }
 
 type LedgerBillingException struct {
@@ -144,33 +152,37 @@ type Model struct {
 }
 
 type Price struct {
-	ID                   int64
-	ModelID              int64
-	Currency             string
-	PricingUnit          string
-	InputPrice           pgtype.Numeric
-	OutputPrice          pgtype.Numeric
-	CachedInputPrice     pgtype.Numeric
-	ReasoningOutputPrice pgtype.Numeric
-	Status               string
-	EffectiveFrom        pgtype.Timestamptz
-	EffectiveTo          pgtype.Timestamptz
-	CreatedAt            pgtype.Timestamptz
-	UpdatedAt            pgtype.Timestamptz
+	ID                     int64
+	ModelID                int64
+	Currency               string
+	PricingUnit            string
+	UncachedInputPrice     pgtype.Numeric
+	CacheReadInputPrice    pgtype.Numeric
+	CacheWrite5mInputPrice pgtype.Numeric
+	CacheWrite1hInputPrice pgtype.Numeric
+	OutputPrice            pgtype.Numeric
+	ReasoningOutputPrice   pgtype.Numeric
+	Status                 string
+	EffectiveFrom          pgtype.Timestamptz
+	EffectiveTo            pgtype.Timestamptz
+	CreatedAt              pgtype.Timestamptz
+	UpdatedAt              pgtype.Timestamptz
 }
 
 type PriceSnapshot struct {
-	ID                   int64
-	RequestRecordID      int64
-	PriceID              pgtype.Int8
-	Currency             string
-	PricingUnit          string
-	InputPrice           pgtype.Numeric
-	OutputPrice          pgtype.Numeric
-	CachedInputPrice     pgtype.Numeric
-	ReasoningOutputPrice pgtype.Numeric
-	FormulaVersion       string
-	CreatedAt            pgtype.Timestamptz
+	ID                     int64
+	RequestRecordID        int64
+	PriceID                pgtype.Int8
+	Currency               string
+	PricingUnit            string
+	UncachedInputPrice     pgtype.Numeric
+	CacheReadInputPrice    pgtype.Numeric
+	CacheWrite5mInputPrice pgtype.Numeric
+	CacheWrite1hInputPrice pgtype.Numeric
+	OutputPrice            pgtype.Numeric
+	ReasoningOutputPrice   pgtype.Numeric
+	FormulaVersion         string
+	CreatedAt              pgtype.Timestamptz
 }
 
 type Project struct {
@@ -193,7 +205,6 @@ type Provider struct {
 	ID        int64
 	Slug      string
 	Name      string
-	Adapter   string
 	Status    string
 	CreatedAt pgtype.Timestamptz
 	UpdatedAt pgtype.Timestamptz
@@ -207,13 +218,20 @@ type RequestAttempt struct {
 	ChannelID             int64
 	AdapterKey            string
 	UpstreamModel         string
+	UpstreamProtocol      string
+	UpstreamResponseID    pgtype.Text
 	UpstreamResponseModel pgtype.Text
+	UpstreamFinishReason  pgtype.Text
+	FinishClass           pgtype.Text
 	Status                string
 	UpstreamStatusCode    pgtype.Int4
 	UpstreamRequestID     pgtype.Text
 	ErrorCode             pgtype.Text
 	ErrorMessage          pgtype.Text
 	InternalErrorDetail   pgtype.Text
+	ResponseStartedAt     pgtype.Timestamptz
+	FinalUsageReceived    bool
+	UsageMappingVersion   pgtype.Text
 	StartedAt             pgtype.Timestamptz
 	CompletedAt           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
@@ -226,7 +244,11 @@ type RequestRecord struct {
 	ProjectID           int64
 	ApiKeyID            int64
 	RequestedModelID    string
+	IngressProtocol     string
+	Operation           string
 	ResponseModelID     pgtype.Text
+	ResponseProtocol    pgtype.Text
+	ResponseID          pgtype.Text
 	Stream              bool
 	Status              string
 	FinalProviderID     pgtype.Int8
@@ -234,6 +256,9 @@ type RequestRecord struct {
 	ErrorCode           pgtype.Text
 	ErrorMessage        pgtype.Text
 	InternalErrorDetail pgtype.Text
+	DeliveryStatus      string
+	ResponseStartedAt   pgtype.Timestamptz
+	ResponseCompletedAt pgtype.Timestamptz
 	StartedAt           pgtype.Timestamptz
 	CompletedAt         pgtype.Timestamptz
 	CreatedAt           pgtype.Timestamptz
@@ -247,59 +272,93 @@ type SchemaHealthCheck struct {
 }
 
 type SettlementRecoveryJob struct {
-	ID                      int64
-	UserID                  int64
-	RequestRecordID         int64
-	AttemptID               int64
-	ReservationID           int64
-	ResponseModelID         string
-	ModelID                 int64
-	ProviderID              int64
-	ChannelID               int64
-	UpstreamResponseModel   string
-	UpstreamStatusCode      int32
-	UpstreamRequestID       pgtype.Text
-	UsagePromptTokens       int64
-	UsageCompletionTokens   int64
-	UsageTotalTokens        int64
-	UsageCachedTokens       int64
-	UsageReasoningTokens    int64
-	UsageSource             string
-	PriceID                 int64
-	Currency                string
-	PricingUnit             string
-	InputPrice              pgtype.Numeric
-	OutputPrice             pgtype.Numeric
-	CachedInputPrice        pgtype.Numeric
-	ReasoningOutputPrice    pgtype.Numeric
-	FormulaVersion          string
-	EstimatedAmount         pgtype.Numeric
-	AuthorizedAmount        pgtype.Numeric
-	Status                  string
-	AttemptCount            int32
-	MaxAttempts             int32
-	NextRunAt               pgtype.Timestamptz
-	LockedBy                pgtype.Text
-	LockedUntil             pgtype.Timestamptz
-	LastErrorCode           pgtype.Text
-	LastErrorMessage        pgtype.Text
-	LastInternalErrorDetail pgtype.Text
-	LastAttemptedAt         pgtype.Timestamptz
-	CompletedAt             pgtype.Timestamptz
-	CreatedAt               pgtype.Timestamptz
-	UpdatedAt               pgtype.Timestamptz
+	ID                                int64
+	UserID                            int64
+	RequestRecordID                   int64
+	AttemptID                         int64
+	ReservationID                     int64
+	ResponseProtocol                  string
+	ResponseID                        string
+	ResponseModelID                   string
+	ModelID                           int64
+	ProviderID                        int64
+	ChannelID                         int64
+	UpstreamProtocol                  string
+	UpstreamResponseID                string
+	UpstreamModel                     string
+	FinishClass                       string
+	UpstreamFinishReason              string
+	UpstreamStatusCode                int32
+	UpstreamRequestID                 pgtype.Text
+	UsageUncachedInputTokens          int64
+	UsageUncachedInputTokensState     string
+	UsageCacheReadInputTokens         int64
+	UsageCacheReadInputTokensState    string
+	UsageCacheWrite5mInputTokens      int64
+	UsageCacheWrite5mInputTokensState string
+	UsageCacheWrite1hInputTokens      int64
+	UsageCacheWrite1hInputTokensState string
+	UsageOutputTokensTotal            int64
+	UsageOutputTokensTotalState       string
+	UsageReasoningOutputTokens        int64
+	UsageReasoningOutputTokensState   string
+	UsageServerWebSearchRequests      int64
+	UsageServerWebFetchRequests       int64
+	UsageSource                       string
+	UsageMappingVersion               string
+	PriceID                           int64
+	Currency                          string
+	PricingUnit                       string
+	UncachedInputPrice                pgtype.Numeric
+	CacheReadInputPrice               pgtype.Numeric
+	CacheWrite5mInputPrice            pgtype.Numeric
+	CacheWrite1hInputPrice            pgtype.Numeric
+	OutputPrice                       pgtype.Numeric
+	ReasoningOutputPrice              pgtype.Numeric
+	FormulaVersion                    string
+	EstimatedAmount                   pgtype.Numeric
+	AuthorizedAmount                  pgtype.Numeric
+	Status                            string
+	AttemptCount                      int32
+	MaxAttempts                       int32
+	NextRunAt                         pgtype.Timestamptz
+	LockedBy                          pgtype.Text
+	LockedUntil                       pgtype.Timestamptz
+	LastErrorCode                     pgtype.Text
+	LastErrorMessage                  pgtype.Text
+	LastInternalErrorDetail           pgtype.Text
+	LastAttemptedAt                   pgtype.Timestamptz
+	CompletedAt                       pgtype.Timestamptz
+	CreatedAt                         pgtype.Timestamptz
+	UpdatedAt                         pgtype.Timestamptz
+}
+
+type UsageLineItem struct {
+	ID            int64
+	UsageRecordID int64
+	Kind          string
+	Quantity      int64
+	CreatedAt     pgtype.Timestamptz
 }
 
 type UsageRecord struct {
-	ID               int64
-	RequestRecordID  int64
-	PromptTokens     int64
-	CompletionTokens int64
-	TotalTokens      int64
-	CachedTokens     int64
-	ReasoningTokens  int64
-	Source           string
-	CreatedAt        pgtype.Timestamptz
+	ID                           int64
+	RequestRecordID              int64
+	UncachedInputTokens          int64
+	UncachedInputTokensState     string
+	CacheReadInputTokens         int64
+	CacheReadInputTokensState    string
+	CacheWrite5mInputTokens      int64
+	CacheWrite5mInputTokensState string
+	CacheWrite1hInputTokens      int64
+	CacheWrite1hInputTokensState string
+	OutputTokensTotal            int64
+	OutputTokensTotalState       string
+	ReasoningOutputTokens        int64
+	ReasoningOutputTokensState   string
+	UsageSource                  string
+	UsageMappingVersion          string
+	CreatedAt                    pgtype.Timestamptz
 }
 
 type User struct {

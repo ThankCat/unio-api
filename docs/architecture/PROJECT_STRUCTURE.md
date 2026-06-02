@@ -466,20 +466,53 @@ Anthropic:
 
 ```text
 app/gatewayapi/openai
-= OpenAI HTTP DTO、decode、validation、encode、SSE 和错误响应。
+= OpenAI 协议族公开 HTTP 包根目录；本身只放协议族级共享类型，
+  每个 operation 必须落到独立子包。
+
+app/gatewayapi/openai/chatcompletions
+= POST /v1/chat/completions 专属 handler / DTO / decode / validation / SSE / 错误响应。
+
+app/gatewayapi/openai/models
+= GET /v1/models 专属 handler。
 
 app/gatewayapi/anthropic
-= Anthropic HTTP DTO、decode、validation、encode、SSE 和错误响应。
+= Anthropic 协议族公开 HTTP 包根目录；本身只放协议族级共享类型
+  （当前是公开 error shape），每个 operation 必须落到独立子包。
+
+app/gatewayapi/anthropic/messages
+= POST /v1/messages 专属 handler / DTO / decode / validation / SSE / 错误响应。
+
+service/gateway/openai/chatcompletions
+= OpenAI Chat Completions operation 的编排骨架。
+
+service/gateway/anthropic/messages
+= Anthropic Messages operation 的编排骨架。
 
 service/gateway/lifecycle
 = API key 身份之后的 request、routing、authorization、attempt、fallback、
-   settlement、recovery、metrics、tracing 和 delivery audit。
+   settlement、recovery、metrics、tracing、request log 文案与 delivery audit
+   等所有协议无关共享能力；双协议骨架必须复用，不得在两侧重复实现。
 
 core/adapter/openai/deepseek
 = DeepSeek OpenAI endpoint 的请求与响应转换。
 
 core/adapter/anthropic/deepseek
 = DeepSeek Anthropic endpoint 的请求与响应转换。
+```
+
+硬规则（Phase 10.15 复核后写入）：
+
+```text
+1. gatewayapi 协议族根包（openai/、anthropic/）不允许平铺单个 operation 的
+   handler/dto/validation；新 operation 必须新建子包（例如未来的
+   openai/responses、openai/embeddings、anthropic/messages_count_tokens）。
+
+2. service/gateway 协议族 + operation 子包结构（openai/chatcompletions、
+   anthropic/messages、未来的 openai/responses 等）必须与 gatewayapi 子包名一一对应。
+
+3. 协议无关共享能力（结算、recovery、metrics、tracing、request log 等）必须落到
+   service/gateway/lifecycle；两个 operation 骨架不允许重复实现同一份协议无关纯
+   函数或 thin wrapper。
 ```
 
 请求协议和响应协议保持分离；账务、审计和商业生命周期按统一事实复用。详细方案见
@@ -508,9 +541,14 @@ Admin API 和 Console API 不能绕过 `core/billing`、`core/ledger`、`core/ro
 当前代码已经按本文档的 `cmd`、`app`、`service`、`core`、`platform` 主分层完成迁移。
 
 Phase 10 将在主分层不变的前提下，把 `gatewayapi`、`service/gateway` 与 `core/adapter`
-继续按 OpenAI / Anthropic 协议族整理。当前代码尚未完成这一轮目录迁移。
+继续按 OpenAI / Anthropic 协议族整理。Phase 10.15 复核已经把 `gatewayapi/openai`
+重组成 `chatcompletions/` 与 `models/` operation 子包，并与 `anthropic/messages/`
+保持对称；`service/gateway/openai/chatcompletions` 与 `service/gateway/anthropic/messages`
+也按同名子包到位。`core/adapter/openai`、`core/adapter/anthropic` 当前每个协议族
+只有一个 operation，文件平铺；如未来加入第二个 operation，必须按 protocol/operation
+子包重组并保持与 gatewayapi、service/gateway 对称。
 
-后续新增代码必须直接进入目标目录，不再使用迁移前的旧路径。
+后续新增代码必须直接进入目标子包，不允许在协议族根包平铺。
 
 当前已预留以下进程入口目录：
 

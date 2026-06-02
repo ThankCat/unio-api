@@ -8,27 +8,27 @@
 4. OpenAI ingress 只路由到 OpenAI channel，Anthropic ingress 只路由到 Anthropic channel。
 5. 两套协议共享身份、routing、authorization、fallback、settlement、recovery、metrics 和 tracing。
 6. 本阶段只承诺双协议对话链路和字段显式行为，不承诺图片、视频、音频、文件等
-   模型能力扩展；不支持的能力必须在调用上游前明确 Reject。
+   模型能力扩展；provider 无法转换的合法协议字段在 adapter 出站 **Drop**，ingress 不 400。
 
 ## OpenAI 协议验收
 
-1. [OPENAI_CHAT_COMPLETIONS_MATRIX.md](OPENAI_CHAT_COMPLETIONS_MATRIX.md) 的请求顶层字段全部为 `Typed`、已登记 `Passthrough` 或 DeepSeek 明确 `Reject`。
-2. messages role、content union、多模态、audio、file、legacy function、tools 和 structured output 都有显式行为。
-3. 非流式 response 的 choices、message、logprobs、annotations、audio、tool_calls 和 usage details 完整。
+1. [OPENAI_CHAT_COMPLETIONS_MATRIX.md](OPENAI_CHAT_COMPLETIONS_MATRIX.md) 的请求顶层字段全部为 `Typed` 或已登记 `Passthrough`；provider **Drop** 见 [DEEPSEEK_OPENAI_MAPPING.md](DEEPSEEK_OPENAI_MAPPING.md)。
+2. messages role、content union、多模态、audio、file、legacy function、tools 和 structured output 在 ingress 有显式 DTO；出站 Drop 有 mapping 登记。
+3. 非流式 response 的 choices、message、logprobs、annotations、audio、tool_calls 和 usage details 完整（协议需要的字段）。
 4. 流式 chunk、delta、usage 尾包、错误 chunk 和 `[DONE]` 完整。
 5. DeepSeek OpenAI mapping 没有残留 `Verify`。
 6. 多模态、audio、file、web search 等字段 typed 化不等于能力支持；当前 provider
-   或选中模型不支持时必须返回 OpenAI 原生错误。
+   不支持时在 upstream body **Drop**，客户仍走合法 OpenAI 协议路径（不因 provider 能力 400）。
 
 ## Anthropic 协议验收
 
-1. [ANTHROPIC_MESSAGES_MATRIX.md](ANTHROPIC_MESSAGES_MATRIX.md) 的顶层字段全部为 `Typed`、已登记 `Passthrough` 或 DeepSeek 明确 `Reject`。
-2. messages content block union、thinking、tool choice、tools、cache control 和 output config 都有显式行为。
+1. [ANTHROPIC_MESSAGES_MATRIX.md](ANTHROPIC_MESSAGES_MATRIX.md) 的顶层字段全部为 `Typed` 或已登记 `Passthrough`；provider **Drop** 见 [DEEPSEEK_ANTHROPIC_MAPPING.md](DEEPSEEK_ANTHROPIC_MAPPING.md)。
+2. messages content block union、thinking、tool choice、tools、cache control 和 output config 在 ingress 有显式行为；出站 Drop 有 mapping 登记。
 3. 非流式 Message response、content block、stop reason、usage 完整。
 4. 流式 named SSE event 与 delta union 完整。
 5. DeepSeek Anthropic mapping 没有残留 `Verify`。
 6. image、document、container upload 等 block typed 化不等于能力支持；当前 provider
-   或选中模型不支持时必须返回 Anthropic 原生错误。
+   不支持时在 upstream body **Drop**，ingress 不因 provider 能力 400。
 
 ## Adapter 验收
 
@@ -84,8 +84,8 @@
 1. provider 原始错误 body 不直接返回客户。
 2. OpenAI 和 Anthropic 错误响应分别由对应 gatewayapi 包渲染。
 3. API key、credential、prompt 和完整响应正文默认不进入审计表。
-4. `anthropic-beta` 只允许登记值，未知 beta 明确 Reject。
-5. nested JSON 字段同样禁止 silent drop。
+4. `anthropic-beta` 一律接受（含未登记值与逗号分隔多值），不因 provider 能力 400；按 [DEC-013](../../production/DECISIONS.md#dec-013-协议-beta-header-宽进接受与出站-drop) 在 provider 映射层 Drop（当前 DeepSeek 忽略且出站不发送），并脱敏审计 `dropped_beta_headers`，绝不在响应里假装某 beta 生效。
+5. nested JSON 字段在 ingress 禁止 decode 丢字段；provider 层 Drop 见 mapping 与内部审计。
 
 ## 数据库验收
 
@@ -102,8 +102,8 @@
 ## 测试验收
 
 1. OpenAI SDK 黑盒覆盖非流式、流式、reasoning、tools、response format、高级字段
-   Support/Reject、usage 和错误；图片、视频、音频、文件等本阶段非目标能力必须覆盖 Reject。
-2. Anthropic SDK 黑盒覆盖非流式、流式、system、thinking、tools、cache、ignored/unsupported 字段、usage 和错误。
+   Drop/Pass/Adapt、usage 和错误；非目标能力字段验证 upstream body 不含 dropped 键。
+2. Anthropic SDK 黑盒覆盖非流式、流式、system、thinking、tools、cache、Drop 字段、usage 和错误。
 3. DeepSeek OpenAI mapping 与 DeepSeek Anthropic mapping 的 `Verify` 字段有对应黑盒冻结用例。
 4. DeepSeek 双协议 adapter 单元测试覆盖 request map、response map、stream translate、usage 和 error。
 5. routing 测试覆盖同 provider 双协议 channel、registry capability 过滤与同协议 fallback。

@@ -63,8 +63,9 @@ func TestNewChatRouterDecryptsStoredCredential(t *testing.T) {
 	}
 
 	plan, err := router.PlanChat(context.Background(), routing.ChatRouteRequest{
-		ProjectID: 1,
-		ModelID:   "gpt-4.1",
+		ProjectID:       1,
+		ModelID:         "gpt-4.1",
+		IngressProtocol: routing.ProtocolOpenAI,
 	})
 	if err != nil {
 		t.Fatalf("PlanChat returned error: %v", err)

@@ -9,9 +9,6 @@ CREATE TABLE providers (
     -- name: provider 展示名称。--
     name TEXT NOT NULL,
 
-    -- adapter: provider 使用的 adapter 注册键。--
-    adapter TEXT NOT NULL,
-
     -- status: provider 启停状态。--
     status TEXT NOT NULL CHECK (status IN ('enabled', 'disabled')),
 

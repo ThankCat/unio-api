@@ -64,9 +64,9 @@ func priceParams(modelID int64, now time.Time) sqlc.CreatePriceParams {
 		ModelID:              modelID,
 		Currency:             "USD",
 		PricingUnit:          "per_1m_tokens",
-		InputPrice:           numeric(2),
+		UncachedInputPrice:   numeric(2),
 		OutputPrice:          numeric(8),
-		CachedInputPrice:     numeric(1),
+		CacheReadInputPrice:  numeric(1),
 		ReasoningOutputPrice: numeric(12),
 		Status:               "enabled",
 		EffectiveFrom:        timestamptz(now.Add(-time.Hour)),
@@ -107,23 +107,23 @@ func TestFindActivePriceForModelFiltersAndOrders(t *testing.T) {
 	modelID := createPriceModelForTest(t, ctx, tx, now.UnixNano())
 
 	disabled := priceParams(modelID, now)
-	disabled.InputPrice = numeric(99)
+	disabled.UncachedInputPrice = numeric(99)
 	disabled.Status = "disabled"
 	createPriceForTest(t, ctx, queries, disabled)
 
 	expired := priceParams(modelID, now)
-	expired.InputPrice = numeric(88)
+	expired.UncachedInputPrice = numeric(88)
 	expired.EffectiveFrom = timestamptz(now.Add(-3 * time.Hour))
 	expired.EffectiveTo = timestamptz(now.Add(-2 * time.Hour))
 	createPriceForTest(t, ctx, queries, expired)
 
 	future := priceParams(modelID, now)
-	future.InputPrice = numeric(77)
+	future.UncachedInputPrice = numeric(77)
 	future.EffectiveFrom = timestamptz(now.Add(time.Hour))
 	createPriceForTest(t, ctx, queries, future)
 
 	active := priceParams(modelID, now)
-	active.InputPrice = numeric(3)
+	active.UncachedInputPrice = numeric(3)
 	active.EffectiveFrom = timestamptz(now.Add(-30 * time.Minute))
 	// active 与 future 都是 enabled 价格，受排他约束不能重叠：
 	// 将 active 的生效窗口收口到 future 的开始时间，二者相邻不重叠。
@@ -144,7 +144,7 @@ func TestFindActivePriceForModelFiltersAndOrders(t *testing.T) {
 	if got.Status != "enabled" {
 		t.Fatalf("expected enabled price, got %q", got.Status)
 	}
-	assertPriceNumericEquals(t, got.InputPrice, 3)
+	assertPriceNumericEquals(t, got.UncachedInputPrice, 3)
 }
 
 func TestPriceRejectsOverlappingEnabledEffectiveWindow(t *testing.T) {
@@ -184,7 +184,7 @@ func TestPriceAllowsAdjacentEnabledEffectiveWindows(t *testing.T) {
 	createPriceForTest(t, ctx, queries, first)
 
 	second := priceParams(modelID, now)
-	second.InputPrice = numeric(3)
+	second.UncachedInputPrice = numeric(3)
 	second.EffectiveFrom = timestamptz(now.Add(time.Hour))
 	second.EffectiveTo = timestamptz(now.Add(2 * time.Hour))
 	want := createPriceForTest(t, ctx, queries, second)
@@ -246,13 +246,13 @@ func TestPriceRejectsInvalidConstraints(t *testing.T) {
 		{
 			name: "negative input price",
 			mutate: func(params *sqlc.CreatePriceParams, _ time.Time) {
-				params.InputPrice = numeric(-1)
+				params.UncachedInputPrice = numeric(-1)
 			},
 		},
 		{
 			name: "negative cached input price",
 			mutate: func(params *sqlc.CreatePriceParams, _ time.Time) {
-				params.CachedInputPrice = numeric(-1)
+				params.CacheReadInputPrice = numeric(-1)
 			},
 		},
 		{
@@ -306,9 +306,9 @@ func TestPriceSnapshotCreateGetAndRejectsDuplicateRequest(t *testing.T) {
 		PriceID:              pgtype.Int8{Int64: price.ID, Valid: true},
 		Currency:             price.Currency,
 		PricingUnit:          price.PricingUnit,
-		InputPrice:           price.InputPrice,
+		UncachedInputPrice:   price.UncachedInputPrice,
 		OutputPrice:          price.OutputPrice,
-		CachedInputPrice:     price.CachedInputPrice,
+		CacheReadInputPrice:  price.CacheReadInputPrice,
 		ReasoningOutputPrice: price.ReasoningOutputPrice,
 		FormulaVersion:       "token_v1",
 	})
@@ -342,9 +342,9 @@ func TestPriceSnapshotCreateGetAndRejectsDuplicateRequest(t *testing.T) {
 		PriceID:              pgtype.Int8{Int64: price.ID, Valid: true},
 		Currency:             price.Currency,
 		PricingUnit:          price.PricingUnit,
-		InputPrice:           price.InputPrice,
+		UncachedInputPrice:   price.UncachedInputPrice,
 		OutputPrice:          price.OutputPrice,
-		CachedInputPrice:     price.CachedInputPrice,
+		CacheReadInputPrice:  price.CacheReadInputPrice,
 		ReasoningOutputPrice: price.ReasoningOutputPrice,
 		FormulaVersion:       "token_v1",
 	})
@@ -371,9 +371,9 @@ func TestPriceSnapshotKeepsCopiedPriceValues(t *testing.T) {
 		PriceID:              pgtype.Int8{Int64: price.ID, Valid: true},
 		Currency:             price.Currency,
 		PricingUnit:          price.PricingUnit,
-		InputPrice:           price.InputPrice,
+		UncachedInputPrice:   price.UncachedInputPrice,
 		OutputPrice:          price.OutputPrice,
-		CachedInputPrice:     nullNumeric(),
+		CacheReadInputPrice:  nullNumeric(),
 		ReasoningOutputPrice: nullNumeric(),
 		FormulaVersion:       "token_v1",
 	})
@@ -383,7 +383,7 @@ func TestPriceSnapshotKeepsCopiedPriceValues(t *testing.T) {
 
 	_, err = tx.Exec(ctx, `
 		UPDATE prices
-		SET input_price = $1, output_price = $2
+		SET uncached_input_price = $1, output_price = $2
 		WHERE id = $3
 	`, numeric(99), numeric(199), price.ID)
 	if err != nil {
@@ -397,9 +397,9 @@ func TestPriceSnapshotKeepsCopiedPriceValues(t *testing.T) {
 	if got.ID != created.ID {
 		t.Fatalf("expected snapshot id %d, got %d", created.ID, got.ID)
 	}
-	assertPriceNumericEquals(t, got.InputPrice, 2)
+	assertPriceNumericEquals(t, got.UncachedInputPrice, 2)
 	assertPriceNumericEquals(t, got.OutputPrice, 8)
-	if got.CachedInputPrice.Valid || got.ReasoningOutputPrice.Valid {
+	if got.CacheReadInputPrice.Valid || got.ReasoningOutputPrice.Valid {
 		t.Fatal("expected nullable specialized prices to remain null in snapshot")
 	}
 }

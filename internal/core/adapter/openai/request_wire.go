@@ -3,27 +3,43 @@ package openai
 import (
 	"bytes"
 	"encoding/json"
-
-	"github.com/ThankCat/unio-api/internal/core/adapter"
 )
 
 // buildChatCompletionRequestBody 将 adapter 请求编码为 upstream wire JSON，并 merge Extensions。
-func buildChatCompletionRequestBody(req adapter.ChatRequest, stream bool) ([]byte, error) {
+func buildChatCompletionRequestBody(req ChatRequest, stream bool) ([]byte, error) {
 	wire := chatCompletionRequest{
-		Model:            req.Model,
-		Messages:         adapterMessagesToWire(req.Messages),
-		Temperature:      req.Temperature,
-		TopP:             req.TopP,
-		MaxTokens:        resolveWireMaxTokens(req),
-		PresencePenalty:  req.PresencePenalty,
-		FrequencyPenalty: req.FrequencyPenalty,
-		Stop:             req.Stop,
-		User:             req.User,
-		ReasoningEffort:   req.ReasoningEffort,
-		Tools:             marshalJSONValue(req.Tools),
-		ToolChoice:        cloneRawMessage(req.ToolChoice),
-		ParallelToolCalls: req.ParallelToolCalls,
-		ResponseFormat:    adapterResponseFormatToWire(req.ResponseFormat),
+		Model:                req.Model,
+		Messages:             adapterMessagesToWire(req.Messages),
+		Temperature:          req.Temperature,
+		TopP:                 req.TopP,
+		MaxTokens:            resolveWireMaxTokens(req),
+		PresencePenalty:      req.PresencePenalty,
+		FrequencyPenalty:     req.FrequencyPenalty,
+		Stop:                 req.Stop,
+		User:                 req.User,
+		ReasoningEffort:      req.ReasoningEffort,
+		Tools:                marshalJSONValue(req.Tools),
+		ToolChoice:           cloneRawMessage(req.ToolChoice),
+		ParallelToolCalls:    req.ParallelToolCalls,
+		ResponseFormat:       adapterResponseFormatToWire(req.ResponseFormat),
+		N:                    req.N,
+		Seed:                 req.Seed,
+		Logprobs:             req.Logprobs,
+		TopLogprobs:          req.TopLogprobs,
+		LogitBias:            cloneRawMessage(req.LogitBias),
+		Modalities:           req.Modalities,
+		Audio:                cloneRawMessage(req.Audio),
+		Prediction:           cloneRawMessage(req.Prediction),
+		Metadata:             cloneRawMessage(req.Metadata),
+		WebSearchOptions:     cloneRawMessage(req.WebSearchOptions),
+		Store:                req.Store,
+		ServiceTier:          req.ServiceTier,
+		Verbosity:            req.Verbosity,
+		PromptCacheKey:       req.PromptCacheKey,
+		PromptCacheRetention: req.PromptCacheRetention,
+		SafetyIdentifier:     req.SafetyIdentifier,
+		FunctionCall:         cloneRawMessage(req.FunctionCall),
+		Functions:            cloneRawMessage(req.Functions),
 	}
 
 	if stream {
@@ -43,7 +59,7 @@ func buildChatCompletionRequestBody(req adapter.ChatRequest, stream bool) ([]byt
 	return mergeJSONObjects(base, req.Extensions)
 }
 
-func resolveWireMaxTokens(req adapter.ChatRequest) *int {
+func resolveWireMaxTokens(req ChatRequest) *int {
 	if req.MaxCompletionTokens != nil {
 		return req.MaxCompletionTokens
 	}
@@ -51,7 +67,7 @@ func resolveWireMaxTokens(req adapter.ChatRequest) *int {
 	return req.MaxTokens
 }
 
-func adapterMessagesToWire(messages []adapter.ChatMessage) []chatMessage {
+func adapterMessagesToWire(messages []ChatMessage) []chatMessage {
 	out := make([]chatMessage, 0, len(messages))
 	for _, msg := range messages {
 		wire := chatMessage{
@@ -92,7 +108,7 @@ func mergeJSONObjects(base []byte, extensions map[string]json.RawMessage) ([]byt
 	return json.Marshal(merged)
 }
 
-func encodeRequestBody(req adapter.ChatRequest, stream bool) (*bytes.Buffer, error) {
+func encodeRequestBody(req ChatRequest, stream bool) (*bytes.Buffer, error) {
 	body, err := buildChatCompletionRequestBody(req, stream)
 	if err != nil {
 		return nil, err

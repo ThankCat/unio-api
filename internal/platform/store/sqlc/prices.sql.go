@@ -16,9 +16,11 @@ INSERT INTO prices (
     model_id,
     currency,
     pricing_unit,
-    input_price,
+    uncached_input_price,
+    cache_read_input_price,
+    cache_write_5m_input_price,
+    cache_write_1h_input_price,
     output_price,
-    cached_input_price,
     reasoning_output_price,
     status,
     effective_from,
@@ -34,35 +36,26 @@ VALUES (
     $7,
     $8,
     $9,
-    $10
+    $10,
+    $11,
+    $12
 )
-RETURNING
-    id,
-    model_id,
-    currency,
-    pricing_unit,
-    input_price,
-    output_price,
-    cached_input_price,
-    reasoning_output_price,
-    status,
-    effective_from,
-    effective_to,
-    created_at,
-    updated_at
+RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at
 `
 
 type CreatePriceParams struct {
-	ModelID              int64
-	Currency             string
-	PricingUnit          string
-	InputPrice           pgtype.Numeric
-	OutputPrice          pgtype.Numeric
-	CachedInputPrice     pgtype.Numeric
-	ReasoningOutputPrice pgtype.Numeric
-	Status               string
-	EffectiveFrom        pgtype.Timestamptz
-	EffectiveTo          pgtype.Timestamptz
+	ModelID                int64
+	Currency               string
+	PricingUnit            string
+	UncachedInputPrice     pgtype.Numeric
+	CacheReadInputPrice    pgtype.Numeric
+	CacheWrite5mInputPrice pgtype.Numeric
+	CacheWrite1hInputPrice pgtype.Numeric
+	OutputPrice            pgtype.Numeric
+	ReasoningOutputPrice   pgtype.Numeric
+	Status                 string
+	EffectiveFrom          pgtype.Timestamptz
+	EffectiveTo            pgtype.Timestamptz
 }
 
 // CreatePrice 创建模型客户侧售卖价配置。
@@ -71,9 +64,11 @@ func (q *Queries) CreatePrice(ctx context.Context, arg CreatePriceParams) (Price
 		arg.ModelID,
 		arg.Currency,
 		arg.PricingUnit,
-		arg.InputPrice,
+		arg.UncachedInputPrice,
+		arg.CacheReadInputPrice,
+		arg.CacheWrite5mInputPrice,
+		arg.CacheWrite1hInputPrice,
 		arg.OutputPrice,
-		arg.CachedInputPrice,
 		arg.ReasoningOutputPrice,
 		arg.Status,
 		arg.EffectiveFrom,
@@ -85,9 +80,11 @@ func (q *Queries) CreatePrice(ctx context.Context, arg CreatePriceParams) (Price
 		&i.ModelID,
 		&i.Currency,
 		&i.PricingUnit,
-		&i.InputPrice,
+		&i.UncachedInputPrice,
+		&i.CacheReadInputPrice,
+		&i.CacheWrite5mInputPrice,
+		&i.CacheWrite1hInputPrice,
 		&i.OutputPrice,
-		&i.CachedInputPrice,
 		&i.ReasoningOutputPrice,
 		&i.Status,
 		&i.EffectiveFrom,
@@ -99,20 +96,7 @@ func (q *Queries) CreatePrice(ctx context.Context, arg CreatePriceParams) (Price
 }
 
 const findActivePriceForModel = `-- name: FindActivePriceForModel :one
-SELECT
-    id,
-    model_id,
-    currency,
-    pricing_unit,
-    input_price,
-    output_price,
-    cached_input_price,
-    reasoning_output_price,
-    status,
-    effective_from,
-    effective_to,
-    created_at,
-    updated_at
+SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at
 FROM prices
 WHERE model_id = $1
     AND status = 'enabled'
@@ -139,9 +123,11 @@ func (q *Queries) FindActivePriceForModel(ctx context.Context, arg FindActivePri
 		&i.ModelID,
 		&i.Currency,
 		&i.PricingUnit,
-		&i.InputPrice,
+		&i.UncachedInputPrice,
+		&i.CacheReadInputPrice,
+		&i.CacheWrite5mInputPrice,
+		&i.CacheWrite1hInputPrice,
 		&i.OutputPrice,
-		&i.CachedInputPrice,
 		&i.ReasoningOutputPrice,
 		&i.Status,
 		&i.EffectiveFrom,

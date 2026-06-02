@@ -9,7 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
+	gatewayanthropic "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
+	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 )
@@ -21,6 +22,16 @@ func (s fakeHTTPChatCompletionService) CreateChatCompletion(ctx context.Context,
 }
 
 func (s fakeHTTPChatCompletionService) StreamChatCompletion(ctx context.Context, req gatewayapi.ChatCompletionRequest, emit func(gatewayapi.ChatCompletionStreamResponse) error) error {
+	return nil
+}
+
+type fakeHTTPMessagesService struct{}
+
+func (s fakeHTTPMessagesService) CreateMessage(ctx context.Context, req gatewayanthropic.MessageRequest) (*gatewayanthropic.MessageResponse, error) {
+	return &gatewayanthropic.MessageResponse{Type: "message", Role: "assistant"}, nil
+}
+
+func (s fakeHTTPMessagesService) StreamMessage(ctx context.Context, req gatewayanthropic.MessageRequest, emit func(gatewayanthropic.StreamFrame) error) error {
 	return nil
 }
 
@@ -39,6 +50,7 @@ func TestNewHTTPHandlerBuildsHealthRoute(t *testing.T) {
 			},
 		},
 		fakeHTTPChatCompletionService{},
+		fakeHTTPMessagesService{},
 		nil,
 	)
 

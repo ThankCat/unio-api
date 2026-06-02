@@ -12,6 +12,13 @@ import (
 
 const defaultChannelTimeout = 30 * time.Second
 
+const (
+	// ProtocolOpenAI 是 OpenAI Chat Completions ingress 协议族标识。
+	ProtocolOpenAI = "openai"
+	// ProtocolAnthropic 是 Anthropic Messages ingress 协议族标识。
+	ProtocolAnthropic = "anthropic"
+)
+
 var (
 	// ErrModelNotFound 表示请求的模型不存在或没有启用。
 	ErrModelNotFound = errors.New("model not found")
@@ -24,12 +31,18 @@ var (
 
 	// ErrChannelCredentialMissing 表示 channel 未配置加密凭据。
 	ErrChannelCredentialMissing = errors.New("channel credential missing")
+
+	// ErrIngressProtocolInvalid 表示 routing 请求没有携带受支持的 ingress 协议族。
+	ErrIngressProtocolInvalid = errors.New("ingress protocol invalid")
 )
 
 // ChatRouteRequest 表示一次 routing 选择所需上下文。
 type ChatRouteRequest struct {
 	ProjectID int64
 	ModelID   string
+
+	// IngressProtocol 是客户请求的协议族（如 openai）；routing 只返回同协议 channel 候选。
+	IngressProtocol string
 }
 
 // ChatRouteCandidate 表示一个可尝试的 chat 上游候选。
@@ -37,6 +50,7 @@ type ChatRouteCandidate struct {
 	ModelDBID     int64
 	ProviderID    int64
 	AdapterKey    string
+	Protocol      string
 	Channel       channel.Runtime
 	UpstreamModel string
 }
@@ -81,6 +95,15 @@ func NewRouter(store Store, credentialDecryptor CredentialDecryptor, defaultTime
 
 // PlanChat 为 chat completion 请求生成有序候选计划。
 func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRoutePlan, error) {
+	if !IsSupportedProtocol(req.IngressProtocol) {
+		return ChatRoutePlan{}, failure.Wrap(
+			failure.CodeRoutingProtocolInvalid,
+			ErrIngressProtocolInvalid,
+			failure.WithMessage(ErrIngressProtocolInvalid.Error()),
+			failure.WithField("ingress_protocol", req.IngressProtocol),
+		)
+	}
+
 	rows, err := r.findCandidateRows(ctx, req)
 	if err != nil {
 		return ChatRoutePlan{}, err
@@ -101,10 +124,21 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 	}, nil
 }
 
+// IsSupportedProtocol 判断 routing 是否支持指定 ingress 协议族。
+func IsSupportedProtocol(protocol string) bool {
+	switch protocol {
+	case ProtocolOpenAI, ProtocolAnthropic:
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest) ([]sqlc.FindRouteCandidatesRow, error) {
-	// TODO(阶段6/production): [GAP-6-005] routing 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束或专属 channel 策略；阶段 7 authorization/余额冻结和阶段 10 项目策略管理前；预算约束进入 reservation，project 禁用和 project_channel policy 进入后台管理策略。
+	// TODO(阶段6/production): [GAP-6-005] routing 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束或专属 channel 策略；阶段 7 authorization/余额冻结和阶段 11 项目策略管理前；预算约束进入 reservation，project 禁用和 project_channel policy 进入后台管理策略。
 	rows, err := r.store.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: req.ModelID,
+		IngressProtocol:  req.IngressProtocol,
 		ProjectID:        req.ProjectID,
 	})
 	if err != nil {
@@ -194,6 +228,7 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		ModelDBID:  row.ModelDbID,
 		ProviderID: row.ProviderID,
 		AdapterKey: row.AdapterKey,
+		Protocol:   row.Protocol,
 		Channel: channel.Runtime{
 			ID:           row.ChannelID,
 			BaseURL:      row.BaseUrl,

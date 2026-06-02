@@ -16,16 +16,18 @@ VALUES (1, 'dev-key', 'unio_sk_YJWgvcQd', '80f18aa303ea352d1b42f490fdcb0ae36b56b
 INSERT INTO user_balances (user_id, currency, balance, reserved_balance)
 VALUES (1, 'USD', 10.0000000000, 0);
 
--- ④ Provider（adapter 必须是 openai）
-INSERT INTO providers (slug, name, adapter, status)
-VALUES ('deepseek', 'DeepSeek', 'openai', 'enabled')
+-- ④ Provider（Phase 10 起 adapter 绑定下沉到 channel）
+INSERT INTO providers (slug, name, status)
+VALUES ('deepseek', 'DeepSeek', 'enabled')
 RETURNING id;  -- 记下 provider_id
 
--- ⑤ Channel（DeepSeek 上游）
-INSERT INTO channels (provider_id, name, base_url, credential_encrypted, status, priority, timeout_ms)
+-- ⑤ Channel（DeepSeek 上游；protocol=openai，adapter_key=deepseek 命中 adapter/openai/deepseek）
+INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms)
 VALUES (
            1,
             'deepseek-main',
+            'openai',
+            'deepseek',
             'https://api.deepseek.com',
             '\xa57c1a5bbd47e00069e8452df0cd47f66da686f480ff828094dbf7133373f2176ce404755d072b4c451184981e1cd5e2a2bb3d3788bbe1e0879b4913a8f3f6'::bytea,
             'enabled',

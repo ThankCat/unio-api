@@ -3,14 +3,12 @@ package openai
 import (
 	"encoding/json"
 	"testing"
-
-	"github.com/ThankCat/unio-api/internal/core/adapter"
 )
 
 func TestBuildChatCompletionRequestBodyMergesExtensions(t *testing.T) {
-	body, err := buildChatCompletionRequestBody(adapter.ChatRequest{
+	body, err := buildChatCompletionRequestBody(ChatRequest{
 		Model: "deepseek-chat",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hi")},
 		},
 		Extensions: map[string]json.RawMessage{
@@ -33,18 +31,18 @@ func TestBuildChatCompletionRequestBodyMergesExtensions(t *testing.T) {
 
 func TestBuildChatCompletionRequestBodyForwardsToolsAndReasoningHistory(t *testing.T) {
 	reasoning := "prior-thought"
-	body, err := buildChatCompletionRequestBody(adapter.ChatRequest{
+	body, err := buildChatCompletionRequestBody(ChatRequest{
 		Model: "deepseek-chat",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hi")},
 			{
 				Role:             "assistant",
 				Content:          jsonContent(""),
 				ReasoningContent: &reasoning,
-				ToolCalls: []adapter.ChatToolCall{{
+				ToolCalls: []ChatToolCall{{
 					ID:   "call_1",
 					Type: "function",
-					Function: adapter.ChatToolCallFunction{
+					Function: ChatToolCallFunction{
 						Name:      "get_weather",
 						Arguments: "{}",
 					},
@@ -52,15 +50,15 @@ func TestBuildChatCompletionRequestBodyForwardsToolsAndReasoningHistory(t *testi
 			},
 			{Role: "tool", ToolCallID: strPtr("call_1"), Content: jsonContent(`{"temp":20}`)},
 		},
-		Tools: []adapter.ChatTool{{
+		Tools: []ChatTool{{
 			Type: "function",
-			Function: adapter.ChatFunctionTool{
+			Function: ChatFunctionTool{
 				Name:       "get_weather",
 				Parameters: json.RawMessage(`{"type":"object"}`),
 			},
 		}},
 		ToolChoice: json.RawMessage(`"auto"`),
-		ResponseFormat: &adapter.ChatResponseFormat{
+		ResponseFormat: &ChatResponseFormat{
 			Type: "json_object",
 		},
 	}, false)

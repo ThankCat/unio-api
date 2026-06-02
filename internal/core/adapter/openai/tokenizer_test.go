@@ -3,16 +3,15 @@ package openai
 import (
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
 
 func TestAdapterCountChatInputTokensCountsMessages(t *testing.T) {
 	openAIAdapter := newTestAdapter(nil)
 
-	got, err := openAIAdapter.CountChatInputTokens(adapter.ChatInputTokenizeRequest{
+	got, err := openAIAdapter.CountChatInputTokens(ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "system", Content: jsonContent("You are concise.")},
 			{Role: "user", Content: jsonContent("Hello")},
 		},
@@ -28,14 +27,43 @@ func TestAdapterCountChatInputTokensCountsMessages(t *testing.T) {
 func TestAdapterCountChatInputTokensRejectsEmptyModel(t *testing.T) {
 	openAIAdapter := newTestAdapter(nil)
 
-	_, err := openAIAdapter.CountChatInputTokens(adapter.ChatInputTokenizeRequest{
+	_, err := openAIAdapter.CountChatInputTokens(ChatRequest{
 		Model: " ",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("Hello")},
 		},
 	})
 	if failure.CodeOf(err) != failure.CodeAdapterTokenizeFailed {
 		t.Fatalf("expected failure code %q, got %q", failure.CodeAdapterTokenizeFailed, failure.CodeOf(err))
+	}
+}
+
+func TestAdapterCountChatInputTokensIncludesTools(t *testing.T) {
+	openAIAdapter := newTestAdapter(nil)
+	req := ChatRequest{
+		Model:    "gpt-4.1",
+		Messages: []ChatMessage{{Role: "user", Content: jsonContent("Hello")}},
+	}
+
+	withoutTools, err := openAIAdapter.CountChatInputTokens(req)
+	if err != nil {
+		t.Fatalf("CountChatInputTokens without tools returned error: %v", err)
+	}
+
+	req.Tools = []ChatTool{{
+		Type: "function",
+		Function: ChatFunctionTool{
+			Name:        "search_docs",
+			Description: "Search product documentation for a detailed answer.",
+			Parameters:  []byte(`{"type":"object","properties":{"query":{"type":"string"}}}`),
+		},
+	}}
+	withTools, err := openAIAdapter.CountChatInputTokens(req)
+	if err != nil {
+		t.Fatalf("CountChatInputTokens with tools returned error: %v", err)
+	}
+	if withTools <= withoutTools {
+		t.Fatalf("expected tools to increase estimate, got without=%d with=%d", withoutTools, withTools)
 	}
 }
 

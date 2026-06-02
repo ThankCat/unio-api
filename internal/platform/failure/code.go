@@ -186,6 +186,9 @@ const (
 
 	// CodeRoutingCredentialResolveFailed 表示 routing 构建候选时凭据解析失败。
 	CodeRoutingCredentialResolveFailed Code = "routing_credential_resolve_failed"
+
+	// CodeRoutingProtocolInvalid 表示 routing 请求没有携带受支持的 ingress 协议族。
+	CodeRoutingProtocolInvalid Code = "routing_protocol_invalid"
 )
 
 const (
@@ -249,6 +252,10 @@ const (
 
 	// CodeAdapterTokenizeFailed 表示 adapter 执行 provider-specific tokenizer 失败。
 	CodeAdapterTokenizeFailed Code = "adapter_tokenize_failed"
+
+	// CodeAdapterRequestUnsupported 表示请求携带了当前 provider 无法保持语义的字段，
+	// adapter 在调用上游前明确拒绝；HTTP 层映射为协议原生 400。
+	CodeAdapterRequestUnsupported Code = "adapter_request_unsupported"
 )
 
 const (
@@ -296,6 +303,9 @@ const (
 const (
 	// CodeGatewayAdapterNotRegistered 表示 routing 选中的 adapter 未注册。
 	CodeGatewayAdapterNotRegistered Code = "gateway_adapter_not_registered"
+
+	// CodeGatewayInputTokenEstimateFailed 表示 gateway 无法完成候选级保守输入 token 估算。
+	CodeGatewayInputTokenEstimateFailed Code = "gateway_input_token_estimate_failed"
 
 	// CodeGatewayStreamUsageMissing 表示 stream 正常结束但没有 final usage。
 	CodeGatewayStreamUsageMissing Code = "gateway_stream_usage_missing"

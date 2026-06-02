@@ -10,14 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai/streamtranslate"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
 
 // adapterChatRequestWithParams 创建带可透传 OpenAI-compatible 参数的 adapter 请求。
-func adapterChatRequestWithParams() adapter.ChatRequest {
+func adapterChatRequestWithParams() ChatRequest {
 	temperature := 0.0
 	topP := 0.8
 	maxTokens := 128
@@ -25,9 +23,9 @@ func adapterChatRequestWithParams() adapter.ChatRequest {
 	frequencyPenalty := 0.25
 	user := "end-user-1"
 
-	return adapter.ChatRequest{
+	return ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hello")},
 		},
 		Temperature:      &temperature,
@@ -183,6 +181,86 @@ func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 	}
 }
 
+// TestAdapterChatCompletionsPreservesResponseFields 验证非流式响应的顶层 / choice / message
+// 全量字段（created/service_tier/system_fingerprint/refusal/annotations/audio/logprobs）被
+// 完整解码进 ChatResponse，不被静默丢弃（矩阵 §5，DEC-012 协议为先）。
+func TestAdapterChatCompletionsPreservesResponseFields(t *testing.T) {
+	body := `{
+		"id": "chatcmpl_fields",
+		"object": "chat.completion",
+		"created": 1710000123,
+		"model": "gpt-4.1",
+		"service_tier": "default",
+		"system_fingerprint": "fp_abc123",
+		"choices": [
+			{
+				"index": 0,
+				"message": {
+					"role": "assistant",
+					"content": "hi",
+					"refusal": "no can do",
+					"annotations": [{"type": "url_citation", "url_citation": {"url": "https://x"}}],
+					"audio": {"id": "audio_1", "transcript": "hi"}
+				},
+				"finish_reason": "stop",
+				"logprobs": {"content": [{"token": "hi"}]}
+			}
+		],
+		"usage": {
+			"prompt_tokens": 5,
+			"completion_tokens": 2,
+			"total_tokens": 7,
+			"prompt_tokens_details": {"cached_tokens": 0},
+			"completion_tokens_details": {"reasoning_tokens": 0}
+		}
+	}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatalf("write response body: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	openAIAdapter := newTestAdapter(server.Client())
+
+	got, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
+		BaseURL: server.URL + "/v1",
+		APIKey:  "test-secret",
+		Timeout: 30 * time.Second,
+	}, ChatRequest{
+		Model:    "gpt-4.1",
+		Messages: []ChatMessage{{Role: "user", Content: jsonContent("hello")}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got.Created != 1710000123 {
+		t.Fatalf("created = %d, want 1710000123", got.Created)
+	}
+	if got.ServiceTier == nil || *got.ServiceTier != "default" {
+		t.Fatalf("service_tier = %#v", got.ServiceTier)
+	}
+	if got.SystemFingerprint == nil || *got.SystemFingerprint != "fp_abc123" {
+		t.Fatalf("system_fingerprint = %#v", got.SystemFingerprint)
+	}
+	if got.Refusal == nil || *got.Refusal != "no can do" {
+		t.Fatalf("refusal = %#v", got.Refusal)
+	}
+	if !json.Valid(got.Annotations) || !strings.Contains(string(got.Annotations), "url_citation") {
+		t.Fatalf("annotations = %s", got.Annotations)
+	}
+	if !json.Valid(got.Audio) || !strings.Contains(string(got.Audio), "audio_1") {
+		t.Fatalf("audio = %s", got.Audio)
+	}
+	if !json.Valid(got.Logprobs) || !strings.Contains(string(got.Logprobs), "token") {
+		t.Fatalf("logprobs = %s", got.Logprobs)
+	}
+}
+
 func TestAdapterChatCompletionsReturnsErrorForMissingUsage(t *testing.T) {
 	tests := []struct {
 		name string
@@ -231,9 +309,9 @@ func TestAdapterChatCompletionsReturnsErrorForMissingUsage(t *testing.T) {
 				BaseURL: server.URL + "/v1",
 				APIKey:  "test-secret",
 				Timeout: 30 * time.Second,
-			}, adapter.ChatRequest{
+			}, ChatRequest{
 				Model: "gpt-4.1",
-				Messages: []adapter.ChatMessage{
+				Messages: []ChatMessage{
 					{Role: "user", Content: jsonContent("hello")},
 				},
 			})
@@ -260,9 +338,9 @@ func TestAdapterChatCompletionsReturnsErrorForUpstreamStatus(t *testing.T) {
 		BaseURL: server.URL + "/v1",
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hello")},
 		},
 	})
@@ -291,8 +369,8 @@ func TestAdapterChatCompletionsUsesChannelTimeout(t *testing.T) {
 			APIKey:  "test-secret",
 			Timeout: 50 * time.Millisecond,
 		},
-		adapter.ChatRequest{Model: "gpt-4.1",
-			Messages: []adapter.ChatMessage{
+		ChatRequest{Model: "gpt-4.1",
+			Messages: []ChatMessage{
 				{Role: "user", Content: jsonContent("hello")},
 			}})
 
@@ -436,13 +514,22 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 		Timeout: 30 * time.Second,
 	}
 
-	got := make([]adapter.ChatStreamChunk, 0)
-	err := openAIAdapter.StreamChatCompletions(context.Background(), selectedChannel, adapterChatRequestWithParams(), func(chunk adapter.ChatStreamChunk) error {
+	got := make([]ChatStreamChunk, 0)
+	outcome, err := openAIAdapter.StreamChatCompletions(context.Background(), selectedChannel, adapterChatRequestWithParams(), func(chunk ChatStreamChunk) error {
 		got = append(got, chunk)
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("StreamChatCompletions returned err: %v", err)
+	}
+	if outcome.Facts == nil {
+		t.Fatal("expected stream outcome facts")
+	}
+	if outcome.Facts.UpstreamResponseID != "chatcmpl_stream_test" {
+		t.Fatalf("outcome response id: got %q, want %q", outcome.Facts.UpstreamResponseID, "chatcmpl_stream_test")
+	}
+	if outcome.Facts.Finish.RawReason != "stop" {
+		t.Fatalf("outcome finish reason: got %q, want stop", outcome.Facts.Finish.RawReason)
 	}
 
 	if gotAuthorization != "Bearer test-secret" {
@@ -561,17 +648,17 @@ func TestAdapterStreamChatCompletionsParsesMultilineSSEEvent(t *testing.T) {
 
 	openAIAdapter := newTestAdapter(server.Client())
 
-	got := make([]adapter.ChatStreamChunk, 0)
-	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+	got := make([]ChatStreamChunk, 0)
+	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hello")},
 		},
-	}, func(chunk adapter.ChatStreamChunk) error {
+	}, func(chunk ChatStreamChunk) error {
 		got = append(got, chunk)
 		return nil
 	})
@@ -609,17 +696,17 @@ func TestAdapterStreamChatCompletionsParsesOpenAIRawSSEFixture(t *testing.T) {
 
 	openAIAdapter := newTestAdapter(server.Client())
 
-	got := make([]adapter.ChatStreamChunk, 0)
-	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+	got := make([]ChatStreamChunk, 0)
+	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hello")},
 		},
-	}, func(chunk adapter.ChatStreamChunk) error {
+	}, func(chunk ChatStreamChunk) error {
 		got = append(got, chunk)
 		return nil
 	})
@@ -659,6 +746,66 @@ func TestAdapterStreamChatCompletionsParsesOpenAIRawSSEFixture(t *testing.T) {
 	}
 }
 
+// TestAdapterStreamChatCompletionsPreservesChunkFields 验证流式 chunk/choice/delta 全量字段
+// （created/service_tier/system_fingerprint/index/logprobs/delta.refusal）被解码进 ChatStreamChunk。
+func TestAdapterStreamChatCompletionsPreservesChunkFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		rawEvents := []string{
+			`data: {"id":"chatcmpl-fields","object":"chat.completion.chunk","created":1710009999,"model":"gpt-4.1","service_tier":"default","system_fingerprint":"fp_stream","choices":[{"index":2,"delta":{"role":"assistant","refusal":"no"},"logprobs":{"content":[{"token":"x"}]},"finish_reason":null}]}` + "\n\n",
+			`data: {"id":"chatcmpl-fields","object":"chat.completion.chunk","created":1710010000,"model":"gpt-4.1","choices":[{"index":2,"delta":{"content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}` + "\n\n",
+			"data: [DONE]\n\n",
+		}
+		for _, event := range rawEvents {
+			if _, err := w.Write([]byte(event)); err != nil {
+				t.Fatalf("write fixture event: %v", err)
+			}
+		}
+	}))
+	defer server.Close()
+
+	openAIAdapter := newTestAdapter(server.Client())
+
+	got := make([]ChatStreamChunk, 0)
+	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+		BaseURL: server.URL + "/v1",
+		APIKey:  "test-secret",
+		Timeout: 30 * time.Second,
+	}, ChatRequest{
+		Model:    "gpt-4.1",
+		Messages: []ChatMessage{{Role: "user", Content: jsonContent("hi")}},
+	}, func(chunk ChatStreamChunk) error {
+		got = append(got, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(got) < 1 {
+		t.Fatalf("got %d chunks, want >=1", len(got))
+	}
+	first := got[0]
+	if first.Created != 1710009999 {
+		t.Fatalf("created = %d, want 1710009999", first.Created)
+	}
+	if first.ServiceTier == nil || *first.ServiceTier != "default" {
+		t.Fatalf("service_tier = %#v", first.ServiceTier)
+	}
+	if first.SystemFingerprint == nil || *first.SystemFingerprint != "fp_stream" {
+		t.Fatalf("system_fingerprint = %#v", first.SystemFingerprint)
+	}
+	if first.Index != 2 {
+		t.Fatalf("index = %d, want 2", first.Index)
+	}
+	if first.Refusal == nil || *first.Refusal != "no" {
+		t.Fatalf("refusal = %#v", first.Refusal)
+	}
+	if !strings.Contains(string(first.Logprobs), "token") {
+		t.Fatalf("logprobs = %s", first.Logprobs)
+	}
+}
+
 func TestAdapterStreamChatCompletionsParsesDeepSeekUsageTail(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -680,23 +827,29 @@ func TestAdapterStreamChatCompletionsParsesDeepSeekUsageTail(t *testing.T) {
 
 	openAIAdapter := newTestAdapter(server.Client())
 
-	got := make([]adapter.ChatStreamChunk, 0)
-	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+	got := make([]ChatStreamChunk, 0)
+	outcome, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		ProviderSlug: "deepseek",
 		BaseURL:      server.URL + "/v1",
 		APIKey:       "test-secret",
 		Timeout:      30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "deepseek-v4-pro",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hi")},
 		},
-	}, func(chunk adapter.ChatStreamChunk) error {
+	}, func(chunk ChatStreamChunk) error {
 		got = append(got, chunk)
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if outcome.Facts == nil {
+		t.Fatal("expected DeepSeek stream outcome facts")
+	}
+	if outcome.Facts.Finish.RawReason != "length" {
+		t.Fatalf("outcome finish reason: got %q, want length", outcome.Facts.Finish.RawReason)
 	}
 
 	if len(got) != 4 {
@@ -735,18 +888,18 @@ func TestAdapterStreamChatCompletionsForwardsDeepSeekReasoningContent(t *testing
 
 	openAIAdapter := newTestAdapter(server.Client())
 
-	got := make([]adapter.ChatStreamChunk, 0)
-	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+	got := make([]ChatStreamChunk, 0)
+	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		ProviderSlug: "deepseek",
 		BaseURL:      server.URL + "/v1",
 		APIKey:       "test-secret",
 		Timeout:      30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "deepseek-v4-pro",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hi")},
 		},
-	}, func(chunk adapter.ChatStreamChunk) error {
+	}, func(chunk ChatStreamChunk) error {
 		got = append(got, chunk)
 		return nil
 	})
@@ -781,20 +934,20 @@ func TestAdapterStreamChatCompletionsDoesNotForwardReasoningWithoutDeepSeekNorma
 	}))
 	defer server.Close()
 
-	openAIAdapter := NewAdapter(server.Client(), streamtranslate.NewRegistry(streamtranslate.Default{}))
+	openAIAdapter := NewAdapter(server.Client())
 
-	got := make([]adapter.ChatStreamChunk, 0)
-	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+	got := make([]ChatStreamChunk, 0)
+	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		ProviderSlug: "openai",
 		BaseURL:      server.URL + "/v1",
 		APIKey:       "test-secret",
 		Timeout:      30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hi")},
 		},
-	}, func(chunk adapter.ChatStreamChunk) error {
+	}, func(chunk ChatStreamChunk) error {
 		got = append(got, chunk)
 		return nil
 	})
@@ -838,17 +991,17 @@ func TestAdapterStreamChatCompletionsParsesLargeSSEEvent(t *testing.T) {
 
 	openAIAdapter := newTestAdapter(server.Client())
 
-	got := make([]adapter.ChatStreamChunk, 0)
-	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+	got := make([]ChatStreamChunk, 0)
+	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hello")},
 		},
-	}, func(chunk adapter.ChatStreamChunk) error {
+	}, func(chunk ChatStreamChunk) error {
 		got = append(got, chunk)
 		return nil
 	})
@@ -872,16 +1025,16 @@ func TestAdapterStreamChatCompletionsReturnsErrorForUpstreamStatus(t *testing.T)
 
 	openAIAdapter := newTestAdapter(server.Client())
 
-	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hello")},
 		},
-	}, func(chunk adapter.ChatStreamChunk) error {
+	}, func(chunk ChatStreamChunk) error {
 		t.Fatalf("unexpected stream chunk: %+v", chunk)
 		return nil
 	})
@@ -905,16 +1058,16 @@ func TestAdapterStreamChatCompletionsReturnsErrorForBadSSEJSON(t *testing.T) {
 
 	openAIAdapter := newTestAdapter(server.Client())
 
-	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hello")},
 		},
-	}, func(chunk adapter.ChatStreamChunk) error {
+	}, func(chunk ChatStreamChunk) error {
 		t.Fatalf("unexpected stream chunk: %+v", chunk)
 		return nil
 	})
@@ -966,16 +1119,16 @@ func TestAdapterStreamChatCompletionsStopsWhenEmitReturnsError(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 
 	emitCalls := 0
-	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hello")},
 		},
-	}, func(chunk adapter.ChatStreamChunk) error {
+	}, func(chunk ChatStreamChunk) error {
 		emitCalls++
 		return emitErr
 	})
@@ -1041,17 +1194,17 @@ func TestAdapterStreamChatCompletionsStopsAtDone(t *testing.T) {
 
 	openAIAdapter := newTestAdapter(server.Client())
 
-	got := make([]adapter.ChatStreamChunk, 0)
-	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+	got := make([]ChatStreamChunk, 0)
+	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		BaseURL: server.URL + "/v1",
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
-	}, adapter.ChatRequest{
+	}, ChatRequest{
 		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
+		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hello")},
 		},
-	}, func(chunk adapter.ChatStreamChunk) error {
+	}, func(chunk ChatStreamChunk) error {
 		got = append(got, chunk)
 		return nil
 	})
@@ -1065,5 +1218,47 @@ func TestAdapterStreamChatCompletionsStopsAtDone(t *testing.T) {
 
 	if got[0].Content != "before done" {
 		t.Fatalf("got content %q, want %q", got[0].Content, "before done")
+	}
+}
+
+func TestAdapterStreamChatCompletionsReturnsFactsWithTailErrorBeforeDone(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		events := []string{
+			`data: {"id":"chatcmpl_tail","model":"gpt-4.1","choices":[{"delta":{"content":"hello"},"finish_reason":"stop"}]}` + "\n\n",
+			`data: {"id":"chatcmpl_tail","model":"gpt-4.1","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}` + "\n\n",
+		}
+		for _, event := range events {
+			if _, err := w.Write([]byte(event)); err != nil {
+				t.Fatalf("write stream event: %v", err)
+			}
+		}
+	}))
+	defer server.Close()
+
+	outcome, err := newTestAdapter(server.Client()).StreamChatCompletions(
+		context.Background(),
+		channel.Runtime{
+			BaseURL: server.URL + "/v1",
+			APIKey:  "test-secret",
+			Timeout: 30 * time.Second,
+		},
+		ChatRequest{
+			Model:    "gpt-4.1",
+			Messages: []ChatMessage{{Role: "user", Content: jsonContent("hello")}},
+		},
+		func(ChatStreamChunk) error { return nil },
+	)
+	if err == nil {
+		t.Fatal("expected missing [DONE] error")
+	}
+	if failure.CodeOf(err) != failure.CodeAdapterReadStreamFailed {
+		t.Fatalf("failure code = %q, want %q", failure.CodeOf(err), failure.CodeAdapterReadStreamFailed)
+	}
+	if outcome.Facts == nil {
+		t.Fatal("expected reliable facts to survive tail error")
+	}
+	if got, ok := outcome.Facts.Usage.OutputTokensTotal.BillableValue(); !ok || got != 2 {
+		t.Fatalf("output = %d ok=%v", got, ok)
 	}
 }

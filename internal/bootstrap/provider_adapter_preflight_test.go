@@ -7,52 +7,69 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
 type fakeProviderAdapterStore struct {
-	rows []sqlc.ListEnabledProviderAdaptersRow
+	rows []sqlc.ListEnabledChannelAdaptersRow
 	err  error
 }
 
-func (s *fakeProviderAdapterStore) ListEnabledProviderAdapters(ctx context.Context) ([]sqlc.ListEnabledProviderAdaptersRow, error) {
+func (s *fakeProviderAdapterStore) ListEnabledChannelAdapters(ctx context.Context) ([]sqlc.ListEnabledChannelAdaptersRow, error) {
 	return s.rows, s.err
 }
 
 type fakeAdapterCapabilityRegistry struct {
-	chat       map[string]bool
-	streamChat map[string]bool
+	capabilities map[adapterCapabilityKey]bool
 }
 
-func (r *fakeAdapterCapabilityRegistry) HasChat(adapterKey string) bool {
-	return r.chat[adapterKey]
+type adapterCapabilityKey struct {
+	protocol   string
+	adapterKey string
+	capability lifecycle.AdapterCapability
 }
 
-func (r *fakeAdapterCapabilityRegistry) HasStreamChat(adapterKey string) bool {
-	return r.streamChat[adapterKey]
+func (r *fakeAdapterCapabilityRegistry) HasAny(protocol string, adapterKey string) bool {
+	for _, capability := range []lifecycle.AdapterCapability{
+		lifecycle.AdapterCapabilityNonStream,
+		lifecycle.AdapterCapabilityStream,
+		lifecycle.AdapterCapabilityInputTokenizer,
+	} {
+		if r.capabilities[adapterCapabilityKey{protocol: protocol, adapterKey: adapterKey, capability: capability}] {
+			return true
+		}
+	}
+	return false
 }
 
-func TestProviderAdapterPreflightAcceptsRegisteredChatCapabilities(t *testing.T) {
+func registeredAdapterCapabilities(protocol string, adapterKey string) map[adapterCapabilityKey]bool {
+	return map[adapterCapabilityKey]bool{
+		{protocol: protocol, adapterKey: adapterKey, capability: lifecycle.AdapterCapabilityNonStream}:      true,
+		{protocol: protocol, adapterKey: adapterKey, capability: lifecycle.AdapterCapabilityStream}:         true,
+		{protocol: protocol, adapterKey: adapterKey, capability: lifecycle.AdapterCapabilityInputTokenizer}: true,
+	}
+}
+
+func TestProviderAdapterPreflightAcceptsRegisteredDualProtocolBindings(t *testing.T) {
+	capabilities := registeredAdapterCapabilities("openai", "deepseek")
+	for key, value := range registeredAdapterCapabilities("anthropic", "deepseek") {
+		capabilities[key] = value
+	}
+
 	preflight := NewProviderAdapterPreflight(
 		&fakeProviderAdapterStore{
-			rows: []sqlc.ListEnabledProviderAdaptersRow{
-				{ID: 1, Slug: "openai", Adapter: "openai"},
-				{ID: 2, Slug: "deepseek", Adapter: "deepseek"},
+			rows: []sqlc.ListEnabledChannelAdaptersRow{
+				{ChannelID: 1, Protocol: "openai", AdapterKey: "deepseek", ProviderSlug: "deepseek"},
+				{ChannelID: 2, Protocol: "anthropic", AdapterKey: "deepseek", ProviderSlug: "deepseek"},
 			},
 		},
 		&fakeAdapterCapabilityRegistry{
-			chat: map[string]bool{
-				"openai":   true,
-				"deepseek": true,
-			},
-			streamChat: map[string]bool{
-				"openai":   true,
-				"deepseek": true,
-			},
+			capabilities: capabilities,
 		},
 	)
 
-	if err := preflight.ValidateChatCapabilities(context.Background()); err != nil {
-		t.Fatalf("ValidateChatCapabilities returned error: %v", err)
+	if err := preflight.ValidateEnabledChannelBindings(context.Background()); err != nil {
+		t.Fatalf("ValidateEnabledChannelBindings returned error: %v", err)
 	}
 }
 
@@ -62,8 +79,8 @@ func TestProviderAdapterPreflightAcceptsNoEnabledProviders(t *testing.T) {
 		&fakeAdapterCapabilityRegistry{},
 	)
 
-	if err := preflight.ValidateChatCapabilities(context.Background()); err != nil {
-		t.Fatalf("ValidateChatCapabilities returned error: %v", err)
+	if err := preflight.ValidateEnabledChannelBindings(context.Background()); err != nil {
+		t.Fatalf("ValidateEnabledChannelBindings returned error: %v", err)
 	}
 }
 
@@ -74,7 +91,7 @@ func TestProviderAdapterPreflightWrapsStoreError(t *testing.T) {
 		&fakeAdapterCapabilityRegistry{},
 	)
 
-	err := preflight.ValidateChatCapabilities(context.Background())
+	err := preflight.ValidateEnabledChannelBindings(context.Background())
 	if !errors.Is(err, storeErr) {
 		t.Fatalf("expected store error cause, got %v", err)
 	}
@@ -86,45 +103,64 @@ func TestProviderAdapterPreflightWrapsStoreError(t *testing.T) {
 	}
 }
 
-func TestProviderAdapterPreflightRejectsMissingChatCapability(t *testing.T) {
+func TestProviderAdapterPreflightAcceptsPartialCapabilityBinding(t *testing.T) {
 	preflight := NewProviderAdapterPreflight(
 		&fakeProviderAdapterStore{
-			rows: []sqlc.ListEnabledProviderAdaptersRow{
-				{ID: 42, Slug: "openai", Adapter: "openai"},
+			rows: []sqlc.ListEnabledChannelAdaptersRow{
+				{ChannelID: 42, Protocol: "openai", AdapterKey: "openai", ProviderSlug: "openai"},
 			},
 		},
 		&fakeAdapterCapabilityRegistry{
-			streamChat: map[string]bool{"openai": true},
+			capabilities: map[adapterCapabilityKey]bool{
+				{protocol: "openai", adapterKey: "openai", capability: lifecycle.AdapterCapabilityNonStream}: true,
+			},
 		},
 	)
 
-	err := preflight.ValidateChatCapabilities(context.Background())
+	if err := preflight.ValidateEnabledChannelBindings(context.Background()); err != nil {
+		t.Fatalf("ValidateEnabledChannelBindings returned error: %v", err)
+	}
+}
+
+func TestProviderAdapterPreflightRejectsUnknownBinding(t *testing.T) {
+	preflight := NewProviderAdapterPreflight(
+		&fakeProviderAdapterStore{
+			rows: []sqlc.ListEnabledChannelAdaptersRow{
+				{ChannelID: 99, Protocol: "openai", AdapterKey: "deepseek", ProviderSlug: "deepseek"},
+			},
+		},
+		&fakeAdapterCapabilityRegistry{},
+	)
+
+	err := preflight.ValidateEnabledChannelBindings(context.Background())
 	assertCapabilityMissingError(t, err, map[string]any{
-		"provider_id":   int64(42),
-		"provider_slug": "openai",
-		"adapter_key":   "openai",
-		"capability":    "chat",
+		"channel_id":    int64(99),
+		"provider_slug": "deepseek",
+		"protocol":      "openai",
+		"adapter_key":   "deepseek",
+		"capability":    "binding",
 	})
 }
 
-func TestProviderAdapterPreflightRejectsMissingStreamChatCapability(t *testing.T) {
+func TestProviderAdapterPreflightDoesNotResolveSameKeyAcrossProtocols(t *testing.T) {
 	preflight := NewProviderAdapterPreflight(
 		&fakeProviderAdapterStore{
-			rows: []sqlc.ListEnabledProviderAdaptersRow{
-				{ID: 99, Slug: "deepseek", Adapter: "deepseek"},
+			rows: []sqlc.ListEnabledChannelAdaptersRow{
+				{ChannelID: 101, Protocol: "anthropic", AdapterKey: "deepseek", ProviderSlug: "deepseek"},
 			},
 		},
 		&fakeAdapterCapabilityRegistry{
-			chat: map[string]bool{"deepseek": true},
+			capabilities: registeredAdapterCapabilities("openai", "deepseek"),
 		},
 	)
 
-	err := preflight.ValidateChatCapabilities(context.Background())
+	err := preflight.ValidateEnabledChannelBindings(context.Background())
 	assertCapabilityMissingError(t, err, map[string]any{
-		"provider_id":   int64(99),
+		"channel_id":    int64(101),
 		"provider_slug": "deepseek",
+		"protocol":      "anthropic",
 		"adapter_key":   "deepseek",
-		"capability":    "stream_chat",
+		"capability":    "binding",
 	})
 }
 

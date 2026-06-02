@@ -1,12 +1,8 @@
 package openai
 
-import (
-	"encoding/json"
+import "encoding/json"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-)
-
-func adapterChatMessageToWire(msg adapter.ChatMessage) chatMessage {
+func adapterChatMessageToWire(msg ChatMessage) chatMessage {
 	return chatMessage{
 		Role:             mapWireMessageRole(msg.Role),
 		Content:          cloneRawMessage(msg.Content),
@@ -32,11 +28,11 @@ func marshalJSONValue(v any) json.RawMessage {
 	switch typed := v.(type) {
 	case json.RawMessage:
 		return cloneRawMessage(typed)
-	case []adapter.ChatToolCall:
+	case []ChatToolCall:
 		if len(typed) == 0 {
 			return nil
 		}
-	case []adapter.ChatTool:
+	case []ChatTool:
 		if len(typed) == 0 {
 			return nil
 		}
@@ -67,12 +63,12 @@ func wireMessageContentString(content json.RawMessage) string {
 	return ""
 }
 
-func wireToolCallsToAdapter(raw json.RawMessage) ([]adapter.ChatToolCall, error) {
+func wireToolCallsToAdapter(raw json.RawMessage) ([]ChatToolCall, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
 
-	var calls []adapter.ChatToolCall
+	var calls []ChatToolCall
 	if err := json.Unmarshal(raw, &calls); err != nil {
 		return nil, err
 	}
@@ -80,7 +76,7 @@ func wireToolCallsToAdapter(raw json.RawMessage) ([]adapter.ChatToolCall, error)
 	return calls, nil
 }
 
-func adapterResponseFormatToWire(format *adapter.ChatResponseFormat) *chatResponseFormat {
+func adapterResponseFormatToWire(format *ChatResponseFormat) *chatResponseFormat {
 	if format == nil {
 		return nil
 	}

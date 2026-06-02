@@ -27,32 +27,46 @@ CREATE TABLE cost_snapshots (
     -- pricing_unit: 成本计价单位。--
     pricing_unit TEXT NOT NULL CHECK (pricing_unit = 'per_1m_tokens'),
 
-    -- input_cost: 快照中的输入 token 成本价。--
-    input_cost NUMERIC(20, 10) NOT NULL CHECK (input_cost >= 0),
+    -- uncached_input_cost: 快照中的未缓存输入 token 成本价。--
+    uncached_input_cost NUMERIC(20, 10) NOT NULL CHECK (uncached_input_cost >= 0),
 
-    -- output_cost: 快照中的输出 token 成本价。--
+    -- cache_read_input_cost: 快照中的缓存读取输入 token 成本价。--
+    cache_read_input_cost NUMERIC(20, 10) CHECK (
+        cache_read_input_cost IS NULL OR cache_read_input_cost >= 0
+    ),
+
+    -- cache_write_5m_input_cost: 快照中的 5 分钟缓存写入输入 token 成本价。--
+    cache_write_5m_input_cost NUMERIC(20, 10) CHECK (
+        cache_write_5m_input_cost IS NULL OR cache_write_5m_input_cost >= 0
+    ),
+
+    -- cache_write_1h_input_cost: 快照中的 1 小时缓存写入输入 token 成本价。--
+    cache_write_1h_input_cost NUMERIC(20, 10) CHECK (
+        cache_write_1h_input_cost IS NULL OR cache_write_1h_input_cost >= 0
+    ),
+
+    -- output_cost: 快照中的权威输出 token 成本价。--
     output_cost NUMERIC(20, 10) NOT NULL CHECK (output_cost >= 0),
-
-    -- cached_input_cost: 快照中的缓存输入 token 成本价。--
-    cached_input_cost NUMERIC(20, 10) CHECK (
-        cached_input_cost IS NULL
-            OR cached_input_cost >= 0
-        ),
 
     -- reasoning_output_cost: 快照中的 reasoning 输出 token 成本价。--
     reasoning_output_cost NUMERIC(20, 10) CHECK (
-        reasoning_output_cost IS NULL
-            OR reasoning_output_cost >= 0
-        ),
+        reasoning_output_cost IS NULL OR reasoning_output_cost >= 0
+    ),
 
-    -- input_cost_amount: 本次请求普通输入 token 实际成本金额。--
-    input_cost_amount NUMERIC(20, 10) NOT NULL CHECK (input_cost_amount >= 0),
+    -- uncached_input_cost_amount: 本次请求未缓存输入 token 实际成本金额。--
+    uncached_input_cost_amount NUMERIC(20, 10) NOT NULL CHECK (uncached_input_cost_amount >= 0),
+
+    -- cache_read_input_cost_amount: 本次请求缓存读取输入 token 实际成本金额。--
+    cache_read_input_cost_amount NUMERIC(20, 10) NOT NULL CHECK (cache_read_input_cost_amount >= 0),
+
+    -- cache_write_5m_input_cost_amount: 本次请求 5 分钟缓存写入输入 token 实际成本金额。--
+    cache_write_5m_input_cost_amount NUMERIC(20, 10) NOT NULL CHECK (cache_write_5m_input_cost_amount >= 0),
+
+    -- cache_write_1h_input_cost_amount: 本次请求 1 小时缓存写入输入 token 实际成本金额。--
+    cache_write_1h_input_cost_amount NUMERIC(20, 10) NOT NULL CHECK (cache_write_1h_input_cost_amount >= 0),
 
     -- output_cost_amount: 本次请求普通输出 token 实际成本金额。--
     output_cost_amount NUMERIC(20, 10) NOT NULL CHECK (output_cost_amount >= 0),
-
-    -- cached_input_cost_amount: 本次请求缓存输入 token 实际成本金额。--
-    cached_input_cost_amount NUMERIC(20, 10) NOT NULL CHECK (cached_input_cost_amount >= 0),
 
     -- reasoning_output_cost_amount: 本次请求 reasoning 输出 token 实际成本金额。--
     reasoning_output_cost_amount NUMERIC(20, 10) NOT NULL CHECK (reasoning_output_cost_amount >= 0),
@@ -79,9 +93,11 @@ CREATE TABLE cost_snapshots (
     -- 总成本必须等于各成本分项金额之和。--
     CONSTRAINT ck_cost_snapshots_total_amount CHECK (
         total_cost_amount =
-            input_cost_amount
+            uncached_input_cost_amount
+            + cache_read_input_cost_amount
+            + cache_write_5m_input_cost_amount
+            + cache_write_1h_input_cost_amount
             + output_cost_amount
-            + cached_input_cost_amount
             + reasoning_output_cost_amount
     ),
 

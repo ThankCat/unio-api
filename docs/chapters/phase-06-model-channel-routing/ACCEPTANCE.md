@@ -11,7 +11,7 @@
 
 1. provider/channel/model/price 不作为正式 env/config 来源。
 2. credential_ref 不保存长期明文 key。
-3. 启动时校验 adapter registry 与 provider.adapter 一致。
+3. 启动时校验 adapter registry 与 `channel.protocol + channel.adapter_key` 复合绑定一致。
 4. routing 支持 project 级模型可见性；预算和后台管理策略已登记到后续阶段。
 5. routing 错误可区分模型不存在和无可用 channel。
 

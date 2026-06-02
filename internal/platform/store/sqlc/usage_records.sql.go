@@ -12,98 +12,128 @@ import (
 const createUsageRecord = `-- name: CreateUsageRecord :one
 INSERT INTO usage_records (
     request_record_id,
-    prompt_tokens,
-    completion_tokens,
-    total_tokens,
-    cached_tokens,
-    reasoning_tokens,
-    source
+    uncached_input_tokens,
+    uncached_input_tokens_state,
+    cache_read_input_tokens,
+    cache_read_input_tokens_state,
+    cache_write_5m_input_tokens,
+    cache_write_5m_input_tokens_state,
+    cache_write_1h_input_tokens,
+    cache_write_1h_input_tokens_state,
+    output_tokens_total,
+    output_tokens_total_state,
+    reasoning_output_tokens,
+    reasoning_output_tokens_state,
+    usage_source,
+    usage_mapping_version
 )
 VALUES (
-           $1,
-           $2,
-           $3,
-           $4,
-           $5,
-           $6,
-           $7
-       )
-RETURNING
-    id,
-    request_record_id,
-    prompt_tokens,
-    completion_tokens,
-    total_tokens,
-    cached_tokens,
-    reasoning_tokens,
-    source,
-    created_at
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10,
+    $11,
+    $12,
+    $13,
+    $14,
+    $15
+)
+RETURNING id, request_record_id, uncached_input_tokens, uncached_input_tokens_state, cache_read_input_tokens, cache_read_input_tokens_state, cache_write_5m_input_tokens, cache_write_5m_input_tokens_state, cache_write_1h_input_tokens, cache_write_1h_input_tokens_state, output_tokens_total, output_tokens_total_state, reasoning_output_tokens, reasoning_output_tokens_state, usage_source, usage_mapping_version, created_at
 `
 
 type CreateUsageRecordParams struct {
-	RequestRecordID  int64
-	PromptTokens     int64
-	CompletionTokens int64
-	TotalTokens      int64
-	CachedTokens     int64
-	ReasoningTokens  int64
-	Source           string
+	RequestRecordID              int64
+	UncachedInputTokens          int64
+	UncachedInputTokensState     string
+	CacheReadInputTokens         int64
+	CacheReadInputTokensState    string
+	CacheWrite5mInputTokens      int64
+	CacheWrite5mInputTokensState string
+	CacheWrite1hInputTokens      int64
+	CacheWrite1hInputTokensState string
+	OutputTokensTotal            int64
+	OutputTokensTotalState       string
+	ReasoningOutputTokens        int64
+	ReasoningOutputTokensState   string
+	UsageSource                  string
+	UsageMappingVersion          string
 }
 
-// CreateUsageRecord 创建一次请求最终用于计费和审计的 usage 记录。
+// CreateUsageRecord 创建一次请求最终用于计费和审计的协议无关 usage 记录。
 func (q *Queries) CreateUsageRecord(ctx context.Context, arg CreateUsageRecordParams) (UsageRecord, error) {
 	row := q.db.QueryRow(ctx, createUsageRecord,
 		arg.RequestRecordID,
-		arg.PromptTokens,
-		arg.CompletionTokens,
-		arg.TotalTokens,
-		arg.CachedTokens,
-		arg.ReasoningTokens,
-		arg.Source,
+		arg.UncachedInputTokens,
+		arg.UncachedInputTokensState,
+		arg.CacheReadInputTokens,
+		arg.CacheReadInputTokensState,
+		arg.CacheWrite5mInputTokens,
+		arg.CacheWrite5mInputTokensState,
+		arg.CacheWrite1hInputTokens,
+		arg.CacheWrite1hInputTokensState,
+		arg.OutputTokensTotal,
+		arg.OutputTokensTotalState,
+		arg.ReasoningOutputTokens,
+		arg.ReasoningOutputTokensState,
+		arg.UsageSource,
+		arg.UsageMappingVersion,
 	)
 	var i UsageRecord
 	err := row.Scan(
 		&i.ID,
 		&i.RequestRecordID,
-		&i.PromptTokens,
-		&i.CompletionTokens,
-		&i.TotalTokens,
-		&i.CachedTokens,
-		&i.ReasoningTokens,
-		&i.Source,
+		&i.UncachedInputTokens,
+		&i.UncachedInputTokensState,
+		&i.CacheReadInputTokens,
+		&i.CacheReadInputTokensState,
+		&i.CacheWrite5mInputTokens,
+		&i.CacheWrite5mInputTokensState,
+		&i.CacheWrite1hInputTokens,
+		&i.CacheWrite1hInputTokensState,
+		&i.OutputTokensTotal,
+		&i.OutputTokensTotalState,
+		&i.ReasoningOutputTokens,
+		&i.ReasoningOutputTokensState,
+		&i.UsageSource,
+		&i.UsageMappingVersion,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getUsageRecordByRequest = `-- name: GetUsageRecordByRequest :one
-SELECT
-    id,
-    request_record_id,
-    prompt_tokens,
-    completion_tokens,
-    total_tokens,
-    cached_tokens,
-    reasoning_tokens,
-    source,
-    created_at
+SELECT id, request_record_id, uncached_input_tokens, uncached_input_tokens_state, cache_read_input_tokens, cache_read_input_tokens_state, cache_write_5m_input_tokens, cache_write_5m_input_tokens_state, cache_write_1h_input_tokens, cache_write_1h_input_tokens_state, output_tokens_total, output_tokens_total_state, reasoning_output_tokens, reasoning_output_tokens_state, usage_source, usage_mapping_version, created_at
 FROM usage_records
 WHERE request_record_id = $1
 `
 
-// GetUsageRecordByRequest 按请求 ID 读取 usage 记录。
+// GetUsageRecordByRequest 按请求 ID 读取协议无关 usage 记录。
 func (q *Queries) GetUsageRecordByRequest(ctx context.Context, requestRecordID int64) (UsageRecord, error) {
 	row := q.db.QueryRow(ctx, getUsageRecordByRequest, requestRecordID)
 	var i UsageRecord
 	err := row.Scan(
 		&i.ID,
 		&i.RequestRecordID,
-		&i.PromptTokens,
-		&i.CompletionTokens,
-		&i.TotalTokens,
-		&i.CachedTokens,
-		&i.ReasoningTokens,
-		&i.Source,
+		&i.UncachedInputTokens,
+		&i.UncachedInputTokensState,
+		&i.CacheReadInputTokens,
+		&i.CacheReadInputTokensState,
+		&i.CacheWrite5mInputTokens,
+		&i.CacheWrite5mInputTokensState,
+		&i.CacheWrite1hInputTokens,
+		&i.CacheWrite1hInputTokensState,
+		&i.OutputTokensTotal,
+		&i.OutputTokensTotalState,
+		&i.ReasoningOutputTokens,
+		&i.ReasoningOutputTokensState,
+		&i.UsageSource,
+		&i.UsageMappingVersion,
 		&i.CreatedAt,
 	)
 	return i, err

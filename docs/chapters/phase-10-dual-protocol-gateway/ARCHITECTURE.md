@@ -64,6 +64,28 @@ flowchart TD
 2. OpenAI ingress 默认只命中 OpenAI channel；Anthropic ingress 默认只命中 Anthropic channel。
 3. protocol-native response 与 `ResponseFacts` 是同一次解析产生的两条输出轨道。
 
+## 2.1 协议为先与 Provider 映射（DEC-012）
+
+```text
+Ingress（gatewayapi）
+  只校验客户协议 JSON 合法；合法字段全部进入 typed DTO / extension。
+  不因 provider 能力返回 400。
+
+Adapter 出站（→ upstream wire）
+  buildUpstreamWire allowlist：仅 Pass/Adapt 写入 upstream body。
+  无法转换 → Drop（键/ block 不出现在 upstream JSON）。
+  记录 dropped_request_fields（内部审计）。
+
+Adapter 入站（upstream → 客户协议）
+  只填充 ingress 协议 DTO 需要的字段。
+  其余 → Drop（不进公开响应）；账务所需走 ResponseFacts / usage.Facts。
+
+禁止：
+  - Extensions 无脑 merge 进 upstream
+  - provider 映射层 CodeAdapterRequestUnsupported 作为默认策略
+  - decode 阶段因窄 struct 丢失客户协议字段
+```
+
 ## 3. 包职责
 
 `gateway-server` 仍然是一个进程。协议分类发生在 `gatewayapi`、`service/gateway`
@@ -316,7 +338,7 @@ adapter/openai
 adapter/openai/deepseek
   implements openai.ChatAdapter
   reuses baseline
-  owns DeepSeek Adapt / No-op / Reject rules
+  owns DeepSeek Adapt / Drop rules
 
 adapter/anthropic
   baseline request / response / stream functions
@@ -324,7 +346,7 @@ adapter/anthropic
 adapter/anthropic/deepseek
   implements anthropic.MessagesAdapter
   reuses baseline
-  owns DeepSeek Adapt / Ignored / Reject rules
+  owns DeepSeek Adapt / Drop rules
 ```
 
 ## 6. Routing 与 registry
@@ -559,7 +581,7 @@ provider wire error
 
 原因：
 
-1. Unio 必须自行掌握 wire DTO、extension、provider ignored 字段和 Reject 行为。
+1. Unio 必须自行掌握 wire DTO、extension、provider Drop 行为与内部 dropped-fields 审计。
 2. Unio 必须在同一次解析中生成协议响应与账务事实。
 3. SDK 自动 retry 会破坏 attempt、成本、熔断和审计一致性。
 4. SDK 类型不应泄漏到 gatewayapi、service 或 billing。

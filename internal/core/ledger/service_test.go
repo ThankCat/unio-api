@@ -132,11 +132,13 @@ func createLedgerTestRequestRecord(t *testing.T, ctx context.Context, pool *pgxp
 			project_id,
 			api_key_id,
 			requested_model_id,
+			ingress_protocol,
+			operation,
 			stream,
 			status,
 			started_at
 		)
-		VALUES ($1, $2, $3, $4, $5, false, 'pending', now())
+		VALUES ($1, $2, $3, $4, $5, 'openai', 'chat_completions', false, 'pending', now())
 		RETURNING id
 	`, fmt.Sprintf("ledger-request-%d", suffix), userID, projectID, apiKeyID, "deepseek-v4-pro").Scan(&requestRecordID)
 	if err != nil {
