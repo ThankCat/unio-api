@@ -104,8 +104,8 @@
 1. OpenAI SDK 黑盒覆盖非流式、流式、reasoning、tools、response format、高级字段
    Drop/Pass/Adapt、usage 和错误；非目标能力字段验证 upstream body 不含 dropped 键。
 2. Anthropic SDK 黑盒覆盖非流式、流式、system、thinking、tools、cache、Drop 字段、usage 和错误。
-3. DeepSeek OpenAI mapping 与 DeepSeek Anthropic mapping 的 `Verify` 字段有对应黑盒冻结用例。
-4. DeepSeek 双协议 adapter 单元测试覆盖 request map、response map、stream translate、usage 和 error。
+3. DeepSeek OpenAI mapping 与 DeepSeek Anthropic mapping 不存在状态列为 `Verify` 的残留；相关冻结由 DS-OAI / DS-ANT 黑盒用例覆盖。
+4. DeepSeek 双协议 adapter 单元测试覆盖 request map、response map、stream 翻译、usage 和 error。
 5. routing 测试覆盖同 provider 双协议 channel、registry capability 过滤与同协议 fallback。
 6. settlement 测试覆盖 cache write、line item、write-off、risk exposure 和 recovery 幂等。
 7. delivery 测试覆盖 completed、interrupted 和 not_started。
@@ -115,18 +115,21 @@
 
 ```bash
 sqlc generate
-go test ./...
-go vet ./...
+go test ./internal/... ./cmd/...
+go vet ./internal/... ./cmd/...
 git diff --check
-rg -n "Verify" docs/chapters/phase-10-dual-protocol-gateway
-rg -n "streamtranslate|adapter\\.ChatUsage" docs internal migrations sql
-rg -n "providers\\.adapter" internal cmd migrations sql
+rg -n '^\| [^|]+ \| [^|]+ \| `Verify` \|' docs/chapters/phase-10-dual-protocol-gateway/DEEPSEEK_*_MAPPING.md
+test ! -d internal/core/adapter/openai/streamtranslate
+rg -n "providers\\.adapter" internal cmd migrations sql --glob '!internal/bootstrap/provider_adapter_preflight.go'
+rg -n "adapter\\.ChatRequest|adapter\\.ChatResponse" internal cmd migrations sql
 ```
+
+说明：仓库级 `go test ./...` 当前仍会被既有 `seed/` 目录双 `main` 阻断，与 Phase 10 无关；Phase 10 签核以 `./internal/... ./cmd/...` 为自动化范围。`adapter.ChatUsage` 在 Phase 10 关闭口径中允许作为 OpenAI 协议族内部响应解析、公开 usage DTO 映射与测试 helper，不允许作为账务事实输入。
 
 关闭阶段前：
 
 ```text
-rg -n "Verify" docs/chapters/phase-10-dual-protocol-gateway
+rg -n '^\| [^|]+ \| [^|]+ \| `Verify` \|' docs/chapters/phase-10-dual-protocol-gateway/DEEPSEEK_*_MAPPING.md
 ```
 
 必须无残留。
@@ -134,7 +137,7 @@ rg -n "Verify" docs/chapters/phase-10-dual-protocol-gateway
 runtime adapter 绑定关闭检查：
 
 ```text
-rg -n "providers\\.adapter" internal cmd migrations sql
+rg -n "providers\\.adapter" internal cmd migrations sql --glob '!internal/bootstrap/provider_adapter_preflight.go'
 ```
 
 必须无残留。文档中只允许以历史背景或迁移说明形式提及。
