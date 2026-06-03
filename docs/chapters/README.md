@@ -2,7 +2,20 @@
 
 章节目录记录每个阶段的具体规划、状态和验收标准。
 
-`AGENTS.md` 只保存全局规则、调度原则和协作规范；具体阶段目标、任务清单、验收标准和当前状态必须写在本目录下的章节文档中。
+`AGENTS.md` 只保存长期 AI 协作规则；具体阶段目标、任务清单、验收标准和当前状态必须写在本目录下的章节文档中。当前全局事实以 [../PROJECT_STATUS.md](../PROJECT_STATUS.md) 为准。
+
+## 当前主线
+
+当前主线是阶段 11 Admin API 设计与实现准备。
+
+阅读顺序：
+
+1. [../PROJECT_STATUS.md](../PROJECT_STATUS.md)
+2. [phase-11-admin/PLAN.md](phase-11-admin/PLAN.md)
+3. [phase-11-admin/STATUS.md](phase-11-admin/STATUS.md)
+4. [phase-11-admin/ACCEPTANCE.md](phase-11-admin/ACCEPTANCE.md)
+
+阶段 10 已完成并作为双协议 Gateway 的当前公开 API 基线。阶段 1 到阶段 9 的文档保留阶段历史、欠账来源和任务锚点；如果历史路径和当前代码路径不一致，以当前阶段文档、TODO register 和实际代码为准。
 
 ## 阶段完成原则
 
@@ -34,6 +47,12 @@ ACCEPTANCE.md
 ```
 
 章节内可以写详细技术路线、字段语义、分步任务和阶段专属边界；这些内容不要上提到 `AGENTS.md`。
+
+## 历史阶段说明
+
+- 已完成阶段的 `PLAN.md` 保留当时的任务拆解，不作为当前目录结构说明。
+- 历史阶段里已经关闭的 GAP 仍保留在 [../production/TODO_REGISTER.md](../production/TODO_REGISTER.md)，用于追溯生产欠账来源。
+- 如果后续重构移动了代码文件，当前事实文档应更新为真实路径；历史阶段文档可以保留说明性文字，但不应保留失效链接。
 
 ## 阶段目录
 

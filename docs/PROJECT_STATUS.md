@@ -16,10 +16,10 @@ docs/production/TODO_REGISTER.md
 ## 当前焦点
 
 ```text
-当前主线：阶段 10 双协议 Gateway 验收签核
-当前进度：阶段 10 主线实现已完成，双协议 ingress + adapter + 共享 lifecycle + SDK 黑盒回归 + durable closeout 全部收口；**2026-06-02 TASK-10.05 架构 B 终局泛型化已收口**——抽出 `lifecycle.RequestLifecycle` 集中承载协议无关 channel breaker / authorization release / metrics / request log 全部实现，两侧 service 的 thin wrapper 改为 1-line forward，消除 ~290 行字面相同的两侧复制代码。上一轮 `go vet` + `go build` + `go test ./internal/...` + `go test -tags=blackbox`（OpenAI SDK 16 + Anthropic SDK 14 用例）全部通过。
-下一小节：阶段 10 ACCEPTANCE sign-off；只在验收命令发现回归时回补代码；可选回归（DS-OAI-05/06/08、DS-ANT-15）不阻塞 Phase 10 关闭，可排到后续回归窗口
-上一阶段状态：阶段 9 OpenAI Protocol Parity 已收口；阶段 10 双协议 Gateway 主线 + 共享 lifecycle 终局已收口
+当前主线：阶段 11 后台管理启动前边界复核
+当前进度：阶段 10 双协议 Gateway 已于 2026-06-03 完成 acceptance sign-off，状态改为 done。双协议 ingress + adapter + 共享 lifecycle + SDK 黑盒回归 + durable closeout 全部收口；`sqlc generate`、`go build ./internal/... ./cmd/...`、`go vet ./internal/... ./cmd/...`、`go test ./internal/... ./cmd/...`、`git diff --check`、OpenAI SDK blackbox 与 Anthropic SDK blackbox 均通过。真实 DeepSeek smoke 本次未额外打开密钥 gate。
+下一小节：进入阶段 11 前置复核；重点复核 credential resolver、admin auth、audit log、provider/channel/model/price CRUD 和 project policy 管理边界
+上一阶段状态：阶段 10 双协议 Gateway 已完成；阶段 9 OpenAI Protocol Parity 已收口
 ```
 
 ## 阶段总览
@@ -35,7 +35,7 @@ docs/production/TODO_REGISTER.md
 | 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | done | Gateway 计费主链路已打通，reservation、settlement、ledger、cost snapshot、recovery worker 和 stream 错误语义已收口。 |
 | 阶段 8 | [可观测性与稳定性](chapters/phase-08-observability-stability/STATUS.md) | done | TASK-8.01 adapter metadata/error 分类、8.02 Prometheus metrics、8.03 structured logs+OpenTelemetry、8.04 channel 熔断、8.05 HTTP SSE Writer 全部完成；阶段 8 无遗留 P0/P1 production TODO。 |
 | 阶段 9 | [OpenAI Protocol Parity](chapters/phase-09-openai-protocol-parity/STATUS.md) | done | C1~C6 已实现；C8 高级字段并入阶段 10 全量 OpenAI 契约，不再作为长期可选项。 |
-| 阶段 10 | [双协议 Gateway 全链路改造](chapters/phase-10-dual-protocol-gateway/STATUS.md) | in_progress | 主线实现已完成，正在做阶段验收签核。双协议 adapter + ingress 已通；共享 lifecycle（候选准备/熔断/retry/metrics/tracing/authorization/settlement/recovery/request log helpers）已抽出并被 OpenAI + Anthropic 共用；`/v1/chat/completions` 与 `/v1/messages` 均端到端接线并有 parity e2e；10.12 facts schema + 账务回归全绿；10.11 双协议错误与安全输出已收口（上游分类映射 + 脱敏 + anthropic-beta 宽进接受/出站 Drop，DEC-013）；10.15 命名与冗余复核已收口；10.13 OpenAI SDK 黑盒验收已收口（14 mock + 2 真实 DeepSeek smoke）；10.14 Anthropic SDK 黑盒验收已收口（12 mock + 2 真实 DeepSeek Anthropic endpoint smoke）；10.10 durable closeout 终局已收口；10.05 共享 Lifecycle Executor 架构 B 终局已收口。剩余：跑最终验收命令并更新签核记录。 |
+| 阶段 10 | [双协议 Gateway 全链路改造](chapters/phase-10-dual-protocol-gateway/STATUS.md) | done | 双协议 adapter + ingress、共享 lifecycle、`/v1/chat/completions` 与 `/v1/messages` 端到端链路、facts schema、账务回归、错误安全输出、SDK 黑盒验收、durable closeout 和 10.05 架构 B 终局均已收口；2026-06-03 acceptance sign-off 通过。 |
 | 阶段 11 | [后台管理](chapters/phase-11-admin/STATUS.md) | planned | 原阶段 10 已顺延，进入前需复核 credential resolver 和后台管理边界。 |
 
 ## 当前上线阻断
@@ -60,37 +60,40 @@ git diff --check                    # 通过
 
 带 `DATABASE_URL` 的集成测试需本地 Postgres；改表源 migration 后，本地库需先 `drop`/`down`→`up` 再跑 sqlc/DB 测试。
 
-2026-06-03 文档收口：同步 Phase 10 任务状态、关闭检查口径和下一步建议；本次未修改生产代码，未重跑 Go 测试。
+2026-06-03 Phase 10 acceptance sign-off：本次未修改生产代码，最终验收命令通过。
+
+```bash
+sqlc generate                                      # 通过
+go build ./internal/... ./cmd/...                  # 通过
+go vet ./internal/... ./cmd/...                    # 通过
+go test ./internal/... ./cmd/...                   # 通过
+git diff --check                                   # 通过
+go test -tags=blackbox -count=1 ./internal/blackbox/openaisdk/...      # 通过
+go test -tags=blackbox -count=1 ./internal/blackbox/anthropicsdk/...   # 通过
+```
+
+说明：本地沙箱禁止 `httptest` 监听端口，`go test ./internal/... ./cmd/...` 与两套 SDK blackbox 已在非沙箱环境重跑并通过。真实 DeepSeek smoke 本次未额外打开 `DEEPSEEK_BLACKBOX` / `DEEPSEEK_API_KEY` gate。
 
 ## 下一步
 
-进入阶段 10 ACCEPTANCE sign-off 前先执行：
+阶段 10 已签核完成。进入阶段 11 前先执行：
 
 ```bash
 rg -n "TODO|GAP-" AGENTS.md docs cmd internal migrations sql
-rg -n '^\| [^|]+ \| [^|]+ \| `Verify` \|' docs/chapters/phase-10-dual-protocol-gateway/DEEPSEEK_*_MAPPING.md
-test ! -d internal/core/adapter/openai/streamtranslate
-rg -n "providers\\.adapter" internal cmd migrations sql --glob '!internal/bootstrap/provider_adapter_preflight.go'
-rg -n "adapter\\.ChatRequest|adapter\\.ChatResponse" internal cmd migrations sql
+rg -n '^\| <a id="gap-[^"]+"></a>\[[^\]]+\].*\| P[01] \| (todo|deferred) \|' docs/production/TODO_REGISTER.md
 ```
 
 然后阅读：
 
 ```text
-docs/protocol/openai_chat_completion.md
-docs/protocol/anthropic_message.md
-docs/chapters/phase-10-dual-protocol-gateway/PLAN.md
-docs/chapters/phase-10-dual-protocol-gateway/STATUS.md
-docs/chapters/phase-10-dual-protocol-gateway/ACCEPTANCE.md
-docs/chapters/phase-10-dual-protocol-gateway/ARCHITECTURE.md
-docs/chapters/phase-10-dual-protocol-gateway/RESPONSE_FACTS.md
-docs/chapters/phase-10-dual-protocol-gateway/OPENAI_CHAT_COMPLETIONS_MATRIX.md
-docs/chapters/phase-10-dual-protocol-gateway/ANTHROPIC_MESSAGES_MATRIX.md
-docs/chapters/phase-10-dual-protocol-gateway/DEEPSEEK_OPENAI_MAPPING.md
-docs/chapters/phase-10-dual-protocol-gateway/DEEPSEEK_ANTHROPIC_MAPPING.md
+docs/PROJECT_STATUS.md
+docs/chapters/README.md
+docs/chapters/phase-11-admin/PLAN.md
+docs/chapters/phase-11-admin/STATUS.md
+docs/chapters/phase-11-admin/ACCEPTANCE.md
 docs/production/TODO_REGISTER.md
 docs/production/DECISIONS.md
 docs/production/RELEASE_BLOCKERS.md
 ```
 
-阶段 11 后台管理只能在 Phase 10 签核后进入实现。Phase 10 当前主线：DEC-012 协议为先 Drop（双侧）、TASK-10.12 facts 账务回归、TASK-10.10B-2b（Anthropic service/handler + 共享 lifecycle + e2e parity）、TASK-10.11（双协议错误与安全输出 + DEC-013 anthropic-beta 宽进）、TASK-10.15（命名与冗余复核）、TASK-10.13（OpenAI SDK 黑盒验收）、TASK-10.14（Anthropic SDK 黑盒验收）、TASK-10.10 durable closeout 终局与 10.05 架构 B 终局均已完成。下一步：跑最终验收命令；若全绿，将 Phase 10 `STATUS.md` 与本文件改为 `done`，再启动 Phase 11 credential/admin 边界复核。
+阶段 11 后台管理现在可以进入启动前复核。优先处理：`GAP-6-001` credential resolver、安全轮换与后台管理边界；admin auth 与 audit log；provider/channel/model/price CRUD；project policy 管理；以及进入实现前对全局 P0/P1 TODO 的再次筛查。

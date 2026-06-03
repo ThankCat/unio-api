@@ -1,5 +1,7 @@
 # Phase 9 Plan - OpenAI Protocol Parity
 
+历史说明：本文件保留 Phase 9 当时的阶段规划。Phase 10 后 Gateway 已扩展为 OpenAI / Anthropic 双协议目录，本文只维护必要的有效链接；当前双协议边界以 [../phase-10-dual-protocol-gateway](../phase-10-dual-protocol-gateway) 和全局状态为准。
+
 ## 目标
 
 让 Unio Gateway API 成为 OpenAI Chat Completions 的可替换实现。
@@ -74,14 +76,14 @@ Phase 4 的 text-only 边界在 Phase 9 完成后视为 **被 parity 层取代**
 
 | 文件 | 作用 |
 | --- | --- |
-| [internal/app/gatewayapi/openai_dto.go](../../../internal/app/gatewayapi/openai_dto.go) | 对外 OpenAI 公开契约。 |
-| [internal/app/gatewayapi/chat_completions_handler.go](../../../internal/app/gatewayapi/chat_completions_handler.go) | 请求 decode、校验、SSE/JSON 写出。 |
-| [internal/core/adapter/chat.go](../../../internal/core/adapter/chat.go) | adapter 内部 OpenAI 语义 contract。 |
+| [internal/app/gatewayapi/openai/chatcompletions/dto.go](../../../internal/app/gatewayapi/openai/chatcompletions/dto.go) | 对外 OpenAI 公开契约。 |
+| [internal/app/gatewayapi/openai/chatcompletions/handler.go](../../../internal/app/gatewayapi/openai/chatcompletions/handler.go) | 请求 decode、校验、SSE/JSON 写出。 |
+| [internal/core/adapter/openai/contract.go](../../../internal/core/adapter/openai/contract.go) | adapter 内部 OpenAI 语义 contract。 |
 | [internal/core/adapter/openai/chat.go](../../../internal/core/adapter/openai/chat.go) | 上游 HTTP、request/response/stream 主流程。 |
 | [internal/core/adapter/openai/dto.go](../../../internal/core/adapter/openai/dto.go) | upstream wire DTO。 |
 | `internal/core/adapter/openai/normalizer/`（历史路径，已移除） | **过渡实现**；TASK-9.07 吸收/refactor 为 stream translate。 |
-| [internal/service/gateway/chat_completion.go](../../../internal/service/gateway/chat_completion.go) | 非流式 gateway 编排。 |
-| [internal/service/gateway/chat_stream.go](../../../internal/service/gateway/chat_stream.go) | 流式 gateway 编排。 |
+| [internal/service/gateway/openai/chatcompletions/chat_completion.go](../../../internal/service/gateway/openai/chatcompletions/chat_completion.go) | 非流式 gateway 编排。 |
+| [internal/service/gateway/openai/chatcompletions/chat_stream.go](../../../internal/service/gateway/openai/chatcompletions/chat_stream.go) | 流式 gateway 编排。 |
 | [docs/production/DECISIONS.md](../../production/DECISIONS.md) | OpenAI-first 兼容策略 ADR。 |
 
 ## 任务
@@ -176,7 +178,7 @@ adapter.ChatRequest / ChatResponse / ChatStreamChunk 承载 OpenAI 语义，
 
 计划实现：
 
-1. 扩展 [internal/core/adapter/chat.go](../../../internal/core/adapter/chat.go) message/chunk/usage 结构。
+1. 扩展 [internal/core/adapter/openai/contract.go](../../../internal/core/adapter/openai/contract.go) message/chunk/usage 结构。
 2. gateway service 只做 OpenAI DTO ↔ adapter contract 映射，不做 vendor 分支。
 3. settlement 继续消费 `adapter.ChatUsage`（含 cached/reasoning），不受对外 DTO 扩展影响。
 
@@ -443,8 +445,8 @@ gateway service 在 gatewayapi DTO ↔ adapter contract 之间完整传递 OpenA
 
 计划实现：
 
-1. [internal/service/gateway/chat_completion.go](../../../internal/service/gateway/chat_completion.go) 非流式映射补齐 message、finish_reason、usage details。
-2. [internal/service/gateway/chat_stream.go](../../../internal/service/gateway/chat_stream.go) 流式映射补齐 delta 全字段与 finish_reason。
+1. [internal/service/gateway/openai/chatcompletions/chat_completion.go](../../../internal/service/gateway/openai/chatcompletions/chat_completion.go) 非流式映射补齐 message、finish_reason、usage details。
+2. [internal/service/gateway/openai/chatcompletions/chat_stream.go](../../../internal/service/gateway/openai/chatcompletions/chat_stream.go) 流式映射补齐 delta 全字段与 finish_reason。
 3. 删除非流式 `finish_reason: "stop"` 硬编码，改由 adapter 输出驱动。
 
 关联 GAP：
@@ -466,7 +468,7 @@ gateway service 在 gatewayapi DTO ↔ adapter contract 之间完整传递 OpenA
 
 计划实现：
 
-1. 扩展 [internal/app/gatewayapi/chat_completions_handler.go](../../../internal/app/gatewayapi/chat_completions_handler.go) 校验规则。
+1. 扩展 [internal/app/gatewayapi/openai/chatcompletions/validation.go](../../../internal/app/gatewayapi/openai/chatcompletions/validation.go) 校验规则。
 2. multimodal content array、tool_calls、空 content assistant 等按 OpenAI 规则处理。
 3. 不支持字段走 Reject 路径，而非 silent drop 或 Phase 4 text-only 拒绝。
 
@@ -489,7 +491,7 @@ chat authorization 与 token 估算不得把 messages 剥成 role+content 窄结
 
 计划实现：
 
-1. [internal/service/gateway/chat_authorization.go](../../../internal/service/gateway/chat_authorization.go) 使用 parity message 结构或等价 canonical 表示。
+1. [internal/service/gateway/openai/chatcompletions/chat_authorization.go](../../../internal/service/gateway/openai/chatcompletions/chat_authorization.go) 使用 parity message 结构或等价 canonical 表示。
 2. 估算逻辑对 tool_calls、reasoning_content 等字段有明确策略（计入或 documented 近似）。
 3. 与 TASK-9.04 contract 扩展联动，保证 freeze/settlement 不受 DTO 扩展破坏。
 

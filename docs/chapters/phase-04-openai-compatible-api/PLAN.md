@@ -1,5 +1,7 @@
 # Phase 4 Plan - OpenAI-compatible API
 
+历史说明：本文件保留 Phase 4 当时的阶段规划。代码目录已在后续阶段按协议族重构，本文只维护必要的有效链接；当前架构说明以 [../../architecture/PROJECT_STRUCTURE.md](../../architecture/PROJECT_STRUCTURE.md) 和后续阶段状态为准。
+
 ## 目标
 
 对外提供 OpenAI-compatible HTTP API 入口，让用户可以用接近 OpenAI SDK 的方式调用 Unio API。
@@ -14,9 +16,9 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| [internal/app/gatewayapi/openai_dto.go](../../../internal/app/gatewayapi/openai_dto.go) | 对外 OpenAI-compatible DTO。 |
-| [internal/app/gatewayapi/chat_completions_handler.go](../../../internal/app/gatewayapi/chat_completions_handler.go) | `/v1/chat/completions` HTTP handler。 |
-| [internal/app/gatewayapi/models_handler.go](../../../internal/app/gatewayapi/models_handler.go) | `/v1/models` HTTP handler。 |
+| [internal/app/gatewayapi/openai/chatcompletions/dto.go](../../../internal/app/gatewayapi/openai/chatcompletions/dto.go) | 对外 OpenAI-compatible DTO。 |
+| [internal/app/gatewayapi/openai/chatcompletions/handler.go](../../../internal/app/gatewayapi/openai/chatcompletions/handler.go) | `/v1/chat/completions` HTTP handler。 |
+| [internal/app/gatewayapi/openai/models/handler.go](../../../internal/app/gatewayapi/openai/models/handler.go) | `/v1/models` HTTP handler。 |
 | [internal/app/gatewayapi/router.go](../../../internal/app/gatewayapi/router.go) | HTTP route 装配。 |
 | [internal/platform/httpx/json.go](../../../internal/platform/httpx/json.go) | JSON decode。 |
 | [internal/platform/httpx/response.go](../../../internal/platform/httpx/response.go) | JSON/error response。 |
@@ -153,7 +155,7 @@ go test ./internal/platform/httpx ./internal/app/gatewayapi
 
 1. [internal/platform/httpx/json.go](../../../internal/platform/httpx/json.go)
 2. [internal/platform/httpx/response.go](../../../internal/platform/httpx/response.go)
-3. [internal/app/gatewayapi/chat_completions_handler.go](../../../internal/app/gatewayapi/chat_completions_handler.go)
+3. [internal/app/gatewayapi/openai/chatcompletions/handler.go](../../../internal/app/gatewayapi/openai/chatcompletions/handler.go)
 
 关联 GAP：
 

@@ -1,5 +1,7 @@
 # Phase 5 Plan - Adapter 边界
 
+历史说明：本文件保留 Phase 5 当时的阶段规划。Phase 10 后 adapter contract 已按协议族拆分，本文只维护必要的有效链接；当前架构说明以后续阶段状态和 [../../architecture/PROJECT_STRUCTURE.md](../../architecture/PROJECT_STRUCTURE.md) 为准。
+
 ## 目标
 
 建立 Unio 内部 adapter contract，让 gateway 不依赖 provider-specific HTTP 细节。
@@ -25,8 +27,8 @@ adapter 不负责：
 
 | 文件 | 作用 |
 | --- | --- |
-| [internal/core/adapter/chat.go](../../../internal/core/adapter/chat.go) | 内部 chat adapter contract。 |
-| [internal/core/adapter/registry.go](../../../internal/core/adapter/registry.go) | adapter registry。 |
+| [internal/core/adapter/openai/contract.go](../../../internal/core/adapter/openai/contract.go) | OpenAI chat adapter contract。 |
+| [internal/core/adapter/openai/registry.go](../../../internal/core/adapter/openai/registry.go) | OpenAI adapter registry。 |
 | [internal/core/adapter/sse/reader.go](../../../internal/core/adapter/sse/reader.go) | 项目级 SSE event reader。 |
 | [internal/core/adapter/openai/dto.go](../../../internal/core/adapter/openai/dto.go) | OpenAI 上游 wire DTO。 |
 | [internal/core/adapter/openai/chat.go](../../../internal/core/adapter/openai/chat.go) | OpenAI adapter 实现。 |
@@ -47,8 +49,8 @@ adapter 不负责：
 
 已完成：
 
-1. 盘点 [internal/app/gatewayapi/openai_dto.go](../../../internal/app/gatewayapi/openai_dto.go) 中 chat request 当前已接收字段。
-2. 将 `temperature`、`top_p`、`max_tokens`、`presence_penalty`、`frequency_penalty`、`stop`、`user` 加入 [internal/core/adapter/chat.go](../../../internal/core/adapter/chat.go)。
+1. 盘点 [internal/app/gatewayapi/openai/chatcompletions/dto.go](../../../internal/app/gatewayapi/openai/chatcompletions/dto.go) 中 chat request 当前已接收字段。
+2. 将 `temperature`、`top_p`、`max_tokens`、`presence_penalty`、`frequency_penalty`、`stop`、`user` 加入 [internal/core/adapter/openai/contract.go](../../../internal/core/adapter/openai/contract.go)。
 3. 将这些可透传字段映射到 [internal/core/adapter/openai/dto.go](../../../internal/core/adapter/openai/dto.go)。
 4. 非流式和流式 OpenAI adapter 均会把可透传字段写入上游请求 body。
 5. optional scalar 使用指针保留显式零值。
