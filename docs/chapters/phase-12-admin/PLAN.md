@@ -1,10 +1,10 @@
-# Phase 11 Plan - 后台管理
+# Phase 12 Plan - 后台管理
 
 ## 目标
 
 提供后台管理能力，让 user、project、API key、provider、channel、model、price、request logs 和 billing logs 可以被安全管理。
 
-阶段 11 不是“做几个 CRUD 页面”，而是把前面阶段的数据库业务数据真正变成可运营系统：
+阶段 12 不是“做几个 CRUD 页面”，而是把前面阶段的数据库业务数据真正变成可运营系统：
 
 1. 管理员可以管理用户和项目。
 2. 用户或管理员可以管理 API key。
@@ -27,8 +27,8 @@
 
 ## 任务
 
-<a id="task-11-01-admin-auth"></a>
-### TASK-11.01 Admin auth
+<a id="task-12-01-admin-auth"></a>
+### TASK-12.01 Admin auth
 
 状态：planned
 
@@ -53,8 +53,8 @@
 2. customer API key 不能访问后台。
 3. 后台 JWT 不能用于 `/v1/chat/completions`。
 
-<a id="task-11-02-credential-management"></a>
-### TASK-11.02 Credential 管理
+<a id="task-12-02-credential-management"></a>
+### TASK-12.02 Credential 管理
 
 状态：planned
 
@@ -79,8 +79,8 @@
 - [GAP-6-001](../../production/TODO_REGISTER.md#gap-6-001)
 
 
-<a id="task-11-03-provider-channel-admin"></a>
-### TASK-11.03 Provider/channel/model/price 管理
+<a id="task-12-03-provider-channel-admin"></a>
+### TASK-12.03 Provider/channel/model/price 管理
 
 状态：planned
 
@@ -106,8 +106,8 @@
 2. [TASK-6.04](../phase-06-model-channel-routing/PLAN.md#task-6-04-routing-policy)
 3. [TASK-7.22](../phase-07-billing-ledger/PLAN.md#task-7-22-price-effective-window)
 
-<a id="task-11-04-request-billing-dashboard"></a>
-### TASK-11.04 Request 与 billing dashboard
+<a id="task-12-04-request-billing-dashboard"></a>
+### TASK-12.04 Request 与 billing dashboard
 
 状态：planned
 
@@ -135,8 +135,8 @@
 3. [TASK-7.21](../phase-07-billing-ledger/PLAN.md#task-7-21-error-usage-audit)
 4. [TASK-8.02](../phase-08-observability-stability/PLAN.md#task-8-02-metrics)
 
-<a id="task-11-05-customer-project-billing-controls"></a>
-### TASK-11.05 客户、项目与预算控制
+<a id="task-12-05-customer-project-billing-controls"></a>
+### TASK-12.05 客户、项目与预算控制
 
 状态：planned
 

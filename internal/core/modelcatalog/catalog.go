@@ -30,7 +30,7 @@ func NewService(store Store) *Service {
 
 // ListAvailableModels 返回当前 project 可见的 OpenAI-compatible 模型。
 func (s *Service) ListAvailableModels(ctx context.Context, projectID int64) ([]Model, error) {
-	// TODO(阶段6/production): [GAP-6-006] /v1/models 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束或专属 channel 策略；阶段 7 authorization/余额冻结和阶段 11 项目策略管理前；与 routing 共用 project/channel policy，预算可用性由 reservation 统一判断。
+	// TODO(阶段6/production): [GAP-6-006] /v1/models 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束或专属 channel 策略；阶段 7 authorization/余额冻结和阶段 12 项目策略管理前；与 routing 共用 project/channel policy，预算可用性由 reservation 统一判断。
 	rows, err := s.store.ListAvailableModelsForProject(ctx, projectID)
 	if err != nil {
 		return nil, failure.Wrap(

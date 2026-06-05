@@ -69,7 +69,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		return nil, err
 	}
 
-	// TODO(阶段6/production): [GAP-6-003] 后台写入 channel.protocol + channel.adapter_key 时仍缺少 registry 校验，可能把不可运行的复合键写入业务数据；开放后台 provider/channel 管理前；在阶段 11 provider/channel CRUD 写入路径校验复合键必须存在于 adapter registry。
+	// TODO(阶段6/production): [GAP-6-003] 后台写入 channel.protocol + channel.adapter_key 时仍缺少 registry 校验，可能把不可运行的复合键写入业务数据；开放后台 provider/channel 管理前；在阶段 12 provider/channel CRUD 写入路径校验复合键必须存在于 adapter registry。
 	providerAdapterPreflight := NewProviderAdapterPreflight(queries, adapterRegistry)
 	if err := providerAdapterPreflight.ValidateEnabledChannelBindings(ctx); err != nil {
 		return nil, err

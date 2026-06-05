@@ -85,7 +85,7 @@
 计划处理时机：
 
 ```text
-阶段 11 前置小节，进入后台 channel 管理和凭据管理前。
+阶段 12 前置小节，进入后台 channel 管理和凭据管理前。
 ```
 
 关联 GAP：
@@ -119,11 +119,11 @@
 7. 启动时校验复合绑定存在于双协议 adapter registry；具体 operation capability 由阶段 10 lifecycle 过滤。
 8. preflight 失败时返回 `bootstrap_*` failure code，并携带 channel_id、provider_slug、protocol、adapter_key 和 capability 安全字段。
 9. server app wiring 已收敛到 `internal/bootstrap.NewGatewayServerApp`，`cmd/gateway-server/main.go` 只保留 config、资源启动、HTTP server lifecycle 和退出信号处理。
-10. 阶段 10 已把 runtime 绑定升级为 channel.protocol + channel.adapter_key；后台写入 registry 校验推迟到阶段 11 provider/channel CRUD。
+10. 阶段 10 已把 runtime 绑定升级为 channel.protocol + channel.adapter_key；后台写入 registry 校验推迟到阶段 12 provider/channel CRUD。
 
 计划实现：
 
-1. 阶段 11 后台 provider/channel CRUD 写入 channel.protocol + channel.adapter_key 时校验 adapter 必须存在于对应协议 registry。
+1. 阶段 12 后台 provider/channel CRUD 写入 channel.protocol + channel.adapter_key 时校验 adapter 必须存在于对应协议 registry。
 
 关联 GAP：
 
@@ -157,7 +157,7 @@
 计划实现：
 
 1. 阶段 7 reservation/余额冻结 统一处理预算约束。
-2. 阶段 11 项目策略管理处理 project 禁用、专属 channel 和后台配置入口。
+2. 阶段 12 项目策略管理处理 project 禁用、专属 channel 和后台配置入口。
 
 关联 GAP：
 

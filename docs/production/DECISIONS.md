@@ -387,7 +387,7 @@ tools、thinking、usage、stream 和错误结构差异明显。
 
 ```text
 Phase 10 按 docs/chapters/phase-10-dual-protocol-gateway/ 实现。
-原阶段 10 后台管理顺延为阶段 11。
+原阶段 10 后台管理先顺延为阶段 11，后又顺延为阶段 12（阶段 11 改为 OpenAI Responses API ingress，见 DEC-014）。
 DEC-009 的 OpenAI-first 原则保留为历史决策，其中“gateway 不写 vendor 分支”
 和“响应翻译收口 adapter”继续有效；“唯一客户契约”由本决策替代。
 ```
@@ -579,4 +579,80 @@ docs/chapters/phase-10-dual-protocol-gateway/DEEPSEEK_ANTHROPIC_MAPPING.md
   - 测试由「拒绝未登记 beta」改为「接受任意 beta（含未登记/逗号列表）并继续调用 service」。
 
 取代 TASK-10.11 实现期间「ingress 仅接受登记 beta」的临时设计；DEC-010 / DEC-012 边界不变。
+```
+
+## DEC-014 OpenAI Responses ingress 下转 Chat Completions 桥接
+
+状态：accepted
+
+决策：
+
+```text
+Unio Gateway 新增第三个公开操作 POST /v1/responses（OpenAI Responses API，Codex CLI 主入口），
+作为阶段 11 商业级、生产级能力，排在后台管理（阶段 12）之前。
+它是 ingress-only 协议：在 gateway 内部把 Responses 请求下转到既有内部 OpenAI Chat 契约
+（core/adapter/openai.ChatRequest），复用 Phase 10 已验收的 OpenAI Chat 上游、adapter registry
+capability、routing、authorization、attempt、settlement、recovery 与 ResponseFacts。
+
+不新增上游 Responses adapter：DeepSeek 及绝大多数第三方上游只提供 Chat Completions，没有
+Responses endpoint，因此 Unio 不去对接任何 provider 的 Responses 上游，而是在内部做
+responses-to-chat 双向翻译（请求下转 + 响应/SSE 上转）。
+
+边界沿用 DEC-010：请求协议分离、响应协议分离、账务事实统一、商业生命周期统一。Responses 公开
+DTO 独立维护，不并入 Chat DTO，也不进 billing。
+
+第一版无状态：
+  - 只支持 store=false 语义；Codex 对第三方 provider 默认每轮回传完整 input。
+  - previous_response_id、server-side store=true、responses retrieve/delete/input_items 不实现。
+  - Responses 专属字段（store/include/truncation/prompt_cache_*）在出站 Drop 并记内部审计。
+
+模型指定：复用 Phase 6 routing + model catalog，客户请求的 model 即 Unio 模型目录 model_id，
+经 IngressProtocol=openai routing 命中 channel 的 upstream_model（DeepSeek）。Unio 不在翻译层
+硬编码 provider 模型名、不静默替换客户模型；未知模型返回 Responses model_not_found。模型别名
+（Codex 默认模型名 → Unio 上游模型）与后台可视化管理分别归 GAP-11-006 与阶段 12。
+
+账务零改动：上游仍是一次 Chat Completions 调用，ResponseFacts / usage.Facts / 价格快照 /
+成本快照 / recovery 全部复用，不新增账务 schema。唯一新增是 requestlog.Operation="responses"，
+用于在审计与 metrics 中区分 Responses 请求。
+
+“第一版无状态” 是经过权衡的生产范围决策（Codex 对第三方 provider 默认 store=false 并每轮回传
+完整 input），不是质量妥协；ingress、响应、流式、错误、usage、工具/reasoning 必须按生产标准完整
+实现并黑盒验收。
+```
+
+翻译要点：
+
+```text
+请求（Responses → 内部 ChatRequest）：
+  input(string|items[]) → messages；function_call/function_call_output → assistant.tool_calls/tool message；
+  instructions → 顶部 system；tools 扁平→嵌套；tool_choice 归一；reasoning.effort→reasoning_effort；
+  text.format→response_format；max_output_tokens→max_tokens。
+响应（内部 ChatResponse/Chunk → Responses）：
+  output items(reasoning/message/function_call)；usage 字段名转换；finish_reason→status；
+  流式翻译成命名事件状态机（response.created → output_item/content_part/output_text.delta/
+  function_call_arguments.delta → ... → response.completed），带单调 sequence_number。
+Codex 专属：custom/grammar 工具(apply_patch) 与 local_shell 在 Chat 无等价，按 convert→function/Drop
+  处理；Responses 内置工具(web_search 等) 第一版不真实执行。
+```
+
+原因：
+
+```text
+1. Codex CLI 固定用 Responses API（wire_api="responses"），而 DeepSeek 等上游只懂 Chat Completions；
+   社区通行做法是中间放一个 Responses↔Chat 翻译代理。Unio 把这层翻译收进 gateway，复用既有计费、
+   审计、fallback 与 settlement，比让用户额外跑本地代理更可控、可计费、可审计。
+2. Responses 与 Chat Completions 同属 OpenAI 协议族，语义可逆映射；下转到内部 Chat 契约能直接
+   复用 Phase 10 全部基础设施，无需新协议族、无需账务改造。
+3. 任何已实现 openai.ChatAdapter 的上游都自动获得 /v1/responses 能力，桥接不依赖具体 provider。
+```
+
+影响：
+
+```text
+新增子包 app/gatewayapi/openai/responses 与 service/gateway/openai/responses（与 chatcompletions 对称，
+不在协议族根包平铺）；adapter/openai 完全复用。requestlog 新增 OperationResponses。
+DEC-010/DEC-011/DEC-012/DEC-013 边界不变。
+实现与验收以 docs/chapters/phase-11-openai-responses-api/ 为准；字段映射以该目录
+RESPONSES_CHAT_BRIDGE.md 为准。无状态、custom 工具、内置工具、模型别名等欠账登记为
+GAP-11-001 ~ GAP-11-006。
 ```

@@ -6,14 +6,15 @@
 
 ## 当前主线
 
-当前主线是阶段 11 Admin API 设计与实现准备。
+当前主线是阶段 11 OpenAI Responses API ingress（Codex 兼容，生产级）设计与实现准备。后台管理已顺延为阶段 12，排在其后。
 
 阅读顺序：
 
 1. [../PROJECT_STATUS.md](../PROJECT_STATUS.md)
-2. [phase-11-admin/PLAN.md](phase-11-admin/PLAN.md)
-3. [phase-11-admin/STATUS.md](phase-11-admin/STATUS.md)
-4. [phase-11-admin/ACCEPTANCE.md](phase-11-admin/ACCEPTANCE.md)
+2. [phase-11-openai-responses-api/PLAN.md](phase-11-openai-responses-api/PLAN.md)
+3. [phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md](phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md)
+4. [phase-11-openai-responses-api/STATUS.md](phase-11-openai-responses-api/STATUS.md)
+5. [phase-11-openai-responses-api/ACCEPTANCE.md](phase-11-openai-responses-api/ACCEPTANCE.md)
 
 阶段 10 已完成并作为双协议 Gateway 的当前公开 API 基线。阶段 1 到阶段 9 的文档保留阶段历史、欠账来源和任务锚点；如果历史路径和当前代码路径不一致，以当前阶段文档、TODO register 和实际代码为准。
 
@@ -68,7 +69,8 @@ ACCEPTANCE.md
 | 阶段 8 | [PLAN](phase-08-observability-stability/PLAN.md) | [STATUS](phase-08-observability-stability/STATUS.md) | [ACCEPTANCE](phase-08-observability-stability/ACCEPTANCE.md) |
 | 阶段 9 | [PLAN](phase-09-openai-protocol-parity/PLAN.md) | [STATUS](phase-09-openai-protocol-parity/STATUS.md) | [ACCEPTANCE](phase-09-openai-protocol-parity/ACCEPTANCE.md) |
 | 阶段 10 | [PLAN](phase-10-dual-protocol-gateway/PLAN.md) | [STATUS](phase-10-dual-protocol-gateway/STATUS.md) | [ACCEPTANCE](phase-10-dual-protocol-gateway/ACCEPTANCE.md) |
-| 阶段 11 | [PLAN](phase-11-admin/PLAN.md) | [STATUS](phase-11-admin/STATUS.md) | [ACCEPTANCE](phase-11-admin/ACCEPTANCE.md) |
+| 阶段 11 | [PLAN](phase-11-openai-responses-api/PLAN.md) | [STATUS](phase-11-openai-responses-api/STATUS.md) | [ACCEPTANCE](phase-11-openai-responses-api/ACCEPTANCE.md) |
+| 阶段 12 | [PLAN](phase-12-admin/PLAN.md) | [STATUS](phase-12-admin/STATUS.md) | [ACCEPTANCE](phase-12-admin/ACCEPTANCE.md) |
 
 ## 状态定义
 
