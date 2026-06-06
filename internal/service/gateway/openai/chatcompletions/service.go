@@ -38,6 +38,7 @@ type ChatCompletionService struct {
 	metrics         lifecycle.MetricsRecorder
 	breaker         lifecycle.ChannelBreaker
 	lifecycle       *lifecycle.RequestLifecycle
+	attemptRunner   *lifecycle.AttemptRunner
 }
 
 // NewChatCompletionService 创建聊天补全 gateway service。
@@ -69,6 +70,16 @@ func NewChatCompletionService(
 		panic("gateway: chat authorizer service is required")
 	}
 
+	requestLifecycle := lifecycle.NewRequestLifecycle(lifecycle.RequestLifecycleParams{
+		RequestLog:      requestLog,
+		Authorizer:      chatAuthorizer,
+		Metrics:         metricsRecorder,
+		Breaker:         breaker,
+		IngressProtocol: requestlog.ProtocolOpenAI,
+		Operation:       requestlog.OperationChatCompletions,
+		SafeMessage:     chatCompletionsSafeMessage,
+	})
+
 	return &ChatCompletionService{
 		router:          router,
 		registry:        registry,
@@ -79,15 +90,8 @@ func NewChatCompletionService(
 		chatAuthorizer:  chatAuthorizer,
 		metrics:         metricsRecorder,
 		breaker:         breaker,
-		lifecycle: lifecycle.NewRequestLifecycle(lifecycle.RequestLifecycleParams{
-			RequestLog:      requestLog,
-			Authorizer:      chatAuthorizer,
-			Metrics:         metricsRecorder,
-			Breaker:         breaker,
-			IngressProtocol: requestlog.ProtocolOpenAI,
-			Operation:       requestlog.OperationChatCompletions,
-			SafeMessage:     chatCompletionsSafeMessage,
-		}),
+		lifecycle:       requestLifecycle,
+		attemptRunner:   lifecycle.NewAttemptRunner(requestLifecycle, retryClassifier, chatSettlement),
 	}
 }
 

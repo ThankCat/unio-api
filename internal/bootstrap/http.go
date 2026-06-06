@@ -7,6 +7,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
 	gatewayanthropic "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
 	gatewayopenai "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
+	gatewayresponses "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/platform/config"
@@ -23,6 +24,7 @@ func NewHTTPHandler(
 	redisClient redis.Cmdable,
 	cfg config.Config,
 	chatCompletionService gatewayopenai.ChatCompletionService,
+	responsesService gatewayresponses.ResponsesService,
 	messagesService gatewayanthropic.MessagesService,
 	metricsRecorder *metrics.Metrics,
 ) http.Handler {
@@ -42,6 +44,7 @@ func NewHTTPHandler(
 		RateLimitFailurePolicy: cfg.RateLimit.FailurePolicy,
 
 		ChatCompletionService: chatCompletionService,
+		ResponsesService:      responsesService,
 		MessagesService:       messagesService,
 		ModelCatalogService:   modelCatalogService,
 	}

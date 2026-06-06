@@ -70,7 +70,7 @@ type channelBreakerState struct {
 //
 // 设计取舍：
 //   - 进程内状态，每个 gateway 实例独立保护自己，不依赖共享存储；
-//     跨实例共享健康和后台手动恢复属于阶段 12 admin 能力。
+//     跨实例共享健康和后台手动恢复属于阶段 13 admin 能力。
 //   - 使用固定时间窗统计错误率，窗口过期清零；实现简单、足够保护上游。
 //   - half-open 通过 inFlight 保证同一时刻只放行一个探测请求。
 type ChannelCircuitBreaker struct {

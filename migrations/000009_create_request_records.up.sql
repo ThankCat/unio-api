@@ -22,7 +22,7 @@ CREATE TABLE request_records (
     ingress_protocol TEXT NOT NULL CHECK (ingress_protocol IN ('openai', 'anthropic')),
 
     -- operation: 客户调用的公开协议操作。--
-    operation TEXT NOT NULL CHECK (operation IN ('chat_completions', 'messages')),
+    operation TEXT NOT NULL CHECK (operation IN ('chat_completions', 'messages', 'responses')),
 
     -- response_model_id: 最终响应使用的模型 ID。--
     response_model_id TEXT,
@@ -84,10 +84,11 @@ CREATE TABLE request_records (
     CONSTRAINT uq_request_records_id_user UNIQUE (id, user_id),
 
     -- 公开协议族与操作必须保持匹配，禁止跨协议隐式 bridge。--
+    -- responses 是 OpenAI 协议族 ingress（Codex），上游仍走 Chat Completions，故归 openai。--
     CONSTRAINT ck_request_records_protocol_operation CHECK (
         (
             ingress_protocol = 'openai'
-                AND operation = 'chat_completions'
+                AND operation IN ('chat_completions', 'responses')
         )
         OR
         (

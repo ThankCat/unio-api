@@ -10,6 +10,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 	anthropicmessages "github.com/ThankCat/unio-api/internal/service/gateway/anthropic/messages"
 	gateway "github.com/ThankCat/unio-api/internal/service/gateway/openai/chatcompletions"
+	responsesgateway "github.com/ThankCat/unio-api/internal/service/gateway/openai/responses"
 )
 
 // NewChatGateway 创建当前 server 进程使用的 chat gateway service。
@@ -70,6 +71,76 @@ func NewChatGateway(
 	}
 
 	return gateway.NewChatCompletionService(
+		router,
+		registry.OpenAI,
+		candidatePreparer,
+		lifecycle.ProviderErrorClassifier{},
+		requestLogStore,
+		chatSettlementExecutor,
+		chatAuthorizationServer,
+		chatMetrics,
+		channelBreaker,
+	)
+}
+
+// NewResponsesGateway 创建 OpenAI Responses API gateway service（DEC-014 responses-to-chat 桥接）。
+//
+// 复用与 chat 相同的 OpenAI routing / adapter / settlement / authorization；只把 ingress operation
+// 落为 responses，候选 fallback 计费循环走共享 lifecycle.AttemptRunner。本阶段不牵扯 Anthropic Messages。
+// metricsRecorder 可为 nil，表示不采集业务指标。
+func NewResponsesGateway(
+	db lifecycle.ChatTxBeginner,
+	queries *sqlc.Queries,
+	router responsesgateway.ChatRouter,
+	registry *lifecycle.AdapterRegistry,
+	workerConfig config.WorkerConfig,
+	breakerConfig config.CircuitBreakerConfig,
+	metricsRecorder *metrics.Metrics,
+) *responsesgateway.ResponsesService {
+	if registry == nil {
+		panic("bootstrap: lifecycle adapter registry is required")
+	}
+
+	requestLogStore := requestlog.NewStore(queries)
+	ledgerService := ledger.NewService(db, queries)
+	chatSettlementService := lifecycle.NewChatSettlementService(
+		db,
+		queries,
+		billing.Service{},
+		ledgerService,
+	)
+	chatSettlementRecoveryStore := lifecycle.NewChatSettlementRecoveryStore(
+		queries,
+		workerConfig.SettlementRecoveryInitialDelay,
+	)
+	chatSettlementExecutor := lifecycle.NewRecoverableChatSettlementExecutor(
+		chatSettlementService,
+		chatSettlementRecoveryStore,
+		workerConfig.SettlementRecoverySettleTimeout,
+	)
+	chatAuthorizationServer := lifecycle.NewChatAuthorizationService(
+		queries,
+		billing.Service{},
+		ledgerService,
+	)
+	candidatePreparer := lifecycle.NewExecutor(registry)
+
+	var chatMetrics lifecycle.MetricsRecorder
+	if metricsRecorder != nil {
+		chatMetrics = metricsRecorder
+	}
+
+	var channelBreaker lifecycle.ChannelBreaker
+	if breakerConfig.Enabled {
+		channelBreaker = lifecycle.NewChannelCircuitBreaker(lifecycle.ChannelCircuitBreakerConfig{
+			Window:       breakerConfig.Window,
+			MinRequests:  breakerConfig.MinRequests,
+			FailureRatio: breakerConfig.FailureRatio,
+			OpenDuration: breakerConfig.OpenDuration,
+		})
+	}
+
+	return responsesgateway.NewResponsesService(
 		router,
 		registry.OpenAI,
 		candidatePreparer,

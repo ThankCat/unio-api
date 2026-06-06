@@ -3,3 +3,6 @@
 .venv-*/
 .idea/
 .vscode/
+
+# 本地构建产物：codexcapture 抓包工具二进制（源码在 tools/codexcapture）
+/codexcapture

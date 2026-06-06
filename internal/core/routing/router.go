@@ -135,7 +135,7 @@ func IsSupportedProtocol(protocol string) bool {
 }
 
 func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest) ([]sqlc.FindRouteCandidatesRow, error) {
-	// TODO(阶段6/production): [GAP-6-005] routing 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束或专属 channel 策略；阶段 7 authorization/余额冻结和阶段 12 项目策略管理前；预算约束进入 reservation，project 禁用和 project_channel policy 进入后台管理策略。
+	// TODO(阶段6/production): [GAP-6-005] routing 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束、专属 channel 策略或模型能力闸门；阶段 7 authorization/余额冻结、阶段 12 capability architecture（运行时 capability filter）和阶段 13 项目策略管理前；预算约束进入 reservation，project 禁用和 project_channel policy 进入后台管理策略，capability filter 由阶段 12 实现。
 	rows, err := r.store.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: req.ModelID,
 		IngressProtocol:  req.IngressProtocol,

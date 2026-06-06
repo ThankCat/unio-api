@@ -30,6 +30,7 @@ type Operation string
 const (
 	OperationChatCompletions Operation = "chat_completions"
 	OperationMessages        Operation = "messages"
+	OperationResponses       Operation = "responses"
 )
 
 // DeliveryStatus 表示客户响应交付状态，与 settlement 状态分开记录。

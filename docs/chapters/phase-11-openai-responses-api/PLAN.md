@@ -83,6 +83,40 @@ service/gateway/openai/responses/responses_response_map.go 内部 openai.ChatRes
 service/gateway/openai/responses/responses_stream.go       内部 openai.ChatStreamChunk → Responses 命名事件状态机
 ```
 
+## 上游与 Drop 职责划分（DeepSeek 为首版具体上游）
+
+首版具体上游就是 **DeepSeek**，复用 Phase 10 已实现并验收的
+[`internal/core/adapter/openai/deepseek`](../../../internal/core/adapter/openai/deepseek)
+（`adapter_key="deepseek"`，已注册 `Chat` / `StreamChat` / `ChatInputTokenizer`，含
+[DEEPSEEK_OPENAI_MAPPING.md](../phase-10-dual-protocol-gateway/DEEPSEEK_OPENAI_MAPPING.md)
+与黑盒测试）。本阶段不重写 DeepSeek adapter，但必须把它纳入计划并复核（见 TASK-11.09），
+明确两层职责，避免桥接层与 adapter 重复或漏 Drop：
+
+```text
+桥接层（responses_chat_map）：只做“协议结构翻译”，把 Responses 字段映射到 openai.ChatRequest
+  契约字段——能映射就映射进契约，不在桥接层做 provider 能力裁剪。
+DeepSeek adapter（已实现）：做“provider 能力 Drop”，在出站前 dropUnsupported 清掉 DeepSeek
+  无法转换的字段并记审计。
+```
+
+关键后果：`openai.ChatRequest` 已含 `Store` / `Verbosity` / `PromptCacheKey` / `PromptCacheRetention` /
+`ResponseFormat` / `ParallelToolCalls` / `ReasoningEffort` 等全部 OpenAI 规范字段，DeepSeek adapter
+也已对它们做出站 Drop（`store` / `verbosity` / `prompt_cache_*` / `json_schema` 形态的
+`response_format` / `parallel_tool_calls` / `type=custom` 工具 / 多模态 part / 非白名单 extension）。
+因此桥接层 **不应** 自己硬 Drop 这些字段，而应：
+
+```text
+有 ChatRequest 承载字段的 Responses 字段（store / prompt_cache_* / text.verbosity / text.format /
+  parallel_tool_calls / reasoning.effort）→ Adapt 进 ChatRequest 对应字段，由 DeepSeek adapter 出站 Drop。
+  好处：provider 无关，未来换上能支持这些字段的上游可直接 Pass，不丢能力。
+无 ChatRequest 承载字段的 Responses 专属字段（previous_response_id / include / truncation /
+  item_reference）→ 桥接层 Drop（契约里无处安放，且无状态），记内部审计。
+```
+
+Codex `apply_patch`（`type=custom` grammar 工具）特别说明：若桥接层原样映射为
+`ChatTool{Type:"custom"}`，DeepSeek adapter 的 `dropCustomTools` 会把它整条 Drop，Codex 编辑能力失效；
+若要在 DeepSeek 上保留编辑能力，必须在桥接层 convert→function（见 GAP-11-002，TASK-11.08 冻结）。
+
 ## 模型指定策略
 
 > 业务诉求第 3 步 “unio 内部使用支持的模型，具体怎么指定还需要讨论” 在此收口。
@@ -136,41 +170,137 @@ Responses 请求复用同一条 routing：`IngressProtocol=openai` + 客户 `mod
 > 红线：Unio **不静默替换** 客户请求的模型；模型映射只来自运营配置的 catalog/channel 事实，
 > 不在 responses 翻译层硬编码 provider 模型名。
 
+## Responses API 接口范围
+
+OpenAI Responses API 不止 `POST /v1/responses` 一个 endpoint。下表是本阶段对全部官方接口的
+生产范围决策（决策依据：Codex CLI 对第三方 provider 的实际调用面 + DeepSeek 能力边界 + Unio
+无状态商业承诺）。完整能力声明见 [CAPABILITY_MATRIX.md](CAPABILITY_MATRIX.md)。
+
+| Endpoint | Codex 是否调用 | 本阶段处理 | 任务 / GAP |
+| --- | --- | --- | --- |
+| `POST /v1/responses` | ✅ 主路径 | **完整实现**（非流式 + 流式 + tools + reasoning + 错误安全） | TASK-11.04 ~ 11.10 |
+| `POST /v1/responses/compact` | ⚠️ 长会话超阈值时调用 | **降级实现**：无状态翻译为一次 DeepSeek 摘要请求 + 合成可回传 `compaction` item（不等价于 OpenAI 加密语义） | TASK-11.11 / GAP-11-007 |
+| `POST /v1/responses/input_tokens` | ⚠️ 偶尔预检 | **本地估算实现**：复用 `ChatInputTokenizer`，先把 Responses input 翻译为 Chat messages 再估算 | TASK-11.12 / GAP-11-008 |
+| `GET /v1/responses/{id}` | ❌ Codex 不发 | **501 stateless**，返回 Responses 原生 error，提示 stateless 边界 | TASK-11.13 / GAP-11-009 |
+| `DELETE /v1/responses/{id}` | ❌ | **501 stateless** | TASK-11.13 / GAP-11-009 |
+| `GET /v1/responses/{id}/input_items` | ❌ | **501 stateless** | TASK-11.13 / GAP-11-009 |
+| `POST /v1/responses/{id}/cancel` | ❌（仅对 `background=true` 异步任务有效） | **501 stateless** | TASK-11.13 / GAP-11-009 |
+
+“501 stateless” 不是静默拒绝：返回 Responses 原生 error shape，`code` 显式标注本阶段为
+无状态商业承诺，引导客户用每轮回传完整 `input` 的方式，与 Codex 默认行为一致。
+
+## 结构性不可桥接能力（公开能力边界）
+
+下列能力是 **OpenAI 专属能力**，DeepSeek 等任何第三方上游结构上无法等价提供。**本阶段不假装实现**，
+统一收口为公开能力边界，由 [CAPABILITY_MATRIX.md](CAPABILITY_MATRIX.md) 声明，并按以下策略处理：
+
+| 能力 | 不可桥接原因 | 本阶段策略 |
+| --- | --- | --- |
+| `encrypted_content`（reasoning 跨轮加密透传） | 需 OpenAI 服务端密钥加解密 | 桥接层不生成；ingress 收到 Drop 并记审计（GAP-11-003） |
+| 内置工具 `web_search` / `file_search` / `code_interpreter` / `computer_use` / `image_generation` / `mcp` | 需 OpenAI 服务端真实执行 | ingress 收到 Drop，不调用任何外部能力（GAP-11-004） |
+| Server-side 存储（`store=true` 持久化、retrieve/delete/input_items） | 需服务端会话存储 | 进 ChatRequest 由 DeepSeek adapter 出站 Drop；retrieve 系列 endpoint 501（GAP-11-001 / 11-009） |
+| `background=true` 异步任务 | 需服务端任务队列 | ingress 收到 Reject（合法协议但本阶段不支持，明确报错而非静默成同步） |
+| `prompt`（server-side prompt template 引用） | 需服务端模板存储 | ingress 收到 Drop 并记审计，建议客户内联 prompt |
+| `include:["reasoning.encrypted_content"]` 等输出控制 | 与上同 | ingress 收到 Drop（GAP-11-004） |
+
+这与社区做法一致：**没有任何一个开源 Codex↔Chat 桥实现了这些能力**（LiteLLM/codex-relay/
+codex-deepseek/codex-bridge 全都不做）。Unio 把它做成显式商业承诺，而不是隐性缺陷。
+
 ## 非目标（生产范围边界，非质量妥协）
 
 1. 不新增上游 Responses adapter；DeepSeek 没有 Responses endpoint，本阶段不去对接任何
    provider 的 Responses 上游。
-2. 不实现 **有状态会话**：`previous_response_id`、server-side `store=true` 持久化、
-   `GET/DELETE /v1/responses/{id}`、`/v1/responses/{id}/input_items` 不在本阶段。生产上 Codex 对
-   第三方 provider 默认 `store=false` 并每轮回传完整 `input`（与社区代理一致），因此无状态即可
-   支撑完整 Codex 工作流。见 GAP-11-001。
-3. 不实现 Responses 内置工具的真实执行：`web_search` / `file_search` / `code_interpreter` /
-   `computer_use` / `image_generation` / `mcp` 等 server-side tool 不在本阶段真实执行。
-4. 不扩展多模态模型能力。Responses `input_image` / `input_file` 等只做协议面识别；当前上游
+2. 不扩展多模态模型能力。Responses `input_image` / `input_file` 等只做协议面识别；当前上游
    不支持时按 DEC-012 在 adapter 出站 Drop。
-5. 不引入官方 Responses Go SDK 进生产链路（沿用 DEC-011，SDK 仅用于黑盒验收）。
-6. 不改动既有 `/v1/chat/completions` 与 `/v1/messages` 的对外契约和计费事实。
+3. 不引入官方 Responses Go SDK 进生产链路（沿用 DEC-011，SDK 仅用于黑盒验收）。
+4. 不改动既有 `/v1/chat/completions` 与 `/v1/messages` 的对外契约和计费事实。
+5. 不模拟"结构性不可桥接能力"。`encrypted_content` 不自己生成假密文、内置工具不挂任何
+   externally-executed 替代物——保持公开能力边界的诚实性。
 
 “不在本阶段”不等于允许静默丢字段：本阶段对 Responses 请求、非流式响应、流式事件、错误响应、
 usage 与工具/reasoning 的下转/上转必须完整设计、实现并验收；无法转换的合法协议字段按 DEC-012
-在出站 Drop 并记内部审计。
+在出站 Drop 并记内部审计；不可桥接能力按上表显式策略处理。
 
-## 开源参考
+## 开源参考（角色分工与不参考清单）
 
-社区已有多个 “Codex ↔ DeepSeek/OpenAI 兼容上游” 的 Responses↔Chat 翻译代理，可直接对照
-字段映射、流式事件序列、工具与 reasoning 处理。本阶段不抄实现，但用它们作为 wire 行为参考与
-黑盒对照基线：
+社区里没有任何一个项目做到了 Responses 在第三方 provider 上的完美适配——这是结构性不可能。
+但它们各自的取舍、字段映射、事件序列对本阶段有不同的参考价值。**本阶段不复制代码**（许可证 +
+架构都不匹配），只把它们当对应角色的参考材料：
 
-| 项目 | 语言 | 参考价值 |
-| --- | --- | --- |
-| [BerriAI/litellm](https://github.com/BerriAI/litellm) `responses/litellm_completion_transformation/` | Python | 最完整、生产级的 Responses↔Chat 双向转换：请求 `input→messages`、`tools` 扁平→嵌套、`tool_choice` 归一、`reasoning→reasoning_effort`、`text→response_format`、响应 `output` items（message/reasoning/function_call）、usage 字段名转换、流式 `transform_chat_completion_chunk_to_response_api_chunk` 事件状态机。 |
-| [MetaFARS/codex-relay](https://github.com/MetaFARS/codex-relay) | Rust | 轻量 Codex 专用：完整 SSE 事件排序、tool_calls delta 累积成 `function_call` item、并行 tool_call 合并成单条 assistant、reasoning_content 跨轮保留。 |
-| [yangfei4913438/codex-deepseek](https://github.com/yangfei4913438/codex-deepseek)（`ccswitch-deepseek` 端口） | Python | 直接面向 Codex+DeepSeek：`/responses` 入口、`input` items→`messages`、转发 `{base_url}/chat/completions`、SSE 回译。 |
-| [soddygo/codex-convert-proxy](https://github.com/soddygo/codex-convert-proxy) | Rust | 多上游：`developer` role→`system`、保留 function tools 与 `tool_choice`、按 provider 映射 reasoning effort。 |
-| [wujfeng712-ui/codex-bridge](https://github.com/wujfeng712-ui/codex-bridge) | TypeScript | Codex 专用双向桥：流式 SSE、tool calls、thinking 往返、按 provider 翻译 `none|minimal|low|medium|high` effort。 |
+### 主参考（行为照它来）
+
+**[MetaFARS/codex-relay](https://github.com/MetaFARS/codex-relay)（Rust）**
+
+社区里**唯一一个把 Codex 在第三方 provider 上的行为做到生产质量**的项目。本阶段 SSE 状态机、
+tool_call delta 累积、并行 tool 分项、`apply_patch` 处理的设计选择 1:1 学它的思路。
+
+具体借鉴：
+
+- 流式事件先后顺序（`response.created` → `output_item.added` → `content_part.added` →
+  `output_text.delta` → `...done` → `response.completed`）。
+- `sequence_number` 单调与 `item_index` / `content_index` 稳定。
+- Chat `tool_calls[i].function.arguments` 增量合并成 Responses 单个 `function_call` item。
+- `apply_patch`(`type=custom` grammar) → function 单 string 参数。
+- 强制无状态，不碰 `previous_response_id` / `encrypted_content`。
+
+代码用 Go 自然风格重写，不直译 Rust enum + match 形态。
+
+### 辅参考 1（字段映射百科全书）
+
+**[BerriAI/litellm](https://github.com/BerriAI/litellm) `responses/litellm_completion_transformation/`（Python）**
+
+字段映射最全、边角 case 最多的实现。专门用来对照填 [RESPONSES_CHAT_BRIDGE.md](RESPONSES_CHAT_BRIDGE.md)
+的矩阵，确保不漏字段。重点函数：
+
+- `transform_responses_api_input_to_messages`（input items → messages）
+- `_transform_response_input_param_to_chat_completion_message`（单 item → message）
+- `transform_responses_api_tools_to_chat_completion_tools`（tools 扁平→嵌套）
+- `transform_chat_completion_response_to_responses_api_response`（响应回译）
+- `_transform_chat_completion_choices_to_responses_output`（choices → output items）
+
+**只参考字段语义和边角处理，不参考其架构**（LiteLLM 是 provider 无关库，与 Unio 分层完全不同）。
+
+### 辅参考 2（DeepSeek wire 行为 sanity check）
+
+**[yangfei4913438/codex-deepseek](https://github.com/yangfei4913438/codex-deepseek)** /
+**[wujfeng712-ui/codex-bridge](https://github.com/wujfeng712-ui/codex-bridge)**（Python / TypeScript）
+
+社区里**真的对着 DeepSeek 跑通过 Codex** 的代理。只用于黑盒验收阶段，遇到"Codex 抓包出来这字段
+长这样，DeepSeek 实际接受/拒绝什么"时，对照它们的 wire 处理确认我们的翻译没偏。
+
+**代码质量都不高（单文件代理），只参考 wire 细节，不参考代码组织**。
+
+### 备用参考
+
+**[soddygo/codex-convert-proxy](https://github.com/soddygo/codex-convert-proxy)（Rust）**
+
+多上游适配：`developer` role→`system`、按 provider 映射 reasoning effort。如果未来引入第二个
+非 OpenAI 上游（如 Gemini），可对照其 provider 切换策略。本阶段只看一次，不进决策依赖。
+
+### 反缝合怪护栏（明确不参考的部分）
+
+为避免读多了变成"东拼西凑"，下列内容明确**不参考**任何一个开源项目，以 Unio 既有 Phase 9/10
+约定为准：
+
+| 不参考的 | 必须遵循 |
+| --- | --- |
+| 任何项目的错误处理 / 重试 / fallback | Unio 已验收的 `failure.Code` + `UpstreamCategoryOf` + lifecycle |
+| 任何项目的日志 / 审计 / metrics | Unio 已验收的 structured log + Prometheus + requestlog |
+| 任何项目的架构分层 / 文件组织 | 与 `chatcompletions/` 完全对称（已验收的 operation 子包模式） |
+| LiteLLM 的 provider 抽象 / 模型注册 | Unio 已验收的 `adapter/openai` registry + Phase 6 routing |
+| Rust 风格的 enum + match 状态机 | Go 自然的 struct + 方法 + 状态变量 |
+| 任何项目的命名（snake_case 变量等） | Go 标准命名 + Unio 现有命名风格 |
+
+**代码评审一票否决标准**：把作者名遮起来，这段代码看起来像 Unio 模块、像 codex-relay 翻译版，
+还是像 LiteLLM 翻译版？答案必须恒等于"Unio 模块"。
+
+字段映射处可在 `RESPONSES_CHAT_BRIDGE.md` 标注参考来源（如 "对照 LiteLLM transformation.py L###"），
+便于审计与责任追溯，但**不在 `.go` 文件代码里留这些标注**。
 
 完整字段映射矩阵、Codex 实际 wire 行为与已知坑见
-[RESPONSES_CHAT_BRIDGE.md](RESPONSES_CHAT_BRIDGE.md)。
+[RESPONSES_CHAT_BRIDGE.md](RESPONSES_CHAT_BRIDGE.md)。完整能力声明见
+[CAPABILITY_MATRIX.md](CAPABILITY_MATRIX.md)。OpenAI Responses 官方协议字段树与 SSE 事件示例
+见 [docs/protocol/openai_responses.md](../../protocol/openai_responses.md)（本阶段权威字段来源）。
 
 ## 目标目录
 
@@ -252,16 +382,22 @@ input(items[])                    → messages[]，其中：
 instructions                      → 顶部 system/developer message
 max_output_tokens                 → max_tokens / max_completion_tokens
 temperature / top_p / user        → 原样
-parallel_tool_calls               → 原样
+parallel_tool_calls               → ChatRequest.ParallelToolCalls（DeepSeek adapter 出站 Drop）
 tools[{type:function,name,...}]   → tools[{type:function,function:{name,...}}]（扁平→嵌套）
-tools[{type:custom/grammar}]      → 见 GAP-11-002（convert→function 或 Drop）
-tools[{type:web_search/...}]      → 内置工具，本阶段 Drop（无真实执行）
+tools[{type:custom/grammar}]      → 见 GAP-11-002（convert→function 才能在 DeepSeek 存活，否则 adapter dropCustomTools 整条 Drop）
+tools[{type:web_search/...}]      → 内置工具，本阶段桥接层 Drop（无真实执行）
 tool_choice(string / {type:...})  → 归一为 auto/none/required/具名 function
-reasoning:{effort}                → reasoning_effort（上游不支持则 adapter 出站 Drop）
-text:{format}                     → response_format
-store/previous_response_id/include/truncation/prompt_cache_* → Responses 专属，Drop（无状态）
+reasoning:{effort}                → ChatRequest.ReasoningEffort（DeepSeek 行为见 TASK-11.09）
+text:{format}                     → ChatRequest.ResponseFormat（json_schema 由 DeepSeek adapter 出站 Drop）
+text:{verbosity}                  → ChatRequest.Verbosity（DeepSeek adapter 出站 Drop）
+store / prompt_cache_*            → ChatRequest.Store / PromptCache*（DeepSeek adapter 出站 Drop，不在桥接层硬 Drop）
+previous_response_id / include / truncation / item_reference → 无 ChatRequest 承载字段，桥接层 Drop（无状态）
 stream                            → 原样（Codex 恒为 true，并强制 include_usage）
 ```
+
+> 红线：桥接层只做协议结构翻译，能映射进 `ChatRequest` 契约的字段一律 Adapt 进契约，provider 能力
+> 裁剪交给 DeepSeek adapter 出站 `dropUnsupported`（见「## 上游与 Drop 职责划分」）。只有契约里无处
+> 安放的 Responses 专属字段才在桥接层 Drop。
 
 响应（内部 ChatResponse/Chunk → Responses）：
 
@@ -285,30 +421,56 @@ finish_reason        → status(completed/incomplete) + incomplete_details
 <a id="task-11-01-protocol-freeze"></a>
 ### TASK-11.01 Responses 协议参考与字段冻结
 
-状态：planned
+状态：done（协议快照补齐 + 桥接全字段冻结；真实 Codex v0.130 抓包 + codex-rs 源码交叉确认，残留全清零）
 
 目标：
 
 ```text
-落地 docs/protocol/openai_responses.md 参考快照，并把 RESPONSES_CHAT_BRIDGE.md 的每个字段
+完整冻结 docs/protocol/openai_responses.md 参考快照，并把 RESPONSES_CHAT_BRIDGE.md 的每个字段
 冻结为 Pass / Adapt / Drop / Reject。
 ```
 
+已落地（协议快照三文件）：
+
+- ✅ `POST /responses` 完整 body parameters + Returns + 9 段示例：[docs/protocol/openai_responses.md](../../protocol/openai_responses.md)
+- ✅ 完整 streaming events 目录（53 种 + 字段 + lifecycle recipes + Unio×DeepSeek 桥接相关性分级）：[docs/protocol/openai_responses_streaming_events.md](../../protocol/openai_responses_streaming_events.md)
+- ✅ 其余 5 个 endpoint（`compact` / `input_tokens` / retrieve / delete / input_items / cancel）语义 + Unio 处理 + error schema + `compaction` item 形状：[docs/protocol/openai_responses_other_endpoints.md](../../protocol/openai_responses_other_endpoints.md)
+- ✅ BRIDGE 矩阵 §1~§7 结构可定字段全部冻结（§6 `sequence_number` 已冻结为 Adapt）
+
+> 来源说明：官方 `developers.openai.com` API reference 抓取超时，streaming events / error code 用
+> OpenAI Developer Community 整理 + Alibaba Cloud 真实 wire dump + 官方 streaming 指南三源交叉印证，
+> provenance 与残留 `Verify` 在各协议子文件顶部标注。
+
+残留项 —— **已全部清零（真实抓包 + codex-rs 源码，见 [BRIDGE §9](RESPONSES_CHAT_BRIDGE.md)）**：
+
+- ✅ §6 reasoning 流式事件名：冻结为 `response.reasoning_text.*`（`content_index` / `content:[{type:"reasoning_text"}]`，开源模型语义）。
+- ✅ `compact` 请求体 `CompactionInput` / 响应 `{output:[ResponseItem]}`；`input_tokens` 请求子集已确认。
+- ✅ `input_tokens` 返回 `object` 字段名 = `response.input_tokens`（SDK 类型确认）。
+- ✅ Codex 实际请求字段子集 + 新发现（`client_metadata`/`namespace`/全 function 工具/事件消费子集），fixture 已存档。
+
 实现内容：
 
-1. 整理 OpenAI Responses Create 官方字段 + Codex CLI 实际 wire（抓一份真实 Codex `/responses`
-   请求体作为 fixture，识别 `instructions/input/tools/reasoning/text/store/include/...`）。
-2. 对每个请求字段、每类 input item、每类 output item 和每个流式事件给出明确策略。
-3. 标注 Codex 专属坑：`custom`/grammar 工具（apply_patch）、`local_shell` 内置工具、
-   `reasoning.summary`、`text.verbosity`、`store=false` 无状态假设。
-4. 冻结前不开始翻译层生产代码（与 Phase 10 mapping 冻结流程一致）。
+1. ✅ **本任务以协议快照为权威字段来源**（不再 page-fetch 官方文档）；缺失的 5 个 endpoint 与完整
+   streaming events 目录已拆同目录子文件补齐。
+2. ✅ 已抓真实 Codex v0.130.0 `/responses` 请求体 fixture（`internal/blackbox/fixtures/codex/`），
+   对照协议快照识别 Codex 实际字段子集 + 专属坑；输出侧细节用 codex-rs 源码交叉确认。
+3. ✅ 对请求字段、input/output item 与流式事件给出 Pass/Adapt/Drop/Reject 策略（结构可定部分），
+   填进 [RESPONSES_CHAT_BRIDGE.md](RESPONSES_CHAT_BRIDGE.md)。
+4. ✅ 标注 Codex 专属坑（`custom`/grammar、`local_shell`、`namespace`、`client_metadata`、
+   `reasoning.summary`、`text.verbosity`、`store=false` 无状态假设）于 BRIDGE §8。
+5. ✅ 字段映射在 BRIDGE 与协议子文件标注参考来源/provenance（含 codex-rs 源码路径），便于审计。
+6. ✅ 冻结完成，可开始翻译层生产代码（TASK-11.04 起）。
 
-验收：[RESPONSES_CHAT_BRIDGE.md](RESPONSES_CHAT_BRIDGE.md) 无残留 `Verify`。
+验收：
+
+- ✅ [RESPONSES_CHAT_BRIDGE.md](RESPONSES_CHAT_BRIDGE.md) 无残留结构性 `Verify`（§9 残留全部清零）。
+- ✅ 协议快照覆盖本阶段 5 个 endpoint 字段 + 全部流式事件类型。
+- ✅ Codex 真实抓包 fixture 存档可复跑（脱敏待 TASK-11.15）。
 
 <a id="task-11-02-model-spec"></a>
 ### TASK-11.02 模型指定与路由策略冻结
 
-状态：planned
+状态：done（方案 A 冻结在 DEC-014；5 决策点结论见上「模型指定策略」；routing 无 responses 特例；seed 落地并入 TASK-11.09）
 
 目标：
 
@@ -330,7 +492,7 @@ finish_reason        → status(completed/incomplete) + incomplete_details
 <a id="task-11-03-decision-operation"></a>
 ### TASK-11.03 DEC-014 决策与 operation 审计枚举
 
-状态：planned
+状态：done（DEC-014 accepted；`requestlog.OperationResponses` 已加；migration 000009 放开 operation CHECK 并 scratch 库验证通过，sqlc 无 drift。dev 本地库待 drop→up 重建）
 
 实现内容：
 
@@ -344,7 +506,7 @@ finish_reason        → status(completed/incomplete) + incomplete_details
 <a id="task-11-04-responses-ingress"></a>
 ### TASK-11.04 Responses ingress DTO / decode / validation
 
-状态：planned
+状态：done（`internal/app/gatewayapi/openai/responses/` 子包落地：dto/tools/stream_dto/decode/content/validation/response + decode/validation/error 单测全过，vet/build/lint 干净）
 
 实现内容：
 
@@ -362,7 +524,7 @@ finish_reason        → status(completed/incomplete) + incomplete_details
 <a id="task-11-05-request-bridge"></a>
 ### TASK-11.05 Responses → Chat 请求翻译
 
-状态：planned
+状态：done（`internal/service/gateway/openai/responses/responses_chat_map.go` + `responses_content_map.go`：请求映射、messages 组装、tools 扁平/拍平、tool_choice 归一、reasoning/text 映射、契约无承载字段 Drop；13 组单测 + 真实 v0.130 fixture 端到端翻译通过，vet/build/gofmt/lint 干净）
 
 实现内容：
 
@@ -378,7 +540,7 @@ finish_reason        → status(completed/incomplete) + incomplete_details
 <a id="task-11-06-nonstream-orchestration"></a>
 ### TASK-11.06 非流式编排与响应翻译
 
-状态：planned
+状态：done（采纳方案 B：抽出共享 `lifecycle.AttemptRunner`，OpenAI chat 与 responses 复用同一份资金关键候选 fallback 循环；Anthropic Messages 保留自身循环。`internal/service/gateway/openai/responses/service.go` 装配 `ResponsesService`（router/registry/candidates/retryClassifier/requestLog/chatSettlement/chatAuthorizer/metrics/breaker，lifecycle 用 `Operation=OperationResponses`、`IngressProtocol=ProtocolOpenAI`）；`create_response.go` 经 routing→authorization→`AttemptRunner.RunNonStream`(ResolveAdapter 复用 `openai.ChatAdapter`、Invoke 内做 responses→chat 请求翻译并发起一次上游调用)→settlement；`responses_response_map.go` 把 `openai.ChatResponse` 翻译回 Responses `response` 对象。`go build ./...` 与 `go test ./internal/... ./cmd/...` 全过，0 失败。）
 
 实现内容：
 
@@ -401,18 +563,21 @@ finish_reason        → status(completed/incomplete) + incomplete_details
 <a id="task-11-07-stream-statemachine"></a>
 ### TASK-11.07 流式事件状态机
 
-状态：planned
+状态：done（`stream_response.go` 走共享 `AttemptRunner.RunStream`，与 chat 流式同一份资金关键链路（emitted 后禁止 fallback、final usage 缺失处理、tail-error 仍尽力结算）；`responses_stream.go` 的 `streamEncoder` 把内部 `openai.ChatStreamChunk` 翻译成 codex-rs 实测消费子集：`response.created`→`output_item.added`→`output_text.delta`/`reasoning_text.delta`/`function_call_arguments.delta`→`output_item.done`（权威载体）→`response.completed`，单调 `sequence_number`、稳定 output_index、并行 tool_call 分项、MCP namespace 回填。SSE 帧编码在 `gatewayapi/openai/responses` handler；HTTP handler stream 用例已改为真 SSE 断言。测试全过。补齐「SDK 完整性」事件（content_part.*、*.done 等）留 TASK-11.08。）
 
 实现内容：
 
 1. `responses_stream.go`：把内部 `openai.ChatStreamChunk` 流翻译成 Responses 命名事件序列：
-   `response.created` → `response.in_progress` → `response.output_item.added` →
-   `response.content_part.added` → `response.output_text.delta`（文本）/
-   `response.reasoning_summary_text.delta`（reasoning_content）/
-   `response.function_call_arguments.delta`（tool_calls delta 累积）→ 对应 `.done` →
-   `response.output_item.done` → `response.completed`（含完整 response + usage）。
+   `response.created` → `response.output_item.added` → `response.output_text.delta`（文本）/
+   `response.reasoning_text.delta`（reasoning_content，带 `content_index`）/
+   tool_calls delta 累积 → **`response.output_item.done`（权威载体：完整 message / reasoning
+   `content:[{type:"reasoning_text"}]` / function_call `{call_id,name,arguments}`）** →
+   `response.completed`（含完整 response + usage）。
+   - codex-rs 源码确认 Codex 仅消费上述事件子集；`in_progress` / `content_part.*` / `output_text.done` /
+     `*.done`(reasoning) / `function_call_arguments.*` 对 Codex 可选（可发以兼容标准 SDK）。
 2. 每个事件带单调 `sequence_number`；item/content_part 索引稳定。
-3. tool_calls 跨 chunk 增量累积成完整 `function_call` item；并行 tool_call 正确分项。
+3. tool_calls 跨 chunk 增量累积成完整 `function_call` item（**最终 args 必须落在 `output_item.done`**）；
+   并行 tool_call 正确分项；MCP `namespace` 工具回填 `namespace` 字段（BRIDGE §3.3）。
 4. 复用共享 stream lifecycle：首个客户可见事件前允许 fallback、之后禁止；有可靠 usage 的 tail
    error 仍 settlement 并记 delivery interrupted；recovery facts 未持久化不写成功终态
    （`response.completed`），改写 Responses `error` / `response.failed` 事件。
@@ -437,8 +602,48 @@ finish_reason        → status(completed/incomplete) + incomplete_details
 
 验收：Codex 工具调用闭环（function_call → function_call_output 续接）端到端可用。
 
-<a id="task-11-09-error-security"></a>
-### TASK-11.09 错误与安全输出
+<a id="task-11-09-deepseek-upstream"></a>
+### TASK-11.09 DeepSeek 上游适配复核与 Codex 工作负载验证
+
+状态：planned
+
+首版具体上游是 DeepSeek，复用已实现并经 Phase 10 验收的 `adapter/openai/deepseek`，不重写。
+本任务把它显式纳入计划并复核其在 Responses/Codex 负载下的行为。
+
+实现内容：
+
+1. **首要验证项：`reasoning_effort` 在 DeepSeek 上的真实行为**（高风险，Codex 100% 命中）。
+   背景：Phase 10 `DEEPSEEK_OPENAI_MAPPING.md` 标 `reasoning_effort` 为 Adapt（"low/medium→high,
+   xhigh→max 枚举映射"），但实际代码 `request_wire.go` 是裸 pass-through，`drop.go` 也没列入
+   drop 清单。Phase 10 chat/completions 流量几乎不带这个字段，所以没真正触发；Phase 11 Codex
+   每个请求都带 `reasoning.effort`，**这是 Phase 10 doc/code drift 的首次实战触发**（GAP-11-010）。
+   动作：黑盒打 DeepSeek 验证三种结果——
+     A) DeepSeek 默默接受并忽略 → 现状 pass-through 即可，仅修 mapping doc 与代码一致；
+     B) DeepSeek 报 400 → 在 `dropUnsupported` 增加 `reasoning_effort`（约 1 行）+ 测试；
+     C) 部分值接受部分 400 → 在 `adapt.go` 加 enum 归一（约 10~20 行）+ 测试。
+2. 职责边界复核：确认桥接层只做协议结构翻译、把字段映射进 `openai.ChatRequest`；provider 能力
+   Drop 全部由 DeepSeek adapter 出站 `dropUnsupported` 负责，两层不重复 Drop、不漏 Drop
+   （对照「## 上游与 Drop 职责划分」与 [DEEPSEEK_OPENAI_MAPPING.md](../phase-10-dual-protocol-gateway/DEEPSEEK_OPENAI_MAPPING.md)）。
+3. reasoning 输出复核：`deepseek-reasoner` 的 `reasoning_content` 透传（已是白名单 extension
+   `thinking`，Phase 9/10 已实现），在 Responses 流式 `reasoning_text.delta`（content_index）路径下
+   复跑一次确认无回归。
+4. 工具复核：function tool 在 DeepSeek 上的真实调用闭环。v0.130 实测 `apply_patch` 经 `exec_command`
+   function 走、不发 custom 工具；重点复核 MCP `namespace` 工具拍平 + `namespace` 回填闭环（GAP-11-002）。
+5. 模型落地：seed/运营配置 DeepSeek channel + 可用于 Codex 的 model（`deepseek-chat` /
+   `deepseek-reasoner`），经 routing(`IngressProtocol=openai`) 命中对应 `upstream_model`（衔接 TASK-11.02）。
+6. **Phase 10 doc drift 同步修正**：本任务收尾时把 `DEEPSEEK_OPENAI_MAPPING.md` 里的
+   `reasoning_effort` 一行改成与代码一致的最终状态（Pass / Drop / Adapt 其中之一），关闭 GAP-11-010。
+7. 不重写 DeepSeek adapter；仅在确有 Responses/Codex 专属缺口时，按既有出站 Drop 模式补规则与测试
+   （改动生产代码须用户授权）。
+
+**真实预期**：`reasoning_effort` 大概率 1~20 行小补丁；其余 0 行改动。即"DeepSeek adapter 大体不动"，
+但不是完全不动——前面 PLAN 把它一笔带过会藏起这个 100% 命中风险，本任务的价值就是把它暴露出来。
+
+验收：Responses/Codex 流量经桥接层 → DeepSeek adapter 出站后 wire 合法、能力 Drop 正确、reasoning 与
+tool 行为符合预期；真实 Codex + DeepSeek smoke 跑通。
+
+<a id="task-11-10-error-security"></a>
+### TASK-11.10 错误与安全输出
 
 状态：planned
 
@@ -451,8 +656,98 @@ finish_reason        → status(completed/incomplete) + incomplete_details
 
 验收：错误分类、HTTP status 与安全不泄漏行为与 Phase 10 双协议一致。
 
-<a id="task-11-10-bootstrap-wiring"></a>
-### TASK-11.10 bootstrap 装配与路由
+<a id="task-11-11-compact"></a>
+### TASK-11.11 `POST /v1/responses/compact` 无状态降级实现
+
+状态：planned
+
+背景：Codex 长会话超 `auto_compact_limit` 时会主动调 `/responses/compact`。OpenAI 官方做法依赖
+服务端 `encrypted_content`（用 OpenAI 密钥加解密），DeepSeek 结构上做不到等价实现。社区大多数
+代理直接不做这个 endpoint，导致 Codex 长会话压缩点报错。Unio 第一版用**无状态翻译降级实现**：
+压缩点本质是 "context 摘要 + 一个可回传的 opaque item"，用 DeepSeek 做一次摘要请求即可。
+
+**请求/响应形状（codex-rs 源码确认）**：请求体 `CompactionInput {model, input:[ResponseItem],
+instructions, tools:[], parallel_tool_calls, reasoning?, text?}`；响应是
+`{"output":[ResponseItem,...]}`（`CompactHistoryResponse`，**非完整 response 对象、非 SSE**，
+Codex 把 `output` 直接当作压缩后的新历史）。
+
+实现内容：
+
+1. 落点 `gatewayapi/openai/responses/compact_handler.go` + `service/gateway/openai/responses/compact.go`。
+2. 翻译：解析 `CompactionInput`，把 `input[]` + `instructions` 拼成单条 Chat 请求
+   （system = instructions，如 "总结以下上下文..."），调用既有 OpenAI ChatAdapter
+   （与 `/v1/responses` 主路径共用 routing/lifecycle/计费）。
+3. 合成响应 `{"output":[ResponseItem]}`：第一版返回单条 message item 承载摘要
+   `{type:"message", role:"assistant", content:[{type:"output_text", text:<摘要>}]}`；
+   或自编码 `{type:"compaction", id:"cmp_<gen>", encrypted_content:"<unio-opaque-token>"}`
+   （仅 Unio 可解，不模拟 OpenAI 密文）。
+4. 下一轮 `/v1/responses` 请求里如果出现回传的 `type:"compaction"` item，桥接层在
+   `responses_chat_map.go` 还原成一条 summary system message（透明往返）。
+5. 计费：compact 调用是一次真实 DeepSeek chat 请求，走完整 lifecycle / settlement / 价格快照 /
+   成本快照，不走免费 fast path。
+6. 错误：DeepSeek 摘要失败时返回 Responses 原生 error；不静默 fallback。
+
+边界与限制（GAP-11-007）：
+
+- 不等价于 OpenAI 原生 `compact`（无加密、无服务端状态、压缩质量取决于 DeepSeek 摘要）。
+- 多轮反复压缩可能累积信息损失，CAPABILITY_MATRIX 需明示。
+- 不支持 `context_management.compact_threshold` 服务端自动压缩（仅响应客户显式调用）。
+
+验收：Codex 长会话触发 compact → Unio 返回合法 `{"output":[ResponseItem]}` → Codex 用返回的
+压缩历史继续会话 → 内容连续可对话；账务两次请求都正确入账。
+
+<a id="task-11-12-input-tokens"></a>
+### TASK-11.12 `POST /v1/responses/input_tokens` 本地估算实现
+
+状态：planned
+
+背景：Codex 偶尔预检 token 数（用于 `auto_compact_limit` 时机判断）。官方做法是服务端精确计数；
+Unio 用本地 tokenizer 估算即可——精度跟 Codex 自身本地估算同量级，绝对不够时通过 `/responses`
+的真实 usage 校正。**也可以选择不实现返回 501**（Codex 会回退本地估算）；第一版采纳"本地估算"
+是为商业体验，避免客户撞到 501 觉得"网关有缺陷"。
+
+实现内容：
+
+1. 落点 `gatewayapi/openai/responses/input_tokens_handler.go` +
+   `service/gateway/openai/responses/input_tokens.go`。
+2. 复用 `responses_chat_map.go` 把请求 `input` 翻译为内部 `openai.ChatRequest`。
+3. 路由到 OpenAI registry 取对应 channel 的 `ChatInputTokenizer`（DeepSeek adapter 已实现），
+   估算 prompt token 数。
+4. 返回 `{object:"response.input_tokens", input_tokens: <N>}`。
+5. **不走 routing 候选选择、不调上游、不计费**：只用 tokenizer 估算，是协议无关的本地能力。
+
+边界与限制（GAP-11-008）：
+
+- 与 OpenAI 服务端精确计数有偏差（与 Codex 本地估算同量级）。
+- 不反映上游 prompt cache 命中带来的实际 prompt token 折扣。
+
+验收：合法 Responses input 进入，返回估算 token 数；非法结构返回 Responses 原生 400；不产生
+账务事件、不产生 upstream 调用。
+
+如未来决定改回 501（更"诚实"），只需把 handler 改为返回 `unsupported_endpoint` error，1 处改动。
+
+<a id="task-11-13-unsupported-endpoints"></a>
+### TASK-11.13 有状态 endpoint 501 与异步任务 Reject
+
+状态：planned
+
+实现内容：
+
+1. `gatewayapi/openai/responses/router.go`（或在主 router.go）挂以下 endpoint，全部返回 Responses
+   原生 error（HTTP 501 + `code:"unsupported_endpoint_stateless"`）：
+   - `GET /v1/responses/{response_id}`
+   - `DELETE /v1/responses/{response_id}`
+   - `GET /v1/responses/{response_id}/input_items`
+   - `POST /v1/responses/{response_id}/cancel`
+2. `/v1/responses` 收到 `background:true` 时 Reject（HTTP 400 + `code:"unsupported_background"`,
+   明确报错而非静默转同步）。
+3. error message 引导客户：本阶段无状态商业承诺，请每轮回传完整 `input`（与 Codex 默认行为一致）。
+4. metrics：501 / Reject 计入独立 counter，方便观测真实调用面。
+
+验收：endpoint 都返回稳定的协议原生错误；不调用上游；不产生账务。
+
+<a id="task-11-14-bootstrap-wiring"></a>
+### TASK-11.14 bootstrap 装配与路由
 
 状态：planned
 
@@ -464,11 +759,16 @@ finish_reason        → status(completed/incomplete) + incomplete_details
 3. `router.go` 在 `/v1` 下挂 `POST /v1/responses`，复用 API key auth + rate limit middleware。
 4. 确认 Codex 把 `base_url` 设为 `<unio>/v1`、`api_key` 为 Unio key 后能 drop-in（含
    `GET /v1/models` 已存在）。
+   - ⚠️ 真实抓包发现（v0.130.0）：Codex 刷新模型时期望 `GET /v1/models` 返回 `{"models":[...]}`，
+     而标准 OpenAI / Unio 现有实现返回 `{"object":"list","data":[...]}`，导致 Codex 日志
+     `failed to decode models response: missing field "models"`。本次为**非致命**（Codex 报错后
+     仍继续发 `/responses`），但影响 drop-in 体验。落点：评估为 Codex 兼容补 `models` 形状
+     （或单独 endpoint / UA 嗅探），不破坏标准 OpenAI `/v1/models` 契约。
 
 验收：进程启动 preflight 通过；`POST /v1/responses` 命中 OpenAI channel。
 
-<a id="task-11-11-blackbox"></a>
-### TASK-11.11 黑盒验收
+<a id="task-11-15-blackbox"></a>
+### TASK-11.15 黑盒验收
 
 状态：planned
 
@@ -484,8 +784,8 @@ finish_reason        → status(completed/incomplete) + incomplete_details
 
 验收：Codex drop-in 真实可用；账务事实与 chat 路径等价。
 
-<a id="task-11-12-doc-review"></a>
-### TASK-11.12 文档、命名与结构复核
+<a id="task-11-16-doc-review"></a>
+### TASK-11.16 文档、命名与结构复核
 
 状态：planned
 
@@ -508,31 +808,43 @@ finish_reason        → status(completed/incomplete) + incomplete_details
 → 11.06 非流式编排 + 响应翻译
 → 11.07 流式事件状态机
 → 11.08 工具/reasoning/text
-→ 11.09 错误与安全
-→ 11.10 bootstrap 装配 + 路由
-→ 11.11 黑盒验收
-→ 11.12 文档与结构复核
+→ 11.09 DeepSeek 上游适配复核与 Codex 工作负载验证（含 reasoning_effort 验证 + Phase 10 drift 修正）
+→ 11.10 错误与安全
+→ 11.11 compact 无状态降级实现
+→ 11.12 input_tokens 本地估算实现
+→ 11.13 有状态 endpoint 501 + 异步任务 Reject
+→ 11.14 bootstrap 装配 + 路由
+→ 11.15 黑盒验收
+→ 11.16 文档与结构复核
 ```
 
 ## 依赖与排序
 
 ```text
-依赖：Phase 10（done）——双协议 lifecycle、OpenAI adapter、registry、ResponseFacts、settlement。
-本阶段排在后台管理（阶段 12）之前：用现有 bootstrap seed / 运营配置即可把某个模型路由到 DeepSeek
-OpenAI channel，不依赖 admin CRUD。
-模型指定的“后台可视化管理”归阶段 12（admin）；阶段 11 用 seed/既有 routing 即可生产可用。
+依赖：Phase 10（done）——双协议 lifecycle、OpenAI adapter（含首版具体上游 adapter/openai/deepseek）、
+registry、ResponseFacts、settlement。
+本阶段排在能力架构（阶段 12 Capability Architecture，DEC-015）与后台管理（阶段 13）之前：用现有
+bootstrap seed / 运营配置即可把某个模型路由到 DeepSeek OpenAI channel，不依赖运行时 capability
+闸门或 admin CRUD。
+本阶段公开 API 表面与 `CAPABILITY_MATRIX.md` 静态文档冻结之后，阶段 12 会把它迁入运行时
+`model_capabilities` 表并加 ingress capability 闸门；模型指定的“后台可视化管理”归阶段 13 admin。
+阶段 11 用 seed/既有 routing 即可生产可用，不会被阶段 12 的灰度迁移影响。
 ```
 
 ## 关联 GAP
 
 | GAP | 优先级 | 摘要 |
 | --- | --- | --- |
-| [GAP-11-001](../../production/TODO_REGISTER.md#gap-11-001) | P1 | 无状态生产范围：`previous_response_id` / server-side `store` / responses retrieve/delete/input_items 未实现。 |
+| [GAP-11-001](../../production/TODO_REGISTER.md#gap-11-001) | P1 | 无状态生产范围：`previous_response_id` / server-side `store` 真实持久化未实现。 |
 | [GAP-11-002](../../production/TODO_REGISTER.md#gap-11-002) | P1 | Codex `custom`/grammar 工具（apply_patch）与 `local_shell` 在 Chat Completions 无等价，按 convert→function/Drop 处理，需登记能力矩阵。 |
 | [GAP-11-003](../../production/TODO_REGISTER.md#gap-11-003) | P2 | 跨轮 reasoning item / `reasoning.summary` / encrypted reasoning 透传保真度为 best-effort。 |
 | [GAP-11-004](../../production/TODO_REGISTER.md#gap-11-004) | P2 | Responses 内置工具（web_search/file_search/code_interpreter/mcp 等）与 `include`/annotations 输出项未实现。 |
 | [GAP-11-005](../../production/TODO_REGISTER.md#gap-11-005) | P2 | OpenAI 协议族 operation 编排骨架（chat/responses）若镜像复制，需后续 genericize 为共享 invoker。 |
 | [GAP-11-006](../../production/TODO_REGISTER.md#gap-11-006) | P2 | 模型别名（Codex 默认模型名 → Unio 上游模型）映射表未实现，第一版需用户填 Unio model_id。 |
+| [GAP-11-007](../../production/TODO_REGISTER.md#gap-11-007) | P1 | `/v1/responses/compact` 用无状态 DeepSeek 摘要降级实现；不等价于 OpenAI 加密语义，多轮压缩会累积信息损失。 |
+| [GAP-11-008](../../production/TODO_REGISTER.md#gap-11-008) | P2 | `/v1/responses/input_tokens` 用本地 tokenizer 估算；与 OpenAI 服务端精确计数有偏差，不反映 prompt cache 折扣。 |
+| [GAP-11-009](../../production/TODO_REGISTER.md#gap-11-009) | P1 | Responses 有状态 endpoint（retrieve/delete/input_items/cancel）返回 501 stateless；`background:true` Reject——商业承诺无状态。 |
+| [GAP-11-010](../../production/TODO_REGISTER.md#gap-11-010) | P2 | Phase 10 `reasoning_effort` doc/code drift（mapping doc 标 Adapt，代码 Pass-through），在 TASK-11.09 同步修正。 |
 
 ## 阶段关闭前必须检查
 
@@ -552,6 +864,8 @@ git diff --check
 docs/chapters/phase-10-dual-protocol-gateway/ARCHITECTURE.md
 docs/chapters/phase-10-dual-protocol-gateway/RESPONSE_FACTS.md
 docs/chapters/phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md
+docs/chapters/phase-11-openai-responses-api/CAPABILITY_MATRIX.md
+docs/protocol/openai_responses.md             # 本阶段权威字段来源
 docs/production/DECISIONS.md
 docs/production/TODO_REGISTER.md
 ```

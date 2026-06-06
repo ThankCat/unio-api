@@ -6,7 +6,7 @@
 
 ## 当前主线
 
-当前主线是阶段 11 OpenAI Responses API ingress（Codex 兼容，生产级）设计与实现准备。后台管理已顺延为阶段 12，排在其后。
+当前主线是阶段 11 OpenAI Responses API ingress（Codex 兼容，生产级）设计与实现准备。其后是阶段 12 Capability Architecture（能力声明 + 运行时闸门 + models.dev daily cron + cap-tags API，见 DEC-015），后台管理再次顺延为阶段 13。
 
 阅读顺序：
 
@@ -70,7 +70,8 @@ ACCEPTANCE.md
 | 阶段 9 | [PLAN](phase-09-openai-protocol-parity/PLAN.md) | [STATUS](phase-09-openai-protocol-parity/STATUS.md) | [ACCEPTANCE](phase-09-openai-protocol-parity/ACCEPTANCE.md) |
 | 阶段 10 | [PLAN](phase-10-dual-protocol-gateway/PLAN.md) | [STATUS](phase-10-dual-protocol-gateway/STATUS.md) | [ACCEPTANCE](phase-10-dual-protocol-gateway/ACCEPTANCE.md) |
 | 阶段 11 | [PLAN](phase-11-openai-responses-api/PLAN.md) | [STATUS](phase-11-openai-responses-api/STATUS.md) | [ACCEPTANCE](phase-11-openai-responses-api/ACCEPTANCE.md) |
-| 阶段 12 | [PLAN](phase-12-admin/PLAN.md) | [STATUS](phase-12-admin/STATUS.md) | [ACCEPTANCE](phase-12-admin/ACCEPTANCE.md) |
+| 阶段 12 | [PLAN](phase-12-capability-architecture/PLAN.md) | [STATUS](phase-12-capability-architecture/STATUS.md) | [ACCEPTANCE](phase-12-capability-architecture/ACCEPTANCE.md) |
+| 阶段 13 | [PLAN](phase-13-admin/PLAN.md) | [STATUS](phase-13-admin/STATUS.md) | [ACCEPTANCE](phase-13-admin/ACCEPTANCE.md) |
 
 ## 状态定义
 

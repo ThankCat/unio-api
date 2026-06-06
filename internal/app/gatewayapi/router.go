@@ -11,6 +11,7 @@ import (
 	gatewayanthropic "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
 	gatewaychat "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	gatewaymodels "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/models"
+	gatewayresponses "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-api/internal/platform/httpmw"
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
 )
@@ -20,6 +21,7 @@ type RouterDeps struct {
 	Logger                 *slog.Logger
 	APIKeyAuthenticator    middleware.APIKeyAuthenticator
 	ChatCompletionService  gatewaychat.ChatCompletionService
+	ResponsesService       gatewayresponses.ResponsesService
 	MessagesService        gatewayanthropic.MessagesService
 	RateLimiter            middleware.RateLimiter
 	RateLimitLimit         int64
@@ -87,6 +89,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 		r.Get("/models", gatewaymodels.NewModelsHandler(deps.ModelCatalogService))
 
 		r.Method(http.MethodPost, "/chat/completions", gatewaychat.NewChatCompletionsHandler(deps.ChatCompletionService))
+		r.Method(http.MethodPost, "/responses", gatewayresponses.NewResponsesHandler(deps.ResponsesService))
 		r.Method(http.MethodPost, "/messages", gatewayanthropic.NewMessagesHandler(deps.MessagesService, deps.Logger))
 	})
 

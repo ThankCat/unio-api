@@ -1,17 +1,26 @@
-# Phase 12 Plan - 后台管理
+# Phase 13 Plan - 后台管理
 
 ## 目标
 
-提供后台管理能力，让 user、project、API key、provider、channel、model、price、request logs 和 billing logs 可以被安全管理。
+提供后台管理能力，让 user、project、API key、provider、channel、model、price、capability、request logs 和 billing logs 可以被安全管理。
 
-阶段 12 不是“做几个 CRUD 页面”，而是把前面阶段的数据库业务数据真正变成可运营系统：
+阶段 13 不是“做几个 CRUD 页面”，而是把前面阶段的数据库业务数据真正变成可运营系统：
 
 1. 管理员可以管理用户和项目。
 2. 用户或管理员可以管理 API key。
-3. 管理员可以管理 provider、channel、model 和 price。
+3. 管理员可以管理 provider、channel、model、price 和模型能力声明。
 4. channel credential 可以安全录入、轮换和审计。
 5. request、attempt、usage、ledger 可以按权限查询。
-6. 后台修改 provider/channel/model/price 后能影响 routing 和 `/v1/models`，不需要改 env 重启。
+6. 后台修改 provider/channel/model/price/capability 后能影响 routing、`/v1/models` 和 capability gating，不需要改 env 重启。
+
+## 与阶段 12 的关系
+
+阶段 12 已经把能力架构（模型能力声明、运行时能力闸门、models.dev 同步、cap-tags API）建好；阶段 13 把这些能力数据接入后台 CRUD，让运营人员可以可视化管理：
+
+```text
+阶段 12 交付：models / model_capabilities / channel_capability_overrides 表 + cron + 闸门
+阶段 13 交付：admin CRUD 入口（增删改查、override、批量同步触发、人工 patch）
+```
 
 ## 涉及文件
 
@@ -22,13 +31,14 @@
 | [internal/core/credential](../../../internal/core/credential) | credential_ref 解析边界。 |
 | [internal/core/routing](../../../internal/core/routing) | 后台 channel/model 变更影响 routing。 |
 | [internal/core/modelcatalog](../../../internal/core/modelcatalog) | 后台模型可见性影响 `/v1/models`。 |
+| [internal/core/capability](../../../internal/core/capability) | 阶段 12 引入的能力矩阵；本阶段加 admin 写入路径。 |
 | [internal/service/gateway](../../../internal/service/gateway) | request log 和 billing log 查询的事实来源。 |
 | [docs/production/DECISIONS.md](../../production/DECISIONS.md) | 关键商业语义决策。 |
 
 ## 任务
 
-<a id="task-12-01-admin-auth"></a>
-### TASK-12.01 Admin auth
+<a id="task-13-01-admin-auth"></a>
+### TASK-13.01 Admin auth
 
 状态：planned
 
@@ -53,8 +63,8 @@
 2. customer API key 不能访问后台。
 3. 后台 JWT 不能用于 `/v1/chat/completions`。
 
-<a id="task-12-02-credential-management"></a>
-### TASK-12.02 Credential 管理
+<a id="task-13-02-credential-management"></a>
+### TASK-13.02 Credential 管理
 
 状态：planned
 
@@ -79,35 +89,39 @@
 - [GAP-6-001](../../production/TODO_REGISTER.md#gap-6-001)
 
 
-<a id="task-12-03-provider-channel-admin"></a>
-### TASK-12.03 Provider/channel/model/price 管理
+<a id="task-13-03-provider-channel-admin"></a>
+### TASK-13.03 Provider/channel/model/price/capability 管理
 
 状态：planned
 
 目标：
 
 ```text
-让 provider、channel、model、price 成为后台可管理的业务数据。
+让 provider、channel、model、price 和模型能力声明成为后台可管理的业务数据。
 ```
 
 计划实现：
 
 1. provider CRUD。
 2. channel CRUD，支持 protocol、adapter_key、enabled、priority、base_url、credential_ref、health。
-3. model CRUD，支持 enabled、owned_by。
+3. model CRUD，支持 enabled、owned_by 与 lab/canonical_id 元数据。
 4. channel_model CRUD，支持 upstream_model、enabled。
 5. price CRUD，支持 pricing_unit、currency、effective_from/to。
 6. price 修改时避免生效窗口重叠。
-7. 后台变更影响 routing 和 `/v1/models`。
+7. 能力管理：models.dev 同步结果可视化、人工 capability 覆盖、channel 级 capability override。
+8. 后台变更影响 routing、`/v1/models` 和阶段 12 的 capability gating。
 
 依赖：
 
 1. [TASK-6.03](../phase-06-model-channel-routing/PLAN.md#task-6-03-bootstrap-wiring)
 2. [TASK-6.04](../phase-06-model-channel-routing/PLAN.md#task-6-04-routing-policy)
 3. [TASK-7.22](../phase-07-billing-ledger/PLAN.md#task-7-22-price-effective-window)
+4. [TASK-12.01](../phase-12-capability-architecture/PLAN.md#task-12-01-capability-schema)
+5. [TASK-12.02](../phase-12-capability-architecture/PLAN.md#task-12-02-capability-inference)
+6. [TASK-12.04](../phase-12-capability-architecture/PLAN.md#task-12-04-models-dev-sync)
 
-<a id="task-12-04-request-billing-dashboard"></a>
-### TASK-12.04 Request 与 billing dashboard
+<a id="task-13-04-request-billing-dashboard"></a>
+### TASK-13.04 Request 与 billing dashboard
 
 状态：planned
 
@@ -135,8 +149,8 @@
 3. [TASK-7.21](../phase-07-billing-ledger/PLAN.md#task-7-21-error-usage-audit)
 4. [TASK-8.02](../phase-08-observability-stability/PLAN.md#task-8-02-metrics)
 
-<a id="task-12-05-customer-project-billing-controls"></a>
-### TASK-12.05 客户、项目与预算控制
+<a id="task-13-05-customer-project-billing-controls"></a>
+### TASK-13.05 客户、项目与预算控制
 
 状态：planned
 
