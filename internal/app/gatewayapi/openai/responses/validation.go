@@ -29,6 +29,15 @@ func validateResponsesRequest(req ResponsesRequest) *responsesValidationError {
 		return &responsesValidationError{param: "model", message: "model is required"}
 	}
 
+	// background:true 是异步任务模式；Unio 无状态承诺下不支持，明确 400 拒绝（不静默转同步）。
+	if req.Background != nil && *req.Background {
+		return &responsesValidationError{
+			code:    errorCodeUnsupportedBackground,
+			param:   "background",
+			message: "background mode is not supported; responses are synchronous only",
+		}
+	}
+
 	if validationErr := validateResponsesInput(req.Input); validationErr != nil {
 		return validationErr
 	}

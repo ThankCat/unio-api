@@ -66,6 +66,18 @@ func dropUnsupported(req openai.ChatRequest) (openai.ChatRequest, []string) {
 		dropped = append(dropped, "response_format")
 	}
 
+	// reasoning_effort Adapt：归一为 DeepSeek 文档支持的 high/max（mapping §2）。
+	// minimal/low/medium/high→high、xhigh/max→max；未知枚举 Drop。req 为值传递，赋新指针对调用方无副作用。
+	// ReasoningDisabled（Responses 显式非 reasoning 意图）时 reasoning_effort 与 thinking:disabled 矛盾，直接 Drop。
+	if req.ReasoningEffort != nil {
+		if normalized, ok := normalizeReasoningEffort(*req.ReasoningEffort); ok && !req.ReasoningDisabled {
+			req.ReasoningEffort = &normalized
+		} else {
+			req.ReasoningEffort = nil
+			dropped = append(dropped, "reasoning_effort")
+		}
+	}
+
 	// OpenAI 规范但 DeepSeek 不支持/不发送的标量字段：出站 Drop（mapping §2）。
 	if req.N != nil {
 		req.N = nil
@@ -158,6 +170,10 @@ func dropUnsupported(req openai.ChatRequest) (openai.ChatRequest, []string) {
 		dropped = append(dropped, "user")
 	}
 
+	// ReasoningDisabled → 注入 thinking:disabled：必须在 filterExtensions 之后，否则会被白名单
+	// 过滤（thinking 在白名单内，但注入时机需晚于过滤）。已显式带 thinking 时不覆盖。
+	req = adaptThinkingDisabled(req)
+
 	// 稳定排序，保证 log 与测试断言可预期（Extensions map 迭代顺序不确定）。
 	sort.Strings(dropped)
 
@@ -199,6 +215,32 @@ func adaptUserID(req openai.ChatRequest) (openai.ChatRequest, bool) {
 	req.Extensions = ext
 
 	return req, false
+}
+
+// deepseekThinkingDisabled 是 DeepSeek 关闭思考模式的 vendor 字段值（thinking 默认 enabled）。
+var deepseekThinkingDisabled = json.RawMessage(`{"type":"disabled"}`)
+
+// adaptThinkingDisabled 在 ReasoningDisabled（Responses 显式非 reasoning 意图）时注入 thinking:disabled。
+//
+// DeepSeek thinking 默认 enabled，Responses 非 reasoning run 不注入则上游仍产生 CoT（额外成本）。
+// 客户已显式带 thinking（如 chat ingress 的 extra_body.thinking）时不覆盖，尊重显式意图。
+// req 为值传递、按需复制 Extensions，对调用方无副作用。
+func adaptThinkingDisabled(req openai.ChatRequest) openai.ChatRequest {
+	if !req.ReasoningDisabled {
+		return req
+	}
+	if _, exists := req.Extensions["thinking"]; exists {
+		return req
+	}
+
+	ext := make(map[string]json.RawMessage, len(req.Extensions)+1)
+	for key, value := range req.Extensions {
+		ext[key] = value
+	}
+	ext["thinking"] = append(json.RawMessage(nil), deepseekThinkingDisabled...)
+	req.Extensions = ext
+
+	return req
 }
 
 // dropCustomTools 剔除 type=custom 的 tool，仅保留 DeepSeek 支持的 function tool。

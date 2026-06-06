@@ -17,6 +17,10 @@ import (
 type ResponsesService interface {
 	CreateResponse(ctx context.Context, req ResponsesRequest) (*ResponsesResponse, error)
 	StreamResponse(ctx context.Context, req ResponsesRequest, emit func(ResponsesStreamEvent) error) error
+	// CompactHistory 无状态降级压缩会话历史（POST /v1/responses/compact）。
+	CompactHistory(ctx context.Context, req ResponsesRequest) (*CompactHistoryResponse, error)
+	// CountInputTokens 本地估算请求 input token（POST /v1/responses/input_tokens），不调上游、不计费。
+	CountInputTokens(ctx context.Context, req ResponsesRequest) (*InputTokenCountResponse, error)
 }
 
 // responsesHandler 处理 OpenAI Responses API（POST /v1/responses）请求。

@@ -49,6 +49,12 @@ type ChatRequest struct {
 	// ReasoningEffort 是 reasoning 模型推理强度。
 	ReasoningEffort *string
 
+	// ReasoningDisabled 是「客户显式未请求 reasoning」的内部意图标志，由 Responses 桥接设置
+	// （Responses reasoning 缺省/null）。它不是 OpenAI wire 字段、不会被序列化进 upstream body；
+	// provider adapter 据此关闭该 provider 的私有思考模式（如 DeepSeek 出站注入 thinking:disabled）。
+	// chat completions ingress 不设置本字段（保持 provider 默认行为，避免回归 DeepSeek 默认开启思考）。
+	ReasoningDisabled bool
+
 	// Tools / ToolChoice / ResponseFormat 为 OpenAI 请求字段，由 adapter wire 透传 upstream。
 	Tools             []ChatTool
 	ToolChoice        json.RawMessage

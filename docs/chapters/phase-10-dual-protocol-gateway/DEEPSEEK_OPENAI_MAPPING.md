@@ -66,7 +66,7 @@ Phase 10 关闭前不允许保留 `Verify`。
 | `presence_penalty` | - | `Drop` | DeepSeek deprecated；出站不发送。 |
 | `prompt_cache_key` | - | `Drop` | 出站不发送。 |
 | `prompt_cache_retention` | - | `Drop` | 出站不发送。 |
-| `reasoning_effort` | `reasoning_effort` | `Adapt` | `low`/`medium`→`high`，`xhigh`→`max` 等枚举映射。 |
+| `reasoning_effort` | `reasoning_effort` | `Adapt` | 出站归一为 DeepSeek 文档值 `high`/`max`：`minimal`/`low`/`medium`/`high`→`high`，`xhigh`/`max`→`max`；未知枚举 **Drop**（DeepSeek 回退默认 `high`）。已在 `deepseek/adapt.go`+`drop.go` 实现并测试（GAP-11-010 关闭）。 |
 | `response_format.type=text` | 同名 | `Pass` | |
 | `response_format.type=json_object` | 同名 | `Pass` | |
 | `response_format.type=json_schema` | - | `Drop` | 整段 `response_format` 或 schema 部分 Drop，不发送 upstream。 |
@@ -87,7 +87,7 @@ Phase 10 关闭前不允许保留 `Verify`。
 | `user` | `user_id` | `Adapt` | DeepSeek 上游 wire 用顶层 `user_id`（非标准 `user`）。校验字符集 `[a-zA-Z0-9_-]`、长度 ≤512 后写入；不满足则 **Drop**（不发送，避免上游 422）。出站永不发送标准 `user`。 |
 | `verbosity` | - | `Drop` | 出站不发送。 |
 | `web_search_options` | - | `Drop` | 出站不发送。 |
-| extension `thinking.type` | `thinking.type` | `Pass` | `enabled` / `disabled`。 |
+| extension `thinking.type` | `thinking.type` | `Pass`/`Adapt` | 客户显式 `enabled`/`disabled` 透传；当 `ChatRequest.ReasoningDisabled`（Responses 非 reasoning 意图）且客户未显式带 `thinking` 时，adapter 出站注入 `thinking:{type:"disabled"}`（DeepSeek thinking 默认 enabled，否则非 reasoning run 仍产生 CoT）。见 `deepseek/drop.go adaptThinkingDisabled`、DEC-016。 |
 
 出站实现必须使用 **allowlist builder**：仅上表 Pass/Adapt 产物进入 `json.Marshal` 的 upstream body；Dropped 键不得出现。
 

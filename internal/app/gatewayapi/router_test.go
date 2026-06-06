@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,6 +259,93 @@ func TestRouterMethodNotAllowed(t *testing.T) {
 
 	if body.Error.Message != "method not allowed" {
 		t.Fatalf("expected error message %q, got %q", "method not allowed", body.Error.Message)
+	}
+}
+
+// routerWithPrincipal 创建一个认证通过的测试 router，用于验证 /responses* 路由注册。
+func routerWithPrincipal() http.Handler {
+	authenticator := &routerTestAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{APIKeyID: 1, ProjectID: 1, KeyPrefix: "unio_sk_test"},
+	}
+	return newTestRouter(authenticator, nil, nil)
+}
+
+// decodeRouterError 解析 router 错误响应的 code 字段。
+func decodeRouterError(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body %q: %v", rec.Body.String(), err)
+	}
+	return body.Error.Code
+}
+
+func TestRouterResponsesStatelessUnsupported(t *testing.T) {
+	handle := routerWithPrincipal()
+
+	// 有状态 endpoint 全部 501 unsupported_endpoint_stateless（无服务端存储）。
+	cases := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/v1/responses/resp_123"},
+		{http.MethodDelete, "/v1/responses/resp_123"},
+		{http.MethodGet, "/v1/responses/resp_123/input_items"},
+		{http.MethodPost, "/v1/responses/resp_123/cancel"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		req.Header.Set("Authorization", "Bearer unio_sk_test")
+		rec := httptest.NewRecorder()
+		handle.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotImplemented {
+			t.Fatalf("%s %s: expected 501, got %d", tc.method, tc.path, rec.Code)
+		}
+		if code := decodeRouterError(t, rec); code != "unsupported_endpoint_stateless" {
+			t.Fatalf("%s %s: expected unsupported_endpoint_stateless, got %q", tc.method, tc.path, code)
+		}
+	}
+}
+
+func TestRouterResponsesBackgroundRejected(t *testing.T) {
+	handle := routerWithPrincipal()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"m","input":"hi","background":true}`))
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handle.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+	if code := decodeRouterError(t, rec); code != "unsupported_background" {
+		t.Fatalf("expected unsupported_background, got %q", code)
+	}
+}
+
+func TestRouterResponsesCompactAndInputTokensRegistered(t *testing.T) {
+	handle := routerWithPrincipal()
+
+	// 路由已注册：非法 body 在 handler 内校验失败返回 400（不触达 nil service）。
+	for _, path := range []string{"/v1/responses/compact", "/v1/responses/input_tokens"} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":""}`))
+		req.Header.Set("Authorization", "Bearer unio_sk_test")
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handle.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: expected 400 (route registered, validation reached), got %d body=%q", path, rec.Code, rec.Body.String())
+		}
+		if code := decodeRouterError(t, rec); code != "invalid_request" {
+			t.Fatalf("%s: expected invalid_request, got %q", path, code)
+		}
 	}
 }
 

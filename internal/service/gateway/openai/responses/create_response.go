@@ -20,6 +20,20 @@ import (
 // adapter（请求方向 responses→chat 翻译在 Invoke 内按候选 upstream model 进行），成功后把内部
 // ChatResponse 翻译回 Responses 响应。资金关键循环、attempt 审计与终态写入由 AttemptRunner 统一承担。
 func (s *ResponsesService) CreateResponse(ctx context.Context, req gatewayapi.ResponsesRequest) (*gatewayapi.ResponsesResponse, error) {
+	chatResp, err := s.executeNonStreamChat(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	resp := mapChatResponseToResponses(req, *chatResp)
+	return &resp, nil
+}
+
+// executeNonStreamChat 执行非流式桥接编排，返回内部 ChatResponse。
+//
+// CreateResponse 与 CompactHistory（无状态压缩）共用同一条资金关键链路：两者都是一次可计费的
+// 非流式上游调用，差异只在成功后的响应翻译方向。本方法承担 routing、authorization、共享
+// AttemptRunner 候选 fallback 计费循环、metrics outcome 与终态写入。
+func (s *ResponsesService) executeNonStreamChat(ctx context.Context, req gatewayapi.ResponsesRequest) (*openai.ChatResponse, error) {
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
 		return nil, failure.Wrap(
@@ -117,6 +131,5 @@ func (s *ResponsesService) CreateResponse(ctx context.Context, req gatewayapi.Re
 		return nil, err
 	}
 
-	resp := mapChatResponseToResponses(req, *adapterResp)
-	return &resp, nil
+	return adapterResp, nil
 }

@@ -12,9 +12,11 @@ import (
 )
 
 type fakeResponsesService struct {
-	resp *ResponsesResponse
-	err  error
-	got  ResponsesRequest
+	resp       *ResponsesResponse
+	compact    *CompactHistoryResponse
+	inputCount *InputTokenCountResponse
+	err        error
+	got        ResponsesRequest
 }
 
 func (s *fakeResponsesService) CreateResponse(_ context.Context, req ResponsesRequest) (*ResponsesResponse, error) {
@@ -28,6 +30,16 @@ func (s *fakeResponsesService) StreamResponse(_ context.Context, req ResponsesRe
 		return s.err
 	}
 	return emit(ResponsesStreamEvent{Type: EventResponseCreated})
+}
+
+func (s *fakeResponsesService) CompactHistory(_ context.Context, req ResponsesRequest) (*CompactHistoryResponse, error) {
+	s.got = req
+	return s.compact, s.err
+}
+
+func (s *fakeResponsesService) CountInputTokens(_ context.Context, req ResponsesRequest) (*InputTokenCountResponse, error) {
+	s.got = req
+	return s.inputCount, s.err
 }
 
 func postJSON(t *testing.T, handler http.Handler, body string) *httptest.ResponseRecorder {

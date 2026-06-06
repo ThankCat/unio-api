@@ -212,6 +212,27 @@ func TestMapReasoningEffortAndText(t *testing.T) {
 	if chat.ResponseFormat == nil || chat.ResponseFormat.Type != "json_object" {
 		t.Errorf("expected response_format json_object, got %+v", chat.ResponseFormat)
 	}
+	// reasoning 提供了 effort：非 disabled 意图。
+	if chat.ReasoningDisabled {
+		t.Errorf("expected ReasoningDisabled=false when reasoning provided")
+	}
+}
+
+// TestMapReasoningDisabledWhenAbsent 验证 Responses reasoning 缺省/null 时置 ReasoningDisabled，
+// 表达显式非 reasoning 意图（DeepSeek 出站据此关思考）。
+func TestMapReasoningDisabledWhenAbsent(t *testing.T) {
+	for _, body := range []string{
+		`{"model":"m","input":"x"}`,
+		`{"model":"m","input":"x","reasoning":null}`,
+	} {
+		chat, _ := mapBody(t, body)
+		if !chat.ReasoningDisabled {
+			t.Errorf("expected ReasoningDisabled=true for %s", body)
+		}
+		if chat.ReasoningEffort != nil {
+			t.Errorf("expected no reasoning_effort for %s, got %v", body, *chat.ReasoningEffort)
+		}
+	}
 }
 
 func TestMapTextFormatJSONSchemaWrap(t *testing.T) {

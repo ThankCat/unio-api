@@ -100,6 +100,16 @@ workers
 │   │   │   │   │   ├── decode.go
 │   │   │   │   │   ├── validation.go
 │   │   │   │   │   └── stream.go
+│   │   │   │   ├── responses
+│   │   │   │   │   ├── handler.go
+│   │   │   │   │   ├── endpoints_handler.go
+│   │   │   │   │   ├── dto.go
+│   │   │   │   │   ├── tools.go
+│   │   │   │   │   ├── decode.go
+│   │   │   │   │   ├── content.go
+│   │   │   │   │   ├── validation.go
+│   │   │   │   │   ├── stream_dto.go
+│   │   │   │   │   └── response.go
 │   │   │   │   └── models
 │   │   │   │       ├── handler.go
 │   │   │   │       └── dto.go
@@ -161,17 +171,22 @@ workers
 │   ├── service
 │   │   ├── gateway
 │   │   │   ├── lifecycle
-│   │   │   │   ├── executor.go
+│   │   │   │   ├── request_lifecycle.go
 │   │   │   │   ├── authorization.go
-│   │   │   │   ├── attempt.go
-│   │   │   │   ├── fallback.go
+│   │   │   │   ├── candidates.go
+│   │   │   │   ├── attempt_runner.go
+│   │   │   │   ├── attempt_runner_stream.go
+│   │   │   │   ├── retry.go
+│   │   │   │   ├── breaker.go
 │   │   │   │   ├── settlement.go
-│   │   │   │   ├── recovery.go
-│   │   │   │   ├── delivery.go
+│   │   │   │   ├── settlement_recovery.go
+│   │   │   │   ├── adapter_registry.go
+│   │   │   │   ├── request_log.go
 │   │   │   │   ├── metrics.go
 │   │   │   │   └── tracing.go
 │   │   │   ├── openai
-│   │   │   │   └── chatcompletions
+│   │   │   │   ├── chatcompletions
+│   │   │   │   └── responses
 │   │   │   └── anthropic
 │   │   │       └── messages
 │   │   │
@@ -457,6 +472,11 @@ Gateway API：
 ```text
 OpenAI:
   POST /v1/chat/completions
+  GET  /v1/models
+  POST /v1/responses
+  POST /v1/responses/compact          # 无状态降级摘要
+  POST /v1/responses/input_tokens     # 本地估算
+  # 有状态 endpoint（retrieve/delete/cancel/input_items）统一 501；background:true → 400
 
 Anthropic:
   POST /v1/messages
@@ -472,6 +492,10 @@ app/gatewayapi/openai
 app/gatewayapi/openai/chatcompletions
 = POST /v1/chat/completions 专属 handler / DTO / decode / validation / SSE / 错误响应。
 
+app/gatewayapi/openai/responses
+= POST /v1/responses 专属 handler / DTO / decode / validation / SSE / 错误响应；
+  另含 /v1/responses/compact、/v1/responses/input_tokens 与有状态 endpoint 501（endpoints_handler.go）。
+
 app/gatewayapi/openai/models
 = GET /v1/models 专属 handler。
 
@@ -485,6 +509,9 @@ app/gatewayapi/anthropic/messages
 service/gateway/openai/chatcompletions
 = OpenAI Chat Completions operation 的编排骨架。
 
+service/gateway/openai/responses
+= OpenAI Responses API operation 的编排骨架（responses↔chat 桥接、compact、input_tokens）。
+
 service/gateway/anthropic/messages
 = Anthropic Messages operation 的编排骨架。
 
@@ -492,6 +519,8 @@ service/gateway/lifecycle
 = API key 身份之后的 request、routing、authorization、attempt、fallback、
    settlement、recovery、metrics、tracing、request log 文案与 delivery audit
    等所有协议无关共享能力；双协议骨架必须复用，不得在两侧重复实现。
+   其中 attempt_runner / attempt_runner_stream 是 OpenAI chat 与 responses 共享的
+   资金关键候选 fallback 循环（非流式 / 流式），Anthropic Messages 保留自身循环。
 
 core/adapter/openai/deepseek
 = DeepSeek OpenAI endpoint 的请求与响应转换。
@@ -504,11 +533,12 @@ core/adapter/anthropic/deepseek
 
 ```text
 1. gatewayapi 协议族根包（openai/、anthropic/）不允许平铺单个 operation 的
-   handler/dto/validation；新 operation 必须新建子包（例如未来的
-   openai/responses、openai/embeddings、anthropic/messages_count_tokens）。
+   handler/dto/validation；新 operation 必须新建子包（已落地 openai/chatcompletions、
+   openai/responses、openai/models、anthropic/messages；未来的 openai/embeddings、
+   anthropic/messages_count_tokens 等同理）。
 
 2. service/gateway 协议族 + operation 子包结构（openai/chatcompletions、
-   anthropic/messages、未来的 openai/responses 等）必须与 gatewayapi 子包名一一对应。
+   openai/responses、anthropic/messages 等）必须与 gatewayapi 子包名一一对应。
 
 3. 协议无关共享能力（结算、recovery、metrics、tracing、request log 等）必须落到
    service/gateway/lifecycle；两个 operation 骨架不允许重复实现同一份协议无关纯
@@ -544,9 +574,12 @@ Phase 10 将在主分层不变的前提下，把 `gatewayapi`、`service/gateway
 继续按 OpenAI / Anthropic 协议族整理。Phase 10.15 复核已经把 `gatewayapi/openai`
 重组成 `chatcompletions/` 与 `models/` operation 子包，并与 `anthropic/messages/`
 保持对称；`service/gateway/openai/chatcompletions` 与 `service/gateway/anthropic/messages`
-也按同名子包到位。`core/adapter/openai`、`core/adapter/anthropic` 当前每个协议族
-只有一个 operation，文件平铺；如未来加入第二个 operation，必须按 protocol/operation
-子包重组并保持与 gatewayapi、service/gateway 对称。
+也按同名子包到位。Phase 11 在 OpenAI 协议族新增 `responses/` operation 子包
+（`gatewayapi/openai/responses` 与 `service/gateway/openai/responses`），与
+`chatcompletions/`、`models/` 对称；它经 responses↔chat 桥接复用既有 OpenAI adapter，
+不新增上游 Responses adapter，故 `core/adapter/openai`、`core/adapter/anthropic` 仍
+每个协议族一个 operation、文件平铺；如未来加入第二个 adapter operation，必须按
+protocol/operation 子包重组并保持与 gatewayapi、service/gateway 对称。
 
 后续新增代码必须直接进入目标子包，不允许在协议族根包平铺。
 

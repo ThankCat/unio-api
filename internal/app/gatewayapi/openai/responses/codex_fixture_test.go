@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// codexFixtureGlob 指向 codexcapture 工具落盘的真实 Codex /v1/responses 抓包
+// codexFixtureGlob 指向开发期手工抓包落盘的真实 Codex /v1/responses 请求
 // （internal/blackbox/fixtures/codex/*_POST_v1_responses.json）。
 // 本测试确保 ingress 能解析并接受真实 Codex v0.130 请求体：缺抓包时跳过，不阻断 CI。
 const codexFixtureGlob = "../../../../blackbox/fixtures/codex/*_POST_v1_responses.json"

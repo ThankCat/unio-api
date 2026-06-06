@@ -15,6 +15,28 @@ type legacyFunctionDef struct {
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
+// deepseekReasoningEfforts 把 OpenAI/Codex 的 reasoning_effort 枚举归一为 DeepSeek 文档支持的 high/max。
+//
+// DeepSeek 官方枚举仅 high/max（thinking 模式下生效），并自带 low/medium→high、xhigh→max 的兼容映射；
+// Codex（gpt-5 家族）还会发 minimal，不在 DeepSeek 文档枚举内。为让出站 wire 始终是 DeepSeek 文档合法值、
+// 不依赖上游隐式兼容行为，也避免 minimal 触发上游 422，这里在 adapter 出站显式归一（DEEPSEEK_OPENAI_MAPPING §2）。
+var deepseekReasoningEfforts = map[string]string{
+	"minimal": "high",
+	"low":     "high",
+	"medium":  "high",
+	"high":    "high",
+	"xhigh":   "max",
+	"max":     "max",
+}
+
+// normalizeReasoningEffort 归一 reasoning_effort 为 DeepSeek 支持值（大小写/空白不敏感）。
+//
+// 未知枚举返回 ok=false，由调用方 Drop（让 DeepSeek 回退默认 high），不把非法值发上游。
+func normalizeReasoningEffort(effort string) (string, bool) {
+	normalized, ok := deepseekReasoningEfforts[strings.ToLower(strings.TrimSpace(effort))]
+	return normalized, ok
+}
+
 // adaptLegacyFunctions 把 deprecated functions / function_call Adapt 成现代 tools / tool_choice。
 //
 // 规则（DEEPSEEK_OPENAI_MAPPING.md §2；无法无损转换则 Drop，避免上游 400）：

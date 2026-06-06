@@ -563,7 +563,7 @@ finish_reason        → status(completed/incomplete) + incomplete_details
 <a id="task-11-07-stream-statemachine"></a>
 ### TASK-11.07 流式事件状态机
 
-状态：done（`stream_response.go` 走共享 `AttemptRunner.RunStream`，与 chat 流式同一份资金关键链路（emitted 后禁止 fallback、final usage 缺失处理、tail-error 仍尽力结算）；`responses_stream.go` 的 `streamEncoder` 把内部 `openai.ChatStreamChunk` 翻译成 codex-rs 实测消费子集：`response.created`→`output_item.added`→`output_text.delta`/`reasoning_text.delta`/`function_call_arguments.delta`→`output_item.done`（权威载体）→`response.completed`，单调 `sequence_number`、稳定 output_index、并行 tool_call 分项、MCP namespace 回填。SSE 帧编码在 `gatewayapi/openai/responses` handler；HTTP handler stream 用例已改为真 SSE 断言。测试全过。补齐「SDK 完整性」事件（content_part.*、*.done 等）留 TASK-11.08。）
+状态：done（`stream_response.go` 走共享 `AttemptRunner.RunStream`，与 chat 流式同一份资金关键链路（emitted 后禁止 fallback、final usage 缺失处理、tail-error 仍尽力结算）；`responses_stream.go` 的 `streamEncoder` 把内部 `openai.ChatStreamChunk` 翻译成 codex-rs 实测消费子集：`response.created`→`output_item.added`→`output_text.delta`/`reasoning_text.delta`/`function_call_arguments.delta`→`output_item.done`（权威载体）→`response.completed`，单调 `sequence_number`、稳定 output_index、并行 tool_call 分项、MCP namespace 回填。SSE 帧编码在 `gatewayapi/openai/responses` handler；HTTP handler stream 用例已改为真 SSE 断言。测试全过。规范完整事件（`in_progress` / `content_part.*` / `output_text.done` / `*.done`(reasoning) / `function_call_arguments.done`）当前未发，Codex 不依赖，标准 SDK 完整性补齐登记 GAP-11-011。）
 
 实现内容：
 
@@ -574,7 +574,7 @@ finish_reason        → status(completed/incomplete) + incomplete_details
    `content:[{type:"reasoning_text"}]` / function_call `{call_id,name,arguments}`）** →
    `response.completed`（含完整 response + usage）。
    - codex-rs 源码确认 Codex 仅消费上述事件子集；`in_progress` / `content_part.*` / `output_text.done` /
-     `*.done`(reasoning) / `function_call_arguments.*` 对 Codex 可选（可发以兼容标准 SDK）。
+     `*.done`(reasoning) / `function_call_arguments.done` 对 Codex 可选，**当前未发**（标准 SDK 完整性补齐留 GAP-11-011）。
 2. 每个事件带单调 `sequence_number`；item/content_part 索引稳定。
 3. tool_calls 跨 chunk 增量累积成完整 `function_call` item（**最终 args 必须落在 `output_item.done`**）；
    并行 tool_call 正确分项；MCP `namespace` 工具回填 `namespace` 字段（BRIDGE §3.3）。
@@ -588,7 +588,14 @@ finish_reason        → status(completed/incomplete) + incomplete_details
 <a id="task-11-08-tools-reasoning"></a>
 ### TASK-11.08 工具、reasoning 与 text 特殊处理
 
-状态：planned
+状态：done（核心结构翻译完成；残留 fidelity 按 GAP 跟踪，见下）
+
+落地：`responses_chat_map.go` 已实现 function 扁平→嵌套 function tool、namespace 拍平 `<ns><name>`、
+内置/custom/local_shell Drop 记审计、`tool_choice` 各形态归一、`reasoning.effort`→`reasoning_effort`、
+`text.format`→`response_format`（json_schema 提 schema）+`text.verbosity`→`verbosity`；
+`responses_response_map.go` 出站把 MCP 拍平名回译为 namespace+name。残留：namespace 回译保真度
+（GAP-11-002）、跨轮 reasoning 回灌 DeepSeek（GAP-11-003，第一版不回灌）、json_schema strict 细节，
+均不阻断链路，留 TASK-11.09 真实负载复核时确认。
 
 实现内容：
 
@@ -605,7 +612,31 @@ finish_reason        → status(completed/incomplete) + incomplete_details
 <a id="task-11-09-deepseek-upstream"></a>
 ### TASK-11.09 DeepSeek 上游适配复核与 Codex 工作负载验证
 
-状态：planned
+状态：partial（首要项 reasoning_effort drift 已修正并关闭 GAP-11-010；真实 smoke 与模型 seed 待办）
+
+已完成：
+- **item 1 reasoning_effort（首要项，已闭环）**：以 DeepSeek 官方 API 文档为权威依据——`reasoning_effort`
+  possible values 仅 `high`/`max`，DeepSeek 自带 `low`/`medium`→`high`、`xhigh`→`max` 兼容映射；Codex（gpt-5
+  家族）另发 `minimal`，不在 DeepSeek 枚举内。决策取 Adapt（非裸 pass-through）：在 `deepseek/adapt.go`
+  `normalizeReasoningEffort` + `drop.go` 出站归一为 `high`/`max`（minimal/low/medium/high→high，
+  xhigh/max→max，未知枚举 Drop），不依赖上游隐式兼容、杜绝 minimal 触发 422。adapt_test 覆盖。
+- **item 2 职责边界复核**：桥接层 `responses_chat_map.go` 只把 `reasoning.effort` Adapt 进
+  `openai.ChatRequest` 契约，不做 provider 归一；归一只在 DeepSeek adapter 出站。两层不重不漏，边界正确。
+- **item 6 Phase 10 doc drift 同步修正**：Phase 9 `DEEPSEEK_UPSTREAM.md`（从 pass-through 移到 adapted）
+  与 Phase 10 `DEEPSEEK_OPENAI_MAPPING.md`（补 minimal→high、未知 Drop、标注已实现）已与代码一致，
+  GAP-11-010 关闭。
+- **thinking opt-in 闸门（DEC-016）**：DeepSeek thinking 默认 enabled，Codex 发 `reasoning:null`
+  （effort none）的非 reasoning run 会触发 DeepSeek CoT（额外成本）。已实现 opt-in 语义：桥接层
+  reasoning 缺省/null → `ChatRequest.ReasoningDisabled`（provider 无关内部意图标志，永不序列化进 wire）；
+  DeepSeek adapter 据此出站注入 `thinking:{type:"disabled"}` 并 Drop 矛盾 reasoning_effort，客户显式
+  thinking 不覆盖、chat ingress 不受影响（不回归 DS-04 默认 enabled）。桥接层不直塞私有 thinking 以防
+  泄漏到真 OpenAI 上游（base adapter 无 extension 白名单）。bridge + adapter 均有单测。
+
+待办：
+- **item 5 模型落地**：seed/运营配置一个可用于 Codex 的 DeepSeek 模型，经 routing(IngressProtocol=openai)
+  命中 `upstream_model`。
+- **真实 smoke**：真实 Codex CLI → Unio → 真实 DeepSeek 端到端（含 reasoning_effort 归一与 thinking
+  on/off 行为，需密钥，gate `DEEPSEEK_BLACKBOX=1`），归 TASK-11.15 执行。
 
 首版具体上游是 DeepSeek，复用已实现并经 Phase 10 验收的 `adapter/openai/deepseek`，不重写。
 本任务把它显式纳入计划并复核其在 Responses/Codex 负载下的行为。
@@ -645,7 +676,13 @@ tool 行为符合预期；真实 Codex + DeepSeek smoke 跑通。
 <a id="task-11-10-error-security"></a>
 ### TASK-11.10 错误与安全输出
 
-状态：planned
+状态：done
+
+落地：`handler.go` `mapResponsesServiceError` 复用 `adapter.UpstreamCategoryOf`，把 insufficient_quota /
+unsupported_parameter / model_not_found / model_unavailable / 上游 rate_limit/timeout/bad_request/其它
+分别渲染为 Responses 原生 error（429/400/404/503/504/502 等），上游 auth/permission 绝不渲染成客户 401，
+不透传上游原始 body；SSE 已开始后写带外 `event:error`（`writeResponsesStreamError`），不回退 JSON；
+`response.go` 统一 decode/validation 400 与 501/400 专属拒绝码渲染。
 
 实现内容：
 
@@ -659,7 +696,15 @@ tool 行为符合预期；真实 Codex + DeepSeek smoke 跑通。
 <a id="task-11-11-compact"></a>
 ### TASK-11.11 `POST /v1/responses/compact` 无状态降级实现
 
-状态：planned
+状态：done（第一版降级；不含第三方上游专属调优，GAP-11-007）
+
+落地：ingress `endpoints_handler.go` `NewResponsesCompactHandler`（复用 `ResponsesRequest`
+decode/validation，CompactionInput 是其子集）+ service `compact_response.go` `CompactHistory`。
+实现把 `input[]`(历史)+`instructions`(缺省注入 `defaultCompactionInstruction`) 当作一次可计费非流式
+chat，复用 `executeNonStreamChat` 走 routing/authorization/`AttemptRunner`/settlement；摘要包成
+`{"output":[{type:"message",role:"assistant",content:[{type:"output_text",text:<摘要>}]}]}`。
+第一版用 message item 承载（Codex 回传即按普通 message 解析，透明往返），不签发 compaction 密文 item。
+测试：`compact_input_tokens_test.go`（happy + 默认指令注入）+ `endpoints_handler_test.go`（200 / 校验 400）。
 
 背景：Codex 长会话超 `auto_compact_limit` 时会主动调 `/responses/compact`。OpenAI 官方做法依赖
 服务端 `encrypted_content`（用 OpenAI 密钥加解密），DeepSeek 结构上做不到等价实现。社区大多数
@@ -699,7 +744,14 @@ Codex 把 `output` 直接当作压缩后的新历史）。
 <a id="task-11-12-input-tokens"></a>
 ### TASK-11.12 `POST /v1/responses/input_tokens` 本地估算实现
 
-状态：planned
+状态：done（本地估算，GAP-11-008）
+
+落地：ingress `endpoints_handler.go` `NewResponsesInputTokensHandler` + service `input_tokens.go`
+`CountInputTokens`。用 `router.PlanChat`(IngressProtocol=openai) 解析模型→候选只为选取 tokenizer，
+取候选 `AdapterKey` 的 `ChatInputTokenizer`，把请求经 `mapResponsesRequestToChat` 翻成 ChatRequest
+后估算，返回 `{"input_tokens":<N>,"object":"response.input_tokens"}`。不走候选 fallback、不调上游、
+不计费、不写请求审计。测试：`compact_input_tokens_test.go`（估算值 + 无上游/无计费/无审计 + routing 错误传播）
++ `endpoints_handler_test.go`（200）。
 
 背景：Codex 偶尔预检 token 数（用于 `auto_compact_limit` 时机判断）。官方做法是服务端精确计数；
 Unio 用本地 tokenizer 估算即可——精度跟 Codex 自身本地估算同量级，绝对不够时通过 `/responses`
@@ -729,7 +781,14 @@ Unio 用本地 tokenizer 估算即可——精度跟 Codex 自身本地估算同
 <a id="task-11-13-unsupported-endpoints"></a>
 ### TASK-11.13 有状态 endpoint 501 与异步任务 Reject
 
-状态：planned
+状态：done（metrics counter 见说明）
+
+落地：ingress `endpoints_handler.go` `NewResponsesStatelessUnsupportedHandler`（serviceless 静态
+handler）对 `GET/DELETE /responses/{response_id}`、`GET /responses/{response_id}/input_items`、
+`POST /responses/{response_id}/cancel` 统一返回 501 `unsupported_endpoint_stateless`；`validation.go`
+对 `POST /responses` 带 `background:true` 返回 400 `unsupported_background`（`response.go` 支持专属
+拒绝码）。测试：`endpoints_handler_test.go` + `router_test.go`（4 个有状态路由 501 + background 400）。
+注：第 4 点独立 metrics counter 暂未加（501/400 已计入 HTTP 层通用指标），留 TASK-11.16 评估是否补。
 
 实现内容：
 
@@ -749,7 +808,15 @@ Unio 用本地 tokenizer 估算即可——精度跟 Codex 自身本地估算同
 <a id="task-11-14-bootstrap-wiring"></a>
 ### TASK-11.14 bootstrap 装配与路由
 
-状态：planned
+状态：done（`GET /v1/models` 的 `models` 形状兼容留 TASK-11.09，开发期抓包已验证，见下）
+
+落地：`bootstrap/gateway.go` `NewResponsesGateway` 复用 `chatRouter`+`registry.OpenAI`+同套
+settlement/authorization/breaker/metrics；`router.go` 在 `/v1` 下挂全部 `/responses*` 路由：
+`POST /responses`、`POST /responses/compact`、`POST /responses/input_tokens`、
+`GET/DELETE /responses/{response_id}`、`GET /responses/{response_id}/input_items`、
+`POST /responses/{response_id}/cancel`，复用 API key auth + rate limit middleware。`router_test.go`
+验证 chi 静态/参数路由共存无冲突、各路由可达。第 4 点 `GET /v1/models` 的 `{"models":[...]}` 兼容
+已在开发期抓包验证为非致命，正式 endpoint 的兼容改造留 TASK-11.09 衔接（不破坏标准 OpenAI 契约）。
 
 实现内容：
 
@@ -770,7 +837,7 @@ Unio 用本地 tokenizer 估算即可——精度跟 Codex 自身本地估算同
 <a id="task-11-15-blackbox"></a>
 ### TASK-11.15 黑盒验收
 
-状态：planned
+状态：partial（mock 黑盒 + gated 真实 smoke 已落地 `internal/blackbox/openaisdk/responses_*_test.go`，`-tags=blackbox` 编译通过、无环境正确 Skip；待真实 DB/Redis 跑 mock 黑盒、`DEEPSEEK_BLACKBOX=1` 跑真实 DeepSeek smoke 与 Codex CLI 手测）
 
 实现内容：
 
@@ -784,10 +851,18 @@ Unio 用本地 tokenizer 估算即可——精度跟 Codex 自身本地估算同
 
 验收：Codex drop-in 真实可用；账务事实与 chat 路径等价。
 
+已落地用例（`internal/blackbox/openaisdk/responses_*_test.go`，复用 `sdkfixture` + chat mock 上游）：
+非流式成功 + thinking:disabled 闸门（DEC-016）、`operation=responses` 账务事实（usage/ledger/snapshots）、
+background 400、有状态 endpoint 501、compact 降级摘要、input_tokens 本地估算（不触达上游）、流式事件
+序列 + `sequence_number` 从 0 单调 + usage 落在 `response.completed`、`reasoning_text.delta`、真实 Codex
+v0.130 `/responses` fixture 端到端回放（改 model 后整体回放，验证多 input item / 工具 / reasoning:null
+翻译不报错）；gated 真实 DeepSeek 非流式/流式 smoke（`DEEPSEEK_BLACKBOX=1`）。
+**待执行**：真实 DB/Redis 环境跑 mock 黑盒全绿、真实 key 跑 smoke、真实 Codex CLI 指向 Unio 手测。
+
 <a id="task-11-16-doc-review"></a>
 ### TASK-11.16 文档、命名与结构复核
 
-状态：planned
+状态：done（结构/依赖/命名/文档/GAP 复核通过，0 代码命名/结构问题；与黑盒一致随 TASK-11.15 回归）
 
 实现内容：
 
@@ -796,6 +871,21 @@ Unio 用本地 tokenizer 估算即可——精度跟 Codex 自身本地估算同
 3. 复核未引入 `common`/`util`/`helper`；lifecycle 不 import responses HTTP DTO；
    responses 子包不 import sqlc row。
 4. 复核全局 P0/P1 GAP，关闭本阶段必须关闭的 GAP。
+
+复核结论：
+
+1. PROJECT_STRUCTURE 已补 `gatewayapi/openai/responses`、`service/gateway/openai/responses`
+   子包、lifecycle `attempt_runner*`、端点清单 `/v1/responses*`，并顺带修正 lifecycle 树过时
+   文件名（Phase 10 遗留 executor/attempt/fallback/recovery/delivery）；PROJECT_STATUS 阶段状态
+   已同步；项目无根 README，跳过该项。
+2. RESPONSES_CHAT_BRIDGE 无残留 `Verify`；§6 流式 recipe 已与实际 emit 子集对齐，规范完整事件
+   未发登记 GAP-11-011；其余字段映射与代码同源（codex-rs + 真实 fixture 冻结）。
+3. 依赖方向复核通过：无 `common`/`util`/`helper` 包；lifecycle 不 import 任何 ingress DTO
+   （AttemptRunner 为泛型）；responses 子包不 import sqlc row；service 用 app DTO 的方式与
+   chatcompletions 一致。
+4. GAP 复核：关闭 GAP-11-005（共享 invoker 已用 `lifecycle.AttemptRunner` 落地）；新增
+   GAP-11-011（标准 SDK 完整性流式事件未发，P2）；GAP-11-001/002/007/009 为已接受的无状态/降级
+   商业边界，按各自触发时机保留，非本阶段必须关闭。
 
 ## 推荐实施顺序
 

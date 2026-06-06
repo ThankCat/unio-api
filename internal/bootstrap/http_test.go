@@ -36,6 +36,14 @@ func (s fakeHTTPResponsesService) StreamResponse(ctx context.Context, req gatewa
 	return nil
 }
 
+func (s fakeHTTPResponsesService) CompactHistory(ctx context.Context, req gatewayresponses.ResponsesRequest) (*gatewayresponses.CompactHistoryResponse, error) {
+	return &gatewayresponses.CompactHistoryResponse{}, nil
+}
+
+func (s fakeHTTPResponsesService) CountInputTokens(ctx context.Context, req gatewayresponses.ResponsesRequest) (*gatewayresponses.InputTokenCountResponse, error) {
+	return &gatewayresponses.InputTokenCountResponse{Object: "response.input_tokens"}, nil
+}
+
 type fakeHTTPMessagesService struct{}
 
 func (s fakeHTTPMessagesService) CreateMessage(ctx context.Context, req gatewayanthropic.MessageRequest) (*gatewayanthropic.MessageResponse, error) {

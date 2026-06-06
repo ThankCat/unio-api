@@ -55,15 +55,17 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	return a.base.StreamChatCompletions(ctx, ch, cleaned, emit)
 }
 
-// logDropped 记录本次请求被 Drop 的字段名。
+// logDropped 以 DEBUG 记录本次请求被 Drop 的字段名。
 //
-// 只记录字段名，不记录字段值，避免把客户内容写入日志；空列表不产生日志。
+// 按 DEC-012，Drop provider 无法转换的合法字段是既定正常行为（Codex 常带 parallel_tool_calls /
+// prompt_cache_key / store 等），不是异常，故用 DEBUG 而非 WARN，避免正常流量刷屏；只记录字段名，
+// 不记录字段值，避免把客户内容写入日志；空列表不产生日志。
 func (a *Adapter) logDropped(ctx context.Context, dropped []string) {
 	if len(dropped) == 0 {
 		return
 	}
 
-	a.logger.WarnContext(ctx, "deepseek openai adapter dropped unsupported request fields",
+	a.logger.DebugContext(ctx, "deepseek openai adapter dropped unsupported request fields",
 		slog.String("protocol", "openai"),
 		slog.String("adapter_key", "deepseek"),
 		slog.Any("dropped_request_fields", dropped),

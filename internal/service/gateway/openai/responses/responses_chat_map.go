@@ -70,7 +70,12 @@ func mapResponsesRequestToChat(req gatewayapi.ResponsesRequest, upstreamModel st
 	}
 
 	// reasoning.effort → reasoning_effort（summary 不是 ChatRequest 字段，影响是否发 reasoning 事件，见 §6）。
-	if req.Reasoning != nil && req.Reasoning.Effort != nil {
+	// Responses reasoning 是 opt-in：缺省/null 表达显式非 reasoning 意图，置 ReasoningDisabled，
+	// 由 provider adapter 关闭私有思考模式（DeepSeek 出站 thinking:disabled），避免 Codex effort=none
+	// 的非 reasoning run 仍触发上游 thinking（额外成本+CoT，BRIDGE §6）。
+	if req.Reasoning == nil {
+		chat.ReasoningDisabled = true
+	} else if req.Reasoning.Effort != nil {
 		chat.ReasoningEffort = req.Reasoning.Effort
 	}
 

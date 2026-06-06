@@ -11,7 +11,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
 )
 
-// codexFixtureGlob 指向真实 Codex /v1/responses 抓包（codexcapture 落盘）。
+// codexFixtureGlob 指向真实 Codex /v1/responses 抓包（开发期手工抓包落盘）。
 const codexFixtureGlob = "../../../../blackbox/fixtures/codex/*_POST_v1_responses.json"
 
 // TestMapRealCodexFixtureToChat 用真实 v0.130 抓包端到端验证 TASK-11.05 翻译：

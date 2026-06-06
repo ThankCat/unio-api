@@ -7,8 +7,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi/middleware"
 	gatewayanthropic "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
+	"github.com/ThankCat/unio-api/internal/app/gatewayapi/middleware"
 	gatewaychat "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	gatewaymodels "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/models"
 	gatewayresponses "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
@@ -89,7 +89,17 @@ func NewRouter(deps RouterDeps) http.Handler {
 		r.Get("/models", gatewaymodels.NewModelsHandler(deps.ModelCatalogService))
 
 		r.Method(http.MethodPost, "/chat/completions", gatewaychat.NewChatCompletionsHandler(deps.ChatCompletionService))
+
+		// OpenAI Responses API（Codex 兼容）。compact/input_tokens 是 /responses 子集协议；
+		// 有状态 endpoint（retrieve/delete/cancel/input_items）Unio 无服务端存储，统一 501。
 		r.Method(http.MethodPost, "/responses", gatewayresponses.NewResponsesHandler(deps.ResponsesService))
+		r.Method(http.MethodPost, "/responses/compact", gatewayresponses.NewResponsesCompactHandler(deps.ResponsesService))
+		r.Method(http.MethodPost, "/responses/input_tokens", gatewayresponses.NewResponsesInputTokensHandler(deps.ResponsesService))
+		r.Method(http.MethodGet, "/responses/{response_id}", gatewayresponses.NewResponsesStatelessUnsupportedHandler())
+		r.Method(http.MethodDelete, "/responses/{response_id}", gatewayresponses.NewResponsesStatelessUnsupportedHandler())
+		r.Method(http.MethodGet, "/responses/{response_id}/input_items", gatewayresponses.NewResponsesStatelessUnsupportedHandler())
+		r.Method(http.MethodPost, "/responses/{response_id}/cancel", gatewayresponses.NewResponsesStatelessUnsupportedHandler())
+
 		r.Method(http.MethodPost, "/messages", gatewayanthropic.NewMessagesHandler(deps.MessagesService, deps.Logger))
 	})
 

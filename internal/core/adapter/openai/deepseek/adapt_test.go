@@ -7,6 +7,121 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
 )
 
+// TestNormalizeReasoningEffort 验证 reasoning_effort 归一为 DeepSeek 支持的 high/max，未知枚举不识别。
+func TestNormalizeReasoningEffort(t *testing.T) {
+	highCases := []string{"minimal", "low", "medium", "high", "MINIMAL", " low ", "High"}
+	for _, in := range highCases {
+		got, ok := normalizeReasoningEffort(in)
+		if !ok || got != "high" {
+			t.Fatalf("normalizeReasoningEffort(%q) = (%q,%v), want (high,true)", in, got, ok)
+		}
+	}
+
+	maxCases := []string{"xhigh", "max", "XHigh", " max "}
+	for _, in := range maxCases {
+		got, ok := normalizeReasoningEffort(in)
+		if !ok || got != "max" {
+			t.Fatalf("normalizeReasoningEffort(%q) = (%q,%v), want (max,true)", in, got, ok)
+		}
+	}
+
+	for _, in := range []string{"", "none", "ultra", "1"} {
+		if got, ok := normalizeReasoningEffort(in); ok {
+			t.Fatalf("normalizeReasoningEffort(%q) = (%q,true), want ok=false", in, got)
+		}
+	}
+}
+
+// TestDropUnsupportedAdaptsReasoningEffort 验证 dropUnsupported 把 reasoning_effort 归一为 high/max，
+// 归一成功不计入 dropped；未知枚举 Drop 并计入审计。
+func TestDropUnsupportedAdaptsReasoningEffort(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want string
+	}{
+		{"minimal", "high"},
+		{"low", "high"},
+		{"medium", "high"},
+		{"high", "high"},
+		{"xhigh", "max"},
+		{"max", "max"},
+	} {
+		effort := tc.in
+		cleaned, dropped := dropUnsupported(openai.ChatRequest{ReasoningEffort: &effort})
+		if cleaned.ReasoningEffort == nil || *cleaned.ReasoningEffort != tc.want {
+			t.Fatalf("reasoning_effort %q normalized = %v, want %q", tc.in, cleaned.ReasoningEffort, tc.want)
+		}
+		for _, d := range dropped {
+			if d == "reasoning_effort" {
+				t.Fatalf("reasoning_effort %q should adapt, not drop", tc.in)
+			}
+		}
+		// 不修改调用方原值。
+		if effort != tc.in {
+			t.Fatalf("dropUnsupported mutated caller reasoning_effort: %q -> %q", tc.in, effort)
+		}
+	}
+
+	unknown := "none"
+	cleaned, dropped := dropUnsupported(openai.ChatRequest{ReasoningEffort: &unknown})
+	if cleaned.ReasoningEffort != nil {
+		t.Fatalf("unknown reasoning_effort should be dropped, got %v", *cleaned.ReasoningEffort)
+	}
+	assertDropped(t, dropped, "reasoning_effort")
+}
+
+// TestAdaptThinkingDisabled 验证 ReasoningDisabled 时注入 thinking:disabled，且不覆盖显式 thinking、
+// 同时 Drop 矛盾的 reasoning_effort；未禁用时不注入。
+func TestAdaptThinkingDisabled(t *testing.T) {
+	// ReasoningDisabled → 注入 thinking:disabled。
+	cleaned, _ := dropUnsupported(openai.ChatRequest{ReasoningDisabled: true})
+	if !thinkingTypeEquals(cleaned.Extensions["thinking"], "disabled") {
+		t.Fatalf("expected thinking:disabled injected, got %s", cleaned.Extensions["thinking"])
+	}
+
+	// 未禁用 → 不注入 thinking。
+	noDisable, _ := dropUnsupported(openai.ChatRequest{})
+	if _, ok := noDisable.Extensions["thinking"]; ok {
+		t.Fatal("expected no thinking injected when reasoning not disabled")
+	}
+
+	// 显式 thinking 不被覆盖（尊重 chat ingress extra_body.thinking）。
+	explicit := openai.ChatRequest{
+		ReasoningDisabled: true,
+		Extensions:        map[string]json.RawMessage{"thinking": json.RawMessage(`{"type":"enabled"}`)},
+	}
+	cleanedExplicit, _ := dropUnsupported(explicit)
+	if !thinkingTypeEquals(cleanedExplicit.Extensions["thinking"], "enabled") {
+		t.Fatalf("expected explicit thinking preserved, got %s", cleanedExplicit.Extensions["thinking"])
+	}
+
+	// ReasoningDisabled + reasoning_effort → effort 与 thinking:disabled 矛盾，Drop。
+	effort := "high"
+	cleanedEffort, dropped := dropUnsupported(openai.ChatRequest{ReasoningDisabled: true, ReasoningEffort: &effort})
+	if cleanedEffort.ReasoningEffort != nil {
+		t.Fatalf("expected reasoning_effort dropped when reasoning disabled, got %v", *cleanedEffort.ReasoningEffort)
+	}
+	if !containsString(dropped, "reasoning_effort") {
+		t.Fatalf("expected reasoning_effort in dropped, got %v", dropped)
+	}
+}
+
+func thinkingTypeEquals(raw json.RawMessage, want string) bool {
+	var th struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(raw, &th) == nil && th.Type == want
+}
+
+func containsString(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
 // TestAdaptLegacyFunctionsConvertsToTools 验证 legacy functions 被 Adapt 成现代 function tools，
 // 不计入 dropped 审计。
 func TestAdaptLegacyFunctionsConvertsToTools(t *testing.T) {

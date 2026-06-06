@@ -42,13 +42,13 @@ Phase 10 会把 runtime adapter 绑定迁移为 `channels.protocol` + `channels.
 | `tools` | `tools` | |
 | `tool_choice` | `tool_choice` | |
 | `response_format` | `response_format` | 支持 `json_object` |
-| `reasoning_effort` | `reasoning_effort` | DeepSeek 支持 `high` / `max` |
 | `stream_options.include_usage` | `stream_options.include_usage` | adapter 内部 settlement **始终 true** |
 
 ### 2.2 需要适配的字段
 
 | 客户 OpenAI 字段 | DeepSeek wire | 适配规则 |
 | --- | --- | --- |
+| `reasoning_effort` | `reasoning_effort` | Unio 出站归一为 `high`/`max`：`minimal`/`low`/`medium`/`high`→`high`，`xhigh`/`max`→`max`，未知枚举 Drop（见 Phase 10 mapping §2 / GAP-11-010；DeepSeek 自身亦兼容 low/medium→high） |
 | `messages[].reasoning_content` | `messages[].reasoning_content` | assistant 历史**必须原样回传**（tool 多轮必需） |
 | OpenAI SDK `extra_body.thinking` | `thinking` | `{ "type": "enabled" \| "disabled" }` |
 | 无等价 OpenAI 字段时客户直传 `thinking` | `thinking` | Passthrough |

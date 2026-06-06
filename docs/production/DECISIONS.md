@@ -812,6 +812,72 @@ Drop vs Reject 划线：
                docs/protocol/MODELS_DEV_LICENSE.md (license 摘要与 attribution)
 
 7. 欠账登记为 GAP-12-001 ~ GAP-12-009；阶段 11 [GAP-11-010](TODO_REGISTER.md#gap-11-010)
-   reasoning_effort doc/code drift 在阶段 12 TASK-12.06 中关闭。
+   reasoning_effort doc/code drift 已在 TASK-11.09 关闭（adapter 出站归一 + 两份 doc 对齐，
+   见 DEC-016）；最终能力位沉淀仍归阶段 12 TASK-12.06。
+```
+
+## DEC-016 Responses reasoning 为 opt-in，DeepSeek 出站归一 reasoning_effort 与 thinking 闸门
+
+状态：accepted
+
+决策：
+
+```text
+1. reasoning_effort 归一（DEC-012 协议为先的 provider 出站具体化）：
+   DeepSeek 官方 reasoning_effort 枚举仅 high/max（thinking 模式生效），并自带
+   low/medium→high、xhigh→max 兼容映射；Codex（gpt-5 家族）另发 minimal，不在 DeepSeek
+   枚举内。Unio 在 DeepSeek adapter 出站显式归一为 high/max：
+     minimal/low/medium/high → high；xhigh/max → max；未知枚举 Drop（DeepSeek 回退默认 high）。
+   不依赖上游隐式兼容、杜绝 minimal 触发上游 422。实现：deepseek/adapt.go normalizeReasoningEffort
+   + drop.go。
+
+2. Responses reasoning 为 opt-in（thinking 闸门）：
+   OpenAI Responses 的 reasoning 是显式可选项；缺省/null 表达「不要推理」。DeepSeek thinking
+   默认 enabled，若不处理，则 Codex effort=none 的非 reasoning run 仍触发 DeepSeek CoT
+   （额外 token 成本 + reasoning 输出）。因此：
+     - 桥接层（responses_chat_map）：reasoning 缺省/null → 置内部意图标志
+       ChatRequest.ReasoningDisabled=true；有 effort → 写 reasoning_effort。
+     - DeepSeek adapter：ReasoningDisabled 且客户未显式带 thinking 时，出站注入
+       thinking:{type:"disabled"}，并 Drop 矛盾的 reasoning_effort。
+
+3. 分层与防泄漏（关键约束）：
+   thinking 是 DeepSeek 私有字段，base OpenAI adapter 的 mergeJSONObjects 会把所有
+   Extensions 原样并入 wire（无白名单），若在桥接层直接塞 thinking 会泄漏到真 OpenAI 上游。
+   因此用「provider 无关的内部意图标志 ReasoningDisabled」承载语义：
+     - 它是 ChatRequest 内部契约字段，不在 wire struct（chatCompletionRequest）中，永不序列化。
+     - 由具体 provider adapter 翻译为自家私有字段（DeepSeek→thinking:disabled）。
+     - chat completions ingress 不设置该标志，保持 DeepSeek 默认 enabled（不回归 DS-04）。
+```
+
+原因：
+
+```text
+1. reasoning_effort 在 Phase 10 chat 流量几乎不触发，但 Phase 11 Codex 每请求必带，是首次实战；
+   原 doc 标 Adapt 而代码裸 pass-through（GAP-11-010）。以官方 API 文档为权威依据定调 Adapt，
+   消除 doc/code/doc 三方漂移。
+2. 「付费要推理才推理」符合 Responses opt-in 语义，也避免非 reasoning run 的隐性思考成本，
+   对商业网关是正确的成本与语义边界。
+3. 用内部意图标志而非直塞私有字段，既满足「ingress 禁止 silent leak」也保持桥接层 provider 无关、
+   provider 能力归一只在各自 adapter（与 DEC-002 / DEC-012 一致）。
+```
+
+明确不做：
+
+```text
+1. 不在桥接层注入 DeepSeek 私有 thinking（防泄漏到真 OpenAI 上游）。
+2. 不在 DeepSeek adapter 仅凭 reasoning_effort==nil 关 thinking（会回归 chat 默认 enabled）。
+3. 不覆盖客户显式 thinking（chat ingress extra_body.thinking 优先）。
+```
+
+影响：
+
+```text
+1. 代码：internal/core/adapter/openai/contract.go 新增内部字段 ReasoningDisabled；
+   responses_chat_map.go 置位；deepseek/drop.go + adapt.go 出站归一与 thinking 注入；均有单测。
+2. doc：Phase 9 DEEPSEEK_UPSTREAM.md、Phase 10 DEEPSEEK_OPENAI_MAPPING.md、Phase 11
+   RESPONSES_CHAT_BRIDGE.md 已对齐；GAP-11-010 关闭。
+3. 真实 key 端到端 smoke（含 thinking on/off 行为）归 TASK-11.15；阶段 12 TASK-12.06 将
+   reasoning.effort 能力位沉淀进 model_capabilities，与本决策出站归一不冲突（一个是能力闸门，
+   一个是 provider 出站适配）。
 ```
 
