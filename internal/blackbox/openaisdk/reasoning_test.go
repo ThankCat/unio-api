@@ -32,8 +32,8 @@ func TestOAISDKMockNonStreamReasoning(t *testing.T) {
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
 		UpstreamBaseURL: mock.URL + "/v1",
-		ModelID:         "deepseek-reasoner",
-		UpstreamModel:   "deepseek-reasoner",
+		ModelID:         "deepseek-v4-pro",
+		UpstreamModel:   "deepseek-v4-pro",
 	})
 
 	client := openai.NewClient(

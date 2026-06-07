@@ -12,7 +12,7 @@ import (
 
 func TestChatCompletionRequestUnmarshalPreservesVendorExtension(t *testing.T) {
 	raw := `{
-		"model": "deepseek/deepseek-chat",
+		"model": "deepseek/deepseek-v4-flash",
 		"messages": [{"role": "user", "content": "hi"}],
 		"thinking": {"type": "enabled"}
 	}`
@@ -22,7 +22,7 @@ func TestChatCompletionRequestUnmarshalPreservesVendorExtension(t *testing.T) {
 		t.Fatalf("unmarshal request: %v", err)
 	}
 
-	if req.Model != "deepseek/deepseek-chat" {
+	if req.Model != "deepseek/deepseek-v4-flash" {
 		t.Fatalf("expected model preserved, got %q", req.Model)
 	}
 
@@ -188,7 +188,7 @@ func TestRouterV1ChatCompletionPreservesThinkingExtension(t *testing.T) {
 	service := &fakeChatCompletionService{
 		createResp: &ChatCompletionResponse{
 			Object: "chat.completion",
-			Model:  "deepseek/deepseek-chat",
+			Model:  "deepseek/deepseek-v4-flash",
 			Choices: []ChatCompletionChoice{
 				{
 					Index: 0,
@@ -204,7 +204,7 @@ func TestRouterV1ChatCompletionPreservesThinkingExtension(t *testing.T) {
 	handler := newTestRouter(authenticator, service, nil)
 
 	body := `{
-		"model": "deepseek/deepseek-chat",
+		"model": "deepseek/deepseek-v4-flash",
 		"messages": [{"role": "user", "content": "hi"}],
 		"thinking": {"type": "enabled"}
 	}`

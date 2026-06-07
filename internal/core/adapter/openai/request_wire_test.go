@@ -7,7 +7,7 @@ import (
 
 func TestBuildChatCompletionRequestBodyMergesExtensions(t *testing.T) {
 	body, err := buildChatCompletionRequestBody(ChatRequest{
-		Model: "deepseek-chat",
+		Model: "deepseek-v4-flash",
 		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hi")},
 		},
@@ -32,7 +32,7 @@ func TestBuildChatCompletionRequestBodyMergesExtensions(t *testing.T) {
 func TestBuildChatCompletionRequestBodyForwardsToolsAndReasoningHistory(t *testing.T) {
 	reasoning := "prior-thought"
 	body, err := buildChatCompletionRequestBody(ChatRequest{
-		Model: "deepseek-chat",
+		Model: "deepseek-v4-flash",
 		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("hi")},
 			{

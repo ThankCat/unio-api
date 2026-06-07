@@ -24,8 +24,8 @@ import (
 func TestResponsesRealNonStream(t *testing.T) {
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:          sdkfixture.UpstreamReal,
-		ModelID:       "deepseek-chat",
-		UpstreamModel: "deepseek-chat",
+		ModelID:       "deepseek-v4-flash",
+		UpstreamModel: "deepseek-v4-flash",
 	})
 
 	resp := doResponses(t, http.MethodPost, f.BaseURL+"/responses", f.APIKey,
@@ -72,8 +72,8 @@ func TestResponsesRealNonStream(t *testing.T) {
 func TestResponsesRealStream(t *testing.T) {
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:          sdkfixture.UpstreamReal,
-		ModelID:       "deepseek-chat",
-		UpstreamModel: "deepseek-chat",
+		ModelID:       "deepseek-v4-flash",
+		UpstreamModel: "deepseek-v4-flash",
 	})
 
 	resp := doResponses(t, http.MethodPost, f.BaseURL+"/responses", f.APIKey,

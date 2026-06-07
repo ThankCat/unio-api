@@ -33,7 +33,7 @@ func mapChatResponseToResponses(req gatewayapi.ResponsesRequest, chatResp openai
 	// reasoning：DeepSeek reasoning_content 是开源模型原始 CoT，落 reasoning item 的
 	// content:[{type:"reasoning_text"}]（BRIDGE §4/§6 已冻结，非 summary_text）。
 	if chatResp.ReasoningContent != nil && *chatResp.ReasoningContent != "" {
-		output = append(output, gatewayapi.ResponseOutputItem{
+		reasoningItem := gatewayapi.ResponseOutputItem{
 			Type:    "reasoning",
 			ID:      newResponsesID("rs"),
 			Summary: []gatewayapi.ResponseOutputContent{},
@@ -41,7 +41,15 @@ func mapChatResponseToResponses(req gatewayapi.ResponsesRequest, chatResp openai
 				Type: "reasoning_text",
 				Text: *chatResp.ReasoningContent,
 			}},
-		})
+		}
+		// 无状态跨轮思维链回放载体（U1）：客户按 reasoning.encrypted_content 原样回传，Unio 解码后
+		// 在工具调用轮回灌 DeepSeek（避免 400）。仅在客户显式请求该 include 或无状态(store=false)时附带，
+		// 不给不需要的客户引入额外字段。
+		if requestWantsEncryptedReasoning(req) {
+			carrier := encodeReasoningCarrier(*chatResp.ReasoningContent)
+			reasoningItem.EncryptedContent = &carrier
+		}
+		output = append(output, reasoningItem)
 	}
 
 	// message：assistant 文本与 refusal 合并进单条 message item 的 content parts。
@@ -104,6 +112,19 @@ func mapChatResponseToResponses(req gatewayapi.ResponsesRequest, chatResp openai
 	}
 
 	return resp
+}
+
+// requestWantsEncryptedReasoning 判断是否应在 reasoning item 附带 encrypted_content 回放载体。
+//
+// Codex 无状态会带 include:["reasoning.encrypted_content"] 且 store:false；满足其一即附带载体，
+// 让客户能把思维链原样带回、在工具调用轮回灌 DeepSeek（U1）。
+func requestWantsEncryptedReasoning(req gatewayapi.ResponsesRequest) bool {
+	for _, inc := range req.Include {
+		if inc == "reasoning.encrypted_content" {
+			return true
+		}
+	}
+	return req.Store != nil && !*req.Store
 }
 
 // responseStatusFromFinish 把 Chat finish_reason 映射为 Responses status + incomplete_details（BRIDGE §4.1）。

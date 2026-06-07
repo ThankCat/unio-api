@@ -258,7 +258,7 @@ func messageResponse() *anthropicadapter.MessageResponse {
 	stopReason := "end_turn"
 	return &anthropicadapter.MessageResponse{
 		ID:         "msg_provider_test",
-		Model:      "deepseek-chat",
+		Model:      "deepseek-v4-flash",
 		Role:       "assistant",
 		Content:    []json.RawMessage{json.RawMessage(`{"type":"text","text":"hi there"}`)},
 		StopReason: &stopReason,
@@ -267,7 +267,7 @@ func messageResponse() *anthropicadapter.MessageResponse {
 		Facts: adapter.ResponseFacts{
 			UpstreamProtocol:    "anthropic",
 			UpstreamResponseID:  "msg_provider_test",
-			UpstreamModel:       "deepseek-chat",
+			UpstreamModel:       "deepseek-v4-flash",
 			Finish:              adapter.FinishFacts{Class: adapter.FinishStop, RawReason: "end_turn"},
 			Usage:               usage.ToUsageFacts(),
 			UsageSource:         coreusage.SourceUpstreamResponse,
@@ -300,7 +300,7 @@ func TestCreateMessageReturnsResponseAndSettlesWithAnthropicFacts(t *testing.T) 
 	settlement := &fakeMessagesSettlement{}
 	authorizer := &fakeMessagesAuthorizer{}
 	service := newMessagesServiceForTest(
-		&fakeMessagesRouter{plan: routePlan(routeCandidate("deepseek", 123, "deepseek-chat"))},
+		&fakeMessagesRouter{plan: routePlan(routeCandidate("deepseek", 123, "deepseek-v4-flash"))},
 		registry,
 		settlement,
 		authorizer,
@@ -337,7 +337,7 @@ func TestCreateMessageReturnsResponseAndSettlesWithAnthropicFacts(t *testing.T) 
 }
 
 func TestCreateMessageRoutesWithAnthropicIngressProtocol(t *testing.T) {
-	router := &fakeMessagesRouter{plan: routePlan(routeCandidate("deepseek", 123, "deepseek-chat"))}
+	router := &fakeMessagesRouter{plan: routePlan(routeCandidate("deepseek", 123, "deepseek-v4-flash"))}
 	adapterFake := &fakeMessagesAdapter{messagesResp: messageResponse()}
 	registry := &fakeMessagesRegistry{
 		messages:   map[string]anthropicadapter.MessagesAdapter{"deepseek": adapterFake},
@@ -363,7 +363,7 @@ func TestCreateMessageReleasesAuthorizationOnNonRetryableAdapterError(t *testing
 	settlement := &fakeMessagesSettlement{}
 	authorizer := &fakeMessagesAuthorizer{}
 	service := newMessagesServiceForTest(
-		&fakeMessagesRouter{plan: routePlan(routeCandidate("deepseek", 123, "deepseek-chat"))},
+		&fakeMessagesRouter{plan: routePlan(routeCandidate("deepseek", 123, "deepseek-v4-flash"))},
 		registry,
 		settlement,
 		authorizer,
@@ -387,7 +387,7 @@ func TestStreamMessageEmitsNativeEventsAndStopThenSettles(t *testing.T) {
 	facts := adapter.ResponseFacts{
 		UpstreamProtocol:    "anthropic",
 		UpstreamResponseID:  "msg_stream_test",
-		UpstreamModel:       "deepseek-chat",
+		UpstreamModel:       "deepseek-v4-flash",
 		Finish:              adapter.FinishFacts{Class: adapter.FinishStop, RawReason: "end_turn"},
 		Usage:               finalUsage.ToUsageFacts(),
 		UsageSource:         coreusage.SourceUpstreamStream,
@@ -396,7 +396,7 @@ func TestStreamMessageEmitsNativeEventsAndStopThenSettles(t *testing.T) {
 	}
 	adapterFake := &fakeMessagesAdapter{
 		streamEvents: []anthropicadapter.MessageStreamEvent{
-			{Type: "message_start", Data: json.RawMessage(`{"type":"message_start","message":{"id":"msg_stream_test","model":"deepseek-chat"}}`)},
+			{Type: "message_start", Data: json.RawMessage(`{"type":"message_start","message":{"id":"msg_stream_test","model":"deepseek-v4-flash"}}`)},
 			{Type: "content_block_delta", Data: json.RawMessage(`{"type":"content_block_delta","index":0}`)},
 			{Type: "message_delta", Data: json.RawMessage(`{"type":"message_delta"}`), Usage: finalUsage, Upstream: upstream},
 		},
@@ -408,7 +408,7 @@ func TestStreamMessageEmitsNativeEventsAndStopThenSettles(t *testing.T) {
 	}
 	settlement := &fakeMessagesSettlement{}
 	service := newMessagesServiceForTest(
-		&fakeMessagesRouter{plan: routePlan(routeCandidate("deepseek", 123, "deepseek-chat"))},
+		&fakeMessagesRouter{plan: routePlan(routeCandidate("deepseek", 123, "deepseek-v4-flash"))},
 		registry,
 		settlement,
 		&fakeMessagesAuthorizer{},
@@ -458,7 +458,7 @@ func TestStreamMessageEmitsNativeEventsAndStopThenSettles(t *testing.T) {
 func TestStreamMessageMissingFinalUsageReleasesAndFails(t *testing.T) {
 	adapterFake := &fakeMessagesAdapter{
 		streamEvents: []anthropicadapter.MessageStreamEvent{
-			{Type: "message_start", Data: json.RawMessage(`{"type":"message_start","message":{"id":"x","model":"deepseek-chat"}}`)},
+			{Type: "message_start", Data: json.RawMessage(`{"type":"message_start","message":{"id":"x","model":"deepseek-v4-flash"}}`)},
 		},
 		// 无 final usage：streamOutcome 为空。
 	}
@@ -469,7 +469,7 @@ func TestStreamMessageMissingFinalUsageReleasesAndFails(t *testing.T) {
 	settlement := &fakeMessagesSettlement{}
 	authorizer := &fakeMessagesAuthorizer{}
 	service := newMessagesServiceForTest(
-		&fakeMessagesRouter{plan: routePlan(routeCandidate("deepseek", 123, "deepseek-chat"))},
+		&fakeMessagesRouter{plan: routePlan(routeCandidate("deepseek", 123, "deepseek-v4-flash"))},
 		registry,
 		settlement,
 		authorizer,

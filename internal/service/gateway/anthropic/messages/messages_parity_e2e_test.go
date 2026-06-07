@@ -62,7 +62,7 @@ func newRealMessagesRegistry(client *http.Client) *fakeMessagesRegistry {
 
 // mockMessagesCandidate 把 routing 候选指向 mock 上游，并标注 deepseek provider slug。
 func mockMessagesCandidate(server *httptest.Server) routing.ChatRouteCandidate {
-	candidate := routeCandidate("deepseek", 123, "deepseek-chat")
+	candidate := routeCandidate("deepseek", 123, "deepseek-v4-flash")
 	candidate.Channel.BaseURL = server.URL
 	candidate.Channel.ProviderSlug = "deepseek"
 	return candidate
@@ -78,7 +78,7 @@ func TestAnthropicSDKShapeNonStreamMessage(t *testing.T) {
 			"id": "msg_ds_1",
 			"type": "message",
 			"role": "assistant",
-			"model": "deepseek-chat",
+			"model": "deepseek-v4-flash",
 			"content": [{"type":"text","text":"hi there"}],
 			"stop_reason": "end_turn",
 			"stop_sequence": null,
@@ -147,8 +147,8 @@ func TestAnthropicSDKShapeNonStreamMessage(t *testing.T) {
 	if err := json.Unmarshal(wire["model"], &upstreamModel); err != nil {
 		t.Fatalf("decode upstream model: %v", err)
 	}
-	if upstreamModel != "deepseek-chat" {
-		t.Fatalf("upstream model = %q, want deepseek-chat", upstreamModel)
+	if upstreamModel != "deepseek-v4-flash" {
+		t.Fatalf("upstream model = %q, want deepseek-v4-flash", upstreamModel)
 	}
 	if _, ok := wire["max_tokens"]; !ok {
 		t.Fatal("expected max_tokens forwarded to upstream")
@@ -174,7 +174,7 @@ func TestAnthropicSDKShapeStreamMessage(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		events := []string{
 			"event: message_start\n" +
-				`data: {"type":"message_start","message":{"id":"msg_ds_stream","model":"deepseek-chat","usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n",
+				`data: {"type":"message_start","message":{"id":"msg_ds_stream","model":"deepseek-v4-flash","usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n",
 			"event: content_block_delta\n" +
 				`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi there"}}` + "\n\n",
 			"event: message_delta\n" +

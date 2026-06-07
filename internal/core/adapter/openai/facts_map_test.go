@@ -35,7 +35,7 @@ func TestResponseFactsNonStreamBuildsNeutralFacts(t *testing.T) {
 	}
 	meta := adapter.UpstreamMetadata{StatusCode: 200, RequestID: "req-abc"}
 
-	facts := responseFactsNonStream("chatcmpl-1", "deepseek-chat", "tool_calls", chatUsage, meta)
+	facts := responseFactsNonStream("chatcmpl-1", "deepseek-v4-flash", "tool_calls", chatUsage, meta)
 
 	if facts.UpstreamProtocol != "openai" {
 		t.Fatalf("UpstreamProtocol = %q, want openai", facts.UpstreamProtocol)
@@ -43,7 +43,7 @@ func TestResponseFactsNonStreamBuildsNeutralFacts(t *testing.T) {
 	if facts.UpstreamResponseID != "chatcmpl-1" {
 		t.Fatalf("UpstreamResponseID = %q", facts.UpstreamResponseID)
 	}
-	if facts.UpstreamModel != "deepseek-chat" {
+	if facts.UpstreamModel != "deepseek-v4-flash" {
 		t.Fatalf("UpstreamModel = %q", facts.UpstreamModel)
 	}
 	if facts.Finish.Class != adapter.FinishToolUse || facts.Finish.RawReason != "tool_calls" {

@@ -67,7 +67,7 @@ DeepSeek）下能做什么、做到什么程度、不做什么。
 | --- | --- | --- |
 | `output[{type:"message",...}]`（普通文本） | ✅ | 标准映射 |
 | `output[{type:"reasoning",...}]`（文本 reasoning） | ✅ | 从 DeepSeek `reasoning_content` 还原 |
-| `output[{type:"reasoning", encrypted_content:...}]`（加密 reasoning） | ❌ | **不生成**；OpenAI 专属能力（GAP-11-003） |
+| `output[{type:"reasoning", encrypted_content:...}]`（加密 reasoning） | ⚠️ | 非 OpenAI 加密；U1 在 `include:["reasoning.encrypted_content"]` 或无状态时附带 Unio 可逆载体 `unio-rsn-v1:`+base64，供无状态跨轮回灌（GAP-11-003） |
 | `output[{type:"function_call",...}]` | ✅ | 从 Chat tool_calls 还原 |
 | `output[{type:"web_search_call"\|"file_search_call"\|...}]` 内置工具调用项 | ❌ | 不生成（GAP-11-004） |
 | `usage`（input_tokens / output_tokens / 字段名转换 / details） | ✅ | 完整 |

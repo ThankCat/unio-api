@@ -49,7 +49,7 @@ func TestAdapterStreamMessagesWithholdsMessageStopAndReturnsFacts(t *testing.T) 
 			Timeout: 30 * time.Second,
 		},
 		MessageRequest{
-			Model:     "deepseek-chat",
+			Model:     "deepseek-v4-flash",
 			MaxTokens: intPtr(16),
 			Messages: []Message{
 				{Role: "user", Content: []byte(`"hello"`)},
@@ -118,7 +118,7 @@ func TestAdapterStreamMessagesReturnsFactsWithTailErrorBeforeMessageStop(t *test
 		context.Background(),
 		channel.Runtime{BaseURL: server.URL, APIKey: "test-secret"},
 		MessageRequest{
-			Model:     "deepseek-chat",
+			Model:     "deepseek-v4-flash",
 			MaxTokens: intPtr(16),
 			Messages:  []Message{{Role: "user", Content: []byte(`"hello"`)}},
 		},

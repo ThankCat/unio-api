@@ -57,7 +57,7 @@ func TestDeepSeekBlackboxNonStream(t *testing.T) {
 	adapter, runtime := newBlackboxAdapter(t)
 
 	resp, err := adapter.ChatCompletions(context.Background(), runtime, openai.ChatRequest{
-		Model:     "deepseek-chat",
+		Model:     "deepseek-v4-flash",
 		Messages:  []openai.ChatMessage{blackboxUserMessage("Reply with the single word: ok")},
 		MaxTokens: intPtr(8),
 	})
@@ -89,7 +89,7 @@ func TestDeepSeekBlackboxStream(t *testing.T) {
 	var content string
 	var finalUsage *openai.ChatStreamChunk
 	outcome, err := adapter.StreamChatCompletions(context.Background(), runtime, openai.ChatRequest{
-		Model:     "deepseek-chat",
+		Model:     "deepseek-v4-flash",
 		Messages:  []openai.ChatMessage{blackboxUserMessage("Reply with the single word: ok")},
 		MaxTokens: intPtr(8),
 	}, func(chunk openai.ChatStreamChunk) error {
@@ -150,7 +150,7 @@ func TestDeepSeekBlackboxTokenizerCalibration(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := openai.ChatRequest{
-				Model:     "deepseek-chat",
+				Model:     "deepseek-v4-flash",
 				Messages:  tc.messages,
 				MaxTokens: intPtr(16),
 			}
@@ -187,7 +187,7 @@ func TestDeepSeekBlackboxLogprobs(t *testing.T) {
 	adapter, runtime := newBlackboxAdapter(t)
 
 	resp, err := adapter.ChatCompletions(context.Background(), runtime, openai.ChatRequest{
-		Model:       "deepseek-chat",
+		Model:       "deepseek-v4-flash",
 		Messages:    []openai.ChatMessage{blackboxUserMessage("Reply with the single word: ok")},
 		MaxTokens:   intPtr(8),
 		Logprobs:    boolPtr(true),
@@ -222,12 +222,12 @@ func TestDeepSeekBlackboxLogprobs(t *testing.T) {
 	}
 }
 
-// DS-OAI-03：thinking 非流式 reasoning/content 分离（deepseek-reasoner）。
+// DS-OAI-03：thinking 非流式 reasoning/content 分离（deepseek-v4-pro）。
 func TestDeepSeekBlackboxThinkingNonStream(t *testing.T) {
 	adapter, runtime := newBlackboxAdapter(t)
 
 	resp, err := adapter.ChatCompletions(context.Background(), runtime, openai.ChatRequest{
-		Model:     "deepseek-reasoner",
+		Model:     "deepseek-v4-pro",
 		Messages:  []openai.ChatMessage{blackboxUserMessage("What is 2+2? Reply with just the number.")},
 		MaxTokens: intPtr(512),
 	})
@@ -246,14 +246,14 @@ func TestDeepSeekBlackboxThinkingNonStream(t *testing.T) {
 	}
 }
 
-// DS-OAI-04：thinking 流式 reasoning/content 分离（deepseek-reasoner）。
+// DS-OAI-04：thinking 流式 reasoning/content 分离（deepseek-v4-pro）。
 func TestDeepSeekBlackboxThinkingStream(t *testing.T) {
 	adapter, runtime := newBlackboxAdapter(t)
 
 	var content, reasoning string
 	var finalUsage *openai.ChatStreamChunk
 	outcome, err := adapter.StreamChatCompletions(context.Background(), runtime, openai.ChatRequest{
-		Model:     "deepseek-reasoner",
+		Model:     "deepseek-v4-pro",
 		Messages:  []openai.ChatMessage{blackboxUserMessage("What is 2+2? Reply with just the number.")},
 		MaxTokens: intPtr(512),
 	}, func(chunk openai.ChatStreamChunk) error {
@@ -297,7 +297,7 @@ func TestDeepSeekBlackboxDropUnsupportedStill200(t *testing.T) {
 	adapter, runtime := newBlackboxAdapter(t)
 
 	resp, err := adapter.ChatCompletions(context.Background(), runtime, openai.ChatRequest{
-		Model:             "deepseek-chat",
+		Model:             "deepseek-v4-flash",
 		Messages:          []openai.ChatMessage{blackboxUserMessage("Reply with the single word: ok")},
 		MaxTokens:         intPtr(8),
 		PresencePenalty:   float64Ptr(0.5),

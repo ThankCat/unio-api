@@ -207,7 +207,7 @@ func okChatResponse() *openai.ChatResponse {
 	meta := adapter.UpstreamMetadata{StatusCode: 200, RequestID: "req-1"}
 	return &openai.ChatResponse{
 		ID:           "chatcmpl_upstream",
-		Model:        "deepseek-chat",
+		Model:        "deepseek-v4-flash",
 		Content:      "hi there",
 		FinishReason: "stop",
 		Usage:        usage,
@@ -216,7 +216,7 @@ func okChatResponse() *openai.ChatResponse {
 		Facts: adapter.ResponseFacts{
 			UpstreamProtocol:    "openai",
 			UpstreamResponseID:  "chatcmpl_upstream",
-			UpstreamModel:       "deepseek-chat",
+			UpstreamModel:       "deepseek-v4-flash",
 			Finish:              adapter.FinishFacts{Class: adapter.FinishStop, RawReason: "stop"},
 			UsageMappingVersion: "openai.v1",
 			Metadata:            meta,
@@ -263,7 +263,7 @@ func TestCreateResponse_HappyPath(t *testing.T) {
 		adapters:   map[string]openai.ChatAdapter{"deepseek": chatAdapter},
 		tokenizers: map[string]openai.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
 	}
-	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-chat")}}}
+	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}}}
 	settlement := &fakeSettlement{}
 	authorizer := &fakeAuthorizer{}
 	requestLog := newFakeRequestLog()
@@ -287,8 +287,8 @@ func TestCreateResponse_HappyPath(t *testing.T) {
 	}
 
 	// 请求翻译送达 adapter：上游模型名 + instructions → system 首条。
-	if chatAdapter.req.Model != "deepseek-chat" {
-		t.Fatalf("expected upstream model deepseek-chat, got %q", chatAdapter.req.Model)
+	if chatAdapter.req.Model != "deepseek-v4-flash" {
+		t.Fatalf("expected upstream model deepseek-v4-flash, got %q", chatAdapter.req.Model)
 	}
 	if len(chatAdapter.req.Messages) != 2 || chatAdapter.req.Messages[0].Role != "system" {
 		t.Fatalf("expected system + user messages, got %+v", chatAdapter.req.Messages)
@@ -323,7 +323,7 @@ func TestCreateResponse_AdapterNotRegistered(t *testing.T) {
 		adapters:   map[string]openai.ChatAdapter{},
 		tokenizers: map[string]openai.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
 	}
-	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-chat")}}}
+	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}}}
 	authorizer := &fakeAuthorizer{}
 	requestLog := newFakeRequestLog()
 
@@ -351,7 +351,7 @@ func TestCreateResponse_AuthorizationFailed(t *testing.T) {
 		adapters:   map[string]openai.ChatAdapter{"deepseek": chatAdapter},
 		tokenizers: map[string]openai.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
 	}
-	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-chat")}}}
+	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}}}
 	// 用无 failure.Code 的裸错误，触发 lifecycle 兜底 code（FailureCodeOrFallback）。
 	authorizer := &fakeAuthorizer{authorizeErr: errors.New("authorize boom")}
 	requestLog := newFakeRequestLog()

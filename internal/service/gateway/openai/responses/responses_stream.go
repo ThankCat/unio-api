@@ -44,6 +44,10 @@ type streamEncoder struct {
 	topP              *float64
 	maxOutputTokens   *int
 
+	// emitReasoningCarrier 控制流式 reasoning item 是否附带 encrypted_content 回放载体（U1）；
+	// 与非流式 requestWantsEncryptedReasoning 同一判定，保证两路对客户形态一致。
+	emitReasoningCarrier bool
+
 	seq     int64
 	started bool
 
@@ -84,15 +88,16 @@ type streamToolCallDelta struct {
 // newStreamEncoder 基于请求回显字段构造事件状态机。
 func newStreamEncoder(req gatewayapi.ResponsesRequest, responseID string, createdAt int64, emit func(gatewayapi.ResponsesStreamEvent) error) *streamEncoder {
 	return &streamEncoder{
-		emit:              emit,
-		responseID:        responseID,
-		createdAt:         createdAt,
-		model:             req.Model,
-		parallelToolCalls: req.ParallelToolCalls,
-		temperature:       req.Temperature,
-		topP:              req.TopP,
-		maxOutputTokens:   req.MaxOutputTokens,
-		toolByIdx:         map[int]*streamToolState{},
+		emit:                 emit,
+		responseID:           responseID,
+		createdAt:            createdAt,
+		model:                req.Model,
+		parallelToolCalls:    req.ParallelToolCalls,
+		temperature:          req.Temperature,
+		topP:                 req.TopP,
+		maxOutputTokens:      req.MaxOutputTokens,
+		emitReasoningCarrier: requestWantsEncryptedReasoning(req),
+		toolByIdx:            map[int]*streamToolState{},
 	}
 }
 
@@ -271,12 +276,17 @@ func (e *streamEncoder) closeItems() ([]gatewayapi.ResponseOutputItem, error) {
 	finals := make([]finalItem, 0, 2+len(e.tools))
 
 	if e.reasoning != nil {
-		finals = append(finals, finalItem{e.reasoning.outputIndex, gatewayapi.ResponseOutputItem{
+		reasoningItem := gatewayapi.ResponseOutputItem{
 			Type:    "reasoning",
 			ID:      e.reasoning.id,
 			Summary: []gatewayapi.ResponseOutputContent{},
 			Content: []gatewayapi.ResponseOutputContent{{Type: "reasoning_text", Text: e.reasoning.text}},
-		}})
+		}
+		if e.emitReasoningCarrier && e.reasoning.text != "" {
+			carrier := encodeReasoningCarrier(e.reasoning.text)
+			reasoningItem.EncryptedContent = &carrier
+		}
+		finals = append(finals, finalItem{e.reasoning.outputIndex, reasoningItem})
 	}
 	if e.message != nil {
 		finals = append(finals, finalItem{e.message.outputIndex, gatewayapi.ResponseOutputItem{

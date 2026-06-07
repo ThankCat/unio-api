@@ -17,8 +17,9 @@ DeepSeek v4 默认**思考开启**。Anthropic 格式下的控制:
 来源:[官方·思考模式](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode)、
 [官方·Anthropic API](https://api-docs.deepseek.com/zh-cn/guides/anthropic_api)(查阅 2026-06-07)。
 
-强度归一现状:Anthropic 格式 `output_config.effort` 当前**原样透传**,靠上游做 low/medium→high、xhigh→max 兼容映射;
-计划与 OpenAI 侧一致地显式归一(见 [../upgrade-plan.md](../upgrade-plan.md) U5)。
+强度归一:adapter 出站**显式归一** `output_config.effort` 为 `high`/`max`(minimal/low/medium/high→high,
+xhigh/max→max),未知值 Drop 让上游回退默认,不依赖上游隐式兼容映射。
+代码:`internal/core/adapter/anthropic/deepseek/drop.go`(`adaptOutputConfig`、`normalizeOutputConfigEffort`)。
 
 > 思考模式下 `temperature`/`top_p` 等不报错但不生效(官方·思考模式)。
 

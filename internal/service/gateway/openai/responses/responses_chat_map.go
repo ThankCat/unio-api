@@ -13,6 +13,8 @@
 package responses
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 
@@ -133,6 +135,11 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []openai.ChatMessage {
 	// pendingToolCallIdx 指向上一条仅由连续 function_call 累积出的 assistant message，用于并行/连续
 	// 工具调用合并；任何非 function_call item 都会打断累积（置 -1）。
 	pendingToolCallIdx := -1
+	// pendingReasoning 暂存紧邻 function_call 之前回传的跨轮思维链（reasoning item），在生成该轮
+	// assistant.tool_calls 消息时回灌为 reasoning_content（U1）。DeepSeek 规则：发生过工具调用的
+	// 轮次，后续请求必须完整回传该轮 reasoning_content，否则上游 400；非工具轮的 reasoning 不需要
+	// （上游忽略），由后续非 function_call 分支清空丢弃。
+	pendingReasoning := ""
 	for _, item := range req.Input.Items {
 		itemType := item.Type
 		if itemType == "" {
@@ -142,6 +149,7 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []openai.ChatMessage {
 		switch itemType {
 		case itemTypeMessage:
 			pendingToolCallIdx = -1
+			pendingReasoning = ""
 			msgs = append(msgs, buildMessageItem(item))
 
 		case itemTypeFunctionCall:
@@ -156,12 +164,19 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []openai.ChatMessage {
 			if pendingToolCallIdx >= 0 {
 				msgs[pendingToolCallIdx].ToolCalls = append(msgs[pendingToolCallIdx].ToolCalls, toolCall)
 			} else {
-				msgs = append(msgs, openai.ChatMessage{Role: "assistant", ToolCalls: []openai.ChatToolCall{toolCall}})
+				assistant := openai.ChatMessage{Role: "assistant", ToolCalls: []openai.ChatToolCall{toolCall}}
+				if pendingReasoning != "" {
+					reasoning := pendingReasoning
+					assistant.ReasoningContent = &reasoning
+				}
+				msgs = append(msgs, assistant)
 				pendingToolCallIdx = len(msgs) - 1
 			}
+			pendingReasoning = ""
 
 		case itemTypeFunctionCallOutput:
 			pendingToolCallIdx = -1
+			pendingReasoning = ""
 			msgs = append(msgs, openai.ChatMessage{
 				Role:       "tool",
 				ToolCallID: item.CallID,
@@ -169,20 +184,86 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []openai.ChatMessage {
 			})
 
 		case itemTypeReasoning:
-			// 跨轮 reasoning item best-effort：第一版不回灌 prior CoT 给 DeepSeek chat（非标准、易被拒）。
-			// 保真度提升见 GAP-11-003 / TASK-11.08。
+			// 跨轮 reasoning 回灌（U1）：暂存思维链文本，附到随后的 assistant.tool_calls 消息。
+			// 还原优先级见 extractReasoningText（encrypted_content 载体 → content → summary）。
 			pendingToolCallIdx = -1
+			pendingReasoning += extractReasoningText(item)
 
 		case itemTypeItemReference, itemTypeCompaction:
 			// 无状态第一版：引用 server-side 历史 item / compaction 历史不还原（GAP-11-001）。
 			pendingToolCallIdx = -1
+			pendingReasoning = ""
 
 		default:
 			pendingToolCallIdx = -1
+			pendingReasoning = ""
 		}
 	}
 
 	return msgs
+}
+
+// reasoningCarrierPrefix 标记 Unio 在 reasoning item encrypted_content 里放置的可逆回放载体。
+//
+// 无状态下客户（如 Codex）按 reasoning.encrypted_content 原样回传，Unio 解码还原思维链，在工具调用
+// 轮次回灌 DeepSeek（避免 400）。base64 仅作透明载体、非加密：思维链原文同时已在 content.reasoning_text
+// 暴露（BRIDGE §6 已冻结对外暴露 DeepSeek 原始 CoT），故不构成额外泄露。
+const reasoningCarrierPrefix = "unio-rsn-v1:"
+
+// encodeReasoningCarrier 把思维链文本编码为 encrypted_content 回放载体。
+func encodeReasoningCarrier(text string) string {
+	return reasoningCarrierPrefix + base64.StdEncoding.EncodeToString([]byte(text))
+}
+
+// decodeReasoningCarrier 还原 Unio 自己签发的 encrypted_content 载体；非本格式返回 ok=false。
+func decodeReasoningCarrier(encrypted string) (string, bool) {
+	if !strings.HasPrefix(encrypted, reasoningCarrierPrefix) {
+		return "", false
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(encrypted, reasoningCarrierPrefix))
+	if err != nil {
+		return "", false
+	}
+	return string(raw), true
+}
+
+// extractReasoningText 从回传的 reasoning input item 还原思维链文本。
+//
+// 优先级：encrypted_content（Unio 载体，无状态规范回放路径）→ content 的 reasoning_text part
+// （Unio 出站可见形态）→ summary 的 summary_text part（OpenAI 标准回放形态）。三者皆空返回空串。
+func extractReasoningText(item gatewayapi.ResponseInputItem) string {
+	if item.EncryptedContent != nil {
+		if text, ok := decodeReasoningCarrier(*item.EncryptedContent); ok {
+			return text
+		}
+	}
+	if text := reasoningPartsText(item.Content, "reasoning_text"); text != "" {
+		return text
+	}
+	return reasoningPartsText(item.Summary, "summary_text")
+}
+
+// reasoningPartsText 从 content/summary parts 数组里拼接指定 type 的 text。
+// 非数组形态（如 string shorthand）返回空串，交由其它来源还原。
+func reasoningPartsText(raw json.RawMessage, partType string) string {
+	data := bytes.TrimSpace(raw)
+	if len(data) == 0 || data[0] != '[' {
+		return ""
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(data, &parts); err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		if p.Type == partType {
+			b.WriteString(p.Text)
+		}
+	}
+	return b.String()
 }
 
 // functionCallName 还原 function_call item 的 Chat 工具名。

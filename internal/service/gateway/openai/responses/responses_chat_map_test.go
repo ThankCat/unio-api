@@ -19,7 +19,7 @@ func decodeRequest(t *testing.T, body string) gatewayapi.ResponsesRequest {
 
 func mapBody(t *testing.T, body string) (openai.ChatRequest, requestTranslation) {
 	t.Helper()
-	return mapResponsesRequestToChat(decodeRequest(t, body), "deepseek-chat")
+	return mapResponsesRequestToChat(decodeRequest(t, body), "deepseek-v4-flash")
 }
 
 func TestMapInstructionsAndStringInput(t *testing.T) {
@@ -29,7 +29,7 @@ func TestMapInstructionsAndStringInput(t *testing.T) {
 		"input": "hello there"
 	}`)
 
-	if chat.Model != "deepseek-chat" {
+	if chat.Model != "deepseek-v4-flash" {
 		t.Fatalf("expected upstream model, got %q", chat.Model)
 	}
 	if len(chat.Messages) != 2 {
@@ -279,6 +279,140 @@ func TestMapTopLevelFieldsAndDrops(t *testing.T) {
 		if !contains(tr.DroppedFields, want) {
 			t.Errorf("expected %q dropped, got %v", want, tr.DroppedFields)
 		}
+	}
+}
+
+// TestMapReasoningBeforeFunctionCallBackfillsContent 验证回传的 reasoning(content.reasoning_text)
+// 在随后的 assistant 工具调用消息上回灌为 reasoning_content（U1）。
+func TestMapReasoningBeforeFunctionCallBackfillsContent(t *testing.T) {
+	chat, _ := mapBody(t, `{
+		"model":"m",
+		"input":[
+			{"type":"message","role":"user","content":"q"},
+			{"type":"reasoning","id":"rs_1","summary":[],"content":[{"type":"reasoning_text","text":"step A"}]},
+			{"type":"function_call","call_id":"c1","name":"f1","arguments":"{}"},
+			{"type":"function_call_output","call_id":"c1","output":"ok"}
+		]
+	}`)
+
+	if len(chat.Messages) != 3 {
+		t.Fatalf("expected user+assistant+tool, got %d", len(chat.Messages))
+	}
+	assistant := chat.Messages[1]
+	if assistant.Role != "assistant" || len(assistant.ToolCalls) != 1 {
+		t.Fatalf("unexpected assistant: %+v", assistant)
+	}
+	if assistant.ReasoningContent == nil || *assistant.ReasoningContent != "step A" {
+		t.Fatalf("expected reasoning_content backfilled, got %v", assistant.ReasoningContent)
+	}
+}
+
+// TestMapReasoningBeforeFunctionCallDecodesEncryptedCarrier 验证 Unio encrypted_content 载体被解码回灌。
+func TestMapReasoningBeforeFunctionCallDecodesEncryptedCarrier(t *testing.T) {
+	carrier := encodeReasoningCarrier("secret cot")
+	chat, _ := mapBody(t, `{
+		"model":"m",
+		"input":[
+			{"type":"reasoning","id":"rs_1","encrypted_content":"`+carrier+`"},
+			{"type":"function_call","call_id":"c1","name":"f1","arguments":"{}"}
+		]
+	}`)
+
+	if len(chat.Messages) != 1 {
+		t.Fatalf("expected single assistant, got %d", len(chat.Messages))
+	}
+	if chat.Messages[0].ReasoningContent == nil || *chat.Messages[0].ReasoningContent != "secret cot" {
+		t.Fatalf("expected decoded carrier reasoning, got %v", chat.Messages[0].ReasoningContent)
+	}
+}
+
+// TestMapReasoningDiscardedWhenNotBeforeFunctionCall 验证非工具调用轮的 reasoning 被丢弃，不泄漏到后续工具轮。
+func TestMapReasoningDiscardedWhenNotBeforeFunctionCall(t *testing.T) {
+	chat, _ := mapBody(t, `{
+		"model":"m",
+		"input":[
+			{"type":"reasoning","content":[{"type":"reasoning_text","text":"stale"}]},
+			{"type":"message","role":"user","content":"hi"},
+			{"type":"function_call","call_id":"c1","name":"f1","arguments":"{}"}
+		]
+	}`)
+
+	var assistant openai.ChatMessage
+	found := false
+	for _, m := range chat.Messages {
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			assistant = m
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected assistant tool-call message")
+	}
+	if assistant.ReasoningContent != nil {
+		t.Fatalf("expected stale reasoning discarded, got %v", *assistant.ReasoningContent)
+	}
+}
+
+// TestMapReasoningBackfillsMergedParallelToolCalls 验证 reasoning 回灌到合并的并行工具调用单条 assistant。
+func TestMapReasoningBackfillsMergedParallelToolCalls(t *testing.T) {
+	chat, _ := mapBody(t, `{
+		"model":"m",
+		"input":[
+			{"type":"reasoning","content":[{"type":"reasoning_text","text":"plan"}]},
+			{"type":"function_call","call_id":"c1","name":"f1","arguments":"{}"},
+			{"type":"function_call","call_id":"c2","name":"f2","arguments":"{}"}
+		]
+	}`)
+
+	if len(chat.Messages) != 1 {
+		t.Fatalf("expected single merged assistant, got %d", len(chat.Messages))
+	}
+	a := chat.Messages[0]
+	if len(a.ToolCalls) != 2 {
+		t.Fatalf("expected 2 merged tool calls, got %d", len(a.ToolCalls))
+	}
+	if a.ReasoningContent == nil || *a.ReasoningContent != "plan" {
+		t.Fatalf("expected reasoning on merged assistant, got %v", a.ReasoningContent)
+	}
+}
+
+// TestReasoningRoundTripOutputToInput 验证出站 reasoning 载体与入站回灌的 emit↔parse 对称（U1）。
+func TestReasoningRoundTripOutputToInput(t *testing.T) {
+	out := mapChatResponseToResponses(
+		gatewayapi.ResponsesRequest{Model: "m", Include: []string{"reasoning.encrypted_content"}},
+		openai.ChatResponse{
+			ReasoningContent: strptr("chain of thought"),
+			FinishReason:     "tool_calls",
+			ToolCalls: []openai.ChatToolCall{{
+				ID: "c1", Type: "function",
+				Function: openai.ChatToolCallFunction{Name: "f1", Arguments: "{}"},
+			}},
+		},
+	)
+
+	var rs, fc gatewayapi.ResponseOutputItem
+	for _, it := range out.Output {
+		switch it.Type {
+		case "reasoning":
+			rs = it
+		case "function_call":
+			fc = it
+		}
+	}
+	if rs.EncryptedContent == nil {
+		t.Fatal("expected encrypted_content carrier on output reasoning item")
+	}
+
+	// 模拟客户原样回传 reasoning(encrypted_content) + function_call。
+	callID, name, args := fc.CallID, fc.Name, fc.Arguments
+	inReq := gatewayapi.ResponsesRequest{Input: gatewayapi.ResponsesInput{Items: []gatewayapi.ResponseInputItem{
+		{Type: "reasoning", ID: &rs.ID, EncryptedContent: rs.EncryptedContent},
+		{Type: "function_call", CallID: &callID, Name: &name, Arguments: &args},
+	}}}
+
+	msgs := buildChatMessages(inReq)
+	if len(msgs) != 1 || msgs[0].ReasoningContent == nil || *msgs[0].ReasoningContent != "chain of thought" {
+		t.Fatalf("round-trip failed: %+v", msgs)
 	}
 }
 

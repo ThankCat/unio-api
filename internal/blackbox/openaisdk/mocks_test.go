@@ -54,7 +54,7 @@ func writeMockChatCompletion(w http.ResponseWriter, id string, content string, p
 		"id":      id,
 		"object":  "chat.completion",
 		"created": time.Now().Unix(),
-		"model":   "deepseek-chat",
+		"model":   "deepseek-v4-flash",
 		"choices": []map[string]any{{
 			"index": 0,
 			"message": map[string]any{
@@ -80,7 +80,7 @@ func writeMockChatCompletionWithMessage(w http.ResponseWriter, id string, messag
 		"id":      id,
 		"object":  "chat.completion",
 		"created": time.Now().Unix(),
-		"model":   "deepseek-chat",
+		"model":   "deepseek-v4-flash",
 		"choices": []map[string]any{{
 			"index":         0,
 			"message":       message,
@@ -110,7 +110,7 @@ func writeMockStreamChunks(w http.ResponseWriter, id string, chunks []map[string
 			"id":      id,
 			"object":  "chat.completion.chunk",
 			"created": created,
-			"model":   "deepseek-chat",
+			"model":   "deepseek-v4-flash",
 			"choices": []map[string]any{{
 				"index":         0,
 				"delta":         delta,
@@ -125,7 +125,7 @@ func writeMockStreamChunks(w http.ResponseWriter, id string, chunks []map[string
 		"id":      id,
 		"object":  "chat.completion.chunk",
 		"created": created,
-		"model":   "deepseek-chat",
+		"model":   "deepseek-v4-flash",
 		"choices": []map[string]any{{
 			"index":         0,
 			"delta":         map[string]any{},
@@ -139,7 +139,7 @@ func writeMockStreamChunks(w http.ResponseWriter, id string, chunks []map[string
 			"id":      id,
 			"object":  "chat.completion.chunk",
 			"created": created,
-			"model":   "deepseek-chat",
+			"model":   "deepseek-v4-flash",
 			"choices": []map[string]any{},
 			"usage":   usageChunk,
 		}

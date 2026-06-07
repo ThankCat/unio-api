@@ -204,8 +204,8 @@ func TestResponsesMockStreamReasoning(t *testing.T) {
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
 		UpstreamBaseURL: mock.URL + "/v1",
-		ModelID:         "deepseek-reasoner",
-		UpstreamModel:   "deepseek-reasoner",
+		ModelID:         "deepseek-v4-pro",
+		UpstreamModel:   "deepseek-v4-pro",
 	})
 
 	// 显式带 reasoning（非 disabled），与真实 reasoning run 一致。

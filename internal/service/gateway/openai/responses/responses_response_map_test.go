@@ -127,6 +127,57 @@ func TestMapChatResponseToResponses_CreatedFallback(t *testing.T) {
 	}
 }
 
+// TestMapChatResponseEmitsReasoningCarrierWhenRequested 验证 include 请求 encrypted_content 时附带回放载体（U1）。
+func TestMapChatResponseEmitsReasoningCarrierWhenRequested(t *testing.T) {
+	got := mapChatResponseToResponses(
+		gatewayapi.ResponsesRequest{Model: "m", Include: []string{"reasoning.encrypted_content"}},
+		openai.ChatResponse{ReasoningContent: strptr("deep thought"), Content: "answer", FinishReason: "stop"},
+	)
+
+	var reasoning *gatewayapi.ResponseOutputItem
+	for i := range got.Output {
+		if got.Output[i].Type == "reasoning" {
+			reasoning = &got.Output[i]
+		}
+	}
+	if reasoning == nil {
+		t.Fatal("expected reasoning output item")
+	}
+	if reasoning.EncryptedContent == nil {
+		t.Fatal("expected encrypted_content carrier when include requests it")
+	}
+	if reasoning.Content == nil || reasoning.Content[0].Text != "deep thought" {
+		t.Fatalf("expected reasoning_text content kept, got %+v", reasoning.Content)
+	}
+}
+
+// TestMapChatResponseEmitsReasoningCarrierWhenStateless 验证 store:false（无状态）也附带载体。
+func TestMapChatResponseEmitsReasoningCarrierWhenStateless(t *testing.T) {
+	storeFalse := false
+	got := mapChatResponseToResponses(
+		gatewayapi.ResponsesRequest{Model: "m", Store: &storeFalse},
+		openai.ChatResponse{ReasoningContent: strptr("x"), FinishReason: "stop"},
+	)
+	for _, it := range got.Output {
+		if it.Type == "reasoning" && it.EncryptedContent == nil {
+			t.Fatal("expected carrier emitted when store=false")
+		}
+	}
+}
+
+// TestMapChatResponseOmitsReasoningCarrierByDefault 验证未请求 include 且非无状态时不附带载体。
+func TestMapChatResponseOmitsReasoningCarrierByDefault(t *testing.T) {
+	got := mapChatResponseToResponses(
+		gatewayapi.ResponsesRequest{Model: "m"},
+		openai.ChatResponse{ReasoningContent: strptr("x"), FinishReason: "stop"},
+	)
+	for _, it := range got.Output {
+		if it.Type == "reasoning" && it.EncryptedContent != nil {
+			t.Fatal("expected no carrier without include/store=false")
+		}
+	}
+}
+
 func TestSplitNamespaceToolName(t *testing.T) {
 	cases := []struct {
 		flattened     string

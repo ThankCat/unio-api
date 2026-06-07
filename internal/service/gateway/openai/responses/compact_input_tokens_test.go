@@ -15,7 +15,7 @@ func TestCompactHistory_HappyPath(t *testing.T) {
 		adapters:   map[string]openai.ChatAdapter{"deepseek": chatAdapter},
 		tokenizers: map[string]openai.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
 	}
-	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-chat")}}}
+	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}}}
 	settlement := &fakeSettlement{}
 	requestLog := newFakeRequestLog()
 
@@ -53,7 +53,7 @@ func TestCompactHistory_InjectsDefaultInstruction(t *testing.T) {
 		adapters:   map[string]openai.ChatAdapter{"deepseek": chatAdapter},
 		tokenizers: map[string]openai.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
 	}
-	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-chat")}}}
+	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}}}
 
 	svc := newServiceForTest(router, registry, &fakeSettlement{}, &fakeAuthorizer{}, newFakeRequestLog())
 
@@ -76,7 +76,7 @@ func TestCountInputTokens_LocalEstimate(t *testing.T) {
 		adapters:   map[string]openai.ChatAdapter{"deepseek": chatAdapter},
 		tokenizers: map[string]openai.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
 	}
-	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-chat")}}}
+	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}}}
 	settlement := &fakeSettlement{}
 	requestLog := newFakeRequestLog()
 

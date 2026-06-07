@@ -38,8 +38,8 @@ func TestOAISDKMockNonStreamSucceeds(t *testing.T) {
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
 		UpstreamBaseURL: mock.URL + "/v1",
-		ModelID:         "deepseek-chat",
-		UpstreamModel:   "deepseek-chat",
+		ModelID:         "deepseek-v4-flash",
+		UpstreamModel:   "deepseek-v4-flash",
 	})
 
 	client := openai.NewClient(
@@ -74,8 +74,8 @@ func TestOAISDKMockNonStreamSucceeds(t *testing.T) {
 	if err := json.Unmarshal(capturedBody, &upstreamBody); err != nil {
 		t.Fatalf("upstream body not valid json: %v (raw: %s)", err, string(capturedBody))
 	}
-	if model, _ := upstreamBody["model"].(string); model != "deepseek-chat" {
-		t.Fatalf("expected upstream model 'deepseek-chat', got %q", model)
+	if model, _ := upstreamBody["model"].(string); model != "deepseek-v4-flash" {
+		t.Fatalf("expected upstream model 'deepseek-v4-flash', got %q", model)
 	}
 	if stream, ok := upstreamBody["stream"].(bool); ok && stream {
 		t.Fatalf("expected upstream stream=false, got true")

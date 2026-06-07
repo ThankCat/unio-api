@@ -37,9 +37,9 @@ func TestMapRealCodexFixtureToChat(t *testing.T) {
 				t.Fatalf("decode fixture: %v", err)
 			}
 
-			chat, tr := mapResponsesRequestToChat(req, "deepseek-chat")
+			chat, tr := mapResponsesRequestToChat(req, "deepseek-v4-flash")
 
-			if chat.Model != "deepseek-chat" {
+			if chat.Model != "deepseek-v4-flash" {
 				t.Errorf("expected upstream model, got %q", chat.Model)
 			}
 			if len(chat.Messages) == 0 {

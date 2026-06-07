@@ -179,7 +179,7 @@ func TestDropUnsupportedRemovesMultimodalContentParts(t *testing.T) {
 func TestDropUnsupportedKeepsSupportedRequest(t *testing.T) {
 	temp := 0.7
 	req := openai.ChatRequest{
-		Model:          "deepseek-chat",
+		Model:          "deepseek-v4-flash",
 		Temperature:    &temp,
 		Tools:          []openai.ChatTool{{Type: "function"}},
 		ResponseFormat: &openai.ChatResponseFormat{Type: "json_object"},

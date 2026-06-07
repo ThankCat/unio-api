@@ -20,7 +20,7 @@ func mustUnmarshal(t *testing.T, raw string) ResponsesRequest {
 
 func TestValidateResponsesRequestValid(t *testing.T) {
 	req := mustUnmarshal(t, `{
-		"model": "deepseek-chat",
+		"model": "deepseek-v4-flash",
 		"input": [
 			{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
 			{"type": "function_call", "call_id": "c1", "name": "exec_command", "arguments": "{}"},

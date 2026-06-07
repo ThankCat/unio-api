@@ -82,7 +82,7 @@ Responses `input` 是 item 数组，工具调用是 **顶层 item**，不像 Cha
 | `{type:"message", role, content:[...]}` | `{role, content}` | Adapt | content parts 见 §2.1。role: user/assistant/system/developer。 |
 | `{type:"function_call", call_id, name, arguments}` | `assistant.tool_calls[{id:call_id, type:function, function:{name,arguments}}]` | Adapt | 连续 function_call 合并进 **同一条** assistant message。 |
 | `{type:"function_call_output", call_id, output}` | `{role:"tool", tool_call_id:call_id, content:output}` | Adapt | 按 call_id 对齐到前一条 assistant.tool_calls。 |
-| `{type:"reasoning", ...}` | `assistant.reasoning_content`（best-effort） | Adapt | 跨轮 reasoning 还原，保真度见 GAP-11-003。 |
+| `{type:"reasoning", ...}` | `assistant.reasoning_content`（仅工具调用轮） | Adapt | U1 已回灌：紧邻 `function_call` 前的 reasoning 翻回该轮 `assistant.reasoning_content`，还原优先级 `encrypted_content`(Unio 载体)→`content.reasoning_text`→`summary.summary_text`；非工具轮丢弃。残留真实 Codex 回传形态确认见 GAP-11-003。 |
 | `{type:"item_reference", id}` | — | Drop/Reject | 引用 server-side 历史 item，无状态不支持（GAP-11-001）。 |
 
 ### 2.1 message content parts

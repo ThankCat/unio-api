@@ -223,6 +223,43 @@ func TestStreamEncoder_LengthFinishYieldsIncomplete(t *testing.T) {
 	}
 }
 
+// TestStreamEncoder_ReasoningCarrierWhenRequested 验证流式 reasoning output_item.done 在客户请求
+// reasoning.encrypted_content 时携带可解码的回放载体（U1，Codex 走流式以 done 事件为权威）。
+func TestStreamEncoder_ReasoningCarrierWhenRequested(t *testing.T) {
+	var events []gatewayapi.ResponsesStreamEvent
+	enc := newStreamEncoder(
+		gatewayapi.ResponsesRequest{Model: "m", Include: []string{"reasoning.encrypted_content"}},
+		"resp_x", 0,
+		func(ev gatewayapi.ResponsesStreamEvent) error { events = append(events, ev); return nil },
+	)
+	if err := enc.Handle(openai.ChatStreamChunk{ReasoningContent: strptr("alpha")}); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if err := enc.Handle(openai.ChatStreamChunk{ReasoningContent: strptr(" beta")}); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if err := enc.Complete("tool_calls", nil); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	var reasoningDone *gatewayapi.ResponseOutputItem
+	for i := range events {
+		if events[i].Type == gatewayapi.EventOutputItemDone && events[i].Item != nil && events[i].Item.Type == "reasoning" {
+			reasoningDone = events[i].Item
+		}
+	}
+	if reasoningDone == nil {
+		t.Fatal("expected reasoning output_item.done event")
+	}
+	if reasoningDone.EncryptedContent == nil {
+		t.Fatal("expected encrypted_content carrier on streamed reasoning done")
+	}
+	decoded, ok := decodeReasoningCarrier(*reasoningDone.EncryptedContent)
+	if !ok || decoded != "alpha beta" {
+		t.Fatalf("carrier decode failed: ok=%v decoded=%q", ok, decoded)
+	}
+}
+
 func TestStreamEncoder_StartedReflectsFirstEmit(t *testing.T) {
 	enc := newStreamEncoder(gatewayapi.ResponsesRequest{Model: "m"}, "resp_1", 0, func(gatewayapi.ResponsesStreamEvent) error { return nil })
 	if enc.Started() {

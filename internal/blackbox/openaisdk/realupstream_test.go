@@ -23,8 +23,8 @@ import (
 func TestOAISDKRealNonStream(t *testing.T) {
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:          sdkfixture.UpstreamReal,
-		ModelID:       "deepseek-chat",
-		UpstreamModel: "deepseek-chat",
+		ModelID:       "deepseek-v4-flash",
+		UpstreamModel: "deepseek-v4-flash",
 	})
 
 	client := openai.NewClient(
@@ -74,8 +74,8 @@ func TestOAISDKRealNonStream(t *testing.T) {
 func TestOAISDKRealStream(t *testing.T) {
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:          sdkfixture.UpstreamReal,
-		ModelID:       "deepseek-chat",
-		UpstreamModel: "deepseek-chat",
+		ModelID:       "deepseek-v4-flash",
+		UpstreamModel: "deepseek-v4-flash",
 	})
 
 	client := openai.NewClient(

@@ -47,7 +47,7 @@ func TestDeepSeekAnthropicBlackboxNonStream(t *testing.T) {
 	a, runtime := newBlackboxAdapter(t)
 
 	resp, err := a.Messages(context.Background(), runtime, anthropicadapter.MessageRequest{
-		Model:     "deepseek-chat",
+		Model:     "deepseek-v4-flash",
 		MaxTokens: intPtr(16),
 		Messages: []anthropicadapter.Message{
 			{Role: "user", Content: json.RawMessage(`"Reply with the single word: ok"`)},
@@ -81,7 +81,7 @@ func TestDeepSeekAnthropicBlackboxStream(t *testing.T) {
 	var types []string
 	var finalUsage *anthropicadapter.MessageUsage
 	outcome, err := a.StreamMessages(context.Background(), runtime, anthropicadapter.MessageRequest{
-		Model:     "deepseek-chat",
+		Model:     "deepseek-v4-flash",
 		MaxTokens: intPtr(32),
 		Messages: []anthropicadapter.Message{
 			{Role: "user", Content: json.RawMessage(`"Count one two three"`)},
@@ -116,7 +116,7 @@ func TestDeepSeekAnthropicBlackboxImageRejectedPreflight(t *testing.T) {
 	a, runtime := newBlackboxAdapter(t)
 
 	_, err := a.Messages(context.Background(), runtime, anthropicadapter.MessageRequest{
-		Model:     "deepseek-chat",
+		Model:     "deepseek-v4-flash",
 		MaxTokens: intPtr(16),
 		Messages: []anthropicadapter.Message{
 			{Role: "user", Content: json.RawMessage(`[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]`)},

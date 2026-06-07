@@ -39,9 +39,18 @@ Unio 现状:
 - **Chat Completions**:入口 DTO 保留 `messages[].reasoning_content`,adapter 原样透传上游(Pass)。
   即只要客户端回传,链路支持。代码:`internal/app/gatewayapi/openai/chatcompletions/dto.go`、
   `internal/core/adapter/openai/request_wire.go`。
-- **Responses**:第一版**不**把跨轮 reasoning 回灌给 DeepSeek(reasoning item 被丢弃)。
-  开启思考 + 工具循环时存在 400 风险。见 [../upgrade-plan.md](../upgrade-plan.md) U1 与 GAP-11-003。
-  代码:`internal/service/gateway/openai/responses/responses_chat_map.go`。
+- **Responses**(U1 已落地跨轮回灌):
+  - **入站**:紧邻 `function_call` 之前的 reasoning item 翻回该轮 `assistant.reasoning_content`
+    (仅工具调用轮需要,非工具轮丢弃);还原优先级 `encrypted_content`(Unio 载体)→
+    `content.reasoning_text` → `summary.summary_text`。
+  - **出站**:reasoning item 始终带 `content:[{reasoning_text}]`;客户请求
+    `include:["reasoning.encrypted_content"]` 或无状态(`store:false`)时,额外附带可逆
+    `encrypted_content` 回放载体(`unio-rsn-v1:` + base64,非加密,原文已在 content 暴露)。
+    流式与非流式两路形态一致(流式以 `output_item.done` 为权威)。
+  - 代码:`responses_chat_map.go`(`extractReasoningText`/`encodeReasoningCarrier`)、
+    `responses_response_map.go`、`responses_stream.go`。
+  - **残留**:真实 Codex stateless 是否原样回传 reasoning item 待真实 Codex 黑盒确认;
+    `reasoning.summary` 与 OpenAI 原生语义差异未对齐(GAP-11-003)。
 
 ## 3. 工具调用(Function Calling)
 

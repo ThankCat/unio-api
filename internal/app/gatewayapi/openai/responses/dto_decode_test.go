@@ -8,7 +8,7 @@ import (
 // TestResponsesRequestUnmarshalItemsInput 验证 input 为 item 数组时各 item 类型解码进 typed 字段。
 func TestResponsesRequestUnmarshalItemsInput(t *testing.T) {
 	raw := `{
-		"model": "deepseek-chat",
+		"model": "deepseek-v4-flash",
 		"instructions": "You are a coding agent.",
 		"input": [
 			{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "rules"}]},
@@ -28,7 +28,7 @@ func TestResponsesRequestUnmarshalItemsInput(t *testing.T) {
 		t.Fatalf("unmarshal request: %v", err)
 	}
 
-	if req.Model != "deepseek-chat" {
+	if req.Model != "deepseek-v4-flash" {
 		t.Fatalf("model = %q", req.Model)
 	}
 	if req.Instructions == nil || *req.Instructions != "You are a coding agent." {
@@ -66,7 +66,7 @@ func TestResponsesRequestUnmarshalItemsInput(t *testing.T) {
 
 // TestResponsesRequestUnmarshalStringInput 验证 input 为单条字符串时解码进 Text。
 func TestResponsesRequestUnmarshalStringInput(t *testing.T) {
-	raw := `{"model": "deepseek-chat", "input": "hello world"}`
+	raw := `{"model": "deepseek-v4-flash", "input": "hello world"}`
 
 	var req ResponsesRequest
 	if err := json.Unmarshal([]byte(raw), &req); err != nil {
@@ -83,7 +83,7 @@ func TestResponsesRequestUnmarshalStringInput(t *testing.T) {
 // TestResponsesRequestUnmarshalTools 验证 function（扁平）与 namespace（嵌套）工具解码。
 func TestResponsesRequestUnmarshalTools(t *testing.T) {
 	raw := `{
-		"model": "deepseek-chat",
+		"model": "deepseek-v4-flash",
 		"input": "hi",
 		"tools": [
 			{"type": "function", "name": "exec_command", "description": "run", "parameters": {"type": "object"}, "strict": false},
@@ -113,7 +113,7 @@ func TestResponsesRequestUnmarshalTools(t *testing.T) {
 // 保留进 Extensions（DEC-012 decode 不丢字段），已建模字段不泄漏。
 func TestResponsesRequestUnmarshalPreservesClientMetadataExtension(t *testing.T) {
 	raw := `{
-		"model": "deepseek-chat",
+		"model": "deepseek-v4-flash",
 		"input": "hi",
 		"include": [],
 		"client_metadata": {"x-codex-installation-id": "abc"}
@@ -134,7 +134,7 @@ func TestResponsesRequestUnmarshalPreservesClientMetadataExtension(t *testing.T)
 // TestResponsesRequestUnmarshalTextAndReasoning 验证 text / reasoning 对象解码进 typed 字段。
 func TestResponsesRequestUnmarshalTextAndReasoning(t *testing.T) {
 	raw := `{
-		"model": "deepseek-reasoner",
+		"model": "deepseek-v4-pro",
 		"input": "hi",
 		"reasoning": {"effort": "high", "summary": "auto"},
 		"text": {"verbosity": "low", "format": {"type": "json_object"}},

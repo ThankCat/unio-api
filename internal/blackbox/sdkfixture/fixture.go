@@ -75,7 +75,7 @@ type SetupOptions struct {
 	// Anthropic SDK 黑盒会传 "anthropic"。
 	Protocol string
 
-	// ModelID 客户在 SDK 里看到的模型名，默认 "deepseek-chat"。
+	// ModelID 客户在 SDK 里看到的模型名，默认 "deepseek-v4-flash"。
 	ModelID string
 	// UpstreamModel 上游真实模型名；默认与 ModelID 相同。
 	UpstreamModel string
@@ -161,7 +161,7 @@ func Setup(t *testing.T, opts SetupOptions) *Fixture {
 			// 直接用 deepseek 名作客户可见 ID，避免引入"任意 claude 名 → mapping"复杂度。
 			opts.ModelID = "deepseek-v4-flash"
 		} else {
-			opts.ModelID = "deepseek-chat"
+			opts.ModelID = "deepseek-v4-flash"
 		}
 	}
 	if opts.UpstreamModel == "" {
