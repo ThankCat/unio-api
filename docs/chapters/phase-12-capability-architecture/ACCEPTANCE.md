@@ -34,7 +34,7 @@
 ## 文档验收
 
 1. `docs/protocol/CAPABILITY_KEYS.md` 已发布，列出全部稳定 capability_key，并标注版本。
-2. `docs/protocol/MODELS_DEV_LICENSE.md` 已记录 models.dev license 摘要与 attribution。
+2. `docs/datasources/MODELS_DEV_LICENSE.md` 已记录 models.dev license 摘要与 attribution。
 3. `docs/production/DECISIONS.md` DEC-015 与本阶段所有任务相互可索引。
 4. `docs/chapters/phase-11-openai-responses-api/CAPABILITY_MATRIX.md` 增加"本静态文档由 Phase 12 model_capabilities 表接管"说明（实现完成后）。
 5. `docs/production/TODO_REGISTER.md` 中 GAP-11-010 在 TASK-12.06 完成后被关闭；GAP-12-001 ~ GAP-12-009 全部存在并指向本阶段任务锚点。

@@ -1,14 +1,16 @@
 # Phase 12 Status
 
-状态：planned
+状态：in-progress
 
 进入条件：阶段 11 OpenAI Responses 收口（ingress 表面冻结，CAPABILITY_MATRIX 静态文档可作为本阶段种子）。
+
+进度：TASK-12.01 capability schema 已完成（schema + sqlc 查询 + `internal/core/capability` 访问层 + 公开 `CAPABILITY_KEYS.md` 注册表 + DB 门控测试），关闭 [GAP-12-001](../../production/TODO_REGISTER.md#gap-12-001)。
 
 ## 任务表
 
 | 任务 | 状态 | 说明 |
 | --- | --- | --- |
-| TASK-12.01 capability schema | planned | models / model_capabilities / channel_capability_overrides / sync_jobs 表 + capability_keys 注册表。 |
+| TASK-12.01 capability schema | done | models 扩展 Layer 1 列 + model_capabilities / channel_capability_overrides / model_capability_sync_jobs 表 + sqlc 查询 + `internal/core/capability` 访问层 + 公开 `docs/protocol/CAPABILITY_KEYS.md` v1 注册表；DB 门控测试覆盖 upsert/list/CASCADE/CHECK。仅落事实基座，不含推断/闸门/同步逻辑。 |
 | TASK-12.02 ingress capability inference | planned | 三协议（Chat/Messages/Responses）请求体 → required_capabilities 推断纯函数。 |
 | TASK-12.03 routing capability filter | planned | routing 加 capability filter；三协议各自原生 capability error 渲染。 |
 | TASK-12.04 models.dev daily cron | planned | 每日同步 metadata；source=manual 不覆盖；新模型默认 disabled；license 审计。 |

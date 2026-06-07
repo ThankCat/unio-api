@@ -37,6 +37,17 @@ type Channel struct {
 	UpdatedAt           pgtype.Timestamptz
 }
 
+type ChannelCapabilityOverride struct {
+	ChannelID     int64
+	CapabilityKey string
+	SupportLevel  string
+	Limits        []byte
+	Reason        pgtype.Text
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+	UpdatedBy     pgtype.Text
+}
+
 type ChannelCostPrice struct {
 	ID                    int64
 	ChannelID             int64
@@ -142,13 +153,44 @@ type LedgerReservation struct {
 }
 
 type Model struct {
-	ID          int64
-	ModelID     string
-	DisplayName string
-	OwnedBy     string
-	Status      string
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
+	ID                             int64
+	ModelID                        string
+	DisplayName                    string
+	OwnedBy                        string
+	Status                         string
+	CanonicalID                    pgtype.Text
+	Lab                            pgtype.Text
+	ContextWindowTokens            pgtype.Int8
+	MaxOutputTokens                pgtype.Int8
+	InputPriceUsdPerMillionTokens  pgtype.Numeric
+	OutputPriceUsdPerMillionTokens pgtype.Numeric
+	ReleaseDate                    pgtype.Date
+	Source                         string
+	RemovedUpstreamAt              pgtype.Timestamptz
+	CreatedAt                      pgtype.Timestamptz
+	UpdatedAt                      pgtype.Timestamptz
+}
+
+type ModelCapability struct {
+	ModelID       int64
+	CapabilityKey string
+	SupportLevel  string
+	Limits        []byte
+	Source        string
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+	UpdatedBy     pgtype.Text
+}
+
+type ModelCapabilitySyncJob struct {
+	ID         int64
+	Source     string
+	Status     string
+	StartedAt  pgtype.Timestamptz
+	FinishedAt pgtype.Timestamptz
+	StatsJson  []byte
+	ErrorText  pgtype.Text
+	CreatedAt  pgtype.Timestamptz
 }
 
 type Price struct {

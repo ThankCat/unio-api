@@ -7,6 +7,18 @@ SELECT EXISTS (
     AND m.status = 'enabled'
 ) AS exists;
 
+-- name: LookupModelByID :one
+-- LookupModelByID 按内部主键读取模型完整元数据（含能力架构 Layer 1 列）。
+SELECT *
+FROM models
+WHERE id = sqlc.arg(id);
+
+-- name: LookupModelByModelID :one
+-- LookupModelByModelID 按对外模型 ID 读取模型完整元数据（含能力架构 Layer 1 列）。
+SELECT *
+FROM models
+WHERE model_id = sqlc.arg(model_id);
+
 -- name: ListAvailableModelsForProject :many
 -- ListAvailableModelsForProject 列出指定项目当前可见且可路由的模型。
 WITH project_scope AS (

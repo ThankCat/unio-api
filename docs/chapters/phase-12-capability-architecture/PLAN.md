@@ -77,7 +77,13 @@ Layer 3: Channel Capability Overrides
 <a id="task-12-01-capability-schema"></a>
 ### TASK-12.01 Capability schema 与基础查询
 
-状态：planned
+状态：done
+
+> 落地说明（与计划文本的对齐）：
+> - **复用现有 `models` 表**（[migrations/000007](../../../migrations/000007_create_models.up.sql)，`id BIGSERIAL` + `model_id TEXT UNIQUE`）而非新建 uuid 表；Layer 1 列以追加方式加入。`enabled` 复用现有 `status`（enabled/disabled），不新增 boolean。三张能力表外键用 `models.id`/`channels.id`（BIGINT），PK 统一 BIGSERIAL（对齐现有约定）。
+> - `capability_key` 在 DB 存 `TEXT` 不加枚举 CHECK（注册表只增不删、由代码 + 文档治理），合法性在 app 层 `internal/core/capability` 校验。
+> - 仅交付事实基座（schema + sqlc + `core/capability` 访问层 + 公开注册表 + DB 门控测试）；推断/闸门/同步/种子归 12.02~12.06。
+> - GAP-12-010 只就位数据列 `models.max_output_tokens`，authorization 代码接线待该列有数据后单独处理。
 
 目标：
 
@@ -231,22 +237,25 @@ routing 在选定模型候选后，按 required_capabilities × (model_capabilit
 目标：
 
 ```text
-把 https://models.dev/api.json（或 catalog.json）每日同步到 `models` 表，
-作为 Layer 1 元数据种子源；同步过程对 Unio 现有运营数据不破坏、可审计、可回滚。
+把 models.dev 每日同步到 `models` 表，作为 Layer 1 元数据种子源；
+同步过程对 Unio 现有运营数据不破坏、可审计、可回滚。
 ```
+
+models.dev 现有 4 个接口，结构与字段以 [docs/datasources/MODELS_DEV_API.md](../../datasources/MODELS_DEV_API.md) 为准：
+`api.json`（provider×model+价格）、`models.json`（canonical 元数据）、`catalog.json`（二者合并）、`logos/<id>.svg`（UI 资产）。
 
 计划实现：
 
 1. 新建 `app/workers/model_catalog_sync_worker.go`：
    - 每日定时（默认 03:00 UTC，cron 表达式可配）
-   - 拉取 `https://models.dev/api.json`，超时与重试由 `platform/httpx` 共享。
+   - **canonical 元数据**拉 `https://models.dev/models.json`（≈122 KB，按 `lab/model` 键控，与 `models.canonical_id` 对齐）；**价格基线**取 `https://models.dev/api.json`（或 `catalog.json.providers`）的 per-provider `cost`；超时与重试由 `platform/httpx` 共享。
    - 解析为 `models.dev` schema 中间结构，写入 `model_capability_sync_jobs.stats_json`。
 2. 冲突与合并规则：
    - 同 `canonical_id` 已存在 → 仅在 `source=seed_models_dev` 行上覆盖元数据字段（context_window、max_output、price、release）。
    - `source=manual` 的行**永不被覆盖**；输出 conflict 列表供后台 review。
    - 缺失（models.dev 删了某条）→ 不删本地，标记 `enabled=false` + `removed_upstream_at`，由人工决定。
 3. 不自动开通新模型：models.dev 新模型只 upsert 元数据，`enabled=false`，必须 admin 手动开通才进入 routing。
-4. License 处理：在 `docs/protocol/MODELS_DEV_LICENSE.md` 记录 license 摘要 + attribution 文本；首次同步与每次 license 变化要写入 audit log。
+4. License 处理：在 `docs/datasources/MODELS_DEV_LICENSE.md` 记录 license 摘要 + attribution 文本；首次同步与每次 license 变化要写入 audit log。
 5. `model_capabilities` 不被 cron 直接覆盖；仅在新 model 首次入库时按 models.dev 粗能力位写入 `source=models_dev` 默认值（可由 admin 改写为 `source=manual`）。
 6. 失败处理：拉取失败、解析失败、DB 失败均写入 sync_job error，不影响下次定时；连续 3 次失败发出 metric alert。
 7. 提供 `cmd/worker-server` 的子命令或 admin 触发入口（阶段 13 接管 UI）：
@@ -394,5 +403,5 @@ TASK-12.08 灰度切 enforce
 
 - [docs/production/DECISIONS.md#dec-015](../../production/DECISIONS.md)
 - [docs/chapters/phase-11-openai-responses-api/CAPABILITY_MATRIX.md](../phase-11-openai-responses-api/CAPABILITY_MATRIX.md)
-- [models.dev](https://models.dev/) 及其 `https://models.dev/api.json`
+- [models.dev](https://models.dev/) 数据源接口（api.json / models.json / catalog.json / logos）：见 [docs/datasources/MODELS_DEV_API.md](../../datasources/MODELS_DEV_API.md)
 - 业界对照：OpenRouter `/api/v1/models` `architecture.modality` + `pricing` + `top_provider`

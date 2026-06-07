@@ -39,6 +39,9 @@ const (
 	// CategoryModelCatalog 表示模型目录查询错误。
 	CategoryModelCatalog Category = "modelcatalog"
 
+	// CategoryCapability 表示模型/渠道能力数据访问与校验错误。
+	CategoryCapability Category = "capability"
+
 	// CategoryAdapter 表示上游 adapter 调用或协议转换错误。
 	CategoryAdapter Category = "adapter"
 
@@ -214,6 +217,23 @@ const (
 const (
 	// CodeModelCatalogStoreFailed 表示模型目录查询存储失败。
 	CodeModelCatalogStoreFailed Code = "modelcatalog_store_failed"
+)
+
+const (
+	// CodeCapabilityStoreFailed 表示能力数据查询或写入存储失败。
+	CodeCapabilityStoreFailed Code = "capability_store_failed"
+
+	// CodeCapabilityInvalidKey 表示能力 key 不在已发布的稳定注册表内。
+	CodeCapabilityInvalidKey Code = "capability_invalid_key"
+
+	// CodeCapabilityInvalidSupportLevel 表示能力支持级别非法或在当前层不被允许。
+	CodeCapabilityInvalidSupportLevel Code = "capability_invalid_support_level"
+
+	// CodeCapabilityInvalidSource 表示能力声明或同步任务来源非法。
+	CodeCapabilityInvalidSource Code = "capability_invalid_source"
+
+	// CodeCapabilityNotFound 表示请求的能力数据不存在。
+	CodeCapabilityNotFound Code = "capability_not_found"
 )
 
 const (

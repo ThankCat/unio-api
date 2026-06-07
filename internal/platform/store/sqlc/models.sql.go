@@ -88,6 +88,68 @@ func (q *Queries) ListAvailableModelsForProject(ctx context.Context, projectID i
 	return items, nil
 }
 
+const lookupModelByID = `-- name: LookupModelByID :one
+SELECT id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
+FROM models
+WHERE id = $1
+`
+
+// LookupModelByID 按内部主键读取模型完整元数据（含能力架构 Layer 1 列）。
+func (q *Queries) LookupModelByID(ctx context.Context, id int64) (Model, error) {
+	row := q.db.QueryRow(ctx, lookupModelByID, id)
+	var i Model
+	err := row.Scan(
+		&i.ID,
+		&i.ModelID,
+		&i.DisplayName,
+		&i.OwnedBy,
+		&i.Status,
+		&i.CanonicalID,
+		&i.Lab,
+		&i.ContextWindowTokens,
+		&i.MaxOutputTokens,
+		&i.InputPriceUsdPerMillionTokens,
+		&i.OutputPriceUsdPerMillionTokens,
+		&i.ReleaseDate,
+		&i.Source,
+		&i.RemovedUpstreamAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const lookupModelByModelID = `-- name: LookupModelByModelID :one
+SELECT id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
+FROM models
+WHERE model_id = $1
+`
+
+// LookupModelByModelID 按对外模型 ID 读取模型完整元数据（含能力架构 Layer 1 列）。
+func (q *Queries) LookupModelByModelID(ctx context.Context, modelID string) (Model, error) {
+	row := q.db.QueryRow(ctx, lookupModelByModelID, modelID)
+	var i Model
+	err := row.Scan(
+		&i.ID,
+		&i.ModelID,
+		&i.DisplayName,
+		&i.OwnedBy,
+		&i.Status,
+		&i.CanonicalID,
+		&i.Lab,
+		&i.ContextWindowTokens,
+		&i.MaxOutputTokens,
+		&i.InputPriceUsdPerMillionTokens,
+		&i.OutputPriceUsdPerMillionTokens,
+		&i.ReleaseDate,
+		&i.Source,
+		&i.RemovedUpstreamAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const modelExistsByID = `-- name: ModelExistsByID :one
 SELECT EXISTS (
     SELECT 1
