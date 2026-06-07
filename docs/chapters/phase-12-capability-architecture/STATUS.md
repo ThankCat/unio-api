@@ -23,6 +23,7 @@
 2. models.dev license：同步前必须确认 license 与 attribution 要求；首次同步与每次 license 变更入审计。
 3. enforce 模式切换前必须完成观察期 + adapter 对齐（TASK-12.06），避免误拒生产请求。
 4. 不引入跨 provider 拼接（DeepSeek 缺能力时不去外部 provider 拼接）；Unio 是网关不是 agent 平台。
+5. 预授权兜底（[GAP-12-010](../../production/TODO_REGISTER.md#gap-12-010)）：当前客户省略输出上限时用全局 `DefaultAuthorizationMaxCompletionTokens=4096` 兜底，DeepSeek-V4（输出 384K）长输出会预冻结不足、差额走 `authorization_underfunded` 平台核销漏收；本阶段 `models.max_output_tokens`（TASK-12.01）落库后需把 authorization 兜底改为按模型上限。
 
 ## 与上下游阶段
 

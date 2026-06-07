@@ -93,6 +93,7 @@ Layer 3: Channel Capability Overrides
    - `context_window_tokens`、`max_output_tokens`、`input_price_usd_per_million_tokens`、`output_price_usd_per_million_tokens`
    - `release_date`、`updated_at`、`source`（`seed_models_dev` / `manual` / `import`）
    - `enabled` boolean
+   - **预授权联动（[GAP-12-010](../../production/TODO_REGISTER.md#gap-12-010)）**：`max_output_tokens` 落库后，`lifecycle` authorization 在客户省略输出上限时改用该模型上限替代全局 `DefaultAuthorizationMaxCompletionTokens=4096` 兜底，消除 DeepSeek-V4 长输出预冻结不足导致的平台核销漏收。
 2. 新建 `model_capabilities` 表：
    - `model_id` × `capability_key`（PK）
    - `support_level` enum：`full` / `limited` / `unsupported`
@@ -147,7 +148,7 @@ Layer 3: Channel Capability Overrides
 
 依赖：无（基础 schema 任务）。
 
-关联 GAP：[GAP-12-001](../../production/TODO_REGISTER.md#gap-12-001)
+关联 GAP：[GAP-12-001](../../production/TODO_REGISTER.md#gap-12-001)、[GAP-12-010](../../production/TODO_REGISTER.md#gap-12-010)
 
 <a id="task-12-02-capability-inference"></a>
 ### TASK-12.02 Ingress capability inference

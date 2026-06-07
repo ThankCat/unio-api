@@ -18,6 +18,12 @@ import (
 //
 // 协议层（OpenAI/Anthropic）的 estimateMaxCompletionTokens 在客户未显式给出输出上限时使用它，
 // 因此放在协议无关的共享 lifecycle 包并导出。
+//
+// TODO(阶段12/production): [GAP-12-010] 客户省略输出上限时用此全局兜底，偏小；
+// DeepSeek-V4 输出可达 384K，实际输出 > 4096 时预冻结不足，结算按 min(actual, authorized)
+// 扣用户、差额进 authorization_underfunded 平台核销，导致系统性漏收（用户不被多扣、有审计）。
+// 触发：限输出上限被省略 + 实际输出 > 4096。正解：authorization 改用 model_capabilities 的
+// models.max_output_tokens 按模型预授权。详见 docs/production/TODO_REGISTER.md#gap-12-010。
 const DefaultAuthorizationMaxCompletionTokens int64 = 4096
 
 // 命名说明：本批（settlement 抽取 Step 1）按 SETTLEMENT_EXTRACTION_DESIGN.md 保留 Chat* 前缀，
