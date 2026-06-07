@@ -1,6 +1,6 @@
 # Phase 11 Status
 
-状态：in_progress
+状态：done
 
 ## 当前判断
 
@@ -49,6 +49,26 @@ GAP-11-005、新增 GAP-11-011）；黑盒验收（TASK-11.15）mock + gated 真
 | TASK-11.16 | done | 结构/依赖/命名/文档/GAP 复核通过：PROJECT_STRUCTURE/PROJECT_STATUS 同步 responses 子包 + lifecycle `attempt_runner*` + 端点清单（项目无根 README，跳过）；BRIDGE §6 recipe 对齐实际 emit 子集、无残留 `Verify`；依赖方向 0 问题（无 common/util/helper、lifecycle 不依赖 ingress DTO、responses 不依赖 sqlc row）；关闭 GAP-11-005（共享 invoker→AttemptRunner），新增 GAP-11-011（标准 SDK 完整性流式事件未发）。与黑盒一致随 TASK-11.15 回归。 |
 
 ## 端到端验收记录
+
+### 2026-06-07 阶段 11 acceptance sign-off（通过，状态 → done）
+
+- 本次未修改生产代码，仅执行验收命令组并据结果收口状态标记。
+- 验收命令组全绿：
+
+```bash
+sqlc generate                                   # 通过，无 drift
+go build ./internal/... ./cmd/...               # 通过
+go vet ./internal/... ./cmd/...                 # 通过
+go test ./internal/... ./cmd/...                # 全绿（DB 门控测试无 DATABASE_URL 正确 Skip）
+git diff --check                                # 通过
+# RESPONSES_CHAT_BRIDGE.md `Verify` 残留检查：无输出
+```
+
+- TASK-11.01 ~ TASK-11.16 全部 done；2026-06-06 真实 Codex CLI v0.130 端到端手测 + 资金三方对账闭合（见下）。
+- 本阶段必须关闭的 P0/P1 GAP 已收口：GAP-11-005、GAP-11-010 done。剩余 P1（GAP-11-001 无状态、
+  GAP-11-002 工具保真度、GAP-11-007 compact 永久降级、GAP-11-009 有状态 501 永久边界）均为已接受范围
+  边界或永久限制，release_blocker 全为 no，非本阶段必须关闭项。
+- 结论：阶段 11 OpenAI Responses API ingress 实现完成、验证通过、文档同步，状态由 in_progress 改为 done。
 
 ### 2026-06-06 真实 Codex CLI 端到端手测（通过）
 
