@@ -82,8 +82,8 @@ POST /v1/messages           Anthropic Messages Create
 
 | 协议 | 本地参考 |
 | --- | --- |
-| OpenAI Chat Completions Create | [docs/protocol/openai_chat_completion.md](../../protocol/openai_chat_completion.md) |
-| Anthropic Messages Create | [docs/protocol/anthropic_message.md](../../protocol/anthropic_message.md) |
+| OpenAI Chat Completions Create | [docs/protocol/openai/chat-completions/official.md](../../protocol/openai/chat-completions/official.md) |
+| Anthropic Messages Create | [docs/protocol/anthropic/messages/official.md](../../protocol/anthropic/messages/official.md) |
 
 ## 必须遵守的设计原则
 
@@ -571,7 +571,7 @@ adapter registry 选择
 目标：
 
 ```text
-按 docs/protocol/openai_chat_completion.md 补齐公开请求、非流式响应、流式响应和错误响应。
+按 docs/protocol/openai/chat-completions/official.md 补齐公开请求、非流式响应、流式响应和错误响应。
 ```
 
 实现内容：
@@ -1041,8 +1041,8 @@ rg -n "adapter\\.ChatRequest|adapter\\.ChatResponse" internal cmd migrations sql
 必须阅读：
 
 ```text
-docs/protocol/openai_chat_completion.md
-docs/protocol/anthropic_message.md
+docs/protocol/openai/chat-completions/official.md
+docs/protocol/anthropic/messages/official.md
 docs/chapters/phase-10-dual-protocol-gateway/ARCHITECTURE.md
 docs/chapters/phase-10-dual-protocol-gateway/RESPONSE_FACTS.md
 docs/chapters/phase-10-dual-protocol-gateway/OPENAI_CHAT_COMPLETIONS_MATRIX.md

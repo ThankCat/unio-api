@@ -4,7 +4,7 @@
 
 原始参考：
 
-- [docs/protocol/openai_chat_completion.md](../../protocol/openai_chat_completion.md)
+- [docs/protocol/openai/chat-completions/official.md](../../protocol/openai/chat-completions/official.md)
 - [OpenAI Chat Completions Create](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
 
 本阶段范围：

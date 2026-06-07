@@ -2,11 +2,11 @@
 
 - OpenAI Developer Community「Responses API streaming - the simple guide to events」（_j，2026-01-21）——响应对象 / error 对象 / `compaction` item / status 枚举
 - OpenAI 官方 API reference 方法页 <https://developers.openai.com/api/reference/resources/responses>（抓取超时，方法签名按公开惯例整理）
-- Unio 阶段 11 [PLAN.md](../chapters/phase-11-openai-responses-api/PLAN.md) 接口范围决策
+- Unio 阶段 11 [PLAN.md](../../../chapters/phase-11-openai-responses-api/PLAN.md) 接口范围决策
 
 > 官方逐方法 schema 页抓取超时。本文件中 `compact` / `input_tokens` 两个较新接口的 **请求体** 官方
 > 细节未能从权威来源完整确认，标 `Verify`，须在 TASK-11.01 用真实 Codex 抓包冻结。其余有状态接口
-> Unio 本阶段一律返回 501（见 [PLAN.md 接口范围](../chapters/phase-11-openai-responses-api/PLAN.md#responses-api-接口范围)），
+> Unio 本阶段一律返回 501（见 [PLAN.md 接口范围](../../../chapters/phase-11-openai-responses-api/PLAN.md#responses-api-接口范围)），
 > 故只记录 Unio 需要识别的 URL 形态与官方返回大形状，不逐字段冻结。
 
 ---
@@ -14,7 +14,7 @@
 # OpenAI Responses API · 其余 endpoint 与 Error schema（协议快照补充）
 
 提供 [openai_responses.md](openai_responses.md) 主文件之外的 **5 个非创建 endpoint + error schema**。
-streaming 事件目录见 [openai_responses_streaming_events.md](openai_responses_streaming_events.md)。
+streaming 事件目录见 [official-streaming-events.md](official-streaming-events.md)。
 
 ## 目录
 
@@ -138,7 +138,7 @@ streaming 事件目录见 [openai_responses_streaming_events.md](openai_response
 **Unio**：无服务端存储 → **HTTP 501** `unsupported_endpoint_stateless`。
 
 > 另：`POST /v1/responses` 带 `background:true` → Unio **HTTP 400** `unsupported_background`
-> （明确报错，不静默转同步）。见 [PLAN.md TASK-11.13](../chapters/phase-11-openai-responses-api/PLAN.md#task-11-13-unsupported-endpoints)。
+> （明确报错，不静默转同步）。见 [PLAN.md TASK-11.13](../../../chapters/phase-11-openai-responses-api/PLAN.md#task-11-13-unsupported-endpoints)。
 
 ## Error schema
 
@@ -158,7 +158,7 @@ HTTP 层错误（鉴权/参数/限流等）OpenAI 通常返回：
 { "error": { "type": "<type>", "code": "<code|null>", "message": "...", "param": "<field|null>" } }
 ```
 
-> Unio 渲染策略以 [RESPONSES_CHAT_BRIDGE.md §7](../chapters/phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md) 为准：
+> Unio 渲染策略以 [RESPONSES_CHAT_BRIDGE.md §7](../../../chapters/phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md) 为准：
 > 复用 `adapter.UpstreamCategoryOf`，上游 auth/permission **绝不**渲染成客户 401；原始上游 body /
 > credential / prompt 不透传。
 

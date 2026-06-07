@@ -4,7 +4,7 @@
 
 原始参考：
 
-- [docs/protocol/anthropic_message.md](../../protocol/anthropic_message.md)
+- [docs/protocol/anthropic/messages/official.md](../../protocol/anthropic/messages/official.md)
 - [Anthropic Messages Create](https://platform.claude.com/docs/en/api/messages/create)
 - [Anthropic Streaming Messages](https://platform.claude.com/docs/en/build-with-claude/streaming)
 

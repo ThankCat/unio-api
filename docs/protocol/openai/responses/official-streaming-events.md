@@ -12,12 +12,12 @@
 
 # OpenAI Responses API · Streaming Events 目录（协议快照补充）
 
-Unio 阶段 11 [TASK-11.01](../chapters/phase-11-openai-responses-api/PLAN.md#task-11-01-protocol-freeze)
+Unio 阶段 11 [TASK-11.01](../../../chapters/phase-11-openai-responses-api/PLAN.md#task-11-01-protocol-freeze)
 权威字段来源之一，提供 [openai_responses.md](openai_responses.md) 主文件之外的 **完整 streaming events 目录**。
 
 - 主文件 [openai_responses.md](openai_responses.md)：`POST /responses` body / Returns / 示例。
-- 其余 endpoint + error schema：[openai_responses_other_endpoints.md](openai_responses_other_endpoints.md)。
-- 桥接消费方：[../chapters/phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md](../chapters/phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md) §6 流式状态机。
+- 其余 endpoint + error schema：[official-other-endpoints.md](official-other-endpoints.md)。
+- 桥接消费方：[../chapters/phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md](../../../chapters/phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md) §6 流式状态机。
 
 ## 目录
 
@@ -262,7 +262,7 @@ response.output_item.done
 
 桥接层（`responses_stream.go`）需要 **生成** 的事件 = DeepSeek Chat SSE 能产出的内容对应项。其余事件
 属于 OpenAI 专属能力，DeepSeek 不会产生，桥接层 **不生成**（见
-[CAPABILITY_MATRIX.md](../chapters/phase-11-openai-responses-api/CAPABILITY_MATRIX.md)）。
+[CAPABILITY_MATRIX.md](../../../chapters/phase-11-openai-responses-api/CAPABILITY_MATRIX.md)）。
 
 > **codex-rs 源码实证（main / 9a8730f3）**：Codex 的 `process_responses_event` 只消费
 > `response.created` / `output_item.added` / `output_text.delta` / `reasoning_summary_text.delta` /

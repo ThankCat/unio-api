@@ -4,7 +4,7 @@
 
 # OpenAI Responses API · 协议快照
 
-Unio 阶段 11 [TASK-11.01](../chapters/phase-11-openai-responses-api/PLAN.md#task-11-01-protocol-freeze)
+Unio 阶段 11 [TASK-11.01](../../../chapters/phase-11-openai-responses-api/PLAN.md#task-11-01-protocol-freeze)
 权威字段来源。本主文件覆盖 **`POST /responses` 创建接口**（含完整 body / Returns / 流式示例
 + 9 个端到端示例）；完整 streaming events 目录、其余 5 个 endpoint 与 error schema 拆入同目录子文件
 （见 [配套文档](#配套文档)）。
@@ -25,8 +25,8 @@ Unio 阶段 11 [TASK-11.01](../chapters/phase-11-openai-responses-api/PLAN.md#ta
   - [Functions](#functions)
   - [Reasoning](#reasoning)
 - 子文件
-  - [完整 streaming events 目录（53 种）](openai_responses_streaming_events.md)
-  - [其余 endpoint + Error schema](openai_responses_other_endpoints.md)
+  - [完整 streaming events 目录（53 种）](official-streaming-events.md)
+  - [其余 endpoint + Error schema](official-other-endpoints.md)
 
 ## 覆盖范围
 
@@ -37,18 +37,18 @@ Unio 阶段 11 [TASK-11.01](../chapters/phase-11-openai-responses-api/PLAN.md#ta
 - ✅ Streaming 示例（含 9 种真实 SSE 事件）
 - ✅ 9 段示例：default / text input / image input / file input / web_search / file_search / streaming / functions / reasoning
 
-子文件 [openai_responses_streaming_events.md](openai_responses_streaming_events.md)：
+子文件 [official-streaming-events.md](official-streaming-events.md)：
 
 - ✅ 完整 streaming events 目录（53 种事件 + 字段 + lifecycle recipes + Unio×DeepSeek 桥接相关性分级）
 
-子文件 [openai_responses_other_endpoints.md](openai_responses_other_endpoints.md)：
+子文件 [official-other-endpoints.md](official-other-endpoints.md)：
 
 - ✅ `POST /responses/compact`（语义 + Unio 降级 + `compaction` item 形状）
 - ✅ `POST /responses/input_tokens`（语义 + Unio 本地估算）
 - ✅ `GET /responses/{id}` / `DELETE /responses/{id}` / `POST /responses/{id}/cancel` / `GET /responses/{id}/input_items`（语义 + Unio 501）
 - ✅ Error schema（非流式 error 对象 + 流式 error 事件 + code 枚举 + Unio 扩展 code）
 
-剩余 `Verify`（须真实 Codex 抓包冻结，见 [TASK-11.01](../chapters/phase-11-openai-responses-api/PLAN.md#task-11-01-protocol-freeze)）：
+剩余 `Verify`（须真实 Codex 抓包冻结，见 [TASK-11.01](../../../chapters/phase-11-openai-responses-api/PLAN.md#task-11-01-protocol-freeze)）：
 
 - ⚠️ `compact` / `input_tokens` 两个较新接口的 **请求体** 官方字段未从权威来源逐字确认。
 - ⚠️ `input_tokens` 返回 `object` 字段名以 Codex 实际期望为准。
@@ -56,12 +56,12 @@ Unio 阶段 11 [TASK-11.01](../chapters/phase-11-openai-responses-api/PLAN.md#ta
 
 ## 配套文档
 
-- 完整 streaming events 目录：[openai_responses_streaming_events.md](openai_responses_streaming_events.md)
-- 其余 endpoint + Error schema：[openai_responses_other_endpoints.md](openai_responses_other_endpoints.md)
-- 字段映射矩阵（Responses ↔ 内部 Chat 契约）：[../chapters/phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md](../chapters/phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md)
-- 公开能力声明：[../chapters/phase-11-openai-responses-api/CAPABILITY_MATRIX.md](../chapters/phase-11-openai-responses-api/CAPABILITY_MATRIX.md)
-- 阶段计划：[../chapters/phase-11-openai-responses-api/PLAN.md](../chapters/phase-11-openai-responses-api/PLAN.md)
-- 关键决策：[DEC-014](../production/DECISIONS.md#dec-014-openai-responses-ingress-下转-chat-completions-桥接)
+- 完整 streaming events 目录：[official-streaming-events.md](official-streaming-events.md)
+- 其余 endpoint + Error schema：[official-other-endpoints.md](official-other-endpoints.md)
+- 字段映射矩阵（Responses ↔ 内部 Chat 契约）：[../chapters/phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md](../../../chapters/phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md)
+- 公开能力声明：[../chapters/phase-11-openai-responses-api/CAPABILITY_MATRIX.md](../../../chapters/phase-11-openai-responses-api/CAPABILITY_MATRIX.md)
+- 阶段计划：[../chapters/phase-11-openai-responses-api/PLAN.md](../../../chapters/phase-11-openai-responses-api/PLAN.md)
+- 关键决策：[DEC-014](../../../production/DECISIONS.md#dec-014-openai-responses-ingress-下转-chat-completions-桥接)
 
 ---
 

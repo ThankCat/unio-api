@@ -4,9 +4,9 @@
 （`internal/core/adapter/openai.ChatRequest` / `ChatResponse` / `ChatStreamChunk`）之间的双向映射。
 
 权威字段来源：
-- [docs/protocol/openai_responses.md](../../protocol/openai_responses.md)（`POST /responses` 完整 body + Returns + 示例）
-- [docs/protocol/openai_responses_streaming_events.md](../../protocol/openai_responses_streaming_events.md)（53 种 streaming events）
-- [docs/protocol/openai_responses_other_endpoints.md](../../protocol/openai_responses_other_endpoints.md)（其余 endpoint + error schema）
+- [docs/protocol/openai/responses/official.md](../../protocol/openai/responses/official.md)（`POST /responses` 完整 body + Returns + 示例）
+- [docs/protocol/openai/responses/official-streaming-events.md](../../protocol/openai/responses/official-streaming-events.md)（53 种 streaming events）
+- [docs/protocol/openai/responses/official-other-endpoints.md](../../protocol/openai/responses/official-other-endpoints.md)（其余 endpoint + error schema）
 
 > 仅覆盖 `POST /v1/responses` 主路径。其他 Responses endpoint（`compact` / `input_tokens` /
 > retrieve / delete / input_items / cancel）以及公开能力边界见 [CAPABILITY_MATRIX.md](CAPABILITY_MATRIX.md)。
@@ -323,9 +323,9 @@ response.output_item.done            # 权威载体：完整 function_call（含
 
 ```text
 协议快照：完整（POST /responses + streaming events 53 种 + 其余 endpoint + error schema）
-  主文件 docs/protocol/openai_responses.md
-  子文件 docs/protocol/openai_responses_streaming_events.md
-  子文件 docs/protocol/openai_responses_other_endpoints.md
+  主文件 docs/protocol/openai/responses/official.md
+  子文件 docs/protocol/openai/responses/official-streaming-events.md
+  子文件 docs/protocol/openai/responses/official-other-endpoints.md
 结构可定字段：已冻结（§1~§7 全部 Pass/Adapt/Drop/Reject；§6 sequence_number 已冻结为 Adapt）
 真实 DeepSeek 黑盒 gate：DEEPSEEK_BLACKBOX=1 + DEEPSEEK_API_KEY（TASK-11.09 reasoning_effort 验证用）
 ```

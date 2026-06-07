@@ -7,7 +7,7 @@ DeepSeek）下能做什么、做到什么程度、不做什么。
 
 - 与 [PLAN.md](PLAN.md) 接口范围表、[DEC-014](../../production/DECISIONS.md#dec-014-openai-responses-ingress-下转-chat-completions-桥接) 一致。
 - 字段级映射细节见 [RESPONSES_CHAT_BRIDGE.md](RESPONSES_CHAT_BRIDGE.md)。
-- OpenAI Responses 官方协议字段树与 SSE 事件示例见 [docs/protocol/openai_responses.md](../../protocol/openai_responses.md)。
+- OpenAI Responses 官方协议字段树与 SSE 事件示例见 [docs/protocol/openai/responses/official.md](../../protocol/openai/responses/official.md)。
 - 公开声明，可作为 Unio 文档站 "Responses API Capability" 页面的事实来源。
 
 ## 0. 核心承诺

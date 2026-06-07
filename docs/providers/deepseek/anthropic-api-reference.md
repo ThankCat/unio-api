@@ -7,8 +7,8 @@
 - [DeepSeek Anthropic API](https://api-docs.deepseek.com/guides/anthropic_api)
 
 本文档保存 DeepSeek 官方兼容表的项目内参考摘要。它不是 Unio 的公开契约，也不替代
-`docs/chapters/phase-10-dual-protocol-gateway/DEEPSEEK_ANTHROPIC_MAPPING.md` 中的
-adapter 决策。
+[anthropic/protocol-and-params.md](anthropic/protocol-and-params.md) 与
+[anthropic/adaptation.md](anthropic/adaptation.md) 中的 adapter 决策。
 
 ## 1. Endpoint
 

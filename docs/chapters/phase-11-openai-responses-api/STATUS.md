@@ -31,7 +31,7 @@ GAP-11-005、新增 GAP-11-011）；黑盒验收（TASK-11.15）mock + gated 真
 
 | 任务 | 状态 | 说明 |
 | --- | --- | --- |
-| TASK-11.01 | done | 协议快照已补齐：主文件 `POST /responses` + 子文件 [streaming events](../../protocol/openai_responses_streaming_events.md) + [其余 endpoint/error schema](../../protocol/openai_responses_other_endpoints.md)。**首份真实 Codex v0.130.0 `/responses` 已抓**（`internal/blackbox/fixtures/codex/20260605_151709.845_POST_v1_responses.json`，76 KB）+ **codex-rs 源码交叉确认**，BRIDGE §1~§9 全部残留清零：① reasoning 事件名冻结为 `reasoning_text.*`（content_index/reasoning_text，开源模型语义）；② `/compact` 请求 `CompactionInput`、响应 `{output:[ResponseItem]}`；③ `/input_tokens` 响应 `{input_tokens,object:"response.input_tokens"}`；④ 字段子集 + 新发现（`client_metadata` Drop、tools `type:"namespace"` 拍平+namespace 回译、工具全 `type:function`、Codex 仅消费事件子集、`output_item.done` 为权威载体）。⚠️ raw fixture 含个人信息，提交前需脱敏（TASK-11.15）。 |
+| TASK-11.01 | done | 协议快照已补齐：主文件 `POST /responses` + 子文件 [streaming events](../../protocol/openai/responses/official-streaming-events.md) + [其余 endpoint/error schema](../../protocol/openai/responses/official-other-endpoints.md)。**首份真实 Codex v0.130.0 `/responses` 已抓**（`internal/blackbox/fixtures/codex/20260605_151709.845_POST_v1_responses.json`，76 KB）+ **codex-rs 源码交叉确认**，BRIDGE §1~§9 全部残留清零：① reasoning 事件名冻结为 `reasoning_text.*`（content_index/reasoning_text，开源模型语义）；② `/compact` 请求 `CompactionInput`、响应 `{output:[ResponseItem]}`；③ `/input_tokens` 响应 `{input_tokens,object:"response.input_tokens"}`；④ 字段子集 + 新发现（`client_metadata` Drop、tools `type:"namespace"` 拍平+namespace 回译、工具全 `type:function`、Codex 仅消费事件子集、`output_item.done` 为权威载体）。⚠️ raw fixture 含个人信息，提交前需脱敏（TASK-11.15）。 |
 | TASK-11.02 | done | 方案 A（客户 model = Unio model_id，复用 Phase 6 routing）已冻结在 [DEC-014](../../production/DECISIONS.md#dec-014-openai-responses-ingress-下转-chat-completions-桥接)；5 个决策点结论见 PLAN「模型指定策略」；routing 用 `IngressProtocol=openai` 无 responses 特例；seed 一个 Codex 可用模型并入 TASK-11.09 item 5。 |
 | TASK-11.03 | done | [DEC-014](../../production/DECISIONS.md#dec-014-openai-responses-ingress-下转-chat-completions-桥接) accepted；`requestlog.OperationResponses="responses"` 已加；migration `000009` 放开 `operation` CHECK + 联合约束加 `(openai, responses)` 分支，scratch 库全量 up 验证通过、`sqlc generate` 无 drift、`go build` 通过。**待办**：dev 本地库需 drop→up 重建后才接受 `responses`（DATABASE_URL 门控测试前）。 |
 | TASK-11.04 | done | `internal/app/gatewayapi/openai/responses/` 落地：`dto.go`（请求/响应/usage/output item/input union/reasoning/text）+ `tools.go`（function/namespace union）+ `stream_dto.go`（事件信封 + 事件名常量）+ `decode.go`（双轨 typed+Extensions，input string/array union）+ `content.go`（content part 结构校验）+ `validation.go`（协议结构校验，含 item/tool union）+ `response.go`（Responses 原生 error 渲染）。测试：decode（含 client_metadata Extensions、namespace 工具、reasoning:null）+ validation（18 例错误 param + 未知类型放行）+ error 渲染全过；`go vet` / `go build ./internal/... ./cmd/...` / lint 干净。 |
@@ -92,7 +92,7 @@ git diff --check                                # 通过
 
 1. 阶段 10 双协议 gateway 链路稳定（done）。
 2. 已能用现有 bootstrap seed / 运营配置把某个客户模型名路由到 DeepSeek OpenAI channel。
-3. 协议快照 [docs/protocol/openai_responses.md](../../protocol/openai_responses.md) 已覆盖
+3. 协议快照 [docs/protocol/openai/responses/official.md](../../protocol/openai/responses/official.md) 已覆盖
    `POST /responses` 主路径；剩余 endpoint 与 streaming events 目录在 TASK-11.01 补齐。
 4. 已抓到一份真实 Codex `/responses` 请求体作为字段冻结依据（TASK-11.01）。
 5. 模型指定方式已冻结（TASK-11.02），运营可声明哪些模型可用于 Codex。

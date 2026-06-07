@@ -1,4 +1,12 @@
-https://developers.openai.com/api/reference/go/resources/chat/subresources/completions/methods/create
+# OpenAI Chat Completions · 官方协议快照
+
+来源：<https://developers.openai.com/api/reference/go/resources/chat/subresources/completions/methods/create>（查阅 2026-06-07）
+
+> 本文件是官方参考的忠实快照,仅作协议事实来源;Unio 的适配/转换决定见 [docs/providers/](../../../providers/README.md)。
+> 请求/响应参数的整理说明见同目录 [params.md](params.md)。
+
+---
+
 ## Create chat completion
 
 `client.Chat.Completions.New(ctx, body) (*ChatCompletion, error)`

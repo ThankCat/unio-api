@@ -1,0 +1,87 @@
+# DeepSeek · OpenAI 格式 适配与转换逻辑
+
+本文件记录 Unio 在 **OpenAI 兼容格式**(`POST /chat/completions`)上接 DeepSeek 的关键转换逻辑与
+行为决策(思考、reasoning 跨轮、工具、usage、模型名、错误、流式)。逐字段映射表见同目录
+[protocol-and-params.md](protocol-and-params.md);计费金额口径见 [../billing.md](../billing.md)。
+
+## 1. 思考模式(reasoning / thinking)
+
+DeepSeek v4 单个模型即可在「非思考 / 思考」间切换,默认**思考开启**。OpenAI 格式下的控制:
+
+| 控制 | 字段 | 说明 |
+| --- | --- | --- |
+| 开关 | `thinking: {type: enabled/disabled}` | 默认 enabled |
+| 强度 | `reasoning_effort: high/max` | 仅这两档生效 |
+
+来源:[官方·思考模式](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode)(查阅 2026-06-07)。
+
+强度归一(Unio 出站显式归一,不依赖上游兼容):`minimal/low/medium/high → high`,`xhigh/max → max`,
+未知值丢弃让上游回退默认。代码:`internal/core/adapter/openai/deepseek/adapt.go`(`deepseekReasoningEfforts`)。
+
+Unio 的开关策略(DEC-016):
+- **Chat Completions 入口**:不干预,保持 DeepSeek 默认(思考开)。
+- **Responses 入口**:思考是 **opt-in**。客户未带 `reasoning` 字段时,Unio 置内部标志 `ReasoningDisabled`,
+  由 DeepSeek adapter 出站注入 `thinking:{type:"disabled"}`,避免非 reasoning 请求白白产生思维链(多花钱)。
+  客户带 `reasoning.effort` 才开思考。代码:`internal/service/gateway/openai/responses/responses_chat_map.go`、
+  `internal/core/adapter/openai/deepseek/drop.go`(`adaptThinkingDisabled`)。
+
+> 思考模式下 `temperature`/`top_p`/`presence_penalty`/`frequency_penalty` 不报错但不生效(官方·思考模式)。
+
+## 2. reasoning_content 跨轮回传(重要)
+
+官方规则([思考模式·工具调用](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode),查阅 2026-06-07):
+
+- 两个 user 之间**没有**工具调用:中间 assistant 的 `reasoning_content` 无需回传(回传也被忽略)。
+- 两个 user 之间**有**工具调用:该轮 assistant 的 `reasoning_content` **必须**在后续所有请求中完整回传;
+  **不回传会返回 400**。
+
+Unio 现状:
+- **Chat Completions**:入口 DTO 保留 `messages[].reasoning_content`,adapter 原样透传上游(Pass)。
+  即只要客户端回传,链路支持。代码:`internal/app/gatewayapi/openai/chatcompletions/dto.go`、
+  `internal/core/adapter/openai/request_wire.go`。
+- **Responses**:第一版**不**把跨轮 reasoning 回灌给 DeepSeek(reasoning item 被丢弃)。
+  开启思考 + 工具循环时存在 400 风险。见 [../upgrade-plan.md](../upgrade-plan.md) U1 与 GAP-11-003。
+  代码:`internal/service/gateway/openai/responses/responses_chat_map.go`。
+
+## 3. 工具调用(Function Calling)
+
+- 标准 OpenAI function tool,DeepSeek v4 思考模式也支持工具调用。
+- legacy `functions`/`function_call` 转新式 `tools`/`tool_choice`(见 protocol-and-params 转换表)。
+- `strict` 模式是 Beta 能力,需 `base_url=.../beta`;Unio 当前走正式 endpoint,未启用 strict(见 upgrade-plan U7)。
+
+来源:[官方·Function Calling](https://api-docs.deepseek.com/zh-cn/guides/function_calling)(查阅 2026-06-07)。
+
+## 4. 模型名解耦
+
+- 客户请求 Unio catalog model;routing 选 channel-model 并给出显式 `upstream_model`。
+- 不依赖 DeepSeek「未知模型名静默降级到 v4-flash」的行为。
+- 响应里把 `model` 恢复为客户的 Unio catalog model;审计记录真实 upstream model。
+
+代码:`internal/core/adapter/openai` response map。
+
+## 5. usage 映射(上游 → 内部计费事实)
+
+| DeepSeek usage 字段 | 内部 `usage.Facts` |
+| --- | --- |
+| `prompt_cache_hit_tokens` | `CacheReadInputTokens`(缓存命中输入) |
+| `prompt_cache_miss_tokens` | `UncachedInputTokens`(未命中输入) |
+| `completion_tokens` | `OutputTokensTotal`(含 reasoning) |
+| `completion_tokens_details.reasoning_tokens` | `ReasoningOutputTokens` |
+
+校验:`prompt_tokens = hit + miss`;`total_tokens = prompt + completion`。
+来源:[官方·上下文硬盘缓存](https://api-docs.deepseek.com/zh-cn/guides/kv_cache)(查阅 2026-06-07);
+代码 `internal/core/adapter/openai`。计费金额口径见 [../billing.md](../billing.md)。
+
+## 6. 错误映射
+
+DeepSeek 错误码:400 格式错误 / 401 认证失败 / 402 余额不足 / 422 参数错误 / 429 速率上限 / 500 服务器故障 / 503 繁忙。
+来源:[官方·错误码](https://api-docs.deepseek.com/zh-cn/quick_start/error_codes)(查阅 2026-06-07)。
+
+adapter 按 OpenAI error 信封解析、以 HTTP status 为主映射 category,再由 gatewayapi 渲染成 OpenAI 原生 error。
+上游 auth/permission 绝不渲染成客户 401(对客户屏蔽上游凭据问题)。代码:`internal/core/adapter/openai/deepseek`。
+
+## 7. 流式
+
+DeepSeek OpenAI endpoint 是 OpenAI 风格 SSE(`data: {chunk}` + `data: [DONE]`),`reasoning_content` 走
+`delta.reasoning_content`,与 OpenAI 基线一致,无 DeepSeek 专属 framing。adapter 截留上游终态,
+由 lifecycle 结算后再由 gatewayapi 写出客户可见终态。
