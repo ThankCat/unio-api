@@ -56,7 +56,10 @@ Unio 现状:
 
 - 标准 OpenAI function tool,DeepSeek v4 思考模式也支持工具调用。
 - legacy `functions`/`function_call` 转新式 `tools`/`tool_choice`(见 protocol-and-params 转换表)。
-- `strict` 模式是 Beta 能力,需 `base_url=.../beta`;Unio 当前走正式 endpoint,未启用 strict(见 upgrade-plan U7)。
+- **`strict` 模式(U7 已收口)**:`function.strict` 字段已**端到端透传**(ingress typed DTO → contract →
+  `request_wire.go` 原样 marshal 上游,无任何 Drop)。但 DeepSeek strict 是 **Beta 能力,需 `base_url=.../beta`**;
+  是否真正生效取决于该 channel 的 `base_url` 是否指向 beta。Unio **不全局切 beta**(Beta 稳定性/特性差异),
+  需严格结构化输出的客户由运营配置专用 beta channel(channel 业务数据,归 phase 13)。见 upgrade-plan U7。
 
 来源:[官方·Function Calling](https://api-docs.deepseek.com/zh-cn/guides/function_calling)(查阅 2026-06-07)。
 

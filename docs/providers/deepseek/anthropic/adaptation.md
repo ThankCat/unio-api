@@ -36,7 +36,11 @@ Anthropic 格式下思维链以 `thinking` content block 表达。与 OpenAI 格
 - `tool_choice` 支持 none/auto/any/tool;`disable_parallel_tool_use` 被忽略。
 - 内置 **server tool 定义**(web_search/code_execution 等)出站 **Drop**;但入站响应里的
   `server_tool_use`/`web_search_tool_result` block 为 supported,予以保留。
-  是否放行 web_search 工具定义待黑盒确认(见 [../upgrade-plan.md](../upgrade-plan.md) U6)。
+- **web_search 工具定义保持 Drop(U6 已收口)**:官方兼容表把 `server_tool_use`/`web_search_tool_result`
+  只列在 §6 content block(supported = 历史回传接受),§5 `tools[]` **没有**可声明的 web_search 工具类型。
+  按"未列入官方表不默认支持"原则,放行该工具定义会形成"客户声明 web_search 却拿不到搜索"的假承诺,
+  故保持 Drop(已审计)。phase 12 `model_capabilities` 用 `tools.builtin.web_search` 记 DeepSeek=unsupported。
+  细节见 [../upgrade-plan.md](../upgrade-plan.md) U6。
 
 来源:[官方·Anthropic API](https://api-docs.deepseek.com/zh-cn/guides/anthropic_api)(查阅 2026-06-07)。
 
