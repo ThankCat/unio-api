@@ -175,6 +175,15 @@ func mapChatServiceError(req ChatCompletionRequest, err error, fallbackCode stri
 			errorType: "api_error",
 			param:     modelParam,
 		}
+	case errors.Is(err, routing.ErrModelCapabilityUnavailable), errors.Is(err, routing.ErrChannelCapabilityUnavailable):
+		// 对客户统一渲染为「模型不支持该能力」：model/channel 内部分层只进审计，不向客户暴露 channel 拓扑。
+		return chatServiceErrorResponse{
+			status:    http.StatusBadRequest,
+			code:      "model_capability_unavailable",
+			message:   capabilityUnavailableMessage(req.Model, err),
+			errorType: "invalid_request_error",
+			param:     modelParam,
+		}
 	}
 
 	// 上游 provider 调用失败：只消费 adapter 给出的稳定 category，不解析 provider 原始 body。
@@ -242,6 +251,14 @@ func chatErrorFieldParam(err error) *string {
 	}
 
 	return nil
+}
+
+// capabilityUnavailableMessage 构造 capability 不可用的客户可见文案，列出缺失能力 key（不泄漏 channel 拓扑）。
+func capabilityUnavailableMessage(model string, err error) string {
+	if missing := routing.MissingCapabilities(err); missing != "" {
+		return fmt.Sprintf("The model %q does not support the required capabilities: %s.", model, missing)
+	}
+	return fmt.Sprintf("The model %q does not support a capability required by this request.", model)
 }
 
 // writeJSONDecodeError 将 JSON decode 错误转换成 OpenAI-compatible 错误响应。

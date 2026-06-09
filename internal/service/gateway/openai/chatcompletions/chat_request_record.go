@@ -19,8 +19,8 @@ func (s *ChatCompletionService) createRequestRecord(ctx context.Context, princip
 	return s.lifecycle.CreateRequest(ctx, principal, req.Model, stream)
 }
 
-func (s *ChatCompletionService) createAttemptRecord(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate) (requestlog.AttemptRecord, error) {
-	return s.lifecycle.CreateAttempt(ctx, requestRecord, attemptIndex, candidate)
+func (s *ChatCompletionService) createAttemptRecord(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate, requiredCapabilities []string) (requestlog.AttemptRecord, error) {
+	return s.lifecycle.CreateAttempt(ctx, requestRecord, attemptIndex, candidate, requiredCapabilities)
 }
 
 func (s *ChatCompletionService) markRequestRecordFailed(ctx context.Context, requestRecord requestlog.RequestRecord, code string, err error) {

@@ -554,3 +554,76 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 		t.Fatalf("expected inherited model to have no candidates in allow-list mode, got %d: %#v", len(inheritedCandidates), inheritedCandidates)
 	}
 }
+
+// insertModelCapability 插入测试 model capability 声明（source=manual）。
+func insertModelCapability(t *testing.T, ctx context.Context, tx pgx.Tx, modelID int64, key string, supportLevel string) {
+	t.Helper()
+
+	_, err := tx.Exec(ctx, `
+		INSERT INTO model_capabilities (model_id, capability_key, support_level, source)
+		VALUES ($1, $2, $3, 'manual')
+	`, modelID, key, supportLevel)
+	if err != nil {
+		t.Fatalf("insert model capability %q: %v", key, err)
+	}
+}
+
+// findAvailableModelRow 在可用模型列表中按对外 model_id 定位行，缺失即失败。
+func findAvailableModelRow(t *testing.T, rows []sqlc.ListAvailableModelsForProjectRow, modelID string) sqlc.ListAvailableModelsForProjectRow {
+	t.Helper()
+
+	for _, row := range rows {
+		if row.ModelID == modelID {
+			return row
+		}
+	}
+
+	t.Fatalf("model %q not found in available models %#v", modelID, rows)
+	return sqlc.ListAvailableModelsForProjectRow{}
+}
+
+// TestListAvailableModelsForProjectReturnsCapTags 验证可用模型查询返回的 cap-tags：
+// 只含 support_level<>'unsupported' 的能力、去重升序，未声明能力的模型为空数组。
+func TestListAvailableModelsForProjectReturnsCapTags(t *testing.T) {
+	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	suffix := time.Now().UnixNano()
+	timeoutMS := int32(15000)
+	projectID := createProjectForModelPolicy(t, ctx, queries, suffix)
+
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("cap-provider-%d", suffix), "enabled")
+	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("cap-channel-%d", suffix), "enabled", 10, &timeoutMS)
+
+	provisioned := fmt.Sprintf("openai/cap-provisioned-%d", suffix)
+	provisionedID := insertModel(t, ctx, tx, provisioned, "openai", "enabled")
+	insertChannelModel(t, ctx, tx, channelID, provisionedID, "cap-provisioned", "enabled")
+	insertModelCapability(t, ctx, tx, provisionedID, "text.output", "full")
+	insertModelCapability(t, ctx, tx, provisionedID, "tools.function", "limited")
+	insertModelCapability(t, ctx, tx, provisionedID, "image.input", "unsupported")
+
+	unprovisioned := fmt.Sprintf("openai/cap-unprovisioned-%d", suffix)
+	unprovisionedID := insertModel(t, ctx, tx, unprovisioned, "openai", "enabled")
+	insertChannelModel(t, ctx, tx, channelID, unprovisionedID, "cap-unprovisioned", "enabled")
+
+	models, err := queries.ListAvailableModelsForProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("list available models: %v", err)
+	}
+
+	provRow := findAvailableModelRow(t, models, provisioned)
+	wantCaps := []string{"text.output", "tools.function"}
+	if len(provRow.CapabilityKeys) != len(wantCaps) {
+		t.Fatalf("provisioned cap-tags = %v, want %v (unsupported excluded, sorted)", provRow.CapabilityKeys, wantCaps)
+	}
+	for i, want := range wantCaps {
+		if provRow.CapabilityKeys[i] != want {
+			t.Fatalf("provisioned cap-tags[%d] = %q, want %q", i, provRow.CapabilityKeys[i], want)
+		}
+	}
+
+	unprovRow := findAvailableModelRow(t, models, unprovisioned)
+	if len(unprovRow.CapabilityKeys) != 0 {
+		t.Fatalf("unprovisioned cap-tags = %v, want empty", unprovRow.CapabilityKeys)
+	}
+}

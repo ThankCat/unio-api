@@ -70,8 +70,9 @@ func TestRouterModelsSuccess(t *testing.T) {
 	modelCatalogService := &routerTestModelCatalogService{
 		models: []modelcatalog.Model{
 			{
-				ID:      "openai/gpt-4.1",
-				OwnedBy: "openai",
+				ID:           "openai/gpt-4.1",
+				OwnedBy:      "openai",
+				Capabilities: []string{"text.input", "text.output", "tools.function"},
 			},
 		},
 	}
@@ -94,9 +95,10 @@ func TestRouterModelsSuccess(t *testing.T) {
 	var body struct {
 		Object string `json:"object"`
 		Data   []struct {
-			ID      string `json:"id"`
-			Object  string `json:"object"`
-			OwnedBy string `json:"owned_by"`
+			ID           string   `json:"id"`
+			Object       string   `json:"object"`
+			OwnedBy      string   `json:"owned_by"`
+			Capabilities []string `json:"capabilities"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
@@ -115,6 +117,10 @@ func TestRouterModelsSuccess(t *testing.T) {
 		t.Fatalf("expected project id %d, got %d", int64(42), modelCatalogService.projectID)
 	}
 
+	if modelCatalogService.requiredCapabilities != nil {
+		t.Fatalf("expected no capability filter, got %v", modelCatalogService.requiredCapabilities)
+	}
+
 	if len(body.Data) != 1 {
 		t.Fatalf("expected 1 model, got %d items", len(body.Data))
 	}
@@ -129,6 +135,48 @@ func TestRouterModelsSuccess(t *testing.T) {
 
 	if body.Data[0].OwnedBy != "openai" {
 		t.Fatalf("expected owned_by %q, got %q", "openai", body.Data[0].OwnedBy)
+	}
+
+	wantCaps := []string{"text.input", "text.output", "tools.function"}
+	if len(body.Data[0].Capabilities) != len(wantCaps) {
+		t.Fatalf("expected capabilities %v, got %v", wantCaps, body.Data[0].Capabilities)
+	}
+	for i, want := range wantCaps {
+		if body.Data[0].Capabilities[i] != want {
+			t.Fatalf("capability[%d] = %q, want %q", i, body.Data[0].Capabilities[i], want)
+		}
+	}
+}
+
+func TestRouterModelsCapabilityFilterParsed(t *testing.T) {
+	authenticator := &modelsTestAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{
+			APIKeyID:  1,
+			ProjectID: 42,
+			KeyPrefix: "unio_sk_test",
+		},
+	}
+	modelCatalogService := &routerTestModelCatalogService{}
+	handler := newTestRouter(authenticator, nil, nil, modelCatalogService)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models?capability=image.input,%20tools.function%20,", nil)
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	want := []string{"image.input", "tools.function"}
+	if len(modelCatalogService.requiredCapabilities) != len(want) {
+		t.Fatalf("expected capability filter %v, got %v", want, modelCatalogService.requiredCapabilities)
+	}
+	for i, w := range want {
+		if modelCatalogService.requiredCapabilities[i] != w {
+			t.Fatalf("filter[%d] = %q, want %q", i, modelCatalogService.requiredCapabilities[i], w)
+		}
 	}
 }
 

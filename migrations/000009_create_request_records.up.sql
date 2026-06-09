@@ -48,6 +48,20 @@ CREATE TABLE request_records (
     -- final_channel_id: 最终成功或终态关联的 channel ID。--
     final_channel_id BIGINT REFERENCES channels (id),
 
+    -- capability_check_result: capability 闸门对本次请求的判定结论审计（阶段 12 observe/enforce 共用）。--
+    -- 取值为闸门稳定结论；闸门未启用 / 无 required 能力 / 无候选时不写（NULL，视为 bypassed）。--
+    capability_check_result TEXT CHECK (
+        capability_check_result IS NULL
+            OR capability_check_result IN (
+                'ok',
+                'model_unavailable',
+                'channel_unavailable',
+                'unprovisioned',
+                'no_required',
+                'error'
+            )
+    ),
+
     -- error_code: 安全稳定的终态错误码。--
     error_code TEXT,
 

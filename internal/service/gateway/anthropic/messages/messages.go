@@ -40,17 +40,26 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 	ctx, span := lifecycle.StartGatewaySpan(ctx, "gateway.messages")
 	defer span.End()
 
+	requiredCapabilities := gatewayapi.RequiredCapabilities(req)
+
 	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
 	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
-		ProjectID:       principal.ProjectID,
-		ModelID:         req.Model,
-		IngressProtocol: routing.ProtocolAnthropic,
+		ProjectID:            principal.ProjectID,
+		ModelID:              req.Model,
+		IngressProtocol:      routing.ProtocolAnthropic,
+		Operation:            routing.OperationMessages,
+		RequiredCapabilities: requiredCapabilities,
+		RequestLimits:        gatewayapi.RequestLimits(req),
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)
+	// 闸门判定（含 enforce 拒绝）先落审计列，再处理路由错误：observation 在 enforce 拒绝时仍随 plan 返回。
+	s.lifecycle.RecordCapabilityResult(ctx, requestRecord, plan.Capability)
 	if err != nil {
 		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return nil, err
 	}
+
+	requiredCapabilityKeys := requiredCapabilities.StringKeys()
 
 	candidatePlan, err := s.prepareMessageCandidates(ctx, req, plan.Candidates, false)
 	if err != nil {
@@ -82,7 +91,7 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 			continue
 		}
 
-		attemptRecord, err := s.createAttemptRecord(ctx, requestRecord, index, candidate)
+		attemptRecord, err := s.createAttemptRecord(ctx, requestRecord, index, candidate, requiredCapabilityKeys)
 		if err != nil {
 			if releaseErr := s.releaseMessageAuthorization(ctx, authorization); releaseErr != nil {
 				s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
@@ -165,6 +174,17 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 		lifecycle.EndSettlementSpan(settleSpan, settleErr)
 		s.recordSettlement(lifecycle.SettlementOutcomeFromErr(settleErr))
 		if settleErr != nil && !lifecycle.IsChatSettlementRecoveryScheduled(settleErr) {
+			// 上游已成功、settlement 永久失败且无 recovery job 接管：释放冻结余额并记账务异常风险，
+			// 否则用户余额被永久冻结（GAP-7-007 只覆盖 job 已创建后的重试/dead；release 自身幂等）。
+			if releaseErr := s.releaseMessageAuthorizationForBillingException(
+				ctx,
+				authorization,
+				"messages_settlement_failed_after_upstream_success",
+				"messages settlement permanently failed after upstream success without recovery job",
+			); releaseErr != nil {
+				s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
+				return nil, releaseErr
+			}
 			s.markRequestRecordFailed(ctx, requestRecord, "messages_settlement_failed", settleErr)
 			return nil, settleErr
 		}

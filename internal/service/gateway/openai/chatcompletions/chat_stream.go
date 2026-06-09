@@ -42,13 +42,20 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 	ctx, span := lifecycle.StartGatewaySpan(ctx, "gateway.chat_stream")
 	defer span.End()
 
+	requiredCapabilities := gatewayapi.RequiredCapabilities(req)
+
 	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
 	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
-		ProjectID:       principal.ProjectID,
-		ModelID:         req.Model,
-		IngressProtocol: routing.ProtocolOpenAI,
+		ProjectID:            principal.ProjectID,
+		ModelID:              req.Model,
+		IngressProtocol:      routing.ProtocolOpenAI,
+		Operation:            routing.OperationChatCompletions,
+		RequiredCapabilities: requiredCapabilities,
+		RequestLimits:        gatewayapi.RequestLimits(req),
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)
+	// 闸门判定（含 enforce 拒绝）先落审计列，再处理路由错误：observation 在 enforce 拒绝时仍随 plan 返回。
+	s.lifecycle.RecordCapabilityResult(ctx, requestRecord, plan.Capability)
 	if err != nil {
 		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
@@ -80,12 +87,13 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 	// Finish 在结算成功后按 include_usage 写收尾 usage chunk。
 	var streamAdapter openai.StreamChatAdapter
 	runResult, err := s.attemptRunner.RunStream(ctx, lifecycle.RunStreamParams{
-		RequestRecord:    requestRecord,
-		Principal:        principal,
-		Authorization:    authorization,
-		Candidates:       candidatePlan.Candidates,
-		RequestedModelID: req.Model,
-		ResponseProtocol: requestlog.ProtocolOpenAI,
+		RequestRecord:        requestRecord,
+		Principal:            principal,
+		Authorization:        authorization,
+		Candidates:           candidatePlan.Candidates,
+		RequestedModelID:     req.Model,
+		ResponseProtocol:     requestlog.ProtocolOpenAI,
+		RequiredCapabilities: requiredCapabilities.StringKeys(),
 		ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
 			adapter, ok := s.registry.StreamChat(candidate.AdapterKey)
 			if !ok {

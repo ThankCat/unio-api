@@ -104,8 +104,14 @@ type fakeRequestLog struct {
 	createRequests    []requestlog.CreateRequestParams
 	markFailed        []requestlog.MarkRequestFailedParams
 	markAttemptFailed []requestlog.MarkAttemptFailedParams
+	capabilityResults []string
 	nextRequestID     int64
 	nextAttemptID     int64
+}
+
+func (s *fakeRequestLog) SetCapabilityCheckResult(_ context.Context, _ int64, result string) error {
+	s.capabilityResults = append(s.capabilityResults, result)
+	return nil
 }
 
 func newFakeRequestLog() *fakeRequestLog {
@@ -185,6 +191,29 @@ func (passthroughPreparer) PrepareCandidates(_ context.Context, params lifecycle
 	return plan, nil
 }
 
+// recordingPreparer 记录最近一次 PrepareCandidates 传入的能力过滤集，用于断言 stream/非 stream 选取。
+type recordingPreparer struct {
+	capabilities []lifecycle.AdapterCapability
+}
+
+func (p *recordingPreparer) PrepareCandidates(_ context.Context, params lifecycle.PrepareCandidatesParams) (lifecycle.CandidatePlan, error) {
+	p.capabilities = params.Capabilities
+	plan := lifecycle.CandidatePlan{ConservativeInputTokens: 16}
+	for index, candidate := range params.Candidates {
+		plan.Candidates = append(plan.Candidates, lifecycle.Candidate{RouteIndex: index, Route: candidate})
+	}
+	return plan, nil
+}
+
+func hasCapability(caps []lifecycle.AdapterCapability, want lifecycle.AdapterCapability) bool {
+	for _, c := range caps {
+		if c == want {
+			return true
+		}
+	}
+	return false
+}
+
 // --- helpers ---
 
 func candidate(adapterKey string, channelID int64, upstreamModel string) routing.ChatRouteCandidate {
@@ -256,6 +285,42 @@ func instructionsRequest() gatewayapi.ResponsesRequest {
 }
 
 // --- tests ---
+
+// TestPrepareResponsesCandidatesStreamCapability 验证流式/非流式请求分别按 Stream/NonStream 能力过滤候选，
+// 避免流式 Responses 复用非流式过滤（仅支持单一模式的候选会被误选/误排，authorization 后在 adapter 阶段失败）。
+func TestPrepareResponsesCandidatesStreamCapability(t *testing.T) {
+	rec := &recordingPreparer{}
+	svc := NewResponsesService(
+		&fakeRouter{},
+		&fakeRegistry{tokenizers: map[string]openai.ChatInputTokenizer{}},
+		rec,
+		lifecycle.NeverRetryClassifier{},
+		newFakeRequestLog(),
+		&fakeSettlement{},
+		&fakeAuthorizer{},
+		nil,
+		nil,
+	)
+	req := gatewayapi.ResponsesRequest{Model: "m"}
+	cands := []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}
+
+	if _, err := svc.prepareResponsesCandidates(context.Background(), req, cands, true); err != nil {
+		t.Fatalf("stream prepare: %v", err)
+	}
+	if !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityStream) || hasCapability(rec.capabilities, lifecycle.AdapterCapabilityNonStream) {
+		t.Fatalf("stream=true capabilities = %v, want Stream and not NonStream", rec.capabilities)
+	}
+	if !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityInputTokenizer) {
+		t.Fatalf("stream=true capabilities = %v, want InputTokenizer present", rec.capabilities)
+	}
+
+	if _, err := svc.prepareResponsesCandidates(context.Background(), req, cands, false); err != nil {
+		t.Fatalf("non-stream prepare: %v", err)
+	}
+	if !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityNonStream) || hasCapability(rec.capabilities, lifecycle.AdapterCapabilityStream) {
+		t.Fatalf("stream=false capabilities = %v, want NonStream and not Stream", rec.capabilities)
+	}
+}
 
 func TestCreateResponse_HappyPath(t *testing.T) {
 	chatAdapter := &fakeChatAdapter{resp: okChatResponse()}

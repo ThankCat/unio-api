@@ -159,7 +159,15 @@ Layer 3: Channel Capability Overrides
 <a id="task-12-02-capability-inference"></a>
 ### TASK-12.02 Ingress capability inference
 
-状态：planned
+状态：done
+
+> 落地说明（与计划文本的对齐）：
+> - **分层修正**：计划文本写的 `InferFromOpenAIChat(*openai.ChatRequest)` 直接放 `core/capability` 会让 core 依赖 app DTO，违反依赖方向。实际落地为：`core/capability` 持有协议无关的 `RequestSignals` + `Infer(signals) Set` + `Set` 类型（集中规则、可单测）；三协议 ingress 包各自实现 `capabilitySignals(req) capability.RequestSignals` 从自身 DTO 抽取信号（content/tools/thinking JSON 解析留在 app）。规则集中、解析分散，既不破坏分层又满足「每条规则单测」。
+> - **基线决策**：`text.input` + `text.output` 作为三协议统一基线始终纳入 required（对话类模型普遍支持，零误拒风险）。
+> - **协议语义差异**：Anthropic `thinking`→`reasoning.budget`（非 effort）、`tool_choice=any|tool`→`tools.choice_required`、无 `include_usage` 故不推断 `stream.usage`；Anthropic 客户 custom 工具计为 `tools.function`，未建模 server tool（bash/text_editor/memory/tool_search/web_fetch）不造 cap。Responses `namespace`(Codex MCP)→`tools.builtin.mcp`。
+> - **范围边界**：本任务只交付推断纯函数 + 抽取 + 单测/fuzz；handler decode 后挂 request context 的接线（计划步骤 4）按工程顺序并入 [TASK-12.03](#task-12-03-capability-filter) 闸门，避免无消费方 dead code。**接线已在 TASK-12.03 完成**（三协议 `RequiredCapabilities(req)` 导出 + 6 service 调用点透传 `routing.ChatRouteRequest.RequiredCapabilities` + observe 消费 + `request_attempts.required_capabilities` 审计）。
+> - **档位值抽取已收口（[GAP-12-012](../../production/TODO_REGISTER.md#gap-12-012) 关闭）**：`RequestSignals.ReasoningEffortLevel` + `InferLimits(signals) RequestLimits` 把 `reasoning.effort` 档位值（low/medium/high）抽进请求侧约束；三协议各导出 `RequestLimits(req)`（Anthropic 用 thinking budget 无 effort 档位，恒空）→ 6 service 调用点透传 `routing.ChatRouteRequest.RequestLimits` → 闸门 `Evaluate(...,in.Limits)` 真正消费 limited 超限判定。单测覆盖 `InferLimits` 与三协议抽取。
+> - **残留**：[GAP-12-002](../../production/TODO_REGISTER.md#gap-12-002)（推断覆盖面 enforce 切换前按 observe 期 metric 复核）随 enforce 切换归阶段 13（受控 deferred）。
 
 目标：
 
@@ -199,7 +207,22 @@ Layer 3: Channel Capability Overrides
 <a id="task-12-03-capability-filter"></a>
 ### TASK-12.03 Routing capability filter 与 capability error
 
-状态：planned
+状态：done
+
+> 落地说明（observe 闭环 + enforce 代码已交付，默认 observe；实际 enforce 切换归阶段 13）：
+> - **范围决策（observe 闭环先行，enforce 代码随 TASK-12.08 就位）**：本任务按灰度先行交付「观察闭环」——推断接线（三协议）+ `gate.go` 纯判定 + routing observe filter（**只记录 + metric + 持久化，不拒绝、不删候选**）+ 定义 capability 错误码/类型。enforce 决策与三协议客户错误渲染由 [TASK-12.08](#task-12-08-backfill-and-migration) 补齐（默认 observe，开关全 false）；[GAP-12-003](../../production/TODO_REGISTER.md#gap-12-003) 已关闭（渲染 + 开关代码就位），实际 observe→enforce 切换是运营决策（[GAP-12-009](../../production/TODO_REGISTER.md#gap-12-009)），随观察期归阶段 13。
+> - **零声明放行策略（DEC-015 灰度约定）**：模型零能力声明行 → 闸门判 `unprovisioned`（视为未 provisioning，记录后放行）；一旦模型有任意声明行 → 按 key 严格判定（缺该 key 或 `unsupported`/`limited` 超限 = `model_unavailable`）。避免在 Layer 2 数据铺好前误拒全量请求。判定顺序见 `gate.go` `Evaluate` 注释。
+> - **已交付**：
+>   - `core/capability/gate.go`：纯判定 `Evaluate(modelCaps, channels, required, limits) Evaluation`，稳定结论 `GateResult`（`ok` / `model_unavailable` / `channel_unavailable` / `unprovisioned` / `no_required` / `error`）；`gate_test.go` 覆盖零声明、无 required、缺/unsupported、limited 超限、channel override 只减、多候选放行。
+>   - `core/routing/router.go`：`CapabilityChecker` 接口 + `CapabilityCheckInput`/`CapabilityObservation` + `SetCapabilityChecker` + `observeCapability`（仅把结论写进 `ChatRoutePlan.Capability`，**不过滤候选**）；sentinel `ErrModelCapabilityUnavailable`/`ErrChannelCapabilityUnavailable` 与 `failure` 错误码 `routing_model_capability_unavailable`/`routing_channel_capability_unavailable` 就位待 enforce 消费。
+>   - `service/gateway/capabilitygate/checker.go`：`routing.CapabilityChecker` 服务层实现（读 store → `Evaluate` → metric → 结构化审计；store 异常 fail-open 记 `result=error` 放行），把 platform 可观测设施挡在 core 之外。
+>   - 推断接线（三协议）：`app/gatewayapi/{openai/chatcompletions, anthropic/messages, openai/responses}` 各导出 `RequiredCapabilities(req)`；6 个 service 调用点（chat/stream、messages/stream、responses create/stream）在 `PlanChat` 前推断并透传 `routing.ChatRouteRequest.RequiredCapabilities`。
+>   - 持久化审计：`request_attempts.required_capabilities TEXT[] NOT NULL`（[000010](../../../migrations/000010_create_request_attempts.up.sql)，`CreateRequestAttempt` 用 `COALESCE(...,'{}')` 对 `nil` 兜底）+ sqlc + `requestlog` / `lifecycle.CreateAttempt` / `AttemptRunner`(非流式/流式) / Anthropic messages 循环串联，把推断结果落每次 attempt 审计。
+>   - metric：`metrics.IncCapabilityCheck` → `unio_gateway_capability_check_total{result}`；observe 审计日志（would-be 拒绝记 Warn，其余 Debug）。
+>   - bootstrap：`gateway_server.go` 用 `capabilitygate.NewChecker` 接线到 `chatRouter.SetCapabilityChecker`。
+> - **已收口（原 GAP）**：
+>   - [GAP-12-012](../../production/TODO_REGISTER.md#gap-12-012) 已关闭：三协议 `RequestLimits(req)` 抽取 `reasoning.effort` 档位值，经 `routing.ChatRouteRequest.RequestLimits` 透传，闸门 `Evaluate(...,in.Limits)` 真正消费 limited 超限判定（`checker_test.go` 覆盖 high>medium → model_unavailable）。
+>   - [GAP-12-003](../../production/TODO_REGISTER.md#gap-12-003) 已关闭：三协议 capability error 对外渲染 + enforce 开关随 TASK-12.08 交付（默认 observe）。
 
 目标：
 
@@ -232,7 +255,7 @@ routing 在选定模型候选后，按 required_capabilities × (model_capabilit
 <a id="task-12-04-models-dev-sync"></a>
 ### TASK-12.04 models.dev daily cron 同步
 
-状态：planned
+状态：done
 
 目标：
 
@@ -266,12 +289,34 @@ models.dev 现有 4 个接口，结构与字段以 [docs/datasources/MODELS_DEV_
 
 依赖：[TASK-12.01](#task-12-01-capability-schema)。
 
-关联 GAP：[GAP-12-004](../../production/TODO_REGISTER.md#gap-12-004)、[GAP-12-005](../../production/TODO_REGISTER.md#gap-12-005)
+关联 GAP：[GAP-12-004](../../production/TODO_REGISTER.md#gap-12-004)、[GAP-12-005](../../production/TODO_REGISTER.md#gap-12-005)、[GAP-12-011](../../production/TODO_REGISTER.md#gap-12-011)
+
+#### 落地说明（done）
+
+实现包 `internal/core/modelcatalog`，分层与上面"计划实现"一致：
+
+- `feed.go`：解析 `models.json`（canonical 元数据，必需）+ `api.json`（per-provider 价格，best-effort），合并为 `CanonicalModel`；价格用 `json.Number` 承载避免 float 精度损失（价格仅展示、绝不计费）；按 `provider.id == lab` 取第一方价格口径。
+- `merge.go`：**纯函数** `PlanSync` 推导 insert / update / manual-conflict / removal，可独立单测、可审计。
+- `store.go`：`SyncStore`（sqlc 实现）——新增 `UpsertSeedModelByCanonicalID`（`ON CONFLICT (canonical_id) ... WHERE source='seed_models_dev'` 守护，manual/import 永不被覆盖，竞态安全）、`ListCanonicalModels`、`MarkSeedModelRemovedUpstream`，复用 `UpsertModelCapability` / sync_job 生命周期查询。
+- `fetcher.go`：`HTTPFetcher`（超时、`io.LimitReader` 体量上限、`models.json` 致命 / `api.json` best-effort）。
+- `syncer.go`：编排 fetch → parse → plan → apply → `model_capability_sync_jobs` 生命周期，`stats_json` 落 license 指纹（`license=MIT` + `source_fingerprint`，对齐 [MODELS_DEV_LICENSE.md](../../datasources/MODELS_DEV_LICENSE.md)）；`--dry-run` 只算计划不写库。
+- `app/workers/model_catalog_sync_worker.go`：cron worker，以最近 sync_job 为准做 interval 门控（跨实例/重启幂等）、失败指数退避、连续 3 次失败发结构化告警日志。
+- 接线：`config.ModelCatalogSyncConfig`（`MODEL_CATALOG_SYNC_*`，默认 `Enabled=false` opt-in）+ `bootstrap.NewWorkerServerApp` 条件挂载 worker + `worker-server sync-models --source=models-dev --dry-run` 子命令。
+
+合并规则落地：新模型默认 `disabled`+`source=seed_models_dev`、首次入库写 `source=models_dev` 粗能力位（`tool_call`/`reasoning`/`structured_output`/`attachment`/`modalities` → cap-tags，admin 后续精化）+ `max_output_tokens`/价格基线；上游删除只 `MarkSeedModelRemovedUpstream`（disabled + `removed_upstream_at`，不删本地）；manual 行进 conflict 列表供 review。
+
+测试：`feed_test.go`/`merge_test.go`/`syncer_test.go` 纯函数 + fake 覆盖 parse、合并规则、dry-run、manual 守护竞态、fetch 失败、apply 失败标记 sync_job failed；`sync_db_test.go` DB 门控集成覆盖 manual 守护、首次入库 + 粗能力位 + 价格、上游删除标记、sync_job license 审计。
+
+未尽（[GAP-12-011](../../production/TODO_REGISTER.md#gap-12-011)）：精确 UTC time-of-day cron 表达式（当前 interval 门控）、Prometheus sync 指标（当前告警日志，指标归 [GAP-12-008](../../production/TODO_REGISTER.md#gap-12-008)）、prod 启用 cron 前的 license/运营签字。
 
 <a id="task-12-05-public-capability-surface"></a>
 ### TASK-12.05 Public capability surface（/v1/models 与 /console/v1/models）
 
-状态：planned
+状态：in_progress
+
+> 落地说明（`/v1/models` cap-tags 已交付，`/console/v1/models` 受控 deferred 阶段 13）：
+> - **已交付（`/v1/models` cap-tags + 过滤）**：`app/gatewayapi/openai/models` handler 在 OpenAI 标准 shape 上扩展 `capabilities` cap-tags 数组（SDK 忽略未知字段，未声明能力返回空数组）+ `?capability=a,b` AND 过滤（`parseCapabilityFilter`）；`core/modelcatalog.ListAvailableModels` 经 sqlc `ListAvailableModelsForProject`（`array_agg ... FILTER (support_level<>'unsupported')`）按 project 可见性 + cap-tags 输出，未识别 capability key 自然匹配不到（lenient）。`docs/protocol/CAPABILITY_KEYS.md` v1 公开稳定注册表已就位（TASK-12.01）。`handler_test.go` 覆盖 cap-tags 输出与过滤。对应计划步骤 1、5，关闭 [GAP-6-006](../../production/TODO_REGISTER.md#gap-6-006) 的 cap-tags 暴露子项。
+> - **受控 deferred 阶段 13**：`/console/v1/models`（计划步骤 2）依赖 console-server 认证表面（user/project token），随阶段 13 console-server 落地；进程缓存 + pub/sub 失效（计划步骤 4）随 admin 编辑能力一并实现。见 [GAP-12-006](../../production/TODO_REGISTER.md#gap-12-006)。
 
 目标：
 
@@ -300,7 +345,7 @@ models.dev 现有 4 个接口，结构与字段以 [docs/datasources/MODELS_DEV_
 <a id="task-12-06-adapter-alignment"></a>
 ### TASK-12.06 Adapter drop 清单与 capability 矩阵对齐
 
-状态：planned
+状态：in_progress
 
 目标：
 
@@ -321,10 +366,28 @@ models.dev 现有 4 个接口，结构与字段以 [docs/datasources/MODELS_DEV_
 
 关联 GAP：[GAP-12-007](../../production/TODO_REGISTER.md#gap-12-007)
 
+落地说明（实现修正）：
+
+- **种子形态改为“adapter 同源画像 + drift 守护”，不落 migrations seed。** 原计划第 2 步“落入 `migrations` seed”与 migration 规则冲突（表 migration 只能建表/约束/索引，不塞数据），且当前没有 migration runner、也没有模型 provisioning（`model_capabilities` 依赖 DeepSeek `model_id` 行存在，归阶段 13 admin）。因此把 adapter 能力事实声明为代码层 `CapabilityProfile()`，与 `dropUnsupported` 同源，作为 `source=adapter_seed` 的唯一事实来源。
+- **已交付**：
+  - `core/capability/seed.go`：`Declaration` / `AdapterProfile` / `AdapterProfile.Validate()` / `MaterializeAdapterSeed`（按 `model_id` 幂等 upsert，`source=adapter_seed`，admin/models.dev 后续覆盖）。
+  - `core/adapter/openai/deepseek/capability_profile.go` 与 `core/adapter/anthropic/deepseek/capability_profile.go`：两协议 adapter 各自的能力画像（unsupported=出站 Drop、limited=Adapt、full=透传）。
+  - 两个 `capability_profile_test.go`：drift 守护——对每个 Drop 可观测能力构造探针请求跑 `dropUnsupported`，断言“声明级别 ⟺ 实际处置”；并强制 unsupported/limited 必须有探针证明（防止只声明不验证）。对应第 3、5 步。
+  - GAP-11-010 结论沉淀：`reasoning.effort = limited`，limits `{high,max}`（对应第 4 步；GAP-11-010 本就 `done`，此处只做沉淀）。
+- **范围边界（本任务不做）**：把画像物化进真实 `model_capabilities` 行的 loader / `worker-server` 子命令（需要 channel/model 拓扑枚举），随模型 provisioning（阶段 13 admin）或 enforce 切换（[TASK-12.08](#task-12-08-backfill-and-migration)）落地。`MaterializeAdapterSeed` 已就位，届时直接调用。
+- **粒度结论**：DeepSeek `dropUnsupported` 是 provider/adapter 级（不看具体 model），故画像按 `provider × protocol` 声明；per-model 差异（如 deepseek-chat 是否消费 reasoning）属 models.dev/manual 来源，不在 adapter_seed 范围。
+
 <a id="task-12-07-observability-audit"></a>
 ### TASK-12.07 Observability 与 audit
 
-状态：planned
+状态：done
+
+> 落地说明（闸门可观测 + 审计列已交付）：
+> - **metric（计划步骤 1，已交付 3 个闸门指标）**：`unio_gateway_capability_check_total{protocol,result}`、`unio_gateway_capability_required_total{protocol,capability}`、`unio_gateway_capability_missing_total{protocol,capability,scope=model|channel}`（`metrics.go` + `capabilitygate.Checker` 发射）。`unio_worker_model_catalog_sync_total` 同步指标归 [GAP-12-011](../../production/TODO_REGISTER.md#gap-12-011)（当前结构化告警日志）。
+> - **structured log（计划步骤 2）**：`capabilitygate.Checker.log` 写 `ingress_protocol`/`model_db_id`/`candidate_channels`/`capability_result`/`required_capabilities`/`missing_model|channel_capabilities`；would-be 拒绝记 Warn 供观察期复核，其余 Debug；不带敏感数据（无 channel 凭据/上游身份）。
+> - **审计列（计划步骤 3，本次交付）**：`request_records.capability_check_result TEXT`（[000009](../../../migrations/000009_create_request_records.up.sql)，`CHECK IN (ok/model_unavailable/channel_unavailable/unprovisioned/no_required/error)` 或 NULL=bypassed）+ sqlc `MarkRequestCapabilityCheckResult` + `requestlog.Store.SetCapabilityCheckResult`（与状态机解耦的纯审计写，best-effort）+ `lifecycle.RecordCapabilityResult`（`PlanChat` 成功后写，observation 为 nil 时保持 NULL）；`request_attempts.required_capabilities TEXT[]` 已在 TASK-12.03 持久化。`store_test.go` DB 往返覆盖创建 NULL → 写入回读 → CHECK 拒绝未知值。
+> - **账务分离（计划步骤 4）**：cap-tag 与判定结论只进 metric / log / 审计列，绝不写 ledger / cost_snapshot。
+> - **残留**：sync 指标 + cap-tag schema 漂移 / 闸门 5xx 告警（计划步骤 5 部分）随同步指标归 [GAP-12-008](../../production/TODO_REGISTER.md#gap-12-008) 残留项 / [GAP-12-011](../../production/TODO_REGISTER.md#gap-12-011)。
 
 目标：
 
@@ -351,7 +414,15 @@ models.dev 现有 4 个接口，结构与字段以 [docs/datasources/MODELS_DEV_
 <a id="task-12-08-backfill-and-migration"></a>
 ### TASK-12.08 已上线模型回填与灰度迁移
 
-状态：planned
+状态：in_progress
+
+> 落地说明（observe/enforce 代码就位，默认 observe；实际切 enforce + 观察期受控 deferred 阶段 13）：
+> - **已交付（enforce 代码 + 三协议错误渲染，计划步骤 1A/1B 机制 + 步骤 2）**：
+>   - config `CapabilityConfig`（`CAPABILITY_ENFORCE_OPENAI_CHAT` / `CAPABILITY_ENFORCE_ANTHROPIC_MESSAGES` / `CAPABILITY_ENFORCE_OPENAI_RESPONSES`，**全默认 false = observe**）。
+>   - router 按 ingress 表面独立判断：`CapabilityEnforcement{OpenAIChat/AnthropicMessages/OpenAIResponses}` + `ChatRouteRequest.Operation`（`chat_completions`/`messages`/`responses`）+ `enforceCapability`（仅匹配表面开关 ON 时把 `model_unavailable`/`channel_unavailable` 升级为 sentinel + 稳定错误码，缺失能力 key 附 `missing_capabilities` field）；`SetCapabilityEnforcement` 由 bootstrap 注入。
+>   - 三协议客户错误渲染：OpenAI Chat / Responses → 400 `invalid_request_error` + code `model_capability_unavailable`；Anthropic Messages → 400 `invalid_request_error`；统一渲染为「模型不支持能力 X」，列出缺失 capability key，**绝不暴露 channel 拓扑/凭据/上游身份**（`routing.MissingCapabilities` 封装 field 提取）。
+>   - 测试：router enforce 决策（拒绝/放行/按表面 scope）+ chat handler capability error 渲染（列 key / 无 field 兜底）。
+> - **受控 deferred 阶段 13（计划步骤 1B 切换 + 步骤 3/4）**：实际 observe→enforce 切换需 7~14 天观察期 + 按 metric/审计校准种子能力位（[GAP-12-002](../../production/TODO_REGISTER.md#gap-12-002)）+ 模型 provisioning 物化 adapter 画像（[GAP-12-007](../../production/TODO_REGISTER.md#gap-12-007)），均依赖阶段 13 admin/provisioning；切换决策 + `DECISIONS.md` 实施日志见 [GAP-12-009](../../production/TODO_REGISTER.md#gap-12-009)。
 
 目标：
 

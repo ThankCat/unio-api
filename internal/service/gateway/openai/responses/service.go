@@ -105,18 +105,26 @@ func responsesSafeMessage(code string) string {
 	return ""
 }
 
-// prepareResponsesCandidates 复用共享 lifecycle executor 生成 Responses 非流式候选 fallback plan。
+// prepareResponsesCandidates 复用共享 lifecycle executor 生成 Responses 候选 fallback plan。
 //
-// 与 chatcompletions 一致使用 InputTokenizer + NonStream 能力过滤；输入 token 估算先把 Responses
-// 请求翻译成内部 ChatRequest 再交给候选对应 tokenizer（桥接复用，无独立 Responses tokenizer）。
-func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req gatewayapi.ResponsesRequest, candidates []routing.ChatRouteCandidate) (lifecycle.CandidatePlan, error) {
+// 与 chatcompletions 一致按 stream 选择 Stream/NonStream 能力过滤（外加 InputTokenizer）：流式请求只保留
+// 支持流式的候选，非流式请求只保留支持非流式的候选；否则会把仅支持一种模式的候选误选/误排，导致
+// authorization 之后在 adapter 调用阶段失败。输入 token 估算先把 Responses 请求翻译成内部 ChatRequest
+// 再交给候选对应 tokenizer（桥接复用，无独立 Responses tokenizer）。
+func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req gatewayapi.ResponsesRequest, candidates []routing.ChatRouteCandidate, stream bool) (lifecycle.CandidatePlan, error) {
+	capabilities := []lifecycle.AdapterCapability{
+		lifecycle.AdapterCapabilityInputTokenizer,
+	}
+	if stream {
+		capabilities = append(capabilities, lifecycle.AdapterCapabilityStream)
+	} else {
+		capabilities = append(capabilities, lifecycle.AdapterCapabilityNonStream)
+	}
+
 	return s.candidates.PrepareCandidates(ctx, lifecycle.PrepareCandidatesParams{
-		Protocol:   routing.ProtocolOpenAI,
-		Candidates: candidates,
-		Capabilities: []lifecycle.AdapterCapability{
-			lifecycle.AdapterCapabilityInputTokenizer,
-			lifecycle.AdapterCapabilityNonStream,
-		},
+		Protocol:            routing.ProtocolOpenAI,
+		Candidates:          candidates,
+		Capabilities:        capabilities,
 		Available:           s.lifecycle.CandidateAvailable,
 		EstimateInputTokens: s.responsesInputTokenEstimator(req),
 	})

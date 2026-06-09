@@ -21,6 +21,7 @@ INSERT INTO request_attempts (
     response_started_at,
     final_usage_received,
     usage_mapping_version,
+    required_capabilities,
     started_at,
     completed_at
 )
@@ -45,6 +46,7 @@ VALUES (
            sqlc.arg(response_started_at),
            sqlc.arg(final_usage_received),
            sqlc.arg(usage_mapping_version),
+           COALESCE(sqlc.arg(required_capabilities)::text[], '{}'),
            sqlc.arg(started_at),
            sqlc.arg(completed_at)
        )
@@ -70,6 +72,7 @@ RETURNING
     response_started_at,
     final_usage_received,
     usage_mapping_version,
+    required_capabilities,
     started_at,
     completed_at,
     created_at;
@@ -180,6 +183,7 @@ SELECT
     response_started_at,
     final_usage_received,
     usage_mapping_version,
+    required_capabilities,
     started_at,
     completed_at,
     created_at

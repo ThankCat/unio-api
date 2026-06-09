@@ -68,6 +68,19 @@ func (s *Store) MarkRequestRunning(ctx context.Context, id int64) (RequestRecord
 	return requestRecordFromSQLC(sqlc.RequestRecord(row)), nil
 }
 
+// SetCapabilityCheckResult 写入本次请求的 capability 闸门判定结论审计（阶段 12 observe）。
+// 纯审计字段，与请求状态机解耦，不改 status；调用方按 best-effort 处理错误。
+func (s *Store) SetCapabilityCheckResult(ctx context.Context, id int64, result string) error {
+	if err := s.queries.MarkRequestCapabilityCheckResult(ctx, sqlc.MarkRequestCapabilityCheckResultParams{
+		RequestRecordID:       id,
+		CapabilityCheckResult: result,
+	}); err != nil {
+		return requestLogStoreFailure(err, "mark request capability check result")
+	}
+
+	return nil
+}
+
 // MarkRequestSucceeded 将 request record 标记为 succeeded。
 func (s *Store) MarkRequestSucceeded(ctx context.Context, params MarkRequestSucceededParams) (RequestRecord, error) {
 	row, err := s.queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
@@ -150,6 +163,7 @@ func (s *Store) CreateAttempt(ctx context.Context, params CreateAttemptParams) (
 		ResponseStartedAt:     pgtype.Timestamptz{Valid: false},
 		FinalUsageReceived:    false,
 		UsageMappingVersion:   pgtype.Text{Valid: false},
+		RequiredCapabilities:  params.RequiredCapabilities,
 		StartedAt:             timestamptz(params.StartedAt),
 		CompletedAt:           pgtype.Timestamptz{Valid: false},
 	})
@@ -276,6 +290,7 @@ func attemptRecordFromSQLC(row sqlc.RequestAttempt) AttemptRecord {
 		ResponseStartedAt:     timePtr(row.ResponseStartedAt),
 		FinalUsageReceived:    row.FinalUsageReceived,
 		UsageMappingVersion:   textPtr(row.UsageMappingVersion),
+		RequiredCapabilities:  row.RequiredCapabilities,
 		StartedAt:             row.StartedAt.Time,
 		CompletedAt:           timePtr(row.CompletedAt),
 	}

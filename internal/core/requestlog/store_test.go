@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -254,6 +255,129 @@ func TestStoreRequestFailedPersistsSafeAndInternalError(t *testing.T) {
 	}
 	if failed.InternalErrorDetail == nil || *failed.InternalErrorDetail != "upstream returned 502 with request id req_123" {
 		t.Fatalf("expected internal error detail, got %v", failed.InternalErrorDetail)
+	}
+}
+
+func TestStoreAttemptPersistsRequiredCapabilities(t *testing.T) {
+	ctx, tx, queries, cleanup := newTestTx(t)
+	defer cleanup()
+
+	identity := createIdentity(t, ctx, queries)
+	providerID, channelID := createProviderChannel(t, ctx, tx)
+	store := NewStore(queries)
+
+	record, err := store.CreateRequest(ctx, CreateRequestParams{
+		RequestID:        fmt.Sprintf("requestlog-capability-%d", time.Now().UnixNano()),
+		UserID:           identity.userID,
+		ProjectID:        identity.projectID,
+		APIKeyID:         identity.apiKeyID,
+		RequestedModelID: "openai/gpt-4.1",
+		IngressProtocol:  ProtocolOpenAI,
+		Operation:        OperationChatCompletions,
+		Stream:           false,
+		StartedAt:        time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+
+	required := []string{"image.input", "text.input", "text.output"}
+	attempt, err := store.CreateAttempt(ctx, CreateAttemptParams{
+		RequestRecordID:      record.ID,
+		AttemptIndex:         0,
+		ProviderID:           providerID,
+		ChannelID:            channelID,
+		AdapterKey:           "openai",
+		UpstreamModel:        "gpt-4.1",
+		UpstreamProtocol:     ProtocolOpenAI,
+		RequiredCapabilities: required,
+		StartedAt:            time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("create attempt: %v", err)
+	}
+	if !reflect.DeepEqual(attempt.RequiredCapabilities, required) {
+		t.Fatalf("create returned required = %v, want %v", attempt.RequiredCapabilities, required)
+	}
+
+	// 经由 list 查询回读，验证列已落库且映射稳定。
+	rows, err := queries.ListRequestAttemptsByRequest(ctx, record.ID)
+	if err != nil {
+		t.Fatalf("list attempts: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 attempt row, got %d", len(rows))
+	}
+	if !reflect.DeepEqual(rows[0].RequiredCapabilities, required) {
+		t.Fatalf("persisted required = %v, want %v", rows[0].RequiredCapabilities, required)
+	}
+
+	// 未推断（nil）必须落成空数组，不能触发 NOT NULL 约束。
+	empty, err := store.CreateAttempt(ctx, CreateAttemptParams{
+		RequestRecordID:  record.ID,
+		AttemptIndex:     1,
+		ProviderID:       providerID,
+		ChannelID:        channelID,
+		AdapterKey:       "openai",
+		UpstreamModel:    "gpt-4.1",
+		UpstreamProtocol: ProtocolOpenAI,
+		StartedAt:        time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("create attempt without required: %v", err)
+	}
+	if len(empty.RequiredCapabilities) != 0 {
+		t.Fatalf("expected empty required, got %v", empty.RequiredCapabilities)
+	}
+}
+
+// TestStoreSetCapabilityCheckResultPersists 验证 capability 闸门判定结论写入 request_records 审计列（TASK-12.07）：
+// 创建时为 NULL（bypassed）、写入后回读一致、CHECK 约束拒绝未知结论。
+func TestStoreSetCapabilityCheckResultPersists(t *testing.T) {
+	ctx, tx, queries, cleanup := newTestTx(t)
+	defer cleanup()
+
+	identity := createIdentity(t, ctx, queries)
+	store := NewStore(queries)
+
+	record, err := store.CreateRequest(ctx, CreateRequestParams{
+		RequestID:        fmt.Sprintf("requestlog-capresult-%d", time.Now().UnixNano()),
+		UserID:           identity.userID,
+		ProjectID:        identity.projectID,
+		APIKeyID:         identity.apiKeyID,
+		RequestedModelID: "deepseek-v4-pro",
+		IngressProtocol:  ProtocolOpenAI,
+		Operation:        OperationChatCompletions,
+		Stream:           false,
+		StartedAt:        time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+
+	var before pgtype.Text
+	if err := tx.QueryRow(ctx, "SELECT capability_check_result FROM request_records WHERE id = $1", record.ID).Scan(&before); err != nil {
+		t.Fatalf("read initial capability_check_result: %v", err)
+	}
+	if before.Valid {
+		t.Fatalf("expected NULL capability_check_result on create, got %q", before.String)
+	}
+
+	if err := store.SetCapabilityCheckResult(ctx, record.ID, "model_unavailable"); err != nil {
+		t.Fatalf("set capability check result: %v", err)
+	}
+
+	var after pgtype.Text
+	if err := tx.QueryRow(ctx, "SELECT capability_check_result FROM request_records WHERE id = $1", record.ID).Scan(&after); err != nil {
+		t.Fatalf("read capability_check_result: %v", err)
+	}
+	if !after.Valid || after.String != "model_unavailable" {
+		t.Fatalf("capability_check_result = %v, want model_unavailable", after)
+	}
+
+	// CHECK 约束拒绝未知结论（最后断言：违反会污染事务，由 cleanup 回滚兜底）。
+	if err := store.SetCapabilityCheckResult(ctx, record.ID, "totally_bogus"); err == nil {
+		t.Fatal("expected CHECK constraint to reject unknown capability result")
 	}
 }
 

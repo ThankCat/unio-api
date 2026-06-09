@@ -43,17 +43,26 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 	ctx, span := lifecycle.StartGatewaySpan(ctx, "gateway.messages_stream")
 	defer span.End()
 
+	requiredCapabilities := gatewayapi.RequiredCapabilities(req)
+
 	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
 	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
-		ProjectID:       principal.ProjectID,
-		ModelID:         req.Model,
-		IngressProtocol: routing.ProtocolAnthropic,
+		ProjectID:            principal.ProjectID,
+		ModelID:              req.Model,
+		IngressProtocol:      routing.ProtocolAnthropic,
+		Operation:            routing.OperationMessages,
+		RequiredCapabilities: requiredCapabilities,
+		RequestLimits:        gatewayapi.RequestLimits(req),
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)
+	// 闸门判定（含 enforce 拒绝）先落审计列，再处理路由错误：observation 在 enforce 拒绝时仍随 plan 返回。
+	s.lifecycle.RecordCapabilityResult(ctx, requestRecord, plan.Capability)
 	if err != nil {
 		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
 	}
+
+	requiredCapabilityKeys := requiredCapabilities.StringKeys()
 
 	candidatePlan, err := s.prepareMessageCandidates(ctx, req, plan.Candidates, true)
 	if err != nil {
@@ -85,7 +94,7 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 			continue
 		}
 
-		attemptRecord, err := s.createAttemptRecord(ctx, requestRecord, index, candidate)
+		attemptRecord, err := s.createAttemptRecord(ctx, requestRecord, index, candidate, requiredCapabilityKeys)
 		if err != nil {
 			if releaseErr := s.releaseMessageAuthorization(ctx, authorization); releaseErr != nil {
 				s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
@@ -184,6 +193,17 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 			if streamFacts != nil {
 				if settleErr := settleStreamFacts(); settleErr != nil {
 					if !lifecycle.IsChatSettlementRecoveryScheduled(settleErr) {
+						// settlement 永久失败且无 recovery job 接管：释放冻结余额并记账务异常风险，
+						// 否则用户余额被永久冻结（同非流式处理；release 自身幂等）。
+						if releaseErr := s.releaseMessageAuthorizationForBillingException(
+							ctx,
+							authorization,
+							"stream_messages_settlement_failed_after_upstream_success",
+							"stream messages settlement permanently failed after upstream success without recovery job",
+						); releaseErr != nil {
+							s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
+							return releaseErr
+						}
 						s.markRequestRecordFailed(ctx, requestRecord, "stream_messages_settlement_failed", settleErr)
 						return settleErr
 					}
@@ -263,6 +283,17 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 
 		if settleErr := settleStreamFacts(); settleErr != nil {
 			if !lifecycle.IsChatSettlementRecoveryScheduled(settleErr) {
+				// settlement 永久失败且无 recovery job 接管：释放冻结余额并记账务异常风险，
+				// 否则用户余额被永久冻结（同非流式处理；release 自身幂等）。
+				if releaseErr := s.releaseMessageAuthorizationForBillingException(
+					ctx,
+					authorization,
+					"stream_messages_settlement_failed_after_upstream_success",
+					"stream messages settlement permanently failed after upstream success without recovery job",
+				); releaseErr != nil {
+					s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
+					return releaseErr
+				}
 				s.markRequestRecordFailed(ctx, requestRecord, "stream_messages_settlement_failed", settleErr)
 				return settleErr
 			}

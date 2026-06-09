@@ -235,6 +235,25 @@ func TestMapReasoningDisabledWhenAbsent(t *testing.T) {
 	}
 }
 
+// TestMapReasoningEffortNoneDisables 验证对象形态 reasoning.effort="none"/空串表达非 reasoning 意图：
+// 置 ReasoningDisabled、不透传 effort，避免 DeepSeek 出站保留默认 thinking 产生额外计费。
+func TestMapReasoningEffortNoneDisables(t *testing.T) {
+	for _, body := range []string{
+		`{"model":"m","input":"x","reasoning":{"effort":"none"}}`,
+		`{"model":"m","input":"x","reasoning":{"effort":"NONE"}}`,
+		`{"model":"m","input":"x","reasoning":{"effort":" none "}}`,
+		`{"model":"m","input":"x","reasoning":{"effort":""}}`,
+	} {
+		chat, _ := mapBody(t, body)
+		if !chat.ReasoningDisabled {
+			t.Errorf("expected ReasoningDisabled=true for %s", body)
+		}
+		if chat.ReasoningEffort != nil {
+			t.Errorf("expected no reasoning_effort for %s, got %v", body, *chat.ReasoningEffort)
+		}
+	}
+}
+
 func TestMapTextFormatJSONSchemaWrap(t *testing.T) {
 	chat, _ := mapBody(t, `{
 		"model":"m","input":"x",

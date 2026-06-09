@@ -274,37 +274,39 @@ type RequestAttempt struct {
 	ResponseStartedAt     pgtype.Timestamptz
 	FinalUsageReceived    bool
 	UsageMappingVersion   pgtype.Text
+	RequiredCapabilities  []string
 	StartedAt             pgtype.Timestamptz
 	CompletedAt           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
 }
 
 type RequestRecord struct {
-	ID                  int64
-	RequestID           string
-	UserID              int64
-	ProjectID           int64
-	ApiKeyID            int64
-	RequestedModelID    string
-	IngressProtocol     string
-	Operation           string
-	ResponseModelID     pgtype.Text
-	ResponseProtocol    pgtype.Text
-	ResponseID          pgtype.Text
-	Stream              bool
-	Status              string
-	FinalProviderID     pgtype.Int8
-	FinalChannelID      pgtype.Int8
-	ErrorCode           pgtype.Text
-	ErrorMessage        pgtype.Text
-	InternalErrorDetail pgtype.Text
-	DeliveryStatus      string
-	ResponseStartedAt   pgtype.Timestamptz
-	ResponseCompletedAt pgtype.Timestamptz
-	StartedAt           pgtype.Timestamptz
-	CompletedAt         pgtype.Timestamptz
-	CreatedAt           pgtype.Timestamptz
-	UpdatedAt           pgtype.Timestamptz
+	ID                    int64
+	RequestID             string
+	UserID                int64
+	ProjectID             int64
+	ApiKeyID              int64
+	RequestedModelID      string
+	IngressProtocol       string
+	Operation             string
+	ResponseModelID       pgtype.Text
+	ResponseProtocol      pgtype.Text
+	ResponseID            pgtype.Text
+	Stream                bool
+	Status                string
+	FinalProviderID       pgtype.Int8
+	FinalChannelID        pgtype.Int8
+	CapabilityCheckResult pgtype.Text
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	DeliveryStatus        string
+	ResponseStartedAt     pgtype.Timestamptz
+	ResponseCompletedAt   pgtype.Timestamptz
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
 }
 
 type SchemaHealthCheck struct {

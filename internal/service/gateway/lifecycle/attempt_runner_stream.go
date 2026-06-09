@@ -42,10 +42,12 @@ type RunStreamParams struct {
 	Candidates       []Candidate
 	RequestedModelID string
 	ResponseProtocol requestlog.Protocol
-	ResolveAdapter   ResolveAdapter
-	Stream           StreamUpstream
-	EmitChunk        EmitStreamChunk
-	Finish           FinishStream
+	// RequiredCapabilities 是 ingress 推断的所需能力 key，写入每个 attempt 的 capability 审计快照（可空）。
+	RequiredCapabilities []string
+	ResolveAdapter       ResolveAdapter
+	Stream               StreamUpstream
+	EmitChunk            EmitStreamChunk
+	Finish               FinishStream
 }
 
 // RunStream 执行 authorization 之后的流式候选 fallback 循环。
@@ -76,7 +78,7 @@ func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (
 
 		// 每个 stream candidate 也必须先创建 attempt：流式失败可能发生在首 chunk 前、首 chunk 后或
 		// 客户端取消时，提前记录 attempt 才能审计这些状态。
-		attemptRecord, err := l.CreateAttempt(ctx, requestRecord, index, candidate)
+		attemptRecord, err := l.CreateAttempt(ctx, requestRecord, index, candidate, params.RequiredCapabilities)
 		if err != nil {
 			if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 				l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
@@ -186,6 +188,17 @@ func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (
 			if streamFacts != nil {
 				if settleErr := settleStreamFacts(); settleErr != nil {
 					if !IsChatSettlementRecoveryScheduled(settleErr) {
+						// settlement 永久失败且无 recovery job 接管：释放冻结余额并记账务异常风险，
+						// 否则用户余额永久冻结（同非流式 settlement_failed_after_upstream_success 处理）。
+						if releaseErr := l.ReleaseAuthorizationForBillingException(
+							ctx,
+							authorization,
+							"stream_settlement_failed_after_upstream_success",
+							"stream settlement permanently failed after upstream success without recovery job",
+						); releaseErr != nil {
+							l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+							return result, releaseErr
+						}
 						l.MarkRequestFailed(ctx, requestRecord, "stream_chat_settlement_failed", settleErr)
 						return result, settleErr
 					}
@@ -273,6 +286,17 @@ func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (
 
 		if settleErr := settleStreamFacts(); settleErr != nil {
 			if !IsChatSettlementRecoveryScheduled(settleErr) {
+				// settlement 永久失败且无 recovery job 接管：释放冻结余额并记账务异常风险，
+				// 否则用户余额永久冻结（同非流式 settlement_failed_after_upstream_success 处理）。
+				if releaseErr := l.ReleaseAuthorizationForBillingException(
+					ctx,
+					authorization,
+					"stream_settlement_failed_after_upstream_success",
+					"stream settlement permanently failed after upstream success without recovery job",
+				); releaseErr != nil {
+					l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+					return result, releaseErr
+				}
 				l.MarkRequestFailed(ctx, requestRecord, "stream_chat_settlement_failed", settleErr)
 				return result, settleErr
 			}

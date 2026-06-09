@@ -131,7 +131,9 @@ type CreateAttemptParams struct {
 	AdapterKey       string
 	UpstreamModel    string
 	UpstreamProtocol Protocol
-	StartedAt        time.Time
+	// RequiredCapabilities 是 ingress 推断的本次请求所需能力 key（capability 闸门 observe 审计快照，可空）。
+	RequiredCapabilities []string
+	StartedAt            time.Time
 }
 
 // AttemptRecord 表示一次上游 channel 尝试记录。
@@ -157,6 +159,7 @@ type AttemptRecord struct {
 	ResponseStartedAt     *time.Time
 	FinalUsageReceived    bool
 	UsageMappingVersion   *string
+	RequiredCapabilities  []string
 	StartedAt             time.Time
 	CompletedAt           *time.Time
 }
@@ -199,6 +202,8 @@ type MarkAttemptCanceledParams struct {
 type Service interface {
 	CreateRequest(ctx context.Context, params CreateRequestParams) (RequestRecord, error)
 	MarkRequestRunning(ctx context.Context, id int64) (RequestRecord, error)
+	// SetCapabilityCheckResult 写入 capability 闸门判定结论审计（阶段 12 observe），与状态机解耦。
+	SetCapabilityCheckResult(ctx context.Context, id int64, result string) error
 	MarkRequestSucceeded(ctx context.Context, params MarkRequestSucceededParams) (RequestRecord, error)
 	MarkRequestFailed(ctx context.Context, params MarkRequestFailedParams) (RequestRecord, error)
 	MarkRequestCanceled(ctx context.Context, params MarkRequestCanceledParams) (RequestRecord, error)

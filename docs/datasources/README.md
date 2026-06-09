@@ -14,7 +14,7 @@
 | 数据源 | 文档 | 用途 |
 | --- | --- | --- |
 | models.dev | [MODELS_DEV_API.md](MODELS_DEV_API.md) | 模型元数据 / 价格基线 / logo 种子源(能力架构 Layer 1,见 [DEC-015](../production/DECISIONS.md)) |
-| models.dev | `MODELS_DEV_LICENSE.md`(待建,[GAP-12-005](../production/TODO_REGISTER.md#gap-12-005)) | license 摘要与 attribution,首次同步前必须确认 |
+| models.dev | [MODELS_DEV_LICENSE.md](MODELS_DEV_LICENSE.md)([GAP-12-005](../production/TODO_REGISTER.md#gap-12-005)) | license 摘要(MIT)与 attribution;首次同步前必须确认 |
 
 ## 3. 事实可追溯
 

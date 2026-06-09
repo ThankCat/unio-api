@@ -7,6 +7,8 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const listAvailableModelsForProject = `-- name: ListAvailableModelsForProject :many
@@ -21,15 +23,21 @@ project_policy_mode AS (
         WHERE pmp.visibility = 'allowed'
     ) AS has_allow_list
 )
-SELECT DISTINCT
+SELECT
     m.id,
     m.model_id,
     m.display_name,
-    m.owned_by
+    m.owned_by,
+    COALESCE(
+        array_agg(DISTINCT mc.capability_key)
+            FILTER (WHERE mc.capability_key IS NOT NULL AND mc.support_level <> 'unsupported'),
+        '{}'
+    )::text[] AS capability_keys
 FROM models m
 JOIN channel_models cm ON cm.model_id = m.id
 JOIN channels c ON c.id = cm.channel_id
 JOIN providers p ON p.id = c.provider_id
+LEFT JOIN model_capabilities mc ON mc.model_id = m.id
 JOIN project_scope ps ON ps.project_id > 0
 WHERE m.status = 'enabled'
     AND cm.status = 'enabled'
@@ -52,17 +60,22 @@ WHERE m.status = 'enabled'
                 AND allowed.visibility = 'allowed'
         )
     )
+GROUP BY m.id, m.model_id, m.display_name, m.owned_by
 ORDER BY m.model_id ASC
 `
 
 type ListAvailableModelsForProjectRow struct {
-	ID          int64
-	ModelID     string
-	DisplayName string
-	OwnedBy     string
+	ID             int64
+	ModelID        string
+	DisplayName    string
+	OwnedBy        string
+	CapabilityKeys []string
 }
 
-// ListAvailableModelsForProject 列出指定项目当前可见且可路由的模型。
+// ListAvailableModelsForProject 列出指定项目当前可见且可路由的模型，并附带该模型已声明的
+// cap-tags（能力架构 Layer 2，support_level<>'unsupported' 的 capability_key 去重升序）。
+// cap-tags 取模型级声明，不下钻到 channel override（不向客户暴露 channel 维度收紧）。
+// 未声明任何能力的模型 capability_keys 为空数组（unprovisioned）。
 func (q *Queries) ListAvailableModelsForProject(ctx context.Context, projectID int64) ([]ListAvailableModelsForProjectRow, error) {
 	rows, err := q.db.Query(ctx, listAvailableModelsForProject, projectID)
 	if err != nil {
@@ -77,6 +90,51 @@ func (q *Queries) ListAvailableModelsForProject(ctx context.Context, projectID i
 			&i.ModelID,
 			&i.DisplayName,
 			&i.OwnedBy,
+			&i.CapabilityKeys,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCanonicalModels = `-- name: ListCanonicalModels :many
+SELECT id, model_id, canonical_id, source, status, removed_upstream_at
+FROM models
+WHERE canonical_id IS NOT NULL
+ORDER BY canonical_id ASC
+`
+
+type ListCanonicalModelsRow struct {
+	ID                int64
+	ModelID           string
+	CanonicalID       pgtype.Text
+	Source            string
+	Status            string
+	RemovedUpstreamAt pgtype.Timestamptz
+}
+
+// ListCanonicalModels 列出全部带 canonical_id 的模型，供 models.dev 同步做合并与缺失检测。
+func (q *Queries) ListCanonicalModels(ctx context.Context) ([]ListCanonicalModelsRow, error) {
+	rows, err := q.db.Query(ctx, listCanonicalModels)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCanonicalModelsRow
+	for rows.Next() {
+		var i ListCanonicalModelsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ModelID,
+			&i.CanonicalID,
+			&i.Source,
+			&i.Status,
+			&i.RemovedUpstreamAt,
 		); err != nil {
 			return nil, err
 		}
@@ -150,6 +208,43 @@ func (q *Queries) LookupModelByModelID(ctx context.Context, modelID string) (Mod
 	return i, err
 }
 
+const markSeedModelRemovedUpstream = `-- name: MarkSeedModelRemovedUpstream :one
+UPDATE models
+SET status = 'disabled',
+    removed_upstream_at = now(),
+    updated_at = now()
+WHERE canonical_id = $1
+    AND source = 'seed_models_dev'
+    AND removed_upstream_at IS NULL
+RETURNING id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
+`
+
+// MarkSeedModelRemovedUpstream 把 models.dev 已删除的种子模型标记为 disabled + removed_upstream_at；
+// 仅作用于 source=seed_models_dev 且尚未标记的行，manual 行与已标记行不动（不自动删除本地数据）。
+func (q *Queries) MarkSeedModelRemovedUpstream(ctx context.Context, canonicalID pgtype.Text) (Model, error) {
+	row := q.db.QueryRow(ctx, markSeedModelRemovedUpstream, canonicalID)
+	var i Model
+	err := row.Scan(
+		&i.ID,
+		&i.ModelID,
+		&i.DisplayName,
+		&i.OwnedBy,
+		&i.Status,
+		&i.CanonicalID,
+		&i.Lab,
+		&i.ContextWindowTokens,
+		&i.MaxOutputTokens,
+		&i.InputPriceUsdPerMillionTokens,
+		&i.OutputPriceUsdPerMillionTokens,
+		&i.ReleaseDate,
+		&i.Source,
+		&i.RemovedUpstreamAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const modelExistsByID = `-- name: ModelExistsByID :one
 SELECT EXISTS (
     SELECT 1
@@ -165,4 +260,100 @@ func (q *Queries) ModelExistsByID(ctx context.Context, requestedModelID string) 
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const upsertSeedModelByCanonicalID = `-- name: UpsertSeedModelByCanonicalID :one
+INSERT INTO models (
+    model_id,
+    display_name,
+    owned_by,
+    status,
+    canonical_id,
+    lab,
+    context_window_tokens,
+    max_output_tokens,
+    input_price_usd_per_million_tokens,
+    output_price_usd_per_million_tokens,
+    release_date,
+    source,
+    removed_upstream_at
+)
+VALUES (
+    $1,
+    $2,
+    $3,
+    'disabled',
+    $4,
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10,
+    'seed_models_dev',
+    NULL
+)
+ON CONFLICT (canonical_id) DO UPDATE
+SET display_name = EXCLUDED.display_name,
+    lab = EXCLUDED.lab,
+    context_window_tokens = EXCLUDED.context_window_tokens,
+    max_output_tokens = EXCLUDED.max_output_tokens,
+    input_price_usd_per_million_tokens = EXCLUDED.input_price_usd_per_million_tokens,
+    output_price_usd_per_million_tokens = EXCLUDED.output_price_usd_per_million_tokens,
+    release_date = EXCLUDED.release_date,
+    removed_upstream_at = NULL,
+    updated_at = now()
+WHERE models.source = 'seed_models_dev'
+RETURNING id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
+`
+
+type UpsertSeedModelByCanonicalIDParams struct {
+	ModelID                        string
+	DisplayName                    string
+	OwnedBy                        string
+	CanonicalID                    pgtype.Text
+	Lab                            pgtype.Text
+	ContextWindowTokens            pgtype.Int8
+	MaxOutputTokens                pgtype.Int8
+	InputPriceUsdPerMillionTokens  pgtype.Numeric
+	OutputPriceUsdPerMillionTokens pgtype.Numeric
+	ReleaseDate                    pgtype.Date
+}
+
+// UpsertSeedModelByCanonicalID 按 canonical_id upsert models.dev 种子模型。
+// 新模型默认 disabled、source=seed_models_dev；仅 source=seed_models_dev 的已存在行才覆盖元数据，
+// source=manual/import 行永不被覆盖（WHERE 守护，竞态下也安全）；覆盖时清除上游删除标记。
+func (q *Queries) UpsertSeedModelByCanonicalID(ctx context.Context, arg UpsertSeedModelByCanonicalIDParams) (Model, error) {
+	row := q.db.QueryRow(ctx, upsertSeedModelByCanonicalID,
+		arg.ModelID,
+		arg.DisplayName,
+		arg.OwnedBy,
+		arg.CanonicalID,
+		arg.Lab,
+		arg.ContextWindowTokens,
+		arg.MaxOutputTokens,
+		arg.InputPriceUsdPerMillionTokens,
+		arg.OutputPriceUsdPerMillionTokens,
+		arg.ReleaseDate,
+	)
+	var i Model
+	err := row.Scan(
+		&i.ID,
+		&i.ModelID,
+		&i.DisplayName,
+		&i.OwnedBy,
+		&i.Status,
+		&i.CanonicalID,
+		&i.Lab,
+		&i.ContextWindowTokens,
+		&i.MaxOutputTokens,
+		&i.InputPriceUsdPerMillionTokens,
+		&i.OutputPriceUsdPerMillionTokens,
+		&i.ReleaseDate,
+		&i.Source,
+		&i.RemovedUpstreamAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

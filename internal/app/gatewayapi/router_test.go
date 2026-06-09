@@ -57,7 +57,7 @@ type routerTestModelCatalogService struct {
 }
 
 // ListAvailableModels 记录收到的 project id，并返回测试预设的模型列表。
-func (s *routerTestModelCatalogService) ListAvailableModels(ctx context.Context, projectID int64) ([]modelcatalog.Model, error) {
+func (s *routerTestModelCatalogService) ListAvailableModels(ctx context.Context, projectID int64, _ []string) ([]modelcatalog.Model, error) {
 	s.called = true
 	s.projectID = projectID
 	return s.models, s.err

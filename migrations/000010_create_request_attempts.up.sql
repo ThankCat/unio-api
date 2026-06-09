@@ -66,6 +66,9 @@ CREATE TABLE request_attempts (
     -- usage_mapping_version: 将协议 usage 映射成统一 facts 的规则版本。--
     usage_mapping_version TEXT CHECK (usage_mapping_version IS NULL OR usage_mapping_version <> ''),
 
+    -- required_capabilities: 本次尝试快照的 ingress 推断所需能力 key（capability 闸门 observe 审计，per-attempt 同值）。--
+    required_capabilities TEXT[] NOT NULL DEFAULT '{}',
+
     -- started_at: attempt 开始时间。--
     started_at TIMESTAMPTZ NOT NULL,
 

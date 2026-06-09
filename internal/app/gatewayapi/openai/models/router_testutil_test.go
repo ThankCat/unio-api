@@ -45,16 +45,18 @@ func newAllowingRateLimiter() *routerTestRateLimiter {
 
 // routerTestModelCatalogService 是 models handler 测试使用的模型目录 service 替身。
 type routerTestModelCatalogService struct {
-	called    bool
-	projectID int64
-	models    []modelcatalog.Model
-	err       error
+	called               bool
+	projectID            int64
+	requiredCapabilities []string
+	models               []modelcatalog.Model
+	err                  error
 }
 
-// ListAvailableModels 记录收到的 project id，并返回测试预设的模型列表。
-func (s *routerTestModelCatalogService) ListAvailableModels(ctx context.Context, projectID int64) ([]modelcatalog.Model, error) {
+// ListAvailableModels 记录收到的 project id 与 capability 过滤，并返回测试预设的模型列表。
+func (s *routerTestModelCatalogService) ListAvailableModels(ctx context.Context, projectID int64, requiredCapabilities []string) ([]modelcatalog.Model, error) {
 	s.called = true
 	s.projectID = projectID
+	s.requiredCapabilities = requiredCapabilities
 	return s.models, s.err
 }
 

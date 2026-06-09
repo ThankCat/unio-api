@@ -9,6 +9,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/app/workers"
 	"github.com/ThankCat/unio-api/internal/core/billing"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
+	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
@@ -51,13 +52,39 @@ func NewWorkerServerApp(_ context.Context, deps WorkerServerAppDeps) (*WorkerSer
 		deps.Config.Worker.SettlementRecoveryLockTTL,
 	)
 
+	units := []workers.Unit{settlementRecoveryWorker}
+
+	if deps.Config.ModelCatalogSync.Enabled {
+		syncer, store := buildModelCatalogSync(deps.Config.ModelCatalogSync, queries)
+		units = append(units, workers.NewModelCatalogSyncWorker(
+			syncer,
+			store,
+			deps.Logger,
+			deps.Config.ModelCatalogSync.Interval,
+		))
+		deps.Logger.Info("model catalog sync worker enabled", "interval", deps.Config.ModelCatalogSync.Interval.String())
+	}
+
 	runner := workers.NewRunner(
 		deps.Logger,
 		deps.Config.Worker.RunnerIdleInterval,
-		settlementRecoveryWorker,
+		units...,
 	)
 
 	return &WorkerServerApp{Runner: runner}, nil
+}
+
+// NewModelCatalogSyncer 装配一个独立的 models.dev 同步编排器，供 worker-server 子命令（如 sync-models）使用。
+func NewModelCatalogSyncer(cfg config.ModelCatalogSyncConfig, db sqlc.DBTX) *modelcatalog.Syncer {
+	syncer, _ := buildModelCatalogSync(cfg, sqlc.New(db))
+	return syncer
+}
+
+func buildModelCatalogSync(cfg config.ModelCatalogSyncConfig, queries *sqlc.Queries) (*modelcatalog.Syncer, modelcatalog.SyncStore) {
+	store := modelcatalog.NewSyncStore(queries)
+	fetcher := modelcatalog.NewHTTPFetcher(cfg.BaseURL, cfg.HTTPTimeout, cfg.MaxResponseBytes)
+
+	return modelcatalog.NewSyncer(fetcher, store), store
 }
 
 func defaultWorkerID(prefix string) string {

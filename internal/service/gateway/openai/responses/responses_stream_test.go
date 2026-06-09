@@ -273,6 +273,71 @@ func TestStreamEncoder_StartedReflectsFirstEmit(t *testing.T) {
 	}
 }
 
+// TestStreamEncoder_RefusalSurfacedInMessageItem 验证上游 refusal 增量被累积进 message item，
+// 并随 output_item.done / response.completed 以 refusal content part 下发（与非流式映射一致，不丢内容过滤信息）。
+func TestStreamEncoder_RefusalAfterText(t *testing.T) {
+	events := collectEvents(t, func(enc *streamEncoder) error {
+		if err := enc.Handle(openai.ChatStreamChunk{Content: "partial "}); err != nil {
+			return err
+		}
+		if err := enc.Handle(openai.ChatStreamChunk{Refusal: strptr("I cannot ")}); err != nil {
+			return err
+		}
+		if err := enc.Handle(openai.ChatStreamChunk{Refusal: strptr("help with that.")}); err != nil {
+			return err
+		}
+		return enc.Complete("content_filter", &adapter.ChatUsage{TotalTokens: 4})
+	})
+
+	var messageDone *gatewayapi.ResponseOutputItem
+	for i := range events {
+		if events[i].Type == gatewayapi.EventOutputItemDone && events[i].Item != nil && events[i].Item.Type == "message" {
+			messageDone = events[i].Item
+		}
+	}
+	if messageDone == nil {
+		t.Fatal("expected message output_item.done event")
+	}
+	var gotText, gotRefusal string
+	for _, part := range messageDone.Content {
+		switch part.Type {
+		case "output_text":
+			gotText = part.Text
+		case "refusal":
+			gotRefusal = part.Refusal
+		}
+	}
+	if gotText != "partial " {
+		t.Fatalf("message output_text = %q, want %q", gotText, "partial ")
+	}
+	if gotRefusal != "I cannot help with that." {
+		t.Fatalf("message refusal = %q, want %q", gotRefusal, "I cannot help with that.")
+	}
+}
+
+// TestStreamEncoder_RefusalOnlyCreatesMessageItem 验证仅有 refusal（无文本）时仍创建 message item 并下发 refusal。
+func TestStreamEncoder_RefusalOnly(t *testing.T) {
+	events := collectEvents(t, func(enc *streamEncoder) error {
+		if err := enc.Handle(openai.ChatStreamChunk{Refusal: strptr("refused")}); err != nil {
+			return err
+		}
+		return enc.Complete("content_filter", &adapter.ChatUsage{TotalTokens: 1})
+	})
+
+	var messageDone *gatewayapi.ResponseOutputItem
+	for i := range events {
+		if events[i].Type == gatewayapi.EventOutputItemDone && events[i].Item != nil && events[i].Item.Type == "message" {
+			messageDone = events[i].Item
+		}
+	}
+	if messageDone == nil {
+		t.Fatal("expected message output_item.done event for refusal-only stream")
+	}
+	if len(messageDone.Content) != 1 || messageDone.Content[0].Type != "refusal" || messageDone.Content[0].Refusal != "refused" {
+		t.Fatalf("refusal-only content wrong: %+v", messageDone.Content)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

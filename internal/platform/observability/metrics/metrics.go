@@ -109,6 +109,10 @@ type Metrics struct {
 	streamEventTotal *prometheus.CounterVec
 
 	rateLimitDecisions *prometheus.CounterVec
+
+	capabilityCheckTotal    *prometheus.CounterVec
+	capabilityRequiredTotal *prometheus.CounterVec
+	capabilityMissingTotal  *prometheus.CounterVec
 }
 
 // New 创建并注册 Unio 全部指标。
@@ -167,6 +171,21 @@ func New() *Metrics {
 			Name: "unio_ratelimit_decisions_total",
 			Help: "限流判定结果计数，包含放行、限流和 Redis 故障降级。",
 		}, []string{"decision"}),
+
+		capabilityCheckTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_capability_check_total",
+			Help: "Gateway capability 闸门判定计数，按 ingress 协议与结果聚合（ok/model_unavailable/channel_unavailable/unprovisioned/no_required/error）。observe 期据此复核误拒风险。",
+		}, []string{"protocol", "result"}),
+
+		capabilityRequiredTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_capability_required_total",
+			Help: "Gateway 请求推断出的所需能力计数，按 ingress 协议与 capability key 聚合，反映客户实际用到的能力分布。",
+		}, []string{"protocol", "capability"}),
+
+		capabilityMissingTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_capability_missing_total",
+			Help: "Gateway capability 闸门判定为缺失的能力计数，按 ingress 协议、capability key 与缺失层级（model/channel）聚合，用于 enforce 前定位需补声明的能力。",
+		}, []string{"protocol", "capability", "scope"}),
 	}
 
 	registry.MustRegister(
@@ -181,6 +200,9 @@ func New() *Metrics {
 		m.settlementTotal,
 		m.streamEventTotal,
 		m.rateLimitDecisions,
+		m.capabilityCheckTotal,
+		m.capabilityRequiredTotal,
+		m.capabilityMissingTotal,
 	)
 
 	return m
@@ -244,6 +266,25 @@ func (m *Metrics) IncStreamEvent(event StreamEvent) {
 // IncRateLimitDecision 记录一次限流判定结果。
 func (m *Metrics) IncRateLimitDecision(decision RateLimitDecision) {
 	m.rateLimitDecisions.WithLabelValues(string(decision)).Inc()
+}
+
+// IncCapabilityCheck 记录一次 capability 闸门判定结果。
+// protocol 为 ingress 协议族（openai/anthropic）；result 为有界稳定取值
+// （ok/model_unavailable/channel_unavailable/unprovisioned/no_required/error 等闸门结论）。
+func (m *Metrics) IncCapabilityCheck(protocol string, result string) {
+	m.capabilityCheckTotal.WithLabelValues(protocol, result).Inc()
+}
+
+// IncCapabilityRequired 记录一次请求推断出的所需能力（每个 capability key 一次）。
+// capability 为有界的注册能力 key；protocol 为 ingress 协议族。
+func (m *Metrics) IncCapabilityRequired(protocol string, capability string) {
+	m.capabilityRequiredTotal.WithLabelValues(protocol, capability).Inc()
+}
+
+// IncCapabilityMissing 记录一次闸门判定为缺失的能力。
+// scope 为缺失层级（model/channel）；capability 为有界的注册能力 key；protocol 为 ingress 协议族。
+func (m *Metrics) IncCapabilityMissing(protocol string, capability string, scope string) {
+	m.capabilityMissingTotal.WithLabelValues(protocol, capability, scope).Inc()
 }
 
 // streamLabel 把是否流式转换成稳定 label 值。

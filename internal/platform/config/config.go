@@ -13,15 +13,45 @@ import (
 
 // Config 保存服务启动所需的全部配置。
 type Config struct {
-	HTTP           HTTPConfig
-	Log            LogConfig
-	DB             DBConfig
-	Redis          RedisConfig
-	RateLimit      RateLimitConfig
-	Worker         WorkerConfig
-	Tracing        TracingConfig
-	CircuitBreaker CircuitBreakerConfig
-	Credential     CredentialConfig
+	HTTP             HTTPConfig
+	Log              LogConfig
+	DB               DBConfig
+	Redis            RedisConfig
+	RateLimit        RateLimitConfig
+	Worker           WorkerConfig
+	Tracing          TracingConfig
+	CircuitBreaker   CircuitBreakerConfig
+	Credential       CredentialConfig
+	ModelCatalogSync ModelCatalogSyncConfig
+	Capability       CapabilityConfig
+}
+
+// CapabilityConfig 保存 capability 闸门 enforce 开关，按 ingress 表面独立可控（阶段 12 TASK-12.08）。
+//
+// 全部默认 false（observe 模式）：闸门只记录判定与 metric，不拒绝请求。observe → enforce 是上线策略
+// 决策（DEC-015 灰度顺序：先 OpenAI Chat 再 Anthropic 再 Responses），切换前须确认 observe 期无误拒。
+type CapabilityConfig struct {
+	// EnforceOpenAIChat 控制 OpenAI Chat Completions 表面是否拒绝能力不可用的请求。
+	EnforceOpenAIChat bool
+	// EnforceAnthropicMessages 控制 Anthropic Messages 表面是否拒绝能力不可用的请求。
+	EnforceAnthropicMessages bool
+	// EnforceOpenAIResponses 控制 OpenAI Responses 表面是否拒绝能力不可用的请求。
+	EnforceOpenAIResponses bool
+}
+
+// ModelCatalogSyncConfig 保存 models.dev 模型目录同步参数；默认关闭（opt-in），
+// 启用前须确认 docs/datasources/MODELS_DEV_LICENSE.md 的 license 与 attribution。
+type ModelCatalogSyncConfig struct {
+	// Enabled 控制 worker 是否调度 models.dev 每日同步。
+	Enabled bool
+	// BaseURL 是 models.dev 站点根地址，可指向镜像/测试桩。
+	BaseURL string
+	// Interval 是两次成功同步之间的最小间隔（默认 24h，等效每日）。
+	Interval time.Duration
+	// HTTPTimeout 是单次拉取的超时。
+	HTTPTimeout time.Duration
+	// MaxResponseBytes 限制单个响应体大小，防御异常大响应。
+	MaxResponseBytes int64
 }
 
 // CircuitBreakerConfig 保存 channel 熔断器阈值；默认启用并使用保守阈值。
@@ -235,6 +265,26 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	modelCatalogSyncEnabled, err := getEnvBool("MODEL_CATALOG_SYNC_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+
+	modelCatalogSyncInterval, err := getEnvDuration("MODEL_CATALOG_SYNC_INTERVAL", 24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+
+	modelCatalogSyncHTTPTimeout, err := getEnvDuration("MODEL_CATALOG_SYNC_HTTP_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
+	modelCatalogSyncMaxResponseBytes, err := getEnvInt("MODEL_CATALOG_SYNC_MAX_RESPONSE_BYTES", 16<<20)
+	if err != nil {
+		return Config{}, err
+	}
+
 	tracingEnabled, err := getEnvBool("OTEL_TRACING_ENABLED", false)
 	if err != nil {
 		return Config{}, err
@@ -271,6 +321,21 @@ func Load() (Config, error) {
 	}
 
 	circuitBreakerOpenDuration, err := getEnvDuration("CIRCUIT_BREAKER_OPEN_DURATION", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
+	capabilityEnforceOpenAIChat, err := getEnvBool("CAPABILITY_ENFORCE_OPENAI_CHAT", false)
+	if err != nil {
+		return Config{}, err
+	}
+
+	capabilityEnforceAnthropicMessages, err := getEnvBool("CAPABILITY_ENFORCE_ANTHROPIC_MESSAGES", false)
+	if err != nil {
+		return Config{}, err
+	}
+
+	capabilityEnforceOpenAIResponses, err := getEnvBool("CAPABILITY_ENFORCE_OPENAI_RESPONSES", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -319,6 +384,13 @@ func Load() (Config, error) {
 			SettlementRecoveryInitialDelay:  workerSettlementRecoveryInitialDelay,
 			SettlementRecoverySettleTimeout: workerSettlementRecoverySettleTimeout,
 		},
+		ModelCatalogSync: ModelCatalogSyncConfig{
+			Enabled:          modelCatalogSyncEnabled,
+			BaseURL:          getEnv("MODEL_CATALOG_SYNC_BASE_URL", "https://models.dev"),
+			Interval:         modelCatalogSyncInterval,
+			HTTPTimeout:      modelCatalogSyncHTTPTimeout,
+			MaxResponseBytes: int64(modelCatalogSyncMaxResponseBytes),
+		},
 		Tracing: TracingConfig{
 			Enabled:     tracingEnabled,
 			Endpoint:    getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
@@ -335,6 +407,11 @@ func Load() (Config, error) {
 		},
 		Credential: CredentialConfig{
 			MasterKey: getEnv("CREDENTIAL_MASTER_KEY", ""),
+		},
+		Capability: CapabilityConfig{
+			EnforceOpenAIChat:        capabilityEnforceOpenAIChat,
+			EnforceAnthropicMessages: capabilityEnforceAnthropicMessages,
+			EnforceOpenAIResponses:   capabilityEnforceOpenAIResponses,
 		},
 	}, nil
 }

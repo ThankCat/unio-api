@@ -60,10 +60,12 @@ type streamEncoder struct {
 }
 
 // streamItemState 累积 reasoning / message item 的输出索引与文本。
+// refusal 仅 message item 使用：上游 refusal 增量累积后随 output_item.done 落 refusal content part。
 type streamItemState struct {
 	id          string
 	outputIndex int
 	text        string
+	refusal     string
 }
 
 // streamToolState 累积单个 function_call item 的标识与分片参数。
@@ -120,6 +122,12 @@ func (e *streamEncoder) Handle(chunk openai.ChatStreamChunk) error {
 
 	if chunk.Content != "" {
 		if err := e.handleTextDelta(chunk.Content); err != nil {
+			return err
+		}
+	}
+
+	if chunk.Refusal != nil && *chunk.Refusal != "" {
+		if err := e.handleRefusalDelta(*chunk.Refusal); err != nil {
 			return err
 		}
 	}
@@ -198,18 +206,23 @@ func (e *streamEncoder) handleReasoningDelta(delta string) error {
 	})
 }
 
+// ensureMessageItem 惰性创建 assistant message item 并发出 output_item.added（首个 text/refusal 增量触发）。
+func (e *streamEncoder) ensureMessageItem() error {
+	if e.message != nil {
+		return nil
+	}
+	e.message = &streamItemState{id: newResponsesID("msg"), outputIndex: e.takeOutputIndex()}
+	return e.emitItemAdded(e.message.outputIndex, gatewayapi.ResponseOutputItem{
+		Type:   "message",
+		ID:     e.message.id,
+		Role:   "assistant",
+		Status: "in_progress",
+	})
+}
+
 func (e *streamEncoder) handleTextDelta(delta string) error {
-	if e.message == nil {
-		e.message = &streamItemState{id: newResponsesID("msg"), outputIndex: e.takeOutputIndex()}
-		item := gatewayapi.ResponseOutputItem{
-			Type:   "message",
-			ID:     e.message.id,
-			Role:   "assistant",
-			Status: "in_progress",
-		}
-		if err := e.emitItemAdded(e.message.outputIndex, item); err != nil {
-			return err
-		}
+	if err := e.ensureMessageItem(); err != nil {
+		return err
 	}
 	e.message.text += delta
 	return e.emitEvent(gatewayapi.ResponsesStreamEvent{
@@ -219,6 +232,19 @@ func (e *streamEncoder) handleTextDelta(delta string) error {
 		ContentIndex: intPtr(0),
 		Delta:        delta,
 	})
+}
+
+// handleRefusalDelta 累积上游 refusal 增量到 message item。
+//
+// 与非流式 mapChatResponseToResponses 对齐：refusal 是 message item 内的 refusal content part。
+// refusal 增量事件不在 v1 Codex 消费子集（见文件头），最终 refusal 文本随 output_item.done 权威载体
+// 与 response.completed 一并下发，保证流式与非流式对客户呈现一致，不丢 content_filter/refusal 信息。
+func (e *streamEncoder) handleRefusalDelta(delta string) error {
+	if err := e.ensureMessageItem(); err != nil {
+		return err
+	}
+	e.message.refusal += delta
+	return nil
 }
 
 func (e *streamEncoder) handleToolCallDeltas(raw json.RawMessage) error {
@@ -289,12 +315,19 @@ func (e *streamEncoder) closeItems() ([]gatewayapi.ResponseOutputItem, error) {
 		finals = append(finals, finalItem{e.reasoning.outputIndex, reasoningItem})
 	}
 	if e.message != nil {
+		content := make([]gatewayapi.ResponseOutputContent, 0, 2)
+		if e.message.text != "" {
+			content = append(content, gatewayapi.ResponseOutputContent{Type: "output_text", Text: e.message.text})
+		}
+		if e.message.refusal != "" {
+			content = append(content, gatewayapi.ResponseOutputContent{Type: "refusal", Refusal: e.message.refusal})
+		}
 		finals = append(finals, finalItem{e.message.outputIndex, gatewayapi.ResponseOutputItem{
 			Type:    "message",
 			ID:      e.message.id,
 			Role:    "assistant",
 			Status:  "completed",
-			Content: []gatewayapi.ResponseOutputContent{{Type: "output_text", Text: e.message.text}},
+			Content: content,
 		}})
 	}
 	for _, tool := range e.tools {

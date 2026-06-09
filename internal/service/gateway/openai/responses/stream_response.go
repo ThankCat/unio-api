@@ -49,19 +49,26 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 	ctx, span := lifecycle.StartGatewaySpan(ctx, "gateway.responses_stream")
 	defer span.End()
 
+	requiredCapabilities := gatewayapi.RequiredCapabilities(req)
+
 	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
 	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
-		ProjectID:       principal.ProjectID,
-		ModelID:         req.Model,
-		IngressProtocol: routing.ProtocolOpenAI,
+		ProjectID:            principal.ProjectID,
+		ModelID:              req.Model,
+		IngressProtocol:      routing.ProtocolOpenAI,
+		Operation:            routing.OperationResponses,
+		RequiredCapabilities: requiredCapabilities,
+		RequestLimits:        gatewayapi.RequestLimits(req),
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)
+	// 闸门判定（含 enforce 拒绝）先落审计列，再处理路由错误：observation 在 enforce 拒绝时仍随 plan 返回。
+	s.lifecycle.RecordCapabilityResult(ctx, requestRecord, plan.Capability)
 	if err != nil {
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
 	}
 
-	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates)
+	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, true)
 	if err != nil {
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
@@ -84,12 +91,13 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 	encoder := newStreamEncoder(req, newResponsesID("resp"), time.Now().Unix(), emit)
 
 	runResult, err := s.attemptRunner.RunStream(ctx, lifecycle.RunStreamParams{
-		RequestRecord:    requestRecord,
-		Principal:        principal,
-		Authorization:    authorization,
-		Candidates:       candidatePlan.Candidates,
-		RequestedModelID: req.Model,
-		ResponseProtocol: requestlog.ProtocolOpenAI,
+		RequestRecord:        requestRecord,
+		Principal:            principal,
+		Authorization:        authorization,
+		Candidates:           candidatePlan.Candidates,
+		RequestedModelID:     req.Model,
+		ResponseProtocol:     requestlog.ProtocolOpenAI,
+		RequiredCapabilities: requiredCapabilities.StringKeys(),
 		ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
 			adapter, ok := s.registry.StreamChat(candidate.AdapterKey)
 			if !ok {

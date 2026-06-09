@@ -78,7 +78,15 @@ func mapResponsesRequestToChat(req gatewayapi.ResponsesRequest, upstreamModel st
 	if req.Reasoning == nil {
 		chat.ReasoningDisabled = true
 	} else if req.Reasoning.Effort != nil {
-		chat.ReasoningEffort = req.Reasoning.Effort
+		// effort 显式为 "none" 或空串表达与 reasoning==nil 同义的「非 reasoning 意图」：必须置
+		// ReasoningDisabled，否则 provider adapter（DeepSeek thinking 默认 enabled）会把未知 effort
+		// 当作 Drop 而保留 thinking，产生额外 CoT/reasoning token 计费。与 capabilitySignals 对 effort
+		// 的判定保持一致；effort 缺省（reasoning 对象存在但无 effort）仍沿用上游默认档位，不强制禁用。
+		if effort := strings.TrimSpace(*req.Reasoning.Effort); effort == "" || strings.EqualFold(effort, "none") {
+			chat.ReasoningDisabled = true
+		} else {
+			chat.ReasoningEffort = req.Reasoning.Effort
+		}
 	}
 
 	// text.format → response_format；text.verbosity → verbosity。

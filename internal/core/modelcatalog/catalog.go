@@ -11,6 +11,8 @@ import (
 type Model struct {
 	ID      string
 	OwnedBy string
+	// Capabilities 是模型已声明（非 unsupported）的 cap-tags，升序去重；未声明为空切片。
+	Capabilities []string
 }
 
 // Store 定义 model catalog 读取可用模型所需的最小数据库能力。
@@ -29,8 +31,12 @@ func NewService(store Store) *Service {
 }
 
 // ListAvailableModels 返回当前 project 可见的 OpenAI-compatible 模型。
-func (s *Service) ListAvailableModels(ctx context.Context, projectID int64) ([]Model, error) {
-	// TODO(阶段6/production): [GAP-6-006] /v1/models 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束、专属 channel 策略或 capability cap-tags 暴露；阶段 7 authorization/余额冻结、阶段 12 capability architecture（cap-tags 公开）与阶段 13 项目策略管理前；与 routing 共用 project/channel policy，预算可用性由 reservation 统一判断，cap-tags 由阶段 12 model_capabilities 表统一供给。
+//
+// requiredCapabilities 非空时按 cap-tags 做 AND 过滤（模型 cap 集合必须包含全部请求 cap），
+// 供 /v1/models?capability=a,b 预检；空过滤返回全部可见模型。未识别的 capability key 不报错，
+// 自然匹配不到模型（lenient filter 语义）。
+func (s *Service) ListAvailableModels(ctx context.Context, projectID int64, requiredCapabilities []string) ([]Model, error) {
+	// TODO(阶段6/production): [GAP-6-006] /v1/models 已支持 project_model_policies 模型 allow-list/deny-list 与 cap-tags 暴露，但尚未表达 project 禁用、预算约束或专属 channel 策略；阶段 7 authorization/余额冻结与阶段 13 项目策略管理前；与 routing 共用 project/channel policy，预算可用性由 reservation 统一判断。
 	rows, err := s.store.ListAvailableModelsForProject(ctx, projectID)
 	if err != nil {
 		return nil, failure.Wrap(
@@ -42,11 +48,38 @@ func (s *Service) ListAvailableModels(ctx context.Context, projectID int64) ([]M
 
 	models := make([]Model, 0, len(rows))
 	for _, row := range rows {
+		caps := row.CapabilityKeys
+		if caps == nil {
+			caps = []string{}
+		}
+		if !capabilitiesSatisfy(caps, requiredCapabilities) {
+			continue
+		}
 		models = append(models, Model{
-			ID:      row.ModelID,
-			OwnedBy: row.OwnedBy,
+			ID:           row.ModelID,
+			OwnedBy:      row.OwnedBy,
+			Capabilities: caps,
 		})
 	}
 
 	return models, nil
+}
+
+// capabilitiesSatisfy 判断模型 cap 集合是否包含全部 required（AND 语义）；required 为空恒为 true。
+func capabilitiesSatisfy(modelCaps, required []string) bool {
+	if len(required) == 0 {
+		return true
+	}
+
+	have := make(map[string]struct{}, len(modelCaps))
+	for _, c := range modelCaps {
+		have[c] = struct{}{}
+	}
+	for _, want := range required {
+		if _, ok := have[want]; !ok {
+			return false
+		}
+	}
+
+	return true
 }

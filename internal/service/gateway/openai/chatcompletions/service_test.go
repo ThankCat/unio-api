@@ -88,6 +88,7 @@ type fakeRequestLogService struct {
 	markRequestSucceededArgs []requestlog.MarkRequestSucceededParams
 	markRequestFailedArgs    []requestlog.MarkRequestFailedParams
 	markRequestCanceledArgs  []requestlog.MarkRequestCanceledParams
+	capabilityResults        []string
 
 	createAttempts           []requestlog.CreateAttemptParams
 	markAttemptSucceededArgs []requestlog.MarkAttemptSucceededParams
@@ -210,6 +211,12 @@ func (s *fakeRequestLogService) MarkRequestRunning(ctx context.Context, id int64
 	}, nil
 }
 
+// SetCapabilityCheckResult 记录 capability 闸门判定结论审计写入。
+func (s *fakeRequestLogService) SetCapabilityCheckResult(_ context.Context, _ int64, result string) error {
+	s.capabilityResults = append(s.capabilityResults, result)
+	return nil
+}
+
 // MarkRequestSucceeded 记录 request succeeded 状态变更。
 func (s *fakeRequestLogService) MarkRequestSucceeded(ctx context.Context, params requestlog.MarkRequestSucceededParams) (requestlog.RequestRecord, error) {
 	s.markRequestSucceededArgs = append(s.markRequestSucceededArgs, params)
@@ -295,10 +302,10 @@ func (s *fakeRequestLogService) MarkAttemptCanceled(ctx context.Context, params 
 
 // fakeChatAdapter 是 gateway 测试使用的 adapter 替身。
 type fakeChatAdapter struct {
-	chatCalled   int
-	chatReq      openai.ChatRequest
-	chatResp     *openai.ChatResponse
-	chatErr      error
+	chatCalled    int
+	chatReq       openai.ChatRequest
+	chatResp      *openai.ChatResponse
+	chatErr       error
 	streamCalled  int
 	streamReq     openai.ChatRequest
 	streamResp    []openai.ChatStreamChunk
@@ -799,7 +806,17 @@ func TestChatCompletionServiceCreateChatCompletionMarksRequestFailedOnSettlement
 		t.Fatalf("expected settlement reservation id %d, got %d", int64(7701), settlement.params[0].Authorization.ReservationID)
 	}
 	if len(authorizer.releaseParams) != 0 {
-		t.Fatalf("expected no authorization release when settlement fails, got %d", len(authorizer.releaseParams))
+		t.Fatalf("expected no normal authorization release when settlement fails, got %d", len(authorizer.releaseParams))
+	}
+	// settlement 永久失败且无 recovery job 接管：必须释放冻结余额并记账务异常风险，避免用户余额永久冻结。
+	if len(authorizer.releaseBillingExceptionParams) != 1 {
+		t.Fatalf("expected billing exception release when settlement permanently fails, got %d", len(authorizer.releaseBillingExceptionParams))
+	}
+	if authorizer.releaseBillingExceptionParams[0].ReservationID != 7701 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(7701), authorizer.releaseBillingExceptionParams[0].ReservationID)
+	}
+	if authorizer.releaseBillingExceptionParams[0].ReasonCode != "settlement_failed_after_upstream_success" {
+		t.Fatalf("expected settlement_failed_after_upstream_success reason code, got %q", authorizer.releaseBillingExceptionParams[0].ReasonCode)
 	}
 	if len(requestLog.markRequestFailedArgs) != 1 {
 		t.Fatalf("expected request to be marked failed once, got %d", len(requestLog.markRequestFailedArgs))
@@ -1845,7 +1862,17 @@ func TestChatCompletionServiceStreamChatCompletionMarksRequestFailedOnSettlement
 		t.Fatalf("expected settlement reservation id %d, got %d", int64(8830), settlement.params[0].Authorization.ReservationID)
 	}
 	if len(authorizer.releaseParams) != 0 {
-		t.Fatalf("expected no authorization release when stream settlement fails, got %d", len(authorizer.releaseParams))
+		t.Fatalf("expected no normal authorization release when stream settlement fails, got %d", len(authorizer.releaseParams))
+	}
+	// settlement 永久失败且无 recovery job 接管：必须释放冻结余额并记账务异常风险，避免用户余额永久冻结。
+	if len(authorizer.releaseBillingExceptionParams) != 1 {
+		t.Fatalf("expected billing exception release when stream settlement permanently fails, got %d", len(authorizer.releaseBillingExceptionParams))
+	}
+	if authorizer.releaseBillingExceptionParams[0].ReservationID != 8830 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(8830), authorizer.releaseBillingExceptionParams[0].ReservationID)
+	}
+	if authorizer.releaseBillingExceptionParams[0].ReasonCode != "stream_settlement_failed_after_upstream_success" {
+		t.Fatalf("expected stream_settlement_failed_after_upstream_success reason code, got %q", authorizer.releaseBillingExceptionParams[0].ReasonCode)
 	}
 	if len(requestLog.markRequestFailedArgs) != 1 {
 		t.Fatalf("expected request to be marked failed once, got %d", len(requestLog.markRequestFailedArgs))

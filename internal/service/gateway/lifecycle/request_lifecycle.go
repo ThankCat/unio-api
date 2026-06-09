@@ -258,18 +258,31 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 	return record, nil
 }
 
+// RecordCapabilityResult 把 capability 闸门 observe 判定结论写入 request_records 审计列（阶段 12）。
+//
+// 在 PlanChat 成功后调用：observation 为 nil（闸门未启用 / 无 required / 无候选）时不写，列保持 NULL（bypassed）。
+// 纯审计动作，best-effort：写失败不影响主流程，与 MarkRequest* 审计写入一致地吞掉错误。
+func (l *RequestLifecycle) RecordCapabilityResult(ctx context.Context, requestRecord requestlog.RequestRecord, observation *routing.CapabilityObservation) {
+	if observation == nil {
+		return
+	}
+
+	_ = l.requestLog.SetCapabilityCheckResult(ctx, requestRecord.ID, string(observation.Result))
+}
+
 // CreateAttempt 创建一次上游 channel 尝试记录。
 // attempt 记录 fallback 链路中的单次 provider/channel 调用，必须先于 adapter 调用创建。
-func (l *RequestLifecycle) CreateAttempt(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate) (requestlog.AttemptRecord, error) {
+func (l *RequestLifecycle) CreateAttempt(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate, requiredCapabilities []string) (requestlog.AttemptRecord, error) {
 	return l.requestLog.CreateAttempt(ctx, requestlog.CreateAttemptParams{
-		RequestRecordID:  requestRecord.ID,
-		AttemptIndex:     attemptIndex,
-		ProviderID:       candidate.ProviderID,
-		ChannelID:        candidate.Channel.ID,
-		AdapterKey:       candidate.AdapterKey,
-		UpstreamModel:    candidate.UpstreamModel,
-		UpstreamProtocol: requestlog.Protocol(candidate.Protocol),
-		StartedAt:        time.Now(),
+		RequestRecordID:      requestRecord.ID,
+		AttemptIndex:         attemptIndex,
+		ProviderID:           candidate.ProviderID,
+		ChannelID:            candidate.Channel.ID,
+		AdapterKey:           candidate.AdapterKey,
+		UpstreamModel:        candidate.UpstreamModel,
+		UpstreamProtocol:     requestlog.Protocol(candidate.Protocol),
+		RequiredCapabilities: requiredCapabilities,
+		StartedAt:            time.Now(),
 	})
 }
 

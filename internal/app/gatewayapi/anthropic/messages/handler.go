@@ -201,6 +201,9 @@ func mapMessageServiceError(req MessageRequest, err error) (status int, errorTyp
 		return http.StatusNotFound, "not_found_error", fmt.Sprintf("model: %s", req.Model)
 	case errors.Is(err, routing.ErrNoAvailableChannel):
 		return http.StatusServiceUnavailable, "api_error", fmt.Sprintf("model %q is temporarily unavailable", req.Model)
+	case errors.Is(err, routing.ErrModelCapabilityUnavailable), errors.Is(err, routing.ErrChannelCapabilityUnavailable):
+		// model/channel 内部分层只进审计；对客户统一渲染为「模型不支持该能力」，不暴露 channel 拓扑。
+		return http.StatusBadRequest, "invalid_request_error", messageCapabilityUnavailableMessage(req.Model, err)
 	}
 
 	// 上游 provider 调用失败：只消费 adapter 给出的稳定 category，不解析 provider 原始 body。
@@ -210,6 +213,14 @@ func mapMessageServiceError(req MessageRequest, err error) (status int, errorTyp
 	}
 
 	return http.StatusInternalServerError, "api_error", "request failed"
+}
+
+// messageCapabilityUnavailableMessage 构造 capability 不可用的客户可见文案，列出缺失能力 key（不泄漏 channel 拓扑）。
+func messageCapabilityUnavailableMessage(model string, err error) string {
+	if missing := routing.MissingCapabilities(err); missing != "" {
+		return fmt.Sprintf("model %q does not support the required capabilities: %s", model, missing)
+	}
+	return fmt.Sprintf("model %q does not support a capability required by this request", model)
 }
 
 // mapUpstreamMessageError 把上游错误分类映射成 Anthropic 原生错误响应。

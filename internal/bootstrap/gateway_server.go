@@ -5,10 +5,13 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/ThankCat/unio-api/internal/core/capability"
+	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-api/internal/platform/observability/tracing"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/service/gateway/capabilitygate"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 	"github.com/redis/go-redis/v9"
 )
@@ -76,6 +79,19 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	}
 
 	metricsRecorder := metrics.New()
+
+	// capability 闸门：注入到共享 chatRouter，三协议路由统一记录判定与 metric。
+	chatRouter.SetCapabilityChecker(capabilitygate.NewChecker(
+		capability.NewStore(queries),
+		metricsRecorder,
+		deps.Logger,
+	))
+	// enforce 开关按 ingress 表面独立可控；默认全 false = observe（只记录不拒绝），切换见 DEC-015 / GAP-12-009。
+	chatRouter.SetCapabilityEnforcement(routing.CapabilityEnforcement{
+		OpenAIChat:        deps.Config.Capability.EnforceOpenAIChat,
+		AnthropicMessages: deps.Config.Capability.EnforceAnthropicMessages,
+		OpenAIResponses:   deps.Config.Capability.EnforceOpenAIResponses,
+	})
 
 	chatCompletionService := NewChatGateway(
 		deps.DB,

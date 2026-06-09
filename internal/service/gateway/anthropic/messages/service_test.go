@@ -102,6 +102,12 @@ type fakeMessagesRequestLog struct {
 	markRequestFailedArgs []requestlog.MarkRequestFailedParams
 	markRequestCanceled   []requestlog.MarkRequestCanceledParams
 	createAttempts        []requestlog.CreateAttemptParams
+	capabilityResults     []string
+}
+
+func (s *fakeMessagesRequestLog) SetCapabilityCheckResult(_ context.Context, _ int64, result string) error {
+	s.capabilityResults = append(s.capabilityResults, result)
+	return nil
 }
 
 func newFakeMessagesRequestLog() *fakeMessagesRequestLog {
@@ -333,6 +339,42 @@ func TestCreateMessageReturnsResponseAndSettlesWithAnthropicFacts(t *testing.T) 
 	}
 	if settled.ResponseModelID != "anthropic/claude-sonnet-4" {
 		t.Fatalf("expected catalog model in settlement, got %q", settled.ResponseModelID)
+	}
+}
+
+// TestCreateMessageReleasesAuthorizationOnPermanentSettlementFailure 验证上游成功但 settlement
+// 永久失败且无 recovery job 接管时，必须释放冻结余额并记账务异常风险，避免用户余额被永久冻结。
+func TestCreateMessageReleasesAuthorizationOnPermanentSettlementFailure(t *testing.T) {
+	settlementErr := errors.New("messages settlement commit failed")
+	adapterFake := &fakeMessagesAdapter{messagesResp: messageResponse()}
+	registry := &fakeMessagesRegistry{
+		messages:   map[string]anthropicadapter.MessagesAdapter{"deepseek": adapterFake},
+		tokenizers: map[string]anthropicadapter.MessagesInputTokenizer{"deepseek": adapterFake},
+	}
+	settlement := &fakeMessagesSettlement{err: settlementErr}
+	authorizer := &fakeMessagesAuthorizer{}
+	service := newMessagesServiceForTest(
+		&fakeMessagesRouter{plan: routePlan(routeCandidate("deepseek", 123, "deepseek-v4-flash"))},
+		registry,
+		settlement,
+		authorizer,
+	)
+
+	_, err := service.CreateMessage(contextWithPrincipal(42), messageRequest())
+	if !errors.Is(err, settlementErr) {
+		t.Fatalf("expected settlement error, got %v", err)
+	}
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected one settlement attempt, got %d", len(settlement.params))
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no normal release on permanent settlement failure, got %d", len(authorizer.releaseParams))
+	}
+	if len(authorizer.releaseBillingExceptionParams) != 1 {
+		t.Fatalf("expected billing exception release on permanent settlement failure, got %d", len(authorizer.releaseBillingExceptionParams))
+	}
+	if authorizer.releaseBillingExceptionParams[0].ReasonCode != "messages_settlement_failed_after_upstream_success" {
+		t.Fatalf("expected messages_settlement_failed_after_upstream_success reason code, got %q", authorizer.releaseBillingExceptionParams[0].ReasonCode)
 	}
 }
 

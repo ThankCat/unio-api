@@ -73,8 +73,10 @@ type RunNonStreamParams struct {
 	Candidates       []Candidate
 	RequestedModelID string
 	ResponseProtocol requestlog.Protocol
-	ResolveAdapter   ResolveAdapter
-	Invoke           NonStreamInvoke
+	// RequiredCapabilities 是 ingress 推断的所需能力 key，写入每个 attempt 的 capability 审计快照（可空）。
+	RequiredCapabilities []string
+	ResolveAdapter       ResolveAdapter
+	Invoke               NonStreamInvoke
 }
 
 // RunResult 汇报候选循环最终的业务 outcome，供协议 service 的 metrics defer 读取。
@@ -107,7 +109,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 		}
 
 		// 每个 candidate 都先创建 attempt，再调用 adapter，保证 fallback 链路可在 request_attempts 还原。
-		attemptRecord, err := l.CreateAttempt(ctx, requestRecord, index, candidate)
+		attemptRecord, err := l.CreateAttempt(ctx, requestRecord, index, candidate, params.RequiredCapabilities)
 		if err != nil {
 			if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 				l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
@@ -180,6 +182,19 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 		EndSettlementSpan(settleSpan, settleErr)
 		l.RecordSettlement(SettlementOutcomeFromErr(settleErr))
 		if settleErr != nil && !IsChatSettlementRecoveryScheduled(settleErr) {
+			// 上游已成功（成本已产生），但 settlement 永久失败且没有 recovery job 接管（典型为 recovery
+			// job 创建失败，此时内层 settlement 尚未 capture，reservation 仍停留在 authorized）。必须释放
+			// 冻结余额并记账务异常风险，否则用户余额被永久冻结——GAP-7-007 只覆盖「job 已创建后重试/dead」，
+			// 不覆盖「job 创建失败」窗口。release 自身幂等（captured 拒绝、released no-op），不会破坏已结算事实。
+			if releaseErr := l.ReleaseAuthorizationForBillingException(
+				ctx,
+				authorization,
+				"settlement_failed_after_upstream_success",
+				"settlement permanently failed after upstream success without recovery job",
+			); releaseErr != nil {
+				l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+				return result, releaseErr
+			}
 			l.MarkRequestFailed(ctx, requestRecord, "chat_settlement_failed", settleErr)
 			return result, settleErr
 		}

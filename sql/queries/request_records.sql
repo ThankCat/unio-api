@@ -64,6 +64,7 @@ RETURNING
     status,
     final_provider_id,
     final_channel_id,
+    capability_check_result,
     error_code,
     error_message,
     internal_error_detail,
@@ -94,6 +95,7 @@ SELECT
     status,
     final_provider_id,
     final_channel_id,
+    capability_check_result,
     error_code,
     error_message,
     internal_error_detail,
@@ -129,6 +131,14 @@ FROM request_records
 WHERE request_records.id = sqlc.arg(request_record_id)
   AND request_records.status = 'running'
   AND NOT EXISTS (SELECT 1 FROM updated);
+
+-- name: MarkRequestCapabilityCheckResult :exec
+-- MarkRequestCapabilityCheckResult 写入本次请求的 capability 闸门判定结论审计（阶段 12 observe）。
+-- 纯审计字段，与状态机解耦：任意非终态/终态都可写一次，不改 status。
+UPDATE request_records
+SET capability_check_result = sqlc.arg(capability_check_result)::text,
+    updated_at = now()
+WHERE id = sqlc.arg(request_record_id);
 
 -- name: MarkRequestSucceeded :one
 -- MarkRequestSucceeded 将 running 请求原子推进到 succeeded，重复 succeeded 返回第一次成功事实。
