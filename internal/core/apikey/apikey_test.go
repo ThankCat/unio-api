@@ -34,6 +34,27 @@ func TestGenerate(t *testing.T) {
 	}
 }
 
+func TestGeneratePlaintextIsBase62(t *testing.T) {
+	key, err := apikey.Generate()
+	if err != nil {
+		t.Fatalf("generate api key: %v", err)
+	}
+
+	random := strings.TrimPrefix(key.Plaintext, "unio_sk_")
+	if random == key.Plaintext {
+		t.Fatal("expected plaintext to start with unio_sk_")
+	}
+
+	for _, c := range random {
+		isDigit := c >= '0' && c <= '9'
+		isUpper := c >= 'A' && c <= 'Z'
+		isLower := c >= 'a' && c <= 'z'
+		if !isDigit && !isUpper && !isLower {
+			t.Fatalf("expected only base62 chars in random part, got %q", c)
+		}
+	}
+}
+
 func TestGenerateUniqueKeys(t *testing.T) {
 	key1, _ := apikey.Generate()
 	key2, _ := apikey.Generate()
