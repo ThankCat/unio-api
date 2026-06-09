@@ -22,6 +22,15 @@
 阶段 13 交付：admin CRUD 入口（增删改查、override、批量同步触发、人工 patch）
 ```
 
+## 交付方式与模块分解
+
+阶段 13 只做 **admin-server**（`/admin/v1/*`，平台运营闭环）；console-server、支付/充值、GAP-12-006 全部 deferred。完整模块分解（M1~M9）、RESTful 资源地图、接口约定与 GAP 收口映射见 [ADMIN_MODULES_DRAFT.md](ADMIN_MODULES_DRAFT.md)（已审查，作为北极星契约）。
+
+交付按**垂直切片、前后端协同**推进，每片只定该 UI 需要的最小端点，后端 → 前端（`unio-admin` 独立仓库）→ 联调 → 下一片，不一次性铺满 API。
+
+- **Slice 1（已交付，2026-06-09）**：M1 静态 token 认证 + M3 provider/channel CRUD + M2 channel 凭据只写轮换。对应 TASK-13.01（done）与 TASK-13.03 的 provider/channel 子集（in_progress）；关闭 GAP-6-003。已落地契约见 [CONTRACT.md](CONTRACT.md)。
+- 后续切片：channel↔model 绑定、model provisioning、定价、能力管理、只读查询台、工作台看板，按 [ADMIN_MODULES_DRAFT.md](ADMIN_MODULES_DRAFT.md) 推进顺序展开。
+
 ## 涉及文件
 
 | 文件 | 作用 |
@@ -38,30 +47,37 @@
 ## 任务
 
 <a id="task-13-01-admin-auth"></a>
-### TASK-13.01 Admin auth
+### TASK-13.01 Admin auth（单管理员极简版）
 
-状态：planned
+状态：done（Slice 1，2026-06-09）
 
 目标：
 
 ```text
-建立后台登录、JWT、管理员权限和审计日志边界。
+为全部 /admin/v1/* 建立认证入口门；单运营者阶段砍到最小，不做登录/会话/权限。
 ```
 
-计划实现：
+已实现：
 
-1. 设计 admin user 或 admin role。
-2. 密码使用 argon2id。
-3. JWT 使用成熟库，固定算法白名单。
-4. access token 和 refresh token 策略分开。
-5. 后台敏感操作必须写 audit log。
-6. admin auth 不与 customer API key auth 混用。
+1. 静态 env `ADMIN_API_TOKEN`（强随机），启动期校验非空（缺失即 fail-fast）。
+2. `core/adminauth.StaticTokenAuthenticator` 用常量时间比对（`crypto/subtle`）校验 `Authorization: Bearer <token>`。
+3. `app/adminapi/middleware.AdminAuth` 守护 `/admin/v1/*`：缺 token → `adminauth_missing_token`(401)，不匹配 → `adminauth_invalid_token`(401)。
+4. 身份缝：认证后往 context 塞恒定 `AdminPrincipal`，handler 一律从 context 取身份；日后换登录/多管理员/RBAC 只改中间件，不动 handler。
+5. 端点：`GET /healthz`（免鉴权）、`GET /admin/v1/ping`（鉴权探针）。
+6. 单测覆盖 authenticator（空/错/对 token + 启动校验）与 router（ping 401/200、healthz 公开）。
 
-关键约束：
+本阶段 deferred（升级触发：接 web 登录页 / 第二个管理员 / 对外开放）：
+
+1. JWT、access/refresh token、登录/刷新/登出流程。
+2. RBAC（role）与 admin 操作审计日志（含 before/after diff）。
+3. admin_users / admin_sessions / admin_audit_logs 表、密码 + argon2id、create-admin CLI。
+4. 登录暴力破解节流 / 锁定。
+
+关键约束（已满足）：
 
 1. 管理员权限不是客户 API 调用权限。
-2. customer API key 不能访问后台。
-3. 后台 JWT 不能用于 `/v1/chat/completions`。
+2. customer API key 不能访问后台（独立进程 + 独立 token）。
+3. 后台 token 不能用于 `/v1/chat/completions`。
 
 <a id="task-13-02-credential-management"></a>
 ### TASK-13.02 Credential 管理
@@ -92,7 +108,7 @@
 <a id="task-13-03-provider-channel-admin"></a>
 ### TASK-13.03 Provider/channel/model/price/capability 管理
 
-状态：planned
+状态：in_progress（Slice 1 已交付 provider/channel CRUD + 凭据轮换，2026-06-09）
 
 目标：
 
@@ -100,16 +116,23 @@
 让 provider、channel、model、price 和模型能力声明成为后台可管理的业务数据。
 ```
 
-计划实现：
+已实现（Slice 1）：
 
-1. provider CRUD。
-2. channel CRUD，支持 protocol、adapter_key、enabled、priority、base_url、credential_ref、health。
-3. model CRUD，支持 enabled、owned_by 与 lab/canonical_id 元数据。
-4. channel_model CRUD，支持 upstream_model、enabled。
-5. price CRUD，支持 pricing_unit、currency、effective_from/to。
-6. price 修改时避免生效窗口重叠。
-7. 能力管理：models.dev 同步结果可视化、人工 capability 覆盖、channel 级 capability override。
-8. 后台变更影响 routing、`/v1/models` 和阶段 12 的 capability gating。
+1. **provider CRUD**：`List/Get/Create/Update`，校验 slug 格式、name、status 枚举；唯一冲突 → `admin_conflict`(409)。
+2. **channel CRUD**：`List`（可按 `provider_id` 过滤）`/Get/Create/Update`，支持 protocol、adapter_key、base_url、status、priority、timeout_ms。
+   - 写入校验：(protocol, adapter_key) 复合键必须存在于 adapter registry（`registry.HasAny`），未注册 → `admin_adapter_binding_unsupported`(422)，**关闭 GAP-6-003**。
+   - provider 外键不存在 → `admin_not_found`(404)；同 provider 内 channel 名重复 → `admin_conflict`(409)。
+3. **channel 凭据只写轮换**（M2 部分）：`PUT /channels/{id}/credential`，明文经 `core/credential` AES-GCM 加密入库；明文/密文绝不回读、不进日志、不出 DTO；成功 204。
+
+待后续切片：
+
+4. channel↔model 绑定（`channel_models`，upstream_model/enabled）。
+5. model CRUD / provisioning（enabled、owned_by、lab/canonical_id、max_output_tokens），关 GAP-12-007/GAP-11-006 的前提。
+6. price CRUD（pricing_unit、currency、effective_from/to）+ 生效窗口不重叠校验（依赖 TASK-7.22）。
+7. 能力管理：models.dev 同步可视化、人工 capability 覆盖、channel 级 override（见 TASK-13.03C / M5）。
+8. provider/channel DELETE 与 channel `/health` 子资源（Slice 1 只做 GET/POST/PATCH + 凭据 PUT）。
+
+约束：后台变更写库即对下一请求生效（routing 实时读库，无需重启）；后台只能从已注册 adapter 中选，不热加载 adapter 代码。
 
 依赖：
 

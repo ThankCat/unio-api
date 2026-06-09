@@ -7,7 +7,167 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const createChannel = `-- name: CreateChannel :one
+INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at
+`
+
+type CreateChannelParams struct {
+	ProviderID          int64
+	Name                string
+	Protocol            string
+	AdapterKey          string
+	BaseUrl             string
+	CredentialEncrypted []byte
+	Status              string
+	Priority            int32
+	TimeoutMs           pgtype.Int4
+}
+
+// CreateChannel 创建 channel；credential_encrypted 为已加密的上游凭据，protocol+adapter_key 复合键须先在 adapter registry 校验存在。
+func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (Channel, error) {
+	row := q.db.QueryRow(ctx, createChannel,
+		arg.ProviderID,
+		arg.Name,
+		arg.Protocol,
+		arg.AdapterKey,
+		arg.BaseUrl,
+		arg.CredentialEncrypted,
+		arg.Status,
+		arg.Priority,
+		arg.TimeoutMs,
+	)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.ProviderID,
+		&i.Name,
+		&i.Protocol,
+		&i.AdapterKey,
+		&i.BaseUrl,
+		&i.CredentialEncrypted,
+		&i.Status,
+		&i.Priority,
+		&i.TimeoutMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getChannel = `-- name: GetChannel :one
+SELECT id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at
+FROM channels
+WHERE id = $1
+LIMIT 1
+`
+
+// GetChannel 按 id 读取单个 channel。
+func (q *Queries) GetChannel(ctx context.Context, id int64) (Channel, error) {
+	row := q.db.QueryRow(ctx, getChannel, id)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.ProviderID,
+		&i.Name,
+		&i.Protocol,
+		&i.AdapterKey,
+		&i.BaseUrl,
+		&i.CredentialEncrypted,
+		&i.Status,
+		&i.Priority,
+		&i.TimeoutMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listChannels = `-- name: ListChannels :many
+SELECT id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at
+FROM channels
+ORDER BY priority, id
+`
+
+// ListChannels 列出全部 channel，按 priority、id 升序，供 admin 管理台展示。
+func (q *Queries) ListChannels(ctx context.Context) ([]Channel, error) {
+	rows, err := q.db.Query(ctx, listChannels)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Channel
+	for rows.Next() {
+		var i Channel
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProviderID,
+			&i.Name,
+			&i.Protocol,
+			&i.AdapterKey,
+			&i.BaseUrl,
+			&i.CredentialEncrypted,
+			&i.Status,
+			&i.Priority,
+			&i.TimeoutMs,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChannelsByProvider = `-- name: ListChannelsByProvider :many
+SELECT id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at
+FROM channels
+WHERE provider_id = $1
+ORDER BY priority, id
+`
+
+// ListChannelsByProvider 列出指定 provider 下的 channel，按 priority、id 升序。
+func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) ([]Channel, error) {
+	rows, err := q.db.Query(ctx, listChannelsByProvider, providerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Channel
+	for rows.Next() {
+		var i Channel
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProviderID,
+			&i.Name,
+			&i.Protocol,
+			&i.AdapterKey,
+			&i.BaseUrl,
+			&i.CredentialEncrypted,
+			&i.Status,
+			&i.Priority,
+			&i.TimeoutMs,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
 
 const listEnabledChannelAdapters = `-- name: ListEnabledChannelAdapters :many
 SELECT
@@ -53,4 +213,68 @@ func (q *Queries) ListEnabledChannelAdapters(ctx context.Context) ([]ListEnabled
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateChannel = `-- name: UpdateChannel :one
+UPDATE channels
+SET name = $1, base_url = $2, status = $3, priority = $4, timeout_ms = $5, updated_at = now()
+WHERE id = $6
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at
+`
+
+type UpdateChannelParams struct {
+	Name      string
+	BaseUrl   string
+	Status    string
+	Priority  int32
+	TimeoutMs pgtype.Int4
+	ID        int64
+}
+
+// UpdateChannel 更新 channel 的展示名、上游地址、启停状态、优先级与超时；protocol、adapter_key 与凭据不在此更新。
+func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (Channel, error) {
+	row := q.db.QueryRow(ctx, updateChannel,
+		arg.Name,
+		arg.BaseUrl,
+		arg.Status,
+		arg.Priority,
+		arg.TimeoutMs,
+		arg.ID,
+	)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.ProviderID,
+		&i.Name,
+		&i.Protocol,
+		&i.AdapterKey,
+		&i.BaseUrl,
+		&i.CredentialEncrypted,
+		&i.Status,
+		&i.Priority,
+		&i.TimeoutMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateChannelCredential = `-- name: UpdateChannelCredential :execrows
+UPDATE channels
+SET credential_encrypted = $1, updated_at = now()
+WHERE id = $2
+`
+
+type UpdateChannelCredentialParams struct {
+	CredentialEncrypted []byte
+	ID                  int64
+}
+
+// UpdateChannelCredential 轮换 channel 的上游凭据；只写密文，不回读；返回受影响行数用于判定 channel 是否存在。
+func (q *Queries) UpdateChannelCredential(ctx context.Context, arg UpdateChannelCredentialParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateChannelCredential, arg.CredentialEncrypted, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

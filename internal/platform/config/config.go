@@ -24,6 +24,14 @@ type Config struct {
 	Credential       CredentialConfig
 	ModelCatalogSync ModelCatalogSyncConfig
 	Capability       CapabilityConfig
+	Admin            AdminConfig
+}
+
+// AdminConfig 保存 admin-server 管理端认证配置。
+type AdminConfig struct {
+	// APIToken 来自 ADMIN_API_TOKEN；单管理员极简版的静态访问 token。
+	// 空值表示未配置，运行 admin-server 时启动期失败。
+	APIToken string
 }
 
 // CapabilityConfig 保存 capability 闸门 enforce 开关，按 ingress 表面独立可控（阶段 12 TASK-12.08）。
@@ -412,6 +420,9 @@ func Load() (Config, error) {
 			EnforceOpenAIChat:        capabilityEnforceOpenAIChat,
 			EnforceAnthropicMessages: capabilityEnforceAnthropicMessages,
 			EnforceOpenAIResponses:   capabilityEnforceOpenAIResponses,
+		},
+		Admin: AdminConfig{
+			APIToken: getEnv("ADMIN_API_TOKEN", ""),
 		},
 	}, nil
 }

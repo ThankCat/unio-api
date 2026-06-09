@@ -6,15 +6,15 @@
 
 ## 当前主线
 
-阶段 11 OpenAI Responses API ingress（Codex 兼容，生产级）已于 2026-06-07 完成 acceptance sign-off，状态为 done。当前主线是阶段 12 Capability Architecture（能力声明 + 运行时闸门 + models.dev daily cron + cap-tags API，见 DEC-015），后台管理再次顺延为阶段 13。
+阶段 12 Capability Architecture 代码层已收口（DEC-015，能力声明 + 运行时闸门 + models.dev daily cron + cap-tags API）。当前主线是阶段 13 后台管理（admin-server，垂直切片推进）：Slice 1（静态 token 认证 + provider/channel CRUD + 凭据只写轮换）已交付，关闭 GAP-6-003。
 
 阅读顺序：
 
 1. [../PROJECT_STATUS.md](../PROJECT_STATUS.md)
-2. [phase-12-capability-architecture/PLAN.md](phase-12-capability-architecture/PLAN.md)
-3. [phase-12-capability-architecture/STATUS.md](phase-12-capability-architecture/STATUS.md)
-4. [phase-12-capability-architecture/ACCEPTANCE.md](phase-12-capability-architecture/ACCEPTANCE.md)
-5. [phase-11-openai-responses-api/CAPABILITY_MATRIX.md](phase-11-openai-responses-api/CAPABILITY_MATRIX.md)
+2. [phase-13-admin/ADMIN_MODULES_DRAFT.md](phase-13-admin/ADMIN_MODULES_DRAFT.md)
+3. [phase-13-admin/PLAN.md](phase-13-admin/PLAN.md)
+4. [phase-13-admin/STATUS.md](phase-13-admin/STATUS.md)
+5. [phase-13-admin/CONTRACT.md](phase-13-admin/CONTRACT.md)
 
 阶段 10、阶段 11 已完成，分别作为双协议 Gateway 与 OpenAI Responses API ingress 的当前公开 API 基线。阶段 1 到阶段 9 的文档保留阶段历史、欠账来源和任务锚点；如果历史路径和当前代码路径不一致，以当前阶段文档、TODO register 和实际代码为准。
 

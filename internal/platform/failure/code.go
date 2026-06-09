@@ -65,6 +65,12 @@ const (
 
 	// CategoryObservability 表示可观测性基础设施（tracing/metrics 导出器）初始化错误。
 	CategoryObservability Category = "observability"
+
+	// CategoryAdminAuth 表示 admin 管理端认证错误。
+	CategoryAdminAuth Category = "adminauth"
+
+	// CategoryAdmin 表示 admin 管理端业务（provider/channel 等 CRUD）错误。
+	CategoryAdmin Category = "admin"
 )
 
 // Category 从错误码前缀推导错误分类，例如 config_invalid => config。
@@ -368,4 +374,29 @@ const (
 const (
 	// CodeObservabilityTracerInitFailed 表示 OpenTelemetry tracer/exporter 初始化失败。
 	CodeObservabilityTracerInitFailed Code = "observability_tracer_init_failed"
+)
+
+const (
+	// CodeAdminAuthMissingToken 表示 admin 请求缺少认证 token。
+	CodeAdminAuthMissingToken Code = "adminauth_missing_token"
+
+	// CodeAdminAuthInvalidToken 表示 admin 认证 token 与配置不匹配。
+	CodeAdminAuthInvalidToken Code = "adminauth_invalid_token"
+)
+
+const (
+	// CodeAdminInvalidArgument 表示 admin 管理请求参数非法（格式、枚举、范围）。
+	CodeAdminInvalidArgument Code = "admin_invalid_argument"
+
+	// CodeAdminNotFound 表示 admin 管理请求的目标资源不存在。
+	CodeAdminNotFound Code = "admin_not_found"
+
+	// CodeAdminConflict 表示 admin 写入违反唯一约束（如 slug、provider 内 channel 名重复）。
+	CodeAdminConflict Code = "admin_conflict"
+
+	// CodeAdminAdapterBindingUnsupported 表示 channel 的 (protocol, adapter_key) 复合键未在当前进程 adapter registry 注册。
+	CodeAdminAdapterBindingUnsupported Code = "admin_adapter_binding_unsupported"
+
+	// CodeAdminStoreFailed 表示 admin 管理存储访问失败。
+	CodeAdminStoreFailed Code = "admin_store_failed"
 )
