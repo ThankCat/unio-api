@@ -34,6 +34,7 @@ type RouterDeps struct {
 func NewRouter(deps RouterDeps) http.Handler {
 	r := chi.NewRouter()
 
+	r.Use(httpmw.CORS)
 	r.Use(httpmw.RequestID)
 	r.Use(httpmw.Tracing)
 	r.Use(httpmw.Metrics(deps.HTTPMetrics))

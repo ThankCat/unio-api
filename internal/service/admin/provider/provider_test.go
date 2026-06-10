@@ -26,8 +26,12 @@ type fakeProviderStore struct {
 	updateErr   error
 }
 
-func (s *fakeProviderStore) ListProviders(context.Context) ([]sqlc.Provider, error) {
+func (s *fakeProviderStore) ListProvidersPage(context.Context, sqlc.ListProvidersPageParams) ([]sqlc.Provider, error) {
 	return s.providers, nil
+}
+
+func (s *fakeProviderStore) CountProviders(context.Context, sqlc.CountProvidersParams) (int64, error) {
+	return int64(len(s.providers)), nil
 }
 
 func (s *fakeProviderStore) GetProvider(_ context.Context, _ int64) (sqlc.Provider, error) {

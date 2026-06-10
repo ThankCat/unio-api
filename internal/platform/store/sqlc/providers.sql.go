@@ -7,7 +7,33 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const countProviders = `-- name: CountProviders :one
+SELECT COUNT(*) AS total
+FROM providers
+WHERE ($1::text IS NULL OR status = $1::text)
+  AND (
+    $2::text IS NULL
+    OR slug ILIKE '%' || $2::text || '%'
+    OR name ILIKE '%' || $2::text || '%'
+  )
+`
+
+type CountProvidersParams struct {
+	Status pgtype.Text
+	Q      pgtype.Text
+}
+
+// CountProviders 返回与 ListProvidersPage 相同过滤条件下的总条数。
+func (q *Queries) CountProviders(ctx context.Context, arg CountProvidersParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countProviders, arg.Status, arg.Q)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
 
 const createProvider = `-- name: CreateProvider :one
 INSERT INTO providers (slug, name, status)
@@ -67,6 +93,59 @@ ORDER BY id
 // ListProviders 列出全部 provider，按 id 升序，供 admin 管理台展示。
 func (q *Queries) ListProviders(ctx context.Context) ([]Provider, error) {
 	rows, err := q.db.Query(ctx, listProviders)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Provider
+	for rows.Next() {
+		var i Provider
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProvidersPage = `-- name: ListProvidersPage :many
+SELECT id, slug, name, status, created_at, updated_at
+FROM providers
+WHERE ($1::text IS NULL OR status = $1::text)
+  AND (
+    $2::text IS NULL
+    OR slug ILIKE '%' || $2::text || '%'
+    OR name ILIKE '%' || $2::text || '%'
+  )
+ORDER BY id
+LIMIT $4 OFFSET $3
+`
+
+type ListProvidersPageParams struct {
+	Status     pgtype.Text
+	Q          pgtype.Text
+	PageOffset int32
+	PageLimit  int32
+}
+
+// ListProvidersPage 按状态/关键字过滤后分页列出 provider；status、q 为 NULL 时不过滤。
+func (q *Queries) ListProvidersPage(ctx context.Context, arg ListProvidersPageParams) ([]Provider, error) {
+	rows, err := q.db.Query(ctx, listProvidersPage,
+		arg.Status,
+		arg.Q,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}

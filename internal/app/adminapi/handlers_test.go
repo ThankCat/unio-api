@@ -26,8 +26,8 @@ type fakeProviderService struct {
 	updateErr error
 }
 
-func (s *fakeProviderService) List(context.Context) ([]provider.Provider, error) {
-	return s.listOut, nil
+func (s *fakeProviderService) List(context.Context, provider.ListParams) (provider.ListResult, error) {
+	return provider.ListResult{Items: s.listOut, Total: int64(len(s.listOut))}, nil
 }
 func (s *fakeProviderService) Get(context.Context, int64) (provider.Provider, error) {
 	return s.getOut, s.getErr
@@ -45,8 +45,8 @@ type fakeChannelService struct {
 	rotateErr error
 }
 
-func (s *fakeChannelService) List(context.Context, int64) ([]channel.Channel, error) {
-	return nil, nil
+func (s *fakeChannelService) List(context.Context, channel.ListParams) (channel.ListResult, error) {
+	return channel.ListResult{}, nil
 }
 func (s *fakeChannelService) Get(context.Context, int64) (channel.Channel, error) {
 	return channel.Channel{}, nil

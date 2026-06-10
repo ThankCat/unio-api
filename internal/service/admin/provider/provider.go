@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
@@ -30,10 +31,25 @@ var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
 // Store 定义 provider 管理所需的存储能力。
 type Store interface {
-	ListProviders(ctx context.Context) ([]sqlc.Provider, error)
+	ListProvidersPage(ctx context.Context, arg sqlc.ListProvidersPageParams) ([]sqlc.Provider, error)
+	CountProviders(ctx context.Context, arg sqlc.CountProvidersParams) (int64, error)
 	GetProvider(ctx context.Context, id int64) (sqlc.Provider, error)
 	CreateProvider(ctx context.Context, arg sqlc.CreateProviderParams) (sqlc.Provider, error)
 	UpdateProvider(ctx context.Context, arg sqlc.UpdateProviderParams) (sqlc.Provider, error)
+}
+
+// ListParams 是分页/过滤列出 provider 的入参；Status、Query 为空表示不过滤。
+type ListParams struct {
+	Status string
+	Query  string
+	Limit  int32
+	Offset int32
+}
+
+// ListResult 是分页列表结果：当前页条目 + 过滤后总数。
+type ListResult struct {
+	Items []Provider
+	Total int64
 }
 
 // Provider 是 admin 视角的 provider 业务事实。
@@ -70,19 +86,43 @@ func NewService(store Store) *Service {
 	return &Service{store: store}
 }
 
-// List 返回全部 provider。
-func (s *Service) List(ctx context.Context) ([]Provider, error) {
-	rows, err := s.store.ListProviders(ctx)
+// List 按 params 过滤分页列出 provider，并返回过滤后的总数。
+func (s *Service) List(ctx context.Context, params ListParams) (ListResult, error) {
+	status := textParam(params.Status)
+	q := textParam(params.Query)
+
+	rows, err := s.store.ListProvidersPage(ctx, sqlc.ListProvidersPageParams{
+		Status:     status,
+		Q:          q,
+		PageLimit:  params.Limit,
+		PageOffset: params.Offset,
+	})
 	if err != nil {
-		return nil, storeFailed(err, "list providers")
+		return ListResult{}, storeFailed(err, "list providers")
 	}
 
-	providers := make([]Provider, 0, len(rows))
+	total, err := s.store.CountProviders(ctx, sqlc.CountProvidersParams{
+		Status: status,
+		Q:      q,
+	})
+	if err != nil {
+		return ListResult{}, storeFailed(err, "count providers")
+	}
+
+	items := make([]Provider, 0, len(rows))
 	for _, row := range rows {
-		providers = append(providers, toProvider(row))
+		items = append(items, toProvider(row))
 	}
 
-	return providers, nil
+	return ListResult{Items: items, Total: total}, nil
+}
+
+// textParam 把空串转成 NULL（不过滤），非空转成有值 pgtype.Text。
+func textParam(s string) pgtype.Text {
+	if s == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: s, Valid: true}
 }
 
 // Get 按 id 读取单个 provider。

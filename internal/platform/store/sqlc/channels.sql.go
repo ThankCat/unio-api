@@ -11,6 +11,32 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countChannels = `-- name: CountChannels :one
+SELECT COUNT(*) AS total
+FROM channels c
+WHERE ($1::bigint IS NULL OR c.provider_id = $1::bigint)
+  AND ($2::text IS NULL OR c.status = $2::text)
+  AND (
+    $3::text IS NULL
+    OR c.name ILIKE '%' || $3::text || '%'
+    OR c.base_url ILIKE '%' || $3::text || '%'
+  )
+`
+
+type CountChannelsParams struct {
+	ProviderID pgtype.Int8
+	Status     pgtype.Text
+	Q          pgtype.Text
+}
+
+// CountChannels 返回与 ListChannelsPage 相同过滤条件下的总条数。
+func (q *Queries) CountChannels(ctx context.Context, arg CountChannelsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countChannels, arg.ProviderID, arg.Status, arg.Q)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const createChannel = `-- name: CreateChannel :one
 INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -158,6 +184,89 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 			&i.TimeoutMs,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChannelsPage = `-- name: ListChannelsPage :many
+SELECT
+    c.id, c.provider_id, c.name, c.protocol, c.adapter_key, c.base_url,
+    c.credential_encrypted, c.status, c.priority, c.timeout_ms, c.created_at, c.updated_at,
+    p.name AS provider_name
+FROM channels c
+JOIN providers p ON p.id = c.provider_id
+WHERE ($1::bigint IS NULL OR c.provider_id = $1::bigint)
+  AND ($2::text IS NULL OR c.status = $2::text)
+  AND (
+    $3::text IS NULL
+    OR c.name ILIKE '%' || $3::text || '%'
+    OR c.base_url ILIKE '%' || $3::text || '%'
+  )
+ORDER BY c.priority, c.id
+LIMIT $5 OFFSET $4
+`
+
+type ListChannelsPageParams struct {
+	ProviderID pgtype.Int8
+	Status     pgtype.Text
+	Q          pgtype.Text
+	PageOffset int32
+	PageLimit  int32
+}
+
+type ListChannelsPageRow struct {
+	ID                  int64
+	ProviderID          int64
+	Name                string
+	Protocol            string
+	AdapterKey          string
+	BaseUrl             string
+	CredentialEncrypted []byte
+	Status              string
+	Priority            int32
+	TimeoutMs           pgtype.Int4
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+	ProviderName        string
+}
+
+// ListChannelsPage 按 provider/状态/关键字过滤后分页列出 channel，连带 provider 名称；过滤项为 NULL 时不过滤。
+func (q *Queries) ListChannelsPage(ctx context.Context, arg ListChannelsPageParams) ([]ListChannelsPageRow, error) {
+	rows, err := q.db.Query(ctx, listChannelsPage,
+		arg.ProviderID,
+		arg.Status,
+		arg.Q,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChannelsPageRow
+	for rows.Next() {
+		var i ListChannelsPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProviderID,
+			&i.Name,
+			&i.Protocol,
+			&i.AdapterKey,
+			&i.BaseUrl,
+			&i.CredentialEncrypted,
+			&i.Status,
+			&i.Priority,
+			&i.TimeoutMs,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ProviderName,
 		); err != nil {
 			return nil, err
 		}

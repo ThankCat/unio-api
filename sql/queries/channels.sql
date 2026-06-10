@@ -24,6 +24,36 @@ FROM channels
 WHERE provider_id = $1
 ORDER BY priority, id;
 
+-- name: ListChannelsPage :many
+-- ListChannelsPage 按 provider/状态/关键字过滤后分页列出 channel，连带 provider 名称；过滤项为 NULL 时不过滤。
+SELECT
+    c.id, c.provider_id, c.name, c.protocol, c.adapter_key, c.base_url,
+    c.credential_encrypted, c.status, c.priority, c.timeout_ms, c.created_at, c.updated_at,
+    p.name AS provider_name
+FROM channels c
+JOIN providers p ON p.id = c.provider_id
+WHERE (sqlc.narg('provider_id')::bigint IS NULL OR c.provider_id = sqlc.narg('provider_id')::bigint)
+  AND (sqlc.narg('status')::text IS NULL OR c.status = sqlc.narg('status')::text)
+  AND (
+    sqlc.narg('q')::text IS NULL
+    OR c.name ILIKE '%' || sqlc.narg('q')::text || '%'
+    OR c.base_url ILIKE '%' || sqlc.narg('q')::text || '%'
+  )
+ORDER BY c.priority, c.id
+LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
+
+-- name: CountChannels :one
+-- CountChannels 返回与 ListChannelsPage 相同过滤条件下的总条数。
+SELECT COUNT(*) AS total
+FROM channels c
+WHERE (sqlc.narg('provider_id')::bigint IS NULL OR c.provider_id = sqlc.narg('provider_id')::bigint)
+  AND (sqlc.narg('status')::text IS NULL OR c.status = sqlc.narg('status')::text)
+  AND (
+    sqlc.narg('q')::text IS NULL
+    OR c.name ILIKE '%' || sqlc.narg('q')::text || '%'
+    OR c.base_url ILIKE '%' || sqlc.narg('q')::text || '%'
+  );
+
 -- name: GetChannel :one
 -- GetChannel 按 id 读取单个 channel。
 SELECT id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at

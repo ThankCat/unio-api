@@ -4,6 +4,30 @@ SELECT id, slug, name, status, created_at, updated_at
 FROM providers
 ORDER BY id;
 
+-- name: ListProvidersPage :many
+-- ListProvidersPage 按状态/关键字过滤后分页列出 provider；status、q 为 NULL 时不过滤。
+SELECT id, slug, name, status, created_at, updated_at
+FROM providers
+WHERE (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
+  AND (
+    sqlc.narg('q')::text IS NULL
+    OR slug ILIKE '%' || sqlc.narg('q')::text || '%'
+    OR name ILIKE '%' || sqlc.narg('q')::text || '%'
+  )
+ORDER BY id
+LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
+
+-- name: CountProviders :one
+-- CountProviders 返回与 ListProvidersPage 相同过滤条件下的总条数。
+SELECT COUNT(*) AS total
+FROM providers
+WHERE (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
+  AND (
+    sqlc.narg('q')::text IS NULL
+    OR slug ILIKE '%' || sqlc.narg('q')::text || '%'
+    OR name ILIKE '%' || sqlc.narg('q')::text || '%'
+  );
+
 -- name: GetProvider :one
 -- GetProvider 按 id 读取单个 provider。
 SELECT id, slug, name, status, created_at, updated_at

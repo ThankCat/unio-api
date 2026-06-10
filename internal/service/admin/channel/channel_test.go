@@ -27,11 +27,11 @@ type fakeChannelStore struct {
 func (s *fakeChannelStore) GetProvider(_ context.Context, _ int64) (sqlc.Provider, error) {
 	return s.provider, s.providerErr
 }
-func (s *fakeChannelStore) ListChannels(context.Context) ([]sqlc.Channel, error) {
+func (s *fakeChannelStore) ListChannelsPage(context.Context, sqlc.ListChannelsPageParams) ([]sqlc.ListChannelsPageRow, error) {
 	return nil, nil
 }
-func (s *fakeChannelStore) ListChannelsByProvider(_ context.Context, _ int64) ([]sqlc.Channel, error) {
-	return nil, nil
+func (s *fakeChannelStore) CountChannels(context.Context, sqlc.CountChannelsParams) (int64, error) {
+	return 0, nil
 }
 func (s *fakeChannelStore) GetChannel(_ context.Context, _ int64) (sqlc.Channel, error) {
 	return sqlc.Channel{}, pgx.ErrNoRows

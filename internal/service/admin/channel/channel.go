@@ -35,8 +35,8 @@ const (
 // Store 定义 channel 管理所需的存储能力。
 type Store interface {
 	GetProvider(ctx context.Context, id int64) (sqlc.Provider, error)
-	ListChannels(ctx context.Context) ([]sqlc.Channel, error)
-	ListChannelsByProvider(ctx context.Context, providerID int64) ([]sqlc.Channel, error)
+	ListChannelsPage(ctx context.Context, arg sqlc.ListChannelsPageParams) ([]sqlc.ListChannelsPageRow, error)
+	CountChannels(ctx context.Context, arg sqlc.CountChannelsParams) (int64, error)
 	GetChannel(ctx context.Context, id int64) (sqlc.Channel, error)
 	CreateChannel(ctx context.Context, arg sqlc.CreateChannelParams) (sqlc.Channel, error)
 	UpdateChannel(ctx context.Context, arg sqlc.UpdateChannelParams) (sqlc.Channel, error)
@@ -49,18 +49,36 @@ type AdapterRegistry interface {
 }
 
 // Channel 是 admin 视角的 channel 业务事实；不含上游凭据。
+//
+// ProviderName 仅在分页列表场景由 JOIN 带出；单条读取/写入路径为空串。
 type Channel struct {
-	ID         int64
+	ID           int64
+	ProviderID   int64
+	ProviderName string
+	Name         string
+	Protocol     string
+	AdapterKey   string
+	BaseURL      string
+	Status       string
+	Priority     int32
+	TimeoutMs    *int32
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// ListParams 是分页/过滤列出 channel 的入参；ProviderID<=0、Status/Query 为空表示不过滤。
+type ListParams struct {
 	ProviderID int64
-	Name       string
-	Protocol   string
-	AdapterKey string
-	BaseURL    string
 	Status     string
-	Priority   int32
-	TimeoutMs  *int32
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	Query      string
+	Limit      int32
+	Offset     int32
+}
+
+// ListResult 是分页列表结果：当前页条目 + 过滤后总数。
+type ListResult struct {
+	Items []Channel
+	Total int64
 }
 
 // CreateInput 是创建 channel 的入参；Credential 为明文上游凭据，落库前加密。
@@ -104,27 +122,38 @@ func NewService(store Store, cipher credential.Cipher, registry AdapterRegistry)
 	return &Service{store: store, cipher: cipher, registry: registry}
 }
 
-// List 返回全部 channel；providerID 为正时只返回该 provider 下的 channel。
-func (s *Service) List(ctx context.Context, providerID int64) ([]Channel, error) {
-	var (
-		rows []sqlc.Channel
-		err  error
-	)
-	if providerID > 0 {
-		rows, err = s.store.ListChannelsByProvider(ctx, providerID)
-	} else {
-		rows, err = s.store.ListChannels(ctx)
-	}
+// List 按 params 过滤分页列出 channel（连带 provider 名称），并返回过滤后的总数。
+func (s *Service) List(ctx context.Context, params ListParams) (ListResult, error) {
+	providerID := int8Param(params.ProviderID)
+	status := textParam(params.Status)
+	q := textParam(params.Query)
+
+	rows, err := s.store.ListChannelsPage(ctx, sqlc.ListChannelsPageParams{
+		ProviderID: providerID,
+		Status:     status,
+		Q:          q,
+		PageLimit:  params.Limit,
+		PageOffset: params.Offset,
+	})
 	if err != nil {
-		return nil, storeFailed(err, "list channels")
+		return ListResult{}, storeFailed(err, "list channels")
 	}
 
-	channels := make([]Channel, 0, len(rows))
+	total, err := s.store.CountChannels(ctx, sqlc.CountChannelsParams{
+		ProviderID: providerID,
+		Status:     status,
+		Q:          q,
+	})
+	if err != nil {
+		return ListResult{}, storeFailed(err, "count channels")
+	}
+
+	items := make([]Channel, 0, len(rows))
 	for _, row := range rows {
-		channels = append(channels, toChannel(row))
+		items = append(items, toChannelRow(row))
 	}
 
-	return channels, nil
+	return ListResult{Items: items, Total: total}, nil
 }
 
 // Get 按 id 读取单个 channel。
@@ -314,6 +343,40 @@ func toChannel(c sqlc.Channel) Channel {
 		CreatedAt:  c.CreatedAt.Time,
 		UpdatedAt:  c.UpdatedAt.Time,
 	}
+}
+
+// toChannelRow 映射分页列表行，额外带出 JOIN 出的 provider 名称。
+func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
+	return Channel{
+		ID:           c.ID,
+		ProviderID:   c.ProviderID,
+		ProviderName: c.ProviderName,
+		Name:         c.Name,
+		Protocol:     c.Protocol,
+		AdapterKey:   c.AdapterKey,
+		BaseURL:      c.BaseUrl,
+		Status:       c.Status,
+		Priority:     c.Priority,
+		TimeoutMs:    timeoutResult(c.TimeoutMs),
+		CreatedAt:    c.CreatedAt.Time,
+		UpdatedAt:    c.UpdatedAt.Time,
+	}
+}
+
+// textParam 把空串转成 NULL（不过滤），非空转成有值 pgtype.Text。
+func textParam(s string) pgtype.Text {
+	if s == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: s, Valid: true}
+}
+
+// int8Param 把非正数转成 NULL（不过滤），正数转成有值 pgtype.Int8。
+func int8Param(id int64) pgtype.Int8 {
+	if id <= 0 {
+		return pgtype.Int8{}
+	}
+	return pgtype.Int8{Int64: id, Valid: true}
 }
 
 func validateProtocol(protocol string) error {

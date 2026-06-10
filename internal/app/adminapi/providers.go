@@ -3,6 +3,7 @@ package adminapi
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
@@ -11,7 +12,7 @@ import (
 
 // ProviderService 定义 adminapi 操作 provider 所需的最小能力。
 type ProviderService interface {
-	List(ctx context.Context) ([]provider.Provider, error)
+	List(ctx context.Context, params provider.ListParams) (provider.ListResult, error)
 	Get(ctx context.Context, id int64) (provider.Provider, error)
 	Create(ctx context.Context, in provider.CreateInput) (provider.Provider, error)
 	Update(ctx context.Context, in provider.UpdateInput) (provider.Provider, error)
@@ -43,18 +44,25 @@ type providersHandler struct {
 }
 
 func (h *providersHandler) list(w http.ResponseWriter, r *http.Request) {
-	providers, err := h.service.List(r.Context())
+	page := parsePage(r)
+
+	result, err := h.service.List(r.Context(), provider.ListParams{
+		Status: listStatus(r),
+		Query:  strings.TrimSpace(r.URL.Query().Get("q")),
+		Limit:  page.Limit(),
+		Offset: page.Offset(),
+	})
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
 
-	dtos := make([]providerDTO, 0, len(providers))
-	for _, p := range providers {
+	dtos := make([]providerDTO, 0, len(result.Items))
+	for _, p := range result.Items {
 		dtos = append(dtos, toProviderDTO(p))
 	}
 
-	writeData(w, http.StatusOK, dtos)
+	writeList(w, http.StatusOK, dtos, page, result.Total)
 }
 
 func (h *providersHandler) get(w http.ResponseWriter, r *http.Request) {
