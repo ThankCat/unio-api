@@ -12,6 +12,10 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/observability/tracing"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-api/internal/service/admin/channel"
+	"github.com/ThankCat/unio-api/internal/service/admin/channelmodel"
+	"github.com/ThankCat/unio-api/internal/service/admin/costprice"
+	"github.com/ThankCat/unio-api/internal/service/admin/model"
+	"github.com/ThankCat/unio-api/internal/service/admin/price"
 	"github.com/ThankCat/unio-api/internal/service/admin/provider"
 )
 
@@ -78,10 +82,14 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 	providerService := provider.NewService(queries)
 	channelService := channel.NewService(queries, cipher, adapterRegistry)
+	modelService := model.NewService(queries)
+	channelModelService := channelmodel.NewService(queries)
+	costPriceService := costprice.NewService(queries)
+	priceService := price.NewService(queries)
 
 	metricsRecorder := metrics.New()
 
-	handler := NewAdminHTTPHandler(deps.Logger, authenticator, providerService, channelService, metricsRecorder)
+	handler := NewAdminHTTPHandler(deps.Logger, authenticator, providerService, channelService, modelService, channelModelService, costPriceService, priceService, metricsRecorder)
 
 	return &AdminServerApp{
 		Handler: handler,

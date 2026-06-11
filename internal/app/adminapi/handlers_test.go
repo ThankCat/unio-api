@@ -13,6 +13,10 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/adminauth"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/service/admin/channel"
+	"github.com/ThankCat/unio-api/internal/service/admin/channelmodel"
+	"github.com/ThankCat/unio-api/internal/service/admin/costprice"
+	"github.com/ThankCat/unio-api/internal/service/admin/model"
+	"github.com/ThankCat/unio-api/internal/service/admin/price"
 	"github.com/ThankCat/unio-api/internal/service/admin/provider"
 )
 
@@ -59,6 +63,147 @@ func (s *fakeChannelService) Update(context.Context, channel.UpdateInput) (chann
 }
 func (s *fakeChannelService) RotateCredential(context.Context, channel.RotateCredentialInput) error {
 	return s.rotateErr
+}
+
+type fakeModelService struct {
+	listOut   []model.Model
+	getOut    model.Model
+	getErr    error
+	createOut model.Model
+	createErr error
+	updateOut model.Model
+	updateErr error
+}
+
+func (s *fakeModelService) List(context.Context, model.ListParams) (model.ListResult, error) {
+	return model.ListResult{Items: s.listOut, Total: int64(len(s.listOut))}, nil
+}
+func (s *fakeModelService) Get(context.Context, int64) (model.Model, error) {
+	return s.getOut, s.getErr
+}
+func (s *fakeModelService) Create(context.Context, model.CreateInput) (model.Model, error) {
+	return s.createOut, s.createErr
+}
+func (s *fakeModelService) Update(context.Context, model.UpdateInput) (model.Model, error) {
+	return s.updateOut, s.updateErr
+}
+
+type fakeChannelModelService struct {
+	listOut   []channelmodel.Binding
+	createOut channelmodel.Binding
+	createErr error
+	updateOut channelmodel.Binding
+	updateErr error
+	deleteErr error
+}
+
+func (s *fakeChannelModelService) List(context.Context, int64) ([]channelmodel.Binding, error) {
+	return s.listOut, nil
+}
+func (s *fakeChannelModelService) Create(context.Context, channelmodel.CreateInput) (channelmodel.Binding, error) {
+	return s.createOut, s.createErr
+}
+func (s *fakeChannelModelService) Update(context.Context, channelmodel.UpdateInput) (channelmodel.Binding, error) {
+	return s.updateOut, s.updateErr
+}
+func (s *fakeChannelModelService) Delete(context.Context, int64, int64) error {
+	return s.deleteErr
+}
+
+func newChannelModelRouter(t *testing.T, cms adminapi.ChannelModelService) http.Handler {
+	t.Helper()
+
+	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
+	if err != nil {
+		t.Fatalf("new authenticator: %v", err)
+	}
+
+	return adminapi.NewRouter(adminapi.RouterDeps{
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		AdminAuthenticator:  authenticator,
+		ChannelModelService: cms,
+	})
+}
+
+type fakeCostPriceService struct {
+	listOut   []costprice.CostPrice
+	createOut costprice.CostPrice
+	createErr error
+	updateOut costprice.CostPrice
+	updateErr error
+}
+
+func (s *fakeCostPriceService) List(context.Context, int64) ([]costprice.CostPrice, error) {
+	return s.listOut, nil
+}
+func (s *fakeCostPriceService) Create(context.Context, costprice.CreateInput) (costprice.CostPrice, error) {
+	return s.createOut, s.createErr
+}
+func (s *fakeCostPriceService) Update(context.Context, costprice.UpdateInput) (costprice.CostPrice, error) {
+	return s.updateOut, s.updateErr
+}
+
+func newCostPriceRouter(t *testing.T, cps adminapi.CostPriceService) http.Handler {
+	t.Helper()
+
+	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
+	if err != nil {
+		t.Fatalf("new authenticator: %v", err)
+	}
+
+	return adminapi.NewRouter(adminapi.RouterDeps{
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		AdminAuthenticator: authenticator,
+		CostPriceService:   cps,
+	})
+}
+
+type fakePriceService struct {
+	listOut   []price.Price
+	createOut price.Price
+	createErr error
+	updateOut price.Price
+	updateErr error
+}
+
+func (s *fakePriceService) List(context.Context, int64) ([]price.Price, error) {
+	return s.listOut, nil
+}
+func (s *fakePriceService) Create(context.Context, price.CreateInput) (price.Price, error) {
+	return s.createOut, s.createErr
+}
+func (s *fakePriceService) Update(context.Context, price.UpdateInput) (price.Price, error) {
+	return s.updateOut, s.updateErr
+}
+
+func newPriceRouter(t *testing.T, ps adminapi.PriceService) http.Handler {
+	t.Helper()
+
+	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
+	if err != nil {
+		t.Fatalf("new authenticator: %v", err)
+	}
+
+	return adminapi.NewRouter(adminapi.RouterDeps{
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		AdminAuthenticator: authenticator,
+		PriceService:       ps,
+	})
+}
+
+func newModelRouter(t *testing.T, ms adminapi.ModelService) http.Handler {
+	t.Helper()
+
+	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
+	if err != nil {
+		t.Fatalf("new authenticator: %v", err)
+	}
+
+	return adminapi.NewRouter(adminapi.RouterDeps{
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		AdminAuthenticator: authenticator,
+		ModelService:       ms,
+	})
 }
 
 func newServicesRouter(t *testing.T, ps adminapi.ProviderService, cs adminapi.ChannelService) http.Handler {
@@ -148,5 +293,154 @@ func TestRotateChannelCredentialReturns204(t *testing.T) {
 	rec := doAdmin(t, handler, http.MethodPut, "/admin/v1/channels/5/credential", `{"credential":"sk-new"}`, true)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusNoContent, rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateModelReturns201(t *testing.T) {
+	handler := newModelRouter(t, &fakeModelService{createOut: model.Model{ID: 1, ModelID: "deepseek-chat", DisplayName: "DeepSeek Chat", OwnedBy: "deepseek", Status: "enabled", Source: "manual"}})
+
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/models", `{"model_id":"deepseek-chat","display_name":"DeepSeek Chat","owned_by":"deepseek","status":"enabled"}`, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetModelInvalidIDReturns400(t *testing.T) {
+	handler := newModelRouter(t, &fakeModelService{})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/models/abc", "", true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+}
+
+func TestGetModelNotFoundReturns404(t *testing.T) {
+	handler := newModelRouter(t, &fakeModelService{getErr: failure.New(failure.CodeAdminNotFound, failure.WithMessage("model not found"))})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/models/9", "", true)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected %d, got %d", http.StatusNotFound, rec.Code)
+	}
+}
+
+func TestModelsRequireToken(t *testing.T) {
+	handler := newModelRouter(t, &fakeModelService{})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/models", "", false)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestCreateChannelModelReturns201(t *testing.T) {
+	handler := newChannelModelRouter(t, &fakeChannelModelService{createOut: channelmodel.Binding{ID: 1, ChannelID: 5, ModelID: 2, UpstreamModel: "gpt-4o", Status: "enabled"}})
+
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/models", `{"model_id":2,"upstream_model":"gpt-4o","status":"enabled"}`, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteChannelModelConflictReturns409(t *testing.T) {
+	handler := newChannelModelRouter(t, &fakeChannelModelService{deleteErr: failure.New(failure.CodeAdminConflict, failure.WithMessage("referenced by billing history"))})
+
+	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/channels/5/models/2", "", true)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusConflict, rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateChannelModelInvalidModelIDReturns400(t *testing.T) {
+	handler := newChannelModelRouter(t, &fakeChannelModelService{})
+
+	rec := doAdmin(t, handler, http.MethodPatch, "/admin/v1/channels/5/models/abc", `{"upstream_model":"gpt-4o","status":"enabled"}`, true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+}
+
+func TestChannelModelsRequireToken(t *testing.T) {
+	handler := newChannelModelRouter(t, &fakeChannelModelService{})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/channels/5/models", "", false)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestCreateCostPriceReturns201(t *testing.T) {
+	handler := newCostPriceRouter(t, &fakeCostPriceService{createOut: costprice.CostPrice{ID: 1, ChannelID: 5, ModelID: 2, Currency: "USD", PricingUnit: "per_1m_tokens", UncachedInputCost: "1.25", OutputCost: "2.5", Status: "enabled"}})
+
+	body := `{"model_id":2,"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_cost":"1.25","output_cost":"2.5","status":"enabled","effective_from":"2026-01-01T00:00:00Z"}`
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/cost-prices", body, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateCostPriceBadEffectiveFromReturns400(t *testing.T) {
+	handler := newCostPriceRouter(t, &fakeCostPriceService{})
+
+	body := `{"model_id":2,"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_cost":"1.25","output_cost":"2.5","status":"enabled","effective_from":"not-a-time"}`
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/cost-prices", body, true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateCostPriceOverlapReturns422(t *testing.T) {
+	handler := newCostPriceRouter(t, &fakeCostPriceService{createErr: failure.New(failure.CodeAdminPricingWindowOverlap, failure.WithMessage("overlap"))})
+
+	body := `{"model_id":2,"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_cost":"1.25","output_cost":"2.5","status":"enabled","effective_from":"2026-01-01T00:00:00Z"}`
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/cost-prices", body, true)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	}
+}
+
+func TestCostPricesRequireToken(t *testing.T) {
+	handler := newCostPriceRouter(t, &fakeCostPriceService{})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/channels/5/cost-prices", "", false)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestCreatePriceReturns201(t *testing.T) {
+	handler := newPriceRouter(t, &fakePriceService{createOut: price.Price{ID: 1, ModelID: 2, Currency: "USD", PricingUnit: "per_1m_tokens", UncachedInputPrice: "3", OutputPrice: "9", Status: "enabled"}})
+
+	body := `{"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_price":"3","output_price":"9","status":"enabled","effective_from":"2026-01-01T00:00:00Z"}`
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/models/2/prices", body, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreatePriceOverlapReturns422(t *testing.T) {
+	handler := newPriceRouter(t, &fakePriceService{createErr: failure.New(failure.CodeAdminPricingWindowOverlap, failure.WithMessage("overlap"))})
+
+	body := `{"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_price":"3","output_price":"9","status":"enabled","effective_from":"2026-01-01T00:00:00Z"}`
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/models/2/prices", body, true)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdatePriceInvalidIDReturns400(t *testing.T) {
+	handler := newPriceRouter(t, &fakePriceService{})
+
+	rec := doAdmin(t, handler, http.MethodPatch, "/admin/v1/prices/abc", `{"status":"disabled"}`, true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+}
+
+func TestPricesRequireToken(t *testing.T) {
+	handler := newPriceRouter(t, &fakePriceService{})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/models/2/prices", "", false)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
 }

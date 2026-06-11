@@ -11,6 +11,59 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createChannelModel = `-- name: CreateChannelModel :one
+INSERT INTO channel_models (channel_id, model_id, upstream_model, status)
+VALUES ($1, $2, $3, $4)
+RETURNING id, channel_id, model_id, upstream_model, status, created_at, updated_at
+`
+
+type CreateChannelModelParams struct {
+	ChannelID     int64
+	ModelID       int64
+	UpstreamModel string
+	Status        string
+}
+
+// CreateChannelModel 创建 channel↔model 绑定；同一 channel 对同一 model 只能绑定一次（唯一约束）。
+func (q *Queries) CreateChannelModel(ctx context.Context, arg CreateChannelModelParams) (ChannelModel, error) {
+	row := q.db.QueryRow(ctx, createChannelModel,
+		arg.ChannelID,
+		arg.ModelID,
+		arg.UpstreamModel,
+		arg.Status,
+	)
+	var i ChannelModel
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelID,
+		&i.ModelID,
+		&i.UpstreamModel,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const deleteChannelModel = `-- name: DeleteChannelModel :execrows
+DELETE FROM channel_models
+WHERE channel_id = $1 AND model_id = $2
+`
+
+type DeleteChannelModelParams struct {
+	ChannelID int64
+	ModelID   int64
+}
+
+// DeleteChannelModel 删除绑定；被 cost_snapshots/channel_cost_prices 外键引用时由 DB 拒绝（23503），上层降级为 conflict。
+func (q *Queries) DeleteChannelModel(ctx context.Context, arg DeleteChannelModelParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteChannelModel, arg.ChannelID, arg.ModelID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const findRouteCandidates = `-- name: FindRouteCandidates :many
 WITH project_scope AS (
     SELECT $3::BIGINT AS project_id
@@ -122,4 +175,127 @@ func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidat
 		return nil, err
 	}
 	return items, nil
+}
+
+const getChannelModel = `-- name: GetChannelModel :one
+SELECT id, channel_id, model_id, upstream_model, status, created_at, updated_at
+FROM channel_models
+WHERE channel_id = $1 AND model_id = $2
+LIMIT 1
+`
+
+type GetChannelModelParams struct {
+	ChannelID int64
+	ModelID   int64
+}
+
+// GetChannelModel 按 (channel_id, model_id) 读取单条绑定。
+func (q *Queries) GetChannelModel(ctx context.Context, arg GetChannelModelParams) (ChannelModel, error) {
+	row := q.db.QueryRow(ctx, getChannelModel, arg.ChannelID, arg.ModelID)
+	var i ChannelModel
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelID,
+		&i.ModelID,
+		&i.UpstreamModel,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listChannelModelsByChannel = `-- name: ListChannelModelsByChannel :many
+SELECT
+    cm.id,
+    cm.channel_id,
+    cm.model_id,
+    cm.upstream_model,
+    cm.status,
+    cm.created_at,
+    cm.updated_at,
+    m.model_id AS model_external_id,
+    m.display_name AS model_display_name
+FROM channel_models cm
+JOIN models m ON m.id = cm.model_id
+WHERE cm.channel_id = $1
+ORDER BY m.model_id
+`
+
+type ListChannelModelsByChannelRow struct {
+	ID               int64
+	ChannelID        int64
+	ModelID          int64
+	UpstreamModel    string
+	Status           string
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+	ModelExternalID  string
+	ModelDisplayName string
+}
+
+// ListChannelModelsByChannel 列出某 channel 的全部模型绑定，连带 Unio 侧模型的对外 ID 与展示名，供 admin 管理台展示。
+func (q *Queries) ListChannelModelsByChannel(ctx context.Context, channelID int64) ([]ListChannelModelsByChannelRow, error) {
+	rows, err := q.db.Query(ctx, listChannelModelsByChannel, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChannelModelsByChannelRow
+	for rows.Next() {
+		var i ListChannelModelsByChannelRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelID,
+			&i.ModelID,
+			&i.UpstreamModel,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ModelExternalID,
+			&i.ModelDisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateChannelModel = `-- name: UpdateChannelModel :one
+UPDATE channel_models
+SET upstream_model = $1, status = $2, updated_at = now()
+WHERE channel_id = $3 AND model_id = $4
+RETURNING id, channel_id, model_id, upstream_model, status, created_at, updated_at
+`
+
+type UpdateChannelModelParams struct {
+	UpstreamModel string
+	Status        string
+	ChannelID     int64
+	ModelID       int64
+}
+
+// UpdateChannelModel 更新绑定的上游模型名与启停状态；按 (channel_id, model_id) 定位。
+func (q *Queries) UpdateChannelModel(ctx context.Context, arg UpdateChannelModelParams) (ChannelModel, error) {
+	row := q.db.QueryRow(ctx, updateChannelModel,
+		arg.UpstreamModel,
+		arg.Status,
+		arg.ChannelID,
+		arg.ModelID,
+	)
+	var i ChannelModel
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelID,
+		&i.ModelID,
+		&i.UpstreamModel,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

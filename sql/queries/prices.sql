@@ -30,6 +30,27 @@ VALUES (
 )
 RETURNING *;
 
+-- name: GetPrice :one
+-- GetPrice 按主键读取单条售价。
+SELECT * FROM prices WHERE id = sqlc.arg(id) LIMIT 1;
+
+-- name: ListPricesByModel :many
+-- ListPricesByModel 列出某模型全部售价（含历史与停用），供 admin 管理台展示。
+SELECT *
+FROM prices
+WHERE model_id = sqlc.arg(model_id)
+ORDER BY effective_from DESC, id DESC;
+
+-- name: UpdatePriceWindow :one
+-- UpdatePriceWindow 调整生效结束时间与启停状态；金额不可改（改价请新建一条）。
+-- 启用窗口重叠由 DB EXCLUDE 约束（ex_prices_enabled_effective_window）保证，违反时报 23P01。
+UPDATE prices
+SET effective_to = sqlc.arg(effective_to),
+    status = sqlc.arg(status),
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
 -- name: FindActivePriceForModel :one
 -- FindActivePriceForModel 查找指定模型在指定时间生效的客户侧售卖价。
 SELECT *

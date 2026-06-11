@@ -11,6 +11,95 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countModels = `-- name: CountModels :one
+SELECT COUNT(*) AS total
+FROM models
+WHERE ($1::text IS NULL OR status = $1::text)
+  AND (
+    $2::text IS NULL
+    OR model_id ILIKE '%' || $2::text || '%'
+    OR display_name ILIKE '%' || $2::text || '%'
+    OR owned_by ILIKE '%' || $2::text || '%'
+  )
+`
+
+type CountModelsParams struct {
+	Status pgtype.Text
+	Q      pgtype.Text
+}
+
+// CountModels 返回与 ListModelsPage 相同过滤条件下的总条数。
+func (q *Queries) CountModels(ctx context.Context, arg CountModelsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countModels, arg.Status, arg.Q)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
+const createModel = `-- name: CreateModel :one
+INSERT INTO models (
+    model_id,
+    display_name,
+    owned_by,
+    status,
+    lab,
+    max_output_tokens,
+    source
+)
+VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    'manual'
+)
+RETURNING id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
+`
+
+type CreateModelParams struct {
+	ModelID         string
+	DisplayName     string
+	OwnedBy         string
+	Status          string
+	Lab             pgtype.Text
+	MaxOutputTokens pgtype.Int8
+}
+
+// CreateModel 创建 admin 手工模型；source 固定 manual（models.dev 同步永不覆盖 manual 行）。
+// model_id 全局唯一由 DB 唯一约束保证；价格基线/canonical_id/release_date 等同步元数据不在此设置。
+func (q *Queries) CreateModel(ctx context.Context, arg CreateModelParams) (Model, error) {
+	row := q.db.QueryRow(ctx, createModel,
+		arg.ModelID,
+		arg.DisplayName,
+		arg.OwnedBy,
+		arg.Status,
+		arg.Lab,
+		arg.MaxOutputTokens,
+	)
+	var i Model
+	err := row.Scan(
+		&i.ID,
+		&i.ModelID,
+		&i.DisplayName,
+		&i.OwnedBy,
+		&i.Status,
+		&i.CanonicalID,
+		&i.Lab,
+		&i.ContextWindowTokens,
+		&i.MaxOutputTokens,
+		&i.InputPriceUsdPerMillionTokens,
+		&i.OutputPriceUsdPerMillionTokens,
+		&i.ReleaseDate,
+		&i.Source,
+		&i.RemovedUpstreamAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listAvailableModelsForProject = `-- name: ListAvailableModelsForProject :many
 WITH project_scope AS (
     SELECT $1::BIGINT AS project_id
@@ -146,6 +235,70 @@ func (q *Queries) ListCanonicalModels(ctx context.Context) ([]ListCanonicalModel
 	return items, nil
 }
 
+const listModelsPage = `-- name: ListModelsPage :many
+SELECT id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
+FROM models
+WHERE ($1::text IS NULL OR status = $1::text)
+  AND (
+    $2::text IS NULL
+    OR model_id ILIKE '%' || $2::text || '%'
+    OR display_name ILIKE '%' || $2::text || '%'
+    OR owned_by ILIKE '%' || $2::text || '%'
+  )
+ORDER BY model_id
+LIMIT $4 OFFSET $3
+`
+
+type ListModelsPageParams struct {
+	Status     pgtype.Text
+	Q          pgtype.Text
+	PageOffset int32
+	PageLimit  int32
+}
+
+// ListModelsPage 按状态/关键字过滤后分页列出 model，供 admin 管理台展示；status、q 为 NULL 时不过滤。
+func (q *Queries) ListModelsPage(ctx context.Context, arg ListModelsPageParams) ([]Model, error) {
+	rows, err := q.db.Query(ctx, listModelsPage,
+		arg.Status,
+		arg.Q,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Model
+	for rows.Next() {
+		var i Model
+		if err := rows.Scan(
+			&i.ID,
+			&i.ModelID,
+			&i.DisplayName,
+			&i.OwnedBy,
+			&i.Status,
+			&i.CanonicalID,
+			&i.Lab,
+			&i.ContextWindowTokens,
+			&i.MaxOutputTokens,
+			&i.InputPriceUsdPerMillionTokens,
+			&i.OutputPriceUsdPerMillionTokens,
+			&i.ReleaseDate,
+			&i.Source,
+			&i.RemovedUpstreamAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lookupModelByID = `-- name: LookupModelByID :one
 SELECT id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
 FROM models
@@ -260,6 +413,60 @@ func (q *Queries) ModelExistsByID(ctx context.Context, requestedModelID string) 
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const updateModel = `-- name: UpdateModel :one
+UPDATE models
+SET display_name = $1,
+    owned_by = $2,
+    status = $3,
+    lab = $4,
+    max_output_tokens = $5,
+    updated_at = now()
+WHERE id = $6
+RETURNING id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
+`
+
+type UpdateModelParams struct {
+	DisplayName     string
+	OwnedBy         string
+	Status          string
+	Lab             pgtype.Text
+	MaxOutputTokens pgtype.Int8
+	ID              int64
+}
+
+// UpdateModel 更新 model 的展示元数据与启停状态；model_id 作为对外稳定标识不可变，
+// source/canonical_id/价格基线不在此修改。
+func (q *Queries) UpdateModel(ctx context.Context, arg UpdateModelParams) (Model, error) {
+	row := q.db.QueryRow(ctx, updateModel,
+		arg.DisplayName,
+		arg.OwnedBy,
+		arg.Status,
+		arg.Lab,
+		arg.MaxOutputTokens,
+		arg.ID,
+	)
+	var i Model
+	err := row.Scan(
+		&i.ID,
+		&i.ModelID,
+		&i.DisplayName,
+		&i.OwnedBy,
+		&i.Status,
+		&i.CanonicalID,
+		&i.Lab,
+		&i.ContextWindowTokens,
+		&i.MaxOutputTokens,
+		&i.InputPriceUsdPerMillionTokens,
+		&i.OutputPriceUsdPerMillionTokens,
+		&i.ReleaseDate,
+		&i.Source,
+		&i.RemovedUpstreamAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const upsertSeedModelByCanonicalID = `-- name: UpsertSeedModelByCanonicalID :one

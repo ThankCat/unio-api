@@ -45,6 +45,8 @@ func adminErrorStatus(code failure.Code) int {
 		return http.StatusBadRequest
 	case failure.CodeAdminAdapterBindingUnsupported:
 		return http.StatusUnprocessableEntity
+	case failure.CodeAdminPricingWindowOverlap:
+		return http.StatusUnprocessableEntity
 	case failure.CodeAdminNotFound:
 		return http.StatusNotFound
 	case failure.CodeAdminConflict:

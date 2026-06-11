@@ -145,3 +145,201 @@ func (q *Queries) FindActiveChannelCostPrice(ctx context.Context, arg FindActive
 	)
 	return i, err
 }
+
+const getChannelCostPrice = `-- name: GetChannelCostPrice :one
+SELECT id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at FROM channel_cost_prices WHERE id = $1 LIMIT 1
+`
+
+// GetChannelCostPrice 按主键读取单条成本价。
+func (q *Queries) GetChannelCostPrice(ctx context.Context, id int64) (ChannelCostPrice, error) {
+	row := q.db.QueryRow(ctx, getChannelCostPrice, id)
+	var i ChannelCostPrice
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelID,
+		&i.ModelID,
+		&i.Currency,
+		&i.PricingUnit,
+		&i.UncachedInputCost,
+		&i.CacheReadInputCost,
+		&i.CacheWrite5mInputCost,
+		&i.CacheWrite1hInputCost,
+		&i.OutputCost,
+		&i.ReasoningOutputCost,
+		&i.Status,
+		&i.EffectiveFrom,
+		&i.EffectiveTo,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listChannelCostPricesByChannel = `-- name: ListChannelCostPricesByChannel :many
+SELECT
+    ccp.id,
+    ccp.channel_id,
+    ccp.model_id,
+    ccp.currency,
+    ccp.pricing_unit,
+    ccp.uncached_input_cost,
+    ccp.cache_read_input_cost,
+    ccp.cache_write_5m_input_cost,
+    ccp.cache_write_1h_input_cost,
+    ccp.output_cost,
+    ccp.reasoning_output_cost,
+    ccp.status,
+    ccp.effective_from,
+    ccp.effective_to,
+    ccp.created_at,
+    ccp.updated_at,
+    m.model_id AS model_external_id,
+    m.display_name AS model_display_name
+FROM channel_cost_prices ccp
+JOIN models m ON m.id = ccp.model_id
+WHERE ccp.channel_id = $1
+ORDER BY m.model_id, ccp.effective_from DESC, ccp.id DESC
+`
+
+type ListChannelCostPricesByChannelRow struct {
+	ID                    int64
+	ChannelID             int64
+	ModelID               int64
+	Currency              string
+	PricingUnit           string
+	UncachedInputCost     pgtype.Numeric
+	CacheReadInputCost    pgtype.Numeric
+	CacheWrite5mInputCost pgtype.Numeric
+	CacheWrite1hInputCost pgtype.Numeric
+	OutputCost            pgtype.Numeric
+	ReasoningOutputCost   pgtype.Numeric
+	Status                string
+	EffectiveFrom         pgtype.Timestamptz
+	EffectiveTo           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	ModelExternalID       string
+	ModelDisplayName      string
+}
+
+// ListChannelCostPricesByChannel 列出某 channel 下全部成本价（含历史与停用），连带模型对外 ID/展示名，供 admin 管理台展示。
+func (q *Queries) ListChannelCostPricesByChannel(ctx context.Context, channelID int64) ([]ListChannelCostPricesByChannelRow, error) {
+	rows, err := q.db.Query(ctx, listChannelCostPricesByChannel, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChannelCostPricesByChannelRow
+	for rows.Next() {
+		var i ListChannelCostPricesByChannelRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelID,
+			&i.ModelID,
+			&i.Currency,
+			&i.PricingUnit,
+			&i.UncachedInputCost,
+			&i.CacheReadInputCost,
+			&i.CacheWrite5mInputCost,
+			&i.CacheWrite1hInputCost,
+			&i.OutputCost,
+			&i.ReasoningOutputCost,
+			&i.Status,
+			&i.EffectiveFrom,
+			&i.EffectiveTo,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ModelExternalID,
+			&i.ModelDisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEnabledChannelCostPriceWindows = `-- name: ListEnabledChannelCostPriceWindows :many
+SELECT id, effective_from, effective_to
+FROM channel_cost_prices
+WHERE channel_id = $1
+    AND model_id = $2
+    AND status = 'enabled'
+    AND id <> $3
+`
+
+type ListEnabledChannelCostPriceWindowsParams struct {
+	ChannelID int64
+	ModelID   int64
+	ExcludeID int64
+}
+
+type ListEnabledChannelCostPriceWindowsRow struct {
+	ID            int64
+	EffectiveFrom pgtype.Timestamptz
+	EffectiveTo   pgtype.Timestamptz
+}
+
+// ListEnabledChannelCostPriceWindows 取某 channel/model 全部启用中的价格生效窗口，供「窗口不重叠」校验；exclude_id 用于更新时排除自身（创建时传 0）。
+func (q *Queries) ListEnabledChannelCostPriceWindows(ctx context.Context, arg ListEnabledChannelCostPriceWindowsParams) ([]ListEnabledChannelCostPriceWindowsRow, error) {
+	rows, err := q.db.Query(ctx, listEnabledChannelCostPriceWindows, arg.ChannelID, arg.ModelID, arg.ExcludeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEnabledChannelCostPriceWindowsRow
+	for rows.Next() {
+		var i ListEnabledChannelCostPriceWindowsRow
+		if err := rows.Scan(&i.ID, &i.EffectiveFrom, &i.EffectiveTo); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateChannelCostPriceWindow = `-- name: UpdateChannelCostPriceWindow :one
+UPDATE channel_cost_prices
+SET effective_to = $1,
+    status = $2,
+    updated_at = now()
+WHERE id = $3
+RETURNING id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at
+`
+
+type UpdateChannelCostPriceWindowParams struct {
+	EffectiveTo pgtype.Timestamptz
+	Status      string
+	ID          int64
+}
+
+// UpdateChannelCostPriceWindow 调整生效结束时间与启停状态；金额不可改（改价请新建一条），账务可复算。
+func (q *Queries) UpdateChannelCostPriceWindow(ctx context.Context, arg UpdateChannelCostPriceWindowParams) (ChannelCostPrice, error) {
+	row := q.db.QueryRow(ctx, updateChannelCostPriceWindow, arg.EffectiveTo, arg.Status, arg.ID)
+	var i ChannelCostPrice
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelID,
+		&i.ModelID,
+		&i.Currency,
+		&i.PricingUnit,
+		&i.UncachedInputCost,
+		&i.CacheReadInputCost,
+		&i.CacheWrite5mInputCost,
+		&i.CacheWrite1hInputCost,
+		&i.OutputCost,
+		&i.ReasoningOutputCost,
+		&i.Status,
+		&i.EffectiveFrom,
+		&i.EffectiveTo,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}

@@ -13,6 +13,68 @@ SELECT *
 FROM models
 WHERE id = sqlc.arg(id);
 
+-- name: ListModelsPage :many
+-- ListModelsPage 按状态/关键字过滤后分页列出 model，供 admin 管理台展示；status、q 为 NULL 时不过滤。
+SELECT *
+FROM models
+WHERE (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
+  AND (
+    sqlc.narg('q')::text IS NULL
+    OR model_id ILIKE '%' || sqlc.narg('q')::text || '%'
+    OR display_name ILIKE '%' || sqlc.narg('q')::text || '%'
+    OR owned_by ILIKE '%' || sqlc.narg('q')::text || '%'
+  )
+ORDER BY model_id
+LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
+
+-- name: CountModels :one
+-- CountModels 返回与 ListModelsPage 相同过滤条件下的总条数。
+SELECT COUNT(*) AS total
+FROM models
+WHERE (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
+  AND (
+    sqlc.narg('q')::text IS NULL
+    OR model_id ILIKE '%' || sqlc.narg('q')::text || '%'
+    OR display_name ILIKE '%' || sqlc.narg('q')::text || '%'
+    OR owned_by ILIKE '%' || sqlc.narg('q')::text || '%'
+  );
+
+-- name: CreateModel :one
+-- CreateModel 创建 admin 手工模型；source 固定 manual（models.dev 同步永不覆盖 manual 行）。
+-- model_id 全局唯一由 DB 唯一约束保证；价格基线/canonical_id/release_date 等同步元数据不在此设置。
+INSERT INTO models (
+    model_id,
+    display_name,
+    owned_by,
+    status,
+    lab,
+    max_output_tokens,
+    source
+)
+VALUES (
+    sqlc.arg(model_id),
+    sqlc.arg(display_name),
+    sqlc.arg(owned_by),
+    sqlc.arg(status),
+    sqlc.narg(lab),
+    sqlc.narg(max_output_tokens),
+    'manual'
+)
+RETURNING *;
+
+-- name: UpdateModel :one
+-- UpdateModel 更新 model 的展示元数据与启停状态；model_id 作为对外稳定标识不可变，
+-- source/canonical_id/价格基线不在此修改。
+UPDATE models
+SET display_name = sqlc.arg(display_name),
+    owned_by = sqlc.arg(owned_by),
+    status = sqlc.arg(status),
+    lab = sqlc.narg(lab),
+    max_output_tokens = sqlc.narg(max_output_tokens),
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
 -- name: LookupModelByModelID :one
 -- LookupModelByModelID 按对外模型 ID 读取模型完整元数据（含能力架构 Layer 1 列）。
 SELECT *

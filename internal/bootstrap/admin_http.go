@@ -15,13 +15,21 @@ func NewAdminHTTPHandler(
 	authenticator middleware.AdminAuthenticator,
 	providerService adminapi.ProviderService,
 	channelService adminapi.ChannelService,
+	modelService adminapi.ModelService,
+	channelModelService adminapi.ChannelModelService,
+	costPriceService adminapi.CostPriceService,
+	priceService adminapi.PriceService,
 	metricsRecorder *metrics.Metrics,
 ) http.Handler {
 	deps := adminapi.RouterDeps{
-		Logger:             logger,
-		AdminAuthenticator: authenticator,
-		ProviderService:    providerService,
-		ChannelService:     channelService,
+		Logger:              logger,
+		AdminAuthenticator:  authenticator,
+		ProviderService:     providerService,
+		ChannelService:      channelService,
+		ModelService:        modelService,
+		ChannelModelService: channelModelService,
+		CostPriceService:    costPriceService,
+		PriceService:        priceService,
 	}
 
 	if metricsRecorder != nil {

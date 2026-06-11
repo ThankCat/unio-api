@@ -20,8 +20,12 @@ type RouterDeps struct {
 	Logger             *slog.Logger
 	AdminAuthenticator middleware.AdminAuthenticator
 
-	ProviderService ProviderService
-	ChannelService  ChannelService
+	ProviderService     ProviderService
+	ChannelService      ChannelService
+	ModelService        ModelService
+	ChannelModelService ChannelModelService
+	CostPriceService    CostPriceService
+	PriceService        PriceService
 
 	// HTTPMetrics 记录 HTTP 层请求指标；nil 表示不采集。
 	HTTPMetrics httpmw.MetricsRecorder
@@ -78,6 +82,39 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Patch("/channels/{id}", ch.update)
 			// credential 只写不回：用子资源 PUT 轮换，成功返回 204。
 			r.Put("/channels/{id}/credential", ch.rotateCredential)
+		}
+
+		if deps.ChannelModelService != nil {
+			cmh := &channelModelsHandler{service: deps.ChannelModelService}
+			// channel↔model 绑定是 channel 的子资源，用 {modelId} 定位 Unio 模型。
+			r.Get("/channels/{id}/models", cmh.list)
+			r.Post("/channels/{id}/models", cmh.create)
+			r.Patch("/channels/{id}/models/{modelId}", cmh.update)
+			r.Delete("/channels/{id}/models/{modelId}", cmh.delete)
+		}
+
+		if deps.CostPriceService != nil {
+			cph := &costPricesHandler{service: deps.CostPriceService}
+			// 成本价挂在 channel 下；价格不可删，PATCH 调窗口/启停用价格 id 定位。
+			r.Get("/channels/{id}/cost-prices", cph.list)
+			r.Post("/channels/{id}/cost-prices", cph.create)
+			r.Patch("/cost-prices/{id}", cph.update)
+		}
+
+		if deps.PriceService != nil {
+			prh := &pricesHandler{service: deps.PriceService}
+			// 客户售价挂在 model 下；价格不可删，PATCH 调窗口/启停用价格 id 定位。
+			r.Get("/models/{id}/prices", prh.list)
+			r.Post("/models/{id}/prices", prh.create)
+			r.Patch("/prices/{id}", prh.update)
+		}
+
+		if deps.ModelService != nil {
+			mh := &modelsHandler{service: deps.ModelService}
+			r.Get("/models", mh.list)
+			r.Post("/models", mh.create)
+			r.Get("/models/{id}", mh.get)
+			r.Patch("/models/{id}", mh.update)
 		}
 	})
 

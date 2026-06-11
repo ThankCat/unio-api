@@ -137,3 +137,115 @@ func (q *Queries) FindActivePriceForModel(ctx context.Context, arg FindActivePri
 	)
 	return i, err
 }
+
+const getPrice = `-- name: GetPrice :one
+SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at FROM prices WHERE id = $1 LIMIT 1
+`
+
+// GetPrice 按主键读取单条售价。
+func (q *Queries) GetPrice(ctx context.Context, id int64) (Price, error) {
+	row := q.db.QueryRow(ctx, getPrice, id)
+	var i Price
+	err := row.Scan(
+		&i.ID,
+		&i.ModelID,
+		&i.Currency,
+		&i.PricingUnit,
+		&i.UncachedInputPrice,
+		&i.CacheReadInputPrice,
+		&i.CacheWrite5mInputPrice,
+		&i.CacheWrite1hInputPrice,
+		&i.OutputPrice,
+		&i.ReasoningOutputPrice,
+		&i.Status,
+		&i.EffectiveFrom,
+		&i.EffectiveTo,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listPricesByModel = `-- name: ListPricesByModel :many
+SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at
+FROM prices
+WHERE model_id = $1
+ORDER BY effective_from DESC, id DESC
+`
+
+// ListPricesByModel 列出某模型全部售价（含历史与停用），供 admin 管理台展示。
+func (q *Queries) ListPricesByModel(ctx context.Context, modelID int64) ([]Price, error) {
+	rows, err := q.db.Query(ctx, listPricesByModel, modelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Price
+	for rows.Next() {
+		var i Price
+		if err := rows.Scan(
+			&i.ID,
+			&i.ModelID,
+			&i.Currency,
+			&i.PricingUnit,
+			&i.UncachedInputPrice,
+			&i.CacheReadInputPrice,
+			&i.CacheWrite5mInputPrice,
+			&i.CacheWrite1hInputPrice,
+			&i.OutputPrice,
+			&i.ReasoningOutputPrice,
+			&i.Status,
+			&i.EffectiveFrom,
+			&i.EffectiveTo,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updatePriceWindow = `-- name: UpdatePriceWindow :one
+UPDATE prices
+SET effective_to = $1,
+    status = $2,
+    updated_at = now()
+WHERE id = $3
+RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at
+`
+
+type UpdatePriceWindowParams struct {
+	EffectiveTo pgtype.Timestamptz
+	Status      string
+	ID          int64
+}
+
+// UpdatePriceWindow 调整生效结束时间与启停状态；金额不可改（改价请新建一条）。
+// 启用窗口重叠由 DB EXCLUDE 约束（ex_prices_enabled_effective_window）保证，违反时报 23P01。
+func (q *Queries) UpdatePriceWindow(ctx context.Context, arg UpdatePriceWindowParams) (Price, error) {
+	row := q.db.QueryRow(ctx, updatePriceWindow, arg.EffectiveTo, arg.Status, arg.ID)
+	var i Price
+	err := row.Scan(
+		&i.ID,
+		&i.ModelID,
+		&i.Currency,
+		&i.PricingUnit,
+		&i.UncachedInputPrice,
+		&i.CacheReadInputPrice,
+		&i.CacheWrite5mInputPrice,
+		&i.CacheWrite1hInputPrice,
+		&i.OutputPrice,
+		&i.ReasoningOutputPrice,
+		&i.Status,
+		&i.EffectiveFrom,
+		&i.EffectiveTo,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}

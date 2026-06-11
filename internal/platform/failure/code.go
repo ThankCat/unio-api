@@ -397,6 +397,9 @@ const (
 	// CodeAdminAdapterBindingUnsupported 表示 channel 的 (protocol, adapter_key) 复合键未在当前进程 adapter registry 注册。
 	CodeAdminAdapterBindingUnsupported Code = "admin_adapter_binding_unsupported"
 
+	// CodeAdminPricingWindowOverlap 表示新建/调整的价格生效窗口与同一 channel/model 现有启用窗口重叠。
+	CodeAdminPricingWindowOverlap Code = "admin_pricing_window_overlap"
+
 	// CodeAdminStoreFailed 表示 admin 管理存储访问失败。
 	CodeAdminStoreFailed Code = "admin_store_failed"
 )
