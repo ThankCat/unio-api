@@ -23,6 +23,8 @@ var (
 	ErrAPIKeyDisabled = errors.New("api key disabled")
 	// ErrAPIKeyExpired 表示 API Key 已经过期。
 	ErrAPIKeyExpired = errors.New("api key expired")
+	// ErrAPIKeySpendLimitReached 表示 API Key 已达生命周期累计费用上限（M7）。
+	ErrAPIKeySpendLimitReached = errors.New("api key spend limit reached")
 )
 
 // APIKeyPrincipal 表示 API Key 认证成功后的请求身份。
@@ -102,6 +104,17 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 			failure.CodeAuthAPIKeyExpired,
 			ErrAPIKeyExpired,
 			failure.WithMessage(ErrAPIKeyExpired.Error()),
+		)
+	}
+
+	// 费用上限闸门（M7）：spend_limit_reached 由 SQL 层按 spent_total >= spend_limit 判定，
+	// 这里只读结论，认证路径不做 NUMERIC 运算。计数器在 settlement capture 时累加，
+	// 故近上限时的并发请求可能有轻微超额，符合「生命周期软上限」语义。
+	if key.SpendLimitReached.Valid && key.SpendLimitReached.Bool {
+		return nil, failure.Wrap(
+			failure.CodeAuthAPIKeySpendLimitReached,
+			ErrAPIKeySpendLimitReached,
+			failure.WithMessage(ErrAPIKeySpendLimitReached.Error()),
 		)
 	}
 

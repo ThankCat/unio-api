@@ -109,6 +109,23 @@ func TestAuthenticateAPIKeyExpired(t *testing.T) {
 	}
 }
 
+func TestAuthenticateAPIKeySpendLimitReached(t *testing.T) {
+	key := validAPIKey()
+	key.SpendLimitReached = pgtype.Bool{Bool: true, Valid: true}
+
+	store := &fakeAPIKeyStore{key: key}
+	authenticator := NewAPIKeyAuthenticator(store)
+
+	_, err := authenticator.AuthenticateAPIKey(context.Background(), "test")
+	if !errors.Is(err, ErrAPIKeySpendLimitReached) {
+		t.Fatalf("expected ErrAPIKeySpendLimitReached, got %v", err)
+	}
+	// 超额是终态拒绝：不应再更新 last_used_at。
+	if store.updated {
+		t.Fatal("expected last_used_at not to be updated when spend limit reached")
+	}
+}
+
 func TestAuthenticateAPIKeyValid(t *testing.T) {
 	key := validAPIKey()
 	authenticator := NewAPIKeyAuthenticator(&fakeAPIKeyStore{

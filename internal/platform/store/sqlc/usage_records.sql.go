@@ -7,7 +7,42 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const countUsageRecords = `-- name: CountUsageRecords :one
+SELECT COUNT(*) AS total
+FROM usage_records u
+JOIN request_records r ON r.id = u.request_record_id
+WHERE ($1::bigint IS NULL OR r.user_id = $1::bigint)
+  AND ($2::bigint IS NULL OR r.project_id = $2::bigint)
+  AND ($3::text IS NULL OR r.requested_model_id ILIKE '%' || $3::text || '%')
+  AND ($4::timestamptz IS NULL OR u.created_at >= $4::timestamptz)
+  AND ($5::timestamptz IS NULL OR u.created_at < $5::timestamptz)
+`
+
+type CountUsageRecordsParams struct {
+	UserID    pgtype.Int8
+	ProjectID pgtype.Int8
+	Model     pgtype.Text
+	FromTime  pgtype.Timestamptz
+	ToTime    pgtype.Timestamptz
+}
+
+// CountUsageRecords 返回与 ListUsageRecordsPage 相同过滤条件下的总条数。
+func (q *Queries) CountUsageRecords(ctx context.Context, arg CountUsageRecordsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countUsageRecords,
+		arg.UserID,
+		arg.ProjectID,
+		arg.Model,
+		arg.FromTime,
+		arg.ToTime,
+	)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
 
 const createUsageRecord = `-- name: CreateUsageRecord :one
 INSERT INTO usage_records (
@@ -137,4 +172,115 @@ func (q *Queries) GetUsageRecordByRequest(ctx context.Context, requestRecordID i
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const listUsageRecordsPage = `-- name: ListUsageRecordsPage :many
+SELECT
+    u.id,
+    u.request_record_id,
+    r.request_id,
+    r.user_id,
+    r.project_id,
+    r.api_key_id,
+    r.requested_model_id,
+    r.response_model_id,
+    r.status,
+    u.uncached_input_tokens,
+    u.cache_read_input_tokens,
+    u.cache_write_5m_input_tokens,
+    u.cache_write_1h_input_tokens,
+    u.output_tokens_total,
+    u.reasoning_output_tokens,
+    u.usage_source,
+    u.usage_mapping_version,
+    u.created_at
+FROM usage_records u
+JOIN request_records r ON r.id = u.request_record_id
+WHERE ($1::bigint IS NULL OR r.user_id = $1::bigint)
+  AND ($2::bigint IS NULL OR r.project_id = $2::bigint)
+  AND ($3::text IS NULL OR r.requested_model_id ILIKE '%' || $3::text || '%')
+  AND ($4::timestamptz IS NULL OR u.created_at >= $4::timestamptz)
+  AND ($5::timestamptz IS NULL OR u.created_at < $5::timestamptz)
+ORDER BY u.created_at DESC, u.id DESC
+LIMIT $7 OFFSET $6
+`
+
+type ListUsageRecordsPageParams struct {
+	UserID     pgtype.Int8
+	ProjectID  pgtype.Int8
+	Model      pgtype.Text
+	FromTime   pgtype.Timestamptz
+	ToTime     pgtype.Timestamptz
+	PageOffset int32
+	PageLimit  int32
+}
+
+type ListUsageRecordsPageRow struct {
+	ID                      int64
+	RequestRecordID         int64
+	RequestID               string
+	UserID                  int64
+	ProjectID               int64
+	ApiKeyID                int64
+	RequestedModelID        string
+	ResponseModelID         pgtype.Text
+	Status                  string
+	UncachedInputTokens     int64
+	CacheReadInputTokens    int64
+	CacheWrite5mInputTokens int64
+	CacheWrite1hInputTokens int64
+	OutputTokensTotal       int64
+	ReasoningOutputTokens   int64
+	UsageSource             string
+	UsageMappingVersion     string
+	CreatedAt               pgtype.Timestamptz
+}
+
+// ListUsageRecordsPage 供 admin 只读查询台（M6）按用户/项目/模型/时间过滤分页倒序列出用量。
+// JOIN request_records 取请求归属维度，便于后台按 user/project/model 检索。
+func (q *Queries) ListUsageRecordsPage(ctx context.Context, arg ListUsageRecordsPageParams) ([]ListUsageRecordsPageRow, error) {
+	rows, err := q.db.Query(ctx, listUsageRecordsPage,
+		arg.UserID,
+		arg.ProjectID,
+		arg.Model,
+		arg.FromTime,
+		arg.ToTime,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUsageRecordsPageRow
+	for rows.Next() {
+		var i ListUsageRecordsPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RequestRecordID,
+			&i.RequestID,
+			&i.UserID,
+			&i.ProjectID,
+			&i.ApiKeyID,
+			&i.RequestedModelID,
+			&i.ResponseModelID,
+			&i.Status,
+			&i.UncachedInputTokens,
+			&i.CacheReadInputTokens,
+			&i.CacheWrite5mInputTokens,
+			&i.CacheWrite1hInputTokens,
+			&i.OutputTokensTotal,
+			&i.ReasoningOutputTokens,
+			&i.UsageSource,
+			&i.UsageMappingVersion,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

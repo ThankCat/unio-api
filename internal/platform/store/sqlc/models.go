@@ -20,6 +20,8 @@ type ApiKey struct {
 	RevokedAt  pgtype.Timestamptz
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
+	SpendLimit pgtype.Numeric
+	SpentTotal pgtype.Numeric
 }
 
 type Channel struct {

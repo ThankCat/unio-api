@@ -111,3 +111,37 @@ WHERE
     request_record_id = sqlc.arg (request_record_id)
 ORDER BY
     id;
+
+-- name: ListLedgerEntriesPage :many
+-- ListLedgerEntriesPage 供 admin 只读查询台（M6）按用户/类型/币种/时间过滤分页倒序列出账本流水。
+-- 所有过滤项为 NULL 时不过滤。
+SELECT
+    id,
+    user_id,
+    request_record_id,
+    entry_type,
+    amount,
+    currency,
+    balance_before,
+    balance_after,
+    idempotency_key,
+    reason,
+    created_at
+FROM ledger_entries
+WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::bigint)
+  AND (sqlc.narg('entry_type')::text IS NULL OR entry_type = sqlc.narg('entry_type')::text)
+  AND (sqlc.narg('currency')::text IS NULL OR currency = sqlc.narg('currency')::text)
+  AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
+  AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
+ORDER BY created_at DESC, id DESC
+LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
+
+-- name: CountLedgerEntries :one
+-- CountLedgerEntries 返回与 ListLedgerEntriesPage 相同过滤条件下的总条数。
+SELECT COUNT(*) AS total
+FROM ledger_entries
+WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::bigint)
+  AND (sqlc.narg('entry_type')::text IS NULL OR entry_type = sqlc.narg('entry_type')::text)
+  AND (sqlc.narg('currency')::text IS NULL OR currency = sqlc.narg('currency')::text)
+  AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
+  AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz);

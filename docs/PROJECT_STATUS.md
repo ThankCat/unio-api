@@ -1,6 +1,6 @@
 # Project Status
 
-更新时间：2026-06-09
+更新时间：2026-06-12
 
 本文档只记录全局当前状态、阶段索引、上线阻断和下一步。
 
@@ -16,7 +16,7 @@ docs/production/TODO_REGISTER.md
 ## 当前焦点
 
 ```text
-当前主线：阶段 13 后台管理（admin-server，垂直切片推进）。**Slice 1 已交付（2026-06-09）**：M1 静态 token 认证（`ADMIN_API_TOKEN` 常量时间比对 + `AdminPrincipal` context 缝，JWT/RBAC/审计 deferred）+ M3 provider/channel CRUD + M2 channel 凭据只写轮换（AES-GCM 加密入库、不回读）。新增 `internal/core/adminauth`、`internal/app/adminapi`、`internal/service/admin/{provider,channel}`、`cmd/admin-server`、`internal/bootstrap/admin_{server,http}.go`。**关闭 GAP-6-003**（channel 写入用 adapter registry 校验 (protocol, adapter_key) 复合键，未注册 422）。全量 `go build`/`go vet`/`go test`（真实 Postgres，含 provider/channel DB CRUD 集成测试）43 包全绿。模块分解见 phase-13 ADMIN_MODULES_DRAFT.md，已交付契约见 phase-13 CONTRACT.md。前端 `unio-admin` 独立仓库（Vite+React+TS+Tailwind+shadcn，Bun）。
+当前主线：阶段 13 后台管理（admin-server，垂直切片推进）。**产品定位已由 DEC-017 锚定：分档网关（卖档 Path B）**——对外售卖单位是模型/档（每档独立 model_id），provider/channel 对用户隐藏，售价覆盖档内最贵渠道，路由/重试锁档内绝不降级；全透明聚合市场（OpenRouter 式）顺延为「有量之后的第二产品线」。后台 = 运营内部工具。**Slice 2 已交付（2026-06-11，commit a2ce401）**：M3A channel↔model 绑定 + Model CRUD/provisioning + M4 定价（客户售价 `prices` + provider 成本价 `channel_cost_prices`，明确金额无倍率，售价生效窗用 DB `EXCLUDE`/`tstzrange` 约束保证不重叠）；新增 `internal/service/admin/{channelmodel,model,costprice,price}` + 对应 adminapi handler/sql/sqlc + 服务层与 handler 单测。**Slice 1（2026-06-09）**：M1 静态 token 认证（`ADMIN_API_TOKEN` 常量时间比对 + `AdminPrincipal` context 缝，JWT/RBAC/审计 deferred）+ M3 provider/channel CRUD + M2 channel 凭据只写轮换（AES-GCM 加密入库、不回读），关闭 GAP-6-003。前端 `unio-admin`（独立仓库，Vite+React+TS+Tailwind+shadcn，Bun）已交付登录、provider/channel/model、定价、渠道模型绑定页面（commit a4a589a）。**下一切片：M6 只读查询台。** 模块分解见 phase-13 ADMIN_MODULES_DRAFT.md，已交付契约见 phase-13 CONTRACT.md。
 上一阶段：阶段 12 Capability Architecture（DEC-015）能力架构**代码层已收口**（用户授权方案 A，2026-06-09）：闸门默认 observe，capability 推断/档位/observe-enforce 闸门/观测审计/enforce 开关+三协议渲染/`/v1/models` cap-tags 全交付，已关闭 GAP-12-001/003/004/005/008/012。三类需外部前置的工作受控 deferred 阶段 13：`/console/v1/models`（GAP-12-006）、adapter 画像物化进真实 model 行（GAP-12-007，依赖 provisioning）、observe→enforce 实际切换 + 观察期 + 覆盖面复核（GAP-12-009/12-002）。
 历史主线：阶段 11 OpenAI Responses API ingress（Codex 兼容，生产级）已于 2026-06-07 完成 acceptance sign-off，状态改为 done。
 当前进度：阶段 11 TASK-11.01~11.16 全部 done——`/v1/responses`（非流式+流式 SSE）、`/responses/compact`（无状态降级、可计费）、`/responses/input_tokens`（本地估算、不调上游/不计费）、有状态 endpoint 501、`background:true` 400 全部路由已挂；方案 B 共享 `lifecycle.AttemptRunner`，chat 与 responses 复用同一份资金关键候选 fallback / settlement 循环。2026-06-06 真实 Codex CLI v0.130 端到端手测通过（14 个 Responses 请求全 succeeded，资金三方对账闭合 authorized=captured+released、reserved_balance=0）；mock + gated 真实 DeepSeek 黑盒（11 用例）已跑通。2026-06-07 验收命令组全绿：`sqlc generate`（无 drift）、`go build`、`go vet`、`go test ./internal/... ./cmd/...`（DB 门控测试无 DATABASE_URL 正确 Skip）、`git diff --check`、`RESPONSES_CHAT_BRIDGE.md` Verify 残留检查无输出。
@@ -41,7 +41,7 @@ GAP 收口：本阶段必须关闭的 P0/P1 已收口（GAP-11-005 共享 Attemp
 | 阶段 10 | [双协议 Gateway 全链路改造](chapters/phase-10-dual-protocol-gateway/STATUS.md) | done | 双协议 adapter + ingress、共享 lifecycle、`/v1/chat/completions` 与 `/v1/messages` 端到端链路、facts schema、账务回归、错误安全输出、SDK 黑盒验收、durable closeout 和 10.05 架构 B 终局均已收口；2026-06-03 acceptance sign-off 通过。 |
 | 阶段 11 | [OpenAI Responses API ingress](chapters/phase-11-openai-responses-api/STATUS.md) | done | 新增 OpenAI Responses API（Codex 兼容，生产级），responses-to-chat 桥接复用 OpenAI adapter/lifecycle/账务。TASK-11.01~11.16 全部 done：`/v1/responses`（非流式+流式 SSE）、`/responses/compact`（无状态降级）、`/responses/input_tokens`（本地估算）、有状态 501、background 400，方案 B 共享 `AttemptRunner`。2026-06-06 真实 Codex CLI v0.130 端到端手测 + 资金三方对账闭合，2026-06-07 acceptance sign-off 通过。剩余 P1 GAP（11-001 无状态 / 11-002 工具保真度 / 11-007 compact 永久降级 / 11-009 有状态 501 永久边界）均为已接受范围边界，非上线阻断。 |
 | 阶段 12 | [能力架构 Capability Architecture](chapters/phase-12-capability-architecture/STATUS.md) | code-closed (deferrals→13) | 把"协议字段 vs 模型能力"从静态文档升级为运行时事实。**能力架构代码层全收口（用户授权方案 A，默认 observe）**：TASK-12.01 schema、TASK-12.04 models.dev 同步、TASK-12.02 推断 + 档位抽取、TASK-12.03 observe/enforce 闸门（`gate.go` 纯判定 + observe filter + `enforceCapability` 按表面开关 + 三协议推断/档位接线 + checker metric/审计 fail-open）、TASK-12.07 观测审计（三指标 + `request_records.capability_check_result` 列 + DB 往返测试）、TASK-12.08 enforce 开关 `CAPABILITY_ENFORCE_*` + 三协议 capability error 渲染（不暴露 channel 拓扑）、TASK-12.05 `/v1/models` cap-tags 全部交付。已关闭 GAP-12-001/003/004/005/008/012。**受控 deferred 阶段 13**：`/console/v1/models`（GAP-12-006）、adapter 画像物化进真实 model 行（GAP-12-007，依赖 provisioning）、observe→enforce 实际切换 + 观察期 + 覆盖面复核（GAP-12-009/12-002）。决策见 DEC-015。 |
-| 阶段 13 | [后台管理](chapters/phase-13-admin/STATUS.md) | in_progress | admin-server 垂直切片推进。Slice 1 已交付：静态 token 认证（M1）+ provider/channel CRUD（M3）+ channel 凭据只写轮换（M2），关闭 GAP-6-003，真实 Postgres 全量测试全绿。后续切片：channel↔model 绑定/model provisioning → 定价 → 能力管理 → 只读查询台 → 工作台看板。 |
+| 阶段 13 | [后台管理](chapters/phase-13-admin/STATUS.md) | in_progress | admin-server 垂直切片推进，产品定位见 DEC-017（卖档网关）。Slice 1：静态 token 认证（M1）+ provider/channel CRUD（M3）+ 凭据只写轮换（M2），关闭 GAP-6-003。Slice 2：channel↔model 绑定 + Model CRUD/provisioning + 定价（M4 售价/成本价，DB EXCLUDE 约束保证售价生效窗不重叠）。真实 Postgres 全量测试全绿。下一切片：只读查询台（M6）→ 客户/项目/预算/手工调额（M7）→ 能力管理（M5）→ 工作台看板（M9）。 |
 
 ## 当前上线阻断
 
@@ -94,7 +94,7 @@ git diff --check                    # 通过
 
 ## 下一步
 
-阶段 13 后台管理进行中，Slice 1（认证 + provider/channel CRUD + 凭据轮换）已交付。下一切片：channel↔model 绑定 + model provisioning（关 GAP-12-007/GAP-11-006 的前提），再做定价（M4）、能力管理（M5）、只读查询台（M6）、工作台看板（M9）。每片按"后端 → `unio-admin` 前端 → 联调"推进，参见：
+阶段 13 后台管理进行中。Slice 1（认证 + provider/channel CRUD + 凭据轮换）与 Slice 2（channel↔model 绑定 + model provisioning + 定价 M4）已交付，channel↔model 绑定与 model provisioning 已就绪（关 GAP-12-007/GAP-11-006 的前提已满足）。**下一切片：M6 只读查询台**（request/usage/billing 只读，风险低），再做客户/项目/预算/手工调额（M7，含 GAP-6-005 路由闸门）、能力管理（M5）、工作台看板（M9）。每片按"后端 → `unio-admin` 前端 → 联调"推进，参见：
 
 ```text
 docs/chapters/phase-13-admin/ADMIN_MODULES_DRAFT.md   # 模块分解 + 资源地图 + 推进顺序

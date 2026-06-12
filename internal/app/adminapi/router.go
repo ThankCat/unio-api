@@ -27,6 +27,17 @@ type RouterDeps struct {
 	CostPriceService    CostPriceService
 	PriceService        PriceService
 
+	// M6 只读查询台
+	RequestQueryService RequestQueryService
+	UsageQueryService   UsageQueryService
+	LedgerQueryService  LedgerQueryService
+
+	// M7 客户管理：用户/项目（工作空间）/API Key（费用上限）/手工调额
+	UserService       UserService
+	ProjectService    ProjectService
+	APIKeyService     APIKeyService
+	AdjustmentService AdjustmentService
+
 	// HTTPMetrics 记录 HTTP 层请求指标；nil 表示不采集。
 	HTTPMetrics httpmw.MetricsRecorder
 
@@ -115,6 +126,55 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Post("/models", mh.create)
 			r.Get("/models/{id}", mh.get)
 			r.Patch("/models/{id}", mh.update)
+		}
+
+		// M6 只读查询台：请求记录（含详情聚合）、用量、账本流水、计费异常。全部只读。
+		if deps.RequestQueryService != nil {
+			rqh := &requestsHandler{service: deps.RequestQueryService}
+			r.Get("/requests", rqh.list)
+			// 详情按对外 request_id 定位；?include_internal=true 才回显内部错误详情。
+			r.Get("/requests/{requestId}", rqh.get)
+		}
+
+		if deps.UsageQueryService != nil {
+			uh := &usageHandler{service: deps.UsageQueryService}
+			r.Get("/usage", uh.list)
+		}
+
+		if deps.LedgerQueryService != nil {
+			lh := &ledgerHandler{service: deps.LedgerQueryService}
+			r.Get("/ledger/entries", lh.listEntries)
+			r.Get("/ledger/billing-exceptions", lh.listBillingExceptions)
+		}
+
+		// M7 客户管理：用户、项目（工作空间）、API Key（费用上限）、手工调额。
+		if deps.UserService != nil {
+			uh := &usersHandler{service: deps.UserService}
+			r.Get("/users", uh.list)
+			r.Get("/users/{id}", uh.get)
+
+			// 手工调额是用户的子资源：充值/扣款一律走账本留痕。
+			if deps.AdjustmentService != nil {
+				ah := &adjustmentsHandler{service: deps.AdjustmentService}
+				r.Post("/users/{id}/balance-adjustments", ah.create)
+			}
+		}
+
+		if deps.ProjectService != nil {
+			pjh := &projectsHandler{service: deps.ProjectService}
+			r.Get("/projects", pjh.list)
+			r.Get("/projects/{id}", pjh.get)
+		}
+
+		if deps.APIKeyService != nil {
+			akh := &apiKeysHandler{service: deps.APIKeyService}
+			// 列表/创建挂在项目（工作空间）下；单把操作用扁平 /api-keys/{id} 定位。
+			r.Get("/projects/{id}/api-keys", akh.listByProject)
+			r.Post("/projects/{id}/api-keys", akh.create)
+			r.Get("/api-keys/{id}", akh.get)
+			// PATCH 调启停/费用上限；DELETE 永久吊销（不可逆）。
+			r.Patch("/api-keys/{id}", akh.update)
+			r.Delete("/api-keys/{id}", akh.revoke)
 		}
 	})
 

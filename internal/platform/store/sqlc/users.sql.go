@@ -7,7 +7,25 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const countUsers = `-- name: CountUsers :one
+SELECT COUNT(*)
+FROM users
+WHERE ($1::text IS NULL
+       OR email ILIKE '%' || $1::text || '%'
+       OR display_name ILIKE '%' || $1::text || '%')
+`
+
+// CountUsers 供 admin 用户列表分页统计总数；q 为空不过滤。
+func (q *Queries) CountUsers(ctx context.Context, q_ pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, countUsers, q_)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
 
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash, display_name)
@@ -56,4 +74,84 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getUserByID = `-- name: GetUserByID :one
+SELECT id, email, display_name, created_at, updated_at
+FROM users
+WHERE id = $1
+LIMIT 1
+`
+
+type GetUserByIDRow struct {
+	ID          int64
+	Email       string
+	DisplayName string
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
+// GetUserByID 供 admin 按 id 读取用户（不返回 password_hash）。
+func (q *Queries) GetUserByID(ctx context.Context, id int64) (GetUserByIDRow, error) {
+	row := q.db.QueryRow(ctx, getUserByID, id)
+	var i GetUserByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.DisplayName,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listUsersPage = `-- name: ListUsersPage :many
+SELECT id, email, display_name, created_at, updated_at
+FROM users
+WHERE ($1::text IS NULL
+       OR email ILIKE '%' || $1::text || '%'
+       OR display_name ILIKE '%' || $1::text || '%')
+ORDER BY id DESC
+LIMIT $3 OFFSET $2
+`
+
+type ListUsersPageParams struct {
+	Q          pgtype.Text
+	PageOffset int32
+	PageLimit  int32
+}
+
+type ListUsersPageRow struct {
+	ID          int64
+	Email       string
+	DisplayName string
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
+// ListUsersPage 供 admin 分页倒序列出用户（不返回 password_hash）；q 为空不过滤。
+func (q *Queries) ListUsersPage(ctx context.Context, arg ListUsersPageParams) ([]ListUsersPageRow, error) {
+	rows, err := q.db.Query(ctx, listUsersPage, arg.Q, arg.PageOffset, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUsersPageRow
+	for rows.Next() {
+		var i ListUsersPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.DisplayName,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

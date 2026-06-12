@@ -7,6 +7,7 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/core/adminauth"
 	"github.com/ThankCat/unio-api/internal/core/credential"
+	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-api/internal/platform/observability/tracing"
@@ -14,16 +15,25 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/admin/channel"
 	"github.com/ThankCat/unio-api/internal/service/admin/channelmodel"
 	"github.com/ThankCat/unio-api/internal/service/admin/costprice"
+	"github.com/ThankCat/unio-api/internal/service/admin/customer"
 	"github.com/ThankCat/unio-api/internal/service/admin/model"
 	"github.com/ThankCat/unio-api/internal/service/admin/price"
 	"github.com/ThankCat/unio-api/internal/service/admin/provider"
+	"github.com/ThankCat/unio-api/internal/service/admin/query"
 )
+
+// AdminServerAppDB 定义 admin server app 构建时需要的数据库能力。
+// 既要 sqlc 查询能力，也要事务能力（M7 手工调额经由 ledger 需要 Begin）。
+type AdminServerAppDB interface {
+	sqlc.DBTX
+	ledger.TxBeginner
+}
 
 // AdminServerAppDeps 表示构建 admin server app 需要的进程级依赖。
 type AdminServerAppDeps struct {
 	Logger *slog.Logger
 	Config config.Config
-	DB     sqlc.DBTX
+	DB     AdminServerAppDB
 }
 
 // AdminServerApp 表示当前 admin-server 进程已经装配完成的 HTTP 应用。
@@ -87,9 +97,38 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	costPriceService := costprice.NewService(queries)
 	priceService := price.NewService(queries)
 
+	// M6 只读查询台：请求记录 / 用量 / 账本，三个只读 service 共用同一 sqlc Queries。
+	requestQueryService := query.NewRequestService(queries)
+	usageQueryService := query.NewUsageService(queries)
+	ledgerQueryService := query.NewLedgerService(queries)
+
+	// M7 客户管理：用户/项目只读 + API Key 管理；手工调额经由 ledger 写 adjustment_* 流水。
+	ledgerService := ledger.NewService(deps.DB, queries)
+	userService := customer.NewUserService(queries)
+	projectService := customer.NewProjectService(queries)
+	apiKeyService := customer.NewAPIKeyService(queries)
+	adjustmentService := customer.NewAdjustmentService(ledgerService)
+
 	metricsRecorder := metrics.New()
 
-	handler := NewAdminHTTPHandler(deps.Logger, authenticator, providerService, channelService, modelService, channelModelService, costPriceService, priceService, metricsRecorder)
+	handler := NewAdminHTTPHandler(adminHTTPDeps{
+		Logger:              deps.Logger,
+		Authenticator:       authenticator,
+		ProviderService:     providerService,
+		ChannelService:      channelService,
+		ModelService:        modelService,
+		ChannelModelService: channelModelService,
+		CostPriceService:    costPriceService,
+		PriceService:        priceService,
+		RequestQueryService: requestQueryService,
+		UsageQueryService:   usageQueryService,
+		LedgerQueryService:  ledgerQueryService,
+		UserService:         userService,
+		ProjectService:      projectService,
+		APIKeyService:       apiKeyService,
+		AdjustmentService:   adjustmentService,
+		MetricsRecorder:     metricsRecorder,
+	})
 
 	return &AdminServerApp{
 		Handler: handler,

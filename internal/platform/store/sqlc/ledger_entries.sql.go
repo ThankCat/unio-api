@@ -11,6 +11,38 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countLedgerEntries = `-- name: CountLedgerEntries :one
+SELECT COUNT(*) AS total
+FROM ledger_entries
+WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
+  AND ($2::text IS NULL OR entry_type = $2::text)
+  AND ($3::text IS NULL OR currency = $3::text)
+  AND ($4::timestamptz IS NULL OR created_at >= $4::timestamptz)
+  AND ($5::timestamptz IS NULL OR created_at < $5::timestamptz)
+`
+
+type CountLedgerEntriesParams struct {
+	UserID    pgtype.Int8
+	EntryType pgtype.Text
+	Currency  pgtype.Text
+	FromTime  pgtype.Timestamptz
+	ToTime    pgtype.Timestamptz
+}
+
+// CountLedgerEntries 返回与 ListLedgerEntriesPage 相同过滤条件下的总条数。
+func (q *Queries) CountLedgerEntries(ctx context.Context, arg CountLedgerEntriesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countLedgerEntries,
+		arg.UserID,
+		arg.EntryType,
+		arg.Currency,
+		arg.FromTime,
+		arg.ToTime,
+	)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const createLedgerEntry = `-- name: CreateLedgerEntry :one
 INSERT INTO
     ledger_entries (
@@ -226,6 +258,81 @@ func (q *Queries) ListLedgerEntriesByUser(ctx context.Context, arg ListLedgerEnt
 		arg.Currency,
 		arg.OffsetRows,
 		arg.LimitRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LedgerEntry
+	for rows.Next() {
+		var i LedgerEntry
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.RequestRecordID,
+			&i.EntryType,
+			&i.Amount,
+			&i.Currency,
+			&i.BalanceBefore,
+			&i.BalanceAfter,
+			&i.IdempotencyKey,
+			&i.Reason,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLedgerEntriesPage = `-- name: ListLedgerEntriesPage :many
+SELECT
+    id,
+    user_id,
+    request_record_id,
+    entry_type,
+    amount,
+    currency,
+    balance_before,
+    balance_after,
+    idempotency_key,
+    reason,
+    created_at
+FROM ledger_entries
+WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
+  AND ($2::text IS NULL OR entry_type = $2::text)
+  AND ($3::text IS NULL OR currency = $3::text)
+  AND ($4::timestamptz IS NULL OR created_at >= $4::timestamptz)
+  AND ($5::timestamptz IS NULL OR created_at < $5::timestamptz)
+ORDER BY created_at DESC, id DESC
+LIMIT $7 OFFSET $6
+`
+
+type ListLedgerEntriesPageParams struct {
+	UserID     pgtype.Int8
+	EntryType  pgtype.Text
+	Currency   pgtype.Text
+	FromTime   pgtype.Timestamptz
+	ToTime     pgtype.Timestamptz
+	PageOffset int32
+	PageLimit  int32
+}
+
+// ListLedgerEntriesPage 供 admin 只读查询台（M6）按用户/类型/币种/时间过滤分页倒序列出账本流水。
+// 所有过滤项为 NULL 时不过滤。
+func (q *Queries) ListLedgerEntriesPage(ctx context.Context, arg ListLedgerEntriesPageParams) ([]LedgerEntry, error) {
+	rows, err := q.db.Query(ctx, listLedgerEntriesPage,
+		arg.UserID,
+		arg.EntryType,
+		arg.Currency,
+		arg.FromTime,
+		arg.ToTime,
+		arg.PageOffset,
+		arg.PageLimit,
 	)
 	if err != nil {
 		return nil, err

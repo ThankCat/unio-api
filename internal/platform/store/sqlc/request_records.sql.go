@@ -11,6 +11,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countRequestRecords = `-- name: CountRequestRecords :one
+SELECT COUNT(*) AS total
+FROM request_records
+WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
+  AND ($2::bigint IS NULL OR project_id = $2::bigint)
+  AND ($3::bigint IS NULL OR api_key_id = $3::bigint)
+  AND ($4::text IS NULL OR status = $4::text)
+  AND ($5::text IS NULL OR requested_model_id ILIKE '%' || $5::text || '%')
+  AND ($6::timestamptz IS NULL OR created_at >= $6::timestamptz)
+  AND ($7::timestamptz IS NULL OR created_at < $7::timestamptz)
+`
+
+type CountRequestRecordsParams struct {
+	UserID    pgtype.Int8
+	ProjectID pgtype.Int8
+	ApiKeyID  pgtype.Int8
+	Status    pgtype.Text
+	Model     pgtype.Text
+	FromTime  pgtype.Timestamptz
+	ToTime    pgtype.Timestamptz
+}
+
+// CountRequestRecords 返回与 ListRequestRecordsPage 相同过滤条件下的总条数。
+func (q *Queries) CountRequestRecords(ctx context.Context, arg CountRequestRecordsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countRequestRecords,
+		arg.UserID,
+		arg.ProjectID,
+		arg.ApiKeyID,
+		arg.Status,
+		arg.Model,
+		arg.FromTime,
+		arg.ToTime,
+	)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const createRequestRecord = `-- name: CreateRequestRecord :one
 INSERT INTO request_records (
     request_id,
@@ -172,6 +210,74 @@ func (q *Queries) CreateRequestRecord(ctx context.Context, arg CreateRequestReco
 	return i, err
 }
 
+const getRequestRecordByRequestID = `-- name: GetRequestRecordByRequestID :one
+SELECT
+    id,
+    request_id,
+    user_id,
+    project_id,
+    api_key_id,
+    requested_model_id,
+    ingress_protocol,
+    operation,
+    response_model_id,
+    response_protocol,
+    response_id,
+    stream,
+    status,
+    final_provider_id,
+    final_channel_id,
+    capability_check_result,
+    error_code,
+    error_message,
+    internal_error_detail,
+    delivery_status,
+    response_started_at,
+    response_completed_at,
+    started_at,
+    completed_at,
+    created_at,
+    updated_at
+FROM request_records
+WHERE request_id = $1
+`
+
+// GetRequestRecordByRequestID 按对外 request_id 读取单条请求记录完整事实（含 internal_error_detail）。
+// 不加锁，仅供 admin 只读详情端点使用；是否回显内部详情由 service/handler 控制。
+func (q *Queries) GetRequestRecordByRequestID(ctx context.Context, requestID string) (RequestRecord, error) {
+	row := q.db.QueryRow(ctx, getRequestRecordByRequestID, requestID)
+	var i RequestRecord
+	err := row.Scan(
+		&i.ID,
+		&i.RequestID,
+		&i.UserID,
+		&i.ProjectID,
+		&i.ApiKeyID,
+		&i.RequestedModelID,
+		&i.IngressProtocol,
+		&i.Operation,
+		&i.ResponseModelID,
+		&i.ResponseProtocol,
+		&i.ResponseID,
+		&i.Stream,
+		&i.Status,
+		&i.FinalProviderID,
+		&i.FinalChannelID,
+		&i.CapabilityCheckResult,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.InternalErrorDetail,
+		&i.DeliveryStatus,
+		&i.ResponseStartedAt,
+		&i.ResponseCompletedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getRequestRecordForUpdate = `-- name: GetRequestRecordForUpdate :one
 SELECT
     id,
@@ -239,6 +345,144 @@ func (q *Queries) GetRequestRecordForUpdate(ctx context.Context, requestRecordID
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listRequestRecordsPage = `-- name: ListRequestRecordsPage :many
+SELECT
+    id,
+    request_id,
+    user_id,
+    project_id,
+    api_key_id,
+    requested_model_id,
+    ingress_protocol,
+    operation,
+    response_model_id,
+    response_protocol,
+    response_id,
+    stream,
+    status,
+    final_provider_id,
+    final_channel_id,
+    capability_check_result,
+    error_code,
+    error_message,
+    delivery_status,
+    response_started_at,
+    response_completed_at,
+    started_at,
+    completed_at,
+    created_at,
+    updated_at
+FROM request_records
+WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
+  AND ($2::bigint IS NULL OR project_id = $2::bigint)
+  AND ($3::bigint IS NULL OR api_key_id = $3::bigint)
+  AND ($4::text IS NULL OR status = $4::text)
+  AND ($5::text IS NULL OR requested_model_id ILIKE '%' || $5::text || '%')
+  AND ($6::timestamptz IS NULL OR created_at >= $6::timestamptz)
+  AND ($7::timestamptz IS NULL OR created_at < $7::timestamptz)
+ORDER BY created_at DESC, id DESC
+LIMIT $9 OFFSET $8
+`
+
+type ListRequestRecordsPageParams struct {
+	UserID     pgtype.Int8
+	ProjectID  pgtype.Int8
+	ApiKeyID   pgtype.Int8
+	Status     pgtype.Text
+	Model      pgtype.Text
+	FromTime   pgtype.Timestamptz
+	ToTime     pgtype.Timestamptz
+	PageOffset int32
+	PageLimit  int32
+}
+
+type ListRequestRecordsPageRow struct {
+	ID                    int64
+	RequestID             string
+	UserID                int64
+	ProjectID             int64
+	ApiKeyID              int64
+	RequestedModelID      string
+	IngressProtocol       string
+	Operation             string
+	ResponseModelID       pgtype.Text
+	ResponseProtocol      pgtype.Text
+	ResponseID            pgtype.Text
+	Stream                bool
+	Status                string
+	FinalProviderID       pgtype.Int8
+	FinalChannelID        pgtype.Int8
+	CapabilityCheckResult pgtype.Text
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	DeliveryStatus        string
+	ResponseStartedAt     pgtype.Timestamptz
+	ResponseCompletedAt   pgtype.Timestamptz
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+}
+
+// ListRequestRecordsPage 供 admin 只读查询台（M6）按过滤条件分页倒序列出请求记录。
+// 所有过滤项为 NULL 时不过滤；列表故意不 SELECT internal_error_detail（从 SQL 层脱敏，
+// 内部错误详情只在详情端点按 ?include_internal 显式开关返回）。
+func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRecordsPageParams) ([]ListRequestRecordsPageRow, error) {
+	rows, err := q.db.Query(ctx, listRequestRecordsPage,
+		arg.UserID,
+		arg.ProjectID,
+		arg.ApiKeyID,
+		arg.Status,
+		arg.Model,
+		arg.FromTime,
+		arg.ToTime,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRequestRecordsPageRow
+	for rows.Next() {
+		var i ListRequestRecordsPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RequestID,
+			&i.UserID,
+			&i.ProjectID,
+			&i.ApiKeyID,
+			&i.RequestedModelID,
+			&i.IngressProtocol,
+			&i.Operation,
+			&i.ResponseModelID,
+			&i.ResponseProtocol,
+			&i.ResponseID,
+			&i.Stream,
+			&i.Status,
+			&i.FinalProviderID,
+			&i.FinalChannelID,
+			&i.CapabilityCheckResult,
+			&i.ErrorCode,
+			&i.ErrorMessage,
+			&i.DeliveryStatus,
+			&i.ResponseStartedAt,
+			&i.ResponseCompletedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markRequestCanceled = `-- name: MarkRequestCanceled :one

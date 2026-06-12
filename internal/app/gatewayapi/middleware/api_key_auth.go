@@ -40,6 +40,13 @@ func APIKeyAuth(authenticator APIKeyAuthenticator) func(http.Handler) http.Handl
 					message = "api key expired"
 				}
 
+				// 费用上限是「有效 Key 但额度用尽」，不是认证失败，返回 402 区别于 401。
+				if errors.Is(err, auth.ErrAPIKeySpendLimitReached) {
+					status = http.StatusPaymentRequired
+					code = "spend_limit_reached"
+					message = "api key spend limit reached"
+				}
+
 				_ = httpx.WriteError(w, status, code, message)
 				return
 			}

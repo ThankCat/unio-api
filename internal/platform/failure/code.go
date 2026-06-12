@@ -145,6 +145,9 @@ const (
 	// CodeAuthAPIKeyExpired 表示 API Key 已过期。
 	CodeAuthAPIKeyExpired Code = "auth_api_key_expired"
 
+	// CodeAuthAPIKeySpendLimitReached 表示 API Key 已达生命周期累计费用上限（M7）。
+	CodeAuthAPIKeySpendLimitReached Code = "auth_api_key_spend_limit_reached"
+
 	// CodeAuthStoreFailed 表示 API Key 认证查询或更新存储失败。
 	CodeAuthStoreFailed Code = "auth_store_failed"
 )

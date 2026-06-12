@@ -7,7 +7,23 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const countProjects = `-- name: CountProjects :one
+SELECT COUNT(*)
+FROM projects
+WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
+`
+
+// CountProjects 供 admin 项目列表分页统计总数；user_id 为空时统计全部。
+func (q *Queries) CountProjects(ctx context.Context, userID pgtype.Int8) (int64, error) {
+	row := q.db.QueryRow(ctx, countProjects, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
 
 const createProject = `-- name: CreateProject :one
 INSERT INTO projects (user_id, name)
@@ -23,6 +39,27 @@ type CreateProjectParams struct {
 // CreateProject 在指定用户下创建项目。
 func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error) {
 	row := q.db.QueryRow(ctx, createProject, arg.UserID, arg.Name)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getProjectByID = `-- name: GetProjectByID :one
+SELECT id, user_id, name, created_at, updated_at
+FROM projects
+WHERE id = $1
+LIMIT 1
+`
+
+// GetProjectByID 供 admin 按 id 读取项目。
+func (q *Queries) GetProjectByID(ctx context.Context, id int64) (Project, error) {
+	row := q.db.QueryRow(ctx, getProjectByID, id)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -59,4 +96,45 @@ func (q *Queries) GetProjectForUser(ctx context.Context, arg GetProjectForUserPa
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listProjectsPage = `-- name: ListProjectsPage :many
+SELECT id, user_id, name, created_at, updated_at
+FROM projects
+WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
+ORDER BY id DESC
+LIMIT $3 OFFSET $2
+`
+
+type ListProjectsPageParams struct {
+	UserID     pgtype.Int8
+	PageOffset int32
+	PageLimit  int32
+}
+
+// ListProjectsPage 供 admin 分页倒序列出项目；user_id 为空时列全部。
+func (q *Queries) ListProjectsPage(ctx context.Context, arg ListProjectsPageParams) ([]Project, error) {
+	rows, err := q.db.Query(ctx, listProjectsPage, arg.UserID, arg.PageOffset, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Project
+	for rows.Next() {
+		var i Project
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

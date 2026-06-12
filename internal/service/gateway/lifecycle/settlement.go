@@ -408,7 +408,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 			return err
 		}
 	} else {
-		_, err = s.ledgerCapturer.CaptureWithQueries(ctx, txQueries, ledger.CaptureParams{
+		reservation, err := s.ledgerCapturer.CaptureWithQueries(ctx, txQueries, ledger.CaptureParams{
 			RequestRecordID: params.RequestRecord.ID,
 			ReservationID:   &reservationID,
 			ActualAmount:    charge.Amount,
@@ -417,6 +417,19 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		})
 		if err != nil {
 			return err
+		}
+
+		// M7 费用上限计数器：按本次实扣金额累加该 Key 累计花费，同事务提交保证与扣费一致；
+		// 只在首次结算（running→succeeded）执行，幂等重放走上面的 succeeded 分支不会重复累加。
+		if err := txQueries.AddAPIKeySpentTotal(ctx, sqlc.AddAPIKeySpentTotalParams{
+			Amount: reservation.CapturedAmount,
+			ID:     params.RequestRecord.APIKeyID,
+		}); err != nil {
+			return failure.Wrap(
+				failure.CodeGatewayChatSettlementFailed,
+				err,
+				failure.WithMessage("add api key spent total"),
+			)
 		}
 	}
 

@@ -9,33 +9,54 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 )
 
+// adminHTTPDeps 收拢 admin-server HTTP handler 构建所需的全部 service 依赖。
+type adminHTTPDeps struct {
+	Logger        *slog.Logger
+	Authenticator middleware.AdminAuthenticator
+
+	ProviderService     adminapi.ProviderService
+	ChannelService      adminapi.ChannelService
+	ModelService        adminapi.ModelService
+	ChannelModelService adminapi.ChannelModelService
+	CostPriceService    adminapi.CostPriceService
+	PriceService        adminapi.PriceService
+
+	RequestQueryService adminapi.RequestQueryService
+	UsageQueryService   adminapi.UsageQueryService
+	LedgerQueryService  adminapi.LedgerQueryService
+
+	UserService       adminapi.UserService
+	ProjectService    adminapi.ProjectService
+	APIKeyService     adminapi.APIKeyService
+	AdjustmentService adminapi.AdjustmentService
+
+	MetricsRecorder *metrics.Metrics
+}
+
 // NewAdminHTTPHandler 创建 admin-server 进程使用的 HTTP handler。
-func NewAdminHTTPHandler(
-	logger *slog.Logger,
-	authenticator middleware.AdminAuthenticator,
-	providerService adminapi.ProviderService,
-	channelService adminapi.ChannelService,
-	modelService adminapi.ModelService,
-	channelModelService adminapi.ChannelModelService,
-	costPriceService adminapi.CostPriceService,
-	priceService adminapi.PriceService,
-	metricsRecorder *metrics.Metrics,
-) http.Handler {
-	deps := adminapi.RouterDeps{
-		Logger:              logger,
-		AdminAuthenticator:  authenticator,
-		ProviderService:     providerService,
-		ChannelService:      channelService,
-		ModelService:        modelService,
-		ChannelModelService: channelModelService,
-		CostPriceService:    costPriceService,
-		PriceService:        priceService,
+func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
+	routerDeps := adminapi.RouterDeps{
+		Logger:              deps.Logger,
+		AdminAuthenticator:  deps.Authenticator,
+		ProviderService:     deps.ProviderService,
+		ChannelService:      deps.ChannelService,
+		ModelService:        deps.ModelService,
+		ChannelModelService: deps.ChannelModelService,
+		CostPriceService:    deps.CostPriceService,
+		PriceService:        deps.PriceService,
+		RequestQueryService: deps.RequestQueryService,
+		UsageQueryService:   deps.UsageQueryService,
+		LedgerQueryService:  deps.LedgerQueryService,
+		UserService:         deps.UserService,
+		ProjectService:      deps.ProjectService,
+		APIKeyService:       deps.APIKeyService,
+		AdjustmentService:   deps.AdjustmentService,
 	}
 
-	if metricsRecorder != nil {
-		deps.HTTPMetrics = metricsRecorder
-		deps.MetricsHandler = metricsRecorder.Handler()
+	if deps.MetricsRecorder != nil {
+		routerDeps.HTTPMetrics = deps.MetricsRecorder
+		routerDeps.MetricsHandler = deps.MetricsRecorder.Handler()
 	}
 
-	return adminapi.NewRouter(deps)
+	return adminapi.NewRouter(routerDeps)
 }

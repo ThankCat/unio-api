@@ -33,6 +33,22 @@ WHERE
     user_id = sqlc.arg (user_id)
   AND currency = sqlc.arg (currency);
 
+-- name: ListUserBalancesByUser :many
+-- ListUserBalancesByUser 供 admin 用户详情读取该用户全部币种余额。
+SELECT
+    id,
+    user_id,
+    currency,
+    balance,
+    reserved_balance,
+    created_at,
+    updated_at
+FROM
+    user_balances
+WHERE
+    user_id = sqlc.arg (user_id)
+ORDER BY currency;
+
 -- name: GetUserBalanceForUpdate :one
 -- GetUserBalanceForUpdate 锁定用户余额投影用于事务内余额变更。
 SELECT
