@@ -132,6 +132,10 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	// M9 工作台看板：复用同一 sqlc Queries 做只读聚合（KPI 概览 + 时间序列）。
 	dashboardService := dashboard.NewService(queries)
 
+	// M8 系统/任务/健康：结算补偿任务只读视图 + 系统级 channel 健康（派生），复用同一 sqlc Queries。
+	recoveryJobQueryService := query.NewRecoveryService(queries)
+	channelHealthQueryService := query.NewChannelHealthService(queries)
+
 	metricsRecorder := metrics.New()
 
 	handler := NewAdminHTTPHandler(adminHTTPDeps{
@@ -157,6 +161,9 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		CapabilityEnforcementService: capabilityEnforcementService,
 
 		DashboardService: dashboardService,
+
+		RecoveryJobQueryService:   recoveryJobQueryService,
+		ChannelHealthQueryService: channelHealthQueryService,
 
 		MetricsRecorder: metricsRecorder,
 	})

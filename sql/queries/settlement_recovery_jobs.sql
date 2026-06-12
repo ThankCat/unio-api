@@ -152,6 +152,64 @@ SELECT *
 FROM settlement_recovery_jobs
 WHERE request_record_id = sqlc.arg(request_record_id);
 
+-- name: GetSettlementRecoveryJobByID :one
+-- GetSettlementRecoveryJobByID 按主键读取单条 recovery job 完整事实（含 last_internal_error_detail）。
+-- 不加锁，仅供 admin 只读详情端点使用；是否回显内部详情由 service/handler 控制（M8）。
+SELECT *
+FROM settlement_recovery_jobs
+WHERE id = sqlc.arg(id);
+
+-- name: ListSettlementRecoveryJobsPage :many
+-- ListSettlementRecoveryJobsPage 按可选过滤分页倒序列出 recovery job（M8 运营任务台，只读）。
+-- 安全红线：列表绝不 SELECT last_internal_error_detail（从存储层就脱敏）；金额走十进制字符串。
+SELECT
+    id,
+    user_id,
+    request_record_id,
+    attempt_id,
+    reservation_id,
+    response_protocol,
+    response_id,
+    response_model_id,
+    model_id,
+    provider_id,
+    channel_id,
+    upstream_protocol,
+    upstream_model,
+    finish_class,
+    upstream_status_code,
+    currency,
+    estimated_amount,
+    authorized_amount,
+    status,
+    attempt_count,
+    max_attempts,
+    next_run_at,
+    locked_by,
+    locked_until,
+    last_error_code,
+    last_error_message,
+    last_attempted_at,
+    completed_at,
+    created_at,
+    updated_at
+FROM settlement_recovery_jobs
+WHERE (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
+  AND (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::bigint)
+  AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
+  AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
+ORDER BY created_at DESC, id DESC
+LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
+
+-- name: CountSettlementRecoveryJobs :one
+-- CountSettlementRecoveryJobs 返回与 ListSettlementRecoveryJobsPage 相同过滤条件下的总条数。
+SELECT COUNT(*) AS total
+FROM settlement_recovery_jobs
+WHERE (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
+  AND (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::bigint)
+  AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
+  AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz);
+
 -- name: ClaimNextSettlementRecoveryJob :one
 -- ClaimNextSettlementRecoveryJob claim 一条到期 pending 或锁过期 running 的 recovery job。
 WITH candidate AS (

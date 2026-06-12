@@ -47,6 +47,10 @@ type RouterDeps struct {
 	// M9 工作台看板：首屏 KPI 概览 + 时间序列（只读聚合）
 	DashboardService DashboardService
 
+	// M8 系统/任务/健康（横切）：结算补偿任务只读视图 + 系统级 channel 健康（派生）
+	RecoveryJobQueryService   RecoveryJobQueryService
+	ChannelHealthQueryService ChannelHealthQueryService
+
 	// HTTPMetrics 记录 HTTP 层请求指标；nil 表示不采集。
 	HTTPMetrics httpmw.MetricsRecorder
 
@@ -226,6 +230,19 @@ func NewRouter(deps RouterDeps) http.Handler {
 			dh := &dashboardHandler{service: deps.DashboardService}
 			r.Get("/dashboard/overview", dh.overview)
 			r.Get("/dashboard/timeseries", dh.timeseries)
+		}
+
+		// M8 系统/任务/健康：结算补偿任务只读视图（列表脱敏内部详情，详情按 ?include_internal 回显）。
+		if deps.RecoveryJobQueryService != nil {
+			rjh := &recoveryJobsHandler{service: deps.RecoveryJobQueryService}
+			r.Get("/system/settlement-recovery-jobs", rjh.list)
+			r.Get("/system/settlement-recovery-jobs/{id}", rjh.get)
+		}
+
+		// M8 系统级 channel 健康：从 request_attempts 派生（非熔断器实时态，仅运营观测近似）。
+		if deps.ChannelHealthQueryService != nil {
+			chh := &channelHealthHandler{service: deps.ChannelHealthQueryService}
+			r.Get("/system/channel-health", chh.list)
 		}
 	})
 

@@ -37,6 +37,9 @@ type adminHTTPDeps struct {
 
 	DashboardService adminapi.DashboardService
 
+	RecoveryJobQueryService   adminapi.RecoveryJobQueryService
+	ChannelHealthQueryService adminapi.ChannelHealthQueryService
+
 	MetricsRecorder *metrics.Metrics
 }
 
@@ -65,6 +68,9 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		CapabilityEnforcementService: deps.CapabilityEnforcementService,
 
 		DashboardService: deps.DashboardService,
+
+		RecoveryJobQueryService:   deps.RecoveryJobQueryService,
+		ChannelHealthQueryService: deps.ChannelHealthQueryService,
 	}
 
 	if deps.MetricsRecorder != nil {

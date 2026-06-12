@@ -117,6 +117,35 @@ func (q *Queries) ClaimNextSettlementRecoveryJob(ctx context.Context, arg ClaimN
 	return i, err
 }
 
+const countSettlementRecoveryJobs = `-- name: CountSettlementRecoveryJobs :one
+SELECT COUNT(*) AS total
+FROM settlement_recovery_jobs
+WHERE ($1::text IS NULL OR status = $1::text)
+  AND ($2::bigint IS NULL OR user_id = $2::bigint)
+  AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
+  AND ($4::timestamptz IS NULL OR created_at < $4::timestamptz)
+`
+
+type CountSettlementRecoveryJobsParams struct {
+	Status   pgtype.Text
+	UserID   pgtype.Int8
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
+}
+
+// CountSettlementRecoveryJobs 返回与 ListSettlementRecoveryJobsPage 相同过滤条件下的总条数。
+func (q *Queries) CountSettlementRecoveryJobs(ctx context.Context, arg CountSettlementRecoveryJobsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSettlementRecoveryJobs,
+		arg.Status,
+		arg.UserID,
+		arg.FromTime,
+		arg.ToTime,
+	)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const createSettlementRecoveryJob = `-- name: CreateSettlementRecoveryJob :one
 INSERT INTO settlement_recovery_jobs (
     user_id,
@@ -429,6 +458,81 @@ func (q *Queries) CreateSettlementRecoveryJob(ctx context.Context, arg CreateSet
 	return i, err
 }
 
+const getSettlementRecoveryJobByID = `-- name: GetSettlementRecoveryJobByID :one
+SELECT id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
+FROM settlement_recovery_jobs
+WHERE id = $1
+`
+
+// GetSettlementRecoveryJobByID 按主键读取单条 recovery job 完整事实（含 last_internal_error_detail）。
+// 不加锁，仅供 admin 只读详情端点使用；是否回显内部详情由 service/handler 控制（M8）。
+func (q *Queries) GetSettlementRecoveryJobByID(ctx context.Context, id int64) (SettlementRecoveryJob, error) {
+	row := q.db.QueryRow(ctx, getSettlementRecoveryJobByID, id)
+	var i SettlementRecoveryJob
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RequestRecordID,
+		&i.AttemptID,
+		&i.ReservationID,
+		&i.ResponseProtocol,
+		&i.ResponseID,
+		&i.ResponseModelID,
+		&i.ModelID,
+		&i.ProviderID,
+		&i.ChannelID,
+		&i.UpstreamProtocol,
+		&i.UpstreamResponseID,
+		&i.UpstreamModel,
+		&i.FinishClass,
+		&i.UpstreamFinishReason,
+		&i.UpstreamStatusCode,
+		&i.UpstreamRequestID,
+		&i.UsageUncachedInputTokens,
+		&i.UsageUncachedInputTokensState,
+		&i.UsageCacheReadInputTokens,
+		&i.UsageCacheReadInputTokensState,
+		&i.UsageCacheWrite5mInputTokens,
+		&i.UsageCacheWrite5mInputTokensState,
+		&i.UsageCacheWrite1hInputTokens,
+		&i.UsageCacheWrite1hInputTokensState,
+		&i.UsageOutputTokensTotal,
+		&i.UsageOutputTokensTotalState,
+		&i.UsageReasoningOutputTokens,
+		&i.UsageReasoningOutputTokensState,
+		&i.UsageServerWebSearchRequests,
+		&i.UsageServerWebFetchRequests,
+		&i.UsageSource,
+		&i.UsageMappingVersion,
+		&i.PriceID,
+		&i.Currency,
+		&i.PricingUnit,
+		&i.UncachedInputPrice,
+		&i.CacheReadInputPrice,
+		&i.CacheWrite5mInputPrice,
+		&i.CacheWrite1hInputPrice,
+		&i.OutputPrice,
+		&i.ReasoningOutputPrice,
+		&i.FormulaVersion,
+		&i.EstimatedAmount,
+		&i.AuthorizedAmount,
+		&i.Status,
+		&i.AttemptCount,
+		&i.MaxAttempts,
+		&i.NextRunAt,
+		&i.LockedBy,
+		&i.LockedUntil,
+		&i.LastErrorCode,
+		&i.LastErrorMessage,
+		&i.LastInternalErrorDetail,
+		&i.LastAttemptedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getSettlementRecoveryJobByRequest = `-- name: GetSettlementRecoveryJobByRequest :one
 SELECT id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
 FROM settlement_recovery_jobs
@@ -501,6 +605,149 @@ func (q *Queries) GetSettlementRecoveryJobByRequest(ctx context.Context, request
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listSettlementRecoveryJobsPage = `-- name: ListSettlementRecoveryJobsPage :many
+SELECT
+    id,
+    user_id,
+    request_record_id,
+    attempt_id,
+    reservation_id,
+    response_protocol,
+    response_id,
+    response_model_id,
+    model_id,
+    provider_id,
+    channel_id,
+    upstream_protocol,
+    upstream_model,
+    finish_class,
+    upstream_status_code,
+    currency,
+    estimated_amount,
+    authorized_amount,
+    status,
+    attempt_count,
+    max_attempts,
+    next_run_at,
+    locked_by,
+    locked_until,
+    last_error_code,
+    last_error_message,
+    last_attempted_at,
+    completed_at,
+    created_at,
+    updated_at
+FROM settlement_recovery_jobs
+WHERE ($1::text IS NULL OR status = $1::text)
+  AND ($2::bigint IS NULL OR user_id = $2::bigint)
+  AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
+  AND ($4::timestamptz IS NULL OR created_at < $4::timestamptz)
+ORDER BY created_at DESC, id DESC
+LIMIT $6 OFFSET $5
+`
+
+type ListSettlementRecoveryJobsPageParams struct {
+	Status     pgtype.Text
+	UserID     pgtype.Int8
+	FromTime   pgtype.Timestamptz
+	ToTime     pgtype.Timestamptz
+	PageOffset int32
+	PageLimit  int32
+}
+
+type ListSettlementRecoveryJobsPageRow struct {
+	ID                 int64
+	UserID             int64
+	RequestRecordID    int64
+	AttemptID          int64
+	ReservationID      int64
+	ResponseProtocol   string
+	ResponseID         string
+	ResponseModelID    string
+	ModelID            int64
+	ProviderID         int64
+	ChannelID          int64
+	UpstreamProtocol   string
+	UpstreamModel      string
+	FinishClass        string
+	UpstreamStatusCode int32
+	Currency           string
+	EstimatedAmount    pgtype.Numeric
+	AuthorizedAmount   pgtype.Numeric
+	Status             string
+	AttemptCount       int32
+	MaxAttempts        int32
+	NextRunAt          pgtype.Timestamptz
+	LockedBy           pgtype.Text
+	LockedUntil        pgtype.Timestamptz
+	LastErrorCode      pgtype.Text
+	LastErrorMessage   pgtype.Text
+	LastAttemptedAt    pgtype.Timestamptz
+	CompletedAt        pgtype.Timestamptz
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// ListSettlementRecoveryJobsPage 按可选过滤分页倒序列出 recovery job（M8 运营任务台，只读）。
+// 安全红线：列表绝不 SELECT last_internal_error_detail（从存储层就脱敏）；金额走十进制字符串。
+func (q *Queries) ListSettlementRecoveryJobsPage(ctx context.Context, arg ListSettlementRecoveryJobsPageParams) ([]ListSettlementRecoveryJobsPageRow, error) {
+	rows, err := q.db.Query(ctx, listSettlementRecoveryJobsPage,
+		arg.Status,
+		arg.UserID,
+		arg.FromTime,
+		arg.ToTime,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSettlementRecoveryJobsPageRow
+	for rows.Next() {
+		var i ListSettlementRecoveryJobsPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.RequestRecordID,
+			&i.AttemptID,
+			&i.ReservationID,
+			&i.ResponseProtocol,
+			&i.ResponseID,
+			&i.ResponseModelID,
+			&i.ModelID,
+			&i.ProviderID,
+			&i.ChannelID,
+			&i.UpstreamProtocol,
+			&i.UpstreamModel,
+			&i.FinishClass,
+			&i.UpstreamStatusCode,
+			&i.Currency,
+			&i.EstimatedAmount,
+			&i.AuthorizedAmount,
+			&i.Status,
+			&i.AttemptCount,
+			&i.MaxAttempts,
+			&i.NextRunAt,
+			&i.LockedBy,
+			&i.LockedUntil,
+			&i.LastErrorCode,
+			&i.LastErrorMessage,
+			&i.LastAttemptedAt,
+			&i.CompletedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markExhaustedSettlementRecoveryJobDead = `-- name: MarkExhaustedSettlementRecoveryJobDead :one
