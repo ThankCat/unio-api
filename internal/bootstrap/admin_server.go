@@ -20,6 +20,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/admin/channelmodel"
 	"github.com/ThankCat/unio-api/internal/service/admin/costprice"
 	"github.com/ThankCat/unio-api/internal/service/admin/customer"
+	"github.com/ThankCat/unio-api/internal/service/admin/dashboard"
 	"github.com/ThankCat/unio-api/internal/service/admin/model"
 	"github.com/ThankCat/unio-api/internal/service/admin/price"
 	"github.com/ThankCat/unio-api/internal/service/admin/provider"
@@ -128,6 +129,9 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	// enforce 只读：读 admin 自身进程的 env 快照 + observe 期判定分布。
 	capabilityEnforcementService := capabilityadmin.NewEnforcementService(queries, deps.Config.Capability)
 
+	// M9 工作台看板：复用同一 sqlc Queries 做只读聚合（KPI 概览 + 时间序列）。
+	dashboardService := dashboard.NewService(queries)
+
 	metricsRecorder := metrics.New()
 
 	handler := NewAdminHTTPHandler(adminHTTPDeps{
@@ -151,6 +155,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		CapabilitySyncService:        capabilitySyncService,
 		CapabilitySeedService:        capabilitySeedService,
 		CapabilityEnforcementService: capabilityEnforcementService,
+
+		DashboardService: dashboardService,
 
 		MetricsRecorder: metricsRecorder,
 	})

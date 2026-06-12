@@ -44,6 +44,9 @@ type RouterDeps struct {
 	CapabilitySeedService        CapabilitySeedService
 	CapabilityEnforcementService CapabilityEnforcementService
 
+	// M9 工作台看板：首屏 KPI 概览 + 时间序列（只读聚合）
+	DashboardService DashboardService
+
 	// HTTPMetrics 记录 HTTP 层请求指标；nil 表示不采集。
 	HTTPMetrics httpmw.MetricsRecorder
 
@@ -216,6 +219,13 @@ func NewRouter(deps RouterDeps) http.Handler {
 			ceh := &capabilityEnforcementHandler{service: deps.CapabilityEnforcementService}
 			r.Get("/capability/enforcement", ceh.get)
 			r.Get("/capability/observe-summary", ceh.observeSummary)
+		}
+
+		// M9 工作台看板：运营首页只读聚合（KPI 概览 + 时间序列）。
+		if deps.DashboardService != nil {
+			dh := &dashboardHandler{service: deps.DashboardService}
+			r.Get("/dashboard/overview", dh.overview)
+			r.Get("/dashboard/timeseries", dh.timeseries)
 		}
 	})
 

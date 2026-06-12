@@ -1,0 +1,98 @@
+package adminapi_test
+
+import (
+	"context"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/ThankCat/unio-api/internal/app/adminapi"
+	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-api/internal/service/admin/dashboard"
+)
+
+type fakeDashboardService struct {
+	overview dashboard.Overview
+	// gotMetric/gotInterval 记录最近一次 Timeseries 入参，用于断言透传。
+	gotMetric   string
+	gotInterval string
+}
+
+func (s *fakeDashboardService) Overview(_ context.Context, from, to time.Time) (dashboard.Overview, error) {
+	out := s.overview
+	out.From = from
+	out.To = to
+	return out, nil
+}
+
+func (s *fakeDashboardService) Timeseries(_ context.Context, metric, interval string, from, to time.Time) (dashboard.Series, error) {
+	s.gotMetric, s.gotInterval = metric, interval
+	// 模拟真实 service：metric/interval 非法返回 admin_invalid_argument。
+	if interval != dashboard.IntervalHour && interval != dashboard.IntervalDay {
+		return dashboard.Series{}, failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("bad interval"))
+	}
+	switch metric {
+	case dashboard.MetricRequests, dashboard.MetricTokens, dashboard.MetricSpend:
+	default:
+		return dashboard.Series{}, failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("bad metric"))
+	}
+	return dashboard.Series{Metric: metric, Interval: interval, From: from, To: to}, nil
+}
+
+func TestDashboardOverviewReturns200(t *testing.T) {
+	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: &fakeDashboardService{}})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/overview", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
+	}
+}
+
+func TestDashboardOverviewInvalidTimeReturns400(t *testing.T) {
+	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: &fakeDashboardService{}})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/overview?from=not-a-time", "", true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+}
+
+func TestDashboardTimeseriesReturns200(t *testing.T) {
+	svc := &fakeDashboardService{}
+	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: svc})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/timeseries?metric=spend&interval=day", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if svc.gotMetric != "spend" || svc.gotInterval != "day" {
+		t.Fatalf("expected metric=spend interval=day passed through, got %q/%q", svc.gotMetric, svc.gotInterval)
+	}
+}
+
+func TestDashboardTimeseriesInvalidMetricReturns400(t *testing.T) {
+	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: &fakeDashboardService{}})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/timeseries?metric=bogus&interval=day", "", true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+}
+
+func TestDashboardTimeseriesInvalidIntervalReturns400(t *testing.T) {
+	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: &fakeDashboardService{}})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/timeseries?metric=requests&interval=week", "", true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+}
+
+func TestDashboardRequiresToken(t *testing.T) {
+	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: &fakeDashboardService{}})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/overview", "", false)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}

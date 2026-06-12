@@ -35,6 +35,8 @@ type adminHTTPDeps struct {
 	CapabilitySeedService        adminapi.CapabilitySeedService
 	CapabilityEnforcementService adminapi.CapabilityEnforcementService
 
+	DashboardService adminapi.DashboardService
+
 	MetricsRecorder *metrics.Metrics
 }
 
@@ -61,6 +63,8 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		CapabilitySyncService:        deps.CapabilitySyncService,
 		CapabilitySeedService:        deps.CapabilitySeedService,
 		CapabilityEnforcementService: deps.CapabilityEnforcementService,
+
+		DashboardService: deps.DashboardService,
 	}
 
 	if deps.MetricsRecorder != nil {
