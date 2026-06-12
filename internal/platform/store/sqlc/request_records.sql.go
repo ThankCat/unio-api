@@ -49,6 +49,48 @@ func (q *Queries) CountRequestRecords(ctx context.Context, arg CountRequestRecor
 	return total, err
 }
 
+const countRequestsByCapabilityResult = `-- name: CountRequestsByCapabilityResult :many
+SELECT capability_check_result, COUNT(*) AS total
+FROM request_records
+WHERE ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
+  AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
+GROUP BY capability_check_result
+ORDER BY total DESC
+`
+
+type CountRequestsByCapabilityResultParams struct {
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
+}
+
+type CountRequestsByCapabilityResultRow struct {
+	CapabilityCheckResult pgtype.Text
+	Total                 int64
+}
+
+// CountRequestsByCapabilityResult 在可选时间范围内按 capability 闸门判定结论聚合请求计数（M5 observe 看板）。
+// NULL 结论（闸门未启用/无 required/无候选，视为 bypassed）也作为一组返回；
+// 运营据此评估翻 enforce 的误拒风险（model_unavailable / channel_unavailable 即潜在拒绝量）。
+func (q *Queries) CountRequestsByCapabilityResult(ctx context.Context, arg CountRequestsByCapabilityResultParams) ([]CountRequestsByCapabilityResultRow, error) {
+	rows, err := q.db.Query(ctx, countRequestsByCapabilityResult, arg.FromTime, arg.ToTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountRequestsByCapabilityResultRow
+	for rows.Next() {
+		var i CountRequestsByCapabilityResultRow
+		if err := rows.Scan(&i.CapabilityCheckResult, &i.Total); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createRequestRecord = `-- name: CreateRequestRecord :one
 INSERT INTO request_records (
     request_id,

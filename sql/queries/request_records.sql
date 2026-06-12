@@ -273,6 +273,17 @@ WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::b
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz);
 
+-- name: CountRequestsByCapabilityResult :many
+-- CountRequestsByCapabilityResult 在可选时间范围内按 capability 闸门判定结论聚合请求计数（M5 observe 看板）。
+-- NULL 结论（闸门未启用/无 required/无候选，视为 bypassed）也作为一组返回；
+-- 运营据此评估翻 enforce 的误拒风险（model_unavailable / channel_unavailable 即潜在拒绝量）。
+SELECT capability_check_result, COUNT(*) AS total
+FROM request_records
+WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
+  AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
+GROUP BY capability_check_result
+ORDER BY total DESC;
+
 -- name: GetRequestRecordByRequestID :one
 -- GetRequestRecordByRequestID 按对外 request_id 读取单条请求记录完整事实（含 internal_error_detail）。
 -- 不加锁，仅供 admin 只读详情端点使用；是否回显内部详情由 service/handler 控制。

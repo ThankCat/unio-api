@@ -46,3 +46,10 @@ FROM model_capability_sync_jobs
 WHERE source = sqlc.arg(source)
 ORDER BY created_at DESC, id DESC
 LIMIT 1;
+
+-- name: ListSyncJobs :many
+-- ListSyncJobs 倒序列出最近的能力同步任务（admin 同步页展示用，不区分来源）。
+SELECT *
+FROM model_capability_sync_jobs
+ORDER BY created_at DESC, id DESC
+LIMIT sqlc.arg(row_limit)::int;

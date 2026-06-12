@@ -65,6 +65,43 @@ func (q *Queries) GetLatestSyncJob(ctx context.Context, source string) (ModelCap
 	return i, err
 }
 
+const listSyncJobs = `-- name: ListSyncJobs :many
+SELECT id, source, status, started_at, finished_at, stats_json, error_text, created_at
+FROM model_capability_sync_jobs
+ORDER BY created_at DESC, id DESC
+LIMIT $1::int
+`
+
+// ListSyncJobs 倒序列出最近的能力同步任务（admin 同步页展示用，不区分来源）。
+func (q *Queries) ListSyncJobs(ctx context.Context, rowLimit int32) ([]ModelCapabilitySyncJob, error) {
+	rows, err := q.db.Query(ctx, listSyncJobs, rowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ModelCapabilitySyncJob
+	for rows.Next() {
+		var i ModelCapabilitySyncJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.Status,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.StatsJson,
+			&i.ErrorText,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markSyncJobFailed = `-- name: MarkSyncJobFailed :one
 UPDATE model_capability_sync_jobs
 SET status = 'failed',

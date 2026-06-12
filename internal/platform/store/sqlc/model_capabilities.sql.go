@@ -11,6 +11,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteModelCapability = `-- name: DeleteModelCapability :exec
+DELETE FROM model_capabilities
+WHERE model_id = $1
+    AND capability_key = $2
+`
+
+type DeleteModelCapabilityParams struct {
+	ModelID       int64
+	CapabilityKey string
+}
+
+// DeleteModelCapability 删除指定模型对某能力的声明（admin 手工撤销）。
+func (q *Queries) DeleteModelCapability(ctx context.Context, arg DeleteModelCapabilityParams) error {
+	_, err := q.db.Exec(ctx, deleteModelCapability, arg.ModelID, arg.CapabilityKey)
+	return err
+}
+
 const listModelCapabilities = `-- name: ListModelCapabilities :many
 SELECT model_id, capability_key, support_level, limits, source, created_at, updated_at, updated_by
 FROM model_capabilities

@@ -58,6 +58,13 @@ func adminErrorStatus(code failure.Code) int {
 		return http.StatusUnprocessableEntity
 	case failure.CodeLedgerIdempotencyConflict:
 		return http.StatusConflict
+	// M5 能力管理：core/capability 写入校验错误映射成可读的 4xx。
+	case failure.CodeCapabilityInvalidKey,
+		failure.CodeCapabilityInvalidSupportLevel,
+		failure.CodeCapabilityInvalidSource:
+		return http.StatusBadRequest
+	case failure.CodeCapabilityNotFound:
+		return http.StatusNotFound
 	}
 
 	if code.Category() == failure.CategoryHTTP {

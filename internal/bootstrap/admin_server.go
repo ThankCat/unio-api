@@ -5,13 +5,17 @@ import (
 	"log/slog"
 	"net/http"
 
+	anthropicdeepseek "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/deepseek"
+	openaideepseek "github.com/ThankCat/unio-api/internal/core/adapter/openai/deepseek"
 	"github.com/ThankCat/unio-api/internal/core/adminauth"
+	"github.com/ThankCat/unio-api/internal/core/capability"
 	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-api/internal/platform/observability/tracing"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	capabilityadmin "github.com/ThankCat/unio-api/internal/service/admin/capability"
 	"github.com/ThankCat/unio-api/internal/service/admin/channel"
 	"github.com/ThankCat/unio-api/internal/service/admin/channelmodel"
 	"github.com/ThankCat/unio-api/internal/service/admin/costprice"
@@ -109,6 +113,21 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	apiKeyService := customer.NewAPIKeyService(queries)
 	adjustmentService := customer.NewAdjustmentService(ledgerService)
 
+	// M5 能力管理：能力数据 CRUD / models.dev 同步 / adapter 画像物化 / enforce 只读。
+	// capability store 复用 core 层（写入前做 key 注册表 + 支持级别校验，渠道层只能减）。
+	capabilityStore := capability.NewStore(queries)
+	capabilityService := capabilityadmin.NewCapabilityService(capabilityStore)
+	// Syncer 与 worker-server 的 sync-models 子命令同构；admin 内联触发（支持 dry-run）。
+	modelCatalogSyncer := NewModelCatalogSyncer(deps.Config.ModelCatalogSync, deps.DB)
+	capabilitySyncService := capabilityadmin.NewSyncService(modelCatalogSyncer, capabilityStore)
+	// adapter 画像注册表在装配期组装（目前仅 DeepSeek 的 openai/anthropic 两协议），避免 core 耦合 adapter。
+	capabilitySeedService := capabilityadmin.NewSeedService(capabilityStore, []capability.AdapterProfile{
+		openaideepseek.CapabilityProfile(),
+		anthropicdeepseek.CapabilityProfile(),
+	})
+	// enforce 只读：读 admin 自身进程的 env 快照 + observe 期判定分布。
+	capabilityEnforcementService := capabilityadmin.NewEnforcementService(queries, deps.Config.Capability)
+
 	metricsRecorder := metrics.New()
 
 	handler := NewAdminHTTPHandler(adminHTTPDeps{
@@ -127,7 +146,13 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		ProjectService:      projectService,
 		APIKeyService:       apiKeyService,
 		AdjustmentService:   adjustmentService,
-		MetricsRecorder:     metricsRecorder,
+
+		CapabilityService:            capabilityService,
+		CapabilitySyncService:        capabilitySyncService,
+		CapabilitySeedService:        capabilitySeedService,
+		CapabilityEnforcementService: capabilityEnforcementService,
+
+		MetricsRecorder: metricsRecorder,
 	})
 
 	return &AdminServerApp{

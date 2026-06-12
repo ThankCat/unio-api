@@ -30,6 +30,11 @@ type adminHTTPDeps struct {
 	APIKeyService     adminapi.APIKeyService
 	AdjustmentService adminapi.AdjustmentService
 
+	CapabilityService            adminapi.CapabilityService
+	CapabilitySyncService        adminapi.CapabilitySyncService
+	CapabilitySeedService        adminapi.CapabilitySeedService
+	CapabilityEnforcementService adminapi.CapabilityEnforcementService
+
 	MetricsRecorder *metrics.Metrics
 }
 
@@ -51,6 +56,11 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		ProjectService:      deps.ProjectService,
 		APIKeyService:       deps.APIKeyService,
 		AdjustmentService:   deps.AdjustmentService,
+
+		CapabilityService:            deps.CapabilityService,
+		CapabilitySyncService:        deps.CapabilitySyncService,
+		CapabilitySeedService:        deps.CapabilitySeedService,
+		CapabilityEnforcementService: deps.CapabilityEnforcementService,
 	}
 
 	if deps.MetricsRecorder != nil {

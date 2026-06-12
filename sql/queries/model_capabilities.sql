@@ -37,3 +37,9 @@ SET support_level = excluded.support_level,
     updated_by = excluded.updated_by,
     updated_at = now()
 RETURNING *;
+
+-- name: DeleteModelCapability :exec
+-- DeleteModelCapability 删除指定模型对某能力的声明（admin 手工撤销）。
+DELETE FROM model_capabilities
+WHERE model_id = sqlc.arg(model_id)
+    AND capability_key = sqlc.arg(capability_key);

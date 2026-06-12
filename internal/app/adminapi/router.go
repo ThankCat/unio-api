@@ -38,6 +38,12 @@ type RouterDeps struct {
 	APIKeyService     APIKeyService
 	AdjustmentService AdjustmentService
 
+	// M5 能力管理：模型能力/渠道收紧 CRUD、models.dev 同步、adapter 画像、enforce 只读
+	CapabilityService            CapabilityService
+	CapabilitySyncService        CapabilitySyncService
+	CapabilitySeedService        CapabilitySeedService
+	CapabilityEnforcementService CapabilityEnforcementService
+
 	// HTTPMetrics 记录 HTTP 层请求指标；nil 表示不采集。
 	HTTPMetrics httpmw.MetricsRecorder
 
@@ -175,6 +181,41 @@ func NewRouter(deps RouterDeps) http.Handler {
 			// PATCH 调启停/费用上限；DELETE 永久吊销（不可逆）。
 			r.Patch("/api-keys/{id}", akh.update)
 			r.Delete("/api-keys/{id}", akh.revoke)
+		}
+
+		// M5 能力管理：模型能力（手工覆盖）/渠道收紧（只能减）CRUD + 能力 key 注册表。
+		if deps.CapabilityService != nil {
+			cah := &capabilitiesHandler{service: deps.CapabilityService}
+			r.Get("/capability/keys", cah.listKeys)
+			// 模型能力挂在 model 下；写入用 PUT {key} 幂等 upsert，DELETE 撤销。
+			r.Get("/models/{id}/capabilities", cah.listModelCapabilities)
+			r.Put("/models/{id}/capabilities/{key}", cah.setModelCapability)
+			r.Delete("/models/{id}/capabilities/{key}", cah.deleteModelCapability)
+			// 渠道收紧挂在 channel 下；只能减（limited/unsupported）。
+			r.Get("/channels/{id}/capability-overrides", cah.listChannelOverrides)
+			r.Put("/channels/{id}/capability-overrides/{key}", cah.setChannelOverride)
+			r.Delete("/channels/{id}/capability-overrides/{key}", cah.deleteChannelOverride)
+		}
+
+		// M5 models.dev 同步：内联触发（dry-run 预览/实际应用）+ 最近任务展示。
+		if deps.CapabilitySyncService != nil {
+			csh := &capabilitySyncHandler{service: deps.CapabilitySyncService}
+			r.Get("/capability/sync-jobs", csh.listJobs)
+			r.Post("/capability/sync-jobs", csh.trigger)
+		}
+
+		// M5 adapter 画像：列出可物化画像 + 对指定模型物化（source=adapter_seed）。
+		if deps.CapabilitySeedService != nil {
+			cseh := &capabilitySeedHandler{service: deps.CapabilitySeedService}
+			r.Get("/capability/adapter-profiles", cseh.listProfiles)
+			r.Post("/capability/adapter-seed-jobs", cseh.materialize)
+		}
+
+		// M5 enforce 只读：展示各表面 observe/enforce + observe 期判定分布。
+		if deps.CapabilityEnforcementService != nil {
+			ceh := &capabilityEnforcementHandler{service: deps.CapabilityEnforcementService}
+			r.Get("/capability/enforcement", ceh.get)
+			r.Get("/capability/observe-summary", ceh.observeSummary)
 		}
 	})
 

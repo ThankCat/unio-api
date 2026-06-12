@@ -117,6 +117,7 @@ type Store interface {
 	ListModelCapabilities(ctx context.Context, modelID int64) ([]ModelCapability, error)
 	ListModelsByCapability(ctx context.Context, key Key) ([]ModelCapability, error)
 	UpsertModelCapability(ctx context.Context, params UpsertModelCapabilityParams) (ModelCapability, error)
+	DeleteModelCapability(ctx context.Context, modelID int64, key Key) error
 
 	ListChannelOverrides(ctx context.Context, channelID int64) ([]ChannelOverride, error)
 	UpsertChannelOverride(ctx context.Context, params UpsertChannelOverrideParams) (ChannelOverride, error)
@@ -127,6 +128,7 @@ type Store interface {
 	MarkSyncJobSucceeded(ctx context.Context, id int64, stats json.RawMessage) (SyncJob, error)
 	MarkSyncJobFailed(ctx context.Context, id int64, errorText string) (SyncJob, error)
 	GetLatestSyncJob(ctx context.Context, source Source) (SyncJob, error)
+	ListSyncJobs(ctx context.Context, limit int32) ([]SyncJob, error)
 }
 
 // sqlcStore 是 Store 的 sqlc 实现。
@@ -217,6 +219,18 @@ func (s *sqlcStore) UpsertModelCapability(ctx context.Context, params UpsertMode
 	}
 
 	return modelCapabilityFromSQLC(row), nil
+}
+
+func (s *sqlcStore) DeleteModelCapability(ctx context.Context, modelID int64, key Key) error {
+	err := s.queries.DeleteModelCapability(ctx, sqlc.DeleteModelCapabilityParams{
+		ModelID:       modelID,
+		CapabilityKey: string(key),
+	})
+	if err != nil {
+		return capabilityStoreFailure(err, "delete model capability")
+	}
+
+	return nil
 }
 
 func (s *sqlcStore) ListChannelOverrides(ctx context.Context, channelID int64) ([]ChannelOverride, error) {
@@ -337,6 +351,20 @@ func (s *sqlcStore) GetLatestSyncJob(ctx context.Context, source Source) (SyncJo
 	}
 
 	return syncJobFromSQLC(row), nil
+}
+
+func (s *sqlcStore) ListSyncJobs(ctx context.Context, limit int32) ([]SyncJob, error) {
+	rows, err := s.queries.ListSyncJobs(ctx, limit)
+	if err != nil {
+		return nil, capabilityStoreFailure(err, "list sync jobs")
+	}
+
+	items := make([]SyncJob, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, syncJobFromSQLC(row))
+	}
+
+	return items, nil
 }
 
 // modelFromSQLC 将 sqlc model row 转成能力领域 Model。
