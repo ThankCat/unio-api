@@ -25,7 +25,7 @@
 
 ## 1. 支持参数(Pass,忠实透传)
 
-base wire DTO(`internal/core/adapter/anthropic/wire.go` `messagesRequest`)已对复杂 union 用
+base wire DTO(`internal/core/adapter/anthropic/messages/wire.go` `messagesRequest`)已对复杂 union 用
 `json.RawMessage` 原样透传,以下全部为 `Pass`:
 
 | 字段 | 策略 | 说明 |

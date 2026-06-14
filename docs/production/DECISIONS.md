@@ -958,3 +958,90 @@ Unio 的产品定位定档为「分档网关（卖档）」，既不是「中转
    路由档界」层面的收束与锚定。
 ```
 
+## DEC-018 上游 Responses 直传 + 第三方桥接分流（DEC-014 补充）
+
+状态：accepted
+
+决策：
+
+```text
+在 DEC-014「Responses ingress 下转 Chat Completions 桥接」之上新增一个维度：当上游原生支持
+POST /responses（OpenAI 官方，或 Codex 标准中转）时，Unio 直连上游 /responses，请求 / 响应 /
+SSE 事件零结构转换透传，不再「只下转 chat」。chat-only 第三方（DeepSeek 等）继续走 DEC-014 桥接。
+
+分流发生在 service 层、按候选 adapter 能力判定，routing 不变：
+  - 候选 adapter 注册了 Responses 直传能力（HasResponses/HasStreamResponses）→ 走直传 adapter，
+    直连上游 <base>/responses；
+  - 否则（chat-only）→ 落既有 responses→chat 桥接分支（即 DEC-014 现状）。
+deepseek 等无直传能力者天然走 else 桥接，行为与现状逐字一致。
+
+新增载体而非新协议族：在 core/adapter/openai/responses 子包定义 Responses 直传契约
+（ResponsesAdapter / StreamResponsesAdapter / ResponsesInputTokenizer + Request/Response/StreamChunk
+DTO），与 chat completions adapter 并列。直传 adapter 不依赖任何 ingress（gatewayapi）DTO；
+ingress↔adapter 的请求 / 响应原文搬运由 service 编排层完成（依赖纪律沿用 DEC-002）。
+
+零转换 + 仅改写 model 回显（直传保真）：
+  - 出站：以客户原始请求体为基底零损耗重放，仅改写 model（→ candidate upstream_model）与
+    stream（→ 本次调用方式）；其余字段原样转发，不二次结构化改写。
+  - 入站：上游响应体 / SSE 事件 data 原文透传给客户，只把顶层 model 与嵌套 response.model
+    回显改写为客户请求名（分档卖档需要回显客户模型名，承接 DEC-017）。
+  - 直传流式：response.completed/incomplete 由上游下发，gateway 不二次补发收尾帧；
+    桥接流式仍由 streamEncoder 在结算后补发 response.completed（DEC-014 行为不变）。
+
+账务零改动（承接 DEC-010/DEC-014）：直传同样在 adapter 解析的同一次里抽取 adapter.ResponseFacts
+（usage 由 responses 的 input_tokens/output_tokens/*_details 归一到 ChatUsage，与桥接侧 mapResponsesUsage
+反向）；routing / authorization / settlement / recovery / 价格 / 成本快照全部复用，不新增账务 schema。
+直传与桥接两类候选共享同一条 AttemptRunner 流式 fallback 循环（chunk 载体泛型化为类型参数 + meta
+提取器，资金关键逻辑逐行不变），混合候选池在「首字节前」仍可互相 fallback。
+
+channel 零新字段：直传与桥接的区别只体现在 channel.adapter_key——绑定 openai-responses 即走直传，
+绑定 deepseek（或其它 chat adapter_key）即走桥接。不在 channel 上加 upstream_endpoint 等标记，
+新增真实第三方直传渠道 = 配 adapter_key=openai-responses 的 channel，不改代码。
+```
+
+原因：
+
+```text
+1. 部分上游（OpenAI 官方、Codex 中转）原生 /responses；对它们做 responses→chat→responses 双向
+   翻译是无谓的有损往返（reasoning / encrypted_content / namespace / 内置工具语义在压平到 chat
+   时不可避免地降级）。直传零转换是这些上游的保真上限，也最贴近真实 Codex CLI 行为。
+2. 协议分离落在 adapter 层、生命周期统一落在 AttemptRunner——既拿到「直传保真」，又不牺牲
+   Unio 既有的统一计费 / 审计 / fallback / recovery（DEC-010 边界）。
+3. 「按 adapter 能力分流」让两条路径在一个候选池里共存：同一 model 可同时绑定官方直传渠道与
+   第三方桥接渠道（分档卖档，DEC-017），routing 无需感知协议差异。
+```
+
+影响：
+
+```text
+新增 core/adapter/openai/responses 子包（contract/adapter/stream/usage/tokenizer/errors）与
+service/gateway/openai/responses 的分流分支（create_response/stream_response/direct_response）；
+registry 增 Responses/StreamResponses/ResponsesInputTokenizer 槽与 Has* 访问器；
+lifecycle.AdapterRegistry 增 responses-serve capability（含 stream 变体）与 HasAny 识别；
+ingress ResponsesRequest/Response/StreamEvent 增 raw 原文透传（自定义 MarshalJSON），
+bootstrap 注册 adapter_key=openai-responses。DEC-010/DEC-014 边界不变；DEC-014 的桥接路径
+逐字保留为 chat-only 第三方的 else 分支。
+保真欠账登记为 GAP-11-012（直传下 namespace/encrypted_content 等保真细节，仅做 model 回显改写，
+不解析重排上游其它字段）。
+```
+
+增补（2026-06-13，注册形态收敛，行为不变）：
+
+```text
+原设计把 OpenAI 1P 拆成 adapter_key=openai（仅 chat 三槽）与 adapter_key=openai-responses
+（仅 responses 三槽）两个 key，导致同一个 OpenAI 官方上游要配两个 channel、且每个 channel 只能
+服务一个端点。现合并为单个 adapter_key=openai（chat 三槽 + responses 三槽），一个 channel 即可
+同时直传 /chat/completions 与 /responses；openai-responses key 移除。
+
+分流机制与账务一律不变：仍按候选 adapter 是否注册 responses 直传能力（HasResponses）决定
+直传 vs 桥接；DEC-018 「按 adapter 能力分流」原样保留，仅注册形态从「两 key」收敛为
+「一 key 双能力组」（Registration 本就支持同 key 注册两组能力）。
+
+同时把 channels.adapter_key 在 admin 创建时改为可选：留空默认取 protocol 同名的忠实透传
+adapter（openai→openai、anthropic→anthropic），普通 OpenAI/Anthropic 兼容上游（含中转站）免填；
+仅需特殊方言/Drop 的上游才显式指定。channels 表结构与 NOT NULL 约束不变（默认值在 admin 层填充）。
+
+若将来接入「只会 /responses、不提供 /chat/completions」的上游（如纯 responses codex 中转），
+再单独注册一个仅含 responses 三槽的 adapter_key 即可，与本次合并不冲突。
+```
+

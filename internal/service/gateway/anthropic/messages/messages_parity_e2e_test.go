@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	anthropicadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic"
+	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	coreusage "github.com/ThankCat/unio-api/internal/core/usage"
@@ -18,7 +18,7 @@ import (
 
 // mockMessagesUpstream 是一个最小的 Anthropic Messages 上游替身。
 //
-// 与 service_test.go 的 fakeMessagesAdapter 不同，这里挂载真实的 anthropic.Adapter，
+// 与 service_test.go 的 fakeMessagesAdapter 不同，这里挂载真实的 messagesadapter.Adapter，
 // 因此本组用例端到端覆盖「gateway 请求映射 → adapter wire 编码 → HTTP → 响应/SSE 解析 →
 // ResponseFacts → gateway 公开 DTO」整条链路，等价于 OpenAI 侧的 openai_parity_e2e_test.go。
 type mockMessagesUpstream struct {
@@ -53,10 +53,10 @@ func newMockMessagesUpstream(t *testing.T, respond func(w http.ResponseWriter)) 
 
 // newRealMessagesRegistry 用真实 anthropic base adapter 充当注册表，复用 service_test 的 fake 形状。
 func newRealMessagesRegistry(client *http.Client) *fakeMessagesRegistry {
-	real := anthropicadapter.NewAdapter(client)
+	real := messagesadapter.NewAdapter(client)
 	return &fakeMessagesRegistry{
-		messages:       map[string]anthropicadapter.MessagesAdapter{"deepseek": real},
-		streamMessages: map[string]anthropicadapter.StreamMessagesAdapter{"deepseek": real},
+		messages:       map[string]messagesadapter.MessagesAdapter{"deepseek": real},
+		streamMessages: map[string]messagesadapter.StreamMessagesAdapter{"deepseek": real},
 	}
 }
 

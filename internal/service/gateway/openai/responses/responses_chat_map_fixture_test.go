@@ -8,14 +8,14 @@ import (
 	"testing"
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 )
 
 // codexFixtureGlob 指向真实 Codex /v1/responses 抓包（开发期手工抓包落盘）。
 const codexFixtureGlob = "../../../../blackbox/fixtures/codex/*_POST_v1_responses.json"
 
 // TestMapRealCodexFixtureToChat 用真实 v0.130 抓包端到端验证 TASK-11.05 翻译：
-// 真实请求体经 ingress decode → mapResponsesRequestToChat → 产出可喂给 openai.ChatAdapter 的 ChatRequest。
+// 真实请求体经 ingress decode → mapResponsesRequestToChat → 产出可喂给 chatcompletionsadapter.ChatAdapter 的 ChatRequest。
 func TestMapRealCodexFixtureToChat(t *testing.T) {
 	matches, err := filepath.Glob(codexFixtureGlob)
 	if err != nil {
@@ -85,7 +85,7 @@ func TestMapRealCodexFixtureToChat(t *testing.T) {
 	}
 }
 
-func assertRoles(t *testing.T, msgs []openai.ChatMessage, wantRoles ...string) {
+func assertRoles(t *testing.T, msgs []chatcompletionsadapter.ChatMessage, wantRoles ...string) {
 	t.Helper()
 	present := map[string]bool{}
 	for _, m := range msgs {

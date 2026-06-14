@@ -21,7 +21,7 @@
 Base URL: https://api.deepseek.com
 Endpoint: POST /chat/completions
 协议族:   openai
-Adapter:  internal/core/adapter/openai/deepseek
+Adapter:  internal/core/adapter/openai/deepseek/chatcompletions
 ```
 
 全局原则见 [DEC-012 协议为先与 Provider 映射 Drop 策略](../../../production/DECISIONS.md#dec-012-协议为先与-provider-映射-drop-策略)。
@@ -196,7 +196,7 @@ data: [DONE]
 实现位置：
 
 ```text
-internal/core/adapter/openai/deepseek/tokenizer.go
+internal/core/adapter/openai/deepseek/chatcompletions/tokenizer.go
 ```
 
 规则：
@@ -213,7 +213,7 @@ gatewayapi/openai 负责渲染 OpenAI error shape。
 
 ## 9. 黑盒清单
 
-实现位置：`internal/core/adapter/openai/deepseek/blackbox_test.go`（gate 在 `DEEPSEEK_BLACKBOX=1` + `DEEPSEEK_API_KEY`）。
+实现位置：`internal/core/adapter/openai/deepseek/chatcompletions/blackbox_test.go`（gate 在 `DEEPSEEK_BLACKBOX=1` + `DEEPSEEK_API_KEY`）。
 
 | ID | 场景 | 状态 |
 | --- | --- | --- |

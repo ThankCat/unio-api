@@ -8,14 +8,14 @@
 
 Anthropic 官方一方上游**尚未接入**,故本文件是**新增(创建)计划**。
 
-> **与 OpenAI 的关键差异**:Anthropic 协议族 base(`internal/core/adapter/anthropic`)**已是忠实官方基线**
+> **与 OpenAI 的关键差异**:Anthropic 协议族 base(`internal/core/adapter/anthropic/messages`)**已是忠实官方基线**
 >(无方言需下沉,见 [protocol-and-params.md §3/§4](protocol-and-params.md))。因此本计划**不含"路线 C 去方言化"**,
 > 只含三件接入工作:补 beta 透传(G1)、补 tokenizer(G2)、注册官方 adapter。
 
 ## 接入待办
 
 ### N1 · `anthropic-beta` 头透传(P0,G1)
-- **现状**:base `do()`(`internal/core/adapter/anthropic/adapter.go` L230–235)只设 `x-api-key` +
+- **现状**:base `do()`(`internal/core/adapter/anthropic/messages/adapter.go` L230–235)只设 `x-api-key` +
   `anthropic-version`;`anthropic-beta` 头按 [DEC-012](../../production/DECISIONS.md#dec-012-协议为先与-provider-映射-drop-策略)
   第 4 点在 gatewayapi 层 Drop,不到上游。
 - **官方依据**:DEC-012 明确"未来接入真实 Anthropic 1P adapter 时,应改为按登记表把支持的 beta Pass 转发到

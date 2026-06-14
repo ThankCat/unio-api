@@ -25,6 +25,14 @@ const (
 	AdapterCapabilityStream AdapterCapability = "stream"
 	// AdapterCapabilityInputTokenizer 表示调用上游前的输入 token 估算能力。
 	AdapterCapabilityInputTokenizer AdapterCapability = "input_tokenizer"
+
+	// AdapterCapabilityResponsesServeNonStream 表示能服务一次非流式 Responses 请求：
+	// 候选 adapter 原生支持上游 responses 直传（HasResponses）或可经桥接走 chat（HasChat）。
+	AdapterCapabilityResponsesServeNonStream AdapterCapability = "responses_serve_non_stream"
+	// AdapterCapabilityResponsesServeStream 表示能服务一次流式 Responses 请求（直传或桥接）。
+	AdapterCapabilityResponsesServeStream AdapterCapability = "responses_serve_stream"
+	// AdapterCapabilityResponsesServeTokenizer 表示能为一次 Responses 请求估算输入 token（直传或桥接）。
+	AdapterCapabilityResponsesServeTokenizer AdapterCapability = "responses_serve_tokenizer"
 )
 
 // AdapterRegistry 是双协议 gateway 的共享 registry facade。
@@ -84,7 +92,33 @@ func (r *AdapterRegistry) Has(protocol string, adapterKey string, capability Ada
 func (r *AdapterRegistry) HasAny(protocol string, adapterKey string) bool {
 	return r.Has(protocol, adapterKey, AdapterCapabilityNonStream) ||
 		r.Has(protocol, adapterKey, AdapterCapabilityStream) ||
-		r.Has(protocol, adapterKey, AdapterCapabilityInputTokenizer)
+		r.Has(protocol, adapterKey, AdapterCapabilityInputTokenizer) ||
+		r.Has(protocol, adapterKey, AdapterCapabilityResponsesServeNonStream) ||
+		r.Has(protocol, adapterKey, AdapterCapabilityResponsesServeStream)
+}
+
+// AdapterKeys 返回指定协议族下当前进程注册的全部 adapter key（去重、字典序）。
+//
+// admin 据此把可选 adapter_key 暴露成枚举供前端下拉；未知协议或对应 registry 缺失返回 nil。
+func (r *AdapterRegistry) AdapterKeys(protocol string) []string {
+	if r == nil {
+		return nil
+	}
+
+	switch protocol {
+	case routing.ProtocolOpenAI:
+		if r.OpenAI == nil {
+			return nil
+		}
+		return r.OpenAI.Keys()
+	case routing.ProtocolAnthropic:
+		if r.Anthropic == nil {
+			return nil
+		}
+		return r.Anthropic.Keys()
+	default:
+		return nil
+	}
 }
 
 // FilterCandidates 保持 SQL routing 顺序，过滤缺少任一指定能力的候选。
@@ -119,6 +153,14 @@ func (r *AdapterRegistry) hasOpenAI(adapterKey string, capability AdapterCapabil
 		return r.OpenAI.HasStreamChat(adapterKey)
 	case AdapterCapabilityInputTokenizer:
 		return r.OpenAI.HasChatInputTokenizer(adapterKey)
+	case AdapterCapabilityResponsesServeNonStream:
+		// 直传（上游 /responses）或桥接（responses→chat）任一可服务即保留候选；
+		// 具体走哪条由 responses service 据 HasResponses 分流。
+		return r.OpenAI.HasResponses(adapterKey) || r.OpenAI.HasChat(adapterKey)
+	case AdapterCapabilityResponsesServeStream:
+		return r.OpenAI.HasStreamResponses(adapterKey) || r.OpenAI.HasStreamChat(adapterKey)
+	case AdapterCapabilityResponsesServeTokenizer:
+		return r.OpenAI.HasResponsesInputTokenizer(adapterKey) || r.OpenAI.HasChatInputTokenizer(adapterKey)
 	default:
 		return false
 	}

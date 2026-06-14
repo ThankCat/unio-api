@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
+	chatcompletions "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 )
 
@@ -13,22 +14,22 @@ import (
 type registryTestChatAdapter struct{}
 
 // ChatCompletions 实现 ChatAdapter，registry 测试不关心实际调用结果。
-func (a *registryTestChatAdapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest) (*ChatResponse, error) {
-	return &ChatResponse{}, nil
+func (a *registryTestChatAdapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req chatcompletions.ChatRequest) (*chatcompletions.ChatResponse, error) {
+	return &chatcompletions.ChatResponse{}, nil
 }
 
 // registryTestStreamChatAdapter 是 registry 测试使用的流式 adapter 替身。
 type registryTestStreamChatAdapter struct{}
 
 // StreamChatCompletions 实现 StreamChatAdapter，registry 测试不关心实际流式内容。
-func (a *registryTestStreamChatAdapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest, emit func(ChatStreamChunk) error) (adapter.StreamOutcome, error) {
+func (a *registryTestStreamChatAdapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req chatcompletions.ChatRequest, emit func(chatcompletions.ChatStreamChunk) error) (adapter.StreamOutcome, error) {
 	return adapter.StreamOutcome{}, nil
 }
 
 // registryTestChatInputTokenizer 是 registry 测试使用的输入 tokenizer 替身。
 type registryTestChatInputTokenizer struct{}
 
-func (t *registryTestChatInputTokenizer) CountChatInputTokens(req ChatRequest) (int64, error) {
+func (t *registryTestChatInputTokenizer) CountChatInputTokens(req chatcompletions.ChatRequest) (int64, error) {
 	return 0, nil
 }
 

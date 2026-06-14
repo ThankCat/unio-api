@@ -34,6 +34,7 @@ type fakeStore struct {
 	requestsTS []sqlc.DashboardRequestsTimeseriesRow
 	tokensTS   []sqlc.DashboardTokensTimeseriesRow
 	spendTS    []sqlc.DashboardSpendTimeseriesRow
+	costTS     []sqlc.DashboardCostTimeseriesRow
 
 	gotUnit string
 }
@@ -73,6 +74,10 @@ func (s *fakeStore) DashboardTokensTimeseries(_ context.Context, arg sqlc.Dashbo
 func (s *fakeStore) DashboardSpendTimeseries(_ context.Context, arg sqlc.DashboardSpendTimeseriesParams) ([]sqlc.DashboardSpendTimeseriesRow, error) {
 	s.gotUnit = arg.Unit
 	return s.spendTS, nil
+}
+func (s *fakeStore) DashboardCostTimeseries(_ context.Context, arg sqlc.DashboardCostTimeseriesParams) ([]sqlc.DashboardCostTimeseriesRow, error) {
+	s.gotUnit = arg.Unit
+	return s.costTS, nil
 }
 
 func TestOverviewAggregates(t *testing.T) {
@@ -171,6 +176,9 @@ func TestTimeseriesDispatch(t *testing.T) {
 		spendTS: []sqlc.DashboardSpendTimeseriesRow{
 			{Bucket: pgtype.Timestamptz{Time: time.Now(), Valid: true}, Currency: "USD", Total: mustNumeric(t, "1.50")},
 		},
+		costTS: []sqlc.DashboardCostTimeseriesRow{
+			{Bucket: pgtype.Timestamptz{Time: time.Now(), Valid: true}, Currency: "USD", Total: mustNumeric(t, "0.75")},
+		},
 	}
 	svc := NewService(store)
 
@@ -191,6 +199,17 @@ func TestTimeseriesDispatch(t *testing.T) {
 	}
 	if len(spendSeries.SpendPoints) != 1 || spendSeries.SpendPoints[0].Amount != "1.5" {
 		t.Fatalf("spend metric should fill SpendPoints with trimmed amount: %+v", spendSeries.SpendPoints)
+	}
+
+	costSeries, err := svc.Timeseries(context.Background(), MetricCost, IntervalDay, time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("cost timeseries: %v", err)
+	}
+	if len(costSeries.CostPoints) != 1 || costSeries.CostPoints[0].Amount != "0.75" {
+		t.Fatalf("cost metric should fill CostPoints with trimmed amount: %+v", costSeries.CostPoints)
+	}
+	if costSeries.SpendPoints != nil || costSeries.RequestPoints != nil {
+		t.Fatalf("cost metric should fill only CostPoints: %+v", costSeries)
 	}
 }
 

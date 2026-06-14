@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
@@ -17,7 +17,7 @@ func TestChatCompletionServiceCreateChatCompletionReturnsResponseWhenRecoverySch
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
-			chatAdapters: map[string]openai.ChatAdapter{
+			chatAdapters: map[string]chatcompletionsadapter.ChatAdapter{
 				"openai": &fakeChatAdapter{chatResp: chatResponse("adapter response")},
 			},
 		},
@@ -53,8 +53,8 @@ func TestChatCompletionServiceStreamReturnsNilWhenRecoveryScheduledAfterFinalUsa
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
-			streamChatAdapters: map[string]openai.StreamChatAdapter{
-				"openai": &fakeChatAdapter{streamResp: []openai.ChatStreamChunk{
+			streamChatAdapters: map[string]chatcompletionsadapter.StreamChatAdapter{
+				"openai": &fakeChatAdapter{streamResp: []chatcompletionsadapter.ChatStreamChunk{
 					{ID: "chatcmpl_mock", Model: "gpt-4.1", Role: "assistant", Content: "stream content"},
 					streamUsageChunk("gpt-4.1"),
 				}},
@@ -91,9 +91,9 @@ func TestChatCompletionServiceStreamKeepsTailErrorWhenRecoveryScheduled(t *testi
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
-			streamChatAdapters: map[string]openai.StreamChatAdapter{
+			streamChatAdapters: map[string]chatcompletionsadapter.StreamChatAdapter{
 				"openai": &fakeChatAdapter{
-					streamResp: []openai.ChatStreamChunk{
+					streamResp: []chatcompletionsadapter.ChatStreamChunk{
 						{ID: "chatcmpl_mock", Model: "gpt-4.1", Role: "assistant", Content: "billable stream content"},
 						streamUsageChunk("gpt-4.1"),
 					},

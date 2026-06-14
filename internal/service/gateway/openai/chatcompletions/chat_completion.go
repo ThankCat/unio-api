@@ -6,7 +6,7 @@ import (
 	"time"
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
@@ -84,8 +84,8 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 	// 协议差异通过两个 typed 闭包注入：ResolveAdapter 解析 typed adapter，Invoke 执行一次上游调用
 	// 并把 typed response 捕获到本作用域，供成功后映射 HTTP DTO。
 	var (
-		chatAdapter openai.ChatAdapter
-		adapterResp *openai.ChatResponse
+		chatAdapter chatcompletionsadapter.ChatAdapter
+		adapterResp *chatcompletionsadapter.ChatResponse
 	)
 	runResult, err := s.attemptRunner.RunNonStream(ctx, lifecycle.RunNonStreamParams{
 		RequestRecord:        requestRecord,

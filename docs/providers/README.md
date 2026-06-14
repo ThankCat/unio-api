@@ -73,7 +73,7 @@ docs/providers/<provider>/
 - **官方文档来源**：在所在小节或表格旁标注页面名、链接与查阅日期。
   - 格式：`来源：[官方·页面名](URL)(查阅 YYYY-MM-DD)`
 - **代码来源**：标注文件路径(必要时含函数名)。
-  - 格式：`代码：internal/core/adapter/openai/deepseek/drop.go`
+  - 格式：`代码：internal/core/adapter/openai/deepseek/chatcompletions/drop.go`
 - **黑盒实测**：标注实测日期与验证方式。
   - 格式：`实测(YYYY-MM-DD)：<如何验证>`
 - **不确定 / 官方未明确**：标 `⚠️ 待查证`,写明需要确认的官方页面,**不得**写成结论性表述。

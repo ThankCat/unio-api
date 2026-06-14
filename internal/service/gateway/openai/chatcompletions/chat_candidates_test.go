@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
@@ -32,12 +32,12 @@ func (r *openAICandidateCapabilityRegistry) FilterCandidates(protocol string, ca
 }
 
 type recordingChatInputTokenizer struct {
-	reqs   []openai.ChatRequest
+	reqs   []chatcompletionsadapter.ChatRequest
 	tokens int64
 	err    error
 }
 
-func (t *recordingChatInputTokenizer) CountChatInputTokens(req openai.ChatRequest) (int64, error) {
+func (t *recordingChatInputTokenizer) CountChatInputTokens(req chatcompletionsadapter.ChatRequest) (int64, error) {
 	t.reqs = append(t.reqs, req)
 	return t.tokens, t.err
 }
@@ -53,7 +53,7 @@ func TestPrepareChatCandidatesUsesEachAdapterTokenizerAndMaximumEstimate(t *test
 	}
 	service := &ChatCompletionService{
 		registry: &fakeAdapterRegistry{
-			chatInputTokenizers: map[string]openai.ChatInputTokenizer{
+			chatInputTokenizers: map[string]chatcompletionsadapter.ChatInputTokenizer{
 				"primary": primary,
 				"backup":  backup,
 			},
@@ -113,7 +113,7 @@ func TestPrepareChatCandidatesWrapsTokenizerFailure(t *testing.T) {
 	tokenizeErr := errors.New("tokenizer failed")
 	service := &ChatCompletionService{
 		registry: &fakeAdapterRegistry{
-			chatInputTokenizers: map[string]openai.ChatInputTokenizer{
+			chatInputTokenizers: map[string]chatcompletionsadapter.ChatInputTokenizer{
 				"deepseek": &recordingChatInputTokenizer{err: tokenizeErr},
 			},
 		},

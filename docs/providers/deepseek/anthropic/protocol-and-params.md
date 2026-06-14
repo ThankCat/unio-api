@@ -21,7 +21,7 @@
 Base URL: https://api.deepseek.com/anthropic
 Endpoint: POST /v1/messages
 协议族:   anthropic
-Adapter:  internal/core/adapter/anthropic/deepseek
+Adapter:  internal/core/adapter/anthropic/deepseek/messages
 ```
 
 状态：
@@ -276,7 +276,7 @@ tool_result.is_error
 实现位置：
 
 ```text
-internal/core/adapter/anthropic/deepseek/tokenizer.go
+internal/core/adapter/anthropic/deepseek/messages/tokenizer.go
 ```
 
 实现规则：

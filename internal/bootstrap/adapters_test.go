@@ -31,6 +31,18 @@ func TestNewAdapterRegistryRegistersDeepSeekDualProtocolCapabilities(t *testing.
 	if !registry.Anthropic.HasMessagesInputTokenizer("deepseek") {
 		t.Fatal("expected deepseek anthropic messages input tokenizer to be registered")
 	}
+	if !registry.Anthropic.HasMessages("anthropic") {
+		t.Fatal("expected anthropic official messages capability to be registered")
+	}
+	if !registry.Anthropic.HasStreamMessages("anthropic") {
+		t.Fatal("expected anthropic official stream messages capability to be registered")
+	}
+	if !registry.Anthropic.HasMessagesInputTokenizer("anthropic") {
+		t.Fatal("expected anthropic official messages input tokenizer to be registered")
+	}
+	if !registry.OpenAI.HasChat("openai") {
+		t.Fatal("expected openai official chat capability to be registered")
+	}
 	if registry.Has(routing.ProtocolOpenAI, "missing", lifecycle.AdapterCapabilityNonStream) {
 		t.Fatal("expected unknown openai capability to be absent")
 	}

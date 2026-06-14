@@ -6,7 +6,7 @@
 ## 1. 总览:官方 adapter = base 直接复用
 
 ```text
-ingress(OpenAI) → contract(ChatRequest) → base adapter(internal/core/adapter/openai) → 官方 upstream
+ingress(OpenAI) → contract(ChatRequest) → base adapter(internal/core/adapter/openai/chatcompletions) → 官方 upstream
 ```
 
 第三方上游(DeepSeek)的接法是「base + provider drop 层」:
@@ -22,14 +22,14 @@ deepseek.Adapter{ base: openai.Adapter }  // 调上游前先 dropUnsupported
 
 ## 2. 请求链路(ingress → upstream)
 
-- **编码**:`buildChatCompletionRequestBody`(`internal/core/adapter/openai/request_wire.go`)把 typed 字段编码为
+- **编码**:`buildChatCompletionRequestBody`(`internal/core/adapter/openai/chatcompletions/request_wire.go`)把 typed 字段编码为
   wire,再把未建模的合法字段经 `Extensions` merge(已存在键不覆盖)。这套「typed + Extensions」机制本身是忠实的。
 - **唯一注入**:流式时强制 `stream_options.include_usage=true`(L45–48),以拿计费 usage。这是**计费必需**,
   对官方语义无损(只是确保拿到 usage)。
 - **路线 C 要改的两处**(当前破坏忠实性,见 protocol-and-params §5):
   - `resolveWireMaxTokens`:停止把 `max_completion_tokens` 塌缩为 `max_tokens`;base 忠实输出 `max_completion_tokens`。
   - `mapWireMessageRole`:停止把 `developer` 塌缩为 `system`;base 忠实透传 `developer`。
-  - 这两条 DeepSeek 仍需要 → 下沉到 `internal/core/adapter/openai/deepseek`(在其 `Messages`/`StreamMessages`
+  - 这两条 DeepSeek 仍需要 → 下沉到 `internal/core/adapter/openai/deepseek/chatcompletions`(在其 `Messages`/`StreamMessages`
     调 base 前,或在 deepseek 专属 request map 里完成)。
 
 ## 3. 响应链路(upstream → 客户)
@@ -75,7 +75,7 @@ deepseek.Adapter{ base: openai.Adapter }  // 调上游前先 dropUnsupported
 ## 10. 内部输入 tokenizer
 
 - 注册 `(openai, openai)` 需要 `openai.ChatInputTokenizer`(authorization 预扣费用,非 settlement 事实)。
-- 协议族包内已有 `internal/core/adapter/openai/tokenizer.go`(`fallbackEncoding` 等)。
+- 协议族包内已有 `internal/core/adapter/openai/chatcompletions/tokenizer.go`(`fallbackEncoding` 等)。
 - ⚠️ 接入待办:确认 base `openai.Adapter` 是否直接实现 `ChatInputTokenizer`;若未实现,官方 adapter 需
   显式装配一个基于 **Drop 后 wire** 的估算器(官方无 Drop,即按忠实 wire 估算)。详见 [upgrade-plan.md](upgrade-plan.md)。
 

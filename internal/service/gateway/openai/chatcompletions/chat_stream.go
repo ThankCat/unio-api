@@ -7,7 +7,7 @@ import (
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
@@ -85,7 +85,7 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 	// OpenAI chat 与 responses 复用同一资金关键流式链路。协议差异通过 typed 闭包注入：
 	// ResolveAdapter 解析 stream adapter；Stream 执行一次上游流式调用；EmitChunk 翻译并写出 SSE 帧；
 	// Finish 在结算成功后按 include_usage 写收尾 usage chunk。
-	var streamAdapter openai.StreamChatAdapter
+	var streamAdapter chatcompletionsadapter.StreamChatAdapter
 	runResult, err := s.attemptRunner.RunStream(ctx, lifecycle.RunStreamParams{
 		RequestRecord:        requestRecord,
 		Principal:            principal,
@@ -105,14 +105,14 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 			streamAdapter = adapter
 			return nil
 		},
-		Stream: func(ctx context.Context, candidate routing.ChatRouteCandidate, onChunk func(openai.ChatStreamChunk) error) (*adapter.ResponseFacts, error) {
+		Stream: func(ctx context.Context, candidate routing.ChatRouteCandidate, onChunk func(chatcompletionsadapter.ChatStreamChunk) error) (*adapter.ResponseFacts, error) {
 			streamCtx, streamSpan := lifecycle.StartGatewaySpan(ctx, "adapter.stream_chat_completions", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 			streamOutcome, streamErr := streamAdapter.StreamChatCompletions(streamCtx, candidate.Channel,
 				mapGatewayRequestToAdapter(req, candidate.UpstreamModel), onChunk)
 			lifecycle.EndGatewaySpan(streamSpan, streamErr)
 			return streamOutcome.Facts, streamErr
 		},
-		EmitChunk: func(chunk openai.ChatStreamChunk) error {
+		EmitChunk: func(chunk chatcompletionsadapter.ChatStreamChunk) error {
 			chunkResp := mapAdapterStreamChunkToGateway(req.Model, chunk, req.StreamIncludeUsage())
 			// 优先透传上游 chunk created；仅当上游未给出（0）时回退本地时间。
 			if chunkResp.Created == 0 {

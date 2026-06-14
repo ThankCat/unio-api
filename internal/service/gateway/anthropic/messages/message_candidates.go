@@ -4,7 +4,7 @@ import (
 	"context"
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
-	anthropicadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic"
+	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
@@ -42,7 +42,7 @@ func (s *MessagesService) messagesInputTokenEstimator(req gatewayapi.MessageRequ
 		}
 
 		adapterReq := mapGatewayRequestToAdapter(req, candidate.UpstreamModel)
-		inputTokens, err := tokenizer.CountMessagesInputTokens(anthropicadapter.MessagesInputTokenizeRequest{
+		inputTokens, err := tokenizer.CountMessagesInputTokens(messagesadapter.MessagesInputTokenizeRequest{
 			Model:    adapterReq.Model,
 			System:   adapterReq.System,
 			Messages: adapterReq.Messages,

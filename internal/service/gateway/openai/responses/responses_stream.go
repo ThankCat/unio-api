@@ -6,10 +6,10 @@ import (
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 )
 
-// responses_stream.go 负责流式方向翻译：把内部 openai.ChatStreamChunk 序列（SSE delta）翻译成
+// responses_stream.go 负责流式方向翻译：把内部 chatcompletionsadapter.ChatStreamChunk 序列（SSE delta）翻译成
 // Responses 命名事件序列（response.created → output_item.added → *.delta → output_item.done →
 // response.completed），并维护单调 sequence_number（BRIDGE §6）。
 //
@@ -109,7 +109,7 @@ func (e *streamEncoder) Started() bool { return e.started }
 // Handle 消费单个上游内容 chunk，发出对应的增量命名事件。
 //
 // 调用方必须已过滤 usage chunk 与纯 id chunk；本方法只处理 reasoning / 文本 / tool_call 增量。
-func (e *streamEncoder) Handle(chunk openai.ChatStreamChunk) error {
+func (e *streamEncoder) Handle(chunk chatcompletionsadapter.ChatStreamChunk) error {
 	if err := e.ensureStarted(); err != nil {
 		return err
 	}

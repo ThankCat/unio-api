@@ -84,4 +84,3 @@ func TestOAISDKMockNonStreamSucceeds(t *testing.T) {
 		t.Fatalf("expected upstream messages array, got %v", upstreamBody["messages"])
 	}
 }
-

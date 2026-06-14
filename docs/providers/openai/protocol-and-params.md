@@ -84,19 +84,26 @@
 
 **空。** 官方端点不丢弃任何合法 OpenAI 字段。若未来官方文档明确删除某字段,在此登记并标官方依据(链接 + 日期)。
 
-## 5. 路线 C:去方言化下沉清单(本次接入核心)
+## 5. 路线 C:去方言化下沉清单(已完成,2026-06-12)
 
-当前协议族 base adapter(`internal/core/adapter/openai`)被 DeepSeek 接入烤进了两处**有损改写**,
-导致它**不是**忠实的官方基线。接入官方 adapter 前必须把这两处从 base 移出、下沉到 `openai/deepseek` 层。
+协议族 base adapter(`internal/core/adapter/openai/chatcompletions`)曾被 DeepSeek 接入烤进两处**有损改写**。
+路线 C 改造已于 2026-06-12 完成:base 回归忠实官方基线,两条方言下沉到 `openai/deepseek` 层。
 
-| # | 当前 base 行为(方言) | 代码位置 | 对官方的影响 | 路线 C 处置 |
-| --- | --- | --- | --- | --- |
-| L1 | `max_completion_tokens` 被塌缩为 wire `max_tokens`(`resolveWireMaxTokens`:`MaxCompletionTokens != nil` 时填入 wire `MaxTokens`) | `internal/core/adapter/openai/request_wire.go` L15、L62–68 | 官方新模型(o 系列等)**要求** `max_completion_tokens`,`max_tokens` 已弃用;塌缩后官方可能拒绝或语义错位 | base 改为忠实输出 `max_completion_tokens`(新增 wire 字段);把"塌缩为 `max_tokens`"下沉到 `openai/deepseek` |
-| L2 | `developer` role 被映射为 `system`(`mapWireMessageRole`) | `internal/core/adapter/openai/request_wire.go` L74、L86–93 | 官方原生区分 `developer` 与 `system`(指令优先级不同);塌缩丢失语义 | base 改为忠实透传 `developer`;把"`developer`→`system`"下沉到 `openai/deepseek` |
+| # | 原 base 行为(方言) | 路线 C 处置(已落地) |
+| --- | --- | --- |
+| L1 | `max_completion_tokens` 被塌缩为 wire `max_tokens`(原 `resolveWireMaxTokens`) | base wire DTO 新增 `max_completion_tokens` 字段,两字段**各自独立忠实输出**;塌缩规则下沉为 `openai/deepseek` 的 `adaptMaxCompletionTokens`(`adapt.go`,在 `dropUnsupported` 入口执行,冲突时仍优先 completion tokens,行为零回归) |
+| L2 | `developer` role 被映射为 `system`(原 `mapWireMessageRole`) | base 忠实透传 `developer`;塌缩规则下沉为 `openai/deepseek` 的 `adaptDeveloperRole`(保持消息相对顺序,行为零回归) |
 
-> 黑盒冻结记录(2026-06-12):⚠️ 待查证 —— 官方端点对 `max_tokens` vs `max_completion_tokens` 的实际接受行为、
-> 以及 `developer` role 的实际处理,需在拿到官方 key 后用最小请求实测冻结(见 [upgrade-plan.md](upgrade-plan.md) 黑盒待办)。
-> 在实测前,上表依据为官方文档([Chat Completions](https://platform.openai.com/docs/api-reference/chat/create)、查阅 2026-06-12)。
+双向回归测试:base `request_wire_test.go`(官方路径忠实)+ deepseek `drop_test.go`(DeepSeek 塌缩零回归)。
+
+> 黑盒冻结记录(2026-06-12,经 OpenRouter OpenAI 协议端点实测,`https://openrouter.ai/api/v1`):
+>
+> - `developer` role、`max_completion_tokens`、`max_tokens`+`max_completion_tokens` **双字段同传**、
+>   `reasoning_effort` 原生枚举:忠实 wire 均被 200 接受(`internal/core/adapter/openai/blackbox_test.go` 三用例全过)。
+> - 流式注入 `stream_options.include_usage` 的尾包 usage 形状(含 `*_tokens_details` 的 cached/reasoning 维度)正常解析。
+> - ⚠️ 残留待查证:**OpenAI 官方直连端点**(`api.openai.com`)与官方在售模型(gpt-5.5 等)的实测被
+>   OpenRouter 账户级 403(provider ToS,中国区限制)拦截,无法经该代理完成;待可用的官方 key / 渠道后
+>   重跑同一组黑盒用例完成最终冻结(用例已就位,env 门控:`OPENAI_BLACKBOX=1` + key/base_url/model)。
 
 下沉后,DeepSeek 侧的这两条规则与现有 [../deepseek/openai/protocol-and-params.md](../deepseek/openai/protocol-and-params.md)
 §2(`max_completion_tokens`→`max_tokens` Adapt)、§3(`developer`→`system` Adapt)保持一致,行为不变。

@@ -19,7 +19,7 @@ DeepSeek v4 默认**思考开启**。Anthropic 格式下的控制:
 
 强度归一:adapter 出站**显式归一** `output_config.effort` 为 `high`/`max`(minimal/low/medium/high→high,
 xhigh/max→max),未知值 Drop 让上游回退默认,不依赖上游隐式兼容映射。
-代码:`internal/core/adapter/anthropic/deepseek/drop.go`(`adaptOutputConfig`、`normalizeOutputConfigEffort`)。
+代码:`internal/core/adapter/anthropic/deepseek/messages/drop.go`(`adaptOutputConfig`、`normalizeOutputConfigEffort`)。
 
 > 思考模式下 `temperature`/`top_p` 等不报错但不生效(官方·思考模式)。
 
@@ -51,7 +51,7 @@ Anthropic 格式下思维链以 `thinking` content block 表达。与 OpenAI 格
 - Unio **不依赖**该隐式映射:routing 选中 channel-model 后用显式 `upstream_model` 发上游;
   响应里把 `model` 恢复为客户的 Unio catalog model,审计记录真实 upstream model。
 
-代码:`internal/core/adapter/anthropic` response map。
+代码:`internal/core/adapter/anthropic/messages` response map。
 
 ## 5. usage 映射(上游 → 内部计费事实)
 
@@ -63,14 +63,14 @@ Anthropic 格式下思维链以 `thinking` content block 表达。与 OpenAI 格
 | `output_tokens` | 输出总量(思考 token 不单独返回,已含在 output) |
 
 来源:[官方·Anthropic API](https://api-docs.deepseek.com/zh-cn/guides/anthropic_api)(查阅 2026-06-07);
-代码 `internal/core/adapter/anthropic`。计费金额口径见 [../billing.md](../billing.md)。
+代码 `internal/core/adapter/anthropic/messages`。计费金额口径见 [../billing.md](../billing.md)。
 
 ## 6. 错误映射(重要)
 
 DeepSeek 的 **Anthropic endpoint 错误体是 OpenAI 风格信封**(`{"error":{type,code,message}}`),
 **不是** Anthropic error shape。adapter 按 OpenAI 信封解析、以 HTTP status 为主映射 category,
 gatewayapi 再渲染成原生 **Anthropic** error 返回客户。上游 auth/permission 绝不渲染成客户 401
-(对客户屏蔽上游凭据问题)。代码:`internal/core/adapter/anthropic/deepseek`。
+(对客户屏蔽上游凭据问题)。代码:`internal/core/adapter/anthropic/deepseek/messages`。
 
 错误码:400 / 401 / 402 / 422 / 429 / 500 / 503,同 OpenAI 格式。
 来源:[官方·错误码](https://api-docs.deepseek.com/zh-cn/quick_start/error_codes)(查阅 2026-06-07)。

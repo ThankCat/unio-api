@@ -5,7 +5,7 @@ import (
 	"time"
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
@@ -62,7 +62,7 @@ func TestChatCompletionServiceRecordsSuccessMetrics(t *testing.T) {
 	fakeAdapter := &fakeChatAdapter{chatResp: chatResponse("ok")}
 	router := &fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))}
 	registry := &fakeAdapterRegistry{
-		chatAdapters: map[string]openai.ChatAdapter{"openai": fakeAdapter},
+		chatAdapters: map[string]chatcompletionsadapter.ChatAdapter{"openai": fakeAdapter},
 	}
 	service := NewChatCompletionService(
 		router,
@@ -99,13 +99,13 @@ func TestChatCompletionServiceRecordsSuccessMetrics(t *testing.T) {
 
 func TestChatCompletionServiceRecordsStreamSuccessMetrics(t *testing.T) {
 	recorder := &fakeMetricsRecorder{}
-	streamAdapter := &fakeChatAdapter{streamResp: []openai.ChatStreamChunk{
+	streamAdapter := &fakeChatAdapter{streamResp: []chatcompletionsadapter.ChatStreamChunk{
 		{ID: "c", Model: "gpt-4.1", Role: "assistant", Content: "hi"},
 		streamUsageChunk("gpt-4.1"),
 	}}
 	router := &fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))}
 	registry := &fakeAdapterRegistry{
-		streamChatAdapters: map[string]openai.StreamChatAdapter{"openai": streamAdapter},
+		streamChatAdapters: map[string]chatcompletionsadapter.StreamChatAdapter{"openai": streamAdapter},
 	}
 	service := NewChatCompletionService(
 		router,

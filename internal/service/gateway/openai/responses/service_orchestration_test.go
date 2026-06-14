@@ -8,7 +8,8 @@ import (
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
+	responsesadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
@@ -31,36 +32,67 @@ func (r *fakeRouter) PlanChat(_ context.Context, _ routing.ChatRouteRequest) (ro
 
 type fakeTokenizer struct{}
 
-func (fakeTokenizer) CountChatInputTokens(_ openai.ChatRequest) (int64, error) { return 16, nil }
-
-type fakeRegistry struct {
-	adapters       map[string]openai.ChatAdapter
-	streamAdapters map[string]openai.StreamChatAdapter
-	tokenizers     map[string]openai.ChatInputTokenizer
+func (fakeTokenizer) CountChatInputTokens(_ chatcompletionsadapter.ChatRequest) (int64, error) {
+	return 16, nil
 }
 
-func (r *fakeRegistry) Chat(key string) (openai.ChatAdapter, bool) {
+type fakeRegistry struct {
+	adapters       map[string]chatcompletionsadapter.ChatAdapter
+	streamAdapters map[string]chatcompletionsadapter.StreamChatAdapter
+	tokenizers     map[string]chatcompletionsadapter.ChatInputTokenizer
+
+	responsesAdapters       map[string]responsesadapter.ResponsesAdapter
+	streamResponsesAdapters map[string]responsesadapter.StreamResponsesAdapter
+	responsesTokenizers     map[string]responsesadapter.ResponsesInputTokenizer
+}
+
+func (r *fakeRegistry) Chat(key string) (chatcompletionsadapter.ChatAdapter, bool) {
 	a, ok := r.adapters[key]
 	return a, ok
 }
 
-func (r *fakeRegistry) StreamChat(key string) (openai.StreamChatAdapter, bool) {
+func (r *fakeRegistry) StreamChat(key string) (chatcompletionsadapter.StreamChatAdapter, bool) {
 	a, ok := r.streamAdapters[key]
 	return a, ok
 }
 
-func (r *fakeRegistry) ChatInputTokenizer(key string) (openai.ChatInputTokenizer, bool) {
+func (r *fakeRegistry) ChatInputTokenizer(key string) (chatcompletionsadapter.ChatInputTokenizer, bool) {
 	t, ok := r.tokenizers[key]
 	return t, ok
 }
 
+func (r *fakeRegistry) Responses(key string) (responsesadapter.ResponsesAdapter, bool) {
+	a, ok := r.responsesAdapters[key]
+	return a, ok
+}
+
+func (r *fakeRegistry) StreamResponses(key string) (responsesadapter.StreamResponsesAdapter, bool) {
+	a, ok := r.streamResponsesAdapters[key]
+	return a, ok
+}
+
+func (r *fakeRegistry) ResponsesInputTokenizer(key string) (responsesadapter.ResponsesInputTokenizer, bool) {
+	t, ok := r.responsesTokenizers[key]
+	return t, ok
+}
+
+func (r *fakeRegistry) HasResponses(key string) bool {
+	_, ok := r.responsesAdapters[key]
+	return ok
+}
+
+func (r *fakeRegistry) HasStreamResponses(key string) bool {
+	_, ok := r.streamResponsesAdapters[key]
+	return ok
+}
+
 type fakeChatAdapter struct {
-	req  openai.ChatRequest
-	resp *openai.ChatResponse
+	req  chatcompletionsadapter.ChatRequest
+	resp *chatcompletionsadapter.ChatResponse
 	err  error
 }
 
-func (a *fakeChatAdapter) ChatCompletions(_ context.Context, _ channel.Runtime, req openai.ChatRequest) (*openai.ChatResponse, error) {
+func (a *fakeChatAdapter) ChatCompletions(_ context.Context, _ channel.Runtime, req chatcompletionsadapter.ChatRequest) (*chatcompletionsadapter.ChatResponse, error) {
 	a.req = req
 	return a.resp, a.err
 }
@@ -231,10 +263,10 @@ func candidate(adapterKey string, channelID int64, upstreamModel string) routing
 	}
 }
 
-func okChatResponse() *openai.ChatResponse {
+func okChatResponse() *chatcompletionsadapter.ChatResponse {
 	usage := adapter.ChatUsage{PromptTokens: 12, CompletionTokens: 8, TotalTokens: 20}
 	meta := adapter.UpstreamMetadata{StatusCode: 200, RequestID: "req-1"}
-	return &openai.ChatResponse{
+	return &chatcompletionsadapter.ChatResponse{
 		ID:           "chatcmpl_upstream",
 		Model:        "deepseek-v4-flash",
 		Content:      "hi there",
@@ -247,7 +279,7 @@ func okChatResponse() *openai.ChatResponse {
 			UpstreamResponseID:  "chatcmpl_upstream",
 			UpstreamModel:       "deepseek-v4-flash",
 			Finish:              adapter.FinishFacts{Class: adapter.FinishStop, RawReason: "stop"},
-			UsageMappingVersion: "openai.v1",
+			UsageMappingVersion: "chatcompletionsadapter.v1",
 			Metadata:            meta,
 		},
 	}
@@ -292,7 +324,7 @@ func TestPrepareResponsesCandidatesStreamCapability(t *testing.T) {
 	rec := &recordingPreparer{}
 	svc := NewResponsesService(
 		&fakeRouter{},
-		&fakeRegistry{tokenizers: map[string]openai.ChatInputTokenizer{}},
+		&fakeRegistry{tokenizers: map[string]chatcompletionsadapter.ChatInputTokenizer{}},
 		rec,
 		lifecycle.NeverRetryClassifier{},
 		newFakeRequestLog(),
@@ -304,29 +336,39 @@ func TestPrepareResponsesCandidatesStreamCapability(t *testing.T) {
 	req := gatewayapi.ResponsesRequest{Model: "m"}
 	cands := []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}
 
-	if _, err := svc.prepareResponsesCandidates(context.Background(), req, cands, true); err != nil {
+	// allowDirect=true（CreateResponse/StreamResponse 生产路径）：按 responses-serve 能力分流过滤，
+	// 流式只保留 serve-stream，非流式只保留 serve-nonstream，避免单一模式候选误选。
+	if _, err := svc.prepareResponsesCandidates(context.Background(), req, cands, true, true); err != nil {
 		t.Fatalf("stream prepare: %v", err)
 	}
-	if !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityStream) || hasCapability(rec.capabilities, lifecycle.AdapterCapabilityNonStream) {
-		t.Fatalf("stream=true capabilities = %v, want Stream and not NonStream", rec.capabilities)
+	if !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityResponsesServeStream) || hasCapability(rec.capabilities, lifecycle.AdapterCapabilityResponsesServeNonStream) {
+		t.Fatalf("stream=true capabilities = %v, want ResponsesServeStream and not ResponsesServeNonStream", rec.capabilities)
 	}
-	if !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityInputTokenizer) {
-		t.Fatalf("stream=true capabilities = %v, want InputTokenizer present", rec.capabilities)
+	if !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityResponsesServeTokenizer) {
+		t.Fatalf("stream=true capabilities = %v, want ResponsesServeTokenizer present", rec.capabilities)
 	}
 
-	if _, err := svc.prepareResponsesCandidates(context.Background(), req, cands, false); err != nil {
+	if _, err := svc.prepareResponsesCandidates(context.Background(), req, cands, false, true); err != nil {
 		t.Fatalf("non-stream prepare: %v", err)
 	}
-	if !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityNonStream) || hasCapability(rec.capabilities, lifecycle.AdapterCapabilityStream) {
-		t.Fatalf("stream=false capabilities = %v, want NonStream and not Stream", rec.capabilities)
+	if !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityResponsesServeNonStream) || hasCapability(rec.capabilities, lifecycle.AdapterCapabilityResponsesServeStream) {
+		t.Fatalf("stream=false capabilities = %v, want ResponsesServeNonStream and not ResponsesServeStream", rec.capabilities)
+	}
+
+	// allowDirect=false（CompactHistory 强制桥接）：退回纯 chat 桥接能力过滤。
+	if _, err := svc.prepareResponsesCandidates(context.Background(), req, cands, false, false); err != nil {
+		t.Fatalf("bridge-only prepare: %v", err)
+	}
+	if !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityNonStream) || !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityInputTokenizer) {
+		t.Fatalf("allowDirect=false capabilities = %v, want chat NonStream + InputTokenizer", rec.capabilities)
 	}
 }
 
 func TestCreateResponse_HappyPath(t *testing.T) {
 	chatAdapter := &fakeChatAdapter{resp: okChatResponse()}
 	registry := &fakeRegistry{
-		adapters:   map[string]openai.ChatAdapter{"deepseek": chatAdapter},
-		tokenizers: map[string]openai.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
+		adapters:   map[string]chatcompletionsadapter.ChatAdapter{"deepseek": chatAdapter},
+		tokenizers: map[string]chatcompletionsadapter.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
 	}
 	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}}}
 	settlement := &fakeSettlement{}
@@ -385,8 +427,8 @@ func TestCreateResponse_HappyPath(t *testing.T) {
 
 func TestCreateResponse_AdapterNotRegistered(t *testing.T) {
 	registry := &fakeRegistry{
-		adapters:   map[string]openai.ChatAdapter{},
-		tokenizers: map[string]openai.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
+		adapters:   map[string]chatcompletionsadapter.ChatAdapter{},
+		tokenizers: map[string]chatcompletionsadapter.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
 	}
 	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}}}
 	authorizer := &fakeAuthorizer{}
@@ -413,8 +455,8 @@ func TestCreateResponse_AdapterNotRegistered(t *testing.T) {
 func TestCreateResponse_AuthorizationFailed(t *testing.T) {
 	chatAdapter := &fakeChatAdapter{resp: okChatResponse()}
 	registry := &fakeRegistry{
-		adapters:   map[string]openai.ChatAdapter{"deepseek": chatAdapter},
-		tokenizers: map[string]openai.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
+		adapters:   map[string]chatcompletionsadapter.ChatAdapter{"deepseek": chatAdapter},
+		tokenizers: map[string]chatcompletionsadapter.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
 	}
 	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}}}
 	// 用无 failure.Code 的裸错误，触发 lifecycle 兜底 code（FailureCodeOrFallback）。

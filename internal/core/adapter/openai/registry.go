@@ -3,7 +3,10 @@ package openai
 import (
 	"errors"
 	"fmt"
+	"sort"
 
+	chatcompletions "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
+	responsesadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
 
@@ -15,26 +18,41 @@ var (
 )
 
 // Registration 表示一个 adapter key 对应的代码能力。
+//
+// chat 三槽是 chat completions / responses→chat 桥接复用的基线能力；responses 三槽是「上游 responses
+// 直传」能力（adapter_key 原生支持上游 /responses 时注册）。同一个 adapter_key 可只注册其中一组，
+// 也可两组都注册；responses service 据候选 adapter 是否有 responses 直传能力分流（直传 vs 桥接）。
 type Registration struct {
 	Key                string
-	Chat               ChatAdapter
-	StreamChat         StreamChatAdapter
-	ChatInputTokenizer ChatInputTokenizer
+	Chat               chatcompletions.ChatAdapter
+	StreamChat         chatcompletions.StreamChatAdapter
+	ChatInputTokenizer chatcompletions.ChatInputTokenizer
+
+	Responses               responsesadapter.ResponsesAdapter
+	StreamResponses         responsesadapter.StreamResponsesAdapter
+	ResponsesInputTokenizer responsesadapter.ResponsesInputTokenizer
 }
 
 // Registry 根据 adapter key 查找对应 adapter 能力。
 type Registry struct {
-	chat               map[string]ChatAdapter
-	streamChat         map[string]StreamChatAdapter
-	chatInputTokenizer map[string]ChatInputTokenizer
+	chat               map[string]chatcompletions.ChatAdapter
+	streamChat         map[string]chatcompletions.StreamChatAdapter
+	chatInputTokenizer map[string]chatcompletions.ChatInputTokenizer
+
+	responses               map[string]responsesadapter.ResponsesAdapter
+	streamResponses         map[string]responsesadapter.StreamResponsesAdapter
+	responsesInputTokenizer map[string]responsesadapter.ResponsesInputTokenizer
 }
 
 // NewRegistry 创建 adapter registry。
 func NewRegistry(registrations ...Registration) (*Registry, error) {
 	r := &Registry{
-		chat:               make(map[string]ChatAdapter),
-		streamChat:         make(map[string]StreamChatAdapter),
-		chatInputTokenizer: make(map[string]ChatInputTokenizer),
+		chat:                    make(map[string]chatcompletions.ChatAdapter),
+		streamChat:              make(map[string]chatcompletions.StreamChatAdapter),
+		chatInputTokenizer:      make(map[string]chatcompletions.ChatInputTokenizer),
+		responses:               make(map[string]responsesadapter.ResponsesAdapter),
+		streamResponses:         make(map[string]responsesadapter.StreamResponsesAdapter),
+		responsesInputTokenizer: make(map[string]responsesadapter.ResponsesInputTokenizer),
 	}
 
 	for _, reg := range registrations {
@@ -46,7 +64,8 @@ func NewRegistry(registrations ...Registration) (*Registry, error) {
 			)
 		}
 
-		if reg.Chat == nil && reg.StreamChat == nil && reg.ChatInputTokenizer == nil {
+		if reg.Chat == nil && reg.StreamChat == nil && reg.ChatInputTokenizer == nil &&
+			reg.Responses == nil && reg.StreamResponses == nil && reg.ResponsesInputTokenizer == nil {
 			return nil, failure.Wrap(
 				failure.CodeAdapterInvalidRegistration,
 				ErrInvalidAdapterRegistration,
@@ -96,17 +115,81 @@ func registerCapabilities(reg Registration, r *Registry) error {
 		r.chatInputTokenizer[reg.Key] = reg.ChatInputTokenizer
 	}
 
+	if reg.Responses != nil {
+		if _, exists := r.responses[reg.Key]; exists {
+			return failure.Wrap(
+				failure.CodeAdapterDuplicateKey,
+				ErrDuplicateAdapterKey,
+				failure.WithMessage(fmt.Sprintf("duplicate responses adapter key %q", reg.Key)),
+			)
+		}
+		r.responses[reg.Key] = reg.Responses
+	}
+
+	if reg.StreamResponses != nil {
+		if _, exists := r.streamResponses[reg.Key]; exists {
+			return failure.Wrap(
+				failure.CodeAdapterDuplicateKey,
+				ErrDuplicateAdapterKey,
+				failure.WithMessage(fmt.Sprintf("duplicate stream responses adapter key %q", reg.Key)),
+			)
+		}
+		r.streamResponses[reg.Key] = reg.StreamResponses
+	}
+
+	if reg.ResponsesInputTokenizer != nil {
+		if _, exists := r.responsesInputTokenizer[reg.Key]; exists {
+			return failure.Wrap(
+				failure.CodeAdapterDuplicateKey,
+				ErrDuplicateAdapterKey,
+				failure.WithMessage(fmt.Sprintf("duplicate responses input tokenizer key %q", reg.Key)),
+			)
+		}
+		r.responsesInputTokenizer[reg.Key] = reg.ResponsesInputTokenizer
+	}
+
 	return nil
 }
 
+// Keys 返回该 registry 注册的全部 adapter key（去重、字典序）。
+// admin 据此把可选 adapter_key 暴露成枚举，供前端下拉而非手填。
+func (r *Registry) Keys() []string {
+	seen := make(map[string]struct{})
+	for key := range r.chat {
+		seen[key] = struct{}{}
+	}
+	for key := range r.streamChat {
+		seen[key] = struct{}{}
+	}
+	for key := range r.chatInputTokenizer {
+		seen[key] = struct{}{}
+	}
+	for key := range r.responses {
+		seen[key] = struct{}{}
+	}
+	for key := range r.streamResponses {
+		seen[key] = struct{}{}
+	}
+	for key := range r.responsesInputTokenizer {
+		seen[key] = struct{}{}
+	}
+
+	keys := make([]string, 0, len(seen))
+	for key := range seen {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // Chat 根据 adapter key 返回非流式聊天 adapter。
-func (r *Registry) Chat(adapterKey string) (ChatAdapter, bool) {
+func (r *Registry) Chat(adapterKey string) (chatcompletions.ChatAdapter, bool) {
 	adapter, ok := r.chat[adapterKey]
 	return adapter, ok
 }
 
 // StreamChat 根据 adapter key 返回流式聊天 adapter。
-func (r *Registry) StreamChat(adapterKey string) (StreamChatAdapter, bool) {
+func (r *Registry) StreamChat(adapterKey string) (chatcompletions.StreamChatAdapter, bool) {
 	adapter, ok := r.streamChat[adapterKey]
 	return adapter, ok
 }
@@ -124,7 +207,7 @@ func (r *Registry) HasStreamChat(adapterKey string) bool {
 }
 
 // ChatInputTokenizer 根据 adapter key 返回 chat 输入 token 计数能力。
-func (r *Registry) ChatInputTokenizer(adapterKey string) (ChatInputTokenizer, bool) {
+func (r *Registry) ChatInputTokenizer(adapterKey string) (chatcompletions.ChatInputTokenizer, bool) {
 	tokenizer, ok := r.chatInputTokenizer[adapterKey]
 	return tokenizer, ok
 }
@@ -132,5 +215,41 @@ func (r *Registry) ChatInputTokenizer(adapterKey string) (ChatInputTokenizer, bo
 // HasChatInputTokenizer 判断 adapter key 是否注册了 chat 输入 token 计数能力。
 func (r *Registry) HasChatInputTokenizer(adapterKey string) bool {
 	_, ok := r.chatInputTokenizer[adapterKey]
+	return ok
+}
+
+// Responses 根据 adapter key 返回非流式 responses 直传 adapter。
+func (r *Registry) Responses(adapterKey string) (responsesadapter.ResponsesAdapter, bool) {
+	adapter, ok := r.responses[adapterKey]
+	return adapter, ok
+}
+
+// StreamResponses 根据 adapter key 返回流式 responses 直传 adapter。
+func (r *Registry) StreamResponses(adapterKey string) (responsesadapter.StreamResponsesAdapter, bool) {
+	adapter, ok := r.streamResponses[adapterKey]
+	return adapter, ok
+}
+
+// ResponsesInputTokenizer 根据 adapter key 返回 responses 输入 token 计数能力。
+func (r *Registry) ResponsesInputTokenizer(adapterKey string) (responsesadapter.ResponsesInputTokenizer, bool) {
+	tokenizer, ok := r.responsesInputTokenizer[adapterKey]
+	return tokenizer, ok
+}
+
+// HasResponses 判断 adapter key 是否注册了非流式 responses 直传能力。
+func (r *Registry) HasResponses(adapterKey string) bool {
+	_, ok := r.responses[adapterKey]
+	return ok
+}
+
+// HasStreamResponses 判断 adapter key 是否注册了流式 responses 直传能力。
+func (r *Registry) HasStreamResponses(adapterKey string) bool {
+	_, ok := r.streamResponses[adapterKey]
+	return ok
+}
+
+// HasResponsesInputTokenizer 判断 adapter key 是否注册了 responses 输入 token 计数能力。
+func (r *Registry) HasResponsesInputTokenizer(adapterKey string) bool {
+	_, ok := r.responsesInputTokenizer[adapterKey]
 	return ok
 }

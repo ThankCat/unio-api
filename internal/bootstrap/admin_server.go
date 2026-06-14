@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	anthropicdeepseek "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/deepseek"
-	openaideepseek "github.com/ThankCat/unio-api/internal/core/adapter/openai/deepseek"
+	anthropicdeepseek "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/deepseek/messages"
+	openaideepseek "github.com/ThankCat/unio-api/internal/core/adapter/openai/deepseek/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/adminauth"
 	"github.com/ThankCat/unio-api/internal/core/capability"
 	"github.com/ThankCat/unio-api/internal/core/credential"

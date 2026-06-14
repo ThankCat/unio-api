@@ -5,10 +5,18 @@ DeepSeek）下能做什么、做到什么程度、不做什么。
 
 定位：
 
-- 与 [PLAN.md](PLAN.md) 接口范围表、[DEC-014](../../production/DECISIONS.md#dec-014-openai-responses-ingress-下转-chat-completions-桥接) 一致。
-- 字段级映射细节见 [RESPONSES_CHAT_BRIDGE.md](RESPONSES_CHAT_BRIDGE.md)。
+- 与 [PLAN.md](PLAN.md) 接口范围表、[DEC-014](../../production/DECISIONS.md#dec-014-openai-responses-ingress-下转-chat-completions-桥接)（桥接）、[DEC-018](../../production/DECISIONS.md#dec-018-上游-responses-直传--第三方桥接分流dec-014-补充)（上游直传分流，见 §7）一致。
+- 字段级映射细节见 [RESPONSES_CHAT_BRIDGE.md](RESPONSES_CHAT_BRIDGE.md)（桥接路径；直传路径零转换，不适用字段映射表）。
 - OpenAI Responses 官方协议字段树与 SSE 事件示例见 [docs/protocol/openai/responses/official.md](../../protocol/openai/responses/official.md)。
 - 公开声明，可作为 Unio 文档站 "Responses API Capability" 页面的事实来源。
+
+> **两条上游路径（DEC-018，按 channel `adapter_key` 分流）**：本矩阵的「桥接路径」适用于
+> chat-only 第三方上游（如 DeepSeek，`adapter_key=deepseek`）——Responses 在 gateway 内部下转到
+> Chat Completions，下表所有 ⚠️/❌ 桥接保真度限制均按此口径。当 channel 绑定原生支持 `/responses`
+> 的上游（OpenAI 官方 / Codex 中转，`adapter_key=openai`，该 key 含 responses 直传槽）时走「直传路径」——请求/响应/SSE
+> 零结构转换原文透传、仅改写 model 回显，能力与保真度**等于该上游本身**（含 namespace 工具、加密
+> reasoning、内置工具等：上游支持则保真，上游不支持则不补偿），不适用下表的桥接降级口径（GAP-11-012）。
+> routing / authorization / settlement / 账务对两条路径完全一致。
 
 ## 0. 核心承诺
 
@@ -117,7 +125,35 @@ DeepSeek）下能做什么、做到什么程度、不做什么。
 社区参照：LiteLLM / codex-relay / codex-deepseek / codex-bridge 在第三方 provider 上**全部都不实现**
 上述能力。Unio 的差异是把这些边界做成**显式商业声明 + 协议原生错误**，而不是隐性缺陷或静默退化。
 
-## 7. 未来演进
+## 7. 上游 Responses 直传分流（DEC-018）
+
+上文 §1~§6 描述的是 **chat-only 第三方（首版 DeepSeek）经 responses→chat 桥接（DEC-014）** 的能力。
+当上游**原生支持 `POST /responses`**（OpenAI 官方，或 Codex 标准中转）时，Unio 走第二条路径：
+**直连上游 `/responses`、零结构转换原文透传**（[DEC-018](../../production/DECISIONS.md#dec-018-上游-responses-直传--第三方桥接分流dec-014-补充)）。
+
+| 维度 | 桥接路径（adapter_key=`deepseek` 等 chat-only） | 直传路径（adapter_key=`openai`，含 responses 直传槽） |
+| --- | --- | --- |
+| 上游端点 | `POST <base>/chat/completions` | `POST <base>/responses` |
+| 请求转换 | responses→chat 压平（§2 字段映射 / Drop） | 零转换，仅改写 `model`→upstream model、`stream` |
+| 响应/SSE | chat→responses 翻译（streamEncoder 重建命名事件 + 补发 `response.completed`） | 上游命名事件**原文透传**，仅改写 `model` 回显；`response.completed`/`incomplete` 由上游下发，不二次补发 |
+| 保真度 | 受 chat 压平上限约束（§6 差距） | **等于上游本身的保真度**：上游支持即保真，上游不支持即不补偿 |
+| 分流依据 | 候选 adapter 未注册 Responses 直传能力 | 候选 adapter 注册了 `HasResponses`/`HasStreamResponses` |
+| 账务/审计/fallback/recovery | 统一 AttemptRunner + settlement（DEC-010） | **完全一致**：同一份 `adapter.ResponseFacts`、同一条流式 fallback 循环、`operation="responses"` |
+| channel 配置 | 绑定 chat adapter_key | 绑定 `adapter_key=openai`（该 key 同时含 chat+responses 能力），**零新字段** |
+
+要点：
+
+```text
+✅ 两条路径在同一 model 的候选池可共存（分档卖档，DEC-017）：routing 不感知协议差异，
+   service 层按候选 adapter 能力分流；混合候选池在「首字节前」仍可互相 fallback。
+✅ 直传账务与桥接逐字一致：usage 由上游 responses input_tokens/output_tokens/*_details 归一到
+   ChatUsage（与桥接侧 mapResponsesUsage 反向），落同一 usage_records / ledger / 快照口径。
+⚠️ 直传只对响应/事件做 model 回显改写（顶层 model + 嵌套 response.model），不解析重排上游其它字段。
+   桥接侧的 namespace 工具回译（GAP-11-002）、encrypted_content 回灌（GAP-11-003）等保真补偿在
+   直传路径上「按上游原样透传」——保真差异登记 GAP-11-012，公开能力声明需按 adapter_key 区分。
+```
+
+## 8. 未来演进
 
 不属于阶段 11 范围，但本表预留观察位：
 

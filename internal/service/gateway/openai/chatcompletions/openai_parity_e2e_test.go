@@ -10,6 +10,7 @@ import (
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	openaiadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
@@ -43,7 +44,7 @@ func newMockUpstream(t *testing.T, respond func(w http.ResponseWriter)) *mockUps
 }
 
 func newOpenAIAdapterRegistry(client *http.Client) AdapterRegistry {
-	openAIAdapter := openaiadapter.NewAdapter(client)
+	openAIAdapter := chatcompletionsadapter.NewAdapter(client)
 	reg, err := openaiadapter.NewRegistry(openaiadapter.Registration{
 		Key:        "openai",
 		Chat:       openAIAdapter,

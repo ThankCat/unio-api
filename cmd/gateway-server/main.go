@@ -68,8 +68,13 @@ func main() {
 		Addr:    cfg.HTTP.Addr,
 		Handler: app.Handler,
 
-		ReadTimeout:  cfg.HTTP.ReadTimeout,
-		WriteTimeout: cfg.HTTP.WriteTimeout,
+		ReadTimeout: cfg.HTTP.ReadTimeout,
+		// 网关要透传 LLM 流式（SSE）与长补全：Go 的 WriteTimeout 是「从读完请求头起算的绝对
+		// 截止时间」，心跳无法续期，>WriteTimeout 的响应（如 Codex 触发图像生成耗时数分钟）会被
+		// 服务端中途掐断，客户端报 "error decoding response body"。故网关不设绝对写超时，改由
+		// ReadTimeout（读请求）+ IdleTimeout（空闲 keep-alive）+ 每次上游调用的 context 超时
+		// （渠道 timeout_ms）兜底。admin-server 仍按 cfg.HTTP.WriteTimeout 设置（纯 CRUD 无长响应）。
+		WriteTimeout: 0,
 		IdleTimeout:  cfg.HTTP.IdleTimeout,
 	}
 

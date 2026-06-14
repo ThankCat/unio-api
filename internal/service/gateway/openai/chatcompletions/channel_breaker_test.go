@@ -6,7 +6,7 @@ import (
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
@@ -60,7 +60,7 @@ func TestChatCompletionSkipsOpenChannel(t *testing.T) {
 		routeCandidate("openai", 456, "gpt-4.1"),
 	)}
 	registry := &fakeAdapterRegistry{
-		chatAdapters: map[string]openai.ChatAdapter{"openai": fakeAdapter},
+		chatAdapters: map[string]chatcompletionsadapter.ChatAdapter{"openai": fakeAdapter},
 	}
 	service := newChatCompletionServiceWithBreaker(registry, router, breaker)
 
@@ -90,7 +90,7 @@ func TestChatCompletionRecordsChannelFailure(t *testing.T) {
 	fakeAdapter := &fakeChatAdapter{chatErr: upstreamErr}
 	router := &fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))}
 	registry := &fakeAdapterRegistry{
-		chatAdapters: map[string]openai.ChatAdapter{"openai": fakeAdapter},
+		chatAdapters: map[string]chatcompletionsadapter.ChatAdapter{"openai": fakeAdapter},
 	}
 	service := newChatCompletionServiceWithBreaker(registry, router, breaker)
 
@@ -116,7 +116,7 @@ func TestChatCompletionReleasesAuthorizationWhenBreakerRaceDeniesAllCandidates(t
 	service := NewChatCompletionService(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
-			chatAdapters: map[string]openai.ChatAdapter{"openai": fakeAdapter},
+			chatAdapters: map[string]chatcompletionsadapter.ChatAdapter{"openai": fakeAdapter},
 		},
 		passthroughCandidatePreparer{inputTokens: 1},
 		lifecycle.ProviderErrorClassifier{},
@@ -148,7 +148,7 @@ func TestChatCompletionReleasesAuthorizationWhenBreakerRaceDeniesAllCandidates(t
 func TestStreamChatCompletionReleasesAuthorizationWhenBreakerRaceDeniesAllCandidates(t *testing.T) {
 	breaker := &fakeChannelBreaker{denied: map[string]bool{"123": true}}
 	fakeAdapter := &fakeChatAdapter{
-		streamResp: []openai.ChatStreamChunk{streamUsageChunk("gpt-4.1")},
+		streamResp: []chatcompletionsadapter.ChatStreamChunk{streamUsageChunk("gpt-4.1")},
 	}
 	requestLog := newFakeRequestLogService()
 	authorizer := &fakeChatAuthorizer{
@@ -157,7 +157,7 @@ func TestStreamChatCompletionReleasesAuthorizationWhenBreakerRaceDeniesAllCandid
 	service := NewChatCompletionService(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
-			streamChatAdapters: map[string]openai.StreamChatAdapter{"openai": fakeAdapter},
+			streamChatAdapters: map[string]chatcompletionsadapter.StreamChatAdapter{"openai": fakeAdapter},
 		},
 		passthroughCandidatePreparer{inputTokens: 1},
 		lifecycle.ProviderErrorClassifier{},

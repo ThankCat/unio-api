@@ -9,10 +9,10 @@ import (
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 )
 
-// responses_response_map.go 负责响应方向翻译：把内部 openai.ChatResponse 翻译成 Responses
+// responses_response_map.go 负责响应方向翻译：把内部 chatcompletionsadapter.ChatResponse 翻译成 Responses
 // 非流式响应对象（BRIDGE §4/§4.1/§5）。账务与翻译无关：settlement 只消费 adapter 同次解析的
 // ResponseFacts，本文件只把公开 ChatResponse 渲染成 Responses 形状供 Codex/SDK 读取。
 //
@@ -25,7 +25,7 @@ const mcpNamespacePrefix = "mcp" + namespaceToolSeparator
 //
 // model 回显客户模型名（req.Model，方案 A）；id 新生成 resp_*，上游 chat id 仅记入审计事实，
 // 不作为对外响应 id。created_at 优先透传上游 Created，缺失时回退本地时间，保持形状有值。
-func mapChatResponseToResponses(req gatewayapi.ResponsesRequest, chatResp openai.ChatResponse) gatewayapi.ResponsesResponse {
+func mapChatResponseToResponses(req gatewayapi.ResponsesRequest, chatResp chatcompletionsadapter.ChatResponse) gatewayapi.ResponsesResponse {
 	status, incomplete := responseStatusFromFinish(chatResp.FinishReason)
 
 	output := make([]gatewayapi.ResponseOutputItem, 0, 2+len(chatResp.ToolCalls))

@@ -100,6 +100,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 
 		if deps.ChannelService != nil {
 			ch := &channelsHandler{service: deps.ChannelService}
+			// adapter_key 可选枚举（供前端下拉）：静态路径，置于 /channels/{id} 之前避免被通配吞掉。
+			r.Get("/channels/adapter-keys", ch.adapterKeys)
 			r.Get("/channels", ch.list)
 			r.Post("/channels", ch.create)
 			r.Get("/channels/{id}", ch.get)

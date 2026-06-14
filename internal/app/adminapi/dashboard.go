@@ -265,6 +265,12 @@ func toDashboardSeriesDTO(s dashboard.Series) dashboardSeriesDTO {
 			points = append(points, spendPointDTO{Bucket: rfc3339(p.Bucket), Currency: p.Currency, Amount: p.Amount})
 		}
 		dto.Points = points
+	case dashboard.MetricCost:
+		points := make([]spendPointDTO, 0, len(s.CostPoints))
+		for _, p := range s.CostPoints {
+			points = append(points, spendPointDTO{Bucket: rfc3339(p.Bucket), Currency: p.Currency, Amount: p.Amount})
+		}
+		dto.Points = points
 	}
 	return dto
 }

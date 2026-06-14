@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
@@ -21,12 +21,12 @@ import (
 // onChunk 原样透传给 adapter；onChunk 负责协议无关的 id/usage/emitted 维护，再分发给协议 EmitChunk。
 // 返回 adapter 同次解析的 streamFacts（可能为 nil）与稳定错误，由 runner 分类。adapter span 由协议
 // 闭包自行开启/结束（与非流式 Invoke 一致）。
-type StreamUpstream func(ctx context.Context, candidate routing.ChatRouteCandidate, onChunk func(openai.ChatStreamChunk) error) (*adapter.ResponseFacts, error)
+type StreamUpstream func(ctx context.Context, candidate routing.ChatRouteCandidate, onChunk func(chatcompletionsadapter.ChatStreamChunk) error) (*adapter.ResponseFacts, error)
 
 // EmitStreamChunk 由协议把单个上游内容 chunk 翻译为协议 SSE 帧（chat chunk / responses 命名事件）。
 //
 // runner 只在「非 usage、非纯 id」的内容 chunk 上调用它，并已先行置 emitted、计数 stream started。
-type EmitStreamChunk func(chunk openai.ChatStreamChunk) error
+type EmitStreamChunk func(chunk chatcompletionsadapter.ChatStreamChunk) error
 
 // FinishStream 在流式结算成功后，让协议写出收尾帧。
 //
@@ -34,7 +34,11 @@ type EmitStreamChunk func(chunk openai.ChatStreamChunk) error
 // 协议差异由闭包内部决定，runner 在成功路径上总会调用一次。
 type FinishStream func(streamID string, finalUsage adapter.ChatUsage, finishReason string) error
 
-// RunStreamParams 是驱动一次流式候选 fallback 循环所需的协议无关参数。
+// RunStreamParams 是驱动一次流式候选 fallback 循环所需的协议无关参数（chat chunk 载体）。
+//
+// 它是 RunStreamParamsGeneric[chatcompletionsadapter.ChatStreamChunk] 的具名别称：OpenAI chat completions 与
+// 现有 responses→chat 桥接两个调用点继续用本类型，零改动。responses 直传等其它载体走
+// RunStreamGeneric。
 type RunStreamParams struct {
 	RequestRecord    requestlog.RequestRecord
 	Principal        *auth.APIKeyPrincipal
@@ -50,15 +54,93 @@ type RunStreamParams struct {
 	Finish               FinishStream
 }
 
-// RunStream 执行 authorization 之后的流式候选 fallback 循环。
+// StreamChunkMeta 是从一个上游流式 chunk 提取出的协议无关元信息。
 //
-// 它把 chat_stream.go 原有的资金关键流式链路收口到一处，供 OpenAI chat 与 responses 复用：attempt
-// 审计、熔断跳过、adapter 解析、上游流式调用、emitted 后禁止 fallback、final usage 缺失处理、客户端
-// 取消处理、tail-error 仍尽力结算、settlement 与 request/attempt 终态写入。所有审计 error_code、
-// release 原因码与 stream metrics 事件均与抽取前的 chat_stream.go 逐字一致，避免改变可观测/账务事实。
+// 共享循环据此维护客户可见 stream id、final usage 与终态 finish，并决定该 chunk 是否对客户可见：
+//   - ID 非空时更新 stream response id；
+//   - FinishReason 非空时更新终态 finish；
+//   - Usage 非 nil 时记为 final usage（仅供协议写出收尾帧，账务只认 adapter facts）；
+//   - SuppressEmit 为 true 时该 chunk 仅用于内部事实提取（如 chat 的 usage 控制 chunk），
+//     不写客户 SSE、也不置 emitted（保持「首字节前可 fallback」语义）。
+type StreamChunkMeta struct {
+	ID           string
+	FinishReason string
+	Usage        *adapter.ChatUsage
+	SuppressEmit bool
+}
+
+// StreamUpstreamGeneric 执行一次 timed 上游流式调用（泛型载体版）。
+type StreamUpstreamGeneric[C any] func(ctx context.Context, candidate routing.ChatRouteCandidate, onChunk func(C) error) (*adapter.ResponseFacts, error)
+
+// EmitStreamChunkGeneric 把单个上游内容 chunk 翻译/透传为协议 SSE 帧（泛型载体版）。
+type EmitStreamChunkGeneric[C any] func(chunk C) error
+
+// RunStreamParamsGeneric 是泛型流式候选 fallback 循环参数。
+//
+// 资金关键流程与 RunStreamParams 完全一致；唯一差异是 chunk 载体类型 C 由调用方决定，并要求提供
+// ChunkMeta 提取器把 C 归一为 StreamChunkMeta。RunStream（chat 载体）是 C=chatcompletionsadapter.ChatStreamChunk 的
+// 薄封装。
+type RunStreamParamsGeneric[C any] struct {
+	RequestRecord        requestlog.RequestRecord
+	Principal            *auth.APIKeyPrincipal
+	Authorization        ChatAuthorization
+	Candidates           []Candidate
+	RequestedModelID     string
+	ResponseProtocol     requestlog.Protocol
+	RequiredCapabilities []string
+	ResolveAdapter       ResolveAdapter
+	Stream               StreamUpstreamGeneric[C]
+	EmitChunk            EmitStreamChunkGeneric[C]
+	Finish               FinishStream
+	// ChunkMeta 从一个上游 chunk 提取协议无关元信息；不得为 nil。
+	ChunkMeta func(C) StreamChunkMeta
+}
+
+// RunStream 执行 authorization 之后的流式候选 fallback 循环（chat chunk 载体）。
+//
+// 它把 chat_stream.go 原有的资金关键流式链路收口到一处，供 OpenAI chat 与 responses 桥接复用；现已
+// 委托给泛型 RunStreamGeneric，逻辑逐字不变（chunk 元信息提取由 chatStreamChunkMeta 等价复刻原
+// inline onChunk）。
+func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (RunResult, error) {
+	return RunStreamGeneric(ctx, r, RunStreamParamsGeneric[chatcompletionsadapter.ChatStreamChunk]{
+		RequestRecord:        params.RequestRecord,
+		Principal:            params.Principal,
+		Authorization:        params.Authorization,
+		Candidates:           params.Candidates,
+		RequestedModelID:     params.RequestedModelID,
+		ResponseProtocol:     params.ResponseProtocol,
+		RequiredCapabilities: params.RequiredCapabilities,
+		ResolveAdapter:       params.ResolveAdapter,
+		Stream:               StreamUpstreamGeneric[chatcompletionsadapter.ChatStreamChunk](params.Stream),
+		EmitChunk:            EmitStreamChunkGeneric[chatcompletionsadapter.ChatStreamChunk](params.EmitChunk),
+		Finish:               params.Finish,
+		ChunkMeta:            chatStreamChunkMeta,
+	})
+}
+
+// chatStreamChunkMeta 等价复刻原 chat inline onChunk 的元信息提取：usage 控制 chunk 抑制 emit，
+// 普通内容 chunk 透传。
+func chatStreamChunkMeta(chunk chatcompletionsadapter.ChatStreamChunk) StreamChunkMeta {
+	meta := StreamChunkMeta{
+		ID:           chunk.ID,
+		Usage:        chunk.Usage,
+		SuppressEmit: chunk.Usage != nil,
+	}
+	if chunk.FinishReason != nil {
+		meta.FinishReason = *chunk.FinishReason
+	}
+	return meta
+}
+
+// RunStreamGeneric 执行 authorization 之后的流式候选 fallback 循环（泛型载体）。
+//
+// 资金关键链路（attempt 审计、熔断跳过、adapter 解析、上游流式调用、emitted 后禁止 fallback、
+// final usage 缺失处理、客户端取消处理、tail-error 仍尽力结算、settlement 与 request/attempt 终态写入）
+// 与原 chat 实现逐字一致；唯一抽象点是 chunk 载体类型 C 与 ChunkMeta 提取器。所有审计 error_code、
+// release 原因码与 stream metrics 事件均不变。
 //
 // 账务只消费 adapter 同次解析返回的 streamFacts；finalUsage 仅供协议向客户写出 usage/completed 帧。
-func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (RunResult, error) {
+func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunStreamParamsGeneric[C]) (RunResult, error) {
 	result := RunResult{Outcome: metrics.ChatOutcomeFailed}
 	l := r.lifecycle
 	requestRecord := params.RequestRecord
@@ -155,19 +237,23 @@ func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (
 			return settleErr
 		}
 
-		onChunk := func(chunk openai.ChatStreamChunk) error {
-			if chunk.ID != "" {
-				streamResponseID = chunk.ID
+		onChunk := func(chunk C) error {
+			meta := params.ChunkMeta(chunk)
+			if meta.ID != "" {
+				streamResponseID = meta.ID
 			}
-			if chunk.FinishReason != nil && *chunk.FinishReason != "" {
-				finishReason = *chunk.FinishReason
+			if meta.FinishReason != "" {
+				finishReason = meta.FinishReason
 			}
 
-			if chunk.Usage != nil {
-				// usage chunk 是 adapter 给 gateway 的内部控制事件，不是用户可见内容：
-				// 不置 emitted、不写 SSE，否则客户端会收到空 choices 帧。
-				usage := *chunk.Usage
+			if meta.Usage != nil {
+				usage := *meta.Usage
 				finalUsage = &usage
+			}
+
+			if meta.SuppressEmit {
+				// 仅内部事实提取的控制 chunk（如 chat 的 usage 控制 chunk）：不置 emitted、不写 SSE，
+				// 否则客户端会收到空 choices 帧，也会误锁「首字节后禁止 fallback」。
 				return nil
 			}
 

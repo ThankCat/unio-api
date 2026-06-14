@@ -9,7 +9,7 @@ import (
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
-	anthropicadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic"
+	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
@@ -168,7 +168,7 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		upstreamStart := time.Now()
 		streamOutcome, streamErr := streamAdapter.StreamMessages(streamCtx, candidate.Channel,
 			mapGatewayRequestToAdapter(req, candidate.UpstreamModel),
-			func(ev anthropicadapter.MessageStreamEvent) error {
+			func(ev messagesadapter.MessageStreamEvent) error {
 				if messageID == "" && ev.Type == "message_start" {
 					messageID = parseStreamMessageID(ev.Data)
 				}

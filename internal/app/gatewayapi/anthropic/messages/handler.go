@@ -61,6 +61,7 @@ func (h *messagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSONDecodeError(w, err)
 		return
 	}
+	req.AnthropicBeta = anthropicBetaTokens(r)
 
 	if validationErr := validateMessageRequest(req); validationErr != nil {
 		writeMessageValidationError(w, validationErr)

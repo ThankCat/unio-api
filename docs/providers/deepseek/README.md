@@ -9,8 +9,8 @@ Unio 据此用两个独立 adapter 接入。
 
 | 协议格式 | Base URL | 路径 | 项目 adapter |
 | --- | --- | --- | --- |
-| OpenAI | `https://api.deepseek.com` | `POST /chat/completions` | `internal/core/adapter/openai/deepseek` |
-| Anthropic | `https://api.deepseek.com/anthropic` | `POST /v1/messages` | `internal/core/adapter/anthropic/deepseek` |
+| OpenAI | `https://api.deepseek.com` | `POST /chat/completions` | `internal/core/adapter/openai/deepseek/chatcompletions` |
+| Anthropic | `https://api.deepseek.com/anthropic` | `POST /v1/messages` | `internal/core/adapter/anthropic/deepseek/messages` |
 
 来源:[官方·首次调用](https://api-docs.deepseek.com/zh-cn/)、[官方·模型&价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing)(查阅 2026-06-07)。
 

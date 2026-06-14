@@ -522,11 +522,26 @@ service/gateway/lifecycle
    其中 attempt_runner / attempt_runner_stream 是 OpenAI chat 与 responses 共享的
    资金关键候选 fallback 循环（非流式 / 流式），Anthropic Messages 保留自身循环。
 
-core/adapter/openai/deepseek
-= DeepSeek OpenAI endpoint 的请求与响应转换。
+core/adapter/openai
+= OpenAI 协议族 adapter 根包；只放 registry（adapter_key → 各端点能力），import 各端点包取接口类型。
 
-core/adapter/anthropic/deepseek
-= DeepSeek Anthropic endpoint 的请求与响应转换。
+core/adapter/openai/chatcompletions
+= OpenAI Chat Completions 端点底座（官方 1P）：去方言化忠实 wire——请求编码、响应解析、SSE、usage、ResponseFacts、tokenizer。
+
+core/adapter/openai/responses
+= OpenAI Responses 端点底座：上游原生 /responses 直传，请求/响应/SSE 零结构转换（DEC-018）。
+
+core/adapter/openai/deepseek/chatcompletions
+= DeepSeek 在 OpenAI Chat Completions 端点的实现：复用 chatcompletions 底座 + DeepSeek Drop 规则 + 能力画像。
+
+core/adapter/anthropic
+= Anthropic 协议族 adapter 根包；只放 registry，import messages 端点包取接口类型。
+
+core/adapter/anthropic/messages
+= Anthropic Messages 端点底座（忠实 wire）+ 官方 1P 变体 OfficialAdapter（anthropic-beta 白名单透传）。
+
+core/adapter/anthropic/deepseek/messages
+= DeepSeek 在 Anthropic Messages 端点的实现：复用 messages 底座 + DeepSeek Drop 规则 + 能力画像。
 ```
 
 硬规则（Phase 10.15 复核后写入）：
@@ -576,10 +591,13 @@ Phase 10 将在主分层不变的前提下，把 `gatewayapi`、`service/gateway
 保持对称；`service/gateway/openai/chatcompletions` 与 `service/gateway/anthropic/messages`
 也按同名子包到位。Phase 11 在 OpenAI 协议族新增 `responses/` operation 子包
 （`gatewayapi/openai/responses` 与 `service/gateway/openai/responses`），与
-`chatcompletions/`、`models/` 对称；它经 responses↔chat 桥接复用既有 OpenAI adapter，
-不新增上游 Responses adapter，故 `core/adapter/openai`、`core/adapter/anthropic` 仍
-每个协议族一个 operation、文件平铺；如未来加入第二个 adapter operation，必须按
-protocol/operation 子包重组并保持与 gatewayapi、service/gateway 对称。
+`chatcompletions/`、`models/` 对称。DEC-018 在 OpenAI 协议族新增「上游 Responses 直传」
+adapter（`core/adapter/openai/responses`），与 responses↔chat 桥接并存。随之 `core/adapter`
+已按「协议族/端点/provider」重组：协议族根包（`openai/`、`anthropic/`）只留 registry；
+端点底座各自独立成包（`openai/chatcompletions`、`openai/responses`、`anthropic/messages`，
+官方 1P 策略并入对应端点包）；provider 实现按端点分层（`openai/deepseek/chatcompletions`、
+`anthropic/deepseek/messages`）。新增端点或 provider 必须沿用该 protocol/endpoint/provider
+结构，并与 gatewayapi、service/gateway 对称。
 
 后续新增代码必须直接进入目标子包，不允许在协议族根包平铺。
 

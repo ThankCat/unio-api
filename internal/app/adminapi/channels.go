@@ -19,6 +19,8 @@ type ChannelService interface {
 	Create(ctx context.Context, in channel.CreateInput) (channel.Channel, error)
 	Update(ctx context.Context, in channel.UpdateInput) (channel.Channel, error)
 	RotateCredential(ctx context.Context, in channel.RotateCredentialInput) error
+	// AdapterKeyOptions 列出可选 adapter_key 枚举，供前端下拉而非手填。
+	AdapterKeyOptions() []channel.AdapterKeyOption
 }
 
 // channelDTO 是 channel 的 admin API 响应体；不含上游凭据（只写不回）。
@@ -36,6 +38,14 @@ type channelDTO struct {
 	TimeoutMs    *int32 `json:"timeout_ms"`
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at"`
+}
+
+// adapterKeyOptionDTO 是某协议族下一个可选 adapter_key 的枚举项，供前端下拉渲染。
+// is_default=true 表示与协议同名的忠实透传 adapter（创建时 adapter_key 留空即取它）。
+type adapterKeyOptionDTO struct {
+	Protocol   string `json:"protocol"`
+	AdapterKey string `json:"adapter_key"`
+	IsDefault  bool   `json:"is_default"`
 }
 
 type createChannelRequest struct {
@@ -101,6 +111,20 @@ func (h *channelsHandler) list(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeList(w, http.StatusOK, dtos, page, result.Total)
+}
+
+// adapterKeys 返回当前进程注册的全部可选 adapter_key（按协议分组项），供前端下拉。
+func (h *channelsHandler) adapterKeys(w http.ResponseWriter, _ *http.Request) {
+	options := h.service.AdapterKeyOptions()
+	dtos := make([]adapterKeyOptionDTO, 0, len(options))
+	for _, o := range options {
+		dtos = append(dtos, adapterKeyOptionDTO{
+			Protocol:   o.Protocol,
+			AdapterKey: o.AdapterKey,
+			IsDefault:  o.IsDefault,
+		})
+	}
+	writeData(w, http.StatusOK, dtos)
 }
 
 func (h *channelsHandler) get(w http.ResponseWriter, r *http.Request) {

@@ -50,6 +50,9 @@ type MessageRequest struct {
 	// 能力相关字段不在 gateway→adapter 契约里建模，按 DEC-012 进入 Extensions 透传给 adapter，
 	// adapter 无法转换时出站 Drop（见 knownMessageFields 与 decode.go 注释）。
 	Extensions map[string]json.RawMessage `json:"-"`
+
+	// AnthropicBeta 来自 ingress anthropic-beta 头（非 JSON body）；由 handler 注入。
+	AnthropicBeta []string `json:"-"`
 }
 
 // Message 表示 Anthropic 单条消息；Content 为 string 或 content block 数组（原始 JSON）。

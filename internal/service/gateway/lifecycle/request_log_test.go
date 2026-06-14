@@ -1,11 +1,13 @@
 package lifecycle
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/ThankCat/unio-api/internal/core/routing"
+	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
 
 func TestRoutingFailureCodeClassifiesRoutingErrors(t *testing.T) {
@@ -55,6 +57,25 @@ func TestInternalErrorDetailIsTruncated(t *testing.T) {
 	}
 	if !strings.HasSuffix(detail, "...[truncated]") {
 		t.Fatalf("expected truncated marker, got %q", detail[len(detail)-20:])
+	}
+}
+
+// TestInternalErrorDetailIncludesCauseChain 锁定:流式断连这类错误必须把底层根因
+// (如 context canceled)拼进 detail,而非只留 failure 顶层归类文案,否则排查无从下手。
+func TestInternalErrorDetailIncludesCauseChain(t *testing.T) {
+	wrapped := failure.Wrap(
+		failure.CodeAdapterReadStreamFailed,
+		context.Canceled,
+		failure.WithMessage("openai responses adapter read stream event"),
+	)
+
+	detail := InternalErrorDetail(wrapped)
+
+	if !strings.Contains(detail, "openai responses adapter read stream event") {
+		t.Fatalf("detail missing top message: %q", detail)
+	}
+	if !strings.Contains(detail, context.Canceled.Error()) {
+		t.Fatalf("detail missing root cause %q: %q", context.Canceled.Error(), detail)
 	}
 }
 

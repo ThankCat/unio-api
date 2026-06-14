@@ -43,9 +43,23 @@ type Store interface {
 	UpdateChannelCredential(ctx context.Context, arg sqlc.UpdateChannelCredentialParams) (int64, error)
 }
 
-// AdapterRegistry 暴露 channel 写入前校验复合键是否被当前进程支持的最小能力。
+// AdapterRegistry 暴露 channel 写入前校验复合键是否被当前进程支持的最小能力，
+// 以及把可选 adapter_key 枚举出来供 admin 前端下拉。
 type AdapterRegistry interface {
 	HasAny(protocol string, adapterKey string) bool
+	// AdapterKeys 返回指定协议族下当前进程注册的全部 adapter key（去重、字典序）。
+	AdapterKeys(protocol string) []string
+}
+
+// AdapterKeyOption 是某协议族下一个可选 adapter_key 的枚举项，供 admin 前端把
+// adapter_key 渲染成下拉而非手填。
+//
+// IsDefault 标记「与协议同名的忠实透传 adapter」——创建 channel 时 adapter_key 留空即默认取它
+// （见 Create 注释）。
+type AdapterKeyOption struct {
+	Protocol   string
+	AdapterKey string
+	IsDefault  bool
 }
 
 // Channel 是 admin 视角的 channel 业务事实；不含上游凭据。
@@ -82,6 +96,8 @@ type ListResult struct {
 }
 
 // CreateInput 是创建 channel 的入参；Credential 为明文上游凭据，落库前加密。
+//
+// AdapterKey 可选：留空时默认为 Protocol 同名的忠实透传 adapter（见 Create 注释）。
 type CreateInput struct {
 	ProviderID int64
 	Name       string
@@ -120,6 +136,22 @@ type Service struct {
 // NewService 创建 channel 管理服务。
 func NewService(store Store, cipher credential.Cipher, registry AdapterRegistry) *Service {
 	return &Service{store: store, cipher: cipher, registry: registry}
+}
+
+// AdapterKeyOptions 列出当前进程在受支持协议族下注册的全部 adapter_key，
+// 供 admin 前端把 adapter_key 渲染成下拉枚举（替代手填，避免写入未注册的不可运行绑定）。
+func (s *Service) AdapterKeyOptions() []AdapterKeyOption {
+	options := make([]AdapterKeyOption, 0)
+	for _, protocol := range []string{ProtocolOpenAI, ProtocolAnthropic} {
+		for _, key := range s.registry.AdapterKeys(protocol) {
+			options = append(options, AdapterKeyOption{
+				Protocol:   protocol,
+				AdapterKey: key,
+				IsDefault:  key == protocol,
+			})
+		}
+	}
+	return options
 }
 
 // List 按 params 过滤分页列出 channel（连带 provider 名称），并返回过滤后的总数。
@@ -190,8 +222,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	if err := validateProtocol(protocol); err != nil {
 		return Channel{}, err
 	}
+	// adapter_key 可选：留空默认为该协议的忠实透传 adapter。忠实 adapter 的注册键与协议同名
+	// （openai→"openai"、anthropic→"anthropic"），故普通 OpenAI/Anthropic 兼容上游免填即可；
+	// 仅需特殊方言/Drop 策略（如直连 DeepSeek 原厂）的上游才显式指定 adapter_key。
 	if adapterKey == "" {
-		return Channel{}, invalidArgument("adapter_key", "adapter_key is required")
+		adapterKey = protocol
 	}
 	if err := validateBaseURL(baseURL); err != nil {
 		return Channel{}, err

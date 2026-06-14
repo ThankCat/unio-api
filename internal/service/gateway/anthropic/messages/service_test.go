@@ -9,7 +9,7 @@ import (
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
-	anthropicadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic"
+	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
@@ -33,22 +33,22 @@ func (r *fakeMessagesRouter) PlanChat(ctx context.Context, req routing.ChatRoute
 
 // fakeMessagesRegistry 是 messages 测试使用的 adapter registry 替身。
 type fakeMessagesRegistry struct {
-	messages       map[string]anthropicadapter.MessagesAdapter
-	streamMessages map[string]anthropicadapter.StreamMessagesAdapter
-	tokenizers     map[string]anthropicadapter.MessagesInputTokenizer
+	messages       map[string]messagesadapter.MessagesAdapter
+	streamMessages map[string]messagesadapter.StreamMessagesAdapter
+	tokenizers     map[string]messagesadapter.MessagesInputTokenizer
 }
 
-func (r *fakeMessagesRegistry) Messages(adapterKey string) (anthropicadapter.MessagesAdapter, bool) {
+func (r *fakeMessagesRegistry) Messages(adapterKey string) (messagesadapter.MessagesAdapter, bool) {
 	a, ok := r.messages[adapterKey]
 	return a, ok
 }
 
-func (r *fakeMessagesRegistry) StreamMessages(adapterKey string) (anthropicadapter.StreamMessagesAdapter, bool) {
+func (r *fakeMessagesRegistry) StreamMessages(adapterKey string) (messagesadapter.StreamMessagesAdapter, bool) {
 	a, ok := r.streamMessages[adapterKey]
 	return a, ok
 }
 
-func (r *fakeMessagesRegistry) MessagesInputTokenizer(adapterKey string) (anthropicadapter.MessagesInputTokenizer, bool) {
+func (r *fakeMessagesRegistry) MessagesInputTokenizer(adapterKey string) (messagesadapter.MessagesInputTokenizer, bool) {
 	t, ok := r.tokenizers[adapterKey]
 	return t, ok
 }
@@ -56,24 +56,24 @@ func (r *fakeMessagesRegistry) MessagesInputTokenizer(adapterKey string) (anthro
 // fakeMessagesAdapter 同时实现非流式、流式与 tokenizer 能力。
 type fakeMessagesAdapter struct {
 	messagesCalled int
-	messagesReq    anthropicadapter.MessageRequest
-	messagesResp   *anthropicadapter.MessageResponse
+	messagesReq    messagesadapter.MessageRequest
+	messagesResp   *messagesadapter.MessageResponse
 	messagesErr    error
 
 	streamCalled  int
-	streamReq     anthropicadapter.MessageRequest
-	streamEvents  []anthropicadapter.MessageStreamEvent
+	streamReq     messagesadapter.MessageRequest
+	streamEvents  []messagesadapter.MessageStreamEvent
 	streamOutcome *adapter.StreamOutcome
 	streamErr     error
 }
 
-func (a *fakeMessagesAdapter) Messages(ctx context.Context, ch channel.Runtime, req anthropicadapter.MessageRequest) (*anthropicadapter.MessageResponse, error) {
+func (a *fakeMessagesAdapter) Messages(ctx context.Context, ch channel.Runtime, req messagesadapter.MessageRequest) (*messagesadapter.MessageResponse, error) {
 	a.messagesCalled++
 	a.messagesReq = req
 	return a.messagesResp, a.messagesErr
 }
 
-func (a *fakeMessagesAdapter) StreamMessages(ctx context.Context, ch channel.Runtime, req anthropicadapter.MessageRequest, emit func(anthropicadapter.MessageStreamEvent) error) (adapter.StreamOutcome, error) {
+func (a *fakeMessagesAdapter) StreamMessages(ctx context.Context, ch channel.Runtime, req messagesadapter.MessageRequest, emit func(messagesadapter.MessageStreamEvent) error) (adapter.StreamOutcome, error) {
 	a.streamCalled++
 	a.streamReq = req
 
@@ -89,7 +89,7 @@ func (a *fakeMessagesAdapter) StreamMessages(ctx context.Context, ch channel.Run
 	return adapter.StreamOutcome{}, a.streamErr
 }
 
-func (a *fakeMessagesAdapter) CountMessagesInputTokens(req anthropicadapter.MessagesInputTokenizeRequest) (int64, error) {
+func (a *fakeMessagesAdapter) CountMessagesInputTokens(req messagesadapter.MessagesInputTokenizeRequest) (int64, error) {
 	return 1, nil
 }
 
@@ -258,11 +258,11 @@ func routeCandidate(adapterKey string, channelID int64, upstreamModel string) ro
 	}
 }
 
-func messageResponse() *anthropicadapter.MessageResponse {
-	usage := anthropicadapter.MessageUsage{InputTokens: 10, OutputTokens: 11}
+func messageResponse() *messagesadapter.MessageResponse {
+	usage := messagesadapter.MessageUsage{InputTokens: 10, OutputTokens: 11}
 	metadata := adapter.UpstreamMetadata{StatusCode: 200, RequestID: "req-msg-1"}
 	stopReason := "end_turn"
-	return &anthropicadapter.MessageResponse{
+	return &messagesadapter.MessageResponse{
 		ID:         "msg_provider_test",
 		Model:      "deepseek-v4-flash",
 		Role:       "assistant",
@@ -277,7 +277,7 @@ func messageResponse() *anthropicadapter.MessageResponse {
 			Finish:              adapter.FinishFacts{Class: adapter.FinishStop, RawReason: "end_turn"},
 			Usage:               usage.ToUsageFacts(),
 			UsageSource:         coreusage.SourceUpstreamResponse,
-			UsageMappingVersion: "anthropic.v1",
+			UsageMappingVersion: "messagesadapter.v1",
 			Metadata:            metadata,
 		},
 	}
@@ -300,8 +300,8 @@ func newMessagesServiceForTest(router MessagesRouter, registry AdapterRegistry, 
 func TestCreateMessageReturnsResponseAndSettlesWithAnthropicFacts(t *testing.T) {
 	adapterFake := &fakeMessagesAdapter{messagesResp: messageResponse()}
 	registry := &fakeMessagesRegistry{
-		messages:   map[string]anthropicadapter.MessagesAdapter{"deepseek": adapterFake},
-		tokenizers: map[string]anthropicadapter.MessagesInputTokenizer{"deepseek": adapterFake},
+		messages:   map[string]messagesadapter.MessagesAdapter{"deepseek": adapterFake},
+		tokenizers: map[string]messagesadapter.MessagesInputTokenizer{"deepseek": adapterFake},
 	}
 	settlement := &fakeMessagesSettlement{}
 	authorizer := &fakeMessagesAuthorizer{}
@@ -348,8 +348,8 @@ func TestCreateMessageReleasesAuthorizationOnPermanentSettlementFailure(t *testi
 	settlementErr := errors.New("messages settlement commit failed")
 	adapterFake := &fakeMessagesAdapter{messagesResp: messageResponse()}
 	registry := &fakeMessagesRegistry{
-		messages:   map[string]anthropicadapter.MessagesAdapter{"deepseek": adapterFake},
-		tokenizers: map[string]anthropicadapter.MessagesInputTokenizer{"deepseek": adapterFake},
+		messages:   map[string]messagesadapter.MessagesAdapter{"deepseek": adapterFake},
+		tokenizers: map[string]messagesadapter.MessagesInputTokenizer{"deepseek": adapterFake},
 	}
 	settlement := &fakeMessagesSettlement{err: settlementErr}
 	authorizer := &fakeMessagesAuthorizer{}
@@ -382,8 +382,8 @@ func TestCreateMessageRoutesWithAnthropicIngressProtocol(t *testing.T) {
 	router := &fakeMessagesRouter{plan: routePlan(routeCandidate("deepseek", 123, "deepseek-v4-flash"))}
 	adapterFake := &fakeMessagesAdapter{messagesResp: messageResponse()}
 	registry := &fakeMessagesRegistry{
-		messages:   map[string]anthropicadapter.MessagesAdapter{"deepseek": adapterFake},
-		tokenizers: map[string]anthropicadapter.MessagesInputTokenizer{"deepseek": adapterFake},
+		messages:   map[string]messagesadapter.MessagesAdapter{"deepseek": adapterFake},
+		tokenizers: map[string]messagesadapter.MessagesInputTokenizer{"deepseek": adapterFake},
 	}
 	service := newMessagesServiceForTest(router, registry, &fakeMessagesSettlement{}, &fakeMessagesAuthorizer{})
 
@@ -399,8 +399,8 @@ func TestCreateMessageRoutesWithAnthropicIngressProtocol(t *testing.T) {
 func TestCreateMessageReleasesAuthorizationOnNonRetryableAdapterError(t *testing.T) {
 	adapterFake := &fakeMessagesAdapter{messagesErr: errors.New("upstream boom")}
 	registry := &fakeMessagesRegistry{
-		messages:   map[string]anthropicadapter.MessagesAdapter{"deepseek": adapterFake},
-		tokenizers: map[string]anthropicadapter.MessagesInputTokenizer{"deepseek": adapterFake},
+		messages:   map[string]messagesadapter.MessagesAdapter{"deepseek": adapterFake},
+		tokenizers: map[string]messagesadapter.MessagesInputTokenizer{"deepseek": adapterFake},
 	}
 	settlement := &fakeMessagesSettlement{}
 	authorizer := &fakeMessagesAuthorizer{}
@@ -424,7 +424,7 @@ func TestCreateMessageReleasesAuthorizationOnNonRetryableAdapterError(t *testing
 }
 
 func TestStreamMessageEmitsNativeEventsAndStopThenSettles(t *testing.T) {
-	finalUsage := &anthropicadapter.MessageUsage{InputTokens: 10, OutputTokens: 11}
+	finalUsage := &messagesadapter.MessageUsage{InputTokens: 10, OutputTokens: 11}
 	upstream := &adapter.UpstreamMetadata{StatusCode: 200, RequestID: "req-msg-stream"}
 	facts := adapter.ResponseFacts{
 		UpstreamProtocol:    "anthropic",
@@ -433,11 +433,11 @@ func TestStreamMessageEmitsNativeEventsAndStopThenSettles(t *testing.T) {
 		Finish:              adapter.FinishFacts{Class: adapter.FinishStop, RawReason: "end_turn"},
 		Usage:               finalUsage.ToUsageFacts(),
 		UsageSource:         coreusage.SourceUpstreamStream,
-		UsageMappingVersion: "anthropic.v1",
+		UsageMappingVersion: "messagesadapter.v1",
 		Metadata:            *upstream,
 	}
 	adapterFake := &fakeMessagesAdapter{
-		streamEvents: []anthropicadapter.MessageStreamEvent{
+		streamEvents: []messagesadapter.MessageStreamEvent{
 			{Type: "message_start", Data: json.RawMessage(`{"type":"message_start","message":{"id":"msg_stream_test","model":"deepseek-v4-flash"}}`)},
 			{Type: "content_block_delta", Data: json.RawMessage(`{"type":"content_block_delta","index":0}`)},
 			{Type: "message_delta", Data: json.RawMessage(`{"type":"message_delta"}`), Usage: finalUsage, Upstream: upstream},
@@ -445,8 +445,8 @@ func TestStreamMessageEmitsNativeEventsAndStopThenSettles(t *testing.T) {
 		streamOutcome: &adapter.StreamOutcome{Facts: &facts},
 	}
 	registry := &fakeMessagesRegistry{
-		streamMessages: map[string]anthropicadapter.StreamMessagesAdapter{"deepseek": adapterFake},
-		tokenizers:     map[string]anthropicadapter.MessagesInputTokenizer{"deepseek": adapterFake},
+		streamMessages: map[string]messagesadapter.StreamMessagesAdapter{"deepseek": adapterFake},
+		tokenizers:     map[string]messagesadapter.MessagesInputTokenizer{"deepseek": adapterFake},
 	}
 	settlement := &fakeMessagesSettlement{}
 	service := newMessagesServiceForTest(
@@ -499,14 +499,14 @@ func TestStreamMessageEmitsNativeEventsAndStopThenSettles(t *testing.T) {
 
 func TestStreamMessageMissingFinalUsageReleasesAndFails(t *testing.T) {
 	adapterFake := &fakeMessagesAdapter{
-		streamEvents: []anthropicadapter.MessageStreamEvent{
+		streamEvents: []messagesadapter.MessageStreamEvent{
 			{Type: "message_start", Data: json.RawMessage(`{"type":"message_start","message":{"id":"x","model":"deepseek-v4-flash"}}`)},
 		},
 		// 无 final usage：streamOutcome 为空。
 	}
 	registry := &fakeMessagesRegistry{
-		streamMessages: map[string]anthropicadapter.StreamMessagesAdapter{"deepseek": adapterFake},
-		tokenizers:     map[string]anthropicadapter.MessagesInputTokenizer{"deepseek": adapterFake},
+		streamMessages: map[string]messagesadapter.StreamMessagesAdapter{"deepseek": adapterFake},
+		tokenizers:     map[string]messagesadapter.MessagesInputTokenizer{"deepseek": adapterFake},
 	}
 	settlement := &fakeMessagesSettlement{}
 	authorizer := &fakeMessagesAuthorizer{}

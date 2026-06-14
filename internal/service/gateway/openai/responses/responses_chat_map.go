@@ -2,7 +2,7 @@
 // 桥接编排（DEC-014：responses-to-chat）。
 //
 // 本文件只负责请求方向翻译：把 ingress 的 Responses DTO 翻译成内部
-// openai.ChatRequest 契约，复用既有 OpenAI adapter / routing / lifecycle / settlement，
+// chatcompletionsadapter.ChatRequest 契约，复用既有 OpenAI adapter / routing / lifecycle / settlement，
 // 不新增上游 Responses adapter。字段语义映射（Pass/Adapt/Drop/Reject）以
 // docs/chapters/phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md 为准。
 //
@@ -19,7 +19,7 @@ import (
 	"strings"
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 )
 
 // requestTranslation 记录 Responses→Chat 翻译的副作用，供 service 层写入请求审计。
@@ -47,13 +47,13 @@ const (
 // namespaceToolSeparator 是 Codex MCP namespace 工具拍平后的名称分隔符（BRIDGE §3.3 方案 B）。
 const namespaceToolSeparator = "__"
 
-// mapResponsesRequestToChat 把 Responses 请求翻译为内部 openai.ChatRequest。
+// mapResponsesRequestToChat 把 Responses 请求翻译为内部 chatcompletionsadapter.ChatRequest。
 //
 // upstreamModel 是 routing 解析出的上游模型名（方案 A，DEC-014）；客户模型名只用于 routing。
-func mapResponsesRequestToChat(req gatewayapi.ResponsesRequest, upstreamModel string) (openai.ChatRequest, requestTranslation) {
+func mapResponsesRequestToChat(req gatewayapi.ResponsesRequest, upstreamModel string) (chatcompletionsadapter.ChatRequest, requestTranslation) {
 	var tr requestTranslation
 
-	chat := openai.ChatRequest{
+	chat := chatcompletionsadapter.ChatRequest{
 		Model:                upstreamModel,
 		Messages:             buildChatMessages(req),
 		Temperature:          req.Temperature,
@@ -129,15 +129,15 @@ func recordContractlessDrops(req gatewayapi.ResponsesRequest, tr *requestTransla
 // instructions 注入顶部 system；input 是字符串时为单条 user message；input 是 item 数组时按
 // §2 规则展开：连续 function_call 合并进同一条 assistant.tool_calls；function_call_output 生成
 // 按 call_id 对齐的 tool message。
-func buildChatMessages(req gatewayapi.ResponsesRequest) []openai.ChatMessage {
-	msgs := make([]openai.ChatMessage, 0, len(req.Input.Items)+1)
+func buildChatMessages(req gatewayapi.ResponsesRequest) []chatcompletionsadapter.ChatMessage {
+	msgs := make([]chatcompletionsadapter.ChatMessage, 0, len(req.Input.Items)+1)
 
 	if req.Instructions != nil && strings.TrimSpace(*req.Instructions) != "" {
-		msgs = append(msgs, openai.ChatMessage{Role: "system", Content: jsonString(*req.Instructions)})
+		msgs = append(msgs, chatcompletionsadapter.ChatMessage{Role: "system", Content: jsonString(*req.Instructions)})
 	}
 
 	if req.Input.Text != nil {
-		return append(msgs, openai.ChatMessage{Role: "user", Content: jsonString(*req.Input.Text)})
+		return append(msgs, chatcompletionsadapter.ChatMessage{Role: "user", Content: jsonString(*req.Input.Text)})
 	}
 
 	// pendingToolCallIdx 指向上一条仅由连续 function_call 累积出的 assistant message，用于并行/连续
@@ -161,10 +161,10 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []openai.ChatMessage {
 			msgs = append(msgs, buildMessageItem(item))
 
 		case itemTypeFunctionCall:
-			toolCall := openai.ChatToolCall{
+			toolCall := chatcompletionsadapter.ChatToolCall{
 				ID:   derefString(item.CallID),
 				Type: "function",
-				Function: openai.ChatToolCallFunction{
+				Function: chatcompletionsadapter.ChatToolCallFunction{
 					Name:      functionCallName(item),
 					Arguments: derefString(item.Arguments),
 				},
@@ -172,7 +172,7 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []openai.ChatMessage {
 			if pendingToolCallIdx >= 0 {
 				msgs[pendingToolCallIdx].ToolCalls = append(msgs[pendingToolCallIdx].ToolCalls, toolCall)
 			} else {
-				assistant := openai.ChatMessage{Role: "assistant", ToolCalls: []openai.ChatToolCall{toolCall}}
+				assistant := chatcompletionsadapter.ChatMessage{Role: "assistant", ToolCalls: []chatcompletionsadapter.ChatToolCall{toolCall}}
 				if pendingReasoning != "" {
 					reasoning := pendingReasoning
 					assistant.ReasoningContent = &reasoning
@@ -185,7 +185,7 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []openai.ChatMessage {
 		case itemTypeFunctionCallOutput:
 			pendingToolCallIdx = -1
 			pendingReasoning = ""
-			msgs = append(msgs, openai.ChatMessage{
+			msgs = append(msgs, chatcompletionsadapter.ChatMessage{
 				Role:       "tool",
 				ToolCallID: item.CallID,
 				Content:    toolOutputContent(item.Output),
@@ -287,8 +287,8 @@ func functionCallName(item gatewayapi.ResponseInputItem) string {
 }
 
 // buildMessageItem 把 message input item 翻译成单条 Chat message。
-func buildMessageItem(item gatewayapi.ResponseInputItem) openai.ChatMessage {
-	return openai.ChatMessage{
+func buildMessageItem(item gatewayapi.ResponseInputItem) chatcompletionsadapter.ChatMessage {
+	return chatcompletionsadapter.ChatMessage{
 		Role:    item.Role,
 		Content: translateInputContent(item.Content),
 	}
@@ -300,12 +300,12 @@ func buildMessageItem(item gatewayapi.ResponseInputItem) openai.ChatMessage {
 //   - namespace（Codex MCP 分组）→ 拍平内层 function 工具，名称用 <namespace><name>（方案 B）。
 //   - 内置工具（web_search/image_generation/file_search/...）/ custom / local_shell：契约无 function
 //     承载或本阶段不消费 → Drop 并记审计（GAP-11-002 / GAP-11-004）。
-func mapResponsesToolsToChat(tools []gatewayapi.ResponsesTool, tr *requestTranslation) []openai.ChatTool {
+func mapResponsesToolsToChat(tools []gatewayapi.ResponsesTool, tr *requestTranslation) []chatcompletionsadapter.ChatTool {
 	if len(tools) == 0 {
 		return nil
 	}
 
-	out := make([]openai.ChatTool, 0, len(tools))
+	out := make([]chatcompletionsadapter.ChatTool, 0, len(tools))
 	for _, tool := range tools {
 		switch {
 		case tool.IsFunction():
@@ -335,14 +335,14 @@ func mapResponsesToolsToChat(tools []gatewayapi.ResponsesTool, tr *requestTransl
 }
 
 // chatFunctionTool 构造 Chat 嵌套 function tool；parameters 缺省时补最小 object schema（BRIDGE §3.1）。
-func chatFunctionTool(name, description string, parameters json.RawMessage, strict *bool) openai.ChatTool {
+func chatFunctionTool(name, description string, parameters json.RawMessage, strict *bool) chatcompletionsadapter.ChatTool {
 	params := cloneRawMessage(parameters)
 	if len(params) == 0 {
 		params = json.RawMessage(`{"type":"object"}`)
 	}
-	return openai.ChatTool{
+	return chatcompletionsadapter.ChatTool{
 		Type: "function",
-		Function: openai.ChatFunctionTool{
+		Function: chatcompletionsadapter.ChatFunctionTool{
 			Name:        name,
 			Description: description,
 			Parameters:  params,
@@ -428,7 +428,7 @@ func chatFunctionToolChoice(name string) json.RawMessage {
 //   - {type:"json_schema", name, schema, strict} → {type:"json_schema", json_schema:{name,schema,strict}}。
 //
 // json_schema 细节（strict / 嵌套 schema 校验）在 TASK-11.08 进一步收口。
-func mapResponsesTextFormat(format json.RawMessage) *openai.ChatResponseFormat {
+func mapResponsesTextFormat(format json.RawMessage) *chatcompletionsadapter.ChatResponseFormat {
 	if len(format) == 0 {
 		return nil
 	}
@@ -442,9 +442,9 @@ func mapResponsesTextFormat(format json.RawMessage) *openai.ChatResponseFormat {
 
 	switch head.Type {
 	case "json_schema":
-		return &openai.ChatResponseFormat{Type: head.Type, JSONSchema: extractJSONSchema(format)}
+		return &chatcompletionsadapter.ChatResponseFormat{Type: head.Type, JSONSchema: extractJSONSchema(format)}
 	default:
-		return &openai.ChatResponseFormat{Type: head.Type}
+		return &chatcompletionsadapter.ChatResponseFormat{Type: head.Type}
 	}
 }
 

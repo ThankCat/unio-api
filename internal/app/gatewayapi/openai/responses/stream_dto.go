@@ -1,5 +1,7 @@
 package responses
 
+import "encoding/json"
+
 // Responses 流式命名事件类型常量。
 //
 // 仅枚举桥接层会发出的事件；codex-rs `process_responses_event` 实际消费的子集见
@@ -47,6 +49,24 @@ type ResponsesStreamEvent struct {
 
 	// Part：content_part.added|done 事件携带的 part 形状。
 	Part *ResponseOutputContent `json:"part,omitempty"`
+
+	// raw 非空时 MarshalJSON 直接返回它：上游 responses 直传零转换透传原始事件 data
+	// （service 已预先改写嵌套 response.model）。Type 仍用于 SSE `event:` 行。桥接路径不设置本字段。
+	raw json.RawMessage
+}
+
+// RawResponsesStreamEvent 构造一个「原文直传」流式事件：data 原样取自上游事件，Type 用于 SSE event 行。
+func RawResponsesStreamEvent(eventType string, data json.RawMessage) ResponsesStreamEvent {
+	return ResponsesStreamEvent{Type: eventType, raw: data}
+}
+
+// MarshalJSON 在 raw 非空时原样透传上游事件 data；否则按 typed 字段正常序列化（桥接路径）。
+func (e ResponsesStreamEvent) MarshalJSON() ([]byte, error) {
+	if len(e.raw) > 0 {
+		return e.raw, nil
+	}
+	type alias ResponsesStreamEvent
+	return json.Marshal(alias(e))
 }
 
 // ResponsesStreamErrorEvent 是流尾不可恢复错误的 SSE `error` 事件载荷。

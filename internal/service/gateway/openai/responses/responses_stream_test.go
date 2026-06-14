@@ -6,7 +6,7 @@ import (
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 )
 
 // collectEvents 驱动 encoder 并收集发出的命名事件，供断言序列/形状。
@@ -38,16 +38,16 @@ func eventTypes(events []gatewayapi.ResponsesStreamEvent) []string {
 
 func TestStreamEncoder_ReasoningThenTextHappyPath(t *testing.T) {
 	events := collectEvents(t, func(enc *streamEncoder) error {
-		if err := enc.Handle(openai.ChatStreamChunk{ReasoningContent: strptr("think ")}); err != nil {
+		if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{ReasoningContent: strptr("think ")}); err != nil {
 			return err
 		}
-		if err := enc.Handle(openai.ChatStreamChunk{ReasoningContent: strptr("more")}); err != nil {
+		if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{ReasoningContent: strptr("more")}); err != nil {
 			return err
 		}
-		if err := enc.Handle(openai.ChatStreamChunk{Content: "hello "}); err != nil {
+		if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{Content: "hello "}); err != nil {
 			return err
 		}
-		if err := enc.Handle(openai.ChatStreamChunk{Content: "world"}); err != nil {
+		if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{Content: "world"}); err != nil {
 			return err
 		}
 		return enc.Complete("stop", &adapter.ChatUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15})
@@ -134,10 +134,10 @@ func TestStreamEncoder_ToolCallAccumulation(t *testing.T) {
 	}})
 
 	events := collectEvents(t, func(enc *streamEncoder) error {
-		if err := enc.Handle(openai.ChatStreamChunk{ToolCalls: first}); err != nil {
+		if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{ToolCalls: first}); err != nil {
 			return err
 		}
-		if err := enc.Handle(openai.ChatStreamChunk{ToolCalls: second}); err != nil {
+		if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{ToolCalls: second}); err != nil {
 			return err
 		}
 		return enc.Complete("tool_calls", &adapter.ChatUsage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2})
@@ -174,7 +174,7 @@ func TestStreamEncoder_MCPNamespaceSplitInStream(t *testing.T) {
 	}})
 
 	events := collectEvents(t, func(enc *streamEncoder) error {
-		if err := enc.Handle(openai.ChatStreamChunk{ToolCalls: raw}); err != nil {
+		if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{ToolCalls: raw}); err != nil {
 			return err
 		}
 		return enc.Complete("tool_calls", &adapter.ChatUsage{TotalTokens: 1})
@@ -205,7 +205,7 @@ func TestStreamEncoder_EmptyStreamStillEmitsCreatedAndCompleted(t *testing.T) {
 
 func TestStreamEncoder_LengthFinishYieldsIncomplete(t *testing.T) {
 	events := collectEvents(t, func(enc *streamEncoder) error {
-		if err := enc.Handle(openai.ChatStreamChunk{Content: "partial"}); err != nil {
+		if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{Content: "partial"}); err != nil {
 			return err
 		}
 		return enc.Complete("length", &adapter.ChatUsage{TotalTokens: 3})
@@ -232,10 +232,10 @@ func TestStreamEncoder_ReasoningCarrierWhenRequested(t *testing.T) {
 		"resp_x", 0,
 		func(ev gatewayapi.ResponsesStreamEvent) error { events = append(events, ev); return nil },
 	)
-	if err := enc.Handle(openai.ChatStreamChunk{ReasoningContent: strptr("alpha")}); err != nil {
+	if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{ReasoningContent: strptr("alpha")}); err != nil {
 		t.Fatalf("handle: %v", err)
 	}
-	if err := enc.Handle(openai.ChatStreamChunk{ReasoningContent: strptr(" beta")}); err != nil {
+	if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{ReasoningContent: strptr(" beta")}); err != nil {
 		t.Fatalf("handle: %v", err)
 	}
 	if err := enc.Complete("tool_calls", nil); err != nil {
@@ -265,7 +265,7 @@ func TestStreamEncoder_StartedReflectsFirstEmit(t *testing.T) {
 	if enc.Started() {
 		t.Fatal("encoder should not be started before any chunk")
 	}
-	if err := enc.Handle(openai.ChatStreamChunk{Content: "x"}); err != nil {
+	if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{Content: "x"}); err != nil {
 		t.Fatalf("handle: %v", err)
 	}
 	if !enc.Started() {
@@ -277,13 +277,13 @@ func TestStreamEncoder_StartedReflectsFirstEmit(t *testing.T) {
 // 并随 output_item.done / response.completed 以 refusal content part 下发（与非流式映射一致，不丢内容过滤信息）。
 func TestStreamEncoder_RefusalAfterText(t *testing.T) {
 	events := collectEvents(t, func(enc *streamEncoder) error {
-		if err := enc.Handle(openai.ChatStreamChunk{Content: "partial "}); err != nil {
+		if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{Content: "partial "}); err != nil {
 			return err
 		}
-		if err := enc.Handle(openai.ChatStreamChunk{Refusal: strptr("I cannot ")}); err != nil {
+		if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{Refusal: strptr("I cannot ")}); err != nil {
 			return err
 		}
-		if err := enc.Handle(openai.ChatStreamChunk{Refusal: strptr("help with that.")}); err != nil {
+		if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{Refusal: strptr("help with that.")}); err != nil {
 			return err
 		}
 		return enc.Complete("content_filter", &adapter.ChatUsage{TotalTokens: 4})
@@ -318,7 +318,7 @@ func TestStreamEncoder_RefusalAfterText(t *testing.T) {
 // TestStreamEncoder_RefusalOnlyCreatesMessageItem 验证仅有 refusal（无文本）时仍创建 message item 并下发 refusal。
 func TestStreamEncoder_RefusalOnly(t *testing.T) {
 	events := collectEvents(t, func(enc *streamEncoder) error {
-		if err := enc.Handle(openai.ChatStreamChunk{Refusal: strptr("refused")}); err != nil {
+		if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{Refusal: strptr("refused")}); err != nil {
 			return err
 		}
 		return enc.Complete("content_filter", &adapter.ChatUsage{TotalTokens: 1})

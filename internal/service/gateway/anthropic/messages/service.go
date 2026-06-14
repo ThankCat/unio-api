@@ -3,7 +3,7 @@ package messages
 import (
 	"context"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter/anthropic"
+	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
@@ -16,9 +16,9 @@ type MessagesRouter interface {
 
 // AdapterRegistry 定义 gateway 根据 routing 返回的 adapter key 查找 Anthropic adapter 能力。
 type AdapterRegistry interface {
-	Messages(adapterKey string) (anthropic.MessagesAdapter, bool)
-	StreamMessages(adapterKey string) (anthropic.StreamMessagesAdapter, bool)
-	MessagesInputTokenizer(adapterKey string) (anthropic.MessagesInputTokenizer, bool)
+	Messages(adapterKey string) (messagesadapter.MessagesAdapter, bool)
+	StreamMessages(adapterKey string) (messagesadapter.StreamMessagesAdapter, bool)
+	MessagesInputTokenizer(adapterKey string) (messagesadapter.MessagesInputTokenizer, bool)
 }
 
 // MessagesService 编排 Anthropic Messages 请求的 routing、adapter 调用、request log 和结算。

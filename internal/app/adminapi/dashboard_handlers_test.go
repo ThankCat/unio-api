@@ -32,7 +32,7 @@ func (s *fakeDashboardService) Timeseries(_ context.Context, metric, interval st
 		return dashboard.Series{}, failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("bad interval"))
 	}
 	switch metric {
-	case dashboard.MetricRequests, dashboard.MetricTokens, dashboard.MetricSpend:
+	case dashboard.MetricRequests, dashboard.MetricTokens, dashboard.MetricSpend, dashboard.MetricCost:
 	default:
 		return dashboard.Series{}, failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("bad metric"))
 	}

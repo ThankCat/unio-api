@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter/anthropic"
-	anthropicdeepseek "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/deepseek"
+	anthropicdeepseek "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/deepseek/messages"
 	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
-	openaideepseek "github.com/ThankCat/unio-api/internal/core/adapter/openai/deepseek"
+	openaideepseek "github.com/ThankCat/unio-api/internal/core/adapter/openai/deepseek/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"

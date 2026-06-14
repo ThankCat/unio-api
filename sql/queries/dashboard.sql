@@ -131,3 +131,17 @@ WHERE entry_type = 'debit'
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
 GROUP BY bucket, currency
 ORDER BY bucket, currency;
+
+-- name: DashboardCostTimeseries :many
+-- DashboardCostTimeseries 按时间桶 + 币种聚合平台实际成本（cost_snapshots.total_cost_amount），
+-- 与 spend 同形（多币种各成一线），供前端画成本趋势折线。时间列用 cost_snapshots.created_at
+-- （结算写入时刻），与 Overview 成本 KPI 一致。
+SELECT
+    date_trunc(sqlc.arg('unit')::text, created_at)::timestamptz AS bucket,
+    currency,
+    COALESCE(SUM(total_cost_amount), 0)::numeric AS total
+FROM cost_snapshots
+WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
+  AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
+GROUP BY bucket, currency
+ORDER BY bucket, currency;

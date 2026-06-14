@@ -190,6 +190,53 @@ func (q *Queries) DashboardCostByCurrency(ctx context.Context, arg DashboardCost
 	return items, nil
 }
 
+const dashboardCostTimeseries = `-- name: DashboardCostTimeseries :many
+SELECT
+    date_trunc($1::text, created_at)::timestamptz AS bucket,
+    currency,
+    COALESCE(SUM(total_cost_amount), 0)::numeric AS total
+FROM cost_snapshots
+WHERE ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
+  AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz)
+GROUP BY bucket, currency
+ORDER BY bucket, currency
+`
+
+type DashboardCostTimeseriesParams struct {
+	Unit     string
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
+}
+
+type DashboardCostTimeseriesRow struct {
+	Bucket   pgtype.Timestamptz
+	Currency string
+	Total    pgtype.Numeric
+}
+
+// DashboardCostTimeseries 按时间桶 + 币种聚合平台实际成本（cost_snapshots.total_cost_amount），
+// 与 spend 同形（多币种各成一线），供前端画成本趋势折线。时间列用 cost_snapshots.created_at
+// （结算写入时刻），与 Overview 成本 KPI 一致。
+func (q *Queries) DashboardCostTimeseries(ctx context.Context, arg DashboardCostTimeseriesParams) ([]DashboardCostTimeseriesRow, error) {
+	rows, err := q.db.Query(ctx, dashboardCostTimeseries, arg.Unit, arg.FromTime, arg.ToTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DashboardCostTimeseriesRow
+	for rows.Next() {
+		var i DashboardCostTimeseriesRow
+		if err := rows.Scan(&i.Bucket, &i.Currency, &i.Total); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const dashboardEnabledChannelCount = `-- name: DashboardEnabledChannelCount :one
 SELECT COUNT(*) AS total
 FROM channels

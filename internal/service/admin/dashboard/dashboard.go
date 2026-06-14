@@ -27,6 +27,7 @@ const (
 	MetricRequests = "requests"
 	MetricTokens   = "tokens"
 	MetricSpend    = "spend"
+	MetricCost     = "cost"
 
 	IntervalHour = "hour"
 	IntervalDay  = "day"
@@ -45,6 +46,7 @@ type Store interface {
 	DashboardRequestsTimeseries(ctx context.Context, arg sqlc.DashboardRequestsTimeseriesParams) ([]sqlc.DashboardRequestsTimeseriesRow, error)
 	DashboardTokensTimeseries(ctx context.Context, arg sqlc.DashboardTokensTimeseriesParams) ([]sqlc.DashboardTokensTimeseriesRow, error)
 	DashboardSpendTimeseries(ctx context.Context, arg sqlc.DashboardSpendTimeseriesParams) ([]sqlc.DashboardSpendTimeseriesRow, error)
+	DashboardCostTimeseries(ctx context.Context, arg sqlc.DashboardCostTimeseriesParams) ([]sqlc.DashboardCostTimeseriesRow, error)
 }
 
 // MoneyByCurrency 是某币种的单一金额（十进制字符串）。
@@ -143,6 +145,7 @@ type SpendPoint struct {
 }
 
 // Series 是某指标的时间序列结果；按 Metric 只填对应一组点。
+// cost 与 spend 同形（bucket+currency+amount），复用 SpendPoint 承载，仅字段名区分。
 type Series struct {
 	Metric        string
 	Interval      string
@@ -151,6 +154,7 @@ type Series struct {
 	RequestPoints []RequestPoint
 	TokenPoints   []TokenPoint
 	SpendPoints   []SpendPoint
+	CostPoints    []SpendPoint
 }
 
 // Service 提供工作台看板只读聚合。
@@ -225,7 +229,7 @@ func (s *Service) Overview(ctx context.Context, from, to time.Time) (Overview, e
 }
 
 // Timeseries 按 metric 分派返回 [from, to) 区间内按时间桶聚合的序列。
-// metric 须为 requests|tokens|spend，interval 须为 hour|day（否则 admin_invalid_argument）。
+// metric 须为 requests|tokens|spend|cost，interval 须为 hour|day（否则 admin_invalid_argument）。
 func (s *Service) Timeseries(ctx context.Context, metric, interval string, from, to time.Time) (Series, error) {
 	if interval != IntervalHour && interval != IntervalDay {
 		return Series{}, invalidArgument("interval", "interval must be one of hour|day")
@@ -262,8 +266,17 @@ func (s *Service) Timeseries(ctx context.Context, metric, interval string, from,
 		for _, row := range rows {
 			out.SpendPoints = append(out.SpendPoints, SpendPoint{Bucket: row.Bucket.Time, Currency: row.Currency, Amount: numericString(row.Total)})
 		}
+	case MetricCost:
+		rows, err := s.store.DashboardCostTimeseries(ctx, sqlc.DashboardCostTimeseriesParams{Unit: interval, FromTime: fromTS, ToTime: toTS})
+		if err != nil {
+			return Series{}, storeFailed(err, "aggregate cost timeseries")
+		}
+		out.CostPoints = make([]SpendPoint, 0, len(rows))
+		for _, row := range rows {
+			out.CostPoints = append(out.CostPoints, SpendPoint{Bucket: row.Bucket.Time, Currency: row.Currency, Amount: numericString(row.Total)})
+		}
 	default:
-		return Series{}, invalidArgument("metric", "metric must be one of requests|tokens|spend")
+		return Series{}, invalidArgument("metric", "metric must be one of requests|tokens|spend|cost")
 	}
 
 	return out, nil

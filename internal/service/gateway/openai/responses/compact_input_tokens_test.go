@@ -5,15 +5,15 @@ import (
 	"testing"
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 )
 
 func TestCompactHistory_HappyPath(t *testing.T) {
 	chatAdapter := &fakeChatAdapter{resp: okChatResponse()}
 	registry := &fakeRegistry{
-		adapters:   map[string]openai.ChatAdapter{"deepseek": chatAdapter},
-		tokenizers: map[string]openai.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
+		adapters:   map[string]chatcompletionsadapter.ChatAdapter{"deepseek": chatAdapter},
+		tokenizers: map[string]chatcompletionsadapter.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
 	}
 	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}}}
 	settlement := &fakeSettlement{}
@@ -50,8 +50,8 @@ func TestCompactHistory_HappyPath(t *testing.T) {
 func TestCompactHistory_InjectsDefaultInstruction(t *testing.T) {
 	chatAdapter := &fakeChatAdapter{resp: okChatResponse()}
 	registry := &fakeRegistry{
-		adapters:   map[string]openai.ChatAdapter{"deepseek": chatAdapter},
-		tokenizers: map[string]openai.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
+		adapters:   map[string]chatcompletionsadapter.ChatAdapter{"deepseek": chatAdapter},
+		tokenizers: map[string]chatcompletionsadapter.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
 	}
 	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}}}
 
@@ -73,8 +73,8 @@ func TestCompactHistory_InjectsDefaultInstruction(t *testing.T) {
 func TestCountInputTokens_LocalEstimate(t *testing.T) {
 	chatAdapter := &fakeChatAdapter{resp: okChatResponse()}
 	registry := &fakeRegistry{
-		adapters:   map[string]openai.ChatAdapter{"deepseek": chatAdapter},
-		tokenizers: map[string]openai.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
+		adapters:   map[string]chatcompletionsadapter.ChatAdapter{"deepseek": chatAdapter},
+		tokenizers: map[string]chatcompletionsadapter.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
 	}
 	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}}}
 	settlement := &fakeSettlement{}
@@ -104,7 +104,7 @@ func TestCountInputTokens_LocalEstimate(t *testing.T) {
 }
 
 func TestCountInputTokens_RoutingError(t *testing.T) {
-	registry := &fakeRegistry{tokenizers: map[string]openai.ChatInputTokenizer{"deepseek": fakeTokenizer{}}}
+	registry := &fakeRegistry{tokenizers: map[string]chatcompletionsadapter.ChatInputTokenizer{"deepseek": fakeTokenizer{}}}
 	router := &fakeRouter{err: errors.New("model not found")}
 
 	svc := newServiceForTest(router, registry, &fakeSettlement{}, &fakeAuthorizer{}, newFakeRequestLog())

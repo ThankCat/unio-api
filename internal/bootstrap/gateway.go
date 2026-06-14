@@ -7,8 +7,8 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 	anthropicmessages "github.com/ThankCat/unio-api/internal/service/gateway/anthropic/messages"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 	gateway "github.com/ThankCat/unio-api/internal/service/gateway/openai/chatcompletions"
 	responsesgateway "github.com/ThankCat/unio-api/internal/service/gateway/openai/responses"
 )

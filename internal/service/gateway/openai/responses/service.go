@@ -4,7 +4,8 @@ import (
 	"context"
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
+	responsesadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
@@ -18,13 +19,21 @@ type ChatRouter interface {
 	PlanChat(ctx context.Context, req routing.ChatRouteRequest) (routing.ChatRoutePlan, error)
 }
 
-// AdapterRegistry 定义 Responses 桥接复用的 OpenAI adapter 查找能力。
+// AdapterRegistry 定义 Responses service 的 OpenAI adapter 查找能力。
 //
-// DEC-014：不新增 Responses adapter，直接复用既有 openai.ChatAdapter 与 tokenizer。
+// 桥接路径（DEC-014）复用既有 chatcompletionsadapter.ChatAdapter 与 chat tokenizer；直传路径（上游 responses 直传）
+// 使用 responses 直传 adapter 与 responses tokenizer。service 据候选 adapter 是否注册 responses 直传
+// （HasResponses / HasStreamResponses）分流，无该能力者天然落桥接。
 type AdapterRegistry interface {
-	Chat(adapterKey string) (openai.ChatAdapter, bool)
-	StreamChat(adapterKey string) (openai.StreamChatAdapter, bool)
-	ChatInputTokenizer(adapterKey string) (openai.ChatInputTokenizer, bool)
+	Chat(adapterKey string) (chatcompletionsadapter.ChatAdapter, bool)
+	StreamChat(adapterKey string) (chatcompletionsadapter.StreamChatAdapter, bool)
+	ChatInputTokenizer(adapterKey string) (chatcompletionsadapter.ChatInputTokenizer, bool)
+
+	Responses(adapterKey string) (responsesadapter.ResponsesAdapter, bool)
+	StreamResponses(adapterKey string) (responsesadapter.StreamResponsesAdapter, bool)
+	ResponsesInputTokenizer(adapterKey string) (responsesadapter.ResponsesInputTokenizer, bool)
+	HasResponses(adapterKey string) bool
+	HasStreamResponses(adapterKey string) bool
 }
 
 // ResponsesService 编排 OpenAI Responses API（POST /v1/responses）请求的 routing、桥接翻译、
@@ -107,18 +116,26 @@ func responsesSafeMessage(code string) string {
 
 // prepareResponsesCandidates 复用共享 lifecycle executor 生成 Responses 候选 fallback plan。
 //
-// 与 chatcompletions 一致按 stream 选择 Stream/NonStream 能力过滤（外加 InputTokenizer）：流式请求只保留
-// 支持流式的候选，非流式请求只保留支持非流式的候选；否则会把仅支持一种模式的候选误选/误排，导致
-// authorization 之后在 adapter 调用阶段失败。输入 token 估算先把 Responses 请求翻译成内部 ChatRequest
-// 再交给候选对应 tokenizer（桥接复用，无独立 Responses tokenizer）。
-func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req gatewayapi.ResponsesRequest, candidates []routing.ChatRouteCandidate, stream bool) (lifecycle.CandidatePlan, error) {
-	capabilities := []lifecycle.AdapterCapability{
-		lifecycle.AdapterCapabilityInputTokenizer,
-	}
-	if stream {
-		capabilities = append(capabilities, lifecycle.AdapterCapabilityStream)
+// allowDirect=true（CreateResponse/StreamResponse）按「responses 可服务」能力过滤：候选 adapter 原生
+// 支持上游 responses 直传或可经桥接走 chat 任一即保留，输入 token 估算据候选能力分流（直传 tokenizer
+// vs 桥接 chat tokenizer）。allowDirect=false（CompactHistory 等强制桥接）退回纯 chat 桥接能力与估算。
+// 与 chatcompletions 一致按 stream 选择 Stream/NonStream 变体，避免仅支持一种模式的候选误选/误排。
+func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req gatewayapi.ResponsesRequest, candidates []routing.ChatRouteCandidate, stream bool, allowDirect bool) (lifecycle.CandidatePlan, error) {
+	var capabilities []lifecycle.AdapterCapability
+	if allowDirect {
+		capabilities = []lifecycle.AdapterCapability{lifecycle.AdapterCapabilityResponsesServeTokenizer}
+		if stream {
+			capabilities = append(capabilities, lifecycle.AdapterCapabilityResponsesServeStream)
+		} else {
+			capabilities = append(capabilities, lifecycle.AdapterCapabilityResponsesServeNonStream)
+		}
 	} else {
-		capabilities = append(capabilities, lifecycle.AdapterCapabilityNonStream)
+		capabilities = []lifecycle.AdapterCapability{lifecycle.AdapterCapabilityInputTokenizer}
+		if stream {
+			capabilities = append(capabilities, lifecycle.AdapterCapabilityStream)
+		} else {
+			capabilities = append(capabilities, lifecycle.AdapterCapabilityNonStream)
+		}
 	}
 
 	return s.candidates.PrepareCandidates(ctx, lifecycle.PrepareCandidatesParams{
@@ -126,16 +143,45 @@ func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req g
 		Candidates:          candidates,
 		Capabilities:        capabilities,
 		Available:           s.lifecycle.CandidateAvailable,
-		EstimateInputTokens: s.responsesInputTokenEstimator(req),
+		EstimateInputTokens: s.responsesInputTokenEstimator(req, allowDirect),
 	})
 }
 
-// responsesInputTokenEstimator 构造 Responses 候选级 tokenizer closure。
+// responsesInputTokenEstimator 构造 Responses 候选级 tokenizer closure，按候选能力分流。
 //
-// closure 持有 Responses HTTP DTO，按 candidate 的 adapter_key 与 upstream model 查找 tokenizer，
-// 并先用 mapResponsesRequestToChat 把请求翻译成内部 ChatRequest 后估算输入 token。
-func (s *ResponsesService) responsesInputTokenEstimator(req gatewayapi.ResponsesRequest) lifecycle.CandidateInputTokenEstimator {
+// 直传候选（allowDirect 且 HasResponses）用 responses tokenizer 对即将上送的请求体做保守估算；
+// 其余候选先用 mapResponsesRequestToChat 翻译成内部 ChatRequest 再交给 chat tokenizer（桥接复用）。
+func (s *ResponsesService) responsesInputTokenEstimator(req gatewayapi.ResponsesRequest, allowDirect bool) lifecycle.CandidateInputTokenEstimator {
 	return func(_ context.Context, candidate routing.ChatRouteCandidate) (int64, error) {
+		if allowDirect && s.registry.HasResponses(candidate.AdapterKey) {
+			tokenizer, ok := s.registry.ResponsesInputTokenizer(candidate.AdapterKey)
+			if !ok {
+				return 0, failure.New(
+					failure.CodeGatewayAdapterNotRegistered,
+					failure.WithMessage("openai responses input tokenizer is not registered"),
+					failure.WithField("protocol", routing.ProtocolOpenAI),
+					failure.WithField("adapter_key", candidate.AdapterKey),
+				)
+			}
+
+			body, err := encodeUpstreamResponsesBody(req, candidate.UpstreamModel, false)
+			if err != nil {
+				return 0, err
+			}
+			inputTokens, err := tokenizer.CountResponsesInputTokens(responsesadapter.Request{Body: body})
+			if err != nil {
+				return 0, failure.Wrap(
+					failure.CodeAdapterTokenizeFailed,
+					err,
+					failure.WithMessage("count responses direct input tokens"),
+					failure.WithField("protocol", routing.ProtocolOpenAI),
+					failure.WithField("adapter_key", candidate.AdapterKey),
+					failure.WithField("upstream_model", candidate.UpstreamModel),
+				)
+			}
+			return inputTokens, nil
+		}
+
 		tokenizer, ok := s.registry.ChatInputTokenizer(candidate.AdapterKey)
 		if !ok {
 			return 0, failure.New(

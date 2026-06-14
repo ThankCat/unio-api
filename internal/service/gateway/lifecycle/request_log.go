@@ -30,13 +30,30 @@ func FailureCodeOrFallback(err error, fallback string) string {
 // InternalErrorDetail 返回供内部排查的错误详情，并限制长度避免单行日志/单条 record
 // 无限膨胀。返回值仅用于 request_records.internal_error_detail，绝不出现在公开响应中。
 //
+// 会沿 errors.Unwrap 链拼接各层消息：failure.Failure.Error() 只返回归类文案、不含 cause，
+// 因此若只取顶层 Error() 会丢掉真正根因（如 context canceled / unexpected EOF /
+// connection reset by peer）——而这些恰是排查流式断连最关键的信息。逐层去重拼接后截断。
+//
 // 协议无关：双协议共享同一截断策略与字段长度上限。
 func InternalErrorDetail(err error) string {
 	if err == nil {
 		return ""
 	}
 
-	detail := strings.TrimSpace(err.Error())
+	var detail string
+	for cur := err; cur != nil; cur = errors.Unwrap(cur) {
+		msg := strings.TrimSpace(cur.Error())
+		if msg == "" {
+			continue
+		}
+		// 标准库 %w 包装的错误其 Error() 往往已内联子 cause，避免重复拼接。
+		if detail == "" {
+			detail = msg
+		} else if !strings.Contains(detail, msg) {
+			detail = detail + ": " + msg
+		}
+	}
+
 	if len(detail) <= MaxRequestLogInternalErrorDetailBytes {
 		return detail
 	}

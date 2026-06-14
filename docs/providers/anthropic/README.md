@@ -6,11 +6,11 @@ Anthropic 是 Unio 接入的**官方一方(1P)上游**,只提供 **Anthropic 协
 > **核心立场:官方上游 = 协议基线。** 官方 Anthropic 端点能接收并正确处理 Messages 协议的**全部合法字段**,
 > 所以本 adapter 的目标是**零 Drop、零有损改写、忠实透传**。
 >
-> **好消息:Anthropic 协议族 base(`internal/core/adapter/anthropic`)当前已基本是忠实官方基线**——
+> **好消息:Anthropic 协议族 base(`internal/core/adapter/anthropic/messages`)当前已基本是忠实官方基线**——
 > 它用 `json.RawMessage` 原样透传 `system`/`content`/`thinking`/`tools`/`tool_choice`/`metadata`,只 typed 了
 > `max_tokens`/`stop_sequences`/`temperature`/`top_p`/`top_k`,**无任何改名/塌缩**;DeepSeek 的全部偏差
 >(`top_k` 丢弃、content block 剔除、server tool 剔除、metadata 仅留 `user_id`、`output_config` 归一等)
-> 都已正确隔离在 `internal/core/adapter/anthropic/deepseek` 层。
+> 都已正确隔离在 `internal/core/adapter/anthropic/deepseek/messages` 层。
 >
 > 因此本次接入的"路线 C"对 Anthropic **几乎是空操作**(无需从 base 下沉方言)。真正要补的是两个**官方 1P 缺口**:
 > **`anthropic-beta` 头透传**(见下)与**官方 input tokenizer**。
@@ -22,7 +22,7 @@ Anthropic 是 Unio 接入的**官方一方(1P)上游**,只提供 **Anthropic 协
 
 | 协议格式 | Base URL | 路径 | 项目 adapter | adapter_key |
 | --- | --- | --- | --- | --- |
-| Anthropic | `https://api.anthropic.com` | `POST /v1/messages` | `internal/core/adapter/anthropic`(base 直接复用) | `anthropic` |
+| Anthropic | `https://api.anthropic.com` | `POST /v1/messages` | `internal/core/adapter/anthropic/messages`(base 直接复用) | `anthropic` |
 
 来源:[官方·Messages](https://docs.anthropic.com/en/api/messages)(查阅 2026-06-12)。
 
@@ -66,7 +66,7 @@ Anthropic 是 Unio 接入的**官方一方(1P)上游**,只提供 **Anthropic 协
 | 术语 | 全称 / 解释 |
 | --- | --- |
 | 1P / 官方一方 | First-Party,上游服务商就是协议发明者(Anthropic 提供 Anthropic 协议) |
-| base adapter | 协议族通用实现 `internal/core/adapter/anthropic`:wire 编码、HTTP、响应解析、SSE、usage,**当前已是忠实官方基线** |
+| base adapter | 协议族通用实现 `internal/core/adapter/anthropic/messages`:wire 编码、HTTP、响应解析、SSE、usage,**当前已是忠实官方基线** |
 | `anthropic-version` | Anthropic 必需的 API 版本头;base 当前固定 `2023-06-01` |
 | `anthropic-beta` | 启用 beta 特性的头(如扩展上下文、特定工具);官方 1P 需按登记表透传 |
 | thinking | Anthropic 扩展思考块;请求里 `thinking` 字段控制,响应/流里以 `thinking` content block 回传 |

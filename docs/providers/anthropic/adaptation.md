@@ -6,7 +6,7 @@
 ## 1. 总览:官方 adapter = base 直接复用
 
 ```text
-ingress(Anthropic) → contract(MessageRequest) → base adapter(internal/core/adapter/anthropic) → 官方 upstream
+ingress(Anthropic) → contract(MessageRequest) → base adapter(internal/core/adapter/anthropic/messages) → 官方 upstream
 ```
 
 DeepSeek 的接法是「base + drop 层」(`anthropic/deepseek/adapter.go`:`Messages`/`StreamMessages` 调 base 前先
@@ -17,7 +17,7 @@ base 已干净),只需补 beta 头透传与 tokenizer(见 §10、§11)。
 
 ## 2. 请求链路(ingress → upstream)
 
-- **编码**:`buildMessagesRequestBody`(`internal/core/adapter/anthropic/wire.go` L87–114)把 typed 字段编码为 wire,
+- **编码**:`buildMessagesRequestBody`(`internal/core/adapter/anthropic/messages/wire.go` L87–114)把 typed 字段编码为 wire,
   复杂 union(`system`/`content`/`thinking`/`tools`/`tool_choice`/`metadata`)以 `json.RawMessage` 原样透传,
   再把 `Extensions` 经 `mergeJSONObjects` 合并(已存在键不覆盖)。**忠实,无改写。**
 - **HTTP**:`do()`(`adapter.go` L209–247)拼 `<base>/v1/messages`,设 `Content-Type` + `x-api-key` +

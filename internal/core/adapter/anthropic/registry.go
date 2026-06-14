@@ -3,7 +3,9 @@ package anthropic
 import (
 	"errors"
 	"fmt"
+	"sort"
 
+	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
 
@@ -20,24 +22,24 @@ var (
 // SQL 先按 protocol=anthropic 筛选 channel，lifecycle 再按 registry capability 过滤。
 type Registration struct {
 	Key                    string
-	Messages               MessagesAdapter
-	StreamMessages         StreamMessagesAdapter
-	MessagesInputTokenizer MessagesInputTokenizer
+	Messages               messagesadapter.MessagesAdapter
+	StreamMessages         messagesadapter.StreamMessagesAdapter
+	MessagesInputTokenizer messagesadapter.MessagesInputTokenizer
 }
 
 // Registry 根据 adapter key 查找 Anthropic 协议族 adapter 能力。
 type Registry struct {
-	messages       map[string]MessagesAdapter
-	streamMessages map[string]StreamMessagesAdapter
-	tokenizer      map[string]MessagesInputTokenizer
+	messages       map[string]messagesadapter.MessagesAdapter
+	streamMessages map[string]messagesadapter.StreamMessagesAdapter
+	tokenizer      map[string]messagesadapter.MessagesInputTokenizer
 }
 
 // NewRegistry 创建 Anthropic 协议族 adapter registry。
 func NewRegistry(registrations ...Registration) (*Registry, error) {
 	r := &Registry{
-		messages:       make(map[string]MessagesAdapter),
-		streamMessages: make(map[string]StreamMessagesAdapter),
-		tokenizer:      make(map[string]MessagesInputTokenizer),
+		messages:       make(map[string]messagesadapter.MessagesAdapter),
+		streamMessages: make(map[string]messagesadapter.StreamMessagesAdapter),
+		tokenizer:      make(map[string]messagesadapter.MessagesInputTokenizer),
 	}
 
 	for _, reg := range registrations {
@@ -98,20 +100,42 @@ func duplicateKey(capability, key string) error {
 	)
 }
 
+// Keys 返回该 registry 注册的全部 adapter key（去重、字典序）。
+// admin 据此把可选 adapter_key 暴露成枚举，供前端下拉而非手填。
+func (r *Registry) Keys() []string {
+	seen := make(map[string]struct{})
+	for key := range r.messages {
+		seen[key] = struct{}{}
+	}
+	for key := range r.streamMessages {
+		seen[key] = struct{}{}
+	}
+	for key := range r.tokenizer {
+		seen[key] = struct{}{}
+	}
+
+	keys := make([]string, 0, len(seen))
+	for key := range seen {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // Messages 根据 adapter key 返回非流式 Messages adapter。
-func (r *Registry) Messages(adapterKey string) (MessagesAdapter, bool) {
+func (r *Registry) Messages(adapterKey string) (messagesadapter.MessagesAdapter, bool) {
 	a, ok := r.messages[adapterKey]
 	return a, ok
 }
 
 // StreamMessages 根据 adapter key 返回流式 Messages adapter。
-func (r *Registry) StreamMessages(adapterKey string) (StreamMessagesAdapter, bool) {
+func (r *Registry) StreamMessages(adapterKey string) (messagesadapter.StreamMessagesAdapter, bool) {
 	a, ok := r.streamMessages[adapterKey]
 	return a, ok
 }
 
 // MessagesInputTokenizer 根据 adapter key 返回 Messages 输入 token 计数能力。
-func (r *Registry) MessagesInputTokenizer(adapterKey string) (MessagesInputTokenizer, bool) {
+func (r *Registry) MessagesInputTokenizer(adapterKey string) (messagesadapter.MessagesInputTokenizer, bool) {
 	t, ok := r.tokenizer[adapterKey]
 	return t, ok
 }

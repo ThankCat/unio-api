@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 )
 
 func decodeRequest(t *testing.T, body string) gatewayapi.ResponsesRequest {
@@ -17,7 +17,7 @@ func decodeRequest(t *testing.T, body string) gatewayapi.ResponsesRequest {
 	return req
 }
 
-func mapBody(t *testing.T, body string) (openai.ChatRequest, requestTranslation) {
+func mapBody(t *testing.T, body string) (chatcompletionsadapter.ChatRequest, requestTranslation) {
 	t.Helper()
 	return mapResponsesRequestToChat(decodeRequest(t, body), "deepseek-v4-flash")
 }
@@ -356,7 +356,7 @@ func TestMapReasoningDiscardedWhenNotBeforeFunctionCall(t *testing.T) {
 		]
 	}`)
 
-	var assistant openai.ChatMessage
+	var assistant chatcompletionsadapter.ChatMessage
 	found := false
 	for _, m := range chat.Messages {
 		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
@@ -399,12 +399,12 @@ func TestMapReasoningBackfillsMergedParallelToolCalls(t *testing.T) {
 func TestReasoningRoundTripOutputToInput(t *testing.T) {
 	out := mapChatResponseToResponses(
 		gatewayapi.ResponsesRequest{Model: "m", Include: []string{"reasoning.encrypted_content"}},
-		openai.ChatResponse{
+		chatcompletionsadapter.ChatResponse{
 			ReasoningContent: strptr("chain of thought"),
 			FinishReason:     "tool_calls",
-			ToolCalls: []openai.ChatToolCall{{
+			ToolCalls: []chatcompletionsadapter.ChatToolCall{{
 				ID: "c1", Type: "function",
-				Function: openai.ChatToolCallFunction{Name: "f1", Arguments: "{}"},
+				Function: chatcompletionsadapter.ChatToolCallFunction{Name: "f1", Arguments: "{}"},
 			}},
 		},
 	)

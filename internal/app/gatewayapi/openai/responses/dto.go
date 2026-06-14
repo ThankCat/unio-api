@@ -71,6 +71,20 @@ type ResponsesRequest struct {
 	// Extensions 保留未显式建模的合法顶层字段（如 Codex 专属 client_metadata）；
 	// 由 UnmarshalJSON 填充。DEC-012：decode 不丢字段。
 	Extensions map[string]json.RawMessage `json:"-"`
+
+	// raw 是 decode 时保留的原始请求体（DEC-012：上游 responses 直传据此零损耗重放，
+	// 仅由 service 改写 model/stream 两个字段）。由 UnmarshalJSON 填充，经 RawBody 读取。
+	raw json.RawMessage
+}
+
+// RawBody 返回 decode 时保留的原始请求体；未经 UnmarshalJSON 构造（如单测直接建结构体）时为 nil。
+//
+// 上游 responses 直传用它作为发往上游的请求基底，零损耗保留客户原始字段（含显式 null 与未建模扩展）。
+func (req *ResponsesRequest) RawBody() json.RawMessage {
+	if req == nil {
+		return nil
+	}
+	return req.raw
 }
 
 // StreamEnabled 判断客户端是否请求流式响应。
@@ -100,6 +114,17 @@ type ResponsesInput struct {
 	Text *string
 	// Items 为 input 是 item 数组时的值。
 	Items []ResponseInputItem
+}
+
+// MarshalJSON 把 input 还原为其原始 JSON（保留字符串/数组两种 union 形态）。
+//
+// 仅用于「无原始请求体」的 typed 重编码兜底路径（上游 responses 直传优先用 ResponsesRequest.RawBody）；
+// ingress 入站只 decode、不 encode，本方法不影响既有路径。
+func (in ResponsesInput) MarshalJSON() ([]byte, error) {
+	if len(in.Raw) > 0 {
+		return in.Raw, nil
+	}
+	return []byte("null"), nil
 }
 
 // ResponseInputItem 表示 Responses `input[]` 中的单个 item（按 type 区分的 union）。
@@ -165,6 +190,24 @@ type ResponsesResponse struct {
 	Temperature       *float64 `json:"temperature,omitempty"`
 	TopP              *float64 `json:"top_p,omitempty"`
 	MaxOutputTokens   *int     `json:"max_output_tokens,omitempty"`
+
+	// raw 非空时 MarshalJSON 直接返回它：上游 responses 直传零转换透传原始响应体
+	// （service 已预先改写顶层 model 回显）。桥接路径不设置本字段，按 typed 字段正常 marshal。
+	raw json.RawMessage
+}
+
+// RawResponsesResponse 构造一个「原文直传」响应：MarshalJSON 将原样返回 raw（不经 typed 字段重编码）。
+func RawResponsesResponse(raw json.RawMessage) *ResponsesResponse {
+	return &ResponsesResponse{raw: raw}
+}
+
+// MarshalJSON 在 raw 非空时原样透传上游响应体；否则按 typed 字段正常序列化（桥接路径）。
+func (r ResponsesResponse) MarshalJSON() ([]byte, error) {
+	if len(r.raw) > 0 {
+		return r.raw, nil
+	}
+	type alias ResponsesResponse
+	return json.Marshal(alias(r))
 }
 
 // ResponseOutputItem 表示 Responses output[] 中的单个 item（message/reasoning/function_call）。

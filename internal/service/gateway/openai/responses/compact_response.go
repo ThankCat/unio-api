@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 )
 
 // compact_response.go 实现 POST /v1/responses/compact 的无状态降级压缩（DEC-014 / GAP-11-007）。
@@ -40,7 +40,7 @@ func (s *ResponsesService) CompactHistory(ctx context.Context, req gatewayapi.Re
 //
 // 第一版只承载摘要文本为单条 assistant message（output_text）；摘要为空时返回空 output，
 // 由 Codex 决定回退策略。
-func mapChatResponseToCompaction(chatResp openai.ChatResponse) gatewayapi.CompactHistoryResponse {
+func mapChatResponseToCompaction(chatResp chatcompletionsadapter.ChatResponse) gatewayapi.CompactHistoryResponse {
 	output := make([]gatewayapi.ResponseOutputItem, 0, 1)
 
 	summary := strings.TrimSpace(chatResp.Content)

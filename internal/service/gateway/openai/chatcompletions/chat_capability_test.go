@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/capability"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
@@ -31,7 +31,7 @@ func TestCreateChatCompletionThreadsRequiredCapabilities(t *testing.T) {
 
 	router := &fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))}
 	registry := &fakeAdapterRegistry{
-		chatAdapters: map[string]openai.ChatAdapter{
+		chatAdapters: map[string]chatcompletionsadapter.ChatAdapter{
 			"openai": &fakeChatAdapter{chatResp: chatResponse("adapter response")},
 		},
 	}

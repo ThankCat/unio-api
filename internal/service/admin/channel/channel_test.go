@@ -62,9 +62,14 @@ func (c *fakeCipher) Encrypt(plaintext string) ([]byte, error) {
 }
 func (c *fakeCipher) Decrypt([]byte) (string, error) { return "", nil }
 
-type fakeRegistry struct{ has bool }
+type fakeRegistry struct {
+	has  bool
+	keys map[string][]string
+}
 
 func (r fakeRegistry) HasAny(string, string) bool { return r.has }
+
+func (r fakeRegistry) AdapterKeys(protocol string) []string { return r.keys[protocol] }
 
 func validCreateInput() channel.CreateInput {
 	return channel.CreateInput{
@@ -151,6 +156,69 @@ func TestCreateEncryptsCredentialAndPersists(t *testing.T) {
 	}
 	if got.ID != 9 || got.TimeoutMs != nil {
 		t.Fatalf("unexpected mapped channel: %+v", got)
+	}
+}
+
+// TestCreateDefaultsAdapterKeyToProtocol 验证：adapter_key 留空时默认取 protocol 同名的忠实
+// 透传 adapter（openai→"openai"、anthropic→"anthropic"），并以该默认键落库。
+func TestCreateDefaultsAdapterKeyToProtocol(t *testing.T) {
+	cases := []struct {
+		protocol string
+		wantKey  string
+	}{
+		{protocol: channel.ProtocolOpenAI, wantKey: "openai"},
+		{protocol: channel.ProtocolAnthropic, wantKey: "anthropic"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.protocol, func(t *testing.T) {
+			store := &fakeChannelStore{
+				provider:  sqlc.Provider{ID: 1, Slug: "p", Status: "enabled"},
+				createRow: sqlc.Channel{ID: 1, ProviderID: 1, Name: "primary", Protocol: tc.protocol, AdapterKey: tc.wantKey},
+			}
+			svc := channel.NewService(store, &fakeCipher{out: []byte("enc")}, fakeRegistry{has: true})
+
+			in := validCreateInput()
+			in.Protocol = tc.protocol
+			in.AdapterKey = "" // 留空触发默认
+
+			if _, err := svc.Create(context.Background(), in); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			if store.createParam.AdapterKey != tc.wantKey {
+				t.Fatalf("persisted adapter_key = %q, want %q (default to protocol)", store.createParam.AdapterKey, tc.wantKey)
+			}
+		})
+	}
+}
+
+// TestAdapterKeyOptions 验证：服务把 registry 注册的 adapter_key 按协议枚举出来，
+// 与协议同名的键标记 is_default（供前端下拉默认选中忠实透传）。
+func TestAdapterKeyOptions(t *testing.T) {
+	reg := fakeRegistry{
+		has: true,
+		keys: map[string][]string{
+			channel.ProtocolOpenAI:    {"deepseek", "openai"},
+			channel.ProtocolAnthropic: {"anthropic", "deepseek"},
+		},
+	}
+	svc := channel.NewService(&fakeChannelStore{}, &fakeCipher{}, reg)
+
+	got := svc.AdapterKeyOptions()
+	want := []channel.AdapterKeyOption{
+		{Protocol: channel.ProtocolOpenAI, AdapterKey: "deepseek", IsDefault: false},
+		{Protocol: channel.ProtocolOpenAI, AdapterKey: "openai", IsDefault: true},
+		{Protocol: channel.ProtocolAnthropic, AdapterKey: "anthropic", IsDefault: true},
+		{Protocol: channel.ProtocolAnthropic, AdapterKey: "deepseek", IsDefault: false},
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("got %d options, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("option[%d] = %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }
 

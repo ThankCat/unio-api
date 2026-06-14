@@ -53,6 +53,8 @@ func (req *ResponsesRequest) UnmarshalJSON(data []byte) error {
 
 	*req = ResponsesRequest(aux)
 	req.Extensions = make(map[string]json.RawMessage, len(raw))
+	// 保留原始请求体：上游 responses 直传据此零损耗重放（仅 service 改写 model/stream）。
+	req.raw = append(json.RawMessage(nil), data...)
 
 	for key, value := range raw {
 		if _, known := knownResponsesFields[key]; known {

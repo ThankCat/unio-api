@@ -3,7 +3,7 @@ package chatcompletions
 import (
 	"context"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
@@ -16,9 +16,9 @@ type ChatRouter interface {
 
 // AdapterRegistry 定义 gateway 根据 routing 返回的 adapter key 查找具体 adapter 的能力。
 type AdapterRegistry interface {
-	Chat(adapterKey string) (openai.ChatAdapter, bool)
-	StreamChat(adapterKey string) (openai.StreamChatAdapter, bool)
-	ChatInputTokenizer(adapterKey string) (openai.ChatInputTokenizer, bool)
+	Chat(adapterKey string) (chatcompletionsadapter.ChatAdapter, bool)
+	StreamChat(adapterKey string) (chatcompletionsadapter.StreamChatAdapter, bool)
+	ChatInputTokenizer(adapterKey string) (chatcompletionsadapter.ChatInputTokenizer, bool)
 }
 
 // ChatCompletionService 编排 chat completion 请求的 routing、adapter 调用、request log 和结算。

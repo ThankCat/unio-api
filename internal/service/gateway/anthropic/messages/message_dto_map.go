@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
-	anthropicadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic"
+	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
 )
 
-func mapGatewayMessagesToAdapter(messages []gatewayapi.Message) []anthropicadapter.Message {
-	out := make([]anthropicadapter.Message, 0, len(messages))
+func mapGatewayMessagesToAdapter(messages []gatewayapi.Message) []messagesadapter.Message {
+	out := make([]messagesadapter.Message, 0, len(messages))
 	for _, msg := range messages {
-		out = append(out, anthropicadapter.Message{
+		out = append(out, messagesadapter.Message{
 			Role:    msg.Role,
 			Content: append(json.RawMessage(nil), msg.Content...),
 		})
@@ -18,7 +18,7 @@ func mapGatewayMessagesToAdapter(messages []gatewayapi.Message) []anthropicadapt
 	return out
 }
 
-func mapGatewayRequestToAdapter(req gatewayapi.MessageRequest, upstreamModel string) anthropicadapter.MessageRequest {
+func mapGatewayRequestToAdapter(req gatewayapi.MessageRequest, upstreamModel string) messagesadapter.MessageRequest {
 	extensions := make(map[string]json.RawMessage, len(req.Extensions))
 	for k, v := range req.Extensions {
 		extensions[k] = append(json.RawMessage(nil), v...)
@@ -29,7 +29,7 @@ func mapGatewayRequestToAdapter(req gatewayapi.MessageRequest, upstreamModel str
 		stream = *req.Stream
 	}
 
-	return anthropicadapter.MessageRequest{
+	return messagesadapter.MessageRequest{
 		Model:         upstreamModel,
 		System:        append(json.RawMessage(nil), req.System...),
 		Messages:      mapGatewayMessagesToAdapter(req.Messages),
@@ -44,10 +44,11 @@ func mapGatewayRequestToAdapter(req gatewayapi.MessageRequest, upstreamModel str
 		Metadata:      append(json.RawMessage(nil), req.Metadata...),
 		Stream:        stream,
 		Extensions:    extensions,
+		AnthropicBeta: append([]string(nil), req.AnthropicBeta...),
 	}
 }
 
-func mapAdapterUsageToGateway(usage anthropicadapter.MessageUsage) gatewayapi.MessageUsage {
+func mapAdapterUsageToGateway(usage messagesadapter.MessageUsage) gatewayapi.MessageUsage {
 	out := gatewayapi.MessageUsage{
 		InputTokens:  usage.InputTokens,
 		OutputTokens: usage.OutputTokens,
@@ -81,7 +82,7 @@ func mapAdapterUsageToGateway(usage anthropicadapter.MessageUsage) gatewayapi.Me
 	return out
 }
 
-func mapAdapterResponseToGateway(catalogModel string, resp anthropicadapter.MessageResponse) gatewayapi.MessageResponse {
+func mapAdapterResponseToGateway(catalogModel string, resp messagesadapter.MessageResponse) gatewayapi.MessageResponse {
 	content := make([]json.RawMessage, len(resp.Content))
 	for i, block := range resp.Content {
 		content[i] = append(json.RawMessage(nil), block...)
@@ -105,7 +106,7 @@ func mapAdapterResponseToGateway(catalogModel string, resp anthropicadapter.Mess
 }
 
 // patchStreamEventCatalogModel 把 message_start 事件中的 model 字段恢复为客户 catalog model。
-func patchStreamEventCatalogModel(catalogModel string, ev anthropicadapter.MessageStreamEvent) json.RawMessage {
+func patchStreamEventCatalogModel(catalogModel string, ev messagesadapter.MessageStreamEvent) json.RawMessage {
 	if ev.Type != "message_start" || len(ev.Data) == 0 {
 		return append(json.RawMessage(nil), ev.Data...)
 	}

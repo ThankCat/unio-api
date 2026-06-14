@@ -97,10 +97,36 @@ git diff --check                                # 通过
 4. 已抓到一份真实 Codex `/responses` 请求体作为字段冻结依据（TASK-11.01）。
 5. 模型指定方式已冻结（TASK-11.02），运营可声明哪些模型可用于 Codex。
 
+## 上游 Responses 直传增量（DEC-018，2026-06-13）
+
+在 DEC-014「只下转 chat」之上新增「上游 Responses 直传」维度（[DEC-018](../../production/DECISIONS.md#dec-018-上游-responses-直传--第三方桥接分流dec-014-补充)）：
+原生支持 `POST /responses` 的上游（OpenAI 官方 / Codex 中转）直连零结构转换，chat-only 第三方
+（DeepSeek）自动落到既有桥接分支。分流在 service 层按候选 adapter 能力判定，routing / authorization /
+settlement / recovery / 账务 schema / `channels` 表结构全部零改动；channel 绑定 `adapter_key=openai-responses`
+即走直传，无新字段。
+
+- 新增 `internal/core/adapter/openai/responses` 子包（直传 adapter 契约 + 实现 + usage 归一 + tokenizer + 错误映射）。
+- `lifecycle.AttemptRunner` 流式 chunk 载体泛型化（`RunStreamGeneric[C]` + `StreamChunkMeta` 提取器），
+  chat 桥接与 responses 直传共享同一条资金关键 fallback 循环，资金逻辑逐行不变。
+- `registry` 增 Responses/StreamResponses/ResponsesInputTokenizer 槽；`AdapterRegistry` 增 responses-serve
+  capability（含 stream 变体）+ `HasAny` 识别（channel→adapter_key 绑定校验放行 `openai-responses`）。
+- ingress `ResponsesRequest/Response/StreamEvent` 增 raw 原文透传（自定义 `MarshalJSON`），直传只改写 model 回显。
+- 验证：adapter 单测（编解码 / SSE / usage / 错误 / tokenizer）+ service 分流单测（直传 / 桥接 / 直传流式）
+  + AttemptRunner 泛型化后 chat + 桥接全量回归全绿；新增黑盒 `responses_direct_test.go`（mock `/responses`
+  上游非流式 / 流式 / 账务审计 / 错误映射）已对真实 DB/Redis + 完整 gateway 跑通；openaisdk + anthropicsdk
+  两套 `-tags=blackbox` 全量回归 0 失败。gated 真实上游 smoke 与真实 Codex CLI 直传端到端为手动门控（需真实 Responses 上游）。
+
+## 任务状态（直传增量）
+
+| 任务 | 状态 | 说明 |
+| --- | --- | --- |
+| TASK-11.17 | done | 上游 Responses 直传 + 第三方分流（DEC-018）：新增 `core/adapter/openai/responses` 直传子包、`AttemptRunner` 流式载体泛型化、registry responses-serve capability、service 按能力分流（直传零转换 + 仅 model 回显改写 / chat-only 落桥接 else）、bootstrap 注册 `adapter_key=openai-responses`、ingress raw 透传。单测 + service 分流 + 黑盒（真实 DB/Redis mock `/responses` 上游非流式/流式/账务/错误）全绿；保真欠账记 GAP-11-012。 |
+
 ## 关联 GAP
 
-GAP-11-001 ~ GAP-11-011 见 [TODO_REGISTER.md](../../production/TODO_REGISTER.md)。
+GAP-11-001 ~ GAP-11-012 见 [TODO_REGISTER.md](../../production/TODO_REGISTER.md)。
 
 - 已关闭：GAP-11-005（共享 invoker → `lifecycle.AttemptRunner`）、GAP-11-010（reasoning_effort drift）。
 - 已实现降级/边界（永久保留）：GAP-11-007（compact 无状态摘要）、GAP-11-008（input_tokens 本地估算）、GAP-11-009（有状态 501 + background 400）。
 - 新增：GAP-11-011（Responses 流式只发 Codex 消费子集，标准 SDK 完整性事件未发，P2）。
+- 新增：GAP-11-012（上游 Responses 直传零转换原文透传，仅 model 回显改写；namespace 回译 / 跨轮 reasoning 回灌等保真处理在直传路径按上游原样透传，保真度等于上游本身，P2，DEC-018）。

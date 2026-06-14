@@ -44,9 +44,10 @@ func (s *fakeProviderService) Update(context.Context, provider.UpdateInput) (pro
 }
 
 type fakeChannelService struct {
-	createOut channel.Channel
-	createErr error
-	rotateErr error
+	createOut         channel.Channel
+	createErr         error
+	rotateErr         error
+	adapterKeyOptions []channel.AdapterKeyOption
 }
 
 func (s *fakeChannelService) List(context.Context, channel.ListParams) (channel.ListResult, error) {
@@ -63,6 +64,9 @@ func (s *fakeChannelService) Update(context.Context, channel.UpdateInput) (chann
 }
 func (s *fakeChannelService) RotateCredential(context.Context, channel.RotateCredentialInput) error {
 	return s.rotateErr
+}
+func (s *fakeChannelService) AdapterKeyOptions() []channel.AdapterKeyOption {
+	return s.adapterKeyOptions
 }
 
 type fakeModelService struct {
@@ -284,6 +288,22 @@ func TestCreateChannelUnsupportedBindingReturns422(t *testing.T) {
 	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels", body, true)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	}
+}
+
+func TestListAdapterKeysReturnsOptions(t *testing.T) {
+	handler := newServicesRouter(t, nil, &fakeChannelService{adapterKeyOptions: []channel.AdapterKeyOption{
+		{Protocol: "openai", AdapterKey: "openai", IsDefault: true},
+		{Protocol: "openai", AdapterKey: "deepseek"},
+	}})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/channels/adapter-keys", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"adapter_key":"openai"`) ||
+		!strings.Contains(body, `"is_default":true`) {
+		t.Fatalf("unexpected adapter-keys body: %s", body)
 	}
 }
 

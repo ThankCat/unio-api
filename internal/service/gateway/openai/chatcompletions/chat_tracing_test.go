@@ -7,7 +7,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
+	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
@@ -23,7 +23,7 @@ func TestChatCompletionServiceCreatesSpanHierarchy(t *testing.T) {
 	fakeAdapter := &fakeChatAdapter{chatResp: chatResponse("ok")}
 	router := &fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))}
 	registry := &fakeAdapterRegistry{
-		chatAdapters: map[string]openai.ChatAdapter{"openai": fakeAdapter},
+		chatAdapters: map[string]chatcompletionsadapter.ChatAdapter{"openai": fakeAdapter},
 	}
 	service := NewChatCompletionService(
 		router,
