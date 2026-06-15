@@ -3,3 +3,10 @@
 .venv-*/
 .idea/
 .vscode/
+
+# air 热加载构建产物与构建日志
+tmp/
+build-errors*.log
+
+# delve 调试二进制（VS Code launch）
+**/__debug_bin*

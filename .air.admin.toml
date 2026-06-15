@@ -1,0 +1,20 @@
+# air 热加载配置：admin-server（服务 /admin/v1/*）。
+# 监听端口来自 .env 的 ADMIN_HTTP_ADDR；DATABASE_URL、ADMIN_API_TOKEN、
+# CREDENTIAL_MASTER_KEY 等也由 Makefile source .env 注入。
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/admin-server ./cmd/admin-server"
+  bin = "./tmp/admin-server"
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "docs", "migrations", "sql", ".git", ".idea"]
+  exclude_regex = ["_test\\.go"]
+  delay = 800
+  kill_delay = "3s"
+  send_interrupt = true
+  stop_on_error = true
+  log = "build-errors-admin.log"
+
+[misc]
+  clean_on_exit = false

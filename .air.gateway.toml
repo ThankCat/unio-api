@@ -1,0 +1,21 @@
+# air 热加载配置：gateway-server（服务 /v1/*）。
+# 监听端口来自 .env 的 GATEWAY_HTTP_ADDR；DATABASE_URL、REDIS_ADDR 等也由 Makefile
+# 在启动 air 前 source .env 注入，air 子进程继承这些环境变量，这里不重复声明。
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/gateway-server ./cmd/gateway-server"
+  bin = "./tmp/gateway-server"
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "docs", "migrations", "sql", ".git", ".idea"]
+  exclude_regex = ["_test\\.go"]
+  delay = 800
+  kill_delay = "3s"
+  # 先给进程发 SIGINT，触发 main.go 里的优雅关闭，再兜底 kill。
+  send_interrupt = true
+  stop_on_error = true
+  log = "build-errors-gateway.log"
+
+[misc]
+  clean_on_exit = false

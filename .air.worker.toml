@@ -1,0 +1,19 @@
+# air 热加载配置：worker-server（后台任务，不服务公网 HTTP）。
+# 不需要 HTTP 端口；DATABASE_URL 等由 Makefile 从 .env 注入。
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/worker-server ./cmd/worker-server"
+  bin = "./tmp/worker-server"
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "docs", "migrations", "sql", ".git", ".idea"]
+  exclude_regex = ["_test\\.go"]
+  delay = 800
+  kill_delay = "3s"
+  send_interrupt = true
+  stop_on_error = true
+  log = "build-errors-worker.log"
+
+[misc]
+  clean_on_exit = false
