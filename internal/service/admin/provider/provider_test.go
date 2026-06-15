@@ -24,6 +24,10 @@ type fakeProviderStore struct {
 	createCalls int
 	updateRow   sqlc.Provider
 	updateErr   error
+	deleteAff   int64
+	deleteErr   error
+	deleteID    int64
+	deleteCalls int
 }
 
 func (s *fakeProviderStore) ListProvidersPage(context.Context, sqlc.ListProvidersPageParams) ([]sqlc.Provider, error) {
@@ -46,6 +50,12 @@ func (s *fakeProviderStore) CreateProvider(_ context.Context, arg sqlc.CreatePro
 
 func (s *fakeProviderStore) UpdateProvider(_ context.Context, _ sqlc.UpdateProviderParams) (sqlc.Provider, error) {
 	return s.updateRow, s.updateErr
+}
+
+func (s *fakeProviderStore) DeleteProvider(_ context.Context, id int64) (int64, error) {
+	s.deleteID = id
+	s.deleteCalls++
+	return s.deleteAff, s.deleteErr
 }
 
 func TestCreateRejectsInvalidArguments(t *testing.T) {
@@ -119,5 +129,44 @@ func TestUpdateNotFound(t *testing.T) {
 	})
 	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
 		t.Fatalf("expected %q, got %q", failure.CodeAdminNotFound, got)
+	}
+}
+
+func TestDeleteRejectsInvalidID(t *testing.T) {
+	store := &fakeProviderStore{}
+	err := provider.NewService(store).Delete(context.Background(), 0)
+	if got := failure.CodeOf(err); got != failure.CodeAdminInvalidArgument {
+		t.Fatalf("expected %q, got %q", failure.CodeAdminInvalidArgument, got)
+	}
+	if store.deleteCalls != 0 {
+		t.Fatalf("store should not be called on invalid id")
+	}
+}
+
+func TestDeleteSuccess(t *testing.T) {
+	store := &fakeProviderStore{deleteAff: 1}
+	if err := provider.NewService(store).Delete(context.Background(), 7); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if store.deleteID != 7 {
+		t.Fatalf("expected delete id 7, got %d", store.deleteID)
+	}
+}
+
+// 录错且无引用的 provider 可真删：受影响行 0 仅当目标不存在，返回 not_found。
+func TestDeleteNotFoundWhenNoRows(t *testing.T) {
+	store := &fakeProviderStore{deleteAff: 0}
+	err := provider.NewService(store).Delete(context.Background(), 7)
+	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
+		t.Fatalf("expected %q, got %q", failure.CodeAdminNotFound, got)
+	}
+}
+
+// 仍有渠道或被请求/账务历史引用时，DB 报外键冲突（23503），降级为 conflict 提示改用停用。
+func TestDeleteConflictOnForeignKeyViolation(t *testing.T) {
+	store := &fakeProviderStore{deleteErr: &pgconn.PgError{Code: "23503"}}
+	err := provider.NewService(store).Delete(context.Background(), 7)
+	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
+		t.Fatalf("expected %q, got %q", failure.CodeAdminConflict, got)
 	}
 }

@@ -18,19 +18,18 @@ func insertCapabilityModel(t *testing.T, ctx context.Context, tx pgx.Tx, suffix 
 	t.Helper()
 
 	modelID := fmt.Sprintf("openai/capability-model-%d", suffix)
-	canonicalID := fmt.Sprintf("openai/capability-canonical-%d", suffix)
 
 	var id int64
 	err := tx.QueryRow(ctx, `
 		INSERT INTO models (
 			model_id, display_name, owned_by, status,
-			canonical_id, lab, context_window_tokens, max_output_tokens,
+			context_window_tokens, max_output_tokens,
 			input_price_usd_per_million_tokens, output_price_usd_per_million_tokens,
 			release_date, source
 		)
-		VALUES ($1, $2, $3, 'enabled', $4, 'openai', 200000, 8192, 2.5, 10, '2026-01-15', 'manual')
+		VALUES ($1, $2, $3, 'enabled', 200000, 8192, 2.5, 10, '2026-01-15', 'manual')
 		RETURNING id
-	`, modelID, modelID, "openai", canonicalID).Scan(&id)
+	`, modelID, modelID, "openai").Scan(&id)
 	if err != nil {
 		t.Fatalf("insert capability model: %v", err)
 	}
@@ -50,12 +49,6 @@ func TestModelLookupReadsLayer1Columns(t *testing.T) {
 		t.Fatalf("lookup model by id: %v", err)
 	}
 
-	if !model.CanonicalID.Valid || model.CanonicalID.String == "" {
-		t.Fatal("expected canonical_id to be set")
-	}
-	if !model.Lab.Valid || model.Lab.String != "openai" {
-		t.Fatalf("expected lab openai, got valid=%v %q", model.Lab.Valid, model.Lab.String)
-	}
 	if !model.ContextWindowTokens.Valid || model.ContextWindowTokens.Int64 != 200000 {
 		t.Fatalf("expected context_window_tokens 200000, got valid=%v %d", model.ContextWindowTokens.Valid, model.ContextWindowTokens.Int64)
 	}
@@ -67,9 +60,6 @@ func TestModelLookupReadsLayer1Columns(t *testing.T) {
 	}
 	if model.Source != "manual" {
 		t.Fatalf("expected source manual, got %q", model.Source)
-	}
-	if model.RemovedUpstreamAt.Valid {
-		t.Fatal("expected removed_upstream_at to be null")
 	}
 
 	byModelID, err := queries.LookupModelByModelID(ctx, model.ModelID)
@@ -105,9 +95,6 @@ func TestModelDefaultSourceIsManual(t *testing.T) {
 	if model.Source != "manual" {
 		t.Fatalf("expected default source manual, got %q", model.Source)
 	}
-	if model.CanonicalID.Valid {
-		t.Fatal("expected canonical_id to default to null")
-	}
 }
 
 func TestModelCapabilityUpsertListAndReverseLookup(t *testing.T) {
@@ -122,7 +109,6 @@ func TestModelCapabilityUpsertListAndReverseLookup(t *testing.T) {
 		CapabilityKey: "reasoning.effort",
 		SupportLevel:  "limited",
 		Limits:        []byte(`{"effort":["high","max"]}`),
-		Source:        "manual",
 		UpdatedBy:     pgtype.Text{String: "admin", Valid: true},
 	})
 	if err != nil {
@@ -145,7 +131,6 @@ func TestModelCapabilityUpsertListAndReverseLookup(t *testing.T) {
 		CapabilityKey: "reasoning.effort",
 		SupportLevel:  "full",
 		Limits:        nil,
-		Source:        "models_dev",
 		UpdatedBy:     pgtype.Text{Valid: false},
 	})
 	if err != nil {
@@ -153,9 +138,6 @@ func TestModelCapabilityUpsertListAndReverseLookup(t *testing.T) {
 	}
 	if updated.SupportLevel != "full" {
 		t.Fatalf("expected conflict upsert to set full, got %q", updated.SupportLevel)
-	}
-	if updated.Source != "models_dev" {
-		t.Fatalf("expected source models_dev after upsert, got %q", updated.Source)
 	}
 	if len(updated.Limits) != 0 {
 		t.Fatalf("expected limits cleared to null, got %s", updated.Limits)
@@ -194,7 +176,6 @@ func TestModelCapabilityRejectsInvalidSupportLevel(t *testing.T) {
 		ModelID:       modelID,
 		CapabilityKey: "text.input",
 		SupportLevel:  "bogus",
-		Source:        "manual",
 	})
 	if err == nil {
 		t.Fatal("expected check violation for invalid support level")
@@ -213,7 +194,6 @@ func TestModelCapabilityCascadeOnModelDelete(t *testing.T) {
 		ModelID:       modelID,
 		CapabilityKey: "text.output",
 		SupportLevel:  "full",
-		Source:        "manual",
 	}); err != nil {
 		t.Fatalf("insert model capability: %v", err)
 	}

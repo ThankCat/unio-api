@@ -23,26 +23,22 @@ type Model struct {
 	DisplayName              string
 	OwnedBy                  string
 	Status                   string
-	CanonicalID              *string
-	Lab                      *string
 	ContextWindowTokens      *int64
 	MaxOutputTokens          *int64
 	InputPriceUSDPerMTokens  *string
 	OutputPriceUSDPerMTokens *string
 	ReleaseDate              *time.Time
 	Source                   Source
-	RemovedUpstreamAt        *time.Time
 	CreatedAt                time.Time
 	UpdatedAt                time.Time
 }
 
-// ModelCapability 是能力架构 Layer 2 的「模型 × 能力」声明。
+// ModelCapability 是能力架构 Layer 2 的「模型 × 能力」声明（阶段 14 起去 source）。
 type ModelCapability struct {
 	ModelID      int64
 	Key          Key
 	SupportLevel SupportLevel
 	Limits       json.RawMessage
-	Source       Source
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	UpdatedBy    *string
@@ -89,13 +85,12 @@ type SyncJob struct {
 	CreatedAt  time.Time
 }
 
-// UpsertModelCapabilityParams 是写入模型能力声明的入参。
+// UpsertModelCapabilityParams 是写入模型能力声明的入参（阶段 14 起去 source）。
 type UpsertModelCapabilityParams struct {
 	ModelID      int64
 	Key          Key
 	SupportLevel SupportLevel
 	Limits       json.RawMessage
-	Source       Source
 	UpdatedBy    *string
 }
 
@@ -202,16 +197,12 @@ func (s *sqlcStore) UpsertModelCapability(ctx context.Context, params UpsertMode
 	if !IsValidSupportLevel(params.SupportLevel) {
 		return ModelCapability{}, capabilityInvalidSupportLevel(params.SupportLevel)
 	}
-	if !IsValidCapabilitySource(params.Source) {
-		return ModelCapability{}, capabilityInvalidSource(params.Source)
-	}
 
 	row, err := s.queries.UpsertModelCapability(ctx, sqlc.UpsertModelCapabilityParams{
 		ModelID:       params.ModelID,
 		CapabilityKey: string(params.Key),
 		SupportLevel:  string(params.SupportLevel),
 		Limits:        limitsToBytes(params.Limits),
-		Source:        string(params.Source),
 		UpdatedBy:     optionalText(params.UpdatedBy),
 	})
 	if err != nil {
@@ -375,15 +366,12 @@ func modelFromSQLC(row sqlc.Model) Model {
 		DisplayName:              row.DisplayName,
 		OwnedBy:                  row.OwnedBy,
 		Status:                   row.Status,
-		CanonicalID:              textPtr(row.CanonicalID),
-		Lab:                      textPtr(row.Lab),
 		ContextWindowTokens:      int64Ptr(row.ContextWindowTokens),
 		MaxOutputTokens:          int64Ptr(row.MaxOutputTokens),
 		InputPriceUSDPerMTokens:  numericDecimalString(row.InputPriceUsdPerMillionTokens),
 		OutputPriceUSDPerMTokens: numericDecimalString(row.OutputPriceUsdPerMillionTokens),
 		ReleaseDate:              datePtr(row.ReleaseDate),
 		Source:                   Source(row.Source),
-		RemovedUpstreamAt:        timePtr(row.RemovedUpstreamAt),
 		CreatedAt:                row.CreatedAt.Time,
 		UpdatedAt:                row.UpdatedAt.Time,
 	}
@@ -396,7 +384,6 @@ func modelCapabilityFromSQLC(row sqlc.ModelCapability) ModelCapability {
 		Key:          Key(row.CapabilityKey),
 		SupportLevel: SupportLevel(row.SupportLevel),
 		Limits:       limitsFromBytes(row.Limits),
-		Source:       Source(row.Source),
 		CreatedAt:    row.CreatedAt.Time,
 		UpdatedAt:    row.UpdatedAt.Time,
 		UpdatedBy:    textPtr(row.UpdatedBy),
@@ -458,7 +445,7 @@ func capabilityInvalidSupportLevel(level SupportLevel) error {
 func capabilityInvalidSource(source Source) error {
 	return failure.New(
 		failure.CodeCapabilityInvalidSource,
-		failure.WithMessage("capability source is invalid"),
+		failure.WithMessage("sync job source is invalid"),
 		failure.WithField("source", string(source)),
 	)
 }

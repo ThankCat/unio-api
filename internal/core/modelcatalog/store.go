@@ -23,15 +23,14 @@ type LatestSyncJob struct {
 	FinishedAt *time.Time
 }
 
-// SyncStore 提供 models.dev 同步所需的目录读写、粗能力写入与同步任务生命周期能力。
+// SyncStore 提供 models.dev 同步所需的目录读写与同步任务生命周期能力（阶段 14：只写目录，不碰运行时 models）。
 type SyncStore interface {
-	ListCanonicalModels(ctx context.Context) ([]ExistingModel, error)
-	// UpsertSeedModel 按 canonical_id upsert 种子模型；applied=false 表示命中 source=manual 守护未写入。
-	UpsertSeedModel(ctx context.Context, model CanonicalModel) (modelID int64, applied bool, err error)
-	// MarkSeedModelRemoved 标记上游已删除的种子模型；applied=false 表示无可标记行（manual/已标记）。
-	MarkSeedModelRemoved(ctx context.Context, canonicalID string) (applied bool, err error)
-	// UpsertCoarseCapability 写入 models.dev 粗能力位（source=models_dev）。
-	UpsertCoarseCapability(ctx context.Context, modelID int64, decl capability.Declaration) error
+	// ListCatalogEntries 列出库内已有目录条目（含下架标记），供推导「feed 不含 → 标记下架」。
+	ListCatalogEntries(ctx context.Context) ([]ExistingCatalogEntry, error)
+	// UpsertCatalogEntry 全量 upsert 一条目录条目（元数据 + 指纹），并整体替换其能力提示。
+	UpsertCatalogEntry(ctx context.Context, model CanonicalModel) error
+	// MarkCatalogRemovedUpstream 标记上游已下架的目录条目；applied=false 表示无需更新（已标记）。
+	MarkCatalogRemovedUpstream(ctx context.Context, canonicalID string) (applied bool, err error)
 
 	CreateSyncJob(ctx context.Context) (jobID int64, err error)
 	MarkSyncJobRunning(ctx context.Context, jobID int64) error
@@ -50,18 +49,16 @@ func NewSyncStore(queries *sqlc.Queries) SyncStore {
 	return &syncQueriesStore{queries: queries}
 }
 
-func (s *syncQueriesStore) ListCanonicalModels(ctx context.Context) ([]ExistingModel, error) {
-	rows, err := s.queries.ListCanonicalModels(ctx)
+func (s *syncQueriesStore) ListCatalogEntries(ctx context.Context) ([]ExistingCatalogEntry, error) {
+	rows, err := s.queries.ListModelCatalogCanonicalIDs(ctx)
 	if err != nil {
-		return nil, catalogFailure(err, "list canonical models")
+		return nil, catalogFailure(err, "list catalog entries")
 	}
 
-	items := make([]ExistingModel, 0, len(rows))
+	items := make([]ExistingCatalogEntry, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, ExistingModel{
-			ID:          row.ID,
-			CanonicalID: row.CanonicalID.String,
-			Source:      row.Source,
+		items = append(items, ExistingCatalogEntry{
+			CanonicalID: row.CanonicalID,
 			Removed:     row.RemovedUpstreamAt.Valid,
 		})
 	}
@@ -69,65 +66,55 @@ func (s *syncQueriesStore) ListCanonicalModels(ctx context.Context) ([]ExistingM
 	return items, nil
 }
 
-func (s *syncQueriesStore) UpsertSeedModel(ctx context.Context, model CanonicalModel) (int64, bool, error) {
+func (s *syncQueriesStore) UpsertCatalogEntry(ctx context.Context, model CanonicalModel) error {
 	inputPrice, err := numericFromDecimal(model.InputPrice)
 	if err != nil {
-		return 0, false, catalogFailure(err, "parse input price")
+		return catalogFailure(err, "parse input price")
 	}
 	outputPrice, err := numericFromDecimal(model.OutputPrice)
 	if err != nil {
-		return 0, false, catalogFailure(err, "parse output price")
+		return catalogFailure(err, "parse output price")
 	}
 
-	row, err := s.queries.UpsertSeedModelByCanonicalID(ctx, sqlc.UpsertSeedModelByCanonicalIDParams{
-		ModelID:                        model.CanonicalID,
+	if _, err := s.queries.UpsertModelCatalogEntry(ctx, sqlc.UpsertModelCatalogEntryParams{
+		CanonicalID:                    model.CanonicalID,
+		Lab:                            model.Lab,
 		DisplayName:                    model.DisplayName,
-		OwnedBy:                        model.Lab,
-		CanonicalID:                    textValue(model.CanonicalID),
-		Lab:                            optionalText(model.Lab),
 		ContextWindowTokens:            int8Value(model.ContextTokens),
 		MaxOutputTokens:                int8Value(model.MaxOutputTokens),
 		InputPriceUsdPerMillionTokens:  inputPrice,
 		OutputPriceUsdPerMillionTokens: outputPrice,
 		ReleaseDate:                    dateValue(model.ReleaseDate),
-	})
-	if err != nil {
-		// source=manual/import 行命中 WHERE 守护时不更新、不返回行：视作未写入。
-		if errors.Is(err, pgx.ErrNoRows) {
-			return 0, false, nil
-		}
-		return 0, false, catalogFailure(err, "upsert seed model")
+		Fingerprint:                    model.Fingerprint,
+	}); err != nil {
+		return catalogFailure(err, "upsert catalog entry")
 	}
 
-	return row.ID, true, nil
-}
-
-func (s *syncQueriesStore) MarkSeedModelRemoved(ctx context.Context, canonicalID string) (bool, error) {
-	_, err := s.queries.MarkSeedModelRemovedUpstream(ctx, textValue(canonicalID))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
-		}
-		return false, catalogFailure(err, "mark seed model removed")
+	// 能力提示整体替换：先清空再按声明重写，保证与最新 feed 一致。
+	if err := s.queries.DeleteModelCatalogCapabilities(ctx, model.CanonicalID); err != nil {
+		return catalogFailure(err, "delete catalog capabilities")
 	}
-
-	return true, nil
-}
-
-func (s *syncQueriesStore) UpsertCoarseCapability(ctx context.Context, modelID int64, decl capability.Declaration) error {
-	_, err := s.queries.UpsertModelCapability(ctx, sqlc.UpsertModelCapabilityParams{
-		ModelID:       modelID,
-		CapabilityKey: string(decl.Key),
-		SupportLevel:  string(decl.SupportLevel),
-		Limits:        nil,
-		Source:        syncJobSource,
-		UpdatedBy:     pgtype.Text{Valid: false},
-	})
-	if err != nil {
-		return catalogFailure(err, "upsert coarse capability")
+	for _, decl := range model.CoarseCapabilities {
+		if err := s.queries.InsertModelCatalogCapability(ctx, sqlc.InsertModelCatalogCapabilityParams{
+			CanonicalID:   model.CanonicalID,
+			CapabilityKey: string(decl.Key),
+			SupportLevel:  string(decl.SupportLevel),
+			Limits:        decl.Limits,
+		}); err != nil {
+			return catalogFailure(err, "insert catalog capability")
+		}
 	}
 
 	return nil
+}
+
+func (s *syncQueriesStore) MarkCatalogRemovedUpstream(ctx context.Context, canonicalID string) (bool, error) {
+	affected, err := s.queries.MarkModelCatalogRemovedUpstream(ctx, canonicalID)
+	if err != nil {
+		return false, catalogFailure(err, "mark catalog removed upstream")
+	}
+
+	return affected > 0, nil
 }
 
 func (s *syncQueriesStore) CreateSyncJob(ctx context.Context) (int64, error) {
@@ -194,10 +181,6 @@ func numericFromDecimal(value *string) (pgtype.Numeric, error) {
 		return pgtype.Numeric{}, err
 	}
 	return numeric, nil
-}
-
-func textValue(value string) pgtype.Text {
-	return pgtype.Text{String: value, Valid: true}
 }
 
 func optionalText(value string) pgtype.Text {

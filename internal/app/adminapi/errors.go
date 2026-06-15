@@ -74,6 +74,15 @@ func adminErrorStatus(code failure.Code) int {
 	return http.StatusInternalServerError
 }
 
+// invalidRequestField 构造一个针对某字段的 admin_invalid_argument（映射为 400）。
+func invalidRequestField(field, message string) error {
+	return failure.New(
+		failure.CodeAdminInvalidArgument,
+		failure.WithMessage(message),
+		failure.WithField("field", field),
+	)
+}
+
 // pathID 解析路径参数 {id}，非法或非正整数时返回 admin_invalid_argument。
 func pathID(r *http.Request) (int64, error) {
 	raw := chi.URLParam(r, "id")

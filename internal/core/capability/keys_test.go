@@ -71,20 +71,14 @@ func TestSupportLevelValidators(t *testing.T) {
 }
 
 func TestSourceValidators(t *testing.T) {
-	for _, source := range []Source{SourceModelsDev, SourceManual, SourceAdapterSeed} {
-		if !IsValidCapabilitySource(source) {
-			t.Fatalf("expected capability source %q valid", source)
-		}
-	}
-	if IsValidCapabilitySource("import") {
-		t.Fatal("expected unknown capability source to be invalid")
-	}
-
 	if !IsValidSyncJobSource(SourceModelsDev) || !IsValidSyncJobSource(SourceManual) {
 		t.Fatal("expected sync job to allow models_dev/manual")
 	}
-	if IsValidSyncJobSource(SourceAdapterSeed) {
+	if IsValidSyncJobSource(Source("adapter_seed")) {
 		t.Fatal("expected sync job to reject adapter_seed")
+	}
+	if IsValidSyncJobSource(Source("import")) {
+		t.Fatal("expected sync job to reject unknown source")
 	}
 }
 
@@ -155,7 +149,6 @@ func TestStoreRejectsInvalidWritesBeforeDB(t *testing.T) {
 		ModelID:      1,
 		Key:          "tools.unknown",
 		SupportLevel: SupportLevelFull,
-		Source:       SourceManual,
 	})
 	assertFailureCode(t, err, failure.CodeCapabilityInvalidKey)
 
@@ -163,17 +156,8 @@ func TestStoreRejectsInvalidWritesBeforeDB(t *testing.T) {
 		ModelID:      1,
 		Key:          KeyTextInput,
 		SupportLevel: "partial",
-		Source:       SourceManual,
 	})
 	assertFailureCode(t, err, failure.CodeCapabilityInvalidSupportLevel)
-
-	_, err = store.UpsertModelCapability(ctx, UpsertModelCapabilityParams{
-		ModelID:      1,
-		Key:          KeyTextInput,
-		SupportLevel: SupportLevelFull,
-		Source:       "import",
-	})
-	assertFailureCode(t, err, failure.CodeCapabilityInvalidSource)
 
 	_, err = store.UpsertChannelOverride(ctx, UpsertChannelOverrideParams{
 		ChannelID:    1,
@@ -182,7 +166,7 @@ func TestStoreRejectsInvalidWritesBeforeDB(t *testing.T) {
 	})
 	assertFailureCode(t, err, failure.CodeCapabilityInvalidSupportLevel)
 
-	_, err = store.CreateSyncJob(ctx, SourceAdapterSeed)
+	_, err = store.CreateSyncJob(ctx, Source("adapter_seed"))
 	assertFailureCode(t, err, failure.CodeCapabilityInvalidSource)
 }
 

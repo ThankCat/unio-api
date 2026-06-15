@@ -560,8 +560,8 @@ func insertModelCapability(t *testing.T, ctx context.Context, tx pgx.Tx, modelID
 	t.Helper()
 
 	_, err := tx.Exec(ctx, `
-		INSERT INTO model_capabilities (model_id, capability_key, support_level, source)
-		VALUES ($1, $2, $3, 'manual')
+		INSERT INTO model_capabilities (model_id, capability_key, support_level)
+		VALUES ($1, $2, $3)
 	`, modelID, key, supportLevel)
 	if err != nil {
 		t.Fatalf("insert model capability %q: %v", key, err)

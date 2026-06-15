@@ -35,12 +35,9 @@ type syncJobDTO struct {
 type syncResultDTO struct {
 	DryRun              bool     `json:"dry_run"`
 	FeedModels          int      `json:"feed_models"`
-	Inserted            int      `json:"inserted"`
-	Updated             int      `json:"updated"`
-	Skipped             int      `json:"skipped"`
+	Upserted            int      `json:"upserted"`
 	Removed             int      `json:"removed"`
-	CapabilitiesSeeded  int      `json:"capabilities_seeded"`
-	ManualConflicts     []string `json:"manual_conflicts"`
+	CapabilityHints     int      `json:"capability_hints"`
 	RemovedCanonicalIDs []string `json:"removed_canonical_ids"`
 	Fingerprint         string   `json:"fingerprint"`
 }
@@ -104,10 +101,6 @@ func toSyncJobDTO(j corecap.SyncJob) syncJobDTO {
 }
 
 func toSyncResultDTO(r modelcatalog.Result) syncResultDTO {
-	manualConflicts := r.ManualConflicts
-	if manualConflicts == nil {
-		manualConflicts = []string{}
-	}
 	removed := r.RemovedCanonicalIDs
 	if removed == nil {
 		removed = []string{}
@@ -115,12 +108,9 @@ func toSyncResultDTO(r modelcatalog.Result) syncResultDTO {
 	return syncResultDTO{
 		DryRun:              r.DryRun,
 		FeedModels:          r.FeedModels,
-		Inserted:            r.Inserted,
-		Updated:             r.Updated,
-		Skipped:             r.Skipped,
+		Upserted:            r.Upserted,
 		Removed:             r.Removed,
-		CapabilitiesSeeded:  r.CapabilitiesSeeded,
-		ManualConflicts:     manualConflicts,
+		CapabilityHints:     r.CapabilityHints,
 		RemovedCanonicalIDs: removed,
 		Fingerprint:         r.Fingerprint,
 	}

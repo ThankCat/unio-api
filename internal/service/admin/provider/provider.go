@@ -36,6 +36,7 @@ type Store interface {
 	GetProvider(ctx context.Context, id int64) (sqlc.Provider, error)
 	CreateProvider(ctx context.Context, arg sqlc.CreateProviderParams) (sqlc.Provider, error)
 	UpdateProvider(ctx context.Context, arg sqlc.UpdateProviderParams) (sqlc.Provider, error)
+	DeleteProvider(ctx context.Context, id int64) (int64, error)
 }
 
 // ListParams 是分页/过滤列出 provider 的入参；Status、Query 为空表示不过滤。
@@ -203,6 +204,29 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Provider, error) 
 	return toProvider(row), nil
 }
 
+// Delete 物理删除 provider，用于清理录错的脏数据；slug 随之释放，可重新录入同名。
+//
+// provider 无自身配置子表，不做级联：名下仍有 channel，或已被请求/账务历史（NO ACTION 外键）
+// 引用时，DB 拒绝删除（23503），降级为 conflict，提示先删该服务商下的渠道或改用停用。
+func (s *Service) Delete(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return invalidArgument("id", "provider id must be positive")
+	}
+
+	affected, err := s.store.DeleteProvider(ctx, id)
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return conflict("provider still has channels or is referenced by request/billing history; delete its channels first or disable it instead")
+		}
+		return storeFailed(err, "delete provider")
+	}
+	if affected == 0 {
+		return notFound("provider not found")
+	}
+
+	return nil
+}
+
 func toProvider(p sqlc.Provider) Provider {
 	return Provider{
 		ID:        p.ID,
@@ -246,4 +270,9 @@ func storeFailed(cause error, message string) error {
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }

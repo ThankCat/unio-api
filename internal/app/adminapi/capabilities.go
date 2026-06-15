@@ -31,7 +31,6 @@ type modelCapabilityDTO struct {
 	CapabilityKey string          `json:"capability_key"`
 	SupportLevel  string          `json:"support_level"`
 	Limits        json.RawMessage `json:"limits"`
-	Source        string          `json:"source"`
 	UpdatedBy     *string         `json:"updated_by"`
 	CreatedAt     string          `json:"created_at"`
 	UpdatedAt     string          `json:"updated_at"`
@@ -201,7 +200,6 @@ func toModelCapabilityDTO(c corecap.ModelCapability) modelCapabilityDTO {
 		CapabilityKey: string(c.Key),
 		SupportLevel:  string(c.SupportLevel),
 		Limits:        c.Limits,
-		Source:        string(c.Source),
 		UpdatedBy:     c.UpdatedBy,
 		CreatedAt:     c.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:     c.UpdatedAt.UTC().Format(time.RFC3339),

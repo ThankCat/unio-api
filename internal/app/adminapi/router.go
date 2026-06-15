@@ -44,6 +44,9 @@ type RouterDeps struct {
 	CapabilitySeedService        CapabilitySeedService
 	CapabilityEnforcementService CapabilityEnforcementService
 
+	// 阶段 14 模型目录：models.dev 目录浏览 + 从目录采纳/刷新/更新提醒
+	CatalogService CatalogService
+
 	// M9 工作台看板：首屏 KPI 概览 + 时间序列（只读聚合）
 	DashboardService DashboardService
 
@@ -96,6 +99,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Post("/providers", ph.create)
 			r.Get("/providers/{id}", ph.get)
 			r.Patch("/providers/{id}", ph.update)
+			// DELETE 物理删除录错的脏数据：名下有渠道或已被请求/账务引用时返回 409，提示改用停用。
+			r.Delete("/providers/{id}", ph.delete)
 		}
 
 		if deps.ChannelService != nil {
@@ -108,6 +113,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Patch("/channels/{id}", ch.update)
 			// credential 只写不回：用子资源 PUT 轮换，成功返回 204。
 			r.Put("/channels/{id}/credential", ch.rotateCredential)
+			// DELETE 物理删除录错的脏数据，级联清理自身绑定/价格；已被请求/账务引用时返回 409。
+			r.Delete("/channels/{id}", ch.delete)
 		}
 
 		if deps.ChannelModelService != nil {
@@ -141,6 +148,19 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Post("/models", mh.create)
 			r.Get("/models/{id}", mh.get)
 			r.Patch("/models/{id}", mh.update)
+			// DELETE 物理删除录错的脏数据，级联清理自身价格/绑定/能力；已被请求/账务引用时返回 409。
+			r.Delete("/models/{id}", mh.delete)
+		}
+
+		// 阶段 14 模型目录：浏览 models.dev 目录 + 从目录采纳/刷新/更新提醒（采纳/刷新/提醒回读完整模型）。
+		if deps.CatalogService != nil && deps.ModelService != nil {
+			ch := &catalogHandler{catalog: deps.CatalogService, models: deps.ModelService}
+			r.Get("/model-catalog", ch.list)
+			// canonical_id 含 '/'，用通配段承载（如 /model-catalog/openai/gpt-4o）。
+			r.Get("/model-catalog/*", ch.get)
+			r.Post("/models/from-catalog", ch.adopt)
+			r.Post("/models/{id}/catalog-refresh", ch.refresh)
+			r.Post("/models/{id}/catalog-reminder", ch.reminder)
 		}
 
 		// M6 只读查询台：请求记录（含详情聚合）、用量、账本流水、计费异常。全部只读。

@@ -22,7 +22,7 @@ type Declaration struct {
 //
 // 它与该 adapter 的出站 dropUnsupported 同源维护：unsupported 对应出站会被 Drop 的能力，
 // limited 对应被 Adapt（如归一）的能力，full 对应透传放行的能力。作为 model_capabilities 的
-// 初始 adapter_seed 来源（source=adapter_seed），admin / models.dev 后续可覆盖。
+// 初始能力种子写入，admin 后续可覆盖（阶段 14 起能力不再带 source）。
 //
 // adapter 包的一致性测试以真实 dropUnsupported 行为守护本画像不漂移：闸门放行（full/limited）
 // 的能力不应再被 adapter Drop，被 Drop 的能力必须声明 unsupported（见 DEC-015、阶段 12
@@ -69,8 +69,8 @@ func (p AdapterProfile) Validate() error {
 	return nil
 }
 
-// MaterializeAdapterSeed 把 adapter 能力画像幂等 upsert 进给定模型的 model_capabilities，
-// source 固定为 adapter_seed。每条声明独立 upsert（ON CONFLICT 覆盖），可重入。
+// MaterializeAdapterSeed 把 adapter 能力画像幂等 upsert 进给定模型的 model_capabilities。
+// 每条声明独立 upsert（ON CONFLICT 覆盖），可重入。
 //
 // 现阶段尚无模型 provisioning，调用方（未来的 admin CRUD 或同步任务）负责决定把哪个 adapter
 // 画像应用到哪些 model_id；本函数只负责忠实写入，不感知 channel/model 拓扑。
@@ -85,7 +85,6 @@ func MaterializeAdapterSeed(ctx context.Context, store Store, modelID int64, pro
 			Key:          d.Key,
 			SupportLevel: d.SupportLevel,
 			Limits:       d.Limits,
-			Source:       SourceAdapterSeed,
 			UpdatedBy:    updatedBy,
 		}); err != nil {
 			return err

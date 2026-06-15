@@ -52,7 +52,7 @@ func main() {
 	}
 
 	server := &http.Server{
-		Addr:    cfg.HTTP.Addr,
+		Addr:    cfg.Admin.HTTPAddr,
 		Handler: app.Handler,
 
 		ReadTimeout:  cfg.HTTP.ReadTimeout,
@@ -63,7 +63,7 @@ func main() {
 	errCh := make(chan error, 1)
 
 	go func() {
-		logger.Info("admin server starting", "addr", cfg.HTTP.Addr)
+		logger.Info("admin server starting", "addr", cfg.Admin.HTTPAddr)
 
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err

@@ -160,15 +160,12 @@ type Model struct {
 	DisplayName                    string
 	OwnedBy                        string
 	Status                         string
-	CanonicalID                    pgtype.Text
-	Lab                            pgtype.Text
 	ContextWindowTokens            pgtype.Int8
 	MaxOutputTokens                pgtype.Int8
 	InputPriceUsdPerMillionTokens  pgtype.Numeric
 	OutputPriceUsdPerMillionTokens pgtype.Numeric
 	ReleaseDate                    pgtype.Date
 	Source                         string
-	RemovedUpstreamAt              pgtype.Timestamptz
 	CreatedAt                      pgtype.Timestamptz
 	UpdatedAt                      pgtype.Timestamptz
 }
@@ -178,7 +175,6 @@ type ModelCapability struct {
 	CapabilityKey string
 	SupportLevel  string
 	Limits        []byte
-	Source        string
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
 	UpdatedBy     pgtype.Text
@@ -193,6 +189,40 @@ type ModelCapabilitySyncJob struct {
 	StatsJson  []byte
 	ErrorText  pgtype.Text
 	CreatedAt  pgtype.Timestamptz
+}
+
+type ModelCatalog struct {
+	CanonicalID                    string
+	Lab                            string
+	DisplayName                    string
+	ContextWindowTokens            pgtype.Int8
+	MaxOutputTokens                pgtype.Int8
+	InputPriceUsdPerMillionTokens  pgtype.Numeric
+	OutputPriceUsdPerMillionTokens pgtype.Numeric
+	ReleaseDate                    pgtype.Date
+	RemovedUpstreamAt              pgtype.Timestamptz
+	Fingerprint                    string
+	SyncedAt                       pgtype.Timestamptz
+	CreatedAt                      pgtype.Timestamptz
+	UpdatedAt                      pgtype.Timestamptz
+}
+
+type ModelCatalogCapability struct {
+	CanonicalID   string
+	CapabilityKey string
+	SupportLevel  string
+	Limits        []byte
+}
+
+type ModelCatalogLink struct {
+	ModelID              int64
+	CanonicalID          string
+	AdoptedFingerprint   string
+	ReminderMuted        bool
+	ReminderSnoozeUntil  pgtype.Timestamptz
+	DismissedFingerprint pgtype.Text
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
 }
 
 type Price struct {

@@ -41,6 +41,7 @@ type Store interface {
 	CreateChannel(ctx context.Context, arg sqlc.CreateChannelParams) (sqlc.Channel, error)
 	UpdateChannel(ctx context.Context, arg sqlc.UpdateChannelParams) (sqlc.Channel, error)
 	UpdateChannelCredential(ctx context.Context, arg sqlc.UpdateChannelCredentialParams) (int64, error)
+	DeleteChannelCascade(ctx context.Context, id int64) (int64, error)
 }
 
 // AdapterRegistry 暴露 channel 写入前校验复合键是否被当前进程支持的最小能力，
@@ -356,6 +357,30 @@ func (s *Service) RotateCredential(ctx context.Context, in RotateCredentialInput
 	})
 	if err != nil {
 		return storeFailed(err, "rotate channel credential")
+	}
+	if affected == 0 {
+		return notFound("channel not found")
+	}
+
+	return nil
+}
+
+// Delete 物理删除 channel，用于清理录错的脏数据，并级联清理它自身的配置子表
+// （模型绑定、成本价、能力收紧）。channel 名随之释放，可在同一 provider 下重新录入同名。
+//
+// 一旦 channel 或其子配置已被请求/账务历史（NO ACTION 外键）引用，DB 拒绝删除（23503），
+// 降级为 conflict，提示改用停用——保住计费/审计链路。
+func (s *Service) Delete(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return invalidArgument("id", "channel id must be positive")
+	}
+
+	affected, err := s.store.DeleteChannelCascade(ctx, id)
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return conflict("channel is referenced by request/billing history; disable it instead of deleting")
+		}
+		return storeFailed(err, "delete channel")
 	}
 	if affected == 0 {
 		return notFound("channel not found")

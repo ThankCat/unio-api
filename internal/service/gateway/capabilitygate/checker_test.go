@@ -53,7 +53,7 @@ func (f *fakeMetrics) IncCapabilityMissing(_ string, capability string, scope st
 }
 
 func mc(modelID int64, key capability.Key, level capability.SupportLevel) capability.ModelCapability {
-	return capability.ModelCapability{ModelID: modelID, Key: key, SupportLevel: level, Source: capability.SourceManual}
+	return capability.ModelCapability{ModelID: modelID, Key: key, SupportLevel: level}
 }
 
 func TestCheckerProvisionedModelOK(t *testing.T) {
@@ -160,7 +160,6 @@ func TestCheckerLimitsThreadThrough(t *testing.T) {
 					Key:          capability.KeyReasoningEffort,
 					SupportLevel: capability.SupportLevelLimited,
 					Limits:       []byte(`{"max_effort":"medium"}`),
-					Source:       capability.SourceManual,
 				},
 			},
 		},

@@ -33,32 +33,27 @@ type Options struct {
 	DryRun bool
 }
 
-// Result 是一次同步的结果摘要，供调用方与审计使用。
+// Result 是一次同步的结果摘要，供调用方与审计使用（阶段 14：目录口径）。
 type Result struct {
 	DryRun              bool
 	FeedModels          int
-	Inserted            int
-	Updated             int
-	Skipped             int
+	Upserted            int
 	Removed             int
-	CapabilitiesSeeded  int
-	ManualConflicts     []string
+	CapabilityHints     int
 	RemovedCanonicalIDs []string
 	Fingerprint         string
 }
 
 // syncStats 是写入 model_capability_sync_jobs.stats_json 的审计载荷（含 license 指纹）。
 type syncStats struct {
-	License            string   `json:"license"`
-	Attribution        string   `json:"attribution"`
-	SourceFingerprint  string   `json:"source_fingerprint"`
-	FeedModels         int      `json:"feed_models"`
-	Inserted           int      `json:"inserted"`
-	Updated            int      `json:"updated"`
-	Skipped            int      `json:"skipped"`
-	CapabilitiesSeeded int      `json:"capabilities_seeded"`
-	ManualConflicts    []string `json:"manual_conflicts"`
-	Removed            []string `json:"removed"`
+	License           string   `json:"license"`
+	Attribution       string   `json:"attribution"`
+	SourceFingerprint string   `json:"source_fingerprint"`
+	FeedModels        int      `json:"feed_models"`
+	Upserted          int      `json:"upserted"`
+	Removed           int      `json:"removed"`
+	CapabilityHints   int      `json:"capability_hints"`
+	RemovedCanonical  []string `json:"removed_canonical_ids"`
 }
 
 // Syncer 编排 models.dev 同步：拉取 → 解析 → 合并规划 → 落库 → 记 sync_job（含 license 审计）。
@@ -91,7 +86,7 @@ func (s *Syncer) Sync(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	existing, err := s.store.ListCanonicalModels(ctx)
+	existing, err := s.store.ListCatalogEntries(ctx)
 	if err != nil {
 		return Result{}, err
 	}
@@ -106,20 +101,17 @@ func (s *Syncer) Sync(ctx context.Context, opts Options) (Result, error) {
 }
 
 func dryRunResult(feed Feed, plan Plan) Result {
-	capabilitiesSeeded := 0
-	for _, model := range plan.Inserts {
-		capabilitiesSeeded += len(model.CoarseCapabilities)
+	capabilityHints := 0
+	for _, model := range plan.Upserts {
+		capabilityHints += len(model.CoarseCapabilities)
 	}
 
 	return Result{
 		DryRun:              true,
 		FeedModels:          len(feed.Models),
-		Inserted:            len(plan.Inserts),
-		Updated:             len(plan.Updates),
-		Skipped:             len(plan.Conflicts),
+		Upserted:            len(plan.Upserts),
 		Removed:             len(plan.Removals),
-		CapabilitiesSeeded:  capabilitiesSeeded,
-		ManualConflicts:     plan.Conflicts,
+		CapabilityHints:     capabilityHints,
 		RemovedCanonicalIDs: plan.Removals,
 		Fingerprint:         feed.Fingerprint,
 	}
@@ -143,16 +135,14 @@ func (s *Syncer) apply(ctx context.Context, feed Feed, plan Plan) (Result, error
 	}
 
 	stats := syncStats{
-		License:            licenseID,
-		Attribution:        attribution,
-		SourceFingerprint:  feed.Fingerprint,
-		FeedModels:         result.FeedModels,
-		Inserted:           result.Inserted,
-		Updated:            result.Updated,
-		Skipped:            result.Skipped,
-		CapabilitiesSeeded: result.CapabilitiesSeeded,
-		ManualConflicts:    result.ManualConflicts,
-		Removed:            result.RemovedCanonicalIDs,
+		License:           licenseID,
+		Attribution:       attribution,
+		SourceFingerprint: feed.Fingerprint,
+		FeedModels:        result.FeedModels,
+		Upserted:          result.Upserted,
+		Removed:           result.Removed,
+		CapabilityHints:   result.CapabilityHints,
+		RemovedCanonical:  result.RemovedCanonicalIDs,
 	}
 	statsJSON, err := json.Marshal(stats)
 	if err != nil {
@@ -168,46 +158,20 @@ func (s *Syncer) apply(ctx context.Context, feed Feed, plan Plan) (Result, error
 func (s *Syncer) applyPlan(ctx context.Context, feed Feed, plan Plan) (Result, error) {
 	result := Result{
 		FeedModels:          len(feed.Models),
-		ManualConflicts:     append([]string(nil), plan.Conflicts...),
-		Skipped:             len(plan.Conflicts),
 		RemovedCanonicalIDs: make([]string, 0, len(plan.Removals)),
 		Fingerprint:         feed.Fingerprint,
 	}
 
-	for _, model := range plan.Inserts {
-		modelID, applied, err := s.store.UpsertSeedModel(ctx, model)
-		if err != nil {
+	for _, model := range plan.Upserts {
+		if err := s.store.UpsertCatalogEntry(ctx, model); err != nil {
 			return Result{}, err
 		}
-		if !applied {
-			result.Skipped++
-			result.ManualConflicts = append(result.ManualConflicts, model.CanonicalID)
-			continue
-		}
-		result.Inserted++
-		for _, decl := range model.CoarseCapabilities {
-			if err := s.store.UpsertCoarseCapability(ctx, modelID, decl); err != nil {
-				return Result{}, err
-			}
-			result.CapabilitiesSeeded++
-		}
-	}
-
-	for _, model := range plan.Updates {
-		_, applied, err := s.store.UpsertSeedModel(ctx, model)
-		if err != nil {
-			return Result{}, err
-		}
-		if !applied {
-			result.Skipped++
-			result.ManualConflicts = append(result.ManualConflicts, model.CanonicalID)
-			continue
-		}
-		result.Updated++
+		result.Upserted++
+		result.CapabilityHints += len(model.CoarseCapabilities)
 	}
 
 	for _, canonicalID := range plan.Removals {
-		applied, err := s.store.MarkSeedModelRemoved(ctx, canonicalID)
+		applied, err := s.store.MarkCatalogRemovedUpstream(ctx, canonicalID)
 		if err != nil {
 			return Result{}, err
 		}

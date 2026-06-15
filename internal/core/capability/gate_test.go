@@ -7,7 +7,7 @@ import (
 )
 
 func modelCap(key Key, level SupportLevel, limits string) ModelCapability {
-	mc := ModelCapability{ModelID: 1, Key: key, SupportLevel: level, Source: SourceManual}
+	mc := ModelCapability{ModelID: 1, Key: key, SupportLevel: level}
 	if limits != "" {
 		mc.Limits = json.RawMessage(limits)
 	}

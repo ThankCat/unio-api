@@ -24,14 +24,30 @@ type Config struct {
 	Credential       CredentialConfig
 	ModelCatalogSync ModelCatalogSyncConfig
 	Capability       CapabilityConfig
+	Gateway          GatewayConfig
 	Admin            AdminConfig
+	Console          ConsoleConfig
 }
 
-// AdminConfig 保存 admin-server 管理端认证配置。
+// GatewayConfig 保存 gateway-server 进程级配置。
+type GatewayConfig struct {
+	// HTTPAddr 来自 GATEWAY_HTTP_ADDR；gateway-server 的监听地址。
+	HTTPAddr string
+}
+
+// AdminConfig 保存 admin-server 进程级配置与管理端认证配置。
 type AdminConfig struct {
+	// HTTPAddr 来自 ADMIN_HTTP_ADDR；admin-server 的监听地址。
+	HTTPAddr string
 	// APIToken 来自 ADMIN_API_TOKEN；单管理员极简版的静态访问 token。
 	// 空值表示未配置，运行 admin-server 时启动期失败。
 	APIToken string
+}
+
+// ConsoleConfig 保存 console-server 进程级配置。
+type ConsoleConfig struct {
+	// HTTPAddr 来自 CONSOLE_HTTP_ADDR；console-server 的监听地址。
+	HTTPAddr string
 }
 
 // CapabilityConfig 保存 capability 闸门 enforce 开关，按 ingress 表面独立可控（阶段 12 TASK-12.08）。
@@ -86,9 +102,9 @@ type TracingConfig struct {
 	SampleRatio float64
 }
 
-// HTTPConfig 保存 HTTP server 监听配置。
+// HTTPConfig 保存所有 HTTP server 共享的超时配置；监听地址按服务独立配置，
+// 见 GatewayConfig / AdminConfig / ConsoleConfig 的 HTTPAddr。
 type HTTPConfig struct {
-	Addr            string
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
@@ -350,7 +366,6 @@ func Load() (Config, error) {
 
 	return Config{
 		HTTP: HTTPConfig{
-			Addr:            getEnv("HTTP_ADDR", ":8520"),
 			ReadTimeout:     httpReadTimeout,
 			WriteTimeout:    httpWriteTimeout,
 			IdleTimeout:     httpIdleTimeout,
@@ -421,8 +436,15 @@ func Load() (Config, error) {
 			EnforceAnthropicMessages: capabilityEnforceAnthropicMessages,
 			EnforceOpenAIResponses:   capabilityEnforceOpenAIResponses,
 		},
+		Gateway: GatewayConfig{
+			HTTPAddr: getEnv("GATEWAY_HTTP_ADDR", ":8520"),
+		},
 		Admin: AdminConfig{
+			HTTPAddr: getEnv("ADMIN_HTTP_ADDR", ":8521"),
 			APIToken: getEnv("ADMIN_API_TOKEN", ""),
+		},
+		Console: ConsoleConfig{
+			HTTPAddr: getEnv("CONSOLE_HTTP_ADDR", ":8522"),
 		},
 	}, nil
 }

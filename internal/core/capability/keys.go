@@ -141,31 +141,20 @@ func IsValidChannelOverrideLevel(level SupportLevel) bool {
 	}
 }
 
-// Source 表示能力声明或模型元数据的来源。
+// Source 表示同步任务来源（model_capability_sync_jobs.source 取值）。
+//
+// 阶段 14 起 model_capabilities 不再带 source（能力来源已无意义）；Source 仅保留给同步任务审计。
 type Source string
 
 const (
 	// SourceModelsDev 表示来自 models.dev 同步。
 	SourceModelsDev Source = "models_dev"
 
-	// SourceManual 表示运营手工维护。
+	// SourceManual 表示运营手工触发。
 	SourceManual Source = "manual"
-
-	// SourceAdapterSeed 表示由 adapter 能力种子回填。
-	SourceAdapterSeed Source = "adapter_seed"
 )
 
-// IsValidCapabilitySource 判断能力声明来源是否合法（model_capabilities.source 取值）。
-func IsValidCapabilitySource(source Source) bool {
-	switch source {
-	case SourceModelsDev, SourceManual, SourceAdapterSeed:
-		return true
-	default:
-		return false
-	}
-}
-
-// IsValidSyncJobSource 判断同步任务来源是否合法（model_capability_sync_jobs.source 取值，禁止 adapter_seed）。
+// IsValidSyncJobSource 判断同步任务来源是否合法（model_capability_sync_jobs.source 取值）。
 func IsValidSyncJobSource(source Source) bool {
 	switch source {
 	case SourceModelsDev, SourceManual:

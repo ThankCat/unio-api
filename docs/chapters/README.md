@@ -72,6 +72,8 @@ ACCEPTANCE.md
 | 阶段 11 | [PLAN](phase-11-openai-responses-api/PLAN.md) | [STATUS](phase-11-openai-responses-api/STATUS.md) | [ACCEPTANCE](phase-11-openai-responses-api/ACCEPTANCE.md) |
 | 阶段 12 | [PLAN](phase-12-capability-architecture/PLAN.md) | [STATUS](phase-12-capability-architecture/STATUS.md) | [ACCEPTANCE](phase-12-capability-architecture/ACCEPTANCE.md) |
 | 阶段 13 | [PLAN](phase-13-admin/PLAN.md) | [STATUS](phase-13-admin/STATUS.md) | [ACCEPTANCE](phase-13-admin/ACCEPTANCE.md) |
+| 阶段 14 | [PLAN](phase-14-model-catalog-decoupling/PLAN.md) | [STATUS](phase-14-model-catalog-decoupling/STATUS.md) | [ACCEPTANCE](phase-14-model-catalog-decoupling/ACCEPTANCE.md) |
+| 阶段 15 | [PLAN](phase-15-channel-productization/PLAN.md) | planned | planned |
 
 ## 状态定义
 

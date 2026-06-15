@@ -38,6 +38,16 @@ func parsePage(r *http.Request) pageParams {
 	return pageParams{Page: page, PageSize: pageSize}
 }
 
+// parseBoolQuery 解析布尔型 query 参数；仅 "true"/"1" 视为真，其余（含缺省/非法）为假。
+func parseBoolQuery(r *http.Request, key string) bool {
+	switch r.URL.Query().Get(key) {
+	case "true", "1":
+		return true
+	default:
+		return false
+	}
+}
+
 // listStatus 只接受 enabled/disabled 作为状态过滤值，其它一律视为不过滤。
 func listStatus(r *http.Request) string {
 	switch r.URL.Query().Get("status") {

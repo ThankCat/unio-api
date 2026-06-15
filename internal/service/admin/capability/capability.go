@@ -81,7 +81,7 @@ func (s *CapabilityService) ListModelCapabilities(ctx context.Context, modelID i
 	return s.store.ListModelCapabilities(ctx, modelID)
 }
 
-// SetModelCapability 写入/覆盖模型能力声明，source 固定为 manual。
+// SetModelCapability 写入/覆盖模型能力声明（阶段 14 起能力不带 source）。
 func (s *CapabilityService) SetModelCapability(ctx context.Context, in SetModelCapabilityInput) (core.ModelCapability, error) {
 	if in.ModelID <= 0 {
 		return core.ModelCapability{}, invalidArgument("id", "model id must be positive")
@@ -106,7 +106,6 @@ func (s *CapabilityService) SetModelCapability(ctx context.Context, in SetModelC
 		Key:          key,
 		SupportLevel: level,
 		Limits:       normalizeLimits(in.Limits),
-		Source:       core.SourceManual,
 		UpdatedBy:    actorPtr(in.Actor),
 	})
 }

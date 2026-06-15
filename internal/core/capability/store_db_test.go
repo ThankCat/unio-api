@@ -60,13 +60,13 @@ func insertModelRow(t *testing.T, ctx context.Context, tx pgx.Tx, suffix int64) 
 	err := tx.QueryRow(ctx, `
 		INSERT INTO models (
 			model_id, display_name, owned_by, status,
-			canonical_id, lab, context_window_tokens, max_output_tokens,
+			context_window_tokens, max_output_tokens,
 			input_price_usd_per_million_tokens, output_price_usd_per_million_tokens,
 			source
 		)
-		VALUES ($1, $2, 'openai', 'enabled', $3, 'openai', 128000, 4096, 2.5, 10, 'manual')
+		VALUES ($1, $2, 'openai', 'enabled', 128000, 4096, 2.5, 10, 'manual')
 		RETURNING id
-	`, modelID, modelID, fmt.Sprintf("openai/cap-store-canon-%d", suffix)).Scan(&id)
+	`, modelID, modelID).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert model row: %v", err)
 	}
@@ -92,20 +92,14 @@ func TestStoreLookupModelMapsLayer1(t *testing.T) {
 	if model.ContextWindowTokens == nil || *model.ContextWindowTokens != 128000 {
 		t.Fatalf("expected context_window 128000, got %v", model.ContextWindowTokens)
 	}
-	if model.CanonicalID == nil {
-		t.Fatal("expected canonical_id set")
-	}
 	if model.InputPriceUSDPerMTokens == nil || *model.InputPriceUSDPerMTokens != "2.5000000000" {
 		t.Fatalf("expected input price 2.5000000000, got %v", model.InputPriceUSDPerMTokens)
 	}
 	if model.OutputPriceUSDPerMTokens == nil || *model.OutputPriceUSDPerMTokens != "10.0000000000" {
 		t.Fatalf("expected output price 10.0000000000, got %v", model.OutputPriceUSDPerMTokens)
 	}
-	if model.Source != capability.SourceManual {
+	if model.Source != "manual" {
 		t.Fatalf("expected source manual, got %q", model.Source)
-	}
-	if model.RemovedUpstreamAt != nil {
-		t.Fatal("expected removed_upstream_at nil")
 	}
 }
 
@@ -121,7 +115,6 @@ func TestStoreModelCapabilityRoundTrip(t *testing.T) {
 		Key:          capability.KeyReasoningEffort,
 		SupportLevel: capability.SupportLevelLimited,
 		Limits:       json.RawMessage(`{"effort":["high","max"]}`),
-		Source:       capability.SourceManual,
 	})
 	if err != nil {
 		t.Fatalf("upsert model capability: %v", err)
@@ -139,9 +132,6 @@ func TestStoreModelCapabilityRoundTrip(t *testing.T) {
 	}
 	if len(caps) != 1 || caps[0].Key != capability.KeyReasoningEffort {
 		t.Fatalf("expected single reasoning.effort capability, got %#v", caps)
-	}
-	if caps[0].Source != capability.SourceManual {
-		t.Fatalf("expected source manual, got %q", caps[0].Source)
 	}
 }
 

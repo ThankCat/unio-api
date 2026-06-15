@@ -47,3 +47,9 @@ UPDATE providers
 SET name = sqlc.arg(name), status = sqlc.arg(status), updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING id, slug, name, status, created_at, updated_at;
+
+-- name: DeleteProvider :execrows
+-- DeleteProvider 物理删除 provider，用于清理录错且从未使用的脏数据。
+-- provider 无自身配置子表，故不级联：名下仍有 channel，或被 request/cost 历史（NO ACTION 外键）
+-- 引用时，DB 拒绝删除（23503），上层降级为 conflict，提示先删渠道或改用停用。
+DELETE FROM providers WHERE id = sqlc.arg(id);

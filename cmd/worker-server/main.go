@@ -103,12 +103,9 @@ func runSyncModels(cfg config.Config, logger *slog.Logger, args []string) error 
 	logger.Info("sync-models completed",
 		"dry_run", result.DryRun,
 		"feed_models", result.FeedModels,
-		"inserted", result.Inserted,
-		"updated", result.Updated,
-		"skipped", result.Skipped,
+		"upserted", result.Upserted,
 		"removed", result.Removed,
-		"capabilities_seeded", result.CapabilitiesSeeded,
-		"manual_conflicts", len(result.ManualConflicts),
+		"capability_hints", result.CapabilityHints,
 		"source_fingerprint", result.Fingerprint,
 	)
 

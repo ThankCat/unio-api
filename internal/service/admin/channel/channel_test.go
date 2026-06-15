@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ThankCat/unio-api/internal/platform/failure"
@@ -22,6 +23,10 @@ type fakeChannelStore struct {
 	createCalls   int
 	credentialAff int64
 	credentialErr error
+	deleteAff     int64
+	deleteErr     error
+	deleteID      int64
+	deleteCalls   int
 }
 
 func (s *fakeChannelStore) GetProvider(_ context.Context, _ int64) (sqlc.Provider, error) {
@@ -46,6 +51,11 @@ func (s *fakeChannelStore) UpdateChannel(_ context.Context, _ sqlc.UpdateChannel
 }
 func (s *fakeChannelStore) UpdateChannelCredential(_ context.Context, _ sqlc.UpdateChannelCredentialParams) (int64, error) {
 	return s.credentialAff, s.credentialErr
+}
+func (s *fakeChannelStore) DeleteChannelCascade(_ context.Context, id int64) (int64, error) {
+	s.deleteID = id
+	s.deleteCalls++
+	return s.deleteAff, s.deleteErr
 }
 
 type fakeCipher struct {
@@ -243,5 +253,48 @@ func TestRotateCredentialSuccess(t *testing.T) {
 
 	if err := svc.RotateCredential(context.Background(), channel.RotateCredentialInput{ID: 5, Credential: "sk-new"}); err != nil {
 		t.Fatalf("rotate: %v", err)
+	}
+}
+
+func newChannelService(store *fakeChannelStore) *channel.Service {
+	return channel.NewService(store, &fakeCipher{out: []byte("enc")}, fakeRegistry{has: true})
+}
+
+func TestDeleteRejectsInvalidID(t *testing.T) {
+	store := &fakeChannelStore{}
+	err := newChannelService(store).Delete(context.Background(), 0)
+	if got := failure.CodeOf(err); got != failure.CodeAdminInvalidArgument {
+		t.Fatalf("expected %q, got %q", failure.CodeAdminInvalidArgument, got)
+	}
+	if store.deleteCalls != 0 {
+		t.Fatalf("store should not be called on invalid id")
+	}
+}
+
+// 录错且无引用的渠道可真删；级联清理由 DB CTE 完成，受影响行 0 仅当 channel 不存在。
+func TestDeleteSuccess(t *testing.T) {
+	store := &fakeChannelStore{deleteAff: 1}
+	if err := newChannelService(store).Delete(context.Background(), 9); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if store.deleteID != 9 {
+		t.Fatalf("expected delete id 9, got %d", store.deleteID)
+	}
+}
+
+func TestDeleteNotFoundWhenNoRows(t *testing.T) {
+	store := &fakeChannelStore{deleteAff: 0}
+	err := newChannelService(store).Delete(context.Background(), 9)
+	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
+		t.Fatalf("expected %q, got %q", failure.CodeAdminNotFound, got)
+	}
+}
+
+// 已被请求/账务历史引用时，DB 报外键冲突（23503），降级为 conflict 提示改用停用。
+func TestDeleteConflictOnForeignKeyViolation(t *testing.T) {
+	store := &fakeChannelStore{deleteErr: &pgconn.PgError{Code: "23503"}}
+	err := newChannelService(store).Delete(context.Background(), 9)
+	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
+		t.Fatalf("expected %q, got %q", failure.CodeAdminConflict, got)
 	}
 }

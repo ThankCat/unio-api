@@ -97,7 +97,7 @@ func (s *fakeStore) ListSyncJobs(_ context.Context, limit int32) ([]core.SyncJob
 	return s.syncJobs, nil
 }
 
-func TestSetModelCapabilityFixesSourceManual(t *testing.T) {
+func TestSetModelCapabilityPropagatesActor(t *testing.T) {
 	store := &fakeStore{}
 	_, err := capadmin.NewCapabilityService(store).SetModelCapability(context.Background(), capadmin.SetModelCapabilityInput{
 		ModelID:      1,
@@ -112,9 +112,6 @@ func TestSetModelCapabilityFixesSourceManual(t *testing.T) {
 		t.Fatalf("expected one upsert, got %d", len(store.upsertModelParams))
 	}
 	got := store.upsertModelParams[0]
-	if got.Source != core.SourceManual {
-		t.Fatalf("expected source=manual, got %q", got.Source)
-	}
 	if got.UpdatedBy == nil || *got.UpdatedBy != "admin" {
 		t.Fatalf("expected updated_by=admin, got %v", got.UpdatedBy)
 	}
@@ -220,11 +217,6 @@ func TestSeedMaterializeWritesAdapterSeed(t *testing.T) {
 	if len(store.upsertModelParams) != len(profile.Declarations) {
 		t.Fatalf("expected %d upserts, got %d", len(profile.Declarations), len(store.upsertModelParams))
 	}
-	for _, p := range store.upsertModelParams {
-		if p.Source != core.SourceAdapterSeed {
-			t.Fatalf("expected source=adapter_seed, got %q", p.Source)
-		}
-	}
 }
 
 func TestSeedProfilesSortedWithKey(t *testing.T) {
@@ -250,7 +242,7 @@ type fakeSyncer struct {
 func (f *fakeSyncer) Sync(_ context.Context, opts modelcatalog.Options) (modelcatalog.Result, error) {
 	f.called = true
 	f.gotDryRun = opts.DryRun
-	return modelcatalog.Result{DryRun: opts.DryRun, Inserted: 3}, nil
+	return modelcatalog.Result{DryRun: opts.DryRun, Upserted: 3}, nil
 }
 
 func TestSyncTriggerPassesDryRun(t *testing.T) {
@@ -263,7 +255,7 @@ func TestSyncTriggerPassesDryRun(t *testing.T) {
 	if !syncer.called || !syncer.gotDryRun {
 		t.Fatalf("expected dry-run trigger, got called=%v dryRun=%v", syncer.called, syncer.gotDryRun)
 	}
-	if !result.DryRun || result.Inserted != 3 {
+	if !result.DryRun || result.Upserted != 3 {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 }

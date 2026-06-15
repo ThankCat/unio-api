@@ -15,7 +15,7 @@ import (
 )
 
 type fakeModelStore struct {
-	models      []sqlc.Model
+	models      []sqlc.ListModelsPageRow
 	lookupRow   sqlc.Model
 	lookupErr   error
 	createRow   sqlc.Model
@@ -24,9 +24,13 @@ type fakeModelStore struct {
 	createCalls int
 	updateRow   sqlc.Model
 	updateErr   error
+	deleteAff   int64
+	deleteErr   error
+	deleteID    int64
+	deleteCalls int
 }
 
-func (s *fakeModelStore) ListModelsPage(context.Context, sqlc.ListModelsPageParams) ([]sqlc.Model, error) {
+func (s *fakeModelStore) ListModelsPage(context.Context, sqlc.ListModelsPageParams) ([]sqlc.ListModelsPageRow, error) {
 	return s.models, nil
 }
 
@@ -36,6 +40,10 @@ func (s *fakeModelStore) CountModels(context.Context, sqlc.CountModelsParams) (i
 
 func (s *fakeModelStore) LookupModelByID(context.Context, int64) (sqlc.Model, error) {
 	return s.lookupRow, s.lookupErr
+}
+
+func (s *fakeModelStore) GetModelCatalogState(context.Context, int64) (sqlc.GetModelCatalogStateRow, error) {
+	return sqlc.GetModelCatalogStateRow{}, pgx.ErrNoRows
 }
 
 func (s *fakeModelStore) CreateModel(_ context.Context, arg sqlc.CreateModelParams) (sqlc.Model, error) {
@@ -48,6 +56,12 @@ func (s *fakeModelStore) UpdateModel(context.Context, sqlc.UpdateModelParams) (s
 	return s.updateRow, s.updateErr
 }
 
+func (s *fakeModelStore) DeleteModelCascade(_ context.Context, id int64) (int64, error) {
+	s.deleteID = id
+	s.deleteCalls++
+	return s.deleteAff, s.deleteErr
+}
+
 func TestCreateRejectsInvalidArguments(t *testing.T) {
 	cases := []struct {
 		name string
@@ -57,7 +71,7 @@ func TestCreateRejectsInvalidArguments(t *testing.T) {
 		{"empty display_name", model.CreateInput{ModelID: "deepseek-chat", DisplayName: "  ", OwnedBy: "y", Status: model.StatusEnabled}},
 		{"empty owned_by", model.CreateInput{ModelID: "deepseek-chat", DisplayName: "x", OwnedBy: " ", Status: model.StatusEnabled}},
 		{"bad status", model.CreateInput{ModelID: "deepseek-chat", DisplayName: "x", OwnedBy: "y", Status: "paused"}},
-		{"bad max_output_tokens", model.CreateInput{ModelID: "deepseek-chat", DisplayName: "x", OwnedBy: "y", Status: model.StatusEnabled, MaxOutputTokens: ptr(int64(0))}},
+		{"bad max_output_tokens", model.CreateInput{ModelID: "deepseek-chat", DisplayName: "x", OwnedBy: "y", Status: model.StatusEnabled, Metadata: model.Metadata{MaxOutputTokens: ptr(int64(0))}}},
 	}
 
 	for _, tc := range cases {
@@ -95,7 +109,7 @@ func TestCreateSuccessTrimsAndMaps(t *testing.T) {
 
 	got, err := model.NewService(store).Create(context.Background(), model.CreateInput{
 		ModelID: "  deepseek-chat  ", DisplayName: "  DeepSeek Chat  ", OwnedBy: "  deepseek  ",
-		Status: model.StatusEnabled, MaxOutputTokens: ptr(int64(8192)),
+		Status: model.StatusEnabled, Metadata: model.Metadata{MaxOutputTokens: ptr(int64(8192))},
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -126,6 +140,45 @@ func TestUpdateNotFound(t *testing.T) {
 	})
 	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
 		t.Fatalf("expected %q, got %q", failure.CodeAdminNotFound, got)
+	}
+}
+
+func TestDeleteRejectsInvalidID(t *testing.T) {
+	store := &fakeModelStore{}
+	err := model.NewService(store).Delete(context.Background(), 0)
+	if got := failure.CodeOf(err); got != failure.CodeAdminInvalidArgument {
+		t.Fatalf("expected %q, got %q", failure.CodeAdminInvalidArgument, got)
+	}
+	if store.deleteCalls != 0 {
+		t.Fatalf("store should not be called on invalid id")
+	}
+}
+
+// 录错且无引用的模型可真删；级联清理由 DB CTE 完成，受影响行 0 仅当 model 不存在。
+func TestDeleteSuccess(t *testing.T) {
+	store := &fakeModelStore{deleteAff: 1}
+	if err := model.NewService(store).Delete(context.Background(), 9); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if store.deleteID != 9 {
+		t.Fatalf("expected delete id 9, got %d", store.deleteID)
+	}
+}
+
+func TestDeleteNotFoundWhenNoRows(t *testing.T) {
+	store := &fakeModelStore{deleteAff: 0}
+	err := model.NewService(store).Delete(context.Background(), 9)
+	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
+		t.Fatalf("expected %q, got %q", failure.CodeAdminNotFound, got)
+	}
+}
+
+// 已被请求/账务历史引用时，DB 报外键冲突（23503），降级为 conflict 提示改用停用。
+func TestDeleteConflictOnForeignKeyViolation(t *testing.T) {
+	store := &fakeModelStore{deleteErr: &pgconn.PgError{Code: "23503"}}
+	err := model.NewService(store).Delete(context.Background(), 9)
+	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
+		t.Fatalf("expected %q, got %q", failure.CodeAdminConflict, got)
 	}
 }
 

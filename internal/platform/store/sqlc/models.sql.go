@@ -13,24 +13,37 @@ import (
 
 const countModels = `-- name: CountModels :one
 SELECT COUNT(*) AS total
-FROM models
-WHERE ($1::text IS NULL OR status = $1::text)
+FROM models m
+LEFT JOIN model_catalog_links l ON l.model_id = m.id
+LEFT JOIN model_catalog mc ON mc.canonical_id = l.canonical_id
+WHERE ($1::text IS NULL OR m.status = $1::text)
   AND (
     $2::text IS NULL
-    OR model_id ILIKE '%' || $2::text || '%'
-    OR display_name ILIKE '%' || $2::text || '%'
-    OR owned_by ILIKE '%' || $2::text || '%'
+    OR m.model_id ILIKE '%' || $2::text || '%'
+    OR m.display_name ILIKE '%' || $2::text || '%'
+    OR m.owned_by ILIKE '%' || $2::text || '%'
+  )
+  AND (
+    NOT $3::bool
+    OR (
+        l.model_id IS NOT NULL
+        AND (mc.fingerprint IS DISTINCT FROM l.adopted_fingerprint OR mc.removed_upstream_at IS NOT NULL)
+        AND NOT l.reminder_muted
+        AND l.dismissed_fingerprint IS DISTINCT FROM mc.fingerprint
+        AND (l.reminder_snooze_until IS NULL OR now() >= l.reminder_snooze_until)
+    )
   )
 `
 
 type CountModelsParams struct {
-	Status pgtype.Text
-	Q      pgtype.Text
+	Status        pgtype.Text
+	Q             pgtype.Text
+	HasUpdateOnly bool
 }
 
-// CountModels 返回与 ListModelsPage 相同过滤条件下的总条数。
+// CountModels 返回与 ListModelsPage 相同过滤条件下的总条数（含 has_update_only）。
 func (q *Queries) CountModels(ctx context.Context, arg CountModelsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countModels, arg.Status, arg.Q)
+	row := q.db.QueryRow(ctx, countModels, arg.Status, arg.Q, arg.HasUpdateOnly)
 	var total int64
 	err := row.Scan(&total)
 	return total, err
@@ -42,8 +55,11 @@ INSERT INTO models (
     display_name,
     owned_by,
     status,
-    lab,
     max_output_tokens,
+    context_window_tokens,
+    input_price_usd_per_million_tokens,
+    output_price_usd_per_million_tokens,
+    release_date,
     source
 )
 VALUES (
@@ -53,30 +69,39 @@ VALUES (
     $4,
     $5,
     $6,
+    $7,
+    $8,
+    $9,
     'manual'
 )
-RETURNING id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
 `
 
 type CreateModelParams struct {
-	ModelID         string
-	DisplayName     string
-	OwnedBy         string
-	Status          string
-	Lab             pgtype.Text
-	MaxOutputTokens pgtype.Int8
+	ModelID                        string
+	DisplayName                    string
+	OwnedBy                        string
+	Status                         string
+	MaxOutputTokens                pgtype.Int8
+	ContextWindowTokens            pgtype.Int8
+	InputPriceUsdPerMillionTokens  pgtype.Numeric
+	OutputPriceUsdPerMillionTokens pgtype.Numeric
+	ReleaseDate                    pgtype.Date
 }
 
-// CreateModel 创建 admin 手工模型；source 固定 manual（models.dev 同步永不覆盖 manual 行）。
-// model_id 全局唯一由 DB 唯一约束保证；价格基线/canonical_id/release_date 等同步元数据不在此设置。
+// CreateModel 创建 admin 空白手建模型；source 固定 manual。
+// model_id 全局唯一由 DB 唯一约束保证；元数据（上下文/价格基线/发布日期）可选填，纯展示不参与计费（阶段 14 Q5）。
 func (q *Queries) CreateModel(ctx context.Context, arg CreateModelParams) (Model, error) {
 	row := q.db.QueryRow(ctx, createModel,
 		arg.ModelID,
 		arg.DisplayName,
 		arg.OwnedBy,
 		arg.Status,
-		arg.Lab,
 		arg.MaxOutputTokens,
+		arg.ContextWindowTokens,
+		arg.InputPriceUsdPerMillionTokens,
+		arg.OutputPriceUsdPerMillionTokens,
+		arg.ReleaseDate,
 	)
 	var i Model
 	err := row.Scan(
@@ -85,17 +110,171 @@ func (q *Queries) CreateModel(ctx context.Context, arg CreateModelParams) (Model
 		&i.DisplayName,
 		&i.OwnedBy,
 		&i.Status,
-		&i.CanonicalID,
-		&i.Lab,
 		&i.ContextWindowTokens,
 		&i.MaxOutputTokens,
 		&i.InputPriceUsdPerMillionTokens,
 		&i.OutputPriceUsdPerMillionTokens,
 		&i.ReleaseDate,
 		&i.Source,
-		&i.RemovedUpstreamAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createModelFromCatalog = `-- name: CreateModelFromCatalog :one
+INSERT INTO models (
+    model_id,
+    display_name,
+    owned_by,
+    status,
+    max_output_tokens,
+    context_window_tokens,
+    input_price_usd_per_million_tokens,
+    output_price_usd_per_million_tokens,
+    release_date,
+    source
+)
+VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    'catalog'
+)
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
+`
+
+type CreateModelFromCatalogParams struct {
+	ModelID                        string
+	DisplayName                    string
+	OwnedBy                        string
+	Status                         string
+	MaxOutputTokens                pgtype.Int8
+	ContextWindowTokens            pgtype.Int8
+	InputPriceUsdPerMillionTokens  pgtype.Numeric
+	OutputPriceUsdPerMillionTokens pgtype.Numeric
+	ReleaseDate                    pgtype.Date
+}
+
+// CreateModelFromCatalog 从 models.dev 目录采纳创建模型；source=catalog（采纳后仍完全可编辑）。
+// 与 model_capabilities、model_catalog_links 在同一事务内写入（见 service 层采纳事务）。
+// model_id 采纳界面可自由填写（默认去前缀模型名），全局唯一由 DB 约束保证。
+func (q *Queries) CreateModelFromCatalog(ctx context.Context, arg CreateModelFromCatalogParams) (Model, error) {
+	row := q.db.QueryRow(ctx, createModelFromCatalog,
+		arg.ModelID,
+		arg.DisplayName,
+		arg.OwnedBy,
+		arg.Status,
+		arg.MaxOutputTokens,
+		arg.ContextWindowTokens,
+		arg.InputPriceUsdPerMillionTokens,
+		arg.OutputPriceUsdPerMillionTokens,
+		arg.ReleaseDate,
+	)
+	var i Model
+	err := row.Scan(
+		&i.ID,
+		&i.ModelID,
+		&i.DisplayName,
+		&i.OwnedBy,
+		&i.Status,
+		&i.ContextWindowTokens,
+		&i.MaxOutputTokens,
+		&i.InputPriceUsdPerMillionTokens,
+		&i.OutputPriceUsdPerMillionTokens,
+		&i.ReleaseDate,
+		&i.Source,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const deleteModelCascade = `-- name: DeleteModelCascade :execrows
+WITH deleted_prices AS (
+    DELETE FROM prices WHERE prices.model_id = $1
+),
+deleted_channel_models AS (
+    DELETE FROM channel_models WHERE channel_models.model_id = $1
+),
+deleted_channel_cost_prices AS (
+    DELETE FROM channel_cost_prices WHERE channel_cost_prices.model_id = $1
+)
+DELETE FROM models WHERE models.id = $1
+`
+
+// DeleteModelCascade 物理删除 model，用于清理录错且从未使用的脏数据，并在同一条语句内
+// 级联清理 model 自身的配置子表：prices（客户售价）、channel_models（模型绑定）、
+// channel_cost_prices（成本价）；model_capabilities、project_model_policies、model_catalog_links
+// 由 ON DELETE CASCADE 自动清理，无需在此显式删除。
+// 外键均为默认 NO ACTION（约束在语句末校验），故 CTE 删子表 + 删主体在单条语句内原子完成：
+// 子配置先删除，语句末 models 的删除不会留下悬挂引用。若 model 或其子配置仍被请求/账务快照
+// （cost_snapshots/price_snapshots/settlement_recovery_jobs 等）引用，整条语句报 23503 全部回滚，
+// 上层降级为 conflict，提示改用停用。返回值为 models 行的受影响数（0 表示 model 不存在）。
+func (q *Queries) DeleteModelCascade(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteModelCascade, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getModelCatalogState = `-- name: GetModelCatalogState :one
+SELECT
+    l.canonical_id,
+    l.adopted_fingerprint,
+    l.reminder_muted,
+    l.reminder_snooze_until,
+    l.dismissed_fingerprint,
+    mc.fingerprint AS catalog_fingerprint,
+    (mc.removed_upstream_at IS NOT NULL)::boolean AS catalog_removed_upstream,
+    (
+        mc.fingerprint IS DISTINCT FROM l.adopted_fingerprint OR mc.removed_upstream_at IS NOT NULL
+    )::boolean AS update_available,
+    (
+        (mc.fingerprint IS DISTINCT FROM l.adopted_fingerprint OR mc.removed_upstream_at IS NOT NULL)
+        AND NOT l.reminder_muted
+        AND l.dismissed_fingerprint IS DISTINCT FROM mc.fingerprint
+        AND (l.reminder_snooze_until IS NULL OR now() >= l.reminder_snooze_until)
+    )::boolean AS should_remind
+FROM model_catalog_links l
+JOIN model_catalog mc ON mc.canonical_id = l.canonical_id
+WHERE l.model_id = $1
+`
+
+type GetModelCatalogStateRow struct {
+	CanonicalID            string
+	AdoptedFingerprint     string
+	ReminderMuted          bool
+	ReminderSnoozeUntil    pgtype.Timestamptz
+	DismissedFingerprint   pgtype.Text
+	CatalogFingerprint     string
+	CatalogRemovedUpstream bool
+	UpdateAvailable        bool
+	ShouldRemind           bool
+}
+
+// GetModelCatalogState 读取单个模型的采纳目录追更状态（供模型详情 catalog 子对象）。
+// 未采纳模型无行返回（上层视为 catalog=null）。
+func (q *Queries) GetModelCatalogState(ctx context.Context, modelID int64) (GetModelCatalogStateRow, error) {
+	row := q.db.QueryRow(ctx, getModelCatalogState, modelID)
+	var i GetModelCatalogStateRow
+	err := row.Scan(
+		&i.CanonicalID,
+		&i.AdoptedFingerprint,
+		&i.ReminderMuted,
+		&i.ReminderSnoozeUntil,
+		&i.DismissedFingerprint,
+		&i.CatalogFingerprint,
+		&i.CatalogRemovedUpstream,
+		&i.UpdateAvailable,
+		&i.ShouldRemind,
 	)
 	return i, err
 }
@@ -191,53 +370,46 @@ func (q *Queries) ListAvailableModelsForProject(ctx context.Context, projectID i
 	return items, nil
 }
 
-const listCanonicalModels = `-- name: ListCanonicalModels :many
-SELECT id, model_id, canonical_id, source, status, removed_upstream_at
-FROM models
-WHERE canonical_id IS NOT NULL
-ORDER BY canonical_id ASC
-`
-
-type ListCanonicalModelsRow struct {
-	ID                int64
-	ModelID           string
-	CanonicalID       pgtype.Text
-	Source            string
-	Status            string
-	RemovedUpstreamAt pgtype.Timestamptz
-}
-
-// ListCanonicalModels 列出全部带 canonical_id 的模型，供 models.dev 同步做合并与缺失检测。
-func (q *Queries) ListCanonicalModels(ctx context.Context) ([]ListCanonicalModelsRow, error) {
-	rows, err := q.db.Query(ctx, listCanonicalModels)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListCanonicalModelsRow
-	for rows.Next() {
-		var i ListCanonicalModelsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.ModelID,
-			&i.CanonicalID,
-			&i.Source,
-			&i.Status,
-			&i.RemovedUpstreamAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listModelsPage = `-- name: ListModelsPage :many
-SELECT id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
-FROM models
+WITH enriched AS (
+    SELECT
+        m.id,
+        m.model_id,
+        m.display_name,
+        m.owned_by,
+        m.status,
+        m.max_output_tokens,
+        m.context_window_tokens,
+        m.input_price_usd_per_million_tokens,
+        m.output_price_usd_per_million_tokens,
+        m.release_date,
+        m.source,
+        m.created_at,
+        m.updated_at,
+        l.canonical_id AS catalog_canonical_id,
+        l.adopted_fingerprint,
+        l.reminder_muted,
+        l.reminder_snooze_until,
+        l.dismissed_fingerprint,
+        mc.fingerprint AS catalog_fingerprint,
+        (mc.removed_upstream_at IS NOT NULL)::boolean AS catalog_removed_upstream,
+        (
+            l.model_id IS NOT NULL
+            AND (mc.fingerprint IS DISTINCT FROM l.adopted_fingerprint OR mc.removed_upstream_at IS NOT NULL)
+        )::boolean AS update_available,
+        (
+            l.model_id IS NOT NULL
+            AND (mc.fingerprint IS DISTINCT FROM l.adopted_fingerprint OR mc.removed_upstream_at IS NOT NULL)
+            AND NOT l.reminder_muted
+            AND l.dismissed_fingerprint IS DISTINCT FROM mc.fingerprint
+            AND (l.reminder_snooze_until IS NULL OR now() >= l.reminder_snooze_until)
+        )::boolean AS should_remind
+    FROM models m
+    LEFT JOIN model_catalog_links l ON l.model_id = m.id
+    LEFT JOIN model_catalog mc ON mc.canonical_id = l.canonical_id
+)
+SELECT id, model_id, display_name, owned_by, status, max_output_tokens, context_window_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, catalog_canonical_id, adopted_fingerprint, reminder_muted, reminder_snooze_until, dismissed_fingerprint, catalog_fingerprint, catalog_removed_upstream, update_available, should_remind
+FROM enriched
 WHERE ($1::text IS NULL OR status = $1::text)
   AND (
     $2::text IS NULL
@@ -245,22 +417,52 @@ WHERE ($1::text IS NULL OR status = $1::text)
     OR display_name ILIKE '%' || $2::text || '%'
     OR owned_by ILIKE '%' || $2::text || '%'
   )
+  AND (NOT $3::bool OR should_remind)
 ORDER BY model_id
-LIMIT $4 OFFSET $3
+LIMIT $5 OFFSET $4
 `
 
 type ListModelsPageParams struct {
-	Status     pgtype.Text
-	Q          pgtype.Text
-	PageOffset int32
-	PageLimit  int32
+	Status        pgtype.Text
+	Q             pgtype.Text
+	HasUpdateOnly bool
+	PageOffset    int32
+	PageLimit     int32
 }
 
-// ListModelsPage 按状态/关键字过滤后分页列出 model，供 admin 管理台展示；status、q 为 NULL 时不过滤。
-func (q *Queries) ListModelsPage(ctx context.Context, arg ListModelsPageParams) ([]Model, error) {
+type ListModelsPageRow struct {
+	ID                             int64
+	ModelID                        string
+	DisplayName                    string
+	OwnedBy                        string
+	Status                         string
+	MaxOutputTokens                pgtype.Int8
+	ContextWindowTokens            pgtype.Int8
+	InputPriceUsdPerMillionTokens  pgtype.Numeric
+	OutputPriceUsdPerMillionTokens pgtype.Numeric
+	ReleaseDate                    pgtype.Date
+	Source                         string
+	CreatedAt                      pgtype.Timestamptz
+	UpdatedAt                      pgtype.Timestamptz
+	CatalogCanonicalID             pgtype.Text
+	AdoptedFingerprint             pgtype.Text
+	ReminderMuted                  pgtype.Bool
+	ReminderSnoozeUntil            pgtype.Timestamptz
+	DismissedFingerprint           pgtype.Text
+	CatalogFingerprint             pgtype.Text
+	CatalogRemovedUpstream         bool
+	UpdateAvailable                bool
+	ShouldRemind                   bool
+}
+
+// ListModelsPage 按状态/关键字过滤后分页列出 model，并连带采纳目录追更状态（阶段 14）。
+// status、q 为 NULL 时不过滤；has_update_only=true 时仅列「应提醒」的采纳模型。
+// catalog_* 字段对未采纳模型为 NULL；update_available/should_remind 见 model_catalog_links 设计。
+func (q *Queries) ListModelsPage(ctx context.Context, arg ListModelsPageParams) ([]ListModelsPageRow, error) {
 	rows, err := q.db.Query(ctx, listModelsPage,
 		arg.Status,
 		arg.Q,
+		arg.HasUpdateOnly,
 		arg.PageOffset,
 		arg.PageLimit,
 	)
@@ -268,26 +470,32 @@ func (q *Queries) ListModelsPage(ctx context.Context, arg ListModelsPageParams) 
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Model
+	var items []ListModelsPageRow
 	for rows.Next() {
-		var i Model
+		var i ListModelsPageRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.ModelID,
 			&i.DisplayName,
 			&i.OwnedBy,
 			&i.Status,
-			&i.CanonicalID,
-			&i.Lab,
-			&i.ContextWindowTokens,
 			&i.MaxOutputTokens,
+			&i.ContextWindowTokens,
 			&i.InputPriceUsdPerMillionTokens,
 			&i.OutputPriceUsdPerMillionTokens,
 			&i.ReleaseDate,
 			&i.Source,
-			&i.RemovedUpstreamAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.CatalogCanonicalID,
+			&i.AdoptedFingerprint,
+			&i.ReminderMuted,
+			&i.ReminderSnoozeUntil,
+			&i.DismissedFingerprint,
+			&i.CatalogFingerprint,
+			&i.CatalogRemovedUpstream,
+			&i.UpdateAvailable,
+			&i.ShouldRemind,
 		); err != nil {
 			return nil, err
 		}
@@ -300,7 +508,7 @@ func (q *Queries) ListModelsPage(ctx context.Context, arg ListModelsPageParams) 
 }
 
 const lookupModelByID = `-- name: LookupModelByID :one
-SELECT id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
+SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
 FROM models
 WHERE id = $1
 `
@@ -315,15 +523,12 @@ func (q *Queries) LookupModelByID(ctx context.Context, id int64) (Model, error) 
 		&i.DisplayName,
 		&i.OwnedBy,
 		&i.Status,
-		&i.CanonicalID,
-		&i.Lab,
 		&i.ContextWindowTokens,
 		&i.MaxOutputTokens,
 		&i.InputPriceUsdPerMillionTokens,
 		&i.OutputPriceUsdPerMillionTokens,
 		&i.ReleaseDate,
 		&i.Source,
-		&i.RemovedUpstreamAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -331,7 +536,7 @@ func (q *Queries) LookupModelByID(ctx context.Context, id int64) (Model, error) 
 }
 
 const lookupModelByModelID = `-- name: LookupModelByModelID :one
-SELECT id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
+SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
 FROM models
 WHERE model_id = $1
 `
@@ -346,52 +551,12 @@ func (q *Queries) LookupModelByModelID(ctx context.Context, modelID string) (Mod
 		&i.DisplayName,
 		&i.OwnedBy,
 		&i.Status,
-		&i.CanonicalID,
-		&i.Lab,
 		&i.ContextWindowTokens,
 		&i.MaxOutputTokens,
 		&i.InputPriceUsdPerMillionTokens,
 		&i.OutputPriceUsdPerMillionTokens,
 		&i.ReleaseDate,
 		&i.Source,
-		&i.RemovedUpstreamAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const markSeedModelRemovedUpstream = `-- name: MarkSeedModelRemovedUpstream :one
-UPDATE models
-SET status = 'disabled',
-    removed_upstream_at = now(),
-    updated_at = now()
-WHERE canonical_id = $1
-    AND source = 'seed_models_dev'
-    AND removed_upstream_at IS NULL
-RETURNING id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
-`
-
-// MarkSeedModelRemovedUpstream 把 models.dev 已删除的种子模型标记为 disabled + removed_upstream_at；
-// 仅作用于 source=seed_models_dev 且尚未标记的行，manual 行与已标记行不动（不自动删除本地数据）。
-func (q *Queries) MarkSeedModelRemovedUpstream(ctx context.Context, canonicalID pgtype.Text) (Model, error) {
-	row := q.db.QueryRow(ctx, markSeedModelRemovedUpstream, canonicalID)
-	var i Model
-	err := row.Scan(
-		&i.ID,
-		&i.ModelID,
-		&i.DisplayName,
-		&i.OwnedBy,
-		&i.Status,
-		&i.CanonicalID,
-		&i.Lab,
-		&i.ContextWindowTokens,
-		&i.MaxOutputTokens,
-		&i.InputPriceUsdPerMillionTokens,
-		&i.OutputPriceUsdPerMillionTokens,
-		&i.ReleaseDate,
-		&i.Source,
-		&i.RemovedUpstreamAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -415,36 +580,42 @@ func (q *Queries) ModelExistsByID(ctx context.Context, requestedModelID string) 
 	return exists, err
 }
 
-const updateModel = `-- name: UpdateModel :one
+const refreshAdoptedModelFromCatalog = `-- name: RefreshAdoptedModelFromCatalog :one
 UPDATE models
 SET display_name = $1,
     owned_by = $2,
-    status = $3,
-    lab = $4,
-    max_output_tokens = $5,
+    max_output_tokens = $3,
+    context_window_tokens = $4,
+    input_price_usd_per_million_tokens = $5,
+    output_price_usd_per_million_tokens = $6,
+    release_date = $7,
     updated_at = now()
-WHERE id = $6
-RETURNING id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
+WHERE id = $8
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
 `
 
-type UpdateModelParams struct {
-	DisplayName     string
-	OwnedBy         string
-	Status          string
-	Lab             pgtype.Text
-	MaxOutputTokens pgtype.Int8
-	ID              int64
+type RefreshAdoptedModelFromCatalogParams struct {
+	DisplayName                    string
+	OwnedBy                        string
+	MaxOutputTokens                pgtype.Int8
+	ContextWindowTokens            pgtype.Int8
+	InputPriceUsdPerMillionTokens  pgtype.Numeric
+	OutputPriceUsdPerMillionTokens pgtype.Numeric
+	ReleaseDate                    pgtype.Date
+	ID                             int64
 }
 
-// UpdateModel 更新 model 的展示元数据与启停状态；model_id 作为对外稳定标识不可变，
-// source/canonical_id/价格基线不在此修改。
-func (q *Queries) UpdateModel(ctx context.Context, arg UpdateModelParams) (Model, error) {
-	row := q.db.QueryRow(ctx, updateModel,
+// RefreshAdoptedModelFromCatalog 用目录最新值覆盖采纳模型的元数据（不动 model_id/display_name 可选）。
+// 「从目录刷新」事务的一部分；能力与 link 基线由同事务的其他查询处理。
+func (q *Queries) RefreshAdoptedModelFromCatalog(ctx context.Context, arg RefreshAdoptedModelFromCatalogParams) (Model, error) {
+	row := q.db.QueryRow(ctx, refreshAdoptedModelFromCatalog,
 		arg.DisplayName,
 		arg.OwnedBy,
-		arg.Status,
-		arg.Lab,
 		arg.MaxOutputTokens,
+		arg.ContextWindowTokens,
+		arg.InputPriceUsdPerMillionTokens,
+		arg.OutputPriceUsdPerMillionTokens,
+		arg.ReleaseDate,
 		arg.ID,
 	)
 	var i Model
@@ -454,94 +625,58 @@ func (q *Queries) UpdateModel(ctx context.Context, arg UpdateModelParams) (Model
 		&i.DisplayName,
 		&i.OwnedBy,
 		&i.Status,
-		&i.CanonicalID,
-		&i.Lab,
 		&i.ContextWindowTokens,
 		&i.MaxOutputTokens,
 		&i.InputPriceUsdPerMillionTokens,
 		&i.OutputPriceUsdPerMillionTokens,
 		&i.ReleaseDate,
 		&i.Source,
-		&i.RemovedUpstreamAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
 }
 
-const upsertSeedModelByCanonicalID = `-- name: UpsertSeedModelByCanonicalID :one
-INSERT INTO models (
-    model_id,
-    display_name,
-    owned_by,
-    status,
-    canonical_id,
-    lab,
-    context_window_tokens,
-    max_output_tokens,
-    input_price_usd_per_million_tokens,
-    output_price_usd_per_million_tokens,
-    release_date,
-    source,
-    removed_upstream_at
-)
-VALUES (
-    $1,
-    $2,
-    $3,
-    'disabled',
-    $4,
-    $5,
-    $6,
-    $7,
-    $8,
-    $9,
-    $10,
-    'seed_models_dev',
-    NULL
-)
-ON CONFLICT (canonical_id) DO UPDATE
-SET display_name = EXCLUDED.display_name,
-    lab = EXCLUDED.lab,
-    context_window_tokens = EXCLUDED.context_window_tokens,
-    max_output_tokens = EXCLUDED.max_output_tokens,
-    input_price_usd_per_million_tokens = EXCLUDED.input_price_usd_per_million_tokens,
-    output_price_usd_per_million_tokens = EXCLUDED.output_price_usd_per_million_tokens,
-    release_date = EXCLUDED.release_date,
-    removed_upstream_at = NULL,
+const updateModel = `-- name: UpdateModel :one
+UPDATE models
+SET display_name = $1,
+    owned_by = $2,
+    status = $3,
+    max_output_tokens = $4,
+    context_window_tokens = $5,
+    input_price_usd_per_million_tokens = $6,
+    output_price_usd_per_million_tokens = $7,
+    release_date = $8,
     updated_at = now()
-WHERE models.source = 'seed_models_dev'
-RETURNING id, model_id, display_name, owned_by, status, canonical_id, lab, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, removed_upstream_at, created_at, updated_at
+WHERE id = $9
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
 `
 
-type UpsertSeedModelByCanonicalIDParams struct {
-	ModelID                        string
+type UpdateModelParams struct {
 	DisplayName                    string
 	OwnedBy                        string
-	CanonicalID                    pgtype.Text
-	Lab                            pgtype.Text
-	ContextWindowTokens            pgtype.Int8
+	Status                         string
 	MaxOutputTokens                pgtype.Int8
+	ContextWindowTokens            pgtype.Int8
 	InputPriceUsdPerMillionTokens  pgtype.Numeric
 	OutputPriceUsdPerMillionTokens pgtype.Numeric
 	ReleaseDate                    pgtype.Date
+	ID                             int64
 }
 
-// UpsertSeedModelByCanonicalID 按 canonical_id upsert models.dev 种子模型。
-// 新模型默认 disabled、source=seed_models_dev；仅 source=seed_models_dev 的已存在行才覆盖元数据，
-// source=manual/import 行永不被覆盖（WHERE 守护，竞态下也安全）；覆盖时清除上游删除标记。
-func (q *Queries) UpsertSeedModelByCanonicalID(ctx context.Context, arg UpsertSeedModelByCanonicalIDParams) (Model, error) {
-	row := q.db.QueryRow(ctx, upsertSeedModelByCanonicalID,
-		arg.ModelID,
+// UpdateModel 更新 model 的展示元数据与启停状态；model_id 作为对外稳定标识不可变，source 不在此修改。
+// 元数据（上下文/价格基线/发布日期）可编辑，也可被「从目录刷新」覆盖；纯展示不参与计费。
+func (q *Queries) UpdateModel(ctx context.Context, arg UpdateModelParams) (Model, error) {
+	row := q.db.QueryRow(ctx, updateModel,
 		arg.DisplayName,
 		arg.OwnedBy,
-		arg.CanonicalID,
-		arg.Lab,
-		arg.ContextWindowTokens,
+		arg.Status,
 		arg.MaxOutputTokens,
+		arg.ContextWindowTokens,
 		arg.InputPriceUsdPerMillionTokens,
 		arg.OutputPriceUsdPerMillionTokens,
 		arg.ReleaseDate,
+		arg.ID,
 	)
 	var i Model
 	err := row.Scan(
@@ -550,15 +685,12 @@ func (q *Queries) UpsertSeedModelByCanonicalID(ctx context.Context, arg UpsertSe
 		&i.DisplayName,
 		&i.OwnedBy,
 		&i.Status,
-		&i.CanonicalID,
-		&i.Lab,
 		&i.ContextWindowTokens,
 		&i.MaxOutputTokens,
 		&i.InputPriceUsdPerMillionTokens,
 		&i.OutputPriceUsdPerMillionTokens,
 		&i.ReleaseDate,
 		&i.Source,
-		&i.RemovedUpstreamAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

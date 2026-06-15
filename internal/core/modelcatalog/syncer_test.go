@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-
-	"github.com/ThankCat/unio-api/internal/core/capability"
 )
 
 type fakeFetcher struct {
@@ -22,17 +20,14 @@ func (f fakeFetcher) Fetch(context.Context) (RawFeed, error) {
 }
 
 type fakeSyncStore struct {
-	existing []ExistingModel
+	existing []ExistingCatalogEntry
 
-	// manualGuard 模拟 upsert 命中 source=manual 守护（返回 applied=false）。
-	manualGuard map[string]bool
 	// failUpsert 让指定 canonical_id 的 upsert 返回错误，模拟落库失败。
 	failUpsert string
 
-	nextID   int64
-	upserted []string
-	caps     map[int64][]capability.Key
-	removed  []string
+	upserted    []string
+	capHints    map[string]int
+	removed     []string
 
 	jobCreated   int
 	jobRunning   int
@@ -42,38 +37,29 @@ type fakeSyncStore struct {
 	lastErrText  string
 }
 
-func newFakeSyncStore(existing ...ExistingModel) *fakeSyncStore {
+func newFakeSyncStore(existing ...ExistingCatalogEntry) *fakeSyncStore {
 	return &fakeSyncStore{
-		existing:    existing,
-		manualGuard: map[string]bool{},
-		caps:        map[int64][]capability.Key{},
+		existing: existing,
+		capHints: map[string]int{},
 	}
 }
 
-func (s *fakeSyncStore) ListCanonicalModels(context.Context) ([]ExistingModel, error) {
+func (s *fakeSyncStore) ListCatalogEntries(context.Context) ([]ExistingCatalogEntry, error) {
 	return s.existing, nil
 }
 
-func (s *fakeSyncStore) UpsertSeedModel(_ context.Context, model CanonicalModel) (int64, bool, error) {
+func (s *fakeSyncStore) UpsertCatalogEntry(_ context.Context, model CanonicalModel) error {
 	if model.CanonicalID == s.failUpsert {
-		return 0, false, errors.New("boom upsert")
+		return errors.New("boom upsert")
 	}
-	if s.manualGuard[model.CanonicalID] {
-		return 0, false, nil
-	}
-	s.nextID++
 	s.upserted = append(s.upserted, model.CanonicalID)
-	return s.nextID, true, nil
+	s.capHints[model.CanonicalID] = len(model.CoarseCapabilities)
+	return nil
 }
 
-func (s *fakeSyncStore) MarkSeedModelRemoved(_ context.Context, canonicalID string) (bool, error) {
+func (s *fakeSyncStore) MarkCatalogRemovedUpstream(_ context.Context, canonicalID string) (bool, error) {
 	s.removed = append(s.removed, canonicalID)
 	return true, nil
-}
-
-func (s *fakeSyncStore) UpsertCoarseCapability(_ context.Context, modelID int64, decl capability.Declaration) error {
-	s.caps[modelID] = append(s.caps[modelID], decl.Key)
-	return nil
 }
 
 func (s *fakeSyncStore) CreateSyncJob(context.Context) (int64, error) {
@@ -110,18 +96,18 @@ func TestSyncDryRunDoesNotWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sync dry-run: %v", err)
 	}
-	if !result.DryRun || result.FeedModels != 2 || result.Inserted != 2 {
+	if !result.DryRun || result.FeedModels != 2 || result.Upserted != 2 {
 		t.Fatalf("unexpected dry-run result: %+v", result)
 	}
-	if store.jobCreated != 0 || len(store.upserted) != 0 || len(store.caps) != 0 {
+	if store.jobCreated != 0 || len(store.upserted) != 0 {
 		t.Fatalf("dry-run must not write: %+v", store)
 	}
 }
 
-func TestSyncAppliesPlanAndSeedsCapabilities(t *testing.T) {
-	existing := []ExistingModel{
-		{ID: 1, CanonicalID: "acme/acme-mini", Source: modelSourceSeedModelsDev},
-		{ID: 2, CanonicalID: "deepseek/old", Source: modelSourceSeedModelsDev},
+func TestSyncAppliesPlanAndWritesCatalog(t *testing.T) {
+	existing := []ExistingCatalogEntry{
+		{CanonicalID: "acme/acme-mini"},
+		{CanonicalID: "deepseek/old"},
 	}
 	store := newFakeSyncStore(existing...)
 	syncer := NewSyncer(fakeFetcher{raw: RawFeed{ModelsJSON: []byte(sampleModelsJSON), APIJSON: []byte(sampleAPIJSON)}}, store)
@@ -131,15 +117,12 @@ func TestSyncAppliesPlanAndSeedsCapabilities(t *testing.T) {
 		t.Fatalf("Sync: %v", err)
 	}
 
-	// deepseek/deepseek-v4-pro 是新模型 → insert + 粗能力位；acme/acme-mini 已存在 seed → update；deepseek/old 缺失 → removal。
-	if result.Inserted != 1 || result.Updated != 1 || result.Removed != 1 {
-		t.Fatalf("counts: inserted=%d updated=%d removed=%d", result.Inserted, result.Updated, result.Removed)
+	// feed = [acme/acme-mini, deepseek/deepseek-v4-pro] 全量 upsert；deepseek/old 缺失 → removal。
+	if result.Upserted != 2 || result.Removed != 1 {
+		t.Fatalf("counts: upserted=%d removed=%d", result.Upserted, result.Removed)
 	}
-	if result.CapabilitiesSeeded != 6 {
-		t.Fatalf("want 6 coarse caps for deepseek, got %d", result.CapabilitiesSeeded)
-	}
-	if len(store.caps) != 1 {
-		t.Fatalf("only the newly inserted model should get caps, got %+v", store.caps)
+	if result.CapabilityHints <= 0 {
+		t.Fatalf("want capability hints recorded, got %d", result.CapabilityHints)
 	}
 	if len(store.removed) != 1 || store.removed[0] != "deepseek/old" {
 		t.Fatalf("want removal of deepseek/old, got %+v", store.removed)
@@ -157,35 +140,8 @@ func TestSyncAppliesPlanAndSeedsCapabilities(t *testing.T) {
 	if stats.License != "MIT" || stats.Attribution == "" || stats.SourceFingerprint == "" {
 		t.Fatalf("stats must carry license audit: %+v", stats)
 	}
-	if stats.Inserted != 1 || stats.Updated != 1 || stats.CapabilitiesSeeded != 6 {
+	if stats.Upserted != 2 || stats.Removed != 1 {
 		t.Fatalf("stats counts off: %+v", stats)
-	}
-}
-
-func TestSyncManualGuardRaceRecordsConflict(t *testing.T) {
-	store := newFakeSyncStore()
-	// deepseek 在 plan 阶段是 insert，但落库时命中 manual 守护（竞态），应记 conflict、不写能力位。
-	store.manualGuard["deepseek/deepseek-v4-pro"] = true
-	syncer := NewSyncer(fakeFetcher{raw: RawFeed{ModelsJSON: []byte(sampleModelsJSON)}}, store)
-
-	result, err := syncer.Sync(context.Background(), Options{})
-	if err != nil {
-		t.Fatalf("Sync: %v", err)
-	}
-	if result.Inserted != 1 {
-		t.Fatalf("acme should still insert, got inserted=%d", result.Inserted)
-	}
-	found := false
-	for _, c := range result.ManualConflicts {
-		if c == "deepseek/deepseek-v4-pro" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("want deepseek recorded as manual conflict, got %+v", result.ManualConflicts)
-	}
-	if len(store.caps) != 1 {
-		t.Fatalf("guarded model must not seed caps, caps=%+v", store.caps)
 	}
 }
 

@@ -24,7 +24,6 @@ func (s *recordingStore) UpsertModelCapability(_ context.Context, params UpsertM
 		Key:          params.Key,
 		SupportLevel: params.SupportLevel,
 		Limits:       params.Limits,
-		Source:       params.Source,
 		UpdatedBy:    params.UpdatedBy,
 	}, nil
 }
@@ -108,9 +107,6 @@ func TestMaterializeAdapterSeedUpsertsAllDeclarations(t *testing.T) {
 	for _, params := range store.upserts {
 		if params.ModelID != 42 {
 			t.Fatalf("expected model id 42, got %d", params.ModelID)
-		}
-		if params.Source != SourceAdapterSeed {
-			t.Fatalf("expected source adapter_seed, got %q", params.Source)
 		}
 		if params.UpdatedBy == nil || *params.UpdatedBy != updatedBy {
 			t.Fatalf("expected updated_by propagated, got %v", params.UpdatedBy)

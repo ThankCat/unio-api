@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,8 +71,10 @@ type CanonicalModel struct {
 	// InputPrice / OutputPrice 是十进制字符串（USD / 百万 token），nil 表示该模型无价格基线。
 	InputPrice  *string
 	OutputPrice *string
-	// CoarseCapabilities 是 models.dev 粗能力位映射，仅在模型首次入库时写入 source=models_dev。
+	// CoarseCapabilities 是 models.dev 粗能力位映射，落到目录能力提示供采纳预填。
 	CoarseCapabilities []capability.Declaration
+	// Fingerprint 是本条目内容指纹（元数据 + 排序能力提示规范化 hash），用于采纳追更对比。
+	Fingerprint string
 }
 
 // Feed 是一次 models.dev 拉取解析后的全部 canonical 模型（按 canonical_id 升序）。
@@ -109,6 +112,7 @@ func ParseFeed(modelsJSON, apiJSON []byte) (Feed, error) {
 			model.InputPrice = decimalOrNil(price.Input)
 			model.OutputPrice = decimalOrNil(price.Output)
 		}
+		model.Fingerprint = entryFingerprint(model)
 		models = append(models, model)
 	}
 
@@ -243,4 +247,55 @@ func containsFold(values []string, target string) bool {
 func fingerprint(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+// entryFingerprint 计算单条目录条目的内容指纹（规范化元数据 + 排序后能力提示）。
+// 用于采纳后对比「目录最新 vs 采纳基线」是否有差异；字段顺序/空值/数值格式固定，避免误报。
+func entryFingerprint(m CanonicalModel) string {
+	var b strings.Builder
+	b.WriteString(m.CanonicalID)
+	b.WriteByte('\n')
+	b.WriteString(m.Lab)
+	b.WriteByte('\n')
+	b.WriteString(m.DisplayName)
+	b.WriteByte('\n')
+	b.WriteString(fingerprintInt(m.ContextTokens))
+	b.WriteByte('\n')
+	b.WriteString(fingerprintInt(m.MaxOutputTokens))
+	b.WriteByte('\n')
+	b.WriteString(fingerprintStr(m.InputPrice))
+	b.WriteByte('\n')
+	b.WriteString(fingerprintStr(m.OutputPrice))
+	b.WriteByte('\n')
+	if m.ReleaseDate != nil {
+		b.WriteString(m.ReleaseDate.Format("2006-01-02"))
+	}
+	b.WriteByte('\n')
+
+	caps := make([]string, 0, len(m.CoarseCapabilities))
+	for _, d := range m.CoarseCapabilities {
+		caps = append(caps, string(d.Key)+"="+string(d.SupportLevel))
+	}
+	sort.Strings(caps)
+	for _, c := range caps {
+		b.WriteString(c)
+		b.WriteByte(';')
+	}
+
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+func fingerprintInt(value *int64) string {
+	if value == nil {
+		return ""
+	}
+	return strconv.FormatInt(*value, 10)
+}
+
+func fingerprintStr(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

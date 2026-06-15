@@ -32,17 +32,14 @@ type fakeCatalogStore struct {
 	calls  int
 }
 
-func (s *fakeCatalogStore) ListCanonicalModels(context.Context) ([]modelcatalog.ExistingModel, error) {
+func (s *fakeCatalogStore) ListCatalogEntries(context.Context) ([]modelcatalog.ExistingCatalogEntry, error) {
 	return nil, nil
 }
-func (s *fakeCatalogStore) UpsertSeedModel(context.Context, modelcatalog.CanonicalModel) (int64, bool, error) {
-	return 0, false, nil
-}
-func (s *fakeCatalogStore) MarkSeedModelRemoved(context.Context, string) (bool, error) {
-	return false, nil
-}
-func (s *fakeCatalogStore) UpsertCoarseCapability(context.Context, int64, capability.Declaration) error {
+func (s *fakeCatalogStore) UpsertCatalogEntry(context.Context, modelcatalog.CanonicalModel) error {
 	return nil
+}
+func (s *fakeCatalogStore) MarkCatalogRemovedUpstream(context.Context, string) (bool, error) {
+	return false, nil
 }
 func (s *fakeCatalogStore) CreateSyncJob(context.Context) (int64, error)              { return 0, nil }
 func (s *fakeCatalogStore) MarkSyncJobRunning(context.Context, int64) error           { return nil }

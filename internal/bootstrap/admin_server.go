@@ -22,6 +22,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/admin/customer"
 	"github.com/ThankCat/unio-api/internal/service/admin/dashboard"
 	"github.com/ThankCat/unio-api/internal/service/admin/model"
+	modelcatalogadmin "github.com/ThankCat/unio-api/internal/service/admin/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/service/admin/price"
 	"github.com/ThankCat/unio-api/internal/service/admin/provider"
 	"github.com/ThankCat/unio-api/internal/service/admin/query"
@@ -126,6 +127,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		openaideepseek.CapabilityProfile(),
 		anthropicdeepseek.CapabilityProfile(),
 	})
+	// 阶段 14 模型目录：浏览 models.dev 目录 + 从目录采纳/刷新/更新提醒（采纳/刷新需事务，复用 deps.DB）。
+	modelCatalogAdminService := modelcatalogadmin.NewService(deps.DB, queries)
 	// enforce 只读：读 admin 自身进程的 env 快照 + observe 期判定分布。
 	capabilityEnforcementService := capabilityadmin.NewEnforcementService(queries, deps.Config.Capability)
 
@@ -159,6 +162,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		CapabilitySyncService:        capabilitySyncService,
 		CapabilitySeedService:        capabilitySeedService,
 		CapabilityEnforcementService: capabilityEnforcementService,
+
+		CatalogService: modelCatalogAdminService,
 
 		DashboardService: dashboardService,
 

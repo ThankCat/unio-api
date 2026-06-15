@@ -28,6 +28,7 @@ type fakeProviderService struct {
 	createErr error
 	updateOut provider.Provider
 	updateErr error
+	deleteErr error
 }
 
 func (s *fakeProviderService) List(context.Context, provider.ListParams) (provider.ListResult, error) {
@@ -42,11 +43,15 @@ func (s *fakeProviderService) Create(context.Context, provider.CreateInput) (pro
 func (s *fakeProviderService) Update(context.Context, provider.UpdateInput) (provider.Provider, error) {
 	return s.updateOut, s.updateErr
 }
+func (s *fakeProviderService) Delete(context.Context, int64) error {
+	return s.deleteErr
+}
 
 type fakeChannelService struct {
 	createOut         channel.Channel
 	createErr         error
 	rotateErr         error
+	deleteErr         error
 	adapterKeyOptions []channel.AdapterKeyOption
 }
 
@@ -65,6 +70,9 @@ func (s *fakeChannelService) Update(context.Context, channel.UpdateInput) (chann
 func (s *fakeChannelService) RotateCredential(context.Context, channel.RotateCredentialInput) error {
 	return s.rotateErr
 }
+func (s *fakeChannelService) Delete(context.Context, int64) error {
+	return s.deleteErr
+}
 func (s *fakeChannelService) AdapterKeyOptions() []channel.AdapterKeyOption {
 	return s.adapterKeyOptions
 }
@@ -77,6 +85,7 @@ type fakeModelService struct {
 	createErr error
 	updateOut model.Model
 	updateErr error
+	deleteErr error
 }
 
 func (s *fakeModelService) List(context.Context, model.ListParams) (model.ListResult, error) {
@@ -90,6 +99,9 @@ func (s *fakeModelService) Create(context.Context, model.CreateInput) (model.Mod
 }
 func (s *fakeModelService) Update(context.Context, model.UpdateInput) (model.Model, error) {
 	return s.updateOut, s.updateErr
+}
+func (s *fakeModelService) Delete(context.Context, int64) error {
+	return s.deleteErr
 }
 
 type fakeChannelModelService struct {
@@ -281,6 +293,47 @@ func TestProvidersRequireToken(t *testing.T) {
 	}
 }
 
+func TestDeleteProviderReturns204(t *testing.T) {
+	handler := newServicesRouter(t, &fakeProviderService{}, nil)
+
+	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/providers/9", "", true)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusNoContent, rec.Code, rec.Body.String())
+	}
+}
+
+// 仍有渠道/被引用时 service 回 conflict，HTTP 层映射为 409，引导改用停用。
+func TestDeleteProviderConflictReturns409(t *testing.T) {
+	handler := newServicesRouter(t, &fakeProviderService{
+		deleteErr: failure.New(failure.CodeAdminConflict, failure.WithMessage("still referenced")),
+	}, nil)
+
+	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/providers/9", "", true)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusConflict, rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteChannelReturns204(t *testing.T) {
+	handler := newServicesRouter(t, nil, &fakeChannelService{})
+
+	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/channels/9", "", true)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusNoContent, rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteChannelConflictReturns409(t *testing.T) {
+	handler := newServicesRouter(t, nil, &fakeChannelService{
+		deleteErr: failure.New(failure.CodeAdminConflict, failure.WithMessage("referenced by billing history")),
+	})
+
+	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/channels/9", "", true)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusConflict, rec.Code, rec.Body.String())
+	}
+}
+
 func TestCreateChannelUnsupportedBindingReturns422(t *testing.T) {
 	handler := newServicesRouter(t, nil, &fakeChannelService{createErr: failure.New(failure.CodeAdminAdapterBindingUnsupported, failure.WithMessage("unsupported"))})
 
@@ -349,6 +402,26 @@ func TestModelsRequireToken(t *testing.T) {
 	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/models", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestDeleteModelReturns204(t *testing.T) {
+	handler := newModelRouter(t, &fakeModelService{})
+
+	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/models/9", "", true)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusNoContent, rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteModelConflictReturns409(t *testing.T) {
+	handler := newModelRouter(t, &fakeModelService{
+		deleteErr: failure.New(failure.CodeAdminConflict, failure.WithMessage("referenced by billing history")),
+	})
+
+	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/models/9", "", true)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusConflict, rec.Code, rec.Body.String())
 	}
 }
 

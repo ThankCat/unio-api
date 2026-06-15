@@ -16,6 +16,7 @@ type ProviderService interface {
 	Get(ctx context.Context, id int64) (provider.Provider, error)
 	Create(ctx context.Context, in provider.CreateInput) (provider.Provider, error)
 	Update(ctx context.Context, in provider.UpdateInput) (provider.Provider, error)
+	Delete(ctx context.Context, id int64) error
 }
 
 // providerDTO 是 provider 的 admin API 响应体。
@@ -125,6 +126,21 @@ func (h *providersHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeData(w, http.StatusOK, toProviderDTO(p))
+}
+
+func (h *providersHandler) delete(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	if err := h.service.Delete(r.Context(), id); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func toProviderDTO(p provider.Provider) providerDTO {

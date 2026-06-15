@@ -19,6 +19,7 @@ type ChannelService interface {
 	Create(ctx context.Context, in channel.CreateInput) (channel.Channel, error)
 	Update(ctx context.Context, in channel.UpdateInput) (channel.Channel, error)
 	RotateCredential(ctx context.Context, in channel.RotateCredentialInput) error
+	Delete(ctx context.Context, id int64) error
 	// AdapterKeyOptions 列出可选 adapter_key 枚举，供前端下拉而非手填。
 	AdapterKeyOptions() []channel.AdapterKeyOption
 }
@@ -220,6 +221,21 @@ func (h *channelsHandler) rotateCredential(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 凭据只写不回；轮换成功返回 204 无响应体。
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *channelsHandler) delete(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	if err := h.service.Delete(r.Context(), id); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 

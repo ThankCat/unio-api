@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteModelCapabilitiesByModel = `-- name: DeleteModelCapabilitiesByModel :exec
+DELETE FROM model_capabilities
+WHERE model_id = $1
+`
+
+// DeleteModelCapabilitiesByModel 清空某模型的全部能力声明（「从目录刷新」整体覆盖前置）。
+func (q *Queries) DeleteModelCapabilitiesByModel(ctx context.Context, modelID int64) error {
+	_, err := q.db.Exec(ctx, deleteModelCapabilitiesByModel, modelID)
+	return err
+}
+
 const deleteModelCapability = `-- name: DeleteModelCapability :exec
 DELETE FROM model_capabilities
 WHERE model_id = $1
@@ -29,7 +40,7 @@ func (q *Queries) DeleteModelCapability(ctx context.Context, arg DeleteModelCapa
 }
 
 const listModelCapabilities = `-- name: ListModelCapabilities :many
-SELECT model_id, capability_key, support_level, limits, source, created_at, updated_at, updated_by
+SELECT model_id, capability_key, support_level, limits, created_at, updated_at, updated_by
 FROM model_capabilities
 WHERE model_id = $1
 ORDER BY capability_key ASC
@@ -50,7 +61,6 @@ func (q *Queries) ListModelCapabilities(ctx context.Context, modelID int64) ([]M
 			&i.CapabilityKey,
 			&i.SupportLevel,
 			&i.Limits,
-			&i.Source,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.UpdatedBy,
@@ -66,7 +76,7 @@ func (q *Queries) ListModelCapabilities(ctx context.Context, modelID int64) ([]M
 }
 
 const listModelsByCapability = `-- name: ListModelsByCapability :many
-SELECT model_id, capability_key, support_level, limits, source, created_at, updated_at, updated_by
+SELECT model_id, capability_key, support_level, limits, created_at, updated_at, updated_by
 FROM model_capabilities
 WHERE capability_key = $1
 ORDER BY model_id ASC
@@ -87,7 +97,6 @@ func (q *Queries) ListModelsByCapability(ctx context.Context, capabilityKey stri
 			&i.CapabilityKey,
 			&i.SupportLevel,
 			&i.Limits,
-			&i.Source,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.UpdatedBy,
@@ -108,7 +117,6 @@ INSERT INTO model_capabilities (
     capability_key,
     support_level,
     limits,
-    source,
     updated_by
 )
 VALUES (
@@ -116,16 +124,14 @@ VALUES (
     $2,
     $3,
     $4,
-    $5,
-    $6
+    $5
 )
 ON CONFLICT (model_id, capability_key) DO UPDATE
 SET support_level = excluded.support_level,
     limits = excluded.limits,
-    source = excluded.source,
     updated_by = excluded.updated_by,
     updated_at = now()
-RETURNING model_id, capability_key, support_level, limits, source, created_at, updated_at, updated_by
+RETURNING model_id, capability_key, support_level, limits, created_at, updated_at, updated_by
 `
 
 type UpsertModelCapabilityParams struct {
@@ -133,18 +139,16 @@ type UpsertModelCapabilityParams struct {
 	CapabilityKey string
 	SupportLevel  string
 	Limits        []byte
-	Source        string
 	UpdatedBy     pgtype.Text
 }
 
-// UpsertModelCapability 写入或覆盖模型能力声明（同步与 admin 用）。
+// UpsertModelCapability 写入或覆盖模型能力声明（admin 与采纳用）。能力已去 source（阶段 14 Q4）。
 func (q *Queries) UpsertModelCapability(ctx context.Context, arg UpsertModelCapabilityParams) (ModelCapability, error) {
 	row := q.db.QueryRow(ctx, upsertModelCapability,
 		arg.ModelID,
 		arg.CapabilityKey,
 		arg.SupportLevel,
 		arg.Limits,
-		arg.Source,
 		arg.UpdatedBy,
 	)
 	var i ModelCapability
@@ -153,7 +157,6 @@ func (q *Queries) UpsertModelCapability(ctx context.Context, arg UpsertModelCapa
 		&i.CapabilityKey,
 		&i.SupportLevel,
 		&i.Limits,
-		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.UpdatedBy,

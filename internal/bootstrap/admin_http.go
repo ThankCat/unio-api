@@ -35,6 +35,8 @@ type adminHTTPDeps struct {
 	CapabilitySeedService        adminapi.CapabilitySeedService
 	CapabilityEnforcementService adminapi.CapabilityEnforcementService
 
+	CatalogService adminapi.CatalogService
+
 	DashboardService adminapi.DashboardService
 
 	RecoveryJobQueryService   adminapi.RecoveryJobQueryService
@@ -66,6 +68,8 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		CapabilitySyncService:        deps.CapabilitySyncService,
 		CapabilitySeedService:        deps.CapabilitySeedService,
 		CapabilityEnforcementService: deps.CapabilityEnforcementService,
+
+		CatalogService: deps.CatalogService,
 
 		DashboardService: deps.DashboardService,
 

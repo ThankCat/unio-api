@@ -14,59 +14,40 @@ func feedFromCanonical(ids ...string) Feed {
 	return Feed{Models: models}
 }
 
-func TestPlanSyncInsertsNewModels(t *testing.T) {
+func TestPlanSyncUpsertsAllFeedEntries(t *testing.T) {
 	plan := PlanSync(feedFromCanonical("deepseek/a", "deepseek/b"), nil)
 
-	if len(plan.Inserts) != 2 || len(plan.Updates) != 0 || len(plan.Conflicts) != 0 || len(plan.Removals) != 0 {
-		t.Fatalf("unexpected plan: %+v", plan)
+	if len(plan.Upserts) != 2 {
+		t.Fatalf("want 2 upserts, got %+v", plan.Upserts)
 	}
-}
-
-func TestPlanSyncUpdatesSeedRows(t *testing.T) {
-	existing := []ExistingModel{
-		{ID: 1, CanonicalID: "deepseek/a", Source: modelSourceSeedModelsDev},
-	}
-	plan := PlanSync(feedFromCanonical("deepseek/a"), existing)
-
-	if len(plan.Updates) != 1 || plan.Updates[0].CanonicalID != "deepseek/a" {
-		t.Fatalf("want update for deepseek/a, got %+v", plan)
-	}
-	if len(plan.Inserts) != 0 || len(plan.Conflicts) != 0 || len(plan.Removals) != 0 {
-		t.Fatalf("unexpected plan: %+v", plan)
-	}
-}
-
-func TestPlanSyncNeverTouchesManualRows(t *testing.T) {
-	existing := []ExistingModel{
-		{ID: 1, CanonicalID: "deepseek/a", Source: modelSourceManual},
-		{ID: 2, CanonicalID: "deepseek/imported", Source: "import"},
-	}
-	plan := PlanSync(feedFromCanonical("deepseek/a"), existing)
-
-	if !reflect.DeepEqual(plan.Conflicts, []string{"deepseek/a"}) {
-		t.Fatalf("want manual conflict for deepseek/a, got %+v", plan.Conflicts)
-	}
-	if len(plan.Updates) != 0 || len(plan.Inserts) != 0 {
-		t.Fatalf("manual row must not be updated/inserted: %+v", plan)
-	}
-	// import 行不在 feed 中，但 source != seed_models_dev，不能标记 removal。
 	if len(plan.Removals) != 0 {
-		t.Fatalf("only seed rows can be removed, got %+v", plan.Removals)
+		t.Fatalf("no removals expected, got %+v", plan.Removals)
 	}
 }
 
-func TestPlanSyncMarksMissingSeedRowsRemoved(t *testing.T) {
-	existing := []ExistingModel{
-		{ID: 1, CanonicalID: "deepseek/gone", Source: modelSourceSeedModelsDev},
-		{ID: 2, CanonicalID: "deepseek/already-gone", Source: modelSourceSeedModelsDev, Removed: true},
-		{ID: 3, CanonicalID: "deepseek/manual-gone", Source: modelSourceManual},
+func TestPlanSyncMarksMissingEntriesRemoved(t *testing.T) {
+	existing := []ExistingCatalogEntry{
+		{CanonicalID: "deepseek/gone"},
+		{CanonicalID: "deepseek/already-gone", Removed: true},
+		{CanonicalID: "deepseek/kept"},
 	}
 	plan := PlanSync(feedFromCanonical("deepseek/kept"), existing)
 
+	// feed 全量都进 Upserts。
+	if len(plan.Upserts) != 1 || plan.Upserts[0].CanonicalID != "deepseek/kept" {
+		t.Fatalf("want upsert for deepseek/kept, got %+v", plan.Upserts)
+	}
+	// 只有「未标记下架且 feed 不含」的条目进 Removals；已下架的不重复标记。
 	if !reflect.DeepEqual(plan.Removals, []string{"deepseek/gone"}) {
 		t.Fatalf("want removal for deepseek/gone only, got %+v", plan.Removals)
 	}
-	if len(plan.Inserts) != 1 || plan.Inserts[0].CanonicalID != "deepseek/kept" {
-		t.Fatalf("want insert for deepseek/kept, got %+v", plan.Inserts)
+}
+
+func TestPlanSyncFeedEntryNeverRemoved(t *testing.T) {
+	existing := []ExistingCatalogEntry{{CanonicalID: "deepseek/a"}}
+	plan := PlanSync(feedFromCanonical("deepseek/a"), existing)
+
+	if len(plan.Removals) != 0 {
+		t.Fatalf("feed entry must not be removed, got %+v", plan.Removals)
 	}
 }
