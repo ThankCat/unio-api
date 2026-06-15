@@ -6,6 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/ThankCat/unio-api/internal/core/billing"
 	"github.com/ThankCat/unio-api/internal/core/capability"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
@@ -103,6 +106,12 @@ type ChatRouteRequest struct {
 	//
 	// 供闸门对 limited 能力做超限判定；零值表示请求未声明档位，limited 一律视为满足。
 	RequestLimits capability.RequestLimits
+
+	// RouteID 是 API Key 绑定的线路 ID（阶段 15）；nil 表示未绑定。
+	RouteID *int64
+	// ProjectDefaultRouteID 是所属项目的默认线路 ID；nil 表示未设。
+	// 线路解析优先级：RouteID ?? ProjectDefaultRouteID ?? 内置「经济」。
+	ProjectDefaultRouteID *int64
 }
 
 // CapabilityObservation 是 capability 闸门对一次 routing 的判定快照，供 observe 记录与未来 enforce 拒绝。
@@ -148,12 +157,20 @@ type ChatRouteCandidate struct {
 	Protocol      string
 	Channel       channel.Runtime
 	UpstreamModel string
+
+	// ChannelPriceID 是该候选当前生效的 channel_prices 行 ID（阶段 15，供审计/快照参考）。
+	ChannelPriceID int64
+	// SalePrice 是该候选命中渠道的当前生效售价向量，供 cheapest 排序与保守预授权上界。
+	SalePrice billing.CustomerPriceSnapshot
 }
 
 // ChatRoutePlan 表示一次 chat 请求的同模型候选计划。
 type ChatRoutePlan struct {
 	RequestedModel string
 	Candidates     []ChatRouteCandidate
+
+	// RouteMode 是本次请求解析出的线路策略（cheapest/stable/fixed），供 lifecycle 候选排序消费（阶段 15）。
+	RouteMode string
 
 	// Capability 是 capability 闸门 observe 判定快照；闸门未启用或无 required 时为 nil。
 	// observe 模式下它不影响 Candidates，仅供调用方审计/持久化与未来 enforce 消费。
@@ -165,6 +182,15 @@ type Store interface {
 	ModelExistsByID(ctx context.Context, requestedModelID string) (bool, error)
 	ProjectCanUseModel(ctx context.Context, arg sqlc.ProjectCanUseModelParams) (bool, error)
 	FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteCandidatesParams) ([]sqlc.FindRouteCandidatesRow, error)
+	GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error)
+	GetBuiltinCheapestRoute(ctx context.Context) (sqlc.Route, error)
+}
+
+// resolvedRoute 是线路解析后的最小事实（候选池 + 策略）。
+type resolvedRoute struct {
+	ID       int64
+	Mode     string
+	PoolKind string
 }
 
 // CredentialDecryptor 把 channel 入库密文解出上游明文 API key。
@@ -221,7 +247,12 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 		)
 	}
 
-	rows, err := r.findCandidateRows(ctx, req)
+	route, err := r.resolveRoute(ctx, req)
+	if err != nil {
+		return ChatRoutePlan{}, err
+	}
+
+	rows, err := r.findCandidateRows(ctx, req, route)
 	if err != nil {
 		return ChatRoutePlan{}, err
 	}
@@ -238,6 +269,7 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 	plan := ChatRoutePlan{
 		RequestedModel: req.ModelID,
 		Candidates:     candidates,
+		RouteMode:      route.Mode,
 	}
 	plan.Capability = r.observeCapability(ctx, req.IngressProtocol, candidates, req.RequiredCapabilities, req.RequestLimits)
 
@@ -340,12 +372,55 @@ func IsSupportedProtocol(protocol string) bool {
 	}
 }
 
-func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest) ([]sqlc.FindRouteCandidatesRow, error) {
-	// TODO(阶段6/production): [GAP-6-005] routing 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束、专属 channel 策略或模型能力闸门；阶段 7 authorization/余额冻结、阶段 12 capability architecture（运行时 capability filter）和阶段 13 项目策略管理前；预算约束进入 reservation，project 禁用和 project_channel policy 进入后台管理策略，capability filter 由阶段 12 实现。
+// resolveRoute 把 Key/项目绑定解析成本次请求的有效线路（候选池 + 策略）。
+// 优先级：Key 线路 ?? 项目默认线路 ?? 内置「经济」；命中但已停用的线路视为未选，继续回落。
+//
+// TODO(阶段15/production): 线路解析每请求读 routes 表（最多 1~3 次点查）；routes 量极小、改动罕见，
+// 后续接入与渠道/能力同款缓存层避免每请求打 DB（PLAN §7）。
+func (r *Router) resolveRoute(ctx context.Context, req ChatRouteRequest) (resolvedRoute, error) {
+	if route, ok := r.loadEnabledRoute(ctx, req.RouteID); ok {
+		return route, nil
+	}
+	if route, ok := r.loadEnabledRoute(ctx, req.ProjectDefaultRouteID); ok {
+		return route, nil
+	}
+
+	builtin, err := r.store.GetBuiltinCheapestRoute(ctx)
+	if err != nil {
+		return resolvedRoute{}, failure.Wrap(
+			failure.CodeRoutingStoreFailed,
+			err,
+			failure.WithMessage("resolve builtin cheapest route"),
+		)
+	}
+	return resolvedRoute{ID: builtin.ID, Mode: builtin.Mode, PoolKind: builtin.PoolKind}, nil
+}
+
+// loadEnabledRoute 读取指定线路；不存在或已停用返回 ok=false 让上层继续回落。
+func (r *Router) loadEnabledRoute(ctx context.Context, id *int64) (resolvedRoute, bool) {
+	if id == nil {
+		return resolvedRoute{}, false
+	}
+	row, err := r.store.GetRouteByID(ctx, *id)
+	if err != nil {
+		// 不存在（理论上被 FK 阻止）或读失败都保守回落，不阻断请求。
+		return resolvedRoute{}, false
+	}
+	if row.Status != "enabled" {
+		return resolvedRoute{}, false
+	}
+	return resolvedRoute{ID: row.ID, Mode: row.Mode, PoolKind: row.PoolKind}, true
+}
+
+func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest, route resolvedRoute) ([]sqlc.FindRouteCandidatesRow, error) {
+	// TODO(阶段6/production): [GAP-6-005] routing 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束或专属 channel 策略；预算约束进入 reservation，project 禁用进入后台管理策略。
 	rows, err := r.store.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: req.ModelID,
 		IngressProtocol:  req.IngressProtocol,
 		ProjectID:        req.ProjectID,
+		PoolKind:         route.PoolKind,
+		RouteID:          route.ID,
+		AtTime:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
 	})
 	if err != nil {
 		return nil, failure.Wrap(
@@ -442,6 +517,18 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 			Timeout:      timeout,
 			ProviderSlug: row.ProviderSlug,
 		},
-		UpstreamModel: row.UpstreamModel,
+		UpstreamModel:  row.UpstreamModel,
+		ChannelPriceID: row.ChannelPriceID,
+		SalePrice: billing.CustomerPriceSnapshot{
+			Currency:               row.PriceCurrency,
+			PricingUnit:            row.PricePricingUnit,
+			UncachedInputPrice:     row.UncachedInputPrice,
+			CacheReadInputPrice:    row.CacheReadInputPrice,
+			CacheWrite5mInputPrice: row.CacheWrite5mInputPrice,
+			CacheWrite1hInputPrice: row.CacheWrite1hInputPrice,
+			OutputPrice:            row.OutputPrice,
+			ReasoningOutputPrice:   row.ReasoningOutputPrice,
+			FormulaVersion:         billing.FormulaVersionV1,
+		},
 	}, nil
 }

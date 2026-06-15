@@ -18,14 +18,14 @@ import (
 	capabilityadmin "github.com/ThankCat/unio-api/internal/service/admin/capability"
 	"github.com/ThankCat/unio-api/internal/service/admin/channel"
 	"github.com/ThankCat/unio-api/internal/service/admin/channelmodel"
-	"github.com/ThankCat/unio-api/internal/service/admin/costprice"
+	"github.com/ThankCat/unio-api/internal/service/admin/channelprice"
 	"github.com/ThankCat/unio-api/internal/service/admin/customer"
 	"github.com/ThankCat/unio-api/internal/service/admin/dashboard"
 	"github.com/ThankCat/unio-api/internal/service/admin/model"
 	modelcatalogadmin "github.com/ThankCat/unio-api/internal/service/admin/modelcatalog"
-	"github.com/ThankCat/unio-api/internal/service/admin/price"
 	"github.com/ThankCat/unio-api/internal/service/admin/provider"
 	"github.com/ThankCat/unio-api/internal/service/admin/query"
+	adminroute "github.com/ThankCat/unio-api/internal/service/admin/route"
 )
 
 // AdminServerAppDB 定义 admin server app 构建时需要的数据库能力。
@@ -100,8 +100,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	channelService := channel.NewService(queries, cipher, adapterRegistry)
 	modelService := model.NewService(queries)
 	channelModelService := channelmodel.NewService(queries)
-	costPriceService := costprice.NewService(queries)
-	priceService := price.NewService(queries)
+	channelPriceService := channelprice.NewService(queries)
+	routeService := adminroute.NewService(deps.DB, queries)
 
 	// M6 只读查询台：请求记录 / 用量 / 账本，三个只读 service 共用同一 sqlc Queries。
 	requestQueryService := query.NewRequestService(queries)
@@ -148,8 +148,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		ChannelService:      channelService,
 		ModelService:        modelService,
 		ChannelModelService: channelModelService,
-		CostPriceService:    costPriceService,
-		PriceService:        priceService,
+		ChannelPriceService: channelPriceService,
+		RouteService:        routeService,
 		RequestQueryService: requestQueryService,
 		UsageQueryService:   usageQueryService,
 		LedgerQueryService:  ledgerQueryService,

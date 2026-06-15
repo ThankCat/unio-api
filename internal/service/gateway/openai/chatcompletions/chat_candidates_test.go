@@ -73,7 +73,7 @@ func TestPrepareChatCandidatesUsesEachAdapterTokenizerAndMaximumEstimate(t *test
 		routeCandidate("primary", 101, "primary-model"),
 		routeCandidate("filtered", 102, "filtered-model"),
 		routeCandidate("backup", 103, "backup-model"),
-	}, false)
+	}, "", false)
 	if err != nil {
 		t.Fatalf("prepareChatCandidates returned error: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestPrepareChatCandidatesWrapsTokenizerFailure(t *testing.T) {
 
 	_, err := service.prepareChatCandidates(context.Background(), chatRequest(), []routing.ChatRouteCandidate{
 		routeCandidate("deepseek", 101, "deepseek-v4-flash"),
-	}, false)
+	}, "", false)
 	if !errors.Is(err, tokenizeErr) {
 		t.Fatalf("expected wrapped tokenizer error, got %v", err)
 	}

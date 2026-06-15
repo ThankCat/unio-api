@@ -10,7 +10,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
-func (s *MessagesService) prepareMessageCandidates(ctx context.Context, req gatewayapi.MessageRequest, candidates []routing.ChatRouteCandidate, stream bool) (lifecycle.CandidatePlan, error) {
+func (s *MessagesService) prepareMessageCandidates(ctx context.Context, req gatewayapi.MessageRequest, candidates []routing.ChatRouteCandidate, mode string, stream bool) (lifecycle.CandidatePlan, error) {
 	capabilities := []lifecycle.AdapterCapability{
 		lifecycle.AdapterCapabilityInputTokenizer,
 	}
@@ -26,6 +26,8 @@ func (s *MessagesService) prepareMessageCandidates(ctx context.Context, req gate
 		Capabilities:        capabilities,
 		Available:           s.candidateAvailable,
 		EstimateInputTokens: s.messagesInputTokenEstimator(req),
+		Mode:                mode,
+		ChannelHealthScore:  s.channelHealthScore,
 	})
 }
 

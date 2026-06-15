@@ -3,14 +3,12 @@ package lifecycle
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/billing"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -44,9 +42,14 @@ type ChatAuthorizer interface {
 // ChatAuthorizeParams 表示一次 chat 请求冻结余额所需的业务事实。
 // 它由协议 service 在 request record 和保守 fallback plan 创建后组装。
 type ChatAuthorizeParams struct {
-	RequestRecord       requestlog.RequestRecord
-	Principal           *auth.APIKeyPrincipal
-	ModelDBID           int64
+	RequestRecord requestlog.RequestRecord
+	Principal     *auth.APIKeyPrincipal
+
+	// CandidatePrices 是本次请求保守 fallback 候选池各命中渠道的当前售价（阶段 15）。
+	// 下单时最终渠道未定（可能 fallback），冻结取「按本次 token 估算最贵」的一条候选售价做上界，
+	// 保证实际命中任一候选都不会超过冻结额（cheapest 命中只会更便宜）。
+	CandidatePrices []billing.CustomerPriceSnapshot
+
 	InputTokens         int64
 	MaxCompletionTokens int64
 }
@@ -62,18 +65,15 @@ type ChatReleaseBillingExceptionParams struct {
 
 // ChatAuthorization 表示一次已经创建成功地请求级资金冻结。
 // ReservationID 后续交给 settlement，用来 capture 同一笔冻结资金。
+//
+// 阶段 15：authorization 只负责「保守冻结」，不再锁定结算售价；最终收入由 settlement
+// 按实际命中渠道重查 channel_prices 决定（见 settlement.go）。
 type ChatAuthorization struct {
 	ReservationID    int64
 	RequestRecordID  int64
 	EstimatedAmount  pgtype.Numeric
 	AuthorizedAmount pgtype.Numeric
 	Currency         string
-
-	// PriceID 是 authorization 时读取到的 prices.id，后续写入 price_snapshots.price_id。
-	PriceID int64
-
-	// Price 是 authorization 时使用的售卖价副本，后续 settlement 用它计算最终费用。
-	Price billing.CustomerPriceSnapshot
 }
 
 // ChatReleaseAuthorizationParams 表示释放一次冻结余额所需参数。
@@ -81,11 +81,6 @@ type ChatAuthorization struct {
 type ChatReleaseAuthorizationParams struct {
 	RequestRecordID int64
 	ReservationID   int64
-}
-
-// ChatAuthorizationPriceStore 定义读取当前有效价格的能力。
-type ChatAuthorizationPriceStore interface {
-	FindActivePriceForModel(ctx context.Context, arg sqlc.FindActivePriceForModelParams) (sqlc.Price, error)
 }
 
 // ChatAuthorizationBilling 定义冻结金额估算能力。
@@ -104,16 +99,12 @@ type ChatAuthorizationLedger interface {
 
 // ChatAuthorizationService 负责 chat 请求调用上游前的余额冻结。
 type ChatAuthorizationService struct {
-	priceStore ChatAuthorizationPriceStore
-	billing    ChatAuthorizationBilling
-	ledger     ChatAuthorizationLedger
+	billing ChatAuthorizationBilling
+	ledger  ChatAuthorizationLedger
 }
 
 // NewChatAuthorizationService 创建 chat 余额冻结 service。
-func NewChatAuthorizationService(priceStore ChatAuthorizationPriceStore, billing ChatAuthorizationBilling, ledger ChatAuthorizationLedger) *ChatAuthorizationService {
-	if priceStore == nil {
-		panic("gateway: chat authorization price store is required")
-	}
+func NewChatAuthorizationService(billing ChatAuthorizationBilling, ledger ChatAuthorizationLedger) *ChatAuthorizationService {
 	if billing == nil {
 		panic("gateway: chat authorization billing is required")
 	}
@@ -122,50 +113,47 @@ func NewChatAuthorizationService(priceStore ChatAuthorizationPriceStore, billing
 	}
 
 	return &ChatAuthorizationService{
-		priceStore: priceStore,
-		billing:    billing,
-		ledger:     ledger,
+		billing: billing,
+		ledger:  ledger,
 	}
 }
 
 // AuthorizeChat 在调用上游前冻结本次请求的预估费用。
-// 最终扣费仍以 settlement 阶段的真实 usage 为准。
+// 最终扣费仍以 settlement 阶段的真实 usage + 实际命中渠道售价为准。
 func (s *ChatAuthorizationService) AuthorizeChat(ctx context.Context, params ChatAuthorizeParams) (ChatAuthorization, error) {
-	now := time.Now()
-
-	// 冻结余额只读取当前生效价格；price snapshot 留给成功 settlement 创建。
-	price, err := s.priceStore.FindActivePriceForModel(ctx, sqlc.FindActivePriceForModelParams{
-		ModelID: params.ModelDBID,
-		AtTime:  pgtype.Timestamptz{Time: now, Valid: true},
-	})
-	if err != nil {
-		return ChatAuthorization{}, failure.Wrap(
+	if len(params.CandidatePrices) == 0 {
+		return ChatAuthorization{}, failure.New(
 			failure.CodeGatewayChatAuthorizationFailed,
-			err,
-			failure.WithMessage("find active price for chat authorization"),
+			failure.WithMessage("chat authorization requires at least one candidate price"),
 		)
 	}
 
-	authorizationPrice := customerPriceSnapshotFromActivePrice(price)
+	estimate := billing.AuthorizationEstimate{
+		InputTokens:         params.InputTokens,
+		MaxCompletionTokens: params.MaxCompletionTokens,
+	}
 
-	// 这里是控损估算，不是最终 usage；但价格必须和最终 settlement 使用同一份。
-	settlement, err := s.billing.EstimateAuthorizationAmount(
-		billing.AuthorizationEstimate{
-			InputTokens:         params.InputTokens,
-			MaxCompletionTokens: params.MaxCompletionTokens,
-		},
-		authorizationPrice,
-	)
-	if err != nil {
-		return ChatAuthorization{}, err
+	// 保守上界：在候选池里取「按本次 token 估算」最贵的一条售价做冻结。
+	// 命中任一候选只会 <= 该额度，避免 fallback 到更贵渠道时预冻结不足。
+	var worst billing.CustomerCharge
+	found := false
+	for _, price := range params.CandidatePrices {
+		charge, err := s.billing.EstimateAuthorizationAmount(estimate, price)
+		if err != nil {
+			return ChatAuthorization{}, err
+		}
+		if !found || chatSettlementNumericGreaterThan(charge.Amount, worst.Amount) {
+			worst = charge
+			found = true
+		}
 	}
 
 	// 用 request_record_id 做幂等边界，避免同一请求重复冻结余额。
 	reservation, err := s.ledger.PreAuthorize(ctx, ledger.PreAuthorizeParams{
 		UserID:          params.Principal.UserID,
 		RequestRecordID: params.RequestRecord.ID,
-		EstimatedAmount: settlement.Amount,
-		Currency:        settlement.Currency,
+		EstimatedAmount: worst.Amount,
+		Currency:        worst.Currency,
 		IdempotencyKey:  fmt.Sprintf("chat:authorize:%d", params.RequestRecord.ID),
 		Reason:          "chat completion authorization",
 	})
@@ -179,8 +167,6 @@ func (s *ChatAuthorizationService) AuthorizeChat(ctx context.Context, params Cha
 		EstimatedAmount:  reservation.EstimatedAmount,
 		AuthorizedAmount: reservation.AuthorizedAmount,
 		Currency:         reservation.Currency,
-		PriceID:          price.ID,
-		Price:            authorizationPrice,
 	}, nil
 }
 
@@ -207,20 +193,4 @@ func (s *ChatAuthorizationService) ReleaseChatForBillingException(ctx context.Co
 		Reason:          params.Reason,
 	})
 	return err
-}
-
-// customerPriceSnapshotFromActivePrice 把当前生效售价转换为冻结和结算共用的客户售价快照。
-// 这样请求过程中价格变化时，最终扣费仍使用 authorization 时看到的同一份价格。
-func customerPriceSnapshotFromActivePrice(price sqlc.Price) billing.CustomerPriceSnapshot {
-	return billing.CustomerPriceSnapshot{
-		Currency:               price.Currency,
-		PricingUnit:            price.PricingUnit,
-		UncachedInputPrice:     price.UncachedInputPrice,
-		CacheReadInputPrice:    price.CacheReadInputPrice,
-		CacheWrite5mInputPrice: price.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice: price.CacheWrite1hInputPrice,
-		OutputPrice:            price.OutputPrice,
-		ReasoningOutputPrice:   price.ReasoningOutputPrice,
-		FormulaVersion:         billing.FormulaVersionV1,
-	}
 }

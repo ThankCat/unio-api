@@ -189,21 +189,18 @@ WHERE model_id = sqlc.arg(model_id);
 
 -- name: DeleteModelCascade :execrows
 -- DeleteModelCascade 物理删除 model，用于清理录错且从未使用的脏数据，并在同一条语句内
--- 级联清理 model 自身的配置子表：prices（客户售价）、channel_models（模型绑定）、
--- channel_cost_prices（成本价）；model_capabilities、project_model_policies、model_catalog_links
+-- 级联清理 model 自身的配置子表：channel_prices（渠道-模型价）、channel_models（模型绑定）；
+-- model_capabilities、project_model_policies、model_catalog_links
 -- 由 ON DELETE CASCADE 自动清理，无需在此显式删除。
 -- 外键均为默认 NO ACTION（约束在语句末校验），故 CTE 删子表 + 删主体在单条语句内原子完成：
 -- 子配置先删除，语句末 models 的删除不会留下悬挂引用。若 model 或其子配置仍被请求/账务快照
 -- （cost_snapshots/price_snapshots/settlement_recovery_jobs 等）引用，整条语句报 23503 全部回滚，
 -- 上层降级为 conflict，提示改用停用。返回值为 models 行的受影响数（0 表示 model 不存在）。
-WITH deleted_prices AS (
-    DELETE FROM prices WHERE prices.model_id = sqlc.arg(id)
+WITH deleted_channel_prices AS (
+    DELETE FROM channel_prices WHERE channel_prices.model_id = sqlc.arg(id)
 ),
 deleted_channel_models AS (
     DELETE FROM channel_models WHERE channel_models.model_id = sqlc.arg(id)
-),
-deleted_channel_cost_prices AS (
-    DELETE FROM channel_cost_prices WHERE channel_cost_prices.model_id = sqlc.arg(id)
 )
 DELETE FROM models WHERE models.id = sqlc.arg(id);
 

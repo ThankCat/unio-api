@@ -28,7 +28,7 @@ func (q *Queries) CountProjects(ctx context.Context, userID pgtype.Int8) (int64,
 const createProject = `-- name: CreateProject :one
 INSERT INTO projects (user_id, name)
 VALUES ($1, $2)
-RETURNING id, user_id, name, created_at, updated_at
+RETURNING id, user_id, name, created_at, updated_at, default_route_id
 `
 
 type CreateProjectParams struct {
@@ -46,18 +46,20 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DefaultRouteID,
 	)
 	return i, err
 }
 
 const getProjectByID = `-- name: GetProjectByID :one
-SELECT id, user_id, name, created_at, updated_at
+SELECT id, user_id, name, created_at, updated_at, default_route_id
 FROM projects
 WHERE id = $1
 LIMIT 1
 `
 
-// GetProjectByID 供 admin 按 id 读取项目。
+// GetProjectByID 供 admin 按 id 读取项目（带项目级默认线路）。
+// 列顺序与 projects 表物理顺序一致，使 sqlc 复用 Project 模型类型。
 func (q *Queries) GetProjectByID(ctx context.Context, id int64) (Project, error) {
 	row := q.db.QueryRow(ctx, getProjectByID, id)
 	var i Project
@@ -67,12 +69,13 @@ func (q *Queries) GetProjectByID(ctx context.Context, id int64) (Project, error)
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DefaultRouteID,
 	)
 	return i, err
 }
 
 const getProjectForUser = `-- name: GetProjectForUser :one
-SELECT id, user_id, name, created_at, updated_at
+SELECT id, user_id, name, created_at, updated_at, default_route_id
 FROM projects
 WHERE id = $1
 AND user_id = $2
@@ -94,12 +97,13 @@ func (q *Queries) GetProjectForUser(ctx context.Context, arg GetProjectForUserPa
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DefaultRouteID,
 	)
 	return i, err
 }
 
 const listProjectsPage = `-- name: ListProjectsPage :many
-SELECT id, user_id, name, created_at, updated_at
+SELECT id, user_id, name, created_at, updated_at, default_route_id
 FROM projects
 WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
 ORDER BY id DESC
@@ -128,6 +132,7 @@ func (q *Queries) ListProjectsPage(ctx context.Context, arg ListProjectsPagePara
 			&i.Name,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DefaultRouteID,
 		); err != nil {
 			return nil, err
 		}
@@ -137,4 +142,31 @@ func (q *Queries) ListProjectsPage(ctx context.Context, arg ListProjectsPagePara
 		return nil, err
 	}
 	return items, nil
+}
+
+const setProjectDefaultRoute = `-- name: SetProjectDefaultRoute :one
+UPDATE projects
+SET default_route_id = $1, updated_at = now()
+WHERE id = $2
+RETURNING id, user_id, name, created_at, updated_at, default_route_id
+`
+
+type SetProjectDefaultRouteParams struct {
+	DefaultRouteID pgtype.Int8
+	ID             int64
+}
+
+// SetProjectDefaultRoute 设置/清除项目默认线路；default_route_id 为 NULL 表示回落内置经济。
+func (q *Queries) SetProjectDefaultRoute(ctx context.Context, arg SetProjectDefaultRouteParams) (Project, error) {
+	row := q.db.QueryRow(ctx, setProjectDefaultRoute, arg.DefaultRouteID, arg.ID)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DefaultRouteID,
+	)
+	return i, err
 }

@@ -18,8 +18,8 @@ type adminHTTPDeps struct {
 	ChannelService      adminapi.ChannelService
 	ModelService        adminapi.ModelService
 	ChannelModelService adminapi.ChannelModelService
-	CostPriceService    adminapi.CostPriceService
-	PriceService        adminapi.PriceService
+	ChannelPriceService adminapi.ChannelPriceService
+	RouteService        adminapi.RouteService
 
 	RequestQueryService adminapi.RequestQueryService
 	UsageQueryService   adminapi.UsageQueryService
@@ -54,8 +54,8 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		ChannelService:      deps.ChannelService,
 		ModelService:        deps.ModelService,
 		ChannelModelService: deps.ChannelModelService,
-		CostPriceService:    deps.CostPriceService,
-		PriceService:        deps.PriceService,
+		ChannelPriceService: deps.ChannelPriceService,
+		RouteService:        deps.RouteService,
 		RequestQueryService: deps.RequestQueryService,
 		UsageQueryService:   deps.UsageQueryService,
 		LedgerQueryService:  deps.LedgerQueryService,

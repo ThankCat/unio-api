@@ -19,3 +19,7 @@ func (s *MessagesService) breakerAllow(channelKey string) bool {
 func (s *MessagesService) recordChannelHealth(channelKey string, err error) {
 	s.lifecycle.RecordChannelHealth(channelKey, err)
 }
+
+func (s *MessagesService) channelHealthScore(channelKey string) float64 {
+	return s.lifecycle.ChannelHealthScore(channelKey)
+}

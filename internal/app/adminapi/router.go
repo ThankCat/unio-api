@@ -24,8 +24,10 @@ type RouterDeps struct {
 	ChannelService      ChannelService
 	ModelService        ModelService
 	ChannelModelService ChannelModelService
-	CostPriceService    CostPriceService
-	PriceService        PriceService
+
+	// 阶段 15：渠道-模型价（售价+成本合并）+ 线路（渠道商品）。
+	ChannelPriceService ChannelPriceService
+	RouteService        RouteService
 
 	// M6 只读查询台
 	RequestQueryService RequestQueryService
@@ -126,20 +128,23 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Delete("/channels/{id}/models/{modelId}", cmh.delete)
 		}
 
-		if deps.CostPriceService != nil {
-			cph := &costPricesHandler{service: deps.CostPriceService}
-			// 成本价挂在 channel 下；价格不可删，PATCH 调窗口/启停用价格 id 定位。
-			r.Get("/channels/{id}/cost-prices", cph.list)
-			r.Post("/channels/{id}/cost-prices", cph.create)
-			r.Patch("/cost-prices/{id}", cph.update)
+		if deps.ChannelPriceService != nil {
+			cph := &channelPricesHandler{service: deps.ChannelPriceService}
+			// 阶段 15：渠道-模型价（售价+成本同表）挂在 channel 下；价格不可删，PATCH 调窗口/启停用价格 id 定位。
+			r.Get("/channels/{id}/prices", cph.list)
+			r.Post("/channels/{id}/models/{modelId}/prices", cph.create)
+			r.Patch("/channel-prices/{id}", cph.update)
 		}
 
-		if deps.PriceService != nil {
-			prh := &pricesHandler{service: deps.PriceService}
-			// 客户售价挂在 model 下；价格不可删，PATCH 调窗口/启停用价格 id 定位。
-			r.Get("/models/{id}/prices", prh.list)
-			r.Post("/models/{id}/prices", prh.create)
-			r.Patch("/prices/{id}", prh.update)
+		if deps.RouteService != nil {
+			rh := &routesHandler{service: deps.RouteService}
+			// 线路（渠道商品）：内置经济/稳定只读，自定义线路 CRUD + 渠道池设置。
+			r.Get("/routes", rh.list)
+			r.Post("/routes", rh.create)
+			r.Get("/routes/{id}", rh.get)
+			r.Patch("/routes/{id}", rh.update)
+			r.Delete("/routes/{id}", rh.delete)
+			r.Put("/routes/{id}/channels", rh.setChannels)
 		}
 
 		if deps.ModelService != nil {
@@ -199,6 +204,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 			pjh := &projectsHandler{service: deps.ProjectService}
 			r.Get("/projects", pjh.list)
 			r.Get("/projects/{id}", pjh.get)
+			// 阶段 15：设置项目默认线路。
+			r.Patch("/projects/{id}", pjh.update)
 		}
 
 		if deps.APIKeyService != nil {

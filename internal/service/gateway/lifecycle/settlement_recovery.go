@@ -108,14 +108,22 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 	if err := ValidateChatSettlementFacts(params); err != nil {
 		return sqlc.SettlementRecoveryJob{}, err
 	}
-	if params.Authorization.PriceID <= 0 {
-		return sqlc.SettlementRecoveryJob{}, failure.New(
+
+	// 阶段 15：补偿任务记录命中渠道的售价（审计快照 + price_id 指向 channel_prices）。
+	// worker 重放 settlement 时会按 (channel, model, attemptStart) 重查同源价，故存储列仅作审计基线。
+	channelPrice, err := s.queries.FindActiveChannelPrice(ctx, sqlc.FindActiveChannelPriceParams{
+		ChannelID: params.FinalChannelID,
+		ModelID:   params.ModelDBID,
+		AtTime:    pgtype.Timestamptz{Time: params.AttemptRecord.StartedAt, Valid: true},
+	})
+	if err != nil {
+		return sqlc.SettlementRecoveryJob{}, failure.Wrap(
 			failure.CodeGatewayChatSettlementFailed,
-			failure.WithMessage("chat settlement recovery missing authorization price id"),
+			err,
+			failure.WithMessage("find active channel price for settlement recovery job"),
 		)
 	}
 
-	price := params.Authorization.Price
 	facts := params.Facts
 	serverWebSearchRequests, serverWebFetchRequests := settlementRecoveryServerToolQuantities(facts.Usage.ServerToolUsage)
 	job, err := s.queries.CreateSettlementRecoveryJob(ctx, sqlc.CreateSettlementRecoveryJobParams{
@@ -152,16 +160,16 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 		UsageServerWebFetchRequests:       serverWebFetchRequests,
 		UsageSource:                       string(facts.UsageSource),
 		UsageMappingVersion:               facts.UsageMappingVersion,
-		PriceID:                           params.Authorization.PriceID,
-		Currency:                          price.Currency,
-		PricingUnit:                       price.PricingUnit,
-		UncachedInputPrice:                price.UncachedInputPrice,
-		CacheReadInputPrice:               price.CacheReadInputPrice,
-		CacheWrite5mInputPrice:            price.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:            price.CacheWrite1hInputPrice,
-		OutputPrice:                       price.OutputPrice,
-		ReasoningOutputPrice:              price.ReasoningOutputPrice,
-		FormulaVersion:                    price.FormulaVersion,
+		PriceID:                           channelPrice.ID,
+		Currency:                          channelPrice.Currency,
+		PricingUnit:                       channelPrice.PricingUnit,
+		UncachedInputPrice:                channelPrice.UncachedInputPrice,
+		CacheReadInputPrice:               channelPrice.CacheReadInputPrice,
+		CacheWrite5mInputPrice:            channelPrice.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:            channelPrice.CacheWrite1hInputPrice,
+		OutputPrice:                       channelPrice.OutputPrice,
+		ReasoningOutputPrice:              channelPrice.ReasoningOutputPrice,
+		FormulaVersion:                    billing.FormulaVersionV1,
 		EstimatedAmount:                   params.Authorization.EstimatedAmount,
 		AuthorizedAmount:                  params.Authorization.AuthorizedAmount,
 		NextRunAt: pgtype.Timestamptz{
@@ -280,18 +288,6 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 			EstimatedAmount:  job.EstimatedAmount,
 			AuthorizedAmount: job.AuthorizedAmount,
 			Currency:         job.Currency,
-			PriceID:          job.PriceID,
-			Price: billing.CustomerPriceSnapshot{
-				Currency:               job.Currency,
-				PricingUnit:            job.PricingUnit,
-				UncachedInputPrice:     job.UncachedInputPrice,
-				CacheReadInputPrice:    job.CacheReadInputPrice,
-				CacheWrite5mInputPrice: job.CacheWrite5mInputPrice,
-				CacheWrite1hInputPrice: job.CacheWrite1hInputPrice,
-				OutputPrice:            job.OutputPrice,
-				ReasoningOutputPrice:   job.ReasoningOutputPrice,
-				FormulaVersion:         job.FormulaVersion,
-			},
 		},
 		ResponseProtocol: requestlog.Protocol(job.ResponseProtocol),
 		ResponseID:       job.ResponseID,

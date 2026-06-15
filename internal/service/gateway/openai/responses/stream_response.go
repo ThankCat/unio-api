@@ -59,12 +59,14 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 
 	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
 	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
-		ProjectID:            principal.ProjectID,
-		ModelID:              req.Model,
-		IngressProtocol:      routing.ProtocolOpenAI,
-		Operation:            routing.OperationResponses,
-		RequiredCapabilities: requiredCapabilities,
-		RequestLimits:        gatewayapi.RequestLimits(req),
+		ProjectID:             principal.ProjectID,
+		ModelID:               req.Model,
+		IngressProtocol:       routing.ProtocolOpenAI,
+		Operation:             routing.OperationResponses,
+		RequiredCapabilities:  requiredCapabilities,
+		RequestLimits:         gatewayapi.RequestLimits(req),
+		RouteID:               principal.RouteID,
+		ProjectDefaultRouteID: principal.ProjectDefaultRouteID,
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)
 	// 闸门判定（含 enforce 拒绝）先落审计列，再处理路由错误：observation 在 enforce 拒绝时仍随 plan 返回。
@@ -74,17 +76,16 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		return err
 	}
 
-	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, true, true)
+	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, plan.RouteMode, true, true)
 	if err != nil {
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
 	}
 
-	firstCandidate := candidatePlan.Candidates[0].Route
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:       requestRecord,
 		Principal:           principal,
-		ModelDBID:           firstCandidate.ModelDBID,
+		CandidatePrices:     candidatePlan.CandidateSalePrices(),
 		InputTokens:         candidatePlan.ConservativeInputTokens,
 		MaxCompletionTokens: estimateMaxCompletionTokens(req),
 	})

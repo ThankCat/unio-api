@@ -3,6 +3,7 @@ package sqlc_test
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"os"
 	"testing"
 	"time"
@@ -10,8 +11,22 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// numeric / timestamptz / nullTimestamptz 是 sqlc 测试共享的 pgtype 构造助手。
+func numeric(value int64) pgtype.Numeric {
+	return pgtype.Numeric{Int: big.NewInt(value), Exp: 0, Valid: true}
+}
+
+func timestamptz(t time.Time) pgtype.Timestamptz {
+	return pgtype.Timestamptz{Time: t, Valid: true}
+}
+
+func nullTimestamptz() pgtype.Timestamptz {
+	return pgtype.Timestamptz{Valid: false}
+}
 
 // newModelChannelTestTx 创建带回滚事务的 sqlc 查询对象，避免测试数据污染本地数据库。
 func newModelChannelTestTx(t *testing.T) (context.Context, pgx.Tx, *sqlc.Queries, func()) {
@@ -373,11 +388,13 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 	insertChannelModel(t, ctx, tx, disabledMappingChannelID, modelID, "gpt-routing-disabled-mapping", "disabled")
 	insertChannelModel(t, ctx, tx, disabledProviderChannelID, modelID, "gpt-routing-disabled-provider", "enabled")
 
-	got, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
-		RequestedModelID: requestedModel,
-		IngressProtocol:  "openai",
-		ProjectID:        1,
-	})
+	// 阶段 15：FindRouteCandidates 只返回「已定价」渠道，给 3 条预期候选各配一条 enabled 渠道-模型价。
+	now := time.Now().UTC()
+	createChannelPriceForTest(t, ctx, queries, fallbackChannelID, modelID, now)
+	createChannelPriceForTest(t, ctx, queries, primaryChannelID, modelID, now)
+	createChannelPriceForTest(t, ctx, queries, secondaryChannelID, modelID, now)
+
+	got, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(requestedModel, 1))
 	if err != nil {
 		t.Fatalf("find route candidates: %v", err)
 	}
@@ -418,11 +435,7 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 	disabledModelID := insertModel(t, ctx, tx, disabledModel, "openai", "disabled")
 	insertChannelModel(t, ctx, tx, primaryChannelID, disabledModelID, "gpt-routing-disabled-model", "enabled")
 
-	disabledModelCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
-		RequestedModelID: disabledModel,
-		IngressProtocol:  "openai",
-		ProjectID:        1,
-	})
+	disabledModelCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(disabledModel, 1))
 	if err != nil {
 		t.Fatalf("find disabled model candidates: %v", err)
 	}
@@ -430,11 +443,7 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 		t.Fatalf("expected disabled model to have no candidates, got %d", len(disabledModelCandidates))
 	}
 
-	unknownCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
-		RequestedModelID: fmt.Sprintf("openai/routing-unknown-%d", suffix),
-		IngressProtocol:  "openai",
-		ProjectID:        1,
-	})
+	unknownCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(fmt.Sprintf("openai/routing-unknown-%d", suffix), 1))
 	if err != nil {
 		t.Fatalf("find unknown model candidates: %v", err)
 	}
@@ -463,6 +472,10 @@ func TestProjectModelPolicyDeniedFiltersCatalogAndRouting(t *testing.T) {
 	insertChannelModel(t, ctx, tx, channelID, deniedModelID, "policy-denied", "enabled")
 	insertProjectModelPolicy(t, ctx, tx, projectID, deniedModelID, "denied")
 
+	// 阶段 15：已定价过滤——给可见/被拒模型各配价，确保候选差异来自策略而非缺价。
+	createChannelPriceForTest(t, ctx, queries, channelID, visibleModelID, time.Now().UTC())
+	createChannelPriceForTest(t, ctx, queries, channelID, deniedModelID, time.Now().UTC())
+
 	models, err := queries.ListAvailableModelsForProject(ctx, projectID)
 	if err != nil {
 		t.Fatalf("list available models for denied policy: %v", err)
@@ -474,11 +487,7 @@ func TestProjectModelPolicyDeniedFiltersCatalogAndRouting(t *testing.T) {
 		t.Fatalf("expected denied model %q to be filtered from catalog, got %#v", deniedModel, models)
 	}
 
-	visibleCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
-		RequestedModelID: visibleModel,
-		IngressProtocol:  "openai",
-		ProjectID:        projectID,
-	})
+	visibleCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(visibleModel, projectID))
 	if err != nil {
 		t.Fatalf("find visible route candidates: %v", err)
 	}
@@ -486,11 +495,7 @@ func TestProjectModelPolicyDeniedFiltersCatalogAndRouting(t *testing.T) {
 		t.Fatalf("expected visible model to have 1 candidate, got %d: %#v", len(visibleCandidates), visibleCandidates)
 	}
 
-	deniedCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
-		RequestedModelID: deniedModel,
-		IngressProtocol:  "openai",
-		ProjectID:        projectID,
-	})
+	deniedCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(deniedModel, projectID))
 	if err != nil {
 		t.Fatalf("find denied route candidates: %v", err)
 	}
@@ -519,6 +524,10 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 	inheritedModelID := insertModel(t, ctx, tx, inheritedModel, "openai", "enabled")
 	insertChannelModel(t, ctx, tx, channelID, inheritedModelID, "policy-inherited", "enabled")
 
+	// 阶段 15：已定价过滤——给允许/继承模型各配价，确保候选差异来自 allow-list 而非缺价。
+	createChannelPriceForTest(t, ctx, queries, channelID, allowedModelID, time.Now().UTC())
+	createChannelPriceForTest(t, ctx, queries, channelID, inheritedModelID, time.Now().UTC())
+
 	models, err := queries.ListAvailableModelsForProject(ctx, projectID)
 	if err != nil {
 		t.Fatalf("list available models for allow-list policy: %v", err)
@@ -530,11 +539,7 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 		t.Fatalf("expected inherited model %q to be filtered in allow-list mode, got %#v", inheritedModel, models)
 	}
 
-	allowedCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
-		RequestedModelID: allowedModel,
-		IngressProtocol:  "openai",
-		ProjectID:        projectID,
-	})
+	allowedCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(allowedModel, projectID))
 	if err != nil {
 		t.Fatalf("find allowed route candidates: %v", err)
 	}
@@ -542,16 +547,46 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 		t.Fatalf("expected allowed model to have 1 candidate, got %d: %#v", len(allowedCandidates), allowedCandidates)
 	}
 
-	inheritedCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
-		RequestedModelID: inheritedModel,
-		IngressProtocol:  "openai",
-		ProjectID:        projectID,
-	})
+	inheritedCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(inheritedModel, projectID))
 	if err != nil {
 		t.Fatalf("find inherited route candidates: %v", err)
 	}
 	if len(inheritedCandidates) != 0 {
 		t.Fatalf("expected inherited model to have no candidates in allow-list mode, got %d: %#v", len(inheritedCandidates), inheritedCandidates)
+	}
+}
+
+// createChannelPriceForTest 创建一条 enabled 渠道-模型价（售价 2/8，无成本），供路由「已定价」过滤与计费测试。
+// effective_from 取 at-1h、effective_to 为空，保证在 at（及之后）时刻生效。
+func createChannelPriceForTest(t *testing.T, ctx context.Context, queries *sqlc.Queries, channelID, modelID int64, at time.Time) sqlc.ChannelPrice {
+	t.Helper()
+
+	price, err := queries.CreateChannelPrice(ctx, sqlc.CreateChannelPriceParams{
+		ChannelID:          channelID,
+		ModelID:            modelID,
+		Currency:           "USD",
+		PricingUnit:        "per_1m_tokens",
+		UncachedInputPrice: numeric(2),
+		OutputPrice:        numeric(8),
+		Status:             "enabled",
+		EffectiveFrom:      timestamptz(at.Add(-time.Hour)),
+		EffectiveTo:        nullTimestamptz(),
+	})
+	if err != nil {
+		t.Fatalf("create channel price: %v", err)
+	}
+	return price
+}
+
+// routeCandidatesParams 构造默认线路（内置经济：pool=all）的候选查询参数，at_time 取当前。
+func routeCandidatesParams(model string, projectID int64) sqlc.FindRouteCandidatesParams {
+	return sqlc.FindRouteCandidatesParams{
+		RequestedModelID: model,
+		IngressProtocol:  "openai",
+		ProjectID:        projectID,
+		PoolKind:         "all",
+		RouteID:          0,
+		AtTime:           timestamptz(time.Now().UTC()),
 	}
 }
 

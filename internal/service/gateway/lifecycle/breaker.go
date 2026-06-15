@@ -16,6 +16,10 @@ type ChannelBreaker interface {
 	// 它不占用 half-open 探测名额；真正尝试前必须继续调用 Allow。
 	Available(channelKey string) bool
 
+	// HealthScore 返回某个 channel 的健康分（越小越健康，0 最佳），供 stable 线路排序。
+	// 约定：closed 且窗口内有样本 → 近窗口失败率；窗口无样本 → 0；half-open → 偏高；open → 最差(1)。
+	HealthScore(channelKey string) float64
+
 	// Allow 判断某个 channel 当前是否允许尝试。
 	// open 状态返回 false；到达探测时机或 half-open 时放行一次探测请求。
 	Allow(channelKey string) bool
@@ -115,6 +119,31 @@ func (b *ChannelCircuitBreaker) Available(channelKey string) bool {
 		return !s.halfOpenInFlight
 	default:
 		return true
+	}
+}
+
+// HealthScore 实现 ChannelBreaker：只读返回近窗口失败率（越小越健康），不推进熔断状态。
+func (b *ChannelCircuitBreaker) HealthScore(channelKey string) float64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	s := b.stateForLocked(channelKey)
+	switch s.state {
+	case circuitOpen:
+		return 1
+	case circuitHalfOpen:
+		// 半开恢复中，比健康闭合差、比熔断好，stable 排序时排在健康渠道之后。
+		return 0.75
+	default:
+		// 窗口已过期视为无近况样本（最优）；避免在只读路径里清零计数。
+		if b.now().Sub(s.windowStart) >= b.cfg.Window {
+			return 0
+		}
+		total := s.failures + s.successes
+		if total == 0 {
+			return 0
+		}
+		return float64(s.failures) / float64(total)
 	}
 }
 

@@ -33,6 +33,11 @@ type APIKeyPrincipal struct {
 	UserID    int64
 	ProjectID int64
 	KeyPrefix string
+
+	// RouteID 是 Key 绑定的线路 ID（阶段 15）；nil 表示未绑定，回落项目默认/内置经济。
+	RouteID *int64
+	// ProjectDefaultRouteID 是所属项目的默认线路 ID；nil 表示项目未设默认线路。
+	ProjectDefaultRouteID *int64
 }
 
 // APIKeyStore 定义 API Key 认证所需的存储查询和更新能力。
@@ -133,11 +138,22 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 	}
 
 	return &APIKeyPrincipal{
-		APIKeyID:  key.ID,
-		UserID:    key.UserID,
-		ProjectID: key.ProjectID,
-		KeyPrefix: key.KeyPrefix,
+		APIKeyID:              key.ID,
+		UserID:                key.UserID,
+		ProjectID:             key.ProjectID,
+		KeyPrefix:             key.KeyPrefix,
+		RouteID:               int8Ptr(key.RouteID),
+		ProjectDefaultRouteID: int8Ptr(key.DefaultRouteID),
 	}, nil
+}
+
+// int8Ptr 把可空 pgtype.Int8 转成 *int64（线路绑定可空）。
+func int8Ptr(v pgtype.Int8) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	out := v.Int64
+	return &out
 }
 
 // TODO(阶段3/production): [GAP-3-002] 补齐 API Key revoke、disable、list 和审计日志能力，确保后台能安全管理 customer API key。

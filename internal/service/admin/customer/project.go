@@ -12,11 +12,12 @@ import (
 
 // Project 表示后台项目（工作空间）视图。
 type Project struct {
-	ID        int64
-	UserID    int64
-	Name      string
-	CreatedAt pgtype.Timestamptz
-	UpdatedAt pgtype.Timestamptz
+	ID             int64
+	UserID         int64
+	Name           string
+	DefaultRouteID *int64 // nil 表示未设默认线路（回落内置经济）
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
 }
 
 // ProjectListParams 表示项目分页查询参数；UserID 为 nil 时列全部。
@@ -26,11 +27,12 @@ type ProjectListParams struct {
 	Offset int32
 }
 
-// ProjectStore 定义项目读取所需的存储能力。
+// ProjectStore 定义项目读取与默认线路设置所需的存储能力。
 type ProjectStore interface {
 	ListProjectsPage(ctx context.Context, arg sqlc.ListProjectsPageParams) ([]sqlc.Project, error)
 	CountProjects(ctx context.Context, userID pgtype.Int8) (int64, error)
 	GetProjectByID(ctx context.Context, id int64) (sqlc.Project, error)
+	SetProjectDefaultRoute(ctx context.Context, arg sqlc.SetProjectDefaultRouteParams) (sqlc.Project, error)
 }
 
 // ProjectService 提供 admin 项目只读查询。
@@ -84,13 +86,32 @@ func (s *ProjectService) Get(ctx context.Context, id int64) (Project, error) {
 	return projectFromSQLC(row), nil
 }
 
+// SetDefaultRoute 设置/清除项目默认线路（routeID 为 nil 表示清除，回落内置经济）。
+func (s *ProjectService) SetDefaultRoute(ctx context.Context, id int64, routeID *int64) (Project, error) {
+	if id <= 0 {
+		return Project{}, invalidArgument("id", "id must be positive")
+	}
+	row, err := s.store.SetProjectDefaultRoute(ctx, sqlc.SetProjectDefaultRouteParams{
+		ID:             id,
+		DefaultRouteID: int8Narg(routeID),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Project{}, notFound("project not found")
+		}
+		return Project{}, storeFailed(err, "set project default route")
+	}
+	return projectFromSQLC(row), nil
+}
+
 func projectFromSQLC(row sqlc.Project) Project {
 	return Project{
-		ID:        row.ID,
-		UserID:    row.UserID,
-		Name:      row.Name,
-		CreatedAt: row.CreatedAt,
-		UpdatedAt: row.UpdatedAt,
+		ID:             row.ID,
+		UserID:         row.UserID,
+		Name:           row.Name,
+		DefaultRouteID: int8ToPtr(row.DefaultRouteID),
+		CreatedAt:      row.CreatedAt,
+		UpdatedAt:      row.UpdatedAt,
 	}
 }
 

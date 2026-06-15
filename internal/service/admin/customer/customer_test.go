@@ -162,6 +162,13 @@ func (f *fakeAPIKeyStore) SetAPIKeySpendLimit(_ context.Context, arg sqlc.SetAPI
 	}, nil
 }
 
+func (f *fakeAPIKeyStore) SetAPIKeyRoute(_ context.Context, arg sqlc.SetAPIKeyRouteParams) (sqlc.SetAPIKeyRouteRow, error) {
+	return sqlc.SetAPIKeyRouteRow{
+		ID:      arg.ID,
+		RouteID: arg.RouteID,
+	}, nil
+}
+
 func TestAPIKeyServiceCreateReturnsPlaintextAndSetsSpendLimit(t *testing.T) {
 	store := &fakeAPIKeyStore{
 		project: sqlc.Project{ID: 100, UserID: 10, Name: "ws"},

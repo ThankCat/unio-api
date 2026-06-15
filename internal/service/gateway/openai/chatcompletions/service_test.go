@@ -674,8 +674,8 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	if len(authorizer.authorizeParams) != 1 {
 		t.Fatalf("expected one authorization, got %d", len(authorizer.authorizeParams))
 	}
-	if authorizer.authorizeParams[0].ModelDBID != 1123 {
-		t.Fatalf("expected authorization model db id %d, got %d", int64(1123), authorizer.authorizeParams[0].ModelDBID)
+	if len(authorizer.authorizeParams[0].CandidatePrices) == 0 {
+		t.Fatalf("expected authorization to receive candidate prices, got none")
 	}
 	if authorizer.authorizeParams[0].InputTokens != 1 {
 		t.Fatalf("expected candidate plan input token estimate %d, got %d", int64(1), authorizer.authorizeParams[0].InputTokens)
@@ -858,8 +858,8 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotCallAdapterWhenAuthoriz
 	if authorizer.authorizeParams[0].RequestRecord.ID != 1 {
 		t.Fatalf("expected authorization request record id 1, got %d", authorizer.authorizeParams[0].RequestRecord.ID)
 	}
-	if authorizer.authorizeParams[0].ModelDBID != 1123 {
-		t.Fatalf("expected authorization model db id %d, got %d", int64(1123), authorizer.authorizeParams[0].ModelDBID)
+	if len(authorizer.authorizeParams[0].CandidatePrices) == 0 {
+		t.Fatalf("expected authorization to receive candidate prices, got none")
 	}
 	if fakeAdapter.chatCalled != 0 {
 		t.Fatalf("expected adapter not to be called after authorization failure, got %d", fakeAdapter.chatCalled)

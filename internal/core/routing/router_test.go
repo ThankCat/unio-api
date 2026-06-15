@@ -44,6 +44,16 @@ func (s *fakeStore) ProjectCanUseModel(ctx context.Context, arg sqlc.ProjectCanU
 	return s.projectCanUse, s.projectCanUseErr
 }
 
+// GetRouteByID 默认返回 not found，让线路解析回落到内置经济（测试默认不绑线路）。
+func (s *fakeStore) GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error) {
+	return sqlc.Route{}, errors.New("route not found")
+}
+
+// GetBuiltinCheapestRoute 返回内置「经济」线路（cheapest/all），作为线路解析回落。
+func (s *fakeStore) GetBuiltinCheapestRoute(ctx context.Context) (sqlc.Route, error) {
+	return sqlc.Route{ID: 1, Name: "经济", Mode: "cheapest", PoolKind: "all", IsBuiltin: true, Status: "enabled"}, nil
+}
+
 // fakeCredentialDecryptor 是 routing 测试使用的凭据解密替身。
 type fakeCredentialDecryptor struct {
 	ciphertexts [][]byte

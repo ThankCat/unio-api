@@ -55,7 +55,7 @@ type DeleteChannelModelParams struct {
 	ModelID   int64
 }
 
-// DeleteChannelModel 删除绑定；被 cost_snapshots/channel_cost_prices 外键引用时由 DB 拒绝（23503），上层降级为 conflict。
+// DeleteChannelModel 删除绑定；被 cost_snapshots/channel_prices 外键引用时由 DB 拒绝（23503），上层降级为 conflict。
 func (q *Queries) DeleteChannelModel(ctx context.Context, arg DeleteChannelModelParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteChannelModel, arg.ChannelID, arg.ModelID)
 	if err != nil {
@@ -66,7 +66,7 @@ func (q *Queries) DeleteChannelModel(ctx context.Context, arg DeleteChannelModel
 
 const findRouteCandidates = `-- name: FindRouteCandidates :many
 WITH project_scope AS (
-    SELECT $3::BIGINT AS project_id
+    SELECT $6::BIGINT AS project_id
 ),
 project_policy_mode AS (
     SELECT EXISTS (
@@ -88,18 +88,50 @@ SELECT
     c.credential_encrypted,
     c.timeout_ms,
     c.priority,
-    cm.upstream_model
+    cm.upstream_model,
+    price.id AS channel_price_id,
+    price.currency AS price_currency,
+    price.pricing_unit AS price_pricing_unit,
+    price.uncached_input_price,
+    price.cache_read_input_price,
+    price.cache_write_5m_input_price,
+    price.cache_write_1h_input_price,
+    price.output_price,
+    price.reasoning_output_price
 FROM channel_models cm
 JOIN models m ON m.id = cm.model_id
 JOIN channels c ON c.id = cm.channel_id
 JOIN providers p ON p.id = c.provider_id
 JOIN project_scope ps ON ps.project_id > 0
-WHERE m.model_id = $1
-  AND c.protocol = $2
+JOIN LATERAL (
+    SELECT cp.id, cp.currency, cp.pricing_unit,
+        cp.uncached_input_price, cp.cache_read_input_price,
+        cp.cache_write_5m_input_price, cp.cache_write_1h_input_price,
+        cp.output_price, cp.reasoning_output_price
+    FROM channel_prices cp
+    WHERE cp.channel_id = c.id
+      AND cp.model_id = m.id
+      AND cp.status = 'enabled'
+      AND cp.effective_from <= $1
+      AND (cp.effective_to IS NULL OR cp.effective_to > $1)
+    ORDER BY cp.effective_from DESC, cp.id DESC
+    LIMIT 1
+) price ON TRUE
+WHERE m.model_id = $2
+  AND c.protocol = $3
   AND m.status = 'enabled'
   AND cm.status = 'enabled'
   AND c.status = 'enabled'
   AND p.status = 'enabled'
+  AND (
+    $4::TEXT = 'all'
+        OR EXISTS (
+        SELECT 1
+        FROM route_channels rc
+        WHERE rc.route_id = $5
+          AND rc.channel_id = c.id
+    )
+  )
   AND NOT EXISTS (
     SELECT 1
     FROM project_model_policies denied
@@ -123,29 +155,54 @@ ORDER BY
 `
 
 type FindRouteCandidatesParams struct {
+	AtTime           pgtype.Timestamptz
 	RequestedModelID string
 	IngressProtocol  string
+	PoolKind         string
+	RouteID          int64
 	ProjectID        int64
 }
 
 type FindRouteCandidatesRow struct {
-	ModelDbID           int64
-	RequestedModelID    string
-	ProviderID          int64
-	ProviderSlug        string
-	AdapterKey          string
-	Protocol            string
-	ChannelID           int64
-	BaseUrl             string
-	CredentialEncrypted []byte
-	TimeoutMs           pgtype.Int4
-	Priority            int32
-	UpstreamModel       string
+	ModelDbID              int64
+	RequestedModelID       string
+	ProviderID             int64
+	ProviderSlug           string
+	AdapterKey             string
+	Protocol               string
+	ChannelID              int64
+	BaseUrl                string
+	CredentialEncrypted    []byte
+	TimeoutMs              pgtype.Int4
+	Priority               int32
+	UpstreamModel          string
+	ChannelPriceID         int64
+	PriceCurrency          string
+	PricePricingUnit       string
+	UncachedInputPrice     pgtype.Numeric
+	CacheReadInputPrice    pgtype.Numeric
+	CacheWrite5mInputPrice pgtype.Numeric
+	CacheWrite1hInputPrice pgtype.Numeric
+	OutputPrice            pgtype.Numeric
+	ReasoningOutputPrice   pgtype.Numeric
 }
 
-// FindRouteCandidates 按请求模型和项目策略查找可用 channel 路由候选。
+// FindRouteCandidates 按请求模型、项目策略与线路查找可用 channel 路由候选（阶段 15）。
+// 在既有过滤（model/channel/provider/cm enabled + 协议 + 项目 allow/deny）之上叠加：
+//  1. 线路候选池：pool_kind='explicit' 时候选 ∩ route_channels（fixed 即只剩一条）；
+//  2. 已定价过滤：候选必须在 channel_prices 有「当前生效、enabled」的售价行（未定价渠道排除，不参与计费）；
+//  3. 带回命中渠道的当前生效售价（供 Go 侧 cheapest 排序与保守预授权上界）。
+//
+// 策略排序（cheapest/stable/fixed）在 Go 侧完成；此处仅给稳定的 priority 基序。
 func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidatesParams) ([]FindRouteCandidatesRow, error) {
-	rows, err := q.db.Query(ctx, findRouteCandidates, arg.RequestedModelID, arg.IngressProtocol, arg.ProjectID)
+	rows, err := q.db.Query(ctx, findRouteCandidates,
+		arg.AtTime,
+		arg.RequestedModelID,
+		arg.IngressProtocol,
+		arg.PoolKind,
+		arg.RouteID,
+		arg.ProjectID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -166,6 +223,15 @@ func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidat
 			&i.TimeoutMs,
 			&i.Priority,
 			&i.UpstreamModel,
+			&i.ChannelPriceID,
+			&i.PriceCurrency,
+			&i.PricePricingUnit,
+			&i.UncachedInputPrice,
+			&i.CacheReadInputPrice,
+			&i.CacheWrite5mInputPrice,
+			&i.CacheWrite1hInputPrice,
+			&i.OutputPrice,
+			&i.ReasoningOutputPrice,
 		); err != nil {
 			return nil, err
 		}

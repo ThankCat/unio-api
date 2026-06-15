@@ -10,7 +10,8 @@ import (
 )
 
 // prepareChatCandidates 使用共享 lifecycle executor 生成 OpenAI operation 的保守 fallback plan。
-func (s *ChatCompletionService) prepareChatCandidates(ctx context.Context, req gatewayapi.ChatCompletionRequest, candidates []routing.ChatRouteCandidate, stream bool) (lifecycle.CandidatePlan, error) {
+// mode 是解析后的线路策略（cheapest/stable/fixed），决定候选排序（阶段 15）。
+func (s *ChatCompletionService) prepareChatCandidates(ctx context.Context, req gatewayapi.ChatCompletionRequest, candidates []routing.ChatRouteCandidate, mode string, stream bool) (lifecycle.CandidatePlan, error) {
 	capabilities := []lifecycle.AdapterCapability{
 		lifecycle.AdapterCapabilityInputTokenizer,
 	}
@@ -26,6 +27,8 @@ func (s *ChatCompletionService) prepareChatCandidates(ctx context.Context, req g
 		Capabilities:        capabilities,
 		Available:           s.candidateAvailable,
 		EstimateInputTokens: s.chatInputTokenEstimator(req),
+		Mode:                mode,
+		ChannelHealthScore:  s.channelHealthScore,
 	})
 }
 

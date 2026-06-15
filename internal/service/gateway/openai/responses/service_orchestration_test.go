@@ -119,7 +119,6 @@ func (a *fakeAuthorizer) AuthorizeChat(_ context.Context, params lifecycle.ChatA
 		RequestRecordID: params.RequestRecord.ID,
 		ReservationID:   42,
 		Currency:        "USD",
-		PriceID:         1,
 	}, nil
 }
 
@@ -338,7 +337,7 @@ func TestPrepareResponsesCandidatesStreamCapability(t *testing.T) {
 
 	// allowDirect=true（CreateResponse/StreamResponse 生产路径）：按 responses-serve 能力分流过滤，
 	// 流式只保留 serve-stream，非流式只保留 serve-nonstream，避免单一模式候选误选。
-	if _, err := svc.prepareResponsesCandidates(context.Background(), req, cands, true, true); err != nil {
+	if _, err := svc.prepareResponsesCandidates(context.Background(), req, cands, "", true, true); err != nil {
 		t.Fatalf("stream prepare: %v", err)
 	}
 	if !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityResponsesServeStream) || hasCapability(rec.capabilities, lifecycle.AdapterCapabilityResponsesServeNonStream) {
@@ -348,7 +347,7 @@ func TestPrepareResponsesCandidatesStreamCapability(t *testing.T) {
 		t.Fatalf("stream=true capabilities = %v, want ResponsesServeTokenizer present", rec.capabilities)
 	}
 
-	if _, err := svc.prepareResponsesCandidates(context.Background(), req, cands, false, true); err != nil {
+	if _, err := svc.prepareResponsesCandidates(context.Background(), req, cands, "", false, true); err != nil {
 		t.Fatalf("non-stream prepare: %v", err)
 	}
 	if !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityResponsesServeNonStream) || hasCapability(rec.capabilities, lifecycle.AdapterCapabilityResponsesServeStream) {
@@ -356,7 +355,7 @@ func TestPrepareResponsesCandidatesStreamCapability(t *testing.T) {
 	}
 
 	// allowDirect=false（CompactHistory 强制桥接）：退回纯 chat 桥接能力过滤。
-	if _, err := svc.prepareResponsesCandidates(context.Background(), req, cands, false, false); err != nil {
+	if _, err := svc.prepareResponsesCandidates(context.Background(), req, cands, "", false, false); err != nil {
 		t.Fatalf("bridge-only prepare: %v", err)
 	}
 	if !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityNonStream) || !hasCapability(rec.capabilities, lifecycle.AdapterCapabilityInputTokenizer) {

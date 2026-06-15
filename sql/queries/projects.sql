@@ -2,11 +2,11 @@
 -- CreateProject 在指定用户下创建项目。
 INSERT INTO projects (user_id, name)
 VALUES ($1, $2)
-RETURNING id, user_id, name, created_at, updated_at;
+RETURNING id, user_id, name, created_at, updated_at, default_route_id;
 
 -- name: GetProjectForUser :one
 -- GetProjectForUser 按 project_id 和 user_id 读取项目并校验归属。
-SELECT id, user_id, name, created_at, updated_at
+SELECT id, user_id, name, created_at, updated_at, default_route_id
 FROM projects
 WHERE id = sqlc.arg(project_id)
 AND user_id = sqlc.arg(user_id)
@@ -14,7 +14,7 @@ LIMIT 1;
 
 -- name: ListProjectsPage :many
 -- ListProjectsPage 供 admin 分页倒序列出项目；user_id 为空时列全部。
-SELECT id, user_id, name, created_at, updated_at
+SELECT id, user_id, name, created_at, updated_at, default_route_id
 FROM projects
 WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::bigint)
 ORDER BY id DESC
@@ -27,8 +27,16 @@ FROM projects
 WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::bigint);
 
 -- name: GetProjectByID :one
--- GetProjectByID 供 admin 按 id 读取项目。
-SELECT id, user_id, name, created_at, updated_at
+-- GetProjectByID 供 admin 按 id 读取项目（带项目级默认线路）。
+-- 列顺序与 projects 表物理顺序一致，使 sqlc 复用 Project 模型类型。
+SELECT id, user_id, name, created_at, updated_at, default_route_id
 FROM projects
 WHERE id = sqlc.arg(id)
 LIMIT 1;
+
+-- name: SetProjectDefaultRoute :one
+-- SetProjectDefaultRoute 设置/清除项目默认线路；default_route_id 为 NULL 表示回落内置经济。
+UPDATE projects
+SET default_route_id = sqlc.narg(default_route_id), updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING id, user_id, name, created_at, updated_at, default_route_id;

@@ -46,7 +46,6 @@ func NewChatGateway(
 		workerConfig.SettlementRecoverySettleTimeout,
 	)
 	chatAuthorizationServer := lifecycle.NewChatAuthorizationService(
-		queries,
 		billing.Service{},
 		ledgerService,
 	)
@@ -119,7 +118,6 @@ func NewResponsesGateway(
 		workerConfig.SettlementRecoverySettleTimeout,
 	)
 	chatAuthorizationServer := lifecycle.NewChatAuthorizationService(
-		queries,
 		billing.Service{},
 		ledgerService,
 	)
@@ -185,7 +183,6 @@ func NewMessagesGateway(
 		workerConfig.SettlementRecoverySettleTimeout,
 	)
 	chatAuthorizationServer := lifecycle.NewChatAuthorizationService(
-		queries,
 		billing.Service{},
 		ledgerService,
 	)

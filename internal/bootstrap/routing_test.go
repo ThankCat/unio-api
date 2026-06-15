@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ThankCat/unio-api/internal/core/credential"
@@ -25,6 +26,14 @@ func (s *fakeChatRouteStore) ProjectCanUseModel(ctx context.Context, arg sqlc.Pr
 
 func (s *fakeChatRouteStore) FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteCandidatesParams) ([]sqlc.FindRouteCandidatesRow, error) {
 	return s.rows, nil
+}
+
+func (s *fakeChatRouteStore) GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error) {
+	return sqlc.Route{}, errors.New("route not found")
+}
+
+func (s *fakeChatRouteStore) GetBuiltinCheapestRoute(ctx context.Context) (sqlc.Route, error) {
+	return sqlc.Route{ID: 1, Name: "经济", Mode: "cheapest", PoolKind: "all", IsBuiltin: true, Status: "enabled"}, nil
 }
 
 func TestNewChatRouterRejectsMissingMasterKey(t *testing.T) {

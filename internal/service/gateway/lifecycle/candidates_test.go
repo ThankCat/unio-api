@@ -5,10 +5,59 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ThankCat/unio-api/internal/core/billing"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
+
+// TestExecutorPrepareCandidatesCheapestOrdersBySalePrice 验证 cheapest 线路按售价升序排序候选（阶段 15）。
+func TestExecutorPrepareCandidatesCheapestOrdersBySalePrice(t *testing.T) {
+	executor := NewExecutor(candidateCapabilityRegistry{
+		allowed: map[int64]bool{1: true, 2: true, 3: true},
+	})
+
+	withPrice := func(id, output int64) routing.ChatRouteCandidate {
+		c := candidateRoute(id, "openai")
+		c.SalePrice = billing.CustomerPriceSnapshot{
+			UncachedInputPrice: gatewayTestNumeric(1, 0),
+			OutputPrice:        gatewayTestNumeric(output, 0),
+		}
+		return c
+	}
+
+	plan, err := executor.PrepareCandidates(context.Background(), PrepareCandidatesParams{
+		Protocol: "openai",
+		// SQL priority 基序：id1(贵=10) → id2(中=5) → id3(便宜=2)。
+		Candidates: []routing.ChatRouteCandidate{
+			withPrice(1, 10),
+			withPrice(2, 5),
+			withPrice(3, 2),
+		},
+		Capabilities: []AdapterCapability{
+			AdapterCapabilityNonStream,
+			AdapterCapabilityInputTokenizer,
+		},
+		EstimateInputTokens: func(_ context.Context, _ routing.ChatRouteCandidate) (int64, error) {
+			return 1, nil
+		},
+		Mode: "cheapest",
+	})
+	if err != nil {
+		t.Fatalf("PrepareCandidates returned error: %v", err)
+	}
+
+	// cheapest：按售价升序 → id3(2) → id2(5) → id1(10)。
+	want := []int64{3, 2, 1}
+	if len(plan.Candidates) != len(want) {
+		t.Fatalf("expected %d candidates, got %d", len(want), len(plan.Candidates))
+	}
+	for i, c := range plan.Candidates {
+		if c.Route.Channel.ID != want[i] {
+			t.Fatalf("cheapest order position %d: expected channel %d, got %d", i, want[i], c.Route.Channel.ID)
+		}
+	}
+}
 
 type candidateCapabilityRegistry struct {
 	allowed map[int64]bool

@@ -19,3 +19,7 @@ func (s *ChatCompletionService) breakerAllow(channelKey string) bool {
 func (s *ChatCompletionService) recordChannelHealth(channelKey string, err error) {
 	s.lifecycle.RecordChannelHealth(channelKey, err)
 }
+
+func (s *ChatCompletionService) channelHealthScore(channelKey string) float64 {
+	return s.lifecycle.ChannelHealthScore(channelKey)
+}

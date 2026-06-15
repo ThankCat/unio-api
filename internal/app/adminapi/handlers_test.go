@@ -14,10 +14,10 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/service/admin/channel"
 	"github.com/ThankCat/unio-api/internal/service/admin/channelmodel"
-	"github.com/ThankCat/unio-api/internal/service/admin/costprice"
+	"github.com/ThankCat/unio-api/internal/service/admin/channelprice"
 	"github.com/ThankCat/unio-api/internal/service/admin/model"
-	"github.com/ThankCat/unio-api/internal/service/admin/price"
 	"github.com/ThankCat/unio-api/internal/service/admin/provider"
+	"github.com/ThankCat/unio-api/internal/service/admin/route"
 )
 
 type fakeProviderService struct {
@@ -141,25 +141,25 @@ func newChannelModelRouter(t *testing.T, cms adminapi.ChannelModelService) http.
 	})
 }
 
-type fakeCostPriceService struct {
-	listOut   []costprice.CostPrice
-	createOut costprice.CostPrice
+type fakeChannelPriceService struct {
+	listOut   []channelprice.ChannelPrice
+	createOut channelprice.ChannelPrice
 	createErr error
-	updateOut costprice.CostPrice
+	updateOut channelprice.ChannelPrice
 	updateErr error
 }
 
-func (s *fakeCostPriceService) List(context.Context, int64) ([]costprice.CostPrice, error) {
+func (s *fakeChannelPriceService) List(context.Context, int64) ([]channelprice.ChannelPrice, error) {
 	return s.listOut, nil
 }
-func (s *fakeCostPriceService) Create(context.Context, costprice.CreateInput) (costprice.CostPrice, error) {
+func (s *fakeChannelPriceService) Create(context.Context, channelprice.CreateInput) (channelprice.ChannelPrice, error) {
 	return s.createOut, s.createErr
 }
-func (s *fakeCostPriceService) Update(context.Context, costprice.UpdateInput) (costprice.CostPrice, error) {
+func (s *fakeChannelPriceService) Update(context.Context, channelprice.UpdateInput) (channelprice.ChannelPrice, error) {
 	return s.updateOut, s.updateErr
 }
 
-func newCostPriceRouter(t *testing.T, cps adminapi.CostPriceService) http.Handler {
+func newChannelPriceRouter(t *testing.T, cps adminapi.ChannelPriceService) http.Handler {
 	t.Helper()
 
 	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
@@ -168,31 +168,34 @@ func newCostPriceRouter(t *testing.T, cps adminapi.CostPriceService) http.Handle
 	}
 
 	return adminapi.NewRouter(adminapi.RouterDeps{
-		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
-		AdminAuthenticator: authenticator,
-		CostPriceService:   cps,
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		AdminAuthenticator:  authenticator,
+		ChannelPriceService: cps,
 	})
 }
 
-type fakePriceService struct {
-	listOut   []price.Price
-	createOut price.Price
+type fakeRouteService struct {
+	listOut   []route.Route
+	createOut route.Route
 	createErr error
-	updateOut price.Price
-	updateErr error
 }
 
-func (s *fakePriceService) List(context.Context, int64) ([]price.Price, error) {
-	return s.listOut, nil
+func (s *fakeRouteService) List(context.Context) ([]route.Route, error) { return s.listOut, nil }
+func (s *fakeRouteService) Get(context.Context, int64) (route.Route, error) {
+	return s.createOut, nil
 }
-func (s *fakePriceService) Create(context.Context, price.CreateInput) (price.Price, error) {
+func (s *fakeRouteService) Create(context.Context, route.CreateInput) (route.Route, error) {
 	return s.createOut, s.createErr
 }
-func (s *fakePriceService) Update(context.Context, price.UpdateInput) (price.Price, error) {
-	return s.updateOut, s.updateErr
+func (s *fakeRouteService) Update(context.Context, route.UpdateInput) (route.Route, error) {
+	return s.createOut, nil
+}
+func (s *fakeRouteService) Delete(context.Context, int64) error { return nil }
+func (s *fakeRouteService) SetChannels(context.Context, int64, []int64) (route.Route, error) {
+	return s.createOut, nil
 }
 
-func newPriceRouter(t *testing.T, ps adminapi.PriceService) http.Handler {
+func newRouteRouter(t *testing.T, rs adminapi.RouteService) http.Handler {
 	t.Helper()
 
 	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
@@ -203,7 +206,7 @@ func newPriceRouter(t *testing.T, ps adminapi.PriceService) http.Handler {
 	return adminapi.NewRouter(adminapi.RouterDeps{
 		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		AdminAuthenticator: authenticator,
-		PriceService:       ps,
+		RouteService:       rs,
 	})
 }
 
@@ -461,78 +464,78 @@ func TestChannelModelsRequireToken(t *testing.T) {
 	}
 }
 
-func TestCreateCostPriceReturns201(t *testing.T) {
-	handler := newCostPriceRouter(t, &fakeCostPriceService{createOut: costprice.CostPrice{ID: 1, ChannelID: 5, ModelID: 2, Currency: "USD", PricingUnit: "per_1m_tokens", UncachedInputCost: "1.25", OutputCost: "2.5", Status: "enabled"}})
+func TestCreateChannelPriceReturns201(t *testing.T) {
+	handler := newChannelPriceRouter(t, &fakeChannelPriceService{createOut: channelprice.ChannelPrice{ID: 1, ChannelID: 5, ModelID: 2, Currency: "USD", PricingUnit: "per_1m_tokens", UncachedInputPrice: "3", OutputPrice: "9", Status: "enabled"}})
 
-	body := `{"model_id":2,"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_cost":"1.25","output_cost":"2.5","status":"enabled","effective_from":"2026-01-01T00:00:00Z"}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/cost-prices", body, true)
+	body := `{"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_price":"3","output_price":"9","uncached_input_cost":"1.25","output_cost":"2.5","status":"enabled","effective_from":"2026-01-01T00:00:00Z"}`
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/models/2/prices", body, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
 	}
 }
 
-func TestCreateCostPriceBadEffectiveFromReturns400(t *testing.T) {
-	handler := newCostPriceRouter(t, &fakeCostPriceService{})
+func TestCreateChannelPriceBadEffectiveFromReturns400(t *testing.T) {
+	handler := newChannelPriceRouter(t, &fakeChannelPriceService{})
 
-	body := `{"model_id":2,"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_cost":"1.25","output_cost":"2.5","status":"enabled","effective_from":"not-a-time"}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/cost-prices", body, true)
+	body := `{"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_price":"3","output_price":"9","status":"enabled","effective_from":"not-a-time"}`
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/models/2/prices", body, true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
 }
 
-func TestCreateCostPriceOverlapReturns422(t *testing.T) {
-	handler := newCostPriceRouter(t, &fakeCostPriceService{createErr: failure.New(failure.CodeAdminPricingWindowOverlap, failure.WithMessage("overlap"))})
+func TestCreateChannelPriceOverlapReturns422(t *testing.T) {
+	handler := newChannelPriceRouter(t, &fakeChannelPriceService{createErr: failure.New(failure.CodeAdminPricingWindowOverlap, failure.WithMessage("overlap"))})
 
-	body := `{"model_id":2,"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_cost":"1.25","output_cost":"2.5","status":"enabled","effective_from":"2026-01-01T00:00:00Z"}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/cost-prices", body, true)
+	body := `{"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_price":"3","output_price":"9","status":"enabled","effective_from":"2026-01-01T00:00:00Z"}`
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/models/2/prices", body, true)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
 	}
 }
 
-func TestCostPricesRequireToken(t *testing.T) {
-	handler := newCostPriceRouter(t, &fakeCostPriceService{})
+func TestUpdateChannelPriceInvalidIDReturns400(t *testing.T) {
+	handler := newChannelPriceRouter(t, &fakeChannelPriceService{})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/channels/5/cost-prices", "", false)
+	rec := doAdmin(t, handler, http.MethodPatch, "/admin/v1/channel-prices/abc", `{"status":"disabled"}`, true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+}
+
+func TestChannelPricesRequireToken(t *testing.T) {
+	handler := newChannelPriceRouter(t, &fakeChannelPriceService{})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/channels/5/prices", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
 }
 
-func TestCreatePriceReturns201(t *testing.T) {
-	handler := newPriceRouter(t, &fakePriceService{createOut: price.Price{ID: 1, ModelID: 2, Currency: "USD", PricingUnit: "per_1m_tokens", UncachedInputPrice: "3", OutputPrice: "9", Status: "enabled"}})
+func TestCreateRouteReturns201(t *testing.T) {
+	handler := newRouteRouter(t, &fakeRouteService{createOut: route.Route{ID: 3, Name: "C-line", Mode: "fixed", PoolKind: "explicit", Status: "enabled"}})
 
-	body := `{"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_price":"3","output_price":"9","status":"enabled","effective_from":"2026-01-01T00:00:00Z"}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/models/2/prices", body, true)
+	body := `{"name":"C-line","mode":"fixed","pool_kind":"explicit","status":"enabled","channel_ids":[5]}`
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/routes", body, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
 	}
 }
 
-func TestCreatePriceOverlapReturns422(t *testing.T) {
-	handler := newPriceRouter(t, &fakePriceService{createErr: failure.New(failure.CodeAdminPricingWindowOverlap, failure.WithMessage("overlap"))})
+func TestCreateRouteFixedValidationReturns400(t *testing.T) {
+	handler := newRouteRouter(t, &fakeRouteService{createErr: failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("fixed route must list exactly one channel"), failure.WithField("field", "channel_ids"))})
 
-	body := `{"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_price":"3","output_price":"9","status":"enabled","effective_from":"2026-01-01T00:00:00Z"}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/models/2/prices", body, true)
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
-	}
-}
-
-func TestUpdatePriceInvalidIDReturns400(t *testing.T) {
-	handler := newPriceRouter(t, &fakePriceService{})
-
-	rec := doAdmin(t, handler, http.MethodPatch, "/admin/v1/prices/abc", `{"status":"disabled"}`, true)
+	body := `{"name":"C-line","mode":"fixed","pool_kind":"explicit","status":"enabled","channel_ids":[]}`
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/routes", body, true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
 }
 
-func TestPricesRequireToken(t *testing.T) {
-	handler := newPriceRouter(t, &fakePriceService{})
+func TestRoutesRequireToken(t *testing.T) {
+	handler := newRouteRouter(t, &fakeRouteService{})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/models/2/prices", "", false)
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/routes", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}

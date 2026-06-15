@@ -22,6 +22,7 @@ type ApiKey struct {
 	UpdatedAt  pgtype.Timestamptz
 	SpendLimit pgtype.Numeric
 	SpentTotal pgtype.Numeric
+	RouteID    pgtype.Int8
 }
 
 type Channel struct {
@@ -50,25 +51,6 @@ type ChannelCapabilityOverride struct {
 	UpdatedBy     pgtype.Text
 }
 
-type ChannelCostPrice struct {
-	ID                    int64
-	ChannelID             int64
-	ModelID               int64
-	Currency              string
-	PricingUnit           string
-	UncachedInputCost     pgtype.Numeric
-	CacheReadInputCost    pgtype.Numeric
-	CacheWrite5mInputCost pgtype.Numeric
-	CacheWrite1hInputCost pgtype.Numeric
-	OutputCost            pgtype.Numeric
-	ReasoningOutputCost   pgtype.Numeric
-	Status                string
-	EffectiveFrom         pgtype.Timestamptz
-	EffectiveTo           pgtype.Timestamptz
-	CreatedAt             pgtype.Timestamptz
-	UpdatedAt             pgtype.Timestamptz
-}
-
 type ChannelModel struct {
 	ID            int64
 	ChannelID     int64
@@ -77,6 +59,31 @@ type ChannelModel struct {
 	Status        string
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
+}
+
+type ChannelPrice struct {
+	ID                     int64
+	ChannelID              int64
+	ModelID                int64
+	Currency               string
+	PricingUnit            string
+	UncachedInputPrice     pgtype.Numeric
+	CacheReadInputPrice    pgtype.Numeric
+	CacheWrite5mInputPrice pgtype.Numeric
+	CacheWrite1hInputPrice pgtype.Numeric
+	OutputPrice            pgtype.Numeric
+	ReasoningOutputPrice   pgtype.Numeric
+	UncachedInputCost      pgtype.Numeric
+	CacheReadInputCost     pgtype.Numeric
+	CacheWrite5mInputCost  pgtype.Numeric
+	CacheWrite1hInputCost  pgtype.Numeric
+	OutputCost             pgtype.Numeric
+	ReasoningOutputCost    pgtype.Numeric
+	Status                 string
+	EffectiveFrom          pgtype.Timestamptz
+	EffectiveTo            pgtype.Timestamptz
+	CreatedAt              pgtype.Timestamptz
+	UpdatedAt              pgtype.Timestamptz
 }
 
 type CostSnapshot struct {
@@ -225,24 +232,6 @@ type ModelCatalogLink struct {
 	UpdatedAt            pgtype.Timestamptz
 }
 
-type Price struct {
-	ID                     int64
-	ModelID                int64
-	Currency               string
-	PricingUnit            string
-	UncachedInputPrice     pgtype.Numeric
-	CacheReadInputPrice    pgtype.Numeric
-	CacheWrite5mInputPrice pgtype.Numeric
-	CacheWrite1hInputPrice pgtype.Numeric
-	OutputPrice            pgtype.Numeric
-	ReasoningOutputPrice   pgtype.Numeric
-	Status                 string
-	EffectiveFrom          pgtype.Timestamptz
-	EffectiveTo            pgtype.Timestamptz
-	CreatedAt              pgtype.Timestamptz
-	UpdatedAt              pgtype.Timestamptz
-}
-
 type PriceSnapshot struct {
 	ID                     int64
 	RequestRecordID        int64
@@ -260,11 +249,12 @@ type PriceSnapshot struct {
 }
 
 type Project struct {
-	ID        int64
-	UserID    int64
-	Name      string
-	CreatedAt pgtype.Timestamptz
-	UpdatedAt pgtype.Timestamptz
+	ID             int64
+	UserID         int64
+	Name           string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	DefaultRouteID pgtype.Int8
 }
 
 type ProjectModelPolicy struct {
@@ -339,6 +329,23 @@ type RequestRecord struct {
 	CompletedAt           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
+}
+
+type Route struct {
+	ID          int64
+	Name        string
+	Mode        string
+	PoolKind    string
+	IsBuiltin   bool
+	Status      string
+	Description pgtype.Text
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
+type RouteChannel struct {
+	RouteID   int64
+	ChannelID int64
 }
 
 type SchemaHealthCheck struct {

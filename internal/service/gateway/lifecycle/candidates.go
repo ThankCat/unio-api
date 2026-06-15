@@ -3,7 +3,11 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"sort"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/ThankCat/unio-api/internal/core/billing"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
@@ -51,6 +55,13 @@ type PrepareCandidatesParams struct {
 
 	// EstimateInputTokens 对每个可用 fallback candidate 做 provider-specific 保守估算。
 	EstimateInputTokens CandidateInputTokenEstimator
+
+	// Mode 是线路策略（cheapest/stable/fixed，阶段 15）；空串保持 SQL routing 的 priority 基序。
+	// 排序叠加在能力过滤/熔断可用性之前，故最终 fallback 顺序即策略顺序。
+	Mode string
+
+	// ChannelHealthScore 给 stable 排序提供渠道健康分（越小越健康）；nil 时 stable 退化为 priority 序。
+	ChannelHealthScore func(channelKey string) float64
 }
 
 // Candidate 是共享 lifecycle 已过滤并估算过的一个可尝试候选。
@@ -69,6 +80,15 @@ type CandidatePlan struct {
 
 	// ConservativeInputTokens 是所有可用 fallback candidates 输入估算的最大值。
 	ConservativeInputTokens int64
+}
+
+// CandidateSalePrices 提取候选池各命中渠道的当前售价，供保守预授权上界估算（阶段 15）。
+func (p CandidatePlan) CandidateSalePrices() []billing.CustomerPriceSnapshot {
+	prices := make([]billing.CustomerPriceSnapshot, 0, len(p.Candidates))
+	for _, c := range p.Candidates {
+		prices = append(prices, c.Route.SalePrice)
+	}
+	return prices
 }
 
 // Executor 放置 OpenAI 与 Anthropic 共享的 gateway 生命周期执行能力。
@@ -97,8 +117,11 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 		)
 	}
 
-	filtered := e.registry.FilterCandidates(params.Protocol, params.Candidates, params.Capabilities...)
-	routeIndexes := candidateRouteIndexes(params.Candidates)
+	// 先按线路策略排序，再做能力过滤 / 熔断可用性 / 估算；过滤保持顺序，故策略顺序即最终 fallback 顺序。
+	ordered := sortCandidatesByMode(params.Candidates, params.Mode, params.ChannelHealthScore)
+
+	filtered := e.registry.FilterCandidates(params.Protocol, ordered, params.Capabilities...)
+	routeIndexes := candidateRouteIndexes(ordered)
 
 	plan := CandidatePlan{
 		Candidates: make([]Candidate, 0, len(filtered)),
@@ -137,6 +160,56 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 	}
 
 	return plan, nil
+}
+
+// sortCandidatesByMode 按线路策略对候选稳定排序（返回新切片，不改入参）。
+//   - cheapest：按代表售价升序（output_price 为主键，uncached_input_price 次之）。
+//   - stable：按渠道健康分升序（越小越健康）；health 为 nil 时保持 priority 基序。
+//   - fixed/其它：保持 SQL routing 的 priority 基序（fixed 池本就只有一条候选）。
+//
+// 稳定排序保证同键候选保留 SQL 的 priority 顺序，故平手回落 priority。
+func sortCandidatesByMode(in []routing.ChatRouteCandidate, mode string, health func(channelKey string) float64) []routing.ChatRouteCandidate {
+	out := make([]routing.ChatRouteCandidate, len(in))
+	copy(out, in)
+
+	switch mode {
+	case "cheapest":
+		sort.SliceStable(out, func(i, j int) bool {
+			return saleSnapshotLess(out[i].SalePrice, out[j].SalePrice)
+		})
+	case "stable":
+		if health != nil {
+			sort.SliceStable(out, func(i, j int) bool {
+				return health(MetricsID(out[i].Channel.ID)) < health(MetricsID(out[j].Channel.ID))
+			})
+		}
+	}
+
+	return out
+}
+
+// saleSnapshotLess 定义 cheapest 排序的代表价口径：output_price 优先，uncached_input_price 次之。
+func saleSnapshotLess(a, b billing.CustomerPriceSnapshot) bool {
+	if c := compareNumeric(a.OutputPrice, b.OutputPrice); c != 0 {
+		return c < 0
+	}
+	return compareNumeric(a.UncachedInputPrice, b.UncachedInputPrice) < 0
+}
+
+// compareNumeric 比较两个 NUMERIC：返回 -1/0/1；无效值视为更大（排到末尾）。
+func compareNumeric(a, b pgtype.Numeric) int {
+	ra, oka := chatSettlementNumericRat(a)
+	rb, okb := chatSettlementNumericRat(b)
+	switch {
+	case !oka && !okb:
+		return 0
+	case !oka:
+		return 1
+	case !okb:
+		return -1
+	default:
+		return ra.Cmp(rb)
+	}
 }
 
 func candidateRouteIndexes(candidates []routing.ChatRouteCandidate) map[int64]int {

@@ -120,7 +120,7 @@ func responsesSafeMessage(code string) string {
 // 支持上游 responses 直传或可经桥接走 chat 任一即保留，输入 token 估算据候选能力分流（直传 tokenizer
 // vs 桥接 chat tokenizer）。allowDirect=false（CompactHistory 等强制桥接）退回纯 chat 桥接能力与估算。
 // 与 chatcompletions 一致按 stream 选择 Stream/NonStream 变体，避免仅支持一种模式的候选误选/误排。
-func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req gatewayapi.ResponsesRequest, candidates []routing.ChatRouteCandidate, stream bool, allowDirect bool) (lifecycle.CandidatePlan, error) {
+func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req gatewayapi.ResponsesRequest, candidates []routing.ChatRouteCandidate, mode string, stream bool, allowDirect bool) (lifecycle.CandidatePlan, error) {
 	var capabilities []lifecycle.AdapterCapability
 	if allowDirect {
 		capabilities = []lifecycle.AdapterCapability{lifecycle.AdapterCapabilityResponsesServeTokenizer}
@@ -144,6 +144,8 @@ func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req g
 		Capabilities:        capabilities,
 		Available:           s.lifecycle.CandidateAvailable,
 		EstimateInputTokens: s.responsesInputTokenEstimator(req, allowDirect),
+		Mode:                mode,
+		ChannelHealthScore:  s.lifecycle.ChannelHealthScore,
 	})
 }
 

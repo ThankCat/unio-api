@@ -9,32 +9,19 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/billing"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type chatAuthorizationPriceStore struct {
-	price  sqlc.Price
-	params []sqlc.FindActivePriceForModelParams
-	err    error
-}
-
-func (s *chatAuthorizationPriceStore) FindActivePriceForModel(ctx context.Context, arg sqlc.FindActivePriceForModelParams) (sqlc.Price, error) {
-	s.params = append(s.params, arg)
-	return s.price, s.err
-}
-
+// chatAuthorizationBilling 用 price.OutputPrice 作为估算金额替身，便于断言「冻结取候选池最贵」。
 type chatAuthorizationBilling struct {
 	estimate billing.AuthorizationEstimate
-	price    billing.CustomerPriceSnapshot
-	charge   billing.CustomerCharge
-	err      error
+	calls    int
 }
 
 func (b *chatAuthorizationBilling) EstimateAuthorizationAmount(estimate billing.AuthorizationEstimate, price billing.CustomerPriceSnapshot) (billing.CustomerCharge, error) {
 	b.estimate = estimate
-	b.price = price
-	return b.charge, b.err
+	b.calls++
+	return billing.CustomerCharge{Amount: price.OutputPrice, Currency: "USD", FormulaVersion: billing.FormulaVersionV1}, nil
 }
 
 type chatAuthorizationLedger struct {
@@ -56,31 +43,40 @@ func (l *chatAuthorizationLedger) ReleaseWithBillingException(ctx context.Contex
 	return ledger.Reservation{}, nil
 }
 
-func TestChatAuthorizationUsesConservativeInputEstimate(t *testing.T) {
-	amount := gatewayTestNumeric(12345, -4)
-	priceStore := &chatAuthorizationPriceStore{price: sqlc.Price{
-		ID:          99,
-		Currency:    "USD",
-		PricingUnit: billing.PricingUnitPer1MTokens,
-	}}
-	billingService := &chatAuthorizationBilling{
-		charge: billing.CustomerCharge{Amount: amount, Currency: "USD", FormulaVersion: billing.FormulaVersionV1},
+// TestChatAuthorizationFreezesOnMostExpensiveCandidate 验证阶段 15：渠道未定时按候选池里
+// 「按本次 token 估算最贵」的一条售价冻结，确保命中任一候选都不超扣。
+func TestChatAuthorizationFreezesOnMostExpensiveCandidate(t *testing.T) {
+	cheap := billing.CustomerPriceSnapshot{
+		Currency:           "USD",
+		PricingUnit:        billing.PricingUnitPer1MTokens,
+		UncachedInputPrice: gatewayTestNumeric(1, 0),
+		OutputPrice:        gatewayTestNumeric(5, 0),
+		FormulaVersion:     billing.FormulaVersionV1,
 	}
+	pricey := billing.CustomerPriceSnapshot{
+		Currency:           "USD",
+		PricingUnit:        billing.PricingUnitPer1MTokens,
+		UncachedInputPrice: gatewayTestNumeric(2, 0),
+		OutputPrice:        gatewayTestNumeric(12, 0),
+		FormulaVersion:     billing.FormulaVersionV1,
+	}
+
+	billingService := &chatAuthorizationBilling{}
 	ledgerService := &chatAuthorizationLedger{
 		reservation: ledger.Reservation{
 			ID:               7001,
 			RequestRecordID:  44,
 			Currency:         "USD",
-			EstimatedAmount:  amount,
-			AuthorizedAmount: amount,
+			EstimatedAmount:  gatewayTestNumeric(12, 0),
+			AuthorizedAmount: gatewayTestNumeric(12, 0),
 		},
 	}
-	service := NewChatAuthorizationService(priceStore, billingService, ledgerService)
+	service := NewChatAuthorizationService(billingService, ledgerService)
 
 	authorization, err := service.AuthorizeChat(context.Background(), ChatAuthorizeParams{
 		RequestRecord:       requestlog.RequestRecord{ID: 44},
 		Principal:           &auth.APIKeyPrincipal{UserID: 12},
-		ModelDBID:           55,
+		CandidatePrices:     []billing.CustomerPriceSnapshot{cheap, pricey},
 		InputTokens:         321,
 		MaxCompletionTokens: 128,
 	})
@@ -88,17 +84,33 @@ func TestChatAuthorizationUsesConservativeInputEstimate(t *testing.T) {
 		t.Fatalf("AuthorizeChat returned error: %v", err)
 	}
 
-	if billingService.estimate.InputTokens != 321 {
-		t.Fatalf("expected input token estimate %d, got %d", 321, billingService.estimate.InputTokens)
+	if billingService.calls != 2 {
+		t.Fatalf("expected estimate over each candidate (2 calls), got %d", billingService.calls)
 	}
-	if billingService.estimate.MaxCompletionTokens != 128 {
-		t.Fatalf("expected max completion tokens %d, got %d", 128, billingService.estimate.MaxCompletionTokens)
+	if billingService.estimate.InputTokens != 321 || billingService.estimate.MaxCompletionTokens != 128 {
+		t.Fatalf("unexpected estimate: %#v", billingService.estimate)
+	}
+	// 冻结额取候选池最贵 = 12。
+	if !chatSettlementSameNumeric(ledgerService.preAuthorizeParams.EstimatedAmount, gatewayTestNumeric(12, 0)) {
+		t.Fatalf("expected freeze on most expensive candidate (12), got %#v", ledgerService.preAuthorizeParams.EstimatedAmount)
 	}
 	if ledgerService.preAuthorizeParams.UserID != 12 || ledgerService.preAuthorizeParams.RequestRecordID != 44 {
 		t.Fatalf("unexpected ledger preauthorize params: %#v", ledgerService.preAuthorizeParams)
 	}
-	if authorization.ReservationID != 7001 || authorization.PriceID != 99 {
+	if authorization.ReservationID != 7001 {
 		t.Fatalf("unexpected authorization: %#v", authorization)
+	}
+}
+
+// TestChatAuthorizationRequiresCandidatePrices 验证无候选售价时拒绝冻结。
+func TestChatAuthorizationRequiresCandidatePrices(t *testing.T) {
+	service := NewChatAuthorizationService(&chatAuthorizationBilling{}, &chatAuthorizationLedger{})
+	_, err := service.AuthorizeChat(context.Background(), ChatAuthorizeParams{
+		RequestRecord: requestlog.RequestRecord{ID: 1},
+		Principal:     &auth.APIKeyPrincipal{UserID: 1},
+	})
+	if err == nil {
+		t.Fatal("expected error when no candidate prices are provided")
 	}
 }
 

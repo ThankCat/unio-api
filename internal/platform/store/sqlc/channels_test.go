@@ -74,10 +74,18 @@ func TestFindRouteCandidatesFiltersByIngressProtocol(t *testing.T) {
 	insertChannelModel(t, ctx, tx, openaiChannelID, modelID, "proto-openai-upstream", "enabled")
 	insertChannelModel(t, ctx, tx, anthropicChannelID, modelID, "proto-anthropic-upstream", "enabled")
 
+	// 阶段 15：FindRouteCandidates 只返回「已定价」渠道，给两条渠道各配一条 enabled 渠道-模型价。
+	now := time.Now().UTC()
+	createChannelPriceForTest(t, ctx, queries, openaiChannelID, modelID, now)
+	createChannelPriceForTest(t, ctx, queries, anthropicChannelID, modelID, now)
+
 	openaiCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: requestedModel,
 		IngressProtocol:  "openai",
 		ProjectID:        1,
+		PoolKind:         "all",
+		RouteID:          0,
+		AtTime:           timestamptz(now),
 	})
 	if err != nil {
 		t.Fatalf("find openai route candidates: %v", err)
@@ -96,6 +104,9 @@ func TestFindRouteCandidatesFiltersByIngressProtocol(t *testing.T) {
 		RequestedModelID: requestedModel,
 		IngressProtocol:  "anthropic",
 		ProjectID:        1,
+		PoolKind:         "all",
+		RouteID:          0,
+		AtTime:           timestamptz(now),
 	})
 	if err != nil {
 		t.Fatalf("find anthropic route candidates: %v", err)

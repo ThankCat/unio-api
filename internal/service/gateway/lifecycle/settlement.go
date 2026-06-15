@@ -286,34 +286,40 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		return err
 	}
 
-	if params.Authorization.PriceID <= 0 {
-		return failure.New(
+	// 阶段 15：按实际命中渠道重查 channel_prices，一次取回售价 + 成本（同源、同 at_time）。
+	// 收入不再沿用 authorization 锁价；authorization 只负责保守冻结。
+	channelPrice, err := txQueries.FindActiveChannelPrice(ctx, sqlc.FindActiveChannelPriceParams{
+		ChannelID: params.FinalChannelID,
+		ModelID:   params.ModelDBID,
+		AtTime:    pgtype.Timestamptz{Time: params.AttemptRecord.StartedAt, Valid: true},
+	})
+	if err != nil {
+		return failure.Wrap(
 			failure.CodeGatewayChatSettlementFailed,
-			failure.WithMessage("chat settlement missing authorization price id"),
+			err,
+			failure.WithMessage("find active channel price for chat settlement"),
 		)
 	}
 
-	authorizationPrice := params.Authorization.Price
-
-	// 将 authorization 使用的价格复制成请求级快照，保证冻结和结算使用同一份价格。
+	// 收入快照：命中渠道的售价（price_id 指向 channel_prices）。
 	snapshot, err := txQueries.CreatePriceSnapshot(ctx, sqlc.CreatePriceSnapshotParams{
 		RequestRecordID:        params.RequestRecord.ID,
-		PriceID:                pgtype.Int8{Int64: params.Authorization.PriceID, Valid: true},
-		Currency:               authorizationPrice.Currency,
-		PricingUnit:            authorizationPrice.PricingUnit,
-		UncachedInputPrice:     authorizationPrice.UncachedInputPrice,
-		CacheReadInputPrice:    authorizationPrice.CacheReadInputPrice,
-		CacheWrite5mInputPrice: authorizationPrice.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice: authorizationPrice.CacheWrite1hInputPrice,
-		OutputPrice:            authorizationPrice.OutputPrice,
-		ReasoningOutputPrice:   authorizationPrice.ReasoningOutputPrice,
-		FormulaVersion:         authorizationPrice.FormulaVersion,
+		PriceID:                pgtype.Int8{Int64: channelPrice.ID, Valid: true},
+		Currency:               channelPrice.Currency,
+		PricingUnit:            channelPrice.PricingUnit,
+		UncachedInputPrice:     channelPrice.UncachedInputPrice,
+		CacheReadInputPrice:    channelPrice.CacheReadInputPrice,
+		CacheWrite5mInputPrice: channelPrice.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice: channelPrice.CacheWrite1hInputPrice,
+		OutputPrice:            channelPrice.OutputPrice,
+		ReasoningOutputPrice:   channelPrice.ReasoningOutputPrice,
+		FormulaVersion:         billing.FormulaVersionV1,
 	})
 	if err != nil {
 		return err
 	}
 
-	// 计算用户本次请求的花费。
+	// 计算用户本次请求的花费（按命中渠道售价）。
 	charge, err := s.billingCalculator.CalculateCustomerCharge(facts.Usage, billing.CustomerPriceSnapshot{
 		Currency:               snapshot.Currency,
 		PricingUnit:            snapshot.PricingUnit,
@@ -329,32 +335,9 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		return err
 	}
 
-	// 获取本次请求命中的 channel/model 上游成本单价。
-	costPrice, err := txQueries.FindActiveChannelCostPrice(ctx, sqlc.FindActiveChannelCostPriceParams{
-		ChannelID: params.FinalChannelID,
-		ModelID:   params.ModelDBID,
-		AtTime:    pgtype.Timestamptz{Time: params.AttemptRecord.StartedAt, Valid: true},
-	})
-	if err != nil {
-		return failure.Wrap(
-			failure.CodeGatewayChatSettlementFailed,
-			err,
-			failure.WithMessage("find active channel cost price for chat settlement"),
-		)
-	}
-
-	// 计算平台本次调用上游的实际成本。
-	providerCost, err := s.billingCalculator.CalculateProviderCost(facts.Usage, billing.ProviderCostSnapshot{
-		Currency:              costPrice.Currency,
-		PricingUnit:           costPrice.PricingUnit,
-		UncachedInputCost:     costPrice.UncachedInputCost,
-		CacheReadInputCost:    costPrice.CacheReadInputCost,
-		CacheWrite5mInputCost: costPrice.CacheWrite5mInputCost,
-		CacheWrite1hInputCost: costPrice.CacheWrite1hInputCost,
-		OutputCost:            costPrice.OutputCost,
-		ReasoningOutputCost:   costPrice.ReasoningOutputCost,
-		FormulaVersion:        billing.FormulaVersionV1,
-	})
+	// 成本：同一 channel_prices 行的成本列；某分项为空按 0 入账（成本未知，毛利偏保守）。
+	costSnapshot := channelPriceCostSnapshot(channelPrice)
+	providerCost, err := s.billingCalculator.CalculateProviderCost(facts.Usage, costSnapshot)
 	if err != nil {
 		return failure.Wrap(
 			failure.CodeGatewayChatSettlementFailed,
@@ -363,22 +346,22 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		)
 	}
 
-	// 写入成本快照
+	// 写入成本快照（cost_price_id 指向同一 channel_prices 行）。
 	_, err = txQueries.CreateCostSnapshot(ctx, sqlc.CreateCostSnapshotParams{
 		RequestRecordID:             params.RequestRecord.ID,
-		CostPriceID:                 costPrice.ID,
+		CostPriceID:                 channelPrice.ID,
 		ProviderID:                  params.FinalProviderID,
 		ChannelID:                   params.FinalChannelID,
 		ModelID:                     params.ModelDBID,
 		UpstreamModel:               params.AttemptRecord.UpstreamModel,
-		Currency:                    costPrice.Currency,
-		PricingUnit:                 costPrice.PricingUnit,
-		UncachedInputCost:           costPrice.UncachedInputCost,
-		CacheReadInputCost:          costPrice.CacheReadInputCost,
-		CacheWrite5mInputCost:       costPrice.CacheWrite5mInputCost,
-		CacheWrite1hInputCost:       costPrice.CacheWrite1hInputCost,
-		OutputCost:                  costPrice.OutputCost,
-		ReasoningOutputCost:         costPrice.ReasoningOutputCost,
+		Currency:                    costSnapshot.Currency,
+		PricingUnit:                 costSnapshot.PricingUnit,
+		UncachedInputCost:           costSnapshot.UncachedInputCost,
+		CacheReadInputCost:          costSnapshot.CacheReadInputCost,
+		CacheWrite5mInputCost:       costSnapshot.CacheWrite5mInputCost,
+		CacheWrite1hInputCost:       costSnapshot.CacheWrite1hInputCost,
+		OutputCost:                  costSnapshot.OutputCost,
+		ReasoningOutputCost:         costSnapshot.ReasoningOutputCost,
 		UncachedInputCostAmount:     providerCost.UncachedInputCostAmount,
 		CacheReadInputCostAmount:    providerCost.CacheReadInputCostAmount,
 		CacheWrite5mInputCostAmount: providerCost.CacheWrite5mInputCostAmount,
@@ -492,6 +475,8 @@ func (s *ChatSettlementService) ensureIdempotentSuccessfulChat(ctx context.Conte
 		return err
 	}
 
+	// 阶段 15：收入快照来自结算时命中渠道的售价（非 authorization 锁价），幂等校验改为
+	// 「按存储的 price_snapshot 重算费用并与 ledger 实扣金额比对」，price_snapshot 本身即为权威事实。
 	snapshot, err := queries.GetPriceSnapshotByRequest(ctx, request.ID)
 	if err != nil {
 		return failure.Wrap(
@@ -499,10 +484,6 @@ func (s *ChatSettlementService) ensureIdempotentSuccessfulChat(ctx context.Conte
 			err,
 			failure.WithMessage("lookup idempotent chat settlement price snapshot"),
 		)
-	}
-
-	if err := ensureSettlementPriceSnapshotMatches(snapshot, params.Authorization); err != nil {
-		return err
 	}
 
 	billingUsage := settlementUsageFactsFromRecord(usageRecord, lineItems)
@@ -606,28 +587,28 @@ func ensureSettlementRequestMatches(request sqlc.RequestRecord, params ChatSettl
 
 }
 
-// ensureSettlementPriceSnapshotMatches 校验请求级价格快照是否等于 authorization 时冻结的价格。
-func ensureSettlementPriceSnapshotMatches(snapshot sqlc.PriceSnapshot, authorization ChatAuthorization) error {
-	price := authorization.Price
+// channelPriceCostSnapshot 把 channel_prices 行的成本列映射成 ProviderCostSnapshot；
+// 阶段 15：某分项成本为空（成本未知）按 0 入账，毛利偏保守，且满足 cost_snapshots 成本列约束。
+func channelPriceCostSnapshot(p sqlc.ChannelPrice) billing.ProviderCostSnapshot {
+	return billing.ProviderCostSnapshot{
+		Currency:              p.Currency,
+		PricingUnit:           p.PricingUnit,
+		UncachedInputCost:     numericOrZero(p.UncachedInputCost),
+		CacheReadInputCost:    numericOrZero(p.CacheReadInputCost),
+		CacheWrite5mInputCost: numericOrZero(p.CacheWrite5mInputCost),
+		CacheWrite1hInputCost: numericOrZero(p.CacheWrite1hInputCost),
+		OutputCost:            numericOrZero(p.OutputCost),
+		ReasoningOutputCost:   numericOrZero(p.ReasoningOutputCost),
+		FormulaVersion:        billing.FormulaVersionV1,
+	}
+}
 
-	if !snapshot.PriceID.Valid || snapshot.PriceID.Int64 != authorization.PriceID {
-		return ChatSettlementIdempotencyConflict("price snapshot id mismatch")
+// numericOrZero 把空/非有限 NUMERIC 归一为 0（成本未知按 0 入账）。
+func numericOrZero(v pgtype.Numeric) pgtype.Numeric {
+	if v.Valid && !v.NaN && v.InfinityModifier == pgtype.Finite && v.Int != nil {
+		return v
 	}
-	if snapshot.Currency != price.Currency ||
-		snapshot.PricingUnit != price.PricingUnit ||
-		snapshot.FormulaVersion != price.FormulaVersion {
-		return ChatSettlementIdempotencyConflict("price snapshot metadata mismatch")
-	}
-	if !chatSettlementSameNumeric(snapshot.UncachedInputPrice, price.UncachedInputPrice) ||
-		!chatSettlementSameNumeric(snapshot.CacheReadInputPrice, price.CacheReadInputPrice) ||
-		!chatSettlementSameNumeric(snapshot.CacheWrite5mInputPrice, price.CacheWrite5mInputPrice) ||
-		!chatSettlementSameNumeric(snapshot.CacheWrite1hInputPrice, price.CacheWrite1hInputPrice) ||
-		!chatSettlementSameNumeric(snapshot.OutputPrice, price.OutputPrice) ||
-		!chatSettlementSameNumeric(snapshot.ReasoningOutputPrice, price.ReasoningOutputPrice) {
-		return ChatSettlementIdempotencyConflict("price snapshot amount mismatch")
-	}
-
-	return nil
+	return pgtype.Numeric{Int: big.NewInt(0), Exp: 0, Valid: true}
 }
 
 // ensureSettlementCostSnapshotMatches 校验请求级成本快照是否和本次 settlement 参数、自身重算金额一致。

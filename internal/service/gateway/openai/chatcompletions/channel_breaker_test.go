@@ -30,6 +30,13 @@ func (f *fakeChannelBreaker) Available(channelKey string) bool {
 	return !f.denied[channelKey]
 }
 
+func (f *fakeChannelBreaker) HealthScore(channelKey string) float64 {
+	if f.denied[channelKey] {
+		return 1
+	}
+	return 0
+}
+
 func (f *fakeChannelBreaker) RecordSuccess(channelKey string) {
 	f.successes = append(f.successes, channelKey)
 }

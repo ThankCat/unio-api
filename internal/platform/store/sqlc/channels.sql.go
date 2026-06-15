@@ -87,22 +87,22 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 }
 
 const deleteChannelCascade = `-- name: DeleteChannelCascade :execrows
-WITH deleted_channel_models AS (
-    DELETE FROM channel_models WHERE channel_models.channel_id = $1
+WITH deleted_channel_prices AS (
+    DELETE FROM channel_prices WHERE channel_prices.channel_id = $1
 ),
-deleted_channel_cost_prices AS (
-    DELETE FROM channel_cost_prices WHERE channel_cost_prices.channel_id = $1
+deleted_channel_models AS (
+    DELETE FROM channel_models WHERE channel_models.channel_id = $1
 )
 DELETE FROM channels WHERE channels.id = $1
 `
 
 // DeleteChannelCascade 物理删除 channel，用于清理录错且从未使用的脏数据，并在同一条语句内
-// 级联清理 channel 自身的配置子表：channel_models（模型绑定）、channel_cost_prices（成本价）；
+// 级联清理 channel 自身的配置子表：channel_models（模型绑定）、channel_prices（渠道-模型价）；
 // channel_capability_overrides 由 ON DELETE CASCADE 自动清理，无需在此显式删除。
 // 外键均为默认 NO ACTION（约束在语句末校验），故 CTE 删子表 + 删主体在单条语句内原子完成：
-// 子配置先删除，语句末 channels 的删除不会留下悬挂引用。若 channel 或其子配置仍被请求/账务快照
-// （request_attempts/request_records/cost_snapshots/settlement_recovery_jobs）引用，整条语句报 23503
-// 全部回滚，上层降级为 conflict，提示改用停用。返回值为 channels 行的受影响数（0 表示 channel 不存在）。
+// 子配置先删除，语句末 channels 的删除不会留下悬挂引用。若 channel 仍被线路池（route_channels）、
+// 请求/账务快照（request_attempts/request_records/cost_snapshots/settlement_recovery_jobs）引用，
+// 整条语句报 23503 全部回滚，上层降级为 conflict，提示改用停用。返回值为 channels 行的受影响数（0 表示 channel 不存在）。
 func (q *Queries) DeleteChannelCascade(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteChannelCascade, id)
 	if err != nil {

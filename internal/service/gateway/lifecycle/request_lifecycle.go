@@ -105,6 +105,16 @@ func (l *RequestLifecycle) BreakerAllow(channelKey string) bool {
 	return l.breaker.Allow(channelKey)
 }
 
+// ChannelHealthScore 返回某 channel 的健康分（越小越健康），供 stable 线路排序。
+// nil receiver / nil breaker 等价于「无健康统计」，返回 0（不改变排序）。
+func (l *RequestLifecycle) ChannelHealthScore(channelKey string) float64 {
+	if l == nil || l.breaker == nil {
+		return 0
+	}
+
+	return l.breaker.HealthScore(channelKey)
+}
+
 // RecordChannelHealth 按错误分类把一次上游尝试结果记入熔断器。
 // 只有归因于 channel 的失败才计为失败；bad_request/canceled 等不惩罚渠道。
 // 每次被放行的尝试都必须恰好记录一次，以正确收口 half-open 探测。

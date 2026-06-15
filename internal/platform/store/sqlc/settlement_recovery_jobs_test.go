@@ -15,14 +15,14 @@ import (
 )
 
 type settlementRecoveryFixture struct {
-	identity    requestRecordIdentity
-	request     sqlc.RequestRecord
-	attempt     sqlc.RequestAttempt
-	reservation sqlc.LedgerReservation
-	price       sqlc.Price
-	modelID     int64
-	providerID  int64
-	channelID   int64
+	identity     requestRecordIdentity
+	request      sqlc.RequestRecord
+	attempt      sqlc.RequestAttempt
+	reservation  sqlc.LedgerReservation
+	channelPrice sqlc.ChannelPrice
+	modelID      int64
+	providerID   int64
+	channelID    int64
 }
 
 func createSettlementRecoveryFixture(t *testing.T, ctx context.Context, tx pgx.Tx, queries *sqlc.Queries) settlementRecoveryFixture {
@@ -34,7 +34,7 @@ func createSettlementRecoveryFixture(t *testing.T, ctx context.Context, tx pgx.T
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("settlement-recovery-channel-%d", suffix), "enabled", 10, nil)
 	modelID := insertModel(t, ctx, tx, fmt.Sprintf("settlement-recovery-model-%d", suffix), "openai", "enabled")
 	insertChannelModel(t, ctx, tx, channelID, modelID, "gpt-4.1", "enabled")
-	price := createPriceForTest(t, ctx, queries, priceParams(modelID, time.Now().UTC()))
+	channelPrice := createChannelPriceForTest(t, ctx, queries, channelID, modelID, time.Now().UTC())
 
 	request := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("settlement-recovery-request-%d", suffix))
 	attempt, err := queries.CreateRequestAttempt(ctx, sqlc.CreateRequestAttemptParams{
@@ -79,14 +79,14 @@ func createSettlementRecoveryFixture(t *testing.T, ctx context.Context, tx pgx.T
 	}
 
 	return settlementRecoveryFixture{
-		identity:    identity,
-		request:     request,
-		attempt:     attempt,
-		reservation: reservation,
-		price:       price,
-		modelID:     modelID,
-		providerID:  providerID,
-		channelID:   channelID,
+		identity:     identity,
+		request:      request,
+		attempt:      attempt,
+		reservation:  reservation,
+		channelPrice: channelPrice,
+		modelID:      modelID,
+		providerID:   providerID,
+		channelID:    channelID,
 	}
 }
 
@@ -123,15 +123,15 @@ func settlementRecoveryJobParams(f settlementRecoveryFixture, nextRunAt time.Tim
 		UsageReasoningOutputTokensState:   "known",
 		UsageSource:                       "upstream_response",
 		UsageMappingVersion:               "openai_chat_usage_v1",
-		PriceID:                           f.price.ID,
-		Currency:                          f.price.Currency,
-		PricingUnit:                       f.price.PricingUnit,
-		UncachedInputPrice:                f.price.UncachedInputPrice,
-		CacheReadInputPrice:               f.price.CacheReadInputPrice,
-		CacheWrite5mInputPrice:            f.price.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:            f.price.CacheWrite1hInputPrice,
-		OutputPrice:                       f.price.OutputPrice,
-		ReasoningOutputPrice:              f.price.ReasoningOutputPrice,
+		PriceID:                           f.channelPrice.ID,
+		Currency:                          f.channelPrice.Currency,
+		PricingUnit:                       f.channelPrice.PricingUnit,
+		UncachedInputPrice:                f.channelPrice.UncachedInputPrice,
+		CacheReadInputPrice:               f.channelPrice.CacheReadInputPrice,
+		CacheWrite5mInputPrice:            f.channelPrice.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:            f.channelPrice.CacheWrite1hInputPrice,
+		OutputPrice:                       f.channelPrice.OutputPrice,
+		ReasoningOutputPrice:              f.channelPrice.ReasoningOutputPrice,
 		FormulaVersion:                    billing.FormulaVersionV1,
 		EstimatedAmount:                   f.reservation.EstimatedAmount,
 		AuthorizedAmount:                  f.reservation.AuthorizedAmount,

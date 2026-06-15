@@ -1,7 +1,8 @@
 # 阶段 15 计划 - 渠道商品化 + 策略路由（Channel Productization & Routing Strategy）
 
-> 状态：planned（规划中，尚未进入实现）。本文件是「本次整改」的落地设计文档；
-> `STATUS.md` / `ACCEPTANCE.md` 在正式进入实现时再补齐。
+> 状态：in_progress（核心实现已落地：迁移 + sqlc + 路由策略 + 计费切换 + 渠道价/线路 admin + 前端，
+> `go build/vet/test` 全绿（51 包，含 DB 集成）、前端 `tsc/eslint/vite build` 全绿）。
+> 当前进度与剩余项见 [STATUS.md](STATUS.md)，验收标准见 [ACCEPTANCE.md](ACCEPTANCE.md)。
 >
 > 关系：本阶段与 [phase-14 模型目录解耦](../phase-14-model-catalog-decoupling/PLAN.md) 正交但相邻——
 > phase-14 解决「模型从哪来 / 怎么采纳」，本阶段解决「同一个模型怎么按渠道定价、怎么把渠道差异
@@ -281,17 +282,25 @@ ALTER TABLE projects ADD COLUMN default_route_id BIGINT REFERENCES routes(id); -
   - 删 `prices`、`channel_cost_prices`（含其查询）。
 - 与 phase-14 的迁移**互不冲突**（phase-14 动 models/目录三表，本阶段动价/线路/快照外键），落地先后皆可，仅编号顺延。
 
-## 13. 任务拆分（实现期再逐项打勾）
+## 13. 任务拆分（实现期逐项打勾）
 
-- [ ] T1 迁移：`channel_prices`（守卫 CHECK/EXCLUDE）+ `routes`(+种子) + `route_channels`；`api_keys.route_id`/`projects.default_route_id`；快照外键改挂 `channel_prices`；删 `prices`/`channel_cost_prices`。
-- [ ] T2 sqlc：`channel_prices` CRUD + `FindActiveChannelPrice` + 候选售价上界（reservation）；`routes`/`route_channels` CRUD；`api_keys`/`projects` 线路读写；`FindRouteCandidates` 扩展（线路池过滤 + 已定价过滤 + 带出售价）。
-- [ ] T3 routing：线路解析 + 候选池过滤 + 策略排序（cheapest/stable/fixed）；价缓存接入。
-- [ ] T4 settlement：收入解析改 `FindActiveChannelPrice`；双快照改挂 `channel_prices`；成本空值按 0；reservation 保守上界。
-- [ ] T5 service：价格守卫（可读错误）；线路 CRUD + fixed/all 校验；一站式绑定事务；key/project 线路绑定。
-- [ ] T6 adminapi：渠道价/线路/绑定/key 线路 路由 + DTO + 错误渲染；`/v1/models` 随线路收敛。
-- [ ] T7 前端：渠道价表（毛利+守卫）、线路管理页、key 线路选择、一站式绑定弹窗、退役模型售价入口。
-- [ ] T8 测试：守卫拦截矩阵、cheapest/stable/fixed 排序、fixed 不 fallback、按实际渠道计费、reservation 不超扣、迁移 down/up。
-- [ ] T9 文档：补 `STATUS.md`/`ACCEPTANCE.md`，更新 chapters `README.md` 索引、`PROJECT_STATUS.md`，必要时 `DECISIONS.md` 追加（倍率取舍 / 收入按渠道）。
+- [x] T1 迁移（000031–000036）：`channel_prices`（守卫 CHECK/EXCLUDE + 复合唯一）+ `routes`(+内置经济/稳定种子) + `route_channels`；`api_keys.route_id`/`projects.default_route_id`；快照与 `settlement_recovery_jobs.price_id` 外键改挂 `channel_prices`；删 `prices`/`channel_cost_prices`。down/up 可逆已验。
+- [x] T2 sqlc：`channel_prices` CRUD + `FindActiveChannelPrice`（一次取售价+成本）；`routes`/`route_channels` CRUD；`api_keys`/`projects` 线路读写；`FindRouteCandidates` 扩展（线路池过滤 + 已定价 LATERAL join 过滤 + 带出每候选售价向量）。`sqlc generate` 干净。
+- [x] T3 routing：线路解析（key ?? project ?? 内置经济）+ 候选池过滤 + 策略排序（cheapest 按售价升序 / stable 按熔断健康分 / fixed 单候选）。排序在 `lifecycle.PrepareCandidates`。
+- [x] T4 settlement：收入改按命中渠道 `FindActiveChannelPrice`（与成本同源、同 attempt 时点）；双快照改挂 `channel_prices`；成本空值按 0；reservation 取候选池「按 token 估算最贵」售价做保守上界（Go 侧计算，不超扣）。
+- [x] T5 service：`channelprice` 价格守卫（分项售<成可读报错 + DB CHECK 兜底）；`route` CRUD + fixed/all/explicit 校验（事务建线路+池）；key/project 线路绑定。
+- [x] T6 adminapi：渠道价（`/channels/{id}/models/{modelID}/prices` + `/channels/{id}/prices` + `/channel-prices/{id}`）、线路（CRUD + `/routes/{id}/channels`）、key/project 线路 路由 + DTO + 错误渲染；bootstrap 装配。
+- [x] T7 前端：渠道价表（售价+成本同行、毛利、售价<成本飘红禁止提交）、线路管理页、key 线路选择、退役模型售价入口；`channelPrices.ts`/`routes.ts` API。`tsc/eslint/vite build` 全绿。
+- [x] T8 测试：守卫拦截、cheapest 排序单测、按命中渠道计费 + attempt 时点取价（DB 集成）、reservation 取最贵候选、迁移 down/up；后端 51 包全绿。
+- [~] T9 文档：`STATUS.md`/`ACCEPTANCE.md` 已建、`README.md` 索引已更新；`PROJECT_STATUS.md`/`DECISIONS.md` 收口时补。
+
+### 实现期偏差与剩余项（详见 STATUS.md）
+
+- **PLAN 缺口已补**：`settlement_recovery_jobs.price_id`（NOT NULL → prices）原 §6.2 漏列，已一并改挂 `channel_prices`。
+- **计费不变量变更**：收入从「授权锁价（模型级）」改为「结算按命中渠道重查」，连带改写 settlement 幂等校验（去授权价比对，改为按存储快照重算对账）与 recovery job 取价。
+- **未做（PLAN §9 运行时）**：`/v1/models`（`ListAvailableModelsForProject`）尚未随 fixed/explicit 线路收敛模型可见性（`all` 默认线路不受影响）。
+- **未做（PLAN §7 优化）**：线路解析与渠道价缓存层（当前每请求直读 routes/`channel_prices`，量小可接受）。
+- **未做（PLAN §9）**：「一站式绑定」单事务（建 channel_model + channel_price）；当前绑定与定价为两步。
 
 ## 14. 测试策略
 

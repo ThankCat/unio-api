@@ -37,6 +37,10 @@ func (f *fakeProjectService) Get(context.Context, int64) (customer.Project, erro
 	return customer.Project{ID: 1, UserID: 10, Name: "ws"}, nil
 }
 
+func (f *fakeProjectService) SetDefaultRoute(_ context.Context, id int64, routeID *int64) (customer.Project, error) {
+	return customer.Project{ID: id, UserID: 10, Name: "ws", DefaultRouteID: routeID}, nil
+}
+
 type fakeAPIKeyService struct {
 	list    []customer.APIKey
 	created customer.CreatedAPIKey
