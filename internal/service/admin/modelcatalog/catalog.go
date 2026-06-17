@@ -72,9 +72,9 @@ type EntryDetail struct {
 
 // ListParams 是目录分页/搜索入参。
 type ListParams struct {
-	Query string
-	Lab   string
-	Limit int32
+	Query  string
+	Lab    string
+	Limit  int32
 	Offset int32
 }
 
@@ -445,23 +445,33 @@ func validateCapabilities(in []CapabilityHint) ([]CapabilityHint, error) {
 		if !capability.IsValidSupportLevel(level) {
 			return nil, invalidArgument("support_level", "support_level must be full, limited or unsupported")
 		}
-		if level != capability.SupportLevelLimited && len(c.Limits) > 0 {
-			return nil, invalidArgument("limits", "limits only allowed at limited support level")
+		if capability.LimitsJSONPresent(c.Limits) {
+			if level != capability.SupportLevelLimited {
+				return nil, invalidArgument("limits", "limits only allowed at limited support level")
+			}
+			if !json.Valid(c.Limits) {
+				return nil, invalidArgument("limits", "limits must be valid JSON")
+			}
 		}
 		if _, dup := seen[string(key)]; dup {
 			return nil, invalidArgument("capability_key", "duplicate capability key: "+string(key))
 		}
 		seen[string(key)] = struct{}{}
-		out = append(out, CapabilityHint{Key: string(key), SupportLevel: string(level), Limits: c.Limits})
+		out = append(out, CapabilityHint{
+			Key:          string(key),
+			SupportLevel: string(level),
+			Limits:       capability.NormalizeLimitsJSON(c.Limits),
+		})
 	}
 	return out, nil
 }
 
 func limitsBytes(raw json.RawMessage) []byte {
-	if len(raw) == 0 {
+	n := capability.NormalizeLimitsJSON(raw)
+	if len(n) == 0 {
 		return nil
 	}
-	return []byte(raw)
+	return []byte(n)
 }
 
 func invalidArgument(field, message string) error {

@@ -61,7 +61,7 @@ func (p AdapterProfile) Validate() error {
 		}
 		seen[d.Key] = struct{}{}
 
-		if d.SupportLevel != SupportLevelLimited && len(d.Limits) > 0 {
+		if d.SupportLevel != SupportLevelLimited && LimitsJSONPresent(d.Limits) {
 			return fmt.Errorf("capability: adapter profile %s/%s key %q sets limits at non-limited level %q", p.Provider, p.Protocol, d.Key, d.SupportLevel)
 		}
 	}

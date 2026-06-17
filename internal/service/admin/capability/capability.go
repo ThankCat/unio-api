@@ -187,7 +187,7 @@ func ensureModelExists(ctx context.Context, l modelLookup, modelID int64) error 
 
 // validateLimits 校验 limits：仅在 limited 级别允许，且必须是合法 JSON。
 func validateLimits(level core.SupportLevel, limits json.RawMessage) error {
-	if len(strings.TrimSpace(string(limits))) == 0 {
+	if !core.LimitsJSONPresent(limits) {
 		return nil
 	}
 	if !json.Valid(limits) {
@@ -199,12 +199,9 @@ func validateLimits(level core.SupportLevel, limits json.RawMessage) error {
 	return nil
 }
 
-// normalizeLimits 把空白/空 JSON 归一为 nil（写 NULL）。
+// normalizeLimits 把空白/null 归一为 nil（写 NULL）。
 func normalizeLimits(limits json.RawMessage) json.RawMessage {
-	if len(strings.TrimSpace(string(limits))) == 0 {
-		return nil
-	}
-	return limits
+	return core.NormalizeLimitsJSON(limits)
 }
 
 // actorPtr 把审计执行者转成可选指针；空串视为未知（nil）。

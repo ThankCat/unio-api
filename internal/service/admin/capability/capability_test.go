@@ -145,6 +145,22 @@ func TestSetModelCapabilityRejectsLimitsAtNonLimited(t *testing.T) {
 	}
 }
 
+func TestSetModelCapabilityAcceptsNullLimitsAtFull(t *testing.T) {
+	store := &fakeStore{}
+	_, err := capadmin.NewCapabilityService(store).SetModelCapability(context.Background(), capadmin.SetModelCapabilityInput{
+		ModelID:      1,
+		Key:          string(core.KeyTextInput),
+		SupportLevel: string(core.SupportLevelFull),
+		Limits:       json.RawMessage("null"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(store.upsertModelParams) != 1 {
+		t.Fatalf("expected upsert, got %d calls", len(store.upsertModelParams))
+	}
+}
+
 func TestSetModelCapabilityModelNotFound(t *testing.T) {
 	store := &fakeStore{lookupErr: pgx.ErrNoRows}
 	_, err := capadmin.NewCapabilityService(store).SetModelCapability(context.Background(), capadmin.SetModelCapabilityInput{

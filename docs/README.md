@@ -23,6 +23,7 @@
 | [production/RELEASE_BLOCKERS.md](production/RELEASE_BLOCKERS.md) | 当前上线阻断项。 |
 | [production/DECISIONS.md](production/DECISIONS.md) | 重大架构、商业规则和长期边界决策。 |
 | [production/THIRD_PARTY_POLICY.md](production/THIRD_PARTY_POLICY.md) | 第三方库选择原则。 |
+| [production/REMEDIATION-context-compaction-and-payload-limit.md](production/REMEDIATION-context-compaction-and-payload-limit.md) | **待审核**：Codex 长会话上下文压缩双路径 + 413 请求体上限整改方案。 |
 | [architecture/PROJECT_STRUCTURE.md](architecture/PROJECT_STRUCTURE.md) | 全服务目标目录结构、分层职责、依赖方向和部署关系。 |
 | [protocol](protocol) | OpenAI、Anthropic 等公开接口的原始参考或带来源日期的官方摘要快照。 |
 
