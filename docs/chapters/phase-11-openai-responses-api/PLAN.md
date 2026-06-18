@@ -887,6 +887,90 @@ v0.130 `/responses` fixture 端到端回放（改 model 后整体回放，验证
    GAP-11-011（标准 SDK 完整性流式事件未发，P2）；GAP-11-001/002/007/009 为已接受的无状态/降级
    商业边界，按各自触发时机保留，非本阶段必须关闭。
 
+## 整改增量：上下文压缩与请求体上限（TASK-11.18~11.25）
+
+来源 [REMEDIATION-context-compaction-and-payload-limit.md](../../production/REMEDIATION-context-compaction-and-payload-limit.md)（已审核：Q1=128MB，Q2~Q7 按建议默认）。
+决策见 [DEC-019](../../production/DECISIONS.md#dec-019-可配置请求体上限--compact-双路径native-透传--synthetic-降级)；GAP [GAP-11-013](../../production/TODO_REGISTER.md#gap-11-013) / [GAP-11-014](../../production/TODO_REGISTER.md#gap-11-014)。
+
+<a id="task-11-18-json-body-limit"></a>
+### TASK-11.18 可配置请求体上限（消除入口 413，GAP-11-013）
+
+状态：done
+
+落地：`platform/config` 增 `HTTPConfig.MaxJSONBodyBytes`（env `HTTP_MAX_JSON_BODY_MB`，默认 **128**，MB→字节）；
+`platform/httpx/json.go` 的 `DecodeJSON` 改读进程级可配置上限 `MaxJSONBodyBytes()`，新增 `SetMaxJSONBodyBytes`，
+保留 `DefaultMaxJSONBodyBytes`(1MB) 作未配置 fallback；`bootstrap` gateway/admin server 启动期各调一次
+`httpx.SetMaxJSONBodyBytes(cfg.HTTP.MaxJSONBodyBytes)`，对全部经 `DecodeJSON` 的 ingress（chat/responses/compact/
+input_tokens/admin）生效。解压后大小仍受 `MaxBytesReader` 约束，超限稳定 413（OpenAI-compatible）。
+测试：`config_test.go`（默认/显式 env/非法）+ `json_test.go`（默认回退/抬高/收紧/负值回退）。
+
+<a id="task-11-19-proxy-body-doc"></a>
+### TASK-11.19 前置代理 body 限制与 env 示例文档
+
+状态：done
+
+落地：`.env.example` 增 `HTTP_MAX_JSON_BODY_MB=128` 并注明「默认 128（对齐 new-api 方向）；前置代理
+`client_max_body_size` 须 ≥ 此值，否则请求仍在代理层 413」。能力契约同步见 CAPABILITY_MATRIX/CAPABILITY_KEYS。
+
+<a id="task-11-20-compact-dual-path"></a>
+### TASK-11.20 CompactOrchestrator + compact 能力 key（GAP-11-014）
+
+状态：done
+
+落地：`capability/keys.go` 注册 `responses.compact.native` / `responses.compact.synthetic`（CAPABILITY_KEYS v1.1）；
+`service/gateway/openai/responses/compact_orchestrator.go` 的 `CompactHistory`→`executeCompact` 按候选 adapter
+代码能力 `HasResponsesCompact` 选路 Native vs Synthetic（与 DEC-018 直传分流一致；能力 key 仅作契约/矩阵声明）。
+两路径共用 `runNonStream` 资金关键 scaffold（自 `create_response.go` 抽出，CreateResponse 与 CompactHistory 同源）。
+ingress `endpoints_handler.go` 不感知路径差异。
+
+<a id="task-11-21-native-compact"></a>
+### TASK-11.21 NativeCompact：原生 /responses/compact 透传 + lifecycle
+
+状态：done
+
+落地：`core/adapter/openai/responses` 增 `ResponsesCompactAdapter` 契约 + `Adapter.CompactResponse`（`compact.go`，
+POST `<base>/responses/compact`，原文透传 + 同次解析 facts；404/405、无 usage、无法解析收敛为 sentinel
+`ErrCompactUnsupported`）；`openai.Registry` 增 `responsesCompact` 槽 + `ResponsesCompact`/`HasResponsesCompact`，
+bootstrap 为 `adapter_key=openai` 注册。ingress `CompactHistoryResponse` 增 `RawCompactHistoryResponse` + 自定义
+`MarshalJSON` 原文透传（仅改写顶层 model 回显）。settlement 落上游 compact usage facts。
+测试：adapter `adapter_test.go`（透传/404→unsupported/缺 usage→unsupported）+ service `compact_native_test.go`（透传）。
+
+<a id="task-11-22-synthetic-compact"></a>
+### TASK-11.22 SyntheticCompact：迁出现有 compact + 策略化
+
+状态：done
+
+落地：原 `compact_response.go` 迁为 `compact_synthetic.go`（`invokeSyntheticCompact` + `mapChatResponseToCompaction`
++ `defaultCompactionInstruction`），行为对 chat-only 第三方（DeepSeek）逐字保留（回归 `compact_input_tokens_test.go`
+绿）。Synthetic 仍不签发加密 compaction item（永久限制 GAP-11-007）。`compact_response.go` 删除。
+
+<a id="task-11-23-native-fallback"></a>
+### TASK-11.23 Native 失败回落 Synthetic（可配置）+ audit 日志（整改 Q2）
+
+状态：done
+
+落地：`ResponsesService.compactNativeFallback`（默认 true）；NativeCompact 命中 `isNativeCompactUnsupported`
+（`ErrCompactUnsupported` 或上游 404/405，`compact_native.go`）时回落 SyntheticCompact 并打 `slog.Warn`
+（adapter_key/channel_id/upstream_model），避免 Codex 断链；其余上游错误按正常上游错误处理。
+测试：`compact_native_test.go`（回落成功 + 关闭回落时上抛失败、synthetic 不触达）。
+
+<a id="task-11-24-remediation-blackbox"></a>
+### TASK-11.24 整改回归与黑盒
+
+状态：done（单测/适配器级黑盒）
+
+落地：`httpx`/`config` 上限单测、adapter `CompactResponse` httptest 黑盒、service compact 双路径 + 回落单测均绿；
+`go build ./... && go vet ./...` 通过。真实上游端到端 smoke（OpenAI 原生 compact 透传 / 大 body 不 413）随
+TASK-11.15 既有黑盒口径在接入真实渠道时复跑。
+
+<a id="task-11-25-gzip-ingress"></a>
+### TASK-11.25 （可选）gateway gzip 解压 + 解压后 MaxBytesReader
+
+状态：deferred（本阶段不做，单独 follow-up）
+
+说明：本整改只做 JSON 明文 + 可配置上限；若未来 gateway 接收 `Content-Encoding: gzip`，在中间件解压后再
+`MaxBytesReader`（对齐 new-api 防 zip bomb）。非 Codex 现场必需，按需排期。
+
 ## 推荐实施顺序
 
 ```text
@@ -906,6 +990,11 @@ v0.130 `/responses` fixture 端到端回放（改 model 后整体回放，验证
 → 11.14 bootstrap 装配 + 路由
 → 11.15 黑盒验收
 → 11.16 文档与结构复核
+
+(整改增量：上下文压缩与请求体上限)
+→ 11.18 可配置请求体上限 → 11.19 代理 body 文档
+→ 11.20 CompactOrchestrator + compact 能力 key → 11.21 NativeCompact 透传 → 11.22 SyntheticCompact 迁出
+→ 11.23 Native 回落 Synthetic（可配置）→ 11.24 整改回归/黑盒 →（11.25 gzip deferred）
 ```
 
 ## 依赖与排序
@@ -931,7 +1020,9 @@ bootstrap seed / 运营配置即可把某个模型路由到 DeepSeek OpenAI chan
 | [GAP-11-004](../../production/TODO_REGISTER.md#gap-11-004) | P2 | Responses 内置工具（web_search/file_search/code_interpreter/mcp 等）与 `include`/annotations 输出项未实现。 |
 | [GAP-11-005](../../production/TODO_REGISTER.md#gap-11-005) | P2 | OpenAI 协议族 operation 编排骨架（chat/responses）若镜像复制，需后续 genericize 为共享 invoker。 |
 | [GAP-11-006](../../production/TODO_REGISTER.md#gap-11-006) | P2 | 模型别名（Codex 默认模型名 → Unio 上游模型）映射表未实现，第一版需用户填 Unio model_id。 |
-| [GAP-11-007](../../production/TODO_REGISTER.md#gap-11-007) | P1 | `/v1/responses/compact` 用无状态 DeepSeek 摘要降级实现；不等价于 OpenAI 加密语义，多轮压缩会累积信息损失。 |
+| [GAP-11-007](../../production/TODO_REGISTER.md#gap-11-007) | P1 | `/v1/responses/compact` 的 **SyntheticCompact**（chat-only 第三方）用无状态摘要降级；不签发加密 compaction item，多轮压缩累积信息损失。NativeCompact 透传见 GAP-11-014。 |
+| [GAP-11-013](../../production/TODO_REGISTER.md#gap-11-013) | P1 | **已关闭**：请求体上限可配置（`HTTP_MAX_JSON_BODY_MB`，默认 128MB），消除 Codex 长会话入口 413（TASK-11.18 / DEC-019）。 |
+| [GAP-11-014](../../production/TODO_REGISTER.md#gap-11-014) | P1 | **已关闭**：compact 双路径（NativeCompact 原文透传 vs SyntheticCompact 摘要降级），Native 不支持回落 Synthetic（TASK-11.20~11.24 / DEC-019）。 |
 | [GAP-11-008](../../production/TODO_REGISTER.md#gap-11-008) | P2 | `/v1/responses/input_tokens` 用本地 tokenizer 估算；与 OpenAI 服务端精确计数有偏差，不反映 prompt cache 折扣。 |
 | [GAP-11-009](../../production/TODO_REGISTER.md#gap-11-009) | P1 | Responses 有状态 endpoint（retrieve/delete/input_items/cancel）返回 501 stateless；`background:true` Reject——商业承诺无状态。 |
 | [GAP-11-010](../../production/TODO_REGISTER.md#gap-11-010) | P2 | Phase 10 `reasoning_effort` doc/code drift（mapping doc 标 Adapt，代码 Pass-through），在 TASK-11.09 同步修正。 |

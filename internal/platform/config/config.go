@@ -109,6 +109,11 @@ type HTTPConfig struct {
 	WriteTimeout    time.Duration
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
+
+	// MaxJSONBodyBytes 是单个 JSON 请求体的最大字节数（由 HTTP_MAX_JSON_BODY_MB 按 MB 换算）。
+	// 这是防 OOM / zip bomb 的网关安全配置，与业务计费无关；超限返回 413。前置代理
+	// （Nginx client_max_body_size）须 ≥ 此值，否则请求仍会在代理层被 413 拒绝。
+	MaxJSONBodyBytes int64
 }
 
 // LogConfig 保存结构化日志配置。
@@ -220,6 +225,12 @@ func Load() (Config, error) {
 	}
 
 	httpShutdownTimeout, err := getEnvDuration("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
+	// 默认 128MB：对齐 new-api 的统一上限方向，覆盖 Codex 长会话 + tool 大 payload；按需在 env 调小。
+	httpMaxJSONBodyMB, err := getEnvInt("HTTP_MAX_JSON_BODY_MB", 128)
 	if err != nil {
 		return Config{}, err
 	}
@@ -366,10 +377,11 @@ func Load() (Config, error) {
 
 	return Config{
 		HTTP: HTTPConfig{
-			ReadTimeout:     httpReadTimeout,
-			WriteTimeout:    httpWriteTimeout,
-			IdleTimeout:     httpIdleTimeout,
-			ShutdownTimeout: httpShutdownTimeout,
+			ReadTimeout:      httpReadTimeout,
+			WriteTimeout:     httpWriteTimeout,
+			IdleTimeout:      httpIdleTimeout,
+			ShutdownTimeout:  httpShutdownTimeout,
+			MaxJSONBodyBytes: int64(httpMaxJSONBodyMB) << 20,
 		},
 		Log: LogConfig{
 			Level: logLevel,

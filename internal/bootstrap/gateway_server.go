@@ -8,6 +8,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/capability"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/config"
+	"github.com/ThankCat/unio-api/internal/platform/httpx"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-api/internal/platform/observability/tracing"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
@@ -59,6 +60,9 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	if err != nil {
 		return nil, err
 	}
+
+	// JSON 请求体上限为进程级网关 ingress 安全配置（防 OOM / zip bomb）；启动期设置一次，全 DecodeJSON 生效。
+	httpx.SetMaxJSONBodyBytes(deps.Config.HTTP.MaxJSONBodyBytes)
 
 	queries := sqlc.New(deps.DB)
 

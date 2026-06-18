@@ -41,9 +41,10 @@ type fakeRegistry struct {
 	streamAdapters map[string]chatcompletionsadapter.StreamChatAdapter
 	tokenizers     map[string]chatcompletionsadapter.ChatInputTokenizer
 
-	responsesAdapters       map[string]responsesadapter.ResponsesAdapter
-	streamResponsesAdapters map[string]responsesadapter.StreamResponsesAdapter
-	responsesTokenizers     map[string]responsesadapter.ResponsesInputTokenizer
+	responsesAdapters        map[string]responsesadapter.ResponsesAdapter
+	streamResponsesAdapters  map[string]responsesadapter.StreamResponsesAdapter
+	responsesTokenizers      map[string]responsesadapter.ResponsesInputTokenizer
+	responsesCompactAdapters map[string]responsesadapter.ResponsesCompactAdapter
 }
 
 func (r *fakeRegistry) Chat(key string) (chatcompletionsadapter.ChatAdapter, bool) {
@@ -83,6 +84,16 @@ func (r *fakeRegistry) HasResponses(key string) bool {
 
 func (r *fakeRegistry) HasStreamResponses(key string) bool {
 	_, ok := r.streamResponsesAdapters[key]
+	return ok
+}
+
+func (r *fakeRegistry) ResponsesCompact(key string) (responsesadapter.ResponsesCompactAdapter, bool) {
+	a, ok := r.responsesCompactAdapters[key]
+	return a, ok
+}
+
+func (r *fakeRegistry) HasResponsesCompact(key string) bool {
+	_, ok := r.responsesCompactAdapters[key]
 	return ok
 }
 

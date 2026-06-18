@@ -3,6 +3,7 @@ package responses
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -205,6 +206,84 @@ func TestCreateResponseEmptyBodyReturnsEncodeError(t *testing.T) {
 	}
 }
 
+// TestCompactResponseForwardsBodyAndParsesFacts 验证原生压缩直传：请求体逐字转发到 <base>/responses/compact，
+// 响应体原文回传（含 compaction item），usage/facts 同次解析抽取。
+func TestCompactResponseForwardsBodyAndParsesFacts(t *testing.T) {
+	var (
+		gotPath string
+		gotBody []byte
+	)
+	respBody := `{"id":"resp_c","object":"response","model":"gpt-5.5","output":[{"type":"compaction","encrypted_content":"enc"}],"usage":{"input_tokens":40,"output_tokens":6,"total_tokens":46}}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		gotBody = body
+		w.Header().Set("X-Request-Id", "req-c-1")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(respBody))
+	}))
+	defer server.Close()
+
+	reqBody := json.RawMessage(`{"model":"gpt-5.5","input":"hello","instructions":"compact"}`)
+	got, err := NewAdapter(server.Client()).CompactResponse(context.Background(), testChannel(server.URL), Request{Body: reqBody})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotPath != "/v1/responses/compact" {
+		t.Fatalf("path = %q, want /v1/responses/compact", gotPath)
+	}
+	if string(gotBody) != string(reqBody) {
+		t.Fatalf("upstream body = %s, want verbatim %s", gotBody, reqBody)
+	}
+	if string(got.Raw) != respBody {
+		t.Fatalf("raw passthrough mismatch:\n got %s\nwant %s", got.Raw, respBody)
+	}
+	if got.Usage.PromptTokens != 40 || got.Usage.CompletionTokens != 6 {
+		t.Fatalf("usage = %+v, want 40/6", got.Usage)
+	}
+	if got.Facts.UsageSource != usage.SourceUpstreamResponse {
+		t.Fatalf("facts usage source = %q, want upstream response", got.Facts.UsageSource)
+	}
+}
+
+// TestCompactResponseNotFoundReturnsUnsupported 验证上游无原生 compact endpoint（404）收敛为 ErrCompactUnsupported，
+// 供 service 回落 Synthetic。
+func TestCompactResponseNotFoundReturnsUnsupported(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	_, err := NewAdapter(server.Client()).CompactResponse(context.Background(), testChannel(server.URL), Request{Body: json.RawMessage(`{"model":"gpt-5.5"}`)})
+	if err == nil {
+		t.Fatal("expected error for 404")
+	}
+	if !errors.Is(err, ErrCompactUnsupported) {
+		t.Fatalf("expected ErrCompactUnsupported, got %v", err)
+	}
+}
+
+// TestCompactResponseMissingUsageReturnsUnsupported 验证压缩响应缺少可计费 usage 时收敛为 ErrCompactUnsupported，
+// 避免无依据结算（回落 Synthetic 按真实 token 计费）。
+func TestCompactResponseMissingUsageReturnsUnsupported(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"output":[{"type":"compaction"}]}`))
+	}))
+	defer server.Close()
+
+	_, err := NewAdapter(server.Client()).CompactResponse(context.Background(), testChannel(server.URL), Request{Body: json.RawMessage(`{"model":"gpt-5.5"}`)})
+	if err == nil {
+		t.Fatal("expected error for missing usage")
+	}
+	if !errors.Is(err, ErrCompactUnsupported) {
+		t.Fatalf("expected ErrCompactUnsupported, got %v", err)
+	}
+}
+
 // TestStreamResponseForwardsRawEventsAndExtractsFacts 验证流式直传：每个上游 SSE 事件原文经 emit 透传，
 // 终态 response.completed 抽取 usage/id/finish，StreamOutcome.Facts 在流尾产出。
 func TestStreamResponseForwardsRawEventsAndExtractsFacts(t *testing.T) {
@@ -395,7 +474,7 @@ func TestStreamResponseChannelTimeoutDoesNotCutLongStream(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		flusher.Flush() // 立刻发响应头:客户端 Do 返回 → headersReceived 停表
+		flusher.Flush()                // 立刻发响应头:客户端 Do 返回 → headersReceived 停表
 		time.Sleep(4 * channelTimeout) // 远超渠道 timeout 才吐事件(旧逻辑会在此被掐断)
 		_, _ = w.Write([]byte("event: response.completed\n" + `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.5","status":"completed","usage":{"input_tokens":3,"output_tokens":5,"total_tokens":8}}}` + "\n\n"))
 		flusher.Flush()

@@ -122,11 +122,41 @@ settlement / recovery / 账务 schema / `channels` 表结构全部零改动；ch
 | --- | --- | --- |
 | TASK-11.17 | done | 上游 Responses 直传 + 第三方分流（DEC-018）：新增 `core/adapter/openai/responses` 直传子包、`AttemptRunner` 流式载体泛型化、registry responses-serve capability、service 按能力分流（直传零转换 + 仅 model 回显改写 / chat-only 落桥接 else）、bootstrap 注册 `adapter_key=openai-responses`、ingress raw 透传。单测 + service 分流 + 黑盒（真实 DB/Redis mock `/responses` 上游非流式/流式/账务/错误）全绿；保真欠账记 GAP-11-012。 |
 
+## 整改增量：上下文压缩与请求体上限（DEC-019，2026-06-18）
+
+来源 [REMEDIATION-context-compaction-and-payload-limit.md](../../production/REMEDIATION-context-compaction-and-payload-limit.md)（已审核：Q1=128MB，Q2~Q7 按建议默认）。
+针对 Codex 长会话两类现场问题：① 网关入口 1MB 硬限制导致 `/responses` 与 `/compact` 在入口 413；
+② compact 能力单一（仅 Synthetic 摘要降级），与主路径直传/桥接分流不对称。
+
+- **请求体上限可配置（GAP-11-013，TASK-11.18/11.19）**：`HTTP_MAX_JSON_BODY_MB`（默认 128MB）经 config
+  注入进程级 `httpx.SetMaxJSONBodyBytes`，保留 1MB 作 fallback；超限稳定 413。前置代理须同步放宽。
+- **Compact 双路径（GAP-11-014，TASK-11.20~11.24）**：NativeCompact（`adapter_key=openai` 原生
+  `/responses/compact` 原文透传，能力等于上游）vs SyntheticCompact（chat-only 第三方摘要降级，迁自
+  `compact_response.go`）。分流以 adapter 代码能力 `HasResponsesCompact` 为准（与 DEC-018 一致）；Native
+  上游不支持（404/405/无 usage）默认回落 Synthetic + warn 日志（可配 `compactNativeFallback`）。两路径
+  共用从 `create_response.go` 抽出的 `runNonStream` 资金关键 scaffold，账务/lifecycle 零改动。
+- 验证：`go build ./...` + `go vet ./...` 通过；`httpx`/`config`/adapter `CompactResponse`/service compact
+  双路径 + 回落 单测全绿。真实上游端到端 smoke（OpenAI 原生 compact 透传 / 大 body 不 413）随 TASK-11.15
+  黑盒口径在接入真实渠道时复跑。
+
+## 任务状态（整改增量）
+
+| 任务 | 状态 | 说明 |
+| --- | --- | --- |
+| TASK-11.18 | done | 可配置请求体上限：`HTTPConfig.MaxJSONBodyBytes`（`HTTP_MAX_JSON_BODY_MB`，默认 128MB）+ `httpx` 进程级可配置上限（`SetMaxJSONBodyBytes`/`MaxJSONBodyBytes`，1MB fallback）+ bootstrap gateway/admin 启动期注入。config/httpx 单测覆盖默认/env/非法/抬高/收紧/负值回退。 |
+| TASK-11.19 | done | `.env.example` 增 `HTTP_MAX_JSON_BODY_MB=128` + Nginx `client_max_body_size` ≥ 此值说明；CAPABILITY_KEYS/CAPABILITY_MATRIX 同步。 |
+| TASK-11.20 | done | `CompactOrchestrator`（`compact_orchestrator.go` `executeCompact` 选路）+ 能力 key `responses.compact.native`/`responses.compact.synthetic`（CAPABILITY_KEYS v1.1）；两路径共用 `runNonStream` scaffold。 |
+| TASK-11.21 | done | NativeCompact：`ResponsesCompactAdapter` + `Adapter.CompactResponse`（透传 + facts + `ErrCompactUnsupported`）+ registry `responsesCompact` 槽 + bootstrap 注册；ingress `RawCompactHistoryResponse` 原文透传。adapter + service 单测覆盖。 |
+| TASK-11.22 | done | SyntheticCompact：迁 `compact_response.go`→`compact_synthetic.go`（`invokeSyntheticCompact`/`mapChatResponseToCompaction`），DeepSeek 行为逐字保留（回归绿）；删除 `compact_response.go`。 |
+| TASK-11.23 | done | Native 失败回落 Synthetic：`compactNativeFallback`（默认开）+ `isNativeCompactUnsupported`（404/405/sentinel）+ `slog.Warn` 审计；关闭开关时上抛失败。单测覆盖回落/关闭两态。 |
+| TASK-11.24 | done | 整改回归：单测 + adapter httptest 黑盒全绿，`go build`/`go vet` 通过；真实上游 smoke 随 TASK-11.15 复跑。 |
+| TASK-11.25 | deferred | gateway gzip 解压 + 解压后 MaxBytesReader（本阶段不做，单独 follow-up）。 |
+
 ## 关联 GAP
 
-GAP-11-001 ~ GAP-11-012 见 [TODO_REGISTER.md](../../production/TODO_REGISTER.md)。
+GAP-11-001 ~ GAP-11-014 见 [TODO_REGISTER.md](../../production/TODO_REGISTER.md)。
 
-- 已关闭：GAP-11-005（共享 invoker → `lifecycle.AttemptRunner`）、GAP-11-010（reasoning_effort drift）。
-- 已实现降级/边界（永久保留）：GAP-11-007（compact 无状态摘要）、GAP-11-008（input_tokens 本地估算）、GAP-11-009（有状态 501 + background 400）。
+- 已关闭：GAP-11-005（共享 invoker → `lifecycle.AttemptRunner`）、GAP-11-010（reasoning_effort drift）、GAP-11-013（请求体上限可配置）、GAP-11-014（compact 双路径）。
+- 已实现降级/边界（永久保留）：GAP-11-007（compact **Synthetic** 路径无状态摘要，不签发加密 compaction item）、GAP-11-008（input_tokens 本地估算）、GAP-11-009（有状态 501 + background 400）。
 - 新增：GAP-11-011（Responses 流式只发 Codex 消费子集，标准 SDK 完整性事件未发，P2）。
 - 新增：GAP-11-012（上游 Responses 直传零转换原文透传，仅 model 回显改写；namespace 回译 / 跨轮 reasoning 回灌等保真处理在直传路径按上游原样透传，保真度等于上游本身，P2，DEC-018）。

@@ -31,6 +31,16 @@ type StreamResponsesAdapter interface {
 	StreamResponse(ctx context.Context, ch channel.Runtime, req Request, emit func(StreamChunk) error) (adapter.StreamOutcome, error)
 }
 
+// ResponsesCompactAdapter 定义 OpenAI 协议族 Responses 原生压缩（POST /responses/compact）上游调用能力。
+//
+// 仅当上游原生支持 /responses/compact（OpenAI 官方 / Codex 中转）时注册；gateway 据是否注册分流
+// NativeCompact（原文透传）vs SyntheticCompact（chat 摘要降级，DEC-014）。
+type ResponsesCompactAdapter interface {
+	// CompactResponse 调用上游 POST /responses/compact（非流式），返回压缩结果原文与同次解析的账务事实。
+	// 上游不支持（404/405）或响应缺少可计费 usage 时返回 ErrCompactUnsupported，调用方据此回落 Synthetic。
+	CompactResponse(ctx context.Context, ch channel.Runtime, req Request) (*Response, error)
+}
+
 // ResponsesInputTokenizer 定义某个 Responses 直传 provider adapter 对输入 token 的计数能力。
 //
 // 用于 authorization 阶段的保守预估；与协议响应解析无关。

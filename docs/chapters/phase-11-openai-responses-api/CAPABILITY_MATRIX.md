@@ -33,7 +33,8 @@ DeepSeek）下能做什么、做到什么程度、不做什么。
 | Endpoint | 状态 | 说明 |
 | --- | --- | --- |
 | `POST /v1/responses` | ✅ Full | 主路径，含流式/非流式、function tools、reasoning 文本、错误安全 |
-| `POST /v1/responses/compact` | ⚠️ Degraded | 无状态降级：用 DeepSeek 做摘要 + Unio 自编码 `compaction` item，不等价于 OpenAI 加密语义（GAP-11-007） |
+| `POST /v1/responses/compact`（Native 路径） | ✅ Passthrough | `adapter_key=openai`（含原生 compact 槽）：原文透传上游 `/responses/compact`，保留 `compaction` + `encrypted_content`，能力等于上游（GAP-11-014）。上游不支持（404/405/无 usage）时按配置回落 Synthetic（默认开，DEC-019 / 整改 Q2） |
+| `POST /v1/responses/compact`（Synthetic 路径） | ⚠️ Degraded | chat-only 第三方（DeepSeek 等）：无状态 chat 摘要降级，单条 assistant message 承载摘要，**不签发**加密 `compaction` item（Synthetic 永久限制，GAP-11-007 / GAP-11-014） |
 | `POST /v1/responses/input_tokens` | ⚠️ Approximate | 本地 tokenizer 估算，与 OpenAI 服务端精确计数有偏差（GAP-11-008） |
 | `GET /v1/responses/{id}` | ❌ 501 | 无服务端持久化，返回 `unsupported_endpoint_stateless` |
 | `DELETE /v1/responses/{id}` | ❌ 501 | 同上 |

@@ -12,6 +12,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/platform/config"
+	"github.com/ThankCat/unio-api/internal/platform/httpx"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-api/internal/platform/observability/tracing"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
@@ -74,6 +75,9 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	if err != nil {
 		return nil, err
 	}
+
+	// JSON 请求体上限为进程级 ingress 安全配置；admin 表面与 gateway 共用同一全局限制（启动期设置一次）。
+	httpx.SetMaxJSONBodyBytes(deps.Config.HTTP.MaxJSONBodyBytes)
 
 	authenticator, err := adminauth.NewStaticTokenAuthenticator(deps.Config.Admin.APIToken)
 	if err != nil {

@@ -53,6 +53,12 @@ const (
 	KeyServerStateBackground Key = "server_state.background"
 
 	KeyResponsesEncryptedContent Key = "responses.encrypted_content"
+
+	// Responses 压缩双路径（GAP-11-014）。native=上游 /responses/compact 原文透传；
+	// synthetic=网关 chat 摘要降级。运行期分流以 adapter 代码能力为准（与 DEC-018 直传一致），
+	// 这两个 key 用于能力契约/矩阵声明与可观测，不作为强制路由前置条件。
+	KeyResponsesCompactNative    Key = "responses.compact.native"
+	KeyResponsesCompactSynthetic Key = "responses.compact.synthetic"
 )
 
 // registeredKeys 是 v1 已发布能力 key 集合，作为写入/推断的合法性边界。
@@ -88,6 +94,8 @@ var registeredKeys = map[Key]struct{}{
 	KeyServerStateStore:            {},
 	KeyServerStateBackground:       {},
 	KeyResponsesEncryptedContent:   {},
+	KeyResponsesCompactNative:      {},
+	KeyResponsesCompactSynthetic:   {},
 }
 
 // IsRegisteredKey 判断能力 key 是否在已发布注册表内，写入与推断必须先通过该校验。

@@ -115,6 +115,11 @@
 | key | 含义 |
 | --- | --- |
 | `responses.encrypted_content` | 支持 Responses API 推理项的 `encrypted_content` 跨轮携带 |
+| `responses.compact.native` | 上游原生支持 `POST /v1/responses/compact`（原文透传压缩，OpenAI 加密 compaction 语义，GAP-11-014） |
+| `responses.compact.synthetic` | 网关以 chat 摘要降级实现 compact（无状态摘要，非加密等价，GAP-11-007 / GAP-11-014） |
+
+> compact 双路径的**运行期分流以 adapter 代码能力为准**（`HasResponsesCompact`，与 DEC-018 直传分流一致）：
+> 上述两个 key 用于能力契约/矩阵声明与可观测，不作为强制路由前置条件。
 
 ## 5. 已知上游标注(参考,非种子数据)
 
@@ -130,3 +135,4 @@
 | 版本 | 日期 | 变更 |
 | --- | --- | --- |
 | v1 | 2026-06-07 | 首次发布,冻结上表 31 个 key。 |
+| v1.1 | 2026-06-18 | 追加 `responses.compact.native` / `responses.compact.synthetic`（GAP-11-014 compact 双路径），共 33 个 key。 |

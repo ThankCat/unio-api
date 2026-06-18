@@ -7,14 +7,38 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
 
 const (
-	// DefaultMaxJSONBodyBytes 是默认 JSON 请求体最大字节数。
+	// DefaultMaxJSONBodyBytes 是默认 JSON 请求体最大字节数（运行期未配置时的兜底值）。
 	DefaultMaxJSONBodyBytes int64 = 1 << 20
 )
+
+// maxJSONBodyBytes 是运行期可配置的 JSON body 上限（字节）；0 表示回退 DefaultMaxJSONBodyBytes。
+//
+// 由进程启动期 SetMaxJSONBodyBytes 设置一次（gateway / admin server bootstrap 读 HTTP_MAX_JSON_BODY_MB）。
+// 用 atomic 仅为读写竞态安全；预期 serve 前设置、serve 中只读。
+var maxJSONBodyBytes atomic.Int64
+
+// SetMaxJSONBodyBytes 设置全局 JSON 请求体上限（字节）。n<=0 时回退内置默认值。
+func SetMaxJSONBodyBytes(n int64) {
+	if n <= 0 {
+		maxJSONBodyBytes.Store(0)
+		return
+	}
+	maxJSONBodyBytes.Store(n)
+}
+
+// MaxJSONBodyBytes 返回当前生效的 JSON 请求体上限（字节）；未配置时返回 DefaultMaxJSONBodyBytes。
+func MaxJSONBodyBytes() int64 {
+	if n := maxJSONBodyBytes.Load(); n > 0 {
+		return n
+	}
+	return DefaultMaxJSONBodyBytes
+}
 
 var (
 	// ErrRequestBodyTooLarge 表示 JSON 请求体超过允许大小。
@@ -40,7 +64,7 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 		)
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, DefaultMaxJSONBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, MaxJSONBodyBytes())
 
 	decoder := json.NewDecoder(r.Body)
 

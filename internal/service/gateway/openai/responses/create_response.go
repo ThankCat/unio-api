@@ -44,26 +44,89 @@ type responseResult struct {
 	direct *responsesadapter.Response
 }
 
-// executeNonStreamChat 执行非流式桥接编排，返回内部 ChatResponse（强制桥接，不走直传）。
-//
-// CompactHistory（无状态会话压缩）共用本入口：它本质是一次 chat 摘要调用，不适用 responses 直传。
-func (s *ResponsesService) executeNonStreamChat(ctx context.Context, req gatewayapi.ResponsesRequest) (*chatcompletionsadapter.ChatResponse, error) {
-	result, err := s.executeResponse(ctx, req, false)
-	if err != nil {
-		return nil, err
-	}
-	return result.chat, nil
+// nonStreamStrategy 注入一次非流式 Responses 族请求的协议差异：候选能力过滤口径（allowDirect）
+// 与 per-candidate 的 adapter 解析 / 上游调用闭包。资金关键 scaffold（routing/authorization/
+// settlement/终态）由 runNonStream 统一承担，CreateResponse 与 CompactHistory 共用同一份。
+type nonStreamStrategy struct {
+	allowDirect bool
+	resolve     lifecycle.ResolveAdapter
+	invoke      lifecycle.NonStreamInvoke
 }
 
 // executeResponse 执行非流式 Responses 候选 fallback 计费循环，按候选能力分流直传/桥接。
 //
-// allowDirect=false 时强制全部走桥接（CompactHistory）。本方法承担 routing、authorization、共享
-// AttemptRunner 候选 fallback 计费循环、metrics outcome 与终态写入；协议差异（直传/桥接调用与响应捕获）
-// 由 ResolveAdapter / Invoke 闭包按候选注入。
+// allowDirect=false 时强制全部走桥接（与 CompactHistory 的 synthetic 估算口径一致）。协议差异（直传/
+// 桥接调用与响应捕获）由 resolve/invoke 闭包按候选注入，scaffold 复用 runNonStream。
 func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.ResponsesRequest, allowDirect bool) (responseResult, error) {
+	var (
+		chatAdapter   chatcompletionsadapter.ChatAdapter
+		directAdapter responsesadapter.ResponsesAdapter
+		result        responseResult
+	)
+	err := s.runNonStream(ctx, req, nonStreamStrategy{
+		allowDirect: allowDirect,
+		resolve: func(candidate routing.ChatRouteCandidate) error {
+			if allowDirect && s.registry.HasResponses(candidate.AdapterKey) {
+				adapter, ok := s.registry.Responses(candidate.AdapterKey)
+				if !ok {
+					return failure.New(
+						failure.CodeGatewayAdapterNotRegistered,
+						failure.WithMessage(fmt.Sprintf("gateway responses adapter %q not registered", candidate.AdapterKey)),
+					)
+				}
+				directAdapter = adapter
+				return nil
+			}
+			adapter, ok := s.registry.Chat(candidate.AdapterKey)
+			if !ok {
+				return failure.New(
+					failure.CodeGatewayAdapterNotRegistered,
+					failure.WithMessage(fmt.Sprintf("gateway chat adapter %q not registered", candidate.AdapterKey)),
+				)
+			}
+			chatAdapter = adapter
+			return nil
+		},
+		invoke: func(ctx context.Context, candidate routing.ChatRouteCandidate) (lifecycle.AttemptSuccess, error) {
+			if allowDirect && s.registry.HasResponses(candidate.AdapterKey) {
+				body, err := encodeUpstreamResponsesBody(req, candidate.UpstreamModel, false)
+				if err != nil {
+					return lifecycle.AttemptSuccess{}, err
+				}
+				adapterCtx, adapterSpan := lifecycle.StartGatewaySpan(ctx, "adapter.responses", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
+				resp, err := directAdapter.CreateResponse(adapterCtx, candidate.Channel, responsesadapter.Request{Body: body})
+				lifecycle.EndGatewaySpan(adapterSpan, err)
+				if err != nil {
+					return lifecycle.AttemptSuccess{}, err
+				}
+				result = responseResult{direct: resp}
+				return lifecycle.AttemptSuccess{ResponseID: resp.ResponseID, Facts: resp.Facts}, nil
+			}
+
+			chatReq, _ := mapResponsesRequestToChat(req, candidate.UpstreamModel)
+			adapterCtx, adapterSpan := lifecycle.StartGatewaySpan(ctx, "adapter.chat_completions", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
+			resp, err := chatAdapter.ChatCompletions(adapterCtx, candidate.Channel, chatReq)
+			lifecycle.EndGatewaySpan(adapterSpan, err)
+			if err != nil {
+				return lifecycle.AttemptSuccess{}, err
+			}
+
+			result = responseResult{chat: resp}
+			return lifecycle.AttemptSuccess{ResponseID: resp.ID, Facts: resp.Facts}, nil
+		},
+	})
+	return result, err
+}
+
+// runNonStream 执行 authorization 之后由共享 AttemptRunner 驱动的非流式 Responses 候选 fallback 计费循环。
+//
+// 本方法承担 routing、authorization、共享候选循环、metrics outcome 与终态写入；协议/路径差异（候选能力
+// 过滤口径、per-candidate 上游调用与响应捕获）由 strat 注入。CreateResponse（直传/桥接）与 CompactHistory
+// （native/synthetic）共用本 scaffold，资金关键链路只此一份。
+func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.ResponsesRequest, strat nonStreamStrategy) error {
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
-		return responseResult{}, failure.Wrap(
+		return failure.Wrap(
 			failure.CodeAuthMissingAPIKey,
 			auth.ErrMissingAPIKey,
 			failure.WithMessage(auth.ErrMissingAPIKey.Error()),
@@ -72,7 +135,7 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 
 	requestRecord, err := s.lifecycle.CreateRequest(ctx, principal, req.Model, false)
 	if err != nil {
-		return responseResult{}, err
+		return err
 	}
 
 	// outcome 默认 failed，仅成功/取消路径覆盖；defer 保证每个请求只计一次，不遗漏提前返回的失败分支。
@@ -102,13 +165,13 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 	s.lifecycle.RecordCapabilityResult(ctx, requestRecord, plan.Capability)
 	if err != nil {
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
-		return responseResult{}, err
+		return err
 	}
 
-	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, plan.RouteMode, false, allowDirect)
+	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, plan.RouteMode, false, strat.allowDirect)
 	if err != nil {
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
-		return responseResult{}, err
+		return err
 	}
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
@@ -120,15 +183,9 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 	})
 	if err != nil {
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, "chat_authorization_failed", err)
-		return responseResult{}, err
+		return err
 	}
 
-	// ResolveAdapter / Invoke 按候选 adapter 是否支持 responses 直传分流，并把对应 typed 响应捕获到本作用域。
-	var (
-		chatAdapter   chatcompletionsadapter.ChatAdapter
-		directAdapter responsesadapter.ResponsesAdapter
-		result        responseResult
-	)
 	runResult, err := s.attemptRunner.RunNonStream(ctx, lifecycle.RunNonStreamParams{
 		RequestRecord:        requestRecord,
 		Principal:            principal,
@@ -137,60 +194,9 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 		RequestedModelID:     req.Model,
 		ResponseProtocol:     requestlog.ProtocolOpenAI,
 		RequiredCapabilities: requiredCapabilities.StringKeys(),
-		ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
-			if allowDirect && s.registry.HasResponses(candidate.AdapterKey) {
-				adapter, ok := s.registry.Responses(candidate.AdapterKey)
-				if !ok {
-					return failure.New(
-						failure.CodeGatewayAdapterNotRegistered,
-						failure.WithMessage(fmt.Sprintf("gateway responses adapter %q not registered", candidate.AdapterKey)),
-					)
-				}
-				directAdapter = adapter
-				return nil
-			}
-			adapter, ok := s.registry.Chat(candidate.AdapterKey)
-			if !ok {
-				return failure.New(
-					failure.CodeGatewayAdapterNotRegistered,
-					failure.WithMessage(fmt.Sprintf("gateway chat adapter %q not registered", candidate.AdapterKey)),
-				)
-			}
-			chatAdapter = adapter
-			return nil
-		},
-		Invoke: func(ctx context.Context, candidate routing.ChatRouteCandidate) (lifecycle.AttemptSuccess, error) {
-			if allowDirect && s.registry.HasResponses(candidate.AdapterKey) {
-				body, err := encodeUpstreamResponsesBody(req, candidate.UpstreamModel, false)
-				if err != nil {
-					return lifecycle.AttemptSuccess{}, err
-				}
-				adapterCtx, adapterSpan := lifecycle.StartGatewaySpan(ctx, "adapter.responses", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
-				resp, err := directAdapter.CreateResponse(adapterCtx, candidate.Channel, responsesadapter.Request{Body: body})
-				lifecycle.EndGatewaySpan(adapterSpan, err)
-				if err != nil {
-					return lifecycle.AttemptSuccess{}, err
-				}
-				result = responseResult{direct: resp}
-				return lifecycle.AttemptSuccess{ResponseID: resp.ResponseID, Facts: resp.Facts}, nil
-			}
-
-			chatReq, _ := mapResponsesRequestToChat(req, candidate.UpstreamModel)
-			adapterCtx, adapterSpan := lifecycle.StartGatewaySpan(ctx, "adapter.chat_completions", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
-			resp, err := chatAdapter.ChatCompletions(adapterCtx, candidate.Channel, chatReq)
-			lifecycle.EndGatewaySpan(adapterSpan, err)
-			if err != nil {
-				return lifecycle.AttemptSuccess{}, err
-			}
-
-			result = responseResult{chat: resp}
-			return lifecycle.AttemptSuccess{ResponseID: resp.ID, Facts: resp.Facts}, nil
-		},
+		ResolveAdapter:       strat.resolve,
+		Invoke:               strat.invoke,
 	})
 	outcome = runResult.Outcome
-	if err != nil {
-		return responseResult{}, err
-	}
-
-	return result, nil
+	return err
 }

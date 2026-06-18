@@ -31,6 +31,7 @@ type Registration struct {
 	Responses               responsesadapter.ResponsesAdapter
 	StreamResponses         responsesadapter.StreamResponsesAdapter
 	ResponsesInputTokenizer responsesadapter.ResponsesInputTokenizer
+	ResponsesCompact        responsesadapter.ResponsesCompactAdapter
 }
 
 // Registry 根据 adapter key 查找对应 adapter 能力。
@@ -42,6 +43,7 @@ type Registry struct {
 	responses               map[string]responsesadapter.ResponsesAdapter
 	streamResponses         map[string]responsesadapter.StreamResponsesAdapter
 	responsesInputTokenizer map[string]responsesadapter.ResponsesInputTokenizer
+	responsesCompact        map[string]responsesadapter.ResponsesCompactAdapter
 }
 
 // NewRegistry 创建 adapter registry。
@@ -53,6 +55,7 @@ func NewRegistry(registrations ...Registration) (*Registry, error) {
 		responses:               make(map[string]responsesadapter.ResponsesAdapter),
 		streamResponses:         make(map[string]responsesadapter.StreamResponsesAdapter),
 		responsesInputTokenizer: make(map[string]responsesadapter.ResponsesInputTokenizer),
+		responsesCompact:        make(map[string]responsesadapter.ResponsesCompactAdapter),
 	}
 
 	for _, reg := range registrations {
@@ -65,7 +68,8 @@ func NewRegistry(registrations ...Registration) (*Registry, error) {
 		}
 
 		if reg.Chat == nil && reg.StreamChat == nil && reg.ChatInputTokenizer == nil &&
-			reg.Responses == nil && reg.StreamResponses == nil && reg.ResponsesInputTokenizer == nil {
+			reg.Responses == nil && reg.StreamResponses == nil && reg.ResponsesInputTokenizer == nil &&
+			reg.ResponsesCompact == nil {
 			return nil, failure.Wrap(
 				failure.CodeAdapterInvalidRegistration,
 				ErrInvalidAdapterRegistration,
@@ -148,6 +152,17 @@ func registerCapabilities(reg Registration, r *Registry) error {
 		r.responsesInputTokenizer[reg.Key] = reg.ResponsesInputTokenizer
 	}
 
+	if reg.ResponsesCompact != nil {
+		if _, exists := r.responsesCompact[reg.Key]; exists {
+			return failure.Wrap(
+				failure.CodeAdapterDuplicateKey,
+				ErrDuplicateAdapterKey,
+				failure.WithMessage(fmt.Sprintf("duplicate responses compact adapter key %q", reg.Key)),
+			)
+		}
+		r.responsesCompact[reg.Key] = reg.ResponsesCompact
+	}
+
 	return nil
 }
 
@@ -171,6 +186,9 @@ func (r *Registry) Keys() []string {
 		seen[key] = struct{}{}
 	}
 	for key := range r.responsesInputTokenizer {
+		seen[key] = struct{}{}
+	}
+	for key := range r.responsesCompact {
 		seen[key] = struct{}{}
 	}
 
@@ -251,5 +269,17 @@ func (r *Registry) HasStreamResponses(adapterKey string) bool {
 // HasResponsesInputTokenizer 判断 adapter key 是否注册了 responses 输入 token 计数能力。
 func (r *Registry) HasResponsesInputTokenizer(adapterKey string) bool {
 	_, ok := r.responsesInputTokenizer[adapterKey]
+	return ok
+}
+
+// ResponsesCompact 根据 adapter key 返回原生 responses 压缩（/responses/compact）直传 adapter。
+func (r *Registry) ResponsesCompact(adapterKey string) (responsesadapter.ResponsesCompactAdapter, bool) {
+	adapter, ok := r.responsesCompact[adapterKey]
+	return adapter, ok
+}
+
+// HasResponsesCompact 判断 adapter key 是否注册了原生 responses 压缩能力（NativeCompact 分流依据）。
+func (r *Registry) HasResponsesCompact(adapterKey string) bool {
+	_, ok := r.responsesCompact[adapterKey]
 	return ok
 }

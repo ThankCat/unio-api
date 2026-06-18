@@ -51,6 +51,7 @@ func NewAdapterRegistry(client *http.Client, logger *slog.Logger) (*lifecycle.Ad
 			Responses:               openAIResponsesAdapter,
 			StreamResponses:         openAIResponsesAdapter,
 			ResponsesInputTokenizer: openAIResponsesAdapter,
+			ResponsesCompact:        openAIResponsesAdapter,
 		},
 	)
 	if err != nil {

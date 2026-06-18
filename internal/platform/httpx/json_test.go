@@ -107,6 +107,45 @@ func TestDecodeJSONReturnsErrorForTooLargeBody(t *testing.T) {
 	assertDecodeJSONFailure(t, err, failure.CodeHTTPRequestBodyTooLarge)
 }
 
+func TestMaxJSONBodyBytesDefaultsWhenUnset(t *testing.T) {
+	SetMaxJSONBodyBytes(0)
+	if got := MaxJSONBodyBytes(); got != DefaultMaxJSONBodyBytes {
+		t.Fatalf("expected default %d, got %d", DefaultMaxJSONBodyBytes, got)
+	}
+
+	// 负值同样回退默认。
+	SetMaxJSONBodyBytes(-1)
+	if got := MaxJSONBodyBytes(); got != DefaultMaxJSONBodyBytes {
+		t.Fatalf("expected default %d for negative limit, got %d", DefaultMaxJSONBodyBytes, got)
+	}
+}
+
+func TestDecodeJSONHonorsConfiguredLimit(t *testing.T) {
+	t.Cleanup(func() { SetMaxJSONBodyBytes(0) })
+
+	// 抬高上限到 4MB：原本超过默认 1MB 的 body 现在应能正常解码。
+	SetMaxJSONBodyBytes(4 << 20)
+	largeValue := strings.Repeat("a", int(DefaultMaxJSONBodyBytes)+1024)
+	reqBody := `{"value":"` + largeValue + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+
+	var body decodeJSONTestBody
+	if err := DecodeJSON(rec, req, &body); err != nil {
+		t.Fatalf("expected decode under raised limit to succeed, got %v", err)
+	}
+
+	// 收紧上限到 16 字节：正常 body 也应 413。
+	SetMaxJSONBodyBytes(16)
+	req = httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(`{"value":"hello"}`))
+	rec = httptest.NewRecorder()
+	err := DecodeJSON(rec, req, &body)
+	if !errors.Is(err, ErrRequestBodyTooLarge) {
+		t.Fatalf("expected ErrRequestBodyTooLarge under tightened limit, got %v", err)
+	}
+	assertDecodeJSONFailure(t, err, failure.CodeHTTPRequestBodyTooLarge)
+}
+
 func assertDecodeJSONFailure(t *testing.T, err error, wantCode failure.Code) {
 	t.Helper()
 

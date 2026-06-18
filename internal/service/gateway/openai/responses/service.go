@@ -34,6 +34,11 @@ type AdapterRegistry interface {
 	ResponsesInputTokenizer(adapterKey string) (responsesadapter.ResponsesInputTokenizer, bool)
 	HasResponses(adapterKey string) bool
 	HasStreamResponses(adapterKey string) bool
+
+	// ResponsesCompact / HasResponsesCompact 暴露原生 /responses/compact 直传能力，供 compact 双路径
+	// 分流 NativeCompact（原文透传）vs SyntheticCompact（chat 摘要降级）。
+	ResponsesCompact(adapterKey string) (responsesadapter.ResponsesCompactAdapter, bool)
+	HasResponsesCompact(adapterKey string) bool
 }
 
 // ResponsesService 编排 OpenAI Responses API（POST /v1/responses）请求的 routing、桥接翻译、
@@ -49,6 +54,10 @@ type ResponsesService struct {
 	chatAuthorizer lifecycle.ChatAuthorizer
 	lifecycle      *lifecycle.RequestLifecycle
 	attemptRunner  *lifecycle.AttemptRunner
+
+	// compactNativeFallback 控制 NativeCompact 命中「上游不支持原生 compact」时是否自动回落 SyntheticCompact
+	// （GAP-11-014 / 整改 Q2，默认开启，避免 Codex 断链）。
+	compactNativeFallback bool
 }
 
 // NewResponsesService 创建 Responses gateway service。
@@ -91,12 +100,13 @@ func NewResponsesService(
 	})
 
 	return &ResponsesService{
-		router:         router,
-		registry:       registry,
-		candidates:     candidates,
-		chatAuthorizer: chatAuthorizer,
-		lifecycle:      requestLifecycle,
-		attemptRunner:  lifecycle.NewAttemptRunner(requestLifecycle, retryClassifier, chatSettlement),
+		router:                router,
+		registry:              registry,
+		candidates:            candidates,
+		chatAuthorizer:        chatAuthorizer,
+		lifecycle:             requestLifecycle,
+		attemptRunner:         lifecycle.NewAttemptRunner(requestLifecycle, retryClassifier, chatSettlement),
+		compactNativeFallback: true,
 	}
 }
 

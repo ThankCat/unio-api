@@ -289,4 +289,22 @@ type InputTokenCountResponse struct {
 // 非完整 response 对象、非 SSE。
 type CompactHistoryResponse struct {
 	Output []ResponseOutputItem `json:"output"`
+
+	// raw 非空时 MarshalJSON 原样返回它：NativeCompact 原文透传上游 /responses/compact 响应体
+	// （service 已预先改写顶层 model 回显）。SyntheticCompact 不设置本字段，按 typed Output 正常 marshal。
+	raw json.RawMessage
+}
+
+// RawCompactHistoryResponse 构造一个「原文直传」compact 响应：MarshalJSON 原样返回 raw（NativeCompact）。
+func RawCompactHistoryResponse(raw json.RawMessage) *CompactHistoryResponse {
+	return &CompactHistoryResponse{raw: raw}
+}
+
+// MarshalJSON 在 raw 非空时原样透传上游压缩响应体；否则按 typed Output 正常序列化（SyntheticCompact）。
+func (r CompactHistoryResponse) MarshalJSON() ([]byte, error) {
+	if len(r.raw) > 0 {
+		return r.raw, nil
+	}
+	type alias CompactHistoryResponse
+	return json.Marshal(alias(r))
 }

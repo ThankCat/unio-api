@@ -184,6 +184,9 @@ func TestLoadInfrastructureDefaults(t *testing.T) {
 	if cfg.HTTP.ShutdownTimeout != 10*time.Second {
 		t.Fatalf("expected HTTP shutdown timeout %v, got %v", 10*time.Second, cfg.HTTP.ShutdownTimeout)
 	}
+	if cfg.HTTP.MaxJSONBodyBytes != 128<<20 {
+		t.Fatalf("expected HTTP max json body bytes %d, got %d", int64(128<<20), cfg.HTTP.MaxJSONBodyBytes)
+	}
 	if cfg.Gateway.HTTPAddr != ":8520" {
 		t.Fatalf("expected gateway http addr %q, got %q", ":8520", cfg.Gateway.HTTPAddr)
 	}
@@ -284,6 +287,7 @@ func TestLoadInfrastructureOverrides(t *testing.T) {
 	t.Setenv("HTTP_WRITE_TIMEOUT", "4s")
 	t.Setenv("HTTP_IDLE_TIMEOUT", "5s")
 	t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "6s")
+	t.Setenv("HTTP_MAX_JSON_BODY_MB", "8")
 	t.Setenv("POSTGRES_MAX_CONNS", "20")
 	t.Setenv("POSTGRES_MIN_CONNS", "2")
 	t.Setenv("POSTGRES_MAX_CONN_LIFETIME", "2h")
@@ -322,6 +326,9 @@ func TestLoadInfrastructureOverrides(t *testing.T) {
 	}
 	if cfg.HTTP.ShutdownTimeout != 6*time.Second {
 		t.Fatalf("expected HTTP shutdown timeout %v, got %v", 6*time.Second, cfg.HTTP.ShutdownTimeout)
+	}
+	if cfg.HTTP.MaxJSONBodyBytes != 8<<20 {
+		t.Fatalf("expected HTTP max json body bytes %d, got %d", int64(8<<20), cfg.HTTP.MaxJSONBodyBytes)
 	}
 	if cfg.Gateway.HTTPAddr != ":9520" {
 		t.Fatalf("expected gateway http addr %q, got %q", ":9520", cfg.Gateway.HTTPAddr)
@@ -401,6 +408,18 @@ func TestLoadInvalidDuration(t *testing.T) {
 	clearInfrastructureEnv(t)
 
 	t.Setenv("HTTP_READ_TIMEOUT", "not-a-duration")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	assertConfigFailure(t, err, failure.CodeConfigInvalid)
+}
+
+func TestLoadInvalidMaxJSONBodyMB(t *testing.T) {
+	clearInfrastructureEnv(t)
+
+	t.Setenv("HTTP_MAX_JSON_BODY_MB", "not-an-int")
 
 	_, err := Load()
 	if err == nil {
@@ -495,6 +514,7 @@ func clearInfrastructureEnv(t *testing.T) {
 		"HTTP_WRITE_TIMEOUT",
 		"HTTP_IDLE_TIMEOUT",
 		"HTTP_SHUTDOWN_TIMEOUT",
+		"HTTP_MAX_JSON_BODY_MB",
 		"LOG_LEVEL",
 		"DATABASE_URL",
 		"POSTGRES_MAX_CONNS",
