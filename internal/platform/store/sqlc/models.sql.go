@@ -74,7 +74,7 @@ VALUES (
     $9,
     'manual'
 )
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, capability_autocalibrate
 `
 
 type CreateModelParams struct {
@@ -118,6 +118,7 @@ func (q *Queries) CreateModel(ctx context.Context, arg CreateModelParams) (Model
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CapabilityAutocalibrate,
 	)
 	return i, err
 }
@@ -147,7 +148,7 @@ VALUES (
     $9,
     'catalog'
 )
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, capability_autocalibrate
 `
 
 type CreateModelFromCatalogParams struct {
@@ -192,6 +193,7 @@ func (q *Queries) CreateModelFromCatalog(ctx context.Context, arg CreateModelFro
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CapabilityAutocalibrate,
 	)
 	return i, err
 }
@@ -505,7 +507,7 @@ func (q *Queries) ListModelsPage(ctx context.Context, arg ListModelsPageParams) 
 }
 
 const lookupModelByID = `-- name: LookupModelByID :one
-SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
+SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, capability_autocalibrate
 FROM models
 WHERE id = $1
 `
@@ -528,12 +530,13 @@ func (q *Queries) LookupModelByID(ctx context.Context, id int64) (Model, error) 
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CapabilityAutocalibrate,
 	)
 	return i, err
 }
 
 const lookupModelByModelID = `-- name: LookupModelByModelID :one
-SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
+SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, capability_autocalibrate
 FROM models
 WHERE model_id = $1
 `
@@ -556,6 +559,7 @@ func (q *Queries) LookupModelByModelID(ctx context.Context, modelID string) (Mod
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CapabilityAutocalibrate,
 	)
 	return i, err
 }
@@ -588,7 +592,7 @@ SET display_name = $1,
     release_date = $7,
     updated_at = now()
 WHERE id = $8
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, capability_autocalibrate
 `
 
 type RefreshAdoptedModelFromCatalogParams struct {
@@ -630,6 +634,7 @@ func (q *Queries) RefreshAdoptedModelFromCatalog(ctx context.Context, arg Refres
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CapabilityAutocalibrate,
 	)
 	return i, err
 }
@@ -646,7 +651,7 @@ SET display_name = $1,
     release_date = $8,
     updated_at = now()
 WHERE id = $9
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, capability_autocalibrate
 `
 
 type UpdateModelParams struct {
@@ -690,6 +695,7 @@ func (q *Queries) UpdateModel(ctx context.Context, arg UpdateModelParams) (Model
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CapabilityAutocalibrate,
 	)
 	return i, err
 }

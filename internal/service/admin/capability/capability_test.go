@@ -72,6 +72,22 @@ func (s *fakeStore) DeleteChannelOverride(context.Context, int64, core.Key) erro
 	return nil
 }
 
+func (s *fakeStore) ListCapabilitySuggestions(context.Context, string) ([]core.CapabilitySuggestion, error) {
+	return nil, nil
+}
+
+func (s *fakeStore) ListCapabilitySuggestionsByModel(context.Context, int64) ([]core.CapabilitySuggestion, error) {
+	return nil, nil
+}
+
+func (s *fakeStore) AcceptCapabilitySuggestion(context.Context, int64, core.Key, string) (core.ModelCapability, error) {
+	return core.ModelCapability{}, nil
+}
+
+func (s *fakeStore) DismissCapabilitySuggestion(context.Context, int64, core.Key, string) error {
+	return nil
+}
+
 func (s *fakeStore) CreateSyncJob(context.Context, core.Source) (core.SyncJob, error) {
 	return core.SyncJob{}, nil
 }

@@ -25,6 +25,14 @@ type ApiKey struct {
 	RouteID    pgtype.Int8
 }
 
+type CapabilityCalibrationState struct {
+	ID                     int16
+	LastProcessedAttemptID int64
+	UpdatedAt              pgtype.Timestamptz
+	LockedBy               pgtype.Text
+	LockedUntil            pgtype.Timestamptz
+}
+
 type Channel struct {
 	ID                  int64
 	ProviderID          int64
@@ -175,6 +183,7 @@ type Model struct {
 	Source                         string
 	CreatedAt                      pgtype.Timestamptz
 	UpdatedAt                      pgtype.Timestamptz
+	CapabilityAutocalibrate        string
 }
 
 type ModelCapability struct {
@@ -185,6 +194,30 @@ type ModelCapability struct {
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
 	UpdatedBy     pgtype.Text
+}
+
+type ModelCapabilityObservation struct {
+	ModelID       int64
+	ChannelID     int64
+	CapabilityKey string
+	SuccessCount  int64
+	EvidenceCount int64
+	FirstSeenAt   pgtype.Timestamptz
+	LastSeenAt    pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
+type ModelCapabilitySuggestion struct {
+	ID             int64
+	ModelID        int64
+	CapabilityKey  string
+	SuggestedLevel string
+	EvidenceKind   string
+	Rationale      []byte
+	Status         string
+	CreatedAt      pgtype.Timestamptz
+	DecidedAt      pgtype.Timestamptz
+	DecidedBy      pgtype.Text
 }
 
 type ModelCapabilitySyncJob struct {

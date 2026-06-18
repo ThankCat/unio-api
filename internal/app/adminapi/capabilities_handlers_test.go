@@ -41,6 +41,15 @@ func (f *fakeCapabilityService) SetChannelOverride(context.Context, capsvc.SetCh
 func (f *fakeCapabilityService) DeleteChannelOverride(context.Context, int64, string) error {
 	return nil
 }
+func (f *fakeCapabilityService) ListSuggestions(context.Context, string) ([]corecap.CapabilitySuggestion, error) {
+	return nil, nil
+}
+func (f *fakeCapabilityService) AcceptSuggestion(context.Context, int64, string, string) (corecap.ModelCapability, error) {
+	return corecap.ModelCapability{}, nil
+}
+func (f *fakeCapabilityService) DismissSuggestion(context.Context, int64, string, string) error {
+	return nil
+}
 
 type fakeCapabilitySyncService struct{}
 

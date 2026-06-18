@@ -56,6 +56,20 @@ type ChannelOverride struct {
 	UpdatedBy    *string
 }
 
+// CapabilitySuggestion 是能力自动校正产出的「建议给某模型补某能力」记录（DESIGN-capability-autocalibration）。
+type CapabilitySuggestion struct {
+	ID             int64
+	ModelID        int64
+	Key            Key
+	SuggestedLevel SupportLevel
+	EvidenceKind   string
+	Rationale      json.RawMessage
+	Status         string
+	CreatedAt      time.Time
+	DecidedAt      *time.Time
+	DecidedBy      *string
+}
+
 // SyncJobStatus 是 models.dev 能力同步任务的状态机取值。
 type SyncJobStatus string
 
@@ -117,6 +131,11 @@ type Store interface {
 	ListChannelOverrides(ctx context.Context, channelID int64) ([]ChannelOverride, error)
 	UpsertChannelOverride(ctx context.Context, params UpsertChannelOverrideParams) (ChannelOverride, error)
 	DeleteChannelOverride(ctx context.Context, channelID int64, key Key) error
+
+	ListCapabilitySuggestions(ctx context.Context, status string) ([]CapabilitySuggestion, error)
+	ListCapabilitySuggestionsByModel(ctx context.Context, modelID int64) ([]CapabilitySuggestion, error)
+	AcceptCapabilitySuggestion(ctx context.Context, modelID int64, key Key, decidedBy string) (ModelCapability, error)
+	DismissCapabilitySuggestion(ctx context.Context, modelID int64, key Key, decidedBy string) error
 
 	CreateSyncJob(ctx context.Context, source Source) (SyncJob, error)
 	MarkSyncJobRunning(ctx context.Context, id int64) (SyncJob, error)
@@ -273,6 +292,100 @@ func (s *sqlcStore) DeleteChannelOverride(ctx context.Context, channelID int64, 
 	return nil
 }
 
+func (s *sqlcStore) ListCapabilitySuggestions(ctx context.Context, status string) ([]CapabilitySuggestion, error) {
+	rows, err := s.queries.ListModelCapabilitySuggestionsByStatus(ctx, status)
+	if err != nil {
+		return nil, capabilityStoreFailure(err, "list capability suggestions")
+	}
+
+	items := make([]CapabilitySuggestion, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, capabilitySuggestionFromSQLC(row))
+	}
+	return items, nil
+}
+
+func (s *sqlcStore) ListCapabilitySuggestionsByModel(ctx context.Context, modelID int64) ([]CapabilitySuggestion, error) {
+	rows, err := s.queries.ListModelCapabilitySuggestionsByModel(ctx, modelID)
+	if err != nil {
+		return nil, capabilityStoreFailure(err, "list capability suggestions by model")
+	}
+
+	items := make([]CapabilitySuggestion, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, capabilitySuggestionFromSQLC(row))
+	}
+	return items, nil
+}
+
+// AcceptCapabilitySuggestion 采纳一条建议：把建议级别写入 model_capabilities（updated_by=decidedBy），
+// 并标记建议为 accepted。两步顺序执行（admin 低并发），重试幂等。
+func (s *sqlcStore) AcceptCapabilitySuggestion(ctx context.Context, modelID int64, key Key, decidedBy string) (ModelCapability, error) {
+	if !IsRegisteredKey(key) {
+		return ModelCapability{}, capabilityInvalidKey(key)
+	}
+
+	sug, err := s.queries.GetModelCapabilitySuggestion(ctx, sqlc.GetModelCapabilitySuggestionParams{
+		ModelID:       modelID,
+		CapabilityKey: string(key),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ModelCapability{}, capabilityNotFound("accept capability suggestion")
+		}
+		return ModelCapability{}, capabilityStoreFailure(err, "get capability suggestion")
+	}
+
+	level := SupportLevel(sug.SuggestedLevel)
+	if !IsValidSupportLevel(level) {
+		return ModelCapability{}, capabilityInvalidSupportLevel(level)
+	}
+
+	row, err := s.queries.UpsertModelCapability(ctx, sqlc.UpsertModelCapabilityParams{
+		ModelID:       modelID,
+		CapabilityKey: string(key),
+		SupportLevel:  string(level),
+		Limits:        nil,
+		UpdatedBy:     nullableText(decidedBy),
+	})
+	if err != nil {
+		return ModelCapability{}, capabilityStoreFailure(err, "accept upsert model capability")
+	}
+
+	if _, err := s.queries.MarkModelCapabilitySuggestionDecided(ctx, sqlc.MarkModelCapabilitySuggestionDecidedParams{
+		Status:    "accepted",
+		DecidedBy: nullableText(decidedBy),
+		ID:        sug.ID,
+	}); err != nil {
+		return ModelCapability{}, capabilityStoreFailure(err, "mark suggestion accepted")
+	}
+
+	return modelCapabilityFromSQLC(row), nil
+}
+
+// DismissCapabilitySuggestion 忽略一条建议：标记 dismissed，worker 不再重复打扰该 (模型, 能力)。
+func (s *sqlcStore) DismissCapabilitySuggestion(ctx context.Context, modelID int64, key Key, decidedBy string) error {
+	sug, err := s.queries.GetModelCapabilitySuggestion(ctx, sqlc.GetModelCapabilitySuggestionParams{
+		ModelID:       modelID,
+		CapabilityKey: string(key),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return capabilityNotFound("dismiss capability suggestion")
+		}
+		return capabilityStoreFailure(err, "get capability suggestion")
+	}
+
+	if _, err := s.queries.MarkModelCapabilitySuggestionDecided(ctx, sqlc.MarkModelCapabilitySuggestionDecidedParams{
+		Status:    "dismissed",
+		DecidedBy: nullableText(decidedBy),
+		ID:        sug.ID,
+	}); err != nil {
+		return capabilityStoreFailure(err, "mark suggestion dismissed")
+	}
+	return nil
+}
+
 func (s *sqlcStore) CreateSyncJob(ctx context.Context, source Source) (SyncJob, error) {
 	if !IsValidSyncJobSource(source) {
 		return SyncJob{}, capabilityInvalidSource(source)
@@ -401,6 +514,22 @@ func channelOverrideFromSQLC(row sqlc.ChannelCapabilityOverride) ChannelOverride
 		CreatedAt:    row.CreatedAt.Time,
 		UpdatedAt:    row.UpdatedAt.Time,
 		UpdatedBy:    textPtr(row.UpdatedBy),
+	}
+}
+
+// capabilitySuggestionFromSQLC 将 sqlc 行转成领域 CapabilitySuggestion。
+func capabilitySuggestionFromSQLC(row sqlc.ModelCapabilitySuggestion) CapabilitySuggestion {
+	return CapabilitySuggestion{
+		ID:             row.ID,
+		ModelID:        row.ModelID,
+		Key:            Key(row.CapabilityKey),
+		SuggestedLevel: SupportLevel(row.SuggestedLevel),
+		EvidenceKind:   row.EvidenceKind,
+		Rationale:      limitsFromBytes(row.Rationale),
+		Status:         row.Status,
+		CreatedAt:      row.CreatedAt.Time,
+		DecidedAt:      timePtr(row.DecidedAt),
+		DecidedBy:      textPtr(row.DecidedBy),
 	}
 }
 

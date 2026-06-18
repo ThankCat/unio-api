@@ -1111,3 +1111,127 @@ compact_orchestrator.go（双路径选路）+ compact_synthetic.go（迁自 comp
 + 自定义 MarshalJSON）。DEC-010/DEC-014/DEC-018 边界不变；账务零改动。
 ```
 
+## DEC-020 被动证据式模型能力自动校正
+
+状态：accepted
+
+决策：
+
+```text
+现场：observe 闸门刷「model capability unavailable」WARN——模型 model_capabilities 手工声明不全，
+与真实请求所用能力不一致；第三方中转上游能力难手工对全。设计见
+docs/production/DESIGN-capability-autocalibration.md（已审核，Q1~Q7 全按推荐默认）。
+
+新增「能力自动校正」后台任务：被动从 request_attempts(status=succeeded) + usage_records 学习模型
+实际具备的能力并补齐 model_capabilities。纪律：被动（不主动探针、零额外上游成本）、增量（watermark）、
+证据式、add-only、manual 永远优先、per-model 可控、全程可审计可撤销。
+
+per-model 开关 models.capability_autocalibrate ∈ {off, suggest（默认）, auto}：
+  - off：不学习；suggest：只产生建议待 admin 一键采纳；auto：强证据自动补、弱证据仍只建议。
+
+证据分级（关键安全点：请求成功 ≠ 该能力真被支持）：
+  - 强证据（响应真用到）：finish_class=tool_use → tools.function/custom/parallel/choice_required；
+    usage cache_read>0 → prompt_cache；reasoning_output_tokens>0 → reasoning.effort/budget。
+  - 弱证据（带字段且成功但未体现用到）：builtin web_search/mcp、encrypted_content 等 → 只建议。
+  - 自动补全部前置：档位 auto + 强证据且比例≥阈值 + 非 limits 维度键 + 模型单渠道（多渠道只建议，
+    避免强渠道能力误套弱渠道）+ 该 (模型,能力) 无 manual 声明（manual 永远优先）。
+
+规模化：增量 watermark（只扫新行）+ rollup 聚合表（成本与历史总量解耦）+ 单轮变更封顶。
+工程现实：finish_class=tool_use 只证明「某工具被调」，无法精确区分 function/custom；Responses 直传上游
+的 finish_class 恒为 stop（不出 tool_use），故 tools.* 在该类上游恒弱证据（只建议）。要让 tools.* 也能
+强证据自动补，需给 adapter 加「按 key 命中埋点」（后续 TASK-H）。
+```
+
+原因：
+
+```text
+1. 真实流量已把模型实际能力暴露出来（request_attempts.required_capabilities + status + finish_class
+   + usage 已持久化），被动挖掘比让运营手工对齐第三方中转能力更准、零成本。
+2. 「证据式 + 强/弱分级」直面「成功≠支持」陷阱：只有响应真用到才敢自动补，其余只建议，避免过度声明在
+   enforce 或路由信任时反噬。
+3. add-only + manual 优先 + 单渠道才 auto + 封顶，是规模化与误判的护栏；只在 observe 期有用，契合
+   「observe 学习 → 声明稳定 → 切 enforce」的上线节奏。
+```
+
+影响：
+
+```text
+迁移 000037（models.capability_autocalibrate 列）+ 000038/039/040（model_capability_observations rollup /
+model_capability_suggestions / capability_calibration_state watermark）。新增 core/capability/calibration
+（BuildPlan 纯函数 + Store + Calibrator，含 DryRun）+ sqlc 查询；core/capability.Store 增 suggestion 读写；
+app/workers 增 capability_calibration_worker；bootstrap 增 NewCapabilityCalibrator + 条件注册；
+cmd/worker-server 增 calibrate-capabilities --dry-run；config 增 CapabilityAutocalibrateConfig（默认关）；
+admin 增能力建议列表/采纳/忽略（/capability/suggestions、/models/{id}/capability-suggestions/{key}/{accept,dismiss}）。
+登记 GAP-12-013（含 TASK-H 残留）。能力 key 注册表不变（不新增 key）；账务/路由/enforce 边界不变。
+
+补充交付（2026-06-18，闭合 DESIGN 风险 A + add-only 退化护栏）：
+- 多实例分布式锁：迁移 000041 给 capability_calibration_state 加 locked_by/locked_until 租约列；calibration.Lease
+  （DB 行锁，抢到才跑、运行中按 TTL/3 续租、丢锁即中止本轮、崩溃后据 TTL 自动释放）；config 增
+  CAPABILITY_AUTOCALIBRATE_LOCK_TTL（默认 10m）；lock=nil 退化为单实例语义。解决 cron 重入 / 多实例并发重复计 rollup。
+- 上游退化告警：calibration.DetectDegradations 纯函数——对已声明的强证据能力，本轮新窗口成功量达阈值但证据比例塌陷
+  （< 0.2）即出告警（alert=capability_upstream_degradation），worker + CLI 打日志。坚持 add-only：只告警，绝不据此
+  自动下调/删除能力声明（删除永远人工，防一次抖动误删）。
+```
+
+## DEC-021 看板「经营驾驶舱」三层架构：按币种拆卡不引汇率
+
+状态：accepted
+
+决策：
+
+```text
+M9 工作台看板（DEC-017 分档网关的运营内部工具）从「数据展示页」升级为「经营驾驶舱」三层信息架构。
+设计与全文口径见 docs/chapters/phase-13-admin/DESIGN-dashboard-business-overview.md，§9.1 推荐结论
+经 owner 确认定稿，本决策锚定其四项口径：
+
+1. 三层信息架构（首页是决策层，不是数据仓库）：
+   - 第一层 首屏决策层（DB，/dashboard/overview）：8 KPI + 本期/上期环比 + 状态 Banner（≤30 秒看完）。
+     8 KPI：收入 / 毛利 / 利润率 / 缓存贡献（估）/ 请求数 / 成功率 / 异常请求 / 客户余额池。
+     首屏不放任何明细表、排行榜、Token 拆解、逐渠道明细。
+   - 第二层 二级分析中心（DB + rollup，独立路由/Tab）：利润 / 渠道 / 模型 / 缓存 / 用户 / 异常中心。
+   - 第三层 实时监控页（Prometheus，独立路由）：QPS/TPS/RPM/TPM/P99/错误率，不走 DB 聚合。
+
+2. 金额口径：按币种拆卡，不引汇率。
+   沿用 DEC-008/DEC-017「按币种分组、绝不跨币种相加」。引汇率= 把一个会过期/有误差的外部事实
+   引进资金展示面，不值。首页 KPI 卡默认展示主币种（USD，可配），其余币种折叠在卡内展开。
+   利润率 / ROI 是同币种内的比值，天然无跨币种问题。→ 不做主币种折算、不引汇率源。
+
+3. 付费率定义：区间内有 debit（实际消费）的去重用户 / 区间内有请求的去重用户。
+   「有余额」会把充了钱没用的算进来失真；「有充值」依赖充值事实另算。先用「有消费」最贴近经营意义。
+
+4. 缓存贡献是反事实估算，不是账本事实：
+   节省 = cache_read_tokens ×（未缓存单价 − 缓存读单价），是「若不命中会多花多少」的假设值，
+   账本里不存在这笔钱。UI 必须标「估算」，不与真实利润 / 账本金额同列误导。
+
+5. rollup 保留期：hour 桶保留 90 天，day 桶永久。
+   hour 桶用于近期细看（≤90 天足够），day 桶用于长期趋势永久留存；超 90 天 hour 桶由 worker 定期清理。
+
+6. AI 经营摘要本轮顺延（依赖二级聚合先就绪 + 涉及 LLM 调用 / 缓存 / 成本，单独立项）。
+
+7. 三类无数据源指标移出本轮、单独立项：供应商（上游）余额 / 可用天数（providers 无余额字段）、
+   在线用户 / 排队请求（无运行时 gauge 埋点）、熔断 / 降级状态（无状态机快照）。
+```
+
+原因：
+
+```text
+1. 产品侧「16 KPI + 11 中心」清单跳进了它要解决的坑——把所有东西堆进首页反而让运营更迷茫。
+   真正的解法是分层（决策层 / 分析层 / 实时层），不是堆叠。
+2. 单运营者起步阶段，资金展示面追求账务清晰可审计（DEC-008）；按币种拆卡 + 不引汇率，避免把
+   外部汇率误差 / 过期风险引进毛利与余额展示。
+3. 三类指标当前确无数据源，硬做会产生假数据；显式移出、单独立项，避免污染首屏可信度。
+```
+
+影响：
+
+```text
+1. 阶段 13 新增 TASK-13.09（看板升级三层架构），切片 D1–D5：
+   - D1 决策层重构已落地（Slice 8，2026-06-18）：扩展 /dashboard/overview（current/previous 环比 +
+     margin_rate 派生 + 缓存贡献估算 + health 状态）+ 前端 DashboardPage 重排为 8-KPI 决策层。
+     后端 go build/test 绿、前端 tsc/eslint/vite build 绿。
+   - D2 rollup 基础设施、D3/D4 二级中心、D5 实时监控页登记 GAP-13-001~003；AI 摘要 GAP-13-004；
+     三类无数据源指标 GAP-13-005。
+2. DEC-008 / DEC-017 不变；本决策是它们在「看板展示口径」层面的收束。
+3. 环比 query D1 暂直扫原表（低量可上），上量前迁 rollup（GAP-13-001），首页不扫原表。
+```
+

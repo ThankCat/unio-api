@@ -23,6 +23,9 @@ type CapabilityService interface {
 	ListChannelOverrides(ctx context.Context, channelID int64) ([]corecap.ChannelOverride, error)
 	SetChannelOverride(ctx context.Context, in capsvc.SetChannelOverrideInput) (corecap.ChannelOverride, error)
 	DeleteChannelOverride(ctx context.Context, channelID int64, key string) error
+	ListSuggestions(ctx context.Context, status string) ([]corecap.CapabilitySuggestion, error)
+	AcceptSuggestion(ctx context.Context, modelID int64, key string, actor string) (corecap.ModelCapability, error)
+	DismissSuggestion(ctx context.Context, modelID int64, key string, actor string) error
 }
 
 // modelCapabilityDTO 是模型能力声明响应体；limits 原样回传（无则为 null）。
@@ -57,6 +60,20 @@ type setChannelOverrideRequest struct {
 	SupportLevel string          `json:"support_level"`
 	Limits       json.RawMessage `json:"limits"`
 	Reason       string          `json:"reason"`
+}
+
+// capabilitySuggestionDTO 是能力自动校正建议响应体。
+type capabilitySuggestionDTO struct {
+	ID             int64           `json:"id"`
+	ModelID        int64           `json:"model_id"`
+	CapabilityKey  string          `json:"capability_key"`
+	SuggestedLevel string          `json:"suggested_level"`
+	EvidenceKind   string          `json:"evidence_kind"`
+	Rationale      json.RawMessage `json:"rationale"`
+	Status         string          `json:"status"`
+	CreatedAt      string          `json:"created_at"`
+	DecidedAt      *string         `json:"decided_at"`
+	DecidedBy      *string         `json:"decided_by"`
 }
 
 type capabilitiesHandler struct {
@@ -192,6 +209,70 @@ func (h *capabilitiesHandler) deleteChannelOverride(w http.ResponseWriter, r *ht
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *capabilitiesHandler) listSuggestions(w http.ResponseWriter, r *http.Request) {
+	items, err := h.service.ListSuggestions(r.Context(), r.URL.Query().Get("status"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	dtos := make([]capabilitySuggestionDTO, 0, len(items))
+	for _, item := range items {
+		dtos = append(dtos, toCapabilitySuggestionDTO(item))
+	}
+	writeData(w, http.StatusOK, dtos)
+}
+
+func (h *capabilitiesHandler) acceptSuggestion(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	item, err := h.service.AcceptSuggestion(r.Context(), id, chi.URLParam(r, "key"), adminActor(r))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	writeData(w, http.StatusOK, toModelCapabilityDTO(item))
+}
+
+func (h *capabilitiesHandler) dismissSuggestion(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	if err := h.service.DismissSuggestion(r.Context(), id, chi.URLParam(r, "key"), adminActor(r)); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func toCapabilitySuggestionDTO(c corecap.CapabilitySuggestion) capabilitySuggestionDTO {
+	dto := capabilitySuggestionDTO{
+		ID:             c.ID,
+		ModelID:        c.ModelID,
+		CapabilityKey:  string(c.Key),
+		SuggestedLevel: string(c.SuggestedLevel),
+		EvidenceKind:   c.EvidenceKind,
+		Rationale:      c.Rationale,
+		Status:         c.Status,
+		CreatedAt:      c.CreatedAt.UTC().Format(time.RFC3339),
+		DecidedBy:      c.DecidedBy,
+	}
+	if c.DecidedAt != nil {
+		decided := c.DecidedAt.UTC().Format(time.RFC3339)
+		dto.DecidedAt = &decided
+	}
+	return dto
 }
 
 func toModelCapabilityDTO(c corecap.ModelCapability) modelCapabilityDTO {

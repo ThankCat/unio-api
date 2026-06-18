@@ -198,3 +198,41 @@
 
 1. [TASK-6.04](../phase-06-model-channel-routing/PLAN.md#task-6-04-routing-policy)
 2. [TASK-7.17](../phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization)
+
+<a id="task-13-09-dashboard-cockpit"></a>
+### TASK-13.09 工作台看板升级为经营驾驶舱（三层信息架构）
+
+状态：in_progress（D1 决策层重构已交付，Slice 8，2026-06-18；D2–D5 见 GAP）
+
+目标：
+
+```text
+把 M9 工作台看板（TASK-13.07）从「数据展示页」升级为「经营驾驶舱」三层信息架构：
+首屏=决策层（8 KPI + 环比 + 状态 Banner），二级=分析中心（DB+rollup），三级=实时监控（Prometheus）。
+设计与口径以 DESIGN-dashboard-business-overview.md 为准；§9.1 口径已定稿并锚定 DEC-021。
+```
+
+切片（设计 §10）：
+
+| 切片 | 范围 | 状态 |
+| --- | --- | --- |
+| D1 决策层重构 | 首页改 8 KPI（收入/毛利/利润率/缓存贡献/请求数/成功率/异常请求/客户余额）+ 本期/上期环比 + 状态 Banner，砍掉首页明细/排行 | **done（Slice 8，2026-06-18）** |
+| D2 rollup 基础设施 | `dashboard_rollups` 表 + 回填 worker + 环比/趋势改读 rollup（上量前必须） | planned（[GAP-13-001](../../production/TODO_REGISTER.md#gap-13-001)） |
+| D3 二级中心（批一） | 利润中心 + 渠道中心 + 异常中心 | planned（[GAP-13-002](../../production/TODO_REGISTER.md#gap-13-002)） |
+| D4 二级中心（批二） | 模型中心 + 缓存中心 + 用户中心（P95/P99 走 rollup） | planned（[GAP-13-002](../../production/TODO_REGISTER.md#gap-13-002)） |
+| D5 实时监控页 | QPS/TPS/P99/错误率接 Prometheus | planned（[GAP-13-003](../../production/TODO_REGISTER.md#gap-13-003)） |
+
+D1 已实现：
+
+1. **后端 service**（`internal/service/admin/dashboard/dashboard.go` + `helpers.go`）：`Overview` 重构为决策层——`Current`/`Previous` 两段同口径环比（上期=同长度紧邻窗口）、`Health` 整体健康状态 Banner（阈值 0.95/0.80）、`MarginRate` 按币种派生利润率（`big.Rat` 精确）、缓存贡献反事实估算（`DashboardCacheSavingsByCurrency`，标「估算」）。
+2. **adminapi DTO**（`internal/app/adminapi/dashboard.go`）：响应体重构为 `current`/`previous`/`margin_rate`/`health` + 时点画像（balance/billing_exceptions/channels）；↑↓% 由前端用 current/previous 自算。
+3. **前端**（`unio-admin`）：`dashboard.ts` 类型对齐；`DashboardPage.tsx` 重排为状态 Banner + 8-KPI 决策层（金额类带环比 `DeltaBadge`，异常类 invert），保留趋势图与渠道健康；删除旧 `OverviewCards`/`MoneyList`。
+
+口径（定稿，DEC-021）：金额按币种拆卡不引汇率；付费率=区间内有 `debit` 的去重用户；rollup hour 桶保留 90 天、day 桶永久；AI 摘要顺延。
+
+关联：
+
+- 设计：[DESIGN-dashboard-business-overview.md](DESIGN-dashboard-business-overview.md)
+- 决策：[DEC-021](../../production/DECISIONS.md#dec-021-看板经营驾驶舱三层架构按币种拆卡不引汇率)
+- 升级自：TASK-13.07（M9 工作台看板，Slice 6）
+- GAP：[GAP-13-001](../../production/TODO_REGISTER.md#gap-13-001) ~ [GAP-13-005](../../production/TODO_REGISTER.md#gap-13-005)

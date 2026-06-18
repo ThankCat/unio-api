@@ -231,6 +231,11 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Get("/channels/{id}/capability-overrides", cah.listChannelOverrides)
 			r.Put("/channels/{id}/capability-overrides/{key}", cah.setChannelOverride)
 			r.Delete("/channels/{id}/capability-overrides/{key}", cah.deleteChannelOverride)
+
+			// 能力自动校正建议（DESIGN-capability-autocalibration）：列待采纳 / 一键采纳 / 忽略。
+			r.Get("/capability/suggestions", cah.listSuggestions)
+			r.Post("/models/{id}/capability-suggestions/{key}/accept", cah.acceptSuggestion)
+			r.Post("/models/{id}/capability-suggestions/{key}/dismiss", cah.dismissSuggestion)
 		}
 
 		// M5 models.dev 同步：内联触发（dry-run 预览/实际应用）+ 最近任务展示。

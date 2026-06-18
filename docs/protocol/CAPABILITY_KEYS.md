@@ -130,6 +130,22 @@
   - `reasoning.effort` = `limited`,`limits` 仅 `high` / `max`(其余档位归一到 `high`)。
   - 详见 [docs/providers/deepseek/](../providers/deepseek/README.md)。
 
+## 5.1 能力自动校正的证据来源（DEC-020 / GAP-12-013）
+
+「能力自动校正」从真实成功流量被动学习模型实际能力并补齐 `model_capabilities`（不新增 key）。
+**强证据 = 响应真用到了该能力**，才允许自动补（`auto` 档）；否则只产生建议待人工采纳：
+
+| 能力 key | 强证据来源 |
+| --- | --- |
+| `tools.function` / `tools.custom` / `tools.parallel` / `tools.choice_required` | `request_attempts.finish_class = tool_use` |
+| `prompt_cache` | `usage_records.cache_read_input_tokens > 0` |
+| `reasoning.effort` / `reasoning.budget` | `usage_records.reasoning_output_tokens > 0`（有 limits 维度，恒只建议不自动） |
+| 其余（builtin 工具 / `responses.encrypted_content` / 模态 / 结构化输出 等） | 当前审计无落点 → 弱证据，只建议 |
+
+> 注：`finish_class=tool_use` 仅证明「某工具被调」，无法区分 function/custom；且 Responses 直传上游的
+> `finish_class` 恒为 `stop`（不出 `tool_use`），故该类上游的 `tools.*` 恒弱证据。要让 `tools.*` 也能强证据
+> 自动补，需给 adapter 加「按 key 命中埋点」（DESIGN-capability-autocalibration TASK-H）。
+
 ## 6. 版本记录
 
 | 版本 | 日期 | 变更 |

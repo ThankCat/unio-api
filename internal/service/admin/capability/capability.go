@@ -29,6 +29,10 @@ type Store interface {
 	ListChannelOverrides(ctx context.Context, channelID int64) ([]core.ChannelOverride, error)
 	UpsertChannelOverride(ctx context.Context, params core.UpsertChannelOverrideParams) (core.ChannelOverride, error)
 	DeleteChannelOverride(ctx context.Context, channelID int64, key core.Key) error
+
+	ListCapabilitySuggestions(ctx context.Context, status string) ([]core.CapabilitySuggestion, error)
+	AcceptCapabilitySuggestion(ctx context.Context, modelID int64, key core.Key, decidedBy string) (core.ModelCapability, error)
+	DismissCapabilitySuggestion(ctx context.Context, modelID int64, key core.Key, decidedBy string) error
 }
 
 // SetModelCapabilityInput 是写入模型能力声明的入参（source 固定 manual）。
@@ -167,6 +171,54 @@ func (s *CapabilityService) DeleteChannelOverride(ctx context.Context, channelID
 		return invalidArgument("capability_key", "capability key is not registered")
 	}
 	return s.store.DeleteChannelOverride(ctx, channelID, k)
+}
+
+// ListSuggestions 列出能力自动校正建议；status 缺省为 pending。
+func (s *CapabilityService) ListSuggestions(ctx context.Context, status string) ([]core.CapabilitySuggestion, error) {
+	st := strings.TrimSpace(status)
+	if st == "" {
+		st = "pending"
+	}
+	if st != "pending" && st != "accepted" && st != "dismissed" {
+		return nil, invalidArgument("status", "status must be pending, accepted or dismissed")
+	}
+	return s.store.ListCapabilitySuggestions(ctx, st)
+}
+
+// AcceptSuggestion 采纳一条能力建议：把建议级别写入 model_capabilities，并标记建议 accepted。
+func (s *CapabilityService) AcceptSuggestion(ctx context.Context, modelID int64, key string, actor string) (core.ModelCapability, error) {
+	if modelID <= 0 {
+		return core.ModelCapability{}, invalidArgument("id", "model id must be positive")
+	}
+	k := core.Key(strings.TrimSpace(key))
+	if !core.IsRegisteredKey(k) {
+		return core.ModelCapability{}, invalidArgument("capability_key", "capability key is not registered")
+	}
+	if err := ensureModelExists(ctx, s.store, modelID); err != nil {
+		return core.ModelCapability{}, err
+	}
+	return s.store.AcceptCapabilitySuggestion(ctx, modelID, k, decidedByOrDefault(actor))
+}
+
+// DismissSuggestion 忽略一条能力建议：标记 dismissed，worker 不再重复打扰该 (模型, 能力)。
+func (s *CapabilityService) DismissSuggestion(ctx context.Context, modelID int64, key string, actor string) error {
+	if modelID <= 0 {
+		return invalidArgument("id", "model id must be positive")
+	}
+	k := core.Key(strings.TrimSpace(key))
+	if !core.IsRegisteredKey(k) {
+		return invalidArgument("capability_key", "capability key is not registered")
+	}
+	return s.store.DismissCapabilitySuggestion(ctx, modelID, k, decidedByOrDefault(actor))
+}
+
+// decidedByOrDefault 把空 actor 归一为 "admin"，保证决策有可审计来源。
+func decidedByOrDefault(actor string) string {
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		return "admin"
+	}
+	return actor
 }
 
 // modelLookup 是校验模型存在所需的最小读取能力（admin Store 与 core.Store 均满足）。

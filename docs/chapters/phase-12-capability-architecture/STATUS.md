@@ -57,3 +57,24 @@ git diff --check
 ```
 
 同步 worker 启动后用 `--dry-run` 校验 conflict 列表；observe 模式上线后用 metrics 看 `unio_gateway_capability_missing_total` 分布再切 enforce。
+
+## 增量：能力自动校正（DEC-020 / GAP-12-013，2026-06-18）
+
+针对 observe 期「model capability unavailable」WARN 刷屏（模型 `model_capabilities` 声明不全），新增**被动证据式**
+能力自动校正：worker 增量扫 `request_attempts(succeeded)` + `usage_records` 证据，按 (模型,渠道,能力) rollup，对
+「成功用过但未声明」的能力——强证据自动补（仅 `auto` 档 + 单渠道）、弱证据进建议待 admin 采纳。per-model 档位
+`models.capability_autocalibrate`（off/suggest/auto，默认 suggest）。设计见 [DESIGN-capability-autocalibration](../../production/DESIGN-capability-autocalibration.md)。
+
+- 已交付：迁移 000037–000041；`core/capability/calibration`（`BuildPlan` 纯函数 + `Store` + `Calibrator`，含 DryRun + 单测）；
+  `core/capability.Store` 增建议读写；`workers/capability_calibration_worker`（间隔/退避/告警 + 单测）；bootstrap 条件注册 +
+  `worker-server calibrate-capabilities --dry-run`；config `CAPABILITY_AUTOCALIBRATE_*`（默认关）；admin 建议列表/采纳/忽略。
+- 多实例分布式锁（DESIGN 风险 A）：迁移 000041 给单行表 `capability_calibration_state` 加 `locked_by/locked_until` 租约列；
+  `calibration.Lease`（DB 行锁，抢到才跑、运行中按 TTL/3 续租、崩溃后据 TTL 自动释放）；worker 丢锁即中止本轮；
+  config `CAPABILITY_AUTOCALIBRATE_LOCK_TTL`（默认 10m）。`lock=nil` 退化为单实例语义。✅ 已实现 + 单测。
+- 上游退化告警（add-only 纪律）：`calibration.DetectDegradations` 纯函数——对**已声明**的强证据能力，若本轮新窗口成功量达阈值
+  但证据比例塌陷（< 0.2）则出告警（`alert=capability_upstream_degradation`），只告警绝不自动下调/删除（删除永远人工）；
+  worker 与 CLI 均打告警日志。✅ 已实现 + 单测。
+- 真实库 dry-run 验证：gpt-5.5（单渠道、155 成功）→ `prompt_cache=strong`（153 真 cache 命中）+ `tools.custom/parallel/...`
+  建议；`auto` 档下 `prompt_cache` 自动补。WARN 刷屏的 6 个缺失能力均被检出。
+- 残留（TASK-H，prod 启用前）：`tools.*` 强证据需 adapter 按 key 命中埋点（Responses 直传 `finish_class` 恒 stop）、
+  多渠道自动下 Layer 3 override。calibration 相关包 `go build` / `go test` 全绿（同工作树另有未完成的 dashboard 重构，与本任务无关）。
