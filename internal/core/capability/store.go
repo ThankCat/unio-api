@@ -137,6 +137,9 @@ type Store interface {
 	AcceptCapabilitySuggestion(ctx context.Context, modelID int64, key Key, decidedBy string) (ModelCapability, error)
 	DismissCapabilitySuggestion(ctx context.Context, modelID int64, key Key, decidedBy string) error
 
+	GetModelCapabilityAutocalibrate(ctx context.Context, modelID int64) (string, error)
+	SetModelCapabilityAutocalibrate(ctx context.Context, modelID int64, mode string) error
+
 	CreateSyncJob(ctx context.Context, source Source) (SyncJob, error)
 	MarkSyncJobRunning(ctx context.Context, id int64) (SyncJob, error)
 	MarkSyncJobSucceeded(ctx context.Context, id int64, stats json.RawMessage) (SyncJob, error)
@@ -382,6 +385,33 @@ func (s *sqlcStore) DismissCapabilitySuggestion(ctx context.Context, modelID int
 		ID:        sug.ID,
 	}); err != nil {
 		return capabilityStoreFailure(err, "mark suggestion dismissed")
+	}
+	return nil
+}
+
+// GetModelCapabilityAutocalibrate 读取模型能力自动校正档位。
+func (s *sqlcStore) GetModelCapabilityAutocalibrate(ctx context.Context, modelID int64) (string, error) {
+	mode, err := s.queries.GetModelCapabilityAutocalibrate(ctx, modelID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", capabilityNotFound("model not found")
+		}
+		return "", capabilityStoreFailure(err, "get model capability autocalibrate mode")
+	}
+	return mode, nil
+}
+
+// SetModelCapabilityAutocalibrate 更新模型能力自动校正档位。
+func (s *sqlcStore) SetModelCapabilityAutocalibrate(ctx context.Context, modelID int64, mode string) error {
+	_, err := s.queries.SetModelCapabilityAutocalibrate(ctx, sqlc.SetModelCapabilityAutocalibrateParams{
+		ID:                      modelID,
+		CapabilityAutocalibrate: mode,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return capabilityNotFound("model not found")
+		}
+		return capabilityStoreFailure(err, "set model capability autocalibrate mode")
 	}
 	return nil
 }

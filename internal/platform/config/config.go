@@ -189,6 +189,8 @@ type WorkerConfig struct {
 
 // Load 从环境变量加载配置，并对需要解析的字段做启动期校验。
 func Load() (Config, error) {
+	loadDotEnvIfNeeded()
+
 	redisDB, err := getEnvInt("REDIS_DB", 0)
 	if err != nil {
 		return Config{}, err

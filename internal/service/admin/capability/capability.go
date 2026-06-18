@@ -33,6 +33,9 @@ type Store interface {
 	ListCapabilitySuggestions(ctx context.Context, status string) ([]core.CapabilitySuggestion, error)
 	AcceptCapabilitySuggestion(ctx context.Context, modelID int64, key core.Key, decidedBy string) (core.ModelCapability, error)
 	DismissCapabilitySuggestion(ctx context.Context, modelID int64, key core.Key, decidedBy string) error
+
+	GetModelCapabilityAutocalibrate(ctx context.Context, modelID int64) (string, error)
+	SetModelCapabilityAutocalibrate(ctx context.Context, modelID int64, mode string) error
 }
 
 // SetModelCapabilityInput 是写入模型能力声明的入参（source 固定 manual）。
@@ -210,6 +213,39 @@ func (s *CapabilityService) DismissSuggestion(ctx context.Context, modelID int64
 		return invalidArgument("capability_key", "capability key is not registered")
 	}
 	return s.store.DismissCapabilitySuggestion(ctx, modelID, k, decidedByOrDefault(actor))
+}
+
+// GetAutocalibrateMode 读取模型能力自动校正档位（off/suggest/auto）。
+func (s *CapabilityService) GetAutocalibrateMode(ctx context.Context, modelID int64) (string, error) {
+	if modelID <= 0 {
+		return "", invalidArgument("id", "model id must be positive")
+	}
+	mode, err := s.store.GetModelCapabilityAutocalibrate(ctx, modelID)
+	if err != nil {
+		if failure.CodeOf(err) == failure.CodeCapabilityNotFound {
+			return "", notFound("model not found")
+		}
+		return "", err
+	}
+	return mode, nil
+}
+
+// SetAutocalibrateMode 更新模型能力自动校正档位。
+func (s *CapabilityService) SetAutocalibrateMode(ctx context.Context, modelID int64, mode string) error {
+	if modelID <= 0 {
+		return invalidArgument("id", "model id must be positive")
+	}
+	mode = strings.TrimSpace(mode)
+	if mode != "off" && mode != "suggest" && mode != "auto" {
+		return invalidArgument("mode", "mode must be off, suggest or auto")
+	}
+	if err := s.store.SetModelCapabilityAutocalibrate(ctx, modelID, mode); err != nil {
+		if failure.CodeOf(err) == failure.CodeCapabilityNotFound {
+			return notFound("model not found")
+		}
+		return err
+	}
+	return nil
 }
 
 // decidedByOrDefault 把空 actor 归一为 "admin"，保证决策有可审计来源。

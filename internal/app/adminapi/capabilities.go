@@ -26,6 +26,8 @@ type CapabilityService interface {
 	ListSuggestions(ctx context.Context, status string) ([]corecap.CapabilitySuggestion, error)
 	AcceptSuggestion(ctx context.Context, modelID int64, key string, actor string) (corecap.ModelCapability, error)
 	DismissSuggestion(ctx context.Context, modelID int64, key string, actor string) error
+	GetAutocalibrateMode(ctx context.Context, modelID int64) (string, error)
+	SetAutocalibrateMode(ctx context.Context, modelID int64, mode string) error
 }
 
 // modelCapabilityDTO 是模型能力声明响应体；limits 原样回传（无则为 null）。
@@ -74,6 +76,14 @@ type capabilitySuggestionDTO struct {
 	CreatedAt      string          `json:"created_at"`
 	DecidedAt      *string         `json:"decided_at"`
 	DecidedBy      *string         `json:"decided_by"`
+}
+
+type capabilityAutocalibrateDTO struct {
+	Mode string `json:"mode"`
+}
+
+type setCapabilityAutocalibrateRequest struct {
+	Mode string `json:"mode"`
 }
 
 type capabilitiesHandler struct {
@@ -254,6 +264,43 @@ func (h *capabilitiesHandler) dismissSuggestion(w http.ResponseWriter, r *http.R
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *capabilitiesHandler) getAutocalibrateMode(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	mode, err := h.service.GetAutocalibrateMode(r.Context(), id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	writeData(w, http.StatusOK, capabilityAutocalibrateDTO{Mode: mode})
+}
+
+func (h *capabilitiesHandler) setAutocalibrateMode(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	var req setCapabilityAutocalibrateRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	if err := h.service.SetAutocalibrateMode(r.Context(), id, req.Mode); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	writeData(w, http.StatusOK, capabilityAutocalibrateDTO{Mode: req.Mode})
 }
 
 func toCapabilitySuggestionDTO(c corecap.CapabilitySuggestion) capabilitySuggestionDTO {

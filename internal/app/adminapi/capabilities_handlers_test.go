@@ -50,6 +50,12 @@ func (f *fakeCapabilityService) AcceptSuggestion(context.Context, int64, string,
 func (f *fakeCapabilityService) DismissSuggestion(context.Context, int64, string, string) error {
 	return nil
 }
+func (f *fakeCapabilityService) GetAutocalibrateMode(context.Context, int64) (string, error) {
+	return "suggest", nil
+}
+func (f *fakeCapabilityService) SetAutocalibrateMode(context.Context, int64, string) error {
+	return nil
+}
 
 type fakeCapabilitySyncService struct{}
 

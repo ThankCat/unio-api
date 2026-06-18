@@ -333,6 +333,7 @@ type RequestAttempt struct {
 	StartedAt             pgtype.Timestamptz
 	CompletedAt           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
+	UsedCapabilities      []string
 }
 
 type RequestRecord struct {
@@ -447,6 +448,7 @@ type SettlementRecoveryJob struct {
 	CompletedAt                       pgtype.Timestamptz
 	CreatedAt                         pgtype.Timestamptz
 	UpdatedAt                         pgtype.Timestamptz
+	UsedCapabilities                  []string
 }
 
 type UsageLineItem struct {

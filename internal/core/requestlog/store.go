@@ -171,7 +171,7 @@ func (s *Store) CreateAttempt(ctx context.Context, params CreateAttemptParams) (
 		return AttemptRecord{}, requestLogStoreFailure(err, "create request attempt")
 	}
 
-	return attemptRecordFromSQLC(row), nil
+	return attemptRecordFromSQLC(sqlc.RequestAttemptFromCreateRow(row)), nil
 }
 
 // MarkAttemptSucceeded 将 request attempt 标记为 succeeded。

@@ -236,6 +236,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Get("/capability/suggestions", cah.listSuggestions)
 			r.Post("/models/{id}/capability-suggestions/{key}/accept", cah.acceptSuggestion)
 			r.Post("/models/{id}/capability-suggestions/{key}/dismiss", cah.dismissSuggestion)
+			r.Get("/models/{id}/capability-autocalibrate", cah.getAutocalibrateMode)
+			r.Put("/models/{id}/capability-autocalibrate", cah.setAutocalibrateMode)
 		}
 
 		// M5 models.dev 同步：内联触发（dry-run 预览/实际应用）+ 最近任务展示。

@@ -165,33 +165,7 @@ WHERE request_attempts.id = sqlc.arg(attempt_id)
 
 -- name: ListRequestAttemptsByRequest :many
 -- ListRequestAttemptsByRequest 按请求 ID 列出完整上游尝试链路。
-SELECT
-    id,
-    request_record_id,
-    attempt_index,
-    provider_id,
-    channel_id,
-    adapter_key,
-    upstream_model,
-    upstream_protocol,
-    upstream_response_id,
-    upstream_response_model,
-    upstream_finish_reason,
-    finish_class,
-    status,
-    upstream_status_code,
-    upstream_request_id,
-    error_code,
-    error_message,
-    internal_error_detail,
-    response_started_at,
-    final_usage_received,
-    usage_mapping_version,
-    required_capabilities,
-    used_capabilities,
-    started_at,
-    completed_at,
-    created_at
+SELECT *
 FROM request_attempts
 WHERE request_record_id = sqlc.arg(request_record_id)
 ORDER BY attempt_index;
