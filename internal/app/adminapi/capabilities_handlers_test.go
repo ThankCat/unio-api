@@ -180,6 +180,15 @@ func TestListSyncJobsReturns200(t *testing.T) {
 	}
 }
 
+func TestSyncJobsPreflightReturns204(t *testing.T) {
+	handler := newCapabilityRouter(t, nil, fakeCapabilitySyncService{}, nil, nil)
+
+	rec := doAdmin(t, handler, http.MethodOptions, "/admin/v1/capability/sync-jobs", "", false)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusNoContent, rec.Code, rec.Body.String())
+	}
+}
+
 func TestListAdapterProfilesReturns200(t *testing.T) {
 	handler := newCapabilityRouter(t, nil, nil, fakeCapabilitySeedService{}, nil)
 
