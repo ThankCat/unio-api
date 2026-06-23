@@ -354,6 +354,7 @@ func TestStreamResponseForwardsRawEventsAndExtractsFacts(t *testing.T) {
 	}
 }
 
+// TestStreamResponseExtractsWebSearchFromOutputItemDone 验证 OpenAI 流式 web_search_call 仅出现在
 // TestStreamResponseIncompleteMapsToLength 验证 response.incomplete + max_output_tokens 终态映射为 length。
 func TestStreamResponseIncompleteMapsToLength(t *testing.T) {
 	events := []string{

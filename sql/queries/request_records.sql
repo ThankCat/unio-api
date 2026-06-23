@@ -64,7 +64,6 @@ RETURNING
     status,
     final_provider_id,
     final_channel_id,
-    capability_check_result,
     error_code,
     error_message,
     internal_error_detail,
@@ -95,7 +94,6 @@ SELECT
     status,
     final_provider_id,
     final_channel_id,
-    capability_check_result,
     error_code,
     error_message,
     internal_error_detail,
@@ -131,14 +129,6 @@ FROM request_records
 WHERE request_records.id = sqlc.arg(request_record_id)
   AND request_records.status = 'running'
   AND NOT EXISTS (SELECT 1 FROM updated);
-
--- name: MarkRequestCapabilityCheckResult :exec
--- MarkRequestCapabilityCheckResult 写入本次请求的 capability 闸门判定结论审计（阶段 12 observe）。
--- 纯审计字段，与状态机解耦：任意非终态/终态都可写一次，不改 status。
-UPDATE request_records
-SET capability_check_result = sqlc.arg(capability_check_result)::text,
-    updated_at = now()
-WHERE id = sqlc.arg(request_record_id);
 
 -- name: MarkRequestSucceeded :one
 -- MarkRequestSucceeded 将 running 请求原子推进到 succeeded，重复 succeeded 返回第一次成功事实。
@@ -240,7 +230,6 @@ SELECT
     status,
     final_provider_id,
     final_channel_id,
-    capability_check_result,
     error_code,
     error_message,
     delivery_status,
@@ -273,17 +262,6 @@ WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::b
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz);
 
--- name: CountRequestsByCapabilityResult :many
--- CountRequestsByCapabilityResult 在可选时间范围内按 capability 闸门判定结论聚合请求计数（M5 observe 看板）。
--- NULL 结论（闸门未启用/无 required/无候选，视为 bypassed）也作为一组返回；
--- 运营据此评估翻 enforce 的误拒风险（model_unavailable / channel_unavailable 即潜在拒绝量）。
-SELECT capability_check_result, COUNT(*) AS total
-FROM request_records
-WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
-  AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
-GROUP BY capability_check_result
-ORDER BY total DESC;
-
 -- name: GetRequestRecordByRequestID :one
 -- GetRequestRecordByRequestID 按对外 request_id 读取单条请求记录完整事实（含 internal_error_detail）。
 -- 不加锁，仅供 admin 只读详情端点使用；是否回显内部详情由 service/handler 控制。
@@ -303,7 +281,6 @@ SELECT
     status,
     final_provider_id,
     final_channel_id,
-    capability_check_result,
     error_code,
     error_message,
     internal_error_detail,

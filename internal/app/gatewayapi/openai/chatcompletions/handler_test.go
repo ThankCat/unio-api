@@ -456,28 +456,6 @@ func TestRouterV1ChatCompletionMapsRoutingErrors(t *testing.T) {
 			wantMessage: "The model \"openai/gpt-4.1\" is temporarily unavailable.",
 			wantParam:   "model",
 		},
-		{
-			name: "model capability unavailable lists keys",
-			err: failure.Wrap(
-				failure.CodeRoutingModelCapabilityUnavailable,
-				routing.ErrModelCapabilityUnavailable,
-				failure.WithField("missing_capabilities", "image.input,reasoning.effort"),
-			),
-			wantStatus:  http.StatusBadRequest,
-			wantCode:    "model_capability_unavailable",
-			wantType:    "invalid_request_error",
-			wantMessage: "The model \"openai/gpt-4.1\" does not support the required capabilities: image.input,reasoning.effort.",
-			wantParam:   "model",
-		},
-		{
-			name:        "channel capability unavailable without field",
-			err:         routing.ErrChannelCapabilityUnavailable,
-			wantStatus:  http.StatusBadRequest,
-			wantCode:    "model_capability_unavailable",
-			wantType:    "invalid_request_error",
-			wantMessage: "The model \"openai/gpt-4.1\" does not support a capability required by this request.",
-			wantParam:   "model",
-		},
 	}
 
 	for _, tc := range cases {

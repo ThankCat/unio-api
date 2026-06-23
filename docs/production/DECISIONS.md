@@ -695,7 +695,11 @@ Reject：POST /v1/responses 带 background:true（明确报错，不静默转同
 
 ## DEC-015 能力架构三层模型与 models.dev 定位
 
-状态：accepted
+状态：**部分 superseded**（2026-06-23 → [DEC-024](#dec-024-移除能力自动校正与能力闸门改为能力字典--人工声明)）
+
+> 运行时**能力闸门**（observe/enforce、required 推断、capability_signals）已删除；「模型层能力声明」
+> （`model_capabilities`）以**纯展示**形式保留，合法 key 真源迁到 `capability_keys` 字典表。
+> 详见 [DESIGN-capability-manual-declaration.md](DESIGN-capability-manual-declaration.md)。Layer 3 渠道收紧此前已由 DEC-023 移除。
 
 决策：
 
@@ -720,11 +724,12 @@ Layer 2 — Protocol Capability Matrix（协议字段能力矩阵）
   只能新增不能删除（如同 OpenAPI 字段）。
   用途：runtime gating + cap-tags 公开
 
-Layer 3 — Channel Capability Overrides（渠道能力收紧）
+Layer 3 — Channel Capability Overrides（渠道能力收紧）【已移除，见 DEC-023】
   来源：admin（阶段 13）配置
   存储：channel_capability_overrides 表 (channel_id × capability_key)
   规则：只能做减法（disable / limits 收紧），不能反向放开 Layer 2 未声明的能力
   用途：某 channel 受供应商限制的具体闸门
+  现状：DEC-023 已移除该层——默认所有渠道完美支持模型层声明的能力，能力判定只看 Layer 2 模型层。
 
 Ingress 处理顺序：
   1. ingress decode → DTO 校验合法（DEC-012 不变）
@@ -1113,7 +1118,7 @@ compact_orchestrator.go（双路径选路）+ compact_synthetic.go（迁自 comp
 
 ## DEC-020 被动证据式模型能力自动校正
 
-状态：accepted
+状态：**superseded**（2026-06-23 → [DEC-024](#dec-024-移除能力自动校正与能力闸门改为能力字典--人工声明)）
 
 决策：
 
@@ -1234,4 +1239,194 @@ M9 工作台看板（DEC-017 分档网关的运营内部工具）从「数据展
 2. DEC-008 / DEC-017 不变；本决策是它们在「看板展示口径」层面的收束。
 3. 环比 query D1 暂直扫原表（低量可上），上量前迁 rollup（GAP-13-001），首页不扫原表。
 ```
+
+---
+
+## DEC-022 能力证据体系 v2：used_capabilities 闭环 + 证据注册表
+
+状态：**superseded**（2026-06-23 → [DEC-024](#dec-024-移除能力自动校正与能力闸门改为能力字典--人工声明)）
+
+决策：
+
+```text
+现场：DEC-020 校正上线后，除 prompt_cache 外几乎全是「弱证据·证据 0」。根因是证据链 L1→L2→L3 断链
+（adapter 已解析 ResponseFacts.UsedCapabilities，但 settlement 未落库、校正 SQL 未读取，tools.* 仅看
+finish_class，而 Responses 直传 finish_class 恒为 stop）。设计见
+docs/production/DESIGN-capability-evidence-v2.md（implemented，Q1~Q6 定稿）。
+
+把 TASK-H 升级为四层闭环：
+  L1 生产：OpenAI Responses/Chat adapter 填满 ResponseFacts.UsedCapabilities（含 stream 族、
+    reasoning.summary、responses.encrypted_content）。
+  L2 落库：settlement 成功路径 + recovery 重放写 request_attempts.used_capabilities；新增
+    delivery_mode（迁移 000043，stream|batch，仅审计/二级佐证，不作证据来源）。
+  L3 注册表：新增 internal/core/capability/evidence——每个 key 有稳定 Tier（Strong/Medium/Weak/Manual）
+    + HasStrongEvidence 纯函数判定，calibration 统一委托（删除各自硬编码 map）。
+  L4 消费：校正 SQL/store/calibrator 改读 used_capabilities + upstream_protocol + delivery_mode；
+    rationale 带 tier/evidence_source；dry-run 与 worker 完成日志输出 tier 与 strong/weak 分布。
+
+关键证据规则（对 DEC-020 v1 的修订）：
+  - tools.*（function/custom/parallel/choice_required）：主路径一律 used_capabilities 命中；唯一回退是
+    Chat 的 tools.function（finish_class=tool_use + required），custom/parallel 禁用 finish_class 笼统归因。
+  - builtin tools（web_search/file_search/code_interpreter/computer_use/image_generation/mcp）：升 Strong，
+    但仅凭 used_capabilities（Responses 终态 output *_call item 是服务端执行后回填，证明真执行；
+    Chat finish_class 不得用于 builtin）。随之 builtin 也纳入退化告警。
+  - stream/stream.tools/stream.usage：定为 Medium——只建议、永不 auto、不参与退化告警（Q6：流式是分发
+    方式而非模型能力，Codex 近乎恒流式无区分度且偶发 buffer 会误报退化）。
+  - prompt_cache（cache_read>0）/ reasoning.effort,budget（reasoning_tokens>0，带 limits 维度仍只建议）不变。
+
+首验范围：OpenAI 协议族（Responses + Chat），Codex E2E。Anthropic 对等留 Phase 5。
+```
+
+原因：
+
+```text
+1. 证据本就被 adapter 解析出来了，只是没流到校正侧——补三段管线即可让 tools.* 在 Codex 流量产生真证据，
+   消除「证据 0」误报，并为切 enforce 把声明对齐。
+2. 证据规则集中到注册表（纯函数、可单测）杜绝多处硬编码漂移，是 DEC-020「证据式、可审计」的自然延伸。
+3. builtin 升 Strong 安全，因为换了证据来源（响应 output item = 服务端执行结果，而非请求声明）。
+4. stream 故意不升 Strong：它是分发方式，纳入 auto/退化只会噪声化，Q6 定稿降 Medium。
+5. delivery_mode 与 used 含 stream 冗余，故仅作审计、不作证据，HasStrongEvidence 不依赖它。
+```
+
+影响：
+
+```text
+1. 迁移 000043 给 request_attempts 增 delivery_mode（NOT NULL DEFAULT 'batch'）。used_capabilities 列
+   早在 000042 就位，本次接通写入与读取。
+2. 新增包 internal/core/capability/evidence（evidence.go/produce.go + 单测）。calibration 删除
+   strongEvidenceKeys/toolCallEvidenceKeys/limitedDimensionKeys/AttemptHasEvidence，改委托 evidence。
+3. 退化告警语义扩展：builtin 强证据键纳入；stream 永不纳入。calibration_test 相应更新。
+4. P4-2 Prometheus 指标降级为结构化日志（批处理 worker 无 /metrics，价值低管线重）；rationale 的
+   tier/evidence_source + worker/dry-run 日志提供等效可观测。
+5. 顺带修复前置 groundwork 遗留的测试编译破损（CreateRequestAttemptRow→RequestAttempt 用 convert 助手、
+   admin fakeStore 补 autocalibrate 方法）。go build/vet/单测全绿。
+6. 待续：Phase 5（Anthropic Messages 对等）、真实非 dry 运行 / HTTP E2E（worker 默认关闭，客户启用后复跑）。
+```
+
+---
+
+## DEC-023 移除能力架构 Layer 3「渠道能力收紧」
+
+状态：implemented
+
+决策：
+
+```text
+移除 DEC-015 能力架构 Layer 3（channel_capability_overrides，渠道能力收紧）。默认所有渠道完美支持
+模型层（model_capabilities）声明的全部能力；能力闸门判定只看模型层。
+
+具体移除：
+  - DB：迁移 000044 DROP TABLE channel_capability_overrides（down 重建，结构同 000024）。
+  - 数据访问：删除 sql/queries/channel_capability_overrides.sql + sqlc 生成物 + core/capability.Store 的
+    ListChannelOverrides/UpsertChannelOverride/DeleteChannelOverride 与 ChannelOverride/UpsertChannelOverrideParams 类型。
+  - 闸门：capability.Evaluate 去掉 channels 入参与 channel 评估，删除 GateResultChannelUnavailable /
+    Evaluation.MissingChannel / capability.ChannelCaps；capabilitygate.Checker 不再读渠道 override。
+  - 路由：CapabilityCheckInput 去 ChannelIDs、CapabilityObservation 去 MissingChannel、enforce 去
+    channel 分支、删除 routing.ErrChannelCapabilityUnavailable 与 failure.CodeRoutingChannelCapabilityUnavailable；
+    三协议 handler 的能力错误渲染只保留 model 分支（对客户文案不变）。
+  - admin：删除渠道收紧 service 方法 + adminapi 端点（/admin/v1/channels/{id}/capability-overrides）+
+    前端 ChannelCapabilityOverridesDialog 与 capability.ts 渠道 override API + ChannelsPage「能力收紧」入口。
+  - keys：删除 IsValidChannelOverrideLevel。
+
+能力自动校正（DEC-020/DEC-022）不受影响：仍按 (model, channel) 学证据，auto 仅对单渠道模型补模型层声明
+（渠道维度只用于安全判定，不写渠道 override）。
+```
+
+原因：
+
+```text
+1. 渠道收紧是 opt-in 的：不配 override 即等于「渠道完美」，本就是默认行为。运营负担来自「可能要手工维护
+   (channel × capability) 矩阵」，而非该能力存在本身。本项目当前阶段假设渠道均高质量、能力同质，YAGNI。
+2. Layer 3 的「(channel × capability) 一刀切、不分模型」对「同渠道多模型能力不一致」表达力有限（需拆渠道），
+   维护心智与价值不匹配；删除后心智回归单层（模型层）声明，最简单清晰。
+3. 真正消除运营负担的方向是「自动化产出建议」（DEC-020/DEC-022 校正），而非让人手填收紧矩阵。
+```
+
+影响：
+
+```text
+1. 用户（owner）明确选择「彻底移除」（非仅停用），故连带删除已不可达的路由错误码/sentinel/枚举，保持代码整洁。
+2. 不可逆需重建时：迁移 000044 down 重建表；其余按 git 历史恢复。
+3. enforce 语义收窄为只判模型层；observe 默认行为对客户无变化（渠道不支持的请求仍由上游报错，与移除前 observe 一致）。
+4. go build / go vet / 单测全绿；前端 tsc / eslint / vite build 全绿。
+5. 关联：DEC-015（Layer 3 标注已移除）、CAPABILITY_KEYS.md（去渠道收紧层）。
+6. 注：DEC-023 原因 §3 曾指向 DEC-020/DEC-022 校正作为运营减负方向；该方向已被
+   [DEC-024](#dec-024-移除能力自动校正与能力闸门改为能力字典--人工声明) 取代（删除校正、改能力模板 + 人工声明）。
+```
+
+---
+
+## DEC-024 移除能力自动校正与能力闸门，改为能力字典 + 人工声明
+
+状态：**accepted**（2026-06-23 定稿，待 P1–P4 实施）
+
+决策：
+
+```text
+彻底移除两套机制——① 能力自动校正（DEC-020/DEC-022/证据 v2 全栈）② 能力闸门（DEC-015 observe/enforce
++ required 推断 + capability_signals + 闸门 metric/审计列）。capability 子系统退化为「纯数据/文档」（不再有预检/拒绝/observe）：
+新增 capability_keys 字典表作为合法 key 唯一真源（取代 keys.go，带中文描述供运维区分），
+model_capabilities 收敛为「创建/采纳时人工声明 + 展示」。注：model_capabilities 仍有读取者——
+面向客户的 /v1/models（cap-tags + ?capability= 过滤），走独立 SQL 直读、不经闸门，删闸门不影响、必须保留。
+Admin 新建模型合并为下拉「自定义 | 从模型目录同步」。
+
+删除自动校正（破坏性，迁移 000045+）：
+  - 表：model_capability_suggestions、model_capability_observations、capability_calibration_state；
+    models.capability_autocalibrate；request_attempts.used_capabilities/delivery_mode；
+    settlement_recovery_jobs.used_capabilities。
+  - 代码：core/capability/calibration、evidence、calibration worker、calibrate-capabilities CLI、
+    used_capabilities 生产链、Admin suggestions/autocalibrate API 与前端。
+
+删除能力闸门（本轮新增）：
+  - 表：request_attempts.required_capabilities（及 request_records 同列，如有）。
+  - 代码：core/capability/gate.go(Evaluate)、inference.go(Infer/InferLimits/RequestSignals)、keys.go（整体）、
+    set.go（若仅服务闸门）；service/gateway/capabilitygate 整包；app/gatewayapi/*/capability_signals.go ×3；
+    routing 的 CapabilityChecker/Enforcement/observeCapability/enforceCapability/相关错误码；
+    service/admin/capability/enforcement.go + enforce 开关 UI；requestlog 的 capability 持久化；
+    闸门 metric(IncCapabilityCheck/Required/Missing)；三协议 service 的 required 构造与 enforce 渲染分支。
+  - keys.go=活法二：删除 Key 常量/registeredKeys/IsRegisteredKey；幸存生产者（adapter capability_profile ×2、
+    目录 coarseCapabilities）改用字符串字面量；加一致性测试断言其 key ∈ capability_keys 字典（补编译期检查缺口）。
+  - 保留：SupportLevel 枚举（迁 support_level.go，model_capabilities 仍校验档位）；adapter dropUnsupported（DEC-012 出站 Drop，与闸门无关）。
+  - 不动：/v1/models 的 cap-tags + capability 过滤（models/handler.go、catalog.ListAvailableModels、
+    ListAvailableModelsForProject SQL），它直读 model_capabilities、不经闸门。
+
+新增 capability_keys 字典表（迁移）：
+  - 列：key(PK)、domain、display_name、description(中文)、sort_order、deprecated、时间戳；seed 当前 33 个 key。
+  - model_capabilities.capability_key FK→capability_keys(key)（ON DELETE RESTRICT，软退役用 deprecated）。
+  - IsRegisteredKey 改查字典（带缓存）；keys.go 常量真源废止。
+  - Admin 最小做 GET /admin/v1/capability/keys；写操作（POST/PUT/DELETE）按需。
+
+数据三件套（详见 DESIGN-capability-manual-declaration.md）：
+  ① capability_keys — 合法 key 唯一真源 + 中文描述；
+  ② model_catalog_capabilities — 目录粗能力提示（阶段 14）；
+  ③ model_capabilities — 声明/展示，support_level/limits 创建或采纳时人工填；读取者为 /v1/models + Admin 矩阵（不经闸门）。
+
+实施分期：P1 删校正 → P2 删闸门 → P3 建字典表 + 切 key 来源 → P4 新建下拉/清理 UI。
+```
+
+原因：
+
+```text
+1. 自动校正：Codex 真实流量下长期「成功 N · 证据 0」，运营无法理解/信任；证据 v2 补链仍依赖复杂
+   流式语义与 finish_class 边界，维护成本高于价值。
+2. 能力闸门：enforce 全程未开（CapabilityEnforcement 零值=observe），生产里只产 observe WARN 与 metric，
+   不拒绝请求、不参与选路——对线上零功能性作用，仅噪声与维护成本。删除后生产请求行为零变化。
+3. 产品方向是「以官网/models.dev 为准、人工声明」，且要求「新增一个能力只改数据不改代码」。
+   保留闸门时新 key 要参与拦截仍需写 3 协议解析代码；删闸门后 capability 变纯数据，新增能力 = 插字典行，零代码。
+4. capability_keys 字典带中文描述，运维可直接区分 OpenAI/Anthropic 等语境，无需读代码。
+5. 删除为破坏性但可接受（开发期）：suggestions/observations/used/required 数据可丢；down 仅恢复 schema。
+```
+
+影响：
+
+```text
+1. superseded：DEC-020、DEC-022、DESIGN-capability-autocalibration.md、DESIGN-capability-evidence-v2.md。
+2. 部分 superseded：DEC-015——能力闸门(observe/enforce)删除；「模型层能力声明」以纯展示形式保留。
+3. 有效延续：DEC-023（无渠道收紧）、阶段 14 catalog。
+4. CAPABILITY_KEYS.md 降级为人类参考；权威 key 列表移到 capability_keys 字典 seed。
+5. 删闸门后 gateway 不再有能力预检/拒绝/observe；如需「客户请求了哪些能力」可后续 ingress 轻量打点，不依赖闸门。
+6. 若未来需要预检/选路/被动学习，须新开设计，不得直接恢复已删表与代码。
+```
+
+设计文档：[DESIGN-capability-manual-declaration.md](DESIGN-capability-manual-declaration.md)
 

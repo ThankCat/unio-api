@@ -154,32 +154,32 @@ func parseAPIPrices(apiJSON []byte) map[string]map[string]costJSON {
 // coarseCapabilities 把 models.dev 模型布尔位/模态映射为粗能力声明（全 full，仅首次入库默认值）。
 func coarseCapabilities(entry modelsJSONEntry) []capability.Declaration {
 	decls := []capability.Declaration{
-		{Key: capability.KeyTextInput, SupportLevel: capability.SupportLevelFull},
-		{Key: capability.KeyTextOutput, SupportLevel: capability.SupportLevelFull},
+		{Key: "text.input", SupportLevel: capability.SupportLevelFull},
+		{Key: "text.output", SupportLevel: capability.SupportLevelFull},
 	}
 	if entry.ToolCall {
-		decls = append(decls, capability.Declaration{Key: capability.KeyToolsFunction, SupportLevel: capability.SupportLevelFull})
+		decls = append(decls, capability.Declaration{Key: "tools.function", SupportLevel: capability.SupportLevelFull})
 	}
 	if entry.Reasoning {
-		decls = append(decls, capability.Declaration{Key: capability.KeyReasoningEffort, SupportLevel: capability.SupportLevelFull})
+		decls = append(decls, capability.Declaration{Key: "reasoning.effort", SupportLevel: capability.SupportLevelFull})
 	}
 	if entry.StructuredOutput {
-		decls = append(decls, capability.Declaration{Key: capability.KeyResponseFormatJSONSchema, SupportLevel: capability.SupportLevelFull})
+		decls = append(decls, capability.Declaration{Key: "response_format.json_schema", SupportLevel: capability.SupportLevelFull})
 	}
 	if entry.Attachment {
-		decls = append(decls, capability.Declaration{Key: capability.KeyFileInput, SupportLevel: capability.SupportLevelFull})
+		decls = append(decls, capability.Declaration{Key: "file.input", SupportLevel: capability.SupportLevelFull})
 	}
 	if containsFold(entry.Modalities.Input, "image") {
-		decls = append(decls, capability.Declaration{Key: capability.KeyImageInput, SupportLevel: capability.SupportLevelFull})
+		decls = append(decls, capability.Declaration{Key: "image.input", SupportLevel: capability.SupportLevelFull})
 	}
 	if containsFold(entry.Modalities.Input, "audio") {
-		decls = append(decls, capability.Declaration{Key: capability.KeyAudioInput, SupportLevel: capability.SupportLevelFull})
+		decls = append(decls, capability.Declaration{Key: "audio.input", SupportLevel: capability.SupportLevelFull})
 	}
 	if containsFold(entry.Modalities.Output, "image") {
-		decls = append(decls, capability.Declaration{Key: capability.KeyImageOutput, SupportLevel: capability.SupportLevelFull})
+		decls = append(decls, capability.Declaration{Key: "image.output", SupportLevel: capability.SupportLevelFull})
 	}
 	if containsFold(entry.Modalities.Output, "audio") {
-		decls = append(decls, capability.Declaration{Key: capability.KeyAudioOutput, SupportLevel: capability.SupportLevelFull})
+		decls = append(decls, capability.Declaration{Key: "audio.output", SupportLevel: capability.SupportLevelFull})
 	}
 
 	return decls

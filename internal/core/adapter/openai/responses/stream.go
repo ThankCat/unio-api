@@ -21,6 +21,8 @@ const (
 	eventResponseCompleted  = "response.completed"
 	eventResponseIncomplete = "response.incomplete"
 	eventResponseFailed     = "response.failed"
+	eventOutputItemDone     = "response.output_item.done"
+	eventOutputItemAdded    = "response.output_item.added"
 	eventError              = "error"
 )
 
@@ -257,3 +259,4 @@ func decodeEnvelope(data []byte) *wireStreamEnvelope {
 	}
 	return &env
 }
+

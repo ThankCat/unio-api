@@ -40,28 +40,20 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 	ctx, span := lifecycle.StartGatewaySpan(ctx, "gateway.messages")
 	defer span.End()
 
-	requiredCapabilities := gatewayapi.RequiredCapabilities(req)
-
 	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
 	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
 		ProjectID:             principal.ProjectID,
 		ModelID:               req.Model,
 		IngressProtocol:       routing.ProtocolAnthropic,
 		Operation:             routing.OperationMessages,
-		RequiredCapabilities:  requiredCapabilities,
-		RequestLimits:         gatewayapi.RequestLimits(req),
 		RouteID:               principal.RouteID,
 		ProjectDefaultRouteID: principal.ProjectDefaultRouteID,
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)
-	// 闸门判定（含 enforce 拒绝）先落审计列，再处理路由错误：observation 在 enforce 拒绝时仍随 plan 返回。
-	s.lifecycle.RecordCapabilityResult(ctx, requestRecord, plan.Capability)
 	if err != nil {
 		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return nil, err
 	}
-
-	requiredCapabilityKeys := requiredCapabilities.StringKeys()
 
 	candidatePlan, err := s.prepareMessageCandidates(ctx, req, plan.Candidates, plan.RouteMode, false)
 	if err != nil {
@@ -92,7 +84,7 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 			continue
 		}
 
-		attemptRecord, err := s.createAttemptRecord(ctx, requestRecord, index, candidate, requiredCapabilityKeys)
+		attemptRecord, err := s.createAttemptRecord(ctx, requestRecord, index, candidate)
 		if err != nil {
 			if releaseErr := s.releaseMessageAuthorization(ctx, authorization); releaseErr != nil {
 				s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)

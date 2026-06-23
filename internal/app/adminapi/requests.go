@@ -32,7 +32,6 @@ type requestSummaryDTO struct {
 	Status                string  `json:"status"`
 	FinalProviderID       *int64  `json:"final_provider_id"`
 	FinalChannelID        *int64  `json:"final_channel_id"`
-	CapabilityCheckResult *string `json:"capability_check_result"`
 	ErrorCode             *string `json:"error_code"`
 	ErrorMessage          *string `json:"error_message"`
 	DeliveryStatus        string  `json:"delivery_status"`
@@ -65,7 +64,6 @@ type attemptDTO struct {
 	InternalErrorDetail   *string  `json:"internal_error_detail,omitempty"`
 	ResponseStartedAt     *string  `json:"response_started_at"`
 	FinalUsageReceived    bool     `json:"final_usage_received"`
-	RequiredCapabilities  []string `json:"required_capabilities"`
 	StartedAt             string   `json:"started_at"`
 	CompletedAt           *string  `json:"completed_at"`
 	CreatedAt             string   `json:"created_at"`
@@ -179,12 +177,11 @@ func toRequestSummaryDTO(s query.RequestSummary) requestSummaryDTO {
 		ResponseID:            s.ResponseID,
 		Stream:                s.Stream,
 		Status:                s.Status,
-		FinalProviderID:       s.FinalProviderID,
-		FinalChannelID:        s.FinalChannelID,
-		CapabilityCheckResult: s.CapabilityCheckResult,
-		ErrorCode:             s.ErrorCode,
-		ErrorMessage:          s.ErrorMessage,
-		DeliveryStatus:        s.DeliveryStatus,
+		FinalProviderID:     s.FinalProviderID,
+		FinalChannelID:      s.FinalChannelID,
+		ErrorCode:           s.ErrorCode,
+		ErrorMessage:        s.ErrorMessage,
+		DeliveryStatus:      s.DeliveryStatus,
 		ResponseStartedAt:     rfc3339Ptr(s.ResponseStartedAt),
 		ResponseCompletedAt:   rfc3339Ptr(s.ResponseCompletedAt),
 		StartedAt:             rfc3339(s.StartedAt),
@@ -219,10 +216,6 @@ func toRequestDetailDTO(d query.RequestDetail) requestDetailDTO {
 }
 
 func toAttemptDTO(a query.Attempt) attemptDTO {
-	caps := a.RequiredCapabilities
-	if caps == nil {
-		caps = []string{}
-	}
 	return attemptDTO{
 		ID:                    a.ID,
 		AttemptIndex:          a.AttemptIndex,
@@ -243,7 +236,6 @@ func toAttemptDTO(a query.Attempt) attemptDTO {
 		InternalErrorDetail:   a.InternalErrorDetail,
 		ResponseStartedAt:     rfc3339Ptr(a.ResponseStartedAt),
 		FinalUsageReceived:    a.FinalUsageReceived,
-		RequiredCapabilities:  caps,
 		StartedAt:             rfc3339(a.StartedAt),
 		CompletedAt:           rfc3339Ptr(a.CompletedAt),
 		CreatedAt:             rfc3339(a.CreatedAt),

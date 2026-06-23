@@ -21,8 +21,6 @@ INSERT INTO request_attempts (
     response_started_at,
     final_usage_received,
     usage_mapping_version,
-    required_capabilities,
-    used_capabilities,
     started_at,
     completed_at
 )
@@ -47,8 +45,6 @@ VALUES (
            sqlc.arg(response_started_at),
            sqlc.arg(final_usage_received),
            sqlc.arg(usage_mapping_version),
-           COALESCE(sqlc.arg(required_capabilities)::text[], '{}'),
-           COALESCE(sqlc.arg(used_capabilities)::text[], '{}'),
            sqlc.arg(started_at),
            sqlc.arg(completed_at)
        )
@@ -74,8 +70,6 @@ RETURNING
     response_started_at,
     final_usage_received,
     usage_mapping_version,
-    required_capabilities,
-    used_capabilities,
     started_at,
     completed_at,
     created_at;
@@ -94,7 +88,6 @@ WITH updated AS (
             upstream_request_id = sqlc.arg(upstream_request_id),
             final_usage_received = TRUE,
             usage_mapping_version = sqlc.arg(usage_mapping_version),
-            used_capabilities = COALESCE(sqlc.arg(used_capabilities)::text[], '{}'),
             completed_at = sqlc.arg(completed_at)
         WHERE request_attempts.id = sqlc.arg(attempt_id)
             AND request_attempts.status = 'running'

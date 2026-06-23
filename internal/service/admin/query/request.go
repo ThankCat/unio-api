@@ -52,7 +52,6 @@ type RequestSummary struct {
 	Status                string
 	FinalProviderID       *int64
 	FinalChannelID        *int64
-	CapabilityCheckResult *string
 	ErrorCode             *string
 	ErrorMessage          *string
 	DeliveryStatus        string
@@ -85,7 +84,6 @@ type Attempt struct {
 	InternalErrorDetail   *string
 	ResponseStartedAt     *time.Time
 	FinalUsageReceived    bool
-	RequiredCapabilities  []string
 	StartedAt             time.Time
 	CompletedAt           *time.Time
 	CreatedAt             time.Time
@@ -227,18 +225,17 @@ func toRequestSummary(r sqlc.ListRequestRecordsPageRow) RequestSummary {
 		ResponseID:            textPtr(r.ResponseID),
 		Stream:                r.Stream,
 		Status:                r.Status,
-		FinalProviderID:       int8Ptr(r.FinalProviderID),
-		FinalChannelID:        int8Ptr(r.FinalChannelID),
-		CapabilityCheckResult: textPtr(r.CapabilityCheckResult),
-		ErrorCode:             textPtr(r.ErrorCode),
-		ErrorMessage:          textPtr(r.ErrorMessage),
-		DeliveryStatus:        r.DeliveryStatus,
-		ResponseStartedAt:     timePtr(r.ResponseStartedAt),
-		ResponseCompletedAt:   timePtr(r.ResponseCompletedAt),
-		StartedAt:             r.StartedAt.Time,
-		CompletedAt:           timePtr(r.CompletedAt),
-		CreatedAt:             r.CreatedAt.Time,
-		UpdatedAt:             r.UpdatedAt.Time,
+		FinalProviderID:     int8Ptr(r.FinalProviderID),
+		FinalChannelID:      int8Ptr(r.FinalChannelID),
+		ErrorCode:           textPtr(r.ErrorCode),
+		ErrorMessage:        textPtr(r.ErrorMessage),
+		DeliveryStatus:      r.DeliveryStatus,
+		ResponseStartedAt:   timePtr(r.ResponseStartedAt),
+		ResponseCompletedAt: timePtr(r.ResponseCompletedAt),
+		StartedAt:           r.StartedAt.Time,
+		CompletedAt:         timePtr(r.CompletedAt),
+		CreatedAt:           r.CreatedAt.Time,
+		UpdatedAt:           r.UpdatedAt.Time,
 	}
 }
 
@@ -257,12 +254,11 @@ func summaryFromRecord(r sqlc.RequestRecord) RequestSummary {
 		ResponseID:            textPtr(r.ResponseID),
 		Stream:                r.Stream,
 		Status:                r.Status,
-		FinalProviderID:       int8Ptr(r.FinalProviderID),
-		FinalChannelID:        int8Ptr(r.FinalChannelID),
-		CapabilityCheckResult: textPtr(r.CapabilityCheckResult),
-		ErrorCode:             textPtr(r.ErrorCode),
-		ErrorMessage:          textPtr(r.ErrorMessage),
-		DeliveryStatus:        r.DeliveryStatus,
+		FinalProviderID:     int8Ptr(r.FinalProviderID),
+		FinalChannelID:      int8Ptr(r.FinalChannelID),
+		ErrorCode:           textPtr(r.ErrorCode),
+		ErrorMessage:        textPtr(r.ErrorMessage),
+		DeliveryStatus:      r.DeliveryStatus,
 		ResponseStartedAt:     timePtr(r.ResponseStartedAt),
 		ResponseCompletedAt:   timePtr(r.ResponseCompletedAt),
 		StartedAt:             r.StartedAt.Time,
@@ -292,7 +288,6 @@ func toAttempt(a sqlc.RequestAttempt, includeInternal bool) Attempt {
 		ErrorMessage:          textPtr(a.ErrorMessage),
 		ResponseStartedAt:     timePtr(a.ResponseStartedAt),
 		FinalUsageReceived:    a.FinalUsageReceived,
-		RequiredCapabilities:  a.RequiredCapabilities,
 		StartedAt:             a.StartedAt.Time,
 		CompletedAt:           timePtr(a.CompletedAt),
 		CreatedAt:             a.CreatedAt.Time,

@@ -46,12 +46,10 @@ type RunStreamParams struct {
 	Candidates       []Candidate
 	RequestedModelID string
 	ResponseProtocol requestlog.Protocol
-	// RequiredCapabilities 是 ingress 推断的所需能力 key，写入每个 attempt 的 capability 审计快照（可空）。
-	RequiredCapabilities []string
-	ResolveAdapter       ResolveAdapter
-	Stream               StreamUpstream
-	EmitChunk            EmitStreamChunk
-	Finish               FinishStream
+	ResolveAdapter   ResolveAdapter
+	Stream           StreamUpstream
+	EmitChunk        EmitStreamChunk
+	Finish           FinishStream
 }
 
 // StreamChunkMeta 是从一个上游流式 chunk 提取出的协议无关元信息。
@@ -85,13 +83,12 @@ type RunStreamParamsGeneric[C any] struct {
 	Principal            *auth.APIKeyPrincipal
 	Authorization        ChatAuthorization
 	Candidates           []Candidate
-	RequestedModelID     string
-	ResponseProtocol     requestlog.Protocol
-	RequiredCapabilities []string
-	ResolveAdapter       ResolveAdapter
-	Stream               StreamUpstreamGeneric[C]
-	EmitChunk            EmitStreamChunkGeneric[C]
-	Finish               FinishStream
+	RequestedModelID string
+	ResponseProtocol requestlog.Protocol
+	ResolveAdapter   ResolveAdapter
+	Stream           StreamUpstreamGeneric[C]
+	EmitChunk        EmitStreamChunkGeneric[C]
+	Finish           FinishStream
 	// ChunkMeta 从一个上游 chunk 提取协议无关元信息；不得为 nil。
 	ChunkMeta func(C) StreamChunkMeta
 }
@@ -106,15 +103,14 @@ func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (
 		RequestRecord:        params.RequestRecord,
 		Principal:            params.Principal,
 		Authorization:        params.Authorization,
-		Candidates:           params.Candidates,
-		RequestedModelID:     params.RequestedModelID,
-		ResponseProtocol:     params.ResponseProtocol,
-		RequiredCapabilities: params.RequiredCapabilities,
-		ResolveAdapter:       params.ResolveAdapter,
-		Stream:               StreamUpstreamGeneric[chatcompletionsadapter.ChatStreamChunk](params.Stream),
-		EmitChunk:            EmitStreamChunkGeneric[chatcompletionsadapter.ChatStreamChunk](params.EmitChunk),
-		Finish:               params.Finish,
-		ChunkMeta:            chatStreamChunkMeta,
+		Candidates:       params.Candidates,
+		RequestedModelID: params.RequestedModelID,
+		ResponseProtocol: params.ResponseProtocol,
+		ResolveAdapter:   params.ResolveAdapter,
+		Stream:           StreamUpstreamGeneric[chatcompletionsadapter.ChatStreamChunk](params.Stream),
+		EmitChunk:        EmitStreamChunkGeneric[chatcompletionsadapter.ChatStreamChunk](params.EmitChunk),
+		Finish:           params.Finish,
+		ChunkMeta:        chatStreamChunkMeta,
 	})
 }
 
@@ -160,7 +156,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 
 		// 每个 stream candidate 也必须先创建 attempt：流式失败可能发生在首 chunk 前、首 chunk 后或
 		// 客户端取消时，提前记录 attempt 才能审计这些状态。
-		attemptRecord, err := l.CreateAttempt(ctx, requestRecord, index, candidate, params.RequiredCapabilities)
+		attemptRecord, err := l.CreateAttempt(ctx, requestRecord, index, candidate)
 		if err != nil {
 			if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 				l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)

@@ -147,22 +147,16 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	ctx, span := lifecycle.StartGatewaySpan(ctx, "gateway.responses")
 	defer span.End()
 
-	requiredCapabilities := gatewayapi.RequiredCapabilities(req)
-
 	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
 	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
 		ProjectID:             principal.ProjectID,
 		ModelID:               req.Model,
 		IngressProtocol:       routing.ProtocolOpenAI,
 		Operation:             routing.OperationResponses,
-		RequiredCapabilities:  requiredCapabilities,
-		RequestLimits:         gatewayapi.RequestLimits(req),
 		RouteID:               principal.RouteID,
 		ProjectDefaultRouteID: principal.ProjectDefaultRouteID,
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)
-	// 闸门判定（含 enforce 拒绝）先落审计列，再处理路由错误：observation 在 enforce 拒绝时仍随 plan 返回。
-	s.lifecycle.RecordCapabilityResult(ctx, requestRecord, plan.Capability)
 	if err != nil {
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
@@ -191,11 +185,10 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		Principal:            principal,
 		Authorization:        authorization,
 		Candidates:           candidatePlan.Candidates,
-		RequestedModelID:     req.Model,
-		ResponseProtocol:     requestlog.ProtocolOpenAI,
-		RequiredCapabilities: requiredCapabilities.StringKeys(),
-		ResolveAdapter:       strat.resolve,
-		Invoke:               strat.invoke,
+		RequestedModelID: req.Model,
+		ResponseProtocol: requestlog.ProtocolOpenAI,
+		ResolveAdapter:   strat.resolve,
+		Invoke:           strat.invoke,
 	})
 	outcome = runResult.Outcome
 	return err

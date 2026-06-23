@@ -8,7 +8,6 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/app/workers"
 	"github.com/ThankCat/unio-api/internal/core/billing"
-	"github.com/ThankCat/unio-api/internal/core/capability/calibration"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/platform/config"
@@ -66,23 +65,6 @@ func NewWorkerServerApp(_ context.Context, deps WorkerServerAppDeps) (*WorkerSer
 		deps.Logger.Info("model catalog sync worker enabled", "interval", deps.Config.ModelCatalogSync.Interval.String())
 	}
 
-	if deps.Config.CapabilityAutocalibrate.Enabled {
-		calibrator := buildCapabilityCalibrator(deps.Config.CapabilityAutocalibrate, queries)
-		// 分布式租约保证多实例部署互斥执行（DESIGN 风险 A）：校正幂等但 rollup 累加，并发会重复计数。
-		lock := calibration.NewLease(queries, defaultWorkerID("capability-calibration"))
-		units = append(units, workers.NewCapabilityCalibrationWorker(
-			calibrator,
-			lock,
-			deps.Logger,
-			deps.Config.CapabilityAutocalibrate.Interval,
-			deps.Config.CapabilityAutocalibrate.LockTTL,
-		))
-		deps.Logger.Info("capability autocalibrate worker enabled",
-			"interval", deps.Config.CapabilityAutocalibrate.Interval.String(),
-			"lock_ttl", deps.Config.CapabilityAutocalibrate.LockTTL.String(),
-		)
-	}
-
 	runner := workers.NewRunner(
 		deps.Logger,
 		deps.Config.Worker.RunnerIdleInterval,
@@ -103,20 +85,6 @@ func buildModelCatalogSync(cfg config.ModelCatalogSyncConfig, queries *sqlc.Quer
 	fetcher := modelcatalog.NewHTTPFetcher(cfg.BaseURL, cfg.HTTPTimeout, cfg.MaxResponseBytes)
 
 	return modelcatalog.NewSyncer(fetcher, store), store
-}
-
-// NewCapabilityCalibrator 装配一个独立的能力自动校正编排器，供 worker-server 子命令（calibrate-capabilities）使用。
-func NewCapabilityCalibrator(cfg config.CapabilityAutocalibrateConfig, db sqlc.DBTX) *calibration.Calibrator {
-	return buildCapabilityCalibrator(cfg, sqlc.New(db))
-}
-
-func buildCapabilityCalibrator(cfg config.CapabilityAutocalibrateConfig, queries *sqlc.Queries) *calibration.Calibrator {
-	store := calibration.NewStore(queries)
-	return calibration.NewCalibrator(store, calibration.Thresholds{
-		MinSuccess:       cfg.MinSuccess,
-		MinEvidenceRatio: cfg.MinEvidenceRatio,
-		Lookback:         cfg.Lookback,
-	}, int32(cfg.BatchSize), cfg.MaxChangesPerRun)
 }
 
 func defaultWorkerID(prefix string) string {

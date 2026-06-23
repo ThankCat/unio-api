@@ -1,6 +1,8 @@
 package modelcatalog
 
 import (
+	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/ThankCat/unio-api/internal/core/capability"
@@ -81,13 +83,13 @@ func TestParseFeedMergesMetadataAndPrice(t *testing.T) {
 		t.Fatalf("output price = %v, want 0.87", deepseek.OutputPrice)
 	}
 
-	wantCaps := capability.NewSet(
-		capability.KeyTextInput, capability.KeyTextOutput,
-		capability.KeyToolsFunction, capability.KeyReasoningEffort,
-		capability.KeyResponseFormatJSONSchema, capability.KeyImageInput,
-	)
-	if got := declKeySet(deepseek.CoarseCapabilities); !got.Equal(wantCaps) {
-		t.Fatalf("deepseek coarse caps = %v, want %v", got.Keys(), wantCaps.Keys())
+	wantCaps := sortedKeyStrings([]capability.Key{
+		capability.Key("text.input"), capability.Key("text.output"),
+		capability.Key("tools.function"), capability.Key("reasoning.effort"),
+		capability.Key("response_format.json_schema"), capability.Key("image.input"),
+	})
+	if got := declKeySet(deepseek.CoarseCapabilities); !reflect.DeepEqual(got, wantCaps) {
+		t.Fatalf("deepseek coarse caps = %v, want %v", got, wantCaps)
 	}
 
 	acme := feed.Models[0]
@@ -103,9 +105,9 @@ func TestParseFeedMergesMetadataAndPrice(t *testing.T) {
 	if acme.InputPrice != nil || acme.OutputPrice != nil {
 		t.Fatalf("acme has no provider price, want nil prices")
 	}
-	wantAcmeCaps := capability.NewSet(capability.KeyTextInput, capability.KeyTextOutput)
-	if got := declKeySet(acme.CoarseCapabilities); !got.Equal(wantAcmeCaps) {
-		t.Fatalf("acme coarse caps = %v, want text only", got.Keys())
+	wantAcmeCaps := sortedKeyStrings([]capability.Key{capability.Key("text.input"), capability.Key("text.output")})
+	if got := declKeySet(acme.CoarseCapabilities); !reflect.DeepEqual(got, wantAcmeCaps) {
+		t.Fatalf("acme coarse caps = %v, want text only", got)
 	}
 }
 
@@ -139,10 +141,19 @@ func TestParseFeedToleratesInvalidAPIJSON(t *testing.T) {
 	}
 }
 
-func declKeySet(decls []capability.Declaration) capability.Set {
+func declKeySet(decls []capability.Declaration) []string {
 	keys := make([]capability.Key, 0, len(decls))
 	for _, decl := range decls {
 		keys = append(keys, decl.Key)
 	}
-	return capability.NewSet(keys...)
+	return sortedKeyStrings(keys)
+}
+
+func sortedKeyStrings(keys []capability.Key) []string {
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, string(k))
+	}
+	sort.Strings(out)
+	return out
 }

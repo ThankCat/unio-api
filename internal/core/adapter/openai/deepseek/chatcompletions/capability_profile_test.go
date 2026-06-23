@@ -40,35 +40,35 @@ type capabilityProbe struct {
 func openaiCapabilityProbes() []capabilityProbe {
 	return []capabilityProbe{
 		{
-			key:   capability.KeyImageInput,
+			key:   capability.Key("image.input"),
 			apply: setContent(`[{"type":"text","text":"hi"},{"type":"image_url","image_url":{"url":"http://x"}}]`),
 			verify: func(t *testing.T, c chatcompletionsadapter.ChatRequest) probeOutcome {
 				return contentPartOutcome(t, c, "image_url")
 			},
 		},
 		{
-			key:   capability.KeyAudioInput,
+			key:   capability.Key("audio.input"),
 			apply: setContent(`[{"type":"text","text":"hi"},{"type":"input_audio","input_audio":{"data":"x","format":"wav"}}]`),
 			verify: func(t *testing.T, c chatcompletionsadapter.ChatRequest) probeOutcome {
 				return contentPartOutcome(t, c, "input_audio")
 			},
 		},
 		{
-			key:   capability.KeyFileInput,
+			key:   capability.Key("file.input"),
 			apply: setContent(`[{"type":"text","text":"hi"},{"type":"file","file":{"file_id":"f"}}]`),
 			verify: func(t *testing.T, c chatcompletionsadapter.ChatRequest) probeOutcome {
 				return contentPartOutcome(t, c, "file")
 			},
 		},
 		{
-			key:   capability.KeyAudioOutput,
+			key:   capability.Key("audio.output"),
 			apply: func(r *chatcompletionsadapter.ChatRequest) { r.Modalities = []string{"text", "audio"} },
 			verify: func(t *testing.T, c chatcompletionsadapter.ChatRequest) probeOutcome {
 				return strippedIf(len(c.Modalities) == 0)
 			},
 		},
 		{
-			key: capability.KeyToolsCustom,
+			key: capability.Key("tools.custom"),
 			apply: func(r *chatcompletionsadapter.ChatRequest) {
 				r.Tools = []chatcompletionsadapter.ChatTool{{Type: "custom"}}
 			},
@@ -77,7 +77,7 @@ func openaiCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyToolsFunction,
+			key: capability.Key("tools.function"),
 			apply: func(r *chatcompletionsadapter.ChatRequest) {
 				r.Tools = []chatcompletionsadapter.ChatTool{{Type: "function"}}
 			},
@@ -86,7 +86,7 @@ func openaiCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyToolsParallel,
+			key: capability.Key("tools.parallel"),
 			apply: func(r *chatcompletionsadapter.ChatRequest) {
 				v := true
 				r.ParallelToolCalls = &v
@@ -96,7 +96,7 @@ func openaiCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyResponseFormatJSONSchema,
+			key: capability.Key("response_format.json_schema"),
 			apply: func(r *chatcompletionsadapter.ChatRequest) {
 				r.ResponseFormat = &chatcompletionsadapter.ChatResponseFormat{Type: "json_schema"}
 			},
@@ -105,7 +105,7 @@ func openaiCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyResponseFormatJSONObject,
+			key: capability.Key("response_format.json_object"),
 			apply: func(r *chatcompletionsadapter.ChatRequest) {
 				r.ResponseFormat = &chatcompletionsadapter.ChatResponseFormat{Type: "json_object"}
 			},
@@ -114,7 +114,7 @@ func openaiCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyServiceTier,
+			key: capability.Key("service_tier"),
 			apply: func(r *chatcompletionsadapter.ChatRequest) {
 				v := "auto"
 				r.ServiceTier = &v
@@ -124,7 +124,7 @@ func openaiCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyServerStateStore,
+			key: capability.Key("server_state.store"),
 			apply: func(r *chatcompletionsadapter.ChatRequest) {
 				v := true
 				r.Store = &v
@@ -134,7 +134,7 @@ func openaiCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyPromptCache,
+			key: capability.Key("prompt_cache"),
 			apply: func(r *chatcompletionsadapter.ChatRequest) {
 				v := "ck"
 				r.PromptCacheKey = &v
@@ -144,14 +144,14 @@ func openaiCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key:   capability.KeyToolsBuiltinWebSearch,
+			key:   capability.Key("tools.builtin.web_search"),
 			apply: func(r *chatcompletionsadapter.ChatRequest) { r.WebSearchOptions = json.RawMessage(`{}`) },
 			verify: func(t *testing.T, c chatcompletionsadapter.ChatRequest) probeOutcome {
 				return strippedIf(len(c.WebSearchOptions) == 0)
 			},
 		},
 		{
-			key: capability.KeyReasoningEffort,
+			key: capability.Key("reasoning.effort"),
 			apply: func(r *chatcompletionsadapter.ChatRequest) {
 				v := "low"
 				r.ReasoningEffort = &v
@@ -167,7 +167,7 @@ func openaiCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyLogprobs,
+			key: capability.Key("logprobs"),
 			apply: func(r *chatcompletionsadapter.ChatRequest) {
 				v := true
 				r.Logprobs = &v
@@ -193,12 +193,12 @@ func TestCapabilityProfileIsSelfConsistent(t *testing.T) {
 func TestCapabilityProfileReasoningEffortLimitsSchema(t *testing.T) {
 	var decl capability.Declaration
 	for _, d := range CapabilityProfile().Declarations {
-		if d.Key == capability.KeyReasoningEffort {
+		if d.Key == capability.Key("reasoning.effort") {
 			decl = d
 			break
 		}
 	}
-	if decl.Key != capability.KeyReasoningEffort {
+	if decl.Key != capability.Key("reasoning.effort") {
 		t.Fatal("reasoning.effort declaration missing")
 	}
 

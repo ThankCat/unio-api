@@ -23,8 +23,6 @@ type Config struct {
 	CircuitBreaker          CircuitBreakerConfig
 	Credential              CredentialConfig
 	ModelCatalogSync        ModelCatalogSyncConfig
-	Capability              CapabilityConfig
-	CapabilityAutocalibrate CapabilityAutocalibrateConfig
 	Gateway                 GatewayConfig
 	Admin                   AdminConfig
 	Console                 ConsoleConfig
@@ -51,19 +49,6 @@ type ConsoleConfig struct {
 	HTTPAddr string
 }
 
-// CapabilityConfig 保存 capability 闸门 enforce 开关，按 ingress 表面独立可控（阶段 12 TASK-12.08）。
-//
-// 全部默认 false（observe 模式）：闸门只记录判定与 metric，不拒绝请求。observe → enforce 是上线策略
-// 决策（DEC-015 灰度顺序：先 OpenAI Chat 再 Anthropic 再 Responses），切换前须确认 observe 期无误拒。
-type CapabilityConfig struct {
-	// EnforceOpenAIChat 控制 OpenAI Chat Completions 表面是否拒绝能力不可用的请求。
-	EnforceOpenAIChat bool
-	// EnforceAnthropicMessages 控制 Anthropic Messages 表面是否拒绝能力不可用的请求。
-	EnforceAnthropicMessages bool
-	// EnforceOpenAIResponses 控制 OpenAI Responses 表面是否拒绝能力不可用的请求。
-	EnforceOpenAIResponses bool
-}
-
 // ModelCatalogSyncConfig 保存 models.dev 模型目录同步参数；默认关闭（opt-in），
 // 启用前须确认 docs/datasources/MODELS_DEV_LICENSE.md 的 license 与 attribution。
 type ModelCatalogSyncConfig struct {
@@ -77,30 +62,6 @@ type ModelCatalogSyncConfig struct {
 	HTTPTimeout time.Duration
 	// MaxResponseBytes 限制单个响应体大小，防御异常大响应。
 	MaxResponseBytes int64
-}
-
-// CapabilityAutocalibrateConfig 保存能力自动校正后台任务参数（DESIGN-capability-autocalibration / DEC-020）。
-//
-// 默认关闭（opt-in）：被动从成功流量学习模型实际具备的能力，补齐 model_capabilities。per-model 档位
-// 见 models.capability_autocalibrate（off/suggest/auto）；本配置控制 worker 调度与全局阈值。
-// CLI dry-run（worker-server calibrate-capabilities --dry-run）不受 Enabled 约束，便于上线前预演。
-type CapabilityAutocalibrateConfig struct {
-	// Enabled 控制 worker 是否调度能力自动校正。
-	Enabled bool
-	// Interval 是两次校正之间的最小间隔。
-	Interval time.Duration
-	// Lookback 限制只学习近期成功流量的时间窗口。
-	Lookback time.Duration
-	// MinSuccess 是单 (模型, 渠道, 能力) 触发判定的最小成功观测数。
-	MinSuccess int64
-	// MinEvidenceRatio 是强证据键自动补所需的最小「证据/成功」比例。
-	MinEvidenceRatio float64
-	// MaxChangesPerRun 限制单轮落库变更数，防写风暴。
-	MaxChangesPerRun int
-	// BatchSize 是单次增量扫描拉取的尝试行数上限。
-	BatchSize int
-	// LockTTL 是多实例互斥的分布式租约 TTL；运行中续租，崩溃后据此自动释放。须大于单轮预计耗时。
-	LockTTL time.Duration
 }
 
 // CircuitBreakerConfig 保存 channel 熔断器阈值；默认启用并使用保守阈值。
@@ -347,46 +308,6 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	capabilityAutocalibrateEnabled, err := getEnvBool("CAPABILITY_AUTOCALIBRATE_ENABLED", false)
-	if err != nil {
-		return Config{}, err
-	}
-
-	capabilityAutocalibrateInterval, err := getEnvDuration("CAPABILITY_AUTOCALIBRATE_INTERVAL", 6*time.Hour)
-	if err != nil {
-		return Config{}, err
-	}
-
-	capabilityAutocalibrateLookback, err := getEnvDuration("CAPABILITY_AUTOCALIBRATE_LOOKBACK", 168*time.Hour)
-	if err != nil {
-		return Config{}, err
-	}
-
-	capabilityAutocalibrateMinSuccess, err := getEnvInt64("CAPABILITY_AUTOCALIBRATE_MIN_SUCCESS", 20)
-	if err != nil {
-		return Config{}, err
-	}
-
-	capabilityAutocalibrateMinEvidenceRatio, err := getEnvFloat("CAPABILITY_AUTOCALIBRATE_MIN_EVIDENCE_RATIO", 0.8)
-	if err != nil {
-		return Config{}, err
-	}
-
-	capabilityAutocalibrateMaxChanges, err := getEnvInt("CAPABILITY_AUTOCALIBRATE_MAX_CHANGES_PER_RUN", 200)
-	if err != nil {
-		return Config{}, err
-	}
-
-	capabilityAutocalibrateBatchSize, err := getEnvInt("CAPABILITY_AUTOCALIBRATE_BATCH_SIZE", 1000)
-	if err != nil {
-		return Config{}, err
-	}
-
-	capabilityAutocalibrateLockTTL, err := getEnvDuration("CAPABILITY_AUTOCALIBRATE_LOCK_TTL", 10*time.Minute)
-	if err != nil {
-		return Config{}, err
-	}
-
 	tracingEnabled, err := getEnvBool("OTEL_TRACING_ENABLED", false)
 	if err != nil {
 		return Config{}, err
@@ -423,21 +344,6 @@ func Load() (Config, error) {
 	}
 
 	circuitBreakerOpenDuration, err := getEnvDuration("CIRCUIT_BREAKER_OPEN_DURATION", 30*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-
-	capabilityEnforceOpenAIChat, err := getEnvBool("CAPABILITY_ENFORCE_OPENAI_CHAT", false)
-	if err != nil {
-		return Config{}, err
-	}
-
-	capabilityEnforceAnthropicMessages, err := getEnvBool("CAPABILITY_ENFORCE_ANTHROPIC_MESSAGES", false)
-	if err != nil {
-		return Config{}, err
-	}
-
-	capabilityEnforceOpenAIResponses, err := getEnvBool("CAPABILITY_ENFORCE_OPENAI_RESPONSES", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -493,16 +399,6 @@ func Load() (Config, error) {
 			HTTPTimeout:      modelCatalogSyncHTTPTimeout,
 			MaxResponseBytes: int64(modelCatalogSyncMaxResponseBytes),
 		},
-		CapabilityAutocalibrate: CapabilityAutocalibrateConfig{
-			Enabled:          capabilityAutocalibrateEnabled,
-			Interval:         capabilityAutocalibrateInterval,
-			Lookback:         capabilityAutocalibrateLookback,
-			MinSuccess:       capabilityAutocalibrateMinSuccess,
-			MinEvidenceRatio: capabilityAutocalibrateMinEvidenceRatio,
-			MaxChangesPerRun: capabilityAutocalibrateMaxChanges,
-			BatchSize:        capabilityAutocalibrateBatchSize,
-			LockTTL:          capabilityAutocalibrateLockTTL,
-		},
 		Tracing: TracingConfig{
 			Enabled:     tracingEnabled,
 			Endpoint:    getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
@@ -519,11 +415,6 @@ func Load() (Config, error) {
 		},
 		Credential: CredentialConfig{
 			MasterKey: getEnv("CREDENTIAL_MASTER_KEY", ""),
-		},
-		Capability: CapabilityConfig{
-			EnforceOpenAIChat:        capabilityEnforceOpenAIChat,
-			EnforceAnthropicMessages: capabilityEnforceAnthropicMessages,
-			EnforceOpenAIResponses:   capabilityEnforceOpenAIResponses,
 		},
 		Gateway: GatewayConfig{
 			HTTPAddr: getEnv("GATEWAY_HTTP_ADDR", ":8520"),

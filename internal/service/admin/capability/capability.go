@@ -18,6 +18,7 @@ import (
 
 	core "github.com/ThankCat/unio-api/internal/core/capability"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 )
 
 // Store 是 admin 能力管理所需的数据访问能力（由 core/capability.Store 满足）。
@@ -26,16 +27,17 @@ type Store interface {
 	ListModelCapabilities(ctx context.Context, modelID int64) ([]core.ModelCapability, error)
 	UpsertModelCapability(ctx context.Context, params core.UpsertModelCapabilityParams) (core.ModelCapability, error)
 	DeleteModelCapability(ctx context.Context, modelID int64, key core.Key) error
-	ListChannelOverrides(ctx context.Context, channelID int64) ([]core.ChannelOverride, error)
-	UpsertChannelOverride(ctx context.Context, params core.UpsertChannelOverrideParams) (core.ChannelOverride, error)
-	DeleteChannelOverride(ctx context.Context, channelID int64, key core.Key) error
+	ListCapabilityKeys(ctx context.Context) ([]core.CapabilityKey, error)
+	GetCapabilityKey(ctx context.Context, key core.Key) (core.CapabilityKey, error)
+	CreateCapabilityKey(ctx context.Context, params core.CreateCapabilityKeyParams) (core.CapabilityKey, error)
+	UpdateCapabilityKey(ctx context.Context, params core.UpdateCapabilityKeyParams) (core.CapabilityKey, error)
+	DeleteCapabilityKey(ctx context.Context, key core.Key) error
+	CapabilityKeyExists(ctx context.Context, key core.Key) (bool, error)
+}
 
-	ListCapabilitySuggestions(ctx context.Context, status string) ([]core.CapabilitySuggestion, error)
-	AcceptCapabilitySuggestion(ctx context.Context, modelID int64, key core.Key, decidedBy string) (core.ModelCapability, error)
-	DismissCapabilitySuggestion(ctx context.Context, modelID int64, key core.Key, decidedBy string) error
-
-	GetModelCapabilityAutocalibrate(ctx context.Context, modelID int64) (string, error)
-	SetModelCapabilityAutocalibrate(ctx context.Context, modelID int64, mode string) error
+// TxBeginner 提供事务能力（由 pgxpool 满足），用于批量能力覆盖的原子写入。
+type TxBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 // SetModelCapabilityInput 是写入模型能力声明的入参（source 固定 manual）。
@@ -47,34 +49,37 @@ type SetModelCapabilityInput struct {
 	Actor        string
 }
 
-// SetChannelOverrideInput 是写入渠道收紧策略的入参（只能减：limited / unsupported）。
-type SetChannelOverrideInput struct {
-	ChannelID    int64
+// ModelCapabilityItem 是批量声明里的一条能力（key + 档位 + 可选 limits）。
+type ModelCapabilityItem struct {
 	Key          string
 	SupportLevel string
 	Limits       json.RawMessage
-	Reason       string
-	Actor        string
 }
 
-// CapabilityService 编排模型能力 / 渠道收紧策略读写。
+// ReplaceModelCapabilitiesInput 是「整表覆盖」模型能力声明的入参（声明式 replace-all）。
+type ReplaceModelCapabilitiesInput struct {
+	ModelID int64
+	Items   []ModelCapabilityItem
+	Actor   string
+}
+
+// CapabilityService 编排模型能力声明读写（渠道收紧已移除，DEC-023；能力闸门已移除，DEC-024）。
 type CapabilityService struct {
-	store Store
+	store   Store
+	db      TxBeginner
+	queries *sqlc.Queries
 }
 
 // NewCapabilityService 创建能力数据管理服务。
-func NewCapabilityService(store Store) *CapabilityService {
-	return &CapabilityService{store: store}
+//
+// db / queries 供批量整表覆盖（ReplaceModelCapabilities）原子写入；仅做单条 CRUD 时可传 nil。
+func NewCapabilityService(store Store, db TxBeginner, queries *sqlc.Queries) *CapabilityService {
+	return &CapabilityService{store: store, db: db, queries: queries}
 }
 
-// Keys 返回全部已注册能力 key（升序），供前端下拉与校验。
-func (s *CapabilityService) Keys() []string {
-	keys := core.RegisteredKeys()
-	out := make([]string, len(keys))
-	for i, k := range keys {
-		out[i] = string(k)
-	}
-	return out
+// ListKeys 返回能力 key 字典（含中文描述），供前端下拉/矩阵与运维区分（DEC-024）。
+func (s *CapabilityService) ListKeys(ctx context.Context) ([]core.CapabilityKey, error) {
+	return s.store.ListCapabilityKeys(ctx)
 }
 
 // ListModelCapabilities 列出指定模型已声明的能力。
@@ -94,9 +99,6 @@ func (s *CapabilityService) SetModelCapability(ctx context.Context, in SetModelC
 		return core.ModelCapability{}, invalidArgument("id", "model id must be positive")
 	}
 	key := core.Key(strings.TrimSpace(in.Key))
-	if !core.IsRegisteredKey(key) {
-		return core.ModelCapability{}, invalidArgument("capability_key", "capability key is not registered")
-	}
 	level := core.SupportLevel(strings.TrimSpace(in.SupportLevel))
 	if !core.IsValidSupportLevel(level) {
 		return core.ModelCapability{}, invalidArgument("support_level", "support_level must be full, limited or unsupported")
@@ -106,6 +108,13 @@ func (s *CapabilityService) SetModelCapability(ctx context.Context, in SetModelC
 	}
 	if err := ensureModelExists(ctx, s.store, in.ModelID); err != nil {
 		return core.ModelCapability{}, err
+	}
+	exists, err := s.store.CapabilityKeyExists(ctx, key)
+	if err != nil {
+		return core.ModelCapability{}, err
+	}
+	if !exists {
+		return core.ModelCapability{}, invalidArgument("capability_key", "capability key is not in the capability dictionary")
 	}
 
 	return s.store.UpsertModelCapability(ctx, core.UpsertModelCapabilityParams{
@@ -123,138 +132,83 @@ func (s *CapabilityService) DeleteModelCapability(ctx context.Context, modelID i
 		return invalidArgument("id", "model id must be positive")
 	}
 	k := core.Key(strings.TrimSpace(key))
-	if !core.IsRegisteredKey(k) {
-		return invalidArgument("capability_key", "capability key is not registered")
-	}
 	return s.store.DeleteModelCapability(ctx, modelID, k)
 }
 
-// ListChannelOverrides 列出指定渠道的能力收紧策略。
-func (s *CapabilityService) ListChannelOverrides(ctx context.Context, channelID int64) ([]core.ChannelOverride, error) {
-	if channelID <= 0 {
-		return nil, invalidArgument("id", "channel id must be positive")
+// ReplaceModelCapabilities 以声明式整表覆盖某模型的能力声明（一次保存多条，DEC-024 §6.2）。
+//
+// 先全量校验（key 在字典内 / 档位合法 / limits 仅 limited 允许 / key 不重复），任一不合法整批拒绝；
+// 再在一个事务里清空该模型旧声明并写入新集合（replace-all），保证原子。返回覆盖后的完整能力列表。
+func (s *CapabilityService) ReplaceModelCapabilities(ctx context.Context, in ReplaceModelCapabilitiesInput) ([]core.ModelCapability, error) {
+	if in.ModelID <= 0 {
+		return nil, invalidArgument("id", "model id must be positive")
 	}
-	return s.store.ListChannelOverrides(ctx, channelID)
-}
-
-// SetChannelOverride 写入/覆盖渠道收紧策略；support_level 只能是 limited / unsupported（只能减）。
-func (s *CapabilityService) SetChannelOverride(ctx context.Context, in SetChannelOverrideInput) (core.ChannelOverride, error) {
-	if in.ChannelID <= 0 {
-		return core.ChannelOverride{}, invalidArgument("id", "channel id must be positive")
+	if s.db == nil || s.queries == nil {
+		return nil, storeFailed(errors.New("capability service not configured for batch writes"), "replace model capabilities")
 	}
-	key := core.Key(strings.TrimSpace(in.Key))
-	if !core.IsRegisteredKey(key) {
-		return core.ChannelOverride{}, invalidArgument("capability_key", "capability key is not registered")
-	}
-	level := core.SupportLevel(strings.TrimSpace(in.SupportLevel))
-	if !core.IsValidChannelOverrideLevel(level) {
-		return core.ChannelOverride{}, invalidArgument("support_level", "channel override support_level must be limited or unsupported")
-	}
-	if err := validateLimits(level, in.Limits); err != nil {
-		return core.ChannelOverride{}, err
+	if err := ensureModelExists(ctx, s.store, in.ModelID); err != nil {
+		return nil, err
 	}
 
-	return s.store.UpsertChannelOverride(ctx, core.UpsertChannelOverrideParams{
-		ChannelID:    in.ChannelID,
-		Key:          key,
-		SupportLevel: level,
-		Limits:       normalizeLimits(in.Limits),
-		Reason:       trimPtr(in.Reason),
-		UpdatedBy:    actorPtr(in.Actor),
-	})
-}
+	updatedBy := pgtype.Text{}
+	if actor := strings.TrimSpace(in.Actor); actor != "" {
+		updatedBy = pgtype.Text{String: actor, Valid: true}
+	}
 
-// DeleteChannelOverride 撤销渠道对某能力的收紧策略（幂等）。
-func (s *CapabilityService) DeleteChannelOverride(ctx context.Context, channelID int64, key string) error {
-	if channelID <= 0 {
-		return invalidArgument("id", "channel id must be positive")
+	seen := make(map[core.Key]struct{}, len(in.Items))
+	params := make([]sqlc.UpsertModelCapabilityParams, 0, len(in.Items))
+	for _, item := range in.Items {
+		key := core.Key(strings.TrimSpace(item.Key))
+		if key == "" {
+			return nil, invalidArgument("capability_key", "capability key must not be empty")
+		}
+		if _, dup := seen[key]; dup {
+			return nil, invalidArgument("capability_key", "duplicate capability key: "+string(key))
+		}
+		level := core.SupportLevel(strings.TrimSpace(item.SupportLevel))
+		if !core.IsValidSupportLevel(level) {
+			return nil, invalidArgument("support_level", "support_level must be full, limited or unsupported")
+		}
+		if err := validateLimits(level, item.Limits); err != nil {
+			return nil, err
+		}
+		exists, err := s.store.CapabilityKeyExists(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, invalidArgument("capability_key", "capability key is not in the capability dictionary: "+string(key))
+		}
+		seen[key] = struct{}{}
+		params = append(params, sqlc.UpsertModelCapabilityParams{
+			ModelID:       in.ModelID,
+			CapabilityKey: string(key),
+			SupportLevel:  string(level),
+			Limits:        normalizeLimits(item.Limits),
+			UpdatedBy:     updatedBy,
+		})
 	}
-	k := core.Key(strings.TrimSpace(key))
-	if !core.IsRegisteredKey(k) {
-		return invalidArgument("capability_key", "capability key is not registered")
-	}
-	return s.store.DeleteChannelOverride(ctx, channelID, k)
-}
 
-// ListSuggestions 列出能力自动校正建议；status 缺省为 pending。
-func (s *CapabilityService) ListSuggestions(ctx context.Context, status string) ([]core.CapabilitySuggestion, error) {
-	st := strings.TrimSpace(status)
-	if st == "" {
-		st = "pending"
-	}
-	if st != "pending" && st != "accepted" && st != "dismissed" {
-		return nil, invalidArgument("status", "status must be pending, accepted or dismissed")
-	}
-	return s.store.ListCapabilitySuggestions(ctx, st)
-}
-
-// AcceptSuggestion 采纳一条能力建议：把建议级别写入 model_capabilities，并标记建议 accepted。
-func (s *CapabilityService) AcceptSuggestion(ctx context.Context, modelID int64, key string, actor string) (core.ModelCapability, error) {
-	if modelID <= 0 {
-		return core.ModelCapability{}, invalidArgument("id", "model id must be positive")
-	}
-	k := core.Key(strings.TrimSpace(key))
-	if !core.IsRegisteredKey(k) {
-		return core.ModelCapability{}, invalidArgument("capability_key", "capability key is not registered")
-	}
-	if err := ensureModelExists(ctx, s.store, modelID); err != nil {
-		return core.ModelCapability{}, err
-	}
-	return s.store.AcceptCapabilitySuggestion(ctx, modelID, k, decidedByOrDefault(actor))
-}
-
-// DismissSuggestion 忽略一条能力建议：标记 dismissed，worker 不再重复打扰该 (模型, 能力)。
-func (s *CapabilityService) DismissSuggestion(ctx context.Context, modelID int64, key string, actor string) error {
-	if modelID <= 0 {
-		return invalidArgument("id", "model id must be positive")
-	}
-	k := core.Key(strings.TrimSpace(key))
-	if !core.IsRegisteredKey(k) {
-		return invalidArgument("capability_key", "capability key is not registered")
-	}
-	return s.store.DismissCapabilitySuggestion(ctx, modelID, k, decidedByOrDefault(actor))
-}
-
-// GetAutocalibrateMode 读取模型能力自动校正档位（off/suggest/auto）。
-func (s *CapabilityService) GetAutocalibrateMode(ctx context.Context, modelID int64) (string, error) {
-	if modelID <= 0 {
-		return "", invalidArgument("id", "model id must be positive")
-	}
-	mode, err := s.store.GetModelCapabilityAutocalibrate(ctx, modelID)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		if failure.CodeOf(err) == failure.CodeCapabilityNotFound {
-			return "", notFound("model not found")
-		}
-		return "", err
+		return nil, storeFailed(err, "begin replace capabilities transaction")
 	}
-	return mode, nil
-}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
 
-// SetAutocalibrateMode 更新模型能力自动校正档位。
-func (s *CapabilityService) SetAutocalibrateMode(ctx context.Context, modelID int64, mode string) error {
-	if modelID <= 0 {
-		return invalidArgument("id", "model id must be positive")
+	if err := q.DeleteModelCapabilitiesByModel(ctx, in.ModelID); err != nil {
+		return nil, storeFailed(err, "clear model capabilities")
 	}
-	mode = strings.TrimSpace(mode)
-	if mode != "off" && mode != "suggest" && mode != "auto" {
-		return invalidArgument("mode", "mode must be off, suggest or auto")
-	}
-	if err := s.store.SetModelCapabilityAutocalibrate(ctx, modelID, mode); err != nil {
-		if failure.CodeOf(err) == failure.CodeCapabilityNotFound {
-			return notFound("model not found")
+	for _, p := range params {
+		if _, err := q.UpsertModelCapability(ctx, p); err != nil {
+			return nil, storeFailed(err, "write model capability")
 		}
-		return err
 	}
-	return nil
-}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, storeFailed(err, "commit replace capabilities transaction")
+	}
 
-// decidedByOrDefault 把空 actor 归一为 "admin"，保证决策有可审计来源。
-func decidedByOrDefault(actor string) string {
-	actor = strings.TrimSpace(actor)
-	if actor == "" {
-		return "admin"
-	}
-	return actor
+	return s.store.ListModelCapabilities(ctx, in.ModelID)
 }
 
 // modelLookup 是校验模型存在所需的最小读取能力（admin Store 与 core.Store 均满足）。

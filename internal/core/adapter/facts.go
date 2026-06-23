@@ -68,13 +68,6 @@ type ResponseFacts struct {
 
 	// Metadata 是本次上游调用的可审计元信息（HTTP 状态码、上游 request id）。
 	Metadata UpstreamMetadata
-
-	// UsedCapabilities 是 adapter 从本次成功响应解析出「真正被用到」的能力 key
-	// （如响应里出现 function_call → tools.function）。它是能力自动校正 tools.* 强证据的精确来源：
-	// finish_class=tool_use 只能笼统证明「某个工具被调了」无法区分 function/custom，且 OpenAI Responses
-	// 直传时 finish_class 恒为 stop（tools.* 永远拿不到证据）。为空表示该 adapter 未埋点或本次未命中工具，
-	// 校正侧据此回退 finish_class（粗粒度）。只记录响应可证明真用到的能力，请求侧声明用 required_capabilities。
-	UsedCapabilities []string
 }
 
 // StreamOutcome 是流式调用结束后 adapter 返回给 lifecycle 的最终事实。

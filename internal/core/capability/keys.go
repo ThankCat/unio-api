@@ -1,148 +1,74 @@
-// Package capability 承载能力架构（DEC-015）的稳定能力标识、支持级别与数据访问层。
+// Package capability 承载能力架构的能力标识类型、支持级别与数据访问层。
 //
-// 能力 key 是公开稳定契约，发布后只增不删，权威列表见 docs/protocol/CAPABILITY_KEYS.md。
-// 本包是 Layer 1/2/3 能力事实的读写基座；推断、闸门、同步逻辑归后续任务（12.02~12.04）。
+// 能力 key 是公开稳定契约。合法 key 的真源是 DB 字典表 capability_keys（DEC-024 起，取代旧
+// keys.go 常量注册表）；新增能力只需往字典表插一行（带中文描述），无需改代码。人类参考列表见
+// docs/protocol/CAPABILITY_KEYS.md。本包负责 model_capabilities / 字典 / 同步任务的读写。
 package capability
 
-import "sort"
+import "strings"
 
 // Key 是稳定能力标识，命名形如 <domain>.<feature>[.<sub>]。
+//
+// 合法性以 DB 字典表 capability_keys 为准（写入 model_capabilities 受外键约束）；
+// 代码内不再维护常量注册表，adapter 画像 / 目录粗能力等生产者直接用字符串字面量声明 key。
 type Key string
 
-// 能力 key v1 注册表。新增 key 只能追加，禁止改名或删除（公开契约）。
-const (
-	KeyTextInput  Key = "text.input"
-	KeyTextOutput Key = "text.output"
-
-	KeyImageInput  Key = "image.input"
-	KeyImageOutput Key = "image.output"
-
-	KeyAudioInput  Key = "audio.input"
-	KeyAudioOutput Key = "audio.output"
-
-	KeyFileInput Key = "file.input"
-
-	KeyToolsFunction       Key = "tools.function"
-	KeyToolsCustom         Key = "tools.custom"
-	KeyToolsParallel       Key = "tools.parallel"
-	KeyToolsChoiceRequired Key = "tools.choice_required"
-
-	KeyToolsBuiltinWebSearch       Key = "tools.builtin.web_search"
-	KeyToolsBuiltinFileSearch      Key = "tools.builtin.file_search"
-	KeyToolsBuiltinCodeInterpreter Key = "tools.builtin.code_interpreter"
-	KeyToolsBuiltinComputerUse     Key = "tools.builtin.computer_use"
-	KeyToolsBuiltinImageGeneration Key = "tools.builtin.image_generation"
-	KeyToolsBuiltinMCP             Key = "tools.builtin.mcp"
-
-	KeyReasoningEffort  Key = "reasoning.effort"
-	KeyReasoningBudget  Key = "reasoning.budget"
-	KeyReasoningSummary Key = "reasoning.summary"
-
-	KeyResponseFormatJSONObject Key = "response_format.json_object"
-	KeyResponseFormatJSONSchema Key = "response_format.json_schema"
-
-	KeyPromptCache Key = "prompt_cache"
-	KeyLogprobs    Key = "logprobs"
-	KeyServiceTier Key = "service_tier"
-
-	KeyStream      Key = "stream"
-	KeyStreamTools Key = "stream.tools"
-	KeyStreamUsage Key = "stream.usage"
-
-	KeyServerStateStore      Key = "server_state.store"
-	KeyServerStateBackground Key = "server_state.background"
-
-	KeyResponsesEncryptedContent Key = "responses.encrypted_content"
-
-	// Responses 压缩双路径（GAP-11-014）。native=上游 /responses/compact 原文透传；
-	// synthetic=网关 chat 摘要降级。运行期分流以 adapter 代码能力为准（与 DEC-018 直传一致），
-	// 这两个 key 用于能力契约/矩阵声明与可观测，不作为强制路由前置条件。
-	KeyResponsesCompactNative    Key = "responses.compact.native"
-	KeyResponsesCompactSynthetic Key = "responses.compact.synthetic"
-)
-
-// registeredKeys 是 v1 已发布能力 key 集合，作为写入/推断的合法性边界。
-var registeredKeys = map[Key]struct{}{
-	KeyTextInput:                   {},
-	KeyTextOutput:                  {},
-	KeyImageInput:                  {},
-	KeyImageOutput:                 {},
-	KeyAudioInput:                  {},
-	KeyAudioOutput:                 {},
-	KeyFileInput:                   {},
-	KeyToolsFunction:               {},
-	KeyToolsCustom:                 {},
-	KeyToolsParallel:               {},
-	KeyToolsChoiceRequired:         {},
-	KeyToolsBuiltinWebSearch:       {},
-	KeyToolsBuiltinFileSearch:      {},
-	KeyToolsBuiltinCodeInterpreter: {},
-	KeyToolsBuiltinComputerUse:     {},
-	KeyToolsBuiltinImageGeneration: {},
-	KeyToolsBuiltinMCP:             {},
-	KeyReasoningEffort:             {},
-	KeyReasoningBudget:             {},
-	KeyReasoningSummary:            {},
-	KeyResponseFormatJSONObject:    {},
-	KeyResponseFormatJSONSchema:    {},
-	KeyPromptCache:                 {},
-	KeyLogprobs:                    {},
-	KeyServiceTier:                 {},
-	KeyStream:                      {},
-	KeyStreamTools:                 {},
-	KeyStreamUsage:                 {},
-	KeyServerStateStore:            {},
-	KeyServerStateBackground:       {},
-	KeyResponsesEncryptedContent:   {},
-	KeyResponsesCompactNative:      {},
-	KeyResponsesCompactSynthetic:   {},
-}
-
-// IsRegisteredKey 判断能力 key 是否在已发布注册表内，写入与推断必须先通过该校验。
-func IsRegisteredKey(key Key) bool {
-	_, ok := registeredKeys[key]
-	return ok
-}
-
-// RegisteredKeys 返回升序排序的全部已注册能力 key，供文档生成与一致性测试使用。
-func RegisteredKeys() []Key {
-	keys := make([]Key, 0, len(registeredKeys))
-	for key := range registeredKeys {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-
-	return keys
-}
-
-// SupportLevel 表示某模型或渠道对某能力的支持级别。
+// SupportLevel 表示某模型对某能力的支持级别。
 type SupportLevel string
 
 const (
 	// SupportLevelFull 表示完整支持该能力。
 	SupportLevelFull SupportLevel = "full"
 
-	// SupportLevelLimited 表示部分支持，受 limits 进一步约束。
+	// SupportLevelLimited 表示部分支持，受 limits 进一步约束（仅作展示记录，DEC-024 后不参与运行时判定）。
 	SupportLevelLimited SupportLevel = "limited"
 
 	// SupportLevelUnsupported 表示不支持该能力。
 	SupportLevelUnsupported SupportLevel = "unsupported"
 )
 
-// IsValidSupportLevel 判断支持级别是否是合法的模型层取值。
-func IsValidSupportLevel(level SupportLevel) bool {
-	switch level {
-	case SupportLevelFull, SupportLevelLimited, SupportLevelUnsupported:
+// ProtocolScope 表示能力 key 的协议归属（capability_keys.protocol_scope）。
+type ProtocolScope string
+
+const (
+	// ProtocolScopeShared 表示 OpenAI 与 Anthropic 双协议通用（Admin 展示「通用」）。
+	ProtocolScopeShared ProtocolScope = "shared"
+
+	// ProtocolScopeOpenAI 表示 OpenAI Chat Completions / Responses 专有。
+	ProtocolScopeOpenAI ProtocolScope = "openai"
+
+	// ProtocolScopeAnthropic 表示 Anthropic Messages API 专有。
+	ProtocolScopeAnthropic ProtocolScope = "anthropic"
+)
+
+// IsValidProtocolScope 判断协议归属是否合法。
+func IsValidProtocolScope(scope ProtocolScope) bool {
+	switch scope {
+	case ProtocolScopeShared, ProtocolScopeOpenAI, ProtocolScopeAnthropic:
 		return true
 	default:
 		return false
 	}
 }
 
-// IsValidChannelOverrideLevel 判断支持级别是否是合法的渠道收紧取值（只能做减法，禁止 full）。
-func IsValidChannelOverrideLevel(level SupportLevel) bool {
+// NormalizeProtocolScope 把历史/缺省值归一为合法 protocol_scope（兼容旧 both）。
+func NormalizeProtocolScope(raw string) ProtocolScope {
+	switch ProtocolScope(strings.TrimSpace(raw)) {
+	case ProtocolScopeOpenAI:
+		return ProtocolScopeOpenAI
+	case ProtocolScopeAnthropic:
+		return ProtocolScopeAnthropic
+	case ProtocolScopeShared, "both":
+		return ProtocolScopeShared
+	default:
+		return ProtocolScopeShared
+	}
+}
+
+// IsValidSupportLevel 判断支持级别是否是合法的模型层取值。
+func IsValidSupportLevel(level SupportLevel) bool {
 	switch level {
-	case SupportLevelLimited, SupportLevelUnsupported:
+	case SupportLevelFull, SupportLevelLimited, SupportLevelUnsupported:
 		return true
 	default:
 		return false

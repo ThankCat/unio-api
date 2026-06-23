@@ -122,7 +122,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	// M5 能力管理：能力数据 CRUD / models.dev 同步 / adapter 画像物化 / enforce 只读。
 	// capability store 复用 core 层（写入前做 key 注册表 + 支持级别校验，渠道层只能减）。
 	capabilityStore := capability.NewStore(queries)
-	capabilityService := capabilityadmin.NewCapabilityService(capabilityStore)
+	capabilityService := capabilityadmin.NewCapabilityService(capabilityStore, deps.DB, queries)
 	// Syncer 与 worker-server 的 sync-models 子命令同构；admin 内联触发（支持 dry-run）。
 	modelCatalogSyncer := NewModelCatalogSyncer(deps.Config.ModelCatalogSync, deps.DB)
 	capabilitySyncService := capabilityadmin.NewSyncService(modelCatalogSyncer, capabilityStore)
@@ -133,8 +133,6 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	})
 	// 阶段 14 模型目录：浏览 models.dev 目录 + 从目录采纳/刷新/更新提醒（采纳/刷新需事务，复用 deps.DB）。
 	modelCatalogAdminService := modelcatalogadmin.NewService(deps.DB, queries)
-	// enforce 只读：读 admin 自身进程的 env 快照 + observe 期判定分布。
-	capabilityEnforcementService := capabilityadmin.NewEnforcementService(queries, deps.Config.Capability)
 
 	// M9 工作台看板：复用同一 sqlc Queries 做只读聚合（KPI 概览 + 时间序列）。
 	dashboardService := dashboard.NewService(queries)
@@ -162,10 +160,9 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		APIKeyService:       apiKeyService,
 		AdjustmentService:   adjustmentService,
 
-		CapabilityService:            capabilityService,
-		CapabilitySyncService:        capabilitySyncService,
-		CapabilitySeedService:        capabilitySeedService,
-		CapabilityEnforcementService: capabilityEnforcementService,
+		CapabilityService:     capabilityService,
+		CapabilitySyncService: capabilitySyncService,
+		CapabilitySeedService: capabilitySeedService,
 
 		CatalogService: modelCatalogAdminService,
 

@@ -16,18 +16,26 @@ import (
 
 // CapabilityService 定义 adminapi 操作能力数据所需的最小能力（M5）。
 type CapabilityService interface {
-	Keys() []string
+	ListKeys(ctx context.Context) ([]corecap.CapabilityKey, error)
+	GetKey(ctx context.Context, key string) (corecap.CapabilityKey, error)
+	CreateKey(ctx context.Context, in capsvc.CreateCapabilityKeyInput) (corecap.CapabilityKey, error)
+	UpdateKey(ctx context.Context, in capsvc.UpdateCapabilityKeyInput) (corecap.CapabilityKey, error)
+	DeleteKey(ctx context.Context, key string) error
 	ListModelCapabilities(ctx context.Context, modelID int64) ([]corecap.ModelCapability, error)
 	SetModelCapability(ctx context.Context, in capsvc.SetModelCapabilityInput) (corecap.ModelCapability, error)
+	ReplaceModelCapabilities(ctx context.Context, in capsvc.ReplaceModelCapabilitiesInput) ([]corecap.ModelCapability, error)
 	DeleteModelCapability(ctx context.Context, modelID int64, key string) error
-	ListChannelOverrides(ctx context.Context, channelID int64) ([]corecap.ChannelOverride, error)
-	SetChannelOverride(ctx context.Context, in capsvc.SetChannelOverrideInput) (corecap.ChannelOverride, error)
-	DeleteChannelOverride(ctx context.Context, channelID int64, key string) error
-	ListSuggestions(ctx context.Context, status string) ([]corecap.CapabilitySuggestion, error)
-	AcceptSuggestion(ctx context.Context, modelID int64, key string, actor string) (corecap.ModelCapability, error)
-	DismissSuggestion(ctx context.Context, modelID int64, key string, actor string) error
-	GetAutocalibrateMode(ctx context.Context, modelID int64) (string, error)
-	SetAutocalibrateMode(ctx context.Context, modelID int64, mode string) error
+}
+
+// capabilityKeyDTO 是能力 key 字典响应体（含中文描述与协议归属，供运维区分）。
+type capabilityKeyDTO struct {
+	Key           string `json:"key"`
+	Domain        string `json:"domain"`
+	DisplayName   string `json:"display_name"`
+	Description   string `json:"description"`
+	SortOrder     int32  `json:"sort_order"`
+	Deprecated    bool   `json:"deprecated"`
+	ProtocolScope string `json:"protocol_scope"`
 }
 
 // modelCapabilityDTO 是模型能力声明响应体；limits 原样回传（无则为 null）。
@@ -41,57 +49,123 @@ type modelCapabilityDTO struct {
 	UpdatedAt     string          `json:"updated_at"`
 }
 
-// channelOverrideDTO 是渠道收紧策略响应体；support_level 只会是 limited / unsupported。
-type channelOverrideDTO struct {
-	ChannelID     int64           `json:"channel_id"`
-	CapabilityKey string          `json:"capability_key"`
-	SupportLevel  string          `json:"support_level"`
-	Limits        json.RawMessage `json:"limits"`
-	Reason        *string         `json:"reason"`
-	UpdatedBy     *string         `json:"updated_by"`
-	CreatedAt     string          `json:"created_at"`
-	UpdatedAt     string          `json:"updated_at"`
-}
-
 type setModelCapabilityRequest struct {
 	SupportLevel string          `json:"support_level"`
 	Limits       json.RawMessage `json:"limits"`
 }
 
-type setChannelOverrideRequest struct {
-	SupportLevel string          `json:"support_level"`
-	Limits       json.RawMessage `json:"limits"`
-	Reason       string          `json:"reason"`
+// replaceModelCapabilitiesRequest 是「批量整表覆盖」模型能力的请求体（DEC-024 §6.2）。
+type replaceModelCapabilitiesRequest struct {
+	Capabilities []modelCapabilityItemRequest `json:"capabilities"`
 }
 
-// capabilitySuggestionDTO 是能力自动校正建议响应体。
-type capabilitySuggestionDTO struct {
-	ID             int64           `json:"id"`
-	ModelID        int64           `json:"model_id"`
-	CapabilityKey  string          `json:"capability_key"`
-	SuggestedLevel string          `json:"suggested_level"`
-	EvidenceKind   string          `json:"evidence_kind"`
-	Rationale      json.RawMessage `json:"rationale"`
-	Status         string          `json:"status"`
-	CreatedAt      string          `json:"created_at"`
-	DecidedAt      *string         `json:"decided_at"`
-	DecidedBy      *string         `json:"decided_by"`
-}
-
-type capabilityAutocalibrateDTO struct {
-	Mode string `json:"mode"`
-}
-
-type setCapabilityAutocalibrateRequest struct {
-	Mode string `json:"mode"`
+type modelCapabilityItemRequest struct {
+	CapabilityKey string          `json:"capability_key"`
+	SupportLevel  string          `json:"support_level"`
+	Limits        json.RawMessage `json:"limits"`
 }
 
 type capabilitiesHandler struct {
 	service CapabilityService
 }
 
-func (h *capabilitiesHandler) listKeys(w http.ResponseWriter, _ *http.Request) {
-	writeData(w, http.StatusOK, h.service.Keys())
+type createCapabilityKeyRequest struct {
+	Key           string `json:"key"`
+	Domain        string `json:"domain"`
+	DisplayName   string `json:"display_name"`
+	Description   string `json:"description"`
+	SortOrder     int32  `json:"sort_order"`
+	Deprecated    bool   `json:"deprecated"`
+	ProtocolScope string `json:"protocol_scope"`
+}
+
+type updateCapabilityKeyRequest struct {
+	Domain        string `json:"domain"`
+	DisplayName   string `json:"display_name"`
+	Description   string `json:"description"`
+	SortOrder     int32  `json:"sort_order"`
+	Deprecated    bool   `json:"deprecated"`
+	ProtocolScope string `json:"protocol_scope"`
+}
+
+func toCapabilityKeyDTO(k corecap.CapabilityKey) capabilityKeyDTO {
+	return capabilityKeyDTO{
+		Key:           string(k.Key),
+		Domain:        k.Domain,
+		DisplayName:   k.DisplayName,
+		Description:   k.Description,
+		SortOrder:     k.SortOrder,
+		Deprecated:    k.Deprecated,
+		ProtocolScope: string(k.ProtocolScope),
+	}
+}
+
+func (h *capabilitiesHandler) listKeys(w http.ResponseWriter, r *http.Request) {
+	keys, err := h.service.ListKeys(r.Context())
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	dtos := make([]capabilityKeyDTO, 0, len(keys))
+	for _, k := range keys {
+		dtos = append(dtos, toCapabilityKeyDTO(k))
+	}
+	writeData(w, http.StatusOK, dtos)
+}
+
+func (h *capabilitiesHandler) createKey(w http.ResponseWriter, r *http.Request) {
+	var req createCapabilityKeyRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	item, err := h.service.CreateKey(r.Context(), capsvc.CreateCapabilityKeyInput{
+		Key:           req.Key,
+		Domain:        req.Domain,
+		DisplayName:   req.DisplayName,
+		Description:   req.Description,
+		SortOrder:     req.SortOrder,
+		Deprecated:    req.Deprecated,
+		ProtocolScope: req.ProtocolScope,
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeData(w, http.StatusCreated, toCapabilityKeyDTO(item))
+}
+
+func (h *capabilitiesHandler) updateKey(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	var req updateCapabilityKeyRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	item, err := h.service.UpdateKey(r.Context(), capsvc.UpdateCapabilityKeyInput{
+		Key:           key,
+		Domain:        req.Domain,
+		DisplayName:   req.DisplayName,
+		Description:   req.Description,
+		SortOrder:     req.SortOrder,
+		Deprecated:    req.Deprecated,
+		ProtocolScope: req.ProtocolScope,
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, toCapabilityKeyDTO(item))
+}
+
+func (h *capabilitiesHandler) deleteKey(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	if err := h.service.DeleteKey(r.Context(), key); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *capabilitiesHandler) listModelCapabilities(w http.ResponseWriter, r *http.Request) {
@@ -142,6 +216,45 @@ func (h *capabilitiesHandler) setModelCapability(w http.ResponseWriter, r *http.
 	writeData(w, http.StatusOK, toModelCapabilityDTO(item))
 }
 
+func (h *capabilitiesHandler) replaceModelCapabilities(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	var req replaceModelCapabilitiesRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	items := make([]capsvc.ModelCapabilityItem, 0, len(req.Capabilities))
+	for _, c := range req.Capabilities {
+		items = append(items, capsvc.ModelCapabilityItem{
+			Key:          c.CapabilityKey,
+			SupportLevel: c.SupportLevel,
+			Limits:       c.Limits,
+		})
+	}
+
+	result, err := h.service.ReplaceModelCapabilities(r.Context(), capsvc.ReplaceModelCapabilitiesInput{
+		ModelID: id,
+		Items:   items,
+		Actor:   adminActor(r),
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	dtos := make([]modelCapabilityDTO, 0, len(result))
+	for _, item := range result {
+		dtos = append(dtos, toModelCapabilityDTO(item))
+	}
+	writeData(w, http.StatusOK, dtos)
+}
+
 func (h *capabilitiesHandler) deleteModelCapability(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -157,190 +270,12 @@ func (h *capabilitiesHandler) deleteModelCapability(w http.ResponseWriter, r *ht
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *capabilitiesHandler) listChannelOverrides(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	items, err := h.service.ListChannelOverrides(r.Context(), id)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	dtos := make([]channelOverrideDTO, 0, len(items))
-	for _, item := range items {
-		dtos = append(dtos, toChannelOverrideDTO(item))
-	}
-	writeData(w, http.StatusOK, dtos)
-}
-
-func (h *capabilitiesHandler) setChannelOverride(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	var req setChannelOverrideRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	item, err := h.service.SetChannelOverride(r.Context(), capsvc.SetChannelOverrideInput{
-		ChannelID:    id,
-		Key:          chi.URLParam(r, "key"),
-		SupportLevel: req.SupportLevel,
-		Limits:       req.Limits,
-		Reason:       req.Reason,
-		Actor:        adminActor(r),
-	})
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	writeData(w, http.StatusOK, toChannelOverrideDTO(item))
-}
-
-func (h *capabilitiesHandler) deleteChannelOverride(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	if err := h.service.DeleteChannelOverride(r.Context(), id, chi.URLParam(r, "key")); err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *capabilitiesHandler) listSuggestions(w http.ResponseWriter, r *http.Request) {
-	items, err := h.service.ListSuggestions(r.Context(), r.URL.Query().Get("status"))
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	dtos := make([]capabilitySuggestionDTO, 0, len(items))
-	for _, item := range items {
-		dtos = append(dtos, toCapabilitySuggestionDTO(item))
-	}
-	writeData(w, http.StatusOK, dtos)
-}
-
-func (h *capabilitiesHandler) acceptSuggestion(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	item, err := h.service.AcceptSuggestion(r.Context(), id, chi.URLParam(r, "key"), adminActor(r))
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	writeData(w, http.StatusOK, toModelCapabilityDTO(item))
-}
-
-func (h *capabilitiesHandler) dismissSuggestion(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	if err := h.service.DismissSuggestion(r.Context(), id, chi.URLParam(r, "key"), adminActor(r)); err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *capabilitiesHandler) getAutocalibrateMode(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	mode, err := h.service.GetAutocalibrateMode(r.Context(), id)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	writeData(w, http.StatusOK, capabilityAutocalibrateDTO{Mode: mode})
-}
-
-func (h *capabilitiesHandler) setAutocalibrateMode(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	var req setCapabilityAutocalibrateRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	if err := h.service.SetAutocalibrateMode(r.Context(), id, req.Mode); err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	writeData(w, http.StatusOK, capabilityAutocalibrateDTO{Mode: req.Mode})
-}
-
-func toCapabilitySuggestionDTO(c corecap.CapabilitySuggestion) capabilitySuggestionDTO {
-	dto := capabilitySuggestionDTO{
-		ID:             c.ID,
-		ModelID:        c.ModelID,
-		CapabilityKey:  string(c.Key),
-		SuggestedLevel: string(c.SuggestedLevel),
-		EvidenceKind:   c.EvidenceKind,
-		Rationale:      c.Rationale,
-		Status:         c.Status,
-		CreatedAt:      c.CreatedAt.UTC().Format(time.RFC3339),
-		DecidedBy:      c.DecidedBy,
-	}
-	if c.DecidedAt != nil {
-		decided := c.DecidedAt.UTC().Format(time.RFC3339)
-		dto.DecidedAt = &decided
-	}
-	return dto
-}
-
 func toModelCapabilityDTO(c corecap.ModelCapability) modelCapabilityDTO {
 	return modelCapabilityDTO{
 		ModelID:       c.ModelID,
 		CapabilityKey: string(c.Key),
 		SupportLevel:  string(c.SupportLevel),
 		Limits:        c.Limits,
-		UpdatedBy:     c.UpdatedBy,
-		CreatedAt:     c.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:     c.UpdatedAt.UTC().Format(time.RFC3339),
-	}
-}
-
-func toChannelOverrideDTO(c corecap.ChannelOverride) channelOverrideDTO {
-	return channelOverrideDTO{
-		ChannelID:     c.ChannelID,
-		CapabilityKey: string(c.Key),
-		SupportLevel:  string(c.SupportLevel),
-		Limits:        c.Limits,
-		Reason:        c.Reason,
 		UpdatedBy:     c.UpdatedBy,
 		CreatedAt:     c.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:     c.UpdatedAt.UTC().Format(time.RFC3339),

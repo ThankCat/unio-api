@@ -23,8 +23,8 @@ func baseModel() CanonicalModel {
 		OutputPrice:     &op,
 		ReleaseDate:     &rel,
 		CoarseCapabilities: []capability.Declaration{
-			{Key: capability.KeyTextInput, SupportLevel: capability.SupportLevelFull},
-			{Key: capability.KeyToolsFunction, SupportLevel: capability.SupportLevelFull},
+			{Key: capability.Key("text.input"), SupportLevel: capability.SupportLevelFull},
+			{Key: capability.Key("tools.function"), SupportLevel: capability.SupportLevelFull},
 		},
 	}
 }
@@ -34,8 +34,8 @@ func TestEntryFingerprintStableAndOrderIndependent(t *testing.T) {
 	b := baseModel()
 	// 能力顺序打乱不应改变指纹（实现内部排序）。
 	b.CoarseCapabilities = []capability.Declaration{
-		{Key: capability.KeyToolsFunction, SupportLevel: capability.SupportLevelFull},
-		{Key: capability.KeyTextInput, SupportLevel: capability.SupportLevelFull},
+		{Key: capability.Key("tools.function"), SupportLevel: capability.SupportLevelFull},
+		{Key: capability.Key("text.input"), SupportLevel: capability.SupportLevelFull},
 	}
 	if entryFingerprint(a) != entryFingerprint(b) {
 		t.Fatal("fingerprint must be stable regardless of capability order")
@@ -52,7 +52,7 @@ func TestEntryFingerprintSensitiveToChanges(t *testing.T) {
 		"input_price":  func(m *CanonicalModel) { v := "3.0"; m.InputPrice = &v },
 		"release_date": func(m *CanonicalModel) { v := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC); m.ReleaseDate = &v },
 		"add_capability": func(m *CanonicalModel) {
-			m.CoarseCapabilities = append(m.CoarseCapabilities, capability.Declaration{Key: capability.KeyImageInput, SupportLevel: capability.SupportLevelFull})
+			m.CoarseCapabilities = append(m.CoarseCapabilities, capability.Declaration{Key: capability.Key("image.input"), SupportLevel: capability.SupportLevelFull})
 		},
 		"capability_level": func(m *CanonicalModel) {
 			m.CoarseCapabilities[0].SupportLevel = capability.SupportLevelLimited

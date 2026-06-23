@@ -1,9 +1,11 @@
 # 能力 Key 注册表(Capability Keys v1)
 
 本文件是 Unio 能力架构([DEC-015](../production/DECISIONS.md))的**公开稳定契约**:
-列出全部合法的 `capability_key`。它描述「一个模型/渠道可以声明哪些能力」,与具体协议端点
-解耦,被三层能力数据(模型层 `model_capabilities`、渠道层 `channel_capability_overrides`)
-共同引用。
+列出全部合法的 `capability_key`。它描述「一个模型可以声明哪些能力」,与具体协议端点解耦,
+由模型层能力数据(`model_capabilities`)引用。
+
+> **注（DEC-023）**：渠道能力收紧层（Layer 3 `channel_capability_overrides`）已移除——默认所有渠道
+> 完美支持模型层声明的能力，能力判定只看模型层。本文档保留的渠道相关历史描述仅供参考。
 
 代码侧权威实现:[internal/core/capability/keys.go](../../internal/core/capability/keys.go)。
 两者必须保持一致(有一致性测试守护)。
@@ -18,15 +20,14 @@
 
 ## 2. 支持级别(support_level)
 
-| 取值 | 含义 | 模型层 | 渠道收紧层 |
-| --- | --- | --- | --- |
-| `full` | 完整支持 | ✅ | ❌(渠道只能做减法) |
-| `limited` | 部分支持,受 `limits` 进一步约束(如仅允许某些 effort 值) | ✅ | ✅ |
-| `unsupported` | 不支持 | ✅ | ✅ |
+| 取值 | 含义 | 模型层 |
+| --- | --- | --- |
+| `full` | 完整支持 | ✅ |
+| `limited` | 部分支持,受 `limits` 进一步约束(如仅允许某些 effort 值) | ✅ |
+| `unsupported` | 不支持 | ✅ |
 
-- **模型层**(`model_capabilities`)声明模型本身的能力,三种级别都可用。
-- **渠道层**(`channel_capability_overrides`)只能在模型基线上**收紧**,只允许 `limited` / `unsupported`,
-  不允许 `full`(不能反向放开模型未声明的能力)。
+- **模型层**(`model_capabilities`)声明模型本身的能力,三种级别都可用——能力判定只看模型层。
+- 渠道能力收紧层已移除（DEC-023）：默认所有渠道完美支持模型层声明的能力。
 
 ## 3. 能力声明来源(source)
 
@@ -130,21 +131,30 @@
   - `reasoning.effort` = `limited`,`limits` 仅 `high` / `max`(其余档位归一到 `high`)。
   - 详见 [docs/providers/deepseek/](../providers/deepseek/README.md)。
 
-## 5.1 能力自动校正的证据来源（DEC-020 / GAP-12-013）
+## 5.1 模型能力声明方式（DEC-024：删校正 + 删闸门 + 能力字典表）
 
-「能力自动校正」从真实成功流量被动学习模型实际能力并补齐 `model_capabilities`（不新增 key）。
-**强证据 = 响应真用到了该能力**，才允许自动补（`auto` 档）；否则只产生建议待人工采纳：
+> **重大变更（2026-06-23，DEC-024）**：① 能力自动校正（DEC-020/DEC-022/证据 v2）**删除**；
+> ② 运行时**能力闸门**（observe/enforce、required 推断、capability_signals）**删除**；
+> ③ 合法 key 真源从 `keys.go` 迁到 **DB 能力字典表 `capability_keys`**（带中文描述）。
+> 本文档随之**降级为人类参考**，权威 key 列表以 `capability_keys` seed 为准。
+> 设计见 [DEC-024](../production/DECISIONS.md#dec-024-移除能力自动校正与能力闸门改为能力字典--人工声明)、
+> [DESIGN-capability-manual-declaration.md](../production/DESIGN-capability-manual-declaration.md)。
 
-| 能力 key | 强证据来源 |
+**当前**：capability 子系统为**纯数据 / 文档**，无能力**判定**行为（无预检、无拒绝、无 observe）。
+`model_capabilities` 仅人工维护；读取者为 Admin 能力矩阵与**面向客户的 `/v1/models`**（cap-tags + `?capability=` 过滤，
+直读本表、不经闸门）。写入路径：
+
+| 路径 | 说明 |
 | --- | --- |
-| `tools.function` / `tools.custom` / `tools.parallel` / `tools.choice_required` | `request_attempts.finish_class = tool_use` |
-| `prompt_cache` | `usage_records.cache_read_input_tokens > 0` |
-| `reasoning.effort` / `reasoning.budget` | `usage_records.reasoning_output_tokens > 0`（有 limits 维度，恒只建议不自动） |
-| 其余（builtin 工具 / `responses.encrypted_content` / 模态 / 结构化输出 等） | 当前审计无落点 → 弱证据，只建议 |
+| Admin CRUD | `PUT/DELETE /admin/v1/models/{id}/capabilities/{key}`（key 下拉来自字典） |
+| 目录采纳/刷新 | 阶段 14 `model_catalog_capabilities` → 拷贝到 `model_capabilities` |
+| Adapter seed | 运营手动触发 `POST /capability/adapter-seed-jobs` |
 
-> 注：`finish_class=tool_use` 仅证明「某工具被调」，无法区分 function/custom；且 Responses 直传上游的
-> `finish_class` 恒为 `stop`（不出 `tool_use`），故该类上游的 `tools.*` 恒弱证据。要让 `tools.*` 也能强证据
-> 自动补，需给 adapter 加「按 key 命中埋点」（DESIGN-capability-autocalibration TASK-H）。
+**新增能力**：往 `capability_keys` 插一行（或 Admin 新增）即可在模型上声明 / 展示，**无需改代码**。
+
+**校验**：`model_capabilities.capability_key` 经 FK 约束于 `capability_keys`；`support_level` 仍由 `SupportLevel` 枚举校验。
+
+**`limits`**：`support_level=limited` 时仍可记录（如 `reasoning.effort` 的 `{"max_effort":"high"}`），但删闸门后**不参与任何运行时判定**，仅作展示记录。
 
 ## 6. 版本记录
 
@@ -152,3 +162,6 @@
 | --- | --- | --- |
 | v1 | 2026-06-07 | 首次发布,冻结上表 31 个 key。 |
 | v1.1 | 2026-06-18 | 追加 `responses.compact.native` / `responses.compact.synthetic`（GAP-11-014 compact 双路径），共 33 个 key。 |
+| v1.2 | 2026-06-23 | §5.1 拆分 v1 现状与 v2 目标；指向 DESIGN-capability-evidence-v2（TASK-H）。 |
+| v1.3 | 2026-06-23 | §5.1 改为人工声明 + 能力模板（DEC-024 初版）；自动校正章节 superseded。 |
+| v1.4 | 2026-06-23 | DEC-024 修订：删能力闸门、key 真源迁 `capability_keys` 字典表（含中文描述）；本文降级为人类参考。 |

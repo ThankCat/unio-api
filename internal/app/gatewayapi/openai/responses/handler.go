@@ -154,15 +154,6 @@ func mapResponsesServiceError(req ResponsesRequest, err error, fallbackCode stri
 			errorType: "api_error",
 			param:     modelParam,
 		}
-	case errors.Is(err, routing.ErrModelCapabilityUnavailable), errors.Is(err, routing.ErrChannelCapabilityUnavailable):
-		// model/channel 内部分层只进审计；对客户统一渲染为「模型不支持该能力」，不暴露 channel 拓扑。
-		return responsesServiceErrorResponse{
-			status:    http.StatusBadRequest,
-			code:      "model_capability_unavailable",
-			message:   responsesCapabilityUnavailableMessage(req.Model, err),
-			errorType: "invalid_request_error",
-			param:     modelParam,
-		}
 	}
 
 	if category, ok := adapter.UpstreamCategoryOf(err); ok {
@@ -247,10 +238,3 @@ func responsesErrorFieldParam(err error) *string {
 	return nil
 }
 
-// responsesCapabilityUnavailableMessage 构造 capability 不可用的客户可见文案，列出缺失能力 key（不泄漏 channel 拓扑）。
-func responsesCapabilityUnavailableMessage(model string, err error) string {
-	if missing := routing.MissingCapabilities(err); missing != "" {
-		return fmt.Sprintf("The model %q does not support the required capabilities: %s.", model, missing)
-	}
-	return fmt.Sprintf("The model %q does not support a capability required by this request.", model)
-}

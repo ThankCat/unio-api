@@ -22,33 +22,30 @@ func CapabilityProfile() capability.AdapterProfile {
 		Protocol: "anthropic",
 		Declarations: []capability.Declaration{
 			// full：透传放行（部分无对应 Drop 探针，由协议契约保证）。
-			{Key: capability.KeyTextInput, SupportLevel: capability.SupportLevelFull},
-			{Key: capability.KeyTextOutput, SupportLevel: capability.SupportLevelFull},
-			{Key: capability.KeyToolsFunction, SupportLevel: capability.SupportLevelFull},
-			{Key: capability.KeyToolsChoiceRequired, SupportLevel: capability.SupportLevelFull},
-			{Key: capability.KeyReasoningBudget, SupportLevel: capability.SupportLevelFull},
-			{Key: capability.KeyStream, SupportLevel: capability.SupportLevelFull},
-			{Key: capability.KeyStreamTools, SupportLevel: capability.SupportLevelFull},
-			{Key: capability.KeyStreamUsage, SupportLevel: capability.SupportLevelFull},
+			{Key: "text.input", SupportLevel: capability.SupportLevelFull},
+			{Key: "text.output", SupportLevel: capability.SupportLevelFull},
+			{Key: "tools.function", SupportLevel: capability.SupportLevelFull},
+			{Key: "tools.choice_required", SupportLevel: capability.SupportLevelFull},
+			{Key: "reasoning.budget", SupportLevel: capability.SupportLevelFull},
+			{Key: "stream", SupportLevel: capability.SupportLevelFull},
+			{Key: "stream.tools", SupportLevel: capability.SupportLevelFull},
+			{Key: "stream.usage", SupportLevel: capability.SupportLevelFull},
 
 			// limited：output_config.effort 出站归一为 high/max（任意请求档位均被 Adapt 向上、不拒绝）。
-			// limits 必须用 capability 闸门可消费的 schema：{"max_effort":<档位>}（见 capability.gate
-			// limitViolated，唯一消费者，按 effortRank 做上限判定）。此前写成 {"effort":[...]} 闸门无法解析，
-			// limited 退化为恒满足的死声明。上限取 "high"（请求域最高档；effortRank 不识别 "max"，若写 "max"
-			// 会令任意请求被误判超限），表达「接受到 high 为止的全部标准请求」，与 dropUnsupported 的归一行为一致。
+			// limits 形如 {"max_effort":<档位>}；DEC-024 删闸门后仅作展示记录，不参与运行时判定。
 			{
-				Key:          capability.KeyReasoningEffort,
+				Key:          "reasoning.effort",
 				SupportLevel: capability.SupportLevelLimited,
 				Limits:       json.RawMessage(`{"max_effort":"high"}`),
 			},
 
 			// unsupported：出站 Drop。
-			{Key: capability.KeyImageInput, SupportLevel: capability.SupportLevelUnsupported},
-			{Key: capability.KeyFileInput, SupportLevel: capability.SupportLevelUnsupported},
-			{Key: capability.KeyServiceTier, SupportLevel: capability.SupportLevelUnsupported},
-			{Key: capability.KeyToolsBuiltinWebSearch, SupportLevel: capability.SupportLevelUnsupported},
-			{Key: capability.KeyToolsBuiltinMCP, SupportLevel: capability.SupportLevelUnsupported},
-			{Key: capability.KeyResponseFormatJSONSchema, SupportLevel: capability.SupportLevelUnsupported},
+			{Key: "image.input", SupportLevel: capability.SupportLevelUnsupported},
+			{Key: "file.input", SupportLevel: capability.SupportLevelUnsupported},
+			{Key: "service_tier", SupportLevel: capability.SupportLevelUnsupported},
+			{Key: "tools.builtin.web_search", SupportLevel: capability.SupportLevelUnsupported},
+			{Key: "tools.builtin.mcp", SupportLevel: capability.SupportLevelUnsupported},
+			{Key: "response_format.json_schema", SupportLevel: capability.SupportLevelUnsupported},
 		},
 	}
 }

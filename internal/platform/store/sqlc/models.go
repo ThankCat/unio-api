@@ -25,12 +25,17 @@ type ApiKey struct {
 	RouteID    pgtype.Int8
 }
 
-type CapabilityCalibrationState struct {
-	ID                     int16
-	LastProcessedAttemptID int64
-	UpdatedAt              pgtype.Timestamptz
-	LockedBy               pgtype.Text
-	LockedUntil            pgtype.Timestamptz
+type CapabilityKey struct {
+	Key         string
+	Domain      string
+	DisplayName string
+	Description string
+	SortOrder   int32
+	Deprecated  bool
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	// 协议归属：shared=OpenAI+Anthropic 通用；openai=OpenAI Chat/Responses 专有；anthropic=Anthropic Messages 专有。
+	ProtocolScope string
 }
 
 type Channel struct {
@@ -46,17 +51,6 @@ type Channel struct {
 	TimeoutMs           pgtype.Int4
 	CreatedAt           pgtype.Timestamptz
 	UpdatedAt           pgtype.Timestamptz
-}
-
-type ChannelCapabilityOverride struct {
-	ChannelID     int64
-	CapabilityKey string
-	SupportLevel  string
-	Limits        []byte
-	Reason        pgtype.Text
-	CreatedAt     pgtype.Timestamptz
-	UpdatedAt     pgtype.Timestamptz
-	UpdatedBy     pgtype.Text
 }
 
 type ChannelModel struct {
@@ -183,7 +177,6 @@ type Model struct {
 	Source                         string
 	CreatedAt                      pgtype.Timestamptz
 	UpdatedAt                      pgtype.Timestamptz
-	CapabilityAutocalibrate        string
 }
 
 type ModelCapability struct {
@@ -194,30 +187,6 @@ type ModelCapability struct {
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
 	UpdatedBy     pgtype.Text
-}
-
-type ModelCapabilityObservation struct {
-	ModelID       int64
-	ChannelID     int64
-	CapabilityKey string
-	SuccessCount  int64
-	EvidenceCount int64
-	FirstSeenAt   pgtype.Timestamptz
-	LastSeenAt    pgtype.Timestamptz
-	UpdatedAt     pgtype.Timestamptz
-}
-
-type ModelCapabilitySuggestion struct {
-	ID             int64
-	ModelID        int64
-	CapabilityKey  string
-	SuggestedLevel string
-	EvidenceKind   string
-	Rationale      []byte
-	Status         string
-	CreatedAt      pgtype.Timestamptz
-	DecidedAt      pgtype.Timestamptz
-	DecidedBy      pgtype.Text
 }
 
 type ModelCapabilitySyncJob struct {
@@ -329,40 +298,37 @@ type RequestAttempt struct {
 	ResponseStartedAt     pgtype.Timestamptz
 	FinalUsageReceived    bool
 	UsageMappingVersion   pgtype.Text
-	RequiredCapabilities  []string
 	StartedAt             pgtype.Timestamptz
 	CompletedAt           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
-	UsedCapabilities      []string
 }
 
 type RequestRecord struct {
-	ID                    int64
-	RequestID             string
-	UserID                int64
-	ProjectID             int64
-	ApiKeyID              int64
-	RequestedModelID      string
-	IngressProtocol       string
-	Operation             string
-	ResponseModelID       pgtype.Text
-	ResponseProtocol      pgtype.Text
-	ResponseID            pgtype.Text
-	Stream                bool
-	Status                string
-	FinalProviderID       pgtype.Int8
-	FinalChannelID        pgtype.Int8
-	CapabilityCheckResult pgtype.Text
-	ErrorCode             pgtype.Text
-	ErrorMessage          pgtype.Text
-	InternalErrorDetail   pgtype.Text
-	DeliveryStatus        string
-	ResponseStartedAt     pgtype.Timestamptz
-	ResponseCompletedAt   pgtype.Timestamptz
-	StartedAt             pgtype.Timestamptz
-	CompletedAt           pgtype.Timestamptz
-	CreatedAt             pgtype.Timestamptz
-	UpdatedAt             pgtype.Timestamptz
+	ID                  int64
+	RequestID           string
+	UserID              int64
+	ProjectID           int64
+	ApiKeyID            int64
+	RequestedModelID    string
+	IngressProtocol     string
+	Operation           string
+	ResponseModelID     pgtype.Text
+	ResponseProtocol    pgtype.Text
+	ResponseID          pgtype.Text
+	Stream              bool
+	Status              string
+	FinalProviderID     pgtype.Int8
+	FinalChannelID      pgtype.Int8
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	DeliveryStatus      string
+	ResponseStartedAt   pgtype.Timestamptz
+	ResponseCompletedAt pgtype.Timestamptz
+	StartedAt           pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
 }
 
 type Route struct {
@@ -448,7 +414,6 @@ type SettlementRecoveryJob struct {
 	CompletedAt                       pgtype.Timestamptz
 	CreatedAt                         pgtype.Timestamptz
 	UpdatedAt                         pgtype.Timestamptz
-	UsedCapabilities                  []string
 }
 
 type UsageLineItem struct {

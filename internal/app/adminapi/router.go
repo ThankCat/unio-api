@@ -40,11 +40,10 @@ type RouterDeps struct {
 	APIKeyService     APIKeyService
 	AdjustmentService AdjustmentService
 
-	// M5 能力管理：模型能力/渠道收紧 CRUD、models.dev 同步、adapter 画像、enforce 只读
-	CapabilityService            CapabilityService
-	CapabilitySyncService        CapabilitySyncService
-	CapabilitySeedService        CapabilitySeedService
-	CapabilityEnforcementService CapabilityEnforcementService
+	// M5 能力管理：模型能力 CRUD、models.dev 同步、adapter 画像（能力闸门已移除，DEC-024）
+	CapabilityService     CapabilityService
+	CapabilitySyncService CapabilitySyncService
+	CapabilitySeedService CapabilitySeedService
 
 	// 阶段 14 模型目录：models.dev 目录浏览 + 从目录采纳/刷新/更新提醒
 	CatalogService CatalogService
@@ -219,25 +218,19 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Delete("/api-keys/{id}", akh.revoke)
 		}
 
-		// M5 能力管理：模型能力（手工覆盖）/渠道收紧（只能减）CRUD + 能力 key 注册表。
+		// M5 能力管理：模型能力（手工覆盖）CRUD + 能力 key 注册表（渠道收紧已移除，DEC-023）。
 		if deps.CapabilityService != nil {
 			cah := &capabilitiesHandler{service: deps.CapabilityService}
 			r.Get("/capability/keys", cah.listKeys)
+			r.Post("/capability/keys", cah.createKey)
+			r.Put("/capability/keys/{key}", cah.updateKey)
+			r.Delete("/capability/keys/{key}", cah.deleteKey)
 			// 模型能力挂在 model 下；写入用 PUT {key} 幂等 upsert，DELETE 撤销。
 			r.Get("/models/{id}/capabilities", cah.listModelCapabilities)
+			// 批量整表覆盖（一次保存多条，DEC-024 §6.2）；per-key PUT/DELETE 保留兼容。
+			r.Put("/models/{id}/capabilities", cah.replaceModelCapabilities)
 			r.Put("/models/{id}/capabilities/{key}", cah.setModelCapability)
 			r.Delete("/models/{id}/capabilities/{key}", cah.deleteModelCapability)
-			// 渠道收紧挂在 channel 下；只能减（limited/unsupported）。
-			r.Get("/channels/{id}/capability-overrides", cah.listChannelOverrides)
-			r.Put("/channels/{id}/capability-overrides/{key}", cah.setChannelOverride)
-			r.Delete("/channels/{id}/capability-overrides/{key}", cah.deleteChannelOverride)
-
-			// 能力自动校正建议（DESIGN-capability-autocalibration）：列待采纳 / 一键采纳 / 忽略。
-			r.Get("/capability/suggestions", cah.listSuggestions)
-			r.Post("/models/{id}/capability-suggestions/{key}/accept", cah.acceptSuggestion)
-			r.Post("/models/{id}/capability-suggestions/{key}/dismiss", cah.dismissSuggestion)
-			r.Get("/models/{id}/capability-autocalibrate", cah.getAutocalibrateMode)
-			r.Put("/models/{id}/capability-autocalibrate", cah.setAutocalibrateMode)
 		}
 
 		// M5 models.dev 同步：内联触发（dry-run 预览/实际应用）+ 最近任务展示。
@@ -252,13 +245,6 @@ func NewRouter(deps RouterDeps) http.Handler {
 			cseh := &capabilitySeedHandler{service: deps.CapabilitySeedService}
 			r.Get("/capability/adapter-profiles", cseh.listProfiles)
 			r.Post("/capability/adapter-seed-jobs", cseh.materialize)
-		}
-
-		// M5 enforce 只读：展示各表面 observe/enforce + observe 期判定分布。
-		if deps.CapabilityEnforcementService != nil {
-			ceh := &capabilityEnforcementHandler{service: deps.CapabilityEnforcementService}
-			r.Get("/capability/enforcement", ceh.get)
-			r.Get("/capability/observe-summary", ceh.observeSummary)
 		}
 
 		// M9 工作台看板：运营首页只读聚合（KPI 概览 + 时间序列）。

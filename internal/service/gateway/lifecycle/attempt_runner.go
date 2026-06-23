@@ -73,10 +73,8 @@ type RunNonStreamParams struct {
 	Candidates       []Candidate
 	RequestedModelID string
 	ResponseProtocol requestlog.Protocol
-	// RequiredCapabilities 是 ingress 推断的所需能力 key，写入每个 attempt 的 capability 审计快照（可空）。
-	RequiredCapabilities []string
-	ResolveAdapter       ResolveAdapter
-	Invoke               NonStreamInvoke
+	ResolveAdapter   ResolveAdapter
+	Invoke           NonStreamInvoke
 }
 
 // RunResult 汇报候选循环最终的业务 outcome，供协议 service 的 metrics defer 读取。
@@ -109,7 +107,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 		}
 
 		// 每个 candidate 都先创建 attempt，再调用 adapter，保证 fallback 链路可在 request_attempts 还原。
-		attemptRecord, err := l.CreateAttempt(ctx, requestRecord, index, candidate, params.RequiredCapabilities)
+		attemptRecord, err := l.CreateAttempt(ctx, requestRecord, index, candidate)
 		if err != nil {
 			if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 				l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)

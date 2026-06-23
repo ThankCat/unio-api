@@ -9,48 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-func TestIsRegisteredKey(t *testing.T) {
-	registered := []Key{
-		KeyTextInput,
-		KeyToolsFunction,
-		KeyToolsBuiltinWebSearch,
-		KeyReasoningEffort,
-		KeyResponsesEncryptedContent,
-	}
-	for _, key := range registered {
-		if !IsRegisteredKey(key) {
-			t.Fatalf("expected key %q to be registered", key)
-		}
-	}
-
-	unknown := []Key{"", "text", "tools.unknown", "reasoning.effort.extra", "TEXT.INPUT"}
-	for _, key := range unknown {
-		if IsRegisteredKey(key) {
-			t.Fatalf("expected key %q to be unregistered", key)
-		}
-	}
-}
-
-func TestRegisteredKeysMatchesRegistry(t *testing.T) {
-	keys := RegisteredKeys()
-
-	if len(keys) != len(registeredKeys) {
-		t.Fatalf("expected %d registered keys, got %d", len(registeredKeys), len(keys))
-	}
-
-	for i := 1; i < len(keys); i++ {
-		if keys[i-1] >= keys[i] {
-			t.Fatalf("expected registered keys sorted ascending, got %q before %q", keys[i-1], keys[i])
-		}
-	}
-
-	for _, key := range keys {
-		if !IsRegisteredKey(key) {
-			t.Fatalf("RegisteredKeys returned unregistered key %q", key)
-		}
-	}
-}
-
 func TestSupportLevelValidators(t *testing.T) {
 	modelValid := []SupportLevel{SupportLevelFull, SupportLevelLimited, SupportLevelUnsupported}
 	for _, level := range modelValid {
@@ -60,13 +18,6 @@ func TestSupportLevelValidators(t *testing.T) {
 	}
 	if IsValidSupportLevel("partial") {
 		t.Fatal("expected unknown support level to be invalid")
-	}
-
-	if IsValidChannelOverrideLevel(SupportLevelFull) {
-		t.Fatal("expected channel override to reject full")
-	}
-	if !IsValidChannelOverrideLevel(SupportLevelLimited) || !IsValidChannelOverrideLevel(SupportLevelUnsupported) {
-		t.Fatal("expected channel override to allow limited/unsupported")
 	}
 }
 
@@ -142,27 +93,14 @@ func TestNumericDecimalString(t *testing.T) {
 
 func TestStoreRejectsInvalidWritesBeforeDB(t *testing.T) {
 	// queries 传 nil：合法性校验必须在触达 DB 之前短路，否则会 panic。
+	// 能力 key 合法性改由 capability_keys 字典外键在 DB 层兜底（DEC-024），不再于此预检。
 	store := NewStore(nil)
 	ctx := context.Background()
 
 	_, err := store.UpsertModelCapability(ctx, UpsertModelCapabilityParams{
 		ModelID:      1,
-		Key:          "tools.unknown",
-		SupportLevel: SupportLevelFull,
-	})
-	assertFailureCode(t, err, failure.CodeCapabilityInvalidKey)
-
-	_, err = store.UpsertModelCapability(ctx, UpsertModelCapabilityParams{
-		ModelID:      1,
-		Key:          KeyTextInput,
+		Key:          "text.input",
 		SupportLevel: "partial",
-	})
-	assertFailureCode(t, err, failure.CodeCapabilityInvalidSupportLevel)
-
-	_, err = store.UpsertChannelOverride(ctx, UpsertChannelOverrideParams{
-		ChannelID:    1,
-		Key:          KeyTextInput,
-		SupportLevel: SupportLevelFull,
 	})
 	assertFailureCode(t, err, failure.CodeCapabilityInvalidSupportLevel)
 

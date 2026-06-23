@@ -33,9 +33,9 @@ func validProfile() AdapterProfile {
 		Provider: "deepseek",
 		Protocol: "openai",
 		Declarations: []Declaration{
-			{Key: KeyTextInput, SupportLevel: SupportLevelFull},
-			{Key: KeyReasoningEffort, SupportLevel: SupportLevelLimited, Limits: json.RawMessage(`{"effort":["high","max"]}`)},
-			{Key: KeyImageInput, SupportLevel: SupportLevelUnsupported},
+			{Key: Key("text.input"), SupportLevel: SupportLevelFull},
+			{Key: Key("reasoning.effort"), SupportLevel: SupportLevelLimited, Limits: json.RawMessage(`{"effort":["high","max"]}`)},
+			{Key: Key("image.input"), SupportLevel: SupportLevelUnsupported},
 		},
 	}
 }
@@ -58,28 +58,28 @@ func TestAdapterProfileValidate(t *testing.T) {
 			profile: AdapterProfile{Provider: "deepseek"},
 		},
 		{
-			name: "unregistered key",
+			name: "empty key",
 			profile: AdapterProfile{Provider: "deepseek", Protocol: "openai", Declarations: []Declaration{
-				{Key: Key("bogus.key"), SupportLevel: SupportLevelFull},
+				{Key: Key(""), SupportLevel: SupportLevelFull},
 			}},
 		},
 		{
 			name: "invalid support level",
 			profile: AdapterProfile{Provider: "deepseek", Protocol: "openai", Declarations: []Declaration{
-				{Key: KeyTextInput, SupportLevel: SupportLevel("bogus")},
+				{Key: Key("text.input"), SupportLevel: SupportLevel("bogus")},
 			}},
 		},
 		{
 			name: "duplicate key",
 			profile: AdapterProfile{Provider: "deepseek", Protocol: "openai", Declarations: []Declaration{
-				{Key: KeyTextInput, SupportLevel: SupportLevelFull},
-				{Key: KeyTextInput, SupportLevel: SupportLevelUnsupported},
+				{Key: Key("text.input"), SupportLevel: SupportLevelFull},
+				{Key: Key("text.input"), SupportLevel: SupportLevelUnsupported},
 			}},
 		},
 		{
 			name: "limits on non-limited level",
 			profile: AdapterProfile{Provider: "deepseek", Protocol: "openai", Declarations: []Declaration{
-				{Key: KeyImageInput, SupportLevel: SupportLevelUnsupported, Limits: json.RawMessage(`{"x":1}`)},
+				{Key: Key("image.input"), SupportLevel: SupportLevelUnsupported, Limits: json.RawMessage(`{"x":1}`)},
 			}},
 		},
 	}
@@ -115,7 +115,7 @@ func TestMaterializeAdapterSeedUpsertsAllDeclarations(t *testing.T) {
 
 	var sawLimited bool
 	for _, params := range store.upserts {
-		if params.Key == KeyReasoningEffort {
+		if params.Key == Key("reasoning.effort") {
 			sawLimited = true
 			if params.SupportLevel != SupportLevelLimited || len(params.Limits) == 0 {
 				t.Fatalf("expected limited reasoning.effort with limits, got level=%q limits=%s", params.SupportLevel, params.Limits)
@@ -144,7 +144,7 @@ func TestMaterializeAdapterSeedIsIdempotent(t *testing.T) {
 func TestMaterializeAdapterSeedRejectsInvalidProfileBeforeWriting(t *testing.T) {
 	store := &recordingStore{}
 	invalid := AdapterProfile{Provider: "deepseek", Protocol: "openai", Declarations: []Declaration{
-		{Key: Key("bogus.key"), SupportLevel: SupportLevelFull},
+		{Key: Key(""), SupportLevel: SupportLevelFull},
 	}}
 
 	if err := MaterializeAdapterSeed(context.Background(), store, 1, invalid, nil); err == nil {

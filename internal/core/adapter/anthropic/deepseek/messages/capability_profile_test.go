@@ -40,7 +40,7 @@ type capabilityProbe struct {
 func anthropicCapabilityProbes() []capabilityProbe {
 	return []capabilityProbe{
 		{
-			key: capability.KeyToolsFunction,
+			key: capability.Key("tools.function"),
 			apply: func(r *messagesadapter.MessageRequest) {
 				r.Tools = json.RawMessage(`[{"name":"get_weather","input_schema":{"type":"object"}}]`)
 			},
@@ -51,7 +51,7 @@ func anthropicCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyReasoningBudget,
+			key: capability.Key("reasoning.budget"),
 			apply: func(r *messagesadapter.MessageRequest) {
 				r.Thinking = json.RawMessage(`{"type":"enabled","budget_tokens":1024}`)
 			},
@@ -60,7 +60,7 @@ func anthropicCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyReasoningEffort,
+			key: capability.Key("reasoning.effort"),
 			apply: func(r *messagesadapter.MessageRequest) {
 				r.Extensions = map[string]json.RawMessage{
 					"output_config": json.RawMessage(`{"effort":"low"}`),
@@ -82,7 +82,7 @@ func anthropicCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyImageInput,
+			key: capability.Key("image.input"),
 			apply: func(r *messagesadapter.MessageRequest) {
 				r.Messages = []messagesadapter.Message{
 					userMessage(`[{"type":"text","text":"hi"},{"type":"image","source":{"type":"base64","data":"x"}}]`),
@@ -93,7 +93,7 @@ func anthropicCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyFileInput,
+			key: capability.Key("file.input"),
 			apply: func(r *messagesadapter.MessageRequest) {
 				r.Messages = []messagesadapter.Message{
 					userMessage(`[{"type":"text","text":"hi"},{"type":"document","source":{"type":"base64","data":"x"}}]`),
@@ -104,7 +104,7 @@ func anthropicCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyServiceTier,
+			key: capability.Key("service_tier"),
 			apply: func(r *messagesadapter.MessageRequest) {
 				r.Extensions = map[string]json.RawMessage{"service_tier": json.RawMessage(`"auto"`)}
 			},
@@ -113,7 +113,7 @@ func anthropicCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyToolsBuiltinWebSearch,
+			key: capability.Key("tools.builtin.web_search"),
 			apply: func(r *messagesadapter.MessageRequest) {
 				r.Tools = json.RawMessage(`[{"type":"web_search_20250305","name":"web_search"}]`)
 			},
@@ -124,7 +124,7 @@ func anthropicCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyToolsBuiltinMCP,
+			key: capability.Key("tools.builtin.mcp"),
 			apply: func(r *messagesadapter.MessageRequest) {
 				r.Extensions = map[string]json.RawMessage{
 					"mcp_servers": json.RawMessage(`[{"type":"url","url":"http://x","name":"m"}]`),
@@ -135,7 +135,7 @@ func anthropicCapabilityProbes() []capabilityProbe {
 			},
 		},
 		{
-			key: capability.KeyResponseFormatJSONSchema,
+			key: capability.Key("response_format.json_schema"),
 			apply: func(r *messagesadapter.MessageRequest) {
 				r.Extensions = map[string]json.RawMessage{
 					"output_config": json.RawMessage(`{"format":{"type":"json_schema"}}`),
@@ -169,12 +169,12 @@ func TestCapabilityProfileIsSelfConsistent(t *testing.T) {
 func TestCapabilityProfileReasoningEffortLimitsSchema(t *testing.T) {
 	var decl capability.Declaration
 	for _, d := range CapabilityProfile().Declarations {
-		if d.Key == capability.KeyReasoningEffort {
+		if d.Key == capability.Key("reasoning.effort") {
 			decl = d
 			break
 		}
 	}
-	if decl.Key != capability.KeyReasoningEffort {
+	if decl.Key != capability.Key("reasoning.effort") {
 		t.Fatal("reasoning.effort declaration missing")
 	}
 

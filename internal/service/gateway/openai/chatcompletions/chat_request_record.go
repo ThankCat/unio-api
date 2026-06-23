@@ -6,7 +6,6 @@ import (
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
-	"github.com/ThankCat/unio-api/internal/core/routing"
 )
 
 // chat_request_record.go 内的方法是 lifecycle.RequestLifecycle 的 receiver-bound forward。
@@ -17,10 +16,6 @@ import (
 
 func (s *ChatCompletionService) createRequestRecord(ctx context.Context, principal *auth.APIKeyPrincipal, req gatewayapi.ChatCompletionRequest, stream bool) (requestlog.RequestRecord, error) {
 	return s.lifecycle.CreateRequest(ctx, principal, req.Model, stream)
-}
-
-func (s *ChatCompletionService) createAttemptRecord(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate, requiredCapabilities []string) (requestlog.AttemptRecord, error) {
-	return s.lifecycle.CreateAttempt(ctx, requestRecord, attemptIndex, candidate, requiredCapabilities)
 }
 
 func (s *ChatCompletionService) markRequestRecordFailed(ctx context.Context, requestRecord requestlog.RequestRecord, code string, err error) {

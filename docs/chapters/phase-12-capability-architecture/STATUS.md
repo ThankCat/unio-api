@@ -76,5 +76,4 @@ git diff --check
   worker 与 CLI 均打告警日志。✅ 已实现 + 单测。
 - 真实库 dry-run 验证：gpt-5.5（单渠道、155 成功）→ `prompt_cache=strong`（153 真 cache 命中）+ `tools.custom/parallel/...`
   建议；`auto` 档下 `prompt_cache` 自动补。WARN 刷屏的 6 个缺失能力均被检出。
-- 残留（TASK-H，prod 启用前）：`tools.*` 强证据需 adapter 按 key 命中埋点（Responses 直传 `finish_class` 恒 stop）、
-  多渠道自动下 Layer 3 override。calibration 相关包 `go build` / `go test` 全绿（同工作树另有未完成的 dashboard 重构，与本任务无关）。
+- 残留（TASK-H，prod 启用前）：证据链 v1 断链（`used_capabilities` 未写入 settlement / 校正未读；Responses `finish_class` 恒 stop）。**完整改造方案**见 [DESIGN-capability-evidence-v2.md](../../production/DESIGN-capability-evidence-v2.md)（四层架构、OpenAI 首验、Codex E2E §10、Phase 1–5 任务表）；多渠道自动 Layer 3 override 仍单列。calibration 相关包 `go build` / `go test` 全绿。

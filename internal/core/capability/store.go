@@ -44,32 +44,6 @@ type ModelCapability struct {
 	UpdatedBy    *string
 }
 
-// ChannelOverride 是能力架构 Layer 3 的渠道收紧策略（只能做减法）。
-type ChannelOverride struct {
-	ChannelID    int64
-	Key          Key
-	SupportLevel SupportLevel
-	Limits       json.RawMessage
-	Reason       *string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	UpdatedBy    *string
-}
-
-// CapabilitySuggestion 是能力自动校正产出的「建议给某模型补某能力」记录（DESIGN-capability-autocalibration）。
-type CapabilitySuggestion struct {
-	ID             int64
-	ModelID        int64
-	Key            Key
-	SuggestedLevel SupportLevel
-	EvidenceKind   string
-	Rationale      json.RawMessage
-	Status         string
-	CreatedAt      time.Time
-	DecidedAt      *time.Time
-	DecidedBy      *string
-}
-
 // SyncJobStatus 是 models.dev 能力同步任务的状态机取值。
 type SyncJobStatus string
 
@@ -108,17 +82,42 @@ type UpsertModelCapabilityParams struct {
 	UpdatedBy    *string
 }
 
-// UpsertChannelOverrideParams 是写入渠道能力收紧策略的入参。
-type UpsertChannelOverrideParams struct {
-	ChannelID    int64
-	Key          Key
-	SupportLevel SupportLevel
-	Limits       json.RawMessage
-	Reason       *string
-	UpdatedBy    *string
+// CapabilityKey 是能力 key 字典（capability_keys）的一行，合法 key 的真源（DEC-024）。
+type CapabilityKey struct {
+	Key           Key
+	Domain        string
+	DisplayName   string
+	Description   string
+	SortOrder     int32
+	Deprecated    bool
+	ProtocolScope ProtocolScope
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
-// Store 提供能力架构三层数据与同步任务的读写能力，core 类型不暴露 sqlc row。
+// CreateCapabilityKeyParams 是新增能力 key 字典行的入参。
+type CreateCapabilityKeyParams struct {
+	Key           Key
+	Domain        string
+	DisplayName   string
+	Description   string
+	SortOrder     int32
+	Deprecated    bool
+	ProtocolScope ProtocolScope
+}
+
+// UpdateCapabilityKeyParams 是更新能力 key 字典元数据的入参（key 本身不可改）。
+type UpdateCapabilityKeyParams struct {
+	Key           Key
+	Domain        string
+	DisplayName   string
+	Description   string
+	SortOrder     int32
+	Deprecated    bool
+	ProtocolScope ProtocolScope
+}
+
+// Store 提供能力架构模型层数据与同步任务的读写能力，core 类型不暴露 sqlc row。
 type Store interface {
 	LookupModelByID(ctx context.Context, id int64) (Model, error)
 	LookupModelByModelID(ctx context.Context, modelID string) (Model, error)
@@ -128,17 +127,12 @@ type Store interface {
 	UpsertModelCapability(ctx context.Context, params UpsertModelCapabilityParams) (ModelCapability, error)
 	DeleteModelCapability(ctx context.Context, modelID int64, key Key) error
 
-	ListChannelOverrides(ctx context.Context, channelID int64) ([]ChannelOverride, error)
-	UpsertChannelOverride(ctx context.Context, params UpsertChannelOverrideParams) (ChannelOverride, error)
-	DeleteChannelOverride(ctx context.Context, channelID int64, key Key) error
-
-	ListCapabilitySuggestions(ctx context.Context, status string) ([]CapabilitySuggestion, error)
-	ListCapabilitySuggestionsByModel(ctx context.Context, modelID int64) ([]CapabilitySuggestion, error)
-	AcceptCapabilitySuggestion(ctx context.Context, modelID int64, key Key, decidedBy string) (ModelCapability, error)
-	DismissCapabilitySuggestion(ctx context.Context, modelID int64, key Key, decidedBy string) error
-
-	GetModelCapabilityAutocalibrate(ctx context.Context, modelID int64) (string, error)
-	SetModelCapabilityAutocalibrate(ctx context.Context, modelID int64, mode string) error
+	ListCapabilityKeys(ctx context.Context) ([]CapabilityKey, error)
+	GetCapabilityKey(ctx context.Context, key Key) (CapabilityKey, error)
+	CreateCapabilityKey(ctx context.Context, params CreateCapabilityKeyParams) (CapabilityKey, error)
+	UpdateCapabilityKey(ctx context.Context, params UpdateCapabilityKeyParams) (CapabilityKey, error)
+	DeleteCapabilityKey(ctx context.Context, key Key) error
+	CapabilityKeyExists(ctx context.Context, key Key) (bool, error)
 
 	CreateSyncJob(ctx context.Context, source Source) (SyncJob, error)
 	MarkSyncJobRunning(ctx context.Context, id int64) (SyncJob, error)
@@ -213,9 +207,6 @@ func (s *sqlcStore) ListModelsByCapability(ctx context.Context, key Key) ([]Mode
 }
 
 func (s *sqlcStore) UpsertModelCapability(ctx context.Context, params UpsertModelCapabilityParams) (ModelCapability, error) {
-	if !IsRegisteredKey(params.Key) {
-		return ModelCapability{}, capabilityInvalidKey(params.Key)
-	}
 	if !IsValidSupportLevel(params.SupportLevel) {
 		return ModelCapability{}, capabilityInvalidSupportLevel(params.SupportLevel)
 	}
@@ -246,174 +237,81 @@ func (s *sqlcStore) DeleteModelCapability(ctx context.Context, modelID int64, ke
 	return nil
 }
 
-func (s *sqlcStore) ListChannelOverrides(ctx context.Context, channelID int64) ([]ChannelOverride, error) {
-	rows, err := s.queries.ListChannelOverrides(ctx, channelID)
+func (s *sqlcStore) ListCapabilityKeys(ctx context.Context) ([]CapabilityKey, error) {
+	rows, err := s.queries.ListCapabilityKeys(ctx)
 	if err != nil {
-		return nil, capabilityStoreFailure(err, "list channel overrides")
+		return nil, capabilityStoreFailure(err, "list capability keys")
 	}
 
-	items := make([]ChannelOverride, 0, len(rows))
+	items := make([]CapabilityKey, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, channelOverrideFromSQLC(row))
+		items = append(items, capabilityKeyFromSQLC(row))
 	}
 
 	return items, nil
 }
 
-func (s *sqlcStore) UpsertChannelOverride(ctx context.Context, params UpsertChannelOverrideParams) (ChannelOverride, error) {
-	if !IsRegisteredKey(params.Key) {
-		return ChannelOverride{}, capabilityInvalidKey(params.Key)
+func (s *sqlcStore) GetCapabilityKey(ctx context.Context, key Key) (CapabilityKey, error) {
+	row, err := s.queries.GetCapabilityKey(ctx, string(key))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return CapabilityKey{}, capabilityNotFound("capability key not found")
+		}
+		return CapabilityKey{}, capabilityStoreFailure(err, "get capability key")
 	}
-	if !IsValidChannelOverrideLevel(params.SupportLevel) {
-		return ChannelOverride{}, capabilityInvalidSupportLevel(params.SupportLevel)
-	}
+	return capabilityKeyFromGetRow(row), nil
+}
 
-	row, err := s.queries.UpsertChannelOverride(ctx, sqlc.UpsertChannelOverrideParams{
-		ChannelID:     params.ChannelID,
-		CapabilityKey: string(params.Key),
-		SupportLevel:  string(params.SupportLevel),
-		Limits:        limitsToBytes(params.Limits),
-		Reason:        optionalText(params.Reason),
-		UpdatedBy:     optionalText(params.UpdatedBy),
+func (s *sqlcStore) CreateCapabilityKey(ctx context.Context, params CreateCapabilityKeyParams) (CapabilityKey, error) {
+	row, err := s.queries.CreateCapabilityKey(ctx, sqlc.CreateCapabilityKeyParams{
+		Key:           string(params.Key),
+		Domain:        params.Domain,
+		DisplayName:   params.DisplayName,
+		Description:   params.Description,
+		SortOrder:     params.SortOrder,
+		Deprecated:    params.Deprecated,
+		ProtocolScope: string(params.ProtocolScope),
 	})
 	if err != nil {
-		return ChannelOverride{}, capabilityStoreFailure(err, "upsert channel override")
+		return CapabilityKey{}, capabilityStoreFailure(err, "create capability key")
 	}
-
-	return channelOverrideFromSQLC(row), nil
+	return capabilityKeyFromCreateRow(row), nil
 }
 
-func (s *sqlcStore) DeleteChannelOverride(ctx context.Context, channelID int64, key Key) error {
-	err := s.queries.DeleteChannelOverride(ctx, sqlc.DeleteChannelOverrideParams{
-		ChannelID:     channelID,
-		CapabilityKey: string(key),
-	})
-	if err != nil {
-		return capabilityStoreFailure(err, "delete channel override")
-	}
-
-	return nil
-}
-
-func (s *sqlcStore) ListCapabilitySuggestions(ctx context.Context, status string) ([]CapabilitySuggestion, error) {
-	rows, err := s.queries.ListModelCapabilitySuggestionsByStatus(ctx, status)
-	if err != nil {
-		return nil, capabilityStoreFailure(err, "list capability suggestions")
-	}
-
-	items := make([]CapabilitySuggestion, 0, len(rows))
-	for _, row := range rows {
-		items = append(items, capabilitySuggestionFromSQLC(row))
-	}
-	return items, nil
-}
-
-func (s *sqlcStore) ListCapabilitySuggestionsByModel(ctx context.Context, modelID int64) ([]CapabilitySuggestion, error) {
-	rows, err := s.queries.ListModelCapabilitySuggestionsByModel(ctx, modelID)
-	if err != nil {
-		return nil, capabilityStoreFailure(err, "list capability suggestions by model")
-	}
-
-	items := make([]CapabilitySuggestion, 0, len(rows))
-	for _, row := range rows {
-		items = append(items, capabilitySuggestionFromSQLC(row))
-	}
-	return items, nil
-}
-
-// AcceptCapabilitySuggestion 采纳一条建议：把建议级别写入 model_capabilities（updated_by=decidedBy），
-// 并标记建议为 accepted。两步顺序执行（admin 低并发），重试幂等。
-func (s *sqlcStore) AcceptCapabilitySuggestion(ctx context.Context, modelID int64, key Key, decidedBy string) (ModelCapability, error) {
-	if !IsRegisteredKey(key) {
-		return ModelCapability{}, capabilityInvalidKey(key)
-	}
-
-	sug, err := s.queries.GetModelCapabilitySuggestion(ctx, sqlc.GetModelCapabilitySuggestionParams{
-		ModelID:       modelID,
-		CapabilityKey: string(key),
+func (s *sqlcStore) UpdateCapabilityKey(ctx context.Context, params UpdateCapabilityKeyParams) (CapabilityKey, error) {
+	row, err := s.queries.UpdateCapabilityKey(ctx, sqlc.UpdateCapabilityKeyParams{
+		Key:           string(params.Key),
+		Domain:        params.Domain,
+		DisplayName:   params.DisplayName,
+		Description:   params.Description,
+		SortOrder:     params.SortOrder,
+		Deprecated:    params.Deprecated,
+		ProtocolScope: string(params.ProtocolScope),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ModelCapability{}, capabilityNotFound("accept capability suggestion")
+			return CapabilityKey{}, capabilityNotFound("capability key not found")
 		}
-		return ModelCapability{}, capabilityStoreFailure(err, "get capability suggestion")
+		return CapabilityKey{}, capabilityStoreFailure(err, "update capability key")
 	}
-
-	level := SupportLevel(sug.SuggestedLevel)
-	if !IsValidSupportLevel(level) {
-		return ModelCapability{}, capabilityInvalidSupportLevel(level)
-	}
-
-	row, err := s.queries.UpsertModelCapability(ctx, sqlc.UpsertModelCapabilityParams{
-		ModelID:       modelID,
-		CapabilityKey: string(key),
-		SupportLevel:  string(level),
-		Limits:        nil,
-		UpdatedBy:     nullableText(decidedBy),
-	})
-	if err != nil {
-		return ModelCapability{}, capabilityStoreFailure(err, "accept upsert model capability")
-	}
-
-	if _, err := s.queries.MarkModelCapabilitySuggestionDecided(ctx, sqlc.MarkModelCapabilitySuggestionDecidedParams{
-		Status:    "accepted",
-		DecidedBy: nullableText(decidedBy),
-		ID:        sug.ID,
-	}); err != nil {
-		return ModelCapability{}, capabilityStoreFailure(err, "mark suggestion accepted")
-	}
-
-	return modelCapabilityFromSQLC(row), nil
+	return capabilityKeyFromUpdateRow(row), nil
 }
 
-// DismissCapabilitySuggestion 忽略一条建议：标记 dismissed，worker 不再重复打扰该 (模型, 能力)。
-func (s *sqlcStore) DismissCapabilitySuggestion(ctx context.Context, modelID int64, key Key, decidedBy string) error {
-	sug, err := s.queries.GetModelCapabilitySuggestion(ctx, sqlc.GetModelCapabilitySuggestionParams{
-		ModelID:       modelID,
-		CapabilityKey: string(key),
-	})
+func (s *sqlcStore) DeleteCapabilityKey(ctx context.Context, key Key) error {
+	err := s.queries.DeleteCapabilityKey(ctx, string(key))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return capabilityNotFound("dismiss capability suggestion")
-		}
-		return capabilityStoreFailure(err, "get capability suggestion")
-	}
-
-	if _, err := s.queries.MarkModelCapabilitySuggestionDecided(ctx, sqlc.MarkModelCapabilitySuggestionDecidedParams{
-		Status:    "dismissed",
-		DecidedBy: nullableText(decidedBy),
-		ID:        sug.ID,
-	}); err != nil {
-		return capabilityStoreFailure(err, "mark suggestion dismissed")
+		return capabilityStoreFailure(err, "delete capability key")
 	}
 	return nil
 }
 
-// GetModelCapabilityAutocalibrate 读取模型能力自动校正档位。
-func (s *sqlcStore) GetModelCapabilityAutocalibrate(ctx context.Context, modelID int64) (string, error) {
-	mode, err := s.queries.GetModelCapabilityAutocalibrate(ctx, modelID)
+func (s *sqlcStore) CapabilityKeyExists(ctx context.Context, key Key) (bool, error) {
+	exists, err := s.queries.CapabilityKeyExists(ctx, string(key))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return "", capabilityNotFound("model not found")
-		}
-		return "", capabilityStoreFailure(err, "get model capability autocalibrate mode")
+		return false, capabilityStoreFailure(err, "capability key exists")
 	}
-	return mode, nil
-}
 
-// SetModelCapabilityAutocalibrate 更新模型能力自动校正档位。
-func (s *sqlcStore) SetModelCapabilityAutocalibrate(ctx context.Context, modelID int64, mode string) error {
-	_, err := s.queries.SetModelCapabilityAutocalibrate(ctx, sqlc.SetModelCapabilityAutocalibrateParams{
-		ID:                      modelID,
-		CapabilityAutocalibrate: mode,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return capabilityNotFound("model not found")
-		}
-		return capabilityStoreFailure(err, "set model capability autocalibrate mode")
-	}
-	return nil
+	return exists, nil
 }
 
 func (s *sqlcStore) CreateSyncJob(ctx context.Context, source Source) (SyncJob, error) {
@@ -533,33 +431,56 @@ func modelCapabilityFromSQLC(row sqlc.ModelCapability) ModelCapability {
 	}
 }
 
-// channelOverrideFromSQLC 将 sqlc 行转成领域 ChannelOverride。
-func channelOverrideFromSQLC(row sqlc.ChannelCapabilityOverride) ChannelOverride {
-	return ChannelOverride{
-		ChannelID:    row.ChannelID,
-		Key:          Key(row.CapabilityKey),
-		SupportLevel: SupportLevel(row.SupportLevel),
-		Limits:       limitsFromBytes(row.Limits),
-		Reason:       textPtr(row.Reason),
-		CreatedAt:    row.CreatedAt.Time,
-		UpdatedAt:    row.UpdatedAt.Time,
-		UpdatedBy:    textPtr(row.UpdatedBy),
-	}
+// capabilityKeyFromSQLC 将 sqlc 行转成领域 CapabilityKey。
+func capabilityKeyFromSQLC(row sqlc.ListCapabilityKeysRow) CapabilityKey {
+	return capabilityKeyFromFields(
+		row.Key, row.Domain, row.DisplayName, row.Description,
+		row.SortOrder, row.Deprecated, row.ProtocolScope,
+		row.CreatedAt, row.UpdatedAt,
+	)
 }
 
-// capabilitySuggestionFromSQLC 将 sqlc 行转成领域 CapabilitySuggestion。
-func capabilitySuggestionFromSQLC(row sqlc.ModelCapabilitySuggestion) CapabilitySuggestion {
-	return CapabilitySuggestion{
-		ID:             row.ID,
-		ModelID:        row.ModelID,
-		Key:            Key(row.CapabilityKey),
-		SuggestedLevel: SupportLevel(row.SuggestedLevel),
-		EvidenceKind:   row.EvidenceKind,
-		Rationale:      limitsFromBytes(row.Rationale),
-		Status:         row.Status,
-		CreatedAt:      row.CreatedAt.Time,
-		DecidedAt:      timePtr(row.DecidedAt),
-		DecidedBy:      textPtr(row.DecidedBy),
+func capabilityKeyFromGetRow(row sqlc.GetCapabilityKeyRow) CapabilityKey {
+	return capabilityKeyFromFields(
+		row.Key, row.Domain, row.DisplayName, row.Description,
+		row.SortOrder, row.Deprecated, row.ProtocolScope,
+		row.CreatedAt, row.UpdatedAt,
+	)
+}
+
+func capabilityKeyFromCreateRow(row sqlc.CreateCapabilityKeyRow) CapabilityKey {
+	return capabilityKeyFromFields(
+		row.Key, row.Domain, row.DisplayName, row.Description,
+		row.SortOrder, row.Deprecated, row.ProtocolScope,
+		row.CreatedAt, row.UpdatedAt,
+	)
+}
+
+func capabilityKeyFromUpdateRow(row sqlc.UpdateCapabilityKeyRow) CapabilityKey {
+	return capabilityKeyFromFields(
+		row.Key, row.Domain, row.DisplayName, row.Description,
+		row.SortOrder, row.Deprecated, row.ProtocolScope,
+		row.CreatedAt, row.UpdatedAt,
+	)
+}
+
+func capabilityKeyFromFields(
+	key, domain, displayName, description string,
+	sortOrder int32,
+	deprecated bool,
+	protocolScope string,
+	createdAt, updatedAt pgtype.Timestamptz,
+) CapabilityKey {
+	return CapabilityKey{
+		Key:           Key(key),
+		Domain:        domain,
+		DisplayName:   displayName,
+		Description:   description,
+		SortOrder:     sortOrder,
+		Deprecated:    deprecated,
+		ProtocolScope: NormalizeProtocolScope(protocolScope),
+		CreatedAt:     createdAt.Time,
+		UpdatedAt:     updatedAt.Time,
 	}
 }
 
@@ -583,14 +504,6 @@ func capabilityStoreFailure(err error, message string) error {
 
 func capabilityNotFound(message string) error {
 	return failure.New(failure.CodeCapabilityNotFound, failure.WithMessage(message))
-}
-
-func capabilityInvalidKey(key Key) error {
-	return failure.New(
-		failure.CodeCapabilityInvalidKey,
-		failure.WithMessage("capability key is not registered"),
-		failure.WithField("capability_key", string(key)),
-	)
 }
 
 func capabilityInvalidSupportLevel(level SupportLevel) error {

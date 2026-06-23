@@ -283,17 +283,3 @@ WHERE m.status = 'enabled'
     )
 GROUP BY m.id, m.model_id, m.display_name, m.owned_by
 ORDER BY m.model_id ASC;
-
--- name: GetModelCapabilityAutocalibrate :one
--- GetModelCapabilityAutocalibrate 读取模型能力自动校正档位（off/suggest/auto）。
-SELECT capability_autocalibrate
-FROM models
-WHERE id = sqlc.arg(id);
-
--- name: SetModelCapabilityAutocalibrate :one
--- SetModelCapabilityAutocalibrate 更新模型能力自动校正档位。
-UPDATE models
-SET capability_autocalibrate = sqlc.arg(capability_autocalibrate),
-    updated_at = now()
-WHERE id = sqlc.arg(id)
-RETURNING capability_autocalibrate;

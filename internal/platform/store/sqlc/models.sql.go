@@ -74,7 +74,7 @@ VALUES (
     $9,
     'manual'
 )
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, capability_autocalibrate
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
 `
 
 type CreateModelParams struct {
@@ -118,7 +118,6 @@ func (q *Queries) CreateModel(ctx context.Context, arg CreateModelParams) (Model
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.CapabilityAutocalibrate,
 	)
 	return i, err
 }
@@ -148,7 +147,7 @@ VALUES (
     $9,
     'catalog'
 )
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, capability_autocalibrate
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
 `
 
 type CreateModelFromCatalogParams struct {
@@ -193,7 +192,6 @@ func (q *Queries) CreateModelFromCatalog(ctx context.Context, arg CreateModelFro
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.CapabilityAutocalibrate,
 	)
 	return i, err
 }
@@ -222,20 +220,6 @@ func (q *Queries) DeleteModelCascade(ctx context.Context, id int64) (int64, erro
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const getModelCapabilityAutocalibrate = `-- name: GetModelCapabilityAutocalibrate :one
-SELECT capability_autocalibrate
-FROM models
-WHERE id = $1
-`
-
-// GetModelCapabilityAutocalibrate 读取模型能力自动校正档位（off/suggest/auto）。
-func (q *Queries) GetModelCapabilityAutocalibrate(ctx context.Context, id int64) (string, error) {
-	row := q.db.QueryRow(ctx, getModelCapabilityAutocalibrate, id)
-	var capability_autocalibrate string
-	err := row.Scan(&capability_autocalibrate)
-	return capability_autocalibrate, err
 }
 
 const getModelCatalogState = `-- name: GetModelCatalogState :one
@@ -521,7 +505,7 @@ func (q *Queries) ListModelsPage(ctx context.Context, arg ListModelsPageParams) 
 }
 
 const lookupModelByID = `-- name: LookupModelByID :one
-SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, capability_autocalibrate
+SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
 FROM models
 WHERE id = $1
 `
@@ -544,13 +528,12 @@ func (q *Queries) LookupModelByID(ctx context.Context, id int64) (Model, error) 
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.CapabilityAutocalibrate,
 	)
 	return i, err
 }
 
 const lookupModelByModelID = `-- name: LookupModelByModelID :one
-SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, capability_autocalibrate
+SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
 FROM models
 WHERE model_id = $1
 `
@@ -573,7 +556,6 @@ func (q *Queries) LookupModelByModelID(ctx context.Context, modelID string) (Mod
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.CapabilityAutocalibrate,
 	)
 	return i, err
 }
@@ -606,7 +588,7 @@ SET display_name = $1,
     release_date = $7,
     updated_at = now()
 WHERE id = $8
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, capability_autocalibrate
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
 `
 
 type RefreshAdoptedModelFromCatalogParams struct {
@@ -648,30 +630,8 @@ func (q *Queries) RefreshAdoptedModelFromCatalog(ctx context.Context, arg Refres
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.CapabilityAutocalibrate,
 	)
 	return i, err
-}
-
-const setModelCapabilityAutocalibrate = `-- name: SetModelCapabilityAutocalibrate :one
-UPDATE models
-SET capability_autocalibrate = $1,
-    updated_at = now()
-WHERE id = $2
-RETURNING capability_autocalibrate
-`
-
-type SetModelCapabilityAutocalibrateParams struct {
-	CapabilityAutocalibrate string
-	ID                      int64
-}
-
-// SetModelCapabilityAutocalibrate 更新模型能力自动校正档位。
-func (q *Queries) SetModelCapabilityAutocalibrate(ctx context.Context, arg SetModelCapabilityAutocalibrateParams) (string, error) {
-	row := q.db.QueryRow(ctx, setModelCapabilityAutocalibrate, arg.CapabilityAutocalibrate, arg.ID)
-	var capability_autocalibrate string
-	err := row.Scan(&capability_autocalibrate)
-	return capability_autocalibrate, err
 }
 
 const updateModel = `-- name: UpdateModel :one
@@ -686,7 +646,7 @@ SET display_name = $1,
     release_date = $8,
     updated_at = now()
 WHERE id = $9
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, capability_autocalibrate
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
 `
 
 type UpdateModelParams struct {
@@ -730,7 +690,6 @@ func (q *Queries) UpdateModel(ctx context.Context, arg UpdateModelParams) (Model
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.CapabilityAutocalibrate,
 	)
 	return i, err
 }

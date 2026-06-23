@@ -112,14 +112,14 @@ func TestStoreModelCapabilityRoundTrip(t *testing.T) {
 
 	written, err := store.UpsertModelCapability(ctx, capability.UpsertModelCapabilityParams{
 		ModelID:      id,
-		Key:          capability.KeyReasoningEffort,
+		Key:          capability.Key("reasoning.effort"),
 		SupportLevel: capability.SupportLevelLimited,
 		Limits:       json.RawMessage(`{"effort":["high","max"]}`),
 	})
 	if err != nil {
 		t.Fatalf("upsert model capability: %v", err)
 	}
-	if written.Key != capability.KeyReasoningEffort || written.SupportLevel != capability.SupportLevelLimited {
+	if written.Key != capability.Key("reasoning.effort") || written.SupportLevel != capability.SupportLevelLimited {
 		t.Fatalf("unexpected written capability: %#v", written)
 	}
 	if len(written.Limits) == 0 {
@@ -130,22 +130,8 @@ func TestStoreModelCapabilityRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list model capabilities: %v", err)
 	}
-	if len(caps) != 1 || caps[0].Key != capability.KeyReasoningEffort {
+	if len(caps) != 1 || caps[0].Key != capability.Key("reasoning.effort") {
 		t.Fatalf("expected single reasoning.effort capability, got %#v", caps)
-	}
-}
-
-func TestStoreChannelOverrideRejectsFull(t *testing.T) {
-	ctx, _, store, cleanup := newCapabilityStoreTx(t)
-	defer cleanup()
-
-	_, err := store.UpsertChannelOverride(ctx, capability.UpsertChannelOverrideParams{
-		ChannelID:    1,
-		Key:          capability.KeyToolsFunction,
-		SupportLevel: capability.SupportLevelFull,
-	})
-	if err == nil {
-		t.Fatal("expected store to reject full on channel override before DB")
 	}
 }
 

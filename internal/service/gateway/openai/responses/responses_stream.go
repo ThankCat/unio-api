@@ -293,13 +293,32 @@ func (e *streamEncoder) handleToolCallDeltas(raw json.RawMessage) error {
 	return nil
 }
 
+// streamFinalItem 是桥接流式 encoder 终态 output 的一项（保留 output_index 供 SSE 与能力埋点）。
+type streamFinalItem struct {
+	outputIndex int
+	item        gatewayapi.ResponseOutputItem
+}
+
 // closeItems 按 output_index 顺序发出每个 item 的 output_item.done，并返回最终 output 数组。
 func (e *streamEncoder) closeItems() ([]gatewayapi.ResponseOutputItem, error) {
-	type finalItem struct {
-		outputIndex int
-		item        gatewayapi.ResponseOutputItem
+	finals := e.collectFinalItems()
+	output := make([]gatewayapi.ResponseOutputItem, 0, len(finals))
+	for _, f := range finals {
+		item := f.item
+		if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
+			Type:        gatewayapi.EventOutputItemDone,
+			OutputIndex: intPtr(f.outputIndex),
+			Item:        &item,
+		}); err != nil {
+			return nil, err
+		}
+		output = append(output, f.item)
 	}
-	finals := make([]finalItem, 0, 2+len(e.tools))
+	return output, nil
+}
+
+func (e *streamEncoder) collectFinalItems() []streamFinalItem {
+	finals := make([]streamFinalItem, 0, 2+len(e.tools))
 
 	if e.reasoning != nil {
 		reasoningItem := gatewayapi.ResponseOutputItem{
@@ -312,7 +331,7 @@ func (e *streamEncoder) closeItems() ([]gatewayapi.ResponseOutputItem, error) {
 			carrier := encodeReasoningCarrier(e.reasoning.text)
 			reasoningItem.EncryptedContent = &carrier
 		}
-		finals = append(finals, finalItem{e.reasoning.outputIndex, reasoningItem})
+		finals = append(finals, streamFinalItem{e.reasoning.outputIndex, reasoningItem})
 	}
 	if e.message != nil {
 		content := make([]gatewayapi.ResponseOutputContent, 0, 2)
@@ -322,7 +341,7 @@ func (e *streamEncoder) closeItems() ([]gatewayapi.ResponseOutputItem, error) {
 		if e.message.refusal != "" {
 			content = append(content, gatewayapi.ResponseOutputContent{Type: "refusal", Refusal: e.message.refusal})
 		}
-		finals = append(finals, finalItem{e.message.outputIndex, gatewayapi.ResponseOutputItem{
+		finals = append(finals, streamFinalItem{e.message.outputIndex, gatewayapi.ResponseOutputItem{
 			Type:    "message",
 			ID:      e.message.id,
 			Role:    "assistant",
@@ -343,23 +362,11 @@ func (e *streamEncoder) closeItems() ([]gatewayapi.ResponseOutputItem, error) {
 		if namespace != "" {
 			item.Namespace = namespace
 		}
-		finals = append(finals, finalItem{tool.outputIndex, item})
+		finals = append(finals, streamFinalItem{tool.outputIndex, item})
 	}
 
 	sort.Slice(finals, func(i, j int) bool { return finals[i].outputIndex < finals[j].outputIndex })
-
-	output := make([]gatewayapi.ResponseOutputItem, 0, len(finals))
-	for _, f := range finals {
-		if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
-			Type:        gatewayapi.EventOutputItemDone,
-			OutputIndex: intPtr(f.outputIndex),
-			Item:        &f.item,
-		}); err != nil {
-			return nil, err
-		}
-		output = append(output, f.item)
-	}
-	return output, nil
+	return finals
 }
 
 func (e *streamEncoder) emitItemAdded(outputIndex int, item gatewayapi.ResponseOutputItem) error {

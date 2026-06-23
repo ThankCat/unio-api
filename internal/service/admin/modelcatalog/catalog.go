@@ -232,7 +232,7 @@ func (s *Service) Adopt(ctx context.Context, in AdoptInput) (int64, error) {
 	if status != "enabled" && status != "disabled" {
 		return 0, invalidArgument("status", "status must be enabled or disabled")
 	}
-	caps, err := validateCapabilities(in.Capabilities)
+	caps, err := s.validateCapabilities(ctx, in.Capabilities)
 	if err != nil {
 		return 0, err
 	}
@@ -433,13 +433,17 @@ func (s *Service) SetReminder(ctx context.Context, modelID int64, action Reminde
 	return nil
 }
 
-func validateCapabilities(in []CapabilityHint) ([]CapabilityHint, error) {
+func (s *Service) validateCapabilities(ctx context.Context, in []CapabilityHint) ([]CapabilityHint, error) {
 	seen := make(map[string]struct{}, len(in))
 	out := make([]CapabilityHint, 0, len(in))
 	for _, c := range in {
 		key := capability.Key(strings.TrimSpace(c.Key))
-		if !capability.IsRegisteredKey(key) {
-			return nil, invalidArgument("capability_key", "capability key is not registered: "+string(key))
+		exists, err := s.queries.CapabilityKeyExists(ctx, string(key))
+		if err != nil {
+			return nil, storeFailed(err, "check capability key")
+		}
+		if !exists {
+			return nil, invalidArgument("capability_key", "capability key is not in the capability dictionary: "+string(key))
 		}
 		level := capability.SupportLevel(strings.TrimSpace(c.SupportLevel))
 		if !capability.IsValidSupportLevel(level) {

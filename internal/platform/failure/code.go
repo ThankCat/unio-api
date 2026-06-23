@@ -202,11 +202,6 @@ const (
 	// CodeRoutingProtocolInvalid 表示 routing 请求没有携带受支持的 ingress 协议族。
 	CodeRoutingProtocolInvalid Code = "routing_protocol_invalid"
 
-	// CodeRoutingModelCapabilityUnavailable 表示模型本身不支持请求所需的某些能力（capability 闸门 Layer 2 缺失）。
-	CodeRoutingModelCapabilityUnavailable Code = "routing_model_capability_unavailable"
-
-	// CodeRoutingChannelCapabilityUnavailable 表示模型支持但所有候选 channel 都被 override 关闭了所需能力（capability 闸门 Layer 3）。
-	CodeRoutingChannelCapabilityUnavailable Code = "routing_channel_capability_unavailable"
 )
 
 const (

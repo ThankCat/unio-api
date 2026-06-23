@@ -50,8 +50,8 @@ func (p AdapterProfile) Validate() error {
 
 	seen := make(map[Key]struct{}, len(p.Declarations))
 	for _, d := range p.Declarations {
-		if !IsRegisteredKey(d.Key) {
-			return fmt.Errorf("capability: adapter profile %s/%s declares unregistered key %q", p.Provider, p.Protocol, d.Key)
+		if d.Key == "" {
+			return fmt.Errorf("capability: adapter profile %s/%s declares empty key", p.Provider, p.Protocol)
 		}
 		if !IsValidSupportLevel(d.SupportLevel) {
 			return fmt.Errorf("capability: adapter profile %s/%s key %q has invalid support level %q", p.Provider, p.Protocol, d.Key, d.SupportLevel)
