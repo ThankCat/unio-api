@@ -19,6 +19,7 @@ type adminHTTPDeps struct {
 	ChannelService      adminapi.ChannelService
 	ChannelOpsService   adminapi.ChannelOpsService
 	ModelService        adminapi.ModelService
+	ModelOpsService     adminapi.ModelOpsService
 	ChannelModelService adminapi.ChannelModelService
 	ChannelPriceService adminapi.ChannelPriceService
 	RouteService        adminapi.RouteService
@@ -32,7 +33,7 @@ type adminHTTPDeps struct {
 	APIKeyService     adminapi.APIKeyService
 	AdjustmentService adminapi.AdjustmentService
 
-	CapabilityService            adminapi.CapabilityService
+	CapabilityService     adminapi.CapabilityService
 	CapabilitySyncService adminapi.CapabilitySyncService
 	CapabilitySeedService adminapi.CapabilitySeedService
 
@@ -56,6 +57,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		ChannelService:      deps.ChannelService,
 		ChannelOpsService:   deps.ChannelOpsService,
 		ModelService:        deps.ModelService,
+		ModelOpsService:     deps.ModelOpsService,
 		ChannelModelService: deps.ChannelModelService,
 		ChannelPriceService: deps.ChannelPriceService,
 		RouteService:        deps.RouteService,
@@ -67,7 +69,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		APIKeyService:       deps.APIKeyService,
 		AdjustmentService:   deps.AdjustmentService,
 
-		CapabilityService:            deps.CapabilityService,
+		CapabilityService:     deps.CapabilityService,
 		CapabilitySyncService: deps.CapabilitySyncService,
 		CapabilitySeedService: deps.CapabilitySeedService,
 

@@ -3,6 +3,8 @@
 package opsutil
 
 import (
+	"math/big"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -97,6 +99,72 @@ func HealthBucket(succeeded, total int64) string {
 	default:
 		return "unhealthy"
 	}
+}
+
+// NumericString 把 NUMERIC 精确格式化为十进制字符串（不经 float）；NULL/NaN/Inf → "0"。
+func NumericString(n pgtype.Numeric) string {
+	if !n.Valid || n.NaN || n.InfinityModifier != pgtype.Finite || n.Int == nil {
+		return "0"
+	}
+	negative := n.Int.Sign() < 0
+	digits := new(big.Int).Abs(n.Int).String()
+	exp := int(n.Exp)
+	var formatted string
+	switch {
+	case exp == 0:
+		formatted = digits
+	case exp > 0:
+		formatted = digits + strings.Repeat("0", exp)
+	default:
+		scale := -exp
+		if len(digits) <= scale {
+			digits = strings.Repeat("0", scale-len(digits)+1) + digits
+		}
+		point := len(digits) - scale
+		formatted = digits[:point] + "." + digits[point:]
+	}
+	if negative {
+		formatted = "-" + formatted
+	}
+	return trimDecimalString(formatted)
+}
+
+// SubtractDecimal 用 big.Rat 精确相减两个十进制字符串，保留 10 位小数后去尾零。
+func SubtractDecimal(a, b string) string {
+	ra, ok := new(big.Rat).SetString(a)
+	if !ok {
+		ra = new(big.Rat)
+	}
+	rb, ok := new(big.Rat).SetString(b)
+	if !ok {
+		rb = new(big.Rat)
+	}
+	return trimDecimalString(new(big.Rat).Sub(ra, rb).FloatString(10))
+}
+
+// Ratio 计算 numerator/denominator 的 float64 比例；分母 ≤ 0 → 0。
+func Ratio(numerator, denominator string) float64 {
+	num, ok := new(big.Rat).SetString(numerator)
+	if !ok {
+		return 0
+	}
+	den, ok := new(big.Rat).SetString(denominator)
+	if !ok || den.Sign() <= 0 {
+		return 0
+	}
+	f, _ := new(big.Rat).Quo(num, den).Float64()
+	return f
+}
+
+func trimDecimalString(s string) string {
+	if strings.Contains(s, ".") {
+		s = strings.TrimRight(s, "0")
+		s = strings.TrimRight(s, ".")
+	}
+	if s == "" || s == "-" || s == "-0" {
+		return "0"
+	}
+	return s
 }
 
 // StoreFailed 包装存储错误为 admin_store_failed。

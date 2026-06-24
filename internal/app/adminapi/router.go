@@ -25,6 +25,7 @@ type RouterDeps struct {
 	ChannelService      ChannelService
 	ChannelOpsService   ChannelOpsService
 	ModelService        ModelService
+	ModelOpsService     ModelOpsService
 	ChannelModelService ChannelModelService
 
 	// 阶段 15：渠道-模型价（售价+成本合并）+ 线路（渠道商品）。
@@ -168,6 +169,17 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Patch("/routes/{id}", rh.update)
 			r.Delete("/routes/{id}", rh.delete)
 			r.Put("/routes/{id}/channels", rh.setChannels)
+		}
+
+		// §3.4 模型商品控制台：静态 /models/ops 必须在 /models/{id} 之前注册。
+		if deps.ModelOpsService != nil {
+			moh := &modelOpsHandler{service: deps.ModelOpsService}
+			r.Get("/models/ops/summary", moh.summary)
+			r.Get("/models/ops", moh.table)
+			r.Get("/models/{id}/ops/detail", moh.detail)
+			r.Get("/models/{id}/ops/channels", moh.channels)
+			r.Get("/models/{id}/ops/performance", moh.performance)
+			r.Get("/models/{id}/ops/requests", moh.requests)
 		}
 
 		if deps.ModelService != nil {
