@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/service/admin/dashboard"
 )
 
@@ -15,7 +16,15 @@ const defaultDashboardWindow = 7 * 24 * time.Hour
 type DashboardService interface {
 	Overview(ctx context.Context, from, to time.Time) (dashboard.Overview, error)
 	Timeseries(ctx context.Context, metric, interval string, from, to time.Time) (dashboard.Series, error)
+
+	// §3.1 概览重构：雷达 / 分组表现 / 性能时序。
+	Radar(ctx context.Context, from, to, statusFrom, statusTo time.Time) (dashboard.RadarReport, error)
+	Breakdown(ctx context.Context, dimension string, from, to time.Time) ([]dashboard.BreakdownRow, error)
+	PerformanceTimeseries(ctx context.Context, interval string, from, to time.Time) ([]dashboard.PerformancePoint, error)
 }
+
+// 概览页时间预设窗口（§3.1）：状态短窗口固定 15 分钟，与页面 range 解耦。
+const dashboardStatusWindow = 15 * time.Minute
 
 // dashboardOverviewDTO 是首屏 KPI 概览响应体。
 type dashboardOverviewDTO struct {
@@ -271,6 +280,279 @@ func toDashboardSeriesDTO(s dashboard.Series) dashboardSeriesDTO {
 			points = append(points, spendPointDTO{Bucket: rfc3339(p.Bucket), Currency: p.Currency, Amount: p.Amount})
 		}
 		dto.Points = points
+	}
+	return dto
+}
+
+// ---- §3.1 概览重构：radar / breakdown / performance ----
+
+type rangeWindowDTO struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type platformStatusDTO struct {
+	Level       string  `json:"level"`
+	Reason      string  `json:"reason"`
+	WindowFrom  string  `json:"window_from"`
+	WindowTo    string  `json:"window_to"`
+	Terminal    int64   `json:"terminal"`
+	Succeeded   int64   `json:"succeeded"`
+	SuccessRate float64 `json:"success_rate"`
+	NoChannel   int64   `json:"no_channel"`
+	Timeout     int64   `json:"timeout"`
+}
+
+type latencyStatsDTO struct {
+	Avg float64 `json:"avg"`
+	P50 float64 `json:"p50"`
+	P90 float64 `json:"p90"`
+	P95 float64 `json:"p95"`
+	P99 float64 `json:"p99"`
+}
+
+type ttftStatsDTO struct {
+	P50     float64 `json:"p50"`
+	P95     float64 `json:"p95"`
+	HasData bool    `json:"has_data"`
+}
+
+type cacheStatsDTO struct {
+	ReadRate    float64 `json:"read_rate"`
+	WriteRate   float64 `json:"write_rate"`
+	InputTokens int64   `json:"input_tokens"`
+}
+
+type radarRequestsDTO struct {
+	Total       int64   `json:"total"`
+	Succeeded   int64   `json:"succeeded"`
+	Failed      int64   `json:"failed"`
+	Canceled    int64   `json:"canceled"`
+	SuccessRate float64 `json:"success_rate"`
+	ErrorRate   float64 `json:"error_rate"`
+	Timeout     int64   `json:"timeout"`
+}
+
+type settlementBacklogDTO struct {
+	Active int64 `json:"active"`
+	Dead   int64 `json:"dead"`
+}
+
+type radarBillingExceptionDTO struct {
+	Total  int64  `json:"total"`
+	Amount string `json:"amount"`
+}
+
+type actionItemDTO struct {
+	Kind     string `json:"kind"`
+	Severity string `json:"severity"`
+	Title    string `json:"title"`
+	Detail   string `json:"detail"`
+	Deeplink string `json:"deeplink"`
+}
+
+type badChannelDTO struct {
+	ChannelID        int64   `json:"channel_id"`
+	Name             string  `json:"name"`
+	Status           string  `json:"status"`
+	AttemptTotal     int64   `json:"attempt_total"`
+	AttemptSucceeded int64   `json:"attempt_succeeded"`
+	SuccessRate      float64 `json:"success_rate"`
+	Bucket           string  `json:"bucket"`
+	RecentErrorCode  string  `json:"recent_error_code"`
+}
+
+type radarDTO struct {
+	Range             rangeWindowDTO           `json:"range"`
+	PlatformStatus    platformStatusDTO        `json:"platform_status"`
+	Requests          radarRequestsDTO         `json:"requests"`
+	Latency           latencyStatsDTO          `json:"latency"`
+	Ttft              ttftStatsDTO             `json:"ttft"`
+	TPS               float64                  `json:"tps"`
+	Tokens            dashboardTokensDTO       `json:"tokens"`
+	Cache             cacheStatsDTO            `json:"cache"`
+	RevenueUSD        string                   `json:"revenue_usd"`
+	CostUSD           string                   `json:"cost_usd"`
+	MarginUSD         string                   `json:"margin_usd"`
+	BillingExceptions radarBillingExceptionDTO `json:"billing_exceptions"`
+	Settlement        settlementBacklogDTO     `json:"settlement_backlog"`
+	ActionItems       []actionItemDTO          `json:"action_items"`
+	BadChannels       []badChannelDTO          `json:"bad_channels"`
+}
+
+type breakdownRowDTO struct {
+	Label       string  `json:"label"`
+	RefID       *int64  `json:"ref_id"`
+	Status      string  `json:"status"`
+	Terminal    int64   `json:"terminal"`
+	Succeeded   int64   `json:"succeeded"`
+	SuccessRate float64 `json:"success_rate"`
+}
+
+type breakdownDTO struct {
+	Dimension string            `json:"dimension"`
+	Rows      []breakdownRowDTO `json:"rows"`
+}
+
+type performancePointDTO struct {
+	Bucket     string  `json:"bucket"`
+	LatencyP95 float64 `json:"latency_p95"`
+	TtftP95    float64 `json:"ttft_p95"`
+	TPS        float64 `json:"tps"`
+}
+
+type performanceSeriesDTO struct {
+	Interval string                `json:"interval"`
+	From     string                `json:"from"`
+	To       string                `json:"to"`
+	Points   []performancePointDTO `json:"points"`
+}
+
+// rangePreset 解析 ?range=24h|3d|7d|30d|all，返回 [from,to) 与建议时间桶。
+// all → from 零值（不过滤）；缺省 24h。
+func rangePreset(r *http.Request) (from, to time.Time, interval string, err error) {
+	to = time.Now()
+	switch queryString(r, "range") {
+	case "", "24h":
+		return to.Add(-24 * time.Hour), to, dashboard.IntervalHour, nil
+	case "3d":
+		return to.Add(-3 * 24 * time.Hour), to, dashboard.IntervalHour, nil
+	case "7d":
+		return to.Add(-7 * 24 * time.Hour), to, dashboard.IntervalDay, nil
+	case "30d":
+		return to.Add(-30 * 24 * time.Hour), to, dashboard.IntervalDay, nil
+	case "all":
+		return time.Time{}, to, dashboard.IntervalDay, nil
+	default:
+		return time.Time{}, time.Time{}, "", failure.New(
+			failure.CodeAdminInvalidArgument,
+			failure.WithMessage("range must be one of 24h|3d|7d|30d|all"),
+			failure.WithField("field", "range"),
+		)
+	}
+}
+
+func (h *dashboardHandler) radar(w http.ResponseWriter, r *http.Request) {
+	from, to, _, err := rangePreset(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	statusTo := time.Now()
+	statusFrom := statusTo.Add(-dashboardStatusWindow)
+
+	report, err := h.service.Radar(r.Context(), from, to, statusFrom, statusTo)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, toRadarDTO(report))
+}
+
+func (h *dashboardHandler) breakdown(w http.ResponseWriter, r *http.Request) {
+	from, to, _, err := rangePreset(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	dimension := queryString(r, "dimension")
+	rows, err := h.service.Breakdown(r.Context(), dimension, from, to)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	out := make([]breakdownRowDTO, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, breakdownRowDTO{
+			Label:       row.Label,
+			RefID:       row.RefID,
+			Status:      row.Status,
+			Terminal:    row.Terminal,
+			Succeeded:   row.Succeeded,
+			SuccessRate: row.SuccessRate,
+		})
+	}
+	writeData(w, http.StatusOK, breakdownDTO{Dimension: dimension, Rows: out})
+}
+
+func (h *dashboardHandler) performanceTimeseries(w http.ResponseWriter, r *http.Request) {
+	from, to, interval, err := rangePreset(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	if q := queryString(r, "interval"); q != "" {
+		interval = q
+	}
+	points, err := h.service.PerformanceTimeseries(r.Context(), interval, from, to)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	out := make([]performancePointDTO, 0, len(points))
+	for _, p := range points {
+		out = append(out, performancePointDTO{
+			Bucket:     rfc3339(p.Bucket),
+			LatencyP95: p.LatencyP95,
+			TtftP95:    p.TtftP95,
+			TPS:        p.TPS,
+		})
+	}
+	writeData(w, http.StatusOK, performanceSeriesDTO{Interval: interval, From: rfc3339(from), To: rfc3339(to), Points: out})
+}
+
+func toRadarDTO(r dashboard.RadarReport) radarDTO {
+	dto := radarDTO{
+		Range: rangeWindowDTO{From: rfc3339(r.From), To: rfc3339(r.To)},
+		PlatformStatus: platformStatusDTO{
+			Level:       r.PlatformStatus.Level,
+			Reason:      r.PlatformStatus.Reason,
+			WindowFrom:  rfc3339(r.PlatformStatus.WindowFrom),
+			WindowTo:    rfc3339(r.PlatformStatus.WindowTo),
+			Terminal:    r.PlatformStatus.Terminal,
+			Succeeded:   r.PlatformStatus.Succeeded,
+			SuccessRate: r.PlatformStatus.SuccessRate,
+			NoChannel:   r.PlatformStatus.NoChannel,
+			Timeout:     r.PlatformStatus.Timeout,
+		},
+		Requests: radarRequestsDTO{
+			Total:       r.Requests.Total,
+			Succeeded:   r.Requests.Succeeded,
+			Failed:      r.Requests.Failed,
+			Canceled:    r.Requests.Canceled,
+			SuccessRate: r.Requests.SuccessRate,
+			ErrorRate:   r.Requests.ErrorRate,
+			Timeout:     r.Timeout,
+		},
+		Latency: latencyStatsDTO{Avg: r.Latency.Avg, P50: r.Latency.P50, P90: r.Latency.P90, P95: r.Latency.P95, P99: r.Latency.P99},
+		Ttft:    ttftStatsDTO{P50: r.Ttft.P50, P95: r.Ttft.P95, HasData: r.Ttft.HasData},
+		TPS:     r.TPS,
+		Tokens:  dashboardTokensDTO{Input: r.Tokens.Input, Output: r.Tokens.Output, Total: r.Tokens.Total},
+		Cache:   cacheStatsDTO{ReadRate: r.Cache.ReadRate, WriteRate: r.Cache.WriteRate, InputTokens: r.Cache.InputTokens},
+
+		RevenueUSD:        r.RevenueUSD,
+		CostUSD:           r.CostUSD,
+		MarginUSD:         r.MarginUSD,
+		BillingExceptions: radarBillingExceptionDTO{Total: r.BillingExceptionTotal, Amount: r.BillingExceptionAmount},
+		Settlement:        settlementBacklogDTO{Active: r.Settlement.Active, Dead: r.Settlement.Dead},
+	}
+
+	dto.ActionItems = make([]actionItemDTO, 0, len(r.ActionItems))
+	for _, a := range r.ActionItems {
+		dto.ActionItems = append(dto.ActionItems, actionItemDTO{Kind: a.Kind, Severity: a.Severity, Title: a.Title, Detail: a.Detail, Deeplink: a.Deeplink})
+	}
+	dto.BadChannels = make([]badChannelDTO, 0, len(r.BadChannels))
+	for _, b := range r.BadChannels {
+		dto.BadChannels = append(dto.BadChannels, badChannelDTO{
+			ChannelID:        b.ChannelID,
+			Name:             b.Name,
+			Status:           b.Status,
+			AttemptTotal:     b.AttemptTotal,
+			AttemptSucceeded: b.AttemptSucceeded,
+			SuccessRate:      b.SuccessRate,
+			Bucket:           b.Bucket,
+			RecentErrorCode:  b.RecentErrorCode,
+		})
 	}
 	return dto
 }

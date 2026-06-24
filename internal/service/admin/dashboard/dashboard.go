@@ -47,6 +47,18 @@ type Store interface {
 	DashboardTokensTimeseries(ctx context.Context, arg sqlc.DashboardTokensTimeseriesParams) ([]sqlc.DashboardTokensTimeseriesRow, error)
 	DashboardSpendTimeseries(ctx context.Context, arg sqlc.DashboardSpendTimeseriesParams) ([]sqlc.DashboardSpendTimeseriesRow, error)
 	DashboardCostTimeseries(ctx context.Context, arg sqlc.DashboardCostTimeseriesParams) ([]sqlc.DashboardCostTimeseriesRow, error)
+
+	// §3.1 概览雷达重构（radar / breakdown / performance 时序）。
+	DashboardRadarRequestPerf(ctx context.Context, arg sqlc.DashboardRadarRequestPerfParams) (sqlc.DashboardRadarRequestPerfRow, error)
+	DashboardRadarThroughput(ctx context.Context, arg sqlc.DashboardRadarThroughputParams) (sqlc.DashboardRadarThroughputRow, error)
+	DashboardRadarTokens(ctx context.Context, arg sqlc.DashboardRadarTokensParams) (sqlc.DashboardRadarTokensRow, error)
+	DashboardRadarSettlementBacklog(ctx context.Context) (sqlc.DashboardRadarSettlementBacklogRow, error)
+	DashboardRadarStatusWindow(ctx context.Context, arg sqlc.DashboardRadarStatusWindowParams) (sqlc.DashboardRadarStatusWindowRow, error)
+	DashboardRadarBadChannels(ctx context.Context, arg sqlc.DashboardRadarBadChannelsParams) ([]sqlc.DashboardRadarBadChannelsRow, error)
+	DashboardBreakdownRoute(ctx context.Context, arg sqlc.DashboardBreakdownRouteParams) ([]sqlc.DashboardBreakdownRouteRow, error)
+	DashboardBreakdownChannel(ctx context.Context, arg sqlc.DashboardBreakdownChannelParams) ([]sqlc.DashboardBreakdownChannelRow, error)
+	DashboardBreakdownModel(ctx context.Context, arg sqlc.DashboardBreakdownModelParams) ([]sqlc.DashboardBreakdownModelRow, error)
+	DashboardPerformanceTimeseries(ctx context.Context, arg sqlc.DashboardPerformanceTimeseriesParams) ([]sqlc.DashboardPerformanceTimeseriesRow, error)
 }
 
 // MoneyByCurrency 是某币种的单一金额（十进制字符串）。

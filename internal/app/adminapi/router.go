@@ -248,10 +248,14 @@ func NewRouter(deps RouterDeps) http.Handler {
 		}
 
 		// M9 工作台看板：运营首页只读聚合（KPI 概览 + 时间序列）。
+		// §3.1 重构新增雷达 / 分组表现 / 性能时序；旧 overview/timeseries 暂保留兼容。
 		if deps.DashboardService != nil {
 			dh := &dashboardHandler{service: deps.DashboardService}
 			r.Get("/dashboard/overview", dh.overview)
 			r.Get("/dashboard/timeseries", dh.timeseries)
+			r.Get("/dashboard/radar", dh.radar)
+			r.Get("/dashboard/breakdown", dh.breakdown)
+			r.Get("/dashboard/timeseries/performance", dh.performanceTimeseries)
 		}
 
 		// M8 系统/任务/健康：结算补偿任务只读视图（列表脱敏内部详情，详情按 ?include_internal 回显）。

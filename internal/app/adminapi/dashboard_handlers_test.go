@@ -39,6 +39,26 @@ func (s *fakeDashboardService) Timeseries(_ context.Context, metric, interval st
 	return dashboard.Series{Metric: metric, Interval: interval, From: from, To: to}, nil
 }
 
+func (s *fakeDashboardService) Radar(_ context.Context, from, to, _, _ time.Time) (dashboard.RadarReport, error) {
+	return dashboard.RadarReport{From: from, To: to}, nil
+}
+
+func (s *fakeDashboardService) Breakdown(_ context.Context, dimension string, _, _ time.Time) ([]dashboard.BreakdownRow, error) {
+	switch dimension {
+	case dashboard.BreakdownRoute, dashboard.BreakdownChannel, dashboard.BreakdownModel:
+		return []dashboard.BreakdownRow{}, nil
+	default:
+		return nil, failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("bad dimension"))
+	}
+}
+
+func (s *fakeDashboardService) PerformanceTimeseries(_ context.Context, interval string, _, _ time.Time) ([]dashboard.PerformancePoint, error) {
+	if interval != dashboard.IntervalHour && interval != dashboard.IntervalDay {
+		return nil, failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("bad interval"))
+	}
+	return []dashboard.PerformancePoint{}, nil
+}
+
 func TestDashboardOverviewReturns200(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: &fakeDashboardService{}})
 

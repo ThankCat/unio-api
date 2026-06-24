@@ -36,6 +36,18 @@ type fakeStore struct {
 	spendTS    []sqlc.DashboardSpendTimeseriesRow
 	costTS     []sqlc.DashboardCostTimeseriesRow
 
+	// §3.1 雷达重构。
+	perfRow      sqlc.DashboardRadarRequestPerfRow
+	throughput   sqlc.DashboardRadarThroughputRow
+	radarTokens  sqlc.DashboardRadarTokensRow
+	backlog      sqlc.DashboardRadarSettlementBacklogRow
+	statusWindow sqlc.DashboardRadarStatusWindowRow
+	badChannels  []sqlc.DashboardRadarBadChannelsRow
+	routeBD      []sqlc.DashboardBreakdownRouteRow
+	channelBD    []sqlc.DashboardBreakdownChannelRow
+	modelBD      []sqlc.DashboardBreakdownModelRow
+	perfTS       []sqlc.DashboardPerformanceTimeseriesRow
+
 	gotUnit string
 }
 
@@ -78,6 +90,114 @@ func (s *fakeStore) DashboardSpendTimeseries(_ context.Context, arg sqlc.Dashboa
 func (s *fakeStore) DashboardCostTimeseries(_ context.Context, arg sqlc.DashboardCostTimeseriesParams) ([]sqlc.DashboardCostTimeseriesRow, error) {
 	s.gotUnit = arg.Unit
 	return s.costTS, nil
+}
+func (s *fakeStore) DashboardRadarRequestPerf(context.Context, sqlc.DashboardRadarRequestPerfParams) (sqlc.DashboardRadarRequestPerfRow, error) {
+	return s.perfRow, nil
+}
+func (s *fakeStore) DashboardRadarThroughput(context.Context, sqlc.DashboardRadarThroughputParams) (sqlc.DashboardRadarThroughputRow, error) {
+	return s.throughput, nil
+}
+func (s *fakeStore) DashboardRadarTokens(context.Context, sqlc.DashboardRadarTokensParams) (sqlc.DashboardRadarTokensRow, error) {
+	return s.radarTokens, nil
+}
+func (s *fakeStore) DashboardRadarSettlementBacklog(context.Context) (sqlc.DashboardRadarSettlementBacklogRow, error) {
+	return s.backlog, nil
+}
+func (s *fakeStore) DashboardRadarStatusWindow(context.Context, sqlc.DashboardRadarStatusWindowParams) (sqlc.DashboardRadarStatusWindowRow, error) {
+	return s.statusWindow, nil
+}
+func (s *fakeStore) DashboardRadarBadChannels(context.Context, sqlc.DashboardRadarBadChannelsParams) ([]sqlc.DashboardRadarBadChannelsRow, error) {
+	return s.badChannels, nil
+}
+func (s *fakeStore) DashboardBreakdownRoute(context.Context, sqlc.DashboardBreakdownRouteParams) ([]sqlc.DashboardBreakdownRouteRow, error) {
+	return s.routeBD, nil
+}
+func (s *fakeStore) DashboardBreakdownChannel(context.Context, sqlc.DashboardBreakdownChannelParams) ([]sqlc.DashboardBreakdownChannelRow, error) {
+	return s.channelBD, nil
+}
+func (s *fakeStore) DashboardBreakdownModel(context.Context, sqlc.DashboardBreakdownModelParams) ([]sqlc.DashboardBreakdownModelRow, error) {
+	return s.modelBD, nil
+}
+func (s *fakeStore) DashboardPerformanceTimeseries(_ context.Context, arg sqlc.DashboardPerformanceTimeseriesParams) ([]sqlc.DashboardPerformanceTimeseriesRow, error) {
+	s.gotUnit = arg.Unit
+	return s.perfTS, nil
+}
+
+func TestRadarAggregates(t *testing.T) {
+	store := &fakeStore{
+		perfRow: sqlc.DashboardRadarRequestPerfRow{
+			TerminalTotal: 100, SucceededTotal: 96, FailedTotal: 3, CanceledTotal: 1, PendingTotal: 5,
+			TimeoutTotal: 2, LatencyAvg: 800, LatencyP50: 700, LatencyP90: 1500, LatencyP95: 1800, LatencyP99: 2500,
+		},
+		throughput:   sqlc.DashboardRadarThroughputRow{OutputTokens: 5000, GenerationSeconds: 100},
+		radarTokens:  sqlc.DashboardRadarTokensRow{UncachedInput: 600, CacheReadInput: 300, CacheWriteInput: 100, OutputTokens: 5000},
+		backlog:      sqlc.DashboardRadarSettlementBacklogRow{ActiveTotal: 2, DeadTotal: 1},
+		statusWindow: sqlc.DashboardRadarStatusWindowRow{TerminalTotal: 80, SucceededTotal: 60, NoChannelTotal: 0, TimeoutTotal: 1},
+		revenueRows:  []sqlc.DashboardRevenueByCurrencyRow{{Currency: "USD", Total: mustNumeric(t, "20.00")}},
+		costRows:     []sqlc.DashboardCostByCurrencyRow{{Currency: "USD", Total: mustNumeric(t, "8.00")}},
+		exceptionRows: []sqlc.DashboardBillingExceptionSummaryRow{
+			{EventType: "write_off", Total: 3, PlatformAmount: mustNumeric(t, "1.25")},
+		},
+		badChannels: []sqlc.DashboardRadarBadChannelsRow{
+			{ChannelID: 9, Name: "ch-bad", Status: "enabled", AttemptTotal: 100, AttemptSucceeded: 50},
+		},
+	}
+
+	now := time.Now()
+	out, err := NewService(store).Radar(context.Background(), now.Add(-24*time.Hour), now, now.Add(-15*time.Minute), now)
+	if err != nil {
+		t.Fatalf("radar: %v", err)
+	}
+	if out.Requests.Total != 105 { // terminal + pending
+		t.Fatalf("requests total = %d, want 105", out.Requests.Total)
+	}
+	if out.Requests.SuccessRate < 0.95 || out.Requests.SuccessRate > 0.961 {
+		t.Fatalf("success rate = %v, want ~0.96", out.Requests.SuccessRate)
+	}
+	if out.TPS != 50 { // 5000 / 100
+		t.Fatalf("tps = %v, want 50", out.TPS)
+	}
+	if out.Cache.ReadRate < 0.29 || out.Cache.ReadRate > 0.31 { // 300/1000
+		t.Fatalf("cache read rate = %v, want ~0.3", out.Cache.ReadRate)
+	}
+	if out.MarginUSD != "12" { // 20 - 8
+		t.Fatalf("margin = %q, want 12", out.MarginUSD)
+	}
+	// 状态窗口 80 终态 ≥ 50 样本，成功率 0.75 < 0.80 → down。
+	if out.PlatformStatus.Level != PlatformDown {
+		t.Fatalf("platform level = %q, want down", out.PlatformStatus.Level)
+	}
+	if out.Settlement.Dead != 1 {
+		t.Fatalf("dead backlog = %d, want 1", out.Settlement.Dead)
+	}
+	// dead>0 + 异常渠道 unhealthy + 计费异常 → 至少 3 个行动项。
+	if len(out.ActionItems) < 2 {
+		t.Fatalf("action items = %d, want >= 2", len(out.ActionItems))
+	}
+	if len(out.BadChannels) != 1 || out.BadChannels[0].Bucket != "unhealthy" {
+		t.Fatalf("bad channels = %+v", out.BadChannels)
+	}
+}
+
+func TestPlatformStatusSampleProtection(t *testing.T) {
+	store := &fakeStore{
+		statusWindow: sqlc.DashboardRadarStatusWindowRow{TerminalTotal: 10, SucceededTotal: 1},
+	}
+	now := time.Now()
+	out, err := NewService(store).Radar(context.Background(), now.Add(-time.Hour), now, now.Add(-15*time.Minute), now)
+	if err != nil {
+		t.Fatalf("radar: %v", err)
+	}
+	if out.PlatformStatus.Level != PlatformInsufficient {
+		t.Fatalf("platform level = %q, want insufficient_data (sample protection)", out.PlatformStatus.Level)
+	}
+}
+
+func TestBreakdownInvalidDimension(t *testing.T) {
+	_, err := NewService(&fakeStore{}).Breakdown(context.Background(), "bogus", time.Time{}, time.Now())
+	if err == nil {
+		t.Fatal("expected error for invalid dimension")
+	}
 }
 
 func TestOverviewAggregates(t *testing.T) {

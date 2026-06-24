@@ -66,6 +66,19 @@ func subtractDecimal(a, b string) string {
 	return trimDecimalString(new(big.Rat).Sub(ra, rb).FloatString(10))
 }
 
+// addDecimal 用 big.Rat 精确相加两个十进制字符串，避免 float 误差。
+func addDecimal(a, b string) string {
+	ra, ok := new(big.Rat).SetString(a)
+	if !ok {
+		ra = new(big.Rat)
+	}
+	rb, ok := new(big.Rat).SetString(b)
+	if !ok {
+		rb = new(big.Rat)
+	}
+	return trimDecimalString(new(big.Rat).Add(ra, rb).FloatString(10))
+}
+
 // trimDecimalString 去掉十进制字符串多余的尾零与小数点："0.5300000000" → "0.53"，"-0" → "0"。
 func trimDecimalString(s string) string {
 	if strings.Contains(s, ".") {
