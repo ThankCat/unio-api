@@ -39,14 +39,6 @@ func Int8Arg(v int64) pgtype.Int8 {
 	return pgtype.Int8{Int64: v, Valid: true}
 }
 
-// Int8Narg 把 nil 转成 SQL NULL（不过滤）。
-func Int8Narg(p *int64) pgtype.Int8 {
-	if p == nil {
-		return pgtype.Int8{}
-	}
-	return pgtype.Int8{Int64: *p, Valid: true}
-}
-
 // TextValue 取 pgtype.Text 值，NULL → ""。
 func TextValue(t pgtype.Text) string {
 	if !t.Valid {

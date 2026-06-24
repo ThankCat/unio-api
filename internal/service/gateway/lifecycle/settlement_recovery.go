@@ -289,13 +289,14 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 			AuthorizedAmount: job.AuthorizedAmount,
 			Currency:         job.Currency,
 		},
-		ResponseProtocol: requestlog.Protocol(job.ResponseProtocol),
-		ResponseID:       job.ResponseID,
-		ResponseModelID:  job.ResponseModelID,
-		ModelDBID:        job.ModelID,
-		FinalProviderID:  job.ProviderID,
-		FinalChannelID:   job.ChannelID,
-		Facts:            chatSettlementRecoveryFactsFromJob(job),
+		ResponseProtocol:  requestlog.Protocol(job.ResponseProtocol),
+		ResponseID:        job.ResponseID,
+		ResponseModelID:   job.ResponseModelID,
+		ResponseStartedAt: attemptRecord.ResponseStartedAt,
+		ModelDBID:         job.ModelID,
+		FinalProviderID:   job.ProviderID,
+		FinalChannelID:    job.ChannelID,
+		Facts:             chatSettlementRecoveryFactsFromJob(job),
 	}, nil
 }
 

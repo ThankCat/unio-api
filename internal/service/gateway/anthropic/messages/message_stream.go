@@ -119,6 +119,7 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		emitted := false
 		var streamFacts *adapter.ResponseFacts
 		messageID := ""
+		var responseStartedAt *time.Time
 
 		settleStreamFacts := func() error {
 			if streamFacts == nil {
@@ -140,17 +141,18 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 				responseID = streamFacts.UpstreamResponseID
 			}
 			settleErr := s.chatSettlement.SettleSuccessfulChat(settleCtx, lifecycle.ChatSettlementParams{
-				RequestRecord:    requestRecord,
-				AttemptRecord:    attemptRecord,
-				Principal:        principal,
-				Authorization:    authorization,
-				ResponseProtocol: requestlog.ProtocolAnthropic,
-				ResponseID:       responseID,
-				ResponseModelID:  req.Model,
-				ModelDBID:        candidate.ModelDBID,
-				FinalProviderID:  candidate.ProviderID,
-				FinalChannelID:   candidate.Channel.ID,
-				Facts:            *streamFacts,
+				RequestRecord:     requestRecord,
+				AttemptRecord:     attemptRecord,
+				Principal:         principal,
+				Authorization:     authorization,
+				ResponseProtocol:  requestlog.ProtocolAnthropic,
+				ResponseID:        responseID,
+				ResponseModelID:   req.Model,
+				ResponseStartedAt: responseStartedAt,
+				ModelDBID:         candidate.ModelDBID,
+				FinalProviderID:   candidate.ProviderID,
+				FinalChannelID:    candidate.Channel.ID,
+				Facts:             *streamFacts,
 			})
 			lifecycle.EndSettlementSpan(settleSpan, settleErr)
 			s.recordSettlement(lifecycle.SettlementOutcomeFromErr(settleErr))
@@ -167,6 +169,8 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 				}
 
 				if !emitted {
+					now := time.Now()
+					responseStartedAt = &now
 					emitted = true
 					s.recordStreamEvent(metrics.StreamEventStarted)
 				}

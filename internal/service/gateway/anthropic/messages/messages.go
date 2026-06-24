@@ -117,6 +117,7 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 		upstreamStart := time.Now()
 		adapterResp, err := messagesAdapter.Messages(adapterCtx, candidate.Channel,
 			mapGatewayRequestToAdapter(req, candidate.UpstreamModel))
+		responseStartedAt := time.Now()
 		s.recordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 		lifecycle.EndGatewaySpan(adapterSpan, err)
 		s.recordChannelHealth(channelKey, err)
@@ -152,17 +153,18 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 
 		settleCtx, settleSpan := lifecycle.StartGatewaySpan(ctx, "gateway.settlement")
 		settleErr := s.chatSettlement.SettleSuccessfulChat(settleCtx, lifecycle.ChatSettlementParams{
-			RequestRecord:    requestRecord,
-			AttemptRecord:    attemptRecord,
-			Principal:        principal,
-			Authorization:    authorization,
-			ResponseProtocol: requestlog.ProtocolAnthropic,
-			ResponseID:       adapterResp.ID,
-			ResponseModelID:  req.Model,
-			ModelDBID:        candidate.ModelDBID,
-			FinalProviderID:  candidate.ProviderID,
-			FinalChannelID:   candidate.Channel.ID,
-			Facts:            adapterResp.Facts,
+			RequestRecord:     requestRecord,
+			AttemptRecord:     attemptRecord,
+			Principal:         principal,
+			Authorization:     authorization,
+			ResponseProtocol:  requestlog.ProtocolAnthropic,
+			ResponseID:        adapterResp.ID,
+			ResponseModelID:   req.Model,
+			ResponseStartedAt: &responseStartedAt,
+			ModelDBID:         candidate.ModelDBID,
+			FinalProviderID:   candidate.ProviderID,
+			FinalChannelID:    candidate.Channel.ID,
+			Facts:             adapterResp.Facts,
 		})
 		lifecycle.EndSettlementSpan(settleSpan, settleErr)
 		s.recordSettlement(lifecycle.SettlementOutcomeFromErr(settleErr))

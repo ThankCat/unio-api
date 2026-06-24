@@ -39,38 +39,6 @@ func (q *Queries) DeleteModelCapability(ctx context.Context, arg DeleteModelCapa
 	return err
 }
 
-const listAllModelCapabilityKeys = `-- name: ListAllModelCapabilityKeys :many
-SELECT model_id, capability_key
-FROM model_capabilities
-ORDER BY model_id ASC, capability_key ASC
-`
-
-type ListAllModelCapabilityKeysRow struct {
-	ModelID       int64
-	CapabilityKey string
-}
-
-// ListAllModelCapabilityKeys 列出全部模型已声明的 (模型, 能力) 对（能力自动校正判定「已声明」用）。
-func (q *Queries) ListAllModelCapabilityKeys(ctx context.Context) ([]ListAllModelCapabilityKeysRow, error) {
-	rows, err := q.db.Query(ctx, listAllModelCapabilityKeys)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListAllModelCapabilityKeysRow
-	for rows.Next() {
-		var i ListAllModelCapabilityKeysRow
-		if err := rows.Scan(&i.ModelID, &i.CapabilityKey); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listModelCapabilities = `-- name: ListModelCapabilities :many
 SELECT model_id, capability_key, support_level, limits, created_at, updated_at, updated_by
 FROM model_capabilities

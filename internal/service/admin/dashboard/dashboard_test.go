@@ -302,15 +302,15 @@ func TestTimeseriesDispatch(t *testing.T) {
 	}
 	svc := NewService(store)
 
-	reqSeries, err := svc.Timeseries(context.Background(), MetricRequests, IntervalHour, time.Time{}, time.Time{})
+	reqSeries, err := svc.Timeseries(context.Background(), MetricRequests, IntervalMinute, time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("requests timeseries: %v", err)
 	}
 	if len(reqSeries.RequestPoints) != 1 || reqSeries.TokenPoints != nil || reqSeries.SpendPoints != nil {
 		t.Fatalf("requests metric should fill only RequestPoints: %+v", reqSeries)
 	}
-	if store.gotUnit != IntervalHour {
-		t.Fatalf("expected unit hour passed through, got %q", store.gotUnit)
+	if store.gotUnit != IntervalMinute {
+		t.Fatalf("expected unit minute passed through, got %q", store.gotUnit)
 	}
 
 	spendSeries, err := svc.Timeseries(context.Background(), MetricSpend, IntervalDay, time.Time{}, time.Time{})

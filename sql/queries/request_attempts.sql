@@ -74,6 +74,26 @@ RETURNING
     completed_at,
     created_at;
 
+-- name: MarkRequestAttemptResponseStarted :one
+-- MarkRequestAttemptResponseStarted 记录一次 attempt 的首次客户可见响应时间；重复调用保留第一次时间。
+WITH updated AS (
+    UPDATE request_attempts
+        SET response_started_at = COALESCE(request_attempts.response_started_at, sqlc.arg(response_started_at))
+        WHERE request_attempts.id = sqlc.arg(attempt_id)
+          AND request_attempts.status IN ('running', 'succeeded')
+        RETURNING request_attempts.*
+)
+SELECT *
+FROM updated
+
+UNION ALL
+
+SELECT request_attempts.*
+FROM request_attempts
+WHERE request_attempts.id = sqlc.arg(attempt_id)
+  AND request_attempts.response_started_at IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM updated);
+
 -- name: MarkRequestAttemptSucceeded :one
 -- MarkRequestAttemptSucceeded 将 running attempt 原子推进到 succeeded，重复 succeeded 返回第一次成功事实。
 -- 重复成功写入不能覆盖 upstream response metadata。
@@ -86,6 +106,7 @@ WITH updated AS (
             finish_class = sqlc.arg(finish_class),
             upstream_status_code = sqlc.arg(upstream_status_code),
             upstream_request_id = sqlc.arg(upstream_request_id),
+            response_started_at = COALESCE(request_attempts.response_started_at, sqlc.narg(response_started_at)),
             final_usage_received = TRUE,
             usage_mapping_version = sqlc.arg(usage_mapping_version),
             completed_at = sqlc.arg(completed_at)

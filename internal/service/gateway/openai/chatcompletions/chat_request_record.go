@@ -21,11 +21,3 @@ func (s *ChatCompletionService) createRequestRecord(ctx context.Context, princip
 func (s *ChatCompletionService) markRequestRecordFailed(ctx context.Context, requestRecord requestlog.RequestRecord, code string, err error) {
 	s.lifecycle.MarkRequestFailed(ctx, requestRecord, code, err)
 }
-
-func (s *ChatCompletionService) markAttemptRecordFailed(ctx context.Context, attempt requestlog.AttemptRecord, code string, err error) {
-	s.lifecycle.MarkAttemptFailed(ctx, attempt, code, err)
-}
-
-func (s *ChatCompletionService) markRequestCanceled(ctx context.Context, requestRecord requestlog.RequestRecord, attemptRecord requestlog.AttemptRecord, err error) {
-	s.lifecycle.MarkRequestCanceled(ctx, requestRecord, attemptRecord, err)
-}

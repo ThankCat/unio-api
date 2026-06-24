@@ -409,7 +409,7 @@ type performanceSeriesDTO struct {
 
 // rangeWindow 解析概览类端点的时间窗口：?range=all → 不限（from 零值）；
 // 否则用 from/to（RFC3339，半开区间，缺省近 24h，前端 useRangeQuery 直接透传）。
-// interval 由跨度推导（≤ 8 天 → hour，否则 day），可被 ?interval= 覆盖。
+// interval 由跨度推导（≤ 1 小时 → minute；≤ 8 天 → hour；否则 day），可被 ?interval= 覆盖。
 func rangeWindow(r *http.Request) (from, to time.Time, interval string, err error) {
 	to = time.Now()
 	if queryString(r, "range") == "all" {
@@ -432,9 +432,13 @@ func rangeWindow(r *http.Request) (from, to time.Time, interval string, err erro
 		from = *fromPtr
 	}
 
-	interval = dashboard.IntervalHour
-	if to.Sub(from) > 8*24*time.Hour {
+	switch span := to.Sub(from); {
+	case span <= time.Hour:
+		interval = dashboard.IntervalMinute
+	case span > 8*24*time.Hour:
 		interval = dashboard.IntervalDay
+	default:
+		interval = dashboard.IntervalHour
 	}
 	return from, to, interval, nil
 }

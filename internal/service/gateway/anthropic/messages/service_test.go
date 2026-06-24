@@ -125,6 +125,10 @@ func (s *fakeMessagesRequestLog) MarkRequestRunning(ctx context.Context, id int6
 	return requestlog.RequestRecord{ID: id, Status: requestlog.RequestStatusRunning}, nil
 }
 
+func (s *fakeMessagesRequestLog) MarkRequestResponseStarted(ctx context.Context, params requestlog.MarkResponseStartedParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusRunning, ResponseStartedAt: &params.ResponseStartedAt}, nil
+}
+
 func (s *fakeMessagesRequestLog) MarkRequestSucceeded(ctx context.Context, params requestlog.MarkRequestSucceededParams) (requestlog.RequestRecord, error) {
 	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusSucceeded}, nil
 }
@@ -148,6 +152,10 @@ func (s *fakeMessagesRequestLog) CreateAttempt(ctx context.Context, params reque
 
 func (s *fakeMessagesRequestLog) MarkAttemptSucceeded(ctx context.Context, params requestlog.MarkAttemptSucceededParams) (requestlog.AttemptRecord, error) {
 	return requestlog.AttemptRecord{ID: params.ID, Status: requestlog.AttemptStatusSucceeded}, nil
+}
+
+func (s *fakeMessagesRequestLog) MarkAttemptResponseStarted(ctx context.Context, params requestlog.MarkAttemptResponseStartedParams) (requestlog.AttemptRecord, error) {
+	return requestlog.AttemptRecord{ID: params.ID, Status: requestlog.AttemptStatusRunning, ResponseStartedAt: &params.ResponseStartedAt}, nil
 }
 
 func (s *fakeMessagesRequestLog) MarkAttemptFailed(ctx context.Context, params requestlog.MarkAttemptFailedParams) (requestlog.AttemptRecord, error) {

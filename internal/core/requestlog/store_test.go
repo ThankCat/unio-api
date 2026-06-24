@@ -183,15 +183,28 @@ func TestStoreRequestLifecycleMapsNullableFields(t *testing.T) {
 		t.Fatalf("expected running status, got %q", running.Status)
 	}
 
-	completedAt := time.Now()
+	responseStartedAt := time.Now()
+	started, err := store.MarkRequestResponseStarted(ctx, MarkResponseStartedParams{
+		ID:                record.ID,
+		ResponseStartedAt: responseStartedAt,
+	})
+	if err != nil {
+		t.Fatalf("mark request response started: %v", err)
+	}
+	if started.ResponseStartedAt == nil {
+		t.Fatal("expected response_started_at to be set before terminal")
+	}
+
+	completedAt := responseStartedAt.Add(250 * time.Millisecond)
 	succeeded, err := store.MarkRequestSucceeded(ctx, MarkRequestSucceededParams{
-		ID:               record.ID,
-		ResponseModelID:  "deepseek-v4-pro",
-		ResponseProtocol: ProtocolOpenAI,
-		ResponseID:       "chatcmpl-requestlog",
-		FinalProviderID:  providerID,
-		FinalChannelID:   channelID,
-		CompletedAt:      completedAt,
+		ID:                record.ID,
+		ResponseModelID:   "deepseek-v4-pro",
+		ResponseProtocol:  ProtocolOpenAI,
+		ResponseID:        "chatcmpl-requestlog",
+		FinalProviderID:   providerID,
+		FinalChannelID:    channelID,
+		ResponseStartedAt: &responseStartedAt,
+		CompletedAt:       completedAt,
 	})
 	if err != nil {
 		t.Fatalf("mark request succeeded: %v", err)
@@ -211,6 +224,16 @@ func TestStoreRequestLifecycleMapsNullableFields(t *testing.T) {
 	}
 	if succeeded.CompletedAt == nil {
 		t.Fatal("expected completed_at to be set")
+	}
+	if succeeded.ResponseStartedAt == nil {
+		t.Fatal("expected response_started_at to be set")
+	}
+	if !succeeded.ResponseStartedAt.Equal(*started.ResponseStartedAt) {
+		t.Fatalf("expected succeeded to keep early response_started_at %v, got %v", *started.ResponseStartedAt, *succeeded.ResponseStartedAt)
+	}
+	// response_completed_at 由交付状态机负责（delivery_status='completed' 时），结算不写，应保持 NULL。
+	if succeeded.ResponseCompletedAt != nil {
+		t.Fatalf("expected response_completed_at to stay nil at settlement, got %v", *succeeded.ResponseCompletedAt)
 	}
 }
 
@@ -301,6 +324,18 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 		t.Fatalf("expected nullable attempt fields to be nil on create, got model=%v status=%v internal=%v completed=%v", attempt.UpstreamResponseModel, attempt.UpstreamStatusCode, attempt.InternalErrorDetail, attempt.CompletedAt)
 	}
 
+	attemptStartedAt := time.Now()
+	started, err := store.MarkAttemptResponseStarted(ctx, MarkAttemptResponseStartedParams{
+		ID:                attempt.ID,
+		ResponseStartedAt: attemptStartedAt,
+	})
+	if err != nil {
+		t.Fatalf("mark attempt response started: %v", err)
+	}
+	if started.ResponseStartedAt == nil {
+		t.Fatal("expected attempt response_started_at to be set before terminal")
+	}
+
 	succeeded, err := store.MarkAttemptSucceeded(ctx, MarkAttemptSucceededParams{
 		ID:                    attempt.ID,
 		UpstreamResponseID:    "chatcmpl-requestlog-attempt",
@@ -309,6 +344,7 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 		FinishClass:           "stop",
 		UpstreamStatusCode:    200,
 		UpstreamRequestID:     stringValuePtr("upstream-request-id"),
+		ResponseStartedAt:     &attemptStartedAt,
 		UsageMappingVersion:   "openai_chat_usage_v1",
 		CompletedAt:           time.Now(),
 	})
@@ -330,6 +366,12 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 	}
 	if succeeded.CompletedAt == nil {
 		t.Fatal("expected completed_at to be set")
+	}
+	if succeeded.ResponseStartedAt == nil {
+		t.Fatal("expected response_started_at to be set")
+	}
+	if !succeeded.ResponseStartedAt.Equal(*started.ResponseStartedAt) {
+		t.Fatalf("expected succeeded to keep early response_started_at %v, got %v", *started.ResponseStartedAt, *succeeded.ResponseStartedAt)
 	}
 
 	// succeeded 是终态，不能再转 failed（GAP-7-003 状态机守卫）。

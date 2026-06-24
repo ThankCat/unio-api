@@ -131,6 +131,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 
 		upstreamStart := time.Now()
 		success, err := params.Invoke(ctx, candidate)
+		responseStartedAt := time.Now()
 		l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 		l.RecordChannelHealth(channelKey, err)
 		if err != nil {
@@ -165,17 +166,18 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 		// 非流式成功请求的账务事实必须在 settlement 事务内一起提交，不能先返回响应再异步扣费。
 		settleCtx, settleSpan := StartGatewaySpan(ctx, "gateway.settlement")
 		settleErr := r.settlement.SettleSuccessfulChat(settleCtx, ChatSettlementParams{
-			RequestRecord:    requestRecord,
-			AttemptRecord:    attemptRecord,
-			Principal:        params.Principal,
-			Authorization:    authorization,
-			ResponseProtocol: params.ResponseProtocol,
-			ResponseID:       success.ResponseID,
-			ResponseModelID:  params.RequestedModelID,
-			ModelDBID:        candidate.ModelDBID,
-			FinalProviderID:  candidate.ProviderID,
-			FinalChannelID:   candidate.Channel.ID,
-			Facts:            success.Facts,
+			RequestRecord:     requestRecord,
+			AttemptRecord:     attemptRecord,
+			Principal:         params.Principal,
+			Authorization:     authorization,
+			ResponseProtocol:  params.ResponseProtocol,
+			ResponseID:        success.ResponseID,
+			ResponseModelID:   params.RequestedModelID,
+			ResponseStartedAt: &responseStartedAt,
+			ModelDBID:         candidate.ModelDBID,
+			FinalProviderID:   candidate.ProviderID,
+			FinalChannelID:    candidate.Channel.ID,
+			Facts:             success.Facts,
 		})
 		EndSettlementSpan(settleSpan, settleErr)
 		l.RecordSettlement(SettlementOutcomeFromErr(settleErr))

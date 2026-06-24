@@ -307,8 +307,8 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 
 // PerformanceTimeseries 返回性能趋势（P95 延迟 / P95 TTFT / TPS）。
 func (s *Service) PerformanceTimeseries(ctx context.Context, interval string, from, to time.Time) ([]PerformancePoint, error) {
-	if interval != IntervalHour && interval != IntervalDay {
-		return nil, invalidArgument("interval", "interval must be one of hour|day")
+	if !validInterval(interval) {
+		return nil, invalidArgument("interval", "interval must be one of minute|hour|day")
 	}
 	rows, err := s.store.DashboardPerformanceTimeseries(ctx, sqlc.DashboardPerformanceTimeseriesParams{Unit: interval, FromTime: tsNarg(from), ToTime: tsNarg(to)})
 	if err != nil {

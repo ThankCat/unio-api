@@ -29,8 +29,9 @@ const (
 	MetricSpend    = "spend"
 	MetricCost     = "cost"
 
-	IntervalHour = "hour"
-	IntervalDay  = "day"
+	IntervalMinute = "minute"
+	IntervalHour   = "hour"
+	IntervalDay    = "day"
 )
 
 // Store 定义工作台看板所需的只读聚合存储能力（由 sqlc.Queries 满足）。
@@ -241,10 +242,10 @@ func (s *Service) Overview(ctx context.Context, from, to time.Time) (Overview, e
 }
 
 // Timeseries 按 metric 分派返回 [from, to) 区间内按时间桶聚合的序列。
-// metric 须为 requests|tokens|spend|cost，interval 须为 hour|day（否则 admin_invalid_argument）。
+// metric 须为 requests|tokens|spend|cost，interval 须为 minute|hour|day（否则 admin_invalid_argument）。
 func (s *Service) Timeseries(ctx context.Context, metric, interval string, from, to time.Time) (Series, error) {
-	if interval != IntervalHour && interval != IntervalDay {
-		return Series{}, invalidArgument("interval", "interval must be one of hour|day")
+	if !validInterval(interval) {
+		return Series{}, invalidArgument("interval", "interval must be one of minute|hour|day")
 	}
 
 	out := Series{Metric: metric, Interval: interval, From: from, To: to}
@@ -292,6 +293,10 @@ func (s *Service) Timeseries(ctx context.Context, metric, interval string, from,
 	}
 
 	return out, nil
+}
+
+func validInterval(interval string) bool {
+	return interval == IntervalMinute || interval == IntervalHour || interval == IntervalDay
 }
 
 func requestStats(rows []sqlc.DashboardRequestStatusCountsRow) RequestStats {

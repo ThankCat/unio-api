@@ -425,6 +425,91 @@ func (q *Queries) MarkRequestAttemptFailed(ctx context.Context, arg MarkRequestA
 	return i, err
 }
 
+const markRequestAttemptResponseStarted = `-- name: MarkRequestAttemptResponseStarted :one
+WITH updated AS (
+    UPDATE request_attempts
+        SET response_started_at = COALESCE(request_attempts.response_started_at, $1)
+        WHERE request_attempts.id = $2
+          AND request_attempts.status IN ('running', 'succeeded')
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+)
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at
+FROM updated
+
+UNION ALL
+
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+FROM request_attempts
+WHERE request_attempts.id = $2
+  AND request_attempts.response_started_at IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM updated)
+`
+
+type MarkRequestAttemptResponseStartedParams struct {
+	ResponseStartedAt pgtype.Timestamptz
+	AttemptID         int64
+}
+
+type MarkRequestAttemptResponseStartedRow struct {
+	ID                    int64
+	RequestRecordID       int64
+	AttemptIndex          int32
+	ProviderID            int64
+	ChannelID             int64
+	AdapterKey            string
+	UpstreamModel         string
+	UpstreamProtocol      string
+	UpstreamResponseID    pgtype.Text
+	UpstreamResponseModel pgtype.Text
+	UpstreamFinishReason  pgtype.Text
+	FinishClass           pgtype.Text
+	Status                string
+	UpstreamStatusCode    pgtype.Int4
+	UpstreamRequestID     pgtype.Text
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	ResponseStartedAt     pgtype.Timestamptz
+	FinalUsageReceived    bool
+	UsageMappingVersion   pgtype.Text
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+}
+
+// MarkRequestAttemptResponseStarted 记录一次 attempt 的首次客户可见响应时间；重复调用保留第一次时间。
+func (q *Queries) MarkRequestAttemptResponseStarted(ctx context.Context, arg MarkRequestAttemptResponseStartedParams) (MarkRequestAttemptResponseStartedRow, error) {
+	row := q.db.QueryRow(ctx, markRequestAttemptResponseStarted, arg.ResponseStartedAt, arg.AttemptID)
+	var i MarkRequestAttemptResponseStartedRow
+	err := row.Scan(
+		&i.ID,
+		&i.RequestRecordID,
+		&i.AttemptIndex,
+		&i.ProviderID,
+		&i.ChannelID,
+		&i.AdapterKey,
+		&i.UpstreamModel,
+		&i.UpstreamProtocol,
+		&i.UpstreamResponseID,
+		&i.UpstreamResponseModel,
+		&i.UpstreamFinishReason,
+		&i.FinishClass,
+		&i.Status,
+		&i.UpstreamStatusCode,
+		&i.UpstreamRequestID,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.InternalErrorDetail,
+		&i.ResponseStartedAt,
+		&i.FinalUsageReceived,
+		&i.UsageMappingVersion,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const markRequestAttemptSucceeded = `-- name: MarkRequestAttemptSucceeded :one
 WITH updated AS (
     UPDATE request_attempts
@@ -435,10 +520,11 @@ WITH updated AS (
             finish_class = $4,
             upstream_status_code = $5,
             upstream_request_id = $6,
+            response_started_at = COALESCE(request_attempts.response_started_at, $7),
             final_usage_received = TRUE,
-            usage_mapping_version = $7,
-            completed_at = $8
-        WHERE request_attempts.id = $9
+            usage_mapping_version = $8,
+            completed_at = $9
+        WHERE request_attempts.id = $10
             AND request_attempts.status = 'running'
         RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
 )
@@ -449,7 +535,7 @@ UNION ALL
 
 SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
 FROM request_attempts
-WHERE request_attempts.id = $9
+WHERE request_attempts.id = $10
   AND request_attempts.status = 'succeeded'
   AND NOT EXISTS (SELECT 1 FROM updated)
 `
@@ -461,6 +547,7 @@ type MarkRequestAttemptSucceededParams struct {
 	FinishClass           pgtype.Text
 	UpstreamStatusCode    pgtype.Int4
 	UpstreamRequestID     pgtype.Text
+	ResponseStartedAt     pgtype.Timestamptz
 	UsageMappingVersion   pgtype.Text
 	CompletedAt           pgtype.Timestamptz
 	AttemptID             int64
@@ -503,6 +590,7 @@ func (q *Queries) MarkRequestAttemptSucceeded(ctx context.Context, arg MarkReque
 		arg.FinishClass,
 		arg.UpstreamStatusCode,
 		arg.UpstreamRequestID,
+		arg.ResponseStartedAt,
 		arg.UsageMappingVersion,
 		arg.CompletedAt,
 		arg.AttemptID,

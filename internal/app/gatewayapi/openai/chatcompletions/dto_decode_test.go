@@ -275,21 +275,3 @@ func TestRouterV1ChatCompletionPassesTypedServiceTierToService(t *testing.T) {
 		t.Fatal("service_tier must be typed, not an extension")
 	}
 }
-
-// httpxErrorResponse 是 decode OpenAI error 响应用的本地别名，避免与 httpx 包循环依赖测试细节。
-type httpxErrorResponse struct {
-	Error struct {
-		Message string  `json:"message"`
-		Type    string  `json:"type"`
-		Param   *string `json:"param"`
-		Code    string  `json:"code"`
-	} `json:"error"`
-}
-
-func decodeOpenAIErrorResponse(t *testing.T, body string, dst *httpxErrorResponse) {
-	t.Helper()
-
-	if err := json.Unmarshal([]byte(body), dst); err != nil {
-		t.Fatalf("decode error response: %v", err)
-	}
-}

@@ -68,16 +68,33 @@ func (s *Store) MarkRequestRunning(ctx context.Context, id int64) (RequestRecord
 	return requestRecordFromSQLC(sqlc.RequestRecord(row)), nil
 }
 
+// MarkRequestResponseStarted 记录 request 的首次客户可见响应时间。
+func (s *Store) MarkRequestResponseStarted(ctx context.Context, params MarkResponseStartedParams) (RequestRecord, error) {
+	row, err := s.queries.MarkRequestResponseStarted(ctx, sqlc.MarkRequestResponseStartedParams{
+		RequestRecordID:   params.ID,
+		ResponseStartedAt: timestamptz(params.ResponseStartedAt),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RequestRecord{}, requestLogStateTransitionFailure("mark request response started")
+		}
+		return RequestRecord{}, requestLogStoreFailure(err, "mark request response started")
+	}
+
+	return requestRecordFromSQLC(sqlc.RequestRecord(row)), nil
+}
+
 // MarkRequestSucceeded 将 request record 标记为 succeeded。
 func (s *Store) MarkRequestSucceeded(ctx context.Context, params MarkRequestSucceededParams) (RequestRecord, error) {
 	row, err := s.queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
-		ResponseModelID:  pgtype.Text{String: params.ResponseModelID, Valid: true},
-		ResponseProtocol: pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
-		ResponseID:       pgtype.Text{String: params.ResponseID, Valid: true},
-		FinalProviderID:  pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
-		FinalChannelID:   pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
-		CompletedAt:      timestamptz(params.CompletedAt),
-		RequestRecordID:  params.ID,
+		ResponseModelID:     pgtype.Text{String: params.ResponseModelID, Valid: true},
+		ResponseProtocol:    pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
+		ResponseID:          pgtype.Text{String: params.ResponseID, Valid: true},
+		FinalProviderID:     pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
+		FinalChannelID:      pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
+		ResponseStartedAt:   optionalTimestamptz(params.ResponseStartedAt),
+		CompletedAt:         timestamptz(params.CompletedAt),
+		RequestRecordID:     params.ID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -160,6 +177,22 @@ func (s *Store) CreateAttempt(ctx context.Context, params CreateAttemptParams) (
 	return attemptRecordFromSQLC(row), nil
 }
 
+// MarkAttemptResponseStarted 记录 attempt 的首次客户可见响应时间。
+func (s *Store) MarkAttemptResponseStarted(ctx context.Context, params MarkAttemptResponseStartedParams) (AttemptRecord, error) {
+	row, err := s.queries.MarkRequestAttemptResponseStarted(ctx, sqlc.MarkRequestAttemptResponseStartedParams{
+		AttemptID:         params.ID,
+		ResponseStartedAt: timestamptz(params.ResponseStartedAt),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AttemptRecord{}, requestLogStateTransitionFailure("mark request attempt response started")
+		}
+		return AttemptRecord{}, requestLogStoreFailure(err, "mark request attempt response started")
+	}
+
+	return attemptRecordFromSQLC(sqlc.RequestAttempt(row)), nil
+}
+
 // MarkAttemptSucceeded 将 request attempt 标记为 succeeded。
 func (s *Store) MarkAttemptSucceeded(ctx context.Context, params MarkAttemptSucceededParams) (AttemptRecord, error) {
 	row, err := s.queries.MarkRequestAttemptSucceeded(ctx, sqlc.MarkRequestAttemptSucceededParams{
@@ -169,6 +202,7 @@ func (s *Store) MarkAttemptSucceeded(ctx context.Context, params MarkAttemptSucc
 		FinishClass:           pgtype.Text{String: params.FinishClass, Valid: true},
 		UpstreamStatusCode:    pgtype.Int4{Int32: int32(params.UpstreamStatusCode), Valid: true},
 		UpstreamRequestID:     optionalText(params.UpstreamRequestID),
+		ResponseStartedAt:     optionalTimestamptz(params.ResponseStartedAt),
 		UsageMappingVersion:   pgtype.Text{String: params.UsageMappingVersion, Valid: true},
 		CompletedAt:           timestamptz(params.CompletedAt),
 		AttemptID:             params.ID,
@@ -284,6 +318,15 @@ func attemptRecordFromSQLC(row sqlc.RequestAttempt) AttemptRecord {
 // timestamptz 将 time.Time 包装成有效的 pgtype.Timestamptz。
 func timestamptz(t time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t, Valid: true}
+}
+
+// optionalTimestamptz 把可选时间转换为 pgtype.Timestamptz。
+func optionalTimestamptz(t *time.Time) pgtype.Timestamptz {
+	if t == nil {
+		return pgtype.Timestamptz{Valid: false}
+	}
+
+	return pgtype.Timestamptz{Time: *t, Valid: true}
 }
 
 // optionalText 把可选字符串转换为 pgtype.Text，避免把未知字段写成空字符串。

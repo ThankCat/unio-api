@@ -56,6 +56,18 @@ func TestSyncAppliesAgainstCatalogDatabase(t *testing.T) {
 	ctx, tx, store, cleanup := newSyncStoreTx(t)
 	defer cleanup()
 
+	// 测试隔离：清空回滚事务内可见的既有目录数据，使 removed 计数只反映本用例 seed 的下架行。
+	// 否则本地已同步的 models.dev 目录会让 sync 把全部历史条目计入 removed（counts: removed=221）。
+	for _, stmt := range []string{
+		"DELETE FROM model_catalog_capabilities",
+		"DELETE FROM model_catalog_links",
+		"DELETE FROM model_catalog",
+	} {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			t.Fatalf("isolate catalog (%s): %v", stmt, err)
+		}
+	}
+
 	suffix := time.Now().UnixNano()
 	goneCanonical := fmt.Sprintf("seedtest/gone-%d", suffix)
 	newCanonical := fmt.Sprintf("seedtest/new-%d", suffix)

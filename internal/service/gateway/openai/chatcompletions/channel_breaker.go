@@ -12,14 +12,6 @@ func (s *ChatCompletionService) candidateAvailable(candidate routing.ChatRouteCa
 	return s.lifecycle.CandidateAvailable(candidate)
 }
 
-func (s *ChatCompletionService) breakerAllow(channelKey string) bool {
-	return s.lifecycle.BreakerAllow(channelKey)
-}
-
-func (s *ChatCompletionService) recordChannelHealth(channelKey string, err error) {
-	s.lifecycle.RecordChannelHealth(channelKey, err)
-}
-
 func (s *ChatCompletionService) channelHealthScore(channelKey string) float64 {
 	return s.lifecycle.ChannelHealthScore(channelKey)
 }

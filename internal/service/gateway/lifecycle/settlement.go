@@ -76,17 +76,18 @@ type ChatSettlementExecutor interface {
 // ChatSettlementParams 表示一次成功 chat 请求结算所需的事实。
 // 非流式与流式都只消费 adapter 同次解析产生的不可变 ResponseFacts。
 type ChatSettlementParams struct {
-	RequestRecord    requestlog.RequestRecord
-	AttemptRecord    requestlog.AttemptRecord
-	Principal        *auth.APIKeyPrincipal
-	Authorization    ChatAuthorization
-	ResponseProtocol requestlog.Protocol
-	ResponseID       string
-	ResponseModelID  string
-	ModelDBID        int64
-	FinalProviderID  int64
-	FinalChannelID   int64
-	Facts            adapter.ResponseFacts
+	RequestRecord     requestlog.RequestRecord
+	AttemptRecord     requestlog.AttemptRecord
+	Principal         *auth.APIKeyPrincipal
+	Authorization     ChatAuthorization
+	ResponseProtocol  requestlog.Protocol
+	ResponseID        string
+	ResponseModelID   string
+	ResponseStartedAt *time.Time
+	ModelDBID         int64
+	FinalProviderID   int64
+	FinalChannelID    int64
+	Facts             adapter.ResponseFacts
 }
 
 // ValidateChatSettlementFacts 校验 adapter 交给 settlement 的不可变事实。
@@ -262,6 +263,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		FinishClass:           string(facts.Finish.Class),
 		UpstreamStatusCode:    facts.Metadata.StatusCode,
 		UpstreamRequestID:     UpstreamRequestIDPtr(facts.Metadata.RequestID),
+		ResponseStartedAt:     params.ResponseStartedAt,
 		UsageMappingVersion:   facts.UsageMappingVersion,
 		CompletedAt:           now,
 	})
@@ -417,13 +419,14 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	}
 
 	_, err = txRequestLog.MarkRequestSucceeded(ctx, requestlog.MarkRequestSucceededParams{
-		ID:               params.RequestRecord.ID,
-		ResponseModelID:  params.ResponseModelID,
-		ResponseProtocol: params.ResponseProtocol,
-		ResponseID:       params.ResponseID,
-		FinalProviderID:  params.FinalProviderID,
-		FinalChannelID:   params.FinalChannelID,
-		CompletedAt:      now,
+		ID:                params.RequestRecord.ID,
+		ResponseModelID:   params.ResponseModelID,
+		ResponseProtocol:  params.ResponseProtocol,
+		ResponseID:        params.ResponseID,
+		FinalProviderID:   params.FinalProviderID,
+		FinalChannelID:    params.FinalChannelID,
+		ResponseStartedAt: params.ResponseStartedAt,
+		CompletedAt:       now,
 	})
 	if err != nil {
 		return err

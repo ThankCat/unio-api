@@ -227,7 +227,7 @@ SELECT
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
     EXISTS (
         SELECT 1 FROM channel_prices p
-        WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
+        WHERE p.channel_id = sqlc.arg('channel_id') AND p.model_id = cm.model_id AND p.status = 'enabled'
     ) AS has_price
 FROM channel_models cm
 JOIN models m ON m.id = cm.model_id

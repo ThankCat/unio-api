@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -253,23 +252,6 @@ func actorPtr(actor string) *string {
 		return nil
 	}
 	return &actor
-}
-
-// trimPtr 把字符串 Trim 后转成可选指针；空串 → nil。
-func trimPtr(s string) *string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
-// tsNarg 把可选时间过滤值转成 pgtype.Timestamptz：nil 表示不过滤（SQL NULL）。
-func tsNarg(t *time.Time) pgtype.Timestamptz {
-	if t == nil {
-		return pgtype.Timestamptz{}
-	}
-	return pgtype.Timestamptz{Time: *t, Valid: true}
 }
 
 func invalidArgument(field, message string) error {

@@ -28,7 +28,7 @@ func (s *fakeDashboardService) Overview(_ context.Context, from, to time.Time) (
 func (s *fakeDashboardService) Timeseries(_ context.Context, metric, interval string, from, to time.Time) (dashboard.Series, error) {
 	s.gotMetric, s.gotInterval = metric, interval
 	// 模拟真实 service：metric/interval 非法返回 admin_invalid_argument。
-	if interval != dashboard.IntervalHour && interval != dashboard.IntervalDay {
+	if !validDashboardTestInterval(interval) {
 		return dashboard.Series{}, failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("bad interval"))
 	}
 	switch metric {
@@ -53,10 +53,14 @@ func (s *fakeDashboardService) Breakdown(_ context.Context, dimension string, _,
 }
 
 func (s *fakeDashboardService) PerformanceTimeseries(_ context.Context, interval string, _, _ time.Time) ([]dashboard.PerformancePoint, error) {
-	if interval != dashboard.IntervalHour && interval != dashboard.IntervalDay {
+	if !validDashboardTestInterval(interval) {
 		return nil, failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("bad interval"))
 	}
 	return []dashboard.PerformancePoint{}, nil
+}
+
+func validDashboardTestInterval(interval string) bool {
+	return interval == dashboard.IntervalMinute || interval == dashboard.IntervalHour || interval == dashboard.IntervalDay
 }
 
 func TestDashboardOverviewReturns200(t *testing.T) {

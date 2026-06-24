@@ -85,12 +85,14 @@ type fakeRequestLogService struct {
 
 	createRequests           []requestlog.CreateRequestParams
 	markRequestRunningIDs    []int64
+	markResponseStartedArgs  []requestlog.MarkResponseStartedParams
 	markRequestSucceededArgs []requestlog.MarkRequestSucceededParams
 	markRequestFailedArgs    []requestlog.MarkRequestFailedParams
 	markRequestCanceledArgs  []requestlog.MarkRequestCanceledParams
 	capabilityResults        []string
 
 	createAttempts           []requestlog.CreateAttemptParams
+	markAttemptStartedArgs   []requestlog.MarkAttemptResponseStartedParams
 	markAttemptSucceededArgs []requestlog.MarkAttemptSucceededParams
 	markAttemptFailedArgs    []requestlog.MarkAttemptFailedParams
 	markAttemptCanceledArgs  []requestlog.MarkAttemptCanceledParams
@@ -211,6 +213,15 @@ func (s *fakeRequestLogService) MarkRequestRunning(ctx context.Context, id int64
 	}, nil
 }
 
+func (s *fakeRequestLogService) MarkRequestResponseStarted(ctx context.Context, params requestlog.MarkResponseStartedParams) (requestlog.RequestRecord, error) {
+	s.markResponseStartedArgs = append(s.markResponseStartedArgs, params)
+	return requestlog.RequestRecord{
+		ID:                params.ID,
+		Status:            requestlog.RequestStatusRunning,
+		ResponseStartedAt: &params.ResponseStartedAt,
+	}, nil
+}
+
 // SetCapabilityCheckResult 记录 capability 闸门判定结论审计写入。
 func (s *fakeRequestLogService) SetCapabilityCheckResult(_ context.Context, _ int64, result string) error {
 	s.capabilityResults = append(s.capabilityResults, result)
@@ -267,6 +278,15 @@ func (s *fakeRequestLogService) CreateAttempt(ctx context.Context, params reques
 		UpstreamModel:   params.UpstreamModel,
 		Status:          requestlog.AttemptStatusRunning,
 		StartedAt:       params.StartedAt,
+	}, nil
+}
+
+func (s *fakeRequestLogService) MarkAttemptResponseStarted(ctx context.Context, params requestlog.MarkAttemptResponseStartedParams) (requestlog.AttemptRecord, error) {
+	s.markAttemptStartedArgs = append(s.markAttemptStartedArgs, params)
+	return requestlog.AttemptRecord{
+		ID:                params.ID,
+		Status:            requestlog.AttemptStatusRunning,
+		ResponseStartedAt: &params.ResponseStartedAt,
 	}, nil
 }
 

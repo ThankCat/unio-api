@@ -79,10 +79,10 @@ type EmitStreamChunkGeneric[C any] func(chunk C) error
 // ChunkMeta 提取器把 C 归一为 StreamChunkMeta。RunStream（chat 载体）是 C=chatcompletionsadapter.ChatStreamChunk 的
 // 薄封装。
 type RunStreamParamsGeneric[C any] struct {
-	RequestRecord        requestlog.RequestRecord
-	Principal            *auth.APIKeyPrincipal
-	Authorization        ChatAuthorization
-	Candidates           []Candidate
+	RequestRecord    requestlog.RequestRecord
+	Principal        *auth.APIKeyPrincipal
+	Authorization    ChatAuthorization
+	Candidates       []Candidate
 	RequestedModelID string
 	ResponseProtocol requestlog.Protocol
 	ResolveAdapter   ResolveAdapter
@@ -100,9 +100,9 @@ type RunStreamParamsGeneric[C any] struct {
 // inline onChunk）。
 func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (RunResult, error) {
 	return RunStreamGeneric(ctx, r, RunStreamParamsGeneric[chatcompletionsadapter.ChatStreamChunk]{
-		RequestRecord:        params.RequestRecord,
-		Principal:            params.Principal,
-		Authorization:        params.Authorization,
+		RequestRecord:    params.RequestRecord,
+		Principal:        params.Principal,
+		Authorization:    params.Authorization,
 		Candidates:       params.Candidates,
 		RequestedModelID: params.RequestedModelID,
 		ResponseProtocol: params.ResponseProtocol,
@@ -194,6 +194,9 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		// finishReason 取上游最后一个非空 finish_reason，供协议收尾帧映射终态。
 		finishReason := ""
 
+		// responseStartedAt 记录第一个真正对客户可见的上游 chunk 到达时间，用于 TTFT。
+		var responseStartedAt *time.Time
+
 		// settleStreamFacts 使用 adapter 最终 facts 结算流式请求。结算不能依赖原始请求 ctx：客户端
 		// 可能已断开，但只要上游已返回 final usage，平台就有准确账务事实，必须尽力完成结算。
 		settleStreamFacts := func() error {
@@ -216,17 +219,18 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				responseID = streamFacts.UpstreamResponseID
 			}
 			settleErr := r.settlement.SettleSuccessfulChat(settleCtx, ChatSettlementParams{
-				RequestRecord:    requestRecord,
-				AttemptRecord:    attemptRecord,
-				Principal:        params.Principal,
-				Authorization:    authorization,
-				ResponseProtocol: params.ResponseProtocol,
-				ResponseID:       responseID,
-				ResponseModelID:  params.RequestedModelID,
-				ModelDBID:        candidate.ModelDBID,
-				FinalProviderID:  candidate.ProviderID,
-				FinalChannelID:   candidate.Channel.ID,
-				Facts:            *streamFacts,
+				RequestRecord:     requestRecord,
+				AttemptRecord:     attemptRecord,
+				Principal:         params.Principal,
+				Authorization:     authorization,
+				ResponseProtocol:  params.ResponseProtocol,
+				ResponseID:        responseID,
+				ResponseModelID:   params.RequestedModelID,
+				ResponseStartedAt: responseStartedAt,
+				ModelDBID:         candidate.ModelDBID,
+				FinalProviderID:   candidate.ProviderID,
+				FinalChannelID:    candidate.Channel.ID,
+				Facts:             *streamFacts,
 			})
 			EndSettlementSpan(settleSpan, settleErr)
 			l.RecordSettlement(SettlementOutcomeFromErr(settleErr))
@@ -254,7 +258,10 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			}
 
 			if !emitted {
+				now := time.Now()
+				responseStartedAt = &now
 				emitted = true
+				l.MarkResponseStarted(ctx, requestRecord, attemptRecord, now)
 				l.RecordStreamEvent(metrics.StreamEventStarted)
 			}
 			return params.EmitChunk(chunk)

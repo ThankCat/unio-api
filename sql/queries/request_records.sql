@@ -130,9 +130,32 @@ WHERE request_records.id = sqlc.arg(request_record_id)
   AND request_records.status = 'running'
   AND NOT EXISTS (SELECT 1 FROM updated);
 
+-- name: MarkRequestResponseStarted :one
+-- MarkRequestResponseStarted 记录首次客户可见响应时间；重复调用保留第一次时间。
+WITH updated AS (
+    UPDATE request_records
+        SET response_started_at = COALESCE(request_records.response_started_at, sqlc.arg(response_started_at)),
+            updated_at = now()
+        WHERE request_records.id = sqlc.arg(request_record_id)
+          AND request_records.status IN ('running', 'succeeded')
+        RETURNING request_records.*
+)
+SELECT *
+FROM updated
+
+UNION ALL
+
+SELECT request_records.*
+FROM request_records
+WHERE request_records.id = sqlc.arg(request_record_id)
+  AND request_records.response_started_at IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM updated);
+
 -- name: MarkRequestSucceeded :one
 -- MarkRequestSucceeded 将 running 请求原子推进到 succeeded，重复 succeeded 返回第一次成功事实。
 -- 重复 settlement 不能覆盖 response_model/provider/channel/completed_at。
+-- response_completed_at 属于交付状态机（仅在 delivery_status='completed' 时落地，见
+-- ck_request_records_delivery_completed_at），结算阶段不写，避免违反约束导致结算失败。
 WITH updated AS (
     UPDATE request_records
         SET status = 'succeeded',
@@ -141,6 +164,7 @@ WITH updated AS (
             response_id = sqlc.arg(response_id),
             final_provider_id = sqlc.arg(final_provider_id),
             final_channel_id = sqlc.arg(final_channel_id),
+            response_started_at = COALESCE(request_records.response_started_at, sqlc.narg(response_started_at)),
             completed_at = sqlc.arg(completed_at),
             updated_at = now()
         WHERE request_records.id = sqlc.arg(request_record_id)

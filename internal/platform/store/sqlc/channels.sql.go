@@ -138,46 +138,6 @@ func (q *Queries) GetChannel(ctx context.Context, id int64) (Channel, error) {
 	return i, err
 }
 
-const listChannels = `-- name: ListChannels :many
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at
-FROM channels
-ORDER BY priority, id
-`
-
-// ListChannels 列出全部 channel，按 priority、id 升序，供 admin 管理台展示。
-func (q *Queries) ListChannels(ctx context.Context) ([]Channel, error) {
-	rows, err := q.db.Query(ctx, listChannels)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Channel
-	for rows.Next() {
-		var i Channel
-		if err := rows.Scan(
-			&i.ID,
-			&i.ProviderID,
-			&i.Name,
-			&i.Protocol,
-			&i.AdapterKey,
-			&i.BaseUrl,
-			&i.CredentialEncrypted,
-			&i.Status,
-			&i.Priority,
-			&i.TimeoutMs,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listChannelsByProvider = `-- name: ListChannelsByProvider :many
 SELECT id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at
 FROM channels

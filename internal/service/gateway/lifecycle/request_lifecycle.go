@@ -283,6 +283,24 @@ func (l *RequestLifecycle) CreateAttempt(ctx context.Context, requestRecord requ
 	})
 }
 
+// MarkResponseStarted 尽力记录首个客户可见响应时间。
+//
+// 该写入只服务观测指标，不能影响主响应链路：流式请求已经开始向客户发数据时，写审计字段失败
+// 不应中断 SSE。
+func (l *RequestLifecycle) MarkResponseStarted(ctx context.Context, requestRecord requestlog.RequestRecord, attemptRecord requestlog.AttemptRecord, responseStartedAt time.Time) {
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+
+	_, _ = l.requestLog.MarkRequestResponseStarted(auditCtx, requestlog.MarkResponseStartedParams{
+		ID:                requestRecord.ID,
+		ResponseStartedAt: responseStartedAt,
+	})
+	_, _ = l.requestLog.MarkAttemptResponseStarted(auditCtx, requestlog.MarkAttemptResponseStartedParams{
+		ID:                attemptRecord.ID,
+		ResponseStartedAt: responseStartedAt,
+	})
+}
+
 // MarkRequestFailed 把 request record 标记为失败。
 // 失败状态写入是审计动作，调用方仍然返回原始业务错误，避免状态写入细节覆盖根因。
 func (l *RequestLifecycle) MarkRequestFailed(ctx context.Context, requestRecord requestlog.RequestRecord, fallbackCode string, err error) {

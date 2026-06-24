@@ -26,18 +26,6 @@ func (q *Queries) AddRouteChannel(ctx context.Context, arg AddRouteChannelParams
 	return err
 }
 
-const countRouteChannels = `-- name: CountRouteChannels :one
-SELECT COUNT(*) FROM route_channels WHERE route_id = $1
-`
-
-// CountRouteChannels 统计某线路渠道池成员数，供 fixed（恰好一条）/explicit（至少一条）校验。
-func (q *Queries) CountRouteChannels(ctx context.Context, routeID int64) (int64, error) {
-	row := q.db.QueryRow(ctx, countRouteChannels, routeID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const deleteRouteChannels = `-- name: DeleteRouteChannels :exec
 DELETE FROM route_channels WHERE route_id = $1
 `
@@ -46,31 +34,6 @@ DELETE FROM route_channels WHERE route_id = $1
 func (q *Queries) DeleteRouteChannels(ctx context.Context, routeID int64) error {
 	_, err := q.db.Exec(ctx, deleteRouteChannels, routeID)
 	return err
-}
-
-const listRouteChannels = `-- name: ListRouteChannels :many
-SELECT channel_id FROM route_channels WHERE route_id = $1 ORDER BY channel_id
-`
-
-// ListRouteChannels 列出某线路的渠道池成员 channel_id。
-func (q *Queries) ListRouteChannels(ctx context.Context, routeID int64) ([]int64, error) {
-	rows, err := q.db.Query(ctx, listRouteChannels, routeID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []int64
-	for rows.Next() {
-		var channel_id int64
-		if err := rows.Scan(&channel_id); err != nil {
-			return nil, err
-		}
-		items = append(items, channel_id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const listRouteChannelsDetailed = `-- name: ListRouteChannelsDetailed :many

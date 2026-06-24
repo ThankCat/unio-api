@@ -11,12 +11,6 @@ WHERE c.status = 'enabled'
   AND p.status = 'enabled'
 ORDER BY c.id;
 
--- name: ListChannels :many
--- ListChannels 列出全部 channel，按 priority、id 升序，供 admin 管理台展示。
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at
-FROM channels
-ORDER BY priority, id;
-
 -- name: ListChannelsByProvider :many
 -- ListChannelsByProvider 列出指定 provider 下的 channel，按 priority、id 升序。
 SELECT id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at

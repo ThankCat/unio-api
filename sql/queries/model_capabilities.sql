@@ -45,9 +45,3 @@ WHERE model_id = sqlc.arg(model_id)
 -- DeleteModelCapabilitiesByModel 清空某模型的全部能力声明（「从目录刷新」整体覆盖前置）。
 DELETE FROM model_capabilities
 WHERE model_id = sqlc.arg(model_id);
-
--- name: ListAllModelCapabilityKeys :many
--- ListAllModelCapabilityKeys 列出全部模型已声明的 (模型, 能力) 对（能力自动校正判定「已声明」用）。
-SELECT model_id, capability_key
-FROM model_capabilities
-ORDER BY model_id ASC, capability_key ASC;

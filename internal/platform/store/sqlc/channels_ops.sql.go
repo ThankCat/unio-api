@@ -176,24 +176,24 @@ SELECT
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
     EXISTS (
         SELECT 1 FROM channel_prices p
-        WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
+        WHERE p.channel_id = $1 AND p.model_id = cm.model_id AND p.status = 'enabled'
     ) AS has_price
 FROM channel_models cm
 JOIN models m ON m.id = cm.model_id
 LEFT JOIN request_attempts a
     ON a.channel_id = cm.channel_id
     AND a.upstream_model = cm.upstream_model
-    AND ($1::timestamptz IS NULL OR a.created_at >= $1::timestamptz)
-    AND ($2::timestamptz IS NULL OR a.created_at < $2::timestamptz)
-WHERE cm.channel_id = $3
+    AND ($2::timestamptz IS NULL OR a.created_at >= $2::timestamptz)
+    AND ($3::timestamptz IS NULL OR a.created_at < $3::timestamptz)
+WHERE cm.channel_id = $1
 GROUP BY cm.model_id, m.model_id, m.display_name, cm.upstream_model, cm.status
 ORDER BY attempt_total DESC, m.model_id
 `
 
 type ChannelOpsModelsParams struct {
+	ChannelID int64
 	FromTime  pgtype.Timestamptz
 	ToTime    pgtype.Timestamptz
-	ChannelID int64
 }
 
 type ChannelOpsModelsRow struct {
@@ -211,7 +211,7 @@ type ChannelOpsModelsRow struct {
 // ChannelOpsModels 单渠道绑定模型 + attempt 指标（抽屉模型 Tab，完整列 §1.8）。
 // attempt 无 model_id，按 upstream_model 关联绑定。
 func (q *Queries) ChannelOpsModels(ctx context.Context, arg ChannelOpsModelsParams) ([]ChannelOpsModelsRow, error) {
-	rows, err := q.db.Query(ctx, channelOpsModels, arg.FromTime, arg.ToTime, arg.ChannelID)
+	rows, err := q.db.Query(ctx, channelOpsModels, arg.ChannelID, arg.FromTime, arg.ToTime)
 	if err != nil {
 		return nil, err
 	}
