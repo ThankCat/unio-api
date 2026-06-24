@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/service/admin/dashboard"
 )
 
@@ -408,32 +407,40 @@ type performanceSeriesDTO struct {
 	Points   []performancePointDTO `json:"points"`
 }
 
-// rangePreset 解析 ?range=24h|3d|7d|30d|all，返回 [from,to) 与建议时间桶。
-// all → from 零值（不过滤）；缺省 24h。
-func rangePreset(r *http.Request) (from, to time.Time, interval string, err error) {
+// rangeWindow 解析概览类端点的时间窗口：?range=all → 不限（from 零值）；
+// 否则用 from/to（RFC3339，半开区间，缺省近 24h，前端 useRangeQuery 直接透传）。
+// interval 由跨度推导（≤ 8 天 → hour，否则 day），可被 ?interval= 覆盖。
+func rangeWindow(r *http.Request) (from, to time.Time, interval string, err error) {
 	to = time.Now()
-	switch queryString(r, "range") {
-	case "", "24h":
-		return to.Add(-24 * time.Hour), to, dashboard.IntervalHour, nil
-	case "3d":
-		return to.Add(-3 * 24 * time.Hour), to, dashboard.IntervalHour, nil
-	case "7d":
-		return to.Add(-7 * 24 * time.Hour), to, dashboard.IntervalDay, nil
-	case "30d":
-		return to.Add(-30 * 24 * time.Hour), to, dashboard.IntervalDay, nil
-	case "all":
+	if queryString(r, "range") == "all" {
 		return time.Time{}, to, dashboard.IntervalDay, nil
-	default:
-		return time.Time{}, time.Time{}, "", failure.New(
-			failure.CodeAdminInvalidArgument,
-			failure.WithMessage("range must be one of 24h|3d|7d|30d|all"),
-			failure.WithField("field", "range"),
-		)
 	}
+
+	fromPtr, err := optionalTimeQuery(r, "from")
+	if err != nil {
+		return time.Time{}, time.Time{}, "", err
+	}
+	toPtr, err := optionalTimeQuery(r, "to")
+	if err != nil {
+		return time.Time{}, time.Time{}, "", err
+	}
+	if toPtr != nil {
+		to = *toPtr
+	}
+	from = to.Add(-24 * time.Hour)
+	if fromPtr != nil {
+		from = *fromPtr
+	}
+
+	interval = dashboard.IntervalHour
+	if to.Sub(from) > 8*24*time.Hour {
+		interval = dashboard.IntervalDay
+	}
+	return from, to, interval, nil
 }
 
 func (h *dashboardHandler) radar(w http.ResponseWriter, r *http.Request) {
-	from, to, _, err := rangePreset(r)
+	from, to, _, err := rangeWindow(r)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -450,7 +457,7 @@ func (h *dashboardHandler) radar(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *dashboardHandler) breakdown(w http.ResponseWriter, r *http.Request) {
-	from, to, _, err := rangePreset(r)
+	from, to, _, err := rangeWindow(r)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -476,7 +483,7 @@ func (h *dashboardHandler) breakdown(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *dashboardHandler) performanceTimeseries(w http.ResponseWriter, r *http.Request) {
-	from, to, interval, err := rangePreset(r)
+	from, to, interval, err := rangeWindow(r)
 	if err != nil {
 		writeServiceError(w, err)
 		return
