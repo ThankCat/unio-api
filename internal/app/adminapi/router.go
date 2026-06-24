@@ -21,6 +21,7 @@ type RouterDeps struct {
 	AdminAuthenticator middleware.AdminAuthenticator
 
 	ProviderService     ProviderService
+	ProviderOpsService  ProviderOpsService
 	ChannelService      ChannelService
 	ChannelOpsService   ChannelOpsService
 	ModelService        ModelService
@@ -94,6 +95,16 @@ func NewRouter(deps RouterDeps) http.Handler {
 
 		// ping 是受保护探针：用于校验 admin token 是否有效（认证后回 200）。
 		r.Get("/ping", handlePing)
+
+		// §3.2 服务商聚合视图：静态 /providers/ops 必须在 /providers/{id} 之前注册。
+		if deps.ProviderOpsService != nil {
+			poh := &providerOpsHandler{service: deps.ProviderOpsService}
+			r.Get("/providers/ops", poh.table)
+			r.Get("/providers/{id}/ops/detail", poh.detail)
+			r.Get("/providers/{id}/ops/channels", poh.channels)
+			r.Get("/providers/{id}/ops/performance", poh.performance)
+			r.Get("/providers/{id}/ops/errors", poh.errors)
+		}
 
 		if deps.ProviderService != nil {
 			ph := &providersHandler{service: deps.ProviderService}

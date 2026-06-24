@@ -26,6 +26,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/admin/model"
 	modelcatalogadmin "github.com/ThankCat/unio-api/internal/service/admin/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/service/admin/provider"
+	"github.com/ThankCat/unio-api/internal/service/admin/providerops"
 	"github.com/ThankCat/unio-api/internal/service/admin/query"
 	adminroute "github.com/ThankCat/unio-api/internal/service/admin/route"
 )
@@ -102,6 +103,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	queries := sqlc.New(deps.DB)
 
 	providerService := provider.NewService(queries)
+	providerOpsService := providerops.NewService(queries)
 	channelService := channel.NewService(queries, cipher, adapterRegistry)
 	channelOpsService := channelops.NewService(queries)
 	modelService := model.NewService(queries)
@@ -149,6 +151,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		Logger:              deps.Logger,
 		Authenticator:       authenticator,
 		ProviderService:     providerService,
+		ProviderOpsService:  providerOpsService,
 		ChannelService:      channelService,
 		ChannelOpsService:   channelOpsService,
 		ModelService:        modelService,

@@ -15,6 +15,7 @@ type adminHTTPDeps struct {
 	Authenticator middleware.AdminAuthenticator
 
 	ProviderService     adminapi.ProviderService
+	ProviderOpsService  adminapi.ProviderOpsService
 	ChannelService      adminapi.ChannelService
 	ChannelOpsService   adminapi.ChannelOpsService
 	ModelService        adminapi.ModelService
@@ -51,6 +52,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		Logger:              deps.Logger,
 		AdminAuthenticator:  deps.Authenticator,
 		ProviderService:     deps.ProviderService,
+		ProviderOpsService:  deps.ProviderOpsService,
 		ChannelService:      deps.ChannelService,
 		ChannelOpsService:   deps.ChannelOpsService,
 		ModelService:        deps.ModelService,

@@ -1,0 +1,235 @@
+package adminapi
+
+import (
+	"context"
+	"net/http"
+	"time"
+
+	"github.com/ThankCat/unio-api/internal/service/admin/providerops"
+)
+
+// ProviderOpsService 定义服务商聚合视图（§3.2）只读运维聚合所需能力。
+type ProviderOpsService interface {
+	Table(ctx context.Context, p providerops.TableParams) ([]providerops.Row, int64, error)
+	Detail(ctx context.Context, providerID int64, from, to time.Time) (providerops.Detail, error)
+	Channels(ctx context.Context, providerID int64, from, to time.Time) ([]providerops.ChannelRow, error)
+	PerformanceTimeseries(ctx context.Context, providerID int64, interval string, from, to time.Time) ([]providerops.PerfPoint, error)
+	Errors(ctx context.Context, providerID int64, from, to time.Time, limit, offset int32) ([]providerops.ErrorRow, int64, error)
+}
+
+type providerOpsHandler struct {
+	service ProviderOpsService
+}
+
+type providerOpsRowDTO struct {
+	ID               int64   `json:"id"`
+	Slug             string  `json:"slug"`
+	Name             string  `json:"name"`
+	Status           string  `json:"status"`
+	ChannelTotal     int64   `json:"channel_total"`
+	ChannelEnabled   int64   `json:"channel_enabled"`
+	AttemptTotal     int64   `json:"attempt_total"`
+	AttemptSucceeded int64   `json:"attempt_succeeded"`
+	SuccessRate      float64 `json:"success_rate"`
+	TimeoutTotal     int64   `json:"timeout_total"`
+	LatencyP95       float64 `json:"latency_p95"`
+	Health           string  `json:"health"`
+	LastSuccessAt    *string `json:"last_success_at"`
+}
+
+type providerOpsDetailDTO struct {
+	ChannelTotal     int64   `json:"channel_total"`
+	ChannelEnabled   int64   `json:"channel_enabled"`
+	AttemptTotal     int64   `json:"attempt_total"`
+	AttemptSucceeded int64   `json:"attempt_succeeded"`
+	SuccessRate      float64 `json:"success_rate"`
+	TimeoutTotal     int64   `json:"timeout_total"`
+	LatencyP50       float64 `json:"latency_p50"`
+	LatencyP95       float64 `json:"latency_p95"`
+}
+
+type providerOpsChannelDTO struct {
+	ID               int64   `json:"id"`
+	Name             string  `json:"name"`
+	BaseURL          string  `json:"base_url"`
+	Status           string  `json:"status"`
+	AttemptTotal     int64   `json:"attempt_total"`
+	AttemptSucceeded int64   `json:"attempt_succeeded"`
+	SuccessRate      float64 `json:"success_rate"`
+	LatencyP95       float64 `json:"latency_p95"`
+	Health           string  `json:"health"`
+}
+
+type providerOpsPerfPointDTO struct {
+	Bucket           string  `json:"bucket"`
+	AttemptTotal     int64   `json:"attempt_total"`
+	AttemptSucceeded int64   `json:"attempt_succeeded"`
+	LatencyP95       float64 `json:"latency_p95"`
+}
+
+type providerOpsErrorDTO struct {
+	At                 string `json:"at"`
+	ChannelName        string `json:"channel_name"`
+	UpstreamModel      string `json:"upstream_model"`
+	ErrorCode          string `json:"error_code"`
+	UpstreamStatusCode *int32 `json:"upstream_status_code"`
+	RequestID          string `json:"request_id"`
+}
+
+func (h *providerOpsHandler) table(w http.ResponseWriter, r *http.Request) {
+	from, to, _, err := rangeWindow(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	page := parsePage(r)
+	rows, total, err := h.service.Table(r.Context(), providerops.TableParams{
+		From:   from,
+		To:     to,
+		Status: listStatus(r),
+		Search: queryString(r, "search"),
+		Limit:  page.Limit(),
+		Offset: page.Offset(),
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	out := make([]providerOpsRowDTO, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, providerOpsRowDTO{
+			ID:               row.ID,
+			Slug:             row.Slug,
+			Name:             row.Name,
+			Status:           row.Status,
+			ChannelTotal:     row.ChannelTotal,
+			ChannelEnabled:   row.ChannelEnabled,
+			AttemptTotal:     row.AttemptTotal,
+			AttemptSucceeded: row.AttemptSucceeded,
+			SuccessRate:      row.SuccessRate,
+			TimeoutTotal:     row.TimeoutTotal,
+			LatencyP95:       row.LatencyP95,
+			Health:           row.HealthBucket,
+			LastSuccessAt:    rfc3339Ptr(row.LastSuccessAt),
+		})
+	}
+	writeList(w, http.StatusOK, out, page, total)
+}
+
+func (h *providerOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	from, to, _, err := rangeWindow(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	d, err := h.service.Detail(r.Context(), id, from, to)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, providerOpsDetailDTO{
+		ChannelTotal:     d.ChannelTotal,
+		ChannelEnabled:   d.ChannelEnabled,
+		AttemptTotal:     d.AttemptTotal,
+		AttemptSucceeded: d.AttemptSucceeded,
+		SuccessRate:      d.SuccessRate,
+		TimeoutTotal:     d.TimeoutTotal,
+		LatencyP50:       d.LatencyP50,
+		LatencyP95:       d.LatencyP95,
+	})
+}
+
+func (h *providerOpsHandler) channels(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	from, to, _, err := rangeWindow(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	rows, err := h.service.Channels(r.Context(), id, from, to)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	out := make([]providerOpsChannelDTO, 0, len(rows))
+	for _, c := range rows {
+		out = append(out, providerOpsChannelDTO{
+			ID:               c.ID,
+			Name:             c.Name,
+			BaseURL:          c.BaseURL,
+			Status:           c.Status,
+			AttemptTotal:     c.AttemptTotal,
+			AttemptSucceeded: c.AttemptSucceeded,
+			SuccessRate:      c.SuccessRate,
+			LatencyP95:       c.LatencyP95,
+			Health:           c.HealthBucket,
+		})
+	}
+	writeData(w, http.StatusOK, out)
+}
+
+func (h *providerOpsHandler) performance(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	from, to, interval, err := rangeWindow(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	if q := queryString(r, "interval"); q != "" {
+		interval = q
+	}
+	points, err := h.service.PerformanceTimeseries(r.Context(), id, interval, from, to)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	out := make([]providerOpsPerfPointDTO, 0, len(points))
+	for _, p := range points {
+		out = append(out, providerOpsPerfPointDTO{Bucket: rfc3339(p.Bucket), AttemptTotal: p.AttemptTotal, AttemptSucceeded: p.AttemptSucceeded, LatencyP95: p.LatencyP95})
+	}
+	writeData(w, http.StatusOK, out)
+}
+
+func (h *providerOpsHandler) errors(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	from, to, _, err := rangeWindow(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	page := parsePage(r)
+	rows, total, err := h.service.Errors(r.Context(), id, from, to, page.Limit(), page.Offset())
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	out := make([]providerOpsErrorDTO, 0, len(rows))
+	for _, e := range rows {
+		out = append(out, providerOpsErrorDTO{
+			At:                 rfc3339(e.At),
+			ChannelName:        e.ChannelName,
+			UpstreamModel:      e.UpstreamModel,
+			ErrorCode:          e.ErrorCode,
+			UpstreamStatusCode: e.UpstreamStatusCode,
+			RequestID:          e.RequestID,
+		})
+	}
+	writeList(w, http.StatusOK, out, page, total)
+}
