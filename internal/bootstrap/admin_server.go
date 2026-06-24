@@ -30,6 +30,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/admin/providerops"
 	"github.com/ThankCat/unio-api/internal/service/admin/query"
 	adminroute "github.com/ThankCat/unio-api/internal/service/admin/route"
+	"github.com/ThankCat/unio-api/internal/service/admin/routeops"
 )
 
 // AdminServerAppDB 定义 admin server app 构建时需要的数据库能力。
@@ -112,6 +113,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	channelModelService := channelmodel.NewService(queries)
 	channelPriceService := channelprice.NewService(queries)
 	routeService := adminroute.NewService(deps.DB, queries)
+	routeOpsService := routeops.NewService(queries)
 
 	// M6 只读查询台：请求记录 / 用量 / 账本，三个只读 service 共用同一 sqlc Queries。
 	requestQueryService := query.NewRequestService(queries)
@@ -161,6 +163,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		ChannelModelService: channelModelService,
 		ChannelPriceService: channelPriceService,
 		RouteService:        routeService,
+		RouteOpsService:     routeOpsService,
 		RequestQueryService: requestQueryService,
 		UsageQueryService:   usageQueryService,
 		LedgerQueryService:  ledgerQueryService,

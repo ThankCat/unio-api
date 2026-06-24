@@ -34,6 +34,11 @@ func TextNarg(s string) pgtype.Text {
 	return pgtype.Text{String: s, Valid: true}
 }
 
+// Int8Arg 构造非空 pgtype.Int8（用于必填 bigint 参数被 sqlc 推断为 nullable 的场景）。
+func Int8Arg(v int64) pgtype.Int8 {
+	return pgtype.Int8{Int64: v, Valid: true}
+}
+
 // Int8Narg 把 nil 转成 SQL NULL（不过滤）。
 func Int8Narg(p *int64) pgtype.Int8 {
 	if p == nil {

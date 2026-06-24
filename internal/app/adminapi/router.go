@@ -31,6 +31,7 @@ type RouterDeps struct {
 	// 阶段 15：渠道-模型价（售价+成本合并）+ 线路（渠道商品）。
 	ChannelPriceService ChannelPriceService
 	RouteService        RouteService
+	RouteOpsService     RouteOpsService
 
 	// M6 只读查询台
 	RequestQueryService RequestQueryService
@@ -158,6 +159,19 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Get("/channels/{id}/prices", cph.list)
 			r.Post("/channels/{id}/models/{modelId}/prices", cph.create)
 			r.Patch("/channel-prices/{id}", cph.update)
+		}
+
+		// §3.5 线路路由作战台：静态 /routes/ops 必须在 /routes/{id} 之前注册。
+		if deps.RouteOpsService != nil {
+			roh := &routeOpsHandler{service: deps.RouteOpsService}
+			r.Get("/routes/ops/summary", roh.summary)
+			r.Get("/routes/ops", roh.table)
+			r.Get("/routes/{id}/ops/detail", roh.detail)
+			r.Get("/routes/{id}/ops/channel-pool", roh.channelPool)
+			r.Get("/routes/{id}/ops/bindings", roh.bindings)
+			r.Get("/routes/{id}/ops/performance", roh.performance)
+			r.Get("/routes/{id}/ops/models", roh.models)
+			r.Get("/routes/{id}/ops/requests", roh.requests)
 		}
 
 		if deps.RouteService != nil {
