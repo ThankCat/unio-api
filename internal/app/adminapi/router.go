@@ -39,10 +39,11 @@ type RouterDeps struct {
 	LedgerQueryService  LedgerQueryService
 
 	// M7 客户管理：用户/项目（工作空间）/API Key（费用上限）/手工调额
-	UserService       UserService
-	ProjectService    ProjectService
-	APIKeyService     APIKeyService
-	AdjustmentService AdjustmentService
+	UserService        UserService
+	ProjectService     ProjectService
+	APIKeyService      APIKeyService
+	AdjustmentService  AdjustmentService
+	CustomerOpsService CustomerOpsService
 
 	// M5 能力管理：模型能力 CRUD、models.dev 同步、adapter 画像（能力闸门已移除，DEC-024）
 	CapabilityService     CapabilityService
@@ -234,6 +235,19 @@ func NewRouter(deps RouterDeps) http.Handler {
 			lh := &ledgerHandler{service: deps.LedgerQueryService}
 			r.Get("/ledger/entries", lh.listEntries)
 			r.Get("/ledger/billing-exceptions", lh.listBillingExceptions)
+		}
+
+		// §3.7 客户中心只读运维聚合：静态 ops 路径在 {id} 之前注册。
+		if deps.CustomerOpsService != nil {
+			cuh := &customerOpsHandler{service: deps.CustomerOpsService}
+			r.Get("/users/ops/summary", cuh.usersSummary)
+			r.Get("/users/ops", cuh.usersTable)
+			r.Get("/users/{id}/ops/detail", cuh.userDetail)
+			r.Get("/users/{id}/ops/keys", cuh.userKeys)
+			r.Get("/projects/ops/summary", cuh.projectsSummary)
+			r.Get("/projects/ops", cuh.projectsTable)
+			r.Get("/projects/{id}/api-keys/ops/summary", cuh.apiKeysSummary)
+			r.Get("/projects/{id}/api-keys/ops", cuh.apiKeysTable)
 		}
 
 		// M7 客户管理：用户、项目（工作空间）、API Key（费用上限）、手工调额。

@@ -29,10 +29,11 @@ type adminHTTPDeps struct {
 	UsageQueryService   adminapi.UsageQueryService
 	LedgerQueryService  adminapi.LedgerQueryService
 
-	UserService       adminapi.UserService
-	ProjectService    adminapi.ProjectService
-	APIKeyService     adminapi.APIKeyService
-	AdjustmentService adminapi.AdjustmentService
+	UserService        adminapi.UserService
+	ProjectService     adminapi.ProjectService
+	APIKeyService      adminapi.APIKeyService
+	AdjustmentService  adminapi.AdjustmentService
+	CustomerOpsService adminapi.CustomerOpsService
 
 	CapabilityService     adminapi.CapabilityService
 	CapabilitySyncService adminapi.CapabilitySyncService
@@ -70,6 +71,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		ProjectService:      deps.ProjectService,
 		APIKeyService:       deps.APIKeyService,
 		AdjustmentService:   deps.AdjustmentService,
+		CustomerOpsService:  deps.CustomerOpsService,
 
 		CapabilityService:     deps.CapabilityService,
 		CapabilitySyncService: deps.CapabilitySyncService,

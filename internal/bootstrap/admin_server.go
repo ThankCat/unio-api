@@ -22,6 +22,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/admin/channelops"
 	"github.com/ThankCat/unio-api/internal/service/admin/channelprice"
 	"github.com/ThankCat/unio-api/internal/service/admin/customer"
+	"github.com/ThankCat/unio-api/internal/service/admin/customerops"
 	"github.com/ThankCat/unio-api/internal/service/admin/dashboard"
 	"github.com/ThankCat/unio-api/internal/service/admin/model"
 	modelcatalogadmin "github.com/ThankCat/unio-api/internal/service/admin/modelcatalog"
@@ -126,6 +127,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	projectService := customer.NewProjectService(queries)
 	apiKeyService := customer.NewAPIKeyService(queries)
 	adjustmentService := customer.NewAdjustmentService(ledgerService)
+	customerOpsService := customerops.NewService(queries)
 
 	// M5 能力管理：能力数据 CRUD / models.dev 同步 / adapter 画像物化 / enforce 只读。
 	// capability store 复用 core 层（写入前做 key 注册表 + 支持级别校验，渠道层只能减）。
@@ -171,6 +173,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		ProjectService:      projectService,
 		APIKeyService:       apiKeyService,
 		AdjustmentService:   adjustmentService,
+		CustomerOpsService:  customerOpsService,
 
 		CapabilityService:     capabilityService,
 		CapabilitySyncService: capabilitySyncService,
