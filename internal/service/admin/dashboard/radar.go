@@ -22,26 +22,41 @@ const (
 )
 
 // LatencyStats 是延迟分位画像（毫秒）。
+// Sample = 区间内测到延迟（成功且 completed_at 非空）的请求数；
+// Coverage = Sample / 成功请求，反映平均/分位的代表性。
 type LatencyStats struct {
-	Avg float64
-	P50 float64
-	P90 float64
-	P95 float64
-	P99 float64
+	Avg      float64
+	P50      float64
+	P90      float64
+	P95      float64
+	P99      float64
+	Sample   int64
+	Coverage float64
 }
 
-// TtftStats 是首 token 时间分位画像（毫秒）。首版多为空（gateway 未写 response_started_at，见决策 D-011）。
+// TtftStats 是首 token 时间画像（毫秒）。
+// Sample = 区间内测到首 token（response_started_at 非空）的请求数；
+// Coverage = Sample / 区间总请求，反映平均/分位的代表性。
 type TtftStats struct {
-	P50     float64
-	P95     float64
-	HasData bool
+	Avg      float64
+	P50      float64
+	P90      float64
+	P95      float64
+	P99      float64
+	Sample   int64
+	Coverage float64
+	HasData  bool
 }
 
-// CacheStats 是缓存命中画像。
+// CacheStats 是缓存命中画像。ReadRate = 缓存命中率 = 缓存重量 / 输入 token。
 type CacheStats struct {
-	ReadRate    float64
-	WriteRate   float64
-	InputTokens int64
+	ReadRate           float64
+	WriteRate          float64
+	InputTokens        int64
+	UncachedTokens     int64
+	CacheReadTokens    int64
+	CacheWrite5mTokens int64
+	CacheWrite1hTokens int64
 }
 
 // SettlementBacklog 是结算补偿积压（时点值）。
@@ -200,8 +215,29 @@ func (s *Service) Radar(ctx context.Context, from, to, statusFrom, statusTo time
 	}
 	report.Timeout = perf.TimeoutTotal
 
-	report.Latency = LatencyStats{Avg: perf.LatencyAvg, P50: perf.LatencyP50, P90: perf.LatencyP90, P95: perf.LatencyP95, P99: perf.LatencyP99}
-	report.Ttft = TtftStats{P50: perf.TtftP50, P95: perf.TtftP95, HasData: perf.TtftP95 > 0 || perf.TtftP50 > 0}
+	report.Latency = LatencyStats{
+		Avg:    perf.LatencyAvg,
+		P50:    perf.LatencyP50,
+		P90:    perf.LatencyP90,
+		P95:    perf.LatencyP95,
+		P99:    perf.LatencyP99,
+		Sample: perf.LatencySample,
+	}
+	if perf.SucceededTotal > 0 {
+		report.Latency.Coverage = float64(perf.LatencySample) / float64(perf.SucceededTotal)
+	}
+	report.Ttft = TtftStats{
+		Avg:     perf.TtftAvg,
+		P50:     perf.TtftP50,
+		P90:     perf.TtftP90,
+		P95:     perf.TtftP95,
+		P99:     perf.TtftP99,
+		Sample:  perf.TtftSample,
+		HasData: perf.TtftSample > 0,
+	}
+	if report.Requests.Total > 0 {
+		report.Ttft.Coverage = float64(perf.TtftSample) / float64(report.Requests.Total)
+	}
 
 	if tp.GenerationSeconds > 0 {
 		report.TPS = float64(tp.OutputTokens) / tp.GenerationSeconds
@@ -212,9 +248,16 @@ func (s *Service) Radar(ctx context.Context, from, to, statusFrom, statusTo time
 		Output: tok.OutputTokens,
 	}
 	report.Tokens.Total = report.Tokens.Input + report.Tokens.Output
-	report.Cache = CacheStats{InputTokens: report.Tokens.Input}
+	report.Cache = CacheStats{
+		InputTokens:        report.Tokens.Input,
+		UncachedTokens:     tok.UncachedInput,
+		CacheReadTokens:    tok.CacheReadInput,
+		CacheWrite5mTokens: tok.CacheWrite5mInput,
+		CacheWrite1hTokens: tok.CacheWrite1hInput,
+	}
 	if report.Tokens.Input > 0 {
-		report.Cache.ReadRate = float64(tok.CacheReadInput) / float64(report.Tokens.Input)
+		cacheWeight := tok.CacheReadInput + tok.CacheWriteInput
+		report.Cache.ReadRate = float64(cacheWeight) / float64(report.Tokens.Input)
 		report.Cache.WriteRate = float64(tok.CacheWriteInput) / float64(report.Tokens.Input)
 	}
 

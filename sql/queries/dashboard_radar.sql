@@ -19,8 +19,13 @@ SELECT
     COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY lat_ms), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY lat_ms), 0)::float8 AS latency_p95,
     COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY lat_ms), 0)::float8 AS latency_p99,
+    COUNT(lat_ms) AS latency_sample,
+    COALESCE(AVG(ttft_ms), 0)::float8 AS ttft_avg,
     COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p50,
-    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p95
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p90,
+    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p99,
+    COUNT(ttft_ms) AS ttft_sample
 FROM (
     SELECT
         status,
@@ -56,10 +61,12 @@ WHERE r.status = 'succeeded'
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz);
 
 -- name: DashboardRadarTokens :one
--- DashboardRadarTokens 在区间内汇总 token 分项（供缓存读取率/写入率与 token 总量卡）。
+-- DashboardRadarTokens 在区间内汇总 token 分项（供缓存命中率与 token 总量卡）。
 SELECT
     COALESCE(SUM(uncached_input_tokens), 0)::bigint AS uncached_input,
     COALESCE(SUM(cache_read_input_tokens), 0)::bigint AS cache_read_input,
+    COALESCE(SUM(cache_write_5m_input_tokens), 0)::bigint AS cache_write_5m_input,
+    COALESCE(SUM(cache_write_1h_input_tokens), 0)::bigint AS cache_write_1h_input,
     COALESCE(SUM(cache_write_5m_input_tokens + cache_write_1h_input_tokens), 0)::bigint AS cache_write_input,
     COALESCE(SUM(output_tokens_total), 0)::bigint AS output_tokens
 FROM usage_records

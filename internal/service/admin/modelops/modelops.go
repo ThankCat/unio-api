@@ -240,7 +240,7 @@ func (s *Service) Detail(ctx context.Context, modelID int64, from, to time.Time)
 		InputTokens:      r.InputTokens,
 	}
 	if r.InputTokens > 0 {
-		d.CacheReadRate = float64(r.CacheReadTokens) / float64(r.InputTokens)
+		d.CacheReadRate = float64(r.CacheReadTokens+r.CacheWriteTokens) / float64(r.InputTokens)
 	}
 	if r.GenerationSeconds > 0 {
 		d.TPS = float64(r.OutputTokens) / r.GenerationSeconds

@@ -325,8 +325,13 @@ SELECT
     COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY lat_ms), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY lat_ms), 0)::float8 AS latency_p95,
     COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY lat_ms), 0)::float8 AS latency_p99,
+    COUNT(lat_ms) AS latency_sample,
+    COALESCE(AVG(ttft_ms), 0)::float8 AS ttft_avg,
     COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p50,
-    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p95
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p90,
+    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p99,
+    COUNT(ttft_ms) AS ttft_sample
 FROM (
     SELECT
         status,
@@ -362,8 +367,13 @@ type DashboardRadarRequestPerfRow struct {
 	LatencyP90     float64
 	LatencyP95     float64
 	LatencyP99     float64
+	LatencySample  int64
+	TtftAvg        float64
 	TtftP50        float64
+	TtftP90        float64
 	TtftP95        float64
+	TtftP99        float64
+	TtftSample     int64
 }
 
 // M9+ 概览运营雷达（§3.1 重构）只读聚合。全部纯只读、不引入新业务事实。
@@ -390,8 +400,13 @@ func (q *Queries) DashboardRadarRequestPerf(ctx context.Context, arg DashboardRa
 		&i.LatencyP90,
 		&i.LatencyP95,
 		&i.LatencyP99,
+		&i.LatencySample,
+		&i.TtftAvg,
 		&i.TtftP50,
+		&i.TtftP90,
 		&i.TtftP95,
+		&i.TtftP99,
+		&i.TtftSample,
 	)
 	return i, err
 }
@@ -492,6 +507,8 @@ const dashboardRadarTokens = `-- name: DashboardRadarTokens :one
 SELECT
     COALESCE(SUM(uncached_input_tokens), 0)::bigint AS uncached_input,
     COALESCE(SUM(cache_read_input_tokens), 0)::bigint AS cache_read_input,
+    COALESCE(SUM(cache_write_5m_input_tokens), 0)::bigint AS cache_write_5m_input,
+    COALESCE(SUM(cache_write_1h_input_tokens), 0)::bigint AS cache_write_1h_input,
     COALESCE(SUM(cache_write_5m_input_tokens + cache_write_1h_input_tokens), 0)::bigint AS cache_write_input,
     COALESCE(SUM(output_tokens_total), 0)::bigint AS output_tokens
 FROM usage_records
@@ -505,19 +522,23 @@ type DashboardRadarTokensParams struct {
 }
 
 type DashboardRadarTokensRow struct {
-	UncachedInput   int64
-	CacheReadInput  int64
-	CacheWriteInput int64
-	OutputTokens    int64
+	UncachedInput     int64
+	CacheReadInput    int64
+	CacheWrite5mInput int64
+	CacheWrite1hInput int64
+	CacheWriteInput   int64
+	OutputTokens      int64
 }
 
-// DashboardRadarTokens 在区间内汇总 token 分项（供缓存读取率/写入率与 token 总量卡）。
+// DashboardRadarTokens 在区间内汇总 token 分项（供缓存命中率与 token 总量卡）。
 func (q *Queries) DashboardRadarTokens(ctx context.Context, arg DashboardRadarTokensParams) (DashboardRadarTokensRow, error) {
 	row := q.db.QueryRow(ctx, dashboardRadarTokens, arg.FromTime, arg.ToTime)
 	var i DashboardRadarTokensRow
 	err := row.Scan(
 		&i.UncachedInput,
 		&i.CacheReadInput,
+		&i.CacheWrite5mInput,
+		&i.CacheWrite1hInput,
 		&i.CacheWriteInput,
 		&i.OutputTokens,
 	)

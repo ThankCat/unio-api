@@ -104,6 +104,7 @@ SELECT
     COALESCE(SUM(u.output_tokens_total) FILTER (WHERE r.status = 'succeeded'), 0)::bigint AS output_tokens,
     COALESCE(SUM(u.uncached_input_tokens + u.cache_read_input_tokens + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens), 0)::bigint AS input_tokens,
     COALESCE(SUM(u.cache_read_input_tokens), 0)::bigint AS cache_read_tokens,
+    COALESCE(SUM(u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens), 0)::bigint AS cache_write_tokens,
     COALESCE(SUM(
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
              THEN EXTRACT(EPOCH FROM (r.completed_at - COALESCE(r.response_started_at, r.started_at))) END
@@ -130,6 +131,7 @@ type ModelOpsDetailRow struct {
 	OutputTokens      int64
 	InputTokens       int64
 	CacheReadTokens   int64
+	CacheWriteTokens  int64
 	GenerationSeconds float64
 }
 
@@ -145,6 +147,7 @@ func (q *Queries) ModelOpsDetail(ctx context.Context, arg ModelOpsDetailParams) 
 		&i.OutputTokens,
 		&i.InputTokens,
 		&i.CacheReadTokens,
+		&i.CacheWriteTokens,
 		&i.GenerationSeconds,
 	)
 	return i, err

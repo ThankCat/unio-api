@@ -303,23 +303,34 @@ type platformStatusDTO struct {
 }
 
 type latencyStatsDTO struct {
-	Avg float64 `json:"avg"`
-	P50 float64 `json:"p50"`
-	P90 float64 `json:"p90"`
-	P95 float64 `json:"p95"`
-	P99 float64 `json:"p99"`
+	Avg      float64 `json:"avg"`
+	P50      float64 `json:"p50"`
+	P90      float64 `json:"p90"`
+	P95      float64 `json:"p95"`
+	P99      float64 `json:"p99"`
+	Sample   int64   `json:"sample"`
+	Coverage float64 `json:"coverage"`
 }
 
 type ttftStatsDTO struct {
-	P50     float64 `json:"p50"`
-	P95     float64 `json:"p95"`
-	HasData bool    `json:"has_data"`
+	Avg      float64 `json:"avg"`
+	P50      float64 `json:"p50"`
+	P90      float64 `json:"p90"`
+	P95      float64 `json:"p95"`
+	P99      float64 `json:"p99"`
+	Sample   int64   `json:"sample"`
+	Coverage float64 `json:"coverage"`
+	HasData  bool    `json:"has_data"`
 }
 
 type cacheStatsDTO struct {
-	ReadRate    float64 `json:"read_rate"`
-	WriteRate   float64 `json:"write_rate"`
-	InputTokens int64   `json:"input_tokens"`
+	ReadRate           float64 `json:"read_rate"`
+	WriteRate          float64 `json:"write_rate"`
+	InputTokens        int64   `json:"input_tokens"`
+	UncachedTokens     int64   `json:"uncached_tokens"`
+	CacheReadTokens    int64   `json:"cache_read_tokens"`
+	CacheWrite5mTokens int64   `json:"cache_write_5m_tokens"`
+	CacheWrite1hTokens int64   `json:"cache_write_1h_tokens"`
 }
 
 type radarRequestsDTO struct {
@@ -535,11 +546,36 @@ func toRadarDTO(r dashboard.RadarReport) radarDTO {
 			ErrorRate:   r.Requests.ErrorRate,
 			Timeout:     r.Timeout,
 		},
-		Latency: latencyStatsDTO{Avg: r.Latency.Avg, P50: r.Latency.P50, P90: r.Latency.P90, P95: r.Latency.P95, P99: r.Latency.P99},
-		Ttft:    ttftStatsDTO{P50: r.Ttft.P50, P95: r.Ttft.P95, HasData: r.Ttft.HasData},
+		Latency: latencyStatsDTO{
+			Avg:      r.Latency.Avg,
+			P50:      r.Latency.P50,
+			P90:      r.Latency.P90,
+			P95:      r.Latency.P95,
+			P99:      r.Latency.P99,
+			Sample:   r.Latency.Sample,
+			Coverage: r.Latency.Coverage,
+		},
+		Ttft: ttftStatsDTO{
+			Avg:      r.Ttft.Avg,
+			P50:      r.Ttft.P50,
+			P90:      r.Ttft.P90,
+			P95:      r.Ttft.P95,
+			P99:      r.Ttft.P99,
+			Sample:   r.Ttft.Sample,
+			Coverage: r.Ttft.Coverage,
+			HasData:  r.Ttft.HasData,
+		},
 		TPS:     r.TPS,
 		Tokens:  dashboardTokensDTO{Input: r.Tokens.Input, Output: r.Tokens.Output, Total: r.Tokens.Total},
-		Cache:   cacheStatsDTO{ReadRate: r.Cache.ReadRate, WriteRate: r.Cache.WriteRate, InputTokens: r.Cache.InputTokens},
+		Cache: cacheStatsDTO{
+			ReadRate:           r.Cache.ReadRate,
+			WriteRate:          r.Cache.WriteRate,
+			InputTokens:        r.Cache.InputTokens,
+			UncachedTokens:     r.Cache.UncachedTokens,
+			CacheReadTokens:    r.Cache.CacheReadTokens,
+			CacheWrite5mTokens: r.Cache.CacheWrite5mTokens,
+			CacheWrite1hTokens: r.Cache.CacheWrite1hTokens,
+		},
 
 		RevenueUSD:        r.RevenueUSD,
 		CostUSD:           r.CostUSD,

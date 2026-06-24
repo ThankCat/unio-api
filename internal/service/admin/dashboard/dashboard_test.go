@@ -128,6 +128,8 @@ func TestRadarAggregates(t *testing.T) {
 		perfRow: sqlc.DashboardRadarRequestPerfRow{
 			TerminalTotal: 100, SucceededTotal: 96, FailedTotal: 3, CanceledTotal: 1, PendingTotal: 5,
 			TimeoutTotal: 2, LatencyAvg: 800, LatencyP50: 700, LatencyP90: 1500, LatencyP95: 1800, LatencyP99: 2500,
+			LatencySample: 96,
+			TtftAvg:       1200, TtftP50: 900, TtftP90: 1500, TtftP95: 1600, TtftP99: 2200, TtftSample: 84,
 		},
 		throughput:   sqlc.DashboardRadarThroughputRow{OutputTokens: 5000, GenerationSeconds: 100},
 		radarTokens:  sqlc.DashboardRadarTokensRow{UncachedInput: 600, CacheReadInput: 300, CacheWriteInput: 100, OutputTokens: 5000},
@@ -157,8 +159,23 @@ func TestRadarAggregates(t *testing.T) {
 	if out.TPS != 50 { // 5000 / 100
 		t.Fatalf("tps = %v, want 50", out.TPS)
 	}
-	if out.Cache.ReadRate < 0.29 || out.Cache.ReadRate > 0.31 { // 300/1000
-		t.Fatalf("cache read rate = %v, want ~0.3", out.Cache.ReadRate)
+	if out.Cache.ReadRate < 0.39 || out.Cache.ReadRate > 0.41 { // (300+100)/1000
+		t.Fatalf("cache hit rate = %v, want ~0.4", out.Cache.ReadRate)
+	}
+	if out.Latency.Sample != 96 {
+		t.Fatalf("latency sample = %d, want 96", out.Latency.Sample)
+	}
+	if out.Latency.Coverage != 1 { // 96/96 succeeded
+		t.Fatalf("latency coverage = %v, want 1", out.Latency.Coverage)
+	}
+	if !out.Ttft.HasData || out.Ttft.Sample != 84 {
+		t.Fatalf("ttft sample = %d hasData=%v, want 84/true", out.Ttft.Sample, out.Ttft.HasData)
+	}
+	if out.Ttft.P99 != 2200 {
+		t.Fatalf("ttft p99 = %v, want 2200", out.Ttft.P99)
+	}
+	if out.Ttft.Coverage < 0.79 || out.Ttft.Coverage > 0.81 { // 84/105
+		t.Fatalf("ttft coverage = %v, want ~0.8", out.Ttft.Coverage)
 	}
 	if out.MarginUSD != "12" { // 20 - 8
 		t.Fatalf("margin = %q, want 12", out.MarginUSD)
