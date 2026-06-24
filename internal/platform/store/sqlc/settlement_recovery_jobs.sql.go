@@ -458,6 +458,86 @@ func (q *Queries) CreateSettlementRecoveryJob(ctx context.Context, arg CreateSet
 	return i, err
 }
 
+const getDeadSettlementRecoveryJobWithRunningRequest = `-- name: GetDeadSettlementRecoveryJobWithRunningRequest :one
+SELECT j.id, j.user_id, j.request_record_id, j.attempt_id, j.reservation_id, j.response_protocol, j.response_id, j.response_model_id, j.model_id, j.provider_id, j.channel_id, j.upstream_protocol, j.upstream_response_id, j.upstream_model, j.finish_class, j.upstream_finish_reason, j.upstream_status_code, j.upstream_request_id, j.usage_uncached_input_tokens, j.usage_uncached_input_tokens_state, j.usage_cache_read_input_tokens, j.usage_cache_read_input_tokens_state, j.usage_cache_write_5m_input_tokens, j.usage_cache_write_5m_input_tokens_state, j.usage_cache_write_1h_input_tokens, j.usage_cache_write_1h_input_tokens_state, j.usage_output_tokens_total, j.usage_output_tokens_total_state, j.usage_reasoning_output_tokens, j.usage_reasoning_output_tokens_state, j.usage_server_web_search_requests, j.usage_server_web_fetch_requests, j.usage_source, j.usage_mapping_version, j.price_id, j.currency, j.pricing_unit, j.uncached_input_price, j.cache_read_input_price, j.cache_write_5m_input_price, j.cache_write_1h_input_price, j.output_price, j.reasoning_output_price, j.formula_version, j.estimated_amount, j.authorized_amount, j.status, j.attempt_count, j.max_attempts, j.next_run_at, j.locked_by, j.locked_until, j.last_error_code, j.last_error_message, j.last_internal_error_detail, j.last_attempted_at, j.completed_at, j.created_at, j.updated_at
+FROM settlement_recovery_jobs j
+JOIN request_records r ON r.id = j.request_record_id
+WHERE j.status = 'dead'
+  AND r.status = 'running'
+ORDER BY j.id ASC
+LIMIT 1
+`
+
+// GetDeadSettlementRecoveryJobWithRunningRequest 取一条已 dead、但其请求仍停留在 running 的补偿任务，
+// 供 worker 收口：释放冻结余额（记风险敞口）并把请求原子推进到 failed，避免请求永远停在「进行中」。
+// 以「请求仍为 running」为闸门，幂等且可重放（已收口的请求不会再被选中）。
+func (q *Queries) GetDeadSettlementRecoveryJobWithRunningRequest(ctx context.Context) (SettlementRecoveryJob, error) {
+	row := q.db.QueryRow(ctx, getDeadSettlementRecoveryJobWithRunningRequest)
+	var i SettlementRecoveryJob
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RequestRecordID,
+		&i.AttemptID,
+		&i.ReservationID,
+		&i.ResponseProtocol,
+		&i.ResponseID,
+		&i.ResponseModelID,
+		&i.ModelID,
+		&i.ProviderID,
+		&i.ChannelID,
+		&i.UpstreamProtocol,
+		&i.UpstreamResponseID,
+		&i.UpstreamModel,
+		&i.FinishClass,
+		&i.UpstreamFinishReason,
+		&i.UpstreamStatusCode,
+		&i.UpstreamRequestID,
+		&i.UsageUncachedInputTokens,
+		&i.UsageUncachedInputTokensState,
+		&i.UsageCacheReadInputTokens,
+		&i.UsageCacheReadInputTokensState,
+		&i.UsageCacheWrite5mInputTokens,
+		&i.UsageCacheWrite5mInputTokensState,
+		&i.UsageCacheWrite1hInputTokens,
+		&i.UsageCacheWrite1hInputTokensState,
+		&i.UsageOutputTokensTotal,
+		&i.UsageOutputTokensTotalState,
+		&i.UsageReasoningOutputTokens,
+		&i.UsageReasoningOutputTokensState,
+		&i.UsageServerWebSearchRequests,
+		&i.UsageServerWebFetchRequests,
+		&i.UsageSource,
+		&i.UsageMappingVersion,
+		&i.PriceID,
+		&i.Currency,
+		&i.PricingUnit,
+		&i.UncachedInputPrice,
+		&i.CacheReadInputPrice,
+		&i.CacheWrite5mInputPrice,
+		&i.CacheWrite1hInputPrice,
+		&i.OutputPrice,
+		&i.ReasoningOutputPrice,
+		&i.FormulaVersion,
+		&i.EstimatedAmount,
+		&i.AuthorizedAmount,
+		&i.Status,
+		&i.AttemptCount,
+		&i.MaxAttempts,
+		&i.NextRunAt,
+		&i.LockedBy,
+		&i.LockedUntil,
+		&i.LastErrorCode,
+		&i.LastErrorMessage,
+		&i.LastInternalErrorDetail,
+		&i.LastAttemptedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getSettlementRecoveryJobByID = `-- name: GetSettlementRecoveryJobByID :one
 SELECT id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
 FROM settlement_recovery_jobs

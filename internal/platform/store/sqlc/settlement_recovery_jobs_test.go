@@ -231,6 +231,74 @@ func TestSettlementRecoveryJobCreateClaimRetryAndSucceed(t *testing.T) {
 	}
 }
 
+func TestGetDeadSettlementRecoveryJobWithRunningRequest(t *testing.T) {
+	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	fixture := createSettlementRecoveryFixture(t, ctx, tx, queries)
+
+	// 收口查询只命中 r.status='running' 的请求；fixture 默认 pending，先推进到 running。
+	if _, err := queries.MarkRequestRunning(ctx, fixture.request.ID); err != nil {
+		t.Fatalf("mark request running: %v", err)
+	}
+
+	created, err := queries.CreateSettlementRecoveryJob(ctx, settlementRecoveryJobParams(fixture, time.Now().Add(-time.Second)))
+	if err != nil {
+		t.Fatalf("create settlement recovery job: %v", err)
+	}
+
+	// pending 任务不该被收口查询命中（只收口 dead）。
+	if _, err := queries.GetDeadSettlementRecoveryJobWithRunningRequest(ctx); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected no dead job while pending, got %v", err)
+	}
+
+	claimed, err := queries.ClaimNextSettlementRecoveryJob(ctx, sqlc.ClaimNextSettlementRecoveryJobParams{
+		LockedBy:    pgtype.Text{String: "worker-a", Valid: true},
+		LockedUntil: timestamptz(time.Now().Add(time.Minute)),
+		NowAt:       timestamptz(time.Now()),
+	})
+	if err != nil {
+		t.Fatalf("claim recovery job: %v", err)
+	}
+
+	if _, err := queries.MarkSettlementRecoveryJobDead(ctx, sqlc.MarkSettlementRecoveryJobDeadParams{
+		ID:                      claimed.ID,
+		LockedBy:                claimed.LockedBy,
+		LockedUntil:             claimed.LockedUntil,
+		AttemptCount:            claimed.AttemptCount,
+		LastErrorCode:           pgtype.Text{String: "gateway_chat_settlement_failed", Valid: true},
+		LastErrorMessage:        pgtype.Text{String: "Settlement recovery failed.", Valid: true},
+		LastInternalErrorDetail: pgtype.Text{String: "permanent failure", Valid: true},
+		CompletedAt:             timestamptz(time.Now()),
+	}); err != nil {
+		t.Fatalf("mark recovery dead: %v", err)
+	}
+
+	// dead 任务 + 请求仍 running → 命中。
+	got, err := queries.GetDeadSettlementRecoveryJobWithRunningRequest(ctx)
+	if err != nil {
+		t.Fatalf("get dead job with running request: %v", err)
+	}
+	if got.ID != created.ID || got.Status != "dead" {
+		t.Fatalf("expected dead job %d, got id=%d status=%q", created.ID, got.ID, got.Status)
+	}
+
+	// 请求收口为 failed 后不再命中（幂等闸门）。
+	if _, err := queries.MarkRequestFailed(ctx, sqlc.MarkRequestFailedParams{
+		RequestRecordID:     fixture.request.ID,
+		ErrorCode:           pgtype.Text{String: "gateway_chat_settlement_failed", Valid: true},
+		ErrorMessage:        pgtype.Text{String: "Request settlement failed.", Valid: true},
+		InternalErrorDetail: pgtype.Text{Valid: false},
+		CompletedAt:         timestamptz(time.Now()),
+	}); err != nil {
+		t.Fatalf("mark request failed: %v", err)
+	}
+
+	if _, err := queries.GetDeadSettlementRecoveryJobWithRunningRequest(ctx); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected no dead job after request finalized, got %v", err)
+	}
+}
+
 func TestSettlementRecoveryJobRejectsStaleWorkerStateUpdate(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
 	defer cleanup()

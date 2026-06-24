@@ -152,6 +152,18 @@ SELECT *
 FROM settlement_recovery_jobs
 WHERE request_record_id = sqlc.arg(request_record_id);
 
+-- name: GetDeadSettlementRecoveryJobWithRunningRequest :one
+-- GetDeadSettlementRecoveryJobWithRunningRequest 取一条已 dead、但其请求仍停留在 running 的补偿任务，
+-- 供 worker 收口：释放冻结余额（记风险敞口）并把请求原子推进到 failed，避免请求永远停在「进行中」。
+-- 以「请求仍为 running」为闸门，幂等且可重放（已收口的请求不会再被选中）。
+SELECT j.*
+FROM settlement_recovery_jobs j
+JOIN request_records r ON r.id = j.request_record_id
+WHERE j.status = 'dead'
+  AND r.status = 'running'
+ORDER BY j.id ASC
+LIMIT 1;
+
 -- name: GetSettlementRecoveryJobByID :one
 -- GetSettlementRecoveryJobByID 按主键读取单条 recovery job 完整事实（含 last_internal_error_detail）。
 -- 不加锁，仅供 admin 只读详情端点使用；是否回显内部详情由 service/handler 控制（M8）。

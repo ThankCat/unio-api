@@ -225,14 +225,22 @@ func (s *ChatSettlementRecoveryStore) MarkChatSettlementRecoveryJobSucceeded(ctx
 	return nil
 }
 
+// ChatSettlementRecoveryExecutor 是 recovery service 依赖的结算能力：
+// 既能幂等重放成功结算（RecoverChatSettlement 用），也能收口无法恢复的死信补偿任务
+// （worker 把 dead 任务的请求/资金残留收口时用）。由 *ChatSettlementService 实现。
+type ChatSettlementRecoveryExecutor interface {
+	ChatSettlementExecutor
+	FinalizeDeadChatSettlement(ctx context.Context, job sqlc.SettlementRecoveryJob) error
+}
+
 // ChatSettlementRecoveryService 负责把 worker claim 到的 recovery job 重放为正式 settlement。
 type ChatSettlementRecoveryService struct {
 	queries    *sqlc.Queries
-	settlement ChatSettlementExecutor
+	settlement ChatSettlementRecoveryExecutor
 }
 
 // NewChatSettlementRecoveryService 创建 settlement recovery 业务服务。
-func NewChatSettlementRecoveryService(queries *sqlc.Queries, settlement ChatSettlementExecutor) *ChatSettlementRecoveryService {
+func NewChatSettlementRecoveryService(queries *sqlc.Queries, settlement ChatSettlementRecoveryExecutor) *ChatSettlementRecoveryService {
 	if queries == nil {
 		panic("lifecycle: chat settlement recovery queries is required")
 	}
@@ -244,6 +252,11 @@ func NewChatSettlementRecoveryService(queries *sqlc.Queries, settlement ChatSett
 		queries:    queries,
 		settlement: settlement,
 	}
+}
+
+// FinalizeDeadChatSettlement 收口一条已 dead 的补偿任务对应的请求/资金残留，委托给 settlement service。
+func (s *ChatSettlementRecoveryService) FinalizeDeadChatSettlement(ctx context.Context, job sqlc.SettlementRecoveryJob) error {
+	return s.settlement.FinalizeDeadChatSettlement(ctx, job)
 }
 
 // RecoverChatSettlement 使用 recovery job 保存的事实幂等重放一次 chat settlement。

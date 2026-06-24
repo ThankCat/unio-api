@@ -20,6 +20,7 @@ type DashboardService interface {
 	Radar(ctx context.Context, from, to, statusFrom, statusTo time.Time) (dashboard.RadarReport, error)
 	Breakdown(ctx context.Context, dimension string, from, to time.Time) ([]dashboard.BreakdownRow, error)
 	PerformanceTimeseries(ctx context.Context, interval string, from, to time.Time) ([]dashboard.PerformancePoint, error)
+	TopErrors(ctx context.Context, from, to time.Time) ([]dashboard.ErrorGroup, error)
 }
 
 // 概览页时间预设窗口（§3.1）：状态短窗口固定 15 分钟，与页面 range 解耦。
@@ -397,11 +398,24 @@ type breakdownRowDTO struct {
 	Terminal    int64   `json:"terminal"`
 	Succeeded   int64   `json:"succeeded"`
 	SuccessRate float64 `json:"success_rate"`
+	Tokens      int64   `json:"tokens"`
+	CostUSD     string  `json:"cost_usd"`
+	LatencyP95  float64 `json:"latency_p95"`
 }
 
 type breakdownDTO struct {
 	Dimension string            `json:"dimension"`
 	Rows      []breakdownRowDTO `json:"rows"`
+}
+
+type errorGroupDTO struct {
+	Code  string  `json:"code"`
+	Total int64   `json:"total"`
+	Share float64 `json:"share"`
+}
+
+type topErrorsDTO struct {
+	Errors []errorGroupDTO `json:"errors"`
 }
 
 type performancePointDTO struct {
@@ -492,9 +506,30 @@ func (h *dashboardHandler) breakdown(w http.ResponseWriter, r *http.Request) {
 			Terminal:    row.Terminal,
 			Succeeded:   row.Succeeded,
 			SuccessRate: row.SuccessRate,
+			Tokens:      row.Tokens,
+			CostUSD:     row.CostUSD,
+			LatencyP95:  row.LatencyP95,
 		})
 	}
 	writeData(w, http.StatusOK, breakdownDTO{Dimension: dimension, Rows: out})
+}
+
+func (h *dashboardHandler) topErrors(w http.ResponseWriter, r *http.Request) {
+	from, to, _, err := rangeWindow(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	groups, err := h.service.TopErrors(r.Context(), from, to)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	out := make([]errorGroupDTO, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, errorGroupDTO{Code: g.Code, Total: g.Total, Share: g.Share})
+	}
+	writeData(w, http.StatusOK, topErrorsDTO{Errors: out})
 }
 
 func (h *dashboardHandler) performanceTimeseries(w http.ResponseWriter, r *http.Request) {
@@ -565,8 +600,8 @@ func toRadarDTO(r dashboard.RadarReport) radarDTO {
 			Coverage: r.Ttft.Coverage,
 			HasData:  r.Ttft.HasData,
 		},
-		TPS:     r.TPS,
-		Tokens:  dashboardTokensDTO{Input: r.Tokens.Input, Output: r.Tokens.Output, Total: r.Tokens.Total},
+		TPS:    r.TPS,
+		Tokens: dashboardTokensDTO{Input: r.Tokens.Input, Output: r.Tokens.Output, Total: r.Tokens.Total},
 		Cache: cacheStatsDTO{
 			ReadRate:           r.Cache.ReadRate,
 			WriteRate:          r.Cache.WriteRate,

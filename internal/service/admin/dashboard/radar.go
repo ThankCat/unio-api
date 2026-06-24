@@ -148,6 +148,17 @@ type BreakdownRow struct {
 	Terminal    int64
 	Succeeded   int64
 	SuccessRate float64
+	Tokens      int64   // 区间内该分组 token 合计（输入 + 输出）
+	CostUSD     string  // 区间内该分组上游成本合计（USD，十进制字符串）
+	LatencyP95  float64 // 区间内该分组 P95 完成延迟（毫秒）
+}
+
+// ErrorGroup 是「失败原因」面板的单条错误码聚合（§错误可见性）。
+// Share = Total / 区间内失败总数（[0,1] 比例），由 service 计算。
+type ErrorGroup struct {
+	Code  string
+	Total int64
+	Share float64
 }
 
 // PerformancePoint 是性能时序桶点。
@@ -290,7 +301,13 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 		}
 		out := make([]BreakdownRow, 0, len(rows))
 		for _, r := range rows {
-			br := BreakdownRow{Terminal: r.TerminalTotal, Succeeded: r.SucceededTotal}
+			br := BreakdownRow{
+				Terminal:   r.TerminalTotal,
+				Succeeded:  r.SucceededTotal,
+				Tokens:     r.TokensTotal,
+				CostUSD:    numericString(r.CostUsd),
+				LatencyP95: r.LatencyP95,
+			}
 			if r.RouteID.Valid {
 				id := r.RouteID.Int64
 				br.RefID = &id
@@ -311,7 +328,13 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 		}
 		out := make([]BreakdownRow, 0, len(rows))
 		for _, r := range rows {
-			br := BreakdownRow{Terminal: r.TerminalTotal, Succeeded: r.SucceededTotal}
+			br := BreakdownRow{
+				Terminal:   r.TerminalTotal,
+				Succeeded:  r.SucceededTotal,
+				Tokens:     r.TokensTotal,
+				CostUSD:    numericString(r.CostUsd),
+				LatencyP95: r.LatencyP95,
+			}
 			if r.ChannelID.Valid {
 				id := r.ChannelID.Int64
 				br.RefID = &id
@@ -340,12 +363,35 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 				Terminal:    r.TerminalTotal,
 				Succeeded:   r.SucceededTotal,
 				SuccessRate: successRate(r.SucceededTotal, r.TerminalTotal),
+				Tokens:      r.TokensTotal,
+				CostUSD:     numericString(r.CostUsd),
+				LatencyP95:  r.LatencyP95,
 			})
 		}
 		return out, nil
 	default:
 		return nil, invalidArgument("dimension", "dimension must be one of route|channel|model")
 	}
+}
+
+// TopErrors 返回区间内失败请求的错误码分布（Top 10），并计算每类占全部失败的比例。
+func (s *Service) TopErrors(ctx context.Context, from, to time.Time) ([]ErrorGroup, error) {
+	rows, err := s.store.DashboardTopErrors(ctx, sqlc.DashboardTopErrorsParams{
+		FromTime: tsNarg(from),
+		ToTime:   tsNarg(to),
+	})
+	if err != nil {
+		return nil, storeFailed(err, "aggregate top errors")
+	}
+	out := make([]ErrorGroup, 0, len(rows))
+	for _, r := range rows {
+		g := ErrorGroup{Code: r.ErrorCode, Total: r.Total}
+		if r.FailedTotal > 0 {
+			g.Share = float64(r.Total) / float64(r.FailedTotal)
+		}
+		out = append(out, g)
+	}
+	return out, nil
 }
 
 // PerformanceTimeseries 返回性能趋势（P95 延迟 / P95 TTFT / TPS）。

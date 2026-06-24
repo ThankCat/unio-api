@@ -20,13 +20,29 @@ type fakeSettlementRecoveryJobStore struct {
 	exhaustedErr   error
 	exhaustedFound bool
 
-	claimArgs     []sqlc.ClaimNextSettlementRecoveryJobParams
-	succeededArgs []sqlc.MarkSettlementRecoveryJobSucceededParams
-	retryArgs     []sqlc.MarkSettlementRecoveryJobRetryParams
-	retryErr      error
-	deadArgs      []sqlc.MarkSettlementRecoveryJobDeadParams
-	deadErr       error
-	exhaustedArgs []sqlc.MarkExhaustedSettlementRecoveryJobDeadParams
+	deadRunningJob   sqlc.SettlementRecoveryJob
+	deadRunningFound bool
+	deadRunningErr   error
+
+	claimArgs        []sqlc.ClaimNextSettlementRecoveryJobParams
+	succeededArgs    []sqlc.MarkSettlementRecoveryJobSucceededParams
+	retryArgs        []sqlc.MarkSettlementRecoveryJobRetryParams
+	retryErr         error
+	deadArgs         []sqlc.MarkSettlementRecoveryJobDeadParams
+	deadErr          error
+	exhaustedArgs    []sqlc.MarkExhaustedSettlementRecoveryJobDeadParams
+	deadRunningCalls int
+}
+
+func (s *fakeSettlementRecoveryJobStore) GetDeadSettlementRecoveryJobWithRunningRequest(ctx context.Context) (sqlc.SettlementRecoveryJob, error) {
+	s.deadRunningCalls++
+	if s.deadRunningErr != nil {
+		return sqlc.SettlementRecoveryJob{}, s.deadRunningErr
+	}
+	if !s.deadRunningFound {
+		return sqlc.SettlementRecoveryJob{}, pgx.ErrNoRows
+	}
+	return s.deadRunningJob, nil
 }
 
 func (s *fakeSettlementRecoveryJobStore) ClaimNextSettlementRecoveryJob(ctx context.Context, arg sqlc.ClaimNextSettlementRecoveryJobParams) (sqlc.SettlementRecoveryJob, error) {
@@ -73,13 +89,20 @@ func (s *fakeSettlementRecoveryJobStore) MarkExhaustedSettlementRecoveryJobDead(
 }
 
 type fakeSettlementRecoveryRecoverer struct {
-	jobs []sqlc.SettlementRecoveryJob
-	err  error
+	jobs         []sqlc.SettlementRecoveryJob
+	err          error
+	finalizeJobs []sqlc.SettlementRecoveryJob
+	finalizeErr  error
 }
 
 func (r *fakeSettlementRecoveryRecoverer) RecoverChatSettlement(ctx context.Context, job sqlc.SettlementRecoveryJob) error {
 	r.jobs = append(r.jobs, job)
 	return r.err
+}
+
+func (r *fakeSettlementRecoveryRecoverer) FinalizeDeadChatSettlement(ctx context.Context, job sqlc.SettlementRecoveryJob) error {
+	r.finalizeJobs = append(r.finalizeJobs, job)
+	return r.finalizeErr
 }
 
 func TestSettlementRecoveryWorkerRunOnceReturnsIdleWhenNoJob(t *testing.T) {
@@ -211,6 +234,59 @@ func TestSettlementRecoveryWorkerMarksExhaustedJobDeadBeforeClaim(t *testing.T) 
 	}
 	if len(recoverer.jobs) != 0 {
 		t.Fatalf("expected recoverer not to run for exhausted job, got %d calls", len(recoverer.jobs))
+	}
+}
+
+func TestSettlementRecoveryWorkerFinalizesDeadJobWithRunningRequestBeforeOtherWork(t *testing.T) {
+	store := &fakeSettlementRecoveryJobStore{
+		deadRunningFound: true,
+		deadRunningJob:   recoveryJob(80, 3, 3),
+		// 同时存在 exhausted/claim 工作，验证 dead 收口优先且抢占本 tick。
+		exhaustedFound: true,
+		exhaustedJob:   recoveryJob(81, 3, 3),
+		claimJob:       recoveryJob(82, 1, 3),
+	}
+	recoverer := &fakeSettlementRecoveryRecoverer{}
+	worker := NewSettlementRecoveryWorker(store, recoverer, "worker-a", time.Second)
+
+	worked, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce returned err: %v", err)
+	}
+	if !worked {
+		t.Fatal("expected dead-job finalize to count as work")
+	}
+	if len(recoverer.finalizeJobs) != 1 || recoverer.finalizeJobs[0].ID != 80 {
+		t.Fatalf("expected finalize for job 80, got %#v", recoverer.finalizeJobs)
+	}
+	if len(store.exhaustedArgs) != 0 {
+		t.Fatalf("expected markExhausted skipped after finalize, got %d", len(store.exhaustedArgs))
+	}
+	if len(store.claimArgs) != 0 {
+		t.Fatalf("expected claim skipped after finalize, got %d", len(store.claimArgs))
+	}
+	if len(recoverer.jobs) != 0 {
+		t.Fatalf("expected recovery replay not called during finalize tick, got %d", len(recoverer.jobs))
+	}
+}
+
+func TestSettlementRecoveryWorkerFinalizeErrorPropagates(t *testing.T) {
+	store := &fakeSettlementRecoveryJobStore{
+		deadRunningFound: true,
+		deadRunningJob:   recoveryJob(90, 3, 3),
+	}
+	recoverer := &fakeSettlementRecoveryRecoverer{finalizeErr: errors.New("finalize boom")}
+	worker := NewSettlementRecoveryWorker(store, recoverer, "worker-a", time.Second)
+
+	worked, err := worker.RunOnce(context.Background())
+	if err == nil {
+		t.Fatal("expected finalize error to propagate so the runner retries next tick")
+	}
+	if !worked {
+		t.Fatal("expected finalize attempt to count as processed work")
+	}
+	if len(recoverer.finalizeJobs) != 1 || recoverer.finalizeJobs[0].ID != 90 {
+		t.Fatalf("expected one finalize attempt for job 90, got %#v", recoverer.finalizeJobs)
 	}
 }
 

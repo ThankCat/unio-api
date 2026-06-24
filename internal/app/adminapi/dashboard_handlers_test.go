@@ -59,6 +59,10 @@ func (s *fakeDashboardService) PerformanceTimeseries(_ context.Context, interval
 	return []dashboard.PerformancePoint{}, nil
 }
 
+func (s *fakeDashboardService) TopErrors(_ context.Context, _, _ time.Time) ([]dashboard.ErrorGroup, error) {
+	return []dashboard.ErrorGroup{}, nil
+}
+
 func validDashboardTestInterval(interval string) bool {
 	return interval == dashboard.IntervalMinute || interval == dashboard.IntervalHour || interval == dashboard.IntervalDay
 }

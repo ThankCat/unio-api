@@ -26,11 +26,15 @@ type SettlementRecoveryJobStore interface {
 	MarkSettlementRecoveryJobRetry(ctx context.Context, arg sqlc.MarkSettlementRecoveryJobRetryParams) (sqlc.SettlementRecoveryJob, error)
 	MarkSettlementRecoveryJobDead(ctx context.Context, arg sqlc.MarkSettlementRecoveryJobDeadParams) (sqlc.SettlementRecoveryJob, error)
 	MarkExhaustedSettlementRecoveryJobDead(ctx context.Context, arg sqlc.MarkExhaustedSettlementRecoveryJobDeadParams) (sqlc.SettlementRecoveryJob, error)
+	GetDeadSettlementRecoveryJobWithRunningRequest(ctx context.Context) (sqlc.SettlementRecoveryJob, error)
 }
 
 // SettlementRecoveryRecoverer 定义 worker 重放 settlement recovery job 的业务能力。
 type SettlementRecoveryRecoverer interface {
 	RecoverChatSettlement(ctx context.Context, job sqlc.SettlementRecoveryJob) error
+	// FinalizeDeadChatSettlement 收口一条已 dead 但请求仍 running 的补偿任务：
+	// 释放冻结余额（记风险敞口）并把请求推进到 failed。以「请求仍为 running」为幂等闸门。
+	FinalizeDeadChatSettlement(ctx context.Context, job sqlc.SettlementRecoveryJob) error
 }
 
 // SettlementRecoveryWorker claim settlement_recovery_jobs 并驱动幂等 settlement 重试。
@@ -72,6 +76,12 @@ func (w *SettlementRecoveryWorker) Name() string {
 // RunOnce claim 并处理一条到期 settlement recovery job。
 func (w *SettlementRecoveryWorker) RunOnce(ctx context.Context) (bool, error) {
 	now := time.Now()
+
+	// 先收口已 dead 但请求仍停留在 running 的补偿任务，避免请求永远显示「进行中」且余额被永久冻结。
+	if worked, err := w.finalizeNextDeadJob(ctx); worked || err != nil {
+		return worked, err
+	}
+
 	if worked, err := w.markExhausted(ctx, now); worked || err != nil {
 		return worked, err
 	}
@@ -114,6 +124,39 @@ func (w *SettlementRecoveryWorker) RunOnce(ctx context.Context) (bool, error) {
 			failure.CodeGatewayChatSettlementFailed,
 			err,
 			failure.WithMessage("mark settlement recovery job succeeded"),
+		)
+	}
+
+	return true, nil
+}
+
+// finalizeNextDeadJob 收口一条已 dead、但请求仍停留在 running 的补偿任务。
+//
+// 这类残留来自 settlement 永久失败 + 补偿重试耗尽：请求记录会卡在 running、冻结余额不释放。
+// 委托 recoverer 在单事务内释放冻结余额（记风险敞口）并把请求推进到 failed；以「请求仍为 running」
+// 为幂等闸门，崩溃后下个 tick 安全重放，多 worker 并发时由请求记录行锁串行化。
+func (w *SettlementRecoveryWorker) finalizeNextDeadJob(ctx context.Context) (bool, error) {
+	job, err := w.store.GetDeadSettlementRecoveryJobWithRunningRequest(ctx)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+
+		return false, failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("find dead settlement recovery job to finalize"),
+		)
+	}
+
+	finalizeCtx, cancel := context.WithTimeout(ctx, w.recoveryTimeout())
+	defer cancel()
+
+	if err := w.recoverer.FinalizeDeadChatSettlement(finalizeCtx, job); err != nil {
+		return true, failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("finalize dead settlement recovery job"),
 		)
 	}
 

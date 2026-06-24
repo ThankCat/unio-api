@@ -47,6 +47,7 @@ type fakeStore struct {
 	channelBD    []sqlc.DashboardBreakdownChannelRow
 	modelBD      []sqlc.DashboardBreakdownModelRow
 	perfTS       []sqlc.DashboardPerformanceTimeseriesRow
+	topErrors    []sqlc.DashboardTopErrorsRow
 
 	gotUnit string
 }
@@ -121,6 +122,9 @@ func (s *fakeStore) DashboardBreakdownModel(context.Context, sqlc.DashboardBreak
 func (s *fakeStore) DashboardPerformanceTimeseries(_ context.Context, arg sqlc.DashboardPerformanceTimeseriesParams) ([]sqlc.DashboardPerformanceTimeseriesRow, error) {
 	s.gotUnit = arg.Unit
 	return s.perfTS, nil
+}
+func (s *fakeStore) DashboardTopErrors(context.Context, sqlc.DashboardTopErrorsParams) ([]sqlc.DashboardTopErrorsRow, error) {
+	return s.topErrors, nil
 }
 
 func TestRadarAggregates(t *testing.T) {

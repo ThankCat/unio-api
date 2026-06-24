@@ -443,6 +443,115 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	return nil
 }
 
+// FinalizeDeadChatSettlement 收口一条「补偿任务已 dead、但请求仍停留在 running」的资金/状态残留。
+//
+// settlement 永久失败、补偿任务耗尽自动重试后会进入 dead，但此前没有任何路径把请求从 running 推进到
+// 终态，也没有释放冻结余额——请求会永远显示「进行中」，用户余额也被永久冻结。本方法在单事务内：
+//  1. 锁请求记录，仅当其仍为 running 才继续（幂等闸门：已被正常结算或其他路径收口则直接返回）；
+//  2. 释放冻结余额并记平台风险敞口异常（与 stream_settlement_failed_after_upstream_success 同语义：
+//     上游可能已产生成本但无可靠结算，平台承担、不向用户扣费）；
+//  3. 把请求原子推进到 failed。
+//
+// 以「请求仍为 running」为闸门，崩溃后由 worker 下个 tick 安全重放。
+func (s *ChatSettlementService) FinalizeDeadChatSettlement(ctx context.Context, job sqlc.SettlementRecoveryJob) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("begin dead chat settlement finalize transaction"),
+		)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	txQueries := s.queries.WithTx(tx)
+
+	lockedRequest, err := txQueries.GetRequestRecordForUpdate(ctx, job.RequestRecordID)
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("lock request record for dead chat settlement finalize"),
+		)
+	}
+
+	// 幂等闸门：只有仍停留在 running 的请求才需要收口；其余终态说明已被正常结算 / 其他路径处理。
+	if requestlog.RequestStatus(lockedRequest.Status) != requestlog.RequestStatusRunning {
+		return nil
+	}
+
+	if err := s.releaseDeadSettlementReservation(ctx, txQueries, job); err != nil {
+		return err
+	}
+
+	txRequestLog := requestlog.NewStore(txQueries)
+	_, err = txRequestLog.MarkRequestFailed(ctx, requestlog.MarkRequestFailedParams{
+		ID:                  job.RequestRecordID,
+		ErrorCode:           string(failure.CodeGatewayChatSettlementFailed),
+		ErrorMessage:        BaseSafeRequestLogErrorMessage(string(failure.CodeGatewayChatSettlementFailed)),
+		InternalErrorDetail: "settlement recovery job exhausted retries; frozen balance released and request finalized as failed",
+		CompletedAt:         time.Now(),
+	})
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("mark request failed for dead chat settlement finalize"),
+		)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("commit dead chat settlement finalize transaction"),
+		)
+	}
+
+	return nil
+}
+
+// releaseDeadSettlementReservation 在 finalize 事务内释放冻结余额并记平台风险敞口异常。
+//
+// reservation 已 released 时 ReleaseWithQueries 幂等返回；CreateLedgerRiskExposureException 按
+// reservation_id ON CONFLICT 幂等，故整体可安全重放。reservation 缺失（理论不该发生：补偿任务必有
+// reservation）时不阻断请求收口。reservation 已 captured 在本路径不可能出现——capture 与
+// MarkRequestSucceeded 同事务提交，请求若 captured 则不会是 running（已被上层闸门拦下）。
+func (s *ChatSettlementService) releaseDeadSettlementReservation(ctx context.Context, txQueries *sqlc.Queries, job sqlc.SettlementRecoveryJob) error {
+	reservationID := job.ReservationID
+	released, err := s.ledgerCapturer.ReleaseWithQueries(ctx, txQueries, ledger.ReleaseParams{
+		RequestRecordID: job.RequestRecordID,
+		ReservationID:   &reservationID,
+	})
+	if err != nil {
+		if failure.CodeOf(err) == failure.CodeLedgerReservationNotFound {
+			return nil
+		}
+		return err
+	}
+
+	_, err = txQueries.CreateLedgerRiskExposureException(ctx, sqlc.CreateLedgerRiskExposureExceptionParams{
+		UserID:          released.UserID,
+		RequestRecordID: released.RequestRecordID,
+		ReservationID:   released.ID,
+		PlatformAmount:  released.AuthorizedAmount,
+		Currency:        released.Currency,
+		ReasonCode:      "settlement_recovery_exhausted",
+		Reason:          "settlement recovery job exhausted retries after upstream success without reliable settlement",
+	})
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("record risk exposure for dead chat settlement finalize"),
+		)
+	}
+
+	return nil
+}
+
 // ensureIdempotentSuccessfulChat 校验重复 settlement 是否等价于第一次成功结算。
 func (s *ChatSettlementService) ensureIdempotentSuccessfulChat(ctx context.Context, queries *sqlc.Queries, request sqlc.RequestRecord, params ChatSettlementParams) error {
 	if err := ensureSettlementRequestMatches(request, params); err != nil {

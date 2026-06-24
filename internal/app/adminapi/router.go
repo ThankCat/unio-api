@@ -319,6 +319,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Get("/dashboard/timeseries", dh.timeseries)
 			r.Get("/dashboard/radar", dh.radar)
 			r.Get("/dashboard/breakdown", dh.breakdown)
+			r.Get("/dashboard/errors", dh.topErrors)
 			r.Get("/dashboard/timeseries/performance", dh.performanceTimeseries)
 		}
 

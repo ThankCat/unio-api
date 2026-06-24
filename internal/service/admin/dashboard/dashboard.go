@@ -60,6 +60,7 @@ type Store interface {
 	DashboardBreakdownChannel(ctx context.Context, arg sqlc.DashboardBreakdownChannelParams) ([]sqlc.DashboardBreakdownChannelRow, error)
 	DashboardBreakdownModel(ctx context.Context, arg sqlc.DashboardBreakdownModelParams) ([]sqlc.DashboardBreakdownModelRow, error)
 	DashboardPerformanceTimeseries(ctx context.Context, arg sqlc.DashboardPerformanceTimeseriesParams) ([]sqlc.DashboardPerformanceTimeseriesRow, error)
+	DashboardTopErrors(ctx context.Context, arg sqlc.DashboardTopErrorsParams) ([]sqlc.DashboardTopErrorsRow, error)
 }
 
 // MoneyByCurrency 是某币种的单一金额（十进制字符串）。

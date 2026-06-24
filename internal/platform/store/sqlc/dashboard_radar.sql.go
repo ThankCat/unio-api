@@ -17,9 +17,22 @@ SELECT
     c.name AS channel_name,
     c.status AS channel_status,
     COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
-    COUNT(*) FILTER (WHERE r.status = 'succeeded') AS succeeded_total
+    COUNT(*) FILTER (WHERE r.status = 'succeeded') AS succeeded_total,
+    COALESCE(SUM(
+        u.uncached_input_tokens + u.cache_read_input_tokens
+        + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
+        + u.output_tokens_total
+    ), 0)::bigint AS tokens_total,
+    COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd,
+    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
+        CASE
+            WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+            THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8
+        END), 0)::float8 AS latency_p95
 FROM request_records r
 LEFT JOIN channels c ON c.id = r.final_channel_id
+LEFT JOIN usage_records u ON u.request_record_id = r.id
+LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
 WHERE r.final_channel_id IS NOT NULL
   AND ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
   AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
@@ -39,9 +52,12 @@ type DashboardBreakdownChannelRow struct {
 	ChannelStatus  pgtype.Text
 	TerminalTotal  int64
 	SucceededTotal int64
+	TokensTotal    int64
+	CostUsd        pgtype.Numeric
+	LatencyP95     float64
 }
 
-// DashboardBreakdownChannel 按最终渠道聚合区间请求（精简 Top）。
+// DashboardBreakdownChannel 按最终渠道聚合区间请求（精简 Top），附 token / 成本(USD) / P95 延迟。
 func (q *Queries) DashboardBreakdownChannel(ctx context.Context, arg DashboardBreakdownChannelParams) ([]DashboardBreakdownChannelRow, error) {
 	rows, err := q.db.Query(ctx, dashboardBreakdownChannel, arg.FromTime, arg.ToTime)
 	if err != nil {
@@ -57,6 +73,9 @@ func (q *Queries) DashboardBreakdownChannel(ctx context.Context, arg DashboardBr
 			&i.ChannelStatus,
 			&i.TerminalTotal,
 			&i.SucceededTotal,
+			&i.TokensTotal,
+			&i.CostUsd,
+			&i.LatencyP95,
 		); err != nil {
 			return nil, err
 		}
@@ -72,8 +91,21 @@ const dashboardBreakdownModel = `-- name: DashboardBreakdownModel :many
 SELECT
     r.requested_model_id AS model_id,
     COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
-    COUNT(*) FILTER (WHERE r.status = 'succeeded') AS succeeded_total
+    COUNT(*) FILTER (WHERE r.status = 'succeeded') AS succeeded_total,
+    COALESCE(SUM(
+        u.uncached_input_tokens + u.cache_read_input_tokens
+        + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
+        + u.output_tokens_total
+    ), 0)::bigint AS tokens_total,
+    COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd,
+    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
+        CASE
+            WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+            THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8
+        END), 0)::float8 AS latency_p95
 FROM request_records r
+LEFT JOIN usage_records u ON u.request_record_id = r.id
+LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
 WHERE ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
   AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
 GROUP BY r.requested_model_id
@@ -90,9 +122,12 @@ type DashboardBreakdownModelRow struct {
 	ModelID        string
 	TerminalTotal  int64
 	SucceededTotal int64
+	TokensTotal    int64
+	CostUsd        pgtype.Numeric
+	LatencyP95     float64
 }
 
-// DashboardBreakdownModel 按对外请求模型聚合区间请求（精简 Top）。
+// DashboardBreakdownModel 按对外请求模型聚合区间请求（精简 Top），附 token / 成本(USD) / P95 延迟。
 func (q *Queries) DashboardBreakdownModel(ctx context.Context, arg DashboardBreakdownModelParams) ([]DashboardBreakdownModelRow, error) {
 	rows, err := q.db.Query(ctx, dashboardBreakdownModel, arg.FromTime, arg.ToTime)
 	if err != nil {
@@ -102,7 +137,14 @@ func (q *Queries) DashboardBreakdownModel(ctx context.Context, arg DashboardBrea
 	var items []DashboardBreakdownModelRow
 	for rows.Next() {
 		var i DashboardBreakdownModelRow
-		if err := rows.Scan(&i.ModelID, &i.TerminalTotal, &i.SucceededTotal); err != nil {
+		if err := rows.Scan(
+			&i.ModelID,
+			&i.TerminalTotal,
+			&i.SucceededTotal,
+			&i.TokensTotal,
+			&i.CostUsd,
+			&i.LatencyP95,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -118,11 +160,24 @@ SELECT
     COALESCE(ak.route_id, p.default_route_id) AS route_id,
     rt.name AS route_name,
     COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
-    COUNT(*) FILTER (WHERE r.status = 'succeeded') AS succeeded_total
+    COUNT(*) FILTER (WHERE r.status = 'succeeded') AS succeeded_total,
+    COALESCE(SUM(
+        u.uncached_input_tokens + u.cache_read_input_tokens
+        + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
+        + u.output_tokens_total
+    ), 0)::bigint AS tokens_total,
+    COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd,
+    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
+        CASE
+            WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+            THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8
+        END), 0)::float8 AS latency_p95
 FROM request_records r
 JOIN api_keys ak ON ak.id = r.api_key_id
 JOIN projects p ON p.id = r.project_id
 LEFT JOIN routes rt ON rt.id = COALESCE(ak.route_id, p.default_route_id)
+LEFT JOIN usage_records u ON u.request_record_id = r.id
+LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
 WHERE ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
   AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
 GROUP BY COALESCE(ak.route_id, p.default_route_id), rt.name
@@ -140,10 +195,14 @@ type DashboardBreakdownRouteRow struct {
 	RouteName      pgtype.Text
 	TerminalTotal  int64
 	SucceededTotal int64
+	TokensTotal    int64
+	CostUsd        pgtype.Numeric
+	LatencyP95     float64
 }
 
 // DashboardBreakdownRoute 按「就近绑定」归属线路聚合区间请求（§3.1.8）：
 // api_keys.route_id ?? projects.default_route_id ?? 内置桶（route_id 为 NULL）。
+// 附 token 合计 / 成本(USD) / P95 延迟；usage_records、cost_snapshots 与请求 1:1，LEFT JOIN 不放大行数。
 func (q *Queries) DashboardBreakdownRoute(ctx context.Context, arg DashboardBreakdownRouteParams) ([]DashboardBreakdownRouteRow, error) {
 	rows, err := q.db.Query(ctx, dashboardBreakdownRoute, arg.FromTime, arg.ToTime)
 	if err != nil {
@@ -158,6 +217,9 @@ func (q *Queries) DashboardBreakdownRoute(ctx context.Context, arg DashboardBrea
 			&i.RouteName,
 			&i.TerminalTotal,
 			&i.SucceededTotal,
+			&i.TokensTotal,
+			&i.CostUsd,
+			&i.LatencyP95,
 		); err != nil {
 			return nil, err
 		}
@@ -543,4 +605,52 @@ func (q *Queries) DashboardRadarTokens(ctx context.Context, arg DashboardRadarTo
 		&i.OutputTokens,
 	)
 	return i, err
+}
+
+const dashboardTopErrors = `-- name: DashboardTopErrors :many
+SELECT
+    COALESCE(NULLIF(error_code, ''), 'unknown')::text AS error_code,
+    COUNT(*) AS total,
+    SUM(COUNT(*)) OVER ()::bigint AS failed_total
+FROM request_records
+WHERE status = 'failed'
+  AND ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
+  AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
+GROUP BY COALESCE(NULLIF(error_code, ''), 'unknown')
+ORDER BY total DESC, error_code ASC
+LIMIT 10
+`
+
+type DashboardTopErrorsParams struct {
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
+}
+
+type DashboardTopErrorsRow struct {
+	ErrorCode   string
+	Total       int64
+	FailedTotal int64
+}
+
+// DashboardTopErrors 汇总区间内失败请求的错误码分布（Top 10），供概览「失败原因」面板。
+// 仅统计 status='failed'（canceled 为客户端取消，不算平台失败）；error_code 空归一为 'unknown'。
+// failed_total 用窗口函数返回全部失败总数（在 LIMIT 前求值），供 service 计算占比。
+func (q *Queries) DashboardTopErrors(ctx context.Context, arg DashboardTopErrorsParams) ([]DashboardTopErrorsRow, error) {
+	rows, err := q.db.Query(ctx, dashboardTopErrors, arg.FromTime, arg.ToTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DashboardTopErrorsRow
+	for rows.Next() {
+		var i DashboardTopErrorsRow
+		if err := rows.Scan(&i.ErrorCode, &i.Total, &i.FailedTotal); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
