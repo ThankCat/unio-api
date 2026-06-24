@@ -19,6 +19,7 @@ import (
 	capabilityadmin "github.com/ThankCat/unio-api/internal/service/admin/capability"
 	"github.com/ThankCat/unio-api/internal/service/admin/channel"
 	"github.com/ThankCat/unio-api/internal/service/admin/channelmodel"
+	"github.com/ThankCat/unio-api/internal/service/admin/channelops"
 	"github.com/ThankCat/unio-api/internal/service/admin/channelprice"
 	"github.com/ThankCat/unio-api/internal/service/admin/customer"
 	"github.com/ThankCat/unio-api/internal/service/admin/dashboard"
@@ -102,6 +103,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 	providerService := provider.NewService(queries)
 	channelService := channel.NewService(queries, cipher, adapterRegistry)
+	channelOpsService := channelops.NewService(queries)
 	modelService := model.NewService(queries)
 	channelModelService := channelmodel.NewService(queries)
 	channelPriceService := channelprice.NewService(queries)
@@ -148,6 +150,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		Authenticator:       authenticator,
 		ProviderService:     providerService,
 		ChannelService:      channelService,
+		ChannelOpsService:   channelOpsService,
 		ModelService:        modelService,
 		ChannelModelService: channelModelService,
 		ChannelPriceService: channelPriceService,

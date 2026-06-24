@@ -22,6 +22,7 @@ type RouterDeps struct {
 
 	ProviderService     ProviderService
 	ChannelService      ChannelService
+	ChannelOpsService   ChannelOpsService
 	ModelService        ModelService
 	ChannelModelService ChannelModelService
 
@@ -102,6 +103,18 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Patch("/providers/{id}", ph.update)
 			// DELETE 物理删除录错的脏数据：名下有渠道或已被请求/账务引用时返回 409，提示改用停用。
 			r.Delete("/providers/{id}", ph.delete)
+		}
+
+		// §3.3 渠道作战台只读运维聚合：静态 /channels/ops* 必须在 /channels/{id} 之前注册。
+		if deps.ChannelOpsService != nil {
+			coh := &channelOpsHandler{service: deps.ChannelOpsService}
+			r.Get("/channels/ops/summary", coh.summary)
+			r.Get("/channels/ops", coh.table)
+			r.Get("/channels/{id}/ops/detail", coh.detail)
+			r.Get("/channels/{id}/ops/performance", coh.performance)
+			r.Get("/channels/{id}/ops/errors", coh.errors)
+			r.Get("/channels/{id}/ops/models", coh.models)
+			r.Get("/channels/{id}/ops/routes", coh.routes)
 		}
 
 		if deps.ChannelService != nil {
