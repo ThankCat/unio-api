@@ -131,10 +131,15 @@ WHERE request_records.id = sqlc.arg(request_record_id)
   AND NOT EXISTS (SELECT 1 FROM updated);
 
 -- name: MarkRequestResponseStarted :one
--- MarkRequestResponseStarted 记录首次客户可见响应时间；重复调用保留第一次时间。
+-- MarkRequestResponseStarted 记录首次客户可见响应时间，并把交付状态从 not_started 推进到 in_progress。
+-- 重复调用保留第一次时间，且不回退已更靠后的交付状态。首字节时 delivery 与 response_started_at 同写。
 WITH updated AS (
     UPDATE request_records
         SET response_started_at = COALESCE(request_records.response_started_at, sqlc.arg(response_started_at)),
+            delivery_status = CASE
+                WHEN request_records.delivery_status = 'not_started' THEN 'in_progress'
+                ELSE request_records.delivery_status
+            END,
             updated_at = now()
         WHERE request_records.id = sqlc.arg(request_record_id)
           AND request_records.status IN ('running', 'succeeded')
@@ -149,6 +154,53 @@ SELECT request_records.*
 FROM request_records
 WHERE request_records.id = sqlc.arg(request_record_id)
   AND request_records.response_started_at IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM updated);
+
+-- name: MarkRequestDeliveryCompleted :one
+-- MarkRequestDeliveryCompleted 在响应完整交付后把交付状态推进到 completed，并同语句落地
+-- response_completed_at，满足 ck_request_records_delivery_completed_at。仅从 not_started/in_progress
+-- 推进；重复调用返回当前 completed 行（幂等，最佳努力审计）。
+WITH updated AS (
+    UPDATE request_records
+        SET delivery_status = 'completed',
+            response_completed_at = sqlc.arg(response_completed_at),
+            updated_at = now()
+        WHERE request_records.id = sqlc.arg(request_record_id)
+            AND request_records.delivery_status IN ('not_started', 'in_progress')
+        RETURNING request_records.*
+)
+SELECT *
+FROM updated
+
+UNION ALL
+
+SELECT request_records.*
+FROM request_records
+WHERE request_records.id = sqlc.arg(request_record_id)
+  AND request_records.delivery_status = 'completed'
+  AND NOT EXISTS (SELECT 1 FROM updated);
+
+-- name: MarkRequestDeliveryInterrupted :one
+-- MarkRequestDeliveryInterrupted 在交付中断（客户端取消、上游中断、尾部错误）时把交付状态推进到
+-- interrupted。response_completed_at 保持 NULL。仅从 not_started/in_progress 推进；重复调用返回当前
+-- interrupted 行（幂等，最佳努力审计）。
+WITH updated AS (
+    UPDATE request_records
+        SET delivery_status = 'interrupted',
+            updated_at = now()
+        WHERE request_records.id = sqlc.arg(request_record_id)
+            AND request_records.delivery_status IN ('not_started', 'in_progress')
+        RETURNING request_records.*
+)
+SELECT *
+FROM updated
+
+UNION ALL
+
+SELECT request_records.*
+FROM request_records
+WHERE request_records.id = sqlc.arg(request_record_id)
+  AND request_records.delivery_status = 'interrupted'
   AND NOT EXISTS (SELECT 1 FROM updated);
 
 -- name: MarkRequestSucceeded :one

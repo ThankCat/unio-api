@@ -180,8 +180,11 @@ type MarkAttemptSucceededParams struct {
 	UpstreamStatusCode    int
 	UpstreamRequestID     *string
 	ResponseStartedAt     *time.Time
-	UsageMappingVersion   string
-	CompletedAt           time.Time
+	// FinalUsageReceived 标记本次成功是否基于上游真实 final usage。
+	// full bill 传 true；partial settlement（合成估算事实）传 false，作为渠道未回 usage 的审计信号。
+	FinalUsageReceived  bool
+	UsageMappingVersion string
+	CompletedAt         time.Time
 }
 
 // MarkAttemptResponseStartedParams 表示记录一次 attempt 首次客户可见响应时间所需的事实。

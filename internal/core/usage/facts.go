@@ -187,14 +187,23 @@ const (
 
 	// SourceUpstreamStream 表示 usage 来自流式 final usage 事实。
 	SourceUpstreamStream Source = "upstream_stream"
+
+	// SourcePartialStreamEstimate 表示已向客户端 emit 但上游无 final usage 时，gateway 合成的估算事实。
+	// 用于流式 partial settlement（客户端取消 / emit 后中断 / 正常结束缺 usage），与上游真实 usage 严格区分。
+	SourcePartialStreamEstimate Source = "partial_stream_estimate"
 )
 
 // Valid 判断 Source 是否为已登记来源。
 func (s Source) Valid() bool {
 	switch s {
-	case SourceUpstreamResponse, SourceUpstreamStream:
+	case SourceUpstreamResponse, SourceUpstreamStream, SourcePartialStreamEstimate:
 		return true
 	default:
 		return false
 	}
+}
+
+// IsPartialEstimate 判断该来源是否为 gateway 合成的 partial 估算事实（非上游真实 usage）。
+func (s Source) IsPartialEstimate() bool {
+	return s == SourcePartialStreamEstimate
 }

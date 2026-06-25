@@ -102,7 +102,7 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 		)
 	}
 
-	if upstreamRespBody.Choices == nil || len(upstreamRespBody.Choices) == 0 {
+	if len(upstreamRespBody.Choices) == 0 {
 		return nil, failure.New(
 			failure.CodeAdapterInvalidResponse,
 			failure.WithMessage("openai adapter empty chat completion choices"),

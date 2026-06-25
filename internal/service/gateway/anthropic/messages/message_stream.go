@@ -117,6 +117,7 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		}
 
 		emitted := false
+		var partialOutputTokens int64
 		var streamFacts *adapter.ResponseFacts
 		messageID := ""
 		var responseStartedAt *time.Time
@@ -159,6 +160,48 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 			return settleErr
 		}
 
+		// finishPartial 处理「已 emit 但无 adapter final usage」的 partial settlement（路线 B/D）：
+		// 合成 partial_stream_estimate 事实走与 full bill 相同的结算管道（attempt/request 标 succeeded、
+		// final_usage_received=false）；settlement 永久失败且无 recovery 接管时退回释放冻结并记风险敞口。
+		finishPartial := func(reason string, oc metrics.ChatOutcome, streamEvent metrics.StreamEvent, deliveryCompleted bool, returnErr error) error {
+			facts := lifecycle.BuildPartialStreamFacts(lifecycle.PartialStreamFactsParams{
+				Candidate:        candidate,
+				StreamResponseID: messageID,
+				RequestRecordID:  requestRecord.ID,
+				InputTokens:      candidatePlan.ConservativeInputTokens,
+				OutputTokens:     partialOutputTokens,
+				Reason:           reason,
+			})
+			streamFacts = &facts
+
+			if settleErr := settleStreamFacts(); settleErr != nil {
+				if !lifecycle.IsChatSettlementRecoveryScheduled(settleErr) {
+					if releaseErr := s.releaseMessageAuthorizationForBillingException(
+						ctx,
+						authorization,
+						"stream_messages_settlement_failed_after_upstream_success",
+						"stream messages partial settlement permanently failed without recovery job",
+					); releaseErr != nil {
+						s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
+						return releaseErr
+					}
+					s.markRequestRecordFailed(ctx, requestRecord, "stream_messages_settlement_failed", settleErr)
+					return settleErr
+				}
+			}
+
+			// 交付状态：路线 D（正常结束仅缺 final usage）→ completed；路线 B（取消/中断）→ interrupted。
+			if deliveryCompleted {
+				s.lifecycle.MarkDeliveryCompleted(ctx, requestRecord)
+			} else {
+				s.lifecycle.MarkDeliveryInterrupted(ctx, requestRecord)
+			}
+
+			outcome = oc
+			s.recordStreamEvent(streamEvent)
+			return returnErr
+		}
+
 		streamCtx, streamSpan := lifecycle.StartGatewaySpan(ctx, "adapter.stream_messages", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 		upstreamStart := time.Now()
 		streamOutcome, streamErr := streamAdapter.StreamMessages(streamCtx, candidate.Channel,
@@ -172,7 +215,14 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 					now := time.Now()
 					responseStartedAt = &now
 					emitted = true
+					// 首字节：记录 TTFT 并把交付状态推进到 in_progress（与 chat 链路一致）。
+					s.lifecycle.MarkResponseStarted(ctx, requestRecord, attemptRecord, now)
 					s.recordStreamEvent(metrics.StreamEventStarted)
+				}
+
+				// 累计已 emit 可见文本的估算 output token，供 partial settlement（无 final usage 时）使用。
+				if text := parseStreamTextDelta(ev); text != "" {
+					partialOutputTokens += messagesadapter.CountOutputTokens(text)
 				}
 
 				return emit(gatewayapi.StreamFrame{
@@ -205,16 +255,21 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 						return settleErr
 					}
 				}
+				// 已 emit 后尾部出错：客户未拿到完整响应，交付标 interrupted。
+				if emitted {
+					s.lifecycle.MarkDeliveryInterrupted(ctx, requestRecord)
+				}
 				return err
 			}
 
+			// 客户端取消不是上游失败，也不触发 fallback。已 emit 时按 partial settlement 计费（路线 B）；
+			// 首 token 前取消则普通释放冻结、不扣费（路线 C）。
 			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-				if releaseErr := s.releaseMessageAuthorizationForBillingException(
-					ctx,
-					authorization,
-					"stream_client_canceled_without_final_usage",
-					"stream client canceled before final usage",
-				); releaseErr != nil {
+				if emitted {
+					return finishPartial(lifecycle.PartialReasonClientCanceled, metrics.ChatOutcomeCanceled, metrics.StreamEventCanceled, false, err)
+				}
+
+				if releaseErr := s.releaseMessageAuthorization(ctx, authorization); releaseErr != nil {
 					s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
 					return releaseErr
 				}
@@ -225,22 +280,14 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 				return err
 			}
 
-			s.markAttemptRecordFailed(ctx, attemptRecord, "stream_adapter_error", err)
-
 			if emitted {
-				if releaseErr := s.releaseMessageAuthorizationForBillingException(
-					ctx,
-					authorization,
-					"stream_interrupted_without_final_usage",
-					"stream interrupted after emit before final usage",
-				); releaseErr != nil {
-					s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
-					return releaseErr
-				}
-
-				s.markRequestRecordFailed(ctx, requestRecord, "stream_adapter_error_after_emit", err)
-				return err
+				// SSE 已写出后无法再 fallback。已 emit 内容按 partial settlement 计费（路线 B）；
+				// 不在此处 markAttemptRecordFailed——partial 走 settlement 会把 attempt 标 succeeded。
+				return finishPartial(lifecycle.PartialReasonInterrupted, metrics.ChatOutcomeCanceled, metrics.StreamEventCanceled, false, err)
 			}
+
+			// 首 token 前失败：attempt 记失败；客户端还没看到上游内容，只有这时允许同模型 fallback。
+			s.markAttemptRecordFailed(ctx, attemptRecord, "stream_adapter_error", err)
 
 			if !s.retryClassifier.IsRetryable(err) {
 				if releaseErr := s.releaseMessageAuthorization(ctx, authorization); releaseErr != nil {
@@ -256,18 +303,19 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 			continue
 		}
 
+		// 账务唯一真源是 adapter facts（B4）。已 emit 时按 partial settlement 计费并标渠道异常（路线 D）；
+		// 未 emit 则普通释放、不扣费（路线 C）。
 		if streamFacts == nil {
+			if emitted {
+				return finishPartial(lifecycle.PartialReasonFinalUsageMissing, metrics.ChatOutcomeSuccess, metrics.StreamEventMissingUsage, true, nil)
+			}
+
 			err := failure.New(
 				failure.CodeGatewayStreamUsageMissing,
 				failure.WithMessage("gateway stream final usage is missing"),
 			)
 
-			if releaseErr := s.releaseMessageAuthorizationForBillingException(
-				ctx,
-				authorization,
-				"stream_final_usage_missing",
-				"stream ended without final usage",
-			); releaseErr != nil {
+			if releaseErr := s.releaseMessageAuthorization(ctx, authorization); releaseErr != nil {
 				s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
 				return releaseErr
 			}
@@ -303,6 +351,9 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		if err := emit(gatewayapi.StreamFrame{EventType: "message_stop", Data: stopPayload}); err != nil {
 			return err
 		}
+
+		// 流式正常结束（路线 A）：所有事件与 message_stop 已写出，交付完成。
+		s.lifecycle.MarkDeliveryCompleted(ctx, requestRecord)
 
 		outcome = metrics.ChatOutcomeSuccess
 		s.recordStreamEvent(metrics.StreamEventCompleted)
@@ -343,4 +394,25 @@ func parseStreamMessageID(data json.RawMessage) string {
 		return ""
 	}
 	return payload.Message.ID
+}
+
+// parseStreamTextDelta 从 Anthropic content_block_delta 事件提取可见文本增量（text_delta），
+// 供 partial settlement 估算 output token；非文本增量返回空。
+func parseStreamTextDelta(ev messagesadapter.MessageStreamEvent) string {
+	if ev.Type != "content_block_delta" {
+		return ""
+	}
+	var payload struct {
+		Delta struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"delta"`
+	}
+	if err := json.Unmarshal(ev.Data, &payload); err != nil {
+		return ""
+	}
+	if payload.Delta.Type != "text_delta" {
+		return ""
+	}
+	return payload.Delta.Text
 }

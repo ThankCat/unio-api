@@ -16,11 +16,15 @@ SELECT
     COUNT(*) AS attempt_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS attempt_succeeded,
     COUNT(*) FILTER (WHERE error_code ILIKE '%timeout%' OR error_code = 'context_deadline_exceeded') AS timeout_total,
+    COUNT(*) FILTER (WHERE status = 'succeeded' AND completed_at IS NOT NULL) AS latency_sample,
     COALESCE(AVG(CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
         THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
     COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
         CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
@@ -45,8 +49,10 @@ type ChannelOpsDetailRow struct {
 	AttemptTotal     int64
 	AttemptSucceeded int64
 	TimeoutTotal     int64
+	LatencySample    int64
 	LatencyAvg       float64
 	LatencyP50       float64
+	LatencyP90       float64
 	LatencyP95       float64
 	LatencyP99       float64
 	LastSuccessAt    pgtype.Timestamptz
@@ -61,8 +67,10 @@ func (q *Queries) ChannelOpsDetail(ctx context.Context, arg ChannelOpsDetailPara
 		&i.AttemptTotal,
 		&i.AttemptSucceeded,
 		&i.TimeoutTotal,
+		&i.LatencySample,
 		&i.LatencyAvg,
 		&i.LatencyP50,
+		&i.LatencyP90,
 		&i.LatencyP95,
 		&i.LatencyP99,
 		&i.LastSuccessAt,
@@ -171,9 +179,21 @@ SELECT
     cm.status,
     COUNT(a.id) AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
+    COUNT(a.id) FILTER (WHERE a.status = 'succeeded' AND a.completed_at IS NOT NULL) AS latency_sample,
+    COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
+        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
+        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
     EXISTS (
         SELECT 1 FROM channel_prices p
         WHERE p.channel_id = $1 AND p.model_id = cm.model_id AND p.status = 'enabled'
@@ -204,7 +224,12 @@ type ChannelOpsModelsRow struct {
 	Status           string
 	AttemptTotal     int64
 	AttemptSucceeded int64
+	LatencySample    int64
+	LatencyAvg       float64
+	LatencyP50       float64
+	LatencyP90       float64
 	LatencyP95       float64
+	LatencyP99       float64
 	HasPrice         bool
 }
 
@@ -227,7 +252,12 @@ func (q *Queries) ChannelOpsModels(ctx context.Context, arg ChannelOpsModelsPara
 			&i.Status,
 			&i.AttemptTotal,
 			&i.AttemptSucceeded,
+			&i.LatencySample,
+			&i.LatencyAvg,
+			&i.LatencyP50,
+			&i.LatencyP90,
 			&i.LatencyP95,
+			&i.LatencyP99,
 			&i.HasPrice,
 		); err != nil {
 			return nil, err
@@ -245,9 +275,8 @@ SELECT
     date_trunc($1::text, created_at)::timestamptz AS bucket,
     COUNT(*) AS attempt_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS attempt_succeeded,
-    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
-        CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95
+    COALESCE(AVG(CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg
 FROM request_attempts
 WHERE channel_id = $2
   AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
@@ -267,10 +296,10 @@ type ChannelOpsPerformanceTimeseriesRow struct {
 	Bucket           pgtype.Timestamptz
 	AttemptTotal     int64
 	AttemptSucceeded int64
-	LatencyP95       float64
+	LatencyAvg       float64
 }
 
-// ChannelOpsPerformanceTimeseries 单渠道按时间桶的 attempt 量/成功/延迟 P95（抽屉性能 Tab）。
+// ChannelOpsPerformanceTimeseries 单渠道按时间桶的 attempt 量/成功/平均延迟（抽屉性能 Tab）。
 func (q *Queries) ChannelOpsPerformanceTimeseries(ctx context.Context, arg ChannelOpsPerformanceTimeseriesParams) ([]ChannelOpsPerformanceTimeseriesRow, error) {
 	rows, err := q.db.Query(ctx, channelOpsPerformanceTimeseries,
 		arg.Unit,
@@ -289,7 +318,7 @@ func (q *Queries) ChannelOpsPerformanceTimeseries(ctx context.Context, arg Chann
 			&i.Bucket,
 			&i.AttemptTotal,
 			&i.AttemptSucceeded,
-			&i.LatencyP95,
+			&i.LatencyAvg,
 		); err != nil {
 			return nil, err
 		}
@@ -351,9 +380,21 @@ SELECT
     COUNT(*) AS attempt_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS attempt_succeeded,
     COUNT(*) FILTER (WHERE error_code ILIKE '%timeout%' OR error_code = 'context_deadline_exceeded') AS timeout_total,
+    COUNT(*) FILTER (WHERE status = 'succeeded' AND completed_at IS NOT NULL) AS latency_sample,
+    COALESCE(AVG(CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
+        CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95
+             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
+        CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99
 FROM request_attempts
 WHERE ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
   AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
@@ -368,7 +409,12 @@ type ChannelsOpsAttemptAggregateRow struct {
 	AttemptTotal     int64
 	AttemptSucceeded int64
 	TimeoutTotal     int64
+	LatencySample    int64
+	LatencyAvg       float64
+	LatencyP50       float64
+	LatencyP90       float64
 	LatencyP95       float64
+	LatencyP99       float64
 }
 
 // ChannelsOpsAttemptAggregate 在区间内汇总全渠道 attempt 指标（成功率/超时/延迟分位）。
@@ -379,7 +425,12 @@ func (q *Queries) ChannelsOpsAttemptAggregate(ctx context.Context, arg ChannelsO
 		&i.AttemptTotal,
 		&i.AttemptSucceeded,
 		&i.TimeoutTotal,
+		&i.LatencySample,
+		&i.LatencyAvg,
+		&i.LatencyP50,
+		&i.LatencyP90,
 		&i.LatencyP95,
+		&i.LatencyP99,
 	)
 	return i, err
 }
@@ -551,9 +602,21 @@ SELECT
     COUNT(a.id) AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
     COUNT(a.id) FILTER (WHERE a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded') AS timeout_total,
+    COUNT(a.id) FILTER (WHERE a.status = 'succeeded' AND a.completed_at IS NOT NULL) AS latency_sample,
+    COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
+        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
+        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
     (MAX(a.completed_at) FILTER (WHERE a.status = 'succeeded'))::timestamptz AS last_success_at,
     (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') AS bound_models,
     (
@@ -603,7 +666,12 @@ type ChannelsOpsTableRow struct {
 	AttemptTotal     int64
 	AttemptSucceeded int64
 	TimeoutTotal     int64
+	LatencySample    int64
+	LatencyAvg       float64
+	LatencyP50       float64
+	LatencyP90       float64
 	LatencyP95       float64
+	LatencyP99       float64
 	LastSuccessAt    pgtype.Timestamptz
 	BoundModels      int64
 	RecentErrorCode  pgtype.Text
@@ -639,7 +707,12 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 			&i.AttemptTotal,
 			&i.AttemptSucceeded,
 			&i.TimeoutTotal,
+			&i.LatencySample,
+			&i.LatencyAvg,
+			&i.LatencyP50,
+			&i.LatencyP90,
 			&i.LatencyP95,
+			&i.LatencyP99,
 			&i.LastSuccessAt,
 			&i.BoundModels,
 			&i.RecentErrorCode,

@@ -173,3 +173,25 @@ func StoreFailed(cause error, message string) error {
 func InvalidArgument(field, message string) error {
 	return failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage(message), failure.WithField("field", field))
 }
+
+// LatencyStats 是 attempt 粒度延迟分位画像（毫秒）。
+// Sample = 区间内测到延迟（成功且 completed_at 非空）的 attempt 数；
+// Coverage = Sample / 成功 attempt，反映平均/分位的代表性。
+type LatencyStats struct {
+	Avg      float64
+	P50      float64
+	P90      float64
+	P95      float64
+	P99      float64
+	Sample   int64
+	Coverage float64
+}
+
+// AttemptLatency 从 SQL 聚合字段组装延迟画像。
+func AttemptLatency(avg, p50, p90, p95, p99 float64, sample, succeeded int64) LatencyStats {
+	s := LatencyStats{Avg: avg, P50: p50, P90: p90, P95: p95, P99: p99, Sample: sample}
+	if succeeded > 0 {
+		s.Coverage = float64(sample) / float64(succeeded)
+	}
+	return s
+}

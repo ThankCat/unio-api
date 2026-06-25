@@ -17,9 +17,21 @@ SELECT
     COUNT(*) AS attempt_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS attempt_succeeded,
     COUNT(*) FILTER (WHERE error_code ILIKE '%timeout%' OR error_code = 'context_deadline_exceeded') AS timeout_total,
+    COUNT(*) FILTER (WHERE status = 'succeeded' AND completed_at IS NOT NULL) AS latency_sample,
+    COALESCE(AVG(CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
+        CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95
+             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
+        CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99
 FROM request_attempts
 WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz);
@@ -108,9 +120,21 @@ SELECT
     COUNT(a.id) AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
     COUNT(a.id) FILTER (WHERE a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded') AS timeout_total,
+    COUNT(a.id) FILTER (WHERE a.status = 'succeeded' AND a.completed_at IS NOT NULL) AS latency_sample,
+    COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
+        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
+        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
     (MAX(a.completed_at) FILTER (WHERE a.status = 'succeeded'))::timestamptz AS last_success_at,
     (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') AS bound_models,
     (
@@ -151,11 +175,15 @@ SELECT
     COUNT(*) AS attempt_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS attempt_succeeded,
     COUNT(*) FILTER (WHERE error_code ILIKE '%timeout%' OR error_code = 'context_deadline_exceeded') AS timeout_total,
+    COUNT(*) FILTER (WHERE status = 'succeeded' AND completed_at IS NOT NULL) AS latency_sample,
     COALESCE(AVG(CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
         THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
     COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
         CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
@@ -170,14 +198,13 @@ WHERE channel_id = sqlc.arg('channel_id')
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz);
 
 -- name: ChannelOpsPerformanceTimeseries :many
--- ChannelOpsPerformanceTimeseries 单渠道按时间桶的 attempt 量/成功/延迟 P95（抽屉性能 Tab）。
+-- ChannelOpsPerformanceTimeseries 单渠道按时间桶的 attempt 量/成功/平均延迟（抽屉性能 Tab）。
 SELECT
     date_trunc(sqlc.arg('unit')::text, created_at)::timestamptz AS bucket,
     COUNT(*) AS attempt_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS attempt_succeeded,
-    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
-        CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95
+    COALESCE(AVG(CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg
 FROM request_attempts
 WHERE channel_id = sqlc.arg('channel_id')
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
@@ -222,9 +249,21 @@ SELECT
     cm.status,
     COUNT(a.id) AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
+    COUNT(a.id) FILTER (WHERE a.status = 'succeeded' AND a.completed_at IS NOT NULL) AS latency_sample,
+    COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
+        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
+        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
     EXISTS (
         SELECT 1 FROM channel_prices p
         WHERE p.channel_id = sqlc.arg('channel_id') AND p.model_id = cm.model_id AND p.status = 'enabled'

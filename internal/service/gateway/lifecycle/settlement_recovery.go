@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -90,6 +91,12 @@ func (e *RecoverableChatSettlementExecutor) SettleSuccessfulChat(ctx context.Con
 	job, err := e.recovery.CreatePendingChatSettlementRecoveryJob(settlementCtx, params)
 	if err != nil {
 		return err
+	}
+
+	// 仅本地账单 E2E：BILLING_E2E_INJECT_SETTLEMENT_FAIL=once 让「内联首次结算」失败但保留 pending job，
+	// 由 worker 幂等重放成功（REC-01）。生产默认未设置该 env，零影响。
+	if os.Getenv("BILLING_E2E_INJECT_SETTLEMENT_FAIL") == "once" {
+		return chatSettlementRecoveryScheduled(params.RequestRecord.ID, errors.New("billing e2e injected inline settlement failure (once)"))
 	}
 
 	if err := e.settlement.SettleSuccessfulChat(settlementCtx, params); err != nil {

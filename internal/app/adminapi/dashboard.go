@@ -17,14 +17,11 @@ type DashboardService interface {
 	Timeseries(ctx context.Context, metric, interval string, from, to time.Time) (dashboard.Series, error)
 
 	// §3.1 概览重构：雷达 / 分组表现 / 性能时序。
-	Radar(ctx context.Context, from, to, statusFrom, statusTo time.Time) (dashboard.RadarReport, error)
+	Radar(ctx context.Context, from, to time.Time) (dashboard.RadarReport, error)
 	Breakdown(ctx context.Context, dimension string, from, to time.Time) ([]dashboard.BreakdownRow, error)
 	PerformanceTimeseries(ctx context.Context, interval string, from, to time.Time) ([]dashboard.PerformancePoint, error)
 	TopErrors(ctx context.Context, from, to time.Time) ([]dashboard.ErrorGroup, error)
 }
-
-// 概览页时间预设窗口（§3.1）：状态短窗口固定 15 分钟，与页面 range 解耦。
-const dashboardStatusWindow = 15 * time.Minute
 
 // dashboardOverviewDTO 是首屏 KPI 概览响应体。
 type dashboardOverviewDTO struct {
@@ -291,18 +288,6 @@ type rangeWindowDTO struct {
 	To   string `json:"to"`
 }
 
-type platformStatusDTO struct {
-	Level       string  `json:"level"`
-	Reason      string  `json:"reason"`
-	WindowFrom  string  `json:"window_from"`
-	WindowTo    string  `json:"window_to"`
-	Terminal    int64   `json:"terminal"`
-	Succeeded   int64   `json:"succeeded"`
-	SuccessRate float64 `json:"success_rate"`
-	NoChannel   int64   `json:"no_channel"`
-	Timeout     int64   `json:"timeout"`
-}
-
 type latencyStatsDTO struct {
 	Avg      float64 `json:"avg"`
 	P50      float64 `json:"p50"`
@@ -375,7 +360,6 @@ type badChannelDTO struct {
 
 type radarDTO struct {
 	Range             rangeWindowDTO           `json:"range"`
-	PlatformStatus    platformStatusDTO        `json:"platform_status"`
 	Requests          radarRequestsDTO         `json:"requests"`
 	Latency           latencyStatsDTO          `json:"latency"`
 	Ttft              ttftStatsDTO             `json:"ttft"`
@@ -392,15 +376,22 @@ type radarDTO struct {
 }
 
 type breakdownRowDTO struct {
-	Label       string  `json:"label"`
-	RefID       *int64  `json:"ref_id"`
-	Status      string  `json:"status"`
-	Terminal    int64   `json:"terminal"`
-	Succeeded   int64   `json:"succeeded"`
-	SuccessRate float64 `json:"success_rate"`
-	Tokens      int64   `json:"tokens"`
-	CostUSD     string  `json:"cost_usd"`
-	LatencyP95  float64 `json:"latency_p95"`
+	Label        string  `json:"label"`
+	RefID        *int64  `json:"ref_id"`
+	Status       string  `json:"status"`
+	Terminal     int64   `json:"terminal"`
+	Succeeded    int64   `json:"succeeded"`
+	Failed       int64   `json:"failed"`
+	SuccessRate  float64 `json:"success_rate"`
+	Tokens       int64   `json:"tokens"`
+	RevenueUSD   string  `json:"revenue_usd"`
+	CostUSD      string  `json:"cost_usd"`
+	MarginUSD    string          `json:"margin_usd"`
+	Latency      latencyStatsDTO `json:"latency"`
+	LatencyP95   float64         `json:"latency_p95"`
+	HealthBucket string          `json:"health_bucket"`
+	RecentError  string  `json:"recent_error"`
+	ChannelCount int64   `json:"channel_count"`
 }
 
 type breakdownDTO struct {
@@ -474,10 +465,7 @@ func (h *dashboardHandler) radar(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	statusTo := time.Now()
-	statusFrom := statusTo.Add(-dashboardStatusWindow)
-
-	report, err := h.service.Radar(r.Context(), from, to, statusFrom, statusTo)
+	report, err := h.service.Radar(r.Context(), from, to)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -500,15 +488,30 @@ func (h *dashboardHandler) breakdown(w http.ResponseWriter, r *http.Request) {
 	out := make([]breakdownRowDTO, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, breakdownRowDTO{
-			Label:       row.Label,
-			RefID:       row.RefID,
-			Status:      row.Status,
-			Terminal:    row.Terminal,
-			Succeeded:   row.Succeeded,
-			SuccessRate: row.SuccessRate,
-			Tokens:      row.Tokens,
-			CostUSD:     row.CostUSD,
-			LatencyP95:  row.LatencyP95,
+			Label:        row.Label,
+			RefID:        row.RefID,
+			Status:       row.Status,
+			Terminal:     row.Terminal,
+			Succeeded:    row.Succeeded,
+			Failed:       row.Failed,
+			SuccessRate:  row.SuccessRate,
+			Tokens:       row.Tokens,
+			RevenueUSD:   row.RevenueUSD,
+			CostUSD:      row.CostUSD,
+			MarginUSD:    row.MarginUSD,
+			Latency: latencyStatsDTO{
+				Avg:      row.Latency.Avg,
+				P50:      row.Latency.P50,
+				P90:      row.Latency.P90,
+				P95:      row.Latency.P95,
+				P99:      row.Latency.P99,
+				Sample:   row.Latency.Sample,
+				Coverage: row.Latency.Coverage,
+			},
+			LatencyP95:   row.LatencyP95,
+			HealthBucket: row.HealthBucket,
+			RecentError:  row.RecentError,
+			ChannelCount: row.ChannelCount,
 		})
 	}
 	writeData(w, http.StatusOK, breakdownDTO{Dimension: dimension, Rows: out})
@@ -561,17 +564,6 @@ func (h *dashboardHandler) performanceTimeseries(w http.ResponseWriter, r *http.
 func toRadarDTO(r dashboard.RadarReport) radarDTO {
 	dto := radarDTO{
 		Range: rangeWindowDTO{From: rfc3339(r.From), To: rfc3339(r.To)},
-		PlatformStatus: platformStatusDTO{
-			Level:       r.PlatformStatus.Level,
-			Reason:      r.PlatformStatus.Reason,
-			WindowFrom:  rfc3339(r.PlatformStatus.WindowFrom),
-			WindowTo:    rfc3339(r.PlatformStatus.WindowTo),
-			Terminal:    r.PlatformStatus.Terminal,
-			Succeeded:   r.PlatformStatus.Succeeded,
-			SuccessRate: r.PlatformStatus.SuccessRate,
-			NoChannel:   r.PlatformStatus.NoChannel,
-			Timeout:     r.PlatformStatus.Timeout,
-		},
 		Requests: radarRequestsDTO{
 			Total:       r.Requests.Total,
 			Succeeded:   r.Requests.Succeeded,

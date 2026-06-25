@@ -1278,8 +1278,20 @@ func TestChatCompletionServiceCreateChatCompletionReturnsReleaseErrorWhenAdapter
 	}
 }
 
+func adapterWrappedClientCancel(operation string) error {
+	return adapter.NewUpstreamError(
+		adapter.UpstreamErrorCanceled,
+		adapter.UpstreamMetadata{},
+		failure.Wrap(
+			failure.CodeAdapterSendRequestFailed,
+			context.Canceled,
+			failure.WithMessage("openai adapter "+operation),
+		),
+	)
+}
+
 func TestChatCompletionServiceCreateChatCompletionMarksCanceledWithoutFallback(t *testing.T) {
-	firstAdapter := &fakeChatAdapter{chatErr: context.Canceled}
+	firstAdapter := &fakeChatAdapter{chatErr: adapterWrappedClientCancel("send chat completion request")}
 	secondAdapter := &fakeChatAdapter{chatResp: chatResponse("should not call")}
 	classifier := &fakeRetryClassifier{retryable: true}
 	requestLog := newFakeRequestLogService()
@@ -1760,7 +1772,7 @@ func TestChatCompletionServiceStreamChatCompletionReleasesAuthorizationOnNonRetr
 	}
 }
 
-func TestChatCompletionServiceStreamChatCompletionFailsWithoutFinalUsage(t *testing.T) {
+func TestChatCompletionServiceStreamChatCompletionPartialSettlesWhenFinalUsageMissingAfterEmit(t *testing.T) {
 	fakeAdapter := &fakeChatAdapter{
 		streamResp: []chatcompletionsadapter.ChatStreamChunk{
 			{
@@ -1794,47 +1806,37 @@ func TestChatCompletionServiceStreamChatCompletionFailsWithoutFinalUsage(t *test
 		chunks = append(chunks, chunk)
 		return nil
 	})
-	if err == nil {
-		t.Fatal("expected missing final usage error")
-	}
-	if !strings.Contains(err.Error(), "stream final usage is missing") {
-		t.Fatalf("expected missing final usage error, got %v", err)
+	// 路线 D：已 emit 可见内容、上游正常结束但缺 final usage → partial settlement，不报错、不写 risk_exposure。
+	if err != nil {
+		t.Fatalf("expected partial settlement (no error) when final usage missing after emit, got %v", err)
 	}
 	if len(chunks) != 1 {
 		t.Fatalf("expected visible content chunk to be emitted, got %d chunks", len(chunks))
 	}
-	if len(settlement.params) != 0 {
-		t.Fatalf("expected settlement not to run without final usage, got %d calls", len(settlement.params))
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected partial settlement to run once, got %d calls", len(settlement.params))
+	}
+	facts := settlement.params[0].Facts
+	if facts.UsageSource != coreusage.SourcePartialStreamEstimate {
+		t.Fatalf("expected partial_stream_estimate usage source, got %q", facts.UsageSource)
+	}
+	if facts.Finish.RawReason != lifecycle.PartialReasonFinalUsageMissing {
+		t.Fatalf("expected %q finish reason, got %q", lifecycle.PartialReasonFinalUsageMissing, facts.Finish.RawReason)
+	}
+	if !facts.Usage.OutputTokensTotal.IsKnown() || facts.Usage.OutputTokensTotal.Value <= 0 {
+		t.Fatalf("expected estimated output tokens > 0, got %#v", facts.Usage.OutputTokensTotal)
 	}
 	if len(authorizer.releaseParams) != 0 {
-		t.Fatalf("expected no normal authorization release without final usage, got %d", len(authorizer.releaseParams))
+		t.Fatalf("expected no normal authorization release for partial settlement, got %d", len(authorizer.releaseParams))
 	}
-	if len(authorizer.releaseBillingExceptionParams) != 1 {
-		t.Fatalf("expected billing exception release without final usage, got %d", len(authorizer.releaseBillingExceptionParams))
+	if len(authorizer.releaseBillingExceptionParams) != 0 {
+		t.Fatalf("expected no risk_exposure for partial settlement, got %d", len(authorizer.releaseBillingExceptionParams))
 	}
-	if authorizer.releaseBillingExceptionParams[0].ReservationID != 8801 {
-		t.Fatalf("expected released reservation id %d, got %d", int64(8801), authorizer.releaseBillingExceptionParams[0].ReservationID)
+	if len(requestLog.markAttemptFailedArgs) != 0 {
+		t.Fatalf("expected no attempt failed for partial settlement, got %d", len(requestLog.markAttemptFailedArgs))
 	}
-	if authorizer.releaseBillingExceptionParams[0].ReasonCode != "stream_final_usage_missing" {
-		t.Fatalf("expected stream_final_usage_missing reason code, got %q", authorizer.releaseBillingExceptionParams[0].ReasonCode)
-	}
-	if len(requestLog.markAttemptFailedArgs) != 1 {
-		t.Fatalf("expected attempt to fail once, got %d", len(requestLog.markAttemptFailedArgs))
-	}
-	if requestLog.markAttemptFailedArgs[0].ErrorCode != string(failure.CodeGatewayStreamUsageMissing) {
-		t.Fatalf("expected attempt error code %q, got %q", failure.CodeGatewayStreamUsageMissing, requestLog.markAttemptFailedArgs[0].ErrorCode)
-	}
-	if len(requestLog.markRequestFailedArgs) != 1 {
-		t.Fatalf("expected request to fail once, got %d", len(requestLog.markRequestFailedArgs))
-	}
-	if requestLog.markRequestFailedArgs[0].ErrorCode != string(failure.CodeGatewayStreamUsageMissing) {
-		t.Fatalf("expected request error code %q, got %q", failure.CodeGatewayStreamUsageMissing, requestLog.markRequestFailedArgs[0].ErrorCode)
-	}
-	if len(requestLog.markAttemptSucceededArgs) != 0 {
-		t.Fatalf("expected no direct attempt success, got %d", len(requestLog.markAttemptSucceededArgs))
-	}
-	if len(requestLog.markRequestSucceededArgs) != 0 {
-		t.Fatalf("expected no direct request success, got %d", len(requestLog.markRequestSucceededArgs))
+	if len(requestLog.markRequestFailedArgs) != 0 {
+		t.Fatalf("expected no request failed for partial settlement, got %d", len(requestLog.markRequestFailedArgs))
 	}
 }
 
@@ -2182,6 +2184,7 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 	authorizer := &fakeChatAuthorizer{
 		authorization: lifecycle.ChatAuthorization{ReservationID: 8870},
 	}
+	settlement := newChatCompletionSettlementForTest()
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(
 			routeCandidate("openai-primary", 101, "gpt-4.1"),
@@ -2195,7 +2198,7 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 		},
 		classifier,
 		requestLog,
-		newChatCompletionSettlementForTest(),
+		settlement,
 		authorizer,
 	)
 
@@ -2219,43 +2222,41 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 	if len(chunks) != 1 || chunks[0].Choices[0].Delta.Content != "partial" {
 		t.Fatalf("expected only partial chunk, got %#v", chunks)
 	}
+	// 路线 B（emit 后中断）：partial settlement，不写 risk_exposure、不普通 release、不 fallback。
 	if len(authorizer.releaseParams) != 0 {
 		t.Fatalf("expected no normal authorization release after emitted stream error, got %d", len(authorizer.releaseParams))
 	}
-	if len(authorizer.releaseBillingExceptionParams) != 1 {
-		t.Fatalf("expected billing exception release after emitted stream error without final usage, got %d", len(authorizer.releaseBillingExceptionParams))
+	if len(authorizer.releaseBillingExceptionParams) != 0 {
+		t.Fatalf("expected no risk_exposure after emitted stream error (partial settlement), got %d", len(authorizer.releaseBillingExceptionParams))
 	}
-	if authorizer.releaseBillingExceptionParams[0].ReservationID != 8870 {
-		t.Fatalf("expected released reservation id %d, got %d", int64(8870), authorizer.releaseBillingExceptionParams[0].ReservationID)
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected partial settlement to run once after emitted stream error, got %d", len(settlement.params))
 	}
-	if authorizer.releaseBillingExceptionParams[0].ReasonCode != "stream_interrupted_without_final_usage" {
-		t.Fatalf("expected stream_interrupted_without_final_usage reason code, got %q", authorizer.releaseBillingExceptionParams[0].ReasonCode)
+	if settlement.params[0].Facts.Finish.RawReason != lifecycle.PartialReasonInterrupted {
+		t.Fatalf("expected %q finish reason, got %q", lifecycle.PartialReasonInterrupted, settlement.params[0].Facts.Finish.RawReason)
+	}
+	if settlement.params[0].Facts.UsageSource != coreusage.SourcePartialStreamEstimate {
+		t.Fatalf("expected partial_stream_estimate usage source, got %q", settlement.params[0].Facts.UsageSource)
 	}
 	if len(requestLog.createAttempts) != 1 {
 		t.Fatalf("expected only first attempt to be created, got %d", len(requestLog.createAttempts))
 	}
-	if len(requestLog.markAttemptFailedArgs) != 1 {
-		t.Fatalf("expected first attempt to fail once, got %d", len(requestLog.markAttemptFailedArgs))
+	if len(requestLog.markAttemptFailedArgs) != 0 {
+		t.Fatalf("expected no attempt failed for partial settlement, got %d", len(requestLog.markAttemptFailedArgs))
 	}
-	if requestLog.markAttemptFailedArgs[0].ErrorCode != "stream_adapter_error" {
-		t.Fatalf("expected attempt error code %q, got %q", "stream_adapter_error", requestLog.markAttemptFailedArgs[0].ErrorCode)
-	}
-	if len(requestLog.markRequestFailedArgs) != 1 {
-		t.Fatalf("expected request to fail once after emitted stream error, got %d", len(requestLog.markRequestFailedArgs))
-	}
-	if requestLog.markRequestFailedArgs[0].ErrorCode != "stream_adapter_error_after_emit" {
-		t.Fatalf("expected request error code %q, got %q", "stream_adapter_error_after_emit", requestLog.markRequestFailedArgs[0].ErrorCode)
+	if len(requestLog.markRequestFailedArgs) != 0 {
+		t.Fatalf("expected no request failed for partial settlement, got %d", len(requestLog.markRequestFailedArgs))
 	}
 	if len(requestLog.markAttemptSucceededArgs) != 0 {
-		t.Fatalf("expected no succeeded attempt after emitted stream error, got %d", len(requestLog.markAttemptSucceededArgs))
+		t.Fatalf("expected attempt success handled by faked settlement, got %d", len(requestLog.markAttemptSucceededArgs))
 	}
 	if len(requestLog.markRequestSucceededArgs) != 0 {
-		t.Fatalf("expected no succeeded request after emitted stream error, got %d", len(requestLog.markRequestSucceededArgs))
+		t.Fatalf("expected request success handled by faked settlement, got %d", len(requestLog.markRequestSucceededArgs))
 	}
 }
 
 func TestChatCompletionServiceStreamChatCompletionMarksCanceledWithoutFallback(t *testing.T) {
-	firstAdapter := &fakeChatAdapter{streamErr: context.Canceled}
+	firstAdapter := &fakeChatAdapter{streamErr: adapterWrappedClientCancel("send stream chat completion request")}
 	secondAdapter := &fakeChatAdapter{
 		streamResp: []chatcompletionsadapter.ChatStreamChunk{
 			{
@@ -2271,6 +2272,7 @@ func TestChatCompletionServiceStreamChatCompletionMarksCanceledWithoutFallback(t
 	authorizer := &fakeChatAuthorizer{
 		authorization: lifecycle.ChatAuthorization{ReservationID: 8880},
 	}
+	settlement := newChatCompletionSettlementForTest()
 	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(
 			routeCandidate("openai-primary", 101, "gpt-4.1"),
@@ -2284,7 +2286,7 @@ func TestChatCompletionServiceStreamChatCompletionMarksCanceledWithoutFallback(t
 		},
 		classifier,
 		requestLog,
-		newChatCompletionSettlementForTest(),
+		settlement,
 		authorizer,
 	)
 
@@ -2304,17 +2306,18 @@ func TestChatCompletionServiceStreamChatCompletionMarksCanceledWithoutFallback(t
 	if classifier.called != 0 {
 		t.Fatalf("expected retry classifier not to be called after client cancel, got %d", classifier.called)
 	}
-	if len(authorizer.releaseParams) != 0 {
-		t.Fatalf("expected no normal authorization release after stream client cancel without final usage, got %d", len(authorizer.releaseParams))
+	// 首 token 前取消（路线 C）：普通释放冻结、0 扣费、不写 risk_exposure、不结算。
+	if len(authorizer.releaseParams) != 1 {
+		t.Fatalf("expected normal authorization release after pre-emit client cancel, got %d", len(authorizer.releaseParams))
 	}
-	if len(authorizer.releaseBillingExceptionParams) != 1 {
-		t.Fatalf("expected billing exception release after stream client cancel without final usage, got %d", len(authorizer.releaseBillingExceptionParams))
+	if authorizer.releaseParams[0].ReservationID != 8880 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(8880), authorizer.releaseParams[0].ReservationID)
 	}
-	if authorizer.releaseBillingExceptionParams[0].ReservationID != 8880 {
-		t.Fatalf("expected released reservation id %d, got %d", int64(8880), authorizer.releaseBillingExceptionParams[0].ReservationID)
+	if len(authorizer.releaseBillingExceptionParams) != 0 {
+		t.Fatalf("expected no risk_exposure for pre-emit cancel, got %d", len(authorizer.releaseBillingExceptionParams))
 	}
-	if authorizer.releaseBillingExceptionParams[0].ReasonCode != "stream_client_canceled_without_final_usage" {
-		t.Fatalf("expected stream_client_canceled_without_final_usage reason code, got %q", authorizer.releaseBillingExceptionParams[0].ReasonCode)
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected no settlement for pre-emit cancel, got %d", len(settlement.params))
 	}
 	if len(requestLog.markAttemptCanceledArgs) != 1 {
 		t.Fatalf("expected 1 attempt canceled call, got %d", len(requestLog.markAttemptCanceledArgs))
@@ -2333,5 +2336,71 @@ func TestChatCompletionServiceStreamChatCompletionMarksCanceledWithoutFallback(t
 	}
 	if len(requestLog.markRequestFailedArgs) != 0 {
 		t.Fatalf("expected no request failed call, got %d", len(requestLog.markRequestFailedArgs))
+	}
+}
+
+func TestChatCompletionServiceStreamChatCompletionPartialSettlesOnCancelAfterEmit(t *testing.T) {
+	fakeAdapter := &fakeChatAdapter{
+		streamResp: []chatcompletionsadapter.ChatStreamChunk{
+			{
+				ID:      "chatcmpl_mock",
+				Model:   "gpt-4.1",
+				Role:    "assistant",
+				Content: "partial answer before client cancels",
+			},
+		},
+		streamErr: context.Canceled,
+	}
+	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
+	authorizer := &fakeChatAuthorizer{
+		authorization: lifecycle.ChatAuthorization{ReservationID: 8890},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
+		&fakeAdapterRegistry{
+			streamChatAdapters: map[string]chatcompletionsadapter.StreamChatAdapter{
+				"openai": fakeAdapter,
+			},
+		},
+		nil,
+		requestLog,
+		settlement,
+		authorizer,
+	)
+
+	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+		chunks = append(chunks, chunk)
+		return nil
+	})
+	// 路线 B：用户已看到部分内容后取消、无 final usage → partial settlement，返回 canceled、不写 risk_exposure。
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled error, got %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("expected one visible chunk before cancel, got %d", len(chunks))
+	}
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected partial settlement to run once, got %d", len(settlement.params))
+	}
+	facts := settlement.params[0].Facts
+	if facts.UsageSource != coreusage.SourcePartialStreamEstimate {
+		t.Fatalf("expected partial_stream_estimate usage source, got %q", facts.UsageSource)
+	}
+	if facts.Finish.RawReason != lifecycle.PartialReasonClientCanceled {
+		t.Fatalf("expected %q finish reason, got %q", lifecycle.PartialReasonClientCanceled, facts.Finish.RawReason)
+	}
+	if !facts.Usage.OutputTokensTotal.IsKnown() || facts.Usage.OutputTokensTotal.Value <= 0 {
+		t.Fatalf("expected estimated output tokens > 0, got %#v", facts.Usage.OutputTokensTotal)
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no normal release for partial settlement, got %d", len(authorizer.releaseParams))
+	}
+	if len(authorizer.releaseBillingExceptionParams) != 0 {
+		t.Fatalf("expected no risk_exposure for partial settlement, got %d", len(authorizer.releaseBillingExceptionParams))
+	}
+	if len(requestLog.markAttemptFailedArgs) != 0 {
+		t.Fatalf("expected no attempt failed for partial settlement, got %d", len(requestLog.markAttemptFailedArgs))
 	}
 }

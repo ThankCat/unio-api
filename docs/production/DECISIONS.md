@@ -49,7 +49,7 @@ gateway/routing 负责选择 channel 并解析 credential，adapter 只负责协
 
 ## DEC-003 Stream 无 final usage 暂不扣费
 
-状态：accepted
+状态：accepted（**部分条款由 [DEC-025](#dec-025-stream-partial-settlement) 修订**）
 
 决策：
 
@@ -68,6 +68,10 @@ gateway/routing 负责选择 channel 并解析 credential，adapter 只负责协
 ```text
 公开生产前必须实现余额冻结、异常状态记录和风控策略。
 关联任务：../chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization
+
+2026-06-25 修订：emitted 且无 final usage 时改走 partial settlement（DEC-025），含 cancel/interrupt（路线 B）
+与 adapter 正常结束缺 usage（路线 D）；不再写 risk_exposure。路线 D 额外记录渠道异常。
+首 token 前 cancel 与无 emit 路径仍适用本决策原意。
 ```
 
 ## DEC-004 request_id 与 correlation id 分离
@@ -1429,4 +1433,64 @@ Admin 新建模型合并为下拉「自定义 | 从模型目录同步」。
 ```
 
 设计文档：[DESIGN-capability-manual-declaration.md](DESIGN-capability-manual-declaration.md)
+
+---
+
+## DEC-025 Stream partial settlement
+
+状态：**accepted**（2026-06-25 定稿，待 [TASK-7.23](../chapters/phase-07-billing-ledger/PLAN.md#task-7-23-stream-partial-settlement) 实施）
+
+决策：
+
+```text
+流式请求在「已向用户 emit 可见内容（emitted）、但 streamFacts == nil（无 adapter final usage）」时，
+不再 release + risk_exposure，而是合成 partial_stream_estimate 的 ResponseFacts，
+走与 full bill 相同的 SettleSuccessfulChat → Capture 管道；
+captured_amount = min(estimated_charge, authorized_amount)。
+
+A1 终态：partial 后 attempt 与 request 都 succeeded；用 attempt 列 final_usage_received=FALSE
+承载「没拿到 usage」这一事实（MarkAttemptSucceeded 的 final_usage_received 由写死 TRUE 改为入参）。
+不把 attempt 标 failed（与 succeeded 状态机冲突，且会谎报请求失败）。
+
+分两种结束原因（扣费、终态相同；靠合成 Finish.RawReason → upstream_finish_reason 区分）：
+- 路线 B：客户端取消（stream_client_canceled_without_final_usage）或 emit 后中断
+  （stream_interrupted_without_final_usage）；指标 Outcome=Canceled。
+- 路线 D：adapter 正常结束但上游未返回 final usage（stream_final_usage_missing）；指标 Outcome=Success。
+  渠道异常复用现有口径（succeeded + final_usage_received=FALSE + 该 finish reason），
+  不写入 risk_exposure，不新增 Admin 专用指标。
+
+B4：full vs partial 只看 streamFacts == nil；finalUsage 永不参与计费。
+首 token 前结束（!emitted）：普通 release，0 扣费，不写 risk_exposure。
+有 final usage（streamFacts != nil）：永远 full bill（upstream_stream），不因 cancel 降级。
+合成 facts 在 lifecycle 层补齐字段以通过现有 settlement 校验（A2-i），settlement/校验零改动。
+```
+
+原因：
+
+```text
+1. 用户已消费部分内容却 0 扣费，平台在 cancel 场景下承担不可持续的 margin 风险。
+2. 预授权 + Capture + write_off 闭环已在 TASK-7.17 落地，DEC-003 当时「无 freeze 不敢估算」的前提已变化。
+3. 客户端 ctx 已绑定上游 HTTP；用户取消后上游停止，partial 估算是「已产生可见服务」的合理对价，
+   而非 new-api 式「上游继续跑用户无感知」。
+4. capped 估算 + usage_source 审计，可在误扣风险与平台贴钱之间折中。
+```
+
+影响：
+
+```text
+1. 部分修订 DEC-003：emitted + streamFacts==nil（路线 B 与 D）均 partial settlement。
+2. 新增 usage.SourcePartialStreamEstimate（partial_stream_estimate）。
+3. MarkAttemptSucceeded 的 final_usage_received 改入参（partial 传 FALSE）：
+   sql/queries/request_attempts.sql + requestlog/store.go + sqlc 重生成。
+4. partial 要在两处独立循环实现：RunStreamGeneric（OpenAI chat / Responses 直传 / Responses→chat）
+   与 message_stream.go（Anthropic Messages，独立实现，非共享 RunStreamGeneric）。
+   两处把 cancel/interrupt/缺 usage 三分支按 emitted 分流为 partial 或 release；
+   interrupt 分支需重排 MarkAttemptFailed，使 partial 进入时 attempt 仍 running。
+5. StreamChunkMeta 增加可见文本字段；输出 token 复用 adapter tokenizer 增量计数（偏保守）。
+6. 渠道异常复用现有 attempt 错误/健康口径（succeeded + final_usage_received=FALSE +
+   upstream_finish_reason=stream_final_usage_missing，统计渠道故障时排除取消）；无专用 Admin 计数。
+7. 已 emit 的无 usage 流不再写 risk_exposure。
+```
+
+设计文档：[STREAM_PARTIAL_SETTLEMENT.md](../chapters/phase-07-billing-ledger/STREAM_PARTIAL_SETTLEMENT.md)
 

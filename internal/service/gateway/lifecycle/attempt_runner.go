@@ -199,6 +199,9 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			return result, settleErr
 		}
 
+		// 非流式成功：响应将由协议 service 在本调用返回后写出，交付视为完成（completed）。
+		l.MarkDeliveryCompleted(ctx, requestRecord)
+
 		result.Outcome = metrics.ChatOutcomeSuccess
 		return result, nil
 	}

@@ -41,8 +41,8 @@ type fakeStore struct {
 	throughput   sqlc.DashboardRadarThroughputRow
 	radarTokens  sqlc.DashboardRadarTokensRow
 	backlog      sqlc.DashboardRadarSettlementBacklogRow
-	statusWindow sqlc.DashboardRadarStatusWindowRow
 	badChannels  []sqlc.DashboardRadarBadChannelsRow
+	providerBD   []sqlc.DashboardBreakdownProviderRow
 	routeBD      []sqlc.DashboardBreakdownRouteRow
 	channelBD    []sqlc.DashboardBreakdownChannelRow
 	modelBD      []sqlc.DashboardBreakdownModelRow
@@ -104,11 +104,11 @@ func (s *fakeStore) DashboardRadarTokens(context.Context, sqlc.DashboardRadarTok
 func (s *fakeStore) DashboardRadarSettlementBacklog(context.Context) (sqlc.DashboardRadarSettlementBacklogRow, error) {
 	return s.backlog, nil
 }
-func (s *fakeStore) DashboardRadarStatusWindow(context.Context, sqlc.DashboardRadarStatusWindowParams) (sqlc.DashboardRadarStatusWindowRow, error) {
-	return s.statusWindow, nil
-}
 func (s *fakeStore) DashboardRadarBadChannels(context.Context, sqlc.DashboardRadarBadChannelsParams) ([]sqlc.DashboardRadarBadChannelsRow, error) {
 	return s.badChannels, nil
+}
+func (s *fakeStore) DashboardBreakdownProvider(context.Context, sqlc.DashboardBreakdownProviderParams) ([]sqlc.DashboardBreakdownProviderRow, error) {
+	return s.providerBD, nil
 }
 func (s *fakeStore) DashboardBreakdownRoute(context.Context, sqlc.DashboardBreakdownRouteParams) ([]sqlc.DashboardBreakdownRouteRow, error) {
 	return s.routeBD, nil
@@ -138,7 +138,6 @@ func TestRadarAggregates(t *testing.T) {
 		throughput:   sqlc.DashboardRadarThroughputRow{OutputTokens: 5000, GenerationSeconds: 100},
 		radarTokens:  sqlc.DashboardRadarTokensRow{UncachedInput: 600, CacheReadInput: 300, CacheWriteInput: 100, OutputTokens: 5000},
 		backlog:      sqlc.DashboardRadarSettlementBacklogRow{ActiveTotal: 2, DeadTotal: 1},
-		statusWindow: sqlc.DashboardRadarStatusWindowRow{TerminalTotal: 80, SucceededTotal: 60, NoChannelTotal: 0, TimeoutTotal: 1},
 		revenueRows:  []sqlc.DashboardRevenueByCurrencyRow{{Currency: "USD", Total: mustNumeric(t, "20.00")}},
 		costRows:     []sqlc.DashboardCostByCurrencyRow{{Currency: "USD", Total: mustNumeric(t, "8.00")}},
 		exceptionRows: []sqlc.DashboardBillingExceptionSummaryRow{
@@ -150,7 +149,7 @@ func TestRadarAggregates(t *testing.T) {
 	}
 
 	now := time.Now()
-	out, err := NewService(store).Radar(context.Background(), now.Add(-24*time.Hour), now, now.Add(-15*time.Minute), now)
+	out, err := NewService(store).Radar(context.Background(), now.Add(-24*time.Hour), now)
 	if err != nil {
 		t.Fatalf("radar: %v", err)
 	}
@@ -184,10 +183,6 @@ func TestRadarAggregates(t *testing.T) {
 	if out.MarginUSD != "12" { // 20 - 8
 		t.Fatalf("margin = %q, want 12", out.MarginUSD)
 	}
-	// 状态窗口 80 终态 ≥ 50 样本，成功率 0.75 < 0.80 → down。
-	if out.PlatformStatus.Level != PlatformDown {
-		t.Fatalf("platform level = %q, want down", out.PlatformStatus.Level)
-	}
 	if out.Settlement.Dead != 1 {
 		t.Fatalf("dead backlog = %d, want 1", out.Settlement.Dead)
 	}
@@ -197,20 +192,6 @@ func TestRadarAggregates(t *testing.T) {
 	}
 	if len(out.BadChannels) != 1 || out.BadChannels[0].Bucket != "unhealthy" {
 		t.Fatalf("bad channels = %+v", out.BadChannels)
-	}
-}
-
-func TestPlatformStatusSampleProtection(t *testing.T) {
-	store := &fakeStore{
-		statusWindow: sqlc.DashboardRadarStatusWindowRow{TerminalTotal: 10, SucceededTotal: 1},
-	}
-	now := time.Now()
-	out, err := NewService(store).Radar(context.Background(), now.Add(-time.Hour), now, now.Add(-15*time.Minute), now)
-	if err != nil {
-		t.Fatalf("radar: %v", err)
-	}
-	if out.PlatformStatus.Level != PlatformInsufficient {
-		t.Fatalf("platform level = %q, want insufficient_data (sample protection)", out.PlatformStatus.Level)
 	}
 }
 

@@ -17,6 +17,16 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
+// partialOutputTokenCounter 按 upstream model 估算可见输出文本的 token 数，供 partial settlement 使用。
+// 直传候选的可见文本暂不计入（VisibleText 为空，P0 偏保守）；tokenizer 失败返回 0。
+func partialOutputTokenCounter(model string, text string) int64 {
+	n, err := chatcompletionsadapter.CountOutputTokens(model, text)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
 // StreamResponse 编排流式 Responses 请求，并通过 emit 写出 Responses 命名事件（Codex 主路径）。
 //
 // 按候选 adapter 能力分流（统一 chunk 载体 responsesStreamCarrier，混合候选池共享一条 AttemptRunner
@@ -97,12 +107,14 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 	encoder := newStreamEncoder(req, newResponsesID("resp"), time.Now().Unix(), emit)
 
 	runResult, err := lifecycle.RunStreamGeneric(ctx, s.attemptRunner, lifecycle.RunStreamParamsGeneric[responsesStreamCarrier]{
-		RequestRecord:        requestRecord,
-		Principal:            principal,
-		Authorization:        authorization,
-		Candidates:           candidatePlan.Candidates,
-		RequestedModelID: req.Model,
-		ResponseProtocol: requestlog.ProtocolOpenAI,
+		RequestRecord:           requestRecord,
+		Principal:               principal,
+		Authorization:           authorization,
+		Candidates:              candidatePlan.Candidates,
+		RequestedModelID:        req.Model,
+		ResponseProtocol:        requestlog.ProtocolOpenAI,
+		ConservativeInputTokens: candidatePlan.ConservativeInputTokens,
+		CountOutputTokens:       partialOutputTokenCounter,
 		ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
 			if s.registry.HasStreamResponses(candidate.AdapterKey) {
 				adapter, ok := s.registry.StreamResponses(candidate.AdapterKey)

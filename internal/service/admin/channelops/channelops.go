@@ -12,6 +12,7 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/service/admin/opsutil"
 )
 
 const (
@@ -72,7 +73,7 @@ type Summary struct {
 	AttemptSucceeded int64
 	SuccessRate      float64
 	TimeoutTotal     int64
-	LatencyP95       float64
+	Latency          opsutil.LatencyStats
 	TPS              float64
 	RecentError      RecentError
 	PriceTotal       int64
@@ -94,7 +95,7 @@ type Row struct {
 	AttemptSucceeded int64
 	SuccessRate      float64
 	TimeoutTotal     int64
-	LatencyP95       float64
+	Latency          opsutil.LatencyStats
 	HealthBucket     string
 	LastSuccessAt    *time.Time
 	BoundModels      int64
@@ -107,10 +108,7 @@ type Detail struct {
 	AttemptSucceeded int64
 	SuccessRate      float64
 	TimeoutTotal     int64
-	LatencyAvg       float64
-	LatencyP50       float64
-	LatencyP95       float64
-	LatencyP99       float64
+	Latency          opsutil.LatencyStats
 	LastSuccessAt    *time.Time
 	LastFailureAt    *time.Time
 }
@@ -120,7 +118,7 @@ type PerfPoint struct {
 	Bucket           time.Time
 	AttemptTotal     int64
 	AttemptSucceeded int64
-	LatencyP95       float64
+	LatencyAvg       float64
 }
 
 // ErrorRow 是抽屉错误 Tab 行。
@@ -143,7 +141,7 @@ type ModelRow struct {
 	AttemptTotal     int64
 	AttemptSucceeded int64
 	SuccessRate      float64
-	LatencyP95       float64
+	Latency          opsutil.LatencyStats
 	HasPrice         bool
 }
 
@@ -205,7 +203,10 @@ func (s *Service) Summary(ctx context.Context, from, to time.Time) (Summary, err
 		AttemptTotal:     agg.AttemptTotal,
 		AttemptSucceeded: agg.AttemptSucceeded,
 		TimeoutTotal:     agg.TimeoutTotal,
-		LatencyP95:       agg.LatencyP95,
+		Latency: opsutil.AttemptLatency(
+			agg.LatencyAvg, agg.LatencyP50, agg.LatencyP90, agg.LatencyP95, agg.LatencyP99,
+			agg.LatencySample, agg.AttemptSucceeded,
+		),
 		PriceTotal:       price.Total,
 		PriceWithPrice:   price.WithPrice,
 		PriceWithCost:    price.WithCost,
@@ -263,7 +264,10 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			AttemptTotal:     r.AttemptTotal,
 			AttemptSucceeded: r.AttemptSucceeded,
 			TimeoutTotal:     r.TimeoutTotal,
-			LatencyP95:       r.LatencyP95,
+			Latency: opsutil.AttemptLatency(
+				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
+				r.LatencySample, r.AttemptSucceeded,
+			),
 			HealthBucket:     healthBucket(r.AttemptSucceeded, r.AttemptTotal),
 			LastSuccessAt:    timeValue(r.LastSuccessAt),
 			BoundModels:      r.BoundModels,
@@ -287,10 +291,10 @@ func (s *Service) Detail(ctx context.Context, channelID int64, from, to time.Tim
 		AttemptTotal:     r.AttemptTotal,
 		AttemptSucceeded: r.AttemptSucceeded,
 		TimeoutTotal:     r.TimeoutTotal,
-		LatencyAvg:       r.LatencyAvg,
-		LatencyP50:       r.LatencyP50,
-		LatencyP95:       r.LatencyP95,
-		LatencyP99:       r.LatencyP99,
+		Latency: opsutil.AttemptLatency(
+			r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
+			r.LatencySample, r.AttemptSucceeded,
+		),
 		LastSuccessAt:    timeValue(r.LastSuccessAt),
 		LastFailureAt:    timeValue(r.LastFailureAt),
 	}
@@ -313,7 +317,7 @@ func (s *Service) PerformanceTimeseries(ctx context.Context, channelID int64, in
 	}
 	out := make([]PerfPoint, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, PerfPoint{Bucket: r.Bucket.Time, AttemptTotal: r.AttemptTotal, AttemptSucceeded: r.AttemptSucceeded, LatencyP95: r.LatencyP95})
+		out = append(out, PerfPoint{Bucket: r.Bucket.Time, AttemptTotal: r.AttemptTotal, AttemptSucceeded: r.AttemptSucceeded, LatencyAvg: r.LatencyAvg})
 	}
 	return out, nil
 }
@@ -360,7 +364,10 @@ func (s *Service) Models(ctx context.Context, channelID int64, from, to time.Tim
 			Status:           r.Status,
 			AttemptTotal:     r.AttemptTotal,
 			AttemptSucceeded: r.AttemptSucceeded,
-			LatencyP95:       r.LatencyP95,
+			Latency: opsutil.AttemptLatency(
+				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
+				r.LatencySample, r.AttemptSucceeded,
+			),
 			HasPrice:         r.HasPrice,
 		}
 		if r.AttemptTotal > 0 {

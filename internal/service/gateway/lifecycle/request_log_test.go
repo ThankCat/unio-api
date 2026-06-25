@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
@@ -82,6 +83,34 @@ func TestInternalErrorDetailIncludesCauseChain(t *testing.T) {
 func TestFailureCodeOrFallbackReturnsFallbackWhenNoFailureCode(t *testing.T) {
 	if got := FailureCodeOrFallback(errors.New("plain error"), "fallback_code"); got != "fallback_code" {
 		t.Fatalf("expected fallback_code, got %q", got)
+	}
+}
+
+func TestRequestLogCancelFactsIgnoresAdapterWrappedFailureCode(t *testing.T) {
+	err := adapter.NewUpstreamError(
+		adapter.UpstreamErrorCanceled,
+		adapter.UpstreamMetadata{},
+		failure.Wrap(
+			failure.CodeAdapterSendRequestFailed,
+			context.Canceled,
+			failure.WithMessage("openai adapter send stream chat completion request"),
+		),
+	)
+
+	l := &RequestLifecycle{}
+	code, msg, detail := l.requestLogCancelFacts(err)
+
+	if code != "client_canceled" {
+		t.Fatalf("expected client_canceled, got %q", code)
+	}
+	if msg != "Request was canceled by the client." {
+		t.Fatalf("expected client cancel message, got %q", msg)
+	}
+	if FailureCodeOrFallback(err, "client_canceled") != string(failure.CodeAdapterSendRequestFailed) {
+		t.Fatal("precondition: wrapped cancel must carry adapter failure code")
+	}
+	if !strings.Contains(detail, context.Canceled.Error()) {
+		t.Fatalf("detail missing root cause %q: %q", context.Canceled.Error(), detail)
 	}
 }
 

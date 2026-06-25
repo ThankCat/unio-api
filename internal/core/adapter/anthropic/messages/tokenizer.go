@@ -56,3 +56,18 @@ func EstimateMessagesInputTokens(req MessagesInputTokenizeRequest) (int64, error
 func (a *Adapter) CountMessagesInputTokens(req MessagesInputTokenizeRequest) (int64, error) {
 	return EstimateMessagesInputTokens(req)
 }
+
+// CountOutputTokens 估算一段 assistant 输出文本的 token 数（与输入同口径的 chars/token 启发式）。
+//
+// 仅用于流式 partial settlement：上游未返回 final usage 时，对「已 emit 的可见文本」做保守估算。
+// 不含 wireOverheadTokens（纯输出文本，无 framing）。空文本返回 0（不计费）。
+func CountOutputTokens(text string) int64 {
+	if strings.TrimSpace(text) == "" {
+		return 0
+	}
+	tokens := int64(utf8.RuneCount([]byte(text))) / charsPerToken
+	if tokens < 1 {
+		tokens = 1
+	}
+	return tokens
+}

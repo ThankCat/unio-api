@@ -39,13 +39,13 @@ func (s *fakeDashboardService) Timeseries(_ context.Context, metric, interval st
 	return dashboard.Series{Metric: metric, Interval: interval, From: from, To: to}, nil
 }
 
-func (s *fakeDashboardService) Radar(_ context.Context, from, to, _, _ time.Time) (dashboard.RadarReport, error) {
+func (s *fakeDashboardService) Radar(_ context.Context, from, to time.Time) (dashboard.RadarReport, error) {
 	return dashboard.RadarReport{From: from, To: to}, nil
 }
 
 func (s *fakeDashboardService) Breakdown(_ context.Context, dimension string, _, _ time.Time) ([]dashboard.BreakdownRow, error) {
 	switch dimension {
-	case dashboard.BreakdownRoute, dashboard.BreakdownChannel, dashboard.BreakdownModel:
+	case dashboard.BreakdownProvider, dashboard.BreakdownRoute, dashboard.BreakdownChannel, dashboard.BreakdownModel:
 		return []dashboard.BreakdownRow{}, nil
 	default:
 		return nil, failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("bad dimension"))
@@ -122,5 +122,14 @@ func TestDashboardRequiresToken(t *testing.T) {
 	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/overview", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestDashboardBreakdownProviderDimensionReturns200(t *testing.T) {
+	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: &fakeDashboardService{}})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/breakdown?dimension=provider&range=24h", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
 }

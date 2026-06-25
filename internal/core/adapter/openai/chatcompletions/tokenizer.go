@@ -30,6 +30,21 @@ func (a *Adapter) CountChatInputTokens(req ChatRequest) (int64, error) {
 	return countTextTokens(codec, string(body))
 }
 
+// CountOutputTokens 估算一段 assistant 输出文本的 token 数，按 upstream model 选 tiktoken 编码。
+//
+// 仅用于流式 partial settlement：上游未返回 final usage 时，对「已 emit 的可见文本」做保守估算。
+// 空文本返回 0（不计费）。这是估算而非上游真实 usage，调用方须标记 partial_stream_estimate。
+func CountOutputTokens(model string, text string) (int64, error) {
+	if strings.TrimSpace(text) == "" {
+		return 0, nil
+	}
+	codec, err := chatCodec(model)
+	if err != nil {
+		return 0, err
+	}
+	return countTextTokens(codec, text)
+}
+
 func chatCodec(model string) (tiktoken.Codec, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {

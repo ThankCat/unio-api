@@ -50,6 +50,12 @@ type RunStreamParams struct {
 	Stream           StreamUpstream
 	EmitChunk        EmitStreamChunk
 	Finish           FinishStream
+
+	// ConservativeInputTokens 是预授权阶段的保守输入估算，供 partial settlement 复用为 input 事实。
+	ConservativeInputTokens int64
+	// CountOutputTokens 按 upstream model 估算一段可见输出文本的 token 数，供 partial settlement 计 output。
+	// 为 nil 时 partial 的 output 记 0（偏保守）。
+	CountOutputTokens func(model string, text string) int64
 }
 
 // StreamChunkMeta 是从一个上游流式 chunk 提取出的协议无关元信息。
@@ -65,6 +71,10 @@ type StreamChunkMeta struct {
 	FinishReason string
 	Usage        *adapter.ChatUsage
 	SuppressEmit bool
+
+	// VisibleText 是该 chunk 对客户可见的输出文本增量，仅供流式 partial settlement 估算 output token。
+	// 不参与 full bill（账务只认 adapter facts）；usage 控制 chunk / 非文本帧应为空。
+	VisibleText string
 }
 
 // StreamUpstreamGeneric 执行一次 timed 上游流式调用（泛型载体版）。
@@ -91,6 +101,12 @@ type RunStreamParamsGeneric[C any] struct {
 	Finish           FinishStream
 	// ChunkMeta 从一个上游 chunk 提取协议无关元信息；不得为 nil。
 	ChunkMeta func(C) StreamChunkMeta
+
+	// ConservativeInputTokens 是预授权阶段的保守输入估算，供 partial settlement 复用为 input 事实。
+	ConservativeInputTokens int64
+	// CountOutputTokens 按 upstream model 估算一段可见输出文本的 token 数，供 partial settlement 计 output。
+	// 为 nil 时 partial 的 output 记 0（偏保守）。
+	CountOutputTokens func(model string, text string) int64
 }
 
 // RunStream 执行 authorization 之后的流式候选 fallback 循环（chat chunk 载体）。
@@ -107,10 +123,12 @@ func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (
 		RequestedModelID: params.RequestedModelID,
 		ResponseProtocol: params.ResponseProtocol,
 		ResolveAdapter:   params.ResolveAdapter,
-		Stream:           StreamUpstreamGeneric[chatcompletionsadapter.ChatStreamChunk](params.Stream),
-		EmitChunk:        EmitStreamChunkGeneric[chatcompletionsadapter.ChatStreamChunk](params.EmitChunk),
-		Finish:           params.Finish,
-		ChunkMeta:        chatStreamChunkMeta,
+		Stream:                  StreamUpstreamGeneric[chatcompletionsadapter.ChatStreamChunk](params.Stream),
+		EmitChunk:               EmitStreamChunkGeneric[chatcompletionsadapter.ChatStreamChunk](params.EmitChunk),
+		Finish:                  params.Finish,
+		ChunkMeta:               chatStreamChunkMeta,
+		ConservativeInputTokens: params.ConservativeInputTokens,
+		CountOutputTokens:       params.CountOutputTokens,
 	})
 }
 
@@ -121,6 +139,7 @@ func chatStreamChunkMeta(chunk chatcompletionsadapter.ChatStreamChunk) StreamChu
 		ID:           chunk.ID,
 		Usage:        chunk.Usage,
 		SuppressEmit: chunk.Usage != nil,
+		VisibleText:  chunk.Content,
 	}
 	if chunk.FinishReason != nil {
 		meta.FinishReason = *chunk.FinishReason
@@ -182,6 +201,9 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		// 响应会混入不同上游内容。
 		emitted := false
 
+		// partialOutputTokens 累计「已 emit 可见文本」的估算 output token，仅用于 partial settlement。
+		var partialOutputTokens int64
+
 		// finalUsage 仅用于协议向客户写出 usage/completed 帧；结算只消费 streamFacts。
 		var finalUsage *adapter.ChatUsage
 
@@ -237,6 +259,51 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			return settleErr
 		}
 
+		// finishPartial 处理「已 emit 但无 adapter final usage」的 partial settlement（路线 B/D）：
+		// 合成 partial_stream_estimate 事实走与 full bill 相同的结算管道（attempt/request 标 succeeded、
+		// final_usage_received=false）；settlement 永久失败且无 recovery 接管时，退回释放冻结并记风险敞口
+		// （与上游成功后 settlement 失败同语义）。reason 落到 upstream_finish_reason 区分 B/D。
+		finishPartial := func(reason string, outcome metrics.ChatOutcome, streamEvent metrics.StreamEvent, deliveryCompleted bool, returnErr error) (RunResult, error) {
+			facts := BuildPartialStreamFacts(PartialStreamFactsParams{
+				Candidate:        candidate,
+				StreamResponseID: streamResponseID,
+				RequestRecordID:  requestRecord.ID,
+				InputTokens:      params.ConservativeInputTokens,
+				OutputTokens:     partialOutputTokens,
+				Reason:           reason,
+			})
+			streamFacts = &facts
+
+			if settleErr := settleStreamFacts(); settleErr != nil {
+				if !IsChatSettlementRecoveryScheduled(settleErr) {
+					if releaseErr := l.ReleaseAuthorizationForBillingException(
+						ctx,
+						authorization,
+						"stream_settlement_failed_after_upstream_success",
+						"stream partial settlement permanently failed without recovery job",
+					); releaseErr != nil {
+						l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+						return result, releaseErr
+					}
+					l.MarkRequestFailed(ctx, requestRecord, "stream_chat_settlement_failed", settleErr)
+					return result, settleErr
+				}
+			}
+
+			// 交付状态：路线 D（上游正常结束、仅缺 final usage）客户已拿到全部内容 → completed；
+			// 路线 B（客户端取消 / 上游中断）客户未拿到完整响应 → interrupted。
+			if deliveryCompleted {
+				l.MarkDeliveryCompleted(ctx, requestRecord)
+			} else {
+				l.MarkDeliveryInterrupted(ctx, requestRecord)
+			}
+
+			result.Outcome = outcome
+			l.RecordStreamEvent(streamEvent)
+			return result, returnErr
+		}
+		_ = finishPartial
+
 		onChunk := func(chunk C) error {
 			meta := params.ChunkMeta(chunk)
 			if meta.ID != "" {
@@ -264,6 +331,12 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				l.MarkResponseStarted(ctx, requestRecord, attemptRecord, now)
 				l.RecordStreamEvent(metrics.StreamEventStarted)
 			}
+
+			// 累计已 emit 可见文本的估算 output token，供 partial settlement（无 final usage 时）使用。
+			if params.CountOutputTokens != nil && meta.VisibleText != "" {
+				partialOutputTokens += params.CountOutputTokens(candidate.UpstreamModel, meta.VisibleText)
+			}
+
 			return params.EmitChunk(chunk)
 		}
 
@@ -293,18 +366,21 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 					}
 				}
 				// 账务已收口，但调用方仍需知道流尾发生过错误；HTTP 层若已写出 SSE 只能中断连接。
+				// 已 emit 后尾部出错：客户未拿到完整响应，交付标 interrupted。
+				if emitted {
+					l.MarkDeliveryInterrupted(ctx, requestRecord)
+				}
 				return result, err
 			}
 
-			// 客户端取消不是上游失败，也不触发 fallback；没有 final usage 时缺少可靠用量事实，
-			// 当前阶段只记录 canceled、不扣费。
+			// 客户端取消不是上游失败，也不触发 fallback。已 emit 时按 partial settlement 计费（路线 B）；
+			// 首 token 前取消则普通释放冻结、不扣费（路线 C）。
 			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-				if releaseErr := l.ReleaseAuthorizationForBillingException(
-					ctx,
-					authorization,
-					"stream_client_canceled_without_final_usage",
-					"stream client canceled before final usage",
-				); releaseErr != nil {
+				if emitted {
+					return finishPartial(PartialReasonClientCanceled, metrics.ChatOutcomeCanceled, metrics.StreamEventCanceled, false, err)
+				}
+
+				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 					l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
 					return result, releaseErr
 				}
@@ -315,26 +391,15 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				return result, err
 			}
 
-			l.MarkAttemptFailed(ctx, attemptRecord, "stream_adapter_error", err)
-
 			if emitted {
-				// SSE 已写出后只能把当前请求标记为失败并结束：HTTP 层不能再改写 JSON error，
-				// 也不能换 channel 重放已写出的内容。
-				if releaseErr := l.ReleaseAuthorizationForBillingException(
-					ctx,
-					authorization,
-					"stream_interrupted_without_final_usage",
-					"stream interrupted after emit before final usage",
-				); releaseErr != nil {
-					l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
-					return result, releaseErr
-				}
-
-				l.MarkRequestFailed(ctx, requestRecord, "stream_adapter_error_after_emit", err)
-				return result, err
+				// SSE 已写出后无法再 fallback 或改写 JSON error。已 emit 内容按 partial settlement 计费（路线 B）；
+				// 不在此处 MarkAttemptFailed——partial 走 settlement 会把 attempt 标 succeeded。
+				return finishPartial(PartialReasonInterrupted, metrics.ChatOutcomeCanceled, metrics.StreamEventCanceled, false, err)
 			}
 
-			// 首 chunk 前失败时客户端还没看到上游内容，只有这时允许同模型 fallback。
+			// 首 token 前失败：attempt 记失败；客户端还没看到上游内容，只有这时允许同模型 fallback。
+			l.MarkAttemptFailed(ctx, attemptRecord, "stream_adapter_error", err)
+
 			if !r.retryClassifier.IsRetryable(err) {
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 					l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
@@ -349,20 +414,20 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			continue
 		}
 
-		if streamFacts == nil || finalUsage == nil {
-			// adapter 正常结束但缺 final usage，不能当作可计费成功请求（上游不支持 include_usage、
-			// 代理吞尾包或 parser 漏解析）。
+		// 账务唯一真源是 adapter facts（B4）：只看 streamFacts 是否缺失，不依赖客户帧用的 finalUsage。
+		if streamFacts == nil {
+			// adapter 正常结束但缺 final usage（上游不支持 include_usage、代理吞尾包或 parser 漏解析）。
+			// 已 emit 时按 partial settlement 计费并标渠道异常（路线 D）；未 emit 则普通释放、不扣费（路线 C）。
+			if emitted {
+				return finishPartial(PartialReasonFinalUsageMissing, metrics.ChatOutcomeSuccess, metrics.StreamEventMissingUsage, true, nil)
+			}
+
 			err := failure.New(
 				failure.CodeGatewayStreamUsageMissing,
 				failure.WithMessage("gateway stream final usage is missing"),
 			)
 
-			if releaseErr := l.ReleaseAuthorizationForBillingException(
-				ctx,
-				authorization,
-				"stream_final_usage_missing",
-				"stream ended without final usage",
-			); releaseErr != nil {
+			if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 				l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
 				return result, releaseErr
 			}
@@ -391,9 +456,15 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			}
 		}
 
-		if err := params.Finish(streamResponseID, *finalUsage, finishReason); err != nil {
-			return result, err
+		// B4：streamFacts 非空即 full bill；finalUsage 仅用于客户收尾帧，缺失时跳过（不影响计费）。
+		if finalUsage != nil {
+			if err := params.Finish(streamResponseID, *finalUsage, finishReason); err != nil {
+				return result, err
+			}
 		}
+
+		// 流式正常结束（路线 A）：所有 chunk 与收尾帧已写出，交付完成。
+		l.MarkDeliveryCompleted(ctx, requestRecord)
 
 		result.Outcome = metrics.ChatOutcomeSuccess
 		l.RecordStreamEvent(metrics.StreamEventCompleted)

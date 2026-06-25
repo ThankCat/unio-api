@@ -43,7 +43,7 @@ type Row struct {
 	AttemptSucceeded int64
 	SuccessRate      float64
 	TimeoutTotal     int64
-	LatencyP95       float64
+	Latency          opsutil.LatencyStats
 	HealthBucket     string
 	LastSuccessAt    *time.Time
 }
@@ -56,8 +56,7 @@ type Detail struct {
 	AttemptSucceeded int64
 	SuccessRate      float64
 	TimeoutTotal     int64
-	LatencyP50       float64
-	LatencyP95       float64
+	Latency          opsutil.LatencyStats
 }
 
 // ChannelRow 是抽屉渠道 Tab 行（精简）。
@@ -69,7 +68,7 @@ type ChannelRow struct {
 	AttemptTotal     int64
 	AttemptSucceeded int64
 	SuccessRate      float64
-	LatencyP95       float64
+	Latency          opsutil.LatencyStats
 	HealthBucket     string
 }
 
@@ -78,7 +77,7 @@ type PerfPoint struct {
 	Bucket           time.Time
 	AttemptTotal     int64
 	AttemptSucceeded int64
-	LatencyP95       float64
+	LatencyAvg       float64
 }
 
 // ErrorRow 是抽屉错误 Tab 行。
@@ -134,7 +133,10 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			AttemptSucceeded: r.AttemptSucceeded,
 			SuccessRate:      opsutil.SuccessRate(r.AttemptSucceeded, r.AttemptTotal),
 			TimeoutTotal:     r.TimeoutTotal,
-			LatencyP95:       r.LatencyP95,
+			Latency: opsutil.AttemptLatency(
+				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
+				r.LatencySample, r.AttemptSucceeded,
+			),
 			HealthBucket:     opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal),
 			LastSuccessAt:    opsutil.TimeValue(r.LastSuccessAt),
 		})
@@ -155,8 +157,10 @@ func (s *Service) Detail(ctx context.Context, providerID int64, from, to time.Ti
 		AttemptSucceeded: r.AttemptSucceeded,
 		SuccessRate:      opsutil.SuccessRate(r.AttemptSucceeded, r.AttemptTotal),
 		TimeoutTotal:     r.TimeoutTotal,
-		LatencyP50:       r.LatencyP50,
-		LatencyP95:       r.LatencyP95,
+		Latency: opsutil.AttemptLatency(
+			r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
+			r.LatencySample, r.AttemptSucceeded,
+		),
 	}, nil
 }
 
@@ -176,7 +180,10 @@ func (s *Service) Channels(ctx context.Context, providerID int64, from, to time.
 			AttemptTotal:     r.AttemptTotal,
 			AttemptSucceeded: r.AttemptSucceeded,
 			SuccessRate:      opsutil.SuccessRate(r.AttemptSucceeded, r.AttemptTotal),
-			LatencyP95:       r.LatencyP95,
+			Latency: opsutil.AttemptLatency(
+				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
+				r.LatencySample, r.AttemptSucceeded,
+			),
 			HealthBucket:     opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal),
 		})
 	}
@@ -194,7 +201,7 @@ func (s *Service) PerformanceTimeseries(ctx context.Context, providerID int64, i
 	}
 	out := make([]PerfPoint, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, PerfPoint{Bucket: r.Bucket.Time, AttemptTotal: r.AttemptTotal, AttemptSucceeded: r.AttemptSucceeded, LatencyP95: r.LatencyP95})
+		out = append(out, PerfPoint{Bucket: r.Bucket.Time, AttemptTotal: r.AttemptTotal, AttemptSucceeded: r.AttemptSucceeded, LatencyAvg: r.LatencyAvg})
 	}
 	return out, nil
 }

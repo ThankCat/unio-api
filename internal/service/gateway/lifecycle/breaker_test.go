@@ -92,7 +92,7 @@ func TestChannelCircuitBreakerAvailableDoesNotReserveHalfOpenProbe(t *testing.T)
 	b.RecordFailure(key)
 
 	*clock = clock.Add(11 * time.Second)
-	if !b.Available(key) || !b.Available(key) {
+	if !b.Available(key) {
 		t.Fatal("read-only availability should report the cooled-down channel without reserving its probe")
 	}
 	if !b.Allow(key) {

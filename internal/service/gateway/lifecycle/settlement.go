@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -192,8 +193,25 @@ func UpstreamRequestIDPtr(requestID string) *string {
 	return &requestID
 }
 
+// injectedSettlementFailure 仅用于本地账单 E2E 故障注入（env BILLING_E2E_INJECT_SETTLEMENT_FAIL）。
+// 生产默认不设置该 env → 返回 nil，零影响。取值 "always" 时每次 raw settlement 都失败，用于驱动
+// recovery 重试耗尽 → dead → 风险敞口收口（REC-02）。"once" 在 recoverable 包裹器层处理（REC-01）。
+func injectedSettlementFailure() error {
+	if os.Getenv("BILLING_E2E_INJECT_SETTLEMENT_FAIL") == "always" {
+		return failure.New(
+			failure.CodeGatewayChatSettlementFailed,
+			failure.WithMessage("billing e2e injected settlement failure (always)"),
+		)
+	}
+	return nil
+}
+
 // SettleSuccessfulChat 对一次成功的 chat 请求执行结算。
 func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params ChatSettlementParams) error {
+	if err := injectedSettlementFailure(); err != nil {
+		return err
+	}
+
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return failure.Wrap(
@@ -264,8 +282,10 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		UpstreamStatusCode:    facts.Metadata.StatusCode,
 		UpstreamRequestID:     UpstreamRequestIDPtr(facts.Metadata.RequestID),
 		ResponseStartedAt:     params.ResponseStartedAt,
-		UsageMappingVersion:   facts.UsageMappingVersion,
-		CompletedAt:           now,
+		// partial settlement 合成的估算事实不是上游真实 usage：标 final_usage_received=false 作为审计信号。
+		FinalUsageReceived:  !facts.UsageSource.IsPartialEstimate(),
+		UsageMappingVersion: facts.UsageMappingVersion,
+		CompletedAt:         now,
 	})
 	if err != nil {
 		return failure.Wrap(

@@ -81,17 +81,6 @@ SELECT
     COUNT(*) FILTER (WHERE status = 'dead') AS dead_total
 FROM settlement_recovery_jobs;
 
--- name: DashboardRadarStatusWindow :one
--- DashboardRadarStatusWindow 在独立短窗口（如近 15min）聚合平台健康判定所需计数。
-SELECT
-    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
-    COUNT(*) FILTER (WHERE status = 'succeeded') AS succeeded_total,
-    COUNT(*) FILTER (WHERE error_code IN ('no_available_channel', 'routing_no_available_channel')) AS no_channel_total,
-    COUNT(*) FILTER (WHERE error_code ILIKE '%timeout%' OR error_code = 'context_deadline_exceeded') AS timeout_total
-FROM request_records
-WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
-  AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz);
-
 -- name: DashboardRadarBadChannels :many
 -- DashboardRadarBadChannels 返回区间内有尝试的渠道里「最差」的若干条（精简列，§1.8）：
 -- 渠道 + 健康（service 据成功率分桶）+ 成功率 + 最近错误码。完整列表去渠道页。
@@ -142,31 +131,109 @@ LIMIT 10;
 -- DashboardBreakdownRoute 按「就近绑定」归属线路聚合区间请求（§3.1.8）：
 -- api_keys.route_id ?? projects.default_route_id ?? 内置桶（route_id 为 NULL）。
 -- 附 token 合计 / 成本(USD) / P95 延迟；usage_records、cost_snapshots 与请求 1:1，LEFT JOIN 不放大行数。
+WITH per_request AS (
+    SELECT
+        COALESCE(ak.route_id, p.default_route_id) AS route_id,
+        rt.name AS route_name,
+        rt.status AS route_status,
+        r.status,
+        r.error_code,
+        r.created_at,
+        r.started_at,
+        r.completed_at,
+        COALESCE(
+            u.uncached_input_tokens + u.cache_read_input_tokens
+            + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
+            + u.output_tokens_total,
+            0
+        )::bigint AS tokens_total,
+        COALESCE(
+            CASE WHEN cs.currency = 'USD' THEN cs.total_cost_amount END,
+            0
+        )::numeric AS cost_usd,
+        COALESCE(
+            CASE WHEN le.entry_type = 'debit' AND le.currency = 'USD' THEN le.amount END,
+            0
+        )::numeric AS revenue_usd,
+        CASE
+            WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+            THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8
+        END AS latency_ms
+    FROM request_records r
+    JOIN api_keys ak ON ak.id = r.api_key_id
+    JOIN projects p ON p.id = r.project_id
+    LEFT JOIN routes rt ON rt.id = COALESCE(ak.route_id, p.default_route_id)
+    LEFT JOIN usage_records u ON u.request_record_id = r.id
+    LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
+    LEFT JOIN ledger_entries le ON le.request_record_id = r.id
+    WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
+      AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
+)
 SELECT
-    COALESCE(ak.route_id, p.default_route_id) AS route_id,
-    rt.name AS route_name,
+    route_id,
+    route_name,
+    route_status,
+    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
+    COUNT(*) FILTER (WHERE status = 'succeeded') AS succeeded_total,
+    COUNT(*) FILTER (WHERE status = 'failed') AS failed_total,
+    COALESCE(SUM(tokens_total), 0)::bigint AS tokens_total,
+    COALESCE(SUM(revenue_usd), 0)::numeric AS revenue_usd,
+    COALESCE(SUM(cost_usd), 0)::numeric AS cost_usd,
+    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0)::float8 AS latency_p95,
+    (
+        SELECT pr2.error_code
+        FROM per_request pr2
+        WHERE pr2.route_id IS NOT DISTINCT FROM pr.route_id
+          AND pr2.error_code IS NOT NULL
+        ORDER BY pr2.created_at DESC
+        LIMIT 1
+    ) AS recent_error_code
+FROM per_request pr
+GROUP BY route_id, route_name, route_status
+ORDER BY terminal_total DESC
+LIMIT 20;
+
+-- name: DashboardBreakdownProvider :many
+-- DashboardBreakdownProvider 按最终服务商聚合区间请求（精简 Top），附 token / 成本(USD) / P95 延迟。
+SELECT
+    r.final_provider_id AS provider_id,
+    p.name AS provider_name,
+    p.status AS provider_status,
     COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
     COUNT(*) FILTER (WHERE r.status = 'succeeded') AS succeeded_total,
+    COUNT(*) FILTER (WHERE r.status = 'failed') AS failed_total,
+    COUNT(DISTINCT r.final_channel_id) FILTER (WHERE r.final_channel_id IS NOT NULL) AS channel_count,
     COALESCE(SUM(
         u.uncached_input_tokens + u.cache_read_input_tokens
         + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
         + u.output_tokens_total
     ), 0)::bigint AS tokens_total,
+    COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
     COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd,
+    COUNT(*) FILTER (WHERE r.status = 'succeeded' AND r.completed_at IS NOT NULL) AS latency_sample,
+    COALESCE(AVG(CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
-        CASE
-            WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-            THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8
-        END), 0)::float8 AS latency_p95
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99
 FROM request_records r
-JOIN api_keys ak ON ak.id = r.api_key_id
-JOIN projects p ON p.id = r.project_id
-LEFT JOIN routes rt ON rt.id = COALESCE(ak.route_id, p.default_route_id)
+LEFT JOIN providers p ON p.id = r.final_provider_id
 LEFT JOIN usage_records u ON u.request_record_id = r.id
 LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
-WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
+LEFT JOIN ledger_entries le ON le.request_record_id = r.id
+WHERE r.final_provider_id IS NOT NULL
+  AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
-GROUP BY COALESCE(ak.route_id, p.default_route_id), rt.name
+GROUP BY r.final_provider_id, p.name, p.status
 ORDER BY terminal_total DESC
 LIMIT 20;
 
@@ -178,21 +245,44 @@ SELECT
     c.status AS channel_status,
     COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
     COUNT(*) FILTER (WHERE r.status = 'succeeded') AS succeeded_total,
+    COUNT(*) FILTER (WHERE r.status = 'failed') AS failed_total,
     COALESCE(SUM(
         u.uncached_input_tokens + u.cache_read_input_tokens
         + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
         + u.output_tokens_total
     ), 0)::bigint AS tokens_total,
+    COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
     COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd,
+    COUNT(*) FILTER (WHERE r.status = 'succeeded' AND r.completed_at IS NOT NULL) AS latency_sample,
+    COALESCE(AVG(CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
-        CASE
-            WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-            THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8
-        END), 0)::float8 AS latency_p95
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
+    (
+        SELECT a2.error_code
+        FROM request_attempts a2
+        WHERE a2.channel_id = r.final_channel_id
+          AND a2.error_code IS NOT NULL
+          AND (sqlc.narg('from_time')::timestamptz IS NULL OR a2.created_at >= sqlc.narg('from_time')::timestamptz)
+          AND (sqlc.narg('to_time')::timestamptz IS NULL OR a2.created_at < sqlc.narg('to_time')::timestamptz)
+        ORDER BY a2.created_at DESC
+        LIMIT 1
+    ) AS recent_error_code
 FROM request_records r
 LEFT JOIN channels c ON c.id = r.final_channel_id
 LEFT JOIN usage_records u ON u.request_record_id = r.id
 LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
+LEFT JOIN ledger_entries le ON le.request_record_id = r.id
 WHERE r.final_channel_id IS NOT NULL
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
@@ -206,11 +296,13 @@ SELECT
     r.requested_model_id AS model_id,
     COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
     COUNT(*) FILTER (WHERE r.status = 'succeeded') AS succeeded_total,
+    COUNT(*) FILTER (WHERE r.status = 'failed') AS failed_total,
     COALESCE(SUM(
         u.uncached_input_tokens + u.cache_read_input_tokens
         + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
         + u.output_tokens_total
     ), 0)::bigint AS tokens_total,
+    COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
     COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE
@@ -220,6 +312,7 @@ SELECT
 FROM request_records r
 LEFT JOIN usage_records u ON u.request_record_id = r.id
 LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
+LEFT JOIN ledger_entries le ON le.request_record_id = r.id
 WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 GROUP BY r.requested_model_id

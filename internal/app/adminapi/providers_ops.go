@@ -31,9 +31,9 @@ type providerOpsRowDTO struct {
 	AttemptTotal     int64   `json:"attempt_total"`
 	AttemptSucceeded int64   `json:"attempt_succeeded"`
 	SuccessRate      float64 `json:"success_rate"`
-	TimeoutTotal     int64   `json:"timeout_total"`
-	LatencyP95       float64 `json:"latency_p95"`
-	Health           string  `json:"health"`
+	TimeoutTotal     int64           `json:"timeout_total"`
+	Latency          latencyStatsDTO `json:"latency"`
+	Health           string          `json:"health"`
 	LastSuccessAt    *string `json:"last_success_at"`
 }
 
@@ -43,9 +43,8 @@ type providerOpsDetailDTO struct {
 	AttemptTotal     int64   `json:"attempt_total"`
 	AttemptSucceeded int64   `json:"attempt_succeeded"`
 	SuccessRate      float64 `json:"success_rate"`
-	TimeoutTotal     int64   `json:"timeout_total"`
-	LatencyP50       float64 `json:"latency_p50"`
-	LatencyP95       float64 `json:"latency_p95"`
+	TimeoutTotal     int64           `json:"timeout_total"`
+	Latency          latencyStatsDTO `json:"latency"`
 }
 
 type providerOpsChannelDTO struct {
@@ -55,16 +54,16 @@ type providerOpsChannelDTO struct {
 	Status           string  `json:"status"`
 	AttemptTotal     int64   `json:"attempt_total"`
 	AttemptSucceeded int64   `json:"attempt_succeeded"`
-	SuccessRate      float64 `json:"success_rate"`
-	LatencyP95       float64 `json:"latency_p95"`
-	Health           string  `json:"health"`
+	SuccessRate      float64         `json:"success_rate"`
+	Latency          latencyStatsDTO `json:"latency"`
+	Health           string          `json:"health"`
 }
 
 type providerOpsPerfPointDTO struct {
 	Bucket           string  `json:"bucket"`
 	AttemptTotal     int64   `json:"attempt_total"`
 	AttemptSucceeded int64   `json:"attempt_succeeded"`
-	LatencyP95       float64 `json:"latency_p95"`
+	LatencyAvg       float64 `json:"latency_avg"`
 }
 
 type providerOpsErrorDTO struct {
@@ -108,7 +107,7 @@ func (h *providerOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			AttemptSucceeded: row.AttemptSucceeded,
 			SuccessRate:      row.SuccessRate,
 			TimeoutTotal:     row.TimeoutTotal,
-			LatencyP95:       row.LatencyP95,
+			Latency:          latencyStatsFrom(row.Latency),
 			Health:           row.HealthBucket,
 			LastSuccessAt:    rfc3339Ptr(row.LastSuccessAt),
 		})
@@ -139,8 +138,7 @@ func (h *providerOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		AttemptSucceeded: d.AttemptSucceeded,
 		SuccessRate:      d.SuccessRate,
 		TimeoutTotal:     d.TimeoutTotal,
-		LatencyP50:       d.LatencyP50,
-		LatencyP95:       d.LatencyP95,
+		Latency:          latencyStatsFrom(d.Latency),
 	})
 }
 
@@ -170,7 +168,7 @@ func (h *providerOpsHandler) channels(w http.ResponseWriter, r *http.Request) {
 			AttemptTotal:     c.AttemptTotal,
 			AttemptSucceeded: c.AttemptSucceeded,
 			SuccessRate:      c.SuccessRate,
-			LatencyP95:       c.LatencyP95,
+			Latency:          latencyStatsFrom(c.Latency),
 			Health:           c.HealthBucket,
 		})
 	}
@@ -198,7 +196,7 @@ func (h *providerOpsHandler) performance(w http.ResponseWriter, r *http.Request)
 	}
 	out := make([]providerOpsPerfPointDTO, 0, len(points))
 	for _, p := range points {
-		out = append(out, providerOpsPerfPointDTO{Bucket: rfc3339(p.Bucket), AttemptTotal: p.AttemptTotal, AttemptSucceeded: p.AttemptSucceeded, LatencyP95: p.LatencyP95})
+		out = append(out, providerOpsPerfPointDTO{Bucket: rfc3339(p.Bucket), AttemptTotal: p.AttemptTotal, AttemptSucceeded: p.AttemptSucceeded, LatencyAvg: p.LatencyAvg})
 	}
 	writeData(w, http.StatusOK, out)
 }

@@ -505,7 +505,7 @@ func TestStreamMessageEmitsNativeEventsAndStopThenSettles(t *testing.T) {
 	}
 }
 
-func TestStreamMessageMissingFinalUsageReleasesAndFails(t *testing.T) {
+func TestStreamMessagePartialSettlesWhenFinalUsageMissingAfterEmit(t *testing.T) {
 	adapterFake := &fakeMessagesAdapter{
 		streamEvents: []messagesadapter.MessageStreamEvent{
 			{Type: "message_start", Data: json.RawMessage(`{"type":"message_start","message":{"id":"x","model":"deepseek-v4-flash"}}`)},
@@ -528,13 +528,20 @@ func TestStreamMessageMissingFinalUsageReleasesAndFails(t *testing.T) {
 	err := service.StreamMessage(contextWithPrincipal(42), messageRequest(), func(frame gatewayapi.StreamFrame) error {
 		return nil
 	})
-	if err == nil {
-		t.Fatal("expected stream usage missing error")
+	// 路线 D：已 emit（message_start）后上游正常结束但缺 final usage → partial settlement，不报错、不写 risk_exposure。
+	if err != nil {
+		t.Fatalf("expected partial settlement (no error) when final usage missing after emit, got %v", err)
 	}
-	if len(settlement.params) != 0 {
-		t.Fatalf("expected no settlement without final usage, got %d", len(settlement.params))
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected partial settlement to run once, got %d", len(settlement.params))
 	}
-	if len(authorizer.releaseBillingExceptionParams) != 1 {
-		t.Fatalf("expected billing exception release once, got %d", len(authorizer.releaseBillingExceptionParams))
+	if settlement.params[0].Facts.UsageSource != coreusage.SourcePartialStreamEstimate {
+		t.Fatalf("expected partial_stream_estimate usage source, got %q", settlement.params[0].Facts.UsageSource)
+	}
+	if settlement.params[0].Facts.Finish.RawReason != lifecycle.PartialReasonFinalUsageMissing {
+		t.Fatalf("expected %q finish reason, got %q", lifecycle.PartialReasonFinalUsageMissing, settlement.params[0].Facts.Finish.RawReason)
+	}
+	if len(authorizer.releaseBillingExceptionParams) != 0 {
+		t.Fatalf("expected no risk_exposure for partial settlement, got %d", len(authorizer.releaseBillingExceptionParams))
 	}
 }

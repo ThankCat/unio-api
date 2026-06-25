@@ -521,10 +521,10 @@ WITH updated AS (
             upstream_status_code = $5,
             upstream_request_id = $6,
             response_started_at = COALESCE(request_attempts.response_started_at, $7),
-            final_usage_received = TRUE,
-            usage_mapping_version = $8,
-            completed_at = $9
-        WHERE request_attempts.id = $10
+            final_usage_received = $8,
+            usage_mapping_version = $9,
+            completed_at = $10
+        WHERE request_attempts.id = $11
             AND request_attempts.status = 'running'
         RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
 )
@@ -535,7 +535,7 @@ UNION ALL
 
 SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
 FROM request_attempts
-WHERE request_attempts.id = $10
+WHERE request_attempts.id = $11
   AND request_attempts.status = 'succeeded'
   AND NOT EXISTS (SELECT 1 FROM updated)
 `
@@ -548,6 +548,7 @@ type MarkRequestAttemptSucceededParams struct {
 	UpstreamStatusCode    pgtype.Int4
 	UpstreamRequestID     pgtype.Text
 	ResponseStartedAt     pgtype.Timestamptz
+	FinalUsageReceived    bool
 	UsageMappingVersion   pgtype.Text
 	CompletedAt           pgtype.Timestamptz
 	AttemptID             int64
@@ -591,6 +592,7 @@ func (q *Queries) MarkRequestAttemptSucceeded(ctx context.Context, arg MarkReque
 		arg.UpstreamStatusCode,
 		arg.UpstreamRequestID,
 		arg.ResponseStartedAt,
+		arg.FinalUsageReceived,
 		arg.UsageMappingVersion,
 		arg.CompletedAt,
 		arg.AttemptID,

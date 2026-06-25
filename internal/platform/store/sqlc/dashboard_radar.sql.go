@@ -18,21 +18,44 @@ SELECT
     c.status AS channel_status,
     COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
     COUNT(*) FILTER (WHERE r.status = 'succeeded') AS succeeded_total,
+    COUNT(*) FILTER (WHERE r.status = 'failed') AS failed_total,
     COALESCE(SUM(
         u.uncached_input_tokens + u.cache_read_input_tokens
         + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
         + u.output_tokens_total
     ), 0)::bigint AS tokens_total,
+    COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
     COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd,
+    COUNT(*) FILTER (WHERE r.status = 'succeeded' AND r.completed_at IS NOT NULL) AS latency_sample,
+    COALESCE(AVG(CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
-        CASE
-            WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-            THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8
-        END), 0)::float8 AS latency_p95
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
+    (
+        SELECT a2.error_code
+        FROM request_attempts a2
+        WHERE a2.channel_id = r.final_channel_id
+          AND a2.error_code IS NOT NULL
+          AND ($1::timestamptz IS NULL OR a2.created_at >= $1::timestamptz)
+          AND ($2::timestamptz IS NULL OR a2.created_at < $2::timestamptz)
+        ORDER BY a2.created_at DESC
+        LIMIT 1
+    ) AS recent_error_code
 FROM request_records r
 LEFT JOIN channels c ON c.id = r.final_channel_id
 LEFT JOIN usage_records u ON u.request_record_id = r.id
 LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
+LEFT JOIN ledger_entries le ON le.request_record_id = r.id
 WHERE r.final_channel_id IS NOT NULL
   AND ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
   AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
@@ -47,14 +70,22 @@ type DashboardBreakdownChannelParams struct {
 }
 
 type DashboardBreakdownChannelRow struct {
-	ChannelID      pgtype.Int8
-	ChannelName    pgtype.Text
-	ChannelStatus  pgtype.Text
-	TerminalTotal  int64
-	SucceededTotal int64
-	TokensTotal    int64
-	CostUsd        pgtype.Numeric
-	LatencyP95     float64
+	ChannelID       pgtype.Int8
+	ChannelName     pgtype.Text
+	ChannelStatus   pgtype.Text
+	TerminalTotal   int64
+	SucceededTotal  int64
+	FailedTotal     int64
+	TokensTotal     int64
+	RevenueUsd      pgtype.Numeric
+	CostUsd         pgtype.Numeric
+	LatencySample   int64
+	LatencyAvg      float64
+	LatencyP50      float64
+	LatencyP90      float64
+	LatencyP95      float64
+	LatencyP99      float64
+	RecentErrorCode pgtype.Text
 }
 
 // DashboardBreakdownChannel 按最终渠道聚合区间请求（精简 Top），附 token / 成本(USD) / P95 延迟。
@@ -73,9 +104,17 @@ func (q *Queries) DashboardBreakdownChannel(ctx context.Context, arg DashboardBr
 			&i.ChannelStatus,
 			&i.TerminalTotal,
 			&i.SucceededTotal,
+			&i.FailedTotal,
 			&i.TokensTotal,
+			&i.RevenueUsd,
 			&i.CostUsd,
+			&i.LatencySample,
+			&i.LatencyAvg,
+			&i.LatencyP50,
+			&i.LatencyP90,
 			&i.LatencyP95,
+			&i.LatencyP99,
+			&i.RecentErrorCode,
 		); err != nil {
 			return nil, err
 		}
@@ -92,11 +131,13 @@ SELECT
     r.requested_model_id AS model_id,
     COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
     COUNT(*) FILTER (WHERE r.status = 'succeeded') AS succeeded_total,
+    COUNT(*) FILTER (WHERE r.status = 'failed') AS failed_total,
     COALESCE(SUM(
         u.uncached_input_tokens + u.cache_read_input_tokens
         + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
         + u.output_tokens_total
     ), 0)::bigint AS tokens_total,
+    COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
     COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE
@@ -106,6 +147,7 @@ SELECT
 FROM request_records r
 LEFT JOIN usage_records u ON u.request_record_id = r.id
 LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
+LEFT JOIN ledger_entries le ON le.request_record_id = r.id
 WHERE ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
   AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
 GROUP BY r.requested_model_id
@@ -122,7 +164,9 @@ type DashboardBreakdownModelRow struct {
 	ModelID        string
 	TerminalTotal  int64
 	SucceededTotal int64
+	FailedTotal    int64
 	TokensTotal    int64
+	RevenueUsd     pgtype.Numeric
 	CostUsd        pgtype.Numeric
 	LatencyP95     float64
 }
@@ -141,7 +185,9 @@ func (q *Queries) DashboardBreakdownModel(ctx context.Context, arg DashboardBrea
 			&i.ModelID,
 			&i.TerminalTotal,
 			&i.SucceededTotal,
+			&i.FailedTotal,
 			&i.TokensTotal,
+			&i.RevenueUsd,
 			&i.CostUsd,
 			&i.LatencyP95,
 		); err != nil {
@@ -155,32 +201,172 @@ func (q *Queries) DashboardBreakdownModel(ctx context.Context, arg DashboardBrea
 	return items, nil
 }
 
-const dashboardBreakdownRoute = `-- name: DashboardBreakdownRoute :many
+const dashboardBreakdownProvider = `-- name: DashboardBreakdownProvider :many
 SELECT
-    COALESCE(ak.route_id, p.default_route_id) AS route_id,
-    rt.name AS route_name,
+    r.final_provider_id AS provider_id,
+    p.name AS provider_name,
+    p.status AS provider_status,
     COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
     COUNT(*) FILTER (WHERE r.status = 'succeeded') AS succeeded_total,
+    COUNT(*) FILTER (WHERE r.status = 'failed') AS failed_total,
+    COUNT(DISTINCT r.final_channel_id) FILTER (WHERE r.final_channel_id IS NOT NULL) AS channel_count,
     COALESCE(SUM(
         u.uncached_input_tokens + u.cache_read_input_tokens
         + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
         + u.output_tokens_total
     ), 0)::bigint AS tokens_total,
+    COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
     COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd,
+    COUNT(*) FILTER (WHERE r.status = 'succeeded' AND r.completed_at IS NOT NULL) AS latency_sample,
+    COALESCE(AVG(CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99
+FROM request_records r
+LEFT JOIN providers p ON p.id = r.final_provider_id
+LEFT JOIN usage_records u ON u.request_record_id = r.id
+LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
+LEFT JOIN ledger_entries le ON le.request_record_id = r.id
+WHERE r.final_provider_id IS NOT NULL
+  AND ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
+  AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
+GROUP BY r.final_provider_id, p.name, p.status
+ORDER BY terminal_total DESC
+LIMIT 20
+`
+
+type DashboardBreakdownProviderParams struct {
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
+}
+
+type DashboardBreakdownProviderRow struct {
+	ProviderID     pgtype.Int8
+	ProviderName   pgtype.Text
+	ProviderStatus pgtype.Text
+	TerminalTotal  int64
+	SucceededTotal int64
+	FailedTotal    int64
+	ChannelCount   int64
+	TokensTotal    int64
+	RevenueUsd     pgtype.Numeric
+	CostUsd        pgtype.Numeric
+	LatencySample  int64
+	LatencyAvg     float64
+	LatencyP50     float64
+	LatencyP90     float64
+	LatencyP95     float64
+	LatencyP99     float64
+}
+
+// DashboardBreakdownProvider 按最终服务商聚合区间请求（精简 Top），附 token / 成本(USD) / P95 延迟。
+func (q *Queries) DashboardBreakdownProvider(ctx context.Context, arg DashboardBreakdownProviderParams) ([]DashboardBreakdownProviderRow, error) {
+	rows, err := q.db.Query(ctx, dashboardBreakdownProvider, arg.FromTime, arg.ToTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DashboardBreakdownProviderRow
+	for rows.Next() {
+		var i DashboardBreakdownProviderRow
+		if err := rows.Scan(
+			&i.ProviderID,
+			&i.ProviderName,
+			&i.ProviderStatus,
+			&i.TerminalTotal,
+			&i.SucceededTotal,
+			&i.FailedTotal,
+			&i.ChannelCount,
+			&i.TokensTotal,
+			&i.RevenueUsd,
+			&i.CostUsd,
+			&i.LatencySample,
+			&i.LatencyAvg,
+			&i.LatencyP50,
+			&i.LatencyP90,
+			&i.LatencyP95,
+			&i.LatencyP99,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const dashboardBreakdownRoute = `-- name: DashboardBreakdownRoute :many
+WITH per_request AS (
+    SELECT
+        COALESCE(ak.route_id, p.default_route_id) AS route_id,
+        rt.name AS route_name,
+        rt.status AS route_status,
+        r.status,
+        r.error_code,
+        r.created_at,
+        r.started_at,
+        r.completed_at,
+        COALESCE(
+            u.uncached_input_tokens + u.cache_read_input_tokens
+            + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
+            + u.output_tokens_total,
+            0
+        )::bigint AS tokens_total,
+        COALESCE(
+            CASE WHEN cs.currency = 'USD' THEN cs.total_cost_amount END,
+            0
+        )::numeric AS cost_usd,
+        COALESCE(
+            CASE WHEN le.entry_type = 'debit' AND le.currency = 'USD' THEN le.amount END,
+            0
+        )::numeric AS revenue_usd,
         CASE
             WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8
-        END), 0)::float8 AS latency_p95
-FROM request_records r
-JOIN api_keys ak ON ak.id = r.api_key_id
-JOIN projects p ON p.id = r.project_id
-LEFT JOIN routes rt ON rt.id = COALESCE(ak.route_id, p.default_route_id)
-LEFT JOIN usage_records u ON u.request_record_id = r.id
-LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
-WHERE ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
-  AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
-GROUP BY COALESCE(ak.route_id, p.default_route_id), rt.name
+        END AS latency_ms
+    FROM request_records r
+    JOIN api_keys ak ON ak.id = r.api_key_id
+    JOIN projects p ON p.id = r.project_id
+    LEFT JOIN routes rt ON rt.id = COALESCE(ak.route_id, p.default_route_id)
+    LEFT JOIN usage_records u ON u.request_record_id = r.id
+    LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
+    LEFT JOIN ledger_entries le ON le.request_record_id = r.id
+    WHERE ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
+      AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
+)
+SELECT
+    route_id,
+    route_name,
+    route_status,
+    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
+    COUNT(*) FILTER (WHERE status = 'succeeded') AS succeeded_total,
+    COUNT(*) FILTER (WHERE status = 'failed') AS failed_total,
+    COALESCE(SUM(tokens_total), 0)::bigint AS tokens_total,
+    COALESCE(SUM(revenue_usd), 0)::numeric AS revenue_usd,
+    COALESCE(SUM(cost_usd), 0)::numeric AS cost_usd,
+    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0)::float8 AS latency_p95,
+    (
+        SELECT pr2.error_code
+        FROM per_request pr2
+        WHERE pr2.route_id IS NOT DISTINCT FROM pr.route_id
+          AND pr2.error_code IS NOT NULL
+        ORDER BY pr2.created_at DESC
+        LIMIT 1
+    ) AS recent_error_code
+FROM per_request pr
+GROUP BY route_id, route_name, route_status
 ORDER BY terminal_total DESC
 LIMIT 20
 `
@@ -191,13 +377,17 @@ type DashboardBreakdownRouteParams struct {
 }
 
 type DashboardBreakdownRouteRow struct {
-	RouteID        pgtype.Int8
-	RouteName      pgtype.Text
-	TerminalTotal  int64
-	SucceededTotal int64
-	TokensTotal    int64
-	CostUsd        pgtype.Numeric
-	LatencyP95     float64
+	RouteID         pgtype.Int8
+	RouteName       pgtype.Text
+	RouteStatus     pgtype.Text
+	TerminalTotal   int64
+	SucceededTotal  int64
+	FailedTotal     int64
+	TokensTotal     int64
+	RevenueUsd      pgtype.Numeric
+	CostUsd         pgtype.Numeric
+	LatencyP95      float64
+	RecentErrorCode pgtype.Text
 }
 
 // DashboardBreakdownRoute 按「就近绑定」归属线路聚合区间请求（§3.1.8）：
@@ -215,11 +405,15 @@ func (q *Queries) DashboardBreakdownRoute(ctx context.Context, arg DashboardBrea
 		if err := rows.Scan(
 			&i.RouteID,
 			&i.RouteName,
+			&i.RouteStatus,
 			&i.TerminalTotal,
 			&i.SucceededTotal,
+			&i.FailedTotal,
 			&i.TokensTotal,
+			&i.RevenueUsd,
 			&i.CostUsd,
 			&i.LatencyP95,
+			&i.RecentErrorCode,
 		); err != nil {
 			return nil, err
 		}
@@ -491,42 +685,6 @@ func (q *Queries) DashboardRadarSettlementBacklog(ctx context.Context) (Dashboar
 	row := q.db.QueryRow(ctx, dashboardRadarSettlementBacklog)
 	var i DashboardRadarSettlementBacklogRow
 	err := row.Scan(&i.ActiveTotal, &i.DeadTotal)
-	return i, err
-}
-
-const dashboardRadarStatusWindow = `-- name: DashboardRadarStatusWindow :one
-SELECT
-    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
-    COUNT(*) FILTER (WHERE status = 'succeeded') AS succeeded_total,
-    COUNT(*) FILTER (WHERE error_code IN ('no_available_channel', 'routing_no_available_channel')) AS no_channel_total,
-    COUNT(*) FILTER (WHERE error_code ILIKE '%timeout%' OR error_code = 'context_deadline_exceeded') AS timeout_total
-FROM request_records
-WHERE ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
-  AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
-`
-
-type DashboardRadarStatusWindowParams struct {
-	FromTime pgtype.Timestamptz
-	ToTime   pgtype.Timestamptz
-}
-
-type DashboardRadarStatusWindowRow struct {
-	TerminalTotal  int64
-	SucceededTotal int64
-	NoChannelTotal int64
-	TimeoutTotal   int64
-}
-
-// DashboardRadarStatusWindow 在独立短窗口（如近 15min）聚合平台健康判定所需计数。
-func (q *Queries) DashboardRadarStatusWindow(ctx context.Context, arg DashboardRadarStatusWindowParams) (DashboardRadarStatusWindowRow, error) {
-	row := q.db.QueryRow(ctx, dashboardRadarStatusWindow, arg.FromTime, arg.ToTime)
-	var i DashboardRadarStatusWindowRow
-	err := row.Scan(
-		&i.TerminalTotal,
-		&i.SucceededTotal,
-		&i.NoChannelTotal,
-		&i.TimeoutTotal,
-	)
 	return i, err
 }
 

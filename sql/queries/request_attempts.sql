@@ -107,7 +107,7 @@ WITH updated AS (
             upstream_status_code = sqlc.arg(upstream_status_code),
             upstream_request_id = sqlc.arg(upstream_request_id),
             response_started_at = COALESCE(request_attempts.response_started_at, sqlc.narg(response_started_at)),
-            final_usage_received = TRUE,
+            final_usage_received = sqlc.arg(final_usage_received),
             usage_mapping_version = sqlc.arg(usage_mapping_version),
             completed_at = sqlc.arg(completed_at)
         WHERE request_attempts.id = sqlc.arg(attempt_id)

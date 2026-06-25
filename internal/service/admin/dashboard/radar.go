@@ -5,21 +5,11 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/jackc/pgx/v5/pgtype"
 )
-
-// 平台状态短窗口样本保护阈值：终态请求数低于此值不判异常，避免误报（§3.1.9）。
-const minStatusSamples = 50
 
 // 仅展示币种（§3.1 首版仅 USD）。
 const displayCurrency = "USD"
-
-// 平台状态等级。
-const (
-	PlatformHealthy      = "healthy"
-	PlatformDegraded     = "degraded"
-	PlatformDown         = "down"
-	PlatformInsufficient = "insufficient_data"
-)
 
 // LatencyStats 是延迟分位画像（毫秒）。
 // Sample = 区间内测到延迟（成功且 completed_at 非空）的请求数；
@@ -65,19 +55,6 @@ type SettlementBacklog struct {
 	Dead   int64
 }
 
-// PlatformStatus 是近窗口平台健康判定。
-type PlatformStatus struct {
-	Level       string
-	Reason      string
-	WindowFrom  time.Time
-	WindowTo    time.Time
-	Terminal    int64
-	Succeeded   int64
-	SuccessRate float64
-	NoChannel   int64
-	Timeout     int64
-}
-
 // ActionItem 是「需要处理」列表项，带深链参数。
 type ActionItem struct {
 	Kind     string
@@ -103,8 +80,6 @@ type BadChannel struct {
 type RadarReport struct {
 	From time.Time
 	To   time.Time
-
-	PlatformStatus PlatformStatus
 
 	// 计数与率
 	Requests RequestStats
@@ -135,22 +110,30 @@ type RadarReport struct {
 
 // BreakdownDimension 合法取值。
 const (
-	BreakdownRoute   = "route"
-	BreakdownChannel = "channel"
-	BreakdownModel   = "model"
+	BreakdownProvider = "provider"
+	BreakdownChannel  = "channel"
+	BreakdownModel    = "model"
+	BreakdownRoute    = "route"
 )
 
-// BreakdownRow 是分组表现 Top 精简行（§1.8）。
+// BreakdownRow 是各维度表现 Top 精简行。
 type BreakdownRow struct {
-	Label       string
-	RefID       *int64 // route_id / channel_id（model 维度为 nil）
-	Status      string // 渠道维度可带状态；其它空
-	Terminal    int64
-	Succeeded   int64
-	SuccessRate float64
-	Tokens      int64   // 区间内该分组 token 合计（输入 + 输出）
-	CostUSD     string  // 区间内该分组上游成本合计（USD，十进制字符串）
-	LatencyP95  float64 // 区间内该分组 P95 完成延迟（毫秒）
+	Label        string
+	RefID        *int64 // route_id / channel_id / provider_id（model 维度为 nil）
+	Status       string // enabled/disabled（provider/channel/route）
+	Terminal     int64
+	Succeeded    int64
+	Failed       int64
+	SuccessRate  float64
+	Tokens       int64  // 区间内该分组 token 合计（输入 + 输出）
+	RevenueUSD   string // 区间内平台收入合计（USD，ledger debit）
+	CostUSD      string // 区间内该分组上游成本合计（USD，十进制字符串）
+	MarginUSD    string // 贡献利润 = 收入 − 成本（USD）
+	Latency      LatencyStats
+	LatencyP95   float64 // route/model 维度仍用 P95 单值
+	HealthBucket string // healthy/degraded/unhealthy/no_data（按请求成功率分桶）
+	RecentError  string
+	ChannelCount int64 // provider 维度：命中渠道数
 }
 
 // ErrorGroup 是「失败原因」面板的单条错误码聚合（§错误可见性）。
@@ -169,9 +152,8 @@ type PerformancePoint struct {
 	TPS        float64
 }
 
-// Radar 聚合概览雷达：cards + 平台状态 + 行动项 + 异常渠道 Top。
-// statusFrom/statusTo 是独立的短窗口（如近 15min），与页面 range [from,to) 解耦。
-func (s *Service) Radar(ctx context.Context, from, to, statusFrom, statusTo time.Time) (RadarReport, error) {
+// Radar 聚合概览雷达：cards + 行动项 + 异常渠道 Top。
+func (s *Service) Radar(ctx context.Context, from, to time.Time) (RadarReport, error) {
 	fromTS, toTS := tsNarg(from), tsNarg(to)
 
 	perf, err := s.store.DashboardRadarRequestPerf(ctx, sqlc.DashboardRadarRequestPerfParams{FromTime: fromTS, ToTime: toTS})
@@ -189,10 +171,6 @@ func (s *Service) Radar(ctx context.Context, from, to, statusFrom, statusTo time
 	backlog, err := s.store.DashboardRadarSettlementBacklog(ctx)
 	if err != nil {
 		return RadarReport{}, storeFailed(err, "aggregate settlement backlog")
-	}
-	statusRow, err := s.store.DashboardRadarStatusWindow(ctx, sqlc.DashboardRadarStatusWindowParams{FromTime: tsNarg(statusFrom), ToTime: tsNarg(statusTo)})
-	if err != nil {
-		return RadarReport{}, storeFailed(err, "aggregate status window")
 	}
 	badRows, err := s.store.DashboardRadarBadChannels(ctx, sqlc.DashboardRadarBadChannelsParams{FromTime: fromTS, ToTime: toTS})
 	if err != nil {
@@ -283,17 +261,48 @@ func (s *Service) Radar(ctx context.Context, from, to, statusFrom, statusTo time
 	report.BillingExceptionAmount = pickCurrency(exceptionAmounts(exceptionRows), displayCurrency)
 	report.Settlement = SettlementBacklog{Active: backlog.ActiveTotal, Dead: backlog.DeadTotal}
 
-	report.PlatformStatus = evaluatePlatformStatus(statusRow, statusFrom, statusTo)
 	report.BadChannels = badChannels(badRows)
 	report.ActionItems = buildActionItems(report)
 
 	return report, nil
 }
 
-// Breakdown 返回某维度（route|channel|model）的分组表现 Top 精简行（§3.1.8）。
+// Breakdown 返回某维度（provider|channel|model|route）的表现 Top 精简行。
 func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time.Time) ([]BreakdownRow, error) {
 	fromTS, toTS := tsNarg(from), tsNarg(to)
 	switch dimension {
+	case BreakdownProvider:
+		rows, err := s.store.DashboardBreakdownProvider(ctx, sqlc.DashboardBreakdownProviderParams{FromTime: fromTS, ToTime: toTS})
+		if err != nil {
+			return nil, storeFailed(err, "aggregate provider breakdown")
+		}
+		out := make([]BreakdownRow, 0, len(rows))
+		for _, r := range rows {
+			br := BreakdownRow{
+				Tokens:       r.TokensTotal,
+				Latency: requestLatencyStats(
+					r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
+					r.LatencySample, r.SucceededTotal,
+				),
+				ChannelCount: r.ChannelCount,
+			}
+			applyBreakdownMoney(&br, r.RevenueUsd, r.CostUsd)
+			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal)
+			if r.ProviderID.Valid {
+				id := r.ProviderID.Int64
+				br.RefID = &id
+			}
+			if r.ProviderName.Valid && r.ProviderName.String != "" {
+				br.Label = r.ProviderName.String
+			} else {
+				br.Label = "未知服务商"
+			}
+			if r.ProviderStatus.Valid {
+				br.Status = r.ProviderStatus.String
+			}
+			out = append(out, br)
+		}
+		return out, nil
 	case BreakdownRoute:
 		rows, err := s.store.DashboardBreakdownRoute(ctx, sqlc.DashboardBreakdownRouteParams{FromTime: fromTS, ToTime: toTS})
 		if err != nil {
@@ -302,12 +311,11 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 		out := make([]BreakdownRow, 0, len(rows))
 		for _, r := range rows {
 			br := BreakdownRow{
-				Terminal:   r.TerminalTotal,
-				Succeeded:  r.SucceededTotal,
 				Tokens:     r.TokensTotal,
-				CostUSD:    numericString(r.CostUsd),
 				LatencyP95: r.LatencyP95,
 			}
+			applyBreakdownMoney(&br, r.RevenueUsd, r.CostUsd)
+			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal)
 			if r.RouteID.Valid {
 				id := r.RouteID.Int64
 				br.RefID = &id
@@ -317,7 +325,12 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 			} else {
 				br.Label = "内置 / 未指定线路"
 			}
-			br.SuccessRate = successRate(r.SucceededTotal, r.TerminalTotal)
+			if r.RouteStatus.Valid {
+				br.Status = r.RouteStatus.String
+			}
+			if r.RecentErrorCode.Valid {
+				br.RecentError = r.RecentErrorCode.String
+			}
 			out = append(out, br)
 		}
 		return out, nil
@@ -329,12 +342,14 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 		out := make([]BreakdownRow, 0, len(rows))
 		for _, r := range rows {
 			br := BreakdownRow{
-				Terminal:   r.TerminalTotal,
-				Succeeded:  r.SucceededTotal,
-				Tokens:     r.TokensTotal,
-				CostUSD:    numericString(r.CostUsd),
-				LatencyP95: r.LatencyP95,
+				Tokens: r.TokensTotal,
+				Latency: requestLatencyStats(
+					r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
+					r.LatencySample, r.SucceededTotal,
+				),
 			}
+			applyBreakdownMoney(&br, r.RevenueUsd, r.CostUsd)
+			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal)
 			if r.ChannelID.Valid {
 				id := r.ChannelID.Int64
 				br.RefID = &id
@@ -347,7 +362,9 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 			if r.ChannelStatus.Valid {
 				br.Status = r.ChannelStatus.String
 			}
-			br.SuccessRate = successRate(r.SucceededTotal, r.TerminalTotal)
+			if r.RecentErrorCode.Valid {
+				br.RecentError = r.RecentErrorCode.String
+			}
 			out = append(out, br)
 		}
 		return out, nil
@@ -358,19 +375,18 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 		}
 		out := make([]BreakdownRow, 0, len(rows))
 		for _, r := range rows {
-			out = append(out, BreakdownRow{
-				Label:       r.ModelID,
-				Terminal:    r.TerminalTotal,
-				Succeeded:   r.SucceededTotal,
-				SuccessRate: successRate(r.SucceededTotal, r.TerminalTotal),
-				Tokens:      r.TokensTotal,
-				CostUSD:     numericString(r.CostUsd),
-				LatencyP95:  r.LatencyP95,
-			})
+			br := BreakdownRow{
+				Label:      r.ModelID,
+				Tokens:     r.TokensTotal,
+				LatencyP95: r.LatencyP95,
+			}
+			applyBreakdownMoney(&br, r.RevenueUsd, r.CostUsd)
+			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal)
+			out = append(out, br)
 		}
 		return out, nil
 	default:
-		return nil, invalidArgument("dimension", "dimension must be one of route|channel|model")
+		return nil, invalidArgument("dimension", "dimension must be one of provider|channel|model|route")
 	}
 }
 
@@ -421,6 +437,28 @@ func successRate(succeeded, terminal int64) float64 {
 	return float64(succeeded) / float64(terminal)
 }
 
+func requestLatencyStats(avg, p50, p90, p95, p99 float64, sample, succeeded int64) LatencyStats {
+	s := LatencyStats{Avg: avg, P50: p50, P90: p90, P95: p95, P99: p99, Sample: sample}
+	if succeeded > 0 {
+		s.Coverage = float64(sample) / float64(succeeded)
+	}
+	return s
+}
+
+func fillBreakdownCounts(br *BreakdownRow, succeeded, terminal, failed int64) {
+	br.Terminal = terminal
+	br.Succeeded = succeeded
+	br.Failed = failed
+	br.SuccessRate = successRate(succeeded, terminal)
+	br.HealthBucket = healthBucket(succeeded, terminal)
+}
+
+func applyBreakdownMoney(br *BreakdownRow, revenue, cost pgtype.Numeric) {
+	br.RevenueUSD = numericString(revenue)
+	br.CostUSD = numericString(cost)
+	br.MarginUSD = subtractDecimal(br.RevenueUSD, br.CostUSD)
+}
+
 // healthBucket 按成功率分桶（与 channelStats 同阈值）。
 func healthBucket(succeeded, total int64) string {
 	if total == 0 {
@@ -457,58 +495,8 @@ func badChannels(rows []sqlc.DashboardRadarBadChannelsRow) []BadChannel {
 	return out
 }
 
-func evaluatePlatformStatus(row sqlc.DashboardRadarStatusWindowRow, from, to time.Time) PlatformStatus {
-	st := PlatformStatus{
-		WindowFrom: from,
-		WindowTo:   to,
-		Terminal:   row.TerminalTotal,
-		Succeeded:  row.SucceededTotal,
-		NoChannel:  row.NoChannelTotal,
-		Timeout:    row.TimeoutTotal,
-	}
-	if row.TerminalTotal > 0 {
-		st.SuccessRate = float64(row.SucceededTotal) / float64(row.TerminalTotal)
-	}
-
-	if row.TerminalTotal < minStatusSamples {
-		st.Level = PlatformInsufficient
-		st.Reason = "近窗口样本不足，暂不判定平台异常"
-		return st
-	}
-
-	switch {
-	case row.NoChannelTotal > 0 || st.SuccessRate < degradedThreshold:
-		st.Level = PlatformDown
-		st.Reason = "近窗口成功率过低或出现无可用渠道"
-	case st.SuccessRate < healthyThreshold:
-		st.Level = PlatformDegraded
-		st.Reason = "近窗口成功率低于健康阈值"
-	default:
-		st.Level = PlatformHealthy
-		st.Reason = "近窗口运行正常"
-	}
-	return st
-}
-
 func buildActionItems(r RadarReport) []ActionItem {
 	items := make([]ActionItem, 0, 4)
-
-	switch r.PlatformStatus.Level {
-	case PlatformDown:
-		items = append(items, ActionItem{
-			Kind: "platform", Severity: "danger",
-			Title:    "平台状态异常",
-			Detail:   r.PlatformStatus.Reason,
-			Deeplink: "/requests?status=failed",
-		})
-	case PlatformDegraded:
-		items = append(items, ActionItem{
-			Kind: "platform", Severity: "warning",
-			Title:    "平台状态降级",
-			Detail:   r.PlatformStatus.Reason,
-			Deeplink: "/requests?status=failed",
-		})
-	}
 
 	if r.Settlement.Dead > 0 {
 		items = append(items, ActionItem{

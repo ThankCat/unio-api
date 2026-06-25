@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/service/admin/channelops"
+	"github.com/ThankCat/unio-api/internal/service/admin/opsutil"
 )
 
 // ChannelOpsService 定义渠道作战台（§3.3）只读运维聚合所需能力。
@@ -39,7 +40,7 @@ type channelsOpsSummaryDTO struct {
 	AttemptSucceeded int64                  `json:"attempt_succeeded"`
 	SuccessRate      float64                `json:"success_rate"`
 	TimeoutTotal     int64                  `json:"timeout_total"`
-	LatencyP95       float64                `json:"latency_p95"`
+	Latency          latencyStatsDTO        `json:"latency"`
 	TPS              float64                `json:"tps"`
 	RecentErrorCode  string                 `json:"recent_error_code"`
 	RecentErrorName  string                 `json:"recent_error_channel"`
@@ -61,9 +62,9 @@ type channelOpsRowDTO struct {
 	AttemptTotal     int64   `json:"attempt_total"`
 	AttemptSucceeded int64   `json:"attempt_succeeded"`
 	SuccessRate      float64 `json:"success_rate"`
-	TimeoutTotal     int64   `json:"timeout_total"`
-	LatencyP95       float64 `json:"latency_p95"`
-	Health           string  `json:"health"`
+	TimeoutTotal     int64             `json:"timeout_total"`
+	Latency          latencyStatsDTO   `json:"latency"`
+	Health           string            `json:"health"`
 	LastSuccessAt    *string `json:"last_success_at"`
 	BoundModels      int64   `json:"bound_models"`
 	RecentErrorCode  string  `json:"recent_error_code"`
@@ -73,12 +74,9 @@ type channelOpsDetailDTO struct {
 	AttemptTotal     int64   `json:"attempt_total"`
 	AttemptSucceeded int64   `json:"attempt_succeeded"`
 	SuccessRate      float64 `json:"success_rate"`
-	TimeoutTotal     int64   `json:"timeout_total"`
-	LatencyAvg       float64 `json:"latency_avg"`
-	LatencyP50       float64 `json:"latency_p50"`
-	LatencyP95       float64 `json:"latency_p95"`
-	LatencyP99       float64 `json:"latency_p99"`
-	LastSuccessAt    *string `json:"last_success_at"`
+	TimeoutTotal     int64           `json:"timeout_total"`
+	Latency          latencyStatsDTO `json:"latency"`
+	LastSuccessAt    *string         `json:"last_success_at"`
 	LastFailureAt    *string `json:"last_failure_at"`
 }
 
@@ -86,7 +84,7 @@ type channelOpsPerfPointDTO struct {
 	Bucket           string  `json:"bucket"`
 	AttemptTotal     int64   `json:"attempt_total"`
 	AttemptSucceeded int64   `json:"attempt_succeeded"`
-	LatencyP95       float64 `json:"latency_p95"`
+	LatencyAvg       float64 `json:"latency_avg"`
 }
 
 type channelOpsErrorDTO struct {
@@ -106,9 +104,9 @@ type channelOpsModelDTO struct {
 	Status           string  `json:"status"`
 	AttemptTotal     int64   `json:"attempt_total"`
 	AttemptSucceeded int64   `json:"attempt_succeeded"`
-	SuccessRate      float64 `json:"success_rate"`
-	LatencyP95       float64 `json:"latency_p95"`
-	HasPrice         bool    `json:"has_price"`
+	SuccessRate      float64         `json:"success_rate"`
+	Latency          latencyStatsDTO `json:"latency"`
+	HasPrice         bool            `json:"has_price"`
 }
 
 type channelOpsRouteDTO struct {
@@ -140,7 +138,7 @@ func (h *channelOpsHandler) summary(w http.ResponseWriter, r *http.Request) {
 		AttemptSucceeded: s.AttemptSucceeded,
 		SuccessRate:      s.SuccessRate,
 		TimeoutTotal:     s.TimeoutTotal,
-		LatencyP95:       s.LatencyP95,
+		Latency:          latencyStatsFrom(s.Latency),
 		TPS:              s.TPS,
 		RecentErrorCode:  s.RecentError.Code,
 		RecentErrorName:  s.RecentError.ChannelName,
@@ -191,7 +189,7 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			AttemptSucceeded: row.AttemptSucceeded,
 			SuccessRate:      row.SuccessRate,
 			TimeoutTotal:     row.TimeoutTotal,
-			LatencyP95:       row.LatencyP95,
+			Latency:          latencyStatsFrom(row.Latency),
 			Health:           row.HealthBucket,
 			LastSuccessAt:    rfc3339Ptr(row.LastSuccessAt),
 			BoundModels:      row.BoundModels,
@@ -222,10 +220,7 @@ func (h *channelOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		AttemptSucceeded: d.AttemptSucceeded,
 		SuccessRate:      d.SuccessRate,
 		TimeoutTotal:     d.TimeoutTotal,
-		LatencyAvg:       d.LatencyAvg,
-		LatencyP50:       d.LatencyP50,
-		LatencyP95:       d.LatencyP95,
-		LatencyP99:       d.LatencyP99,
+		Latency:          latencyStatsFrom(d.Latency),
 		LastSuccessAt:    rfc3339Ptr(d.LastSuccessAt),
 		LastFailureAt:    rfc3339Ptr(d.LastFailureAt),
 	})
@@ -252,7 +247,7 @@ func (h *channelOpsHandler) performance(w http.ResponseWriter, r *http.Request) 
 	}
 	out := make([]channelOpsPerfPointDTO, 0, len(points))
 	for _, p := range points {
-		out = append(out, channelOpsPerfPointDTO{Bucket: rfc3339(p.Bucket), AttemptTotal: p.AttemptTotal, AttemptSucceeded: p.AttemptSucceeded, LatencyP95: p.LatencyP95})
+		out = append(out, channelOpsPerfPointDTO{Bucket: rfc3339(p.Bucket), AttemptTotal: p.AttemptTotal, AttemptSucceeded: p.AttemptSucceeded, LatencyAvg: p.LatencyAvg})
 	}
 	writeData(w, http.StatusOK, out)
 }
@@ -315,7 +310,7 @@ func (h *channelOpsHandler) models(w http.ResponseWriter, r *http.Request) {
 			AttemptTotal:     m.AttemptTotal,
 			AttemptSucceeded: m.AttemptSucceeded,
 			SuccessRate:      m.SuccessRate,
-			LatencyP95:       m.LatencyP95,
+			Latency:          latencyStatsFrom(m.Latency),
 			HasPrice:         m.HasPrice,
 		})
 	}
@@ -338,4 +333,16 @@ func (h *channelOpsHandler) routes(w http.ResponseWriter, r *http.Request) {
 		out = append(out, channelOpsRouteDTO{ID: rt.ID, Name: rt.Name, Mode: rt.Mode, PoolKind: rt.PoolKind, Status: rt.Status, IsBuiltin: rt.IsBuiltin})
 	}
 	writeData(w, http.StatusOK, out)
+}
+
+func latencyStatsFrom(s opsutil.LatencyStats) latencyStatsDTO {
+	return latencyStatsDTO{
+		Avg:      s.Avg,
+		P50:      s.P50,
+		P90:      s.P90,
+		P95:      s.P95,
+		P99:      s.P99,
+		Sample:   s.Sample,
+		Coverage: s.Coverage,
+	}
 }

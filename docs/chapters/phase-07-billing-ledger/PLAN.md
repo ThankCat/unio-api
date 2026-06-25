@@ -135,6 +135,7 @@ ledger entry
 1. 有 final usage 时执行 settlement。
 2. 客户端取消但已拿到 final usage 时仍 settlement。
 3. 无 final usage 时不强行估算扣费；已经可能产生上游成本的路径释放用户冻结余额，并记录 `risk_exposure`。
+   **2026-06-25 修订：** emitted 且无 final usage 时改走 partial settlement（路线 B/D，见 [DEC-025](../../production/DECISIONS.md#dec-025-stream-partial-settlement)）；路线 D 另记渠道异常，不再 risk_exposure。
 4. 调用上游前 request-level authorization 已接入。
 5. request/attempt 状态机守卫、settlement 幂等、首次 settlement 失败 recovery 和 SSE 写出后 data-only error chunk 已完成。
 
@@ -344,3 +345,30 @@ disabled 价格草稿允许重叠，不影响结算选择。
 关联 GAP：
 
 - [GAP-7-010](../../production/TODO_REGISTER.md#gap-7-010) 已关闭
+
+
+<a id="task-7-23-stream-partial-settlement"></a>
+### TASK-7.23 Stream partial settlement
+
+状态：todo
+
+范围：
+
+1. 实现 [STREAM_PARTIAL_SETTLEMENT.md](STREAM_PARTIAL_SETTLEMENT.md) 路线 B/D：`emitted` + `streamFacts==nil` → partial settlement（B4：只看 `streamFacts`）。
+2. 终态（A1/B3）：partial 后 attempt 与 request 都 `succeeded`；`MarkAttemptSucceeded` 的 `final_usage_received` 改入参，partial 传 `FALSE`（改 `sql/queries/request_attempts.sql` + `requestlog/store.go` + sqlc 重生成）。**不**把 attempt 标 failed。
+3. 区分 B/D：合成 `Finish.RawReason` 落到 `upstream_finish_reason`（`stream_client_canceled_without_final_usage` / `stream_interrupted_without_final_usage` / `stream_final_usage_missing`）；D 指标 `Success`、B 指标 `Canceled`。
+4. 登记 `usage.SourcePartialStreamEstimate`；`BuildPartialStreamFacts` 在 lifecycle 合成字段以通过现有 settlement 校验（A2-i，settlement/校验零改）。
+5. 输出 token（B1-i）：`StreamChunkMeta` 加可见文本字段，各载体填充；复用 adapter tokenizer 增量计数（OpenAI tiktoken / Anthropic 估算器，回退启发式），估算偏保守。
+6. **两处独立循环各实现一份**：`RunStreamGeneric`（OpenAI chat / Responses 直传 / Responses→chat）与 `message_stream.go`（Anthropic，**非**共享 RunStreamGeneric）；三分支按 `emitted` 分流；interrupt 分支重排 `MarkAttemptFailed` 使 partial 进入时 attempt 仍 `running`。
+7. 首 token 前结束 → release（C，0 扣）；`streamFacts!=nil` → full bill（A）；partial **不**调用 `params.Finish`（不向客户端发合成 usage 尾帧）；已 emit 无 usage 流 **不再** 写 `risk_exposure`。
+8. 渠道异常复用现有口径（succeeded + `final_usage_received=FALSE` + `upstream_finish_reason=stream_final_usage_missing`，统计渠道故障时排除取消）；无专用 Admin 指标。
+9. 单测（OpenAI + Anthropic 各一套）：B(cancel/interrupt)、D、!emitted release、full bill 优先(B4)、capped write_off。
+10. **改造完成且测试全绿后清理僵尸代码**（见 [STREAM_PARTIAL_SETTLEMENT.md §11](STREAM_PARTIAL_SETTLEMENT.md#11-改造收尾僵尸代码清理)）：移除两处循环中「已 emit 无 usage → `ReleaseAuthorizationForBillingException`/`risk_exposure`」的三处旧调用（cancel/interrupt/缺 usage）及被其取代的旧终态写入、过时断言；**保留** `stream_settlement_failed_after_upstream_success` 与 dead-finalize 的 `risk_exposure`（仍在用，勿删函数本体）。
+
+关联决策：
+
+- [DEC-025](../../production/DECISIONS.md#dec-025-stream-partial-settlement)（修订 [DEC-003](../../production/DECISIONS.md#dec-003-stream-无-final-usage-暂不扣费) 部分条款）
+
+关联 GAP：
+
+- [GAP-7-015](../../production/TODO_REGISTER.md#gap-7-015)

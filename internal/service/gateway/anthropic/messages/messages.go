@@ -184,6 +184,9 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 			return nil, settleErr
 		}
 
+		// 非流式成功：响应将由 handler 在本调用返回后写出，交付视为完成。
+		s.lifecycle.MarkDeliveryCompleted(ctx, requestRecord)
+
 		outcome = metrics.ChatOutcomeSuccess
 
 		resp := mapAdapterResponseToGateway(req.Model, *adapterResp)

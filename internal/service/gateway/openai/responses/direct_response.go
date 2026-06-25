@@ -143,6 +143,7 @@ func responsesStreamCarrierMeta(c responsesStreamCarrier) lifecycle.StreamChunkM
 		ID:           chunk.ID,
 		Usage:        chunk.Usage,
 		SuppressEmit: chunk.Usage != nil,
+		VisibleText:  chunk.Content,
 	}
 	if chunk.FinishReason != nil {
 		meta.FinishReason = *chunk.FinishReason

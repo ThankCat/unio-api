@@ -578,6 +578,182 @@ func (q *Queries) MarkRequestCanceled(ctx context.Context, arg MarkRequestCancel
 	return i, err
 }
 
+const markRequestDeliveryCompleted = `-- name: MarkRequestDeliveryCompleted :one
+WITH updated AS (
+    UPDATE request_records
+        SET delivery_status = 'completed',
+            response_completed_at = $1,
+            updated_at = now()
+        WHERE request_records.id = $2
+            AND request_records.delivery_status IN ('not_started', 'in_progress')
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+)
+SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
+FROM updated
+
+UNION ALL
+
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+FROM request_records
+WHERE request_records.id = $2
+  AND request_records.delivery_status = 'completed'
+  AND NOT EXISTS (SELECT 1 FROM updated)
+`
+
+type MarkRequestDeliveryCompletedParams struct {
+	ResponseCompletedAt pgtype.Timestamptz
+	RequestRecordID     int64
+}
+
+type MarkRequestDeliveryCompletedRow struct {
+	ID                  int64
+	RequestID           string
+	UserID              int64
+	ProjectID           int64
+	ApiKeyID            int64
+	RequestedModelID    string
+	IngressProtocol     string
+	Operation           string
+	ResponseModelID     pgtype.Text
+	ResponseProtocol    pgtype.Text
+	ResponseID          pgtype.Text
+	Stream              bool
+	Status              string
+	FinalProviderID     pgtype.Int8
+	FinalChannelID      pgtype.Int8
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	DeliveryStatus      string
+	ResponseStartedAt   pgtype.Timestamptz
+	ResponseCompletedAt pgtype.Timestamptz
+	StartedAt           pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+}
+
+// MarkRequestDeliveryCompleted 在响应完整交付后把交付状态推进到 completed，并同语句落地
+// response_completed_at，满足 ck_request_records_delivery_completed_at。仅从 not_started/in_progress
+// 推进；重复调用返回当前 completed 行（幂等，最佳努力审计）。
+func (q *Queries) MarkRequestDeliveryCompleted(ctx context.Context, arg MarkRequestDeliveryCompletedParams) (MarkRequestDeliveryCompletedRow, error) {
+	row := q.db.QueryRow(ctx, markRequestDeliveryCompleted, arg.ResponseCompletedAt, arg.RequestRecordID)
+	var i MarkRequestDeliveryCompletedRow
+	err := row.Scan(
+		&i.ID,
+		&i.RequestID,
+		&i.UserID,
+		&i.ProjectID,
+		&i.ApiKeyID,
+		&i.RequestedModelID,
+		&i.IngressProtocol,
+		&i.Operation,
+		&i.ResponseModelID,
+		&i.ResponseProtocol,
+		&i.ResponseID,
+		&i.Stream,
+		&i.Status,
+		&i.FinalProviderID,
+		&i.FinalChannelID,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.InternalErrorDetail,
+		&i.DeliveryStatus,
+		&i.ResponseStartedAt,
+		&i.ResponseCompletedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const markRequestDeliveryInterrupted = `-- name: MarkRequestDeliveryInterrupted :one
+WITH updated AS (
+    UPDATE request_records
+        SET delivery_status = 'interrupted',
+            updated_at = now()
+        WHERE request_records.id = $1
+            AND request_records.delivery_status IN ('not_started', 'in_progress')
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+)
+SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
+FROM updated
+
+UNION ALL
+
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+FROM request_records
+WHERE request_records.id = $1
+  AND request_records.delivery_status = 'interrupted'
+  AND NOT EXISTS (SELECT 1 FROM updated)
+`
+
+type MarkRequestDeliveryInterruptedRow struct {
+	ID                  int64
+	RequestID           string
+	UserID              int64
+	ProjectID           int64
+	ApiKeyID            int64
+	RequestedModelID    string
+	IngressProtocol     string
+	Operation           string
+	ResponseModelID     pgtype.Text
+	ResponseProtocol    pgtype.Text
+	ResponseID          pgtype.Text
+	Stream              bool
+	Status              string
+	FinalProviderID     pgtype.Int8
+	FinalChannelID      pgtype.Int8
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	DeliveryStatus      string
+	ResponseStartedAt   pgtype.Timestamptz
+	ResponseCompletedAt pgtype.Timestamptz
+	StartedAt           pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+}
+
+// MarkRequestDeliveryInterrupted 在交付中断（客户端取消、上游中断、尾部错误）时把交付状态推进到
+// interrupted。response_completed_at 保持 NULL。仅从 not_started/in_progress 推进；重复调用返回当前
+// interrupted 行（幂等，最佳努力审计）。
+func (q *Queries) MarkRequestDeliveryInterrupted(ctx context.Context, requestRecordID int64) (MarkRequestDeliveryInterruptedRow, error) {
+	row := q.db.QueryRow(ctx, markRequestDeliveryInterrupted, requestRecordID)
+	var i MarkRequestDeliveryInterruptedRow
+	err := row.Scan(
+		&i.ID,
+		&i.RequestID,
+		&i.UserID,
+		&i.ProjectID,
+		&i.ApiKeyID,
+		&i.RequestedModelID,
+		&i.IngressProtocol,
+		&i.Operation,
+		&i.ResponseModelID,
+		&i.ResponseProtocol,
+		&i.ResponseID,
+		&i.Stream,
+		&i.Status,
+		&i.FinalProviderID,
+		&i.FinalChannelID,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.InternalErrorDetail,
+		&i.DeliveryStatus,
+		&i.ResponseStartedAt,
+		&i.ResponseCompletedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const markRequestFailed = `-- name: MarkRequestFailed :one
 WITH updated AS (
     UPDATE request_records
@@ -684,6 +860,10 @@ const markRequestResponseStarted = `-- name: MarkRequestResponseStarted :one
 WITH updated AS (
     UPDATE request_records
         SET response_started_at = COALESCE(request_records.response_started_at, $1),
+            delivery_status = CASE
+                WHEN request_records.delivery_status = 'not_started' THEN 'in_progress'
+                ELSE request_records.delivery_status
+            END,
             updated_at = now()
         WHERE request_records.id = $2
           AND request_records.status IN ('running', 'succeeded')
@@ -734,7 +914,8 @@ type MarkRequestResponseStartedRow struct {
 	UpdatedAt           pgtype.Timestamptz
 }
 
-// MarkRequestResponseStarted 记录首次客户可见响应时间；重复调用保留第一次时间。
+// MarkRequestResponseStarted 记录首次客户可见响应时间，并把交付状态从 not_started 推进到 in_progress。
+// 重复调用保留第一次时间，且不回退已更靠后的交付状态。首字节时 delivery 与 response_started_at 同写。
 func (q *Queries) MarkRequestResponseStarted(ctx context.Context, arg MarkRequestResponseStartedParams) (MarkRequestResponseStartedRow, error) {
 	row := q.db.QueryRow(ctx, markRequestResponseStarted, arg.ResponseStartedAt, arg.RequestRecordID)
 	var i MarkRequestResponseStartedRow

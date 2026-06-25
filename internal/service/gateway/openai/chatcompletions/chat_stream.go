@@ -16,6 +16,16 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
+// partialOutputTokenCounter 按 upstream model 估算一段可见输出文本的 token 数，供 partial settlement 使用。
+// tokenizer 解析失败时返回 0（偏保守，宁可少算偏向用户）。
+func partialOutputTokenCounter(model string, text string) int64 {
+	n, err := chatcompletionsadapter.CountOutputTokens(model, text)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
 // StreamChatCompletion 编排流式 chat completion 请求，并通过 emit 写出 OpenAI-compatible SSE chunk。
 func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req gatewayapi.ChatCompletionRequest, emit func(gatewayapi.ChatCompletionStreamResponse) error) error {
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
@@ -82,12 +92,14 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 	// Finish 在结算成功后按 include_usage 写收尾 usage chunk。
 	var streamAdapter chatcompletionsadapter.StreamChatAdapter
 	runResult, err := s.attemptRunner.RunStream(ctx, lifecycle.RunStreamParams{
-		RequestRecord:        requestRecord,
-		Principal:            principal,
-		Authorization:        authorization,
-		Candidates:           candidatePlan.Candidates,
-		RequestedModelID: req.Model,
-		ResponseProtocol: requestlog.ProtocolOpenAI,
+		RequestRecord:           requestRecord,
+		Principal:               principal,
+		Authorization:           authorization,
+		Candidates:              candidatePlan.Candidates,
+		RequestedModelID:        req.Model,
+		ResponseProtocol:        requestlog.ProtocolOpenAI,
+		ConservativeInputTokens: candidatePlan.ConservativeInputTokens,
+		CountOutputTokens:       partialOutputTokenCounter,
 		ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
 			adapter, ok := s.registry.StreamChat(candidate.AdapterKey)
 			if !ok {

@@ -84,6 +84,36 @@ func (s *Store) MarkRequestResponseStarted(ctx context.Context, params MarkRespo
 	return requestRecordFromSQLC(sqlc.RequestRecord(row)), nil
 }
 
+// MarkRequestDeliveryCompleted 在响应完整交付后把交付状态推进到 completed。
+// 与 response_completed_at 在同一语句写入，满足交付完成约束；幂等（已 completed 返回当前行）。
+func (s *Store) MarkRequestDeliveryCompleted(ctx context.Context, id int64, completedAt time.Time) (RequestRecord, error) {
+	row, err := s.queries.MarkRequestDeliveryCompleted(ctx, sqlc.MarkRequestDeliveryCompletedParams{
+		ResponseCompletedAt: timestamptz(completedAt),
+		RequestRecordID:     id,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RequestRecord{}, requestLogStateTransitionFailure("mark request delivery completed")
+		}
+		return RequestRecord{}, requestLogStoreFailure(err, "mark request delivery completed")
+	}
+
+	return requestRecordFromSQLC(sqlc.RequestRecord(row)), nil
+}
+
+// MarkRequestDeliveryInterrupted 在交付中断时把交付状态推进到 interrupted；幂等（已 interrupted 返回当前行）。
+func (s *Store) MarkRequestDeliveryInterrupted(ctx context.Context, id int64) (RequestRecord, error) {
+	row, err := s.queries.MarkRequestDeliveryInterrupted(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RequestRecord{}, requestLogStateTransitionFailure("mark request delivery interrupted")
+		}
+		return RequestRecord{}, requestLogStoreFailure(err, "mark request delivery interrupted")
+	}
+
+	return requestRecordFromSQLC(sqlc.RequestRecord(row)), nil
+}
+
 // MarkRequestSucceeded 将 request record 标记为 succeeded。
 func (s *Store) MarkRequestSucceeded(ctx context.Context, params MarkRequestSucceededParams) (RequestRecord, error) {
 	row, err := s.queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
@@ -203,6 +233,7 @@ func (s *Store) MarkAttemptSucceeded(ctx context.Context, params MarkAttemptSucc
 		UpstreamStatusCode:    pgtype.Int4{Int32: int32(params.UpstreamStatusCode), Valid: true},
 		UpstreamRequestID:     optionalText(params.UpstreamRequestID),
 		ResponseStartedAt:     optionalTimestamptz(params.ResponseStartedAt),
+		FinalUsageReceived:    params.FinalUsageReceived,
 		UsageMappingVersion:   pgtype.Text{String: params.UsageMappingVersion, Valid: true},
 		CompletedAt:           timestamptz(params.CompletedAt),
 		AttemptID:             params.ID,

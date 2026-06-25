@@ -301,6 +301,43 @@ func (l *RequestLifecycle) MarkResponseStarted(ctx context.Context, requestRecor
 	})
 }
 
+// deliveryStatusMarker 是交付状态机的可选写入能力。
+//
+// 生产注入的 requestlog.Service 实现（*requestlog.Store）满足它；测试 fake 不实现时交付写入静默跳过。
+// 交付状态只服务审计/展示（Admin），与 settlement 状态相互独立，写失败绝不影响主响应链路。
+type deliveryStatusMarker interface {
+	MarkRequestDeliveryCompleted(ctx context.Context, id int64, completedAt time.Time) (requestlog.RequestRecord, error)
+	MarkRequestDeliveryInterrupted(ctx context.Context, id int64) (requestlog.RequestRecord, error)
+}
+
+// MarkDeliveryCompleted 尽力把请求交付状态推进到 completed（响应已完整交给客户写出路径）。
+// 最佳努力审计：脱离请求 ctx 取消，写失败不影响已成功的主链路与账务。
+func (l *RequestLifecycle) MarkDeliveryCompleted(ctx context.Context, requestRecord requestlog.RequestRecord) {
+	marker, ok := l.requestLog.(deliveryStatusMarker)
+	if !ok {
+		return
+	}
+
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+
+	_, _ = marker.MarkRequestDeliveryCompleted(auditCtx, requestRecord.ID, time.Now())
+}
+
+// MarkDeliveryInterrupted 尽力把请求交付状态推进到 interrupted（客户端取消、上游中断或尾部错误，
+// 客户未拿到完整响应）。最佳努力审计，写失败不影响主链路与账务。
+func (l *RequestLifecycle) MarkDeliveryInterrupted(ctx context.Context, requestRecord requestlog.RequestRecord) {
+	marker, ok := l.requestLog.(deliveryStatusMarker)
+	if !ok {
+		return
+	}
+
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+
+	_, _ = marker.MarkRequestDeliveryInterrupted(auditCtx, requestRecord.ID)
+}
+
 // MarkRequestFailed 把 request record 标记为失败。
 // 失败状态写入是审计动作，调用方仍然返回原始业务错误，避免状态写入细节覆盖根因。
 func (l *RequestLifecycle) MarkRequestFailed(ctx context.Context, requestRecord requestlog.RequestRecord, fallbackCode string, err error) {
@@ -335,7 +372,7 @@ func (l *RequestLifecycle) MarkAttemptFailed(ctx context.Context, attempt reques
 // 客户端断开时原请求 ctx 通常已经取消；这里脱离请求取消，
 // 给审计写入一个很短的补偿窗口，避免 canceled 状态写不进去。
 func (l *RequestLifecycle) MarkRequestCanceled(ctx context.Context, requestRecord requestlog.RequestRecord, attemptRecord requestlog.AttemptRecord, err error) {
-	errorCode, safeMessage, internalDetail := l.requestLogErrorFacts("client_canceled", err)
+	errorCode, safeMessage, internalDetail := l.requestLogCancelFacts(err)
 
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
@@ -366,6 +403,14 @@ func (l *RequestLifecycle) MarkRequestCanceled(ctx context.Context, requestRecor
 func (l *RequestLifecycle) requestLogErrorFacts(fallbackCode string, err error) (errorCode string, safeMessage string, internalDetail string) {
 	errorCode = FailureCodeOrFallback(err, fallbackCode)
 	return errorCode, l.safeMessageFor(errorCode), InternalErrorDetail(err)
+}
+
+// requestLogCancelFacts 生成客户端取消的 request log 事实。
+// 取消不是上游故障：adapter 可能把 context.Canceled 包装成 adapter_send_request_failed，
+// 但审计字段仍固定为 client_canceled；internal_error_detail 保留 unwrap 链供排查。
+func (l *RequestLifecycle) requestLogCancelFacts(err error) (errorCode string, safeMessage string, internalDetail string) {
+	const cancelCode = "client_canceled"
+	return cancelCode, l.safeMessageFor(cancelCode), InternalErrorDetail(err)
 }
 
 // safeMessageFor 优先调用构造时注入的 service-specific 映射；未命中（空串）才回退到协议无关兜底。
