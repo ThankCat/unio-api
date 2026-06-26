@@ -118,22 +118,32 @@ const (
 
 // BreakdownRow 是各维度表现 Top 精简行。
 type BreakdownRow struct {
-	Label        string
-	RefID        *int64 // route_id / channel_id / provider_id（model 维度为 nil）
-	Status       string // enabled/disabled（provider/channel/route）
-	Terminal     int64
-	Succeeded    int64
-	Failed       int64
-	SuccessRate  float64
-	Tokens       int64  // 区间内该分组 token 合计（输入 + 输出）
-	RevenueUSD   string // 区间内平台收入合计（USD，ledger debit）
-	CostUSD      string // 区间内该分组上游成本合计（USD，十进制字符串）
-	MarginUSD    string // 贡献利润 = 收入 − 成本（USD）
-	Latency      LatencyStats
-	LatencyP95   float64 // route/model 维度仍用 P95 单值
-	HealthBucket string // healthy/degraded/unhealthy/no_data（按请求成功率分桶）
-	RecentError  string
-	ChannelCount int64 // provider 维度：命中渠道数
+	Label          string
+	RefID          *int64 // route_id / channel_id / provider_id（model 维度为 nil）
+	Status         string // enabled/disabled（provider/channel/route）
+	Terminal       int64
+	Succeeded      int64
+	Failed         int64
+	SuccessRate    float64
+	Tokens         int64  // 区间内该分组 token 合计（输入 + 输出）
+	RevenueUSD     string // 区间内平台收入合计（USD，ledger debit）
+	CostUSD        string // 区间内该分组上游成本合计（USD，十进制字符串）
+	MarginUSD      string // 贡献利润 = 收入 − 成本（USD）
+	Latency        LatencyStats
+	LatencyP95     float64 // route/model 维度仍用 P95 单值
+	AvgTPS         float64 // provider/channel 维度：成功 attempt 的加权平均输出速度
+	HealthBucket   string  // healthy/degraded/unhealthy/no_data（按请求成功率分桶）
+	RecentError    string
+	ChannelCount   int64           // provider 维度：命中渠道数
+	SuccessBuckets []SuccessBucket // channel 维度：最近 10 分钟 attempt 成功率桶
+}
+
+// SuccessBucket 是渠道表现中按小时聚合的 attempt 成功率。
+type SuccessBucket struct {
+	Bucket      time.Time
+	Terminal    int64
+	Succeeded   int64
+	SuccessRate float64
 }
 
 // ErrorGroup 是「失败原因」面板的单条错误码聚合（§错误可见性）。
@@ -279,27 +289,23 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 		out := make([]BreakdownRow, 0, len(rows))
 		for _, r := range rows {
 			br := BreakdownRow{
-				Tokens:       r.TokensTotal,
+				Tokens: r.TokensTotal,
 				Latency: requestLatencyStats(
 					r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 					r.LatencySample, r.SucceededTotal,
 				),
 				ChannelCount: r.ChannelCount,
+				AvgTPS:       r.AvgTps,
 			}
 			applyBreakdownMoney(&br, r.RevenueUsd, r.CostUsd)
 			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal)
-			if r.ProviderID.Valid {
-				id := r.ProviderID.Int64
-				br.RefID = &id
-			}
-			if r.ProviderName.Valid && r.ProviderName.String != "" {
-				br.Label = r.ProviderName.String
-			} else {
+			id := r.ProviderID
+			br.RefID = &id
+			br.Label = r.ProviderName
+			if br.Label == "" {
 				br.Label = "未知服务商"
 			}
-			if r.ProviderStatus.Valid {
-				br.Status = r.ProviderStatus.String
-			}
+			br.Status = r.ProviderStatus
 			out = append(out, br)
 		}
 		return out, nil
@@ -339,6 +345,19 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 		if err != nil {
 			return nil, storeFailed(err, "aggregate channel breakdown")
 		}
+		bucketRows, err := s.store.DashboardChannelSuccessBuckets(ctx, sqlc.DashboardChannelSuccessBucketsParams{FromTime: fromTS, ToTime: toTS})
+		if err != nil {
+			return nil, storeFailed(err, "aggregate channel success buckets")
+		}
+		bucketsByChannel := make(map[int64][]SuccessBucket)
+		for _, r := range bucketRows {
+			bucketsByChannel[r.ChannelID] = append(bucketsByChannel[r.ChannelID], SuccessBucket{
+				Bucket:      r.Bucket.Time,
+				Terminal:    r.TerminalTotal,
+				Succeeded:   r.SucceededTotal,
+				SuccessRate: r.SuccessRate,
+			})
+		}
 		out := make([]BreakdownRow, 0, len(rows))
 		for _, r := range rows {
 			br := BreakdownRow{
@@ -347,21 +366,18 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 					r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 					r.LatencySample, r.SucceededTotal,
 				),
+				AvgTPS:         r.AvgTps,
+				SuccessBuckets: bucketsByChannel[r.ChannelID],
 			}
 			applyBreakdownMoney(&br, r.RevenueUsd, r.CostUsd)
 			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal)
-			if r.ChannelID.Valid {
-				id := r.ChannelID.Int64
-				br.RefID = &id
-			}
-			if r.ChannelName.Valid && r.ChannelName.String != "" {
-				br.Label = r.ChannelName.String
-			} else {
+			id := r.ChannelID
+			br.RefID = &id
+			br.Label = r.ChannelName
+			if br.Label == "" {
 				br.Label = "未知渠道"
 			}
-			if r.ChannelStatus.Valid {
-				br.Status = r.ChannelStatus.String
-			}
+			br.Status = r.ChannelStatus
 			if r.RecentErrorCode.Valid {
 				br.RecentError = r.RecentErrorCode.String
 			}

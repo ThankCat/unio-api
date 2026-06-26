@@ -376,22 +376,31 @@ type radarDTO struct {
 }
 
 type breakdownRowDTO struct {
-	Label        string  `json:"label"`
-	RefID        *int64  `json:"ref_id"`
-	Status       string  `json:"status"`
-	Terminal     int64   `json:"terminal"`
-	Succeeded    int64   `json:"succeeded"`
-	Failed       int64   `json:"failed"`
-	SuccessRate  float64 `json:"success_rate"`
-	Tokens       int64   `json:"tokens"`
-	RevenueUSD   string  `json:"revenue_usd"`
-	CostUSD      string  `json:"cost_usd"`
-	MarginUSD    string          `json:"margin_usd"`
-	Latency      latencyStatsDTO `json:"latency"`
-	LatencyP95   float64         `json:"latency_p95"`
-	HealthBucket string          `json:"health_bucket"`
-	RecentError  string  `json:"recent_error"`
-	ChannelCount int64   `json:"channel_count"`
+	Label          string             `json:"label"`
+	RefID          *int64             `json:"ref_id"`
+	Status         string             `json:"status"`
+	Terminal       int64              `json:"terminal"`
+	Succeeded      int64              `json:"succeeded"`
+	Failed         int64              `json:"failed"`
+	SuccessRate    float64            `json:"success_rate"`
+	Tokens         int64              `json:"tokens"`
+	RevenueUSD     string             `json:"revenue_usd"`
+	CostUSD        string             `json:"cost_usd"`
+	MarginUSD      string             `json:"margin_usd"`
+	Latency        latencyStatsDTO    `json:"latency"`
+	LatencyP95     float64            `json:"latency_p95"`
+	AvgTPS         float64            `json:"avg_tps"`
+	HealthBucket   string             `json:"health_bucket"`
+	RecentError    string             `json:"recent_error"`
+	ChannelCount   int64              `json:"channel_count"`
+	SuccessBuckets []successBucketDTO `json:"success_buckets,omitempty"`
+}
+
+type successBucketDTO struct {
+	Bucket      string  `json:"bucket"`
+	Terminal    int64   `json:"terminal"`
+	Succeeded   int64   `json:"succeeded"`
+	SuccessRate float64 `json:"success_rate"`
 }
 
 type breakdownDTO struct {
@@ -487,18 +496,27 @@ func (h *dashboardHandler) breakdown(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]breakdownRowDTO, 0, len(rows))
 	for _, row := range rows {
+		successBuckets := make([]successBucketDTO, 0, len(row.SuccessBuckets))
+		for _, bucket := range row.SuccessBuckets {
+			successBuckets = append(successBuckets, successBucketDTO{
+				Bucket:      bucket.Bucket.Format(time.RFC3339),
+				Terminal:    bucket.Terminal,
+				Succeeded:   bucket.Succeeded,
+				SuccessRate: bucket.SuccessRate,
+			})
+		}
 		out = append(out, breakdownRowDTO{
-			Label:        row.Label,
-			RefID:        row.RefID,
-			Status:       row.Status,
-			Terminal:     row.Terminal,
-			Succeeded:    row.Succeeded,
-			Failed:       row.Failed,
-			SuccessRate:  row.SuccessRate,
-			Tokens:       row.Tokens,
-			RevenueUSD:   row.RevenueUSD,
-			CostUSD:      row.CostUSD,
-			MarginUSD:    row.MarginUSD,
+			Label:       row.Label,
+			RefID:       row.RefID,
+			Status:      row.Status,
+			Terminal:    row.Terminal,
+			Succeeded:   row.Succeeded,
+			Failed:      row.Failed,
+			SuccessRate: row.SuccessRate,
+			Tokens:      row.Tokens,
+			RevenueUSD:  row.RevenueUSD,
+			CostUSD:     row.CostUSD,
+			MarginUSD:   row.MarginUSD,
 			Latency: latencyStatsDTO{
 				Avg:      row.Latency.Avg,
 				P50:      row.Latency.P50,
@@ -508,10 +526,12 @@ func (h *dashboardHandler) breakdown(w http.ResponseWriter, r *http.Request) {
 				Sample:   row.Latency.Sample,
 				Coverage: row.Latency.Coverage,
 			},
-			LatencyP95:   row.LatencyP95,
-			HealthBucket: row.HealthBucket,
-			RecentError:  row.RecentError,
-			ChannelCount: row.ChannelCount,
+			LatencyP95:     row.LatencyP95,
+			AvgTPS:         row.AvgTPS,
+			HealthBucket:   row.HealthBucket,
+			RecentError:    row.RecentError,
+			ChannelCount:   row.ChannelCount,
+			SuccessBuckets: successBuckets,
 		})
 	}
 	writeData(w, http.StatusOK, breakdownDTO{Dimension: dimension, Rows: out})

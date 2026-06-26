@@ -37,17 +37,18 @@ type fakeStore struct {
 	costTS     []sqlc.DashboardCostTimeseriesRow
 
 	// §3.1 雷达重构。
-	perfRow      sqlc.DashboardRadarRequestPerfRow
-	throughput   sqlc.DashboardRadarThroughputRow
-	radarTokens  sqlc.DashboardRadarTokensRow
-	backlog      sqlc.DashboardRadarSettlementBacklogRow
-	badChannels  []sqlc.DashboardRadarBadChannelsRow
-	providerBD   []sqlc.DashboardBreakdownProviderRow
-	routeBD      []sqlc.DashboardBreakdownRouteRow
-	channelBD    []sqlc.DashboardBreakdownChannelRow
-	modelBD      []sqlc.DashboardBreakdownModelRow
-	perfTS       []sqlc.DashboardPerformanceTimeseriesRow
-	topErrors    []sqlc.DashboardTopErrorsRow
+	perfRow        sqlc.DashboardRadarRequestPerfRow
+	throughput     sqlc.DashboardRadarThroughputRow
+	radarTokens    sqlc.DashboardRadarTokensRow
+	backlog        sqlc.DashboardRadarSettlementBacklogRow
+	badChannels    []sqlc.DashboardRadarBadChannelsRow
+	providerBD     []sqlc.DashboardBreakdownProviderRow
+	routeBD        []sqlc.DashboardBreakdownRouteRow
+	channelBD      []sqlc.DashboardBreakdownChannelRow
+	channelBuckets []sqlc.DashboardChannelSuccessBucketsRow
+	modelBD        []sqlc.DashboardBreakdownModelRow
+	perfTS         []sqlc.DashboardPerformanceTimeseriesRow
+	topErrors      []sqlc.DashboardTopErrorsRow
 
 	gotUnit string
 }
@@ -116,6 +117,9 @@ func (s *fakeStore) DashboardBreakdownRoute(context.Context, sqlc.DashboardBreak
 func (s *fakeStore) DashboardBreakdownChannel(context.Context, sqlc.DashboardBreakdownChannelParams) ([]sqlc.DashboardBreakdownChannelRow, error) {
 	return s.channelBD, nil
 }
+func (s *fakeStore) DashboardChannelSuccessBuckets(context.Context, sqlc.DashboardChannelSuccessBucketsParams) ([]sqlc.DashboardChannelSuccessBucketsRow, error) {
+	return s.channelBuckets, nil
+}
 func (s *fakeStore) DashboardBreakdownModel(context.Context, sqlc.DashboardBreakdownModelParams) ([]sqlc.DashboardBreakdownModelRow, error) {
 	return s.modelBD, nil
 }
@@ -135,11 +139,11 @@ func TestRadarAggregates(t *testing.T) {
 			LatencySample: 96,
 			TtftAvg:       1200, TtftP50: 900, TtftP90: 1500, TtftP95: 1600, TtftP99: 2200, TtftSample: 84,
 		},
-		throughput:   sqlc.DashboardRadarThroughputRow{OutputTokens: 5000, GenerationSeconds: 100},
-		radarTokens:  sqlc.DashboardRadarTokensRow{UncachedInput: 600, CacheReadInput: 300, CacheWriteInput: 100, OutputTokens: 5000},
-		backlog:      sqlc.DashboardRadarSettlementBacklogRow{ActiveTotal: 2, DeadTotal: 1},
-		revenueRows:  []sqlc.DashboardRevenueByCurrencyRow{{Currency: "USD", Total: mustNumeric(t, "20.00")}},
-		costRows:     []sqlc.DashboardCostByCurrencyRow{{Currency: "USD", Total: mustNumeric(t, "8.00")}},
+		throughput:  sqlc.DashboardRadarThroughputRow{OutputTokens: 5000, GenerationSeconds: 100},
+		radarTokens: sqlc.DashboardRadarTokensRow{UncachedInput: 600, CacheReadInput: 300, CacheWriteInput: 100, OutputTokens: 5000},
+		backlog:     sqlc.DashboardRadarSettlementBacklogRow{ActiveTotal: 2, DeadTotal: 1},
+		revenueRows: []sqlc.DashboardRevenueByCurrencyRow{{Currency: "USD", Total: mustNumeric(t, "20.00")}},
+		costRows:    []sqlc.DashboardCostByCurrencyRow{{Currency: "USD", Total: mustNumeric(t, "8.00")}},
 		exceptionRows: []sqlc.DashboardBillingExceptionSummaryRow{
 			{EventType: "write_off", Total: 3, PlatformAmount: mustNumeric(t, "1.25")},
 		},
