@@ -42,7 +42,7 @@ func validateResponsesRequest(req ResponsesRequest) *responsesValidationError {
 		return validationErr
 	}
 
-	if req.MaxOutputTokens != nil && *req.MaxOutputTokens <= 0 {
+	if req.MaxOutputTokens != nil && (!req.MaxOutputTokens.Integral() || req.MaxOutputTokens.Int() <= 0) {
 		return &responsesValidationError{param: "max_output_tokens", message: "max_output_tokens must be greater than 0"}
 	}
 

@@ -626,3 +626,253 @@ func (q *Queries) MarkRequestAttemptSucceeded(ctx context.Context, arg MarkReque
 	)
 	return i, err
 }
+
+const markSettledRequestAttemptCanceled = `-- name: MarkSettledRequestAttemptCanceled :one
+WITH updated AS (
+    UPDATE request_attempts
+        SET status = 'canceled',
+            upstream_response_id = $1,
+            upstream_response_model = $2,
+            upstream_finish_reason = $3,
+            finish_class = $4,
+            upstream_status_code = $5,
+            upstream_request_id = $6,
+            error_code = $7,
+            error_message = $8,
+            internal_error_detail = $9,
+            response_started_at = COALESCE(request_attempts.response_started_at, $10),
+            final_usage_received = $11,
+            usage_mapping_version = $12,
+            completed_at = $13
+        WHERE request_attempts.id = $14
+            AND request_attempts.status = 'running'
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+)
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at
+FROM updated
+
+UNION ALL
+
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+FROM request_attempts
+WHERE request_attempts.id = $14
+  AND request_attempts.status = 'canceled'
+  AND NOT EXISTS (SELECT 1 FROM updated)
+`
+
+type MarkSettledRequestAttemptCanceledParams struct {
+	UpstreamResponseID    pgtype.Text
+	UpstreamResponseModel pgtype.Text
+	UpstreamFinishReason  pgtype.Text
+	FinishClass           pgtype.Text
+	UpstreamStatusCode    pgtype.Int4
+	UpstreamRequestID     pgtype.Text
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	ResponseStartedAt     pgtype.Timestamptz
+	FinalUsageReceived    bool
+	UsageMappingVersion   pgtype.Text
+	CompletedAt           pgtype.Timestamptz
+	AttemptID             int64
+}
+
+type MarkSettledRequestAttemptCanceledRow struct {
+	ID                    int64
+	RequestRecordID       int64
+	AttemptIndex          int32
+	ProviderID            int64
+	ChannelID             int64
+	AdapterKey            string
+	UpstreamModel         string
+	UpstreamProtocol      string
+	UpstreamResponseID    pgtype.Text
+	UpstreamResponseModel pgtype.Text
+	UpstreamFinishReason  pgtype.Text
+	FinishClass           pgtype.Text
+	Status                string
+	UpstreamStatusCode    pgtype.Int4
+	UpstreamRequestID     pgtype.Text
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	ResponseStartedAt     pgtype.Timestamptz
+	FinalUsageReceived    bool
+	UsageMappingVersion   pgtype.Text
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+}
+
+// MarkSettledRequestAttemptCanceled 将 running attempt 推进到 canceled，但保留已结算上游事实（partial stream 客户端取消）。
+func (q *Queries) MarkSettledRequestAttemptCanceled(ctx context.Context, arg MarkSettledRequestAttemptCanceledParams) (MarkSettledRequestAttemptCanceledRow, error) {
+	row := q.db.QueryRow(ctx, markSettledRequestAttemptCanceled,
+		arg.UpstreamResponseID,
+		arg.UpstreamResponseModel,
+		arg.UpstreamFinishReason,
+		arg.FinishClass,
+		arg.UpstreamStatusCode,
+		arg.UpstreamRequestID,
+		arg.ErrorCode,
+		arg.ErrorMessage,
+		arg.InternalErrorDetail,
+		arg.ResponseStartedAt,
+		arg.FinalUsageReceived,
+		arg.UsageMappingVersion,
+		arg.CompletedAt,
+		arg.AttemptID,
+	)
+	var i MarkSettledRequestAttemptCanceledRow
+	err := row.Scan(
+		&i.ID,
+		&i.RequestRecordID,
+		&i.AttemptIndex,
+		&i.ProviderID,
+		&i.ChannelID,
+		&i.AdapterKey,
+		&i.UpstreamModel,
+		&i.UpstreamProtocol,
+		&i.UpstreamResponseID,
+		&i.UpstreamResponseModel,
+		&i.UpstreamFinishReason,
+		&i.FinishClass,
+		&i.Status,
+		&i.UpstreamStatusCode,
+		&i.UpstreamRequestID,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.InternalErrorDetail,
+		&i.ResponseStartedAt,
+		&i.FinalUsageReceived,
+		&i.UsageMappingVersion,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const markSettledRequestAttemptFailed = `-- name: MarkSettledRequestAttemptFailed :one
+WITH updated AS (
+    UPDATE request_attempts
+        SET status = 'failed',
+            upstream_response_id = $1,
+            upstream_response_model = $2,
+            upstream_finish_reason = $3,
+            finish_class = $4,
+            upstream_status_code = $5,
+            upstream_request_id = $6,
+            error_code = $7,
+            error_message = $8,
+            internal_error_detail = $9,
+            response_started_at = COALESCE(request_attempts.response_started_at, $10),
+            final_usage_received = $11,
+            usage_mapping_version = $12,
+            completed_at = $13
+        WHERE request_attempts.id = $14
+            AND request_attempts.status = 'running'
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+)
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at
+FROM updated
+
+UNION ALL
+
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+FROM request_attempts
+WHERE request_attempts.id = $14
+  AND request_attempts.status = 'failed'
+  AND NOT EXISTS (SELECT 1 FROM updated)
+`
+
+type MarkSettledRequestAttemptFailedParams struct {
+	UpstreamResponseID    pgtype.Text
+	UpstreamResponseModel pgtype.Text
+	UpstreamFinishReason  pgtype.Text
+	FinishClass           pgtype.Text
+	UpstreamStatusCode    pgtype.Int4
+	UpstreamRequestID     pgtype.Text
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	ResponseStartedAt     pgtype.Timestamptz
+	FinalUsageReceived    bool
+	UsageMappingVersion   pgtype.Text
+	CompletedAt           pgtype.Timestamptz
+	AttemptID             int64
+}
+
+type MarkSettledRequestAttemptFailedRow struct {
+	ID                    int64
+	RequestRecordID       int64
+	AttemptIndex          int32
+	ProviderID            int64
+	ChannelID             int64
+	AdapterKey            string
+	UpstreamModel         string
+	UpstreamProtocol      string
+	UpstreamResponseID    pgtype.Text
+	UpstreamResponseModel pgtype.Text
+	UpstreamFinishReason  pgtype.Text
+	FinishClass           pgtype.Text
+	Status                string
+	UpstreamStatusCode    pgtype.Int4
+	UpstreamRequestID     pgtype.Text
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	ResponseStartedAt     pgtype.Timestamptz
+	FinalUsageReceived    bool
+	UsageMappingVersion   pgtype.Text
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+}
+
+// MarkSettledRequestAttemptFailed 将 running attempt 推进到 failed，但保留已结算上游事实（partial stream 上游中断）。
+func (q *Queries) MarkSettledRequestAttemptFailed(ctx context.Context, arg MarkSettledRequestAttemptFailedParams) (MarkSettledRequestAttemptFailedRow, error) {
+	row := q.db.QueryRow(ctx, markSettledRequestAttemptFailed,
+		arg.UpstreamResponseID,
+		arg.UpstreamResponseModel,
+		arg.UpstreamFinishReason,
+		arg.FinishClass,
+		arg.UpstreamStatusCode,
+		arg.UpstreamRequestID,
+		arg.ErrorCode,
+		arg.ErrorMessage,
+		arg.InternalErrorDetail,
+		arg.ResponseStartedAt,
+		arg.FinalUsageReceived,
+		arg.UsageMappingVersion,
+		arg.CompletedAt,
+		arg.AttemptID,
+	)
+	var i MarkSettledRequestAttemptFailedRow
+	err := row.Scan(
+		&i.ID,
+		&i.RequestRecordID,
+		&i.AttemptIndex,
+		&i.ProviderID,
+		&i.ChannelID,
+		&i.AdapterKey,
+		&i.UpstreamModel,
+		&i.UpstreamProtocol,
+		&i.UpstreamResponseID,
+		&i.UpstreamResponseModel,
+		&i.UpstreamFinishReason,
+		&i.FinishClass,
+		&i.Status,
+		&i.UpstreamStatusCode,
+		&i.UpstreamRequestID,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.InternalErrorDetail,
+		&i.ResponseStartedAt,
+		&i.FinalUsageReceived,
+		&i.UsageMappingVersion,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}

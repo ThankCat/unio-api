@@ -1145,3 +1145,242 @@ func (q *Queries) MarkRequestSucceeded(ctx context.Context, arg MarkRequestSucce
 	)
 	return i, err
 }
+
+const markSettledRequestCanceled = `-- name: MarkSettledRequestCanceled :one
+WITH updated AS (
+    UPDATE request_records
+        SET status = 'canceled',
+            response_model_id = $1,
+            response_protocol = $2,
+            response_id = $3,
+            final_provider_id = $4,
+            final_channel_id = $5,
+            error_code = $6,
+            error_message = $7,
+            internal_error_detail = $8,
+            response_started_at = COALESCE(request_records.response_started_at, $9),
+            completed_at = $10,
+            updated_at = now()
+        WHERE request_records.id = $11
+            AND request_records.status = 'running'
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+)
+SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
+FROM updated
+
+UNION ALL
+
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+FROM request_records
+WHERE request_records.id = $11
+  AND request_records.status = 'canceled'
+  AND NOT EXISTS (SELECT 1 FROM updated)
+`
+
+type MarkSettledRequestCanceledParams struct {
+	ResponseModelID     pgtype.Text
+	ResponseProtocol    pgtype.Text
+	ResponseID          pgtype.Text
+	FinalProviderID     pgtype.Int8
+	FinalChannelID      pgtype.Int8
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	ResponseStartedAt   pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+	RequestRecordID     int64
+}
+
+type MarkSettledRequestCanceledRow struct {
+	ID                  int64
+	RequestID           string
+	UserID              int64
+	ProjectID           int64
+	ApiKeyID            int64
+	RequestedModelID    string
+	IngressProtocol     string
+	Operation           string
+	ResponseModelID     pgtype.Text
+	ResponseProtocol    pgtype.Text
+	ResponseID          pgtype.Text
+	Stream              bool
+	Status              string
+	FinalProviderID     pgtype.Int8
+	FinalChannelID      pgtype.Int8
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	DeliveryStatus      string
+	ResponseStartedAt   pgtype.Timestamptz
+	ResponseCompletedAt pgtype.Timestamptz
+	StartedAt           pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+}
+
+// MarkSettledRequestCanceled 将 running 请求推进到 canceled，但保留已结算响应事实（partial stream 客户端取消）。
+// 与 MarkRequestCanceled 不同：该路径已经写入 usage/price/ledger，只是客户主动中断交付。
+func (q *Queries) MarkSettledRequestCanceled(ctx context.Context, arg MarkSettledRequestCanceledParams) (MarkSettledRequestCanceledRow, error) {
+	row := q.db.QueryRow(ctx, markSettledRequestCanceled,
+		arg.ResponseModelID,
+		arg.ResponseProtocol,
+		arg.ResponseID,
+		arg.FinalProviderID,
+		arg.FinalChannelID,
+		arg.ErrorCode,
+		arg.ErrorMessage,
+		arg.InternalErrorDetail,
+		arg.ResponseStartedAt,
+		arg.CompletedAt,
+		arg.RequestRecordID,
+	)
+	var i MarkSettledRequestCanceledRow
+	err := row.Scan(
+		&i.ID,
+		&i.RequestID,
+		&i.UserID,
+		&i.ProjectID,
+		&i.ApiKeyID,
+		&i.RequestedModelID,
+		&i.IngressProtocol,
+		&i.Operation,
+		&i.ResponseModelID,
+		&i.ResponseProtocol,
+		&i.ResponseID,
+		&i.Stream,
+		&i.Status,
+		&i.FinalProviderID,
+		&i.FinalChannelID,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.InternalErrorDetail,
+		&i.DeliveryStatus,
+		&i.ResponseStartedAt,
+		&i.ResponseCompletedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const markSettledRequestFailed = `-- name: MarkSettledRequestFailed :one
+WITH updated AS (
+    UPDATE request_records
+        SET status = 'failed',
+            response_model_id = $1,
+            response_protocol = $2,
+            response_id = $3,
+            final_provider_id = $4,
+            final_channel_id = $5,
+            error_code = $6,
+            error_message = $7,
+            internal_error_detail = $8,
+            response_started_at = COALESCE(request_records.response_started_at, $9),
+            completed_at = $10,
+            updated_at = now()
+        WHERE request_records.id = $11
+            AND request_records.status = 'running'
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+)
+SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
+FROM updated
+
+UNION ALL
+
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+FROM request_records
+WHERE request_records.id = $11
+  AND request_records.status = 'failed'
+  AND NOT EXISTS (SELECT 1 FROM updated)
+`
+
+type MarkSettledRequestFailedParams struct {
+	ResponseModelID     pgtype.Text
+	ResponseProtocol    pgtype.Text
+	ResponseID          pgtype.Text
+	FinalProviderID     pgtype.Int8
+	FinalChannelID      pgtype.Int8
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	ResponseStartedAt   pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+	RequestRecordID     int64
+}
+
+type MarkSettledRequestFailedRow struct {
+	ID                  int64
+	RequestID           string
+	UserID              int64
+	ProjectID           int64
+	ApiKeyID            int64
+	RequestedModelID    string
+	IngressProtocol     string
+	Operation           string
+	ResponseModelID     pgtype.Text
+	ResponseProtocol    pgtype.Text
+	ResponseID          pgtype.Text
+	Stream              bool
+	Status              string
+	FinalProviderID     pgtype.Int8
+	FinalChannelID      pgtype.Int8
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	DeliveryStatus      string
+	ResponseStartedAt   pgtype.Timestamptz
+	ResponseCompletedAt pgtype.Timestamptz
+	StartedAt           pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+}
+
+// MarkSettledRequestFailed 将 running 请求推进到 failed，但保留已结算响应事实（partial stream 上游中断）。
+func (q *Queries) MarkSettledRequestFailed(ctx context.Context, arg MarkSettledRequestFailedParams) (MarkSettledRequestFailedRow, error) {
+	row := q.db.QueryRow(ctx, markSettledRequestFailed,
+		arg.ResponseModelID,
+		arg.ResponseProtocol,
+		arg.ResponseID,
+		arg.FinalProviderID,
+		arg.FinalChannelID,
+		arg.ErrorCode,
+		arg.ErrorMessage,
+		arg.InternalErrorDetail,
+		arg.ResponseStartedAt,
+		arg.CompletedAt,
+		arg.RequestRecordID,
+	)
+	var i MarkSettledRequestFailedRow
+	err := row.Scan(
+		&i.ID,
+		&i.RequestID,
+		&i.UserID,
+		&i.ProjectID,
+		&i.ApiKeyID,
+		&i.RequestedModelID,
+		&i.IngressProtocol,
+		&i.Operation,
+		&i.ResponseModelID,
+		&i.ResponseProtocol,
+		&i.ResponseID,
+		&i.Stream,
+		&i.Status,
+		&i.FinalProviderID,
+		&i.FinalChannelID,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.InternalErrorDetail,
+		&i.DeliveryStatus,
+		&i.ResponseStartedAt,
+		&i.ResponseCompletedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}

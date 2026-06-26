@@ -17,7 +17,7 @@ type ResponsesRequest struct {
 	Instructions *string `json:"instructions,omitempty"`
 
 	// MaxOutputTokens 是最大输出 token；桥接为 Chat max_tokens / max_completion_tokens。
-	MaxOutputTokens *int `json:"max_output_tokens,omitempty"`
+	MaxOutputTokens *ResponsesInt `json:"max_output_tokens,omitempty"`
 
 	// 采样温度与核采样，原样映射到 Chat。
 	Temperature *float64 `json:"temperature,omitempty"`
@@ -116,6 +116,30 @@ type ResponsesInput struct {
 	Items []ResponseInputItem
 }
 
+// ResponsesInt 承载 Responses 文档里标为 number、但语义为整数计数的字段。
+//
+// OpenAI 文档把 max_output_tokens 写作 number；入口接受 256 与 256.0，
+// 但保留 256.5 到 validation 阶段给出字段级错误，避免 decode 阶段泛化成 invalid json body。
+type ResponsesInt struct {
+	value    int
+	integral bool
+}
+
+// Int 返回普通 int 值，供内部 adapter 使用。
+func (n ResponsesInt) Int() int {
+	return n.value
+}
+
+// Integral 表示原始 JSON number 是否可无损表达为整数。
+func (n ResponsesInt) Integral() bool {
+	return n.integral
+}
+
+// MarshalJSON 按数字输出，保持 Responses 响应回显形状。
+func (n ResponsesInt) MarshalJSON() ([]byte, error) {
+	return json.Marshal(n.value)
+}
+
 // MarshalJSON 把 input 还原为其原始 JSON（保留字符串/数组两种 union 形态）。
 //
 // 仅用于「无原始请求体」的 typed 重编码兜底路径（上游 responses 直传优先用 ResponsesRequest.RawBody）；
@@ -140,10 +164,12 @@ type ResponseInputItem struct {
 	Content json.RawMessage `json:"content,omitempty"`
 
 	// function_call: call_id / name / arguments；MCP namespace 工具额外带 namespace。
-	CallID    *string `json:"call_id,omitempty"`
-	Name      *string `json:"name,omitempty"`
-	Arguments *string `json:"arguments,omitempty"`
-	Namespace *string `json:"namespace,omitempty"`
+	// arguments 在 function_call 上通常是 JSON 字符串，但 Responses 也有未知/future item
+	// 使用 arguments: unknown；保留原始 JSON，避免入口 decode 过早拒绝合法协议扩展。
+	CallID    *string         `json:"call_id,omitempty"`
+	Name      *string         `json:"name,omitempty"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+	Namespace *string         `json:"namespace,omitempty"`
 
 	// function_call_output: call_id + output（string | parts[]）。
 	Output json.RawMessage `json:"output,omitempty"`

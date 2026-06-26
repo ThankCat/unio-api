@@ -116,13 +116,13 @@ type RunStreamParamsGeneric[C any] struct {
 // inline onChunk）。
 func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (RunResult, error) {
 	return RunStreamGeneric(ctx, r, RunStreamParamsGeneric[chatcompletionsadapter.ChatStreamChunk]{
-		RequestRecord:    params.RequestRecord,
-		Principal:        params.Principal,
-		Authorization:    params.Authorization,
-		Candidates:       params.Candidates,
-		RequestedModelID: params.RequestedModelID,
-		ResponseProtocol: params.ResponseProtocol,
-		ResolveAdapter:   params.ResolveAdapter,
+		RequestRecord:           params.RequestRecord,
+		Principal:               params.Principal,
+		Authorization:           params.Authorization,
+		Candidates:              params.Candidates,
+		RequestedModelID:        params.RequestedModelID,
+		ResponseProtocol:        params.ResponseProtocol,
+		ResolveAdapter:          params.ResolveAdapter,
 		Stream:                  StreamUpstreamGeneric[chatcompletionsadapter.ChatStreamChunk](params.Stream),
 		EmitChunk:               EmitStreamChunkGeneric[chatcompletionsadapter.ChatStreamChunk](params.EmitChunk),
 		Finish:                  params.Finish,
@@ -216,6 +216,10 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		// finishReason 取上游最后一个非空 finish_reason，供协议收尾帧映射终态。
 		finishReason := ""
 
+		settledRequestStatus := requestlog.RequestStatusSucceeded
+		settledAttemptStatus := requestlog.AttemptStatusSucceeded
+		settledErrorCode, settledErrorMessage, settledInternalErrorDetail := "", "", ""
+
 		// responseStartedAt 记录第一个真正对客户可见的上游 chunk 到达时间，用于 TTFT。
 		var responseStartedAt *time.Time
 
@@ -241,18 +245,23 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				responseID = streamFacts.UpstreamResponseID
 			}
 			settleErr := r.settlement.SettleSuccessfulChat(settleCtx, ChatSettlementParams{
-				RequestRecord:     requestRecord,
-				AttemptRecord:     attemptRecord,
-				Principal:         params.Principal,
-				Authorization:     authorization,
-				ResponseProtocol:  params.ResponseProtocol,
-				ResponseID:        responseID,
-				ResponseModelID:   params.RequestedModelID,
-				ResponseStartedAt: responseStartedAt,
-				ModelDBID:         candidate.ModelDBID,
-				FinalProviderID:   candidate.ProviderID,
-				FinalChannelID:    candidate.Channel.ID,
-				Facts:             *streamFacts,
+				RequestRecord:       requestRecord,
+				AttemptRecord:       attemptRecord,
+				Principal:           params.Principal,
+				Authorization:       authorization,
+				ResponseProtocol:    params.ResponseProtocol,
+				ResponseID:          responseID,
+				ResponseModelID:     params.RequestedModelID,
+				ResponseStartedAt:   responseStartedAt,
+				RequestFinalStatus:  settledRequestStatus,
+				AttemptFinalStatus:  settledAttemptStatus,
+				ErrorCode:           settledErrorCode,
+				ErrorMessage:        settledErrorMessage,
+				InternalErrorDetail: settledInternalErrorDetail,
+				ModelDBID:           candidate.ModelDBID,
+				FinalProviderID:     candidate.ProviderID,
+				FinalChannelID:      candidate.Channel.ID,
+				Facts:               *streamFacts,
 			})
 			EndSettlementSpan(settleSpan, settleErr)
 			l.RecordSettlement(SettlementOutcomeFromErr(settleErr))
@@ -264,6 +273,19 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		// final_usage_received=false）；settlement 永久失败且无 recovery 接管时，退回释放冻结并记风险敞口
 		// （与上游成功后 settlement 失败同语义）。reason 落到 upstream_finish_reason 区分 B/D。
 		finishPartial := func(reason string, outcome metrics.ChatOutcome, streamEvent metrics.StreamEvent, deliveryCompleted bool, returnErr error) (RunResult, error) {
+			settledRequestStatus = requestlog.RequestStatusSucceeded
+			settledAttemptStatus = requestlog.AttemptStatusSucceeded
+			settledErrorCode, settledErrorMessage, settledInternalErrorDetail = "", "", ""
+			switch reason {
+			case PartialReasonClientCanceled:
+				settledRequestStatus = requestlog.RequestStatusCanceled
+				settledAttemptStatus = requestlog.AttemptStatusCanceled
+				settledErrorCode, settledErrorMessage, settledInternalErrorDetail = l.requestLogCancelFacts(returnErr)
+			case PartialReasonInterrupted:
+				settledRequestStatus = requestlog.RequestStatusFailed
+				settledAttemptStatus = requestlog.AttemptStatusFailed
+				settledErrorCode, settledErrorMessage, settledInternalErrorDetail = l.requestLogErrorFacts("stream_adapter_error", returnErr)
+			}
 			facts := BuildPartialStreamFacts(PartialStreamFactsParams{
 				Candidate:        candidate,
 				StreamResponseID: streamResponseID,
@@ -393,8 +415,8 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 
 			if emitted {
 				// SSE 已写出后无法再 fallback 或改写 JSON error。已 emit 内容按 partial settlement 计费（路线 B）；
-				// 不在此处 MarkAttemptFailed——partial 走 settlement 会把 attempt 标 succeeded。
-				return finishPartial(PartialReasonInterrupted, metrics.ChatOutcomeCanceled, metrics.StreamEventCanceled, false, err)
+				// 不在此处 MarkAttemptFailed——partial 走 settlement 会先结算 usage/ledger 再把 attempt 标 failed。
+				return finishPartial(PartialReasonInterrupted, metrics.ChatOutcomeFailed, metrics.StreamEventInterrupted, false, err)
 			}
 
 			// 首 token 前失败：attempt 记失败；客户端还没看到上游内容，只有这时允许同模型 fallback。

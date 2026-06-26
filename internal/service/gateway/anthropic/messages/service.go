@@ -98,6 +98,8 @@ func messagesSafeMessage(code string) string {
 		return "Request authorization failed."
 	case "messages_authorization_release_failed":
 		return "Request billing cleanup failed."
+	case "stream_adapter_error":
+		return "Upstream stream failed."
 	case "messages_settlement_failed", "stream_messages_settlement_failed":
 		return "Request settlement failed."
 	}

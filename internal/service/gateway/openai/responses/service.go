@@ -223,8 +223,8 @@ func (s *ResponsesService) responsesInputTokenEstimator(req gatewayapi.Responses
 
 // estimateMaxCompletionTokens 估算 authorization 用的最大输出 token。
 func estimateMaxCompletionTokens(req gatewayapi.ResponsesRequest) int64 {
-	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
-		return int64(*req.MaxOutputTokens)
+	if req.MaxOutputTokens != nil && req.MaxOutputTokens.Int() > 0 {
+		return int64(req.MaxOutputTokens.Int())
 	}
 	return lifecycle.DefaultAuthorizationMaxCompletionTokens
 }

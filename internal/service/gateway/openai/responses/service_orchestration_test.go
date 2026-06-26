@@ -198,6 +198,14 @@ func (s *fakeRequestLog) MarkRequestCanceled(_ context.Context, params requestlo
 	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusCanceled}, nil
 }
 
+func (s *fakeRequestLog) MarkSettledRequestCanceled(_ context.Context, params requestlog.MarkSettledRequestCanceledParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusCanceled}, nil
+}
+
+func (s *fakeRequestLog) MarkSettledRequestFailed(_ context.Context, params requestlog.MarkSettledRequestFailedParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusFailed}, nil
+}
+
 func (s *fakeRequestLog) CreateAttempt(_ context.Context, params requestlog.CreateAttemptParams) (requestlog.AttemptRecord, error) {
 	id := s.nextAttemptID
 	s.nextAttemptID++
@@ -229,6 +237,14 @@ func (s *fakeRequestLog) MarkAttemptFailed(_ context.Context, params requestlog.
 
 func (s *fakeRequestLog) MarkAttemptCanceled(_ context.Context, params requestlog.MarkAttemptCanceledParams) (requestlog.AttemptRecord, error) {
 	return requestlog.AttemptRecord{ID: params.ID, Status: requestlog.AttemptStatusCanceled}, nil
+}
+
+func (s *fakeRequestLog) MarkSettledAttemptCanceled(_ context.Context, params requestlog.MarkSettledAttemptCanceledParams) (requestlog.AttemptRecord, error) {
+	return requestlog.AttemptRecord{ID: params.ID, Status: requestlog.AttemptStatusCanceled}, nil
+}
+
+func (s *fakeRequestLog) MarkSettledAttemptFailed(_ context.Context, params requestlog.MarkSettledAttemptFailedParams) (requestlog.AttemptRecord, error) {
+	return requestlog.AttemptRecord{ID: params.ID, Status: requestlog.AttemptStatusFailed}, nil
 }
 
 type passthroughPreparer struct{}

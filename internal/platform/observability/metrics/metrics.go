@@ -58,6 +58,9 @@ const (
 	// StreamEventCanceled 表示流式请求被客户端取消。
 	StreamEventCanceled StreamEvent = "canceled"
 
+	// StreamEventInterrupted 表示流式请求已输出后被上游/链路错误中断。
+	StreamEventInterrupted StreamEvent = "interrupted"
+
 	// StreamEventMissingUsage 表示流正常结束但缺少 final usage。
 	StreamEventMissingUsage StreamEvent = "missing_usage"
 )

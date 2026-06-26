@@ -260,6 +260,37 @@ WHERE request_records.id = sqlc.arg(request_record_id)
   AND request_records.status = 'failed'
   AND NOT EXISTS (SELECT 1 FROM updated);
 
+-- name: MarkSettledRequestFailed :one
+-- MarkSettledRequestFailed 将 running 请求推进到 failed，但保留已结算响应事实（partial stream 上游中断）。
+WITH updated AS (
+    UPDATE request_records
+        SET status = 'failed',
+            response_model_id = sqlc.arg(response_model_id),
+            response_protocol = sqlc.arg(response_protocol),
+            response_id = sqlc.arg(response_id),
+            final_provider_id = sqlc.arg(final_provider_id),
+            final_channel_id = sqlc.arg(final_channel_id),
+            error_code = sqlc.arg(error_code),
+            error_message = sqlc.arg(error_message),
+            internal_error_detail = sqlc.arg(internal_error_detail),
+            response_started_at = COALESCE(request_records.response_started_at, sqlc.narg(response_started_at)),
+            completed_at = sqlc.arg(completed_at),
+            updated_at = now()
+        WHERE request_records.id = sqlc.arg(request_record_id)
+            AND request_records.status = 'running'
+        RETURNING request_records.*
+)
+SELECT *
+FROM updated
+
+UNION ALL
+
+SELECT request_records.*
+FROM request_records
+WHERE request_records.id = sqlc.arg(request_record_id)
+  AND request_records.status = 'failed'
+  AND NOT EXISTS (SELECT 1 FROM updated);
+
 -- name: MarkRequestCanceled :one
 -- MarkRequestCanceled 将 running 请求原子推进到 canceled，重复 canceled 返回第一次取消事实。
 -- 重复取消写入不能覆盖 error_code/error_message/internal_error_detail/completed_at。
@@ -269,6 +300,38 @@ WITH updated AS (
             error_code = sqlc.arg(error_code),
             error_message = sqlc.arg(error_message),
             internal_error_detail = sqlc.arg(internal_error_detail),
+            completed_at = sqlc.arg(completed_at),
+            updated_at = now()
+        WHERE request_records.id = sqlc.arg(request_record_id)
+            AND request_records.status = 'running'
+        RETURNING request_records.*
+)
+SELECT *
+FROM updated
+
+UNION ALL
+
+SELECT request_records.*
+FROM request_records
+WHERE request_records.id = sqlc.arg(request_record_id)
+  AND request_records.status = 'canceled'
+  AND NOT EXISTS (SELECT 1 FROM updated);
+
+-- name: MarkSettledRequestCanceled :one
+-- MarkSettledRequestCanceled 将 running 请求推进到 canceled，但保留已结算响应事实（partial stream 客户端取消）。
+-- 与 MarkRequestCanceled 不同：该路径已经写入 usage/price/ledger，只是客户主动中断交付。
+WITH updated AS (
+    UPDATE request_records
+        SET status = 'canceled',
+            response_model_id = sqlc.arg(response_model_id),
+            response_protocol = sqlc.arg(response_protocol),
+            response_id = sqlc.arg(response_id),
+            final_provider_id = sqlc.arg(final_provider_id),
+            final_channel_id = sqlc.arg(final_channel_id),
+            error_code = sqlc.arg(error_code),
+            error_message = sqlc.arg(error_message),
+            internal_error_detail = sqlc.arg(internal_error_detail),
+            response_started_at = COALESCE(request_records.response_started_at, sqlc.narg(response_started_at)),
             completed_at = sqlc.arg(completed_at),
             updated_at = now()
         WHERE request_records.id = sqlc.arg(request_record_id)

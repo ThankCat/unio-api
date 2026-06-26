@@ -13,9 +13,11 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/apikey"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/billing"
+	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
+	"github.com/ThankCat/unio-api/internal/core/routing"
 	coreusage "github.com/ThankCat/unio-api/internal/core/usage"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
@@ -724,6 +726,143 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 	}
 	if v, ok := costUsage.ReasoningOutputTokens.BillableValue(); !ok || v != 2 {
 		t.Fatalf("expected provider cost reasoning usage 2, got %d (ok=%v)", v, ok)
+	}
+}
+
+func TestChatSettlementSettlesClientCanceledPartialAsCanceled(t *testing.T) {
+	deps := newChatSettlementDBDeps(t)
+	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))
+	ledgerService := ledger.NewService(deps.pool, deps.queries)
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerService)
+	params := deps.params()
+	params.RequestFinalStatus = requestlog.RequestStatusCanceled
+	params.AttemptFinalStatus = requestlog.AttemptStatusCanceled
+	params.ErrorCode = "client_canceled"
+	params.ErrorMessage = "client canceled request"
+	params.InternalErrorDetail = "context canceled"
+	params.ResponseID = "partial-client-canceled"
+	params.Facts = BuildPartialStreamFacts(PartialStreamFactsParams{
+		Candidate: routing.ChatRouteCandidate{
+			ProviderID:    deps.providerID,
+			ModelDBID:     deps.modelID,
+			Protocol:      string(requestlog.ProtocolOpenAI),
+			AdapterKey:    "openai",
+			Channel:       channel.Runtime{ID: deps.channelID},
+			UpstreamModel: "gpt-4.1",
+		},
+		StreamResponseID: "partial-client-canceled",
+		RequestRecordID:  deps.requestRecord.ID,
+		InputTokens:      10,
+		OutputTokens:     5,
+		Reason:           PartialReasonClientCanceled,
+	})
+
+	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
+		t.Fatalf("settle client-canceled partial chat: %v", err)
+	}
+
+	if status := requestStatus(t, deps.ctx, deps.pool, deps.requestRecord.ID); status != string(requestlog.RequestStatusCanceled) {
+		t.Fatalf("expected request canceled, got %q", status)
+	}
+	if status := attemptStatus(t, deps.ctx, deps.pool, deps.attemptRecord.ID); status != string(requestlog.AttemptStatusCanceled) {
+		t.Fatalf("expected attempt canceled, got %q", status)
+	}
+	if got := requestTableCount(t, deps.ctx, deps.pool, "usage_records", deps.requestRecord.ID); got != 1 {
+		t.Fatalf("expected one usage record for canceled partial settlement, got %d", got)
+	}
+	if got := requestDebitLedgerCount(t, deps.ctx, deps.pool, deps.requestRecord.ID); got != 1 {
+		t.Fatalf("expected one debit ledger entry for canceled partial settlement, got %d", got)
+	}
+
+	attempts, err := deps.queries.ListRequestAttemptsByRequest(deps.ctx, deps.requestRecord.ID)
+	if err != nil {
+		t.Fatalf("list attempts: %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("expected one attempt, got %d", len(attempts))
+	}
+	if !attempts[0].UpstreamFinishReason.Valid || attempts[0].UpstreamFinishReason.String != PartialReasonClientCanceled {
+		t.Fatalf("expected attempt finish reason %q, got valid=%v value=%q", PartialReasonClientCanceled, attempts[0].UpstreamFinishReason.Valid, attempts[0].UpstreamFinishReason.String)
+	}
+	if attempts[0].FinalUsageReceived {
+		t.Fatal("expected final_usage_received=false for partial stream estimate")
+	}
+	if !attempts[0].ErrorCode.Valid || attempts[0].ErrorCode.String != "client_canceled" {
+		t.Fatalf("expected attempt error code client_canceled, got valid=%v value=%q", attempts[0].ErrorCode.Valid, attempts[0].ErrorCode.String)
+	}
+
+	request, err := deps.queries.GetRequestRecordByRequestID(deps.ctx, deps.requestRecord.RequestID)
+	if err != nil {
+		t.Fatalf("get request record: %v", err)
+	}
+	if !request.ErrorCode.Valid || request.ErrorCode.String != "client_canceled" {
+		t.Fatalf("expected request error code client_canceled, got valid=%v value=%q", request.ErrorCode.Valid, request.ErrorCode.String)
+	}
+	if !request.ResponseID.Valid || request.ResponseID.String != "partial-client-canceled" {
+		t.Fatalf("expected partial response id, got valid=%v value=%q", request.ResponseID.Valid, request.ResponseID.String)
+	}
+}
+
+func TestChatSettlementSettlesInterruptedPartialAsFailed(t *testing.T) {
+	deps := newChatSettlementDBDeps(t)
+	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))
+	ledgerService := ledger.NewService(deps.pool, deps.queries)
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerService)
+	params := deps.params()
+	params.RequestFinalStatus = requestlog.RequestStatusFailed
+	params.AttemptFinalStatus = requestlog.AttemptStatusFailed
+	params.ErrorCode = "stream_adapter_error"
+	params.ErrorMessage = "Upstream stream failed."
+	params.InternalErrorDetail = "upstream stream interrupted"
+	params.ResponseID = "partial-interrupted"
+	params.Facts = BuildPartialStreamFacts(PartialStreamFactsParams{
+		Candidate: routing.ChatRouteCandidate{
+			ProviderID:    deps.providerID,
+			ModelDBID:     deps.modelID,
+			Protocol:      string(requestlog.ProtocolOpenAI),
+			AdapterKey:    "openai",
+			Channel:       channel.Runtime{ID: deps.channelID},
+			UpstreamModel: "gpt-4.1",
+		},
+		StreamResponseID: "partial-interrupted",
+		RequestRecordID:  deps.requestRecord.ID,
+		InputTokens:      10,
+		OutputTokens:     5,
+		Reason:           PartialReasonInterrupted,
+	})
+
+	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
+		t.Fatalf("settle interrupted partial chat: %v", err)
+	}
+
+	if status := requestStatus(t, deps.ctx, deps.pool, deps.requestRecord.ID); status != string(requestlog.RequestStatusFailed) {
+		t.Fatalf("expected request failed, got %q", status)
+	}
+	if status := attemptStatus(t, deps.ctx, deps.pool, deps.attemptRecord.ID); status != string(requestlog.AttemptStatusFailed) {
+		t.Fatalf("expected attempt failed, got %q", status)
+	}
+	if got := requestTableCount(t, deps.ctx, deps.pool, "usage_records", deps.requestRecord.ID); got != 1 {
+		t.Fatalf("expected one usage record for failed partial settlement, got %d", got)
+	}
+	if got := requestDebitLedgerCount(t, deps.ctx, deps.pool, deps.requestRecord.ID); got != 1 {
+		t.Fatalf("expected one debit ledger entry for failed partial settlement, got %d", got)
+	}
+
+	attempts, err := deps.queries.ListRequestAttemptsByRequest(deps.ctx, deps.requestRecord.ID)
+	if err != nil {
+		t.Fatalf("list attempts: %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("expected one attempt, got %d", len(attempts))
+	}
+	if !attempts[0].UpstreamFinishReason.Valid || attempts[0].UpstreamFinishReason.String != PartialReasonInterrupted {
+		t.Fatalf("expected attempt finish reason %q, got valid=%v value=%q", PartialReasonInterrupted, attempts[0].UpstreamFinishReason.Valid, attempts[0].UpstreamFinishReason.String)
+	}
+	if attempts[0].FinalUsageReceived {
+		t.Fatal("expected final_usage_received=false for interrupted partial estimate")
+	}
+	if !attempts[0].ErrorCode.Valid || attempts[0].ErrorCode.String != "stream_adapter_error" {
+		t.Fatalf("expected attempt error code stream_adapter_error, got valid=%v value=%q", attempts[0].ErrorCode.Valid, attempts[0].ErrorCode.String)
 	}
 }
 

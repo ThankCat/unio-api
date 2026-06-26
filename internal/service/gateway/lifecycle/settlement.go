@@ -77,18 +77,23 @@ type ChatSettlementExecutor interface {
 // ChatSettlementParams 表示一次成功 chat 请求结算所需的事实。
 // 非流式与流式都只消费 adapter 同次解析产生的不可变 ResponseFacts。
 type ChatSettlementParams struct {
-	RequestRecord     requestlog.RequestRecord
-	AttemptRecord     requestlog.AttemptRecord
-	Principal         *auth.APIKeyPrincipal
-	Authorization     ChatAuthorization
-	ResponseProtocol  requestlog.Protocol
-	ResponseID        string
-	ResponseModelID   string
-	ResponseStartedAt *time.Time
-	ModelDBID         int64
-	FinalProviderID   int64
-	FinalChannelID    int64
-	Facts             adapter.ResponseFacts
+	RequestRecord       requestlog.RequestRecord
+	AttemptRecord       requestlog.AttemptRecord
+	Principal           *auth.APIKeyPrincipal
+	Authorization       ChatAuthorization
+	ResponseProtocol    requestlog.Protocol
+	ResponseID          string
+	ResponseModelID     string
+	ResponseStartedAt   *time.Time
+	RequestFinalStatus  requestlog.RequestStatus
+	AttemptFinalStatus  requestlog.AttemptStatus
+	ErrorCode           string
+	ErrorMessage        string
+	InternalErrorDetail string
+	ModelDBID           int64
+	FinalProviderID     int64
+	FinalChannelID      int64
+	Facts               adapter.ResponseFacts
 }
 
 // ValidateChatSettlementFacts 校验 adapter 交给 settlement 的不可变事实。
@@ -270,10 +275,18 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 
 	txRequestLog := requestlog.NewStore(txQueries)
 	facts := params.Facts
+	requestFinalStatus := params.RequestFinalStatus
+	if requestFinalStatus == "" {
+		requestFinalStatus = requestlog.RequestStatusSucceeded
+	}
+	attemptFinalStatus := params.AttemptFinalStatus
+	if attemptFinalStatus == "" {
+		attemptFinalStatus = requestlog.AttemptStatusSucceeded
+	}
 
 	// 从 adapter response metadata 写入真实 upstream status code 和 request id，
 	// 用于渠道审计和 observability，而不是固定写 200/NULL。
-	_, err = txRequestLog.MarkAttemptSucceeded(ctx, requestlog.MarkAttemptSucceededParams{
+	attemptSuccessParams := requestlog.MarkAttemptSucceededParams{
 		ID:                    params.AttemptRecord.ID,
 		UpstreamResponseID:    facts.UpstreamResponseID,
 		UpstreamResponseModel: facts.UpstreamModel,
@@ -286,7 +299,31 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		FinalUsageReceived:  !facts.UsageSource.IsPartialEstimate(),
 		UsageMappingVersion: facts.UsageMappingVersion,
 		CompletedAt:         now,
-	})
+	}
+	switch attemptFinalStatus {
+	case requestlog.AttemptStatusSucceeded:
+		_, err = txRequestLog.MarkAttemptSucceeded(ctx, attemptSuccessParams)
+	case requestlog.AttemptStatusFailed:
+		_, err = txRequestLog.MarkSettledAttemptFailed(ctx, requestlog.MarkSettledAttemptFailedParams{
+			MarkAttemptSucceededParams: attemptSuccessParams,
+			ErrorCode:                  params.ErrorCode,
+			ErrorMessage:               params.ErrorMessage,
+			InternalErrorDetail:        params.InternalErrorDetail,
+		})
+	case requestlog.AttemptStatusCanceled:
+		_, err = txRequestLog.MarkSettledAttemptCanceled(ctx, requestlog.MarkSettledAttemptCanceledParams{
+			MarkAttemptSucceededParams: attemptSuccessParams,
+			ErrorCode:                  params.ErrorCode,
+			ErrorMessage:               params.ErrorMessage,
+			InternalErrorDetail:        params.InternalErrorDetail,
+		})
+	default:
+		err = failure.New(
+			failure.CodeGatewayChatSettlementFailed,
+			failure.WithMessage("unsupported settled attempt final status"),
+			failure.WithField("attempt_status", string(attemptFinalStatus)),
+		)
+	}
 	if err != nil {
 		return failure.Wrap(
 			failure.CodeGatewayChatSettlementFailed,
@@ -438,7 +475,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		}
 	}
 
-	_, err = txRequestLog.MarkRequestSucceeded(ctx, requestlog.MarkRequestSucceededParams{
+	requestSuccessParams := requestlog.MarkRequestSucceededParams{
 		ID:                params.RequestRecord.ID,
 		ResponseModelID:   params.ResponseModelID,
 		ResponseProtocol:  params.ResponseProtocol,
@@ -447,7 +484,31 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		FinalChannelID:    params.FinalChannelID,
 		ResponseStartedAt: params.ResponseStartedAt,
 		CompletedAt:       now,
-	})
+	}
+	switch requestFinalStatus {
+	case requestlog.RequestStatusSucceeded:
+		_, err = txRequestLog.MarkRequestSucceeded(ctx, requestSuccessParams)
+	case requestlog.RequestStatusFailed:
+		_, err = txRequestLog.MarkSettledRequestFailed(ctx, requestlog.MarkSettledRequestFailedParams{
+			MarkRequestSucceededParams: requestSuccessParams,
+			ErrorCode:                  params.ErrorCode,
+			ErrorMessage:               params.ErrorMessage,
+			InternalErrorDetail:        params.InternalErrorDetail,
+		})
+	case requestlog.RequestStatusCanceled:
+		_, err = txRequestLog.MarkSettledRequestCanceled(ctx, requestlog.MarkSettledRequestCanceledParams{
+			MarkRequestSucceededParams: requestSuccessParams,
+			ErrorCode:                  params.ErrorCode,
+			ErrorMessage:               params.ErrorMessage,
+			InternalErrorDetail:        params.InternalErrorDetail,
+		})
+	default:
+		err = failure.New(
+			failure.CodeGatewayChatSettlementFailed,
+			failure.WithMessage("unsupported settled request final status"),
+			failure.WithField("request_status", string(requestFinalStatus)),
+		)
+	}
 	if err != nil {
 		return err
 	}

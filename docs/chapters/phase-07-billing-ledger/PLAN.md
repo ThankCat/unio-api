@@ -355,13 +355,13 @@ disabled 价格草稿允许重叠，不影响结算选择。
 范围：
 
 1. 实现 [STREAM_PARTIAL_SETTLEMENT.md](STREAM_PARTIAL_SETTLEMENT.md) 路线 B/D：`emitted` + `streamFacts==nil` → partial settlement（B4：只看 `streamFacts`）。
-2. 终态（A1/B3）：partial 后 attempt 与 request 都 `succeeded`；`MarkAttemptSucceeded` 的 `final_usage_received` 改入参，partial 传 `FALSE`（改 `sql/queries/request_attempts.sql` + `requestlog/store.go` + sqlc 重生成）。**不**把 attempt 标 failed。
-3. 区分 B/D：合成 `Finish.RawReason` 落到 `upstream_finish_reason`（`stream_client_canceled_without_final_usage` / `stream_interrupted_without_final_usage` / `stream_final_usage_missing`）；D 指标 `Success`、B 指标 `Canceled`。
-4. 登记 `usage.SourcePartialStreamEstimate`；`BuildPartialStreamFacts` 在 lifecycle 合成字段以通过现有 settlement 校验（A2-i，settlement/校验零改）。
+2. 终态（A1/B3）：partial 后资金与审计仍结算，但 request/attempt 生命周期按原因落库：用户取消 `canceled`、上游中断 `failed`、正常缺 usage `succeeded`；partial 均写 `final_usage_received=FALSE`。
+3. 区分 B/D：合成 `Finish.RawReason` 落到 `upstream_finish_reason`（`stream_client_canceled_without_final_usage` / `stream_interrupted_without_final_usage` / `stream_final_usage_missing`）；D 指标 `Success`、用户取消指标 `Canceled`、上游中断指标 `Failed`。
+4. 登记 `usage.SourcePartialStreamEstimate`；`BuildPartialStreamFacts` 在 lifecycle 合成字段以通过现有 settlement 校验（A2-i），settlement 复用资金管道但扩展 final status。
 5. 输出 token（B1-i）：`StreamChunkMeta` 加可见文本字段，各载体填充；复用 adapter tokenizer 增量计数（OpenAI tiktoken / Anthropic 估算器，回退启发式），估算偏保守。
-6. **两处独立循环各实现一份**：`RunStreamGeneric`（OpenAI chat / Responses 直传 / Responses→chat）与 `message_stream.go`（Anthropic，**非**共享 RunStreamGeneric）；三分支按 `emitted` 分流；interrupt 分支重排 `MarkAttemptFailed` 使 partial 进入时 attempt 仍 `running`。
+6. **两处独立循环各实现一份**：`RunStreamGeneric`（OpenAI chat / Responses 直传 / Responses→chat）与 `message_stream.go`（Anthropic，**非**共享 RunStreamGeneric）；三分支按 `emitted` 分流；interrupt 分支重排普通 `MarkAttemptFailed`，使 partial 能先结算 usage/ledger，再由 settlement 写 `failed` 终态。
 7. 首 token 前结束 → release（C，0 扣）；`streamFacts!=nil` → full bill（A）；partial **不**调用 `params.Finish`（不向客户端发合成 usage 尾帧）；已 emit 无 usage 流 **不再** 写 `risk_exposure`。
-8. 渠道异常复用现有口径（succeeded + `final_usage_received=FALSE` + `upstream_finish_reason=stream_final_usage_missing`，统计渠道故障时排除取消）；无专用 Admin 指标。
+8. 渠道异常复用现有口径（succeeded + `final_usage_received=FALSE` + `upstream_finish_reason=stream_final_usage_missing`，统计渠道故障时不混入 canceled/failed partial）；无专用 Admin 指标。
 9. 单测（OpenAI + Anthropic 各一套）：B(cancel/interrupt)、D、!emitted release、full bill 优先(B4)、capped write_off。
 10. **改造完成且测试全绿后清理僵尸代码**（见 [STREAM_PARTIAL_SETTLEMENT.md §11](STREAM_PARTIAL_SETTLEMENT.md#11-改造收尾僵尸代码清理)）：移除两处循环中「已 emit 无 usage → `ReleaseAuthorizationForBillingException`/`risk_exposure`」的三处旧调用（cancel/interrupt/缺 usage）及被其取代的旧终态写入、过时断言；**保留** `stream_settlement_failed_after_upstream_success` 与 dead-finalize 的 `risk_exposure`（仍在用，勿删函数本体）。
 

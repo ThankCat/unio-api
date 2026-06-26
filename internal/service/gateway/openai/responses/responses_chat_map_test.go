@@ -95,6 +95,19 @@ func TestMapConsecutiveFunctionCallsMerge(t *testing.T) {
 	}
 }
 
+func TestMapFunctionCallObjectArguments(t *testing.T) {
+	chat, _ := mapBody(t, `{
+		"model": "m",
+		"input": [
+			{"type":"function_call","call_id":"c1","name":"f1","arguments":{"x":1}}
+		]
+	}`)
+
+	if got := chat.Messages[0].ToolCalls[0].Function.Arguments; got != `{"x":1}` {
+		t.Fatalf("expected object arguments encoded as JSON string, got %q", got)
+	}
+}
+
 func TestMapFunctionCallInterruptedByMessageDoesNotMerge(t *testing.T) {
 	chat, _ := mapBody(t, `{
 		"model": "m",
@@ -424,9 +437,10 @@ func TestReasoningRoundTripOutputToInput(t *testing.T) {
 
 	// 模拟客户原样回传 reasoning(encrypted_content) + function_call。
 	callID, name, args := fc.CallID, fc.Name, fc.Arguments
+	rawArgs, _ := json.Marshal(args)
 	inReq := gatewayapi.ResponsesRequest{Input: gatewayapi.ResponsesInput{Items: []gatewayapi.ResponseInputItem{
 		{Type: "reasoning", ID: &rs.ID, EncryptedContent: rs.EncryptedContent},
-		{Type: "function_call", CallID: &callID, Name: &name, Arguments: &args},
+		{Type: "function_call", CallID: &callID, Name: &name, Arguments: rawArgs},
 	}}}
 
 	msgs := buildChatMessages(inReq)

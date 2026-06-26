@@ -117,20 +117,70 @@ func (s *Store) MarkRequestDeliveryInterrupted(ctx context.Context, id int64) (R
 // MarkRequestSucceeded 将 request record 标记为 succeeded。
 func (s *Store) MarkRequestSucceeded(ctx context.Context, params MarkRequestSucceededParams) (RequestRecord, error) {
 	row, err := s.queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
-		ResponseModelID:     pgtype.Text{String: params.ResponseModelID, Valid: true},
-		ResponseProtocol:    pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
-		ResponseID:          pgtype.Text{String: params.ResponseID, Valid: true},
-		FinalProviderID:     pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
-		FinalChannelID:      pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
-		ResponseStartedAt:   optionalTimestamptz(params.ResponseStartedAt),
-		CompletedAt:         timestamptz(params.CompletedAt),
-		RequestRecordID:     params.ID,
+		ResponseModelID:   pgtype.Text{String: params.ResponseModelID, Valid: true},
+		ResponseProtocol:  pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
+		ResponseID:        pgtype.Text{String: params.ResponseID, Valid: true},
+		FinalProviderID:   pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
+		FinalChannelID:    pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
+		ResponseStartedAt: optionalTimestamptz(params.ResponseStartedAt),
+		CompletedAt:       timestamptz(params.CompletedAt),
+		RequestRecordID:   params.ID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return RequestRecord{}, requestLogStateTransitionFailure("mark request succeeded")
 		}
 		return RequestRecord{}, requestLogStoreFailure(err, "mark request succeeded")
+	}
+
+	return requestRecordFromSQLC(sqlc.RequestRecord(row)), nil
+}
+
+// MarkSettledRequestCanceled 将 request record 标记为已结算的 canceled。
+func (s *Store) MarkSettledRequestCanceled(ctx context.Context, params MarkSettledRequestCanceledParams) (RequestRecord, error) {
+	row, err := s.queries.MarkSettledRequestCanceled(ctx, sqlc.MarkSettledRequestCanceledParams{
+		ResponseModelID:     pgtype.Text{String: params.ResponseModelID, Valid: true},
+		ResponseProtocol:    pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
+		ResponseID:          pgtype.Text{String: params.ResponseID, Valid: true},
+		FinalProviderID:     pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
+		FinalChannelID:      pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
+		ErrorCode:           pgtype.Text{String: params.ErrorCode, Valid: true},
+		ErrorMessage:        pgtype.Text{String: params.ErrorMessage, Valid: true},
+		InternalErrorDetail: nullableText(params.InternalErrorDetail),
+		ResponseStartedAt:   optionalTimestamptz(params.ResponseStartedAt),
+		CompletedAt:         timestamptz(params.CompletedAt),
+		RequestRecordID:     params.ID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RequestRecord{}, requestLogStateTransitionFailure("mark settled request canceled")
+		}
+		return RequestRecord{}, requestLogStoreFailure(err, "mark settled request canceled")
+	}
+
+	return requestRecordFromSQLC(sqlc.RequestRecord(row)), nil
+}
+
+// MarkSettledRequestFailed 将 request record 标记为已结算的 failed。
+func (s *Store) MarkSettledRequestFailed(ctx context.Context, params MarkSettledRequestFailedParams) (RequestRecord, error) {
+	row, err := s.queries.MarkSettledRequestFailed(ctx, sqlc.MarkSettledRequestFailedParams{
+		ResponseModelID:     pgtype.Text{String: params.ResponseModelID, Valid: true},
+		ResponseProtocol:    pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
+		ResponseID:          pgtype.Text{String: params.ResponseID, Valid: true},
+		FinalProviderID:     pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
+		FinalChannelID:      pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
+		ErrorCode:           pgtype.Text{String: params.ErrorCode, Valid: true},
+		ErrorMessage:        pgtype.Text{String: params.ErrorMessage, Valid: true},
+		InternalErrorDetail: nullableText(params.InternalErrorDetail),
+		ResponseStartedAt:   optionalTimestamptz(params.ResponseStartedAt),
+		CompletedAt:         timestamptz(params.CompletedAt),
+		RequestRecordID:     params.ID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RequestRecord{}, requestLogStateTransitionFailure("mark settled request failed")
+		}
+		return RequestRecord{}, requestLogStoreFailure(err, "mark settled request failed")
 	}
 
 	return requestRecordFromSQLC(sqlc.RequestRecord(row)), nil
@@ -243,6 +293,62 @@ func (s *Store) MarkAttemptSucceeded(ctx context.Context, params MarkAttemptSucc
 			return AttemptRecord{}, requestLogStateTransitionFailure("mark request attempt succeeded")
 		}
 		return AttemptRecord{}, requestLogStoreFailure(err, "mark request attempt succeeded")
+	}
+
+	return attemptRecordFromSQLC(sqlc.RequestAttempt(row)), nil
+}
+
+// MarkSettledAttemptCanceled 将 request attempt 标记为已结算的 canceled。
+func (s *Store) MarkSettledAttemptCanceled(ctx context.Context, params MarkSettledAttemptCanceledParams) (AttemptRecord, error) {
+	row, err := s.queries.MarkSettledRequestAttemptCanceled(ctx, sqlc.MarkSettledRequestAttemptCanceledParams{
+		UpstreamResponseID:    pgtype.Text{String: params.UpstreamResponseID, Valid: true},
+		UpstreamResponseModel: pgtype.Text{String: params.UpstreamResponseModel, Valid: true},
+		UpstreamFinishReason:  pgtype.Text{String: params.UpstreamFinishReason, Valid: true},
+		FinishClass:           pgtype.Text{String: params.FinishClass, Valid: true},
+		UpstreamStatusCode:    pgtype.Int4{Int32: int32(params.UpstreamStatusCode), Valid: true},
+		UpstreamRequestID:     optionalText(params.UpstreamRequestID),
+		ErrorCode:             pgtype.Text{String: params.ErrorCode, Valid: true},
+		ErrorMessage:          pgtype.Text{String: params.ErrorMessage, Valid: true},
+		InternalErrorDetail:   nullableText(params.InternalErrorDetail),
+		ResponseStartedAt:     optionalTimestamptz(params.ResponseStartedAt),
+		FinalUsageReceived:    params.FinalUsageReceived,
+		UsageMappingVersion:   pgtype.Text{String: params.UsageMappingVersion, Valid: true},
+		CompletedAt:           timestamptz(params.CompletedAt),
+		AttemptID:             params.ID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AttemptRecord{}, requestLogStateTransitionFailure("mark settled request attempt canceled")
+		}
+		return AttemptRecord{}, requestLogStoreFailure(err, "mark settled request attempt canceled")
+	}
+
+	return attemptRecordFromSQLC(sqlc.RequestAttempt(row)), nil
+}
+
+// MarkSettledAttemptFailed 将 request attempt 标记为已结算的 failed。
+func (s *Store) MarkSettledAttemptFailed(ctx context.Context, params MarkSettledAttemptFailedParams) (AttemptRecord, error) {
+	row, err := s.queries.MarkSettledRequestAttemptFailed(ctx, sqlc.MarkSettledRequestAttemptFailedParams{
+		UpstreamResponseID:    pgtype.Text{String: params.UpstreamResponseID, Valid: true},
+		UpstreamResponseModel: pgtype.Text{String: params.UpstreamResponseModel, Valid: true},
+		UpstreamFinishReason:  pgtype.Text{String: params.UpstreamFinishReason, Valid: true},
+		FinishClass:           pgtype.Text{String: params.FinishClass, Valid: true},
+		UpstreamStatusCode:    pgtype.Int4{Int32: int32(params.UpstreamStatusCode), Valid: true},
+		UpstreamRequestID:     optionalText(params.UpstreamRequestID),
+		ErrorCode:             pgtype.Text{String: params.ErrorCode, Valid: true},
+		ErrorMessage:          pgtype.Text{String: params.ErrorMessage, Valid: true},
+		InternalErrorDetail:   nullableText(params.InternalErrorDetail),
+		ResponseStartedAt:     optionalTimestamptz(params.ResponseStartedAt),
+		FinalUsageReceived:    params.FinalUsageReceived,
+		UsageMappingVersion:   pgtype.Text{String: params.UsageMappingVersion, Valid: true},
+		CompletedAt:           timestamptz(params.CompletedAt),
+		AttemptID:             params.ID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AttemptRecord{}, requestLogStateTransitionFailure("mark settled request attempt failed")
+		}
+		return AttemptRecord{}, requestLogStoreFailure(err, "mark settled request attempt failed")
 	}
 
 	return attemptRecordFromSQLC(sqlc.RequestAttempt(row)), nil

@@ -105,7 +105,7 @@ func mapChatResponseToResponses(req gatewayapi.ResponsesRequest, chatResp chatco
 		ParallelToolCalls: req.ParallelToolCalls,
 		Temperature:       req.Temperature,
 		TopP:              req.TopP,
-		MaxOutputTokens:   req.MaxOutputTokens,
+		MaxOutputTokens:   responsesIntPtr(req.MaxOutputTokens),
 	}
 	if resp.CreatedAt == 0 {
 		resp.CreatedAt = time.Now().Unix()

@@ -62,6 +62,7 @@ func TestValidateResponsesRequestErrors(t *testing.T) {
 		{"temperature out of range", `{"model": "m", "input": "hi", "temperature": 3}`, "temperature"},
 		{"top_p out of range", `{"model": "m", "input": "hi", "top_p": 2}`, "top_p"},
 		{"max_output_tokens zero", `{"model": "m", "input": "hi", "max_output_tokens": 0}`, "max_output_tokens"},
+		{"max_output_tokens fractional", `{"model": "m", "input": "hi", "max_output_tokens": 256.5}`, "max_output_tokens"},
 	}
 
 	for _, tc := range cases {
@@ -83,6 +84,13 @@ func TestValidateUnknownItemTypePassesThrough(t *testing.T) {
 	req := mustUnmarshal(t, `{"model": "m", "input": [{"type": "future_item_type", "id": "x"}]}`)
 	if err := validateResponsesRequest(req); err != nil {
 		t.Fatalf("expected unknown item type to pass, got %+v", err)
+	}
+}
+
+func TestValidateUnknownItemTypeWithObjectArgumentsPassesThrough(t *testing.T) {
+	req := mustUnmarshal(t, `{"model": "m", "input": [{"type": "tool_search_call", "id": "x", "arguments": {"query": "hi"}}]}`)
+	if err := validateResponsesRequest(req); err != nil {
+		t.Fatalf("expected unknown item type with object arguments to pass, got %+v", err)
 	}
 }
 

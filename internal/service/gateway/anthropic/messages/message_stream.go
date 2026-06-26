@@ -121,6 +121,9 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		var streamFacts *adapter.ResponseFacts
 		messageID := ""
 		var responseStartedAt *time.Time
+		settledRequestStatus := requestlog.RequestStatusSucceeded
+		settledAttemptStatus := requestlog.AttemptStatusSucceeded
+		settledErrorCode, settledErrorMessage, settledInternalErrorDetail := "", "", ""
 
 		settleStreamFacts := func() error {
 			if streamFacts == nil {
@@ -142,18 +145,23 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 				responseID = streamFacts.UpstreamResponseID
 			}
 			settleErr := s.chatSettlement.SettleSuccessfulChat(settleCtx, lifecycle.ChatSettlementParams{
-				RequestRecord:     requestRecord,
-				AttemptRecord:     attemptRecord,
-				Principal:         principal,
-				Authorization:     authorization,
-				ResponseProtocol:  requestlog.ProtocolAnthropic,
-				ResponseID:        responseID,
-				ResponseModelID:   req.Model,
-				ResponseStartedAt: responseStartedAt,
-				ModelDBID:         candidate.ModelDBID,
-				FinalProviderID:   candidate.ProviderID,
-				FinalChannelID:    candidate.Channel.ID,
-				Facts:             *streamFacts,
+				RequestRecord:       requestRecord,
+				AttemptRecord:       attemptRecord,
+				Principal:           principal,
+				Authorization:       authorization,
+				ResponseProtocol:    requestlog.ProtocolAnthropic,
+				ResponseID:          responseID,
+				ResponseModelID:     req.Model,
+				ResponseStartedAt:   responseStartedAt,
+				RequestFinalStatus:  settledRequestStatus,
+				AttemptFinalStatus:  settledAttemptStatus,
+				ErrorCode:           settledErrorCode,
+				ErrorMessage:        settledErrorMessage,
+				InternalErrorDetail: settledInternalErrorDetail,
+				ModelDBID:           candidate.ModelDBID,
+				FinalProviderID:     candidate.ProviderID,
+				FinalChannelID:      candidate.Channel.ID,
+				Facts:               *streamFacts,
 			})
 			lifecycle.EndSettlementSpan(settleSpan, settleErr)
 			s.recordSettlement(lifecycle.SettlementOutcomeFromErr(settleErr))
@@ -161,9 +169,30 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		}
 
 		// finishPartial 处理「已 emit 但无 adapter final usage」的 partial settlement（路线 B/D）：
-		// 合成 partial_stream_estimate 事实走与 full bill 相同的结算管道（attempt/request 标 succeeded、
-		// final_usage_received=false）；settlement 永久失败且无 recovery 接管时退回释放冻结并记风险敞口。
+		// 合成 partial_stream_estimate 事实走与 full bill 相同的结算管道；终态按原因区分
+		// canceled/failed/succeeded，且 final_usage_received=false。settlement 永久失败且无 recovery 接管时
+		// 退回释放冻结并记风险敞口。
 		finishPartial := func(reason string, oc metrics.ChatOutcome, streamEvent metrics.StreamEvent, deliveryCompleted bool, returnErr error) error {
+			settledRequestStatus = requestlog.RequestStatusSucceeded
+			settledAttemptStatus = requestlog.AttemptStatusSucceeded
+			settledErrorCode, settledErrorMessage, settledInternalErrorDetail = "", "", ""
+			switch reason {
+			case lifecycle.PartialReasonClientCanceled:
+				settledRequestStatus = requestlog.RequestStatusCanceled
+				settledAttemptStatus = requestlog.AttemptStatusCanceled
+				settledErrorCode = "client_canceled"
+				settledErrorMessage = lifecycle.BaseSafeRequestLogErrorMessage(settledErrorCode)
+				settledInternalErrorDetail = lifecycle.InternalErrorDetail(returnErr)
+			case lifecycle.PartialReasonInterrupted:
+				settledRequestStatus = requestlog.RequestStatusFailed
+				settledAttemptStatus = requestlog.AttemptStatusFailed
+				settledErrorCode = lifecycle.FailureCodeOrFallback(returnErr, "stream_adapter_error")
+				settledErrorMessage = messagesSafeMessage(settledErrorCode)
+				if settledErrorMessage == "" {
+					settledErrorMessage = lifecycle.BaseSafeRequestLogErrorMessage(settledErrorCode)
+				}
+				settledInternalErrorDetail = lifecycle.InternalErrorDetail(returnErr)
+			}
 			facts := lifecycle.BuildPartialStreamFacts(lifecycle.PartialStreamFactsParams{
 				Candidate:        candidate,
 				StreamResponseID: messageID,
@@ -282,8 +311,8 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 
 			if emitted {
 				// SSE 已写出后无法再 fallback。已 emit 内容按 partial settlement 计费（路线 B）；
-				// 不在此处 markAttemptRecordFailed——partial 走 settlement 会把 attempt 标 succeeded。
-				return finishPartial(lifecycle.PartialReasonInterrupted, metrics.ChatOutcomeCanceled, metrics.StreamEventCanceled, false, err)
+				// 不在此处 markAttemptRecordFailed——partial 走 settlement 会先结算 usage/ledger 再把 attempt 标 failed。
+				return finishPartial(lifecycle.PartialReasonInterrupted, metrics.ChatOutcomeFailed, metrics.StreamEventInterrupted, false, err)
 			}
 
 			// 首 token 前失败：attempt 记失败；客户端还没看到上游内容，只有这时允许同模型 fallback。

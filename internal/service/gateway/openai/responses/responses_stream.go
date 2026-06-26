@@ -97,7 +97,7 @@ func newStreamEncoder(req gatewayapi.ResponsesRequest, responseID string, create
 		parallelToolCalls:    req.ParallelToolCalls,
 		temperature:          req.Temperature,
 		topP:                 req.TopP,
-		maxOutputTokens:      req.MaxOutputTokens,
+		maxOutputTokens:      responsesIntPtr(req.MaxOutputTokens),
 		emitReasoningCarrier: requestWantsEncryptedReasoning(req),
 		toolByIdx:            map[int]*streamToolState{},
 	}

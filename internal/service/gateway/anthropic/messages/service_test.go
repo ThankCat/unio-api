@@ -133,6 +133,14 @@ func (s *fakeMessagesRequestLog) MarkRequestSucceeded(ctx context.Context, param
 	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusSucceeded}, nil
 }
 
+func (s *fakeMessagesRequestLog) MarkSettledRequestFailed(ctx context.Context, params requestlog.MarkSettledRequestFailedParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusFailed}, nil
+}
+
+func (s *fakeMessagesRequestLog) MarkSettledRequestCanceled(ctx context.Context, params requestlog.MarkSettledRequestCanceledParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusCanceled}, nil
+}
+
 func (s *fakeMessagesRequestLog) MarkRequestFailed(ctx context.Context, params requestlog.MarkRequestFailedParams) (requestlog.RequestRecord, error) {
 	s.markRequestFailedArgs = append(s.markRequestFailedArgs, params)
 	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusFailed}, nil
@@ -152,6 +160,14 @@ func (s *fakeMessagesRequestLog) CreateAttempt(ctx context.Context, params reque
 
 func (s *fakeMessagesRequestLog) MarkAttemptSucceeded(ctx context.Context, params requestlog.MarkAttemptSucceededParams) (requestlog.AttemptRecord, error) {
 	return requestlog.AttemptRecord{ID: params.ID, Status: requestlog.AttemptStatusSucceeded}, nil
+}
+
+func (s *fakeMessagesRequestLog) MarkSettledAttemptFailed(ctx context.Context, params requestlog.MarkSettledAttemptFailedParams) (requestlog.AttemptRecord, error) {
+	return requestlog.AttemptRecord{ID: params.ID, Status: requestlog.AttemptStatusFailed}, nil
+}
+
+func (s *fakeMessagesRequestLog) MarkSettledAttemptCanceled(ctx context.Context, params requestlog.MarkSettledAttemptCanceledParams) (requestlog.AttemptRecord, error) {
+	return requestlog.AttemptRecord{ID: params.ID, Status: requestlog.AttemptStatusCanceled}, nil
 }
 
 func (s *fakeMessagesRequestLog) MarkAttemptResponseStarted(ctx context.Context, params requestlog.MarkAttemptResponseStartedParams) (requestlog.AttemptRecord, error) {

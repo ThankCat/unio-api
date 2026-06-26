@@ -107,6 +107,22 @@ type MarkRequestSucceededParams struct {
 	CompletedAt       time.Time
 }
 
+// MarkSettledRequestCanceledParams 表示已结算但客户取消的请求终态事实。
+type MarkSettledRequestCanceledParams struct {
+	MarkRequestSucceededParams
+	ErrorCode           string
+	ErrorMessage        string
+	InternalErrorDetail string
+}
+
+// MarkSettledRequestFailedParams 表示已结算但上游失败的请求终态事实。
+type MarkSettledRequestFailedParams struct {
+	MarkRequestSucceededParams
+	ErrorCode           string
+	ErrorMessage        string
+	InternalErrorDetail string
+}
+
 // MarkResponseStartedParams 表示记录首次客户可见响应时间所需的事实。
 type MarkResponseStartedParams struct {
 	ID                int64
@@ -187,6 +203,22 @@ type MarkAttemptSucceededParams struct {
 	CompletedAt         time.Time
 }
 
+// MarkSettledAttemptCanceledParams 表示已结算但客户取消的 attempt 终态事实。
+type MarkSettledAttemptCanceledParams struct {
+	MarkAttemptSucceededParams
+	ErrorCode           string
+	ErrorMessage        string
+	InternalErrorDetail string
+}
+
+// MarkSettledAttemptFailedParams 表示已结算但上游失败的 attempt 终态事实。
+type MarkSettledAttemptFailedParams struct {
+	MarkAttemptSucceededParams
+	ErrorCode           string
+	ErrorMessage        string
+	InternalErrorDetail string
+}
+
 // MarkAttemptResponseStartedParams 表示记录一次 attempt 首次客户可见响应时间所需的事实。
 type MarkAttemptResponseStartedParams struct {
 	ID                int64
@@ -220,12 +252,16 @@ type Service interface {
 	MarkRequestRunning(ctx context.Context, id int64) (RequestRecord, error)
 	MarkRequestResponseStarted(ctx context.Context, params MarkResponseStartedParams) (RequestRecord, error)
 	MarkRequestSucceeded(ctx context.Context, params MarkRequestSucceededParams) (RequestRecord, error)
+	MarkSettledRequestFailed(ctx context.Context, params MarkSettledRequestFailedParams) (RequestRecord, error)
+	MarkSettledRequestCanceled(ctx context.Context, params MarkSettledRequestCanceledParams) (RequestRecord, error)
 	MarkRequestFailed(ctx context.Context, params MarkRequestFailedParams) (RequestRecord, error)
 	MarkRequestCanceled(ctx context.Context, params MarkRequestCanceledParams) (RequestRecord, error)
 
 	CreateAttempt(ctx context.Context, params CreateAttemptParams) (AttemptRecord, error)
 	MarkAttemptResponseStarted(ctx context.Context, params MarkAttemptResponseStartedParams) (AttemptRecord, error)
 	MarkAttemptSucceeded(ctx context.Context, params MarkAttemptSucceededParams) (AttemptRecord, error)
+	MarkSettledAttemptFailed(ctx context.Context, params MarkSettledAttemptFailedParams) (AttemptRecord, error)
+	MarkSettledAttemptCanceled(ctx context.Context, params MarkSettledAttemptCanceledParams) (AttemptRecord, error)
 	MarkAttemptFailed(ctx context.Context, params MarkAttemptFailedParams) (AttemptRecord, error)
 	MarkAttemptCanceled(ctx context.Context, params MarkAttemptCanceledParams) (AttemptRecord, error)
 }

@@ -370,8 +370,8 @@ curl -sS "$GATEWAY/v1/chat/completions" \
 
 | ID | 场景 | 触发 | 预期 |
 |----|------|------|------|
-| SB-01 | 客户端 cancel | curl stream 收到 1+ chunk 后 Ctrl+C | request **succeeded**；final_usage_received=**FALSE**；usage_source=**partial_stream_estimate**；debit>0（若有输出）；**无** risk_exposure |
-| SB-02 | 上游断流 | mock：content 后断连 | upstream_finish_reason=stream_interrupted_without_final_usage；其余同 SB-01 |
+| SB-01 | 客户端 cancel | curl stream 收到 1+ chunk 后 Ctrl+C | request **canceled**；final_usage_received=**FALSE**；usage_source=**partial_stream_estimate**；debit>0（若有输出）；**无** risk_exposure |
+| SB-02 | 上游断流 | mock：content 后断连 | request **failed**；upstream_finish_reason=stream_interrupted_without_final_usage；final_usage_received=**FALSE**；usage_source=**partial_stream_estimate**；debit>0（若有输出）；**无** risk_exposure |
 | SB-03 | Codex 中途 Stop | Codex UI 点停止（若可触发） | 同 SB-01；记录 metrics 层 canceled |
 
 > **依赖**：§0 migration 修复 partial_stream_estimate。
@@ -533,8 +533,8 @@ REC-01 → REC-02 → COD-04 → COD-05 → DEL-03 → DEL-04 → AD-01 → AD-0
 | SD-01 路线 D 缺 usage | 7 | PASS | partial_stream_estimate, stream_final_usage_missing, debit>0, **无 risk_exposure** |
 | SC-02 emit 前上游 500 | 8 | PASS | failed, released, 0 扣费, delivery=not_started（兼 DEL-04） |
 | SC-01 emit 前客户端取消 | 9 | PASS | canceled, released, 0 扣费 |
-| SB-02 上游中断（emit 后） | 10 | PASS | partial_stream_estimate, stream_interrupted_without_final_usage, delivery=interrupted, **无 risk_exposure** |
-| SB-01 客户端取消（emit 后） | 11 | PASS | partial_stream_estimate, stream_client_canceled_without_final_usage, **无 risk_exposure**（原始投诉场景已修） |
+| SB-02 上游中断（emit 后） | 10 | PASS | failed, partial_stream_estimate, stream_interrupted_without_final_usage, delivery=interrupted, **无 risk_exposure** |
+| SB-01 客户端取消（emit 后） | 11 | PASS | canceled, partial_stream_estimate, stream_client_canceled_without_final_usage, **无 risk_exposure**（原始投诉场景已修） |
 | AUTH-01 余额为 0 | 12 | PASS | 429 insufficient_quota, ledger_insufficient_balance, 0 次上游调用 |
 | AUTH-02 部分余额授权 | 13 | PASS | authorized=$0.005（封顶可用余额）, captured<authorized |
 | WO-01 非流 actual≫authorized | 14 | PASS | captured=authorized, write_off platform=$0.43, 余额不为负 |

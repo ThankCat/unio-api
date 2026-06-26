@@ -3,6 +3,7 @@ package responses
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
 )
 
 // knownResponsesFields 是当前 ResponsesRequest 已建模的顶层 JSON 字段。
@@ -88,5 +89,36 @@ func (in *ResponsesInput) UnmarshalJSON(data []byte) error {
 		return json.Unmarshal(data, &in.Items)
 	}
 
+	return nil
+}
+
+// UnmarshalJSON 宽松解析 ResponsesInt：接受 JSON integer 与形如 256.0 的 number。
+func (n *ResponsesInt) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+
+	var number json.Number
+	if err := json.Unmarshal(trimmed, &number); err != nil {
+		return err
+	}
+	if value, err := number.Int64(); err == nil {
+		*n = ResponsesInt{value: int(value), integral: true}
+		return nil
+	}
+
+	floatValue, err := strconv.ParseFloat(number.String(), 64)
+	if err != nil {
+		return err
+	}
+	if floatValue == float64(int64(floatValue)) {
+		*n = ResponsesInt{value: int(floatValue), integral: true}
+		return nil
+	}
+
+	// 保存截断值，让 validateResponsesRequest 返回 max_output_tokens 字段级错误，
+	// 而不是在 DecodeJSON 阶段变成笼统 invalid json body。
+	*n = ResponsesInt{value: int(floatValue), integral: false}
 	return nil
 }

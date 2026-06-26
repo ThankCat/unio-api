@@ -151,7 +151,17 @@ func TestResponsesRequestUnmarshalTextAndReasoning(t *testing.T) {
 	if req.Text == nil || req.Text.Verbosity == nil || *req.Text.Verbosity != "low" || len(req.Text.Format) == 0 {
 		t.Fatalf("text = %#v", req.Text)
 	}
-	if req.MaxOutputTokens == nil || *req.MaxOutputTokens != 256 {
+	if req.MaxOutputTokens == nil || req.MaxOutputTokens.Int() != 256 {
+		t.Fatalf("max_output_tokens = %#v", req.MaxOutputTokens)
+	}
+}
+
+func TestResponsesRequestUnmarshalMaxOutputTokensAcceptsIntegralNumber(t *testing.T) {
+	var req ResponsesRequest
+	if err := json.Unmarshal([]byte(`{"model": "m", "input": "hi", "max_output_tokens": 256.0}`), &req); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	if req.MaxOutputTokens == nil || req.MaxOutputTokens.Int() != 256 {
 		t.Fatalf("max_output_tokens = %#v", req.MaxOutputTokens)
 	}
 }

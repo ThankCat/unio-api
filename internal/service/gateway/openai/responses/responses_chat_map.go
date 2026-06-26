@@ -58,7 +58,7 @@ func mapResponsesRequestToChat(req gatewayapi.ResponsesRequest, upstreamModel st
 		Messages:             buildChatMessages(req),
 		Temperature:          req.Temperature,
 		TopP:                 req.TopP,
-		MaxCompletionTokens:  req.MaxOutputTokens,
+		MaxCompletionTokens:  responsesIntPtr(req.MaxOutputTokens),
 		User:                 req.User,
 		ParallelToolCalls:    req.ParallelToolCalls,
 		Metadata:             cloneRawMessage(req.Metadata),
@@ -166,7 +166,7 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []chatcompletionsadapter
 				Type: "function",
 				Function: chatcompletionsadapter.ChatToolCallFunction{
 					Name:      functionCallName(item),
-					Arguments: derefString(item.Arguments),
+					Arguments: functionCallArguments(item.Arguments),
 				},
 			}
 			if pendingToolCallIdx >= 0 {
@@ -284,6 +284,20 @@ func functionCallName(item gatewayapi.ResponseInputItem) string {
 		return joinNamespaceToolName(*item.Namespace, name)
 	}
 	return name
+}
+
+// functionCallArguments 还原 function_call item 的 Chat arguments 字符串。
+func functionCallArguments(raw json.RawMessage) string {
+	data := bytes.TrimSpace(raw)
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+		return ""
+	}
+
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		return s
+	}
+	return string(data)
 }
 
 // buildMessageItem 把 message input item 翻译成单条 Chat message。

@@ -14,11 +14,11 @@
 
 | 编号 | 决策 |
 | --- | --- |
-| **A1** | partial 结算后 attempt/request 都 `succeeded`，用 attempt 列 **`final_usage_received=FALSE`** 承载「没拿到 usage」这一事实。`MarkAttemptSucceeded` 的 `final_usage_received` 由写死 `TRUE` 改为**入参**。 |
-| **A2** | 合成 facts 在 lifecycle 层补齐所有字段以通过现有 `ValidateChatSettlementFacts`，**settlement 与校验零改动**（A2-i）。 |
+| **A1** | partial 结算后仍写 `usage_records` / snapshots / ledger，但 request/attempt 终态按原因落库：用户取消 `canceled`、上游中断 `failed`、正常缺 usage `succeeded`；attempt 列 **`final_usage_received=FALSE`** 承载「没拿到 usage」。 |
+| **A2** | 合成 facts 在 lifecycle 层补齐所有字段以通过现有 `ValidateChatSettlementFacts`；settlement 复用同一资金管道，但扩展 final status 入参以写 `succeeded` / `failed` / `canceled`。 |
 | **B1** | output token 复用各 adapter 已有 tokenizer 数「已 emit 可见文本」（OpenAI 走 tiktoken，Anthropic 用其估算器）；`StreamChunkMeta` 增加可见文本字段；估算**偏保守**。 |
 | **B2** | partial 涉及三处分支，均按 `emitted` 分流；interrupt 分支需**重排** `MarkAttemptFailed`，让 partial 进入时 attempt 仍 `running`；抽统一私有方法。 |
-| **B3** | B/D 的 request 终态都 `succeeded`（复用 settlement）；取消靠指标 `Outcome=Canceled` + `usage_source` 区分；D 返回 `nil`、B 返回 `canceled` err；**partial 永不向客户端发合成 usage 尾帧**。 |
+| **B3** | B/D 共用 settlement 资金管道，但生命周期终态拆开：客户端取消 `canceled`，上游中断 `failed`，正常缺 usage `succeeded`；**partial 永不向客户端发合成 usage 尾帧**。 |
 | **B4** | full bill / partial **只看 `streamFacts == nil`**；`finalUsage` 永不参与计费。 |
 | **范围** | partial 要在 **两处独立循环**实现：`RunStreamGeneric`（OpenAI chat / Responses 直传 / Responses→chat 桥接）与 `message_stream.go`（Anthropic Messages，独立实现）。 |
 
@@ -83,11 +83,12 @@
 | 路线 | 条件 | 账务动作 | 用户扣费 | request 终态 | attempt 标记 |
 | --- | --- | --- | --- | --- | --- |
 | **A Full bill** | `streamFacts != nil` | `SettleSuccessfulChat → Capture` | `min(actual, authorized)` | succeeded | succeeded，`final_usage_received=TRUE` |
-| **B Partial bill** | `emitted && streamFacts == nil && (cancel \|\| interrupt)` | 合成 facts → 同 A 管道 | `min(estimated, authorized)` | succeeded（指标 `Canceled`） | succeeded，`final_usage_received=FALSE` |
+| **B1 Partial bill + 用户取消** | `emitted && streamFacts == nil && cancel` | 合成 facts → 同 A 管道 | `min(estimated, authorized)` | canceled | canceled，`final_usage_received=FALSE`，`upstream_finish_reason=stream_client_canceled_without_final_usage` |
+| **B2 Partial bill + 上游中断** | `emitted && streamFacts == nil && interrupt` | 合成 facts → 同 A 管道 | `min(estimated, authorized)` | failed | failed，`final_usage_received=FALSE`，`upstream_finish_reason=stream_interrupted_without_final_usage` |
 | **C Release** | `!emitted` | `ReleaseAuthorization` | 0 | failed/canceled | failed/canceled（现状） |
 | **D Partial bill + 渠道异常** | `emitted && streamFacts == nil && adapter 正常结束` | 合成 facts → 同 A 管道 | `min(estimated, authorized)` | succeeded | succeeded，`final_usage_received=FALSE`，`upstream_finish_reason=stream_final_usage_missing` |
 
-**B 与 D 对用户扣费完全相同**；差别只在结束原因（落到 `upstream_finish_reason`）与 D 是渠道侧问题。
+**B 与 D 对用户扣费管道相同**；差别在生命周期终态和结束原因（落到 `upstream_finish_reason`）。
 
 ### 3.1 路线 B / D 共同触发条件
 
@@ -200,7 +201,7 @@ AuthorizeChat → PreAuthorize(authorized_amount)
 | ② interrupt-after-emit | `:320-335`（已判 `emitted`） | release+risk_exposure | 改 B partial；**重排** `MarkAttemptFailed`（见下） |
 | ③ normal-end 缺 usage | `:352-373`（`err==nil`） | release + `MarkAttemptFailed` + `MarkRequestFailed` | `emitted`→D partial；`!emitted`→release(C) |
 
-**② 的重排**：第 318 行 `MarkAttemptFailed(stream_adapter_error)` 当前**无条件**先执行，会让 attempt 变 `failed`，与 partial 需要的 `MarkAttemptSucceeded`（要求 `running`）冲突。须把它从「无条件」改为**只在非 partial 的 fallback/retry 路径（337-349）执行**。① 在 318 之前、③ 在 `err==nil` 块，attempt 都仍 `running`，不受影响。
+**② 的重排**：第 318 行 `MarkAttemptFailed(stream_adapter_error)` 当前**无条件**先执行，会让 attempt 变 `failed`，导致 partial settlement 无法在同一事务内写 usage/ledger 与最终失败事实。须把它从「无条件」改为**只在非 partial 的 fallback/retry 路径（337-349）执行**。① 在 318 之前、③ 在 `err==nil` 块，attempt 都仍 `running`，不受影响。
 
 统一私有方法（两处循环各自实现一份，逻辑一致）：
 
@@ -210,23 +211,24 @@ settlePartialOrRelease(emitted, reason):
         ReleaseAuthorization(); 终态 release; return        // 路线 C
     facts := BuildPartialStreamFacts(reason, candidate, streamResponseID, partialOutputMeter)  // A2-i
     streamFacts = &facts
-    settleStreamFacts(finalUsageReceived=false)             // A1：MarkAttemptSucceeded(final_usage_received=FALSE) + MarkRequestSucceeded
-    reason == stream_final_usage_missing ? Outcome=Success : Outcome=Canceled
+    settleStreamFacts(finalUsageReceived=false, finalStatusByReason(reason))
+    reason == stream_final_usage_missing ? Outcome=Success : reason == client_canceled ? Outcome=Canceled : Outcome=Failed
 ```
 
 ### 5.3 Settlement 管道（复用，不 fork）
 
-Partial 与 Full 共用 `SettleSuccessfulChat`、`usage_records` + `price_snapshots` + `cost_snapshots`、`ledger.CaptureWithQueries`、settlement recovery。唯一改动：`MarkAttemptSucceeded` 的 `final_usage_received` 改入参（A1）。
+Partial 与 Full 共用 `SettleSuccessfulChat`、`usage_records` + `price_snapshots` + `cost_snapshots`、`ledger.CaptureWithQueries`、settlement recovery。差异只在 final request/attempt status 与 `final_usage_received=false`。
 
 **终态与返回（B3）：**
 
 | | request 状态 | metrics Outcome | 返回 HTTP | 客户端 usage 尾帧 |
 | --- | --- | --- | --- | --- |
-| B（cancel/interrupt） | succeeded | `Canceled` | 返回原 `err`（canceled/interrupt） | 不发（客户端多已断） |
+| B1（cancel） | canceled | `Canceled` | 返回原 cancel err | 不发（客户端多已断） |
+| B2（interrupt） | failed | `Failed` | 返回原 upstream/stream err | 不发（客户端多已断） |
 | D（缺 usage） | succeeded | `Success` | 返回 `nil` | 不发 |
 
 - **partial 不调用 `params.Finish`**：永不把估算 usage 当真 usage 发给客户端。`[DONE]` / 流收尾由 handler 照常处理，客户端仅少一个 usage chunk。
-- B 的 request 记为 `succeeded`（复用 settlement，不动资金主干）；取消行为不丢——靠 metrics `Canceled` + `usage_source=partial_stream_estimate` 可筛。**代价**：DB 按 `status` 统计的成功率会把「取消但已部分计费」算进成功（这类少，且用户确得了内容+被计费）。
+- settlement 成功只代表资金与审计闭环成功，不等同于请求生命周期成功；用户取消和上游中断必须分别落 `canceled` / `failed`。
 
 ---
 
@@ -244,11 +246,11 @@ Partial 与 Full 共用 `SettleSuccessfulChat`、`usage_records` + `price_snapsh
 
 ### 6.2 渠道异常统计口径（排除取消）
 
-「succeeded 且 `final_usage_received=FALSE`」会**同时包含 B（取消）和 D（渠道）**。统计**渠道故障**时必须再约束 `upstream_finish_reason='stream_final_usage_missing'`，否则用户取消会被误算成渠道问题。
+现在只有路线 D 会落 `succeeded + final_usage_received=FALSE`；统计**渠道故障**仍显式约束 `upstream_finish_reason='stream_final_usage_missing'`，避免未来新增 partial reason 时误混入用户取消或上游中断。
 
 ### 6.3 P0 实现
 
-1. `MarkAttemptSucceeded` 的 `final_usage_received` 改入参；partial 传 `FALSE`，full bill 传 `TRUE`。
+1. settlement 支持三种已结算终态（succeeded / failed / canceled）；partial 传 `final_usage_received=FALSE`，full bill 传 `TRUE`。
 2. **不**写 `risk_exposure`（用户已 capture，与 captured=0 语义冲突）。
 3. **不**新增 `RecordChannelMissingFinalUsage` 专用 metrics / Admin 聚合。
 
@@ -256,7 +258,7 @@ Partial 与 Full 共用 `SettleSuccessfulChat`、`usage_records` + `price_snapsh
 
 | 场景 | 现在 | 落地后 |
 | --- | --- | --- |
-| emit + cancel/interrupt，无 usage | `risk_exposure` | partial capture；**无** risk_exposure |
+| emit + cancel/interrupt，无 usage | `risk_exposure` | partial capture + canceled/failed 终态；**无** risk_exposure |
 | emit + 正常结束，无 usage（D） | `risk_exposure` | partial capture + 渠道异常信号 |
 | `!emit` | release | 不变（0 扣，无 exception） |
 | full usage | capture | 不变 |
@@ -272,7 +274,7 @@ Partial 与 Full 共用 `SettleSuccessfulChat`、`usage_records` + `price_snapsh
 | # | 项 | 文件/范围 |
 | --- | --- | --- |
 | 1 | 登记 `usage.SourcePartialStreamEstimate` | `internal/core/usage/facts.go` |
-| 2 | `MarkAttemptSucceeded` 的 `final_usage_received` 改入参 | `sql/queries/request_attempts.sql` + `requestlog/store.go` + sqlc 重生成 |
+| 2 | settled succeeded / failed / canceled 写库入口，均保留 response facts 与 `final_usage_received` | `sql/queries/request_attempts.sql`、`sql/queries/request_records.sql` + `requestlog/store.go` + sqlc 重生成 |
 | 3 | `StreamChunkMeta` 加 `VisibleText`，各载体 ChunkMeta 填充 | `attempt_runner_stream.go`、responses/直传 carrier、Anthropic onChunk |
 | 4 | 输出文本 token 计数（B1-i：复用 tokenizer，偏保守，回退启发式） | adapter tokenizer 暴露「数文本」能力 + lifecycle meter |
 | 5 | `BuildPartialStreamFacts`（A2-i 合成）+ incremental meter | `lifecycle/partial_stream.go`（新） |
@@ -302,8 +304,8 @@ Partial 与 Full 共用 `SettleSuccessfulChat`、`usage_records` + `price_snapsh
 
 ### 8.1 必测用例（OpenAI + Anthropic 各一套）
 
-1. **B partial（cancel after emit）** → `succeeded` + `final_usage_received=FALSE` + `captured>0` + 无 `risk_exposure`。
-2. **B partial（interrupt after emit）** → 同上；并验证 attempt **未被 318 预先标 failed**（partial 能正常 `MarkAttemptSucceeded`）。
+1. **B1 partial（cancel after emit）** → `canceled` + `final_usage_received=FALSE` + `captured>0` + 无 `risk_exposure`。
+2. **B2 partial（interrupt after emit）** → `failed` + `final_usage_received=FALSE` + `captured>0` + 无 `risk_exposure`；并验证普通 `MarkAttemptFailed` 未在 settlement 前抢先写终态。
 3. **D partial（normal end missing usage, emitted）** → `succeeded` + `final_usage_received=FALSE` + `upstream_finish_reason=stream_final_usage_missing` + `captured>0`。
 4. **Zero emit（cancel / 缺 usage 前未 emit）** → `ReleaseAuthorization`，0 扣，无 settlement、无 exception。
 5. **Full bill 优先（B4）** → `streamFacts!=nil` 一律 full settlement，即便 `finalUsage==nil`。
@@ -313,7 +315,7 @@ Partial 与 Full 共用 `SettleSuccessfulChat`、`usage_records` + `price_snapsh
 
 - [ ] 已 emit 且无 final usage（B/D）**不再** 产生 `risk_exposure`。
 - [ ] 上述 request 有 `usage_records.usage_source=partial_stream_estimate` 且 `captured_amount>0`（估算非零时）。
-- [ ] 上述 attempt 为 `succeeded` 且 `final_usage_received=FALSE`。
+- [ ] 上述 attempt 按原因分别为 `canceled` / `failed` / `succeeded`，且 `final_usage_received=FALSE`。
 - [ ] 路线 D：attempt `upstream_finish_reason=stream_final_usage_missing`；渠道故障统计排除取消（仅算该 reason）。
 - [ ] 首 token 前结束仍 `captured_amount=0`。
 - [ ] 现有 full stream settlement 测试全绿（OpenAI chat / Responses / Anthropic）。
@@ -334,7 +336,7 @@ Partial 与 Full 共用 `SettleSuccessfulChat`、`usage_records` + `price_snapsh
 
 **情况：** adapter 正常结束，用户已看到内容，上游没有 final usage。
 
-**决策：** 与路线 B **同一套 partial settlement**（succeeded + `final_usage_received=FALSE`）；用 `upstream_finish_reason=stream_final_usage_missing` 标识渠道异常、复用现有渠道错误/健康统计；**不写 `risk_exposure`、不新增 Admin 指标**。
+**决策：** 与路线 B **同一套 partial settlement** 资金管道，但路线 D 生命周期终态为 succeeded；用 `upstream_finish_reason=stream_final_usage_missing` 标识渠道异常、复用现有渠道错误/健康统计；**不写 `risk_exposure`、不新增 Admin 指标**。
 
 ---
 

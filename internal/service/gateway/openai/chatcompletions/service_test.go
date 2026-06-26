@@ -83,20 +83,22 @@ type fakeRequestLogService struct {
 	nextRequestID int64
 	nextAttemptID int64
 
-	createRequests           []requestlog.CreateRequestParams
-	markRequestRunningIDs    []int64
-	markResponseStartedArgs  []requestlog.MarkResponseStartedParams
-	markRequestSucceededArgs []requestlog.MarkRequestSucceededParams
-	markRequestFailedArgs    []requestlog.MarkRequestFailedParams
-	markRequestCanceledArgs  []requestlog.MarkRequestCanceledParams
-	capabilityResults        []string
+	createRequests                 []requestlog.CreateRequestParams
+	markRequestRunningIDs          []int64
+	markResponseStartedArgs        []requestlog.MarkResponseStartedParams
+	markRequestSucceededArgs       []requestlog.MarkRequestSucceededParams
+	markSettledRequestCanceledArgs []requestlog.MarkSettledRequestCanceledParams
+	markRequestFailedArgs          []requestlog.MarkRequestFailedParams
+	markRequestCanceledArgs        []requestlog.MarkRequestCanceledParams
+	capabilityResults              []string
 
-	createAttempts           []requestlog.CreateAttemptParams
-	markAttemptStartedArgs   []requestlog.MarkAttemptResponseStartedParams
-	markAttemptSucceededArgs []requestlog.MarkAttemptSucceededParams
-	markAttemptFailedArgs    []requestlog.MarkAttemptFailedParams
-	markAttemptCanceledArgs  []requestlog.MarkAttemptCanceledParams
-	createAttemptErr         error
+	createAttempts                 []requestlog.CreateAttemptParams
+	markAttemptStartedArgs         []requestlog.MarkAttemptResponseStartedParams
+	markAttemptSucceededArgs       []requestlog.MarkAttemptSucceededParams
+	markSettledAttemptCanceledArgs []requestlog.MarkSettledAttemptCanceledParams
+	markAttemptFailedArgs          []requestlog.MarkAttemptFailedParams
+	markAttemptCanceledArgs        []requestlog.MarkAttemptCanceledParams
+	createAttemptErr               error
 }
 
 // fakeChatSettlementExecutor 是 gateway 测试使用的 chat settlement 替身。
@@ -258,6 +260,22 @@ func (s *fakeRequestLogService) MarkRequestCanceled(ctx context.Context, params 
 	}, nil
 }
 
+func (s *fakeRequestLogService) MarkSettledRequestCanceled(ctx context.Context, params requestlog.MarkSettledRequestCanceledParams) (requestlog.RequestRecord, error) {
+	s.markSettledRequestCanceledArgs = append(s.markSettledRequestCanceledArgs, params)
+
+	return requestlog.RequestRecord{
+		ID:     params.ID,
+		Status: requestlog.RequestStatusCanceled,
+	}, nil
+}
+
+func (s *fakeRequestLogService) MarkSettledRequestFailed(ctx context.Context, params requestlog.MarkSettledRequestFailedParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{
+		ID:     params.ID,
+		Status: requestlog.RequestStatusFailed,
+	}, nil
+}
+
 // CreateAttempt 记录创建 request attempt 的参数并返回 running 记录。
 func (s *fakeRequestLogService) CreateAttempt(ctx context.Context, params requestlog.CreateAttemptParams) (requestlog.AttemptRecord, error) {
 	s.createAttempts = append(s.createAttempts, params)
@@ -317,6 +335,22 @@ func (s *fakeRequestLogService) MarkAttemptCanceled(ctx context.Context, params 
 	return requestlog.AttemptRecord{
 		ID:     params.ID,
 		Status: requestlog.AttemptStatusCanceled,
+	}, nil
+}
+
+func (s *fakeRequestLogService) MarkSettledAttemptCanceled(ctx context.Context, params requestlog.MarkSettledAttemptCanceledParams) (requestlog.AttemptRecord, error) {
+	s.markSettledAttemptCanceledArgs = append(s.markSettledAttemptCanceledArgs, params)
+
+	return requestlog.AttemptRecord{
+		ID:     params.ID,
+		Status: requestlog.AttemptStatusCanceled,
+	}, nil
+}
+
+func (s *fakeRequestLogService) MarkSettledAttemptFailed(ctx context.Context, params requestlog.MarkSettledAttemptFailedParams) (requestlog.AttemptRecord, error) {
+	return requestlog.AttemptRecord{
+		ID:     params.ID,
+		Status: requestlog.AttemptStatusFailed,
 	}, nil
 }
 
@@ -2235,6 +2269,15 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 	if settlement.params[0].Facts.Finish.RawReason != lifecycle.PartialReasonInterrupted {
 		t.Fatalf("expected %q finish reason, got %q", lifecycle.PartialReasonInterrupted, settlement.params[0].Facts.Finish.RawReason)
 	}
+	if settlement.params[0].RequestFinalStatus != requestlog.RequestStatusFailed {
+		t.Fatalf("expected settled request status failed, got %q", settlement.params[0].RequestFinalStatus)
+	}
+	if settlement.params[0].AttemptFinalStatus != requestlog.AttemptStatusFailed {
+		t.Fatalf("expected settled attempt status failed, got %q", settlement.params[0].AttemptFinalStatus)
+	}
+	if settlement.params[0].ErrorCode == "" {
+		t.Fatal("expected settled interrupt to carry an error code")
+	}
 	if settlement.params[0].Facts.UsageSource != coreusage.SourcePartialStreamEstimate {
 		t.Fatalf("expected partial_stream_estimate usage source, got %q", settlement.params[0].Facts.UsageSource)
 	}
@@ -2384,7 +2427,17 @@ func TestChatCompletionServiceStreamChatCompletionPartialSettlesOnCancelAfterEmi
 	if len(settlement.params) != 1 {
 		t.Fatalf("expected partial settlement to run once, got %d", len(settlement.params))
 	}
-	facts := settlement.params[0].Facts
+	settlementParams := settlement.params[0]
+	if settlementParams.RequestFinalStatus != requestlog.RequestStatusCanceled {
+		t.Fatalf("expected settled request status canceled, got %q", settlementParams.RequestFinalStatus)
+	}
+	if settlementParams.AttemptFinalStatus != requestlog.AttemptStatusCanceled {
+		t.Fatalf("expected settled attempt status canceled, got %q", settlementParams.AttemptFinalStatus)
+	}
+	if settlementParams.ErrorCode != "client_canceled" {
+		t.Fatalf("expected settlement error code %q, got %q", "client_canceled", settlementParams.ErrorCode)
+	}
+	facts := settlementParams.Facts
 	if facts.UsageSource != coreusage.SourcePartialStreamEstimate {
 		t.Fatalf("expected partial_stream_estimate usage source, got %q", facts.UsageSource)
 	}
