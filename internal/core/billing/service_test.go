@@ -52,6 +52,45 @@ func defaultCustomerPriceSnapshot() CustomerPriceSnapshot {
 	}
 }
 
+func TestCustomerPriceSnapshotIsEffectivelyFree(t *testing.T) {
+	if defaultCustomerPriceSnapshot().IsEffectivelyFree() {
+		t.Fatal("expected priced snapshot to not be effectively free")
+	}
+
+	allZero := CustomerPriceSnapshot{
+		Currency:           "USD",
+		PricingUnit:        PricingUnitPer1MTokens,
+		UncachedInputPrice: numeric(0, 0),
+		OutputPrice:        numeric(0, 0),
+		FormulaVersion:     FormulaVersionV1,
+	}
+	if !allZero.IsEffectivelyFree() {
+		t.Fatal("expected all-zero snapshot to be effectively free")
+	}
+
+	allInvalid := CustomerPriceSnapshot{
+		Currency:           "USD",
+		PricingUnit:        PricingUnitPer1MTokens,
+		UncachedInputPrice: nullNumeric(),
+		OutputPrice:        nullNumeric(),
+		FormulaVersion:     FormulaVersionV1,
+	}
+	if !allInvalid.IsEffectivelyFree() {
+		t.Fatal("expected missing-rate snapshot to be treated as effectively free")
+	}
+
+	onlyOutputPriced := CustomerPriceSnapshot{
+		Currency:           "USD",
+		PricingUnit:        PricingUnitPer1MTokens,
+		UncachedInputPrice: numeric(0, 0),
+		OutputPrice:        numeric(8_0000000000, -10),
+		FormulaVersion:     FormulaVersionV1,
+	}
+	if onlyOutputPriced.IsEffectivelyFree() {
+		t.Fatal("expected a positive output price to make snapshot not free")
+	}
+}
+
 // defaultProviderCostSnapshot 返回一份支持 token_v1 的基础 provider/channel 成本价快照。
 func defaultProviderCostSnapshot() ProviderCostSnapshot {
 	return ProviderCostSnapshot{

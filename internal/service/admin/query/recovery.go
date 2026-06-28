@@ -21,10 +21,12 @@ type RecoveryJobStore interface {
 type RecoveryJobListParams struct {
 	Status string
 	UserID *int64
-	From   *time.Time
-	To     *time.Time
-	Limit  int32
-	Offset int32
+	From      *time.Time
+	To        *time.Time
+	SortField string
+	SortDesc  bool
+	Limit     int32
+	Offset    int32
 }
 
 // RecoveryJobSummary 是 recovery job 列表项：运营关心的归属/状态/重试/金额事实（绝不含内部诊断详情）。
@@ -102,6 +104,8 @@ func (s *RecoveryService) List(ctx context.Context, params RecoveryJobListParams
 		UserID:     int8Narg(params.UserID),
 		FromTime:   tsNarg(params.From),
 		ToTime:     tsNarg(params.To),
+		SortField:  textNarg(params.SortField),
+		SortDesc:   boolNarg(params.SortDesc),
 		PageLimit:  params.Limit,
 		PageOffset: params.Offset,
 	})

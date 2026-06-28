@@ -56,6 +56,7 @@ type RunStreamParams struct {
 	// CountOutputTokens 按 upstream model 估算一段可见输出文本的 token 数，供 partial settlement 计 output。
 	// 为 nil 时 partial 的 output 记 0（偏保守）。
 	CountOutputTokens func(model string, text string) int64
+	Codes             RunStreamCodes
 }
 
 // StreamChunkMeta 是从一个上游流式 chunk 提取出的协议无关元信息。
@@ -107,6 +108,42 @@ type RunStreamParamsGeneric[C any] struct {
 	// CountOutputTokens 按 upstream model 估算一段可见输出文本的 token 数，供 partial settlement 计 output。
 	// 为 nil 时 partial 的 output 记 0（偏保守）。
 	CountOutputTokens func(model string, text string) int64
+	Codes             RunStreamCodes
+}
+
+// RunStreamCodes 是共享流式候选循环里的审计 code/reason 覆盖项。
+//
+// 空值使用 OpenAI chat 既有默认值，保证现有调用点零改动、历史观测语义不漂移。
+type RunStreamCodes struct {
+	AuthorizationReleaseFailedCode string
+	SettlementFailedCode           string
+
+	PartialSettlementBillingExceptionReasonCode string
+	PartialSettlementBillingExceptionReason     string
+	SettlementBillingExceptionReasonCode        string
+	SettlementBillingExceptionReason            string
+}
+
+func (c RunStreamCodes) withDefaults() RunStreamCodes {
+	if c.AuthorizationReleaseFailedCode == "" {
+		c.AuthorizationReleaseFailedCode = "chat_authorization_release_failed"
+	}
+	if c.SettlementFailedCode == "" {
+		c.SettlementFailedCode = "stream_chat_settlement_failed"
+	}
+	if c.PartialSettlementBillingExceptionReasonCode == "" {
+		c.PartialSettlementBillingExceptionReasonCode = "stream_settlement_failed_after_upstream_success"
+	}
+	if c.PartialSettlementBillingExceptionReason == "" {
+		c.PartialSettlementBillingExceptionReason = "stream partial settlement permanently failed without recovery job"
+	}
+	if c.SettlementBillingExceptionReasonCode == "" {
+		c.SettlementBillingExceptionReasonCode = "stream_settlement_failed_after_upstream_success"
+	}
+	if c.SettlementBillingExceptionReason == "" {
+		c.SettlementBillingExceptionReason = "stream settlement permanently failed after upstream success without recovery job"
+	}
+	return c
 }
 
 // RunStream 执行 authorization 之后的流式候选 fallback 循环（chat chunk 载体）。
@@ -129,6 +166,7 @@ func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (
 		ChunkMeta:               chatStreamChunkMeta,
 		ConservativeInputTokens: params.ConservativeInputTokens,
 		CountOutputTokens:       params.CountOutputTokens,
+		Codes:                   params.Codes,
 	})
 }
 
@@ -160,6 +198,26 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 	l := r.lifecycle
 	requestRecord := params.RequestRecord
 	authorization := params.Authorization
+	codes := params.Codes.withDefaults()
+
+	// Key 级 TPM 预占（P2-8）：RPM/RPD 已在 ingress 中间件处理，这里只做 token 维度。
+	// 命中即释放冻结并以 429 上抛；计数后端 fail_closed 故障同样释放冻结后上抛。
+	if dec, allowed, err := r.guardKeyTokens(ctx, params.Principal, params.ConservativeInputTokens); err != nil {
+		if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+			l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+			return result, releaseErr
+		}
+		l.MarkRequestFailed(ctx, requestRecord, string(failure.CodeRateLimitStoreFailed), err)
+		return result, err
+	} else if !allowed {
+		if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+			l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+			return result, releaseErr
+		}
+		rlErr := keyTokenRateLimitError(dec)
+		l.MarkRequestFailed(ctx, requestRecord, string(failure.CodeRateLimitExceeded), rlErr)
+		return result, rlErr
+	}
 
 	var lastErr error
 
@@ -173,12 +231,22 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			continue
 		}
 
+		// 渠道级限流预占（P2-8）：命中任一维度即跳过该候选 fallback 到下一渠道（与熔断 open 同语义，不写 attempt）。
+		// 计数后端 fail_closed 故障同样保守跳过该候选；fail_open 时 Guard 内部已放行。
+		if dec, allowed, err := r.guardChannel(ctx, candidate, params.ConservativeInputTokens); err != nil {
+			lastErr = err
+			continue
+		} else if !allowed {
+			lastErr = channelRateLimitedError(dec)
+			continue
+		}
+
 		// 每个 stream candidate 也必须先创建 attempt：流式失败可能发生在首 chunk 前、首 chunk 后或
 		// 客户端取消时，提前记录 attempt 才能审计这些状态。
 		attemptRecord, err := l.CreateAttempt(ctx, requestRecord, index, candidate)
 		if err != nil {
 			if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-				l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+				l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 				return result, releaseErr
 			}
 			l.MarkRequestFailed(ctx, requestRecord, "request_attempt_create_failed", err)
@@ -188,7 +256,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		if params.ResolveAdapter != nil {
 			if err := params.ResolveAdapter(candidate); err != nil {
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-					l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 					return result, releaseErr
 				}
 				l.MarkAttemptFailed(ctx, attemptRecord, "adapter_not_registered", err)
@@ -261,10 +329,15 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				ModelDBID:           candidate.ModelDBID,
 				FinalProviderID:     candidate.ProviderID,
 				FinalChannelID:      candidate.Channel.ID,
+				ChannelPriceID:      candidate.ChannelPriceID,
 				Facts:               *streamFacts,
 			})
 			EndSettlementSpan(settleSpan, settleErr)
 			l.RecordSettlement(SettlementOutcomeFromErr(settleErr))
+			// 结算成功（或已交 recovery 接管）后按真实 billable token 回填 Key/channel 的 TPM 计数差额（P2-8）。
+			if settleErr == nil || IsChatSettlementRecoveryScheduled(settleErr) {
+				r.backfillRateTokens(ctx, params.Principal, candidate, params.ConservativeInputTokens, streamFacts.Usage)
+			}
 			return settleErr
 		}
 
@@ -301,13 +374,13 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 					if releaseErr := l.ReleaseAuthorizationForBillingException(
 						ctx,
 						authorization,
-						"stream_settlement_failed_after_upstream_success",
-						"stream partial settlement permanently failed without recovery job",
+						codes.PartialSettlementBillingExceptionReasonCode,
+						codes.PartialSettlementBillingExceptionReason,
 					); releaseErr != nil {
-						l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 						return result, releaseErr
 					}
-					l.MarkRequestFailed(ctx, requestRecord, "stream_chat_settlement_failed", settleErr)
+					l.MarkRequestFailed(ctx, requestRecord, codes.SettlementFailedCode, settleErr)
 					return result, settleErr
 				}
 			}
@@ -322,6 +395,8 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 
 			result.Outcome = outcome
 			l.RecordStreamEvent(streamEvent)
+			// partial settlement 按已吐内容保守估算收费，系统性偏少收（P2-2）：记指标供监控占比/滥用。
+			l.RecordPartialSettlement(reason)
 			return result, returnErr
 		}
 		_ = finishPartial
@@ -368,6 +443,9 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		l.RecordChannelHealth(channelKey, err)
 
 		if err != nil {
+			// 上游 429：按 Retry-After 登记渠道冷却，后续 fallback 在冷却窗口内直接跳过该渠道（P2-7）。
+			l.RecordChannelRateLimit(channelKey, err)
+
 			// 有 final usage 时优先结算：上游已给出准确 token 用量，即使尾部出错也不能让已产生成本的请求免费。
 			if streamFacts != nil {
 				if settleErr := settleStreamFacts(); settleErr != nil {
@@ -377,13 +455,13 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 						if releaseErr := l.ReleaseAuthorizationForBillingException(
 							ctx,
 							authorization,
-							"stream_settlement_failed_after_upstream_success",
-							"stream settlement permanently failed after upstream success without recovery job",
+							codes.SettlementBillingExceptionReasonCode,
+							codes.SettlementBillingExceptionReason,
 						); releaseErr != nil {
-							l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+							l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 							return result, releaseErr
 						}
-						l.MarkRequestFailed(ctx, requestRecord, "stream_chat_settlement_failed", settleErr)
+						l.MarkRequestFailed(ctx, requestRecord, codes.SettlementFailedCode, settleErr)
 						return result, settleErr
 					}
 				}
@@ -403,7 +481,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				}
 
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-					l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 					return result, releaseErr
 				}
 
@@ -424,7 +502,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 
 			if !r.retryClassifier.IsRetryable(err) {
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-					l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 					return result, releaseErr
 				}
 
@@ -432,6 +510,8 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				return result, err
 			}
 
+			// 首字节前可重试错误切换候选：前一候选可能已在上游产生成本却不会被结算（P2-3），记指标供监控。
+			l.RecordRetryableFallback(err)
 			lastErr = err
 			continue
 		}
@@ -450,7 +530,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			)
 
 			if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-				l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+				l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 				return result, releaseErr
 			}
 
@@ -467,13 +547,13 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				if releaseErr := l.ReleaseAuthorizationForBillingException(
 					ctx,
 					authorization,
-					"stream_settlement_failed_after_upstream_success",
-					"stream settlement permanently failed after upstream success without recovery job",
+					codes.SettlementBillingExceptionReasonCode,
+					codes.SettlementBillingExceptionReason,
 				); releaseErr != nil {
-					l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 					return result, releaseErr
 				}
-				l.MarkRequestFailed(ctx, requestRecord, "stream_chat_settlement_failed", settleErr)
+				l.MarkRequestFailed(ctx, requestRecord, codes.SettlementFailedCode, settleErr)
 				return result, settleErr
 			}
 		}
@@ -488,6 +568,11 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		// 流式正常结束（路线 A）：所有 chunk 与收尾帧已写出，交付完成。
 		l.MarkDeliveryCompleted(ctx, requestRecord)
 
+		// 零价渠道误配监控（P2-4）：售价快照全部非正即客户侧 $0 收入，记指标供运维定位误配渠道。
+		if candidate.SalePrice.IsEffectivelyFree() {
+			l.RecordZeroPriceServed(candidate.ProviderID, candidate.Channel.ID, params.RequestedModelID)
+		}
+
 		result.Outcome = metrics.ChatOutcomeSuccess
 		l.RecordStreamEvent(metrics.StreamEventCompleted)
 		return result, nil
@@ -495,7 +580,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 
 	if lastErr != nil {
 		if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-			l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+			l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 			return result, releaseErr
 		}
 		l.MarkRequestFailed(ctx, requestRecord, "stream_adapter_error", lastErr)
@@ -503,7 +588,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 	}
 
 	if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-		l.MarkRequestFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+		l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 		return result, releaseErr
 	}
 

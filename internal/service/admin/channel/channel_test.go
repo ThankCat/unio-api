@@ -27,6 +27,9 @@ type fakeChannelStore struct {
 	deleteErr     error
 	deleteID      int64
 	deleteCalls   int
+
+	rateLimitsParam sqlc.SetChannelRateLimitsParams
+	rateLimitsCalls int
 }
 
 func (s *fakeChannelStore) GetProvider(_ context.Context, _ int64) (sqlc.Provider, error) {
@@ -48,6 +51,16 @@ func (s *fakeChannelStore) CreateChannel(_ context.Context, arg sqlc.CreateChann
 }
 func (s *fakeChannelStore) UpdateChannel(_ context.Context, _ sqlc.UpdateChannelParams) (sqlc.Channel, error) {
 	return sqlc.Channel{}, pgx.ErrNoRows
+}
+func (s *fakeChannelStore) SetChannelRateLimits(_ context.Context, arg sqlc.SetChannelRateLimitsParams) (sqlc.Channel, error) {
+	s.rateLimitsParam = arg
+	s.rateLimitsCalls++
+	return sqlc.Channel{
+		ID:       arg.ID,
+		RpmLimit: arg.RpmLimit,
+		TpmLimit: arg.TpmLimit,
+		RpdLimit: arg.RpdLimit,
+	}, nil
 }
 func (s *fakeChannelStore) UpdateChannelCredential(_ context.Context, _ sqlc.UpdateChannelCredentialParams) (int64, error) {
 	return s.credentialAff, s.credentialErr

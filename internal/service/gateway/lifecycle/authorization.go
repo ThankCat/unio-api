@@ -50,8 +50,15 @@ type ChatAuthorizeParams struct {
 	// 保证实际命中任一候选都不会超过冻结额（cheapest 命中只会更便宜）。
 	CandidatePrices []billing.CustomerPriceSnapshot
 
-	InputTokens         int64
+	InputTokens int64
+
+	// MaxCompletionTokens 是客户显式给出的输出 token 上限；0 表示客户未给出。
+	// 未给出时 authorization 改用候选模型 max_output_tokens（CandidateMaxOutputTokens）做保守冻结上界。
 	MaxCompletionTokens int64
+
+	// CandidateMaxOutputTokens 是本次候选池各模型 max_output_tokens 的最大值（0 表示候选均未配置）。
+	// 仅当客户未给出输出上限时参与冻结估算；候选与客户都缺失时回退进程级 MaxOutputTokensFallback。
+	CandidateMaxOutputTokens int64
 }
 
 // ChatReleaseBillingExceptionParams 表示异常释放 chat 冻结余额所需参数。
@@ -99,23 +106,41 @@ type ChatAuthorizationLedger interface {
 
 // ChatAuthorizationService 负责 chat 请求调用上游前的余额冻结。
 type ChatAuthorizationService struct {
-	billing ChatAuthorizationBilling
-	ledger  ChatAuthorizationLedger
+	billing                 ChatAuthorizationBilling
+	ledger                  ChatAuthorizationLedger
+	maxOutputTokensFallback int64
 }
 
 // NewChatAuthorizationService 创建 chat 余额冻结 service。
-func NewChatAuthorizationService(billing ChatAuthorizationBilling, ledger ChatAuthorizationLedger) *ChatAuthorizationService {
+// maxOutputTokensFallback 是客户与候选模型都未给出输出上限时的兜底冻结上界（<=0 时回退内置默认）。
+func NewChatAuthorizationService(billing ChatAuthorizationBilling, ledger ChatAuthorizationLedger, maxOutputTokensFallback int64) *ChatAuthorizationService {
 	if billing == nil {
 		panic("gateway: chat authorization billing is required")
 	}
 	if ledger == nil {
 		panic("gateway: chat authorization ledger is required")
 	}
+	if maxOutputTokensFallback <= 0 {
+		maxOutputTokensFallback = DefaultAuthorizationMaxCompletionTokens
+	}
 
 	return &ChatAuthorizationService{
-		billing: billing,
-		ledger:  ledger,
+		billing:                 billing,
+		ledger:                  ledger,
+		maxOutputTokensFallback: maxOutputTokensFallback,
 	}
+}
+
+// resolveAuthorizationMaxOutputTokens 决定冻结额度估算用的输出 token 上限：
+// 客户显式给出(>0)以客户值为准；否则取候选模型 max_output_tokens 最大值；候选也缺失时回退进程级兜底。
+func (s *ChatAuthorizationService) resolveAuthorizationMaxOutputTokens(clientMaxOutputTokens int64, candidateMaxOutputTokens int64) int64 {
+	if clientMaxOutputTokens > 0 {
+		return clientMaxOutputTokens
+	}
+	if candidateMaxOutputTokens > 0 {
+		return candidateMaxOutputTokens
+	}
+	return s.maxOutputTokensFallback
 }
 
 // AuthorizeChat 在调用上游前冻结本次请求的预估费用。
@@ -128,9 +153,11 @@ func (s *ChatAuthorizationService) AuthorizeChat(ctx context.Context, params Cha
 		)
 	}
 
+	// 客户未给出输出上限时，用候选模型 max_output_tokens（取最大值）做保守冻结上界，
+	// 候选也缺失才回退进程级兜底；不会改写转发给上游的请求体，仅影响预冻结额度。
 	estimate := billing.AuthorizationEstimate{
 		InputTokens:         params.InputTokens,
-		MaxCompletionTokens: params.MaxCompletionTokens,
+		MaxCompletionTokens: s.resolveAuthorizationMaxOutputTokens(params.MaxCompletionTokens, params.CandidateMaxOutputTokens),
 	}
 
 	// 保守上界：在候选池里取「按本次 token 估算」最贵的一条售价做冻结。

@@ -63,11 +63,12 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 	}
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
-		RequestRecord:       requestRecord,
-		Principal:           principal,
-		CandidatePrices:     candidatePlan.CandidateSalePrices(),
-		InputTokens:         candidatePlan.ConservativeInputTokens,
-		MaxCompletionTokens: estimateMaxCompletionTokens(req),
+		RequestRecord:            requestRecord,
+		Principal:                principal,
+		CandidatePrices:          candidatePlan.CandidateSalePrices(),
+		InputTokens:              candidatePlan.ConservativeInputTokens,
+		MaxCompletionTokens:      estimateMaxCompletionTokens(req),
+		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),
 	})
 	if err != nil {
 		s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_failed", err)
@@ -89,6 +90,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		Candidates:           candidatePlan.Candidates,
 		RequestedModelID: req.Model,
 		ResponseProtocol: requestlog.ProtocolOpenAI,
+		EstimatedTokens:  candidatePlan.ConservativeInputTokens,
 		ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
 			adapter, ok := s.registry.Chat(candidate.AdapterKey)
 			if !ok {

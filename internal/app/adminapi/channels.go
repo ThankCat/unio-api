@@ -37,8 +37,12 @@ type channelDTO struct {
 	Status       string `json:"status"`
 	Priority     int32  `json:"priority"`
 	TimeoutMs    *int32 `json:"timeout_ms"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	// RPMLimit/TPMLimit/RPDLimit：渠道级限流上限（P2-8）。null=继承全局默认，0=不限，>0=具体上限。
+	RPMLimit  *int64 `json:"rpm_limit"`
+	TPMLimit  *int64 `json:"tpm_limit"`
+	RPDLimit  *int64 `json:"rpd_limit"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // adapterKeyOptionDTO 是某协议族下一个可选 adapter_key 的枚举项，供前端下拉渲染。
@@ -50,23 +54,25 @@ type adapterKeyOptionDTO struct {
 }
 
 type createChannelRequest struct {
-	ProviderID int64  `json:"provider_id"`
-	Name       string `json:"name"`
-	Protocol   string `json:"protocol"`
-	AdapterKey string `json:"adapter_key"`
-	BaseURL    string `json:"base_url"`
-	Credential string `json:"credential"`
-	Status     string `json:"status"`
-	Priority   int32  `json:"priority"`
-	TimeoutMs  *int32 `json:"timeout_ms"`
+	ProviderID int64              `json:"provider_id"`
+	Name       string             `json:"name"`
+	Protocol   string             `json:"protocol"`
+	AdapterKey string             `json:"adapter_key"`
+	BaseURL    string             `json:"base_url"`
+	Credential string             `json:"credential"`
+	Status     string             `json:"status"`
+	Priority   int32              `json:"priority"`
+	TimeoutMs  *int32             `json:"timeout_ms"`
+	RateLimits *rateLimitsRequest `json:"rate_limits"` // 可选渠道级限流；不传表示全继承全局默认
 }
 
 type updateChannelRequest struct {
-	Name      string `json:"name"`
-	BaseURL   string `json:"base_url"`
-	Status    string `json:"status"`
-	Priority  int32  `json:"priority"`
-	TimeoutMs *int32 `json:"timeout_ms"`
+	Name       string             `json:"name"`
+	BaseURL    string             `json:"base_url"`
+	Status     string             `json:"status"`
+	Priority   int32              `json:"priority"`
+	TimeoutMs  *int32             `json:"timeout_ms"`
+	RateLimits *rateLimitsRequest `json:"rate_limits"` // 对象缺省=不变，存在即原子替换三维限流
 }
 
 type rotateChannelCredentialRequest struct {
@@ -151,7 +157,12 @@ func (h *channelsHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c, err := h.service.Create(r.Context(), channel.CreateInput{
+	if err := validateRateLimits(req.RateLimits); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	in := channel.CreateInput{
 		ProviderID: req.ProviderID,
 		Name:       req.Name,
 		Protocol:   req.Protocol,
@@ -161,7 +172,15 @@ func (h *channelsHandler) create(w http.ResponseWriter, r *http.Request) {
 		Status:     req.Status,
 		Priority:   req.Priority,
 		TimeoutMs:  req.TimeoutMs,
-	})
+	}
+	if req.RateLimits != nil {
+		in.RateLimitsProvided = true
+		in.RPMLimit = req.RateLimits.RPM
+		in.TPMLimit = req.RateLimits.TPM
+		in.RPDLimit = req.RateLimits.RPD
+	}
+
+	c, err := h.service.Create(r.Context(), in)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -183,14 +202,27 @@ func (h *channelsHandler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c, err := h.service.Update(r.Context(), channel.UpdateInput{
+	if err := validateRateLimits(req.RateLimits); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	in := channel.UpdateInput{
 		ID:        id,
 		Name:      req.Name,
 		BaseURL:   req.BaseURL,
 		Status:    req.Status,
 		Priority:  req.Priority,
 		TimeoutMs: req.TimeoutMs,
-	})
+	}
+	if req.RateLimits != nil {
+		in.RateLimitsProvided = true
+		in.RPMLimit = req.RateLimits.RPM
+		in.TPMLimit = req.RateLimits.TPM
+		in.RPDLimit = req.RateLimits.RPD
+	}
+
+	c, err := h.service.Update(r.Context(), in)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -251,6 +283,9 @@ func toChannelDTO(c channel.Channel) channelDTO {
 		Status:       c.Status,
 		Priority:     c.Priority,
 		TimeoutMs:    c.TimeoutMs,
+		RPMLimit:     c.RPMLimit,
+		TPMLimit:     c.TPMLimit,
+		RPDLimit:     c.RPDLimit,
 		CreatedAt:    c.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:    c.UpdatedAt.UTC().Format(time.RFC3339),
 	}

@@ -3,9 +3,7 @@ package messages
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"time"
 
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
 	"github.com/ThankCat/unio-api/internal/core/adapter"
@@ -14,7 +12,6 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
@@ -65,352 +62,92 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 	}
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
-		RequestRecord:       requestRecord,
-		Principal:           principal,
-		CandidatePrices:     candidatePlan.CandidateSalePrices(),
-		InputTokens:         candidatePlan.ConservativeInputTokens,
-		MaxCompletionTokens: estimateMaxOutputTokens(req),
+		RequestRecord:            requestRecord,
+		Principal:                principal,
+		CandidatePrices:          candidatePlan.CandidateSalePrices(),
+		InputTokens:              candidatePlan.ConservativeInputTokens,
+		MaxCompletionTokens:      estimateMaxOutputTokens(req),
+		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),
 	})
 	if err != nil {
 		s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_failed", err)
 		return err
 	}
 
-	var lastErr error
-
-	for _, prepared := range candidatePlan.Candidates {
-		index := prepared.RouteIndex
-		candidate := prepared.Route
-
-		channelKey := lifecycle.MetricsID(candidate.Channel.ID)
-		if !s.breakerAllow(channelKey) {
-			continue
-		}
-
-		attemptRecord, err := s.createAttemptRecord(ctx, requestRecord, index, candidate)
-		if err != nil {
-			if releaseErr := s.releaseMessageAuthorization(ctx, authorization); releaseErr != nil {
-				s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
-				return releaseErr
-			}
-
-			s.markRequestRecordFailed(ctx, requestRecord, "request_attempt_create_failed", err)
-			return err
-		}
-
-		streamAdapter, ok := s.registry.StreamMessages(candidate.AdapterKey)
-		if !ok {
-			err := failure.New(
-				failure.CodeGatewayAdapterNotRegistered,
-				failure.WithMessage(fmt.Sprintf("gateway stream messages adapter %q not registered", candidate.AdapterKey)),
-			)
-
-			if releaseErr := s.releaseMessageAuthorization(ctx, authorization); releaseErr != nil {
-				s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
-				return releaseErr
-			}
-
-			s.markAttemptRecordFailed(ctx, attemptRecord, "adapter_not_registered", err)
-			s.markRequestRecordFailed(ctx, requestRecord, "adapter_not_registered", err)
-
-			return err
-		}
-
-		emitted := false
-		var partialOutputTokens int64
-		var streamFacts *adapter.ResponseFacts
-		messageID := ""
-		var responseStartedAt *time.Time
-		settledRequestStatus := requestlog.RequestStatusSucceeded
-		settledAttemptStatus := requestlog.AttemptStatusSucceeded
-		settledErrorCode, settledErrorMessage, settledInternalErrorDetail := "", "", ""
-
-		settleStreamFacts := func() error {
-			if streamFacts == nil {
+	var streamAdapter messagesadapter.StreamMessagesAdapter
+	runResult, err := lifecycle.RunStreamGeneric(ctx, s.attemptRunner, lifecycle.RunStreamParamsGeneric[messagesadapter.MessageStreamEvent]{
+		RequestRecord:           requestRecord,
+		Principal:               principal,
+		Authorization:           authorization,
+		Candidates:              candidatePlan.Candidates,
+		RequestedModelID:        req.Model,
+		ResponseProtocol:        requestlog.ProtocolAnthropic,
+		ConservativeInputTokens: candidatePlan.ConservativeInputTokens,
+		CountOutputTokens:       anthropicPartialOutputTokenCounter,
+		Codes: lifecycle.RunStreamCodes{
+			AuthorizationReleaseFailedCode:              "messages_authorization_release_failed",
+			SettlementFailedCode:                        "stream_messages_settlement_failed",
+			PartialSettlementBillingExceptionReasonCode: "stream_messages_settlement_failed_after_upstream_success",
+			PartialSettlementBillingExceptionReason:     "stream messages partial settlement permanently failed without recovery job",
+			SettlementBillingExceptionReasonCode:        "stream_messages_settlement_failed_after_upstream_success",
+			SettlementBillingExceptionReason:            "stream messages settlement permanently failed after upstream success without recovery job",
+		},
+		ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
+			adapter, ok := s.registry.StreamMessages(candidate.AdapterKey)
+			if !ok {
 				return failure.New(
-					failure.CodeGatewayStreamUsageMissing,
-					failure.WithMessage("gateway stream response facts are missing"),
+					failure.CodeGatewayAdapterNotRegistered,
+					failure.WithMessage(fmt.Sprintf("gateway stream messages adapter %q not registered", candidate.AdapterKey)),
 				)
 			}
-
-			s.recordRoutingSelected(candidate.ProviderID, candidate.Channel.ID, req.Model)
-			logfields.SetRoute(ctx, req.Model, lifecycle.MetricsID(candidate.ProviderID), lifecycle.MetricsID(candidate.Channel.ID))
-
-			settlementCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-
-			settleCtx, settleSpan := lifecycle.StartGatewaySpan(settlementCtx, "gateway.settlement")
-			responseID := messageID
-			if responseID == "" {
-				responseID = streamFacts.UpstreamResponseID
-			}
-			settleErr := s.chatSettlement.SettleSuccessfulChat(settleCtx, lifecycle.ChatSettlementParams{
-				RequestRecord:       requestRecord,
-				AttemptRecord:       attemptRecord,
-				Principal:           principal,
-				Authorization:       authorization,
-				ResponseProtocol:    requestlog.ProtocolAnthropic,
-				ResponseID:          responseID,
-				ResponseModelID:     req.Model,
-				ResponseStartedAt:   responseStartedAt,
-				RequestFinalStatus:  settledRequestStatus,
-				AttemptFinalStatus:  settledAttemptStatus,
-				ErrorCode:           settledErrorCode,
-				ErrorMessage:        settledErrorMessage,
-				InternalErrorDetail: settledInternalErrorDetail,
-				ModelDBID:           candidate.ModelDBID,
-				FinalProviderID:     candidate.ProviderID,
-				FinalChannelID:      candidate.Channel.ID,
-				Facts:               *streamFacts,
+			streamAdapter = adapter
+			return nil
+		},
+		Stream: func(ctx context.Context, candidate routing.ChatRouteCandidate, onChunk func(messagesadapter.MessageStreamEvent) error) (*adapter.ResponseFacts, error) {
+			streamCtx, streamSpan := lifecycle.StartGatewaySpan(ctx, "adapter.stream_messages", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
+			streamOutcome, streamErr := streamAdapter.StreamMessages(streamCtx, candidate.Channel, mapGatewayRequestToAdapter(req, candidate.UpstreamModel), onChunk)
+			lifecycle.EndGatewaySpan(streamSpan, streamErr)
+			return streamOutcome.Facts, streamErr
+		},
+		EmitChunk: func(ev messagesadapter.MessageStreamEvent) error {
+			return emit(gatewayapi.StreamFrame{
+				EventType: ev.Type,
+				Data:      patchStreamEventCatalogModel(req.Model, ev),
 			})
-			lifecycle.EndSettlementSpan(settleSpan, settleErr)
-			s.recordSettlement(lifecycle.SettlementOutcomeFromErr(settleErr))
-			return settleErr
-		}
-
-		// finishPartial 处理「已 emit 但无 adapter final usage」的 partial settlement（路线 B/D）：
-		// 合成 partial_stream_estimate 事实走与 full bill 相同的结算管道；终态按原因区分
-		// canceled/failed/succeeded，且 final_usage_received=false。settlement 永久失败且无 recovery 接管时
-		// 退回释放冻结并记风险敞口。
-		finishPartial := func(reason string, oc metrics.ChatOutcome, streamEvent metrics.StreamEvent, deliveryCompleted bool, returnErr error) error {
-			settledRequestStatus = requestlog.RequestStatusSucceeded
-			settledAttemptStatus = requestlog.AttemptStatusSucceeded
-			settledErrorCode, settledErrorMessage, settledInternalErrorDetail = "", "", ""
-			switch reason {
-			case lifecycle.PartialReasonClientCanceled:
-				settledRequestStatus = requestlog.RequestStatusCanceled
-				settledAttemptStatus = requestlog.AttemptStatusCanceled
-				settledErrorCode = "client_canceled"
-				settledErrorMessage = lifecycle.BaseSafeRequestLogErrorMessage(settledErrorCode)
-				settledInternalErrorDetail = lifecycle.InternalErrorDetail(returnErr)
-			case lifecycle.PartialReasonInterrupted:
-				settledRequestStatus = requestlog.RequestStatusFailed
-				settledAttemptStatus = requestlog.AttemptStatusFailed
-				settledErrorCode = lifecycle.FailureCodeOrFallback(returnErr, "stream_adapter_error")
-				settledErrorMessage = messagesSafeMessage(settledErrorCode)
-				if settledErrorMessage == "" {
-					settledErrorMessage = lifecycle.BaseSafeRequestLogErrorMessage(settledErrorCode)
-				}
-				settledInternalErrorDetail = lifecycle.InternalErrorDetail(returnErr)
+		},
+		Finish: func(_ string, _ adapter.ChatUsage, _ string) error {
+			stopPayload, marshalErr := json.Marshal(gatewayapi.StreamMessageStop{Type: "message_stop"})
+			if marshalErr != nil {
+				return marshalErr
 			}
-			facts := lifecycle.BuildPartialStreamFacts(lifecycle.PartialStreamFactsParams{
-				Candidate:        candidate,
-				StreamResponseID: messageID,
-				RequestRecordID:  requestRecord.ID,
-				InputTokens:      candidatePlan.ConservativeInputTokens,
-				OutputTokens:     partialOutputTokens,
-				Reason:           reason,
-			})
-			streamFacts = &facts
-
-			if settleErr := settleStreamFacts(); settleErr != nil {
-				if !lifecycle.IsChatSettlementRecoveryScheduled(settleErr) {
-					if releaseErr := s.releaseMessageAuthorizationForBillingException(
-						ctx,
-						authorization,
-						"stream_messages_settlement_failed_after_upstream_success",
-						"stream messages partial settlement permanently failed without recovery job",
-					); releaseErr != nil {
-						s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
-						return releaseErr
-					}
-					s.markRequestRecordFailed(ctx, requestRecord, "stream_messages_settlement_failed", settleErr)
-					return settleErr
-				}
-			}
-
-			// 交付状态：路线 D（正常结束仅缺 final usage）→ completed；路线 B（取消/中断）→ interrupted。
-			if deliveryCompleted {
-				s.lifecycle.MarkDeliveryCompleted(ctx, requestRecord)
-			} else {
-				s.lifecycle.MarkDeliveryInterrupted(ctx, requestRecord)
-			}
-
-			outcome = oc
-			s.recordStreamEvent(streamEvent)
-			return returnErr
-		}
-
-		streamCtx, streamSpan := lifecycle.StartGatewaySpan(ctx, "adapter.stream_messages", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
-		upstreamStart := time.Now()
-		streamOutcome, streamErr := streamAdapter.StreamMessages(streamCtx, candidate.Channel,
-			mapGatewayRequestToAdapter(req, candidate.UpstreamModel),
-			func(ev messagesadapter.MessageStreamEvent) error {
-				if messageID == "" && ev.Type == "message_start" {
-					messageID = parseStreamMessageID(ev.Data)
-				}
-
-				if !emitted {
-					now := time.Now()
-					responseStartedAt = &now
-					emitted = true
-					// 首字节：记录 TTFT 并把交付状态推进到 in_progress（与 chat 链路一致）。
-					s.lifecycle.MarkResponseStarted(ctx, requestRecord, attemptRecord, now)
-					s.recordStreamEvent(metrics.StreamEventStarted)
-				}
-
-				// 累计已 emit 可见文本的估算 output token，供 partial settlement（无 final usage 时）使用。
-				if text := parseStreamTextDelta(ev); text != "" {
-					partialOutputTokens += messagesadapter.CountOutputTokens(text)
-				}
-
-				return emit(gatewayapi.StreamFrame{
-					EventType: ev.Type,
-					Data:      patchStreamEventCatalogModel(req.Model, ev),
-				})
-			})
-		streamFacts = streamOutcome.Facts
-		err = streamErr
-		s.recordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
-		lifecycle.EndGatewaySpan(streamSpan, err)
-		s.recordChannelHealth(channelKey, err)
-
-		if err != nil {
-			if streamFacts != nil {
-				if settleErr := settleStreamFacts(); settleErr != nil {
-					if !lifecycle.IsChatSettlementRecoveryScheduled(settleErr) {
-						// settlement 永久失败且无 recovery job 接管：释放冻结余额并记账务异常风险，
-						// 否则用户余额被永久冻结（同非流式处理；release 自身幂等）。
-						if releaseErr := s.releaseMessageAuthorizationForBillingException(
-							ctx,
-							authorization,
-							"stream_messages_settlement_failed_after_upstream_success",
-							"stream messages settlement permanently failed after upstream success without recovery job",
-						); releaseErr != nil {
-							s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
-							return releaseErr
-						}
-						s.markRequestRecordFailed(ctx, requestRecord, "stream_messages_settlement_failed", settleErr)
-						return settleErr
-					}
-				}
-				// 已 emit 后尾部出错：客户未拿到完整响应，交付标 interrupted。
-				if emitted {
-					s.lifecycle.MarkDeliveryInterrupted(ctx, requestRecord)
-				}
-				return err
-			}
-
-			// 客户端取消不是上游失败，也不触发 fallback。已 emit 时按 partial settlement 计费（路线 B）；
-			// 首 token 前取消则普通释放冻结、不扣费（路线 C）。
-			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-				if emitted {
-					return finishPartial(lifecycle.PartialReasonClientCanceled, metrics.ChatOutcomeCanceled, metrics.StreamEventCanceled, false, err)
-				}
-
-				if releaseErr := s.releaseMessageAuthorization(ctx, authorization); releaseErr != nil {
-					s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
-					return releaseErr
-				}
-
-				outcome = metrics.ChatOutcomeCanceled
-				s.recordStreamEvent(metrics.StreamEventCanceled)
-				s.markRequestCanceled(ctx, requestRecord, attemptRecord, err)
-				return err
-			}
-
-			if emitted {
-				// SSE 已写出后无法再 fallback。已 emit 内容按 partial settlement 计费（路线 B）；
-				// 不在此处 markAttemptRecordFailed——partial 走 settlement 会先结算 usage/ledger 再把 attempt 标 failed。
-				return finishPartial(lifecycle.PartialReasonInterrupted, metrics.ChatOutcomeFailed, metrics.StreamEventInterrupted, false, err)
-			}
-
-			// 首 token 前失败：attempt 记失败；客户端还没看到上游内容，只有这时允许同模型 fallback。
-			s.markAttemptRecordFailed(ctx, attemptRecord, "stream_adapter_error", err)
-
-			if !s.retryClassifier.IsRetryable(err) {
-				if releaseErr := s.releaseMessageAuthorization(ctx, authorization); releaseErr != nil {
-					s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
-					return releaseErr
-				}
-
-				s.markRequestRecordFailed(ctx, requestRecord, "stream_adapter_error", err)
-				return err
-			}
-
-			lastErr = err
-			continue
-		}
-
-		// 账务唯一真源是 adapter facts（B4）。已 emit 时按 partial settlement 计费并标渠道异常（路线 D）；
-		// 未 emit 则普通释放、不扣费（路线 C）。
-		if streamFacts == nil {
-			if emitted {
-				return finishPartial(lifecycle.PartialReasonFinalUsageMissing, metrics.ChatOutcomeSuccess, metrics.StreamEventMissingUsage, true, nil)
-			}
-
-			err := failure.New(
-				failure.CodeGatewayStreamUsageMissing,
-				failure.WithMessage("gateway stream final usage is missing"),
-			)
-
-			if releaseErr := s.releaseMessageAuthorization(ctx, authorization); releaseErr != nil {
-				s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
-				return releaseErr
-			}
-
-			s.recordStreamEvent(metrics.StreamEventMissingUsage)
-			s.markAttemptRecordFailed(ctx, attemptRecord, "stream_usage_missing", err)
-			s.markRequestRecordFailed(ctx, requestRecord, "stream_usage_missing", err)
-			return err
-		}
-
-		if settleErr := settleStreamFacts(); settleErr != nil {
-			if !lifecycle.IsChatSettlementRecoveryScheduled(settleErr) {
-				// settlement 永久失败且无 recovery job 接管：释放冻结余额并记账务异常风险，
-				// 否则用户余额被永久冻结（同非流式处理；release 自身幂等）。
-				if releaseErr := s.releaseMessageAuthorizationForBillingException(
-					ctx,
-					authorization,
-					"stream_messages_settlement_failed_after_upstream_success",
-					"stream messages settlement permanently failed after upstream success without recovery job",
-				); releaseErr != nil {
-					s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
-					return releaseErr
-				}
-				s.markRequestRecordFailed(ctx, requestRecord, "stream_messages_settlement_failed", settleErr)
-				return settleErr
-			}
-		}
-
-		stopPayload, marshalErr := json.Marshal(gatewayapi.StreamMessageStop{Type: "message_stop"})
-		if marshalErr != nil {
-			return marshalErr
-		}
-		if err := emit(gatewayapi.StreamFrame{EventType: "message_stop", Data: stopPayload}); err != nil {
-			return err
-		}
-
-		// 流式正常结束（路线 A）：所有事件与 message_stop 已写出，交付完成。
-		s.lifecycle.MarkDeliveryCompleted(ctx, requestRecord)
-
-		outcome = metrics.ChatOutcomeSuccess
-		s.recordStreamEvent(metrics.StreamEventCompleted)
-		return nil
-	}
-
-	if lastErr != nil {
-		if releaseErr := s.releaseMessageAuthorization(ctx, authorization); releaseErr != nil {
-			s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
-			return releaseErr
-		}
-
-		s.markRequestRecordFailed(ctx, requestRecord, "stream_adapter_error", lastErr)
-		return lastErr
-	}
-
-	if releaseErr := s.releaseMessageAuthorization(ctx, authorization); releaseErr != nil {
-		s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_release_failed", releaseErr)
-		return releaseErr
-	}
-
-	err = failure.Wrap(
-		failure.CodeRoutingNoAvailableChannel,
-		routing.ErrNoAvailableChannel,
-		failure.WithMessage(routing.ErrNoAvailableChannel.Error()),
-	)
-	s.markRequestRecordFailed(ctx, requestRecord, "no_available_channel", err)
+			return emit(gatewayapi.StreamFrame{EventType: "message_stop", Data: stopPayload})
+		},
+		ChunkMeta: messagesStreamChunkMeta,
+	})
+	outcome = runResult.Outcome
 	return err
+}
+
+func anthropicPartialOutputTokenCounter(_ string, text string) int64 {
+	return messagesadapter.CountOutputTokens(text)
+}
+
+func messagesStreamChunkMeta(ev messagesadapter.MessageStreamEvent) lifecycle.StreamChunkMeta {
+	meta := lifecycle.StreamChunkMeta{
+		VisibleText: parseStreamTextDelta(ev),
+	}
+	if ev.Type == "message_start" {
+		meta.ID = parseStreamMessageID(ev.Data)
+	}
+	if ev.Usage != nil {
+		usage := *ev.Usage
+		meta.Usage = &adapter.ChatUsage{
+			PromptTokens:     int(usage.InputTokens),
+			CompletionTokens: int(usage.OutputTokens),
+			TotalTokens:      int(usage.InputTokens + usage.OutputTokens),
+		}
+	}
+	return meta
 }
 
 func parseStreamMessageID(data json.RawMessage) string {

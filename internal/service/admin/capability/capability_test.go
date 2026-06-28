@@ -10,6 +10,7 @@ import (
 	core "github.com/ThankCat/unio-api/internal/core/capability"
 	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	capadmin "github.com/ThankCat/unio-api/internal/service/admin/capability"
 )
 
@@ -25,7 +26,7 @@ type fakeStore struct {
 	unknownKeys map[core.Key]struct{}
 
 	syncJobs      []core.SyncJob
-	syncJobsLimit int32
+	syncJobsParams sqlc.ListSyncJobsParams
 }
 
 func (s *fakeStore) LookupModelByID(context.Context, int64) (core.Model, error) {
@@ -106,9 +107,13 @@ func (s *fakeStore) GetLatestSyncJob(context.Context, core.Source) (core.SyncJob
 	return core.SyncJob{}, nil
 }
 
-func (s *fakeStore) ListSyncJobs(_ context.Context, limit int32) ([]core.SyncJob, error) {
-	s.syncJobsLimit = limit
+func (s *fakeStore) ListSyncJobs(_ context.Context, arg sqlc.ListSyncJobsParams) ([]core.SyncJob, error) {
+	s.syncJobsParams = arg
 	return s.syncJobs, nil
+}
+
+func (s *fakeStore) CountSyncJobs(context.Context) (int64, error) {
+	return int64(len(s.syncJobs)), nil
 }
 
 func TestSetModelCapabilityPropagatesActor(t *testing.T) {
@@ -254,22 +259,30 @@ func TestSyncTriggerPassesDryRun(t *testing.T) {
 	}
 }
 
-func TestSyncListJobsClampsLimit(t *testing.T) {
+func TestSyncListJobsForwardsPagination(t *testing.T) {
 	store := &fakeStore{}
 	svc := capadmin.NewSyncService(&fakeSyncer{}, store)
 
-	if _, err := svc.ListJobs(context.Background(), 0); err != nil {
+	jobs, total, err := svc.ListJobs(context.Background(), capadmin.ListJobsParams{
+		SortField: "created_at",
+		SortDesc:  true,
+		Limit:     15,
+		Offset:    30,
+	})
+	if err != nil {
 		t.Fatalf("list jobs: %v", err)
 	}
-	if store.syncJobsLimit != 20 {
-		t.Fatalf("expected default limit 20, got %d", store.syncJobsLimit)
+	if total != 0 || len(jobs) != 0 {
+		t.Fatalf("unexpected jobs=%d total=%d", len(jobs), total)
 	}
-
-	if _, err := svc.ListJobs(context.Background(), 999); err != nil {
-		t.Fatalf("list jobs: %v", err)
+	if store.syncJobsParams.PageLimit != 15 || store.syncJobsParams.PageOffset != 30 {
+		t.Fatalf("pagination not forwarded: %+v", store.syncJobsParams)
 	}
-	if store.syncJobsLimit != 50 {
-		t.Fatalf("expected clamped limit 50, got %d", store.syncJobsLimit)
+	if !store.syncJobsParams.SortField.Valid || store.syncJobsParams.SortField.String != "created_at" {
+		t.Fatalf("sort field not forwarded: %+v", store.syncJobsParams.SortField)
+	}
+	if !store.syncJobsParams.SortDesc.Valid || !store.syncJobsParams.SortDesc.Bool {
+		t.Fatalf("sort desc not forwarded: %+v", store.syncJobsParams.SortDesc)
 	}
 }
 

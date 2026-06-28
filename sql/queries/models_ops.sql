@@ -83,6 +83,7 @@ SELECT
     m.display_name,
     m.owned_by,
     m.status,
+    m.created_at,
     (SELECT COUNT(*) FROM channel_models cm WHERE cm.model_id = m.id AND cm.status = 'enabled') AS bindings_total,
     (
         SELECT COUNT(*)
@@ -97,9 +98,21 @@ SELECT
     EXISTS (SELECT 1 FROM channel_prices p WHERE p.model_id = m.id AND p.status = 'enabled') AS has_price,
     COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
     COUNT(r.id) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
+    COUNT(r.id) FILTER (WHERE r.status = 'succeeded' AND r.completed_at IS NOT NULL) AS latency_sample,
+    COALESCE(AVG(CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
     COALESCE((
         SELECT SUM(le.amount)
         FROM ledger_entries le
@@ -122,11 +135,19 @@ LEFT JOIN request_records r
     AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 WHERE (sqlc.narg('status')::text IS NULL OR m.status = sqlc.narg('status')::text)
   AND (sqlc.narg('search')::text IS NULL OR m.model_id ILIKE '%' || sqlc.narg('search')::text || '%' OR m.display_name ILIKE '%' || sqlc.narg('search')::text || '%')
-GROUP BY m.id, m.model_id, m.display_name, m.owned_by, m.status
+GROUP BY m.id, m.model_id, m.display_name, m.owned_by, m.status, m.created_at
 ORDER BY
-    (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) ASC NULLS LAST,
-    COUNT(r.id) DESC,
-    m.model_id
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END DESC NULLS LAST,
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'name' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN m.model_id END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'name' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN m.model_id END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'margin' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE le.entry_type = 'debit' AND le.currency = 'USD' AND rr.requested_model_id = m.model_id AND (sqlc.narg('from_time')::timestamptz IS NULL OR le.created_at >= sqlc.narg('from_time')::timestamptz) AND (sqlc.narg('to_time')::timestamptz IS NULL OR le.created_at < sqlc.narg('to_time')::timestamptz)), 0) - COALESCE((SELECT SUM(cs.total_cost_amount) FROM cost_snapshots cs WHERE cs.model_id = m.id AND cs.currency = 'USD' AND (sqlc.narg('from_time')::timestamptz IS NULL OR cs.created_at >= sqlc.narg('from_time')::timestamptz) AND (sqlc.narg('to_time')::timestamptz IS NULL OR cs.created_at < sqlc.narg('to_time')::timestamptz)), 0)) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'margin' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE le.entry_type = 'debit' AND le.currency = 'USD' AND rr.requested_model_id = m.model_id AND (sqlc.narg('from_time')::timestamptz IS NULL OR le.created_at >= sqlc.narg('from_time')::timestamptz) AND (sqlc.narg('to_time')::timestamptz IS NULL OR le.created_at < sqlc.narg('to_time')::timestamptz)), 0) - COALESCE((SELECT SUM(cs.total_cost_amount) FROM cost_snapshots cs WHERE cs.model_id = m.id AND cs.currency = 'USD' AND (sqlc.narg('from_time')::timestamptz IS NULL OR cs.created_at >= sqlc.narg('from_time')::timestamptz) AND (sqlc.narg('to_time')::timestamptz IS NULL OR cs.created_at < sqlc.narg('to_time')::timestamptz)), 0)) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN m.created_at END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN m.created_at END ASC NULLS LAST,
+  m.model_id
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 
 -- name: ModelsOpsTableCount :one
@@ -177,7 +198,7 @@ SELECT
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
     EXISTS (
         SELECT 1 FROM channel_prices p
-        WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
+        WHERE p.channel_id = c.id AND p.model_id = sqlc.arg('model_id') AND p.status = 'enabled'
     ) AS has_price
 FROM channel_models cm
 JOIN channels c ON c.id = cm.channel_id

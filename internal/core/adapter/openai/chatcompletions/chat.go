@@ -93,8 +93,24 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 		return nil, newUpstreamStatusError(upstreamResp, "upstream")
 	}
 
+	body, exceeded, err := adapter.ReadUpstreamBodyLimited(upstreamResp.Body)
+	if err != nil {
+		return nil, failure.Wrap(
+			failure.CodeAdapterReadStreamFailed,
+			err,
+			failure.WithMessage("openai adapter read chat completion response body"),
+		)
+	}
+	if exceeded {
+		return nil, failure.New(
+			failure.CodeAdapterResponseTooLarge,
+			failure.WithMessage("openai adapter chat completion response body exceeds limit"),
+			failure.WithField("limit_bytes", adapter.MaxUpstreamResponseBytes()),
+		)
+	}
+
 	var upstreamRespBody chatCompletionResponse
-	if err := json.NewDecoder(upstreamResp.Body).Decode(&upstreamRespBody); err != nil {
+	if err := json.Unmarshal(body, &upstreamRespBody); err != nil {
 		return nil, failure.Wrap(
 			failure.CodeAdapterDecodeResponseFailed,
 			err,
@@ -171,7 +187,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 
 	// 渠道 timeout 只约束「上游开始响应(拿到响应头)」,不约束流本体:长补全会合法地流式数分钟,
 	// 绝不能被渠道 timeout 当绝对截止时间罩住整段读流而掐断。流总时长由客户端断开(父 ctx)兜底。
-	streamCtx, headersReceived, cancel := adapter.HeaderTimeoutContext(ctx, ch.Timeout)
+	streamCtx, headersReceived, resetIdle, cancel := adapter.StreamTimeoutContext(ctx, ch.Timeout, adapter.StreamIdleTimeout())
 	defer cancel()
 
 	url := strings.TrimRight(ch.BaseURL, "/") + "/chat/completions"
@@ -198,9 +214,10 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", ch.APIKey))
 
 	upstreamResp, err := a.client.Do(request)
+	ctxCause := context.Cause(streamCtx)
 	headersReceived()
 	if err != nil {
-		return adapter.StreamOutcome{}, newUpstreamSendError(err, "send stream chat completion request")
+		return adapter.StreamOutcome{}, newUpstreamSendErrorWithContextCause(err, ctxCause, "send stream chat completion request")
 	}
 	defer upstreamResp.Body.Close()
 
@@ -221,6 +238,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	streamReader := adaptersse.NewReader(upstreamResp.Body, adaptersse.Config{
 		MaxLineBytes:  maxOpenAIStreamEventBytes,
 		MaxEventBytes: maxOpenAIStreamEventBytes,
+		OnActivity:    resetIdle,
 	})
 
 	for streamReader.Next() {
@@ -270,19 +288,13 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	}
 
 	if err := streamReader.Err(); err != nil {
-		return streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta), failure.Wrap(
-			failure.CodeAdapterReadStreamFailed,
-			err,
-			failure.WithMessage("openai adapter read stream event"),
-		)
+		return streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta),
+			newUpstreamStreamReadError(err, context.Cause(streamCtx), "openai adapter read stream event")
 	}
 
 	outcome := streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta)
 	if !terminalReceived {
-		return outcome, failure.New(
-			failure.CodeAdapterReadStreamFailed,
-			failure.WithMessage("openai adapter stream ended before [DONE]"),
-		)
+		return outcome, newUpstreamStreamIncompleteError("openai adapter stream ended before [DONE]")
 	}
 
 	return outcome, nil

@@ -66,12 +66,15 @@ func (s *ChatCompletionService) chatInputTokenEstimator(req gatewayapi.ChatCompl
 	}
 }
 
+// estimateMaxCompletionTokens 返回客户显式给出的输出 token 上限；客户未给出时返回 0。
+// 客户缺失时的兜底（候选模型 max_output_tokens → 进程级 fallback）由 authorization 统一决定，
+// 不在协议层用全局默认替代，避免按偏小的全局值预冻结导致超额进平台核销。
 func estimateMaxCompletionTokens(req gatewayapi.ChatCompletionRequest) int64 {
 	if req.MaxCompletionTokens != nil && *req.MaxCompletionTokens > 0 {
 		return int64(*req.MaxCompletionTokens)
 	}
-	if req.MaxTokens != nil {
+	if req.MaxTokens != nil && *req.MaxTokens > 0 {
 		return int64(*req.MaxTokens)
 	}
-	return lifecycle.DefaultAuthorizationMaxCompletionTokens
+	return 0
 }

@@ -544,8 +544,7 @@ func blackboxConfig() config.Config {
 			KeyNamespace: defaultRedisNamespace,
 		},
 		RateLimit: config.RateLimitConfig{
-			DefaultLimit:  10000,
-			DefaultWindow: time.Minute,
+			DefaultRPM:    10000,
 			FailurePolicy: "fail_open",
 		},
 		Worker: config.WorkerConfig{

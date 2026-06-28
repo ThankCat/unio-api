@@ -87,11 +87,12 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 	}
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
-		RequestRecord:       requestRecord,
-		Principal:           principal,
-		CandidatePrices:     candidatePlan.CandidateSalePrices(),
-		InputTokens:         candidatePlan.ConservativeInputTokens,
-		MaxCompletionTokens: estimateMaxCompletionTokens(req),
+		RequestRecord:            requestRecord,
+		Principal:                principal,
+		CandidatePrices:          candidatePlan.CandidateSalePrices(),
+		InputTokens:              candidatePlan.ConservativeInputTokens,
+		MaxCompletionTokens:      estimateMaxCompletionTokens(req),
+		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),
 	})
 	if err != nil {
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, "chat_authorization_failed", err)

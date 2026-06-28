@@ -51,6 +51,13 @@ type nonStreamStrategy struct {
 	allowDirect bool
 	resolve     lifecycle.ResolveAdapter
 	invoke      lifecycle.NonStreamInvoke
+
+	// upstreamCostWithoutUsage 可选：命中时 runner 释放冻结并记 risk_exposure（不重试/不普通释放），
+	// 用于「上游可能已计费但无可靠 usage」（compact 2xx 缺 usage，P0-3）。nil 表示沿用普通失败语义。
+	upstreamCostWithoutUsage func(err error) bool
+
+	// codes 可选：覆盖 runner 审计 code/reason（如 compact 专用 risk_exposure 文案）。零值用通用默认。
+	codes lifecycle.RunNonStreamCodes
 }
 
 // executeResponse 执行非流式 Responses 候选 fallback 计费循环，按候选能力分流直传/桥接。
@@ -169,11 +176,12 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	}
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
-		RequestRecord:       requestRecord,
-		Principal:           principal,
-		CandidatePrices:     candidatePlan.CandidateSalePrices(),
-		InputTokens:         candidatePlan.ConservativeInputTokens,
-		MaxCompletionTokens: estimateMaxCompletionTokens(req),
+		RequestRecord:            requestRecord,
+		Principal:                principal,
+		CandidatePrices:          candidatePlan.CandidateSalePrices(),
+		InputTokens:              candidatePlan.ConservativeInputTokens,
+		MaxCompletionTokens:      estimateMaxCompletionTokens(req),
+		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),
 	})
 	if err != nil {
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, "chat_authorization_failed", err)
@@ -181,14 +189,17 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	}
 
 	runResult, err := s.attemptRunner.RunNonStream(ctx, lifecycle.RunNonStreamParams{
-		RequestRecord:        requestRecord,
-		Principal:            principal,
-		Authorization:        authorization,
-		Candidates:           candidatePlan.Candidates,
-		RequestedModelID: req.Model,
-		ResponseProtocol: requestlog.ProtocolOpenAI,
-		ResolveAdapter:   strat.resolve,
-		Invoke:           strat.invoke,
+		RequestRecord:            requestRecord,
+		Principal:                principal,
+		Authorization:            authorization,
+		Candidates:               candidatePlan.Candidates,
+		RequestedModelID:         req.Model,
+		ResponseProtocol:         requestlog.ProtocolOpenAI,
+		EstimatedTokens:          candidatePlan.ConservativeInputTokens,
+		ResolveAdapter:           strat.resolve,
+		Invoke:                   strat.invoke,
+		Codes:                    strat.codes,
+		UpstreamCostWithoutUsage: strat.upstreamCostWithoutUsage,
 	})
 	outcome = runResult.Outcome
 	return err

@@ -74,11 +74,12 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 	}
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
-		RequestRecord:       requestRecord,
-		Principal:           principal,
-		CandidatePrices:     candidatePlan.CandidateSalePrices(),
-		InputTokens:         candidatePlan.ConservativeInputTokens,
-		MaxCompletionTokens: estimateMaxCompletionTokens(req),
+		RequestRecord:            requestRecord,
+		Principal:                principal,
+		CandidatePrices:          candidatePlan.CandidateSalePrices(),
+		InputTokens:              candidatePlan.ConservativeInputTokens,
+		MaxCompletionTokens:      estimateMaxCompletionTokens(req),
+		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),
 	})
 	if err != nil {
 		s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_failed", err)

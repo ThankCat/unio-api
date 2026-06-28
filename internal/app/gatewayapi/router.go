@@ -3,7 +3,6 @@ package gatewayapi
 import (
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -20,14 +19,11 @@ import (
 type RouterDeps struct {
 	Logger                 *slog.Logger
 	APIKeyAuthenticator    middleware.APIKeyAuthenticator
-	ChatCompletionService  gatewaychat.ChatCompletionService
-	ResponsesService       gatewayresponses.ResponsesService
-	MessagesService        gatewayanthropic.MessagesService
-	RateLimiter            middleware.RateLimiter
-	RateLimitLimit         int64
-	RateLimitWindow        time.Duration
-	ModelCatalogService    gatewaymodels.ModelCatalogService
-	RateLimitFailurePolicy string
+	ChatCompletionService gatewaychat.ChatCompletionService
+	ResponsesService      gatewayresponses.ResponsesService
+	MessagesService       gatewayanthropic.MessagesService
+	RateLimiter           middleware.KeyRateLimiter
+	ModelCatalogService   gatewaymodels.ModelCatalogService
 
 	// HTTPMetrics 记录 HTTP 层请求指标；nil 表示不采集。
 	HTTPMetrics httpmw.MetricsRecorder
@@ -79,11 +75,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(deps.APIKeyAuthenticator))
 		r.Use(middleware.RateLimit(deps.RateLimiter, middleware.RateLimitOptions{
-			Limit:         deps.RateLimitLimit,
-			Window:        deps.RateLimitWindow,
-			FailurePolicy: middleware.RateLimitFailurePolicy(deps.RateLimitFailurePolicy),
-			Logger:        deps.Logger,
-			Metrics:       deps.RateLimitMetrics,
+			Logger:  deps.Logger,
+			Metrics: deps.RateLimitMetrics,
 		}))
 
 		r.Get("/models", gatewaymodels.NewModelsHandler(deps.ModelCatalogService))

@@ -24,6 +24,8 @@ type fakeSettlementRecoveryJobStore struct {
 	deadRunningFound bool
 	deadRunningErr   error
 
+	claimQueue       []sqlc.SettlementRecoveryJob
+	claimCount       int
 	claimArgs        []sqlc.ClaimNextSettlementRecoveryJobParams
 	succeededArgs    []sqlc.MarkSettlementRecoveryJobSucceededParams
 	retryArgs        []sqlc.MarkSettlementRecoveryJobRetryParams
@@ -50,9 +52,21 @@ func (s *fakeSettlementRecoveryJobStore) ClaimNextSettlementRecoveryJob(ctx cont
 	if s.claimErr != nil {
 		return sqlc.SettlementRecoveryJob{}, s.claimErr
 	}
+	// 队列模式：依次返回多条到期 job，耗尽后 ErrNoRows，用于验证批量排空。
+	if len(s.claimQueue) > 0 {
+		job := s.claimQueue[0]
+		s.claimQueue = s.claimQueue[1:]
+		return job, nil
+	}
 	if s.claimJob.ID == 0 {
 		return sqlc.SettlementRecoveryJob{}, pgx.ErrNoRows
 	}
+	// 批量排空（P2-5）：已 claim 的 job 在同批次不会被再次 claim（真实库由 next_run_at/锁状态排除），
+	// 因此首条返回配置 job，其后返回 ErrNoRows 让批量循环收尾。
+	if s.claimCount > 0 {
+		return sqlc.SettlementRecoveryJob{}, pgx.ErrNoRows
+	}
+	s.claimCount++
 	return s.claimJob, nil
 }
 
@@ -107,7 +121,7 @@ func (r *fakeSettlementRecoveryRecoverer) FinalizeDeadChatSettlement(ctx context
 
 func TestSettlementRecoveryWorkerRunOnceReturnsIdleWhenNoJob(t *testing.T) {
 	store := &fakeSettlementRecoveryJobStore{}
-	worker := NewSettlementRecoveryWorker(store, &fakeSettlementRecoveryRecoverer{}, "worker-a", time.Second)
+	worker := NewSettlementRecoveryWorker(store, &fakeSettlementRecoveryRecoverer{}, "worker-a", time.Second, time.Minute)
 
 	worked, err := worker.RunOnce(context.Background())
 	if err != nil {
@@ -127,7 +141,7 @@ func TestSettlementRecoveryWorkerRunOnceReturnsIdleWhenNoJob(t *testing.T) {
 func TestSettlementRecoveryWorkerMarksSucceededAfterRecovery(t *testing.T) {
 	store := &fakeSettlementRecoveryJobStore{claimJob: recoveryJob(10, 1, 3)}
 	recoverer := &fakeSettlementRecoveryRecoverer{}
-	worker := NewSettlementRecoveryWorker(store, recoverer, "worker-a", time.Second)
+	worker := NewSettlementRecoveryWorker(store, recoverer, "worker-a", time.Second, time.Minute)
 
 	worked, err := worker.RunOnce(context.Background())
 	if err != nil {
@@ -150,7 +164,7 @@ func TestSettlementRecoveryWorkerMarksSucceededAfterRecovery(t *testing.T) {
 func TestSettlementRecoveryWorkerRetriesRecoverableFailure(t *testing.T) {
 	recoverErr := failure.New(failure.CodeGatewayChatSettlementFailed, failure.WithMessage("temporary settlement failure"))
 	store := &fakeSettlementRecoveryJobStore{claimJob: recoveryJob(20, 2, 4)}
-	worker := NewSettlementRecoveryWorker(store, &fakeSettlementRecoveryRecoverer{err: recoverErr}, "worker-a", time.Second)
+	worker := NewSettlementRecoveryWorker(store, &fakeSettlementRecoveryRecoverer{err: recoverErr}, "worker-a", time.Second, time.Minute)
 
 	worked, err := worker.RunOnce(context.Background())
 	if err != nil {
@@ -181,7 +195,7 @@ func TestSettlementRecoveryWorkerRetriesRecoverableFailure(t *testing.T) {
 
 func TestSettlementRecoveryWorkerMarksDeadOnFinalFailure(t *testing.T) {
 	store := &fakeSettlementRecoveryJobStore{claimJob: recoveryJob(30, 3, 3)}
-	worker := NewSettlementRecoveryWorker(store, &fakeSettlementRecoveryRecoverer{err: errors.New("permanent settlement failure")}, "worker-a", time.Second)
+	worker := NewSettlementRecoveryWorker(store, &fakeSettlementRecoveryRecoverer{err: errors.New("permanent settlement failure")}, "worker-a", time.Second, time.Minute)
 
 	worked, err := worker.RunOnce(context.Background())
 	if err != nil {
@@ -214,7 +228,7 @@ func TestSettlementRecoveryWorkerMarksExhaustedJobDeadBeforeClaim(t *testing.T) 
 		claimJob:       recoveryJob(50, 1, 3),
 	}
 	recoverer := &fakeSettlementRecoveryRecoverer{}
-	worker := NewSettlementRecoveryWorker(store, recoverer, "worker-a", time.Second)
+	worker := NewSettlementRecoveryWorker(store, recoverer, "worker-a", time.Second, time.Minute)
 
 	worked, err := worker.RunOnce(context.Background())
 	if err != nil {
@@ -247,7 +261,7 @@ func TestSettlementRecoveryWorkerFinalizesDeadJobWithRunningRequestBeforeOtherWo
 		claimJob:       recoveryJob(82, 1, 3),
 	}
 	recoverer := &fakeSettlementRecoveryRecoverer{}
-	worker := NewSettlementRecoveryWorker(store, recoverer, "worker-a", time.Second)
+	worker := NewSettlementRecoveryWorker(store, recoverer, "worker-a", time.Second, time.Minute)
 
 	worked, err := worker.RunOnce(context.Background())
 	if err != nil {
@@ -276,7 +290,7 @@ func TestSettlementRecoveryWorkerFinalizeErrorPropagates(t *testing.T) {
 		deadRunningJob:   recoveryJob(90, 3, 3),
 	}
 	recoverer := &fakeSettlementRecoveryRecoverer{finalizeErr: errors.New("finalize boom")}
-	worker := NewSettlementRecoveryWorker(store, recoverer, "worker-a", time.Second)
+	worker := NewSettlementRecoveryWorker(store, recoverer, "worker-a", time.Second, time.Minute)
 
 	worked, err := worker.RunOnce(context.Background())
 	if err == nil {
@@ -295,7 +309,7 @@ func TestSettlementRecoveryWorkerIgnoresRetryWhenLockOwnershipWasLost(t *testing
 		claimJob: recoveryJob(60, 2, 4),
 		retryErr: pgx.ErrNoRows,
 	}
-	worker := NewSettlementRecoveryWorker(store, &fakeSettlementRecoveryRecoverer{err: errors.New("stale worker failure")}, "worker-a", time.Second)
+	worker := NewSettlementRecoveryWorker(store, &fakeSettlementRecoveryRecoverer{err: errors.New("stale worker failure")}, "worker-a", time.Second, time.Minute)
 
 	worked, err := worker.RunOnce(context.Background())
 	if err != nil {
@@ -314,7 +328,7 @@ func TestSettlementRecoveryWorkerIgnoresDeadMarkWhenLockOwnershipWasLost(t *test
 		claimJob: recoveryJob(70, 3, 3),
 		deadErr:  pgx.ErrNoRows,
 	}
-	worker := NewSettlementRecoveryWorker(store, &fakeSettlementRecoveryRecoverer{err: errors.New("stale final failure")}, "worker-a", time.Second)
+	worker := NewSettlementRecoveryWorker(store, &fakeSettlementRecoveryRecoverer{err: errors.New("stale final failure")}, "worker-a", time.Second, time.Minute)
 
 	worked, err := worker.RunOnce(context.Background())
 	if err != nil {
@@ -328,11 +342,101 @@ func TestSettlementRecoveryWorkerIgnoresDeadMarkWhenLockOwnershipWasLost(t *test
 	}
 }
 
+func TestSettlementRecoveryWorkerDrainsBatchPerTick(t *testing.T) {
+	store := &fakeSettlementRecoveryJobStore{
+		claimQueue: []sqlc.SettlementRecoveryJob{
+			recoveryJob(101, 1, 3),
+			recoveryJob(102, 1, 3),
+			recoveryJob(103, 1, 3),
+		},
+	}
+	recoverer := &fakeSettlementRecoveryRecoverer{}
+	worker := NewSettlementRecoveryWorker(store, recoverer, "worker-a", time.Second, time.Minute)
+
+	worked, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce returned err: %v", err)
+	}
+	if !worked {
+		t.Fatal("expected worker to process queued jobs")
+	}
+	// 单 tick 内批量排空全部三条 job（每条独立 claim + 重放 + 标记成功）。
+	if len(recoverer.jobs) != 3 {
+		t.Fatalf("expected 3 jobs recovered in one tick, got %d", len(recoverer.jobs))
+	}
+	if len(store.succeededArgs) != 3 {
+		t.Fatalf("expected 3 jobs marked succeeded in one tick, got %d", len(store.succeededArgs))
+	}
+}
+
+func TestSettlementRecoveryWorkerBatchSizeBoundsDrain(t *testing.T) {
+	store := &fakeSettlementRecoveryJobStore{
+		claimQueue: []sqlc.SettlementRecoveryJob{
+			recoveryJob(201, 1, 3),
+			recoveryJob(202, 1, 3),
+			recoveryJob(203, 1, 3),
+		},
+	}
+	recoverer := &fakeSettlementRecoveryRecoverer{}
+	worker := NewSettlementRecoveryWorker(store, recoverer, "worker-a", time.Second, time.Minute)
+	worker.SetBatchSize(2)
+
+	worked, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce returned err: %v", err)
+	}
+	if !worked {
+		t.Fatal("expected worker to process queued jobs")
+	}
+	// batchSize=2 限制单 tick 只处理两条，剩余留待下个 tick。
+	if len(recoverer.jobs) != 2 {
+		t.Fatalf("expected 2 jobs recovered when batch size is 2, got %d", len(recoverer.jobs))
+	}
+}
+
 func TestSettlementRecoveryWorkerRecoveryTimeoutKeepsLockMargin(t *testing.T) {
-	worker := NewSettlementRecoveryWorker(&fakeSettlementRecoveryJobStore{}, &fakeSettlementRecoveryRecoverer{}, "worker-a", 30*time.Second)
+	worker := NewSettlementRecoveryWorker(&fakeSettlementRecoveryJobStore{}, &fakeSettlementRecoveryRecoverer{}, "worker-a", 30*time.Second, time.Minute)
 
 	if got := worker.recoveryTimeout(); got != 25*time.Second {
 		t.Fatalf("expected recovery timeout %v, got %v", 25*time.Second, got)
+	}
+}
+
+func TestSettlementRecoveryBackoffCapsAndCoversWindow(t *testing.T) {
+	cap := 5 * time.Minute
+
+	cases := []struct {
+		attemptCount int32
+		want         time.Duration
+	}{
+		{attemptCount: 0, want: time.Second},
+		{attemptCount: 1, want: time.Second},
+		{attemptCount: 2, want: 2 * time.Second},
+		{attemptCount: 3, want: 4 * time.Second},
+		{attemptCount: 9, want: 256 * time.Second},
+		{attemptCount: 10, want: cap},  // 512s 截断到 cap
+		{attemptCount: 20, want: cap},  // 远超 cap 仍稳定在 cap
+		{attemptCount: 100, want: cap}, // 大尝试次数不溢出
+	}
+	for _, tc := range cases {
+		if got := settlementRecoveryBackoff(tc.attemptCount, cap); got != tc.want {
+			t.Fatalf("backoff(%d) = %v, want %v", tc.attemptCount, got, tc.want)
+		}
+	}
+
+	// 覆盖窗口：max_attempts=20 时，第 1..19 次失败后各排一次退避，总窗口应达分钟~小时级（远大于旧的 ~4 分钟）。
+	var total time.Duration
+	for attempt := int32(1); attempt <= 19; attempt++ {
+		total += settlementRecoveryBackoff(attempt, cap)
+	}
+	if total < 45*time.Minute {
+		t.Fatalf("expected total recovery window >= 45m, got %v", total)
+	}
+}
+
+func TestSettlementRecoveryBackoffFallsBackToDefaultCap(t *testing.T) {
+	if got := settlementRecoveryBackoff(100, 0); got != defaultSettlementRecoveryBackoffCap {
+		t.Fatalf("backoff with non-positive cap = %v, want default %v", got, defaultSettlementRecoveryBackoffCap)
 	}
 }
 

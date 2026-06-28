@@ -15,6 +15,7 @@ type ChannelOpsService interface {
 	Table(ctx context.Context, p channelops.TableParams) ([]channelops.Row, int64, error)
 	Detail(ctx context.Context, channelID int64, from, to time.Time) (channelops.Detail, error)
 	PerformanceTimeseries(ctx context.Context, channelID int64, interval string, from, to time.Time) ([]channelops.PerfPoint, error)
+	SuccessBuckets(ctx context.Context, channelID int64, from, to time.Time) ([]channelops.SuccessBucket, error)
 	Errors(ctx context.Context, channelID int64, from, to time.Time, limit, offset int32) ([]channelops.ErrorRow, int64, error)
 	Models(ctx context.Context, channelID int64, from, to time.Time) ([]channelops.ModelRow, error)
 	Routes(ctx context.Context, channelID int64) ([]channelops.RouteRow, error)
@@ -54,6 +55,7 @@ type channelOpsRowDTO struct {
 	ID               int64   `json:"id"`
 	Name             string  `json:"name"`
 	Status           string  `json:"status"`
+	CreatedAt        string  `json:"created_at"`
 	Protocol         string  `json:"protocol"`
 	AdapterKey       string  `json:"adapter_key"`
 	BaseURL          string  `json:"base_url"`
@@ -85,6 +87,13 @@ type channelOpsPerfPointDTO struct {
 	AttemptTotal     int64   `json:"attempt_total"`
 	AttemptSucceeded int64   `json:"attempt_succeeded"`
 	LatencyAvg       float64 `json:"latency_avg"`
+}
+
+type channelOpsSuccessBucketDTO struct {
+	Bucket      string  `json:"bucket"`
+	Terminal    int64   `json:"terminal"`
+	Succeeded   int64   `json:"succeeded"`
+	SuccessRate float64 `json:"success_rate"`
 }
 
 type channelOpsErrorDTO struct {
@@ -161,12 +170,26 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
+	sort, err := parseListSort(r, map[string]struct{}{
+		"name":         {},
+		"requests":     {},
+		"success_rate": {},
+		"status":       {},
+		"created_at":   {},
+	}, "success_rate", false)
+	if err != nil {
+		writeSortError(w, err)
+		return
+	}
+	field, desc := sort.SQLParams()
 	rows, total, err := h.service.Table(r.Context(), channelops.TableParams{
 		From:       from,
 		To:         to,
 		Status:     listStatus(r),
 		ProviderID: providerID,
 		Search:     queryString(r, "search"),
+		SortField:  field,
+		SortDesc:   desc,
 		Limit:      page.Limit(),
 		Offset:     page.Offset(),
 	})
@@ -180,6 +203,7 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			ID:               row.ID,
 			Name:             row.Name,
 			Status:           row.Status,
+			CreatedAt:        rfc3339(row.CreatedAt),
 			Protocol:         row.Protocol,
 			AdapterKey:       row.AdapterKey,
 			BaseURL:          row.BaseURL,
@@ -224,6 +248,34 @@ func (h *channelOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		LastSuccessAt:    rfc3339Ptr(d.LastSuccessAt),
 		LastFailureAt:    rfc3339Ptr(d.LastFailureAt),
 	})
+}
+
+func (h *channelOpsHandler) successBuckets(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	from, to, _, err := rangeWindow(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	buckets, err := h.service.SuccessBuckets(r.Context(), id, from, to)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	out := make([]channelOpsSuccessBucketDTO, 0, len(buckets))
+	for _, b := range buckets {
+		out = append(out, channelOpsSuccessBucketDTO{
+			Bucket:      rfc3339(b.Bucket),
+			Terminal:    b.Terminal,
+			Succeeded:   b.Succeeded,
+			SuccessRate: b.SuccessRate,
+		})
+	}
+	writeData(w, http.StatusOK, out)
 }
 
 func (h *channelOpsHandler) performance(w http.ResponseWriter, r *http.Request) {

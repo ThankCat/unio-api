@@ -91,6 +91,19 @@ func (p CandidatePlan) CandidateSalePrices() []billing.CustomerPriceSnapshot {
 	return prices
 }
 
+// CandidateMaxOutputTokens 取候选池中各模型 models.max_output_tokens 的最大值（0 表示候选均未配置）。
+// 客户未显式给出输出上限时，authorization 用它做保守冻结上界；取最大值保证 fallback 命中
+// 任一候选时预冻结额度都足够（更大的输出上限只会冻结更多，不会少冻结）。
+func (p CandidatePlan) CandidateMaxOutputTokens() int64 {
+	maxOut := int64(0)
+	for _, c := range p.Candidates {
+		if c.Route.MaxOutputTokens > maxOut {
+			maxOut = c.Route.MaxOutputTokens
+		}
+	}
+	return maxOut
+}
+
 // Executor 放置 OpenAI 与 Anthropic 共享的 gateway 生命周期执行能力。
 //
 // 当前先收口 authorization 前的候选准备段；后续 attempt、settlement 与 delivery 迁移继续

@@ -116,6 +116,7 @@ SELECT
     c.adapter_key,
     c.base_url,
     c.priority,
+    c.created_at,
     pr.name AS provider_name,
     COUNT(a.id) AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
@@ -153,12 +154,19 @@ LEFT JOIN request_attempts a
 WHERE (sqlc.narg('status')::text IS NULL OR c.status = sqlc.narg('status')::text)
   AND (sqlc.narg('provider_id')::bigint IS NULL OR c.provider_id = sqlc.narg('provider_id')::bigint)
   AND (sqlc.narg('search')::text IS NULL OR c.name ILIKE '%' || sqlc.narg('search')::text || '%')
-GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, c.base_url, c.priority, pr.name
+GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, c.base_url, c.priority, c.created_at, pr.name
 ORDER BY
-    (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0)) ASC NULLS LAST,
-    COUNT(a.id) DESC,
-    c.priority,
-    c.id
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0)) END DESC NULLS LAST,
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0)) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'name' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.name END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'name' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.name END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(a.id) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(a.id) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.status END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.status END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.created_at END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.created_at END ASC NULLS LAST,
+  c.id
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 
 -- name: ChannelsOpsTableCount :one
@@ -286,3 +294,18 @@ FROM route_channels rc
 JOIN routes rt ON rt.id = rc.route_id
 WHERE rc.channel_id = sqlc.arg('channel_id')
 ORDER BY rt.id;
+
+-- name: ChannelOpsSuccessBuckets :many
+-- ChannelOpsSuccessBuckets 单渠道最近 10 分钟 attempt 成功率桶（与概览渠道表现一致）。
+SELECT
+    date_bin('10 minutes'::interval, a.created_at, '1970-01-01 00:00:00+00'::timestamptz)::timestamptz AS bucket,
+    COUNT(a.id)::bigint AS terminal_total,
+    COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::bigint AS succeeded_total,
+    COALESCE(COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0), 0)::float8 AS success_rate
+FROM request_attempts a
+WHERE a.channel_id = sqlc.arg('channel_id')
+  AND (sqlc.narg('from_time')::timestamptz IS NULL OR a.created_at >= sqlc.narg('from_time')::timestamptz)
+  AND (sqlc.narg('to_time')::timestamptz IS NULL OR a.created_at < sqlc.narg('to_time')::timestamptz)
+GROUP BY bucket
+ORDER BY bucket DESC
+LIMIT 144;

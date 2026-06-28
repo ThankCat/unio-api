@@ -26,24 +26,24 @@ SELECT
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
     EXISTS (
         SELECT 1 FROM channel_prices p
-        WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
+        WHERE p.channel_id = c.id AND p.model_id = $1 AND p.status = 'enabled'
     ) AS has_price
 FROM channel_models cm
 JOIN channels c ON c.id = cm.channel_id
 LEFT JOIN request_attempts a
     ON a.channel_id = cm.channel_id
     AND a.upstream_model = cm.upstream_model
-    AND ($1::timestamptz IS NULL OR a.created_at >= $1::timestamptz)
-    AND ($2::timestamptz IS NULL OR a.created_at < $2::timestamptz)
-WHERE cm.model_id = $3
+    AND ($2::timestamptz IS NULL OR a.created_at >= $2::timestamptz)
+    AND ($3::timestamptz IS NULL OR a.created_at < $3::timestamptz)
+WHERE cm.model_id = $1
 GROUP BY c.id, c.name, c.status, cm.status, cm.upstream_model, c.priority
 ORDER BY attempt_total DESC, c.priority, c.id
 `
 
 type ModelOpsChannelsParams struct {
+	ModelID  int64
 	FromTime pgtype.Timestamptz
 	ToTime   pgtype.Timestamptz
-	ModelID  int64
 }
 
 type ModelOpsChannelsRow struct {
@@ -61,7 +61,7 @@ type ModelOpsChannelsRow struct {
 
 // ModelOpsChannels 单模型的承载渠道（绑定）+ attempt 指标（抽屉渠道 Tab，§3.4 最关键）。
 func (q *Queries) ModelOpsChannels(ctx context.Context, arg ModelOpsChannelsParams) ([]ModelOpsChannelsRow, error) {
-	rows, err := q.db.Query(ctx, modelOpsChannels, arg.FromTime, arg.ToTime, arg.ModelID)
+	rows, err := q.db.Query(ctx, modelOpsChannels, arg.ModelID, arg.FromTime, arg.ToTime)
 	if err != nil {
 		return nil, err
 	}
@@ -464,6 +464,7 @@ SELECT
     m.display_name,
     m.owned_by,
     m.status,
+    m.created_at,
     (SELECT COUNT(*) FROM channel_models cm WHERE cm.model_id = m.id AND cm.status = 'enabled') AS bindings_total,
     (
         SELECT COUNT(*)
@@ -478,9 +479,21 @@ SELECT
     EXISTS (SELECT 1 FROM channel_prices p WHERE p.model_id = m.id AND p.status = 'enabled') AS has_price,
     COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
     COUNT(r.id) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
+    COUNT(r.id) FILTER (WHERE r.status = 'succeeded' AND r.completed_at IS NOT NULL) AS latency_sample,
+    COALESCE(AVG(CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
     COALESCE((
         SELECT SUM(le.amount)
         FROM ledger_entries le
@@ -503,12 +516,20 @@ LEFT JOIN request_records r
     AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
 WHERE ($3::text IS NULL OR m.status = $3::text)
   AND ($4::text IS NULL OR m.model_id ILIKE '%' || $4::text || '%' OR m.display_name ILIKE '%' || $4::text || '%')
-GROUP BY m.id, m.model_id, m.display_name, m.owned_by, m.status
+GROUP BY m.id, m.model_id, m.display_name, m.owned_by, m.status, m.created_at
 ORDER BY
-    (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) ASC NULLS LAST,
-    COUNT(r.id) DESC,
-    m.model_id
-LIMIT $6 OFFSET $5
+  CASE WHEN COALESCE($5::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($6::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END DESC NULLS LAST,
+  CASE WHEN COALESCE($5::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($6::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END ASC NULLS LAST,
+  CASE WHEN $5::text = 'name' AND COALESCE($6::bool, false) THEN m.model_id END DESC NULLS LAST,
+  CASE WHEN $5::text = 'name' AND NOT COALESCE($6::bool, false) THEN m.model_id END ASC NULLS LAST,
+  CASE WHEN $5::text = 'requests' AND COALESCE($6::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
+  CASE WHEN $5::text = 'requests' AND NOT COALESCE($6::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
+  CASE WHEN $5::text = 'margin' AND COALESCE($6::bool, false) THEN (COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE le.entry_type = 'debit' AND le.currency = 'USD' AND rr.requested_model_id = m.model_id AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) - COALESCE((SELECT SUM(cs.total_cost_amount) FROM cost_snapshots cs WHERE cs.model_id = m.id AND cs.currency = 'USD' AND ($1::timestamptz IS NULL OR cs.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR cs.created_at < $2::timestamptz)), 0)) END DESC NULLS LAST,
+  CASE WHEN $5::text = 'margin' AND NOT COALESCE($6::bool, false) THEN (COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE le.entry_type = 'debit' AND le.currency = 'USD' AND rr.requested_model_id = m.model_id AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) - COALESCE((SELECT SUM(cs.total_cost_amount) FROM cost_snapshots cs WHERE cs.model_id = m.id AND cs.currency = 'USD' AND ($1::timestamptz IS NULL OR cs.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR cs.created_at < $2::timestamptz)), 0)) END ASC NULLS LAST,
+  CASE WHEN $5::text = 'created_at' AND COALESCE($6::bool, false) THEN m.created_at END DESC NULLS LAST,
+  CASE WHEN $5::text = 'created_at' AND NOT COALESCE($6::bool, false) THEN m.created_at END ASC NULLS LAST,
+  m.model_id
+LIMIT $8 OFFSET $7
 `
 
 type ModelsOpsTableParams struct {
@@ -516,6 +537,8 @@ type ModelsOpsTableParams struct {
 	ToTime     pgtype.Timestamptz
 	Status     pgtype.Text
 	Search     pgtype.Text
+	SortField  pgtype.Text
+	SortDesc   pgtype.Bool
 	PageOffset int32
 	PageLimit  int32
 }
@@ -526,12 +549,18 @@ type ModelsOpsTableRow struct {
 	DisplayName       string
 	OwnedBy           string
 	Status            string
+	CreatedAt         pgtype.Timestamptz
 	BindingsTotal     int64
 	BindingsAvailable int64
 	HasPrice          bool
 	RequestTotal      int64
 	RequestSucceeded  int64
+	LatencySample     int64
+	LatencyAvg        float64
+	LatencyP50        float64
+	LatencyP90        float64
 	LatencyP95        float64
+	LatencyP99        float64
 	RevenueUsd        pgtype.Numeric
 	CostUsd           pgtype.Numeric
 }
@@ -543,6 +572,8 @@ func (q *Queries) ModelsOpsTable(ctx context.Context, arg ModelsOpsTableParams) 
 		arg.ToTime,
 		arg.Status,
 		arg.Search,
+		arg.SortField,
+		arg.SortDesc,
 		arg.PageOffset,
 		arg.PageLimit,
 	)
@@ -559,12 +590,18 @@ func (q *Queries) ModelsOpsTable(ctx context.Context, arg ModelsOpsTableParams) 
 			&i.DisplayName,
 			&i.OwnedBy,
 			&i.Status,
+			&i.CreatedAt,
 			&i.BindingsTotal,
 			&i.BindingsAvailable,
 			&i.HasPrice,
 			&i.RequestTotal,
 			&i.RequestSucceeded,
+			&i.LatencySample,
+			&i.LatencyAvg,
+			&i.LatencyP50,
+			&i.LatencyP90,
 			&i.LatencyP95,
+			&i.LatencyP99,
 			&i.RevenueUsd,
 			&i.CostUsd,
 		); err != nil {

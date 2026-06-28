@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -75,10 +76,21 @@ type ChatRouteCandidate struct {
 	Channel       channel.Runtime
 	UpstreamModel string
 
+	// MaxOutputTokens 是该候选逻辑模型 models.max_output_tokens（0 表示未配置）。
+	// 客户未显式给出输出上限时，authorization 用它（取候选最大值）做保守冻结上界，
+	// 避免按全局兜底偏小导致预冻结不足、超额进平台核销。
+	MaxOutputTokens int64
+
 	// ChannelPriceID 是该候选当前生效的 channel_prices 行 ID（阶段 15，供审计/快照参考）。
 	ChannelPriceID int64
 	// SalePrice 是该候选命中渠道的当前生效售价向量，供 cheapest 排序与保守预授权上界。
 	SalePrice billing.CustomerPriceSnapshot
+
+	// RPMLimit/TPMLimit/RPDLimit 是该候选命中渠道的渠道级限流上限（P2-8）：
+	// nil 表示「继承全局默认」，0 表示「显式不限」，>0 表示具体上限。调用上游前在 attempt runner 生效。
+	RPMLimit *int64
+	TPMLimit *int64
+	RPDLimit *int64
 }
 
 // ChatRoutePlan 表示一次 chat 请求的同模型候选计划。
@@ -116,19 +128,37 @@ type Router struct {
 	store               Store
 	credentialDecryptor CredentialDecryptor
 	defaultTimeout      time.Duration
+	logger              *slog.Logger
+}
+
+// Option 调整 Router 的可选依赖（如日志）。
+type Option func(*Router)
+
+// WithLogger 注入结构化日志器，用于记录被跳过的坏候选（P1-1）。
+func WithLogger(logger *slog.Logger) Option {
+	return func(r *Router) {
+		if logger != nil {
+			r.logger = logger
+		}
+	}
 }
 
 // NewRouter 创建 routing router。
-func NewRouter(store Store, credentialDecryptor CredentialDecryptor, defaultTimeout time.Duration) *Router {
+func NewRouter(store Store, credentialDecryptor CredentialDecryptor, defaultTimeout time.Duration, opts ...Option) *Router {
 	if defaultTimeout <= 0 {
 		defaultTimeout = defaultChannelTimeout
 	}
 
-	return &Router{
+	r := &Router{
 		store:               store,
 		credentialDecryptor: credentialDecryptor,
 		defaultTimeout:      defaultTimeout,
+		logger:              slog.Default(),
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // PlanChat 为 chat completion 请求生成有序候选计划。
@@ -156,9 +186,28 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 	for _, row := range rows {
 		candidate, err := r.buildChatRouteCandidate(ctx, row)
 		if err != nil {
-			return ChatRoutePlan{}, err
+			// P1-1：单个候选凭据缺失/解密失败时跳过该候选并记日志，不让整批 plan 失败；
+			// 只有当全部候选都不可用时才在循环后报 no_available_channel，最大化可用性。
+			r.logger.WarnContext(ctx, "routing: skip unusable candidate",
+				append([]any{
+					"channel_id", row.ChannelID,
+					"provider_slug", row.ProviderSlug,
+					"adapter_key", row.AdapterKey,
+					"upstream_model", row.UpstreamModel,
+				}, failure.LogArgs(err)...)...)
+			continue
 		}
 		candidates = append(candidates, candidate)
+	}
+
+	// rows 非空（findCandidateRows 已区分 model 不存在/不可用/无渠道），若到此处候选全被跳过，
+	// 说明命中渠道的凭据全部不可用：报 no_available_channel 而非泄露底层凭据错误。
+	if len(candidates) == 0 {
+		return ChatRoutePlan{}, failure.Wrap(
+			failure.CodeRoutingNoAvailableChannel,
+			ErrNoAvailableChannel,
+			failure.WithMessage("all matched channels are unusable (credential missing or decrypt failed)"),
+		)
 	}
 
 	plan := ChatRoutePlan{
@@ -290,6 +339,15 @@ func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest, ro
 	)
 }
 
+// int4LimitPtr 把可空 pgtype.Int4 限流上限转成 *int64（nil=继承全局默认，0=不限，>0=上限）。
+func int4LimitPtr(v pgtype.Int4) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	out := int64(v.Int32)
+	return &out
+}
+
 func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRouteCandidatesRow) (ChatRouteCandidate, error) {
 	if len(row.CredentialEncrypted) == 0 {
 		return ChatRouteCandidate{}, failure.Wrap(
@@ -313,11 +371,20 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		timeout = time.Duration(row.TimeoutMs.Int32) * time.Millisecond
 	}
 
+	maxOutputTokens := int64(0)
+	if row.ModelMaxOutputTokens.Valid {
+		maxOutputTokens = row.ModelMaxOutputTokens.Int64
+	}
+
 	return ChatRouteCandidate{
-		ModelDBID:  row.ModelDbID,
-		ProviderID: row.ProviderID,
-		AdapterKey: row.AdapterKey,
-		Protocol:   row.Protocol,
+		ModelDBID:       row.ModelDbID,
+		ProviderID:      row.ProviderID,
+		AdapterKey:      row.AdapterKey,
+		Protocol:        row.Protocol,
+		MaxOutputTokens: maxOutputTokens,
+		RPMLimit:        int4LimitPtr(row.ChannelRpmLimit),
+		TPMLimit:        int4LimitPtr(row.ChannelTpmLimit),
+		RPDLimit:        int4LimitPtr(row.ChannelRpdLimit),
 		Channel: channel.Runtime{
 			ID:           row.ChannelID,
 			BaseURL:      row.BaseUrl,

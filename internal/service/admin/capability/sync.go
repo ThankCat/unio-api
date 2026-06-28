@@ -3,13 +3,11 @@ package capability
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	core "github.com/ThankCat/unio-api/internal/core/capability"
 	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
-)
-
-const (
-	defaultSyncJobLimit = 20
-	maxSyncJobLimit     = 50
+	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 )
 
 // Syncer 是 models.dev 同步编排能力（由 modelcatalog.Syncer 满足）。
@@ -19,7 +17,16 @@ type Syncer interface {
 
 // SyncJobStore 是同步任务历史的只读能力（由 core/capability.Store 满足）。
 type SyncJobStore interface {
-	ListSyncJobs(ctx context.Context, limit int32) ([]core.SyncJob, error)
+	ListSyncJobs(ctx context.Context, arg sqlc.ListSyncJobsParams) ([]core.SyncJob, error)
+	CountSyncJobs(ctx context.Context) (int64, error)
+}
+
+// ListJobsParams 是分页/排序列出同步任务的入参。
+type ListJobsParams struct {
+	SortField string
+	SortDesc  bool
+	Limit     int32
+	Offset    int32
 }
 
 // SyncService 编排 models.dev 同步触发与任务历史展示。
@@ -37,22 +44,36 @@ func NewSyncService(syncer Syncer, store SyncJobStore) *SyncService {
 	return &SyncService{syncer: syncer, store: store}
 }
 
-// ListJobs 倒序返回最近的同步任务（limit 越界回退默认值并夹紧上限）。
-func (s *SyncService) ListJobs(ctx context.Context, limit int32) ([]core.SyncJob, error) {
-	if limit <= 0 {
-		limit = defaultSyncJobLimit
-	}
-	if limit > maxSyncJobLimit {
-		limit = maxSyncJobLimit
-	}
-	jobs, err := s.store.ListSyncJobs(ctx, limit)
+// ListJobs 倒序分页返回同步任务及总数。
+func (s *SyncService) ListJobs(ctx context.Context, params ListJobsParams) ([]core.SyncJob, int64, error) {
+	rows, err := s.store.ListSyncJobs(ctx, sqlc.ListSyncJobsParams{
+		SortField:  textNarg(params.SortField),
+		SortDesc:   boolNarg(params.SortDesc),
+		PageLimit:  params.Limit,
+		PageOffset: params.Offset,
+	})
 	if err != nil {
-		return nil, storeFailed(err, "list sync jobs")
+		return nil, 0, storeFailed(err, "list sync jobs")
 	}
-	return jobs, nil
+	total, err := s.store.CountSyncJobs(ctx)
+	if err != nil {
+		return nil, 0, storeFailed(err, "count sync jobs")
+	}
+	return rows, total, nil
 }
 
 // Trigger 触发一次 models.dev 同步；dryRun 只返回合并计划摘要，不写任何库。
 func (s *SyncService) Trigger(ctx context.Context, dryRun bool) (modelcatalog.Result, error) {
 	return s.syncer.Sync(ctx, modelcatalog.Options{DryRun: dryRun})
+}
+
+func textNarg(s string) pgtype.Text {
+	if s == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: s, Valid: true}
+}
+
+func boolNarg(v bool) pgtype.Bool {
+	return pgtype.Bool{Bool: v, Valid: true}
 }

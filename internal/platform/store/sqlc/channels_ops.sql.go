@@ -375,6 +375,60 @@ func (q *Queries) ChannelOpsRoutes(ctx context.Context, channelID int64) ([]Chan
 	return items, nil
 }
 
+const channelOpsSuccessBuckets = `-- name: ChannelOpsSuccessBuckets :many
+SELECT
+    date_bin('10 minutes'::interval, a.created_at, '1970-01-01 00:00:00+00'::timestamptz)::timestamptz AS bucket,
+    COUNT(a.id)::bigint AS terminal_total,
+    COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::bigint AS succeeded_total,
+    COALESCE(COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0), 0)::float8 AS success_rate
+FROM request_attempts a
+WHERE a.channel_id = $1
+  AND ($2::timestamptz IS NULL OR a.created_at >= $2::timestamptz)
+  AND ($3::timestamptz IS NULL OR a.created_at < $3::timestamptz)
+GROUP BY bucket
+ORDER BY bucket DESC
+LIMIT 144
+`
+
+type ChannelOpsSuccessBucketsParams struct {
+	ChannelID int64
+	FromTime  pgtype.Timestamptz
+	ToTime    pgtype.Timestamptz
+}
+
+type ChannelOpsSuccessBucketsRow struct {
+	Bucket         pgtype.Timestamptz
+	TerminalTotal  int64
+	SucceededTotal int64
+	SuccessRate    float64
+}
+
+// ChannelOpsSuccessBuckets 单渠道最近 10 分钟 attempt 成功率桶（与概览渠道表现一致）。
+func (q *Queries) ChannelOpsSuccessBuckets(ctx context.Context, arg ChannelOpsSuccessBucketsParams) ([]ChannelOpsSuccessBucketsRow, error) {
+	rows, err := q.db.Query(ctx, channelOpsSuccessBuckets, arg.ChannelID, arg.FromTime, arg.ToTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelOpsSuccessBucketsRow
+	for rows.Next() {
+		var i ChannelOpsSuccessBucketsRow
+		if err := rows.Scan(
+			&i.Bucket,
+			&i.TerminalTotal,
+			&i.SucceededTotal,
+			&i.SuccessRate,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const channelsOpsAttemptAggregate = `-- name: ChannelsOpsAttemptAggregate :one
 SELECT
     COUNT(*) AS attempt_total,
@@ -598,6 +652,7 @@ SELECT
     c.adapter_key,
     c.base_url,
     c.priority,
+    c.created_at,
     pr.name AS provider_name,
     COUNT(a.id) AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
@@ -635,13 +690,20 @@ LEFT JOIN request_attempts a
 WHERE ($3::text IS NULL OR c.status = $3::text)
   AND ($4::bigint IS NULL OR c.provider_id = $4::bigint)
   AND ($5::text IS NULL OR c.name ILIKE '%' || $5::text || '%')
-GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, c.base_url, c.priority, pr.name
+GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, c.base_url, c.priority, c.created_at, pr.name
 ORDER BY
-    (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0)) ASC NULLS LAST,
-    COUNT(a.id) DESC,
-    c.priority,
-    c.id
-LIMIT $7 OFFSET $6
+  CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0)) END DESC NULLS LAST,
+  CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0)) END ASC NULLS LAST,
+  CASE WHEN $6::text = 'name' AND COALESCE($7::bool, false) THEN c.name END DESC NULLS LAST,
+  CASE WHEN $6::text = 'name' AND NOT COALESCE($7::bool, false) THEN c.name END ASC NULLS LAST,
+  CASE WHEN $6::text = 'requests' AND COALESCE($7::bool, false) THEN COUNT(a.id) END DESC NULLS LAST,
+  CASE WHEN $6::text = 'requests' AND NOT COALESCE($7::bool, false) THEN COUNT(a.id) END ASC NULLS LAST,
+  CASE WHEN $6::text = 'status' AND COALESCE($7::bool, false) THEN c.status END DESC NULLS LAST,
+  CASE WHEN $6::text = 'status' AND NOT COALESCE($7::bool, false) THEN c.status END ASC NULLS LAST,
+  CASE WHEN $6::text = 'created_at' AND COALESCE($7::bool, false) THEN c.created_at END DESC NULLS LAST,
+  CASE WHEN $6::text = 'created_at' AND NOT COALESCE($7::bool, false) THEN c.created_at END ASC NULLS LAST,
+  c.id
+LIMIT $9 OFFSET $8
 `
 
 type ChannelsOpsTableParams struct {
@@ -650,6 +712,8 @@ type ChannelsOpsTableParams struct {
 	Status     pgtype.Text
 	ProviderID pgtype.Int8
 	Search     pgtype.Text
+	SortField  pgtype.Text
+	SortDesc   pgtype.Bool
 	PageOffset int32
 	PageLimit  int32
 }
@@ -662,6 +726,7 @@ type ChannelsOpsTableRow struct {
 	AdapterKey       string
 	BaseUrl          string
 	Priority         int32
+	CreatedAt        pgtype.Timestamptz
 	ProviderName     string
 	AttemptTotal     int64
 	AttemptSucceeded int64
@@ -685,6 +750,8 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 		arg.Status,
 		arg.ProviderID,
 		arg.Search,
+		arg.SortField,
+		arg.SortDesc,
 		arg.PageOffset,
 		arg.PageLimit,
 	)
@@ -703,6 +770,7 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 			&i.AdapterKey,
 			&i.BaseUrl,
 			&i.Priority,
+			&i.CreatedAt,
 			&i.ProviderName,
 			&i.AttemptTotal,
 			&i.AttemptSucceeded,

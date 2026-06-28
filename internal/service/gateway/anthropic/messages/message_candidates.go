@@ -65,9 +65,12 @@ func (s *MessagesService) messagesInputTokenEstimator(req gatewayapi.MessageRequ
 	}
 }
 
+// estimateMaxOutputTokens 返回客户显式给出的输出 token 上限；客户未给出时返回 0。
+// Anthropic Messages 协议要求客户必传 max_tokens，这里仍兜底为 0，
+// 客户缺失时的兜底（候选模型 max_output_tokens → 进程级 fallback）由 authorization 统一决定。
 func estimateMaxOutputTokens(req gatewayapi.MessageRequest) int64 {
 	if req.MaxTokens != nil && *req.MaxTokens > 0 {
 		return int64(*req.MaxTokens)
 	}
-	return lifecycle.DefaultAuthorizationMaxCompletionTokens
+	return 0
 }

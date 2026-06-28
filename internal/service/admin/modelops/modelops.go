@@ -61,6 +61,7 @@ type Row struct {
 	DisplayName       string
 	OwnedBy           string
 	Status            string
+	CreatedAt         time.Time
 	BindingsTotal     int64
 	BindingsAvailable int64
 	HasPrice          bool
@@ -68,7 +69,7 @@ type Row struct {
 	RequestTotal      int64
 	RequestSucceeded  int64
 	SuccessRate       float64
-	LatencyP95        float64
+	Latency           opsutil.LatencyStats
 	RevenueUSD        string
 	MarginUSD         string
 	MarginRate        float64
@@ -122,12 +123,14 @@ type RequestRow struct {
 
 // TableParams 主表入参。
 type TableParams struct {
-	From   time.Time
-	To     time.Time
-	Status string
-	Search string
-	Limit  int32
-	Offset int32
+	From      time.Time
+	To        time.Time
+	Status    string
+	Search    string
+	SortField string
+	SortDesc  bool
+	Limit     int32
+	Offset    int32
 }
 
 // Summary 聚合模型总览（8 卡）。
@@ -184,6 +187,8 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 		ToTime:     opsutil.TsNarg(p.To),
 		Status:     opsutil.TextNarg(p.Status),
 		Search:     opsutil.TextNarg(p.Search),
+		SortField:  opsutil.TextNarg(p.SortField),
+		SortDesc:   opsutil.BoolNarg(p.SortDesc),
 		PageLimit:  p.Limit,
 		PageOffset: p.Offset,
 	})
@@ -208,6 +213,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			DisplayName:       r.DisplayName,
 			OwnedBy:           r.OwnedBy,
 			Status:            r.Status,
+			CreatedAt:         r.CreatedAt.Time,
 			BindingsTotal:     r.BindingsTotal,
 			BindingsAvailable: r.BindingsAvailable,
 			HasPrice:          r.HasPrice,
@@ -215,10 +221,13 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			RequestTotal:      r.RequestTotal,
 			RequestSucceeded:  r.RequestSucceeded,
 			SuccessRate:       opsutil.SuccessRate(r.RequestSucceeded, r.RequestTotal),
-			LatencyP95:        r.LatencyP95,
-			RevenueUSD:        revenue,
-			MarginUSD:         marginAmt,
-			MarginRate:        opsutil.Ratio(marginAmt, revenue),
+			Latency: opsutil.AttemptLatency(
+				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
+				r.LatencySample, r.RequestSucceeded,
+			),
+			RevenueUSD: revenue,
+			MarginUSD:  marginAmt,
+			MarginRate: opsutil.Ratio(marginAmt, revenue),
 		})
 	}
 	return out, total, nil

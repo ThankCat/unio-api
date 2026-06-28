@@ -56,12 +56,18 @@ func TestStreamEncoder_ReasoningThenTextHappyPath(t *testing.T) {
 	want := []string{
 		gatewayapi.EventResponseCreated,
 		gatewayapi.EventOutputItemAdded,    // reasoning
+		gatewayapi.EventContentPartAdded,   // reasoning_text part
 		gatewayapi.EventReasoningTextDelta, // "think "
 		gatewayapi.EventReasoningTextDelta, // "more"
 		gatewayapi.EventOutputItemAdded,    // message
+		gatewayapi.EventContentPartAdded,   // output_text part
 		gatewayapi.EventOutputTextDelta,    // "hello "
 		gatewayapi.EventOutputTextDelta,    // "world"
+		gatewayapi.EventReasoningTextDone,  // reasoning收口
+		gatewayapi.EventContentPartDone,    // reasoning_text part收口
 		gatewayapi.EventOutputItemDone,     // reasoning (index 0)
+		gatewayapi.EventOutputTextDone,     // message收口
+		gatewayapi.EventContentPartDone,    // output_text part收口
 		gatewayapi.EventOutputItemDone,     // message (index 1)
 		gatewayapi.EventResponseCompleted,
 	}
@@ -88,12 +94,12 @@ func TestStreamEncoder_ReasoningThenTextHappyPath(t *testing.T) {
 	if got := derefInt(events[1].OutputIndex); got != 0 {
 		t.Fatalf("reasoning output_index=%d, want 0", got)
 	}
-	if got := derefInt(events[4].OutputIndex); got != 1 {
+	if got := derefInt(events[5].OutputIndex); got != 1 {
 		t.Fatalf("message output_index=%d, want 1", got)
 	}
 
 	// reasoning output_item.done 携带全量 reasoning_text。
-	reasoningDone := events[7]
+	reasoningDone := events[11]
 	if reasoningDone.Item == nil || reasoningDone.Item.Type != "reasoning" {
 		t.Fatalf("expected reasoning item.done, got %+v", reasoningDone.Item)
 	}
@@ -102,7 +108,7 @@ func TestStreamEncoder_ReasoningThenTextHappyPath(t *testing.T) {
 	}
 
 	// message output_item.done 携带全量 output_text 且 status=completed。
-	messageDone := events[8]
+	messageDone := events[14]
 	if messageDone.Item == nil || messageDone.Item.Type != "message" || messageDone.Item.Status != "completed" {
 		t.Fatalf("expected message item.done completed, got %+v", messageDone.Item)
 	}
@@ -111,7 +117,7 @@ func TestStreamEncoder_ReasoningThenTextHappyPath(t *testing.T) {
 	}
 
 	// response.completed 携带全量 output（顺序 reasoning→message）与 usage。
-	completed := events[9]
+	completed := events[15]
 	if completed.Response == nil || completed.Response.Status != "completed" {
 		t.Fatalf("expected response.completed, got %+v", completed.Response)
 	}

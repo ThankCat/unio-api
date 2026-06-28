@@ -386,7 +386,18 @@ WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::b
   AND (sqlc.narg('model')::text IS NULL OR requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
-ORDER BY created_at DESC, id DESC
+ORDER BY
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN created_at END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN status END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN status END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN user_id END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN user_id END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'model' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN requested_model_id END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'model' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN requested_model_id END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'stream' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN stream END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'stream' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN stream END ASC NULLS LAST,
+  id DESC
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 
 -- name: CountRequestRecords :one

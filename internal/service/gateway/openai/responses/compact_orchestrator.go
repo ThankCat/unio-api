@@ -72,6 +72,13 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 	)
 	err := s.runNonStream(ctx, req, nonStreamStrategy{
 		allowDirect: false,
+		// 原生 2xx 缺 usage（上游很可能已计费）：runner 释放冻结 + 记 risk_exposure，不重复白嫖（P0-3）。
+		upstreamCostWithoutUsage: isNativeCompactMissingUsage,
+		codes: lifecycle.RunNonStreamCodes{
+			UpstreamCostWithoutUsageCode:       "responses_compact_cost_without_usage",
+			UpstreamCostWithoutUsageReasonCode: "responses_compact_missing_usage",
+			UpstreamCostWithoutUsageReason:     "native /responses/compact returned 2xx without billable usage; upstream cost may have been incurred",
+		},
 		resolve: func(candidate routing.ChatRouteCandidate) error {
 			if s.registry.HasResponsesCompact(candidate.AdapterKey) {
 				adapter, ok := s.registry.ResponsesCompact(candidate.AdapterKey)
@@ -108,6 +115,7 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 				resp, err := compactAdapter.CompactResponse(adapterCtx, candidate.Channel, responsesadapter.Request{Body: body})
 				lifecycle.EndGatewaySpan(adapterSpan, err)
 				if err != nil {
+					// 真 404/405（上游无原生 compact、无成本）：按配置安全回落 Synthetic。
 					if s.compactNativeFallback && isNativeCompactUnsupported(err) {
 						slog.WarnContext(ctx, "native compact unsupported; falling back to synthetic compaction",
 							slog.String("adapter_key", candidate.AdapterKey),
@@ -115,6 +123,15 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 							slog.String("upstream_model", candidate.UpstreamModel),
 						)
 						return s.invokeSyntheticCompact(ctx, candidate, req, chatAdapter, &result)
+					}
+					// 原生 2xx 但缺 usage（上游很可能已计费）：绝不回落白嫖。上抛交由 AttemptRunner 释放冻结 +
+					// 记 risk_exposure（UpstreamCostWithoutUsage 分类命中），并向客户返回上游错误（P0-3）。
+					if isNativeCompactMissingUsage(err) {
+						slog.WarnContext(ctx, "native compact returned 2xx without billable usage; recording risk exposure instead of synthetic freeloading",
+							slog.String("adapter_key", candidate.AdapterKey),
+							slog.Int64("channel_id", candidate.Channel.ID),
+							slog.String("upstream_model", candidate.UpstreamModel),
+						)
 					}
 					return lifecycle.AttemptSuccess{}, err
 				}

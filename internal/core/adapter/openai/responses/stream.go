@@ -58,7 +58,7 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 
 	// 渠道 timeout 只约束「上游开始响应(拿到响应头)」,不约束流本体:Responses 流在长任务
 	// (图像生成等)期间会先回 200 再静默数分钟才吐事件,绝不能被渠道 timeout 当绝对截止时间掐断。
-	streamCtx, headersReceived, cancel := adapter.HeaderTimeoutContext(ctx, ch.Timeout)
+	streamCtx, headersReceived, resetIdle, cancel := adapter.StreamTimeoutContext(ctx, ch.Timeout, adapter.StreamIdleTimeout())
 	defer cancel()
 
 	httpReq, err := a.newUpstreamRequest(streamCtx, ch, req, true)
@@ -67,9 +67,10 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 	}
 
 	upstreamResp, err := a.client.Do(httpReq)
+	ctxCause := context.Cause(streamCtx)
 	headersReceived()
 	if err != nil {
-		return adapter.StreamOutcome{}, newUpstreamSendError(err, "send stream responses request")
+		return adapter.StreamOutcome{}, newUpstreamSendErrorWithContextCause(err, ctxCause, "send stream responses request")
 	}
 	defer upstreamResp.Body.Close()
 
@@ -92,6 +93,7 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 	reader := adaptersse.NewReader(upstreamResp.Body, adaptersse.Config{
 		MaxLineBytes:  maxResponsesStreamEventBytes,
 		MaxEventBytes: maxResponsesStreamEventBytes,
+		OnActivity:    resetIdle,
 	})
 
 	buildOutcome := func() adapter.StreamOutcome {
@@ -158,6 +160,8 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 					message = env.Response.Error.Message
 				}
 			}
+			// P2-10：内联透传给客户端前重建为脱敏最小信封（去 base_url 等基础设施细节），仍保留 Codex 所需 error.code/message 形状。
+			chunk.Data = sanitizedResponsesFailedEvent(responseID, code, message)
 			streamErr = newUpstreamStreamError(meta, code, message)
 		case eventError:
 			env := decodeEnvelope(data)
@@ -168,6 +172,8 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 					message = env.Message
 				}
 			}
+			// P2-10：同上，error 事件重建为脱敏最小信封后再透传。
+			chunk.Data = sanitizedResponsesErrorEvent(code, message)
 			streamErr = newUpstreamStreamError(meta, code, message)
 		}
 
@@ -189,19 +195,13 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 	}
 
 	if err := reader.Err(); err != nil {
-		return buildOutcome(), failure.Wrap(
-			failure.CodeAdapterReadStreamFailed,
-			err,
-			failure.WithMessage("openai responses adapter read stream event"),
-		)
+		return buildOutcome(),
+			newUpstreamStreamReadError(err, context.Cause(streamCtx), "openai responses adapter read stream event")
 	}
 
 	outcome := buildOutcome()
 	if !terminalSeen {
-		return outcome, failure.New(
-			failure.CodeAdapterReadStreamFailed,
-			failure.WithMessage("openai responses adapter stream ended before terminal event"),
-		)
+		return outcome, newUpstreamStreamIncompleteError("openai responses adapter stream ended before terminal event")
 	}
 	return outcome, nil
 }
@@ -259,4 +259,3 @@ func decodeEnvelope(data []byte) *wireStreamEnvelope {
 	}
 	return &env
 }
-

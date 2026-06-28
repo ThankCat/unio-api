@@ -32,13 +32,17 @@ var (
 	ErrMalformedStream = errors.New("sse: malformed stream")
 )
 
-// Config 定义 SSE reader 的内存边界。
+// Config 定义 SSE reader 的内存边界与活动回调。
 type Config struct {
 	// MaxLineBytes 限制单行 field 的最大字节数，避免异常上游发送无限长行。
 	MaxLineBytes int
 
 	// MaxEventBytes 限制单个 event 的 data 聚合大小，避免多行 data 无限增长。
 	MaxEventBytes int
+
+	// OnActivity 在每读到一整行（含 event/data/心跳注释行）后被调用，用于驱动上层 idle 看门狗复位。
+	// 为 nil 时不回调。心跳注释行（":"）也算活动，避免长任务期间被 idle 误杀。
+	OnActivity func()
 }
 
 // Event 表示一个已经按 SSE 规则聚合完成的 event。
@@ -157,6 +161,12 @@ func normalizeConfig(cfg Config) Config {
 	return cfg
 }
 
+func (r *Reader) signalActivity() {
+	if r.config.OnActivity != nil {
+		r.config.OnActivity()
+	}
+}
+
 func (r *Reader) readLine() ([]byte, bool, error) {
 	line := make([]byte, 0, 256)
 
@@ -168,6 +178,7 @@ func (r *Reader) readLine() ([]byte, bool, error) {
 					return nil, false, nil
 				}
 
+				r.signalActivity()
 				return line, false, nil
 			}
 
@@ -180,6 +191,7 @@ func (r *Reader) readLine() ([]byte, bool, error) {
 
 		switch b {
 		case '\n':
+			r.signalActivity()
 			return line, true, nil
 		case '\r':
 			next, err := r.reader.ReadByte()
@@ -195,6 +207,7 @@ func (r *Reader) readLine() ([]byte, bool, error) {
 				)
 			}
 
+			r.signalActivity()
 			return line, true, nil
 		default:
 			if len(line)+1 > r.config.MaxLineBytes {

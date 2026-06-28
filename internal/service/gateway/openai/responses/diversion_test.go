@@ -13,6 +13,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/core/usage"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
 // fakeResponsesAdapter 是 responses 直传 adapter 的测试替身：记录上送请求体并返回预置原文响应。
@@ -283,5 +284,43 @@ func TestStreamResponse_DirectPassthrough(t *testing.T) {
 	}
 	if settlement.params[0].ResponseProtocol != requestlog.ProtocolOpenAI {
 		t.Fatalf("settlement protocol = %q, want openai", settlement.params[0].ResponseProtocol)
+	}
+}
+
+func TestStreamResponse_DirectPartialSettlementCountsVisibleText(t *testing.T) {
+	directStream := &fakeStreamResponsesAdapter{
+		chunks: []responsesadapter.StreamChunk{
+			{EventType: "response.created", Data: json.RawMessage(`{"type":"response.created","response":{"id":"resp_1","model":"gpt-5.5-up","status":"in_progress"}}`)},
+			{EventType: "response.output_text.delta", Data: json.RawMessage(`{"type":"response.output_text.delta","delta":"partial visible answer"}`)},
+		},
+	}
+	registry := &fakeRegistry{
+		streamResponsesAdapters: map[string]responsesadapter.StreamResponsesAdapter{"openai": directStream},
+	}
+	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("openai", 1, "gpt-5.5-up")}}}
+	settlement := &fakeSettlement{}
+	authorizer := &fakeAuthorizer{}
+	requestLog := newFakeRequestLog()
+
+	svc := newServiceForTest(router, registry, settlement, authorizer, requestLog)
+
+	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(gatewayapi.ResponsesStreamEvent) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("expected partial settlement without error, got %v", err)
+	}
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected one partial settlement, got %d", len(settlement.params))
+	}
+	facts := settlement.params[0].Facts
+	if facts.UsageSource != usage.SourcePartialStreamEstimate {
+		t.Fatalf("usage source = %q, want partial_stream_estimate", facts.UsageSource)
+	}
+	if facts.Finish.RawReason != lifecycle.PartialReasonFinalUsageMissing {
+		t.Fatalf("finish reason = %q, want %q", facts.Finish.RawReason, lifecycle.PartialReasonFinalUsageMissing)
+	}
+	if !facts.Usage.OutputTokensTotal.IsKnown() || facts.Usage.OutputTokensTotal.Value <= 0 {
+		t.Fatalf("expected estimated output tokens > 0, got %#v", facts.Usage.OutputTokensTotal)
 	}
 }

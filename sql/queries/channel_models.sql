@@ -61,6 +61,7 @@ project_policy_mode AS (
 SELECT
     m.id AS model_db_id,
     m.model_id AS requested_model_id,
+    m.max_output_tokens AS model_max_output_tokens,
     p.id AS provider_id,
     p.slug AS provider_slug,
     c.adapter_key AS adapter_key,
@@ -70,6 +71,9 @@ SELECT
     c.credential_encrypted,
     c.timeout_ms,
     c.priority,
+    c.rpm_limit AS channel_rpm_limit,
+    c.tpm_limit AS channel_tpm_limit,
+    c.rpd_limit AS channel_rpd_limit,
     cm.upstream_model,
     price.id AS channel_price_id,
     price.currency AS price_currency,

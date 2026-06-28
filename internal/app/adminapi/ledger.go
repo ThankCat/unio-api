@@ -66,12 +66,25 @@ func (h *ledgerHandler) listEntries(w http.ResponseWriter, r *http.Request) {
 	}
 
 	page := parsePage(r)
+	sort, err := parseListSort(r, map[string]struct{}{
+		"created_at": {},
+		"user_id":    {},
+		"amount":     {},
+		"entry_type": {},
+	}, "created_at", true)
+	if err != nil {
+		writeSortError(w, err)
+		return
+	}
+	field, desc := sort.SQLParams()
 	items, total, err := h.service.ListEntries(r.Context(), query.EntryListParams{
 		UserID:    userID,
 		EntryType: queryString(r, "entry_type"),
 		Currency:  queryString(r, "currency"),
 		From:      from,
 		To:        to,
+		SortField: field,
+		SortDesc:  desc,
 		Limit:     page.Limit(),
 		Offset:    page.Offset(),
 	})
@@ -105,13 +118,26 @@ func (h *ledgerHandler) listBillingExceptions(w http.ResponseWriter, r *http.Req
 	}
 
 	page := parsePage(r)
+	sort, err := parseListSort(r, map[string]struct{}{
+		"created_at": {},
+		"user_id":    {},
+		"event_type": {},
+	}, "created_at", true)
+	if err != nil {
+		writeSortError(w, err)
+		return
+	}
+	field, desc := sort.SQLParams()
 	items, total, err := h.service.ListBillingExceptions(r.Context(), query.ExceptionListParams{
-		UserID:    userID,
-		EventType: queryString(r, "event_type"),
-		From:      from,
-		To:        to,
-		Limit:     page.Limit(),
-		Offset:    page.Offset(),
+		UserID:     userID,
+		EventType:  queryString(r, "event_type"),
+		ReasonCode: queryString(r, "reason_code"),
+		From:       from,
+		To:         to,
+		SortField:  field,
+		SortDesc:   desc,
+		Limit:      page.Limit(),
+		Offset:     page.Offset(),
 	})
 	if err != nil {
 		writeServiceError(w, err)

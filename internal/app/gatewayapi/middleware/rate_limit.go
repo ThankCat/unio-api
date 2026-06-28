@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
@@ -14,22 +13,10 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
 )
 
-// RateLimitFailurePolicy 表示限流器故障时的处理策略。
-type RateLimitFailurePolicy string
-
 const (
-	// RateLimitFailurePolicyFailClosed 表示限流器故障时拒绝请求。
-	RateLimitFailurePolicyFailClosed RateLimitFailurePolicy = "fail_closed"
-
-	// RateLimitFailurePolicyFailOpen 表示限流器故障时放行请求。
-	RateLimitFailurePolicyFailOpen RateLimitFailurePolicy = "fail_open"
-)
-
-const (
-	HeaderRateLimitLimit         = "X-RateLimit-Limit"
-	HeaderRateLimitRemaining     = "X-RateLimit-Remaining"
-	HeaderRateLimitReset         = "X-RateLimit-Reset"
-	rateLimitSubjectAPIKeyPrefix = "api_key:"
+	HeaderRateLimitLimit     = "X-RateLimit-Limit"
+	HeaderRateLimitRemaining = "X-RateLimit-Remaining"
+	HeaderRateLimitReset     = "X-RateLimit-Reset"
 )
 
 // RateLimitMetricsRecorder 定义限流中间件记录判定结果的能力。
@@ -39,21 +26,21 @@ type RateLimitMetricsRecorder interface {
 }
 
 // RateLimitOptions 保存 RateLimit middleware 的运行参数。
+// fail_open/fail_closed 策略已下沉到 Guard（按 RATE_LIMIT_FAILURE_POLICY 构造）：
+// 故障 fail_open 时 Guard 返回放行且不报错；fail_closed 时返回错误，中间件据此回 500。
 type RateLimitOptions struct {
-	Limit         int64
-	Window        time.Duration
-	FailurePolicy RateLimitFailurePolicy
-	Logger        *slog.Logger
-	Metrics       RateLimitMetricsRecorder
+	Logger  *slog.Logger
+	Metrics RateLimitMetricsRecorder
 }
 
-// RateLimiter 定义 middleware 调用限流器所需的最小能力。
-type RateLimiter interface {
-	Allow(ctx context.Context, subject string, limit int64, window time.Duration) (ratelimit.Decision, error)
+// KeyRateLimiter 定义 middleware 在 ingress 执行 API Key 级请求限流（RPM/RPD）的能力。
+type KeyRateLimiter interface {
+	AllowKeyRequest(ctx context.Context, apiKeyID int64, limits ratelimit.Limits) (ratelimit.Decision, error)
 }
 
-// RateLimit 使用认证身份作为 subject，对请求做基础限流。
-func RateLimit(limiter RateLimiter, opts RateLimitOptions) func(next http.Handler) http.Handler {
+// RateLimit 在 ingress 用认证身份对请求做 API Key 级 RPM/RPD 限流（P2-8）。
+// 每把 Key 的上限取其自身配置，未配置则继承全局默认（由 Guard 解析）。TPM 与渠道级限流在调用上游前于 lifecycle 执行。
+func RateLimit(limiter KeyRateLimiter, opts RateLimitOptions) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			principal, ok := auth.APIKeyPrincipalFromContext(r.Context())
@@ -62,17 +49,14 @@ func RateLimit(limiter RateLimiter, opts RateLimitOptions) func(next http.Handle
 				return
 			}
 
-			subject := apiKeyRateLimitSubject(principal.APIKeyID)
-			decision, err := limiter.Allow(r.Context(), subject, opts.Limit, opts.Window)
+			limits := ratelimit.Limits{
+				RPM: principal.RPMLimit,
+				TPM: principal.TPMLimit,
+				RPD: principal.RPDLimit,
+			}
+			decision, err := limiter.AllowKeyRequest(r.Context(), principal.APIKeyID, limits)
 			if err != nil {
-				logRateLimitFailure(opts.Logger, subject, principal.KeyPrefix, opts.FailurePolicy, err)
-
-				if opts.FailurePolicy == RateLimitFailurePolicyFailOpen {
-					recordRateLimitDecision(opts.Metrics, metrics.RateLimitDecisionFailOpen)
-					next.ServeHTTP(w, r)
-					return
-				}
-
+				logRateLimitFailure(opts.Logger, principal.APIKeyID, principal.KeyPrefix, err)
 				recordRateLimitDecision(opts.Metrics, metrics.RateLimitDecisionFailClosed)
 				_ = httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "rate limit failed")
 				return
@@ -92,8 +76,11 @@ func RateLimit(limiter RateLimiter, opts RateLimitOptions) func(next http.Handle
 	}
 }
 
-// writeRateLimitHeaders 写入标准限流响应头。
+// writeRateLimitHeaders 写入标准限流响应头；不限（Limit<=0）时不写，避免误导客户端。
 func writeRateLimitHeaders(w http.ResponseWriter, decision ratelimit.Decision) {
+	if decision.Limit <= 0 {
+		return
+	}
 	w.Header().Set(HeaderRateLimitLimit, strconv.FormatInt(decision.Limit, 10))
 	w.Header().Set(HeaderRateLimitRemaining, strconv.FormatInt(decision.Remaining, 10))
 	w.Header().Set(HeaderRateLimitReset, strconv.FormatInt(decision.ResetAt.Unix(), 10))
@@ -108,21 +95,15 @@ func recordRateLimitDecision(recorder RateLimitMetricsRecorder, decision metrics
 	recorder.IncRateLimitDecision(decision)
 }
 
-// apiKeyRateLimitSubject 返回 API Key 对应的限流 subject。
-func apiKeyRateLimitSubject(apiKeyID int64) string {
-	return rateLimitSubjectAPIKeyPrefix + strconv.FormatInt(apiKeyID, 10)
-}
-
-// logRateLimitFailure 记录限流器故障；只记录 key prefix，不记录完整 API key。
-func logRateLimitFailure(logger *slog.Logger, subject string, keyPrefix string, policy RateLimitFailurePolicy, err error) {
+// logRateLimitFailure 记录限流计数后端故障；只记录 key prefix，不记录完整 API key。
+func logRateLimitFailure(logger *slog.Logger, apiKeyID int64, keyPrefix string, err error) {
 	if logger == nil {
 		return
 	}
 
 	args := []any{
-		"subject", subject,
+		"api_key_id", apiKeyID,
 		"api_key_prefix", keyPrefix,
-		"failure_policy", string(policy),
 	}
 	args = append(args, failure.LogArgs(err)...)
 

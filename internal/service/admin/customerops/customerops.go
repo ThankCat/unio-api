@@ -66,6 +66,17 @@ type UserRow struct {
 	LowBalance     bool
 }
 
+// UsersTableParams 用户运维主表入参。
+type UsersTableParams struct {
+	From      time.Time
+	To        time.Time
+	Search    string
+	SortField string
+	SortDesc  bool
+	Limit     int32
+	Offset    int32
+}
+
 type UserDetail struct {
 	BalanceUSD     string
 	ReservedUSD    string
@@ -107,14 +118,20 @@ func (s *Service) UsersSummary(ctx context.Context, from, to time.Time) (UsersSu
 	}, nil
 }
 
-func (s *Service) UsersTable(ctx context.Context, from, to time.Time, search string, limit, offset int32) ([]UserRow, int64, error) {
+func (s *Service) UsersTable(ctx context.Context, p UsersTableParams) ([]UserRow, int64, error) {
 	rows, err := s.store.UsersOpsTable(ctx, sqlc.UsersOpsTableParams{
-		FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to), Search: opsutil.TextNarg(search), PageLimit: limit, PageOffset: offset,
+		FromTime:   opsutil.TsNarg(p.From),
+		ToTime:     opsutil.TsNarg(p.To),
+		Search:     opsutil.TextNarg(p.Search),
+		SortField:  opsutil.TextNarg(p.SortField),
+		SortDesc:   opsutil.BoolNarg(p.SortDesc),
+		PageLimit:  p.Limit,
+		PageOffset: p.Offset,
 	})
 	if err != nil {
 		return nil, 0, opsutil.StoreFailed(err, "users ops table")
 	}
-	total, err := s.store.UsersOpsTableCount(ctx, opsutil.TextNarg(search))
+	total, err := s.store.UsersOpsTableCount(ctx, opsutil.TextNarg(p.Search))
 	if err != nil {
 		return nil, 0, opsutil.StoreFailed(err, "users ops table count")
 	}
@@ -206,6 +223,17 @@ type ProjectRow struct {
 	LastUsedAt       *time.Time
 }
 
+// ProjectsTableParams 项目运维主表入参。
+type ProjectsTableParams struct {
+	From      time.Time
+	To        time.Time
+	Search    string
+	SortField string
+	SortDesc  bool
+	Limit     int32
+	Offset    int32
+}
+
 func (s *Service) ProjectsSummary(ctx context.Context, from, to time.Time) (ProjectsSummary, error) {
 	r, err := s.store.ProjectsOpsSummary(ctx, sqlc.ProjectsOpsSummaryParams{FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
 	if err != nil {
@@ -220,14 +248,20 @@ func (s *Service) ProjectsSummary(ctx context.Context, from, to time.Time) (Proj
 	}, nil
 }
 
-func (s *Service) ProjectsTable(ctx context.Context, from, to time.Time, search string, limit, offset int32) ([]ProjectRow, int64, error) {
+func (s *Service) ProjectsTable(ctx context.Context, p ProjectsTableParams) ([]ProjectRow, int64, error) {
 	rows, err := s.store.ProjectsOpsTable(ctx, sqlc.ProjectsOpsTableParams{
-		FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to), Search: opsutil.TextNarg(search), PageLimit: limit, PageOffset: offset,
+		FromTime:   opsutil.TsNarg(p.From),
+		ToTime:     opsutil.TsNarg(p.To),
+		Search:     opsutil.TextNarg(p.Search),
+		SortField:  opsutil.TextNarg(p.SortField),
+		SortDesc:   opsutil.BoolNarg(p.SortDesc),
+		PageLimit:  p.Limit,
+		PageOffset: p.Offset,
 	})
 	if err != nil {
 		return nil, 0, opsutil.StoreFailed(err, "projects ops table")
 	}
-	total, err := s.store.ProjectsOpsTableCount(ctx, opsutil.TextNarg(search))
+	total, err := s.store.ProjectsOpsTableCount(ctx, opsutil.TextNarg(p.Search))
 	if err != nil {
 		return nil, 0, opsutil.StoreFailed(err, "projects ops table count")
 	}

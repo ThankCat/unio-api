@@ -79,6 +79,7 @@ project_policy_mode AS (
 SELECT
     m.id AS model_db_id,
     m.model_id AS requested_model_id,
+    m.max_output_tokens AS model_max_output_tokens,
     p.id AS provider_id,
     p.slug AS provider_slug,
     c.adapter_key AS adapter_key,
@@ -88,6 +89,9 @@ SELECT
     c.credential_encrypted,
     c.timeout_ms,
     c.priority,
+    c.rpm_limit AS channel_rpm_limit,
+    c.tpm_limit AS channel_tpm_limit,
+    c.rpd_limit AS channel_rpd_limit,
     cm.upstream_model,
     price.id AS channel_price_id,
     price.currency AS price_currency,
@@ -166,6 +170,7 @@ type FindRouteCandidatesParams struct {
 type FindRouteCandidatesRow struct {
 	ModelDbID              int64
 	RequestedModelID       string
+	ModelMaxOutputTokens   pgtype.Int8
 	ProviderID             int64
 	ProviderSlug           string
 	AdapterKey             string
@@ -175,6 +180,9 @@ type FindRouteCandidatesRow struct {
 	CredentialEncrypted    []byte
 	TimeoutMs              pgtype.Int4
 	Priority               int32
+	ChannelRpmLimit        pgtype.Int4
+	ChannelTpmLimit        pgtype.Int4
+	ChannelRpdLimit        pgtype.Int4
 	UpstreamModel          string
 	ChannelPriceID         int64
 	PriceCurrency          string
@@ -213,6 +221,7 @@ func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidat
 		if err := rows.Scan(
 			&i.ModelDbID,
 			&i.RequestedModelID,
+			&i.ModelMaxOutputTokens,
 			&i.ProviderID,
 			&i.ProviderSlug,
 			&i.AdapterKey,
@@ -222,6 +231,9 @@ func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidat
 			&i.CredentialEncrypted,
 			&i.TimeoutMs,
 			&i.Priority,
+			&i.ChannelRpmLimit,
+			&i.ChannelTpmLimit,
+			&i.ChannelRpdLimit,
 			&i.UpstreamModel,
 			&i.ChannelPriceID,
 			&i.PriceCurrency,

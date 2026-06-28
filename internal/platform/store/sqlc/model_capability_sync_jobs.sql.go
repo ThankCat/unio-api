@@ -11,6 +11,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countSyncJobs = `-- name: CountSyncJobs :one
+SELECT COUNT(*) AS total
+FROM model_capability_sync_jobs
+`
+
+// CountSyncJobs 返回能力同步任务总条数。
+func (q *Queries) CountSyncJobs(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countSyncJobs)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const createSyncJob = `-- name: CreateSyncJob :one
 INSERT INTO model_capability_sync_jobs (
     source,
@@ -68,13 +81,32 @@ func (q *Queries) GetLatestSyncJob(ctx context.Context, source string) (ModelCap
 const listSyncJobs = `-- name: ListSyncJobs :many
 SELECT id, source, status, started_at, finished_at, stats_json, error_text, created_at
 FROM model_capability_sync_jobs
-ORDER BY created_at DESC, id DESC
-LIMIT $1::int
+ORDER BY
+  CASE WHEN COALESCE($1::text, 'created_at') IN ('', 'created_at') AND COALESCE($2::bool, true) THEN created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE($1::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($2::bool, true) THEN created_at END ASC NULLS LAST,
+  CASE WHEN $1::text = 'status' AND COALESCE($2::bool, false) THEN status END DESC NULLS LAST,
+  CASE WHEN $1::text = 'status' AND NOT COALESCE($2::bool, false) THEN status END ASC NULLS LAST,
+  CASE WHEN $1::text = 'source' AND COALESCE($2::bool, false) THEN source END DESC NULLS LAST,
+  CASE WHEN $1::text = 'source' AND NOT COALESCE($2::bool, false) THEN source END ASC NULLS LAST,
+  id DESC
+LIMIT $4 OFFSET $3
 `
 
-// ListSyncJobs 倒序列出最近的能力同步任务（admin 同步页展示用，不区分来源）。
-func (q *Queries) ListSyncJobs(ctx context.Context, rowLimit int32) ([]ModelCapabilitySyncJob, error) {
-	rows, err := q.db.Query(ctx, listSyncJobs, rowLimit)
+type ListSyncJobsParams struct {
+	SortField  pgtype.Text
+	SortDesc   pgtype.Bool
+	PageOffset int32
+	PageLimit  int32
+}
+
+// ListSyncJobs 分页倒序列出能力同步任务（admin 同步页展示用，不区分来源）。
+func (q *Queries) ListSyncJobs(ctx context.Context, arg ListSyncJobsParams) ([]ModelCapabilitySyncJob, error) {
+	rows, err := q.db.Query(ctx, listSyncJobs,
+		arg.SortField,
+		arg.SortDesc,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}

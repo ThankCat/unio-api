@@ -153,13 +153,25 @@ func (h *routeOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := parsePage(r)
+	sort, err := parseListSort(r, map[string]struct{}{
+		"name":         {},
+		"requests":     {},
+		"success_rate": {},
+	}, "success_rate", false)
+	if err != nil {
+		writeSortError(w, err)
+		return
+	}
+	field, desc := sort.SQLParams()
 	rows, total, err := h.service.Table(r.Context(), routeops.TableParams{
-		From:   from,
-		To:     to,
-		Status: listStatus(r),
-		Search: queryString(r, "search"),
-		Limit:  page.Limit(),
-		Offset: page.Offset(),
+		From:      from,
+		To:        to,
+		Status:    listStatus(r),
+		Search:    queryString(r, "search"),
+		SortField: field,
+		SortDesc:  desc,
+		Limit:     page.Limit(),
+		Offset:    page.Offset(),
 	})
 	if err != nil {
 		writeServiceError(w, err)

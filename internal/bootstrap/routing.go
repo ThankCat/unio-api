@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"log/slog"
 	"strings"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 const defaultChatRouteTimeout = 30 * time.Second
 
 // NewChatRouter 创建当前 server 进程使用的 chat routing 组件。
-func NewChatRouter(store routing.Store, masterKeyEncoded string) (*routing.Router, error) {
+func NewChatRouter(store routing.Store, masterKeyEncoded string, logger *slog.Logger) (*routing.Router, error) {
 	if strings.TrimSpace(masterKeyEncoded) == "" {
 		return nil, failure.New(
 			failure.CodeConfigMissing,
@@ -30,5 +31,5 @@ func NewChatRouter(store routing.Store, masterKeyEncoded string) (*routing.Route
 		return nil, err
 	}
 
-	return routing.NewRouter(store, cipher, defaultChatRouteTimeout), nil
+	return routing.NewRouter(store, cipher, defaultChatRouteTimeout, routing.WithLogger(logger)), nil
 }

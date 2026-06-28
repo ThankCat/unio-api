@@ -196,14 +196,23 @@ LEFT JOIN request_records r
     AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
 WHERE ($3::text IS NULL OR pj.name ILIKE '%' || $3::text || '%' OR u.email ILIKE '%' || $3::text || '%')
 GROUP BY pj.id, pj.name, pj.user_id, u.email, rt.name
-ORDER BY consumption_usd DESC, pj.id
-LIMIT $5 OFFSET $4
+ORDER BY
+  CASE WHEN COALESCE($4::text, 'consumption') IN ('', 'consumption') AND COALESCE($5::bool, true) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE rr.project_id = pj.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) END DESC NULLS LAST,
+  CASE WHEN COALESCE($4::text, 'consumption') IN ('', 'consumption') AND NOT COALESCE($5::bool, true) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE rr.project_id = pj.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) END ASC NULLS LAST,
+  CASE WHEN $4::text = 'name' AND COALESCE($5::bool, false) THEN pj.name END DESC NULLS LAST,
+  CASE WHEN $4::text = 'name' AND NOT COALESCE($5::bool, false) THEN pj.name END ASC NULLS LAST,
+  CASE WHEN $4::text = 'requests' AND COALESCE($5::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
+  CASE WHEN $4::text = 'requests' AND NOT COALESCE($5::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
+  pj.id
+LIMIT $7 OFFSET $6
 `
 
 type ProjectsOpsTableParams struct {
 	FromTime   pgtype.Timestamptz
 	ToTime     pgtype.Timestamptz
 	Search     pgtype.Text
+	SortField  pgtype.Text
+	SortDesc   pgtype.Bool
 	PageOffset int32
 	PageLimit  int32
 }
@@ -226,6 +235,8 @@ func (q *Queries) ProjectsOpsTable(ctx context.Context, arg ProjectsOpsTablePara
 		arg.FromTime,
 		arg.ToTime,
 		arg.Search,
+		arg.SortField,
+		arg.SortDesc,
 		arg.PageOffset,
 		arg.PageLimit,
 	)
@@ -460,14 +471,27 @@ LEFT JOIN request_records r
     AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
 WHERE ($3::text IS NULL OR u.email ILIKE '%' || $3::text || '%' OR u.display_name ILIKE '%' || $3::text || '%')
 GROUP BY u.id, u.email, u.display_name, ub.balance, ub.reserved_balance
-ORDER BY consumption_usd DESC, u.id
-LIMIT $5 OFFSET $4
+ORDER BY
+  CASE WHEN COALESCE($4::text, 'consumption') IN ('', 'consumption') AND COALESCE($5::bool, true) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) END DESC NULLS LAST,
+  CASE WHEN COALESCE($4::text, 'consumption') IN ('', 'consumption') AND NOT COALESCE($5::bool, true) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) END ASC NULLS LAST,
+  CASE WHEN $4::text = 'email' AND COALESCE($5::bool, false) THEN u.email END DESC NULLS LAST,
+  CASE WHEN $4::text = 'email' AND NOT COALESCE($5::bool, false) THEN u.email END ASC NULLS LAST,
+  CASE WHEN $4::text = 'balance' AND COALESCE($5::bool, false) THEN COALESCE(ub.balance, 0) END DESC NULLS LAST,
+  CASE WHEN $4::text = 'balance' AND NOT COALESCE($5::bool, false) THEN COALESCE(ub.balance, 0) END ASC NULLS LAST,
+  CASE WHEN $4::text = 'requests' AND COALESCE($5::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
+  CASE WHEN $4::text = 'requests' AND NOT COALESCE($5::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
+  CASE WHEN $4::text = 'last_used' AND COALESCE($5::bool, false) THEN MAX(r.created_at) END DESC NULLS LAST,
+  CASE WHEN $4::text = 'last_used' AND NOT COALESCE($5::bool, false) THEN MAX(r.created_at) END ASC NULLS LAST,
+  u.id
+LIMIT $7 OFFSET $6
 `
 
 type UsersOpsTableParams struct {
 	FromTime   pgtype.Timestamptz
 	ToTime     pgtype.Timestamptz
 	Search     pgtype.Text
+	SortField  pgtype.Text
+	SortDesc   pgtype.Bool
 	PageOffset int32
 	PageLimit  int32
 }
@@ -491,6 +515,8 @@ func (q *Queries) UsersOpsTable(ctx context.Context, arg UsersOpsTableParams) ([
 		arg.FromTime,
 		arg.ToTime,
 		arg.Search,
+		arg.SortField,
+		arg.SortDesc,
 		arg.PageOffset,
 		arg.PageLimit,
 	)

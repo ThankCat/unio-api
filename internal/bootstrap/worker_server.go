@@ -50,9 +50,21 @@ func NewWorkerServerApp(_ context.Context, deps WorkerServerAppDeps) (*WorkerSer
 		chatSettlementRecoveryService,
 		defaultWorkerID("settlement-recovery"),
 		deps.Config.Worker.SettlementRecoveryLockTTL,
+		deps.Config.Worker.SettlementRecoveryBackoffCap,
+	)
+	// P2-5：积压时单轮批量排空，摊薄每轮 dead 收口 + exhausted 扫描的固定开销。
+	settlementRecoveryWorker.SetBatchSize(int(deps.Config.Worker.SettlementRecoveryBatchSize))
+
+	// 孤儿预授权清扫 worker：兜底进程崩溃遗留的「永久冻结 + 永久 running」请求（与 settlement_recovery 互补）。
+	orphanReservationSweeperWorker := workers.NewOrphanReservationSweeperWorker(
+		queries,
+		chatSettlementService,
+		deps.Logger,
+		deps.Config.Worker.OrphanReservationSweepAgeThreshold,
+		deps.Config.Worker.OrphanReservationSweepBatchSize,
 	)
 
-	units := []workers.Unit{settlementRecoveryWorker}
+	units := []workers.Unit{settlementRecoveryWorker, orphanReservationSweeperWorker}
 
 	if deps.Config.ModelCatalogSync.Enabled {
 		syncer, store := buildModelCatalogSync(deps.Config.ModelCatalogSync, queries)

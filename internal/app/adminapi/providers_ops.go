@@ -22,19 +22,25 @@ type providerOpsHandler struct {
 }
 
 type providerOpsRowDTO struct {
-	ID               int64   `json:"id"`
-	Slug             string  `json:"slug"`
-	Name             string  `json:"name"`
-	Status           string  `json:"status"`
-	ChannelTotal     int64   `json:"channel_total"`
-	ChannelEnabled   int64   `json:"channel_enabled"`
-	AttemptTotal     int64   `json:"attempt_total"`
-	AttemptSucceeded int64   `json:"attempt_succeeded"`
-	SuccessRate      float64 `json:"success_rate"`
+	ID               int64           `json:"id"`
+	Slug             string          `json:"slug"`
+	Name             string          `json:"name"`
+	Status           string          `json:"status"`
+	CreatedAt        string          `json:"created_at"`
+	ChannelTotal     int64           `json:"channel_total"`
+	ChannelEnabled   int64           `json:"channel_enabled"`
+	AttemptTotal     int64           `json:"attempt_total"`
+	AttemptSucceeded int64           `json:"attempt_succeeded"`
+	SuccessRate      float64         `json:"success_rate"`
 	TimeoutTotal     int64           `json:"timeout_total"`
 	Latency          latencyStatsDTO `json:"latency"`
 	Health           string          `json:"health"`
-	LastSuccessAt    *string `json:"last_success_at"`
+	LastSuccessAt    *string         `json:"last_success_at"`
+	Tokens           int64           `json:"tokens"`
+	RevenueUSD       string          `json:"revenue_usd"`
+	CostUSD          string          `json:"cost_usd"`
+	MarginUSD        string          `json:"margin_usd"`
+	AvgTPS           float64         `json:"avg_tps"`
 }
 
 type providerOpsDetailDTO struct {
@@ -82,13 +88,28 @@ func (h *providerOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := parsePage(r)
+	sort, err := parseListSort(r, map[string]struct{}{
+		"name":         {},
+		"requests":     {},
+		"success_rate": {},
+		"tokens":       {},
+		"margin":       {},
+		"created_at":   {},
+	}, "success_rate", false)
+	if err != nil {
+		writeSortError(w, err)
+		return
+	}
+	field, desc := sort.SQLParams()
 	rows, total, err := h.service.Table(r.Context(), providerops.TableParams{
-		From:   from,
-		To:     to,
-		Status: listStatus(r),
-		Search: queryString(r, "search"),
-		Limit:  page.Limit(),
-		Offset: page.Offset(),
+		From:      from,
+		To:        to,
+		Status:    listStatus(r),
+		Search:    queryString(r, "search"),
+		SortField: field,
+		SortDesc:  desc,
+		Limit:     page.Limit(),
+		Offset:    page.Offset(),
 	})
 	if err != nil {
 		writeServiceError(w, err)
@@ -101,6 +122,7 @@ func (h *providerOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			Slug:             row.Slug,
 			Name:             row.Name,
 			Status:           row.Status,
+			CreatedAt:        rfc3339(row.CreatedAt),
 			ChannelTotal:     row.ChannelTotal,
 			ChannelEnabled:   row.ChannelEnabled,
 			AttemptTotal:     row.AttemptTotal,
@@ -110,6 +132,11 @@ func (h *providerOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			Latency:          latencyStatsFrom(row.Latency),
 			Health:           row.HealthBucket,
 			LastSuccessAt:    rfc3339Ptr(row.LastSuccessAt),
+			Tokens:           row.Tokens,
+			RevenueUSD:       row.RevenueUSD,
+			CostUSD:          row.CostUSD,
+			MarginUSD:        row.MarginUSD,
+			AvgTPS:           row.AvgTPS,
 		})
 	}
 	writeList(w, http.StatusOK, out, page, total)

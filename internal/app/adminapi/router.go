@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/ThankCat/unio-api/internal/app/adminapi/middleware"
+	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/httpmw"
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
 )
@@ -59,6 +60,14 @@ type RouterDeps struct {
 	// M8 系统/任务/健康（横切）：结算补偿任务只读视图 + 系统级 channel 健康（派生）
 	RecoveryJobQueryService   RecoveryJobQueryService
 	ChannelHealthQueryService ChannelHealthQueryService
+
+	// 系统配置只读面板（进程级 env 生效值，脱敏）：网关兜底/熔断/限流默认/补偿/HTTP 阈值。
+	// 这些是值类型快照，恒有效，故 /system/config 路由无条件注册。
+	GatewayConfig        config.GatewayConfig
+	RateLimitConfig      config.RateLimitConfig
+	CircuitBreakerConfig config.CircuitBreakerConfig
+	WorkerConfig         config.WorkerConfig
+	HTTPConfig           config.HTTPConfig
 
 	// HTTPMetrics 记录 HTTP 层请求指标；nil 表示不采集。
 	HTTPMetrics httpmw.MetricsRecorder
@@ -126,6 +135,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Get("/channels/ops", coh.table)
 			r.Get("/channels/{id}/ops/detail", coh.detail)
 			r.Get("/channels/{id}/ops/performance", coh.performance)
+			r.Get("/channels/{id}/ops/success-buckets", coh.successBuckets)
 			r.Get("/channels/{id}/ops/errors", coh.errors)
 			r.Get("/channels/{id}/ops/models", coh.models)
 			r.Get("/channels/{id}/ops/routes", coh.routes)
@@ -335,6 +345,16 @@ func NewRouter(deps RouterDeps) http.Handler {
 			chh := &channelHealthHandler{service: deps.ChannelHealthQueryService}
 			r.Get("/system/channel-health", chh.list)
 		}
+
+		// 系统配置只读面板：进程级 env 生效阈值（脱敏），让运营在前端看到所有不可运行期改的阈值。
+		systemConfig := &systemConfigHandler{
+			gateway:        deps.GatewayConfig,
+			rateLimit:      deps.RateLimitConfig,
+			circuitBreaker: deps.CircuitBreakerConfig,
+			worker:         deps.WorkerConfig,
+			http:           deps.HTTPConfig,
+		}
+		r.Get("/system/config", systemConfig.get)
 	})
 
 	return r

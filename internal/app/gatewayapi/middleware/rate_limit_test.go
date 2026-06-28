@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,26 +16,25 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
 )
 
-// fakeRateLimiter 是 RateLimit middleware 测试使用的限流器替身。
-type fakeRateLimiter struct {
-	subject  string
-	limit    int64
-	window   time.Duration
+// fakeKeyRateLimiter 是 RateLimit middleware 测试使用的 Key 级限流器替身。
+type fakeKeyRateLimiter struct {
+	apiKeyID int64
+	limits   ratelimit.Limits
 	decision ratelimit.Decision
 	err      error
+	called   bool
 }
 
-// Allow 记录 middleware 传入的限流参数，并返回测试预设的判断结果。
-func (l *fakeRateLimiter) Allow(ctx context.Context, subject string, limit int64, window time.Duration) (ratelimit.Decision, error) {
-	l.subject = subject
-	l.limit = limit
-	l.window = window
+func (l *fakeKeyRateLimiter) AllowKeyRequest(_ context.Context, apiKeyID int64, limits ratelimit.Limits) (ratelimit.Decision, error) {
+	l.called = true
+	l.apiKeyID = apiKeyID
+	l.limits = limits
 	return l.decision, l.err
 }
 
 func TestRateLimitAllowsRequest(t *testing.T) {
 	resetAt := time.Date(2026, 5, 8, 10, 1, 0, 0, time.UTC)
-	limiter := &fakeRateLimiter{
+	limiter := &fakeKeyRateLimiter{
 		decision: ratelimit.Decision{
 			Allowed:   true,
 			Limit:     60,
@@ -52,7 +49,7 @@ func TestRateLimitAllowsRequest(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	handler := RateLimit(limiter, testRateLimitOptions(nil))(next)
+	handler := RateLimit(limiter, RateLimitOptions{})(next)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
 		APIKeyID:  123,
@@ -66,29 +63,41 @@ func TestRateLimitAllowsRequest(t *testing.T) {
 	if !nextCalled {
 		t.Fatal("want next handler to be called")
 	}
-
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("want status %d, got %d", http.StatusNoContent, rec.Code)
 	}
-
-	if limiter.subject != "api_key:123" {
-		t.Fatalf("want subject %q, got %q", "api_key:123", limiter.subject)
+	if limiter.apiKeyID != 123 {
+		t.Fatalf("want api key id 123, got %d", limiter.apiKeyID)
 	}
-
-	if limiter.limit != 60 {
-		t.Fatalf("want limit 60, got %d", limiter.limit)
-	}
-
-	if limiter.window != time.Minute {
-		t.Fatalf("want window %v, got %v", time.Minute, limiter.window)
-	}
-
 	assertRateLimitHeaders(t, rec, "60", "59", resetAt)
+}
+
+func TestRateLimitForwardsPerKeyLimits(t *testing.T) {
+	limiter := &fakeKeyRateLimiter{decision: ratelimit.Decision{Allowed: true, Limit: 10, Remaining: 9}}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+
+	rpm := int64(10)
+	rpd := int64(1000)
+	handler := RateLimit(limiter, RateLimitOptions{})(next)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
+		APIKeyID: 7,
+		RPMLimit: &rpm,
+		RPDLimit: &rpd,
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if limiter.limits.RPM == nil || *limiter.limits.RPM != 10 {
+		t.Fatalf("want rpm override 10 forwarded, got %v", limiter.limits.RPM)
+	}
+	if limiter.limits.RPD == nil || *limiter.limits.RPD != 1000 {
+		t.Fatalf("want rpd override 1000 forwarded, got %v", limiter.limits.RPD)
+	}
 }
 
 func TestRateLimitRejectsRequest(t *testing.T) {
 	resetAt := time.Date(2026, 5, 8, 10, 1, 0, 0, time.UTC)
-	limiter := &fakeRateLimiter{
+	limiter := &fakeKeyRateLimiter{
 		decision: ratelimit.Decision{
 			Allowed:   false,
 			Limit:     60,
@@ -98,15 +107,12 @@ func TestRateLimitRejectsRequest(t *testing.T) {
 	}
 
 	nextCalled := false
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		nextCalled = true
-	})
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { nextCalled = true })
 
-	handler := RateLimit(limiter, testRateLimitOptions(nil))(next)
+	handler := RateLimit(limiter, RateLimitOptions{})(next)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
 		APIKeyID:  123,
-		ProjectID: 456,
 		KeyPrefix: "unio_sk_test",
 	}))
 	rec := httptest.NewRecorder()
@@ -116,31 +122,42 @@ func TestRateLimitRejectsRequest(t *testing.T) {
 	if nextCalled {
 		t.Fatal("want next handler not to be called")
 	}
-
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("want status %d, got %d", http.StatusTooManyRequests, rec.Code)
 	}
-
 	assertRateLimitHeaders(t, rec, "60", "0", resetAt)
 
 	var body httpx.ErrorResponse
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
-
 	if body.Error.Code != "rate_limited" {
 		t.Fatalf("want error code %q, got %q", "rate_limited", body.Error.Code)
 	}
 }
 
+func TestRateLimitUnlimitedSkipsHeaders(t *testing.T) {
+	limiter := &fakeKeyRateLimiter{decision: ratelimit.Decision{Allowed: true, Limit: 0}}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+
+	handler := RateLimit(limiter, RateLimitOptions{})(next)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{APIKeyID: 1}))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Header().Get(HeaderRateLimitLimit) != "" {
+		t.Fatalf("want no rate limit header under unlimited, got %q", rec.Header().Get(HeaderRateLimitLimit))
+	}
+}
+
 func TestRateLimitMissingPrincipal(t *testing.T) {
-	limiter := &fakeRateLimiter{}
+	limiter := &fakeKeyRateLimiter{}
 	nextCalled := false
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		nextCalled = true
-	})
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { nextCalled = true })
 
-	handler := RateLimit(limiter, testRateLimitOptions(nil))(next)
+	handler := RateLimit(limiter, RateLimitOptions{})(next)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
 
@@ -149,30 +166,24 @@ func TestRateLimitMissingPrincipal(t *testing.T) {
 	if nextCalled {
 		t.Fatal("want next handler not to be called")
 	}
-
-	if limiter.subject != "" {
-		t.Fatalf("want limiter not to be called, got subject %q", limiter.subject)
+	if limiter.called {
+		t.Fatal("want limiter not to be called without principal")
 	}
-
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("want status %d, got %d", http.StatusInternalServerError, rec.Code)
 	}
 }
 
-func TestRateLimitLimiterError(t *testing.T) {
-	limiter := &fakeRateLimiter{
-		err: errors.New("rate limit failed"),
-	}
+func TestRateLimitStoreErrorReturns500(t *testing.T) {
+	limiter := &fakeKeyRateLimiter{err: errors.New("rate limit failed")}
 	nextCalled := false
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		nextCalled = true
-	})
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { nextCalled = true })
 
-	handler := RateLimit(limiter, testRateLimitOptions(nil))(next)
+	logger := slog.New(slog.NewTextHandler(httptest.NewRecorder().Body, nil))
+	handler := RateLimit(limiter, RateLimitOptions{Logger: logger})(next)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
 		APIKeyID:  123,
-		ProjectID: 456,
 		KeyPrefix: "unio_sk_test",
 	}))
 	rec := httptest.NewRecorder()
@@ -180,66 +191,13 @@ func TestRateLimitLimiterError(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	if nextCalled {
-		t.Fatal("want next handler not to be called")
+		t.Fatal("want next handler not to be called on store error (guard already applied fail policy)")
 	}
-
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("want status %d, got %d", http.StatusInternalServerError, rec.Code)
 	}
-
-	if limiter.subject != "api_key:123" {
-		t.Fatalf("want subject %q, got %q", "api_key:123", limiter.subject)
-	}
-}
-
-func TestRateLimitLimiterErrorFailOpen(t *testing.T) {
-	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
-	limiter := &fakeRateLimiter{
-		err: errors.New("rate limit failed"),
-	}
-	nextCalled := false
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		nextCalled = true
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	opts := testRateLimitOptions(logger)
-	opts.FailurePolicy = RateLimitFailurePolicyFailOpen
-
-	handler := RateLimit(limiter, opts)(next)
-	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
-		APIKeyID:  123,
-		ProjectID: 456,
-		KeyPrefix: "unio_sk_test",
-	}))
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if !nextCalled {
-		t.Fatal("want next handler to be called")
-	}
-
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("want status %d, got %d", http.StatusNoContent, rec.Code)
-	}
-
-	logLine := logBuf.String()
-	if !strings.Contains(logLine, "failure_policy=fail_open") {
-		t.Fatalf("want log to contain fail_open policy, got %q", logLine)
-	}
-	if !strings.Contains(logLine, "api_key_prefix=unio_sk_test") {
-		t.Fatalf("want log to contain api key prefix, got %q", logLine)
-	}
-}
-
-func TestAPIKeyRateLimitSubject(t *testing.T) {
-	got := apiKeyRateLimitSubject(123)
-	want := "api_key:123"
-	if got != want {
-		t.Fatalf("want subject %q, got %q", want, got)
+	if limiter.apiKeyID != 123 {
+		t.Fatalf("want api key id 123, got %d", limiter.apiKeyID)
 	}
 }
 
@@ -250,28 +208,11 @@ func assertRateLimitHeaders(t *testing.T, rec *httptest.ResponseRecorder, limit 
 	if rec.Header().Get(HeaderRateLimitLimit) != limit {
 		t.Fatalf("want %s %q, got %q", HeaderRateLimitLimit, limit, rec.Header().Get(HeaderRateLimitLimit))
 	}
-
 	if rec.Header().Get(HeaderRateLimitRemaining) != remaining {
 		t.Fatalf("want %s %q, got %q", HeaderRateLimitRemaining, remaining, rec.Header().Get(HeaderRateLimitRemaining))
 	}
-
-	wantReset := strconvFormatUnix(resetAt)
+	wantReset := strconv.FormatInt(resetAt.Unix(), 10)
 	if rec.Header().Get(HeaderRateLimitReset) != wantReset {
 		t.Fatalf("want %s %q, got %q", HeaderRateLimitReset, wantReset, rec.Header().Get(HeaderRateLimitReset))
-	}
-}
-
-// strconvFormatUnix 返回时间的 Unix 秒字符串，避免测试里重复格式化逻辑。
-func strconvFormatUnix(t time.Time) string {
-	return strconv.FormatInt(t.Unix(), 10)
-}
-
-// testRateLimitOptions 返回 RateLimit middleware 测试使用的默认运行参数。
-func testRateLimitOptions(logger *slog.Logger) RateLimitOptions {
-	return RateLimitOptions{
-		Limit:         60,
-		Window:        time.Minute,
-		FailurePolicy: RateLimitFailurePolicyFailClosed,
-		Logger:        logger,
 	}
 }

@@ -16,15 +16,17 @@ SELECT COUNT(*) AS total
 FROM ledger_billing_exceptions
 WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
   AND ($2::text IS NULL OR event_type = $2::text)
-  AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
-  AND ($4::timestamptz IS NULL OR created_at < $4::timestamptz)
+  AND ($3::text IS NULL OR reason_code = $3::text)
+  AND ($4::timestamptz IS NULL OR created_at >= $4::timestamptz)
+  AND ($5::timestamptz IS NULL OR created_at < $5::timestamptz)
 `
 
 type CountLedgerBillingExceptionsParams struct {
-	UserID    pgtype.Int8
-	EventType pgtype.Text
-	FromTime  pgtype.Timestamptz
-	ToTime    pgtype.Timestamptz
+	UserID     pgtype.Int8
+	EventType  pgtype.Text
+	ReasonCode pgtype.Text
+	FromTime   pgtype.Timestamptz
+	ToTime     pgtype.Timestamptz
 }
 
 // CountLedgerBillingExceptions 返回与 ListLedgerBillingExceptionsPage 相同过滤条件下的总条数。
@@ -32,6 +34,7 @@ func (q *Queries) CountLedgerBillingExceptions(ctx context.Context, arg CountLed
 	row := q.db.QueryRow(ctx, countLedgerBillingExceptions,
 		arg.UserID,
 		arg.EventType,
+		arg.ReasonCode,
 		arg.FromTime,
 		arg.ToTime,
 	)
@@ -114,11 +117,11 @@ VALUES (
    $3,
    'write_off',
    $4::numeric,
-   $5::numeric,
-   $4::numeric - $5::numeric,
-   $6,
+   $5::numeric + $6::numeric,
+   $4::numeric - $5::numeric - $6::numeric,
    $7,
-   $8
+   $8,
+   $9
        )
 RETURNING id, user_id, request_record_id, reservation_id, event_type, actual_amount, captured_amount, platform_amount, currency, reason_code, reason, created_at
 `
@@ -129,12 +132,15 @@ type CreateLedgerWriteOffExceptionParams struct {
 	ReservationID   int64
 	ActualAmount    pgtype.Numeric
 	CapturedAmount  pgtype.Numeric
+	OverageAmount   pgtype.Numeric
 	Currency        string
 	ReasonCode      string
 	Reason          string
 }
 
-// CreateLedgerWriteOffException 记录实际费用超过授权金额时的平台核销事实。
+// CreateLedgerWriteOffException 记录实际费用超过「授权金额 + 二次补扣金额」后仍由平台核销的残差事实。
+// captured_amount 存「冻结内确认扣费 + 超额二次补扣」的合计（用户真实承担总额）；
+// platform_amount = 真实费用 - 合计实扣，即平台最终核销的不可回收残差。
 func (q *Queries) CreateLedgerWriteOffException(ctx context.Context, arg CreateLedgerWriteOffExceptionParams) (LedgerBillingException, error) {
 	row := q.db.QueryRow(ctx, createLedgerWriteOffException,
 		arg.UserID,
@@ -142,6 +148,7 @@ func (q *Queries) CreateLedgerWriteOffException(ctx context.Context, arg CreateL
 		arg.ReservationID,
 		arg.ActualAmount,
 		arg.CapturedAmount,
+		arg.OverageAmount,
 		arg.Currency,
 		arg.ReasonCode,
 		arg.Reason,
@@ -235,17 +242,28 @@ SELECT
 FROM ledger_billing_exceptions
 WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
   AND ($2::text IS NULL OR event_type = $2::text)
-  AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
-  AND ($4::timestamptz IS NULL OR created_at < $4::timestamptz)
-ORDER BY created_at DESC, id DESC
-LIMIT $6 OFFSET $5
+  AND ($3::text IS NULL OR reason_code = $3::text)
+  AND ($4::timestamptz IS NULL OR created_at >= $4::timestamptz)
+  AND ($5::timestamptz IS NULL OR created_at < $5::timestamptz)
+ORDER BY
+  CASE WHEN COALESCE($6::text, 'created_at') IN ('', 'created_at') AND COALESCE($7::bool, true) THEN created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE($6::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($7::bool, true) THEN created_at END ASC NULLS LAST,
+  CASE WHEN $6::text = 'user_id' AND COALESCE($7::bool, false) THEN user_id END DESC NULLS LAST,
+  CASE WHEN $6::text = 'user_id' AND NOT COALESCE($7::bool, false) THEN user_id END ASC NULLS LAST,
+  CASE WHEN $6::text = 'event_type' AND COALESCE($7::bool, false) THEN event_type END DESC NULLS LAST,
+  CASE WHEN $6::text = 'event_type' AND NOT COALESCE($7::bool, false) THEN event_type END ASC NULLS LAST,
+  id DESC
+LIMIT $9 OFFSET $8
 `
 
 type ListLedgerBillingExceptionsPageParams struct {
 	UserID     pgtype.Int8
 	EventType  pgtype.Text
+	ReasonCode pgtype.Text
 	FromTime   pgtype.Timestamptz
 	ToTime     pgtype.Timestamptz
+	SortField  pgtype.Text
+	SortDesc   pgtype.Bool
 	PageOffset int32
 	PageLimit  int32
 }
@@ -256,8 +274,11 @@ func (q *Queries) ListLedgerBillingExceptionsPage(ctx context.Context, arg ListL
 	rows, err := q.db.Query(ctx, listLedgerBillingExceptionsPage,
 		arg.UserID,
 		arg.EventType,
+		arg.ReasonCode,
 		arg.FromTime,
 		arg.ToTime,
+		arg.SortField,
+		arg.SortDesc,
 		arg.PageOffset,
 		arg.PageLimit,
 	)

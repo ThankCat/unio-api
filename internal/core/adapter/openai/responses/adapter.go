@@ -71,12 +71,19 @@ func (a *Adapter) CreateResponse(ctx context.Context, ch channel.Runtime, req Re
 		return nil, newUpstreamStatusError(upstreamResp, "upstream")
 	}
 
-	raw, err := readAllLimited(upstreamResp.Body, maxResponsesStreamEventBytes)
+	raw, exceeded, err := adapter.ReadUpstreamBodyLimited(upstreamResp.Body)
 	if err != nil {
 		return nil, failure.Wrap(
 			failure.CodeAdapterReadStreamFailed,
 			err,
 			failure.WithMessage("openai responses adapter read response body"),
+		)
+	}
+	if exceeded {
+		return nil, failure.New(
+			failure.CodeAdapterResponseTooLarge,
+			failure.WithMessage("openai responses adapter response body exceeds limit"),
+			failure.WithField("limit_bytes", adapter.MaxUpstreamResponseBytes()),
 		)
 	}
 

@@ -283,7 +283,9 @@ func TestRouterPlanChatReturnsStoreError(t *testing.T) {
 	}
 }
 
-func TestRouterPlanChatReturnsCredentialDecryptError(t *testing.T) {
+// TestRouterPlanChatAllCandidatesDecryptFailReturnsNoAvailable 验证 P1-1：当全部候选凭据解密失败时，
+// 跳过坏候选不再整盘抛底层 decrypt 错误，而是收口为 ErrNoAvailableChannel（不泄露内部凭据错误）。
+func TestRouterPlanChatAllCandidatesDecryptFailReturnsNoAvailable(t *testing.T) {
 	decryptErr := errors.New("decrypt unavailable")
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
@@ -304,12 +306,16 @@ func TestRouterPlanChatReturnsCredentialDecryptError(t *testing.T) {
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
 	})
-	if !errors.Is(err, decryptErr) {
-		t.Fatalf("expected credential decrypt error, got %v", err)
+	if !errors.Is(err, ErrNoAvailableChannel) {
+		t.Fatalf("expected ErrNoAvailableChannel after skipping all bad candidates, got %v", err)
+	}
+	if errors.Is(err, decryptErr) {
+		t.Fatal("internal decrypt error must not leak to caller")
 	}
 }
 
-func TestRouterPlanChatReturnsMissingCredentialError(t *testing.T) {
+// TestRouterPlanChatAllCandidatesMissingCredentialReturnsNoAvailable 验证 P1-1：唯一候选缺凭据被跳过后收口为 ErrNoAvailableChannel。
+func TestRouterPlanChatAllCandidatesMissingCredentialReturnsNoAvailable(t *testing.T) {
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
@@ -329,8 +335,50 @@ func TestRouterPlanChatReturnsMissingCredentialError(t *testing.T) {
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
 	})
-	if !errors.Is(err, ErrChannelCredentialMissing) {
-		t.Fatalf("expected ErrChannelCredentialMissing, got %v", err)
+	if !errors.Is(err, ErrNoAvailableChannel) {
+		t.Fatalf("expected ErrNoAvailableChannel, got %v", err)
+	}
+}
+
+// TestRouterPlanChatSkipsBadCandidateKeepsGood 验证 P1-1：单个坏候选（缺凭据）被跳过，
+// 健康候选仍正常进入 plan，请求不被整盘拖垮。
+func TestRouterPlanChatSkipsBadCandidateKeepsGood(t *testing.T) {
+	goodEncrypted := mustEncryptTestCredential(t, "secret://openai/good")
+	store := &fakeStore{
+		rows: []sqlc.FindRouteCandidatesRow{
+			{
+				AdapterKey:          "openai",
+				ChannelID:           111,
+				BaseUrl:             "https://bad.openai.example/v1",
+				CredentialEncrypted: nil, // 坏候选：缺凭据，应被跳过
+				TimeoutMs:           pgtype.Int4{Int32: 15000, Valid: true},
+				UpstreamModel:       "gpt-4.1",
+			},
+			{
+				AdapterKey:          "openai",
+				ChannelID:           222,
+				BaseUrl:             "https://good.openai.example/v1",
+				CredentialEncrypted: goodEncrypted,
+				TimeoutMs:           pgtype.Int4{Int32: 30000, Valid: true},
+				UpstreamModel:       "gpt-4.1",
+			},
+		},
+	}
+	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
+
+	got, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		ProjectID:       42,
+		ModelID:         "openai/gpt-4.1",
+		IngressProtocol: ProtocolOpenAI,
+	})
+	if err != nil {
+		t.Fatalf("expected good candidate to survive, got error: %v", err)
+	}
+	if len(got.Candidates) != 1 {
+		t.Fatalf("expected 1 surviving candidate, got %d", len(got.Candidates))
+	}
+	if got.Candidates[0].Channel.ID != 222 {
+		t.Fatalf("expected surviving channel 222, got %d", got.Candidates[0].Channel.ID)
 	}
 }
 

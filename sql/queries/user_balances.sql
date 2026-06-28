@@ -182,6 +182,53 @@ RETURNING
     created_at,
     updated_at;
 
+-- name: CollectUserBalanceOverage :one
+-- CollectUserBalanceOverage 在 capture 之后，对「真实费用超过授权金额」的差额做二次补扣。
+-- 实扣金额 = GREATEST(LEAST(可用余额(balance - reserved_balance), 真实费用 - 授权金额), 0)：
+--   可用余额足够时全额补扣差额；不足时只扣到清空可用余额；不动用其它请求的冻结额，余额永不为负。
+-- 返回本次实际补扣金额 collected_amount 与扣减后的余额投影，供调用方写超额扣费流水。
+WITH locked_balance AS (
+    SELECT
+        ub.id,
+        GREATEST(
+            LEAST(
+                ub.balance - ub.reserved_balance,
+                sqlc.arg(actual_amount)::numeric(20, 10) - sqlc.arg(authorized_amount)::numeric(20, 10)
+            ),
+            0
+        )::numeric(20, 10) AS collected_amount
+    FROM user_balances ub
+    WHERE ub.user_id = sqlc.arg(user_id)
+      AND ub.currency = sqlc.arg(currency)
+        FOR UPDATE
+),
+     updated AS (
+         UPDATE user_balances ub
+             SET
+                 balance = ub.balance - lb.collected_amount,
+                 updated_at = now()
+             FROM locked_balance lb
+             WHERE ub.id = lb.id
+             RETURNING
+                 ub.id,
+                 ub.user_id,
+                 ub.currency,
+                 ub.balance,
+                 ub.reserved_balance,
+                 ub.created_at,
+                 ub.updated_at,
+                 lb.collected_amount
+     )
+SELECT id,
+       user_id,
+       currency,
+       balance,
+       reserved_balance,
+       created_at,
+       updated_at,
+       collected_amount
+FROM updated;
+
 -- name: ReserveAvailableUserBalance :one
 -- ReserveAvailableUserBalance 按估算金额冻结用户全部或部分可用余额，并返回本次实际授权金额。
 WITH locked_balance AS (

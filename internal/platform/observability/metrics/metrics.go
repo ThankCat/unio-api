@@ -111,6 +111,10 @@ type Metrics struct {
 	settlementTotal  *prometheus.CounterVec
 	streamEventTotal *prometheus.CounterVec
 
+	partialSettlementTotal *prometheus.CounterVec
+	retryableFallbackTotal *prometheus.CounterVec
+	zeroPriceServedTotal   *prometheus.CounterVec
+
 	rateLimitDecisions *prometheus.CounterVec
 
 	capabilityCheckTotal    *prometheus.CounterVec
@@ -170,6 +174,21 @@ func New() *Metrics {
 			Help: "Gateway 流式请求生命周期事件计数。",
 		}, []string{"event"}),
 
+		partialSettlementTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_partial_settlement_total",
+			Help: "流式 partial settlement（按已吐内容保守估算收费）发生次数，按原因聚合（P2-2 监控偏少收/滥用）。",
+		}, []string{"reason"}),
+
+		retryableFallbackTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_retryable_fallback_total",
+			Help: "因可重试上游错误切换到下一候选的次数，按上游错误分类聚合（P2-3 监控前序候选可能已产生但未计费的成本）。",
+		}, []string{"error_category"}),
+
+		zeroPriceServedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_zero_price_served_total",
+			Help: "以零售价（客户侧 $0）成功结算的请求次数，按 provider/channel/model 聚合（P2-4 零价渠道误配告警）。",
+		}, []string{"provider", "channel", "model"}),
+
 		rateLimitDecisions: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "unio_ratelimit_decisions_total",
 			Help: "限流判定结果计数，包含放行、限流和 Redis 故障降级。",
@@ -202,6 +221,9 @@ func New() *Metrics {
 		m.upstreamDuration,
 		m.settlementTotal,
 		m.streamEventTotal,
+		m.partialSettlementTotal,
+		m.retryableFallbackTotal,
+		m.zeroPriceServedTotal,
 		m.rateLimitDecisions,
 		m.capabilityCheckTotal,
 		m.capabilityRequiredTotal,
@@ -269,6 +291,27 @@ func (m *Metrics) IncStreamEvent(event StreamEvent) {
 // IncRateLimitDecision 记录一次限流判定结果。
 func (m *Metrics) IncRateLimitDecision(decision RateLimitDecision) {
 	m.rateLimitDecisions.WithLabelValues(string(decision)).Inc()
+}
+
+// IncPartialSettlement 记录一次流式 partial settlement（P2-2）。reason 为有界原因（interrupted/canceled/missing_usage 等）。
+func (m *Metrics) IncPartialSettlement(reason string) {
+	if reason == "" {
+		reason = "unknown"
+	}
+	m.partialSettlementTotal.WithLabelValues(reason).Inc()
+}
+
+// IncRetryableFallback 记录一次因可重试上游错误而切换候选（P2-3）。errorCategory 为有界上游错误分类。
+func (m *Metrics) IncRetryableFallback(errorCategory string) {
+	if errorCategory == "" {
+		errorCategory = upstreamErrorCategoryNone
+	}
+	m.retryableFallbackTotal.WithLabelValues(errorCategory).Inc()
+}
+
+// IncZeroPriceServed 记录一次以零售价成功结算的请求（P2-4 零价渠道误配）。
+func (m *Metrics) IncZeroPriceServed(provider string, channel string, model string) {
+	m.zeroPriceServedTotal.WithLabelValues(provider, channel, model).Inc()
 }
 
 // IncCapabilityCheck 记录一次 capability 闸门判定结果。

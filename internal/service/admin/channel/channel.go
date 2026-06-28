@@ -40,6 +40,7 @@ type Store interface {
 	GetChannel(ctx context.Context, id int64) (sqlc.Channel, error)
 	CreateChannel(ctx context.Context, arg sqlc.CreateChannelParams) (sqlc.Channel, error)
 	UpdateChannel(ctx context.Context, arg sqlc.UpdateChannelParams) (sqlc.Channel, error)
+	SetChannelRateLimits(ctx context.Context, arg sqlc.SetChannelRateLimitsParams) (sqlc.Channel, error)
 	UpdateChannelCredential(ctx context.Context, arg sqlc.UpdateChannelCredentialParams) (int64, error)
 	DeleteChannelCascade(ctx context.Context, id int64) (int64, error)
 }
@@ -65,7 +66,7 @@ type AdapterKeyOption struct {
 
 // Channel 是 admin 视角的 channel 业务事实；不含上游凭据。
 //
-// ProviderName 仅在分页列表场景由 JOIN 带出；单条读取/写入路径为空串。
+// ProviderName 由 enrichProviderName 在单条读取/写入后补全；列表场景由 JOIN 直接带出。
 type Channel struct {
 	ID           int64
 	ProviderID   int64
@@ -77,8 +78,12 @@ type Channel struct {
 	Status       string
 	Priority     int32
 	TimeoutMs    *int32
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// RPMLimit/TPMLimit/RPDLimit 是渠道级限流上限（P2-8）：nil=继承全局默认，0=不限，>0=具体上限。
+	RPMLimit  *int64
+	TPMLimit  *int64
+	RPDLimit  *int64
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // ListParams 是分页/过滤列出 channel 的入参；ProviderID<=0、Status/Query 为空表示不过滤。
@@ -109,6 +114,11 @@ type CreateInput struct {
 	Status     string
 	Priority   int32
 	TimeoutMs  *int32
+	// RateLimitsProvided=true 时按 RPM/TPM/RPD 设置渠道级限流（各值 nil=继承全局默认，0=不限，>0=具体上限）。
+	RateLimitsProvided bool
+	RPMLimit           *int64
+	TPMLimit           *int64
+	RPDLimit           *int64
 }
 
 // UpdateInput 是更新 channel 的入参；protocol、adapter_key 与凭据不在此修改。
@@ -119,6 +129,11 @@ type UpdateInput struct {
 	Status    string
 	Priority  int32
 	TimeoutMs *int32
+	// RateLimitsProvided=true 时按 RPM/TPM/RPD 原子设置渠道级限流。
+	RateLimitsProvided bool
+	RPMLimit           *int64
+	TPMLimit           *int64
+	RPDLimit           *int64
 }
 
 // RotateCredentialInput 是轮换 channel 上游凭据的入参。
@@ -203,7 +218,7 @@ func (s *Service) Get(ctx context.Context, id int64) (Channel, error) {
 		return Channel{}, storeFailed(err, "get channel")
 	}
 
-	return toChannel(row), nil
+	return s.enrichProviderName(ctx, toChannel(row))
 }
 
 // Create 创建 channel：校验复合键在 registry 注册、provider 存在，再加密凭据落库。
@@ -288,7 +303,24 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		return Channel{}, storeFailed(err, "create channel")
 	}
 
-	return toChannel(row), nil
+	// 渠道级限流作为独立 UPDATE（CreateChannel 不接收 rpm/tpm/rpd），创建后按需补设（P2-8）。
+	if in.RateLimitsProvided {
+		if err := validateChannelRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit); err != nil {
+			return Channel{}, err
+		}
+		limited, err := s.store.SetChannelRateLimits(ctx, sqlc.SetChannelRateLimitsParams{
+			ID:       row.ID,
+			RpmLimit: rateLimitParam(in.RPMLimit),
+			TpmLimit: rateLimitParam(in.TPMLimit),
+			RpdLimit: rateLimitParam(in.RPDLimit),
+		})
+		if err != nil {
+			return Channel{}, storeFailed(err, "set channel rate limits")
+		}
+		row = limited
+	}
+
+	return s.enrichProviderName(ctx, toChannel(row))
 }
 
 // Update 更新 channel 的展示名、上游地址、状态、优先级与超时。
@@ -334,7 +366,26 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 		return Channel{}, storeFailed(err, "update channel")
 	}
 
-	return toChannel(row), nil
+	if in.RateLimitsProvided {
+		if err := validateChannelRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit); err != nil {
+			return Channel{}, err
+		}
+		limited, err := s.store.SetChannelRateLimits(ctx, sqlc.SetChannelRateLimitsParams{
+			ID:       in.ID,
+			RpmLimit: rateLimitParam(in.RPMLimit),
+			TpmLimit: rateLimitParam(in.TPMLimit),
+			RpdLimit: rateLimitParam(in.RPDLimit),
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return Channel{}, notFound("channel not found")
+			}
+			return Channel{}, storeFailed(err, "set channel rate limits")
+		}
+		row = limited
+	}
+
+	return s.enrichProviderName(ctx, toChannel(row))
 }
 
 // RotateCredential 轮换 channel 上游凭据；目标不存在返回 not_found。
@@ -400,9 +451,27 @@ func toChannel(c sqlc.Channel) Channel {
 		Status:     c.Status,
 		Priority:   c.Priority,
 		TimeoutMs:  timeoutResult(c.TimeoutMs),
+		RPMLimit:   rateLimitResult(c.RpmLimit),
+		TPMLimit:   rateLimitResult(c.TpmLimit),
+		RPDLimit:   rateLimitResult(c.RpdLimit),
 		CreatedAt:  c.CreatedAt.Time,
 		UpdatedAt:  c.UpdatedAt.Time,
 	}
+}
+
+func (s *Service) enrichProviderName(ctx context.Context, ch Channel) (Channel, error) {
+	if ch.ProviderID <= 0 {
+		return ch, nil
+	}
+	provider, err := s.store.GetProvider(ctx, ch.ProviderID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ch, nil
+		}
+		return Channel{}, storeFailed(err, "load provider for channel")
+	}
+	ch.ProviderName = provider.Name
+	return ch, nil
 }
 
 // toChannelRow 映射分页列表行，额外带出 JOIN 出的 provider 名称。
@@ -418,9 +487,39 @@ func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 		Status:       c.Status,
 		Priority:     c.Priority,
 		TimeoutMs:    timeoutResult(c.TimeoutMs),
+		RPMLimit:     rateLimitResult(c.RpmLimit),
+		TPMLimit:     rateLimitResult(c.TpmLimit),
+		RPDLimit:     rateLimitResult(c.RpdLimit),
 		CreatedAt:    c.CreatedAt.Time,
 		UpdatedAt:    c.UpdatedAt.Time,
 	}
+}
+
+// rateLimitParam 把 *int64 转成可空 pgtype.Int4（nil=NULL 继承全局默认；含 0=显式不限）。
+func rateLimitParam(v *int64) pgtype.Int4 {
+	if v == nil {
+		return pgtype.Int4{Valid: false}
+	}
+	return pgtype.Int4{Int32: int32(*v), Valid: true}
+}
+
+// rateLimitResult 把可空 pgtype.Int4 转成 *int64（nil=继承全局默认）。
+func rateLimitResult(v pgtype.Int4) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	out := int64(v.Int32)
+	return &out
+}
+
+// validateChannelRateLimits 校验渠道级限流非负（限流上限不能为负数）。
+func validateChannelRateLimits(rpm, tpm, rpd *int64) error {
+	for field, v := range map[string]*int64{"rpm_limit": rpm, "tpm_limit": tpm, "rpd_limit": rpd} {
+		if v != nil && *v < 0 {
+			return invalidArgument(field, "rate limit must be a non-negative integer (0 means unlimited)")
+		}
+	}
+	return nil
 }
 
 // textParam 把空串转成 NULL（不过滤），非空转成有值 pgtype.Text。

@@ -181,6 +181,13 @@ const (
 
 	// CodeRateLimitStoreFailed 表示限流计数存储失败。
 	CodeRateLimitStoreFailed Code = "ratelimit_store_failed"
+
+	// CodeRateLimitExceeded 表示 API Key 级 RPM/TPM/RPD 限流命中，请求被拒（映射 HTTP 429）。
+	CodeRateLimitExceeded Code = "rate_limit_exceeded"
+
+	// CodeGatewayChannelRateLimited 表示渠道级 RPM/TPM/RPD 限流命中：单候选层面用于跳过该候选 fallback；
+	// 全部候选都被限流时作为整体失败码上抛（映射 HTTP 429）。
+	CodeGatewayChannelRateLimited Code = "channel_rate_limited"
 )
 
 const (
@@ -280,6 +287,12 @@ const (
 	// CodeAdapterReadStreamFailed 表示 adapter 读取上游 stream 失败。
 	CodeAdapterReadStreamFailed Code = "adapter_read_stream_failed"
 
+	// CodeAdapterResponseTooLarge 表示上游非流式响应体超过网关配置的字节上限（防 OOM）。
+	CodeAdapterResponseTooLarge Code = "adapter_response_too_large"
+
+	// CodeAdapterStreamIdleTimeout 表示流式上游在 idle 超时窗口内未推进任何字节（疑似半开/挂死连接）。
+	CodeAdapterStreamIdleTimeout Code = "adapter_stream_idle_timeout"
+
 	// CodeAdapterTokenizeFailed 表示 adapter 执行 provider-specific tokenizer 失败。
 	CodeAdapterTokenizeFailed Code = "adapter_tokenize_failed"
 
@@ -348,6 +361,9 @@ const (
 
 	// CodeGatewayChatSettlementIdempotencyConflict 表示重复 settlement 的事实和第一次成功结算不一致。
 	CodeGatewayChatSettlementIdempotencyConflict Code = "gateway_chat_settlement_idempotency_conflict"
+
+	// CodeGatewayRequestOrphanReclaimed 表示进程崩溃遗留的孤儿请求被清扫 worker 释放冻结并收口为 failed。
+	CodeGatewayRequestOrphanReclaimed Code = "gateway_request_orphan_reclaimed"
 )
 
 const (

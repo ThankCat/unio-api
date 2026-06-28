@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -93,7 +92,59 @@ type ChatSettlementParams struct {
 	ModelDBID           int64
 	FinalProviderID     int64
 	FinalChannelID      int64
-	Facts               adapter.ResponseFacts
+	// ChannelPriceID 是中标候选在路由/授权时锁定的 channel_prices 行 ID（P1-3）。
+	// settlement 优先按此 ID 取价计费，降低「授权后管理员停用/改窗口」导致结算价漂移到另一行的竞态。
+	// 0 表示未透传（旧数据 / 个别路径），此时回退按 attemptStart 时点重查 active 价。
+	ChannelPriceID int64
+	Facts          adapter.ResponseFacts
+}
+
+// resolveSettlementChannelPrice 解析 settlement 计费应使用的 channel_prices 行。
+//
+// 优先用「中标候选在路由/授权时锁定的 channelPriceID」(P1-3)：channel_prices 金额不可变（改价是新增一行），
+// 只要该行仍存在且归属 (channel, model) 一致，就以它为准——即使管理员随后停用该价或改动生效窗口，结算价也
+// 不会漂移到另一行，从源头消除改价竞态。channelPriceID<=0（旧数据/缺失）或该行已不存在/与路由不一致时，
+// 回退到按 attemptStart 时点重查 FindActiveChannelPrice（保持既有行为）。
+func resolveSettlementChannelPrice(
+	ctx context.Context,
+	queries *sqlc.Queries,
+	channelID int64,
+	modelID int64,
+	channelPriceID int64,
+	atTime time.Time,
+) (sqlc.ChannelPrice, error) {
+	if channelPriceID > 0 {
+		pinned, err := queries.GetChannelPrice(ctx, channelPriceID)
+		switch {
+		case err == nil:
+			// 防御：仅当锁定价确实归属本次中标的 (channel, model) 才采用，避免脏 ID 串价。
+			if pinned.ChannelID == channelID && pinned.ModelID == modelID {
+				return pinned, nil
+			}
+		case errors.Is(err, pgx.ErrNoRows):
+			// 行已不存在（极少见，价一般不硬删）：回退重查。
+		default:
+			return sqlc.ChannelPrice{}, failure.Wrap(
+				failure.CodeGatewayChatSettlementFailed,
+				err,
+				failure.WithMessage("load pinned channel price for chat settlement"),
+			)
+		}
+	}
+
+	price, err := queries.FindActiveChannelPrice(ctx, sqlc.FindActiveChannelPriceParams{
+		ChannelID: channelID,
+		ModelID:   modelID,
+		AtTime:    pgtype.Timestamptz{Time: atTime, Valid: true},
+	})
+	if err != nil {
+		return sqlc.ChannelPrice{}, failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("find active channel price for chat settlement"),
+		)
+	}
+	return price, nil
 }
 
 // ValidateChatSettlementFacts 校验 adapter 交给 settlement 的不可变事实。
@@ -198,11 +249,13 @@ func UpstreamRequestIDPtr(requestID string) *string {
 	return &requestID
 }
 
-// injectedSettlementFailure 仅用于本地账单 E2E 故障注入（env BILLING_E2E_INJECT_SETTLEMENT_FAIL）。
-// 生产默认不设置该 env → 返回 nil，零影响。取值 "always" 时每次 raw settlement 都失败，用于驱动
+// injectedSettlementFailure 仅用于本地账单 E2E 故障注入。
+//
+// P2-6：故障注入开关只在以 `-tags billing_e2e` 构建的二进制里读取 env，生产构建恒为 false，
+// 杜绝「生产误设 env 导致每次结算都失败」。"always" 让每次 raw settlement 失败，用于驱动
 // recovery 重试耗尽 → dead → 风险敞口收口（REC-02）。"once" 在 recoverable 包裹器层处理（REC-01）。
 func injectedSettlementFailure() error {
-	if os.Getenv("BILLING_E2E_INJECT_SETTLEMENT_FAIL") == "always" {
+	if faultInjectSettlementAlways() {
 		return failure.New(
 			failure.CodeGatewayChatSettlementFailed,
 			failure.WithMessage("billing e2e injected settlement failure (always)"),
@@ -345,19 +398,18 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		return err
 	}
 
-	// 阶段 15：按实际命中渠道重查 channel_prices，一次取回售价 + 成本（同源、同 at_time）。
-	// 收入不再沿用 authorization 锁价；authorization 只负责保守冻结。
-	channelPrice, err := txQueries.FindActiveChannelPrice(ctx, sqlc.FindActiveChannelPriceParams{
-		ChannelID: params.FinalChannelID,
-		ModelID:   params.ModelDBID,
-		AtTime:    pgtype.Timestamptz{Time: params.AttemptRecord.StartedAt, Valid: true},
-	})
+	// 阶段 15 + P1-3：优先用中标候选锁定的 channel_prices 行（降低改价竞态），缺失时回退按 attemptStart
+	// 时点重查；一次取回售价 + 成本（同源）。收入不沿用 authorization 锁价；authorization 只负责保守冻结。
+	channelPrice, err := resolveSettlementChannelPrice(
+		ctx,
+		txQueries,
+		params.FinalChannelID,
+		params.ModelDBID,
+		params.ChannelPriceID,
+		params.AttemptRecord.StartedAt,
+	)
 	if err != nil {
-		return failure.Wrap(
-			failure.CodeGatewayChatSettlementFailed,
-			err,
-			failure.WithMessage("find active channel price for chat settlement"),
-		)
+		return err
 	}
 
 	// 收入快照：命中渠道的售价（price_id 指向 channel_prices）。
@@ -472,6 +524,20 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 				err,
 				failure.WithMessage("add api key spent total"),
 			)
+		}
+
+		// 真实费用超出冻结额度时的超额二次补扣同样是用户真实承担的花费，一并计入费用上限累计口径。
+		if !numericIsZero(reservation.OverageCapturedAmount) {
+			if err := txQueries.AddAPIKeySpentTotal(ctx, sqlc.AddAPIKeySpentTotalParams{
+				Amount: reservation.OverageCapturedAmount,
+				ID:     params.RequestRecord.APIKeyID,
+			}); err != nil {
+				return failure.Wrap(
+					failure.CodeGatewayChatSettlementFailed,
+					err,
+					failure.WithMessage("add api key overage spent total"),
+				)
+			}
 		}
 	}
 
@@ -627,6 +693,106 @@ func (s *ChatSettlementService) releaseDeadSettlementReservation(ctx context.Con
 			failure.CodeGatewayChatSettlementFailed,
 			err,
 			failure.WithMessage("record risk exposure for dead chat settlement finalize"),
+		)
+	}
+
+	return nil
+}
+
+// FinalizeOrphanReservation 收口一条「进程崩溃遗留的孤儿预授权」：请求永久停留 running、冻结余额永不释放。
+//
+// 这类残留发生在 gateway 在 PreAuthorize 之后、settlement/补偿任务建立之前崩溃：既没有正常结算路径，
+// 也没有 settlement_recovery_job 兜底（调用方查询已用 NOT EXISTS 排除有补偿任务者，与该 worker 严格互补）。
+// 本方法在单事务内：
+//  1. 锁请求记录，仅当其仍为 running 才继续（幂等闸门：已被其他路径收口则直接返回）；
+//  2. 释放冻结余额（用户不扣费），并记一条 risk_exposure 异常作为「可能已产生上游成本」的上界敞口，便于观测追查；
+//  3. 把请求原子推进到 failed。
+//
+// 以「请求仍为 running」为闸门，崩溃后下个 tick 安全重放；多 worker 并发由请求记录行锁串行化。
+func (s *ChatSettlementService) FinalizeOrphanReservation(ctx context.Context, reservation sqlc.LedgerReservation) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayRequestOrphanReclaimed,
+			err,
+			failure.WithMessage("begin orphan reservation finalize transaction"),
+		)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	txQueries := s.queries.WithTx(tx)
+
+	lockedRequest, err := txQueries.GetRequestRecordForUpdate(ctx, reservation.RequestRecordID)
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayRequestOrphanReclaimed,
+			err,
+			failure.WithMessage("lock request record for orphan reservation finalize"),
+		)
+	}
+
+	// 幂等闸门：只有仍停留在 running 的请求才需要收口；其余终态说明已被其他路径处理。
+	if requestlog.RequestStatus(lockedRequest.Status) != requestlog.RequestStatusRunning {
+		return nil
+	}
+
+	reservationID := reservation.ID
+	released, err := s.ledgerCapturer.ReleaseWithQueries(ctx, txQueries, ledger.ReleaseParams{
+		RequestRecordID: reservation.RequestRecordID,
+		ReservationID:   &reservationID,
+	})
+	if err != nil {
+		// 已被释放/不存在则视作已收口，幂等返回；其余（如已 captured 冲突）上抛由 worker 重试或告警。
+		if failure.CodeOf(err) == failure.CodeLedgerReservationNotFound {
+			return nil
+		}
+		return failure.Wrap(
+			failure.CodeGatewayRequestOrphanReclaimed,
+			err,
+			failure.WithMessage("release orphan reservation"),
+		)
+	}
+
+	_, err = txQueries.CreateLedgerRiskExposureException(ctx, sqlc.CreateLedgerRiskExposureExceptionParams{
+		UserID:          released.UserID,
+		RequestRecordID: released.RequestRecordID,
+		ReservationID:   released.ID,
+		PlatformAmount:  released.AuthorizedAmount,
+		Currency:        released.Currency,
+		ReasonCode:      "orphan_reservation_swept",
+		Reason:          "process crash left an authorized reservation with a stuck running request; frozen balance released and request finalized as failed",
+	})
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayRequestOrphanReclaimed,
+			err,
+			failure.WithMessage("record risk exposure for orphan reservation finalize"),
+		)
+	}
+
+	txRequestLog := requestlog.NewStore(txQueries)
+	_, err = txRequestLog.MarkRequestFailed(ctx, requestlog.MarkRequestFailedParams{
+		ID:                  reservation.RequestRecordID,
+		ErrorCode:           string(failure.CodeGatewayRequestOrphanReclaimed),
+		ErrorMessage:        BaseSafeRequestLogErrorMessage(string(failure.CodeGatewayRequestOrphanReclaimed)),
+		InternalErrorDetail: "orphan authorized reservation swept by worker; frozen balance released and request finalized as failed",
+		CompletedAt:         time.Now(),
+	})
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayRequestOrphanReclaimed,
+			err,
+			failure.WithMessage("mark request failed for orphan reservation finalize"),
+		)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayRequestOrphanReclaimed,
+			err,
+			failure.WithMessage("commit orphan reservation finalize transaction"),
 		)
 	}
 
@@ -915,7 +1081,62 @@ func ensureSettlementCapturedReservationMatches(ctx context.Context, queries *sq
 		return ChatSettlementIdempotencyConflict("capture ledger entry mismatch")
 	}
 
-	return ensureSettlementWriteOffMatches(ctx, queries, reservation, actualAmount, capturedAmount)
+	// 还原首次结算的超额二次补扣：存在独立 overage debit 时校验其身份并取金额，否则为 0。
+	overageCaptured := chatSettlementNumericZero()
+	overageEntry, err := queries.GetLedgerEntryByIdempotencyKey(ctx, settlementOverageIdempotencyKey(reservation.RequestRecordID))
+	if err == nil {
+		if overageEntry.UserID != reservation.UserID ||
+			!overageEntry.RequestRecordID.Valid ||
+			overageEntry.RequestRecordID.Int64 != reservation.RequestRecordID ||
+			overageEntry.EntryType != string(ledger.EntryTypeDebit) ||
+			overageEntry.Currency != reservation.Currency ||
+			!chatSettlementNumericGreaterThan(overageEntry.Amount, chatSettlementNumericZero()) {
+			return ChatSettlementIdempotencyConflict("overage ledger entry mismatch")
+		}
+		overageCaptured = overageEntry.Amount
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("lookup idempotent overage ledger entry"),
+		)
+	}
+
+	return ensureSettlementWriteOffMatches(ctx, queries, reservation, actualAmount, capturedAmount, overageCaptured)
+}
+
+// settlementOverageIdempotencyKey 由 capture 幂等键派生超额补扣 debit 幂等键，与 ledger.overageIdempotencyKey 保持一致。
+func settlementOverageIdempotencyKey(requestRecordID int64) string {
+	return fmt.Sprintf("chat:settle:%d", requestRecordID) + ":overage"
+}
+
+// chatSettlementNumericZero 返回 settlement 幂等校验用的 0 金额 NUMERIC。
+func chatSettlementNumericZero() pgtype.Numeric {
+	return pgtype.Numeric{Int: big.NewInt(0), Exp: 0, Valid: true}
+}
+
+// chatSettlementAddNumeric 精确相加两个有限 NUMERIC（按更小指数对齐），用于还原用户真实承担总额。
+func chatSettlementAddNumeric(left pgtype.Numeric, right pgtype.Numeric) pgtype.Numeric {
+	leftFinite := left.Valid && !left.NaN && left.InfinityModifier == pgtype.Finite && left.Int != nil
+	rightFinite := right.Valid && !right.NaN && right.InfinityModifier == pgtype.Finite && right.Int != nil
+	if !leftFinite || !rightFinite {
+		return pgtype.Numeric{}
+	}
+
+	exp := left.Exp
+	if right.Exp < exp {
+		exp = right.Exp
+	}
+
+	scale := func(value pgtype.Numeric) *big.Int {
+		diff := value.Exp - exp
+		if diff <= 0 {
+			return new(big.Int).Set(value.Int)
+		}
+		return new(big.Int).Mul(new(big.Int).Set(value.Int), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(diff)), nil))
+	}
+
+	return pgtype.Numeric{Int: new(big.Int).Add(scale(left), scale(right)), Exp: exp, Valid: true}
 }
 
 // ChatSettlementIdempotencyConflict 返回重复 settlement 事实不一致的稳定错误。
@@ -1057,11 +1278,14 @@ func settlementUsageFactsFromRecord(row sqlc.UsageRecord, lineItems []sqlc.Usage
 	}
 }
 
-// ensureSettlementWriteOffMatches 校验 actual 超过 authorized 时的平台核销事实。
-func ensureSettlementWriteOffMatches(ctx context.Context, queries *sqlc.Queries, reservation sqlc.LedgerReservation, actualAmount pgtype.Numeric, capturedAmount pgtype.Numeric) error {
+// ensureSettlementWriteOffMatches 校验「真实费用 - (冻结内扣费 + 超额二次补扣)」残差由平台核销的事实。
+// totalCaptured = capturedAmount + overageCaptured，即用户真实承担总额；残差 > 0 时才应存在 write_off 异常。
+func ensureSettlementWriteOffMatches(ctx context.Context, queries *sqlc.Queries, reservation sqlc.LedgerReservation, actualAmount pgtype.Numeric, capturedAmount pgtype.Numeric, overageCaptured pgtype.Numeric) error {
+	totalCaptured := chatSettlementAddNumeric(capturedAmount, overageCaptured)
 	exception, err := queries.GetLedgerBillingExceptionByReservationID(ctx, reservation.ID)
 
-	if !chatSettlementNumericGreaterThan(actualAmount, reservation.AuthorizedAmount) {
+	if !chatSettlementNumericGreaterThan(actualAmount, totalCaptured) {
+		// 二次补扣已覆盖全部超额（或无超额）：不应存在 write_off 异常。
 		if err == nil {
 			return ChatSettlementIdempotencyConflict("unexpected billing exception")
 		}
@@ -1076,6 +1300,9 @@ func ensureSettlementWriteOffMatches(ctx context.Context, queries *sqlc.Queries,
 	}
 
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ChatSettlementIdempotencyConflict("missing write off exception")
+		}
 		return failure.Wrap(
 			failure.CodeGatewayChatSettlementFailed,
 			err,
@@ -1088,8 +1315,8 @@ func ensureSettlementWriteOffMatches(ctx context.Context, queries *sqlc.Queries,
 		exception.ReservationID != reservation.ID ||
 		exception.Currency != reservation.Currency ||
 		!chatSettlementSameNumeric(exception.ActualAmount, actualAmount) ||
-		!chatSettlementSameNumeric(exception.CapturedAmount, capturedAmount) ||
-		!chatSettlementNumericDiffMatches(exception.PlatformAmount, actualAmount, capturedAmount) {
+		!chatSettlementSameNumeric(exception.CapturedAmount, totalCaptured) ||
+		!chatSettlementNumericDiffMatches(exception.PlatformAmount, actualAmount, totalCaptured) {
 		return ChatSettlementIdempotencyConflict("write off exception mismatch")
 	}
 

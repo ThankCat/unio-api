@@ -139,7 +139,8 @@ type Store interface {
 	MarkSyncJobSucceeded(ctx context.Context, id int64, stats json.RawMessage) (SyncJob, error)
 	MarkSyncJobFailed(ctx context.Context, id int64, errorText string) (SyncJob, error)
 	GetLatestSyncJob(ctx context.Context, source Source) (SyncJob, error)
-	ListSyncJobs(ctx context.Context, limit int32) ([]SyncJob, error)
+	ListSyncJobs(ctx context.Context, arg sqlc.ListSyncJobsParams) ([]SyncJob, error)
+	CountSyncJobs(ctx context.Context) (int64, error)
 }
 
 // sqlcStore 是 Store 的 sqlc 实现。
@@ -385,8 +386,8 @@ func (s *sqlcStore) GetLatestSyncJob(ctx context.Context, source Source) (SyncJo
 	return syncJobFromSQLC(row), nil
 }
 
-func (s *sqlcStore) ListSyncJobs(ctx context.Context, limit int32) ([]SyncJob, error) {
-	rows, err := s.queries.ListSyncJobs(ctx, limit)
+func (s *sqlcStore) ListSyncJobs(ctx context.Context, arg sqlc.ListSyncJobsParams) ([]SyncJob, error) {
+	rows, err := s.queries.ListSyncJobs(ctx, arg)
 	if err != nil {
 		return nil, capabilityStoreFailure(err, "list sync jobs")
 	}
@@ -397,6 +398,14 @@ func (s *sqlcStore) ListSyncJobs(ctx context.Context, limit int32) ([]SyncJob, e
 	}
 
 	return items, nil
+}
+
+func (s *sqlcStore) CountSyncJobs(ctx context.Context) (int64, error) {
+	total, err := s.queries.CountSyncJobs(ctx)
+	if err != nil {
+		return 0, capabilityStoreFailure(err, "count sync jobs")
+	}
+	return total, nil
 }
 
 // modelFromSQLC 将 sqlc model row 转成能力领域 Model。

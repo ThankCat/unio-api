@@ -22,6 +22,8 @@ type EntryListParams struct {
 	Currency  string
 	From      *time.Time
 	To        *time.Time
+	SortField string
+	SortDesc  bool
 	Limit     int32
 	Offset    int32
 }
@@ -30,10 +32,14 @@ type EntryListParams struct {
 type ExceptionListParams struct {
 	UserID    *int64
 	EventType string
-	From      *time.Time
-	To        *time.Time
-	Limit     int32
-	Offset    int32
+	// ReasonCode 按异常原因码过滤（如 orphan_reservation_swept 用于孤儿清扫观测视图）；空串不过滤。
+	ReasonCode string
+	From       *time.Time
+	To         *time.Time
+	SortField  string
+	SortDesc   bool
+	Limit      int32
+	Offset     int32
 }
 
 // LedgerEntry 是一条用户余额变化账本流水（金额为十进制字符串）。
@@ -85,6 +91,8 @@ func (s *LedgerService) ListEntries(ctx context.Context, params EntryListParams)
 		Currency:   textNarg(params.Currency),
 		FromTime:   tsNarg(params.From),
 		ToTime:     tsNarg(params.To),
+		SortField:  textNarg(params.SortField),
+		SortDesc:   boolNarg(params.SortDesc),
 		PageLimit:  params.Limit,
 		PageOffset: params.Offset,
 	})
@@ -115,8 +123,11 @@ func (s *LedgerService) ListBillingExceptions(ctx context.Context, params Except
 	rows, err := s.store.ListLedgerBillingExceptionsPage(ctx, sqlc.ListLedgerBillingExceptionsPageParams{
 		UserID:     int8Narg(params.UserID),
 		EventType:  textNarg(params.EventType),
+		ReasonCode: textNarg(params.ReasonCode),
 		FromTime:   tsNarg(params.From),
 		ToTime:     tsNarg(params.To),
+		SortField:  textNarg(params.SortField),
+		SortDesc:   boolNarg(params.SortDesc),
 		PageLimit:  params.Limit,
 		PageOffset: params.Offset,
 	})
@@ -125,10 +136,11 @@ func (s *LedgerService) ListBillingExceptions(ctx context.Context, params Except
 	}
 
 	total, err := s.store.CountLedgerBillingExceptions(ctx, sqlc.CountLedgerBillingExceptionsParams{
-		UserID:    int8Narg(params.UserID),
-		EventType: textNarg(params.EventType),
-		FromTime:  tsNarg(params.From),
-		ToTime:    tsNarg(params.To),
+		UserID:     int8Narg(params.UserID),
+		EventType:  textNarg(params.EventType),
+		ReasonCode: textNarg(params.ReasonCode),
+		FromTime:   tsNarg(params.From),
+		ToTime:     tsNarg(params.To),
 	})
 	if err != nil {
 		return nil, 0, storeFailed(err, "count billing exceptions")

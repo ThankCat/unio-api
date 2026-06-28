@@ -42,6 +42,11 @@ func tsNarg(t *time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: *t, Valid: true}
 }
 
+// boolNarg 把 bool 转成 pgtype.Bool（用于 sort_desc 等必填布尔参数）。
+func boolNarg(v bool) pgtype.Bool {
+	return pgtype.Bool{Bool: v, Valid: true}
+}
+
 // int8Ptr 把可空 pgtype.Int8 转成 *int64：NULL → nil。
 func int8Ptr(v pgtype.Int8) *int64 {
 	if !v.Valid {

@@ -308,8 +308,17 @@ WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
   AND ($3::text IS NULL OR currency = $3::text)
   AND ($4::timestamptz IS NULL OR created_at >= $4::timestamptz)
   AND ($5::timestamptz IS NULL OR created_at < $5::timestamptz)
-ORDER BY created_at DESC, id DESC
-LIMIT $7 OFFSET $6
+ORDER BY
+  CASE WHEN COALESCE($6::text, 'created_at') IN ('', 'created_at') AND COALESCE($7::bool, true) THEN created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE($6::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($7::bool, true) THEN created_at END ASC NULLS LAST,
+  CASE WHEN $6::text = 'user_id' AND COALESCE($7::bool, false) THEN user_id END DESC NULLS LAST,
+  CASE WHEN $6::text = 'user_id' AND NOT COALESCE($7::bool, false) THEN user_id END ASC NULLS LAST,
+  CASE WHEN $6::text = 'amount' AND COALESCE($7::bool, false) THEN amount END DESC NULLS LAST,
+  CASE WHEN $6::text = 'amount' AND NOT COALESCE($7::bool, false) THEN amount END ASC NULLS LAST,
+  CASE WHEN $6::text = 'entry_type' AND COALESCE($7::bool, false) THEN entry_type END DESC NULLS LAST,
+  CASE WHEN $6::text = 'entry_type' AND NOT COALESCE($7::bool, false) THEN entry_type END ASC NULLS LAST,
+  id DESC
+LIMIT $9 OFFSET $8
 `
 
 type ListLedgerEntriesPageParams struct {
@@ -318,6 +327,8 @@ type ListLedgerEntriesPageParams struct {
 	Currency   pgtype.Text
 	FromTime   pgtype.Timestamptz
 	ToTime     pgtype.Timestamptz
+	SortField  pgtype.Text
+	SortDesc   pgtype.Bool
 	PageOffset int32
 	PageLimit  int32
 }
@@ -331,6 +342,8 @@ func (q *Queries) ListLedgerEntriesPage(ctx context.Context, arg ListLedgerEntri
 		arg.Currency,
 		arg.FromTime,
 		arg.ToTime,
+		arg.SortField,
+		arg.SortDesc,
 		arg.PageOffset,
 		arg.PageLimit,
 	)

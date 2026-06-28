@@ -16,16 +16,19 @@ import (
 // 本文件只做协议形状翻译，是纯翻译层：不读取请求 ctx、不结算、不计费。账务由 service 编排层用
 // adapter 同次解析的 ResponseFacts 收口（与非流式一致）。
 //
-// v1 只生成 codex-rs process_responses_event 真实消费的权威子集（BRIDGE §6）：
+// 生成的事件序列（与真实 OpenAI Responses 顺序一致）：
 //
 //	response.created
 //	response.output_item.added
+//	response.content_part.added                ← 文本增量前建立活跃 content part
 //	response.output_text.delta / response.reasoning_text.delta / response.function_call_arguments.delta
-//	response.output_item.done   ← 每个 item 的最终权威载体（Codex 以此为准）
+//	response.output_text.done / response.reasoning_text.done
+//	response.content_part.done                 ← 收口活跃 content part
+//	response.output_item.done                  ← 每个 item 的最终权威载体（Codex 以此为准）
 //	response.completed
 //
-// content_part.added/done、output_text.done、reasoning_text.done、function_call_arguments.done 等
-// 「SDK 完整性」事件 Codex 不消费，v1 暂不发；补齐留 TASK-11.08（见 RESPONSES_CHAT_BRIDGE.md §6）。
+// content_part.added/*_text.done/content_part.done 由 P0 真实 codex（v0.142.3）测试补齐：缺失这些事件时
+// codex 报 "OutputTextDelta without active item" 错误。function_call 走 arguments delta，无 content part。
 
 // streamEncoder 维护一次流式响应的事件状态机。
 //
@@ -61,11 +64,15 @@ type streamEncoder struct {
 
 // streamItemState 累积 reasoning / message item 的输出索引与文本。
 // refusal 仅 message item 使用：上游 refusal 增量累积后随 output_item.done 落 refusal content part。
+// partOpen 记录该 item 的文本 content part（message=output_text / reasoning=reasoning_text）是否已发出
+// response.content_part.added，用于在收尾时配对发出 *_text.done + content_part.done（Codex 0.142.3 要求
+// 文本增量前必须有「活跃 content part」，否则报 OutputTextDelta without active item）。
 type streamItemState struct {
 	id          string
 	outputIndex int
 	text        string
 	refusal     string
+	partOpen    bool
 }
 
 // streamToolState 累积单个 function_call item 的标识与分片参数。
@@ -195,6 +202,11 @@ func (e *streamEncoder) handleReasoningDelta(delta string) error {
 		if err := e.emitItemAdded(e.reasoning.outputIndex, item); err != nil {
 			return err
 		}
+		// 文本增量前先发出 content_part.added，建立 Codex 解析所需的「活跃 content part」。
+		if err := e.emitContentPartAdded(e.reasoning.id, e.reasoning.outputIndex, gatewayapi.ResponseOutputContent{Type: "reasoning_text"}); err != nil {
+			return err
+		}
+		e.reasoning.partOpen = true
 	}
 	e.reasoning.text += delta
 	return e.emitEvent(gatewayapi.ResponsesStreamEvent{
@@ -223,6 +235,14 @@ func (e *streamEncoder) ensureMessageItem() error {
 func (e *streamEncoder) handleTextDelta(delta string) error {
 	if err := e.ensureMessageItem(); err != nil {
 		return err
+	}
+	// 首个文本增量前惰性发出 content_part.added，建立 Codex 解析所需的「活跃 content part」。
+	// 惰性发出（而非 message item 创建时）确保「仅 refusal、无文本」的流不会落空的 output_text part。
+	if !e.message.partOpen {
+		if err := e.emitContentPartAdded(e.message.id, e.message.outputIndex, gatewayapi.ResponseOutputContent{Type: "output_text"}); err != nil {
+			return err
+		}
+		e.message.partOpen = true
 	}
 	e.message.text += delta
 	return e.emitEvent(gatewayapi.ResponsesStreamEvent{
@@ -299,11 +319,18 @@ type streamFinalItem struct {
 	item        gatewayapi.ResponseOutputItem
 }
 
-// closeItems 按 output_index 顺序发出每个 item 的 output_item.done，并返回最终 output 数组。
+// closeItems 按 output_index 顺序发出每个 item 的收尾事件，并返回最终 output 数组。
+//
+// 每个 item 在 output_item.done 之前，先把曾经打开的文本 content part 配对收口：
+// message → output_text.done + content_part.done(output_text)；reasoning → reasoning_text.done +
+// content_part.done(reasoning_text)。这与真实 OpenAI Responses 事件顺序一致，满足 Codex 的活跃 part 校验。
 func (e *streamEncoder) closeItems() ([]gatewayapi.ResponseOutputItem, error) {
 	finals := e.collectFinalItems()
 	output := make([]gatewayapi.ResponseOutputItem, 0, len(finals))
 	for _, f := range finals {
+		if err := e.emitItemContentDone(f); err != nil {
+			return nil, err
+		}
 		item := f.item
 		if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
 			Type:        gatewayapi.EventOutputItemDone,
@@ -315,6 +342,35 @@ func (e *streamEncoder) closeItems() ([]gatewayapi.ResponseOutputItem, error) {
 		output = append(output, f.item)
 	}
 	return output, nil
+}
+
+// emitItemContentDone 在 output_item.done 之前收口该 item 打开过的文本 content part。
+func (e *streamEncoder) emitItemContentDone(f streamFinalItem) error {
+	switch {
+	case e.message != nil && f.item.ID == e.message.id && e.message.partOpen:
+		if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
+			Type:         gatewayapi.EventOutputTextDone,
+			ItemID:       e.message.id,
+			OutputIndex:  intPtr(f.outputIndex),
+			ContentIndex: intPtr(0),
+			Text:         e.message.text,
+		}); err != nil {
+			return err
+		}
+		return e.emitContentPartDone(e.message.id, f.outputIndex, gatewayapi.ResponseOutputContent{Type: "output_text", Text: e.message.text})
+	case e.reasoning != nil && f.item.ID == e.reasoning.id && e.reasoning.partOpen:
+		if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
+			Type:         gatewayapi.EventReasoningTextDone,
+			ItemID:       e.reasoning.id,
+			OutputIndex:  intPtr(f.outputIndex),
+			ContentIndex: intPtr(0),
+			Text:         e.reasoning.text,
+		}); err != nil {
+			return err
+		}
+		return e.emitContentPartDone(e.reasoning.id, f.outputIndex, gatewayapi.ResponseOutputContent{Type: "reasoning_text", Text: e.reasoning.text})
+	}
+	return nil
 }
 
 func (e *streamEncoder) collectFinalItems() []streamFinalItem {
@@ -374,6 +430,28 @@ func (e *streamEncoder) emitItemAdded(outputIndex int, item gatewayapi.ResponseO
 		Type:        gatewayapi.EventOutputItemAdded,
 		OutputIndex: intPtr(outputIndex),
 		Item:        &item,
+	})
+}
+
+// emitContentPartAdded 发出 response.content_part.added：在文本增量前建立活跃 content part。
+func (e *streamEncoder) emitContentPartAdded(itemID string, outputIndex int, part gatewayapi.ResponseOutputContent) error {
+	return e.emitEvent(gatewayapi.ResponsesStreamEvent{
+		Type:         gatewayapi.EventContentPartAdded,
+		ItemID:       itemID,
+		OutputIndex:  intPtr(outputIndex),
+		ContentIndex: intPtr(0),
+		Part:         &part,
+	})
+}
+
+// emitContentPartDone 发出 response.content_part.done：收口此前打开的文本 content part。
+func (e *streamEncoder) emitContentPartDone(itemID string, outputIndex int, part gatewayapi.ResponseOutputContent) error {
+	return e.emitEvent(gatewayapi.ResponsesStreamEvent{
+		Type:         gatewayapi.EventContentPartDone,
+		ItemID:       itemID,
+		OutputIndex:  intPtr(outputIndex),
+		ContentIndex: intPtr(0),
+		Part:         &part,
 	})
 }
 

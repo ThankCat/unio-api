@@ -244,16 +244,8 @@ func TestRouterModelsUsesRateLimit(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
 
-	if limiter.subject != "api_key:1" {
-		t.Fatalf("expected rate limit subject %q, got %q", "api_key:1", limiter.subject)
-	}
-
-	if limiter.limit != 60 {
-		t.Fatalf("expected rate limit limit %d, got %d", 60, limiter.limit)
-	}
-
-	if limiter.window != time.Minute {
-		t.Fatalf("expected rate limit window %v, got %v", time.Minute, limiter.window)
+	if limiter.apiKeyID != 1 {
+		t.Fatalf("expected rate limit api key id %d, got %d", 1, limiter.apiKeyID)
 	}
 }
 

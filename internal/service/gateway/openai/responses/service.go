@@ -110,6 +110,16 @@ func NewResponsesService(
 	}
 }
 
+// SetRateLimitGuard 注入两层限流 Guard（P2-8），转发给候选循环驱动；nil 表示不启用限流。
+func (s *ResponsesService) SetRateLimitGuard(guard lifecycle.RateLimitGuard) {
+	s.attemptRunner.SetRateLimitGuard(guard)
+}
+
+// SetChannelCooldownRegistry 注入渠道级 429 冷却注册表（P2-7），转发给共享 lifecycle；nil 表示不启用冷却。
+func (s *ResponsesService) SetChannelCooldownRegistry(registry *lifecycle.ChannelCooldownRegistry) {
+	s.lifecycle.SetChannelCooldownRegistry(registry)
+}
+
 // responsesSafeMessage 把 Responses 编排专用 ad-hoc string code 映射成可展示文案；
 // 返回空串表示由 lifecycle 兜底。资金关键 code 与 chatcompletions 复用同一组（AttemptRunner 共享）。
 func responsesSafeMessage(code string) string {
@@ -221,10 +231,11 @@ func (s *ResponsesService) responsesInputTokenEstimator(req gatewayapi.Responses
 	}
 }
 
-// estimateMaxCompletionTokens 估算 authorization 用的最大输出 token。
+// estimateMaxCompletionTokens 返回客户显式给出的输出 token 上限；客户未给出时返回 0。
+// 客户缺失时的兜底（候选模型 max_output_tokens → 进程级 fallback）由 authorization 统一决定。
 func estimateMaxCompletionTokens(req gatewayapi.ResponsesRequest) int64 {
 	if req.MaxOutputTokens != nil && req.MaxOutputTokens.Int() > 0 {
 		return int64(req.MaxOutputTokens.Int())
 	}
-	return lifecycle.DefaultAuthorizationMaxCompletionTokens
+	return 0
 }

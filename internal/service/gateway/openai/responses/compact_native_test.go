@@ -170,6 +170,64 @@ func TestCompactHistory_NativeFallbackToSynthetic(t *testing.T) {
 	}
 }
 
+// TestCompactHistory_NativeMissingUsageRecordsRiskExposure 验证 P0-3：原生 compact 返回 2xx 但缺可计费 usage
+// 时，绝不静默回落 synthetic 白嫖；而是不再调用 chat、记 risk_exposure（账务异常释放）并向客户返回错误。
+func TestCompactHistory_NativeMissingUsageRecordsRiskExposure(t *testing.T) {
+	missingUsageErr := adapter.NewUpstreamError(
+		adapter.UpstreamErrorServer,
+		adapter.UpstreamMetadata{StatusCode: 200, RequestID: "req-missing-usage"},
+		failure.Wrap(
+			failure.CodeAdapterInvalidResponse,
+			responsesadapter.ErrCompactMissingUsage,
+			failure.WithMessage("simulated 200 without usage"),
+		),
+	)
+	compactAdapter := &fakeCompactAdapter{err: missingUsageErr}
+	chatAdapter := &fakeChatAdapter{resp: okChatResponse()}
+	registry := &fakeRegistry{
+		adapters:                 map[string]chatcompletionsadapter.ChatAdapter{"openai": chatAdapter},
+		tokenizers:               map[string]chatcompletionsadapter.ChatInputTokenizer{"openai": fakeTokenizer{}},
+		responsesCompactAdapters: map[string]responsesadapter.ResponsesCompactAdapter{"openai": compactAdapter},
+	}
+	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("openai", 1, "gpt-5.5-upstream")}}}
+	authorizer := &fakeAuthorizer{}
+	settlement := &fakeSettlement{}
+
+	svc := newServiceForTest(router, registry, settlement, authorizer, newFakeRequestLog())
+	// 即便回落开关打开，缺 usage 也不得回落（开关只管真 404/405）。
+	svc.compactNativeFallback = true
+
+	_, err := svc.CompactHistory(ctxWithPrincipal(), compactNativeRequest())
+	if err == nil {
+		t.Fatal("expected error when native compact returns 2xx without usage")
+	}
+
+	// 原生尝试一次；synthetic chat 绝不触达（避免双调上游、只收一次费白嫖）。
+	if compactAdapter.called != 1 {
+		t.Fatalf("expected native compact attempted once, got %d", compactAdapter.called)
+	}
+	if chatAdapter.req.Model != "" {
+		t.Fatalf("synthetic must not run on missing-usage (no freeloading), got model %q", chatAdapter.req.Model)
+	}
+
+	// 不结算（无可靠 usage 不向用户扣费）。
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected no settlement on missing-usage, got %d", len(settlement.params))
+	}
+
+	// 记一条 risk_exposure（账务异常释放），保留「平台可能承担成本」审计事实。
+	if len(authorizer.billingExceptions) != 1 {
+		t.Fatalf("expected exactly one billing-exception (risk_exposure) release, got %d", len(authorizer.billingExceptions))
+	}
+	if authorizer.billingExceptions[0].ReasonCode != "responses_compact_missing_usage" {
+		t.Fatalf("unexpected risk_exposure reason code: %q", authorizer.billingExceptions[0].ReasonCode)
+	}
+	// 普通释放不应发生（走的是账务异常释放）。
+	if authorizer.releaseCount != 0 {
+		t.Fatalf("expected no plain release on missing-usage, got %d", authorizer.releaseCount)
+	}
+}
+
 // TestCompactHistory_NativeFallbackDisabled 验证：关闭回落开关时，原生「不支持」错误直接上抛为请求失败，
 // 不静默回落 synthetic（运营可显式关闭回落）。
 func TestCompactHistory_NativeFallbackDisabled(t *testing.T) {

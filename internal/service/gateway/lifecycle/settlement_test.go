@@ -938,6 +938,69 @@ func TestChatSettlementUsesAttemptTimeChannelPrice(t *testing.T) {
 	assertNumericEqual(t, billingCalculator.prices[0].OutputPrice, testNumeric(8_0000000000, -10))
 }
 
+// TestChatSettlementPinsCandidateChannelPrice 验证 P1-3：当中标候选透传了 ChannelPriceID 时，结算以该行计费，
+// 即使其窗口已被收口、且当前另有一条覆盖 attempt 时刻的更贵 enabled 价（不带 pin 会被 FindActiveChannelPrice 选中）。
+func TestChatSettlementPinsCandidateChannelPrice(t *testing.T) {
+	deps := newChatSettlementDBDeps(t)
+	params := deps.params()
+	params.ChannelPriceID = deps.channelPriceID // 中标候选在路由/授权时锁定的价
+
+	// 收口 seed 窗口到 attempt 之前，并新增一条覆盖 attempt 时刻的更贵 enabled 价。
+	// 不带 pin 时 FindActiveChannelPrice(attemptStart) 会选这条新价；带 pin 必须仍用 seed 行。
+	cutoff := params.AttemptRecord.StartedAt.Add(-time.Minute)
+	if _, err := deps.pool.Exec(deps.ctx, `UPDATE channel_prices SET effective_to = $2 WHERE id = $1`, deps.channelPriceID, cutoff); err != nil {
+		t.Fatalf("close seed channel price window: %v", err)
+	}
+
+	newPrice, err := deps.queries.CreateChannelPrice(deps.ctx, sqlc.CreateChannelPriceParams{
+		ChannelID:            deps.channelID,
+		ModelID:              deps.modelID,
+		Currency:             "USD",
+		PricingUnit:          billing.PricingUnitPer1MTokens,
+		UncachedInputPrice:   testNumeric(99_0000000000, -10),
+		OutputPrice:          testNumeric(199_0000000000, -10),
+		CacheReadInputPrice:  testNumeric(49_0000000000, -10),
+		ReasoningOutputPrice: testNumeric(299_0000000000, -10),
+		UncachedInputCost:    testNumeric(50_0000000000, -10),
+		OutputCost:           testNumeric(100_0000000000, -10),
+		Status:               "enabled",
+		EffectiveFrom:        pgtype.Timestamptz{Time: cutoff, Valid: true},
+		EffectiveTo:          pgtype.Timestamptz{Valid: false},
+	})
+	if err != nil {
+		t.Fatalf("create replacement channel price: %v", err)
+	}
+
+	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, &fakeChatLedgerCapturer{})
+
+	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
+		t.Fatalf("settle successful chat: %v", err)
+	}
+
+	snapshot, err := deps.queries.GetPriceSnapshotByRequest(deps.ctx, deps.requestRecord.ID)
+	if err != nil {
+		t.Fatalf("get price snapshot: %v", err)
+	}
+	if !snapshot.PriceID.Valid || snapshot.PriceID.Int64 != deps.channelPriceID {
+		t.Fatalf("expected pinned channel price id %d, got valid=%v value=%d", deps.channelPriceID, snapshot.PriceID.Valid, snapshot.PriceID.Int64)
+	}
+	if snapshot.PriceID.Int64 == newPrice.ID {
+		t.Fatalf("settlement must not drift to replacement price id %d when candidate price is pinned", newPrice.ID)
+	}
+	// 售价取锁定的 seed 行（非更贵新行）。
+	assertNumericEqual(t, snapshot.UncachedInputPrice, testNumeric(2_0000000000, -10))
+	assertNumericEqual(t, snapshot.OutputPrice, testNumeric(8_0000000000, -10))
+
+	costSnapshot, err := deps.queries.GetCostSnapshotByRequest(deps.ctx, deps.requestRecord.ID)
+	if err != nil {
+		t.Fatalf("get cost snapshot: %v", err)
+	}
+	if costSnapshot.CostPriceID != deps.channelPriceID {
+		t.Fatalf("expected pinned channel price id %d for cost, got %d", deps.channelPriceID, costSnapshot.CostPriceID)
+	}
+}
+
 func TestChatSettlementReturnsIdempotentSuccessAfterRequestSucceeded(t *testing.T) {
 	deps := newChatSettlementDBDeps(t)
 	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))

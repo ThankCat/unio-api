@@ -40,22 +40,23 @@ type modelsOpsSummaryDTO struct {
 }
 
 type modelOpsRowDTO struct {
-	ID                int64   `json:"id"`
-	ModelID           string  `json:"model_id"`
-	DisplayName       string  `json:"display_name"`
-	OwnedBy           string  `json:"owned_by"`
-	Status            string  `json:"status"`
-	BindingsTotal     int64   `json:"bindings_total"`
-	BindingsAvailable int64   `json:"bindings_available"`
-	HasPrice          bool    `json:"has_price"`
-	Sellable          bool    `json:"sellable"`
-	RequestTotal      int64   `json:"request_total"`
-	RequestSucceeded  int64   `json:"request_succeeded"`
-	SuccessRate       float64 `json:"success_rate"`
-	LatencyP95        float64 `json:"latency_p95"`
-	RevenueUSD        string  `json:"revenue_usd"`
-	MarginUSD         string  `json:"margin_usd"`
-	MarginRate        float64 `json:"margin_rate"`
+	ID                int64           `json:"id"`
+	ModelID           string          `json:"model_id"`
+	DisplayName       string          `json:"display_name"`
+	OwnedBy           string          `json:"owned_by"`
+	Status            string          `json:"status"`
+	CreatedAt         string          `json:"created_at"`
+	BindingsTotal     int64           `json:"bindings_total"`
+	BindingsAvailable int64           `json:"bindings_available"`
+	HasPrice          bool            `json:"has_price"`
+	Sellable          bool            `json:"sellable"`
+	RequestTotal      int64           `json:"request_total"`
+	RequestSucceeded  int64           `json:"request_succeeded"`
+	SuccessRate       float64         `json:"success_rate"`
+	Latency           latencyStatsDTO `json:"latency"`
+	RevenueUSD        string          `json:"revenue_usd"`
+	MarginUSD         string          `json:"margin_usd"`
+	MarginRate        float64         `json:"margin_rate"`
 }
 
 type modelOpsDetailDTO struct {
@@ -136,13 +137,27 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := parsePage(r)
+	sort, err := parseListSort(r, map[string]struct{}{
+		"name":         {},
+		"requests":     {},
+		"success_rate": {},
+		"margin":       {},
+		"created_at":   {},
+	}, "success_rate", false)
+	if err != nil {
+		writeSortError(w, err)
+		return
+	}
+	field, desc := sort.SQLParams()
 	rows, total, err := h.service.Table(r.Context(), modelops.TableParams{
-		From:   from,
-		To:     to,
-		Status: listStatus(r),
-		Search: queryString(r, "search"),
-		Limit:  page.Limit(),
-		Offset: page.Offset(),
+		From:      from,
+		To:        to,
+		Status:    listStatus(r),
+		Search:    queryString(r, "search"),
+		SortField: field,
+		SortDesc:  desc,
+		Limit:     page.Limit(),
+		Offset:    page.Offset(),
 	})
 	if err != nil {
 		writeServiceError(w, err)
@@ -156,6 +171,7 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			DisplayName:       row.DisplayName,
 			OwnedBy:           row.OwnedBy,
 			Status:            row.Status,
+			CreatedAt:         rfc3339(row.CreatedAt),
 			BindingsTotal:     row.BindingsTotal,
 			BindingsAvailable: row.BindingsAvailable,
 			HasPrice:          row.HasPrice,
@@ -163,7 +179,7 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			RequestTotal:      row.RequestTotal,
 			RequestSucceeded:  row.RequestSucceeded,
 			SuccessRate:       row.SuccessRate,
-			LatencyP95:        row.LatencyP95,
+			Latency:           latencyStatsFrom(row.Latency),
 			RevenueUSD:        row.RevenueUSD,
 			MarginUSD:         row.MarginUSD,
 			MarginRate:        row.MarginRate,

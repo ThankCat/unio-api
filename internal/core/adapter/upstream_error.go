@@ -1,6 +1,9 @@
 package adapter
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // UpstreamErrorCategory 表示一次上游 provider 调用失败的语义分类。
 //
@@ -53,6 +56,10 @@ type UpstreamMetadata struct {
 	// RequestID 是上游返回的请求标识（如响应头 x-request-id）。
 	// 空字符串表示上游未提供。
 	RequestID string
+
+	// RetryAfter 是上游 429 响应 Retry-After 头解析出的建议冷却时长（P2-7）。
+	// 0 表示上游未提供或无法解析；>0 时 gateway 据此对该渠道做限时 cooldown（跳过 fallback）。
+	RetryAfter time.Duration
 }
 
 // UpstreamError 是 adapter 返回给 gateway 的结构化上游错误。

@@ -38,6 +38,12 @@ type APIKeyPrincipal struct {
 	RouteID *int64
 	// ProjectDefaultRouteID 是所属项目的默认线路 ID；nil 表示项目未设默认线路。
 	ProjectDefaultRouteID *int64
+
+	// RPMLimit/TPMLimit/RPDLimit 是本把 Key 的令牌级限流上限（P2-8）：
+	// nil 表示「继承全局默认」，0 表示「显式不限」，>0 表示具体上限（每分钟请求/每分钟 token/每日请求）。
+	RPMLimit *int64
+	TPMLimit *int64
+	RPDLimit *int64
 }
 
 // APIKeyStore 定义 API Key 认证所需的存储查询和更新能力。
@@ -144,6 +150,9 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 		KeyPrefix:             key.KeyPrefix,
 		RouteID:               int8Ptr(key.RouteID),
 		ProjectDefaultRouteID: int8Ptr(key.DefaultRouteID),
+		RPMLimit:              int4Ptr(key.RpmLimit),
+		TPMLimit:              int4Ptr(key.TpmLimit),
+		RPDLimit:              int4Ptr(key.RpdLimit),
 	}, nil
 }
 
@@ -153,6 +162,15 @@ func int8Ptr(v pgtype.Int8) *int64 {
 		return nil
 	}
 	out := v.Int64
+	return &out
+}
+
+// int4Ptr 把可空 pgtype.Int4 转成 *int64（限流上限可空，nil=继承全局默认）。
+func int4Ptr(v pgtype.Int4) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	out := int64(v.Int32)
 	return &out
 }
 

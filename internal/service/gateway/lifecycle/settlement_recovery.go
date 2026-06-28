@@ -3,7 +3,6 @@ package lifecycle
 import (
 	"context"
 	"errors"
-	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,6 +20,9 @@ import (
 const (
 	defaultSettlementRecoveryDelay   = 30 * time.Second
 	defaultSettlementRecoveryTimeout = 10 * time.Second
+	// defaultSettlementRecoveryMaxAttempts 是补偿任务自动重试次数的回退默认；与退避上限一起决定总覆盖窗口。
+	// 与 settlement_recovery_jobs.max_attempts 列默认一致，配置缺省/非法时使用该值。
+	defaultSettlementRecoveryMaxAttempts int32 = 20
 )
 
 // ErrChatSettlementRecoveryScheduled 表示 settlement 失败后已有持久化 recovery job 接管。
@@ -36,20 +38,26 @@ type ChatSettlementRecoveryRecorder interface {
 type ChatSettlementRecoveryStore struct {
 	queries      *sqlc.Queries
 	nextRunDelay time.Duration
+	maxAttempts  int32
 }
 
 // NewChatSettlementRecoveryStore 创建 settlement recovery job store。
-func NewChatSettlementRecoveryStore(queries *sqlc.Queries, nextRunDelay time.Duration) *ChatSettlementRecoveryStore {
+// maxAttempts 写入每条 job 的 max_attempts，与 worker 退避一起决定补偿总覆盖窗口；<=0 时回退默认。
+func NewChatSettlementRecoveryStore(queries *sqlc.Queries, nextRunDelay time.Duration, maxAttempts int32) *ChatSettlementRecoveryStore {
 	if queries == nil {
 		panic("lifecycle: chat settlement recovery queries is required")
 	}
 	if nextRunDelay <= 0 {
 		nextRunDelay = defaultSettlementRecoveryDelay
 	}
+	if maxAttempts <= 0 {
+		maxAttempts = defaultSettlementRecoveryMaxAttempts
+	}
 
 	return &ChatSettlementRecoveryStore{
 		queries:      queries,
 		nextRunDelay: nextRunDelay,
+		maxAttempts:  maxAttempts,
 	}
 }
 
@@ -93,9 +101,9 @@ func (e *RecoverableChatSettlementExecutor) SettleSuccessfulChat(ctx context.Con
 		return err
 	}
 
-	// 仅本地账单 E2E：BILLING_E2E_INJECT_SETTLEMENT_FAIL=once 让「内联首次结算」失败但保留 pending job，
-	// 由 worker 幂等重放成功（REC-01）。生产默认未设置该 env，零影响。
-	if os.Getenv("BILLING_E2E_INJECT_SETTLEMENT_FAIL") == "once" {
+	// 仅本地账单 E2E（P2-6：仅 `-tags billing_e2e` 构建生效，生产恒 false）：让「内联首次结算」失败
+	// 但保留 pending job，由 worker 幂等重放成功（REC-01）。
+	if faultInjectSettlementOnce() {
 		return chatSettlementRecoveryScheduled(params.RequestRecord.ID, errors.New("billing e2e injected inline settlement failure (once)"))
 	}
 
@@ -116,19 +124,19 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 		return sqlc.SettlementRecoveryJob{}, err
 	}
 
-	// 阶段 15：补偿任务记录命中渠道的售价（审计快照 + price_id 指向 channel_prices）。
-	// worker 重放 settlement 时会按 (channel, model, attemptStart) 重查同源价，故存储列仅作审计基线。
-	channelPrice, err := s.queries.FindActiveChannelPrice(ctx, sqlc.FindActiveChannelPriceParams{
-		ChannelID: params.FinalChannelID,
-		ModelID:   params.ModelDBID,
-		AtTime:    pgtype.Timestamptz{Time: params.AttemptRecord.StartedAt, Valid: true},
-	})
+	// 阶段 15 + P1-3：补偿任务记录命中渠道的售价（审计快照 + price_id 指向 channel_prices）。
+	// 与正式 settlement 同源解析：优先用中标候选锁定的 channelPriceID，缺失时按 attemptStart 重查。
+	// price_id 持久化下来后，worker 重放 settlement 会以同一行计费，避免改价竞态导致重放价漂移。
+	channelPrice, err := resolveSettlementChannelPrice(
+		ctx,
+		s.queries,
+		params.FinalChannelID,
+		params.ModelDBID,
+		params.ChannelPriceID,
+		params.AttemptRecord.StartedAt,
+	)
 	if err != nil {
-		return sqlc.SettlementRecoveryJob{}, failure.Wrap(
-			failure.CodeGatewayChatSettlementFailed,
-			err,
-			failure.WithMessage("find active channel price for settlement recovery job"),
-		)
+		return sqlc.SettlementRecoveryJob{}, err
 	}
 
 	facts := params.Facts
@@ -179,6 +187,7 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 		FormulaVersion:                    billing.FormulaVersionV1,
 		EstimatedAmount:                   params.Authorization.EstimatedAmount,
 		AuthorizedAmount:                  params.Authorization.AuthorizedAmount,
+		MaxAttempts:                       s.maxAttempts,
 		NextRunAt: pgtype.Timestamptz{
 			Time:  time.Now().Add(s.nextRunDelay),
 			Valid: true,
@@ -316,7 +325,9 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 		ModelDBID:         job.ModelID,
 		FinalProviderID:   job.ProviderID,
 		FinalChannelID:    job.ChannelID,
-		Facts:             chatSettlementRecoveryFactsFromJob(job),
+		// 重放 settlement 沿用 job 落库时锁定的 price_id（P1-3），保证重放价与首次一致、不受改价竞态影响。
+		ChannelPriceID: job.PriceID,
+		Facts:          chatSettlementRecoveryFactsFromJob(job),
 	}, nil
 }
 

@@ -40,7 +40,7 @@ func (q *Queries) CountChannels(ctx context.Context, arg CountChannelsParams) (i
 const createChannel = `-- name: CreateChannel :one
 INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit
 `
 
 type CreateChannelParams struct {
@@ -82,6 +82,9 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		&i.TimeoutMs,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
 	)
 	return i, err
 }
@@ -111,7 +114,7 @@ func (q *Queries) DeleteChannelCascade(ctx context.Context, id int64) (int64, er
 }
 
 const getChannel = `-- name: GetChannel :one
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at
+SELECT id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit
 FROM channels
 WHERE id = $1
 LIMIT 1
@@ -134,12 +137,15 @@ func (q *Queries) GetChannel(ctx context.Context, id int64) (Channel, error) {
 		&i.TimeoutMs,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
 	)
 	return i, err
 }
 
 const listChannelsByProvider = `-- name: ListChannelsByProvider :many
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at
+SELECT id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit
 FROM channels
 WHERE provider_id = $1
 ORDER BY priority, id
@@ -168,6 +174,9 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 			&i.TimeoutMs,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RpmLimit,
+			&i.TpmLimit,
+			&i.RpdLimit,
 		); err != nil {
 			return nil, err
 		}
@@ -183,6 +192,7 @@ const listChannelsPage = `-- name: ListChannelsPage :many
 SELECT
     c.id, c.provider_id, c.name, c.protocol, c.adapter_key, c.base_url,
     c.credential_encrypted, c.status, c.priority, c.timeout_ms, c.created_at, c.updated_at,
+    c.rpm_limit, c.tpm_limit, c.rpd_limit,
     p.name AS provider_name
 FROM channels c
 JOIN providers p ON p.id = c.provider_id
@@ -218,6 +228,9 @@ type ListChannelsPageRow struct {
 	TimeoutMs           pgtype.Int4
 	CreatedAt           pgtype.Timestamptz
 	UpdatedAt           pgtype.Timestamptz
+	RpmLimit            pgtype.Int4
+	TpmLimit            pgtype.Int4
+	RpdLimit            pgtype.Int4
 	ProviderName        string
 }
 
@@ -250,6 +263,9 @@ func (q *Queries) ListChannelsPage(ctx context.Context, arg ListChannelsPagePara
 			&i.TimeoutMs,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RpmLimit,
+			&i.TpmLimit,
+			&i.RpdLimit,
 			&i.ProviderName,
 		); err != nil {
 			return nil, err
@@ -308,11 +324,54 @@ func (q *Queries) ListEnabledChannelAdapters(ctx context.Context) ([]ListEnabled
 	return items, nil
 }
 
+const setChannelRateLimits = `-- name: SetChannelRateLimits :one
+UPDATE channels
+SET rpm_limit = $1, tpm_limit = $2, rpd_limit = $3, updated_at = now()
+WHERE id = $4
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit
+`
+
+type SetChannelRateLimitsParams struct {
+	RpmLimit pgtype.Int4
+	TpmLimit pgtype.Int4
+	RpdLimit pgtype.Int4
+	ID       int64
+}
+
+// SetChannelRateLimits 设置/清除 channel 的渠道级限流上限（P2-8）；各列 NULL=继承全局默认，0=不限，>0=具体上限。
+func (q *Queries) SetChannelRateLimits(ctx context.Context, arg SetChannelRateLimitsParams) (Channel, error) {
+	row := q.db.QueryRow(ctx, setChannelRateLimits,
+		arg.RpmLimit,
+		arg.TpmLimit,
+		arg.RpdLimit,
+		arg.ID,
+	)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.ProviderID,
+		&i.Name,
+		&i.Protocol,
+		&i.AdapterKey,
+		&i.BaseUrl,
+		&i.CredentialEncrypted,
+		&i.Status,
+		&i.Priority,
+		&i.TimeoutMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
+	)
+	return i, err
+}
+
 const updateChannel = `-- name: UpdateChannel :one
 UPDATE channels
 SET name = $1, base_url = $2, status = $3, priority = $4, timeout_ms = $5, updated_at = now()
 WHERE id = $6
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit
 `
 
 type UpdateChannelParams struct {
@@ -348,6 +407,9 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		&i.TimeoutMs,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
 	)
 	return i, err
 }

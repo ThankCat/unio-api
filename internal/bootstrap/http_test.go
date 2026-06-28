@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	gatewayanthropic "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
@@ -63,8 +62,7 @@ func TestNewHTTPHandlerBuildsHealthRoute(t *testing.T) {
 		config.Config{
 			Redis: config.RedisConfig{KeyNamespace: "unio:test"},
 			RateLimit: config.RateLimitConfig{
-				DefaultLimit:  60,
-				DefaultWindow: time.Minute,
+				DefaultRPM:    60,
 				FailurePolicy: "fail_closed",
 			},
 		},

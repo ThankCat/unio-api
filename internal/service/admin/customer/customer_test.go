@@ -129,6 +129,8 @@ type fakeAPIKeyStore struct {
 	createErr     error
 	spendLimitArg sqlc.SetAPIKeySpendLimitParams
 	spendLimitSet bool
+	rateLimitsArg sqlc.SetAPIKeyRateLimitsParams
+	rateLimitsSet bool
 }
 
 func (f *fakeAPIKeyStore) ListAPIKeysByProjectPage(context.Context, sqlc.ListAPIKeysByProjectPageParams) ([]sqlc.ListAPIKeysByProjectPageRow, error) {
@@ -166,6 +168,17 @@ func (f *fakeAPIKeyStore) SetAPIKeyRoute(_ context.Context, arg sqlc.SetAPIKeyRo
 	return sqlc.SetAPIKeyRouteRow{
 		ID:      arg.ID,
 		RouteID: arg.RouteID,
+	}, nil
+}
+
+func (f *fakeAPIKeyStore) SetAPIKeyRateLimits(_ context.Context, arg sqlc.SetAPIKeyRateLimitsParams) (sqlc.SetAPIKeyRateLimitsRow, error) {
+	f.rateLimitsSet = true
+	f.rateLimitsArg = arg
+	return sqlc.SetAPIKeyRateLimitsRow{
+		ID:       arg.ID,
+		RpmLimit: arg.RpmLimit,
+		TpmLimit: arg.TpmLimit,
+		RpdLimit: arg.RpdLimit,
 	}, nil
 }
 

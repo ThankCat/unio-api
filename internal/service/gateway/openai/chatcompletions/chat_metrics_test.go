@@ -12,11 +12,14 @@ import (
 
 // fakeMetricsRecorder 捕获 gateway 上报的业务指标调用，供传播测试断言。
 type fakeMetricsRecorder struct {
-	chatRequests []chatRequestMetric
-	routing      []routingMetric
-	upstream     []upstreamMetric
-	settlements  []metrics.SettlementOutcome
-	streamEvents []metrics.StreamEvent
+	chatRequests       []chatRequestMetric
+	routing            []routingMetric
+	upstream           []upstreamMetric
+	settlements        []metrics.SettlementOutcome
+	streamEvents       []metrics.StreamEvent
+	partialSettlements []string
+	retryableFallbacks []string
+	zeroPriceServed    []routingMetric
 }
 
 type chatRequestMetric struct {
@@ -55,6 +58,18 @@ func (r *fakeMetricsRecorder) IncSettlement(outcome metrics.SettlementOutcome) {
 
 func (r *fakeMetricsRecorder) IncStreamEvent(event metrics.StreamEvent) {
 	r.streamEvents = append(r.streamEvents, event)
+}
+
+func (r *fakeMetricsRecorder) IncPartialSettlement(reason string) {
+	r.partialSettlements = append(r.partialSettlements, reason)
+}
+
+func (r *fakeMetricsRecorder) IncRetryableFallback(errorCategory string) {
+	r.retryableFallbacks = append(r.retryableFallbacks, errorCategory)
+}
+
+func (r *fakeMetricsRecorder) IncZeroPriceServed(provider string, channel string, model string) {
+	r.zeroPriceServed = append(r.zeroPriceServed, routingMetric{provider: provider, channel: channel, model: model})
 }
 
 func TestChatCompletionServiceRecordsSuccessMetrics(t *testing.T) {

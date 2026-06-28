@@ -139,12 +139,14 @@ type RequestRow struct {
 
 // TableParams 主表入参。
 type TableParams struct {
-	From   time.Time
-	To     time.Time
-	Status string
-	Search string
-	Limit  int32
-	Offset int32
+	From      time.Time
+	To        time.Time
+	Status    string
+	Search    string
+	SortField string
+	SortDesc  bool
+	Limit     int32
+	Offset    int32
 }
 
 // Summary 聚合线路总览。
@@ -182,6 +184,8 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 		ToTime:     opsutil.TsNarg(p.To),
 		Status:     opsutil.TextNarg(p.Status),
 		Search:     opsutil.TextNarg(p.Search),
+		SortField:  opsutil.TextNarg(p.SortField),
+		SortDesc:   opsutil.BoolNarg(p.SortDesc),
 		PageLimit:  p.Limit,
 		PageOffset: p.Offset,
 	})

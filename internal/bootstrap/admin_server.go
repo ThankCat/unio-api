@@ -186,6 +186,12 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		RecoveryJobQueryService:   recoveryJobQueryService,
 		ChannelHealthQueryService: channelHealthQueryService,
 
+		GatewayConfig:        deps.Config.Gateway,
+		RateLimitConfig:      deps.Config.RateLimit,
+		CircuitBreakerConfig: deps.Config.CircuitBreaker,
+		WorkerConfig:         deps.Config.Worker,
+		HTTPConfig:           deps.Config.HTTP,
+
 		MetricsRecorder: metricsRecorder,
 	})
 

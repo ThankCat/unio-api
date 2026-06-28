@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
@@ -350,6 +351,139 @@ func TestAdapterChatCompletionsReturnsErrorForUpstreamStatus(t *testing.T) {
 
 	if failure.CodeOf(err) != failure.CodeAdapterUpstreamStatus {
 		t.Fatalf("expected failure code %q, got %q", failure.CodeAdapterUpstreamStatus, failure.CodeOf(err))
+	}
+}
+
+func TestAdapterChatCompletionsRejectsOversizedResponseBody(t *testing.T) {
+	t.Cleanup(func() { adapter.SetMaxUpstreamResponseBytes(0) })
+	adapter.SetMaxUpstreamResponseBytes(64)
+
+	// 上游 200 但 body 远超上限：必须在读入内存阶段判定超限并报 adapter_response_too_large，
+	// 不退化成 decode 失败，也不把整块 body 读进内存。
+	oversized := `{"id":"chatcmpl-x","choices":[{"message":{"role":"assistant","content":"` +
+		strings.Repeat("a", 4096) + `"}}]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte(oversized)); err != nil {
+			t.Fatalf("write response body: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	openAIAdapter := newTestAdapter(server.Client())
+
+	_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
+		BaseURL: server.URL + "/v1",
+		APIKey:  "test-secret",
+		Timeout: 30 * time.Second,
+	}, ChatRequest{
+		Model:    "gpt-4.1",
+		Messages: []ChatMessage{{Role: "user", Content: jsonContent("hello")}},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if failure.CodeOf(err) != failure.CodeAdapterResponseTooLarge {
+		t.Fatalf("expected failure code %q, got %q", failure.CodeAdapterResponseTooLarge, failure.CodeOf(err))
+	}
+}
+
+func TestAdapterStreamChatCompletionsTransportFailureIsRetryableServerError(t *testing.T) {
+	// 200 + 半个 SSE 帧后直接结束（无终止空行）：reader 读到 EOF-with-data 报 malformed stream。
+	// 这类「首字节前」传输层失败必须携带 server_error 上游分类，让 lifecycle 可 fallback 到其他 channel。
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`data: {"id":"chatcmpl_x"`))
+	}))
+	defer server.Close()
+
+	_, err := newTestAdapter(server.Client()).StreamChatCompletions(
+		context.Background(),
+		channel.Runtime{BaseURL: server.URL + "/v1", APIKey: "test-secret", Timeout: 30 * time.Second},
+		adapterChatRequestWithParams(),
+		func(ChatStreamChunk) error { return nil },
+	)
+	if err == nil {
+		t.Fatal("expected transport read failure, got nil")
+	}
+	if failure.CodeOf(err) != failure.CodeAdapterReadStreamFailed {
+		t.Fatalf("failure code = %q, want %q", failure.CodeOf(err), failure.CodeAdapterReadStreamFailed)
+	}
+	category, ok := adapter.UpstreamCategoryOf(err)
+	if !ok {
+		t.Fatal("expected stream read failure to carry an upstream category for fallback decisions")
+	}
+	if category != adapter.UpstreamErrorServer {
+		t.Fatalf("category = %q, want %q (retryable)", category, adapter.UpstreamErrorServer)
+	}
+}
+
+func TestAdapterStreamChatCompletionsIncompleteStreamIsRetryableServerError(t *testing.T) {
+	// 完整帧但缺尾部 [DONE]：上游/中转截断尾包。归为 server_error，允许首字节前 fallback。
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"id":"chatcmpl_x","model":"gpt-4.1","choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}` + "\n\n"))
+	}))
+	defer server.Close()
+
+	_, err := newTestAdapter(server.Client()).StreamChatCompletions(
+		context.Background(),
+		channel.Runtime{BaseURL: server.URL + "/v1", APIKey: "test-secret", Timeout: 30 * time.Second},
+		adapterChatRequestWithParams(),
+		func(ChatStreamChunk) error { return nil },
+	)
+	if err == nil {
+		t.Fatal("expected incomplete stream error, got nil")
+	}
+	if failure.CodeOf(err) != failure.CodeAdapterReadStreamFailed {
+		t.Fatalf("failure code = %q, want %q", failure.CodeOf(err), failure.CodeAdapterReadStreamFailed)
+	}
+	category, ok := adapter.UpstreamCategoryOf(err)
+	if !ok || category != adapter.UpstreamErrorServer {
+		t.Fatalf("category = %q ok=%v, want %q (retryable)", category, ok, adapter.UpstreamErrorServer)
+	}
+}
+
+func TestAdapterStreamChatCompletionsIdleTimeout(t *testing.T) {
+	t.Cleanup(func() { adapter.SetStreamIdleTimeout(0) })
+	adapter.SetStreamIdleTimeout(60 * time.Millisecond)
+
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected ResponseWriter to support Flush")
+		}
+		// 先发一次心跳注释（复位 idle），随后挂死不再推进任何字节，模拟半开连接。
+		_, _ = w.Write([]byte(": ping\n\n"))
+		flusher.Flush()
+		<-release
+	}))
+	// defer LIFO：先 close(release) 解开挂死的 handler，再 server.Close() 等待请求收尾。
+	defer server.Close()
+	defer close(release)
+
+	openAIAdapter := newTestAdapter(server.Client())
+
+	_, err := openAIAdapter.StreamChatCompletions(
+		context.Background(),
+		channel.Runtime{
+			BaseURL: server.URL + "/v1",
+			APIKey:  "test-secret",
+			Timeout: 5 * time.Second,
+		},
+		adapterChatRequestWithParams(),
+		func(ChatStreamChunk) error { return nil },
+	)
+	if err == nil {
+		t.Fatal("expected idle timeout error, got nil")
+	}
+	if failure.CodeOf(err) != failure.CodeAdapterStreamIdleTimeout {
+		t.Fatalf("expected failure code %q, got %q", failure.CodeAdapterStreamIdleTimeout, failure.CodeOf(err))
 	}
 }
 

@@ -43,7 +43,7 @@ func (q *Queries) CountAPIKeysByProject(ctx context.Context, projectID int64) (i
 const createAPIKey = `-- name: CreateAPIKey :one
 INSERT INTO api_keys (project_id, name, key_prefix, key_hash, expires_at, route_id)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, project_id, name, key_prefix, key_hash, last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at, spend_limit, spent_total, route_id
+RETURNING id, project_id, name, key_prefix, key_hash, last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit
 `
 
 type CreateAPIKeyParams struct {
@@ -81,6 +81,9 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (Api
 		&i.SpendLimit,
 		&i.SpentTotal,
 		&i.RouteID,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
 	)
 	return i, err
 }
@@ -88,7 +91,8 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (Api
 const getAPIKeyByHash = `-- name: GetAPIKeyByHash :one
 SELECT k.id, p.user_id, k.project_id, k.name, k.key_prefix, k.key_hash, k.last_used_at, k.expires_at, k.disabled_at, k.revoked_at, k.created_at, k.updated_at,
        (k.spend_limit IS NOT NULL AND k.spent_total >= k.spend_limit) AS spend_limit_reached,
-       k.route_id, p.default_route_id
+       k.route_id, p.default_route_id,
+       k.rpm_limit, k.tpm_limit, k.rpd_limit
 FROM api_keys k
 JOIN projects p ON p.id = k.project_id
 WHERE key_hash = $1
@@ -111,6 +115,9 @@ type GetAPIKeyByHashRow struct {
 	SpendLimitReached pgtype.Bool
 	RouteID           pgtype.Int8
 	DefaultRouteID    pgtype.Int8
+	RpmLimit          pgtype.Int4
+	TpmLimit          pgtype.Int4
+	RpdLimit          pgtype.Int4
 }
 
 // GetAPIKeyByHash 按 key hash 读取 API Key，带出所属用户 ID、Key 线路与项目默认线路，并计算是否已达费用上限。
@@ -135,12 +142,15 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKe
 		&i.SpendLimitReached,
 		&i.RouteID,
 		&i.DefaultRouteID,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
 	)
 	return i, err
 }
 
 const getAPIKeyByID = `-- name: GetAPIKeyByID :one
-SELECT k.id, p.user_id, k.project_id, k.name, k.key_prefix, k.last_used_at, k.expires_at, k.disabled_at, k.revoked_at, k.spend_limit, k.spent_total, k.route_id, k.created_at, k.updated_at
+SELECT k.id, p.user_id, k.project_id, k.name, k.key_prefix, k.last_used_at, k.expires_at, k.disabled_at, k.revoked_at, k.spend_limit, k.spent_total, k.route_id, k.rpm_limit, k.tpm_limit, k.rpd_limit, k.created_at, k.updated_at
 FROM api_keys k
 JOIN projects p ON p.id = k.project_id
 WHERE k.id = $1
@@ -160,6 +170,9 @@ type GetAPIKeyByIDRow struct {
 	SpendLimit pgtype.Numeric
 	SpentTotal pgtype.Numeric
 	RouteID    pgtype.Int8
+	RpmLimit   pgtype.Int4
+	TpmLimit   pgtype.Int4
+	RpdLimit   pgtype.Int4
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
 }
@@ -181,6 +194,9 @@ func (q *Queries) GetAPIKeyByID(ctx context.Context, id int64) (GetAPIKeyByIDRow
 		&i.SpendLimit,
 		&i.SpentTotal,
 		&i.RouteID,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -188,7 +204,7 @@ func (q *Queries) GetAPIKeyByID(ctx context.Context, id int64) (GetAPIKeyByIDRow
 }
 
 const listAPIKeysByProjectPage = `-- name: ListAPIKeysByProjectPage :many
-SELECT id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, created_at, updated_at
+SELECT id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
 FROM api_keys
 WHERE project_id = $1
 ORDER BY created_at DESC, id DESC
@@ -213,6 +229,9 @@ type ListAPIKeysByProjectPageRow struct {
 	SpendLimit pgtype.Numeric
 	SpentTotal pgtype.Numeric
 	RouteID    pgtype.Int8
+	RpmLimit   pgtype.Int4
+	TpmLimit   pgtype.Int4
+	RpdLimit   pgtype.Int4
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
 }
@@ -239,6 +258,9 @@ func (q *Queries) ListAPIKeysByProjectPage(ctx context.Context, arg ListAPIKeysB
 			&i.SpendLimit,
 			&i.SpentTotal,
 			&i.RouteID,
+			&i.RpmLimit,
+			&i.TpmLimit,
+			&i.RpdLimit,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -256,7 +278,7 @@ const revokeAPIKey = `-- name: RevokeAPIKey :one
 UPDATE api_keys
 SET revoked_at = now(), updated_at = now()
 WHERE id = $1 AND revoked_at IS NULL
-RETURNING id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, created_at, updated_at
+RETURNING id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
 `
 
 type RevokeAPIKeyRow struct {
@@ -271,6 +293,9 @@ type RevokeAPIKeyRow struct {
 	SpendLimit pgtype.Numeric
 	SpentTotal pgtype.Numeric
 	RouteID    pgtype.Int8
+	RpmLimit   pgtype.Int4
+	TpmLimit   pgtype.Int4
+	RpdLimit   pgtype.Int4
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
 }
@@ -291,6 +316,9 @@ func (q *Queries) RevokeAPIKey(ctx context.Context, id int64) (RevokeAPIKeyRow, 
 		&i.SpendLimit,
 		&i.SpentTotal,
 		&i.RouteID,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -301,7 +329,7 @@ const setAPIKeyDisabled = `-- name: SetAPIKeyDisabled :one
 UPDATE api_keys
 SET disabled_at = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, created_at, updated_at
+RETURNING id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
 `
 
 type SetAPIKeyDisabledParams struct {
@@ -321,6 +349,9 @@ type SetAPIKeyDisabledRow struct {
 	SpendLimit pgtype.Numeric
 	SpentTotal pgtype.Numeric
 	RouteID    pgtype.Int8
+	RpmLimit   pgtype.Int4
+	TpmLimit   pgtype.Int4
+	RpdLimit   pgtype.Int4
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
 }
@@ -341,6 +372,72 @@ func (q *Queries) SetAPIKeyDisabled(ctx context.Context, arg SetAPIKeyDisabledPa
 		&i.SpendLimit,
 		&i.SpentTotal,
 		&i.RouteID,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setAPIKeyRateLimits = `-- name: SetAPIKeyRateLimits :one
+UPDATE api_keys
+SET rpm_limit = $1, tpm_limit = $2, rpd_limit = $3, updated_at = now()
+WHERE id = $4
+RETURNING id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
+`
+
+type SetAPIKeyRateLimitsParams struct {
+	RpmLimit pgtype.Int4
+	TpmLimit pgtype.Int4
+	RpdLimit pgtype.Int4
+	ID       int64
+}
+
+type SetAPIKeyRateLimitsRow struct {
+	ID         int64
+	ProjectID  int64
+	Name       string
+	KeyPrefix  string
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	SpendLimit pgtype.Numeric
+	SpentTotal pgtype.Numeric
+	RouteID    pgtype.Int8
+	RpmLimit   pgtype.Int4
+	TpmLimit   pgtype.Int4
+	RpdLimit   pgtype.Int4
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+// SetAPIKeyRateLimits 设置/清除 API Key 的令牌级限流上限（P2-8）；各列 NULL=继承全局默认，0=不限，>0=具体上限。
+func (q *Queries) SetAPIKeyRateLimits(ctx context.Context, arg SetAPIKeyRateLimitsParams) (SetAPIKeyRateLimitsRow, error) {
+	row := q.db.QueryRow(ctx, setAPIKeyRateLimits,
+		arg.RpmLimit,
+		arg.TpmLimit,
+		arg.RpdLimit,
+		arg.ID,
+	)
+	var i SetAPIKeyRateLimitsRow
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Name,
+		&i.KeyPrefix,
+		&i.LastUsedAt,
+		&i.ExpiresAt,
+		&i.DisabledAt,
+		&i.RevokedAt,
+		&i.SpendLimit,
+		&i.SpentTotal,
+		&i.RouteID,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -351,7 +448,7 @@ const setAPIKeyRoute = `-- name: SetAPIKeyRoute :one
 UPDATE api_keys
 SET route_id = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, created_at, updated_at
+RETURNING id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
 `
 
 type SetAPIKeyRouteParams struct {
@@ -371,6 +468,9 @@ type SetAPIKeyRouteRow struct {
 	SpendLimit pgtype.Numeric
 	SpentTotal pgtype.Numeric
 	RouteID    pgtype.Int8
+	RpmLimit   pgtype.Int4
+	TpmLimit   pgtype.Int4
+	RpdLimit   pgtype.Int4
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
 }
@@ -391,6 +491,9 @@ func (q *Queries) SetAPIKeyRoute(ctx context.Context, arg SetAPIKeyRouteParams) 
 		&i.SpendLimit,
 		&i.SpentTotal,
 		&i.RouteID,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -401,7 +504,7 @@ const setAPIKeySpendLimit = `-- name: SetAPIKeySpendLimit :one
 UPDATE api_keys
 SET spend_limit = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, created_at, updated_at
+RETURNING id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
 `
 
 type SetAPIKeySpendLimitParams struct {
@@ -421,6 +524,9 @@ type SetAPIKeySpendLimitRow struct {
 	SpendLimit pgtype.Numeric
 	SpentTotal pgtype.Numeric
 	RouteID    pgtype.Int8
+	RpmLimit   pgtype.Int4
+	TpmLimit   pgtype.Int4
+	RpdLimit   pgtype.Int4
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
 }
@@ -441,6 +547,9 @@ func (q *Queries) SetAPIKeySpendLimit(ctx context.Context, arg SetAPIKeySpendLim
 		&i.SpendLimit,
 		&i.SpentTotal,
 		&i.RouteID,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

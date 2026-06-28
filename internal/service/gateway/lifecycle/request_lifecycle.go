@@ -27,6 +27,7 @@ type RequestLifecycle struct {
 	authorizer      ChatAuthorizer
 	metrics         MetricsRecorder
 	breaker         ChannelBreaker
+	cooldowns       *ChannelCooldownRegistry
 	ingressProtocol requestlog.Protocol
 	operation       requestlog.Operation
 	safeMessage     func(code string) string
@@ -87,22 +88,63 @@ func NewRequestLifecycle(params RequestLifecycleParams) *RequestLifecycle {
 // nil receiver / nil breaker 都等价于「未启用熔断」，全部放行——这与抽取前
 // service.candidateAvailable 的语义一致，也允许只关心 candidate planning 的单元测试
 // 用字面量构造 service 时不必同时构造 RequestLifecycle。
+//
+// 同时考虑 P2-7 渠道级 429 冷却：处于冷却窗口内的渠道一并排除出 plan。
 func (l *RequestLifecycle) CandidateAvailable(candidate routing.ChatRouteCandidate) bool {
-	if l == nil || l.breaker == nil {
+	if l == nil {
+		return true
+	}
+	channelKey := MetricsID(candidate.Channel.ID)
+	if !l.cooldowns.Allowed(channelKey) {
+		return false
+	}
+	if l.breaker == nil {
 		return true
 	}
 
-	return l.breaker.Available(MetricsID(candidate.Channel.ID))
+	return l.breaker.Available(channelKey)
 }
 
 // BreakerAllow 在启用熔断时判断是否允许尝试该 channel；未启用时始终放行。
 // nil receiver / nil breaker 等价于「未启用熔断」，全部放行。
+//
+// 同时考虑 P2-7 渠道级 429 冷却：处于冷却窗口内的渠道直接跳过，不占用 half-open 探测名额。
 func (l *RequestLifecycle) BreakerAllow(channelKey string) bool {
-	if l == nil || l.breaker == nil {
+	if l == nil {
+		return true
+	}
+	if !l.cooldowns.Allowed(channelKey) {
+		return false
+	}
+	if l.breaker == nil {
 		return true
 	}
 
 	return l.breaker.Allow(channelKey)
+}
+
+// SetChannelCooldownRegistry 注入 P2-7 渠道级 429 冷却注册表；nil 表示不启用冷却。
+func (l *RequestLifecycle) SetChannelCooldownRegistry(registry *ChannelCooldownRegistry) {
+	if l == nil {
+		return
+	}
+	l.cooldowns = registry
+}
+
+// RecordChannelRateLimit 在上游返回 429 时按 Retry-After 登记渠道冷却（P2-7）。
+//
+// 仅对 rate_limit 分类生效；其它错误 no-op。nil 冷却注册表（未启用）时 no-op。
+// 返回是否成功登记冷却，便于调用方观测/记录。
+func (l *RequestLifecycle) RecordChannelRateLimit(channelKey string, err error) bool {
+	if l == nil || l.cooldowns == nil {
+		return false
+	}
+	retryAfter, ok := channelRateLimitRetryAfter(err)
+	if !ok {
+		return false
+	}
+	_, recorded := l.cooldowns.RecordRateLimit(channelKey, retryAfter)
+	return recorded
 }
 
 // ChannelHealthScore 返回某 channel 的健康分（越小越健康），供 stable 线路排序。
@@ -227,6 +269,35 @@ func (l *RequestLifecycle) RecordStreamEvent(event metrics.StreamEvent) {
 	}
 
 	l.metrics.IncStreamEvent(event)
+}
+
+// RecordPartialSettlement 记录一次流式 partial settlement（P2-2 监控偏少收/滥用）。
+func (l *RequestLifecycle) RecordPartialSettlement(reason string) {
+	if l == nil || l.metrics == nil {
+		return
+	}
+
+	l.metrics.IncPartialSettlement(reason)
+}
+
+// RecordRetryableFallback 记录一次因可重试上游错误而切换候选（P2-3 监控前序候选潜在未计费成本）。
+// err 为触发 fallback 的上游错误；用 adapter.UpstreamCategoryOf 提取稳定分类。
+func (l *RequestLifecycle) RecordRetryableFallback(err error) {
+	if l == nil || l.metrics == nil {
+		return
+	}
+
+	category, _ := adapter.UpstreamCategoryOf(err)
+	l.metrics.IncRetryableFallback(string(category))
+}
+
+// RecordZeroPriceServed 记录一次以零售价（客户侧 $0）成功结算的请求（P2-4 零价渠道误配告警）。
+func (l *RequestLifecycle) RecordZeroPriceServed(providerID int64, channelID int64, model string) {
+	if l == nil || l.metrics == nil {
+		return
+	}
+
+	l.metrics.IncZeroPriceServed(MetricsID(providerID), MetricsID(channelID), model)
 }
 
 // ---------------------------------------------------------------------------
@@ -356,9 +427,20 @@ func (l *RequestLifecycle) MarkRequestFailed(ctx context.Context, requestRecord 
 // 失败状态写入是审计动作，调用方仍然返回原始业务错误，避免状态写入细节覆盖根因。
 func (l *RequestLifecycle) MarkAttemptFailed(ctx context.Context, attempt requestlog.AttemptRecord, fallbackCode string, err error) {
 	errorCode, safeMessage, internalDetail := l.requestLogErrorFacts(fallbackCode, err)
+	var upstreamStatusCode *int
+	var upstreamRequestID *string
+	if meta, ok := adapter.UpstreamMetadataOf(err); ok {
+		if meta.StatusCode >= 100 && meta.StatusCode <= 599 {
+			statusCode := meta.StatusCode
+			upstreamStatusCode = &statusCode
+		}
+		upstreamRequestID = UpstreamRequestIDPtr(meta.RequestID)
+	}
 
 	_, _ = l.requestLog.MarkAttemptFailed(ctx, requestlog.MarkAttemptFailedParams{
 		ID:                  attempt.ID,
+		UpstreamStatusCode:  upstreamStatusCode,
+		UpstreamRequestID:   upstreamRequestID,
 		ErrorCode:           errorCode,
 		ErrorMessage:        safeMessage,
 		InternalErrorDetail: internalDetail,

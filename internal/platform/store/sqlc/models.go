@@ -23,6 +23,9 @@ type ApiKey struct {
 	SpendLimit pgtype.Numeric
 	SpentTotal pgtype.Numeric
 	RouteID    pgtype.Int8
+	RpmLimit   pgtype.Int4
+	TpmLimit   pgtype.Int4
+	RpdLimit   pgtype.Int4
 }
 
 type CapabilityKey struct {
@@ -51,6 +54,9 @@ type Channel struct {
 	TimeoutMs           pgtype.Int4
 	CreatedAt           pgtype.Timestamptz
 	UpdatedAt           pgtype.Timestamptz
+	RpmLimit            pgtype.Int4
+	TpmLimit            pgtype.Int4
+	RpdLimit            pgtype.Int4
 }
 
 type ChannelModel struct {

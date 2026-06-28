@@ -145,6 +145,15 @@ func mapChatServiceError(req ChatCompletionRequest, err error, fallbackCode stri
 			errorType: "insufficient_quota",
 			param:     nil,
 		}
+	case failure.CodeOf(err) == failure.CodeRateLimitExceeded, failure.CodeOf(err) == failure.CodeGatewayChannelRateLimited:
+		// Key 级 TPM 或渠道级 RPM/TPM/RPD 限流命中（P2-8）：统一 429，不泄露具体维度阈值。
+		return chatServiceErrorResponse{
+			status:    http.StatusTooManyRequests,
+			code:      "rate_limit_exceeded",
+			message:   "You have exceeded the rate limit. Please slow down and retry later.",
+			errorType: "rate_limit_error",
+			param:     nil,
+		}
 	case failure.CodeOf(err) == failure.CodeAdapterRequestUnsupported:
 		// adapter 在调用上游前明确拒绝当前 provider 无法保持语义的字段。
 		param := chatErrorFieldParam(err)

@@ -258,6 +258,26 @@ type ResponseOutputItem struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
+// MarshalJSON 对 message item 始终输出 content 字段（空时为 []）。
+//
+// Codex（responses 解析）的 ResponseItem::Message 把 content 当作必填，缺省会导致 output_item.added
+// 反序列化失败、item 不被登记，后续 output_text.delta 报 "OutputTextDelta without active item" 并丢字。
+// 仅对 message 强制；reasoning/function_call 仍按 omitempty（与上游 OpenAI 形状一致）。
+func (i ResponseOutputItem) MarshalJSON() ([]byte, error) {
+	type alias ResponseOutputItem
+	if i.Type == "message" {
+		content := i.Content
+		if content == nil {
+			content = []ResponseOutputContent{}
+		}
+		return json.Marshal(struct {
+			alias
+			Content []ResponseOutputContent `json:"content"`
+		}{alias(i), content})
+	}
+	return json.Marshal(alias(i))
+}
+
 // ResponseOutputContent 表示 output / reasoning item content 或 summary 中的单个 part。
 //
 // Type 取值：output_text / refusal（message content）；reasoning_text（reasoning content）；

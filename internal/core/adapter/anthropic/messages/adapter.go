@@ -63,8 +63,24 @@ func (a *Adapter) Messages(ctx context.Context, ch channel.Runtime, req MessageR
 		return nil, newUpstreamStatusError(httpResp, "messages")
 	}
 
+	body, exceeded, err := adapter.ReadUpstreamBodyLimited(httpResp.Body)
+	if err != nil {
+		return nil, failure.Wrap(
+			failure.CodeAdapterReadStreamFailed,
+			err,
+			failure.WithMessage("anthropic adapter read messages response body"),
+		)
+	}
+	if exceeded {
+		return nil, failure.New(
+			failure.CodeAdapterResponseTooLarge,
+			failure.WithMessage("anthropic adapter messages response body exceeds limit"),
+			failure.WithField("limit_bytes", adapter.MaxUpstreamResponseBytes()),
+		)
+	}
+
 	var wire messagesResponse
-	if err := json.NewDecoder(httpResp.Body).Decode(&wire); err != nil {
+	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, failure.Wrap(
 			failure.CodeAdapterDecodeResponseFailed,
 			err,
@@ -120,7 +136,7 @@ func (a *Adapter) StreamMessages(ctx context.Context, ch channel.Runtime, req Me
 
 	// 渠道 timeout 只约束「上游开始响应(拿到响应头)」,不约束流本体:长补全会合法地流式数分钟,
 	// 绝不能被渠道 timeout 当绝对截止时间罩住整段读流而掐断。流总时长由客户端断开(父 ctx)兜底。
-	streamCtx, headersReceived, cancel := adapter.HeaderTimeoutContext(ctx, ch.Timeout)
+	streamCtx, headersReceived, resetIdle, cancel := adapter.StreamTimeoutContext(ctx, ch.Timeout, adapter.StreamIdleTimeout())
 	defer cancel()
 
 	req.Stream = true
@@ -145,6 +161,7 @@ func (a *Adapter) StreamMessages(ctx context.Context, ch channel.Runtime, req Me
 	reader := adaptersse.NewReader(httpResp.Body, adaptersse.Config{
 		MaxLineBytes:  maxAnthropicStreamEventBytes,
 		MaxEventBytes: maxAnthropicStreamEventBytes,
+		OnActivity:    resetIdle,
 	})
 
 	for reader.Next() {
@@ -188,19 +205,13 @@ func (a *Adapter) StreamMessages(ctx context.Context, ch channel.Runtime, req Me
 	}
 
 	if err := reader.Err(); err != nil {
-		return state.outcome(meta), failure.Wrap(
-			failure.CodeAdapterReadStreamFailed,
-			err,
-			failure.WithMessage("anthropic adapter read stream event"),
-		)
+		return state.outcome(meta),
+			newUpstreamStreamReadError(err, context.Cause(streamCtx), "anthropic adapter read stream event")
 	}
 
 	outcome := state.outcome(meta)
 	if !terminalReceived {
-		return outcome, failure.New(
-			failure.CodeAdapterReadStreamFailed,
-			failure.WithMessage("anthropic adapter stream ended before message_stop"),
-		)
+		return outcome, newUpstreamStreamIncompleteError("anthropic adapter stream ended before message_stop")
 	}
 
 	return outcome, nil
@@ -243,7 +254,7 @@ func (a *Adapter) do(ctx context.Context, ch channel.Runtime, req MessageRequest
 		if stream {
 			op = "send messages stream request"
 		}
-		return nil, newUpstreamSendError(err, op)
+		return nil, newUpstreamSendErrorWithContextCause(err, context.Cause(ctx), op)
 	}
 
 	return httpResp, nil

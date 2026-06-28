@@ -71,7 +71,7 @@ func TestChatAuthorizationFreezesOnMostExpensiveCandidate(t *testing.T) {
 			AuthorizedAmount: gatewayTestNumeric(12, 0),
 		},
 	}
-	service := NewChatAuthorizationService(billingService, ledgerService)
+	service := NewChatAuthorizationService(billingService, ledgerService, 0)
 
 	authorization, err := service.AuthorizeChat(context.Background(), ChatAuthorizeParams{
 		RequestRecord:       requestlog.RequestRecord{ID: 44},
@@ -102,9 +102,102 @@ func TestChatAuthorizationFreezesOnMostExpensiveCandidate(t *testing.T) {
 	}
 }
 
+// TestChatAuthorizationUsesCandidateMaxOutputTokensWhenClientOmits 验证 P0-2：客户未给出输出上限时，
+// 冻结估算改用候选模型 max_output_tokens（取候选最大值），而非进程级偏小兜底。
+func TestChatAuthorizationUsesCandidateMaxOutputTokensWhenClientOmits(t *testing.T) {
+	price := billing.CustomerPriceSnapshot{
+		Currency:           "USD",
+		PricingUnit:        billing.PricingUnitPer1MTokens,
+		UncachedInputPrice: gatewayTestNumeric(1, 0),
+		OutputPrice:        gatewayTestNumeric(5, 0),
+		FormulaVersion:     billing.FormulaVersionV1,
+	}
+
+	billingService := &chatAuthorizationBilling{}
+	ledgerService := &chatAuthorizationLedger{reservation: ledger.Reservation{ID: 1, RequestRecordID: 9, Currency: "USD"}}
+	// 进程级兜底设很小(100)，确认未被用到（候选上限 32000 优先）。
+	service := NewChatAuthorizationService(billingService, ledgerService, 100)
+
+	_, err := service.AuthorizeChat(context.Background(), ChatAuthorizeParams{
+		RequestRecord:            requestlog.RequestRecord{ID: 9},
+		Principal:                &auth.APIKeyPrincipal{UserID: 3},
+		CandidatePrices:          []billing.CustomerPriceSnapshot{price},
+		InputTokens:              10,
+		MaxCompletionTokens:      0,
+		CandidateMaxOutputTokens: 32000,
+	})
+	if err != nil {
+		t.Fatalf("AuthorizeChat returned error: %v", err)
+	}
+	if billingService.estimate.MaxCompletionTokens != 32000 {
+		t.Fatalf("expected estimate to use candidate max output tokens 32000, got %d", billingService.estimate.MaxCompletionTokens)
+	}
+}
+
+// TestChatAuthorizationFallsBackToProcessDefaultWhenAllOmit 验证 P0-2：客户与候选均未给出输出上限时，
+// 回退进程级 maxOutputTokensFallback。
+func TestChatAuthorizationFallsBackToProcessDefaultWhenAllOmit(t *testing.T) {
+	price := billing.CustomerPriceSnapshot{
+		Currency:           "USD",
+		PricingUnit:        billing.PricingUnitPer1MTokens,
+		UncachedInputPrice: gatewayTestNumeric(1, 0),
+		OutputPrice:        gatewayTestNumeric(5, 0),
+		FormulaVersion:     billing.FormulaVersionV1,
+	}
+
+	billingService := &chatAuthorizationBilling{}
+	ledgerService := &chatAuthorizationLedger{reservation: ledger.Reservation{ID: 1, RequestRecordID: 9, Currency: "USD"}}
+	service := NewChatAuthorizationService(billingService, ledgerService, 8192)
+
+	_, err := service.AuthorizeChat(context.Background(), ChatAuthorizeParams{
+		RequestRecord:            requestlog.RequestRecord{ID: 9},
+		Principal:                &auth.APIKeyPrincipal{UserID: 3},
+		CandidatePrices:          []billing.CustomerPriceSnapshot{price},
+		InputTokens:              10,
+		MaxCompletionTokens:      0,
+		CandidateMaxOutputTokens: 0,
+	})
+	if err != nil {
+		t.Fatalf("AuthorizeChat returned error: %v", err)
+	}
+	if billingService.estimate.MaxCompletionTokens != 8192 {
+		t.Fatalf("expected estimate to fall back to process default 8192, got %d", billingService.estimate.MaxCompletionTokens)
+	}
+}
+
+// TestChatAuthorizationPrefersClientMaxOutputTokens 验证 P0-2：客户显式给出输出上限时优先生效。
+func TestChatAuthorizationPrefersClientMaxOutputTokens(t *testing.T) {
+	price := billing.CustomerPriceSnapshot{
+		Currency:           "USD",
+		PricingUnit:        billing.PricingUnitPer1MTokens,
+		UncachedInputPrice: gatewayTestNumeric(1, 0),
+		OutputPrice:        gatewayTestNumeric(5, 0),
+		FormulaVersion:     billing.FormulaVersionV1,
+	}
+
+	billingService := &chatAuthorizationBilling{}
+	ledgerService := &chatAuthorizationLedger{reservation: ledger.Reservation{ID: 1, RequestRecordID: 9, Currency: "USD"}}
+	service := NewChatAuthorizationService(billingService, ledgerService, 8192)
+
+	_, err := service.AuthorizeChat(context.Background(), ChatAuthorizeParams{
+		RequestRecord:            requestlog.RequestRecord{ID: 9},
+		Principal:                &auth.APIKeyPrincipal{UserID: 3},
+		CandidatePrices:          []billing.CustomerPriceSnapshot{price},
+		InputTokens:              10,
+		MaxCompletionTokens:      256,
+		CandidateMaxOutputTokens: 32000,
+	})
+	if err != nil {
+		t.Fatalf("AuthorizeChat returned error: %v", err)
+	}
+	if billingService.estimate.MaxCompletionTokens != 256 {
+		t.Fatalf("expected estimate to prefer client max output tokens 256, got %d", billingService.estimate.MaxCompletionTokens)
+	}
+}
+
 // TestChatAuthorizationRequiresCandidatePrices 验证无候选售价时拒绝冻结。
 func TestChatAuthorizationRequiresCandidatePrices(t *testing.T) {
-	service := NewChatAuthorizationService(&chatAuthorizationBilling{}, &chatAuthorizationLedger{})
+	service := NewChatAuthorizationService(&chatAuthorizationBilling{}, &chatAuthorizationLedger{}, 0)
 	_, err := service.AuthorizeChat(context.Background(), ChatAuthorizeParams{
 		RequestRecord: requestlog.RequestRecord{ID: 1},
 		Principal:     &auth.APIKeyPrincipal{UserID: 1},

@@ -17,6 +17,12 @@ const (
 	defaultSettlementRecoveryLockTTL = 30 * time.Second
 	settlementRecoveryLockMargin     = 5 * time.Second
 	maxRecoveryErrorDetailBytes      = 2048
+	// defaultSettlementRecoveryBackoffCap 是补偿重试指数退避的单次上限回退默认（配置 <=0 时使用）。
+	defaultSettlementRecoveryBackoffCap = 5 * time.Minute
+	// defaultSettlementRecoveryBatchSize 是单轮 RunOnce 最多 claim/处理的补偿任务数（P2-5）。
+	// 批量排空把每轮固定开销（dead 收口 + exhausted 标记扫描）摊薄到多条 job 上，
+	// 积压时显著加快排空；每条仍以 FOR UPDATE SKIP LOCKED 独立 claim，多副本/多 worker 并发安全。
+	defaultSettlementRecoveryBatchSize = 16
 )
 
 // SettlementRecoveryJobStore 定义 worker claim 和推进 recovery job 状态所需的存储能力。
@@ -39,14 +45,17 @@ type SettlementRecoveryRecoverer interface {
 
 // SettlementRecoveryWorker claim settlement_recovery_jobs 并驱动幂等 settlement 重试。
 type SettlementRecoveryWorker struct {
-	store     SettlementRecoveryJobStore
-	recoverer SettlementRecoveryRecoverer
-	workerID  string
-	lockTTL   time.Duration
+	store      SettlementRecoveryJobStore
+	recoverer  SettlementRecoveryRecoverer
+	workerID   string
+	lockTTL    time.Duration
+	backoffCap time.Duration
+	batchSize  int
 }
 
 // NewSettlementRecoveryWorker 创建 settlement recovery worker。
-func NewSettlementRecoveryWorker(store SettlementRecoveryJobStore, recoverer SettlementRecoveryRecoverer, workerID string, lockTTL time.Duration) *SettlementRecoveryWorker {
+// backoffCap 是重试指数退避的单次上限；<=0 时回退默认。与 job.max_attempts 一起决定补偿总覆盖窗口。
+func NewSettlementRecoveryWorker(store SettlementRecoveryJobStore, recoverer SettlementRecoveryRecoverer, workerID string, lockTTL time.Duration, backoffCap time.Duration) *SettlementRecoveryWorker {
 	if store == nil {
 		panic("workers: settlement recovery store is required")
 	}
@@ -59,13 +68,26 @@ func NewSettlementRecoveryWorker(store SettlementRecoveryJobStore, recoverer Set
 	if lockTTL <= 0 {
 		lockTTL = defaultSettlementRecoveryLockTTL
 	}
+	if backoffCap <= 0 {
+		backoffCap = defaultSettlementRecoveryBackoffCap
+	}
 
 	return &SettlementRecoveryWorker{
-		store:     store,
-		recoverer: recoverer,
-		workerID:  workerID,
-		lockTTL:   lockTTL,
+		store:      store,
+		recoverer:  recoverer,
+		workerID:   workerID,
+		lockTTL:    lockTTL,
+		backoffCap: backoffCap,
+		batchSize:  defaultSettlementRecoveryBatchSize,
 	}
+}
+
+// SetBatchSize 配置单轮 RunOnce 最多 claim/处理的补偿任务数（P2-5 积压排空）。<=0 时回退默认。
+func (w *SettlementRecoveryWorker) SetBatchSize(size int) {
+	if size <= 0 {
+		size = defaultSettlementRecoveryBatchSize
+	}
+	w.batchSize = size
 }
 
 // Name 返回 worker 名称。
@@ -73,11 +95,15 @@ func (w *SettlementRecoveryWorker) Name() string {
 	return "settlement_recovery"
 }
 
-// RunOnce claim 并处理一条到期 settlement recovery job。
+// RunOnce 收口 dead 残留、标记到期耗尽，并批量 claim/处理一批到期 settlement recovery job。
+//
+// 批量排空（P2-5）：单轮把每轮固定开销（dead 收口 + exhausted 标记）摊薄到至多 batchSize 条 job，
+// 积压时显著减少 DB 往返、加快排空；每条仍以独立的 FOR UPDATE SKIP LOCKED claim，多 worker 并发安全。
 func (w *SettlementRecoveryWorker) RunOnce(ctx context.Context) (bool, error) {
 	now := time.Now()
 
-	// 先收口已 dead 但请求仍停留在 running 的补偿任务，避免请求永远显示「进行中」且余额被永久冻结。
+	// dead 收口与 exhausted 标记保持「每 tick 至多一次、且优先于 claim」的语义：
+	// 任一做了事就抢占本 tick 返回，依赖 Runner 的「有工作即立刻再跑」继续推进，避免与批量 claim 互相抢锁。
 	if worked, err := w.finalizeNextDeadJob(ctx); worked || err != nil {
 		return worked, err
 	}
@@ -85,6 +111,32 @@ func (w *SettlementRecoveryWorker) RunOnce(ctx context.Context) (bool, error) {
 	if worked, err := w.markExhausted(ctx, now); worked || err != nil {
 		return worked, err
 	}
+
+	batchSize := w.batchSize
+	if batchSize <= 0 {
+		batchSize = defaultSettlementRecoveryBatchSize
+	}
+
+	// 仅对 claim+重放阶段做批量排空：单 tick 连续 claim 至多 batchSize 条到期 job，
+	// 把每轮 dead/exhausted 扫描的固定开销摊薄到多条 job，积压时显著加快排空。
+	worked := false
+	for i := 0; i < batchSize; i++ {
+		processed, err := w.claimAndRecoverOne(ctx)
+		if err != nil {
+			return true, err
+		}
+		if !processed {
+			break
+		}
+		worked = true
+	}
+
+	return worked, nil
+}
+
+// claimAndRecoverOne claim 并处理一条到期 settlement recovery job；processed=false 表示当前已无到期任务。
+func (w *SettlementRecoveryWorker) claimAndRecoverOne(ctx context.Context) (processed bool, err error) {
+	now := time.Now()
 
 	job, err := w.store.ClaimNextSettlementRecoveryJob(ctx, sqlc.ClaimNextSettlementRecoveryJobParams{
 		LockedBy: pgtype.Text{String: w.workerID, Valid: true},
@@ -221,7 +273,7 @@ func (w *SettlementRecoveryWorker) markFailed(ctx context.Context, job sqlc.Sett
 		LockedBy:                job.LockedBy,
 		LockedUntil:             job.LockedUntil,
 		AttemptCount:            job.AttemptCount,
-		NextRunAt:               pgtype.Timestamptz{Time: now.Add(settlementRecoveryBackoff(job.AttemptCount)), Valid: true},
+		NextRunAt:               pgtype.Timestamptz{Time: now.Add(settlementRecoveryBackoff(job.AttemptCount, w.backoffCap)), Valid: true},
 		LastErrorCode:           nullableText(code),
 		LastErrorMessage:        nullableText(safeMessage),
 		LastInternalErrorDetail: nullableText(internalDetail),
@@ -257,17 +309,37 @@ func (w *SettlementRecoveryWorker) recoveryTimeout() time.Duration {
 	return w.lockTTL - settlementRecoveryLockMargin
 }
 
-func settlementRecoveryBackoff(attemptCount int32) time.Duration {
+// settlementRecoveryBackoff 计算第 attemptCount 次失败后的下次重试延迟：
+// 指数退避 1s,2s,4s,...，增长到 cap 后保持平稳。cap<=0 时回退默认上限。
+// 退避序列在 cap 处封顶，避免随尝试次数无界增长，同时把总覆盖窗口拉长到分钟~小时级。
+func settlementRecoveryBackoff(attemptCount int32, backoffCap time.Duration) time.Duration {
+	if backoffCap <= 0 {
+		backoffCap = defaultSettlementRecoveryBackoffCap
+	}
 	if attemptCount <= 1 {
-		return time.Second
+		return minDuration(time.Second, backoffCap)
 	}
 
+	// 用 30 位封顶移位幂，避免 1<<shift 在大 attemptCount 时溢出；幂一旦超过 cap 即提前返回 cap。
 	shift := attemptCount - 1
-	if shift > 6 {
-		shift = 6
+	if shift > 30 {
+		shift = 30
 	}
 
-	return time.Second * time.Duration(1<<shift)
+	backoff := time.Second * time.Duration(int64(1)<<uint(shift))
+	if backoff <= 0 || backoff > backoffCap {
+		return backoffCap
+	}
+
+	return backoff
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+
+	return b
 }
 
 func recoveryErrorFacts(err error) (code string, safeMessage string, internalDetail string) {

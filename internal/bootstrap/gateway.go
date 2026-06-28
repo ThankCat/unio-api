@@ -22,7 +22,9 @@ func NewChatGateway(
 	registry *lifecycle.AdapterRegistry,
 	workerConfig config.WorkerConfig,
 	breakerConfig config.CircuitBreakerConfig,
+	gatewayConfig config.GatewayConfig,
 	metricsRecorder *metrics.Metrics,
+	rateLimitGuard lifecycle.RateLimitGuard,
 ) *gateway.ChatCompletionService {
 	if registry == nil {
 		panic("bootstrap: lifecycle adapter registry is required")
@@ -39,6 +41,7 @@ func NewChatGateway(
 	chatSettlementRecoveryStore := lifecycle.NewChatSettlementRecoveryStore(
 		queries,
 		workerConfig.SettlementRecoveryInitialDelay,
+		workerConfig.SettlementRecoveryMaxAttempts,
 	)
 	chatSettlementExecutor := lifecycle.NewRecoverableChatSettlementExecutor(
 		chatSettlementService,
@@ -48,6 +51,7 @@ func NewChatGateway(
 	chatAuthorizationServer := lifecycle.NewChatAuthorizationService(
 		billing.Service{},
 		ledgerService,
+		gatewayConfig.MaxOutputTokensFallback,
 	)
 	candidatePreparer := lifecycle.NewExecutor(registry)
 
@@ -69,7 +73,7 @@ func NewChatGateway(
 		})
 	}
 
-	return gateway.NewChatCompletionService(
+	service := gateway.NewChatCompletionService(
 		router,
 		registry.OpenAI,
 		candidatePreparer,
@@ -80,6 +84,8 @@ func NewChatGateway(
 		chatMetrics,
 		channelBreaker,
 	)
+	service.SetRateLimitGuard(rateLimitGuard)
+	return service
 }
 
 // NewResponsesGateway 创建 OpenAI Responses API gateway service（DEC-014 responses-to-chat 桥接）。
@@ -94,7 +100,9 @@ func NewResponsesGateway(
 	registry *lifecycle.AdapterRegistry,
 	workerConfig config.WorkerConfig,
 	breakerConfig config.CircuitBreakerConfig,
+	gatewayConfig config.GatewayConfig,
 	metricsRecorder *metrics.Metrics,
+	rateLimitGuard lifecycle.RateLimitGuard,
 ) *responsesgateway.ResponsesService {
 	if registry == nil {
 		panic("bootstrap: lifecycle adapter registry is required")
@@ -111,6 +119,7 @@ func NewResponsesGateway(
 	chatSettlementRecoveryStore := lifecycle.NewChatSettlementRecoveryStore(
 		queries,
 		workerConfig.SettlementRecoveryInitialDelay,
+		workerConfig.SettlementRecoveryMaxAttempts,
 	)
 	chatSettlementExecutor := lifecycle.NewRecoverableChatSettlementExecutor(
 		chatSettlementService,
@@ -120,6 +129,7 @@ func NewResponsesGateway(
 	chatAuthorizationServer := lifecycle.NewChatAuthorizationService(
 		billing.Service{},
 		ledgerService,
+		gatewayConfig.MaxOutputTokensFallback,
 	)
 	candidatePreparer := lifecycle.NewExecutor(registry)
 
@@ -138,7 +148,7 @@ func NewResponsesGateway(
 		})
 	}
 
-	return responsesgateway.NewResponsesService(
+	service := responsesgateway.NewResponsesService(
 		router,
 		registry.OpenAI,
 		candidatePreparer,
@@ -149,6 +159,8 @@ func NewResponsesGateway(
 		chatMetrics,
 		channelBreaker,
 	)
+	service.SetRateLimitGuard(rateLimitGuard)
+	return service
 }
 
 // NewMessagesGateway 创建 Anthropic Messages gateway service。
@@ -159,7 +171,9 @@ func NewMessagesGateway(
 	registry *lifecycle.AdapterRegistry,
 	workerConfig config.WorkerConfig,
 	breakerConfig config.CircuitBreakerConfig,
+	gatewayConfig config.GatewayConfig,
 	metricsRecorder *metrics.Metrics,
+	rateLimitGuard lifecycle.RateLimitGuard,
 ) *anthropicmessages.MessagesService {
 	if registry == nil {
 		panic("bootstrap: lifecycle adapter registry is required")
@@ -176,6 +190,7 @@ func NewMessagesGateway(
 	chatSettlementRecoveryStore := lifecycle.NewChatSettlementRecoveryStore(
 		queries,
 		workerConfig.SettlementRecoveryInitialDelay,
+		workerConfig.SettlementRecoveryMaxAttempts,
 	)
 	chatSettlementExecutor := lifecycle.NewRecoverableChatSettlementExecutor(
 		chatSettlementService,
@@ -185,6 +200,7 @@ func NewMessagesGateway(
 	chatAuthorizationServer := lifecycle.NewChatAuthorizationService(
 		billing.Service{},
 		ledgerService,
+		gatewayConfig.MaxOutputTokensFallback,
 	)
 	candidatePreparer := lifecycle.NewExecutor(registry)
 
@@ -203,7 +219,7 @@ func NewMessagesGateway(
 		})
 	}
 
-	return anthropicmessages.NewMessagesService(
+	service := anthropicmessages.NewMessagesService(
 		router,
 		registry.Anthropic,
 		candidatePreparer,
@@ -214,4 +230,6 @@ func NewMessagesGateway(
 		chatMetrics,
 		channelBreaker,
 	)
+	service.SetRateLimitGuard(rateLimitGuard)
+	return service
 }

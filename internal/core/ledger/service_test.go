@@ -600,6 +600,191 @@ func TestCaptureWritesOffActualAmountAboveAuthorization(t *testing.T) {
 	}
 }
 
+func TestCaptureCollectsOverageFromAvailableBalanceWithoutWriteOff(t *testing.T) {
+	ctx, pool, queries, service, cleanup := newServiceTestDeps(t)
+	defer cleanup()
+
+	userID := createLedgerTestUser(t, ctx, pool)
+	defer cleanupLedgerTestUser(t, context.Background(), pool, userID)
+	requestRecordID := createLedgerTestRequestRecord(t, ctx, pool, userID)
+
+	// 余额充足（200），按模型保守估算只冻结 80；真实费用 100 的超额应从未冻结可用余额二次补扣，不动用平台核销。
+	if _, err := service.Credit(ctx, CreditParams{
+		UserID:         userID,
+		Amount:         numeric(200),
+		Currency:       "USD",
+		IdempotencyKey: fmt.Sprintf("overage-full-credit-%d", time.Now().UnixNano()),
+		Reason:         "seed overage balance",
+	}); err != nil {
+		t.Fatalf("seed credit: %v", err)
+	}
+
+	reservation, err := service.PreAuthorize(ctx, PreAuthorizeParams{
+		UserID:          userID,
+		RequestRecordID: requestRecordID,
+		EstimatedAmount: numeric(80),
+		Currency:        "USD",
+		IdempotencyKey:  fmt.Sprintf("overage-full-preauthorize-%d", time.Now().UnixNano()),
+		Reason:          "test overage preauthorize",
+	})
+	if err != nil {
+		t.Fatalf("preauthorize: %v", err)
+	}
+	assertNumericEquals(t, reservation.AuthorizedAmount, 80)
+
+	captureParams := CaptureParams{
+		RequestRecordID: requestRecordID,
+		ReservationID:   &reservation.ID,
+		ActualAmount:    numeric(100),
+		IdempotencyKey:  fmt.Sprintf("overage-full-capture-%d", time.Now().UnixNano()),
+		Reason:          "test overage capture",
+	}
+	captured, err := service.Capture(ctx, captureParams)
+	if err != nil {
+		t.Fatalf("capture with overage: %v", err)
+	}
+	if captured.Status != ReservationStatusCaptured {
+		t.Fatalf("expected captured reservation, got %q", captured.Status)
+	}
+	// reservation 行只记录冻结内扣费；超额补扣不写回 reservation。
+	assertNumericEquals(t, captured.CapturedAmount, 80)
+	assertNumericEquals(t, captured.OverageCapturedAmount, 20)
+
+	balance, err := queries.GetUserBalance(ctx, sqlc.GetUserBalanceParams{UserID: userID, Currency: "USD"})
+	if err != nil {
+		t.Fatalf("get balance after overage capture: %v", err)
+	}
+	// 200 - 80(冻结扣费) - 20(超额补扣) = 100，余额非负且无平台损失。
+	assertNumericEquals(t, balance.Balance, 100)
+	assertNumericEquals(t, balance.ReservedBalance, 0)
+
+	captureEntry, err := queries.GetLedgerEntryByIdempotencyKey(ctx, captureParams.IdempotencyKey)
+	if err != nil {
+		t.Fatalf("get capture ledger entry: %v", err)
+	}
+	assertNumericEquals(t, captureEntry.Amount, 80)
+	assertNumericEquals(t, captureEntry.BalanceBefore, 200)
+	assertNumericEquals(t, captureEntry.BalanceAfter, 120)
+
+	overageEntry, err := queries.GetLedgerEntryByIdempotencyKey(ctx, captureParams.IdempotencyKey+":overage")
+	if err != nil {
+		t.Fatalf("get overage ledger entry: %v", err)
+	}
+	assertNumericEquals(t, overageEntry.Amount, 20)
+	assertNumericEquals(t, overageEntry.BalanceBefore, 120)
+	assertNumericEquals(t, overageEntry.BalanceAfter, 100)
+
+	if _, err := queries.GetLedgerBillingExceptionByReservationID(ctx, reservation.ID); err == nil {
+		t.Fatal("expected no write off exception when overage fully collected")
+	}
+
+	// 幂等重放：金额、流水都不应重复。
+	repeated, err := service.Capture(ctx, captureParams)
+	if err != nil {
+		t.Fatalf("repeat overage capture: %v", err)
+	}
+	if repeated.ID != captured.ID {
+		t.Fatalf("expected idempotent capture id %d, got %d", captured.ID, repeated.ID)
+	}
+	assertNumericEquals(t, repeated.OverageCapturedAmount, 20)
+
+	balance, err = queries.GetUserBalance(ctx, sqlc.GetUserBalanceParams{UserID: userID, Currency: "USD"})
+	if err != nil {
+		t.Fatalf("get balance after repeated overage capture: %v", err)
+	}
+	assertNumericEquals(t, balance.Balance, 100)
+}
+
+func TestCapturePartiallyCollectsOverageThenWritesOffResidual(t *testing.T) {
+	ctx, pool, queries, service, cleanup := newServiceTestDeps(t)
+	defer cleanup()
+
+	userID := createLedgerTestUser(t, ctx, pool)
+	defer cleanupLedgerTestUser(t, context.Background(), pool, userID)
+	requestRecordID := createLedgerTestRequestRecord(t, ctx, pool, userID)
+
+	// 余额 90：冻结 80，真实费用 100。超额 20 中只有 10 可二次补扣（清空可用余额），剩余 10 平台核销。
+	if _, err := service.Credit(ctx, CreditParams{
+		UserID:         userID,
+		Amount:         numeric(90),
+		Currency:       "USD",
+		IdempotencyKey: fmt.Sprintf("overage-partial-credit-%d", time.Now().UnixNano()),
+		Reason:         "seed partial overage balance",
+	}); err != nil {
+		t.Fatalf("seed credit: %v", err)
+	}
+
+	reservation, err := service.PreAuthorize(ctx, PreAuthorizeParams{
+		UserID:          userID,
+		RequestRecordID: requestRecordID,
+		EstimatedAmount: numeric(80),
+		Currency:        "USD",
+		IdempotencyKey:  fmt.Sprintf("overage-partial-preauthorize-%d", time.Now().UnixNano()),
+		Reason:          "test partial overage preauthorize",
+	})
+	if err != nil {
+		t.Fatalf("preauthorize: %v", err)
+	}
+	assertNumericEquals(t, reservation.AuthorizedAmount, 80)
+
+	captureParams := CaptureParams{
+		RequestRecordID: requestRecordID,
+		ReservationID:   &reservation.ID,
+		ActualAmount:    numeric(100),
+		IdempotencyKey:  fmt.Sprintf("overage-partial-capture-%d", time.Now().UnixNano()),
+		Reason:          "test partial overage capture",
+	}
+	captured, err := service.Capture(ctx, captureParams)
+	if err != nil {
+		t.Fatalf("capture with partial overage: %v", err)
+	}
+	assertNumericEquals(t, captured.CapturedAmount, 80)
+	assertNumericEquals(t, captured.OverageCapturedAmount, 10)
+
+	balance, err := queries.GetUserBalance(ctx, sqlc.GetUserBalanceParams{UserID: userID, Currency: "USD"})
+	if err != nil {
+		t.Fatalf("get balance after partial overage capture: %v", err)
+	}
+	// 90 - 80 - 10 = 0，可用余额清空但永不为负。
+	assertNumericEquals(t, balance.Balance, 0)
+	assertNumericEquals(t, balance.ReservedBalance, 0)
+
+	overageEntry, err := queries.GetLedgerEntryByIdempotencyKey(ctx, captureParams.IdempotencyKey+":overage")
+	if err != nil {
+		t.Fatalf("get partial overage ledger entry: %v", err)
+	}
+	assertNumericEquals(t, overageEntry.Amount, 10)
+
+	writeOff, err := queries.GetLedgerBillingExceptionByReservationID(ctx, reservation.ID)
+	if err != nil {
+		t.Fatalf("get write off exception: %v", err)
+	}
+	if writeOff.EventType != string(BillingExceptionEventTypeWriteOff) {
+		t.Fatalf("expected write off event type, got %q", writeOff.EventType)
+	}
+	assertNumericEquals(t, writeOff.ActualAmount, 100)
+	// captured_amount 记录用户真实承担总额（冻结内 80 + 超额补扣 10）。
+	assertNumericEquals(t, writeOff.CapturedAmount, 90)
+	// 平台只核销补扣后仍不可回收的残差 10。
+	assertNumericEquals(t, writeOff.PlatformAmount, 10)
+
+	// 幂等重放。
+	repeated, err := service.Capture(ctx, captureParams)
+	if err != nil {
+		t.Fatalf("repeat partial overage capture: %v", err)
+	}
+	if repeated.ID != captured.ID {
+		t.Fatalf("expected idempotent capture id %d, got %d", captured.ID, repeated.ID)
+	}
+	assertNumericEquals(t, repeated.OverageCapturedAmount, 10)
+
+	balance, err = queries.GetUserBalance(ctx, sqlc.GetUserBalanceParams{UserID: userID, Currency: "USD"})
+	if err != nil {
+		t.Fatalf("get balance after repeated partial overage capture: %v", err)
+	}
+	assertNumericEquals(t, balance.Balance, 0)
+}
+
 func TestReleaseWithBillingExceptionRecordsRiskExposure(t *testing.T) {
 	ctx, pool, queries, service, cleanup := newServiceTestDeps(t)
 	defer cleanup()

@@ -95,6 +95,16 @@ func NewChatCompletionService(
 	}
 }
 
+// SetRateLimitGuard 注入两层限流 Guard（P2-8），转发给候选循环驱动；nil 表示不启用限流。
+func (s *ChatCompletionService) SetRateLimitGuard(guard lifecycle.RateLimitGuard) {
+	s.attemptRunner.SetRateLimitGuard(guard)
+}
+
+// SetChannelCooldownRegistry 注入渠道级 429 冷却注册表（P2-7），转发给共享 lifecycle；nil 表示不启用冷却。
+func (s *ChatCompletionService) SetChannelCooldownRegistry(registry *lifecycle.ChannelCooldownRegistry) {
+	s.lifecycle.SetChannelCooldownRegistry(registry)
+}
+
 // chatCompletionsSafeMessage 把 chat-completion 编排专用 ad-hoc string code 映射成可展示文案；
 // 返回空串表示「此 code 不在本协议族 ad-hoc 集合内」，由 lifecycle 兜底到 BaseSafeRequestLogErrorMessage。
 func chatCompletionsSafeMessage(code string) string {

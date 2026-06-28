@@ -39,11 +39,9 @@ func (a *routerTestAPIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, 
 	return a.principal, a.err
 }
 
-// routerTestRateLimiter 是 router 测试使用的限流器替身。
+// routerTestRateLimiter 是 router 测试使用的 Key 级限流器替身。
 type routerTestRateLimiter struct {
-	subject  string
-	limit    int64
-	window   time.Duration
+	apiKeyID int64
 	decision ratelimit.Decision
 	err      error
 }
@@ -63,11 +61,9 @@ func (s *routerTestModelCatalogService) ListAvailableModels(ctx context.Context,
 	return s.models, s.err
 }
 
-// Allow 记录收到的限流参数，并返回测试预设的限流判断结果。
-func (l *routerTestRateLimiter) Allow(ctx context.Context, subject string, limit int64, window time.Duration) (ratelimit.Decision, error) {
-	l.subject = subject
-	l.limit = limit
-	l.window = window
+// AllowKeyRequest 记录收到的 API Key，并返回测试预设的限流判断结果。
+func (l *routerTestRateLimiter) AllowKeyRequest(_ context.Context, apiKeyID int64, _ ratelimit.Limits) (ratelimit.Decision, error) {
+	l.apiKeyID = apiKeyID
 	return l.decision, l.err
 }
 
@@ -116,7 +112,7 @@ func (s *routerTestChatCompletionService) StreamChatCompletion(ctx context.Conte
 }
 
 // newTestRouter 创建带默认测试依赖的 router。
-func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService gatewaychat.ChatCompletionService, limiter middleware.RateLimiter, modelCatalogServices ...gatewaymodels.ModelCatalogService) http.Handler {
+func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService gatewaychat.ChatCompletionService, limiter middleware.KeyRateLimiter, modelCatalogServices ...gatewaymodels.ModelCatalogService) http.Handler {
 	if chatService == nil {
 		chatService = &routerTestChatCompletionService{}
 	}
@@ -134,8 +130,6 @@ func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService gat
 		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
 		APIKeyAuthenticator:   authenticator,
 		RateLimiter:           limiter,
-		RateLimitLimit:        60,
-		RateLimitWindow:       time.Minute,
 		ChatCompletionService: chatService,
 		ModelCatalogService:   modelCatalogService,
 	})

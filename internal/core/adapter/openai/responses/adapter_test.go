@@ -26,6 +26,12 @@ func testChannel(baseURL string) channel.Runtime {
 	}
 }
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 // TestCreateResponseForwardsBodyAndParsesFacts 验证非流式直传：请求体逐字转发到 <base>/responses，
 // 带 Authorization/Content-Type；响应体原文回传（Raw == 上游 body），usage/id/facts 在同次解析抽取。
 func TestCreateResponseForwardsBodyAndParsesFacts(t *testing.T) {
@@ -266,9 +272,10 @@ func TestCompactResponseNotFoundReturnsUnsupported(t *testing.T) {
 	}
 }
 
-// TestCompactResponseMissingUsageReturnsUnsupported 验证压缩响应缺少可计费 usage 时收敛为 ErrCompactUnsupported，
-// 避免无依据结算（回落 Synthetic 按真实 token 计费）。
-func TestCompactResponseMissingUsageReturnsUnsupported(t *testing.T) {
+// TestCompactResponseMissingUsageReturnsMissingUsage 验证压缩响应返回 2xx 但缺少可计费 usage 时收敛为
+// ErrCompactMissingUsage（区别于 404/405 的 ErrCompactUnsupported）：上游很可能已计费，service 不得静默
+// 回落白嫖，须记 risk_exposure 并报错（P0-3）。错误同时带 server_error 上游分类，供 handler 映射 502。
+func TestCompactResponseMissingUsageReturnsMissingUsage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"output":[{"type":"compaction"}]}`))
@@ -279,8 +286,32 @@ func TestCompactResponseMissingUsageReturnsUnsupported(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing usage")
 	}
-	if !errors.Is(err, ErrCompactUnsupported) {
-		t.Fatalf("expected ErrCompactUnsupported, got %v", err)
+	if !errors.Is(err, ErrCompactMissingUsage) {
+		t.Fatalf("expected ErrCompactMissingUsage, got %v", err)
+	}
+	if errors.Is(err, ErrCompactUnsupported) {
+		t.Fatalf("missing-usage must not be classified as unsupported (404/405): %v", err)
+	}
+	if category, ok := adapter.UpstreamCategoryOf(err); !ok || category != adapter.UpstreamErrorServer {
+		t.Fatalf("expected server_error upstream category, got %q ok=%v", category, ok)
+	}
+}
+
+// TestCompactResponseUnparseableBodyReturnsMissingUsage 验证 2xx 但响应体无法解析时同样收敛为
+// ErrCompactMissingUsage（上游可能已计费），不得静默回落白嫖。
+func TestCompactResponseUnparseableBodyReturnsMissingUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`not-json`))
+	}))
+	defer server.Close()
+
+	_, err := NewAdapter(server.Client()).CompactResponse(context.Background(), testChannel(server.URL), Request{Body: json.RawMessage(`{"model":"gpt-5.5"}`)})
+	if err == nil {
+		t.Fatal("expected error for unparseable body")
+	}
+	if !errors.Is(err, ErrCompactMissingUsage) {
+		t.Fatalf("expected ErrCompactMissingUsage, got %v", err)
 	}
 }
 
@@ -498,6 +529,64 @@ func TestStreamResponseChannelTimeoutDoesNotCutLongStream(t *testing.T) {
 	}
 	if outcome.Facts == nil || outcome.Facts.UpstreamResponseID != "resp_1" {
 		t.Fatalf("facts = %+v, want resp_1 facts from terminal event", outcome.Facts)
+	}
+}
+
+func TestStreamResponseHeaderTimeoutClassifiesAsTimeout(t *testing.T) {
+	const channelTimeout = 20 * time.Millisecond
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(4 * channelTimeout)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ch := testChannel(server.URL)
+	ch.Timeout = channelTimeout
+
+	_, err := NewAdapter(server.Client()).StreamResponse(context.Background(), ch, Request{Body: json.RawMessage(`{"model":"gpt-5.5","stream":true}`)}, func(StreamChunk) error {
+		t.Fatal("unexpected stream chunk")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected header timeout error")
+	}
+	category, ok := adapter.UpstreamCategoryOf(err)
+	if !ok || category != adapter.UpstreamErrorTimeout {
+		t.Fatalf("category = %q ok=%v, want timeout", category, ok)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded in error chain, got %v", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("header timeout must not look like client cancel: %v", err)
+	}
+}
+
+func TestStreamResponseHeaderTimeoutClassifiesTransportCanceledAsTimeout(t *testing.T) {
+	const channelTimeout = time.Millisecond
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})}
+	ch := testChannel("https://example.test")
+	ch.Timeout = channelTimeout
+
+	_, err := NewAdapter(client).StreamResponse(context.Background(), ch, Request{Body: json.RawMessage(`{"model":"gpt-5.5","stream":true}`)}, func(StreamChunk) error {
+		t.Fatal("unexpected stream chunk")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected header timeout error")
+	}
+	category, ok := adapter.UpstreamCategoryOf(err)
+	if !ok || category != adapter.UpstreamErrorTimeout {
+		t.Fatalf("category = %q ok=%v, want timeout", category, ok)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded in error chain, got %v", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("transport context canceled must not be classified as client cancel: %v", err)
 	}
 }
 

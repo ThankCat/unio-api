@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
@@ -58,12 +59,21 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		return nil, err
 	}
 
+	// P2-6：生产构建不读结算故障注入 env；若运维误设则启动期显式告警（构建标签 billing_e2e 时为激活提示）。
+	lifecycle.WarnIfSettlementFaultInjectionConfigured(deps.Logger)
+
 	// JSON 请求体上限为进程级网关 ingress 安全配置（防 OOM / zip bomb）；启动期设置一次，全 DecodeJSON 生效。
 	httpx.SetMaxJSONBodyBytes(deps.Config.HTTP.MaxJSONBodyBytes)
 
+	// 非流式上游响应体上限为进程级 egress 安全配置（防 OOM）；启动期设置一次，全 adapter 非流式读 body 生效。
+	adapter.SetMaxUpstreamResponseBytes(deps.Config.Gateway.MaxUpstreamResponseBytes)
+
+	// 流式 idle 超时为进程级 egress 安全配置（兜底半开/挂死连接）；启动期设置一次，全 adapter 流式读生效。
+	adapter.SetStreamIdleTimeout(deps.Config.Gateway.StreamIdleTimeout)
+
 	queries := sqlc.New(deps.DB)
 
-	chatRouter, err := NewChatRouter(queries, deps.Config.Credential.MasterKey)
+	chatRouter, err := NewChatRouter(queries, deps.Config.Credential.MasterKey, deps.Logger)
 	if err != nil {
 		return nil, err
 	}
@@ -83,6 +93,10 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 
 	metricsRecorder := metrics.New()
 
+	// 两层限流 Guard（P2-8）：与 HTTP 中间件共用 Redis 计数口径（counter 全在 Redis，多实例一致）。
+	// 注入 attempt runner 用于 Key 级 TPM 预占、渠道级 RPM/TPM/RPD 预占与结算回填。
+	rateLimitGuard := NewRateLimitGuard(deps.Redis, deps.Config, deps.Logger)
+
 	chatCompletionService := NewChatGateway(
 		deps.DB,
 		queries,
@@ -90,7 +104,9 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		adapterRegistry,
 		deps.Config.Worker,
 		deps.Config.CircuitBreaker,
+		deps.Config.Gateway,
 		metricsRecorder,
+		rateLimitGuard,
 	)
 	responsesService := NewResponsesGateway(
 		deps.DB,
@@ -99,7 +115,9 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		adapterRegistry,
 		deps.Config.Worker,
 		deps.Config.CircuitBreaker,
+		deps.Config.Gateway,
 		metricsRecorder,
+		rateLimitGuard,
 	)
 	messagesService := NewMessagesGateway(
 		deps.DB,
@@ -108,8 +126,20 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		adapterRegistry,
 		deps.Config.Worker,
 		deps.Config.CircuitBreaker,
+		deps.Config.Gateway,
 		metricsRecorder,
+		rateLimitGuard,
 	)
+
+	// 渠道级 429 冷却注册表（P2-7）：三协议 service 共享一份，使任一协议命中的 429 都能即时
+	// 让该渠道在冷却窗口内被 routing fallback 跳过。冷却到期自动恢复。
+	channelCooldown := lifecycle.NewChannelCooldownRegistry(
+		deps.Config.Gateway.ChannelRateLimitCooldown,
+		deps.Config.Gateway.ChannelRateLimitCooldownCap,
+	)
+	chatCompletionService.SetChannelCooldownRegistry(channelCooldown)
+	responsesService.SetChannelCooldownRegistry(channelCooldown)
+	messagesService.SetChannelCooldownRegistry(channelCooldown)
 
 	handler := NewHTTPHandler(
 		deps.Logger,

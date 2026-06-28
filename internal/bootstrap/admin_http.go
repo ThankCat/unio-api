@@ -6,6 +6,7 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/app/adminapi"
 	"github.com/ThankCat/unio-api/internal/app/adminapi/middleware"
+	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 )
 
@@ -46,6 +47,13 @@ type adminHTTPDeps struct {
 	RecoveryJobQueryService   adminapi.RecoveryJobQueryService
 	ChannelHealthQueryService adminapi.ChannelHealthQueryService
 
+	// 系统配置只读面板（进程级 env 生效值，脱敏）。
+	GatewayConfig        config.GatewayConfig
+	RateLimitConfig      config.RateLimitConfig
+	CircuitBreakerConfig config.CircuitBreakerConfig
+	WorkerConfig         config.WorkerConfig
+	HTTPConfig           config.HTTPConfig
+
 	MetricsRecorder *metrics.Metrics
 }
 
@@ -83,6 +91,12 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 
 		RecoveryJobQueryService:   deps.RecoveryJobQueryService,
 		ChannelHealthQueryService: deps.ChannelHealthQueryService,
+
+		GatewayConfig:        deps.GatewayConfig,
+		RateLimitConfig:      deps.RateLimitConfig,
+		CircuitBreakerConfig: deps.CircuitBreakerConfig,
+		WorkerConfig:         deps.WorkerConfig,
+		HTTPConfig:           deps.HTTPConfig,
 	}
 
 	if deps.MetricsRecorder != nil {

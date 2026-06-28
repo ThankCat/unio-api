@@ -133,7 +133,16 @@ WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::b
   AND (sqlc.narg('currency')::text IS NULL OR currency = sqlc.narg('currency')::text)
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
-ORDER BY created_at DESC, id DESC
+ORDER BY
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN created_at END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN user_id END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN user_id END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'amount' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN amount END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'amount' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN amount END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'entry_type' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN entry_type END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'entry_type' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN entry_type END ASC NULLS LAST,
+  id DESC
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 
 -- name: CountLedgerEntries :one

@@ -11,11 +11,11 @@ import (
 // CustomerOpsService 定义客户中心（用户/项目/API Key §3.7）只读运维聚合所需能力。
 type CustomerOpsService interface {
 	UsersSummary(ctx context.Context, from, to time.Time) (customerops.UsersSummary, error)
-	UsersTable(ctx context.Context, from, to time.Time, search string, limit, offset int32) ([]customerops.UserRow, int64, error)
+	UsersTable(ctx context.Context, p customerops.UsersTableParams) ([]customerops.UserRow, int64, error)
 	UserDetail(ctx context.Context, userID int64, from, to time.Time) (customerops.UserDetail, error)
 	UserKeys(ctx context.Context, userID int64) ([]customerops.KeyRow, error)
 	ProjectsSummary(ctx context.Context, from, to time.Time) (customerops.ProjectsSummary, error)
-	ProjectsTable(ctx context.Context, from, to time.Time, search string, limit, offset int32) ([]customerops.ProjectRow, int64, error)
+	ProjectsTable(ctx context.Context, p customerops.ProjectsTableParams) ([]customerops.ProjectRow, int64, error)
 	ApiKeysSummary(ctx context.Context, projectID int64) (customerops.ApiKeysSummary, error)
 	ApiKeysTable(ctx context.Context, projectID int64, from, to time.Time) ([]customerops.ApiKeyRow, error)
 }
@@ -143,7 +143,27 @@ func (h *customerOpsHandler) usersTable(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	page := parsePage(r)
-	rows, total, err := h.service.UsersTable(r.Context(), from, to, queryString(r, "search"), page.Limit(), page.Offset())
+	sort, err := parseListSort(r, map[string]struct{}{
+		"email":       {},
+		"balance":     {},
+		"consumption": {},
+		"requests":    {},
+		"last_used":   {},
+	}, "consumption", true)
+	if err != nil {
+		writeSortError(w, err)
+		return
+	}
+	field, desc := sort.SQLParams()
+	rows, total, err := h.service.UsersTable(r.Context(), customerops.UsersTableParams{
+		From:      from,
+		To:        to,
+		Search:    queryString(r, "search"),
+		SortField: field,
+		SortDesc:  desc,
+		Limit:     page.Limit(),
+		Offset:    page.Offset(),
+	})
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -231,7 +251,25 @@ func (h *customerOpsHandler) projectsTable(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	page := parsePage(r)
-	rows, total, err := h.service.ProjectsTable(r.Context(), from, to, queryString(r, "search"), page.Limit(), page.Offset())
+	sort, err := parseListSort(r, map[string]struct{}{
+		"name":        {},
+		"consumption": {},
+		"requests":    {},
+	}, "consumption", true)
+	if err != nil {
+		writeSortError(w, err)
+		return
+	}
+	field, desc := sort.SQLParams()
+	rows, total, err := h.service.ProjectsTable(r.Context(), customerops.ProjectsTableParams{
+		From:      from,
+		To:        to,
+		Search:    queryString(r, "search"),
+		SortField: field,
+		SortDesc:  desc,
+		Limit:     page.Limit(),
+		Offset:    page.Offset(),
+	})
 	if err != nil {
 		writeServiceError(w, err)
 		return

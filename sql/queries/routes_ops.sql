@@ -77,9 +77,13 @@ WHERE (sqlc.narg('status')::text IS NULL OR rt.status = sqlc.narg('status')::tex
   AND (sqlc.narg('search')::text IS NULL OR rt.name ILIKE '%' || sqlc.narg('search')::text || '%')
 GROUP BY rt.id, rt.name, rt.mode, rt.pool_kind, rt.is_builtin, rt.status, rt.description
 ORDER BY
-    (COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded')::float8 / NULLIF(COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded','failed','canceled')), 0)) ASC NULLS LAST,
-    COUNT(ar.route_id) DESC,
-    rt.id
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded')::float8 / NULLIF(COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded','failed','canceled')), 0)) END DESC NULLS LAST,
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded')::float8 / NULLIF(COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded','failed','canceled')), 0)) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'name' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.name END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'name' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.name END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
+  rt.id
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 
 -- name: RoutesOpsTableCount :one

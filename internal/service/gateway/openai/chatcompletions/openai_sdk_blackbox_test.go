@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
 	gatewayopenai "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
@@ -122,7 +121,7 @@ func (sdkBlackboxAuthenticator) AuthenticateAPIKey(_ context.Context, _ string) 
 
 type sdkBlackboxRateLimiter struct{}
 
-func (sdkBlackboxRateLimiter) Allow(context.Context, string, int64, time.Duration) (ratelimit.Decision, error) {
+func (sdkBlackboxRateLimiter) AllowKeyRequest(context.Context, int64, ratelimit.Limits) (ratelimit.Decision, error) {
 	return ratelimit.Decision{Allowed: true}, nil
 }
 
@@ -132,7 +131,5 @@ func newSDKBlackboxHandler(service *ChatCompletionService) http.Handler {
 		APIKeyAuthenticator:   sdkBlackboxAuthenticator{},
 		ChatCompletionService: service,
 		RateLimiter:           sdkBlackboxRateLimiter{},
-		RateLimitLimit:        60,
-		RateLimitWindow:       time.Minute,
 	})
 }

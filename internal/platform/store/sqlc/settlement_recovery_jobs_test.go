@@ -135,6 +135,7 @@ func settlementRecoveryJobParams(f settlementRecoveryFixture, nextRunAt time.Tim
 		FormulaVersion:                    billing.FormulaVersionV1,
 		EstimatedAmount:                   f.reservation.EstimatedAmount,
 		AuthorizedAmount:                  f.reservation.AuthorizedAmount,
+		MaxAttempts:                       20,
 		NextRunAt:                         timestamptz(nextRunAt),
 	}
 }

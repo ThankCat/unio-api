@@ -18,6 +18,9 @@ type MetricsRecorder interface {
 	ObserveUpstream(provider string, channel string, success bool, errorCategory string, duration time.Duration)
 	IncSettlement(outcome metrics.SettlementOutcome)
 	IncStreamEvent(event metrics.StreamEvent)
+	IncPartialSettlement(reason string)
+	IncRetryableFallback(errorCategory string)
+	IncZeroPriceServed(provider string, channel string, model string)
 }
 
 // MetricsID 把 provider/channel 数据库 ID 转成稳定 label 值。

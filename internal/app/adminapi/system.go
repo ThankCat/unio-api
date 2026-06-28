@@ -113,13 +113,25 @@ func (h *recoveryJobsHandler) list(w http.ResponseWriter, r *http.Request) {
 	}
 
 	page := parsePage(r)
+	sort, err := parseListSort(r, map[string]struct{}{
+		"created_at": {},
+		"status":     {},
+		"user_id":    {},
+	}, "created_at", true)
+	if err != nil {
+		writeSortError(w, err)
+		return
+	}
+	field, desc := sort.SQLParams()
 	items, total, err := h.service.List(r.Context(), query.RecoveryJobListParams{
-		Status: queryString(r, "status"),
-		UserID: userID,
-		From:   from,
-		To:     to,
-		Limit:  page.Limit(),
-		Offset: page.Offset(),
+		Status:    queryString(r, "status"),
+		UserID:    userID,
+		From:      from,
+		To:        to,
+		SortField: field,
+		SortDesc:  desc,
+		Limit:     page.Limit(),
+		Offset:    page.Offset(),
 	})
 	if err != nil {
 		writeServiceError(w, err)

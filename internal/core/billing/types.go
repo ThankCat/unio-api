@@ -15,6 +15,26 @@ type CustomerPriceSnapshot struct {
 	FormulaVersion         string
 }
 
+// IsEffectivelyFree 判断客户侧售价快照是否「全部非正」，即该渠道对客户实际免费（P2-4 零价渠道误配检测）。
+//
+// 任一价格分量为正即返回 false；无效/缺失/零/负值都视为非正（缺失的 cache/reasoning 单价会回退到
+// uncached/output，因此只要 uncached 与 output 非正，整体即为免费）。仅用于观测告警，不参与计费。
+func (p CustomerPriceSnapshot) IsEffectivelyFree() bool {
+	for _, rate := range []pgtype.Numeric{
+		p.UncachedInputPrice,
+		p.CacheReadInputPrice,
+		p.CacheWrite5mInputPrice,
+		p.CacheWrite1hInputPrice,
+		p.OutputPrice,
+		p.ReasoningOutputPrice,
+	} {
+		if rat, err := numericToRat(rate); err == nil && rat.Sign() > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // ProviderCostSnapshot 表示一次请求结算时冻结下来的 provider/channel 成本价副本。
 type ProviderCostSnapshot struct {
 	Currency              string

@@ -508,8 +508,8 @@ WITH attributed AS (
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
     JOIN projects p ON p.id = r.project_id
-    WHERE ($5::timestamptz IS NULL OR r.created_at >= $5::timestamptz)
-      AND ($6::timestamptz IS NULL OR r.created_at < $6::timestamptz)
+    WHERE ($7::timestamptz IS NULL OR r.created_at >= $7::timestamptz)
+      AND ($8::timestamptz IS NULL OR r.created_at < $8::timestamptz)
 )
 SELECT
     rt.id,
@@ -535,15 +535,21 @@ WHERE ($1::text IS NULL OR rt.status = $1::text)
   AND ($2::text IS NULL OR rt.name ILIKE '%' || $2::text || '%')
 GROUP BY rt.id, rt.name, rt.mode, rt.pool_kind, rt.is_builtin, rt.status, rt.description
 ORDER BY
-    (COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded')::float8 / NULLIF(COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded','failed','canceled')), 0)) ASC NULLS LAST,
-    COUNT(ar.route_id) DESC,
-    rt.id
-LIMIT $4 OFFSET $3
+  CASE WHEN COALESCE($3::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($4::bool, false) THEN (COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded')::float8 / NULLIF(COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded','failed','canceled')), 0)) END DESC NULLS LAST,
+  CASE WHEN COALESCE($3::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($4::bool, false) THEN (COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded')::float8 / NULLIF(COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded','failed','canceled')), 0)) END ASC NULLS LAST,
+  CASE WHEN $3::text = 'name' AND COALESCE($4::bool, false) THEN rt.name END DESC NULLS LAST,
+  CASE WHEN $3::text = 'name' AND NOT COALESCE($4::bool, false) THEN rt.name END ASC NULLS LAST,
+  CASE WHEN $3::text = 'requests' AND COALESCE($4::bool, false) THEN COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
+  CASE WHEN $3::text = 'requests' AND NOT COALESCE($4::bool, false) THEN COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
+  rt.id
+LIMIT $6 OFFSET $5
 `
 
 type RoutesOpsTableParams struct {
 	Status     pgtype.Text
 	Search     pgtype.Text
+	SortField  pgtype.Text
+	SortDesc   pgtype.Bool
 	PageOffset int32
 	PageLimit  int32
 	FromTime   pgtype.Timestamptz
@@ -573,6 +579,8 @@ func (q *Queries) RoutesOpsTable(ctx context.Context, arg RoutesOpsTableParams) 
 	rows, err := q.db.Query(ctx, routesOpsTable,
 		arg.Status,
 		arg.Search,
+		arg.SortField,
+		arg.SortDesc,
 		arg.PageOffset,
 		arg.PageLimit,
 		arg.FromTime,

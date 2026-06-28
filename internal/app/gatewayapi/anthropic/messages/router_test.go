@@ -52,8 +52,8 @@ type messagesRateLimiter struct {
 	err      error
 }
 
-// Allow 返回测试预设的限流判断结果。
-func (l *messagesRateLimiter) Allow(ctx context.Context, subject string, limit int64, window time.Duration) (ratelimit.Decision, error) {
+// AllowKeyRequest 返回测试预设的限流判断结果。
+func (l *messagesRateLimiter) AllowKeyRequest(_ context.Context, _ int64, _ ratelimit.Limits) (ratelimit.Decision, error) {
 	return l.decision, l.err
 }
 
@@ -157,7 +157,7 @@ func defaultStreamFrames(model string) []StreamFrame {
 //
 // 它不引入 gatewayapi 根包，避免 messages → gatewayapi → messages 的测试编译环；
 // 顶层 httpmw（request id/metrics/logger）在 gatewayapi router_test.go 中单独验证。
-func newMessagesTestRouter(authenticator middleware.APIKeyAuthenticator, service MessagesService, limiter middleware.RateLimiter) http.Handler {
+func newMessagesTestRouter(authenticator middleware.APIKeyAuthenticator, service MessagesService, limiter middleware.KeyRateLimiter) http.Handler {
 	if service == nil {
 		service = &fakeMessagesService{}
 	}
@@ -170,8 +170,6 @@ func newMessagesTestRouter(authenticator middleware.APIKeyAuthenticator, service
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(authenticator))
 		r.Use(middleware.RateLimit(limiter, middleware.RateLimitOptions{
-			Limit:  60,
-			Window: time.Minute,
 			Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}))
 

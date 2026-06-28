@@ -125,6 +125,15 @@ func mapResponsesServiceError(req ResponsesRequest, err error, fallbackCode stri
 			errorType: "insufficient_quota",
 			param:     nil,
 		}
+	case failure.CodeOf(err) == failure.CodeRateLimitExceeded, failure.CodeOf(err) == failure.CodeGatewayChannelRateLimited:
+		// Key 级 TPM 或渠道级 RPM/TPM/RPD 限流命中（P2-8）：统一 429，不泄露具体维度阈值。
+		return responsesServiceErrorResponse{
+			status:    http.StatusTooManyRequests,
+			code:      "rate_limit_exceeded",
+			message:   "You have exceeded the rate limit. Please slow down and retry later.",
+			errorType: "rate_limit_error",
+			param:     nil,
+		}
 	case failure.CodeOf(err) == failure.CodeAdapterRequestUnsupported:
 		param := responsesErrorFieldParam(err)
 		message := "This model does not support one of the request parameters."

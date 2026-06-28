@@ -13,20 +13,16 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
 )
 
-// routerTestRateLimiter 是 chat completions handler 集成测试使用的限流器替身，记录收到的限流参数。
+// routerTestRateLimiter 是 chat completions handler 集成测试使用的 Key 级限流器替身。
 type routerTestRateLimiter struct {
-	subject  string
-	limit    int64
-	window   time.Duration
+	apiKeyID int64
 	decision ratelimit.Decision
 	err      error
 }
 
-// Allow 记录收到的限流参数，并返回测试预设的限流判断结果。
-func (l *routerTestRateLimiter) Allow(ctx context.Context, subject string, limit int64, window time.Duration) (ratelimit.Decision, error) {
-	l.subject = subject
-	l.limit = limit
-	l.window = window
+// AllowKeyRequest 记录收到的 API Key，并返回测试预设的限流判断结果。
+func (l *routerTestRateLimiter) AllowKeyRequest(_ context.Context, apiKeyID int64, _ ratelimit.Limits) (ratelimit.Decision, error) {
+	l.apiKeyID = apiKeyID
 	return l.decision, l.err
 }
 
@@ -91,7 +87,7 @@ func (s *routerTestChatCompletionService) StreamChatCompletion(ctx context.Conte
 // 它不引入 gatewayapi 根包，避免子包 → gatewayapi → 子包的测试编译环；
 // 顶层 httpmw（request id/metrics/logger）与跨 operation 路由（models）在
 // gatewayapi router_test.go 和 models 子包中单独验证。
-func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService ChatCompletionService, limiter middleware.RateLimiter) http.Handler {
+func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService ChatCompletionService, limiter middleware.KeyRateLimiter) http.Handler {
 	if chatService == nil {
 		chatService = &routerTestChatCompletionService{}
 	}
@@ -104,8 +100,6 @@ func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService Cha
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(authenticator))
 		r.Use(middleware.RateLimit(limiter, middleware.RateLimitOptions{
-			Limit:  60,
-			Window: time.Minute,
 			Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}))
 

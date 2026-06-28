@@ -48,8 +48,20 @@ ORDER BY created_at DESC, id DESC
 LIMIT 1;
 
 -- name: ListSyncJobs :many
--- ListSyncJobs 倒序列出最近的能力同步任务（admin 同步页展示用，不区分来源）。
+-- ListSyncJobs 分页倒序列出能力同步任务（admin 同步页展示用，不区分来源）。
 SELECT *
 FROM model_capability_sync_jobs
-ORDER BY created_at DESC, id DESC
-LIMIT sqlc.arg(row_limit)::int;
+ORDER BY
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN created_at END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN status END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN status END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'source' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN source END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'source' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN source END ASC NULLS LAST,
+  id DESC
+LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
+
+-- name: CountSyncJobs :one
+-- CountSyncJobs 返回能力同步任务总条数。
+SELECT COUNT(*) AS total
+FROM model_capability_sync_jobs;

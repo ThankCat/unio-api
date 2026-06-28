@@ -50,8 +50,8 @@ func (f *fakeCapabilityService) DeleteModelCapability(context.Context, int64, st
 
 type fakeCapabilitySyncService struct{}
 
-func (fakeCapabilitySyncService) ListJobs(context.Context, int32) ([]corecap.SyncJob, error) {
-	return []corecap.SyncJob{}, nil
+func (fakeCapabilitySyncService) ListJobs(context.Context, capsvc.ListJobsParams) ([]corecap.SyncJob, int64, error) {
+	return []corecap.SyncJob{}, 0, nil
 }
 func (fakeCapabilitySyncService) Trigger(_ context.Context, dryRun bool) (modelcatalog.Result, error) {
 	return modelcatalog.Result{DryRun: dryRun}, nil

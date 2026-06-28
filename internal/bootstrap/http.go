@@ -31,17 +31,12 @@ func NewHTTPHandler(
 	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
 	modelCatalogService := modelcatalog.NewService(queries)
 
-	rateLimitStore := ratelimit.NewRedisStore(redisClient, cfg.Redis.KeyNamespace)
-	rateLimiter := ratelimit.NewLimiter(rateLimitStore)
+	rateLimitGuard := NewRateLimitGuard(redisClient, cfg, logger)
 
 	deps := gatewayapi.RouterDeps{
 		Logger:              logger,
 		APIKeyAuthenticator: apiKeyAuthenticator,
-		RateLimiter:         rateLimiter,
-
-		RateLimitLimit:         cfg.RateLimit.DefaultLimit,
-		RateLimitWindow:        cfg.RateLimit.DefaultWindow,
-		RateLimitFailurePolicy: cfg.RateLimit.FailurePolicy,
+		RateLimiter:         rateLimitGuard,
 
 		ChatCompletionService: chatCompletionService,
 		ResponsesService:      responsesService,
@@ -56,4 +51,17 @@ func NewHTTPHandler(
 	}
 
 	return gatewayapi.NewRouter(deps)
+}
+
+// NewRateLimitGuard 构造两层限流 Guard（P2-8）：Redis 滑动窗口计数 + 全局默认上限 + 故障策略。
+// gateway HTTP 中间件（key 级 RPM/RPD）与 attempt runner（key TPM / 渠道级 RPM/TPM/RPD）共用同一口径。
+func NewRateLimitGuard(redisClient redis.Cmdable, cfg config.Config, logger *slog.Logger) *ratelimit.Guard {
+	store := ratelimit.NewSlidingWindowStore(redisClient, cfg.Redis.KeyNamespace)
+	defaults := ratelimit.DefaultLimits{
+		RPM: cfg.RateLimit.DefaultRPM,
+		TPM: cfg.RateLimit.DefaultTPM,
+		RPD: cfg.RateLimit.DefaultRPD,
+	}
+	failOpen := cfg.RateLimit.FailurePolicy == "fail_open"
+	return ratelimit.NewGuard(store, defaults, failOpen, logger)
 }

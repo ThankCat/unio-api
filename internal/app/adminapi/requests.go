@@ -125,7 +125,20 @@ func (h *requestsHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sort, err := parseListSort(r, map[string]struct{}{
+		"created_at": {},
+		"status":     {},
+		"user_id":    {},
+		"model":      {},
+		"stream":     {},
+	}, "created_at", true)
+	if err != nil {
+		writeSortError(w, err)
+		return
+	}
+
 	page := parsePage(r)
+	field, desc := sort.SQLParams()
 	items, total, err := h.service.List(r.Context(), query.RequestListParams{
 		UserID:    userID,
 		ProjectID: projectID,
@@ -134,6 +147,8 @@ func (h *requestsHandler) list(w http.ResponseWriter, r *http.Request) {
 		Model:     queryString(r, "model"),
 		From:      from,
 		To:        to,
+		SortField: field,
+		SortDesc:  desc,
 		Limit:     page.Limit(),
 		Offset:    page.Offset(),
 	})

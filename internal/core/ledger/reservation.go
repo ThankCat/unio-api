@@ -26,6 +26,12 @@ type Reservation struct {
 	CaptureLedgerEntryID *int64
 	IdempotencyKey       string
 	Reason               string
+
+	// OverageCapturedAmount 为本次 capture 在「真实费用超过授权金额」时，从用户未冻结可用余额
+	// 二次补扣的金额（实扣到清空可用余额为止）。它是内存态结算事实，不持久化在 reservation 行上：
+	// 超额扣费另写独立 debit ledger entry，平台核销只承担补扣后仍不可回收的残差。
+	// 调用方据此把超额实扣计入费用上限（spent_total）等累计口径。
+	OverageCapturedAmount pgtype.Numeric
 }
 
 // PreAuthorizeParams 表示创建余额预授权所需参数。
@@ -181,34 +187,51 @@ func (s *Service) captureWithQueries(ctx context.Context, queries *sqlc.Queries,
 		return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 	}
 
-	// 用户最多扣已冻结金额；真实金额超出冻结金额时，差额进入平台核销，不形成用户欠费。
+	// 用户在冻结额度内最多扣已冻结金额；真实金额超出冻结额度时，先尝试从未冻结可用余额二次补扣
+	// （扣到清空可用余额为止，余额永不为负），补扣后仍不可回收的残差才进入平台核销。
 	capturedAmount := numericMin(params.ActualAmount, reservation.AuthorizedAmount)
-	writeOffRequired := numericGreaterThan(params.ActualAmount, reservation.AuthorizedAmount)
+	overageRequired := numericGreaterThan(params.ActualAmount, reservation.AuthorizedAmount)
 
 	switch ReservationStatus(reservation.Status) {
 	case ReservationStatusCaptured:
-		// 已 capture 且金额一致，视为幂等重放。
+		// 已 capture 且冻结额度内扣费金额一致，视为幂等重放。
 		if !sameNumeric(reservation.CapturedAmount, capturedAmount) {
 			return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 		}
 
+		// 还原首次结算的超额二次补扣金额：有独立 overage debit 即取其金额，否则为 0。
+		overageCaptured := numericZero()
+		overageEntry, err := queries.GetLedgerEntryByIdempotencyKey(ctx, overageIdempotencyKey(params.IdempotencyKey))
+		if err == nil {
+			overageCaptured = overageEntry.Amount
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lookup ledger overage entry")
+		}
+
+		// 平台核销残差 = 真实费用 - (冻结内扣费 + 超额补扣)；>0 时应存在 write_off 异常。
+		residualWriteOff := numericGreaterThan(params.ActualAmount, numericAdd(capturedAmount, overageCaptured))
+
 		exception, err := queries.GetLedgerBillingExceptionByReservationID(ctx, reservation.ID)
 		if err == nil {
 			if exception.EventType != string(BillingExceptionEventTypeWriteOff) ||
-				!writeOffRequired ||
+				!residualWriteOff ||
 				!sameNumeric(exception.ActualAmount, params.ActualAmount) ||
-				!sameNumeric(exception.CapturedAmount, capturedAmount) {
+				!sameNumeric(exception.CapturedAmount, numericAdd(capturedAmount, overageCaptured)) {
 				return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 			}
 
-			return reservationFromSQLC(reservation), nil
+			replay := reservationFromSQLC(reservation)
+			replay.OverageCapturedAmount = overageCaptured
+			return replay, nil
 		}
 
 		if errors.Is(err, pgx.ErrNoRows) {
-			if writeOffRequired {
+			if residualWriteOff {
 				return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 			}
-			return reservationFromSQLC(reservation), nil
+			replay := reservationFromSQLC(reservation)
+			replay.OverageCapturedAmount = overageCaptured
+			return replay, nil
 		}
 
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lookup ledger billing exception")
@@ -279,23 +302,64 @@ func (s *Service) captureWithQueries(ctx context.Context, queries *sqlc.Queries,
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "capture ledger reservation")
 	}
 
-	if writeOffRequired {
-		_, err := queries.CreateLedgerWriteOffException(ctx, sqlc.CreateLedgerWriteOffExceptionParams{
-			UserID:          reservation.UserID,
-			RequestRecordID: reservation.RequestRecordID,
-			ReservationID:   reservation.ID,
-			ActualAmount:    params.ActualAmount,
-			CapturedAmount:  capturedAmount,
-			Currency:        reservation.Currency,
-			ReasonCode:      "authorization_underfunded",
-			Reason:          "actual amount exceeded authorized amount",
+	// 默认无超额补扣；仅当真实费用超出冻结额度时尝试二次补扣。
+	overageCaptured := numericZero()
+	if overageRequired {
+		// 真实费用超出冻结额度：在同一行锁内从未冻结可用余额二次补扣，扣到清空可用余额为止，余额永不为负。
+		overage, err := queries.CollectUserBalanceOverage(ctx, sqlc.CollectUserBalanceOverageParams{
+			ActualAmount:     params.ActualAmount,
+			AuthorizedAmount: reservation.AuthorizedAmount,
+			UserID:           reservation.UserID,
+			Currency:         reservation.Currency,
 		})
 		if err != nil {
-			return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "create ledger billing exception")
+			return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "collect user balance overage")
+		}
+		overageCaptured = overage.CollectedAmount
+
+		// 实际补扣到金额时，写一条独立的超额扣费 debit ledger entry，作为审计事实。
+		if isPositiveNumeric(overageCaptured) {
+			_, err := queries.CreateLedgerEntry(ctx, sqlc.CreateLedgerEntryParams{
+				UserID:          reservation.UserID,
+				RequestRecordID: int64PtrToPgtypeInt8(&requestRecordID),
+				EntryType:       string(EntryTypeDebit),
+				Amount:          overageCaptured,
+				Currency:        reservation.Currency,
+				BalanceBefore:   after.Balance,
+				BalanceAfter:    overage.Balance,
+				IdempotencyKey:  overageIdempotencyKey(params.IdempotencyKey),
+				Reason:          params.Reason + " (overage)",
+			})
+			if err != nil {
+				if isUniqueViolation(err) {
+					return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
+				}
+				return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "create overage capture ledger entry")
+			}
+		}
+
+		// 二次补扣后仍不可回收的残差（真实费用 - 冻结内扣费 - 超额补扣）才由平台核销。
+		if numericGreaterThan(params.ActualAmount, numericAdd(capturedAmount, overageCaptured)) {
+			_, err := queries.CreateLedgerWriteOffException(ctx, sqlc.CreateLedgerWriteOffExceptionParams{
+				UserID:          reservation.UserID,
+				RequestRecordID: reservation.RequestRecordID,
+				ReservationID:   reservation.ID,
+				ActualAmount:    params.ActualAmount,
+				CapturedAmount:  capturedAmount,
+				OverageAmount:   overageCaptured,
+				Currency:        reservation.Currency,
+				ReasonCode:      "authorization_underfunded",
+				Reason:          "actual amount exceeded authorized amount and available balance",
+			})
+			if err != nil {
+				return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "create ledger billing exception")
+			}
 		}
 	}
 
-	return reservationFromSQLC(captured), nil
+	result := reservationFromSQLC(captured)
+	result.OverageCapturedAmount = overageCaptured
+	return result, nil
 }
 
 // Release 释放一次尚未结算的预授权金额。
@@ -482,7 +546,14 @@ func reservationFromSQLC(row sqlc.LedgerReservation) Reservation {
 		CaptureLedgerEntryID: pgtypeInt8ToInt64Ptr(row.CaptureLedgerEntryID),
 		IdempotencyKey:       row.IdempotencyKey,
 		Reason:               row.Reason,
+		// 默认无超额补扣；capture 路径在确有二次补扣时覆盖为实扣金额。
+		OverageCapturedAmount: numericZero(),
 	}
+}
+
+// overageIdempotencyKey 由 capture 幂等键派生超额补扣 debit 的幂等键，保证与主扣费流水键不冲突。
+func overageIdempotencyKey(captureIdempotencyKey string) string {
+	return captureIdempotencyKey + ":overage"
 }
 
 func ensureIdempotentReservationMatches(row sqlc.LedgerReservation, userID int64, requestRecordID int64, amount pgtype.Numeric, currency string) error {

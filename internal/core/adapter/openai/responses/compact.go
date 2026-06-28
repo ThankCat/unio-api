@@ -15,9 +15,15 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
 
-// ErrCompactUnsupported 表示上游不提供可用的原生 /responses/compact（404/405），或压缩响应缺少可
-// 计费 usage / 无法解析：service 据此回落 SyntheticCompact（chat 摘要按真实 token 计费），避免 Codex 断链。
+// ErrCompactUnsupported 表示上游确实不提供原生 /responses/compact endpoint（404/405）——上游未处理、
+// 无成本：service 据此安全回落 SyntheticCompact（chat 摘要按真实 token 计费），避免 Codex 断链。
 var ErrCompactUnsupported = errors.New("openai responses adapter native compact unsupported")
+
+// ErrCompactMissingUsage 表示原生 /responses/compact 返回 2xx（上游很可能已处理并计费），但响应缺少
+// 可计费 usage 或无法解析。与 ErrCompactUnsupported（404/405，无成本）本质不同：此情形上游可能已产生
+// 成本，调用方绝不能静默回落 Synthetic 再调一次（会「双调上游、只收一次费」白嫖），应记 risk_exposure
+// 并报错（P0-3）。它沿 *adapter.UpstreamError(server_error) 上抛，便于 lifecycle 记账与 handler 映射 502。
+var ErrCompactMissingUsage = errors.New("openai responses adapter native compact returned 2xx without billable usage")
 
 var _ ResponsesCompactAdapter = (*Adapter)(nil)
 
@@ -75,7 +81,7 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 		return nil, newUpstreamStatusError(upstreamResp, "compact")
 	}
 
-	raw, err := readAllLimited(upstreamResp.Body, maxResponsesStreamEventBytes)
+	raw, exceeded, err := adapter.ReadUpstreamBodyLimited(upstreamResp.Body)
 	if err != nil {
 		return nil, failure.Wrap(
 			failure.CodeAdapterReadStreamFailed,
@@ -89,14 +95,15 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 		RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
 	}
 
+	// 上游 2xx 但 body 超限无法完整解析：很可能已处理并计费，不静默回落白嫖，按缺 usage 记 risk_exposure。
+	if exceeded {
+		return nil, compactMissingUsageError(meta, "openai responses adapter compact response body exceeds limit")
+	}
+
 	var parsed wireResponse
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		// 压缩响应无法解析：保守回落 Synthetic 而非中断 Codex。
-		return nil, failure.Wrap(
-			failure.CodeAdapterRequestUnsupported,
-			ErrCompactUnsupported,
-			failure.WithMessage("openai responses adapter decode compact response"),
-		)
+		// 上游已返回 2xx（很可能已处理并计费）却无法解析：不静默回落白嫖，按缺 usage 记 risk_exposure。
+		return nil, compactMissingUsageError(meta, "openai responses adapter decode compact response")
 	}
 	if parsed.Error != nil {
 		return nil, newUpstreamStreamError(meta, parsed.Error.Code, parsed.Error.Message)
@@ -104,12 +111,8 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 
 	chatUsage, ok := chatUsageFromWire(parsed.Usage)
 	if !ok {
-		// 无可计费 usage：回落 Synthetic（chat 摘要按真实 token 计费），避免无依据结算。
-		return nil, failure.Wrap(
-			failure.CodeAdapterRequestUnsupported,
-			ErrCompactUnsupported,
-			failure.WithMessage("openai responses adapter compact response missing usage"),
-		)
+		// 上游 2xx 但缺可计费 usage（很可能已产生成本）：不静默回落白嫖，记 risk_exposure 并报错。
+		return nil, compactMissingUsageError(meta, "openai responses adapter compact response missing usage")
 	}
 
 	facts := responsesFacts(parsed, chatUsage, meta, usage.SourceUpstreamResponse)
@@ -121,4 +124,21 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 		Upstream:   meta,
 		Facts:      facts,
 	}, nil
+}
+
+// compactMissingUsageError 构造「原生 compact 返回 2xx 但拿不到可计费 usage」的结构化上游错误。
+//
+// 用 server_error 上游分类承载（handler 据此映射 502 upstream_error，不透传上游 body），cause 携带稳定
+// failure.Code 与 ErrCompactMissingUsage sentinel，便于 lifecycle 沿链 errors.Is 判定为「有成本无 usage」
+// 并记 risk_exposure（区别于真 404/405 的无成本回落）。
+func compactMissingUsageError(meta adapter.UpstreamMetadata, detail string) error {
+	return adapter.NewUpstreamError(
+		adapter.UpstreamErrorServer,
+		meta,
+		failure.Wrap(
+			failure.CodeAdapterInvalidResponse,
+			ErrCompactMissingUsage,
+			failure.WithMessage(detail),
+		),
+	)
 }

@@ -20,6 +20,8 @@ type UsageListParams struct {
 	Model     string
 	From      *time.Time
 	To        *time.Time
+	SortField string
+	SortDesc  bool
 	Limit     int32
 	Offset    int32
 }
@@ -79,6 +81,8 @@ func (s *UsageService) List(ctx context.Context, params UsageListParams) ([]Usag
 		Model:      textNarg(params.Model),
 		FromTime:   tsNarg(params.From),
 		ToTime:     tsNarg(params.To),
+		SortField:  textNarg(params.SortField),
+		SortDesc:   boolNarg(params.SortDesc),
 		PageLimit:  params.Limit,
 		PageOffset: params.Offset,
 	})

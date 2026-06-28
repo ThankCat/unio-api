@@ -14,20 +14,16 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
 )
 
-// routerTestRateLimiter 是 models handler 集成测试使用的限流器替身，记录收到的限流参数。
+// routerTestRateLimiter 是 models handler 集成测试使用的 Key 级限流器替身。
 type routerTestRateLimiter struct {
-	subject  string
-	limit    int64
-	window   time.Duration
+	apiKeyID int64
 	decision ratelimit.Decision
 	err      error
 }
 
-// Allow 记录收到的限流参数，并返回测试预设的限流判断结果。
-func (l *routerTestRateLimiter) Allow(ctx context.Context, subject string, limit int64, window time.Duration) (ratelimit.Decision, error) {
-	l.subject = subject
-	l.limit = limit
-	l.window = window
+// AllowKeyRequest 记录收到的 API Key，并返回测试预设的限流判断结果。
+func (l *routerTestRateLimiter) AllowKeyRequest(_ context.Context, apiKeyID int64, _ ratelimit.Limits) (ratelimit.Decision, error) {
+	l.apiKeyID = apiKeyID
 	return l.decision, l.err
 }
 
@@ -69,7 +65,7 @@ func (s *routerTestModelCatalogService) ListAvailableModels(ctx context.Context,
 // 第 4 个参数（modelCatalogServices 变长形式）保留 chat 包同名 helper 的调用习惯，
 // 即 newTestRouter(auth, _ignored_, limiter, modelCatalogService)，让 models 包测试和
 // chat 包测试的调用形态保持一致。chatService 形参当前只用于占位，不真正影响 models endpoint。
-func newTestRouter(authenticator middleware.APIKeyAuthenticator, _ any, limiter middleware.RateLimiter, modelCatalogServices ...ModelCatalogService) http.Handler {
+func newTestRouter(authenticator middleware.APIKeyAuthenticator, _ any, limiter middleware.KeyRateLimiter, modelCatalogServices ...ModelCatalogService) http.Handler {
 	if limiter == nil {
 		limiter = newAllowingRateLimiter()
 	}
@@ -83,8 +79,6 @@ func newTestRouter(authenticator middleware.APIKeyAuthenticator, _ any, limiter 
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(authenticator))
 		r.Use(middleware.RateLimit(limiter, middleware.RateLimitOptions{
-			Limit:  60,
-			Window: time.Minute,
 			Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}))
 

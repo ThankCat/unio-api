@@ -118,8 +118,9 @@ func (s *fakeSettlement) SettleSuccessfulChat(_ context.Context, params lifecycl
 }
 
 type fakeAuthorizer struct {
-	authorizeErr error
-	releaseCount int
+	authorizeErr      error
+	releaseCount      int
+	billingExceptions []lifecycle.ChatReleaseBillingExceptionParams
 }
 
 func (a *fakeAuthorizer) AuthorizeChat(_ context.Context, params lifecycle.ChatAuthorizeParams) (lifecycle.ChatAuthorization, error) {
@@ -138,7 +139,8 @@ func (a *fakeAuthorizer) ReleaseChat(_ context.Context, _ lifecycle.ChatReleaseA
 	return nil
 }
 
-func (a *fakeAuthorizer) ReleaseChatForBillingException(_ context.Context, _ lifecycle.ChatReleaseBillingExceptionParams) error {
+func (a *fakeAuthorizer) ReleaseChatForBillingException(_ context.Context, params lifecycle.ChatReleaseBillingExceptionParams) error {
+	a.billingExceptions = append(a.billingExceptions, params)
 	return nil
 }
 

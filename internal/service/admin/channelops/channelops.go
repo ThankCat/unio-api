@@ -32,6 +32,7 @@ type Store interface {
 	ChannelsOpsTableCount(ctx context.Context, arg sqlc.ChannelsOpsTableCountParams) (int64, error)
 	ChannelOpsDetail(ctx context.Context, arg sqlc.ChannelOpsDetailParams) (sqlc.ChannelOpsDetailRow, error)
 	ChannelOpsPerformanceTimeseries(ctx context.Context, arg sqlc.ChannelOpsPerformanceTimeseriesParams) ([]sqlc.ChannelOpsPerformanceTimeseriesRow, error)
+	ChannelOpsSuccessBuckets(ctx context.Context, arg sqlc.ChannelOpsSuccessBucketsParams) ([]sqlc.ChannelOpsSuccessBucketsRow, error)
 	ChannelOpsErrors(ctx context.Context, arg sqlc.ChannelOpsErrorsParams) ([]sqlc.ChannelOpsErrorsRow, error)
 	ChannelOpsErrorsCount(ctx context.Context, arg sqlc.ChannelOpsErrorsCountParams) (int64, error)
 	ChannelOpsModels(ctx context.Context, arg sqlc.ChannelOpsModelsParams) ([]sqlc.ChannelOpsModelsRow, error)
@@ -86,6 +87,7 @@ type Row struct {
 	ID               int64
 	Name             string
 	Status           string
+	CreatedAt        time.Time
 	Protocol         string
 	AdapterKey       string
 	BaseURL          string
@@ -119,6 +121,14 @@ type PerfPoint struct {
 	AttemptTotal     int64
 	AttemptSucceeded int64
 	LatencyAvg       float64
+}
+
+// SuccessBucket 是最近 10 分钟 attempt 成功率桶（与概览渠道表现一致）。
+type SuccessBucket struct {
+	Bucket      time.Time
+	Terminal    int64
+	Succeeded   int64
+	SuccessRate float64
 }
 
 // ErrorRow 是抽屉错误 Tab 行。
@@ -162,6 +172,8 @@ type TableParams struct {
 	Status     string
 	ProviderID *int64
 	Search     string
+	SortField  string
+	SortDesc   bool
 	Limit      int32
 	Offset     int32
 }
@@ -235,6 +247,8 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 		Status:     textNarg(p.Status),
 		ProviderID: int8Narg(p.ProviderID),
 		Search:     textNarg(p.Search),
+		SortField:  textNarg(p.SortField),
+		SortDesc:   boolNarg(p.SortDesc),
 		PageLimit:  p.Limit,
 		PageOffset: p.Offset,
 	})
@@ -256,6 +270,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			ID:               r.ID,
 			Name:             r.Name,
 			Status:           r.Status,
+			CreatedAt:        r.CreatedAt.Time,
 			Protocol:         r.Protocol,
 			AdapterKey:       r.AdapterKey,
 			BaseURL:          r.BaseUrl,
@@ -302,6 +317,26 @@ func (s *Service) Detail(ctx context.Context, channelID int64, from, to time.Tim
 		d.SuccessRate = float64(r.AttemptSucceeded) / float64(r.AttemptTotal)
 	}
 	return d, nil
+}
+
+// SuccessBuckets 返回单渠道最近 10 分钟 attempt 成功率桶。
+func (s *Service) SuccessBuckets(ctx context.Context, channelID int64, from, to time.Time) ([]SuccessBucket, error) {
+	rows, err := s.store.ChannelOpsSuccessBuckets(ctx, sqlc.ChannelOpsSuccessBucketsParams{
+		ChannelID: channelID, FromTime: tsNarg(from), ToTime: tsNarg(to),
+	})
+	if err != nil {
+		return nil, storeFailed(err, "channel ops success buckets")
+	}
+	out := make([]SuccessBucket, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, SuccessBucket{
+			Bucket:      r.Bucket.Time,
+			Terminal:    r.TerminalTotal,
+			Succeeded:   r.SucceededTotal,
+			SuccessRate: r.SuccessRate,
+		})
+	}
+	return out, nil
 }
 
 // PerformanceTimeseries 返回单渠道性能时序。
@@ -418,6 +453,10 @@ func textNarg(s string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: s, Valid: true}
+}
+
+func boolNarg(v bool) pgtype.Bool {
+	return pgtype.Bool{Bool: v, Valid: true}
 }
 
 func int8Narg(p *int64) pgtype.Int8 {

@@ -135,6 +135,7 @@ func responsesStreamCarrierMeta(c responsesStreamCarrier) lifecycle.StreamChunkM
 			FinishReason: c.direct.FinishReason,
 			Usage:        c.direct.Usage,
 			SuppressEmit: false,
+			VisibleText:  directResponsesVisibleText(*c.direct),
 		}
 	}
 
@@ -149,6 +150,29 @@ func responsesStreamCarrierMeta(c responsesStreamCarrier) lifecycle.StreamChunkM
 		meta.FinishReason = *chunk.FinishReason
 	}
 	return meta
+}
+
+// directResponsesVisibleText extracts customer-visible text deltas from raw Responses stream events.
+//
+// It is used only for partial stream settlement when final usage is missing; full billing still consumes
+// adapter facts from the terminal event.
+func directResponsesVisibleText(chunk responsesadapter.StreamChunk) string {
+	switch chunk.EventType {
+	case gatewayapi.EventOutputTextDelta,
+		gatewayapi.EventReasoningTextDelta,
+		gatewayapi.EventReasoningSummaryTextDelta,
+		gatewayapi.EventFunctionCallArgsDelta:
+	default:
+		return ""
+	}
+
+	var payload struct {
+		Delta string `json:"delta"`
+	}
+	if err := json.Unmarshal(chunk.Data, &payload); err != nil {
+		return ""
+	}
+	return payload.Delta
 }
 
 // emitDirectStreamEvent 把上游 responses 事件（改写 model 回显后）原文透传给客户 SSE。

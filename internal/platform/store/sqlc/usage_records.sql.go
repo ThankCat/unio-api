@@ -201,8 +201,15 @@ WHERE ($1::bigint IS NULL OR r.user_id = $1::bigint)
   AND ($3::text IS NULL OR r.requested_model_id ILIKE '%' || $3::text || '%')
   AND ($4::timestamptz IS NULL OR u.created_at >= $4::timestamptz)
   AND ($5::timestamptz IS NULL OR u.created_at < $5::timestamptz)
-ORDER BY u.created_at DESC, u.id DESC
-LIMIT $7 OFFSET $6
+ORDER BY
+  CASE WHEN COALESCE($6::text, 'created_at') IN ('', 'created_at') AND COALESCE($7::bool, true) THEN u.created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE($6::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($7::bool, true) THEN u.created_at END ASC NULLS LAST,
+  CASE WHEN $6::text = 'model' AND COALESCE($7::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
+  CASE WHEN $6::text = 'model' AND NOT COALESCE($7::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
+  CASE WHEN $6::text = 'user_id' AND COALESCE($7::bool, false) THEN r.user_id END DESC NULLS LAST,
+  CASE WHEN $6::text = 'user_id' AND NOT COALESCE($7::bool, false) THEN r.user_id END ASC NULLS LAST,
+  u.id DESC
+LIMIT $9 OFFSET $8
 `
 
 type ListUsageRecordsPageParams struct {
@@ -211,6 +218,8 @@ type ListUsageRecordsPageParams struct {
 	Model      pgtype.Text
 	FromTime   pgtype.Timestamptz
 	ToTime     pgtype.Timestamptz
+	SortField  pgtype.Text
+	SortDesc   pgtype.Bool
 	PageOffset int32
 	PageLimit  int32
 }
@@ -245,6 +254,8 @@ func (q *Queries) ListUsageRecordsPage(ctx context.Context, arg ListUsageRecords
 		arg.Model,
 		arg.FromTime,
 		arg.ToTime,
+		arg.SortField,
+		arg.SortDesc,
 		arg.PageOffset,
 		arg.PageLimit,
 	)

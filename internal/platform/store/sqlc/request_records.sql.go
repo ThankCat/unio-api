@@ -375,8 +375,19 @@ WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
   AND ($5::text IS NULL OR requested_model_id ILIKE '%' || $5::text || '%')
   AND ($6::timestamptz IS NULL OR created_at >= $6::timestamptz)
   AND ($7::timestamptz IS NULL OR created_at < $7::timestamptz)
-ORDER BY created_at DESC, id DESC
-LIMIT $9 OFFSET $8
+ORDER BY
+  CASE WHEN COALESCE($8::text, 'created_at') IN ('', 'created_at') AND COALESCE($9::bool, true) THEN created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE($8::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($9::bool, true) THEN created_at END ASC NULLS LAST,
+  CASE WHEN $8::text = 'status' AND COALESCE($9::bool, false) THEN status END DESC NULLS LAST,
+  CASE WHEN $8::text = 'status' AND NOT COALESCE($9::bool, false) THEN status END ASC NULLS LAST,
+  CASE WHEN $8::text = 'user_id' AND COALESCE($9::bool, false) THEN user_id END DESC NULLS LAST,
+  CASE WHEN $8::text = 'user_id' AND NOT COALESCE($9::bool, false) THEN user_id END ASC NULLS LAST,
+  CASE WHEN $8::text = 'model' AND COALESCE($9::bool, false) THEN requested_model_id END DESC NULLS LAST,
+  CASE WHEN $8::text = 'model' AND NOT COALESCE($9::bool, false) THEN requested_model_id END ASC NULLS LAST,
+  CASE WHEN $8::text = 'stream' AND COALESCE($9::bool, false) THEN stream END DESC NULLS LAST,
+  CASE WHEN $8::text = 'stream' AND NOT COALESCE($9::bool, false) THEN stream END ASC NULLS LAST,
+  id DESC
+LIMIT $11 OFFSET $10
 `
 
 type ListRequestRecordsPageParams struct {
@@ -387,6 +398,8 @@ type ListRequestRecordsPageParams struct {
 	Model      pgtype.Text
 	FromTime   pgtype.Timestamptz
 	ToTime     pgtype.Timestamptz
+	SortField  pgtype.Text
+	SortDesc   pgtype.Bool
 	PageOffset int32
 	PageLimit  int32
 }
@@ -430,6 +443,8 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 		arg.Model,
 		arg.FromTime,
 		arg.ToTime,
+		arg.SortField,
+		arg.SortDesc,
 		arg.PageOffset,
 		arg.PageLimit,
 	)

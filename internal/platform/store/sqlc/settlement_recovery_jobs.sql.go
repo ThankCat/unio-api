@@ -193,6 +193,7 @@ INSERT INTO settlement_recovery_jobs (
     formula_version,
     estimated_amount,
     authorized_amount,
+    max_attempts,
     status,
     next_run_at
 )
@@ -242,8 +243,9 @@ VALUES (
            $43,
            $44,
            $45,
+           $46,
            'pending',
-           $46
+           $47
        )
 ON CONFLICT (request_record_id) DO UPDATE
 SET updated_at = settlement_recovery_jobs.updated_at
@@ -340,6 +342,7 @@ type CreateSettlementRecoveryJobParams struct {
 	FormulaVersion                    string
 	EstimatedAmount                   pgtype.Numeric
 	AuthorizedAmount                  pgtype.Numeric
+	MaxAttempts                       int32
 	NextRunAt                         pgtype.Timestamptz
 }
 
@@ -391,6 +394,7 @@ func (q *Queries) CreateSettlementRecoveryJob(ctx context.Context, arg CreateSet
 		arg.FormulaVersion,
 		arg.EstimatedAmount,
 		arg.AuthorizedAmount,
+		arg.MaxAttempts,
 		arg.NextRunAt,
 	)
 	var i SettlementRecoveryJob
@@ -724,8 +728,15 @@ WHERE ($1::text IS NULL OR status = $1::text)
   AND ($2::bigint IS NULL OR user_id = $2::bigint)
   AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
   AND ($4::timestamptz IS NULL OR created_at < $4::timestamptz)
-ORDER BY created_at DESC, id DESC
-LIMIT $6 OFFSET $5
+ORDER BY
+  CASE WHEN COALESCE($5::text, 'created_at') IN ('', 'created_at') AND COALESCE($6::bool, true) THEN created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE($5::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($6::bool, true) THEN created_at END ASC NULLS LAST,
+  CASE WHEN $5::text = 'status' AND COALESCE($6::bool, false) THEN status END DESC NULLS LAST,
+  CASE WHEN $5::text = 'status' AND NOT COALESCE($6::bool, false) THEN status END ASC NULLS LAST,
+  CASE WHEN $5::text = 'user_id' AND COALESCE($6::bool, false) THEN user_id END DESC NULLS LAST,
+  CASE WHEN $5::text = 'user_id' AND NOT COALESCE($6::bool, false) THEN user_id END ASC NULLS LAST,
+  id DESC
+LIMIT $8 OFFSET $7
 `
 
 type ListSettlementRecoveryJobsPageParams struct {
@@ -733,6 +744,8 @@ type ListSettlementRecoveryJobsPageParams struct {
 	UserID     pgtype.Int8
 	FromTime   pgtype.Timestamptz
 	ToTime     pgtype.Timestamptz
+	SortField  pgtype.Text
+	SortDesc   pgtype.Bool
 	PageOffset int32
 	PageLimit  int32
 }
@@ -778,6 +791,8 @@ func (q *Queries) ListSettlementRecoveryJobsPage(ctx context.Context, arg ListSe
 		arg.UserID,
 		arg.FromTime,
 		arg.ToTime,
+		arg.SortField,
+		arg.SortDesc,
 		arg.PageOffset,
 		arg.PageLimit,
 	)

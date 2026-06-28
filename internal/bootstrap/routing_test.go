@@ -37,7 +37,7 @@ func (s *fakeChatRouteStore) GetBuiltinCheapestRoute(ctx context.Context) (sqlc.
 }
 
 func TestNewChatRouterRejectsMissingMasterKey(t *testing.T) {
-	_, err := NewChatRouter(&fakeChatRouteStore{}, "")
+	_, err := NewChatRouter(&fakeChatRouteStore{}, "", nil)
 	if err == nil {
 		t.Fatal("expected missing master key error")
 	}
@@ -66,7 +66,7 @@ func TestNewChatRouterDecryptsStoredCredential(t *testing.T) {
 				UpstreamModel:       "gpt-4.1",
 			},
 		},
-	}, credential.FixedTestMasterKeyBase64)
+	}, credential.FixedTestMasterKeyBase64, nil)
 	if err != nil {
 		t.Fatalf("NewChatRouter returned error: %v", err)
 	}

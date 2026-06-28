@@ -32,6 +32,33 @@ type Config struct {
 type GatewayConfig struct {
 	// HTTPAddr 来自 GATEWAY_HTTP_ADDR；gateway-server 的监听地址。
 	HTTPAddr string
+
+	// MaxOutputTokensFallback 来自 AUTHORIZATION_MAX_OUTPUT_TOKENS_FALLBACK（默认 4096）。
+	// 客户未显式给出输出上限、且候选模型 models.max_output_tokens 也未配置(NULL)时，
+	// authorization 用它做保守冻结的输出 token 兜底上界。仅影响预冻结额度，不改写转发上游的请求体。
+	MaxOutputTokensFallback int64
+
+	// MaxUpstreamResponseBytes 来自 GATEWAY_MAX_UPSTREAM_RESPONSE_MB（默认 8MB，按 MB 换算）。
+	// 这是非流式上游响应体的防 OOM 上界：异常/恶意上游可能对一次非流式请求返回任意大的 body，
+	// 整体读入内存会撑爆进程。超限时 adapter 返回 adapter_response_too_large 并释放冻结，不计费。
+	// 仅约束非流式 body；流式 SSE 单事件大小由 adapter 内部常量约束，与此无关。
+	MaxUpstreamResponseBytes int64
+
+	// StreamIdleTimeout 来自 GATEWAY_STREAM_IDLE_TIMEOUT（默认 10m）。
+	// 流式上游拿到响应头后，「相邻两次流活动之间」的最大静默时长看门狗：用于兜底半开/挂死连接
+	// （TCP 在线但永不推进字节）。必须显著大于上游合法的最长静默阶段（如慢速图像生成在 200 后静默
+	// 数分钟），否则会误杀正常长任务流；故默认从宽取 10m。仅约束 chunk 间静默，不约束流总时长。
+	StreamIdleTimeout time.Duration
+
+	// ChannelRateLimitCooldown 来自 GATEWAY_CHANNEL_RATELIMIT_COOLDOWN（默认 5s）。
+	// 上游返回 429 但未给出 Retry-After 时，对该渠道套用的默认冷却时长：冷却窗口内 routing
+	// fallback 直接跳过该渠道（plan 与 attempt 两阶段都跳）。<=0 表示此情形不冷却（仅熔断器兜底）。
+	ChannelRateLimitCooldown time.Duration
+
+	// ChannelRateLimitCooldownCap 来自 GATEWAY_CHANNEL_RATELIMIT_COOLDOWN_CAP（默认 5m）。
+	// 对上游 429 Retry-After 建议值的冷却上限保护：防御 provider 返回异常大的 Retry-After 把渠道
+	// 长时间踢出。<=0 表示不额外封顶（仍受 adapter 解析阶段 24h 硬上限约束）。
+	ChannelRateLimitCooldownCap time.Duration
 }
 
 // AdminConfig 保存 admin-server 进程级配置与管理端认证配置。
@@ -132,10 +159,15 @@ type RedisConfig struct {
 	KeyNamespace    string
 }
 
-// RateLimitConfig 保存全局默认限流配置。
+// RateLimitConfig 保存全局默认限流配置（P2-8 两层 RPM/TPM/RPD）。
+//
+// DefaultRPM/DefaultTPM/DefaultRPD 是「未在 API Key / channel 上单独配置时」生效的全局默认上限，
+// 0 表示该维度默认不限。具体主体可在 api_keys/channels 行上覆盖（NULL=继承此默认，0=显式不限，>0=具体上限）。
+// FailurePolicy 决定 Redis 计数后端故障时 fail_closed（拒绝）还是 fail_open（放行）。
 type RateLimitConfig struct {
-	DefaultLimit  int64
-	DefaultWindow time.Duration
+	DefaultRPM    int64
+	DefaultTPM    int64
+	DefaultRPD    int64
 	FailurePolicy string
 }
 
@@ -146,6 +178,24 @@ type WorkerConfig struct {
 	SettlementRecoveryLockTTL       time.Duration
 	SettlementRecoveryInitialDelay  time.Duration
 	SettlementRecoverySettleTimeout time.Duration
+
+	// SettlementRecoveryMaxAttempts 是单条 settlement 补偿任务的最大自动重试次数（写入 job.max_attempts）。
+	// 与退避一起决定「上游已成功但 settlement 反复失败」时的总补偿覆盖窗口；耗尽后任务转 dead 并由 worker
+	// 收口（释放冻结 + 记风险敞口 + 请求标 failed）。应足够大以覆盖依赖（DB/网络）短时抖动，避免过早放弃。
+	SettlementRecoveryMaxAttempts int32
+	// SettlementRecoveryBackoffCap 是补偿重试指数退避的单次上限。退避序列 1s,2s,4s,... 增长到该上限后保持平稳，
+	// 用于在不过早 dead 的前提下把总覆盖窗口拉长到分钟~小时级（兜底较长依赖故障）。
+	SettlementRecoveryBackoffCap time.Duration
+	// SettlementRecoveryBatchSize 是补偿 worker 单轮最多 claim/处理的任务数（P2-5）。
+	// 批量排空把每轮固定开销（dead 收口 + exhausted 标记扫描）摊薄到多条 job，积压时显著加快排空；
+	// 每条仍以 FOR UPDATE SKIP LOCKED 独立 claim，可与多副本 worker 并存。
+	SettlementRecoveryBatchSize int32
+
+	// OrphanReservationSweepAgeThreshold 是孤儿预授权的判定年龄阈值：仅清扫 authorized 且 created_at 早于
+	// now-阈值、请求仍 running、且无 settlement 补偿任务的预授权。阈值应明显大于单请求最长可能耗时，避免误清在途请求。
+	OrphanReservationSweepAgeThreshold time.Duration
+	// OrphanReservationSweepBatchSize 是单轮扫描收口的最大孤儿预授权条数。
+	OrphanReservationSweepBatchSize int32
 }
 
 // Load 从环境变量加载配置，并对需要解析的字段做启动期校验。
@@ -248,14 +298,38 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	rateLimitDefaultLimit, err := getEnvInt64("RATE_LIMIT_DEFAULT_LIMIT", 60)
+	// 默认 RPM=60（迁移自旧全局固定窗口默认，保持非破坏）；TPM/RPD 默认 0=不限，按需开启。
+	rateLimitDefaultRPM, err := getEnvInt64("RATE_LIMIT_DEFAULT_RPM", 60)
 	if err != nil {
 		return Config{}, err
 	}
+	if rateLimitDefaultRPM < 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("RATE_LIMIT_DEFAULT_RPM must be zero or a positive integer"),
+		)
+	}
 
-	rateLimitDefaultWindow, err := getEnvDuration("RATE_LIMIT_DEFAULT_WINDOW", time.Minute)
+	rateLimitDefaultTPM, err := getEnvInt64("RATE_LIMIT_DEFAULT_TPM", 0)
 	if err != nil {
 		return Config{}, err
+	}
+	if rateLimitDefaultTPM < 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("RATE_LIMIT_DEFAULT_TPM must be zero or a positive integer"),
+		)
+	}
+
+	rateLimitDefaultRPD, err := getEnvInt64("RATE_LIMIT_DEFAULT_RPD", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	if rateLimitDefaultRPD < 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("RATE_LIMIT_DEFAULT_RPD must be zero or a positive integer"),
+		)
 	}
 
 	rateLimitFailurePolicy, err := parseRateLimitFailurePolicy(getEnv("RATE_LIMIT_FAILURE_POLICY", "fail_closed"))
@@ -286,6 +360,61 @@ func Load() (Config, error) {
 	workerSettlementRecoverySettleTimeout, err := getEnvDuration("WORKER_SETTLEMENT_RECOVERY_SETTLE_TIMEOUT", 10*time.Second)
 	if err != nil {
 		return Config{}, err
+	}
+
+	workerSettlementRecoveryMaxAttempts, err := getEnvInt32("WORKER_SETTLEMENT_RECOVERY_MAX_ATTEMPTS", 20)
+	if err != nil {
+		return Config{}, err
+	}
+	if workerSettlementRecoveryMaxAttempts <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("WORKER_SETTLEMENT_RECOVERY_MAX_ATTEMPTS must be a positive integer"),
+		)
+	}
+
+	workerSettlementRecoveryBackoffCap, err := getEnvDuration("WORKER_SETTLEMENT_RECOVERY_BACKOFF_CAP", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	if workerSettlementRecoveryBackoffCap <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("WORKER_SETTLEMENT_RECOVERY_BACKOFF_CAP must be a positive duration"),
+		)
+	}
+
+	workerSettlementRecoveryBatchSize, err := getEnvInt32("WORKER_SETTLEMENT_RECOVERY_BATCH_SIZE", 16)
+	if err != nil {
+		return Config{}, err
+	}
+	if workerSettlementRecoveryBatchSize <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("WORKER_SETTLEMENT_RECOVERY_BATCH_SIZE must be a positive integer"),
+		)
+	}
+
+	workerOrphanReservationSweepAgeThreshold, err := getEnvDuration("WORKER_ORPHAN_RESERVATION_SWEEP_AGE_THRESHOLD", 15*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	if workerOrphanReservationSweepAgeThreshold <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("WORKER_ORPHAN_RESERVATION_SWEEP_AGE_THRESHOLD must be a positive duration"),
+		)
+	}
+
+	workerOrphanReservationSweepBatchSize, err := getEnvInt32("WORKER_ORPHAN_RESERVATION_SWEEP_BATCH_SIZE", 100)
+	if err != nil {
+		return Config{}, err
+	}
+	if workerOrphanReservationSweepBatchSize <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("WORKER_ORPHAN_RESERVATION_SWEEP_BATCH_SIZE must be a positive integer"),
+		)
 	}
 
 	modelCatalogSyncEnabled, err := getEnvBool("MODEL_CATALOG_SYNC_ENABLED", false)
@@ -348,6 +477,62 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	authorizationMaxOutputTokensFallback, err := getEnvInt64("AUTHORIZATION_MAX_OUTPUT_TOKENS_FALLBACK", 4096)
+	if err != nil {
+		return Config{}, err
+	}
+	if authorizationMaxOutputTokensFallback <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("AUTHORIZATION_MAX_OUTPUT_TOKENS_FALLBACK must be a positive integer"),
+		)
+	}
+
+	gatewayMaxUpstreamResponseMB, err := getEnvInt("GATEWAY_MAX_UPSTREAM_RESPONSE_MB", 8)
+	if err != nil {
+		return Config{}, err
+	}
+	if gatewayMaxUpstreamResponseMB <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("GATEWAY_MAX_UPSTREAM_RESPONSE_MB must be a positive integer"),
+		)
+	}
+
+	gatewayStreamIdleTimeout, err := getEnvDuration("GATEWAY_STREAM_IDLE_TIMEOUT", 10*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	if gatewayStreamIdleTimeout <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("GATEWAY_STREAM_IDLE_TIMEOUT must be a positive duration"),
+		)
+	}
+
+	// P2-7 渠道级 429 冷却：允许为 0（关闭默认冷却 / 不额外封顶），但不允许为负。
+	gatewayChannelRateLimitCooldown, err := getEnvDuration("GATEWAY_CHANNEL_RATELIMIT_COOLDOWN", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	if gatewayChannelRateLimitCooldown < 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("GATEWAY_CHANNEL_RATELIMIT_COOLDOWN must not be negative"),
+		)
+	}
+
+	gatewayChannelRateLimitCooldownCap, err := getEnvDuration("GATEWAY_CHANNEL_RATELIMIT_COOLDOWN_CAP", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	if gatewayChannelRateLimitCooldownCap < 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("GATEWAY_CHANNEL_RATELIMIT_COOLDOWN_CAP must not be negative"),
+		)
+	}
+
 	return Config{
 		HTTP: HTTPConfig{
 			ReadTimeout:      httpReadTimeout,
@@ -381,16 +566,22 @@ func Load() (Config, error) {
 			KeyNamespace:    getEnv("REDIS_KEY_NAMESPACE", "unio:dev"),
 		},
 		RateLimit: RateLimitConfig{
-			DefaultLimit:  rateLimitDefaultLimit,
-			DefaultWindow: rateLimitDefaultWindow,
+			DefaultRPM:    rateLimitDefaultRPM,
+			DefaultTPM:    rateLimitDefaultTPM,
+			DefaultRPD:    rateLimitDefaultRPD,
 			FailurePolicy: rateLimitFailurePolicy,
 		},
 		Worker: WorkerConfig{
-			StartupTimeout:                  workerStartupTimeout,
-			RunnerIdleInterval:              workerRunnerIdleInterval,
-			SettlementRecoveryLockTTL:       workerSettlementRecoveryLockTTL,
-			SettlementRecoveryInitialDelay:  workerSettlementRecoveryInitialDelay,
-			SettlementRecoverySettleTimeout: workerSettlementRecoverySettleTimeout,
+			StartupTimeout:                     workerStartupTimeout,
+			RunnerIdleInterval:                 workerRunnerIdleInterval,
+			SettlementRecoveryLockTTL:          workerSettlementRecoveryLockTTL,
+			SettlementRecoveryInitialDelay:     workerSettlementRecoveryInitialDelay,
+			SettlementRecoverySettleTimeout:    workerSettlementRecoverySettleTimeout,
+			SettlementRecoveryMaxAttempts:      workerSettlementRecoveryMaxAttempts,
+			SettlementRecoveryBackoffCap:       workerSettlementRecoveryBackoffCap,
+			SettlementRecoveryBatchSize:        workerSettlementRecoveryBatchSize,
+			OrphanReservationSweepAgeThreshold: workerOrphanReservationSweepAgeThreshold,
+			OrphanReservationSweepBatchSize:    workerOrphanReservationSweepBatchSize,
 		},
 		ModelCatalogSync: ModelCatalogSyncConfig{
 			Enabled:          modelCatalogSyncEnabled,
@@ -417,7 +608,12 @@ func Load() (Config, error) {
 			MasterKey: getEnv("CREDENTIAL_MASTER_KEY", ""),
 		},
 		Gateway: GatewayConfig{
-			HTTPAddr: getEnv("GATEWAY_HTTP_ADDR", ":8520"),
+			HTTPAddr:                    getEnv("GATEWAY_HTTP_ADDR", ":8520"),
+			MaxOutputTokensFallback:     authorizationMaxOutputTokensFallback,
+			MaxUpstreamResponseBytes:    int64(gatewayMaxUpstreamResponseMB) << 20,
+			StreamIdleTimeout:           gatewayStreamIdleTimeout,
+			ChannelRateLimitCooldown:    gatewayChannelRateLimitCooldown,
+			ChannelRateLimitCooldownCap: gatewayChannelRateLimitCooldownCap,
 		},
 		Admin: AdminConfig{
 			HTTPAddr: getEnv("ADMIN_HTTP_ADDR", ":8521"),

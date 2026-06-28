@@ -3,10 +3,13 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
+	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
@@ -114,6 +117,34 @@ func TestRequestLogCancelFactsIgnoresAdapterWrappedFailureCode(t *testing.T) {
 	}
 }
 
+func TestMarkAttemptFailedPersistsUpstreamMetadata(t *testing.T) {
+	store := &captureAttemptFailedLog{}
+	l := &RequestLifecycle{requestLog: store}
+	err := adapter.NewUpstreamError(
+		adapter.UpstreamErrorServer,
+		adapter.UpstreamMetadata{StatusCode: 503, RequestID: "req-upstream-503"},
+		failure.New(
+			failure.CodeAdapterUpstreamStatus,
+			failure.WithMessage("openai responses adapter upstream stream status 503"),
+		),
+	)
+
+	l.MarkAttemptFailed(context.Background(), requestlog.AttemptRecord{ID: 42}, "stream_adapter_error", err)
+
+	if store.params.ID != 42 {
+		t.Fatalf("attempt id = %d, want 42", store.params.ID)
+	}
+	if store.params.UpstreamStatusCode == nil || *store.params.UpstreamStatusCode != 503 {
+		t.Fatalf("upstream status = %v, want 503", store.params.UpstreamStatusCode)
+	}
+	if store.params.UpstreamRequestID == nil || *store.params.UpstreamRequestID != "req-upstream-503" {
+		t.Fatalf("upstream request id = %v, want req-upstream-503", store.params.UpstreamRequestID)
+	}
+	if store.params.ErrorCode != string(failure.CodeAdapterUpstreamStatus) {
+		t.Fatalf("error code = %q, want %q", store.params.ErrorCode, failure.CodeAdapterUpstreamStatus)
+	}
+}
+
 func TestBaseSafeRequestLogErrorMessageFallsBackByCategory(t *testing.T) {
 	cases := []struct {
 		code string
@@ -134,4 +165,70 @@ func TestBaseSafeRequestLogErrorMessageFallsBackByCategory(t *testing.T) {
 			}
 		})
 	}
+}
+
+type captureAttemptFailedLog struct {
+	params requestlog.MarkAttemptFailedParams
+}
+
+func (s *captureAttemptFailedLog) CreateRequest(context.Context, requestlog.CreateRequestParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{}, fmt.Errorf("unexpected CreateRequest")
+}
+
+func (s *captureAttemptFailedLog) MarkRequestRunning(context.Context, int64) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkRequestRunning")
+}
+
+func (s *captureAttemptFailedLog) MarkRequestResponseStarted(context.Context, requestlog.MarkResponseStartedParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkRequestResponseStarted")
+}
+
+func (s *captureAttemptFailedLog) MarkRequestSucceeded(context.Context, requestlog.MarkRequestSucceededParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkRequestSucceeded")
+}
+
+func (s *captureAttemptFailedLog) MarkSettledRequestFailed(context.Context, requestlog.MarkSettledRequestFailedParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkSettledRequestFailed")
+}
+
+func (s *captureAttemptFailedLog) MarkSettledRequestCanceled(context.Context, requestlog.MarkSettledRequestCanceledParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkSettledRequestCanceled")
+}
+
+func (s *captureAttemptFailedLog) MarkRequestFailed(context.Context, requestlog.MarkRequestFailedParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkRequestFailed")
+}
+
+func (s *captureAttemptFailedLog) MarkRequestCanceled(context.Context, requestlog.MarkRequestCanceledParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkRequestCanceled")
+}
+
+func (s *captureAttemptFailedLog) CreateAttempt(context.Context, requestlog.CreateAttemptParams) (requestlog.AttemptRecord, error) {
+	return requestlog.AttemptRecord{}, fmt.Errorf("unexpected CreateAttempt")
+}
+
+func (s *captureAttemptFailedLog) MarkAttemptResponseStarted(context.Context, requestlog.MarkAttemptResponseStartedParams) (requestlog.AttemptRecord, error) {
+	return requestlog.AttemptRecord{}, fmt.Errorf("unexpected MarkAttemptResponseStarted")
+}
+
+func (s *captureAttemptFailedLog) MarkAttemptSucceeded(context.Context, requestlog.MarkAttemptSucceededParams) (requestlog.AttemptRecord, error) {
+	return requestlog.AttemptRecord{}, fmt.Errorf("unexpected MarkAttemptSucceeded")
+}
+
+func (s *captureAttemptFailedLog) MarkSettledAttemptFailed(context.Context, requestlog.MarkSettledAttemptFailedParams) (requestlog.AttemptRecord, error) {
+	return requestlog.AttemptRecord{}, fmt.Errorf("unexpected MarkSettledAttemptFailed")
+}
+
+func (s *captureAttemptFailedLog) MarkSettledAttemptCanceled(context.Context, requestlog.MarkSettledAttemptCanceledParams) (requestlog.AttemptRecord, error) {
+	return requestlog.AttemptRecord{}, fmt.Errorf("unexpected MarkSettledAttemptCanceled")
+}
+
+func (s *captureAttemptFailedLog) MarkAttemptFailed(_ context.Context, params requestlog.MarkAttemptFailedParams) (requestlog.AttemptRecord, error) {
+	s.params = params
+	completedAt := time.Now()
+	return requestlog.AttemptRecord{ID: params.ID, CompletedAt: &completedAt}, nil
+}
+
+func (s *captureAttemptFailedLog) MarkAttemptCanceled(context.Context, requestlog.MarkAttemptCanceledParams) (requestlog.AttemptRecord, error) {
+	return requestlog.AttemptRecord{}, fmt.Errorf("unexpected MarkAttemptCanceled")
 }

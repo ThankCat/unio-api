@@ -38,6 +38,7 @@ type MessagesService struct {
 	metrics         lifecycle.MetricsRecorder
 	breaker         lifecycle.ChannelBreaker
 	lifecycle       *lifecycle.RequestLifecycle
+	attemptRunner   *lifecycle.AttemptRunner
 }
 
 // NewMessagesService 创建 Anthropic Messages gateway service。
@@ -68,6 +69,16 @@ func NewMessagesService(
 		panic("gateway: chat authorizer service is required")
 	}
 
+	requestLifecycle := lifecycle.NewRequestLifecycle(lifecycle.RequestLifecycleParams{
+		RequestLog:      requestLog,
+		Authorizer:      chatAuthorizer,
+		Metrics:         metricsRecorder,
+		Breaker:         breaker,
+		IngressProtocol: requestlog.ProtocolAnthropic,
+		Operation:       requestlog.OperationMessages,
+		SafeMessage:     messagesSafeMessage,
+	})
+
 	return &MessagesService{
 		router:          router,
 		registry:        registry,
@@ -78,16 +89,19 @@ func NewMessagesService(
 		chatAuthorizer:  chatAuthorizer,
 		metrics:         metricsRecorder,
 		breaker:         breaker,
-		lifecycle: lifecycle.NewRequestLifecycle(lifecycle.RequestLifecycleParams{
-			RequestLog:      requestLog,
-			Authorizer:      chatAuthorizer,
-			Metrics:         metricsRecorder,
-			Breaker:         breaker,
-			IngressProtocol: requestlog.ProtocolAnthropic,
-			Operation:       requestlog.OperationMessages,
-			SafeMessage:     messagesSafeMessage,
-		}),
+		lifecycle:       requestLifecycle,
+		attemptRunner:   lifecycle.NewAttemptRunner(requestLifecycle, retryClassifier, chatSettlement),
 	}
+}
+
+// SetRateLimitGuard 注入两层限流 Guard（P2-8），转发给候选循环驱动；nil 表示不启用限流。
+func (s *MessagesService) SetRateLimitGuard(guard lifecycle.RateLimitGuard) {
+	s.attemptRunner.SetRateLimitGuard(guard)
+}
+
+// SetChannelCooldownRegistry 注入渠道级 429 冷却注册表（P2-7），转发给共享 lifecycle；nil 表示不启用冷却。
+func (s *MessagesService) SetChannelCooldownRegistry(registry *lifecycle.ChannelCooldownRegistry) {
+	s.lifecycle.SetChannelCooldownRegistry(registry)
 }
 
 // messagesSafeMessage 把 messages 编排专用 ad-hoc string code 映射成可展示文案；
@@ -98,8 +112,12 @@ func messagesSafeMessage(code string) string {
 		return "Request authorization failed."
 	case "messages_authorization_release_failed":
 		return "Request billing cleanup failed."
+	case "chat_authorization_release_failed":
+		return "Request billing cleanup failed."
 	case "stream_adapter_error":
 		return "Upstream stream failed."
+	case "chat_settlement_failed", "stream_chat_settlement_failed":
+		return "Request settlement failed."
 	case "messages_settlement_failed", "stream_messages_settlement_failed":
 		return "Request settlement failed."
 	}

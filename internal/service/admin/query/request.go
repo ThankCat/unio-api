@@ -22,7 +22,7 @@ type RequestStore interface {
 	GetLedgerBillingExceptionByRequest(ctx context.Context, requestRecordID int64) (sqlc.LedgerBillingException, error)
 }
 
-// RequestListParams 是分页/过滤列出请求记录的入参；指针/空串/nil 表示该维度不过滤。
+// RequestListParams 是分页/过滤/排序列出请求记录的入参；指针/空串/nil 表示该维度不过滤。
 type RequestListParams struct {
 	UserID    *int64
 	ProjectID *int64
@@ -31,6 +31,8 @@ type RequestListParams struct {
 	Model     string
 	From      *time.Time
 	To        *time.Time
+	SortField string
+	SortDesc  bool
 	Limit     int32
 	Offset    int32
 }
@@ -120,6 +122,8 @@ func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]
 		Model:      textNarg(params.Model),
 		FromTime:   tsNarg(params.From),
 		ToTime:     tsNarg(params.To),
+		SortField:  textNarg(params.SortField),
+		SortDesc:   boolNarg(params.SortDesc),
 		PageLimit:  params.Limit,
 		PageOffset: params.Offset,
 	})

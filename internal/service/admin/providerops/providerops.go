@@ -37,6 +37,7 @@ type Row struct {
 	Slug             string
 	Name             string
 	Status           string
+	CreatedAt        time.Time
 	ChannelTotal     int64
 	ChannelEnabled   int64
 	AttemptTotal     int64
@@ -46,6 +47,11 @@ type Row struct {
 	Latency          opsutil.LatencyStats
 	HealthBucket     string
 	LastSuccessAt    *time.Time
+	Tokens           int64
+	RevenueUSD       string
+	CostUSD          string
+	MarginUSD        string
+	AvgTPS           float64
 }
 
 // Detail 是抽屉概览。
@@ -92,12 +98,14 @@ type ErrorRow struct {
 
 // TableParams 主表入参。
 type TableParams struct {
-	From   time.Time
-	To     time.Time
-	Status string
-	Search string
-	Limit  int32
-	Offset int32
+	From      time.Time
+	To        time.Time
+	Status    string
+	Search    string
+	SortField string
+	SortDesc  bool
+	Limit     int32
+	Offset    int32
 }
 
 // Table 返回服务商运维主表（分页）。
@@ -107,6 +115,8 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 		ToTime:     opsutil.TsNarg(p.To),
 		Status:     opsutil.TextNarg(p.Status),
 		Search:     opsutil.TextNarg(p.Search),
+		SortField:  opsutil.TextNarg(p.SortField),
+		SortDesc:   opsutil.BoolNarg(p.SortDesc),
 		PageLimit:  p.Limit,
 		PageOffset: p.Offset,
 	})
@@ -127,6 +137,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			Slug:             r.Slug,
 			Name:             r.Name,
 			Status:           r.Status,
+			CreatedAt:        r.CreatedAt.Time,
 			ChannelTotal:     r.ChannelTotal,
 			ChannelEnabled:   r.ChannelEnabled,
 			AttemptTotal:     r.AttemptTotal,
@@ -137,8 +148,16 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 				r.LatencySample, r.AttemptSucceeded,
 			),
-			HealthBucket:     opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal),
-			LastSuccessAt:    opsutil.TimeValue(r.LastSuccessAt),
+			HealthBucket:  opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal),
+			LastSuccessAt: opsutil.TimeValue(r.LastSuccessAt),
+			Tokens:        r.TokensTotal,
+			RevenueUSD:    opsutil.NumericString(r.RevenueUsd),
+			CostUSD:       opsutil.NumericString(r.CostUsd),
+			MarginUSD: opsutil.SubtractDecimal(
+				opsutil.NumericString(r.RevenueUsd),
+				opsutil.NumericString(r.CostUsd),
+			),
+			AvgTPS: r.AvgTps,
 		})
 	}
 	return out, total, nil

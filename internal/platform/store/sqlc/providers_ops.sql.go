@@ -321,54 +321,136 @@ func (q *Queries) ProviderOpsPerformanceTimeseries(ctx context.Context, arg Prov
 
 const providersOpsTable = `-- name: ProvidersOpsTable :many
 
+WITH filtered_providers AS (
+    SELECT p.id, p.slug, p.name, p.status, p.created_at
+    FROM providers p
+    WHERE ($5::text IS NULL OR p.status = $5::text)
+      AND ($6::text IS NULL OR p.name ILIKE '%' || $6::text || '%' OR p.slug ILIKE '%' || $6::text || '%')
+),
+attempt_agg AS (
+    SELECT
+        fp.id,
+        fp.slug,
+        fp.name,
+        fp.status,
+        fp.created_at,
+        (SELECT COUNT(*) FROM channels c WHERE c.provider_id = fp.id) AS channel_total,
+        (SELECT COUNT(*) FROM channels c WHERE c.provider_id = fp.id AND c.status = 'enabled') AS channel_enabled,
+        COUNT(a.id) AS attempt_total,
+        COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
+        COUNT(a.id) FILTER (WHERE a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded') AS timeout_total,
+        COUNT(a.id) FILTER (WHERE a.status = 'succeeded' AND a.completed_at IS NOT NULL) AS latency_sample,
+        COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+            THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
+        COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
+            CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+                 THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+        COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+            CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+                 THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
+        COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
+            CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+                 THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+        COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
+            CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+                 THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
+        (MAX(a.completed_at) FILTER (WHERE a.status = 'succeeded'))::timestamptz AS last_success_at
+    FROM filtered_providers fp
+    LEFT JOIN request_attempts a
+        ON a.provider_id = fp.id
+        AND ($7::timestamptz IS NULL OR a.created_at >= $7::timestamptz)
+        AND ($8::timestamptz IS NULL OR a.created_at < $8::timestamptz)
+    GROUP BY fp.id, fp.slug, fp.name, fp.status, fp.created_at
+),
+money_agg AS (
+    SELECT
+        r.final_provider_id AS provider_id,
+        COALESCE(SUM(
+            u.uncached_input_tokens + u.cache_read_input_tokens
+            + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
+            + u.output_tokens_total
+        ), 0)::bigint AS tokens_total,
+        COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
+        COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd
+    FROM request_records r
+    LEFT JOIN usage_records u ON u.request_record_id = r.id
+    LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
+    LEFT JOIN ledger_entries le ON le.request_record_id = r.id
+    WHERE r.final_provider_id IS NOT NULL
+      AND ($7::timestamptz IS NULL OR r.created_at >= $7::timestamptz)
+      AND ($8::timestamptz IS NULL OR r.created_at < $8::timestamptz)
+    GROUP BY r.final_provider_id
+),
+tps_agg AS (
+    SELECT
+        a.provider_id,
+        COALESCE(
+            SUM(u.output_tokens_total)::float8 / NULLIF(SUM(
+                CASE
+                    WHEN a.completed_at IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (a.completed_at - COALESCE(a.response_started_at, a.started_at)))
+                END
+            ), 0),
+            0
+        )::float8 AS avg_tps
+    FROM request_attempts a
+    JOIN usage_records u ON u.request_record_id = a.request_record_id
+    WHERE a.status = 'succeeded'
+      AND ($7::timestamptz IS NULL OR a.created_at >= $7::timestamptz)
+      AND ($8::timestamptz IS NULL OR a.created_at < $8::timestamptz)
+    GROUP BY a.provider_id
+)
 SELECT
-    p.id,
-    p.slug,
-    p.name,
-    p.status,
-    (SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id) AS channel_total,
-    (SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id AND c.status = 'enabled') AS channel_enabled,
-    COUNT(a.id) AS attempt_total,
-    COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
-    COUNT(a.id) FILTER (WHERE a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded') AS timeout_total,
-    COUNT(a.id) FILTER (WHERE a.status = 'succeeded' AND a.completed_at IS NOT NULL) AS latency_sample,
-    COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-        THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
-    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
-        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
-    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
-        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
-    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
-        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
-    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
-        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
-    (MAX(a.completed_at) FILTER (WHERE a.status = 'succeeded'))::timestamptz AS last_success_at
-FROM providers p
-LEFT JOIN request_attempts a
-    ON a.provider_id = p.id
-    AND ($1::timestamptz IS NULL OR a.created_at >= $1::timestamptz)
-    AND ($2::timestamptz IS NULL OR a.created_at < $2::timestamptz)
-WHERE ($3::text IS NULL OR p.status = $3::text)
-  AND ($4::text IS NULL OR p.name ILIKE '%' || $4::text || '%' OR p.slug ILIKE '%' || $4::text || '%')
-GROUP BY p.id, p.slug, p.name, p.status
+    a.id,
+    a.slug,
+    a.name,
+    a.status,
+    a.created_at,
+    a.channel_total,
+    a.channel_enabled,
+    a.attempt_total,
+    a.attempt_succeeded,
+    a.timeout_total,
+    a.latency_sample,
+    a.latency_avg,
+    a.latency_p50,
+    a.latency_p90,
+    a.latency_p95,
+    a.latency_p99,
+    a.last_success_at,
+    COALESCE(m.tokens_total, 0)::bigint AS tokens_total,
+    COALESCE(m.revenue_usd, 0)::numeric AS revenue_usd,
+    COALESCE(m.cost_usd, 0)::numeric AS cost_usd,
+    COALESCE(t.avg_tps, 0)::float8 AS avg_tps
+FROM attempt_agg a
+LEFT JOIN money_agg m ON m.provider_id = a.id
+LEFT JOIN tps_agg t ON t.provider_id = a.id
 ORDER BY
-    (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0)) ASC NULLS LAST,
-    COUNT(a.id) DESC,
-    p.id
-LIMIT $6 OFFSET $5
+  CASE WHEN COALESCE($1::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($2::bool, false) THEN (a.attempt_succeeded::float8 / NULLIF(a.attempt_total, 0)) END DESC NULLS LAST,
+  CASE WHEN COALESCE($1::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($2::bool, false) THEN (a.attempt_succeeded::float8 / NULLIF(a.attempt_total, 0)) END ASC NULLS LAST,
+  CASE WHEN $1::text = 'name' AND COALESCE($2::bool, false) THEN a.name END DESC NULLS LAST,
+  CASE WHEN $1::text = 'name' AND NOT COALESCE($2::bool, false) THEN a.name END ASC NULLS LAST,
+  CASE WHEN $1::text = 'requests' AND COALESCE($2::bool, false) THEN a.attempt_total END DESC NULLS LAST,
+  CASE WHEN $1::text = 'requests' AND NOT COALESCE($2::bool, false) THEN a.attempt_total END ASC NULLS LAST,
+  CASE WHEN $1::text = 'tokens' AND COALESCE($2::bool, false) THEN COALESCE(m.tokens_total, 0) END DESC NULLS LAST,
+  CASE WHEN $1::text = 'tokens' AND NOT COALESCE($2::bool, false) THEN COALESCE(m.tokens_total, 0) END ASC NULLS LAST,
+  CASE WHEN $1::text = 'margin' AND COALESCE($2::bool, false) THEN (COALESCE(m.revenue_usd, 0) - COALESCE(m.cost_usd, 0)) END DESC NULLS LAST,
+  CASE WHEN $1::text = 'margin' AND NOT COALESCE($2::bool, false) THEN (COALESCE(m.revenue_usd, 0) - COALESCE(m.cost_usd, 0)) END ASC NULLS LAST,
+  CASE WHEN $1::text = 'created_at' AND COALESCE($2::bool, false) THEN a.created_at END DESC NULLS LAST,
+  CASE WHEN $1::text = 'created_at' AND NOT COALESCE($2::bool, false) THEN a.created_at END ASC NULLS LAST,
+  a.id
+LIMIT $4 OFFSET $3
 `
 
 type ProvidersOpsTableParams struct {
-	FromTime   pgtype.Timestamptz
-	ToTime     pgtype.Timestamptz
-	Status     pgtype.Text
-	Search     pgtype.Text
+	SortField  pgtype.Text
+	SortDesc   pgtype.Bool
 	PageOffset int32
 	PageLimit  int32
+	Status     pgtype.Text
+	Search     pgtype.Text
+	FromTime   pgtype.Timestamptz
+	ToTime     pgtype.Timestamptz
 }
 
 type ProvidersOpsTableRow struct {
@@ -376,6 +458,7 @@ type ProvidersOpsTableRow struct {
 	Slug             string
 	Name             string
 	Status           string
+	CreatedAt        pgtype.Timestamptz
 	ChannelTotal     int64
 	ChannelEnabled   int64
 	AttemptTotal     int64
@@ -388,6 +471,10 @@ type ProvidersOpsTableRow struct {
 	LatencyP95       float64
 	LatencyP99       float64
 	LastSuccessAt    pgtype.Timestamptz
+	TokensTotal      int64
+	RevenueUsd       pgtype.Numeric
+	CostUsd          pgtype.Numeric
+	AvgTps           float64
 }
 
 // §3.2 服务商聚合视图只读运维聚合。轻聚合：无 12 卡，表 + 4 Tab 抽屉。
@@ -396,12 +483,14 @@ type ProvidersOpsTableRow struct {
 // ProvidersOpsTable 服务商运维主表（分页）：每 provider 渠道数 + attempt 聚合，最需处理优先。
 func (q *Queries) ProvidersOpsTable(ctx context.Context, arg ProvidersOpsTableParams) ([]ProvidersOpsTableRow, error) {
 	rows, err := q.db.Query(ctx, providersOpsTable,
-		arg.FromTime,
-		arg.ToTime,
-		arg.Status,
-		arg.Search,
+		arg.SortField,
+		arg.SortDesc,
 		arg.PageOffset,
 		arg.PageLimit,
+		arg.Status,
+		arg.Search,
+		arg.FromTime,
+		arg.ToTime,
 	)
 	if err != nil {
 		return nil, err
@@ -415,6 +504,7 @@ func (q *Queries) ProvidersOpsTable(ctx context.Context, arg ProvidersOpsTablePa
 			&i.Slug,
 			&i.Name,
 			&i.Status,
+			&i.CreatedAt,
 			&i.ChannelTotal,
 			&i.ChannelEnabled,
 			&i.AttemptTotal,
@@ -427,6 +517,10 @@ func (q *Queries) ProvidersOpsTable(ctx context.Context, arg ProvidersOpsTablePa
 			&i.LatencyP95,
 			&i.LatencyP99,
 			&i.LastSuccessAt,
+			&i.TokensTotal,
+			&i.RevenueUsd,
+			&i.CostUsd,
+			&i.AvgTps,
 		); err != nil {
 			return nil, err
 		}

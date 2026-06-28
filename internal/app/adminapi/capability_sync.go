@@ -4,18 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
 
 	corecap "github.com/ThankCat/unio-api/internal/core/capability"
 	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
+	capsvc "github.com/ThankCat/unio-api/internal/service/admin/capability"
 )
 
 // CapabilitySyncService 定义 adminapi 触发/展示 models.dev 同步所需的最小能力（M5）。
 type CapabilitySyncService interface {
-	ListJobs(ctx context.Context, limit int32) ([]corecap.SyncJob, error)
+	ListJobs(ctx context.Context, params capsvc.ListJobsParams) ([]corecap.SyncJob, int64, error)
 	Trigger(ctx context.Context, dryRun bool) (modelcatalog.Result, error)
 }
 
@@ -51,14 +50,23 @@ type capabilitySyncHandler struct {
 }
 
 func (h *capabilitySyncHandler) listJobs(w http.ResponseWriter, r *http.Request) {
-	var limit int32
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil {
-			limit = int32(n)
-		}
+	page := parsePage(r)
+	sort, err := parseListSort(r, map[string]struct{}{
+		"created_at": {},
+		"status":     {},
+		"source":     {},
+	}, "created_at", true)
+	if err != nil {
+		writeSortError(w, err)
+		return
 	}
-
-	jobs, err := h.service.ListJobs(r.Context(), limit)
+	field, desc := sort.SQLParams()
+	jobs, total, err := h.service.ListJobs(r.Context(), capsvc.ListJobsParams{
+		SortField: field,
+		SortDesc:  desc,
+		Limit:     page.Limit(),
+		Offset:    page.Offset(),
+	})
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -68,7 +76,7 @@ func (h *capabilitySyncHandler) listJobs(w http.ResponseWriter, r *http.Request)
 	for _, job := range jobs {
 		dtos = append(dtos, toSyncJobDTO(job))
 	}
-	writeData(w, http.StatusOK, dtos)
+	writeList(w, http.StatusOK, dtos, page, total)
 }
 
 func (h *capabilitySyncHandler) trigger(w http.ResponseWriter, r *http.Request) {
