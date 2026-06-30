@@ -138,5 +138,25 @@ LEFT JOIN request_records r
     AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
     AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 WHERE k.user_id = sqlc.arg('user_id')
+  AND (sqlc.narg('search')::text IS NULL OR k.name ILIKE '%' || sqlc.narg('search')::text || '%' OR k.key_prefix ILIKE '%' || sqlc.narg('search')::text || '%')
 GROUP BY k.id, k.name, k.key_prefix, k.key_plaintext, k.user_id, k.disabled_at, k.revoked_at, k.expires_at, k.spend_limit, k.spent_total, k.last_used_at, k.route_id, rt.name
-ORDER BY k.id;
+ORDER BY
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'requests') IN ('', 'requests') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'requests') IN ('', 'requests') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'name' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN k.name END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'name' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN k.name END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'spent' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN k.spent_total END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'spent' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN k.spent_total END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'consumption' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE rr.api_key_id = k.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND (sqlc.narg('from_time')::timestamptz IS NULL OR le.created_at >= sqlc.narg('from_time')::timestamptz) AND (sqlc.narg('to_time')::timestamptz IS NULL OR le.created_at < sqlc.narg('to_time')::timestamptz)), 0) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'consumption' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE rr.api_key_id = k.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND (sqlc.narg('from_time')::timestamptz IS NULL OR le.created_at >= sqlc.narg('from_time')::timestamptz) AND (sqlc.narg('to_time')::timestamptz IS NULL OR le.created_at < sqlc.narg('to_time')::timestamptz)), 0) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'last_used' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN k.last_used_at END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'last_used' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN k.last_used_at END ASC NULLS LAST,
+  k.id
+LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
+
+-- name: ApiKeysOpsTableCount :one
+-- ApiKeysOpsTableCount 与 ApiKeysOpsTable 同过滤条件下的 Key 总数。
+SELECT COUNT(*) AS total
+FROM api_keys k
+WHERE k.user_id = sqlc.arg('user_id')
+  AND (sqlc.narg('search')::text IS NULL OR k.name ILIKE '%' || sqlc.narg('search')::text || '%' OR k.key_prefix ILIKE '%' || sqlc.narg('search')::text || '%');

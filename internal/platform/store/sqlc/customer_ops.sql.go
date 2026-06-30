@@ -65,14 +65,32 @@ LEFT JOIN request_records r
     AND ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
     AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
 WHERE k.user_id = $3
+  AND ($4::text IS NULL OR k.name ILIKE '%' || $4::text || '%' OR k.key_prefix ILIKE '%' || $4::text || '%')
 GROUP BY k.id, k.name, k.key_prefix, k.key_plaintext, k.user_id, k.disabled_at, k.revoked_at, k.expires_at, k.spend_limit, k.spent_total, k.last_used_at, k.route_id, rt.name
-ORDER BY k.id
+ORDER BY
+  CASE WHEN COALESCE($5::text, 'requests') IN ('', 'requests') AND COALESCE($6::bool, true) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
+  CASE WHEN COALESCE($5::text, 'requests') IN ('', 'requests') AND NOT COALESCE($6::bool, true) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
+  CASE WHEN $5::text = 'name' AND COALESCE($6::bool, false) THEN k.name END DESC NULLS LAST,
+  CASE WHEN $5::text = 'name' AND NOT COALESCE($6::bool, false) THEN k.name END ASC NULLS LAST,
+  CASE WHEN $5::text = 'spent' AND COALESCE($6::bool, false) THEN k.spent_total END DESC NULLS LAST,
+  CASE WHEN $5::text = 'spent' AND NOT COALESCE($6::bool, false) THEN k.spent_total END ASC NULLS LAST,
+  CASE WHEN $5::text = 'consumption' AND COALESCE($6::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE rr.api_key_id = k.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) END DESC NULLS LAST,
+  CASE WHEN $5::text = 'consumption' AND NOT COALESCE($6::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE rr.api_key_id = k.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) END ASC NULLS LAST,
+  CASE WHEN $5::text = 'last_used' AND COALESCE($6::bool, false) THEN k.last_used_at END DESC NULLS LAST,
+  CASE WHEN $5::text = 'last_used' AND NOT COALESCE($6::bool, false) THEN k.last_used_at END ASC NULLS LAST,
+  k.id
+LIMIT $8 OFFSET $7
 `
 
 type ApiKeysOpsTableParams struct {
-	FromTime pgtype.Timestamptz
-	ToTime   pgtype.Timestamptz
-	UserID   int64
+	FromTime   pgtype.Timestamptz
+	ToTime     pgtype.Timestamptz
+	UserID     int64
+	Search     pgtype.Text
+	SortField  pgtype.Text
+	SortDesc   pgtype.Bool
+	PageOffset int32
+	PageLimit  int32
 }
 
 type ApiKeysOpsTableRow struct {
@@ -96,7 +114,16 @@ type ApiKeysOpsTableRow struct {
 
 // ApiKeysOpsTable 用户范围内 Key 运维表（请求/消费按 api_key 归因）。
 func (q *Queries) ApiKeysOpsTable(ctx context.Context, arg ApiKeysOpsTableParams) ([]ApiKeysOpsTableRow, error) {
-	rows, err := q.db.Query(ctx, apiKeysOpsTable, arg.FromTime, arg.ToTime, arg.UserID)
+	rows, err := q.db.Query(ctx, apiKeysOpsTable,
+		arg.FromTime,
+		arg.ToTime,
+		arg.UserID,
+		arg.Search,
+		arg.SortField,
+		arg.SortDesc,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +157,26 @@ func (q *Queries) ApiKeysOpsTable(ctx context.Context, arg ApiKeysOpsTableParams
 		return nil, err
 	}
 	return items, nil
+}
+
+const apiKeysOpsTableCount = `-- name: ApiKeysOpsTableCount :one
+SELECT COUNT(*) AS total
+FROM api_keys k
+WHERE k.user_id = $1
+  AND ($2::text IS NULL OR k.name ILIKE '%' || $2::text || '%' OR k.key_prefix ILIKE '%' || $2::text || '%')
+`
+
+type ApiKeysOpsTableCountParams struct {
+	UserID int64
+	Search pgtype.Text
+}
+
+// ApiKeysOpsTableCount 与 ApiKeysOpsTable 同过滤条件下的 Key 总数。
+func (q *Queries) ApiKeysOpsTableCount(ctx context.Context, arg ApiKeysOpsTableCountParams) (int64, error) {
+	row := q.db.QueryRow(ctx, apiKeysOpsTableCount, arg.UserID, arg.Search)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
 }
 
 const userOpsDetail = `-- name: UserOpsDetail :one

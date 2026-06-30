@@ -90,12 +90,17 @@ func (h *providerOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 	page := parsePage(r)
 	sort, err := parseListSort(r, map[string]struct{}{
 		"name":         {},
+		"channels":     {},
 		"requests":     {},
 		"success_rate": {},
+		"latency":      {},
+		"tps":          {},
 		"tokens":       {},
 		"margin":       {},
+		"timeout":      {},
 		"created_at":   {},
-	}, "success_rate", false)
+		"status":       {},
+	}, "", false)
 	if err != nil {
 		writeSortError(w, err)
 		return

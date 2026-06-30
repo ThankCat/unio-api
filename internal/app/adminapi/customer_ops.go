@@ -15,7 +15,7 @@ type CustomerOpsService interface {
 	UserDetail(ctx context.Context, userID int64, from, to time.Time) (customerops.UserDetail, error)
 	UserKeys(ctx context.Context, userID int64) ([]customerops.KeyRow, error)
 	ApiKeysSummary(ctx context.Context, userID int64) (customerops.ApiKeysSummary, error)
-	ApiKeysTable(ctx context.Context, userID int64, from, to time.Time) ([]customerops.ApiKeyRow, error)
+	ApiKeysTable(ctx context.Context, p customerops.ApiKeysTableParams) ([]customerops.ApiKeyRow, int64, error)
 }
 
 type customerOpsHandler struct {
@@ -227,7 +227,29 @@ func (h *customerOpsHandler) apiKeysTable(w http.ResponseWriter, r *http.Request
 		writeServiceError(w, err)
 		return
 	}
-	rows, err := h.service.ApiKeysTable(r.Context(), id, from, to)
+	page := parsePage(r)
+	sort, err := parseListSort(r, map[string]struct{}{
+		"name":        {},
+		"requests":    {},
+		"spent":       {},
+		"consumption": {},
+		"last_used":   {},
+	}, "requests", true)
+	if err != nil {
+		writeSortError(w, err)
+		return
+	}
+	field, desc := sort.SQLParams()
+	rows, total, err := h.service.ApiKeysTable(r.Context(), customerops.ApiKeysTableParams{
+		UserID:    id,
+		From:      from,
+		To:        to,
+		Search:    queryString(r, "search"),
+		SortField: field,
+		SortDesc:  desc,
+		Limit:     page.Limit(),
+		Offset:    page.Offset(),
+	})
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -241,5 +263,5 @@ func (h *customerOpsHandler) apiKeysTable(w http.ResponseWriter, r *http.Request
 			ConsumptionUSD: k.ConsumptionUSD, LastUsedAt: rfc3339Ptr(k.LastUsedAt), ExpiresAt: rfc3339Ptr(k.ExpiresAt),
 		})
 	}
-	writeData(w, http.StatusOK, out)
+	writeList(w, http.StatusOK, out, page, total)
 }

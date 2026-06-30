@@ -214,6 +214,8 @@ func positiveOrNil(value *int64) *int64 {
 }
 
 // decimalOrNil 把 json.Number 价格字面量转成十进制字符串，非法/空/负值返回 nil。
+// 价格基线仅展示（绝不用于计费），统一四舍五入到三位小数并去尾零后入库，
+// 使目录成为「三位小数」唯一真源——采纳/追更刷新/展示均由此继承一致精度。
 func decimalOrNil(number json.Number) *string {
 	literal := strings.TrimSpace(number.String())
 	if literal == "" {
@@ -223,7 +225,16 @@ func decimalOrNil(number json.Number) *string {
 	if err != nil || value < 0 {
 		return nil
 	}
-	return &literal
+	rounded := trimTrailingZeros(strconv.FormatFloat(value, 'f', 3, 64))
+	return &rounded
+}
+
+// trimTrailingZeros 去掉十进制字符串多余的尾零："2.500" → "2.5"，"15.000" → "15"。
+func trimTrailingZeros(s string) string {
+	if !strings.Contains(s, ".") {
+		return s
+	}
+	return strings.TrimRight(strings.TrimRight(s, "0"), ".")
 }
 
 func firstNonEmpty(values ...string) string {

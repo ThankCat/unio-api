@@ -20,6 +20,7 @@ type Store interface {
 	UserOpsKeys(ctx context.Context, userID int64) ([]sqlc.UserOpsKeysRow, error)
 	ApiKeysOpsSummary(ctx context.Context, userID int64) (sqlc.ApiKeysOpsSummaryRow, error)
 	ApiKeysOpsTable(ctx context.Context, arg sqlc.ApiKeysOpsTableParams) ([]sqlc.ApiKeysOpsTableRow, error)
+	ApiKeysOpsTableCount(ctx context.Context, arg sqlc.ApiKeysOpsTableCountParams) (int64, error)
 }
 
 // Service 提供客户运维只读聚合。
@@ -217,6 +218,18 @@ type ApiKeyRow struct {
 	ExpiresAt      *time.Time
 }
 
+// ApiKeysTableParams 用户范围内 API Key 运维主表入参（分页 / 排序 / 搜索均走 DB）。
+type ApiKeysTableParams struct {
+	UserID    int64
+	From      time.Time
+	To        time.Time
+	Search    string
+	SortField string
+	SortDesc  bool
+	Limit     int32
+	Offset    int32
+}
+
 func (s *Service) ApiKeysSummary(ctx context.Context, userID int64) (ApiKeysSummary, error) {
 	r, err := s.store.ApiKeysOpsSummary(ctx, userID)
 	if err != nil {
@@ -225,10 +238,26 @@ func (s *Service) ApiKeysSummary(ctx context.Context, userID int64) (ApiKeysSumm
 	return ApiKeysSummary{KeyTotal: r.KeyTotal, KeyEnabled: r.KeyEnabled, SpendCapped: r.SpendCapped}, nil
 }
 
-func (s *Service) ApiKeysTable(ctx context.Context, userID int64, from, to time.Time) ([]ApiKeyRow, error) {
-	rows, err := s.store.ApiKeysOpsTable(ctx, sqlc.ApiKeysOpsTableParams{UserID: userID, FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
+func (s *Service) ApiKeysTable(ctx context.Context, p ApiKeysTableParams) ([]ApiKeyRow, int64, error) {
+	rows, err := s.store.ApiKeysOpsTable(ctx, sqlc.ApiKeysOpsTableParams{
+		UserID:     p.UserID,
+		FromTime:   opsutil.TsNarg(p.From),
+		ToTime:     opsutil.TsNarg(p.To),
+		Search:     opsutil.TextNarg(p.Search),
+		SortField:  opsutil.TextNarg(p.SortField),
+		SortDesc:   opsutil.BoolNarg(p.SortDesc),
+		PageLimit:  p.Limit,
+		PageOffset: p.Offset,
+	})
 	if err != nil {
-		return nil, opsutil.StoreFailed(err, "api keys ops table")
+		return nil, 0, opsutil.StoreFailed(err, "api keys ops table")
+	}
+	total, err := s.store.ApiKeysOpsTableCount(ctx, sqlc.ApiKeysOpsTableCountParams{
+		UserID: p.UserID,
+		Search: opsutil.TextNarg(p.Search),
+	})
+	if err != nil {
+		return nil, 0, opsutil.StoreFailed(err, "api keys ops table count")
 	}
 	now := time.Now()
 	out := make([]ApiKeyRow, 0, len(rows))
@@ -253,7 +282,7 @@ func (s *Service) ApiKeysTable(ctx context.Context, userID int64, from, to time.
 			ExpiresAt:      opsutil.TimeValue(k.ExpiresAt),
 		})
 	}
-	return out, nil
+	return out, total, nil
 }
 
 func keyStatus(disabledAt, revokedAt, expiresAt pgtype.Timestamptz, now time.Time) string {

@@ -426,8 +426,8 @@ FROM attempt_agg a
 LEFT JOIN money_agg m ON m.provider_id = a.id
 LEFT JOIN tps_agg t ON t.provider_id = a.id
 ORDER BY
-  CASE WHEN COALESCE($1::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($2::bool, false) THEN (a.attempt_succeeded::float8 / NULLIF(a.attempt_total, 0)) END DESC NULLS LAST,
-  CASE WHEN COALESCE($1::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($2::bool, false) THEN (a.attempt_succeeded::float8 / NULLIF(a.attempt_total, 0)) END ASC NULLS LAST,
+  CASE WHEN $1::text = 'success_rate' AND COALESCE($2::bool, false) THEN (a.attempt_succeeded::float8 / NULLIF(a.attempt_total, 0)) END DESC NULLS LAST,
+  CASE WHEN $1::text = 'success_rate' AND NOT COALESCE($2::bool, false) THEN (a.attempt_succeeded::float8 / NULLIF(a.attempt_total, 0)) END ASC NULLS LAST,
   CASE WHEN $1::text = 'name' AND COALESCE($2::bool, false) THEN a.name END DESC NULLS LAST,
   CASE WHEN $1::text = 'name' AND NOT COALESCE($2::bool, false) THEN a.name END ASC NULLS LAST,
   CASE WHEN $1::text = 'requests' AND COALESCE($2::bool, false) THEN a.attempt_total END DESC NULLS LAST,
@@ -438,6 +438,16 @@ ORDER BY
   CASE WHEN $1::text = 'margin' AND NOT COALESCE($2::bool, false) THEN (COALESCE(m.revenue_usd, 0) - COALESCE(m.cost_usd, 0)) END ASC NULLS LAST,
   CASE WHEN $1::text = 'created_at' AND COALESCE($2::bool, false) THEN a.created_at END DESC NULLS LAST,
   CASE WHEN $1::text = 'created_at' AND NOT COALESCE($2::bool, false) THEN a.created_at END ASC NULLS LAST,
+  CASE WHEN $1::text = 'channels' AND COALESCE($2::bool, false) THEN a.channel_enabled END DESC NULLS LAST,
+  CASE WHEN $1::text = 'channels' AND NOT COALESCE($2::bool, false) THEN a.channel_enabled END ASC NULLS LAST,
+  CASE WHEN $1::text = 'latency' AND COALESCE($2::bool, false) THEN a.latency_avg END DESC NULLS LAST,
+  CASE WHEN $1::text = 'latency' AND NOT COALESCE($2::bool, false) THEN a.latency_avg END ASC NULLS LAST,
+  CASE WHEN $1::text = 'tps' AND COALESCE($2::bool, false) THEN COALESCE(t.avg_tps, 0) END DESC NULLS LAST,
+  CASE WHEN $1::text = 'tps' AND NOT COALESCE($2::bool, false) THEN COALESCE(t.avg_tps, 0) END ASC NULLS LAST,
+  CASE WHEN $1::text = 'timeout' AND COALESCE($2::bool, false) THEN a.timeout_total END DESC NULLS LAST,
+  CASE WHEN $1::text = 'timeout' AND NOT COALESCE($2::bool, false) THEN a.timeout_total END ASC NULLS LAST,
+  CASE WHEN $1::text = 'status' AND COALESCE($2::bool, false) THEN a.status END DESC NULLS LAST,
+  CASE WHEN $1::text = 'status' AND NOT COALESCE($2::bool, false) THEN a.status END ASC NULLS LAST,
   a.id
 LIMIT $4 OFFSET $3
 `

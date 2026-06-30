@@ -173,6 +173,10 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 		"name":         {},
 		"requests":     {},
 		"success_rate": {},
+		"latency":      {},
+		"timeout":      {},
+		"bound_models": {},
+		"last_success": {},
 		"status":       {},
 		"created_at":   {},
 	}, "success_rate", false)

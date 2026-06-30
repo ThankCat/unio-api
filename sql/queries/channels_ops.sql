@@ -166,6 +166,14 @@ ORDER BY
   CASE WHEN sqlc.narg('sort_field')::text = 'status' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.status END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.created_at END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.created_at END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'latency' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'latency' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'timeout' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(a.id) FILTER (WHERE a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded') END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'timeout' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(a.id) FILTER (WHERE a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded') END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'bound_models' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'bound_models' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'last_success' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN MAX(a.completed_at) FILTER (WHERE a.status = 'succeeded') END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'last_success' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN MAX(a.completed_at) FILTER (WHERE a.status = 'succeeded') END ASC NULLS LAST,
   c.id
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 

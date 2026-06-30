@@ -14,10 +14,12 @@ type Sort struct {
 }
 
 // ParseSort 从 query 解析 sort；field 必须在 allowed 内，否则返回错误。
-// defaultField 在 sort 缺省或非法时回退（须在 allowed 内）。
+// defaultField 在 sort 缺省时回退；空串表示不排序（须在 allowed 内或为空）。
 func ParseSort(r *http.Request, allowed map[string]struct{}, defaultField string, defaultDesc bool) (Sort, error) {
-	if _, ok := allowed[defaultField]; !ok {
-		return Sort{}, fmt.Errorf("listquery: invalid defaultField %q", defaultField)
+	if defaultField != "" {
+		if _, ok := allowed[defaultField]; !ok {
+			return Sort{}, fmt.Errorf("listquery: invalid defaultField %q", defaultField)
+		}
 	}
 	raw := strings.TrimSpace(r.URL.Query().Get("sort"))
 	if raw == "" {

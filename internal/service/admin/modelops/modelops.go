@@ -73,6 +73,14 @@ type Row struct {
 	RevenueUSD        string
 	MarginUSD         string
 	MarginRate        float64
+	// 基准售价（DEC-026 model_prices 当前生效行，每 1M tokens）；无基准价时全部为 nil。
+	BaseCurrency               *string
+	BaseUncachedInputPrice     *string
+	BaseCacheReadInputPrice    *string
+	BaseCacheWrite5mInputPrice *string
+	BaseCacheWrite1hInputPrice *string
+	BaseOutputPrice            *string
+	BaseReasoningOutputPrice   *string
 }
 
 // Detail 是抽屉概览。
@@ -207,6 +215,11 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 		revenue := opsutil.NumericString(r.RevenueUsd)
 		cost := opsutil.NumericString(r.CostUsd)
 		marginAmt := opsutil.SubtractDecimal(revenue, cost)
+		// base_currency 经 CASE 包裹由 sqlc 推断为 interface{}（可空），命中基准价时为 string（mirror LatencyMs 断言模式）。
+		var baseCurrency *string
+		if v, ok := r.BaseCurrency.(string); ok {
+			baseCurrency = &v
+		}
 		out = append(out, Row{
 			ID:                r.ID,
 			ModelID:           r.ModelID,
@@ -225,9 +238,16 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 				r.LatencySample, r.RequestSucceeded,
 			),
-			RevenueUSD: revenue,
-			MarginUSD:  marginAmt,
-			MarginRate: opsutil.Ratio(marginAmt, revenue),
+			RevenueUSD:                 revenue,
+			MarginUSD:                  marginAmt,
+			MarginRate:                 opsutil.Ratio(marginAmt, revenue),
+			BaseCurrency:               baseCurrency,
+			BaseUncachedInputPrice:     opsutil.NumericStringPtr(r.BaseUncachedInputPrice),
+			BaseCacheReadInputPrice:    opsutil.NumericStringPtr(r.BaseCacheReadInputPrice),
+			BaseCacheWrite5mInputPrice: opsutil.NumericStringPtr(r.BaseCacheWrite5mInputPrice),
+			BaseCacheWrite1hInputPrice: opsutil.NumericStringPtr(r.BaseCacheWrite1hInputPrice),
+			BaseOutputPrice:            opsutil.NumericStringPtr(r.BaseOutputPrice),
+			BaseReasoningOutputPrice:   opsutil.NumericStringPtr(r.BaseReasoningOutputPrice),
 		})
 	}
 	return out, total, nil

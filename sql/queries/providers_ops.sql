@@ -109,8 +109,8 @@ FROM attempt_agg a
 LEFT JOIN money_agg m ON m.provider_id = a.id
 LEFT JOIN tps_agg t ON t.provider_id = a.id
 ORDER BY
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (a.attempt_succeeded::float8 / NULLIF(a.attempt_total, 0)) END DESC NULLS LAST,
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (a.attempt_succeeded::float8 / NULLIF(a.attempt_total, 0)) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'success_rate' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (a.attempt_succeeded::float8 / NULLIF(a.attempt_total, 0)) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'success_rate' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (a.attempt_succeeded::float8 / NULLIF(a.attempt_total, 0)) END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'name' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN a.name END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'name' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN a.name END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN a.attempt_total END DESC NULLS LAST,
@@ -121,6 +121,16 @@ ORDER BY
   CASE WHEN sqlc.narg('sort_field')::text = 'margin' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COALESCE(m.revenue_usd, 0) - COALESCE(m.cost_usd, 0)) END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN a.created_at END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN a.created_at END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'channels' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN a.channel_enabled END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'channels' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN a.channel_enabled END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'latency' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN a.latency_avg END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'latency' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN a.latency_avg END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'tps' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(t.avg_tps, 0) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'tps' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(t.avg_tps, 0) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'timeout' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN a.timeout_total END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'timeout' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN a.timeout_total END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN a.status END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN a.status END ASC NULLS LAST,
   a.id
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 

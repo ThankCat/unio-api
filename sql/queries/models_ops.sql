@@ -127,15 +127,40 @@ SELECT
         WHERE cs.model_id = m.id AND cs.currency = 'USD'
           AND (sqlc.narg('from_time')::timestamptz IS NULL OR cs.created_at >= sqlc.narg('from_time')::timestamptz)
           AND (sqlc.narg('to_time')::timestamptz IS NULL OR cs.created_at < sqlc.narg('to_time')::timestamptz)
-    ), 0)::numeric AS cost_usd
+    ), 0)::numeric AS cost_usd,
+    -- 基准售价（DEC-026 model_prices 当前生效行）：客户售价 = 基准 × 线路倍率；无基准时各列为 NULL（前端显示「缺价」）。
+    -- CASE 包裹让 sqlc 把 base_currency 推断为可空（pgtype.Text）：LATERAL 无命中行时该列为 NULL，避免扫描进 string 报错。
+    CASE WHEN base.currency IS NOT NULL THEN base.currency END AS base_currency,
+    base.uncached_input_price AS base_uncached_input_price,
+    base.cache_read_input_price AS base_cache_read_input_price,
+    base.cache_write_5m_input_price AS base_cache_write_5m_input_price,
+    base.cache_write_1h_input_price AS base_cache_write_1h_input_price,
+    base.output_price AS base_output_price,
+    base.reasoning_output_price AS base_reasoning_output_price
 FROM models m
 LEFT JOIN request_records r
     ON r.requested_model_id = m.model_id
     AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
     AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
+LEFT JOIN LATERAL (
+    -- base: 模型当前生效的基准售价（mirror FindRouteCandidates 的 base LATERAL）；LEFT 保证无基准价的模型仍出现在列表。
+    SELECT mp.currency, mp.uncached_input_price, mp.cache_read_input_price,
+        mp.cache_write_5m_input_price, mp.cache_write_1h_input_price,
+        mp.output_price, mp.reasoning_output_price
+    FROM model_prices mp
+    WHERE mp.model_id = m.id
+      AND mp.status = 'enabled'
+      AND mp.effective_from <= now()
+      AND (mp.effective_to IS NULL OR mp.effective_to > now())
+    ORDER BY mp.effective_from DESC, mp.id DESC
+    LIMIT 1
+) base ON TRUE
 WHERE (sqlc.narg('status')::text IS NULL OR m.status = sqlc.narg('status')::text)
   AND (sqlc.narg('search')::text IS NULL OR m.model_id ILIKE '%' || sqlc.narg('search')::text || '%' OR m.display_name ILIKE '%' || sqlc.narg('search')::text || '%')
-GROUP BY m.id, m.model_id, m.display_name, m.owned_by, m.status, m.created_at
+GROUP BY m.id, m.model_id, m.display_name, m.owned_by, m.status, m.created_at,
+    base.currency, base.uncached_input_price, base.cache_read_input_price,
+    base.cache_write_5m_input_price, base.cache_write_1h_input_price,
+    base.output_price, base.reasoning_output_price
 ORDER BY
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END DESC NULLS LAST,
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END ASC NULLS LAST,

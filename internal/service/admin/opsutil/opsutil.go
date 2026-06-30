@@ -131,6 +131,15 @@ func NumericString(n pgtype.Numeric) string {
 	return trimDecimalString(formatted)
 }
 
+// NumericStringPtr 把可空 NUMERIC 精确格式化为十进制字符串指针；NULL/NaN/Inf → nil（区别于 NumericString 的 "0"）。
+func NumericStringPtr(n pgtype.Numeric) *string {
+	if !n.Valid || n.NaN || n.InfinityModifier != pgtype.Finite || n.Int == nil {
+		return nil
+	}
+	s := NumericString(n)
+	return &s
+}
+
 // SubtractDecimal 用 big.Rat 精确相减两个十进制字符串，保留 10 位小数后去尾零。
 func SubtractDecimal(a, b string) string {
 	ra, ok := new(big.Rat).SetString(a)
