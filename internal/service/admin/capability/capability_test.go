@@ -25,7 +25,7 @@ type fakeStore struct {
 
 	unknownKeys map[core.Key]struct{}
 
-	syncJobs      []core.SyncJob
+	syncJobs       []core.SyncJob
 	syncJobsParams sqlc.ListSyncJobsParams
 }
 

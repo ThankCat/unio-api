@@ -7,7 +7,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 )
 
@@ -71,27 +70,26 @@ func TestChannelCRUDQueries(t *testing.T) {
 	suffix := time.Now().UnixNano()
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("admin-chan-prov-%d", suffix), "enabled")
 
-	encrypted, err := credential.EncryptFixedTestCredential("sk-admin-create")
-	if err != nil {
-		t.Fatalf("encrypt credential: %v", err)
-	}
-
 	created, err := queries.CreateChannel(ctx, sqlc.CreateChannelParams{
-		ProviderID:          providerID,
-		Name:                "primary",
-		Protocol:            "openai",
-		AdapterKey:          "openai",
-		BaseUrl:             "https://api.example.test/v1",
-		CredentialEncrypted: encrypted,
-		Status:              "enabled",
-		Priority:            10,
-		TimeoutMs:           pgtype.Int4{Int32: 15000, Valid: true},
+		ProviderID: providerID,
+		Name:       "primary",
+		Protocol:   "openai",
+		AdapterKey: "openai",
+		BaseUrl:    "https://api.example.test/v1",
+		Credential: "sk-admin-create",
+		Status:     "enabled",
+		Priority:   10,
+		TimeoutMs:  pgtype.Int4{Int32: 15000, Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("create channel: %v", err)
 	}
 	if created.ID == 0 || created.ProviderID != providerID || !created.TimeoutMs.Valid || created.TimeoutMs.Int32 != 15000 {
 		t.Fatalf("unexpected created channel: %+v", created)
+	}
+	// 渠道凭据明文存储（产品决策）：可回读。
+	if created.Credential != "sk-admin-create" {
+		t.Fatalf("expected plaintext credential persisted, got %q", created.Credential)
 	}
 
 	got, err := queries.GetChannel(ctx, created.ID)
@@ -100,6 +98,9 @@ func TestChannelCRUDQueries(t *testing.T) {
 	}
 	if got.ID != created.ID || got.Protocol != "openai" || got.AdapterKey != "openai" {
 		t.Fatalf("unexpected channel read: %+v", got)
+	}
+	if got.Credential != "sk-admin-create" {
+		t.Fatalf("expected plaintext credential readable, got %q", got.Credential)
 	}
 
 	updated, err := queries.UpdateChannel(ctx, sqlc.UpdateChannelParams{
@@ -117,12 +118,8 @@ func TestChannelCRUDQueries(t *testing.T) {
 		t.Fatalf("update must not change protocol/adapter_key: %+v", updated)
 	}
 
-	rotated, err := credential.EncryptFixedTestCredential("sk-admin-rotated")
-	if err != nil {
-		t.Fatalf("encrypt rotated credential: %v", err)
-	}
 	affected, err := queries.UpdateChannelCredential(ctx, sqlc.UpdateChannelCredentialParams{
-		ID: created.ID, CredentialEncrypted: rotated,
+		ID: created.ID, Credential: "sk-admin-rotated",
 	})
 	if err != nil {
 		t.Fatalf("rotate credential: %v", err)
@@ -132,7 +129,7 @@ func TestChannelCRUDQueries(t *testing.T) {
 	}
 
 	missing, err := queries.UpdateChannelCredential(ctx, sqlc.UpdateChannelCredentialParams{
-		ID: -1, CredentialEncrypted: rotated,
+		ID: -1, Credential: "sk-admin-rotated",
 	})
 	if err != nil {
 		t.Fatalf("rotate missing credential: %v", err)

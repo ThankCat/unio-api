@@ -289,7 +289,7 @@ ORDER BY attempt_total DESC, m.model_id;
 
 -- name: ChannelOpsRoutes :many
 -- ChannelOpsRoutes 引用该渠道的显式线路池（抽屉线路 Tab）。
-SELECT rt.id, rt.name, rt.mode, rt.pool_kind, rt.status, rt.is_builtin
+SELECT rt.id, rt.name, rt.mode, rt.pool_kind, rt.status
 FROM route_channels rc
 JOIN routes rt ON rt.id = rc.route_id
 WHERE rc.channel_id = sqlc.arg('channel_id')

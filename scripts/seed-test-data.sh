@@ -86,6 +86,7 @@ pg --quiet --no-psqlrc \
     -v ON_ERROR_STOP=1 \
     -v key_prefix="${KEY_PREFIX}" \
     -v key_hash="${KEY_HASH}" \
+    -v key_plaintext="${API_KEY}" \
     < "${SQL_FILE}"
 
 # --- 概览 ----------------------------------------------------------------------
@@ -94,31 +95,32 @@ pg --quiet --no-psqlrc -P pager=off <<'SQL'
 SELECT 'provider' AS kind, slug AS name, status FROM providers WHERE slug='openai'
 UNION ALL SELECT 'channel', name, status FROM channels WHERE name='OpenAI 官方渠道'
 UNION ALL SELECT 'model', model_id, status FROM models WHERE model_id IN ('gpt-5.5','gpt-5.4','gpt-5.4-mini')
-UNION ALL SELECT 'route', name, status FROM routes WHERE name IN ('经济','稳定')
+UNION ALL SELECT 'route', name, status FROM routes WHERE name = 'Dev Cheapest'
 UNION ALL SELECT 'user', email, '' FROM users WHERE lower(email)=lower('dev@unio.local')
-UNION ALL SELECT 'project', name, '' FROM projects WHERE name='Dev Project'
 ORDER BY kind, name;
 
+-- DEC-026：渠道只录成本（channel_prices）；模型基准售价在 model_prices，客户售价 = 基准 × 线路倍率。
 SELECT m.model_id,
        cp.currency,
-       cp.uncached_input_cost  AS in_cost,  cp.uncached_input_price AS in_sale,
-       cp.cache_read_input_cost AS cache_cost, cp.cache_read_input_price AS cache_sale,
-       cp.output_cost AS out_cost, cp.output_price AS out_sale,
-       (cp.effective_to IS NULL) AS never_expires
+       cp.uncached_input_cost AS in_cost,
+       cp.output_cost AS out_cost,
+       mp.uncached_input_price AS in_base,
+       mp.output_price AS out_base,
+       (cp.effective_to IS NULL) AS cost_never_expires
 FROM channel_prices cp
 JOIN models m ON m.id = cp.model_id
 JOIN channels c ON c.id = cp.channel_id
+LEFT JOIN model_prices mp ON mp.model_id = m.id AND mp.status = 'enabled'
 WHERE c.name='OpenAI 官方渠道'
 ORDER BY m.model_id;
 
 SELECT u.email, ub.currency, ub.balance,
-       pr.name AS project, dr.name AS default_route,
+       kr.name AS key_route,
        ak.name AS api_key_name, ak.key_prefix
 FROM users u
 JOIN user_balances ub ON ub.user_id=u.id
-JOIN projects pr ON pr.user_id=u.id AND pr.name='Dev Project'
-LEFT JOIN routes dr ON dr.id=pr.default_route_id
-JOIN api_keys ak ON ak.project_id=pr.id AND ak.name='seed test key'
+JOIN api_keys ak ON ak.user_id=u.id AND ak.name='seed test key'
+LEFT JOIN routes kr ON kr.id=ak.route_id
 WHERE lower(u.email)=lower('dev@unio.local');
 SQL
 
@@ -126,7 +128,7 @@ SQL
 cat <<EOF
 
 ============================================================
-  测试 API Key（请妥善保存，明文仅此一次）：
+  测试 API Key（已明文留存，可在 Admin 多次复制查看）：
 
       ${API_KEY}
 

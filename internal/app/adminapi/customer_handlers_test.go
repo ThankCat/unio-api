@@ -25,22 +25,6 @@ func (f *fakeUserService) Get(context.Context, int64) (customer.UserDetail, erro
 	return f.detail, f.getErr
 }
 
-type fakeProjectService struct {
-	list []customer.Project
-}
-
-func (f *fakeProjectService) List(context.Context, customer.ProjectListParams) ([]customer.Project, int64, error) {
-	return f.list, int64(len(f.list)), nil
-}
-
-func (f *fakeProjectService) Get(context.Context, int64) (customer.Project, error) {
-	return customer.Project{ID: 1, UserID: 10, Name: "ws"}, nil
-}
-
-func (f *fakeProjectService) SetDefaultRoute(_ context.Context, id int64, routeID *int64) (customer.Project, error) {
-	return customer.Project{ID: id, UserID: 10, Name: "ws", DefaultRouteID: routeID}, nil
-}
-
 type fakeAPIKeyService struct {
 	list    []customer.APIKey
 	created customer.CreatedAPIKey
@@ -133,27 +117,17 @@ func TestCreateAdjustmentInsufficientBalanceReturns422(t *testing.T) {
 	}
 }
 
-func TestListProjectsReturns200(t *testing.T) {
-	handler := newQueryRouter(t, adminapi.RouterDeps{ProjectService: &fakeProjectService{
-		list: []customer.Project{{ID: 1, UserID: 10, Name: "ws"}},
-	}})
-
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/projects?user_id=10", "", true)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
-	}
-}
-
-func TestCreateAPIKeyReturnsPlaintextOnce(t *testing.T) {
+func TestCreateAPIKeyReturnsPlaintext(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{APIKeyService: &fakeAPIKeyService{
 		created: customer.CreatedAPIKey{
-			APIKey:    customer.APIKey{ID: 5, ProjectID: 100, Name: "ci", KeyPrefix: "unio_sk_abc", Status: "active", SpentTotal: "0"},
+			APIKey:    customer.APIKey{ID: 5, UserID: 100, Name: "ci", KeyPrefix: "unio_sk_abc", Status: "active", SpentTotal: "0"},
 			Plaintext: "unio_sk_secretsecret",
 		},
 	}})
 
-	body := `{"name":"ci"}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/projects/100/api-keys", body, true)
+	// 线路必填：创建请求必须带 route_id（fake service 不校验，这里以真实契约填写）。
+	body := `{"name":"ci","route_id":3}`
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/users/100/api-keys", body, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d (%s)", rec.Code, rec.Body.String())
 	}

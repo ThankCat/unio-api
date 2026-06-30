@@ -31,13 +31,10 @@ var (
 type APIKeyPrincipal struct {
 	APIKeyID  int64
 	UserID    int64
-	ProjectID int64
 	KeyPrefix string
 
-	// RouteID 是 Key 绑定的线路 ID（阶段 15）；nil 表示未绑定，回落项目默认/内置经济。
+	// RouteID 是 Key 绑定的线路 ID（线路必填，恒有值）；运行时据此解析线路，无默认回落。
 	RouteID *int64
-	// ProjectDefaultRouteID 是所属项目的默认线路 ID；nil 表示项目未设默认线路。
-	ProjectDefaultRouteID *int64
 
 	// RPMLimit/TPMLimit/RPDLimit 是本把 Key 的令牌级限流上限（P2-8）：
 	// nil 表示「继承全局默认」，0 表示「显式不限」，>0 表示具体上限（每分钟请求/每分钟 token/每日请求）。
@@ -143,26 +140,17 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 		)
 	}
 
+	// route_id 在 DB 层 NOT NULL（线路必填），恒有值；取地址供下游统一以 *int64 消费。
+	routeID := key.RouteID
 	return &APIKeyPrincipal{
-		APIKeyID:              key.ID,
-		UserID:                key.UserID,
-		ProjectID:             key.ProjectID,
-		KeyPrefix:             key.KeyPrefix,
-		RouteID:               int8Ptr(key.RouteID),
-		ProjectDefaultRouteID: int8Ptr(key.DefaultRouteID),
-		RPMLimit:              int4Ptr(key.RpmLimit),
-		TPMLimit:              int4Ptr(key.TpmLimit),
-		RPDLimit:              int4Ptr(key.RpdLimit),
+		APIKeyID:  key.ID,
+		UserID:    key.UserID,
+		KeyPrefix: key.KeyPrefix,
+		RouteID:   &routeID,
+		RPMLimit:  int4Ptr(key.RpmLimit),
+		TPMLimit:  int4Ptr(key.TpmLimit),
+		RPDLimit:  int4Ptr(key.RpdLimit),
 	}, nil
-}
-
-// int8Ptr 把可空 pgtype.Int8 转成 *int64（线路绑定可空）。
-func int8Ptr(v pgtype.Int8) *int64 {
-	if !v.Valid {
-		return nil
-	}
-	out := v.Int64
-	return &out
 }
 
 // int4Ptr 把可空 pgtype.Int4 转成 *int64（限流上限可空，nil=继承全局默认）。

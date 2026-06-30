@@ -12,7 +12,7 @@ import (
 )
 
 const routeOpsBoundKeys = `-- name: RouteOpsBoundKeys :many
-SELECT k.id, k.name, k.project_id, k.disabled_at, k.revoked_at, k.expires_at
+SELECT k.id, k.name, k.user_id, k.disabled_at, k.revoked_at, k.expires_at
 FROM api_keys k
 WHERE k.route_id = $1
 ORDER BY k.id
@@ -22,14 +22,14 @@ LIMIT 200
 type RouteOpsBoundKeysRow struct {
 	ID         int64
 	Name       string
-	ProjectID  int64
+	UserID     int64
 	DisabledAt pgtype.Timestamptz
 	RevokedAt  pgtype.Timestamptz
 	ExpiresAt  pgtype.Timestamptz
 }
 
 // RouteOpsBoundKeys 绑定本线路的 API Key（抽屉绑定 Tab，P0）。状态由时间戳派生。
-func (q *Queries) RouteOpsBoundKeys(ctx context.Context, routeID pgtype.Int8) ([]RouteOpsBoundKeysRow, error) {
+func (q *Queries) RouteOpsBoundKeys(ctx context.Context, routeID int64) ([]RouteOpsBoundKeysRow, error) {
 	rows, err := q.db.Query(ctx, routeOpsBoundKeys, routeID)
 	if err != nil {
 		return nil, err
@@ -41,7 +41,7 @@ func (q *Queries) RouteOpsBoundKeys(ctx context.Context, routeID pgtype.Int8) ([
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
-			&i.ProjectID,
+			&i.UserID,
 			&i.DisabledAt,
 			&i.RevokedAt,
 			&i.ExpiresAt,
@@ -56,31 +56,32 @@ func (q *Queries) RouteOpsBoundKeys(ctx context.Context, routeID pgtype.Int8) ([
 	return items, nil
 }
 
-const routeOpsBoundProjects = `-- name: RouteOpsBoundProjects :many
-SELECT pj.id, pj.name, pj.user_id
-FROM projects pj
-WHERE pj.default_route_id = $1
-ORDER BY pj.id
+const routeOpsBoundUsers = `-- name: RouteOpsBoundUsers :many
+SELECT DISTINCT u.id, u.email, u.display_name
+FROM users u
+JOIN api_keys k ON k.user_id = u.id
+WHERE k.route_id = $1
+ORDER BY u.id
 LIMIT 200
 `
 
-type RouteOpsBoundProjectsRow struct {
-	ID     int64
-	Name   string
-	UserID int64
+type RouteOpsBoundUsersRow struct {
+	ID          int64
+	Email       string
+	DisplayName string
 }
 
-// RouteOpsBoundProjects 默认线路指向本线路的项目（抽屉绑定 Tab，P0）。
-func (q *Queries) RouteOpsBoundProjects(ctx context.Context, routeID pgtype.Int8) ([]RouteOpsBoundProjectsRow, error) {
-	rows, err := q.db.Query(ctx, routeOpsBoundProjects, routeID)
+// RouteOpsBoundUsers 拥有「绑定本线路的 API Key」的用户（去重，抽屉绑定 Tab，P0）。
+func (q *Queries) RouteOpsBoundUsers(ctx context.Context, routeID int64) ([]RouteOpsBoundUsersRow, error) {
+	rows, err := q.db.Query(ctx, routeOpsBoundUsers, routeID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []RouteOpsBoundProjectsRow
+	var items []RouteOpsBoundUsersRow
 	for rows.Next() {
-		var i RouteOpsBoundProjectsRow
-		if err := rows.Scan(&i.ID, &i.Name, &i.UserID); err != nil {
+		var i RouteOpsBoundUsersRow
+		if err := rows.Scan(&i.ID, &i.Email, &i.DisplayName); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -150,8 +151,7 @@ WITH attributed AS (
         (SELECT COUNT(*) FROM request_attempts a WHERE a.request_record_id = r.id) AS attempt_count
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    JOIN projects p ON p.id = r.project_id
-    WHERE COALESCE(ak.route_id, p.default_route_id) = $1
+    WHERE ak.route_id = $1
       AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
       AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 )
@@ -170,7 +170,7 @@ FROM attributed
 `
 
 type RouteOpsDetailParams struct {
-	RouteID  pgtype.Int8
+	RouteID  int64
 	FromTime pgtype.Timestamptz
 	ToTime   pgtype.Timestamptz
 }
@@ -204,8 +204,7 @@ WITH attributed AS (
     SELECT r.requested_model_id, r.status
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    JOIN projects p ON p.id = r.project_id
-    WHERE COALESCE(ak.route_id, p.default_route_id) = $1
+    WHERE ak.route_id = $1
       AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
       AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 )
@@ -220,7 +219,7 @@ LIMIT 50
 `
 
 type RouteOpsModelsParams struct {
-	RouteID  pgtype.Int8
+	RouteID  int64
 	FromTime pgtype.Timestamptz
 	ToTime   pgtype.Timestamptz
 }
@@ -257,8 +256,7 @@ WITH attributed AS (
     SELECT r.created_at, r.status, r.started_at, r.completed_at
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    JOIN projects p ON p.id = r.project_id
-    WHERE COALESCE(ak.route_id, p.default_route_id) = $2
+    WHERE ak.route_id = $2
       AND ($3::timestamptz IS NULL OR r.created_at >= $3::timestamptz)
       AND ($4::timestamptz IS NULL OR r.created_at < $4::timestamptz)
 )
@@ -276,7 +274,7 @@ ORDER BY bucket
 
 type RouteOpsPerformanceTimeseriesParams struct {
 	Unit     string
-	RouteID  pgtype.Int8
+	RouteID  int64
 	FromTime pgtype.Timestamptz
 	ToTime   pgtype.Timestamptz
 }
@@ -328,8 +326,7 @@ SELECT
     CASE WHEN r.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END AS latency_ms
 FROM request_records r
 JOIN api_keys ak ON ak.id = r.api_key_id
-JOIN projects p ON p.id = r.project_id
-WHERE COALESCE(ak.route_id, p.default_route_id) = $1
+WHERE ak.route_id = $1
   AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
   AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 ORDER BY r.created_at DESC
@@ -337,7 +334,7 @@ LIMIT $5 OFFSET $4
 `
 
 type RouteOpsRequestsParams struct {
-	RouteID    pgtype.Int8
+	RouteID    int64
 	FromTime   pgtype.Timestamptz
 	ToTime     pgtype.Timestamptz
 	PageOffset int32
@@ -391,14 +388,13 @@ const routeOpsRequestsCount = `-- name: RouteOpsRequestsCount :one
 SELECT COUNT(*) AS total
 FROM request_records r
 JOIN api_keys ak ON ak.id = r.api_key_id
-JOIN projects p ON p.id = r.project_id
-WHERE COALESCE(ak.route_id, p.default_route_id) = $1
+WHERE ak.route_id = $1
   AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
   AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 `
 
 type RouteOpsRequestsCountParams struct {
-	RouteID  pgtype.Int8
+	RouteID  int64
 	FromTime pgtype.Timestamptz
 	ToTime   pgtype.Timestamptz
 }
@@ -413,7 +409,7 @@ func (q *Queries) RouteOpsRequestsCount(ctx context.Context, arg RouteOpsRequest
 const routesOpsAttributeAggregate = `-- name: RoutesOpsAttributeAggregate :one
 WITH attributed AS (
     SELECT
-        COALESCE(ak.route_id, p.default_route_id) AS route_id,
+        ak.route_id AS route_id,
         r.status,
         r.error_code,
         r.started_at,
@@ -421,7 +417,6 @@ WITH attributed AS (
         (SELECT COUNT(*) FROM request_attempts a WHERE a.request_record_id = r.id) AS attempt_count
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    JOIN projects p ON p.id = r.project_id
     WHERE ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
       AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
 )
@@ -468,8 +463,7 @@ const routesOpsCounts = `-- name: RoutesOpsCounts :one
 SELECT
     COUNT(*) AS total,
     COUNT(*) FILTER (WHERE status = 'enabled') AS enabled,
-    COUNT(*) FILTER (WHERE status = 'disabled') AS disabled,
-    COUNT(*) FILTER (WHERE is_builtin) AS builtin
+    COUNT(*) FILTER (WHERE status = 'disabled') AS disabled
 FROM routes
 `
 
@@ -477,29 +471,22 @@ type RoutesOpsCountsRow struct {
 	Total    int64
 	Enabled  int64
 	Disabled int64
-	Builtin  int64
 }
 
 // §3.5 线路路由作战台只读运维聚合。
-// 归因（就近绑定 §3.1）：每条请求归属 COALESCE(api_keys.route_id, projects.default_route_id)。
-// NULL（无 Key 线路且无项目默认）= 内置桶，不计入任何具体线路。request 粒度。
-// fallback：同 request 有 >1 次 attempt 且最终成功；no_channel：error_code 命中无可用渠道码。
+// 归因（线路必填 §3.1）：每条请求归属其 API Key 绑定的 api_keys.route_id（线路必填，无默认回落）。
+// request 粒度。fallback：同 request 有 >1 次 attempt 且最终成功；no_channel：error_code 命中无可用渠道码。
 func (q *Queries) RoutesOpsCounts(ctx context.Context) (RoutesOpsCountsRow, error) {
 	row := q.db.QueryRow(ctx, routesOpsCounts)
 	var i RoutesOpsCountsRow
-	err := row.Scan(
-		&i.Total,
-		&i.Enabled,
-		&i.Disabled,
-		&i.Builtin,
-	)
+	err := row.Scan(&i.Total, &i.Enabled, &i.Disabled)
 	return i, err
 }
 
 const routesOpsTable = `-- name: RoutesOpsTable :many
 WITH attributed AS (
     SELECT
-        COALESCE(ak.route_id, p.default_route_id) AS route_id,
+        ak.route_id AS route_id,
         r.status,
         r.error_code,
         r.started_at,
@@ -507,7 +494,6 @@ WITH attributed AS (
         (SELECT COUNT(*) FROM request_attempts a WHERE a.request_record_id = r.id) AS attempt_count
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    JOIN projects p ON p.id = r.project_id
     WHERE ($7::timestamptz IS NULL OR r.created_at >= $7::timestamptz)
       AND ($8::timestamptz IS NULL OR r.created_at < $8::timestamptz)
 )
@@ -516,9 +502,9 @@ SELECT
     rt.name,
     rt.mode,
     rt.pool_kind,
-    rt.is_builtin,
     rt.status,
     rt.description,
+    rt.price_ratio,
     COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
     COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded') AS request_succeeded,
     COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded' AND ar.attempt_count > 1) AS fallback_total,
@@ -526,14 +512,14 @@ SELECT
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN ar.status = 'succeeded' AND ar.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (ar.completed_at - ar.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
-    (SELECT COUNT(*) FROM projects pp WHERE pp.default_route_id = rt.id) AS bound_projects,
+    (SELECT COUNT(DISTINCT kk.user_id) FROM api_keys kk WHERE kk.route_id = rt.id) AS bound_users,
     (SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id) AS bound_keys,
     (SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id) AS pool_channels
 FROM routes rt
 LEFT JOIN attributed ar ON ar.route_id = rt.id
 WHERE ($1::text IS NULL OR rt.status = $1::text)
   AND ($2::text IS NULL OR rt.name ILIKE '%' || $2::text || '%')
-GROUP BY rt.id, rt.name, rt.mode, rt.pool_kind, rt.is_builtin, rt.status, rt.description
+GROUP BY rt.id, rt.name, rt.mode, rt.pool_kind, rt.status, rt.description, rt.price_ratio
 ORDER BY
   CASE WHEN COALESCE($3::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($4::bool, false) THEN (COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded')::float8 / NULLIF(COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded','failed','canceled')), 0)) END DESC NULLS LAST,
   CASE WHEN COALESCE($3::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($4::bool, false) THEN (COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded')::float8 / NULLIF(COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded','failed','canceled')), 0)) END ASC NULLS LAST,
@@ -561,15 +547,15 @@ type RoutesOpsTableRow struct {
 	Name             string
 	Mode             string
 	PoolKind         string
-	IsBuiltin        bool
 	Status           string
 	Description      pgtype.Text
+	PriceRatio       pgtype.Numeric
 	RequestTotal     int64
 	RequestSucceeded int64
 	FallbackTotal    int64
 	NoChannelTotal   int64
 	LatencyP95       float64
-	BoundProjects    int64
+	BoundUsers       int64
 	BoundKeys        int64
 	PoolChannels     int64
 }
@@ -598,15 +584,15 @@ func (q *Queries) RoutesOpsTable(ctx context.Context, arg RoutesOpsTableParams) 
 			&i.Name,
 			&i.Mode,
 			&i.PoolKind,
-			&i.IsBuiltin,
 			&i.Status,
 			&i.Description,
+			&i.PriceRatio,
 			&i.RequestTotal,
 			&i.RequestSucceeded,
 			&i.FallbackTotal,
 			&i.NoChannelTotal,
 			&i.LatencyP95,
-			&i.BoundProjects,
+			&i.BoundUsers,
 			&i.BoundKeys,
 			&i.PoolChannels,
 		); err != nil {

@@ -52,7 +52,7 @@ func APIKeyAuth(authenticator APIKeyAuthenticator) func(http.Handler) http.Handl
 			}
 
 			ctx := auth.ContextWithAPIKeyPrincipal(r.Context(), principal)
-			logfields.SetIdentity(ctx, principal.UserID, principal.ProjectID, principal.APIKeyID)
+			logfields.SetIdentity(ctx, principal.UserID, principal.APIKeyID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

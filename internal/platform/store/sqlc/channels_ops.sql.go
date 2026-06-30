@@ -331,7 +331,7 @@ func (q *Queries) ChannelOpsPerformanceTimeseries(ctx context.Context, arg Chann
 }
 
 const channelOpsRoutes = `-- name: ChannelOpsRoutes :many
-SELECT rt.id, rt.name, rt.mode, rt.pool_kind, rt.status, rt.is_builtin
+SELECT rt.id, rt.name, rt.mode, rt.pool_kind, rt.status
 FROM route_channels rc
 JOIN routes rt ON rt.id = rc.route_id
 WHERE rc.channel_id = $1
@@ -339,12 +339,11 @@ ORDER BY rt.id
 `
 
 type ChannelOpsRoutesRow struct {
-	ID        int64
-	Name      string
-	Mode      string
-	PoolKind  string
-	Status    string
-	IsBuiltin bool
+	ID       int64
+	Name     string
+	Mode     string
+	PoolKind string
+	Status   string
 }
 
 // ChannelOpsRoutes 引用该渠道的显式线路池（抽屉线路 Tab）。
@@ -363,7 +362,6 @@ func (q *Queries) ChannelOpsRoutes(ctx context.Context, channelID int64) ([]Chan
 			&i.Mode,
 			&i.PoolKind,
 			&i.Status,
-			&i.IsBuiltin,
 		); err != nil {
 			return nil, err
 		}

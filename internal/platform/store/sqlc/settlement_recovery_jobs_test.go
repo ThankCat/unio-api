@@ -126,17 +126,19 @@ func settlementRecoveryJobParams(f settlementRecoveryFixture, nextRunAt time.Tim
 		PriceID:                           f.channelPrice.ID,
 		Currency:                          f.channelPrice.Currency,
 		PricingUnit:                       f.channelPrice.PricingUnit,
-		UncachedInputPrice:                f.channelPrice.UncachedInputPrice,
-		CacheReadInputPrice:               f.channelPrice.CacheReadInputPrice,
-		CacheWrite5mInputPrice:            f.channelPrice.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:            f.channelPrice.CacheWrite1hInputPrice,
-		OutputPrice:                       f.channelPrice.OutputPrice,
-		ReasoningOutputPrice:              f.channelPrice.ReasoningOutputPrice,
-		FormulaVersion:                    billing.FormulaVersionV1,
-		EstimatedAmount:                   f.reservation.EstimatedAmount,
-		AuthorizedAmount:                  f.reservation.AuthorizedAmount,
-		MaxAttempts:                       20,
-		NextRunAt:                         timestamptz(nextRunAt),
+		// DEC-026：恢复任务存的是客户售价快照（model_prices×线路倍率）；本 sqlc 持久化测试只验证存取往返，
+		// 渠道已无售价列，这里用渠道成本列作占位值喂入即可（不参与业务断言）。
+		UncachedInputPrice:     f.channelPrice.UncachedInputCost,
+		CacheReadInputPrice:    f.channelPrice.CacheReadInputCost,
+		CacheWrite5mInputPrice: f.channelPrice.CacheWrite5mInputCost,
+		CacheWrite1hInputPrice: f.channelPrice.CacheWrite1hInputCost,
+		OutputPrice:            f.channelPrice.OutputCost,
+		ReasoningOutputPrice:   f.channelPrice.ReasoningOutputCost,
+		FormulaVersion:         billing.FormulaVersionV1,
+		EstimatedAmount:        f.reservation.EstimatedAmount,
+		AuthorizedAmount:       f.reservation.AuthorizedAmount,
+		MaxAttempts:            20,
+		NextRunAt:              timestamptz(nextRunAt),
 	}
 }
 

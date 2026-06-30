@@ -17,8 +17,8 @@ import (
 
 // RouterDeps 保存构建 HTTP router 所需的外部依赖。
 type RouterDeps struct {
-	Logger                 *slog.Logger
-	APIKeyAuthenticator    middleware.APIKeyAuthenticator
+	Logger                *slog.Logger
+	APIKeyAuthenticator   middleware.APIKeyAuthenticator
 	ChatCompletionService gatewaychat.ChatCompletionService
 	ResponsesService      gatewayresponses.ResponsesService
 	MessagesService       gatewayanthropic.MessagesService

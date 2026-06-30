@@ -118,7 +118,7 @@ func (s *fakeMessagesRequestLog) CreateRequest(ctx context.Context, params reque
 	s.createRequests = append(s.createRequests, params)
 	id := s.nextRequestID
 	s.nextRequestID++
-	return requestlog.RequestRecord{ID: id, RequestID: params.RequestID, UserID: params.UserID, ProjectID: params.ProjectID, APIKeyID: params.APIKeyID, Status: requestlog.RequestStatusPending}, nil
+	return requestlog.RequestRecord{ID: id, RequestID: params.RequestID, UserID: params.UserID, APIKeyID: params.APIKeyID, Status: requestlog.RequestStatusPending}, nil
 }
 
 func (s *fakeMessagesRequestLog) MarkRequestRunning(ctx context.Context, id int64) (requestlog.RequestRecord, error) {
@@ -244,12 +244,11 @@ func (p passthroughCandidatePreparer) PrepareCandidates(_ context.Context, param
 	return plan, nil
 }
 
-func contextWithPrincipal(projectID int64) context.Context {
+func contextWithPrincipal(userID int64) context.Context {
 	ctx := httpx.ContextWithRequestID(context.Background(), "messages-test-request-id")
 	return auth.ContextWithAPIKeyPrincipal(ctx, &auth.APIKeyPrincipal{
 		APIKeyID:  1,
-		UserID:    7,
-		ProjectID: projectID,
+		UserID:    userID,
 		KeyPrefix: "unio_sk_test",
 	})
 }

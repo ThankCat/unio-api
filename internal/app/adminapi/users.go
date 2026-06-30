@@ -71,19 +71,7 @@ func (h *usersHandler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	balances := make([]balanceDTO, 0, len(detail.Balances))
-	for _, b := range detail.Balances {
-		balances = append(balances, balanceDTO{
-			Currency:        b.Currency,
-			Balance:         b.Balance,
-			ReservedBalance: b.ReservedBalance,
-		})
-	}
-
-	writeData(w, http.StatusOK, userDetailDTO{
-		userDTO:  toUserDTO(detail.User),
-		Balances: balances,
-	})
+	writeData(w, http.StatusOK, toUserDetailDTO(detail))
 }
 
 func toUserDTO(u customer.User) userDTO {
@@ -93,5 +81,20 @@ func toUserDTO(u customer.User) userDTO {
 		DisplayName: u.DisplayName,
 		CreatedAt:   rfc3339(u.CreatedAt.Time),
 		UpdatedAt:   rfc3339(u.UpdatedAt.Time),
+	}
+}
+
+func toUserDetailDTO(detail customer.UserDetail) userDetailDTO {
+	balances := make([]balanceDTO, 0, len(detail.Balances))
+	for _, b := range detail.Balances {
+		balances = append(balances, balanceDTO{
+			Currency:        b.Currency,
+			Balance:         b.Balance,
+			ReservedBalance: b.ReservedBalance,
+		})
+	}
+	return userDetailDTO{
+		userDTO:  toUserDTO(detail.User),
+		Balances: balances,
 	}
 }

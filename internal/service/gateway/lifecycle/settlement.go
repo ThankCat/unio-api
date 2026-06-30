@@ -96,7 +96,10 @@ type ChatSettlementParams struct {
 	// settlement 优先按此 ID 取价计费，降低「授权后管理员停用/改窗口」导致结算价漂移到另一行的竞态。
 	// 0 表示未透传（旧数据 / 个别路径），此时回退按 attemptStart 时点重查 active 价。
 	ChannelPriceID int64
-	Facts          adapter.ResponseFacts
+	// SalePrice 是客户最终售价快照 = 模型基准价 × 线路倍率（DEC-026），路由时算好并透传到结算；
+	// 同一请求所有候选共享、不随命中哪条渠道变。结算用它写收入快照与扣费，ChannelPriceID 仅用于成本。
+	SalePrice billing.CustomerPriceSnapshot
+	Facts     adapter.ResponseFacts
 }
 
 // resolveSettlementChannelPrice 解析 settlement 计费应使用的 channel_prices 行。
@@ -412,25 +415,27 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		return err
 	}
 
-	// 收入快照：命中渠道的售价（price_id 指向 channel_prices）。
+	// 收入快照：客户售价 = 模型基准价 × 线路倍率（DEC-026），由路由透传（params.SalePrice），
+	// 不随命中哪条渠道变。price_id 仍指向命中渠道的 channel_prices 行（成本来源 / 审计参考）。
+	salePrice := params.SalePrice
 	snapshot, err := txQueries.CreatePriceSnapshot(ctx, sqlc.CreatePriceSnapshotParams{
 		RequestRecordID:        params.RequestRecord.ID,
 		PriceID:                pgtype.Int8{Int64: channelPrice.ID, Valid: true},
-		Currency:               channelPrice.Currency,
-		PricingUnit:            channelPrice.PricingUnit,
-		UncachedInputPrice:     channelPrice.UncachedInputPrice,
-		CacheReadInputPrice:    channelPrice.CacheReadInputPrice,
-		CacheWrite5mInputPrice: channelPrice.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice: channelPrice.CacheWrite1hInputPrice,
-		OutputPrice:            channelPrice.OutputPrice,
-		ReasoningOutputPrice:   channelPrice.ReasoningOutputPrice,
+		Currency:               salePrice.Currency,
+		PricingUnit:            salePrice.PricingUnit,
+		UncachedInputPrice:     salePrice.UncachedInputPrice,
+		CacheReadInputPrice:    salePrice.CacheReadInputPrice,
+		CacheWrite5mInputPrice: salePrice.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice: salePrice.CacheWrite1hInputPrice,
+		OutputPrice:            salePrice.OutputPrice,
+		ReasoningOutputPrice:   salePrice.ReasoningOutputPrice,
 		FormulaVersion:         billing.FormulaVersionV1,
 	})
 	if err != nil {
 		return err
 	}
 
-	// 计算用户本次请求的花费（按命中渠道售价）。
+	// 计算用户本次请求的花费（按客户售价 = 基准 × 倍率）。
 	charge, err := s.billingCalculator.CalculateCustomerCharge(facts.Usage, billing.CustomerPriceSnapshot{
 		Currency:               snapshot.Currency,
 		PricingUnit:            snapshot.PricingUnit,
@@ -922,7 +927,6 @@ func (s *ChatSettlementService) ensureIdempotentSuccessfulChat(ctx context.Conte
 func ensureSettlementRequestMatches(request sqlc.RequestRecord, params ChatSettlementParams) error {
 	if request.ID != params.RequestRecord.ID ||
 		request.UserID != params.RequestRecord.UserID ||
-		request.ProjectID != params.RequestRecord.ProjectID ||
 		request.ApiKeyID != params.RequestRecord.APIKeyID {
 		return ChatSettlementIdempotencyConflict("request identity mismatch")
 	}

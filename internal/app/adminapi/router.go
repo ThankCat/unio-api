@@ -34,14 +34,16 @@ type RouterDeps struct {
 	RouteService        RouteService
 	RouteOpsService     RouteOpsService
 
+	// DEC-026：模型基准售价（客户售价 = 模型基准价 × 线路倍率）。
+	ModelPriceService ModelPriceService
+
 	// M6 只读查询台
 	RequestQueryService RequestQueryService
 	UsageQueryService   UsageQueryService
 	LedgerQueryService  LedgerQueryService
 
-	// M7 客户管理：用户/项目（工作空间）/API Key（费用上限）/手工调额
+	// M7 客户管理：用户（只读）/API Key（费用上限 + 必填线路）/手工调额
 	UserService        UserService
-	ProjectService     ProjectService
 	APIKeyService      APIKeyService
 	AdjustmentService  AdjustmentService
 	CustomerOpsService CustomerOpsService
@@ -187,7 +189,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 
 		if deps.RouteService != nil {
 			rh := &routesHandler{service: deps.RouteService}
-			// 线路（渠道商品）：内置经济/稳定只读，自定义线路 CRUD + 渠道池设置。
+			// 线路（渠道商品）CRUD + 渠道池设置。
 			r.Get("/routes", rh.list)
 			r.Post("/routes", rh.create)
 			r.Get("/routes/{id}", rh.get)
@@ -215,6 +217,14 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Patch("/models/{id}", mh.update)
 			// DELETE 物理删除录错的脏数据，级联清理自身价格/绑定/能力；已被请求/账务引用时返回 409。
 			r.Delete("/models/{id}", mh.delete)
+		}
+
+		if deps.ModelPriceService != nil {
+			mph := &modelPricesHandler{service: deps.ModelPriceService}
+			// DEC-026：模型基准售价挂在 model 下；金额不可改，PATCH 调窗口/启停用价格 id 定位。
+			r.Get("/models/{id}/prices", mph.list)
+			r.Post("/models/{id}/prices", mph.create)
+			r.Patch("/model-prices/{id}", mph.update)
 		}
 
 		// 阶段 14 模型目录：浏览 models.dev 目录 + 从目录采纳/刷新/更新提醒（采纳/刷新/提醒回读完整模型）。
@@ -254,13 +264,11 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Get("/users/ops", cuh.usersTable)
 			r.Get("/users/{id}/ops/detail", cuh.userDetail)
 			r.Get("/users/{id}/ops/keys", cuh.userKeys)
-			r.Get("/projects/ops/summary", cuh.projectsSummary)
-			r.Get("/projects/ops", cuh.projectsTable)
-			r.Get("/projects/{id}/api-keys/ops/summary", cuh.apiKeysSummary)
-			r.Get("/projects/{id}/api-keys/ops", cuh.apiKeysTable)
+			r.Get("/users/{id}/api-keys/ops/summary", cuh.apiKeysSummary)
+			r.Get("/users/{id}/api-keys/ops", cuh.apiKeysTable)
 		}
 
-		// M7 客户管理：用户、项目（工作空间）、API Key（费用上限）、手工调额。
+		// M7 客户管理：用户（只读列表/详情）、API Key（费用上限/线路）、手工调额。
 		if deps.UserService != nil {
 			uh := &usersHandler{service: deps.UserService}
 			r.Get("/users", uh.list)
@@ -273,19 +281,11 @@ func NewRouter(deps RouterDeps) http.Handler {
 			}
 		}
 
-		if deps.ProjectService != nil {
-			pjh := &projectsHandler{service: deps.ProjectService}
-			r.Get("/projects", pjh.list)
-			r.Get("/projects/{id}", pjh.get)
-			// 阶段 15：设置项目默认线路。
-			r.Patch("/projects/{id}", pjh.update)
-		}
-
 		if deps.APIKeyService != nil {
 			akh := &apiKeysHandler{service: deps.APIKeyService}
-			// 列表/创建挂在项目（工作空间）下；单把操作用扁平 /api-keys/{id} 定位。
-			r.Get("/projects/{id}/api-keys", akh.listByProject)
-			r.Post("/projects/{id}/api-keys", akh.create)
+			// 列表/创建挂在用户下；单把操作用扁平 /api-keys/{id} 定位。
+			r.Get("/users/{id}/api-keys", akh.listByUser)
+			r.Post("/users/{id}/api-keys", akh.create)
 			r.Get("/api-keys/{id}", akh.get)
 			// PATCH 调启停/费用上限；DELETE 永久吊销（不可逆）。
 			r.Patch("/api-keys/{id}", akh.update)

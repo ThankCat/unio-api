@@ -104,22 +104,22 @@ func createLedgerTestRequestRecord(t *testing.T, ctx context.Context, pool *pgxp
 
 	suffix := time.Now().UnixNano()
 
-	var projectID int64
-	err := pool.QueryRow(ctx, `
-		INSERT INTO projects (user_id, name)
-		VALUES ($1, $2)
+	// 线路必填：先建一条线路供 API Key 绑定（route_id 现为 NOT NULL）。
+	var routeID int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO routes (name, mode, pool_kind, status, price_ratio)
+		VALUES ($1, 'cheapest', 'all', 'enabled', 1)
 		RETURNING id
-	`, userID, fmt.Sprintf("ledger-project-%d", suffix)).Scan(&projectID)
-	if err != nil {
-		t.Fatalf("insert ledger test project: %v", err)
+	`, fmt.Sprintf("ledger-route-%d", suffix)).Scan(&routeID); err != nil {
+		t.Fatalf("insert ledger test route: %v", err)
 	}
 
 	var apiKeyID int64
-	err = pool.QueryRow(ctx, `
-		INSERT INTO api_keys (project_id, name, key_prefix, key_hash)
-		VALUES ($1, $2, $3, $4)
+	err := pool.QueryRow(ctx, `
+		INSERT INTO api_keys (user_id, name, key_prefix, key_hash, route_id)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id
-	`, projectID, "ledger test key", "sk-test", fmt.Sprintf("ledger-key-hash-%d", suffix)).Scan(&apiKeyID)
+	`, userID, "ledger test key", "sk-test", fmt.Sprintf("ledger-key-hash-%d", suffix), routeID).Scan(&apiKeyID)
 	if err != nil {
 		t.Fatalf("insert ledger test api key: %v", err)
 	}
@@ -129,7 +129,6 @@ func createLedgerTestRequestRecord(t *testing.T, ctx context.Context, pool *pgxp
 		INSERT INTO request_records (
 			request_id,
 			user_id,
-			project_id,
 			api_key_id,
 			requested_model_id,
 			ingress_protocol,
@@ -138,9 +137,9 @@ func createLedgerTestRequestRecord(t *testing.T, ctx context.Context, pool *pgxp
 			status,
 			started_at
 		)
-		VALUES ($1, $2, $3, $4, $5, 'openai', 'chat_completions', false, 'pending', now())
+		VALUES ($1, $2, $3, $4, 'openai', 'chat_completions', false, 'pending', now())
 		RETURNING id
-	`, fmt.Sprintf("ledger-request-%d", suffix), userID, projectID, apiKeyID, "deepseek-v4-pro").Scan(&requestRecordID)
+	`, fmt.Sprintf("ledger-request-%d", suffix), userID, apiKeyID, "deepseek-v4-pro").Scan(&requestRecordID)
 	if err != nil {
 		t.Fatalf("insert ledger test request record: %v", err)
 	}

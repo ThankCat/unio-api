@@ -24,7 +24,7 @@ func TestFieldsAttrsOmitUnset(t *testing.T) {
 		t.Fatalf("expected only correlation_id, got %#v", got)
 	}
 
-	SetIdentity(ctx, 7, 42, 100)
+	SetIdentity(ctx, 7, 100)
 	SetRequestID(ctx, "req_abc")
 	SetRoute(ctx, "openai/gpt-4.1", "9123", "123")
 
@@ -33,7 +33,6 @@ func TestFieldsAttrsOmitUnset(t *testing.T) {
 		"correlation_id": "corr-1",
 		"request_id":     "req_abc",
 		"user_id":        int64(7),
-		"project_id":     int64(42),
 		"api_key_id":     int64(100),
 		"model":          "openai/gpt-4.1",
 		"provider":       "9123",
@@ -50,7 +49,7 @@ func TestFieldsAttrsOmitUnset(t *testing.T) {
 func TestContextHelpersNoopWithoutHolder(t *testing.T) {
 	ctx := context.Background()
 
-	SetIdentity(ctx, 1, 2, 3)
+	SetIdentity(ctx, 1, 3)
 	SetRequestID(ctx, "req")
 	SetRoute(ctx, "m", "p", "c")
 
@@ -62,7 +61,7 @@ func TestContextHelpersNoopWithoutHolder(t *testing.T) {
 // TestNilFieldsSettersSafe 验证 nil *Fields 的方法安全。
 func TestNilFieldsSettersSafe(t *testing.T) {
 	var f *Fields
-	f.SetIdentity(1, 2, 3)
+	f.SetIdentity(1, 3)
 	f.SetRequestID("x")
 	f.SetRoute("m", "p", "c")
 	if f.Attrs() != nil {

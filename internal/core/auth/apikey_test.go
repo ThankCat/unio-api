@@ -37,7 +37,6 @@ func validAPIKey() sqlc.GetAPIKeyByHashRow {
 	return sqlc.GetAPIKeyByHashRow{
 		ID:        1,
 		UserID:    10,
-		ProjectID: 100,
 		KeyPrefix: "unio_sk_test",
 	}
 }
@@ -144,9 +143,6 @@ func TestAuthenticateAPIKeyValid(t *testing.T) {
 	}
 	if principal.KeyPrefix != key.KeyPrefix {
 		t.Fatalf("expected key prefix %q, got %q", key.KeyPrefix, principal.KeyPrefix)
-	}
-	if principal.ProjectID != key.ProjectID {
-		t.Fatalf("expected project id %d, got %d", key.ProjectID, principal.ProjectID)
 	}
 }
 

@@ -176,7 +176,8 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 }
 
 // sortCandidatesByMode 按线路策略对候选稳定排序（返回新切片，不改入参）。
-//   - cheapest：按代表售价升序（output_price 为主键，uncached_input_price 次之）。
+//   - cheapest：按命中渠道代表成本升序（output_cost 为主键，uncached_input_cost 次之）；
+//     售价已由 线路 × 模型 固定（DEC-026），池内挑成本最低 = 平台毛利最大。
 //   - stable：按渠道健康分升序（越小越健康）；health 为 nil 时保持 priority 基序。
 //   - fixed/其它：保持 SQL routing 的 priority 基序（fixed 池本就只有一条候选）。
 //
@@ -188,7 +189,7 @@ func sortCandidatesByMode(in []routing.ChatRouteCandidate, mode string, health f
 	switch mode {
 	case "cheapest":
 		sort.SliceStable(out, func(i, j int) bool {
-			return saleSnapshotLess(out[i].SalePrice, out[j].SalePrice)
+			return costSnapshotLess(out[i].ChannelCost, out[j].ChannelCost)
 		})
 	case "stable":
 		if health != nil {
@@ -201,12 +202,13 @@ func sortCandidatesByMode(in []routing.ChatRouteCandidate, mode string, health f
 	return out
 }
 
-// saleSnapshotLess 定义 cheapest 排序的代表价口径：output_price 优先，uncached_input_price 次之。
-func saleSnapshotLess(a, b billing.CustomerPriceSnapshot) bool {
-	if c := compareNumeric(a.OutputPrice, b.OutputPrice); c != 0 {
+// costSnapshotLess 定义 cheapest（按成本）排序的代表成本口径：output_cost 优先，uncached_input_cost 次之。
+// 无效/缺失成本视为更大（compareNumeric 把无效值排到末尾），优先选有明确成本的渠道。
+func costSnapshotLess(a, b billing.ProviderCostSnapshot) bool {
+	if c := compareNumeric(a.OutputCost, b.OutputCost); c != 0 {
 		return c < 0
 	}
-	return compareNumeric(a.UncachedInputPrice, b.UncachedInputPrice) < 0
+	return compareNumeric(a.UncachedInputCost, b.UncachedInputCost) < 0
 }
 
 // compareNumeric 比较两个 NUMERIC：返回 -1/0/1；无效值视为更大（排到末尾）。

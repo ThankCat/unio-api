@@ -123,8 +123,8 @@ func TestAdjustmentServiceValidation(t *testing.T) {
 // --- APIKeyService ---
 
 type fakeAPIKeyStore struct {
-	project       sqlc.Project
-	projectErr    error
+	user          sqlc.GetUserByIDRow
+	userErr       error
 	created       sqlc.ApiKey
 	createErr     error
 	spendLimitArg sqlc.SetAPIKeySpendLimitParams
@@ -133,18 +133,18 @@ type fakeAPIKeyStore struct {
 	rateLimitsSet bool
 }
 
-func (f *fakeAPIKeyStore) ListAPIKeysByProjectPage(context.Context, sqlc.ListAPIKeysByProjectPageParams) ([]sqlc.ListAPIKeysByProjectPageRow, error) {
+func (f *fakeAPIKeyStore) ListAPIKeysByUserPage(context.Context, sqlc.ListAPIKeysByUserPageParams) ([]sqlc.ListAPIKeysByUserPageRow, error) {
 	return nil, nil
 }
-func (f *fakeAPIKeyStore) CountAPIKeysByProject(context.Context, int64) (int64, error) { return 0, nil }
+func (f *fakeAPIKeyStore) CountAPIKeysByUser(context.Context, int64) (int64, error) { return 0, nil }
 func (f *fakeAPIKeyStore) GetAPIKeyByID(context.Context, int64) (sqlc.GetAPIKeyByIDRow, error) {
 	return sqlc.GetAPIKeyByIDRow{}, nil
 }
-func (f *fakeAPIKeyStore) GetProjectByID(context.Context, int64) (sqlc.Project, error) {
-	return f.project, f.projectErr
+func (f *fakeAPIKeyStore) GetUserByID(context.Context, int64) (sqlc.GetUserByIDRow, error) {
+	return f.user, f.userErr
 }
 func (f *fakeAPIKeyStore) CreateAPIKey(_ context.Context, arg sqlc.CreateAPIKeyParams) (sqlc.ApiKey, error) {
-	f.created.ProjectID = arg.ProjectID
+	f.created.UserID = arg.UserID
 	f.created.Name = arg.Name
 	f.created.KeyPrefix = arg.KeyPrefix
 	return f.created, f.createErr
@@ -184,16 +184,18 @@ func (f *fakeAPIKeyStore) SetAPIKeyRateLimits(_ context.Context, arg sqlc.SetAPI
 
 func TestAPIKeyServiceCreateReturnsPlaintextAndSetsSpendLimit(t *testing.T) {
 	store := &fakeAPIKeyStore{
-		project: sqlc.Project{ID: 100, UserID: 10, Name: "ws"},
+		user:    sqlc.GetUserByIDRow{ID: 100},
 		created: sqlc.ApiKey{ID: 5},
 	}
 	svc := NewAPIKeyService(store)
 
 	limit := "20.50"
+	routeID := int64(7)
 	got, err := svc.Create(context.Background(), APIKeyCreateParams{
-		ProjectID:  100,
+		UserID:     100,
 		Name:       "ci",
 		SpendLimit: &limit,
+		RouteID:    &routeID,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -213,11 +215,28 @@ func TestAPIKeyServiceCreateReturnsPlaintextAndSetsSpendLimit(t *testing.T) {
 }
 
 func TestAPIKeyServiceCreateRejectsEmptyName(t *testing.T) {
-	store := &fakeAPIKeyStore{project: sqlc.Project{ID: 100}}
+	store := &fakeAPIKeyStore{user: sqlc.GetUserByIDRow{ID: 100}}
 	svc := NewAPIKeyService(store)
 
-	if _, err := svc.Create(context.Background(), APIKeyCreateParams{ProjectID: 100, Name: "  "}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
+	routeID := int64(7)
+	if _, err := svc.Create(context.Background(), APIKeyCreateParams{UserID: 100, Name: "  ", RouteID: &routeID}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
 		t.Fatalf("expected admin_invalid_argument, got %v", failure.CodeOf(err))
+	}
+}
+
+func TestAPIKeyServiceCreateRequiresRoute(t *testing.T) {
+	store := &fakeAPIKeyStore{user: sqlc.GetUserByIDRow{ID: 100}}
+	svc := NewAPIKeyService(store)
+
+	// 线路必填：缺失 route_id（nil）应被拒为 admin_invalid_argument，且不落库。
+	if _, err := svc.Create(context.Background(), APIKeyCreateParams{UserID: 100, Name: "ci"}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
+		t.Fatalf("expected admin_invalid_argument for missing route, got %v", failure.CodeOf(err))
+	}
+
+	// 非正数 route_id 同样拒绝。
+	zero := int64(0)
+	if _, err := svc.Create(context.Background(), APIKeyCreateParams{UserID: 100, Name: "ci", RouteID: &zero}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
+		t.Fatalf("expected admin_invalid_argument for non-positive route, got %v", failure.CodeOf(err))
 	}
 }
 

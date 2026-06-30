@@ -26,7 +26,6 @@ func (s *Store) CreateRequest(ctx context.Context, params CreateRequestParams) (
 	row, err := s.queries.CreateRequestRecord(ctx, sqlc.CreateRequestRecordParams{
 		RequestID:           params.RequestID,
 		UserID:              params.UserID,
-		ProjectID:           params.ProjectID,
 		ApiKeyID:            params.APIKeyID,
 		RequestedModelID:    params.RequestedModelID,
 		IngressProtocol:     string(params.IngressProtocol),
@@ -400,7 +399,6 @@ func requestRecordFromSQLC(row sqlc.RequestRecord) RequestRecord {
 		ID:                  row.ID,
 		RequestID:           row.RequestID,
 		UserID:              row.UserID,
-		ProjectID:           row.ProjectID,
 		APIKeyID:            row.ApiKeyID,
 		RequestedModelID:    row.RequestedModelID,
 		IngressProtocol:     Protocol(row.IngressProtocol),

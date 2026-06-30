@@ -157,12 +157,11 @@ type ModelRow struct {
 
 // RouteRow 是抽屉线路 Tab 行。
 type RouteRow struct {
-	ID        int64
-	Name      string
-	Mode      string
-	PoolKind  string
-	Status    string
-	IsBuiltin bool
+	ID       int64
+	Name     string
+	Mode     string
+	PoolKind string
+	Status   string
 }
 
 // TableParams 是主表查询入参。
@@ -219,9 +218,9 @@ func (s *Service) Summary(ctx context.Context, from, to time.Time) (Summary, err
 			agg.LatencyAvg, agg.LatencyP50, agg.LatencyP90, agg.LatencyP95, agg.LatencyP99,
 			agg.LatencySample, agg.AttemptSucceeded,
 		),
-		PriceTotal:       price.Total,
-		PriceWithPrice:   price.WithPrice,
-		PriceWithCost:    price.WithCost,
+		PriceTotal:     price.Total,
+		PriceWithPrice: price.WithPrice,
+		PriceWithCost:  price.WithCost,
 	}
 	if agg.AttemptTotal > 0 {
 		out.SuccessRate = float64(agg.AttemptSucceeded) / float64(agg.AttemptTotal)
@@ -283,10 +282,10 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 				r.LatencySample, r.AttemptSucceeded,
 			),
-			HealthBucket:     healthBucket(r.AttemptSucceeded, r.AttemptTotal),
-			LastSuccessAt:    timeValue(r.LastSuccessAt),
-			BoundModels:      r.BoundModels,
-			RecentErrorCode:  textValue(r.RecentErrorCode),
+			HealthBucket:    healthBucket(r.AttemptSucceeded, r.AttemptTotal),
+			LastSuccessAt:   timeValue(r.LastSuccessAt),
+			BoundModels:     r.BoundModels,
+			RecentErrorCode: textValue(r.RecentErrorCode),
 		}
 		if r.AttemptTotal > 0 {
 			row.SuccessRate = float64(r.AttemptSucceeded) / float64(r.AttemptTotal)
@@ -310,8 +309,8 @@ func (s *Service) Detail(ctx context.Context, channelID int64, from, to time.Tim
 			r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 			r.LatencySample, r.AttemptSucceeded,
 		),
-		LastSuccessAt:    timeValue(r.LastSuccessAt),
-		LastFailureAt:    timeValue(r.LastFailureAt),
+		LastSuccessAt: timeValue(r.LastSuccessAt),
+		LastFailureAt: timeValue(r.LastFailureAt),
 	}
 	if r.AttemptTotal > 0 {
 		d.SuccessRate = float64(r.AttemptSucceeded) / float64(r.AttemptTotal)
@@ -403,7 +402,7 @@ func (s *Service) Models(ctx context.Context, channelID int64, from, to time.Tim
 				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 				r.LatencySample, r.AttemptSucceeded,
 			),
-			HasPrice:         r.HasPrice,
+			HasPrice: r.HasPrice,
 		}
 		if r.AttemptTotal > 0 {
 			row.SuccessRate = float64(r.AttemptSucceeded) / float64(r.AttemptTotal)
@@ -421,7 +420,7 @@ func (s *Service) Routes(ctx context.Context, channelID int64) ([]RouteRow, erro
 	}
 	out := make([]RouteRow, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, RouteRow{ID: r.ID, Name: r.Name, Mode: r.Mode, PoolKind: r.PoolKind, Status: r.Status, IsBuiltin: r.IsBuiltin})
+		out = append(out, RouteRow{ID: r.ID, Name: r.Name, Mode: r.Mode, PoolKind: r.PoolKind, Status: r.Status})
 	}
 	return out, nil
 }

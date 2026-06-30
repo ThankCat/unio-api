@@ -21,16 +21,18 @@ const (
 	APIKeyStatusExpired  = "expired"
 )
 
-// APIKey 表示后台 API Key 视图；绝不含 key_hash。
+// APIKey 表示后台 API Key 视图；含完整明文 key 供多次复制（产品决策），绝不含 key_hash。
 type APIKey struct {
-	ID         int64
-	ProjectID  int64
-	Name       string
-	KeyPrefix  string
-	Status     string
-	SpendLimit *string // nil 表示不限额
-	SpentTotal string
-	RouteID    *int64 // nil 表示未绑线路（回落项目默认/内置经济）
+	ID        int64
+	UserID    int64
+	Name      string
+	KeyPrefix string
+	// KeyPlaintext 是完整明文 key（产品决策：留存明文供多次复制）；nil 表示历史 key 不可回显。
+	KeyPlaintext *string
+	Status       string
+	SpendLimit   *string // nil 表示不限额
+	SpentTotal   string
+	RouteID      *int64 // Key 绑定的线路 ID（线路必填，恒有值）
 	// RPMLimit/TPMLimit/RPDLimit 是本把 Key 的令牌级限流上限（P2-8）：
 	// nil 表示继承全局默认，0 表示显式不限，>0 表示具体上限。
 	RPMLimit   *int64
@@ -50,20 +52,20 @@ type CreatedAPIKey struct {
 	Plaintext string
 }
 
-// APIKeyListParams 表示某项目下 API Key 分页查询参数。
+// APIKeyListParams 表示某用户下 API Key 分页查询参数。
 type APIKeyListParams struct {
-	ProjectID int64
-	Limit     int32
-	Offset    int32
+	UserID int64
+	Limit  int32
+	Offset int32
 }
 
 // APIKeyCreateParams 表示创建 API Key 的业务参数。
 type APIKeyCreateParams struct {
-	ProjectID  int64
+	UserID     int64
 	Name       string
 	ExpiresAt  *time.Time
 	SpendLimit *string // nil/空串 表示不限额
-	RouteID    *int64  // nil 表示不绑线路
+	RouteID    *int64  // 必填：线路必须显式绑定（缺失/非正数 → route is required）
 	// RateLimitsProvided=true 时按 RPM/TPM/RPD 设置令牌级限流（各值 nil=继承全局默认，0=不限，>0=具体上限）。
 	RateLimitsProvided bool
 	RPMLimit           *int64
@@ -88,10 +90,10 @@ type APIKeyUpdateParams struct {
 
 // APIKeyStore 定义 API Key 管理所需的存储能力。
 type APIKeyStore interface {
-	ListAPIKeysByProjectPage(ctx context.Context, arg sqlc.ListAPIKeysByProjectPageParams) ([]sqlc.ListAPIKeysByProjectPageRow, error)
-	CountAPIKeysByProject(ctx context.Context, projectID int64) (int64, error)
+	ListAPIKeysByUserPage(ctx context.Context, arg sqlc.ListAPIKeysByUserPageParams) ([]sqlc.ListAPIKeysByUserPageRow, error)
+	CountAPIKeysByUser(ctx context.Context, userID int64) (int64, error)
 	GetAPIKeyByID(ctx context.Context, id int64) (sqlc.GetAPIKeyByIDRow, error)
-	GetProjectByID(ctx context.Context, id int64) (sqlc.Project, error)
+	GetUserByID(ctx context.Context, id int64) (sqlc.GetUserByIDRow, error)
 	CreateAPIKey(ctx context.Context, arg sqlc.CreateAPIKeyParams) (sqlc.ApiKey, error)
 	SetAPIKeyDisabled(ctx context.Context, arg sqlc.SetAPIKeyDisabledParams) (sqlc.SetAPIKeyDisabledRow, error)
 	RevokeAPIKey(ctx context.Context, id int64) (sqlc.RevokeAPIKeyRow, error)
@@ -114,10 +116,10 @@ func NewAPIKeyService(store APIKeyStore) *APIKeyService {
 	return &APIKeyService{store: store, now: time.Now}
 }
 
-// List 列出某项目下的 API Key（倒序），并返回总数。
+// List 列出某用户下的 API Key（倒序），并返回总数。
 func (s *APIKeyService) List(ctx context.Context, params APIKeyListParams) ([]APIKey, int64, error) {
-	rows, err := s.store.ListAPIKeysByProjectPage(ctx, sqlc.ListAPIKeysByProjectPageParams{
-		ProjectID:  params.ProjectID,
+	rows, err := s.store.ListAPIKeysByUserPage(ctx, sqlc.ListAPIKeysByUserPageParams{
+		UserID:     params.UserID,
 		PageLimit:  params.Limit,
 		PageOffset: params.Offset,
 	})
@@ -125,14 +127,14 @@ func (s *APIKeyService) List(ctx context.Context, params APIKeyListParams) ([]AP
 		return nil, 0, storeFailed(err, "list api keys")
 	}
 
-	total, err := s.store.CountAPIKeysByProject(ctx, params.ProjectID)
+	total, err := s.store.CountAPIKeysByUser(ctx, params.UserID)
 	if err != nil {
 		return nil, 0, storeFailed(err, "count api keys")
 	}
 
 	keys := make([]APIKey, 0, len(rows))
 	for _, row := range rows {
-		keys = append(keys, s.buildAPIKey(row.ID, row.ProjectID, row.Name, row.KeyPrefix, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt))
+		keys = append(keys, s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt))
 	}
 
 	return keys, total, nil
@@ -147,21 +149,26 @@ func (s *APIKeyService) Get(ctx context.Context, id int64) (APIKey, error) {
 		}
 		return APIKey{}, storeFailed(err, "get api key")
 	}
-	return s.buildAPIKey(row.ID, row.ProjectID, row.Name, row.KeyPrefix, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt), nil
+	return s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt), nil
 }
 
-// Create 在项目下创建 API Key，并返回只展示一次的明文。
+// Create 在用户下创建 API Key，并返回只展示一次的明文。
 func (s *APIKeyService) Create(ctx context.Context, params APIKeyCreateParams) (CreatedAPIKey, error) {
 	name := strings.TrimSpace(params.Name)
 	if name == "" {
 		return CreatedAPIKey{}, invalidArgument("name", "name must not be empty")
 	}
 
-	if _, err := s.store.GetProjectByID(ctx, params.ProjectID); err != nil {
+	// 线路必填：API Key 必须显式绑定一条线路（无默认线路回落）。DB NOT NULL 是最终兜底。
+	if params.RouteID == nil || *params.RouteID <= 0 {
+		return CreatedAPIKey{}, invalidArgument("route_id", "route is required")
+	}
+
+	if _, err := s.store.GetUserByID(ctx, params.UserID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return CreatedAPIKey{}, notFound("project not found")
+			return CreatedAPIKey{}, notFound("user not found")
 		}
-		return CreatedAPIKey{}, storeFailed(err, "lookup project for api key")
+		return CreatedAPIKey{}, storeFailed(err, "lookup user for api key")
 	}
 
 	spendLimit, err := parseOptionalMoney("spend_limit", params.SpendLimit)
@@ -180,18 +187,19 @@ func (s *APIKeyService) Create(ctx context.Context, params APIKeyCreateParams) (
 	}
 
 	created, err := s.store.CreateAPIKey(ctx, sqlc.CreateAPIKeyParams{
-		ProjectID: params.ProjectID,
-		Name:      name,
-		KeyPrefix: generated.Prefix,
-		KeyHash:   generated.Hash,
-		ExpiresAt: expiresAt,
-		RouteID:   int8Narg(params.RouteID),
+		UserID:       params.UserID,
+		Name:         name,
+		KeyPrefix:    generated.Prefix,
+		KeyHash:      generated.Hash,
+		KeyPlaintext: pgtype.Text{String: generated.Plaintext, Valid: true},
+		ExpiresAt:    expiresAt,
+		RouteID:      *params.RouteID,
 	})
 	if err != nil {
 		return CreatedAPIKey{}, storeFailed(err, "create api key")
 	}
 
-	view := s.buildAPIKey(created.ID, created.ProjectID, created.Name, created.KeyPrefix, created.LastUsedAt, created.ExpiresAt, created.DisabledAt, created.RevokedAt, created.SpendLimit, created.SpentTotal, created.RouteID, created.RpmLimit, created.TpmLimit, created.RpdLimit, created.CreatedAt, created.UpdatedAt)
+	view := s.buildAPIKey(created.ID, created.UserID, created.Name, created.KeyPrefix, created.KeyPlaintext, created.LastUsedAt, created.ExpiresAt, created.DisabledAt, created.RevokedAt, created.SpendLimit, created.SpentTotal, created.RouteID, created.RpmLimit, created.TpmLimit, created.RpdLimit, created.CreatedAt, created.UpdatedAt)
 
 	// 上限作为独立 UPDATE：CreateAPIKey 不接收 spend_limit，创建后按需补设。
 	if spendLimit.Valid {
@@ -202,7 +210,7 @@ func (s *APIKeyService) Create(ctx context.Context, params APIKeyCreateParams) (
 		if err != nil {
 			return CreatedAPIKey{}, storeFailed(err, "set api key spend limit")
 		}
-		view = s.buildAPIKey(updated.ID, updated.ProjectID, updated.Name, updated.KeyPrefix, updated.LastUsedAt, updated.ExpiresAt, updated.DisabledAt, updated.RevokedAt, updated.SpendLimit, updated.SpentTotal, updated.RouteID, updated.RpmLimit, updated.TpmLimit, updated.RpdLimit, updated.CreatedAt, updated.UpdatedAt)
+		view = s.buildAPIKey(updated.ID, updated.UserID, updated.Name, updated.KeyPrefix, updated.KeyPlaintext, updated.LastUsedAt, updated.ExpiresAt, updated.DisabledAt, updated.RevokedAt, updated.SpendLimit, updated.SpentTotal, updated.RouteID, updated.RpmLimit, updated.TpmLimit, updated.RpdLimit, updated.CreatedAt, updated.UpdatedAt)
 	}
 
 	// 令牌级限流同样作为独立 UPDATE（CreateAPIKey 不接收 rpm/tpm/rpd），创建后按需补设（P2-8）。
@@ -216,7 +224,7 @@ func (s *APIKeyService) Create(ctx context.Context, params APIKeyCreateParams) (
 		if err != nil {
 			return CreatedAPIKey{}, storeFailed(err, "set api key rate limits")
 		}
-		view = s.buildAPIKey(limited.ID, limited.ProjectID, limited.Name, limited.KeyPrefix, limited.LastUsedAt, limited.ExpiresAt, limited.DisabledAt, limited.RevokedAt, limited.SpendLimit, limited.SpentTotal, limited.RouteID, limited.RpmLimit, limited.TpmLimit, limited.RpdLimit, limited.CreatedAt, limited.UpdatedAt)
+		view = s.buildAPIKey(limited.ID, limited.UserID, limited.Name, limited.KeyPrefix, limited.KeyPlaintext, limited.LastUsedAt, limited.ExpiresAt, limited.DisabledAt, limited.RevokedAt, limited.SpendLimit, limited.SpentTotal, limited.RouteID, limited.RpmLimit, limited.TpmLimit, limited.RpdLimit, limited.CreatedAt, limited.UpdatedAt)
 	}
 
 	return CreatedAPIKey{APIKey: view, Plaintext: generated.Plaintext}, nil
@@ -255,7 +263,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdat
 		if err != nil {
 			return APIKey{}, storeFailed(err, "set api key disabled")
 		}
-		latest = s.buildAPIKey(row.ID, row.ProjectID, row.Name, row.KeyPrefix, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
 		applied = true
 	}
 
@@ -271,19 +279,23 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdat
 		if err != nil {
 			return APIKey{}, storeFailed(err, "set api key spend limit")
 		}
-		latest = s.buildAPIKey(row.ID, row.ProjectID, row.Name, row.KeyPrefix, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
 		applied = true
 	}
 
 	if params.RouteProvided {
+		// 线路必填：禁止清空绑定（route_id=null），只能改绑到另一条线路。
+		if params.RouteID == nil || *params.RouteID <= 0 {
+			return APIKey{}, invalidArgument("route_id", "route is required")
+		}
 		row, err := s.store.SetAPIKeyRoute(ctx, sqlc.SetAPIKeyRouteParams{
 			ID:      id,
-			RouteID: int8Narg(params.RouteID),
+			RouteID: *params.RouteID,
 		})
 		if err != nil {
 			return APIKey{}, storeFailed(err, "set api key route")
 		}
-		latest = s.buildAPIKey(row.ID, row.ProjectID, row.Name, row.KeyPrefix, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
 		applied = true
 	}
 
@@ -297,7 +309,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdat
 		if err != nil {
 			return APIKey{}, storeFailed(err, "set api key rate limits")
 		}
-		latest = s.buildAPIKey(row.ID, row.ProjectID, row.Name, row.KeyPrefix, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
 		applied = true
 	}
 
@@ -317,38 +329,51 @@ func (s *APIKeyService) Revoke(ctx context.Context, id int64) (APIKey, error) {
 		}
 		return APIKey{}, storeFailed(err, "revoke api key")
 	}
-	return s.buildAPIKey(row.ID, row.ProjectID, row.Name, row.KeyPrefix, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt), nil
+	return s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt), nil
 }
 
 // buildAPIKey 把各 sqlc row 的公共字段组装为对外 APIKey 视图，并计算状态。
 func (s *APIKeyService) buildAPIKey(
-	id, projectID int64,
+	id, userID int64,
 	name, keyPrefix string,
+	keyPlaintext pgtype.Text,
 	lastUsedAt, expiresAt, disabledAt, revokedAt pgtype.Timestamptz,
 	spendLimit, spentTotal pgtype.Numeric,
-	routeID pgtype.Int8,
+	routeID int64,
 	rpmLimit, tpmLimit, rpdLimit pgtype.Int4,
 	createdAt, updatedAt pgtype.Timestamptz,
 ) APIKey {
+	// route_id 在 DB 层 NOT NULL（线路必填），恒有值；取地址以 *int64 对外表达。
+	boundRouteID := routeID
 	return APIKey{
-		ID:         id,
-		ProjectID:  projectID,
-		Name:       name,
-		KeyPrefix:  keyPrefix,
-		Status:     s.computeStatus(disabledAt, revokedAt, expiresAt),
-		SpendLimit: numericPtr(spendLimit),
-		SpentTotal: numericString(spentTotal),
-		RouteID:    int8ToPtr(routeID),
-		RPMLimit:   int4ToPtr(rpmLimit),
-		TPMLimit:   int4ToPtr(tpmLimit),
-		RPDLimit:   int4ToPtr(rpdLimit),
-		LastUsedAt: timePtr(lastUsedAt),
-		ExpiresAt:  timePtr(expiresAt),
-		DisabledAt: timePtr(disabledAt),
-		RevokedAt:  timePtr(revokedAt),
-		CreatedAt:  createdAt,
-		UpdatedAt:  updatedAt,
+		ID:           id,
+		UserID:       userID,
+		Name:         name,
+		KeyPrefix:    keyPrefix,
+		KeyPlaintext: textPtr(keyPlaintext),
+		Status:       s.computeStatus(disabledAt, revokedAt, expiresAt),
+		SpendLimit:   numericPtr(spendLimit),
+		SpentTotal:   numericString(spentTotal),
+		RouteID:      &boundRouteID,
+		RPMLimit:     int4ToPtr(rpmLimit),
+		TPMLimit:     int4ToPtr(tpmLimit),
+		RPDLimit:     int4ToPtr(rpdLimit),
+		LastUsedAt:   timePtr(lastUsedAt),
+		ExpiresAt:    timePtr(expiresAt),
+		DisabledAt:   timePtr(disabledAt),
+		RevokedAt:    timePtr(revokedAt),
+		CreatedAt:    createdAt,
+		UpdatedAt:    updatedAt,
 	}
+}
+
+// textPtr 把可空 pgtype.Text 转成 *string（nil=历史 key 无明文，不可回显）。
+func textPtr(v pgtype.Text) *string {
+	if !v.Valid {
+		return nil
+	}
+	out := v.String
+	return &out
 }
 
 // int4ToPtr 把可空 pgtype.Int4 转成 *int64（限流上限可空，nil=继承全局默认）。
@@ -366,15 +391,6 @@ func int4Narg(v *int64) pgtype.Int4 {
 		return pgtype.Int4{Valid: false}
 	}
 	return pgtype.Int4{Int32: int32(*v), Valid: true}
-}
-
-// int8ToPtr 把可空 pgtype.Int8 转成 *int64（线路绑定可空）。
-func int8ToPtr(v pgtype.Int8) *int64 {
-	if !v.Valid {
-		return nil
-	}
-	out := v.Int64
-	return &out
 }
 
 func (s *APIKeyService) computeStatus(disabledAt, revokedAt, expiresAt pgtype.Timestamptz) string {

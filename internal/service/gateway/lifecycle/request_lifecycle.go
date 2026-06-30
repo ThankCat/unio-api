@@ -319,7 +319,6 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 	record, err := l.requestLog.CreateRequest(ctx, requestlog.CreateRequestParams{
 		RequestID:        requestID,
 		UserID:           principal.UserID,
-		ProjectID:        principal.ProjectID,
 		APIKeyID:         principal.APIKeyID,
 		RequestedModelID: requestedModelID,
 		IngressProtocol:  l.ingressProtocol,

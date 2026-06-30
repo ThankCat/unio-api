@@ -1,8 +1,8 @@
 // Package channel 编排 admin 管理端的 channel 读写。
 //
 // channel 写入路径负责：① 校验 (protocol, adapter_key) 复合键在 adapter registry 注册
-// （关 GAP-6-003，避免把不可运行绑定写入业务数据）；② 把明文上游凭据经 cipher 加密成
-// credential_encrypted 落库。明文凭据绝不回读、不进日志、不出 DTO。
+// （关 GAP-6-003，避免把不可运行绑定写入业务数据）；② 把上游凭据以明文落库
+// （产品决策：渠道凭据明文存储，管理端可查看/复制/编辑）。
 package channel
 
 import (
@@ -17,7 +17,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 )
@@ -64,7 +63,7 @@ type AdapterKeyOption struct {
 	IsDefault  bool
 }
 
-// Channel 是 admin 视角的 channel 业务事实；不含上游凭据。
+// Channel 是 admin 视角的 channel 业务事实，含明文上游凭据（产品决策：渠道凭据明文，管理端可查看/复制）。
 //
 // ProviderName 由 enrichProviderName 在单条读取/写入后补全；列表场景由 JOIN 直接带出。
 type Channel struct {
@@ -75,6 +74,7 @@ type Channel struct {
 	Protocol     string
 	AdapterKey   string
 	BaseURL      string
+	Credential   string
 	Status       string
 	Priority     int32
 	TimeoutMs    *int32
@@ -145,13 +145,12 @@ type RotateCredentialInput struct {
 // Service 编排 channel 管理读写。
 type Service struct {
 	store    Store
-	cipher   credential.Cipher
 	registry AdapterRegistry
 }
 
 // NewService 创建 channel 管理服务。
-func NewService(store Store, cipher credential.Cipher, registry AdapterRegistry) *Service {
-	return &Service{store: store, cipher: cipher, registry: registry}
+func NewService(store Store, registry AdapterRegistry) *Service {
+	return &Service{store: store, registry: registry}
 }
 
 // AdapterKeyOptions 列出当前进程在受支持协议族下注册的全部 adapter_key，
@@ -277,21 +276,16 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		return Channel{}, storeFailed(err, "load provider for channel")
 	}
 
-	encrypted, err := s.cipher.Encrypt(in.Credential)
-	if err != nil {
-		return Channel{}, err
-	}
-
 	row, err := s.store.CreateChannel(ctx, sqlc.CreateChannelParams{
-		ProviderID:          in.ProviderID,
-		Name:                name,
-		Protocol:            protocol,
-		AdapterKey:          adapterKey,
-		BaseUrl:             baseURL,
-		CredentialEncrypted: encrypted,
-		Status:              status,
-		Priority:            in.Priority,
-		TimeoutMs:           timeoutParam(in.TimeoutMs),
+		ProviderID: in.ProviderID,
+		Name:       name,
+		Protocol:   protocol,
+		AdapterKey: adapterKey,
+		BaseUrl:    baseURL,
+		Credential: strings.TrimSpace(in.Credential),
+		Status:     status,
+		Priority:   in.Priority,
+		TimeoutMs:  timeoutParam(in.TimeoutMs),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -397,14 +391,9 @@ func (s *Service) RotateCredential(ctx context.Context, in RotateCredentialInput
 		return invalidArgument("credential", "credential is required")
 	}
 
-	encrypted, err := s.cipher.Encrypt(in.Credential)
-	if err != nil {
-		return err
-	}
-
 	affected, err := s.store.UpdateChannelCredential(ctx, sqlc.UpdateChannelCredentialParams{
-		ID:                  in.ID,
-		CredentialEncrypted: encrypted,
+		ID:         in.ID,
+		Credential: strings.TrimSpace(in.Credential),
 	})
 	if err != nil {
 		return storeFailed(err, "rotate channel credential")
@@ -448,6 +437,7 @@ func toChannel(c sqlc.Channel) Channel {
 		Protocol:   c.Protocol,
 		AdapterKey: c.AdapterKey,
 		BaseURL:    c.BaseUrl,
+		Credential: c.Credential,
 		Status:     c.Status,
 		Priority:   c.Priority,
 		TimeoutMs:  timeoutResult(c.TimeoutMs),
@@ -484,6 +474,7 @@ func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 		Protocol:     c.Protocol,
 		AdapterKey:   c.AdapterKey,
 		BaseURL:      c.BaseUrl,
+		Credential:   c.Credential,
 		Status:       c.Status,
 		Priority:     c.Priority,
 		TimeoutMs:    timeoutResult(c.TimeoutMs),

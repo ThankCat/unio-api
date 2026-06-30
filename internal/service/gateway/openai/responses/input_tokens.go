@@ -32,7 +32,7 @@ func (s *ResponsesService) CountInputTokens(ctx context.Context, req gatewayapi.
 
 	// routing 仅解析模型→候选，用于选取 tokenizer；不消费候选 fallback 计划，不做能力过滤/授权。
 	plan, err := s.router.PlanChat(ctx, routing.ChatRouteRequest{
-		ProjectID:       principal.ProjectID,
+		UserID:          principal.UserID,
 		ModelID:         req.Model,
 		IngressProtocol: routing.ProtocolOpenAI,
 	})

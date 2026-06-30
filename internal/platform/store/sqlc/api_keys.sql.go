@@ -28,50 +28,60 @@ func (q *Queries) AddAPIKeySpentTotal(ctx context.Context, arg AddAPIKeySpentTot
 	return err
 }
 
-const countAPIKeysByProject = `-- name: CountAPIKeysByProject :one
-SELECT COUNT(*) FROM api_keys WHERE project_id = $1
+const countAPIKeysByUser = `-- name: CountAPIKeysByUser :one
+SELECT COUNT(*) FROM api_keys WHERE user_id = $1
 `
 
-// CountAPIKeysByProject 供 admin API Key 列表分页统计总数。
-func (q *Queries) CountAPIKeysByProject(ctx context.Context, projectID int64) (int64, error) {
-	row := q.db.QueryRow(ctx, countAPIKeysByProject, projectID)
+// CountAPIKeysByUser 供 admin API Key 列表分页统计总数。
+func (q *Queries) CountAPIKeysByUser(ctx context.Context, userID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countAPIKeysByUser, userID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const createAPIKey = `-- name: CreateAPIKey :one
-INSERT INTO api_keys (project_id, name, key_prefix, key_hash, expires_at, route_id)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, project_id, name, key_prefix, key_hash, last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit
+INSERT INTO api_keys (user_id, name, key_prefix, key_hash, key_plaintext, expires_at, route_id)
+VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    $7
+)
+RETURNING id, name, key_prefix, key_hash, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, user_id
 `
 
 type CreateAPIKeyParams struct {
-	ProjectID int64
-	Name      string
-	KeyPrefix string
-	KeyHash   string
-	ExpiresAt pgtype.Timestamptz
-	RouteID   pgtype.Int8
+	UserID       int64
+	Name         string
+	KeyPrefix    string
+	KeyHash      string
+	KeyPlaintext pgtype.Text
+	ExpiresAt    pgtype.Timestamptz
+	RouteID      int64
 }
 
-// CreateAPIKey 创建项目 API Key，只保存 key hash 和展示前缀；route_id 可空（NULL 表示回落项目默认/内置经济）。
+// CreateAPIKey 创建用户 API Key，保存 key hash（认证用）、展示前缀与完整明文（供多次复制）；route_id 必填（线路必须显式绑定，无默认回落）。
 func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (ApiKey, error) {
 	row := q.db.QueryRow(ctx, createAPIKey,
-		arg.ProjectID,
+		arg.UserID,
 		arg.Name,
 		arg.KeyPrefix,
 		arg.KeyHash,
+		arg.KeyPlaintext,
 		arg.ExpiresAt,
 		arg.RouteID,
 	)
 	var i ApiKey
 	err := row.Scan(
 		&i.ID,
-		&i.ProjectID,
 		&i.Name,
 		&i.KeyPrefix,
 		&i.KeyHash,
+		&i.KeyPlaintext,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.DisabledAt,
@@ -84,17 +94,17 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (Api
 		&i.RpmLimit,
 		&i.TpmLimit,
 		&i.RpdLimit,
+		&i.UserID,
 	)
 	return i, err
 }
 
 const getAPIKeyByHash = `-- name: GetAPIKeyByHash :one
-SELECT k.id, p.user_id, k.project_id, k.name, k.key_prefix, k.key_hash, k.last_used_at, k.expires_at, k.disabled_at, k.revoked_at, k.created_at, k.updated_at,
+SELECT k.id, k.user_id, k.name, k.key_prefix, k.key_hash, k.last_used_at, k.expires_at, k.disabled_at, k.revoked_at, k.created_at, k.updated_at,
        (k.spend_limit IS NOT NULL AND k.spent_total >= k.spend_limit) AS spend_limit_reached,
-       k.route_id, p.default_route_id,
+       k.route_id,
        k.rpm_limit, k.tpm_limit, k.rpd_limit
 FROM api_keys k
-JOIN projects p ON p.id = k.project_id
 WHERE key_hash = $1
 LIMIT 1
 `
@@ -102,7 +112,6 @@ LIMIT 1
 type GetAPIKeyByHashRow struct {
 	ID                int64
 	UserID            int64
-	ProjectID         int64
 	Name              string
 	KeyPrefix         string
 	KeyHash           string
@@ -113,23 +122,21 @@ type GetAPIKeyByHashRow struct {
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
 	SpendLimitReached pgtype.Bool
-	RouteID           pgtype.Int8
-	DefaultRouteID    pgtype.Int8
+	RouteID           int64
 	RpmLimit          pgtype.Int4
 	TpmLimit          pgtype.Int4
 	RpdLimit          pgtype.Int4
 }
 
-// GetAPIKeyByHash 按 key hash 读取 API Key，带出所属用户 ID、Key 线路与项目默认线路，并计算是否已达费用上限。
+// GetAPIKeyByHash 按 key hash 读取 API Key，带出所属用户 ID 与 Key 绑定线路，并计算是否已达费用上限。
 // spend_limit_reached 在 SQL 层判定，避免认证路径在 Go 里做 NUMERIC 比较（M7 费用上限闸门）。
-// route_id / default_route_id 供运行时线路解析（key 为准，project 给默认，未选回落内置经济）。
+// route_id 是运行时线路解析的唯一依据（线路必填，无默认回落；线路缺失/停用则拒绝请求）。
 func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKeyByHashRow, error) {
 	row := q.db.QueryRow(ctx, getAPIKeyByHash, keyHash)
 	var i GetAPIKeyByHashRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
-		&i.ProjectID,
 		&i.Name,
 		&i.KeyPrefix,
 		&i.KeyHash,
@@ -141,7 +148,6 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKe
 		&i.UpdatedAt,
 		&i.SpendLimitReached,
 		&i.RouteID,
-		&i.DefaultRouteID,
 		&i.RpmLimit,
 		&i.TpmLimit,
 		&i.RpdLimit,
@@ -150,43 +156,42 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKe
 }
 
 const getAPIKeyByID = `-- name: GetAPIKeyByID :one
-SELECT k.id, p.user_id, k.project_id, k.name, k.key_prefix, k.last_used_at, k.expires_at, k.disabled_at, k.revoked_at, k.spend_limit, k.spent_total, k.route_id, k.rpm_limit, k.tpm_limit, k.rpd_limit, k.created_at, k.updated_at
+SELECT k.id, k.user_id, k.name, k.key_prefix, k.key_plaintext, k.last_used_at, k.expires_at, k.disabled_at, k.revoked_at, k.spend_limit, k.spent_total, k.route_id, k.rpm_limit, k.tpm_limit, k.rpd_limit, k.created_at, k.updated_at
 FROM api_keys k
-JOIN projects p ON p.id = k.project_id
 WHERE k.id = $1
 LIMIT 1
 `
 
 type GetAPIKeyByIDRow struct {
-	ID         int64
-	UserID     int64
-	ProjectID  int64
-	Name       string
-	KeyPrefix  string
-	LastUsedAt pgtype.Timestamptz
-	ExpiresAt  pgtype.Timestamptz
-	DisabledAt pgtype.Timestamptz
-	RevokedAt  pgtype.Timestamptz
-	SpendLimit pgtype.Numeric
-	SpentTotal pgtype.Numeric
-	RouteID    pgtype.Int8
-	RpmLimit   pgtype.Int4
-	TpmLimit   pgtype.Int4
-	RpdLimit   pgtype.Int4
-	CreatedAt  pgtype.Timestamptz
-	UpdatedAt  pgtype.Timestamptz
+	ID           int64
+	UserID       int64
+	Name         string
+	KeyPrefix    string
+	KeyPlaintext pgtype.Text
+	LastUsedAt   pgtype.Timestamptz
+	ExpiresAt    pgtype.Timestamptz
+	DisabledAt   pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	SpendLimit   pgtype.Numeric
+	SpentTotal   pgtype.Numeric
+	RouteID      int64
+	RpmLimit     pgtype.Int4
+	TpmLimit     pgtype.Int4
+	RpdLimit     pgtype.Int4
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
 
-// GetAPIKeyByID 供 admin 按 id 读取单把 API Key（带所属用户 ID 与线路）。
+// GetAPIKeyByID 供 admin 按 id 读取单把 API Key（带所属用户 ID 与 Key 绑定线路；返回明文 key 供复制）。
 func (q *Queries) GetAPIKeyByID(ctx context.Context, id int64) (GetAPIKeyByIDRow, error) {
 	row := q.db.QueryRow(ctx, getAPIKeyByID, id)
 	var i GetAPIKeyByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
-		&i.ProjectID,
 		&i.Name,
 		&i.KeyPrefix,
+		&i.KeyPlaintext,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.DisabledAt,
@@ -203,54 +208,56 @@ func (q *Queries) GetAPIKeyByID(ctx context.Context, id int64) (GetAPIKeyByIDRow
 	return i, err
 }
 
-const listAPIKeysByProjectPage = `-- name: ListAPIKeysByProjectPage :many
-SELECT id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
+const listAPIKeysByUserPage = `-- name: ListAPIKeysByUserPage :many
+SELECT id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
 FROM api_keys
-WHERE project_id = $1
+WHERE user_id = $1
 ORDER BY created_at DESC, id DESC
 LIMIT $3 OFFSET $2
 `
 
-type ListAPIKeysByProjectPageParams struct {
-	ProjectID  int64
+type ListAPIKeysByUserPageParams struct {
+	UserID     int64
 	PageOffset int32
 	PageLimit  int32
 }
 
-type ListAPIKeysByProjectPageRow struct {
-	ID         int64
-	ProjectID  int64
-	Name       string
-	KeyPrefix  string
-	LastUsedAt pgtype.Timestamptz
-	ExpiresAt  pgtype.Timestamptz
-	DisabledAt pgtype.Timestamptz
-	RevokedAt  pgtype.Timestamptz
-	SpendLimit pgtype.Numeric
-	SpentTotal pgtype.Numeric
-	RouteID    pgtype.Int8
-	RpmLimit   pgtype.Int4
-	TpmLimit   pgtype.Int4
-	RpdLimit   pgtype.Int4
-	CreatedAt  pgtype.Timestamptz
-	UpdatedAt  pgtype.Timestamptz
+type ListAPIKeysByUserPageRow struct {
+	ID           int64
+	UserID       int64
+	Name         string
+	KeyPrefix    string
+	KeyPlaintext pgtype.Text
+	LastUsedAt   pgtype.Timestamptz
+	ExpiresAt    pgtype.Timestamptz
+	DisabledAt   pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	SpendLimit   pgtype.Numeric
+	SpentTotal   pgtype.Numeric
+	RouteID      int64
+	RpmLimit     pgtype.Int4
+	TpmLimit     pgtype.Int4
+	RpdLimit     pgtype.Int4
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
 
-// ListAPIKeysByProjectPage 供 admin 按项目分页倒序列出 API Key（不返回 key_hash）。
-func (q *Queries) ListAPIKeysByProjectPage(ctx context.Context, arg ListAPIKeysByProjectPageParams) ([]ListAPIKeysByProjectPageRow, error) {
-	rows, err := q.db.Query(ctx, listAPIKeysByProjectPage, arg.ProjectID, arg.PageOffset, arg.PageLimit)
+// ListAPIKeysByUserPage 供 admin 按用户分页倒序列出 API Key（返回明文 key 供复制，不返回 key_hash）。
+func (q *Queries) ListAPIKeysByUserPage(ctx context.Context, arg ListAPIKeysByUserPageParams) ([]ListAPIKeysByUserPageRow, error) {
+	rows, err := q.db.Query(ctx, listAPIKeysByUserPage, arg.UserID, arg.PageOffset, arg.PageLimit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListAPIKeysByProjectPageRow
+	var items []ListAPIKeysByUserPageRow
 	for rows.Next() {
-		var i ListAPIKeysByProjectPageRow
+		var i ListAPIKeysByUserPageRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.ProjectID,
+			&i.UserID,
 			&i.Name,
 			&i.KeyPrefix,
+			&i.KeyPlaintext,
 			&i.LastUsedAt,
 			&i.ExpiresAt,
 			&i.DisabledAt,
@@ -278,26 +285,27 @@ const revokeAPIKey = `-- name: RevokeAPIKey :one
 UPDATE api_keys
 SET revoked_at = now(), updated_at = now()
 WHERE id = $1 AND revoked_at IS NULL
-RETURNING id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
 `
 
 type RevokeAPIKeyRow struct {
-	ID         int64
-	ProjectID  int64
-	Name       string
-	KeyPrefix  string
-	LastUsedAt pgtype.Timestamptz
-	ExpiresAt  pgtype.Timestamptz
-	DisabledAt pgtype.Timestamptz
-	RevokedAt  pgtype.Timestamptz
-	SpendLimit pgtype.Numeric
-	SpentTotal pgtype.Numeric
-	RouteID    pgtype.Int8
-	RpmLimit   pgtype.Int4
-	TpmLimit   pgtype.Int4
-	RpdLimit   pgtype.Int4
-	CreatedAt  pgtype.Timestamptz
-	UpdatedAt  pgtype.Timestamptz
+	ID           int64
+	UserID       int64
+	Name         string
+	KeyPrefix    string
+	KeyPlaintext pgtype.Text
+	LastUsedAt   pgtype.Timestamptz
+	ExpiresAt    pgtype.Timestamptz
+	DisabledAt   pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	SpendLimit   pgtype.Numeric
+	SpentTotal   pgtype.Numeric
+	RouteID      int64
+	RpmLimit     pgtype.Int4
+	TpmLimit     pgtype.Int4
+	RpdLimit     pgtype.Int4
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
 
 // RevokeAPIKey 永久吊销 API Key（revoked_at 置 now()，不可逆）。
@@ -306,9 +314,10 @@ func (q *Queries) RevokeAPIKey(ctx context.Context, id int64) (RevokeAPIKeyRow, 
 	var i RevokeAPIKeyRow
 	err := row.Scan(
 		&i.ID,
-		&i.ProjectID,
+		&i.UserID,
 		&i.Name,
 		&i.KeyPrefix,
+		&i.KeyPlaintext,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.DisabledAt,
@@ -329,7 +338,7 @@ const setAPIKeyDisabled = `-- name: SetAPIKeyDisabled :one
 UPDATE api_keys
 SET disabled_at = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
 `
 
 type SetAPIKeyDisabledParams struct {
@@ -338,22 +347,23 @@ type SetAPIKeyDisabledParams struct {
 }
 
 type SetAPIKeyDisabledRow struct {
-	ID         int64
-	ProjectID  int64
-	Name       string
-	KeyPrefix  string
-	LastUsedAt pgtype.Timestamptz
-	ExpiresAt  pgtype.Timestamptz
-	DisabledAt pgtype.Timestamptz
-	RevokedAt  pgtype.Timestamptz
-	SpendLimit pgtype.Numeric
-	SpentTotal pgtype.Numeric
-	RouteID    pgtype.Int8
-	RpmLimit   pgtype.Int4
-	TpmLimit   pgtype.Int4
-	RpdLimit   pgtype.Int4
-	CreatedAt  pgtype.Timestamptz
-	UpdatedAt  pgtype.Timestamptz
+	ID           int64
+	UserID       int64
+	Name         string
+	KeyPrefix    string
+	KeyPlaintext pgtype.Text
+	LastUsedAt   pgtype.Timestamptz
+	ExpiresAt    pgtype.Timestamptz
+	DisabledAt   pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	SpendLimit   pgtype.Numeric
+	SpentTotal   pgtype.Numeric
+	RouteID      int64
+	RpmLimit     pgtype.Int4
+	TpmLimit     pgtype.Int4
+	RpdLimit     pgtype.Int4
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
 
 // SetAPIKeyDisabled 启停 API Key：disabled_at 置 now() 为停用，置 NULL 为启用。
@@ -362,9 +372,10 @@ func (q *Queries) SetAPIKeyDisabled(ctx context.Context, arg SetAPIKeyDisabledPa
 	var i SetAPIKeyDisabledRow
 	err := row.Scan(
 		&i.ID,
-		&i.ProjectID,
+		&i.UserID,
 		&i.Name,
 		&i.KeyPrefix,
+		&i.KeyPlaintext,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.DisabledAt,
@@ -385,7 +396,7 @@ const setAPIKeyRateLimits = `-- name: SetAPIKeyRateLimits :one
 UPDATE api_keys
 SET rpm_limit = $1, tpm_limit = $2, rpd_limit = $3, updated_at = now()
 WHERE id = $4
-RETURNING id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
 `
 
 type SetAPIKeyRateLimitsParams struct {
@@ -396,22 +407,23 @@ type SetAPIKeyRateLimitsParams struct {
 }
 
 type SetAPIKeyRateLimitsRow struct {
-	ID         int64
-	ProjectID  int64
-	Name       string
-	KeyPrefix  string
-	LastUsedAt pgtype.Timestamptz
-	ExpiresAt  pgtype.Timestamptz
-	DisabledAt pgtype.Timestamptz
-	RevokedAt  pgtype.Timestamptz
-	SpendLimit pgtype.Numeric
-	SpentTotal pgtype.Numeric
-	RouteID    pgtype.Int8
-	RpmLimit   pgtype.Int4
-	TpmLimit   pgtype.Int4
-	RpdLimit   pgtype.Int4
-	CreatedAt  pgtype.Timestamptz
-	UpdatedAt  pgtype.Timestamptz
+	ID           int64
+	UserID       int64
+	Name         string
+	KeyPrefix    string
+	KeyPlaintext pgtype.Text
+	LastUsedAt   pgtype.Timestamptz
+	ExpiresAt    pgtype.Timestamptz
+	DisabledAt   pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	SpendLimit   pgtype.Numeric
+	SpentTotal   pgtype.Numeric
+	RouteID      int64
+	RpmLimit     pgtype.Int4
+	TpmLimit     pgtype.Int4
+	RpdLimit     pgtype.Int4
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
 
 // SetAPIKeyRateLimits 设置/清除 API Key 的令牌级限流上限（P2-8）；各列 NULL=继承全局默认，0=不限，>0=具体上限。
@@ -425,9 +437,10 @@ func (q *Queries) SetAPIKeyRateLimits(ctx context.Context, arg SetAPIKeyRateLimi
 	var i SetAPIKeyRateLimitsRow
 	err := row.Scan(
 		&i.ID,
-		&i.ProjectID,
+		&i.UserID,
 		&i.Name,
 		&i.KeyPrefix,
+		&i.KeyPlaintext,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.DisabledAt,
@@ -448,42 +461,44 @@ const setAPIKeyRoute = `-- name: SetAPIKeyRoute :one
 UPDATE api_keys
 SET route_id = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
 `
 
 type SetAPIKeyRouteParams struct {
-	RouteID pgtype.Int8
+	RouteID int64
 	ID      int64
 }
 
 type SetAPIKeyRouteRow struct {
-	ID         int64
-	ProjectID  int64
-	Name       string
-	KeyPrefix  string
-	LastUsedAt pgtype.Timestamptz
-	ExpiresAt  pgtype.Timestamptz
-	DisabledAt pgtype.Timestamptz
-	RevokedAt  pgtype.Timestamptz
-	SpendLimit pgtype.Numeric
-	SpentTotal pgtype.Numeric
-	RouteID    pgtype.Int8
-	RpmLimit   pgtype.Int4
-	TpmLimit   pgtype.Int4
-	RpdLimit   pgtype.Int4
-	CreatedAt  pgtype.Timestamptz
-	UpdatedAt  pgtype.Timestamptz
+	ID           int64
+	UserID       int64
+	Name         string
+	KeyPrefix    string
+	KeyPlaintext pgtype.Text
+	LastUsedAt   pgtype.Timestamptz
+	ExpiresAt    pgtype.Timestamptz
+	DisabledAt   pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	SpendLimit   pgtype.Numeric
+	SpentTotal   pgtype.Numeric
+	RouteID      int64
+	RpmLimit     pgtype.Int4
+	TpmLimit     pgtype.Int4
+	RpdLimit     pgtype.Int4
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
 
-// SetAPIKeyRoute 设置/清除 API Key 绑定的线路；route_id 为 NULL 表示回落项目默认/内置经济。
+// SetAPIKeyRoute 改绑 API Key 的线路；route_id 必填（线路不可清空，必须指向一条线路）。
 func (q *Queries) SetAPIKeyRoute(ctx context.Context, arg SetAPIKeyRouteParams) (SetAPIKeyRouteRow, error) {
 	row := q.db.QueryRow(ctx, setAPIKeyRoute, arg.RouteID, arg.ID)
 	var i SetAPIKeyRouteRow
 	err := row.Scan(
 		&i.ID,
-		&i.ProjectID,
+		&i.UserID,
 		&i.Name,
 		&i.KeyPrefix,
+		&i.KeyPlaintext,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.DisabledAt,
@@ -504,7 +519,7 @@ const setAPIKeySpendLimit = `-- name: SetAPIKeySpendLimit :one
 UPDATE api_keys
 SET spend_limit = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, project_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
 `
 
 type SetAPIKeySpendLimitParams struct {
@@ -513,22 +528,23 @@ type SetAPIKeySpendLimitParams struct {
 }
 
 type SetAPIKeySpendLimitRow struct {
-	ID         int64
-	ProjectID  int64
-	Name       string
-	KeyPrefix  string
-	LastUsedAt pgtype.Timestamptz
-	ExpiresAt  pgtype.Timestamptz
-	DisabledAt pgtype.Timestamptz
-	RevokedAt  pgtype.Timestamptz
-	SpendLimit pgtype.Numeric
-	SpentTotal pgtype.Numeric
-	RouteID    pgtype.Int8
-	RpmLimit   pgtype.Int4
-	TpmLimit   pgtype.Int4
-	RpdLimit   pgtype.Int4
-	CreatedAt  pgtype.Timestamptz
-	UpdatedAt  pgtype.Timestamptz
+	ID           int64
+	UserID       int64
+	Name         string
+	KeyPrefix    string
+	KeyPlaintext pgtype.Text
+	LastUsedAt   pgtype.Timestamptz
+	ExpiresAt    pgtype.Timestamptz
+	DisabledAt   pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	SpendLimit   pgtype.Numeric
+	SpentTotal   pgtype.Numeric
+	RouteID      int64
+	RpmLimit     pgtype.Int4
+	TpmLimit     pgtype.Int4
+	RpdLimit     pgtype.Int4
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
 
 // SetAPIKeySpendLimit 设置/清除 API Key 费用上限；spend_limit 为 NULL 表示不限额。
@@ -537,9 +553,10 @@ func (q *Queries) SetAPIKeySpendLimit(ctx context.Context, arg SetAPIKeySpendLim
 	var i SetAPIKeySpendLimitRow
 	err := row.Scan(
 		&i.ID,
-		&i.ProjectID,
+		&i.UserID,
 		&i.Name,
 		&i.KeyPrefix,
+		&i.KeyPlaintext,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.DisabledAt,

@@ -181,7 +181,7 @@ func TestRouterV1ChatCompletionPreservesThinkingExtension(t *testing.T) {
 	authenticator := &fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -229,7 +229,7 @@ func TestRouterV1ChatCompletionPassesTypedServiceTierToService(t *testing.T) {
 	authenticator := &fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}

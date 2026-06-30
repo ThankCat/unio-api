@@ -16,25 +16,22 @@ SELECT COUNT(*) AS total
 FROM usage_records u
 JOIN request_records r ON r.id = u.request_record_id
 WHERE ($1::bigint IS NULL OR r.user_id = $1::bigint)
-  AND ($2::bigint IS NULL OR r.project_id = $2::bigint)
-  AND ($3::text IS NULL OR r.requested_model_id ILIKE '%' || $3::text || '%')
-  AND ($4::timestamptz IS NULL OR u.created_at >= $4::timestamptz)
-  AND ($5::timestamptz IS NULL OR u.created_at < $5::timestamptz)
+  AND ($2::text IS NULL OR r.requested_model_id ILIKE '%' || $2::text || '%')
+  AND ($3::timestamptz IS NULL OR u.created_at >= $3::timestamptz)
+  AND ($4::timestamptz IS NULL OR u.created_at < $4::timestamptz)
 `
 
 type CountUsageRecordsParams struct {
-	UserID    pgtype.Int8
-	ProjectID pgtype.Int8
-	Model     pgtype.Text
-	FromTime  pgtype.Timestamptz
-	ToTime    pgtype.Timestamptz
+	UserID   pgtype.Int8
+	Model    pgtype.Text
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
 }
 
 // CountUsageRecords 返回与 ListUsageRecordsPage 相同过滤条件下的总条数。
 func (q *Queries) CountUsageRecords(ctx context.Context, arg CountUsageRecordsParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countUsageRecords,
 		arg.UserID,
-		arg.ProjectID,
 		arg.Model,
 		arg.FromTime,
 		arg.ToTime,
@@ -180,7 +177,6 @@ SELECT
     u.request_record_id,
     r.request_id,
     r.user_id,
-    r.project_id,
     r.api_key_id,
     r.requested_model_id,
     r.response_model_id,
@@ -197,24 +193,22 @@ SELECT
 FROM usage_records u
 JOIN request_records r ON r.id = u.request_record_id
 WHERE ($1::bigint IS NULL OR r.user_id = $1::bigint)
-  AND ($2::bigint IS NULL OR r.project_id = $2::bigint)
-  AND ($3::text IS NULL OR r.requested_model_id ILIKE '%' || $3::text || '%')
-  AND ($4::timestamptz IS NULL OR u.created_at >= $4::timestamptz)
-  AND ($5::timestamptz IS NULL OR u.created_at < $5::timestamptz)
+  AND ($2::text IS NULL OR r.requested_model_id ILIKE '%' || $2::text || '%')
+  AND ($3::timestamptz IS NULL OR u.created_at >= $3::timestamptz)
+  AND ($4::timestamptz IS NULL OR u.created_at < $4::timestamptz)
 ORDER BY
-  CASE WHEN COALESCE($6::text, 'created_at') IN ('', 'created_at') AND COALESCE($7::bool, true) THEN u.created_at END DESC NULLS LAST,
-  CASE WHEN COALESCE($6::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($7::bool, true) THEN u.created_at END ASC NULLS LAST,
-  CASE WHEN $6::text = 'model' AND COALESCE($7::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
-  CASE WHEN $6::text = 'model' AND NOT COALESCE($7::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
-  CASE WHEN $6::text = 'user_id' AND COALESCE($7::bool, false) THEN r.user_id END DESC NULLS LAST,
-  CASE WHEN $6::text = 'user_id' AND NOT COALESCE($7::bool, false) THEN r.user_id END ASC NULLS LAST,
+  CASE WHEN COALESCE($5::text, 'created_at') IN ('', 'created_at') AND COALESCE($6::bool, true) THEN u.created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE($5::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($6::bool, true) THEN u.created_at END ASC NULLS LAST,
+  CASE WHEN $5::text = 'model' AND COALESCE($6::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
+  CASE WHEN $5::text = 'model' AND NOT COALESCE($6::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
+  CASE WHEN $5::text = 'user_id' AND COALESCE($6::bool, false) THEN r.user_id END DESC NULLS LAST,
+  CASE WHEN $5::text = 'user_id' AND NOT COALESCE($6::bool, false) THEN r.user_id END ASC NULLS LAST,
   u.id DESC
-LIMIT $9 OFFSET $8
+LIMIT $8 OFFSET $7
 `
 
 type ListUsageRecordsPageParams struct {
 	UserID     pgtype.Int8
-	ProjectID  pgtype.Int8
 	Model      pgtype.Text
 	FromTime   pgtype.Timestamptz
 	ToTime     pgtype.Timestamptz
@@ -229,7 +223,6 @@ type ListUsageRecordsPageRow struct {
 	RequestRecordID         int64
 	RequestID               string
 	UserID                  int64
-	ProjectID               int64
 	ApiKeyID                int64
 	RequestedModelID        string
 	ResponseModelID         pgtype.Text
@@ -245,12 +238,11 @@ type ListUsageRecordsPageRow struct {
 	CreatedAt               pgtype.Timestamptz
 }
 
-// ListUsageRecordsPage 供 admin 只读查询台（M6）按用户/项目/模型/时间过滤分页倒序列出用量。
-// JOIN request_records 取请求归属维度，便于后台按 user/project/model 检索。
+// ListUsageRecordsPage 供 admin 只读查询台（M6）按用户/模型/时间过滤分页倒序列出用量。
+// JOIN request_records 取请求归属维度，便于后台按 user/model 检索。
 func (q *Queries) ListUsageRecordsPage(ctx context.Context, arg ListUsageRecordsPageParams) ([]ListUsageRecordsPageRow, error) {
 	rows, err := q.db.Query(ctx, listUsageRecordsPage,
 		arg.UserID,
-		arg.ProjectID,
 		arg.Model,
 		arg.FromTime,
 		arg.ToTime,
@@ -271,7 +263,6 @@ func (q *Queries) ListUsageRecordsPage(ctx context.Context, arg ListUsageRecords
 			&i.RequestRecordID,
 			&i.RequestID,
 			&i.UserID,
-			&i.ProjectID,
 			&i.ApiKeyID,
 			&i.RequestedModelID,
 			&i.ResponseModelID,

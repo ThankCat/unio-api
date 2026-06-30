@@ -25,7 +25,6 @@ type RequestStore interface {
 // RequestListParams 是分页/过滤/排序列出请求记录的入参；指针/空串/nil 表示该维度不过滤。
 type RequestListParams struct {
 	UserID    *int64
-	ProjectID *int64
 	APIKeyID  *int64
 	Status    string
 	Model     string
@@ -39,30 +38,29 @@ type RequestListParams struct {
 
 // RequestSummary 是请求列表项（不含 internal_error_detail）。
 type RequestSummary struct {
-	ID                    int64
-	RequestID             string
-	UserID                int64
-	ProjectID             int64
-	APIKeyID              int64
-	RequestedModelID      string
-	IngressProtocol       string
-	Operation             string
-	ResponseModelID       *string
-	ResponseProtocol      *string
-	ResponseID            *string
-	Stream                bool
-	Status                string
-	FinalProviderID       *int64
-	FinalChannelID        *int64
-	ErrorCode             *string
-	ErrorMessage          *string
-	DeliveryStatus        string
-	ResponseStartedAt     *time.Time
-	ResponseCompletedAt   *time.Time
-	StartedAt             time.Time
-	CompletedAt           *time.Time
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	ID                  int64
+	RequestID           string
+	UserID              int64
+	APIKeyID            int64
+	RequestedModelID    string
+	IngressProtocol     string
+	Operation           string
+	ResponseModelID     *string
+	ResponseProtocol    *string
+	ResponseID          *string
+	Stream              bool
+	Status              string
+	FinalProviderID     *int64
+	FinalChannelID      *int64
+	ErrorCode           *string
+	ErrorMessage        *string
+	DeliveryStatus      string
+	ResponseStartedAt   *time.Time
+	ResponseCompletedAt *time.Time
+	StartedAt           time.Time
+	CompletedAt         *time.Time
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // Attempt 是一次上游 channel 尝试事实；InternalErrorDetail 仅在 includeInternal 时填充。
@@ -116,7 +114,6 @@ func NewRequestService(store RequestStore) *RequestService {
 func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]RequestSummary, int64, error) {
 	rows, err := s.store.ListRequestRecordsPage(ctx, sqlc.ListRequestRecordsPageParams{
 		UserID:     int8Narg(params.UserID),
-		ProjectID:  int8Narg(params.ProjectID),
 		ApiKeyID:   int8Narg(params.APIKeyID),
 		Status:     textNarg(params.Status),
 		Model:      textNarg(params.Model),
@@ -132,13 +129,12 @@ func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]
 	}
 
 	total, err := s.store.CountRequestRecords(ctx, sqlc.CountRequestRecordsParams{
-		UserID:    int8Narg(params.UserID),
-		ProjectID: int8Narg(params.ProjectID),
-		ApiKeyID:  int8Narg(params.APIKeyID),
-		Status:    textNarg(params.Status),
-		Model:     textNarg(params.Model),
-		FromTime:  tsNarg(params.From),
-		ToTime:    tsNarg(params.To),
+		UserID:   int8Narg(params.UserID),
+		ApiKeyID: int8Narg(params.APIKeyID),
+		Status:   textNarg(params.Status),
+		Model:    textNarg(params.Model),
+		FromTime: tsNarg(params.From),
+		ToTime:   tsNarg(params.To),
 	})
 	if err != nil {
 		return nil, 0, storeFailed(err, "count request records")
@@ -216,19 +212,18 @@ func (s *RequestService) Get(ctx context.Context, requestID string, includeInter
 
 func toRequestSummary(r sqlc.ListRequestRecordsPageRow) RequestSummary {
 	return RequestSummary{
-		ID:                    r.ID,
-		RequestID:             r.RequestID,
-		UserID:                r.UserID,
-		ProjectID:             r.ProjectID,
-		APIKeyID:              r.ApiKeyID,
-		RequestedModelID:      r.RequestedModelID,
-		IngressProtocol:       r.IngressProtocol,
-		Operation:             r.Operation,
-		ResponseModelID:       textPtr(r.ResponseModelID),
-		ResponseProtocol:      textPtr(r.ResponseProtocol),
-		ResponseID:            textPtr(r.ResponseID),
-		Stream:                r.Stream,
-		Status:                r.Status,
+		ID:                  r.ID,
+		RequestID:           r.RequestID,
+		UserID:              r.UserID,
+		APIKeyID:            r.ApiKeyID,
+		RequestedModelID:    r.RequestedModelID,
+		IngressProtocol:     r.IngressProtocol,
+		Operation:           r.Operation,
+		ResponseModelID:     textPtr(r.ResponseModelID),
+		ResponseProtocol:    textPtr(r.ResponseProtocol),
+		ResponseID:          textPtr(r.ResponseID),
+		Stream:              r.Stream,
+		Status:              r.Status,
 		FinalProviderID:     int8Ptr(r.FinalProviderID),
 		FinalChannelID:      int8Ptr(r.FinalChannelID),
 		ErrorCode:           textPtr(r.ErrorCode),
@@ -245,30 +240,29 @@ func toRequestSummary(r sqlc.ListRequestRecordsPageRow) RequestSummary {
 
 func summaryFromRecord(r sqlc.RequestRecord) RequestSummary {
 	return RequestSummary{
-		ID:                    r.ID,
-		RequestID:             r.RequestID,
-		UserID:                r.UserID,
-		ProjectID:             r.ProjectID,
-		APIKeyID:              r.ApiKeyID,
-		RequestedModelID:      r.RequestedModelID,
-		IngressProtocol:       r.IngressProtocol,
-		Operation:             r.Operation,
-		ResponseModelID:       textPtr(r.ResponseModelID),
-		ResponseProtocol:      textPtr(r.ResponseProtocol),
-		ResponseID:            textPtr(r.ResponseID),
-		Stream:                r.Stream,
-		Status:                r.Status,
+		ID:                  r.ID,
+		RequestID:           r.RequestID,
+		UserID:              r.UserID,
+		APIKeyID:            r.ApiKeyID,
+		RequestedModelID:    r.RequestedModelID,
+		IngressProtocol:     r.IngressProtocol,
+		Operation:           r.Operation,
+		ResponseModelID:     textPtr(r.ResponseModelID),
+		ResponseProtocol:    textPtr(r.ResponseProtocol),
+		ResponseID:          textPtr(r.ResponseID),
+		Stream:              r.Stream,
+		Status:              r.Status,
 		FinalProviderID:     int8Ptr(r.FinalProviderID),
 		FinalChannelID:      int8Ptr(r.FinalChannelID),
 		ErrorCode:           textPtr(r.ErrorCode),
 		ErrorMessage:        textPtr(r.ErrorMessage),
 		DeliveryStatus:      r.DeliveryStatus,
-		ResponseStartedAt:     timePtr(r.ResponseStartedAt),
-		ResponseCompletedAt:   timePtr(r.ResponseCompletedAt),
-		StartedAt:             r.StartedAt.Time,
-		CompletedAt:           timePtr(r.CompletedAt),
-		CreatedAt:             r.CreatedAt.Time,
-		UpdatedAt:             r.UpdatedAt.Time,
+		ResponseStartedAt:   timePtr(r.ResponseStartedAt),
+		ResponseCompletedAt: timePtr(r.ResponseCompletedAt),
+		StartedAt:           r.StartedAt.Time,
+		CompletedAt:         timePtr(r.CompletedAt),
+		CreatedAt:           r.CreatedAt.Time,
+		UpdatedAt:           r.UpdatedAt.Time,
 	}
 }
 

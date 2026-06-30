@@ -14,7 +14,7 @@ type RouteOpsService interface {
 	Table(ctx context.Context, p routeops.TableParams) ([]routeops.Row, int64, error)
 	Detail(ctx context.Context, routeID int64, from, to time.Time) (routeops.Detail, error)
 	ChannelPool(ctx context.Context, routeID int64) ([]routeops.ChannelPoolRow, error)
-	Bindings(ctx context.Context, routeID int64) ([]routeops.BoundProject, []routeops.BoundKey, error)
+	Bindings(ctx context.Context, routeID int64) ([]routeops.BoundUser, []routeops.BoundKey, error)
 	PerformanceTimeseries(ctx context.Context, routeID int64, interval string, from, to time.Time) ([]routeops.PerfPoint, error)
 	Models(ctx context.Context, routeID int64, from, to time.Time) ([]routeops.ModelRow, error)
 	Requests(ctx context.Context, routeID int64, from, to time.Time, limit, offset int32) ([]routeops.RequestRow, int64, error)
@@ -28,7 +28,6 @@ type routesOpsSummaryDTO struct {
 	Total         int64   `json:"total"`
 	Enabled       int64   `json:"enabled"`
 	Disabled      int64   `json:"disabled"`
-	Builtin       int64   `json:"builtin"`
 	RequestTotal  int64   `json:"request_total"`
 	Succeeded     int64   `json:"succeeded"`
 	SuccessRate   float64 `json:"success_rate"`
@@ -43,9 +42,9 @@ type routeOpsRowDTO struct {
 	Name             string  `json:"name"`
 	Mode             string  `json:"mode"`
 	PoolKind         string  `json:"pool_kind"`
-	IsBuiltin        bool    `json:"is_builtin"`
 	Status           string  `json:"status"`
 	Description      string  `json:"description"`
+	PriceRatio       string  `json:"price_ratio"`
 	RequestTotal     int64   `json:"request_total"`
 	RequestSucceeded int64   `json:"request_succeeded"`
 	SuccessRate      float64 `json:"success_rate"`
@@ -53,7 +52,7 @@ type routeOpsRowDTO struct {
 	FallbackRate     float64 `json:"fallback_rate"`
 	NoChannelTotal   int64   `json:"no_channel_total"`
 	LatencyP95       float64 `json:"latency_p95"`
-	BoundProjects    int64   `json:"bound_projects"`
+	BoundUsers       int64   `json:"bound_users"`
 	BoundKeys        int64   `json:"bound_keys"`
 	PoolChannels     int64   `json:"pool_channels"`
 	Serviceable      bool    `json:"serviceable"`
@@ -79,22 +78,22 @@ type routeOpsChannelPoolDTO struct {
 	ProviderName  string `json:"provider_name"`
 }
 
-type routeOpsBoundProjectDTO struct {
-	ID     int64  `json:"id"`
-	Name   string `json:"name"`
-	UserID int64  `json:"user_id"`
+type routeOpsBoundUserDTO struct {
+	ID          int64  `json:"id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
 }
 
 type routeOpsBoundKeyDTO struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	ProjectID int64  `json:"project_id"`
-	Status    string `json:"status"`
+	ID     int64  `json:"id"`
+	Name   string `json:"name"`
+	UserID int64  `json:"user_id"`
+	Status string `json:"status"`
 }
 
 type routeOpsBindingsDTO struct {
-	Projects []routeOpsBoundProjectDTO `json:"projects"`
-	Keys     []routeOpsBoundKeyDTO     `json:"keys"`
+	Users []routeOpsBoundUserDTO `json:"users"`
+	Keys  []routeOpsBoundKeyDTO  `json:"keys"`
 }
 
 type routeOpsPerfPointDTO struct {
@@ -135,7 +134,6 @@ func (h *routeOpsHandler) summary(w http.ResponseWriter, r *http.Request) {
 		Total:         s.Total,
 		Enabled:       s.Enabled,
 		Disabled:      s.Disabled,
-		Builtin:       s.Builtin,
 		RequestTotal:  s.RequestTotal,
 		Succeeded:     s.Succeeded,
 		SuccessRate:   s.SuccessRate,
@@ -184,9 +182,9 @@ func (h *routeOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			Name:             row.Name,
 			Mode:             row.Mode,
 			PoolKind:         row.PoolKind,
-			IsBuiltin:        row.IsBuiltin,
 			Status:           row.Status,
 			Description:      row.Description,
+			PriceRatio:       row.PriceRatio,
 			RequestTotal:     row.RequestTotal,
 			RequestSucceeded: row.RequestSucceeded,
 			SuccessRate:      row.SuccessRate,
@@ -194,7 +192,7 @@ func (h *routeOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			FallbackRate:     row.FallbackRate,
 			NoChannelTotal:   row.NoChannelTotal,
 			LatencyP95:       row.LatencyP95,
-			BoundProjects:    row.BoundProjects,
+			BoundUsers:       row.BoundUsers,
 			BoundKeys:        row.BoundKeys,
 			PoolChannels:     row.PoolChannels,
 			Serviceable:      row.Serviceable,
@@ -256,20 +254,20 @@ func (h *routeOpsHandler) bindings(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	projects, keys, err := h.service.Bindings(r.Context(), id)
+	users, keys, err := h.service.Bindings(r.Context(), id)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	dto := routeOpsBindingsDTO{
-		Projects: make([]routeOpsBoundProjectDTO, 0, len(projects)),
-		Keys:     make([]routeOpsBoundKeyDTO, 0, len(keys)),
+		Users: make([]routeOpsBoundUserDTO, 0, len(users)),
+		Keys:  make([]routeOpsBoundKeyDTO, 0, len(keys)),
 	}
-	for _, p := range projects {
-		dto.Projects = append(dto.Projects, routeOpsBoundProjectDTO{ID: p.ID, Name: p.Name, UserID: p.UserID})
+	for _, u := range users {
+		dto.Users = append(dto.Users, routeOpsBoundUserDTO{ID: u.ID, Email: u.Email, DisplayName: u.DisplayName})
 	}
 	for _, k := range keys {
-		dto.Keys = append(dto.Keys, routeOpsBoundKeyDTO{ID: k.ID, Name: k.Name, ProjectID: k.ProjectID, Status: k.Status})
+		dto.Keys = append(dto.Keys, routeOpsBoundKeyDTO{ID: k.ID, Name: k.Name, UserID: k.UserID, Status: k.Status})
 	}
 	writeData(w, http.StatusOK, dto)
 }

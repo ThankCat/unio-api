@@ -176,14 +176,14 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 		UsageSource:                       string(facts.UsageSource),
 		UsageMappingVersion:               facts.UsageMappingVersion,
 		PriceID:                           channelPrice.ID,
-		Currency:                          channelPrice.Currency,
-		PricingUnit:                       channelPrice.PricingUnit,
-		UncachedInputPrice:                channelPrice.UncachedInputPrice,
-		CacheReadInputPrice:               channelPrice.CacheReadInputPrice,
-		CacheWrite5mInputPrice:            channelPrice.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:            channelPrice.CacheWrite1hInputPrice,
-		OutputPrice:                       channelPrice.OutputPrice,
-		ReasoningOutputPrice:              channelPrice.ReasoningOutputPrice,
+		Currency:                          params.SalePrice.Currency,
+		PricingUnit:                       params.SalePrice.PricingUnit,
+		UncachedInputPrice:                params.SalePrice.UncachedInputPrice,
+		CacheReadInputPrice:               params.SalePrice.CacheReadInputPrice,
+		CacheWrite5mInputPrice:            params.SalePrice.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:            params.SalePrice.CacheWrite1hInputPrice,
+		OutputPrice:                       params.SalePrice.OutputPrice,
+		ReasoningOutputPrice:              params.SalePrice.ReasoningOutputPrice,
 		FormulaVersion:                    billing.FormulaVersionV1,
 		EstimatedAmount:                   params.Authorization.EstimatedAmount,
 		AuthorizedAmount:                  params.Authorization.AuthorizedAmount,
@@ -307,9 +307,8 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 		RequestRecord: requestRecord,
 		AttemptRecord: attemptRecord,
 		Principal: &auth.APIKeyPrincipal{
-			UserID:    requestRecord.UserID,
-			ProjectID: requestRecord.ProjectID,
-			APIKeyID:  requestRecord.APIKeyID,
+			UserID:   requestRecord.UserID,
+			APIKeyID: requestRecord.APIKeyID,
 		},
 		Authorization: ChatAuthorization{
 			ReservationID:    job.ReservationID,
@@ -325,9 +324,21 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 		ModelDBID:         job.ModelID,
 		FinalProviderID:   job.ProviderID,
 		FinalChannelID:    job.ChannelID,
-		// 重放 settlement 沿用 job 落库时锁定的 price_id（P1-3），保证重放价与首次一致、不受改价竞态影响。
+		// 重放 settlement 沿用 job 落库时锁定的 price_id（成本行，P1-3）；客户售价用 job 落库时算好的
+		// 售价向量（= 基准 × 倍率，DEC-026），保证重放账单与首次一致、不受改价/改倍率竞态影响。
 		ChannelPriceID: job.PriceID,
-		Facts:          chatSettlementRecoveryFactsFromJob(job),
+		SalePrice: billing.CustomerPriceSnapshot{
+			Currency:               job.Currency,
+			PricingUnit:            job.PricingUnit,
+			UncachedInputPrice:     job.UncachedInputPrice,
+			CacheReadInputPrice:    job.CacheReadInputPrice,
+			CacheWrite5mInputPrice: job.CacheWrite5mInputPrice,
+			CacheWrite1hInputPrice: job.CacheWrite1hInputPrice,
+			OutputPrice:            job.OutputPrice,
+			ReasoningOutputPrice:   job.ReasoningOutputPrice,
+			FormulaVersion:         job.FormulaVersion,
+		},
+		Facts: chatSettlementRecoveryFactsFromJob(job),
 	}, nil
 }
 
@@ -401,7 +412,6 @@ func chatSettlementRecoveryRequestRecordFromSQLC(row sqlc.RequestRecord) request
 		ID:                  row.ID,
 		RequestID:           row.RequestID,
 		UserID:              row.UserID,
-		ProjectID:           row.ProjectID,
 		APIKeyID:            row.ApiKeyID,
 		RequestedModelID:    row.RequestedModelID,
 		IngressProtocol:     requestlog.Protocol(row.IngressProtocol),

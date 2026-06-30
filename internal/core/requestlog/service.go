@@ -57,7 +57,6 @@ const (
 type CreateRequestParams struct {
 	RequestID        string
 	UserID           int64
-	ProjectID        int64
 	APIKeyID         int64
 	RequestedModelID string
 	IngressProtocol  Protocol
@@ -71,7 +70,6 @@ type RequestRecord struct {
 	ID                  int64
 	RequestID           string
 	UserID              int64
-	ProjectID           int64
 	APIKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     Protocol

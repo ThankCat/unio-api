@@ -12,8 +12,11 @@ CREATE TABLE api_keys (
     -- key_prefix: API Key 明文前缀，用于定位和展示。--
     key_prefix TEXT NOT NULL,
 
-    -- key_hash: API Key 哈希值，不保存明文。--
+    -- key_hash: API Key 哈希值，认证按它定位（不参与明文展示）。--
     key_hash TEXT NOT NULL UNIQUE,
+
+    -- key_plaintext: 完整明文 key，供用户在控制台多次复制查看（产品决策：用户 key 明文留存）。NULL=历史/不可回显。--
+    key_plaintext TEXT,
 
     -- last_used_at: 最近一次成功认证时间。--
     last_used_at TIMESTAMPTZ,

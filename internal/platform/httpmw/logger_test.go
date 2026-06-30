@@ -23,7 +23,7 @@ func TestLoggerEmitsUnifiedFields(t *testing.T) {
 	r.Use(Logger(logger))
 	r.Get("/v1/chat/completions", func(w http.ResponseWriter, req *http.Request) {
 		// 模拟认证和 gateway 下游对同一 *Fields 的填充。
-		logfields.SetIdentity(req.Context(), 7, 42, 100)
+		logfields.SetIdentity(req.Context(), 7, 100)
 		logfields.SetRequestID(req.Context(), "req_abc")
 		logfields.SetRoute(req.Context(), "openai/gpt-4.1", "9123", "123")
 		w.WriteHeader(http.StatusOK)
@@ -42,7 +42,6 @@ func TestLoggerEmitsUnifiedFields(t *testing.T) {
 		"correlation_id": "corr-fixed",
 		"request_id":     "req_abc",
 		"user_id":        float64(7),
-		"project_id":     float64(42),
 		"api_key_id":     float64(100),
 		"model":          "openai/gpt-4.1",
 		"provider":       "9123",

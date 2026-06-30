@@ -11,17 +11,17 @@ import (
 
 // fakeCatalogStore 是 catalog service 单测用的可用模型查询替身。
 type fakeCatalogStore struct {
-	rows []sqlc.ListAvailableModelsForProjectRow
+	rows []sqlc.ListAvailableModelsForUserRow
 	err  error
 }
 
-func (s *fakeCatalogStore) ListAvailableModelsForProject(_ context.Context, _ int64) ([]sqlc.ListAvailableModelsForProjectRow, error) {
+func (s *fakeCatalogStore) ListAvailableModelsForUser(_ context.Context, _ int64) ([]sqlc.ListAvailableModelsForUserRow, error) {
 	return s.rows, s.err
 }
 
 func TestListAvailableModelsMapsCapabilities(t *testing.T) {
 	store := &fakeCatalogStore{
-		rows: []sqlc.ListAvailableModelsForProjectRow{
+		rows: []sqlc.ListAvailableModelsForUserRow{
 			{ModelID: "openai/gpt-4.1", OwnedBy: "openai", CapabilityKeys: []string{"text.input", "text.output", "tools.function"}},
 			{ModelID: "deepseek/deepseek-chat", OwnedBy: "deepseek", CapabilityKeys: nil},
 		},
@@ -53,7 +53,7 @@ func TestListAvailableModelsMapsCapabilities(t *testing.T) {
 
 func TestListAvailableModelsCapabilityFilterAND(t *testing.T) {
 	store := &fakeCatalogStore{
-		rows: []sqlc.ListAvailableModelsForProjectRow{
+		rows: []sqlc.ListAvailableModelsForUserRow{
 			{ModelID: "has-both", OwnedBy: "x", CapabilityKeys: []string{"image.input", "tools.function", "text.output"}},
 			{ModelID: "has-one", OwnedBy: "x", CapabilityKeys: []string{"image.input"}},
 			{ModelID: "has-none", OwnedBy: "x", CapabilityKeys: []string{"text.output"}},
@@ -75,7 +75,7 @@ func TestListAvailableModelsCapabilityFilterAND(t *testing.T) {
 
 func TestListAvailableModelsEmptyFilterReturnsAll(t *testing.T) {
 	store := &fakeCatalogStore{
-		rows: []sqlc.ListAvailableModelsForProjectRow{
+		rows: []sqlc.ListAvailableModelsForUserRow{
 			{ModelID: "a", OwnedBy: "x", CapabilityKeys: []string{"text.output"}},
 			{ModelID: "b", OwnedBy: "x", CapabilityKeys: nil},
 		},

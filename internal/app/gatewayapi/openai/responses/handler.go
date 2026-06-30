@@ -246,4 +246,3 @@ func responsesErrorFieldParam(err error) *string {
 
 	return nil
 }
-

@@ -83,7 +83,7 @@ func TestAPIKeyAuthAuthenticatorError(t *testing.T) {
 func TestAPIKeyAuthSuccess(t *testing.T) {
 	expectedPrincipal := &auth.APIKeyPrincipal{
 		APIKeyID:  1,
-		ProjectID: 1,
+		UserID:    1,
 		KeyPrefix: "unio_sk_XhE8wL5D",
 	}
 

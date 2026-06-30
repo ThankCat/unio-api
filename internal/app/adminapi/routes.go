@@ -20,12 +20,13 @@ type RouteService interface {
 }
 
 type routeDTO struct {
-	ID          int64             `json:"id"`
-	Name        string            `json:"name"`
-	Mode        string            `json:"mode"`
-	PoolKind    string            `json:"pool_kind"`
-	IsBuiltin   bool              `json:"is_builtin"`
-	Status      string            `json:"status"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Mode     string `json:"mode"`
+	PoolKind string `json:"pool_kind"`
+	Status   string `json:"status"`
+	// PriceRatio 客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率），十进制字符串。
+	PriceRatio  string            `json:"price_ratio"`
 	Description *string           `json:"description"`
 	Channels    []routeChannelDTO `json:"channels"`
 	CreatedAt   string            `json:"created_at"`
@@ -44,6 +45,7 @@ type createRouteRequest struct {
 	Mode        string  `json:"mode"`
 	PoolKind    string  `json:"pool_kind"`
 	Status      string  `json:"status"`
+	PriceRatio  string  `json:"price_ratio"` // 客户售价倍率（十进制字符串，空=默认 1.0）
 	Description *string `json:"description"`
 	ChannelIDs  []int64 `json:"channel_ids"`
 }
@@ -53,6 +55,7 @@ type updateRouteRequest struct {
 	Mode        string  `json:"mode"`
 	PoolKind    string  `json:"pool_kind"`
 	Status      string  `json:"status"`
+	PriceRatio  string  `json:"price_ratio"` // 客户售价倍率（十进制字符串，空=默认 1.0）
 	Description *string `json:"description"`
 	ChannelIDs  []int64 `json:"channel_ids"`
 }
@@ -103,6 +106,7 @@ func (h *routesHandler) create(w http.ResponseWriter, r *http.Request) {
 		Mode:        req.Mode,
 		PoolKind:    req.PoolKind,
 		Status:      req.Status,
+		PriceRatio:  req.PriceRatio,
 		Description: req.Description,
 		ChannelIDs:  req.ChannelIDs,
 	})
@@ -130,6 +134,7 @@ func (h *routesHandler) update(w http.ResponseWriter, r *http.Request) {
 		Mode:        req.Mode,
 		PoolKind:    req.PoolKind,
 		Status:      req.Status,
+		PriceRatio:  req.PriceRatio,
 		Description: req.Description,
 		ChannelIDs:  req.ChannelIDs,
 	})
@@ -187,8 +192,8 @@ func toRouteDTO(rt route.Route) routeDTO {
 		Name:        rt.Name,
 		Mode:        rt.Mode,
 		PoolKind:    rt.PoolKind,
-		IsBuiltin:   rt.IsBuiltin,
 		Status:      rt.Status,
+		PriceRatio:  rt.PriceRatio,
 		Description: rt.Description,
 		Channels:    channels,
 		CreatedAt:   rt.CreatedAt.UTC().Format(time.RFC3339),

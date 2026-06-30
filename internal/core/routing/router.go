@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -39,10 +40,13 @@ var (
 	// ErrNoAvailableChannel 表示模型存在但当前没有可用渠道。
 	ErrNoAvailableChannel = errors.New("no available channel")
 
-	// ErrModelNotAvailable 表示模型存在但当前 project 不允许使用。
-	ErrModelNotAvailable = errors.New("model not available for project")
+	// ErrModelNotAvailable 表示模型存在但当前用户不允许使用。
+	ErrModelNotAvailable = errors.New("model not available for user")
 
-	// ErrChannelCredentialMissing 表示 channel 未配置加密凭据。
+	// ErrRouteNotConfigured 表示 API Key 绑定的线路缺失或已停用（线路必填，无默认回落）。
+	ErrRouteNotConfigured = errors.New("route not configured")
+
+	// ErrChannelCredentialMissing 表示 channel 未配置上游凭据。
 	ErrChannelCredentialMissing = errors.New("channel credential missing")
 
 	// ErrIngressProtocolInvalid 表示 routing 请求没有携带受支持的 ingress 协议族。
@@ -51,8 +55,8 @@ var (
 
 // ChatRouteRequest 表示一次 routing 选择所需上下文。
 type ChatRouteRequest struct {
-	ProjectID int64
-	ModelID   string
+	UserID  int64
+	ModelID string
 
 	// IngressProtocol 是客户请求的协议族（如 openai）；routing 只返回同协议 channel 候选。
 	IngressProtocol string
@@ -60,11 +64,8 @@ type ChatRouteRequest struct {
 	// Operation 是本次请求的 ingress 表面（chat_completions/messages/responses），供审计/日志维度。
 	Operation string
 
-	// RouteID 是 API Key 绑定的线路 ID（阶段 15）；nil 表示未绑定。
+	// RouteID 是 API Key 绑定的线路 ID（线路必填，恒有值）；线路缺失或已停用则拒绝请求（无默认回落）。
 	RouteID *int64
-	// ProjectDefaultRouteID 是所属项目的默认线路 ID；nil 表示未设。
-	// 线路解析优先级：RouteID ?? ProjectDefaultRouteID ?? 内置「经济」。
-	ProjectDefaultRouteID *int64
 }
 
 // ChatRouteCandidate 表示一个可尝试的 chat 上游候选。
@@ -81,10 +82,18 @@ type ChatRouteCandidate struct {
 	// 避免按全局兜底偏小导致预冻结不足、超额进平台核销。
 	MaxOutputTokens int64
 
-	// ChannelPriceID 是该候选当前生效的 channel_prices 行 ID（阶段 15，供审计/快照参考）。
-	ChannelPriceID int64
-	// SalePrice 是该候选命中渠道的当前生效售价向量，供 cheapest 排序与保守预授权上界。
+	// ModelPriceID 是计算 SalePrice 所用的模型基准售价行 ID（model_prices.id，供结算审计/快照）。
+	ModelPriceID int64
+	// PriceRatio 是计算 SalePrice 所用的线路价格倍率（routes.price_ratio，供结算审计/快照）。
+	PriceRatio pgtype.Numeric
+	// SalePrice 是客户最终售价向量 = 模型基准价 × 线路倍率（DEC-026）；同一请求所有候选共享同一售价，
+	// 供保守预授权上界与结算扣费，不随命中哪条渠道变化。
 	SalePrice billing.CustomerPriceSnapshot
+
+	// ChannelPriceID 是命中渠道当前生效的 channel_prices 行 ID（成本来源，供结算/快照审计）。
+	ChannelPriceID int64
+	// ChannelCost 是命中渠道当前生效的上游成本快照；毛利 = SalePrice − ChannelCost。
+	ChannelCost billing.ProviderCostSnapshot
 
 	// RPMLimit/TPMLimit/RPDLimit 是该候选命中渠道的渠道级限流上限（P2-8）：
 	// nil 表示「继承全局默认」，0 表示「显式不限」，>0 表示具体上限。调用上游前在 attempt runner 生效。
@@ -105,30 +114,24 @@ type ChatRoutePlan struct {
 // Store 定义 routing 查询候选渠道所需的最小数据库能力。
 type Store interface {
 	ModelExistsByID(ctx context.Context, requestedModelID string) (bool, error)
-	ProjectCanUseModel(ctx context.Context, arg sqlc.ProjectCanUseModelParams) (bool, error)
+	UserCanUseModel(ctx context.Context, arg sqlc.UserCanUseModelParams) (bool, error)
 	FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteCandidatesParams) ([]sqlc.FindRouteCandidatesRow, error)
 	GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error)
-	GetBuiltinCheapestRoute(ctx context.Context) (sqlc.Route, error)
 }
 
-// resolvedRoute 是线路解析后的最小事实（候选池 + 策略）。
+// resolvedRoute 是线路解析后的最小事实（候选池 + 策略 + 价格倍率）。
 type resolvedRoute struct {
-	ID       int64
-	Mode     string
-	PoolKind string
-}
-
-// CredentialDecryptor 把 channel 入库密文解出上游明文 API key。
-type CredentialDecryptor interface {
-	Decrypt(ciphertext []byte) (string, error)
+	ID         int64
+	Mode       string
+	PoolKind   string
+	PriceRatio pgtype.Numeric
 }
 
 // Router 负责根据 project 和 requested model 选择可用 channel。
 type Router struct {
-	store               Store
-	credentialDecryptor CredentialDecryptor
-	defaultTimeout      time.Duration
-	logger              *slog.Logger
+	store          Store
+	defaultTimeout time.Duration
+	logger         *slog.Logger
 }
 
 // Option 调整 Router 的可选依赖（如日志）。
@@ -144,16 +147,15 @@ func WithLogger(logger *slog.Logger) Option {
 }
 
 // NewRouter 创建 routing router。
-func NewRouter(store Store, credentialDecryptor CredentialDecryptor, defaultTimeout time.Duration, opts ...Option) *Router {
+func NewRouter(store Store, defaultTimeout time.Duration, opts ...Option) *Router {
 	if defaultTimeout <= 0 {
 		defaultTimeout = defaultChannelTimeout
 	}
 
 	r := &Router{
-		store:               store,
-		credentialDecryptor: credentialDecryptor,
-		defaultTimeout:      defaultTimeout,
-		logger:              slog.Default(),
+		store:          store,
+		defaultTimeout: defaultTimeout,
+		logger:         slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -184,7 +186,7 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 
 	candidates := make([]ChatRouteCandidate, 0, len(rows))
 	for _, row := range rows {
-		candidate, err := r.buildChatRouteCandidate(ctx, row)
+		candidate, err := r.buildChatRouteCandidate(ctx, row, route)
 		if err != nil {
 			// P1-1：单个候选凭据缺失/解密失败时跳过该候选并记日志，不让整批 plan 失败；
 			// 只有当全部候选都不可用时才在循环后报 no_available_channel，最大化可用性。
@@ -206,7 +208,7 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 		return ChatRoutePlan{}, failure.Wrap(
 			failure.CodeRoutingNoAvailableChannel,
 			ErrNoAvailableChannel,
-			failure.WithMessage("all matched channels are unusable (credential missing or decrypt failed)"),
+			failure.WithMessage("all matched channels are unusable (credential missing)"),
 		)
 	}
 
@@ -229,31 +231,21 @@ func IsSupportedProtocol(protocol string) bool {
 	}
 }
 
-// resolveRoute 把 Key/项目绑定解析成本次请求的有效线路（候选池 + 策略）。
-// 优先级：Key 线路 ?? 项目默认线路 ?? 内置「经济」；命中但已停用的线路视为未选，继续回落。
-//
-// TODO(阶段15/production): 线路解析每请求读 routes 表（最多 1~3 次点查）；routes 量极小、改动罕见，
-// 后续接入与渠道/能力同款缓存层避免每请求打 DB（PLAN §7）。
+// resolveRoute 把 Key 绑定解析成本次请求的有效线路（候选池 + 策略）。
+// 线路必填、无默认回落：Key 绑定线路缺失或已停用即拒绝请求。
 func (r *Router) resolveRoute(ctx context.Context, req ChatRouteRequest) (resolvedRoute, error) {
 	if route, ok := r.loadEnabledRoute(ctx, req.RouteID); ok {
 		return route, nil
 	}
-	if route, ok := r.loadEnabledRoute(ctx, req.ProjectDefaultRouteID); ok {
-		return route, nil
-	}
 
-	builtin, err := r.store.GetBuiltinCheapestRoute(ctx)
-	if err != nil {
-		return resolvedRoute{}, failure.Wrap(
-			failure.CodeRoutingStoreFailed,
-			err,
-			failure.WithMessage("resolve builtin cheapest route"),
-		)
-	}
-	return resolvedRoute{ID: builtin.ID, Mode: builtin.Mode, PoolKind: builtin.PoolKind}, nil
+	return resolvedRoute{}, failure.Wrap(
+		failure.CodeRoutingRouteNotConfigured,
+		ErrRouteNotConfigured,
+		failure.WithMessage(ErrRouteNotConfigured.Error()),
+	)
 }
 
-// loadEnabledRoute 读取指定线路；不存在或已停用返回 ok=false 让上层继续回落。
+// loadEnabledRoute 读取指定线路；不存在或已停用返回 ok=false（上层据此拒绝请求）。
 func (r *Router) loadEnabledRoute(ctx context.Context, id *int64) (resolvedRoute, bool) {
 	if id == nil {
 		return resolvedRoute{}, false
@@ -266,15 +258,15 @@ func (r *Router) loadEnabledRoute(ctx context.Context, id *int64) (resolvedRoute
 	if row.Status != "enabled" {
 		return resolvedRoute{}, false
 	}
-	return resolvedRoute{ID: row.ID, Mode: row.Mode, PoolKind: row.PoolKind}, true
+	return resolvedRoute{ID: row.ID, Mode: row.Mode, PoolKind: row.PoolKind, PriceRatio: row.PriceRatio}, true
 }
 
 func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest, route resolvedRoute) ([]sqlc.FindRouteCandidatesRow, error) {
-	// TODO(阶段6/production): [GAP-6-005] routing 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束或专属 channel 策略；预算约束进入 reservation，project 禁用进入后台管理策略。
+	// TODO(阶段6/production): [GAP-6-005] routing 已支持 user_model_policies 模型 allow-list/deny-list，但尚未表达用户禁用、预算约束或专属 channel 策略；预算约束进入 reservation，用户禁用进入后台管理策略。
 	rows, err := r.store.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: req.ModelID,
 		IngressProtocol:  req.IngressProtocol,
-		ProjectID:        req.ProjectID,
+		UserID:           req.UserID,
 		PoolKind:         route.PoolKind,
 		RouteID:          route.ID,
 		AtTime:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
@@ -310,19 +302,19 @@ func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest, ro
 		)
 	}
 
-	// 3.1 模型存在，再问 project 是否允许
-	allowed, err := r.store.ProjectCanUseModel(ctx, sqlc.ProjectCanUseModelParams{
-		ProjectID:        req.ProjectID,
+	// 3.1 模型存在，再问 user 是否允许
+	allowed, err := r.store.UserCanUseModel(ctx, sqlc.UserCanUseModelParams{
+		UserID:           req.UserID,
 		RequestedModelID: req.ModelID,
 	})
 	if err != nil {
 		return nil, failure.Wrap(
 			failure.CodeRoutingStoreFailed,
 			err,
-			failure.WithMessage("check project model policy"),
+			failure.WithMessage("check user model policy"),
 		)
 	}
-	// 3.2 project 不允许，返回 ErrModelNotAvailable。
+	// 3.2 user 不允许，返回 ErrModelNotAvailable。
 	if !allowed {
 		return nil, failure.Wrap(
 			failure.CodeRoutingModelNotAvailable,
@@ -348,21 +340,36 @@ func int4LimitPtr(v pgtype.Int4) *int64 {
 	return &out
 }
 
-func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRouteCandidatesRow) (ChatRouteCandidate, error) {
-	if len(row.CredentialEncrypted) == 0 {
+func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRouteCandidatesRow, route resolvedRoute) (ChatRouteCandidate, error) {
+	// 渠道凭据明文存储（产品决策）：直接取用，仅防御性校验非空（DB 已 NOT NULL + CHECK <> ''）。
+	apiKey := strings.TrimSpace(row.Credential)
+	if apiKey == "" {
 		return ChatRouteCandidate{}, failure.Wrap(
-			failure.CodeCredentialCiphertextInvalid,
+			failure.CodeRoutingCredentialResolveFailed,
 			ErrChannelCredentialMissing,
 			failure.WithMessage(ErrChannelCredentialMissing.Error()),
 		)
 	}
 
-	apiKey, err := r.credentialDecryptor.Decrypt(row.CredentialEncrypted)
+	// 客户售价 = 模型基准售价（model_prices）× 线路倍率（routes.price_ratio）（DEC-026）。
+	// 同一请求所有候选共享同一售价，不随命中哪条渠道而变。
+	basePrice := billing.CustomerPriceSnapshot{
+		Currency:               row.BaseCurrency,
+		PricingUnit:            row.BasePricingUnit,
+		UncachedInputPrice:     row.UncachedInputPrice,
+		CacheReadInputPrice:    row.CacheReadInputPrice,
+		CacheWrite5mInputPrice: row.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice: row.CacheWrite1hInputPrice,
+		OutputPrice:            row.OutputPrice,
+		ReasoningOutputPrice:   row.ReasoningOutputPrice,
+		FormulaVersion:         billing.FormulaVersionV1,
+	}
+	salePrice, err := billing.ScaleCustomerPrice(basePrice, route.PriceRatio)
 	if err != nil {
 		return ChatRouteCandidate{}, failure.Wrap(
-			failure.CodeRoutingCredentialResolveFailed,
+			failure.CodeBillingInvalidPrice,
 			err,
-			failure.WithMessage("decrypt channel credential"),
+			failure.WithMessage("scale customer price by route price_ratio"),
 		)
 	}
 
@@ -393,17 +400,20 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 			ProviderSlug: row.ProviderSlug,
 		},
 		UpstreamModel:  row.UpstreamModel,
+		ModelPriceID:   row.ModelPriceID,
+		PriceRatio:     route.PriceRatio,
+		SalePrice:      salePrice,
 		ChannelPriceID: row.ChannelPriceID,
-		SalePrice: billing.CustomerPriceSnapshot{
-			Currency:               row.PriceCurrency,
-			PricingUnit:            row.PricePricingUnit,
-			UncachedInputPrice:     row.UncachedInputPrice,
-			CacheReadInputPrice:    row.CacheReadInputPrice,
-			CacheWrite5mInputPrice: row.CacheWrite5mInputPrice,
-			CacheWrite1hInputPrice: row.CacheWrite1hInputPrice,
-			OutputPrice:            row.OutputPrice,
-			ReasoningOutputPrice:   row.ReasoningOutputPrice,
-			FormulaVersion:         billing.FormulaVersionV1,
+		ChannelCost: billing.ProviderCostSnapshot{
+			Currency:              row.CostCurrency,
+			PricingUnit:           row.CostPricingUnit,
+			UncachedInputCost:     row.UncachedInputCost,
+			CacheReadInputCost:    row.CacheReadInputCost,
+			CacheWrite5mInputCost: row.CacheWrite5mInputCost,
+			CacheWrite1hInputCost: row.CacheWrite1hInputCost,
+			OutputCost:            row.OutputCost,
+			ReasoningOutputCost:   row.ReasoningOutputCost,
+			FormulaVersion:        billing.FormulaVersionV1,
 		},
 	}, nil
 }

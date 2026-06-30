@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/apikey"
-	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -17,9 +16,8 @@ import (
 
 // testIdentity 保存 requestlog store 测试所需的身份数据。
 type testIdentity struct {
-	userID    int64
-	projectID int64
-	apiKeyID  int64
+	userID   int64
+	apiKeyID int64
 }
 
 // newTestTx 创建带回滚事务的 requestlog store 测试依赖。
@@ -61,7 +59,7 @@ func newTestTx(t *testing.T) (context.Context, pgx.Tx, *sqlc.Queries, func()) {
 	return ctx, tx, sqlc.New(tx), cleanup
 }
 
-// createIdentity 创建 requestlog store 测试所需的 user、project 和 API key。
+// createIdentity 创建 requestlog store 测试所需的 user 和 API key。
 func createIdentity(t *testing.T, ctx context.Context, queries *sqlc.Queries) testIdentity {
 	t.Helper()
 
@@ -76,34 +74,42 @@ func createIdentity(t *testing.T, ctx context.Context, queries *sqlc.Queries) te
 		t.Fatalf("create user: %v", err)
 	}
 
-	project, err := queries.CreateProject(ctx, sqlc.CreateProjectParams{
-		UserID: user.ID,
-		Name:   fmt.Sprintf("requestlog-project-%d", suffix),
-	})
-	if err != nil {
-		t.Fatalf("create project: %v", err)
-	}
-
 	generatedKey, err := apikey.Generate()
 	if err != nil {
 		t.Fatalf("generate api key: %v", err)
 	}
 
+	// 线路必填：先建一条线路供 API Key 绑定（route_id 现为 NOT NULL）。
+	var priceRatio pgtype.Numeric
+	if err := priceRatio.Scan("1"); err != nil {
+		t.Fatalf("scan price ratio: %v", err)
+	}
+	route, err := queries.CreateRoute(ctx, sqlc.CreateRouteParams{
+		Name:       fmt.Sprintf("requestlog-route-%d", suffix),
+		Mode:       "cheapest",
+		PoolKind:   "all",
+		Status:     "enabled",
+		PriceRatio: priceRatio,
+	})
+	if err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+
 	key, err := queries.CreateAPIKey(ctx, sqlc.CreateAPIKeyParams{
-		ProjectID: project.ID,
+		UserID:    user.ID,
 		Name:      "requestlog key",
 		KeyPrefix: generatedKey.Prefix,
 		KeyHash:   generatedKey.Hash,
 		ExpiresAt: pgtype.Timestamptz{Valid: false},
+		RouteID:   route.ID,
 	})
 	if err != nil {
 		t.Fatalf("create api key: %v", err)
 	}
 
 	return testIdentity{
-		userID:    user.ID,
-		projectID: project.ID,
-		apiKeyID:  key.ID,
+		userID:   user.ID,
+		apiKeyID: key.ID,
 	}
 }
 
@@ -123,17 +129,12 @@ func createProviderChannel(t *testing.T, ctx context.Context, tx pgx.Tx) (int64,
 		t.Fatalf("insert provider: %v", err)
 	}
 
-	credentialEncrypted, err := credential.EncryptFixedTestCredential("sk-requestlog-test")
-	if err != nil {
-		t.Fatalf("encrypt channel credential: %v", err)
-	}
-
 	var channelID int64
 	err = tx.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms)
+		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms)
 		VALUES ($1, $2, 'openai', 'openai', $3, $4, $5, $6, $7)
 		RETURNING id
-	`, providerID, fmt.Sprintf("requestlog-channel-%d", suffix), "https://api.example.test/v1", credentialEncrypted, "enabled", 10, nil).Scan(&channelID)
+	`, providerID, fmt.Sprintf("requestlog-channel-%d", suffix), "https://api.example.test/v1", "sk-requestlog-test", "enabled", 10, nil).Scan(&channelID)
 	if err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
@@ -153,7 +154,6 @@ func TestStoreRequestLifecycleMapsNullableFields(t *testing.T) {
 	record, err := store.CreateRequest(ctx, CreateRequestParams{
 		RequestID:        fmt.Sprintf("requestlog-request-%d", startedAt.UnixNano()),
 		UserID:           identity.userID,
-		ProjectID:        identity.projectID,
 		APIKeyID:         identity.apiKeyID,
 		RequestedModelID: "deepseek-v4-pro",
 		IngressProtocol:  ProtocolOpenAI,
@@ -247,7 +247,6 @@ func TestStoreRequestFailedPersistsSafeAndInternalError(t *testing.T) {
 	record, err := store.CreateRequest(ctx, CreateRequestParams{
 		RequestID:        fmt.Sprintf("requestlog-failed-%d", time.Now().UnixNano()),
 		UserID:           identity.userID,
-		ProjectID:        identity.projectID,
 		APIKeyID:         identity.apiKeyID,
 		RequestedModelID: "deepseek-v4-pro",
 		IngressProtocol:  ProtocolOpenAI,
@@ -291,7 +290,6 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 	record, err := store.CreateRequest(ctx, CreateRequestParams{
 		RequestID:        fmt.Sprintf("requestlog-attempt-%d", time.Now().UnixNano()),
 		UserID:           identity.userID,
-		ProjectID:        identity.projectID,
 		APIKeyID:         identity.apiKeyID,
 		RequestedModelID: "deepseek-v4-pro",
 		IngressProtocol:  ProtocolOpenAI,

@@ -56,39 +56,34 @@ func TestIdentityQueries(t *testing.T) {
 		t.Fatalf("expected user id %d, got %d", user.ID, gotUser.ID)
 	}
 
-	project, err := queries.CreateProject(ctx, sqlc.CreateProjectParams{
-		UserID: user.ID,
-		Name:   "default",
-	})
-	if err != nil {
-		t.Fatalf("create project: %v", err)
-	}
-
-	gotProject, err := queries.GetProjectForUser(ctx, sqlc.GetProjectForUserParams{
-		ProjectID: project.ID,
-		UserID:    user.ID,
-	})
-	if err != nil {
-		t.Fatalf("get project for user: %v", err)
-	}
-	if gotProject.ID != project.ID {
-		t.Fatalf("expected project id %d, got %d", project.ID, gotProject.ID)
-	}
-	if gotProject.UserID != user.ID {
-		t.Fatalf("expected project user id %d, got %d", user.ID, gotProject.UserID)
-	}
-
 	key, err := apikey.Generate()
 	if err != nil {
 		t.Fatalf("generate api key: %v", err)
 	}
 
+	// 线路必填：先建一条线路供 API Key 绑定（route_id 现为 NOT NULL）。
+	var priceRatio pgtype.Numeric
+	if err := priceRatio.Scan("1"); err != nil {
+		t.Fatalf("scan price ratio: %v", err)
+	}
+	route, err := queries.CreateRoute(ctx, sqlc.CreateRouteParams{
+		Name:       fmt.Sprintf("identity-route-%d", suffix),
+		Mode:       "cheapest",
+		PoolKind:   "all",
+		Status:     "enabled",
+		PriceRatio: priceRatio,
+	})
+	if err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+
 	storedKey, err := queries.CreateAPIKey(ctx, sqlc.CreateAPIKeyParams{
-		ProjectID: project.ID,
+		UserID:    user.ID,
 		Name:      "test key",
 		KeyPrefix: key.Prefix,
 		KeyHash:   key.Hash,
 		ExpiresAt: pgtype.Timestamptz{Valid: false},
+		RouteID:   route.ID,
 	})
 	if err != nil {
 		t.Fatalf("create api key: %v", err)
@@ -101,10 +96,6 @@ func TestIdentityQueries(t *testing.T) {
 
 	if gotKey.ID != storedKey.ID {
 		t.Fatalf("expected api key id %d, got %d", storedKey.ID, gotKey.ID)
-	}
-
-	if gotKey.ProjectID != project.ID {
-		t.Fatalf("expected project id %d, got %d", project.ID, gotKey.ProjectID)
 	}
 
 	if gotKey.UserID != user.ID {

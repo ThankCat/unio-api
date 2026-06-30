@@ -15,29 +15,26 @@ const countRequestRecords = `-- name: CountRequestRecords :one
 SELECT COUNT(*) AS total
 FROM request_records
 WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
-  AND ($2::bigint IS NULL OR project_id = $2::bigint)
-  AND ($3::bigint IS NULL OR api_key_id = $3::bigint)
-  AND ($4::text IS NULL OR status = $4::text)
-  AND ($5::text IS NULL OR requested_model_id ILIKE '%' || $5::text || '%')
-  AND ($6::timestamptz IS NULL OR created_at >= $6::timestamptz)
-  AND ($7::timestamptz IS NULL OR created_at < $7::timestamptz)
+  AND ($2::bigint IS NULL OR api_key_id = $2::bigint)
+  AND ($3::text IS NULL OR status = $3::text)
+  AND ($4::text IS NULL OR requested_model_id ILIKE '%' || $4::text || '%')
+  AND ($5::timestamptz IS NULL OR created_at >= $5::timestamptz)
+  AND ($6::timestamptz IS NULL OR created_at < $6::timestamptz)
 `
 
 type CountRequestRecordsParams struct {
-	UserID    pgtype.Int8
-	ProjectID pgtype.Int8
-	ApiKeyID  pgtype.Int8
-	Status    pgtype.Text
-	Model     pgtype.Text
-	FromTime  pgtype.Timestamptz
-	ToTime    pgtype.Timestamptz
+	UserID   pgtype.Int8
+	ApiKeyID pgtype.Int8
+	Status   pgtype.Text
+	Model    pgtype.Text
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
 }
 
 // CountRequestRecords 返回与 ListRequestRecordsPage 相同过滤条件下的总条数。
 func (q *Queries) CountRequestRecords(ctx context.Context, arg CountRequestRecordsParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countRequestRecords,
 		arg.UserID,
-		arg.ProjectID,
 		arg.ApiKeyID,
 		arg.Status,
 		arg.Model,
@@ -53,7 +50,6 @@ const createRequestRecord = `-- name: CreateRequestRecord :one
 INSERT INTO request_records (
     request_id,
     user_id,
-    project_id,
     api_key_id,
     requested_model_id,
     ingress_protocol,
@@ -95,14 +91,12 @@ VALUES (
            $18,
            $19,
            $20,
-           $21,
-           $22
+           $21
        )
 RETURNING
     id,
     request_id,
     user_id,
-    project_id,
     api_key_id,
     requested_model_id,
     ingress_protocol,
@@ -129,7 +123,6 @@ RETURNING
 type CreateRequestRecordParams struct {
 	RequestID           string
 	UserID              int64
-	ProjectID           int64
 	ApiKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     string
@@ -156,7 +149,6 @@ func (q *Queries) CreateRequestRecord(ctx context.Context, arg CreateRequestReco
 	row := q.db.QueryRow(ctx, createRequestRecord,
 		arg.RequestID,
 		arg.UserID,
-		arg.ProjectID,
 		arg.ApiKeyID,
 		arg.RequestedModelID,
 		arg.IngressProtocol,
@@ -182,7 +174,6 @@ func (q *Queries) CreateRequestRecord(ctx context.Context, arg CreateRequestReco
 		&i.ID,
 		&i.RequestID,
 		&i.UserID,
-		&i.ProjectID,
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
@@ -213,7 +204,6 @@ SELECT
     id,
     request_id,
     user_id,
-    project_id,
     api_key_id,
     requested_model_id,
     ingress_protocol,
@@ -248,7 +238,6 @@ func (q *Queries) GetRequestRecordByRequestID(ctx context.Context, requestID str
 		&i.ID,
 		&i.RequestID,
 		&i.UserID,
-		&i.ProjectID,
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
@@ -279,7 +268,6 @@ SELECT
     id,
     request_id,
     user_id,
-    project_id,
     api_key_id,
     requested_model_id,
     ingress_protocol,
@@ -315,7 +303,6 @@ func (q *Queries) GetRequestRecordForUpdate(ctx context.Context, requestRecordID
 		&i.ID,
 		&i.RequestID,
 		&i.UserID,
-		&i.ProjectID,
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
@@ -346,7 +333,6 @@ SELECT
     id,
     request_id,
     user_id,
-    project_id,
     api_key_id,
     requested_model_id,
     ingress_protocol,
@@ -369,30 +355,28 @@ SELECT
     updated_at
 FROM request_records
 WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
-  AND ($2::bigint IS NULL OR project_id = $2::bigint)
-  AND ($3::bigint IS NULL OR api_key_id = $3::bigint)
-  AND ($4::text IS NULL OR status = $4::text)
-  AND ($5::text IS NULL OR requested_model_id ILIKE '%' || $5::text || '%')
-  AND ($6::timestamptz IS NULL OR created_at >= $6::timestamptz)
-  AND ($7::timestamptz IS NULL OR created_at < $7::timestamptz)
+  AND ($2::bigint IS NULL OR api_key_id = $2::bigint)
+  AND ($3::text IS NULL OR status = $3::text)
+  AND ($4::text IS NULL OR requested_model_id ILIKE '%' || $4::text || '%')
+  AND ($5::timestamptz IS NULL OR created_at >= $5::timestamptz)
+  AND ($6::timestamptz IS NULL OR created_at < $6::timestamptz)
 ORDER BY
-  CASE WHEN COALESCE($8::text, 'created_at') IN ('', 'created_at') AND COALESCE($9::bool, true) THEN created_at END DESC NULLS LAST,
-  CASE WHEN COALESCE($8::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($9::bool, true) THEN created_at END ASC NULLS LAST,
-  CASE WHEN $8::text = 'status' AND COALESCE($9::bool, false) THEN status END DESC NULLS LAST,
-  CASE WHEN $8::text = 'status' AND NOT COALESCE($9::bool, false) THEN status END ASC NULLS LAST,
-  CASE WHEN $8::text = 'user_id' AND COALESCE($9::bool, false) THEN user_id END DESC NULLS LAST,
-  CASE WHEN $8::text = 'user_id' AND NOT COALESCE($9::bool, false) THEN user_id END ASC NULLS LAST,
-  CASE WHEN $8::text = 'model' AND COALESCE($9::bool, false) THEN requested_model_id END DESC NULLS LAST,
-  CASE WHEN $8::text = 'model' AND NOT COALESCE($9::bool, false) THEN requested_model_id END ASC NULLS LAST,
-  CASE WHEN $8::text = 'stream' AND COALESCE($9::bool, false) THEN stream END DESC NULLS LAST,
-  CASE WHEN $8::text = 'stream' AND NOT COALESCE($9::bool, false) THEN stream END ASC NULLS LAST,
+  CASE WHEN COALESCE($7::text, 'created_at') IN ('', 'created_at') AND COALESCE($8::bool, true) THEN created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE($7::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($8::bool, true) THEN created_at END ASC NULLS LAST,
+  CASE WHEN $7::text = 'status' AND COALESCE($8::bool, false) THEN status END DESC NULLS LAST,
+  CASE WHEN $7::text = 'status' AND NOT COALESCE($8::bool, false) THEN status END ASC NULLS LAST,
+  CASE WHEN $7::text = 'user_id' AND COALESCE($8::bool, false) THEN user_id END DESC NULLS LAST,
+  CASE WHEN $7::text = 'user_id' AND NOT COALESCE($8::bool, false) THEN user_id END ASC NULLS LAST,
+  CASE WHEN $7::text = 'model' AND COALESCE($8::bool, false) THEN requested_model_id END DESC NULLS LAST,
+  CASE WHEN $7::text = 'model' AND NOT COALESCE($8::bool, false) THEN requested_model_id END ASC NULLS LAST,
+  CASE WHEN $7::text = 'stream' AND COALESCE($8::bool, false) THEN stream END DESC NULLS LAST,
+  CASE WHEN $7::text = 'stream' AND NOT COALESCE($8::bool, false) THEN stream END ASC NULLS LAST,
   id DESC
-LIMIT $11 OFFSET $10
+LIMIT $10 OFFSET $9
 `
 
 type ListRequestRecordsPageParams struct {
 	UserID     pgtype.Int8
-	ProjectID  pgtype.Int8
 	ApiKeyID   pgtype.Int8
 	Status     pgtype.Text
 	Model      pgtype.Text
@@ -408,7 +392,6 @@ type ListRequestRecordsPageRow struct {
 	ID                  int64
 	RequestID           string
 	UserID              int64
-	ProjectID           int64
 	ApiKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     string
@@ -437,7 +420,6 @@ type ListRequestRecordsPageRow struct {
 func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRecordsPageParams) ([]ListRequestRecordsPageRow, error) {
 	rows, err := q.db.Query(ctx, listRequestRecordsPage,
 		arg.UserID,
-		arg.ProjectID,
 		arg.ApiKeyID,
 		arg.Status,
 		arg.Model,
@@ -459,7 +441,6 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.ID,
 			&i.RequestID,
 			&i.UserID,
-			&i.ProjectID,
 			&i.ApiKeyID,
 			&i.RequestedModelID,
 			&i.IngressProtocol,
@@ -502,14 +483,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $5
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 )
-SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 FROM request_records
 WHERE request_records.id = $5
   AND request_records.status = 'canceled'
@@ -528,7 +509,6 @@ type MarkRequestCanceledRow struct {
 	ID                  int64
 	RequestID           string
 	UserID              int64
-	ProjectID           int64
 	ApiKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     string
@@ -567,7 +547,6 @@ func (q *Queries) MarkRequestCanceled(ctx context.Context, arg MarkRequestCancel
 		&i.ID,
 		&i.RequestID,
 		&i.UserID,
-		&i.ProjectID,
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
@@ -601,14 +580,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $2
             AND request_records.delivery_status IN ('not_started', 'in_progress')
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 )
-SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 FROM request_records
 WHERE request_records.id = $2
   AND request_records.delivery_status = 'completed'
@@ -624,7 +603,6 @@ type MarkRequestDeliveryCompletedRow struct {
 	ID                  int64
 	RequestID           string
 	UserID              int64
-	ProjectID           int64
 	ApiKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     string
@@ -658,7 +636,6 @@ func (q *Queries) MarkRequestDeliveryCompleted(ctx context.Context, arg MarkRequ
 		&i.ID,
 		&i.RequestID,
 		&i.UserID,
-		&i.ProjectID,
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
@@ -691,14 +668,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $1
             AND request_records.delivery_status IN ('not_started', 'in_progress')
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 )
-SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 FROM request_records
 WHERE request_records.id = $1
   AND request_records.delivery_status = 'interrupted'
@@ -709,7 +686,6 @@ type MarkRequestDeliveryInterruptedRow struct {
 	ID                  int64
 	RequestID           string
 	UserID              int64
-	ProjectID           int64
 	ApiKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     string
@@ -743,7 +719,6 @@ func (q *Queries) MarkRequestDeliveryInterrupted(ctx context.Context, requestRec
 		&i.ID,
 		&i.RequestID,
 		&i.UserID,
-		&i.ProjectID,
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
@@ -780,14 +755,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $5
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 )
-SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 FROM request_records
 WHERE request_records.id = $5
   AND request_records.status = 'failed'
@@ -806,7 +781,6 @@ type MarkRequestFailedRow struct {
 	ID                  int64
 	RequestID           string
 	UserID              int64
-	ProjectID           int64
 	ApiKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     string
@@ -845,7 +819,6 @@ func (q *Queries) MarkRequestFailed(ctx context.Context, arg MarkRequestFailedPa
 		&i.ID,
 		&i.RequestID,
 		&i.UserID,
-		&i.ProjectID,
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
@@ -882,14 +855,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $2
           AND request_records.status IN ('running', 'succeeded')
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 )
-SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 FROM request_records
 WHERE request_records.id = $2
   AND request_records.response_started_at IS NOT NULL
@@ -905,7 +878,6 @@ type MarkRequestResponseStartedRow struct {
 	ID                  int64
 	RequestID           string
 	UserID              int64
-	ProjectID           int64
 	ApiKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     string
@@ -938,7 +910,6 @@ func (q *Queries) MarkRequestResponseStarted(ctx context.Context, arg MarkReques
 		&i.ID,
 		&i.RequestID,
 		&i.UserID,
-		&i.ProjectID,
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
@@ -971,14 +942,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $1
             AND request_records.status = 'pending'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 )
-SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 FROM request_records
 WHERE request_records.id = $1
   AND request_records.status = 'running'
@@ -989,7 +960,6 @@ type MarkRequestRunningRow struct {
 	ID                  int64
 	RequestID           string
 	UserID              int64
-	ProjectID           int64
 	ApiKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     string
@@ -1022,7 +992,6 @@ func (q *Queries) MarkRequestRunning(ctx context.Context, requestRecordID int64)
 		&i.ID,
 		&i.RequestID,
 		&i.UserID,
-		&i.ProjectID,
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
@@ -1062,14 +1031,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $8
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 )
-SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 FROM request_records
 WHERE request_records.id = $8
   AND request_records.status = 'succeeded'
@@ -1091,7 +1060,6 @@ type MarkRequestSucceededRow struct {
 	ID                  int64
 	RequestID           string
 	UserID              int64
-	ProjectID           int64
 	ApiKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     string
@@ -1135,7 +1103,6 @@ func (q *Queries) MarkRequestSucceeded(ctx context.Context, arg MarkRequestSucce
 		&i.ID,
 		&i.RequestID,
 		&i.UserID,
-		&i.ProjectID,
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
@@ -1178,14 +1145,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $11
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 )
-SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 FROM request_records
 WHERE request_records.id = $11
   AND request_records.status = 'canceled'
@@ -1210,7 +1177,6 @@ type MarkSettledRequestCanceledRow struct {
 	ID                  int64
 	RequestID           string
 	UserID              int64
-	ProjectID           int64
 	ApiKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     string
@@ -1255,7 +1221,6 @@ func (q *Queries) MarkSettledRequestCanceled(ctx context.Context, arg MarkSettle
 		&i.ID,
 		&i.RequestID,
 		&i.UserID,
-		&i.ProjectID,
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
@@ -1298,14 +1263,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $11
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 )
-SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
 FROM request_records
 WHERE request_records.id = $11
   AND request_records.status = 'failed'
@@ -1330,7 +1295,6 @@ type MarkSettledRequestFailedRow struct {
 	ID                  int64
 	RequestID           string
 	UserID              int64
-	ProjectID           int64
 	ApiKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     string
@@ -1374,7 +1338,6 @@ func (q *Queries) MarkSettledRequestFailed(ctx context.Context, arg MarkSettledR
 		&i.ID,
 		&i.RequestID,
 		&i.UserID,
-		&i.ProjectID,
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,

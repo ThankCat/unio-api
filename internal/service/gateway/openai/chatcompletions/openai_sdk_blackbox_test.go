@@ -116,7 +116,7 @@ func newSDKBlackboxHTTPService(t *testing.T, stream bool) (*ChatCompletionServic
 type sdkBlackboxAuthenticator struct{}
 
 func (sdkBlackboxAuthenticator) AuthenticateAPIKey(_ context.Context, _ string) (*auth.APIKeyPrincipal, error) {
-	return &auth.APIKeyPrincipal{APIKeyID: 1, ProjectID: 42, KeyPrefix: "unio_sk_test"}, nil
+	return &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 42, KeyPrefix: "unio_sk_test"}, nil
 }
 
 type sdkBlackboxRateLimiter struct{}

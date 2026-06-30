@@ -53,7 +53,7 @@ func TestRateLimitAllowsRequest(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
 		APIKeyID:  123,
-		ProjectID: 456,
+		UserID:    456,
 		KeyPrefix: "unio_sk_test",
 	}))
 	rec := httptest.NewRecorder()

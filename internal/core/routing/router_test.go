@@ -1,29 +1,33 @@
 package routing
 
 import (
-	"bytes"
 	"context"
 	"errors"
+	"math/big"
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+// testPriceRatio 返回测试用的有效线路价格倍率（1.0）；不设倍率会让 ScaleCustomerPrice 因无效倍率报错。
+func testPriceRatio() pgtype.Numeric {
+	return pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true}
+}
+
 // fakeStore 是 routing 测试使用的候选 channel 存储替身。
 type fakeStore struct {
-	params              sqlc.FindRouteCandidatesParams
-	rows                []sqlc.FindRouteCandidatesRow
-	err                 error
-	modelExistsID       string
-	modelExists         bool
-	modelExistsErr      error
-	projectCanUseParams sqlc.ProjectCanUseModelParams
-	projectCanUse       bool
-	projectCanUseErr    error
+	params           sqlc.FindRouteCandidatesParams
+	rows             []sqlc.FindRouteCandidatesRow
+	err              error
+	modelExistsID    string
+	modelExists      bool
+	modelExistsErr   error
+	userCanUseParams sqlc.UserCanUseModelParams
+	userCanUse       bool
+	userCanUseErr    error
 }
 
 // FindRouteCandidates 记录查询参数，并返回测试预设候选结果。
@@ -38,107 +42,67 @@ func (s *fakeStore) ModelExistsByID(ctx context.Context, requestedModelID string
 	return s.modelExists, s.modelExistsErr
 }
 
-// ProjectCanUseModel 记录 project 模型可用性诊断参数，并返回测试预设结果。
-func (s *fakeStore) ProjectCanUseModel(ctx context.Context, arg sqlc.ProjectCanUseModelParams) (bool, error) {
-	s.projectCanUseParams = arg
-	return s.projectCanUse, s.projectCanUseErr
+// UserCanUseModel 记录 user 模型可用性诊断参数，并返回测试预设结果。
+func (s *fakeStore) UserCanUseModel(ctx context.Context, arg sqlc.UserCanUseModelParams) (bool, error) {
+	s.userCanUseParams = arg
+	return s.userCanUse, s.userCanUseErr
 }
 
-// GetRouteByID 默认返回 not found，让线路解析回落到内置经济（测试默认不绑线路）。
+// GetRouteByID 返回测试线路；调用方传入 RouteID 触发解析（线路必填）。
 func (s *fakeStore) GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error) {
-	return sqlc.Route{}, errors.New("route not found")
+	return sqlc.Route{ID: id, Name: "test", Mode: "cheapest", PoolKind: "all", Status: "enabled", PriceRatio: testPriceRatio()}, nil
 }
 
-// GetBuiltinCheapestRoute 返回内置「经济」线路（cheapest/all），作为线路解析回落。
-func (s *fakeStore) GetBuiltinCheapestRoute(ctx context.Context) (sqlc.Route, error) {
-	return sqlc.Route{ID: 1, Name: "经济", Mode: "cheapest", PoolKind: "all", IsBuiltin: true, Status: "enabled"}, nil
-}
-
-// fakeCredentialDecryptor 是 routing 测试使用的凭据解密替身。
-type fakeCredentialDecryptor struct {
-	ciphertexts [][]byte
-	apiKey      string
-	err         error
-}
-
-// Decrypt 记录密文，并返回测试预设 API key。
-func (d *fakeCredentialDecryptor) Decrypt(ciphertext []byte) (string, error) {
-	d.ciphertexts = append(d.ciphertexts, append([]byte(nil), ciphertext...))
-	if d.err != nil {
-		return "", d.err
-	}
-
-	return d.apiKey, nil
-}
-
-func mustEncryptTestCredential(t *testing.T, plaintext string) []byte {
-	t.Helper()
-
-	encrypted, err := credential.EncryptFixedTestCredential(plaintext)
-	if err != nil {
-		t.Fatalf("encrypt test credential: %v", err)
-	}
-
-	return encrypted
+func testRouteID() *int64 {
+	id := int64(1)
+	return &id
 }
 
 func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
-	primaryEncrypted := mustEncryptTestCredential(t, "secret://openai/main")
-	backupEncrypted := mustEncryptTestCredential(t, "secret://openai/backup")
-
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
-				RequestedModelID:    "openai/gpt-4.1",
-				ProviderID:          11,
-				AdapterKey:          "openai",
-				ChannelID:           123,
-				BaseUrl:             "https://api.openai.example/v1",
-				CredentialEncrypted: primaryEncrypted,
-				TimeoutMs:           pgtype.Int4{Int32: 15000, Valid: true},
-				UpstreamModel:       "gpt-4.1",
+				RequestedModelID: "openai/gpt-4.1",
+				ProviderID:       11,
+				AdapterKey:       "openai",
+				ChannelID:        123,
+				BaseUrl:          "https://api.openai.example/v1",
+				Credential:       "secret://openai/main",
+				TimeoutMs:        pgtype.Int4{Int32: 15000, Valid: true},
+				UpstreamModel:    "gpt-4.1",
 			},
 			{
-				RequestedModelID:    "openai/gpt-4.1",
-				ProviderID:          11,
-				AdapterKey:          "openai",
-				ChannelID:           456,
-				BaseUrl:             "https://backup.openai.example/v1",
-				CredentialEncrypted: backupEncrypted,
-				TimeoutMs:           pgtype.Int4{Int32: 30000, Valid: true},
-				UpstreamModel:       "gpt-4.1",
+				RequestedModelID: "openai/gpt-4.1",
+				ProviderID:       11,
+				AdapterKey:       "openai",
+				ChannelID:        456,
+				BaseUrl:          "https://backup.openai.example/v1",
+				Credential:       "secret://openai/backup",
+				TimeoutMs:        pgtype.Int4{Int32: 30000, Valid: true},
+				UpstreamModel:    "gpt-4.1",
 			},
 		},
 	}
-	decryptor := &fakeCredentialDecryptor{apiKey: "resolved-secret"}
-	router := NewRouter(store, decryptor, 30*time.Second)
+	router := NewRouter(store, 30*time.Second)
 
 	got, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID:       42,
+		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
+		RouteID:         testRouteID(),
 	})
 	if err != nil {
 		t.Fatalf("PlanChat returned error: %v", err)
 	}
 
-	if store.params.ProjectID != 42 {
-		t.Fatalf("expected project id %d, got %d", int64(42), store.params.ProjectID)
+	if store.params.UserID != 42 {
+		t.Fatalf("expected user id %d, got %d", int64(42), store.params.UserID)
 	}
 	if store.params.RequestedModelID != "openai/gpt-4.1" {
 		t.Fatalf("expected requested model %q, got %q", "openai/gpt-4.1", store.params.RequestedModelID)
 	}
 	if store.params.IngressProtocol != ProtocolOpenAI {
 		t.Fatalf("expected ingress protocol %q, got %q", ProtocolOpenAI, store.params.IngressProtocol)
-	}
-	if len(decryptor.ciphertexts) != 2 {
-		t.Fatalf("expected 2 credential decrypt calls, got %d", len(decryptor.ciphertexts))
-	}
-	if !bytes.Equal(decryptor.ciphertexts[0], primaryEncrypted) {
-		t.Fatal("expected primary encrypted credential to be decrypted")
-	}
-	if !bytes.Equal(decryptor.ciphertexts[1], backupEncrypted) {
-		t.Fatal("expected backup encrypted credential to be decrypted")
 	}
 
 	if got.RequestedModel != "openai/gpt-4.1" {
@@ -164,8 +128,9 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	if first.Channel.BaseURL != "https://api.openai.example/v1" {
 		t.Fatalf("expected base url %q, got %q", "https://api.openai.example/v1", first.Channel.BaseURL)
 	}
-	if first.Channel.APIKey != "resolved-secret" {
-		t.Fatalf("expected resolved API key, got %q", first.Channel.APIKey)
+	// 渠道凭据明文存储：候选直接取用 channels.credential 明文，无解密环节。
+	if first.Channel.APIKey != "secret://openai/main" {
+		t.Fatalf("expected plaintext credential as API key, got %q", first.Channel.APIKey)
 	}
 	if first.Channel.Timeout != 15*time.Second {
 		t.Fatalf("expected timeout %v, got %v", 15*time.Second, first.Channel.Timeout)
@@ -174,6 +139,9 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	second := got.Candidates[1]
 	if second.Channel.ID != 456 {
 		t.Fatalf("expected second channel id %d, got %d", int64(456), second.Channel.ID)
+	}
+	if second.Channel.APIKey != "secret://openai/backup" {
+		t.Fatalf("expected second plaintext credential, got %q", second.Channel.APIKey)
 	}
 	if second.Channel.Timeout != 30*time.Second {
 		t.Fatalf("expected second timeout %v, got %v", 30*time.Second, second.Channel.Timeout)
@@ -184,21 +152,22 @@ func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
-				AdapterKey:          "openai",
-				ChannelID:           123,
-				BaseUrl:             "https://api.openai.example/v1",
-				CredentialEncrypted: mustEncryptTestCredential(t, "secret://openai/main"),
-				TimeoutMs:           pgtype.Int4{Valid: false},
-				UpstreamModel:       "gpt-4.1",
+				AdapterKey:    "openai",
+				ChannelID:     123,
+				BaseUrl:       "https://api.openai.example/v1",
+				Credential:    "secret://openai/main",
+				TimeoutMs:     pgtype.Int4{Valid: false},
+				UpstreamModel: "gpt-4.1",
 			},
 		},
 	}
-	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 0)
+	router := NewRouter(store, 0)
 
 	got, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID:       42,
+		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
+		RouteID:         testRouteID(),
 	})
 	if err != nil {
 		t.Fatalf("PlanChat returned error: %v", err)
@@ -211,15 +180,16 @@ func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 
 func TestRouterPlanChatReturnsNoAvailableChannel(t *testing.T) {
 	store := &fakeStore{
-		modelExists:   true,
-		projectCanUse: true,
+		modelExists: true,
+		userCanUse:  true,
 	}
-	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
+	router := NewRouter(store, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID:       42,
+		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
+		RouteID:         testRouteID(),
 	})
 	if !errors.Is(err, ErrNoAvailableChannel) {
 		t.Fatalf("expected ErrNoAvailableChannel, got %v", err)
@@ -227,42 +197,44 @@ func TestRouterPlanChatReturnsNoAvailableChannel(t *testing.T) {
 	if store.modelExistsID != "openai/gpt-4.1" {
 		t.Fatalf("expected model exists check for %q, got %q", "openai/gpt-4.1", store.modelExistsID)
 	}
-	if store.projectCanUseParams.ProjectID != 42 {
-		t.Fatalf("expected project can use check for project %d, got %d", int64(42), store.projectCanUseParams.ProjectID)
+	if store.userCanUseParams.UserID != 42 {
+		t.Fatalf("expected user can use check for user %d, got %d", int64(42), store.userCanUseParams.UserID)
 	}
-	if store.projectCanUseParams.RequestedModelID != "openai/gpt-4.1" {
-		t.Fatalf("expected project can use check for model %q, got %q", "openai/gpt-4.1", store.projectCanUseParams.RequestedModelID)
+	if store.userCanUseParams.RequestedModelID != "openai/gpt-4.1" {
+		t.Fatalf("expected user can use check for model %q, got %q", "openai/gpt-4.1", store.userCanUseParams.RequestedModelID)
 	}
 }
 
 func TestRouterPlanChatReturnsModelNotFound(t *testing.T) {
 	store := &fakeStore{modelExists: false}
-	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
+	router := NewRouter(store, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID:       42,
+		UserID:          42,
 		ModelID:         "openai/missing",
 		IngressProtocol: ProtocolOpenAI,
+		RouteID:         testRouteID(),
 	})
 	if !errors.Is(err, ErrModelNotFound) {
 		t.Fatalf("expected ErrModelNotFound, got %v", err)
 	}
-	if store.projectCanUseParams.ProjectID != 0 {
-		t.Fatalf("expected project policy check to be skipped, got %#v", store.projectCanUseParams)
+	if store.userCanUseParams.UserID != 0 {
+		t.Fatalf("expected user policy check to be skipped, got %#v", store.userCanUseParams)
 	}
 }
 
 func TestRouterPlanChatReturnsModelNotAvailable(t *testing.T) {
 	store := &fakeStore{
-		modelExists:   true,
-		projectCanUse: false,
+		modelExists: true,
+		userCanUse:  false,
 	}
-	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
+	router := NewRouter(store, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID:       42,
+		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
+		RouteID:         testRouteID(),
 	})
 	if !errors.Is(err, ErrModelNotAvailable) {
 		t.Fatalf("expected ErrModelNotAvailable, got %v", err)
@@ -271,69 +243,41 @@ func TestRouterPlanChatReturnsModelNotAvailable(t *testing.T) {
 
 func TestRouterPlanChatReturnsStoreError(t *testing.T) {
 	storeErr := errors.New("database unavailable")
-	router := NewRouter(&fakeStore{err: storeErr}, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
+	router := NewRouter(&fakeStore{err: storeErr}, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID:       42,
+		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
+		RouteID:         testRouteID(),
 	})
 	if !errors.Is(err, storeErr) {
 		t.Fatalf("expected store error, got %v", err)
 	}
 }
 
-// TestRouterPlanChatAllCandidatesDecryptFailReturnsNoAvailable 验证 P1-1：当全部候选凭据解密失败时，
-// 跳过坏候选不再整盘抛底层 decrypt 错误，而是收口为 ErrNoAvailableChannel（不泄露内部凭据错误）。
-func TestRouterPlanChatAllCandidatesDecryptFailReturnsNoAvailable(t *testing.T) {
-	decryptErr := errors.New("decrypt unavailable")
-	store := &fakeStore{
-		rows: []sqlc.FindRouteCandidatesRow{
-			{
-				AdapterKey:          "openai",
-				ChannelID:           123,
-				BaseUrl:             "https://api.openai.example/v1",
-				CredentialEncrypted: mustEncryptTestCredential(t, "secret://openai/main"),
-				TimeoutMs:           pgtype.Int4{Int32: 15000, Valid: true},
-				UpstreamModel:       "gpt-4.1",
-			},
-		},
-	}
-	router := NewRouter(store, &fakeCredentialDecryptor{err: decryptErr}, 30*time.Second)
-
-	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID:       42,
-		ModelID:         "openai/gpt-4.1",
-		IngressProtocol: ProtocolOpenAI,
-	})
-	if !errors.Is(err, ErrNoAvailableChannel) {
-		t.Fatalf("expected ErrNoAvailableChannel after skipping all bad candidates, got %v", err)
-	}
-	if errors.Is(err, decryptErr) {
-		t.Fatal("internal decrypt error must not leak to caller")
-	}
-}
-
-// TestRouterPlanChatAllCandidatesMissingCredentialReturnsNoAvailable 验证 P1-1：唯一候选缺凭据被跳过后收口为 ErrNoAvailableChannel。
+// TestRouterPlanChatAllCandidatesMissingCredentialReturnsNoAvailable 验证 P1-1：唯一候选缺凭据（明文为空）
+// 被跳过后收口为 ErrNoAvailableChannel，不泄露内部错误。
 func TestRouterPlanChatAllCandidatesMissingCredentialReturnsNoAvailable(t *testing.T) {
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
-				AdapterKey:          "openai",
-				ChannelID:           123,
-				BaseUrl:             "https://api.openai.example/v1",
-				CredentialEncrypted: nil,
-				TimeoutMs:           pgtype.Int4{Int32: 15000, Valid: true},
-				UpstreamModel:       "gpt-4.1",
+				AdapterKey:    "openai",
+				ChannelID:     123,
+				BaseUrl:       "https://api.openai.example/v1",
+				Credential:    "",
+				TimeoutMs:     pgtype.Int4{Int32: 15000, Valid: true},
+				UpstreamModel: "gpt-4.1",
 			},
 		},
 	}
-	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
+	router := NewRouter(store, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID:       42,
+		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
+		RouteID:         testRouteID(),
 	})
 	if !errors.Is(err, ErrNoAvailableChannel) {
 		t.Fatalf("expected ErrNoAvailableChannel, got %v", err)
@@ -343,33 +287,33 @@ func TestRouterPlanChatAllCandidatesMissingCredentialReturnsNoAvailable(t *testi
 // TestRouterPlanChatSkipsBadCandidateKeepsGood 验证 P1-1：单个坏候选（缺凭据）被跳过，
 // 健康候选仍正常进入 plan，请求不被整盘拖垮。
 func TestRouterPlanChatSkipsBadCandidateKeepsGood(t *testing.T) {
-	goodEncrypted := mustEncryptTestCredential(t, "secret://openai/good")
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
-				AdapterKey:          "openai",
-				ChannelID:           111,
-				BaseUrl:             "https://bad.openai.example/v1",
-				CredentialEncrypted: nil, // 坏候选：缺凭据，应被跳过
-				TimeoutMs:           pgtype.Int4{Int32: 15000, Valid: true},
-				UpstreamModel:       "gpt-4.1",
+				AdapterKey:    "openai",
+				ChannelID:     111,
+				BaseUrl:       "https://bad.openai.example/v1",
+				Credential:    "", // 坏候选：缺凭据，应被跳过
+				TimeoutMs:     pgtype.Int4{Int32: 15000, Valid: true},
+				UpstreamModel: "gpt-4.1",
 			},
 			{
-				AdapterKey:          "openai",
-				ChannelID:           222,
-				BaseUrl:             "https://good.openai.example/v1",
-				CredentialEncrypted: goodEncrypted,
-				TimeoutMs:           pgtype.Int4{Int32: 30000, Valid: true},
-				UpstreamModel:       "gpt-4.1",
+				AdapterKey:    "openai",
+				ChannelID:     222,
+				BaseUrl:       "https://good.openai.example/v1",
+				Credential:    "secret://openai/good",
+				TimeoutMs:     pgtype.Int4{Int32: 30000, Valid: true},
+				UpstreamModel: "gpt-4.1",
 			},
 		},
 	}
-	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
+	router := NewRouter(store, 30*time.Second)
 
 	got, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID:       42,
+		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
+		RouteID:         testRouteID(),
 	})
 	if err != nil {
 		t.Fatalf("expected good candidate to survive, got error: %v", err)
@@ -382,12 +326,32 @@ func TestRouterPlanChatSkipsBadCandidateKeepsGood(t *testing.T) {
 	}
 }
 
-func TestRouterPlanChatRejectsInvalidIngressProtocolBeforeQuery(t *testing.T) {
+func TestRouterPlanChatReturnsRouteNotConfigured(t *testing.T) {
 	store := &fakeStore{}
-	router := NewRouter(store, &fakeCredentialDecryptor{apiKey: "resolved-secret"}, 30*time.Second)
+	router := NewRouter(store, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		ProjectID:       42,
+		UserID:          42,
+		ModelID:         "openai/gpt-4.1",
+		IngressProtocol: ProtocolOpenAI,
+	})
+	if !errors.Is(err, ErrRouteNotConfigured) {
+		t.Fatalf("expected ErrRouteNotConfigured, got %v", err)
+	}
+	if got := failure.CodeOf(err); got != failure.CodeRoutingRouteNotConfigured {
+		t.Fatalf("expected code %q, got %q", failure.CodeRoutingRouteNotConfigured, got)
+	}
+	if store.params != (sqlc.FindRouteCandidatesParams{}) {
+		t.Fatalf("expected store query to be skipped, got %#v", store.params)
+	}
+}
+
+func TestRouterPlanChatRejectsInvalidIngressProtocolBeforeQuery(t *testing.T) {
+	store := &fakeStore{}
+	router := NewRouter(store, 30*time.Second)
+
+	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: "unknown",
 	})

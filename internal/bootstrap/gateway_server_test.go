@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
@@ -199,9 +198,6 @@ func newGatewayServerAppTestConfig() config.Config {
 		RateLimit: config.RateLimitConfig{
 			DefaultRPM:    60,
 			FailurePolicy: "fail_closed",
-		},
-		Credential: config.CredentialConfig{
-			MasterKey: credential.FixedTestMasterKeyBase64,
 		},
 	}
 }

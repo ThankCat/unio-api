@@ -14,11 +14,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// requestRecordIdentity 保存请求记录测试所需的用户、项目和 API Key。
+// requestRecordIdentity 保存请求记录测试所需的用户和 API Key。
 type requestRecordIdentity struct {
-	user    sqlc.User
-	project sqlc.Project
-	apiKey  sqlc.ApiKey
+	user   sqlc.User
+	apiKey sqlc.ApiKey
 }
 
 // createRequestRecordIdentity 创建请求记录测试所需的身份数据。
@@ -36,34 +35,42 @@ func createRequestRecordIdentity(t *testing.T, ctx context.Context, queries *sql
 		t.Fatalf("create user: %v", err)
 	}
 
-	project, err := queries.CreateProject(ctx, sqlc.CreateProjectParams{
-		UserID: user.ID,
-		Name:   fmt.Sprintf("request-record-project-%d", suffix),
-	})
-	if err != nil {
-		t.Fatalf("create project: %v", err)
-	}
-
 	generatedKey, err := apikey.Generate()
 	if err != nil {
 		t.Fatalf("generate api key: %v", err)
 	}
 
+	// 线路必填：先建一条线路供 API Key 绑定（route_id 现为 NOT NULL）。
+	var priceRatio pgtype.Numeric
+	if err := priceRatio.Scan("1"); err != nil {
+		t.Fatalf("scan price ratio: %v", err)
+	}
+	route, err := queries.CreateRoute(ctx, sqlc.CreateRouteParams{
+		Name:       fmt.Sprintf("request-record-route-%d", suffix),
+		Mode:       "cheapest",
+		PoolKind:   "all",
+		Status:     "enabled",
+		PriceRatio: priceRatio,
+	})
+	if err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+
 	apiKey, err := queries.CreateAPIKey(ctx, sqlc.CreateAPIKeyParams{
-		ProjectID: project.ID,
+		UserID:    user.ID,
 		Name:      "request record key",
 		KeyPrefix: generatedKey.Prefix,
 		KeyHash:   generatedKey.Hash,
 		ExpiresAt: pgtype.Timestamptz{Valid: false},
+		RouteID:   route.ID,
 	})
 	if err != nil {
 		t.Fatalf("create api key: %v", err)
 	}
 
 	return requestRecordIdentity{
-		user:    user,
-		project: project,
-		apiKey:  apiKey,
+		user:   user,
+		apiKey: apiKey,
 	}
 }
 
@@ -74,7 +81,6 @@ func createRequestRecordForTest(t *testing.T, ctx context.Context, queries *sqlc
 	record, err := queries.CreateRequestRecord(ctx, sqlc.CreateRequestRecordParams{
 		RequestID:           requestID,
 		UserID:              identity.user.ID,
-		ProjectID:           identity.project.ID,
 		ApiKeyID:            identity.apiKey.ID,
 		RequestedModelID:    "deepseek-v4-pro",
 		IngressProtocol:     "openai",
@@ -341,7 +347,6 @@ func TestRequestRecordRejectsDuplicateRequestID(t *testing.T) {
 	_, err := queries.CreateRequestRecord(ctx, sqlc.CreateRequestRecordParams{
 		RequestID:           requestID,
 		UserID:              identity.user.ID,
-		ProjectID:           identity.project.ID,
 		ApiKeyID:            identity.apiKey.ID,
 		RequestedModelID:    "deepseek-v4-pro",
 		IngressProtocol:     "openai",

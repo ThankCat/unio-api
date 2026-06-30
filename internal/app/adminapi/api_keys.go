@@ -38,12 +38,14 @@ type APIKeyService interface {
 	Revoke(ctx context.Context, id int64) (customer.APIKey, error)
 }
 
-// apiKeyDTO 是 API Key 响应体；绝不含 key_hash。
+// apiKeyDTO 是 API Key 响应体；含完整明文 key 供多次复制（产品决策），绝不含 key_hash。
 type apiKeyDTO struct {
-	ID         int64   `json:"id"`
-	ProjectID  int64   `json:"project_id"`
-	Name       string  `json:"name"`
-	KeyPrefix  string  `json:"key_prefix"`
+	ID        int64  `json:"id"`
+	UserID    int64  `json:"user_id"`
+	Name      string `json:"name"`
+	KeyPrefix string `json:"key_prefix"`
+	// Plaintext 是完整明文 key（产品决策：留存供多次复制）；null 表示历史 key 不可回显。
+	Plaintext  *string `json:"plaintext"`
 	Status     string  `json:"status"`
 	SpendLimit *string `json:"spend_limit"`
 	SpentTotal string  `json:"spent_total"`
@@ -66,12 +68,6 @@ type rateLimitsRequest struct {
 	RPM *int64 `json:"rpm"`
 	TPM *int64 `json:"tpm"`
 	RPD *int64 `json:"rpd"`
-}
-
-// createdAPIKeyDTO 是创建结果响应体：含只展示一次的明文 plaintext。
-type createdAPIKeyDTO struct {
-	apiKeyDTO
-	Plaintext string `json:"plaintext"`
 }
 
 type createAPIKeyRequest struct {
@@ -114,9 +110,9 @@ type apiKeysHandler struct {
 	service APIKeyService
 }
 
-// listByProject 列出某项目（路径 {id} 为 project id）下的 API Key。
-func (h *apiKeysHandler) listByProject(w http.ResponseWriter, r *http.Request) {
-	projectID, err := pathID(r)
+// listByUser 列出某用户（路径 {id} 为 user id）下的 API Key。
+func (h *apiKeysHandler) listByUser(w http.ResponseWriter, r *http.Request) {
+	userID, err := pathID(r)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -124,9 +120,9 @@ func (h *apiKeysHandler) listByProject(w http.ResponseWriter, r *http.Request) {
 
 	page := parsePage(r)
 	items, total, err := h.service.List(r.Context(), customer.APIKeyListParams{
-		ProjectID: projectID,
-		Limit:     page.Limit(),
-		Offset:    page.Offset(),
+		UserID: userID,
+		Limit:  page.Limit(),
+		Offset: page.Offset(),
 	})
 	if err != nil {
 		writeServiceError(w, err)
@@ -140,9 +136,9 @@ func (h *apiKeysHandler) listByProject(w http.ResponseWriter, r *http.Request) {
 	writeList(w, http.StatusOK, dtos, page, total)
 }
 
-// create 在项目（路径 {id} 为 project id）下创建 API Key，返回一次性明文。
+// create 在用户（路径 {id} 为 user id）下创建 API Key，返回一次性明文。
 func (h *apiKeysHandler) create(w http.ResponseWriter, r *http.Request) {
-	projectID, err := pathID(r)
+	userID, err := pathID(r)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -166,7 +162,7 @@ func (h *apiKeysHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	createParams := customer.APIKeyCreateParams{
-		ProjectID:  projectID,
+		UserID:     userID,
 		Name:       req.Name,
 		ExpiresAt:  expiresAt,
 		SpendLimit: req.SpendLimit,
@@ -185,10 +181,10 @@ func (h *apiKeysHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeData(w, http.StatusCreated, createdAPIKeyDTO{
-		apiKeyDTO: toAPIKeyDTO(created.APIKey),
-		Plaintext: created.Plaintext,
-	})
+	dto := toAPIKeyDTO(created.APIKey)
+	// 创建结果以服务返回的权威明文为准（也已落库供后续多次复制）。
+	dto.Plaintext = &created.Plaintext
+	writeData(w, http.StatusCreated, dto)
 }
 
 // get 读取单把 API Key（路径 {id} 为 api key id）。
@@ -275,9 +271,10 @@ func (h *apiKeysHandler) revoke(w http.ResponseWriter, r *http.Request) {
 func toAPIKeyDTO(k customer.APIKey) apiKeyDTO {
 	return apiKeyDTO{
 		ID:         k.ID,
-		ProjectID:  k.ProjectID,
+		UserID:     k.UserID,
 		Name:       k.Name,
 		KeyPrefix:  k.KeyPrefix,
+		Plaintext:  k.KeyPlaintext,
 		Status:     k.Status,
 		SpendLimit: k.SpendLimit,
 		SpentTotal: k.SpentTotal,

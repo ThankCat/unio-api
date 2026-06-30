@@ -151,7 +151,7 @@ func TestRouterHealthz(t *testing.T) {
 	authenticator := &routerTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -182,7 +182,7 @@ func TestRouterNotFound(t *testing.T) {
 	authenticator := &routerTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -221,7 +221,7 @@ func TestRouterMethodNotAllowed(t *testing.T) {
 	authenticator := &routerTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -259,7 +259,7 @@ func TestRouterMethodNotAllowed(t *testing.T) {
 // routerWithPrincipal 创建一个认证通过的测试 router，用于验证 /responses* 路由注册。
 func routerWithPrincipal() http.Handler {
 	authenticator := &routerTestAPIKeyAuthenticator{
-		principal: &auth.APIKeyPrincipal{APIKeyID: 1, ProjectID: 1, KeyPrefix: "unio_sk_test"},
+		principal: &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 1, KeyPrefix: "unio_sk_test"},
 	}
 	return newTestRouter(authenticator, nil, nil)
 }
@@ -347,7 +347,7 @@ func TestRouterRequestID(t *testing.T) {
 	authenticator := &routerTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}

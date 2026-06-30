@@ -17,12 +17,6 @@ INSERT INTO channel_prices (
     model_id,
     currency,
     pricing_unit,
-    uncached_input_price,
-    cache_read_input_price,
-    cache_write_5m_input_price,
-    cache_write_1h_input_price,
-    output_price,
-    reasoning_output_price,
     uncached_input_cost,
     cache_read_input_cost,
     cache_write_5m_input_cost,
@@ -46,41 +40,28 @@ VALUES (
     $10,
     $11,
     $12,
-    $13,
-    $14,
-    $15,
-    $16,
-    $17,
-    $18,
-    $19
+    $13
 )
-RETURNING id, channel_id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at
+RETURNING id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at
 `
 
 type CreateChannelPriceParams struct {
-	ChannelID              int64
-	ModelID                int64
-	Currency               string
-	PricingUnit            string
-	UncachedInputPrice     pgtype.Numeric
-	CacheReadInputPrice    pgtype.Numeric
-	CacheWrite5mInputPrice pgtype.Numeric
-	CacheWrite1hInputPrice pgtype.Numeric
-	OutputPrice            pgtype.Numeric
-	ReasoningOutputPrice   pgtype.Numeric
-	UncachedInputCost      pgtype.Numeric
-	CacheReadInputCost     pgtype.Numeric
-	CacheWrite5mInputCost  pgtype.Numeric
-	CacheWrite1hInputCost  pgtype.Numeric
-	OutputCost             pgtype.Numeric
-	ReasoningOutputCost    pgtype.Numeric
-	Status                 string
-	EffectiveFrom          pgtype.Timestamptz
-	EffectiveTo            pgtype.Timestamptz
+	ChannelID             int64
+	ModelID               int64
+	Currency              string
+	PricingUnit           string
+	UncachedInputCost     pgtype.Numeric
+	CacheReadInputCost    pgtype.Numeric
+	CacheWrite5mInputCost pgtype.Numeric
+	CacheWrite1hInputCost pgtype.Numeric
+	OutputCost            pgtype.Numeric
+	ReasoningOutputCost   pgtype.Numeric
+	Status                string
+	EffectiveFrom         pgtype.Timestamptz
+	EffectiveTo           pgtype.Timestamptz
 }
 
-// CreateChannelPrice 创建一条渠道-模型价（售价必填、成本可空）。
-// 录入守卫（任一分项售价 < 成本）由 DB ck_channel_prices_margin 硬拦，违反报 23514。
+// CreateChannelPrice 创建一条渠道-模型成本价（DEC-026：渠道只录成本，售价取 model_prices × 线路倍率）。
 // 启用窗口重叠由 ex_channel_prices_enabled_window 保证，违反报 23P01。
 func (q *Queries) CreateChannelPrice(ctx context.Context, arg CreateChannelPriceParams) (ChannelPrice, error) {
 	row := q.db.QueryRow(ctx, createChannelPrice,
@@ -88,12 +69,6 @@ func (q *Queries) CreateChannelPrice(ctx context.Context, arg CreateChannelPrice
 		arg.ModelID,
 		arg.Currency,
 		arg.PricingUnit,
-		arg.UncachedInputPrice,
-		arg.CacheReadInputPrice,
-		arg.CacheWrite5mInputPrice,
-		arg.CacheWrite1hInputPrice,
-		arg.OutputPrice,
-		arg.ReasoningOutputPrice,
 		arg.UncachedInputCost,
 		arg.CacheReadInputCost,
 		arg.CacheWrite5mInputCost,
@@ -111,12 +86,6 @@ func (q *Queries) CreateChannelPrice(ctx context.Context, arg CreateChannelPrice
 		&i.ModelID,
 		&i.Currency,
 		&i.PricingUnit,
-		&i.UncachedInputPrice,
-		&i.CacheReadInputPrice,
-		&i.CacheWrite5mInputPrice,
-		&i.CacheWrite1hInputPrice,
-		&i.OutputPrice,
-		&i.ReasoningOutputPrice,
 		&i.UncachedInputCost,
 		&i.CacheReadInputCost,
 		&i.CacheWrite5mInputCost,
@@ -133,7 +102,7 @@ func (q *Queries) CreateChannelPrice(ctx context.Context, arg CreateChannelPrice
 }
 
 const findActiveChannelPrice = `-- name: FindActiveChannelPrice :one
-SELECT id, channel_id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at
+SELECT id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at
 FROM channel_prices
 WHERE channel_id = $1
     AND model_id = $2
@@ -163,12 +132,6 @@ func (q *Queries) FindActiveChannelPrice(ctx context.Context, arg FindActiveChan
 		&i.ModelID,
 		&i.Currency,
 		&i.PricingUnit,
-		&i.UncachedInputPrice,
-		&i.CacheReadInputPrice,
-		&i.CacheWrite5mInputPrice,
-		&i.CacheWrite1hInputPrice,
-		&i.OutputPrice,
-		&i.ReasoningOutputPrice,
 		&i.UncachedInputCost,
 		&i.CacheReadInputCost,
 		&i.CacheWrite5mInputCost,
@@ -185,7 +148,7 @@ func (q *Queries) FindActiveChannelPrice(ctx context.Context, arg FindActiveChan
 }
 
 const getChannelPrice = `-- name: GetChannelPrice :one
-SELECT id, channel_id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at FROM channel_prices WHERE id = $1 LIMIT 1
+SELECT id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at FROM channel_prices WHERE id = $1 LIMIT 1
 `
 
 // GetChannelPrice 按主键读取单条渠道-模型价。
@@ -198,12 +161,6 @@ func (q *Queries) GetChannelPrice(ctx context.Context, id int64) (ChannelPrice, 
 		&i.ModelID,
 		&i.Currency,
 		&i.PricingUnit,
-		&i.UncachedInputPrice,
-		&i.CacheReadInputPrice,
-		&i.CacheWrite5mInputPrice,
-		&i.CacheWrite1hInputPrice,
-		&i.OutputPrice,
-		&i.ReasoningOutputPrice,
 		&i.UncachedInputCost,
 		&i.CacheReadInputCost,
 		&i.CacheWrite5mInputCost,
@@ -226,12 +183,6 @@ SELECT
     cp.model_id,
     cp.currency,
     cp.pricing_unit,
-    cp.uncached_input_price,
-    cp.cache_read_input_price,
-    cp.cache_write_5m_input_price,
-    cp.cache_write_1h_input_price,
-    cp.output_price,
-    cp.reasoning_output_price,
     cp.uncached_input_cost,
     cp.cache_read_input_cost,
     cp.cache_write_5m_input_cost,
@@ -252,33 +203,27 @@ ORDER BY m.model_id, cp.effective_from DESC, cp.id DESC
 `
 
 type ListChannelPricesByChannelRow struct {
-	ID                     int64
-	ChannelID              int64
-	ModelID                int64
-	Currency               string
-	PricingUnit            string
-	UncachedInputPrice     pgtype.Numeric
-	CacheReadInputPrice    pgtype.Numeric
-	CacheWrite5mInputPrice pgtype.Numeric
-	CacheWrite1hInputPrice pgtype.Numeric
-	OutputPrice            pgtype.Numeric
-	ReasoningOutputPrice   pgtype.Numeric
-	UncachedInputCost      pgtype.Numeric
-	CacheReadInputCost     pgtype.Numeric
-	CacheWrite5mInputCost  pgtype.Numeric
-	CacheWrite1hInputCost  pgtype.Numeric
-	OutputCost             pgtype.Numeric
-	ReasoningOutputCost    pgtype.Numeric
-	Status                 string
-	EffectiveFrom          pgtype.Timestamptz
-	EffectiveTo            pgtype.Timestamptz
-	CreatedAt              pgtype.Timestamptz
-	UpdatedAt              pgtype.Timestamptz
-	ModelExternalID        string
-	ModelDisplayName       string
+	ID                    int64
+	ChannelID             int64
+	ModelID               int64
+	Currency              string
+	PricingUnit           string
+	UncachedInputCost     pgtype.Numeric
+	CacheReadInputCost    pgtype.Numeric
+	CacheWrite5mInputCost pgtype.Numeric
+	CacheWrite1hInputCost pgtype.Numeric
+	OutputCost            pgtype.Numeric
+	ReasoningOutputCost   pgtype.Numeric
+	Status                string
+	EffectiveFrom         pgtype.Timestamptz
+	EffectiveTo           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	ModelExternalID       string
+	ModelDisplayName      string
 }
 
-// ListChannelPricesByChannel 列出某 channel 下全部渠道-模型价（含历史与停用），连带模型对外 ID/展示名，供 admin 管理台展示毛利。
+// ListChannelPricesByChannel 列出某 channel 下全部渠道-模型成本价（含历史与停用），连带模型对外 ID/展示名，供 admin 管理台展示成本。
 func (q *Queries) ListChannelPricesByChannel(ctx context.Context, channelID int64) ([]ListChannelPricesByChannelRow, error) {
 	rows, err := q.db.Query(ctx, listChannelPricesByChannel, channelID)
 	if err != nil {
@@ -294,12 +239,6 @@ func (q *Queries) ListChannelPricesByChannel(ctx context.Context, channelID int6
 			&i.ModelID,
 			&i.Currency,
 			&i.PricingUnit,
-			&i.UncachedInputPrice,
-			&i.CacheReadInputPrice,
-			&i.CacheWrite5mInputPrice,
-			&i.CacheWrite1hInputPrice,
-			&i.OutputPrice,
-			&i.ReasoningOutputPrice,
 			&i.UncachedInputCost,
 			&i.CacheReadInputCost,
 			&i.CacheWrite5mInputCost,
@@ -372,7 +311,7 @@ SET effective_to = $1,
     status = $2,
     updated_at = now()
 WHERE id = $3
-RETURNING id, channel_id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at
+RETURNING id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at
 `
 
 type UpdateChannelPriceWindowParams struct {
@@ -391,12 +330,6 @@ func (q *Queries) UpdateChannelPriceWindow(ctx context.Context, arg UpdateChanne
 		&i.ModelID,
 		&i.Currency,
 		&i.PricingUnit,
-		&i.UncachedInputPrice,
-		&i.CacheReadInputPrice,
-		&i.CacheWrite5mInputPrice,
-		&i.CacheWrite1hInputPrice,
-		&i.OutputPrice,
-		&i.ReasoningOutputPrice,
 		&i.UncachedInputCost,
 		&i.CacheReadInputCost,
 		&i.CacheWrite5mInputCost,

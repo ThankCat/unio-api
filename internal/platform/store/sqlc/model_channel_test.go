@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -102,17 +101,12 @@ func insertChannelWithBinding(t *testing.T, ctx context.Context, tx pgx.Tx, prov
 		timeout = *timeoutMS
 	}
 
-	credentialEncrypted, err := credential.EncryptFixedTestCredential("sk-test-" + name)
-	if err != nil {
-		t.Fatalf("encrypt channel credential for %q: %v", name, err)
-	}
-
 	var id int64
-	err = tx.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms)
+	err := tx.QueryRow(ctx, `
+		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id
-	`, providerID, name, protocol, adapterKey, "https://"+name+".example.test/v1", credentialEncrypted, status, priority, timeout).Scan(&id)
+	`, providerID, name, protocol, adapterKey, "https://"+name+".example.test/v1", "sk-test-"+name, status, priority, timeout).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert channel %q: %v", name, err)
 	}
@@ -150,8 +144,8 @@ func insertChannelModel(t *testing.T, ctx context.Context, tx pgx.Tx, channelID 
 	}
 }
 
-// createProjectForModelPolicy 创建模型策略测试专用 project。
-func createProjectForModelPolicy(t *testing.T, ctx context.Context, queries *sqlc.Queries, suffix int64) int64 {
+// createUserForModelPolicy 创建模型策略测试专用 user。
+func createUserForModelPolicy(t *testing.T, ctx context.Context, queries *sqlc.Queries, suffix int64) int64 {
 	t.Helper()
 
 	user, err := queries.CreateUser(ctx, sqlc.CreateUserParams{
@@ -163,31 +157,23 @@ func createProjectForModelPolicy(t *testing.T, ctx context.Context, queries *sql
 		t.Fatalf("create model policy user: %v", err)
 	}
 
-	project, err := queries.CreateProject(ctx, sqlc.CreateProjectParams{
-		UserID: user.ID,
-		Name:   fmt.Sprintf("model-policy-project-%d", suffix),
-	})
-	if err != nil {
-		t.Fatalf("create model policy project: %v", err)
-	}
-
-	return project.ID
+	return user.ID
 }
 
-// insertProjectModelPolicy 插入 project/model 可见性覆盖策略。
-func insertProjectModelPolicy(t *testing.T, ctx context.Context, tx pgx.Tx, projectID int64, modelID int64, visibility string) {
+// insertUserModelPolicy 插入 user/model 可见性覆盖策略。
+func insertUserModelPolicy(t *testing.T, ctx context.Context, tx pgx.Tx, userID int64, modelID int64, visibility string) {
 	t.Helper()
 
 	_, err := tx.Exec(ctx, `
-		INSERT INTO project_model_policies (project_id, model_id, visibility)
+		INSERT INTO user_model_policies (user_id, model_id, visibility)
 		VALUES ($1, $2, $3)
-	`, projectID, modelID, visibility)
+	`, userID, modelID, visibility)
 	if err != nil {
-		t.Fatalf("insert project model policy %q: %v", visibility, err)
+		t.Fatalf("insert user model policy %q: %v", visibility, err)
 	}
 }
 
-func listContainsModel(rows []sqlc.ListAvailableModelsForProjectRow, modelID string) bool {
+func listContainsModel(rows []sqlc.ListAvailableModelsForUserRow, modelID string) bool {
 	for _, row := range rows {
 		if row.ModelID == modelID {
 			return true
@@ -202,8 +188,8 @@ func TestRoutingDiagnosisQueriesClassifyModelAndProjectPolicy(t *testing.T) {
 	defer cleanup()
 
 	suffix := time.Now().UnixNano()
-	projectID := createProjectForModelPolicy(t, ctx, queries, suffix)
-	allowListProjectID := createProjectForModelPolicy(t, ctx, queries, suffix+1)
+	projectID := createUserForModelPolicy(t, ctx, queries, suffix)
+	allowListProjectID := createUserForModelPolicy(t, ctx, queries, suffix+1)
 
 	enabledModel := fmt.Sprintf("openai/diagnosis-enabled-%d", suffix)
 	enabledModelID := insertModel(t, ctx, tx, enabledModel, "openai", "enabled")
@@ -238,8 +224,8 @@ func TestRoutingDiagnosisQueriesClassifyModelAndProjectPolicy(t *testing.T) {
 		t.Fatal("expected missing model to be treated as not found")
 	}
 
-	allowed, err := queries.ProjectCanUseModel(ctx, sqlc.ProjectCanUseModelParams{
-		ProjectID:        projectID,
+	allowed, err := queries.UserCanUseModel(ctx, sqlc.UserCanUseModelParams{
+		UserID:           projectID,
 		RequestedModelID: noChannelModel,
 	})
 	if err != nil {
@@ -249,9 +235,9 @@ func TestRoutingDiagnosisQueriesClassifyModelAndProjectPolicy(t *testing.T) {
 		t.Fatalf("expected project without policy to allow enabled model %q even without channel", noChannelModel)
 	}
 
-	insertProjectModelPolicy(t, ctx, tx, projectID, enabledModelID, "denied")
-	allowed, err = queries.ProjectCanUseModel(ctx, sqlc.ProjectCanUseModelParams{
-		ProjectID:        projectID,
+	insertUserModelPolicy(t, ctx, tx, projectID, enabledModelID, "denied")
+	allowed, err = queries.UserCanUseModel(ctx, sqlc.UserCanUseModelParams{
+		UserID:           projectID,
 		RequestedModelID: enabledModel,
 	})
 	if err != nil {
@@ -261,9 +247,9 @@ func TestRoutingDiagnosisQueriesClassifyModelAndProjectPolicy(t *testing.T) {
 		t.Fatalf("expected denied model %q to be unavailable for project", enabledModel)
 	}
 
-	insertProjectModelPolicy(t, ctx, tx, allowListProjectID, allowListedModelID, "allowed")
-	allowed, err = queries.ProjectCanUseModel(ctx, sqlc.ProjectCanUseModelParams{
-		ProjectID:        allowListProjectID,
+	insertUserModelPolicy(t, ctx, tx, allowListProjectID, allowListedModelID, "allowed")
+	allowed, err = queries.UserCanUseModel(ctx, sqlc.UserCanUseModelParams{
+		UserID:           allowListProjectID,
 		RequestedModelID: allowListedModel,
 	})
 	if err != nil {
@@ -273,8 +259,8 @@ func TestRoutingDiagnosisQueriesClassifyModelAndProjectPolicy(t *testing.T) {
 		t.Fatalf("expected allow-listed model %q to be available for project", allowListedModel)
 	}
 
-	allowed, err = queries.ProjectCanUseModel(ctx, sqlc.ProjectCanUseModelParams{
-		ProjectID:        allowListProjectID,
+	allowed, err = queries.UserCanUseModel(ctx, sqlc.UserCanUseModelParams{
+		UserID:           allowListProjectID,
 		RequestedModelID: noChannelModel,
 	})
 	if err != nil {
@@ -320,7 +306,7 @@ func TestListAvailableModelsForProjectFiltersDisabledRelations(t *testing.T) {
 	disabledProviderModelID := insertModel(t, ctx, tx, disabledProviderModel, "openai", "enabled")
 	insertChannelModel(t, ctx, tx, disabledProviderChannelID, disabledProviderModelID, "catalog-disabled-provider", "enabled")
 
-	got, err := queries.ListAvailableModelsForProject(ctx, 1)
+	got, err := queries.ListAvailableModelsForUser(ctx, 1)
 	if err != nil {
 		t.Fatalf("list available models: %v", err)
 	}
@@ -352,7 +338,7 @@ func TestListAvailableModelsForProjectFiltersDisabledRelations(t *testing.T) {
 		t.Fatalf("expected visible model %q once, got %d in %#v", visibleModel, visibleCount, got)
 	}
 
-	zeroProject, err := queries.ListAvailableModelsForProject(ctx, 0)
+	zeroProject, err := queries.ListAvailableModelsForUser(ctx, 0)
 	if err != nil {
 		t.Fatalf("list available models for zero project: %v", err)
 	}
@@ -393,6 +379,8 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 	createChannelPriceForTest(t, ctx, queries, fallbackChannelID, modelID, now)
 	createChannelPriceForTest(t, ctx, queries, primaryChannelID, modelID, now)
 	createChannelPriceForTest(t, ctx, queries, secondaryChannelID, modelID, now)
+	// DEC-026：模型需有基准价（× 线路倍率得客户售价），否则候选被过滤。
+	createModelPriceForTest(t, ctx, queries, modelID, now)
 
 	got, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(requestedModel, 1))
 	if err != nil {
@@ -424,8 +412,8 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 	if first.ProviderSlug != fmt.Sprintf("routing-openai-%d", suffix) {
 		t.Fatalf("expected provider slug for enabled provider, got %q", first.ProviderSlug)
 	}
-	if len(first.CredentialEncrypted) == 0 {
-		t.Fatal("expected encrypted credential on route candidate")
+	if first.Credential == "" {
+		t.Fatal("expected plaintext credential on route candidate")
 	}
 	if !first.TimeoutMs.Valid || first.TimeoutMs.Int32 != timeoutMS {
 		t.Fatalf("expected timeout_ms %d, got valid=%v value=%d", timeoutMS, first.TimeoutMs.Valid, first.TimeoutMs.Int32)
@@ -458,7 +446,7 @@ func TestProjectModelPolicyDeniedFiltersCatalogAndRouting(t *testing.T) {
 
 	suffix := time.Now().UnixNano()
 	timeoutMS := int32(15000)
-	projectID := createProjectForModelPolicy(t, ctx, queries, suffix)
+	projectID := createUserForModelPolicy(t, ctx, queries, suffix)
 
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("policy-deny-provider-%d", suffix), "enabled")
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("policy-deny-channel-%d", suffix), "enabled", 10, &timeoutMS)
@@ -470,13 +458,15 @@ func TestProjectModelPolicyDeniedFiltersCatalogAndRouting(t *testing.T) {
 	deniedModel := fmt.Sprintf("openai/policy-denied-%d", suffix)
 	deniedModelID := insertModel(t, ctx, tx, deniedModel, "openai", "enabled")
 	insertChannelModel(t, ctx, tx, channelID, deniedModelID, "policy-denied", "enabled")
-	insertProjectModelPolicy(t, ctx, tx, projectID, deniedModelID, "denied")
+	insertUserModelPolicy(t, ctx, tx, projectID, deniedModelID, "denied")
 
 	// 阶段 15：已定价过滤——给可见/被拒模型各配价，确保候选差异来自策略而非缺价。
 	createChannelPriceForTest(t, ctx, queries, channelID, visibleModelID, time.Now().UTC())
 	createChannelPriceForTest(t, ctx, queries, channelID, deniedModelID, time.Now().UTC())
+	createModelPriceForTest(t, ctx, queries, visibleModelID, time.Now().UTC())
+	createModelPriceForTest(t, ctx, queries, deniedModelID, time.Now().UTC())
 
-	models, err := queries.ListAvailableModelsForProject(ctx, projectID)
+	models, err := queries.ListAvailableModelsForUser(ctx, projectID)
 	if err != nil {
 		t.Fatalf("list available models for denied policy: %v", err)
 	}
@@ -510,7 +500,7 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 
 	suffix := time.Now().UnixNano()
 	timeoutMS := int32(15000)
-	projectID := createProjectForModelPolicy(t, ctx, queries, suffix)
+	projectID := createUserForModelPolicy(t, ctx, queries, suffix)
 
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("policy-allow-provider-%d", suffix), "enabled")
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("policy-allow-channel-%d", suffix), "enabled", 10, &timeoutMS)
@@ -518,7 +508,7 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 	allowedModel := fmt.Sprintf("openai/policy-allowed-%d", suffix)
 	allowedModelID := insertModel(t, ctx, tx, allowedModel, "openai", "enabled")
 	insertChannelModel(t, ctx, tx, channelID, allowedModelID, "policy-allowed", "enabled")
-	insertProjectModelPolicy(t, ctx, tx, projectID, allowedModelID, "allowed")
+	insertUserModelPolicy(t, ctx, tx, projectID, allowedModelID, "allowed")
 
 	inheritedModel := fmt.Sprintf("openai/policy-inherited-%d", suffix)
 	inheritedModelID := insertModel(t, ctx, tx, inheritedModel, "openai", "enabled")
@@ -527,8 +517,10 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 	// 阶段 15：已定价过滤——给允许/继承模型各配价，确保候选差异来自 allow-list 而非缺价。
 	createChannelPriceForTest(t, ctx, queries, channelID, allowedModelID, time.Now().UTC())
 	createChannelPriceForTest(t, ctx, queries, channelID, inheritedModelID, time.Now().UTC())
+	createModelPriceForTest(t, ctx, queries, allowedModelID, time.Now().UTC())
+	createModelPriceForTest(t, ctx, queries, inheritedModelID, time.Now().UTC())
 
-	models, err := queries.ListAvailableModelsForProject(ctx, projectID)
+	models, err := queries.ListAvailableModelsForUser(ctx, projectID)
 	if err != nil {
 		t.Fatalf("list available models for allow-list policy: %v", err)
 	}
@@ -556,13 +548,34 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 	}
 }
 
-// createChannelPriceForTest 创建一条 enabled 渠道-模型价（售价 2/8，无成本），供路由「已定价」过滤与计费测试。
+// createChannelPriceForTest 创建一条 enabled 渠道-模型成本价（成本 1/4），供路由「已配成本」过滤与计费测试（DEC-026）。
 // effective_from 取 at-1h、effective_to 为空，保证在 at（及之后）时刻生效。
 func createChannelPriceForTest(t *testing.T, ctx context.Context, queries *sqlc.Queries, channelID, modelID int64, at time.Time) sqlc.ChannelPrice {
 	t.Helper()
 
 	price, err := queries.CreateChannelPrice(ctx, sqlc.CreateChannelPriceParams{
-		ChannelID:          channelID,
+		ChannelID:         channelID,
+		ModelID:           modelID,
+		Currency:          "USD",
+		PricingUnit:       "per_1m_tokens",
+		UncachedInputCost: numeric(1),
+		OutputCost:        numeric(4),
+		Status:            "enabled",
+		EffectiveFrom:     timestamptz(at.Add(-time.Hour)),
+		EffectiveTo:       nullTimestamptz(),
+	})
+	if err != nil {
+		t.Fatalf("create channel price: %v", err)
+	}
+	return price
+}
+
+// createModelPriceForTest 创建一条 enabled 模型基准售价（model_prices，2/8），供 DEC-026 路由
+// 「模型已配基准价」过滤：FindRouteCandidates 要求模型有 active 基准价（× 线路倍率得客户售价）。
+func createModelPriceForTest(t *testing.T, ctx context.Context, queries *sqlc.Queries, modelID int64, at time.Time) {
+	t.Helper()
+
+	if _, err := queries.CreateModelPrice(ctx, sqlc.CreateModelPriceParams{
 		ModelID:            modelID,
 		Currency:           "USD",
 		PricingUnit:        "per_1m_tokens",
@@ -571,11 +584,9 @@ func createChannelPriceForTest(t *testing.T, ctx context.Context, queries *sqlc.
 		Status:             "enabled",
 		EffectiveFrom:      timestamptz(at.Add(-time.Hour)),
 		EffectiveTo:        nullTimestamptz(),
-	})
-	if err != nil {
-		t.Fatalf("create channel price: %v", err)
+	}); err != nil {
+		t.Fatalf("create model price: %v", err)
 	}
-	return price
 }
 
 // routeCandidatesParams 构造默认线路（内置经济：pool=all）的候选查询参数，at_time 取当前。
@@ -583,7 +594,7 @@ func routeCandidatesParams(model string, projectID int64) sqlc.FindRouteCandidat
 	return sqlc.FindRouteCandidatesParams{
 		RequestedModelID: model,
 		IngressProtocol:  "openai",
-		ProjectID:        projectID,
+		UserID:           projectID,
 		PoolKind:         "all",
 		RouteID:          0,
 		AtTime:           timestamptz(time.Now().UTC()),
@@ -604,7 +615,7 @@ func insertModelCapability(t *testing.T, ctx context.Context, tx pgx.Tx, modelID
 }
 
 // findAvailableModelRow 在可用模型列表中按对外 model_id 定位行，缺失即失败。
-func findAvailableModelRow(t *testing.T, rows []sqlc.ListAvailableModelsForProjectRow, modelID string) sqlc.ListAvailableModelsForProjectRow {
+func findAvailableModelRow(t *testing.T, rows []sqlc.ListAvailableModelsForUserRow, modelID string) sqlc.ListAvailableModelsForUserRow {
 	t.Helper()
 
 	for _, row := range rows {
@@ -614,7 +625,7 @@ func findAvailableModelRow(t *testing.T, rows []sqlc.ListAvailableModelsForProje
 	}
 
 	t.Fatalf("model %q not found in available models %#v", modelID, rows)
-	return sqlc.ListAvailableModelsForProjectRow{}
+	return sqlc.ListAvailableModelsForUserRow{}
 }
 
 // TestListAvailableModelsForProjectReturnsCapTags 验证可用模型查询返回的 cap-tags：
@@ -625,7 +636,7 @@ func TestListAvailableModelsForProjectReturnsCapTags(t *testing.T) {
 
 	suffix := time.Now().UnixNano()
 	timeoutMS := int32(15000)
-	projectID := createProjectForModelPolicy(t, ctx, queries, suffix)
+	projectID := createUserForModelPolicy(t, ctx, queries, suffix)
 
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("cap-provider-%d", suffix), "enabled")
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("cap-channel-%d", suffix), "enabled", 10, &timeoutMS)
@@ -641,7 +652,7 @@ func TestListAvailableModelsForProjectReturnsCapTags(t *testing.T) {
 	unprovisionedID := insertModel(t, ctx, tx, unprovisioned, "openai", "enabled")
 	insertChannelModel(t, ctx, tx, channelID, unprovisionedID, "cap-unprovisioned", "enabled")
 
-	models, err := queries.ListAvailableModelsForProject(ctx, projectID)
+	models, err := queries.ListAvailableModelsForUser(ctx, projectID)
 	if err != nil {
 		t.Fatalf("list available models: %v", err)
 	}

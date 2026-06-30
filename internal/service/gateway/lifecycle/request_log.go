@@ -77,6 +77,8 @@ func RoutingFailureCode(err error) string {
 		return "model_not_available"
 	case errors.Is(err, routing.ErrNoAvailableChannel):
 		return "no_available_channel"
+	case errors.Is(err, routing.ErrRouteNotConfigured):
+		return string(failure.CodeRoutingRouteNotConfigured)
 	default:
 		return "routing_error"
 	}
@@ -98,7 +100,8 @@ func BaseSafeRequestLogErrorMessage(code string) string {
 	case "model_not_found", string(failure.CodeRoutingModelNotFound):
 		return "The requested model was not found."
 	case "model_not_available", "no_available_channel",
-		string(failure.CodeRoutingModelNotAvailable), string(failure.CodeRoutingNoAvailableChannel):
+		string(failure.CodeRoutingModelNotAvailable), string(failure.CodeRoutingNoAvailableChannel),
+		string(failure.CodeRoutingRouteNotConfigured):
 		return "The requested model is temporarily unavailable."
 	case string(failure.CodeGatewayChatAuthorizationFailed):
 		return "Request authorization failed."

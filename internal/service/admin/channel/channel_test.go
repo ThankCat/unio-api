@@ -71,20 +71,6 @@ func (s *fakeChannelStore) DeleteChannelCascade(_ context.Context, id int64) (in
 	return s.deleteAff, s.deleteErr
 }
 
-type fakeCipher struct {
-	out        []byte
-	err        error
-	calledWith string
-	calls      int
-}
-
-func (c *fakeCipher) Encrypt(plaintext string) ([]byte, error) {
-	c.calledWith = plaintext
-	c.calls++
-	return c.out, c.err
-}
-func (c *fakeCipher) Decrypt([]byte) (string, error) { return "", nil }
-
 type fakeRegistry struct {
 	has  bool
 	keys map[string][]string
@@ -109,15 +95,14 @@ func validCreateInput() channel.CreateInput {
 
 func TestCreateRejectsUnsupportedAdapterBinding(t *testing.T) {
 	store := &fakeChannelStore{}
-	cipher := &fakeCipher{out: []byte("enc")}
-	svc := channel.NewService(store, cipher, fakeRegistry{has: false})
+	svc := channel.NewService(store, fakeRegistry{has: false})
 
 	_, err := svc.Create(context.Background(), validCreateInput())
 	if got := failure.CodeOf(err); got != failure.CodeAdminAdapterBindingUnsupported {
 		t.Fatalf("expected %q, got %q", failure.CodeAdminAdapterBindingUnsupported, got)
 	}
-	if cipher.calls != 0 || store.createCalls != 0 {
-		t.Fatalf("cipher/store must not be called on unsupported binding")
+	if store.createCalls != 0 {
+		t.Fatalf("store must not be called on unsupported binding")
 	}
 }
 
@@ -134,7 +119,7 @@ func TestCreateRejectsInvalidArguments(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			in := validCreateInput()
 			mutate(&in)
-			svc := channel.NewService(&fakeChannelStore{}, &fakeCipher{}, fakeRegistry{has: true})
+			svc := channel.NewService(&fakeChannelStore{}, fakeRegistry{has: true})
 			_, err := svc.Create(context.Background(), in)
 			if got := failure.CodeOf(err); got != failure.CodeAdminInvalidArgument {
 				t.Fatalf("expected %q, got %q", failure.CodeAdminInvalidArgument, got)
@@ -145,7 +130,7 @@ func TestCreateRejectsInvalidArguments(t *testing.T) {
 
 func TestCreateProviderNotFound(t *testing.T) {
 	store := &fakeChannelStore{providerErr: pgx.ErrNoRows}
-	svc := channel.NewService(store, &fakeCipher{out: []byte("enc")}, fakeRegistry{has: true})
+	svc := channel.NewService(store, fakeRegistry{has: true})
 
 	_, err := svc.Create(context.Background(), validCreateInput())
 	if got := failure.CodeOf(err); got != failure.CodeAdminInvalidArgument {
@@ -153,7 +138,7 @@ func TestCreateProviderNotFound(t *testing.T) {
 	}
 }
 
-func TestCreateEncryptsCredentialAndPersists(t *testing.T) {
+func TestCreatePersistsPlaintextCredential(t *testing.T) {
 	now := time.Now()
 	store := &fakeChannelStore{
 		provider: sqlc.Provider{ID: 1, Slug: "openai", Status: "enabled"},
@@ -164,18 +149,15 @@ func TestCreateEncryptsCredentialAndPersists(t *testing.T) {
 			UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true},
 		},
 	}
-	cipher := &fakeCipher{out: []byte("encrypted-bytes")}
-	svc := channel.NewService(store, cipher, fakeRegistry{has: true})
+	svc := channel.NewService(store, fakeRegistry{has: true})
 
 	got, err := svc.Create(context.Background(), validCreateInput())
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if cipher.calledWith != "sk-secret" {
-		t.Fatalf("expected plaintext credential encrypted, got %q", cipher.calledWith)
-	}
-	if string(store.createParam.CredentialEncrypted) != "encrypted-bytes" {
-		t.Fatalf("expected encrypted credential persisted, got %q", store.createParam.CredentialEncrypted)
+	// 渠道凭据明文存储（产品决策）：原样落库，不加密。
+	if store.createParam.Credential != "sk-secret" {
+		t.Fatalf("expected plaintext credential persisted, got %q", store.createParam.Credential)
 	}
 	if got.ID != 9 || got.TimeoutMs != nil {
 		t.Fatalf("unexpected mapped channel: %+v", got)
@@ -199,7 +181,7 @@ func TestCreateDefaultsAdapterKeyToProtocol(t *testing.T) {
 				provider:  sqlc.Provider{ID: 1, Slug: "p", Status: "enabled"},
 				createRow: sqlc.Channel{ID: 1, ProviderID: 1, Name: "primary", Protocol: tc.protocol, AdapterKey: tc.wantKey},
 			}
-			svc := channel.NewService(store, &fakeCipher{out: []byte("enc")}, fakeRegistry{has: true})
+			svc := channel.NewService(store, fakeRegistry{has: true})
 
 			in := validCreateInput()
 			in.Protocol = tc.protocol
@@ -225,7 +207,7 @@ func TestAdapterKeyOptions(t *testing.T) {
 			channel.ProtocolAnthropic: {"anthropic", "deepseek"},
 		},
 	}
-	svc := channel.NewService(&fakeChannelStore{}, &fakeCipher{}, reg)
+	svc := channel.NewService(&fakeChannelStore{}, reg)
 
 	got := svc.AdapterKeyOptions()
 	want := []channel.AdapterKeyOption{
@@ -247,22 +229,17 @@ func TestAdapterKeyOptions(t *testing.T) {
 
 func TestRotateCredentialNotFound(t *testing.T) {
 	store := &fakeChannelStore{credentialAff: 0}
-	cipher := &fakeCipher{out: []byte("enc")}
-	svc := channel.NewService(store, cipher, fakeRegistry{has: true})
+	svc := channel.NewService(store, fakeRegistry{has: true})
 
 	err := svc.RotateCredential(context.Background(), channel.RotateCredentialInput{ID: 5, Credential: "sk-new"})
 	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
 		t.Fatalf("expected %q, got %q", failure.CodeAdminNotFound, got)
 	}
-	if cipher.calls != 1 {
-		t.Fatalf("expected credential encrypted once, got %d", cipher.calls)
-	}
 }
 
 func TestRotateCredentialSuccess(t *testing.T) {
 	store := &fakeChannelStore{credentialAff: 1}
-	cipher := &fakeCipher{out: []byte("enc")}
-	svc := channel.NewService(store, cipher, fakeRegistry{has: true})
+	svc := channel.NewService(store, fakeRegistry{has: true})
 
 	if err := svc.RotateCredential(context.Background(), channel.RotateCredentialInput{ID: 5, Credential: "sk-new"}); err != nil {
 		t.Fatalf("rotate: %v", err)
@@ -270,7 +247,7 @@ func TestRotateCredentialSuccess(t *testing.T) {
 }
 
 func newChannelService(store *fakeChannelStore) *channel.Service {
-	return channel.NewService(store, &fakeCipher{out: []byte("enc")}, fakeRegistry{has: true})
+	return channel.NewService(store, fakeRegistry{has: true})
 }
 
 func TestDeleteRejectsInvalidID(t *testing.T) {

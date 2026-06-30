@@ -82,7 +82,7 @@ func TestCooldownKeepsLaterExpiry(t *testing.T) {
 	r.RecordRateLimit("9", 40*time.Second)
 	// 之后一个更短的 Retry-After 不应缩短已登记冷却。
 	until, _ := r.RecordRateLimit("9", 5*time.Second)
-	if !until.Equal(now.Add(40*time.Second)) {
+	if !until.Equal(now.Add(40 * time.Second)) {
 		t.Fatalf("expected later expiry retained, got %s", until)
 	}
 }

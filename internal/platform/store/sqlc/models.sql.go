@@ -208,7 +208,7 @@ DELETE FROM models WHERE models.id = $1
 
 // DeleteModelCascade 物理删除 model，用于清理录错且从未使用的脏数据，并在同一条语句内
 // 级联清理 model 自身的配置子表：channel_prices（渠道-模型价）、channel_models（模型绑定）；
-// model_capabilities、project_model_policies、model_catalog_links
+// model_capabilities、user_model_policies、model_catalog_links
 // 由 ON DELETE CASCADE 自动清理，无需在此显式删除。
 // 外键均为默认 NO ACTION（约束在语句末校验），故 CTE 删子表 + 删主体在单条语句内原子完成：
 // 子配置先删除，语句末 models 的删除不会留下悬挂引用。若 model 或其子配置仍被请求/账务快照
@@ -276,16 +276,16 @@ func (q *Queries) GetModelCatalogState(ctx context.Context, modelID int64) (GetM
 	return i, err
 }
 
-const listAvailableModelsForProject = `-- name: ListAvailableModelsForProject :many
-WITH project_scope AS (
-    SELECT $1::BIGINT AS project_id
+const listAvailableModelsForUser = `-- name: ListAvailableModelsForUser :many
+WITH user_scope AS (
+    SELECT $1::BIGINT AS user_id
 ),
-project_policy_mode AS (
+user_policy_mode AS (
     SELECT EXISTS (
         SELECT 1
-        FROM project_model_policies pmp
-        JOIN project_scope ps ON ps.project_id = pmp.project_id
-        WHERE pmp.visibility = 'allowed'
+        FROM user_model_policies ump
+        JOIN user_scope us ON us.user_id = ump.user_id
+        WHERE ump.visibility = 'allowed'
     ) AS has_allow_list
 )
 SELECT
@@ -303,24 +303,24 @@ JOIN channel_models cm ON cm.model_id = m.id
 JOIN channels c ON c.id = cm.channel_id
 JOIN providers p ON p.id = c.provider_id
 LEFT JOIN model_capabilities mc ON mc.model_id = m.id
-JOIN project_scope ps ON ps.project_id > 0
+JOIN user_scope us ON us.user_id > 0
 WHERE m.status = 'enabled'
     AND cm.status = 'enabled'
     AND c.status = 'enabled'
     AND p.status = 'enabled'
     AND NOT EXISTS (
         SELECT 1
-        FROM project_model_policies denied
-        JOIN project_scope ps ON ps.project_id = denied.project_id
+        FROM user_model_policies denied
+        JOIN user_scope us ON us.user_id = denied.user_id
         WHERE denied.model_id = m.id
             AND denied.visibility = 'denied'
     )
     AND (
-        NOT (SELECT has_allow_list FROM project_policy_mode)
+        NOT (SELECT has_allow_list FROM user_policy_mode)
         OR EXISTS (
             SELECT 1
-            FROM project_model_policies allowed
-            JOIN project_scope ps ON ps.project_id = allowed.project_id
+            FROM user_model_policies allowed
+            JOIN user_scope us ON us.user_id = allowed.user_id
             WHERE allowed.model_id = m.id
                 AND allowed.visibility = 'allowed'
         )
@@ -329,7 +329,7 @@ GROUP BY m.id, m.model_id, m.display_name, m.owned_by
 ORDER BY m.model_id ASC
 `
 
-type ListAvailableModelsForProjectRow struct {
+type ListAvailableModelsForUserRow struct {
 	ID             int64
 	ModelID        string
 	DisplayName    string
@@ -337,19 +337,19 @@ type ListAvailableModelsForProjectRow struct {
 	CapabilityKeys []string
 }
 
-// ListAvailableModelsForProject 列出指定项目当前可见且可路由的模型，并附带该模型已声明的
+// ListAvailableModelsForUser 列出指定用户当前可见且可路由的模型，并附带该模型已声明的
 // cap-tags（能力架构 Layer 2，support_level<>'unsupported' 的 capability_key 去重升序）。
 // cap-tags 取模型级声明，不下钻到 channel override（不向客户暴露 channel 维度收紧）。
 // 未声明任何能力的模型 capability_keys 为空数组（unprovisioned）。
-func (q *Queries) ListAvailableModelsForProject(ctx context.Context, projectID int64) ([]ListAvailableModelsForProjectRow, error) {
-	rows, err := q.db.Query(ctx, listAvailableModelsForProject, projectID)
+func (q *Queries) ListAvailableModelsForUser(ctx context.Context, userID int64) ([]ListAvailableModelsForUserRow, error) {
+	rows, err := q.db.Query(ctx, listAvailableModelsForUser, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListAvailableModelsForProjectRow
+	var items []ListAvailableModelsForUserRow
 	for rows.Next() {
-		var i ListAvailableModelsForProjectRow
+		var i ListAvailableModelsForUserRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.ModelID,

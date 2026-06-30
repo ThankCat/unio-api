@@ -1,12 +1,10 @@
 // Package routeops 提供线路路由作战台（§3.5）的只读运维聚合。
-// 归因：每条请求按 COALESCE(api_keys.route_id, projects.default_route_id) 就近绑定到线路。
+// 归因：每条请求按其 API Key 绑定的 api_keys.route_id 计入线路（线路必填，无默认回落）。
 package routeops
 
 import (
 	"context"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-api/internal/service/admin/opsutil"
@@ -20,8 +18,8 @@ type Store interface {
 	RoutesOpsTableCount(ctx context.Context, arg sqlc.RoutesOpsTableCountParams) (int64, error)
 	RouteOpsDetail(ctx context.Context, arg sqlc.RouteOpsDetailParams) (sqlc.RouteOpsDetailRow, error)
 	RouteOpsChannelPool(ctx context.Context, routeID int64) ([]sqlc.RouteOpsChannelPoolRow, error)
-	RouteOpsBoundProjects(ctx context.Context, routeID pgtype.Int8) ([]sqlc.RouteOpsBoundProjectsRow, error)
-	RouteOpsBoundKeys(ctx context.Context, routeID pgtype.Int8) ([]sqlc.RouteOpsBoundKeysRow, error)
+	RouteOpsBoundUsers(ctx context.Context, routeID int64) ([]sqlc.RouteOpsBoundUsersRow, error)
+	RouteOpsBoundKeys(ctx context.Context, routeID int64) ([]sqlc.RouteOpsBoundKeysRow, error)
 	RouteOpsPerformanceTimeseries(ctx context.Context, arg sqlc.RouteOpsPerformanceTimeseriesParams) ([]sqlc.RouteOpsPerformanceTimeseriesRow, error)
 	RouteOpsModels(ctx context.Context, arg sqlc.RouteOpsModelsParams) ([]sqlc.RouteOpsModelsRow, error)
 	RouteOpsRequests(ctx context.Context, arg sqlc.RouteOpsRequestsParams) ([]sqlc.RouteOpsRequestsRow, error)
@@ -43,7 +41,6 @@ type Summary struct {
 	Total         int64
 	Enabled       int64
 	Disabled      int64
-	Builtin       int64
 	RequestTotal  int64
 	Succeeded     int64
 	SuccessRate   float64
@@ -55,13 +52,14 @@ type Summary struct {
 
 // Row 是线路运维主表行。
 type Row struct {
-	ID               int64
-	Name             string
-	Mode             string
-	PoolKind         string
-	IsBuiltin        bool
-	Status           string
-	Description      string
+	ID          int64
+	Name        string
+	Mode        string
+	PoolKind    string
+	Status      string
+	Description string
+	// PriceRatio 客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率），十进制字符串。
+	PriceRatio       string
 	RequestTotal     int64
 	RequestSucceeded int64
 	SuccessRate      float64
@@ -69,7 +67,7 @@ type Row struct {
 	FallbackRate     float64
 	NoChannelTotal   int64
 	LatencyP95       float64
-	BoundProjects    int64
+	BoundUsers       int64
 	BoundKeys        int64
 	PoolChannels     int64
 	Serviceable      bool
@@ -97,18 +95,18 @@ type ChannelPoolRow struct {
 	ProviderName  string
 }
 
-// BoundProject / BoundKey 是绑定 Tab 行。
-type BoundProject struct {
-	ID     int64
-	Name   string
-	UserID int64
+// BoundUser / BoundKey 是绑定 Tab 行。
+type BoundUser struct {
+	ID          int64
+	Email       string
+	DisplayName string
 }
 
 type BoundKey struct {
-	ID        int64
-	Name      string
-	ProjectID int64
-	Status    string
+	ID     int64
+	Name   string
+	UserID int64
+	Status string
 }
 
 // PerfPoint 是性能 Tab 时序点。
@@ -163,7 +161,6 @@ func (s *Service) Summary(ctx context.Context, from, to time.Time) (Summary, err
 		Total:         counts.Total,
 		Enabled:       counts.Enabled,
 		Disabled:      counts.Disabled,
-		Builtin:       counts.Builtin,
 		RequestTotal:  agg.TerminalTotal,
 		Succeeded:     agg.SucceededTotal,
 		SuccessRate:   opsutil.SuccessRate(agg.SucceededTotal, agg.TerminalTotal),
@@ -208,16 +205,16 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			Name:             r.Name,
 			Mode:             r.Mode,
 			PoolKind:         r.PoolKind,
-			IsBuiltin:        r.IsBuiltin,
 			Status:           r.Status,
 			Description:      opsutil.TextValue(r.Description),
+			PriceRatio:       opsutil.NumericString(r.PriceRatio),
 			RequestTotal:     r.RequestTotal,
 			RequestSucceeded: r.RequestSucceeded,
 			SuccessRate:      rate,
 			FallbackTotal:    r.FallbackTotal,
 			NoChannelTotal:   r.NoChannelTotal,
 			LatencyP95:       r.LatencyP95,
-			BoundProjects:    r.BoundProjects,
+			BoundUsers:       r.BoundUsers,
 			BoundKeys:        r.BoundKeys,
 			PoolChannels:     r.PoolChannels,
 			Serviceable:      r.Status == "enabled" && !abnormal,
@@ -233,7 +230,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 
 // Detail 返回单线路抽屉概览。
 func (s *Service) Detail(ctx context.Context, routeID int64, from, to time.Time) (Detail, error) {
-	r, err := s.store.RouteOpsDetail(ctx, sqlc.RouteOpsDetailParams{RouteID: opsutil.Int8Arg(routeID), FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
+	r, err := s.store.RouteOpsDetail(ctx, sqlc.RouteOpsDetailParams{RouteID: routeID, FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
 	if err != nil {
 		return Detail{}, opsutil.StoreFailed(err, "route ops detail")
 	}
@@ -265,26 +262,26 @@ func (s *Service) ChannelPool(ctx context.Context, routeID int64) ([]ChannelPool
 	return out, nil
 }
 
-// Bindings 返回绑定本线路的项目与 API Key（绑定 Tab，P0）。
-func (s *Service) Bindings(ctx context.Context, routeID int64) ([]BoundProject, []BoundKey, error) {
-	projects, err := s.store.RouteOpsBoundProjects(ctx, opsutil.Int8Arg(routeID))
+// Bindings 返回绑定本线路的用户与 API Key（绑定 Tab，P0）。
+func (s *Service) Bindings(ctx context.Context, routeID int64) ([]BoundUser, []BoundKey, error) {
+	users, err := s.store.RouteOpsBoundUsers(ctx, routeID)
 	if err != nil {
-		return nil, nil, opsutil.StoreFailed(err, "route ops bound projects")
+		return nil, nil, opsutil.StoreFailed(err, "route ops bound users")
 	}
-	keys, err := s.store.RouteOpsBoundKeys(ctx, opsutil.Int8Arg(routeID))
+	keys, err := s.store.RouteOpsBoundKeys(ctx, routeID)
 	if err != nil {
 		return nil, nil, opsutil.StoreFailed(err, "route ops bound keys")
 	}
-	pj := make([]BoundProject, 0, len(projects))
-	for _, p := range projects {
-		pj = append(pj, BoundProject{ID: p.ID, Name: p.Name, UserID: p.UserID})
+	us := make([]BoundUser, 0, len(users))
+	for _, u := range users {
+		us = append(us, BoundUser{ID: u.ID, Email: u.Email, DisplayName: u.DisplayName})
 	}
 	ks := make([]BoundKey, 0, len(keys))
 	now := time.Now()
 	for _, k := range keys {
-		ks = append(ks, BoundKey{ID: k.ID, Name: k.Name, ProjectID: k.ProjectID, Status: apiKeyStatus(k, now)})
+		ks = append(ks, BoundKey{ID: k.ID, Name: k.Name, UserID: k.UserID, Status: apiKeyStatus(k, now)})
 	}
-	return pj, ks, nil
+	return us, ks, nil
 }
 
 // PerformanceTimeseries 返回单线路性能趋势。
@@ -292,7 +289,7 @@ func (s *Service) PerformanceTimeseries(ctx context.Context, routeID int64, inte
 	if interval != "hour" && interval != "day" {
 		return nil, opsutil.InvalidArgument("interval", "interval must be one of hour|day")
 	}
-	rows, err := s.store.RouteOpsPerformanceTimeseries(ctx, sqlc.RouteOpsPerformanceTimeseriesParams{Unit: interval, RouteID: opsutil.Int8Arg(routeID), FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
+	rows, err := s.store.RouteOpsPerformanceTimeseries(ctx, sqlc.RouteOpsPerformanceTimeseriesParams{Unit: interval, RouteID: routeID, FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
 	if err != nil {
 		return nil, opsutil.StoreFailed(err, "route ops performance timeseries")
 	}
@@ -305,7 +302,7 @@ func (s *Service) PerformanceTimeseries(ctx context.Context, routeID int64, inte
 
 // Models 返回本线路下各模型表现。
 func (s *Service) Models(ctx context.Context, routeID int64, from, to time.Time) ([]ModelRow, error) {
-	rows, err := s.store.RouteOpsModels(ctx, sqlc.RouteOpsModelsParams{RouteID: opsutil.Int8Arg(routeID), FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
+	rows, err := s.store.RouteOpsModels(ctx, sqlc.RouteOpsModelsParams{RouteID: routeID, FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
 	if err != nil {
 		return nil, opsutil.StoreFailed(err, "route ops models")
 	}
@@ -318,11 +315,11 @@ func (s *Service) Models(ctx context.Context, routeID int64, from, to time.Time)
 
 // Requests 返回本线路最近请求（分页）。
 func (s *Service) Requests(ctx context.Context, routeID int64, from, to time.Time, limit, offset int32) ([]RequestRow, int64, error) {
-	rows, err := s.store.RouteOpsRequests(ctx, sqlc.RouteOpsRequestsParams{RouteID: opsutil.Int8Arg(routeID), FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to), PageLimit: limit, PageOffset: offset})
+	rows, err := s.store.RouteOpsRequests(ctx, sqlc.RouteOpsRequestsParams{RouteID: routeID, FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to), PageLimit: limit, PageOffset: offset})
 	if err != nil {
 		return nil, 0, opsutil.StoreFailed(err, "route ops requests")
 	}
-	total, err := s.store.RouteOpsRequestsCount(ctx, sqlc.RouteOpsRequestsCountParams{RouteID: opsutil.Int8Arg(routeID), FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
+	total, err := s.store.RouteOpsRequestsCount(ctx, sqlc.RouteOpsRequestsCountParams{RouteID: routeID, FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
 	if err != nil {
 		return nil, 0, opsutil.StoreFailed(err, "route ops requests count")
 	}

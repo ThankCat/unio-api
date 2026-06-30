@@ -14,7 +14,6 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/billing"
 	"github.com/ThankCat/unio-api/internal/core/channel"
-	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
@@ -105,8 +104,8 @@ type chatSettlementDBDeps struct {
 	pool           *pgxpool.Pool
 	queries        *sqlc.Queries
 	userID         int64
-	projectID      int64
 	apiKeyID       int64
+	routeID        int64
 	providerID     int64
 	channelID      int64
 	modelID        int64
@@ -184,8 +183,9 @@ func (d *chatSettlementDBDeps) cleanup() {
 	if d.apiKeyID != 0 {
 		_, _ = d.pool.Exec(ctx, `DELETE FROM api_keys WHERE id = $1`, d.apiKeyID)
 	}
-	if d.projectID != 0 {
-		_, _ = d.pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, d.projectID)
+	if d.routeID != 0 {
+		// 线路被 api_keys.route_id 外键引用，必须在 api_keys 删除后再删。
+		_, _ = d.pool.Exec(ctx, `DELETE FROM routes WHERE id = $1`, d.routeID)
 	}
 	if d.userID != 0 {
 		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_billing_exceptions WHERE user_id = $1`, d.userID)
@@ -214,25 +214,35 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 	}
 	d.userID = user.ID
 
-	project, err := d.queries.CreateProject(d.ctx, sqlc.CreateProjectParams{
-		UserID: user.ID,
-		Name:   fmt.Sprintf("chat-settlement-project-%d", suffix),
-	})
-	if err != nil {
-		t.Fatalf("create project: %v", err)
-	}
-	d.projectID = project.ID
-
 	generatedKey, err := apikey.Generate()
 	if err != nil {
 		t.Fatalf("generate api key: %v", err)
 	}
+
+	// 线路必填：先建一条线路供 API Key 绑定（route_id 现为 NOT NULL）。
+	var priceRatio pgtype.Numeric
+	if err := priceRatio.Scan("1"); err != nil {
+		t.Fatalf("scan price ratio: %v", err)
+	}
+	route, err := d.queries.CreateRoute(d.ctx, sqlc.CreateRouteParams{
+		Name:       fmt.Sprintf("chat-settlement-route-%d", suffix),
+		Mode:       "cheapest",
+		PoolKind:   "all",
+		Status:     "enabled",
+		PriceRatio: priceRatio,
+	})
+	if err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+	d.routeID = route.ID
+
 	apiKey, err := d.queries.CreateAPIKey(d.ctx, sqlc.CreateAPIKeyParams{
-		ProjectID: project.ID,
+		UserID:    user.ID,
 		Name:      "chat settlement key",
 		KeyPrefix: generatedKey.Prefix,
 		KeyHash:   generatedKey.Hash,
 		ExpiresAt: pgtype.Timestamptz{Valid: false},
+		RouteID:   route.ID,
 	})
 	if err != nil {
 		t.Fatalf("create api key: %v", err)
@@ -244,23 +254,19 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 	d.modelID = insertChatSettlementModel(t, d.ctx, d.pool, suffix)
 	insertChatSettlementChannelModel(t, d.ctx, d.pool, d.channelID, d.modelID)
 
-	// 阶段 15：售价 + 成本同表（channel_prices）。settlement 按命中渠道重查这一行。
+	// DEC-026：渠道只录成本（客户售价取 model_prices × 线路倍率，由 params.SalePrice 透传）。settlement 按命中渠道重查这一行取成本。
 	channelPrice, err := d.queries.CreateChannelPrice(d.ctx, sqlc.CreateChannelPriceParams{
-		ChannelID:            d.channelID,
-		ModelID:              d.modelID,
-		Currency:             "USD",
-		PricingUnit:          billing.PricingUnitPer1MTokens,
-		UncachedInputPrice:   testNumeric(2_0000000000, -10),
-		OutputPrice:          testNumeric(8_0000000000, -10),
-		CacheReadInputPrice:  testNumeric(5000000000, -10),
-		ReasoningOutputPrice: testNumeric(12_0000000000, -10),
-		UncachedInputCost:    testNumeric(1_0000000000, -10),
-		OutputCost:           testNumeric(4_0000000000, -10),
-		CacheReadInputCost:   testNumeric(2500000000, -10),
-		ReasoningOutputCost:  testNumeric(6_0000000000, -10),
-		Status:               "enabled",
-		EffectiveFrom:        pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
-		EffectiveTo:          pgtype.Timestamptz{Valid: false},
+		ChannelID:           d.channelID,
+		ModelID:             d.modelID,
+		Currency:            "USD",
+		PricingUnit:         billing.PricingUnitPer1MTokens,
+		UncachedInputCost:   testNumeric(1_0000000000, -10),
+		OutputCost:          testNumeric(4_0000000000, -10),
+		CacheReadInputCost:  testNumeric(2500000000, -10),
+		ReasoningOutputCost: testNumeric(6_0000000000, -10),
+		Status:              "enabled",
+		EffectiveFrom:       pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
+		EffectiveTo:         pgtype.Timestamptz{Valid: false},
 	})
 	if err != nil {
 		t.Fatalf("create channel price: %v", err)
@@ -270,7 +276,6 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 	requestRecord, err := d.queries.CreateRequestRecord(d.ctx, sqlc.CreateRequestRecordParams{
 		RequestID:        fmt.Sprintf("chat-settlement-request-%d", suffix),
 		UserID:           user.ID,
-		ProjectID:        project.ID,
 		ApiKeyID:         apiKey.ID,
 		RequestedModelID: "openai/gpt-4.1",
 		IngressProtocol:  string(requestlog.ProtocolOpenAI),
@@ -349,7 +354,6 @@ func (d *chatSettlementDBDeps) params() ChatSettlementParams {
 		RequestRecord: requestlog.RequestRecord{
 			ID:               d.requestRecord.ID,
 			UserID:           d.userID,
-			ProjectID:        d.projectID,
 			APIKeyID:         d.apiKeyID,
 			RequestedModelID: d.requestRecord.RequestedModelID,
 			Status:           requestlog.RequestStatus(d.requestRecord.Status),
@@ -365,7 +369,7 @@ func (d *chatSettlementDBDeps) params() ChatSettlementParams {
 			Status:          requestlog.AttemptStatus(d.attemptRecord.Status),
 			StartedAt:       d.attemptRecord.StartedAt.Time,
 		},
-		Principal: &auth.APIKeyPrincipal{UserID: d.userID, ProjectID: d.projectID, APIKeyID: d.apiKeyID},
+		Principal: &auth.APIKeyPrincipal{UserID: d.userID, APIKeyID: d.apiKeyID},
 		Authorization: ChatAuthorization{
 			ReservationID:    d.reservationID,
 			RequestRecordID:  d.requestRecord.ID,
@@ -379,7 +383,17 @@ func (d *chatSettlementDBDeps) params() ChatSettlementParams {
 		ModelDBID:        d.modelID,
 		FinalProviderID:  d.providerID,
 		FinalChannelID:   d.channelID,
-		Facts:            chatSettlementFacts(coreusage.SourceUpstreamResponse),
+		// SalePrice 是客户售价快照 = 模型基准价 × 线路倍率（DEC-026），由路由透传到结算写收入快照。
+		SalePrice: billing.CustomerPriceSnapshot{
+			Currency:             "USD",
+			PricingUnit:          billing.PricingUnitPer1MTokens,
+			UncachedInputPrice:   testNumeric(3_0000000000, -10),
+			CacheReadInputPrice:  testNumeric(0_7500000000, -10),
+			OutputPrice:          testNumeric(12_0000000000, -10),
+			ReasoningOutputPrice: testNumeric(18_0000000000, -10),
+			FormulaVersion:       billing.FormulaVersionV1,
+		},
+		Facts: chatSettlementFacts(coreusage.SourceUpstreamResponse),
 	}
 }
 
@@ -430,17 +444,12 @@ func insertChatSettlementProvider(t *testing.T, ctx context.Context, pool *pgxpo
 func insertChatSettlementChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, providerID int64, suffix int64) int64 {
 	t.Helper()
 
-	credentialEncrypted, err := credential.EncryptFixedTestCredential("sk-chat-settlement-test")
-	if err != nil {
-		t.Fatalf("encrypt channel credential: %v", err)
-	}
-
 	var id int64
-	err = pool.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms)
+	err := pool.QueryRow(ctx, `
+		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms)
 		VALUES ($1, $2, 'openai', 'openai', $3, $4, $5, $6, $7)
 		RETURNING id
-	`, providerID, fmt.Sprintf("chat-settlement-channel-%d", suffix), "https://example.test/v1", credentialEncrypted, "enabled", 10, 30000).Scan(&id)
+	`, providerID, fmt.Sprintf("chat-settlement-channel-%d", suffix), "https://example.test/v1", "sk-chat-settlement-test", "enabled", 10, 30000).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
@@ -880,19 +889,17 @@ func TestChatSettlementUsesAttemptTimeChannelPrice(t *testing.T) {
 	}
 
 	newPrice, err := deps.queries.CreateChannelPrice(deps.ctx, sqlc.CreateChannelPriceParams{
-		ChannelID:            deps.channelID,
-		ModelID:              deps.modelID,
-		Currency:             "USD",
-		PricingUnit:          billing.PricingUnitPer1MTokens,
-		UncachedInputPrice:   testNumeric(99_0000000000, -10),
-		OutputPrice:          testNumeric(199_0000000000, -10),
-		CacheReadInputPrice:  testNumeric(49_0000000000, -10),
-		ReasoningOutputPrice: testNumeric(299_0000000000, -10),
-		UncachedInputCost:    testNumeric(50_0000000000, -10),
-		OutputCost:           testNumeric(100_0000000000, -10),
-		Status:               "enabled",
-		EffectiveFrom:        pgtype.Timestamptz{Time: priceChangeAt, Valid: true},
-		EffectiveTo:          pgtype.Timestamptz{Valid: false},
+		ChannelID:           deps.channelID,
+		ModelID:             deps.modelID,
+		Currency:            "USD",
+		PricingUnit:         billing.PricingUnitPer1MTokens,
+		UncachedInputCost:   testNumeric(50_0000000000, -10),
+		OutputCost:          testNumeric(100_0000000000, -10),
+		CacheReadInputCost:  testNumeric(25_0000000000, -10),
+		ReasoningOutputCost: testNumeric(150_0000000000, -10),
+		Status:              "enabled",
+		EffectiveFrom:       pgtype.Timestamptz{Time: priceChangeAt, Valid: true},
+		EffectiveTo:         pgtype.Timestamptz{Valid: false},
 	})
 	if err != nil {
 		t.Fatalf("create replacement channel price: %v", err)
@@ -916,9 +923,9 @@ func TestChatSettlementUsesAttemptTimeChannelPrice(t *testing.T) {
 	if snapshot.PriceID.Int64 == newPrice.ID {
 		t.Fatalf("expected settlement not to use replacement price id %d", newPrice.ID)
 	}
-	// 售价取 attempt 时刻生效的 seed 行（非新行）。
-	assertNumericEqual(t, snapshot.UncachedInputPrice, testNumeric(2_0000000000, -10))
-	assertNumericEqual(t, snapshot.OutputPrice, testNumeric(8_0000000000, -10))
+	// 售价取路由透传的 SalePrice（DEC-026：与渠道价解耦，= 模型基准价 × 线路倍率）。
+	assertNumericEqual(t, snapshot.UncachedInputPrice, testNumeric(3_0000000000, -10))
+	assertNumericEqual(t, snapshot.OutputPrice, testNumeric(12_0000000000, -10))
 
 	costSnapshot, err := deps.queries.GetCostSnapshotByRequest(deps.ctx, deps.requestRecord.ID)
 	if err != nil {
@@ -934,8 +941,8 @@ func TestChatSettlementUsesAttemptTimeChannelPrice(t *testing.T) {
 	if len(billingCalculator.prices) != 1 {
 		t.Fatalf("expected one billing price, got %d", len(billingCalculator.prices))
 	}
-	assertNumericEqual(t, billingCalculator.prices[0].UncachedInputPrice, testNumeric(2_0000000000, -10))
-	assertNumericEqual(t, billingCalculator.prices[0].OutputPrice, testNumeric(8_0000000000, -10))
+	assertNumericEqual(t, billingCalculator.prices[0].UncachedInputPrice, testNumeric(3_0000000000, -10))
+	assertNumericEqual(t, billingCalculator.prices[0].OutputPrice, testNumeric(12_0000000000, -10))
 }
 
 // TestChatSettlementPinsCandidateChannelPrice 验证 P1-3：当中标候选透传了 ChannelPriceID 时，结算以该行计费，
@@ -953,19 +960,17 @@ func TestChatSettlementPinsCandidateChannelPrice(t *testing.T) {
 	}
 
 	newPrice, err := deps.queries.CreateChannelPrice(deps.ctx, sqlc.CreateChannelPriceParams{
-		ChannelID:            deps.channelID,
-		ModelID:              deps.modelID,
-		Currency:             "USD",
-		PricingUnit:          billing.PricingUnitPer1MTokens,
-		UncachedInputPrice:   testNumeric(99_0000000000, -10),
-		OutputPrice:          testNumeric(199_0000000000, -10),
-		CacheReadInputPrice:  testNumeric(49_0000000000, -10),
-		ReasoningOutputPrice: testNumeric(299_0000000000, -10),
-		UncachedInputCost:    testNumeric(50_0000000000, -10),
-		OutputCost:           testNumeric(100_0000000000, -10),
-		Status:               "enabled",
-		EffectiveFrom:        pgtype.Timestamptz{Time: cutoff, Valid: true},
-		EffectiveTo:          pgtype.Timestamptz{Valid: false},
+		ChannelID:           deps.channelID,
+		ModelID:             deps.modelID,
+		Currency:            "USD",
+		PricingUnit:         billing.PricingUnitPer1MTokens,
+		UncachedInputCost:   testNumeric(50_0000000000, -10),
+		OutputCost:          testNumeric(100_0000000000, -10),
+		CacheReadInputCost:  testNumeric(25_0000000000, -10),
+		ReasoningOutputCost: testNumeric(150_0000000000, -10),
+		Status:              "enabled",
+		EffectiveFrom:       pgtype.Timestamptz{Time: cutoff, Valid: true},
+		EffectiveTo:         pgtype.Timestamptz{Valid: false},
 	})
 	if err != nil {
 		t.Fatalf("create replacement channel price: %v", err)
@@ -988,9 +993,9 @@ func TestChatSettlementPinsCandidateChannelPrice(t *testing.T) {
 	if snapshot.PriceID.Int64 == newPrice.ID {
 		t.Fatalf("settlement must not drift to replacement price id %d when candidate price is pinned", newPrice.ID)
 	}
-	// 售价取锁定的 seed 行（非更贵新行）。
-	assertNumericEqual(t, snapshot.UncachedInputPrice, testNumeric(2_0000000000, -10))
-	assertNumericEqual(t, snapshot.OutputPrice, testNumeric(8_0000000000, -10))
+	// 售价取路由透传的 SalePrice（DEC-026：与渠道价/pin 解耦）；PriceID 仍指向 pin 的成本行。
+	assertNumericEqual(t, snapshot.UncachedInputPrice, testNumeric(3_0000000000, -10))
+	assertNumericEqual(t, snapshot.OutputPrice, testNumeric(12_0000000000, -10))
 
 	costSnapshot, err := deps.queries.GetCostSnapshotByRequest(deps.ctx, deps.requestRecord.ID)
 	if err != nil {

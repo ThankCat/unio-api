@@ -44,22 +44,22 @@ type providerOpsRowDTO struct {
 }
 
 type providerOpsDetailDTO struct {
-	ChannelTotal     int64   `json:"channel_total"`
-	ChannelEnabled   int64   `json:"channel_enabled"`
-	AttemptTotal     int64   `json:"attempt_total"`
-	AttemptSucceeded int64   `json:"attempt_succeeded"`
-	SuccessRate      float64 `json:"success_rate"`
+	ChannelTotal     int64           `json:"channel_total"`
+	ChannelEnabled   int64           `json:"channel_enabled"`
+	AttemptTotal     int64           `json:"attempt_total"`
+	AttemptSucceeded int64           `json:"attempt_succeeded"`
+	SuccessRate      float64         `json:"success_rate"`
 	TimeoutTotal     int64           `json:"timeout_total"`
 	Latency          latencyStatsDTO `json:"latency"`
 }
 
 type providerOpsChannelDTO struct {
-	ID               int64   `json:"id"`
-	Name             string  `json:"name"`
-	BaseURL          string  `json:"base_url"`
-	Status           string  `json:"status"`
-	AttemptTotal     int64   `json:"attempt_total"`
-	AttemptSucceeded int64   `json:"attempt_succeeded"`
+	ID               int64           `json:"id"`
+	Name             string          `json:"name"`
+	BaseURL          string          `json:"base_url"`
+	Status           string          `json:"status"`
+	AttemptTotal     int64           `json:"attempt_total"`
+	AttemptSucceeded int64           `json:"attempt_succeeded"`
 	SuccessRate      float64         `json:"success_rate"`
 	Latency          latencyStatsDTO `json:"latency"`
 	Health           string          `json:"health"`

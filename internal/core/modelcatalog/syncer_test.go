@@ -25,9 +25,9 @@ type fakeSyncStore struct {
 	// failUpsert 让指定 canonical_id 的 upsert 返回错误，模拟落库失败。
 	failUpsert string
 
-	upserted    []string
-	capHints    map[string]int
-	removed     []string
+	upserted []string
+	capHints map[string]int
+	removed  []string
 
 	jobCreated   int
 	jobRunning   int

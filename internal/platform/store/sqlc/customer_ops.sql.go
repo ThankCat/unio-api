@@ -17,7 +17,7 @@ SELECT
     COUNT(*) FILTER (WHERE disabled_at IS NULL AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())) AS key_enabled,
     COUNT(*) FILTER (WHERE spend_limit IS NOT NULL AND spent_total >= spend_limit) AS spend_capped
 FROM api_keys
-WHERE project_id = $1
+WHERE user_id = $1
 `
 
 type ApiKeysOpsSummaryRow struct {
@@ -26,9 +26,9 @@ type ApiKeysOpsSummaryRow struct {
 	SpendCapped int64
 }
 
-// ApiKeysOpsSummary 项目范围内 Key 概况。
-func (q *Queries) ApiKeysOpsSummary(ctx context.Context, projectID int64) (ApiKeysOpsSummaryRow, error) {
-	row := q.db.QueryRow(ctx, apiKeysOpsSummary, projectID)
+// ApiKeysOpsSummary 用户范围内 Key 概况。
+func (q *Queries) ApiKeysOpsSummary(ctx context.Context, userID int64) (ApiKeysOpsSummaryRow, error) {
+	row := q.db.QueryRow(ctx, apiKeysOpsSummary, userID)
 	var i ApiKeysOpsSummaryRow
 	err := row.Scan(&i.KeyTotal, &i.KeyEnabled, &i.SpendCapped)
 	return i, err
@@ -39,13 +39,15 @@ SELECT
     k.id,
     k.name,
     k.key_prefix,
-    k.project_id,
+    k.key_plaintext,
+    k.user_id,
     k.disabled_at,
     k.revoked_at,
     k.expires_at,
     k.spend_limit,
     k.spent_total,
     k.last_used_at,
+    k.route_id,
     rt.name AS route_name,
     COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
     COUNT(r.id) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
@@ -62,37 +64,39 @@ LEFT JOIN request_records r
     ON r.api_key_id = k.id
     AND ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
     AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
-WHERE k.project_id = $3
-GROUP BY k.id, k.name, k.key_prefix, k.project_id, k.disabled_at, k.revoked_at, k.expires_at, k.spend_limit, k.spent_total, k.last_used_at, rt.name
+WHERE k.user_id = $3
+GROUP BY k.id, k.name, k.key_prefix, k.key_plaintext, k.user_id, k.disabled_at, k.revoked_at, k.expires_at, k.spend_limit, k.spent_total, k.last_used_at, k.route_id, rt.name
 ORDER BY k.id
 `
 
 type ApiKeysOpsTableParams struct {
-	FromTime  pgtype.Timestamptz
-	ToTime    pgtype.Timestamptz
-	ProjectID int64
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
+	UserID   int64
 }
 
 type ApiKeysOpsTableRow struct {
 	ID               int64
 	Name             string
 	KeyPrefix        string
-	ProjectID        int64
+	KeyPlaintext     pgtype.Text
+	UserID           int64
 	DisabledAt       pgtype.Timestamptz
 	RevokedAt        pgtype.Timestamptz
 	ExpiresAt        pgtype.Timestamptz
 	SpendLimit       pgtype.Numeric
 	SpentTotal       pgtype.Numeric
 	LastUsedAt       pgtype.Timestamptz
+	RouteID          int64
 	RouteName        pgtype.Text
 	RequestTotal     int64
 	RequestSucceeded int64
 	ConsumptionUsd   pgtype.Numeric
 }
 
-// ApiKeysOpsTable 项目范围内 Key 运维表（请求/消费按 api_key 归因）。
+// ApiKeysOpsTable 用户范围内 Key 运维表（请求/消费按 api_key 归因）。
 func (q *Queries) ApiKeysOpsTable(ctx context.Context, arg ApiKeysOpsTableParams) ([]ApiKeysOpsTableRow, error) {
-	rows, err := q.db.Query(ctx, apiKeysOpsTable, arg.FromTime, arg.ToTime, arg.ProjectID)
+	rows, err := q.db.Query(ctx, apiKeysOpsTable, arg.FromTime, arg.ToTime, arg.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -104,13 +108,15 @@ func (q *Queries) ApiKeysOpsTable(ctx context.Context, arg ApiKeysOpsTableParams
 			&i.ID,
 			&i.Name,
 			&i.KeyPrefix,
-			&i.ProjectID,
+			&i.KeyPlaintext,
+			&i.UserID,
 			&i.DisabledAt,
 			&i.RevokedAt,
 			&i.ExpiresAt,
 			&i.SpendLimit,
 			&i.SpentTotal,
 			&i.LastUsedAt,
+			&i.RouteID,
 			&i.RouteName,
 			&i.RequestTotal,
 			&i.RequestSucceeded,
@@ -124,163 +130,6 @@ func (q *Queries) ApiKeysOpsTable(ctx context.Context, arg ApiKeysOpsTableParams
 		return nil, err
 	}
 	return items, nil
-}
-
-const projectsOpsSummary = `-- name: ProjectsOpsSummary :one
-SELECT
-    (SELECT COUNT(*) FROM projects) AS project_total,
-    (SELECT COUNT(*) FROM api_keys) AS key_total,
-    (SELECT COUNT(*) FROM api_keys WHERE disabled_at IS NULL AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())) AS key_enabled,
-    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
-    COALESCE((
-        SELECT SUM(le.amount) FROM ledger_entries le
-        WHERE le.entry_type = 'debit' AND le.currency = 'USD'
-          AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz)
-          AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)
-    ), 0)::numeric AS consumption_usd
-FROM request_records r
-WHERE ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
-  AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
-`
-
-type ProjectsOpsSummaryParams struct {
-	FromTime pgtype.Timestamptz
-	ToTime   pgtype.Timestamptz
-}
-
-type ProjectsOpsSummaryRow struct {
-	ProjectTotal   int64
-	KeyTotal       int64
-	KeyEnabled     int64
-	RequestTotal   int64
-	ConsumptionUsd pgtype.Numeric
-}
-
-func (q *Queries) ProjectsOpsSummary(ctx context.Context, arg ProjectsOpsSummaryParams) (ProjectsOpsSummaryRow, error) {
-	row := q.db.QueryRow(ctx, projectsOpsSummary, arg.FromTime, arg.ToTime)
-	var i ProjectsOpsSummaryRow
-	err := row.Scan(
-		&i.ProjectTotal,
-		&i.KeyTotal,
-		&i.KeyEnabled,
-		&i.RequestTotal,
-		&i.ConsumptionUsd,
-	)
-	return i, err
-}
-
-const projectsOpsTable = `-- name: ProjectsOpsTable :many
-SELECT
-    pj.id,
-    pj.name,
-    pj.user_id,
-    u.email AS user_email,
-    rt.name AS default_route_name,
-    (SELECT COUNT(*) FROM api_keys k WHERE k.project_id = pj.id) AS key_total,
-    (SELECT COUNT(*) FROM api_keys k WHERE k.project_id = pj.id AND k.disabled_at IS NULL AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())) AS key_enabled,
-    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
-    COALESCE((
-        SELECT SUM(le.amount) FROM ledger_entries le
-        JOIN request_records rr ON rr.id = le.request_record_id
-        WHERE rr.project_id = pj.id AND le.entry_type = 'debit' AND le.currency = 'USD'
-          AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz)
-          AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)
-    ), 0)::numeric AS consumption_usd,
-    (MAX(r.created_at))::timestamptz AS last_used_at
-FROM projects pj
-JOIN users u ON u.id = pj.user_id
-LEFT JOIN routes rt ON rt.id = pj.default_route_id
-LEFT JOIN request_records r
-    ON r.project_id = pj.id
-    AND ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
-    AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
-WHERE ($3::text IS NULL OR pj.name ILIKE '%' || $3::text || '%' OR u.email ILIKE '%' || $3::text || '%')
-GROUP BY pj.id, pj.name, pj.user_id, u.email, rt.name
-ORDER BY
-  CASE WHEN COALESCE($4::text, 'consumption') IN ('', 'consumption') AND COALESCE($5::bool, true) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE rr.project_id = pj.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) END DESC NULLS LAST,
-  CASE WHEN COALESCE($4::text, 'consumption') IN ('', 'consumption') AND NOT COALESCE($5::bool, true) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE rr.project_id = pj.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) END ASC NULLS LAST,
-  CASE WHEN $4::text = 'name' AND COALESCE($5::bool, false) THEN pj.name END DESC NULLS LAST,
-  CASE WHEN $4::text = 'name' AND NOT COALESCE($5::bool, false) THEN pj.name END ASC NULLS LAST,
-  CASE WHEN $4::text = 'requests' AND COALESCE($5::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
-  CASE WHEN $4::text = 'requests' AND NOT COALESCE($5::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
-  pj.id
-LIMIT $7 OFFSET $6
-`
-
-type ProjectsOpsTableParams struct {
-	FromTime   pgtype.Timestamptz
-	ToTime     pgtype.Timestamptz
-	Search     pgtype.Text
-	SortField  pgtype.Text
-	SortDesc   pgtype.Bool
-	PageOffset int32
-	PageLimit  int32
-}
-
-type ProjectsOpsTableRow struct {
-	ID               int64
-	Name             string
-	UserID           int64
-	UserEmail        string
-	DefaultRouteName pgtype.Text
-	KeyTotal         int64
-	KeyEnabled       int64
-	RequestTotal     int64
-	ConsumptionUsd   pgtype.Numeric
-	LastUsedAt       pgtype.Timestamptz
-}
-
-func (q *Queries) ProjectsOpsTable(ctx context.Context, arg ProjectsOpsTableParams) ([]ProjectsOpsTableRow, error) {
-	rows, err := q.db.Query(ctx, projectsOpsTable,
-		arg.FromTime,
-		arg.ToTime,
-		arg.Search,
-		arg.SortField,
-		arg.SortDesc,
-		arg.PageOffset,
-		arg.PageLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ProjectsOpsTableRow
-	for rows.Next() {
-		var i ProjectsOpsTableRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.UserID,
-			&i.UserEmail,
-			&i.DefaultRouteName,
-			&i.KeyTotal,
-			&i.KeyEnabled,
-			&i.RequestTotal,
-			&i.ConsumptionUsd,
-			&i.LastUsedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const projectsOpsTableCount = `-- name: ProjectsOpsTableCount :one
-SELECT COUNT(*) AS total
-FROM projects pj
-JOIN users u ON u.id = pj.user_id
-WHERE ($1::text IS NULL OR pj.name ILIKE '%' || $1::text || '%' OR u.email ILIKE '%' || $1::text || '%')
-`
-
-func (q *Queries) ProjectsOpsTableCount(ctx context.Context, search pgtype.Text) (int64, error) {
-	row := q.db.QueryRow(ctx, projectsOpsTableCount, search)
-	var total int64
-	err := row.Scan(&total)
-	return total, err
 }
 
 const userOpsDetail = `-- name: UserOpsDetail :one
@@ -332,8 +181,6 @@ const userOpsKeys = `-- name: UserOpsKeys :many
 SELECT
     k.id,
     k.name,
-    k.project_id,
-    pj.name AS project_name,
     k.disabled_at,
     k.revoked_at,
     k.expires_at,
@@ -341,26 +188,23 @@ SELECT
     k.spent_total,
     k.last_used_at
 FROM api_keys k
-JOIN projects pj ON pj.id = k.project_id
-WHERE pj.user_id = $1
+WHERE k.user_id = $1
 ORDER BY k.id
 LIMIT 200
 `
 
 type UserOpsKeysRow struct {
-	ID          int64
-	Name        string
-	ProjectID   int64
-	ProjectName string
-	DisabledAt  pgtype.Timestamptz
-	RevokedAt   pgtype.Timestamptz
-	ExpiresAt   pgtype.Timestamptz
-	SpendLimit  pgtype.Numeric
-	SpentTotal  pgtype.Numeric
-	LastUsedAt  pgtype.Timestamptz
+	ID         int64
+	Name       string
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	SpendLimit pgtype.Numeric
+	SpentTotal pgtype.Numeric
+	LastUsedAt pgtype.Timestamptz
 }
 
-// UserOpsKeys 跨项目汇总用户的 API Key（抽屉 Key Tab）。状态由时间戳派生。
+// UserOpsKeys 汇总用户的 API Key（抽屉 Key Tab）。状态由时间戳派生。
 func (q *Queries) UserOpsKeys(ctx context.Context, userID int64) ([]UserOpsKeysRow, error) {
 	rows, err := q.db.Query(ctx, userOpsKeys, userID)
 	if err != nil {
@@ -373,8 +217,6 @@ func (q *Queries) UserOpsKeys(ctx context.Context, userID int64) ([]UserOpsKeysR
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
-			&i.ProjectID,
-			&i.ProjectName,
 			&i.DisabledAt,
 			&i.RevokedAt,
 			&i.ExpiresAt,
@@ -427,9 +269,9 @@ type UsersOpsSummaryRow struct {
 	ConsumptionUsd   pgtype.Numeric
 }
 
-// §3.7 客户中心（用户/项目/API Key）只读运维聚合。金额仅 USD。
+// §3.7 客户中心（用户/API Key）只读运维聚合。金额仅 USD。
 // 用户余额来自 user_balances（USD）；消费来自 ledger_entries(debit, USD)；
-// 请求来自 request_records 按 user/project/api_key 归因。Key 状态由时间戳派生。
+// 请求来自 request_records 按 user/api_key 归因。Key 状态由时间戳派生。
 func (q *Queries) UsersOpsSummary(ctx context.Context, arg UsersOpsSummaryParams) (UsersOpsSummaryRow, error) {
 	row := q.db.QueryRow(ctx, usersOpsSummary, arg.FromTime, arg.ToTime)
 	var i UsersOpsSummaryRow
@@ -452,8 +294,7 @@ SELECT
     u.display_name,
     COALESCE(ub.balance, 0)::numeric AS balance_usd,
     COALESCE(ub.reserved_balance, 0)::numeric AS reserved_usd,
-    (SELECT COUNT(*) FROM projects pj WHERE pj.user_id = u.id) AS project_count,
-    (SELECT COUNT(*) FROM api_keys k JOIN projects pj ON pj.id = k.project_id WHERE pj.user_id = u.id) AS key_total,
+    (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_total,
     COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
     COUNT(r.id) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
     COALESCE((
@@ -502,7 +343,6 @@ type UsersOpsTableRow struct {
 	DisplayName      string
 	BalanceUsd       pgtype.Numeric
 	ReservedUsd      pgtype.Numeric
-	ProjectCount     int64
 	KeyTotal         int64
 	RequestTotal     int64
 	RequestSucceeded int64
@@ -533,7 +373,6 @@ func (q *Queries) UsersOpsTable(ctx context.Context, arg UsersOpsTableParams) ([
 			&i.DisplayName,
 			&i.BalanceUsd,
 			&i.ReservedUsd,
-			&i.ProjectCount,
 			&i.KeyTotal,
 			&i.RequestTotal,
 			&i.RequestSucceeded,

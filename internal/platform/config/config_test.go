@@ -274,22 +274,6 @@ func TestLoadInfrastructureDefaults(t *testing.T) {
 	if cfg.Worker.SettlementRecoveryBatchSize != 16 {
 		t.Fatalf("expected worker settlement recovery batch size %d, got %d", 16, cfg.Worker.SettlementRecoveryBatchSize)
 	}
-	if cfg.Credential.MasterKey != "" {
-		t.Fatalf("expected empty credential master key by default, got %q", cfg.Credential.MasterKey)
-	}
-}
-
-func TestLoadCredentialMasterKeyFromEnv(t *testing.T) {
-	t.Setenv("CREDENTIAL_MASTER_KEY", "dGVzdC1tYXN0ZXIta2V5LTMyYnl0ZXMhIQ==")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-
-	if cfg.Credential.MasterKey != "dGVzdC1tYXN0ZXIta2V5LTMyYnl0ZXMhIQ==" {
-		t.Fatalf("expected credential master key from env, got %q", cfg.Credential.MasterKey)
-	}
 }
 
 func TestLoadInfrastructureOverrides(t *testing.T) {
@@ -576,7 +560,6 @@ func clearInfrastructureEnv(t *testing.T) {
 		"WORKER_SETTLEMENT_RECOVERY_MAX_ATTEMPTS",
 		"WORKER_SETTLEMENT_RECOVERY_BACKOFF_CAP",
 		"WORKER_SETTLEMENT_RECOVERY_BATCH_SIZE",
-		"CREDENTIAL_MASTER_KEY",
 	} {
 		t.Setenv(key, "")
 	}

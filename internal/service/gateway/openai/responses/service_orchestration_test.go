@@ -170,7 +170,6 @@ func (s *fakeRequestLog) CreateRequest(_ context.Context, params requestlog.Crea
 		ID:              id,
 		RequestID:       params.RequestID,
 		UserID:          params.UserID,
-		ProjectID:       params.ProjectID,
 		APIKeyID:        params.APIKeyID,
 		IngressProtocol: params.IngressProtocol,
 		Operation:       params.Operation,
@@ -324,7 +323,7 @@ func okChatResponse() *chatcompletionsadapter.ChatResponse {
 func ctxWithPrincipal() context.Context {
 	ctx := httpx.ContextWithRequestID(context.Background(), "responses-test-request-id")
 	return auth.ContextWithAPIKeyPrincipal(ctx, &auth.APIKeyPrincipal{
-		APIKeyID: 1, UserID: 7, ProjectID: 3, KeyPrefix: "unio_sk_test",
+		APIKeyID: 1, UserID: 7, KeyPrefix: "unio_sk_test",
 	})
 }
 

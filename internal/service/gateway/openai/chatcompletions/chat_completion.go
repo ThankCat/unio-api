@@ -43,12 +43,11 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 
 	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
 	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
-		ProjectID:             principal.ProjectID,
-		ModelID:               req.Model,
-		IngressProtocol:       routing.ProtocolOpenAI,
-		Operation:             routing.OperationChatCompletions,
-		RouteID:               principal.RouteID,
-		ProjectDefaultRouteID: principal.ProjectDefaultRouteID,
+		UserID:          principal.UserID,
+		ModelID:         req.Model,
+		IngressProtocol: routing.ProtocolOpenAI,
+		Operation:       routing.OperationChatCompletions,
+		RouteID:         principal.RouteID,
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)
 	if err != nil {
@@ -84,10 +83,10 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		adapterResp *chatcompletionsadapter.ChatResponse
 	)
 	runResult, err := s.attemptRunner.RunNonStream(ctx, lifecycle.RunNonStreamParams{
-		RequestRecord:        requestRecord,
-		Principal:            principal,
-		Authorization:        authorization,
-		Candidates:           candidatePlan.Candidates,
+		RequestRecord:    requestRecord,
+		Principal:        principal,
+		Authorization:    authorization,
+		Candidates:       candidatePlan.Candidates,
 		RequestedModelID: req.Model,
 		ResponseProtocol: requestlog.ProtocolOpenAI,
 		EstimatedTokens:  candidatePlan.ConservativeInputTokens,

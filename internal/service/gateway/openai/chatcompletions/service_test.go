@@ -196,7 +196,6 @@ func (s *fakeRequestLogService) CreateRequest(ctx context.Context, params reques
 		ID:               id,
 		RequestID:        params.RequestID,
 		UserID:           params.UserID,
-		ProjectID:        params.ProjectID,
 		APIKeyID:         params.APIKeyID,
 		RequestedModelID: params.RequestedModelID,
 		Stream:           params.Stream,
@@ -430,13 +429,12 @@ func syntheticStreamOutcome(chunks []chatcompletionsadapter.ChatStreamChunk) ada
 }
 
 // contextWithPrincipal 创建带 API key principal 的测试 context。
-func contextWithPrincipal(projectID int64) context.Context {
+func contextWithPrincipal(userID int64) context.Context {
 	ctx := httpx.ContextWithRequestID(context.Background(), "gateway-test-request-id")
 
 	return auth.ContextWithAPIKeyPrincipal(ctx, &auth.APIKeyPrincipal{
 		APIKeyID:  1,
-		UserID:    7,
-		ProjectID: projectID,
+		UserID:    userID,
 		KeyPrefix: "unio_sk_test",
 	})
 }
@@ -627,8 +625,8 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	if !router.called {
 		t.Fatal("expected routing to be called")
 	}
-	if router.req.ProjectID != 42 {
-		t.Fatalf("expected project id %d, got %d", int64(42), router.req.ProjectID)
+	if router.req.UserID != 42 {
+		t.Fatalf("expected user id %d, got %d", int64(42), router.req.UserID)
 	}
 	if router.req.ModelID != "openai/gpt-4.1" {
 		t.Fatalf("expected requested model %q, got %q", "openai/gpt-4.1", router.req.ModelID)
@@ -667,11 +665,8 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	if !strings.HasPrefix(requestLog.createRequests[0].RequestID, "req_") {
 		t.Fatalf("expected server-generated request id prefix %q, got %q", "req_", requestLog.createRequests[0].RequestID)
 	}
-	if requestLog.createRequests[0].UserID != 7 {
-		t.Fatalf("expected user id %d, got %d", int64(7), requestLog.createRequests[0].UserID)
-	}
-	if requestLog.createRequests[0].ProjectID != 42 {
-		t.Fatalf("expected request project id %d, got %d", int64(42), requestLog.createRequests[0].ProjectID)
+	if requestLog.createRequests[0].UserID != 42 {
+		t.Fatalf("expected user id %d, got %d", int64(42), requestLog.createRequests[0].UserID)
 	}
 	if requestLog.createRequests[0].RequestedModelID != "openai/gpt-4.1" {
 		t.Fatalf("expected requested model %q, got %q", "openai/gpt-4.1", requestLog.createRequests[0].RequestedModelID)

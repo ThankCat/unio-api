@@ -1,6 +1,6 @@
 # air 热加载配置：admin-server（服务 /admin/v1/*）。
-# 监听端口来自 .env 的 ADMIN_HTTP_ADDR；DATABASE_URL、ADMIN_API_TOKEN、
-# CREDENTIAL_MASTER_KEY 等也由 Makefile source .env 注入。
+# 监听端口来自 .env 的 ADMIN_HTTP_ADDR；DATABASE_URL、ADMIN_API_TOKEN 等
+# 也由 Makefile source .env 注入。
 root = "."
 tmp_dir = "tmp"
 

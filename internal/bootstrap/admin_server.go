@@ -9,7 +9,6 @@ import (
 	openaideepseek "github.com/ThankCat/unio-api/internal/core/adapter/openai/deepseek/chatcompletions"
 	"github.com/ThankCat/unio-api/internal/core/adminauth"
 	"github.com/ThankCat/unio-api/internal/core/capability"
-	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
@@ -27,6 +26,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/admin/model"
 	modelcatalogadmin "github.com/ThankCat/unio-api/internal/service/admin/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/service/admin/modelops"
+	"github.com/ThankCat/unio-api/internal/service/admin/modelprice"
 	"github.com/ThankCat/unio-api/internal/service/admin/provider"
 	"github.com/ThankCat/unio-api/internal/service/admin/providerops"
 	"github.com/ThankCat/unio-api/internal/service/admin/query"
@@ -67,8 +67,8 @@ func (a *AdminServerApp) Shutdown(ctx context.Context) error {
 
 // NewAdminServerApp 装配当前 admin-server 进程的业务应用。
 //
-// 启动期校验：ADMIN_API_TOKEN 不能为空；CREDENTIAL_MASTER_KEY 必须可解析成 AES-256 key
-// （channel 凭据落库要用它加密）。任一缺失/非法都在此失败，避免 admin 表面带病启动。
+// 启动期校验：ADMIN_API_TOKEN 不能为空（缺失即失败，避免 admin 表面带病启动）。
+// 渠道上游凭据已改为明文存储（产品决策），admin 不再需要 master key / cipher。
 func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServerApp, error) {
 	tracerProvider, err := tracing.Setup(ctx, tracing.Options{
 		Enabled:     deps.Config.Tracing.Enabled,
@@ -89,15 +89,6 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		return nil, err
 	}
 
-	masterKey, err := credential.ParseMasterKey(deps.Config.Credential.MasterKey)
-	if err != nil {
-		return nil, err
-	}
-	cipher, err := credential.NewAESGCMCipher(masterKey)
-	if err != nil {
-		return nil, err
-	}
-
 	adapterRegistry, err := NewAdapterRegistry(http.DefaultClient, deps.Logger)
 	if err != nil {
 		return nil, err
@@ -107,12 +98,13 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 	providerService := provider.NewService(queries)
 	providerOpsService := providerops.NewService(queries)
-	channelService := channel.NewService(queries, cipher, adapterRegistry)
+	channelService := channel.NewService(queries, adapterRegistry)
 	channelOpsService := channelops.NewService(queries)
 	modelService := model.NewService(queries)
 	modelOpsService := modelops.NewService(queries)
 	channelModelService := channelmodel.NewService(queries)
 	channelPriceService := channelprice.NewService(queries)
+	modelPriceService := modelprice.NewService(queries)
 	routeService := adminroute.NewService(deps.DB, queries)
 	routeOpsService := routeops.NewService(queries)
 
@@ -124,7 +116,6 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	// M7 客户管理：用户/项目只读 + API Key 管理；手工调额经由 ledger 写 adjustment_* 流水。
 	ledgerService := ledger.NewService(deps.DB, queries)
 	userService := customer.NewUserService(queries)
-	projectService := customer.NewProjectService(queries)
 	apiKeyService := customer.NewAPIKeyService(queries)
 	adjustmentService := customer.NewAdjustmentService(ledgerService)
 	customerOpsService := customerops.NewService(queries)
@@ -164,13 +155,13 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		ModelOpsService:     modelOpsService,
 		ChannelModelService: channelModelService,
 		ChannelPriceService: channelPriceService,
+		ModelPriceService:   modelPriceService,
 		RouteService:        routeService,
 		RouteOpsService:     routeOpsService,
 		RequestQueryService: requestQueryService,
 		UsageQueryService:   usageQueryService,
 		LedgerQueryService:  ledgerQueryService,
 		UserService:         userService,
-		ProjectService:      projectService,
 		APIKeyService:       apiKeyService,
 		AdjustmentService:   adjustmentService,
 		CustomerOpsService:  customerOpsService,

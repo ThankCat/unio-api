@@ -40,7 +40,7 @@ func newMessagesAuthenticator() *fakeMessagesAuthenticator {
 	return &fakeMessagesAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}

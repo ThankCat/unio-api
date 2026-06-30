@@ -12,16 +12,16 @@ import (
 )
 
 const createRoute = `-- name: CreateRoute :one
-INSERT INTO routes (name, mode, pool_kind, status, description, is_builtin)
+INSERT INTO routes (name, mode, pool_kind, status, description, price_ratio)
 VALUES (
     $1,
     $2,
     $3,
     $4,
     $5,
-    false
+    $6
 )
-RETURNING id, name, mode, pool_kind, is_builtin, status, description, created_at, updated_at
+RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio
 `
 
 type CreateRouteParams struct {
@@ -30,9 +30,11 @@ type CreateRouteParams struct {
 	PoolKind    string
 	Status      string
 	Description pgtype.Text
+	PriceRatio  pgtype.Numeric
 }
 
-// CreateRoute 创建自定义线路（is_builtin 恒 false）；mode/pool_kind 组合的 fixed/explicit 数量约束由 service 层校验。
+// CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
+// mode/pool_kind 组合的 fixed/explicit 数量约束由 service 层校验。
 func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route, error) {
 	row := q.db.QueryRow(ctx, createRoute,
 		arg.Name,
@@ -40,6 +42,7 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		arg.PoolKind,
 		arg.Status,
 		arg.Description,
+		arg.PriceRatio,
 	)
 	var i Route
 	err := row.Scan(
@@ -47,20 +50,20 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		&i.Name,
 		&i.Mode,
 		&i.PoolKind,
-		&i.IsBuiltin,
 		&i.Status,
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PriceRatio,
 	)
 	return i, err
 }
 
 const deleteRoute = `-- name: DeleteRoute :execrows
-DELETE FROM routes WHERE id = $1 AND is_builtin = false
+DELETE FROM routes WHERE id = $1
 `
 
-// DeleteRoute 删除自定义线路（内置线路不可删）；被 api_keys/projects 引用时由 DB 外键拒绝（23503）。
+// DeleteRoute 删除线路；被 api_keys/users 引用时由 DB 外键拒绝（23503）。
 func (q *Queries) DeleteRoute(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteRoute, id)
 	if err != nil {
@@ -69,30 +72,8 @@ func (q *Queries) DeleteRoute(ctx context.Context, id int64) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
-const getBuiltinCheapestRoute = `-- name: GetBuiltinCheapestRoute :one
-SELECT id, name, mode, pool_kind, is_builtin, status, description, created_at, updated_at FROM routes WHERE is_builtin = true AND mode = 'cheapest' LIMIT 1
-`
-
-// GetBuiltinCheapestRoute 读取内置「经济」线路，作为线路解析的最终回落。
-func (q *Queries) GetBuiltinCheapestRoute(ctx context.Context) (Route, error) {
-	row := q.db.QueryRow(ctx, getBuiltinCheapestRoute)
-	var i Route
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Mode,
-		&i.PoolKind,
-		&i.IsBuiltin,
-		&i.Status,
-		&i.Description,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const getRouteByID = `-- name: GetRouteByID :one
-SELECT id, name, mode, pool_kind, is_builtin, status, description, created_at, updated_at FROM routes WHERE id = $1 LIMIT 1
+SELECT id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio FROM routes WHERE id = $1 LIMIT 1
 `
 
 // GetRouteByID 按主键读取单条线路。
@@ -104,20 +85,20 @@ func (q *Queries) GetRouteByID(ctx context.Context, id int64) (Route, error) {
 		&i.Name,
 		&i.Mode,
 		&i.PoolKind,
-		&i.IsBuiltin,
 		&i.Status,
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PriceRatio,
 	)
 	return i, err
 }
 
 const listRoutes = `-- name: ListRoutes :many
-SELECT id, name, mode, pool_kind, is_builtin, status, description, created_at, updated_at FROM routes ORDER BY is_builtin DESC, id ASC
+SELECT id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio FROM routes ORDER BY id ASC
 `
 
-// ListRoutes 列出全部线路，内置（经济/稳定）排在前，供 admin 管理台展示。
+// ListRoutes 列出全部线路，供 admin 管理台展示。
 func (q *Queries) ListRoutes(ctx context.Context) ([]Route, error) {
 	rows, err := q.db.Query(ctx, listRoutes)
 	if err != nil {
@@ -132,11 +113,11 @@ func (q *Queries) ListRoutes(ctx context.Context) ([]Route, error) {
 			&i.Name,
 			&i.Mode,
 			&i.PoolKind,
-			&i.IsBuiltin,
 			&i.Status,
 			&i.Description,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PriceRatio,
 		); err != nil {
 			return nil, err
 		}
@@ -155,9 +136,10 @@ SET name = $1,
     pool_kind = $3,
     status = $4,
     description = $5,
+    price_ratio = $6,
     updated_at = now()
-WHERE id = $6
-RETURNING id, name, mode, pool_kind, is_builtin, status, description, created_at, updated_at
+WHERE id = $7
+RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio
 `
 
 type UpdateRouteParams struct {
@@ -166,10 +148,11 @@ type UpdateRouteParams struct {
 	PoolKind    string
 	Status      string
 	Description pgtype.Text
+	PriceRatio  pgtype.Numeric
 	ID          int64
 }
 
-// UpdateRoute 更新自定义线路的名称/策略/池类型/启停/简介；内置线路只读由 service 层拦截。
+// UpdateRoute 更新线路的名称/策略/池类型/启停/简介/售价倍率。
 func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route, error) {
 	row := q.db.QueryRow(ctx, updateRoute,
 		arg.Name,
@@ -177,6 +160,7 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route
 		arg.PoolKind,
 		arg.Status,
 		arg.Description,
+		arg.PriceRatio,
 		arg.ID,
 	)
 	var i Route
@@ -185,11 +169,11 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route
 		&i.Name,
 		&i.Mode,
 		&i.PoolKind,
-		&i.IsBuiltin,
 		&i.Status,
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PriceRatio,
 	)
 	return i, err
 }

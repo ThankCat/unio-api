@@ -41,21 +41,22 @@ DELETE FROM channel_models
 WHERE channel_id = sqlc.arg(channel_id) AND model_id = sqlc.arg(model_id);
 
 -- name: FindRouteCandidates :many
--- FindRouteCandidates 按请求模型、项目策略与线路查找可用 channel 路由候选（阶段 15）。
--- 在既有过滤（model/channel/provider/cm enabled + 协议 + 项目 allow/deny）之上叠加：
+-- FindRouteCandidates 按请求模型、用户策略与线路查找可用 channel 路由候选（DEC-026 倍率定价）。
+-- 在既有过滤（model/channel/provider/cm enabled + 协议 + 用户 allow/deny）之上叠加：
 --   1. 线路候选池：pool_kind='explicit' 时候选 ∩ route_channels（fixed 即只剩一条）；
---   2. 已定价过滤：候选必须在 channel_prices 有「当前生效、enabled」的售价行（未定价渠道排除，不参与计费）；
---   3. 带回命中渠道的当前生效售价（供 Go 侧 cheapest 排序与保守预授权上界）。
--- 策略排序（cheapest/stable/fixed）在 Go 侧完成；此处仅给稳定的 priority 基序。
-WITH project_scope AS (
-    SELECT sqlc.arg(project_id)::BIGINT AS project_id
+--   2. 已定价过滤：候选必须同时满足「模型有当前生效 model_prices 基准售价」+「渠道有当前生效 channel_prices 成本行」（两者皆缺则排除，不参与计费）；
+--   3. 带回模型基准售价（base，供 Go 侧 ScaleCustomerPrice = 基准 × 线路倍率 算客户售价）与命中渠道成本（cost，供 cheapest 按成本排序与毛利结算）。
+-- 客户售价 = base × routes.price_ratio，在 Go 侧算（同一请求所有候选共享同一售价）；
+-- 策略排序（cheapest 按成本 / stable 按健康 / fixed 单条）在 Go 侧完成；此处仅给稳定的 priority 基序。
+WITH user_scope AS (
+    SELECT sqlc.arg(user_id)::BIGINT AS user_id
 ),
-project_policy_mode AS (
+user_policy_mode AS (
     SELECT EXISTS (
         SELECT 1
-        FROM project_model_policies pmp
-        JOIN project_scope ps ON ps.project_id = pmp.project_id
-        WHERE pmp.visibility = 'allowed'
+        FROM user_model_policies ump
+        JOIN user_scope us ON us.user_id = ump.user_id
+        WHERE ump.visibility = 'allowed'
     ) AS has_allow_list
 )
 SELECT
@@ -68,32 +69,56 @@ SELECT
     c.protocol AS protocol,
     c.id AS channel_id,
     c.base_url,
-    c.credential_encrypted,
+    c.credential,
     c.timeout_ms,
     c.priority,
     c.rpm_limit AS channel_rpm_limit,
     c.tpm_limit AS channel_tpm_limit,
     c.rpd_limit AS channel_rpd_limit,
     cm.upstream_model,
-    price.id AS channel_price_id,
-    price.currency AS price_currency,
-    price.pricing_unit AS price_pricing_unit,
-    price.uncached_input_price,
-    price.cache_read_input_price,
-    price.cache_write_5m_input_price,
-    price.cache_write_1h_input_price,
-    price.output_price,
-    price.reasoning_output_price
+    base.id AS model_price_id,
+    base.currency AS base_currency,
+    base.pricing_unit AS base_pricing_unit,
+    base.uncached_input_price,
+    base.cache_read_input_price,
+    base.cache_write_5m_input_price,
+    base.cache_write_1h_input_price,
+    base.output_price,
+    base.reasoning_output_price,
+    cost.id AS channel_price_id,
+    cost.currency AS cost_currency,
+    cost.pricing_unit AS cost_pricing_unit,
+    cost.uncached_input_cost,
+    cost.cache_read_input_cost,
+    cost.cache_write_5m_input_cost,
+    cost.cache_write_1h_input_cost,
+    cost.output_cost,
+    cost.reasoning_output_cost
 FROM channel_models cm
 JOIN models m ON m.id = cm.model_id
 JOIN channels c ON c.id = cm.channel_id
 JOIN providers p ON p.id = c.provider_id
-JOIN project_scope ps ON ps.project_id > 0
+JOIN user_scope us ON us.user_id > 0
 JOIN LATERAL (
+    -- base: 模型当前生效的基准售价（DEC-026），客户售价 = base × 线路倍率。
+    SELECT mp.id, mp.currency, mp.pricing_unit,
+        mp.uncached_input_price, mp.cache_read_input_price,
+        mp.cache_write_5m_input_price, mp.cache_write_1h_input_price,
+        mp.output_price, mp.reasoning_output_price
+    FROM model_prices mp
+    WHERE mp.model_id = m.id
+      AND mp.status = 'enabled'
+      AND mp.effective_from <= sqlc.arg(at_time)
+      AND (mp.effective_to IS NULL OR mp.effective_to > sqlc.arg(at_time))
+    ORDER BY mp.effective_from DESC, mp.id DESC
+    LIMIT 1
+) base ON TRUE
+JOIN LATERAL (
+    -- cost: 命中渠道当前生效的上游成本（毛利结算与 cheapest 按成本排序用）。
     SELECT cp.id, cp.currency, cp.pricing_unit,
-        cp.uncached_input_price, cp.cache_read_input_price,
-        cp.cache_write_5m_input_price, cp.cache_write_1h_input_price,
-        cp.output_price, cp.reasoning_output_price
+        cp.uncached_input_cost, cp.cache_read_input_cost,
+        cp.cache_write_5m_input_cost, cp.cache_write_1h_input_cost,
+        cp.output_cost, cp.reasoning_output_cost
     FROM channel_prices cp
     WHERE cp.channel_id = c.id
       AND cp.model_id = m.id
@@ -102,7 +127,7 @@ JOIN LATERAL (
       AND (cp.effective_to IS NULL OR cp.effective_to > sqlc.arg(at_time))
     ORDER BY cp.effective_from DESC, cp.id DESC
     LIMIT 1
-) price ON TRUE
+) cost ON TRUE
 WHERE m.model_id = sqlc.arg(requested_model_id)
   AND c.protocol = sqlc.arg(ingress_protocol)
   AND m.status = 'enabled'
@@ -120,17 +145,17 @@ WHERE m.model_id = sqlc.arg(requested_model_id)
   )
   AND NOT EXISTS (
     SELECT 1
-    FROM project_model_policies denied
-    JOIN project_scope ps ON ps.project_id = denied.project_id
+    FROM user_model_policies denied
+    JOIN user_scope us ON us.user_id = denied.user_id
     WHERE denied.model_id = m.id
       AND denied.visibility = 'denied'
 )
   AND (
-    NOT (SELECT has_allow_list FROM project_policy_mode)
+    NOT (SELECT has_allow_list FROM user_policy_mode)
         OR EXISTS (
         SELECT 1
-        FROM project_model_policies allowed
-        JOIN project_scope ps ON ps.project_id = allowed.project_id
+        FROM user_model_policies allowed
+        JOIN user_scope us ON us.user_id = allowed.user_id
         WHERE allowed.model_id = m.id
           AND allowed.visibility = 'allowed'
     )

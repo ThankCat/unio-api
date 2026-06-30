@@ -465,9 +465,9 @@ func TestChannelModelsRequireToken(t *testing.T) {
 }
 
 func TestCreateChannelPriceReturns201(t *testing.T) {
-	handler := newChannelPriceRouter(t, &fakeChannelPriceService{createOut: channelprice.ChannelPrice{ID: 1, ChannelID: 5, ModelID: 2, Currency: "USD", PricingUnit: "per_1m_tokens", UncachedInputPrice: "3", OutputPrice: "9", Status: "enabled"}})
+	handler := newChannelPriceRouter(t, &fakeChannelPriceService{createOut: channelprice.ChannelPrice{ID: 1, ChannelID: 5, ModelID: 2, Currency: "USD", PricingUnit: "per_1m_tokens", UncachedInputCost: "1.25", OutputCost: "2.5", Status: "enabled"}})
 
-	body := `{"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_price":"3","output_price":"9","uncached_input_cost":"1.25","output_cost":"2.5","status":"enabled","effective_from":"2026-01-01T00:00:00Z"}`
+	body := `{"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_cost":"1.25","output_cost":"2.5","status":"enabled","effective_from":"2026-01-01T00:00:00Z"}`
 	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/models/2/prices", body, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())

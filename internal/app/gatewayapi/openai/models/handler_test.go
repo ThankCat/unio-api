@@ -31,7 +31,7 @@ func TestRouterModelsRequiresAPIKey(t *testing.T) {
 	authenticator := &modelsTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 42,
+			UserID:    42,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -63,7 +63,7 @@ func TestRouterModelsSuccess(t *testing.T) {
 	authenticator := &modelsTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 42,
+			UserID:    42,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -152,7 +152,7 @@ func TestRouterModelsCapabilityFilterParsed(t *testing.T) {
 	authenticator := &modelsTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 42,
+			UserID:    42,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -184,7 +184,7 @@ func TestRouterModelsServiceError(t *testing.T) {
 	authenticator := &modelsTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -220,7 +220,7 @@ func TestRouterModelsUsesRateLimit(t *testing.T) {
 	authenticator := &modelsTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -253,7 +253,7 @@ func TestRouterModelsRateLimited(t *testing.T) {
 	authenticator := &modelsTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}

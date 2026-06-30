@@ -2,7 +2,7 @@
 --
 -- 内容：1 个 OpenAI provider + 1 条渠道 + 3 个模型（GPT-5.5 / GPT-5.4 / GPT-5.4-mini，
 -- 参考 OpenAI 全能力声明）+ 模型与渠道绑定 + 永不过期价格（成本参考官网、售价 = 成本 ×1.5）
--- + 1 用户 + 余额 + 1 项目 + 1 API Key。内置「经济 / 稳定」线路由 migration 000032 预置，这里直接引用。
+-- + 1 用户 + 余额 + 1 条开发用线路 + 1 API Key（线路必填，Key 直接绑定该线路）。
 --
 -- 必须通过 scripts/seed-test-data.sh 运行（它会注入 :key_prefix / :key_hash 两个 psql 变量）。
 -- 渠道 base_url / credential 为占位，需在 Admin 后台改成真实值后才能打真实上游。
@@ -20,13 +20,13 @@ VALUES ('openai', 'OpenAI', 'enabled')
 ON CONFLICT (slug) DO NOTHING;
 
 -- 2) Channel：OpenAI 官方渠道（adapter_key=openai，protocol=openai）------------
---    credential_encrypted 是占位字节（非真实密文）；base_url 为官方地址占位。
+--    credential 为明文占位（产品决策：渠道凭据明文存储）；base_url 为官方地址占位。需在 Admin 改成真实值。
 INSERT INTO channels (
     provider_id, name, protocol, adapter_key, base_url,
-    credential_encrypted, status, priority, timeout_ms
+    credential, status, priority, timeout_ms
 )
 SELECT p.id, 'OpenAI 官方渠道', 'openai', 'openai', 'https://api.openai.com/v1',
-       '\x00'::bytea, 'enabled', 0, 60000
+       'sk-REPLACE-IN-ADMIN', 'enabled', 0, 60000
 FROM providers p
 WHERE p.slug = 'openai'
 ON CONFLICT (provider_id, name) DO NOTHING;
@@ -53,18 +53,16 @@ JOIN models m ON m.model_id IN ('gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini')
 WHERE c.name = 'OpenAI 官方渠道'
 ON CONFLICT (channel_id, model_id) DO NOTHING;
 
--- 5) 价格（售价 + 成本，永不过期 effective_to=NULL，售价 = 成本 ×1.5）---------
+-- 5) 渠道成本价（DEC-026：渠道只录成本，永不过期 effective_to=NULL）---------
 --    成本参考 OpenAI 官网量级：input / cached_input / output（USD per 1M tokens）。
---    OpenAI 无 cache_write / 独立 reasoning 计价，对应列留空。
+--    OpenAI 无 cache_write / 独立 reasoning 计价，对应列留空。客户售价取 model_prices × 线路倍率（见 5b）。
 INSERT INTO channel_prices (
     channel_id, model_id, currency, pricing_unit,
-    uncached_input_price, cache_read_input_price, output_price,
     uncached_input_cost, cache_read_input_cost, output_cost,
     status, effective_from, effective_to
 )
 SELECT
     cm.channel_id, cm.model_id, 'USD', 'per_1m_tokens',
-    v.sale_in, v.sale_cached, v.sale_out,
     v.cost_in, v.cost_cached, v.cost_out,
     'enabled', now(), NULL
 FROM channel_models cm
@@ -72,11 +70,11 @@ JOIN models m ON m.id = cm.model_id
 JOIN channels c ON c.id = cm.channel_id
 JOIN providers p ON p.id = c.provider_id AND p.slug = 'openai'
 JOIN (VALUES
-    -- model_id,       cost_in, cost_cached, cost_out, sale_in, sale_cached, sale_out
-    ('gpt-5.5',        1.2500,  0.1250,      10.0000,  1.8750,  0.1875,      15.0000),
-    ('gpt-5.4',        1.0000,  0.1000,       8.0000,  1.5000,  0.1500,      12.0000),
-    ('gpt-5.4-mini',   0.2500,  0.0250,       2.0000,  0.3750,  0.0375,       3.0000)
-) AS v(model_id, cost_in, cost_cached, cost_out, sale_in, sale_cached, sale_out)
+    -- model_id,       cost_in, cost_cached, cost_out
+    ('gpt-5.5',        1.2500,  0.1250,      10.0000),
+    ('gpt-5.4',        1.0000,  0.1000,       8.0000),
+    ('gpt-5.4-mini',   0.2500,  0.0250,       2.0000)
+) AS v(model_id, cost_in, cost_cached, cost_out)
     ON v.model_id = m.model_id
 WHERE c.name = 'OpenAI 官方渠道'
   AND NOT EXISTS (
@@ -86,6 +84,35 @@ WHERE c.name = 'OpenAI 官方渠道'
         AND cp.status = 'enabled'
         AND cp.currency = 'USD'
         AND cp.pricing_unit = 'per_1m_tokens'
+  );
+
+-- 5b) 模型基准售价 model_prices（DEC-026：客户售价 = 模型基准价 × 线路倍率）-------
+--     基准价取原渠道售价（= 成本 ×1.5）；配合内置「经济」线路倍率 1.0，等价于旧渠道售价口径。
+--     OpenAI 无 cache_write / 独立 reasoning 计价，对应列留空。
+INSERT INTO model_prices (
+    model_id, currency, pricing_unit,
+    uncached_input_price, cache_read_input_price, output_price,
+    status, effective_from, effective_to
+)
+SELECT
+    m.id, 'USD', 'per_1m_tokens',
+    v.sale_in, v.sale_cached, v.sale_out,
+    'enabled', now(), NULL
+FROM models m
+JOIN (VALUES
+    -- model_id,       sale_in, sale_cached, sale_out
+    ('gpt-5.5',        1.8750,  0.1875,      15.0000),
+    ('gpt-5.4',        1.5000,  0.1500,      12.0000),
+    ('gpt-5.4-mini',   0.3750,  0.0375,       3.0000)
+) AS v(model_id, sale_in, sale_cached, sale_out)
+    ON v.model_id = m.model_id
+WHERE m.model_id IN ('gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini')
+  AND NOT EXISTS (
+      SELECT 1 FROM model_prices mp
+      WHERE mp.model_id = m.id
+        AND mp.status = 'enabled'
+        AND mp.currency = 'USD'
+        AND mp.pricing_unit = 'per_1m_tokens'
   );
 
 -- 6) 模型能力声明（参考 OpenAI 全能力，support_level=full；展示用，非闸门）-------
@@ -121,28 +148,25 @@ FROM users u
 WHERE lower(u.email) = lower('dev@unio.local')
 ON CONFLICT (user_id, currency) DO NOTHING;
 
--- 9) 项目（默认线路 = 经济）---------------------------------------------------
-INSERT INTO projects (user_id, name, default_route_id)
-SELECT u.id, 'Dev Project', r.id
-FROM users u
-JOIN routes r ON r.name = '经济'
-WHERE lower(u.email) = lower('dev@unio.local')
-ON CONFLICT (user_id, name) DO NOTHING;
+-- 9) 开发用线路（cheapest / all）----------------------------------------------
+INSERT INTO routes (name, mode, pool_kind, status, description)
+SELECT 'Dev Cheapest', 'cheapest', 'all', 'enabled', '本地 seed：按售价最低选路'
+WHERE NOT EXISTS (SELECT 1 FROM routes WHERE name = 'Dev Cheapest');
 
--- 10) API Key（route_id=NULL → 回落项目默认线路「经济」；spend_limit 不限额）----
---     幂等：先删除同项目下同名 seed key，再插入本次新 key。
+-- 10) API Key（route_id 必填 → 直接绑定 Dev Cheapest 线路；spend_limit 不限额）---
+--     幂等：先删除同用户下同名 seed key，再插入本次新 key。
 DELETE FROM api_keys
 WHERE name = 'seed test key'
-  AND project_id = (
-      SELECT pr.id FROM projects pr
-      JOIN users u ON u.id = pr.user_id
-      WHERE lower(u.email) = lower('dev@unio.local') AND pr.name = 'Dev Project'
+  AND user_id = (
+      SELECT u.id FROM users u
+      WHERE lower(u.email) = lower('dev@unio.local')
   );
 
-INSERT INTO api_keys (project_id, name, key_prefix, key_hash, route_id, spend_limit)
-SELECT pr.id, 'seed test key', :'key_prefix', :'key_hash', NULL, NULL
-FROM projects pr
-JOIN users u ON u.id = pr.user_id
-WHERE lower(u.email) = lower('dev@unio.local') AND pr.name = 'Dev Project';
+INSERT INTO api_keys (user_id, name, key_prefix, key_hash, key_plaintext, route_id, spend_limit)
+SELECT u.id, 'seed test key', :'key_prefix', :'key_hash', :'key_plaintext', r.id, NULL
+FROM users u
+CROSS JOIN routes r
+WHERE lower(u.email) = lower('dev@unio.local')
+  AND r.name = 'Dev Cheapest';
 
 COMMIT;

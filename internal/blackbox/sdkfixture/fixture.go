@@ -2,7 +2,7 @@
 
 // Package sdkfixture 提供双协议 SDK 黑盒验收使用的共享 fixture：
 // 装一个完整的 unio gateway HTTP server (httptest) + 真实 PostgreSQL + Redis + 一份
-// 可用的 user / project / api key / channel / model / price / balance / credential。
+// 可用的 user / api key / channel / model / price / balance / credential。
 //
 // 客户 SDK 只需要把 base_url 指到 Fixture.BaseURL，把 Authorization 设成 Fixture.APIKey，
 // 就能像调真实 OpenAI / Anthropic 一样调 Unio Gateway。
@@ -29,7 +29,6 @@ import (
 	"github.com/ThankCat/unio-api/internal/bootstrap"
 	"github.com/ThankCat/unio-api/internal/core/apikey"
 	"github.com/ThankCat/unio-api/internal/core/billing"
-	"github.com/ThankCat/unio-api/internal/core/credential"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 )
@@ -105,25 +104,25 @@ type Fixture struct {
 	Pool    *pgxpool.Pool
 	Queries *sqlc.Queries
 
-	UserID    int64
-	ProjectID int64
-	APIKeyID  int64
+	UserID   int64
+	APIKeyID int64
+	RouteID  int64
 
-	ProviderID  int64
-	ChannelID   int64
-	ModelDBID   int64
-	PriceID     int64
-	CostPriceID int64
+	ProviderID     int64
+	ChannelID      int64
+	ModelDBID      int64
+	ModelPriceID   int64
+	ChannelPriceID int64
 
 	ModelID       string
 	UpstreamModel string
 
-	ctx                  context.Context
-	cancel               context.CancelFunc
-	redisClient          redis.UniversalClient
-	suffix               int64
-	fallbackChannelIDs   []int64
-	fallbackCostPriceIDs []int64
+	ctx                     context.Context
+	cancel                  context.CancelFunc
+	redisClient             redis.UniversalClient
+	suffix                  int64
+	fallbackChannelIDs      []int64
+	fallbackChannelPriceIDs []int64
 }
 
 // Setup 装一个 unio gateway 黑盒 fixture。
@@ -283,17 +282,12 @@ func Setup(t *testing.T, opts SetupOptions) *Fixture {
 func (f *Fixture) AddFallbackChannel(t *testing.T, baseURL string, priority int32) int64 {
 	t.Helper()
 
-	credentialEncrypted, err := credential.EncryptFixedTestCredential("sk-fallback-test")
-	if err != nil {
-		t.Fatalf("encrypt fallback channel credential: %v", err)
-	}
-
 	var fallbackID int64
 	if err := f.Pool.QueryRow(f.ctx, `
-		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms)
+		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms)
 		VALUES ($1, $2, (SELECT protocol FROM channels WHERE id = $3), (SELECT adapter_key FROM channels WHERE id = $3), $4, $5, 'enabled', $6, 60000)
 		RETURNING id
-	`, f.ProviderID, fmt.Sprintf("blackbox-fallback-%d", f.suffix), f.ChannelID, baseURL, credentialEncrypted, priority).Scan(&fallbackID); err != nil {
+	`, f.ProviderID, fmt.Sprintf("blackbox-fallback-%d", f.suffix), f.ChannelID, baseURL, "sk-fallback-test", priority).Scan(&fallbackID); err != nil {
 		t.Fatalf("insert fallback channel: %v", err)
 	}
 
@@ -304,9 +298,9 @@ func (f *Fixture) AddFallbackChannel(t *testing.T, baseURL string, priority int3
 		t.Fatalf("insert fallback channel_model: %v", err)
 	}
 
-	// 复制主 channel 的 cost_price 形状，价格单元/币种/费率保持一致（这只是黑盒 fixture，
-	// 业务无关；只要 FindActiveChannelCostPrice 在 settle 时能命中即可）。
-	fallbackCostPrice, err := f.Queries.CreateChannelCostPrice(f.ctx, sqlc.CreateChannelCostPriceParams{
+	// 复制主 channel 的渠道成本价形状（DEC-026：渠道只录成本），价格单元/币种/费率保持一致
+	// （这只是黑盒 fixture，业务无关；只要 settle 时能命中该渠道成本即可）。
+	fallbackCostPrice, err := f.Queries.CreateChannelPrice(f.ctx, sqlc.CreateChannelPriceParams{
 		ChannelID:           fallbackID,
 		ModelID:             f.ModelDBID,
 		Currency:            "USD",
@@ -322,7 +316,7 @@ func (f *Fixture) AddFallbackChannel(t *testing.T, baseURL string, priority int3
 	if err != nil {
 		t.Fatalf("insert fallback channel cost price: %v", err)
 	}
-	f.fallbackCostPriceIDs = append(f.fallbackCostPriceIDs, fallbackCostPrice.ID)
+	f.fallbackChannelPriceIDs = append(f.fallbackChannelPriceIDs, fallbackCostPrice.ID)
 
 	f.fallbackChannelIDs = append(f.fallbackChannelIDs, fallbackID)
 	return fallbackID
@@ -346,14 +340,18 @@ func (f *Fixture) teardown(t *testing.T) {
 		_, _ = f.Pool.Exec(ctx, `DELETE FROM user_balances WHERE user_id = $1`, f.UserID)
 		_, _ = f.Pool.Exec(ctx, `DELETE FROM api_keys WHERE id = $1`, f.APIKeyID)
 	}
-	if f.CostPriceID != 0 {
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM channel_cost_prices WHERE id = $1`, f.CostPriceID)
+	if f.RouteID != 0 {
+		// 线路被 api_keys.route_id 外键引用，必须在 api_keys 删除后再删。
+		_, _ = f.Pool.Exec(ctx, `DELETE FROM routes WHERE id = $1`, f.RouteID)
 	}
-	if f.PriceID != 0 {
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM prices WHERE id = $1`, f.PriceID)
+	if f.ChannelPriceID != 0 {
+		_, _ = f.Pool.Exec(ctx, `DELETE FROM channel_prices WHERE id = $1`, f.ChannelPriceID)
 	}
-	for _, fbCostID := range f.fallbackCostPriceIDs {
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM channel_cost_prices WHERE id = $1`, fbCostID)
+	if f.ModelPriceID != 0 {
+		_, _ = f.Pool.Exec(ctx, `DELETE FROM model_prices WHERE id = $1`, f.ModelPriceID)
+	}
+	for _, fbCostID := range f.fallbackChannelPriceIDs {
+		_, _ = f.Pool.Exec(ctx, `DELETE FROM channel_prices WHERE id = $1`, fbCostID)
 	}
 	for _, fbID := range f.fallbackChannelIDs {
 		_, _ = f.Pool.Exec(ctx, `DELETE FROM channel_models WHERE channel_id = $1`, fbID)
@@ -370,9 +368,6 @@ func (f *Fixture) teardown(t *testing.T) {
 	}
 	if f.ModelDBID != 0 {
 		_, _ = f.Pool.Exec(ctx, `DELETE FROM models WHERE id = $1`, f.ModelDBID)
-	}
-	if f.ProjectID != 0 {
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, f.ProjectID)
 	}
 	if f.UserID != 0 {
 		_, _ = f.Pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, f.UserID)
@@ -395,7 +390,7 @@ func (f *Fixture) seed(t *testing.T, opts SetupOptions, upstreamBaseURL string, 
 
 	suffix := f.suffix
 
-	// user / project / api key
+	// user / api key
 	user, err := f.Queries.CreateUser(f.ctx, sqlc.CreateUserParams{
 		Email:        fmt.Sprintf("blackbox-%d@example.test", suffix),
 		PasswordHash: "blackbox-password-hash",
@@ -406,25 +401,31 @@ func (f *Fixture) seed(t *testing.T, opts SetupOptions, upstreamBaseURL string, 
 	}
 	f.UserID = user.ID
 
-	project, err := f.Queries.CreateProject(f.ctx, sqlc.CreateProjectParams{
-		UserID: user.ID,
-		Name:   fmt.Sprintf("blackbox-project-%d", suffix),
-	})
-	if err != nil {
-		t.Fatalf("create project: %v", err)
-	}
-	f.ProjectID = project.ID
-
 	generatedKey, err := apikey.Generate()
 	if err != nil {
 		t.Fatalf("generate api key: %v", err)
 	}
+
+	// 线路必填：先建一条 pool_kind=all 的线路供 API Key 绑定（route_id 现为 NOT NULL）。
+	route, err := f.Queries.CreateRoute(f.ctx, sqlc.CreateRouteParams{
+		Name:       fmt.Sprintf("blackbox-route-%d", suffix),
+		Mode:       "cheapest",
+		PoolKind:   "all",
+		Status:     "enabled",
+		PriceRatio: pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+	f.RouteID = route.ID
+
 	storedKey, err := f.Queries.CreateAPIKey(f.ctx, sqlc.CreateAPIKeyParams{
-		ProjectID: project.ID,
+		UserID:    user.ID,
 		Name:      "blackbox sdk key",
 		KeyPrefix: generatedKey.Prefix,
 		KeyHash:   generatedKey.Hash,
 		ExpiresAt: pgtype.Timestamptz{Valid: false},
+		RouteID:   route.ID,
 	})
 	if err != nil {
 		t.Fatalf("create api key: %v", err)
@@ -444,17 +445,12 @@ func (f *Fixture) seed(t *testing.T, opts SetupOptions, upstreamBaseURL string, 
 	}
 	f.ProviderID = providerID
 
-	credentialEncrypted, err := credential.EncryptFixedTestCredential(upstreamAPIKey)
-	if err != nil {
-		t.Fatalf("encrypt channel credential: %v", err)
-	}
-
 	var channelID int64
 	if err := f.Pool.QueryRow(f.ctx, `
-		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential_encrypted, status, priority, timeout_ms)
+		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms)
 		VALUES ($1, $2, $3, $4, $5, $6, 'enabled', 10, $7)
 		RETURNING id
-	`, providerID, fmt.Sprintf("blackbox-channel-%d", suffix), opts.Protocol, opts.AdapterKey, upstreamBaseURL, credentialEncrypted, opts.ChannelTimeoutMS).Scan(&channelID); err != nil {
+	`, providerID, fmt.Sprintf("blackbox-channel-%d", suffix), opts.Protocol, opts.AdapterKey, upstreamBaseURL, upstreamAPIKey, opts.ChannelTimeoutMS).Scan(&channelID); err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
 	f.ChannelID = channelID
@@ -476,9 +472,9 @@ func (f *Fixture) seed(t *testing.T, opts SetupOptions, upstreamBaseURL string, 
 		t.Fatalf("insert channel_model: %v", err)
 	}
 
-	// 客户售价 / 平台成本价
-	// 单价采用与 settlement_test 一致的 per_1m_tokens NUMERIC(20,10) 表达。
-	price, err := f.Queries.CreatePrice(f.ctx, sqlc.CreatePriceParams{
+	// DEC-026：模型基准售价(model_prices) + 渠道成本价(channel_prices)。
+	// 客户最终售价 = 基准价 × 线路倍率；单价采用 per_1m_tokens NUMERIC(20,10) 表达。
+	modelPrice, err := f.Queries.CreateModelPrice(f.ctx, sqlc.CreateModelPriceParams{
 		ModelID:              modelDBID,
 		Currency:             "USD",
 		PricingUnit:          billing.PricingUnitPer1MTokens,
@@ -491,11 +487,11 @@ func (f *Fixture) seed(t *testing.T, opts SetupOptions, upstreamBaseURL string, 
 		EffectiveTo:          pgtype.Timestamptz{Valid: false},
 	})
 	if err != nil {
-		t.Fatalf("create price: %v", err)
+		t.Fatalf("create model price: %v", err)
 	}
-	f.PriceID = price.ID
+	f.ModelPriceID = modelPrice.ID
 
-	costPrice, err := f.Queries.CreateChannelCostPrice(f.ctx, sqlc.CreateChannelCostPriceParams{
+	costPrice, err := f.Queries.CreateChannelPrice(f.ctx, sqlc.CreateChannelPriceParams{
 		ChannelID:           channelID,
 		ModelID:             modelDBID,
 		Currency:            "USD",
@@ -511,7 +507,7 @@ func (f *Fixture) seed(t *testing.T, opts SetupOptions, upstreamBaseURL string, 
 	if err != nil {
 		t.Fatalf("create channel cost price: %v", err)
 	}
-	f.CostPriceID = costPrice.ID
+	f.ChannelPriceID = costPrice.ID
 
 	// 余额：先 ensure 行，再加 N USD（NUMERIC，per_1m_tokens 同精度）。
 	if err := f.Queries.EnsureUserBalance(f.ctx, sqlc.EnsureUserBalanceParams{
@@ -537,9 +533,6 @@ func (f *Fixture) seed(t *testing.T, opts SetupOptions, upstreamBaseURL string, 
 //   - CircuitBreaker 关闭，黑盒不验熔断（熔断有专门单测）。
 func blackboxConfig() config.Config {
 	return config.Config{
-		Credential: config.CredentialConfig{
-			MasterKey: credential.FixedTestMasterKeyBase64,
-		},
 		Redis: config.RedisConfig{
 			KeyNamespace: defaultRedisNamespace,
 		},

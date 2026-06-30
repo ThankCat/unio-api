@@ -1,18 +1,11 @@
 -- name: CreateChannelPrice :one
--- CreateChannelPrice 创建一条渠道-模型价（售价必填、成本可空）。
--- 录入守卫（任一分项售价 < 成本）由 DB ck_channel_prices_margin 硬拦，违反报 23514。
+-- CreateChannelPrice 创建一条渠道-模型成本价（DEC-026：渠道只录成本，售价取 model_prices × 线路倍率）。
 -- 启用窗口重叠由 ex_channel_prices_enabled_window 保证，违反报 23P01。
 INSERT INTO channel_prices (
     channel_id,
     model_id,
     currency,
     pricing_unit,
-    uncached_input_price,
-    cache_read_input_price,
-    cache_write_5m_input_price,
-    cache_write_1h_input_price,
-    output_price,
-    reasoning_output_price,
     uncached_input_cost,
     cache_read_input_cost,
     cache_write_5m_input_cost,
@@ -28,12 +21,6 @@ VALUES (
     sqlc.arg(model_id),
     sqlc.arg(currency),
     sqlc.arg(pricing_unit),
-    sqlc.arg(uncached_input_price),
-    sqlc.arg(cache_read_input_price),
-    sqlc.arg(cache_write_5m_input_price),
-    sqlc.arg(cache_write_1h_input_price),
-    sqlc.arg(output_price),
-    sqlc.arg(reasoning_output_price),
     sqlc.arg(uncached_input_cost),
     sqlc.arg(cache_read_input_cost),
     sqlc.arg(cache_write_5m_input_cost),
@@ -51,19 +38,13 @@ RETURNING *;
 SELECT * FROM channel_prices WHERE id = sqlc.arg(id) LIMIT 1;
 
 -- name: ListChannelPricesByChannel :many
--- ListChannelPricesByChannel 列出某 channel 下全部渠道-模型价（含历史与停用），连带模型对外 ID/展示名，供 admin 管理台展示毛利。
+-- ListChannelPricesByChannel 列出某 channel 下全部渠道-模型成本价（含历史与停用），连带模型对外 ID/展示名，供 admin 管理台展示成本。
 SELECT
     cp.id,
     cp.channel_id,
     cp.model_id,
     cp.currency,
     cp.pricing_unit,
-    cp.uncached_input_price,
-    cp.cache_read_input_price,
-    cp.cache_write_5m_input_price,
-    cp.cache_write_1h_input_price,
-    cp.output_price,
-    cp.reasoning_output_price,
     cp.uncached_input_cost,
     cp.cache_read_input_cost,
     cp.cache_write_5m_input_cost,

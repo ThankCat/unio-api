@@ -18,10 +18,7 @@ type Store interface {
 	UsersOpsTableCount(ctx context.Context, search pgtype.Text) (int64, error)
 	UserOpsDetail(ctx context.Context, arg sqlc.UserOpsDetailParams) (sqlc.UserOpsDetailRow, error)
 	UserOpsKeys(ctx context.Context, userID int64) ([]sqlc.UserOpsKeysRow, error)
-	ProjectsOpsSummary(ctx context.Context, arg sqlc.ProjectsOpsSummaryParams) (sqlc.ProjectsOpsSummaryRow, error)
-	ProjectsOpsTable(ctx context.Context, arg sqlc.ProjectsOpsTableParams) ([]sqlc.ProjectsOpsTableRow, error)
-	ProjectsOpsTableCount(ctx context.Context, search pgtype.Text) (int64, error)
-	ApiKeysOpsSummary(ctx context.Context, projectID int64) (sqlc.ApiKeysOpsSummaryRow, error)
+	ApiKeysOpsSummary(ctx context.Context, userID int64) (sqlc.ApiKeysOpsSummaryRow, error)
 	ApiKeysOpsTable(ctx context.Context, arg sqlc.ApiKeysOpsTableParams) ([]sqlc.ApiKeysOpsTableRow, error)
 }
 
@@ -56,7 +53,6 @@ type UserRow struct {
 	BalanceUSD     string
 	ReservedUSD    string
 	AvailableUSD   string
-	ProjectCount   int64
 	KeyTotal       int64
 	RequestTotal   int64
 	Succeeded      int64
@@ -88,14 +84,12 @@ type UserDetail struct {
 }
 
 type KeyRow struct {
-	ID          int64
-	Name        string
-	ProjectID   int64
-	ProjectName string
-	Status      string
-	SpendLimit  *string
-	SpentTotal  string
-	LastUsedAt  *time.Time
+	ID         int64
+	Name       string
+	Status     string
+	SpendLimit *string
+	SpentTotal string
+	LastUsedAt *time.Time
 }
 
 func (s *Service) UsersSummary(ctx context.Context, from, to time.Time) (UsersSummary, error) {
@@ -147,7 +141,6 @@ func (s *Service) UsersTable(ctx context.Context, p UsersTableParams) ([]UserRow
 			BalanceUSD:     balance,
 			ReservedUSD:    reserved,
 			AvailableUSD:   available,
-			ProjectCount:   r.ProjectCount,
 			KeyTotal:       r.KeyTotal,
 			RequestTotal:   r.RequestTotal,
 			Succeeded:      r.RequestSucceeded,
@@ -187,103 +180,18 @@ func (s *Service) UserKeys(ctx context.Context, userID int64) ([]KeyRow, error) 
 	out := make([]KeyRow, 0, len(rows))
 	for _, k := range rows {
 		out = append(out, KeyRow{
-			ID:          k.ID,
-			Name:        k.Name,
-			ProjectID:   k.ProjectID,
-			ProjectName: k.ProjectName,
-			Status:      keyStatus(k.DisabledAt, k.RevokedAt, k.ExpiresAt, now),
-			SpendLimit:  numericPtr(k.SpendLimit),
-			SpentTotal:  opsutil.NumericString(k.SpentTotal),
-			LastUsedAt:  opsutil.TimeValue(k.LastUsedAt),
+			ID:         k.ID,
+			Name:       k.Name,
+			Status:     keyStatus(k.DisabledAt, k.RevokedAt, k.ExpiresAt, now),
+			SpendLimit: numericPtr(k.SpendLimit),
+			SpentTotal: opsutil.NumericString(k.SpentTotal),
+			LastUsedAt: opsutil.TimeValue(k.LastUsedAt),
 		})
 	}
 	return out, nil
 }
 
-// ---- 项目 ----
-
-type ProjectsSummary struct {
-	ProjectTotal   int64
-	KeyTotal       int64
-	KeyEnabled     int64
-	RequestTotal   int64
-	ConsumptionUSD string
-}
-
-type ProjectRow struct {
-	ID               int64
-	Name             string
-	UserID           int64
-	UserEmail        string
-	DefaultRouteName string
-	KeyTotal         int64
-	KeyEnabled       int64
-	RequestTotal     int64
-	ConsumptionUSD   string
-	LastUsedAt       *time.Time
-}
-
-// ProjectsTableParams 项目运维主表入参。
-type ProjectsTableParams struct {
-	From      time.Time
-	To        time.Time
-	Search    string
-	SortField string
-	SortDesc  bool
-	Limit     int32
-	Offset    int32
-}
-
-func (s *Service) ProjectsSummary(ctx context.Context, from, to time.Time) (ProjectsSummary, error) {
-	r, err := s.store.ProjectsOpsSummary(ctx, sqlc.ProjectsOpsSummaryParams{FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
-	if err != nil {
-		return ProjectsSummary{}, opsutil.StoreFailed(err, "projects ops summary")
-	}
-	return ProjectsSummary{
-		ProjectTotal:   r.ProjectTotal,
-		KeyTotal:       r.KeyTotal,
-		KeyEnabled:     r.KeyEnabled,
-		RequestTotal:   r.RequestTotal,
-		ConsumptionUSD: opsutil.NumericString(r.ConsumptionUsd),
-	}, nil
-}
-
-func (s *Service) ProjectsTable(ctx context.Context, p ProjectsTableParams) ([]ProjectRow, int64, error) {
-	rows, err := s.store.ProjectsOpsTable(ctx, sqlc.ProjectsOpsTableParams{
-		FromTime:   opsutil.TsNarg(p.From),
-		ToTime:     opsutil.TsNarg(p.To),
-		Search:     opsutil.TextNarg(p.Search),
-		SortField:  opsutil.TextNarg(p.SortField),
-		SortDesc:   opsutil.BoolNarg(p.SortDesc),
-		PageLimit:  p.Limit,
-		PageOffset: p.Offset,
-	})
-	if err != nil {
-		return nil, 0, opsutil.StoreFailed(err, "projects ops table")
-	}
-	total, err := s.store.ProjectsOpsTableCount(ctx, opsutil.TextNarg(p.Search))
-	if err != nil {
-		return nil, 0, opsutil.StoreFailed(err, "projects ops table count")
-	}
-	out := make([]ProjectRow, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, ProjectRow{
-			ID:               r.ID,
-			Name:             r.Name,
-			UserID:           r.UserID,
-			UserEmail:        r.UserEmail,
-			DefaultRouteName: opsutil.TextValue(r.DefaultRouteName),
-			KeyTotal:         r.KeyTotal,
-			KeyEnabled:       r.KeyEnabled,
-			RequestTotal:     r.RequestTotal,
-			ConsumptionUSD:   opsutil.NumericString(r.ConsumptionUsd),
-			LastUsedAt:       opsutil.TimeValue(r.LastUsedAt),
-		})
-	}
-	return out, total, nil
-}
-
-// ---- API Key（项目范围）----
+// ---- API Key（用户范围）----
 
 type ApiKeysSummary struct {
 	KeyTotal    int64
@@ -295,8 +203,9 @@ type ApiKeyRow struct {
 	ID             int64
 	Name           string
 	KeyPrefix      string
-	ProjectID      int64
+	UserID         int64
 	Status         string
+	RouteID        *int64
 	RouteName      string
 	SpendLimit     *string
 	SpentTotal     string
@@ -308,28 +217,31 @@ type ApiKeyRow struct {
 	ExpiresAt      *time.Time
 }
 
-func (s *Service) ApiKeysSummary(ctx context.Context, projectID int64) (ApiKeysSummary, error) {
-	r, err := s.store.ApiKeysOpsSummary(ctx, projectID)
+func (s *Service) ApiKeysSummary(ctx context.Context, userID int64) (ApiKeysSummary, error) {
+	r, err := s.store.ApiKeysOpsSummary(ctx, userID)
 	if err != nil {
 		return ApiKeysSummary{}, opsutil.StoreFailed(err, "api keys ops summary")
 	}
 	return ApiKeysSummary{KeyTotal: r.KeyTotal, KeyEnabled: r.KeyEnabled, SpendCapped: r.SpendCapped}, nil
 }
 
-func (s *Service) ApiKeysTable(ctx context.Context, projectID int64, from, to time.Time) ([]ApiKeyRow, error) {
-	rows, err := s.store.ApiKeysOpsTable(ctx, sqlc.ApiKeysOpsTableParams{ProjectID: projectID, FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
+func (s *Service) ApiKeysTable(ctx context.Context, userID int64, from, to time.Time) ([]ApiKeyRow, error) {
+	rows, err := s.store.ApiKeysOpsTable(ctx, sqlc.ApiKeysOpsTableParams{UserID: userID, FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
 	if err != nil {
 		return nil, opsutil.StoreFailed(err, "api keys ops table")
 	}
 	now := time.Now()
 	out := make([]ApiKeyRow, 0, len(rows))
 	for _, k := range rows {
+		// route_id 在 DB 层 NOT NULL（线路必填），恒有值；取地址以 *int64 对外表达。
+		boundRouteID := k.RouteID
 		out = append(out, ApiKeyRow{
 			ID:             k.ID,
 			Name:           k.Name,
 			KeyPrefix:      k.KeyPrefix,
-			ProjectID:      k.ProjectID,
+			UserID:         k.UserID,
 			Status:         keyStatus(k.DisabledAt, k.RevokedAt, k.ExpiresAt, now),
+			RouteID:        &boundRouteID,
 			RouteName:      opsutil.TextValue(k.RouteName),
 			SpendLimit:     numericPtr(k.SpendLimit),
 			SpentTotal:     opsutil.NumericString(k.SpentTotal),

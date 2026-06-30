@@ -57,7 +57,6 @@ func baseRecord() sqlc.RequestRecord {
 		ID:                  1,
 		RequestID:           "req_1",
 		UserID:              7,
-		ProjectID:           3,
 		ApiKeyID:            9,
 		RequestedModelID:    "gpt-5.5",
 		IngressProtocol:     "openai",

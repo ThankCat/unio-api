@@ -17,56 +17,55 @@ type RequestQueryService interface {
 
 // requestSummaryDTO 是请求列表项响应体；不含 internal_error_detail。
 type requestSummaryDTO struct {
-	ID                    int64   `json:"id"`
-	RequestID             string  `json:"request_id"`
-	UserID                int64   `json:"user_id"`
-	ProjectID             int64   `json:"project_id"`
-	APIKeyID              int64   `json:"api_key_id"`
-	RequestedModelID      string  `json:"requested_model_id"`
-	IngressProtocol       string  `json:"ingress_protocol"`
-	Operation             string  `json:"operation"`
-	ResponseModelID       *string `json:"response_model_id"`
-	ResponseProtocol      *string `json:"response_protocol"`
-	ResponseID            *string `json:"response_id"`
-	Stream                bool    `json:"stream"`
-	Status                string  `json:"status"`
-	FinalProviderID       *int64  `json:"final_provider_id"`
-	FinalChannelID        *int64  `json:"final_channel_id"`
-	ErrorCode             *string `json:"error_code"`
-	ErrorMessage          *string `json:"error_message"`
-	DeliveryStatus        string  `json:"delivery_status"`
-	ResponseStartedAt     *string `json:"response_started_at"`
-	ResponseCompletedAt   *string `json:"response_completed_at"`
-	StartedAt             string  `json:"started_at"`
-	CompletedAt           *string `json:"completed_at"`
-	CreatedAt             string  `json:"created_at"`
-	UpdatedAt             string  `json:"updated_at"`
+	ID                  int64   `json:"id"`
+	RequestID           string  `json:"request_id"`
+	UserID              int64   `json:"user_id"`
+	APIKeyID            int64   `json:"api_key_id"`
+	RequestedModelID    string  `json:"requested_model_id"`
+	IngressProtocol     string  `json:"ingress_protocol"`
+	Operation           string  `json:"operation"`
+	ResponseModelID     *string `json:"response_model_id"`
+	ResponseProtocol    *string `json:"response_protocol"`
+	ResponseID          *string `json:"response_id"`
+	Stream              bool    `json:"stream"`
+	Status              string  `json:"status"`
+	FinalProviderID     *int64  `json:"final_provider_id"`
+	FinalChannelID      *int64  `json:"final_channel_id"`
+	ErrorCode           *string `json:"error_code"`
+	ErrorMessage        *string `json:"error_message"`
+	DeliveryStatus      string  `json:"delivery_status"`
+	ResponseStartedAt   *string `json:"response_started_at"`
+	ResponseCompletedAt *string `json:"response_completed_at"`
+	StartedAt           string  `json:"started_at"`
+	CompletedAt         *string `json:"completed_at"`
+	CreatedAt           string  `json:"created_at"`
+	UpdatedAt           string  `json:"updated_at"`
 }
 
 // attemptDTO 是请求详情中的一次上游尝试；internal_error_detail 仅在 ?include_internal=true 时出现。
 type attemptDTO struct {
-	ID                    int64    `json:"id"`
-	AttemptIndex          int32    `json:"attempt_index"`
-	ProviderID            int64    `json:"provider_id"`
-	ChannelID             int64    `json:"channel_id"`
-	AdapterKey            string   `json:"adapter_key"`
-	UpstreamModel         string   `json:"upstream_model"`
-	UpstreamProtocol      string   `json:"upstream_protocol"`
-	UpstreamResponseID    *string  `json:"upstream_response_id"`
-	UpstreamResponseModel *string  `json:"upstream_response_model"`
-	UpstreamFinishReason  *string  `json:"upstream_finish_reason"`
-	FinishClass           *string  `json:"finish_class"`
-	Status                string   `json:"status"`
-	UpstreamStatusCode    *int32   `json:"upstream_status_code"`
-	UpstreamRequestID     *string  `json:"upstream_request_id"`
-	ErrorCode             *string  `json:"error_code"`
-	ErrorMessage          *string  `json:"error_message"`
-	InternalErrorDetail   *string  `json:"internal_error_detail,omitempty"`
-	ResponseStartedAt     *string  `json:"response_started_at"`
-	FinalUsageReceived    bool     `json:"final_usage_received"`
-	StartedAt             string   `json:"started_at"`
-	CompletedAt           *string  `json:"completed_at"`
-	CreatedAt             string   `json:"created_at"`
+	ID                    int64   `json:"id"`
+	AttemptIndex          int32   `json:"attempt_index"`
+	ProviderID            int64   `json:"provider_id"`
+	ChannelID             int64   `json:"channel_id"`
+	AdapterKey            string  `json:"adapter_key"`
+	UpstreamModel         string  `json:"upstream_model"`
+	UpstreamProtocol      string  `json:"upstream_protocol"`
+	UpstreamResponseID    *string `json:"upstream_response_id"`
+	UpstreamResponseModel *string `json:"upstream_response_model"`
+	UpstreamFinishReason  *string `json:"upstream_finish_reason"`
+	FinishClass           *string `json:"finish_class"`
+	Status                string  `json:"status"`
+	UpstreamStatusCode    *int32  `json:"upstream_status_code"`
+	UpstreamRequestID     *string `json:"upstream_request_id"`
+	ErrorCode             *string `json:"error_code"`
+	ErrorMessage          *string `json:"error_message"`
+	InternalErrorDetail   *string `json:"internal_error_detail,omitempty"`
+	ResponseStartedAt     *string `json:"response_started_at"`
+	FinalUsageReceived    bool    `json:"final_usage_received"`
+	StartedAt             string  `json:"started_at"`
+	CompletedAt           *string `json:"completed_at"`
+	CreatedAt             string  `json:"created_at"`
 }
 
 // usageDTO 是请求详情中的协议无关用量事实。
@@ -104,11 +103,6 @@ func (h *requestsHandler) list(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	projectID, err := optionalInt64Query(r, "project_id")
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
 	apiKeyID, err := optionalInt64Query(r, "api_key_id")
 	if err != nil {
 		writeServiceError(w, err)
@@ -141,7 +135,6 @@ func (h *requestsHandler) list(w http.ResponseWriter, r *http.Request) {
 	field, desc := sort.SQLParams()
 	items, total, err := h.service.List(r.Context(), query.RequestListParams{
 		UserID:    userID,
-		ProjectID: projectID,
 		APIKeyID:  apiKeyID,
 		Status:    queryString(r, "status"),
 		Model:     queryString(r, "model"),
@@ -179,30 +172,29 @@ func (h *requestsHandler) get(w http.ResponseWriter, r *http.Request) {
 
 func toRequestSummaryDTO(s query.RequestSummary) requestSummaryDTO {
 	return requestSummaryDTO{
-		ID:                    s.ID,
-		RequestID:             s.RequestID,
-		UserID:                s.UserID,
-		ProjectID:             s.ProjectID,
-		APIKeyID:              s.APIKeyID,
-		RequestedModelID:      s.RequestedModelID,
-		IngressProtocol:       s.IngressProtocol,
-		Operation:             s.Operation,
-		ResponseModelID:       s.ResponseModelID,
-		ResponseProtocol:      s.ResponseProtocol,
-		ResponseID:            s.ResponseID,
-		Stream:                s.Stream,
-		Status:                s.Status,
+		ID:                  s.ID,
+		RequestID:           s.RequestID,
+		UserID:              s.UserID,
+		APIKeyID:            s.APIKeyID,
+		RequestedModelID:    s.RequestedModelID,
+		IngressProtocol:     s.IngressProtocol,
+		Operation:           s.Operation,
+		ResponseModelID:     s.ResponseModelID,
+		ResponseProtocol:    s.ResponseProtocol,
+		ResponseID:          s.ResponseID,
+		Stream:              s.Stream,
+		Status:              s.Status,
 		FinalProviderID:     s.FinalProviderID,
 		FinalChannelID:      s.FinalChannelID,
 		ErrorCode:           s.ErrorCode,
 		ErrorMessage:        s.ErrorMessage,
 		DeliveryStatus:      s.DeliveryStatus,
-		ResponseStartedAt:     rfc3339Ptr(s.ResponseStartedAt),
-		ResponseCompletedAt:   rfc3339Ptr(s.ResponseCompletedAt),
-		StartedAt:             rfc3339(s.StartedAt),
-		CompletedAt:           rfc3339Ptr(s.CompletedAt),
-		CreatedAt:             rfc3339(s.CreatedAt),
-		UpdatedAt:             rfc3339(s.UpdatedAt),
+		ResponseStartedAt:   rfc3339Ptr(s.ResponseStartedAt),
+		ResponseCompletedAt: rfc3339Ptr(s.ResponseCompletedAt),
+		StartedAt:           rfc3339(s.StartedAt),
+		CompletedAt:         rfc3339Ptr(s.CompletedAt),
+		CreatedAt:           rfc3339(s.CreatedAt),
+		UpdatedAt:           rfc3339(s.UpdatedAt),
 	}
 }
 

@@ -32,7 +32,7 @@ func TestRouterV1ChatCompletionWithMissingAPIKey(t *testing.T) {
 	authenticator := &fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -52,7 +52,7 @@ func TestRouterV1ChatCompletionWithAPIKey(t *testing.T) {
 	authenticator := &fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -102,7 +102,7 @@ func TestRouterV1ChatCompletionWithInvalidBody(t *testing.T) {
 	authenticator := &fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -181,7 +181,7 @@ func assertChatCompletionDecodeError(t *testing.T, reqBody string, contentType s
 	authenticator := &fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -231,7 +231,7 @@ func TestRouterV1ChatCompletionWithMissingModel(t *testing.T) {
 	authenticator := &fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -272,7 +272,7 @@ func TestRouterV1ChatCompletionWithMissingMessages(t *testing.T) {
 	authenticator := &fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -352,7 +352,7 @@ func TestRouterV1ChatCompletionCallsService(t *testing.T) {
 	authenticator := &fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -463,7 +463,7 @@ func TestRouterV1ChatCompletionMapsRoutingErrors(t *testing.T) {
 			authenticator := &fakeAPIKeyAuthenticator{
 				principal: &auth.APIKeyPrincipal{
 					APIKeyID:  1,
-					ProjectID: 1,
+					UserID:    1,
 					KeyPrefix: "unio_sk_test",
 				},
 			}
@@ -516,7 +516,7 @@ func TestRouterV1ChatCompletionMapsInsufficientQuota(t *testing.T) {
 	authenticator := &fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -568,7 +568,7 @@ func TestRouterV1ChatCompletionPreservesExplicitZeroTemperature(t *testing.T) {
 	authenticator := &fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -833,7 +833,7 @@ func assertChatCompletionInvalidRequest(t *testing.T, reqBody ChatCompletionRequ
 	authenticator := &fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -905,7 +905,7 @@ func TestChatCompletionMissingModelReturnsOpenAIError(t *testing.T) {
 	// 构造带认证的 router。
 	authenticator := &fakeAPIKeyAuthenticator{principal: &auth.APIKeyPrincipal{
 		APIKeyID:  1,
-		ProjectID: 1,
+		UserID:    1,
 		KeyPrefix: "unio_sk_test",
 	}}
 	router := newTestRouter(authenticator, nil, nil)
@@ -960,7 +960,7 @@ func TestChatCompletionMissingMessagesReturnsOpenAIError(t *testing.T) {
 	// 构造带认证的 router。
 	authenticator := &fakeAPIKeyAuthenticator{principal: &auth.APIKeyPrincipal{
 		APIKeyID:  1,
-		ProjectID: 1,
+		UserID:    1,
 		KeyPrefix: "unio_sk_test",
 	}}
 	router := newTestRouter(authenticator, nil, nil)
@@ -1035,7 +1035,7 @@ func TestRouterV1ChatCompletionWithStreamTrueWritesSSE(t *testing.T) {
 	router := newTestRouter(&fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}, service, nil)
@@ -1128,7 +1128,7 @@ func TestRouterV1ChatCompletionStreamReturnsJSONErrorBeforeFirstChunk(t *testing
 	router := newTestRouter(&fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}, service, nil)
@@ -1186,7 +1186,7 @@ func TestRouterV1ChatCompletionStreamMapsRoutingErrorBeforeFirstChunk(t *testing
 	router := newTestRouter(&fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}, service, nil)
@@ -1238,7 +1238,7 @@ func TestRouterV1ChatCompletionStreamMapsInsufficientQuotaBeforeFirstChunk(t *te
 	router := newTestRouter(&fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}, service, nil)
@@ -1310,7 +1310,7 @@ func TestRouterV1ChatCompletionStreamWritesSSEErrorAfterChunkStarted(t *testing.
 	router := newTestRouter(&fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			UserID:    1,
 			KeyPrefix: "unio_sk_test",
 		},
 	}, service, nil)

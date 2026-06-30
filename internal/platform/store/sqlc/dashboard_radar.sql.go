@@ -417,7 +417,7 @@ func (q *Queries) DashboardBreakdownProvider(ctx context.Context, arg DashboardB
 const dashboardBreakdownRoute = `-- name: DashboardBreakdownRoute :many
 WITH per_request AS (
     SELECT
-        COALESCE(ak.route_id, p.default_route_id) AS route_id,
+        ak.route_id AS route_id,
         rt.name AS route_name,
         rt.status AS route_status,
         r.status,
@@ -426,9 +426,9 @@ WITH per_request AS (
         r.started_at,
         r.completed_at,
         COALESCE(
-            u.uncached_input_tokens + u.cache_read_input_tokens
-            + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
-            + u.output_tokens_total,
+            ur.uncached_input_tokens + ur.cache_read_input_tokens
+            + ur.cache_write_5m_input_tokens + ur.cache_write_1h_input_tokens
+            + ur.output_tokens_total,
             0
         )::bigint AS tokens_total,
         COALESCE(
@@ -445,9 +445,8 @@ WITH per_request AS (
         END AS latency_ms
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    JOIN projects p ON p.id = r.project_id
-    LEFT JOIN routes rt ON rt.id = COALESCE(ak.route_id, p.default_route_id)
-    LEFT JOIN usage_records u ON u.request_record_id = r.id
+    LEFT JOIN routes rt ON rt.id = ak.route_id
+    LEFT JOIN usage_records ur ON ur.request_record_id = r.id
     LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
     LEFT JOIN ledger_entries le ON le.request_record_id = r.id
     WHERE ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
@@ -484,7 +483,7 @@ type DashboardBreakdownRouteParams struct {
 }
 
 type DashboardBreakdownRouteRow struct {
-	RouteID         pgtype.Int8
+	RouteID         int64
 	RouteName       pgtype.Text
 	RouteStatus     pgtype.Text
 	TerminalTotal   int64
@@ -497,8 +496,7 @@ type DashboardBreakdownRouteRow struct {
 	RecentErrorCode pgtype.Text
 }
 
-// DashboardBreakdownRoute 按「就近绑定」归属线路聚合区间请求（§3.1.8）：
-// api_keys.route_id ?? projects.default_route_id ?? 内置桶（route_id 为 NULL）。
+// DashboardBreakdownRoute 按 API Key 绑定线路聚合区间请求（§3.1.8）：归属 = api_keys.route_id（线路必填，无默认回落）。
 // 附 token 合计 / 成本(USD) / P95 延迟；usage_records、cost_snapshots 与请求 1:1，LEFT JOIN 不放大行数。
 func (q *Queries) DashboardBreakdownRoute(ctx context.Context, arg DashboardBreakdownRouteParams) ([]DashboardBreakdownRouteRow, error) {
 	rows, err := q.db.Query(ctx, dashboardBreakdownRoute, arg.FromTime, arg.ToTime)

@@ -177,4 +177,3 @@ func TestMaterializeAdapterSeedReturns200(t *testing.T) {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
 }
-

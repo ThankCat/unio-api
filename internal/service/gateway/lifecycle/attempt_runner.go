@@ -285,6 +285,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			FinalProviderID:   candidate.ProviderID,
 			FinalChannelID:    candidate.Channel.ID,
 			ChannelPriceID:    candidate.ChannelPriceID,
+			SalePrice:         candidate.SalePrice,
 			Facts:             success.Facts,
 		})
 		EndSettlementSpan(settleSpan, settleErr)

@@ -18,7 +18,6 @@ type usageSummaryDTO struct {
 	RequestRecordID         int64   `json:"request_record_id"`
 	RequestID               string  `json:"request_id"`
 	UserID                  int64   `json:"user_id"`
-	ProjectID               int64   `json:"project_id"`
 	APIKeyID                int64   `json:"api_key_id"`
 	RequestedModelID        string  `json:"requested_model_id"`
 	ResponseModelID         *string `json:"response_model_id"`
@@ -40,11 +39,6 @@ type usageHandler struct {
 
 func (h *usageHandler) list(w http.ResponseWriter, r *http.Request) {
 	userID, err := optionalInt64Query(r, "user_id")
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	projectID, err := optionalInt64Query(r, "project_id")
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -73,7 +67,6 @@ func (h *usageHandler) list(w http.ResponseWriter, r *http.Request) {
 	field, desc := sort.SQLParams()
 	items, total, err := h.service.List(r.Context(), query.UsageListParams{
 		UserID:    userID,
-		ProjectID: projectID,
 		Model:     queryString(r, "model"),
 		From:      from,
 		To:        to,
@@ -100,7 +93,6 @@ func toUsageSummaryDTO(u query.UsageSummary) usageSummaryDTO {
 		RequestRecordID:         u.RequestRecordID,
 		RequestID:               u.RequestID,
 		UserID:                  u.UserID,
-		ProjectID:               u.ProjectID,
 		APIKeyID:                u.APIKeyID,
 		RequestedModelID:        u.RequestedModelID,
 		ResponseModelID:         u.ResponseModelID,

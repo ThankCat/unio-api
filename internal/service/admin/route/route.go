@@ -1,13 +1,13 @@
 // Package route 编排 admin 管理端的线路（routes / 渠道商品）读写（阶段 15）。
 //
-// 线路决定「候选池 + 排序策略」：内置「经济/稳定」(pool=all, 系统判定零配置) 只读不可删；
-// 自定义线路可手挑渠道池（explicit），fixed 模式锁定恰好一条渠道。
-// 约束在 service 层强校验（DB 仅有 builtin/fixed 的弱约束），给出可读错误。
+// 线路决定「候选池 + 排序策略」：自定义线路可手挑渠道池（explicit），fixed 模式锁定恰好一条渠道。
+// 约束在 service 层强校验（DB 仅有 fixed 的弱约束），给出可读错误。
 package route
 
 import (
 	"context"
 	"errors"
+	"math/big"
 	"strings"
 	"time"
 
@@ -56,12 +56,13 @@ func NewService(db TxBeginner, queries *sqlc.Queries) *Service {
 
 // Route 是 admin 视角的线路事实（含渠道池）。
 type Route struct {
-	ID          int64
-	Name        string
-	Mode        string
-	PoolKind    string
-	IsBuiltin   bool
-	Status      string
+	ID       int64
+	Name     string
+	Mode     string
+	PoolKind string
+	Status   string
+	// PriceRatio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；十进制字符串承载，避免精度丢失。
+	PriceRatio  string
 	Description *string
 	Channels    []RouteChannel
 	CreatedAt   time.Time
@@ -76,28 +77,30 @@ type RouteChannel struct {
 	ProviderSlug string
 }
 
-// CreateInput 创建自定义线路入参。
+// CreateInput 创建线路入参。PriceRatio 为客户售价倍率（十进制字符串，空=默认 1.0）。
 type CreateInput struct {
 	Name        string
 	Mode        string
 	PoolKind    string
 	Status      string
+	PriceRatio  string
 	Description *string
 	ChannelIDs  []int64
 }
 
-// UpdateInput 更新自定义线路入参（含渠道池整体替换）。
+// UpdateInput 更新线路入参（含渠道池整体替换）。PriceRatio 为客户售价倍率（十进制字符串，空=默认 1.0）。
 type UpdateInput struct {
 	ID          int64
 	Name        string
 	Mode        string
 	PoolKind    string
 	Status      string
+	PriceRatio  string
 	Description *string
 	ChannelIDs  []int64
 }
 
-// List 列出全部线路（内置在前），含 explicit 线路的渠道池。
+// List 列出全部线路，含 explicit 线路的渠道池。
 func (s *Service) List(ctx context.Context) ([]Route, error) {
 	rows, err := s.queries.ListRoutes(ctx)
 	if err != nil {
@@ -147,6 +150,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 	if err := validateRouteShape(name, in.Mode, in.PoolKind, in.Status, in.ChannelIDs); err != nil {
 		return Route{}, err
 	}
+	priceRatio, err := parsePriceRatio(in.PriceRatio)
+	if err != nil {
+		return Route{}, err
+	}
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -160,6 +167,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 		Mode:        in.Mode,
 		PoolKind:    in.PoolKind,
 		Status:      in.Status,
+		PriceRatio:  priceRatio,
 		Description: textParam(in.Description),
 	})
 	if err != nil {
@@ -180,7 +188,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 	return s.Get(ctx, row.ID)
 }
 
-// Update 更新自定义线路（事务内改线路 + 整体替换渠道池）；内置线路只读。
+// Update 更新线路（事务内改线路 + 整体替换渠道池）。
 func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 	if in.ID <= 0 {
 		return Route{}, invalidArgument("id", "id must be positive")
@@ -189,16 +197,16 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 	if err := validateRouteShape(name, in.Mode, in.PoolKind, in.Status, in.ChannelIDs); err != nil {
 		return Route{}, err
 	}
-
-	existing, err := s.queries.GetRouteByID(ctx, in.ID)
+	priceRatio, err := parsePriceRatio(in.PriceRatio)
 	if err != nil {
+		return Route{}, err
+	}
+
+	if _, err := s.queries.GetRouteByID(ctx, in.ID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Route{}, notFound("route not found")
 		}
 		return Route{}, storeFailed(err, "load route")
-	}
-	if existing.IsBuiltin {
-		return Route{}, conflict("builtin route is read-only")
 	}
 
 	tx, err := s.db.Begin(ctx)
@@ -214,6 +222,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 		Mode:        in.Mode,
 		PoolKind:    in.PoolKind,
 		Status:      in.Status,
+		PriceRatio:  priceRatio,
 		Description: textParam(in.Description),
 	}); err != nil {
 		if isUniqueViolation(err) {
@@ -249,9 +258,6 @@ func (s *Service) SetChannels(ctx context.Context, id int64, channelIDs []int64)
 		}
 		return Route{}, storeFailed(err, "load route")
 	}
-	if existing.IsBuiltin {
-		return Route{}, conflict("builtin route pool is read-only")
-	}
 	if existing.PoolKind != PoolExplicit {
 		return Route{}, invalidArgument("pool_kind", "only explicit-pool routes can set channels")
 	}
@@ -280,7 +286,7 @@ func (s *Service) SetChannels(ctx context.Context, id int64, channelIDs []int64)
 	return s.Get(ctx, id)
 }
 
-// Delete 删除自定义线路（内置不可删）；被 api_keys/projects 引用时返回 conflict。
+// Delete 删除线路；被 api_keys/users 引用时返回 conflict。
 func (s *Service) Delete(ctx context.Context, id int64) error {
 	if id <= 0 {
 		return invalidArgument("id", "id must be positive")
@@ -289,22 +295,11 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	rows, err := s.queries.DeleteRoute(ctx, id)
 	if err != nil {
 		if isForeignKeyViolation(err) {
-			return conflict("route is still referenced by api keys or projects")
+			return conflict("route is still referenced by api keys or users")
 		}
 		return storeFailed(err, "delete route")
 	}
 	if rows == 0 {
-		// 0 行：要么不存在，要么是内置线路（DeleteRoute 过滤了 is_builtin）。
-		existing, err := s.queries.GetRouteByID(ctx, id)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return notFound("route not found")
-			}
-			return storeFailed(err, "load route")
-		}
-		if existing.IsBuiltin {
-			return conflict("builtin route cannot be deleted")
-		}
 		return notFound("route not found")
 	}
 
@@ -393,14 +388,14 @@ func validatePoolCount(mode, poolKind string, channelIDs []int64) error {
 
 func toRoute(r sqlc.Route) Route {
 	out := Route{
-		ID:        r.ID,
-		Name:      r.Name,
-		Mode:      r.Mode,
-		PoolKind:  r.PoolKind,
-		IsBuiltin: r.IsBuiltin,
-		Status:    r.Status,
-		CreatedAt: r.CreatedAt.Time,
-		UpdatedAt: r.UpdatedAt.Time,
+		ID:         r.ID,
+		Name:       r.Name,
+		Mode:       r.Mode,
+		PoolKind:   r.PoolKind,
+		Status:     r.Status,
+		PriceRatio: numericString(r.PriceRatio),
+		CreatedAt:  r.CreatedAt.Time,
+		UpdatedAt:  r.UpdatedAt.Time,
 	}
 	if r.Description.Valid {
 		desc := r.Description.String
@@ -414,6 +409,55 @@ func textParam(s *string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: strings.TrimSpace(*s), Valid: true}
+}
+
+// parsePriceRatio 解析客户售价倍率：空=默认 "1"（1.0×=基准价）；否则非负十进制（0=免费，>1=加价，<1=折扣）。
+func parsePriceRatio(raw string) (pgtype.Numeric, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		s = "1"
+	}
+	r, ok := new(big.Rat).SetString(s)
+	if !ok || strings.ContainsAny(s, "eE") || r.Sign() < 0 {
+		return pgtype.Numeric{}, invalidArgument("price_ratio", "must be a non-negative decimal multiplier")
+	}
+	var n pgtype.Numeric
+	if err := n.Scan(s); err != nil {
+		return pgtype.Numeric{}, invalidArgument("price_ratio", "invalid decimal multiplier")
+	}
+	return n, nil
+}
+
+// numericString 把 NUMERIC 精确格式化为十进制字符串（不用 float）；NULL/NaN/Inf → "1"（默认倍率）。
+func numericString(n pgtype.Numeric) string {
+	if !n.Valid || n.NaN || n.InfinityModifier != pgtype.Finite {
+		return "1"
+	}
+	if n.Int == nil {
+		return "0"
+	}
+	negative := n.Int.Sign() < 0
+	digits := new(big.Int).Abs(n.Int).String()
+	exp := int(n.Exp)
+
+	var formatted string
+	switch {
+	case exp == 0:
+		formatted = digits
+	case exp > 0:
+		formatted = digits + strings.Repeat("0", exp)
+	default:
+		scale := -exp
+		if len(digits) <= scale {
+			digits = strings.Repeat("0", scale-len(digits)+1) + digits
+		}
+		point := len(digits) - scale
+		formatted = digits[:point] + "." + digits[point:]
+	}
+	if negative {
+		formatted = "-" + formatted
+	}
+	return formatted
 }
 
 func isUniqueViolation(err error) bool {

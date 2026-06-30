@@ -43,14 +43,13 @@ FROM usage_records
 WHERE request_record_id = sqlc.arg(request_record_id);
 
 -- name: ListUsageRecordsPage :many
--- ListUsageRecordsPage 供 admin 只读查询台（M6）按用户/项目/模型/时间过滤分页倒序列出用量。
--- JOIN request_records 取请求归属维度，便于后台按 user/project/model 检索。
+-- ListUsageRecordsPage 供 admin 只读查询台（M6）按用户/模型/时间过滤分页倒序列出用量。
+-- JOIN request_records 取请求归属维度，便于后台按 user/model 检索。
 SELECT
     u.id,
     u.request_record_id,
     r.request_id,
     r.user_id,
-    r.project_id,
     r.api_key_id,
     r.requested_model_id,
     r.response_model_id,
@@ -67,7 +66,6 @@ SELECT
 FROM usage_records u
 JOIN request_records r ON r.id = u.request_record_id
 WHERE (sqlc.narg('user_id')::bigint IS NULL OR r.user_id = sqlc.narg('user_id')::bigint)
-  AND (sqlc.narg('project_id')::bigint IS NULL OR r.project_id = sqlc.narg('project_id')::bigint)
   AND (sqlc.narg('model')::text IS NULL OR r.requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR u.created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR u.created_at < sqlc.narg('to_time')::timestamptz)
@@ -87,7 +85,6 @@ SELECT COUNT(*) AS total
 FROM usage_records u
 JOIN request_records r ON r.id = u.request_record_id
 WHERE (sqlc.narg('user_id')::bigint IS NULL OR r.user_id = sqlc.narg('user_id')::bigint)
-  AND (sqlc.narg('project_id')::bigint IS NULL OR r.project_id = sqlc.narg('project_id')::bigint)
   AND (sqlc.narg('model')::text IS NULL OR r.requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR u.created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR u.created_at < sqlc.narg('to_time')::timestamptz);

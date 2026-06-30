@@ -73,10 +73,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 
 	queries := sqlc.New(deps.DB)
 
-	chatRouter, err := NewChatRouter(queries, deps.Config.Credential.MasterKey, deps.Logger)
-	if err != nil {
-		return nil, err
-	}
+	chatRouter := NewChatRouter(queries, deps.Logger)
 
 	adapterRegistry, err := NewAdapterRegistry(http.DefaultClient, deps.Logger)
 	if err != nil {

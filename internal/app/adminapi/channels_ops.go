@@ -52,34 +52,34 @@ type channelsOpsSummaryDTO struct {
 }
 
 type channelOpsRowDTO struct {
-	ID               int64   `json:"id"`
-	Name             string  `json:"name"`
-	Status           string  `json:"status"`
-	CreatedAt        string  `json:"created_at"`
-	Protocol         string  `json:"protocol"`
-	AdapterKey       string  `json:"adapter_key"`
-	BaseURL          string  `json:"base_url"`
-	Priority         int32   `json:"priority"`
-	ProviderName     string  `json:"provider_name"`
-	AttemptTotal     int64   `json:"attempt_total"`
-	AttemptSucceeded int64   `json:"attempt_succeeded"`
-	SuccessRate      float64 `json:"success_rate"`
-	TimeoutTotal     int64             `json:"timeout_total"`
-	Latency          latencyStatsDTO   `json:"latency"`
-	Health           string            `json:"health"`
-	LastSuccessAt    *string `json:"last_success_at"`
-	BoundModels      int64   `json:"bound_models"`
-	RecentErrorCode  string  `json:"recent_error_code"`
+	ID               int64           `json:"id"`
+	Name             string          `json:"name"`
+	Status           string          `json:"status"`
+	CreatedAt        string          `json:"created_at"`
+	Protocol         string          `json:"protocol"`
+	AdapterKey       string          `json:"adapter_key"`
+	BaseURL          string          `json:"base_url"`
+	Priority         int32           `json:"priority"`
+	ProviderName     string          `json:"provider_name"`
+	AttemptTotal     int64           `json:"attempt_total"`
+	AttemptSucceeded int64           `json:"attempt_succeeded"`
+	SuccessRate      float64         `json:"success_rate"`
+	TimeoutTotal     int64           `json:"timeout_total"`
+	Latency          latencyStatsDTO `json:"latency"`
+	Health           string          `json:"health"`
+	LastSuccessAt    *string         `json:"last_success_at"`
+	BoundModels      int64           `json:"bound_models"`
+	RecentErrorCode  string          `json:"recent_error_code"`
 }
 
 type channelOpsDetailDTO struct {
-	AttemptTotal     int64   `json:"attempt_total"`
-	AttemptSucceeded int64   `json:"attempt_succeeded"`
-	SuccessRate      float64 `json:"success_rate"`
+	AttemptTotal     int64           `json:"attempt_total"`
+	AttemptSucceeded int64           `json:"attempt_succeeded"`
+	SuccessRate      float64         `json:"success_rate"`
 	TimeoutTotal     int64           `json:"timeout_total"`
 	Latency          latencyStatsDTO `json:"latency"`
 	LastSuccessAt    *string         `json:"last_success_at"`
-	LastFailureAt    *string `json:"last_failure_at"`
+	LastFailureAt    *string         `json:"last_failure_at"`
 }
 
 type channelOpsPerfPointDTO struct {
@@ -106,25 +106,24 @@ type channelOpsErrorDTO struct {
 }
 
 type channelOpsModelDTO struct {
-	ModelID          int64   `json:"model_id"`
-	ModelRef         string  `json:"model_ref"`
-	DisplayName      string  `json:"display_name"`
-	UpstreamModel    string  `json:"upstream_model"`
-	Status           string  `json:"status"`
-	AttemptTotal     int64   `json:"attempt_total"`
-	AttemptSucceeded int64   `json:"attempt_succeeded"`
+	ModelID          int64           `json:"model_id"`
+	ModelRef         string          `json:"model_ref"`
+	DisplayName      string          `json:"display_name"`
+	UpstreamModel    string          `json:"upstream_model"`
+	Status           string          `json:"status"`
+	AttemptTotal     int64           `json:"attempt_total"`
+	AttemptSucceeded int64           `json:"attempt_succeeded"`
 	SuccessRate      float64         `json:"success_rate"`
 	Latency          latencyStatsDTO `json:"latency"`
 	HasPrice         bool            `json:"has_price"`
 }
 
 type channelOpsRouteDTO struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	Mode      string `json:"mode"`
-	PoolKind  string `json:"pool_kind"`
-	Status    string `json:"status"`
-	IsBuiltin bool   `json:"is_builtin"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Mode     string `json:"mode"`
+	PoolKind string `json:"pool_kind"`
+	Status   string `json:"status"`
 }
 
 func (h *channelOpsHandler) summary(w http.ResponseWriter, r *http.Request) {
@@ -382,7 +381,7 @@ func (h *channelOpsHandler) routes(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]channelOpsRouteDTO, 0, len(rows))
 	for _, rt := range rows {
-		out = append(out, channelOpsRouteDTO{ID: rt.ID, Name: rt.Name, Mode: rt.Mode, PoolKind: rt.PoolKind, Status: rt.Status, IsBuiltin: rt.IsBuiltin})
+		out = append(out, channelOpsRouteDTO{ID: rt.ID, Name: rt.Name, Mode: rt.Mode, PoolKind: rt.PoolKind, Status: rt.Status})
 	}
 	writeData(w, http.StatusOK, out)
 }

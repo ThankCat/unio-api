@@ -62,7 +62,7 @@ func TestDeleteChannelCascadeRemovesOwnConfig(t *testing.T) {
 }
 
 // TestDeleteModelCascadeRemovesOwnConfig 验证录错的 model 可一键真删：
-// CTE 清掉它自身的绑定（NO ACTION）后删 model；model_capabilities、project_model_policies
+// CTE 清掉它自身的绑定（NO ACTION）后删 model；model_capabilities、user_model_policies
 // 由 ON DELETE CASCADE 自动清理；channel 本身不受影响。
 func TestDeleteModelCascadeRemovesOwnConfig(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
@@ -70,14 +70,14 @@ func TestDeleteModelCascadeRemovesOwnConfig(t *testing.T) {
 
 	suffix := time.Now().UnixNano()
 	timeoutMS := int32(15000)
-	projectID := createProjectForModelPolicy(t, ctx, queries, suffix)
+	userID := createUserForModelPolicy(t, ctx, queries, suffix)
 
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("del-model-provider-%d", suffix), "enabled")
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("del-model-channel-%d", suffix), "enabled", 10, &timeoutMS)
 	modelID := insertModel(t, ctx, tx, fmt.Sprintf("openai/del-model-%d", suffix), "openai", "enabled")
 	insertChannelModel(t, ctx, tx, channelID, modelID, "del-model-upstream", "enabled")
 	insertModelCapability(t, ctx, tx, modelID, "text.output", "full")
-	insertProjectModelPolicy(t, ctx, tx, projectID, modelID, "denied")
+	insertUserModelPolicy(t, ctx, tx, userID, modelID, "denied")
 
 	affected, err := queries.DeleteModelCascade(ctx, modelID)
 	if err != nil {
@@ -93,8 +93,8 @@ func TestDeleteModelCascadeRemovesOwnConfig(t *testing.T) {
 	if got := countRows(t, ctx, tx, `SELECT count(*) FROM model_capabilities WHERE model_id = $1`, modelID); got != 0 {
 		t.Fatalf("expected model_capabilities ON DELETE CASCADE removed, got %d", got)
 	}
-	if got := countRows(t, ctx, tx, `SELECT count(*) FROM project_model_policies WHERE model_id = $1`, modelID); got != 0 {
-		t.Fatalf("expected project_model_policies ON DELETE CASCADE removed, got %d", got)
+	if got := countRows(t, ctx, tx, `SELECT count(*) FROM user_model_policies WHERE model_id = $1`, modelID); got != 0 {
+		t.Fatalf("expected user_model_policies ON DELETE CASCADE removed, got %d", got)
 	}
 	// channel 本身不应被模型删除连带删掉。
 	if _, err := queries.GetChannel(ctx, channelID); err != nil {

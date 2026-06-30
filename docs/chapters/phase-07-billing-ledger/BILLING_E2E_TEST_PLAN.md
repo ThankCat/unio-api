@@ -102,7 +102,7 @@
 | 项 | 值 |
 |----|-----|
 | 渠道 Base URL | `https://zz1cc.cc.cd/v1` |
-| 渠道 API Key | `sk-GKFabdCun5V6s5mr66v4Ri1Wf2tpdScKFjd59flBqGV7J4JF`（2026-06-25 更新） |
+| 渠道 API Key | `sk-REDACTED（实测时从 .env / 私密渠道获取，勿写入仓库）`（2026-06-25 更新） |
 | 渠道类型 | `protocol=openai`，`adapter_key=openai` |
 | 上游能力 | **原生支持** `POST /v1/responses`（Q5）；Unio 可走 direct 路径 |
 | stream usage | **偶发丢失**（Q6）；真实流量可能触发路线 D，需与 Unio bug 区分 |
@@ -612,7 +612,7 @@ REC-01 → REC-02 → COD-04 → COD-05 → DEL-03 → DEL-04 → AD-01 → AD-0
 | **Q13** | **接受** Codex 一条用户消息 → 多条 API 请求为正常 |
 | **Q14** | **`delivery_status` 必须修 + 必测**（§5.12 DEL-*） |
 
-**上游 Key 更新**（2026-06-25）：`sk-GKFabdCun5V6s5mr66v4Ri1Wf2tpdScKFjd59flBqGV7J4JF`
+**上游 Key 更新**（2026-06-25）：`sk-REDACTED（实测时从 .env / 私密渠道获取，勿写入仓库）`
 
 ---
 

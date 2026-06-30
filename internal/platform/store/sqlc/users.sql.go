@@ -77,9 +77,9 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, display_name, created_at, updated_at
-FROM users
-WHERE id = $1
+SELECT u.id, u.email, u.display_name, u.created_at, u.updated_at
+FROM users u
+WHERE u.id = $1
 LIMIT 1
 `
 
@@ -106,12 +106,12 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (GetUserByIDRow, er
 }
 
 const listUsersPage = `-- name: ListUsersPage :many
-SELECT id, email, display_name, created_at, updated_at
-FROM users
+SELECT u.id, u.email, u.display_name, u.created_at, u.updated_at
+FROM users u
 WHERE ($1::text IS NULL
-       OR email ILIKE '%' || $1::text || '%'
-       OR display_name ILIKE '%' || $1::text || '%')
-ORDER BY id DESC
+       OR u.email ILIKE '%' || $1::text || '%'
+       OR u.display_name ILIKE '%' || $1::text || '%')
+ORDER BY u.id DESC
 LIMIT $3 OFFSET $2
 `
 

@@ -1,6 +1,6 @@
 // Package logfields 提供按请求传播的结构化日志字段。
 //
-// 设计动机：HTTP 访问日志在中间件最外层写出，但 user/project/api_key（认证中间件）
+// 设计动机：HTTP 访问日志在中间件最外层写出，但 user/api_key（认证中间件）
 // 和 request_id/model/provider/channel（gateway）是在更内层才确定的。
 // 通过在请求最外层安装一个可变 *Fields 指针并由下游填充，外层日志即可拿到全量字段。
 //
@@ -24,7 +24,6 @@ type Fields struct {
 	correlationID string
 	requestID     string
 	userID        int64
-	projectID     int64
 	apiKeyID      int64
 	model         string
 	provider      string
@@ -44,7 +43,7 @@ func FromContext(ctx context.Context) (*Fields, bool) {
 }
 
 // SetIdentity 记录认证身份字段。
-func (f *Fields) SetIdentity(userID int64, projectID int64, apiKeyID int64) {
+func (f *Fields) SetIdentity(userID int64, apiKeyID int64) {
 	if f == nil {
 		return
 	}
@@ -52,7 +51,6 @@ func (f *Fields) SetIdentity(userID int64, projectID int64, apiKeyID int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.userID = userID
-	f.projectID = projectID
 	f.apiKeyID = apiKeyID
 }
 
@@ -99,9 +97,6 @@ func (f *Fields) Attrs() []any {
 	if f.userID != 0 {
 		attrs = append(attrs, "user_id", f.userID)
 	}
-	if f.projectID != 0 {
-		attrs = append(attrs, "project_id", f.projectID)
-	}
 	if f.apiKeyID != 0 {
 		attrs = append(attrs, "api_key_id", f.apiKeyID)
 	}
@@ -119,9 +114,9 @@ func (f *Fields) Attrs() []any {
 }
 
 // SetIdentity 在 ctx 存在 Fields 时记录认证身份；否则静默忽略。
-func SetIdentity(ctx context.Context, userID int64, projectID int64, apiKeyID int64) {
+func SetIdentity(ctx context.Context, userID int64, apiKeyID int64) {
 	if f, ok := FromContext(ctx); ok {
-		f.SetIdentity(userID, projectID, apiKeyID)
+		f.SetIdentity(userID, apiKeyID)
 	}
 }
 

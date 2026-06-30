@@ -24,7 +24,7 @@ type ChannelService interface {
 	AdapterKeyOptions() []channel.AdapterKeyOption
 }
 
-// channelDTO 是 channel 的 admin API 响应体；不含上游凭据（只写不回）。
+// channelDTO 是 channel 的 admin API 响应体；含明文上游凭据（产品决策：渠道凭据明文，管理端可查看/复制）。
 // ProviderName 仅分页列表场景有值；单条读取/写入返回为空。
 type channelDTO struct {
 	ID           int64  `json:"id"`
@@ -34,9 +34,11 @@ type channelDTO struct {
 	Protocol     string `json:"protocol"`
 	AdapterKey   string `json:"adapter_key"`
 	BaseURL      string `json:"base_url"`
-	Status       string `json:"status"`
-	Priority     int32  `json:"priority"`
-	TimeoutMs    *int32 `json:"timeout_ms"`
+	// Credential 是明文上游 API key（产品决策：明文存储，管理端可查看/复制/编辑）。
+	Credential string `json:"credential"`
+	Status     string `json:"status"`
+	Priority   int32  `json:"priority"`
+	TimeoutMs  *int32 `json:"timeout_ms"`
 	// RPMLimit/TPMLimit/RPDLimit：渠道级限流上限（P2-8）。null=继承全局默认，0=不限，>0=具体上限。
 	RPMLimit  *int64 `json:"rpm_limit"`
 	TPMLimit  *int64 `json:"tpm_limit"`
@@ -280,6 +282,7 @@ func toChannelDTO(c channel.Channel) channelDTO {
 		Protocol:     c.Protocol,
 		AdapterKey:   c.AdapterKey,
 		BaseURL:      c.BaseURL,
+		Credential:   c.Credential,
 		Status:       c.Status,
 		Priority:     c.Priority,
 		TimeoutMs:    c.TimeoutMs,

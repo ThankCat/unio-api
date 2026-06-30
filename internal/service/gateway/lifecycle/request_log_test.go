@@ -36,6 +36,11 @@ func TestRoutingFailureCodeClassifiesRoutingErrors(t *testing.T) {
 			want: "no_available_channel",
 		},
 		{
+			name: "route not configured",
+			err:  routing.ErrRouteNotConfigured,
+			want: "routing_route_not_configured",
+		},
+		{
 			name: "unknown routing error",
 			err:  errors.New("routing database failed"),
 			want: "routing_error",

@@ -42,12 +42,11 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 
 	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
 	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
-		ProjectID:             principal.ProjectID,
-		ModelID:               req.Model,
-		IngressProtocol:       routing.ProtocolAnthropic,
-		Operation:             routing.OperationMessages,
-		RouteID:               principal.RouteID,
-		ProjectDefaultRouteID: principal.ProjectDefaultRouteID,
+		UserID:          principal.UserID,
+		ModelID:         req.Model,
+		IngressProtocol: routing.ProtocolAnthropic,
+		Operation:       routing.OperationMessages,
+		RouteID:         principal.RouteID,
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)
 	if err != nil {

@@ -16,7 +16,6 @@ type UsageStore interface {
 // UsageListParams 是分页/过滤列出用量的入参；指针/空串/nil 表示该维度不过滤。
 type UsageListParams struct {
 	UserID    *int64
-	ProjectID *int64
 	Model     string
 	From      *time.Time
 	To        *time.Time
@@ -47,7 +46,6 @@ type UsageSummary struct {
 	RequestRecordID         int64
 	RequestID               string
 	UserID                  int64
-	ProjectID               int64
 	APIKeyID                int64
 	RequestedModelID        string
 	ResponseModelID         *string
@@ -77,7 +75,6 @@ func NewUsageService(store UsageStore) *UsageService {
 func (s *UsageService) List(ctx context.Context, params UsageListParams) ([]UsageSummary, int64, error) {
 	rows, err := s.store.ListUsageRecordsPage(ctx, sqlc.ListUsageRecordsPageParams{
 		UserID:     int8Narg(params.UserID),
-		ProjectID:  int8Narg(params.ProjectID),
 		Model:      textNarg(params.Model),
 		FromTime:   tsNarg(params.From),
 		ToTime:     tsNarg(params.To),
@@ -91,11 +88,10 @@ func (s *UsageService) List(ctx context.Context, params UsageListParams) ([]Usag
 	}
 
 	total, err := s.store.CountUsageRecords(ctx, sqlc.CountUsageRecordsParams{
-		UserID:    int8Narg(params.UserID),
-		ProjectID: int8Narg(params.ProjectID),
-		Model:     textNarg(params.Model),
-		FromTime:  tsNarg(params.From),
-		ToTime:    tsNarg(params.To),
+		UserID:   int8Narg(params.UserID),
+		Model:    textNarg(params.Model),
+		FromTime: tsNarg(params.From),
+		ToTime:   tsNarg(params.To),
 	})
 	if err != nil {
 		return nil, 0, storeFailed(err, "count usage records")
@@ -130,7 +126,6 @@ func toUsageSummary(u sqlc.ListUsageRecordsPageRow) UsageSummary {
 		RequestRecordID:         u.RequestRecordID,
 		RequestID:               u.RequestID,
 		UserID:                  u.UserID,
-		ProjectID:               u.ProjectID,
 		APIKeyID:                u.ApiKeyID,
 		RequestedModelID:        u.RequestedModelID,
 		ResponseModelID:         textPtr(u.ResponseModelID),

@@ -3,7 +3,6 @@
 INSERT INTO request_records (
     request_id,
     user_id,
-    project_id,
     api_key_id,
     requested_model_id,
     ingress_protocol,
@@ -27,7 +26,6 @@ INSERT INTO request_records (
 VALUES (
            sqlc.arg(request_id),
            sqlc.arg(user_id),
-           sqlc.arg(project_id),
            sqlc.arg(api_key_id),
            sqlc.arg(requested_model_id),
            sqlc.arg(ingress_protocol),
@@ -52,7 +50,6 @@ RETURNING
     id,
     request_id,
     user_id,
-    project_id,
     api_key_id,
     requested_model_id,
     ingress_protocol,
@@ -82,7 +79,6 @@ SELECT
     id,
     request_id,
     user_id,
-    project_id,
     api_key_id,
     requested_model_id,
     ingress_protocol,
@@ -357,7 +353,6 @@ SELECT
     id,
     request_id,
     user_id,
-    project_id,
     api_key_id,
     requested_model_id,
     ingress_protocol,
@@ -380,7 +375,6 @@ SELECT
     updated_at
 FROM request_records
 WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::bigint)
-  AND (sqlc.narg('project_id')::bigint IS NULL OR project_id = sqlc.narg('project_id')::bigint)
   AND (sqlc.narg('api_key_id')::bigint IS NULL OR api_key_id = sqlc.narg('api_key_id')::bigint)
   AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
   AND (sqlc.narg('model')::text IS NULL OR requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
@@ -405,7 +399,6 @@ LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 SELECT COUNT(*) AS total
 FROM request_records
 WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::bigint)
-  AND (sqlc.narg('project_id')::bigint IS NULL OR project_id = sqlc.narg('project_id')::bigint)
   AND (sqlc.narg('api_key_id')::bigint IS NULL OR api_key_id = sqlc.narg('api_key_id')::bigint)
   AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
   AND (sqlc.narg('model')::text IS NULL OR requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
@@ -419,7 +412,6 @@ SELECT
     id,
     request_id,
     user_id,
-    project_id,
     api_key_id,
     requested_model_id,
     ingress_protocol,

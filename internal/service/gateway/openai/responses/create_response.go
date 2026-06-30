@@ -156,12 +156,11 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 
 	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
 	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
-		ProjectID:             principal.ProjectID,
-		ModelID:               req.Model,
-		IngressProtocol:       routing.ProtocolOpenAI,
-		Operation:             routing.OperationResponses,
-		RouteID:               principal.RouteID,
-		ProjectDefaultRouteID: principal.ProjectDefaultRouteID,
+		UserID:          principal.UserID,
+		ModelID:         req.Model,
+		IngressProtocol: routing.ProtocolOpenAI,
+		Operation:       routing.OperationResponses,
+		RouteID:         principal.RouteID,
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)
 	if err != nil {

@@ -19,8 +19,8 @@ type RecoveryJobStore interface {
 
 // RecoveryJobListParams 是分页/过滤列出 recovery job 的入参；指针/空串/nil 表示该维度不过滤。
 type RecoveryJobListParams struct {
-	Status string
-	UserID *int64
+	Status    string
+	UserID    *int64
 	From      *time.Time
 	To        *time.Time
 	SortField string

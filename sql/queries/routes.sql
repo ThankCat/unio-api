@@ -1,13 +1,14 @@
 -- name: CreateRoute :one
--- CreateRoute 创建自定义线路（is_builtin 恒 false）；mode/pool_kind 组合的 fixed/explicit 数量约束由 service 层校验。
-INSERT INTO routes (name, mode, pool_kind, status, description, is_builtin)
+-- CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
+-- mode/pool_kind 组合的 fixed/explicit 数量约束由 service 层校验。
+INSERT INTO routes (name, mode, pool_kind, status, description, price_ratio)
 VALUES (
     sqlc.arg(name),
     sqlc.arg(mode),
     sqlc.arg(pool_kind),
     sqlc.arg(status),
     sqlc.narg(description),
-    false
+    sqlc.arg(price_ratio)
 )
 RETURNING *;
 
@@ -16,25 +17,22 @@ RETURNING *;
 SELECT * FROM routes WHERE id = sqlc.arg(id) LIMIT 1;
 
 -- name: ListRoutes :many
--- ListRoutes 列出全部线路，内置（经济/稳定）排在前，供 admin 管理台展示。
-SELECT * FROM routes ORDER BY is_builtin DESC, id ASC;
-
--- name: GetBuiltinCheapestRoute :one
--- GetBuiltinCheapestRoute 读取内置「经济」线路，作为线路解析的最终回落。
-SELECT * FROM routes WHERE is_builtin = true AND mode = 'cheapest' LIMIT 1;
+-- ListRoutes 列出全部线路，供 admin 管理台展示。
+SELECT * FROM routes ORDER BY id ASC;
 
 -- name: UpdateRoute :one
--- UpdateRoute 更新自定义线路的名称/策略/池类型/启停/简介；内置线路只读由 service 层拦截。
+-- UpdateRoute 更新线路的名称/策略/池类型/启停/简介/售价倍率。
 UPDATE routes
 SET name = sqlc.arg(name),
     mode = sqlc.arg(mode),
     pool_kind = sqlc.arg(pool_kind),
     status = sqlc.arg(status),
     description = sqlc.narg(description),
+    price_ratio = sqlc.arg(price_ratio),
     updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- name: DeleteRoute :execrows
--- DeleteRoute 删除自定义线路（内置线路不可删）；被 api_keys/projects 引用时由 DB 外键拒绝（23503）。
-DELETE FROM routes WHERE id = sqlc.arg(id) AND is_builtin = false;
+-- DeleteRoute 删除线路；被 api_keys/users 引用时由 DB 外键拒绝（23503）。
+DELETE FROM routes WHERE id = sqlc.arg(id);

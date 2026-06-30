@@ -330,6 +330,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				FinalProviderID:     candidate.ProviderID,
 				FinalChannelID:      candidate.Channel.ID,
 				ChannelPriceID:      candidate.ChannelPriceID,
+				SalePrice:           candidate.SalePrice,
 				Facts:               *streamFacts,
 			})
 			EndSettlementSpan(settleSpan, settleErr)

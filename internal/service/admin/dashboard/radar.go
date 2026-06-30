@@ -322,14 +322,13 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 			}
 			applyBreakdownMoney(&br, r.RevenueUsd, r.CostUsd)
 			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal)
-			if r.RouteID.Valid {
-				id := r.RouteID.Int64
-				br.RefID = &id
-			}
+			// route_id 在 DB 层 NOT NULL（线路必填），恒有值。
+			id := r.RouteID
+			br.RefID = &id
 			if r.RouteName.Valid && r.RouteName.String != "" {
 				br.Label = r.RouteName.String
 			} else {
-				br.Label = "内置 / 未指定线路"
+				br.Label = "未指定线路"
 			}
 			if r.RouteStatus.Valid {
 				br.Status = r.RouteStatus.String

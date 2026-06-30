@@ -203,7 +203,7 @@ func (s *Service) Channels(ctx context.Context, providerID int64, from, to time.
 				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 				r.LatencySample, r.AttemptSucceeded,
 			),
-			HealthBucket:     opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal),
+			HealthBucket: opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal),
 		})
 	}
 	return out, nil
