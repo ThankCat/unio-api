@@ -8,5 +8,8 @@
 tmp/
 build-errors*.log
 
+# go build ./cmd/<x> 在仓库根产生的可执行产物
+/e2e-realtest
+
 # delve 调试二进制（VS Code launch）
 **/__debug_bin*
