@@ -1563,6 +1563,11 @@ TPM（每分钟 token）限流改为「缓存感知」，对齐 Anthropic「cach
 
 3. 只释放 TPM（token 维度）。channel/ingress 的 RPM/RPD（请求计数）代表「确实发起过一次尝试」，
    按上游保护/防滥用的行业惯例不回退。
+
+4. TPM 判定改用「new-api 式准入门槛」（2026-07-02 二次修复）：门槛只看「进入前窗口已用量 sum 是否 >= 上限」，
+   不把本次请求的预估计入门槛——单条请求无论多大都不因自身预估超上限而被拒。RPM/RPD 仍用严格门槛。
+   理由：Codex 每轮重发整段上下文，会话涨到 30 万+ token 后单条保守预占自身就 >= 300k 上限，旧的
+   「sum+est>limit 即拒」会让空窗口也「一说话就 429」。准入放行后仍照常预占、结算回填退回缓存部分收敛窗口。
 ```
 
 原因：
@@ -1573,6 +1578,9 @@ TPM（每分钟 token）限流改为「缓存感知」，对齐 Anthropic「cach
 2. 历史实现只有胜出候选走 backfill 对账，失败/取消/无结算的请求与 fallback 落选渠道的 TPM 预占
    从不显式回退，只能干等 60s 滑动窗口过期——额度「泄漏」在窗口里，造成 bursty/易错负载过早 429，
    并让渠道级 TPM 负载虚高（每个尝试过的渠道都被计入，却只有胜者被对账）。
+3. 旧的「sum+est>limit 即拒」严格门槛把「单条请求自身大小」当拒绝依据：Codex 大会话单条预占 >= 上限时，
+   即使窗口为空也进门即 429（实测 req_d5b7c1e8… 窗口早已清空仍 98ms 秒拒、未触上游）。new-api 的模型限流是
+   准入型（已用量未达上限即放行，请求本身大小不作拒绝依据），别家中转站「不会因一条请求大就拒」正是此理。
 ```
 
 影响：
@@ -1585,12 +1593,15 @@ TPM（每分钟 token）限流改为「缓存感知」，对齐 Anthropic「cach
 3. internal/platform/ratelimit/sliding.go：checkAndAddScript 判定前把窗口聚合和 floor 到 0（E2E 发现的加固）——
    负向回填/释放落在比预占更晚的秒桶，预占桶先滚出窗口时聚合和会短暂为负；用量不可能为负，floor 到 0
    避免负额度授予「超过配置上限」的余量（底层桶仍保留负值随 TTL 自愈）。
-4. TPM 计数从「按预估膨胀、只减不还」转为「按真实用量收敛、失败即回退」，Codex 多轮不再误 429，
-   限流窗口更贴近真实吞吐。
-5. 计费（billing）不受影响：本改造只动 TPM 限流口径，扣费仍按完整 usage facts（含 cache_read 折扣价）。
-6. E2E（真实 Codex，本地 Docker DB）验证：大上下文会话 cache_read 累计 472,576、旧口径 TPM 559,665（会超 300k 上限
-   而中途 429），新口径仅 87,089、全程 0 次 429；取消场景预占 49,378 在结算前被释放归零。详见
-   DESIGN-route-rate-limit.md §15.4。
+4. internal/platform/ratelimit/{sliding.go,guard.go}：新增 admitThenAddScript + CheckThenAdd（准入门槛，
+   门槛只看进入前 sum>=limit）；guard 引入 gateMode，TPM 走 gateAdmit、RPM/RPD 走 gateHard。
+   guard_test.go 按准入语义更新并补：空窗超大单请求放行、已超才拒、回填退回后恢复放行。
+5. TPM 计数从「按预估膨胀、只减不还」转为「按真实用量收敛、失败即回退」；准入门槛让单条大请求进得来，
+   Codex 多轮/大会话都不再误 429，限流窗口更贴近真实吞吐。
+6. 计费（billing）不受影响：本改造只动 TPM 限流口径，扣费仍按完整 usage facts（含 cache_read 折扣价）。
+7. E2E（真实 Codex，本地 Docker DB）验证：大上下文会话 cache_read 累计 472,576、旧口径 TPM 559,665（会超 300k 上限
+   而中途 429），新口径仅 87,089、全程 0 次 429；取消场景预占 49,378 在结算前被释放归零；
+   30 万+ token 大会话续跑（旧代码进门即 429）全程 0 次 429。详见 DESIGN-route-rate-limit.md §15.4。
 ```
 
 设计文档：[DESIGN-route-rate-limit.md](DESIGN-route-rate-limit.md) §14–§15

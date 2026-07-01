@@ -31,6 +31,23 @@ func (f *fakeStore) CheckAndAdd(_ context.Context, subject string, limit int64, 
 	return CountResult{Allowed: true, Count: current + amount, ResetAt: time.Now()}, nil
 }
 
+// CheckThenAdd 复刻 admitThenAddScript 的准入语义：门槛只看进入前已用量（下探 0），未达上限即放行并占用 amount。
+func (f *fakeStore) CheckThenAdd(_ context.Context, subject string, limit int64, _ time.Duration, _ time.Duration, amount int64) (CountResult, error) {
+	f.calls++
+	if f.err != nil {
+		return CountResult{}, f.err
+	}
+	current := f.counts[subject]
+	if current < 0 {
+		current = 0
+	}
+	if limit > 0 && current >= limit {
+		return CountResult{Allowed: false, Count: current}, nil
+	}
+	f.counts[subject] = current + amount
+	return CountResult{Allowed: true, Count: current + amount, ResetAt: time.Now()}, nil
+}
+
 func (f *fakeStore) Add(_ context.Context, subject string, _ time.Duration, _ time.Duration, delta int64) error {
 	if f.err != nil {
 		return f.err
@@ -101,24 +118,83 @@ func TestGuardZeroOverrideMeansUnlimited(t *testing.T) {
 	}
 }
 
+// TestGuardChannelTokensRespectTPM 验证渠道 TPM 的准入门槛：窗口未达上限前放行（允许最后一条冲过上限一次），
+// 一旦已用量达到/超过上限，后续请求被拒（DEC-028 准入语义，替代旧的 sum+amount>limit 严格门槛）。
 func TestGuardChannelTokensRespectTPM(t *testing.T) {
 	store := newFakeStore()
 	guard := NewGuard(store, DefaultLimits{}, false, nil)
 	limits := Limits{TPM: ptr(100)}
 
+	// 已用量 0 < 100 → 放行，占用 80。
 	if decision, err := guard.AllowChannel(context.Background(), 3, limits, 80); err != nil || !decision.Allowed {
 		t.Fatalf("first 80 tokens should pass: decision=%+v err=%v", decision, err)
 	}
-	// 已占 80，再来 30 超过 100 应拒绝。
-	decision, err := guard.AllowChannel(context.Background(), 3, limits, 30)
+	// 已用量 80 < 100 → 仍放行（准入门槛不看本次 amount），占用后窗口冲到 110。
+	if decision, err := guard.AllowChannel(context.Background(), 3, limits, 30); err != nil || !decision.Allowed {
+		t.Fatalf("second request should be admitted while window (80) is under limit: decision=%+v err=%v", decision, err)
+	}
+	// 已用量 110 >= 100 → 拒绝。
+	decision, err := guard.AllowChannel(context.Background(), 3, limits, 1)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if decision.Allowed {
-		t.Fatalf("expected tpm rejection when 80+30 > 100")
+		t.Fatalf("expected tpm rejection when window already at/over limit")
 	}
 	if decision.Dimension != DimensionTPM {
 		t.Fatalf("expected tpm dimension, got %s", decision.Dimension)
+	}
+}
+
+// TestGuardRouteUserTokensAdmitsOversizedSingleRequest 锁定 DEC-028 准入门槛：
+// 空窗口下单条预估远超上限的请求也应放行（Codex 每轮重发大缓存上下文的核心场景），
+// 不再「预估超上限即 429」。
+func TestGuardRouteUserTokensAdmitsOversizedSingleRequest(t *testing.T) {
+	store := newFakeStore()
+	guard := NewGuard(store, DefaultLimits{}, false, nil)
+	limits := Limits{TPM: ptr(300_000)}
+
+	// 单条预估 330k > 上限 300k，但窗口为空 → 准入门槛应放行。
+	decision, err := guard.AllowRouteUserTokens(context.Background(), 3, 1, limits, 330_000)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !decision.Allowed {
+		t.Fatalf("oversized single request must be admitted on an empty window (new-api admission gate)")
+	}
+}
+
+// TestGuardRouteUserTokensRejectsWhenAlreadyOverLimit 验证准入门槛在「窗口已用量达/超上限」时才拒绝，
+// 且回填把用量降回上限内后立即恢复放行（对应结算 backfill 退回 cache_read）。
+func TestGuardRouteUserTokensRejectsWhenAlreadyOverLimit(t *testing.T) {
+	store := newFakeStore()
+	guard := NewGuard(store, DefaultLimits{}, false, nil)
+	limits := Limits{TPM: ptr(300_000)}
+
+	// 第一条把窗口冲到 330k（> 上限），准入放行。
+	if d, err := guard.AllowRouteUserTokens(context.Background(), 3, 1, limits, 330_000); err != nil || !d.Allowed {
+		t.Fatalf("first request should be admitted: decision=%+v err=%v", d, err)
+	}
+	// 此时已用量 330k >= 300k → 下一条应被拒。
+	if d, err := guard.AllowRouteUserTokens(context.Background(), 3, 1, limits, 1); err != nil || d.Allowed {
+		t.Fatalf("second request should be rejected while window is over limit: decision=%+v err=%v", d, err)
+	}
+	// 结算回填把预估退回真实小额（如真实仅 5k，delta = 5k-330k）。
+	guard.BackfillRouteUserTokens(context.Background(), 3, 1, 5_000-330_000)
+	// 窗口回落到 5k < 300k → 恢复放行。
+	if d, err := guard.AllowRouteUserTokens(context.Background(), 3, 1, limits, 330_000); err != nil || !d.Allowed {
+		t.Fatalf("request should be admitted again after backfill drains the window: decision=%+v err=%v", d, err)
+	}
+}
+
+// TestGuardChannelTokensAdmitOnEmptyWindow 验证渠道级 TPM 同样用准入门槛：单条大请求不因自身预估超渠道上限被跳过。
+func TestGuardChannelTokensAdmitOnEmptyWindow(t *testing.T) {
+	store := newFakeStore()
+	guard := NewGuard(store, DefaultLimits{}, false, nil)
+	limits := Limits{TPM: ptr(219_000)}
+
+	if d, err := guard.AllowChannel(context.Background(), 1, limits, 300_000); err != nil || !d.Allowed {
+		t.Fatalf("oversized single request must be admitted on empty channel window: decision=%+v err=%v", d, err)
 	}
 }
 

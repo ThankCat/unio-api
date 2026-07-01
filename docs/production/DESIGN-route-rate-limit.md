@@ -426,6 +426,35 @@ flowchart TD
 命令：`go build ./...`、`go vet ./internal/platform/ratelimit/... ./internal/service/gateway/lifecycle/...`、
 `go test ./internal/platform/ratelimit/... ./internal/service/gateway/lifecycle/...`（全绿）。
 
+### 14.6 Fix 5 — TPM 改用「new-api 式准入门槛」（预占不再自我否决，2026-07-02 二次修复）
+
+**问题（上线后又踩的第二个坑）**：Fix 1 解决了「多轮累计把窗口撑爆」，但没解决**单条请求自身把上限顶破**。
+Codex 每轮都把整段对话上下文重发，会话涨到 30 万+ token 后，上游调用前按 `ConservativeInputTokens`（全量输入
+的保守估算）预占 TPM，而旧判定是 `已用量 + 本次预估 > 上限 即拒`。于是**即使窗口为空**，单条请求的预估
+（≈整段输入，30 万+）自己就 ≥ 300k 上限 → 进门即 429（表现为「重启后第一句就 429」，实测 `req_d5b7c1e8…`：
+上一次成功在 5 分钟前、窗口早已清空，仍 98ms 秒拒、未触上游）。
+
+**行业对照**：new-api 的模型限流是**准入型**——只要窗口内**已累计用量未达上限**就放行该请求，请求本身的大小
+不作为拒绝依据（它把该请求计入，允许最后一条冲过上限一次，之后才拒）。别家中转站「不会因为一条请求大就拒」正是此理。
+
+**改法**：把 TPM（token 维度）的判定从「严格门槛」改为「准入门槛」；RPM/RPD（请求计数）保持严格门槛不变。
+- [`sliding.go`](../../internal/platform/ratelimit/sliding.go)：新增 `admitThenAddScript` + `CheckThenAdd`——
+  门槛只看「进入前窗口已用量 `sum`（下探 0）」：`limit>0 且 sum>=limit` 才拒；通过后仍照常占用 `amount`。
+  与 `checkAndAddScript` 的唯一差异是**不把本次 `amount` 计入门槛**。
+- [`guard.go`](../../internal/platform/ratelimit/guard.go)：引入 `gateMode`（`gateHard`/`gateAdmit`）。
+  `AllowRouteUserTokens` 与 `AllowChannel` 的 TPM 维度走 `gateAdmit`；`AllowRouteUserRequest` 与 channel 的
+  RPM/RPD 走 `gateHard`。
+- 预占仍按全量估算计入（reserve/reconcile/release 与 backfill 数学不变）：准入放行后 `+est`，结算回填 `actual-est`
+  把缓存命中部分退回，窗口收敛到真实（排除 cache_read 的）小额用量；下一轮自然 `< 上限` → 不再误 429。
+
+**为什么安全**：准入门槛只放宽「单条请求自身大小」这一条，**真实滥用仍被拦**——当窗口内**已结算的真实用量**
+（排除 cache_read 后）累计达到上限，后续请求照样被拒；渠道级 TPM + `spend_limit`（费用上限）继续兜底上游与账务。
+代价仅是「一条真·全量非缓存的巨型请求会先被放到上游一次再触发限流」，可接受。
+
+**语义变化提示**：渠道 TPM 从「`sum+est>limit` 即跳过」变为「`sum>=limit` 才跳过」，故单条大请求不再在每个渠道
+被连续跳过导致整体 429。相关单测（`guard_test.go` 的 `TestGuardChannelTokensRespectTPM`）已按准入语义更新，
+并新增：空窗口下超大单请求放行、已超上限才拒、回填退回后恢复放行。
+
 ---
 
 ## 15. E2E 测试方案（真实 Codex，独立网关，本地 Docker DB）
@@ -486,4 +515,20 @@ flowchart TD
 预占桶先滚出窗口」的时序偏移。按行业标准（限流不授予负用量余量）在 [`sliding.go`](../../internal/platform/ratelimit/sliding.go)
 判定处把窗口聚合和 floor 到 0（见 §14.4 Fix 4），重编重启后复跑通过。
 
-**结论**：Fix 1/2/3 + Fix 4 全部通过；真实 Codex 多轮/大上下文/取消场景下不再出现过早 429，TPM 计数贴近真实吞吐。
+**结论（Fix 1/2/3/4）**：全部通过；真实 Codex 多轮/大上下文/取消场景下不再出现过早 429，TPM 计数贴近真实吞吐。
+
+### 15.5 Fix 5 复跑（准入门槛，2026-07-02）
+
+上线后发现第二个坑：**单条请求预占自身 ≥ 上限 → 进门即 429**（`req_ed9016ee…`、`req_d5b7c1e8…`；后者上一次成功在
+5 分钟前、窗口早已清空仍 98ms 秒拒、未触上游）。原因是旧判定「已用量 + 本次预估 > 上限 即拒」把「单条请求大小」
+当拒绝依据，而 Codex 会话涨到 30 万+ token 后每轮保守预占自身就 ≥ 300k。按 §14.6 改为 new-api 式准入门槛后复跑：
+
+- **超大单请求准入验证**：对 route 3（tpm=300000）发一条估算 ~88 万 token 的请求（远超上限）：
+  - 修复前：`HTTP 429`，98ms 秒拒，Redis 桶保持 0（未准入、未触上游）。
+  - 修复后（`:8531` 与用户在用的 `:8521` 均验证）：在途 `ru:3:1:tpm = 880030`（**已准入**，预占记入），
+    `curl http=100`（服务端已受理、上游处理中，非 429）；客户端中止后桶回落 `0`（Fix 2 释放照常）。
+- **真实 Codex 多轮会话（17 次上游调用）**：读大文件后连续 4 轮加类型标注 + 编译，全部 `succeeded`，
+  **rate_limit_exceeded = 0**；单轮 cache_read 最高 27,520，对应 billable 仅几百~几千。
+
+**总结论**：Fix 1–5 全部通过。缓存命中不再计入 TPM（Fix 1），失败/取消/落选预占按时释放（Fix 2/3），
+负值不授予超额余量（Fix 4），单条大请求不再自我否决（Fix 5）——真实 Codex 全场景零误 429。

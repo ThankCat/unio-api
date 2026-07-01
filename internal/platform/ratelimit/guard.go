@@ -66,7 +66,10 @@ type Decision struct {
 
 // slidingStore 抽象 Guard 依赖的滑动窗口计数能力，便于单测注入。
 type slidingStore interface {
+	// CheckAndAdd 严格门槛：sum+amount>limit 即拒（用于 RPM/RPD 请求计数维度）。
 	CheckAndAdd(ctx context.Context, subject string, limit int64, window, bucket time.Duration, amount int64) (CountResult, error)
+	// CheckThenAdd 准入门槛：仅当进入前 sum>=limit 才拒（用于 TPM token 维度，单条大请求不因自身预估超限被拒）。
+	CheckThenAdd(ctx context.Context, subject string, limit int64, window, bucket time.Duration, amount int64) (CountResult, error)
 	Add(ctx context.Context, subject string, window, bucket time.Duration, delta int64) error
 }
 
@@ -93,14 +96,14 @@ func NewGuard(store slidingStore, defaults DefaultLimits, failOpen bool, logger 
 func (g *Guard) AllowRouteUserRequest(ctx context.Context, routeID, userID int64, limits Limits) (Decision, error) {
 	subjectRPM := routeUserSubject(routeID, userID, DimensionRPM)
 	rpm := effectiveLimit(limits.RPM, g.defaults.RPM)
-	rpmDecision, err := g.checkSubject(ctx, subjectRPM, DimensionRPM, rpm, rpmWindow, rpmBucket, 1)
+	rpmDecision, err := g.checkSubject(ctx, subjectRPM, DimensionRPM, rpm, rpmWindow, rpmBucket, 1, gateHard)
 	if err != nil || !rpmDecision.Allowed {
 		return rpmDecision, err
 	}
 
 	subjectRPD := routeUserSubject(routeID, userID, DimensionRPD)
 	rpd := effectiveLimit(limits.RPD, g.defaults.RPD)
-	rpdDecision, err := g.checkSubject(ctx, subjectRPD, DimensionRPD, rpd, rpdWindow, rpdBucket, 1)
+	rpdDecision, err := g.checkSubject(ctx, subjectRPD, DimensionRPD, rpd, rpdWindow, rpdBucket, 1, gateHard)
 	if err != nil {
 		return rpdDecision, err
 	}
@@ -111,26 +114,30 @@ func (g *Guard) AllowRouteUserRequest(ctx context.Context, routeID, userID int64
 	return rpmDecision, nil
 }
 
-// AllowRouteUserTokens 按预估 token 数对「线路+用户」的 TPM 做预检并占用，用于上游调用前。
+// AllowRouteUserTokens 按预估 token 数对「线路+用户」的 TPM 做准入检查并占用，用于上游调用前。
+//
+// 采用「准入门槛」（DEC-028）：只要窗口已用量未达上限即放行，本次预估无论多大都不挡——避免 Codex 每轮
+// 重发大缓存上下文时，单条保守预占自身 ≥ 上限而「一说话就 429」。占用仍按预估计入，结算回填退回缓存部分。
 func (g *Guard) AllowRouteUserTokens(ctx context.Context, routeID, userID int64, limits Limits, estTokens int64) (Decision, error) {
 	tpm := effectiveLimit(limits.TPM, g.defaults.TPM)
-	return g.checkSubject(ctx, routeUserSubject(routeID, userID, DimensionTPM), DimensionTPM, tpm, tpmWindow, tpmBucket, nonNegative(estTokens))
+	return g.checkSubject(ctx, routeUserSubject(routeID, userID, DimensionTPM), DimensionTPM, tpm, tpmWindow, tpmBucket, nonNegative(estTokens), gateAdmit)
 }
 
 // AllowChannel 检查 channel 的 RPM/RPD/TPM，用于上游调用前；命中任一维度即拒绝（上层据此跳过该候选 fallback）。
+// RPM/RPD 用严格门槛；TPM 用准入门槛（同 AllowRouteUserTokens，单条大请求不因自身预估超限被跳过）。
 func (g *Guard) AllowChannel(ctx context.Context, channelID int64, limits Limits, estTokens int64) (Decision, error) {
 	rpm := effectiveLimit(limits.RPM, g.defaults.RPM)
-	if decision, err := g.check(ctx, ScopeChannel, channelID, DimensionRPM, rpm, rpmWindow, rpmBucket, 1); err != nil || !decision.Allowed {
+	if decision, err := g.check(ctx, ScopeChannel, channelID, DimensionRPM, rpm, rpmWindow, rpmBucket, 1, gateHard); err != nil || !decision.Allowed {
 		return decision, err
 	}
 
 	rpd := effectiveLimit(limits.RPD, g.defaults.RPD)
-	if decision, err := g.check(ctx, ScopeChannel, channelID, DimensionRPD, rpd, rpdWindow, rpdBucket, 1); err != nil || !decision.Allowed {
+	if decision, err := g.check(ctx, ScopeChannel, channelID, DimensionRPD, rpd, rpdWindow, rpdBucket, 1, gateHard); err != nil || !decision.Allowed {
 		return decision, err
 	}
 
 	tpm := effectiveLimit(limits.TPM, g.defaults.TPM)
-	return g.check(ctx, ScopeChannel, channelID, DimensionTPM, tpm, tpmWindow, tpmBucket, nonNegative(estTokens))
+	return g.check(ctx, ScopeChannel, channelID, DimensionTPM, tpm, tpmWindow, tpmBucket, nonNegative(estTokens), gateAdmit)
 }
 
 // TokensEnforced 报告某主体的 TPM 是否实际生效（>0），供调用方决定是否需要结算回填。
@@ -159,18 +166,36 @@ func (g *Guard) backfillSubject(ctx context.Context, subject string, delta int64
 	}
 }
 
+// gateMode 选择限流门槛语义：hard=严格（sum+amount>limit 拒，用于 RPM/RPD 请求计数）；
+// admit=准入（进入前 sum>=limit 才拒，用于 TPM token 维度，单条大请求不因自身预估超限被拒，DEC-028）。
+type gateMode int
+
+const (
+	gateHard gateMode = iota
+	gateAdmit
+)
+
 // check 对单一维度执行检查并占用 amount（按 scope+id 构造 subject）。limit<=0 视为不限：直接放行且不计数。
-func (g *Guard) check(ctx context.Context, scope Scope, id int64, dim string, limit int64, window, bucket time.Duration, amount int64) (Decision, error) {
-	return g.checkSubject(ctx, subjectFor(scope, id, dim), dim, limit, window, bucket, amount)
+func (g *Guard) check(ctx context.Context, scope Scope, id int64, dim string, limit int64, window, bucket time.Duration, amount int64, gate gateMode) (Decision, error) {
+	return g.checkSubject(ctx, subjectFor(scope, id, dim), dim, limit, window, bucket, amount, gate)
 }
 
 // checkSubject 对给定 subject 的单一维度执行检查并占用 amount。limit<=0 视为不限：直接放行且不计数。
-func (g *Guard) checkSubject(ctx context.Context, subject, dim string, limit int64, window, bucket time.Duration, amount int64) (Decision, error) {
+func (g *Guard) checkSubject(ctx context.Context, subject, dim string, limit int64, window, bucket time.Duration, amount int64, gate gateMode) (Decision, error) {
 	if limit <= 0 {
 		return Decision{Allowed: true, Dimension: dim, Limit: 0}, nil
 	}
 
-	result, err := g.store.CheckAndAdd(ctx, subject, limit, window, bucket, amount)
+	var (
+		result CountResult
+		err    error
+	)
+	switch gate {
+	case gateAdmit:
+		result, err = g.store.CheckThenAdd(ctx, subject, limit, window, bucket, amount)
+	default:
+		result, err = g.store.CheckAndAdd(ctx, subject, limit, window, bucket, amount)
+	}
 	if err != nil {
 		return g.onStoreError(subject, dim, err)
 	}

@@ -44,6 +44,37 @@ end
 return {1, sum + amount}
 `)
 
+// admitThenAddScript 实现「new-api 式准入门槛」的检查并占用（DEC-028，用于 TPM token 维度）：
+//   - 汇总覆盖 [now-window, now] 的所有桶计数并下探为 0（同 checkAndAddScript）；
+//   - 门槛只看「本次请求进入前窗口已用量 sum」是否已达上限：limit<=0 不限；否则 sum>=limit 才拒绝；
+//     与 checkAndAddScript 的关键差异是「不把本次 amount 计入门槛」——单条请求无论多大都不会因为
+//     自身预估超过上限而被拒（否则 Codex 每轮重发 ~30 万 token 上下文，其保守预占单条就 ≥ 上限，
+//     空窗口也进不来 → 一说话就 429）。只要窗口还有余量就放行，随后仍照常占用 amount，
+//     并由结算回填把缓存命中部分退回，使窗口收敛到真实（排除 cache_read 的）用量。
+//   - 通过则把 amount 累加到当前桶并刷新 TTL。
+//
+// 返回 {allowed(0/1), 占用后的窗口计数}。这是「准入型」限流：允许最后一条请求把窗口冲过上限一次，
+// 后续请求在窗口回落前被拒——与 new-api「已用量未达上限即放行、该请求照常计数」的语义一致。
+var admitThenAddScript = redis.NewScript(`
+local sum = 0
+for i = 1, #KEYS do
+  local v = redis.call('GET', KEYS[i])
+  if v then sum = sum + tonumber(v) end
+end
+if sum < 0 then sum = 0 end
+local amount = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+if limit > 0 and sum >= limit then
+  return {0, sum}
+end
+if amount ~= 0 then
+  redis.call('INCRBY', KEYS[1], amount)
+  redis.call('EXPIRE', KEYS[1], ttl)
+end
+return {1, sum + amount}
+`)
+
 // addDeltaScript 无条件把 delta 累加到当前桶（用于 TPM 实际用量回填，delta 可为负）并刷新 TTL。
 var addDeltaScript = redis.NewScript(`
 redis.call('INCRBY', KEYS[1], ARGV[1])
@@ -80,6 +111,27 @@ type CountResult struct {
 func (s *SlidingWindowStore) CheckAndAdd(ctx context.Context, subject string, limit int64, window, bucket time.Duration, amount int64) (CountResult, error) {
 	keys, ttl := s.bucketKeys(subject, window, bucket)
 	res, err := checkAndAddScript.Run(ctx, s.client, keys, amount, limit, int64(ttl/time.Second)).Result()
+	if err != nil {
+		return CountResult{}, err
+	}
+
+	allowed, count, err := parsePair(res)
+	if err != nil {
+		return CountResult{}, err
+	}
+
+	return CountResult{
+		Allowed: allowed == 1,
+		Count:   count,
+		ResetAt: s.now().Add(window),
+	}, nil
+}
+
+// CheckThenAdd 按「new-api 式准入门槛」检查 subject 是否还有余量（门槛只看进入前已用量，不计本次 amount），
+// 有余量则占用 amount。用于 TPM token 维度，避免单条大请求因自身预估超限而被拒（见 admitThenAddScript）。
+func (s *SlidingWindowStore) CheckThenAdd(ctx context.Context, subject string, limit int64, window, bucket time.Duration, amount int64) (CountResult, error) {
+	keys, ttl := s.bucketKeys(subject, window, bucket)
+	res, err := admitThenAddScript.Run(ctx, s.client, keys, amount, limit, int64(ttl/time.Second)).Result()
 	if err != nil {
 		return CountResult{}, err
 	}
