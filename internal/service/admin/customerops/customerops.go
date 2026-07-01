@@ -204,6 +204,7 @@ type ApiKeyRow struct {
 	ID             int64
 	Name           string
 	KeyPrefix      string
+	KeyPlaintext   *string
 	UserID         int64
 	Status         string
 	RouteID        *int64
@@ -268,6 +269,7 @@ func (s *Service) ApiKeysTable(ctx context.Context, p ApiKeysTableParams) ([]Api
 			ID:             k.ID,
 			Name:           k.Name,
 			KeyPrefix:      k.KeyPrefix,
+			KeyPlaintext:   textPtr(k.KeyPlaintext),
 			UserID:         k.UserID,
 			Status:         keyStatus(k.DisabledAt, k.RevokedAt, k.ExpiresAt, now),
 			RouteID:        &boundRouteID,
@@ -303,5 +305,13 @@ func numericPtr(n pgtype.Numeric) *string {
 		return nil
 	}
 	s := opsutil.NumericString(n)
+	return &s
+}
+
+func textPtr(t pgtype.Text) *string {
+	if !t.Valid {
+		return nil
+	}
+	s := t.String
 	return &s
 }
