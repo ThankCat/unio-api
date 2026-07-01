@@ -47,7 +47,7 @@ func TestGuardKeyRequestAllowsUpToLimitThenDenies(t *testing.T) {
 	limits := Limits{RPM: ptr(2)}
 
 	for i := 1; i <= 2; i++ {
-		decision, err := guard.AllowKeyRequest(context.Background(), 7, limits)
+		decision, err := guard.AllowRouteUserRequest(context.Background(), 1, 7, limits)
 		if err != nil {
 			t.Fatalf("call %d unexpected err: %v", i, err)
 		}
@@ -56,7 +56,7 @@ func TestGuardKeyRequestAllowsUpToLimitThenDenies(t *testing.T) {
 		}
 	}
 
-	decision, err := guard.AllowKeyRequest(context.Background(), 7, limits)
+	decision, err := guard.AllowRouteUserRequest(context.Background(), 1, 7, limits)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestGuardUnlimitedSkipsStore(t *testing.T) {
 	// 全局默认 0 + 无覆盖 = 不限：不应触达 store。
 	guard := NewGuard(store, DefaultLimits{}, false, nil)
 
-	decision, err := guard.AllowKeyRequest(context.Background(), 1, Limits{})
+	decision, err := guard.AllowRouteUserRequest(context.Background(), 1, 1, Limits{})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestGuardZeroOverrideMeansUnlimited(t *testing.T) {
 	guard := NewGuard(store, DefaultLimits{RPM: 1, RPD: 1}, false, nil)
 
 	for i := 0; i < 5; i++ {
-		decision, err := guard.AllowKeyRequest(context.Background(), 1, Limits{RPM: ptr(0), RPD: ptr(0)})
+		decision, err := guard.AllowRouteUserRequest(context.Background(), 1, 1, Limits{RPM: ptr(0), RPD: ptr(0)})
 		if err != nil {
 			t.Fatalf("unexpected err: %v", err)
 		}
@@ -128,13 +128,13 @@ func TestGuardBackfillAdjustsTokens(t *testing.T) {
 	limits := Limits{TPM: ptr(1000)}
 
 	// 预占 100。
-	if _, err := guard.AllowKeyTokens(context.Background(), 5, limits, 100); err != nil {
+	if _, err := guard.AllowRouteUserTokens(context.Background(), 1, 5, limits, 100); err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	// 实际用了 250，回填 +150。
-	guard.BackfillKeyTokens(context.Background(), 5, 150)
+	guard.BackfillRouteUserTokens(context.Background(), 1, 5, 150)
 
-	subject := subjectFor(ScopeKey, 5, DimensionTPM)
+	subject := routeUserSubject(1, 5, DimensionTPM)
 	if got := store.counts[subject]; got != 250 {
 		t.Fatalf("expected tpm counter 250 after backfill, got %d", got)
 	}
@@ -145,7 +145,7 @@ func TestGuardFailOpenOnStoreError(t *testing.T) {
 	store.err = errors.New("redis down")
 	guard := NewGuard(store, DefaultLimits{RPM: 10}, true, nil)
 
-	decision, err := guard.AllowKeyRequest(context.Background(), 9, Limits{})
+	decision, err := guard.AllowRouteUserRequest(context.Background(), 1, 9, Limits{})
 	if err != nil {
 		t.Fatalf("fail-open should not return error, got %v", err)
 	}
@@ -159,7 +159,7 @@ func TestGuardFailClosedOnStoreError(t *testing.T) {
 	store.err = errors.New("redis down")
 	guard := NewGuard(store, DefaultLimits{RPM: 10}, false, nil)
 
-	decision, err := guard.AllowKeyRequest(context.Background(), 9, Limits{})
+	decision, err := guard.AllowRouteUserRequest(context.Background(), 1, 9, Limits{})
 	if err == nil {
 		t.Fatalf("fail-closed should return error on store failure")
 	}

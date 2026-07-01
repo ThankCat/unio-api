@@ -20,6 +20,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/admin/channelmodel"
 	"github.com/ThankCat/unio-api/internal/service/admin/channelops"
 	"github.com/ThankCat/unio-api/internal/service/admin/channelprice"
+	"github.com/ThankCat/unio-api/internal/service/admin/channeltest"
 	"github.com/ThankCat/unio-api/internal/service/admin/customer"
 	"github.com/ThankCat/unio-api/internal/service/admin/customerops"
 	"github.com/ThankCat/unio-api/internal/service/admin/dashboard"
@@ -99,6 +100,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	providerService := provider.NewService(queries)
 	providerOpsService := providerops.NewService(queries)
 	channelService := channel.NewService(queries, adapterRegistry)
+	// 渠道检测复用 gateway adapter registry（同一份 adapter/HTTP 链路，检测结果=真实行为）。
+	channelTestService := channeltest.NewService(queries, adapterRegistry)
 	channelOpsService := channelops.NewService(queries)
 	modelService := model.NewService(queries)
 	modelOpsService := modelops.NewService(queries)
@@ -150,6 +153,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		ProviderService:     providerService,
 		ProviderOpsService:  providerOpsService,
 		ChannelService:      channelService,
+		ChannelTestService:  channelTestService,
 		ChannelOpsService:   channelOpsService,
 		ModelService:        modelService,
 		ModelOpsService:     modelOpsService,

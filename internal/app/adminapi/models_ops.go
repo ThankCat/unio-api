@@ -89,8 +89,10 @@ type modelOpsChannelDTO struct {
 	AttemptTotal     int64   `json:"attempt_total"`
 	AttemptSucceeded int64   `json:"attempt_succeeded"`
 	SuccessRate      float64 `json:"success_rate"`
-	LatencyP95       float64 `json:"latency_p95"`
-	HasPrice         bool    `json:"has_price"`
+	LatencyP95       float64  `json:"latency_p95"`
+	HasPrice         bool     `json:"has_price"`
+	InputCost        *string  `json:"input_cost"`
+	OutputCost       *string  `json:"output_cost"`
 }
 
 type modelOpsPerfPointDTO struct {
@@ -262,6 +264,8 @@ func (h *modelOpsHandler) channels(w http.ResponseWriter, r *http.Request) {
 			SuccessRate:      c.SuccessRate,
 			LatencyP95:       c.LatencyP95,
 			HasPrice:         c.HasPrice,
+			InputCost:        c.InputCost,
+			OutputCost:       c.OutputCost,
 		})
 	}
 	writeData(w, http.StatusOK, out)

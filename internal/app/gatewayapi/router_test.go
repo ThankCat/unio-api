@@ -39,9 +39,8 @@ func (a *routerTestAPIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, 
 	return a.principal, a.err
 }
 
-// routerTestRateLimiter 是 router 测试使用的 Key 级限流器替身。
+// routerTestRateLimiter 是 router 测试使用的「线路+用户」级限流器替身。
 type routerTestRateLimiter struct {
-	apiKeyID int64
 	decision ratelimit.Decision
 	err      error
 }
@@ -61,9 +60,8 @@ func (s *routerTestModelCatalogService) ListAvailableModels(ctx context.Context,
 	return s.models, s.err
 }
 
-// AllowKeyRequest 记录收到的 API Key，并返回测试预设的限流判断结果。
-func (l *routerTestRateLimiter) AllowKeyRequest(_ context.Context, apiKeyID int64, _ ratelimit.Limits) (ratelimit.Decision, error) {
-	l.apiKeyID = apiKeyID
+// AllowRouteUserRequest 返回测试预设的限流判断结果。
+func (l *routerTestRateLimiter) AllowRouteUserRequest(_ context.Context, _, _ int64, _ ratelimit.Limits) (ratelimit.Decision, error) {
 	return l.decision, l.err
 }
 

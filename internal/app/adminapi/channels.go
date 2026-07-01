@@ -45,6 +45,11 @@ type channelDTO struct {
 	RPDLimit  *int64 `json:"rpd_limit"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
+	// LastTest*：最近一次主动检测结果（渠道检测，阶段一）。全 null 表示从未检测。
+	LastTestedAt      *string `json:"last_tested_at"`
+	LastTestOK        *bool   `json:"last_test_ok"`
+	LastTestLatencyMs *int32  `json:"last_test_latency_ms"`
+	LastTestError     *string `json:"last_test_error"`
 }
 
 // adapterKeyOptionDTO 是某协议族下一个可选 adapter_key 的枚举项，供前端下拉渲染。
@@ -53,6 +58,32 @@ type adapterKeyOptionDTO struct {
 	Protocol   string `json:"protocol"`
 	AdapterKey string `json:"adapter_key"`
 	IsDefault  bool   `json:"is_default"`
+}
+
+// rateLimitsRequest 是渠道级限流的可选嵌套对象（P2-8，渠道层保护上游）。
+// 整个对象缺省=不变；存在即原子替换三维：各字段 null/缺省=继承全局默认(NULL)，数字（含 0）=显式设定（0=不限）。
+// 注：Key/线路侧限流已归线路（DEC-027），此类型仅服务于渠道级限流。
+type rateLimitsRequest struct {
+	RPM *int64 `json:"rpm"`
+	TPM *int64 `json:"tpm"`
+	RPD *int64 `json:"rpd"`
+}
+
+// validateRateLimits 校验限流值非负（限流上限不能为负数）。
+func validateRateLimits(rl *rateLimitsRequest) error {
+	if rl == nil {
+		return nil
+	}
+	for field, v := range map[string]*int64{"rpm": rl.RPM, "tpm": rl.TPM, "rpd": rl.RPD} {
+		if v != nil && *v < 0 {
+			return failure.New(
+				failure.CodeAdminInvalidArgument,
+				failure.WithMessage("rate limit must be a non-negative integer (0 means unlimited)"),
+				failure.WithField("field", "rate_limits."+field),
+			)
+		}
+	}
+	return nil
 }
 
 type createChannelRequest struct {
@@ -291,5 +322,19 @@ func toChannelDTO(c channel.Channel) channelDTO {
 		RPDLimit:     c.RPDLimit,
 		CreatedAt:    c.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:    c.UpdatedAt.UTC().Format(time.RFC3339),
+
+		LastTestedAt:      formatOptionalTime(c.LastTestedAt),
+		LastTestOK:        c.LastTestOK,
+		LastTestLatencyMs: c.LastTestLatencyMs,
+		LastTestError:     c.LastTestError,
 	}
+}
+
+// formatOptionalTime 把可空时间格式化成 RFC3339 字符串指针（nil 保持 nil）。
+func formatOptionalTime(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	s := t.UTC().Format(time.RFC3339)
+	return &s
 }

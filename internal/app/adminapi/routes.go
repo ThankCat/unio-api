@@ -26,7 +26,11 @@ type routeDTO struct {
 	PoolKind string `json:"pool_kind"`
 	Status   string `json:"status"`
 	// PriceRatio 客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率），十进制字符串。
-	PriceRatio  string            `json:"price_ratio"`
+	PriceRatio string `json:"price_ratio"`
+	// RPM/TPM/RPDLimit 线路级限流上限（DEC-027：按 (线路,用户) 计数）；null=继承全局默认，0=不限，>0=上限。
+	RPMLimit    *int64            `json:"rpm_limit"`
+	TPMLimit    *int64            `json:"tpm_limit"`
+	RPDLimit    *int64            `json:"rpd_limit"`
 	Description *string           `json:"description"`
 	Channels    []routeChannelDTO `json:"channels"`
 	CreatedAt   string            `json:"created_at"`
@@ -46,6 +50,9 @@ type createRouteRequest struct {
 	PoolKind    string  `json:"pool_kind"`
 	Status      string  `json:"status"`
 	PriceRatio  string  `json:"price_ratio"` // 客户售价倍率（十进制字符串，空=默认 1.0）
+	RPMLimit    *int64  `json:"rpm_limit"`   // 线路级限流（null=继承默认，0=不限，>0=上限）
+	TPMLimit    *int64  `json:"tpm_limit"`
+	RPDLimit    *int64  `json:"rpd_limit"`
 	Description *string `json:"description"`
 	ChannelIDs  []int64 `json:"channel_ids"`
 }
@@ -56,6 +63,9 @@ type updateRouteRequest struct {
 	PoolKind    string  `json:"pool_kind"`
 	Status      string  `json:"status"`
 	PriceRatio  string  `json:"price_ratio"` // 客户售价倍率（十进制字符串，空=默认 1.0）
+	RPMLimit    *int64  `json:"rpm_limit"`   // 线路级限流（null=继承默认，0=不限，>0=上限）
+	TPMLimit    *int64  `json:"tpm_limit"`
+	RPDLimit    *int64  `json:"rpd_limit"`
 	Description *string `json:"description"`
 	ChannelIDs  []int64 `json:"channel_ids"`
 }
@@ -107,6 +117,9 @@ func (h *routesHandler) create(w http.ResponseWriter, r *http.Request) {
 		PoolKind:    req.PoolKind,
 		Status:      req.Status,
 		PriceRatio:  req.PriceRatio,
+		RPMLimit:    req.RPMLimit,
+		TPMLimit:    req.TPMLimit,
+		RPDLimit:    req.RPDLimit,
 		Description: req.Description,
 		ChannelIDs:  req.ChannelIDs,
 	})
@@ -135,6 +148,9 @@ func (h *routesHandler) update(w http.ResponseWriter, r *http.Request) {
 		PoolKind:    req.PoolKind,
 		Status:      req.Status,
 		PriceRatio:  req.PriceRatio,
+		RPMLimit:    req.RPMLimit,
+		TPMLimit:    req.TPMLimit,
+		RPDLimit:    req.RPDLimit,
 		Description: req.Description,
 		ChannelIDs:  req.ChannelIDs,
 	})
@@ -194,6 +210,9 @@ func toRouteDTO(rt route.Route) routeDTO {
 		PoolKind:    rt.PoolKind,
 		Status:      rt.Status,
 		PriceRatio:  rt.PriceRatio,
+		RPMLimit:    rt.RPMLimit,
+		TPMLimit:    rt.TPMLimit,
+		RPDLimit:    rt.RPDLimit,
 		Description: rt.Description,
 		Channels:    channels,
 		CreatedAt:   rt.CreatedAt.UTC().Format(time.RFC3339),

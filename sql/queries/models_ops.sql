@@ -162,8 +162,8 @@ GROUP BY m.id, m.model_id, m.display_name, m.owned_by, m.status, m.created_at,
     base.cache_write_5m_input_price, base.cache_write_1h_input_price,
     base.output_price, base.reasoning_output_price
 ORDER BY
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END DESC NULLS LAST,
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'success_rate' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'success_rate' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'name' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN m.model_id END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'name' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN m.model_id END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
@@ -224,16 +224,30 @@ SELECT
     EXISTS (
         SELECT 1 FROM channel_prices p
         WHERE p.channel_id = c.id AND p.model_id = sqlc.arg('model_id') AND p.status = 'enabled'
-    ) AS has_price
+    ) AS has_price,
+    price.uncached_input_cost AS input_cost,
+    price.output_cost AS output_cost
 FROM channel_models cm
 JOIN channels c ON c.id = cm.channel_id
+LEFT JOIN LATERAL (
+    SELECT p.uncached_input_cost, p.output_cost
+    FROM channel_prices p
+    WHERE p.channel_id = c.id
+      AND p.model_id = sqlc.arg('model_id')
+      AND p.status = 'enabled'
+      AND p.effective_from <= now()
+      AND (p.effective_to IS NULL OR p.effective_to > now())
+    ORDER BY p.effective_from DESC, p.id DESC
+    LIMIT 1
+) price ON TRUE
 LEFT JOIN request_attempts a
     ON a.channel_id = cm.channel_id
     AND a.upstream_model = cm.upstream_model
     AND (sqlc.narg('from_time')::timestamptz IS NULL OR a.created_at >= sqlc.narg('from_time')::timestamptz)
     AND (sqlc.narg('to_time')::timestamptz IS NULL OR a.created_at < sqlc.narg('to_time')::timestamptz)
 WHERE cm.model_id = sqlc.arg('model_id')
-GROUP BY c.id, c.name, c.status, cm.status, cm.upstream_model, c.priority
+GROUP BY c.id, c.name, c.status, cm.status, cm.upstream_model, c.priority,
+    price.uncached_input_cost, price.output_cost
 ORDER BY attempt_total DESC, c.priority, c.id;
 
 -- name: ModelOpsPerformanceTimeseries :many

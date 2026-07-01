@@ -61,15 +61,18 @@ type channelOpsRowDTO struct {
 	BaseURL          string          `json:"base_url"`
 	Priority         int32           `json:"priority"`
 	ProviderName     string          `json:"provider_name"`
+	Credential       string          `json:"credential"`
 	AttemptTotal     int64           `json:"attempt_total"`
 	AttemptSucceeded int64           `json:"attempt_succeeded"`
 	SuccessRate      float64         `json:"success_rate"`
 	TimeoutTotal     int64           `json:"timeout_total"`
 	Latency          latencyStatsDTO `json:"latency"`
 	Health           string          `json:"health"`
-	LastSuccessAt    *string         `json:"last_success_at"`
 	BoundModels      int64           `json:"bound_models"`
 	RecentErrorCode  string          `json:"recent_error_code"`
+	RpmLimit         *int32          `json:"rpm_limit"`
+	TpmLimit         *int32          `json:"tpm_limit"`
+	RpdLimit         *int32          `json:"rpd_limit"`
 }
 
 type channelOpsDetailDTO struct {
@@ -176,7 +179,6 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 		"latency":      {},
 		"timeout":      {},
 		"bound_models": {},
-		"last_success": {},
 		"status":       {},
 		"created_at":   {},
 	}, "success_rate", false)
@@ -212,15 +214,18 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			BaseURL:          row.BaseURL,
 			Priority:         row.Priority,
 			ProviderName:     row.ProviderName,
+			Credential:       row.Credential,
 			AttemptTotal:     row.AttemptTotal,
 			AttemptSucceeded: row.AttemptSucceeded,
 			SuccessRate:      row.SuccessRate,
 			TimeoutTotal:     row.TimeoutTotal,
 			Latency:          latencyStatsFrom(row.Latency),
 			Health:           row.HealthBucket,
-			LastSuccessAt:    rfc3339Ptr(row.LastSuccessAt),
 			BoundModels:      row.BoundModels,
 			RecentErrorCode:  row.RecentErrorCode,
+			RpmLimit:         row.RpmLimit,
+			TpmLimit:         row.TpmLimit,
+			RpdLimit:         row.RpdLimit,
 		})
 	}
 	writeList(w, http.StatusOK, dtos, page, total)

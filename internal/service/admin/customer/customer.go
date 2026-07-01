@@ -8,11 +8,13 @@
 package customer
 
 import (
+	"errors"
 	"math/big"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ThankCat/unio-api/internal/platform/failure"
@@ -35,6 +37,16 @@ func notFound(message string) error {
 
 func storeFailed(cause error, message string) error {
 	return failure.Wrap(failure.CodeAdminStoreFailed, cause, failure.WithMessage(message))
+}
+
+func conflict(message string) error {
+	return failure.New(failure.CodeAdminConflict, failure.WithMessage(message))
+}
+
+// isForeignKeyViolation 判断错误是否为 Postgres 外键约束冲突（23503）。
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
 // parseMoney 解析必填正向金额：非负十进制字符串 → pgtype.Numeric。

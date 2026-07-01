@@ -33,13 +33,14 @@ type RateLimitOptions struct {
 	Metrics RateLimitMetricsRecorder
 }
 
-// KeyRateLimiter 定义 middleware 在 ingress 执行 API Key 级请求限流（RPM/RPD）的能力。
+// KeyRateLimiter 定义 middleware 在 ingress 执行「线路+用户」级请求限流（RPM/RPD）的能力（DEC-027）。
 type KeyRateLimiter interface {
-	AllowKeyRequest(ctx context.Context, apiKeyID int64, limits ratelimit.Limits) (ratelimit.Decision, error)
+	AllowRouteUserRequest(ctx context.Context, routeID, userID int64, limits ratelimit.Limits) (ratelimit.Decision, error)
 }
 
-// RateLimit 在 ingress 用认证身份对请求做 API Key 级 RPM/RPD 限流（P2-8）。
-// 每把 Key 的上限取其自身配置，未配置则继承全局默认（由 Guard 解析）。TPM 与渠道级限流在调用上游前于 lifecycle 执行。
+// RateLimit 在 ingress 用认证身份对请求做「线路+用户」级 RPM/RPD 限流（DEC-027）。
+// 上限取自 Key 绑定的线路（未配置则继承全局默认，由 Guard 解析），计数按 (线路,用户) 复合主体——
+// 同一用户在该线路下的所有 Key 共享一个桶。TPM 与渠道级限流在调用上游前于 lifecycle 执行。
 func RateLimit(limiter KeyRateLimiter, opts RateLimitOptions) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,12 +50,19 @@ func RateLimit(limiter KeyRateLimiter, opts RateLimitOptions) func(next http.Han
 				return
 			}
 
+			// 线路必填（DB NOT NULL + 认证期 JOIN routes 保证），恒有值。理论不可达的 nil 分支
+			// 与 lifecycle 侧一致地放行（不静默 500），避免对不可能状态硬失败。
+			if principal.RouteID == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			limits := ratelimit.Limits{
 				RPM: principal.RPMLimit,
 				TPM: principal.TPMLimit,
 				RPD: principal.RPDLimit,
 			}
-			decision, err := limiter.AllowKeyRequest(r.Context(), principal.APIKeyID, limits)
+			decision, err := limiter.AllowRouteUserRequest(r.Context(), *principal.RouteID, principal.UserID, limits)
 			if err != nil {
 				logRateLimitFailure(opts.Logger, principal.APIKeyID, principal.KeyPrefix, err)
 				recordRateLimitDecision(opts.Metrics, metrics.RateLimitDecisionFailClosed)

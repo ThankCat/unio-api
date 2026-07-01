@@ -650,6 +650,10 @@ SELECT
     c.adapter_key,
     c.base_url,
     c.priority,
+    c.credential,
+    c.rpm_limit,
+    c.tpm_limit,
+    c.rpd_limit,
     c.created_at,
     pr.name AS provider_name,
     COUNT(a.id) AS attempt_total,
@@ -670,7 +674,6 @@ SELECT
     COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
-    (MAX(a.completed_at) FILTER (WHERE a.status = 'succeeded'))::timestamptz AS last_success_at,
     (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') AS bound_models,
     (
         SELECT a2.error_code FROM request_attempts a2
@@ -688,7 +691,7 @@ LEFT JOIN request_attempts a
 WHERE ($3::text IS NULL OR c.status = $3::text)
   AND ($4::bigint IS NULL OR c.provider_id = $4::bigint)
   AND ($5::text IS NULL OR c.name ILIKE '%' || $5::text || '%')
-GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, c.base_url, c.priority, c.created_at, pr.name
+GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, c.base_url, c.priority, c.credential, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.created_at, pr.name
 ORDER BY
   CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0)) END DESC NULLS LAST,
   CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0)) END ASC NULLS LAST,
@@ -706,8 +709,6 @@ ORDER BY
   CASE WHEN $6::text = 'timeout' AND NOT COALESCE($7::bool, false) THEN COUNT(a.id) FILTER (WHERE a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded') END ASC NULLS LAST,
   CASE WHEN $6::text = 'bound_models' AND COALESCE($7::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END DESC NULLS LAST,
   CASE WHEN $6::text = 'bound_models' AND NOT COALESCE($7::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END ASC NULLS LAST,
-  CASE WHEN $6::text = 'last_success' AND COALESCE($7::bool, false) THEN MAX(a.completed_at) FILTER (WHERE a.status = 'succeeded') END DESC NULLS LAST,
-  CASE WHEN $6::text = 'last_success' AND NOT COALESCE($7::bool, false) THEN MAX(a.completed_at) FILTER (WHERE a.status = 'succeeded') END ASC NULLS LAST,
   c.id
 LIMIT $9 OFFSET $8
 `
@@ -732,6 +733,10 @@ type ChannelsOpsTableRow struct {
 	AdapterKey       string
 	BaseUrl          string
 	Priority         int32
+	Credential       string
+	RpmLimit         pgtype.Int4
+	TpmLimit         pgtype.Int4
+	RpdLimit         pgtype.Int4
 	CreatedAt        pgtype.Timestamptz
 	ProviderName     string
 	AttemptTotal     int64
@@ -743,7 +748,6 @@ type ChannelsOpsTableRow struct {
 	LatencyP90       float64
 	LatencyP95       float64
 	LatencyP99       float64
-	LastSuccessAt    pgtype.Timestamptz
 	BoundModels      int64
 	RecentErrorCode  pgtype.Text
 }
@@ -776,6 +780,10 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 			&i.AdapterKey,
 			&i.BaseUrl,
 			&i.Priority,
+			&i.Credential,
+			&i.RpmLimit,
+			&i.TpmLimit,
+			&i.RpdLimit,
 			&i.CreatedAt,
 			&i.ProviderName,
 			&i.AttemptTotal,
@@ -787,7 +795,6 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 			&i.LatencyP90,
 			&i.LatencyP95,
 			&i.LatencyP99,
-			&i.LastSuccessAt,
 			&i.BoundModels,
 			&i.RecentErrorCode,
 		); err != nil {

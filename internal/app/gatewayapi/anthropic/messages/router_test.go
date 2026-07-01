@@ -52,8 +52,8 @@ type messagesRateLimiter struct {
 	err      error
 }
 
-// AllowKeyRequest 返回测试预设的限流判断结果。
-func (l *messagesRateLimiter) AllowKeyRequest(_ context.Context, _ int64, _ ratelimit.Limits) (ratelimit.Decision, error) {
+// AllowRouteUserRequest 返回测试预设的限流判断结果。
+func (l *messagesRateLimiter) AllowRouteUserRequest(_ context.Context, _, _ int64, _ ratelimit.Limits) (ratelimit.Decision, error) {
 	return l.decision, l.err
 }
 

@@ -14,16 +14,20 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
 )
 
-// routerTestRateLimiter 是 models handler 集成测试使用的 Key 级限流器替身。
+func ptrInt64(v int64) *int64 { return &v }
+
+// routerTestRateLimiter 是 models handler 集成测试使用的「线路+用户」级限流器替身。
 type routerTestRateLimiter struct {
-	apiKeyID int64
+	routeID  int64
+	userID   int64
 	decision ratelimit.Decision
 	err      error
 }
 
-// AllowKeyRequest 记录收到的 API Key，并返回测试预设的限流判断结果。
-func (l *routerTestRateLimiter) AllowKeyRequest(_ context.Context, apiKeyID int64, _ ratelimit.Limits) (ratelimit.Decision, error) {
-	l.apiKeyID = apiKeyID
+// AllowRouteUserRequest 记录收到的 (线路,用户)，并返回测试预设的限流判断结果。
+func (l *routerTestRateLimiter) AllowRouteUserRequest(_ context.Context, routeID, userID int64, _ ratelimit.Limits) (ratelimit.Decision, error) {
+	l.routeID = routeID
+	l.userID = userID
 	return l.decision, l.err
 }
 

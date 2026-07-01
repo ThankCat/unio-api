@@ -25,10 +25,12 @@ const (
 type Scope string
 
 const (
-	// ScopeKey 表示 API Key 级限流。
+	// ScopeKey 表示 API Key 级限流（已废弃，改为 ScopeRouteUser；保留常量以兼容历史计数键）。
 	ScopeKey Scope = "key"
 	// ScopeChannel 表示渠道级限流。
 	ScopeChannel Scope = "chan"
+	// ScopeRouteUser 表示「线路 + 用户」级限流（DEC-027）：同一用户在某线路下所有 Key 共享一个桶。
+	ScopeRouteUser Scope = "ru"
 )
 
 // 限流维度标识，用于 subject 拼接、响应头与日志。
@@ -86,16 +88,19 @@ func NewGuard(store slidingStore, defaults DefaultLimits, failOpen bool, logger 
 	}
 }
 
-// AllowKeyRequest 检查 API Key 的 RPM 与 RPD（请求计数维度），任一超限即拒绝；返回 RPM 维度判定供响应头使用。
-func (g *Guard) AllowKeyRequest(ctx context.Context, apiKeyID int64, limits Limits) (Decision, error) {
+// AllowRouteUserRequest 检查「线路+用户」的 RPM 与 RPD（请求计数维度），任一超限即拒绝；
+// 返回 RPM 维度判定供响应头使用。同一用户在该线路下的所有 Key 共享同一计数桶（DEC-027）。
+func (g *Guard) AllowRouteUserRequest(ctx context.Context, routeID, userID int64, limits Limits) (Decision, error) {
+	subjectRPM := routeUserSubject(routeID, userID, DimensionRPM)
 	rpm := effectiveLimit(limits.RPM, g.defaults.RPM)
-	rpmDecision, err := g.check(ctx, ScopeKey, apiKeyID, DimensionRPM, rpm, rpmWindow, rpmBucket, 1)
+	rpmDecision, err := g.checkSubject(ctx, subjectRPM, DimensionRPM, rpm, rpmWindow, rpmBucket, 1)
 	if err != nil || !rpmDecision.Allowed {
 		return rpmDecision, err
 	}
 
+	subjectRPD := routeUserSubject(routeID, userID, DimensionRPD)
 	rpd := effectiveLimit(limits.RPD, g.defaults.RPD)
-	rpdDecision, err := g.check(ctx, ScopeKey, apiKeyID, DimensionRPD, rpd, rpdWindow, rpdBucket, 1)
+	rpdDecision, err := g.checkSubject(ctx, subjectRPD, DimensionRPD, rpd, rpdWindow, rpdBucket, 1)
 	if err != nil {
 		return rpdDecision, err
 	}
@@ -106,10 +111,10 @@ func (g *Guard) AllowKeyRequest(ctx context.Context, apiKeyID int64, limits Limi
 	return rpmDecision, nil
 }
 
-// AllowKeyTokens 按预估 token 数对 API Key 的 TPM 做预检并占用，用于上游调用前。
-func (g *Guard) AllowKeyTokens(ctx context.Context, apiKeyID int64, limits Limits, estTokens int64) (Decision, error) {
+// AllowRouteUserTokens 按预估 token 数对「线路+用户」的 TPM 做预检并占用，用于上游调用前。
+func (g *Guard) AllowRouteUserTokens(ctx context.Context, routeID, userID int64, limits Limits, estTokens int64) (Decision, error) {
 	tpm := effectiveLimit(limits.TPM, g.defaults.TPM)
-	return g.check(ctx, ScopeKey, apiKeyID, DimensionTPM, tpm, tpmWindow, tpmBucket, nonNegative(estTokens))
+	return g.checkSubject(ctx, routeUserSubject(routeID, userID, DimensionTPM), DimensionTPM, tpm, tpmWindow, tpmBucket, nonNegative(estTokens))
 }
 
 // AllowChannel 检查 channel 的 RPM/RPD/TPM，用于上游调用前；命中任一维度即拒绝（上层据此跳过该候选 fallback）。
@@ -133,38 +138,41 @@ func (g *Guard) TokensEnforced(limits Limits) bool {
 	return effectiveLimit(limits.TPM, g.defaults.TPM) > 0
 }
 
-// BackfillKeyTokens 在结算拿到真实 token 用量后，按 (actual-est) 修正 Key 的 TPM 计数（delta 可为负）。
-func (g *Guard) BackfillKeyTokens(ctx context.Context, apiKeyID int64, delta int64) {
-	g.backfill(ctx, ScopeKey, apiKeyID, delta)
+// BackfillRouteUserTokens 在结算拿到真实 token 用量后，按 (actual-est) 修正「线路+用户」的 TPM 计数（delta 可为负）。
+func (g *Guard) BackfillRouteUserTokens(ctx context.Context, routeID, userID int64, delta int64) {
+	g.backfillSubject(ctx, routeUserSubject(routeID, userID, DimensionTPM), delta)
 }
 
 // BackfillChannelTokens 在结算拿到真实 token 用量后，按 (actual-est) 修正 channel 的 TPM 计数（delta 可为负）。
 func (g *Guard) BackfillChannelTokens(ctx context.Context, channelID int64, delta int64) {
-	g.backfill(ctx, ScopeChannel, channelID, delta)
+	g.backfillSubject(ctx, subjectFor(ScopeChannel, channelID, DimensionTPM), delta)
 }
 
-func (g *Guard) backfill(ctx context.Context, scope Scope, id int64, delta int64) {
+func (g *Guard) backfillSubject(ctx context.Context, subject string, delta int64) {
 	if delta == 0 {
 		return
 	}
-	subject := subjectFor(scope, id, DimensionTPM)
 	if err := g.store.Add(ctx, subject, tpmWindow, tpmBucket, delta); err != nil && g.logger != nil {
-		args := []any{"scope", string(scope), "id", id, "delta", delta}
+		args := []any{"subject", subject, "delta", delta}
 		args = append(args, failure.LogArgs(err)...)
 		g.logger.Warn("rate limit tpm backfill failed", args...)
 	}
 }
 
-// check 对单一维度执行检查并占用 amount。limit<=0 视为不限：直接放行且不计数。
+// check 对单一维度执行检查并占用 amount（按 scope+id 构造 subject）。limit<=0 视为不限：直接放行且不计数。
 func (g *Guard) check(ctx context.Context, scope Scope, id int64, dim string, limit int64, window, bucket time.Duration, amount int64) (Decision, error) {
+	return g.checkSubject(ctx, subjectFor(scope, id, dim), dim, limit, window, bucket, amount)
+}
+
+// checkSubject 对给定 subject 的单一维度执行检查并占用 amount。limit<=0 视为不限：直接放行且不计数。
+func (g *Guard) checkSubject(ctx context.Context, subject, dim string, limit int64, window, bucket time.Duration, amount int64) (Decision, error) {
 	if limit <= 0 {
 		return Decision{Allowed: true, Dimension: dim, Limit: 0}, nil
 	}
 
-	subject := subjectFor(scope, id, dim)
 	result, err := g.store.CheckAndAdd(ctx, subject, limit, window, bucket, amount)
 	if err != nil {
-		return g.onStoreError(scope, id, dim, err)
+		return g.onStoreError(subject, dim, err)
 	}
 
 	remaining := limit - result.Count
@@ -182,10 +190,10 @@ func (g *Guard) check(ctx context.Context, scope Scope, id int64, dim string, li
 }
 
 // onStoreError 按 failOpen 策略处理计数后端故障。
-func (g *Guard) onStoreError(scope Scope, id int64, dim string, err error) (Decision, error) {
+func (g *Guard) onStoreError(subject, dim string, err error) (Decision, error) {
 	if g.failOpen {
 		if g.logger != nil {
-			args := []any{"scope", string(scope), "id", id, "dimension", dim}
+			args := []any{"subject", subject, "dimension", dim}
 			args = append(args, failure.LogArgs(err)...)
 			g.logger.Warn("rate limit store failed; failing open", args...)
 		}
@@ -214,4 +222,10 @@ func nonNegative(v int64) int64 {
 
 func subjectFor(scope Scope, id int64, dim string) string {
 	return string(scope) + ":" + strconv.FormatInt(id, 10) + ":" + dim
+}
+
+// routeUserSubject 构造「线路+用户」复合计数主体：ru:<routeID>:<userID>:<dim>。
+// 同一用户在该线路下的所有 Key 共享此桶（多建 Key 不放大配额）；不同用户各自独立（DEC-027）。
+func routeUserSubject(routeID, userID int64, dim string) string {
+	return string(ScopeRouteUser) + ":" + strconv.FormatInt(routeID, 10) + ":" + strconv.FormatInt(userID, 10) + ":" + dim
 }

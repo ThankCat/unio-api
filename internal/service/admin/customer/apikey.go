@@ -60,32 +60,24 @@ type APIKeyListParams struct {
 }
 
 // APIKeyCreateParams 表示创建 API Key 的业务参数。
+// 限流已归线路（DEC-027），创建 Key 不再配置令牌级限流。
 type APIKeyCreateParams struct {
 	UserID     int64
 	Name       string
 	ExpiresAt  *time.Time
 	SpendLimit *string // nil/空串 表示不限额
 	RouteID    *int64  // 必填：线路必须显式绑定（缺失/非正数 → route is required）
-	// RateLimitsProvided=true 时按 RPM/TPM/RPD 设置令牌级限流（各值 nil=继承全局默认，0=不限，>0=具体上限）。
-	RateLimitsProvided bool
-	RPMLimit           *int64
-	TPMLimit           *int64
-	RPDLimit           *int64
 }
 
 // APIKeyUpdateParams 表示更新 API Key 的业务参数。
 // 指针为 nil 表示该字段不变；SpendLimit 指向空串表示清除上限（改为不限额）。
 // RouteProvided=true 时按 RouteID 设置线路（RouteID 为 nil 表示清除绑定）。
-// RateLimitsProvided=true 时按 RPM/TPM/RPD 原子设置令牌级限流（各值 nil=继承全局默认，0=不限，>0=具体上限）。
+// 限流已归线路（DEC-027），更新 Key 不再配置令牌级限流。
 type APIKeyUpdateParams struct {
-	Disabled           *bool
-	SpendLimit         *string
-	RouteID            *int64
-	RouteProvided      bool
-	RateLimitsProvided bool
-	RPMLimit           *int64
-	TPMLimit           *int64
-	RPDLimit           *int64
+	Disabled      *bool
+	SpendLimit    *string
+	RouteID       *int64
+	RouteProvided bool
 }
 
 // APIKeyStore 定义 API Key 管理所需的存储能力。
@@ -97,9 +89,9 @@ type APIKeyStore interface {
 	CreateAPIKey(ctx context.Context, arg sqlc.CreateAPIKeyParams) (sqlc.ApiKey, error)
 	SetAPIKeyDisabled(ctx context.Context, arg sqlc.SetAPIKeyDisabledParams) (sqlc.SetAPIKeyDisabledRow, error)
 	RevokeAPIKey(ctx context.Context, id int64) (sqlc.RevokeAPIKeyRow, error)
+	DeleteAPIKey(ctx context.Context, id int64) (int64, error)
 	SetAPIKeySpendLimit(ctx context.Context, arg sqlc.SetAPIKeySpendLimitParams) (sqlc.SetAPIKeySpendLimitRow, error)
 	SetAPIKeyRoute(ctx context.Context, arg sqlc.SetAPIKeyRouteParams) (sqlc.SetAPIKeyRouteRow, error)
-	SetAPIKeyRateLimits(ctx context.Context, arg sqlc.SetAPIKeyRateLimitsParams) (sqlc.SetAPIKeyRateLimitsRow, error)
 }
 
 // APIKeyService 提供 admin API Key 管理。
@@ -213,27 +205,13 @@ func (s *APIKeyService) Create(ctx context.Context, params APIKeyCreateParams) (
 		view = s.buildAPIKey(updated.ID, updated.UserID, updated.Name, updated.KeyPrefix, updated.KeyPlaintext, updated.LastUsedAt, updated.ExpiresAt, updated.DisabledAt, updated.RevokedAt, updated.SpendLimit, updated.SpentTotal, updated.RouteID, updated.RpmLimit, updated.TpmLimit, updated.RpdLimit, updated.CreatedAt, updated.UpdatedAt)
 	}
 
-	// 令牌级限流同样作为独立 UPDATE（CreateAPIKey 不接收 rpm/tpm/rpd），创建后按需补设（P2-8）。
-	if params.RateLimitsProvided {
-		limited, err := s.store.SetAPIKeyRateLimits(ctx, sqlc.SetAPIKeyRateLimitsParams{
-			ID:       created.ID,
-			RpmLimit: int4Narg(params.RPMLimit),
-			TpmLimit: int4Narg(params.TPMLimit),
-			RpdLimit: int4Narg(params.RPDLimit),
-		})
-		if err != nil {
-			return CreatedAPIKey{}, storeFailed(err, "set api key rate limits")
-		}
-		view = s.buildAPIKey(limited.ID, limited.UserID, limited.Name, limited.KeyPrefix, limited.KeyPlaintext, limited.LastUsedAt, limited.ExpiresAt, limited.DisabledAt, limited.RevokedAt, limited.SpendLimit, limited.SpentTotal, limited.RouteID, limited.RpmLimit, limited.TpmLimit, limited.RpdLimit, limited.CreatedAt, limited.UpdatedAt)
-	}
-
 	return CreatedAPIKey{APIKey: view, Plaintext: generated.Plaintext}, nil
 }
 
 // Update 更新 API Key 的启停状态与费用上限（按需各自应用）。
 func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdateParams) (APIKey, error) {
-	if params.Disabled == nil && params.SpendLimit == nil && !params.RouteProvided && !params.RateLimitsProvided {
-		return APIKey{}, invalidArgument("body", "at least one of disabled, spend_limit, route_id or rate limits must be provided")
+	if params.Disabled == nil && params.SpendLimit == nil && !params.RouteProvided {
+		return APIKey{}, invalidArgument("body", "at least one of disabled, spend_limit or route_id must be provided")
 	}
 
 	current, err := s.store.GetAPIKeyByID(ctx, id)
@@ -299,20 +277,6 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdat
 		applied = true
 	}
 
-	if params.RateLimitsProvided {
-		row, err := s.store.SetAPIKeyRateLimits(ctx, sqlc.SetAPIKeyRateLimitsParams{
-			ID:       id,
-			RpmLimit: int4Narg(params.RPMLimit),
-			TpmLimit: int4Narg(params.TPMLimit),
-			RpdLimit: int4Narg(params.RPDLimit),
-		})
-		if err != nil {
-			return APIKey{}, storeFailed(err, "set api key rate limits")
-		}
-		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
-		applied = true
-	}
-
 	if !applied {
 		return s.Get(ctx, id)
 	}
@@ -330,6 +294,28 @@ func (s *APIKeyService) Revoke(ctx context.Context, id int64) (APIKey, error) {
 		return APIKey{}, storeFailed(err, "revoke api key")
 	}
 	return s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt), nil
+}
+
+// Delete 物理删除 API Key，用于清理误建/未使用的 Key（与 channel/model/provider/route 的删除语义对齐）。
+// 一旦该 Key 已产生调用历史（request_records NO ACTION 外键引用），DB 拒绝删除（23503），
+// 降级为 conflict，提示改用吊销——保住计费/审计链路。目标不存在返回 not_found。
+func (s *APIKeyService) Delete(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return invalidArgument("id", "api key id must be positive")
+	}
+
+	affected, err := s.store.DeleteAPIKey(ctx, id)
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return conflict("api key has usage history; revoke it instead of deleting")
+		}
+		return storeFailed(err, "delete api key")
+	}
+	if affected == 0 {
+		return notFound("api key not found")
+	}
+
+	return nil
 }
 
 // buildAPIKey 把各 sqlc row 的公共字段组装为对外 APIKey 视图，并计算状态。
@@ -383,14 +369,6 @@ func int4ToPtr(v pgtype.Int4) *int64 {
 	}
 	out := int64(v.Int32)
 	return &out
-}
-
-// int4Narg 把 *int64 转成可空 pgtype.Int4 写入参数（nil=NULL 继承全局默认；含 0=显式不限）。
-func int4Narg(v *int64) pgtype.Int4 {
-	if v == nil {
-		return pgtype.Int4{Valid: false}
-	}
-	return pgtype.Int4{Int32: int32(*v), Valid: true}
 }
 
 func (s *APIKeyService) computeStatus(disabledAt, revokedAt, expiresAt pgtype.Timestamptz) string {

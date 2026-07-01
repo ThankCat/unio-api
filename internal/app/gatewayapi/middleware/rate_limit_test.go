@@ -16,18 +16,22 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
 )
 
-// fakeKeyRateLimiter 是 RateLimit middleware 测试使用的 Key 级限流器替身。
+func i64(v int64) *int64 { return &v }
+
+// fakeKeyRateLimiter 是 RateLimit middleware 测试使用的「线路+用户」级限流器替身。
 type fakeKeyRateLimiter struct {
-	apiKeyID int64
+	routeID  int64
+	userID   int64
 	limits   ratelimit.Limits
 	decision ratelimit.Decision
 	err      error
 	called   bool
 }
 
-func (l *fakeKeyRateLimiter) AllowKeyRequest(_ context.Context, apiKeyID int64, limits ratelimit.Limits) (ratelimit.Decision, error) {
+func (l *fakeKeyRateLimiter) AllowRouteUserRequest(_ context.Context, routeID, userID int64, limits ratelimit.Limits) (ratelimit.Decision, error) {
 	l.called = true
-	l.apiKeyID = apiKeyID
+	l.routeID = routeID
+	l.userID = userID
 	l.limits = limits
 	return l.decision, l.err
 }
@@ -54,6 +58,7 @@ func TestRateLimitAllowsRequest(t *testing.T) {
 	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
 		APIKeyID:  123,
 		UserID:    456,
+		RouteID:   i64(9),
 		KeyPrefix: "unio_sk_test",
 	}))
 	rec := httptest.NewRecorder()
@@ -66,8 +71,8 @@ func TestRateLimitAllowsRequest(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("want status %d, got %d", http.StatusNoContent, rec.Code)
 	}
-	if limiter.apiKeyID != 123 {
-		t.Fatalf("want api key id 123, got %d", limiter.apiKeyID)
+	if limiter.routeID != 9 || limiter.userID != 456 {
+		t.Fatalf("want route 9 / user 456, got route %d / user %d", limiter.routeID, limiter.userID)
 	}
 	assertRateLimitHeaders(t, rec, "60", "59", resetAt)
 }
@@ -82,6 +87,8 @@ func TestRateLimitForwardsPerKeyLimits(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
 		APIKeyID: 7,
+		UserID:   7,
+		RouteID:  i64(1),
 		RPMLimit: &rpm,
 		RPDLimit: &rpd,
 	}))
@@ -113,6 +120,8 @@ func TestRateLimitRejectsRequest(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
 		APIKeyID:  123,
+		UserID:    123,
+		RouteID:   i64(1),
 		KeyPrefix: "unio_sk_test",
 	}))
 	rec := httptest.NewRecorder()
@@ -142,7 +151,7 @@ func TestRateLimitUnlimitedSkipsHeaders(t *testing.T) {
 
 	handler := RateLimit(limiter, RateLimitOptions{})(next)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{APIKeyID: 1}))
+	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 1, RouteID: i64(1)}))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -184,6 +193,8 @@ func TestRateLimitStoreErrorReturns500(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
 		APIKeyID:  123,
+		UserID:    123,
+		RouteID:   i64(1),
 		KeyPrefix: "unio_sk_test",
 	}))
 	rec := httptest.NewRecorder()
@@ -196,8 +207,8 @@ func TestRateLimitStoreErrorReturns500(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("want status %d, got %d", http.StatusInternalServerError, rec.Code)
 	}
-	if limiter.apiKeyID != 123 {
-		t.Fatalf("want api key id 123, got %d", limiter.apiKeyID)
+	if limiter.userID != 123 {
+		t.Fatalf("want user id 123, got %d", limiter.userID)
 	}
 }
 

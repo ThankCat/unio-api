@@ -46,7 +46,6 @@ type Row struct {
 	TimeoutTotal     int64
 	Latency          opsutil.LatencyStats
 	HealthBucket     string
-	LastSuccessAt    *time.Time
 	Tokens           int64
 	RevenueUSD       string
 	CostUSD          string
@@ -148,9 +147,8 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 				r.LatencySample, r.AttemptSucceeded,
 			),
-			HealthBucket:  opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal),
-			LastSuccessAt: opsutil.TimeValue(r.LastSuccessAt),
-			Tokens:        r.TokensTotal,
+			HealthBucket: opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal),
+			Tokens:       r.TokensTotal,
 			RevenueUSD:    opsutil.NumericString(r.RevenueUsd),
 			CostUSD:       opsutil.NumericString(r.CostUsd),
 			MarginUSD: opsutil.SubtractDecimal(

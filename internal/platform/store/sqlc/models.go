@@ -43,21 +43,25 @@ type CapabilityKey struct {
 }
 
 type Channel struct {
-	ID         int64
-	ProviderID int64
-	Name       string
-	Protocol   string
-	AdapterKey string
-	BaseUrl    string
-	Credential string
-	Status     string
-	Priority   int32
-	TimeoutMs  pgtype.Int4
-	CreatedAt  pgtype.Timestamptz
-	UpdatedAt  pgtype.Timestamptz
-	RpmLimit   pgtype.Int4
-	TpmLimit   pgtype.Int4
-	RpdLimit   pgtype.Int4
+	ID                int64
+	ProviderID        int64
+	Name              string
+	Protocol          string
+	AdapterKey        string
+	BaseUrl           string
+	Credential        string
+	Status            string
+	Priority          int32
+	TimeoutMs         pgtype.Int4
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	RpmLimit          pgtype.Int4
+	TpmLimit          pgtype.Int4
+	RpdLimit          pgtype.Int4
+	LastTestedAt      pgtype.Timestamptz
+	LastTestOk        pgtype.Bool
+	LastTestLatencyMs pgtype.Int4
+	LastTestError     pgtype.Text
 }
 
 type ChannelModel struct {
@@ -342,6 +346,9 @@ type Route struct {
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
 	PriceRatio  pgtype.Numeric
+	RpmLimit    pgtype.Int4
+	TpmLimit    pgtype.Int4
+	RpdLimit    pgtype.Int4
 }
 
 type RouteChannel struct {

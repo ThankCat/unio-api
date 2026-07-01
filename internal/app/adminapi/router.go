@@ -24,6 +24,7 @@ type RouterDeps struct {
 	ProviderService     ProviderService
 	ProviderOpsService  ProviderOpsService
 	ChannelService      ChannelService
+	ChannelTestService  ChannelTestService
 	ChannelOpsService   ChannelOpsService
 	ModelService        ModelService
 	ModelOpsService     ModelOpsService
@@ -157,6 +158,12 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Delete("/channels/{id}", ch.delete)
 		}
 
+		// 渠道主动检测（一键测渠道，阶段一）：向真实上游发一个最小请求验证连通/凭据/模型，只报告不摘除。
+		if deps.ChannelTestService != nil {
+			cth := &channelTestHandler{service: deps.ChannelTestService}
+			r.Post("/channels/{id}/test", cth.test)
+		}
+
 		if deps.ChannelModelService != nil {
 			cmh := &channelModelsHandler{service: deps.ChannelModelService}
 			// channel↔model 绑定是 channel 的子资源，用 {modelId} 定位 Unio 模型。
@@ -287,9 +294,11 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Get("/users/{id}/api-keys", akh.listByUser)
 			r.Post("/users/{id}/api-keys", akh.create)
 			r.Get("/api-keys/{id}", akh.get)
-			// PATCH 调启停/费用上限；DELETE 永久吊销（不可逆）。
+			// PATCH 调启停/费用上限；DELETE 物理删除无调用历史的 Key（有历史→409 提示改用吊销）。
 			r.Patch("/api-keys/{id}", akh.update)
-			r.Delete("/api-keys/{id}", akh.revoke)
+			r.Delete("/api-keys/{id}", akh.delete)
+			// 吊销是保留行与审计的软失效（不可逆），走子资源 POST，与硬删除区分。
+			r.Post("/api-keys/{id}/revoke", akh.revoke)
 		}
 
 		// M5 能力管理：模型能力（手工覆盖）CRUD + 能力 key 注册表（渠道收紧已移除，DEC-023）。

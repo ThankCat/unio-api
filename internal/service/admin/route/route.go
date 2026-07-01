@@ -62,7 +62,12 @@ type Route struct {
 	PoolKind string
 	Status   string
 	// PriceRatio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；十进制字符串承载，避免精度丢失。
-	PriceRatio  string
+	PriceRatio string
+	// RPMLimit/TPMLimit/RPDLimit 是线路级限流上限（DEC-027：按 (线路,用户) 计数）：
+	// nil=继承全局默认，0=显式不限，>0=具体上限。
+	RPMLimit    *int64
+	TPMLimit    *int64
+	RPDLimit    *int64
 	Description *string
 	Channels    []RouteChannel
 	CreatedAt   time.Time
@@ -78,17 +83,22 @@ type RouteChannel struct {
 }
 
 // CreateInput 创建线路入参。PriceRatio 为客户售价倍率（十进制字符串，空=默认 1.0）。
+// RPM/TPM/RPDLimit 为线路级限流上限（nil=继承全局默认，0=不限，>0=上限）。
 type CreateInput struct {
 	Name        string
 	Mode        string
 	PoolKind    string
 	Status      string
 	PriceRatio  string
+	RPMLimit    *int64
+	TPMLimit    *int64
+	RPDLimit    *int64
 	Description *string
 	ChannelIDs  []int64
 }
 
 // UpdateInput 更新线路入参（含渠道池整体替换）。PriceRatio 为客户售价倍率（十进制字符串，空=默认 1.0）。
+// RPM/TPM/RPDLimit 为线路级限流上限（nil=继承全局默认，0=不限，>0=上限）。
 type UpdateInput struct {
 	ID          int64
 	Name        string
@@ -96,6 +106,9 @@ type UpdateInput struct {
 	PoolKind    string
 	Status      string
 	PriceRatio  string
+	RPMLimit    *int64
+	TPMLimit    *int64
+	RPDLimit    *int64
 	Description *string
 	ChannelIDs  []int64
 }
@@ -154,6 +167,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 	if err != nil {
 		return Route{}, err
 	}
+	if err := validateRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit); err != nil {
+		return Route{}, err
+	}
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -168,6 +184,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 		PoolKind:    in.PoolKind,
 		Status:      in.Status,
 		PriceRatio:  priceRatio,
+		RpmLimit:    int4Narg(in.RPMLimit),
+		TpmLimit:    int4Narg(in.TPMLimit),
+		RpdLimit:    int4Narg(in.RPDLimit),
 		Description: textParam(in.Description),
 	})
 	if err != nil {
@@ -201,6 +220,9 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 	if err != nil {
 		return Route{}, err
 	}
+	if err := validateRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit); err != nil {
+		return Route{}, err
+	}
 
 	if _, err := s.queries.GetRouteByID(ctx, in.ID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -223,6 +245,9 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 		PoolKind:    in.PoolKind,
 		Status:      in.Status,
 		PriceRatio:  priceRatio,
+		RpmLimit:    int4Narg(in.RPMLimit),
+		TpmLimit:    int4Narg(in.TPMLimit),
+		RpdLimit:    int4Narg(in.RPDLimit),
 		Description: textParam(in.Description),
 	}); err != nil {
 		if isUniqueViolation(err) {
@@ -394,6 +419,9 @@ func toRoute(r sqlc.Route) Route {
 		PoolKind:   r.PoolKind,
 		Status:     r.Status,
 		PriceRatio: numericString(r.PriceRatio),
+		RPMLimit:   int4ToPtr(r.RpmLimit),
+		TPMLimit:   int4ToPtr(r.TpmLimit),
+		RPDLimit:   int4ToPtr(r.RpdLimit),
 		CreatedAt:  r.CreatedAt.Time,
 		UpdatedAt:  r.UpdatedAt.Time,
 	}
@@ -402,6 +430,40 @@ func toRoute(r sqlc.Route) Route {
 		out.Description = &desc
 	}
 	return out
+}
+
+// validateRateLimits 校验线路级限流三维：nil（继承默认）放行；否则须为 ≥0 整数。
+func validateRateLimits(rpm, tpm, rpd *int64) error {
+	for _, p := range []struct {
+		field string
+		val   *int64
+	}{
+		{"rpm_limit", rpm},
+		{"tpm_limit", tpm},
+		{"rpd_limit", rpd},
+	} {
+		if p.val != nil && *p.val < 0 {
+			return invalidArgument(p.field, "must be zero or a positive integer (0=unlimited, empty=inherit default)")
+		}
+	}
+	return nil
+}
+
+// int4Narg 把 *int64 转成可空 pgtype.Int4（nil=NULL 继承全局默认；含 0=显式不限）。
+func int4Narg(v *int64) pgtype.Int4 {
+	if v == nil {
+		return pgtype.Int4{Valid: false}
+	}
+	return pgtype.Int4{Int32: int32(*v), Valid: true}
+}
+
+// int4ToPtr 把可空 pgtype.Int4 转成 *int64（nil=继承全局默认）。
+func int4ToPtr(v pgtype.Int4) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	out := int64(v.Int32)
+	return &out
 }
 
 func textParam(s *string) pgtype.Text {

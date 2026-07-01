@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ThankCat/unio-api/internal/core/ledger"
@@ -131,6 +132,8 @@ type fakeAPIKeyStore struct {
 	spendLimitSet bool
 	rateLimitsArg sqlc.SetAPIKeyRateLimitsParams
 	rateLimitsSet bool
+	deleteRows    int64
+	deleteErr     error
 }
 
 func (f *fakeAPIKeyStore) ListAPIKeysByUserPage(context.Context, sqlc.ListAPIKeysByUserPageParams) ([]sqlc.ListAPIKeysByUserPageRow, error) {
@@ -154,6 +157,9 @@ func (f *fakeAPIKeyStore) SetAPIKeyDisabled(context.Context, sqlc.SetAPIKeyDisab
 }
 func (f *fakeAPIKeyStore) RevokeAPIKey(context.Context, int64) (sqlc.RevokeAPIKeyRow, error) {
 	return sqlc.RevokeAPIKeyRow{}, nil
+}
+func (f *fakeAPIKeyStore) DeleteAPIKey(context.Context, int64) (int64, error) {
+	return f.deleteRows, f.deleteErr
 }
 func (f *fakeAPIKeyStore) SetAPIKeySpendLimit(_ context.Context, arg sqlc.SetAPIKeySpendLimitParams) (sqlc.SetAPIKeySpendLimitRow, error) {
 	f.spendLimitSet = true
@@ -264,5 +270,34 @@ func TestAPIKeyServiceComputeStatus(t *testing.T) {
 				t.Fatalf("computeStatus = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAPIKeyServiceDeleteSuccess(t *testing.T) {
+	svc := NewAPIKeyService(&fakeAPIKeyStore{deleteRows: 1})
+	if err := svc.Delete(context.Background(), 5); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestAPIKeyServiceDeleteNotFoundWhenNoRows(t *testing.T) {
+	svc := NewAPIKeyService(&fakeAPIKeyStore{deleteRows: 0})
+	if err := svc.Delete(context.Background(), 5); failure.CodeOf(err) != failure.CodeAdminNotFound {
+		t.Fatalf("expected admin_not_found, got %v (%v)", failure.CodeOf(err), err)
+	}
+}
+
+// 已产生调用历史（request_records 外键引用）时，DB 报 23503，服务须降级为 conflict 提示改用吊销。
+func TestAPIKeyServiceDeleteConflictWhenReferenced(t *testing.T) {
+	svc := NewAPIKeyService(&fakeAPIKeyStore{deleteErr: &pgconn.PgError{Code: "23503"}})
+	if err := svc.Delete(context.Background(), 5); failure.CodeOf(err) != failure.CodeAdminConflict {
+		t.Fatalf("expected admin_conflict, got %v (%v)", failure.CodeOf(err), err)
+	}
+}
+
+func TestAPIKeyServiceDeleteRejectsNonPositiveID(t *testing.T) {
+	svc := NewAPIKeyService(&fakeAPIKeyStore{})
+	if err := svc.Delete(context.Background(), 0); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
+		t.Fatalf("expected admin_invalid_argument, got %v (%v)", failure.CodeOf(err), err)
 	}
 }

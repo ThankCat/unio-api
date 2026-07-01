@@ -36,8 +36,7 @@ attempt_agg AS (
                  THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
         COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
             CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-                 THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
-        (MAX(a.completed_at) FILTER (WHERE a.status = 'succeeded'))::timestamptz AS last_success_at
+                 THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99
     FROM filtered_providers fp
     LEFT JOIN request_attempts a
         ON a.provider_id = fp.id
@@ -100,7 +99,6 @@ SELECT
     a.latency_p90,
     a.latency_p95,
     a.latency_p99,
-    a.last_success_at,
     COALESCE(m.tokens_total, 0)::bigint AS tokens_total,
     COALESCE(m.revenue_usd, 0)::numeric AS revenue_usd,
     COALESCE(m.cost_usd, 0)::numeric AS cost_usd,

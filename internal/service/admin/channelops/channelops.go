@@ -93,15 +93,19 @@ type Row struct {
 	BaseURL          string
 	Priority         int32
 	ProviderName     string
+	Credential       string
 	AttemptTotal     int64
 	AttemptSucceeded int64
 	SuccessRate      float64
 	TimeoutTotal     int64
 	Latency          opsutil.LatencyStats
 	HealthBucket     string
-	LastSuccessAt    *time.Time
 	BoundModels      int64
 	RecentErrorCode  string
+	// 渠道级限流上限（P2-8）：nil=继承全局默认，0=不限，>0=具体上限。
+	RpmLimit *int32
+	TpmLimit *int32
+	RpdLimit *int32
 }
 
 // Detail 是抽屉概览 attempt 指标。
@@ -275,6 +279,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			BaseURL:          r.BaseUrl,
 			Priority:         r.Priority,
 			ProviderName:     r.ProviderName,
+			Credential:       r.Credential,
 			AttemptTotal:     r.AttemptTotal,
 			AttemptSucceeded: r.AttemptSucceeded,
 			TimeoutTotal:     r.TimeoutTotal,
@@ -283,9 +288,11 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 				r.LatencySample, r.AttemptSucceeded,
 			),
 			HealthBucket:    healthBucket(r.AttemptSucceeded, r.AttemptTotal),
-			LastSuccessAt:   timeValue(r.LastSuccessAt),
 			BoundModels:     r.BoundModels,
 			RecentErrorCode: textValue(r.RecentErrorCode),
+			RpmLimit:        int4Value(r.RpmLimit),
+			TpmLimit:        int4Value(r.TpmLimit),
+			RpdLimit:        int4Value(r.RpdLimit),
 		}
 		if r.AttemptTotal > 0 {
 			row.SuccessRate = float64(r.AttemptSucceeded) / float64(r.AttemptTotal)

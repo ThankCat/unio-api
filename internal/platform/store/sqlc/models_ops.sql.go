@@ -27,16 +27,30 @@ SELECT
     EXISTS (
         SELECT 1 FROM channel_prices p
         WHERE p.channel_id = c.id AND p.model_id = $1 AND p.status = 'enabled'
-    ) AS has_price
+    ) AS has_price,
+    price.uncached_input_cost AS input_cost,
+    price.output_cost AS output_cost
 FROM channel_models cm
 JOIN channels c ON c.id = cm.channel_id
+LEFT JOIN LATERAL (
+    SELECT p.uncached_input_cost, p.output_cost
+    FROM channel_prices p
+    WHERE p.channel_id = c.id
+      AND p.model_id = $1
+      AND p.status = 'enabled'
+      AND p.effective_from <= now()
+      AND (p.effective_to IS NULL OR p.effective_to > now())
+    ORDER BY p.effective_from DESC, p.id DESC
+    LIMIT 1
+) price ON TRUE
 LEFT JOIN request_attempts a
     ON a.channel_id = cm.channel_id
     AND a.upstream_model = cm.upstream_model
     AND ($2::timestamptz IS NULL OR a.created_at >= $2::timestamptz)
     AND ($3::timestamptz IS NULL OR a.created_at < $3::timestamptz)
 WHERE cm.model_id = $1
-GROUP BY c.id, c.name, c.status, cm.status, cm.upstream_model, c.priority
+GROUP BY c.id, c.name, c.status, cm.status, cm.upstream_model, c.priority,
+    price.uncached_input_cost, price.output_cost
 ORDER BY attempt_total DESC, c.priority, c.id
 `
 
@@ -57,6 +71,8 @@ type ModelOpsChannelsRow struct {
 	AttemptSucceeded int64
 	LatencyP95       float64
 	HasPrice         bool
+	InputCost        pgtype.Numeric
+	OutputCost       pgtype.Numeric
 }
 
 // ModelOpsChannels 单模型的承载渠道（绑定）+ attempt 指标（抽屉渠道 Tab，§3.4 最关键）。
@@ -80,6 +96,8 @@ func (q *Queries) ModelOpsChannels(ctx context.Context, arg ModelOpsChannelsPara
 			&i.AttemptSucceeded,
 			&i.LatencyP95,
 			&i.HasPrice,
+			&i.InputCost,
+			&i.OutputCost,
 		); err != nil {
 			return nil, err
 		}
@@ -543,8 +561,8 @@ GROUP BY m.id, m.model_id, m.display_name, m.owned_by, m.status, m.created_at,
     base.cache_write_5m_input_price, base.cache_write_1h_input_price,
     base.output_price, base.reasoning_output_price
 ORDER BY
-  CASE WHEN COALESCE($5::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($6::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END DESC NULLS LAST,
-  CASE WHEN COALESCE($5::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($6::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END ASC NULLS LAST,
+  CASE WHEN $5::text = 'success_rate' AND COALESCE($6::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END DESC NULLS LAST,
+  CASE WHEN $5::text = 'success_rate' AND NOT COALESCE($6::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END ASC NULLS LAST,
   CASE WHEN $5::text = 'name' AND COALESCE($6::bool, false) THEN m.model_id END DESC NULLS LAST,
   CASE WHEN $5::text = 'name' AND NOT COALESCE($6::bool, false) THEN m.model_id END ASC NULLS LAST,
   CASE WHEN $5::text = 'requests' AND COALESCE($6::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,

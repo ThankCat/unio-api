@@ -109,6 +109,8 @@ type ChannelRow struct {
 	SuccessRate      float64
 	LatencyP95       float64
 	HasPrice         bool
+	InputCost        *string
+	OutputCost       *string
 }
 
 // PerfPoint 是抽屉性能 Tab 时序点。
@@ -297,6 +299,8 @@ func (s *Service) Channels(ctx context.Context, modelID int64, from, to time.Tim
 			SuccessRate:      opsutil.SuccessRate(r.AttemptSucceeded, r.AttemptTotal),
 			LatencyP95:       r.LatencyP95,
 			HasPrice:         r.HasPrice,
+			InputCost:        opsutil.NumericStringPtr(r.InputCost),
+			OutputCost:       opsutil.NumericStringPtr(r.OutputCost),
 		})
 	}
 	return out, nil

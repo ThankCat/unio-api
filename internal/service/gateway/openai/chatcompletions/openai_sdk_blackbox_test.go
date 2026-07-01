@@ -121,7 +121,7 @@ func (sdkBlackboxAuthenticator) AuthenticateAPIKey(_ context.Context, _ string) 
 
 type sdkBlackboxRateLimiter struct{}
 
-func (sdkBlackboxRateLimiter) AllowKeyRequest(context.Context, int64, ratelimit.Limits) (ratelimit.Decision, error) {
+func (sdkBlackboxRateLimiter) AllowRouteUserRequest(context.Context, int64, int64, ratelimit.Limits) (ratelimit.Decision, error) {
 	return ratelimit.Decision{Allowed: true}, nil
 }
 

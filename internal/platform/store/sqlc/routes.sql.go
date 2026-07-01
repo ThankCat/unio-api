@@ -12,16 +12,19 @@ import (
 )
 
 const createRoute = `-- name: CreateRoute :one
-INSERT INTO routes (name, mode, pool_kind, status, description, price_ratio)
+INSERT INTO routes (name, mode, pool_kind, status, description, price_ratio, rpm_limit, tpm_limit, rpd_limit)
 VALUES (
     $1,
     $2,
     $3,
     $4,
     $5,
-    $6
+    $6,
+    $7,
+    $8,
+    $9
 )
-RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio
+RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit
 `
 
 type CreateRouteParams struct {
@@ -31,9 +34,13 @@ type CreateRouteParams struct {
 	Status      string
 	Description pgtype.Text
 	PriceRatio  pgtype.Numeric
+	RpmLimit    pgtype.Int4
+	TpmLimit    pgtype.Int4
+	RpdLimit    pgtype.Int4
 }
 
 // CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
+// rpm/tpm/rpd_limit 是线路级限流上限（DEC-027：NULL=继承全局默认，0=不限，>0=上限）；
 // mode/pool_kind 组合的 fixed/explicit 数量约束由 service 层校验。
 func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route, error) {
 	row := q.db.QueryRow(ctx, createRoute,
@@ -43,6 +50,9 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		arg.Status,
 		arg.Description,
 		arg.PriceRatio,
+		arg.RpmLimit,
+		arg.TpmLimit,
+		arg.RpdLimit,
 	)
 	var i Route
 	err := row.Scan(
@@ -55,6 +65,9 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.PriceRatio,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
 	)
 	return i, err
 }
@@ -73,7 +86,7 @@ func (q *Queries) DeleteRoute(ctx context.Context, id int64) (int64, error) {
 }
 
 const getRouteByID = `-- name: GetRouteByID :one
-SELECT id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio FROM routes WHERE id = $1 LIMIT 1
+SELECT id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit FROM routes WHERE id = $1 LIMIT 1
 `
 
 // GetRouteByID 按主键读取单条线路。
@@ -90,12 +103,15 @@ func (q *Queries) GetRouteByID(ctx context.Context, id int64) (Route, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.PriceRatio,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
 	)
 	return i, err
 }
 
 const listRoutes = `-- name: ListRoutes :many
-SELECT id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio FROM routes ORDER BY id ASC
+SELECT id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit FROM routes ORDER BY id ASC
 `
 
 // ListRoutes 列出全部线路，供 admin 管理台展示。
@@ -118,6 +134,9 @@ func (q *Queries) ListRoutes(ctx context.Context) ([]Route, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.PriceRatio,
+			&i.RpmLimit,
+			&i.TpmLimit,
+			&i.RpdLimit,
 		); err != nil {
 			return nil, err
 		}
@@ -137,9 +156,12 @@ SET name = $1,
     status = $4,
     description = $5,
     price_ratio = $6,
+    rpm_limit = $7,
+    tpm_limit = $8,
+    rpd_limit = $9,
     updated_at = now()
-WHERE id = $7
-RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio
+WHERE id = $10
+RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit
 `
 
 type UpdateRouteParams struct {
@@ -149,10 +171,13 @@ type UpdateRouteParams struct {
 	Status      string
 	Description pgtype.Text
 	PriceRatio  pgtype.Numeric
+	RpmLimit    pgtype.Int4
+	TpmLimit    pgtype.Int4
+	RpdLimit    pgtype.Int4
 	ID          int64
 }
 
-// UpdateRoute 更新线路的名称/策略/池类型/启停/简介/售价倍率。
+// UpdateRoute 更新线路的名称/策略/池类型/启停/简介/售价倍率/线路级限流上限。
 func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route, error) {
 	row := q.db.QueryRow(ctx, updateRoute,
 		arg.Name,
@@ -161,6 +186,9 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route
 		arg.Status,
 		arg.Description,
 		arg.PriceRatio,
+		arg.RpmLimit,
+		arg.TpmLimit,
+		arg.RpdLimit,
 		arg.ID,
 	)
 	var i Route
@@ -174,6 +202,9 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.PriceRatio,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
 	)
 	return i, err
 }

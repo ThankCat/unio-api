@@ -84,6 +84,12 @@ type Channel struct {
 	RPDLimit  *int64
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// LastTested* 是最近一次主动检测结果（渠道检测，阶段一）：全 nil 表示从未检测。
+	// 仅由检测端点写入，不参与路由/计费，也不改渠道启停状态。
+	LastTestedAt      *time.Time
+	LastTestOK        *bool
+	LastTestLatencyMs *int32
+	LastTestError     *string
 }
 
 // ListParams 是分页/过滤列出 channel 的入参；ProviderID<=0、Status/Query 为空表示不过滤。
@@ -446,6 +452,11 @@ func toChannel(c sqlc.Channel) Channel {
 		RPDLimit:   rateLimitResult(c.RpdLimit),
 		CreatedAt:  c.CreatedAt.Time,
 		UpdatedAt:  c.UpdatedAt.Time,
+
+		LastTestedAt:      timestampResult(c.LastTestedAt),
+		LastTestOK:        boolResult(c.LastTestOk),
+		LastTestLatencyMs: timeoutResult(c.LastTestLatencyMs),
+		LastTestError:     textResult(c.LastTestError),
 	}
 }
 
@@ -483,6 +494,11 @@ func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 		RPDLimit:     rateLimitResult(c.RpdLimit),
 		CreatedAt:    c.CreatedAt.Time,
 		UpdatedAt:    c.UpdatedAt.Time,
+
+		LastTestedAt:      timestampResult(c.LastTestedAt),
+		LastTestOK:        boolResult(c.LastTestOk),
+		LastTestLatencyMs: timeoutResult(c.LastTestLatencyMs),
+		LastTestError:     textResult(c.LastTestError),
 	}
 }
 
@@ -578,6 +594,33 @@ func timeoutResult(v pgtype.Int4) *int32 {
 	}
 	ms := v.Int32
 	return &ms
+}
+
+// timestampResult 把可空 pgtype.Timestamptz 转成 *time.Time（nil=未设置）。
+func timestampResult(v pgtype.Timestamptz) *time.Time {
+	if !v.Valid {
+		return nil
+	}
+	t := v.Time
+	return &t
+}
+
+// boolResult 把可空 pgtype.Bool 转成 *bool（nil=未设置）。
+func boolResult(v pgtype.Bool) *bool {
+	if !v.Valid {
+		return nil
+	}
+	b := v.Bool
+	return &b
+}
+
+// textResult 把可空 pgtype.Text 转成 *string（nil=未设置；空串也视为未设置以贴合“无错误”语义）。
+func textResult(v pgtype.Text) *string {
+	if !v.Valid || v.String == "" {
+		return nil
+	}
+	s := v.String
+	return &s
 }
 
 func invalidArgument(field, message string) error {

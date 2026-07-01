@@ -36,6 +36,7 @@ type APIKeyService interface {
 	Create(ctx context.Context, params customer.APIKeyCreateParams) (customer.CreatedAPIKey, error)
 	Update(ctx context.Context, id int64, params customer.APIKeyUpdateParams) (customer.APIKey, error)
 	Revoke(ctx context.Context, id int64) (customer.APIKey, error)
+	Delete(ctx context.Context, id int64) error
 }
 
 // apiKeyDTO 是 API Key 响应体；含完整明文 key 供多次复制（产品决策），绝不含 key_hash。
@@ -50,7 +51,8 @@ type apiKeyDTO struct {
 	SpendLimit *string `json:"spend_limit"`
 	SpentTotal string  `json:"spent_total"`
 	RouteID    *int64  `json:"route_id"`
-	// RPMLimit/TPMLimit/RPDLimit：令牌级限流上限（P2-8）。null=继承全局默认，0=不限，>0=具体上限。
+	// RPMLimit/TPMLimit/RPDLimit：已废弃（DEC-027 限流已归线路，改由 route 决定、按 (线路,用户) 计数）。
+	// 保留字段仅为兼容旧响应，恒为 null；限流请在线路上配置。
 	RPMLimit   *int64  `json:"rpm_limit"`
 	TPMLimit   *int64  `json:"tpm_limit"`
 	RPDLimit   *int64  `json:"rpd_limit"`
@@ -62,48 +64,21 @@ type apiKeyDTO struct {
 	UpdatedAt  string  `json:"updated_at"`
 }
 
-// rateLimitsRequest 是令牌级限流的可选嵌套对象（P2-8）。
-// 整个对象缺省=不变；存在即原子替换三维：各字段 null/缺省=继承全局默认(NULL)，数字（含 0）=显式设定（0=不限）。
-type rateLimitsRequest struct {
-	RPM *int64 `json:"rpm"`
-	TPM *int64 `json:"tpm"`
-	RPD *int64 `json:"rpd"`
-}
-
 type createAPIKeyRequest struct {
-	Name       string             `json:"name"`
-	ExpiresAt  *string            `json:"expires_at"`  // RFC3339，可选
-	SpendLimit *string            `json:"spend_limit"` // 可选，不传/空串表示不限额
-	RouteID    *int64             `json:"route_id"`    // 可选线路绑定；不传表示不绑（回落项目默认/内置经济）
-	RateLimits *rateLimitsRequest `json:"rate_limits"` // 可选令牌级限流；不传表示不设（全继承全局默认）
+	Name       string  `json:"name"`
+	ExpiresAt  *string `json:"expires_at"`  // RFC3339，可选
+	SpendLimit *string `json:"spend_limit"` // 可选，不传/空串表示不限额
+	RouteID    *int64  `json:"route_id"`    // 线路绑定（必填）；限流由所选线路决定（DEC-027），Key 不再单独配置
 }
 
 // updateAPIKeyRequest 是 PATCH 请求体。
 // disabled: 非空时启停；spend_limit: 不传=不变，空串=清除上限，否则设为该值。
 // route_id: 字段缺省=不变，null=清除绑定，数字=设为该线路。
-// rate_limits: 对象缺省=不变，存在即原子替换三维限流。
+// 限流已归线路（DEC-027），此处不再接收 rate_limits。
 type updateAPIKeyRequest struct {
-	Disabled   *bool              `json:"disabled"`
-	SpendLimit *string            `json:"spend_limit"`
-	RouteID    json.RawMessage    `json:"route_id"`
-	RateLimits *rateLimitsRequest `json:"rate_limits"`
-}
-
-// validateRateLimits 校验限流值非负（限流上限不能为负数）。
-func validateRateLimits(rl *rateLimitsRequest) error {
-	if rl == nil {
-		return nil
-	}
-	for field, v := range map[string]*int64{"rpm": rl.RPM, "tpm": rl.TPM, "rpd": rl.RPD} {
-		if v != nil && *v < 0 {
-			return failure.New(
-				failure.CodeAdminInvalidArgument,
-				failure.WithMessage("rate limit must be a non-negative integer (0 means unlimited)"),
-				failure.WithField("field", "rate_limits."+field),
-			)
-		}
-	}
-	return nil
+	Disabled   *bool           `json:"disabled"`
+	SpendLimit *string         `json:"spend_limit"`
+	RouteID    json.RawMessage `json:"route_id"`
 }
 
 type apiKeysHandler struct {
@@ -156,23 +131,12 @@ func (h *apiKeysHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validateRateLimits(req.RateLimits); err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
 	createParams := customer.APIKeyCreateParams{
 		UserID:     userID,
 		Name:       req.Name,
 		ExpiresAt:  expiresAt,
 		SpendLimit: req.SpendLimit,
 		RouteID:    req.RouteID,
-	}
-	if req.RateLimits != nil {
-		createParams.RateLimitsProvided = true
-		createParams.RPMLimit = req.RateLimits.RPM
-		createParams.TPMLimit = req.RateLimits.TPM
-		createParams.RPDLimit = req.RateLimits.RPD
 	}
 
 	created, err := h.service.Create(r.Context(), createParams)
@@ -224,22 +188,11 @@ func (h *apiKeysHandler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validateRateLimits(req.RateLimits); err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
 	updateParams := customer.APIKeyUpdateParams{
 		Disabled:      req.Disabled,
 		SpendLimit:    req.SpendLimit,
 		RouteID:       routeID,
 		RouteProvided: routeProvided,
-	}
-	if req.RateLimits != nil {
-		updateParams.RateLimitsProvided = true
-		updateParams.RPMLimit = req.RateLimits.RPM
-		updateParams.TPMLimit = req.RateLimits.TPM
-		updateParams.RPDLimit = req.RateLimits.RPD
 	}
 
 	key, err := h.service.Update(r.Context(), id, updateParams)
@@ -251,7 +204,7 @@ func (h *apiKeysHandler) update(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, toAPIKeyDTO(key))
 }
 
-// revoke 永久吊销 API Key（不可逆）。
+// revoke 永久吊销 API Key（软失效、保留行与调用历史，不可逆）；子资源 POST。
 func (h *apiKeysHandler) revoke(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -266,6 +219,22 @@ func (h *apiKeysHandler) revoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeData(w, http.StatusOK, toAPIKeyDTO(key))
+}
+
+// delete 物理删除 API Key，用于清理误建/未使用的 Key；已产生调用历史时返回 409，提示改用吊销。
+func (h *apiKeysHandler) delete(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	if err := h.service.Delete(r.Context(), id); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func toAPIKeyDTO(k customer.APIKey) apiKeyDTO {

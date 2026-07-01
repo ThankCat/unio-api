@@ -35,7 +35,6 @@ type providerOpsRowDTO struct {
 	TimeoutTotal     int64           `json:"timeout_total"`
 	Latency          latencyStatsDTO `json:"latency"`
 	Health           string          `json:"health"`
-	LastSuccessAt    *string         `json:"last_success_at"`
 	Tokens           int64           `json:"tokens"`
 	RevenueUSD       string          `json:"revenue_usd"`
 	CostUSD          string          `json:"cost_usd"`
@@ -136,7 +135,6 @@ func (h *providerOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			TimeoutTotal:     row.TimeoutTotal,
 			Latency:          latencyStatsFrom(row.Latency),
 			Health:           row.HealthBucket,
-			LastSuccessAt:    rfc3339Ptr(row.LastSuccessAt),
 			Tokens:           row.Tokens,
 			RevenueUSD:       row.RevenueUSD,
 			CostUSD:          row.CostUSD,

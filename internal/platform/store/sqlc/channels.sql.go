@@ -40,7 +40,7 @@ func (q *Queries) CountChannels(ctx context.Context, arg CountChannelsParams) (i
 const createChannel = `-- name: CreateChannel :one
 INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error
 `
 
 type CreateChannelParams struct {
@@ -85,6 +85,10 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		&i.RpmLimit,
 		&i.TpmLimit,
 		&i.RpdLimit,
+		&i.LastTestedAt,
+		&i.LastTestOk,
+		&i.LastTestLatencyMs,
+		&i.LastTestError,
 	)
 	return i, err
 }
@@ -114,7 +118,7 @@ func (q *Queries) DeleteChannelCascade(ctx context.Context, id int64) (int64, er
 }
 
 const getChannel = `-- name: GetChannel :one
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit
+SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error
 FROM channels
 WHERE id = $1
 LIMIT 1
@@ -140,12 +144,16 @@ func (q *Queries) GetChannel(ctx context.Context, id int64) (Channel, error) {
 		&i.RpmLimit,
 		&i.TpmLimit,
 		&i.RpdLimit,
+		&i.LastTestedAt,
+		&i.LastTestOk,
+		&i.LastTestLatencyMs,
+		&i.LastTestError,
 	)
 	return i, err
 }
 
 const listChannelsByProvider = `-- name: ListChannelsByProvider :many
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit
+SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error
 FROM channels
 WHERE provider_id = $1
 ORDER BY priority, id
@@ -177,6 +185,10 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 			&i.RpmLimit,
 			&i.TpmLimit,
 			&i.RpdLimit,
+			&i.LastTestedAt,
+			&i.LastTestOk,
+			&i.LastTestLatencyMs,
+			&i.LastTestError,
 		); err != nil {
 			return nil, err
 		}
@@ -193,6 +205,7 @@ SELECT
     c.id, c.provider_id, c.name, c.protocol, c.adapter_key, c.base_url,
     c.credential, c.status, c.priority, c.timeout_ms, c.created_at, c.updated_at,
     c.rpm_limit, c.tpm_limit, c.rpd_limit,
+    c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error,
     p.name AS provider_name
 FROM channels c
 JOIN providers p ON p.id = c.provider_id
@@ -216,22 +229,26 @@ type ListChannelsPageParams struct {
 }
 
 type ListChannelsPageRow struct {
-	ID           int64
-	ProviderID   int64
-	Name         string
-	Protocol     string
-	AdapterKey   string
-	BaseUrl      string
-	Credential   string
-	Status       string
-	Priority     int32
-	TimeoutMs    pgtype.Int4
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
-	RpmLimit     pgtype.Int4
-	TpmLimit     pgtype.Int4
-	RpdLimit     pgtype.Int4
-	ProviderName string
+	ID                int64
+	ProviderID        int64
+	Name              string
+	Protocol          string
+	AdapterKey        string
+	BaseUrl           string
+	Credential        string
+	Status            string
+	Priority          int32
+	TimeoutMs         pgtype.Int4
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	RpmLimit          pgtype.Int4
+	TpmLimit          pgtype.Int4
+	RpdLimit          pgtype.Int4
+	LastTestedAt      pgtype.Timestamptz
+	LastTestOk        pgtype.Bool
+	LastTestLatencyMs pgtype.Int4
+	LastTestError     pgtype.Text
+	ProviderName      string
 }
 
 // ListChannelsPage 按 provider/状态/关键字过滤后分页列出 channel，连带 provider 名称；过滤项为 NULL 时不过滤。
@@ -266,6 +283,10 @@ func (q *Queries) ListChannelsPage(ctx context.Context, arg ListChannelsPagePara
 			&i.RpmLimit,
 			&i.TpmLimit,
 			&i.RpdLimit,
+			&i.LastTestedAt,
+			&i.LastTestOk,
+			&i.LastTestLatencyMs,
+			&i.LastTestError,
 			&i.ProviderName,
 		); err != nil {
 			return nil, err
@@ -328,7 +349,7 @@ const setChannelRateLimits = `-- name: SetChannelRateLimits :one
 UPDATE channels
 SET rpm_limit = $1, tpm_limit = $2, rpd_limit = $3, updated_at = now()
 WHERE id = $4
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error
 `
 
 type SetChannelRateLimitsParams struct {
@@ -363,15 +384,52 @@ func (q *Queries) SetChannelRateLimits(ctx context.Context, arg SetChannelRateLi
 		&i.RpmLimit,
 		&i.TpmLimit,
 		&i.RpdLimit,
+		&i.LastTestedAt,
+		&i.LastTestOk,
+		&i.LastTestLatencyMs,
+		&i.LastTestError,
 	)
 	return i, err
+}
+
+const setChannelTestResult = `-- name: SetChannelTestResult :execrows
+UPDATE channels
+SET last_tested_at = now(),
+    last_test_ok = $1,
+    last_test_latency_ms = $2,
+    last_test_error = $3
+WHERE id = $4
+`
+
+type SetChannelTestResultParams struct {
+	LastTestOk        pgtype.Bool
+	LastTestLatencyMs pgtype.Int4
+	LastTestError     pgtype.Text
+	ID                int64
+}
+
+// SetChannelTestResult 写入渠道「最近一次主动检测结果」（渠道检测，阶段一）。
+// last_tested_at 用 DB now() 保证服务器时钟；latency 恒有值（连接失败也测到耗时）；
+// error 成功时为 NULL、失败时为可读原因。不改 updated_at（检测是运营遥测，非配置变更），
+// 也不改 status（阶段一只报告不摘除）。返回受影响行数用于判定渠道是否存在。
+func (q *Queries) SetChannelTestResult(ctx context.Context, arg SetChannelTestResultParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setChannelTestResult,
+		arg.LastTestOk,
+		arg.LastTestLatencyMs,
+		arg.LastTestError,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateChannel = `-- name: UpdateChannel :one
 UPDATE channels
 SET name = $1, base_url = $2, status = $3, priority = $4, timeout_ms = $5, updated_at = now()
 WHERE id = $6
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error
 `
 
 type UpdateChannelParams struct {
@@ -410,6 +468,10 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		&i.RpmLimit,
 		&i.TpmLimit,
 		&i.RpdLimit,
+		&i.LastTestedAt,
+		&i.LastTestOk,
+		&i.LastTestLatencyMs,
+		&i.LastTestError,
 	)
 	return i, err
 }

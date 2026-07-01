@@ -47,6 +47,9 @@ func (f *fakeAPIKeyService) Update(context.Context, int64, customer.APIKeyUpdate
 func (f *fakeAPIKeyService) Revoke(context.Context, int64) (customer.APIKey, error) {
 	return f.revoked, nil
 }
+func (f *fakeAPIKeyService) Delete(context.Context, int64) error {
+	return nil
+}
 
 type fakeAdjustmentService struct {
 	out customer.Adjustment
@@ -156,8 +159,17 @@ func TestRevokeAPIKeyReturns200(t *testing.T) {
 		revoked: customer.APIKey{ID: 5, Status: "revoked", SpentTotal: "0"},
 	}})
 
-	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/api-keys/5", "", true)
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/api-keys/5/revoke", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteAPIKeyReturns204(t *testing.T) {
+	handler := newQueryRouter(t, adminapi.RouterDeps{APIKeyService: &fakeAPIKeyService{}})
+
+	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/api-keys/5", "", true)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d (%s)", rec.Code, rec.Body.String())
 	}
 }

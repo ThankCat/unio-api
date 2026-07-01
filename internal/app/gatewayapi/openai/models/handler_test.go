@@ -221,6 +221,7 @@ func TestRouterModelsUsesRateLimit(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
+			RouteID:   ptrInt64(9),
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -244,8 +245,8 @@ func TestRouterModelsUsesRateLimit(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
 
-	if limiter.apiKeyID != 1 {
-		t.Fatalf("expected rate limit api key id %d, got %d", 1, limiter.apiKeyID)
+	if limiter.routeID != 9 || limiter.userID != 1 {
+		t.Fatalf("expected rate limit route 9 / user 1, got route %d / user %d", limiter.routeID, limiter.userID)
 	}
 }
 
@@ -254,6 +255,7 @@ func TestRouterModelsRateLimited(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
+			RouteID:   ptrInt64(9),
 			KeyPrefix: "unio_sk_test",
 		},
 	}

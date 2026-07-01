@@ -10,16 +10,16 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
 )
 
-// RateLimitGuard 抽象 AttemptRunner 在候选循环内依赖的两层限流能力（P2-8）。
+// RateLimitGuard 抽象 AttemptRunner 在候选循环内依赖的两层限流能力（DEC-027）。
 //
-// 仅覆盖「上游调用前」生效的维度：Key 级 TPM 预占、channel 级 RPM/RPD/TPM 预占，以及结算后
-// 按真实用量回填 TPM。Key 级 RPM/RPD（请求计数维度）在 ingress 中间件已处理，不在此重复。
+// 仅覆盖「上游调用前」生效的维度：线路+用户级 TPM 预占、channel 级 RPM/RPD/TPM 预占，以及结算后
+// 按真实用量回填 TPM。线路+用户级 RPM/RPD（请求计数维度）在 ingress 中间件已处理，不在此重复。
 // AttemptRunner.guard 为 nil 时全部放行，保证未注入限流的调用点零行为变化。
 type RateLimitGuard interface {
-	AllowKeyTokens(ctx context.Context, apiKeyID int64, limits ratelimit.Limits, estTokens int64) (ratelimit.Decision, error)
+	AllowRouteUserTokens(ctx context.Context, routeID, userID int64, limits ratelimit.Limits, estTokens int64) (ratelimit.Decision, error)
 	AllowChannel(ctx context.Context, channelID int64, limits ratelimit.Limits, estTokens int64) (ratelimit.Decision, error)
 	TokensEnforced(limits ratelimit.Limits) bool
-	BackfillKeyTokens(ctx context.Context, apiKeyID int64, delta int64)
+	BackfillRouteUserTokens(ctx context.Context, routeID, userID int64, delta int64)
 	BackfillChannelTokens(ctx context.Context, channelID int64, delta int64)
 }
 
@@ -32,6 +32,14 @@ func keyRateLimits(p *auth.APIKeyPrincipal) ratelimit.Limits {
 	return ratelimit.Limits{RPM: p.RPMLimit, TPM: p.TPMLimit, RPD: p.RPDLimit}
 }
 
+// routeUserOf 从 principal 取 (线路ID, 用户ID) 复合计数主体；线路必填、恒有值。
+func routeUserOf(p *auth.APIKeyPrincipal) (routeID, userID int64, ok bool) {
+	if p == nil || p.RouteID == nil {
+		return 0, 0, false
+	}
+	return *p.RouteID, p.UserID, true
+}
+
 func channelRateLimits(c routing.ChatRouteCandidate) ratelimit.Limits {
 	return ratelimit.Limits{RPM: c.RPMLimit, TPM: c.TPMLimit, RPD: c.RPDLimit}
 }
@@ -41,10 +49,11 @@ func channelRateLimits(c routing.ChatRouteCandidate) ratelimit.Limits {
 // 返回 (decision, allowed, err)：err!=nil 为计数后端 fail_closed 故障（调用方释放冻结后按 500/限流上抛）；
 // allowed=false 且 err=nil 为命中 Key 级 TPM 限流（映射 429）。guard 为 nil 或无 principal 时放行。
 func (r *AttemptRunner) guardKeyTokens(ctx context.Context, principal *auth.APIKeyPrincipal, estTokens int64) (ratelimit.Decision, bool, error) {
-	if r.guard == nil || principal == nil {
+	routeID, userID, ok := routeUserOf(principal)
+	if r.guard == nil || !ok {
 		return ratelimit.Decision{Allowed: true}, true, nil
 	}
-	dec, err := r.guard.AllowKeyTokens(ctx, principal.APIKeyID, keyRateLimits(principal), estTokens)
+	dec, err := r.guard.AllowRouteUserTokens(ctx, routeID, userID, keyRateLimits(principal), estTokens)
 	if err != nil {
 		return dec, false, err
 	}
@@ -81,9 +90,9 @@ func (r *AttemptRunner) backfillRateTokens(ctx context.Context, principal *auth.
 		return
 	}
 	bgCtx := context.WithoutCancel(ctx)
-	if principal != nil {
+	if routeID, userID, ok := routeUserOf(principal); ok {
 		if keyLimits := keyRateLimits(principal); r.guard.TokensEnforced(keyLimits) {
-			r.guard.BackfillKeyTokens(bgCtx, principal.APIKeyID, delta)
+			r.guard.BackfillRouteUserTokens(bgCtx, routeID, userID, delta)
 		}
 	}
 	if chanLimits := channelRateLimits(candidate); r.guard.TokensEnforced(chanLimits) {
