@@ -100,16 +100,113 @@ func (r *AttemptRunner) backfillRateTokens(ctx context.Context, principal *auth.
 	}
 }
 
-// billableTPMTokens 把统一 usage facts 折算成用于 TPM 计数的 token 总量。
+// tpmReservations 跟踪一次请求内「实际生效且已预占」的 TPM 计数（route+user 级 + 各候选 channel 级），
+// 用于请求收尾时释放那些「没有被成功结算回填对账」的预占（DEC-028）。
 //
-// = 全部输入维度（uncached/cache_read/cache_write_5m/cache_write_1h）+ 权威输出总量（含 reasoning）。
+// 背景：进入上游前按 ConservativeInputTokens 预占 TPM 窗口；只有胜出候选走 backfillRateTokens 用真实
+// billable token 对账。历史实现里失败/取消/无结算的请求、以及 fallback 中落选/失败的候选渠道，其预占
+// 从不显式回退，只能干等 60s 滑动窗口自然过期——这会把额度「泄漏」在窗口里，造成 bursty/易错负载过早 429，
+// 也让渠道级 TPM 负载虚高（fallback 时每个尝试过的渠道都被计入，却只有胜者被对账）。
+//
+// 释放只针对 TPM（token 维度）。channel/ingress 的 RPM/RPD（请求计数）代表「确实发起过一次尝试」，
+// 按上游保护/防滥用的行业惯例不回退。
+type tpmReservations struct {
+	routeID       int64
+	userID        int64
+	keyEst        int64
+	hasKey        bool
+	keyReconciled bool
+	channels      []channelTPMReservation
+}
+
+// channelTPMReservation 记录某候选 channel 的 TPM 预占量与是否已被结算回填对账。
+type channelTPMReservation struct {
+	channelID  int64
+	est        int64
+	reconciled bool
+}
+
+// recordKeyTPMReservation 在 route+user TPM 预占成功且该主体 TPM 实际生效时登记预占量。
+//
+// 只在真正会写入 TPM 窗口时登记（guard 非空、有 route+user 主体、TPM 生效），保证释放量与预占量一致。
+func (r *AttemptRunner) recordKeyTPMReservation(res *tpmReservations, principal *auth.APIKeyPrincipal, estTokens int64) {
+	if r.guard == nil || res == nil {
+		return
+	}
+	routeID, userID, ok := routeUserOf(principal)
+	if !ok || !r.guard.TokensEnforced(keyRateLimits(principal)) {
+		return
+	}
+	res.routeID, res.userID, res.keyEst, res.hasKey = routeID, userID, nonNegativeTokens(estTokens), true
+}
+
+// recordChannelTPMReservation 在某候选 channel TPM 预占成功且该 channel TPM 实际生效时登记预占量。
+func (r *AttemptRunner) recordChannelTPMReservation(res *tpmReservations, candidate routing.ChatRouteCandidate, estTokens int64) {
+	if r.guard == nil || res == nil {
+		return
+	}
+	if !r.guard.TokensEnforced(channelRateLimits(candidate)) {
+		return
+	}
+	res.channels = append(res.channels, channelTPMReservation{channelID: candidate.Channel.ID, est: nonNegativeTokens(estTokens)})
+}
+
+// markReconciled 在结算按真实用量回填后，标记 route+user 与胜出 channel 的预占已对账，收尾时不再释放。
+//
+// 即使 backfill 的 delta 为 0（预占恰等于真实用量）也应调用：此时预占本身就是正确值，不能被当作泄漏释放掉。
+func (res *tpmReservations) markReconciled(channelID int64) {
+	if res == nil {
+		return
+	}
+	res.keyReconciled = true
+	for i := range res.channels {
+		if res.channels[i].channelID == channelID {
+			res.channels[i].reconciled = true
+		}
+	}
+}
+
+// releaseUnreconciledTPM 释放请求收尾时仍未被结算回填的 TPM 预占：route+user 未对账（失败/取消/无结算），
+// 以及 fallback 中落选/失败的候选渠道。只回退 TPM（token 维度），不回退 RPM/RPD（请求计数）。
+//
+// 用脱离 cancel 的上下文，保证客户端断开也能释放。释放采用现有 Backfill*（负增量）：与结算回填同一入口，
+// 允许桶短暂为负（下一分钟自然收敛），与既有 backfill 语义一致。
+func (r *AttemptRunner) releaseUnreconciledTPM(ctx context.Context, res *tpmReservations) {
+	if r.guard == nil || res == nil {
+		return
+	}
+	bgCtx := context.WithoutCancel(ctx)
+	if res.hasKey && res.keyEst > 0 && !res.keyReconciled {
+		r.guard.BackfillRouteUserTokens(bgCtx, res.routeID, res.userID, -res.keyEst)
+	}
+	for _, c := range res.channels {
+		if c.reconciled || c.est <= 0 {
+			continue
+		}
+		r.guard.BackfillChannelTokens(bgCtx, c.channelID, -c.est)
+	}
+}
+
+func nonNegativeTokens(v int64) int64 {
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
+// billableTPMTokens 把统一 usage facts 折算成用于 TPM 计数的 token 总量（缓存感知，DEC-028）。
+//
+// = uncached 输入 + cache_write（首次写缓存 5m/1h）+ 权威输出总量（含 reasoning）。
+// 明确「排除」cache_read（缓存命中读取）：缓存命中的 token 上游不重新计算、近乎零吞吐负载，
+// 若计入每分钟 TPM，会把重发缓存上下文的 agent（如 Codex，每轮重发 ~8-9 万缓存 token）迅速挤爆
+// 窗口——对齐 Anthropic「cache-aware ITPM」（cache_read 不计、cache_creation 计）。cache_write 仍全额
+// 计入（首次处理有真实上游负载）。行业口径上限流不做「打折」：要么全额、要么不计，0.1~0.25 是计费折扣。
 // 不另加 ReasoningOutputTokens（已含于 OutputTokensTotal）。unknown 维度按 0 处理（TPM 是限流非计费，
 // 偏少不会误扣费，且结算侧另有 risk_exposure 兜底）。
 func billableTPMTokens(f usage.Facts) int64 {
 	total := int64(0)
 	for _, c := range []usage.TokenCount{
 		f.UncachedInputTokens,
-		f.CacheReadInputTokens,
 		f.CacheWrite5mInputTokens,
 		f.CacheWrite1hInputTokens,
 		f.OutputTokensTotal,

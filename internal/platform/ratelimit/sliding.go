@@ -16,6 +16,10 @@ const maxSlidingBuckets = 1440
 
 // checkAndAddScript 原子地实现「桶化滑动窗口」的检查并占用：
 //   - 先汇总覆盖 [now-window, now] 的所有桶计数（KEYS 由 Go 侧按当前时间算好，KEYS[1] 为当前桶）；
+//   - 汇总值下探为 0：TPM 预占/回填/释放（Add，可为负）写入的是「当前桶」而非原预占桶，长流式请求的
+//     负向回填可能比其正向预占更晚落桶，当预占桶先滚出窗口时残留负值会让窗口和短暂为负（DEC-028）。
+//     用量本身不可能为负，故判定/返回前把窗口和 floor 到 0，避免负额度授予「超过配置上限」的余量；
+//     底层桶仍保留负值并随 TTL 自愈。
 //   - limit<=0 视为不限；否则若 sum+amount 超过 limit 则拒绝且不占用；
 //   - 通过则把 amount 累加到当前桶并刷新该桶 TTL。
 //
@@ -26,6 +30,7 @@ for i = 1, #KEYS do
   local v = redis.call('GET', KEYS[i])
   if v then sum = sum + tonumber(v) end
 end
+if sum < 0 then sum = 0 end
 local amount = tonumber(ARGV[1])
 local limit = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])

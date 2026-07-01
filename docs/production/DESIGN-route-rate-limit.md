@@ -337,3 +337,153 @@ ALTER TABLE routes
 
 **文档**
 - 本文；`docs/production/DECISIONS.md` 追加 DEC-027；`.env.example` 注释澄清（Q5）
+
+---
+
+## 14. 缓存感知 TPM 改造 + 预占泄漏/渠道多计修复（DEC-028）
+
+> 本节是在 §1–§13（限流归线路、按 (线路,用户) 计数）落地之后，针对 **TPM 口径本身**的二次改造。
+> 关联决策：[DEC-028](DECISIONS.md#dec-028-缓存感知-tpm排除-cache_read保留-cache_write预占在未结算时释放补充-dec-027)。
+
+### 14.1 问题（来自线上真实现象）
+
+- 现网唯一 Key `unio_sk_TwH1SbGu` → 线路 3 `VIP-Codex`（用户 1，`tpm=300000, rpm=300, rpd=15000, cheapest`）。
+- 用户用 Codex「刚配置好、发两句话」就 `429 Too Many Requests / exceeded retry limit`。别家中转站不会这样。
+- 定位：[`ratelimit_gate.go`](../../internal/service/gateway/lifecycle/ratelimit_gate.go) 的 `billableTPMTokens` 把
+  `cache_read`（缓存命中读取）**按全额**计入 TPM。Codex 每轮把整段对话上下文重发给上游，其中绝大部分命中
+  prompt cache（每轮 ~8-9 万 cache_read）。10 次请求、22 秒内累计 ~12.6 万 billable token，几次就把每分钟
+  30 万的窗口顶满 → 后续请求被拒。
+- **旁证的两处隐藏 bug**（同一条链路审计发现，见 §14.4）：预占从不在失败时释放；fallback 时每个尝试过的渠道都被计入却只有胜者被对账。
+
+### 14.2 行业口径对照（cache_read 到底「排除」还是「打折」）
+
+| 厂商 | 缓存命中 token 在**限流**里的处理 | 备注 |
+|------|-------------------------------|------|
+| OpenAI | **全额**计入 TPM | 但 TPM 上限极高（tier 越高越大），单个 agent 很难打满 |
+| Anthropic | **排除** cache_read（cache-aware ITPM）；cache_creation（写缓存）**计入** | 官方明确「input tokens per minute」不含缓存命中读取 |
+| new-api | 每日 token 上限不含缓存加价；计费侧用 `cache_ratio`（如 0.25）**折价** | 折扣是**计费**概念，不是限流权重 |
+
+**结论（锁定）**：限流口径**不做打折**——要么全额、要么不计。0.1~0.25 是**计费**折扣，与限流是两件事。
+采用 Anthropic 口径：**cache_read 排除（权重 0）**、**cache_write 全额**、**uncached + output 全额**。
+
+### 14.3 锁定决策
+
+- `cache_read`（缓存命中）：**排除**（权重 0）。上游不重算、几乎零吞吐负载。
+- `cache_write`（缓存创建 5m/1h）：**全额**（首次处理有真实上游负载）。
+- `uncached_input` + `output`：**全额**。
+- 预占仍按 `ConservativeInputTokens`（全量输入的保守估算）——入场时缓存命中率未知，取最坏情况占位（与 Anthropic
+  的 worst-case token-count 一致）。**结算后的 backfill 成为唯一的缓存感知对账点**：由于 `actual` 现在已排除
+  `cache_read`，差额 `actual - est` 会把预占里那部分「其实是缓存命中」的额度**退还**给窗口。
+
+### 14.4 三处修复（reserve / reconcile / release 模型）
+
+```mermaid
+flowchart TD
+    A["入场：预占 est = ConservativeInputTokens<br/>route+user TPM 与逐候选 channel TPM"] --> B{结果}
+    B -->|结算成功| C["对账：backfill 差额 = actualBillable - est<br/>（actualBillable 现已排除 cache_read）"]
+    B -->|失败 / 取消 / 无结算| D["释放：route+user TPM -est"]
+    C --> E["释放落选渠道：-est（尝试过但非胜出的 channel）"]
+    D --> E
+```
+
+**Fix 1 — 排除 cache_read（核心）**
+[`ratelimit_gate.go`](../../internal/service/gateway/lifecycle/ratelimit_gate.go) `billableTPMTokens`：从求和中去掉
+`f.CacheReadInputTokens`，保留 `UncachedInputTokens + CacheWrite5mInputTokens + CacheWrite1hInputTokens + OutputTokensTotal`。
+函数注释已改为说明「cache_read 排除（Anthropic cache-aware ITPM）」及原因。
+
+**Fix 2 + 3 — 释放未对账的 TPM 预占（泄漏 + fallback 多计）**
+两者收敛为同一句：「凡是成功结算没有对账掉的 TPM 预占，收尾时都释放」。在两个 runner 里加一个轻量预占跟踪器 + `defer` 释放：
+- [`ratelimit_gate.go`](../../internal/service/gateway/lifecycle/ratelimit_gate.go)：新增 `tpmReservations`（route+user 预占 +
+  各候选 channel 预占列表）及 `recordKeyTPMReservation` / `recordChannelTPMReservation` / `markReconciled` /
+  `releaseUnreconciledTPM`。只在「TPM 实际生效」时登记，保证释放量 == 预占量。
+- [`attempt_runner.go`](../../internal/service/gateway/lifecycle/attempt_runner.go) 与
+  [`attempt_runner_stream.go`](../../internal/service/gateway/lifecycle/attempt_runner_stream.go)：
+  - 通过 `guardKeyTokens` 后登记 route+user 预占，并 `defer r.releaseUnreconciledTPM(ctx, res)`。
+  - 每个通过 `guardChannel` 的候选登记 channel 预占。
+  - 结算 `backfillRateTokens` 之后 `res.markReconciled(winnerChannelID)`——收尾释放跳过已对账的 route+user 与胜出 channel。
+- 释放复用现有 `BackfillRouteUserTokens(-x)` / `BackfillChannelTokens(-x)`（仅 TPM 维度），用
+  `context.WithoutCancel(ctx)`，客户端断开也能回退。允许桶短暂为负（下一分钟自然收敛，与既有 backfill 一致）。
+
+**范围界定**：只释放 **TPM（token）** 预占。channel/ingress 的 **RPM/RPD（请求计数）不回退**——请求确实被发起/尝试过，
+计入它是上游保护/防滥用的行业标准行为（与 new-api「命中即跳过渠道、但请求已计数」一致）。
+
+**Fix 4 — 窗口和下探为 0（E2E 发现的加固）**
+[`sliding.go`](../../internal/platform/ratelimit/sliding.go) `checkAndAddScript`：判定前把「窗口聚合和」floor 到 0。
+原因：TPM 的预占/回填/释放（`Add`，可为负）写入的是「当前秒桶」而非「原预占所在桶」。长流式请求的负向回填（
+`actual - est`，排除 cache_read 后往往很负）比其正向预占晚落在不同秒桶；当预占桶先滚出 60s 窗口、负向修正桶仍在窗口内时，
+窗口聚合和会短暂为负（E2E 实测见 §15.4，出现过 `-23612`）。用量不可能为负，若不处理，负额度会让下一次判定获得「超过配置
+上限」的余量，削弱限流保证。floor 到 0 后：底层桶仍保留负值并随 TTL 自愈，但**判定永远不会因为负数而放行超过上限**。
+这是 E2E 按行业标准（限流不授予负用量余量）补的加固，不改变正常正值路径。
+
+### 14.5 单元测试
+
+新增 [`ratelimit_gate_test.go`](../../internal/service/gateway/lifecycle/ratelimit_gate_test.go)：
+- `billableTPMTokens` 排除 cache_read（含「一轮全缓存命中只剩 output」）。
+- fallback：胜出对账、落选释放、route+user 与胜出不回退。
+- 失败/取消：route+user 与已预占渠道全部释放。
+- TPM 未生效时不登记、不释放（释放量恒等预占量，绝不凭空把桶推负）。
+
+命令：`go build ./...`、`go vet ./internal/platform/ratelimit/... ./internal/service/gateway/lifecycle/...`、
+`go test ./internal/platform/ratelimit/... ./internal/service/gateway/lifecycle/...`（全绿）。
+
+---
+
+## 15. E2E 测试方案（真实 Codex，独立网关，本地 Docker DB）
+
+> 目标：站在用户视角，用**真实 Codex CLI** 对着新代码跑**多轮、上下文增长**的编码会话（正是过去会 429 的场景），
+> 外加取消/失败场景，验证 Fix 1/2/3。使用本地 Docker 的 Postgres/Redis 与数据库里现有的唯一 Key，不只测几个 token。
+
+### 15.1 环境搭建
+
+1. 用新代码在**备用端口**起一个独立网关，连本地 Docker 的 Postgres/Redis：
+   `GATEWAY_HTTP_ADDR=:8531 go run ./cmd/gateway-server`（在 `unio-api` 下，`.env` 提供 `DATABASE_URL`/`REDIS_ADDR`）。
+   现有 dev worker（已在跑）负责 settlement/recovery；DB + Redis 共享，Codex 只连 :8531。
+2. 从 DB 取 Key 明文：`SELECT key_plaintext FROM api_keys WHERE id=2`。
+3. 在 `~/.codex/config.toml` 配一个专用 profile：`model_providers.unio` → `base_url=http://localhost:8531/v1`,
+   `wire_api="responses"`, `env_key="UNIO_KEY"`；`profiles.unio` → `model="gpt-5.4"`, `model_provider="unio"`。
+
+### 15.2 场景
+
+1. **多轮真实编码任务**（Fix 1 主场景）：在临时目录里 `UNIO_KEY=... codex exec --profile unio "<任务>"`，
+   让 Codex 读文件 / 推理 / 跨多轮编辑，使缓存上下文增长越过旧的 15 万点（过去必 429 处）。跑不止两三轮，模拟真实会话。
+2. **取消 / 失败**（Fix 2/3）：中途 Ctrl-C 取消一轮再继续；确认后续轮次不被过早限流。
+
+### 15.3 验证点
+
+- **无误 429**：查 `request_records`（会话时间窗内 status/error_code），`usage_records`（cache_read 大、uncached 小）。
+- **TPM 数学**：滚动 1 分钟内 `(uncached + cache_write + output)` 之和即使 cache_read 巨大也远低于 30 万。
+- **预占释放**：取消/失败一轮前后，用 `docker exec <redis> redis-cli` 看桶
+  `unio:dev:rl:ru:3:1:tpm:*` 与 `unio:dev:rl:chan:*:tpm:*`，确认预占被释放（净额回落）。
+
+### 15.4 结果（2026-07-01 实跑）
+
+环境：独立网关 `/tmp/unio-gw-e2e`（新代码）监听 `:8531`，连本地 Docker Postgres(:5432)/Redis(:6380)；
+真实 Codex CLI 0.142.4（隔离 `CODEX_HOME`，provider `unio` → `:8531/v1`, `wire_api=responses`, `model=gpt-5.5`）；
+真实 Key `unio_sk_TwH1SbGu…`（route 3 VIP-Codex, tpm=300000）；真实上游中转 `https://zz1cc.cc.cd/v1`（channel 2 命中）。
+
+**场景 A — 单轮多步编码任务（5 次快速上游调用）**：Codex 加方法 + 类型标注 + 写 unittest + 跑测试至全绿。
+全部 `succeeded`，无 429。每轮 cache_read 递增（1920→8576→10624→11136→11648），uncached 递减；
+路由 TPM 净额（新口径）= 14,598，与 Redis 桶 `ru:3:1:tpm` 完全一致；旧口径（含 cache_read）= 58,502（4× 膨胀）。
+
+**场景 B — 大上下文多轮会话（resume，16 次上游调用）**：读 2400 行大文件后连续多轮加 docstring/类型标注/编译。
+全部 `succeeded`，**无一次 429**。聚合：
+
+| 口径 | 一次会话累计 token |
+|------|-------------------|
+| cache_read（缓存命中，被排除） | **472,576** |
+| 新 TPM 口径（uncached+cache_write+output） | **87,089** |
+| 旧 TPM 口径（含 cache_read） | **559,665** |
+
+即：**旧口径下这一段会话会累计 559,665 TPM，远超 300,000 路由上限 → 必然中途 429**（正是用户「发两句就 429」的现象）；
+新口径仅 87,089，稳稳在上限内。单轮 cache_read 已达 ~44,416，而对应 billable 仅几百~几千。**Fix 1 验证通过。**
+
+**场景 C — 取消 / 释放（Fix 2/3）**：对大 prompt（预占 est≈49,378）的流式请求，
+- 抓拍在途预占：`ru:3:1:tpm = 49,378`；客户端在结算前中止 → +2s 后 `ru:3:1:tpm = 0`（**预占被释放**，旧实现会滞留 ~60s）。
+- 连续 5 次首字节前中止的大请求后 `ru:3:1:tpm = 0`（非 5×49k 泄漏）；`request_records` 记为 `canceled / client_canceled`；
+  紧接一次正常请求返回 **HTTP 200**（未被泄漏预占误限流）。RPM 计数照常 +1/次（请求确实发起过，按设计不回退）。**Fix 2/3 验证通过。**
+
+**E2E 发现并修复的问题**：场景 B 中观察到路由 TPM 桶出现负值（如 `-23612`）——源于「负向回填落在比预占更晚的秒桶、
+预占桶先滚出窗口」的时序偏移。按行业标准（限流不授予负用量余量）在 [`sliding.go`](../../internal/platform/ratelimit/sliding.go)
+判定处把窗口聚合和 floor 到 0（见 §14.4 Fix 4），重编重启后复跑通过。
+
+**结论**：Fix 1/2/3 + Fix 4 全部通过；真实 Codex 多轮/大上下文/取消场景下不再出现过早 429，TPM 计数贴近真实吞吐。

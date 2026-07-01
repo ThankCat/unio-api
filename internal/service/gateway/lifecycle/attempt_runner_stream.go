@@ -219,6 +219,12 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		return result, rlErr
 	}
 
+	// TPM 预占跟踪（DEC-028）：登记已实际生效的 route+user 预占，收尾时释放所有未被结算回填对账的预占
+	// （失败/取消/无结算的 route+user，以及 fallback 落选/失败的候选渠道），避免额度泄漏在 TPM 窗口。
+	res := &tpmReservations{}
+	r.recordKeyTPMReservation(res, params.Principal, params.ConservativeInputTokens)
+	defer r.releaseUnreconciledTPM(ctx, res)
+
 	var lastErr error
 
 	for _, prepared := range params.Candidates {
@@ -240,6 +246,9 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			lastErr = channelRateLimitedError(dec)
 			continue
 		}
+
+		// 该候选已通过渠道级 TPM 预占（额度已写入窗口）：登记预占，收尾时若非胜出（fallback 落选/失败）则释放。
+		r.recordChannelTPMReservation(res, candidate, params.ConservativeInputTokens)
 
 		// 每个 stream candidate 也必须先创建 attempt：流式失败可能发生在首 chunk 前、首 chunk 后或
 		// 客户端取消时，提前记录 attempt 才能审计这些状态。
@@ -335,9 +344,11 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			})
 			EndSettlementSpan(settleSpan, settleErr)
 			l.RecordSettlement(SettlementOutcomeFromErr(settleErr))
-			// 结算成功（或已交 recovery 接管）后按真实 billable token 回填 Key/channel 的 TPM 计数差额（P2-8）。
+			// 结算成功（或已交 recovery 接管）后按真实 billable token 回填 Key/channel 的 TPM 计数差额（P2-8），
+			// 并标记该 route+user 与胜出 channel 的预占已对账——收尾释放不再回退它们（DEC-028）。
 			if settleErr == nil || IsChatSettlementRecoveryScheduled(settleErr) {
 				r.backfillRateTokens(ctx, params.Principal, candidate, params.ConservativeInputTokens, streamFacts.Usage)
+				res.markReconciled(candidate.Channel.ID)
 			}
 			return settleErr
 		}

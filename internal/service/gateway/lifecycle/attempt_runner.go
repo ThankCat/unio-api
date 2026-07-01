@@ -168,6 +168,12 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 		return result, rlErr
 	}
 
+	// TPM 预占跟踪（DEC-028）：登记已实际生效的 route+user 预占，收尾时释放所有未被结算回填对账的预占
+	// （失败/取消/无结算的 route+user，以及 fallback 落选/失败的候选渠道），避免额度泄漏在 TPM 窗口。
+	res := &tpmReservations{}
+	r.recordKeyTPMReservation(res, params.Principal, params.EstimatedTokens)
+	defer r.releaseUnreconciledTPM(ctx, res)
+
 	var lastErr error
 
 	for _, prepared := range params.Candidates {
@@ -190,6 +196,9 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			lastErr = channelRateLimitedError(dec)
 			continue
 		}
+
+		// 该候选已通过渠道级 TPM 预占（额度已写入窗口）：登记预占，收尾时若非胜出（fallback 落选/失败）则释放。
+		r.recordChannelTPMReservation(res, candidate, params.EstimatedTokens)
 
 		// 每个 candidate 都先创建 attempt，再调用 adapter，保证 fallback 链路可在 request_attempts 还原。
 		attemptRecord, err := l.CreateAttempt(ctx, requestRecord, index, candidate)
@@ -308,8 +317,10 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			return result, settleErr
 		}
 
-		// 结算成功后按真实 billable token 回填 Key/channel 的 TPM 计数差额（P2-8）。
+		// 结算成功后按真实 billable token 回填 Key/channel 的 TPM 计数差额（P2-8），并标记该 route+user 与
+		// 胜出 channel 的预占已对账——收尾释放不再回退它们（其余落选候选仍会被释放，DEC-028）。
 		r.backfillRateTokens(ctx, params.Principal, candidate, params.EstimatedTokens, success.Facts.Usage)
+		res.markReconciled(candidate.Channel.ID)
 
 		// 零价渠道误配监控（P2-4）：售价快照全部非正即客户侧 $0 收入，记指标供运维定位误配渠道。
 		if candidate.SalePrice.IsEffectivelyFree() {
