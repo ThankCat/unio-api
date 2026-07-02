@@ -346,9 +346,16 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			l.RecordSettlement(SettlementOutcomeFromErr(settleErr))
 			// 结算成功（或已交 recovery 接管）后按真实 billable token 回填 Key/channel 的 TPM 计数差额（P2-8），
 			// 并标记该 route+user 与胜出 channel 的预占已对账——收尾释放不再回退它们（DEC-028）。
+			//
+			// 仅当拿到「真实」usage 时才回填并对账。partial 估算（流中断/客户端取消/缺 final usage）不含真实
+			// cache 拆分、把全部输入按「未缓存」计，若据此回填 billableTPMTokens≈预占额→退款为 0，预占无法退回，
+			// 会把用户 TPM 窗口顶到上限、连累后续请求（上游流中断不应惩罚用户限流）。此时保持未对账，
+			// 由收尾 releaseUnreconciledTPM 退还整笔 route+user 与 channel 预占，使窗口回落。
 			if settleErr == nil || IsChatSettlementRecoveryScheduled(settleErr) {
-				r.backfillRateTokens(ctx, params.Principal, candidate, params.ConservativeInputTokens, streamFacts.Usage)
-				res.markReconciled(candidate.Channel.ID)
+				if !streamFacts.UsageSource.IsPartialEstimate() {
+					r.backfillRateTokens(ctx, params.Principal, candidate, params.ConservativeInputTokens, streamFacts.Usage)
+					res.markReconciled(candidate.Channel.ID)
+				}
 			}
 			return settleErr
 		}
@@ -504,9 +511,24 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			}
 
 			if emitted {
-				// SSE 已写出后无法再 fallback 或改写 JSON error。已 emit 内容按 partial settlement 计费（路线 B）；
-				// 不在此处 MarkAttemptFailed——partial 走 settlement 会先结算 usage/ledger 再把 attempt 标 failed。
-				return finishPartial(PartialReasonInterrupted, metrics.ChatOutcomeFailed, metrics.StreamEventInterrupted, false, err)
+				// SSE 已写出后无法再 fallback 或改写 JSON error。
+				if partialOutputTokens > 0 {
+					// 已 emit 可用输出内容：按 partial settlement 计费（路线 B）；不在此处 MarkAttemptFailed——
+					// partial 走 settlement 会先结算 usage/ledger 再把 attempt 标 failed。
+					return finishPartial(PartialReasonInterrupted, metrics.ChatOutcomeFailed, metrics.StreamEventInterrupted, false, err)
+				}
+				// 已 emit 帧但无可用输出内容（仅控制帧/空内容后上游中断）：视同「上游流中断、无可用输出」——
+				// 一分钱不扣、全额释放预扣（对齐 new-api PR #4199）；TPM 预占由收尾 releaseUnreconciledTPM 退还。
+				l.MarkAttemptFailed(ctx, attemptRecord, "stream_adapter_error", err)
+				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+					return result, releaseErr
+				}
+				l.MarkRequestFailed(ctx, requestRecord, "stream_adapter_error", err)
+				l.MarkDeliveryInterrupted(ctx, requestRecord)
+				result.Outcome = metrics.ChatOutcomeFailed
+				l.RecordStreamEvent(metrics.StreamEventInterrupted)
+				return result, err
 			}
 
 			// 首 token 前失败：attempt 记失败；客户端还没看到上游内容，只有这时允许同模型 fallback。

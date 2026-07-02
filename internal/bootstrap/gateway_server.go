@@ -80,6 +80,9 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		FetchMaxBytes:     deps.Config.TokenEstimate.FetchMaxBytes,
 	})
 
+	// 无真实 usage 的流式 partial 结算的假定缓存率（临时口径）；启动期设置一次，全 partial 结算生效。
+	lifecycle.SetPartialAssumedCacheReadRatio(deps.Config.Gateway.PartialAssumedCacheReadRatio)
+
 	queries := sqlc.New(deps.DB)
 
 	chatRouter := NewChatRouter(queries, deps.Logger)

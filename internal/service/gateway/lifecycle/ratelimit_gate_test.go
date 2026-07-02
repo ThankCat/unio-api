@@ -132,6 +132,39 @@ func TestReleaseUnreconciledTPMFailureReleasesAll(t *testing.T) {
 	}
 }
 
+// TestPartialStreamEstimateLeavesReservationForRelease 锁定 BUG 修复：流式 partial 估算
+// （上游流中断 / 客户端取消 / 缺 final usage）不含真实 cache 拆分、把全部输入按「未缓存」计。
+// 修复前 settleStreamFacts 对它也 backfill+markReconciled，导致 billableTPMTokens≈预占额→退款为 0、
+// 预占卡死、把用户 TPM 窗口顶到上限（连累后续请求 429）。修复后 partial 源保持未对账，
+// 由 releaseUnreconciledTPM 退还整笔 route+user 与 channel 预占，窗口随即回落。
+func TestPartialStreamEstimateLeavesReservationForRelease(t *testing.T) {
+	// 前置：partial 估算源必须被识别为「非上游真实 usage」，settleStreamFacts 据此跳过回填/对账。
+	if !coreusage.SourcePartialStreamEstimate.IsPartialEstimate() {
+		t.Fatal("SourcePartialStreamEstimate must report IsPartialEstimate() = true")
+	}
+	if coreusage.SourceUpstreamStream.IsPartialEstimate() {
+		t.Fatal("real stream usage must not be treated as partial estimate")
+	}
+
+	// 后果：未对账的大额预占被整笔释放（复刻 257 场景的 ~37 万输入）。
+	guard := newFakeReservationGuard()
+	r := &AttemptRunner{guard: guard}
+
+	res := &tpmReservations{}
+	r.recordKeyTPMReservation(res, principalWithTPM(75, 1, 280_000), 371_129)
+	r.recordChannelTPMReservation(res, channelWithTPM(48, 274_000), 371_129)
+	// partial 估算路径不 markReconciled（修复行为）。
+
+	r.releaseUnreconciledTPM(context.Background(), res)
+
+	if got := guard.routeUser[[2]int64{75, 1}]; got != -371_129 {
+		t.Fatalf("route+user pre-occupy must be fully released on partial estimate, got %d", got)
+	}
+	if got := guard.channel[48]; got != -371_129 {
+		t.Fatalf("channel pre-occupy must be fully released on partial estimate, got %d", got)
+	}
+}
+
 // TestReleaseUnreconciledTPMSkipsUnenforced 验证 TPM 未生效（无 override）时不登记预占、收尾不释放，
 // 保证释放量恒等于预占量，绝不把桶推成无中生有的负数。
 func TestReleaseUnreconciledTPMSkipsUnenforced(t *testing.T) {

@@ -54,6 +54,11 @@ type GatewayConfig struct {
 	// authorization 用它做保守冻结的输出 token 兜底上界。仅影响预冻结额度，不改写转发上游的请求体。
 	MaxOutputTokensFallback int64
 
+	// PartialAssumedCacheReadRatio 来自 PARTIAL_ASSUMED_CACHE_READ_RATIO（默认 0.6，取值 [0,1]）。
+	// 无上游真实 usage 的流式 partial 结算：按此比例把估算输入拆成 cache_read / uncached 计费
+	// （临时口径，最优是按历史真实缓存率预估——见 lifecycle/partial_stream.go 的 TODO）。
+	PartialAssumedCacheReadRatio float64
+
 	// MaxUpstreamResponseBytes 来自 GATEWAY_MAX_UPSTREAM_RESPONSE_MB（默认 8MB，按 MB 换算）。
 	// 这是非流式上游响应体的防 OOM 上界：异常/恶意上游可能对一次非流式请求返回任意大的 body，
 	// 整体读入内存会撑爆进程。超限时 adapter 返回 adapter_response_too_large 并释放冻结，不计费。
@@ -487,6 +492,17 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	partialAssumedCacheReadRatio, err := getEnvFloat("PARTIAL_ASSUMED_CACHE_READ_RATIO", 0.6)
+	if err != nil {
+		return Config{}, err
+	}
+	if partialAssumedCacheReadRatio < 0 || partialAssumedCacheReadRatio > 1 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("PARTIAL_ASSUMED_CACHE_READ_RATIO must be within [0, 1]"),
+		)
+	}
+
 	authorizationMaxOutputTokensFallback, err := getEnvInt64("AUTHORIZATION_MAX_OUTPUT_TOKENS_FALLBACK", 4096)
 	if err != nil {
 		return Config{}, err
@@ -644,12 +660,13 @@ func Load() (Config, error) {
 			OpenDuration: circuitBreakerOpenDuration,
 		},
 		Gateway: GatewayConfig{
-			HTTPAddr:                    getEnv("GATEWAY_HTTP_ADDR", ":8520"),
-			MaxOutputTokensFallback:     authorizationMaxOutputTokensFallback,
-			MaxUpstreamResponseBytes:    int64(gatewayMaxUpstreamResponseMB) << 20,
-			StreamIdleTimeout:           gatewayStreamIdleTimeout,
-			ChannelRateLimitCooldown:    gatewayChannelRateLimitCooldown,
-			ChannelRateLimitCooldownCap: gatewayChannelRateLimitCooldownCap,
+			HTTPAddr:                     getEnv("GATEWAY_HTTP_ADDR", ":8520"),
+			MaxOutputTokensFallback:      authorizationMaxOutputTokensFallback,
+			PartialAssumedCacheReadRatio: partialAssumedCacheReadRatio,
+			MaxUpstreamResponseBytes:     int64(gatewayMaxUpstreamResponseMB) << 20,
+			StreamIdleTimeout:            gatewayStreamIdleTimeout,
+			ChannelRateLimitCooldown:     gatewayChannelRateLimitCooldown,
+			ChannelRateLimitCooldownCap:  gatewayChannelRateLimitCooldownCap,
 		},
 		Admin: AdminConfig{
 			HTTPAddr: getEnv("ADMIN_HTTP_ADDR", ":8521"),

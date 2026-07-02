@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/routing"
@@ -10,6 +11,37 @@ import (
 
 // partialUsageMappingVersion 标记 partial 估算事实的映射版本，用于历史账务复算与幂等比对。
 const partialUsageMappingVersion = "partial.v1"
+
+// defaultPartialAssumedCacheReadRatio 是假定缓存率的内置默认（60% cache_read / 40% uncached）。
+const defaultPartialAssumedCacheReadRatio = 0.60
+
+// partialAssumedCacheReadRatio 是「无上游真实 usage 的流式 partial 结算」下，对估算输入假定的缓存命中比例。
+// 由 PARTIAL_ASSUMED_CACHE_READ_RATIO 环境变量配置，进程启动时经 SetPartialAssumedCacheReadRatio 注入。
+//
+// 拿不到 final usage 时无从得知真实 cache 拆分：全按 uncached 计会把缓存重的 agent/Codex 请求超扣约 10 倍
+// （用户吃亏），一点不扣又让平台白担成本。这里按固定比例把估算输入拆成 cache_read / uncached，
+// 计费恒落在「全缓存」与「全未缓存」之间（按构造安全）。
+//
+// TODO(临时方案 · billing): 这只是一个固定比例的临时口径。最优方案是「根据该用户/会话距本次失败最近的
+// 一次成功请求的真实缓存率来拆分」（缓存率强自相关，预测精度高），fallback 再退回本固定比例。
+// 届时应把本固定比例替换为「历史缓存率 → 本固定比例」的兜底链，并注意：仅用于 partial 估算的输入拆分，
+// 不影响冻结/限流/真实 usage/非流式（见 attempt_runner_stream.go 的 settleStreamFacts 与 releaseUnreconciledTPM）。
+//
+// 注意：仅当客户售价配置了 cache_read 单价时该拆分才真正生效——否则 billing 会把 cache_read 回退到
+// uncached 单价（见 core/billing/price.go），拆分退化为「全 uncached」而静默失效。
+var partialAssumedCacheReadRatio = defaultPartialAssumedCacheReadRatio
+
+// SetPartialAssumedCacheReadRatio 在进程启动时注入假定缓存率（bootstrap 调用）。
+// 入参预期在 [0,1]（由 config 层校验），这里再夹一层兜底，避免异常值把拆分推出边界。
+func SetPartialAssumedCacheReadRatio(r float64) {
+	if r < 0 {
+		r = 0
+	}
+	if r > 1 {
+		r = 1
+	}
+	partialAssumedCacheReadRatio = r
+}
 
 // Partial settlement 的合成 finish reason（落到 attempt.upstream_finish_reason，区分 B/D，见 DEC-025）。
 const (
@@ -58,6 +90,13 @@ func BuildPartialStreamFacts(p PartialStreamFactsParams) adapter.ResponseFacts {
 		outputTokens = 0
 	}
 
+	// 无真实 usage：按固定假定缓存率把估算输入拆成 cache_read / uncached（见 partialAssumedCacheReadRatio）。
+	cacheReadInput := int64(math.Round(float64(inputTokens) * partialAssumedCacheReadRatio))
+	if cacheReadInput > inputTokens {
+		cacheReadInput = inputTokens
+	}
+	uncachedInput := inputTokens - cacheReadInput
+
 	return adapter.ResponseFacts{
 		UpstreamProtocol:   p.Candidate.Protocol,
 		UpstreamResponseID: responseID,
@@ -67,8 +106,8 @@ func BuildPartialStreamFacts(p PartialStreamFactsParams) adapter.ResponseFacts {
 			RawReason: p.Reason,
 		},
 		Usage: usage.Facts{
-			UncachedInputTokens:     usage.KnownTokens(inputTokens),
-			CacheReadInputTokens:    usage.NotApplicableTokens(),
+			UncachedInputTokens:     usage.KnownTokens(uncachedInput),
+			CacheReadInputTokens:    usage.KnownTokens(cacheReadInput),
 			CacheWrite5mInputTokens: usage.NotApplicableTokens(),
 			CacheWrite1hInputTokens: usage.NotApplicableTokens(),
 			OutputTokensTotal:       usage.KnownTokens(outputTokens),
