@@ -2,8 +2,6 @@ package chatcompletions
 
 import (
 	"testing"
-
-	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
 
 func TestAdapterCountChatInputTokensCountsMessages(t *testing.T) {
@@ -24,17 +22,21 @@ func TestAdapterCountChatInputTokensCountsMessages(t *testing.T) {
 	}
 }
 
-func TestAdapterCountChatInputTokensRejectsEmptyModel(t *testing.T) {
+func TestAdapterCountChatInputTokensAcceptsEmptyModel(t *testing.T) {
 	openAIAdapter := newTestAdapter(nil)
 
-	_, err := openAIAdapter.CountChatInputTokens(ChatRequest{
+	// 空模型名不再硬失败：估算是保守上界，无法解析 tokenizer 时回退默认编码（对齐 new-api）。
+	got, err := openAIAdapter.CountChatInputTokens(ChatRequest{
 		Model: " ",
 		Messages: []ChatMessage{
 			{Role: "user", Content: jsonContent("Hello")},
 		},
 	})
-	if failure.CodeOf(err) != failure.CodeAdapterTokenizeFailed {
-		t.Fatalf("expected failure code %q, got %q", failure.CodeAdapterTokenizeFailed, failure.CodeOf(err))
+	if err != nil {
+		t.Fatalf("CountChatInputTokens returned error: %v", err)
+	}
+	if got <= 0 {
+		t.Fatalf("expected positive token count, got %d", got)
 	}
 }
 
@@ -84,11 +86,19 @@ func TestAdapterCountChatInputTokensAcceptsUnknownModelName(t *testing.T) {
 	}
 }
 
-func TestFallbackEncodingCoversKnownOpenAIModelFamilies(t *testing.T) {
+func TestAdapterCountChatInputTokensCoversKnownOpenAIModelFamilies(t *testing.T) {
+	openAIAdapter := newTestAdapter(nil)
 	for _, model := range []string{"gpt-5", "gpt-4.1-mini", "gpt-4o", "o3-mini", "gpt-4-turbo", "gpt-3.5-turbo"} {
 		t.Run(model, func(t *testing.T) {
-			if _, ok := fallbackEncoding(model); !ok {
-				t.Fatalf("expected fallback encoding for %q", model)
+			got, err := openAIAdapter.CountChatInputTokens(ChatRequest{
+				Model:    model,
+				Messages: []ChatMessage{{Role: "user", Content: jsonContent("Hello world")}},
+			})
+			if err != nil {
+				t.Fatalf("CountChatInputTokens returned error: %v", err)
+			}
+			if got <= 0 {
+				t.Fatalf("expected positive token count for %q, got %d", model, got)
 			}
 		})
 	}

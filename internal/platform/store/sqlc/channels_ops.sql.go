@@ -650,6 +650,7 @@ SELECT
     c.adapter_key,
     c.base_url,
     c.priority,
+    c.timeout_ms,
     c.credential,
     c.rpm_limit,
     c.tpm_limit,
@@ -691,7 +692,7 @@ LEFT JOIN request_attempts a
 WHERE ($3::text IS NULL OR c.status = $3::text)
   AND ($4::bigint IS NULL OR c.provider_id = $4::bigint)
   AND ($5::text IS NULL OR c.name ILIKE '%' || $5::text || '%')
-GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, c.base_url, c.priority, c.credential, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.created_at, pr.name
+GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, c.base_url, c.priority, c.timeout_ms, c.credential, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.created_at, pr.name
 ORDER BY
   CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0)) END DESC NULLS LAST,
   CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0)) END ASC NULLS LAST,
@@ -733,6 +734,7 @@ type ChannelsOpsTableRow struct {
 	AdapterKey       string
 	BaseUrl          string
 	Priority         int32
+	TimeoutMs        pgtype.Int4
 	Credential       string
 	RpmLimit         pgtype.Int4
 	TpmLimit         pgtype.Int4
@@ -780,6 +782,7 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 			&i.AdapterKey,
 			&i.BaseUrl,
 			&i.Priority,
+			&i.TimeoutMs,
 			&i.Credential,
 			&i.RpmLimit,
 			&i.TpmLimit,

@@ -684,9 +684,12 @@ func TestCountResponsesInputTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := int64(len(body))/charsPerToken + wireOverheadTokens
-	if tokens != want {
-		t.Fatalf("tokens = %d, want %d", tokens, want)
+	// 新口径：只 tiktoken 文本内容 + 框架开销；"hello world" 仅 2 token，远小于旧的整包字符/3。
+	if tokens <= 0 {
+		t.Fatalf("tokens = %d, want positive", tokens)
+	}
+	if tokens > int64(len(body)) {
+		t.Fatalf("tokens = %d unexpectedly exceeds body length %d (should not count JSON framing as text)", tokens, len(body))
 	}
 
 	if _, err := a.CountResponsesInputTokens(Request{}); err == nil {

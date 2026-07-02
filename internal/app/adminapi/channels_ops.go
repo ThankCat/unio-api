@@ -60,6 +60,7 @@ type channelOpsRowDTO struct {
 	AdapterKey       string          `json:"adapter_key"`
 	BaseURL          string          `json:"base_url"`
 	Priority         int32           `json:"priority"`
+	TimeoutMs        *int32          `json:"timeout_ms"`
 	ProviderName     string          `json:"provider_name"`
 	Credential       string          `json:"credential"`
 	AttemptTotal     int64           `json:"attempt_total"`
@@ -213,6 +214,7 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			AdapterKey:       row.AdapterKey,
 			BaseURL:          row.BaseURL,
 			Priority:         row.Priority,
+			TimeoutMs:        row.TimeoutMs,
 			ProviderName:     row.ProviderName,
 			Credential:       row.Credential,
 			AttemptTotal:     row.AttemptTotal,

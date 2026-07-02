@@ -25,6 +25,23 @@ type Config struct {
 	Gateway          GatewayConfig
 	Admin            AdminConfig
 	Console          ConsoleConfig
+	TokenEstimate    TokenEstimateConfig
+}
+
+// TokenEstimateConfig 保存输入 token 估算的媒体处理配置（对齐 new-api GetMediaToken 系列）。
+//
+// 输入 token 估算只对提取出的文本内容跑 tiktoken，图片走 tile/像素数学。这里控制图片估算的力度：
+// CountMedia 关闭 → 图片按固定保守值（不解码/不抓取）；FetchRemoteImages 打开 → 抓取 http(s) URL
+// 图片读取真实尺寸（内联 base64 图片始终本地解码，不受开关影响）。
+type TokenEstimateConfig struct {
+	// CountMedia 来自 TOKEN_ESTIMATE_COUNT_MEDIA（默认 true）。
+	CountMedia bool
+	// FetchRemoteImages 来自 TOKEN_ESTIMATE_FETCH_REMOTE_IMAGES（默认 false）。
+	// 打开会在下单前抓取任意客户图片 URL，存在 SSRF/延迟风险，启用前应在网络层限制出站目标。
+	FetchRemoteImages bool
+	// FetchTimeout 来自 TOKEN_ESTIMATE_FETCH_TIMEOUT（默认 3s）；FetchMaxBytes 来自 TOKEN_ESTIMATE_FETCH_MAX_MB（默认 8MB）。
+	FetchTimeout  time.Duration
+	FetchMaxBytes int64
 }
 
 // GatewayConfig 保存 gateway-server 进程级配置。
@@ -526,6 +543,35 @@ func Load() (Config, error) {
 		)
 	}
 
+	tokenEstimateCountMedia, err := getEnvBool("TOKEN_ESTIMATE_COUNT_MEDIA", true)
+	if err != nil {
+		return Config{}, err
+	}
+	tokenEstimateFetchRemoteImages, err := getEnvBool("TOKEN_ESTIMATE_FETCH_REMOTE_IMAGES", false)
+	if err != nil {
+		return Config{}, err
+	}
+	tokenEstimateFetchTimeout, err := getEnvDuration("TOKEN_ESTIMATE_FETCH_TIMEOUT", 3*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	if tokenEstimateFetchTimeout <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("TOKEN_ESTIMATE_FETCH_TIMEOUT must be a positive duration"),
+		)
+	}
+	tokenEstimateFetchMaxMB, err := getEnvInt("TOKEN_ESTIMATE_FETCH_MAX_MB", 8)
+	if err != nil {
+		return Config{}, err
+	}
+	if tokenEstimateFetchMaxMB <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("TOKEN_ESTIMATE_FETCH_MAX_MB must be a positive integer"),
+		)
+	}
+
 	return Config{
 		HTTP: HTTPConfig{
 			ReadTimeout:      httpReadTimeout,
@@ -611,6 +657,12 @@ func Load() (Config, error) {
 		},
 		Console: ConsoleConfig{
 			HTTPAddr: getEnv("CONSOLE_HTTP_ADDR", ":8522"),
+		},
+		TokenEstimate: TokenEstimateConfig{
+			CountMedia:        tokenEstimateCountMedia,
+			FetchRemoteImages: tokenEstimateFetchRemoteImages,
+			FetchTimeout:      tokenEstimateFetchTimeout,
+			FetchMaxBytes:     int64(tokenEstimateFetchMaxMB) << 20,
 		},
 	}, nil
 }

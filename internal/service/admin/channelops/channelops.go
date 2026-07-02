@@ -92,6 +92,7 @@ type Row struct {
 	AdapterKey       string
 	BaseURL          string
 	Priority         int32
+	TimeoutMs        *int32
 	ProviderName     string
 	Credential       string
 	AttemptTotal     int64
@@ -278,6 +279,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			AdapterKey:       r.AdapterKey,
 			BaseURL:          r.BaseUrl,
 			Priority:         r.Priority,
+			TimeoutMs:        int4Value(r.TimeoutMs),
 			ProviderName:     r.ProviderName,
 			Credential:       r.Credential,
 			AttemptTotal:     r.AttemptTotal,

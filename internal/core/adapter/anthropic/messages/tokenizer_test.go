@@ -2,8 +2,6 @@ package messages
 
 import (
 	"testing"
-
-	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
 
 func TestEstimateMessagesInputTokensCountsWireBody(t *testing.T) {
@@ -45,15 +43,19 @@ func TestEstimateMessagesInputTokensIncludesTools(t *testing.T) {
 	}
 }
 
-func TestEstimateMessagesInputTokensRejectsEmptyModel(t *testing.T) {
-	_, err := EstimateMessagesInputTokens(MessagesInputTokenizeRequest{
+func TestEstimateMessagesInputTokensAcceptsEmptyModel(t *testing.T) {
+	// 空模型名不再硬失败：估算是保守上界，无法解析 tokenizer 时回退默认编码（对齐 new-api）。
+	got, err := EstimateMessagesInputTokens(MessagesInputTokenizeRequest{
 		Model: " ",
 		Messages: []Message{
 			{Role: "user", Content: []byte(`"Hello"`)},
 		},
 	})
-	if failure.CodeOf(err) != failure.CodeAdapterTokenizeFailed {
-		t.Fatalf("expected %q, got %q", failure.CodeAdapterTokenizeFailed, failure.CodeOf(err))
+	if err != nil {
+		t.Fatalf("EstimateMessagesInputTokens: %v", err)
+	}
+	if got <= 0 {
+		t.Fatalf("expected positive token count, got %d", got)
 	}
 }
 

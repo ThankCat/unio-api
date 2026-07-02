@@ -1,28 +1,15 @@
 package responses
 
 import (
-	"unicode/utf8"
-
 	"github.com/ThankCat/unio-api/internal/platform/failure"
-)
-
-const (
-	// charsPerToken 是保守的「字符数 / token」折算系数（authorization 宁可高估）。
-	//
-	// 直传 adapter 不持有 provider 私有 tokenizer，也不应因新模型名解析失败阻塞请求（GAP：tiktoken
-	// 不识别新 model 族）。真实计费仍以 settlement 阶段上游 usage facts 为准；本估算只用于授权预扣保守边界。
-	charsPerToken = 3
-
-	// wireOverheadTokens 是请求级 framing 固定开销估算（HTTP JSON 字段名等）。
-	wireOverheadTokens = 16
 )
 
 var _ ResponsesInputTokenizer = (*Adapter)(nil)
 
-// CountResponsesInputTokens 按即将发往上游的 Responses 请求体做保守输入 token 估算。
+// CountResponsesInputTokens 估算一次 Responses 请求的输入 token（new-api 口径）。
 //
-// 与 anthropic 官方 1P tokenizer 同口径（wire 字符折算 + framing 开销），避免依赖按 model 选择的
-// 精确 tokenizer 在新模型名上失败。
+// 解析即将上送的请求体，只对提取出的文本内容跑 tiktoken + 每消息/工具框架开销，图片走 tile/patch
+// 数学、音频/文件按固定值；绝不把整包 JSON 或 base64 当文本计数（旧实现按整包字符估算会放大数倍）。
 func (a *Adapter) CountResponsesInputTokens(req Request) (int64, error) {
 	if len(req.Body) == 0 {
 		return 0, failure.New(
@@ -30,10 +17,5 @@ func (a *Adapter) CountResponsesInputTokens(req Request) (int64, error) {
 			failure.WithMessage("openai responses adapter tokenize empty request body"),
 		)
 	}
-
-	tokens := int64(utf8.RuneCount(req.Body))/charsPerToken + wireOverheadTokens
-	if tokens < 1 {
-		tokens = 1
-	}
-	return tokens, nil
+	return buildResponsesEstimate(req.Body).Count(), nil
 }

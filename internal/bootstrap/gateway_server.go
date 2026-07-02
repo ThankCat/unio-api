@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
+	"github.com/ThankCat/unio-api/internal/core/tokenest"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
@@ -70,6 +71,14 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 
 	// 流式 idle 超时为进程级 egress 安全配置（兜底半开/挂死连接）；启动期设置一次，全 adapter 流式读生效。
 	adapter.SetStreamIdleTimeout(deps.Config.Gateway.StreamIdleTimeout)
+
+	// 输入 token 估算的媒体处理配置（图片 tile 数学 / 是否抓取远程图片）；启动期设置一次，全 tokenizer 生效。
+	tokenest.Configure(tokenest.Options{
+		CountMedia:        deps.Config.TokenEstimate.CountMedia,
+		FetchRemoteImages: deps.Config.TokenEstimate.FetchRemoteImages,
+		FetchTimeout:      deps.Config.TokenEstimate.FetchTimeout,
+		FetchMaxBytes:     deps.Config.TokenEstimate.FetchMaxBytes,
+	})
 
 	queries := sqlc.New(deps.DB)
 
