@@ -298,7 +298,7 @@ func (q *Queries) DashboardRequestStatusCounts(ctx context.Context, arg Dashboar
 const dashboardRequestsTimeseries = `-- name: DashboardRequestsTimeseries :many
 SELECT
     date_trunc($1::text, created_at)::timestamptz AS bucket,
-    COUNT(*) AS total,
+    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed')) AS total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS succeeded
 FROM request_records
 WHERE ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)

@@ -48,19 +48,22 @@ type UsersSummary struct {
 }
 
 type UserRow struct {
-	ID             int64
-	Email          string
-	DisplayName    string
-	BalanceUSD     string
-	ReservedUSD    string
-	AvailableUSD   string
-	KeyTotal       int64
-	RequestTotal   int64
-	Succeeded      int64
-	SuccessRate    float64
-	ConsumptionUSD string
-	LastUsedAt     *time.Time
-	LowBalance     bool
+	ID                  int64
+	Email               string
+	DisplayName         string
+	BalanceUSD          string
+	ReservedUSD         string
+	AvailableUSD        string
+	KeyTotal            int64
+	RequestTotal        int64
+	Succeeded           int64
+	SuccessRate         float64
+	ConsumptionUSD      string
+	TotalConsumptionUSD string
+	TotalTopupUSD       string
+	LastUsedAt          *time.Time
+	CreatedAt           time.Time
+	LowBalance          bool
 }
 
 // UsersTableParams 用户运维主表入参。
@@ -136,19 +139,22 @@ func (s *Service) UsersTable(ctx context.Context, p UsersTableParams) ([]UserRow
 		reserved := opsutil.NumericString(r.ReservedUsd)
 		available := opsutil.SubtractDecimal(balance, reserved)
 		out = append(out, UserRow{
-			ID:             r.ID,
-			Email:          r.Email,
-			DisplayName:    r.DisplayName,
-			BalanceUSD:     balance,
-			ReservedUSD:    reserved,
-			AvailableUSD:   available,
-			KeyTotal:       r.KeyTotal,
-			RequestTotal:   r.RequestTotal,
-			Succeeded:      r.RequestSucceeded,
-			SuccessRate:    opsutil.SuccessRate(r.RequestSucceeded, r.RequestTotal),
-			ConsumptionUSD: opsutil.NumericString(r.ConsumptionUsd),
-			LastUsedAt:     opsutil.TimeValue(r.LastUsedAt),
-			LowBalance:     opsutil.Ratio(available, "1") < 5 && opsutil.Ratio(balance, "1") > 0,
+			ID:                  r.ID,
+			Email:               r.Email,
+			DisplayName:         r.DisplayName,
+			BalanceUSD:          balance,
+			ReservedUSD:         reserved,
+			AvailableUSD:        available,
+			KeyTotal:            r.KeyTotal,
+			RequestTotal:        r.RequestTotal,
+			Succeeded:           r.RequestSucceeded,
+			SuccessRate:         opsutil.SuccessRate(r.RequestSucceeded, r.RequestTotal),
+			ConsumptionUSD:      opsutil.NumericString(r.ConsumptionUsd),
+			TotalConsumptionUSD: opsutil.NumericString(r.TotalConsumptionUsd),
+			TotalTopupUSD:       opsutil.NumericString(r.TotalTopupUsd),
+			LastUsedAt:          opsutil.TimeValue(r.LastUsedAt),
+			CreatedAt:           r.CreatedAt.Time,
+			LowBalance:          opsutil.Ratio(available, "1") < 5 && opsutil.Ratio(balance, "1") > 0,
 		})
 	}
 	return out, total, nil
@@ -201,22 +207,23 @@ type ApiKeysSummary struct {
 }
 
 type ApiKeyRow struct {
-	ID             int64
-	Name           string
-	KeyPrefix      string
-	KeyPlaintext   *string
-	UserID         int64
-	Status         string
-	RouteID        *int64
-	RouteName      string
-	SpendLimit     *string
-	SpentTotal     string
-	RequestTotal   int64
-	Succeeded      int64
-	SuccessRate    float64
-	ConsumptionUSD string
-	LastUsedAt     *time.Time
-	ExpiresAt      *time.Time
+	ID              int64
+	Name            string
+	KeyPrefix       string
+	KeyPlaintext    *string
+	UserID          int64
+	Status          string
+	RouteID         *int64
+	RouteName       string
+	RoutePriceRatio string
+	SpendLimit      *string
+	SpentTotal      string
+	RequestTotal    int64
+	Succeeded       int64
+	SuccessRate     float64
+	ConsumptionUSD  string
+	LastUsedAt      *time.Time
+	ExpiresAt       *time.Time
 }
 
 // ApiKeysTableParams 用户范围内 API Key 运维主表入参（分页 / 排序 / 搜索均走 DB）。
@@ -266,22 +273,23 @@ func (s *Service) ApiKeysTable(ctx context.Context, p ApiKeysTableParams) ([]Api
 		// route_id 在 DB 层 NOT NULL（线路必填），恒有值；取地址以 *int64 对外表达。
 		boundRouteID := k.RouteID
 		out = append(out, ApiKeyRow{
-			ID:             k.ID,
-			Name:           k.Name,
-			KeyPrefix:      k.KeyPrefix,
-			KeyPlaintext:   textPtr(k.KeyPlaintext),
-			UserID:         k.UserID,
-			Status:         keyStatus(k.DisabledAt, k.RevokedAt, k.ExpiresAt, now),
-			RouteID:        &boundRouteID,
-			RouteName:      opsutil.TextValue(k.RouteName),
-			SpendLimit:     numericPtr(k.SpendLimit),
-			SpentTotal:     opsutil.NumericString(k.SpentTotal),
-			RequestTotal:   k.RequestTotal,
-			Succeeded:      k.RequestSucceeded,
-			SuccessRate:    opsutil.SuccessRate(k.RequestSucceeded, k.RequestTotal),
-			ConsumptionUSD: opsutil.NumericString(k.ConsumptionUsd),
-			LastUsedAt:     opsutil.TimeValue(k.LastUsedAt),
-			ExpiresAt:      opsutil.TimeValue(k.ExpiresAt),
+			ID:              k.ID,
+			Name:            k.Name,
+			KeyPrefix:       k.KeyPrefix,
+			KeyPlaintext:    textPtr(k.KeyPlaintext),
+			UserID:          k.UserID,
+			Status:          keyStatus(k.DisabledAt, k.RevokedAt, k.ExpiresAt, now),
+			RouteID:         &boundRouteID,
+			RouteName:       opsutil.TextValue(k.RouteName),
+			RoutePriceRatio: opsutil.NumericString(k.RoutePriceRatio),
+			SpendLimit:      numericPtr(k.SpendLimit),
+			SpentTotal:      opsutil.NumericString(k.SpentTotal),
+			RequestTotal:    k.RequestTotal,
+			Succeeded:       k.RequestSucceeded,
+			SuccessRate:     opsutil.SuccessRate(k.RequestSucceeded, k.RequestTotal),
+			ConsumptionUSD:  opsutil.NumericString(k.ConsumptionUsd),
+			LastUsedAt:      opsutil.TimeValue(k.LastUsedAt),
+			ExpiresAt:       opsutil.TimeValue(k.ExpiresAt),
 		})
 	}
 	return out, total, nil

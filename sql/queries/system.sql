@@ -13,6 +13,7 @@ SELECT
     COUNT(a.id) AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
     COUNT(a.id) FILTER (WHERE a.status = 'failed') AS attempt_failed,
+    COUNT(a.id) FILTER (WHERE a.status = 'failed' AND a.fault_party = 'upstream') AS attempt_upstream_failed,
     COUNT(a.id) FILTER (WHERE a.status = 'canceled') AS attempt_canceled,
     MAX(a.created_at)::timestamptz AS last_attempt_at
 FROM channels c

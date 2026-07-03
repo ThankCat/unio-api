@@ -201,16 +201,17 @@ func (s *Service) Radar(ctx context.Context, from, to time.Time) (RadarReport, e
 
 	report := RadarReport{From: from, To: to}
 
-	// 请求计数与率（区间内 request 粒度）。
+	// 请求计数与率（区间内 request 粒度）。成功率口径：分母为「成功+失败」，
+	// canceled（客户端取消）不计入分子分母，单列展示；pending/running 为进行中。
 	report.Requests = RequestStats{
-		Total:     perf.TerminalTotal + perf.PendingTotal,
+		Total:     perf.TerminalTotal + perf.CanceledTotal + perf.PendingTotal,
 		Succeeded: perf.SucceededTotal,
 		Failed:    perf.FailedTotal,
 		Canceled:  perf.CanceledTotal,
 	}
 	if perf.TerminalTotal > 0 {
 		report.Requests.SuccessRate = float64(perf.SucceededTotal) / float64(perf.TerminalTotal)
-		report.Requests.ErrorRate = float64(perf.FailedTotal+perf.CanceledTotal) / float64(perf.TerminalTotal)
+		report.Requests.ErrorRate = float64(perf.FailedTotal) / float64(perf.TerminalTotal)
 	}
 	report.Timeout = perf.TimeoutTotal
 

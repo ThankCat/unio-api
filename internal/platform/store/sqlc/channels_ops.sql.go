@@ -13,9 +13,9 @@ import (
 
 const channelOpsDetail = `-- name: ChannelOpsDetail :one
 SELECT
-    COUNT(*) AS attempt_total,
+    COUNT(*) FILTER (WHERE status = 'succeeded' OR fault_party = 'upstream') AS attempt_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS attempt_succeeded,
-    COUNT(*) FILTER (WHERE error_code ILIKE '%timeout%' OR error_code = 'context_deadline_exceeded') AS timeout_total,
+    COUNT(*) FILTER (WHERE status = 'failed' AND (error_code ILIKE '%timeout%' OR error_code = 'context_deadline_exceeded')) AS timeout_total,
     COUNT(*) FILTER (WHERE status = 'succeeded' AND completed_at IS NOT NULL) AS latency_sample,
     COALESCE(AVG(CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
         THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
@@ -32,7 +32,7 @@ SELECT
         CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
     (MAX(completed_at) FILTER (WHERE status = 'succeeded'))::timestamptz AS last_success_at,
-    (MAX(completed_at) FILTER (WHERE status IN ('failed', 'canceled')))::timestamptz AS last_failure_at
+    (MAX(completed_at) FILTER (WHERE status = 'failed' AND fault_party = 'upstream'))::timestamptz AS last_failure_at
 FROM request_attempts
 WHERE channel_id = $1
   AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
@@ -59,7 +59,7 @@ type ChannelOpsDetailRow struct {
 	LastFailureAt    pgtype.Timestamptz
 }
 
-// ChannelOpsDetail 单渠道（抽屉概览）attempt 指标。
+// ChannelOpsDetail 单渠道（抽屉概览）attempt 指标。attempt_total 口径同上：合格 attempt（succeeded+failed）。
 func (q *Queries) ChannelOpsDetail(ctx context.Context, arg ChannelOpsDetailParams) (ChannelOpsDetailRow, error) {
 	row := q.db.QueryRow(ctx, channelOpsDetail, arg.ChannelID, arg.FromTime, arg.ToTime)
 	var i ChannelOpsDetailRow
@@ -90,7 +90,7 @@ SELECT
 FROM request_attempts a
 JOIN request_records r ON r.id = a.request_record_id
 WHERE a.channel_id = $1
-  AND a.status IN ('failed', 'canceled')
+  AND a.status = 'failed'
   AND ($2::timestamptz IS NULL OR a.created_at >= $2::timestamptz)
   AND ($3::timestamptz IS NULL OR a.created_at < $3::timestamptz)
 ORDER BY a.created_at DESC
@@ -152,7 +152,7 @@ const channelOpsErrorsCount = `-- name: ChannelOpsErrorsCount :one
 SELECT COUNT(*) AS total
 FROM request_attempts a
 WHERE a.channel_id = $1
-  AND a.status IN ('failed', 'canceled')
+  AND a.status = 'failed'
   AND ($2::timestamptz IS NULL OR a.created_at >= $2::timestamptz)
   AND ($3::timestamptz IS NULL OR a.created_at < $3::timestamptz)
 `
@@ -177,7 +177,7 @@ SELECT
     m.display_name,
     cm.upstream_model,
     cm.status,
-    COUNT(a.id) AS attempt_total,
+    COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded' AND a.completed_at IS NOT NULL) AS latency_sample,
     COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
@@ -273,7 +273,7 @@ func (q *Queries) ChannelOpsModels(ctx context.Context, arg ChannelOpsModelsPara
 const channelOpsPerformanceTimeseries = `-- name: ChannelOpsPerformanceTimeseries :many
 SELECT
     date_trunc($1::text, created_at)::timestamptz AS bucket,
-    COUNT(*) AS attempt_total,
+    COUNT(*) FILTER (WHERE status = 'succeeded' OR fault_party = 'upstream') AS attempt_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS attempt_succeeded,
     COALESCE(AVG(CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
         THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg
@@ -429,9 +429,9 @@ func (q *Queries) ChannelOpsSuccessBuckets(ctx context.Context, arg ChannelOpsSu
 
 const channelsOpsAttemptAggregate = `-- name: ChannelsOpsAttemptAggregate :one
 SELECT
-    COUNT(*) AS attempt_total,
+    COUNT(*) FILTER (WHERE status = 'succeeded' OR fault_party = 'upstream') AS attempt_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS attempt_succeeded,
-    COUNT(*) FILTER (WHERE error_code ILIKE '%timeout%' OR error_code = 'context_deadline_exceeded') AS timeout_total,
+    COUNT(*) FILTER (WHERE status = 'failed' AND (error_code ILIKE '%timeout%' OR error_code = 'context_deadline_exceeded')) AS timeout_total,
     COUNT(*) FILTER (WHERE status = 'succeeded' AND completed_at IS NOT NULL) AS latency_sample,
     COALESCE(AVG(CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
         THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
@@ -470,6 +470,8 @@ type ChannelsOpsAttemptAggregateRow struct {
 }
 
 // ChannelsOpsAttemptAggregate 在区间内汇总全渠道 attempt 指标（成功率/超时/延迟分位）。
+// attempt_total 口径为「合格 attempt」= succeeded + failed（排除 running 未终态与 canceled 客户端取消，
+// 与运行时熔断器 IsChannelFaultError 一致，不把客户端取消/在途算作渠道结果）。
 func (q *Queries) ChannelsOpsAttemptAggregate(ctx context.Context, arg ChannelsOpsAttemptAggregateParams) (ChannelsOpsAttemptAggregateRow, error) {
 	row := q.db.QueryRow(ctx, channelsOpsAttemptAggregate, arg.FromTime, arg.ToTime)
 	var i ChannelsOpsAttemptAggregateRow
@@ -518,7 +520,7 @@ const channelsOpsHealthDistribution = `-- name: ChannelsOpsHealthDistribution :o
 WITH per_channel AS (
     SELECT
         c.id,
-        COUNT(a.id) AS total,
+        COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS total,
         COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS succeeded
     FROM channels c
     LEFT JOIN request_attempts a
@@ -602,7 +604,7 @@ const channelsOpsRecentError = `-- name: ChannelsOpsRecentError :many
 SELECT a.error_code, c.name AS channel_name, a.created_at
 FROM request_attempts a
 JOIN channels c ON c.id = a.channel_id
-WHERE a.error_code IS NOT NULL
+WHERE a.status = 'failed' AND a.fault_party = 'upstream' AND a.error_code IS NOT NULL
   AND ($1::timestamptz IS NULL OR a.created_at >= $1::timestamptz)
   AND ($2::timestamptz IS NULL OR a.created_at < $2::timestamptz)
 ORDER BY a.created_at DESC
@@ -656,10 +658,14 @@ SELECT
     c.tpm_limit,
     c.rpd_limit,
     c.created_at,
+    c.last_tested_at,
+    c.last_test_ok,
+    c.last_test_latency_ms,
+    c.last_test_error,
     pr.name AS provider_name,
-    COUNT(a.id) AS attempt_total,
+    COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
-    COUNT(a.id) FILTER (WHERE a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded') AS timeout_total,
+    COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) AS timeout_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded' AND a.completed_at IS NOT NULL) AS latency_sample,
     COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
         THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
@@ -678,7 +684,7 @@ SELECT
     (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') AS bound_models,
     (
         SELECT a2.error_code FROM request_attempts a2
-        WHERE a2.channel_id = c.id AND a2.error_code IS NOT NULL
+        WHERE a2.channel_id = c.id AND a2.status = 'failed' AND a2.fault_party = 'upstream' AND a2.error_code IS NOT NULL
           AND ($1::timestamptz IS NULL OR a2.created_at >= $1::timestamptz)
           AND ($2::timestamptz IS NULL OR a2.created_at < $2::timestamptz)
         ORDER BY a2.created_at DESC LIMIT 1
@@ -692,22 +698,22 @@ LEFT JOIN request_attempts a
 WHERE ($3::text IS NULL OR c.status = $3::text)
   AND ($4::bigint IS NULL OR c.provider_id = $4::bigint)
   AND ($5::text IS NULL OR c.name ILIKE '%' || $5::text || '%')
-GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, c.base_url, c.priority, c.timeout_ms, c.credential, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.created_at, pr.name
+GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, c.base_url, c.priority, c.timeout_ms, c.credential, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.created_at, c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, pr.name
 ORDER BY
-  CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0)) END DESC NULLS LAST,
-  CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0)) END ASC NULLS LAST,
+  CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END DESC NULLS LAST,
+  CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END ASC NULLS LAST,
   CASE WHEN $6::text = 'name' AND COALESCE($7::bool, false) THEN c.name END DESC NULLS LAST,
   CASE WHEN $6::text = 'name' AND NOT COALESCE($7::bool, false) THEN c.name END ASC NULLS LAST,
-  CASE WHEN $6::text = 'requests' AND COALESCE($7::bool, false) THEN COUNT(a.id) END DESC NULLS LAST,
-  CASE WHEN $6::text = 'requests' AND NOT COALESCE($7::bool, false) THEN COUNT(a.id) END ASC NULLS LAST,
+  CASE WHEN $6::text = 'requests' AND COALESCE($7::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') END DESC NULLS LAST,
+  CASE WHEN $6::text = 'requests' AND NOT COALESCE($7::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') END ASC NULLS LAST,
   CASE WHEN $6::text = 'status' AND COALESCE($7::bool, false) THEN c.status END DESC NULLS LAST,
   CASE WHEN $6::text = 'status' AND NOT COALESCE($7::bool, false) THEN c.status END ASC NULLS LAST,
   CASE WHEN $6::text = 'created_at' AND COALESCE($7::bool, false) THEN c.created_at END DESC NULLS LAST,
   CASE WHEN $6::text = 'created_at' AND NOT COALESCE($7::bool, false) THEN c.created_at END ASC NULLS LAST,
   CASE WHEN $6::text = 'latency' AND COALESCE($7::bool, false) THEN COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0) END DESC NULLS LAST,
   CASE WHEN $6::text = 'latency' AND NOT COALESCE($7::bool, false) THEN COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0) END ASC NULLS LAST,
-  CASE WHEN $6::text = 'timeout' AND COALESCE($7::bool, false) THEN COUNT(a.id) FILTER (WHERE a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded') END DESC NULLS LAST,
-  CASE WHEN $6::text = 'timeout' AND NOT COALESCE($7::bool, false) THEN COUNT(a.id) FILTER (WHERE a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded') END ASC NULLS LAST,
+  CASE WHEN $6::text = 'timeout' AND COALESCE($7::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) END DESC NULLS LAST,
+  CASE WHEN $6::text = 'timeout' AND NOT COALESCE($7::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) END ASC NULLS LAST,
   CASE WHEN $6::text = 'bound_models' AND COALESCE($7::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END DESC NULLS LAST,
   CASE WHEN $6::text = 'bound_models' AND NOT COALESCE($7::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END ASC NULLS LAST,
   c.id
@@ -727,31 +733,35 @@ type ChannelsOpsTableParams struct {
 }
 
 type ChannelsOpsTableRow struct {
-	ID               int64
-	Name             string
-	Status           string
-	Protocol         string
-	AdapterKey       string
-	BaseUrl          string
-	Priority         int32
-	TimeoutMs        pgtype.Int4
-	Credential       string
-	RpmLimit         pgtype.Int4
-	TpmLimit         pgtype.Int4
-	RpdLimit         pgtype.Int4
-	CreatedAt        pgtype.Timestamptz
-	ProviderName     string
-	AttemptTotal     int64
-	AttemptSucceeded int64
-	TimeoutTotal     int64
-	LatencySample    int64
-	LatencyAvg       float64
-	LatencyP50       float64
-	LatencyP90       float64
-	LatencyP95       float64
-	LatencyP99       float64
-	BoundModels      int64
-	RecentErrorCode  pgtype.Text
+	ID                int64
+	Name              string
+	Status            string
+	Protocol          string
+	AdapterKey        string
+	BaseUrl           string
+	Priority          int32
+	TimeoutMs         pgtype.Int4
+	Credential        string
+	RpmLimit          pgtype.Int4
+	TpmLimit          pgtype.Int4
+	RpdLimit          pgtype.Int4
+	CreatedAt         pgtype.Timestamptz
+	LastTestedAt      pgtype.Timestamptz
+	LastTestOk        pgtype.Bool
+	LastTestLatencyMs pgtype.Int4
+	LastTestError     pgtype.Text
+	ProviderName      string
+	AttemptTotal      int64
+	AttemptSucceeded  int64
+	TimeoutTotal      int64
+	LatencySample     int64
+	LatencyAvg        float64
+	LatencyP50        float64
+	LatencyP90        float64
+	LatencyP95        float64
+	LatencyP99        float64
+	BoundModels       int64
+	RecentErrorCode   pgtype.Text
 }
 
 // ChannelsOpsTable 渠道运维主表（分页）：每渠道 attempt 指标 + 绑定模型数 + 最近错误，默认最需处理优先。
@@ -788,6 +798,10 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 			&i.TpmLimit,
 			&i.RpdLimit,
 			&i.CreatedAt,
+			&i.LastTestedAt,
+			&i.LastTestOk,
+			&i.LastTestLatencyMs,
+			&i.LastTestError,
 			&i.ProviderName,
 			&i.AttemptTotal,
 			&i.AttemptSucceeded,

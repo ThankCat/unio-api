@@ -77,16 +77,18 @@ type Attempt struct {
 	UpstreamFinishReason  *string
 	FinishClass           *string
 	Status                string
-	UpstreamStatusCode    *int32
-	UpstreamRequestID     *string
-	ErrorCode             *string
-	ErrorMessage          *string
-	InternalErrorDetail   *string
-	ResponseStartedAt     *time.Time
-	FinalUsageReceived    bool
-	StartedAt             time.Time
-	CompletedAt           *time.Time
-	CreatedAt             time.Time
+	// FaultParty 归因：upstream / client / platform（由 DB 生成列派生；succeeded/running 为 nil）。
+	FaultParty          *string
+	UpstreamStatusCode  *int32
+	UpstreamRequestID   *string
+	ErrorCode           *string
+	ErrorMessage        *string
+	InternalErrorDetail *string
+	ResponseStartedAt   *time.Time
+	FinalUsageReceived  bool
+	StartedAt           time.Time
+	CompletedAt         *time.Time
+	CreatedAt           time.Time
 }
 
 // RequestDetail 是请求详情聚合：请求事实 + 上游尝试链 + usage + 账本流水 + 计费异常。
@@ -280,6 +282,7 @@ func toAttempt(a sqlc.RequestAttempt, includeInternal bool) Attempt {
 		UpstreamFinishReason:  textPtr(a.UpstreamFinishReason),
 		FinishClass:           textPtr(a.FinishClass),
 		Status:                a.Status,
+		FaultParty:            textPtr(a.FaultParty),
 		UpstreamStatusCode:    int4Ptr(a.UpstreamStatusCode),
 		UpstreamRequestID:     textPtr(a.UpstreamRequestID),
 		ErrorCode:             textPtr(a.ErrorCode),

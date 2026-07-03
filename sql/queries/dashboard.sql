@@ -94,7 +94,7 @@ ORDER BY attempt_total DESC, c.id;
 -- DashboardRequestsTimeseries 按时间桶（hour|day，UTC 截断）聚合请求数与成功数，供前端画折线。
 SELECT
     date_trunc(sqlc.arg('unit')::text, created_at)::timestamptz AS bucket,
-    COUNT(*) AS total,
+    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed')) AS total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS succeeded
 FROM request_records
 WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)

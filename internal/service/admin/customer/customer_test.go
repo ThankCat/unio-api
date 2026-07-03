@@ -177,6 +177,14 @@ func (f *fakeAPIKeyStore) SetAPIKeyRoute(_ context.Context, arg sqlc.SetAPIKeyRo
 	}, nil
 }
 
+func (f *fakeAPIKeyStore) SetAPIKeyName(_ context.Context, arg sqlc.SetAPIKeyNameParams) (sqlc.SetAPIKeyNameRow, error) {
+	return sqlc.SetAPIKeyNameRow{ID: arg.ID, Name: arg.Name}, nil
+}
+
+func (f *fakeAPIKeyStore) SetAPIKeyExpiresAt(_ context.Context, arg sqlc.SetAPIKeyExpiresAtParams) (sqlc.SetAPIKeyExpiresAtRow, error) {
+	return sqlc.SetAPIKeyExpiresAtRow{ID: arg.ID, ExpiresAt: arg.ExpiresAt}, nil
+}
+
 func (f *fakeAPIKeyStore) SetAPIKeyRateLimits(_ context.Context, arg sqlc.SetAPIKeyRateLimitsParams) (sqlc.SetAPIKeyRateLimitsRow, error) {
 	f.rateLimitsSet = true
 	f.rateLimitsArg = arg

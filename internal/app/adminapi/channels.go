@@ -289,21 +289,6 @@ func (h *channelsHandler) rotateCredential(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *channelsHandler) delete(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	if err := h.service.Delete(r.Context(), id); err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
 func toChannelDTO(c channel.Channel) channelDTO {
 	return channelDTO{
 		ID:           c.ID,

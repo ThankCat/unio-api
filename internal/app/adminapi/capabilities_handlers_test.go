@@ -11,7 +11,6 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/adminauth"
 	corecap "github.com/ThankCat/unio-api/internal/core/capability"
 	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
 	capsvc "github.com/ThankCat/unio-api/internal/service/admin/capability"
 )
 
@@ -101,35 +100,6 @@ func TestCapabilityKeysRequireToken(t *testing.T) {
 	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/capability/keys", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
-	}
-}
-
-func TestSetModelCapabilityReturns200(t *testing.T) {
-	handler := newCapabilityRouter(t, &fakeCapabilityService{}, nil, nil)
-
-	rec := doAdmin(t, handler, http.MethodPut, "/admin/v1/models/1/capabilities/tools.function", `{"support_level":"full"}`, true)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
-	}
-}
-
-func TestSetModelCapabilityInvalidArgReturns400(t *testing.T) {
-	handler := newCapabilityRouter(t, &fakeCapabilityService{
-		setModelErr: failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("support_level must be full, limited or unsupported")),
-	}, nil, nil)
-
-	rec := doAdmin(t, handler, http.MethodPut, "/admin/v1/models/1/capabilities/tools.function", `{"support_level":"weird"}`, true)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
-	}
-}
-
-func TestDeleteModelCapabilityReturns204(t *testing.T) {
-	handler := newCapabilityRouter(t, &fakeCapabilityService{}, nil, nil)
-
-	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/models/1/capabilities/tools.function", "", true)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusNoContent, rec.Code, rec.Body.String())
 	}
 }
 

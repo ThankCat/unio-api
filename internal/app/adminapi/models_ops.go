@@ -40,23 +40,19 @@ type modelsOpsSummaryDTO struct {
 }
 
 type modelOpsRowDTO struct {
-	ID                int64           `json:"id"`
-	ModelID           string          `json:"model_id"`
-	DisplayName       string          `json:"display_name"`
-	OwnedBy           string          `json:"owned_by"`
-	Status            string          `json:"status"`
-	CreatedAt         string          `json:"created_at"`
-	BindingsTotal     int64           `json:"bindings_total"`
-	BindingsAvailable int64           `json:"bindings_available"`
-	HasPrice          bool            `json:"has_price"`
-	Sellable          bool            `json:"sellable"`
-	RequestTotal      int64           `json:"request_total"`
-	RequestSucceeded  int64           `json:"request_succeeded"`
-	SuccessRate       float64         `json:"success_rate"`
-	Latency           latencyStatsDTO `json:"latency"`
-	RevenueUSD        string          `json:"revenue_usd"`
-	MarginUSD         string          `json:"margin_usd"`
-	MarginRate        float64         `json:"margin_rate"`
+	ID                        int64  `json:"id"`
+	ModelID                   string `json:"model_id"`
+	DisplayName               string `json:"display_name"`
+	OwnedBy                   string `json:"owned_by"`
+	Status                    string `json:"status"`
+	CreatedAt                 string `json:"created_at"`
+	MaxOutputTokens           *int64 `json:"max_output_tokens"`
+	ContextWindowTokens       *int64 `json:"context_window_tokens"`
+	BindingsTotal             int64  `json:"bindings_total"`
+	BindingsAvailable         int64  `json:"bindings_available"`
+	CapabilitiesDeclaredCount int64  `json:"capabilities_declared_count"`
+	HasPrice                  bool   `json:"has_price"`
+	Sellable                  bool   `json:"sellable"`
 	// 基准售价（DEC-026 model_prices，每 1M tokens；无基准价时为 null）。
 	BaseCurrency               *string `json:"base_currency"`
 	BaseUncachedInputPrice     *string `json:"base_uncached_input_price"`
@@ -68,15 +64,23 @@ type modelOpsRowDTO struct {
 }
 
 type modelOpsDetailDTO struct {
-	RequestTotal     int64   `json:"request_total"`
-	RequestSucceeded int64   `json:"request_succeeded"`
-	SuccessRate      float64 `json:"success_rate"`
-	LatencyP50       float64 `json:"latency_p50"`
-	LatencyP95       float64 `json:"latency_p95"`
-	OutputTokens     int64   `json:"output_tokens"`
-	InputTokens      int64   `json:"input_tokens"`
-	CacheReadRate    float64 `json:"cache_read_rate"`
-	TPS              float64 `json:"tps"`
+	RequestTotal      int64   `json:"request_total"`
+	RequestSucceeded  int64   `json:"request_succeeded"`
+	SuccessRate       float64 `json:"success_rate"`
+	LatencyAvg        float64 `json:"latency_avg"`
+	LatencyP50        float64 `json:"latency_p50"`
+	LatencyP95        float64 `json:"latency_p95"`
+	OutputTokens      int64   `json:"output_tokens"`
+	InputTokens       int64   `json:"input_tokens"`
+	CacheReadRate     float64 `json:"cache_read_rate"`
+	TPS               float64 `json:"tps"`
+	RevenueUSD        string  `json:"revenue_usd"`
+	MarginUSD         string  `json:"margin_usd"`
+	MarginRate        float64 `json:"margin_rate"`
+	Sellable          bool    `json:"sellable"`
+	BindingsTotal     int64   `json:"bindings_total"`
+	BindingsAvailable int64   `json:"bindings_available"`
+	ModelStatus       string  `json:"model_status"`
 }
 
 type modelOpsChannelDTO struct {
@@ -89,10 +93,10 @@ type modelOpsChannelDTO struct {
 	AttemptTotal     int64   `json:"attempt_total"`
 	AttemptSucceeded int64   `json:"attempt_succeeded"`
 	SuccessRate      float64 `json:"success_rate"`
-	LatencyP95       float64  `json:"latency_p95"`
-	HasPrice         bool     `json:"has_price"`
-	InputCost        *string  `json:"input_cost"`
-	OutputCost       *string  `json:"output_cost"`
+	LatencyP95       float64 `json:"latency_p95"`
+	HasPrice         bool    `json:"has_price"`
+	InputCost        *string `json:"input_cost"`
+	OutputCost       *string `json:"output_cost"`
 }
 
 type modelOpsPerfPointDTO struct {
@@ -148,12 +152,12 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 	}
 	page := parsePage(r)
 	sort, err := parseListSort(r, map[string]struct{}{
-		"name":         {},
-		"requests":     {},
-		"success_rate": {},
-		"margin":       {},
-		"created_at":   {},
-	}, "success_rate", false)
+		"name":       {},
+		"bindings":   {},
+		"context":    {},
+		"max_output": {},
+		"created_at": {},
+	}, "name", false)
 	if err != nil {
 		writeSortError(w, err)
 		return
@@ -182,17 +186,13 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			OwnedBy:                    row.OwnedBy,
 			Status:                     row.Status,
 			CreatedAt:                  rfc3339(row.CreatedAt),
+			MaxOutputTokens:            row.MaxOutputTokens,
+			ContextWindowTokens:        row.ContextWindowTokens,
 			BindingsTotal:              row.BindingsTotal,
 			BindingsAvailable:          row.BindingsAvailable,
+			CapabilitiesDeclaredCount:  row.CapabilitiesDeclaredCount,
 			HasPrice:                   row.HasPrice,
 			Sellable:                   row.Sellable,
-			RequestTotal:               row.RequestTotal,
-			RequestSucceeded:           row.RequestSucceeded,
-			SuccessRate:                row.SuccessRate,
-			Latency:                    latencyStatsFrom(row.Latency),
-			RevenueUSD:                 row.RevenueUSD,
-			MarginUSD:                  row.MarginUSD,
-			MarginRate:                 row.MarginRate,
 			BaseCurrency:               row.BaseCurrency,
 			BaseUncachedInputPrice:     row.BaseUncachedInputPrice,
 			BaseCacheReadInputPrice:    row.BaseCacheReadInputPrice,
@@ -222,15 +222,23 @@ func (h *modelOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, modelOpsDetailDTO{
-		RequestTotal:     d.RequestTotal,
-		RequestSucceeded: d.RequestSucceeded,
-		SuccessRate:      d.SuccessRate,
-		LatencyP50:       d.LatencyP50,
-		LatencyP95:       d.LatencyP95,
-		OutputTokens:     d.OutputTokens,
-		InputTokens:      d.InputTokens,
-		CacheReadRate:    d.CacheReadRate,
-		TPS:              d.TPS,
+		RequestTotal:      d.RequestTotal,
+		RequestSucceeded:  d.RequestSucceeded,
+		SuccessRate:       d.SuccessRate,
+		LatencyAvg:        d.LatencyAvg,
+		LatencyP50:        d.LatencyP50,
+		LatencyP95:        d.LatencyP95,
+		OutputTokens:      d.OutputTokens,
+		InputTokens:       d.InputTokens,
+		CacheReadRate:     d.CacheReadRate,
+		TPS:               d.TPS,
+		RevenueUSD:        d.RevenueUSD,
+		MarginUSD:         d.MarginUSD,
+		MarginRate:        d.MarginRate,
+		Sellable:          d.Sellable,
+		BindingsTotal:     d.BindingsTotal,
+		BindingsAvailable: d.BindingsAvailable,
+		ModelStatus:       d.ModelStatus,
 	})
 }
 

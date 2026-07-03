@@ -17,6 +17,7 @@ type Store interface {
 	RoutesOpsTable(ctx context.Context, arg sqlc.RoutesOpsTableParams) ([]sqlc.RoutesOpsTableRow, error)
 	RoutesOpsTableCount(ctx context.Context, arg sqlc.RoutesOpsTableCountParams) (int64, error)
 	RouteOpsDetail(ctx context.Context, arg sqlc.RouteOpsDetailParams) (sqlc.RouteOpsDetailRow, error)
+	RouteOpsReachableModels(ctx context.Context, routeID int64) ([]sqlc.RouteOpsReachableModelsRow, error)
 	RouteOpsChannelPool(ctx context.Context, routeID int64) ([]sqlc.RouteOpsChannelPoolRow, error)
 	RouteOpsBoundUsers(ctx context.Context, routeID int64) ([]sqlc.RouteOpsBoundUsersRow, error)
 	RouteOpsBoundKeys(ctx context.Context, routeID int64) ([]sqlc.RouteOpsBoundKeysRow, error)
@@ -50,31 +51,25 @@ type Summary struct {
 	LatencyP95    float64
 }
 
-// Row 是线路运维主表行。
+// Row 是线路运维主表行（静态配置；请求指标在详情页聚合）。
 type Row struct {
-	ID          int64
-	Name        string
-	Mode        string
-	PoolKind    string
-	Status      string
-	Description string
-	// PriceRatio 客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率），十进制字符串。
-	PriceRatio       string
-	RequestTotal     int64
-	RequestSucceeded int64
-	SuccessRate      float64
-	FallbackTotal    int64
-	FallbackRate     float64
-	NoChannelTotal   int64
-	LatencyP95       float64
-	BoundUsers       int64
-	BoundKeys        int64
-	PoolChannels     int64
-	Serviceable      bool
-	Abnormal         bool
+	ID           int64
+	Name         string
+	Mode         string
+	PoolKind     string
+	Status       string
+	Description  string
+	PriceRatio   string
+	RpmLimit     *int32
+	TpmLimit     *int32
+	RpdLimit     *int32
+	CreatedAt    time.Time
+	BoundKeys    int64
+	PoolChannels int64
+	ModelsCount  int64
 }
 
-// Detail 是抽屉概览。
+// Detail 是详情页概览（含请求/延迟/可服务等运维指标）。
 type Detail struct {
 	RequestTotal     int64
 	RequestSucceeded int64
@@ -84,6 +79,15 @@ type Detail struct {
 	NoChannelTotal   int64
 	LatencyP50       float64
 	LatencyP95       float64
+	Serviceable      bool
+	Abnormal         bool
+	RouteStatus      string
+}
+
+// ReachableModel 是线路可达模型（列表 Tip / 详情）。
+type ReachableModel struct {
+	ModelID     string
+	DisplayName string
 }
 
 // ChannelPoolRow 是渠道池 Tab 行。
@@ -137,14 +141,19 @@ type RequestRow struct {
 
 // TableParams 主表入参。
 type TableParams struct {
-	From      time.Time
-	To        time.Time
 	Status    string
 	Search    string
 	SortField string
 	SortDesc  bool
 	Limit     int32
 	Offset    int32
+}
+
+func deriveServiceable(status string, requestTotal, requestSucceeded, noChannelTotal int64) (serviceable, abnormal bool) {
+	rate := opsutil.SuccessRate(requestSucceeded, requestTotal)
+	abnormal = noChannelTotal > 0 || (requestTotal >= 20 && rate < 0.9)
+	serviceable = status == "enabled" && !abnormal
+	return serviceable, abnormal
 }
 
 // Summary 聚合线路总览。
@@ -177,8 +186,6 @@ func (s *Service) Summary(ctx context.Context, from, to time.Time) (Summary, err
 // Table 返回线路运维主表（分页）。
 func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error) {
 	rows, err := s.store.RoutesOpsTable(ctx, sqlc.RoutesOpsTableParams{
-		FromTime:   opsutil.TsNarg(p.From),
-		ToTime:     opsutil.TsNarg(p.To),
 		Status:     opsutil.TextNarg(p.Status),
 		Search:     opsutil.TextNarg(p.Search),
 		SortField:  opsutil.TextNarg(p.SortField),
@@ -198,42 +205,34 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 	}
 	out := make([]Row, 0, len(rows))
 	for _, r := range rows {
-		rate := opsutil.SuccessRate(r.RequestSucceeded, r.RequestTotal)
-		abnormal := r.NoChannelTotal > 0 || (r.RequestTotal >= 20 && rate < 0.9)
-		row := Row{
-			ID:               r.ID,
-			Name:             r.Name,
-			Mode:             r.Mode,
-			PoolKind:         r.PoolKind,
-			Status:           r.Status,
-			Description:      opsutil.TextValue(r.Description),
-			PriceRatio:       opsutil.NumericString(r.PriceRatio),
-			RequestTotal:     r.RequestTotal,
-			RequestSucceeded: r.RequestSucceeded,
-			SuccessRate:      rate,
-			FallbackTotal:    r.FallbackTotal,
-			NoChannelTotal:   r.NoChannelTotal,
-			LatencyP95:       r.LatencyP95,
-			BoundUsers:       r.BoundUsers,
-			BoundKeys:        r.BoundKeys,
-			PoolChannels:     r.PoolChannels,
-			Serviceable:      r.Status == "enabled" && !abnormal,
-			Abnormal:         abnormal,
-		}
-		if r.RequestSucceeded > 0 {
-			row.FallbackRate = float64(r.FallbackTotal) / float64(r.RequestSucceeded)
-		}
-		out = append(out, row)
+		out = append(out, Row{
+			ID:           r.ID,
+			Name:         r.Name,
+			Mode:         r.Mode,
+			PoolKind:     r.PoolKind,
+			Status:       r.Status,
+			Description:  opsutil.TextValue(r.Description),
+			PriceRatio:   opsutil.NumericString(r.PriceRatio),
+			RpmLimit:     opsutil.Int4Value(r.RpmLimit),
+			TpmLimit:     opsutil.Int4Value(r.TpmLimit),
+			RpdLimit:     opsutil.Int4Value(r.RpdLimit),
+			CreatedAt:    r.CreatedAt.Time,
+			BoundKeys:    r.BoundKeys,
+			PoolChannels: r.PoolChannels,
+			ModelsCount:  r.ModelsCount,
+		})
 	}
 	return out, total, nil
 }
 
-// Detail 返回单线路抽屉概览。
+// Detail 返回单线路详情概览。
 func (s *Service) Detail(ctx context.Context, routeID int64, from, to time.Time) (Detail, error) {
 	r, err := s.store.RouteOpsDetail(ctx, sqlc.RouteOpsDetailParams{RouteID: routeID, FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
 	if err != nil {
 		return Detail{}, opsutil.StoreFailed(err, "route ops detail")
 	}
+	status := r.RouteStatus
+	serviceable, abnormal := deriveServiceable(status, r.RequestTotal, r.RequestSucceeded, r.NoChannelTotal)
 	d := Detail{
 		RequestTotal:     r.RequestTotal,
 		RequestSucceeded: r.RequestSucceeded,
@@ -242,11 +241,27 @@ func (s *Service) Detail(ctx context.Context, routeID int64, from, to time.Time)
 		NoChannelTotal:   r.NoChannelTotal,
 		LatencyP50:       r.LatencyP50,
 		LatencyP95:       r.LatencyP95,
+		Serviceable:      serviceable,
+		Abnormal:         abnormal,
+		RouteStatus:      status,
 	}
 	if r.RequestSucceeded > 0 {
 		d.FallbackRate = float64(r.FallbackTotal) / float64(r.RequestSucceeded)
 	}
 	return d, nil
+}
+
+// ReachableModels 返回线路可达模型列表。
+func (s *Service) ReachableModels(ctx context.Context, routeID int64) ([]ReachableModel, error) {
+	rows, err := s.store.RouteOpsReachableModels(ctx, routeID)
+	if err != nil {
+		return nil, opsutil.StoreFailed(err, "route ops reachable models")
+	}
+	out := make([]ReachableModel, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ReachableModel{ModelID: r.ModelID, DisplayName: r.DisplayName})
+	}
+	return out, nil
 }
 
 // ChannelPool 返回线路显式渠道池成员。

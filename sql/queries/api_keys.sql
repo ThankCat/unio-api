@@ -94,6 +94,20 @@ SET route_id = sqlc.arg(route_id), updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at;
 
+-- name: SetAPIKeyName :one
+-- SetAPIKeyName 更新 API Key 名称。
+UPDATE api_keys
+SET name = sqlc.arg(name), updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at;
+
+-- name: SetAPIKeyExpiresAt :one
+-- SetAPIKeyExpiresAt 设置/清除 API Key 过期时间；expires_at 为 NULL 表示永不过期。
+UPDATE api_keys
+SET expires_at = sqlc.narg(expires_at), updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at;
+
 -- name: SetAPIKeyRateLimits :one
 -- SetAPIKeyRateLimits 设置/清除 API Key 的令牌级限流上限（P2-8）；各列 NULL=继承全局默认，0=不限，>0=具体上限。
 UPDATE api_keys

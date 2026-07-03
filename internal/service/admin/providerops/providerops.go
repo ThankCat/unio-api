@@ -15,6 +15,9 @@ type Store interface {
 	ProvidersOpsTable(ctx context.Context, arg sqlc.ProvidersOpsTableParams) ([]sqlc.ProvidersOpsTableRow, error)
 	ProvidersOpsTableCount(ctx context.Context, arg sqlc.ProvidersOpsTableCountParams) (int64, error)
 	ProviderOpsDetail(ctx context.Context, arg sqlc.ProviderOpsDetailParams) (sqlc.ProviderOpsDetailRow, error)
+	ProviderOpsChannelCatalog(ctx context.Context, providerID int64) ([]sqlc.ProviderOpsChannelCatalogRow, error)
+	ProviderOpsModelCatalog(ctx context.Context, providerID int64) ([]sqlc.ProviderOpsModelCatalogRow, error)
+	ProviderOpsRouteCatalog(ctx context.Context, providerID int64) ([]sqlc.ProviderOpsRouteCatalogRow, error)
 	ProviderOpsChannels(ctx context.Context, arg sqlc.ProviderOpsChannelsParams) ([]sqlc.ProviderOpsChannelsRow, error)
 	ProviderOpsPerformanceTimeseries(ctx context.Context, arg sqlc.ProviderOpsPerformanceTimeseriesParams) ([]sqlc.ProviderOpsPerformanceTimeseriesRow, error)
 	ProviderOpsErrors(ctx context.Context, arg sqlc.ProviderOpsErrorsParams) ([]sqlc.ProviderOpsErrorsRow, error)
@@ -31,13 +34,20 @@ func NewService(store Store) *Service {
 	return &Service{store: store}
 }
 
-// Row 是服务商运维主表行。
+// Row 是服务商运维主表行（静态元数据；指标在详情页聚合）。
 type Row struct {
-	ID               int64
-	Slug             string
-	Name             string
-	Status           string
-	CreatedAt        time.Time
+	ID           int64
+	Slug         string
+	Name         string
+	Status       string
+	CreatedAt    time.Time
+	ChannelTotal int64
+	ModelsCount  int64
+	RoutesCount  int64
+}
+
+// Detail 是详情页概览（含 attempt/延迟/Token/利润/TPS 等运维指标）。
+type Detail struct {
 	ChannelTotal     int64
 	ChannelEnabled   int64
 	AttemptTotal     int64
@@ -53,15 +63,25 @@ type Row struct {
 	AvgTPS           float64
 }
 
-// Detail 是抽屉概览。
-type Detail struct {
-	ChannelTotal     int64
-	ChannelEnabled   int64
-	AttemptTotal     int64
-	AttemptSucceeded int64
-	SuccessRate      float64
-	TimeoutTotal     int64
-	Latency          opsutil.LatencyStats
+// ChannelCatalogRow 是列表 Tip 渠道行。
+type ChannelCatalogRow struct {
+	ID     int64
+	Name   string
+	Status string
+}
+
+// ModelCatalogRow 是列表 Tip 模型行。
+type ModelCatalogRow struct {
+	ModelID     string
+	DisplayName string
+}
+
+// RouteCatalogRow 是列表 Tip 线路行。
+type RouteCatalogRow struct {
+	ID     int64
+	Name   string
+	Status string
+	Mode   string
 }
 
 // ChannelRow 是抽屉渠道 Tab 行（精简）。
@@ -97,8 +117,6 @@ type ErrorRow struct {
 
 // TableParams 主表入参。
 type TableParams struct {
-	From      time.Time
-	To        time.Time
 	Status    string
 	Search    string
 	SortField string
@@ -110,8 +128,6 @@ type TableParams struct {
 // Table 返回服务商运维主表（分页）。
 func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error) {
 	rows, err := s.store.ProvidersOpsTable(ctx, sqlc.ProvidersOpsTableParams{
-		FromTime:   opsutil.TsNarg(p.From),
-		ToTime:     opsutil.TsNarg(p.To),
 		Status:     opsutil.TextNarg(p.Status),
 		Search:     opsutil.TextNarg(p.Search),
 		SortField:  opsutil.TextNarg(p.SortField),
@@ -132,41 +148,27 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 	out := make([]Row, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, Row{
-			ID:               r.ID,
-			Slug:             r.Slug,
-			Name:             r.Name,
-			Status:           r.Status,
-			CreatedAt:        r.CreatedAt.Time,
-			ChannelTotal:     r.ChannelTotal,
-			ChannelEnabled:   r.ChannelEnabled,
-			AttemptTotal:     r.AttemptTotal,
-			AttemptSucceeded: r.AttemptSucceeded,
-			SuccessRate:      opsutil.SuccessRate(r.AttemptSucceeded, r.AttemptTotal),
-			TimeoutTotal:     r.TimeoutTotal,
-			Latency: opsutil.AttemptLatency(
-				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
-				r.LatencySample, r.AttemptSucceeded,
-			),
-			HealthBucket: opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal),
-			Tokens:       r.TokensTotal,
-			RevenueUSD:    opsutil.NumericString(r.RevenueUsd),
-			CostUSD:       opsutil.NumericString(r.CostUsd),
-			MarginUSD: opsutil.SubtractDecimal(
-				opsutil.NumericString(r.RevenueUsd),
-				opsutil.NumericString(r.CostUsd),
-			),
-			AvgTPS: r.AvgTps,
+			ID:           r.ID,
+			Slug:         r.Slug,
+			Name:         r.Name,
+			Status:       r.Status,
+			CreatedAt:    r.CreatedAt.Time,
+			ChannelTotal: r.ChannelTotal,
+			ModelsCount:  r.ModelsCount,
+			RoutesCount:  r.RoutesCount,
 		})
 	}
 	return out, total, nil
 }
 
-// Detail 返回单服务商抽屉概览。
+// Detail 返回单服务商详情概览。
 func (s *Service) Detail(ctx context.Context, providerID int64, from, to time.Time) (Detail, error) {
 	r, err := s.store.ProviderOpsDetail(ctx, sqlc.ProviderOpsDetailParams{ProviderID: providerID, FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
 	if err != nil {
 		return Detail{}, opsutil.StoreFailed(err, "provider ops detail")
 	}
+	revenue := opsutil.NumericString(r.RevenueUsd)
+	cost := opsutil.NumericString(r.CostUsd)
 	return Detail{
 		ChannelTotal:     r.ChannelTotal,
 		ChannelEnabled:   r.ChannelEnabled,
@@ -178,7 +180,52 @@ func (s *Service) Detail(ctx context.Context, providerID int64, from, to time.Ti
 			r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 			r.LatencySample, r.AttemptSucceeded,
 		),
+		HealthBucket: opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal),
+		Tokens:       r.TokensTotal,
+		RevenueUSD:   revenue,
+		CostUSD:      cost,
+		MarginUSD:    opsutil.SubtractDecimal(revenue, cost),
+		AvgTPS:       r.AvgTps,
 	}, nil
+}
+
+// ChannelCatalog 返回服务商渠道清单（列表 Tip）。
+func (s *Service) ChannelCatalog(ctx context.Context, providerID int64) ([]ChannelCatalogRow, error) {
+	rows, err := s.store.ProviderOpsChannelCatalog(ctx, providerID)
+	if err != nil {
+		return nil, opsutil.StoreFailed(err, "provider ops channel catalog")
+	}
+	out := make([]ChannelCatalogRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ChannelCatalogRow{ID: r.ID, Name: r.Name, Status: r.Status})
+	}
+	return out, nil
+}
+
+// ModelCatalog 返回服务商绑定模型清单（列表 Tip）。
+func (s *Service) ModelCatalog(ctx context.Context, providerID int64) ([]ModelCatalogRow, error) {
+	rows, err := s.store.ProviderOpsModelCatalog(ctx, providerID)
+	if err != nil {
+		return nil, opsutil.StoreFailed(err, "provider ops model catalog")
+	}
+	out := make([]ModelCatalogRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ModelCatalogRow{ModelID: r.ModelID, DisplayName: r.DisplayName})
+	}
+	return out, nil
+}
+
+// RouteCatalog 返回引用本服务商渠道的线路清单（列表 Tip）。
+func (s *Service) RouteCatalog(ctx context.Context, providerID int64) ([]RouteCatalogRow, error) {
+	rows, err := s.store.ProviderOpsRouteCatalog(ctx, providerID)
+	if err != nil {
+		return nil, opsutil.StoreFailed(err, "provider ops route catalog")
+	}
+	out := make([]RouteCatalogRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, RouteCatalogRow{ID: r.ID, Name: r.Name, Status: r.Status, Mode: r.Mode})
+	}
+	return out, nil
 }
 
 // Channels 返回单服务商下渠道精简子列表。

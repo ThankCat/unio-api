@@ -122,21 +122,6 @@ type dashboardHandler struct {
 	service DashboardService
 }
 
-func (h *dashboardHandler) overview(w http.ResponseWriter, r *http.Request) {
-	from, to, err := dashboardRange(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	overview, err := h.service.Overview(r.Context(), from, to)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	writeData(w, http.StatusOK, toDashboardOverviewDTO(overview))
-}
-
 func (h *dashboardHandler) timeseries(w http.ResponseWriter, r *http.Request) {
 	from, to, err := dashboardRange(r)
 	if err != nil {

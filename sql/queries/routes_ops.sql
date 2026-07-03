@@ -25,7 +25,7 @@ WITH attributed AS (
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 )
 SELECT
-    COUNT(*) FILTER (WHERE route_id IS NOT NULL AND status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
+    COUNT(*) FILTER (WHERE route_id IS NOT NULL AND status IN ('succeeded', 'failed')) AS terminal_total,
     COUNT(*) FILTER (WHERE route_id IS NOT NULL AND status = 'succeeded') AS succeeded_total,
     COUNT(*) FILTER (WHERE route_id IS NOT NULL AND status = 'succeeded' AND attempt_count > 1) AS fallback_total,
     COUNT(*) FILTER (WHERE route_id IS NOT NULL AND error_code IN ('no_available_channel', 'routing_no_available_channel')) AS no_channel_total,
@@ -35,20 +35,7 @@ SELECT
 FROM attributed;
 
 -- name: RoutesOpsTable :many
--- RoutesOpsTable 线路运维主表（分页）：归因请求指标 + fallback + 无可用渠道 + 绑定数。
-WITH attributed AS (
-    SELECT
-        ak.route_id AS route_id,
-        r.status,
-        r.error_code,
-        r.started_at,
-        r.completed_at,
-        (SELECT COUNT(*) FROM request_attempts a WHERE a.request_record_id = r.id) AS attempt_count
-    FROM request_records r
-    JOIN api_keys ak ON ak.id = r.api_key_id
-    WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
-      AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
-)
+-- RoutesOpsTable 线路运维主表（分页）：静态配置 + 绑定/池/可达模型数；请求指标在详情页聚合。
 SELECT
     rt.id,
     rt.name,
@@ -57,29 +44,75 @@ SELECT
     rt.status,
     rt.description,
     rt.price_ratio,
-    COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
-    COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded') AS request_succeeded,
-    COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded' AND ar.attempt_count > 1) AS fallback_total,
-    COUNT(ar.route_id) FILTER (WHERE ar.error_code IN ('no_available_channel', 'routing_no_available_channel')) AS no_channel_total,
-    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
-        CASE WHEN ar.status = 'succeeded' AND ar.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (ar.completed_at - ar.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
-    (SELECT COUNT(DISTINCT kk.user_id) FROM api_keys kk WHERE kk.route_id = rt.id) AS bound_users,
+    rt.rpm_limit,
+    rt.tpm_limit,
+    rt.rpd_limit,
+    rt.created_at,
     (SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id) AS bound_keys,
-    (SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id) AS pool_channels
+    (SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id) AS pool_channels,
+    (
+        SELECT COUNT(DISTINCT m.id)
+        FROM models m
+        JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
+        JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled'
+        WHERE EXISTS (
+            SELECT 1 FROM channel_prices p
+            WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
+        )
+        AND (
+            rt.pool_kind = 'all'
+            OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
+        )
+    ) AS models_count
 FROM routes rt
-LEFT JOIN attributed ar ON ar.route_id = rt.id
 WHERE (sqlc.narg('status')::text IS NULL OR rt.status = sqlc.narg('status')::text)
   AND (sqlc.narg('search')::text IS NULL OR rt.name ILIKE '%' || sqlc.narg('search')::text || '%')
-GROUP BY rt.id, rt.name, rt.mode, rt.pool_kind, rt.status, rt.description, rt.price_ratio
 ORDER BY
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded')::float8 / NULLIF(COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded','failed','canceled')), 0)) END DESC NULLS LAST,
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded')::float8 / NULLIF(COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded','failed','canceled')), 0)) END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'name' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.name END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'name' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.name END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
-  rt.id
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'name') IN ('', 'name') AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.name END DESC NULLS LAST,
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'name') IN ('', 'name') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.name END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.created_at END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.created_at END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'bindings' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (
+        SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id
+    ) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'bindings' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (
+        SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id
+    ) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'pool_channels' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (
+        SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id
+    ) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'pool_channels' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (
+        SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id
+    ) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'models' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (
+        SELECT COUNT(DISTINCT m.id)
+        FROM models m
+        JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
+        JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled'
+        WHERE EXISTS (
+            SELECT 1 FROM channel_prices p
+            WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
+        )
+        AND (
+            rt.pool_kind = 'all'
+            OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
+        )
+    ) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'models' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (
+        SELECT COUNT(DISTINCT m.id)
+        FROM models m
+        JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
+        JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled'
+        WHERE EXISTS (
+            SELECT 1 FROM channel_prices p
+            WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
+        )
+        AND (
+            rt.pool_kind = 'all'
+            OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
+        )
+    ) END ASC NULLS LAST,
+  rt.name
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 
 -- name: RoutesOpsTableCount :one
@@ -104,7 +137,7 @@ WITH attributed AS (
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 )
 SELECT
-    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed', 'canceled')) AS request_total,
+    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed')) AS request_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS request_succeeded,
     COUNT(*) FILTER (WHERE status = 'succeeded' AND attempt_count > 1) AS fallback_total,
     COUNT(*) FILTER (WHERE error_code IN ('no_available_channel', 'routing_no_available_channel')) AS no_channel_total,
@@ -113,8 +146,30 @@ SELECT
              THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95
+             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    (SELECT rt.status FROM routes rt WHERE rt.id = sqlc.arg('route_id')) AS route_status
 FROM attributed;
+
+-- name: RouteOpsReachableModels :many
+-- RouteOpsReachableModels 线路可达模型（有启用绑定且有价格的 distinct 模型）。
+SELECT
+    m.model_id,
+    m.display_name
+FROM models m
+JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
+JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled'
+JOIN routes rt ON rt.id = sqlc.arg('route_id')
+WHERE EXISTS (
+    SELECT 1 FROM channel_prices p
+    WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
+)
+AND (
+    rt.pool_kind = 'all'
+    OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
+)
+GROUP BY m.id, m.model_id, m.display_name
+ORDER BY m.model_id
+LIMIT 500;
 
 -- name: RouteOpsChannelPool :many
 -- RouteOpsChannelPool 线路显式渠道池成员（pool_kind='explicit'）+ 渠道健康（抽屉渠道池 Tab）。
@@ -158,7 +213,7 @@ WITH attributed AS (
 )
 SELECT
     date_trunc(sqlc.arg('unit')::text, created_at)::timestamptz AS bucket,
-    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed', 'canceled')) AS request_total,
+    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed')) AS request_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS request_succeeded,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
@@ -179,7 +234,7 @@ WITH attributed AS (
 )
 SELECT
     requested_model_id AS model_id,
-    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed', 'canceled')) AS request_total,
+    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed')) AS request_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS request_succeeded
 FROM attributed
 GROUP BY requested_model_id

@@ -159,53 +159,7 @@ func (h *catalogHandler) adopt(w http.ResponseWriter, r *http.Request) {
 	h.writeModel(w, r, id, http.StatusCreated)
 }
 
-func (h *catalogHandler) refresh(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	if err := h.catalog.Refresh(r.Context(), id); err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	h.writeModel(w, r, id, http.StatusOK)
-}
-
-func (h *catalogHandler) reminder(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	var req catalogReminderRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	var snoozeUntil *time.Time
-	if req.SnoozeUntil != nil && strings.TrimSpace(*req.SnoozeUntil) != "" {
-		parsed, perr := time.Parse(time.RFC3339, strings.TrimSpace(*req.SnoozeUntil))
-		if perr != nil {
-			writeServiceError(w, invalidRequestField("snooze_until", "snooze_until must be RFC3339"))
-			return
-		}
-		snoozeUntil = &parsed
-	}
-
-	if err := h.catalog.SetReminder(r.Context(), id, modelcatalogadmin.ReminderAction(strings.TrimSpace(req.Action)), snoozeUntil); err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	h.writeModel(w, r, id, http.StatusOK)
-}
-
-// writeModel 回读模型完整视图（含 catalog 追更状态）并写出，供采纳/刷新/提醒后返回最新态。
+// writeModel 回读模型完整视图（含 catalog 追更状态）并写出，供采纳后返回最新态。
 func (h *catalogHandler) writeModel(w http.ResponseWriter, r *http.Request, id int64, status int) {
 	m, err := h.models.Get(r.Context(), id)
 	if err != nil {

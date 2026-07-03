@@ -51,7 +51,7 @@ FROM per_model;
 
 -- name: ModelsOpsRequestAggregate :one
 SELECT
-    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
+    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed')) AS terminal_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS succeeded_total
 FROM request_records
 WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
@@ -76,7 +76,7 @@ SELECT
     ), 0)::numeric AS cost_usd;
 
 -- name: ModelsOpsTable :many
--- ModelsOpsTable 模型商品运维主表（分页）：可售/渠道/请求/成功率/延迟/价格/毛利（USD）。
+-- ModelsOpsTable 模型商品运维主表（分页）：静态元数据 + 渠道/基准价；请求/毛利等指标在详情页聚合。
 SELECT
     m.id,
     m.model_id,
@@ -84,6 +84,8 @@ SELECT
     m.owned_by,
     m.status,
     m.created_at,
+    m.max_output_tokens,
+    m.context_window_tokens,
     (SELECT COUNT(*) FROM channel_models cm WHERE cm.model_id = m.id AND cm.status = 'enabled') AS bindings_total,
     (
         SELECT COUNT(*)
@@ -95,39 +97,13 @@ SELECT
               WHERE p.channel_id = cm.channel_id AND p.model_id = m.id AND p.status = 'enabled'
           )
     ) AS bindings_available,
+    (
+        SELECT COUNT(*)
+        FROM model_capabilities mc
+        WHERE mc.model_id = m.id
+          AND mc.support_level IN ('full', 'limited')
+    ) AS capabilities_declared_count,
     EXISTS (SELECT 1 FROM channel_prices p WHERE p.model_id = m.id AND p.status = 'enabled') AS has_price,
-    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
-    COUNT(r.id) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
-    COUNT(r.id) FILTER (WHERE r.status = 'succeeded' AND r.completed_at IS NOT NULL) AS latency_sample,
-    COALESCE(AVG(CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-        THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
-    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
-        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
-    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
-        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
-    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
-        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
-    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
-        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
-    COALESCE((
-        SELECT SUM(le.amount)
-        FROM ledger_entries le
-        JOIN request_records rr ON rr.id = le.request_record_id
-        WHERE le.entry_type = 'debit' AND le.currency = 'USD' AND rr.requested_model_id = m.model_id
-          AND (sqlc.narg('from_time')::timestamptz IS NULL OR le.created_at >= sqlc.narg('from_time')::timestamptz)
-          AND (sqlc.narg('to_time')::timestamptz IS NULL OR le.created_at < sqlc.narg('to_time')::timestamptz)
-    ), 0)::numeric AS revenue_usd,
-    COALESCE((
-        SELECT SUM(cs.total_cost_amount)
-        FROM cost_snapshots cs
-        WHERE cs.model_id = m.id AND cs.currency = 'USD'
-          AND (sqlc.narg('from_time')::timestamptz IS NULL OR cs.created_at >= sqlc.narg('from_time')::timestamptz)
-          AND (sqlc.narg('to_time')::timestamptz IS NULL OR cs.created_at < sqlc.narg('to_time')::timestamptz)
-    ), 0)::numeric AS cost_usd,
     -- 基准售价（DEC-026 model_prices 当前生效行）：客户售价 = 基准 × 线路倍率；无基准时各列为 NULL（前端显示「缺价」）。
     -- CASE 包裹让 sqlc 把 base_currency 推断为可空（pgtype.Text）：LATERAL 无命中行时该列为 NULL，避免扫描进 string 报错。
     CASE WHEN base.currency IS NOT NULL THEN base.currency END AS base_currency,
@@ -138,10 +114,6 @@ SELECT
     base.output_price AS base_output_price,
     base.reasoning_output_price AS base_reasoning_output_price
 FROM models m
-LEFT JOIN request_records r
-    ON r.requested_model_id = m.model_id
-    AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
-    AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 LEFT JOIN LATERAL (
     -- base: 模型当前生效的基准售价（mirror FindRouteCandidates 的 base LATERAL）；LEFT 保证无基准价的模型仍出现在列表。
     SELECT mp.currency, mp.uncached_input_price, mp.cache_read_input_price,
@@ -157,19 +129,33 @@ LEFT JOIN LATERAL (
 ) base ON TRUE
 WHERE (sqlc.narg('status')::text IS NULL OR m.status = sqlc.narg('status')::text)
   AND (sqlc.narg('search')::text IS NULL OR m.model_id ILIKE '%' || sqlc.narg('search')::text || '%' OR m.display_name ILIKE '%' || sqlc.narg('search')::text || '%')
-GROUP BY m.id, m.model_id, m.display_name, m.owned_by, m.status, m.created_at,
-    base.currency, base.uncached_input_price, base.cache_read_input_price,
-    base.cache_write_5m_input_price, base.cache_write_1h_input_price,
-    base.output_price, base.reasoning_output_price
 ORDER BY
-  CASE WHEN sqlc.narg('sort_field')::text = 'success_rate' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'success_rate' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'name' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN m.model_id END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'name' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN m.model_id END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'margin' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE le.entry_type = 'debit' AND le.currency = 'USD' AND rr.requested_model_id = m.model_id AND (sqlc.narg('from_time')::timestamptz IS NULL OR le.created_at >= sqlc.narg('from_time')::timestamptz) AND (sqlc.narg('to_time')::timestamptz IS NULL OR le.created_at < sqlc.narg('to_time')::timestamptz)), 0) - COALESCE((SELECT SUM(cs.total_cost_amount) FROM cost_snapshots cs WHERE cs.model_id = m.id AND cs.currency = 'USD' AND (sqlc.narg('from_time')::timestamptz IS NULL OR cs.created_at >= sqlc.narg('from_time')::timestamptz) AND (sqlc.narg('to_time')::timestamptz IS NULL OR cs.created_at < sqlc.narg('to_time')::timestamptz)), 0)) END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'margin' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE le.entry_type = 'debit' AND le.currency = 'USD' AND rr.requested_model_id = m.model_id AND (sqlc.narg('from_time')::timestamptz IS NULL OR le.created_at >= sqlc.narg('from_time')::timestamptz) AND (sqlc.narg('to_time')::timestamptz IS NULL OR le.created_at < sqlc.narg('to_time')::timestamptz)), 0) - COALESCE((SELECT SUM(cs.total_cost_amount) FROM cost_snapshots cs WHERE cs.model_id = m.id AND cs.currency = 'USD' AND (sqlc.narg('from_time')::timestamptz IS NULL OR cs.created_at >= sqlc.narg('from_time')::timestamptz) AND (sqlc.narg('to_time')::timestamptz IS NULL OR cs.created_at < sqlc.narg('to_time')::timestamptz)), 0)) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'context' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN m.context_window_tokens END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'context' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN m.context_window_tokens END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'max_output' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN m.max_output_tokens END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'max_output' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN m.max_output_tokens END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'bindings' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (
+        SELECT COUNT(*)
+        FROM channel_models cm
+        JOIN channels c ON c.id = cm.channel_id
+        WHERE cm.model_id = m.id AND cm.status = 'enabled' AND c.status = 'enabled'
+          AND EXISTS (
+              SELECT 1 FROM channel_prices p
+              WHERE p.channel_id = cm.channel_id AND p.model_id = m.id AND p.status = 'enabled'
+          )
+    ) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'bindings' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (
+        SELECT COUNT(*)
+        FROM channel_models cm
+        JOIN channels c ON c.id = cm.channel_id
+        WHERE cm.model_id = m.id AND cm.status = 'enabled' AND c.status = 'enabled'
+          AND EXISTS (
+              SELECT 1 FROM channel_prices p
+              WHERE p.channel_id = cm.channel_id AND p.model_id = m.id AND p.status = 'enabled'
+          )
+    ) END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN m.created_at END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN m.created_at END ASC NULLS LAST,
   m.model_id
@@ -182,10 +168,12 @@ WHERE (sqlc.narg('status')::text IS NULL OR m.status = sqlc.narg('status')::text
   AND (sqlc.narg('search')::text IS NULL OR m.model_id ILIKE '%' || sqlc.narg('search')::text || '%' OR m.display_name ILIKE '%' || sqlc.narg('search')::text || '%');
 
 -- name: ModelOpsDetail :one
--- ModelOpsDetail 单模型抽屉概览：请求/成功率/延迟/token/缓存/TPS/毛利（USD）。
+-- ModelOpsDetail 单模型详情概览：请求/成功率/延迟/token/缓存/TPS/毛利（USD）。
 SELECT
-    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
+    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) AS request_total,
     COUNT(r.id) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
+    COALESCE(AVG(CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
     COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
@@ -199,7 +187,35 @@ SELECT
     COALESCE(SUM(
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
              THEN EXTRACT(EPOCH FROM (r.completed_at - COALESCE(r.response_started_at, r.started_at))) END
-    ), 0)::float8 AS generation_seconds
+    ), 0)::float8 AS generation_seconds,
+    COALESCE((
+        SELECT SUM(le.amount)
+        FROM ledger_entries le
+        JOIN request_records rr ON rr.id = le.request_record_id
+        JOIN models m2 ON m2.model_id = rr.requested_model_id
+        WHERE le.entry_type = 'debit' AND le.currency = 'USD' AND m2.id = sqlc.arg('model_id')
+          AND (sqlc.narg('from_time')::timestamptz IS NULL OR le.created_at >= sqlc.narg('from_time')::timestamptz)
+          AND (sqlc.narg('to_time')::timestamptz IS NULL OR le.created_at < sqlc.narg('to_time')::timestamptz)
+    ), 0)::numeric AS revenue_usd,
+    COALESCE((
+        SELECT SUM(cs.total_cost_amount)
+        FROM cost_snapshots cs
+        WHERE cs.model_id = sqlc.arg('model_id') AND cs.currency = 'USD'
+          AND (sqlc.narg('from_time')::timestamptz IS NULL OR cs.created_at >= sqlc.narg('from_time')::timestamptz)
+          AND (sqlc.narg('to_time')::timestamptz IS NULL OR cs.created_at < sqlc.narg('to_time')::timestamptz)
+    ), 0)::numeric AS cost_usd,
+    (SELECT COUNT(*) FROM channel_models cm WHERE cm.model_id = sqlc.arg('model_id') AND cm.status = 'enabled') AS bindings_total,
+    (
+        SELECT COUNT(*)
+        FROM channel_models cm
+        JOIN channels c ON c.id = cm.channel_id
+        WHERE cm.model_id = sqlc.arg('model_id') AND cm.status = 'enabled' AND c.status = 'enabled'
+          AND EXISTS (
+              SELECT 1 FROM channel_prices p
+              WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
+          )
+    ) AS bindings_available,
+    (SELECT status FROM models WHERE id = sqlc.arg('model_id')) AS model_status
 FROM request_records r
 JOIN models m ON m.model_id = r.requested_model_id
 LEFT JOIN usage_records u ON u.request_record_id = r.id
@@ -216,7 +232,7 @@ SELECT
     cm.status AS binding_status,
     cm.upstream_model,
     c.priority,
-    COUNT(a.id) AS attempt_total,
+    COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
@@ -253,7 +269,7 @@ ORDER BY attempt_total DESC, c.priority, c.id;
 -- name: ModelOpsPerformanceTimeseries :many
 SELECT
     date_trunc(sqlc.arg('unit')::text, r.created_at)::timestamptz AS bucket,
-    COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
+    COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed')) AS request_total,
     COUNT(*) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL

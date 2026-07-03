@@ -307,6 +307,7 @@ type RequestAttempt struct {
 	StartedAt             pgtype.Timestamptz
 	CompletedAt           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
+	FaultParty            pgtype.Text
 }
 
 type RequestRecord struct {

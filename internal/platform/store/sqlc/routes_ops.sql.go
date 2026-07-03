@@ -156,7 +156,7 @@ WITH attributed AS (
       AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 )
 SELECT
-    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed', 'canceled')) AS request_total,
+    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed')) AS request_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS request_succeeded,
     COUNT(*) FILTER (WHERE status = 'succeeded' AND attempt_count > 1) AS fallback_total,
     COUNT(*) FILTER (WHERE error_code IN ('no_available_channel', 'routing_no_available_channel')) AS no_channel_total,
@@ -165,7 +165,8 @@ SELECT
              THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95
+             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    (SELECT rt.status FROM routes rt WHERE rt.id = $1) AS route_status
 FROM attributed
 `
 
@@ -182,6 +183,7 @@ type RouteOpsDetailRow struct {
 	NoChannelTotal   int64
 	LatencyP50       float64
 	LatencyP95       float64
+	RouteStatus      string
 }
 
 // RouteOpsDetail 单线路抽屉概览：归因请求指标 + fallback + 无可用渠道。
@@ -195,6 +197,7 @@ func (q *Queries) RouteOpsDetail(ctx context.Context, arg RouteOpsDetailParams) 
 		&i.NoChannelTotal,
 		&i.LatencyP50,
 		&i.LatencyP95,
+		&i.RouteStatus,
 	)
 	return i, err
 }
@@ -210,7 +213,7 @@ WITH attributed AS (
 )
 SELECT
     requested_model_id AS model_id,
-    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed', 'canceled')) AS request_total,
+    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed')) AS request_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS request_succeeded
 FROM attributed
 GROUP BY requested_model_id
@@ -262,7 +265,7 @@ WITH attributed AS (
 )
 SELECT
     date_trunc($1::text, created_at)::timestamptz AS bucket,
-    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed', 'canceled')) AS request_total,
+    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed')) AS request_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS request_succeeded,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
@@ -306,6 +309,53 @@ func (q *Queries) RouteOpsPerformanceTimeseries(ctx context.Context, arg RouteOp
 			&i.RequestSucceeded,
 			&i.LatencyP95,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const routeOpsReachableModels = `-- name: RouteOpsReachableModels :many
+SELECT
+    m.model_id,
+    m.display_name
+FROM models m
+JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
+JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled'
+JOIN routes rt ON rt.id = $1
+WHERE EXISTS (
+    SELECT 1 FROM channel_prices p
+    WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
+)
+AND (
+    rt.pool_kind = 'all'
+    OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
+)
+GROUP BY m.id, m.model_id, m.display_name
+ORDER BY m.model_id
+LIMIT 500
+`
+
+type RouteOpsReachableModelsRow struct {
+	ModelID     string
+	DisplayName string
+}
+
+// RouteOpsReachableModels 线路可达模型（有启用绑定且有价格的 distinct 模型）。
+func (q *Queries) RouteOpsReachableModels(ctx context.Context, routeID int64) ([]RouteOpsReachableModelsRow, error) {
+	rows, err := q.db.Query(ctx, routeOpsReachableModels, routeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RouteOpsReachableModelsRow
+	for rows.Next() {
+		var i RouteOpsReachableModelsRow
+		if err := rows.Scan(&i.ModelID, &i.DisplayName); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -421,7 +471,7 @@ WITH attributed AS (
       AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
 )
 SELECT
-    COUNT(*) FILTER (WHERE route_id IS NOT NULL AND status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
+    COUNT(*) FILTER (WHERE route_id IS NOT NULL AND status IN ('succeeded', 'failed')) AS terminal_total,
     COUNT(*) FILTER (WHERE route_id IS NOT NULL AND status = 'succeeded') AS succeeded_total,
     COUNT(*) FILTER (WHERE route_id IS NOT NULL AND status = 'succeeded' AND attempt_count > 1) AS fallback_total,
     COUNT(*) FILTER (WHERE route_id IS NOT NULL AND error_code IN ('no_available_channel', 'routing_no_available_channel')) AS no_channel_total,
@@ -484,19 +534,6 @@ func (q *Queries) RoutesOpsCounts(ctx context.Context) (RoutesOpsCountsRow, erro
 }
 
 const routesOpsTable = `-- name: RoutesOpsTable :many
-WITH attributed AS (
-    SELECT
-        ak.route_id AS route_id,
-        r.status,
-        r.error_code,
-        r.started_at,
-        r.completed_at,
-        (SELECT COUNT(*) FROM request_attempts a WHERE a.request_record_id = r.id) AS attempt_count
-    FROM request_records r
-    JOIN api_keys ak ON ak.id = r.api_key_id
-    WHERE ($7::timestamptz IS NULL OR r.created_at >= $7::timestamptz)
-      AND ($8::timestamptz IS NULL OR r.created_at < $8::timestamptz)
-)
 SELECT
     rt.id,
     rt.name,
@@ -505,29 +542,75 @@ SELECT
     rt.status,
     rt.description,
     rt.price_ratio,
-    COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
-    COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded') AS request_succeeded,
-    COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded' AND ar.attempt_count > 1) AS fallback_total,
-    COUNT(ar.route_id) FILTER (WHERE ar.error_code IN ('no_available_channel', 'routing_no_available_channel')) AS no_channel_total,
-    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
-        CASE WHEN ar.status = 'succeeded' AND ar.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (ar.completed_at - ar.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
-    (SELECT COUNT(DISTINCT kk.user_id) FROM api_keys kk WHERE kk.route_id = rt.id) AS bound_users,
+    rt.rpm_limit,
+    rt.tpm_limit,
+    rt.rpd_limit,
+    rt.created_at,
     (SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id) AS bound_keys,
-    (SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id) AS pool_channels
+    (SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id) AS pool_channels,
+    (
+        SELECT COUNT(DISTINCT m.id)
+        FROM models m
+        JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
+        JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled'
+        WHERE EXISTS (
+            SELECT 1 FROM channel_prices p
+            WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
+        )
+        AND (
+            rt.pool_kind = 'all'
+            OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
+        )
+    ) AS models_count
 FROM routes rt
-LEFT JOIN attributed ar ON ar.route_id = rt.id
 WHERE ($1::text IS NULL OR rt.status = $1::text)
   AND ($2::text IS NULL OR rt.name ILIKE '%' || $2::text || '%')
-GROUP BY rt.id, rt.name, rt.mode, rt.pool_kind, rt.status, rt.description, rt.price_ratio
 ORDER BY
-  CASE WHEN COALESCE($3::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($4::bool, false) THEN (COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded')::float8 / NULLIF(COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded','failed','canceled')), 0)) END DESC NULLS LAST,
-  CASE WHEN COALESCE($3::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($4::bool, false) THEN (COUNT(ar.route_id) FILTER (WHERE ar.status = 'succeeded')::float8 / NULLIF(COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded','failed','canceled')), 0)) END ASC NULLS LAST,
-  CASE WHEN $3::text = 'name' AND COALESCE($4::bool, false) THEN rt.name END DESC NULLS LAST,
-  CASE WHEN $3::text = 'name' AND NOT COALESCE($4::bool, false) THEN rt.name END ASC NULLS LAST,
-  CASE WHEN $3::text = 'requests' AND COALESCE($4::bool, false) THEN COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
-  CASE WHEN $3::text = 'requests' AND NOT COALESCE($4::bool, false) THEN COUNT(ar.route_id) FILTER (WHERE ar.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
-  rt.id
+  CASE WHEN COALESCE($3::text, 'name') IN ('', 'name') AND COALESCE($4::bool, false) THEN rt.name END DESC NULLS LAST,
+  CASE WHEN COALESCE($3::text, 'name') IN ('', 'name') AND NOT COALESCE($4::bool, false) THEN rt.name END ASC NULLS LAST,
+  CASE WHEN $3::text = 'created_at' AND COALESCE($4::bool, false) THEN rt.created_at END DESC NULLS LAST,
+  CASE WHEN $3::text = 'created_at' AND NOT COALESCE($4::bool, false) THEN rt.created_at END ASC NULLS LAST,
+  CASE WHEN $3::text = 'bindings' AND COALESCE($4::bool, false) THEN (
+        SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id
+    ) END DESC NULLS LAST,
+  CASE WHEN $3::text = 'bindings' AND NOT COALESCE($4::bool, false) THEN (
+        SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id
+    ) END ASC NULLS LAST,
+  CASE WHEN $3::text = 'pool_channels' AND COALESCE($4::bool, false) THEN (
+        SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id
+    ) END DESC NULLS LAST,
+  CASE WHEN $3::text = 'pool_channels' AND NOT COALESCE($4::bool, false) THEN (
+        SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id
+    ) END ASC NULLS LAST,
+  CASE WHEN $3::text = 'models' AND COALESCE($4::bool, false) THEN (
+        SELECT COUNT(DISTINCT m.id)
+        FROM models m
+        JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
+        JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled'
+        WHERE EXISTS (
+            SELECT 1 FROM channel_prices p
+            WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
+        )
+        AND (
+            rt.pool_kind = 'all'
+            OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
+        )
+    ) END DESC NULLS LAST,
+  CASE WHEN $3::text = 'models' AND NOT COALESCE($4::bool, false) THEN (
+        SELECT COUNT(DISTINCT m.id)
+        FROM models m
+        JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
+        JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled'
+        WHERE EXISTS (
+            SELECT 1 FROM channel_prices p
+            WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
+        )
+        AND (
+            rt.pool_kind = 'all'
+            OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
+        )
+    ) END ASC NULLS LAST,
+  rt.name
 LIMIT $6 OFFSET $5
 `
 
@@ -538,29 +621,26 @@ type RoutesOpsTableParams struct {
 	SortDesc   pgtype.Bool
 	PageOffset int32
 	PageLimit  int32
-	FromTime   pgtype.Timestamptz
-	ToTime     pgtype.Timestamptz
 }
 
 type RoutesOpsTableRow struct {
-	ID               int64
-	Name             string
-	Mode             string
-	PoolKind         string
-	Status           string
-	Description      pgtype.Text
-	PriceRatio       pgtype.Numeric
-	RequestTotal     int64
-	RequestSucceeded int64
-	FallbackTotal    int64
-	NoChannelTotal   int64
-	LatencyP95       float64
-	BoundUsers       int64
-	BoundKeys        int64
-	PoolChannels     int64
+	ID           int64
+	Name         string
+	Mode         string
+	PoolKind     string
+	Status       string
+	Description  pgtype.Text
+	PriceRatio   pgtype.Numeric
+	RpmLimit     pgtype.Int4
+	TpmLimit     pgtype.Int4
+	RpdLimit     pgtype.Int4
+	CreatedAt    pgtype.Timestamptz
+	BoundKeys    int64
+	PoolChannels int64
+	ModelsCount  int64
 }
 
-// RoutesOpsTable 线路运维主表（分页）：归因请求指标 + fallback + 无可用渠道 + 绑定数。
+// RoutesOpsTable 线路运维主表（分页）：静态配置 + 绑定/池/可达模型数；请求指标在详情页聚合。
 func (q *Queries) RoutesOpsTable(ctx context.Context, arg RoutesOpsTableParams) ([]RoutesOpsTableRow, error) {
 	rows, err := q.db.Query(ctx, routesOpsTable,
 		arg.Status,
@@ -569,8 +649,6 @@ func (q *Queries) RoutesOpsTable(ctx context.Context, arg RoutesOpsTableParams) 
 		arg.SortDesc,
 		arg.PageOffset,
 		arg.PageLimit,
-		arg.FromTime,
-		arg.ToTime,
 	)
 	if err != nil {
 		return nil, err
@@ -587,14 +665,13 @@ func (q *Queries) RoutesOpsTable(ctx context.Context, arg RoutesOpsTableParams) 
 			&i.Status,
 			&i.Description,
 			&i.PriceRatio,
-			&i.RequestTotal,
-			&i.RequestSucceeded,
-			&i.FallbackTotal,
-			&i.NoChannelTotal,
-			&i.LatencyP95,
-			&i.BoundUsers,
+			&i.RpmLimit,
+			&i.TpmLimit,
+			&i.RpdLimit,
+			&i.CreatedAt,
 			&i.BoundKeys,
 			&i.PoolChannels,
+			&i.ModelsCount,
 		); err != nil {
 			return nil, err
 		}

@@ -134,7 +134,8 @@ func (s *fakeStore) DashboardTopErrors(context.Context, sqlc.DashboardTopErrorsP
 func TestRadarAggregates(t *testing.T) {
 	store := &fakeStore{
 		perfRow: sqlc.DashboardRadarRequestPerfRow{
-			TerminalTotal: 100, SucceededTotal: 96, FailedTotal: 3, CanceledTotal: 1, PendingTotal: 5,
+			// terminal_total 口径为 succeeded+failed（不含 canceled）；total = terminal + canceled + pending。
+			TerminalTotal: 100, SucceededTotal: 96, FailedTotal: 4, CanceledTotal: 1, PendingTotal: 4,
 			TimeoutTotal: 2, LatencyAvg: 800, LatencyP50: 700, LatencyP90: 1500, LatencyP95: 1800, LatencyP99: 2500,
 			LatencySample: 96,
 			TtftAvg:       1200, TtftP50: 900, TtftP90: 1500, TtftP95: 1600, TtftP99: 2200, TtftSample: 84,
@@ -157,7 +158,7 @@ func TestRadarAggregates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("radar: %v", err)
 	}
-	if out.Requests.Total != 105 { // terminal + pending
+	if out.Requests.Total != 105 { // terminal(succ+fail) + canceled + pending
 		t.Fatalf("requests total = %d, want 105", out.Requests.Total)
 	}
 	if out.Requests.SuccessRate < 0.95 || out.Requests.SuccessRate > 0.961 {

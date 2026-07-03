@@ -54,25 +54,21 @@ type Summary struct {
 	MarginRate     float64
 }
 
-// Row 是模型商品运维主表行。
+// Row 是模型商品运维主表行（静态元数据 + 渠道/基准价；请求/毛利等指标在详情页聚合）。
 type Row struct {
-	ID                int64
-	ModelID           string
-	DisplayName       string
-	OwnedBy           string
-	Status            string
-	CreatedAt         time.Time
-	BindingsTotal     int64
-	BindingsAvailable int64
-	HasPrice          bool
-	Sellable          bool
-	RequestTotal      int64
-	RequestSucceeded  int64
-	SuccessRate       float64
-	Latency           opsutil.LatencyStats
-	RevenueUSD        string
-	MarginUSD         string
-	MarginRate        float64
+	ID                        int64
+	ModelID                   string
+	DisplayName               string
+	OwnedBy                   string
+	Status                    string
+	CreatedAt                 time.Time
+	MaxOutputTokens           *int64
+	ContextWindowTokens       *int64
+	BindingsTotal             int64
+	BindingsAvailable         int64
+	CapabilitiesDeclaredCount int64
+	HasPrice                  bool
+	Sellable                  bool
 	// 基准售价（DEC-026 model_prices 当前生效行，每 1M tokens）；无基准价时全部为 nil。
 	BaseCurrency               *string
 	BaseUncachedInputPrice     *string
@@ -83,17 +79,25 @@ type Row struct {
 	BaseReasoningOutputPrice   *string
 }
 
-// Detail 是抽屉概览。
+// Detail 是模型详情页概览（含请求/延迟/毛利等运维指标）。
 type Detail struct {
-	RequestTotal     int64
-	RequestSucceeded int64
-	SuccessRate      float64
-	LatencyP50       float64
-	LatencyP95       float64
-	OutputTokens     int64
-	InputTokens      int64
-	CacheReadRate    float64
-	TPS              float64
+	RequestTotal      int64
+	RequestSucceeded  int64
+	SuccessRate       float64
+	LatencyAvg        float64
+	LatencyP50        float64
+	LatencyP95        float64
+	OutputTokens      int64
+	InputTokens       int64
+	CacheReadRate     float64
+	TPS               float64
+	RevenueUSD        string
+	MarginUSD         string
+	MarginRate        float64
+	Sellable          bool
+	BindingsTotal     int64
+	BindingsAvailable int64
+	ModelStatus       string
 }
 
 // ChannelRow 是抽屉渠道 Tab 行（最关键）。
@@ -193,8 +197,6 @@ func (s *Service) Summary(ctx context.Context, from, to time.Time) (Summary, err
 // Table 返回模型商品运维主表（分页）。
 func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error) {
 	rows, err := s.store.ModelsOpsTable(ctx, sqlc.ModelsOpsTableParams{
-		FromTime:   opsutil.TsNarg(p.From),
-		ToTime:     opsutil.TsNarg(p.To),
 		Status:     opsutil.TextNarg(p.Status),
 		Search:     opsutil.TextNarg(p.Search),
 		SortField:  opsutil.TextNarg(p.SortField),
@@ -214,35 +216,25 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 	}
 	out := make([]Row, 0, len(rows))
 	for _, r := range rows {
-		revenue := opsutil.NumericString(r.RevenueUsd)
-		cost := opsutil.NumericString(r.CostUsd)
-		marginAmt := opsutil.SubtractDecimal(revenue, cost)
-		// base_currency 经 CASE 包裹由 sqlc 推断为 interface{}（可空），命中基准价时为 string（mirror LatencyMs 断言模式）。
+		// base_currency 经 CASE 包裹由 sqlc 推断为 interface{}（可空），命中基准价时为 string。
 		var baseCurrency *string
 		if v, ok := r.BaseCurrency.(string); ok {
 			baseCurrency = &v
 		}
 		out = append(out, Row{
-			ID:                r.ID,
-			ModelID:           r.ModelID,
-			DisplayName:       r.DisplayName,
-			OwnedBy:           r.OwnedBy,
-			Status:            r.Status,
-			CreatedAt:         r.CreatedAt.Time,
-			BindingsTotal:     r.BindingsTotal,
-			BindingsAvailable: r.BindingsAvailable,
-			HasPrice:          r.HasPrice,
-			Sellable:          r.Status == "enabled" && r.BindingsAvailable > 0,
-			RequestTotal:      r.RequestTotal,
-			RequestSucceeded:  r.RequestSucceeded,
-			SuccessRate:       opsutil.SuccessRate(r.RequestSucceeded, r.RequestTotal),
-			Latency: opsutil.AttemptLatency(
-				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
-				r.LatencySample, r.RequestSucceeded,
-			),
-			RevenueUSD:                 revenue,
-			MarginUSD:                  marginAmt,
-			MarginRate:                 opsutil.Ratio(marginAmt, revenue),
+			ID:                         r.ID,
+			ModelID:                    r.ModelID,
+			DisplayName:                r.DisplayName,
+			OwnedBy:                    r.OwnedBy,
+			Status:                     r.Status,
+			CreatedAt:                  r.CreatedAt.Time,
+			MaxOutputTokens:            opsutil.Int8Value(r.MaxOutputTokens),
+			ContextWindowTokens:        opsutil.Int8Value(r.ContextWindowTokens),
+			BindingsTotal:              r.BindingsTotal,
+			BindingsAvailable:          r.BindingsAvailable,
+			CapabilitiesDeclaredCount:  r.CapabilitiesDeclaredCount,
+			HasPrice:                   r.HasPrice,
+			Sellable:                   r.Status == "enabled" && r.BindingsAvailable > 0,
 			BaseCurrency:               baseCurrency,
 			BaseUncachedInputPrice:     opsutil.NumericStringPtr(r.BaseUncachedInputPrice),
 			BaseCacheReadInputPrice:    opsutil.NumericStringPtr(r.BaseCacheReadInputPrice),
@@ -261,14 +253,26 @@ func (s *Service) Detail(ctx context.Context, modelID int64, from, to time.Time)
 	if err != nil {
 		return Detail{}, opsutil.StoreFailed(err, "model ops detail")
 	}
+	revenue := opsutil.NumericString(r.RevenueUsd)
+	cost := opsutil.NumericString(r.CostUsd)
+	marginAmt := opsutil.SubtractDecimal(revenue, cost)
+
 	d := Detail{
-		RequestTotal:     r.RequestTotal,
-		RequestSucceeded: r.RequestSucceeded,
-		SuccessRate:      opsutil.SuccessRate(r.RequestSucceeded, r.RequestTotal),
-		LatencyP50:       r.LatencyP50,
-		LatencyP95:       r.LatencyP95,
-		OutputTokens:     r.OutputTokens,
-		InputTokens:      r.InputTokens,
+		RequestTotal:      r.RequestTotal,
+		RequestSucceeded:  r.RequestSucceeded,
+		SuccessRate:       opsutil.SuccessRate(r.RequestSucceeded, r.RequestTotal),
+		LatencyAvg:        r.LatencyAvg,
+		LatencyP50:        r.LatencyP50,
+		LatencyP95:        r.LatencyP95,
+		OutputTokens:      r.OutputTokens,
+		InputTokens:       r.InputTokens,
+		RevenueUSD:        revenue,
+		MarginUSD:         marginAmt,
+		MarginRate:        opsutil.Ratio(marginAmt, revenue),
+		Sellable:          r.ModelStatus == "enabled" && r.BindingsAvailable > 0,
+		BindingsTotal:     r.BindingsTotal,
+		BindingsAvailable: r.BindingsAvailable,
+		ModelStatus:       r.ModelStatus,
 	}
 	if r.InputTokens > 0 {
 		d.CacheReadRate = float64(r.CacheReadTokens+r.CacheWriteTokens) / float64(r.InputTokens)

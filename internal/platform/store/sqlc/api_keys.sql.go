@@ -412,6 +412,122 @@ func (q *Queries) SetAPIKeyDisabled(ctx context.Context, arg SetAPIKeyDisabledPa
 	return i, err
 }
 
+const setAPIKeyExpiresAt = `-- name: SetAPIKeyExpiresAt :one
+UPDATE api_keys
+SET expires_at = $1, updated_at = now()
+WHERE id = $2
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
+`
+
+type SetAPIKeyExpiresAtParams struct {
+	ExpiresAt pgtype.Timestamptz
+	ID        int64
+}
+
+type SetAPIKeyExpiresAtRow struct {
+	ID           int64
+	UserID       int64
+	Name         string
+	KeyPrefix    string
+	KeyPlaintext pgtype.Text
+	LastUsedAt   pgtype.Timestamptz
+	ExpiresAt    pgtype.Timestamptz
+	DisabledAt   pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	SpendLimit   pgtype.Numeric
+	SpentTotal   pgtype.Numeric
+	RouteID      int64
+	RpmLimit     pgtype.Int4
+	TpmLimit     pgtype.Int4
+	RpdLimit     pgtype.Int4
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
+// SetAPIKeyExpiresAt 设置/清除 API Key 过期时间；expires_at 为 NULL 表示永不过期。
+func (q *Queries) SetAPIKeyExpiresAt(ctx context.Context, arg SetAPIKeyExpiresAtParams) (SetAPIKeyExpiresAtRow, error) {
+	row := q.db.QueryRow(ctx, setAPIKeyExpiresAt, arg.ExpiresAt, arg.ID)
+	var i SetAPIKeyExpiresAtRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.KeyPrefix,
+		&i.KeyPlaintext,
+		&i.LastUsedAt,
+		&i.ExpiresAt,
+		&i.DisabledAt,
+		&i.RevokedAt,
+		&i.SpendLimit,
+		&i.SpentTotal,
+		&i.RouteID,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setAPIKeyName = `-- name: SetAPIKeyName :one
+UPDATE api_keys
+SET name = $1, updated_at = now()
+WHERE id = $2
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
+`
+
+type SetAPIKeyNameParams struct {
+	Name string
+	ID   int64
+}
+
+type SetAPIKeyNameRow struct {
+	ID           int64
+	UserID       int64
+	Name         string
+	KeyPrefix    string
+	KeyPlaintext pgtype.Text
+	LastUsedAt   pgtype.Timestamptz
+	ExpiresAt    pgtype.Timestamptz
+	DisabledAt   pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	SpendLimit   pgtype.Numeric
+	SpentTotal   pgtype.Numeric
+	RouteID      int64
+	RpmLimit     pgtype.Int4
+	TpmLimit     pgtype.Int4
+	RpdLimit     pgtype.Int4
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
+// SetAPIKeyName 更新 API Key 名称。
+func (q *Queries) SetAPIKeyName(ctx context.Context, arg SetAPIKeyNameParams) (SetAPIKeyNameRow, error) {
+	row := q.db.QueryRow(ctx, setAPIKeyName, arg.Name, arg.ID)
+	var i SetAPIKeyNameRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.KeyPrefix,
+		&i.KeyPlaintext,
+		&i.LastUsedAt,
+		&i.ExpiresAt,
+		&i.DisabledAt,
+		&i.RevokedAt,
+		&i.SpendLimit,
+		&i.SpentTotal,
+		&i.RouteID,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const setAPIKeyRateLimits = `-- name: SetAPIKeyRateLimits :one
 UPDATE api_keys
 SET rpm_limit = $1, tpm_limit = $2, rpd_limit = $3, updated_at = now()

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
@@ -29,6 +31,31 @@ func parseOptionalRouteID(raw json.RawMessage) (*int64, bool, error) {
 	return &id, true, nil
 }
 
+func parseOptionalExpiresAt(raw json.RawMessage) (*time.Time, bool, error) {
+	if len(raw) == 0 {
+		return nil, false, nil
+	}
+	if string(raw) == "null" {
+		return nil, true, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, false, failure.New(
+			failure.CodeAdminInvalidArgument,
+			failure.WithMessage("expires_at must be RFC3339 timestamp or null"),
+			failure.WithField("field", "expires_at"),
+		)
+	}
+	if strings.TrimSpace(s) == "" {
+		return nil, true, nil
+	}
+	t, err := parseOptionalRFC3339("expires_at", &s)
+	if err != nil {
+		return nil, false, err
+	}
+	return t, true, nil
+}
+
 // APIKeyService 定义 adminapi 管理 API Key 所需的最小能力（M7 客户管理）。
 type APIKeyService interface {
 	List(ctx context.Context, params customer.APIKeyListParams) ([]customer.APIKey, int64, error)
@@ -50,7 +77,8 @@ type apiKeyDTO struct {
 	Status     string  `json:"status"`
 	SpendLimit *string `json:"spend_limit"`
 	SpentTotal string  `json:"spent_total"`
-	RouteID    *int64  `json:"route_id"`
+	// RouteID 线路必填、恒有值（DB NOT NULL），故非空整型；前端按 number 读取。
+	RouteID int64 `json:"route_id"`
 	// RPMLimit/TPMLimit/RPDLimit：已废弃（DEC-027 限流已归线路，改由 route 决定、按 (线路,用户) 计数）。
 	// 保留字段仅为兼容旧响应，恒为 null；限流请在线路上配置。
 	RPMLimit   *int64  `json:"rpm_limit"`
@@ -74,41 +102,18 @@ type createAPIKeyRequest struct {
 // updateAPIKeyRequest 是 PATCH 请求体。
 // disabled: 非空时启停；spend_limit: 不传=不变，空串=清除上限，否则设为该值。
 // route_id: 字段缺省=不变，null=清除绑定，数字=设为该线路。
+// name: 非空时更新名称；expires_at: 字段缺省=不变，null=永不过期，RFC3339=设为该时间。
 // 限流已归线路（DEC-027），此处不再接收 rate_limits。
 type updateAPIKeyRequest struct {
 	Disabled   *bool           `json:"disabled"`
 	SpendLimit *string         `json:"spend_limit"`
 	RouteID    json.RawMessage `json:"route_id"`
+	Name       *string         `json:"name"`
+	ExpiresAt  json.RawMessage `json:"expires_at"`
 }
 
 type apiKeysHandler struct {
 	service APIKeyService
-}
-
-// listByUser 列出某用户（路径 {id} 为 user id）下的 API Key。
-func (h *apiKeysHandler) listByUser(w http.ResponseWriter, r *http.Request) {
-	userID, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	page := parsePage(r)
-	items, total, err := h.service.List(r.Context(), customer.APIKeyListParams{
-		UserID: userID,
-		Limit:  page.Limit(),
-		Offset: page.Offset(),
-	})
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	dtos := make([]apiKeyDTO, 0, len(items))
-	for _, k := range items {
-		dtos = append(dtos, toAPIKeyDTO(k))
-	}
-	writeList(w, http.StatusOK, dtos, page, total)
 }
 
 // create 在用户（路径 {id} 为 user id）下创建 API Key，返回一次性明文。
@@ -151,23 +156,6 @@ func (h *apiKeysHandler) create(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusCreated, dto)
 }
 
-// get 读取单把 API Key（路径 {id} 为 api key id）。
-func (h *apiKeysHandler) get(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	key, err := h.service.Get(r.Context(), id)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	writeData(w, http.StatusOK, toAPIKeyDTO(key))
-}
-
 // update 更新 API Key 的启停与费用上限。
 func (h *apiKeysHandler) update(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
@@ -187,12 +175,20 @@ func (h *apiKeysHandler) update(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
+	expiresAt, expiresProvided, err := parseOptionalExpiresAt(req.ExpiresAt)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
 
 	updateParams := customer.APIKeyUpdateParams{
-		Disabled:      req.Disabled,
-		SpendLimit:    req.SpendLimit,
-		RouteID:       routeID,
-		RouteProvided: routeProvided,
+		Disabled:        req.Disabled,
+		SpendLimit:      req.SpendLimit,
+		RouteID:         routeID,
+		RouteProvided:   routeProvided,
+		Name:            req.Name,
+		ExpiresAt:       expiresAt,
+		ExpiresProvided: expiresProvided,
 	}
 
 	key, err := h.service.Update(r.Context(), id, updateParams)
@@ -237,6 +233,14 @@ func (h *apiKeysHandler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// int64Value 解引用 *int64（nil→0）；用于恒有值但上游以指针承载的字段（如 route_id）。
+func int64Value(p *int64) int64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
 func toAPIKeyDTO(k customer.APIKey) apiKeyDTO {
 	return apiKeyDTO{
 		ID:         k.ID,
@@ -247,7 +251,7 @@ func toAPIKeyDTO(k customer.APIKey) apiKeyDTO {
 		Status:     k.Status,
 		SpendLimit: k.SpendLimit,
 		SpentTotal: k.SpentTotal,
-		RouteID:    k.RouteID,
+		RouteID:    int64Value(k.RouteID),
 		RPMLimit:   k.RPMLimit,
 		TPMLimit:   k.TPMLimit,
 		RPDLimit:   k.RPDLimit,

@@ -17,7 +17,7 @@ WITH attempt_agg AS (
         c.id AS channel_id,
         c.name AS channel_name,
         c.status AS channel_status,
-        COUNT(a.id) AS terminal_total,
+        COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS terminal_total,
         COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS succeeded_total,
         COUNT(a.id) FILTER (WHERE a.status = 'failed') AS failed_total,
         COUNT(a.id) FILTER (WHERE a.status = 'succeeded' AND a.completed_at IS NOT NULL) AS latency_sample,
@@ -183,7 +183,7 @@ func (q *Queries) DashboardBreakdownChannel(ctx context.Context, arg DashboardBr
 const dashboardBreakdownModel = `-- name: DashboardBreakdownModel :many
 SELECT
     r.requested_model_id AS model_id,
-    COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
+    COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed')) AS terminal_total,
     COUNT(*) FILTER (WHERE r.status = 'succeeded') AS succeeded_total,
     COUNT(*) FILTER (WHERE r.status = 'failed') AS failed_total,
     COALESCE(SUM(
@@ -261,7 +261,7 @@ WITH attempt_agg AS (
         p.id AS provider_id,
         p.name AS provider_name,
         p.status AS provider_status,
-        COUNT(a.id) AS terminal_total,
+        COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS terminal_total,
         COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS succeeded_total,
         COUNT(a.id) FILTER (WHERE a.status = 'failed') AS failed_total,
         COUNT(DISTINCT a.channel_id) AS channel_count,
@@ -456,7 +456,7 @@ SELECT
     route_id,
     route_name,
     route_status,
-    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
+    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed')) AS terminal_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS succeeded_total,
     COUNT(*) FILTER (WHERE status = 'failed') AS failed_total,
     COALESCE(SUM(tokens_total), 0)::bigint AS tokens_total,
@@ -756,7 +756,7 @@ func (q *Queries) DashboardRadarBadChannels(ctx context.Context, arg DashboardRa
 const dashboardRadarRequestPerf = `-- name: DashboardRadarRequestPerf :one
 
 SELECT
-    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
+    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed')) AS terminal_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS succeeded_total,
     COUNT(*) FILTER (WHERE status = 'failed') AS failed_total,
     COUNT(*) FILTER (WHERE status = 'canceled') AS canceled_total,

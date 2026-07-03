@@ -52,28 +52,32 @@ type channelsOpsSummaryDTO struct {
 }
 
 type channelOpsRowDTO struct {
-	ID               int64           `json:"id"`
-	Name             string          `json:"name"`
-	Status           string          `json:"status"`
-	CreatedAt        string          `json:"created_at"`
-	Protocol         string          `json:"protocol"`
-	AdapterKey       string          `json:"adapter_key"`
-	BaseURL          string          `json:"base_url"`
-	Priority         int32           `json:"priority"`
-	TimeoutMs        *int32          `json:"timeout_ms"`
-	ProviderName     string          `json:"provider_name"`
-	Credential       string          `json:"credential"`
-	AttemptTotal     int64           `json:"attempt_total"`
-	AttemptSucceeded int64           `json:"attempt_succeeded"`
-	SuccessRate      float64         `json:"success_rate"`
-	TimeoutTotal     int64           `json:"timeout_total"`
-	Latency          latencyStatsDTO `json:"latency"`
-	Health           string          `json:"health"`
-	BoundModels      int64           `json:"bound_models"`
-	RecentErrorCode  string          `json:"recent_error_code"`
-	RpmLimit         *int32          `json:"rpm_limit"`
-	TpmLimit         *int32          `json:"tpm_limit"`
-	RpdLimit         *int32          `json:"rpd_limit"`
+	ID                int64           `json:"id"`
+	Name              string          `json:"name"`
+	Status            string          `json:"status"`
+	CreatedAt         string          `json:"created_at"`
+	Protocol          string          `json:"protocol"`
+	AdapterKey        string          `json:"adapter_key"`
+	BaseURL           string          `json:"base_url"`
+	Priority          int32           `json:"priority"`
+	TimeoutMs         *int32          `json:"timeout_ms"`
+	ProviderName      string          `json:"provider_name"`
+	Credential        string          `json:"credential"`
+	AttemptTotal      int64           `json:"attempt_total"`
+	AttemptSucceeded  int64           `json:"attempt_succeeded"`
+	SuccessRate       float64         `json:"success_rate"`
+	TimeoutTotal      int64           `json:"timeout_total"`
+	Latency           latencyStatsDTO `json:"latency"`
+	Health            string          `json:"health"`
+	BoundModels       int64           `json:"bound_models"`
+	RecentErrorCode   string          `json:"recent_error_code"`
+	RpmLimit          *int32          `json:"rpm_limit"`
+	TpmLimit          *int32          `json:"tpm_limit"`
+	RpdLimit          *int32          `json:"rpd_limit"`
+	LastTestedAt      *string         `json:"last_tested_at"`
+	LastTestOK        *bool           `json:"last_test_ok"`
+	LastTestLatencyMs *int32          `json:"last_test_latency_ms"`
+	LastTestError     string          `json:"last_test_error"`
 }
 
 type channelOpsDetailDTO struct {
@@ -206,28 +210,32 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 	dtos := make([]channelOpsRowDTO, 0, len(rows))
 	for _, row := range rows {
 		dtos = append(dtos, channelOpsRowDTO{
-			ID:               row.ID,
-			Name:             row.Name,
-			Status:           row.Status,
-			CreatedAt:        rfc3339(row.CreatedAt),
-			Protocol:         row.Protocol,
-			AdapterKey:       row.AdapterKey,
-			BaseURL:          row.BaseURL,
-			Priority:         row.Priority,
-			TimeoutMs:        row.TimeoutMs,
-			ProviderName:     row.ProviderName,
-			Credential:       row.Credential,
-			AttemptTotal:     row.AttemptTotal,
-			AttemptSucceeded: row.AttemptSucceeded,
-			SuccessRate:      row.SuccessRate,
-			TimeoutTotal:     row.TimeoutTotal,
-			Latency:          latencyStatsFrom(row.Latency),
-			Health:           row.HealthBucket,
-			BoundModels:      row.BoundModels,
-			RecentErrorCode:  row.RecentErrorCode,
-			RpmLimit:         row.RpmLimit,
-			TpmLimit:         row.TpmLimit,
-			RpdLimit:         row.RpdLimit,
+			ID:                row.ID,
+			Name:              row.Name,
+			Status:            row.Status,
+			CreatedAt:         rfc3339(row.CreatedAt),
+			Protocol:          row.Protocol,
+			AdapterKey:        row.AdapterKey,
+			BaseURL:           row.BaseURL,
+			Priority:          row.Priority,
+			TimeoutMs:         row.TimeoutMs,
+			ProviderName:      row.ProviderName,
+			Credential:        row.Credential,
+			AttemptTotal:      row.AttemptTotal,
+			AttemptSucceeded:  row.AttemptSucceeded,
+			SuccessRate:       row.SuccessRate,
+			TimeoutTotal:      row.TimeoutTotal,
+			Latency:           latencyStatsFrom(row.Latency),
+			Health:            row.HealthBucket,
+			BoundModels:       row.BoundModels,
+			RecentErrorCode:   row.RecentErrorCode,
+			RpmLimit:          row.RpmLimit,
+			TpmLimit:          row.TpmLimit,
+			RpdLimit:          row.RpdLimit,
+			LastTestedAt:      rfc3339Ptr(row.LastTestedAt),
+			LastTestOK:        row.LastTestOK,
+			LastTestLatencyMs: row.LastTestLatencyMs,
+			LastTestError:     row.LastTestError,
 		})
 	}
 	writeList(w, http.StatusOK, dtos, page, total)

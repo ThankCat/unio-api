@@ -26,9 +26,9 @@ func TestChannelHealthServiceBuckets(t *testing.T) {
 	last := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	store := &fakeChannelHealthStore{
 		rows: []sqlc.SystemChannelHealthRow{
-			{ChannelID: 1, Name: "healthy-ch", Status: "enabled", AttemptTotal: 100, AttemptSucceeded: 99, AttemptFailed: 1, LastAttemptAt: pgtype.Timestamptz{Time: last, Valid: true}},
-			{ChannelID: 2, Name: "degraded-ch", Status: "enabled", AttemptTotal: 100, AttemptSucceeded: 85, AttemptFailed: 15},
-			{ChannelID: 3, Name: "unhealthy-ch", Status: "enabled", AttemptTotal: 100, AttemptSucceeded: 50, AttemptFailed: 50},
+			{ChannelID: 1, Name: "healthy-ch", Status: "enabled", AttemptTotal: 100, AttemptSucceeded: 99, AttemptFailed: 1, AttemptUpstreamFailed: 1, LastAttemptAt: pgtype.Timestamptz{Time: last, Valid: true}},
+			{ChannelID: 2, Name: "degraded-ch", Status: "enabled", AttemptTotal: 100, AttemptSucceeded: 85, AttemptFailed: 15, AttemptUpstreamFailed: 15},
+			{ChannelID: 3, Name: "unhealthy-ch", Status: "enabled", AttemptTotal: 100, AttemptSucceeded: 50, AttemptFailed: 50, AttemptUpstreamFailed: 50},
 			{ChannelID: 4, Name: "idle-ch", Status: "disabled", AttemptTotal: 0},
 		},
 	}

@@ -21,6 +21,7 @@ SELECT
     COUNT(a.id) AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
     COUNT(a.id) FILTER (WHERE a.status = 'failed') AS attempt_failed,
+    COUNT(a.id) FILTER (WHERE a.status = 'failed' AND a.fault_party = 'upstream') AS attempt_upstream_failed,
     COUNT(a.id) FILTER (WHERE a.status = 'canceled') AS attempt_canceled,
     MAX(a.created_at)::timestamptz AS last_attempt_at
 FROM channels c
@@ -38,15 +39,16 @@ type SystemChannelHealthParams struct {
 }
 
 type SystemChannelHealthRow struct {
-	ChannelID        int64
-	Name             string
-	Status           string
-	ProviderID       int64
-	AttemptTotal     int64
-	AttemptSucceeded int64
-	AttemptFailed    int64
-	AttemptCanceled  int64
-	LastAttemptAt    pgtype.Timestamptz
+	ChannelID             int64
+	Name                  string
+	Status                string
+	ProviderID            int64
+	AttemptTotal          int64
+	AttemptSucceeded      int64
+	AttemptFailed         int64
+	AttemptUpstreamFailed int64
+	AttemptCanceled       int64
+	LastAttemptAt         pgtype.Timestamptz
 }
 
 // M8 系统 / 任务 / 健康（横切）只读聚合。纯只读、不引入新业务事实。
@@ -71,6 +73,7 @@ func (q *Queries) SystemChannelHealth(ctx context.Context, arg SystemChannelHeal
 			&i.AttemptTotal,
 			&i.AttemptSucceeded,
 			&i.AttemptFailed,
+			&i.AttemptUpstreamFailed,
 			&i.AttemptCanceled,
 			&i.LastAttemptAt,
 		); err != nil {

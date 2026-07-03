@@ -104,9 +104,13 @@ type Row struct {
 	BoundModels      int64
 	RecentErrorCode  string
 	// 渠道级限流上限（P2-8）：nil=继承全局默认，0=不限，>0=具体上限。
-	RpmLimit *int32
-	TpmLimit *int32
-	RpdLimit *int32
+	RpmLimit          *int32
+	TpmLimit          *int32
+	RpdLimit          *int32
+	LastTestedAt      *time.Time
+	LastTestOK        *bool
+	LastTestLatencyMs *int32
+	LastTestError     string
 }
 
 // Detail 是抽屉概览 attempt 指标。
@@ -289,12 +293,16 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 				r.LatencySample, r.AttemptSucceeded,
 			),
-			HealthBucket:    healthBucket(r.AttemptSucceeded, r.AttemptTotal),
-			BoundModels:     r.BoundModels,
-			RecentErrorCode: textValue(r.RecentErrorCode),
-			RpmLimit:        int4Value(r.RpmLimit),
-			TpmLimit:        int4Value(r.TpmLimit),
-			RpdLimit:        int4Value(r.RpdLimit),
+			HealthBucket:      healthBucket(r.AttemptSucceeded, r.AttemptTotal),
+			BoundModels:       r.BoundModels,
+			RecentErrorCode:   textValue(r.RecentErrorCode),
+			RpmLimit:          int4Value(r.RpmLimit),
+			TpmLimit:          int4Value(r.TpmLimit),
+			RpdLimit:          int4Value(r.RpdLimit),
+			LastTestedAt:      timeValue(r.LastTestedAt),
+			LastTestOK:        boolValue(r.LastTestOk),
+			LastTestLatencyMs: int4Value(r.LastTestLatencyMs),
+			LastTestError:     textValue(r.LastTestError),
 		}
 		if r.AttemptTotal > 0 {
 			row.SuccessRate = float64(r.AttemptSucceeded) / float64(r.AttemptTotal)
@@ -495,6 +503,14 @@ func int4Value(v pgtype.Int4) *int32 {
 	}
 	n := v.Int32
 	return &n
+}
+
+func boolValue(v pgtype.Bool) *bool {
+	if !v.Valid {
+		return nil
+	}
+	b := v.Bool
+	return &b
 }
 
 func invalidArgument(field, message string) error {

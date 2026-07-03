@@ -66,22 +66,6 @@ func (h *providersHandler) list(w http.ResponseWriter, r *http.Request) {
 	writeList(w, http.StatusOK, dtos, page, result.Total)
 }
 
-func (h *providersHandler) get(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	p, err := h.service.Get(r.Context(), id)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	writeData(w, http.StatusOK, toProviderDTO(p))
-}
-
 func (h *providersHandler) create(w http.ResponseWriter, r *http.Request) {
 	var req createProviderRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {

@@ -19,7 +19,7 @@ SELECT
     cm.status AS binding_status,
     cm.upstream_model,
     c.priority,
-    COUNT(a.id) AS attempt_total,
+    COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
@@ -111,8 +111,10 @@ func (q *Queries) ModelOpsChannels(ctx context.Context, arg ModelOpsChannelsPara
 
 const modelOpsDetail = `-- name: ModelOpsDetail :one
 SELECT
-    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
+    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) AS request_total,
     COUNT(r.id) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
+    COALESCE(AVG(CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+        THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
     COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
@@ -126,7 +128,35 @@ SELECT
     COALESCE(SUM(
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
              THEN EXTRACT(EPOCH FROM (r.completed_at - COALESCE(r.response_started_at, r.started_at))) END
-    ), 0)::float8 AS generation_seconds
+    ), 0)::float8 AS generation_seconds,
+    COALESCE((
+        SELECT SUM(le.amount)
+        FROM ledger_entries le
+        JOIN request_records rr ON rr.id = le.request_record_id
+        JOIN models m2 ON m2.model_id = rr.requested_model_id
+        WHERE le.entry_type = 'debit' AND le.currency = 'USD' AND m2.id = $1
+          AND ($2::timestamptz IS NULL OR le.created_at >= $2::timestamptz)
+          AND ($3::timestamptz IS NULL OR le.created_at < $3::timestamptz)
+    ), 0)::numeric AS revenue_usd,
+    COALESCE((
+        SELECT SUM(cs.total_cost_amount)
+        FROM cost_snapshots cs
+        WHERE cs.model_id = $1 AND cs.currency = 'USD'
+          AND ($2::timestamptz IS NULL OR cs.created_at >= $2::timestamptz)
+          AND ($3::timestamptz IS NULL OR cs.created_at < $3::timestamptz)
+    ), 0)::numeric AS cost_usd,
+    (SELECT COUNT(*) FROM channel_models cm WHERE cm.model_id = $1 AND cm.status = 'enabled') AS bindings_total,
+    (
+        SELECT COUNT(*)
+        FROM channel_models cm
+        JOIN channels c ON c.id = cm.channel_id
+        WHERE cm.model_id = $1 AND cm.status = 'enabled' AND c.status = 'enabled'
+          AND EXISTS (
+              SELECT 1 FROM channel_prices p
+              WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
+          )
+    ) AS bindings_available,
+    (SELECT status FROM models WHERE id = $1) AS model_status
 FROM request_records r
 JOIN models m ON m.model_id = r.requested_model_id
 LEFT JOIN usage_records u ON u.request_record_id = r.id
@@ -144,6 +174,7 @@ type ModelOpsDetailParams struct {
 type ModelOpsDetailRow struct {
 	RequestTotal      int64
 	RequestSucceeded  int64
+	LatencyAvg        float64
 	LatencyP50        float64
 	LatencyP95        float64
 	OutputTokens      int64
@@ -151,15 +182,21 @@ type ModelOpsDetailRow struct {
 	CacheReadTokens   int64
 	CacheWriteTokens  int64
 	GenerationSeconds float64
+	RevenueUsd        pgtype.Numeric
+	CostUsd           pgtype.Numeric
+	BindingsTotal     int64
+	BindingsAvailable int64
+	ModelStatus       string
 }
 
-// ModelOpsDetail 单模型抽屉概览：请求/成功率/延迟/token/缓存/TPS/毛利（USD）。
+// ModelOpsDetail 单模型详情概览：请求/成功率/延迟/token/缓存/TPS/毛利（USD）。
 func (q *Queries) ModelOpsDetail(ctx context.Context, arg ModelOpsDetailParams) (ModelOpsDetailRow, error) {
 	row := q.db.QueryRow(ctx, modelOpsDetail, arg.ModelID, arg.FromTime, arg.ToTime)
 	var i ModelOpsDetailRow
 	err := row.Scan(
 		&i.RequestTotal,
 		&i.RequestSucceeded,
+		&i.LatencyAvg,
 		&i.LatencyP50,
 		&i.LatencyP95,
 		&i.OutputTokens,
@@ -167,6 +204,11 @@ func (q *Queries) ModelOpsDetail(ctx context.Context, arg ModelOpsDetailParams) 
 		&i.CacheReadTokens,
 		&i.CacheWriteTokens,
 		&i.GenerationSeconds,
+		&i.RevenueUsd,
+		&i.CostUsd,
+		&i.BindingsTotal,
+		&i.BindingsAvailable,
+		&i.ModelStatus,
 	)
 	return i, err
 }
@@ -174,7 +216,7 @@ func (q *Queries) ModelOpsDetail(ctx context.Context, arg ModelOpsDetailParams) 
 const modelOpsPerformanceTimeseries = `-- name: ModelOpsPerformanceTimeseries :many
 SELECT
     date_trunc($1::text, r.created_at)::timestamptz AS bucket,
-    COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
+    COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed')) AS request_total,
     COUNT(*) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
@@ -415,7 +457,7 @@ func (q *Queries) ModelsOpsPriceCompleteness(ctx context.Context) (ModelsOpsPric
 
 const modelsOpsRequestAggregate = `-- name: ModelsOpsRequestAggregate :one
 SELECT
-    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed', 'canceled')) AS terminal_total,
+    COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed')) AS terminal_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS succeeded_total
 FROM request_records
 WHERE ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
@@ -483,6 +525,8 @@ SELECT
     m.owned_by,
     m.status,
     m.created_at,
+    m.max_output_tokens,
+    m.context_window_tokens,
     (SELECT COUNT(*) FROM channel_models cm WHERE cm.model_id = m.id AND cm.status = 'enabled') AS bindings_total,
     (
         SELECT COUNT(*)
@@ -494,39 +538,13 @@ SELECT
               WHERE p.channel_id = cm.channel_id AND p.model_id = m.id AND p.status = 'enabled'
           )
     ) AS bindings_available,
+    (
+        SELECT COUNT(*)
+        FROM model_capabilities mc
+        WHERE mc.model_id = m.id
+          AND mc.support_level IN ('full', 'limited')
+    ) AS capabilities_declared_count,
     EXISTS (SELECT 1 FROM channel_prices p WHERE p.model_id = m.id AND p.status = 'enabled') AS has_price,
-    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
-    COUNT(r.id) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
-    COUNT(r.id) FILTER (WHERE r.status = 'succeeded' AND r.completed_at IS NOT NULL) AS latency_sample,
-    COALESCE(AVG(CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-        THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
-    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
-        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
-    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
-        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
-    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
-        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
-    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
-        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
-    COALESCE((
-        SELECT SUM(le.amount)
-        FROM ledger_entries le
-        JOIN request_records rr ON rr.id = le.request_record_id
-        WHERE le.entry_type = 'debit' AND le.currency = 'USD' AND rr.requested_model_id = m.model_id
-          AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz)
-          AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)
-    ), 0)::numeric AS revenue_usd,
-    COALESCE((
-        SELECT SUM(cs.total_cost_amount)
-        FROM cost_snapshots cs
-        WHERE cs.model_id = m.id AND cs.currency = 'USD'
-          AND ($1::timestamptz IS NULL OR cs.created_at >= $1::timestamptz)
-          AND ($2::timestamptz IS NULL OR cs.created_at < $2::timestamptz)
-    ), 0)::numeric AS cost_usd,
     -- 基准售价（DEC-026 model_prices 当前生效行）：客户售价 = 基准 × 线路倍率；无基准时各列为 NULL（前端显示「缺价」）。
     -- CASE 包裹让 sqlc 把 base_currency 推断为可空（pgtype.Text）：LATERAL 无命中行时该列为 NULL，避免扫描进 string 报错。
     CASE WHEN base.currency IS NOT NULL THEN base.currency END AS base_currency,
@@ -537,10 +555,6 @@ SELECT
     base.output_price AS base_output_price,
     base.reasoning_output_price AS base_reasoning_output_price
 FROM models m
-LEFT JOIN request_records r
-    ON r.requested_model_id = m.model_id
-    AND ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
-    AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
 LEFT JOIN LATERAL (
     -- base: 模型当前生效的基准售价（mirror FindRouteCandidates 的 base LATERAL）；LEFT 保证无基准价的模型仍出现在列表。
     SELECT mp.currency, mp.uncached_input_price, mp.cache_read_input_price,
@@ -554,30 +568,42 @@ LEFT JOIN LATERAL (
     ORDER BY mp.effective_from DESC, mp.id DESC
     LIMIT 1
 ) base ON TRUE
-WHERE ($3::text IS NULL OR m.status = $3::text)
-  AND ($4::text IS NULL OR m.model_id ILIKE '%' || $4::text || '%' OR m.display_name ILIKE '%' || $4::text || '%')
-GROUP BY m.id, m.model_id, m.display_name, m.owned_by, m.status, m.created_at,
-    base.currency, base.uncached_input_price, base.cache_read_input_price,
-    base.cache_write_5m_input_price, base.cache_write_1h_input_price,
-    base.output_price, base.reasoning_output_price
+WHERE ($1::text IS NULL OR m.status = $1::text)
+  AND ($2::text IS NULL OR m.model_id ILIKE '%' || $2::text || '%' OR m.display_name ILIKE '%' || $2::text || '%')
 ORDER BY
-  CASE WHEN $5::text = 'success_rate' AND COALESCE($6::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END DESC NULLS LAST,
-  CASE WHEN $5::text = 'success_rate' AND NOT COALESCE($6::bool, false) THEN (COUNT(r.id) FILTER (WHERE r.status = 'succeeded')::float8 / NULLIF(COUNT(r.id) FILTER (WHERE r.status IN ('succeeded','failed','canceled')), 0)) END ASC NULLS LAST,
-  CASE WHEN $5::text = 'name' AND COALESCE($6::bool, false) THEN m.model_id END DESC NULLS LAST,
-  CASE WHEN $5::text = 'name' AND NOT COALESCE($6::bool, false) THEN m.model_id END ASC NULLS LAST,
-  CASE WHEN $5::text = 'requests' AND COALESCE($6::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
-  CASE WHEN $5::text = 'requests' AND NOT COALESCE($6::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
-  CASE WHEN $5::text = 'margin' AND COALESCE($6::bool, false) THEN (COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE le.entry_type = 'debit' AND le.currency = 'USD' AND rr.requested_model_id = m.model_id AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) - COALESCE((SELECT SUM(cs.total_cost_amount) FROM cost_snapshots cs WHERE cs.model_id = m.id AND cs.currency = 'USD' AND ($1::timestamptz IS NULL OR cs.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR cs.created_at < $2::timestamptz)), 0)) END DESC NULLS LAST,
-  CASE WHEN $5::text = 'margin' AND NOT COALESCE($6::bool, false) THEN (COALESCE((SELECT SUM(le.amount) FROM ledger_entries le JOIN request_records rr ON rr.id = le.request_record_id WHERE le.entry_type = 'debit' AND le.currency = 'USD' AND rr.requested_model_id = m.model_id AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) - COALESCE((SELECT SUM(cs.total_cost_amount) FROM cost_snapshots cs WHERE cs.model_id = m.id AND cs.currency = 'USD' AND ($1::timestamptz IS NULL OR cs.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR cs.created_at < $2::timestamptz)), 0)) END ASC NULLS LAST,
-  CASE WHEN $5::text = 'created_at' AND COALESCE($6::bool, false) THEN m.created_at END DESC NULLS LAST,
-  CASE WHEN $5::text = 'created_at' AND NOT COALESCE($6::bool, false) THEN m.created_at END ASC NULLS LAST,
+  CASE WHEN $3::text = 'name' AND COALESCE($4::bool, false) THEN m.model_id END DESC NULLS LAST,
+  CASE WHEN $3::text = 'name' AND NOT COALESCE($4::bool, false) THEN m.model_id END ASC NULLS LAST,
+  CASE WHEN $3::text = 'context' AND COALESCE($4::bool, false) THEN m.context_window_tokens END DESC NULLS LAST,
+  CASE WHEN $3::text = 'context' AND NOT COALESCE($4::bool, false) THEN m.context_window_tokens END ASC NULLS LAST,
+  CASE WHEN $3::text = 'max_output' AND COALESCE($4::bool, false) THEN m.max_output_tokens END DESC NULLS LAST,
+  CASE WHEN $3::text = 'max_output' AND NOT COALESCE($4::bool, false) THEN m.max_output_tokens END ASC NULLS LAST,
+  CASE WHEN $3::text = 'bindings' AND COALESCE($4::bool, false) THEN (
+        SELECT COUNT(*)
+        FROM channel_models cm
+        JOIN channels c ON c.id = cm.channel_id
+        WHERE cm.model_id = m.id AND cm.status = 'enabled' AND c.status = 'enabled'
+          AND EXISTS (
+              SELECT 1 FROM channel_prices p
+              WHERE p.channel_id = cm.channel_id AND p.model_id = m.id AND p.status = 'enabled'
+          )
+    ) END DESC NULLS LAST,
+  CASE WHEN $3::text = 'bindings' AND NOT COALESCE($4::bool, false) THEN (
+        SELECT COUNT(*)
+        FROM channel_models cm
+        JOIN channels c ON c.id = cm.channel_id
+        WHERE cm.model_id = m.id AND cm.status = 'enabled' AND c.status = 'enabled'
+          AND EXISTS (
+              SELECT 1 FROM channel_prices p
+              WHERE p.channel_id = cm.channel_id AND p.model_id = m.id AND p.status = 'enabled'
+          )
+    ) END ASC NULLS LAST,
+  CASE WHEN $3::text = 'created_at' AND COALESCE($4::bool, false) THEN m.created_at END DESC NULLS LAST,
+  CASE WHEN $3::text = 'created_at' AND NOT COALESCE($4::bool, false) THEN m.created_at END ASC NULLS LAST,
   m.model_id
-LIMIT $8 OFFSET $7
+LIMIT $6 OFFSET $5
 `
 
 type ModelsOpsTableParams struct {
-	FromTime   pgtype.Timestamptz
-	ToTime     pgtype.Timestamptz
 	Status     pgtype.Text
 	Search     pgtype.Text
 	SortField  pgtype.Text
@@ -593,19 +619,12 @@ type ModelsOpsTableRow struct {
 	OwnedBy                    string
 	Status                     string
 	CreatedAt                  pgtype.Timestamptz
+	MaxOutputTokens            pgtype.Int8
+	ContextWindowTokens        pgtype.Int8
 	BindingsTotal              int64
 	BindingsAvailable          int64
+	CapabilitiesDeclaredCount  int64
 	HasPrice                   bool
-	RequestTotal               int64
-	RequestSucceeded           int64
-	LatencySample              int64
-	LatencyAvg                 float64
-	LatencyP50                 float64
-	LatencyP90                 float64
-	LatencyP95                 float64
-	LatencyP99                 float64
-	RevenueUsd                 pgtype.Numeric
-	CostUsd                    pgtype.Numeric
 	BaseCurrency               interface{}
 	BaseUncachedInputPrice     pgtype.Numeric
 	BaseCacheReadInputPrice    pgtype.Numeric
@@ -615,11 +634,9 @@ type ModelsOpsTableRow struct {
 	BaseReasoningOutputPrice   pgtype.Numeric
 }
 
-// ModelsOpsTable 模型商品运维主表（分页）：可售/渠道/请求/成功率/延迟/价格/毛利（USD）。
+// ModelsOpsTable 模型商品运维主表（分页）：静态元数据 + 渠道/基准价；请求/毛利等指标在详情页聚合。
 func (q *Queries) ModelsOpsTable(ctx context.Context, arg ModelsOpsTableParams) ([]ModelsOpsTableRow, error) {
 	rows, err := q.db.Query(ctx, modelsOpsTable,
-		arg.FromTime,
-		arg.ToTime,
 		arg.Status,
 		arg.Search,
 		arg.SortField,
@@ -641,19 +658,12 @@ func (q *Queries) ModelsOpsTable(ctx context.Context, arg ModelsOpsTableParams) 
 			&i.OwnedBy,
 			&i.Status,
 			&i.CreatedAt,
+			&i.MaxOutputTokens,
+			&i.ContextWindowTokens,
 			&i.BindingsTotal,
 			&i.BindingsAvailable,
+			&i.CapabilitiesDeclaredCount,
 			&i.HasPrice,
-			&i.RequestTotal,
-			&i.RequestSucceeded,
-			&i.LatencySample,
-			&i.LatencyAvg,
-			&i.LatencyP50,
-			&i.LatencyP90,
-			&i.LatencyP95,
-			&i.LatencyP99,
-			&i.RevenueUsd,
-			&i.CostUsd,
 			&i.BaseCurrency,
 			&i.BaseUncachedInputPrice,
 			&i.BaseCacheReadInputPrice,

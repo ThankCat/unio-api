@@ -39,25 +39,6 @@ type usersHandler struct {
 	service UserService
 }
 
-func (h *usersHandler) list(w http.ResponseWriter, r *http.Request) {
-	page := parsePage(r)
-	items, total, err := h.service.List(r.Context(), customer.UserListParams{
-		Q:      queryString(r, "q"),
-		Limit:  page.Limit(),
-		Offset: page.Offset(),
-	})
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	dtos := make([]userDTO, 0, len(items))
-	for _, u := range items {
-		dtos = append(dtos, toUserDTO(u))
-	}
-	writeList(w, http.StatusOK, dtos, page, total)
-}
-
 func (h *usersHandler) get(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {

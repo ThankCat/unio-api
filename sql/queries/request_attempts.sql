@@ -72,7 +72,8 @@ RETURNING
     usage_mapping_version,
     started_at,
     completed_at,
-    created_at;
+    created_at,
+    fault_party;
 
 -- name: MarkRequestAttemptResponseStarted :one
 -- MarkRequestAttemptResponseStarted 记录一次 attempt 的首次客户可见响应时间；重复调用保留第一次时间。

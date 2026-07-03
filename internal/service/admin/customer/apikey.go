@@ -72,12 +72,16 @@ type APIKeyCreateParams struct {
 // APIKeyUpdateParams 表示更新 API Key 的业务参数。
 // 指针为 nil 表示该字段不变；SpendLimit 指向空串表示清除上限（改为不限额）。
 // RouteProvided=true 时按 RouteID 设置线路（RouteID 为 nil 表示清除绑定）。
+// ExpiresProvided=true 时按 ExpiresAt 设置过期（ExpiresAt 为 nil 表示永不过期）。
 // 限流已归线路（DEC-027），更新 Key 不再配置令牌级限流。
 type APIKeyUpdateParams struct {
-	Disabled      *bool
-	SpendLimit    *string
-	RouteID       *int64
-	RouteProvided bool
+	Disabled        *bool
+	SpendLimit      *string
+	RouteID         *int64
+	RouteProvided   bool
+	Name            *string
+	ExpiresAt       *time.Time
+	ExpiresProvided bool
 }
 
 // APIKeyStore 定义 API Key 管理所需的存储能力。
@@ -92,6 +96,8 @@ type APIKeyStore interface {
 	DeleteAPIKey(ctx context.Context, id int64) (int64, error)
 	SetAPIKeySpendLimit(ctx context.Context, arg sqlc.SetAPIKeySpendLimitParams) (sqlc.SetAPIKeySpendLimitRow, error)
 	SetAPIKeyRoute(ctx context.Context, arg sqlc.SetAPIKeyRouteParams) (sqlc.SetAPIKeyRouteRow, error)
+	SetAPIKeyName(ctx context.Context, arg sqlc.SetAPIKeyNameParams) (sqlc.SetAPIKeyNameRow, error)
+	SetAPIKeyExpiresAt(ctx context.Context, arg sqlc.SetAPIKeyExpiresAtParams) (sqlc.SetAPIKeyExpiresAtRow, error)
 }
 
 // APIKeyService 提供 admin API Key 管理。
@@ -208,10 +214,10 @@ func (s *APIKeyService) Create(ctx context.Context, params APIKeyCreateParams) (
 	return CreatedAPIKey{APIKey: view, Plaintext: generated.Plaintext}, nil
 }
 
-// Update 更新 API Key 的启停状态与费用上限（按需各自应用）。
+// Update 更新 API Key 的启停、费用上限、线路、名称与过期时间（按需各自应用）。
 func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdateParams) (APIKey, error) {
-	if params.Disabled == nil && params.SpendLimit == nil && !params.RouteProvided {
-		return APIKey{}, invalidArgument("body", "at least one of disabled, spend_limit or route_id must be provided")
+	if params.Disabled == nil && params.SpendLimit == nil && !params.RouteProvided && params.Name == nil && !params.ExpiresProvided {
+		return APIKey{}, invalidArgument("body", "at least one updatable field must be provided")
 	}
 
 	current, err := s.store.GetAPIKeyByID(ctx, id)
@@ -272,6 +278,38 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdat
 		})
 		if err != nil {
 			return APIKey{}, storeFailed(err, "set api key route")
+		}
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
+		applied = true
+	}
+
+	if params.Name != nil {
+		name := strings.TrimSpace(*params.Name)
+		if name == "" {
+			return APIKey{}, invalidArgument("name", "name must not be empty")
+		}
+		row, err := s.store.SetAPIKeyName(ctx, sqlc.SetAPIKeyNameParams{
+			ID:   id,
+			Name: name,
+		})
+		if err != nil {
+			return APIKey{}, storeFailed(err, "set api key name")
+		}
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
+		applied = true
+	}
+
+	if params.ExpiresProvided {
+		expiresAt := pgtype.Timestamptz{}
+		if params.ExpiresAt != nil {
+			expiresAt = pgtype.Timestamptz{Time: *params.ExpiresAt, Valid: true}
+		}
+		row, err := s.store.SetAPIKeyExpiresAt(ctx, sqlc.SetAPIKeyExpiresAtParams{
+			ID:        id,
+			ExpiresAt: expiresAt,
+		})
+		if err != nil {
+			return APIKey{}, storeFailed(err, "set api key expires at")
 		}
 		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
 		applied = true

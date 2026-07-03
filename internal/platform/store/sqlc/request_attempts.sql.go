@@ -84,7 +84,8 @@ RETURNING
     usage_mapping_version,
     started_at,
     completed_at,
-    created_at
+    created_at,
+    fault_party
 `
 
 type CreateRequestAttemptParams struct {
@@ -164,12 +165,13 @@ func (q *Queries) CreateRequestAttempt(ctx context.Context, arg CreateRequestAtt
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
+		&i.FaultParty,
 	)
 	return i, err
 }
 
 const listRequestAttemptsByRequest = `-- name: ListRequestAttemptsByRequest :many
-SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, fault_party
 FROM request_attempts
 WHERE request_record_id = $1
 ORDER BY attempt_index
@@ -210,6 +212,7 @@ func (q *Queries) ListRequestAttemptsByRequest(ctx context.Context, requestRecor
 			&i.StartedAt,
 			&i.CompletedAt,
 			&i.CreatedAt,
+			&i.FaultParty,
 		); err != nil {
 			return nil, err
 		}
@@ -231,14 +234,14 @@ WITH updated AS (
             completed_at = $4
         WHERE request_attempts.id = $5
             AND request_attempts.status = 'running'
-        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.fault_party
 )
-SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, fault_party
 FROM updated
 
 UNION ALL
 
-SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.fault_party
 FROM request_attempts
 WHERE request_attempts.id = $5
   AND request_attempts.status = 'canceled'
@@ -278,6 +281,7 @@ type MarkRequestAttemptCanceledRow struct {
 	StartedAt             pgtype.Timestamptz
 	CompletedAt           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
+	FaultParty            pgtype.Text
 }
 
 // MarkRequestAttemptCanceled 将 running attempt 原子推进到 canceled，重复 canceled 返回第一次取消事实。
@@ -316,6 +320,7 @@ func (q *Queries) MarkRequestAttemptCanceled(ctx context.Context, arg MarkReques
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
+		&i.FaultParty,
 	)
 	return i, err
 }
@@ -332,14 +337,14 @@ WITH updated AS (
             completed_at = $6
         WHERE request_attempts.id = $7
             AND request_attempts.status = 'running'
-        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.fault_party
 )
-SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, fault_party
 FROM updated
 
 UNION ALL
 
-SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.fault_party
 FROM request_attempts
 WHERE request_attempts.id = $7
   AND request_attempts.status = 'failed'
@@ -381,6 +386,7 @@ type MarkRequestAttemptFailedRow struct {
 	StartedAt             pgtype.Timestamptz
 	CompletedAt           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
+	FaultParty            pgtype.Text
 }
 
 // MarkRequestAttemptFailed 将 running attempt 原子推进到 failed，重复 failed 返回第一次失败事实。
@@ -421,6 +427,7 @@ func (q *Queries) MarkRequestAttemptFailed(ctx context.Context, arg MarkRequestA
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
+		&i.FaultParty,
 	)
 	return i, err
 }
@@ -431,14 +438,14 @@ WITH updated AS (
         SET response_started_at = COALESCE(request_attempts.response_started_at, $1)
         WHERE request_attempts.id = $2
           AND request_attempts.status IN ('running', 'succeeded')
-        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.fault_party
 )
-SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, fault_party
 FROM updated
 
 UNION ALL
 
-SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.fault_party
 FROM request_attempts
 WHERE request_attempts.id = $2
   AND request_attempts.response_started_at IS NOT NULL
@@ -475,6 +482,7 @@ type MarkRequestAttemptResponseStartedRow struct {
 	StartedAt             pgtype.Timestamptz
 	CompletedAt           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
+	FaultParty            pgtype.Text
 }
 
 // MarkRequestAttemptResponseStarted 记录一次 attempt 的首次客户可见响应时间；重复调用保留第一次时间。
@@ -506,6 +514,7 @@ func (q *Queries) MarkRequestAttemptResponseStarted(ctx context.Context, arg Mar
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
+		&i.FaultParty,
 	)
 	return i, err
 }
@@ -526,14 +535,14 @@ WITH updated AS (
             completed_at = $10
         WHERE request_attempts.id = $11
             AND request_attempts.status = 'running'
-        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.fault_party
 )
-SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, fault_party
 FROM updated
 
 UNION ALL
 
-SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.fault_party
 FROM request_attempts
 WHERE request_attempts.id = $11
   AND request_attempts.status = 'succeeded'
@@ -579,6 +588,7 @@ type MarkRequestAttemptSucceededRow struct {
 	StartedAt             pgtype.Timestamptz
 	CompletedAt           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
+	FaultParty            pgtype.Text
 }
 
 // MarkRequestAttemptSucceeded 将 running attempt 原子推进到 succeeded，重复 succeeded 返回第一次成功事实。
@@ -623,6 +633,7 @@ func (q *Queries) MarkRequestAttemptSucceeded(ctx context.Context, arg MarkReque
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
+		&i.FaultParty,
 	)
 	return i, err
 }
@@ -646,14 +657,14 @@ WITH updated AS (
             completed_at = $13
         WHERE request_attempts.id = $14
             AND request_attempts.status = 'running'
-        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.fault_party
 )
-SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, fault_party
 FROM updated
 
 UNION ALL
 
-SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.fault_party
 FROM request_attempts
 WHERE request_attempts.id = $14
   AND request_attempts.status = 'canceled'
@@ -702,6 +713,7 @@ type MarkSettledRequestAttemptCanceledRow struct {
 	StartedAt             pgtype.Timestamptz
 	CompletedAt           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
+	FaultParty            pgtype.Text
 }
 
 // MarkSettledRequestAttemptCanceled 将 running attempt 推进到 canceled，但保留已结算上游事实（partial stream 客户端取消）。
@@ -748,6 +760,7 @@ func (q *Queries) MarkSettledRequestAttemptCanceled(ctx context.Context, arg Mar
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
+		&i.FaultParty,
 	)
 	return i, err
 }
@@ -771,14 +784,14 @@ WITH updated AS (
             completed_at = $13
         WHERE request_attempts.id = $14
             AND request_attempts.status = 'running'
-        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.fault_party
 )
-SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, fault_party
 FROM updated
 
 UNION ALL
 
-SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.fault_party
 FROM request_attempts
 WHERE request_attempts.id = $14
   AND request_attempts.status = 'failed'
@@ -827,6 +840,7 @@ type MarkSettledRequestAttemptFailedRow struct {
 	StartedAt             pgtype.Timestamptz
 	CompletedAt           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
+	FaultParty            pgtype.Text
 }
 
 // MarkSettledRequestAttemptFailed 将 running attempt 推进到 failed，但保留已结算上游事实（partial stream 上游中断）。
@@ -873,6 +887,7 @@ func (q *Queries) MarkSettledRequestAttemptFailed(ctx context.Context, arg MarkS
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
+		&i.FaultParty,
 	)
 	return i, err
 }

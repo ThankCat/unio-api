@@ -116,6 +116,9 @@ func NewRouter(deps RouterDeps) http.Handler {
 			poh := &providerOpsHandler{service: deps.ProviderOpsService}
 			r.Get("/providers/ops", poh.table)
 			r.Get("/providers/{id}/ops/detail", poh.detail)
+			r.Get("/providers/{id}/ops/channel-catalog", poh.channelCatalog)
+			r.Get("/providers/{id}/ops/model-catalog", poh.modelCatalog)
+			r.Get("/providers/{id}/ops/route-catalog", poh.routeCatalog)
 			r.Get("/providers/{id}/ops/channels", poh.channels)
 			r.Get("/providers/{id}/ops/performance", poh.performance)
 			r.Get("/providers/{id}/ops/errors", poh.errors)
@@ -125,7 +128,6 @@ func NewRouter(deps RouterDeps) http.Handler {
 			ph := &providersHandler{service: deps.ProviderService}
 			r.Get("/providers", ph.list)
 			r.Post("/providers", ph.create)
-			r.Get("/providers/{id}", ph.get)
 			r.Patch("/providers/{id}", ph.update)
 			// DELETE 物理删除录错的脏数据：名下有渠道或已被请求/账务引用时返回 409，提示改用停用。
 			r.Delete("/providers/{id}", ph.delete)
@@ -154,8 +156,6 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Patch("/channels/{id}", ch.update)
 			// credential 只写不回：用子资源 PUT 轮换，成功返回 204。
 			r.Put("/channels/{id}/credential", ch.rotateCredential)
-			// DELETE 物理删除录错的脏数据，级联清理自身绑定/价格；已被请求/账务引用时返回 409。
-			r.Delete("/channels/{id}", ch.delete)
 		}
 
 		// 渠道主动检测（一键测渠道，阶段一）：向真实上游发一个最小请求验证连通/凭据/模型，只报告不摘除。
@@ -187,6 +187,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Get("/routes/ops/summary", roh.summary)
 			r.Get("/routes/ops", roh.table)
 			r.Get("/routes/{id}/ops/detail", roh.detail)
+			r.Get("/routes/{id}/ops/reachable-models", roh.reachableModels)
 			r.Get("/routes/{id}/ops/channel-pool", roh.channelPool)
 			r.Get("/routes/{id}/ops/bindings", roh.bindings)
 			r.Get("/routes/{id}/ops/performance", roh.performance)
@@ -202,7 +203,6 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Get("/routes/{id}", rh.get)
 			r.Patch("/routes/{id}", rh.update)
 			r.Delete("/routes/{id}", rh.delete)
-			r.Put("/routes/{id}/channels", rh.setChannels)
 		}
 
 		// §3.4 模型商品控制台：静态 /models/ops 必须在 /models/{id} 之前注册。
@@ -241,8 +241,6 @@ func NewRouter(deps RouterDeps) http.Handler {
 			// canonical_id 含 '/'，用通配段承载（如 /model-catalog/openai/gpt-4o）。
 			r.Get("/model-catalog/*", ch.get)
 			r.Post("/models/from-catalog", ch.adopt)
-			r.Post("/models/{id}/catalog-refresh", ch.refresh)
-			r.Post("/models/{id}/catalog-reminder", ch.reminder)
 		}
 
 		// M6 只读查询台：请求记录（含详情聚合）、用量、账本流水、计费异常。全部只读。
@@ -270,7 +268,6 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Get("/users/ops/summary", cuh.usersSummary)
 			r.Get("/users/ops", cuh.usersTable)
 			r.Get("/users/{id}/ops/detail", cuh.userDetail)
-			r.Get("/users/{id}/ops/keys", cuh.userKeys)
 			r.Get("/users/{id}/api-keys/ops/summary", cuh.apiKeysSummary)
 			r.Get("/users/{id}/api-keys/ops", cuh.apiKeysTable)
 		}
@@ -278,7 +275,6 @@ func NewRouter(deps RouterDeps) http.Handler {
 		// M7 客户管理：用户（只读列表/详情）、API Key（费用上限/线路）、手工调额。
 		if deps.UserService != nil {
 			uh := &usersHandler{service: deps.UserService}
-			r.Get("/users", uh.list)
 			r.Get("/users/{id}", uh.get)
 
 			// 手工调额是用户的子资源：充值/扣款一律走账本留痕。
@@ -290,10 +286,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 
 		if deps.APIKeyService != nil {
 			akh := &apiKeysHandler{service: deps.APIKeyService}
-			// 列表/创建挂在用户下；单把操作用扁平 /api-keys/{id} 定位。
-			r.Get("/users/{id}/api-keys", akh.listByUser)
+			// 创建挂在用户下；单把操作用扁平 /api-keys/{id} 定位。
 			r.Post("/users/{id}/api-keys", akh.create)
-			r.Get("/api-keys/{id}", akh.get)
 			// PATCH 调启停/费用上限；DELETE 物理删除无调用历史的 Key（有历史→409 提示改用吊销）。
 			r.Patch("/api-keys/{id}", akh.update)
 			r.Delete("/api-keys/{id}", akh.delete)
@@ -312,8 +306,6 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Get("/models/{id}/capabilities", cah.listModelCapabilities)
 			// 批量整表覆盖（一次保存多条，DEC-024 §6.2）；per-key PUT/DELETE 保留兼容。
 			r.Put("/models/{id}/capabilities", cah.replaceModelCapabilities)
-			r.Put("/models/{id}/capabilities/{key}", cah.setModelCapability)
-			r.Delete("/models/{id}/capabilities/{key}", cah.deleteModelCapability)
 		}
 
 		// M5 models.dev 同步：内联触发（dry-run 预览/实际应用）+ 最近任务展示。
@@ -330,11 +322,9 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Post("/capability/adapter-seed-jobs", cseh.materialize)
 		}
 
-		// M9 工作台看板：运营首页只读聚合（KPI 概览 + 时间序列）。
-		// §3.1 重构新增雷达 / 分组表现 / 性能时序；旧 overview/timeseries 暂保留兼容。
+		// M9 工作台看板：运营首页只读聚合（雷达 / 分组表现 / 性能时序）。
 		if deps.DashboardService != nil {
 			dh := &dashboardHandler{service: deps.DashboardService}
-			r.Get("/dashboard/overview", dh.overview)
 			r.Get("/dashboard/timeseries", dh.timeseries)
 			r.Get("/dashboard/radar", dh.radar)
 			r.Get("/dashboard/breakdown", dh.breakdown)

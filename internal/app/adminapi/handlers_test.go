@@ -269,24 +269,6 @@ func TestCreateProviderReturns201(t *testing.T) {
 	}
 }
 
-func TestGetProviderInvalidIDReturns400(t *testing.T) {
-	handler := newServicesRouter(t, &fakeProviderService{}, nil)
-
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/providers/abc", "", true)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected %d, got %d", http.StatusBadRequest, rec.Code)
-	}
-}
-
-func TestGetProviderNotFoundReturns404(t *testing.T) {
-	handler := newServicesRouter(t, &fakeProviderService{getErr: failure.New(failure.CodeAdminNotFound, failure.WithMessage("provider not found"))}, nil)
-
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/providers/9", "", true)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected %d, got %d", http.StatusNotFound, rec.Code)
-	}
-}
-
 func TestProvidersRequireToken(t *testing.T) {
 	handler := newServicesRouter(t, &fakeProviderService{}, nil)
 
@@ -312,26 +294,6 @@ func TestDeleteProviderConflictReturns409(t *testing.T) {
 	}, nil)
 
 	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/providers/9", "", true)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusConflict, rec.Code, rec.Body.String())
-	}
-}
-
-func TestDeleteChannelReturns204(t *testing.T) {
-	handler := newServicesRouter(t, nil, &fakeChannelService{})
-
-	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/channels/9", "", true)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusNoContent, rec.Code, rec.Body.String())
-	}
-}
-
-func TestDeleteChannelConflictReturns409(t *testing.T) {
-	handler := newServicesRouter(t, nil, &fakeChannelService{
-		deleteErr: failure.New(failure.CodeAdminConflict, failure.WithMessage("referenced by billing history")),
-	})
-
-	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/channels/9", "", true)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusConflict, rec.Code, rec.Body.String())
 	}

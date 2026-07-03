@@ -35,19 +35,22 @@ type usersOpsSummaryDTO struct {
 }
 
 type userOpsRowDTO struct {
-	ID             int64   `json:"id"`
-	Email          string  `json:"email"`
-	DisplayName    string  `json:"display_name"`
-	BalanceUSD     string  `json:"balance_usd"`
-	ReservedUSD    string  `json:"reserved_usd"`
-	AvailableUSD   string  `json:"available_usd"`
-	KeyTotal       int64   `json:"key_total"`
-	RequestTotal   int64   `json:"request_total"`
-	Succeeded      int64   `json:"succeeded"`
-	SuccessRate    float64 `json:"success_rate"`
-	ConsumptionUSD string  `json:"consumption_usd"`
-	LastUsedAt     *string `json:"last_used_at"`
-	LowBalance     bool    `json:"low_balance"`
+	ID                  int64   `json:"id"`
+	Email               string  `json:"email"`
+	DisplayName         string  `json:"display_name"`
+	BalanceUSD          string  `json:"balance_usd"`
+	ReservedUSD         string  `json:"reserved_usd"`
+	AvailableUSD        string  `json:"available_usd"`
+	KeyTotal            int64   `json:"key_total"`
+	RequestTotal        int64   `json:"request_total"`
+	Succeeded           int64   `json:"succeeded"`
+	SuccessRate         float64 `json:"success_rate"`
+	ConsumptionUSD      string  `json:"consumption_usd"`
+	TotalConsumptionUSD string  `json:"total_consumption_usd"`
+	TotalTopupUSD       string  `json:"total_topup_usd"`
+	LastUsedAt          *string `json:"last_used_at"`
+	CreatedAt           string  `json:"created_at"`
+	LowBalance          bool    `json:"low_balance"`
 }
 
 type userOpsDetailDTO struct {
@@ -76,22 +79,23 @@ type apiKeysOpsSummaryDTO struct {
 }
 
 type apiKeyOpsRowDTO struct {
-	ID             int64   `json:"id"`
-	Name           string  `json:"name"`
-	KeyPrefix      string  `json:"key_prefix"`
-	KeyPlaintext   *string `json:"key_plaintext"`
-	UserID         int64   `json:"user_id"`
-	Status         string  `json:"status"`
-	RouteID        *int64  `json:"route_id"`
-	RouteName      string  `json:"route_name"`
-	SpendLimit     *string `json:"spend_limit"`
-	SpentTotal     string  `json:"spent_total"`
-	RequestTotal   int64   `json:"request_total"`
-	Succeeded      int64   `json:"succeeded"`
-	SuccessRate    float64 `json:"success_rate"`
-	ConsumptionUSD string  `json:"consumption_usd"`
-	LastUsedAt     *string `json:"last_used_at"`
-	ExpiresAt      *string `json:"expires_at"`
+	ID              int64   `json:"id"`
+	Name            string  `json:"name"`
+	KeyPrefix       string  `json:"key_prefix"`
+	KeyPlaintext    *string `json:"key_plaintext"`
+	UserID          int64   `json:"user_id"`
+	Status          string  `json:"status"`
+	RouteID         int64   `json:"route_id"`
+	RouteName       string  `json:"route_name"`
+	RoutePriceRatio string  `json:"route_price_ratio"`
+	SpendLimit      *string `json:"spend_limit"`
+	SpentTotal      string  `json:"spent_total"`
+	RequestTotal    int64   `json:"request_total"`
+	Succeeded       int64   `json:"succeeded"`
+	SuccessRate     float64 `json:"success_rate"`
+	ConsumptionUSD  string  `json:"consumption_usd"`
+	LastUsedAt      *string `json:"last_used_at"`
+	ExpiresAt       *string `json:"expires_at"`
 }
 
 func (h *customerOpsHandler) usersSummary(w http.ResponseWriter, r *http.Request) {
@@ -120,12 +124,17 @@ func (h *customerOpsHandler) usersTable(w http.ResponseWriter, r *http.Request) 
 	}
 	page := parsePage(r)
 	sort, err := parseListSort(r, map[string]struct{}{
-		"email":       {},
-		"balance":     {},
-		"consumption": {},
-		"requests":    {},
-		"last_used":   {},
-	}, "consumption", true)
+		"email":             {},
+		"balance":           {},
+		"keys":              {},
+		"consumption":       {},
+		"total_consumption": {},
+		"total_topup":       {},
+		"requests":          {},
+		"last_used":         {},
+		"created_at":        {},
+		"display_name":      {},
+	}, "email", false)
 	if err != nil {
 		writeSortError(w, err)
 		return
@@ -150,7 +159,8 @@ func (h *customerOpsHandler) usersTable(w http.ResponseWriter, r *http.Request) 
 			ID: u.ID, Email: u.Email, DisplayName: u.DisplayName, BalanceUSD: u.BalanceUSD, ReservedUSD: u.ReservedUSD,
 			AvailableUSD: u.AvailableUSD, KeyTotal: u.KeyTotal, RequestTotal: u.RequestTotal,
 			Succeeded: u.Succeeded, SuccessRate: u.SuccessRate, ConsumptionUSD: u.ConsumptionUSD,
-			LastUsedAt: rfc3339Ptr(u.LastUsedAt), LowBalance: u.LowBalance,
+			TotalConsumptionUSD: u.TotalConsumptionUSD, TotalTopupUSD: u.TotalTopupUSD,
+			LastUsedAt: rfc3339Ptr(u.LastUsedAt), CreatedAt: rfc3339(u.CreatedAt), LowBalance: u.LowBalance,
 		})
 	}
 	writeList(w, http.StatusOK, out, page, total)
@@ -176,31 +186,6 @@ func (h *customerOpsHandler) userDetail(w http.ResponseWriter, r *http.Request) 
 		BalanceUSD: d.BalanceUSD, ReservedUSD: d.ReservedUSD, AvailableUSD: d.AvailableUSD,
 		RequestTotal: d.RequestTotal, Succeeded: d.Succeeded, SuccessRate: d.SuccessRate, ConsumptionUSD: d.ConsumptionUSD,
 	})
-}
-
-func (h *customerOpsHandler) userKeys(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	rows, err := h.service.UserKeys(r.Context(), id)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	writeData(w, http.StatusOK, toCustomerKeyDTOs(rows))
-}
-
-func toCustomerKeyDTOs(rows []customerops.KeyRow) []customerKeyDTO {
-	out := make([]customerKeyDTO, 0, len(rows))
-	for _, k := range rows {
-		out = append(out, customerKeyDTO{
-			ID: k.ID, Name: k.Name, Status: k.Status,
-			SpendLimit: k.SpendLimit, SpentTotal: k.SpentTotal, LastUsedAt: rfc3339Ptr(k.LastUsedAt),
-		})
-	}
-	return out
 }
 
 func (h *customerOpsHandler) apiKeysSummary(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +244,7 @@ func (h *customerOpsHandler) apiKeysTable(w http.ResponseWriter, r *http.Request
 	for _, k := range rows {
 		out = append(out, apiKeyOpsRowDTO{
 			ID: k.ID, Name: k.Name, KeyPrefix: k.KeyPrefix, KeyPlaintext: k.KeyPlaintext, UserID: k.UserID, Status: k.Status,
-			RouteID: k.RouteID, RouteName: k.RouteName, SpendLimit: k.SpendLimit, SpentTotal: k.SpentTotal,
+			RouteID: int64Value(k.RouteID), RouteName: k.RouteName, RoutePriceRatio: k.RoutePriceRatio, SpendLimit: k.SpendLimit, SpentTotal: k.SpentTotal,
 			RequestTotal: k.RequestTotal, Succeeded: k.Succeeded, SuccessRate: k.SuccessRate,
 			ConsumptionUSD: k.ConsumptionUSD, LastUsedAt: rfc3339Ptr(k.LastUsedAt), ExpiresAt: rfc3339Ptr(k.ExpiresAt),
 		})

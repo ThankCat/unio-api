@@ -174,25 +174,6 @@ func (h *routesHandler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *routesHandler) setChannels(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	var req setRouteChannelsRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	rt, err := h.service.SetChannels(r.Context(), id, req.ChannelIDs)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	writeData(w, http.StatusOK, toRouteDTO(rt))
-}
-
 func toRouteDTO(rt route.Route) routeDTO {
 	channels := make([]routeChannelDTO, 0, len(rt.Channels))
 	for _, c := range rt.Channels {

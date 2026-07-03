@@ -8,7 +8,7 @@ SELECT
     (SELECT COALESCE(SUM(balance), 0) FROM user_balances WHERE currency = 'USD')::numeric AS balance_usd,
     (SELECT COALESCE(SUM(reserved_balance), 0) FROM user_balances WHERE currency = 'USD')::numeric AS reserved_usd,
     (SELECT COUNT(*) FROM user_balances WHERE currency = 'USD' AND (balance - reserved_balance) < 5) AS low_balance_total,
-    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
+    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) AS request_total,
     COUNT(r.id) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
     COALESCE((
         SELECT SUM(le.amount) FROM ledger_entries le
@@ -28,7 +28,7 @@ SELECT
     COALESCE(ub.balance, 0)::numeric AS balance_usd,
     COALESCE(ub.reserved_balance, 0)::numeric AS reserved_usd,
     (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_total,
-    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
+    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) AS request_total,
     COUNT(r.id) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
     COALESCE((
         SELECT SUM(le.amount) FROM ledger_entries le
@@ -36,15 +36,26 @@ SELECT
           AND (sqlc.narg('from_time')::timestamptz IS NULL OR le.created_at >= sqlc.narg('from_time')::timestamptz)
           AND (sqlc.narg('to_time')::timestamptz IS NULL OR le.created_at < sqlc.narg('to_time')::timestamptz)
     ), 0)::numeric AS consumption_usd,
-    (MAX(r.created_at))::timestamptz AS last_used_at
+    COALESCE((
+        SELECT SUM(le.amount) FROM ledger_entries le
+        WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD'
+    ), 0)::numeric AS total_consumption_usd,
+    COALESCE((
+        SELECT SUM(le.amount) FROM ledger_entries le
+        WHERE le.user_id = u.id AND le.entry_type IN ('credit', 'adjustment_credit') AND le.currency = 'USD'
+    ), 0)::numeric AS total_topup_usd,
+    (
+        SELECT MAX(r2.created_at) FROM request_records r2 WHERE r2.user_id = u.id
+    )::timestamptz AS last_used_at,
+    u.created_at
 FROM users u
 LEFT JOIN user_balances ub ON ub.user_id = u.id AND ub.currency = 'USD'
 LEFT JOIN request_records r
     ON r.user_id = u.id
     AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
     AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
-WHERE (sqlc.narg('search')::text IS NULL OR u.email ILIKE '%' || sqlc.narg('search')::text || '%' OR u.display_name ILIKE '%' || sqlc.narg('search')::text || '%')
-GROUP BY u.id, u.email, u.display_name, ub.balance, ub.reserved_balance
+WHERE (sqlc.narg('search')::text IS NULL OR u.email ILIKE '%' || sqlc.narg('search')::text || '%' OR u.display_name ILIKE '%' || sqlc.narg('search')::text || '%' OR u.id::text = sqlc.narg('search')::text)
+GROUP BY u.id, u.email, u.display_name, u.created_at, ub.balance, ub.reserved_balance
 ORDER BY
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'consumption') IN ('', 'consumption') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND (sqlc.narg('from_time')::timestamptz IS NULL OR le.created_at >= sqlc.narg('from_time')::timestamptz) AND (sqlc.narg('to_time')::timestamptz IS NULL OR le.created_at < sqlc.narg('to_time')::timestamptz)), 0) END DESC NULLS LAST,
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'consumption') IN ('', 'consumption') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND (sqlc.narg('from_time')::timestamptz IS NULL OR le.created_at >= sqlc.narg('from_time')::timestamptz) AND (sqlc.narg('to_time')::timestamptz IS NULL OR le.created_at < sqlc.narg('to_time')::timestamptz)), 0) END ASC NULLS LAST,
@@ -52,23 +63,33 @@ ORDER BY
   CASE WHEN sqlc.narg('sort_field')::text = 'email' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN u.email END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'balance' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(ub.balance, 0) END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'balance' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(ub.balance, 0) END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'last_used' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN MAX(r.created_at) END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'last_used' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN MAX(r.created_at) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'keys' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'keys' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'last_used' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT MAX(r2.created_at) FROM request_records r2 WHERE r2.user_id = u.id) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'last_used' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT MAX(r2.created_at) FROM request_records r2 WHERE r2.user_id = u.id) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN u.created_at END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN u.created_at END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'total_consumption' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD'), 0) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'total_consumption' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD'), 0) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'total_topup' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type IN ('credit', 'adjustment_credit') AND le.currency = 'USD'), 0) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'total_topup' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type IN ('credit', 'adjustment_credit') AND le.currency = 'USD'), 0) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'display_name' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN u.display_name END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'display_name' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN u.display_name END ASC NULLS LAST,
   u.id
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 
 -- name: UsersOpsTableCount :one
 SELECT COUNT(*) AS total
 FROM users u
-WHERE (sqlc.narg('search')::text IS NULL OR u.email ILIKE '%' || sqlc.narg('search')::text || '%' OR u.display_name ILIKE '%' || sqlc.narg('search')::text || '%');
+WHERE (sqlc.narg('search')::text IS NULL OR u.email ILIKE '%' || sqlc.narg('search')::text || '%' OR u.display_name ILIKE '%' || sqlc.narg('search')::text || '%' OR u.id::text = sqlc.narg('search')::text);
 
 -- name: UserOpsDetail :one
 SELECT
     COALESCE((SELECT balance FROM user_balances WHERE user_balances.user_id = sqlc.arg('user_id') AND currency = 'USD'), 0)::numeric AS balance_usd,
     COALESCE((SELECT reserved_balance FROM user_balances WHERE user_balances.user_id = sqlc.arg('user_id') AND currency = 'USD'), 0)::numeric AS reserved_usd,
-    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
+    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) AS request_total,
     COUNT(r.id) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
     COALESCE((
         SELECT SUM(le.amount) FROM ledger_entries le
@@ -122,7 +143,8 @@ SELECT
     k.last_used_at,
     k.route_id,
     rt.name AS route_name,
-    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) AS request_total,
+    rt.price_ratio AS route_price_ratio,
+    COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) AS request_total,
     COUNT(r.id) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
     COALESCE((
         SELECT SUM(le.amount) FROM ledger_entries le
@@ -139,10 +161,10 @@ LEFT JOIN request_records r
     AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 WHERE k.user_id = sqlc.arg('user_id')
   AND (sqlc.narg('search')::text IS NULL OR k.name ILIKE '%' || sqlc.narg('search')::text || '%' OR k.key_prefix ILIKE '%' || sqlc.narg('search')::text || '%')
-GROUP BY k.id, k.name, k.key_prefix, k.key_plaintext, k.user_id, k.disabled_at, k.revoked_at, k.expires_at, k.spend_limit, k.spent_total, k.last_used_at, k.route_id, rt.name
+GROUP BY k.id, k.name, k.key_prefix, k.key_plaintext, k.user_id, k.disabled_at, k.revoked_at, k.expires_at, k.spend_limit, k.spent_total, k.last_used_at, k.route_id, rt.name, rt.price_ratio
 ORDER BY
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'requests') IN ('', 'requests') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END DESC NULLS LAST,
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'requests') IN ('', 'requests') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed', 'canceled')) END ASC NULLS LAST,
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'requests') IN ('', 'requests') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) END DESC NULLS LAST,
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'requests') IN ('', 'requests') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'name' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN k.name END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'name' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN k.name END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'spent' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN k.spent_total END DESC NULLS LAST,

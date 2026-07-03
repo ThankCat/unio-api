@@ -56,6 +56,7 @@ type attemptDTO struct {
 	UpstreamFinishReason  *string `json:"upstream_finish_reason"`
 	FinishClass           *string `json:"finish_class"`
 	Status                string  `json:"status"`
+	FaultParty            *string `json:"fault_party"`
 	UpstreamStatusCode    *int32  `json:"upstream_status_code"`
 	UpstreamRequestID     *string `json:"upstream_request_id"`
 	ErrorCode             *string `json:"error_code"`
@@ -236,6 +237,7 @@ func toAttemptDTO(a query.Attempt) attemptDTO {
 		UpstreamFinishReason:  a.UpstreamFinishReason,
 		FinishClass:           a.FinishClass,
 		Status:                a.Status,
+		FaultParty:            a.FaultParty,
 		UpstreamStatusCode:    a.UpstreamStatusCode,
 		UpstreamRequestID:     a.UpstreamRequestID,
 		ErrorCode:             a.ErrorCode,

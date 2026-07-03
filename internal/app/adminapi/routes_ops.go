@@ -17,6 +17,7 @@ type RouteOpsService interface {
 	Bindings(ctx context.Context, routeID int64) ([]routeops.BoundUser, []routeops.BoundKey, error)
 	PerformanceTimeseries(ctx context.Context, routeID int64, interval string, from, to time.Time) ([]routeops.PerfPoint, error)
 	Models(ctx context.Context, routeID int64, from, to time.Time) ([]routeops.ModelRow, error)
+	ReachableModels(ctx context.Context, routeID int64) ([]routeops.ReachableModel, error)
 	Requests(ctx context.Context, routeID int64, from, to time.Time, limit, offset int32) ([]routeops.RequestRow, int64, error)
 }
 
@@ -38,25 +39,20 @@ type routesOpsSummaryDTO struct {
 }
 
 type routeOpsRowDTO struct {
-	ID               int64   `json:"id"`
-	Name             string  `json:"name"`
-	Mode             string  `json:"mode"`
-	PoolKind         string  `json:"pool_kind"`
-	Status           string  `json:"status"`
-	Description      string  `json:"description"`
-	PriceRatio       string  `json:"price_ratio"`
-	RequestTotal     int64   `json:"request_total"`
-	RequestSucceeded int64   `json:"request_succeeded"`
-	SuccessRate      float64 `json:"success_rate"`
-	FallbackTotal    int64   `json:"fallback_total"`
-	FallbackRate     float64 `json:"fallback_rate"`
-	NoChannelTotal   int64   `json:"no_channel_total"`
-	LatencyP95       float64 `json:"latency_p95"`
-	BoundUsers       int64   `json:"bound_users"`
-	BoundKeys        int64   `json:"bound_keys"`
-	PoolChannels     int64   `json:"pool_channels"`
-	Serviceable      bool    `json:"serviceable"`
-	Abnormal         bool    `json:"abnormal"`
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	Mode         string `json:"mode"`
+	PoolKind     string `json:"pool_kind"`
+	Status       string `json:"status"`
+	Description  string `json:"description"`
+	PriceRatio   string `json:"price_ratio"`
+	RpmLimit     *int32 `json:"rpm_limit"`
+	TpmLimit     *int32 `json:"tpm_limit"`
+	RpdLimit     *int32 `json:"rpd_limit"`
+	CreatedAt    string `json:"created_at"`
+	BoundKeys    int64  `json:"bound_keys"`
+	PoolChannels int64  `json:"pool_channels"`
+	ModelsCount  int64  `json:"models_count"`
 }
 
 type routeOpsDetailDTO struct {
@@ -68,6 +64,14 @@ type routeOpsDetailDTO struct {
 	NoChannelTotal   int64   `json:"no_channel_total"`
 	LatencyP50       float64 `json:"latency_p50"`
 	LatencyP95       float64 `json:"latency_p95"`
+	Serviceable      bool    `json:"serviceable"`
+	Abnormal         bool    `json:"abnormal"`
+	RouteStatus      string  `json:"route_status"`
+}
+
+type routeOpsReachableModelDTO struct {
+	ModelID     string `json:"model_id"`
+	DisplayName string `json:"display_name"`
 }
 
 type routeOpsChannelPoolDTO struct {
@@ -145,25 +149,20 @@ func (h *routeOpsHandler) summary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *routeOpsHandler) table(w http.ResponseWriter, r *http.Request) {
-	from, to, _, err := rangeWindow(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
 	page := parsePage(r)
 	sort, err := parseListSort(r, map[string]struct{}{
-		"name":         {},
-		"requests":     {},
-		"success_rate": {},
-	}, "success_rate", false)
+		"name":          {},
+		"created_at":    {},
+		"bindings":      {},
+		"pool_channels": {},
+		"models":        {},
+	}, "name", false)
 	if err != nil {
 		writeSortError(w, err)
 		return
 	}
 	field, desc := sort.SQLParams()
 	rows, total, err := h.service.Table(r.Context(), routeops.TableParams{
-		From:      from,
-		To:        to,
 		Status:    listStatus(r),
 		Search:    queryString(r, "search"),
 		SortField: field,
@@ -178,25 +177,20 @@ func (h *routeOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 	out := make([]routeOpsRowDTO, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, routeOpsRowDTO{
-			ID:               row.ID,
-			Name:             row.Name,
-			Mode:             row.Mode,
-			PoolKind:         row.PoolKind,
-			Status:           row.Status,
-			Description:      row.Description,
-			PriceRatio:       row.PriceRatio,
-			RequestTotal:     row.RequestTotal,
-			RequestSucceeded: row.RequestSucceeded,
-			SuccessRate:      row.SuccessRate,
-			FallbackTotal:    row.FallbackTotal,
-			FallbackRate:     row.FallbackRate,
-			NoChannelTotal:   row.NoChannelTotal,
-			LatencyP95:       row.LatencyP95,
-			BoundUsers:       row.BoundUsers,
-			BoundKeys:        row.BoundKeys,
-			PoolChannels:     row.PoolChannels,
-			Serviceable:      row.Serviceable,
-			Abnormal:         row.Abnormal,
+			ID:           row.ID,
+			Name:         row.Name,
+			Mode:         row.Mode,
+			PoolKind:     row.PoolKind,
+			Status:       row.Status,
+			Description:  row.Description,
+			PriceRatio:   row.PriceRatio,
+			RpmLimit:     row.RpmLimit,
+			TpmLimit:     row.TpmLimit,
+			RpdLimit:     row.RpdLimit,
+			CreatedAt:    rfc3339(row.CreatedAt),
+			BoundKeys:    row.BoundKeys,
+			PoolChannels: row.PoolChannels,
+			ModelsCount:  row.ModelsCount,
 		})
 	}
 	writeList(w, http.StatusOK, out, page, total)
@@ -227,7 +221,28 @@ func (h *routeOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		NoChannelTotal:   d.NoChannelTotal,
 		LatencyP50:       d.LatencyP50,
 		LatencyP95:       d.LatencyP95,
+		Serviceable:      d.Serviceable,
+		Abnormal:         d.Abnormal,
+		RouteStatus:      d.RouteStatus,
 	})
+}
+
+func (h *routeOpsHandler) reachableModels(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	rows, err := h.service.ReachableModels(r.Context(), id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	out := make([]routeOpsReachableModelDTO, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, routeOpsReachableModelDTO{ModelID: m.ModelID, DisplayName: m.DisplayName})
+	}
+	writeData(w, http.StatusOK, out)
 }
 
 func (h *routeOpsHandler) channelPool(w http.ResponseWriter, r *http.Request) {

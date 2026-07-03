@@ -63,20 +63,6 @@ func (f *fakeAdjustmentService) Adjust(context.Context, customer.AdjustParams) (
 	return f.out, nil
 }
 
-func TestListUsersReturns200(t *testing.T) {
-	handler := newQueryRouter(t, adminapi.RouterDeps{UserService: &fakeUserService{
-		list: []customer.User{{ID: 1, Email: "a@b.com", DisplayName: "A"}},
-	}})
-
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/users?q=a", "", true)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), "password_hash") {
-		t.Fatalf("user response must not contain password_hash: %s", rec.Body.String())
-	}
-}
-
 func TestGetUserReturnsBalances(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{UserService: &fakeUserService{
 		detail: customer.UserDetail{

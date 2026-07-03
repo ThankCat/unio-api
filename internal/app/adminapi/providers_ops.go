@@ -12,6 +12,9 @@ import (
 type ProviderOpsService interface {
 	Table(ctx context.Context, p providerops.TableParams) ([]providerops.Row, int64, error)
 	Detail(ctx context.Context, providerID int64, from, to time.Time) (providerops.Detail, error)
+	ChannelCatalog(ctx context.Context, providerID int64) ([]providerops.ChannelCatalogRow, error)
+	ModelCatalog(ctx context.Context, providerID int64) ([]providerops.ModelCatalogRow, error)
+	RouteCatalog(ctx context.Context, providerID int64) ([]providerops.RouteCatalogRow, error)
 	Channels(ctx context.Context, providerID int64, from, to time.Time) ([]providerops.ChannelRow, error)
 	PerformanceTimeseries(ctx context.Context, providerID int64, interval string, from, to time.Time) ([]providerops.PerfPoint, error)
 	Errors(ctx context.Context, providerID int64, from, to time.Time, limit, offset int32) ([]providerops.ErrorRow, int64, error)
@@ -22,11 +25,17 @@ type providerOpsHandler struct {
 }
 
 type providerOpsRowDTO struct {
-	ID               int64           `json:"id"`
-	Slug             string          `json:"slug"`
-	Name             string          `json:"name"`
-	Status           string          `json:"status"`
-	CreatedAt        string          `json:"created_at"`
+	ID           int64  `json:"id"`
+	Slug         string `json:"slug"`
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	CreatedAt    string `json:"created_at"`
+	ChannelTotal int64  `json:"channel_total"`
+	ModelsCount  int64  `json:"models_count"`
+	RoutesCount  int64  `json:"routes_count"`
+}
+
+type providerOpsDetailDTO struct {
 	ChannelTotal     int64           `json:"channel_total"`
 	ChannelEnabled   int64           `json:"channel_enabled"`
 	AttemptTotal     int64           `json:"attempt_total"`
@@ -42,14 +51,22 @@ type providerOpsRowDTO struct {
 	AvgTPS           float64         `json:"avg_tps"`
 }
 
-type providerOpsDetailDTO struct {
-	ChannelTotal     int64           `json:"channel_total"`
-	ChannelEnabled   int64           `json:"channel_enabled"`
-	AttemptTotal     int64           `json:"attempt_total"`
-	AttemptSucceeded int64           `json:"attempt_succeeded"`
-	SuccessRate      float64         `json:"success_rate"`
-	TimeoutTotal     int64           `json:"timeout_total"`
-	Latency          latencyStatsDTO `json:"latency"`
+type providerOpsChannelCatalogDTO struct {
+	ID     int64  `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+type providerOpsModelCatalogDTO struct {
+	ModelID     string `json:"model_id"`
+	DisplayName string `json:"display_name"`
+}
+
+type providerOpsRouteCatalogDTO struct {
+	ID     int64  `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Mode   string `json:"mode"`
 }
 
 type providerOpsChannelDTO struct {
@@ -81,33 +98,21 @@ type providerOpsErrorDTO struct {
 }
 
 func (h *providerOpsHandler) table(w http.ResponseWriter, r *http.Request) {
-	from, to, _, err := rangeWindow(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
 	page := parsePage(r)
 	sort, err := parseListSort(r, map[string]struct{}{
-		"name":         {},
-		"channels":     {},
-		"requests":     {},
-		"success_rate": {},
-		"latency":      {},
-		"tps":          {},
-		"tokens":       {},
-		"margin":       {},
-		"timeout":      {},
-		"created_at":   {},
-		"status":       {},
-	}, "", false)
+		"name":       {},
+		"channels":   {},
+		"models":     {},
+		"routes":     {},
+		"created_at": {},
+		"status":     {},
+	}, "name", false)
 	if err != nil {
 		writeSortError(w, err)
 		return
 	}
 	field, desc := sort.SQLParams()
 	rows, total, err := h.service.Table(r.Context(), providerops.TableParams{
-		From:      from,
-		To:        to,
 		Status:    listStatus(r),
 		Search:    queryString(r, "search"),
 		SortField: field,
@@ -122,24 +127,14 @@ func (h *providerOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 	out := make([]providerOpsRowDTO, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, providerOpsRowDTO{
-			ID:               row.ID,
-			Slug:             row.Slug,
-			Name:             row.Name,
-			Status:           row.Status,
-			CreatedAt:        rfc3339(row.CreatedAt),
-			ChannelTotal:     row.ChannelTotal,
-			ChannelEnabled:   row.ChannelEnabled,
-			AttemptTotal:     row.AttemptTotal,
-			AttemptSucceeded: row.AttemptSucceeded,
-			SuccessRate:      row.SuccessRate,
-			TimeoutTotal:     row.TimeoutTotal,
-			Latency:          latencyStatsFrom(row.Latency),
-			Health:           row.HealthBucket,
-			Tokens:           row.Tokens,
-			RevenueUSD:       row.RevenueUSD,
-			CostUSD:          row.CostUSD,
-			MarginUSD:        row.MarginUSD,
-			AvgTPS:           row.AvgTPS,
+			ID:           row.ID,
+			Slug:         row.Slug,
+			Name:         row.Name,
+			Status:       row.Status,
+			CreatedAt:    rfc3339(row.CreatedAt),
+			ChannelTotal: row.ChannelTotal,
+			ModelsCount:  row.ModelsCount,
+			RoutesCount:  row.RoutesCount,
 		})
 	}
 	writeList(w, http.StatusOK, out, page, total)
@@ -169,7 +164,67 @@ func (h *providerOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		SuccessRate:      d.SuccessRate,
 		TimeoutTotal:     d.TimeoutTotal,
 		Latency:          latencyStatsFrom(d.Latency),
+		Health:           d.HealthBucket,
+		Tokens:           d.Tokens,
+		RevenueUSD:       d.RevenueUSD,
+		CostUSD:          d.CostUSD,
+		MarginUSD:        d.MarginUSD,
+		AvgTPS:           d.AvgTPS,
 	})
+}
+
+func (h *providerOpsHandler) channelCatalog(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	rows, err := h.service.ChannelCatalog(r.Context(), id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	out := make([]providerOpsChannelCatalogDTO, 0, len(rows))
+	for _, c := range rows {
+		out = append(out, providerOpsChannelCatalogDTO{ID: c.ID, Name: c.Name, Status: c.Status})
+	}
+	writeData(w, http.StatusOK, out)
+}
+
+func (h *providerOpsHandler) modelCatalog(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	rows, err := h.service.ModelCatalog(r.Context(), id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	out := make([]providerOpsModelCatalogDTO, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, providerOpsModelCatalogDTO{ModelID: m.ModelID, DisplayName: m.DisplayName})
+	}
+	writeData(w, http.StatusOK, out)
+}
+
+func (h *providerOpsHandler) routeCatalog(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	rows, err := h.service.RouteCatalog(r.Context(), id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	out := make([]providerOpsRouteCatalogDTO, 0, len(rows))
+	for _, rt := range rows {
+		out = append(out, providerOpsRouteCatalogDTO{ID: rt.ID, Name: rt.Name, Status: rt.Status, Mode: rt.Mode})
+	}
+	writeData(w, http.StatusOK, out)
 }
 
 func (h *providerOpsHandler) channels(w http.ResponseWriter, r *http.Request) {

@@ -23,17 +23,18 @@ type ChannelHealthStore interface {
 // channel 熔断是 gateway 进程内内存态（见 lifecycle/breaker.go），admin 跨进程读不到实时电路；
 // 这里的 Bucket 是从落库的 request_attempts 派生的近似，供运营观测，而非熔断器实时状态。
 type ChannelHealth struct {
-	ChannelID        int64
-	Name             string
-	Status           string
-	ProviderID       int64
-	AttemptTotal     int64
-	AttemptSucceeded int64
-	AttemptFailed    int64
-	AttemptCanceled  int64
-	SuccessRate      float64
-	LastAttemptAt    *time.Time
-	Bucket           string // healthy / degraded / unhealthy / no_data
+	ChannelID             int64
+	Name                  string
+	Status                string
+	ProviderID            int64
+	AttemptTotal          int64
+	AttemptSucceeded      int64
+	AttemptFailed         int64
+	AttemptUpstreamFailed int64
+	AttemptCanceled       int64
+	SuccessRate           float64
+	LastAttemptAt         *time.Time
+	Bucket                string // healthy / degraded / unhealthy / no_data
 }
 
 // ChannelHealthService 提供系统级 channel 健康只读聚合。
@@ -59,21 +60,26 @@ func (s *ChannelHealthService) List(ctx context.Context, from, to *time.Time) ([
 	out := make([]ChannelHealth, 0, len(rows))
 	for _, row := range rows {
 		ch := ChannelHealth{
-			ChannelID:        row.ChannelID,
-			Name:             row.Name,
-			Status:           row.Status,
-			ProviderID:       row.ProviderID,
-			AttemptTotal:     row.AttemptTotal,
-			AttemptSucceeded: row.AttemptSucceeded,
-			AttemptFailed:    row.AttemptFailed,
-			AttemptCanceled:  row.AttemptCanceled,
-			LastAttemptAt:    timePtr(row.LastAttemptAt),
+			ChannelID:             row.ChannelID,
+			Name:                  row.Name,
+			Status:                row.Status,
+			ProviderID:            row.ProviderID,
+			AttemptTotal:          row.AttemptTotal,
+			AttemptSucceeded:      row.AttemptSucceeded,
+			AttemptFailed:         row.AttemptFailed,
+			AttemptUpstreamFailed: row.AttemptUpstreamFailed,
+			AttemptCanceled:       row.AttemptCanceled,
+			LastAttemptAt:         timePtr(row.LastAttemptAt),
 		}
+		// 健康分桶按「合格 attempt」= succeeded + 上游故障失败（fault_party='upstream'），
+		// 排除客户端取消 / 进行中 / 平台错误 / 上游 4xx（bad_request），与运行时熔断器 IsChannelFaultError 一致，
+		// 不因客户端取消或我方/请求本身问题误判渠道不健康。
+		eligible := row.AttemptSucceeded + row.AttemptUpstreamFailed
 		switch {
-		case row.AttemptTotal == 0:
+		case eligible == 0:
 			ch.Bucket = "no_data"
 		default:
-			ch.SuccessRate = float64(row.AttemptSucceeded) / float64(row.AttemptTotal)
+			ch.SuccessRate = float64(row.AttemptSucceeded) / float64(eligible)
 			switch {
 			case ch.SuccessRate >= channelHealthyThreshold:
 				ch.Bucket = "healthy"

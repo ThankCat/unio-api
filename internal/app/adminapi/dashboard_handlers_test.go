@@ -67,24 +67,6 @@ func validDashboardTestInterval(interval string) bool {
 	return interval == dashboard.IntervalMinute || interval == dashboard.IntervalHour || interval == dashboard.IntervalDay
 }
 
-func TestDashboardOverviewReturns200(t *testing.T) {
-	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: &fakeDashboardService{}})
-
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/overview", "", true)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
-	}
-}
-
-func TestDashboardOverviewInvalidTimeReturns400(t *testing.T) {
-	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: &fakeDashboardService{}})
-
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/overview?from=not-a-time", "", true)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
-	}
-}
-
 func TestDashboardTimeseriesReturns200(t *testing.T) {
 	svc := &fakeDashboardService{}
 	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: svc})

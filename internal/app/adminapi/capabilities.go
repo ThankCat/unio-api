@@ -188,34 +188,6 @@ func (h *capabilitiesHandler) listModelCapabilities(w http.ResponseWriter, r *ht
 	writeData(w, http.StatusOK, dtos)
 }
 
-func (h *capabilitiesHandler) setModelCapability(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	var req setModelCapabilityRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	item, err := h.service.SetModelCapability(r.Context(), capsvc.SetModelCapabilityInput{
-		ModelID:      id,
-		Key:          chi.URLParam(r, "key"),
-		SupportLevel: req.SupportLevel,
-		Limits:       req.Limits,
-		Actor:        adminActor(r),
-	})
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	writeData(w, http.StatusOK, toModelCapabilityDTO(item))
-}
-
 func (h *capabilitiesHandler) replaceModelCapabilities(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -253,21 +225,6 @@ func (h *capabilitiesHandler) replaceModelCapabilities(w http.ResponseWriter, r 
 		dtos = append(dtos, toModelCapabilityDTO(item))
 	}
 	writeData(w, http.StatusOK, dtos)
-}
-
-func (h *capabilitiesHandler) deleteModelCapability(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	if err := h.service.DeleteModelCapability(r.Context(), id, chi.URLParam(r, "key")); err != nil {
-		writeServiceError(w, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func toModelCapabilityDTO(c corecap.ModelCapability) modelCapabilityDTO {
