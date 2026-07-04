@@ -140,7 +140,11 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		)
 	}
 
-	requestRecord, err := s.lifecycle.CreateRequest(ctx, principal, req.Model, false)
+	var effort string
+	if req.Reasoning != nil && req.Reasoning.Effort != nil {
+		effort = *req.Reasoning.Effort
+	}
+	requestRecord, err := s.lifecycle.CreateRequest(ctx, principal, req.Model, false, lifecycle.NormalizeOpenAIEffort(effort))
 	if err != nil {
 		return err
 	}

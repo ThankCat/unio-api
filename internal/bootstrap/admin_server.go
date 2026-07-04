@@ -111,9 +111,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	routeService := adminroute.NewService(deps.DB, queries)
 	routeOpsService := routeops.NewService(queries)
 
-	// M6 只读查询台：请求记录 / 用量 / 账本，三个只读 service 共用同一 sqlc Queries。
+	// M6 只读查询台：请求记录 / 账本，只读 service 共用同一 sqlc Queries。
 	requestQueryService := query.NewRequestService(queries)
-	usageQueryService := query.NewUsageService(queries)
 	ledgerQueryService := query.NewLedgerService(queries)
 
 	// M7 客户管理：用户/项目只读 + API Key 管理；手工调额经由 ledger 写 adjustment_* 流水。
@@ -163,7 +162,6 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		RouteService:        routeService,
 		RouteOpsService:     routeOpsService,
 		RequestQueryService: requestQueryService,
-		UsageQueryService:   usageQueryService,
 		LedgerQueryService:  ledgerQueryService,
 		UserService:         userService,
 		APIKeyService:       apiKeyService,

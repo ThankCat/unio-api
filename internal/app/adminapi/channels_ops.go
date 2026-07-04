@@ -70,6 +70,7 @@ type channelOpsRowDTO struct {
 	Latency           latencyStatsDTO `json:"latency"`
 	Health            string          `json:"health"`
 	BoundModels       int64           `json:"bound_models"`
+	BoundRoutes       int64           `json:"bound_routes"`
 	RecentErrorCode   string          `json:"recent_error_code"`
 	RpmLimit          *int32          `json:"rpm_limit"`
 	TpmLimit          *int32          `json:"tpm_limit"`
@@ -78,6 +79,7 @@ type channelOpsRowDTO struct {
 	LastTestOK        *bool           `json:"last_test_ok"`
 	LastTestLatencyMs *int32          `json:"last_test_latency_ms"`
 	LastTestError     string          `json:"last_test_error"`
+	CredentialValid   bool            `json:"credential_valid"`
 }
 
 type channelOpsDetailDTO struct {
@@ -127,11 +129,12 @@ type channelOpsModelDTO struct {
 }
 
 type channelOpsRouteDTO struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	Mode     string `json:"mode"`
-	PoolKind string `json:"pool_kind"`
-	Status   string `json:"status"`
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Mode       string `json:"mode"`
+	PoolKind   string `json:"pool_kind"`
+	Status     string `json:"status"`
+	PriceRatio string `json:"price_ratio"`
 }
 
 func (h *channelOpsHandler) summary(w http.ResponseWriter, r *http.Request) {
@@ -228,6 +231,7 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			Latency:           latencyStatsFrom(row.Latency),
 			Health:            row.HealthBucket,
 			BoundModels:       row.BoundModels,
+			BoundRoutes:       row.BoundRoutes,
 			RecentErrorCode:   row.RecentErrorCode,
 			RpmLimit:          row.RpmLimit,
 			TpmLimit:          row.TpmLimit,
@@ -236,6 +240,7 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			LastTestOK:        row.LastTestOK,
 			LastTestLatencyMs: row.LastTestLatencyMs,
 			LastTestError:     row.LastTestError,
+			CredentialValid:   row.CredentialValid,
 		})
 	}
 	writeList(w, http.StatusOK, dtos, page, total)
@@ -400,7 +405,14 @@ func (h *channelOpsHandler) routes(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]channelOpsRouteDTO, 0, len(rows))
 	for _, rt := range rows {
-		out = append(out, channelOpsRouteDTO{ID: rt.ID, Name: rt.Name, Mode: rt.Mode, PoolKind: rt.PoolKind, Status: rt.Status})
+		out = append(out, channelOpsRouteDTO{
+			ID:         rt.ID,
+			Name:       rt.Name,
+			Mode:       rt.Mode,
+			PoolKind:   rt.PoolKind,
+			Status:     rt.Status,
+			PriceRatio: rt.PriceRatio,
+		})
 	}
 	writeData(w, http.StatusOK, out)
 }

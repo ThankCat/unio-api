@@ -62,6 +62,7 @@ type Channel struct {
 	LastTestOk        pgtype.Bool
 	LastTestLatencyMs pgtype.Int4
 	LastTestError     pgtype.Text
+	CredentialValid   bool
 }
 
 type ChannelModel struct {
@@ -91,6 +92,20 @@ type ChannelPrice struct {
 	EffectiveTo           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
+}
+
+type ChannelTestLog struct {
+	ID                   int64
+	ChannelID            int64
+	CreatedAt            pgtype.Timestamptz
+	Source               string
+	Success              bool
+	ErrorCode            pgtype.Text
+	HttpStatus           pgtype.Int4
+	LatencyMs            pgtype.Int4
+	TestedModel          pgtype.Text
+	CredentialValidAfter bool
+	Message              pgtype.Text
 }
 
 type CostSnapshot struct {
@@ -311,30 +326,34 @@ type RequestAttempt struct {
 }
 
 type RequestRecord struct {
-	ID                  int64
-	RequestID           string
-	UserID              int64
-	ApiKeyID            int64
-	RequestedModelID    string
-	IngressProtocol     string
-	Operation           string
-	ResponseModelID     pgtype.Text
-	ResponseProtocol    pgtype.Text
-	ResponseID          pgtype.Text
-	Stream              bool
-	Status              string
-	FinalProviderID     pgtype.Int8
-	FinalChannelID      pgtype.Int8
-	ErrorCode           pgtype.Text
-	ErrorMessage        pgtype.Text
-	InternalErrorDetail pgtype.Text
-	DeliveryStatus      string
-	ResponseStartedAt   pgtype.Timestamptz
-	ResponseCompletedAt pgtype.Timestamptz
-	StartedAt           pgtype.Timestamptz
-	CompletedAt         pgtype.Timestamptz
-	CreatedAt           pgtype.Timestamptz
-	UpdatedAt           pgtype.Timestamptz
+	ID                    int64
+	RequestID             string
+	UserID                int64
+	ApiKeyID              int64
+	RequestedModelID      string
+	IngressProtocol       string
+	Operation             string
+	ResponseModelID       pgtype.Text
+	ResponseProtocol      pgtype.Text
+	ResponseID            pgtype.Text
+	Stream                bool
+	Status                string
+	FinalProviderID       pgtype.Int8
+	FinalChannelID        pgtype.Int8
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	DeliveryStatus        string
+	ResponseStartedAt     pgtype.Timestamptz
+	ResponseCompletedAt   pgtype.Timestamptz
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	RouteID               pgtype.Int8
+	ReasoningEffort       pgtype.Text
+	ReasoningBudgetTokens pgtype.Int4
+	ClientIp              pgtype.Text
 }
 
 type Route struct {

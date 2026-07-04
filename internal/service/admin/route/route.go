@@ -26,6 +26,8 @@ const (
 	ModeStable = "stable"
 	// ModeFixed 锁定单条渠道。
 	ModeFixed = "fixed"
+	// ModeRandom 每次请求随机洗牌候选顺序（仍保留 fallback）。
+	ModeRandom = "random"
 
 	// PoolAll 动态全量候选池。
 	PoolAll = "all"
@@ -373,9 +375,9 @@ func validateRouteShape(name, mode, poolKind, status string, channelIDs []int64)
 		return invalidArgument("name", "name is required")
 	}
 	switch mode {
-	case ModeCheapest, ModeStable, ModeFixed:
+	case ModeCheapest, ModeStable, ModeFixed, ModeRandom:
 	default:
-		return invalidArgument("mode", "mode must be cheapest, stable or fixed")
+		return invalidArgument("mode", "mode must be cheapest, stable, fixed or random")
 	}
 	switch poolKind {
 	case PoolAll, PoolExplicit:

@@ -40,6 +40,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(httpmw.RequestID)
+	r.Use(httpmw.ClientIP)
 	r.Use(httpmw.Tracing)
 	r.Use(httpmw.Metrics(deps.HTTPMetrics))
 	r.Use(httpmw.Logger(deps.Logger))

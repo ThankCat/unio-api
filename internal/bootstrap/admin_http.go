@@ -29,7 +29,6 @@ type adminHTTPDeps struct {
 	RouteOpsService     adminapi.RouteOpsService
 
 	RequestQueryService adminapi.RequestQueryService
-	UsageQueryService   adminapi.UsageQueryService
 	LedgerQueryService  adminapi.LedgerQueryService
 
 	UserService        adminapi.UserService
@@ -76,7 +75,6 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		RouteService:        deps.RouteService,
 		RouteOpsService:     deps.RouteOpsService,
 		RequestQueryService: deps.RequestQueryService,
-		UsageQueryService:   deps.UsageQueryService,
 		LedgerQueryService:  deps.LedgerQueryService,
 		UserService:         deps.UserService,
 		APIKeyService:       deps.APIKeyService,

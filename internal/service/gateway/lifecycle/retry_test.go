@@ -18,7 +18,7 @@ func TestProviderErrorClassifierIsRetryable(t *testing.T) {
 		{"rate_limit retryable", adapter.UpstreamErrorRateLimit, true},
 		{"timeout retryable", adapter.UpstreamErrorTimeout, true},
 		{"server_error retryable", adapter.UpstreamErrorServer, true},
-		{"auth not retryable", adapter.UpstreamErrorAuth, false},
+		{"auth retryable (fallback to another key)", adapter.UpstreamErrorAuth, true},
 		{"permission not retryable", adapter.UpstreamErrorPermission, false},
 		{"bad_request not retryable", adapter.UpstreamErrorBadRequest, false},
 		{"canceled not retryable", adapter.UpstreamErrorCanceled, false},

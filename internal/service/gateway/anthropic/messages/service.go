@@ -104,6 +104,11 @@ func (s *MessagesService) SetChannelCooldownRegistry(registry *lifecycle.Channel
 	s.lifecycle.SetChannelCooldownRegistry(registry)
 }
 
+// SetCredentialGate 注入凭据失效闸门（连续 401 翻 credential_valid=false，阶段二）；nil 表示不启用。
+func (s *MessagesService) SetCredentialGate(gate lifecycle.CredentialGate) {
+	s.lifecycle.SetCredentialGate(gate)
+}
+
 // messagesSafeMessage 把 messages 编排专用 ad-hoc string code 映射成可展示文案；
 // 返回空串表示「此 code 不在本协议族 ad-hoc 集合内」，由 lifecycle 兜底到 BaseSafeRequestLogErrorMessage。
 func messagesSafeMessage(code string) string {

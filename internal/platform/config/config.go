@@ -13,19 +13,35 @@ import (
 
 // Config 保存服务启动所需的全部配置。
 type Config struct {
-	HTTP             HTTPConfig
-	Log              LogConfig
-	DB               DBConfig
-	Redis            RedisConfig
-	RateLimit        RateLimitConfig
-	Worker           WorkerConfig
-	Tracing          TracingConfig
-	CircuitBreaker   CircuitBreakerConfig
-	ModelCatalogSync ModelCatalogSyncConfig
-	Gateway          GatewayConfig
-	Admin            AdminConfig
-	Console          ConsoleConfig
-	TokenEstimate    TokenEstimateConfig
+	HTTP              HTTPConfig
+	Log               LogConfig
+	DB                DBConfig
+	Redis             RedisConfig
+	RateLimit         RateLimitConfig
+	Worker            WorkerConfig
+	Tracing           TracingConfig
+	CircuitBreaker    CircuitBreakerConfig
+	ModelCatalogSync  ModelCatalogSyncConfig
+	ChannelTestWorker ChannelTestWorkerConfig
+	Gateway           GatewayConfig
+	Admin             AdminConfig
+	Console           ConsoleConfig
+	TokenEstimate     TokenEstimateConfig
+}
+
+// ChannelTestWorkerConfig 保存渠道自动检测 worker（阶段二）的配置。
+//
+// worker 周期性对所有启用渠道发一个最小合成 "hi" 探测，验证「连得上 + 凭据有效 + 模型可用」，
+// 据此翻 channels.credential_valid（凭据失效自动摘除、检测通过自动恢复）并按 R1(b) 落检测日志。
+// 探测复用 gateway 的 adapter 链路但不走计费/请求记录，故不污染统计、不给客户计费。
+type ChannelTestWorkerConfig struct {
+	// Enabled 来自 CHANNEL_TEST_WORKER_ENABLED（默认 true）。
+	Enabled bool
+	// Interval 来自 CHANNEL_TEST_WORKER_INTERVAL（默认 30m）：巡检间隔。
+	Interval time.Duration
+	// LogRetentionPerChannel 来自 CHANNEL_TEST_LOG_RETENTION_PER_CHANNEL（默认 200，须 > 0）：
+	// 每渠道 channel_test_logs 保留最近 N 条，worker 每轮末尾清理更旧的。
+	LogRetentionPerChannel int
 }
 
 // TokenEstimateConfig 保存输入 token 估算的媒体处理配置（对齐 new-api GetMediaToken 系列）。
@@ -80,6 +96,11 @@ type GatewayConfig struct {
 	// 对上游 429 Retry-After 建议值的冷却上限保护：防御 provider 返回异常大的 Retry-After 把渠道
 	// 长时间踢出。<=0 表示不额外封顶（仍受 adapter 解析阶段 24h 硬上限约束）。
 	ChannelRateLimitCooldownCap time.Duration
+
+	// CredentialInvalid401Threshold 来自 GATEWAY_CHANNEL_CREDENTIAL_401_THRESHOLD（默认 3）。
+	// 某渠道「连续」这么多次上游 401 后，凭据闸门把 channels.credential_valid 翻为 false 持久摘除，
+	// 后续请求在路由候选层直接跳过该渠道，直到渠道检测通过才恢复。必须 > 0。
+	CredentialInvalid401Threshold int
 }
 
 // AdminConfig 保存 admin-server 进程级配置与管理端认证配置。
@@ -452,6 +473,32 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	channelTestWorkerEnabled, err := getEnvBool("CHANNEL_TEST_WORKER_ENABLED", true)
+	if err != nil {
+		return Config{}, err
+	}
+
+	channelTestWorkerInterval, err := getEnvDuration("CHANNEL_TEST_WORKER_INTERVAL", 30*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+
+	channelTestLogRetentionPerChannel, err := getEnvInt("CHANNEL_TEST_LOG_RETENTION_PER_CHANNEL", 200)
+	if err != nil {
+		return Config{}, err
+	}
+	if channelTestLogRetentionPerChannel <= 0 {
+		return Config{}, failure.New(failure.CodeConfigInvalid, failure.WithMessage("CHANNEL_TEST_LOG_RETENTION_PER_CHANNEL must be > 0"))
+	}
+
+	credentialInvalid401Threshold, err := getEnvInt("GATEWAY_CHANNEL_CREDENTIAL_401_THRESHOLD", 3)
+	if err != nil {
+		return Config{}, err
+	}
+	if credentialInvalid401Threshold <= 0 {
+		return Config{}, failure.New(failure.CodeConfigInvalid, failure.WithMessage("GATEWAY_CHANNEL_CREDENTIAL_401_THRESHOLD must be > 0"))
+	}
+
 	tracingEnabled, err := getEnvBool("OTEL_TRACING_ENABLED", false)
 	if err != nil {
 		return Config{}, err
@@ -645,6 +692,11 @@ func Load() (Config, error) {
 			HTTPTimeout:      modelCatalogSyncHTTPTimeout,
 			MaxResponseBytes: int64(modelCatalogSyncMaxResponseBytes),
 		},
+		ChannelTestWorker: ChannelTestWorkerConfig{
+			Enabled:                channelTestWorkerEnabled,
+			Interval:               channelTestWorkerInterval,
+			LogRetentionPerChannel: channelTestLogRetentionPerChannel,
+		},
 		Tracing: TracingConfig{
 			Enabled:     tracingEnabled,
 			Endpoint:    getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
@@ -660,13 +712,14 @@ func Load() (Config, error) {
 			OpenDuration: circuitBreakerOpenDuration,
 		},
 		Gateway: GatewayConfig{
-			HTTPAddr:                     getEnv("GATEWAY_HTTP_ADDR", ":8520"),
-			MaxOutputTokensFallback:      authorizationMaxOutputTokensFallback,
-			PartialAssumedCacheReadRatio: partialAssumedCacheReadRatio,
-			MaxUpstreamResponseBytes:     int64(gatewayMaxUpstreamResponseMB) << 20,
-			StreamIdleTimeout:            gatewayStreamIdleTimeout,
-			ChannelRateLimitCooldown:     gatewayChannelRateLimitCooldown,
-			ChannelRateLimitCooldownCap:  gatewayChannelRateLimitCooldownCap,
+			HTTPAddr:                      getEnv("GATEWAY_HTTP_ADDR", ":8520"),
+			MaxOutputTokensFallback:       authorizationMaxOutputTokensFallback,
+			PartialAssumedCacheReadRatio:  partialAssumedCacheReadRatio,
+			MaxUpstreamResponseBytes:      int64(gatewayMaxUpstreamResponseMB) << 20,
+			StreamIdleTimeout:             gatewayStreamIdleTimeout,
+			ChannelRateLimitCooldown:      gatewayChannelRateLimitCooldown,
+			ChannelRateLimitCooldownCap:   gatewayChannelRateLimitCooldownCap,
+			CredentialInvalid401Threshold: credentialInvalid401Threshold,
 		},
 		Admin: AdminConfig{
 			HTTPAddr: getEnv("ADMIN_HTTP_ADDR", ":8521"),

@@ -105,6 +105,11 @@ func (s *ChatCompletionService) SetChannelCooldownRegistry(registry *lifecycle.C
 	s.lifecycle.SetChannelCooldownRegistry(registry)
 }
 
+// SetCredentialGate 注入凭据失效闸门（连续 401 翻 credential_valid=false，阶段二）；nil 表示不启用。
+func (s *ChatCompletionService) SetCredentialGate(gate lifecycle.CredentialGate) {
+	s.lifecycle.SetCredentialGate(gate)
+}
+
 // chatCompletionsSafeMessage 把 chat-completion 编排专用 ad-hoc string code 映射成可展示文案；
 // 返回空串表示「此 code 不在本协议族 ad-hoc 集合内」，由 lifecycle 兜底到 BaseSafeRequestLogErrorMessage。
 func chatCompletionsSafeMessage(code string) string {

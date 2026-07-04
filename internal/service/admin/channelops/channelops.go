@@ -102,6 +102,7 @@ type Row struct {
 	Latency          opsutil.LatencyStats
 	HealthBucket     string
 	BoundModels      int64
+	BoundRoutes      int64
 	RecentErrorCode  string
 	// 渠道级限流上限（P2-8）：nil=继承全局默认，0=不限，>0=具体上限。
 	RpmLimit          *int32
@@ -111,6 +112,7 @@ type Row struct {
 	LastTestOK        *bool
 	LastTestLatencyMs *int32
 	LastTestError     string
+	CredentialValid   bool
 }
 
 // Detail 是抽屉概览 attempt 指标。
@@ -166,11 +168,12 @@ type ModelRow struct {
 
 // RouteRow 是抽屉线路 Tab 行。
 type RouteRow struct {
-	ID       int64
-	Name     string
-	Mode     string
-	PoolKind string
-	Status   string
+	ID         int64
+	Name       string
+	Mode       string
+	PoolKind   string
+	Status     string
+	PriceRatio string
 }
 
 // TableParams 是主表查询入参。
@@ -295,6 +298,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			),
 			HealthBucket:      healthBucket(r.AttemptSucceeded, r.AttemptTotal),
 			BoundModels:       r.BoundModels,
+			BoundRoutes:       r.BoundRoutes,
 			RecentErrorCode:   textValue(r.RecentErrorCode),
 			RpmLimit:          int4Value(r.RpmLimit),
 			TpmLimit:          int4Value(r.TpmLimit),
@@ -303,6 +307,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			LastTestOK:        boolValue(r.LastTestOk),
 			LastTestLatencyMs: int4Value(r.LastTestLatencyMs),
 			LastTestError:     textValue(r.LastTestError),
+			CredentialValid:   r.CredentialValid,
 		}
 		if r.AttemptTotal > 0 {
 			row.SuccessRate = float64(r.AttemptSucceeded) / float64(r.AttemptTotal)
@@ -437,7 +442,14 @@ func (s *Service) Routes(ctx context.Context, channelID int64) ([]RouteRow, erro
 	}
 	out := make([]RouteRow, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, RouteRow{ID: r.ID, Name: r.Name, Mode: r.Mode, PoolKind: r.PoolKind, Status: r.Status})
+		out = append(out, RouteRow{
+			ID:         r.ID,
+			Name:       r.Name,
+			Mode:       r.Mode,
+			PoolKind:   r.PoolKind,
+			Status:     r.Status,
+			PriceRatio: opsutil.NumericString(r.PriceRatio),
+		})
 	}
 	return out, nil
 }

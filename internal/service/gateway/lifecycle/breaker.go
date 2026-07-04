@@ -250,10 +250,13 @@ func (b *ChannelCircuitBreaker) closeLocked(s *channelBreakerState) {
 	s.halfOpenInFlight = false
 }
 
-// IsChannelFaultError 判断一个上游错误是否应归因于 channel 健康度。
+// IsChannelFaultError 判断一个上游错误是否应计入进程内熔断（瞬时故障保护）。
 //
 //   - timeout / server_error / rate_limit：上游瞬时故障，应计入熔断。
-//   - auth / permission：多为 channel 凭据/授权问题，持续出现应停用该 channel。
+//   - permission（403）：账号/模型级授权问题，持续出现应摘除该 channel；不进凭据闸门（不自动 ban），
+//     故保留在此由熔断做瞬时摘除。
+//   - auth（401）：凭据失效，改由持久「凭据闸门」（credential_valid + 连续 401 计数）专管，
+//     不再喂进程内熔断，避免两套摘除机制重叠（DEC 2026-07 凭据闸门 C-4）。
 //   - bad_request：请求本身问题，channel 正常拒绝，不计故障。
 //   - canceled / 无上游分类：非 channel 责任，不计故障。
 func IsChannelFaultError(err error) bool {
@@ -270,7 +273,6 @@ func IsChannelFaultError(err error) bool {
 	case adapter.UpstreamErrorTimeout,
 		adapter.UpstreamErrorServer,
 		adapter.UpstreamErrorRateLimit,
-		adapter.UpstreamErrorAuth,
 		adapter.UpstreamErrorPermission:
 		return true
 	default:

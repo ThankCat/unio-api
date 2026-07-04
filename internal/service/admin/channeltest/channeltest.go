@@ -48,6 +48,12 @@ type Store interface {
 	GetProvider(ctx context.Context, id int64) (sqlc.Provider, error)
 	ListChannelModelsByChannel(ctx context.Context, channelID int64) ([]sqlc.ListChannelModelsByChannelRow, error)
 	SetChannelTestResult(ctx context.Context, arg sqlc.SetChannelTestResultParams) (int64, error)
+	// 阶段二凭据闸门：检测成功→翻有效、credential_invalid→翻失效（均幂等，返回受影响行数判断是否跳变）。
+	SetChannelCredentialValid(ctx context.Context, id int64) (int64, error)
+	SetChannelCredentialInvalid(ctx context.Context, id int64) (int64, error)
+	InsertChannelTestLog(ctx context.Context, arg sqlc.InsertChannelTestLogParams) error
+	ListChannelTestLogsByChannel(ctx context.Context, arg sqlc.ListChannelTestLogsByChannelParams) ([]sqlc.ChannelTestLog, error)
+	CountChannelTestLogsByChannel(ctx context.Context, channelID int64) (int64, error)
 }
 
 // Prober 向渠道真实上游发一次最小请求（复用与网关一致的 adapter/HTTP 链路）。
@@ -56,11 +62,19 @@ type Prober interface {
 	ProbeChannel(ctx context.Context, protocol, adapterKey string, rt channel.Runtime, upstreamModel string) (int, error)
 }
 
+// 检测事件来源（写入 channel_test_logs.source）。
+const (
+	SourceManual = "manual" // 管理员在控制台手动点「检测」
+	SourceWorker = "worker" // 渠道自动检测 worker 周期巡检
+)
+
 // TestInput 是一次渠道检测入参。
 type TestInput struct {
 	ChannelID int64
 	// Model 可选：Unio 对外模型 ID 或直接的上游模型名；留空时自动取渠道第一个启用绑定模型。
 	Model string
+	// Source 是本次检测来源（manual/worker）；留空按 manual 处理。决定日志写入口径（R1(b)）。
+	Source string
 }
 
 // TestResult 是一次渠道检测结果。它始终代表「检测已成功执行」；渠道是否健康看 Success。
@@ -137,7 +151,127 @@ func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 		return TestResult{}, storeFailed(err, "persist channel test result")
 	}
 
+	if err := s.applyCredentialState(ctx, ch, in.Source, result); err != nil {
+		return TestResult{}, err
+	}
+
 	return result, nil
+}
+
+// applyCredentialState 按检测结果翻 credential_valid（C-7）并按 R1(b) 决定是否落一条检测日志。
+//
+// 翻牌：成功→有效、credential_invalid→失效、其它失败不动。均幂等（返回受影响行数判断是否跳变）。
+// 写日志口径：手动检测总写（管理员显式操作留痕）；worker 仅在「失败」或「credential_valid 跳变」时写
+// （健康且状态未变的成功探测不写，避免刷屏）。日志写入 best-effort，失败不影响检测结果。
+func (s *Service) applyCredentialState(ctx context.Context, ch sqlc.Channel, source string, result TestResult) error {
+	if source == "" {
+		source = SourceManual
+	}
+
+	credentialValidAfter := ch.CredentialValid
+	transition := false
+	switch {
+	case result.Success:
+		rows, err := s.store.SetChannelCredentialValid(ctx, ch.ID)
+		if err != nil {
+			return storeFailed(err, "set channel credential valid")
+		}
+		credentialValidAfter = true
+		transition = rows > 0
+	case result.ErrorCode == ErrCodeCredentialInvalid:
+		rows, err := s.store.SetChannelCredentialInvalid(ctx, ch.ID)
+		if err != nil {
+			return storeFailed(err, "set channel credential invalid")
+		}
+		credentialValidAfter = false
+		transition = rows > 0
+	}
+
+	shouldLog := source == SourceManual || !result.Success || transition
+	if !shouldLog {
+		return nil
+	}
+
+	_ = s.store.InsertChannelTestLog(ctx, sqlc.InsertChannelTestLogParams{
+		ChannelID:            ch.ID,
+		Source:               source,
+		Success:              result.Success,
+		ErrorCode:            optText(result.ErrorCode),
+		HttpStatus:           optInt4(int32(result.HTTPStatus)),
+		LatencyMs:            pgtype.Int4{Int32: clampInt32(result.LatencyMs), Valid: true},
+		TestedModel:          optText(result.TestedModel),
+		CredentialValidAfter: credentialValidAfter,
+		Message:              optText(result.Message),
+	})
+	return nil
+}
+
+// optText 空串→NULL。
+func optText(v string) pgtype.Text {
+	if v == "" {
+		return pgtype.Text{Valid: false}
+	}
+	return pgtype.Text{String: v, Valid: true}
+}
+
+// optInt4 非正数（含探测未拿到状态码的 0）→NULL。
+func optInt4(v int32) pgtype.Int4 {
+	if v <= 0 {
+		return pgtype.Int4{Valid: false}
+	}
+	return pgtype.Int4{Int32: v, Valid: true}
+}
+
+// LogEntry 是一条渠道检测/凭据事件日志（详情页「检测日志」区块展示）。
+type LogEntry struct {
+	ID                   int64
+	CreatedAt            time.Time
+	Source               string
+	Success              bool
+	ErrorCode            string
+	HTTPStatus           int
+	LatencyMs            int64
+	TestedModel          string
+	CredentialValidAfter bool
+	Message              string
+}
+
+// ListLogs 分页返回某渠道的检测日志（倒序）。返回本页 + 总数。
+func (s *Service) ListLogs(ctx context.Context, channelID int64, limit, offset int32) ([]LogEntry, int64, error) {
+	if channelID <= 0 {
+		return nil, 0, invalidArgument("id", "channel id must be positive")
+	}
+
+	rows, err := s.store.ListChannelTestLogsByChannel(ctx, sqlc.ListChannelTestLogsByChannelParams{
+		ChannelID:  channelID,
+		PageLimit:  limit,
+		PageOffset: offset,
+	})
+	if err != nil {
+		return nil, 0, storeFailed(err, "list channel test logs")
+	}
+
+	total, err := s.store.CountChannelTestLogsByChannel(ctx, channelID)
+	if err != nil {
+		return nil, 0, storeFailed(err, "count channel test logs")
+	}
+
+	out := make([]LogEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, LogEntry{
+			ID:                   r.ID,
+			CreatedAt:            r.CreatedAt.Time,
+			Source:               r.Source,
+			Success:              r.Success,
+			ErrorCode:            r.ErrorCode.String,
+			HTTPStatus:           int(r.HttpStatus.Int32),
+			LatencyMs:            int64(r.LatencyMs.Int32),
+			TestedModel:          r.TestedModel.String,
+			CredentialValidAfter: r.CredentialValidAfter,
+			Message:              r.Message.String,
+		})
+	}
+	return out, total, nil
 }
 
 // resolveUpstreamModel 决定本次检测用哪个上游模型：入参指定则映射校验，否则取第一个启用绑定。

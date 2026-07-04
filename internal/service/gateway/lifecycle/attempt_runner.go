@@ -228,6 +228,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 		responseStartedAt := time.Now()
 		l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 		l.RecordChannelHealth(channelKey, err)
+		l.RecordCredentialResult(candidate.Channel.ID, err)
 		if err != nil {
 			// 客户端取消不是上游失败，也不触发 fallback；此时还没进入 settlement，不写账务。
 			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {

@@ -24,11 +24,14 @@ func (NeverRetryClassifier) IsRetryable(err error) bool {
 // 因此 gateway 不会因为不同 provider 的错误文案差异而做出不同决策。
 type ProviderErrorClassifier struct{}
 
-// IsRetryable 仅对与请求内容无关的瞬时上游故障返回 true。
+// IsRetryable 仅对与请求内容无关、且换同模型另一 channel 有望成功的错误返回 true。
 //
 // 判定规则：
 //   - rate_limit / timeout / server_error：上游瞬时故障，换同模型 channel 可能成功，允许 fallback。
-//   - auth / permission：多为平台 channel 凭据或授权配置问题，盲目重试会放大错误并掩盖配置故障，不重试。
+//   - auth（401）：本渠道凭据失效。因 (provider, key) 联合唯一 → 同线路其它候选必然是「另一把 key /
+//     另一个上游账号」，fallback 过去大概率成功；且失效渠道由凭据闸门（credential_valid）持久摘除，
+//     不会反复盲目重试同一把死 key，故允许 fallback（DEC 2026-07 凭据闸门）。
+//   - permission（403）：多为账号级/模型级授权问题，换渠道多半同样被拒，不重试（仍由熔断做瞬时摘除）。
 //   - bad_request：请求本身非法，换 channel 内容不变也不会成功，不重试。
 //   - canceled：客户端主动取消，不是上游故障，不重试。
 //   - unknown 或链上没有 *adapter.UpstreamError：缺乏可靠依据，保守地不重试。
@@ -41,7 +44,8 @@ func (ProviderErrorClassifier) IsRetryable(err error) bool {
 	switch category {
 	case adapter.UpstreamErrorRateLimit,
 		adapter.UpstreamErrorTimeout,
-		adapter.UpstreamErrorServer:
+		adapter.UpstreamErrorServer,
+		adapter.UpstreamErrorAuth:
 		return true
 	default:
 		return false

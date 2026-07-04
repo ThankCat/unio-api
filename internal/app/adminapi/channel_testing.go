@@ -9,9 +9,10 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/admin/channeltest"
 )
 
-// ChannelTestService 定义 adminapi 触发渠道主动检测所需的最小能力。
+// ChannelTestService 定义 adminapi 触发渠道主动检测 + 查询检测日志所需的最小能力。
 type ChannelTestService interface {
 	Test(ctx context.Context, in channeltest.TestInput) (channeltest.TestResult, error)
+	ListLogs(ctx context.Context, channelID int64, limit, offset int32) ([]channeltest.LogEntry, int64, error)
 }
 
 // channelTestRequest 是 POST /channels/{id}/test 的请求体（字段均可选）。
@@ -56,6 +57,7 @@ func (h *channelTestHandler) test(w http.ResponseWriter, r *http.Request) {
 	result, err := h.service.Test(r.Context(), channeltest.TestInput{
 		ChannelID: id,
 		Model:     req.Model,
+		Source:    channeltest.SourceManual,
 	})
 	if err != nil {
 		writeServiceError(w, err)
@@ -63,6 +65,61 @@ func (h *channelTestHandler) test(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeData(w, http.StatusOK, toChannelTestResultDTO(result))
+}
+
+// channelTestLogDTO 是一条渠道检测/凭据事件日志（详情页「检测日志」区块）。
+type channelTestLogDTO struct {
+	ID                   int64   `json:"id"`
+	CreatedAt            string  `json:"created_at"`
+	Source               string  `json:"source"`
+	Success              bool    `json:"success"`
+	ErrorCode            *string `json:"error_code"`
+	HTTPStatus           *int    `json:"http_status"`
+	LatencyMs            int64   `json:"latency_ms"`
+	TestedModel          string  `json:"tested_model"`
+	CredentialValidAfter bool    `json:"credential_valid_after"`
+	Message              string  `json:"message"`
+}
+
+// testLogs 分页返回某渠道的检测日志（GET /channels/{id}/test-logs）。
+func (h *channelTestHandler) testLogs(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	page := parsePage(r)
+	logs, total, err := h.service.ListLogs(r.Context(), id, page.Limit(), page.Offset())
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	out := make([]channelTestLogDTO, 0, len(logs))
+	for _, l := range logs {
+		dto := channelTestLogDTO{
+			ID:                   l.ID,
+			CreatedAt:            l.CreatedAt.UTC().Format(time.RFC3339),
+			Source:               l.Source,
+			Success:              l.Success,
+			LatencyMs:            l.LatencyMs,
+			TestedModel:          l.TestedModel,
+			CredentialValidAfter: l.CredentialValidAfter,
+			Message:              l.Message,
+		}
+		if l.ErrorCode != "" {
+			code := l.ErrorCode
+			dto.ErrorCode = &code
+		}
+		if l.HTTPStatus > 0 {
+			status := l.HTTPStatus
+			dto.HTTPStatus = &status
+		}
+		out = append(out, dto)
+	}
+
+	writeList(w, http.StatusOK, out, page, total)
 }
 
 func toChannelTestResultDTO(r channeltest.TestResult) channelTestResultDTO {

@@ -45,6 +45,11 @@ func (s *Store) CreateRequest(ctx context.Context, params CreateRequestParams) (
 		ResponseCompletedAt: pgtype.Timestamptz{Valid: false},
 		StartedAt:           timestamptz(params.StartedAt),
 		CompletedAt:         pgtype.Timestamptz{Valid: false},
+		// 批二富化：线路快照 / 推理强度归一 / 客户端 IP（均可空）。
+		RouteID:               int8OrNull(params.RouteID),
+		ReasoningEffort:       textOrNull(params.ReasoningEffort),
+		ReasoningBudgetTokens: int4OrNull(params.ReasoningBudgetTokens),
+		ClientIp:              textOrNull(params.ClientIP),
 	})
 	if err != nil {
 		return RequestRecord{}, requestLogStoreFailure(err, "create request record")
@@ -453,6 +458,28 @@ func attemptRecordFromSQLC(row sqlc.RequestAttempt) AttemptRecord {
 // timestamptz 将 time.Time 包装成有效的 pgtype.Timestamptz。
 func timestamptz(t time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t, Valid: true}
+}
+
+// int8OrNull / int4OrNull / textOrNull 把可选值转成可空 pgtype（nil → NULL）。
+func int8OrNull(v *int64) pgtype.Int8 {
+	if v == nil {
+		return pgtype.Int8{Valid: false}
+	}
+	return pgtype.Int8{Int64: *v, Valid: true}
+}
+
+func int4OrNull(v *int32) pgtype.Int4 {
+	if v == nil {
+		return pgtype.Int4{Valid: false}
+	}
+	return pgtype.Int4{Int32: *v, Valid: true}
+}
+
+func textOrNull(v *string) pgtype.Text {
+	if v == nil || *v == "" {
+		return pgtype.Text{Valid: false}
+	}
+	return pgtype.Text{String: *v, Valid: true}
 }
 
 // optionalTimestamptz 把可选时间转换为 pgtype.Timestamptz。

@@ -51,7 +51,11 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		)
 	}
 
-	requestRecord, err := s.lifecycle.CreateRequest(ctx, principal, req.Model, true)
+	var effort string
+	if req.Reasoning != nil && req.Reasoning.Effort != nil {
+		effort = *req.Reasoning.Effort
+	}
+	requestRecord, err := s.lifecycle.CreateRequest(ctx, principal, req.Model, true, lifecycle.NormalizeOpenAIEffort(effort))
 	if err != nil {
 		return err
 	}

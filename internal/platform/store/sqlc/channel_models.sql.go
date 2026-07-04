@@ -150,6 +150,7 @@ WHERE m.model_id = $2
   AND m.status = 'enabled'
   AND cm.status = 'enabled'
   AND c.status = 'enabled'
+  AND c.credential_valid
   AND p.status = 'enabled'
   AND (
     $4::TEXT = 'all'
@@ -235,7 +236,7 @@ type FindRouteCandidatesRow struct {
 //  3. 带回模型基准售价（base，供 Go 侧 ScaleCustomerPrice = 基准 × 线路倍率 算客户售价）与命中渠道成本（cost，供 cheapest 按成本排序与毛利结算）。
 //
 // 客户售价 = base × routes.price_ratio，在 Go 侧算（同一请求所有候选共享同一售价）；
-// 策略排序（cheapest 按成本 / stable 按健康 / fixed 单条）在 Go 侧完成；此处仅给稳定的 priority 基序。
+// 策略排序（cheapest 按成本 / stable 按健康 / random 洗牌 / fixed 单条）在 Go 侧完成；此处仅给稳定的 priority 基序。
 func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidatesParams) ([]FindRouteCandidatesRow, error) {
 	rows, err := q.db.Query(ctx, findRouteCandidates,
 		arg.AtTime,

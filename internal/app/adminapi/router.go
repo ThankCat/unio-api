@@ -40,7 +40,6 @@ type RouterDeps struct {
 
 	// M6 只读查询台
 	RequestQueryService RequestQueryService
-	UsageQueryService   UsageQueryService
 	LedgerQueryService  LedgerQueryService
 
 	// M7 客户管理：用户（只读）/API Key（费用上限 + 必填线路）/手工调额
@@ -162,6 +161,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 		if deps.ChannelTestService != nil {
 			cth := &channelTestHandler{service: deps.ChannelTestService}
 			r.Post("/channels/{id}/test", cth.test)
+			r.Get("/channels/{id}/test-logs", cth.testLogs)
 		}
 
 		if deps.ChannelModelService != nil {
@@ -249,11 +249,6 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Get("/requests", rqh.list)
 			// 详情按对外 request_id 定位；?include_internal=true 才回显内部错误详情。
 			r.Get("/requests/{requestId}", rqh.get)
-		}
-
-		if deps.UsageQueryService != nil {
-			uh := &usageHandler{service: deps.UsageQueryService}
-			r.Get("/usage", uh.list)
 		}
 
 		if deps.LedgerQueryService != nil {

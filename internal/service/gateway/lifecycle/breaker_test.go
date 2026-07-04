@@ -152,7 +152,6 @@ func TestIsChannelFaultError(t *testing.T) {
 		adapter.UpstreamErrorTimeout,
 		adapter.UpstreamErrorServer,
 		adapter.UpstreamErrorRateLimit,
-		adapter.UpstreamErrorAuth,
 		adapter.UpstreamErrorPermission,
 	}
 	for _, category := range faulty {
@@ -162,8 +161,10 @@ func TestIsChannelFaultError(t *testing.T) {
 		}
 	}
 
+	// auth（401）改由凭据闸门专管，不再计入进程内熔断（DEC 2026-07 C-4）。
 	notFaulty := []error{
 		nil,
+		adapter.NewUpstreamError(adapter.UpstreamErrorAuth, adapter.UpstreamMetadata{}, failure.New(failure.CodeAdapterUpstreamStatus)),
 		adapter.NewUpstreamError(adapter.UpstreamErrorBadRequest, adapter.UpstreamMetadata{}, failure.New(failure.CodeAdapterUpstreamStatus)),
 		adapter.NewUpstreamError(adapter.UpstreamErrorCanceled, adapter.UpstreamMetadata{}, failure.New(failure.CodeAdapterUpstreamStatus)),
 		errors.New("non-upstream error"),

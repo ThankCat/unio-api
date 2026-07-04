@@ -24,6 +24,12 @@ type fakeRequestStore struct {
 	entriesErr   error
 	exception    sqlc.LedgerBillingException
 	exceptionErr error
+	costSnap     sqlc.CostSnapshot
+	costSnapErr  error
+	priceSnap    sqlc.PriceSnapshot
+	priceSnapErr error
+	route        sqlc.Route
+	routeErr     error
 
 	listRows []sqlc.ListRequestRecordsPageRow
 	total    int64
@@ -49,6 +55,15 @@ func (f *fakeRequestStore) ListLedgerEntriesByRequest(context.Context, pgtype.In
 }
 func (f *fakeRequestStore) GetLedgerBillingExceptionByRequest(context.Context, int64) (sqlc.LedgerBillingException, error) {
 	return f.exception, f.exceptionErr
+}
+func (f *fakeRequestStore) GetCostSnapshotByRequest(context.Context, int64) (sqlc.CostSnapshot, error) {
+	return f.costSnap, f.costSnapErr
+}
+func (f *fakeRequestStore) GetPriceSnapshotByRequest(context.Context, int64) (sqlc.PriceSnapshot, error) {
+	return f.priceSnap, f.priceSnapErr
+}
+func (f *fakeRequestStore) GetRouteByID(context.Context, int64) (sqlc.Route, error) {
+	return f.route, f.routeErr
 }
 
 func baseRecord() sqlc.RequestRecord {
@@ -90,6 +105,9 @@ func newFakeStoreWithDetail() *fakeRequestStore {
 		}},
 		usageErr:     pgx.ErrNoRows,
 		exceptionErr: pgx.ErrNoRows,
+		costSnapErr:  pgx.ErrNoRows,
+		priceSnapErr: pgx.ErrNoRows,
+		routeErr:     pgx.ErrNoRows,
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
+	"github.com/ThankCat/unio-api/internal/platform/httpx"
 	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 )
@@ -28,6 +29,7 @@ type RequestLifecycle struct {
 	metrics         MetricsRecorder
 	breaker         ChannelBreaker
 	cooldowns       *ChannelCooldownRegistry
+	credentialGate  CredentialGate
 	ingressProtocol requestlog.Protocol
 	operation       requestlog.Operation
 	safeMessage     func(code string) string
@@ -175,6 +177,24 @@ func (l *RequestLifecycle) RecordChannelHealth(channelKey string, err error) {
 	l.breaker.RecordSuccess(channelKey)
 }
 
+// SetCredentialGate 注入凭据失效闸门（连续 401 翻 credential_valid=false）。nil 表示不启用。
+// 与 SetChannelCooldownRegistry 一样是可选的启动期后置注入。
+func (l *RequestLifecycle) SetCredentialGate(gate CredentialGate) {
+	if l == nil {
+		return
+	}
+	l.credentialGate = gate
+}
+
+// RecordCredentialResult 把一次上游尝试结果喂给凭据闸门（按 channel id）。
+// nil receiver / nil gate 等价于「未启用凭据闸门」，no-op。
+func (l *RequestLifecycle) RecordCredentialResult(channelID int64, err error) {
+	if l == nil || l.credentialGate == nil {
+		return
+	}
+	l.credentialGate.RecordResult(channelID, err)
+}
+
 // ---------------------------------------------------------------------------
 // authorization release：脱离客户端取消 context，给冻结余额释放留补偿窗口。
 // ---------------------------------------------------------------------------
@@ -307,7 +327,9 @@ func (l *RequestLifecycle) RecordZeroPriceServed(providerID int64, channelID int
 // CreateRequest 创建用户可见请求记录，并立即推进到 running 状态。
 // request_records.request_id 由服务端生成，用作数据库唯一事实 ID；
 // HTTP X-Request-ID 只作为日志 correlation id，不能直接复用为账务请求 ID。
-func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.APIKeyPrincipal, requestedModelID string, stream bool) (requestlog.RequestRecord, error) {
+// reasoning 为归一后的推理强度（协议编排从请求 DTO 提取）；线路快照取自 principal.RouteID，
+// 客户端 IP 取自 ctx（gateway ClientIP 中间件写入）。
+func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.APIKeyPrincipal, requestedModelID string, stream bool, reasoning ReasoningInfo) (requestlog.RequestRecord, error) {
 	requestID, err := requestlog.GenerateRequestID()
 	if err != nil {
 		return requestlog.RequestRecord{}, err
@@ -316,15 +338,28 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 	// 把业务 request_id 写入结构化日志字段，使其与 HTTP correlation_id 在同一条访问日志可关联。
 	logfields.SetRequestID(ctx, requestID)
 
+	var routeID *int64
+	if principal != nil {
+		routeID = principal.RouteID
+	}
+	var clientIP *string
+	if ip := httpx.ClientIP(ctx); ip != "" {
+		clientIP = &ip
+	}
+
 	record, err := l.requestLog.CreateRequest(ctx, requestlog.CreateRequestParams{
-		RequestID:        requestID,
-		UserID:           principal.UserID,
-		APIKeyID:         principal.APIKeyID,
-		RequestedModelID: requestedModelID,
-		IngressProtocol:  l.ingressProtocol,
-		Operation:        l.operation,
-		Stream:           stream,
-		StartedAt:        time.Now(),
+		RequestID:             requestID,
+		UserID:                principal.UserID,
+		APIKeyID:              principal.APIKeyID,
+		RequestedModelID:      requestedModelID,
+		IngressProtocol:       l.ingressProtocol,
+		Operation:             l.operation,
+		Stream:                stream,
+		StartedAt:             time.Now(),
+		RouteID:               routeID,
+		ReasoningEffort:       reasoning.Effort,
+		ReasoningBudgetTokens: reasoning.BudgetTokens,
+		ClientIP:              clientIP,
 	})
 	if err != nil {
 		return requestlog.RequestRecord{}, err

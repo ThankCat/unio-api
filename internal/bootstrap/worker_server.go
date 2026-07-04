@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 
 	"github.com/ThankCat/unio-api/internal/app/workers"
@@ -12,6 +13,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/service/admin/channeltest"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
@@ -77,6 +79,26 @@ func NewWorkerServerApp(_ context.Context, deps WorkerServerAppDeps) (*WorkerSer
 		deps.Logger.Info("model catalog sync worker enabled", "interval", deps.Config.ModelCatalogSync.Interval.String())
 	}
 
+	if deps.Config.ChannelTestWorker.Enabled {
+		// 渠道自动检测复用与网关一致的 adapter/HTTP 探测链路（不走计费/请求记录），
+		// 故 worker-server 需自建一份 adapter registry 供 channeltest 使用。
+		adapterRegistry, err := NewAdapterRegistry(http.DefaultClient, deps.Logger)
+		if err != nil {
+			return nil, err
+		}
+		channelTestService := channeltest.NewService(queries, adapterRegistry)
+		units = append(units, workers.NewChannelTestWorker(
+			queries,
+			workerChannelTester{svc: channelTestService},
+			deps.Logger,
+			deps.Config.ChannelTestWorker.Interval,
+			deps.Config.ChannelTestWorker.LogRetentionPerChannel,
+		))
+		deps.Logger.Info("channel test worker enabled",
+			"interval", deps.Config.ChannelTestWorker.Interval.String(),
+			"log_retention_per_channel", deps.Config.ChannelTestWorker.LogRetentionPerChannel)
+	}
+
 	runner := workers.NewRunner(
 		deps.Logger,
 		deps.Config.Worker.RunnerIdleInterval,
@@ -97,6 +119,17 @@ func buildModelCatalogSync(cfg config.ModelCatalogSyncConfig, queries *sqlc.Quer
 	fetcher := modelcatalog.NewHTTPFetcher(cfg.BaseURL, cfg.HTTPTimeout, cfg.MaxResponseBytes)
 
 	return modelcatalog.NewSyncer(fetcher, store), store
+}
+
+// workerChannelTester 把 channeltest.Service 适配成 workers.ChannelCredentialTester：
+// worker 只需触发一次 source=worker 的检测（翻牌 + 写日志在 Service 内完成），不关心 TestResult。
+type workerChannelTester struct {
+	svc *channeltest.Service
+}
+
+func (t workerChannelTester) TestChannel(ctx context.Context, channelID int64) error {
+	_, err := t.svc.Test(ctx, channeltest.TestInput{ChannelID: channelID, Source: channeltest.SourceWorker})
+	return err
 }
 
 func defaultWorkerID(prefix string) string {

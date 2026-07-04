@@ -7,6 +7,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/core/routing"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
 // message_request_record.go 内的方法是 lifecycle.RequestLifecycle 的 receiver-bound forward。
@@ -16,7 +17,7 @@ import (
 // 协议族 ad-hoc string code 文案映射通过 service.go 注入的 messagesSafeMessage 闭包提供。
 
 func (s *MessagesService) createMessageRequestRecord(ctx context.Context, principal *auth.APIKeyPrincipal, req gatewayapi.MessageRequest, stream bool) (requestlog.RequestRecord, error) {
-	return s.lifecycle.CreateRequest(ctx, principal, req.Model, stream)
+	return s.lifecycle.CreateRequest(ctx, principal, req.Model, stream, lifecycle.NormalizeAnthropicThinking(req.Thinking))
 }
 
 func (s *MessagesService) createAttemptRecord(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate) (requestlog.AttemptRecord, error) {

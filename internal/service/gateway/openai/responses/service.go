@@ -120,6 +120,11 @@ func (s *ResponsesService) SetChannelCooldownRegistry(registry *lifecycle.Channe
 	s.lifecycle.SetChannelCooldownRegistry(registry)
 }
 
+// SetCredentialGate 注入凭据失效闸门（连续 401 翻 credential_valid=false，阶段二）；nil 表示不启用。
+func (s *ResponsesService) SetCredentialGate(gate lifecycle.CredentialGate) {
+	s.lifecycle.SetCredentialGate(gate)
+}
+
 // responsesSafeMessage 把 Responses 编排专用 ad-hoc string code 映射成可展示文案；
 // 返回空串表示由 lifecycle 兜底。资金关键 code 与 chatcompletions 复用同一组（AttemptRunner 共享）。
 func responsesSafeMessage(code string) string {

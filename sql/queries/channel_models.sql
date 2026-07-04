@@ -47,7 +47,7 @@ WHERE channel_id = sqlc.arg(channel_id) AND model_id = sqlc.arg(model_id);
 --   2. 已定价过滤：候选必须同时满足「模型有当前生效 model_prices 基准售价」+「渠道有当前生效 channel_prices 成本行」（两者皆缺则排除，不参与计费）；
 --   3. 带回模型基准售价（base，供 Go 侧 ScaleCustomerPrice = 基准 × 线路倍率 算客户售价）与命中渠道成本（cost，供 cheapest 按成本排序与毛利结算）。
 -- 客户售价 = base × routes.price_ratio，在 Go 侧算（同一请求所有候选共享同一售价）；
--- 策略排序（cheapest 按成本 / stable 按健康 / fixed 单条）在 Go 侧完成；此处仅给稳定的 priority 基序。
+-- 策略排序（cheapest 按成本 / stable 按健康 / random 洗牌 / fixed 单条）在 Go 侧完成；此处仅给稳定的 priority 基序。
 WITH user_scope AS (
     SELECT sqlc.arg(user_id)::BIGINT AS user_id
 ),
@@ -133,6 +133,7 @@ WHERE m.model_id = sqlc.arg(requested_model_id)
   AND m.status = 'enabled'
   AND cm.status = 'enabled'
   AND c.status = 'enabled'
+  AND c.credential_valid
   AND p.status = 'enabled'
   AND (
     sqlc.arg(pool_kind)::TEXT = 'all'

@@ -460,6 +460,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		streamFacts, err = params.Stream(ctx, candidate, onChunk)
 		l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 		l.RecordChannelHealth(channelKey, err)
+		l.RecordCredentialResult(candidate.Channel.ID, err)
 
 		if err != nil {
 			// 上游 429：按 Retry-After 登记渠道冷却，后续 fallback 在冷却窗口内直接跳过该渠道（P2-7）。

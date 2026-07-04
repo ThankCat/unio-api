@@ -150,6 +150,16 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	responsesService.SetChannelCooldownRegistry(channelCooldown)
 	messagesService.SetChannelCooldownRegistry(channelCooldown)
 
+	// 凭据失效闸门（阶段二）：三协议共享一份进程内「连续 401」计数器；达阈值时异步把
+	// channels.credential_valid 翻 false + 写 runtime_401 日志，后续请求在路由候选层直接跳过该渠道。
+	credentialGate := lifecycle.NewChannelCredentialGate(
+		deps.Config.Gateway.CredentialInvalid401Threshold,
+		newCredentialInvalidator(queries, deps.Logger),
+	)
+	chatCompletionService.SetCredentialGate(credentialGate)
+	responsesService.SetCredentialGate(credentialGate)
+	messagesService.SetCredentialGate(credentialGate)
+
 	handler := NewHTTPHandler(
 		deps.Logger,
 		queries,

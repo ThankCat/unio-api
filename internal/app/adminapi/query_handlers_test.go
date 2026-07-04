@@ -15,14 +15,14 @@ import (
 )
 
 type fakeRequestQueryService struct {
-	listOut []query.RequestSummary
+	listOut []query.RequestListItem
 	getOut  query.RequestDetail
 	getErr  error
 	// gotInclude 记录最近一次 Get 的 includeInternal，用于断言开关透传。
 	gotInclude bool
 }
 
-func (s *fakeRequestQueryService) List(context.Context, query.RequestListParams) ([]query.RequestSummary, int64, error) {
+func (s *fakeRequestQueryService) List(context.Context, query.RequestListParams) ([]query.RequestListItem, int64, error) {
 	return s.listOut, int64(len(s.listOut)), nil
 }
 
@@ -40,14 +40,6 @@ func (s *fakeRequestQueryService) Get(_ context.Context, _ string, includeIntern
 		detail.InternalErrorDetail = nil
 	}
 	return detail, nil
-}
-
-type fakeUsageQueryService struct {
-	listOut []query.UsageSummary
-}
-
-func (s *fakeUsageQueryService) List(context.Context, query.UsageListParams) ([]query.UsageSummary, int64, error) {
-	return s.listOut, int64(len(s.listOut)), nil
 }
 
 type fakeLedgerQueryService struct {
@@ -76,7 +68,7 @@ func newQueryRouter(t *testing.T, deps adminapi.RouterDeps) http.Handler {
 }
 
 func TestListRequestsOmitsInternalErrorDetail(t *testing.T) {
-	rqs := &fakeRequestQueryService{listOut: []query.RequestSummary{{ID: 1, RequestID: "req_1", Status: "failed"}}}
+	rqs := &fakeRequestQueryService{listOut: []query.RequestListItem{{RequestSummary: query.RequestSummary{ID: 1, RequestID: "req_1", Status: "failed"}}}}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
 
 	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests", "", true)
@@ -155,15 +147,6 @@ func TestRequestsRequireToken(t *testing.T) {
 	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
-	}
-}
-
-func TestListUsageReturns200(t *testing.T) {
-	handler := newQueryRouter(t, adminapi.RouterDeps{UsageQueryService: &fakeUsageQueryService{listOut: []query.UsageSummary{{ID: 1, RequestID: "req_1"}}}})
-
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/usage?user_id=7", "", true)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
 }
 

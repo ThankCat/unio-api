@@ -331,7 +331,7 @@ func (q *Queries) ChannelOpsPerformanceTimeseries(ctx context.Context, arg Chann
 }
 
 const channelOpsRoutes = `-- name: ChannelOpsRoutes :many
-SELECT rt.id, rt.name, rt.mode, rt.pool_kind, rt.status
+SELECT rt.id, rt.name, rt.mode, rt.pool_kind, rt.status, rt.price_ratio
 FROM route_channels rc
 JOIN routes rt ON rt.id = rc.route_id
 WHERE rc.channel_id = $1
@@ -339,11 +339,12 @@ ORDER BY rt.id
 `
 
 type ChannelOpsRoutesRow struct {
-	ID       int64
-	Name     string
-	Mode     string
-	PoolKind string
-	Status   string
+	ID         int64
+	Name       string
+	Mode       string
+	PoolKind   string
+	Status     string
+	PriceRatio pgtype.Numeric
 }
 
 // ChannelOpsRoutes 引用该渠道的显式线路池（抽屉线路 Tab）。
@@ -362,6 +363,7 @@ func (q *Queries) ChannelOpsRoutes(ctx context.Context, channelID int64) ([]Chan
 			&i.Mode,
 			&i.PoolKind,
 			&i.Status,
+			&i.PriceRatio,
 		); err != nil {
 			return nil, err
 		}
@@ -662,6 +664,7 @@ SELECT
     c.last_test_ok,
     c.last_test_latency_ms,
     c.last_test_error,
+    c.credential_valid,
     pr.name AS provider_name,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
@@ -682,6 +685,7 @@ SELECT
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
     (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') AS bound_models,
+    (SELECT COUNT(*) FROM route_channels rc WHERE rc.channel_id = c.id) AS bound_routes,
     (
         SELECT a2.error_code FROM request_attempts a2
         WHERE a2.channel_id = c.id AND a2.status = 'failed' AND a2.fault_party = 'upstream' AND a2.error_code IS NOT NULL
@@ -698,7 +702,7 @@ LEFT JOIN request_attempts a
 WHERE ($3::text IS NULL OR c.status = $3::text)
   AND ($4::bigint IS NULL OR c.provider_id = $4::bigint)
   AND ($5::text IS NULL OR c.name ILIKE '%' || $5::text || '%')
-GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, c.base_url, c.priority, c.timeout_ms, c.credential, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.created_at, c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, pr.name
+GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, c.base_url, c.priority, c.timeout_ms, c.credential, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.created_at, c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name
 ORDER BY
   CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END DESC NULLS LAST,
   CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END ASC NULLS LAST,
@@ -750,6 +754,7 @@ type ChannelsOpsTableRow struct {
 	LastTestOk        pgtype.Bool
 	LastTestLatencyMs pgtype.Int4
 	LastTestError     pgtype.Text
+	CredentialValid   bool
 	ProviderName      string
 	AttemptTotal      int64
 	AttemptSucceeded  int64
@@ -761,6 +766,7 @@ type ChannelsOpsTableRow struct {
 	LatencyP95        float64
 	LatencyP99        float64
 	BoundModels       int64
+	BoundRoutes       int64
 	RecentErrorCode   pgtype.Text
 }
 
@@ -802,6 +808,7 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 			&i.LastTestOk,
 			&i.LastTestLatencyMs,
 			&i.LastTestError,
+			&i.CredentialValid,
 			&i.ProviderName,
 			&i.AttemptTotal,
 			&i.AttemptSucceeded,
@@ -813,6 +820,7 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 			&i.LatencyP95,
 			&i.LatencyP99,
 			&i.BoundModels,
+			&i.BoundRoutes,
 			&i.RecentErrorCode,
 		); err != nil {
 			return nil, err

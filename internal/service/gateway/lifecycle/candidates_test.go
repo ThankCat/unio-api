@@ -60,6 +60,46 @@ func TestExecutorPrepareCandidatesCheapestOrdersByChannelCost(t *testing.T) {
 	}
 }
 
+// TestSortCandidatesByModeRandomShufflesKeepingSet 验证 random 策略洗牌：候选集合不变（仍保留全部 fallback），
+// 且多次洗牌能产生与基序不同的顺序（20 次全部相同的概率约 (1/6)^20，可忽略）。
+func TestSortCandidatesByModeRandomShufflesKeepingSet(t *testing.T) {
+	in := []routing.ChatRouteCandidate{
+		candidateRoute(1, "a"),
+		candidateRoute(2, "b"),
+		candidateRoute(3, "c"),
+	}
+
+	sawDifferentOrder := false
+	for range 20 {
+		out := sortCandidatesByMode(in, "random", nil)
+		if len(out) != len(in) {
+			t.Fatalf("random mode changed candidate count: got %d, want %d", len(out), len(in))
+		}
+		seen := map[int64]bool{}
+		for _, c := range out {
+			seen[c.Channel.ID] = true
+		}
+		for _, c := range in {
+			if !seen[c.Channel.ID] {
+				t.Fatalf("random mode dropped channel %d", c.Channel.ID)
+			}
+		}
+		if out[0].Channel.ID != in[0].Channel.ID || out[1].Channel.ID != in[1].Channel.ID {
+			sawDifferentOrder = true
+		}
+	}
+	if !sawDifferentOrder {
+		t.Fatal("random mode never produced an order different from base priority order in 20 shuffles")
+	}
+
+	// 入参不被修改（洗牌发生在副本上）。
+	for i, want := range []int64{1, 2, 3} {
+		if in[i].Channel.ID != want {
+			t.Fatalf("input slice mutated at %d: got %d, want %d", i, in[i].Channel.ID, want)
+		}
+	}
+}
+
 type candidateCapabilityRegistry struct {
 	allowed map[int64]bool
 }

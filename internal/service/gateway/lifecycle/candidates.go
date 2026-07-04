@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"sort"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -179,6 +180,7 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 //   - cheapest：按命中渠道代表成本升序（output_cost 为主键，uncached_input_cost 次之）；
 //     售价已由 线路 × 模型 固定（DEC-026），池内挑成本最低 = 平台毛利最大。
 //   - stable：按渠道健康分升序（越小越健康）；health 为 nil 时保持 priority 基序。
+//   - random：每次请求对候选顺序随机洗牌（仍保留 fallback，仅改变尝试顺序）。
 //   - fixed/其它：保持 SQL routing 的 priority 基序（fixed 池本就只有一条候选）。
 //
 // 稳定排序保证同键候选保留 SQL 的 priority 顺序，故平手回落 priority。
@@ -197,6 +199,8 @@ func sortCandidatesByMode(in []routing.ChatRouteCandidate, mode string, health f
 				return health(MetricsID(out[i].Channel.ID)) < health(MetricsID(out[j].Channel.ID))
 			})
 		}
+	case "random":
+		rand.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
 	}
 
 	return out

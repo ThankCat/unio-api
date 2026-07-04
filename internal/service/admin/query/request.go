@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/service/admin/opsutil"
 )
 
 // RequestStore 定义请求只读查询所需的存储能力。
@@ -20,6 +21,9 @@ type RequestStore interface {
 	GetUsageRecordByRequest(ctx context.Context, requestRecordID int64) (sqlc.UsageRecord, error)
 	ListLedgerEntriesByRequest(ctx context.Context, requestRecordID pgtype.Int8) ([]sqlc.LedgerEntry, error)
 	GetLedgerBillingExceptionByRequest(ctx context.Context, requestRecordID int64) (sqlc.LedgerBillingException, error)
+	GetCostSnapshotByRequest(ctx context.Context, requestRecordID int64) (sqlc.CostSnapshot, error)
+	GetPriceSnapshotByRequest(ctx context.Context, requestRecordID int64) (sqlc.PriceSnapshot, error)
+	GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error)
 }
 
 // RequestListParams 是分页/过滤/排序列出请求记录的入参；指针/空串/nil 表示该维度不过滤。
@@ -63,6 +67,70 @@ type RequestSummary struct {
 	UpdatedAt           time.Time
 }
 
+// RequestListItem 是富化后的请求列表项：请求事实 + 用量/成本/扣费 + 线路/渠道链 + 计算出的时延。
+// 与详情不同，列表项的这些指标来自单条 JOIN 查询（`ListRequestRecordsPage`）；无结算快照时费用类为 nil。
+type RequestListItem struct {
+	RequestSummary
+
+	// token 用量（无 usage 记录时为 0）。
+	UncachedInputTokens     int64
+	CacheReadInputTokens    int64
+	CacheWrite5mInputTokens int64
+	CacheWrite1hInputTokens int64
+	OutputTokens            int64
+	ReasoningOutputTokens   int64
+
+	// 费用金额（USD 十进制字符串；无结算快照 / 账本时为 nil）。UserChargeUSD=用户实际扣费净额，TotalCostUSD=平台成本。
+	UserChargeUSD            *string
+	TotalCostUSD             *string
+	UncachedInputCostUSD     *string
+	CacheReadInputCostUSD    *string
+	CacheWrite5mInputCostUSD *string
+	CacheWrite1hInputCostUSD *string
+	OutputCostUSD            *string
+	ReasoningOutputCostUSD   *string
+
+	// 计费单价快照（USD 十进制字符串，per_1m_tokens）。平台侧=成本单价，用户侧=售价单价，供「单价 × tokens = 金额」计算过程展示。
+	UncachedInputCostUnitUSD      *string
+	CacheReadInputCostUnitUSD     *string
+	CacheWrite5mInputCostUnitUSD  *string
+	CacheWrite1hInputCostUnitUSD  *string
+	OutputCostUnitUSD             *string
+	ReasoningOutputCostUnitUSD    *string
+	UncachedInputPriceUnitUSD     *string
+	CacheReadInputPriceUnitUSD    *string
+	CacheWrite5mInputPriceUnitUSD *string
+	CacheWrite1hInputPriceUnitUSD *string
+	OutputPriceUnitUSD            *string
+	ReasoningOutputPriceUnitUSD   *string
+
+	// 用户/Key 展示（key 名 / 前缀 / 明文——明文供列表点击复制，口径同 api-keys 页）。
+	APIKeyName      *string
+	APIKeyPrefix    *string
+	APIKeyPlaintext *string
+
+	// 线路（请求级快照 route_id → routes.name；历史行回落当前 Key 绑定）/ 倍率 / 策略 / 最终命中渠道 / 经过的渠道链。
+	RouteName        *string
+	RoutePriceRatio  *string
+	RouteMode        *string
+	FinalChannelName *string
+	ChannelChain     string
+
+	// 模型元信息（按请求模型 id 关联）。
+	ModelDisplayName *string
+	ModelOwnedBy     *string
+
+	// 推理强度（归一档位）+ 原始预算（Anthropic）/ 客户端 IP（批二埋点，历史行为 nil）。
+	ReasoningEffort       *string
+	ReasoningBudgetTokens *int32
+	ClientIP              *string
+
+	// 时延（由时间戳 + output tokens 计算；缺时间戳时为 nil）。
+	LatencyMs *int64   // 总耗时（completed - started）
+	TtftMs    *int64   // 首字（response_started - started）
+	TPS       *float64 // 输出速率（output / (completed - response_started)）
+}
+
 // Attempt 是一次上游 channel 尝试事实；InternalErrorDetail 仅在 includeInternal 时填充。
 type Attempt struct {
 	ID                    int64
@@ -96,10 +164,76 @@ type Attempt struct {
 type RequestDetail struct {
 	RequestSummary
 	InternalErrorDetail *string
-	Attempts            []Attempt
-	Usage               *Usage
-	LedgerEntries       []LedgerEntry
-	BillingException    *BillingException
+	// 批二富化：线路快照 id / 归一推理强度 + 原始预算 / 客户端 IP。
+	RouteID               *int64
+	ReasoningEffort       *string
+	ReasoningBudgetTokens *int32
+	ClientIP              *string
+	// 费用明细快照：平台成本单价+金额 / 用户售价单价 / 线路倍率+策略（供详情费用明细「计算过程」）。
+	CostSnapshot     *CostSnapshotView
+	PriceSnapshot    *PriceSnapshotView
+	RoutePriceRatio  *string
+	RouteMode        *string
+	Attempts         []Attempt
+	Usage            *Usage
+	LedgerEntries    []LedgerEntry
+	BillingException *BillingException
+}
+
+// CostSnapshotView 是平台成本快照的展示视图：每分项成本单价（per_1m_tokens）+ 实际金额 + 总额（USD 字符串）。
+type CostSnapshotView struct {
+	UncachedInputCostUnit       *string
+	CacheReadInputCostUnit      *string
+	CacheWrite5mInputCostUnit   *string
+	CacheWrite1hInputCostUnit   *string
+	OutputCostUnit              *string
+	ReasoningOutputCostUnit     *string
+	UncachedInputCostAmount     *string
+	CacheReadInputCostAmount    *string
+	CacheWrite5mInputCostAmount *string
+	CacheWrite1hInputCostAmount *string
+	OutputCostAmount            *string
+	ReasoningOutputCostAmount   *string
+	TotalCostAmount             *string
+}
+
+// PriceSnapshotView 是客户售价快照的展示视图：每分项售价单价（per_1m_tokens，USD 字符串）。
+type PriceSnapshotView struct {
+	UncachedInputPrice     *string
+	CacheReadInputPrice    *string
+	CacheWrite5mInputPrice *string
+	CacheWrite1hInputPrice *string
+	OutputPrice            *string
+	ReasoningOutputPrice   *string
+}
+
+func toCostSnapshotView(c sqlc.CostSnapshot) CostSnapshotView {
+	return CostSnapshotView{
+		UncachedInputCostUnit:       opsutil.NumericStringPtr(c.UncachedInputCost),
+		CacheReadInputCostUnit:      opsutil.NumericStringPtr(c.CacheReadInputCost),
+		CacheWrite5mInputCostUnit:   opsutil.NumericStringPtr(c.CacheWrite5mInputCost),
+		CacheWrite1hInputCostUnit:   opsutil.NumericStringPtr(c.CacheWrite1hInputCost),
+		OutputCostUnit:              opsutil.NumericStringPtr(c.OutputCost),
+		ReasoningOutputCostUnit:     opsutil.NumericStringPtr(c.ReasoningOutputCost),
+		UncachedInputCostAmount:     opsutil.NumericStringPtr(c.UncachedInputCostAmount),
+		CacheReadInputCostAmount:    opsutil.NumericStringPtr(c.CacheReadInputCostAmount),
+		CacheWrite5mInputCostAmount: opsutil.NumericStringPtr(c.CacheWrite5mInputCostAmount),
+		CacheWrite1hInputCostAmount: opsutil.NumericStringPtr(c.CacheWrite1hInputCostAmount),
+		OutputCostAmount:            opsutil.NumericStringPtr(c.OutputCostAmount),
+		ReasoningOutputCostAmount:   opsutil.NumericStringPtr(c.ReasoningOutputCostAmount),
+		TotalCostAmount:             opsutil.NumericStringPtr(c.TotalCostAmount),
+	}
+}
+
+func toPriceSnapshotView(p sqlc.PriceSnapshot) PriceSnapshotView {
+	return PriceSnapshotView{
+		UncachedInputPrice:     opsutil.NumericStringPtr(p.UncachedInputPrice),
+		CacheReadInputPrice:    opsutil.NumericStringPtr(p.CacheReadInputPrice),
+		CacheWrite5mInputPrice: opsutil.NumericStringPtr(p.CacheWrite5mInputPrice),
+		CacheWrite1hInputPrice: opsutil.NumericStringPtr(p.CacheWrite1hInputPrice),
+		OutputPrice:            opsutil.NumericStringPtr(p.OutputPrice),
+		ReasoningOutputPrice:   opsutil.NumericStringPtr(p.ReasoningOutputPrice),
+	}
 }
 
 // RequestService 提供请求记录只读查询。
@@ -112,8 +246,8 @@ func NewRequestService(store RequestStore) *RequestService {
 	return &RequestService{store: store}
 }
 
-// List 按 params 过滤分页倒序列出请求记录，并返回过滤后的总数。
-func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]RequestSummary, int64, error) {
+// List 按 params 过滤分页倒序列出请求记录（富化项），并返回过滤后的总数。
+func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]RequestListItem, int64, error) {
 	rows, err := s.store.ListRequestRecordsPage(ctx, sqlc.ListRequestRecordsPageParams{
 		UserID:     int8Narg(params.UserID),
 		ApiKeyID:   int8Narg(params.APIKeyID),
@@ -142,9 +276,9 @@ func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]
 		return nil, 0, storeFailed(err, "count request records")
 	}
 
-	items := make([]RequestSummary, 0, len(rows))
+	items := make([]RequestListItem, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, toRequestSummary(row))
+		items = append(items, toRequestListItem(row))
 	}
 	return items, total, nil
 }
@@ -164,7 +298,13 @@ func (s *RequestService) Get(ctx context.Context, requestID string, includeInter
 		return RequestDetail{}, storeFailed(err, "get request record")
 	}
 
-	detail := RequestDetail{RequestSummary: summaryFromRecord(record)}
+	detail := RequestDetail{
+		RequestSummary:        summaryFromRecord(record),
+		RouteID:               int8Ptr(record.RouteID),
+		ReasoningEffort:       textPtr(record.ReasoningEffort),
+		ReasoningBudgetTokens: int4Ptr(record.ReasoningBudgetTokens),
+		ClientIP:              textPtr(record.ClientIp),
+	}
 	if includeInternal {
 		detail.InternalErrorDetail = textPtr(record.InternalErrorDetail)
 	}
@@ -187,6 +327,41 @@ func (s *RequestService) Get(ctx context.Context, requestID string, includeInter
 		// 无 usage（如失败请求）属正常情形。
 	default:
 		return RequestDetail{}, storeFailed(err, "get usage record")
+	}
+
+	// 费用明细快照（成本/售价）：缺快照（如失败请求）属正常，置 nil。
+	costRow, err := s.store.GetCostSnapshotByRequest(ctx, record.ID)
+	switch {
+	case err == nil:
+		v := toCostSnapshotView(costRow)
+		detail.CostSnapshot = &v
+	case errors.Is(err, pgx.ErrNoRows):
+	default:
+		return RequestDetail{}, storeFailed(err, "get cost snapshot")
+	}
+
+	priceRow, err := s.store.GetPriceSnapshotByRequest(ctx, record.ID)
+	switch {
+	case err == nil:
+		v := toPriceSnapshotView(priceRow)
+		detail.PriceSnapshot = &v
+	case errors.Is(err, pgx.ErrNoRows):
+	default:
+		return RequestDetail{}, storeFailed(err, "get price snapshot")
+	}
+
+	// 线路倍率 / 策略（用于费用汇总的基准价推导 = 售价 ÷ 倍率）；线路已删或历史未快照时忽略。
+	if record.RouteID.Valid {
+		routeRow, err := s.store.GetRouteByID(ctx, record.RouteID.Int64)
+		switch {
+		case err == nil:
+			detail.RoutePriceRatio = opsutil.NumericStringPtr(routeRow.PriceRatio)
+			mode := routeRow.Mode
+			detail.RouteMode = &mode
+		case errors.Is(err, pgx.ErrNoRows):
+		default:
+			return RequestDetail{}, storeFailed(err, "get route")
+		}
 	}
 
 	entryRows, err := s.store.ListLedgerEntriesByRequest(ctx, pgtype.Int8{Int64: record.ID, Valid: true})
@@ -212,32 +387,104 @@ func (s *RequestService) Get(ctx context.Context, requestID string, includeInter
 	return detail, nil
 }
 
-func toRequestSummary(r sqlc.ListRequestRecordsPageRow) RequestSummary {
-	return RequestSummary{
-		ID:                  r.ID,
-		RequestID:           r.RequestID,
-		UserID:              r.UserID,
-		APIKeyID:            r.ApiKeyID,
-		RequestedModelID:    r.RequestedModelID,
-		IngressProtocol:     r.IngressProtocol,
-		Operation:           r.Operation,
-		ResponseModelID:     textPtr(r.ResponseModelID),
-		ResponseProtocol:    textPtr(r.ResponseProtocol),
-		ResponseID:          textPtr(r.ResponseID),
-		Stream:              r.Stream,
-		Status:              r.Status,
-		FinalProviderID:     int8Ptr(r.FinalProviderID),
-		FinalChannelID:      int8Ptr(r.FinalChannelID),
-		ErrorCode:           textPtr(r.ErrorCode),
-		ErrorMessage:        textPtr(r.ErrorMessage),
-		DeliveryStatus:      r.DeliveryStatus,
-		ResponseStartedAt:   timePtr(r.ResponseStartedAt),
-		ResponseCompletedAt: timePtr(r.ResponseCompletedAt),
-		StartedAt:           r.StartedAt.Time,
-		CompletedAt:         timePtr(r.CompletedAt),
-		CreatedAt:           r.CreatedAt.Time,
-		UpdatedAt:           r.UpdatedAt.Time,
+func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
+	item := RequestListItem{
+		RequestSummary: RequestSummary{
+			ID:                  r.ID,
+			RequestID:           r.RequestID,
+			UserID:              r.UserID,
+			APIKeyID:            r.ApiKeyID,
+			RequestedModelID:    r.RequestedModelID,
+			IngressProtocol:     r.IngressProtocol,
+			Operation:           r.Operation,
+			ResponseModelID:     textPtr(r.ResponseModelID),
+			ResponseProtocol:    textPtr(r.ResponseProtocol),
+			ResponseID:          textPtr(r.ResponseID),
+			Stream:              r.Stream,
+			Status:              r.Status,
+			FinalProviderID:     int8Ptr(r.FinalProviderID),
+			FinalChannelID:      int8Ptr(r.FinalChannelID),
+			ErrorCode:           textPtr(r.ErrorCode),
+			ErrorMessage:        textPtr(r.ErrorMessage),
+			DeliveryStatus:      r.DeliveryStatus,
+			ResponseStartedAt:   timePtr(r.ResponseStartedAt),
+			ResponseCompletedAt: timePtr(r.ResponseCompletedAt),
+			StartedAt:           r.StartedAt.Time,
+			CompletedAt:         timePtr(r.CompletedAt),
+			CreatedAt:           r.CreatedAt.Time,
+			UpdatedAt:           r.UpdatedAt.Time,
+		},
+		UncachedInputTokens:     r.UncachedInputTokens,
+		CacheReadInputTokens:    r.CacheReadInputTokens,
+		CacheWrite5mInputTokens: r.CacheWrite5mInputTokens,
+		CacheWrite1hInputTokens: r.CacheWrite1hInputTokens,
+		OutputTokens:            r.OutputTokensTotal,
+		ReasoningOutputTokens:   r.ReasoningOutputTokens,
+
+		UserChargeUSD:            opsutil.NumericStringPtr(r.UserChargeAmount),
+		TotalCostUSD:             opsutil.NumericStringPtr(r.TotalCostAmount),
+		UncachedInputCostUSD:     opsutil.NumericStringPtr(r.UncachedInputCostAmount),
+		CacheReadInputCostUSD:    opsutil.NumericStringPtr(r.CacheReadInputCostAmount),
+		CacheWrite5mInputCostUSD: opsutil.NumericStringPtr(r.CacheWrite5mInputCostAmount),
+		CacheWrite1hInputCostUSD: opsutil.NumericStringPtr(r.CacheWrite1hInputCostAmount),
+		OutputCostUSD:            opsutil.NumericStringPtr(r.OutputCostAmount),
+		ReasoningOutputCostUSD:   opsutil.NumericStringPtr(r.ReasoningOutputCostAmount),
+
+		UncachedInputCostUnitUSD:      opsutil.NumericStringPtr(r.UncachedInputCost),
+		CacheReadInputCostUnitUSD:     opsutil.NumericStringPtr(r.CacheReadInputCost),
+		CacheWrite5mInputCostUnitUSD:  opsutil.NumericStringPtr(r.CacheWrite5mInputCost),
+		CacheWrite1hInputCostUnitUSD:  opsutil.NumericStringPtr(r.CacheWrite1hInputCost),
+		OutputCostUnitUSD:             opsutil.NumericStringPtr(r.OutputCost),
+		ReasoningOutputCostUnitUSD:    opsutil.NumericStringPtr(r.ReasoningOutputCost),
+		UncachedInputPriceUnitUSD:     opsutil.NumericStringPtr(r.UncachedInputPrice),
+		CacheReadInputPriceUnitUSD:    opsutil.NumericStringPtr(r.CacheReadInputPrice),
+		CacheWrite5mInputPriceUnitUSD: opsutil.NumericStringPtr(r.CacheWrite5mInputPrice),
+		CacheWrite1hInputPriceUnitUSD: opsutil.NumericStringPtr(r.CacheWrite1hInputPrice),
+		OutputPriceUnitUSD:            opsutil.NumericStringPtr(r.OutputPrice),
+		ReasoningOutputPriceUnitUSD:   opsutil.NumericStringPtr(r.ReasoningOutputPrice),
+
+		APIKeyName:      textPtr(r.ApiKeyName),
+		APIKeyPrefix:    textPtr(r.ApiKeyPrefix),
+		APIKeyPlaintext: textPtr(r.ApiKeyPlaintext),
+
+		RouteName:        textPtr(r.RouteName),
+		RoutePriceRatio:  opsutil.NumericStringPtr(r.RoutePriceRatio),
+		RouteMode:        textPtr(r.RouteMode),
+		FinalChannelName: textPtr(r.FinalChannelName),
+		ChannelChain:     r.ChannelChain,
+
+		ModelDisplayName: textPtr(r.ModelDisplayName),
+		ModelOwnedBy:     textPtr(r.ModelOwnedBy),
+
+		ReasoningEffort:       textPtr(r.ReasoningEffort),
+		ReasoningBudgetTokens: int4Ptr(r.ReasoningBudgetTokens),
+		ClientIP:              textPtr(r.ClientIp),
 	}
+
+	// 时延计算：均由已返回的时间戳派生。started_at 恒有值。
+	started := r.StartedAt.Time
+	if r.CompletedAt.Valid {
+		ms := r.CompletedAt.Time.Sub(started).Milliseconds()
+		if ms >= 0 {
+			item.LatencyMs = &ms
+		}
+	}
+	if r.ResponseStartedAt.Valid {
+		ttft := r.ResponseStartedAt.Time.Sub(started).Milliseconds()
+		if ttft >= 0 {
+			item.TtftMs = &ttft
+		}
+	}
+	// TPS = 输出 token / 生成时长（completed - response_started）。
+	if r.CompletedAt.Valid && r.ResponseStartedAt.Valid && r.OutputTokensTotal > 0 {
+		genSec := r.CompletedAt.Time.Sub(r.ResponseStartedAt.Time).Seconds()
+		if genSec > 0 {
+			tps := float64(r.OutputTokensTotal) / genSec
+			item.TPS = &tps
+		}
+	}
+
+	return item
 }
 
 func summaryFromRecord(r sqlc.RequestRecord) RequestSummary {
