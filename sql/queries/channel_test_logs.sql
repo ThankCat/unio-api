@@ -4,15 +4,15 @@
 -- name: InsertChannelTestLog :exec
 -- InsertChannelTestLog 追加一条检测/凭据事件日志。写入口径由调用方按 R1(b) 决定（失败/跳变才写、手动总写）。
 INSERT INTO channel_test_logs (
-    channel_id, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message
+    channel_id, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error
 ) VALUES (
     sqlc.arg(channel_id), sqlc.arg(source), sqlc.arg(success), sqlc.narg(error_code),
-    sqlc.narg(http_status), sqlc.narg(latency_ms), sqlc.narg(tested_model), sqlc.arg(credential_valid_after), sqlc.narg(message)
+    sqlc.narg(http_status), sqlc.narg(latency_ms), sqlc.narg(tested_model), sqlc.arg(credential_valid_after), sqlc.narg(message), sqlc.narg(upstream_error)
 );
 
 -- name: ListChannelTestLogsByChannel :many
 -- ListChannelTestLogsByChannel 按渠道倒序分页返回检测日志（详情页「检测日志」区块）。
-SELECT id, channel_id, created_at, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message
+SELECT id, channel_id, created_at, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error
 FROM channel_test_logs
 WHERE channel_id = sqlc.arg(channel_id)
 ORDER BY created_at DESC, id DESC

@@ -42,6 +42,12 @@ type ChannelTestWorkerConfig struct {
 	// LogRetentionPerChannel 来自 CHANNEL_TEST_LOG_RETENTION_PER_CHANNEL（默认 200，须 > 0）：
 	// 每渠道 channel_test_logs 保留最近 N 条，worker 每轮末尾清理更旧的。
 	LogRetentionPerChannel int
+	// ProbeTimeout 来自 CHANNEL_TEST_PROBE_TIMEOUT（默认 30s）：渠道未显式配置 timeout 时的探测超时。
+	// 手动检测与自动巡检共用（两者复用同一 channeltest.Service）。
+	ProbeTimeout time.Duration
+	// ProbeTimeoutMax 来自 CHANNEL_TEST_PROBE_TIMEOUT_MAX（默认 60s）：探测超时硬上限，
+	// 渠道 timeout 再大也不超过它——既给慢上游（如推理模型中转）足够响应时间，又不让坏渠道把巡检拖太久。
+	ProbeTimeoutMax time.Duration
 }
 
 // TokenEstimateConfig 保存输入 token 估算的媒体处理配置（对齐 new-api GetMediaToken 系列）。
@@ -491,6 +497,22 @@ func Load() (Config, error) {
 		return Config{}, failure.New(failure.CodeConfigInvalid, failure.WithMessage("CHANNEL_TEST_LOG_RETENTION_PER_CHANNEL must be > 0"))
 	}
 
+	channelTestProbeTimeout, err := getEnvDuration("CHANNEL_TEST_PROBE_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	if channelTestProbeTimeout <= 0 {
+		return Config{}, failure.New(failure.CodeConfigInvalid, failure.WithMessage("CHANNEL_TEST_PROBE_TIMEOUT must be > 0"))
+	}
+
+	channelTestProbeTimeoutMax, err := getEnvDuration("CHANNEL_TEST_PROBE_TIMEOUT_MAX", 60*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	if channelTestProbeTimeoutMax < channelTestProbeTimeout {
+		return Config{}, failure.New(failure.CodeConfigInvalid, failure.WithMessage("CHANNEL_TEST_PROBE_TIMEOUT_MAX must be >= CHANNEL_TEST_PROBE_TIMEOUT"))
+	}
+
 	credentialInvalid401Threshold, err := getEnvInt("GATEWAY_CHANNEL_CREDENTIAL_401_THRESHOLD", 3)
 	if err != nil {
 		return Config{}, err
@@ -696,6 +718,8 @@ func Load() (Config, error) {
 			Enabled:                channelTestWorkerEnabled,
 			Interval:               channelTestWorkerInterval,
 			LogRetentionPerChannel: channelTestLogRetentionPerChannel,
+			ProbeTimeout:           channelTestProbeTimeout,
+			ProbeTimeoutMax:        channelTestProbeTimeoutMax,
 		},
 		Tracing: TracingConfig{
 			Enabled:     tracingEnabled,

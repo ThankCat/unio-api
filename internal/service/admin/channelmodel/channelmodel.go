@@ -1,8 +1,9 @@
 // Package channelmodel 编排 admin 管理端的 channel↔model 绑定读写。
 //
 // 绑定是路由边：表示某条 channel 能服务哪个 Unio 模型、转发到上游时用什么模型名。
-// 绑定被 cost_snapshots/channel_cost_prices 以 (channel_id, model_id) 外键引用，
-// 已被账务引用的绑定不可硬删（DB 23503），上层降级为 conflict，提示改用停用。
+// 解绑（Delete）在同一条语句内先清掉该边自身的 channel_prices（追加式成本价配置，无删除接口），
+// 再删绑定；只有当该边确有计费/审计历史（cost_snapshots/price_snapshots/settlement_recovery_jobs
+// 以 NO ACTION 外键引用 channel_prices）时才被 DB 拒绝（23503），上层降级为 conflict，提示改用停用。
 package channelmodel
 
 import (
@@ -171,7 +172,8 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Binding, error) {
 	return toBinding(row), nil
 }
 
-// Delete 删除绑定；已被账务（cost_snapshots/channel_cost_prices）引用时降级为 conflict，提示改用停用。
+// Delete 删除绑定，并级联清掉该边自身的 channel_prices（追加式成本价配置）；仅当该边确有计费/审计历史
+// 引用时才被 DB 拒绝（23503），降级为 conflict 提示改用停用。
 func (s *Service) Delete(ctx context.Context, channelID, modelID int64) error {
 	if channelID <= 0 {
 		return invalidArgument("channel_id", "channel id must be positive")

@@ -24,8 +24,27 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 )
 
-// defaultProbeTimeout 是检测超时上限：坏渠道不该把检测拖很久。实际超时取 min(渠道 timeout, 本值)。
-const defaultProbeTimeout = 15 * time.Second
+// 检测超时默认值（可被 Config 覆盖）。
+//
+// 实际探测超时 = 渠道自己的 timeout（钳到 DefaultProbeTimeoutMax）；渠道未显式配置时用 DefaultProbeTimeout。
+// 之前是硬编码 min(渠道 timeout, 15s)，对慢上游（如推理模型中转，真实平均延迟可达数十秒）而言 15s 太紧，
+// 会把本来正常、只是首字节慢的渠道频繁误判成「检测超时」。
+const (
+	// DefaultProbeTimeout 是渠道未显式配置 timeout 时的检测超时。
+	DefaultProbeTimeout = 30 * time.Second
+	// DefaultProbeTimeoutMax 是检测超时硬上限：即便渠道 timeout 更大，探测也不超过它，
+	// 既给慢上游足够响应时间，又不让坏渠道把巡检拖太久。
+	DefaultProbeTimeoutMax = 60 * time.Second
+)
+
+// Config 调节渠道检测行为（探测超时上下限）。零值字段按默认兜底，可由 CHANNEL_TEST_PROBE_TIMEOUT*
+// 环境变量经 bootstrap 注入；手动检测与自动巡检共用同一份配置。
+type Config struct {
+	// ProbeTimeout 渠道未显式配置 timeout 时的检测超时。<=0 兜底 DefaultProbeTimeout。
+	ProbeTimeout time.Duration
+	// ProbeTimeoutMax 检测超时硬上限（渠道 timeout 再大也不超过它）。<=0 兜底 DefaultProbeTimeoutMax。
+	ProbeTimeoutMax time.Duration
+}
 
 // channelModelStatusEnabled 是 channel_models 启用状态值（与 DB 约束一致）。
 const channelModelStatusEnabled = "enabled"
@@ -79,24 +98,45 @@ type TestInput struct {
 
 // TestResult 是一次渠道检测结果。它始终代表「检测已成功执行」；渠道是否健康看 Success。
 type TestResult struct {
-	Success     bool
-	LatencyMs   int64
-	TestedModel string // 实际使用的上游模型名
-	HTTPStatus  int    // 上游 HTTP 状态码（连接失败/超时未拿到响应时为 0）
-	ErrorCode   string // 成功为空
-	Message     string // 成功为空；失败为可读原因
-	TestedAt    time.Time
+	Success       bool
+	LatencyMs     int64
+	TestedModel   string // 实际使用的上游模型名
+	HTTPStatus    int    // 上游 HTTP 状态码（连接失败/超时未拿到响应时为 0）
+	ErrorCode     string // 成功为空
+	Message       string // 成功为空；失败为可读原因（归类后的中文说明）
+	UpstreamError string // 失败时上游返回的原始错误体截断快照；成功/无响应体（连不上/超时）时为空
+	TestedAt      time.Time
 }
 
 // Service 编排渠道主动检测：选模型 → 构造 Runtime → 发探测请求 → 归类 → 落库。
 type Service struct {
-	store  Store
-	prober Prober
+	store        Store
+	prober       Prober
+	probeDefault time.Duration
+	probeMax     time.Duration
 }
 
-// NewService 创建渠道检测服务。
-func NewService(store Store, prober Prober) *Service {
-	return &Service{store: store, prober: prober}
+// NewService 创建渠道检测服务。cfg 零值字段按默认兜底。
+func NewService(store Store, prober Prober, cfg Config) *Service {
+	probeDefault := cfg.ProbeTimeout
+	if probeDefault <= 0 {
+		probeDefault = DefaultProbeTimeout
+	}
+	probeMax := cfg.ProbeTimeoutMax
+	if probeMax <= 0 {
+		probeMax = DefaultProbeTimeoutMax
+	}
+	// 上限不得小于默认值，否则未配 timeout 的渠道会被上限压穿；取较大者兜底。
+	if probeMax < probeDefault {
+		probeMax = probeDefault
+	}
+
+	return &Service{
+		store:        store,
+		prober:       prober,
+		probeDefault: probeDefault,
+		probeMax:     probeMax,
+	}
 }
 
 // Test 对指定渠道执行一次主动检测，并持久化「最近一次检测结果」。
@@ -113,33 +153,48 @@ func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 		return TestResult{}, storeFailed(err, "get channel")
 	}
 
-	upstreamModel, err := s.resolveUpstreamModel(ctx, in.ChannelID, strings.TrimSpace(in.Model))
+	candidates, err := s.resolveUpstreamCandidates(ctx, in.ChannelID, strings.TrimSpace(in.Model))
 	if err != nil {
 		return TestResult{}, err
 	}
 
+	pt := s.probeTimeout(ch.TimeoutMs)
 	rt := channel.Runtime{
 		ID:           ch.ID,
 		BaseURL:      ch.BaseUrl,
 		APIKey:       strings.TrimSpace(ch.Credential),
-		Timeout:      probeTimeout(ch.TimeoutMs),
+		Timeout:      pt,
 		ProviderSlug: s.providerSlug(ctx, ch.ProviderID),
 	}
 
-	start := time.Now()
-	status, probeErr := s.prober.ProbeChannel(ctx, ch.Protocol, ch.AdapterKey, rt, upstreamModel)
-	latency := time.Since(start)
+	// 逐个候选探测。自动选模型（未显式指定 model）时，若命中「模型不可用/端点不存在」，
+	// 顺延到下一个启用绑定——避免绑定列表里排在前面的坏模型（如已下线的旧模型返回 404）
+	// 让整条渠道被误判为异常。其它失败（凭据无效/超时/限流/连不上…）属渠道级问题，换模型
+	// 无意义，立即停止并上报。显式指定 model 时候选只有一个，天然不会顺延。
+	var result TestResult
+	for i, upstreamModel := range candidates {
+		start := time.Now()
+		status, probeErr := s.prober.ProbeChannel(ctx, ch.Protocol, ch.AdapterKey, rt, upstreamModel)
+		latency := time.Since(start)
 
-	result := TestResult{
-		LatencyMs:   latency.Milliseconds(),
-		TestedModel: upstreamModel,
-		HTTPStatus:  status,
-		TestedAt:    time.Now().UTC(),
-	}
-	if probeErr != nil {
-		result.ErrorCode, result.Message = classifyProbeError(probeErr)
-	} else {
-		result.Success = true
+		result = TestResult{
+			LatencyMs:   latency.Milliseconds(),
+			TestedModel: upstreamModel,
+			HTTPStatus:  status,
+			TestedAt:    time.Now().UTC(),
+		}
+		if probeErr == nil {
+			result.Success = true
+			break
+		}
+		result.ErrorCode, result.Message = classifyProbeError(probeErr, pt)
+		// 把上游返回的原始错误体（截断快照）一并记下，供排障时看到完整错误而非只有归类后的中文原因。
+		if meta, ok := adapter.UpstreamMetadataOf(probeErr); ok {
+			result.UpstreamError = meta.ResponseSnippet
+		}
+		if result.ErrorCode != ErrCodeModelUnavailable || i == len(candidates)-1 {
+			break
+		}
 	}
 
 	if _, err := s.store.SetChannelTestResult(ctx, sqlc.SetChannelTestResultParams{
@@ -158,38 +213,30 @@ func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 	return result, nil
 }
 
-// applyCredentialState 按检测结果翻 credential_valid（C-7）并按 R1(b) 决定是否落一条检测日志。
+// applyCredentialState 按检测结果翻 credential_valid（C-7）并落一条检测日志。
 //
-// 翻牌：成功→有效、credential_invalid→失效、其它失败不动。均幂等（返回受影响行数判断是否跳变）。
-// 写日志口径：手动检测总写（管理员显式操作留痕）；worker 仅在「失败」或「credential_valid 跳变」时写
-// （健康且状态未变的成功探测不写，避免刷屏）。日志写入 best-effort，失败不影响检测结果。
+// 翻牌：成功→有效、credential_invalid→失效、其它失败不动。均幂等。
+// 写日志口径：每次检测都写一条——手动是管理员显式留痕，worker 是巡检心跳。
+// 过去 worker 成功且状态未变时被静默（防刷屏），但这样检测日志里自动巡检「只剩失败行」，
+// 会被误读成「自动巡检老是异常」；现改为成功也留痕（每渠道每轮一条，总量由
+// LogRetentionPerChannel 控制）。日志写入 best-effort，失败不影响检测结果。
 func (s *Service) applyCredentialState(ctx context.Context, ch sqlc.Channel, source string, result TestResult) error {
 	if source == "" {
 		source = SourceManual
 	}
 
 	credentialValidAfter := ch.CredentialValid
-	transition := false
 	switch {
 	case result.Success:
-		rows, err := s.store.SetChannelCredentialValid(ctx, ch.ID)
-		if err != nil {
+		if _, err := s.store.SetChannelCredentialValid(ctx, ch.ID); err != nil {
 			return storeFailed(err, "set channel credential valid")
 		}
 		credentialValidAfter = true
-		transition = rows > 0
 	case result.ErrorCode == ErrCodeCredentialInvalid:
-		rows, err := s.store.SetChannelCredentialInvalid(ctx, ch.ID)
-		if err != nil {
+		if _, err := s.store.SetChannelCredentialInvalid(ctx, ch.ID); err != nil {
 			return storeFailed(err, "set channel credential invalid")
 		}
 		credentialValidAfter = false
-		transition = rows > 0
-	}
-
-	shouldLog := source == SourceManual || !result.Success || transition
-	if !shouldLog {
-		return nil
 	}
 
 	_ = s.store.InsertChannelTestLog(ctx, sqlc.InsertChannelTestLogParams{
@@ -202,6 +249,7 @@ func (s *Service) applyCredentialState(ctx context.Context, ch sqlc.Channel, sou
 		TestedModel:          optText(result.TestedModel),
 		CredentialValidAfter: credentialValidAfter,
 		Message:              optText(result.Message),
+		UpstreamError:        optText(result.UpstreamError),
 	})
 	return nil
 }
@@ -234,6 +282,7 @@ type LogEntry struct {
 	TestedModel          string
 	CredentialValidAfter bool
 	Message              string
+	UpstreamError        string
 }
 
 // ListLogs 分页返回某渠道的检测日志（倒序）。返回本页 + 总数。
@@ -269,34 +318,49 @@ func (s *Service) ListLogs(ctx context.Context, channelID int64, limit, offset i
 			TestedModel:          r.TestedModel.String,
 			CredentialValidAfter: r.CredentialValidAfter,
 			Message:              r.Message.String,
+			UpstreamError:        r.UpstreamError.String,
 		})
 	}
 	return out, total, nil
 }
 
-// resolveUpstreamModel 决定本次检测用哪个上游模型：入参指定则映射校验，否则取第一个启用绑定。
-func (s *Service) resolveUpstreamModel(ctx context.Context, channelID int64, model string) (string, error) {
+// resolveUpstreamCandidates 决定本次检测按序尝试哪些上游模型。
+//
+//   - 入参指定 model：映射校验后只返回该模型（不顺延——尊重管理员显式选择）。
+//   - 未指定：返回全部启用绑定的上游模型（按绑定顺序、去重），供 Test 在命中「模型不可用」时
+//     依次顺延，直到某个模型通得过或全部试完。
+func (s *Service) resolveUpstreamCandidates(ctx context.Context, channelID int64, model string) ([]string, error) {
 	bindings, err := s.store.ListChannelModelsByChannel(ctx, channelID)
 	if err != nil {
-		return "", storeFailed(err, "list channel models")
+		return nil, storeFailed(err, "list channel models")
 	}
 
 	if model != "" {
 		// 允许前端传 Unio 对外模型 ID（下拉展示值）或直接的上游模型名。
 		for _, b := range bindings {
 			if b.ModelExternalID == model || b.UpstreamModel == model {
-				return b.UpstreamModel, nil
+				return []string{b.UpstreamModel}, nil
 			}
 		}
-		return "", invalidArgument("model", "model is not bound to this channel")
+		return nil, invalidArgument("model", "model is not bound to this channel")
 	}
 
+	candidates := make([]string, 0, len(bindings))
+	seen := make(map[string]struct{}, len(bindings))
 	for _, b := range bindings {
-		if b.Status == channelModelStatusEnabled {
-			return b.UpstreamModel, nil
+		if b.Status != channelModelStatusEnabled {
+			continue
 		}
+		if _, ok := seen[b.UpstreamModel]; ok {
+			continue
+		}
+		seen[b.UpstreamModel] = struct{}{}
+		candidates = append(candidates, b.UpstreamModel)
 	}
-	return "", invalidArgument("model", "channel has no enabled model binding to test")
+	if len(candidates) == 0 {
+		return nil, invalidArgument("model", "channel has no enabled model binding to test")
+	}
+	return candidates, nil
 }
 
 // providerSlug 取渠道所属 provider 的 slug 供 adapter 选择 provider 专属处理；
@@ -313,7 +377,8 @@ func (s *Service) providerSlug(ctx context.Context, providerID int64) string {
 }
 
 // classifyProbeError 把 adapter 返回的上游错误归类成稳定错误码 + 可读中文原因。
-func classifyProbeError(err error) (code string, message string) {
+// probeTimeout 是本次探测实际使用的超时，用于在超时原因里带上具体时长，便于一眼看出是被探测上限卡的。
+func classifyProbeError(err error, probeTimeout time.Duration) (code string, message string) {
 	category, hasCategory := adapter.UpstreamCategoryOf(err)
 	meta, _ := adapter.UpstreamMetadataOf(err)
 	status := meta.StatusCode
@@ -331,7 +396,7 @@ func classifyProbeError(err error) (code string, message string) {
 	case adapter.UpstreamErrorRateLimit:
 		return ErrCodeRateLimited, "上游限流（429）：稍后重试，通常不代表渠道故障"
 	case adapter.UpstreamErrorTimeout:
-		return ErrCodeTimeout, "检测超时：上游在超时时间内未响应"
+		return ErrCodeTimeout, fmt.Sprintf("检测超时：上游在 %.0fs 内未响应", probeTimeout.Seconds())
 	case adapter.UpstreamErrorBadRequest:
 		if status == http.StatusNotFound {
 			return ErrCodeModelUnavailable, "上游未找到该模型或端点（404）"
@@ -352,15 +417,16 @@ func classifyProbeError(err error) (code string, message string) {
 	}
 }
 
-// probeTimeout 取 min(渠道 timeout, defaultProbeTimeout)；渠道未设或非正数时用默认上限。
-func probeTimeout(timeoutMs pgtype.Int4) time.Duration {
+// probeTimeout 取渠道自己的 timeout（钳到 probeMax 上限）；渠道未设或非正数时用 probeDefault。
+func (s *Service) probeTimeout(timeoutMs pgtype.Int4) time.Duration {
 	if timeoutMs.Valid && timeoutMs.Int32 > 0 {
 		ct := time.Duration(timeoutMs.Int32) * time.Millisecond
-		if ct < defaultProbeTimeout {
-			return ct
+		if ct > s.probeMax {
+			return s.probeMax
 		}
+		return ct
 	}
-	return defaultProbeTimeout
+	return s.probeDefault
 }
 
 // testErrorParam 成功或无原因时写 NULL，失败时写可读原因（供渠道表悬浮展示最近失败）。

@@ -101,7 +101,11 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	providerOpsService := providerops.NewService(queries)
 	channelService := channel.NewService(queries, adapterRegistry)
 	// 渠道检测复用 gateway adapter registry（同一份 adapter/HTTP 链路，检测结果=真实行为）。
-	channelTestService := channeltest.NewService(queries, adapterRegistry)
+	// 探测超时配置与自动巡检 worker 共用，保证手动检测与自动巡检口径一致。
+	channelTestService := channeltest.NewService(queries, adapterRegistry, channeltest.Config{
+		ProbeTimeout:    deps.Config.ChannelTestWorker.ProbeTimeout,
+		ProbeTimeoutMax: deps.Config.ChannelTestWorker.ProbeTimeoutMax,
+	})
 	channelOpsService := channelops.NewService(queries)
 	modelService := model.NewService(queries)
 	modelOpsService := modelops.NewService(queries)

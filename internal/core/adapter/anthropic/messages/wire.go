@@ -195,6 +195,14 @@ func intValue(v *int) int {
 	return *v
 }
 
+// cacheCreationWireSum 汇总 cache write 的 TTL 拆分 token（nil 档记 0）。
+func cacheCreationWireSum(c *cacheCreationWire) int {
+	if c == nil {
+		return 0
+	}
+	return intValue(c.Ephemeral5mInputTokens) + intValue(c.Ephemeral1hInputTokens)
+}
+
 // mergeUsageWire 把 Anthropic stream 分散在 message_start 与 message_delta 的 usage 合并。
 //
 // wire 基础 token 使用指针保留“本事件未携带”语义：官方 Anthropic stream 的
@@ -206,6 +214,15 @@ func mergeUsageWire(dst *usageWire, src usageWire) {
 	}
 	if src.CacheCreationInputTokens != nil {
 		dst.CacheCreationInputTokens = src.CacheCreationInputTokens
+		// 当本事件只给出 flat cache write 总量、未随附 TTL 拆分对象时（如 sub2api/上游把真实
+		// cache_creation_input_tokens 放在 message_delta，而 message_start 只带全 0 的 cache_creation
+		// 占位对象），既有 TTL 拆分来自更早事件、已过期。若其汇总与新 flat 总量不一致，清空它，
+		// 让 ToUsageFacts 回退到权威的 flat 总量——否则流式 cache write 会被 message_start 的 0 拆分
+		// 吞没，导致 cache 成本严重少计（少计缓存写入 token → 成本/售价被大幅低估）。
+		if src.CacheCreation == nil && dst.CacheCreation != nil &&
+			cacheCreationWireSum(dst.CacheCreation) != *src.CacheCreationInputTokens {
+			dst.CacheCreation = nil
+		}
 	}
 	if src.CacheReadInputTokens != nil {
 		dst.CacheReadInputTokens = src.CacheReadInputTokens

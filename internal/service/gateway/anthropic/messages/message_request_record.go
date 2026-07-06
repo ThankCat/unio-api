@@ -17,7 +17,9 @@ import (
 // 协议族 ad-hoc string code 文案映射通过 service.go 注入的 messagesSafeMessage 闭包提供。
 
 func (s *MessagesService) createMessageRequestRecord(ctx context.Context, principal *auth.APIKeyPrincipal, req gatewayapi.MessageRequest, stream bool) (requestlog.RequestRecord, error) {
-	return s.lifecycle.CreateRequest(ctx, principal, req.Model, stream, lifecycle.NormalizeAnthropicThinking(req.Thinking))
+	// 推理强度优先取 output_config.effort（官方档位，透传在 Extensions 里），缺失再退回 thinking.budget_tokens。
+	reasoning := lifecycle.NormalizeAnthropicReasoning(req.Extensions["output_config"], req.Thinking)
+	return s.lifecycle.CreateRequest(ctx, principal, req.Model, stream, reasoning)
 }
 
 func (s *MessagesService) createAttemptRecord(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate) (requestlog.AttemptRecord, error) {

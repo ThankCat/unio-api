@@ -63,6 +63,7 @@ type Channel struct {
 	LastTestLatencyMs pgtype.Int4
 	LastTestError     pgtype.Text
 	CredentialValid   bool
+	ArchivedAt        pgtype.Timestamptz
 }
 
 type ChannelModel struct {
@@ -106,6 +107,7 @@ type ChannelTestLog struct {
 	TestedModel          pgtype.Text
 	CredentialValidAfter bool
 	Message              pgtype.Text
+	UpstreamError        pgtype.Text
 }
 
 type CostSnapshot struct {
@@ -289,12 +291,13 @@ type PriceSnapshot struct {
 }
 
 type Provider struct {
-	ID        int64
-	Slug      string
-	Name      string
-	Status    string
-	CreatedAt pgtype.Timestamptz
-	UpdatedAt pgtype.Timestamptz
+	ID         int64
+	Slug       string
+	Name       string
+	Status     string
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+	ArchivedAt pgtype.Timestamptz
 }
 
 type RequestAttempt struct {
@@ -369,6 +372,7 @@ type Route struct {
 	RpmLimit    pgtype.Int4
 	TpmLimit    pgtype.Int4
 	RpdLimit    pgtype.Int4
+	ArchivedAt  pgtype.Timestamptz
 }
 
 type RouteChannel struct {

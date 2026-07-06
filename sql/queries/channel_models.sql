@@ -36,9 +36,20 @@ WHERE channel_id = sqlc.arg(channel_id) AND model_id = sqlc.arg(model_id)
 RETURNING id, channel_id, model_id, upstream_model, status, created_at, updated_at;
 
 -- name: DeleteChannelModel :execrows
--- DeleteChannelModel 删除绑定；被 cost_snapshots/channel_prices 外键引用时由 DB 拒绝（23503），上层降级为 conflict。
+-- DeleteChannelModel 删除绑定，并在同一条语句内级联清理该 (channel_id, model_id) 边自身的
+-- channel_prices（渠道-模型成本价，追加式配置、无删除接口，只能停用）——否则只要该边配过成本价，
+-- 就会被自身配置行永久挡住解绑。channel_prices 仅被账务历史（cost_snapshots/price_snapshots/
+-- settlement_recovery_jobs）以 NO ACTION 外键引用：若该边确有计费历史，删 channel_prices 触发
+-- 23503 使整条语句回滚，上层降级为 conflict，提示改用停用——保住计费/审计链路。
+-- 无历史时（仅配置行）则干净解绑。返回值为 channel_models 行的受影响数（0 表示绑定不存在）。
+WITH deleted_channel_prices AS (
+    DELETE FROM channel_prices
+    WHERE channel_prices.channel_id = sqlc.arg(channel_id)
+      AND channel_prices.model_id = sqlc.arg(model_id)
+)
 DELETE FROM channel_models
-WHERE channel_id = sqlc.arg(channel_id) AND model_id = sqlc.arg(model_id);
+WHERE channel_models.channel_id = sqlc.arg(channel_id)
+  AND channel_models.model_id = sqlc.arg(model_id);
 
 -- name: FindRouteCandidates :many
 -- FindRouteCandidates 按请求模型、用户策略与线路查找可用 channel 路由候选（DEC-026 倍率定价）。

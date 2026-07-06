@@ -24,18 +24,20 @@ func upstreamRequestID(header http.Header) string {
 
 // newUpstreamStatusError 把上游非 2xx 响应转换成带稳定 category 和 metadata 的结构化错误。
 //
-// 不解析 provider 原始错误 body：DeepSeek Anthropic endpoint 的错误体为 OpenAI 风格信封，
+// 分类仍不解析 provider 原始错误 body：DeepSeek Anthropic endpoint 的错误体为 OpenAI 风格信封，
 // 与真实 Anthropic error shape 不同，统一以 HTTP status 为主信号分类，gatewayapi/anthropic
-// 再渲染原生 Anthropic error shape。
+// 再渲染原生 Anthropic error shape。但会把原始错误体截断快照放进 metadata.ResponseSnippet，
+// 供渠道检测排障留痕（不参与分类，也不进 gateway 请求记录）。
 func newUpstreamStatusError(resp *http.Response, operation string) error {
 	statusCode := resp.StatusCode
 
 	return adapter.NewUpstreamError(
 		upstreamCategoryForStatus(statusCode),
 		adapter.UpstreamMetadata{
-			StatusCode: statusCode,
-			RequestID:  upstreamRequestID(resp.Header),
-			RetryAfter: adapter.ParseRetryAfterHeader(resp.Header),
+			StatusCode:      statusCode,
+			RequestID:       upstreamRequestID(resp.Header),
+			RetryAfter:      adapter.ParseRetryAfterHeader(resp.Header),
+			ResponseSnippet: adapter.ReadUpstreamErrorSnippet(resp.Body),
 		},
 		failure.New(
 			failure.CodeAdapterUpstreamStatus,

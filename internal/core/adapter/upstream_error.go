@@ -47,7 +47,9 @@ const (
 // UpstreamMetadata 表示一次上游调用的可审计元信息。
 //
 // 成功或失败都可能携带，用于渠道审计、request/attempt 记录和 observability。
-// 只保存协议级非敏感信息，不包含 provider 原始错误 body、用户 prompt 或凭据。
+// 只保存协议级非敏感信息（状态码、请求标识、Retry-After）；gateway 的计费/请求记录只显式
+// 读取这些字段，不整体持久化本结构。ResponseSnippet 是唯一携带上游原文的字段，仅在非 2xx
+// 错误路径填充、供渠道检测排障留痕，gateway 请求记录不消费它（见字段说明）。
 type UpstreamMetadata struct {
 	// StatusCode 是上游返回的 HTTP 状态码。
 	// 0 表示请求未拿到 HTTP 响应，例如连接失败、超时或客户端取消。
@@ -60,6 +62,11 @@ type UpstreamMetadata struct {
 	// RetryAfter 是上游 429 响应 Retry-After 头解析出的建议冷却时长（P2-7）。
 	// 0 表示上游未提供或无法解析；>0 时 gateway 据此对该渠道做限时 cooldown（跳过 fallback）。
 	RetryAfter time.Duration
+
+	// ResponseSnippet 是上游「错误响应体」的截断原文快照（仅非 2xx 错误路径填充）。
+	// 用途：渠道检测把上游完整错误记进 channel_test_logs 便于排障——adapter 仍只按 HTTP status
+	// 分类（不解析此原文），gateway retry/fallback 也不依赖它；正常响应与 gateway 请求记录不使用此字段。
+	ResponseSnippet string
 }
 
 // UpstreamError 是 adapter 返回给 gateway 的结构化上游错误。

@@ -46,6 +46,10 @@ func NewRouter(deps RouterDeps) http.Handler {
 	r.Use(httpmw.Logger(deps.Logger))
 	r.Use(httpmw.Recoverer(deps.Logger))
 
+	// 版本前缀兼容：折叠多余的 /v1、补齐缺失的 /v1。置于日志/指标之后，故访问日志仍记录
+	// 客户端真实发来的路径（便于定位 base_url 配错），而路由按规范化后的单个 /v1 前缀匹配。
+	r.Use(v1PathCompat)
+
 	if deps.MetricsHandler != nil {
 		r.Handle("/metrics", deps.MetricsHandler)
 	}

@@ -29,6 +29,8 @@ const (
 	// StatusEnabled / StatusDisabled 是 channel 启停状态，与 channels.status 的 DB 约束一致。
 	StatusEnabled  = "enabled"
 	StatusDisabled = "disabled"
+	// StatusArchived 表示 channel 已归档（默认隐藏、不参与路由、已退出线路池；可恢复）。
+	StatusArchived = "archived"
 )
 
 // Store 定义 channel 管理所需的存储能力。
@@ -42,6 +44,8 @@ type Store interface {
 	SetChannelRateLimits(ctx context.Context, arg sqlc.SetChannelRateLimitsParams) (sqlc.Channel, error)
 	UpdateChannelCredential(ctx context.Context, arg sqlc.UpdateChannelCredentialParams) (int64, error)
 	DeleteChannelCascade(ctx context.Context, id int64) (int64, error)
+	ArchiveChannelCascade(ctx context.Context, id int64) (int64, error)
+	RestoreChannel(ctx context.Context, id int64) (int64, error)
 }
 
 // AdapterRegistry 暴露 channel 写入前校验复合键是否被当前进程支持的最小能力，
@@ -79,11 +83,12 @@ type Channel struct {
 	Priority     int32
 	TimeoutMs    *int32
 	// RPMLimit/TPMLimit/RPDLimit 是渠道级限流上限（P2-8）：nil=继承全局默认，0=不限，>0=具体上限。
-	RPMLimit  *int64
-	TPMLimit  *int64
-	RPDLimit  *int64
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	RPMLimit   *int64
+	TPMLimit   *int64
+	RPDLimit   *int64
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	ArchivedAt *time.Time
 	// LastTested* 是最近一次主动检测结果（渠道检测，阶段一）：全 nil 表示从未检测。
 	// 仅由检测端点写入，不参与路由/计费，也不改渠道启停状态。
 	LastTestedAt      *time.Time
@@ -421,10 +426,22 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 		return invalidArgument("id", "channel id must be positive")
 	}
 
+	// 硬删闸门（D-4）：只允许删除已归档渠道。
+	cur, err := s.store.GetChannel(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notFound("channel not found")
+		}
+		return storeFailed(err, "get channel")
+	}
+	if cur.Status != StatusArchived {
+		return conflict("channel must be archived before deletion")
+	}
+
 	affected, err := s.store.DeleteChannelCascade(ctx, id)
 	if err != nil {
 		if isForeignKeyViolation(err) {
-			return conflict("channel is referenced by request/billing history; disable it instead of deleting")
+			return conflict("channel is referenced by request/billing history; keep it archived instead of deleting")
 		}
 		return storeFailed(err, "delete channel")
 	}
@@ -432,6 +449,56 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 		return notFound("channel not found")
 	}
 
+	return nil
+}
+
+// Archive 归档渠道：从所有线路候选池移除、置 archived、释放渠道名（追加 __archived_<id> 后缀）。
+// 幂等：已归档返回 not_found（0 行）。
+func (s *Service) Archive(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return invalidArgument("id", "channel id must be positive")
+	}
+	affected, err := s.store.ArchiveChannelCascade(ctx, id)
+	if err != nil {
+		return storeFailed(err, "archive channel")
+	}
+	if affected == 0 {
+		return notFound("channel not found or already archived")
+	}
+	return nil
+}
+
+// Restore 取消归档渠道：archived → disabled。护栏：所属 provider 仍归档时拦截（先恢复服务商）。
+// 名字保持归档时的后缀名；不自动重加线路池（需手动）。
+func (s *Service) Restore(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return invalidArgument("id", "channel id must be positive")
+	}
+
+	cur, err := s.store.GetChannel(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notFound("channel not found")
+		}
+		return storeFailed(err, "get channel")
+	}
+	// 护栏：不允许在归档的服务商下恢复渠道（避免归档父级下出现半活子级）。
+	provider, err := s.store.GetProvider(ctx, cur.ProviderID)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return storeFailed(err, "get provider for channel restore")
+		}
+	} else if provider.Status == StatusArchived {
+		return conflict("provider is archived; restore the provider first")
+	}
+
+	affected, err := s.store.RestoreChannel(ctx, id)
+	if err != nil {
+		return storeFailed(err, "restore channel")
+	}
+	if affected == 0 {
+		return notFound("channel not found or not archived")
+	}
 	return nil
 }
 
@@ -452,6 +519,7 @@ func toChannel(c sqlc.Channel) Channel {
 		RPDLimit:   rateLimitResult(c.RpdLimit),
 		CreatedAt:  c.CreatedAt.Time,
 		UpdatedAt:  c.UpdatedAt.Time,
+		ArchivedAt: timestampResult(c.ArchivedAt),
 
 		LastTestedAt:      timestampResult(c.LastTestedAt),
 		LastTestOK:        boolResult(c.LastTestOk),

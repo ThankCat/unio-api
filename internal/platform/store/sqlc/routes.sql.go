@@ -11,6 +11,59 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const archiveRoute = `-- name: ArchiveRoute :execrows
+UPDATE routes
+SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+WHERE routes.id = $1 AND routes.status <> 'archived'
+`
+
+// ArchiveRoute 归档线路（要求已无绑定 key，服务层护栏保证）：置 archived + 释放全局唯一线路名
+// （追加 __archived_<id> 后缀）。route_channels 保留（线路已隐藏，便于恢复）。
+func (q *Queries) ArchiveRoute(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, archiveRoute, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const archiveRouteWithKeyMigration = `-- name: ArchiveRouteWithKeyMigration :execrows
+WITH migrated AS (
+    UPDATE api_keys SET route_id = $2, updated_at = now()
+    WHERE route_id = $1
+)
+UPDATE routes
+SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+WHERE routes.id = $1 AND routes.status <> 'archived'
+`
+
+type ArchiveRouteWithKeyMigrationParams struct {
+	ID            int64
+	TargetRouteID int64
+}
+
+// ArchiveRouteWithKeyMigration 单事务内先把源线路全部 api_key 迁到目标线路，再归档源线路
+// （§4B 入口②「迁移并归档」）。目标线路有效性（存在且 enabled、非自身）由服务层先校验。
+func (q *Queries) ArchiveRouteWithKeyMigration(ctx context.Context, arg ArchiveRouteWithKeyMigrationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, archiveRouteWithKeyMigration, arg.ID, arg.TargetRouteID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const countApiKeysByRoute = `-- name: CountApiKeysByRoute :one
+SELECT COUNT(*) AS total FROM api_keys WHERE route_id = $1
+`
+
+// CountApiKeysByRoute 统计绑定到某线路的 api_key 数量，供线路归档护栏（有 key 则拦截）。
+func (q *Queries) CountApiKeysByRoute(ctx context.Context, routeID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countApiKeysByRoute, routeID)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const createRoute = `-- name: CreateRoute :one
 INSERT INTO routes (name, mode, pool_kind, status, description, price_ratio, rpm_limit, tpm_limit, rpd_limit)
 VALUES (
@@ -24,7 +77,7 @@ VALUES (
     $8,
     $9
 )
-RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit
+RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at
 `
 
 type CreateRouteParams struct {
@@ -68,6 +121,7 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		&i.RpmLimit,
 		&i.TpmLimit,
 		&i.RpdLimit,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
@@ -86,7 +140,7 @@ func (q *Queries) DeleteRoute(ctx context.Context, id int64) (int64, error) {
 }
 
 const getRouteByID = `-- name: GetRouteByID :one
-SELECT id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit FROM routes WHERE id = $1 LIMIT 1
+SELECT id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at FROM routes WHERE id = $1 LIMIT 1
 `
 
 // GetRouteByID 按主键读取单条线路。
@@ -106,12 +160,50 @@ func (q *Queries) GetRouteByID(ctx context.Context, id int64) (Route, error) {
 		&i.RpmLimit,
 		&i.TpmLimit,
 		&i.RpdLimit,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
 
+const listEmptyRoutesWithKeys = `-- name: ListEmptyRoutesWithKeys :many
+SELECT rt.id, rt.name,
+    (SELECT COUNT(*) FROM api_keys k WHERE k.route_id = rt.id) AS key_count
+FROM routes rt
+WHERE rt.status <> 'archived'
+  AND NOT EXISTS (SELECT 1 FROM route_channels rc WHERE rc.route_id = rt.id)
+  AND EXISTS (SELECT 1 FROM api_keys k WHERE k.route_id = rt.id)
+ORDER BY rt.id
+`
+
+type ListEmptyRoutesWithKeysRow struct {
+	ID       int64
+	Name     string
+	KeyCount int64
+}
+
+// ListEmptyRoutesWithKeys 列出「候选池为空但仍有绑定 key」的非归档线路，供归档后预警断供。
+func (q *Queries) ListEmptyRoutesWithKeys(ctx context.Context) ([]ListEmptyRoutesWithKeysRow, error) {
+	rows, err := q.db.Query(ctx, listEmptyRoutesWithKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEmptyRoutesWithKeysRow
+	for rows.Next() {
+		var i ListEmptyRoutesWithKeysRow
+		if err := rows.Scan(&i.ID, &i.Name, &i.KeyCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRoutes = `-- name: ListRoutes :many
-SELECT id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit FROM routes ORDER BY id ASC
+SELECT id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at FROM routes ORDER BY id ASC
 `
 
 // ListRoutes 列出全部线路，供 admin 管理台展示。
@@ -137,6 +229,7 @@ func (q *Queries) ListRoutes(ctx context.Context) ([]Route, error) {
 			&i.RpmLimit,
 			&i.TpmLimit,
 			&i.RpdLimit,
+			&i.ArchivedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -146,6 +239,22 @@ func (q *Queries) ListRoutes(ctx context.Context) ([]Route, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const restoreRoute = `-- name: RestoreRoute :execrows
+UPDATE routes
+SET status = 'disabled', archived_at = NULL
+WHERE id = $1 AND status = 'archived'
+`
+
+// RestoreRoute 取消归档线路：archived → disabled（archived_at 清空）。route_channels 原样保留；
+// 归档前已无 key，恢复后仍无 key，需手动绑定或迁入。
+func (q *Queries) RestoreRoute(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, restoreRoute, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateRoute = `-- name: UpdateRoute :one
@@ -161,7 +270,7 @@ SET name = $1,
     rpd_limit = $9,
     updated_at = now()
 WHERE id = $10
-RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit
+RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at
 `
 
 type UpdateRouteParams struct {
@@ -205,6 +314,7 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route
 		&i.RpmLimit,
 		&i.TpmLimit,
 		&i.RpdLimit,
+		&i.ArchivedAt,
 	)
 	return i, err
 }

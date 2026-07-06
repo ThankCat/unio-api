@@ -2,8 +2,36 @@ package adapter
 
 import (
 	"io"
+	"strings"
 	"sync/atomic"
 )
+
+// DefaultMaxUpstreamErrorSnippetBytes 是捕获上游「错误响应体」原文快照的字节上限。
+//
+// 仅用于渠道检测/排障留痕（把上游返回的完整错误记下来），远小于正常响应上限：错误 body 通常只有
+// 几百字节到 1~2 KB，截断到这个上限足以定位问题，又不会把大 body 塞进元信息/日志。
+const DefaultMaxUpstreamErrorSnippetBytes = 2048
+
+// ReadUpstreamErrorSnippet 从上游「错误响应体」读取一段截断的原文快照。
+//
+// 最多读 DefaultMaxUpstreamErrorSnippetBytes 字节；超出则截断并在末尾标注「…（已截断）」。去首尾空白；
+// 读失败时尽力返回已读到的部分。只在非 2xx 错误路径调用（不用于成功响应）；调用方负责关闭 body。
+func ReadUpstreamErrorSnippet(r io.Reader) string {
+	const limit = DefaultMaxUpstreamErrorSnippetBytes
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	truncated := len(data) > limit
+	if truncated {
+		data = data[:limit]
+	}
+	snippet := strings.TrimSpace(string(data))
+	if err != nil {
+		return snippet
+	}
+	if truncated && snippet != "" {
+		snippet += " …（已截断）"
+	}
+	return snippet
+}
 
 // DefaultMaxUpstreamResponseBytes 是非流式上游响应体的默认字节上限（运行期未配置时的兜底值）。
 //

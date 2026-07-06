@@ -86,7 +86,10 @@ func NewWorkerServerApp(_ context.Context, deps WorkerServerAppDeps) (*WorkerSer
 		if err != nil {
 			return nil, err
 		}
-		channelTestService := channeltest.NewService(queries, adapterRegistry)
+		channelTestService := channeltest.NewService(queries, adapterRegistry, channeltest.Config{
+			ProbeTimeout:    deps.Config.ChannelTestWorker.ProbeTimeout,
+			ProbeTimeoutMax: deps.Config.ChannelTestWorker.ProbeTimeoutMax,
+		})
 		units = append(units, workers.NewChannelTestWorker(
 			queries,
 			workerChannelTester{svc: channelTestService},

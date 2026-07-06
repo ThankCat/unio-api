@@ -38,6 +38,8 @@ const (
 	StatusEnabled = "enabled"
 	// StatusDisabled 线路停用。
 	StatusDisabled = "disabled"
+	// StatusArchived 线路已归档（默认隐藏、不可绑定新 key；可恢复）。
+	StatusArchived = "archived"
 )
 
 // TxBeginner 提供事务能力（由 pgxpool 满足），用于线路 + 渠道池的原子写入。
@@ -74,6 +76,14 @@ type Route struct {
 	Channels    []RouteChannel
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	ArchivedAt  *time.Time
+}
+
+// EmptyRouteWarning 是归档导致「候选池空但仍有绑定 key」的断供预警项。
+type EmptyRouteWarning struct {
+	RouteID  int64
+	Name     string
+	KeyCount int64
 }
 
 // RouteChannel 是线路渠道池成员视图。
@@ -319,6 +329,18 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 		return invalidArgument("id", "id must be positive")
 	}
 
+	// 硬删闸门（D-4）：只允许删除已归档线路。
+	cur, err := s.queries.GetRouteByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notFound("route not found")
+		}
+		return storeFailed(err, "get route")
+	}
+	if cur.Status != StatusArchived {
+		return conflict("route must be archived before deletion")
+	}
+
 	rows, err := s.queries.DeleteRoute(ctx, id)
 	if err != nil {
 		if isForeignKeyViolation(err) {
@@ -331,6 +353,114 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	}
 
 	return nil
+}
+
+// Archive 归档线路。护栏：线路仍绑定 api_key 时必须先迁移——migrateKeysTo 为 nil 则拦截（返回
+// conflict），非 nil 则单事务内先把全部 key 迁到目标线路再归档（§4B 入口②）。无绑定 key 直接归档。
+// 返回归档后「候选池空但仍有 key」的断供预警。
+func (s *Service) Archive(ctx context.Context, id int64, migrateKeysTo *int64) ([]EmptyRouteWarning, error) {
+	if id <= 0 {
+		return nil, invalidArgument("id", "id must be positive")
+	}
+
+	keyCount, err := s.queries.CountApiKeysByRoute(ctx, id)
+	if err != nil {
+		return nil, storeFailed(err, "count route api keys")
+	}
+
+	var affected int64
+	if keyCount > 0 {
+		if migrateKeysTo == nil {
+			return nil, conflict("route has bound api keys; migrate them to another route before archiving")
+		}
+		if err := s.ensureMigrationTarget(ctx, id, *migrateKeysTo); err != nil {
+			return nil, err
+		}
+		affected, err = s.queries.ArchiveRouteWithKeyMigration(ctx, sqlc.ArchiveRouteWithKeyMigrationParams{
+			ID:            id,
+			TargetRouteID: *migrateKeysTo,
+		})
+		if err != nil {
+			return nil, storeFailed(err, "archive route with key migration")
+		}
+	} else {
+		affected, err = s.queries.ArchiveRoute(ctx, id)
+		if err != nil {
+			return nil, storeFailed(err, "archive route")
+		}
+	}
+	if affected == 0 {
+		return nil, notFound("route not found or already archived")
+	}
+
+	return s.emptyRouteWarnings(ctx)
+}
+
+// Restore 取消归档线路：archived → disabled。route_channels 原样保留；归档前已无 key，恢复后需手动绑定。
+func (s *Service) Restore(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return invalidArgument("id", "id must be positive")
+	}
+	affected, err := s.queries.RestoreRoute(ctx, id)
+	if err != nil {
+		return storeFailed(err, "restore route")
+	}
+	if affected == 0 {
+		return notFound("route not found or not archived")
+	}
+	return nil
+}
+
+// MigrateKeys 把源线路下全部 api_key 一键迁到目标线路（§4B 入口①）。返回迁移的 key 数。
+func (s *Service) MigrateKeys(ctx context.Context, sourceID, targetID int64) (int64, error) {
+	if sourceID <= 0 {
+		return 0, invalidArgument("id", "id must be positive")
+	}
+	if err := s.ensureMigrationTarget(ctx, sourceID, targetID); err != nil {
+		return 0, err
+	}
+	moved, err := s.queries.MigrateAPIKeysByRoute(ctx, sqlc.MigrateAPIKeysByRouteParams{
+		SourceRouteID: sourceID,
+		TargetRouteID: targetID,
+	})
+	if err != nil {
+		return 0, storeFailed(err, "migrate route api keys")
+	}
+	return moved, nil
+}
+
+// ensureMigrationTarget 校验迁移目标线路：非自身、存在、且为 enabled（不能迁到停用/归档线路）。
+func (s *Service) ensureMigrationTarget(ctx context.Context, sourceID, targetID int64) error {
+	if targetID <= 0 {
+		return invalidArgument("target_route_id", "target route id must be positive")
+	}
+	if targetID == sourceID {
+		return invalidArgument("target_route_id", "target route must differ from source")
+	}
+	target, err := s.queries.GetRouteByID(ctx, targetID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return invalidArgument("target_route_id", "target route not found")
+		}
+		return storeFailed(err, "get target route")
+	}
+	if target.Status != StatusEnabled {
+		return invalidArgument("target_route_id", "target route must be enabled")
+	}
+	return nil
+}
+
+// emptyRouteWarnings 列出「候选池空但仍有绑定 key」的非归档线路，作为归档后的断供预警。
+func (s *Service) emptyRouteWarnings(ctx context.Context) ([]EmptyRouteWarning, error) {
+	rows, err := s.queries.ListEmptyRoutesWithKeys(ctx)
+	if err != nil {
+		return nil, storeFailed(err, "list empty routes with keys")
+	}
+	out := make([]EmptyRouteWarning, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, EmptyRouteWarning{RouteID: r.ID, Name: r.Name, KeyCount: r.KeyCount})
+	}
+	return out, nil
 }
 
 func (s *Service) listChannels(ctx context.Context, routeID int64) ([]RouteChannel, error) {
@@ -430,6 +560,10 @@ func toRoute(r sqlc.Route) Route {
 	if r.Description.Valid {
 		desc := r.Description.String
 		out.Description = &desc
+	}
+	if r.ArchivedAt.Valid {
+		t := r.ArchivedAt.Time
+		out.ArchivedAt = &t
 	}
 	return out
 }

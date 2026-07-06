@@ -55,10 +55,10 @@ func (q *Queries) DeleteChannelTestLogsBeyondPerChannel(ctx context.Context, arg
 const insertChannelTestLog = `-- name: InsertChannelTestLog :exec
 
 INSERT INTO channel_test_logs (
-    channel_id, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message
+    channel_id, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error
 ) VALUES (
     $1, $2, $3, $4,
-    $5, $6, $7, $8, $9
+    $5, $6, $7, $8, $9, $10
 )
 `
 
@@ -72,6 +72,7 @@ type InsertChannelTestLogParams struct {
 	TestedModel          pgtype.Text
 	CredentialValidAfter bool
 	Message              pgtype.Text
+	UpstreamError        pgtype.Text
 }
 
 // channel_test_logs：渠道凭据有效性事件历史（worker 巡检 / 手动检测 / 运行时 401 翻失效）。
@@ -88,12 +89,13 @@ func (q *Queries) InsertChannelTestLog(ctx context.Context, arg InsertChannelTes
 		arg.TestedModel,
 		arg.CredentialValidAfter,
 		arg.Message,
+		arg.UpstreamError,
 	)
 	return err
 }
 
 const listChannelTestLogsByChannel = `-- name: ListChannelTestLogsByChannel :many
-SELECT id, channel_id, created_at, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message
+SELECT id, channel_id, created_at, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error
 FROM channel_test_logs
 WHERE channel_id = $1
 ORDER BY created_at DESC, id DESC
@@ -128,6 +130,7 @@ func (q *Queries) ListChannelTestLogsByChannel(ctx context.Context, arg ListChan
 			&i.TestedModel,
 			&i.CredentialValidAfter,
 			&i.Message,
+			&i.UpstreamError,
 		); err != nil {
 			return nil, err
 		}

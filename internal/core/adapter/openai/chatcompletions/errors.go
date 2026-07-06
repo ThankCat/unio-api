@@ -25,9 +25,10 @@ func newUpstreamStatusError(resp *http.Response, operation string) error {
 	return adapter.NewUpstreamError(
 		upstreamCategoryForStatus(statusCode),
 		adapter.UpstreamMetadata{
-			StatusCode: statusCode,
-			RequestID:  resp.Header.Get(upstreamRequestIDHeader),
-			RetryAfter: adapter.ParseRetryAfterHeader(resp.Header),
+			StatusCode:      statusCode,
+			RequestID:       resp.Header.Get(upstreamRequestIDHeader),
+			RetryAfter:      adapter.ParseRetryAfterHeader(resp.Header),
+			ResponseSnippet: adapter.ReadUpstreamErrorSnippet(resp.Body),
 		},
 		failure.New(
 			failure.CodeAdapterUpstreamStatus,

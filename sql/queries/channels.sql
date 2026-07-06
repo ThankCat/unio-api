@@ -13,7 +13,7 @@ ORDER BY c.id;
 
 -- name: ListChannelsByProvider :many
 -- ListChannelsByProvider 列出指定 provider 下的 channel，按 priority、id 升序。
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid
+SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at
 FROM channels
 WHERE provider_id = $1
 ORDER BY priority, id;
@@ -52,7 +52,7 @@ WHERE (sqlc.narg('provider_id')::bigint IS NULL OR c.provider_id = sqlc.narg('pr
 
 -- name: GetChannel :one
 -- GetChannel 按 id 读取单个 channel。
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid
+SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at
 FROM channels
 WHERE id = $1
 LIMIT 1;
@@ -61,21 +61,21 @@ LIMIT 1;
 -- CreateChannel 创建 channel；credential 为明文上游凭据，protocol+adapter_key 复合键须先在 adapter registry 校验存在。
 INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms)
 VALUES (sqlc.arg(provider_id), sqlc.arg(name), sqlc.arg(protocol), sqlc.arg(adapter_key), sqlc.arg(base_url), sqlc.arg(credential), sqlc.arg(status), sqlc.arg(priority), sqlc.arg(timeout_ms))
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid;
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at;
 
 -- name: UpdateChannel :one
 -- UpdateChannel 更新 channel 的展示名、上游地址、启停状态、优先级与超时；protocol、adapter_key 与凭据不在此更新。
 UPDATE channels
 SET name = sqlc.arg(name), base_url = sqlc.arg(base_url), status = sqlc.arg(status), priority = sqlc.arg(priority), timeout_ms = sqlc.arg(timeout_ms), updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid;
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at;
 
 -- name: SetChannelRateLimits :one
 -- SetChannelRateLimits 设置/清除 channel 的渠道级限流上限（P2-8）；各列 NULL=继承全局默认，0=不限，>0=具体上限。
 UPDATE channels
 SET rpm_limit = sqlc.narg(rpm_limit), tpm_limit = sqlc.narg(tpm_limit), rpd_limit = sqlc.narg(rpd_limit), updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid;
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at;
 
 -- name: SetChannelTestResult :execrows
 -- SetChannelTestResult 写入渠道「最近一次主动检测结果」（渠道检测，阶段一）。
@@ -112,10 +112,28 @@ WHERE id = sqlc.arg(id) AND credential_valid = FALSE;
 -- name: ListChannelsForCredentialTest :many
 -- ListChannelsForCredentialTest 供渠道自动检测 worker 巡检：所有启用渠道（含 credential_valid=false 以便恢复），
 -- 失效的排在前面（优先复检以尽快恢复），再按 priority、id。
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid
+SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at
 FROM channels
 WHERE status = 'enabled'
 ORDER BY credential_valid ASC, priority, id;
+
+-- name: ArchiveChannelCascade :execrows
+-- ArchiveChannelCascade 归档单个渠道：从所有线路候选池移除（删 route_channels 行）、置 archived、
+-- 释放渠道名（追加 __archived_<id> 后缀释放 (provider_id, name) 槽位供复用）。不动 provider。
+-- 返回 channels 受影响行数（0 = 渠道不存在或已归档）。恢复保持后缀名、不自动重加线路池。
+WITH cleared_pools AS (
+    DELETE FROM route_channels WHERE channel_id = sqlc.arg(id)
+)
+UPDATE channels
+SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+WHERE channels.id = sqlc.arg(id) AND channels.status <> 'archived';
+
+-- name: RestoreChannel :execrows
+-- RestoreChannel 取消归档渠道：archived → disabled（archived_at 清空）。名字保持归档时的后缀名
+-- （如需干净名由管理员手动改）。调用方需先保证所属 provider 非 archived（服务层护栏）。
+UPDATE channels
+SET status = 'disabled', archived_at = NULL
+WHERE id = sqlc.arg(id) AND status = 'archived';
 
 -- name: DeleteChannelCascade :execrows
 -- DeleteChannelCascade 物理删除 channel，用于清理录错且从未使用的脏数据，并在同一条语句内

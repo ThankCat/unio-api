@@ -24,6 +24,8 @@ const (
 	StatusEnabled = "enabled"
 	// StatusDisabled 表示 provider 停用。
 	StatusDisabled = "disabled"
+	// StatusArchived 表示 provider 已归档（默认隐藏、不参与路由；可恢复）。
+	StatusArchived = "archived"
 )
 
 // slugPattern 限定 provider slug：小写字母数字开头，允许小写字母、数字与连字符，长度 1..64。
@@ -37,6 +39,8 @@ type Store interface {
 	CreateProvider(ctx context.Context, arg sqlc.CreateProviderParams) (sqlc.Provider, error)
 	UpdateProvider(ctx context.Context, arg sqlc.UpdateProviderParams) (sqlc.Provider, error)
 	DeleteProvider(ctx context.Context, id int64) (int64, error)
+	ArchiveProviderCascade(ctx context.Context, id int64) (int64, error)
+	RestoreProvider(ctx context.Context, id int64) (int64, error)
 }
 
 // ListParams 是分页/过滤列出 provider 的入参；Status、Query 为空表示不过滤。
@@ -55,12 +59,13 @@ type ListResult struct {
 
 // Provider 是 admin 视角的 provider 业务事实。
 type Provider struct {
-	ID        int64
-	Slug      string
-	Name      string
-	Status    string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID         int64
+	Slug       string
+	Name       string
+	Status     string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	ArchivedAt *time.Time
 }
 
 // CreateInput 是创建 provider 的入参。
@@ -213,10 +218,22 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 		return invalidArgument("id", "provider id must be positive")
 	}
 
+	// 硬删闸门（D-4）：只允许删除已归档实体，避免误删在用/停用的配置。
+	cur, err := s.store.GetProvider(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notFound("provider not found")
+		}
+		return storeFailed(err, "get provider")
+	}
+	if cur.Status != StatusArchived {
+		return conflict("provider must be archived before deletion")
+	}
+
 	affected, err := s.store.DeleteProvider(ctx, id)
 	if err != nil {
 		if isForeignKeyViolation(err) {
-			return conflict("provider still has channels or is referenced by request/billing history; delete its channels first or disable it instead")
+			return conflict("provider still has channels or is referenced by request/billing history; delete its channels first")
 		}
 		return storeFailed(err, "delete provider")
 	}
@@ -227,8 +244,39 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
+// Archive 归档 provider：单事务内级联归档名下渠道（释放渠道名）+ 从线路池移除，再置 provider archived。
+// slug 不变。幂等：已归档返回 not_found（0 行）。恢复不向下级联。
+func (s *Service) Archive(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return invalidArgument("id", "provider id must be positive")
+	}
+	affected, err := s.store.ArchiveProviderCascade(ctx, id)
+	if err != nil {
+		return storeFailed(err, "archive provider")
+	}
+	if affected == 0 {
+		return notFound("provider not found or already archived")
+	}
+	return nil
+}
+
+// Restore 取消归档 provider：archived → disabled。名下渠道保持归档，需逐个恢复。
+func (s *Service) Restore(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return invalidArgument("id", "provider id must be positive")
+	}
+	affected, err := s.store.RestoreProvider(ctx, id)
+	if err != nil {
+		return storeFailed(err, "restore provider")
+	}
+	if affected == 0 {
+		return notFound("provider not found or not archived")
+	}
+	return nil
+}
+
 func toProvider(p sqlc.Provider) Provider {
-	return Provider{
+	prov := Provider{
 		ID:        p.ID,
 		Slug:      p.Slug,
 		Name:      p.Name,
@@ -236,8 +284,15 @@ func toProvider(p sqlc.Provider) Provider {
 		CreatedAt: p.CreatedAt.Time,
 		UpdatedAt: p.UpdatedAt.Time,
 	}
+	if p.ArchivedAt.Valid {
+		t := p.ArchivedAt.Time
+		prov.ArchivedAt = &t
+	}
+	return prov
 }
 
+// validateStatus 校验管理员可直接设置的状态：仅 enabled/disabled。archived 只能经 Archive 专用入口进入，
+// 不允许通过 Create/Update 直接设置（否则绕过级联与护栏）。
 func validateStatus(status string) error {
 	switch status {
 	case StatusEnabled, StatusDisabled:

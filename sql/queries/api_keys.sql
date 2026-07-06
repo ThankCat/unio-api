@@ -94,6 +94,13 @@ SET route_id = sqlc.arg(route_id), updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at;
 
+-- name: MigrateAPIKeysByRoute :execrows
+-- MigrateAPIKeysByRoute 把源线路下全部 api_key 批量改绑到目标线路（§4B 入口①「整条线路一键迁移」）。
+-- 目标线路有效性（存在且 enabled、非自身）由服务层先校验。返回迁移的 key 数。
+UPDATE api_keys
+SET route_id = sqlc.arg(target_route_id), updated_at = now()
+WHERE route_id = sqlc.arg(source_route_id);
+
 -- name: SetAPIKeyName :one
 -- SetAPIKeyName 更新 API Key 名称。
 UPDATE api_keys

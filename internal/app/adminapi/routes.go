@@ -17,6 +17,9 @@ type RouteService interface {
 	Update(ctx context.Context, in route.UpdateInput) (route.Route, error)
 	Delete(ctx context.Context, id int64) error
 	SetChannels(ctx context.Context, id int64, channelIDs []int64) (route.Route, error)
+	Archive(ctx context.Context, id int64, migrateKeysTo *int64) ([]route.EmptyRouteWarning, error)
+	Restore(ctx context.Context, id int64) error
+	MigrateKeys(ctx context.Context, sourceID, targetID int64) (int64, error)
 }
 
 type routeDTO struct {
@@ -35,6 +38,31 @@ type routeDTO struct {
 	Channels    []routeChannelDTO `json:"channels"`
 	CreatedAt   string            `json:"created_at"`
 	UpdatedAt   string            `json:"updated_at"`
+	ArchivedAt  *string           `json:"archived_at"`
+}
+
+// archiveRouteRequest 归档线路入参：migrate_keys_to 非空时先把该线路全部 key 迁到目标线路再归档。
+type archiveRouteRequest struct {
+	MigrateKeysTo *int64 `json:"migrate_keys_to"`
+}
+
+// migrateKeysRequest 整条线路 key 一键迁移入参。
+type migrateKeysRequest struct {
+	TargetRouteID int64 `json:"target_route_id"`
+}
+
+type emptyRouteWarningDTO struct {
+	RouteID  int64  `json:"route_id"`
+	Name     string `json:"name"`
+	KeyCount int64  `json:"key_count"`
+}
+
+type archiveRouteResponse struct {
+	Warnings []emptyRouteWarningDTO `json:"warnings"`
+}
+
+type migrateKeysResponse struct {
+	Migrated int64 `json:"migrated"`
 }
 
 type routeChannelDTO struct {
@@ -174,6 +202,60 @@ func (h *routesHandler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *routesHandler) archive(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	var req archiveRouteRequest
+	// body 可选：无 body 时按「不迁移」处理（有 key 则被拦截）。
+	_ = httpx.DecodeJSON(w, r, &req)
+
+	warnings, err := h.service.Archive(r.Context(), id, req.MigrateKeysTo)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	dtos := make([]emptyRouteWarningDTO, 0, len(warnings))
+	for _, wn := range warnings {
+		dtos = append(dtos, emptyRouteWarningDTO{RouteID: wn.RouteID, Name: wn.Name, KeyCount: wn.KeyCount})
+	}
+	writeData(w, http.StatusOK, archiveRouteResponse{Warnings: dtos})
+}
+
+func (h *routesHandler) restore(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	if err := h.service.Restore(r.Context(), id); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *routesHandler) migrateKeys(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	var req migrateKeysRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	moved, err := h.service.MigrateKeys(r.Context(), id, req.TargetRouteID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, migrateKeysResponse{Migrated: moved})
+}
+
 func toRouteDTO(rt route.Route) routeDTO {
 	channels := make([]routeChannelDTO, 0, len(rt.Channels))
 	for _, c := range rt.Channels {
@@ -198,5 +280,6 @@ func toRouteDTO(rt route.Route) routeDTO {
 		Channels:    channels,
 		CreatedAt:   rt.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:   rt.UpdatedAt.UTC().Format(time.RFC3339),
+		ArchivedAt:  rfc3339Ptr(rt.ArchivedAt),
 	}
 }

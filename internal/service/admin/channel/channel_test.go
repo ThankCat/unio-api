@@ -27,6 +27,14 @@ type fakeChannelStore struct {
 	deleteErr     error
 	deleteID      int64
 	deleteCalls   int
+	getRow        sqlc.Channel
+	getErr        error
+	archiveAff    int64
+	archiveErr    error
+	archiveID     int64
+	restoreAff    int64
+	restoreErr    error
+	restoreID     int64
 
 	rateLimitsParam sqlc.SetChannelRateLimitsParams
 	rateLimitsCalls int
@@ -42,7 +50,7 @@ func (s *fakeChannelStore) CountChannels(context.Context, sqlc.CountChannelsPara
 	return 0, nil
 }
 func (s *fakeChannelStore) GetChannel(_ context.Context, _ int64) (sqlc.Channel, error) {
-	return sqlc.Channel{}, pgx.ErrNoRows
+	return s.getRow, s.getErr
 }
 func (s *fakeChannelStore) CreateChannel(_ context.Context, arg sqlc.CreateChannelParams) (sqlc.Channel, error) {
 	s.createParam = arg
@@ -69,6 +77,14 @@ func (s *fakeChannelStore) DeleteChannelCascade(_ context.Context, id int64) (in
 	s.deleteID = id
 	s.deleteCalls++
 	return s.deleteAff, s.deleteErr
+}
+func (s *fakeChannelStore) ArchiveChannelCascade(_ context.Context, id int64) (int64, error) {
+	s.archiveID = id
+	return s.archiveAff, s.archiveErr
+}
+func (s *fakeChannelStore) RestoreChannel(_ context.Context, id int64) (int64, error) {
+	s.restoreID = id
+	return s.restoreAff, s.restoreErr
 }
 
 type fakeRegistry struct {
@@ -261,9 +277,9 @@ func TestDeleteRejectsInvalidID(t *testing.T) {
 	}
 }
 
-// 录错且无引用的渠道可真删；级联清理由 DB CTE 完成，受影响行 0 仅当 channel 不存在。
+// 已归档且无引用的渠道可真删；级联清理由 DB CTE 完成，受影响行 0 仅当 channel 不存在。
 func TestDeleteSuccess(t *testing.T) {
-	store := &fakeChannelStore{deleteAff: 1}
+	store := &fakeChannelStore{deleteAff: 1, getRow: sqlc.Channel{ID: 9, Status: "archived"}}
 	if err := newChannelService(store).Delete(context.Background(), 9); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -272,18 +288,57 @@ func TestDeleteSuccess(t *testing.T) {
 	}
 }
 
+// 未归档的渠道直接删除被拦截（先归档）。
+func TestDeleteRejectsWhenNotArchived(t *testing.T) {
+	store := &fakeChannelStore{deleteAff: 1, getRow: sqlc.Channel{ID: 9, Status: "enabled"}}
+	err := newChannelService(store).Delete(context.Background(), 9)
+	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
+		t.Fatalf("expected %q, got %q", failure.CodeAdminConflict, got)
+	}
+	if store.deleteCalls != 0 {
+		t.Fatalf("store delete must not be called before archive")
+	}
+}
+
 func TestDeleteNotFoundWhenNoRows(t *testing.T) {
-	store := &fakeChannelStore{deleteAff: 0}
+	store := &fakeChannelStore{deleteAff: 0, getRow: sqlc.Channel{ID: 9, Status: "archived"}}
 	err := newChannelService(store).Delete(context.Background(), 9)
 	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
 		t.Fatalf("expected %q, got %q", failure.CodeAdminNotFound, got)
 	}
 }
 
-// 已被请求/账务历史引用时，DB 报外键冲突（23503），降级为 conflict 提示改用停用。
+// 已归档但仍被请求/账务历史引用时，DB 报外键冲突（23503），降级为 conflict。
 func TestDeleteConflictOnForeignKeyViolation(t *testing.T) {
-	store := &fakeChannelStore{deleteErr: &pgconn.PgError{Code: "23503"}}
+	store := &fakeChannelStore{deleteErr: &pgconn.PgError{Code: "23503"}, getRow: sqlc.Channel{ID: 9, Status: "archived"}}
 	err := newChannelService(store).Delete(context.Background(), 9)
+	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
+		t.Fatalf("expected %q, got %q", failure.CodeAdminConflict, got)
+	}
+}
+
+// 渠道归档；恢复时父服务商非归档放行。
+func TestArchiveAndRestore(t *testing.T) {
+	store := &fakeChannelStore{archiveAff: 1, restoreAff: 1, getRow: sqlc.Channel{ID: 9, ProviderID: 3, Status: "archived"}, provider: sqlc.Provider{ID: 3, Status: "enabled"}}
+	svc := newChannelService(store)
+	if err := svc.Archive(context.Background(), 9); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if store.archiveID != 9 {
+		t.Fatalf("expected archive id 9, got %d", store.archiveID)
+	}
+	if err := svc.Restore(context.Background(), 9); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if store.restoreID != 9 {
+		t.Fatalf("expected restore id 9, got %d", store.restoreID)
+	}
+}
+
+// 父服务商归档时，恢复渠道被拦截（先恢复服务商）。
+func TestRestoreBlockedWhenProviderArchived(t *testing.T) {
+	store := &fakeChannelStore{restoreAff: 1, getRow: sqlc.Channel{ID: 9, ProviderID: 3, Status: "archived"}, provider: sqlc.Provider{ID: 3, Status: "archived"}}
+	err := newChannelService(store).Restore(context.Background(), 9)
 	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
 		t.Fatalf("expected %q, got %q", failure.CodeAdminConflict, got)
 	}

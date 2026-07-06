@@ -127,6 +127,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 			ph := &providersHandler{service: deps.ProviderService}
 			r.Get("/providers", ph.list)
 			r.Post("/providers", ph.create)
+			r.Post("/providers/{id}/archive", ph.archive)
+			r.Post("/providers/{id}/restore", ph.restore)
 			r.Patch("/providers/{id}", ph.update)
 			// DELETE 物理删除录错的脏数据：名下有渠道或已被请求/账务引用时返回 409，提示改用停用。
 			r.Delete("/providers/{id}", ph.delete)
@@ -153,6 +155,9 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Post("/channels", ch.create)
 			r.Get("/channels/{id}", ch.get)
 			r.Patch("/channels/{id}", ch.update)
+			r.Delete("/channels/{id}", ch.delete)
+			r.Post("/channels/{id}/archive", ch.archive)
+			r.Post("/channels/{id}/restore", ch.restore)
 			// credential 只写不回：用子资源 PUT 轮换，成功返回 204。
 			r.Put("/channels/{id}/credential", ch.rotateCredential)
 		}
@@ -200,6 +205,9 @@ func NewRouter(deps RouterDeps) http.Handler {
 			// 线路（渠道商品）CRUD + 渠道池设置。
 			r.Get("/routes", rh.list)
 			r.Post("/routes", rh.create)
+			r.Post("/routes/{id}/archive", rh.archive)
+			r.Post("/routes/{id}/restore", rh.restore)
+			r.Post("/routes/{id}/migrate-keys", rh.migrateKeys)
 			r.Get("/routes/{id}", rh.get)
 			r.Patch("/routes/{id}", rh.update)
 			r.Delete("/routes/{id}", rh.delete)

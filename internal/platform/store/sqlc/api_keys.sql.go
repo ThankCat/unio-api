@@ -301,6 +301,27 @@ func (q *Queries) ListAPIKeysByUserPage(ctx context.Context, arg ListAPIKeysByUs
 	return items, nil
 }
 
+const migrateAPIKeysByRoute = `-- name: MigrateAPIKeysByRoute :execrows
+UPDATE api_keys
+SET route_id = $1, updated_at = now()
+WHERE route_id = $2
+`
+
+type MigrateAPIKeysByRouteParams struct {
+	TargetRouteID int64
+	SourceRouteID int64
+}
+
+// MigrateAPIKeysByRoute 把源线路下全部 api_key 批量改绑到目标线路（§4B 入口①「整条线路一键迁移」）。
+// 目标线路有效性（存在且 enabled、非自身）由服务层先校验。返回迁移的 key 数。
+func (q *Queries) MigrateAPIKeysByRoute(ctx context.Context, arg MigrateAPIKeysByRouteParams) (int64, error) {
+	result, err := q.db.Exec(ctx, migrateAPIKeysByRoute, arg.TargetRouteID, arg.SourceRouteID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const revokeAPIKey = `-- name: RevokeAPIKey :one
 UPDATE api_keys
 SET revoked_at = now(), updated_at = now()

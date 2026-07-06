@@ -28,6 +28,12 @@ type fakeProviderStore struct {
 	deleteErr   error
 	deleteID    int64
 	deleteCalls int
+	archiveAff  int64
+	archiveErr  error
+	archiveID   int64
+	restoreAff  int64
+	restoreErr  error
+	restoreID   int64
 }
 
 func (s *fakeProviderStore) ListProvidersPage(context.Context, sqlc.ListProvidersPageParams) ([]sqlc.Provider, error) {
@@ -56,6 +62,16 @@ func (s *fakeProviderStore) DeleteProvider(_ context.Context, id int64) (int64, 
 	s.deleteID = id
 	s.deleteCalls++
 	return s.deleteAff, s.deleteErr
+}
+
+func (s *fakeProviderStore) ArchiveProviderCascade(_ context.Context, id int64) (int64, error) {
+	s.archiveID = id
+	return s.archiveAff, s.archiveErr
+}
+
+func (s *fakeProviderStore) RestoreProvider(_ context.Context, id int64) (int64, error) {
+	s.restoreID = id
+	return s.restoreAff, s.restoreErr
 }
 
 func TestCreateRejectsInvalidArguments(t *testing.T) {
@@ -144,7 +160,8 @@ func TestDeleteRejectsInvalidID(t *testing.T) {
 }
 
 func TestDeleteSuccess(t *testing.T) {
-	store := &fakeProviderStore{deleteAff: 1}
+	// 硬删闸门（D-4）：只允许删除已归档 provider，故 getRow 须为 archived。
+	store := &fakeProviderStore{deleteAff: 1, getRow: sqlc.Provider{ID: 7, Status: "archived"}}
 	if err := provider.NewService(store).Delete(context.Background(), 7); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -153,20 +170,49 @@ func TestDeleteSuccess(t *testing.T) {
 	}
 }
 
+// 未归档的 provider 直接删除被拦截（先归档）。
+func TestDeleteRejectsWhenNotArchived(t *testing.T) {
+	store := &fakeProviderStore{deleteAff: 1, getRow: sqlc.Provider{ID: 7, Status: "enabled"}}
+	err := provider.NewService(store).Delete(context.Background(), 7)
+	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
+		t.Fatalf("expected %q, got %q", failure.CodeAdminConflict, got)
+	}
+	if store.deleteCalls != 0 {
+		t.Fatalf("store delete must not be called before archive")
+	}
+}
+
 // 录错且无引用的 provider 可真删：受影响行 0 仅当目标不存在，返回 not_found。
 func TestDeleteNotFoundWhenNoRows(t *testing.T) {
-	store := &fakeProviderStore{deleteAff: 0}
+	store := &fakeProviderStore{deleteAff: 0, getRow: sqlc.Provider{ID: 7, Status: "archived"}}
 	err := provider.NewService(store).Delete(context.Background(), 7)
 	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
 		t.Fatalf("expected %q, got %q", failure.CodeAdminNotFound, got)
 	}
 }
 
-// 仍有渠道或被请求/账务历史引用时，DB 报外键冲突（23503），降级为 conflict 提示改用停用。
+// 已归档但仍被请求/账务历史引用时，DB 报外键冲突（23503），降级为 conflict。
 func TestDeleteConflictOnForeignKeyViolation(t *testing.T) {
-	store := &fakeProviderStore{deleteErr: &pgconn.PgError{Code: "23503"}}
+	store := &fakeProviderStore{deleteErr: &pgconn.PgError{Code: "23503"}, getRow: sqlc.Provider{ID: 7, Status: "archived"}}
 	err := provider.NewService(store).Delete(context.Background(), 7)
 	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
 		t.Fatalf("expected %q, got %q", failure.CodeAdminConflict, got)
+	}
+}
+
+func TestArchiveAndRestore(t *testing.T) {
+	store := &fakeProviderStore{archiveAff: 1, restoreAff: 1}
+	svc := provider.NewService(store)
+	if err := svc.Archive(context.Background(), 7); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if store.archiveID != 7 {
+		t.Fatalf("expected archive id 7, got %d", store.archiveID)
+	}
+	if err := svc.Restore(context.Background(), 7); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if store.restoreID != 7 {
+		t.Fatalf("expected restore id 7, got %d", store.restoreID)
 	}
 }

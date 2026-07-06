@@ -27,13 +27,14 @@ type channelTestRequest struct {
 // 始终返回 HTTP 200（检测本身已成功执行），用 success 表达渠道是否健康——与 new-api 一致，
 // 便于前端统一处理。error_code 成功时为 null。
 type channelTestResultDTO struct {
-	Success     bool    `json:"success"`
-	LatencyMs   int64   `json:"latency_ms"`
-	TestedModel string  `json:"tested_model"`
-	HTTPStatus  int     `json:"http_status"`
-	ErrorCode   *string `json:"error_code"`
-	Message     string  `json:"message"`
-	TestedAt    string  `json:"tested_at"`
+	Success       bool    `json:"success"`
+	LatencyMs     int64   `json:"latency_ms"`
+	TestedModel   string  `json:"tested_model"`
+	HTTPStatus    int     `json:"http_status"`
+	ErrorCode     *string `json:"error_code"`
+	Message       string  `json:"message"`
+	UpstreamError *string `json:"upstream_error"`
+	TestedAt      string  `json:"tested_at"`
 }
 
 type channelTestHandler struct {
@@ -79,6 +80,7 @@ type channelTestLogDTO struct {
 	TestedModel          string  `json:"tested_model"`
 	CredentialValidAfter bool    `json:"credential_valid_after"`
 	Message              string  `json:"message"`
+	UpstreamError        *string `json:"upstream_error"`
 }
 
 // testLogs 分页返回某渠道的检测日志（GET /channels/{id}/test-logs）。
@@ -116,6 +118,10 @@ func (h *channelTestHandler) testLogs(w http.ResponseWriter, r *http.Request) {
 			status := l.HTTPStatus
 			dto.HTTPStatus = &status
 		}
+		if l.UpstreamError != "" {
+			ue := l.UpstreamError
+			dto.UpstreamError = &ue
+		}
 		out = append(out, dto)
 	}
 
@@ -134,6 +140,10 @@ func toChannelTestResultDTO(r channeltest.TestResult) channelTestResultDTO {
 	if r.ErrorCode != "" {
 		code := r.ErrorCode
 		dto.ErrorCode = &code
+	}
+	if r.UpstreamError != "" {
+		ue := r.UpstreamError
+		dto.UpstreamError = &ue
 	}
 	return dto
 }

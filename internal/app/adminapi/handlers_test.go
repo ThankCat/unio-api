@@ -46,6 +46,8 @@ func (s *fakeProviderService) Update(context.Context, provider.UpdateInput) (pro
 func (s *fakeProviderService) Delete(context.Context, int64) error {
 	return s.deleteErr
 }
+func (s *fakeProviderService) Archive(context.Context, int64) error { return nil }
+func (s *fakeProviderService) Restore(context.Context, int64) error { return nil }
 
 type fakeChannelService struct {
 	createOut         channel.Channel
@@ -73,6 +75,8 @@ func (s *fakeChannelService) RotateCredential(context.Context, channel.RotateCre
 func (s *fakeChannelService) Delete(context.Context, int64) error {
 	return s.deleteErr
 }
+func (s *fakeChannelService) Archive(context.Context, int64) error { return nil }
+func (s *fakeChannelService) Restore(context.Context, int64) error { return nil }
 func (s *fakeChannelService) AdapterKeyOptions() []channel.AdapterKeyOption {
 	return s.adapterKeyOptions
 }
@@ -191,6 +195,11 @@ func (s *fakeRouteService) Update(context.Context, route.UpdateInput) (route.Rou
 	return s.createOut, nil
 }
 func (s *fakeRouteService) Delete(context.Context, int64) error { return nil }
+func (s *fakeRouteService) Archive(context.Context, int64, *int64) ([]route.EmptyRouteWarning, error) {
+	return nil, nil
+}
+func (s *fakeRouteService) Restore(context.Context, int64) error                     { return nil }
+func (s *fakeRouteService) MigrateKeys(context.Context, int64, int64) (int64, error) { return 0, nil }
 func (s *fakeRouteService) SetChannels(context.Context, int64, []int64) (route.Route, error) {
 	return s.createOut, nil
 }

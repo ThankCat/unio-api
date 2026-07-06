@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -62,8 +63,9 @@ func TestDeleteChannelCascadeRemovesOwnConfig(t *testing.T) {
 }
 
 // TestDeleteModelCascadeRemovesOwnConfig 验证录错的 model 可一键真删：
-// CTE 清掉它自身的绑定（NO ACTION）后删 model；model_capabilities、user_model_policies
-// 由 ON DELETE CASCADE 自动清理；channel 本身不受影响。
+// CTE 清掉它自身的配置子表——绑定、基准售价（model_prices）、渠道成本价（channel_prices，NO ACTION）；
+// model_capabilities、user_model_policies 由 ON DELETE CASCADE 自动清理；channel 本身不受影响。
+// 价格表是追加式配置（无删除接口，只能停用），必须由级联清掉，否则任何配过价的 model 永远删不掉。
 func TestDeleteModelCascadeRemovesOwnConfig(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
 	defer cleanup()
@@ -78,6 +80,10 @@ func TestDeleteModelCascadeRemovesOwnConfig(t *testing.T) {
 	insertChannelModel(t, ctx, tx, channelID, modelID, "del-model-upstream", "enabled")
 	insertModelCapability(t, ctx, tx, modelID, "text.output", "full")
 	insertUserModelPolicy(t, ctx, tx, userID, modelID, "denied")
+	// 追加式价格配置：模型基准售价 + 渠道成本价，验证级联把两者一并清掉。
+	now := time.Now().UTC()
+	createModelPriceForTest(t, ctx, queries, modelID, now)
+	createChannelPriceForTest(t, ctx, queries, channelID, modelID, now)
 
 	affected, err := queries.DeleteModelCascade(ctx, modelID)
 	if err != nil {
@@ -90,6 +96,12 @@ func TestDeleteModelCascadeRemovesOwnConfig(t *testing.T) {
 	if got := countRows(t, ctx, tx, `SELECT count(*) FROM channel_models WHERE model_id = $1`, modelID); got != 0 {
 		t.Fatalf("expected channel_models cascaded away, got %d", got)
 	}
+	if got := countRows(t, ctx, tx, `SELECT count(*) FROM model_prices WHERE model_id = $1`, modelID); got != 0 {
+		t.Fatalf("expected model_prices cascaded away, got %d", got)
+	}
+	if got := countRows(t, ctx, tx, `SELECT count(*) FROM channel_prices WHERE model_id = $1`, modelID); got != 0 {
+		t.Fatalf("expected channel_prices cascaded away, got %d", got)
+	}
 	if got := countRows(t, ctx, tx, `SELECT count(*) FROM model_capabilities WHERE model_id = $1`, modelID); got != 0 {
 		t.Fatalf("expected model_capabilities ON DELETE CASCADE removed, got %d", got)
 	}
@@ -99,6 +111,59 @@ func TestDeleteModelCascadeRemovesOwnConfig(t *testing.T) {
 	// channel 本身不应被模型删除连带删掉。
 	if _, err := queries.GetChannel(ctx, channelID); err != nil {
 		t.Fatalf("channel should survive model delete: %v", err)
+	}
+}
+
+// TestDeleteChannelModelRemovesOwnChannelPrice 验证解绑单个 (channel, model) 时，
+// 同一条语句先清掉该边自身的 channel_prices（追加式成本价配置，无删除接口），再删绑定；
+// 不因「该边配过成本价」而失败。兄弟绑定/价格、model 与 channel 本身都不受影响。
+func TestDeleteChannelModelRemovesOwnChannelPrice(t *testing.T) {
+	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	suffix := time.Now().UnixNano()
+	timeoutMS := int32(15000)
+
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("unbind-provider-%d", suffix), "enabled")
+	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("unbind-channel-%d", suffix), "enabled", 10, &timeoutMS)
+	modelA := insertModel(t, ctx, tx, fmt.Sprintf("openai/unbind-model-a-%d", suffix), "openai", "enabled")
+	modelB := insertModel(t, ctx, tx, fmt.Sprintf("openai/unbind-model-b-%d", suffix), "openai", "enabled")
+	insertChannelModel(t, ctx, tx, channelID, modelA, "unbind-a", "enabled")
+	insertChannelModel(t, ctx, tx, channelID, modelB, "unbind-b", "enabled")
+	now := time.Now().UTC()
+	createChannelPriceForTest(t, ctx, queries, channelID, modelA, now)
+	createChannelPriceForTest(t, ctx, queries, channelID, modelB, now)
+
+	affected, err := queries.DeleteChannelModel(ctx, sqlc.DeleteChannelModelParams{
+		ChannelID: channelID,
+		ModelID:   modelA,
+	})
+	if err != nil {
+		t.Fatalf("delete channel model: %v", err)
+	}
+	if affected != 1 {
+		t.Fatalf("expected 1 binding deleted, got %d", affected)
+	}
+
+	if got := countRows(t, ctx, tx, `SELECT count(*) FROM channel_prices WHERE channel_id = $1 AND model_id = $2`, channelID, modelA); got != 0 {
+		t.Fatalf("expected unbound edge's channel_prices cleaned, got %d", got)
+	}
+	if got := countRows(t, ctx, tx, `SELECT count(*) FROM channel_models WHERE channel_id = $1 AND model_id = $2`, channelID, modelA); got != 0 {
+		t.Fatalf("expected binding gone, got %d", got)
+	}
+	// 兄弟绑定（model B）及其成本价不受影响。
+	if got := countRows(t, ctx, tx, `SELECT count(*) FROM channel_models WHERE channel_id = $1 AND model_id = $2`, channelID, modelB); got != 1 {
+		t.Fatalf("expected sibling binding to survive, got %d", got)
+	}
+	if got := countRows(t, ctx, tx, `SELECT count(*) FROM channel_prices WHERE channel_id = $1 AND model_id = $2`, channelID, modelB); got != 1 {
+		t.Fatalf("expected sibling channel_price to survive, got %d", got)
+	}
+	// model 与 channel 本身都不应被解绑连带删掉。
+	if _, err := queries.LookupModelByID(ctx, modelA); err != nil {
+		t.Fatalf("model A should survive unbind: %v", err)
+	}
+	if _, err := queries.GetChannel(ctx, channelID); err != nil {
+		t.Fatalf("channel should survive unbind: %v", err)
 	}
 }
 

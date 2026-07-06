@@ -11,6 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const archiveProviderCascade = `-- name: ArchiveProviderCascade :execrows
+WITH archived_channels AS (
+    UPDATE channels
+    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+    WHERE provider_id = $1 AND status <> 'archived'
+    RETURNING id
+),
+cleared_pools AS (
+    DELETE FROM route_channels WHERE channel_id IN (SELECT id FROM archived_channels)
+)
+UPDATE providers
+SET status = 'archived', archived_at = now()
+WHERE providers.id = $1 AND providers.status <> 'archived'
+`
+
+// ArchiveProviderCascade 归档 provider：单事务内把名下未归档渠道一并归档（释放渠道名：追加
+// __archived_<id> 后缀）、从所有线路候选池移除这些渠道（route_channels 纯配置、无账务外键，可安全删），
+// 再把 provider 置 archived。slug 与 provider.name 不变（服务商标识稳定，归档大概率不再复用同 slug）。
+// 返回 providers 受影响行数（0 = provider 不存在或已归档）。恢复不向下级联，需逐个恢复渠道。
+func (q *Queries) ArchiveProviderCascade(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, archiveProviderCascade, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countProviders = `-- name: CountProviders :one
 SELECT COUNT(*) AS total
 FROM providers
@@ -38,7 +65,7 @@ func (q *Queries) CountProviders(ctx context.Context, arg CountProvidersParams) 
 const createProvider = `-- name: CreateProvider :one
 INSERT INTO providers (slug, name, status)
 VALUES ($1, $2, $3)
-RETURNING id, slug, name, status, created_at, updated_at
+RETURNING id, slug, name, status, created_at, updated_at, archived_at
 `
 
 type CreateProviderParams struct {
@@ -58,6 +85,7 @@ func (q *Queries) CreateProvider(ctx context.Context, arg CreateProviderParams) 
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
@@ -78,7 +106,7 @@ func (q *Queries) DeleteProvider(ctx context.Context, id int64) (int64, error) {
 }
 
 const getProvider = `-- name: GetProvider :one
-SELECT id, slug, name, status, created_at, updated_at
+SELECT id, slug, name, status, created_at, updated_at, archived_at
 FROM providers
 WHERE id = $1
 LIMIT 1
@@ -95,12 +123,13 @@ func (q *Queries) GetProvider(ctx context.Context, id int64) (Provider, error) {
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
 
 const listProviders = `-- name: ListProviders :many
-SELECT id, slug, name, status, created_at, updated_at
+SELECT id, slug, name, status, created_at, updated_at, archived_at
 FROM providers
 ORDER BY id
 `
@@ -122,6 +151,7 @@ func (q *Queries) ListProviders(ctx context.Context) ([]Provider, error) {
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ArchivedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -134,7 +164,7 @@ func (q *Queries) ListProviders(ctx context.Context) ([]Provider, error) {
 }
 
 const listProvidersPage = `-- name: ListProvidersPage :many
-SELECT id, slug, name, status, created_at, updated_at
+SELECT id, slug, name, status, created_at, updated_at, archived_at
 FROM providers
 WHERE ($1::text IS NULL OR status = $1::text)
   AND (
@@ -175,6 +205,7 @@ func (q *Queries) ListProvidersPage(ctx context.Context, arg ListProvidersPagePa
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ArchivedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -186,11 +217,26 @@ func (q *Queries) ListProvidersPage(ctx context.Context, arg ListProvidersPagePa
 	return items, nil
 }
 
+const restoreProvider = `-- name: RestoreProvider :execrows
+UPDATE providers
+SET status = 'disabled', archived_at = NULL
+WHERE id = $1 AND status = 'archived'
+`
+
+// RestoreProvider 取消归档 provider：archived → disabled（archived_at 清空）。不向下级联恢复渠道。
+func (q *Queries) RestoreProvider(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, restoreProvider, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateProvider = `-- name: UpdateProvider :one
 UPDATE providers
 SET name = $1, status = $2, updated_at = now()
 WHERE id = $3
-RETURNING id, slug, name, status, created_at, updated_at
+RETURNING id, slug, name, status, created_at, updated_at, archived_at
 `
 
 type UpdateProviderParams struct {
@@ -210,6 +256,7 @@ func (q *Queries) UpdateProvider(ctx context.Context, arg UpdateProviderParams) 
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ArchivedAt,
 	)
 	return i, err
 }

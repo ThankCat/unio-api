@@ -17,16 +17,19 @@ type ProviderService interface {
 	Create(ctx context.Context, in provider.CreateInput) (provider.Provider, error)
 	Update(ctx context.Context, in provider.UpdateInput) (provider.Provider, error)
 	Delete(ctx context.Context, id int64) error
+	Archive(ctx context.Context, id int64) error
+	Restore(ctx context.Context, id int64) error
 }
 
 // providerDTO 是 provider 的 admin API 响应体。
 type providerDTO struct {
-	ID        int64  `json:"id"`
-	Slug      string `json:"slug"`
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID         int64   `json:"id"`
+	Slug       string  `json:"slug"`
+	Name       string  `json:"name"`
+	Status     string  `json:"status"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
+	ArchivedAt *string `json:"archived_at"`
 }
 
 type createProviderRequest struct {
@@ -127,13 +130,40 @@ func (h *providersHandler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *providersHandler) archive(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	if err := h.service.Archive(r.Context(), id); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *providersHandler) restore(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	if err := h.service.Restore(r.Context(), id); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func toProviderDTO(p provider.Provider) providerDTO {
 	return providerDTO{
-		ID:        p.ID,
-		Slug:      p.Slug,
-		Name:      p.Name,
-		Status:    p.Status,
-		CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt: p.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:         p.ID,
+		Slug:       p.Slug,
+		Name:       p.Name,
+		Status:     p.Status,
+		CreatedAt:  p.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:  p.UpdatedAt.UTC().Format(time.RFC3339),
+		ArchivedAt: rfc3339Ptr(p.ArchivedAt),
 	}
 }

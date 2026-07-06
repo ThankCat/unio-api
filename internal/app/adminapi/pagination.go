@@ -48,13 +48,17 @@ func parseBoolQuery(r *http.Request, key string) bool {
 	}
 }
 
-// listStatus 只接受 enabled/disabled 作为状态过滤值，其它一律视为不过滤。
+// listStatus 只接受 enabled/disabled/archived 作为状态过滤值，其它一律视为不过滤。
+// archived 是 providers/channels/routes 的归档第三态（migration 000066）；
+// 缺了它会导致前端选「已归档」时被当成不过滤（返回全部），即归档筛选失效。
 func listStatus(r *http.Request) string {
 	switch r.URL.Query().Get("status") {
 	case "enabled":
 		return "enabled"
 	case "disabled":
 		return "disabled"
+	case "archived":
+		return "archived"
 	default:
 		return ""
 	}

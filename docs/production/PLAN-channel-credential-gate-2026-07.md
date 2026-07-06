@@ -138,8 +138,10 @@
 - [ ] 新建 `ChannelTestWorker`：`Name()="channel_test"`；`RunOnce`：到点（`nextPollAt + interval`）则取**所有 `status=enabled` 渠道**（含 `credential_valid=false` 的，以便恢复），逐个调 `channeltest.Service.Test`。
 - [ ] 检测结果翻牌 + 写日志（走 §5.8 的公共翻牌函数）：`Success` → `SetChannelCredentialValid`；失败且 `ErrorCode==credential_invalid` → `SetChannelCredentialInvalid`；其它失败只落 `last_test_*`，不动 flag。
 - [ ] **R1(b) 写日志口径**：只在「**检测失败** 或 **credential_valid 发生跳变**」时写 `channel_test_logs`（健康且状态未变的成功探测**不写**，避免刷屏）。
+  - **【2026-07 修订】已改为每次检测都写一条**：原策略导致检测日志里自动巡检「只剩失败行」，被误读成「自动巡检老是异常」。现成功也留痕（每渠道每轮一条），总量由 `CHANNEL_TEST_LOG_RETENTION_PER_CHANNEL` 控制。
 - [ ] **日志清理（R1）**：worker 每轮末尾调 `DeleteChannelTestLogsBeyondPerChannel`，每渠道保留最近 `CHANNEL_TEST_LOG_RETENTION_PER_CHANNEL`（默认 200）条。
-- [ ] 并发/限速：逐个串行或小并发，避免瞬时打爆上游（沿用 `defaultProbeTimeout=15s`）。
+- [ ] 并发/限速：逐个串行或小并发，避免瞬时打爆上游。
+  - **【2026-07 修订】探测超时改为「渠道 timeout 钳到上限」**：默认 `CHANNEL_TEST_PROBE_TIMEOUT=30s`、上限 `CHANNEL_TEST_PROBE_TIMEOUT_MAX=60s`（旧值硬编码 15s，对慢上游/推理模型中转太紧，会误判超时）。
 - [ ] 注册：`bootstrap/worker_server.go` 里仿 `ModelCatalogSync` 条件 append（`if cfg.ChannelTestWorker.Enabled`，**默认开**）；依赖 `channeltest.NewService(queries, adapterRegistry)`（同 `admin_server.go:104`）。
   - [ ] 确认 worker-server 是否已构建 `adapterRegistry`（gateway lifecycle 依赖）；若无需在 `bootstrap/worker_server.go` 补建。**【落地时确认】**
 - [ ] 单测：假 prober，成功→翻有效、credential_invalid→翻失效、超时→只落 last_test；每次都写一条日志。
