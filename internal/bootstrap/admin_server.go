@@ -33,6 +33,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/admin/query"
 	adminroute "github.com/ThankCat/unio-api/internal/service/admin/route"
 	"github.com/ThankCat/unio-api/internal/service/admin/routeops"
+	"github.com/ThankCat/unio-api/internal/service/appsettings"
 )
 
 // AdminServerAppDB 定义 admin server app 构建时需要的数据库能力。
@@ -182,6 +183,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 		RecoveryJobQueryService:   recoveryJobQueryService,
 		ChannelHealthQueryService: channelHealthQueryService,
+
+		ProviderSettingsService: appsettings.NewService(queries),
 
 		GatewayConfig:        deps.Config.Gateway,
 		RateLimitConfig:      deps.Config.RateLimit,

@@ -63,6 +63,9 @@ type RouterDeps struct {
 	RecoveryJobQueryService   RecoveryJobQueryService
 	ChannelHealthQueryService ChannelHealthQueryService
 
+	// Provider 全局设置（可编辑）：起步 Anthropic beta 转发策略（app_settings）。
+	ProviderSettingsService ProviderSettingsService
+
 	// 系统配置只读面板（进程级 env 生效值，脱敏）：网关兜底/熔断/限流默认/补偿/HTTP 阈值。
 	// 这些是值类型快照，恒有效，故 /system/config 路由无条件注册。
 	GatewayConfig        config.GatewayConfig
@@ -346,6 +349,13 @@ func NewRouter(deps RouterDeps) http.Handler {
 		if deps.ChannelHealthQueryService != nil {
 			chh := &channelHealthHandler{service: deps.ChannelHealthQueryService}
 			r.Get("/system/channel-health", chh.list)
+		}
+
+		// Provider 全局设置（可编辑）：起步 Anthropic beta 转发策略;将来 OpenAI/Gemini 各自配置在此扩展。
+		if deps.ProviderSettingsService != nil {
+			psh := &providerSettingsHandler{service: deps.ProviderSettingsService}
+			r.Get("/provider-settings/anthropic/beta-policy", psh.getAnthropicBeta)
+			r.Put("/provider-settings/anthropic/beta-policy", psh.putAnthropicBeta)
 		}
 
 		// 系统配置只读面板：进程级 env 生效阈值（脱敏），让运营在前端看到所有不可运行期改的阈值。

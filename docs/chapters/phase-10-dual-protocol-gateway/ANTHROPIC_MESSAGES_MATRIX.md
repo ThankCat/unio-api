@@ -48,7 +48,7 @@ Anthropic SDK 需要原生 header：
 | --- | --- | --- |
 | `x-api-key` | `Typed` | 解析为 Unio opaque API key 身份。 |
 | `anthropic-version` | `Typed` | 校验并记录 ingress version。 |
-| `anthropic-beta` | `Passthrough` | ingress 接受任意 beta（含未登记 / 逗号多值），不 400；provider **Drop** + 脱敏审计，见 DEC-013。 |
+| `anthropic-beta` | `Passthrough` | ingress 接受任意 beta（含未登记 / 逗号多值），不 400。**出站(官方 adapter)透传 + 小黑名单**（`beta.go`：默认转发，仅拦截有计费/解析缺口的 `code-execution` / `context-1m`）+ 脱敏审计，见 [passthrough-audit.md](../../providers/anthropic/passthrough-audit.md)。DeepSeek adapter 仍全 Drop。 |
 | `mcp_servers` extension | `Passthrough` | ingress 可登记；provider **Drop**，见 mapping。 |
 | `content-type` | `Typed` | 必须为 JSON。 |
 
@@ -61,12 +61,12 @@ Anthropic SDK 需要原生 header：
 | `max_tokens` | `Typed` | 必填；允许协议文档定义的 `0` cache warm 场景。 |
 | `messages` | `Typed` | 完整 message/content block union。 |
 | `model` | `Typed` | 客户发送 Unio catalog model；adapter 使用 routing 后的 upstream model。 |
-| `cache_control` | `Typed` | request 级 cache control。 |
-| `container` | `Typed` | code execution container ID。 |
-| `inference_geo` | `Typed` | 推理区域偏好。 |
+| `cache_control` | `Passthrough` | request 级 cache control。**注**:非顶层 typed 字段（不在 `decode.go: knownMessageFields`），经 `Extensions` 透传到上游 body。 |
+| `container` | `Passthrough` | code execution container ID。经 `Extensions` 透传（非 Typed）。 |
+| `inference_geo` | `Passthrough` | 推理区域偏好。经 `Extensions` 透传（非 Typed）。 |
 | `metadata` | `Typed` | 包含 `user_id`。 |
-| `output_config` | `Typed` | effort 与 structured output format。 |
-| `service_tier` | `Typed` | `auto` 或 `standard_only`。 |
+| `output_config` | `Passthrough` | effort 与 structured output format。经 `Extensions` 透传（非 Typed）。 |
+| `service_tier` | `Passthrough` | `auto` 或 `standard_only`。经 `Extensions` 透传（非 Typed）。 |
 | `stop_sequences` | `Typed` | 字符串数组。 |
 | `stream` | `Typed` | 非流式或流式。 |
 | `system` | `Typed` | string 或 text block 数组；不能塞入 messages system role 代替。 |

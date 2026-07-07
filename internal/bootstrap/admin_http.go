@@ -47,6 +47,8 @@ type adminHTTPDeps struct {
 	RecoveryJobQueryService   adminapi.RecoveryJobQueryService
 	ChannelHealthQueryService adminapi.ChannelHealthQueryService
 
+	ProviderSettingsService adminapi.ProviderSettingsService
+
 	// 系统配置只读面板（进程级 env 生效值，脱敏）。
 	GatewayConfig        config.GatewayConfig
 	RateLimitConfig      config.RateLimitConfig
@@ -91,6 +93,8 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 
 		RecoveryJobQueryService:   deps.RecoveryJobQueryService,
 		ChannelHealthQueryService: deps.ChannelHealthQueryService,
+
+		ProviderSettingsService: deps.ProviderSettingsService,
 
 		GatewayConfig:        deps.GatewayConfig,
 		RateLimitConfig:      deps.RateLimitConfig,

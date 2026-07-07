@@ -39,7 +39,7 @@ Anthropic 是 Unio 接入的**官方一方(1P)上游**,只提供 **Anthropic 协
 | --- | --- |
 | 协议格式 | Anthropic Messages(官方一方) |
 | 认证 | `x-api-key: <key>` + `anthropic-version: 2023-06-01`(base 已设) |
-| `anthropic-beta` 头 | **当前未透传**(DEC-012:gatewayapi 层 Drop);官方 1P **必须按登记表 Pass 转发**(本次接入要补,见 upgrade-plan N1) |
+| `anthropic-beta` 头 | **透传 + 小黑名单**(`beta.go`:默认转发,仅拦截有计费/解析缺口的 `code-execution` / `context-1m`)。1h 缓存(`extended-cache-ttl`)已透传——见 [passthrough-audit.md](passthrough-audit.md) |
 | Drop 策略 | **原则零 Drop**:官方接受全部合法 Messages 字段,忠实透传(base 已如此) |
 | Adapt 策略 | 仅 `model`(routing 选 upstream model) |
 | 思考模式 | `thinking` 字段**原样透传**(`json.RawMessage`),不归一(归一 effort 是 DeepSeek 规则) |

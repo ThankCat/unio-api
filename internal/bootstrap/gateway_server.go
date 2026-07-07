@@ -4,17 +4,24 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
+	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-api/internal/core/tokenest"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-api/internal/platform/observability/tracing"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/service/appsettings"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 	"github.com/redis/go-redis/v9"
 )
+
+// betaPolicyRefreshTTL 是 gateway 侧 Anthropic beta 策略缓存的刷新周期:
+// admin 改动后最多 TTL 内在 gateway 生效（跨进程,无需重启）。
+const betaPolicyRefreshTTL = 30 * time.Second
 
 // GatewayServerAppDB 定义 gateway server app 构建时需要的数据库能力。
 type GatewayServerAppDB interface {
@@ -84,6 +91,12 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	lifecycle.SetPartialAssumedCacheReadRatio(deps.Config.Gateway.PartialAssumedCacheReadRatio)
 
 	queries := sqlc.New(deps.DB)
+
+	// Anthropic beta 转发策略为管理端可编辑的全局设置（app_settings）；注入带 TTL 缓存的 provider，
+	// gateway 在 TTL 内自动刷新到 admin 最新写入值（无需重启）。未配置时 adapter 用内置默认策略。
+	messagesadapter.SetBetaPolicyProvider(
+		appsettings.NewAnthropicBetaProvider(queries, betaPolicyRefreshTTL, deps.Logger),
+	)
 
 	chatRouter := NewChatRouter(queries, deps.Logger)
 

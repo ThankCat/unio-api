@@ -29,6 +29,12 @@ type ApiKey struct {
 	UserID       int64
 }
 
+type AppSetting struct {
+	Key       string
+	Value     []byte
+	UpdatedAt pgtype.Timestamptz
+}
+
 type CapabilityKey struct {
 	Key         string
 	Domain      string
