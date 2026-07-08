@@ -12,13 +12,15 @@ import (
 // 与熔断器（按错误率统计、固定 OpenDuration）正交：本注册表对「单次 429 + Retry-After」
 // 即时生效，让 routing fallback 在冷却窗口内直接跳过该渠道（plan 阶段与 attempt 阶段都跳），
 // 冷却到期自动恢复。计数全在进程内存（与熔断器一致），多实例各自统计可接受。
+//
+// defaultCooldown/cap 可运行时热改（SetCooldown），故与 until 一并由 mu 保护。
 type ChannelCooldownRegistry struct {
-	now             func() time.Time
+	now func() time.Time
+
+	mu              sync.Mutex
 	defaultCooldown time.Duration
 	cap             time.Duration
-
-	mu    sync.Mutex
-	until map[string]time.Time
+	until           map[string]time.Time
 }
 
 // NewChannelCooldownRegistry 创建渠道冷却注册表。
@@ -32,6 +34,18 @@ func NewChannelCooldownRegistry(defaultCooldown, cap time.Duration) *ChannelCool
 		cap:             cap,
 		until:           make(map[string]time.Time),
 	}
+}
+
+// SetCooldown 原子替换默认冷却与封顶（运行时热改入口）。
+// 只影响之后的 RecordRateLimit 计算；已登记的在途冷却条目不受影响，到期自然恢复。
+func (r *ChannelCooldownRegistry) SetCooldown(defaultCooldown, cap time.Duration) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.defaultCooldown = defaultCooldown
+	r.cap = cap
+	r.mu.Unlock()
 }
 
 // Allowed 报告渠道当前是否不在冷却窗口内（true=可用）。
@@ -77,6 +91,9 @@ func (r *ChannelCooldownRegistry) RecordRateLimit(channelKey string, retryAfter 
 		return time.Time{}, false
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	cooldown := retryAfter
 	if cooldown <= 0 {
 		cooldown = r.defaultCooldown
@@ -89,14 +106,12 @@ func (r *ChannelCooldownRegistry) RecordRateLimit(channelKey string, retryAfter 
 	}
 
 	until := r.now().Add(cooldown)
-	r.mu.Lock()
 	// 取较晚到期时间，避免并发下用较短的 Retry-After 缩短已登记的冷却。
 	if existing, ok := r.until[channelKey]; !ok || until.After(existing) {
 		r.until[channelKey] = until
 	} else {
 		until = existing
 	}
-	r.mu.Unlock()
 	return until, true
 }
 

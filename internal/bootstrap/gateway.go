@@ -15,16 +15,17 @@ import (
 
 // NewChatGateway 创建当前 server 进程使用的 chat gateway service。
 // metricsRecorder 可为 nil，表示不采集业务指标。
+// channelBreaker 为三协议共享的熔断器单实例（运行时配置驱动，enabled 为内部原子开关）；nil 表示不启用熔断。
 func NewChatGateway(
 	db lifecycle.ChatTxBeginner,
 	queries *sqlc.Queries,
 	router gateway.ChatRouter,
 	registry *lifecycle.AdapterRegistry,
 	workerConfig config.WorkerConfig,
-	breakerConfig config.CircuitBreakerConfig,
 	gatewayConfig config.GatewayConfig,
 	metricsRecorder *metrics.Metrics,
 	rateLimitGuard lifecycle.RateLimitGuard,
+	channelBreaker lifecycle.ChannelBreaker,
 ) *gateway.ChatCompletionService {
 	if registry == nil {
 		panic("bootstrap: lifecycle adapter registry is required")
@@ -62,17 +63,6 @@ func NewChatGateway(
 		chatMetrics = metricsRecorder
 	}
 
-	// 熔断器默认启用；未启用时以 nil 接口传入，service 内退化为始终放行。
-	var channelBreaker lifecycle.ChannelBreaker
-	if breakerConfig.Enabled {
-		channelBreaker = lifecycle.NewChannelCircuitBreaker(lifecycle.ChannelCircuitBreakerConfig{
-			Window:       breakerConfig.Window,
-			MinRequests:  breakerConfig.MinRequests,
-			FailureRatio: breakerConfig.FailureRatio,
-			OpenDuration: breakerConfig.OpenDuration,
-		})
-	}
-
 	service := gateway.NewChatCompletionService(
 		router,
 		registry.OpenAI,
@@ -92,17 +82,17 @@ func NewChatGateway(
 //
 // 复用与 chat 相同的 OpenAI routing / adapter / settlement / authorization；只把 ingress operation
 // 落为 responses，候选 fallback 计费循环走共享 lifecycle.AttemptRunner。本阶段不牵扯 Anthropic Messages。
-// metricsRecorder 可为 nil，表示不采集业务指标。
+// metricsRecorder 可为 nil，表示不采集业务指标。channelBreaker 为三协议共享单实例；nil 表示不启用熔断。
 func NewResponsesGateway(
 	db lifecycle.ChatTxBeginner,
 	queries *sqlc.Queries,
 	router responsesgateway.ChatRouter,
 	registry *lifecycle.AdapterRegistry,
 	workerConfig config.WorkerConfig,
-	breakerConfig config.CircuitBreakerConfig,
 	gatewayConfig config.GatewayConfig,
 	metricsRecorder *metrics.Metrics,
 	rateLimitGuard lifecycle.RateLimitGuard,
+	channelBreaker lifecycle.ChannelBreaker,
 ) *responsesgateway.ResponsesService {
 	if registry == nil {
 		panic("bootstrap: lifecycle adapter registry is required")
@@ -138,16 +128,6 @@ func NewResponsesGateway(
 		chatMetrics = metricsRecorder
 	}
 
-	var channelBreaker lifecycle.ChannelBreaker
-	if breakerConfig.Enabled {
-		channelBreaker = lifecycle.NewChannelCircuitBreaker(lifecycle.ChannelCircuitBreakerConfig{
-			Window:       breakerConfig.Window,
-			MinRequests:  breakerConfig.MinRequests,
-			FailureRatio: breakerConfig.FailureRatio,
-			OpenDuration: breakerConfig.OpenDuration,
-		})
-	}
-
 	service := responsesgateway.NewResponsesService(
 		router,
 		registry.OpenAI,
@@ -164,16 +144,17 @@ func NewResponsesGateway(
 }
 
 // NewMessagesGateway 创建 Anthropic Messages gateway service。
+// channelBreaker 为三协议共享的熔断器单实例；nil 表示不启用熔断。
 func NewMessagesGateway(
 	db lifecycle.ChatTxBeginner,
 	queries *sqlc.Queries,
 	router anthropicmessages.MessagesRouter,
 	registry *lifecycle.AdapterRegistry,
 	workerConfig config.WorkerConfig,
-	breakerConfig config.CircuitBreakerConfig,
 	gatewayConfig config.GatewayConfig,
 	metricsRecorder *metrics.Metrics,
 	rateLimitGuard lifecycle.RateLimitGuard,
+	channelBreaker lifecycle.ChannelBreaker,
 ) *anthropicmessages.MessagesService {
 	if registry == nil {
 		panic("bootstrap: lifecycle adapter registry is required")
@@ -207,16 +188,6 @@ func NewMessagesGateway(
 	var chatMetrics lifecycle.MetricsRecorder
 	if metricsRecorder != nil {
 		chatMetrics = metricsRecorder
-	}
-
-	var channelBreaker lifecycle.ChannelBreaker
-	if breakerConfig.Enabled {
-		channelBreaker = lifecycle.NewChannelCircuitBreaker(lifecycle.ChannelCircuitBreakerConfig{
-			Window:       breakerConfig.Window,
-			MinRequests:  breakerConfig.MinRequests,
-			FailureRatio: breakerConfig.FailureRatio,
-			OpenDuration: breakerConfig.OpenDuration,
-		})
 	}
 
 	service := anthropicmessages.NewMessagesService(

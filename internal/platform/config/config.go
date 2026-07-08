@@ -12,15 +12,17 @@ import (
 )
 
 // Config 保存服务启动所需的全部配置。
+//
+// 注意:限流全局默认、渠道熔断、流式 idle 超时、渠道 429 冷却、凭据 401 阈值、默认渠道超时
+// 已迁移为运行时配置(app_settings,admin 后台可改、免重启生效),不再从 env 读取——
+// 见 internal/service/appsettings 与 docs/production/DESIGN-env-to-runtime-settings-migration.md。
 type Config struct {
 	HTTP              HTTPConfig
 	Log               LogConfig
 	DB                DBConfig
 	Redis             RedisConfig
-	RateLimit         RateLimitConfig
 	Worker            WorkerConfig
 	Tracing           TracingConfig
-	CircuitBreaker    CircuitBreakerConfig
 	ModelCatalogSync  ModelCatalogSyncConfig
 	ChannelTestWorker ChannelTestWorkerConfig
 	Gateway           GatewayConfig
@@ -86,27 +88,6 @@ type GatewayConfig struct {
 	// 整体读入内存会撑爆进程。超限时 adapter 返回 adapter_response_too_large 并释放冻结，不计费。
 	// 仅约束非流式 body；流式 SSE 单事件大小由 adapter 内部常量约束，与此无关。
 	MaxUpstreamResponseBytes int64
-
-	// StreamIdleTimeout 来自 GATEWAY_STREAM_IDLE_TIMEOUT（默认 10m）。
-	// 流式上游拿到响应头后，「相邻两次流活动之间」的最大静默时长看门狗：用于兜底半开/挂死连接
-	// （TCP 在线但永不推进字节）。必须显著大于上游合法的最长静默阶段（如慢速图像生成在 200 后静默
-	// 数分钟），否则会误杀正常长任务流；故默认从宽取 10m。仅约束 chunk 间静默，不约束流总时长。
-	StreamIdleTimeout time.Duration
-
-	// ChannelRateLimitCooldown 来自 GATEWAY_CHANNEL_RATELIMIT_COOLDOWN（默认 5s）。
-	// 上游返回 429 但未给出 Retry-After 时，对该渠道套用的默认冷却时长：冷却窗口内 routing
-	// fallback 直接跳过该渠道（plan 与 attempt 两阶段都跳）。<=0 表示此情形不冷却（仅熔断器兜底）。
-	ChannelRateLimitCooldown time.Duration
-
-	// ChannelRateLimitCooldownCap 来自 GATEWAY_CHANNEL_RATELIMIT_COOLDOWN_CAP（默认 5m）。
-	// 对上游 429 Retry-After 建议值的冷却上限保护：防御 provider 返回异常大的 Retry-After 把渠道
-	// 长时间踢出。<=0 表示不额外封顶（仍受 adapter 解析阶段 24h 硬上限约束）。
-	ChannelRateLimitCooldownCap time.Duration
-
-	// CredentialInvalid401Threshold 来自 GATEWAY_CHANNEL_CREDENTIAL_401_THRESHOLD（默认 3）。
-	// 某渠道「连续」这么多次上游 401 后，凭据闸门把 channels.credential_valid 翻为 false 持久摘除，
-	// 后续请求在路由候选层直接跳过该渠道，直到渠道检测通过才恢复。必须 > 0。
-	CredentialInvalid401Threshold int
 }
 
 // AdminConfig 保存 admin-server 进程级配置与管理端认证配置。
@@ -137,15 +118,6 @@ type ModelCatalogSyncConfig struct {
 	HTTPTimeout time.Duration
 	// MaxResponseBytes 限制单个响应体大小，防御异常大响应。
 	MaxResponseBytes int64
-}
-
-// CircuitBreakerConfig 保存 channel 熔断器阈值；默认启用并使用保守阈值。
-type CircuitBreakerConfig struct {
-	Enabled      bool
-	Window       time.Duration
-	MinRequests  int
-	FailureRatio float64
-	OpenDuration time.Duration
 }
 
 // TracingConfig 保存 OpenTelemetry trace 导出配置；默认关闭（opt-in）。
@@ -199,18 +171,6 @@ type RedisConfig struct {
 	MinRetryBackoff time.Duration
 	MaxRetryBackoff time.Duration
 	KeyNamespace    string
-}
-
-// RateLimitConfig 保存全局默认限流配置（P2-8 两层 RPM/TPM/RPD）。
-//
-// DefaultRPM/DefaultTPM/DefaultRPD 是「未在 API Key / channel 上单独配置时」生效的全局默认上限，
-// 0 表示该维度默认不限。具体主体可在 api_keys/channels 行上覆盖（NULL=继承此默认，0=显式不限，>0=具体上限）。
-// FailurePolicy 决定 Redis 计数后端故障时 fail_closed（拒绝）还是 fail_open（放行）。
-type RateLimitConfig struct {
-	DefaultRPM    int64
-	DefaultTPM    int64
-	DefaultRPD    int64
-	FailurePolicy string
 }
 
 // WorkerConfig 保存后台 worker 调度与 recovery 参数。
@@ -336,45 +296,6 @@ func Load() (Config, error) {
 	}
 
 	postgresHealthCheckPeriod, err := getEnvDuration("POSTGRES_HEALTH_CHECK_PERIOD", 5*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-
-	// 默认 RPM=60（迁移自旧全局固定窗口默认，保持非破坏）；TPM/RPD 默认 0=不限，按需开启。
-	rateLimitDefaultRPM, err := getEnvInt64("RATE_LIMIT_DEFAULT_RPM", 60)
-	if err != nil {
-		return Config{}, err
-	}
-	if rateLimitDefaultRPM < 0 {
-		return Config{}, failure.New(
-			failure.CodeConfigInvalid,
-			failure.WithMessage("RATE_LIMIT_DEFAULT_RPM must be zero or a positive integer"),
-		)
-	}
-
-	rateLimitDefaultTPM, err := getEnvInt64("RATE_LIMIT_DEFAULT_TPM", 0)
-	if err != nil {
-		return Config{}, err
-	}
-	if rateLimitDefaultTPM < 0 {
-		return Config{}, failure.New(
-			failure.CodeConfigInvalid,
-			failure.WithMessage("RATE_LIMIT_DEFAULT_TPM must be zero or a positive integer"),
-		)
-	}
-
-	rateLimitDefaultRPD, err := getEnvInt64("RATE_LIMIT_DEFAULT_RPD", 0)
-	if err != nil {
-		return Config{}, err
-	}
-	if rateLimitDefaultRPD < 0 {
-		return Config{}, failure.New(
-			failure.CodeConfigInvalid,
-			failure.WithMessage("RATE_LIMIT_DEFAULT_RPD must be zero or a positive integer"),
-		)
-	}
-
-	rateLimitFailurePolicy, err := parseRateLimitFailurePolicy(getEnv("RATE_LIMIT_FAILURE_POLICY", "fail_closed"))
 	if err != nil {
 		return Config{}, err
 	}
@@ -513,14 +434,6 @@ func Load() (Config, error) {
 		return Config{}, failure.New(failure.CodeConfigInvalid, failure.WithMessage("CHANNEL_TEST_PROBE_TIMEOUT_MAX must be >= CHANNEL_TEST_PROBE_TIMEOUT"))
 	}
 
-	credentialInvalid401Threshold, err := getEnvInt("GATEWAY_CHANNEL_CREDENTIAL_401_THRESHOLD", 3)
-	if err != nil {
-		return Config{}, err
-	}
-	if credentialInvalid401Threshold <= 0 {
-		return Config{}, failure.New(failure.CodeConfigInvalid, failure.WithMessage("GATEWAY_CHANNEL_CREDENTIAL_401_THRESHOLD must be > 0"))
-	}
-
 	tracingEnabled, err := getEnvBool("OTEL_TRACING_ENABLED", false)
 	if err != nil {
 		return Config{}, err
@@ -532,31 +445,6 @@ func Load() (Config, error) {
 	}
 
 	tracingSampleRatio, err := getEnvFloat("OTEL_TRACES_SAMPLER_RATIO", 1.0)
-	if err != nil {
-		return Config{}, err
-	}
-
-	circuitBreakerEnabled, err := getEnvBool("CIRCUIT_BREAKER_ENABLED", true)
-	if err != nil {
-		return Config{}, err
-	}
-
-	circuitBreakerWindow, err := getEnvDuration("CIRCUIT_BREAKER_WINDOW", 30*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-
-	circuitBreakerMinRequests, err := getEnvInt("CIRCUIT_BREAKER_MIN_REQUESTS", 20)
-	if err != nil {
-		return Config{}, err
-	}
-
-	circuitBreakerFailureRatio, err := getEnvFloat("CIRCUIT_BREAKER_FAILURE_RATIO", 0.5)
-	if err != nil {
-		return Config{}, err
-	}
-
-	circuitBreakerOpenDuration, err := getEnvDuration("CIRCUIT_BREAKER_OPEN_DURATION", 30*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -591,40 +479,6 @@ func Load() (Config, error) {
 		return Config{}, failure.New(
 			failure.CodeConfigInvalid,
 			failure.WithMessage("GATEWAY_MAX_UPSTREAM_RESPONSE_MB must be a positive integer"),
-		)
-	}
-
-	gatewayStreamIdleTimeout, err := getEnvDuration("GATEWAY_STREAM_IDLE_TIMEOUT", 10*time.Minute)
-	if err != nil {
-		return Config{}, err
-	}
-	if gatewayStreamIdleTimeout <= 0 {
-		return Config{}, failure.New(
-			failure.CodeConfigInvalid,
-			failure.WithMessage("GATEWAY_STREAM_IDLE_TIMEOUT must be a positive duration"),
-		)
-	}
-
-	// P2-7 渠道级 429 冷却：允许为 0（关闭默认冷却 / 不额外封顶），但不允许为负。
-	gatewayChannelRateLimitCooldown, err := getEnvDuration("GATEWAY_CHANNEL_RATELIMIT_COOLDOWN", 5*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	if gatewayChannelRateLimitCooldown < 0 {
-		return Config{}, failure.New(
-			failure.CodeConfigInvalid,
-			failure.WithMessage("GATEWAY_CHANNEL_RATELIMIT_COOLDOWN must not be negative"),
-		)
-	}
-
-	gatewayChannelRateLimitCooldownCap, err := getEnvDuration("GATEWAY_CHANNEL_RATELIMIT_COOLDOWN_CAP", 5*time.Minute)
-	if err != nil {
-		return Config{}, err
-	}
-	if gatewayChannelRateLimitCooldownCap < 0 {
-		return Config{}, failure.New(
-			failure.CodeConfigInvalid,
-			failure.WithMessage("GATEWAY_CHANNEL_RATELIMIT_COOLDOWN_CAP must not be negative"),
 		)
 	}
 
@@ -689,12 +543,6 @@ func Load() (Config, error) {
 			MaxRetryBackoff: redisMaxRetryBackoff,
 			KeyNamespace:    getEnv("REDIS_KEY_NAMESPACE", "unio:dev"),
 		},
-		RateLimit: RateLimitConfig{
-			DefaultRPM:    rateLimitDefaultRPM,
-			DefaultTPM:    rateLimitDefaultTPM,
-			DefaultRPD:    rateLimitDefaultRPD,
-			FailurePolicy: rateLimitFailurePolicy,
-		},
 		Worker: WorkerConfig{
 			StartupTimeout:                     workerStartupTimeout,
 			RunnerIdleInterval:                 workerRunnerIdleInterval,
@@ -728,22 +576,11 @@ func Load() (Config, error) {
 			ServiceName: getEnv("OTEL_SERVICE_NAME", "unio-gateway"),
 			SampleRatio: tracingSampleRatio,
 		},
-		CircuitBreaker: CircuitBreakerConfig{
-			Enabled:      circuitBreakerEnabled,
-			Window:       circuitBreakerWindow,
-			MinRequests:  circuitBreakerMinRequests,
-			FailureRatio: circuitBreakerFailureRatio,
-			OpenDuration: circuitBreakerOpenDuration,
-		},
 		Gateway: GatewayConfig{
-			HTTPAddr:                      getEnv("GATEWAY_HTTP_ADDR", ":8520"),
-			MaxOutputTokensFallback:       authorizationMaxOutputTokensFallback,
-			PartialAssumedCacheReadRatio:  partialAssumedCacheReadRatio,
-			MaxUpstreamResponseBytes:      int64(gatewayMaxUpstreamResponseMB) << 20,
-			StreamIdleTimeout:             gatewayStreamIdleTimeout,
-			ChannelRateLimitCooldown:      gatewayChannelRateLimitCooldown,
-			ChannelRateLimitCooldownCap:   gatewayChannelRateLimitCooldownCap,
-			CredentialInvalid401Threshold: credentialInvalid401Threshold,
+			HTTPAddr:                     getEnv("GATEWAY_HTTP_ADDR", ":8520"),
+			MaxOutputTokensFallback:      authorizationMaxOutputTokensFallback,
+			PartialAssumedCacheReadRatio: partialAssumedCacheReadRatio,
+			MaxUpstreamResponseBytes:     int64(gatewayMaxUpstreamResponseMB) << 20,
 		},
 		Admin: AdminConfig{
 			HTTPAddr: getEnv("ADMIN_HTTP_ADDR", ":8521"),
@@ -903,17 +740,3 @@ func getEnvDuration(key string, fallback time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
-// parseRateLimitFailurePolicy 校验 Redis 限流故障时的处理策略。
-func parseRateLimitFailurePolicy(value string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "fail_closed":
-		return "fail_closed", nil
-	case "fail_open":
-		return "fail_open", nil
-	default:
-		return "", failure.New(
-			failure.CodeConfigUnsupported,
-			failure.WithMessage(fmt.Sprintf("parse RATE_LIMIT_FAILURE_POLICY: unsupported policy %q", value)),
-		)
-	}
-}

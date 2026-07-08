@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/routing"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
@@ -51,7 +52,7 @@ func TestNewChatRouterUsesPlaintextCredential(t *testing.T) {
 				UpstreamModel: "gpt-4.1",
 			},
 		},
-	}, nil)
+	}, 30*time.Second, nil)
 
 	plan, err := router.PlanChat(context.Background(), routing.ChatRouteRequest{
 		UserID:          1,

@@ -2,19 +2,72 @@ package adminapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
 	"github.com/ThankCat/unio-api/internal/service/appsettings"
+	"github.com/go-chi/chi/v5"
 )
 
-// ProviderSettingsService 定义 adminapi 读写全局 provider 设置所需的最小能力。
-// 起步只有 Anthropic beta 转发策略;将来 OpenAI/Gemini 各自的配置在此扩方法即可。
+// ProviderSettingsService 定义 adminapi 读写全局运行时配置所需的最小能力。
+// 通用 List/SetRaw 驱动配置面板;beta 专用方法为便捷的 typed 入口。
 type ProviderSettingsService interface {
-	GetAnthropicBetaPolicy(ctx context.Context) (messagesadapter.BetaPolicy, error)
+	List(ctx context.Context) []appsettings.SettingItem
+	SetRaw(ctx context.Context, key string, value json.RawMessage) error
+	GetAnthropicBetaPolicy(ctx context.Context) messagesadapter.BetaPolicy
 	SetAnthropicBetaPolicy(ctx context.Context, policy messagesadapter.BetaPolicy) error
+}
+
+// settingItemDTO 是通用配置项响应:元数据 + 当前生效值 + 生效来源(redis/db/default)。
+// 因 Redis 是跨进程实时源,此处的 value/source 即 gateway 将读到的值,可据此验证配置已传播。
+type settingItemDTO struct {
+	Key         string          `json:"key"`
+	Category    string          `json:"category"`
+	Label       string          `json:"label"`
+	Description string          `json:"description"`
+	HotReload   bool            `json:"hot_reload"`
+	Default     json.RawMessage `json:"default"`
+	Value       json.RawMessage `json:"value"`
+	Source      string          `json:"source"`
+}
+
+func (h *providerSettingsHandler) listSettings(w http.ResponseWriter, r *http.Request) {
+	items := h.service.List(r.Context())
+	dtos := make([]settingItemDTO, 0, len(items))
+	for _, it := range items {
+		dtos = append(dtos, settingItemDTO{
+			Key:         it.Key,
+			Category:    it.Category,
+			Label:       it.Label,
+			Description: it.Description,
+			HotReload:   it.HotReload,
+			Default:     it.Default,
+			Value:       it.Value,
+			Source:      it.Source,
+		})
+	}
+	writeData(w, http.StatusOK, dtos)
+}
+
+func (h *providerSettingsHandler) putSetting(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	var value json.RawMessage
+	if err := httpx.DecodeJSON(w, r, &value); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	if err := h.service.SetRaw(r.Context(), key, value); err != nil {
+		writeServiceError(w, failure.New(
+			failure.CodeAdminInvalidArgument,
+			failure.WithMessage(err.Error()),
+			failure.WithField("field", "value"),
+		))
+		return
+	}
+	writeData(w, http.StatusOK, map[string]string{"key": key, "status": "saved"})
 }
 
 // anthropicBetaPolicyDTO 是 Anthropic beta 策略的 admin API 请求/响应体。
@@ -31,11 +84,7 @@ type providerSettingsHandler struct {
 }
 
 func (h *providerSettingsHandler) getAnthropicBeta(w http.ResponseWriter, r *http.Request) {
-	policy, err := h.service.GetAnthropicBetaPolicy(r.Context())
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
+	policy := h.service.GetAnthropicBetaPolicy(r.Context())
 	writeData(w, http.StatusOK, toAnthropicBetaPolicyDTO(policy))
 }
 

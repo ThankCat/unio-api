@@ -37,8 +37,8 @@
   经 `message_dto_map.go` 透传给 adapter,再 merge 回上游 body。**→ body 侧未知字段不丢**(`service_tier`/`container`/`mcp_servers`/`output_config`/`inference_geo` 等都能到上游)。
 - **`anthropic-beta` 头**:**透传 + 小黑名单,且策略运行时可配(管理端可编辑)**。
   `official_adapter.go: applyBetaPolicy` 每次读 `activeBetaPolicy`;策略经 `BetaPolicyProvider` 注入(gateway 侧由
-  `appsettings.AnthropicBetaProvider` 带 TTL≈30s 缓存从 `app_settings` key=`anthropic.beta_policy` 读取,admin 改后约 30s 生效、无需重启)。
-  三种模式:`passthrough`(全透传)/ `filter`(黑名单)/ `whitelist`(白名单)。未配置时回退 `DefaultBetaPolicy`。
+  `appsettings.SettingsStore` 供给:PostgreSQL `app_settings` key=`anthropic.beta_policy` 为权威源,Redis 作实时缓存实现跨进程秒级生效,
+  各进程再叠一层 ~3s 本地缓存去抖;admin 改后无需重启)。三种模式:`passthrough`(全透传)/ `filter`(黑名单)/ `whitelist`(白名单)。未配置时回退 `DefaultBetaPolicy`。
   **→ 未知/未来 beta 不再静默丢弃,与 OpenAI 侧对齐。** (历史:P0-B 前为白名单严进,曾漏 `extended-cache-ttl` 致 1h 缓存降级。)
 - **`anthropic-version`**:钉死常量 `2023-06-01`,覆盖客户端传入(F5)。
 
@@ -180,10 +180,32 @@
 
 ---
 
+## 10. 缓存 TTL 默认值变更(2026-03-06)与计费无关性
+
+**背景(2026-07-08 查证)**:5m/1h 两档缓存**依然存在,官方未取消**(5m 写入=1.25x、1h 写入=2x、读取=0.1x)。
+唯一变化是:**2026-03-06 起,`cache_control:{"type":"ephemeral"}` 不带 `ttl` 时的默认 TTL 从 1h 悄悄降为 5m**
+(官方 2026-04-23 postmortem 确认)。要 1h 必须**显式** `ttl:"1h"`。
+
+**对本网关计费的影响:无。** 计费是**响应驱动**,不解释请求里的 `ttl`:
+
+- `wire.go` 解析上游 usage 的 `cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens`;
+- `usage.go: ToUsageFacts` 按上游返回的拆分生成事实;`billing/service.go` 5m/1h 分别计价。
+
+因此无论客户端显式发 `ttl:"1h"`(上游→`ephemeral_1h`→按 2x)还是用新默认 5m(上游→`ephemeral_5m`→按 1.25x),
+本网关都**如实按上游实际档位计费**,零影响。2026-07-08 的 10 条 Kiro 请求已端到端对账验证(5m/1h/read/uncached/output 逐 token 一致)。
+
+**唯一理论前提(非本变更引入)**:计费正确性依赖**上游在 usage 里返回 5m/1h 拆分**。若某上游对 1h 写入只回 flat 总量、不给拆分,
+`ToUsageFacts` 兜底会全算 5m(1.25x)→ 少收(见 `wire.go: mergeUsageWire` 针对 sub2api 的注释)。当前上游正确返回拆分,不受影响。
+
+**给运维的提示**:若客户反馈「1h 缓存命中率暴跌/成本上升」,大概率是其**客户端未显式带 `ttl:"1h"`**、吃了新默认值,
+不是网关 bug——网关只是如实反映上游实际做的档位。
+
+---
+
 ## 附:权威来源
 - [anthropic-sdk-python `AnthropicBetaParam` 枚举](https://raw.githubusercontent.com/anthropics/anthropic-sdk-python/main/src/anthropic/types/anthropic_beta_param.py)(beta 权威清单)
 - [Anthropic Beta headers](https://docs.claude.com/en/api/beta-headers)(无效头上游返 400)
-- [Anthropic Prompt caching](https://docs.claude.com/en/docs/build-with-claude/prompt-caching)(1h TTL=2x;基础 caching 已 GA 不需前缀)
+- [Anthropic Prompt caching](https://docs.claude.com/en/docs/build-with-claude/prompt-caching)(1h TTL=2x;基础 caching 已 GA 不需前缀;5m/1h 两档仍在,2026-03-06 起不带 ttl 默认降为 5m)
 - [Anthropic Pricing · Long context](https://platform.claude.com/docs/en/about-claude/pricing)(2026-03-13 取消 >200K 溢价)
 - [Anthropic Structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)(structured-outputs GA)
 - [Anthropic Fine-grained tool streaming](https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming)(fine-grained streaming GA)

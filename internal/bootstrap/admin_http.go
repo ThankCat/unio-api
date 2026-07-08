@@ -49,12 +49,10 @@ type adminHTTPDeps struct {
 
 	ProviderSettingsService adminapi.ProviderSettingsService
 
-	// 系统配置只读面板（进程级 env 生效值，脱敏）。
-	GatewayConfig        config.GatewayConfig
-	RateLimitConfig      config.RateLimitConfig
-	CircuitBreakerConfig config.CircuitBreakerConfig
-	WorkerConfig         config.WorkerConfig
-	HTTPConfig           config.HTTPConfig
+	// 系统配置只读面板（进程级 env 生效值，脱敏）；6 组热路径配置已迁移为运行时配置，不在此列。
+	GatewayConfig config.GatewayConfig
+	WorkerConfig  config.WorkerConfig
+	HTTPConfig    config.HTTPConfig
 
 	MetricsRecorder *metrics.Metrics
 }
@@ -96,11 +94,9 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 
 		ProviderSettingsService: deps.ProviderSettingsService,
 
-		GatewayConfig:        deps.GatewayConfig,
-		RateLimitConfig:      deps.RateLimitConfig,
-		CircuitBreakerConfig: deps.CircuitBreakerConfig,
-		WorkerConfig:         deps.WorkerConfig,
-		HTTPConfig:           deps.HTTPConfig,
+		GatewayConfig: deps.GatewayConfig,
+		WorkerConfig:  deps.WorkerConfig,
+		HTTPConfig:    deps.HTTPConfig,
 	}
 
 	if deps.MetricsRecorder != nil {

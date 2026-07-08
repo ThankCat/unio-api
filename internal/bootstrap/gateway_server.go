@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
 	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
@@ -18,10 +17,6 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 	"github.com/redis/go-redis/v9"
 )
-
-// betaPolicyRefreshTTL 是 gateway 侧 Anthropic beta 策略缓存的刷新周期:
-// admin 改动后最多 TTL 内在 gateway 生效（跨进程,无需重启）。
-const betaPolicyRefreshTTL = 30 * time.Second
 
 // GatewayServerAppDB 定义 gateway server app 构建时需要的数据库能力。
 type GatewayServerAppDB interface {
@@ -41,14 +36,18 @@ type GatewayServerAppDeps struct {
 type GatewayServerApp struct {
 	Handler http.Handler
 
-	tracer *tracing.Provider
+	tracer      *tracing.Provider
+	stopApplier context.CancelFunc
 }
 
-// Shutdown 释放 app 持有的可观测性资源（flush trace exporter）。
+// Shutdown 停止后台配置 applier 并释放可观测性资源（flush trace exporter）。
 // 未启用 tracing 时为安全空操作。
 func (a *GatewayServerApp) Shutdown(ctx context.Context) error {
 	if a == nil {
 		return nil
+	}
+	if a.stopApplier != nil {
+		a.stopApplier()
 	}
 
 	return a.tracer.Shutdown(ctx)
@@ -76,9 +75,6 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	// 非流式上游响应体上限为进程级 egress 安全配置（防 OOM）；启动期设置一次，全 adapter 非流式读 body 生效。
 	adapter.SetMaxUpstreamResponseBytes(deps.Config.Gateway.MaxUpstreamResponseBytes)
 
-	// 流式 idle 超时为进程级 egress 安全配置（兜底半开/挂死连接）；启动期设置一次，全 adapter 流式读生效。
-	adapter.SetStreamIdleTimeout(deps.Config.Gateway.StreamIdleTimeout)
-
 	// 输入 token 估算的媒体处理配置（图片 tile 数学 / 是否抓取远程图片）；启动期设置一次，全 tokenizer 生效。
 	tokenest.Configure(tokenest.Options{
 		CountMedia:        deps.Config.TokenEstimate.CountMedia,
@@ -92,13 +88,22 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 
 	queries := sqlc.New(deps.DB)
 
-	// Anthropic beta 转发策略为管理端可编辑的全局设置（app_settings）；注入带 TTL 缓存的 provider，
-	// gateway 在 TTL 内自动刷新到 admin 最新写入值（无需重启）。未配置时 adapter 用内置默认策略。
-	messagesadapter.SetBetaPolicyProvider(
-		appsettings.NewAnthropicBetaProvider(queries, betaPolicyRefreshTTL, deps.Logger),
+	// 运行时配置中枢（app_settings + Redis 实时缓存 + 本地短缓存）：admin 改动经 Redis 跨进程秒级生效、无需重启。
+	settingsStore := appsettings.NewSettingsStore(
+		queries, deps.Redis, deps.Config.Redis.KeyNamespace, appsettings.DefaultRegistry(), deps.Logger,
 	)
+	// 启动 seed（DEC §11.2）：把注册表默认值写入 DB 缺行（DO NOTHING,绝不覆盖已改值）。
+	// 失败不阻断启动——读侧本就有注册表默认兜底。
+	_ = settingsStore.SeedDefaults(ctx)
 
-	chatRouter := NewChatRouter(queries, deps.Logger)
+	// Anthropic beta 转发策略：adapter 每请求经 provider 现读（策略读取本身足够轻）。
+	messagesadapter.SetBetaPolicyProvider(appsettings.NewBetaPolicyProvider(settingsStore))
+
+	// 6 组 gateway 热路径配置（DEC db_only）：启动期从配置中枢取初值构造消费方，
+	// 之后由 settingsApplier 周期推送热更新（消费方内部 atomic/锁内字段，热路径零额外开销）。
+	adapter.SetStreamIdleTimeout(appsettings.GatewayStreamIdleTimeout(ctx, settingsStore))
+
+	chatRouter := NewChatRouter(queries, appsettings.GatewayDefaultChannelTimeout(ctx, settingsStore), deps.Logger)
 
 	adapterRegistry, err := NewAdapterRegistry(http.DefaultClient, deps.Logger)
 	if err != nil {
@@ -115,9 +120,22 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 
 	metricsRecorder := metrics.New()
 
-	// 两层限流 Guard（P2-8）：与 HTTP 中间件共用 Redis 计数口径（counter 全在 Redis，多实例一致）。
-	// 注入 attempt runner 用于 Key 级 TPM 预占、渠道级 RPM/TPM/RPD 预占与结算回填。
-	rateLimitGuard := NewRateLimitGuard(deps.Redis, deps.Config, deps.Logger)
+	// 两层限流 Guard（P2-8）：进程内唯一实例（DEC §11.5），HTTP 中间件（线路+用户 RPM/RPD）与
+	// attempt runner（TPM / 渠道级）共用同一 Redis 计数口径、同一默认上限与故障策略。
+	rateLimitGuard := NewRateLimitGuard(
+		deps.Redis, deps.Config.Redis.KeyNamespace,
+		appsettings.GatewayRateLimitDefaults(ctx, settingsStore), deps.Logger,
+	)
+
+	// 渠道熔断器：三协议共享单实例（DEC §11.4），enabled 为内部原子开关（运行期启停免重启/免重建）。
+	breakerSettings := appsettings.GatewayCircuitBreaker(ctx, settingsStore)
+	channelBreaker := lifecycle.NewChannelCircuitBreaker(lifecycle.ChannelCircuitBreakerConfig{
+		Window:       breakerSettings.Window,
+		MinRequests:  breakerSettings.MinRequests,
+		FailureRatio: breakerSettings.FailureRatio,
+		OpenDuration: breakerSettings.OpenDuration,
+	})
+	channelBreaker.SetEnabled(breakerSettings.Enabled)
 
 	chatCompletionService := NewChatGateway(
 		deps.DB,
@@ -125,10 +143,10 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		chatRouter,
 		adapterRegistry,
 		deps.Config.Worker,
-		deps.Config.CircuitBreaker,
 		deps.Config.Gateway,
 		metricsRecorder,
 		rateLimitGuard,
+		channelBreaker,
 	)
 	responsesService := NewResponsesGateway(
 		deps.DB,
@@ -136,10 +154,10 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		chatRouter,
 		adapterRegistry,
 		deps.Config.Worker,
-		deps.Config.CircuitBreaker,
 		deps.Config.Gateway,
 		metricsRecorder,
 		rateLimitGuard,
+		channelBreaker,
 	)
 	messagesService := NewMessagesGateway(
 		deps.DB,
@@ -147,18 +165,16 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		chatRouter,
 		adapterRegistry,
 		deps.Config.Worker,
-		deps.Config.CircuitBreaker,
 		deps.Config.Gateway,
 		metricsRecorder,
 		rateLimitGuard,
+		channelBreaker,
 	)
 
 	// 渠道级 429 冷却注册表（P2-7）：三协议 service 共享一份，使任一协议命中的 429 都能即时
 	// 让该渠道在冷却窗口内被 routing fallback 跳过。冷却到期自动恢复。
-	channelCooldown := lifecycle.NewChannelCooldownRegistry(
-		deps.Config.Gateway.ChannelRateLimitCooldown,
-		deps.Config.Gateway.ChannelRateLimitCooldownCap,
-	)
+	cooldownSettings := appsettings.GatewayChannelCooldown(ctx, settingsStore)
+	channelCooldown := lifecycle.NewChannelCooldownRegistry(cooldownSettings.Cooldown, cooldownSettings.Cap)
 	chatCompletionService.SetChannelCooldownRegistry(channelCooldown)
 	responsesService.SetChannelCooldownRegistry(channelCooldown)
 	messagesService.SetChannelCooldownRegistry(channelCooldown)
@@ -166,18 +182,31 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	// 凭据失效闸门（阶段二）：三协议共享一份进程内「连续 401」计数器；达阈值时异步把
 	// channels.credential_valid 翻 false + 写 runtime_401 日志，后续请求在路由候选层直接跳过该渠道。
 	credentialGate := lifecycle.NewChannelCredentialGate(
-		deps.Config.Gateway.CredentialInvalid401Threshold,
+		appsettings.GatewayCredential401Threshold(ctx, settingsStore),
 		newCredentialInvalidator(queries, deps.Logger),
 	)
 	chatCompletionService.SetCredentialGate(credentialGate)
 	responsesService.SetCredentialGate(credentialGate)
 	messagesService.SetCredentialGate(credentialGate)
 
+	// 配置 applier：周期性把 6 组配置的最新生效值推给上述消费方（admin 改动 ≤ 应用周期内生效）。
+	// 生命周期挂到独立 background context（传入的 ctx 是启动期短时 ctx），随 app.Shutdown 停止。
+	applier := &settingsApplier{
+		store:    settingsStore,
+		logger:   deps.Logger,
+		breaker:  channelBreaker,
+		guard:    rateLimitGuard,
+		cooldown: channelCooldown,
+		gate:     credentialGate,
+		router:   chatRouter,
+	}
+	applierCtx, stopApplier := context.WithCancel(context.Background())
+	go applier.run(applierCtx, settingsApplyInterval)
+
 	handler := NewHTTPHandler(
 		deps.Logger,
 		queries,
-		deps.Redis,
-		deps.Config,
+		rateLimitGuard,
 		chatCompletionService,
 		responsesService,
 		messagesService,
@@ -185,7 +214,8 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	)
 
 	return &GatewayServerApp{
-		Handler: handler,
-		tracer:  tracerProvider,
+		Handler:     handler,
+		tracer:      tracerProvider,
+		stopApplier: stopApplier,
 	}, nil
 }

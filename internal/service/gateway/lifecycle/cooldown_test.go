@@ -87,6 +87,47 @@ func TestCooldownKeepsLaterExpiry(t *testing.T) {
 	}
 }
 
+func TestCooldownSetCooldownTakesEffect(t *testing.T) {
+	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	r := newTestCooldown(5*time.Second, time.Minute, &now)
+
+	// 热改默认冷却与封顶:之后的登记用新值。
+	r.SetCooldown(20*time.Second, 25*time.Second)
+
+	until, ok := r.RecordRateLimit("9", 0)
+	if !ok || !until.Equal(now.Add(20*time.Second)) {
+		t.Fatalf("new default cooldown: ok=%v until=%s", ok, until)
+	}
+	until, ok = r.RecordRateLimit("10", time.Hour)
+	if !ok || !until.Equal(now.Add(25*time.Second)) {
+		t.Fatalf("new cap: ok=%v until=%s", ok, until)
+	}
+
+	// 热改为 0:关闭默认冷却(无 Retry-After 时不再登记)。
+	r.SetCooldown(0, 0)
+	if _, ok := r.RecordRateLimit("11", 0); ok {
+		t.Fatal("zero default cooldown should not record")
+	}
+}
+
+// TestCooldownConcurrentReload 在 -race 下验证热改与热路径读写无竞态。
+func TestCooldownConcurrentReload(t *testing.T) {
+	r := NewChannelCooldownRegistry(5*time.Second, time.Minute)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 500; i++ {
+			r.SetCooldown(time.Duration(i)*time.Millisecond, time.Minute)
+		}
+	}()
+	for i := 0; i < 500; i++ {
+		r.RecordRateLimit("1", 0)
+		r.Allowed("1")
+		r.Until("1")
+	}
+	<-done
+}
+
 func TestNilCooldownRegistryAllowsAll(t *testing.T) {
 	var r *ChannelCooldownRegistry
 	if !r.Allowed("1") {

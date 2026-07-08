@@ -27,12 +27,13 @@ type CredentialGate interface {
 //
 // 设计取舍与 ChannelCircuitBreaker 一致：进程内状态、每实例独立。多实例下第一个数到阈值的实例
 // 翻 DB flag，其余实例随后从 DB（路由候选）看到失效即停选，无需共享存储。
+// threshold 可运行时热改（SetThreshold），由 mu 保护。
 type ChannelCredentialGate struct {
-	threshold   int
 	invalidator CredentialInvalidator
 
-	mu    sync.Mutex
-	count map[int64]int
+	mu        sync.Mutex
+	threshold int
+	count     map[int64]int
 }
 
 // NewChannelCredentialGate 创建凭据闸门。threshold<=0 兜底为 3（连续 3 次 401 翻失效）。
@@ -45,6 +46,20 @@ func NewChannelCredentialGate(threshold int, invalidator CredentialInvalidator) 
 		invalidator: invalidator,
 		count:       make(map[int64]int),
 	}
+}
+
+// SetThreshold 原子替换 401 阈值（运行时热改入口）；<=0 沿用构造相同的兜底 3。
+// 各渠道进行中的连续计数保留，下次 401 判定即用新阈值。
+func (g *ChannelCredentialGate) SetThreshold(threshold int) {
+	if g == nil {
+		return
+	}
+	if threshold <= 0 {
+		threshold = 3
+	}
+	g.mu.Lock()
+	g.threshold = threshold
+	g.mu.Unlock()
 }
 
 // RecordResult 实现 CredentialGate。

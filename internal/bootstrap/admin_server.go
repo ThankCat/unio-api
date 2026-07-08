@@ -34,6 +34,7 @@ import (
 	adminroute "github.com/ThankCat/unio-api/internal/service/admin/route"
 	"github.com/ThankCat/unio-api/internal/service/admin/routeops"
 	"github.com/ThankCat/unio-api/internal/service/appsettings"
+	"github.com/redis/go-redis/v9"
 )
 
 // AdminServerAppDB 定义 admin server app 构建时需要的数据库能力。
@@ -48,6 +49,8 @@ type AdminServerAppDeps struct {
 	Logger *slog.Logger
 	Config config.Config
 	DB     AdminServerAppDB
+	// Redis 供运行时配置中枢(app_settings 实时缓存)写透与读取;nil 时降级为 DB + 本地缓存。
+	Redis redis.Cmdable
 }
 
 // AdminServerApp 表示当前 admin-server 进程已经装配完成的 HTTP 应用。
@@ -149,6 +152,13 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	recoveryJobQueryService := query.NewRecoveryService(queries)
 	channelHealthQueryService := query.NewChannelHealthService(queries)
 
+	// 运行时配置中枢：与 gateway 同一注册表;启动 seed 把默认值写入 DB 缺行（DO NOTHING,幂等,
+	// 与 gateway 并发启动安全）。seed 后 app_settings 即完整配置清单,面板直接呈现全部配置。
+	settingsStore := appsettings.NewSettingsStore(
+		queries, deps.Redis, deps.Config.Redis.KeyNamespace, appsettings.DefaultRegistry(), deps.Logger,
+	)
+	_ = settingsStore.SeedDefaults(ctx)
+
 	metricsRecorder := metrics.New()
 
 	handler := NewAdminHTTPHandler(adminHTTPDeps{
@@ -184,13 +194,11 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		RecoveryJobQueryService:   recoveryJobQueryService,
 		ChannelHealthQueryService: channelHealthQueryService,
 
-		ProviderSettingsService: appsettings.NewService(queries),
+		ProviderSettingsService: appsettings.NewService(settingsStore),
 
-		GatewayConfig:        deps.Config.Gateway,
-		RateLimitConfig:      deps.Config.RateLimit,
-		CircuitBreakerConfig: deps.Config.CircuitBreaker,
-		WorkerConfig:         deps.Config.Worker,
-		HTTPConfig:           deps.Config.HTTP,
+		GatewayConfig: deps.Config.Gateway,
+		WorkerConfig:  deps.Config.Worker,
+		HTTPConfig:    deps.Config.HTTP,
 
 		MetricsRecorder: metricsRecorder,
 	})

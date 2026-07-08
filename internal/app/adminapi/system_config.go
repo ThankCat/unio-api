@@ -10,17 +10,18 @@ import (
 // systemConfigHandler 暴露进程级（env 生效）网关配置的只读视图。
 //
 // 设计意图（上线前全量修复 P0 前端）：凡运行期不可改的 env 阈值/兜底都要在前端「网关配置(只读)」面板可见，
-// 杜绝后台静默。此处只回显非敏感运维阈值（兜底 token、熔断、限流默认、补偿、HTTP 超时），绝不回显任何
+// 杜绝后台静默。此处只回显非敏感运维阈值（兜底 token、补偿、HTTP 超时），绝不回显任何
 // 凭据/密钥/DSN（DATABASE_URL、REDIS_PASSWORD、CREDENTIAL_MASTER_KEY、ADMIN_API_TOKEN 等）。
+//
+// 限流全局默认、渠道熔断、流式 idle 超时、渠道 429 冷却、凭据 401 阈值、默认渠道超时已迁移为
+// 运行时配置（app_settings），从本只读面板移除，改在「运行时配置」可编辑面板管理（/settings）。
 //
 // 注意：admin-server 与 gateway-server 是独立进程，此处反映的是 admin 进程启动时读到的 env。
 // 共享同一份 .env 时与 gateway 生效值一致；否则仅作近似参考（DTO note 已说明）。
 type systemConfigHandler struct {
-	gateway        config.GatewayConfig
-	rateLimit      config.RateLimitConfig
-	circuitBreaker config.CircuitBreakerConfig
-	worker         config.WorkerConfig
-	http           config.HTTPConfig
+	gateway config.GatewayConfig
+	worker  config.WorkerConfig
+	http    config.HTTPConfig
 }
 
 // systemConfigEntryDTO 是一条配置项：人类可读标签 + 当前值 + 对应 env 变量名。
@@ -65,40 +66,6 @@ func (h *systemConfigHandler) get(w http.ResponseWriter, _ *http.Request) {
 						Value: strconv.FormatInt(h.gateway.MaxUpstreamResponseBytes, 10),
 						Env:   "GATEWAY_MAX_UPSTREAM_RESPONSE_MB",
 					},
-					{
-						Label: "流式 chunk 间静默超时",
-						Value: h.gateway.StreamIdleTimeout.String(),
-						Env:   "GATEWAY_STREAM_IDLE_TIMEOUT",
-					},
-					{
-						Label: "渠道 429 默认冷却(无 Retry-After)",
-						Value: h.gateway.ChannelRateLimitCooldown.String(),
-						Env:   "GATEWAY_CHANNEL_RATELIMIT_COOLDOWN",
-					},
-					{
-						Label: "渠道 429 冷却上限(Retry-After 封顶)",
-						Value: h.gateway.ChannelRateLimitCooldownCap.String(),
-						Env:   "GATEWAY_CHANNEL_RATELIMIT_COOLDOWN_CAP",
-					},
-				},
-			},
-			{
-				Title: "渠道熔断",
-				Entries: []systemConfigEntryDTO{
-					{Label: "启用", Value: strconv.FormatBool(h.circuitBreaker.Enabled), Env: "CIRCUIT_BREAKER_ENABLED"},
-					{Label: "统计窗口", Value: h.circuitBreaker.Window.String(), Env: "CIRCUIT_BREAKER_WINDOW"},
-					{Label: "最小请求数", Value: strconv.Itoa(h.circuitBreaker.MinRequests), Env: "CIRCUIT_BREAKER_MIN_REQUESTS"},
-					{Label: "失败比例阈值", Value: strconv.FormatFloat(h.circuitBreaker.FailureRatio, 'f', -1, 64), Env: "CIRCUIT_BREAKER_FAILURE_RATIO"},
-					{Label: "熔断打开时长", Value: h.circuitBreaker.OpenDuration.String(), Env: "CIRCUIT_BREAKER_OPEN_DURATION"},
-				},
-			},
-			{
-				Title: "限流全局默认（两层 RPM/TPM/RPD）",
-				Entries: []systemConfigEntryDTO{
-					{Label: "默认 RPM（每分钟请求，0=不限）", Value: strconv.FormatInt(h.rateLimit.DefaultRPM, 10), Env: "RATE_LIMIT_DEFAULT_RPM"},
-					{Label: "默认 TPM（每分钟 token，0=不限）", Value: strconv.FormatInt(h.rateLimit.DefaultTPM, 10), Env: "RATE_LIMIT_DEFAULT_TPM"},
-					{Label: "默认 RPD（每日请求，0=不限）", Value: strconv.FormatInt(h.rateLimit.DefaultRPD, 10), Env: "RATE_LIMIT_DEFAULT_RPD"},
-					{Label: "失败策略", Value: h.rateLimit.FailurePolicy, Env: "RATE_LIMIT_FAILURE_POLICY"},
 				},
 			},
 			{

@@ -193,11 +193,8 @@ func TestNewGatewayServerAppReturnsProviderAdapterPreflightError(t *testing.T) {
 }
 
 func newGatewayServerAppTestConfig() config.Config {
+	// 限流/熔断等 6 组已迁移为运行时配置(app_settings):fake DB 读不到行时回退注册表默认。
 	return config.Config{
 		Redis: config.RedisConfig{KeyNamespace: "unio:test"},
-		RateLimit: config.RateLimitConfig{
-			DefaultRPM:    60,
-			FailurePolicy: "fail_closed",
-		},
 	}
 }

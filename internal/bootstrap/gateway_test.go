@@ -34,8 +34,8 @@ func TestNewChatGatewayBuildsService(t *testing.T) {
 		fakeChatGatewayRouter{},
 		registry,
 		config.WorkerConfig{},
-		config.CircuitBreakerConfig{},
 		config.GatewayConfig{},
+		nil,
 		nil,
 		nil,
 	)

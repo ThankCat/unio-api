@@ -31,10 +31,13 @@ func (s *ResponsesService) CountInputTokens(ctx context.Context, req gatewayapi.
 	}
 
 	// routing 仅解析模型→候选，用于选取 tokenizer；不消费候选 fallback 计划，不做能力过滤/授权。
+	// RouteID 必传：线路必填改造（DEC-026/027）后缺省会被 ErrRouteNotConfigured 拒绝。
 	plan, err := s.router.PlanChat(ctx, routing.ChatRouteRequest{
 		UserID:          principal.UserID,
 		ModelID:         req.Model,
 		IngressProtocol: routing.ProtocolOpenAI,
+		Operation:       routing.OperationResponses,
+		RouteID:         principal.RouteID,
 	})
 	if err != nil {
 		return nil, err

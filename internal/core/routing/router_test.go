@@ -178,6 +178,49 @@ func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 	}
 }
 
+func TestRouterSetDefaultTimeoutTakesEffect(t *testing.T) {
+	newRows := func() []sqlc.FindRouteCandidatesRow {
+		return []sqlc.FindRouteCandidatesRow{
+			{
+				AdapterKey:    "openai",
+				ChannelID:     123,
+				BaseUrl:       "https://api.openai.example/v1",
+				Credential:    "secret://openai/main",
+				TimeoutMs:     pgtype.Int4{Valid: false},
+				UpstreamModel: "gpt-4.1",
+			},
+		}
+	}
+	store := &fakeStore{rows: newRows()}
+	router := NewRouter(store, 30*time.Second)
+	req := ChatRouteRequest{
+		UserID:          42,
+		ModelID:         "openai/gpt-4.1",
+		IngressProtocol: ProtocolOpenAI,
+		RouteID:         testRouteID(),
+	}
+
+	// 热改默认超时:之后的候选构造用新值。
+	router.SetDefaultTimeout(45 * time.Second)
+	got, err := router.PlanChat(context.Background(), req)
+	if err != nil {
+		t.Fatalf("PlanChat returned error: %v", err)
+	}
+	if got.Candidates[0].Channel.Timeout != 45*time.Second {
+		t.Fatalf("expected hot-reloaded timeout 45s, got %v", got.Candidates[0].Channel.Timeout)
+	}
+
+	// <=0 兜底为内置 30s。
+	router.SetDefaultTimeout(0)
+	got, err = router.PlanChat(context.Background(), req)
+	if err != nil {
+		t.Fatalf("PlanChat returned error: %v", err)
+	}
+	if got.Candidates[0].Channel.Timeout != defaultChannelTimeout {
+		t.Fatalf("expected fallback timeout %v, got %v", defaultChannelTimeout, got.Candidates[0].Channel.Timeout)
+	}
+}
+
 func TestRouterPlanChatReturnsNoAvailableChannel(t *testing.T) {
 	store := &fakeStore{
 		modelExists: true,

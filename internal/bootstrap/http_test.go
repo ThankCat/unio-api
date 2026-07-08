@@ -11,8 +11,8 @@ import (
 	gatewayanthropic "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	gatewayresponses "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
-	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/service/appsettings"
 )
 
 type fakeHTTPChatCompletionService struct{}
@@ -58,14 +58,7 @@ func TestNewHTTPHandlerBuildsHealthRoute(t *testing.T) {
 	handler := NewHTTPHandler(
 		logger,
 		&sqlc.Queries{},
-		nil,
-		config.Config{
-			Redis: config.RedisConfig{KeyNamespace: "unio:test"},
-			RateLimit: config.RateLimitConfig{
-				DefaultRPM:    60,
-				FailurePolicy: "fail_closed",
-			},
-		},
+		NewRateLimitGuard(nil, "unio:test", appsettings.DefaultRateLimitDefaultsSettings(), logger),
 		fakeHTTPChatCompletionService{},
 		fakeHTTPResponsesService{},
 		fakeHTTPMessagesService{},

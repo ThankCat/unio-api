@@ -147,6 +147,115 @@ func TestChannelCircuitBreakerWindowResetsCounts(t *testing.T) {
 	}
 }
 
+func TestChannelCircuitBreakerSetConfigTakesEffect(t *testing.T) {
+	b, _ := newTestBreaker(ChannelCircuitBreakerConfig{
+		Window:       time.Minute,
+		MinRequests:  10,
+		FailureRatio: 0.9,
+		OpenDuration: 10 * time.Second,
+	})
+
+	key := "1"
+	// 旧阈值下 2 次失败远不足以熔断。
+	b.RecordFailure(key)
+	b.RecordFailure(key)
+	if !b.Allow(key) {
+		t.Fatal("breaker should stay closed under old thresholds")
+	}
+
+	// 热改为更敏感的阈值:窗口计数保留(2 failures),第 3 次失败即触发。
+	b.SetConfig(ChannelCircuitBreakerConfig{
+		Window:       time.Minute,
+		MinRequests:  3,
+		FailureRatio: 0.5,
+		OpenDuration: 10 * time.Second,
+	})
+	b.RecordFailure(key)
+	if b.Allow(key) {
+		t.Fatal("breaker should trip using hot-reloaded thresholds")
+	}
+}
+
+func TestChannelCircuitBreakerSetConfigNormalizesInvalid(t *testing.T) {
+	b, _ := newTestBreaker(ChannelCircuitBreakerConfig{})
+	b.SetConfig(ChannelCircuitBreakerConfig{Window: -1, MinRequests: -1, FailureRatio: 2, OpenDuration: -1})
+
+	b.mu.Lock()
+	cfg := b.cfg
+	b.mu.Unlock()
+	want := ChannelCircuitBreakerConfig{Window: 30 * time.Second, MinRequests: 20, FailureRatio: 0.5, OpenDuration: 30 * time.Second}
+	if cfg != want {
+		t.Fatalf("normalized cfg = %+v, want %+v", cfg, want)
+	}
+}
+
+func TestChannelCircuitBreakerSetEnabled(t *testing.T) {
+	b, _ := newTestBreaker(ChannelCircuitBreakerConfig{
+		Window:       time.Minute,
+		MinRequests:  2,
+		FailureRatio: 0.5,
+		OpenDuration: 10 * time.Second,
+	})
+
+	key := "1"
+	b.RecordFailure(key)
+	b.RecordFailure(key)
+	if b.Allow(key) {
+		t.Fatal("breaker should be open")
+	}
+
+	// 运行期禁用:放行全部、健康分归零、不记状态。
+	b.SetEnabled(false)
+	if b.Enabled() {
+		t.Fatal("Enabled() should be false after disable")
+	}
+	if !b.Allow(key) || !b.Available(key) {
+		t.Fatal("disabled breaker must allow everything")
+	}
+	if score := b.HealthScore(key); score != 0 {
+		t.Fatalf("disabled breaker health score = %v, want 0", score)
+	}
+	b.RecordFailure(key)
+	b.RecordFailure(key)
+
+	// 重新启用:禁用边沿已清空状态,旧熔断/禁用期间的失败都不追溯。
+	b.SetEnabled(true)
+	if !b.Enabled() {
+		t.Fatal("Enabled() should be true after enable")
+	}
+	if !b.Allow(key) {
+		t.Fatal("re-enabled breaker should start from clean state")
+	}
+
+	// 重新启用后照常工作。
+	b.RecordFailure(key)
+	b.RecordFailure(key)
+	if b.Allow(key) {
+		t.Fatal("re-enabled breaker should trip on fresh failures")
+	}
+}
+
+// TestChannelCircuitBreakerConcurrentReload 在 -race 下验证热改与热路径读写无竞态。
+func TestChannelCircuitBreakerConcurrentReload(t *testing.T) {
+	b := NewChannelCircuitBreaker(ChannelCircuitBreakerConfig{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 500; i++ {
+			b.SetConfig(ChannelCircuitBreakerConfig{Window: time.Minute, MinRequests: i%10 + 1, FailureRatio: 0.5, OpenDuration: time.Second})
+			b.SetEnabled(i%2 == 0)
+		}
+	}()
+	for i := 0; i < 500; i++ {
+		b.Allow("1")
+		b.RecordFailure("1")
+		b.RecordSuccess("1")
+		b.HealthScore("1")
+		b.Available("1")
+	}
+	<-done
+}
+
 func TestIsChannelFaultError(t *testing.T) {
 	faulty := []adapter.UpstreamErrorCategory{
 		adapter.UpstreamErrorTimeout,

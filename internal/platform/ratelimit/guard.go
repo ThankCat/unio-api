@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/platform/failure"
@@ -74,35 +75,54 @@ type slidingStore interface {
 }
 
 // Guard 在 API Key 与 channel 两层执行 RPM/TPM/RPD 限流，并支持 TPM 预估占用后的实际用量回填。
+//
+// defaults/failOpen 可运行时热改（SetDefaults / SetFailOpen），用 atomic 存储：
+// 热路径每请求读取，无锁竞争；替换后下次判定即用新值。
 type Guard struct {
 	store    slidingStore
-	defaults DefaultLimits
-	failOpen bool
+	defaults atomic.Pointer[DefaultLimits]
+	failOpen atomic.Bool
 	logger   *slog.Logger
 }
 
 // NewGuard 创建限流 Guard。failOpen 为 true 时计数后端故障放行（仅记录告警），否则故障即拒绝。
 func NewGuard(store slidingStore, defaults DefaultLimits, failOpen bool, logger *slog.Logger) *Guard {
-	return &Guard{
-		store:    store,
-		defaults: defaults,
-		failOpen: failOpen,
-		logger:   logger,
+	g := &Guard{
+		store:  store,
+		logger: logger,
 	}
+	g.defaults.Store(&defaults)
+	g.failOpen.Store(failOpen)
+	return g
+}
+
+// SetDefaults 原子替换全局默认上限（运行时热改入口）。
+func (g *Guard) SetDefaults(defaults DefaultLimits) {
+	g.defaults.Store(&defaults)
+}
+
+// SetFailOpen 原子替换计数后端故障策略（运行时热改入口）。
+func (g *Guard) SetFailOpen(failOpen bool) {
+	g.failOpen.Store(failOpen)
+}
+
+// defaultLimits 返回当前全局默认上限快照。
+func (g *Guard) defaultLimits() DefaultLimits {
+	return *g.defaults.Load()
 }
 
 // AllowRouteUserRequest 检查「线路+用户」的 RPM 与 RPD（请求计数维度），任一超限即拒绝；
 // 返回 RPM 维度判定供响应头使用。同一用户在该线路下的所有 Key 共享同一计数桶（DEC-027）。
 func (g *Guard) AllowRouteUserRequest(ctx context.Context, routeID, userID int64, limits Limits) (Decision, error) {
 	subjectRPM := routeUserSubject(routeID, userID, DimensionRPM)
-	rpm := effectiveLimit(limits.RPM, g.defaults.RPM)
+	rpm := effectiveLimit(limits.RPM, g.defaultLimits().RPM)
 	rpmDecision, err := g.checkSubject(ctx, subjectRPM, DimensionRPM, rpm, rpmWindow, rpmBucket, 1, gateHard)
 	if err != nil || !rpmDecision.Allowed {
 		return rpmDecision, err
 	}
 
 	subjectRPD := routeUserSubject(routeID, userID, DimensionRPD)
-	rpd := effectiveLimit(limits.RPD, g.defaults.RPD)
+	rpd := effectiveLimit(limits.RPD, g.defaultLimits().RPD)
 	rpdDecision, err := g.checkSubject(ctx, subjectRPD, DimensionRPD, rpd, rpdWindow, rpdBucket, 1, gateHard)
 	if err != nil {
 		return rpdDecision, err
@@ -119,30 +139,30 @@ func (g *Guard) AllowRouteUserRequest(ctx context.Context, routeID, userID int64
 // 采用「准入门槛」（DEC-028）：只要窗口已用量未达上限即放行，本次预估无论多大都不挡——避免 Codex 每轮
 // 重发大缓存上下文时，单条保守预占自身 ≥ 上限而「一说话就 429」。占用仍按预估计入，结算回填退回缓存部分。
 func (g *Guard) AllowRouteUserTokens(ctx context.Context, routeID, userID int64, limits Limits, estTokens int64) (Decision, error) {
-	tpm := effectiveLimit(limits.TPM, g.defaults.TPM)
+	tpm := effectiveLimit(limits.TPM, g.defaultLimits().TPM)
 	return g.checkSubject(ctx, routeUserSubject(routeID, userID, DimensionTPM), DimensionTPM, tpm, tpmWindow, tpmBucket, nonNegative(estTokens), gateAdmit)
 }
 
 // AllowChannel 检查 channel 的 RPM/RPD/TPM，用于上游调用前；命中任一维度即拒绝（上层据此跳过该候选 fallback）。
 // RPM/RPD 用严格门槛；TPM 用准入门槛（同 AllowRouteUserTokens，单条大请求不因自身预估超限被跳过）。
 func (g *Guard) AllowChannel(ctx context.Context, channelID int64, limits Limits, estTokens int64) (Decision, error) {
-	rpm := effectiveLimit(limits.RPM, g.defaults.RPM)
+	rpm := effectiveLimit(limits.RPM, g.defaultLimits().RPM)
 	if decision, err := g.check(ctx, ScopeChannel, channelID, DimensionRPM, rpm, rpmWindow, rpmBucket, 1, gateHard); err != nil || !decision.Allowed {
 		return decision, err
 	}
 
-	rpd := effectiveLimit(limits.RPD, g.defaults.RPD)
+	rpd := effectiveLimit(limits.RPD, g.defaultLimits().RPD)
 	if decision, err := g.check(ctx, ScopeChannel, channelID, DimensionRPD, rpd, rpdWindow, rpdBucket, 1, gateHard); err != nil || !decision.Allowed {
 		return decision, err
 	}
 
-	tpm := effectiveLimit(limits.TPM, g.defaults.TPM)
+	tpm := effectiveLimit(limits.TPM, g.defaultLimits().TPM)
 	return g.check(ctx, ScopeChannel, channelID, DimensionTPM, tpm, tpmWindow, tpmBucket, nonNegative(estTokens), gateAdmit)
 }
 
 // TokensEnforced 报告某主体的 TPM 是否实际生效（>0），供调用方决定是否需要结算回填。
 func (g *Guard) TokensEnforced(limits Limits) bool {
-	return effectiveLimit(limits.TPM, g.defaults.TPM) > 0
+	return effectiveLimit(limits.TPM, g.defaultLimits().TPM) > 0
 }
 
 // BackfillRouteUserTokens 在结算拿到真实 token 用量后，按 (actual-est) 修正「线路+用户」的 TPM 计数（delta 可为负）。
@@ -216,7 +236,7 @@ func (g *Guard) checkSubject(ctx context.Context, subject, dim string, limit int
 
 // onStoreError 按 failOpen 策略处理计数后端故障。
 func (g *Guard) onStoreError(subject, dim string, err error) (Decision, error) {
-	if g.failOpen {
+	if g.failOpen.Load() {
 		if g.logger != nil {
 			args := []any{"subject", subject, "dimension", dim}
 			args = append(args, failure.LogArgs(err)...)

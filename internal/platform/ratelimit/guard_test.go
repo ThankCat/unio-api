@@ -256,3 +256,61 @@ func TestTokensEnforced(t *testing.T) {
 		t.Fatalf("override tpm 0 means unlimited, not enforced")
 	}
 }
+
+func TestGuardSetDefaultsTakesEffect(t *testing.T) {
+	store := newFakeStore()
+	guard := NewGuard(store, DefaultLimits{RPM: 1}, false, nil)
+
+	// 旧默认 RPM=1:第 2 次即拒。
+	if decision, _ := guard.AllowRouteUserRequest(context.Background(), 1, 7, Limits{}); !decision.Allowed {
+		t.Fatal("first request should pass under RPM=1")
+	}
+	if decision, _ := guard.AllowRouteUserRequest(context.Background(), 1, 7, Limits{}); decision.Allowed {
+		t.Fatal("second request should be denied under RPM=1")
+	}
+
+	// 热改默认 RPM=100:同一分钟内继续放行。
+	guard.SetDefaults(DefaultLimits{RPM: 100})
+	decision, err := guard.AllowRouteUserRequest(context.Background(), 1, 7, Limits{})
+	if err != nil || !decision.Allowed {
+		t.Fatalf("request should pass after hot reload to RPM=100: allowed=%v err=%v", decision.Allowed, err)
+	}
+	if decision.Limit != 100 {
+		t.Fatalf("decision limit = %d, want 100", decision.Limit)
+	}
+}
+
+func TestGuardSetFailOpenTakesEffect(t *testing.T) {
+	store := newFakeStore()
+	store.err = errors.New("redis down")
+	guard := NewGuard(store, DefaultLimits{RPM: 10}, false, nil)
+
+	if _, err := guard.AllowRouteUserRequest(context.Background(), 1, 9, Limits{}); err == nil {
+		t.Fatal("fail-closed should error on store failure")
+	}
+
+	guard.SetFailOpen(true)
+	decision, err := guard.AllowRouteUserRequest(context.Background(), 1, 9, Limits{})
+	if err != nil || !decision.Allowed {
+		t.Fatalf("fail-open after hot reload should allow: allowed=%v err=%v", decision.Allowed, err)
+	}
+}
+
+// TestGuardConcurrentReload 在 -race 下验证热改与热路径读取无竞态。
+// fakeStore 本身非线程安全,这里仅并发读判定(不同 subject 竞争 map 写由 -race 检出属预期外),
+// 故读侧固定用 limit 覆盖(不触发 store 写)之外的默认读取路径:TokensEnforced 只读 defaults。
+func TestGuardConcurrentReload(t *testing.T) {
+	guard := NewGuard(newFakeStore(), DefaultLimits{RPM: 10, TPM: 10}, false, nil)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 1000; i++ {
+			guard.SetDefaults(DefaultLimits{RPM: int64(i), TPM: int64(i)})
+			guard.SetFailOpen(i%2 == 0)
+		}
+	}()
+	for i := 0; i < 1000; i++ {
+		guard.TokensEnforced(Limits{})
+	}
+	<-done
+}

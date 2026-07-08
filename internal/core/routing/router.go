@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -128,10 +129,13 @@ type resolvedRoute struct {
 }
 
 // Router 负责根据 project 和 requested model 选择可用 channel。
+//
+// defaultTimeout 可运行时热改（SetDefaultTimeout），用 atomic 存储（纳秒）：
+// 路由热路径每次候选构造都会读取，无锁竞争。
 type Router struct {
-	store          Store
-	defaultTimeout time.Duration
-	logger         *slog.Logger
+	store               Store
+	defaultTimeoutNanos atomic.Int64
+	logger              *slog.Logger
 }
 
 // Option 调整 Router 的可选依赖（如日志）。
@@ -148,19 +152,29 @@ func WithLogger(logger *slog.Logger) Option {
 
 // NewRouter 创建 routing router。
 func NewRouter(store Store, defaultTimeout time.Duration, opts ...Option) *Router {
-	if defaultTimeout <= 0 {
-		defaultTimeout = defaultChannelTimeout
-	}
-
 	r := &Router{
-		store:          store,
-		defaultTimeout: defaultTimeout,
-		logger:         slog.Default(),
+		store:  store,
+		logger: slog.Default(),
 	}
+	r.SetDefaultTimeout(defaultTimeout)
 	for _, opt := range opts {
 		opt(r)
 	}
 	return r
+}
+
+// SetDefaultTimeout 原子替换默认渠道超时（运行时热改入口）；<=0 兜底为内置 30s。
+// 仅影响之后的候选构造；渠道行上的 timeout_ms 始终优先。
+func (r *Router) SetDefaultTimeout(d time.Duration) {
+	if d <= 0 {
+		d = defaultChannelTimeout
+	}
+	r.defaultTimeoutNanos.Store(int64(d))
+}
+
+// defaultTimeout 返回当前生效的默认渠道超时。
+func (r *Router) defaultTimeout() time.Duration {
+	return time.Duration(r.defaultTimeoutNanos.Load())
 }
 
 // PlanChat 为 chat completion 请求生成有序候选计划。
@@ -373,7 +387,7 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		)
 	}
 
-	timeout := r.defaultTimeout
+	timeout := r.defaultTimeout()
 	if row.TimeoutMs.Valid {
 		timeout = time.Duration(row.TimeoutMs.Int32) * time.Millisecond
 	}

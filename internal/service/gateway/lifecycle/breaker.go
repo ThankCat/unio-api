@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
@@ -77,15 +78,21 @@ type channelBreakerState struct {
 //     跨实例共享健康和后台手动恢复属于阶段 13 admin 能力。
 //   - 使用固定时间窗统计错误率，窗口过期清零；实现简单、足够保护上游。
 //   - half-open 通过 inFlight 保证同一时刻只放行一个探测请求。
+//   - 总开关与阈值均可运行时热改（SetEnabled / SetConfig）：实例始终构造，
+//     禁用时放行全部且不记状态，因而「运行期启/停熔断」无需重建实例。
 type ChannelCircuitBreaker struct {
-	cfg   ChannelCircuitBreakerConfig
-	now   func() time.Time
+	now func() time.Time
+
+	// disabled 用反义使零值即「启用」，兼容既有直接构造路径。
+	disabled atomic.Bool
+
 	mu    sync.Mutex
+	cfg   ChannelCircuitBreakerConfig
 	items map[string]*channelBreakerState
 }
 
-// NewChannelCircuitBreaker 创建熔断器，并对非法/缺省阈值做保守兜底。
-func NewChannelCircuitBreaker(cfg ChannelCircuitBreakerConfig) *ChannelCircuitBreaker {
+// normalizeChannelCircuitBreakerConfig 对非法/缺省阈值做保守兜底（构造与热改共用）。
+func normalizeChannelCircuitBreakerConfig(cfg ChannelCircuitBreakerConfig) ChannelCircuitBreakerConfig {
 	if cfg.Window <= 0 {
 		cfg.Window = 30 * time.Second
 	}
@@ -98,16 +105,48 @@ func NewChannelCircuitBreaker(cfg ChannelCircuitBreakerConfig) *ChannelCircuitBr
 	if cfg.OpenDuration <= 0 {
 		cfg.OpenDuration = 30 * time.Second
 	}
+	return cfg
+}
 
+// NewChannelCircuitBreaker 创建熔断器（默认启用），并对非法/缺省阈值做保守兜底。
+func NewChannelCircuitBreaker(cfg ChannelCircuitBreakerConfig) *ChannelCircuitBreaker {
 	return &ChannelCircuitBreaker{
-		cfg:   cfg,
+		cfg:   normalizeChannelCircuitBreakerConfig(cfg),
 		now:   time.Now,
 		items: make(map[string]*channelBreakerState),
 	}
 }
 
+// SetConfig 原子替换熔断阈值（运行时热改入口）；非法/缺省字段沿用与构造相同的保守兜底。
+// 只替换阈值，不动各 channel 进行中的窗口计数与熔断状态；下次判定即用新阈值。
+func (b *ChannelCircuitBreaker) SetConfig(cfg ChannelCircuitBreakerConfig) {
+	cfg = normalizeChannelCircuitBreakerConfig(cfg)
+	b.mu.Lock()
+	b.cfg = cfg
+	b.mu.Unlock()
+}
+
+// SetEnabled 热改熔断器总开关。禁用时 Allow/Available 恒放行、HealthScore 恒 0、不记状态，
+// 并在「启用→禁用」边沿清空全部熔断状态（重新启用从干净状态起步，避免陈旧窗口误判）。
+func (b *ChannelCircuitBreaker) SetEnabled(enabled bool) {
+	wasDisabled := b.disabled.Swap(!enabled)
+	if !enabled && !wasDisabled {
+		b.mu.Lock()
+		b.items = make(map[string]*channelBreakerState)
+		b.mu.Unlock()
+	}
+}
+
+// Enabled 报告熔断器当前是否启用（供观测）。
+func (b *ChannelCircuitBreaker) Enabled() bool {
+	return !b.disabled.Load()
+}
+
 // Available 只读判断 channel 是否可进入 fallback plan，不推进熔断状态。
 func (b *ChannelCircuitBreaker) Available(channelKey string) bool {
+	if b.disabled.Load() {
+		return true
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -124,6 +163,9 @@ func (b *ChannelCircuitBreaker) Available(channelKey string) bool {
 
 // HealthScore 实现 ChannelBreaker：只读返回近窗口失败率（越小越健康），不推进熔断状态。
 func (b *ChannelCircuitBreaker) HealthScore(channelKey string) float64 {
+	if b.disabled.Load() {
+		return 0
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -149,6 +191,9 @@ func (b *ChannelCircuitBreaker) HealthScore(channelKey string) float64 {
 
 // Allow 实现 ChannelBreaker。
 func (b *ChannelCircuitBreaker) Allow(channelKey string) bool {
+	if b.disabled.Load() {
+		return true
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -177,6 +222,9 @@ func (b *ChannelCircuitBreaker) Allow(channelKey string) bool {
 
 // RecordSuccess 实现 ChannelBreaker。
 func (b *ChannelCircuitBreaker) RecordSuccess(channelKey string) {
+	if b.disabled.Load() {
+		return
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -193,6 +241,9 @@ func (b *ChannelCircuitBreaker) RecordSuccess(channelKey string) {
 
 // RecordFailure 实现 ChannelBreaker。
 func (b *ChannelCircuitBreaker) RecordFailure(channelKey string) {
+	if b.disabled.Load() {
+		return
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

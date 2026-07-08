@@ -108,38 +108,6 @@ func TestLoadInvalidTracingSampleRatio(t *testing.T) {
 	assertConfigFailure(t, err, failure.CodeConfigInvalid)
 }
 
-func TestLoadCircuitBreakerDefaults(t *testing.T) {
-	t.Setenv("CIRCUIT_BREAKER_ENABLED", "")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-
-	if !cfg.CircuitBreaker.Enabled {
-		t.Fatal("expected circuit breaker enabled by default")
-	}
-	if cfg.CircuitBreaker.MinRequests != 20 {
-		t.Fatalf("expected default min requests 20, got %d", cfg.CircuitBreaker.MinRequests)
-	}
-	if cfg.CircuitBreaker.FailureRatio != 0.5 {
-		t.Fatalf("expected default failure ratio 0.5, got %v", cfg.CircuitBreaker.FailureRatio)
-	}
-}
-
-func TestLoadCircuitBreakerDisabledFromEnv(t *testing.T) {
-	t.Setenv("CIRCUIT_BREAKER_ENABLED", "false")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-
-	if cfg.CircuitBreaker.Enabled {
-		t.Fatal("expected circuit breaker disabled from env")
-	}
-}
-
 func TestLoadLogLevelDebug(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "debug")
 
@@ -238,18 +206,6 @@ func TestLoadInfrastructureDefaults(t *testing.T) {
 	if cfg.Redis.KeyNamespace != "unio:dev" {
 		t.Fatalf("expected redis key namespace %q, got %q", "unio:dev", cfg.Redis.KeyNamespace)
 	}
-	if cfg.RateLimit.DefaultRPM != 60 {
-		t.Fatalf("expected rate limit default rpm %d, got %d", 60, cfg.RateLimit.DefaultRPM)
-	}
-	if cfg.RateLimit.DefaultTPM != 0 {
-		t.Fatalf("expected rate limit default tpm %d, got %d", 0, cfg.RateLimit.DefaultTPM)
-	}
-	if cfg.RateLimit.DefaultRPD != 0 {
-		t.Fatalf("expected rate limit default rpd %d, got %d", 0, cfg.RateLimit.DefaultRPD)
-	}
-	if cfg.RateLimit.FailurePolicy != "fail_closed" {
-		t.Fatalf("expected rate limit failure policy %q, got %q", "fail_closed", cfg.RateLimit.FailurePolicy)
-	}
 	if cfg.Worker.StartupTimeout != 5*time.Second {
 		t.Fatalf("expected worker startup timeout %v, got %v", 5*time.Second, cfg.Worker.StartupTimeout)
 	}
@@ -300,10 +256,6 @@ func TestLoadInfrastructureOverrides(t *testing.T) {
 	t.Setenv("REDIS_MIN_RETRY_BACKOFF", "10ms")
 	t.Setenv("REDIS_MAX_RETRY_BACKOFF", "1s")
 	t.Setenv("REDIS_KEY_NAMESPACE", "unio:test")
-	t.Setenv("RATE_LIMIT_DEFAULT_RPM", "120")
-	t.Setenv("RATE_LIMIT_DEFAULT_TPM", "90000")
-	t.Setenv("RATE_LIMIT_DEFAULT_RPD", "5000")
-	t.Setenv("RATE_LIMIT_FAILURE_POLICY", "fail_open")
 	t.Setenv("WORKER_STARTUP_TIMEOUT", "9s")
 	t.Setenv("WORKER_RUNNER_IDLE_INTERVAL", "2s")
 	t.Setenv("WORKER_SETTLEMENT_RECOVERY_LOCK_TTL", "45s")
@@ -381,18 +333,6 @@ func TestLoadInfrastructureOverrides(t *testing.T) {
 	if cfg.Redis.KeyNamespace != "unio:test" {
 		t.Fatalf("expected redis key namespace %q, got %q", "unio:test", cfg.Redis.KeyNamespace)
 	}
-	if cfg.RateLimit.DefaultRPM != 120 {
-		t.Fatalf("expected rate limit default rpm %d, got %d", 120, cfg.RateLimit.DefaultRPM)
-	}
-	if cfg.RateLimit.DefaultTPM != 90000 {
-		t.Fatalf("expected rate limit default tpm %d, got %d", 90000, cfg.RateLimit.DefaultTPM)
-	}
-	if cfg.RateLimit.DefaultRPD != 5000 {
-		t.Fatalf("expected rate limit default rpd %d, got %d", 5000, cfg.RateLimit.DefaultRPD)
-	}
-	if cfg.RateLimit.FailurePolicy != "fail_open" {
-		t.Fatalf("expected rate limit failure policy %q, got %q", "fail_open", cfg.RateLimit.FailurePolicy)
-	}
 	if cfg.Worker.StartupTimeout != 9*time.Second {
 		t.Fatalf("expected worker startup timeout %v, got %v", 9*time.Second, cfg.Worker.StartupTimeout)
 	}
@@ -467,42 +407,6 @@ func TestLoadInvalidRedisPoolSize(t *testing.T) {
 	assertConfigFailure(t, err, failure.CodeConfigInvalid)
 }
 
-func TestLoadInvalidRateLimitDefaultRPM(t *testing.T) {
-	clearInfrastructureEnv(t)
-
-	t.Setenv("RATE_LIMIT_DEFAULT_RPM", "not-an-int64")
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	assertConfigFailure(t, err, failure.CodeConfigInvalid)
-}
-
-func TestLoadNegativeRateLimitDefaultTPM(t *testing.T) {
-	clearInfrastructureEnv(t)
-
-	t.Setenv("RATE_LIMIT_DEFAULT_TPM", "-1")
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	assertConfigFailure(t, err, failure.CodeConfigInvalid)
-}
-
-func TestLoadInvalidRateLimitFailurePolicy(t *testing.T) {
-	clearInfrastructureEnv(t)
-
-	t.Setenv("RATE_LIMIT_FAILURE_POLICY", "unknown")
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	assertConfigFailure(t, err, failure.CodeConfigUnsupported)
-}
-
 func assertConfigFailure(t *testing.T, err error, wantCode failure.Code) {
 	t.Helper()
 
@@ -548,10 +452,6 @@ func clearInfrastructureEnv(t *testing.T) {
 		"REDIS_MIN_RETRY_BACKOFF",
 		"REDIS_MAX_RETRY_BACKOFF",
 		"REDIS_KEY_NAMESPACE",
-		"RATE_LIMIT_DEFAULT_RPM",
-		"RATE_LIMIT_DEFAULT_TPM",
-		"RATE_LIMIT_DEFAULT_RPD",
-		"RATE_LIMIT_FAILURE_POLICY",
 		"WORKER_STARTUP_TIMEOUT",
 		"WORKER_RUNNER_IDLE_INTERVAL",
 		"WORKER_SETTLEMENT_RECOVERY_LOCK_TTL",

@@ -13,6 +13,7 @@ package sdkfixture
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -31,6 +32,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/billing"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/service/appsettings"
 )
 
 // 默认值。
@@ -241,6 +243,11 @@ func Setup(t *testing.T, opts SetupOptions) *Fixture {
 
 	cfg := blackboxConfig()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// 运行时配置(app_settings)预置:限流放宽 + fail_open(避免 Redis 抖动挂黑盒)、熔断关闭
+	// (黑盒不验熔断)。经 SettingsStore.Set 写 DB+Redis,gateway 启动读到的即这些值;
+	// 启动 seed 是 DO NOTHING,不会覆盖。
+	f.seedRuntimeSettings(t, cfg)
 
 	app, err := bootstrap.NewGatewayServerApp(ctx, bootstrap.GatewayServerAppDeps{
 		Logger: logger,
@@ -526,19 +533,11 @@ func (f *Fixture) seed(t *testing.T, opts SetupOptions, upstreamBaseURL string, 
 }
 
 // blackboxConfig 返回 fixture 使用的最小可用 config。
-//
-// 重点：
-//   - CredentialMasterKey 使用 credential.FixedTestMasterKeyBase64，与 seed 加密路径一致。
-//   - RateLimit fail_open，避免偶发 Redis 抖动让黑盒挂掉。
-//   - CircuitBreaker 关闭，黑盒不验熔断（熔断有专门单测）。
+// 限流/熔断已迁移为运行时配置,由 seedRuntimeSettings 写入 app_settings(见 Setup)。
 func blackboxConfig() config.Config {
 	return config.Config{
 		Redis: config.RedisConfig{
 			KeyNamespace: defaultRedisNamespace,
-		},
-		RateLimit: config.RateLimitConfig{
-			DefaultRPM:    10000,
-			FailurePolicy: "fail_open",
 		},
 		Worker: config.WorkerConfig{
 			StartupTimeout:                  5 * time.Second,
@@ -547,9 +546,42 @@ func blackboxConfig() config.Config {
 			SettlementRecoveryInitialDelay:  30 * time.Second,
 			SettlementRecoverySettleTimeout: 10 * time.Second,
 		},
-		CircuitBreaker: config.CircuitBreakerConfig{
-			Enabled: false,
-		},
+	}
+}
+
+// seedRuntimeSettings 在 gateway app 构建前写入黑盒需要的运行时配置:
+//   - 限流默认 RPM=10000 + fail_open,避免偶发 Redis 抖动让黑盒挂掉;
+//   - 熔断关闭,黑盒不验熔断(熔断有专门单测);
+//   - 429 冷却关闭:对齐迁移前 blackboxConfig 未设 Gateway 配置的零值行为——SDK 对 429 会自动
+//     重试,若冷却开启,重试会因唯一渠道在冷却中而拿到 503,破坏「上游 429→客户 429」断言
+//     (冷却行为有专门单测)。
+//
+// 隔离原则:**只写 Redis(unio:blackbox 命名空间),绝不写 DB**。app_settings 表是全局单行,
+// DATABASE_URL 常指向开发库,若经 SettingsStore.Set 写透 DB 会把黑盒专用值(如熔断关闭)持久
+// 覆盖运维真实配置。SettingsStore 读序为 本地→Redis→DB,黑盒命名空间的 Redis 命中即生效,
+// 与 dev(unio:dev)互不可见;gateway 启动初值与 applier 周期读取走同一路径,行为一致。
+func (f *Fixture) seedRuntimeSettings(t *testing.T, cfg config.Config) {
+	t.Helper()
+
+	values := map[string]string{
+		appsettings.GatewayRateLimitDefaultsKey: `{"rpm":10000,"tpm":0,"rpd":0,"failure_policy":"fail_open"}`,
+		appsettings.GatewayCircuitBreakerKey:    `{"enabled":false,"window_ms":30000,"min_requests":20,"failure_ratio":0.5,"open_duration_ms":30000}`,
+		appsettings.GatewayChannelCooldownKey:   `{"cooldown_ms":0,"cap_ms":0}`,
+	}
+	registry := appsettings.DefaultRegistry()
+	for key, value := range values {
+		def, ok := registry.Get(key)
+		if !ok {
+			t.Fatalf("seed runtime settings: key %q not registered", key)
+		}
+		// 用注册表校验器把关,避免黑盒 fixture 里的手写 JSON 与 codec 脱节。
+		if err := def.Validate(json.RawMessage(value)); err != nil {
+			t.Fatalf("seed runtime settings: %s invalid: %v", key, err)
+		}
+		redisKey := fmt.Sprintf("%s:settings:%s", cfg.Redis.KeyNamespace, key)
+		if err := f.redisClient.Set(f.ctx, redisKey, value, 0).Err(); err != nil {
+			t.Fatalf("seed runtime settings: redis set %s: %v", key, err)
+		}
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/bootstrap"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-api/internal/platform/redis"
 	"github.com/ThankCat/unio-api/internal/platform/store"
 )
 
@@ -40,11 +41,21 @@ func main() {
 	defer pgPool.Close()
 	logger.Info("postgres connected")
 
+	// Redis：运行时配置中枢(app_settings 实时缓存)需要;与 gateway 共享同一 Redis 实现跨进程秒级生效。
+	redisClient, err := redis.OpenRedis(startupCtx, cfg.Redis)
+	if err != nil {
+		logger.Error("open redis failed", failure.LogArgs(err)...)
+		os.Exit(1)
+	}
+	defer redisClient.Close()
+	logger.Info("redis connected", "addr", cfg.Redis.Addr, "db", cfg.Redis.DB)
+
 	// APP：装配时校验 ADMIN_API_TOKEN 与 CREDENTIAL_MASTER_KEY，缺失/非法在此启动期失败。
 	app, err := bootstrap.NewAdminServerApp(startupCtx, bootstrap.AdminServerAppDeps{
 		Logger: logger,
 		Config: cfg,
 		DB:     pgPool,
+		Redis:  redisClient,
 	})
 	if err != nil {
 		logger.Error("admin server app failed", failure.LogArgs(err)...)

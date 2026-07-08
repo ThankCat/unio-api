@@ -30,9 +30,10 @@ type ApiKey struct {
 }
 
 type AppSetting struct {
-	Key       string
-	Value     []byte
-	UpdatedAt pgtype.Timestamptz
+	Key         string
+	Value       []byte
+	UpdatedAt   pgtype.Timestamptz
+	Description string
 }
 
 type CapabilityKey struct {

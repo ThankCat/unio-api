@@ -7,6 +7,8 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const getAppSetting = `-- name: GetAppSetting :one
@@ -25,21 +27,82 @@ func (q *Queries) GetAppSetting(ctx context.Context, key string) ([]byte, error)
 	return value, err
 }
 
+const listAppSettings = `-- name: ListAppSettings :many
+SELECT key, value, description, updated_at
+FROM app_settings
+ORDER BY key
+`
+
+type ListAppSettingsRow struct {
+	Key         string
+	Value       []byte
+	Description string
+	UpdatedAt   pgtype.Timestamptz
+}
+
+// ListAppSettings 列出全部已持久化设置(供 admin 面板对照展示)。
+func (q *Queries) ListAppSettings(ctx context.Context) ([]ListAppSettingsRow, error) {
+	rows, err := q.db.Query(ctx, listAppSettings)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAppSettingsRow
+	for rows.Next() {
+		var i ListAppSettingsRow
+		if err := rows.Scan(
+			&i.Key,
+			&i.Value,
+			&i.Description,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const seedAppSetting = `-- name: SeedAppSetting :exec
+INSERT INTO app_settings (key, value, description, updated_at)
+VALUES ($1, $2, $3, now())
+ON CONFLICT (key) DO NOTHING
+`
+
+type SeedAppSettingParams struct {
+	Key         string
+	Value       []byte
+	Description string
+}
+
+// SeedAppSetting 仅在 key 缺行时写入注册表默认值(启动 seed 用)。
+// 与 UpsertAppSetting 的关键区别:DO NOTHING——绝不覆盖运维已改过的值;幂等且并发安全,
+// gateway/admin 启动都会调用。
+func (q *Queries) SeedAppSetting(ctx context.Context, arg SeedAppSettingParams) error {
+	_, err := q.db.Exec(ctx, seedAppSetting, arg.Key, arg.Value, arg.Description)
+	return err
+}
+
 const upsertAppSetting = `-- name: UpsertAppSetting :exec
-INSERT INTO app_settings (key, value, updated_at)
-VALUES ($1, $2, now())
+INSERT INTO app_settings (key, value, description, updated_at)
+VALUES ($1, $2, $3, now())
 ON CONFLICT (key) DO UPDATE
 SET value = EXCLUDED.value,
+    description = EXCLUDED.description,
     updated_at = now()
 `
 
 type UpsertAppSettingParams struct {
-	Key   string
-	Value []byte
+	Key         string
+	Value       []byte
+	Description string
 }
 
-// UpsertAppSetting 写入/覆盖设置内容,并刷新 updated_at。
+// UpsertAppSetting 写入/覆盖设置内容与说明,并刷新 updated_at。
 func (q *Queries) UpsertAppSetting(ctx context.Context, arg UpsertAppSettingParams) error {
-	_, err := q.db.Exec(ctx, upsertAppSetting, arg.Key, arg.Value)
+	_, err := q.db.Exec(ctx, upsertAppSetting, arg.Key, arg.Value, arg.Description)
 	return err
 }
