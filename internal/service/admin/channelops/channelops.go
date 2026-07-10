@@ -13,11 +13,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-api/internal/service/admin/opsutil"
-)
-
-const (
-	healthyThreshold  = 0.95
-	degradedThreshold = 0.80
+	"github.com/ThankCat/unio-api/internal/service/appsettings"
 )
 
 // Store 是渠道运维聚合所需的只读存储能力（由 *sqlc.Queries 满足）。
@@ -42,11 +38,19 @@ type Store interface {
 // Service 提供渠道运维只读聚合。
 type Service struct {
 	store Store
+	// settings 供每请求现读健康分桶阈值(admin_backend.channel_health_thresholds);
+	// nil(单测)回代码默认。
+	settings *appsettings.SettingsStore
 }
 
 // NewService 创建渠道运维聚合服务。
-func NewService(store Store) *Service {
-	return &Service{store: store}
+func NewService(store Store, settings *appsettings.SettingsStore) *Service {
+	return &Service{store: store, settings: settings}
+}
+
+// healthThresholds 读取当前生效的分桶阈值。
+func (s *Service) healthThresholds(ctx context.Context) appsettings.ChannelHealthThresholds {
+	return appsettings.AdminBackendChannelHealthThresholds(ctx, s.settings)
 }
 
 // HealthCounts 是健康四档计数。
@@ -205,7 +209,13 @@ func (s *Service) Summary(ctx context.Context, from, to time.Time) (Summary, err
 	if err != nil {
 		return Summary{}, storeFailed(err, "aggregate channel throughput")
 	}
-	health, err := s.store.ChannelsOpsHealthDistribution(ctx, sqlc.ChannelsOpsHealthDistributionParams{FromTime: fromTS, ToTime: toTS})
+	th := s.healthThresholds(ctx)
+	health, err := s.store.ChannelsOpsHealthDistribution(ctx, sqlc.ChannelsOpsHealthDistributionParams{
+		FromTime:     fromTS,
+		ToTime:       toTS,
+		HealthyRate:  th.HealthyRate,
+		DegradedRate: th.DegradedRate,
+	})
 	if err != nil {
 		return Summary{}, storeFailed(err, "aggregate channel health")
 	}
@@ -275,6 +285,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 		return nil, 0, storeFailed(err, "count channel ops table")
 	}
 
+	th := s.healthThresholds(ctx)
 	out := make([]Row, 0, len(rows))
 	for _, r := range rows {
 		row := Row{
@@ -296,7 +307,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 				r.LatencySample, r.AttemptSucceeded,
 			),
-			HealthBucket:      healthBucket(r.AttemptSucceeded, r.AttemptTotal),
+			HealthBucket:      opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal, th.HealthyRate, th.DegradedRate),
 			BoundModels:       r.BoundModels,
 			BoundRoutes:       r.BoundRoutes,
 			RecentErrorCode:   textValue(r.RecentErrorCode),
@@ -452,21 +463,6 @@ func (s *Service) Routes(ctx context.Context, channelID int64) ([]RouteRow, erro
 		})
 	}
 	return out, nil
-}
-
-func healthBucket(succeeded, total int64) string {
-	if total == 0 {
-		return "no_data"
-	}
-	rate := float64(succeeded) / float64(total)
-	switch {
-	case rate >= healthyThreshold:
-		return "healthy"
-	case rate >= degradedThreshold:
-		return "degraded"
-	default:
-		return "unhealthy"
-	}
 }
 
 func tsNarg(t time.Time) pgtype.Timestamptz {

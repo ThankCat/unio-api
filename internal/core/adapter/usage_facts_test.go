@@ -31,6 +31,32 @@ func TestChatUsageToUsageFactsSplitsCacheAndMarksCacheWriteNotApplicable(t *test
 	}
 }
 
+func TestChatUsageToUsageFactsSplitsCacheWriteIntoThirtyMinuteBucket(t *testing.T) {
+	// GPT-5.6+：prompt=100 中 cached=20（读）、cache_write=30（写，1.25x），余 50 为纯未缓存。
+	facts := ChatUsage{
+		PromptTokens:     100,
+		CompletionTokens: 40,
+		TotalTokens:      140,
+		CachedTokens:     20,
+		CacheWriteTokens: 30,
+		ReasoningTokens:  5,
+	}.ToUsageFacts()
+
+	// uncached 必须扣掉 cache_write，避免写入 token 被同时按 1x 与 1.25x 双重计费。
+	assertKnownToken(t, "uncached_input", facts.UncachedInputTokens, 50)
+	assertKnownToken(t, "cache_read_input", facts.CacheReadInputTokens, 20)
+	assertKnownToken(t, "cache_write_30m", facts.CacheWrite30mInputTokens, 30)
+	assertKnownToken(t, "output_total", facts.OutputTokensTotal, 40)
+
+	// OpenAI 无 Anthropic 式 5m/1h 分档。
+	if facts.CacheWrite5mInputTokens.State != usage.CountNotApplicable {
+		t.Fatalf("cache_write_5m: expected not_applicable, got %q", facts.CacheWrite5mInputTokens.State)
+	}
+	if facts.CacheWrite1hInputTokens.State != usage.CountNotApplicable {
+		t.Fatalf("cache_write_1h: expected not_applicable, got %q", facts.CacheWrite1hInputTokens.State)
+	}
+}
+
 func TestChatUsageToUsageFactsHandlesNoCacheNoReasoning(t *testing.T) {
 	facts := ChatUsage{
 		PromptTokens:     10,

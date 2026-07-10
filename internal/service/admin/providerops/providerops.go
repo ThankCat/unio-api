@@ -8,6 +8,7 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-api/internal/service/admin/opsutil"
+	"github.com/ThankCat/unio-api/internal/service/appsettings"
 )
 
 // Store 是服务商运维聚合所需的只读存储能力（由 *sqlc.Queries 满足）。
@@ -27,11 +28,19 @@ type Store interface {
 // Service 提供服务商运维只读聚合。
 type Service struct {
 	store Store
+	// settings 供每请求现读健康分桶阈值(admin_backend.channel_health_thresholds);
+	// nil(单测)回代码默认。
+	settings *appsettings.SettingsStore
 }
 
 // NewService 创建服务商运维聚合服务。
-func NewService(store Store) *Service {
-	return &Service{store: store}
+func NewService(store Store, settings *appsettings.SettingsStore) *Service {
+	return &Service{store: store, settings: settings}
+}
+
+// healthThresholds 读取当前生效的分桶阈值。
+func (s *Service) healthThresholds(ctx context.Context) appsettings.ChannelHealthThresholds {
+	return appsettings.AdminBackendChannelHealthThresholds(ctx, s.settings)
 }
 
 // Row 是服务商运维主表行（静态元数据；指标在详情页聚合）。
@@ -167,6 +176,7 @@ func (s *Service) Detail(ctx context.Context, providerID int64, from, to time.Ti
 	if err != nil {
 		return Detail{}, opsutil.StoreFailed(err, "provider ops detail")
 	}
+	th := s.healthThresholds(ctx)
 	revenue := opsutil.NumericString(r.RevenueUsd)
 	cost := opsutil.NumericString(r.CostUsd)
 	return Detail{
@@ -180,7 +190,7 @@ func (s *Service) Detail(ctx context.Context, providerID int64, from, to time.Ti
 			r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 			r.LatencySample, r.AttemptSucceeded,
 		),
-		HealthBucket: opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal),
+		HealthBucket: opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal, th.HealthyRate, th.DegradedRate),
 		Tokens:       r.TokensTotal,
 		RevenueUSD:   revenue,
 		CostUSD:      cost,
@@ -234,6 +244,7 @@ func (s *Service) Channels(ctx context.Context, providerID int64, from, to time.
 	if err != nil {
 		return nil, opsutil.StoreFailed(err, "provider ops channels")
 	}
+	th := s.healthThresholds(ctx)
 	out := make([]ChannelRow, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, ChannelRow{
@@ -248,7 +259,7 @@ func (s *Service) Channels(ctx context.Context, providerID int64, from, to time.
 				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 				r.LatencySample, r.AttemptSucceeded,
 			),
-			HealthBucket: opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal),
+			HealthBucket: opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal, th.HealthyRate, th.DegradedRate),
 		})
 	}
 	return out, nil

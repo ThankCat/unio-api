@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// TestGatewaySettingsRegistered 验证 6 组 gateway 配置全部注册且默认值可通过自身校验。
+// TestGatewaySettingsRegistered 验证 gateway 配置全部注册且默认值可通过自身校验。
 func TestGatewaySettingsRegistered(t *testing.T) {
 	reg := DefaultRegistry()
 	keys := []string{
@@ -16,6 +16,8 @@ func TestGatewaySettingsRegistered(t *testing.T) {
 		GatewayChannelCooldownKey,
 		GatewayCredential401ThresholdKey,
 		GatewayDefaultChannelTimeoutKey,
+		GatewayFailureCooldownKey,
+		GatewayConcurrencyDefaultsKey,
 	}
 	for _, key := range keys {
 		def, ok := reg.Get(key)
@@ -39,10 +41,44 @@ func TestGatewaySettingsRegistered(t *testing.T) {
 
 // TestDurationKeysCarryMsSuffix 时长类标量 key 必须带 _ms 后缀,与值单位(毫秒)自证一致。
 func TestDurationKeysCarryMsSuffix(t *testing.T) {
-	for _, key := range []string{GatewayStreamIdleTimeoutKey, GatewayDefaultChannelTimeoutKey} {
+	for _, key := range []string{GatewayStreamIdleTimeoutKey, GatewayDefaultChannelTimeoutKey, GatewayFailureCooldownKey} {
 		if !strings.HasSuffix(key, "_ms") {
 			t.Errorf("duration key %q must end with _ms", key)
 		}
+	}
+}
+
+func TestFailureCooldownSettingDecoding(t *testing.T) {
+	// 0=关闭 合法；负数非法；默认 5000ms。
+	if d, err := DecodeNonNegativeMsSetting([]byte(`0`)); err != nil || d != 0 {
+		t.Fatalf("zero should decode as disabled: d=%v err=%v", d, err)
+	}
+	if _, err := DecodeNonNegativeMsSetting([]byte(`-1`)); err == nil {
+		t.Fatal("negative must be rejected")
+	}
+	if d, err := DecodeNonNegativeMsSetting(encodeMsSetting(DefaultFailureCooldownSetting)); err != nil || d != 5*time.Second {
+		t.Fatalf("default failure cooldown = %v (err=%v), want 5s", d, err)
+	}
+}
+
+func TestConcurrencyDefaultsSettingsRoundTrip(t *testing.T) {
+	want := ConcurrencyDefaultsSettings{KeyLimit: 5, ChannelLimit: 12}
+	got, err := DecodeConcurrencyDefaultsSettings(encodeConcurrencyDefaultsSettings(want))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got != want {
+		t.Fatalf("round trip mismatch: got %+v want %+v", got, want)
+	}
+
+	if _, err := DecodeConcurrencyDefaultsSettings([]byte(`{"key_limit":-1,"channel_limit":0}`)); err == nil {
+		t.Fatal("negative key_limit must be rejected")
+	}
+	if _, err := DecodeConcurrencyDefaultsSettings([]byte(`{"key_limit":0,"channel_limit":0,"bogus":1}`)); err == nil {
+		t.Fatal("unknown field must be rejected")
+	}
+	if def := DefaultConcurrencyDefaultsSettings(); def.KeyLimit != 0 || def.ChannelLimit != 0 {
+		t.Fatalf("default must be disabled (0/0), got %+v", def)
 	}
 }
 

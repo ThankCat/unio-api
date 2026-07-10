@@ -100,6 +100,61 @@ func TestSortCandidatesByModeRandomShufflesKeepingSet(t *testing.T) {
 	}
 }
 
+// TestPrepareCandidatesDemotesFailureCooledChannels 验证失败软冷却 demote（DEC-029）：
+// 软冷却中的候选被稳定移到末尾（不剔除）；全部软冷却时顺序不变；唯一候选不受影响。
+func TestPrepareCandidatesDemotesFailureCooledChannels(t *testing.T) {
+	executor := NewExecutor(candidateCapabilityRegistry{
+		allowed: map[int64]bool{1: true, 2: true, 3: true},
+	})
+
+	prepare := func(cooled map[int64]bool, in []routing.ChatRouteCandidate) []int64 {
+		plan, err := executor.PrepareCandidates(context.Background(), PrepareCandidatesParams{
+			Protocol:   "openai",
+			Candidates: in,
+			Capabilities: []AdapterCapability{
+				AdapterCapabilityNonStream,
+				AdapterCapabilityInputTokenizer,
+			},
+			FailurePreferred: func(c routing.ChatRouteCandidate) bool {
+				return !cooled[c.Channel.ID]
+			},
+			EstimateInputTokens: func(_ context.Context, _ routing.ChatRouteCandidate) (int64, error) {
+				return 1, nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("PrepareCandidates returned error: %v", err)
+		}
+		ids := make([]int64, 0, len(plan.Candidates))
+		for _, c := range plan.Candidates {
+			ids = append(ids, c.Route.Channel.ID)
+		}
+		return ids
+	}
+
+	three := []routing.ChatRouteCandidate{
+		candidateRoute(1, "openai"),
+		candidateRoute(2, "openai"),
+		candidateRoute(3, "openai"),
+	}
+
+	// 渠道 1 软冷却：demote 到末尾，2/3 保持相对顺序。
+	if got := prepare(map[int64]bool{1: true}, three); got[0] != 2 || got[1] != 3 || got[2] != 1 {
+		t.Fatalf("expected order [2 3 1], got %v", got)
+	}
+
+	// 全部软冷却：顺序不变（不因软冷却清空/重排池子）。
+	if got := prepare(map[int64]bool{1: true, 2: true, 3: true}, three); got[0] != 1 || got[1] != 2 || got[2] != 3 {
+		t.Fatalf("expected original order [1 2 3], got %v", got)
+	}
+
+	// 唯一候选 + 软冷却：仍然可用（唯一渠道保护）。
+	single := []routing.ChatRouteCandidate{candidateRoute(1, "openai")}
+	if got := prepare(map[int64]bool{1: true}, single); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("sole candidate must survive failure cooldown, got %v", got)
+	}
+}
+
 type candidateCapabilityRegistry struct {
 	allowed map[int64]bool
 }

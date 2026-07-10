@@ -42,6 +42,9 @@ type RouterDeps struct {
 	RequestQueryService RequestQueryService
 	LedgerQueryService  LedgerQueryService
 
+	// bill-on-cancel 渠道成本敞口只读视图（DESIGN-bill-on-cancel 阶段一）。
+	CostExposureQueryService CostExposureQueryService
+
 	// M7 客户管理：用户（只读）/API Key（费用上限 + 必填线路）/手工调额
 	UserService        UserService
 	APIKeyService      APIKeyService
@@ -147,6 +150,13 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Get("/channels/{id}/ops/errors", coh.errors)
 			r.Get("/channels/{id}/ops/models", coh.models)
 			r.Get("/channels/{id}/ops/routes", coh.routes)
+		}
+
+		// bill-on-cancel 渠道成本敞口（DESIGN-bill-on-cancel 阶段一）：静态 summary 在 /channels/{id} 之前注册。
+		if deps.CostExposureQueryService != nil {
+			ceh := &costExposuresHandler{service: deps.CostExposureQueryService}
+			r.Get("/channels/cost-exposures/summary", ceh.summary)
+			r.Get("/channels/{id}/cost-exposures", ceh.list)
 		}
 
 		if deps.ChannelService != nil {

@@ -122,9 +122,9 @@ SELECT
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
     COALESCE(SUM(u.output_tokens_total) FILTER (WHERE r.status = 'succeeded'), 0)::bigint AS output_tokens,
-    COALESCE(SUM(u.uncached_input_tokens + u.cache_read_input_tokens + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens), 0)::bigint AS input_tokens,
+    COALESCE(SUM(u.uncached_input_tokens + u.cache_read_input_tokens + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens), 0)::bigint AS input_tokens,
     COALESCE(SUM(u.cache_read_input_tokens), 0)::bigint AS cache_read_tokens,
-    COALESCE(SUM(u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens), 0)::bigint AS cache_write_tokens,
+    COALESCE(SUM(u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens), 0)::bigint AS cache_write_tokens,
     COALESCE(SUM(
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
              THEN EXTRACT(EPOCH FROM (r.completed_at - COALESCE(r.response_started_at, r.started_at))) END
@@ -552,6 +552,7 @@ SELECT
     base.cache_read_input_price AS base_cache_read_input_price,
     base.cache_write_5m_input_price AS base_cache_write_5m_input_price,
     base.cache_write_1h_input_price AS base_cache_write_1h_input_price,
+    base.cache_write_30m_input_price AS base_cache_write_30m_input_price,
     base.output_price AS base_output_price,
     base.reasoning_output_price AS base_reasoning_output_price
 FROM models m
@@ -559,6 +560,7 @@ LEFT JOIN LATERAL (
     -- base: 模型当前生效的基准售价（mirror FindRouteCandidates 的 base LATERAL）；LEFT 保证无基准价的模型仍出现在列表。
     SELECT mp.currency, mp.uncached_input_price, mp.cache_read_input_price,
         mp.cache_write_5m_input_price, mp.cache_write_1h_input_price,
+        mp.cache_write_30m_input_price,
         mp.output_price, mp.reasoning_output_price
     FROM model_prices mp
     WHERE mp.model_id = m.id
@@ -613,25 +615,26 @@ type ModelsOpsTableParams struct {
 }
 
 type ModelsOpsTableRow struct {
-	ID                         int64
-	ModelID                    string
-	DisplayName                string
-	OwnedBy                    string
-	Status                     string
-	CreatedAt                  pgtype.Timestamptz
-	MaxOutputTokens            pgtype.Int8
-	ContextWindowTokens        pgtype.Int8
-	BindingsTotal              int64
-	BindingsAvailable          int64
-	CapabilitiesDeclaredCount  int64
-	HasPrice                   bool
-	BaseCurrency               interface{}
-	BaseUncachedInputPrice     pgtype.Numeric
-	BaseCacheReadInputPrice    pgtype.Numeric
-	BaseCacheWrite5mInputPrice pgtype.Numeric
-	BaseCacheWrite1hInputPrice pgtype.Numeric
-	BaseOutputPrice            pgtype.Numeric
-	BaseReasoningOutputPrice   pgtype.Numeric
+	ID                          int64
+	ModelID                     string
+	DisplayName                 string
+	OwnedBy                     string
+	Status                      string
+	CreatedAt                   pgtype.Timestamptz
+	MaxOutputTokens             pgtype.Int8
+	ContextWindowTokens         pgtype.Int8
+	BindingsTotal               int64
+	BindingsAvailable           int64
+	CapabilitiesDeclaredCount   int64
+	HasPrice                    bool
+	BaseCurrency                interface{}
+	BaseUncachedInputPrice      pgtype.Numeric
+	BaseCacheReadInputPrice     pgtype.Numeric
+	BaseCacheWrite5mInputPrice  pgtype.Numeric
+	BaseCacheWrite1hInputPrice  pgtype.Numeric
+	BaseCacheWrite30mInputPrice pgtype.Numeric
+	BaseOutputPrice             pgtype.Numeric
+	BaseReasoningOutputPrice    pgtype.Numeric
 }
 
 // ModelsOpsTable 模型商品运维主表（分页）：静态元数据 + 渠道/基准价；请求/毛利等指标在详情页聚合。
@@ -669,6 +672,7 @@ func (q *Queries) ModelsOpsTable(ctx context.Context, arg ModelsOpsTableParams) 
 			&i.BaseCacheReadInputPrice,
 			&i.BaseCacheWrite5mInputPrice,
 			&i.BaseCacheWrite1hInputPrice,
+			&i.BaseCacheWrite30mInputPrice,
 			&i.BaseOutputPrice,
 			&i.BaseReasoningOutputPrice,
 		); err != nil {

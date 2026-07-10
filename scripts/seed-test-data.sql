@@ -1,7 +1,8 @@
 -- seed-test-data.sql — 本地开发测试数据种子（幂等，可重复执行）。
 --
--- 内容：1 个 OpenAI provider + 1 条渠道 + 3 个模型（GPT-5.5 / GPT-5.4 / GPT-5.4-mini，
--- 参考 OpenAI 全能力声明）+ 模型与渠道绑定 + 永不过期价格（成本参考官网、售价 = 成本 ×1.5）
+-- 内容：1 个 OpenAI provider + 1 条渠道 + 模型（GPT-5.5 / 5.4 / 5.4-mini + GPT-5.6 Sol/Terra/Luna
+-- 及 gpt-5.6 别名，参考 OpenAI 全能力声明）+ 模型与渠道绑定 + 永不过期价格（成本参考官网、
+-- 售价 = 成本 ×1.5；GPT-5.6 含 30 分钟缓存写入价 cache_write_30m）
 -- + 1 用户 + 余额 + 1 条开发用线路 + 1 API Key（线路必填，Key 直接绑定该线路）。
 --
 -- 必须通过 scripts/seed-test-data.sh 运行（它会注入 :key_prefix / :key_hash 两个 psql 变量）。
@@ -134,6 +135,112 @@ CROSS JOIN (VALUES
     ('responses.encrypted_content'), ('responses.compact.native'), ('responses.compact.synthetic')
 ) AS k(key)
 WHERE m.model_id IN ('gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini')
+ON CONFLICT (model_id, capability_key) DO NOTHING;
+
+-- 6b) GPT-5.6 家族（Sol / Terra / Luna + gpt-5.6 别名→Sol）------------------
+--     官方 2026-07-09 GA：上下文 1.05M / 输出 128K。缓存写入为「30 分钟单档」（cache_write_30m，
+--     按未缓存输入价 1.25x 计费）；缓存读取 90% 折扣。此处渠道成本取官方 API 价，客户售价 = 成本 ×1.5。
+INSERT INTO models (
+    model_id, display_name, owned_by, status,
+    context_window_tokens, max_output_tokens,
+    input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, source
+)
+VALUES
+    ('gpt-5.6-sol',   'GPT-5.6 Sol',          'openai', 'enabled', 1050000, 128000, 7.5000, 45.0000, 'manual'),
+    ('gpt-5.6-terra', 'GPT-5.6 Terra',        'openai', 'enabled', 1050000, 128000, 3.7500, 22.5000, 'manual'),
+    ('gpt-5.6-luna',  'GPT-5.6 Luna',         'openai', 'enabled', 1050000, 128000, 1.5000,  9.0000, 'manual'),
+    ('gpt-5.6',       'GPT-5.6 (alias→Sol)',  'openai', 'enabled', 1050000, 128000, 7.5000, 45.0000, 'manual')
+ON CONFLICT (model_id) DO NOTHING;
+
+-- 绑定到 OpenAI 官方渠道；别名 gpt-5.6 的 upstream_model 指向 gpt-5.6-sol。
+INSERT INTO channel_models (channel_id, model_id, upstream_model, status)
+SELECT c.id, m.id,
+       CASE WHEN m.model_id = 'gpt-5.6' THEN 'gpt-5.6-sol' ELSE m.model_id END,
+       'enabled'
+FROM channels c
+JOIN providers p ON p.id = c.provider_id AND p.slug = 'openai'
+JOIN models m ON m.model_id IN ('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.6')
+WHERE c.name = 'OpenAI 官方渠道'
+ON CONFLICT (channel_id, model_id) DO NOTHING;
+
+-- 渠道成本价（官方 API 价：input / cache_read(0.1x) / cache_write_30m(1.25x) / output）。
+INSERT INTO channel_prices (
+    channel_id, model_id, currency, pricing_unit,
+    uncached_input_cost, cache_read_input_cost, cache_write_30m_input_cost, output_cost,
+    status, effective_from, effective_to
+)
+SELECT
+    cm.channel_id, cm.model_id, 'USD', 'per_1m_tokens',
+    v.cost_in, v.cost_cached, v.cost_cw30m, v.cost_out,
+    'enabled', now(), NULL
+FROM channel_models cm
+JOIN models m ON m.id = cm.model_id
+JOIN channels c ON c.id = cm.channel_id
+JOIN providers p ON p.id = c.provider_id AND p.slug = 'openai'
+JOIN (VALUES
+    -- model_id,       cost_in, cost_cached, cost_cw30m, cost_out
+    ('gpt-5.6-sol',    5.0000,  0.5000,      6.2500,     30.0000),
+    ('gpt-5.6-terra',  2.5000,  0.2500,      3.1250,     15.0000),
+    ('gpt-5.6-luna',   1.0000,  0.1000,      1.2500,      6.0000),
+    ('gpt-5.6',        5.0000,  0.5000,      6.2500,     30.0000)
+) AS v(model_id, cost_in, cost_cached, cost_cw30m, cost_out)
+    ON v.model_id = m.model_id
+WHERE c.name = 'OpenAI 官方渠道'
+  AND NOT EXISTS (
+      SELECT 1 FROM channel_prices cp
+      WHERE cp.channel_id = cm.channel_id
+        AND cp.model_id = cm.model_id
+        AND cp.status = 'enabled'
+        AND cp.currency = 'USD'
+        AND cp.pricing_unit = 'per_1m_tokens'
+  );
+
+-- 模型基准售价（= 成本 ×1.5；含 30m 缓存写入售价）。
+INSERT INTO model_prices (
+    model_id, currency, pricing_unit,
+    uncached_input_price, cache_read_input_price, cache_write_30m_input_price, output_price,
+    status, effective_from, effective_to
+)
+SELECT
+    m.id, 'USD', 'per_1m_tokens',
+    v.sale_in, v.sale_cached, v.sale_cw30m, v.sale_out,
+    'enabled', now(), NULL
+FROM models m
+JOIN (VALUES
+    -- model_id,       sale_in, sale_cached, sale_cw30m, sale_out
+    ('gpt-5.6-sol',    7.5000,  0.7500,      9.3750,     45.0000),
+    ('gpt-5.6-terra',  3.7500,  0.3750,      4.6875,     22.5000),
+    ('gpt-5.6-luna',   1.5000,  0.1500,      1.8750,      9.0000),
+    ('gpt-5.6',        7.5000,  0.7500,      9.3750,     45.0000)
+) AS v(model_id, sale_in, sale_cached, sale_cw30m, sale_out)
+    ON v.model_id = m.model_id
+WHERE m.model_id IN ('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.6')
+  AND NOT EXISTS (
+      SELECT 1 FROM model_prices mp
+      WHERE mp.model_id = m.id
+        AND mp.status = 'enabled'
+        AND mp.currency = 'USD'
+        AND mp.pricing_unit = 'per_1m_tokens'
+  );
+
+-- 能力声明（含 prompt_cache / reasoning.effort / reasoning.summary；展示用，非闸门）。
+INSERT INTO model_capabilities (model_id, capability_key, support_level, updated_by)
+SELECT m.id, k.key, 'full', 'seed'
+FROM models m
+CROSS JOIN (VALUES
+    ('text.input'), ('text.output'),
+    ('image.input'), ('file.input'),
+    ('tools.function'), ('tools.custom'), ('tools.parallel'), ('tools.choice_required'),
+    ('tools.builtin.web_search'), ('tools.builtin.file_search'),
+    ('tools.builtin.code_interpreter'), ('tools.builtin.image_generation'), ('tools.builtin.mcp'),
+    ('reasoning.effort'), ('reasoning.summary'),
+    ('response_format.json_object'), ('response_format.json_schema'),
+    ('prompt_cache'), ('logprobs'), ('service_tier'),
+    ('stream'), ('stream.tools'), ('stream.usage'),
+    ('server_state.store'), ('server_state.background'),
+    ('responses.encrypted_content'), ('responses.compact.native'), ('responses.compact.synthetic')
+) AS k(key)
+WHERE m.model_id IN ('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.6')
 ON CONFLICT (model_id, capability_key) DO NOTHING;
 
 -- 7) 用户（dev@unio.local；password_hash 占位，gateway 不校验登录）-------------

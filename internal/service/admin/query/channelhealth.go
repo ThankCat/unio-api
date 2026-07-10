@@ -5,12 +5,8 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-)
-
-// channel 健康分桶阈值（按区间内 request_attempts 成功率）；与 M9 看板一致，后续可配置。
-const (
-	channelHealthyThreshold  = 0.95
-	channelDegradedThreshold = 0.80
+	"github.com/ThankCat/unio-api/internal/service/admin/opsutil"
+	"github.com/ThankCat/unio-api/internal/service/appsettings"
 )
 
 // ChannelHealthStore 定义系统级 channel 健康只读聚合所需的存储能力（M8）。
@@ -40,11 +36,14 @@ type ChannelHealth struct {
 // ChannelHealthService 提供系统级 channel 健康只读聚合。
 type ChannelHealthService struct {
 	store ChannelHealthStore
+	// settings 供每请求现读健康分桶阈值(admin_backend.channel_health_thresholds);
+	// nil(单测)回代码默认。
+	settings *appsettings.SettingsStore
 }
 
 // NewChannelHealthService 创建 channel 健康只读聚合服务。
-func NewChannelHealthService(store ChannelHealthStore) *ChannelHealthService {
-	return &ChannelHealthService{store: store}
+func NewChannelHealthService(store ChannelHealthStore, settings *appsettings.SettingsStore) *ChannelHealthService {
+	return &ChannelHealthService{store: store, settings: settings}
 }
 
 // List 在可选时间范围内返回每个 channel 的健康明细（失败多者靠前）。
@@ -57,6 +56,7 @@ func (s *ChannelHealthService) List(ctx context.Context, from, to *time.Time) ([
 		return nil, storeFailed(err, "aggregate system channel health")
 	}
 
+	th := appsettings.AdminBackendChannelHealthThresholds(ctx, s.settings)
 	out := make([]ChannelHealth, 0, len(rows))
 	for _, row := range rows {
 		ch := ChannelHealth{
@@ -75,20 +75,10 @@ func (s *ChannelHealthService) List(ctx context.Context, from, to *time.Time) ([
 		// 排除客户端取消 / 进行中 / 平台错误 / 上游 4xx（bad_request），与运行时熔断器 IsChannelFaultError 一致，
 		// 不因客户端取消或我方/请求本身问题误判渠道不健康。
 		eligible := row.AttemptSucceeded + row.AttemptUpstreamFailed
-		switch {
-		case eligible == 0:
-			ch.Bucket = "no_data"
-		default:
+		if eligible > 0 {
 			ch.SuccessRate = float64(row.AttemptSucceeded) / float64(eligible)
-			switch {
-			case ch.SuccessRate >= channelHealthyThreshold:
-				ch.Bucket = "healthy"
-			case ch.SuccessRate >= channelDegradedThreshold:
-				ch.Bucket = "degraded"
-			default:
-				ch.Bucket = "unhealthy"
-			}
 		}
+		ch.Bucket = opsutil.HealthBucket(row.AttemptSucceeded, eligible, th.HealthyRate, th.DegradedRate)
 		out = append(out, ch)
 	}
 	return out, nil

@@ -32,6 +32,9 @@ type AttemptRunner struct {
 	// guard 是可选的两层限流 Guard（P2-8）：Key 级 TPM 预占、channel 级 RPM/RPD/TPM 预占与结算回填。
 	// nil 表示未启用限流，所有 guard 调用放行，保证未注入限流的调用点零行为变化。
 	guard RateLimitGuard
+
+	// concurrency 是可选的渠道在途并发限制器（DEC-029）。nil 表示未启用，恒放行。
+	concurrency ChannelConcurrencyLimiter
 }
 
 // NewAttemptRunner 构造候选循环驱动。retryClassifier 为 nil 时保守地不重试。
@@ -187,12 +190,24 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			continue
 		}
 
+		// 渠道在途并发上限（DEC-029）：满员即跳过该候选（与熔断 open 同语义，不写 attempt、不占 RPM/TPM）。
+		// 占到名额后：正常路径在上游调用返回后立即显式释放（避免尝试下一候选时仍占前一渠道名额）；
+		// defer 兜底 early-return / panic（release 幂等，重复调用安全）。
+		releaseSlot, slotOK := r.acquireChannelSlot(candidate)
+		if !slotOK {
+			lastErr = channelConcurrencyLimitedError()
+			continue
+		}
+		defer releaseSlot()
+
 		// 渠道级限流预占（P2-8）：命中任一维度即跳过该候选 fallback 到下一渠道（与熔断 open 同语义，不写 attempt）。
 		// 计数后端 fail_closed 故障同样保守跳过该候选；fail_open 时 Guard 内部已放行。
 		if dec, allowed, err := r.guardChannel(ctx, candidate, params.EstimatedTokens); err != nil {
+			releaseSlot()
 			lastErr = err
 			continue
 		} else if !allowed {
+			releaseSlot()
 			lastErr = channelRateLimitedError(dec)
 			continue
 		}
@@ -226,12 +241,16 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 		upstreamStart := time.Now()
 		success, err := params.Invoke(ctx, candidate)
 		responseStartedAt := time.Now()
+		// 上游调用已结束，立即归还渠道在途名额（结算/审计不占上游容量）。
+		releaseSlot()
 		l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 		l.RecordChannelHealth(channelKey, err)
 		l.RecordCredentialResult(candidate.Channel.ID, err)
 		if err != nil {
 			// 客户端取消不是上游失败，也不触发 fallback；此时还没进入 settlement，不写账务。
 			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+				// bill-on-disconnect 渠道：请求已发出、上游照常生成并计费，记平台成本敞口（阶段一）。
+				l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.EstimatedTokens, err)
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 					return result, releaseErr
@@ -245,6 +264,12 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 
 			// 上游 429：按 Retry-After 登记渠道冷却，后续 fallback 在冷却窗口内直接跳过该渠道（P2-7）。
 			l.RecordChannelRateLimit(channelKey, err)
+
+			// 上游 timeout/5xx：登记失败软冷却，让紧随其后的请求（含客户端重试）优先绕开该渠道（DEC-029）。
+			l.RecordChannelFailureCooldown(channelKey, err)
+
+			// bill-on-disconnect 渠道的 timeout/5xx：上游可能已生成并计费，记平台成本敞口（阶段一）。
+			l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.EstimatedTokens, err)
 
 			// 上游可能已产生成本但无可靠 usage（如原生 compact 2xx 缺 usage，P0-3）：不重试、不普通释放，
 			// 而是释放冻结并记 risk_exposure，保留「平台可能承担成本」的审计事实，杜绝静默白嫖。
@@ -296,6 +321,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			FinalChannelID:    candidate.Channel.ID,
 			ChannelPriceID:    candidate.ChannelPriceID,
 			SalePrice:         candidate.SalePrice,
+			PriceRatio:        candidate.PriceRatio,
 			Facts:             success.Facts,
 		})
 		EndSettlementSpan(settleSpan, settleErr)

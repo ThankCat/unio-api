@@ -26,6 +26,7 @@ func (s *ChatCompletionService) prepareChatCandidates(ctx context.Context, req g
 		Candidates:          candidates,
 		Capabilities:        capabilities,
 		Available:           s.candidateAvailable,
+		FailurePreferred:    s.lifecycle.CandidateFailurePreferred,
 		EstimateInputTokens: s.chatInputTokenEstimator(req),
 		Mode:                mode,
 		ChannelHealthScore:  s.channelHealthScore,

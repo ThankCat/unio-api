@@ -8,13 +8,14 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/service/admin/opsutil"
 )
 
 // RecoveryJobStore 定义 settlement recovery job 只读查询所需的存储能力（M8 运营任务台）。
 type RecoveryJobStore interface {
 	ListSettlementRecoveryJobsPage(ctx context.Context, arg sqlc.ListSettlementRecoveryJobsPageParams) ([]sqlc.ListSettlementRecoveryJobsPageRow, error)
 	CountSettlementRecoveryJobs(ctx context.Context, arg sqlc.CountSettlementRecoveryJobsParams) (int64, error)
-	GetSettlementRecoveryJobByID(ctx context.Context, id int64) (sqlc.SettlementRecoveryJob, error)
+	GetSettlementRecoveryJobByID(ctx context.Context, id int64) (sqlc.GetSettlementRecoveryJobByIDRow, error)
 }
 
 // RecoveryJobListParams 是分页/过滤列出 recovery job 的入参；指针/空串/nil 表示该维度不过滤。
@@ -61,6 +62,19 @@ type RecoveryJobSummary struct {
 	CompletedAt        *time.Time
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+
+	// RequestPublicID 是对外 request_id(req_xxx,JOIN request_records 取);供 admin 跳转到请求详情。
+	// 理论恒有值(补偿任务必有对应请求);兜底为空时前端不渲染跳转入口。
+	RequestPublicID string
+
+	// 资金闭环(JOIN ledger_reservations / 超额补扣流水派生):
+	// ReservationStatus: authorized=未结算 / captured=已实扣 / released=已全额释放(dead 收口)。
+	// CapturedAmount 是冻结内实扣;OverageAmount 是超出冻结的二次补扣(加扣);
+	// ReleasedAmount 是释放回用户的冻结(capture 时=冻结-实扣,dead 收口时=全额)。
+	ReservationStatus string
+	CapturedAmount    string
+	ReleasedAmount    string
+	OverageAmount     string
 }
 
 // RecoveryJobDetail 是 recovery job 详情：摘要 + 审计补充字段 + 受控的内部诊断详情。
@@ -76,12 +90,13 @@ type RecoveryJobDetail struct {
 	PricingUnit          string
 
 	// token 用量事实（settlement 重放依据）。
-	UncachedInputTokens     int64
-	CacheReadInputTokens    int64
-	CacheWrite5mInputTokens int64
-	CacheWrite1hInputTokens int64
-	OutputTokensTotal       int64
-	ReasoningOutputTokens   int64
+	UncachedInputTokens      int64
+	CacheReadInputTokens     int64
+	CacheWrite5mInputTokens  int64
+	CacheWrite1hInputTokens  int64
+	CacheWrite30mInputTokens int64
+	OutputTokensTotal        int64
+	ReasoningOutputTokens    int64
 
 	// LastInternalErrorDetail 默认脱敏；仅 includeInternal=true 时回显（与 M6 请求详情同策）。
 	LastInternalErrorDetail *string
@@ -176,20 +191,26 @@ func (s *RecoveryService) Get(ctx context.Context, id int64, includeInternal boo
 			CompletedAt:        timePtr(job.CompletedAt),
 			CreatedAt:          job.CreatedAt.Time,
 			UpdatedAt:          job.UpdatedAt.Time,
+			RequestPublicID:    opsutil.TextValue(job.RequestPublicID),
+			ReservationStatus:  opsutil.TextValue(job.ReservationStatus),
+			CapturedAmount:     numericString(job.ReservationCapturedAmount),
+			ReleasedAmount:     numericString(job.ReservationReleasedAmount),
+			OverageAmount:      numericString(job.OverageAmount),
 		},
-		UpstreamResponseID:      job.UpstreamResponseID,
-		UpstreamFinishReason:    job.UpstreamFinishReason,
-		UpstreamRequestID:       textPtr(job.UpstreamRequestID),
-		UsageSource:             job.UsageSource,
-		UsageMappingVersion:     job.UsageMappingVersion,
-		FormulaVersion:          job.FormulaVersion,
-		PricingUnit:             job.PricingUnit,
-		UncachedInputTokens:     job.UsageUncachedInputTokens,
-		CacheReadInputTokens:    job.UsageCacheReadInputTokens,
-		CacheWrite5mInputTokens: job.UsageCacheWrite5mInputTokens,
-		CacheWrite1hInputTokens: job.UsageCacheWrite1hInputTokens,
-		OutputTokensTotal:       job.UsageOutputTokensTotal,
-		ReasoningOutputTokens:   job.UsageReasoningOutputTokens,
+		UpstreamResponseID:       job.UpstreamResponseID,
+		UpstreamFinishReason:     job.UpstreamFinishReason,
+		UpstreamRequestID:        textPtr(job.UpstreamRequestID),
+		UsageSource:              job.UsageSource,
+		UsageMappingVersion:      job.UsageMappingVersion,
+		FormulaVersion:           job.FormulaVersion,
+		PricingUnit:              job.PricingUnit,
+		UncachedInputTokens:      job.UsageUncachedInputTokens,
+		CacheReadInputTokens:     job.UsageCacheReadInputTokens,
+		CacheWrite5mInputTokens:  job.UsageCacheWrite5mInputTokens,
+		CacheWrite1hInputTokens:  job.UsageCacheWrite1hInputTokens,
+		CacheWrite30mInputTokens: job.UsageCacheWrite30mInputTokens,
+		OutputTokensTotal:        job.UsageOutputTokensTotal,
+		ReasoningOutputTokens:    job.UsageReasoningOutputTokens,
 	}
 	if includeInternal {
 		detail.LastInternalErrorDetail = textPtr(job.LastInternalErrorDetail)
@@ -229,5 +250,10 @@ func toRecoveryJobSummary(r sqlc.ListSettlementRecoveryJobsPageRow) RecoveryJobS
 		CompletedAt:        timePtr(r.CompletedAt),
 		CreatedAt:          r.CreatedAt.Time,
 		UpdatedAt:          r.UpdatedAt.Time,
+		RequestPublicID:    opsutil.TextValue(r.RequestPublicID),
+		ReservationStatus:  opsutil.TextValue(r.ReservationStatus),
+		CapturedAmount:     numericString(r.ReservationCapturedAmount),
+		ReleasedAmount:     numericString(r.ReservationReleasedAmount),
+		OverageAmount:      numericString(r.OverageAmount),
 	}
 }

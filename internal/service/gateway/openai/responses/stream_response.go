@@ -55,7 +55,7 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 	if req.Reasoning != nil && req.Reasoning.Effort != nil {
 		effort = *req.Reasoning.Effort
 	}
-	requestRecord, err := s.lifecycle.CreateRequest(ctx, principal, req.Model, true, lifecycle.NormalizeOpenAIEffort(effort))
+	requestRecord, err := s.lifecycle.CreateRequest(ctx, principal, req.Model, true, lifecycle.NormalizeOpenAIEffort(effort, req.Model))
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 					return nil, bodyErr
 				}
 				streamCtx, streamSpan := lifecycle.StartGatewaySpan(ctx, "adapter.stream_responses", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
-				streamOutcome, streamErr := directStreamAdapter.StreamResponse(streamCtx, candidate.Channel, responsesadapter.Request{Body: body}, func(chunk responsesadapter.StreamChunk) error {
+				streamOutcome, streamErr := directStreamAdapter.StreamResponse(streamCtx, candidate.Channel, responsesadapter.Request{Body: body, BetaHeader: req.OpenAIBeta}, func(chunk responsesadapter.StreamChunk) error {
 					event := chunk
 					return onChunk(responsesStreamCarrier{direct: &event})
 				})
@@ -156,6 +156,10 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 				return streamOutcome.Facts, streamErr
 			}
 
+			// multi-agent 无法降级为单请求 Chat Completions：桥接候选显式拒绝，避免静默退化为单 agent 却照常计费。
+			if req.MultiAgentEnabled() {
+				return nil, multiAgentBridgeUnsupported()
+			}
 			chatReq, _ := mapResponsesRequestToChat(req, candidate.UpstreamModel)
 			streamCtx, streamSpan := lifecycle.StartGatewaySpan(ctx, "adapter.stream_chat_completions", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 			streamOutcome, streamErr := streamAdapter.StreamChatCompletions(streamCtx, candidate.Channel, chatReq, func(chunk chatcompletionsadapter.ChatStreamChunk) error {

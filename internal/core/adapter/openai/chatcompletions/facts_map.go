@@ -6,7 +6,8 @@ import (
 )
 
 // usageMappingVersionOpenAI 标记 OpenAI usage→facts 映射规则版本，用于历史账务复算与回归。
-const usageMappingVersionOpenAI = "openai.v1"
+// v2：新增解析 cache_write_tokens（GPT-5.6+），从 uncached 拆出并计入 30m 缓存写维度。
+const usageMappingVersionOpenAI = "openai.v2"
 
 // openAIFinishClass 把 OpenAI finish_reason 映射为协议无关的稳定 FinishClass。
 //

@@ -9,9 +9,11 @@ INSERT INTO price_snapshots (
     cache_read_input_price,
     cache_write_5m_input_price,
     cache_write_1h_input_price,
+    cache_write_30m_input_price,
     output_price,
     reasoning_output_price,
-    formula_version
+    formula_version,
+    price_ratio
 )
 VALUES (
     sqlc.arg(request_record_id),
@@ -22,9 +24,11 @@ VALUES (
     sqlc.arg(cache_read_input_price),
     sqlc.arg(cache_write_5m_input_price),
     sqlc.arg(cache_write_1h_input_price),
+    sqlc.arg(cache_write_30m_input_price),
     sqlc.arg(output_price),
     sqlc.arg(reasoning_output_price),
-    sqlc.arg(formula_version)
+    sqlc.arg(formula_version),
+    sqlc.arg(price_ratio)
 )
 RETURNING *;
 

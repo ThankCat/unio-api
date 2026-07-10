@@ -20,6 +20,7 @@ INSERT INTO model_prices (
     cache_read_input_price,
     cache_write_5m_input_price,
     cache_write_1h_input_price,
+    cache_write_30m_input_price,
     output_price,
     reasoning_output_price,
     status,
@@ -38,24 +39,26 @@ VALUES (
     $9,
     $10,
     $11,
-    $12
+    $12,
+    $13
 )
-RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at
+RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price
 `
 
 type CreateModelPriceParams struct {
-	ModelID                int64
-	Currency               string
-	PricingUnit            string
-	UncachedInputPrice     pgtype.Numeric
-	CacheReadInputPrice    pgtype.Numeric
-	CacheWrite5mInputPrice pgtype.Numeric
-	CacheWrite1hInputPrice pgtype.Numeric
-	OutputPrice            pgtype.Numeric
-	ReasoningOutputPrice   pgtype.Numeric
-	Status                 string
-	EffectiveFrom          pgtype.Timestamptz
-	EffectiveTo            pgtype.Timestamptz
+	ModelID                 int64
+	Currency                string
+	PricingUnit             string
+	UncachedInputPrice      pgtype.Numeric
+	CacheReadInputPrice     pgtype.Numeric
+	CacheWrite5mInputPrice  pgtype.Numeric
+	CacheWrite1hInputPrice  pgtype.Numeric
+	CacheWrite30mInputPrice pgtype.Numeric
+	OutputPrice             pgtype.Numeric
+	ReasoningOutputPrice    pgtype.Numeric
+	Status                  string
+	EffectiveFrom           pgtype.Timestamptz
+	EffectiveTo             pgtype.Timestamptz
 }
 
 // CreateModelPrice 创建一条模型基准售价（DEC-026）。客户最终售价 = 本基准价 × 线路倍率。
@@ -69,6 +72,7 @@ func (q *Queries) CreateModelPrice(ctx context.Context, arg CreateModelPricePara
 		arg.CacheReadInputPrice,
 		arg.CacheWrite5mInputPrice,
 		arg.CacheWrite1hInputPrice,
+		arg.CacheWrite30mInputPrice,
 		arg.OutputPrice,
 		arg.ReasoningOutputPrice,
 		arg.Status,
@@ -92,12 +96,13 @@ func (q *Queries) CreateModelPrice(ctx context.Context, arg CreateModelPricePara
 		&i.EffectiveTo,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CacheWrite30mInputPrice,
 	)
 	return i, err
 }
 
 const findActiveModelPrice = `-- name: FindActiveModelPrice :one
-SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at
+SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price
 FROM model_prices
 WHERE model_id = $1
     AND status = 'enabled'
@@ -135,12 +140,13 @@ func (q *Queries) FindActiveModelPrice(ctx context.Context, arg FindActiveModelP
 		&i.EffectiveTo,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CacheWrite30mInputPrice,
 	)
 	return i, err
 }
 
 const getModelPrice = `-- name: GetModelPrice :one
-SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at FROM model_prices WHERE id = $1 LIMIT 1
+SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price FROM model_prices WHERE id = $1 LIMIT 1
 `
 
 // GetModelPrice 按主键读取单条模型基准售价。
@@ -163,6 +169,7 @@ func (q *Queries) GetModelPrice(ctx context.Context, id int64) (ModelPrice, erro
 		&i.EffectiveTo,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CacheWrite30mInputPrice,
 	)
 	return i, err
 }
@@ -217,6 +224,7 @@ SELECT
     mp.cache_read_input_price,
     mp.cache_write_5m_input_price,
     mp.cache_write_1h_input_price,
+    mp.cache_write_30m_input_price,
     mp.output_price,
     mp.reasoning_output_price,
     mp.status,
@@ -233,23 +241,24 @@ ORDER BY mp.effective_from DESC, mp.id DESC
 `
 
 type ListModelPricesByModelRow struct {
-	ID                     int64
-	ModelID                int64
-	Currency               string
-	PricingUnit            string
-	UncachedInputPrice     pgtype.Numeric
-	CacheReadInputPrice    pgtype.Numeric
-	CacheWrite5mInputPrice pgtype.Numeric
-	CacheWrite1hInputPrice pgtype.Numeric
-	OutputPrice            pgtype.Numeric
-	ReasoningOutputPrice   pgtype.Numeric
-	Status                 string
-	EffectiveFrom          pgtype.Timestamptz
-	EffectiveTo            pgtype.Timestamptz
-	CreatedAt              pgtype.Timestamptz
-	UpdatedAt              pgtype.Timestamptz
-	ModelExternalID        string
-	ModelDisplayName       string
+	ID                      int64
+	ModelID                 int64
+	Currency                string
+	PricingUnit             string
+	UncachedInputPrice      pgtype.Numeric
+	CacheReadInputPrice     pgtype.Numeric
+	CacheWrite5mInputPrice  pgtype.Numeric
+	CacheWrite1hInputPrice  pgtype.Numeric
+	CacheWrite30mInputPrice pgtype.Numeric
+	OutputPrice             pgtype.Numeric
+	ReasoningOutputPrice    pgtype.Numeric
+	Status                  string
+	EffectiveFrom           pgtype.Timestamptz
+	EffectiveTo             pgtype.Timestamptz
+	CreatedAt               pgtype.Timestamptz
+	UpdatedAt               pgtype.Timestamptz
+	ModelExternalID         string
+	ModelDisplayName        string
 }
 
 // ListModelPricesByModel 列出某模型的全部基准售价（含历史与停用），连带模型对外 ID/展示名，供 admin 管理台展示。
@@ -271,6 +280,7 @@ func (q *Queries) ListModelPricesByModel(ctx context.Context, modelID int64) ([]
 			&i.CacheReadInputPrice,
 			&i.CacheWrite5mInputPrice,
 			&i.CacheWrite1hInputPrice,
+			&i.CacheWrite30mInputPrice,
 			&i.OutputPrice,
 			&i.ReasoningOutputPrice,
 			&i.Status,
@@ -297,7 +307,7 @@ SET effective_to = $1,
     status = $2,
     updated_at = now()
 WHERE id = $3
-RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at
+RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price
 `
 
 type UpdateModelPriceWindowParams struct {
@@ -326,6 +336,7 @@ func (q *Queries) UpdateModelPriceWindow(ctx context.Context, arg UpdateModelPri
 		&i.EffectiveTo,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CacheWrite30mInputPrice,
 	)
 	return i, err
 }

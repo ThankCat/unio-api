@@ -18,6 +18,10 @@ type ChatUsage struct {
 	// CachedTokens 是 prompt tokens 中命中上游 prompt cache 的数量。
 	CachedTokens int
 
+	// CacheWriteTokens 是 prompt tokens 中写入上游 prompt cache 的数量（OpenAI GPT-5.6+ 的
+	// cache_write_tokens，按未缓存输入价 1.25x 计费）。它是 uncached 输入的子集，映射到 30m 缓存写维度。
+	CacheWriteTokens int
+
 	// ReasoningTokens 是 completion tokens 中用于模型内部推理的数量。
 	ReasoningTokens int
 }

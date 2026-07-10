@@ -23,6 +23,7 @@ type RouterDeps struct {
 	ResponsesService      gatewayresponses.ResponsesService
 	MessagesService       gatewayanthropic.MessagesService
 	RateLimiter           middleware.KeyRateLimiter
+	ConcurrencyLimiter    middleware.KeyConcurrencyLimiter
 	ModelCatalogService   gatewaymodels.ModelCatalogService
 
 	// HTTPMetrics 记录 HTTP 层请求指标；nil 表示不采集。
@@ -83,6 +84,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 			Logger:  deps.Logger,
 			Metrics: deps.RateLimitMetrics,
 		}))
+		// 「线路+用户」在途并发限制（DEC-029）：多余的并发重试立即 429，不打上游、不冻结余额。
+		r.Use(middleware.ConcurrencyLimit(deps.ConcurrencyLimiter))
 
 		r.Get("/models", gatewaymodels.NewModelsHandler(deps.ModelCatalogService))
 

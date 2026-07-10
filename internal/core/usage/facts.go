@@ -113,11 +113,15 @@ type Facts struct {
 	// CacheReadInputTokens 是命中上游 prompt cache 读取的输入 token。
 	CacheReadInputTokens TokenCount
 
-	// CacheWrite5mInputTokens 是写入 5m TTL cache 的输入 token（OpenAI 不适用）。
+	// CacheWrite5mInputTokens 是写入 5m TTL cache 的输入 token（Anthropic 5m 档；OpenAI 不适用）。
 	CacheWrite5mInputTokens TokenCount
 
-	// CacheWrite1hInputTokens 是写入 1h TTL cache 的输入 token（OpenAI 不适用）。
+	// CacheWrite1hInputTokens 是写入 1h TTL cache 的输入 token（Anthropic 1h 档；OpenAI 不适用）。
 	CacheWrite1hInputTokens TokenCount
+
+	// CacheWrite30mInputTokens 是写入 30m TTL cache 的输入 token（OpenAI GPT-5.6+ 单档缓存写；
+	// Anthropic 不适用）。与 5m/1h 并列，按 TTL 语义独立计价与审计，绝不混入其它档位。
+	CacheWrite30mInputTokens TokenCount
 
 	// OutputTokensTotal 是包含 reasoning 的 authoritative 输出总量。
 	OutputTokensTotal TokenCount
@@ -140,6 +144,7 @@ func (f Facts) Valid() bool {
 		f.CacheReadInputTokens,
 		f.CacheWrite5mInputTokens,
 		f.CacheWrite1hInputTokens,
+		f.CacheWrite30mInputTokens,
 		f.OutputTokensTotal,
 		f.ReasoningOutputTokens,
 	}

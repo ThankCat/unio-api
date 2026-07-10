@@ -21,9 +21,11 @@ INSERT INTO price_snapshots (
     cache_read_input_price,
     cache_write_5m_input_price,
     cache_write_1h_input_price,
+    cache_write_30m_input_price,
     output_price,
     reasoning_output_price,
-    formula_version
+    formula_version,
+    price_ratio
 )
 VALUES (
     $1,
@@ -36,23 +38,27 @@ VALUES (
     $8,
     $9,
     $10,
-    $11
+    $11,
+    $12,
+    $13
 )
-RETURNING id, request_record_id, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, created_at
+RETURNING id, request_record_id, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, created_at, price_ratio, cache_write_30m_input_price
 `
 
 type CreatePriceSnapshotParams struct {
-	RequestRecordID        int64
-	PriceID                pgtype.Int8
-	Currency               string
-	PricingUnit            string
-	UncachedInputPrice     pgtype.Numeric
-	CacheReadInputPrice    pgtype.Numeric
-	CacheWrite5mInputPrice pgtype.Numeric
-	CacheWrite1hInputPrice pgtype.Numeric
-	OutputPrice            pgtype.Numeric
-	ReasoningOutputPrice   pgtype.Numeric
-	FormulaVersion         string
+	RequestRecordID         int64
+	PriceID                 pgtype.Int8
+	Currency                string
+	PricingUnit             string
+	UncachedInputPrice      pgtype.Numeric
+	CacheReadInputPrice     pgtype.Numeric
+	CacheWrite5mInputPrice  pgtype.Numeric
+	CacheWrite1hInputPrice  pgtype.Numeric
+	CacheWrite30mInputPrice pgtype.Numeric
+	OutputPrice             pgtype.Numeric
+	ReasoningOutputPrice    pgtype.Numeric
+	FormulaVersion          string
+	PriceRatio              pgtype.Numeric
 }
 
 // CreatePriceSnapshot 创建一次请求结算使用的客户售价快照。
@@ -66,9 +72,11 @@ func (q *Queries) CreatePriceSnapshot(ctx context.Context, arg CreatePriceSnapsh
 		arg.CacheReadInputPrice,
 		arg.CacheWrite5mInputPrice,
 		arg.CacheWrite1hInputPrice,
+		arg.CacheWrite30mInputPrice,
 		arg.OutputPrice,
 		arg.ReasoningOutputPrice,
 		arg.FormulaVersion,
+		arg.PriceRatio,
 	)
 	var i PriceSnapshot
 	err := row.Scan(
@@ -85,12 +93,14 @@ func (q *Queries) CreatePriceSnapshot(ctx context.Context, arg CreatePriceSnapsh
 		&i.ReasoningOutputPrice,
 		&i.FormulaVersion,
 		&i.CreatedAt,
+		&i.PriceRatio,
+		&i.CacheWrite30mInputPrice,
 	)
 	return i, err
 }
 
 const getPriceSnapshotByRequest = `-- name: GetPriceSnapshotByRequest :one
-SELECT id, request_record_id, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, created_at
+SELECT id, request_record_id, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, created_at, price_ratio, cache_write_30m_input_price
 FROM price_snapshots
 WHERE request_record_id = $1
 `
@@ -113,6 +123,8 @@ func (q *Queries) GetPriceSnapshotByRequest(ctx context.Context, requestRecordID
 		&i.ReasoningOutputPrice,
 		&i.FormulaVersion,
 		&i.CreatedAt,
+		&i.PriceRatio,
+		&i.CacheWrite30mInputPrice,
 	)
 	return i, err
 }

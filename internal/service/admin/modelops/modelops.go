@@ -70,13 +70,14 @@ type Row struct {
 	HasPrice                  bool
 	Sellable                  bool
 	// 基准售价（DEC-026 model_prices 当前生效行，每 1M tokens）；无基准价时全部为 nil。
-	BaseCurrency               *string
-	BaseUncachedInputPrice     *string
-	BaseCacheReadInputPrice    *string
-	BaseCacheWrite5mInputPrice *string
-	BaseCacheWrite1hInputPrice *string
-	BaseOutputPrice            *string
-	BaseReasoningOutputPrice   *string
+	BaseCurrency                *string
+	BaseUncachedInputPrice      *string
+	BaseCacheReadInputPrice     *string
+	BaseCacheWrite5mInputPrice  *string
+	BaseCacheWrite1hInputPrice  *string
+	BaseCacheWrite30mInputPrice *string
+	BaseOutputPrice             *string
+	BaseReasoningOutputPrice    *string
 }
 
 // Detail 是模型详情页概览（含请求/延迟/毛利等运维指标）。
@@ -222,26 +223,27 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			baseCurrency = &v
 		}
 		out = append(out, Row{
-			ID:                         r.ID,
-			ModelID:                    r.ModelID,
-			DisplayName:                r.DisplayName,
-			OwnedBy:                    r.OwnedBy,
-			Status:                     r.Status,
-			CreatedAt:                  r.CreatedAt.Time,
-			MaxOutputTokens:            opsutil.Int8Value(r.MaxOutputTokens),
-			ContextWindowTokens:        opsutil.Int8Value(r.ContextWindowTokens),
-			BindingsTotal:              r.BindingsTotal,
-			BindingsAvailable:          r.BindingsAvailable,
-			CapabilitiesDeclaredCount:  r.CapabilitiesDeclaredCount,
-			HasPrice:                   r.HasPrice,
-			Sellable:                   r.Status == "enabled" && r.BindingsAvailable > 0,
-			BaseCurrency:               baseCurrency,
-			BaseUncachedInputPrice:     opsutil.NumericStringPtr(r.BaseUncachedInputPrice),
-			BaseCacheReadInputPrice:    opsutil.NumericStringPtr(r.BaseCacheReadInputPrice),
-			BaseCacheWrite5mInputPrice: opsutil.NumericStringPtr(r.BaseCacheWrite5mInputPrice),
-			BaseCacheWrite1hInputPrice: opsutil.NumericStringPtr(r.BaseCacheWrite1hInputPrice),
-			BaseOutputPrice:            opsutil.NumericStringPtr(r.BaseOutputPrice),
-			BaseReasoningOutputPrice:   opsutil.NumericStringPtr(r.BaseReasoningOutputPrice),
+			ID:                          r.ID,
+			ModelID:                     r.ModelID,
+			DisplayName:                 r.DisplayName,
+			OwnedBy:                     r.OwnedBy,
+			Status:                      r.Status,
+			CreatedAt:                   r.CreatedAt.Time,
+			MaxOutputTokens:             opsutil.Int8Value(r.MaxOutputTokens),
+			ContextWindowTokens:         opsutil.Int8Value(r.ContextWindowTokens),
+			BindingsTotal:               r.BindingsTotal,
+			BindingsAvailable:           r.BindingsAvailable,
+			CapabilitiesDeclaredCount:   r.CapabilitiesDeclaredCount,
+			HasPrice:                    r.HasPrice,
+			Sellable:                    r.Status == "enabled" && r.BindingsAvailable > 0,
+			BaseCurrency:                baseCurrency,
+			BaseUncachedInputPrice:      opsutil.NumericStringPtr(r.BaseUncachedInputPrice),
+			BaseCacheReadInputPrice:     opsutil.NumericStringPtr(r.BaseCacheReadInputPrice),
+			BaseCacheWrite5mInputPrice:  opsutil.NumericStringPtr(r.BaseCacheWrite5mInputPrice),
+			BaseCacheWrite1hInputPrice:  opsutil.NumericStringPtr(r.BaseCacheWrite1hInputPrice),
+			BaseCacheWrite30mInputPrice: opsutil.NumericStringPtr(r.BaseCacheWrite30mInputPrice),
+			BaseOutputPrice:             opsutil.NumericStringPtr(r.BaseOutputPrice),
+			BaseReasoningOutputPrice:    opsutil.NumericStringPtr(r.BaseReasoningOutputPrice),
 		})
 	}
 	return out, total, nil

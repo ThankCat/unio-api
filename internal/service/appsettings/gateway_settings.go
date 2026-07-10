@@ -16,7 +16,7 @@ import (
 // 单位约定(用户决策):时长一律 int 毫秒,字段/key 带 _ms 后缀(对齐 channels.timeout_ms 惯例),
 // 不用 "10m" 之类的 duration 字符串;比例用 (0,1] 浮点;计数用普通整数。
 
-// 6 组 gateway 配置在 app_settings 中的 key。
+// gateway 配置在 app_settings 中的 key。
 const (
 	GatewayCircuitBreakerKey         = "gateway.circuit_breaker"
 	GatewayRateLimitDefaultsKey      = "gateway.rate_limit_defaults"
@@ -24,6 +24,8 @@ const (
 	GatewayChannelCooldownKey        = "gateway.channel_ratelimit_cooldown"
 	GatewayCredential401ThresholdKey = "gateway.credential_401_threshold"
 	GatewayDefaultChannelTimeoutKey  = "gateway.default_channel_timeout_ms"
+	GatewayFailureCooldownKey        = "gateway.channel_failure_cooldown_ms"
+	GatewayConcurrencyDefaultsKey    = "gateway.concurrency_defaults"
 )
 
 func msToDuration(ms int64) time.Duration {
@@ -383,6 +385,117 @@ func GatewayCredential401Threshold(ctx context.Context, store *SettingsStore) in
 		return DefaultCredential401Threshold
 	}
 	return n
+}
+
+// ---- 渠道失败软冷却（DEC-029） ----
+
+// DefaultFailureCooldownSetting 是 timeout/5xx 失败后的默认软冷却时长（对齐 LiteLLM 默认 5s 冷却）。
+const DefaultFailureCooldownSetting = 5 * time.Second
+
+// DecodeNonNegativeMsSetting 解码 int 毫秒标量值，要求 >= 0（0=关闭该功能），返回 time.Duration。
+func DecodeNonNegativeMsSetting(raw []byte) (time.Duration, error) {
+	var ms int64
+	if err := json.Unmarshal(raw, &ms); err != nil {
+		return 0, fmt.Errorf("value must be an integer of milliseconds: %w", err)
+	}
+	if ms < 0 {
+		return 0, errors.New("milliseconds must not be negative")
+	}
+	return msToDuration(ms), nil
+}
+
+func failureCooldownDefinition() Definition {
+	return Definition{
+		Key:      GatewayFailureCooldownKey,
+		Category: "gateway",
+		Label:    "渠道失败软冷却",
+		Description: "渠道发生 timeout/5xx 类上游故障后，把它软冷却这么长时间：期间新请求的候选排序把该渠道" +
+			"demote 到末尾（健康渠道优先），让紧随其后的客户端重试快速绕开慢渠道。只重排不剔除——" +
+			"该模型只有一条可用渠道时行为不变（唯一渠道保护）。单位毫秒，0=关闭。",
+		HotReload: true,
+		Default:   encodeMsSetting(DefaultFailureCooldownSetting),
+		Validate: func(raw json.RawMessage) error {
+			_, err := DecodeNonNegativeMsSetting(raw)
+			return err
+		},
+	}
+}
+
+// GatewayFailureCooldown 读取当前生效的渠道失败软冷却时长（解码失败回默认；0=关闭）。
+func GatewayFailureCooldown(ctx context.Context, store *SettingsStore) time.Duration {
+	d, err := DecodeNonNegativeMsSetting(store.Raw(ctx, GatewayFailureCooldownKey))
+	if err != nil {
+		return DefaultFailureCooldownSetting
+	}
+	return d
+}
+
+// ---- 在途并发全局默认（DEC-029） ----
+
+// ConcurrencyDefaultsSettings 是两级在途并发上限的全局默认（0=该级不限）。
+// KeyLimit 作用于「线路+用户」（ingress 中间件，多余并发立即 429）；
+// ChannelLimit 作用于渠道（attempt runner，满员跳过该候选 fallback）。渠道行 concurrency_limit 可覆盖。
+type ConcurrencyDefaultsSettings struct {
+	KeyLimit     int64
+	ChannelLimit int64
+}
+
+// DefaultConcurrencyDefaultsSettings 默认两级均不限（0）：并发限制是选择性开启的保护，
+// 避免默认值误伤合法的 agent 并发扇出；建议按客户端重试行为设置（如 Claude Code 重试 10 次 → key 设 3~5）。
+func DefaultConcurrencyDefaultsSettings() ConcurrencyDefaultsSettings {
+	return ConcurrencyDefaultsSettings{KeyLimit: 0, ChannelLimit: 0}
+}
+
+type concurrencyDefaultsDoc struct {
+	KeyLimit     int64 `json:"key_limit"`
+	ChannelLimit int64 `json:"channel_limit"`
+}
+
+func encodeConcurrencyDefaultsSettings(s ConcurrencyDefaultsSettings) json.RawMessage {
+	raw, err := json.Marshal(concurrencyDefaultsDoc(s))
+	if err != nil {
+		panic(fmt.Sprintf("appsettings: encode concurrency defaults: %v", err))
+	}
+	return raw
+}
+
+// DecodeConcurrencyDefaultsSettings 解码并校验在途并发全局默认（拒绝未知字段；各值 >=0，0=不限）。
+func DecodeConcurrencyDefaultsSettings(raw []byte) (ConcurrencyDefaultsSettings, error) {
+	var doc concurrencyDefaultsDoc
+	if err := strictUnmarshal(raw, &doc); err != nil {
+		return ConcurrencyDefaultsSettings{}, err
+	}
+	s := ConcurrencyDefaultsSettings(doc)
+	if s.KeyLimit < 0 || s.ChannelLimit < 0 {
+		return ConcurrencyDefaultsSettings{}, errors.New("key_limit/channel_limit must be zero or positive")
+	}
+	return s, nil
+}
+
+func concurrencyDefaultsDefinition() Definition {
+	return Definition{
+		Key:      GatewayConcurrencyDefaultsKey,
+		Category: "gateway",
+		Label:    "在途并发全局默认",
+		Description: "「同时进行中」请求数上限（含整段流式传输），0=不限。key_limit 作用于线路+用户" +
+			"（ingress，超出立即 429，专防客户端自动重试风暴堆积慢请求）；channel_limit 作用于渠道" +
+			"（满员跳过该候选 fallback），渠道行 concurrency_limit 可覆盖。进程内计数，多实例各自独立。",
+		HotReload: true,
+		Default:   encodeConcurrencyDefaultsSettings(DefaultConcurrencyDefaultsSettings()),
+		Validate: func(raw json.RawMessage) error {
+			_, err := DecodeConcurrencyDefaultsSettings(raw)
+			return err
+		},
+	}
+}
+
+// GatewayConcurrencyDefaults 读取当前生效的在途并发全局默认（解码失败回默认）。
+func GatewayConcurrencyDefaults(ctx context.Context, store *SettingsStore) ConcurrencyDefaultsSettings {
+	s, err := DecodeConcurrencyDefaultsSettings(store.Raw(ctx, GatewayConcurrencyDefaultsKey))
+	if err != nil {
+		return DefaultConcurrencyDefaultsSettings()
+	}
+	return s
 }
 
 func defaultChannelTimeoutDefinition() Definition {

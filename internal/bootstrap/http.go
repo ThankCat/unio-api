@@ -26,6 +26,7 @@ func NewHTTPHandler(
 	logger *slog.Logger,
 	queries *sqlc.Queries,
 	rateLimitGuard *ratelimit.Guard,
+	concurrencyLimiter *ratelimit.ConcurrencyLimiter,
 	chatCompletionService gatewayopenai.ChatCompletionService,
 	responsesService gatewayresponses.ResponsesService,
 	messagesService gatewayanthropic.MessagesService,
@@ -38,6 +39,7 @@ func NewHTTPHandler(
 		Logger:              logger,
 		APIKeyAuthenticator: apiKeyAuthenticator,
 		RateLimiter:         rateLimitGuard,
+		ConcurrencyLimiter:  concurrencyLimiter,
 
 		ChatCompletionService: chatCompletionService,
 		ResponsesService:      responsesService,

@@ -295,13 +295,14 @@ type ttftStatsDTO struct {
 }
 
 type cacheStatsDTO struct {
-	ReadRate           float64 `json:"read_rate"`
-	WriteRate          float64 `json:"write_rate"`
-	InputTokens        int64   `json:"input_tokens"`
-	UncachedTokens     int64   `json:"uncached_tokens"`
-	CacheReadTokens    int64   `json:"cache_read_tokens"`
-	CacheWrite5mTokens int64   `json:"cache_write_5m_tokens"`
-	CacheWrite1hTokens int64   `json:"cache_write_1h_tokens"`
+	ReadRate            float64 `json:"read_rate"`
+	WriteRate           float64 `json:"write_rate"`
+	InputTokens         int64   `json:"input_tokens"`
+	UncachedTokens      int64   `json:"uncached_tokens"`
+	CacheReadTokens     int64   `json:"cache_read_tokens"`
+	CacheWrite5mTokens  int64   `json:"cache_write_5m_tokens"`
+	CacheWrite1hTokens  int64   `json:"cache_write_1h_tokens"`
+	CacheWrite30mTokens int64   `json:"cache_write_30m_tokens"`
 }
 
 type radarRequestsDTO struct {
@@ -600,13 +601,14 @@ func toRadarDTO(r dashboard.RadarReport) radarDTO {
 		TPS:    r.TPS,
 		Tokens: dashboardTokensDTO{Input: r.Tokens.Input, Output: r.Tokens.Output, Total: r.Tokens.Total},
 		Cache: cacheStatsDTO{
-			ReadRate:           r.Cache.ReadRate,
-			WriteRate:          r.Cache.WriteRate,
-			InputTokens:        r.Cache.InputTokens,
-			UncachedTokens:     r.Cache.UncachedTokens,
-			CacheReadTokens:    r.Cache.CacheReadTokens,
-			CacheWrite5mTokens: r.Cache.CacheWrite5mTokens,
-			CacheWrite1hTokens: r.Cache.CacheWrite1hTokens,
+			ReadRate:            r.Cache.ReadRate,
+			WriteRate:           r.Cache.WriteRate,
+			InputTokens:         r.Cache.InputTokens,
+			UncachedTokens:      r.Cache.UncachedTokens,
+			CacheReadTokens:     r.Cache.CacheReadTokens,
+			CacheWrite5mTokens:  r.Cache.CacheWrite5mTokens,
+			CacheWrite1hTokens:  r.Cache.CacheWrite1hTokens,
+			CacheWrite30mTokens: r.Cache.CacheWrite30mTokens,
 		},
 
 		RevenueUSD:        r.RevenueUSD,

@@ -73,36 +73,40 @@ type RequestListItem struct {
 	RequestSummary
 
 	// token 用量（无 usage 记录时为 0）。
-	UncachedInputTokens     int64
-	CacheReadInputTokens    int64
-	CacheWrite5mInputTokens int64
-	CacheWrite1hInputTokens int64
-	OutputTokens            int64
-	ReasoningOutputTokens   int64
+	UncachedInputTokens      int64
+	CacheReadInputTokens     int64
+	CacheWrite5mInputTokens  int64
+	CacheWrite1hInputTokens  int64
+	CacheWrite30mInputTokens int64
+	OutputTokens             int64
+	ReasoningOutputTokens    int64
 
 	// 费用金额（USD 十进制字符串；无结算快照 / 账本时为 nil）。UserChargeUSD=用户实际扣费净额，TotalCostUSD=平台成本。
-	UserChargeUSD            *string
-	TotalCostUSD             *string
-	UncachedInputCostUSD     *string
-	CacheReadInputCostUSD    *string
-	CacheWrite5mInputCostUSD *string
-	CacheWrite1hInputCostUSD *string
-	OutputCostUSD            *string
-	ReasoningOutputCostUSD   *string
+	UserChargeUSD             *string
+	TotalCostUSD              *string
+	UncachedInputCostUSD      *string
+	CacheReadInputCostUSD     *string
+	CacheWrite5mInputCostUSD  *string
+	CacheWrite1hInputCostUSD  *string
+	CacheWrite30mInputCostUSD *string
+	OutputCostUSD             *string
+	ReasoningOutputCostUSD    *string
 
 	// 计费单价快照（USD 十进制字符串，per_1m_tokens）。平台侧=成本单价，用户侧=售价单价，供「单价 × tokens = 金额」计算过程展示。
-	UncachedInputCostUnitUSD      *string
-	CacheReadInputCostUnitUSD     *string
-	CacheWrite5mInputCostUnitUSD  *string
-	CacheWrite1hInputCostUnitUSD  *string
-	OutputCostUnitUSD             *string
-	ReasoningOutputCostUnitUSD    *string
-	UncachedInputPriceUnitUSD     *string
-	CacheReadInputPriceUnitUSD    *string
-	CacheWrite5mInputPriceUnitUSD *string
-	CacheWrite1hInputPriceUnitUSD *string
-	OutputPriceUnitUSD            *string
-	ReasoningOutputPriceUnitUSD   *string
+	UncachedInputCostUnitUSD       *string
+	CacheReadInputCostUnitUSD      *string
+	CacheWrite5mInputCostUnitUSD   *string
+	CacheWrite1hInputCostUnitUSD   *string
+	CacheWrite30mInputCostUnitUSD  *string
+	OutputCostUnitUSD              *string
+	ReasoningOutputCostUnitUSD     *string
+	UncachedInputPriceUnitUSD      *string
+	CacheReadInputPriceUnitUSD     *string
+	CacheWrite5mInputPriceUnitUSD  *string
+	CacheWrite1hInputPriceUnitUSD  *string
+	CacheWrite30mInputPriceUnitUSD *string
+	OutputPriceUnitUSD             *string
+	ReasoningOutputPriceUnitUSD    *string
 
 	// 用户/Key 展示（key 名 / 前缀 / 明文——明文供列表点击复制，口径同 api-keys 页）。
 	APIKeyName      *string
@@ -182,57 +186,63 @@ type RequestDetail struct {
 
 // CostSnapshotView 是平台成本快照的展示视图：每分项成本单价（per_1m_tokens）+ 实际金额 + 总额（USD 字符串）。
 type CostSnapshotView struct {
-	UncachedInputCostUnit       *string
-	CacheReadInputCostUnit      *string
-	CacheWrite5mInputCostUnit   *string
-	CacheWrite1hInputCostUnit   *string
-	OutputCostUnit              *string
-	ReasoningOutputCostUnit     *string
-	UncachedInputCostAmount     *string
-	CacheReadInputCostAmount    *string
-	CacheWrite5mInputCostAmount *string
-	CacheWrite1hInputCostAmount *string
-	OutputCostAmount            *string
-	ReasoningOutputCostAmount   *string
-	TotalCostAmount             *string
+	UncachedInputCostUnit        *string
+	CacheReadInputCostUnit       *string
+	CacheWrite5mInputCostUnit    *string
+	CacheWrite1hInputCostUnit    *string
+	CacheWrite30mInputCostUnit   *string
+	OutputCostUnit               *string
+	ReasoningOutputCostUnit      *string
+	UncachedInputCostAmount      *string
+	CacheReadInputCostAmount     *string
+	CacheWrite5mInputCostAmount  *string
+	CacheWrite1hInputCostAmount  *string
+	CacheWrite30mInputCostAmount *string
+	OutputCostAmount             *string
+	ReasoningOutputCostAmount    *string
+	TotalCostAmount              *string
 }
 
 // PriceSnapshotView 是客户售价快照的展示视图：每分项售价单价（per_1m_tokens，USD 字符串）。
 type PriceSnapshotView struct {
-	UncachedInputPrice     *string
-	CacheReadInputPrice    *string
-	CacheWrite5mInputPrice *string
-	CacheWrite1hInputPrice *string
-	OutputPrice            *string
-	ReasoningOutputPrice   *string
+	UncachedInputPrice      *string
+	CacheReadInputPrice     *string
+	CacheWrite5mInputPrice  *string
+	CacheWrite1hInputPrice  *string
+	CacheWrite30mInputPrice *string
+	OutputPrice             *string
+	ReasoningOutputPrice    *string
 }
 
 func toCostSnapshotView(c sqlc.CostSnapshot) CostSnapshotView {
 	return CostSnapshotView{
-		UncachedInputCostUnit:       opsutil.NumericStringPtr(c.UncachedInputCost),
-		CacheReadInputCostUnit:      opsutil.NumericStringPtr(c.CacheReadInputCost),
-		CacheWrite5mInputCostUnit:   opsutil.NumericStringPtr(c.CacheWrite5mInputCost),
-		CacheWrite1hInputCostUnit:   opsutil.NumericStringPtr(c.CacheWrite1hInputCost),
-		OutputCostUnit:              opsutil.NumericStringPtr(c.OutputCost),
-		ReasoningOutputCostUnit:     opsutil.NumericStringPtr(c.ReasoningOutputCost),
-		UncachedInputCostAmount:     opsutil.NumericStringPtr(c.UncachedInputCostAmount),
-		CacheReadInputCostAmount:    opsutil.NumericStringPtr(c.CacheReadInputCostAmount),
-		CacheWrite5mInputCostAmount: opsutil.NumericStringPtr(c.CacheWrite5mInputCostAmount),
-		CacheWrite1hInputCostAmount: opsutil.NumericStringPtr(c.CacheWrite1hInputCostAmount),
-		OutputCostAmount:            opsutil.NumericStringPtr(c.OutputCostAmount),
-		ReasoningOutputCostAmount:   opsutil.NumericStringPtr(c.ReasoningOutputCostAmount),
-		TotalCostAmount:             opsutil.NumericStringPtr(c.TotalCostAmount),
+		UncachedInputCostUnit:        opsutil.NumericStringPtr(c.UncachedInputCost),
+		CacheReadInputCostUnit:       opsutil.NumericStringPtr(c.CacheReadInputCost),
+		CacheWrite5mInputCostUnit:    opsutil.NumericStringPtr(c.CacheWrite5mInputCost),
+		CacheWrite1hInputCostUnit:    opsutil.NumericStringPtr(c.CacheWrite1hInputCost),
+		CacheWrite30mInputCostUnit:   opsutil.NumericStringPtr(c.CacheWrite30mInputCost),
+		OutputCostUnit:               opsutil.NumericStringPtr(c.OutputCost),
+		ReasoningOutputCostUnit:      opsutil.NumericStringPtr(c.ReasoningOutputCost),
+		UncachedInputCostAmount:      opsutil.NumericStringPtr(c.UncachedInputCostAmount),
+		CacheReadInputCostAmount:     opsutil.NumericStringPtr(c.CacheReadInputCostAmount),
+		CacheWrite5mInputCostAmount:  opsutil.NumericStringPtr(c.CacheWrite5mInputCostAmount),
+		CacheWrite1hInputCostAmount:  opsutil.NumericStringPtr(c.CacheWrite1hInputCostAmount),
+		CacheWrite30mInputCostAmount: opsutil.NumericStringPtr(c.CacheWrite30mInputCostAmount),
+		OutputCostAmount:             opsutil.NumericStringPtr(c.OutputCostAmount),
+		ReasoningOutputCostAmount:    opsutil.NumericStringPtr(c.ReasoningOutputCostAmount),
+		TotalCostAmount:              opsutil.NumericStringPtr(c.TotalCostAmount),
 	}
 }
 
 func toPriceSnapshotView(p sqlc.PriceSnapshot) PriceSnapshotView {
 	return PriceSnapshotView{
-		UncachedInputPrice:     opsutil.NumericStringPtr(p.UncachedInputPrice),
-		CacheReadInputPrice:    opsutil.NumericStringPtr(p.CacheReadInputPrice),
-		CacheWrite5mInputPrice: opsutil.NumericStringPtr(p.CacheWrite5mInputPrice),
-		CacheWrite1hInputPrice: opsutil.NumericStringPtr(p.CacheWrite1hInputPrice),
-		OutputPrice:            opsutil.NumericStringPtr(p.OutputPrice),
-		ReasoningOutputPrice:   opsutil.NumericStringPtr(p.ReasoningOutputPrice),
+		UncachedInputPrice:      opsutil.NumericStringPtr(p.UncachedInputPrice),
+		CacheReadInputPrice:     opsutil.NumericStringPtr(p.CacheReadInputPrice),
+		CacheWrite5mInputPrice:  opsutil.NumericStringPtr(p.CacheWrite5mInputPrice),
+		CacheWrite1hInputPrice:  opsutil.NumericStringPtr(p.CacheWrite1hInputPrice),
+		CacheWrite30mInputPrice: opsutil.NumericStringPtr(p.CacheWrite30mInputPrice),
+		OutputPrice:             opsutil.NumericStringPtr(p.OutputPrice),
+		ReasoningOutputPrice:    opsutil.NumericStringPtr(p.ReasoningOutputPrice),
 	}
 }
 
@@ -345,17 +355,19 @@ func (s *RequestService) Get(ctx context.Context, requestID string, includeInter
 	case err == nil:
 		v := toPriceSnapshotView(priceRow)
 		detail.PriceSnapshot = &v
+		// 线路倍率取结算当时的快照（供费用汇总倒推基准价 = 售价 ÷ 倍率）；历史无快照行为 NULL，展示端回落「—」。
+		// 不再实时读 routes.price_ratio，避免管理员改倍率污染历史请求的倍率与基准价展示。
+		detail.RoutePriceRatio = opsutil.NumericStringPtr(priceRow.PriceRatio)
 	case errors.Is(err, pgx.ErrNoRows):
 	default:
 		return RequestDetail{}, storeFailed(err, "get price snapshot")
 	}
 
-	// 线路倍率 / 策略（用于费用汇总的基准价推导 = 售价 ÷ 倍率）；线路已删或历史未快照时忽略。
+	// 线路策略（route mode）仍取当前线路配置（仅展示标签，非计费口径）；线路已删则忽略。
 	if record.RouteID.Valid {
 		routeRow, err := s.store.GetRouteByID(ctx, record.RouteID.Int64)
 		switch {
 		case err == nil:
-			detail.RoutePriceRatio = opsutil.NumericStringPtr(routeRow.PriceRatio)
 			mode := routeRow.Mode
 			detail.RouteMode = &mode
 		case errors.Is(err, pgx.ErrNoRows):
@@ -414,34 +426,38 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 			CreatedAt:           r.CreatedAt.Time,
 			UpdatedAt:           r.UpdatedAt.Time,
 		},
-		UncachedInputTokens:     r.UncachedInputTokens,
-		CacheReadInputTokens:    r.CacheReadInputTokens,
-		CacheWrite5mInputTokens: r.CacheWrite5mInputTokens,
-		CacheWrite1hInputTokens: r.CacheWrite1hInputTokens,
-		OutputTokens:            r.OutputTokensTotal,
-		ReasoningOutputTokens:   r.ReasoningOutputTokens,
+		UncachedInputTokens:      r.UncachedInputTokens,
+		CacheReadInputTokens:     r.CacheReadInputTokens,
+		CacheWrite5mInputTokens:  r.CacheWrite5mInputTokens,
+		CacheWrite1hInputTokens:  r.CacheWrite1hInputTokens,
+		CacheWrite30mInputTokens: r.CacheWrite30mInputTokens,
+		OutputTokens:             r.OutputTokensTotal,
+		ReasoningOutputTokens:    r.ReasoningOutputTokens,
 
-		UserChargeUSD:            opsutil.NumericStringPtr(r.UserChargeAmount),
-		TotalCostUSD:             opsutil.NumericStringPtr(r.TotalCostAmount),
-		UncachedInputCostUSD:     opsutil.NumericStringPtr(r.UncachedInputCostAmount),
-		CacheReadInputCostUSD:    opsutil.NumericStringPtr(r.CacheReadInputCostAmount),
-		CacheWrite5mInputCostUSD: opsutil.NumericStringPtr(r.CacheWrite5mInputCostAmount),
-		CacheWrite1hInputCostUSD: opsutil.NumericStringPtr(r.CacheWrite1hInputCostAmount),
-		OutputCostUSD:            opsutil.NumericStringPtr(r.OutputCostAmount),
-		ReasoningOutputCostUSD:   opsutil.NumericStringPtr(r.ReasoningOutputCostAmount),
+		UserChargeUSD:             opsutil.NumericStringPtr(r.UserChargeAmount),
+		TotalCostUSD:              opsutil.NumericStringPtr(r.TotalCostAmount),
+		UncachedInputCostUSD:      opsutil.NumericStringPtr(r.UncachedInputCostAmount),
+		CacheReadInputCostUSD:     opsutil.NumericStringPtr(r.CacheReadInputCostAmount),
+		CacheWrite5mInputCostUSD:  opsutil.NumericStringPtr(r.CacheWrite5mInputCostAmount),
+		CacheWrite1hInputCostUSD:  opsutil.NumericStringPtr(r.CacheWrite1hInputCostAmount),
+		CacheWrite30mInputCostUSD: opsutil.NumericStringPtr(r.CacheWrite30mInputCostAmount),
+		OutputCostUSD:             opsutil.NumericStringPtr(r.OutputCostAmount),
+		ReasoningOutputCostUSD:    opsutil.NumericStringPtr(r.ReasoningOutputCostAmount),
 
-		UncachedInputCostUnitUSD:      opsutil.NumericStringPtr(r.UncachedInputCost),
-		CacheReadInputCostUnitUSD:     opsutil.NumericStringPtr(r.CacheReadInputCost),
-		CacheWrite5mInputCostUnitUSD:  opsutil.NumericStringPtr(r.CacheWrite5mInputCost),
-		CacheWrite1hInputCostUnitUSD:  opsutil.NumericStringPtr(r.CacheWrite1hInputCost),
-		OutputCostUnitUSD:             opsutil.NumericStringPtr(r.OutputCost),
-		ReasoningOutputCostUnitUSD:    opsutil.NumericStringPtr(r.ReasoningOutputCost),
-		UncachedInputPriceUnitUSD:     opsutil.NumericStringPtr(r.UncachedInputPrice),
-		CacheReadInputPriceUnitUSD:    opsutil.NumericStringPtr(r.CacheReadInputPrice),
-		CacheWrite5mInputPriceUnitUSD: opsutil.NumericStringPtr(r.CacheWrite5mInputPrice),
-		CacheWrite1hInputPriceUnitUSD: opsutil.NumericStringPtr(r.CacheWrite1hInputPrice),
-		OutputPriceUnitUSD:            opsutil.NumericStringPtr(r.OutputPrice),
-		ReasoningOutputPriceUnitUSD:   opsutil.NumericStringPtr(r.ReasoningOutputPrice),
+		UncachedInputCostUnitUSD:       opsutil.NumericStringPtr(r.UncachedInputCost),
+		CacheReadInputCostUnitUSD:      opsutil.NumericStringPtr(r.CacheReadInputCost),
+		CacheWrite5mInputCostUnitUSD:   opsutil.NumericStringPtr(r.CacheWrite5mInputCost),
+		CacheWrite1hInputCostUnitUSD:   opsutil.NumericStringPtr(r.CacheWrite1hInputCost),
+		CacheWrite30mInputCostUnitUSD:  opsutil.NumericStringPtr(r.CacheWrite30mInputCost),
+		OutputCostUnitUSD:              opsutil.NumericStringPtr(r.OutputCost),
+		ReasoningOutputCostUnitUSD:     opsutil.NumericStringPtr(r.ReasoningOutputCost),
+		UncachedInputPriceUnitUSD:      opsutil.NumericStringPtr(r.UncachedInputPrice),
+		CacheReadInputPriceUnitUSD:     opsutil.NumericStringPtr(r.CacheReadInputPrice),
+		CacheWrite5mInputPriceUnitUSD:  opsutil.NumericStringPtr(r.CacheWrite5mInputPrice),
+		CacheWrite1hInputPriceUnitUSD:  opsutil.NumericStringPtr(r.CacheWrite1hInputPrice),
+		CacheWrite30mInputPriceUnitUSD: opsutil.NumericStringPtr(r.CacheWrite30mInputPrice),
+		OutputPriceUnitUSD:             opsutil.NumericStringPtr(r.OutputPrice),
+		ReasoningOutputPriceUnitUSD:    opsutil.NumericStringPtr(r.ReasoningOutputPrice),
 
 		APIKeyName:      textPtr(r.ApiKeyName),
 		APIKeyPrefix:    textPtr(r.ApiKeyPrefix),

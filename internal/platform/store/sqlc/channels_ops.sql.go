@@ -527,21 +527,23 @@ WITH per_channel AS (
     FROM channels c
     LEFT JOIN request_attempts a
         ON a.channel_id = c.id
-        AND ($1::timestamptz IS NULL OR a.created_at >= $1::timestamptz)
-        AND ($2::timestamptz IS NULL OR a.created_at < $2::timestamptz)
+        AND ($3::timestamptz IS NULL OR a.created_at >= $3::timestamptz)
+        AND ($4::timestamptz IS NULL OR a.created_at < $4::timestamptz)
     GROUP BY c.id
 )
 SELECT
     COUNT(*) FILTER (WHERE total = 0) AS no_data,
-    COUNT(*) FILTER (WHERE total > 0 AND succeeded::float8 / total >= 0.95) AS healthy,
-    COUNT(*) FILTER (WHERE total > 0 AND succeeded::float8 / total >= 0.80 AND succeeded::float8 / total < 0.95) AS degraded,
-    COUNT(*) FILTER (WHERE total > 0 AND succeeded::float8 / total < 0.80) AS unhealthy
+    COUNT(*) FILTER (WHERE total > 0 AND succeeded::float8 / total >= $1::float8) AS healthy,
+    COUNT(*) FILTER (WHERE total > 0 AND succeeded::float8 / total >= $2::float8 AND succeeded::float8 / total < $1::float8) AS degraded,
+    COUNT(*) FILTER (WHERE total > 0 AND succeeded::float8 / total < $2::float8) AS unhealthy
 FROM per_channel
 `
 
 type ChannelsOpsHealthDistributionParams struct {
-	FromTime pgtype.Timestamptz
-	ToTime   pgtype.Timestamptz
+	HealthyRate  float64
+	DegradedRate float64
+	FromTime     pgtype.Timestamptz
+	ToTime       pgtype.Timestamptz
 }
 
 type ChannelsOpsHealthDistributionRow struct {
@@ -552,8 +554,15 @@ type ChannelsOpsHealthDistributionRow struct {
 }
 
 // ChannelsOpsHealthDistribution 按区间内 attempt 成功率对每条渠道分桶并计数（healthy/degraded/unhealthy/no_data）。
+// 分桶阈值 healthy_rate/degraded_rate 由调用方传入（运行时配置 admin_backend.channel_health_thresholds），
+// 与 Go 侧 opsutil.HealthBucket 同口径。
 func (q *Queries) ChannelsOpsHealthDistribution(ctx context.Context, arg ChannelsOpsHealthDistributionParams) (ChannelsOpsHealthDistributionRow, error) {
-	row := q.db.QueryRow(ctx, channelsOpsHealthDistribution, arg.FromTime, arg.ToTime)
+	row := q.db.QueryRow(ctx, channelsOpsHealthDistribution,
+		arg.HealthyRate,
+		arg.DegradedRate,
+		arg.FromTime,
+		arg.ToTime,
+	)
 	var i ChannelsOpsHealthDistributionRow
 	err := row.Scan(
 		&i.NoData,

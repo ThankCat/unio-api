@@ -1605,3 +1605,118 @@ TPM（每分钟 token）限流改为「缓存感知」，对齐 Anthropic「cach
 ```
 
 设计文档：[DESIGN-route-rate-limit.md](DESIGN-route-rate-limit.md) §14–§15
+
+## DEC-029 慢上游 + 客户端重试风暴防护：在途并发上限 + 失败软冷却（唯一渠道保护）
+
+状态：accepted（2026-07-10 定稿）
+
+决策：
+
+```text
+针对「慢上游（如 sub2api 中转，断开仍计费）+ 客户端自动重试（Claude Code 最多 ~10 次）」的成本放大
+场景，新增两项相互独立的保护，均为运行时配置（app_settings，热改免重启）：
+
+1. 在途并发上限（in-flight concurrency limit，进程内计数）：
+   - 「线路+用户」级：ingress 中间件在认证后检查，超出全局默认 key_limit 的并发请求立即 429
+     快速失败——不发上游、不冻结余额、不被上游计费。主体口径与 DEC-027 一致（ru:<route>:<user>）。
+   - 渠道级：attempt runner 在调用上游前占用渠道在途名额（含整段流式传输，params.Stream 返回即释放），
+     满员即跳过该候选 fallback 到下一渠道（与熔断 open 同语义，不写 attempt、不占 RPM/TPM）。
+     渠道行 channels.concurrency_limit 覆盖全局默认（NULL=继承，0=不限，>0=上限）。
+   - 全局默认 gateway.concurrency_defaults {key_limit, channel_limit}，默认 0/0（关闭）——并发限制是
+     选择性开启的保护，避免默认值误伤合法的 agent 并发扇出。
+   - 与 RPM（按时间的请求速率）正交：RPM 挡不住「10 个 200s 长请求同时挂着」这种堆积。
+   - 对齐业界：LiteLLM max_parallel_requests（per-deployment）、sub2api account.Concurrency、
+     Envoy circuit breakers max_requests。
+
+2. 渠道失败软冷却（failure soft-cooldown）：
+   - 渠道发生 timeout / 5xx（server_error）类上游故障后，登记软冷却
+     gateway.channel_failure_cooldown_ms（默认 5000ms，对齐 LiteLLM 默认冷却；0=关闭）。
+   - 「软」语义 = 只 demote 不剔除：PrepareCandidates 把软冷却中的候选稳定移到 fallback 顺序末尾，
+     健康候选优先；全部软冷却时顺序不变。因此该模型只有一条可用渠道时行为完全不变——
+     唯一渠道保护，对齐 LiteLLM「单 deployment 不冷却」与 Envoy max_ejection_percent 的设计意图。
+   - 与既有机制分工：429 → RecordRateLimit 硬冷却（上游明确要求退避）；401 → 凭据闸门持久摘除；
+     403 → 熔断器瞬时摘除；timeout/5xx → 本软冷却（快速降级）+ 熔断器（错误率达阈值才硬摘）。
+     熔断器窗口需要 min_requests=20 个样本才动作，低流量/慢超时场景反应迟钝，软冷却补这个空窗。
+```
+
+原因：
+
+```text
+1. anthropic_0.16（sub2api 中转）事故复盘：39 次首字节超时 + 59 次 5xx + 11 次 TLS 损坏，全部发生在
+   首字节前；上游 sub2api 断开不取消、drain 到底照扣费。客户端（Claude Code）超时后自动重试最多 10 次，
+   每次都是新请求、都可能被上游计费——渠道 timeout 放大到 200s 后，单次用户操作最坏可堆 10×200s 在途。
+2. 重试放大是「跨请求」现象，单请求内的 retry 分类器/每渠道重试次数都治不到；业界（LiteLLM/sub2api/
+   Envoy/Google SRE）一致用「并发上限 + 冷却/重试预算」处理，没有一家按渠道配重试次数。
+3. 唯一渠道保护是硬要求：opus 系列当前只有一条渠道，任何「冷却=剔除」的实现都会把该模型打成全灭。
+```
+
+影响：
+
+```text
+1. migrations/000072：channels.concurrency_limit（可空，CHECK >= 0）；FindRouteCandidates/channels 全行
+   查询带出该列；routing.ChatRouteCandidate.ConcurrencyLimit 传递到 attempt runner。
+2. internal/platform/ratelimit/concurrency.go：进程内 ConcurrencyLimiter（AcquireRouteUser/AcquireChannel/
+   SetDefaults 热改；release 幂等；limit<=0 不限但仍计数，保证热改后计数准确）。
+3. internal/service/gateway/lifecycle：cooldown.go 增加 failureUntil 软冷却（RecordFailure/FailurePreferred/
+   SetFailureCooldown）；candidates.go PrepareCandidatesParams.FailurePreferred + demoteFailureCooled；
+   attempt_runner(_stream).go 在 429 冷却旁登记失败软冷却 + 渠道在途名额 acquire/release。
+4. ingress：internal/app/gatewayapi/middleware/concurrency.go（ConcurrencyLimit 中间件，429 快速失败）。
+5. 新 failure code：channel_concurrency_limited（三协议 handler 均映射 429）。
+6. app_settings 新增 gateway.channel_failure_cooldown_ms 与 gateway.concurrency_defaults（注册表 +
+   settingsApplier 热推送 + admin 面板自动出现）。
+7. admin：渠道 rate_limits 请求对象增加 concurrency 字段；unio-admin 渠道表单增加「并发」输入。
+8. 推荐运维配置：sub2api 类渠道 concurrency_limit 2~5、key_limit 3~5（略高于终端用户合法并发）；
+   失败软冷却保持默认 5s。
+```
+
+## DEC-030 缓存写入 30m 维度：OpenAI GPT-5.6 独立成档，不塞进 5m/1h 桶
+
+状态：accepted（2026-07-10 定稿）
+
+决策：
+
+```text
+OpenAI GPT-5.6（2026-07-09 GA）起，缓存写入（cache_write_tokens）按未缓存输入价 1.25x 计费，且只有
+「30 分钟单档」这一种 TTL；Anthropic 则是 5m（1.25x）/ 1h（2x）双档且可并存。二者 TTL 语义与计价倍率
+都不同。为账目按 TTL 精确区分、便于对账与未来分档定价，在既有 cache_write_5m / cache_write_1h 之外
+显式新增第三个协议无关维度 cache_write_30m，而不是把 OpenAI 的写入塞进 5m 桶。
+
+映射口径：
+- OpenAI 协议族（Chat Completions / Responses，含 DeepSeek 兼容）：cache_write_tokens → 30m 维度；
+  5m/1h 标 not_applicable。uncached = prompt − cached − cache_write（写入 token 是 uncached 的子集，
+  从中扣出改按 1.25x 计，避免同一批 token 既按 1x 又按 1.25x 双重计费）。
+- Anthropic：5m/1h 维持原样，30m 标 not_applicable。
+- 计费公式 token_v1 不升级：新增维度对全部历史数据恒为 0（回填 not_applicable / 0），复算结果不变。
+- usage_mapping_version 升级 v1→v2（openai.v2 / openai.responses.v2）：新增解析了以前忽略的
+  cache_write_tokens 字段，按复算纪律必须升版以区分映射规则。
+```
+
+原因：
+
+```text
+1. 单一 CacheWriteInputTokens 维度对 Anthropic 行不通：一条响应可同时含 5m + 1h 写入，两档单价不同，
+   一个维度只能挂一个单价。故写入维度天然需要多档。
+2. 把 OpenAI 的 30m 归入 5m 桶会丢失 TTL 语义（30m ≠ 5m），一旦两家按 TTL 差异定价即被动，且请求详情
+   / 对账口径与上游账单对不上。
+3. adapter/anthropic/messages/usage.go 早有先例：无 TTL 分级的上游（DeepSeek flat 写入）归入默认桶 +
+   另一档 not_applicable。此处沿用「按 TTL 语义分档、缺失档 not_applicable」的统一口径。
+```
+
+影响：
+
+```text
+1. migrations/000075：6 张表（model_prices / channel_prices / price_snapshots / cost_snapshots /
+   usage_records / settlement_recovery_jobs）新增 cache_write_30m 列（价/成本/金额/token+state），
+   并把 30m 并入 cost_snapshots 总额校验与 usage/recovery 的「非 known 值置零」约束；历史行回填
+   0 / not_applicable，token_v1 复算不变。
+2. usage.Facts 新增 CacheWrite30mInputTokens（+ Valid()）；billing types/price/service/scale 全链路
+   新增 30m 单价/金额/校验/授权估算；adapter.ChatUsage 新增 CacheWriteTokens 并解析
+   prompt_tokens_details.cache_write_tokens / input_tokens_details.cache_write_tokens。
+3. settlement / settlement_recovery / router / partial_stream / cost_exposure / ratelimit_gate /
+   admin(query+service+api DTO) 所有 usage/price/cost 映射点同步补 30m；sqlc 查询（价目、快照、
+   请求详情、dashboard/radar/models_ops 聚合）纳入 30m。
+4. unio-admin：价格/成本录入表单、成本分解、成本计算器、请求详情、recovery 详情、dashboard 缓存卡
+   均新增 30m 展示/录入；cost-breakdown 的 30m 行按「tokens>0」条件渲染，Anthropic/旧请求不显示空行。
+5. seed-test-data.sql 新增 GPT-5.6 Sol/Terra/Luna + gpt-5.6 别名（官方价，cache_write_30m = 输入价 1.25x）。
+6. 后续若 OpenAI 推出更长 TTL 的更高价写入档，可复用现有多档结构（新增维度或复用现档），无需重构。
+```

@@ -393,7 +393,9 @@ func (d *chatSettlementDBDeps) params() ChatSettlementParams {
 			ReasoningOutputPrice: testNumeric(18_0000000000, -10),
 			FormulaVersion:       billing.FormulaVersionV1,
 		},
-		Facts: chatSettlementFacts(coreusage.SourceUpstreamResponse),
+		// PriceRatio 随 SalePrice 一起快照进 price_snapshots.price_ratio（0.5×），供请求展示恒显结算当时倍率。
+		PriceRatio: testNumeric(0_5000000000, -10),
+		Facts:      chatSettlementFacts(coreusage.SourceUpstreamResponse),
 	}
 }
 
@@ -501,15 +503,16 @@ func chatSettlementBilling(amount pgtype.Numeric) *fakeChatBillingCalculator {
 // chatSettlementProviderCost 返回当前测试 usage 和成本价对应的平台成本分项。
 func chatSettlementProviderCost() billing.ProviderCost {
 	return billing.ProviderCost{
-		UncachedInputCostAmount:     testNumeric(70000, -10),
-		OutputCostAmount:            testNumeric(120000, -10),
-		CacheReadInputCostAmount:    testNumeric(7500, -10),
-		CacheWrite5mInputCostAmount: testNumeric(0, -10),
-		CacheWrite1hInputCostAmount: testNumeric(0, -10),
-		ReasoningOutputCostAmount:   testNumeric(120000, -10),
-		TotalCostAmount:             testNumeric(317500, -10),
-		Currency:                    "USD",
-		FormulaVersion:              billing.FormulaVersionV1,
+		UncachedInputCostAmount:      testNumeric(70000, -10),
+		OutputCostAmount:             testNumeric(120000, -10),
+		CacheReadInputCostAmount:     testNumeric(7500, -10),
+		CacheWrite5mInputCostAmount:  testNumeric(0, -10),
+		CacheWrite1hInputCostAmount:  testNumeric(0, -10),
+		CacheWrite30mInputCostAmount: testNumeric(0, -10),
+		ReasoningOutputCostAmount:    testNumeric(120000, -10),
+		TotalCostAmount:              testNumeric(317500, -10),
+		Currency:                     "USD",
+		FormulaVersion:               billing.FormulaVersionV1,
 	}
 }
 
@@ -669,6 +672,8 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 	if snapshot.FormulaVersion != billing.FormulaVersionV1 {
 		t.Fatalf("expected formula version %q, got %q", billing.FormulaVersionV1, snapshot.FormulaVersion)
 	}
+	// 线路倍率随售价一起快照，供请求详情/列表恒显示结算当时倍率（不随后续改倍率漂移）。
+	assertNumericEqual(t, snapshot.PriceRatio, testNumeric(0_5000000000, -10))
 
 	costSnapshot, err := deps.queries.GetCostSnapshotByRequest(deps.ctx, deps.requestRecord.ID)
 	if err != nil {
@@ -1097,20 +1102,22 @@ func TestChatSettlementRejectsReplayWithDifferentCostSnapshot(t *testing.T) {
 func usageRecordRowFromFacts(facts adapter.ResponseFacts) sqlc.UsageRecord {
 	u := facts.Usage
 	return sqlc.UsageRecord{
-		UncachedInputTokens:          u.UncachedInputTokens.Value,
-		UncachedInputTokensState:     string(u.UncachedInputTokens.State),
-		CacheReadInputTokens:         u.CacheReadInputTokens.Value,
-		CacheReadInputTokensState:    string(u.CacheReadInputTokens.State),
-		CacheWrite5mInputTokens:      u.CacheWrite5mInputTokens.Value,
-		CacheWrite5mInputTokensState: string(u.CacheWrite5mInputTokens.State),
-		CacheWrite1hInputTokens:      u.CacheWrite1hInputTokens.Value,
-		CacheWrite1hInputTokensState: string(u.CacheWrite1hInputTokens.State),
-		OutputTokensTotal:            u.OutputTokensTotal.Value,
-		OutputTokensTotalState:       string(u.OutputTokensTotal.State),
-		ReasoningOutputTokens:        u.ReasoningOutputTokens.Value,
-		ReasoningOutputTokensState:   string(u.ReasoningOutputTokens.State),
-		UsageSource:                  string(facts.UsageSource),
-		UsageMappingVersion:          facts.UsageMappingVersion,
+		UncachedInputTokens:           u.UncachedInputTokens.Value,
+		UncachedInputTokensState:      string(u.UncachedInputTokens.State),
+		CacheReadInputTokens:          u.CacheReadInputTokens.Value,
+		CacheReadInputTokensState:     string(u.CacheReadInputTokens.State),
+		CacheWrite5mInputTokens:       u.CacheWrite5mInputTokens.Value,
+		CacheWrite5mInputTokensState:  string(u.CacheWrite5mInputTokens.State),
+		CacheWrite1hInputTokens:       u.CacheWrite1hInputTokens.Value,
+		CacheWrite1hInputTokensState:  string(u.CacheWrite1hInputTokens.State),
+		CacheWrite30mInputTokens:      u.CacheWrite30mInputTokens.Value,
+		CacheWrite30mInputTokensState: string(u.CacheWrite30mInputTokens.State),
+		OutputTokensTotal:             u.OutputTokensTotal.Value,
+		OutputTokensTotalState:        string(u.OutputTokensTotal.State),
+		ReasoningOutputTokens:         u.ReasoningOutputTokens.Value,
+		ReasoningOutputTokensState:    string(u.ReasoningOutputTokens.State),
+		UsageSource:                   string(facts.UsageSource),
+		UsageMappingVersion:           facts.UsageMappingVersion,
 	}
 }
 

@@ -20,6 +20,8 @@ INSERT INTO usage_records (
     cache_write_5m_input_tokens_state,
     cache_write_1h_input_tokens,
     cache_write_1h_input_tokens_state,
+    cache_write_30m_input_tokens,
+    cache_write_30m_input_tokens_state,
     output_tokens_total,
     output_tokens_total_state,
     reasoning_output_tokens,
@@ -42,27 +44,31 @@ VALUES (
     $12,
     $13,
     $14,
-    $15
+    $15,
+    $16,
+    $17
 )
-RETURNING id, request_record_id, uncached_input_tokens, uncached_input_tokens_state, cache_read_input_tokens, cache_read_input_tokens_state, cache_write_5m_input_tokens, cache_write_5m_input_tokens_state, cache_write_1h_input_tokens, cache_write_1h_input_tokens_state, output_tokens_total, output_tokens_total_state, reasoning_output_tokens, reasoning_output_tokens_state, usage_source, usage_mapping_version, created_at
+RETURNING id, request_record_id, uncached_input_tokens, uncached_input_tokens_state, cache_read_input_tokens, cache_read_input_tokens_state, cache_write_5m_input_tokens, cache_write_5m_input_tokens_state, cache_write_1h_input_tokens, cache_write_1h_input_tokens_state, output_tokens_total, output_tokens_total_state, reasoning_output_tokens, reasoning_output_tokens_state, usage_source, usage_mapping_version, created_at, cache_write_30m_input_tokens, cache_write_30m_input_tokens_state
 `
 
 type CreateUsageRecordParams struct {
-	RequestRecordID              int64
-	UncachedInputTokens          int64
-	UncachedInputTokensState     string
-	CacheReadInputTokens         int64
-	CacheReadInputTokensState    string
-	CacheWrite5mInputTokens      int64
-	CacheWrite5mInputTokensState string
-	CacheWrite1hInputTokens      int64
-	CacheWrite1hInputTokensState string
-	OutputTokensTotal            int64
-	OutputTokensTotalState       string
-	ReasoningOutputTokens        int64
-	ReasoningOutputTokensState   string
-	UsageSource                  string
-	UsageMappingVersion          string
+	RequestRecordID               int64
+	UncachedInputTokens           int64
+	UncachedInputTokensState      string
+	CacheReadInputTokens          int64
+	CacheReadInputTokensState     string
+	CacheWrite5mInputTokens       int64
+	CacheWrite5mInputTokensState  string
+	CacheWrite1hInputTokens       int64
+	CacheWrite1hInputTokensState  string
+	CacheWrite30mInputTokens      int64
+	CacheWrite30mInputTokensState string
+	OutputTokensTotal             int64
+	OutputTokensTotalState        string
+	ReasoningOutputTokens         int64
+	ReasoningOutputTokensState    string
+	UsageSource                   string
+	UsageMappingVersion           string
 }
 
 // CreateUsageRecord 创建一次请求最终用于计费和审计的协议无关 usage 记录。
@@ -77,6 +83,8 @@ func (q *Queries) CreateUsageRecord(ctx context.Context, arg CreateUsageRecordPa
 		arg.CacheWrite5mInputTokensState,
 		arg.CacheWrite1hInputTokens,
 		arg.CacheWrite1hInputTokensState,
+		arg.CacheWrite30mInputTokens,
+		arg.CacheWrite30mInputTokensState,
 		arg.OutputTokensTotal,
 		arg.OutputTokensTotalState,
 		arg.ReasoningOutputTokens,
@@ -103,12 +111,14 @@ func (q *Queries) CreateUsageRecord(ctx context.Context, arg CreateUsageRecordPa
 		&i.UsageSource,
 		&i.UsageMappingVersion,
 		&i.CreatedAt,
+		&i.CacheWrite30mInputTokens,
+		&i.CacheWrite30mInputTokensState,
 	)
 	return i, err
 }
 
 const getUsageRecordByRequest = `-- name: GetUsageRecordByRequest :one
-SELECT id, request_record_id, uncached_input_tokens, uncached_input_tokens_state, cache_read_input_tokens, cache_read_input_tokens_state, cache_write_5m_input_tokens, cache_write_5m_input_tokens_state, cache_write_1h_input_tokens, cache_write_1h_input_tokens_state, output_tokens_total, output_tokens_total_state, reasoning_output_tokens, reasoning_output_tokens_state, usage_source, usage_mapping_version, created_at
+SELECT id, request_record_id, uncached_input_tokens, uncached_input_tokens_state, cache_read_input_tokens, cache_read_input_tokens_state, cache_write_5m_input_tokens, cache_write_5m_input_tokens_state, cache_write_1h_input_tokens, cache_write_1h_input_tokens_state, output_tokens_total, output_tokens_total_state, reasoning_output_tokens, reasoning_output_tokens_state, usage_source, usage_mapping_version, created_at, cache_write_30m_input_tokens, cache_write_30m_input_tokens_state
 FROM usage_records
 WHERE request_record_id = $1
 `
@@ -135,6 +145,8 @@ func (q *Queries) GetUsageRecordByRequest(ctx context.Context, requestRecordID i
 		&i.UsageSource,
 		&i.UsageMappingVersion,
 		&i.CreatedAt,
+		&i.CacheWrite30mInputTokens,
+		&i.CacheWrite30mInputTokensState,
 	)
 	return i, err
 }

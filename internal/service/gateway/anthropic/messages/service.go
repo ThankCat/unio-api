@@ -99,6 +99,16 @@ func (s *MessagesService) SetRateLimitGuard(guard lifecycle.RateLimitGuard) {
 	s.attemptRunner.SetRateLimitGuard(guard)
 }
 
+// SetConcurrencyLimiter 注入渠道在途并发限制器（DEC-029），转发给候选循环驱动；nil 表示不启用。
+func (s *MessagesService) SetConcurrencyLimiter(limiter lifecycle.ChannelConcurrencyLimiter) {
+	s.attemptRunner.SetConcurrencyLimiter(limiter)
+}
+
+// SetCostExposureRecorder 注入成本敞口记录器（DESIGN-bill-on-cancel 阶段一）；nil 表示不启用。
+func (s *MessagesService) SetCostExposureRecorder(recorder lifecycle.CostExposureRecorder, assumedOutputFallback int64) {
+	s.lifecycle.SetCostExposureRecorder(recorder, assumedOutputFallback)
+}
+
 // SetChannelCooldownRegistry 注入渠道级 429 冷却注册表（P2-7），转发给共享 lifecycle；nil 表示不启用冷却。
 func (s *MessagesService) SetChannelCooldownRegistry(registry *lifecycle.ChannelCooldownRegistry) {
 	s.lifecycle.SetChannelCooldownRegistry(registry)

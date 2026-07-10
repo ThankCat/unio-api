@@ -33,6 +33,10 @@ type RequestLifecycle struct {
 	ingressProtocol requestlog.Protocol
 	operation       requestlog.Operation
 	safeMessage     func(code string) string
+
+	// costExposures 是可选的成本敞口记录器（DESIGN-bill-on-cancel 阶段一）；nil 表示不启用。
+	costExposures              CostExposureRecorder
+	costExposureOutputFallback int64
 }
 
 // RequestLifecycleParams 是构造 RequestLifecycle 所需的全部字段。
@@ -147,6 +151,32 @@ func (l *RequestLifecycle) RecordChannelRateLimit(channelKey string, err error) 
 	}
 	_, recorded := l.cooldowns.RecordRateLimit(channelKey, retryAfter)
 	return recorded
+}
+
+// RecordChannelFailureCooldown 在上游 timeout/5xx 类故障后登记渠道失败软冷却（DEC-029）。
+//
+// 仅对 timeout/server_error 分类生效；其它错误 no-op。nil 冷却注册表（未启用）时 no-op。
+// 软冷却只影响后续请求的候选排序偏好（demote），不会把候选池清空（唯一渠道保护）。
+func (l *RequestLifecycle) RecordChannelFailureCooldown(channelKey string, err error) bool {
+	if l == nil || l.cooldowns == nil {
+		return false
+	}
+	if !isFailureCooldownError(err) {
+		return false
+	}
+	_, recorded := l.cooldowns.RecordFailure(channelKey)
+	return recorded
+}
+
+// CandidateFailurePreferred 报告候选渠道当前是否不在失败软冷却窗口内（true=可正常优先使用）。
+//
+// 供 PrepareCandidates 的 FailurePreferred 软偏好使用：软冷却中的候选被 demote 到 fallback
+// 顺序末尾而非剔除，故唯一候选时行为不变（DEC-029）。
+func (l *RequestLifecycle) CandidateFailurePreferred(candidate routing.ChatRouteCandidate) bool {
+	if l == nil || l.cooldowns == nil {
+		return true
+	}
+	return l.cooldowns.FailurePreferred(MetricsID(candidate.Channel.ID))
 }
 
 // ChannelHealthScore 返回某 channel 的健康分（越小越健康），供 stable 线路排序。

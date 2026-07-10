@@ -121,6 +121,21 @@ type chatCompletionUsage struct {
 
 type chatPromptTokensDetails struct {
 	CachedTokens int `json:"cached_tokens"`
+	// CacheWriteTokens 是 GPT-5.6+ 起 prompt_tokens_details 中「写入缓存」的 token 数（按 1.25x 计费）。
+	CacheWriteTokens int `json:"cache_write_tokens"`
+	// CacheCreationTokens 是 sub2api 等兼容上游的别名字段（等价 cache_write_tokens）。
+	CacheCreationTokens int `json:"cache_creation_tokens"`
+}
+
+// CacheWrite 返回缓存写入 token，按别名优先级兜底（cache_write_tokens > cache_creation_tokens）。
+func (d chatPromptTokensDetails) CacheWrite() int {
+	if d.CacheWriteTokens > 0 {
+		return d.CacheWriteTokens
+	}
+	if d.CacheCreationTokens > 0 {
+		return d.CacheCreationTokens
+	}
+	return 0
 }
 
 type chatCompletionTokensDetails struct {

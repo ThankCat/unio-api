@@ -18,7 +18,7 @@ type fakeRecoveryStore struct {
 	listErr   error
 	total     int64
 	countErr  error
-	job       sqlc.SettlementRecoveryJob
+	job       sqlc.GetSettlementRecoveryJobByIDRow
 	getErr    error
 	lastList  sqlc.ListSettlementRecoveryJobsPageParams
 	lastCount sqlc.CountSettlementRecoveryJobsParams
@@ -34,7 +34,7 @@ func (f *fakeRecoveryStore) CountSettlementRecoveryJobs(_ context.Context, arg s
 	return f.total, f.countErr
 }
 
-func (f *fakeRecoveryStore) GetSettlementRecoveryJobByID(context.Context, int64) (sqlc.SettlementRecoveryJob, error) {
+func (f *fakeRecoveryStore) GetSettlementRecoveryJobByID(context.Context, int64) (sqlc.GetSettlementRecoveryJobByIDRow, error) {
 	return f.job, f.getErr
 }
 
@@ -49,7 +49,15 @@ func numeric(s string) pgtype.Numeric {
 func TestRecoveryServiceListMapsFiltersAndTotal(t *testing.T) {
 	store := &fakeRecoveryStore{
 		listRows: []sqlc.ListSettlementRecoveryJobsPageRow{
-			{ID: 5, UserID: 7, Status: "dead", EstimatedAmount: numeric("1.5"), AuthorizedAmount: numeric("1.0")},
+			{
+				ID: 5, UserID: 7, Status: "dead",
+				EstimatedAmount: numeric("1.5"), AuthorizedAmount: numeric("1.0"),
+				RequestPublicID:           pgtype.Text{String: "req_abc", Valid: true},
+				ReservationStatus:         pgtype.Text{String: "captured", Valid: true},
+				ReservationCapturedAmount: numeric("0.8"),
+				ReservationReleasedAmount: numeric("0.2"),
+				OverageAmount:             numeric("0.1"),
+			},
 			{ID: 4, UserID: 7, Status: "dead", EstimatedAmount: numeric("0.20"), AuthorizedAmount: numeric("0.20")},
 		},
 		total: 9,
@@ -78,6 +86,18 @@ func TestRecoveryServiceListMapsFiltersAndTotal(t *testing.T) {
 	if items[0].EstimatedAmount != "1.5" || items[1].AuthorizedAmount != "0.20" {
 		t.Fatalf("unexpected amount mapping: %+v", items)
 	}
+	// 资金闭环字段(JOIN 预授权行 + 超额补扣流水)映射。
+	if items[0].ReservationStatus != "captured" || items[0].CapturedAmount != "0.8" ||
+		items[0].ReleasedAmount != "0.2" || items[0].OverageAmount != "0.1" {
+		t.Fatalf("money-loop fields not mapped: %+v", items[0])
+	}
+	if items[0].RequestPublicID != "req_abc" {
+		t.Fatalf("request public id not mapped: %q", items[0].RequestPublicID)
+	}
+	// 关联缺失(理论不可达,LEFT JOIN 兜底)时金额回 "0"、状态回空。
+	if items[1].ReservationStatus != "" || items[1].CapturedAmount != "0" {
+		t.Fatalf("nullable money-loop fields not defaulted: %+v", items[1])
+	}
 
 	if !store.lastList.Status.Valid || store.lastList.Status.String != "dead" {
 		t.Fatalf("status filter not forwarded: %+v", store.lastList.Status)
@@ -100,9 +120,9 @@ func TestRecoveryServiceListMapsFiltersAndTotal(t *testing.T) {
 	}
 }
 
-func baseRecoveryJob() sqlc.SettlementRecoveryJob {
+func baseRecoveryJob() sqlc.GetSettlementRecoveryJobByIDRow {
 	now := time.Date(2026, 6, 2, 3, 4, 5, 0, time.UTC)
-	return sqlc.SettlementRecoveryJob{
+	return sqlc.GetSettlementRecoveryJobByIDRow{
 		ID:                      11,
 		UserID:                  7,
 		RequestRecordID:         100,
@@ -136,6 +156,12 @@ func baseRecoveryJob() sqlc.SettlementRecoveryJob {
 		CompletedAt:             pgtype.Timestamptz{Time: now, Valid: true},
 		CreatedAt:               pgtype.Timestamptz{Time: now, Valid: true},
 		UpdatedAt:               pgtype.Timestamptz{Time: now, Valid: true},
+		// dead 收口:全额释放、零实扣。
+		RequestPublicID:           pgtype.Text{String: "req_detail", Valid: true},
+		ReservationStatus:         pgtype.Text{String: "released", Valid: true},
+		ReservationCapturedAmount: numeric("0"),
+		ReservationReleasedAmount: numeric("2.5"),
+		OverageAmount:             numeric("0"),
 	}
 }
 
@@ -157,6 +183,9 @@ func TestRecoveryServiceGetHidesInternalByDefault(t *testing.T) {
 	}
 	if detail.Status != "dead" || detail.AttemptCount != 10 || detail.MaxAttempts != 10 {
 		t.Fatalf("status/retry fields not mapped: %+v", detail.RecoveryJobSummary)
+	}
+	if detail.ReservationStatus != "released" || detail.ReleasedAmount != "2.5" || detail.CapturedAmount != "0" {
+		t.Fatalf("money-loop fields not mapped in detail: %+v", detail.RecoveryJobSummary)
 	}
 }
 

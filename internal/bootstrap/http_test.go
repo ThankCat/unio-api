@@ -11,6 +11,7 @@ import (
 	gatewayanthropic "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
 	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	gatewayresponses "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
+	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-api/internal/service/appsettings"
 )
@@ -59,6 +60,7 @@ func TestNewHTTPHandlerBuildsHealthRoute(t *testing.T) {
 		logger,
 		&sqlc.Queries{},
 		NewRateLimitGuard(nil, "unio:test", appsettings.DefaultRateLimitDefaultsSettings(), logger),
+		ratelimit.NewConcurrencyLimiter(0, 0),
 		fakeHTTPChatCompletionService{},
 		fakeHTTPResponsesService{},
 		fakeHTTPMessagesService{},

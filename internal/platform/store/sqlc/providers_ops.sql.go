@@ -138,7 +138,7 @@ WITH money AS (
     SELECT
         COALESCE(SUM(
             u.uncached_input_tokens + u.cache_read_input_tokens
-            + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
+            + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens
             + u.output_tokens_total
         ), 0)::bigint AS tokens_total,
         COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,

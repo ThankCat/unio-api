@@ -54,13 +54,14 @@ type modelOpsRowDTO struct {
 	HasPrice                  bool   `json:"has_price"`
 	Sellable                  bool   `json:"sellable"`
 	// 基准售价（DEC-026 model_prices，每 1M tokens；无基准价时为 null）。
-	BaseCurrency               *string `json:"base_currency"`
-	BaseUncachedInputPrice     *string `json:"base_uncached_input_price"`
-	BaseCacheReadInputPrice    *string `json:"base_cache_read_input_price"`
-	BaseCacheWrite5mInputPrice *string `json:"base_cache_write_5m_input_price"`
-	BaseCacheWrite1hInputPrice *string `json:"base_cache_write_1h_input_price"`
-	BaseOutputPrice            *string `json:"base_output_price"`
-	BaseReasoningOutputPrice   *string `json:"base_reasoning_output_price"`
+	BaseCurrency                *string `json:"base_currency"`
+	BaseUncachedInputPrice      *string `json:"base_uncached_input_price"`
+	BaseCacheReadInputPrice     *string `json:"base_cache_read_input_price"`
+	BaseCacheWrite5mInputPrice  *string `json:"base_cache_write_5m_input_price"`
+	BaseCacheWrite1hInputPrice  *string `json:"base_cache_write_1h_input_price"`
+	BaseCacheWrite30mInputPrice *string `json:"base_cache_write_30m_input_price"`
+	BaseOutputPrice             *string `json:"base_output_price"`
+	BaseReasoningOutputPrice    *string `json:"base_reasoning_output_price"`
 }
 
 type modelOpsDetailDTO struct {
@@ -180,26 +181,27 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 	out := make([]modelOpsRowDTO, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, modelOpsRowDTO{
-			ID:                         row.ID,
-			ModelID:                    row.ModelID,
-			DisplayName:                row.DisplayName,
-			OwnedBy:                    row.OwnedBy,
-			Status:                     row.Status,
-			CreatedAt:                  rfc3339(row.CreatedAt),
-			MaxOutputTokens:            row.MaxOutputTokens,
-			ContextWindowTokens:        row.ContextWindowTokens,
-			BindingsTotal:              row.BindingsTotal,
-			BindingsAvailable:          row.BindingsAvailable,
-			CapabilitiesDeclaredCount:  row.CapabilitiesDeclaredCount,
-			HasPrice:                   row.HasPrice,
-			Sellable:                   row.Sellable,
-			BaseCurrency:               row.BaseCurrency,
-			BaseUncachedInputPrice:     row.BaseUncachedInputPrice,
-			BaseCacheReadInputPrice:    row.BaseCacheReadInputPrice,
-			BaseCacheWrite5mInputPrice: row.BaseCacheWrite5mInputPrice,
-			BaseCacheWrite1hInputPrice: row.BaseCacheWrite1hInputPrice,
-			BaseOutputPrice:            row.BaseOutputPrice,
-			BaseReasoningOutputPrice:   row.BaseReasoningOutputPrice,
+			ID:                          row.ID,
+			ModelID:                     row.ModelID,
+			DisplayName:                 row.DisplayName,
+			OwnedBy:                     row.OwnedBy,
+			Status:                      row.Status,
+			CreatedAt:                   rfc3339(row.CreatedAt),
+			MaxOutputTokens:             row.MaxOutputTokens,
+			ContextWindowTokens:         row.ContextWindowTokens,
+			BindingsTotal:               row.BindingsTotal,
+			BindingsAvailable:           row.BindingsAvailable,
+			CapabilitiesDeclaredCount:   row.CapabilitiesDeclaredCount,
+			HasPrice:                    row.HasPrice,
+			Sellable:                    row.Sellable,
+			BaseCurrency:                row.BaseCurrency,
+			BaseUncachedInputPrice:      row.BaseUncachedInputPrice,
+			BaseCacheReadInputPrice:     row.BaseCacheReadInputPrice,
+			BaseCacheWrite5mInputPrice:  row.BaseCacheWrite5mInputPrice,
+			BaseCacheWrite1hInputPrice:  row.BaseCacheWrite1hInputPrice,
+			BaseCacheWrite30mInputPrice: row.BaseCacheWrite30mInputPrice,
+			BaseOutputPrice:             row.BaseOutputPrice,
+			BaseReasoningOutputPrice:    row.BaseReasoningOutputPrice,
 		})
 	}
 	writeList(w, http.StatusOK, out, page, total)

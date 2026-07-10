@@ -154,7 +154,7 @@ func TestRadarAggregates(t *testing.T) {
 	}
 
 	now := time.Now()
-	out, err := NewService(store).Radar(context.Background(), now.Add(-24*time.Hour), now)
+	out, err := NewService(store, nil).Radar(context.Background(), now.Add(-24*time.Hour), now)
 	if err != nil {
 		t.Fatalf("radar: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestRadarAggregates(t *testing.T) {
 }
 
 func TestBreakdownInvalidDimension(t *testing.T) {
-	_, err := NewService(&fakeStore{}).Breakdown(context.Background(), "bogus", time.Time{}, time.Now())
+	_, err := NewService(&fakeStore{}, nil).Breakdown(context.Background(), "bogus", time.Time{}, time.Now())
 	if err == nil {
 		t.Fatal("expected error for invalid dimension")
 	}
@@ -231,7 +231,7 @@ func TestOverviewAggregates(t *testing.T) {
 		},
 	}
 
-	out, err := NewService(store).Overview(context.Background(), time.Now().Add(-time.Hour), time.Now())
+	out, err := NewService(store, nil).Overview(context.Background(), time.Now().Add(-time.Hour), time.Now())
 	if err != nil {
 		t.Fatalf("overview: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestMarginCoversCostOnlyCurrency(t *testing.T) {
 		},
 	}
 
-	out, err := NewService(store).Overview(context.Background(), time.Time{}, time.Time{})
+	out, err := NewService(store, nil).Overview(context.Background(), time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("overview: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestTimeseriesDispatch(t *testing.T) {
 			{Bucket: pgtype.Timestamptz{Time: time.Now(), Valid: true}, Currency: "USD", Total: mustNumeric(t, "0.75")},
 		},
 	}
-	svc := NewService(store)
+	svc := NewService(store, nil)
 
 	reqSeries, err := svc.Timeseries(context.Background(), MetricRequests, IntervalMinute, time.Time{}, time.Time{})
 	if err != nil {
@@ -341,7 +341,7 @@ func TestTimeseriesDispatch(t *testing.T) {
 }
 
 func TestTimeseriesRejectsBadArgs(t *testing.T) {
-	svc := NewService(&fakeStore{})
+	svc := NewService(&fakeStore{}, nil)
 
 	if _, err := svc.Timeseries(context.Background(), "bogus", IntervalHour, time.Time{}, time.Time{}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
 		t.Fatalf("expected invalid argument for bad metric, got %v", err)

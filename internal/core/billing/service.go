@@ -46,15 +46,16 @@ func (s Service) CalculateProviderCost(facts usage.Facts, cost ProviderCostSnaps
 	amounts := calculateTokenAmountBreakdown(billableUsage, rates)
 
 	return ProviderCost{
-		UncachedInputCostAmount:     ratToNumeric(amounts.UncachedInputAmount, amountDecimalScale),
-		CacheReadInputCostAmount:    ratToNumeric(amounts.CacheReadInputAmount, amountDecimalScale),
-		CacheWrite5mInputCostAmount: ratToNumeric(amounts.CacheWrite5mInputAmount, amountDecimalScale),
-		CacheWrite1hInputCostAmount: ratToNumeric(amounts.CacheWrite1hInputAmount, amountDecimalScale),
-		OutputCostAmount:            ratToNumeric(amounts.OutputAmount, amountDecimalScale),
-		ReasoningOutputCostAmount:   ratToNumeric(amounts.ReasoningOutputAmount, amountDecimalScale),
-		TotalCostAmount:             ratToNumeric(amounts.TotalAmount, amountDecimalScale),
-		Currency:                    rates.Currency,
-		FormulaVersion:              rates.FormulaVersion,
+		UncachedInputCostAmount:      ratToNumeric(amounts.UncachedInputAmount, amountDecimalScale),
+		CacheReadInputCostAmount:     ratToNumeric(amounts.CacheReadInputAmount, amountDecimalScale),
+		CacheWrite5mInputCostAmount:  ratToNumeric(amounts.CacheWrite5mInputAmount, amountDecimalScale),
+		CacheWrite1hInputCostAmount:  ratToNumeric(amounts.CacheWrite1hInputAmount, amountDecimalScale),
+		CacheWrite30mInputCostAmount: ratToNumeric(amounts.CacheWrite30mInputAmount, amountDecimalScale),
+		OutputCostAmount:             ratToNumeric(amounts.OutputAmount, amountDecimalScale),
+		ReasoningOutputCostAmount:    ratToNumeric(amounts.ReasoningOutputAmount, amountDecimalScale),
+		TotalCostAmount:              ratToNumeric(amounts.TotalAmount, amountDecimalScale),
+		Currency:                     rates.Currency,
+		FormulaVersion:               rates.FormulaVersion,
 	}, nil
 }
 
@@ -75,7 +76,10 @@ func (s Service) EstimateAuthorizationAmount(estimate AuthorizationEstimate, pri
 
 	maxInputRate := maxRat(
 		maxRat(rates.UncachedInputRate, rates.CacheReadInputRate),
-		maxRat(rates.CacheWrite5mInputRate, rates.CacheWrite1hInputRate),
+		maxRat(
+			maxRat(rates.CacheWrite5mInputRate, rates.CacheWrite1hInputRate),
+			rates.CacheWrite30mInputRate,
+		),
 	)
 	maxCompletionRate := maxRat(rates.OutputRate, rates.ReasoningOutputRate)
 
@@ -93,12 +97,13 @@ func (s Service) EstimateAuthorizationAmount(estimate AuthorizationEstimate, pri
 
 // billableUsage 是当前 token_v1 公式消费的协议无关 token 数。
 type billableUsage struct {
-	UncachedInputTokens     int64
-	CacheReadInputTokens    int64
-	CacheWrite5mInputTokens int64
-	CacheWrite1hInputTokens int64
-	OutputTokensTotal       int64
-	ReasoningOutputTokens   int64
+	UncachedInputTokens      int64
+	CacheReadInputTokens     int64
+	CacheWrite5mInputTokens  int64
+	CacheWrite1hInputTokens  int64
+	CacheWrite30mInputTokens int64
+	OutputTokensTotal        int64
+	ReasoningOutputTokens    int64
 }
 
 // normalizeUsageFacts 校验 usage facts 并把 not_applicable 安全转换成 0。
@@ -117,10 +122,11 @@ func normalizeUsageFacts(facts usage.Facts) (billableUsage, error) {
 	cacheReadInput, cacheReadInputOK := facts.CacheReadInputTokens.BillableValue()
 	cacheWrite5mInput, cacheWrite5mInputOK := facts.CacheWrite5mInputTokens.BillableValue()
 	cacheWrite1hInput, cacheWrite1hInputOK := facts.CacheWrite1hInputTokens.BillableValue()
+	cacheWrite30mInput, cacheWrite30mInputOK := facts.CacheWrite30mInputTokens.BillableValue()
 	outputTotal, outputTotalOK := facts.OutputTokensTotal.BillableValue()
 	reasoningOutput, reasoningOutputOK := facts.ReasoningOutputTokens.BillableValue()
 	if !uncachedInputOK || !cacheReadInputOK || !cacheWrite5mInputOK ||
-		!cacheWrite1hInputOK || !outputTotalOK || !reasoningOutputOK {
+		!cacheWrite1hInputOK || !cacheWrite30mInputOK || !outputTotalOK || !reasoningOutputOK {
 		return billableUsage{}, failure.Wrap(
 			failure.CodeBillingInvalidUsage,
 			ErrInvalidUsage,
@@ -129,24 +135,26 @@ func normalizeUsageFacts(facts usage.Facts) (billableUsage, error) {
 	}
 
 	return billableUsage{
-		UncachedInputTokens:     uncachedInput,
-		CacheReadInputTokens:    cacheReadInput,
-		CacheWrite5mInputTokens: cacheWrite5mInput,
-		CacheWrite1hInputTokens: cacheWrite1hInput,
-		OutputTokensTotal:       outputTotal,
-		ReasoningOutputTokens:   reasoningOutput,
+		UncachedInputTokens:      uncachedInput,
+		CacheReadInputTokens:     cacheReadInput,
+		CacheWrite5mInputTokens:  cacheWrite5mInput,
+		CacheWrite1hInputTokens:  cacheWrite1hInput,
+		CacheWrite30mInputTokens: cacheWrite30mInput,
+		OutputTokensTotal:        outputTotal,
+		ReasoningOutputTokens:    reasoningOutput,
 	}, nil
 }
 
 // tokenAmountBreakdown 表示协议无关 token 维度分别计算出的金额。
 type tokenAmountBreakdown struct {
-	UncachedInputAmount     *big.Rat
-	CacheReadInputAmount    *big.Rat
-	CacheWrite5mInputAmount *big.Rat
-	CacheWrite1hInputAmount *big.Rat
-	OutputAmount            *big.Rat
-	ReasoningOutputAmount   *big.Rat
-	TotalAmount             *big.Rat
+	UncachedInputAmount      *big.Rat
+	CacheReadInputAmount     *big.Rat
+	CacheWrite5mInputAmount  *big.Rat
+	CacheWrite1hInputAmount  *big.Rat
+	CacheWrite30mInputAmount *big.Rat
+	OutputAmount             *big.Rat
+	ReasoningOutputAmount    *big.Rat
+	TotalAmount              *big.Rat
 }
 
 // calculateTokenAmountBreakdown 按 token_v1 公式计算各 token 维度的金额分项。
@@ -157,6 +165,7 @@ func calculateTokenAmountBreakdown(usage billableUsage, rates tokenRates) tokenA
 	cacheReadInputAmount := tokenAmount(rates.CacheReadInputRate, usage.CacheReadInputTokens)
 	cacheWrite5mInputAmount := tokenAmount(rates.CacheWrite5mInputRate, usage.CacheWrite5mInputTokens)
 	cacheWrite1hInputAmount := tokenAmount(rates.CacheWrite1hInputRate, usage.CacheWrite1hInputTokens)
+	cacheWrite30mInputAmount := tokenAmount(rates.CacheWrite30mInputRate, usage.CacheWrite30mInputTokens)
 	outputAmount := tokenAmount(rates.OutputRate, normalOutput)
 	reasoningOutputAmount := tokenAmount(rates.ReasoningOutputRate, usage.ReasoningOutputTokens)
 
@@ -166,17 +175,19 @@ func calculateTokenAmountBreakdown(usage billableUsage, rates tokenRates) tokenA
 	totalAmount.Add(totalAmount, cacheReadInputAmount)
 	totalAmount.Add(totalAmount, cacheWrite5mInputAmount)
 	totalAmount.Add(totalAmount, cacheWrite1hInputAmount)
+	totalAmount.Add(totalAmount, cacheWrite30mInputAmount)
 	totalAmount.Add(totalAmount, outputAmount)
 	totalAmount.Add(totalAmount, reasoningOutputAmount)
 
 	return tokenAmountBreakdown{
-		UncachedInputAmount:     uncachedInputAmount,
-		CacheReadInputAmount:    cacheReadInputAmount,
-		CacheWrite5mInputAmount: cacheWrite5mInputAmount,
-		CacheWrite1hInputAmount: cacheWrite1hInputAmount,
-		OutputAmount:            outputAmount,
-		ReasoningOutputAmount:   reasoningOutputAmount,
-		TotalAmount:             totalAmount,
+		UncachedInputAmount:      uncachedInputAmount,
+		CacheReadInputAmount:     cacheReadInputAmount,
+		CacheWrite5mInputAmount:  cacheWrite5mInputAmount,
+		CacheWrite1hInputAmount:  cacheWrite1hInputAmount,
+		CacheWrite30mInputAmount: cacheWrite30mInputAmount,
+		OutputAmount:             outputAmount,
+		ReasoningOutputAmount:    reasoningOutputAmount,
+		TotalAmount:              totalAmount,
 	}
 }
 

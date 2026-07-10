@@ -12,11 +12,9 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 )
 
-// 健康分桶阈值（按区间内成功率），与概览/渠道一致。
-const (
-	HealthyThreshold  = 0.95
-	DegradedThreshold = 0.80
-)
+// 健康分桶阈值已迁移为运行时配置 admin_backend.channel_health_thresholds
+// (appsettings.AdminBackendChannelHealthThresholds),调用方读取后显式传入 HealthBucket——
+// opsutil 保持纯函数、不依赖 appsettings。
 
 // TsNarg 把可选时间过滤值转成 pgtype.Timestamptz：零值表示不过滤（SQL NULL）。
 func TsNarg(t time.Time) pgtype.Timestamptz {
@@ -88,15 +86,17 @@ func SuccessRate(succeeded, total int64) float64 {
 }
 
 // HealthBucket 按成功率与样本量分桶：healthy / degraded / unhealthy / no_data。
-func HealthBucket(succeeded, total int64) string {
+// 阈值(healthyRate/degradedRate)来自运行时配置,由调用方传入(须满足 0 < degraded < healthy <= 1,
+// 写入口已校验,此处不重复防御)。
+func HealthBucket(succeeded, total int64, healthyRate, degradedRate float64) string {
 	if total == 0 {
 		return "no_data"
 	}
 	rate := float64(succeeded) / float64(total)
 	switch {
-	case rate >= HealthyThreshold:
+	case rate >= healthyRate:
 		return "healthy"
-	case rate >= DegradedThreshold:
+	case rate >= degradedRate:
 		return "degraded"
 	default:
 		return "unhealthy"

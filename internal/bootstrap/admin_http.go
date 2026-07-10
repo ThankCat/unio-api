@@ -31,6 +31,9 @@ type adminHTTPDeps struct {
 	RequestQueryService adminapi.RequestQueryService
 	LedgerQueryService  adminapi.LedgerQueryService
 
+	// bill-on-cancel 渠道成本敞口只读视图（DESIGN-bill-on-cancel 阶段一）。
+	CostExposureQueryService adminapi.CostExposureQueryService
+
 	UserService        adminapi.UserService
 	APIKeyService      adminapi.APIKeyService
 	AdjustmentService  adminapi.AdjustmentService
@@ -76,10 +79,12 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		RouteOpsService:     deps.RouteOpsService,
 		RequestQueryService: deps.RequestQueryService,
 		LedgerQueryService:  deps.LedgerQueryService,
-		UserService:         deps.UserService,
-		APIKeyService:       deps.APIKeyService,
-		AdjustmentService:   deps.AdjustmentService,
-		CustomerOpsService:  deps.CustomerOpsService,
+
+		CostExposureQueryService: deps.CostExposureQueryService,
+		UserService:              deps.UserService,
+		APIKeyService:            deps.APIKeyService,
+		AdjustmentService:        deps.AdjustmentService,
+		CustomerOpsService:       deps.CustomerOpsService,
 
 		CapabilityService:     deps.CapabilityService,
 		CapabilitySyncService: deps.CapabilitySyncService,

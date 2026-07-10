@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/routing"
@@ -41,6 +42,10 @@ func (h *responsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeResponsesDecodeError(w, err)
 		return
 	}
+
+	// OpenAI-Beta 头(如 responses_multi_agent=v1)来自 header 而非 body：捕获后随请求透传，
+	// 由直传路径转发给上游(DEC-013 宽进;桥接路径不适用 multi-agent)。多值按逗号合并保真转发。
+	req.OpenAIBeta = openAIBetaHeader(r)
 
 	if validationErr := validateResponsesRequest(req); validationErr != nil {
 		writeResponsesValidationError(w, validationErr)
@@ -86,6 +91,19 @@ func (h *responsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
+// openAIBetaHeader 读取并合并 OpenAI-Beta 头（可能多次出现），去空白后以逗号连接;无则返回空串。
+func openAIBetaHeader(r *http.Request) string {
+	var tokens []string
+	for _, headerValue := range r.Header.Values("OpenAI-Beta") {
+		for _, token := range strings.Split(headerValue, ",") {
+			if beta := strings.TrimSpace(token); beta != "" {
+				tokens = append(tokens, beta)
+			}
+		}
+	}
+	return strings.Join(tokens, ", ")
+}
+
 // responsesServiceErrorResponse 表示 Responses service 错误对应的协议原生 HTTP 响应。
 type responsesServiceErrorResponse struct {
 	status    int
@@ -125,7 +143,7 @@ func mapResponsesServiceError(req ResponsesRequest, err error, fallbackCode stri
 			errorType: "insufficient_quota",
 			param:     nil,
 		}
-	case failure.CodeOf(err) == failure.CodeRateLimitExceeded, failure.CodeOf(err) == failure.CodeGatewayChannelRateLimited:
+	case failure.CodeOf(err) == failure.CodeRateLimitExceeded, failure.CodeOf(err) == failure.CodeGatewayChannelRateLimited, failure.CodeOf(err) == failure.CodeGatewayChannelConcurrencyLimited:
 		// Key 级 TPM 或渠道级 RPM/TPM/RPD 限流命中（P2-8）：统一 429，不泄露具体维度阈值。
 		return responsesServiceErrorResponse{
 			status:    http.StatusTooManyRequests,

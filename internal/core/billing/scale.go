@@ -33,6 +33,7 @@ func ScaleCustomerPrice(base CustomerPriceSnapshot, ratio pgtype.Numeric) (Custo
 		{base.CacheReadInputPrice, &scaled.CacheReadInputPrice},
 		{base.CacheWrite5mInputPrice, &scaled.CacheWrite5mInputPrice},
 		{base.CacheWrite1hInputPrice, &scaled.CacheWrite1hInputPrice},
+		{base.CacheWrite30mInputPrice, &scaled.CacheWrite30mInputPrice},
 		{base.OutputPrice, &scaled.OutputPrice},
 		{base.ReasoningOutputPrice, &scaled.ReasoningOutputPrice},
 	} {

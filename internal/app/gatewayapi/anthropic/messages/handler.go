@@ -196,7 +196,7 @@ func mapMessageServiceError(req MessageRequest, err error) (status int, errorTyp
 	switch {
 	case failure.CodeOf(err) == failure.CodeLedgerInsufficientBalance:
 		return http.StatusTooManyRequests, "rate_limit_error", "Your credit balance is too low to access the API. Please go to Plans & Billing to upgrade or purchase credits."
-	case failure.CodeOf(err) == failure.CodeRateLimitExceeded, failure.CodeOf(err) == failure.CodeGatewayChannelRateLimited:
+	case failure.CodeOf(err) == failure.CodeRateLimitExceeded, failure.CodeOf(err) == failure.CodeGatewayChannelRateLimited, failure.CodeOf(err) == failure.CodeGatewayChannelConcurrencyLimited:
 		// Key 级 TPM 或渠道级 RPM/TPM/RPD 限流命中（P2-8）：统一 429，不泄露具体维度阈值。
 		return http.StatusTooManyRequests, "rate_limit_error", "You have exceeded the rate limit. Please slow down and retry later."
 	case failure.CodeOf(err) == failure.CodeAdapterRequestUnsupported:

@@ -154,5 +154,10 @@ func (a *Adapter) newUpstreamRequest(ctx context.Context, ch channel.Runtime, re
 	if stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
+	// 转发客户端 OpenAI-Beta 头(如 responses_multi_agent=v1)：上游据此启用 beta 能力。
+	// 上游不支持时由上游报错，非我方 bug；直传路径忠实转发（DEC-013）。
+	if beta := strings.TrimSpace(req.BetaHeader); beta != "" {
+		httpReq.Header.Set("OpenAI-Beta", beta)
+	}
 	return httpReq, nil
 }

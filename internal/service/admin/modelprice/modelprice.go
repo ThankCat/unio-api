@@ -44,39 +44,41 @@ type Store interface {
 
 // ModelPrice 是 admin 视角的模型基准价事实；金额以十进制字符串承载，可空项用 *string。
 type ModelPrice struct {
-	ID                     int64
-	ModelID                int64
-	ModelExternalID        string
-	ModelDisplayName       string
-	Currency               string
-	PricingUnit            string
-	UncachedInputPrice     string
-	CacheReadInputPrice    *string
-	CacheWrite5mInputPrice *string
-	CacheWrite1hInputPrice *string
-	OutputPrice            string
-	ReasoningOutputPrice   *string
-	Status                 string
-	EffectiveFrom          time.Time
-	EffectiveTo            *time.Time
-	CreatedAt              time.Time
-	UpdatedAt              time.Time
+	ID                      int64
+	ModelID                 int64
+	ModelExternalID         string
+	ModelDisplayName        string
+	Currency                string
+	PricingUnit             string
+	UncachedInputPrice      string
+	CacheReadInputPrice     *string
+	CacheWrite5mInputPrice  *string
+	CacheWrite1hInputPrice  *string
+	CacheWrite30mInputPrice *string
+	OutputPrice             string
+	ReasoningOutputPrice    *string
+	Status                  string
+	EffectiveFrom           time.Time
+	EffectiveTo             *time.Time
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
 }
 
 // CreateInput 是创建模型基准价的入参；uncached_input/output 必填，其余可空，金额为十进制字符串。
 type CreateInput struct {
-	ModelID                int64
-	Currency               string
-	PricingUnit            string
-	UncachedInputPrice     string
-	CacheReadInputPrice    *string
-	CacheWrite5mInputPrice *string
-	CacheWrite1hInputPrice *string
-	OutputPrice            string
-	ReasoningOutputPrice   *string
-	Status                 string
-	EffectiveFrom          time.Time
-	EffectiveTo            *time.Time
+	ModelID                 int64
+	Currency                string
+	PricingUnit             string
+	UncachedInputPrice      string
+	CacheReadInputPrice     *string
+	CacheWrite5mInputPrice  *string
+	CacheWrite1hInputPrice  *string
+	CacheWrite30mInputPrice *string
+	OutputPrice             string
+	ReasoningOutputPrice    *string
+	Status                  string
+	EffectiveFrom           time.Time
+	EffectiveTo             *time.Time
 }
 
 // UpdateInput 是 PATCH 模型基准价的入参：只改启停状态与生效结束时间（关闭窗口）；金额不可改。
@@ -163,18 +165,19 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ModelPrice, error
 	}
 
 	row, err := s.store.CreateModelPrice(ctx, sqlc.CreateModelPriceParams{
-		ModelID:                in.ModelID,
-		Currency:               currency,
-		PricingUnit:            in.PricingUnit,
-		UncachedInputPrice:     amounts.uncachedInputPrice,
-		CacheReadInputPrice:    amounts.cacheReadInputPrice,
-		CacheWrite5mInputPrice: amounts.cacheWrite5mInputPrice,
-		CacheWrite1hInputPrice: amounts.cacheWrite1hInputPrice,
-		OutputPrice:            amounts.outputPrice,
-		ReasoningOutputPrice:   amounts.reasoningOutputPrice,
-		Status:                 in.Status,
-		EffectiveFrom:          tsParam(&in.EffectiveFrom),
-		EffectiveTo:            tsParam(in.EffectiveTo),
+		ModelID:                 in.ModelID,
+		Currency:                currency,
+		PricingUnit:             in.PricingUnit,
+		UncachedInputPrice:      amounts.uncachedInputPrice,
+		CacheReadInputPrice:     amounts.cacheReadInputPrice,
+		CacheWrite5mInputPrice:  amounts.cacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:  amounts.cacheWrite1hInputPrice,
+		CacheWrite30mInputPrice: amounts.cacheWrite30mInputPrice,
+		OutputPrice:             amounts.outputPrice,
+		ReasoningOutputPrice:    amounts.reasoningOutputPrice,
+		Status:                  in.Status,
+		EffectiveFrom:           tsParam(&in.EffectiveFrom),
+		EffectiveTo:             tsParam(in.EffectiveTo),
 	})
 	if err != nil {
 		return ModelPrice{}, storeFailed(err, "create model price")
@@ -261,12 +264,13 @@ func windowsOverlap(aFrom time.Time, aTo *time.Time, bFrom time.Time, bTo *time.
 
 // modelPriceAmounts 持有解析后的 NUMERIC 基准售价。
 type modelPriceAmounts struct {
-	uncachedInputPrice     pgtype.Numeric
-	cacheReadInputPrice    pgtype.Numeric
-	cacheWrite5mInputPrice pgtype.Numeric
-	cacheWrite1hInputPrice pgtype.Numeric
-	outputPrice            pgtype.Numeric
-	reasoningOutputPrice   pgtype.Numeric
+	uncachedInputPrice      pgtype.Numeric
+	cacheReadInputPrice     pgtype.Numeric
+	cacheWrite5mInputPrice  pgtype.Numeric
+	cacheWrite1hInputPrice  pgtype.Numeric
+	cacheWrite30mInputPrice pgtype.Numeric
+	outputPrice             pgtype.Numeric
+	reasoningOutputPrice    pgtype.Numeric
 }
 
 func parseModelPriceAmounts(in CreateInput) (modelPriceAmounts, error) {
@@ -288,6 +292,9 @@ func parseModelPriceAmounts(in CreateInput) (modelPriceAmounts, error) {
 	if out.cacheWrite1hInputPrice, err = parseOptionalMoney("cache_write_1h_input_price", in.CacheWrite1hInputPrice); err != nil {
 		return modelPriceAmounts{}, err
 	}
+	if out.cacheWrite30mInputPrice, err = parseOptionalMoney("cache_write_30m_input_price", in.CacheWrite30mInputPrice); err != nil {
+		return modelPriceAmounts{}, err
+	}
 	if out.reasoningOutputPrice, err = parseOptionalMoney("reasoning_output_price", in.ReasoningOutputPrice); err != nil {
 		return modelPriceAmounts{}, err
 	}
@@ -297,43 +304,45 @@ func parseModelPriceAmounts(in CreateInput) (modelPriceAmounts, error) {
 
 func toModelPrice(c sqlc.ModelPrice) ModelPrice {
 	return ModelPrice{
-		ID:                     c.ID,
-		ModelID:                c.ModelID,
-		Currency:               c.Currency,
-		PricingUnit:            c.PricingUnit,
-		UncachedInputPrice:     numericString(c.UncachedInputPrice),
-		CacheReadInputPrice:    numericPtr(c.CacheReadInputPrice),
-		CacheWrite5mInputPrice: numericPtr(c.CacheWrite5mInputPrice),
-		CacheWrite1hInputPrice: numericPtr(c.CacheWrite1hInputPrice),
-		OutputPrice:            numericString(c.OutputPrice),
-		ReasoningOutputPrice:   numericPtr(c.ReasoningOutputPrice),
-		Status:                 c.Status,
-		EffectiveFrom:          c.EffectiveFrom.Time,
-		EffectiveTo:            timePtr(c.EffectiveTo),
-		CreatedAt:              c.CreatedAt.Time,
-		UpdatedAt:              c.UpdatedAt.Time,
+		ID:                      c.ID,
+		ModelID:                 c.ModelID,
+		Currency:                c.Currency,
+		PricingUnit:             c.PricingUnit,
+		UncachedInputPrice:      numericString(c.UncachedInputPrice),
+		CacheReadInputPrice:     numericPtr(c.CacheReadInputPrice),
+		CacheWrite5mInputPrice:  numericPtr(c.CacheWrite5mInputPrice),
+		CacheWrite1hInputPrice:  numericPtr(c.CacheWrite1hInputPrice),
+		CacheWrite30mInputPrice: numericPtr(c.CacheWrite30mInputPrice),
+		OutputPrice:             numericString(c.OutputPrice),
+		ReasoningOutputPrice:    numericPtr(c.ReasoningOutputPrice),
+		Status:                  c.Status,
+		EffectiveFrom:           c.EffectiveFrom.Time,
+		EffectiveTo:             timePtr(c.EffectiveTo),
+		CreatedAt:               c.CreatedAt.Time,
+		UpdatedAt:               c.UpdatedAt.Time,
 	}
 }
 
 func toModelPriceFromRow(c sqlc.ListModelPricesByModelRow) ModelPrice {
 	return ModelPrice{
-		ID:                     c.ID,
-		ModelID:                c.ModelID,
-		ModelExternalID:        c.ModelExternalID,
-		ModelDisplayName:       c.ModelDisplayName,
-		Currency:               c.Currency,
-		PricingUnit:            c.PricingUnit,
-		UncachedInputPrice:     numericString(c.UncachedInputPrice),
-		CacheReadInputPrice:    numericPtr(c.CacheReadInputPrice),
-		CacheWrite5mInputPrice: numericPtr(c.CacheWrite5mInputPrice),
-		CacheWrite1hInputPrice: numericPtr(c.CacheWrite1hInputPrice),
-		OutputPrice:            numericString(c.OutputPrice),
-		ReasoningOutputPrice:   numericPtr(c.ReasoningOutputPrice),
-		Status:                 c.Status,
-		EffectiveFrom:          c.EffectiveFrom.Time,
-		EffectiveTo:            timePtr(c.EffectiveTo),
-		CreatedAt:              c.CreatedAt.Time,
-		UpdatedAt:              c.UpdatedAt.Time,
+		ID:                      c.ID,
+		ModelID:                 c.ModelID,
+		ModelExternalID:         c.ModelExternalID,
+		ModelDisplayName:        c.ModelDisplayName,
+		Currency:                c.Currency,
+		PricingUnit:             c.PricingUnit,
+		UncachedInputPrice:      numericString(c.UncachedInputPrice),
+		CacheReadInputPrice:     numericPtr(c.CacheReadInputPrice),
+		CacheWrite5mInputPrice:  numericPtr(c.CacheWrite5mInputPrice),
+		CacheWrite1hInputPrice:  numericPtr(c.CacheWrite1hInputPrice),
+		CacheWrite30mInputPrice: numericPtr(c.CacheWrite30mInputPrice),
+		OutputPrice:             numericString(c.OutputPrice),
+		ReasoningOutputPrice:    numericPtr(c.ReasoningOutputPrice),
+		Status:                  c.Status,
+		EffectiveFrom:           c.EffectiveFrom.Time,
+		EffectiveTo:             timePtr(c.EffectiveTo),
+		CreatedAt:               c.CreatedAt.Time,
+		UpdatedAt:               c.UpdatedAt.Time,
 	}
 }
 

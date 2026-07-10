@@ -31,11 +31,12 @@ type settingsApplier struct {
 	store  settingsReader
 	logger *slog.Logger
 
-	breaker  *lifecycle.ChannelCircuitBreaker
-	guard    *ratelimit.Guard
-	cooldown *lifecycle.ChannelCooldownRegistry
-	gate     *lifecycle.ChannelCredentialGate
-	router   *routing.Router
+	breaker     *lifecycle.ChannelCircuitBreaker
+	guard       *ratelimit.Guard
+	cooldown    *lifecycle.ChannelCooldownRegistry
+	gate        *lifecycle.ChannelCredentialGate
+	router      *routing.Router
+	concurrency *ratelimit.ConcurrencyLimiter
 }
 
 // run 周期性拉取并推送,直到 ctx 取消(随 app shutdown 退出)。
@@ -96,6 +97,18 @@ func (a *settingsApplier) applyOnce(ctx context.Context) {
 		a.cooldown.SetCooldown(cd.Cooldown, cd.Cap)
 	} else {
 		a.warnDecode(ctx, appsettings.GatewayChannelCooldownKey, err)
+	}
+
+	if d, err := appsettings.DecodeNonNegativeMsSetting(a.store.Raw(ctx, appsettings.GatewayFailureCooldownKey)); err == nil {
+		a.cooldown.SetFailureCooldown(d)
+	} else {
+		a.warnDecode(ctx, appsettings.GatewayFailureCooldownKey, err)
+	}
+
+	if cc, err := appsettings.DecodeConcurrencyDefaultsSettings(a.store.Raw(ctx, appsettings.GatewayConcurrencyDefaultsKey)); err == nil {
+		a.concurrency.SetDefaults(cc.KeyLimit, cc.ChannelLimit)
+	} else {
+		a.warnDecode(ctx, appsettings.GatewayConcurrencyDefaultsKey, err)
 	}
 
 	if n, err := appsettings.DecodePositiveIntSetting(a.store.Raw(ctx, appsettings.GatewayCredential401ThresholdKey)); err == nil {

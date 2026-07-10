@@ -30,12 +30,13 @@ type testUsage struct {
 // testUsageFacts 把旧 OpenAI 形状的测试输入映射成协议无关 facts，便于验证金额兼容性。
 func testUsageFacts(u testUsage) coreusage.Facts {
 	return coreusage.Facts{
-		UncachedInputTokens:     coreusage.KnownTokens(u.PromptTokens - u.CachedTokens),
-		CacheReadInputTokens:    coreusage.KnownTokens(u.CachedTokens),
-		CacheWrite5mInputTokens: coreusage.NotApplicableTokens(),
-		CacheWrite1hInputTokens: coreusage.NotApplicableTokens(),
-		OutputTokensTotal:       coreusage.KnownTokens(u.CompletionTokens),
-		ReasoningOutputTokens:   coreusage.KnownTokens(u.ReasoningTokens),
+		UncachedInputTokens:      coreusage.KnownTokens(u.PromptTokens - u.CachedTokens),
+		CacheReadInputTokens:     coreusage.KnownTokens(u.CachedTokens),
+		CacheWrite5mInputTokens:  coreusage.NotApplicableTokens(),
+		CacheWrite1hInputTokens:  coreusage.NotApplicableTokens(),
+		CacheWrite30mInputTokens: coreusage.NotApplicableTokens(),
+		OutputTokensTotal:        coreusage.KnownTokens(u.CompletionTokens),
+		ReasoningOutputTokens:    coreusage.KnownTokens(u.ReasoningTokens),
 	}
 }
 
@@ -144,6 +145,32 @@ func TestCalculateCustomerChargeChargesTokenClassesSeparately(t *testing.T) {
 
 	// (800*2 + 200*0.5 + 400*8 + 100*12) / 1_000_000 = 0.0061000000。
 	assertNumeric(t, settlement.Amount, 61_000000, -10)
+}
+
+// TestCalculateCustomerChargeChargesCacheWrite30m 验证 OpenAI GPT-5.6 的 30m 缓存写维度按独立单价计费，
+// 与 5m/1h（此处 not_applicable）互不影响。
+func TestCalculateCustomerChargeChargesCacheWrite30m(t *testing.T) {
+	price := defaultCustomerPriceSnapshot()
+	// 30m 缓存写单价 = 未缓存输入价 1.25x = 2.5 / 1M。
+	price.CacheWrite30mInputPrice = numeric(2_5000000000, -10)
+
+	facts := coreusage.Facts{
+		UncachedInputTokens:      coreusage.KnownTokens(500),
+		CacheReadInputTokens:     coreusage.KnownTokens(200),
+		CacheWrite5mInputTokens:  coreusage.NotApplicableTokens(),
+		CacheWrite1hInputTokens:  coreusage.NotApplicableTokens(),
+		CacheWrite30mInputTokens: coreusage.KnownTokens(300),
+		OutputTokensTotal:        coreusage.KnownTokens(400),
+		ReasoningOutputTokens:    coreusage.KnownTokens(0),
+	}
+
+	settlement, err := (Service{}).CalculateCustomerCharge(facts, price)
+	if err != nil {
+		t.Fatalf("calculate customer charge: %v", err)
+	}
+
+	// (500*2 + 200*0.5 + 300*2.5 + 400*8) / 1_000_000 = 5050 / 1e6 = 0.0050500000。
+	assertNumeric(t, settlement.Amount, 50_500000, -10)
 }
 
 // TestCalculateCustomerChargeFallsBackToBasePricesForNullSpecialPrices 验证客户扣费在特殊价格未配置时回退到普通输入/输出价格。

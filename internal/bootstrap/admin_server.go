@@ -101,8 +101,16 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 	queries := sqlc.New(deps.DB)
 
+	// 运行时配置中枢:与 gateway 同一注册表;启动 seed 把默认值写入 DB 缺行(DO NOTHING,幂等,
+	// 与 gateway 并发启动安全)。构造提前到各运维 service 之前——admin_backend 域(渠道健康分桶
+	// 阈值)由 channelops/providerops/dashboard/channelhealth 四个 service 每请求现读。
+	settingsStore := appsettings.NewSettingsStore(
+		queries, deps.Redis, deps.Config.Redis.KeyNamespace, appsettings.DefaultRegistry(), deps.Logger,
+	)
+	_ = settingsStore.SeedDefaults(ctx)
+
 	providerService := provider.NewService(queries)
-	providerOpsService := providerops.NewService(queries)
+	providerOpsService := providerops.NewService(queries, settingsStore)
 	channelService := channel.NewService(queries, adapterRegistry)
 	// 渠道检测复用 gateway adapter registry（同一份 adapter/HTTP 链路，检测结果=真实行为）。
 	// 探测超时配置与自动巡检 worker 共用，保证手动检测与自动巡检口径一致。
@@ -110,7 +118,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		ProbeTimeout:    deps.Config.ChannelTestWorker.ProbeTimeout,
 		ProbeTimeoutMax: deps.Config.ChannelTestWorker.ProbeTimeoutMax,
 	})
-	channelOpsService := channelops.NewService(queries)
+	channelOpsService := channelops.NewService(queries, settingsStore)
 	modelService := model.NewService(queries)
 	modelOpsService := modelops.NewService(queries)
 	channelModelService := channelmodel.NewService(queries)
@@ -121,6 +129,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 	// M6 只读查询台：请求记录 / 账本，只读 service 共用同一 sqlc Queries。
 	requestQueryService := query.NewRequestService(queries)
+	costExposureQueryService := query.NewCostExposureService(queries)
 	ledgerQueryService := query.NewLedgerService(queries)
 
 	// M7 客户管理：用户/项目只读 + API Key 管理；手工调额经由 ledger 写 adjustment_* 流水。
@@ -146,18 +155,11 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	modelCatalogAdminService := modelcatalogadmin.NewService(deps.DB, queries)
 
 	// M9 工作台看板：复用同一 sqlc Queries 做只读聚合（KPI 概览 + 时间序列）。
-	dashboardService := dashboard.NewService(queries)
+	dashboardService := dashboard.NewService(queries, settingsStore)
 
 	// M8 系统/任务/健康：结算补偿任务只读视图 + 系统级 channel 健康（派生），复用同一 sqlc Queries。
 	recoveryJobQueryService := query.NewRecoveryService(queries)
-	channelHealthQueryService := query.NewChannelHealthService(queries)
-
-	// 运行时配置中枢：与 gateway 同一注册表;启动 seed 把默认值写入 DB 缺行（DO NOTHING,幂等,
-	// 与 gateway 并发启动安全）。seed 后 app_settings 即完整配置清单,面板直接呈现全部配置。
-	settingsStore := appsettings.NewSettingsStore(
-		queries, deps.Redis, deps.Config.Redis.KeyNamespace, appsettings.DefaultRegistry(), deps.Logger,
-	)
-	_ = settingsStore.SeedDefaults(ctx)
+	channelHealthQueryService := query.NewChannelHealthService(queries, settingsStore)
 
 	metricsRecorder := metrics.New()
 
@@ -178,10 +180,12 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		RouteOpsService:     routeOpsService,
 		RequestQueryService: requestQueryService,
 		LedgerQueryService:  ledgerQueryService,
-		UserService:         userService,
-		APIKeyService:       apiKeyService,
-		AdjustmentService:   adjustmentService,
-		CustomerOpsService:  customerOpsService,
+
+		CostExposureQueryService: costExposureQueryService,
+		UserService:              userService,
+		APIKeyService:            apiKeyService,
+		AdjustmentService:        adjustmentService,
+		CustomerOpsService:       customerOpsService,
 
 		CapabilityService:     capabilityService,
 		CapabilitySyncService: capabilitySyncService,

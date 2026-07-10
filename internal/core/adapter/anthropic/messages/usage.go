@@ -55,10 +55,12 @@ type ServerToolUsage struct {
 //   - server tool 调用映射为受控 MeteredItem，未提供则不入账。
 func (u MessageUsage) ToUsageFacts() usage.Facts {
 	facts := usage.Facts{
-		UncachedInputTokens:   usage.KnownTokens(int64(u.InputTokens)),
-		CacheReadInputTokens:  optionalTokenCount(u.CacheReadInputTokens),
-		OutputTokensTotal:     usage.KnownTokens(int64(u.OutputTokens)),
-		ReasoningOutputTokens: optionalTokenCount(u.ThinkingOutputTokens),
+		UncachedInputTokens:  usage.KnownTokens(int64(u.InputTokens)),
+		CacheReadInputTokens: optionalTokenCount(u.CacheReadInputTokens),
+		// Anthropic 只有 5m/1h 两档缓存写，无 OpenAI 式 30m 单档：30m 恒 not_applicable。
+		CacheWrite30mInputTokens: usage.NotApplicableTokens(),
+		OutputTokensTotal:        usage.KnownTokens(int64(u.OutputTokens)),
+		ReasoningOutputTokens:    optionalTokenCount(u.ThinkingOutputTokens),
 	}
 
 	switch {

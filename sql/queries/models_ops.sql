@@ -111,6 +111,7 @@ SELECT
     base.cache_read_input_price AS base_cache_read_input_price,
     base.cache_write_5m_input_price AS base_cache_write_5m_input_price,
     base.cache_write_1h_input_price AS base_cache_write_1h_input_price,
+    base.cache_write_30m_input_price AS base_cache_write_30m_input_price,
     base.output_price AS base_output_price,
     base.reasoning_output_price AS base_reasoning_output_price
 FROM models m
@@ -118,6 +119,7 @@ LEFT JOIN LATERAL (
     -- base: 模型当前生效的基准售价（mirror FindRouteCandidates 的 base LATERAL）；LEFT 保证无基准价的模型仍出现在列表。
     SELECT mp.currency, mp.uncached_input_price, mp.cache_read_input_price,
         mp.cache_write_5m_input_price, mp.cache_write_1h_input_price,
+        mp.cache_write_30m_input_price,
         mp.output_price, mp.reasoning_output_price
     FROM model_prices mp
     WHERE mp.model_id = m.id
@@ -181,9 +183,9 @@ SELECT
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
     COALESCE(SUM(u.output_tokens_total) FILTER (WHERE r.status = 'succeeded'), 0)::bigint AS output_tokens,
-    COALESCE(SUM(u.uncached_input_tokens + u.cache_read_input_tokens + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens), 0)::bigint AS input_tokens,
+    COALESCE(SUM(u.uncached_input_tokens + u.cache_read_input_tokens + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens), 0)::bigint AS input_tokens,
     COALESCE(SUM(u.cache_read_input_tokens), 0)::bigint AS cache_read_tokens,
-    COALESCE(SUM(u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens), 0)::bigint AS cache_write_tokens,
+    COALESCE(SUM(u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens), 0)::bigint AS cache_write_tokens,
     COALESCE(SUM(
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
              THEN EXTRACT(EPOCH FROM (r.completed_at - COALESCE(r.response_started_at, r.started_at))) END

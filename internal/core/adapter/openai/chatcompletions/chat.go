@@ -401,6 +401,7 @@ func chatUsageFromOpenAI(usage *chatCompletionUsage) (adapter.ChatUsage, error) 
 		CompletionTokens: *usage.CompletionTokens,
 		TotalTokens:      *usage.TotalTokens,
 		CachedTokens:     usage.PromptTokensDetails.CachedTokens,
+		CacheWriteTokens: usage.PromptTokensDetails.CacheWrite(),
 		ReasoningTokens:  usage.CompletionTokensDetails.ReasoningTokens,
 	}, nil
 }

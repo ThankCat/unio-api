@@ -54,6 +54,8 @@ WHERE r.status = 'succeeded'
 
 -- name: ChannelsOpsHealthDistribution :one
 -- ChannelsOpsHealthDistribution 按区间内 attempt 成功率对每条渠道分桶并计数（healthy/degraded/unhealthy/no_data）。
+-- 分桶阈值 healthy_rate/degraded_rate 由调用方传入（运行时配置 admin_backend.channel_health_thresholds），
+-- 与 Go 侧 opsutil.HealthBucket 同口径。
 WITH per_channel AS (
     SELECT
         c.id,
@@ -68,9 +70,9 @@ WITH per_channel AS (
 )
 SELECT
     COUNT(*) FILTER (WHERE total = 0) AS no_data,
-    COUNT(*) FILTER (WHERE total > 0 AND succeeded::float8 / total >= 0.95) AS healthy,
-    COUNT(*) FILTER (WHERE total > 0 AND succeeded::float8 / total >= 0.80 AND succeeded::float8 / total < 0.95) AS degraded,
-    COUNT(*) FILTER (WHERE total > 0 AND succeeded::float8 / total < 0.80) AS unhealthy
+    COUNT(*) FILTER (WHERE total > 0 AND succeeded::float8 / total >= sqlc.arg(healthy_rate)::float8) AS healthy,
+    COUNT(*) FILTER (WHERE total > 0 AND succeeded::float8 / total >= sqlc.arg(degraded_rate)::float8 AND succeeded::float8 / total < sqlc.arg(healthy_rate)::float8) AS degraded,
+    COUNT(*) FILTER (WHERE total > 0 AND succeeded::float8 / total < sqlc.arg(degraded_rate)::float8) AS unhealthy
 FROM per_channel;
 
 -- name: ChannelsOpsRecentError :many

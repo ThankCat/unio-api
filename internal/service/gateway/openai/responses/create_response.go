@@ -60,6 +60,18 @@ type nonStreamStrategy struct {
 	codes lifecycle.RunNonStreamCodes
 }
 
+// multiAgentBridgeUnsupported 构造「multi-agent 无法桥接到 Chat Completions」的请求不支持错误（映射 400）。
+//
+// multi_agent 是 Responses 专属 beta，只能走上游 /responses 直传候选；被路由到 chat-only 桥接候选时
+// 显式拒绝，绝不静默降级为单 agent。param=multi_agent 供客户端定位。
+func multiAgentBridgeUnsupported() error {
+	return failure.New(
+		failure.CodeAdapterRequestUnsupported,
+		failure.WithMessage("multi_agent is only supported on upstream Responses passthrough channels, not chat-completions bridge candidates"),
+		failure.WithField("param", "multi_agent"),
+	)
+}
+
 // executeResponse 执行非流式 Responses 候选 fallback 计费循环，按候选能力分流直传/桥接。
 //
 // allowDirect=false 时强制全部走桥接（与 CompactHistory 的 synthetic 估算口径一致）。协议差异（直传/
@@ -101,7 +113,7 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 					return lifecycle.AttemptSuccess{}, err
 				}
 				adapterCtx, adapterSpan := lifecycle.StartGatewaySpan(ctx, "adapter.responses", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
-				resp, err := directAdapter.CreateResponse(adapterCtx, candidate.Channel, responsesadapter.Request{Body: body})
+				resp, err := directAdapter.CreateResponse(adapterCtx, candidate.Channel, responsesadapter.Request{Body: body, BetaHeader: req.OpenAIBeta})
 				lifecycle.EndGatewaySpan(adapterSpan, err)
 				if err != nil {
 					return lifecycle.AttemptSuccess{}, err
@@ -110,6 +122,10 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 				return lifecycle.AttemptSuccess{ResponseID: resp.ResponseID, Facts: resp.Facts}, nil
 			}
 
+			// multi-agent 无法降级为单请求 Chat Completions：桥接候选显式拒绝，避免静默退化为单 agent 却照常计费。
+			if req.MultiAgentEnabled() {
+				return lifecycle.AttemptSuccess{}, multiAgentBridgeUnsupported()
+			}
 			chatReq, _ := mapResponsesRequestToChat(req, candidate.UpstreamModel)
 			adapterCtx, adapterSpan := lifecycle.StartGatewaySpan(ctx, "adapter.chat_completions", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 			resp, err := chatAdapter.ChatCompletions(adapterCtx, candidate.Channel, chatReq)
@@ -144,7 +160,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	if req.Reasoning != nil && req.Reasoning.Effort != nil {
 		effort = *req.Reasoning.Effort
 	}
-	requestRecord, err := s.lifecycle.CreateRequest(ctx, principal, req.Model, false, lifecycle.NormalizeOpenAIEffort(effort))
+	requestRecord, err := s.lifecycle.CreateRequest(ctx, principal, req.Model, false, lifecycle.NormalizeOpenAIEffort(effort, req.Model))
 	if err != nil {
 		return err
 	}

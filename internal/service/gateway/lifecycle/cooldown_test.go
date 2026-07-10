@@ -165,6 +165,122 @@ func TestChannelRateLimitRetryAfterExtraction(t *testing.T) {
 	}
 }
 
+// TestFailureCooldownRecordsAndExpires 验证失败软冷却：登记 → FailurePreferred=false → 到期自动恢复；
+// 与 429 冷却相互独立（软冷却不影响 Allowed）。
+func TestFailureCooldownRecordsAndExpires(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	r := newTestCooldown(5*time.Second, time.Minute, &now)
+	r.SetFailureCooldown(8 * time.Second)
+
+	if !r.FailurePreferred("7") {
+		t.Fatal("channel should start preferred")
+	}
+
+	until, ok := r.RecordFailure("7")
+	if !ok || !until.Equal(now.Add(8*time.Second)) {
+		t.Fatalf("record failure: ok=%v until=%s", ok, until)
+	}
+	if r.FailurePreferred("7") {
+		t.Fatal("channel should be soft-cooled after failure")
+	}
+	// 软冷却不影响 429 硬冷却判定。
+	if !r.Allowed("7") {
+		t.Fatal("soft cooldown must not affect hard 429 cooldown gate")
+	}
+
+	now = now.Add(9 * time.Second)
+	if !r.FailurePreferred("7") {
+		t.Fatal("channel should recover after failure cooldown expires")
+	}
+}
+
+// TestFailureCooldownDisabledByDefault 验证未设置失败软冷却时长（0）时不登记。
+func TestFailureCooldownDisabledByDefault(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	r := newTestCooldown(5*time.Second, time.Minute, &now)
+
+	if _, ok := r.RecordFailure("7"); ok {
+		t.Fatal("failure cooldown should be disabled when duration is 0")
+	}
+	if !r.FailurePreferred("7") {
+		t.Fatal("channel should remain preferred")
+	}
+}
+
+// TestFailureCooldownKeepsLaterExpiry 连续失败续期，不缩短已登记的软冷却。
+func TestFailureCooldownKeepsLaterExpiry(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	r := newTestCooldown(5*time.Second, time.Minute, &now)
+	r.SetFailureCooldown(10 * time.Second)
+
+	r.RecordFailure("7")
+	now = now.Add(4 * time.Second)
+	until, ok := r.RecordFailure("7")
+	if !ok || !until.Equal(now.Add(10*time.Second)) {
+		t.Fatalf("consecutive failure should extend expiry: ok=%v until=%s", ok, until)
+	}
+}
+
+// TestIsFailureCooldownError 验证只有 timeout/server 分类触发软冷却。
+func TestIsFailureCooldownError(t *testing.T) {
+	mk := func(cat adapter.UpstreamErrorCategory) error {
+		return adapter.NewUpstreamError(cat, adapter.UpstreamMetadata{}, failure.New(failure.CodeAdapterUpstreamStatus))
+	}
+	if !isFailureCooldownError(mk(adapter.UpstreamErrorTimeout)) {
+		t.Fatal("timeout should trigger failure cooldown")
+	}
+	if !isFailureCooldownError(mk(adapter.UpstreamErrorServer)) {
+		t.Fatal("server error should trigger failure cooldown")
+	}
+	for _, cat := range []adapter.UpstreamErrorCategory{
+		adapter.UpstreamErrorRateLimit,
+		adapter.UpstreamErrorAuth,
+		adapter.UpstreamErrorPermission,
+		adapter.UpstreamErrorBadRequest,
+		adapter.UpstreamErrorCanceled,
+	} {
+		if isFailureCooldownError(mk(cat)) {
+			t.Fatalf("category %v should not trigger failure cooldown", cat)
+		}
+	}
+	if isFailureCooldownError(failure.New(failure.CodeAdapterUpstreamStatus)) {
+		t.Fatal("error without upstream category should not trigger failure cooldown")
+	}
+}
+
+// TestRequestLifecycleRecordChannelFailureCooldown 验证 lifecycle 入口：timeout 错误登记软冷却，
+// CandidateFailurePreferred 随之翻 false，到期恢复。
+func TestRequestLifecycleRecordChannelFailureCooldown(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	r := newTestCooldown(5*time.Second, time.Minute, &now)
+	r.SetFailureCooldown(6 * time.Second)
+
+	lc := &RequestLifecycle{}
+	lc.SetChannelCooldownRegistry(r)
+
+	timeoutErr := adapter.NewUpstreamError(
+		adapter.UpstreamErrorTimeout,
+		adapter.UpstreamMetadata{},
+		failure.New(failure.CodeAdapterSendRequestFailed),
+	)
+
+	if !lc.RecordChannelFailureCooldown("42", timeoutErr) {
+		t.Fatal("expected failure cooldown to be recorded")
+	}
+	if lc.CandidateFailurePreferred(candidateRoute(42, "openai")) {
+		t.Fatal("channel should not be preferred during failure cooldown")
+	}
+	// 软冷却不把渠道从硬闸门里摘掉。
+	if !lc.BreakerAllow("42") {
+		t.Fatal("failure cooldown must not hard-block the channel")
+	}
+
+	now = now.Add(7 * time.Second)
+	if !lc.CandidateFailurePreferred(candidateRoute(42, "openai")) {
+		t.Fatal("channel should be preferred again after cooldown expires")
+	}
+}
+
 func TestRequestLifecycleBreakerAllowHonorsCooldown(t *testing.T) {
 	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
 	r := newTestCooldown(5*time.Second, time.Minute, &now)

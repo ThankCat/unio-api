@@ -400,6 +400,7 @@ SELECT
     COALESCE(ur.cache_read_input_tokens, 0)::bigint AS cache_read_input_tokens,
     COALESCE(ur.cache_write_5m_input_tokens, 0)::bigint AS cache_write_5m_input_tokens,
     COALESCE(ur.cache_write_1h_input_tokens, 0)::bigint AS cache_write_1h_input_tokens,
+    COALESCE(ur.cache_write_30m_input_tokens, 0)::bigint AS cache_write_30m_input_tokens,
     COALESCE(ur.output_tokens_total, 0)::bigint AS output_tokens_total,
     COALESCE(ur.reasoning_output_tokens, 0)::bigint AS reasoning_output_tokens,
     cs.total_cost_amount,
@@ -407,18 +408,21 @@ SELECT
     cs.cache_read_input_cost_amount,
     cs.cache_write_5m_input_cost_amount,
     cs.cache_write_1h_input_cost_amount,
+    cs.cache_write_30m_input_cost_amount,
     cs.output_cost_amount,
     cs.reasoning_output_cost_amount,
     cs.uncached_input_cost,
     cs.cache_read_input_cost,
     cs.cache_write_5m_input_cost,
     cs.cache_write_1h_input_cost,
+    cs.cache_write_30m_input_cost,
     cs.output_cost,
     cs.reasoning_output_cost,
     ps.uncached_input_price,
     ps.cache_read_input_price,
     ps.cache_write_5m_input_price,
     ps.cache_write_1h_input_price,
+    ps.cache_write_30m_input_price,
     ps.output_price,
     ps.reasoning_output_price,
     (
@@ -436,7 +440,9 @@ SELECT
     r.reasoning_budget_tokens,
     r.client_ip,
     rt.name AS route_name,
-    rt.price_ratio AS route_price_ratio,
+    -- 倍率取结算当时的快照（price_snapshots.price_ratio），历史无快照行为 NULL，展示端回落「—」；
+    -- 不再实时读 rt.price_ratio，避免管理员改倍率污染历史请求的倍率与倒推基准价展示。
+    ps.price_ratio AS route_price_ratio,
     rt.mode AS route_mode,
     m.display_name AS model_display_name,
     m.owned_by AS model_owned_by,
@@ -490,68 +496,72 @@ type ListRequestRecordsPageParams struct {
 }
 
 type ListRequestRecordsPageRow struct {
-	ID                          int64
-	RequestID                   string
-	UserID                      int64
-	ApiKeyID                    int64
-	RequestedModelID            string
-	IngressProtocol             string
-	Operation                   string
-	ResponseModelID             pgtype.Text
-	ResponseProtocol            pgtype.Text
-	ResponseID                  pgtype.Text
-	Stream                      bool
-	Status                      string
-	FinalProviderID             pgtype.Int8
-	FinalChannelID              pgtype.Int8
-	ErrorCode                   pgtype.Text
-	ErrorMessage                pgtype.Text
-	DeliveryStatus              string
-	ResponseStartedAt           pgtype.Timestamptz
-	ResponseCompletedAt         pgtype.Timestamptz
-	StartedAt                   pgtype.Timestamptz
-	CompletedAt                 pgtype.Timestamptz
-	CreatedAt                   pgtype.Timestamptz
-	UpdatedAt                   pgtype.Timestamptz
-	ApiKeyName                  pgtype.Text
-	ApiKeyPrefix                pgtype.Text
-	ApiKeyPlaintext             pgtype.Text
-	UncachedInputTokens         int64
-	CacheReadInputTokens        int64
-	CacheWrite5mInputTokens     int64
-	CacheWrite1hInputTokens     int64
-	OutputTokensTotal           int64
-	ReasoningOutputTokens       int64
-	TotalCostAmount             pgtype.Numeric
-	UncachedInputCostAmount     pgtype.Numeric
-	CacheReadInputCostAmount    pgtype.Numeric
-	CacheWrite5mInputCostAmount pgtype.Numeric
-	CacheWrite1hInputCostAmount pgtype.Numeric
-	OutputCostAmount            pgtype.Numeric
-	ReasoningOutputCostAmount   pgtype.Numeric
-	UncachedInputCost           pgtype.Numeric
-	CacheReadInputCost          pgtype.Numeric
-	CacheWrite5mInputCost       pgtype.Numeric
-	CacheWrite1hInputCost       pgtype.Numeric
-	OutputCost                  pgtype.Numeric
-	ReasoningOutputCost         pgtype.Numeric
-	UncachedInputPrice          pgtype.Numeric
-	CacheReadInputPrice         pgtype.Numeric
-	CacheWrite5mInputPrice      pgtype.Numeric
-	CacheWrite1hInputPrice      pgtype.Numeric
-	OutputPrice                 pgtype.Numeric
-	ReasoningOutputPrice        pgtype.Numeric
-	UserChargeAmount            pgtype.Numeric
-	ReasoningEffort             pgtype.Text
-	ReasoningBudgetTokens       pgtype.Int4
-	ClientIp                    pgtype.Text
-	RouteName                   pgtype.Text
-	RoutePriceRatio             pgtype.Numeric
-	RouteMode                   pgtype.Text
-	ModelDisplayName            pgtype.Text
-	ModelOwnedBy                pgtype.Text
-	FinalChannelName            pgtype.Text
-	ChannelChain                string
+	ID                           int64
+	RequestID                    string
+	UserID                       int64
+	ApiKeyID                     int64
+	RequestedModelID             string
+	IngressProtocol              string
+	Operation                    string
+	ResponseModelID              pgtype.Text
+	ResponseProtocol             pgtype.Text
+	ResponseID                   pgtype.Text
+	Stream                       bool
+	Status                       string
+	FinalProviderID              pgtype.Int8
+	FinalChannelID               pgtype.Int8
+	ErrorCode                    pgtype.Text
+	ErrorMessage                 pgtype.Text
+	DeliveryStatus               string
+	ResponseStartedAt            pgtype.Timestamptz
+	ResponseCompletedAt          pgtype.Timestamptz
+	StartedAt                    pgtype.Timestamptz
+	CompletedAt                  pgtype.Timestamptz
+	CreatedAt                    pgtype.Timestamptz
+	UpdatedAt                    pgtype.Timestamptz
+	ApiKeyName                   pgtype.Text
+	ApiKeyPrefix                 pgtype.Text
+	ApiKeyPlaintext              pgtype.Text
+	UncachedInputTokens          int64
+	CacheReadInputTokens         int64
+	CacheWrite5mInputTokens      int64
+	CacheWrite1hInputTokens      int64
+	CacheWrite30mInputTokens     int64
+	OutputTokensTotal            int64
+	ReasoningOutputTokens        int64
+	TotalCostAmount              pgtype.Numeric
+	UncachedInputCostAmount      pgtype.Numeric
+	CacheReadInputCostAmount     pgtype.Numeric
+	CacheWrite5mInputCostAmount  pgtype.Numeric
+	CacheWrite1hInputCostAmount  pgtype.Numeric
+	CacheWrite30mInputCostAmount pgtype.Numeric
+	OutputCostAmount             pgtype.Numeric
+	ReasoningOutputCostAmount    pgtype.Numeric
+	UncachedInputCost            pgtype.Numeric
+	CacheReadInputCost           pgtype.Numeric
+	CacheWrite5mInputCost        pgtype.Numeric
+	CacheWrite1hInputCost        pgtype.Numeric
+	CacheWrite30mInputCost       pgtype.Numeric
+	OutputCost                   pgtype.Numeric
+	ReasoningOutputCost          pgtype.Numeric
+	UncachedInputPrice           pgtype.Numeric
+	CacheReadInputPrice          pgtype.Numeric
+	CacheWrite5mInputPrice       pgtype.Numeric
+	CacheWrite1hInputPrice       pgtype.Numeric
+	CacheWrite30mInputPrice      pgtype.Numeric
+	OutputPrice                  pgtype.Numeric
+	ReasoningOutputPrice         pgtype.Numeric
+	UserChargeAmount             pgtype.Numeric
+	ReasoningEffort              pgtype.Text
+	ReasoningBudgetTokens        pgtype.Int4
+	ClientIp                     pgtype.Text
+	RouteName                    pgtype.Text
+	RoutePriceRatio              pgtype.Numeric
+	RouteMode                    pgtype.Text
+	ModelDisplayName             pgtype.Text
+	ModelOwnedBy                 pgtype.Text
+	FinalChannelName             pgtype.Text
+	ChannelChain                 string
 }
 
 // ListRequestRecordsPage 供 admin 请求记录列表（富化版）按过滤条件分页倒序列出。
@@ -613,6 +623,7 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.CacheReadInputTokens,
 			&i.CacheWrite5mInputTokens,
 			&i.CacheWrite1hInputTokens,
+			&i.CacheWrite30mInputTokens,
 			&i.OutputTokensTotal,
 			&i.ReasoningOutputTokens,
 			&i.TotalCostAmount,
@@ -620,18 +631,21 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.CacheReadInputCostAmount,
 			&i.CacheWrite5mInputCostAmount,
 			&i.CacheWrite1hInputCostAmount,
+			&i.CacheWrite30mInputCostAmount,
 			&i.OutputCostAmount,
 			&i.ReasoningOutputCostAmount,
 			&i.UncachedInputCost,
 			&i.CacheReadInputCost,
 			&i.CacheWrite5mInputCost,
 			&i.CacheWrite1hInputCost,
+			&i.CacheWrite30mInputCost,
 			&i.OutputCost,
 			&i.ReasoningOutputCost,
 			&i.UncachedInputPrice,
 			&i.CacheReadInputPrice,
 			&i.CacheWrite5mInputPrice,
 			&i.CacheWrite1hInputPrice,
+			&i.CacheWrite30mInputPrice,
 			&i.OutputPrice,
 			&i.ReasoningOutputPrice,
 			&i.UserChargeAmount,

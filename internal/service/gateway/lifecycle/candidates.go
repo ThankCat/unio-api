@@ -54,6 +54,12 @@ type PrepareCandidatesParams struct {
 	// Available 过滤当前处于熔断冷却期的 channel；nil 表示全部可用。
 	Available CandidateAvailability
 
+	// FailurePreferred 是失败软冷却的「偏好」判定（DEC-029）：返回 false 的候选不被剔除，
+	// 而是 demote 到 fallback 顺序末尾——健康候选优先，软冷却候选仍作最后兜底。
+	// 全部候选都在软冷却中时顺序不变，故唯一候选场景行为完全不受影响（唯一渠道保护）。
+	// nil 表示不启用软偏好。
+	FailurePreferred CandidateAvailability
+
 	// EstimateInputTokens 对每个可用 fallback candidate 做 provider-specific 保守估算。
 	EstimateInputTokens CandidateInputTokenEstimator
 
@@ -173,7 +179,33 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 		)
 	}
 
+	// 失败软冷却 demote（DEC-029）：健康候选保序在前，软冷却候选保序垫后。
+	// 只重排不剔除——候选总数与保守估算不变，唯一候选时顺序天然不变。
+	plan.Candidates = demoteFailureCooled(plan.Candidates, params.FailurePreferred)
+
 	return plan, nil
+}
+
+// demoteFailureCooled 把软冷却中的候选稳定移到列表末尾（不剔除、组内保持原相对顺序）。
+// preferred 为 nil 时原样返回。
+func demoteFailureCooled(candidates []Candidate, preferred CandidateAvailability) []Candidate {
+	if preferred == nil || len(candidates) < 2 {
+		return candidates
+	}
+
+	healthy := make([]Candidate, 0, len(candidates))
+	cooled := make([]Candidate, 0)
+	for _, c := range candidates {
+		if preferred(c.Route) {
+			healthy = append(healthy, c)
+		} else {
+			cooled = append(cooled, c)
+		}
+	}
+	if len(cooled) == 0 || len(healthy) == 0 {
+		return candidates
+	}
+	return append(healthy, cooled...)
 }
 
 // sortCandidatesByMode 按线路策略对候选稳定排序（返回新切片，不改入参）。

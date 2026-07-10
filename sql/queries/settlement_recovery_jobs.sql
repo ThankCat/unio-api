@@ -26,6 +26,8 @@ INSERT INTO settlement_recovery_jobs (
     usage_cache_write_5m_input_tokens_state,
     usage_cache_write_1h_input_tokens,
     usage_cache_write_1h_input_tokens_state,
+    usage_cache_write_30m_input_tokens,
+    usage_cache_write_30m_input_tokens_state,
     usage_output_tokens_total,
     usage_output_tokens_total_state,
     usage_reasoning_output_tokens,
@@ -41,9 +43,11 @@ INSERT INTO settlement_recovery_jobs (
     cache_read_input_price,
     cache_write_5m_input_price,
     cache_write_1h_input_price,
+    cache_write_30m_input_price,
     output_price,
     reasoning_output_price,
     formula_version,
+    price_ratio,
     estimated_amount,
     authorized_amount,
     max_attempts,
@@ -76,6 +80,8 @@ VALUES (
            sqlc.arg(usage_cache_write_5m_input_tokens_state),
            sqlc.arg(usage_cache_write_1h_input_tokens),
            sqlc.arg(usage_cache_write_1h_input_tokens_state),
+           sqlc.arg(usage_cache_write_30m_input_tokens),
+           sqlc.arg(usage_cache_write_30m_input_tokens_state),
            sqlc.arg(usage_output_tokens_total),
            sqlc.arg(usage_output_tokens_total_state),
            sqlc.arg(usage_reasoning_output_tokens),
@@ -91,9 +97,11 @@ VALUES (
            sqlc.arg(cache_read_input_price),
            sqlc.arg(cache_write_5m_input_price),
            sqlc.arg(cache_write_1h_input_price),
+           sqlc.arg(cache_write_30m_input_price),
            sqlc.arg(output_price),
            sqlc.arg(reasoning_output_price),
            sqlc.arg(formula_version),
+           sqlc.arg(price_ratio),
            sqlc.arg(estimated_amount),
            sqlc.arg(authorized_amount),
            sqlc.arg(max_attempts),
@@ -126,6 +134,8 @@ WHERE settlement_recovery_jobs.user_id = EXCLUDED.user_id
   AND settlement_recovery_jobs.usage_cache_write_5m_input_tokens_state = EXCLUDED.usage_cache_write_5m_input_tokens_state
   AND settlement_recovery_jobs.usage_cache_write_1h_input_tokens = EXCLUDED.usage_cache_write_1h_input_tokens
   AND settlement_recovery_jobs.usage_cache_write_1h_input_tokens_state = EXCLUDED.usage_cache_write_1h_input_tokens_state
+  AND settlement_recovery_jobs.usage_cache_write_30m_input_tokens = EXCLUDED.usage_cache_write_30m_input_tokens
+  AND settlement_recovery_jobs.usage_cache_write_30m_input_tokens_state = EXCLUDED.usage_cache_write_30m_input_tokens_state
   AND settlement_recovery_jobs.usage_output_tokens_total = EXCLUDED.usage_output_tokens_total
   AND settlement_recovery_jobs.usage_output_tokens_total_state = EXCLUDED.usage_output_tokens_total_state
   AND settlement_recovery_jobs.usage_reasoning_output_tokens = EXCLUDED.usage_reasoning_output_tokens
@@ -141,9 +151,11 @@ WHERE settlement_recovery_jobs.user_id = EXCLUDED.user_id
   AND settlement_recovery_jobs.cache_read_input_price IS NOT DISTINCT FROM EXCLUDED.cache_read_input_price
   AND settlement_recovery_jobs.cache_write_5m_input_price IS NOT DISTINCT FROM EXCLUDED.cache_write_5m_input_price
   AND settlement_recovery_jobs.cache_write_1h_input_price IS NOT DISTINCT FROM EXCLUDED.cache_write_1h_input_price
+  AND settlement_recovery_jobs.cache_write_30m_input_price IS NOT DISTINCT FROM EXCLUDED.cache_write_30m_input_price
   AND settlement_recovery_jobs.output_price = EXCLUDED.output_price
   AND settlement_recovery_jobs.reasoning_output_price IS NOT DISTINCT FROM EXCLUDED.reasoning_output_price
   AND settlement_recovery_jobs.formula_version = EXCLUDED.formula_version
+  AND settlement_recovery_jobs.price_ratio IS NOT DISTINCT FROM EXCLUDED.price_ratio
   AND settlement_recovery_jobs.estimated_amount = EXCLUDED.estimated_amount
   AND settlement_recovery_jobs.authorized_amount = EXCLUDED.authorized_amount
 RETURNING *;
@@ -169,57 +181,84 @@ LIMIT 1;
 -- name: GetSettlementRecoveryJobByID :one
 -- GetSettlementRecoveryJobByID 按主键读取单条 recovery job 完整事实（含 last_internal_error_detail）。
 -- 不加锁，仅供 admin 只读详情端点使用；是否回显内部详情由 service/handler 控制（M8）。
-SELECT *
-FROM settlement_recovery_jobs
-WHERE id = sqlc.arg(id);
+-- 关联预授权行与超额补扣流水,还原资金闭环:冻结(authorized)→ 实扣(captured+overage)→ 释放(released)。
+-- overage 是独立 debit 流水(幂等键 = capture 键 + ':overage',见 ledger/reservation.go),每请求至多一条。
+SELECT
+    j.*,
+    rr.request_id AS request_public_id,
+    res.status AS reservation_status,
+    res.captured_amount AS reservation_captured_amount,
+    res.released_amount AS reservation_released_amount,
+    COALESCE(oe.amount, 0)::numeric(20, 10) AS overage_amount
+FROM settlement_recovery_jobs j
+LEFT JOIN request_records rr ON rr.id = j.request_record_id
+LEFT JOIN ledger_reservations res ON res.id = j.reservation_id
+LEFT JOIN ledger_entries oe
+    ON oe.request_record_id = j.request_record_id
+   AND oe.entry_type = 'debit'
+   AND oe.idempotency_key LIKE '%:overage'
+WHERE j.id = sqlc.arg(id);
 
 -- name: ListSettlementRecoveryJobsPage :many
 -- ListSettlementRecoveryJobsPage 按可选过滤分页倒序列出 recovery job（M8 运营任务台，只读）。
 -- 安全红线：列表绝不 SELECT last_internal_error_detail（从存储层就脱敏）；金额走十进制字符串。
+-- 关联预授权行与超额补扣流水,还原资金闭环:冻结(authorized)→ 实扣(captured+overage)→ 释放(released)。
+-- reservation_status: authorized=未结算 / captured=已实扣 / released=已全额释放(dead 收口)。
 SELECT
-    id,
-    user_id,
-    request_record_id,
-    attempt_id,
-    reservation_id,
-    response_protocol,
-    response_id,
-    response_model_id,
-    model_id,
-    provider_id,
-    channel_id,
-    upstream_protocol,
-    upstream_model,
-    finish_class,
-    upstream_status_code,
-    currency,
-    estimated_amount,
-    authorized_amount,
-    status,
-    attempt_count,
-    max_attempts,
-    next_run_at,
-    locked_by,
-    locked_until,
-    last_error_code,
-    last_error_message,
-    last_attempted_at,
-    completed_at,
-    created_at,
-    updated_at
-FROM settlement_recovery_jobs
-WHERE (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
-  AND (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::bigint)
-  AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
-  AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
+    j.id,
+    j.user_id,
+    j.request_record_id,
+    j.attempt_id,
+    j.reservation_id,
+    j.response_protocol,
+    j.response_id,
+    j.response_model_id,
+    j.model_id,
+    j.provider_id,
+    j.channel_id,
+    j.upstream_protocol,
+    j.upstream_model,
+    j.finish_class,
+    j.upstream_status_code,
+    j.currency,
+    j.estimated_amount,
+    j.authorized_amount,
+    j.status,
+    j.attempt_count,
+    j.max_attempts,
+    j.next_run_at,
+    j.locked_by,
+    j.locked_until,
+    j.last_error_code,
+    j.last_error_message,
+    j.last_attempted_at,
+    j.completed_at,
+    j.created_at,
+    j.updated_at,
+    rr.request_id AS request_public_id,
+    res.status AS reservation_status,
+    res.captured_amount AS reservation_captured_amount,
+    res.released_amount AS reservation_released_amount,
+    COALESCE(oe.amount, 0)::numeric(20, 10) AS overage_amount
+FROM settlement_recovery_jobs j
+LEFT JOIN request_records rr ON rr.id = j.request_record_id
+LEFT JOIN ledger_reservations res ON res.id = j.reservation_id
+LEFT JOIN ledger_entries oe
+    ON oe.request_record_id = j.request_record_id
+   AND oe.entry_type = 'debit'
+   AND oe.idempotency_key LIKE '%:overage'
+WHERE (sqlc.narg('status')::text IS NULL OR j.status = sqlc.narg('status')::text)
+  AND (sqlc.narg('user_id')::bigint IS NULL OR j.user_id = sqlc.narg('user_id')::bigint)
+  AND (sqlc.narg('from_time')::timestamptz IS NULL OR j.created_at >= sqlc.narg('from_time')::timestamptz)
+  AND (sqlc.narg('to_time')::timestamptz IS NULL OR j.created_at < sqlc.narg('to_time')::timestamptz)
 ORDER BY
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN created_at END DESC NULLS LAST,
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN created_at END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN status END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN status END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN user_id END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN user_id END ASC NULLS LAST,
-  id DESC
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN j.created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN j.created_at END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN j.status END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN j.status END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN j.user_id END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN j.user_id END ASC NULLS LAST,
+  j.id DESC
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 
 -- name: CountSettlementRecoveryJobs :one

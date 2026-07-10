@@ -45,41 +45,43 @@ type Store interface {
 
 // ChannelPrice 是 admin 视角的渠道-模型成本价事实；金额以十进制字符串承载，可空项用 *string。
 type ChannelPrice struct {
-	ID                    int64
-	ChannelID             int64
-	ModelID               int64
-	ModelExternalID       string
-	ModelDisplayName      string
-	Currency              string
-	PricingUnit           string
-	UncachedInputCost     string
-	CacheReadInputCost    *string
-	CacheWrite5mInputCost *string
-	CacheWrite1hInputCost *string
-	OutputCost            string
-	ReasoningOutputCost   *string
-	Status                string
-	EffectiveFrom         time.Time
-	EffectiveTo           *time.Time
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	ID                     int64
+	ChannelID              int64
+	ModelID                int64
+	ModelExternalID        string
+	ModelDisplayName       string
+	Currency               string
+	PricingUnit            string
+	UncachedInputCost      string
+	CacheReadInputCost     *string
+	CacheWrite5mInputCost  *string
+	CacheWrite1hInputCost  *string
+	CacheWrite30mInputCost *string
+	OutputCost             string
+	ReasoningOutputCost    *string
+	Status                 string
+	EffectiveFrom          time.Time
+	EffectiveTo            *time.Time
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
 }
 
 // CreateInput 是创建渠道-模型成本价的入参；主成本必填、其余分项可空，金额为十进制字符串。
 type CreateInput struct {
-	ChannelID             int64
-	ModelID               int64
-	Currency              string
-	PricingUnit           string
-	UncachedInputCost     string
-	CacheReadInputCost    *string
-	CacheWrite5mInputCost *string
-	CacheWrite1hInputCost *string
-	OutputCost            string
-	ReasoningOutputCost   *string
-	Status                string
-	EffectiveFrom         time.Time
-	EffectiveTo           *time.Time
+	ChannelID              int64
+	ModelID                int64
+	Currency               string
+	PricingUnit            string
+	UncachedInputCost      string
+	CacheReadInputCost     *string
+	CacheWrite5mInputCost  *string
+	CacheWrite1hInputCost  *string
+	CacheWrite30mInputCost *string
+	OutputCost             string
+	ReasoningOutputCost    *string
+	Status                 string
+	EffectiveFrom          time.Time
+	EffectiveTo            *time.Time
 }
 
 // UpdateInput 是 PATCH 渠道-模型成本价的入参：只改启停状态与生效结束时间（关闭窗口）；金额不可改。
@@ -172,19 +174,20 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ChannelPrice, err
 	}
 
 	row, err := s.store.CreateChannelPrice(ctx, sqlc.CreateChannelPriceParams{
-		ChannelID:             in.ChannelID,
-		ModelID:               in.ModelID,
-		Currency:              currency,
-		PricingUnit:           in.PricingUnit,
-		UncachedInputCost:     amounts.uncachedInputCost,
-		CacheReadInputCost:    amounts.cacheReadInputCost,
-		CacheWrite5mInputCost: amounts.cacheWrite5mInputCost,
-		CacheWrite1hInputCost: amounts.cacheWrite1hInputCost,
-		OutputCost:            amounts.outputCost,
-		ReasoningOutputCost:   amounts.reasoningOutputCost,
-		Status:                in.Status,
-		EffectiveFrom:         tsParam(&in.EffectiveFrom),
-		EffectiveTo:           tsParam(in.EffectiveTo),
+		ChannelID:              in.ChannelID,
+		ModelID:                in.ModelID,
+		Currency:               currency,
+		PricingUnit:            in.PricingUnit,
+		UncachedInputCost:      amounts.uncachedInputCost,
+		CacheReadInputCost:     amounts.cacheReadInputCost,
+		CacheWrite5mInputCost:  amounts.cacheWrite5mInputCost,
+		CacheWrite1hInputCost:  amounts.cacheWrite1hInputCost,
+		CacheWrite30mInputCost: amounts.cacheWrite30mInputCost,
+		OutputCost:             amounts.outputCost,
+		ReasoningOutputCost:    amounts.reasoningOutputCost,
+		Status:                 in.Status,
+		EffectiveFrom:          tsParam(&in.EffectiveFrom),
+		EffectiveTo:            tsParam(in.EffectiveTo),
 	})
 	if err != nil {
 		return ChannelPrice{}, storeFailed(err, "create channel price")
@@ -272,12 +275,13 @@ func windowsOverlap(aFrom time.Time, aTo *time.Time, bFrom time.Time, bTo *time.
 
 // channelPriceAmounts 持有解析后的 NUMERIC 成本价。
 type channelPriceAmounts struct {
-	uncachedInputCost     pgtype.Numeric
-	cacheReadInputCost    pgtype.Numeric
-	cacheWrite5mInputCost pgtype.Numeric
-	cacheWrite1hInputCost pgtype.Numeric
-	outputCost            pgtype.Numeric
-	reasoningOutputCost   pgtype.Numeric
+	uncachedInputCost      pgtype.Numeric
+	cacheReadInputCost     pgtype.Numeric
+	cacheWrite5mInputCost  pgtype.Numeric
+	cacheWrite1hInputCost  pgtype.Numeric
+	cacheWrite30mInputCost pgtype.Numeric
+	outputCost             pgtype.Numeric
+	reasoningOutputCost    pgtype.Numeric
 }
 
 func parseChannelPriceAmounts(in CreateInput) (channelPriceAmounts, error) {
@@ -299,6 +303,9 @@ func parseChannelPriceAmounts(in CreateInput) (channelPriceAmounts, error) {
 	if out.cacheWrite1hInputCost, err = parseOptionalMoney("cache_write_1h_input_cost", in.CacheWrite1hInputCost); err != nil {
 		return channelPriceAmounts{}, err
 	}
+	if out.cacheWrite30mInputCost, err = parseOptionalMoney("cache_write_30m_input_cost", in.CacheWrite30mInputCost); err != nil {
+		return channelPriceAmounts{}, err
+	}
 	if out.reasoningOutputCost, err = parseOptionalMoney("reasoning_output_cost", in.ReasoningOutputCost); err != nil {
 		return channelPriceAmounts{}, err
 	}
@@ -308,45 +315,47 @@ func parseChannelPriceAmounts(in CreateInput) (channelPriceAmounts, error) {
 
 func toChannelPrice(c sqlc.ChannelPrice) ChannelPrice {
 	return ChannelPrice{
-		ID:                    c.ID,
-		ChannelID:             c.ChannelID,
-		ModelID:               c.ModelID,
-		Currency:              c.Currency,
-		PricingUnit:           c.PricingUnit,
-		UncachedInputCost:     numericString(c.UncachedInputCost),
-		CacheReadInputCost:    numericPtr(c.CacheReadInputCost),
-		CacheWrite5mInputCost: numericPtr(c.CacheWrite5mInputCost),
-		CacheWrite1hInputCost: numericPtr(c.CacheWrite1hInputCost),
-		OutputCost:            numericString(c.OutputCost),
-		ReasoningOutputCost:   numericPtr(c.ReasoningOutputCost),
-		Status:                c.Status,
-		EffectiveFrom:         c.EffectiveFrom.Time,
-		EffectiveTo:           timePtr(c.EffectiveTo),
-		CreatedAt:             c.CreatedAt.Time,
-		UpdatedAt:             c.UpdatedAt.Time,
+		ID:                     c.ID,
+		ChannelID:              c.ChannelID,
+		ModelID:                c.ModelID,
+		Currency:               c.Currency,
+		PricingUnit:            c.PricingUnit,
+		UncachedInputCost:      numericString(c.UncachedInputCost),
+		CacheReadInputCost:     numericPtr(c.CacheReadInputCost),
+		CacheWrite5mInputCost:  numericPtr(c.CacheWrite5mInputCost),
+		CacheWrite1hInputCost:  numericPtr(c.CacheWrite1hInputCost),
+		CacheWrite30mInputCost: numericPtr(c.CacheWrite30mInputCost),
+		OutputCost:             numericString(c.OutputCost),
+		ReasoningOutputCost:    numericPtr(c.ReasoningOutputCost),
+		Status:                 c.Status,
+		EffectiveFrom:          c.EffectiveFrom.Time,
+		EffectiveTo:            timePtr(c.EffectiveTo),
+		CreatedAt:              c.CreatedAt.Time,
+		UpdatedAt:              c.UpdatedAt.Time,
 	}
 }
 
 func toChannelPriceFromRow(c sqlc.ListChannelPricesByChannelRow) ChannelPrice {
 	return ChannelPrice{
-		ID:                    c.ID,
-		ChannelID:             c.ChannelID,
-		ModelID:               c.ModelID,
-		ModelExternalID:       c.ModelExternalID,
-		ModelDisplayName:      c.ModelDisplayName,
-		Currency:              c.Currency,
-		PricingUnit:           c.PricingUnit,
-		UncachedInputCost:     numericString(c.UncachedInputCost),
-		CacheReadInputCost:    numericPtr(c.CacheReadInputCost),
-		CacheWrite5mInputCost: numericPtr(c.CacheWrite5mInputCost),
-		CacheWrite1hInputCost: numericPtr(c.CacheWrite1hInputCost),
-		OutputCost:            numericString(c.OutputCost),
-		ReasoningOutputCost:   numericPtr(c.ReasoningOutputCost),
-		Status:                c.Status,
-		EffectiveFrom:         c.EffectiveFrom.Time,
-		EffectiveTo:           timePtr(c.EffectiveTo),
-		CreatedAt:             c.CreatedAt.Time,
-		UpdatedAt:             c.UpdatedAt.Time,
+		ID:                     c.ID,
+		ChannelID:              c.ChannelID,
+		ModelID:                c.ModelID,
+		ModelExternalID:        c.ModelExternalID,
+		ModelDisplayName:       c.ModelDisplayName,
+		Currency:               c.Currency,
+		PricingUnit:            c.PricingUnit,
+		UncachedInputCost:      numericString(c.UncachedInputCost),
+		CacheReadInputCost:     numericPtr(c.CacheReadInputCost),
+		CacheWrite5mInputCost:  numericPtr(c.CacheWrite5mInputCost),
+		CacheWrite1hInputCost:  numericPtr(c.CacheWrite1hInputCost),
+		CacheWrite30mInputCost: numericPtr(c.CacheWrite30mInputCost),
+		OutputCost:             numericString(c.OutputCost),
+		ReasoningOutputCost:    numericPtr(c.ReasoningOutputCost),
+		Status:                 c.Status,
+		EffectiveFrom:          c.EffectiveFrom.Time,
+		EffectiveTo:            timePtr(c.EffectiveTo),
+		CreatedAt:              c.CreatedAt.Time,
+		UpdatedAt:              c.UpdatedAt.Time,
 	}
 }
 

@@ -37,13 +37,14 @@ func newApplierFixture() (*settingsApplier, *fakeSettingsReader, *fakeChatRouteS
 	store := &fakeSettingsReader{values: map[string]json.RawMessage{}}
 	routeStore := &fakeChatRouteStore{}
 	a := &settingsApplier{
-		store:    store,
-		logger:   slog.Default(),
-		breaker:  lifecycle.NewChannelCircuitBreaker(lifecycle.ChannelCircuitBreakerConfig{}),
-		guard:    NewRateLimitGuard(nil, "test", appsettings.DefaultRateLimitDefaultsSettings(), slog.Default()),
-		cooldown: lifecycle.NewChannelCooldownRegistry(5*time.Second, 5*time.Minute),
-		gate:     lifecycle.NewChannelCredentialGate(3, nil),
-		router:   routing.NewRouter(routeStore, 30*time.Second),
+		store:       store,
+		logger:      slog.Default(),
+		breaker:     lifecycle.NewChannelCircuitBreaker(lifecycle.ChannelCircuitBreakerConfig{}),
+		guard:       NewRateLimitGuard(nil, "test", appsettings.DefaultRateLimitDefaultsSettings(), slog.Default()),
+		cooldown:    lifecycle.NewChannelCooldownRegistry(5*time.Second, 5*time.Minute),
+		gate:        lifecycle.NewChannelCredentialGate(3, nil),
+		router:      routing.NewRouter(routeStore, 30*time.Second),
+		concurrency: ratelimit.NewConcurrencyLimiter(0, 0),
 	}
 	return a, store, routeStore
 }
@@ -61,6 +62,8 @@ func TestSettingsApplierAppliesAllSixGroups(t *testing.T) {
 	store.set(appsettings.GatewayChannelCooldownKey, `{"cooldown_ms":9000,"cap_ms":120000}`)
 	store.set(appsettings.GatewayCredential401ThresholdKey, `7`)
 	store.set(appsettings.GatewayDefaultChannelTimeoutKey, `42000`)
+	store.set(appsettings.GatewayFailureCooldownKey, `7000`)
+	store.set(appsettings.GatewayConcurrencyDefaultsKey, `{"key_limit":1,"channel_limit":2}`)
 
 	a.applyOnce(context.Background())
 
@@ -79,6 +82,19 @@ func TestSettingsApplierAppliesAllSixGroups(t *testing.T) {
 	if !ok || time.Until(until) > 10*time.Second {
 		t.Errorf("cooldown not applied: ok=%v until=%v", ok, until)
 	}
+	// 失败软冷却:热改后 RecordFailure 生效(7s)。
+	if _, ok := a.cooldown.RecordFailure("c"); !ok {
+		t.Error("failure cooldown should be enabled after apply")
+	}
+	// 并发默认:key_limit=1 生效,第二个在途请求被拒。
+	release, ok := a.concurrency.AcquireRouteUser(1, 1)
+	if !ok {
+		t.Fatal("first in-flight should be allowed")
+	}
+	if _, ok := a.concurrency.AcquireRouteUser(1, 1); ok {
+		t.Error("second in-flight should be rejected after key_limit=1 applied")
+	}
+	release()
 }
 
 // TestSettingsApplierKeepsCurrentOnDecodeError 验证坏数据不推送、保持当前值。

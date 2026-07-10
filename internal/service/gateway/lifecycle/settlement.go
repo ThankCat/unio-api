@@ -99,7 +99,10 @@ type ChatSettlementParams struct {
 	// SalePrice 是客户最终售价快照 = 模型基准价 × 线路倍率（DEC-026），路由时算好并透传到结算；
 	// 同一请求所有候选共享、不随命中哪条渠道变。结算用它写收入快照与扣费，ChannelPriceID 仅用于成本。
 	SalePrice billing.CustomerPriceSnapshot
-	Facts     adapter.ResponseFacts
+	// PriceRatio 是算 SalePrice 用的线路倍率（routes.price_ratio），随 SalePrice 一起快照进 price_snapshots，
+	// 供请求详情/列表恒显示结算当时的倍率与倒推基准价（不随后续改倍率漂移）。
+	PriceRatio pgtype.Numeric
+	Facts      adapter.ResponseFacts
 }
 
 // resolveSettlementChannelPrice 解析 settlement 计费应使用的 channel_prices 行。
@@ -206,21 +209,23 @@ func validSettlementFinishClass(class adapter.FinishClass) bool {
 func createSettlementUsageRecord(ctx context.Context, queries *sqlc.Queries, requestRecordID int64, facts adapter.ResponseFacts) (sqlc.UsageRecord, error) {
 	u := facts.Usage
 	return queries.CreateUsageRecord(ctx, sqlc.CreateUsageRecordParams{
-		RequestRecordID:              requestRecordID,
-		UncachedInputTokens:          u.UncachedInputTokens.Value,
-		UncachedInputTokensState:     string(u.UncachedInputTokens.State),
-		CacheReadInputTokens:         u.CacheReadInputTokens.Value,
-		CacheReadInputTokensState:    string(u.CacheReadInputTokens.State),
-		CacheWrite5mInputTokens:      u.CacheWrite5mInputTokens.Value,
-		CacheWrite5mInputTokensState: string(u.CacheWrite5mInputTokens.State),
-		CacheWrite1hInputTokens:      u.CacheWrite1hInputTokens.Value,
-		CacheWrite1hInputTokensState: string(u.CacheWrite1hInputTokens.State),
-		OutputTokensTotal:            u.OutputTokensTotal.Value,
-		OutputTokensTotalState:       string(u.OutputTokensTotal.State),
-		ReasoningOutputTokens:        u.ReasoningOutputTokens.Value,
-		ReasoningOutputTokensState:   string(u.ReasoningOutputTokens.State),
-		UsageSource:                  string(facts.UsageSource),
-		UsageMappingVersion:          facts.UsageMappingVersion,
+		RequestRecordID:               requestRecordID,
+		UncachedInputTokens:           u.UncachedInputTokens.Value,
+		UncachedInputTokensState:      string(u.UncachedInputTokens.State),
+		CacheReadInputTokens:          u.CacheReadInputTokens.Value,
+		CacheReadInputTokensState:     string(u.CacheReadInputTokens.State),
+		CacheWrite5mInputTokens:       u.CacheWrite5mInputTokens.Value,
+		CacheWrite5mInputTokensState:  string(u.CacheWrite5mInputTokens.State),
+		CacheWrite1hInputTokens:       u.CacheWrite1hInputTokens.Value,
+		CacheWrite1hInputTokensState:  string(u.CacheWrite1hInputTokens.State),
+		CacheWrite30mInputTokens:      u.CacheWrite30mInputTokens.Value,
+		CacheWrite30mInputTokensState: string(u.CacheWrite30mInputTokens.State),
+		OutputTokensTotal:             u.OutputTokensTotal.Value,
+		OutputTokensTotalState:        string(u.OutputTokensTotal.State),
+		ReasoningOutputTokens:         u.ReasoningOutputTokens.Value,
+		ReasoningOutputTokensState:    string(u.ReasoningOutputTokens.State),
+		UsageSource:                   string(facts.UsageSource),
+		UsageMappingVersion:           facts.UsageMappingVersion,
 	})
 }
 
@@ -419,17 +424,19 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	// 不随命中哪条渠道变。price_id 仍指向命中渠道的 channel_prices 行（成本来源 / 审计参考）。
 	salePrice := params.SalePrice
 	snapshot, err := txQueries.CreatePriceSnapshot(ctx, sqlc.CreatePriceSnapshotParams{
-		RequestRecordID:        params.RequestRecord.ID,
-		PriceID:                pgtype.Int8{Int64: channelPrice.ID, Valid: true},
-		Currency:               salePrice.Currency,
-		PricingUnit:            salePrice.PricingUnit,
-		UncachedInputPrice:     salePrice.UncachedInputPrice,
-		CacheReadInputPrice:    salePrice.CacheReadInputPrice,
-		CacheWrite5mInputPrice: salePrice.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice: salePrice.CacheWrite1hInputPrice,
-		OutputPrice:            salePrice.OutputPrice,
-		ReasoningOutputPrice:   salePrice.ReasoningOutputPrice,
-		FormulaVersion:         billing.FormulaVersionV1,
+		RequestRecordID:         params.RequestRecord.ID,
+		PriceID:                 pgtype.Int8{Int64: channelPrice.ID, Valid: true},
+		Currency:                salePrice.Currency,
+		PricingUnit:             salePrice.PricingUnit,
+		UncachedInputPrice:      salePrice.UncachedInputPrice,
+		CacheReadInputPrice:     salePrice.CacheReadInputPrice,
+		CacheWrite5mInputPrice:  salePrice.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:  salePrice.CacheWrite1hInputPrice,
+		CacheWrite30mInputPrice: salePrice.CacheWrite30mInputPrice,
+		OutputPrice:             salePrice.OutputPrice,
+		ReasoningOutputPrice:    salePrice.ReasoningOutputPrice,
+		FormulaVersion:          billing.FormulaVersionV1,
+		PriceRatio:              params.PriceRatio,
 	})
 	if err != nil {
 		return err
@@ -437,15 +444,16 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 
 	// 计算用户本次请求的花费（按客户售价 = 基准 × 倍率）。
 	charge, err := s.billingCalculator.CalculateCustomerCharge(facts.Usage, billing.CustomerPriceSnapshot{
-		Currency:               snapshot.Currency,
-		PricingUnit:            snapshot.PricingUnit,
-		UncachedInputPrice:     snapshot.UncachedInputPrice,
-		CacheReadInputPrice:    snapshot.CacheReadInputPrice,
-		CacheWrite5mInputPrice: snapshot.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice: snapshot.CacheWrite1hInputPrice,
-		OutputPrice:            snapshot.OutputPrice,
-		ReasoningOutputPrice:   snapshot.ReasoningOutputPrice,
-		FormulaVersion:         snapshot.FormulaVersion,
+		Currency:                snapshot.Currency,
+		PricingUnit:             snapshot.PricingUnit,
+		UncachedInputPrice:      snapshot.UncachedInputPrice,
+		CacheReadInputPrice:     snapshot.CacheReadInputPrice,
+		CacheWrite5mInputPrice:  snapshot.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:  snapshot.CacheWrite1hInputPrice,
+		CacheWrite30mInputPrice: snapshot.CacheWrite30mInputPrice,
+		OutputPrice:             snapshot.OutputPrice,
+		ReasoningOutputPrice:    snapshot.ReasoningOutputPrice,
+		FormulaVersion:          snapshot.FormulaVersion,
 	})
 	if err != nil {
 		return err
@@ -464,28 +472,30 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 
 	// 写入成本快照（cost_price_id 指向同一 channel_prices 行）。
 	_, err = txQueries.CreateCostSnapshot(ctx, sqlc.CreateCostSnapshotParams{
-		RequestRecordID:             params.RequestRecord.ID,
-		CostPriceID:                 channelPrice.ID,
-		ProviderID:                  params.FinalProviderID,
-		ChannelID:                   params.FinalChannelID,
-		ModelID:                     params.ModelDBID,
-		UpstreamModel:               params.AttemptRecord.UpstreamModel,
-		Currency:                    costSnapshot.Currency,
-		PricingUnit:                 costSnapshot.PricingUnit,
-		UncachedInputCost:           costSnapshot.UncachedInputCost,
-		CacheReadInputCost:          costSnapshot.CacheReadInputCost,
-		CacheWrite5mInputCost:       costSnapshot.CacheWrite5mInputCost,
-		CacheWrite1hInputCost:       costSnapshot.CacheWrite1hInputCost,
-		OutputCost:                  costSnapshot.OutputCost,
-		ReasoningOutputCost:         costSnapshot.ReasoningOutputCost,
-		UncachedInputCostAmount:     providerCost.UncachedInputCostAmount,
-		CacheReadInputCostAmount:    providerCost.CacheReadInputCostAmount,
-		CacheWrite5mInputCostAmount: providerCost.CacheWrite5mInputCostAmount,
-		CacheWrite1hInputCostAmount: providerCost.CacheWrite1hInputCostAmount,
-		OutputCostAmount:            providerCost.OutputCostAmount,
-		ReasoningOutputCostAmount:   providerCost.ReasoningOutputCostAmount,
-		TotalCostAmount:             providerCost.TotalCostAmount,
-		FormulaVersion:              providerCost.FormulaVersion,
+		RequestRecordID:              params.RequestRecord.ID,
+		CostPriceID:                  channelPrice.ID,
+		ProviderID:                   params.FinalProviderID,
+		ChannelID:                    params.FinalChannelID,
+		ModelID:                      params.ModelDBID,
+		UpstreamModel:                params.AttemptRecord.UpstreamModel,
+		Currency:                     costSnapshot.Currency,
+		PricingUnit:                  costSnapshot.PricingUnit,
+		UncachedInputCost:            costSnapshot.UncachedInputCost,
+		CacheReadInputCost:           costSnapshot.CacheReadInputCost,
+		CacheWrite5mInputCost:        costSnapshot.CacheWrite5mInputCost,
+		CacheWrite1hInputCost:        costSnapshot.CacheWrite1hInputCost,
+		CacheWrite30mInputCost:       costSnapshot.CacheWrite30mInputCost,
+		OutputCost:                   costSnapshot.OutputCost,
+		ReasoningOutputCost:          costSnapshot.ReasoningOutputCost,
+		UncachedInputCostAmount:      providerCost.UncachedInputCostAmount,
+		CacheReadInputCostAmount:     providerCost.CacheReadInputCostAmount,
+		CacheWrite5mInputCostAmount:  providerCost.CacheWrite5mInputCostAmount,
+		CacheWrite1hInputCostAmount:  providerCost.CacheWrite1hInputCostAmount,
+		CacheWrite30mInputCostAmount: providerCost.CacheWrite30mInputCostAmount,
+		OutputCostAmount:             providerCost.OutputCostAmount,
+		ReasoningOutputCostAmount:    providerCost.ReasoningOutputCostAmount,
+		TotalCostAmount:              providerCost.TotalCostAmount,
+		FormulaVersion:               providerCost.FormulaVersion,
 	})
 	if err != nil {
 		return failure.Wrap(
@@ -853,15 +863,16 @@ func (s *ChatSettlementService) ensureIdempotentSuccessfulChat(ctx context.Conte
 	billingUsage := settlementUsageFactsFromRecord(usageRecord, lineItems)
 
 	charge, err := s.billingCalculator.CalculateCustomerCharge(billingUsage, billing.CustomerPriceSnapshot{
-		Currency:               snapshot.Currency,
-		PricingUnit:            snapshot.PricingUnit,
-		UncachedInputPrice:     snapshot.UncachedInputPrice,
-		CacheReadInputPrice:    snapshot.CacheReadInputPrice,
-		CacheWrite5mInputPrice: snapshot.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice: snapshot.CacheWrite1hInputPrice,
-		OutputPrice:            snapshot.OutputPrice,
-		ReasoningOutputPrice:   snapshot.ReasoningOutputPrice,
-		FormulaVersion:         snapshot.FormulaVersion,
+		Currency:                snapshot.Currency,
+		PricingUnit:             snapshot.PricingUnit,
+		UncachedInputPrice:      snapshot.UncachedInputPrice,
+		CacheReadInputPrice:     snapshot.CacheReadInputPrice,
+		CacheWrite5mInputPrice:  snapshot.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:  snapshot.CacheWrite1hInputPrice,
+		CacheWrite30mInputPrice: snapshot.CacheWrite30mInputPrice,
+		OutputPrice:             snapshot.OutputPrice,
+		ReasoningOutputPrice:    snapshot.ReasoningOutputPrice,
+		FormulaVersion:          snapshot.FormulaVersion,
 	})
 	if err != nil {
 		return failure.Wrap(
@@ -881,15 +892,16 @@ func (s *ChatSettlementService) ensureIdempotentSuccessfulChat(ctx context.Conte
 	}
 
 	providerCost, err := s.billingCalculator.CalculateProviderCost(billingUsage, billing.ProviderCostSnapshot{
-		Currency:              costSnapshot.Currency,
-		PricingUnit:           costSnapshot.PricingUnit,
-		UncachedInputCost:     costSnapshot.UncachedInputCost,
-		CacheReadInputCost:    costSnapshot.CacheReadInputCost,
-		CacheWrite5mInputCost: costSnapshot.CacheWrite5mInputCost,
-		CacheWrite1hInputCost: costSnapshot.CacheWrite1hInputCost,
-		OutputCost:            costSnapshot.OutputCost,
-		ReasoningOutputCost:   costSnapshot.ReasoningOutputCost,
-		FormulaVersion:        costSnapshot.FormulaVersion,
+		Currency:               costSnapshot.Currency,
+		PricingUnit:            costSnapshot.PricingUnit,
+		UncachedInputCost:      costSnapshot.UncachedInputCost,
+		CacheReadInputCost:     costSnapshot.CacheReadInputCost,
+		CacheWrite5mInputCost:  costSnapshot.CacheWrite5mInputCost,
+		CacheWrite1hInputCost:  costSnapshot.CacheWrite1hInputCost,
+		CacheWrite30mInputCost: costSnapshot.CacheWrite30mInputCost,
+		OutputCost:             costSnapshot.OutputCost,
+		ReasoningOutputCost:    costSnapshot.ReasoningOutputCost,
+		FormulaVersion:         costSnapshot.FormulaVersion,
 	})
 	if err != nil {
 		return failure.Wrap(
@@ -954,15 +966,16 @@ func ensureSettlementRequestMatches(request sqlc.RequestRecord, params ChatSettl
 // 阶段 15：某分项成本为空（成本未知）按 0 入账，毛利偏保守，且满足 cost_snapshots 成本列约束。
 func channelPriceCostSnapshot(p sqlc.ChannelPrice) billing.ProviderCostSnapshot {
 	return billing.ProviderCostSnapshot{
-		Currency:              p.Currency,
-		PricingUnit:           p.PricingUnit,
-		UncachedInputCost:     numericOrZero(p.UncachedInputCost),
-		CacheReadInputCost:    numericOrZero(p.CacheReadInputCost),
-		CacheWrite5mInputCost: numericOrZero(p.CacheWrite5mInputCost),
-		CacheWrite1hInputCost: numericOrZero(p.CacheWrite1hInputCost),
-		OutputCost:            numericOrZero(p.OutputCost),
-		ReasoningOutputCost:   numericOrZero(p.ReasoningOutputCost),
-		FormulaVersion:        billing.FormulaVersionV1,
+		Currency:               p.Currency,
+		PricingUnit:            p.PricingUnit,
+		UncachedInputCost:      numericOrZero(p.UncachedInputCost),
+		CacheReadInputCost:     numericOrZero(p.CacheReadInputCost),
+		CacheWrite5mInputCost:  numericOrZero(p.CacheWrite5mInputCost),
+		CacheWrite1hInputCost:  numericOrZero(p.CacheWrite1hInputCost),
+		CacheWrite30mInputCost: numericOrZero(p.CacheWrite30mInputCost),
+		OutputCost:             numericOrZero(p.OutputCost),
+		ReasoningOutputCost:    numericOrZero(p.ReasoningOutputCost),
+		FormulaVersion:         billing.FormulaVersionV1,
 	}
 }
 
@@ -1001,6 +1014,7 @@ func ensureSettlementCostSnapshotMatches(snapshot sqlc.CostSnapshot, params Chat
 		!chatSettlementSameNumeric(snapshot.CacheReadInputCostAmount, cost.CacheReadInputCostAmount) ||
 		!chatSettlementSameNumeric(snapshot.CacheWrite5mInputCostAmount, cost.CacheWrite5mInputCostAmount) ||
 		!chatSettlementSameNumeric(snapshot.CacheWrite1hInputCostAmount, cost.CacheWrite1hInputCostAmount) ||
+		!chatSettlementSameNumeric(snapshot.CacheWrite30mInputCostAmount, cost.CacheWrite30mInputCostAmount) ||
 		!chatSettlementSameNumeric(snapshot.OutputCostAmount, cost.OutputCostAmount) ||
 		!chatSettlementSameNumeric(snapshot.ReasoningOutputCostAmount, cost.ReasoningOutputCostAmount) ||
 		!chatSettlementSameNumeric(snapshot.TotalCostAmount, cost.TotalCostAmount) {
@@ -1226,6 +1240,8 @@ func ensureSettlementUsageMatches(row sqlc.UsageRecord, facts adapter.ResponseFa
 		row.CacheWrite5mInputTokensState != string(u.CacheWrite5mInputTokens.State) ||
 		row.CacheWrite1hInputTokens != u.CacheWrite1hInputTokens.Value ||
 		row.CacheWrite1hInputTokensState != string(u.CacheWrite1hInputTokens.State) ||
+		row.CacheWrite30mInputTokens != u.CacheWrite30mInputTokens.Value ||
+		row.CacheWrite30mInputTokensState != string(u.CacheWrite30mInputTokens.State) ||
 		row.OutputTokensTotal != u.OutputTokensTotal.Value ||
 		row.OutputTokensTotalState != string(u.OutputTokensTotal.State) ||
 		row.ReasoningOutputTokens != u.ReasoningOutputTokens.Value ||
@@ -1272,13 +1288,14 @@ func settlementUsageFactsFromRecord(row sqlc.UsageRecord, lineItems []sqlc.Usage
 	}
 
 	return usage.Facts{
-		UncachedInputTokens:     usage.TokenCount{Value: row.UncachedInputTokens, State: usage.CountState(row.UncachedInputTokensState)},
-		CacheReadInputTokens:    usage.TokenCount{Value: row.CacheReadInputTokens, State: usage.CountState(row.CacheReadInputTokensState)},
-		CacheWrite5mInputTokens: usage.TokenCount{Value: row.CacheWrite5mInputTokens, State: usage.CountState(row.CacheWrite5mInputTokensState)},
-		CacheWrite1hInputTokens: usage.TokenCount{Value: row.CacheWrite1hInputTokens, State: usage.CountState(row.CacheWrite1hInputTokensState)},
-		OutputTokensTotal:       usage.TokenCount{Value: row.OutputTokensTotal, State: usage.CountState(row.OutputTokensTotalState)},
-		ReasoningOutputTokens:   usage.TokenCount{Value: row.ReasoningOutputTokens, State: usage.CountState(row.ReasoningOutputTokensState)},
-		ServerToolUsage:         items,
+		UncachedInputTokens:      usage.TokenCount{Value: row.UncachedInputTokens, State: usage.CountState(row.UncachedInputTokensState)},
+		CacheReadInputTokens:     usage.TokenCount{Value: row.CacheReadInputTokens, State: usage.CountState(row.CacheReadInputTokensState)},
+		CacheWrite5mInputTokens:  usage.TokenCount{Value: row.CacheWrite5mInputTokens, State: usage.CountState(row.CacheWrite5mInputTokensState)},
+		CacheWrite1hInputTokens:  usage.TokenCount{Value: row.CacheWrite1hInputTokens, State: usage.CountState(row.CacheWrite1hInputTokensState)},
+		CacheWrite30mInputTokens: usage.TokenCount{Value: row.CacheWrite30mInputTokens, State: usage.CountState(row.CacheWrite30mInputTokensState)},
+		OutputTokensTotal:        usage.TokenCount{Value: row.OutputTokensTotal, State: usage.CountState(row.OutputTokensTotalState)},
+		ReasoningOutputTokens:    usage.TokenCount{Value: row.ReasoningOutputTokens, State: usage.CountState(row.ReasoningOutputTokensState)},
+		ServerToolUsage:          items,
 	}
 }
 

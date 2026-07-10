@@ -14,12 +14,8 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-)
-
-// 健康分桶阈值（按区间内 attempt 成功率）；后续可改为可配置。
-const (
-	healthyThreshold  = 0.95
-	degradedThreshold = 0.80
+	"github.com/ThankCat/unio-api/internal/service/admin/opsutil"
+	"github.com/ThankCat/unio-api/internal/service/appsettings"
 )
 
 // 时间序列指标与时间桶单位的合法取值。
@@ -175,11 +171,19 @@ type Series struct {
 // Service 提供工作台看板只读聚合。
 type Service struct {
 	store Store
+	// settings 供每请求现读健康分桶阈值(admin_backend.channel_health_thresholds);
+	// nil(单测)回代码默认。
+	settings *appsettings.SettingsStore
 }
 
 // NewService 创建工作台看板只读聚合服务。
-func NewService(store Store) *Service {
-	return &Service{store: store}
+func NewService(store Store, settings *appsettings.SettingsStore) *Service {
+	return &Service{store: store, settings: settings}
+}
+
+// healthThresholds 读取当前生效的分桶阈值。
+func (s *Service) healthThresholds(ctx context.Context) appsettings.ChannelHealthThresholds {
+	return appsettings.AdminBackendChannelHealthThresholds(ctx, s.settings)
 }
 
 // Overview 聚合 [from, to) 区间内的全部首屏 KPI。
@@ -239,7 +243,7 @@ func (s *Service) Overview(ctx context.Context, from, to time.Time) (Overview, e
 		Margin:            marginByCurrency(revenue, cost),
 		Balance:           balanceByCurrency(balanceRows),
 		BillingExceptions: exceptionGroups(exceptionRows),
-		Channels:          channelStats(enabledChannels, healthRows),
+		Channels:          channelStats(enabledChannels, healthRows, s.healthThresholds(ctx)),
 	}, nil
 }
 
@@ -416,7 +420,7 @@ func exceptionGroups(rows []sqlc.DashboardBillingExceptionSummaryRow) []Exceptio
 	return out
 }
 
-func channelStats(enabled int64, rows []sqlc.DashboardChannelHealthRow) ChannelStats {
+func channelStats(enabled int64, rows []sqlc.DashboardChannelHealthRow, th appsettings.ChannelHealthThresholds) ChannelStats {
 	st := ChannelStats{EnabledCount: enabled, Channels: make([]ChannelHealth, 0, len(rows))}
 	for _, row := range rows {
 		ch := ChannelHealth{
@@ -426,23 +430,19 @@ func channelStats(enabled int64, rows []sqlc.DashboardChannelHealthRow) ChannelS
 			AttemptTotal:     row.AttemptTotal,
 			AttemptSucceeded: row.AttemptSucceeded,
 		}
-		switch {
-		case row.AttemptTotal == 0:
-			ch.Bucket = "no_data"
-			st.NoData++
-		default:
+		if row.AttemptTotal > 0 {
 			ch.SuccessRate = float64(row.AttemptSucceeded) / float64(row.AttemptTotal)
-			switch {
-			case ch.SuccessRate >= healthyThreshold:
-				ch.Bucket = "healthy"
-				st.Healthy++
-			case ch.SuccessRate >= degradedThreshold:
-				ch.Bucket = "degraded"
-				st.Degraded++
-			default:
-				ch.Bucket = "unhealthy"
-				st.Unhealthy++
-			}
+		}
+		ch.Bucket = opsutil.HealthBucket(row.AttemptSucceeded, row.AttemptTotal, th.HealthyRate, th.DegradedRate)
+		switch ch.Bucket {
+		case "no_data":
+			st.NoData++
+		case "healthy":
+			st.Healthy++
+		case "degraded":
+			st.Degraded++
+		default:
+			st.Unhealthy++
 		}
 		st.Channels = append(st.Channels, ch)
 	}

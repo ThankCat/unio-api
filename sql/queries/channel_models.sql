@@ -86,6 +86,8 @@ SELECT
     c.rpm_limit AS channel_rpm_limit,
     c.tpm_limit AS channel_tpm_limit,
     c.rpd_limit AS channel_rpd_limit,
+    c.concurrency_limit AS channel_concurrency_limit,
+    c.upstream_bills_on_disconnect AS channel_bills_on_disconnect,
     cm.upstream_model,
     base.id AS model_price_id,
     base.currency AS base_currency,
@@ -94,6 +96,7 @@ SELECT
     base.cache_read_input_price,
     base.cache_write_5m_input_price,
     base.cache_write_1h_input_price,
+    base.cache_write_30m_input_price,
     base.output_price,
     base.reasoning_output_price,
     cost.id AS channel_price_id,
@@ -103,6 +106,7 @@ SELECT
     cost.cache_read_input_cost,
     cost.cache_write_5m_input_cost,
     cost.cache_write_1h_input_cost,
+    cost.cache_write_30m_input_cost,
     cost.output_cost,
     cost.reasoning_output_cost
 FROM channel_models cm
@@ -115,6 +119,7 @@ JOIN LATERAL (
     SELECT mp.id, mp.currency, mp.pricing_unit,
         mp.uncached_input_price, mp.cache_read_input_price,
         mp.cache_write_5m_input_price, mp.cache_write_1h_input_price,
+        mp.cache_write_30m_input_price,
         mp.output_price, mp.reasoning_output_price
     FROM model_prices mp
     WHERE mp.model_id = m.id
@@ -129,6 +134,7 @@ JOIN LATERAL (
     SELECT cp.id, cp.currency, cp.pricing_unit,
         cp.uncached_input_cost, cp.cache_read_input_cost,
         cp.cache_write_5m_input_cost, cp.cache_write_1h_input_cost,
+        cp.cache_write_30m_input_cost,
         cp.output_cost, cp.reasoning_output_cost
     FROM channel_prices cp
     WHERE cp.channel_id = c.id

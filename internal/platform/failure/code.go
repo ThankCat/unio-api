@@ -188,6 +188,10 @@ const (
 	// CodeGatewayChannelRateLimited 表示渠道级 RPM/TPM/RPD 限流命中：单候选层面用于跳过该候选 fallback；
 	// 全部候选都被限流时作为整体失败码上抛（映射 HTTP 429）。
 	CodeGatewayChannelRateLimited Code = "channel_rate_limited"
+
+	// CodeGatewayChannelConcurrencyLimited 表示渠道在途并发上限命中（DEC-029）：单候选层面用于跳过该候选
+	// fallback；全部候选都被并发限制时作为整体失败码上抛（映射 HTTP 429）。
+	CodeGatewayChannelConcurrencyLimited Code = "channel_concurrency_limited"
 )
 
 const (

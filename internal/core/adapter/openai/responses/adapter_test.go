@@ -699,6 +699,42 @@ func TestCountResponsesInputTokens(t *testing.T) {
 	}
 }
 
+// TestCreateResponseForwardsBetaHeader 验证 Request.BetaHeader 被转发为上游 OpenAI-Beta 头
+// （multi-agent beta 启用前提），空则不发。
+func TestCreateResponseForwardsBetaHeader(t *testing.T) {
+	respBody := `{"id":"resp_1","object":"response","status":"completed","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+
+	cases := []struct {
+		name string
+		beta string
+		want string
+	}{
+		{"forwarded", "responses_multi_agent=v1", "responses_multi_agent=v1"},
+		{"empty not sent", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var gotBeta string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotBeta = r.Header.Get("OpenAI-Beta")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(respBody))
+			}))
+			defer server.Close()
+
+			a := NewAdapter(server.Client())
+			_, err := a.CreateResponse(context.Background(), testChannel(server.URL),
+				Request{Body: json.RawMessage(`{"model":"gpt-5.6-sol","input":"hi"}`), BetaHeader: c.beta})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotBeta != c.want {
+				t.Fatalf("upstream OpenAI-Beta = %q, want %q", gotBeta, c.want)
+			}
+		})
+	}
+}
+
 func TestChatUsageFromWire(t *testing.T) {
 	if _, ok := chatUsageFromWire(nil); ok {
 		t.Fatal("nil usage must map to ok=false")
@@ -719,6 +755,55 @@ func TestChatUsageFromWire(t *testing.T) {
 	}
 	if u.CachedTokens != 3 || u.ReasoningTokens != 2 {
 		t.Fatalf("usage details = cached %d / reasoning %d, want 3/2", u.CachedTokens, u.ReasoningTokens)
+	}
+}
+
+// TestChatUsageFromWireCacheWriteAliases 验证缓存写入 token 的多字段兜底：
+// 官方 input_tokens_details.cache_write_tokens 优先，其次兼容 sub2api 的 cache_creation_tokens
+// 与顶层 cache_creation_input_tokens，保证上游为 sub2api 时缓存写入不漏记。
+func TestChatUsageFromWireCacheWriteAliases(t *testing.T) {
+	cases := []struct {
+		name string
+		wire *wireUsage
+		want int
+	}{
+		{
+			name: "official cache_write_tokens",
+			wire: &wireUsage{InputTokens: 100, OutputTokens: 5, TotalTokens: 105,
+				InputTokensDetails: &wireInputTokenDetail{CachedTokens: 10, CacheWriteTokens: 30}},
+			want: 30,
+		},
+		{
+			name: "sub2api detail cache_creation_tokens alias",
+			wire: &wireUsage{InputTokens: 100, OutputTokens: 5, TotalTokens: 105,
+				InputTokensDetails: &wireInputTokenDetail{CachedTokens: 10, CacheCreationTokens: 25}},
+			want: 25,
+		},
+		{
+			name: "sub2api top-level cache_creation_input_tokens alias",
+			wire: &wireUsage{InputTokens: 100, OutputTokens: 5, TotalTokens: 105,
+				CacheCreationInputTokens: 40,
+				InputTokensDetails:       &wireInputTokenDetail{CachedTokens: 10}},
+			want: 40,
+		},
+		{
+			name: "prefer cache_write_tokens over aliases",
+			wire: &wireUsage{InputTokens: 100, OutputTokens: 5, TotalTokens: 105,
+				CacheCreationInputTokens: 40,
+				InputTokensDetails:       &wireInputTokenDetail{CacheWriteTokens: 30, CacheCreationTokens: 25}},
+			want: 30,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			u, ok := chatUsageFromWire(c.wire)
+			if !ok {
+				t.Fatal("expected ok=true")
+			}
+			if u.CacheWriteTokens != c.want {
+				t.Fatalf("CacheWriteTokens = %d, want %d", u.CacheWriteTokens, c.want)
+			}
+		})
 	}
 }
 

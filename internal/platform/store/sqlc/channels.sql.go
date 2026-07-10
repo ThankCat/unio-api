@@ -60,7 +60,7 @@ func (q *Queries) CountChannels(ctx context.Context, arg CountChannelsParams) (i
 const createChannel = `-- name: CreateChannel :one
 INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
 `
 
 type CreateChannelParams struct {
@@ -111,6 +111,8 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		&i.LastTestError,
 		&i.CredentialValid,
 		&i.ArchivedAt,
+		&i.ConcurrencyLimit,
+		&i.UpstreamBillsOnDisconnect,
 	)
 	return i, err
 }
@@ -140,7 +142,7 @@ func (q *Queries) DeleteChannelCascade(ctx context.Context, id int64) (int64, er
 }
 
 const getChannel = `-- name: GetChannel :one
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at
+SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
 FROM channels
 WHERE id = $1
 LIMIT 1
@@ -172,12 +174,14 @@ func (q *Queries) GetChannel(ctx context.Context, id int64) (Channel, error) {
 		&i.LastTestError,
 		&i.CredentialValid,
 		&i.ArchivedAt,
+		&i.ConcurrencyLimit,
+		&i.UpstreamBillsOnDisconnect,
 	)
 	return i, err
 }
 
 const listChannelsByProvider = `-- name: ListChannelsByProvider :many
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at
+SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
 FROM channels
 WHERE provider_id = $1
 ORDER BY priority, id
@@ -215,6 +219,8 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 			&i.LastTestError,
 			&i.CredentialValid,
 			&i.ArchivedAt,
+			&i.ConcurrencyLimit,
+			&i.UpstreamBillsOnDisconnect,
 		); err != nil {
 			return nil, err
 		}
@@ -227,7 +233,7 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 }
 
 const listChannelsForCredentialTest = `-- name: ListChannelsForCredentialTest :many
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at
+SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
 FROM channels
 WHERE status = 'enabled'
 ORDER BY credential_valid ASC, priority, id
@@ -266,6 +272,8 @@ func (q *Queries) ListChannelsForCredentialTest(ctx context.Context) ([]Channel,
 			&i.LastTestError,
 			&i.CredentialValid,
 			&i.ArchivedAt,
+			&i.ConcurrencyLimit,
+			&i.UpstreamBillsOnDisconnect,
 		); err != nil {
 			return nil, err
 		}
@@ -281,7 +289,7 @@ const listChannelsPage = `-- name: ListChannelsPage :many
 SELECT
     c.id, c.provider_id, c.name, c.protocol, c.adapter_key, c.base_url,
     c.credential, c.status, c.priority, c.timeout_ms, c.created_at, c.updated_at,
-    c.rpm_limit, c.tpm_limit, c.rpd_limit,
+    c.rpm_limit, c.tpm_limit, c.rpd_limit, c.concurrency_limit, c.upstream_bills_on_disconnect,
     c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
     p.name AS provider_name
 FROM channels c
@@ -306,27 +314,29 @@ type ListChannelsPageParams struct {
 }
 
 type ListChannelsPageRow struct {
-	ID                int64
-	ProviderID        int64
-	Name              string
-	Protocol          string
-	AdapterKey        string
-	BaseUrl           string
-	Credential        string
-	Status            string
-	Priority          int32
-	TimeoutMs         pgtype.Int4
-	CreatedAt         pgtype.Timestamptz
-	UpdatedAt         pgtype.Timestamptz
-	RpmLimit          pgtype.Int4
-	TpmLimit          pgtype.Int4
-	RpdLimit          pgtype.Int4
-	LastTestedAt      pgtype.Timestamptz
-	LastTestOk        pgtype.Bool
-	LastTestLatencyMs pgtype.Int4
-	LastTestError     pgtype.Text
-	CredentialValid   bool
-	ProviderName      string
+	ID                        int64
+	ProviderID                int64
+	Name                      string
+	Protocol                  string
+	AdapterKey                string
+	BaseUrl                   string
+	Credential                string
+	Status                    string
+	Priority                  int32
+	TimeoutMs                 pgtype.Int4
+	CreatedAt                 pgtype.Timestamptz
+	UpdatedAt                 pgtype.Timestamptz
+	RpmLimit                  pgtype.Int4
+	TpmLimit                  pgtype.Int4
+	RpdLimit                  pgtype.Int4
+	ConcurrencyLimit          pgtype.Int4
+	UpstreamBillsOnDisconnect bool
+	LastTestedAt              pgtype.Timestamptz
+	LastTestOk                pgtype.Bool
+	LastTestLatencyMs         pgtype.Int4
+	LastTestError             pgtype.Text
+	CredentialValid           bool
+	ProviderName              string
 }
 
 // ListChannelsPage 按 provider/状态/关键字过滤后分页列出 channel，连带 provider 名称；过滤项为 NULL 时不过滤。
@@ -361,6 +371,8 @@ func (q *Queries) ListChannelsPage(ctx context.Context, arg ListChannelsPagePara
 			&i.RpmLimit,
 			&i.TpmLimit,
 			&i.RpdLimit,
+			&i.ConcurrencyLimit,
+			&i.UpstreamBillsOnDisconnect,
 			&i.LastTestedAt,
 			&i.LastTestOk,
 			&i.LastTestLatencyMs,
@@ -440,6 +452,51 @@ func (q *Queries) RestoreChannel(ctx context.Context, id int64) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const setChannelBillingBehavior = `-- name: SetChannelBillingBehavior :one
+UPDATE channels
+SET upstream_bills_on_disconnect = $1, updated_at = now()
+WHERE id = $2
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+`
+
+type SetChannelBillingBehaviorParams struct {
+	UpstreamBillsOnDisconnect bool
+	ID                        int64
+}
+
+// SetChannelBillingBehavior 设置渠道「断开仍计费」标记（DESIGN-bill-on-cancel 阶段一）。
+// true 表示上游在连接断开后仍会完成生成并计费（sub2api 类中转）；打开后失败/取消路径会记成本敞口。
+func (q *Queries) SetChannelBillingBehavior(ctx context.Context, arg SetChannelBillingBehaviorParams) (Channel, error) {
+	row := q.db.QueryRow(ctx, setChannelBillingBehavior, arg.UpstreamBillsOnDisconnect, arg.ID)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.ProviderID,
+		&i.Name,
+		&i.Protocol,
+		&i.AdapterKey,
+		&i.BaseUrl,
+		&i.Credential,
+		&i.Status,
+		&i.Priority,
+		&i.TimeoutMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
+		&i.LastTestedAt,
+		&i.LastTestOk,
+		&i.LastTestLatencyMs,
+		&i.LastTestError,
+		&i.CredentialValid,
+		&i.ArchivedAt,
+		&i.ConcurrencyLimit,
+		&i.UpstreamBillsOnDisconnect,
+	)
+	return i, err
+}
+
 const setChannelCredentialInvalid = `-- name: SetChannelCredentialInvalid :execrows
 UPDATE channels
 SET credential_valid = FALSE
@@ -474,24 +531,27 @@ func (q *Queries) SetChannelCredentialValid(ctx context.Context, id int64) (int6
 
 const setChannelRateLimits = `-- name: SetChannelRateLimits :one
 UPDATE channels
-SET rpm_limit = $1, tpm_limit = $2, rpd_limit = $3, updated_at = now()
-WHERE id = $4
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at
+SET rpm_limit = $1, tpm_limit = $2, rpd_limit = $3, concurrency_limit = $4, updated_at = now()
+WHERE id = $5
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
 `
 
 type SetChannelRateLimitsParams struct {
-	RpmLimit pgtype.Int4
-	TpmLimit pgtype.Int4
-	RpdLimit pgtype.Int4
-	ID       int64
+	RpmLimit         pgtype.Int4
+	TpmLimit         pgtype.Int4
+	RpdLimit         pgtype.Int4
+	ConcurrencyLimit pgtype.Int4
+	ID               int64
 }
 
-// SetChannelRateLimits 设置/清除 channel 的渠道级限流上限（P2-8）；各列 NULL=继承全局默认，0=不限，>0=具体上限。
+// SetChannelRateLimits 设置/清除 channel 的渠道级限流上限（P2-8）与在途并发上限（DEC-029）；
+// 各列 NULL=继承全局默认，0=不限，>0=具体上限。
 func (q *Queries) SetChannelRateLimits(ctx context.Context, arg SetChannelRateLimitsParams) (Channel, error) {
 	row := q.db.QueryRow(ctx, setChannelRateLimits,
 		arg.RpmLimit,
 		arg.TpmLimit,
 		arg.RpdLimit,
+		arg.ConcurrencyLimit,
 		arg.ID,
 	)
 	var i Channel
@@ -517,6 +577,8 @@ func (q *Queries) SetChannelRateLimits(ctx context.Context, arg SetChannelRateLi
 		&i.LastTestError,
 		&i.CredentialValid,
 		&i.ArchivedAt,
+		&i.ConcurrencyLimit,
+		&i.UpstreamBillsOnDisconnect,
 	)
 	return i, err
 }
@@ -558,7 +620,7 @@ const updateChannel = `-- name: UpdateChannel :one
 UPDATE channels
 SET name = $1, base_url = $2, status = $3, priority = $4, timeout_ms = $5, updated_at = now()
 WHERE id = $6
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at
+RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
 `
 
 type UpdateChannelParams struct {
@@ -603,6 +665,8 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		&i.LastTestError,
 		&i.CredentialValid,
 		&i.ArchivedAt,
+		&i.ConcurrencyLimit,
+		&i.UpstreamBillsOnDisconnect,
 	)
 	return i, err
 }

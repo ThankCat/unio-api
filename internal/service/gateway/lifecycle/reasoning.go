@@ -20,24 +20,40 @@ const (
 	effortMedium  = "medium"
 	effortHigh    = "high"
 	effortXHigh   = "xhigh"
-	effortMax     = "max" // 官方 Anthropic output_config.effort 顶格档（高于 xhigh，如 Opus 4.6+）。
+	effortMax     = "max" // 顶格档（高于 xhigh）：Anthropic output_config.effort（Opus 4.6+）与 OpenAI GPT-5.6+ 均有。
 )
 
-// NormalizeOpenAIEffort 归一 OpenAI reasoning_effort（含 Responses reasoning.effort）为统一档位。
-// 空串 → 无（nil）；max → xhigh；其余小写保留（未知档位也可展示）。
+// NormalizeOpenAIEffort 归一 OpenAI reasoning_effort（含 Responses reasoning.effort）为统一档位（用于审计落库）。
+// 空串 → 无（nil）；其余小写保留（未知档位也可展示）。
 //
-// 参考：sub2api UsageLog.ReasoningEffort（跨协议、max→xhigh）
+// max 的处理按模型判定（对齐 sub2api normalizeOpenAIReasoningEffortForModel）：
+//   - GPT-5.6+ 家族：max 是官方独立顶格档，原样保留（不塌缩为 xhigh），保证审计口径与上游账单一致；
+//   - 其它 OpenAI 模型（GPT-5.5 及更早无 max 档）：max → xhigh，与历史口径一致。
+//
+// 注意：这里只影响审计落库；转发链路（request_wire.go / Responses RawBody 直传）始终原样透传 max。
+//
+// 参考：sub2api UsageLog.ReasoningEffort / normalizeOpenAIReasoningEffortForModel（跨协议、按模型保留 max）
 //
 //	https://github.com/Wei-Shaw/sub2api/blob/main/backend/internal/service/usage_log.go
-func NormalizeOpenAIEffort(effort string) ReasoningInfo {
+func NormalizeOpenAIEffort(effort, model string) ReasoningInfo {
 	e := strings.ToLower(strings.TrimSpace(effort))
 	if e == "" {
 		return ReasoningInfo{}
 	}
-	if e == "max" {
+	if e == effortMax && !isOpenAIGPT56Model(model) {
 		e = effortXHigh
 	}
 	return ReasoningInfo{Effort: &e}
+}
+
+// isOpenAIGPT56Model 判定模型是否属 GPT-5.6+ 家族（支持独立 max 顶格档）。
+// 兼容代理前缀（openrouter 的 provider/model）、版本后缀（gpt-5.6-sol-2026-07-09）与别名（gpt-5.6）。
+func isOpenAIGPT56Model(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if slash := strings.LastIndex(m, "/"); slash >= 0 {
+		m = m[slash+1:]
+	}
+	return m == "gpt-5.6" || strings.HasPrefix(m, "gpt-5.6-")
 }
 
 // anthropicThinking 是 Anthropic thinking union 的最小解析形状。

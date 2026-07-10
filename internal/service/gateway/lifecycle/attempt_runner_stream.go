@@ -237,12 +237,24 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			continue
 		}
 
+		// 渠道在途并发上限（DEC-029）：满员即跳过该候选（与熔断 open 同语义，不写 attempt、不占 RPM/TPM）。
+		// 流式在途窗口 = 从发起上游请求到整段流读完/失败（params.Stream 返回）；正常路径在其返回后
+		// 立即显式释放，defer 兜底 early-return / panic（release 幂等，重复调用安全）。
+		releaseSlot, slotOK := r.acquireChannelSlot(candidate)
+		if !slotOK {
+			lastErr = channelConcurrencyLimitedError()
+			continue
+		}
+		defer releaseSlot()
+
 		// 渠道级限流预占（P2-8）：命中任一维度即跳过该候选 fallback 到下一渠道（与熔断 open 同语义，不写 attempt）。
 		// 计数后端 fail_closed 故障同样保守跳过该候选；fail_open 时 Guard 内部已放行。
 		if dec, allowed, err := r.guardChannel(ctx, candidate, params.ConservativeInputTokens); err != nil {
+			releaseSlot()
 			lastErr = err
 			continue
 		} else if !allowed {
+			releaseSlot()
 			lastErr = channelRateLimitedError(dec)
 			continue
 		}
@@ -340,6 +352,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				FinalChannelID:      candidate.Channel.ID,
 				ChannelPriceID:      candidate.ChannelPriceID,
 				SalePrice:           candidate.SalePrice,
+				PriceRatio:          candidate.PriceRatio,
 				Facts:               *streamFacts,
 			})
 			EndSettlementSpan(settleSpan, settleErr)
@@ -458,6 +471,8 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 
 		upstreamStart := time.Now()
 		streamFacts, err = params.Stream(ctx, candidate, onChunk)
+		// 整段流已读完/失败，立即归还渠道在途名额（settlement/收尾帧不占上游容量）。
+		releaseSlot()
 		l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 		l.RecordChannelHealth(channelKey, err)
 		l.RecordCredentialResult(candidate.Channel.ID, err)
@@ -465,6 +480,9 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		if err != nil {
 			// 上游 429：按 Retry-After 登记渠道冷却，后续 fallback 在冷却窗口内直接跳过该渠道（P2-7）。
 			l.RecordChannelRateLimit(channelKey, err)
+
+			// 上游 timeout/5xx：登记失败软冷却，让紧随其后的请求（含客户端重试）优先绕开该渠道（DEC-029）。
+			l.RecordChannelFailureCooldown(channelKey, err)
 
 			// 有 final usage 时优先结算：上游已给出准确 token 用量，即使尾部出错也不能让已产生成本的请求免费。
 			if streamFacts != nil {
@@ -497,8 +515,12 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			// 首 token 前取消则普通释放冻结、不扣费（路线 C）。
 			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 				if emitted {
+					// 已 emit → partial settlement 会落真实成本快照，不再记敞口（避免双计）。
 					return finishPartial(PartialReasonClientCanceled, metrics.ChatOutcomeCanceled, metrics.StreamEventCanceled, false, err)
 				}
+
+				// 首字节前取消 + bill-on-disconnect 渠道：上游照常生成并计费，记平台成本敞口（阶段一）。
+				l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, err)
 
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
@@ -521,6 +543,8 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				// 已 emit 帧但无可用输出内容（仅控制帧/空内容后上游中断）：视同「上游流中断、无可用输出」——
 				// 一分钱不扣、全额释放预扣（对齐 new-api PR #4199）；TPM 预占由收尾 releaseUnreconciledTPM 退还。
 				l.MarkAttemptFailed(ctx, attemptRecord, "stream_adapter_error", err)
+				// 客户侧不扣费，但 bill-on-disconnect 上游已开始生成、大概率照常计费：记平台成本敞口（阶段一）。
+				l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, err)
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 					return result, releaseErr
@@ -534,6 +558,10 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 
 			// 首 token 前失败：attempt 记失败；客户端还没看到上游内容，只有这时允许同模型 fallback。
 			l.MarkAttemptFailed(ctx, attemptRecord, "stream_adapter_error", err)
+
+			// bill-on-disconnect 渠道的 timeout/5xx：上游可能已生成并计费，记平台成本敞口（阶段一）。
+			// 注意在 fallback 判定之前记录：即使换渠道成功，本渠道的敞口已经产生。
+			l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, err)
 
 			if !r.retryClassifier.IsRetryable(err) {
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {

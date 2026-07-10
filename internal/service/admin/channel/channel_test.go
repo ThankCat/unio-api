@@ -70,6 +70,12 @@ func (s *fakeChannelStore) SetChannelRateLimits(_ context.Context, arg sqlc.SetC
 		RpdLimit: arg.RpdLimit,
 	}, nil
 }
+func (s *fakeChannelStore) SetChannelBillingBehavior(_ context.Context, arg sqlc.SetChannelBillingBehaviorParams) (sqlc.Channel, error) {
+	return sqlc.Channel{
+		ID:                        arg.ID,
+		UpstreamBillsOnDisconnect: arg.UpstreamBillsOnDisconnect,
+	}, nil
+}
 func (s *fakeChannelStore) UpdateChannelCredential(_ context.Context, _ sqlc.UpdateChannelCredentialParams) (int64, error) {
 	return s.credentialAff, s.credentialErr
 }

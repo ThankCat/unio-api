@@ -101,6 +101,14 @@ type ChatRouteCandidate struct {
 	RPMLimit *int64
 	TPMLimit *int64
 	RPDLimit *int64
+
+	// ConcurrencyLimit 是该候选命中渠道的在途并发上限（DEC-029）：
+	// nil=继承全局默认，0=显式不限，>0=具体上限。命中时该候选被跳过 fallback 到下一渠道。
+	ConcurrencyLimit *int64
+
+	// BillsOnDisconnect 标记该候选渠道的上游「断开仍计费」（DESIGN-bill-on-cancel 阶段一）：
+	// true 时失败/取消路径会记平台成本敞口（channel_cost_exposures），纯观测不影响路由与客户计费。
+	BillsOnDisconnect bool
 }
 
 // ChatRoutePlan 表示一次 chat 请求的同模型候选计划。
@@ -368,15 +376,16 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 	// 客户售价 = 模型基准售价（model_prices）× 线路倍率（routes.price_ratio）（DEC-026）。
 	// 同一请求所有候选共享同一售价，不随命中哪条渠道而变。
 	basePrice := billing.CustomerPriceSnapshot{
-		Currency:               row.BaseCurrency,
-		PricingUnit:            row.BasePricingUnit,
-		UncachedInputPrice:     row.UncachedInputPrice,
-		CacheReadInputPrice:    row.CacheReadInputPrice,
-		CacheWrite5mInputPrice: row.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice: row.CacheWrite1hInputPrice,
-		OutputPrice:            row.OutputPrice,
-		ReasoningOutputPrice:   row.ReasoningOutputPrice,
-		FormulaVersion:         billing.FormulaVersionV1,
+		Currency:                row.BaseCurrency,
+		PricingUnit:             row.BasePricingUnit,
+		UncachedInputPrice:      row.UncachedInputPrice,
+		CacheReadInputPrice:     row.CacheReadInputPrice,
+		CacheWrite5mInputPrice:  row.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:  row.CacheWrite1hInputPrice,
+		CacheWrite30mInputPrice: row.CacheWrite30mInputPrice,
+		OutputPrice:             row.OutputPrice,
+		ReasoningOutputPrice:    row.ReasoningOutputPrice,
+		FormulaVersion:          billing.FormulaVersionV1,
 	}
 	salePrice, err := billing.ScaleCustomerPrice(basePrice, route.PriceRatio)
 	if err != nil {
@@ -398,14 +407,16 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 	}
 
 	return ChatRouteCandidate{
-		ModelDBID:       row.ModelDbID,
-		ProviderID:      row.ProviderID,
-		AdapterKey:      row.AdapterKey,
-		Protocol:        row.Protocol,
-		MaxOutputTokens: maxOutputTokens,
-		RPMLimit:        int4LimitPtr(row.ChannelRpmLimit),
-		TPMLimit:        int4LimitPtr(row.ChannelTpmLimit),
-		RPDLimit:        int4LimitPtr(row.ChannelRpdLimit),
+		ModelDBID:         row.ModelDbID,
+		ProviderID:        row.ProviderID,
+		AdapterKey:        row.AdapterKey,
+		Protocol:          row.Protocol,
+		MaxOutputTokens:   maxOutputTokens,
+		RPMLimit:          int4LimitPtr(row.ChannelRpmLimit),
+		TPMLimit:          int4LimitPtr(row.ChannelTpmLimit),
+		RPDLimit:          int4LimitPtr(row.ChannelRpdLimit),
+		ConcurrencyLimit:  int4LimitPtr(row.ChannelConcurrencyLimit),
+		BillsOnDisconnect: row.ChannelBillsOnDisconnect,
 		Channel: channel.Runtime{
 			ID:           row.ChannelID,
 			BaseURL:      row.BaseUrl,
@@ -419,15 +430,16 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		SalePrice:      salePrice,
 		ChannelPriceID: row.ChannelPriceID,
 		ChannelCost: billing.ProviderCostSnapshot{
-			Currency:              row.CostCurrency,
-			PricingUnit:           row.CostPricingUnit,
-			UncachedInputCost:     row.UncachedInputCost,
-			CacheReadInputCost:    row.CacheReadInputCost,
-			CacheWrite5mInputCost: row.CacheWrite5mInputCost,
-			CacheWrite1hInputCost: row.CacheWrite1hInputCost,
-			OutputCost:            row.OutputCost,
-			ReasoningOutputCost:   row.ReasoningOutputCost,
-			FormulaVersion:        billing.FormulaVersionV1,
+			Currency:               row.CostCurrency,
+			PricingUnit:            row.CostPricingUnit,
+			UncachedInputCost:      row.UncachedInputCost,
+			CacheReadInputCost:     row.CacheReadInputCost,
+			CacheWrite5mInputCost:  row.CacheWrite5mInputCost,
+			CacheWrite1hInputCost:  row.CacheWrite1hInputCost,
+			CacheWrite30mInputCost: row.CacheWrite30mInputCost,
+			OutputCost:             row.OutputCost,
+			ReasoningOutputCost:    row.ReasoningOutputCost,
+			FormulaVersion:         billing.FormulaVersionV1,
 		},
 	}, nil
 }

@@ -32,7 +32,7 @@ func TestChannelHealthServiceBuckets(t *testing.T) {
 			{ChannelID: 4, Name: "idle-ch", Status: "disabled", AttemptTotal: 0},
 		},
 	}
-	svc := query.NewChannelHealthService(store)
+	svc := query.NewChannelHealthService(store, nil)
 
 	from := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	items, err := svc.List(context.Background(), &from, nil)

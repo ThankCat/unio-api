@@ -12,6 +12,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-api/internal/platform/observability/tracing"
+	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-api/internal/service/appsettings"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
@@ -173,11 +174,28 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 
 	// 渠道级 429 冷却注册表（P2-7）：三协议 service 共享一份，使任一协议命中的 429 都能即时
 	// 让该渠道在冷却窗口内被 routing fallback 跳过。冷却到期自动恢复。
+	// 同一注册表还承载 timeout/5xx 失败软冷却（DEC-029）：软冷却只 demote 候选排序、不剔除。
 	cooldownSettings := appsettings.GatewayChannelCooldown(ctx, settingsStore)
 	channelCooldown := lifecycle.NewChannelCooldownRegistry(cooldownSettings.Cooldown, cooldownSettings.Cap)
+	channelCooldown.SetFailureCooldown(appsettings.GatewayFailureCooldown(ctx, settingsStore))
 	chatCompletionService.SetChannelCooldownRegistry(channelCooldown)
 	responsesService.SetChannelCooldownRegistry(channelCooldown)
 	messagesService.SetChannelCooldownRegistry(channelCooldown)
+
+	// 在途并发限制器（DEC-029）：进程内单实例，两级共用——ingress 中间件（线路+用户）与
+	// attempt runner（渠道级，渠道行 concurrency_limit 可覆盖默认）。
+	concurrencySettings := appsettings.GatewayConcurrencyDefaults(ctx, settingsStore)
+	concurrencyLimiter := ratelimit.NewConcurrencyLimiter(concurrencySettings.KeyLimit, concurrencySettings.ChannelLimit)
+	chatCompletionService.SetConcurrencyLimiter(concurrencyLimiter)
+	responsesService.SetConcurrencyLimiter(concurrencyLimiter)
+	messagesService.SetConcurrencyLimiter(concurrencyLimiter)
+
+	// 成本敞口记录器（DESIGN-bill-on-cancel 阶段一）：bill-on-disconnect 渠道的失败/取消路径
+	// 记平台成本敞口；假定输出兜底与 authorization 的进程级兜底同源，保证敞口与冻结上界口径一致。
+	costExposureRecorder := newCostExposureStore(queries, deps.Logger)
+	chatCompletionService.SetCostExposureRecorder(costExposureRecorder, deps.Config.Gateway.MaxOutputTokensFallback)
+	responsesService.SetCostExposureRecorder(costExposureRecorder, deps.Config.Gateway.MaxOutputTokensFallback)
+	messagesService.SetCostExposureRecorder(costExposureRecorder, deps.Config.Gateway.MaxOutputTokensFallback)
 
 	// 凭据失效闸门（阶段二）：三协议共享一份进程内「连续 401」计数器；达阈值时异步把
 	// channels.credential_valid 翻 false + 写 runtime_401 日志，后续请求在路由候选层直接跳过该渠道。
@@ -192,13 +210,14 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	// 配置 applier：周期性把 6 组配置的最新生效值推给上述消费方（admin 改动 ≤ 应用周期内生效）。
 	// 生命周期挂到独立 background context（传入的 ctx 是启动期短时 ctx），随 app.Shutdown 停止。
 	applier := &settingsApplier{
-		store:    settingsStore,
-		logger:   deps.Logger,
-		breaker:  channelBreaker,
-		guard:    rateLimitGuard,
-		cooldown: channelCooldown,
-		gate:     credentialGate,
-		router:   chatRouter,
+		store:       settingsStore,
+		logger:      deps.Logger,
+		breaker:     channelBreaker,
+		guard:       rateLimitGuard,
+		cooldown:    channelCooldown,
+		gate:        credentialGate,
+		router:      chatRouter,
+		concurrency: concurrencyLimiter,
 	}
 	applierCtx, stopApplier := context.WithCancel(context.Background())
 	go applier.run(applierCtx, settingsApplyInterval)
@@ -207,6 +226,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		deps.Logger,
 		queries,
 		rateLimitGuard,
+		concurrencyLimiter,
 		chatCompletionService,
 		responsesService,
 		messagesService,

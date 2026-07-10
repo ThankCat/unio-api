@@ -20,7 +20,7 @@ func (s *ChatCompletionService) createRequestRecord(ctx context.Context, princip
 	if req.ReasoningEffort != nil {
 		effort = *req.ReasoningEffort
 	}
-	return s.lifecycle.CreateRequest(ctx, principal, req.Model, stream, lifecycle.NormalizeOpenAIEffort(effort))
+	return s.lifecycle.CreateRequest(ctx, principal, req.Model, stream, lifecycle.NormalizeOpenAIEffort(effort, req.Model))
 }
 
 func (s *ChatCompletionService) markRequestRecordFailed(ctx context.Context, requestRecord requestlog.RequestRecord, code string, err error) {

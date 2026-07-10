@@ -56,6 +56,10 @@ type ResponsesInputTokenizer interface {
 // adapter 直传 Body，不做二次结构化改写（上游 responses 直传零转换）。
 type Request struct {
 	Body json.RawMessage
+
+	// BetaHeader 是要转发给上游的 OpenAI-Beta 头值(如 responses_multi_agent=v1)；空则不发。
+	// 由 service 从 ingress 头透传(DEC-013 宽进 + 忠实转发)。
+	BetaHeader string
 }
 
 // Response 是 Responses 直传 adapter 返回给 gateway 的非流式响应 DTO。

@@ -25,6 +25,7 @@ func (s *MessagesService) prepareMessageCandidates(ctx context.Context, req gate
 		Candidates:          candidates,
 		Capabilities:        capabilities,
 		Available:           s.candidateAvailable,
+		FailurePreferred:    s.lifecycle.CandidateFailurePreferred,
 		EstimateInputTokens: s.messagesInputTokenEstimator(req),
 		Mode:                mode,
 		ChannelHealthScore:  s.channelHealthScore,

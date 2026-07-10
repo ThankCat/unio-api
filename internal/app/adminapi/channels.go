@@ -42,12 +42,17 @@ type channelDTO struct {
 	Priority   int32  `json:"priority"`
 	TimeoutMs  *int32 `json:"timeout_ms"`
 	// RPMLimit/TPMLimit/RPDLimit：渠道级限流上限（P2-8）。null=继承全局默认，0=不限，>0=具体上限。
-	RPMLimit   *int64  `json:"rpm_limit"`
-	TPMLimit   *int64  `json:"tpm_limit"`
-	RPDLimit   *int64  `json:"rpd_limit"`
-	CreatedAt  string  `json:"created_at"`
-	UpdatedAt  string  `json:"updated_at"`
-	ArchivedAt *string `json:"archived_at"`
+	RPMLimit *int64 `json:"rpm_limit"`
+	TPMLimit *int64 `json:"tpm_limit"`
+	RPDLimit *int64 `json:"rpd_limit"`
+	// ConcurrencyLimit：渠道在途并发上限（DEC-029）。null=继承全局默认，0=不限，>0=具体上限。
+	ConcurrencyLimit *int64 `json:"concurrency_limit"`
+	// BillsOnDisconnect：上游「断开仍计费」标记（DESIGN-bill-on-cancel 阶段一）。
+	// true 时失败/取消路径记平台成本敞口，纯观测不影响路由与客户计费。
+	BillsOnDisconnect bool    `json:"upstream_bills_on_disconnect"`
+	CreatedAt         string  `json:"created_at"`
+	UpdatedAt         string  `json:"updated_at"`
+	ArchivedAt        *string `json:"archived_at"`
 	// LastTest*：最近一次主动检测结果（渠道检测，阶段一）。全 null 表示从未检测。
 	LastTestedAt      *string `json:"last_tested_at"`
 	LastTestOK        *bool   `json:"last_test_ok"`
@@ -70,6 +75,8 @@ type rateLimitsRequest struct {
 	RPM *int64 `json:"rpm"`
 	TPM *int64 `json:"tpm"`
 	RPD *int64 `json:"rpd"`
+	// Concurrency 是渠道在途并发上限（DEC-029），语义同其余维度：null=继承全局默认，0=不限。
+	Concurrency *int64 `json:"concurrency"`
 }
 
 // validateRateLimits 校验限流值非负（限流上限不能为负数）。
@@ -77,7 +84,7 @@ func validateRateLimits(rl *rateLimitsRequest) error {
 	if rl == nil {
 		return nil
 	}
-	for field, v := range map[string]*int64{"rpm": rl.RPM, "tpm": rl.TPM, "rpd": rl.RPD} {
+	for field, v := range map[string]*int64{"rpm": rl.RPM, "tpm": rl.TPM, "rpd": rl.RPD, "concurrency": rl.Concurrency} {
 		if v != nil && *v < 0 {
 			return failure.New(
 				failure.CodeAdminInvalidArgument,
@@ -100,6 +107,8 @@ type createChannelRequest struct {
 	Priority   int32              `json:"priority"`
 	TimeoutMs  *int32             `json:"timeout_ms"`
 	RateLimits *rateLimitsRequest `json:"rate_limits"` // 可选渠道级限流；不传表示全继承全局默认
+	// BillsOnDisconnect 可选：上游「断开仍计费」标记；缺省=false（正常上游）。
+	BillsOnDisconnect *bool `json:"upstream_bills_on_disconnect"`
 }
 
 type updateChannelRequest struct {
@@ -109,6 +118,8 @@ type updateChannelRequest struct {
 	Priority   int32              `json:"priority"`
 	TimeoutMs  *int32             `json:"timeout_ms"`
 	RateLimits *rateLimitsRequest `json:"rate_limits"` // 对象缺省=不变，存在即原子替换三维限流
+	// BillsOnDisconnect 可选：上游「断开仍计费」标记；缺省=不变。
+	BillsOnDisconnect *bool `json:"upstream_bills_on_disconnect"`
 }
 
 type rotateChannelCredentialRequest struct {
@@ -214,7 +225,9 @@ func (h *channelsHandler) create(w http.ResponseWriter, r *http.Request) {
 		in.RPMLimit = req.RateLimits.RPM
 		in.TPMLimit = req.RateLimits.TPM
 		in.RPDLimit = req.RateLimits.RPD
+		in.ConcurrencyLimit = req.RateLimits.Concurrency
 	}
+	in.BillsOnDisconnect = req.BillsOnDisconnect
 
 	c, err := h.service.Create(r.Context(), in)
 	if err != nil {
@@ -256,7 +269,9 @@ func (h *channelsHandler) update(w http.ResponseWriter, r *http.Request) {
 		in.RPMLimit = req.RateLimits.RPM
 		in.TPMLimit = req.RateLimits.TPM
 		in.RPDLimit = req.RateLimits.RPD
+		in.ConcurrencyLimit = req.RateLimits.Concurrency
 	}
+	in.BillsOnDisconnect = req.BillsOnDisconnect
 
 	c, err := h.service.Update(r.Context(), in)
 	if err != nil {
@@ -333,23 +348,25 @@ func (h *channelsHandler) restore(w http.ResponseWriter, r *http.Request) {
 
 func toChannelDTO(c channel.Channel) channelDTO {
 	return channelDTO{
-		ID:           c.ID,
-		ProviderID:   c.ProviderID,
-		ProviderName: c.ProviderName,
-		Name:         c.Name,
-		Protocol:     c.Protocol,
-		AdapterKey:   c.AdapterKey,
-		BaseURL:      c.BaseURL,
-		Credential:   c.Credential,
-		Status:       c.Status,
-		Priority:     c.Priority,
-		TimeoutMs:    c.TimeoutMs,
-		RPMLimit:     c.RPMLimit,
-		TPMLimit:     c.TPMLimit,
-		RPDLimit:     c.RPDLimit,
-		CreatedAt:    c.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:    c.UpdatedAt.UTC().Format(time.RFC3339),
-		ArchivedAt:   formatOptionalTime(c.ArchivedAt),
+		ID:                c.ID,
+		ProviderID:        c.ProviderID,
+		ProviderName:      c.ProviderName,
+		Name:              c.Name,
+		Protocol:          c.Protocol,
+		AdapterKey:        c.AdapterKey,
+		BaseURL:           c.BaseURL,
+		Credential:        c.Credential,
+		Status:            c.Status,
+		Priority:          c.Priority,
+		TimeoutMs:         c.TimeoutMs,
+		RPMLimit:          c.RPMLimit,
+		TPMLimit:          c.TPMLimit,
+		RPDLimit:          c.RPDLimit,
+		ConcurrencyLimit:  c.ConcurrencyLimit,
+		BillsOnDisconnect: c.BillsOnDisconnect,
+		CreatedAt:         c.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:         c.UpdatedAt.UTC().Format(time.RFC3339),
+		ArchivedAt:        formatOptionalTime(c.ArchivedAt),
 
 		LastTestedAt:      formatOptionalTime(c.LastTestedAt),
 		LastTestOK:        c.LastTestOK,

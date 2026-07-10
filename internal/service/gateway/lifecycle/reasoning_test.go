@@ -7,24 +7,35 @@ import (
 
 func TestNormalizeOpenAIEffort(t *testing.T) {
 	cases := []struct {
-		in   string
-		want *string
+		in    string
+		model string
+		want  *string
 	}{
-		{"", nil},
-		{"   ", nil},
-		{"high", strptr("high")},
-		{"HIGH", strptr("high")},
-		{" low ", strptr("low")},
-		{"minimal", strptr("minimal")},
-		{"max", strptr("xhigh")},
+		{"", "gpt-5.5", nil},
+		{"   ", "gpt-5.5", nil},
+		{"high", "gpt-5.5", strptr("high")},
+		{"HIGH", "gpt-5.5", strptr("high")},
+		{" low ", "gpt-5.5", strptr("low")},
+		{"minimal", "gpt-5.5", strptr("minimal")},
+		// 非 GPT-5.6 模型：max 塌缩为 xhigh（历史口径）。
+		{"max", "gpt-5.5", strptr("xhigh")},
+		{"max", "", strptr("xhigh")},
+		// GPT-5.6 家族：max 是独立顶格档，原样保留（含别名/后缀/代理前缀）。
+		{"max", "gpt-5.6", strptr("max")},
+		{"max", "gpt-5.6-sol", strptr("max")},
+		{"MAX", "gpt-5.6-terra", strptr("max")},
+		{"max", "gpt-5.6-luna-2026-07-09", strptr("max")},
+		{"max", "openai/gpt-5.6-sol", strptr("max")},
+		// GPT-5.6 家族的非 max 档不受影响。
+		{"high", "gpt-5.6-sol", strptr("high")},
 	}
 	for _, c := range cases {
-		got := NormalizeOpenAIEffort(c.in)
+		got := NormalizeOpenAIEffort(c.in, c.model)
 		if !eqStrPtr(got.Effort, c.want) {
-			t.Errorf("NormalizeOpenAIEffort(%q).Effort = %v, want %v", c.in, derefStr(got.Effort), derefStr(c.want))
+			t.Errorf("NormalizeOpenAIEffort(%q, %q).Effort = %v, want %v", c.in, c.model, derefStr(got.Effort), derefStr(c.want))
 		}
 		if got.BudgetTokens != nil {
-			t.Errorf("NormalizeOpenAIEffort(%q).BudgetTokens = %v, want nil", c.in, *got.BudgetTokens)
+			t.Errorf("NormalizeOpenAIEffort(%q, %q).BudgetTokens = %v, want nil", c.in, c.model, *got.BudgetTokens)
 		}
 	}
 }

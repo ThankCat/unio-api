@@ -42,6 +42,7 @@ type Store interface {
 	CreateChannel(ctx context.Context, arg sqlc.CreateChannelParams) (sqlc.Channel, error)
 	UpdateChannel(ctx context.Context, arg sqlc.UpdateChannelParams) (sqlc.Channel, error)
 	SetChannelRateLimits(ctx context.Context, arg sqlc.SetChannelRateLimitsParams) (sqlc.Channel, error)
+	SetChannelBillingBehavior(ctx context.Context, arg sqlc.SetChannelBillingBehaviorParams) (sqlc.Channel, error)
 	UpdateChannelCredential(ctx context.Context, arg sqlc.UpdateChannelCredentialParams) (int64, error)
 	DeleteChannelCascade(ctx context.Context, id int64) (int64, error)
 	ArchiveChannelCascade(ctx context.Context, id int64) (int64, error)
@@ -83,12 +84,17 @@ type Channel struct {
 	Priority     int32
 	TimeoutMs    *int32
 	// RPMLimit/TPMLimit/RPDLimit 是渠道级限流上限（P2-8）：nil=继承全局默认，0=不限，>0=具体上限。
-	RPMLimit   *int64
-	TPMLimit   *int64
-	RPDLimit   *int64
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	ArchivedAt *time.Time
+	RPMLimit *int64
+	TPMLimit *int64
+	RPDLimit *int64
+	// ConcurrencyLimit 是渠道在途并发上限（DEC-029）：nil=继承全局默认，0=不限，>0=具体上限。
+	ConcurrencyLimit *int64
+	// BillsOnDisconnect 标记上游「断开仍计费」（DESIGN-bill-on-cancel 阶段一）：
+	// true 时失败/取消路径会记平台成本敞口，纯观测不影响路由与客户计费。
+	BillsOnDisconnect bool
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	ArchivedAt        *time.Time
 	// LastTested* 是最近一次主动检测结果（渠道检测，阶段一）：全 nil 表示从未检测。
 	// 仅由检测端点写入，不参与路由/计费，也不改渠道启停状态。
 	LastTestedAt      *time.Time
@@ -125,11 +131,14 @@ type CreateInput struct {
 	Status     string
 	Priority   int32
 	TimeoutMs  *int32
-	// RateLimitsProvided=true 时按 RPM/TPM/RPD 设置渠道级限流（各值 nil=继承全局默认，0=不限，>0=具体上限）。
+	// RateLimitsProvided=true 时按 RPM/TPM/RPD/并发 设置渠道级限流（各值 nil=继承全局默认，0=不限，>0=具体上限）。
 	RateLimitsProvided bool
 	RPMLimit           *int64
 	TPMLimit           *int64
 	RPDLimit           *int64
+	ConcurrencyLimit   *int64
+	// BillsOnDisconnect 非 nil 时设置「断开仍计费」标记（DESIGN-bill-on-cancel 阶段一）。
+	BillsOnDisconnect *bool
 }
 
 // UpdateInput 是更新 channel 的入参；protocol、adapter_key 与凭据不在此修改。
@@ -140,11 +149,14 @@ type UpdateInput struct {
 	Status    string
 	Priority  int32
 	TimeoutMs *int32
-	// RateLimitsProvided=true 时按 RPM/TPM/RPD 原子设置渠道级限流。
+	// RateLimitsProvided=true 时按 RPM/TPM/RPD/并发 原子设置渠道级限流。
 	RateLimitsProvided bool
 	RPMLimit           *int64
 	TPMLimit           *int64
 	RPDLimit           *int64
+	ConcurrencyLimit   *int64
+	// BillsOnDisconnect 非 nil 时设置「断开仍计费」标记（DESIGN-bill-on-cancel 阶段一）。
+	BillsOnDisconnect *bool
 }
 
 // RotateCredentialInput 是轮换 channel 上游凭据的入参。
@@ -310,19 +322,31 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 
 	// 渠道级限流作为独立 UPDATE（CreateChannel 不接收 rpm/tpm/rpd），创建后按需补设（P2-8）。
 	if in.RateLimitsProvided {
-		if err := validateChannelRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit); err != nil {
+		if err := validateChannelRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit, in.ConcurrencyLimit); err != nil {
 			return Channel{}, err
 		}
 		limited, err := s.store.SetChannelRateLimits(ctx, sqlc.SetChannelRateLimitsParams{
-			ID:       row.ID,
-			RpmLimit: rateLimitParam(in.RPMLimit),
-			TpmLimit: rateLimitParam(in.TPMLimit),
-			RpdLimit: rateLimitParam(in.RPDLimit),
+			ID:               row.ID,
+			RpmLimit:         rateLimitParam(in.RPMLimit),
+			TpmLimit:         rateLimitParam(in.TPMLimit),
+			RpdLimit:         rateLimitParam(in.RPDLimit),
+			ConcurrencyLimit: rateLimitParam(in.ConcurrencyLimit),
 		})
 		if err != nil {
 			return Channel{}, storeFailed(err, "set channel rate limits")
 		}
 		row = limited
+	}
+
+	if in.BillsOnDisconnect != nil {
+		flagged, err := s.store.SetChannelBillingBehavior(ctx, sqlc.SetChannelBillingBehaviorParams{
+			ID:                        row.ID,
+			UpstreamBillsOnDisconnect: *in.BillsOnDisconnect,
+		})
+		if err != nil {
+			return Channel{}, storeFailed(err, "set channel billing behavior")
+		}
+		row = flagged
 	}
 
 	return s.enrichProviderName(ctx, toChannel(row))
@@ -372,14 +396,15 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	}
 
 	if in.RateLimitsProvided {
-		if err := validateChannelRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit); err != nil {
+		if err := validateChannelRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit, in.ConcurrencyLimit); err != nil {
 			return Channel{}, err
 		}
 		limited, err := s.store.SetChannelRateLimits(ctx, sqlc.SetChannelRateLimitsParams{
-			ID:       in.ID,
-			RpmLimit: rateLimitParam(in.RPMLimit),
-			TpmLimit: rateLimitParam(in.TPMLimit),
-			RpdLimit: rateLimitParam(in.RPDLimit),
+			ID:               in.ID,
+			RpmLimit:         rateLimitParam(in.RPMLimit),
+			TpmLimit:         rateLimitParam(in.TPMLimit),
+			RpdLimit:         rateLimitParam(in.RPDLimit),
+			ConcurrencyLimit: rateLimitParam(in.ConcurrencyLimit),
 		})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -388,6 +413,20 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 			return Channel{}, storeFailed(err, "set channel rate limits")
 		}
 		row = limited
+	}
+
+	if in.BillsOnDisconnect != nil {
+		flagged, err := s.store.SetChannelBillingBehavior(ctx, sqlc.SetChannelBillingBehaviorParams{
+			ID:                        in.ID,
+			UpstreamBillsOnDisconnect: *in.BillsOnDisconnect,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return Channel{}, notFound("channel not found")
+			}
+			return Channel{}, storeFailed(err, "set channel billing behavior")
+		}
+		row = flagged
 	}
 
 	return s.enrichProviderName(ctx, toChannel(row))
@@ -504,22 +543,24 @@ func (s *Service) Restore(ctx context.Context, id int64) error {
 
 func toChannel(c sqlc.Channel) Channel {
 	return Channel{
-		ID:         c.ID,
-		ProviderID: c.ProviderID,
-		Name:       c.Name,
-		Protocol:   c.Protocol,
-		AdapterKey: c.AdapterKey,
-		BaseURL:    c.BaseUrl,
-		Credential: c.Credential,
-		Status:     c.Status,
-		Priority:   c.Priority,
-		TimeoutMs:  timeoutResult(c.TimeoutMs),
-		RPMLimit:   rateLimitResult(c.RpmLimit),
-		TPMLimit:   rateLimitResult(c.TpmLimit),
-		RPDLimit:   rateLimitResult(c.RpdLimit),
-		CreatedAt:  c.CreatedAt.Time,
-		UpdatedAt:  c.UpdatedAt.Time,
-		ArchivedAt: timestampResult(c.ArchivedAt),
+		ID:                c.ID,
+		ProviderID:        c.ProviderID,
+		Name:              c.Name,
+		Protocol:          c.Protocol,
+		AdapterKey:        c.AdapterKey,
+		BaseURL:           c.BaseUrl,
+		Credential:        c.Credential,
+		Status:            c.Status,
+		Priority:          c.Priority,
+		TimeoutMs:         timeoutResult(c.TimeoutMs),
+		RPMLimit:          rateLimitResult(c.RpmLimit),
+		TPMLimit:          rateLimitResult(c.TpmLimit),
+		RPDLimit:          rateLimitResult(c.RpdLimit),
+		ConcurrencyLimit:  rateLimitResult(c.ConcurrencyLimit),
+		BillsOnDisconnect: c.UpstreamBillsOnDisconnect,
+		CreatedAt:         c.CreatedAt.Time,
+		UpdatedAt:         c.UpdatedAt.Time,
+		ArchivedAt:        timestampResult(c.ArchivedAt),
 
 		LastTestedAt:      timestampResult(c.LastTestedAt),
 		LastTestOK:        boolResult(c.LastTestOk),
@@ -546,22 +587,24 @@ func (s *Service) enrichProviderName(ctx context.Context, ch Channel) (Channel, 
 // toChannelRow 映射分页列表行，额外带出 JOIN 出的 provider 名称。
 func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 	return Channel{
-		ID:           c.ID,
-		ProviderID:   c.ProviderID,
-		ProviderName: c.ProviderName,
-		Name:         c.Name,
-		Protocol:     c.Protocol,
-		AdapterKey:   c.AdapterKey,
-		BaseURL:      c.BaseUrl,
-		Credential:   c.Credential,
-		Status:       c.Status,
-		Priority:     c.Priority,
-		TimeoutMs:    timeoutResult(c.TimeoutMs),
-		RPMLimit:     rateLimitResult(c.RpmLimit),
-		TPMLimit:     rateLimitResult(c.TpmLimit),
-		RPDLimit:     rateLimitResult(c.RpdLimit),
-		CreatedAt:    c.CreatedAt.Time,
-		UpdatedAt:    c.UpdatedAt.Time,
+		ID:                c.ID,
+		ProviderID:        c.ProviderID,
+		ProviderName:      c.ProviderName,
+		Name:              c.Name,
+		Protocol:          c.Protocol,
+		AdapterKey:        c.AdapterKey,
+		BaseURL:           c.BaseUrl,
+		Credential:        c.Credential,
+		Status:            c.Status,
+		Priority:          c.Priority,
+		TimeoutMs:         timeoutResult(c.TimeoutMs),
+		RPMLimit:          rateLimitResult(c.RpmLimit),
+		TPMLimit:          rateLimitResult(c.TpmLimit),
+		RPDLimit:          rateLimitResult(c.RpdLimit),
+		ConcurrencyLimit:  rateLimitResult(c.ConcurrencyLimit),
+		BillsOnDisconnect: c.UpstreamBillsOnDisconnect,
+		CreatedAt:         c.CreatedAt.Time,
+		UpdatedAt:         c.UpdatedAt.Time,
 
 		LastTestedAt:      timestampResult(c.LastTestedAt),
 		LastTestOK:        boolResult(c.LastTestOk),
@@ -588,8 +631,8 @@ func rateLimitResult(v pgtype.Int4) *int64 {
 }
 
 // validateChannelRateLimits 校验渠道级限流非负（限流上限不能为负数）。
-func validateChannelRateLimits(rpm, tpm, rpd *int64) error {
-	for field, v := range map[string]*int64{"rpm_limit": rpm, "tpm_limit": tpm, "rpd_limit": rpd} {
+func validateChannelRateLimits(rpm, tpm, rpd, concurrency *int64) error {
+	for field, v := range map[string]*int64{"rpm_limit": rpm, "tpm_limit": tpm, "rpd_limit": rpd, "concurrency_limit": concurrency} {
 		if v != nil && *v < 0 {
 			return invalidArgument(field, "rate limit must be a non-negative integer (0 means unlimited)")
 		}

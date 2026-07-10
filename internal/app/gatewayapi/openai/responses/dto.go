@@ -72,6 +72,10 @@ type ResponsesRequest struct {
 	// 由 UnmarshalJSON 填充。DEC-012：decode 不丢字段。
 	Extensions map[string]json.RawMessage `json:"-"`
 
+	// OpenAIBeta 来自 ingress OpenAI-Beta 头（非 JSON body），由 handler 注入。
+	// 用于把 responses_multi_agent=v1 等 beta 能力开关忠实转发给上游（直传路径）。
+	OpenAIBeta string `json:"-"`
+
 	// raw 是 decode 时保留的原始请求体（DEC-012：上游 responses 直传据此零损耗重放，
 	// 仅由 service 改写 model/stream 两个字段）。由 UnmarshalJSON 填充，经 RawBody 读取。
 	raw json.RawMessage
@@ -96,6 +100,25 @@ func (req *ResponsesRequest) StreamEnabled() bool {
 func (req *ResponsesRequest) HasExtension(name string) bool {
 	_, ok := req.Extensions[name]
 	return ok
+}
+
+// MultiAgentEnabled 判断请求是否开启了 Responses multi-agent beta（multi_agent.enabled=true）。
+//
+// multi_agent 是 Responses 专属 beta（GPT-5.6+），无法降级为单请求 Chat Completions。直传路径
+// 随 RawBody + OpenAI-Beta 头原样转发上游；桥接路径(chat-only)据此显式拒绝，避免静默降级为单 agent
+// 却照常计费。字段本身未建模、保留在 Extensions，这里按需解析 enabled 标志。
+func (req *ResponsesRequest) MultiAgentEnabled() bool {
+	raw, ok := req.Extensions["multi_agent"]
+	if !ok || len(raw) == 0 {
+		return false
+	}
+	var ma struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(raw, &ma); err != nil {
+		return false
+	}
+	return ma.Enabled
 }
 
 // Extension 返回指定扩展字段的原始 JSON；不存在时返回 nil。

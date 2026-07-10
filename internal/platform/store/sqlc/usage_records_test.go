@@ -18,21 +18,23 @@ func isCheckViolation(err error) bool {
 
 func usageRecordParams(requestRecordID int64) sqlc.CreateUsageRecordParams {
 	return sqlc.CreateUsageRecordParams{
-		RequestRecordID:              requestRecordID,
-		UncachedInputTokens:          88,
-		UncachedInputTokensState:     "known",
-		CacheReadInputTokens:         12,
-		CacheReadInputTokensState:    "known",
-		CacheWrite5mInputTokens:      0,
-		CacheWrite5mInputTokensState: "not_applicable",
-		CacheWrite1hInputTokens:      0,
-		CacheWrite1hInputTokensState: "not_applicable",
-		OutputTokensTotal:            40,
-		OutputTokensTotalState:       "known",
-		ReasoningOutputTokens:        8,
-		ReasoningOutputTokensState:   "known",
-		UsageSource:                  "upstream_response",
-		UsageMappingVersion:          "openai_chat_usage_v1",
+		RequestRecordID:               requestRecordID,
+		UncachedInputTokens:           88,
+		UncachedInputTokensState:      "known",
+		CacheReadInputTokens:          12,
+		CacheReadInputTokensState:     "known",
+		CacheWrite5mInputTokens:       0,
+		CacheWrite5mInputTokensState:  "not_applicable",
+		CacheWrite1hInputTokens:       0,
+		CacheWrite1hInputTokensState:  "not_applicable",
+		CacheWrite30mInputTokens:      0,
+		CacheWrite30mInputTokensState: "not_applicable",
+		OutputTokensTotal:             40,
+		OutputTokensTotalState:        "known",
+		ReasoningOutputTokens:         8,
+		ReasoningOutputTokensState:    "known",
+		UsageSource:                   "upstream_response",
+		UsageMappingVersion:           "openai_chat_usage_v1",
 	}
 }
 

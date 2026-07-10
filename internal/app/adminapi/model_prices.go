@@ -21,37 +21,39 @@ type ModelPriceService interface {
 // uncached_input_price/output_price 必填恒有值；其余可空（*string，未配置时为 null）。
 // model_external_id / model_display_name 仅列表场景有值；单条写入返回为空。
 type modelPriceDTO struct {
-	ID                     int64   `json:"id"`
-	ModelID                int64   `json:"model_id"`
-	ModelExternalID        string  `json:"model_external_id"`
-	ModelDisplayName       string  `json:"model_display_name"`
-	Currency               string  `json:"currency"`
-	PricingUnit            string  `json:"pricing_unit"`
-	UncachedInputPrice     string  `json:"uncached_input_price"`
-	CacheReadInputPrice    *string `json:"cache_read_input_price"`
-	CacheWrite5mInputPrice *string `json:"cache_write_5m_input_price"`
-	CacheWrite1hInputPrice *string `json:"cache_write_1h_input_price"`
-	OutputPrice            string  `json:"output_price"`
-	ReasoningOutputPrice   *string `json:"reasoning_output_price"`
-	Status                 string  `json:"status"`
-	EffectiveFrom          string  `json:"effective_from"`
-	EffectiveTo            *string `json:"effective_to"`
-	CreatedAt              string  `json:"created_at"`
-	UpdatedAt              string  `json:"updated_at"`
+	ID                      int64   `json:"id"`
+	ModelID                 int64   `json:"model_id"`
+	ModelExternalID         string  `json:"model_external_id"`
+	ModelDisplayName        string  `json:"model_display_name"`
+	Currency                string  `json:"currency"`
+	PricingUnit             string  `json:"pricing_unit"`
+	UncachedInputPrice      string  `json:"uncached_input_price"`
+	CacheReadInputPrice     *string `json:"cache_read_input_price"`
+	CacheWrite5mInputPrice  *string `json:"cache_write_5m_input_price"`
+	CacheWrite1hInputPrice  *string `json:"cache_write_1h_input_price"`
+	CacheWrite30mInputPrice *string `json:"cache_write_30m_input_price"`
+	OutputPrice             string  `json:"output_price"`
+	ReasoningOutputPrice    *string `json:"reasoning_output_price"`
+	Status                  string  `json:"status"`
+	EffectiveFrom           string  `json:"effective_from"`
+	EffectiveTo             *string `json:"effective_to"`
+	CreatedAt               string  `json:"created_at"`
+	UpdatedAt               string  `json:"updated_at"`
 }
 
 type createModelPriceRequest struct {
-	Currency               string  `json:"currency"`
-	PricingUnit            string  `json:"pricing_unit"`
-	UncachedInputPrice     string  `json:"uncached_input_price"`
-	CacheReadInputPrice    *string `json:"cache_read_input_price"`
-	CacheWrite5mInputPrice *string `json:"cache_write_5m_input_price"`
-	CacheWrite1hInputPrice *string `json:"cache_write_1h_input_price"`
-	OutputPrice            string  `json:"output_price"`
-	ReasoningOutputPrice   *string `json:"reasoning_output_price"`
-	Status                 string  `json:"status"`
-	EffectiveFrom          string  `json:"effective_from"`
-	EffectiveTo            *string `json:"effective_to"`
+	Currency                string  `json:"currency"`
+	PricingUnit             string  `json:"pricing_unit"`
+	UncachedInputPrice      string  `json:"uncached_input_price"`
+	CacheReadInputPrice     *string `json:"cache_read_input_price"`
+	CacheWrite5mInputPrice  *string `json:"cache_write_5m_input_price"`
+	CacheWrite1hInputPrice  *string `json:"cache_write_1h_input_price"`
+	CacheWrite30mInputPrice *string `json:"cache_write_30m_input_price"`
+	OutputPrice             string  `json:"output_price"`
+	ReasoningOutputPrice    *string `json:"reasoning_output_price"`
+	Status                  string  `json:"status"`
+	EffectiveFrom           string  `json:"effective_from"`
+	EffectiveTo             *string `json:"effective_to"`
 }
 
 type updateModelPriceRequest struct {
@@ -109,18 +111,19 @@ func (h *modelPricesHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p, err := h.service.Create(r.Context(), modelprice.CreateInput{
-		ModelID:                modelID,
-		Currency:               req.Currency,
-		PricingUnit:            req.PricingUnit,
-		UncachedInputPrice:     req.UncachedInputPrice,
-		CacheReadInputPrice:    req.CacheReadInputPrice,
-		CacheWrite5mInputPrice: req.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice: req.CacheWrite1hInputPrice,
-		OutputPrice:            req.OutputPrice,
-		ReasoningOutputPrice:   req.ReasoningOutputPrice,
-		Status:                 req.Status,
-		EffectiveFrom:          from,
-		EffectiveTo:            to,
+		ModelID:                 modelID,
+		Currency:                req.Currency,
+		PricingUnit:             req.PricingUnit,
+		UncachedInputPrice:      req.UncachedInputPrice,
+		CacheReadInputPrice:     req.CacheReadInputPrice,
+		CacheWrite5mInputPrice:  req.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:  req.CacheWrite1hInputPrice,
+		CacheWrite30mInputPrice: req.CacheWrite30mInputPrice,
+		OutputPrice:             req.OutputPrice,
+		ReasoningOutputPrice:    req.ReasoningOutputPrice,
+		Status:                  req.Status,
+		EffectiveFrom:           from,
+		EffectiveTo:             to,
 	})
 	if err != nil {
 		writeServiceError(w, err)
@@ -164,22 +167,23 @@ func (h *modelPricesHandler) update(w http.ResponseWriter, r *http.Request) {
 
 func toModelPriceDTO(p modelprice.ModelPrice) modelPriceDTO {
 	dto := modelPriceDTO{
-		ID:                     p.ID,
-		ModelID:                p.ModelID,
-		ModelExternalID:        p.ModelExternalID,
-		ModelDisplayName:       p.ModelDisplayName,
-		Currency:               p.Currency,
-		PricingUnit:            p.PricingUnit,
-		UncachedInputPrice:     p.UncachedInputPrice,
-		CacheReadInputPrice:    p.CacheReadInputPrice,
-		CacheWrite5mInputPrice: p.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice: p.CacheWrite1hInputPrice,
-		OutputPrice:            p.OutputPrice,
-		ReasoningOutputPrice:   p.ReasoningOutputPrice,
-		Status:                 p.Status,
-		EffectiveFrom:          p.EffectiveFrom.UTC().Format(time.RFC3339),
-		CreatedAt:              p.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:              p.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:                      p.ID,
+		ModelID:                 p.ModelID,
+		ModelExternalID:         p.ModelExternalID,
+		ModelDisplayName:        p.ModelDisplayName,
+		Currency:                p.Currency,
+		PricingUnit:             p.PricingUnit,
+		UncachedInputPrice:      p.UncachedInputPrice,
+		CacheReadInputPrice:     p.CacheReadInputPrice,
+		CacheWrite5mInputPrice:  p.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:  p.CacheWrite1hInputPrice,
+		CacheWrite30mInputPrice: p.CacheWrite30mInputPrice,
+		OutputPrice:             p.OutputPrice,
+		ReasoningOutputPrice:    p.ReasoningOutputPrice,
+		Status:                  p.Status,
+		EffectiveFrom:           p.EffectiveFrom.UTC().Format(time.RFC3339),
+		CreatedAt:               p.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:               p.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 	if p.EffectiveTo != nil {
 		s := p.EffectiveTo.UTC().Format(time.RFC3339)

@@ -19,6 +19,7 @@ SELECT
         + cache_read_input_tokens
         + cache_write_5m_input_tokens
         + cache_write_1h_input_tokens
+        + cache_write_30m_input_tokens
     ), 0)::bigint AS input_tokens,
     COALESCE(SUM(output_tokens_total), 0)::bigint AS output_tokens
 FROM usage_records
@@ -111,6 +112,7 @@ SELECT
         + cache_read_input_tokens
         + cache_write_5m_input_tokens
         + cache_write_1h_input_tokens
+        + cache_write_30m_input_tokens
     ), 0)::bigint AS input_tokens,
     COALESCE(SUM(output_tokens_total), 0)::bigint AS output_tokens
 FROM usage_records

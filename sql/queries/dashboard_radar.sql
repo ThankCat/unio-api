@@ -67,7 +67,8 @@ SELECT
     COALESCE(SUM(cache_read_input_tokens), 0)::bigint AS cache_read_input,
     COALESCE(SUM(cache_write_5m_input_tokens), 0)::bigint AS cache_write_5m_input,
     COALESCE(SUM(cache_write_1h_input_tokens), 0)::bigint AS cache_write_1h_input,
-    COALESCE(SUM(cache_write_5m_input_tokens + cache_write_1h_input_tokens), 0)::bigint AS cache_write_input,
+    COALESCE(SUM(cache_write_30m_input_tokens), 0)::bigint AS cache_write_30m_input,
+    COALESCE(SUM(cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens), 0)::bigint AS cache_write_input,
     COALESCE(SUM(output_tokens_total), 0)::bigint AS output_tokens
 FROM usage_records
 WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
@@ -142,7 +143,7 @@ WITH per_request AS (
         r.completed_at,
         COALESCE(
             ur.uncached_input_tokens + ur.cache_read_input_tokens
-            + ur.cache_write_5m_input_tokens + ur.cache_write_1h_input_tokens
+            + ur.cache_write_5m_input_tokens + ur.cache_write_1h_input_tokens + ur.cache_write_30m_input_tokens
             + ur.output_tokens_total,
             0
         )::bigint AS tokens_total,
@@ -229,7 +230,7 @@ money_agg AS (
         r.final_provider_id AS provider_id,
         COALESCE(SUM(
             u.uncached_input_tokens + u.cache_read_input_tokens
-            + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
+            + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens
             + u.output_tokens_total
         ), 0)::bigint AS tokens_total,
         COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
@@ -323,7 +324,7 @@ money_agg AS (
         r.final_channel_id AS channel_id,
         COALESCE(SUM(
             u.uncached_input_tokens + u.cache_read_input_tokens
-            + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
+            + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens
             + u.output_tokens_total
         ), 0)::bigint AS tokens_total,
         COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
@@ -441,7 +442,7 @@ SELECT
     COUNT(*) FILTER (WHERE r.status = 'failed') AS failed_total,
     COALESCE(SUM(
         u.uncached_input_tokens + u.cache_read_input_tokens
-        + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens
+        + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens
         + u.output_tokens_total
     ), 0)::bigint AS tokens_total,
     COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
