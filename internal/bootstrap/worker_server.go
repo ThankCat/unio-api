@@ -14,6 +14,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-api/internal/service/admin/channeltest"
+	"github.com/ThankCat/unio-api/internal/service/appsettings"
 	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
@@ -36,7 +37,7 @@ type WorkerServerApp struct {
 }
 
 // NewWorkerServerApp 装配当前 worker-server 进程的后台任务应用。
-func NewWorkerServerApp(_ context.Context, deps WorkerServerAppDeps) (*WorkerServerApp, error) {
+func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerServerApp, error) {
 	queries := sqlc.New(deps.DB)
 	ledgerService := ledger.NewService(deps.DB, queries)
 	chatSettlementService := lifecycle.NewChatSettlementService(
@@ -86,10 +87,12 @@ func NewWorkerServerApp(_ context.Context, deps WorkerServerAppDeps) (*WorkerSer
 		if err != nil {
 			return nil, err
 		}
-		channelTestService := channeltest.NewService(queries, adapterRegistry, channeltest.Config{
-			ProbeTimeout:    deps.Config.ChannelTestWorker.ProbeTimeout,
-			ProbeTimeoutMax: deps.Config.ChannelTestWorker.ProbeTimeoutMax,
-		})
+		// 探测超时走运行时配置（与 admin 手动检测同一 key）。worker 无 Redis 时退化为 DB + 本地缓存。
+		settingsStore := appsettings.NewSettingsStore(
+			queries, nil, deps.Config.Redis.KeyNamespace, appsettings.DefaultRegistry(), deps.Logger,
+		)
+		_ = settingsStore.SeedDefaults(ctx)
+		channelTestService := channeltest.NewService(queries, adapterRegistry, settingsStore)
 		units = append(units, workers.NewChannelTestWorker(
 			queries,
 			workerChannelTester{svc: channelTestService},

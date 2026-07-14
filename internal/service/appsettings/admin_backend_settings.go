@@ -5,14 +5,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 )
 
-// 本文件登记 admin_backend 域(admin 进程后端消费)的运行时配置。
+// 本文件登记 admin_backend 域(admin 进程后端 / 渠道检测 worker 消费)的运行时配置。
 // 域约定见 DESIGN-runtime-settings-batch2-domains.md §2:admin 后端每请求经 store 现读,
 // 本地 3s 缓存即可满足生效时效(admin QPS 低,不走 applier)。
+// 渠道检测 worker 同样现读本域(可无 Redis,退化为 DB + 本地缓存)。
 
 // AdminBackendChannelHealthKey 是渠道健康分桶阈值在 app_settings 中的 key。
 const AdminBackendChannelHealthKey = "admin_backend.channel_health_thresholds"
+
+// AdminBackendChannelTestProbeTimeoutKey 是渠道检测(手动/自动巡检)探测超时在 app_settings 中的 key。
+// 与 gateway.default_channel_timeout_ms / channels.timeout_ms(用户请求上游超时)完全正交。
+const AdminBackendChannelTestProbeTimeoutKey = "admin_backend.channel_test_probe_timeout_ms"
+
+// DefaultChannelTestProbeTimeoutSetting 是渠道检测超时的代码默认(60s)。
+// 与迁移前 CHANNEL_TEST_PROBE_TIMEOUT_MAX 对齐:给慢上游足够响应时间,又不让坏渠道拖垮巡检。
+const DefaultChannelTestProbeTimeoutSetting = 60 * time.Second
 
 // ChannelHealthThresholds 是渠道健康分桶阈值(按区间内 attempt 成功率):
 // >= HealthyRate 为 healthy,>= DegradedRate 为 degraded,否则 unhealthy(无样本 no_data)。
@@ -84,4 +94,34 @@ func AdminBackendChannelHealthThresholds(ctx context.Context, store *SettingsSto
 		return DefaultChannelHealthThresholds()
 	}
 	return t
+}
+
+func channelTestProbeTimeoutDefinition() Definition {
+	return Definition{
+		Key:      AdminBackendChannelTestProbeTimeoutKey,
+		Category: "admin_backend",
+		Label:    "渠道检测超时",
+		Description: "手动「检测渠道」与自动巡检 worker 向真实上游发探测请求时的超时。" +
+			"单位毫秒。与「默认渠道超时」/ 渠道行 timeout_ms(用户请求上游超时)无关——检测专用,互不影响。" +
+			"保存后 admin 与 worker 约 3 秒内生效。",
+		HotReload: true,
+		Default:   encodeMsSetting(DefaultChannelTestProbeTimeoutSetting),
+		Validate: func(raw json.RawMessage) error {
+			_, err := DecodePositiveMsSetting(raw)
+			return err
+		},
+	}
+}
+
+// AdminBackendChannelTestProbeTimeout 读取当前生效的渠道检测超时。
+// store 为 nil(如单测)或解码失败时回默认。
+func AdminBackendChannelTestProbeTimeout(ctx context.Context, store *SettingsStore) time.Duration {
+	if store == nil {
+		return DefaultChannelTestProbeTimeoutSetting
+	}
+	d, err := DecodePositiveMsSetting(store.Raw(ctx, AdminBackendChannelTestProbeTimeoutKey))
+	if err != nil {
+		return DefaultChannelTestProbeTimeoutSetting
+	}
+	return d
 }

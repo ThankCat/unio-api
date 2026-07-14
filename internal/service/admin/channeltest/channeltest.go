@@ -4,6 +4,9 @@
 // 验证「连得上 + 凭据有效 + 模型可用」；成功记录延迟，失败把上游错误翻译成可读原因（凭据无效 /
 // 模型不可用 / 超时 / 连不上 / 限流 …）。它复用与网关完全一致的 adapter/HTTP 链路，故结果=真实行为。
 //
+// 探测超时取自运行时配置 admin_backend.channel_test_probe_timeout_ms，与用户请求的
+// channels.timeout_ms / gateway.default_channel_timeout_ms 完全正交——检测专用、互不影响。
+//
 // 阶段一只报告不摘除：检测结果只落「最近一次检测」四列，绝不改渠道启停状态；与被动熔断/cooldown 正交。
 package channeltest
 
@@ -22,29 +25,8 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/channel"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/service/appsettings"
 )
-
-// 检测超时默认值（可被 Config 覆盖）。
-//
-// 实际探测超时 = 渠道自己的 timeout（钳到 DefaultProbeTimeoutMax）；渠道未显式配置时用 DefaultProbeTimeout。
-// 之前是硬编码 min(渠道 timeout, 15s)，对慢上游（如推理模型中转，真实平均延迟可达数十秒）而言 15s 太紧，
-// 会把本来正常、只是首字节慢的渠道频繁误判成「检测超时」。
-const (
-	// DefaultProbeTimeout 是渠道未显式配置 timeout 时的检测超时。
-	DefaultProbeTimeout = 30 * time.Second
-	// DefaultProbeTimeoutMax 是检测超时硬上限：即便渠道 timeout 更大，探测也不超过它，
-	// 既给慢上游足够响应时间，又不让坏渠道把巡检拖太久。
-	DefaultProbeTimeoutMax = 60 * time.Second
-)
-
-// Config 调节渠道检测行为（探测超时上下限）。零值字段按默认兜底，可由 CHANNEL_TEST_PROBE_TIMEOUT*
-// 环境变量经 bootstrap 注入；手动检测与自动巡检共用同一份配置。
-type Config struct {
-	// ProbeTimeout 渠道未显式配置 timeout 时的检测超时。<=0 兜底 DefaultProbeTimeout。
-	ProbeTimeout time.Duration
-	// ProbeTimeoutMax 检测超时硬上限（渠道 timeout 再大也不超过它）。<=0 兜底 DefaultProbeTimeoutMax。
-	ProbeTimeoutMax time.Duration
-}
 
 // channelModelStatusEnabled 是 channel_models 启用状态值（与 DB 约束一致）。
 const channelModelStatusEnabled = "enabled"
@@ -110,32 +92,17 @@ type TestResult struct {
 
 // Service 编排渠道主动检测：选模型 → 构造 Runtime → 发探测请求 → 归类 → 落库。
 type Service struct {
-	store        Store
-	prober       Prober
-	probeDefault time.Duration
-	probeMax     time.Duration
+	store    Store
+	prober   Prober
+	settings *appsettings.SettingsStore
 }
 
-// NewService 创建渠道检测服务。cfg 零值字段按默认兜底。
-func NewService(store Store, prober Prober, cfg Config) *Service {
-	probeDefault := cfg.ProbeTimeout
-	if probeDefault <= 0 {
-		probeDefault = DefaultProbeTimeout
-	}
-	probeMax := cfg.ProbeTimeoutMax
-	if probeMax <= 0 {
-		probeMax = DefaultProbeTimeoutMax
-	}
-	// 上限不得小于默认值，否则未配 timeout 的渠道会被上限压穿；取较大者兜底。
-	if probeMax < probeDefault {
-		probeMax = probeDefault
-	}
-
+// NewService 创建渠道检测服务。settings 可为 nil（单测），此时探测超时回代码默认。
+func NewService(store Store, prober Prober, settings *appsettings.SettingsStore) *Service {
 	return &Service{
-		store:        store,
-		prober:       prober,
-		probeDefault: probeDefault,
-		probeMax:     probeMax,
+		store:    store,
+		prober:   prober,
+		settings: settings,
 	}
 }
 
@@ -158,7 +125,8 @@ func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 		return TestResult{}, err
 	}
 
-	pt := s.probeTimeout(ch.TimeoutMs)
+	// 检测超时只读系统设置，绝不使用渠道 timeout_ms（那是用户请求超时）。
+	pt := appsettings.AdminBackendChannelTestProbeTimeout(ctx, s.settings)
 	rt := channel.Runtime{
 		ID:           ch.ID,
 		BaseURL:      ch.BaseUrl,
@@ -171,11 +139,16 @@ func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 	// 顺延到下一个启用绑定——避免绑定列表里排在前面的坏模型（如已下线的旧模型返回 404）
 	// 让整条渠道被误判为异常。其它失败（凭据无效/超时/限流/连不上…）属渠道级问题，换模型
 	// 无意义，立即停止并上报。显式指定 model 时候选只有一个，天然不会顺延。
+	// 探测用独立超时上下文：不要继承 admin HTTP 请求的 ReadTimeout/WriteTimeout/客户端断开。
+	// 否则会出现「文案写系统检测超时，延迟却只有 ~10s（HTTP_READ_TIMEOUT）」的错位——
+	// 实际是入口请求 ctx 先被掐断，classify 却仍按 probeTimeout 报错。
 	var result TestResult
 	for i, upstreamModel := range candidates {
 		start := time.Now()
-		status, probeErr := s.prober.ProbeChannel(ctx, ch.Protocol, ch.AdapterKey, rt, upstreamModel)
+		probeCtx, probeCancel := context.WithTimeout(context.WithoutCancel(ctx), pt)
+		status, probeErr := s.prober.ProbeChannel(probeCtx, ch.Protocol, ch.AdapterKey, rt, upstreamModel)
 		latency := time.Since(start)
+		probeCancel()
 
 		result = TestResult{
 			LatencyMs:   latency.Milliseconds(),
@@ -187,7 +160,7 @@ func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 			result.Success = true
 			break
 		}
-		result.ErrorCode, result.Message = classifyProbeError(probeErr, pt)
+		result.ErrorCode, result.Message = classifyProbeError(probeErr, pt, latency)
 		// 把上游返回的原始错误体（截断快照）一并记下，供排障时看到完整错误而非只有归类后的中文原因。
 		if meta, ok := adapter.UpstreamMetadataOf(probeErr); ok {
 			result.UpstreamError = meta.ResponseSnippet
@@ -377,8 +350,9 @@ func (s *Service) providerSlug(ctx context.Context, providerID int64) string {
 }
 
 // classifyProbeError 把 adapter 返回的上游错误归类成稳定错误码 + 可读中文原因。
-// probeTimeout 是本次探测实际使用的超时，用于在超时原因里带上具体时长，便于一眼看出是被探测上限卡的。
-func classifyProbeError(err error, probeTimeout time.Duration) (code string, message string) {
+// probeTimeout 是本次探测配置的超时上限；waited 是实际等待时长。超时文案优先用 waited，
+// 避免「配置上限 60s、实际 10s 被掐断」时仍显示 60s 造成误解。
+func classifyProbeError(err error, probeTimeout time.Duration, waited time.Duration) (code string, message string) {
 	category, hasCategory := adapter.UpstreamCategoryOf(err)
 	meta, _ := adapter.UpstreamMetadataOf(err)
 	status := meta.StatusCode
@@ -396,7 +370,7 @@ func classifyProbeError(err error, probeTimeout time.Duration) (code string, mes
 	case adapter.UpstreamErrorRateLimit:
 		return ErrCodeRateLimited, "上游限流（429）：稍后重试，通常不代表渠道故障"
 	case adapter.UpstreamErrorTimeout:
-		return ErrCodeTimeout, fmt.Sprintf("检测超时：上游在 %.0fs 内未响应", probeTimeout.Seconds())
+		return ErrCodeTimeout, fmt.Sprintf("检测超时：上游在 %.0fs 内未响应", timeoutSecondsForMessage(probeTimeout, waited))
 	case adapter.UpstreamErrorBadRequest:
 		if status == http.StatusNotFound {
 			return ErrCodeModelUnavailable, "上游未找到该模型或端点（404）"
@@ -417,16 +391,17 @@ func classifyProbeError(err error, probeTimeout time.Duration) (code string, mes
 	}
 }
 
-// probeTimeout 取渠道自己的 timeout（钳到 probeMax 上限）；渠道未设或非正数时用 probeDefault。
-func (s *Service) probeTimeout(timeoutMs pgtype.Int4) time.Duration {
-	if timeoutMs.Valid && timeoutMs.Int32 > 0 {
-		ct := time.Duration(timeoutMs.Int32) * time.Millisecond
-		if ct > s.probeMax {
-			return s.probeMax
-		}
-		return ct
+// timeoutSecondsForMessage 选超时文案里的秒数：实际等待明显短于配置上限时用等待值（反映真实掐断点）。
+func timeoutSecondsForMessage(probeTimeout, waited time.Duration) float64 {
+	shown := probeTimeout
+	if waited > 0 && waited+500*time.Millisecond < probeTimeout {
+		shown = waited
 	}
-	return s.probeDefault
+	sec := shown.Seconds()
+	if sec < 1 {
+		return 1
+	}
+	return sec
 }
 
 // testErrorParam 成功或无原因时写 NULL，失败时写可读原因（供渠道表悬浮展示最近失败）。

@@ -36,6 +36,7 @@ type Config struct {
 // worker 周期性对所有启用渠道发一个最小合成 "hi" 探测，验证「连得上 + 凭据有效 + 模型可用」，
 // 据此翻 channels.credential_valid（凭据失效自动摘除、检测通过自动恢复）并按 R1(b) 落检测日志。
 // 探测复用 gateway 的 adapter 链路但不走计费/请求记录，故不污染统计、不给客户计费。
+// 探测超时已迁移为运行时配置 admin_backend.channel_test_probe_timeout_ms（系统设置），不在此结构。
 type ChannelTestWorkerConfig struct {
 	// Enabled 来自 CHANNEL_TEST_WORKER_ENABLED（默认 true）。
 	Enabled bool
@@ -44,12 +45,6 @@ type ChannelTestWorkerConfig struct {
 	// LogRetentionPerChannel 来自 CHANNEL_TEST_LOG_RETENTION_PER_CHANNEL（默认 200，须 > 0）：
 	// 每渠道 channel_test_logs 保留最近 N 条，worker 每轮末尾清理更旧的。
 	LogRetentionPerChannel int
-	// ProbeTimeout 来自 CHANNEL_TEST_PROBE_TIMEOUT（默认 30s）：渠道未显式配置 timeout 时的探测超时。
-	// 手动检测与自动巡检共用（两者复用同一 channeltest.Service）。
-	ProbeTimeout time.Duration
-	// ProbeTimeoutMax 来自 CHANNEL_TEST_PROBE_TIMEOUT_MAX（默认 60s）：探测超时硬上限，
-	// 渠道 timeout 再大也不超过它——既给慢上游（如推理模型中转）足够响应时间，又不让坏渠道把巡检拖太久。
-	ProbeTimeoutMax time.Duration
 }
 
 // TokenEstimateConfig 保存输入 token 估算的媒体处理配置（对齐 new-api GetMediaToken 系列）。
@@ -418,22 +413,6 @@ func Load() (Config, error) {
 		return Config{}, failure.New(failure.CodeConfigInvalid, failure.WithMessage("CHANNEL_TEST_LOG_RETENTION_PER_CHANNEL must be > 0"))
 	}
 
-	channelTestProbeTimeout, err := getEnvDuration("CHANNEL_TEST_PROBE_TIMEOUT", 30*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	if channelTestProbeTimeout <= 0 {
-		return Config{}, failure.New(failure.CodeConfigInvalid, failure.WithMessage("CHANNEL_TEST_PROBE_TIMEOUT must be > 0"))
-	}
-
-	channelTestProbeTimeoutMax, err := getEnvDuration("CHANNEL_TEST_PROBE_TIMEOUT_MAX", 60*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	if channelTestProbeTimeoutMax < channelTestProbeTimeout {
-		return Config{}, failure.New(failure.CodeConfigInvalid, failure.WithMessage("CHANNEL_TEST_PROBE_TIMEOUT_MAX must be >= CHANNEL_TEST_PROBE_TIMEOUT"))
-	}
-
 	tracingEnabled, err := getEnvBool("OTEL_TRACING_ENABLED", false)
 	if err != nil {
 		return Config{}, err
@@ -566,8 +545,6 @@ func Load() (Config, error) {
 			Enabled:                channelTestWorkerEnabled,
 			Interval:               channelTestWorkerInterval,
 			LogRetentionPerChannel: channelTestLogRetentionPerChannel,
-			ProbeTimeout:           channelTestProbeTimeout,
-			ProbeTimeoutMax:        channelTestProbeTimeoutMax,
 		},
 		Tracing: TracingConfig{
 			Enabled:     tracingEnabled,

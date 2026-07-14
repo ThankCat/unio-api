@@ -503,8 +503,9 @@ func defaultChannelTimeoutDefinition() Definition {
 		Key:      GatewayDefaultChannelTimeoutKey,
 		Category: "gateway",
 		Label:    "默认渠道超时",
-		Description: "渠道未配置 timeout_ms 时,单次上游调用的兜底超时。单位毫秒。" +
-			"渠道行上的 timeout_ms 优先于此默认值。",
+		Description: "用户请求经网关调用上游时,渠道未配置 timeout_ms 的兜底超时。单位毫秒。" +
+			"渠道行上的 timeout_ms 优先于此默认值。" +
+			"不影响「渠道检测超时」(admin_backend.channel_test_probe_timeout_ms)——检测专用、独立配置。",
 		HotReload: true,
 		Default:   encodeMsSetting(DefaultChannelTimeoutSetting),
 		Validate: func(raw json.RawMessage) error {

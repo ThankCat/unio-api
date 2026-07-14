@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestRegistryCategoryMatchesKeyPrefix 断言域约定:每个 key 的 Category 与其前缀一致
@@ -21,10 +22,14 @@ func TestRegistryCategoryMatchesKeyPrefix(t *testing.T) {
 	}
 }
 
-// TestAdminDomainSettingsRegistered 验证两个新域配置注册齐全且默认值过自身校验。
+// TestAdminDomainSettingsRegistered 验证 admin 域配置注册齐全且默认值过自身校验。
 func TestAdminDomainSettingsRegistered(t *testing.T) {
 	reg := DefaultRegistry()
-	for _, key := range []string{AdminBackendChannelHealthKey, AdminFrontendDashboardThresholdsKey} {
+	for _, key := range []string{
+		AdminBackendChannelHealthKey,
+		AdminBackendChannelTestProbeTimeoutKey,
+		AdminFrontendDashboardThresholdsKey,
+	} {
 		def, ok := reg.Get(key)
 		if !ok {
 			t.Fatalf("key %q not registered", key)
@@ -35,6 +40,18 @@ func TestAdminDomainSettingsRegistered(t *testing.T) {
 		if err := def.Validate(def.Default); err != nil {
 			t.Errorf("key %q default fails own validation: %v", key, err)
 		}
+	}
+}
+
+func TestChannelTestProbeTimeoutDefault(t *testing.T) {
+	if DefaultChannelTestProbeTimeoutSetting != 60*time.Second {
+		t.Fatalf("default probe timeout = %v, want 60s", DefaultChannelTestProbeTimeoutSetting)
+	}
+	if got := AdminBackendChannelTestProbeTimeout(context.Background(), nil); got != DefaultChannelTestProbeTimeoutSetting {
+		t.Fatalf("nil store = %v, want default", got)
+	}
+	if !strings.HasSuffix(AdminBackendChannelTestProbeTimeoutKey, "_ms") {
+		t.Errorf("duration key %q must end with _ms", AdminBackendChannelTestProbeTimeoutKey)
 	}
 }
 
