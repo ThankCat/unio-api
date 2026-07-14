@@ -17,9 +17,11 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	capabilityadmin "github.com/ThankCat/unio-api/internal/service/admin/capability"
 	"github.com/ThankCat/unio-api/internal/service/admin/channel"
+	"github.com/ThankCat/unio-api/internal/service/admin/channelcostmultiplier"
 	"github.com/ThankCat/unio-api/internal/service/admin/channelmodel"
 	"github.com/ThankCat/unio-api/internal/service/admin/channelops"
 	"github.com/ThankCat/unio-api/internal/service/admin/channelprice"
+	"github.com/ThankCat/unio-api/internal/service/admin/channelrechargefactor"
 	"github.com/ThankCat/unio-api/internal/service/admin/channeltest"
 	"github.com/ThankCat/unio-api/internal/service/admin/customer"
 	"github.com/ThankCat/unio-api/internal/service/admin/customerops"
@@ -113,17 +115,17 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	providerOpsService := providerops.NewService(queries, settingsStore)
 	channelService := channel.NewService(queries, adapterRegistry)
 	// 渠道检测复用 gateway adapter registry（同一份 adapter/HTTP 链路，检测结果=真实行为）。
-	// 探测超时配置与自动巡检 worker 共用，保证手动检测与自动巡检口径一致。
-	channelTestService := channeltest.NewService(queries, adapterRegistry, channeltest.Config{
-		ProbeTimeout:    deps.Config.ChannelTestWorker.ProbeTimeout,
-		ProbeTimeoutMax: deps.Config.ChannelTestWorker.ProbeTimeoutMax,
-	})
+	// 探测超时取自运行时配置 admin_backend.channel_test_probe_timeout_ms（与用户请求渠道超时正交）。
+	channelTestService := channeltest.NewService(queries, adapterRegistry, settingsStore)
 	channelOpsService := channelops.NewService(queries, settingsStore)
 	modelService := model.NewService(queries)
 	modelOpsService := modelops.NewService(queries)
 	channelModelService := channelmodel.NewService(queries)
 	channelPriceService := channelprice.NewService(queries)
 	modelPriceService := modelprice.NewService(queries)
+	// DEC-027 渠道成本倍率：渠道价格倍率 / 渠道充值倍率，均复用同一 sqlc Queries。
+	channelCostMultiplierService := channelcostmultiplier.NewService(queries)
+	channelRechargeFactorService := channelrechargefactor.NewService(queries)
 	routeService := adminroute.NewService(deps.DB, queries)
 	routeOpsService := routeops.NewService(queries)
 
@@ -157,9 +159,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	// M9 工作台看板：复用同一 sqlc Queries 做只读聚合（KPI 概览 + 时间序列）。
 	dashboardService := dashboard.NewService(queries, settingsStore)
 
-	// M8 系统/任务/健康：结算补偿任务只读视图 + 系统级 channel 健康（派生），复用同一 sqlc Queries。
+	// M8 系统/任务/健康：结算补偿任务只读视图，复用同一 sqlc Queries。
 	recoveryJobQueryService := query.NewRecoveryService(queries)
-	channelHealthQueryService := query.NewChannelHealthService(queries, settingsStore)
 
 	metricsRecorder := metrics.New()
 
@@ -176,6 +177,10 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		ChannelModelService: channelModelService,
 		ChannelPriceService: channelPriceService,
 		ModelPriceService:   modelPriceService,
+
+		ChannelCostMultiplierService: channelCostMultiplierService,
+		ChannelRechargeFactorService: channelRechargeFactorService,
+
 		RouteService:        routeService,
 		RouteOpsService:     routeOpsService,
 		RequestQueryService: requestQueryService,
@@ -196,8 +201,6 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		DashboardService: dashboardService,
 
 		RecoveryJobQueryService:   recoveryJobQueryService,
-		ChannelHealthQueryService: channelHealthQueryService,
-
 		ProviderSettingsService: appsettings.NewService(settingsStore),
 
 		GatewayConfig: deps.Config.Gateway,

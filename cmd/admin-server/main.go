@@ -66,8 +66,11 @@ func main() {
 		Addr:    cfg.Admin.HTTPAddr,
 		Handler: app.Handler,
 
-		ReadTimeout:  cfg.HTTP.ReadTimeout,
-		WriteTimeout: cfg.HTTP.WriteTimeout,
+		ReadTimeout: cfg.HTTP.ReadTimeout,
+		// 渠道手动检测可跑满系统「渠道检测超时」（默认 60s）。Go 的 WriteTimeout 从读完请求头起算、
+		// 心跳无法续期；沿用短 WriteTimeout（默认 30s）会在探测未完成时掐断连接，前端看到失败、
+		// 日志延迟却对不上文案。与 gateway 一样置 0，超时由业务侧 probe context 兜底。
+		WriteTimeout: 0,
 		IdleTimeout:  cfg.HTTP.IdleTimeout,
 	}
 

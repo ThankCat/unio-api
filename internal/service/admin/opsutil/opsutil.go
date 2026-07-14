@@ -37,11 +37,6 @@ func BoolNarg(v bool) pgtype.Bool {
 	return pgtype.Bool{Bool: v, Valid: true}
 }
 
-// Int8Arg 构造非空 pgtype.Int8（用于必填 bigint 参数被 sqlc 推断为 nullable 的场景）。
-func Int8Arg(v int64) pgtype.Int8 {
-	return pgtype.Int8{Int64: v, Valid: true}
-}
-
 // TextValue 取 pgtype.Text 值，NULL → ""。
 func TextValue(t pgtype.Text) string {
 	if !t.Valid {

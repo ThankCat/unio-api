@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ThankCat/unio-api/internal/app/adminapi"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
@@ -34,17 +33,6 @@ func (s *fakeRecoveryJobService) Get(_ context.Context, id int64, includeInterna
 		return query.RecoveryJobDetail{}, s.getErr
 	}
 	return s.getOut, nil
-}
-
-type fakeChannelHealthService struct {
-	out     []query.ChannelHealth
-	gotFrom *time.Time
-	gotTo   *time.Time
-}
-
-func (s *fakeChannelHealthService) List(_ context.Context, from, to *time.Time) ([]query.ChannelHealth, error) {
-	s.gotFrom, s.gotTo = from, to
-	return s.out, nil
 }
 
 func TestListRecoveryJobsReturns200AndOmitsInternalDetail(t *testing.T) {
@@ -140,30 +128,5 @@ func TestRecoveryJobsRequireToken(t *testing.T) {
 	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/system/settlement-recovery-jobs", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
-	}
-}
-
-func TestChannelHealthReturns200AndForwardsRange(t *testing.T) {
-	svc := &fakeChannelHealthService{out: []query.ChannelHealth{{ChannelID: 1, Bucket: "healthy"}}}
-	handler := newQueryRouter(t, adminapi.RouterDeps{ChannelHealthQueryService: svc})
-
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/system/channel-health?from=2026-06-01T00:00:00Z", "", true)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
-	}
-	if svc.gotFrom == nil {
-		t.Fatalf("expected from forwarded")
-	}
-	if svc.gotTo != nil {
-		t.Fatalf("expected to nil when unset")
-	}
-}
-
-func TestChannelHealthInvalidTimeReturns400(t *testing.T) {
-	handler := newQueryRouter(t, adminapi.RouterDeps{ChannelHealthQueryService: &fakeChannelHealthService{}})
-
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/system/channel-health?to=not-a-time", "", true)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
 }

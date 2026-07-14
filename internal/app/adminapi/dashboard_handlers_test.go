@@ -12,17 +12,9 @@ import (
 )
 
 type fakeDashboardService struct {
-	overview dashboard.Overview
 	// gotMetric/gotInterval 记录最近一次 Timeseries 入参，用于断言透传。
 	gotMetric   string
 	gotInterval string
-}
-
-func (s *fakeDashboardService) Overview(_ context.Context, from, to time.Time) (dashboard.Overview, error) {
-	out := s.overview
-	out.From = from
-	out.To = to
-	return out, nil
 }
 
 func (s *fakeDashboardService) Timeseries(_ context.Context, metric, interval string, from, to time.Time) (dashboard.Series, error) {
@@ -101,7 +93,7 @@ func TestDashboardTimeseriesInvalidIntervalReturns400(t *testing.T) {
 func TestDashboardRequiresToken(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: &fakeDashboardService{}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/overview", "", false)
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/radar", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}

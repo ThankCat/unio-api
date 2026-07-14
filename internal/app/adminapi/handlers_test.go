@@ -10,6 +10,10 @@ import (
 	"testing"
 
 	"github.com/ThankCat/unio-api/internal/app/adminapi"
+	achannel "github.com/ThankCat/unio-api/internal/app/adminapi/channel"
+	amodel "github.com/ThankCat/unio-api/internal/app/adminapi/model"
+	aprovider "github.com/ThankCat/unio-api/internal/app/adminapi/provider"
+	aroute "github.com/ThankCat/unio-api/internal/app/adminapi/route"
 	"github.com/ThankCat/unio-api/internal/core/adminauth"
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/service/admin/channel"
@@ -130,7 +134,7 @@ func (s *fakeChannelModelService) Delete(context.Context, int64, int64) error {
 	return s.deleteErr
 }
 
-func newChannelModelRouter(t *testing.T, cms adminapi.ChannelModelService) http.Handler {
+func newChannelModelRouter(t *testing.T, cms achannel.ChannelModelService) http.Handler {
 	t.Helper()
 
 	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
@@ -163,7 +167,7 @@ func (s *fakeChannelPriceService) Update(context.Context, channelprice.UpdateInp
 	return s.updateOut, s.updateErr
 }
 
-func newChannelPriceRouter(t *testing.T, cps adminapi.ChannelPriceService) http.Handler {
+func newChannelPriceRouter(t *testing.T, cps achannel.ChannelPriceService) http.Handler {
 	t.Helper()
 
 	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
@@ -204,7 +208,7 @@ func (s *fakeRouteService) SetChannels(context.Context, int64, []int64) (route.R
 	return s.createOut, nil
 }
 
-func newRouteRouter(t *testing.T, rs adminapi.RouteService) http.Handler {
+func newRouteRouter(t *testing.T, rs aroute.RouteService) http.Handler {
 	t.Helper()
 
 	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
@@ -219,7 +223,7 @@ func newRouteRouter(t *testing.T, rs adminapi.RouteService) http.Handler {
 	})
 }
 
-func newModelRouter(t *testing.T, ms adminapi.ModelService) http.Handler {
+func newModelRouter(t *testing.T, ms amodel.ModelService) http.Handler {
 	t.Helper()
 
 	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
@@ -234,7 +238,7 @@ func newModelRouter(t *testing.T, ms adminapi.ModelService) http.Handler {
 	})
 }
 
-func newServicesRouter(t *testing.T, ps adminapi.ProviderService, cs adminapi.ChannelService) http.Handler {
+func newServicesRouter(t *testing.T, ps aprovider.ProviderService, cs achannel.ChannelService) http.Handler {
 	t.Helper()
 
 	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)

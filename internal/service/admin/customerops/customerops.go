@@ -13,7 +13,6 @@ import (
 
 // Store 是客户运维聚合所需的只读存储能力（由 *sqlc.Queries 满足）。
 type Store interface {
-	UsersOpsSummary(ctx context.Context, arg sqlc.UsersOpsSummaryParams) (sqlc.UsersOpsSummaryRow, error)
 	UsersOpsTable(ctx context.Context, arg sqlc.UsersOpsTableParams) ([]sqlc.UsersOpsTableRow, error)
 	UsersOpsTableCount(ctx context.Context, search pgtype.Text) (int64, error)
 	UserOpsDetail(ctx context.Context, arg sqlc.UserOpsDetailParams) (sqlc.UserOpsDetailRow, error)
@@ -34,18 +33,6 @@ func NewService(store Store) *Service {
 }
 
 // ---- 用户 ----
-
-type UsersSummary struct {
-	UserTotal       int64
-	BalanceUSD      string
-	ReservedUSD     string
-	AvailableUSD    string
-	LowBalanceTotal int64
-	RequestTotal    int64
-	Succeeded       int64
-	SuccessRate     float64
-	ConsumptionUSD  string
-}
 
 type UserRow struct {
 	ID                  int64
@@ -94,26 +81,6 @@ type KeyRow struct {
 	SpendLimit *string
 	SpentTotal string
 	LastUsedAt *time.Time
-}
-
-func (s *Service) UsersSummary(ctx context.Context, from, to time.Time) (UsersSummary, error) {
-	r, err := s.store.UsersOpsSummary(ctx, sqlc.UsersOpsSummaryParams{FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
-	if err != nil {
-		return UsersSummary{}, opsutil.StoreFailed(err, "users ops summary")
-	}
-	balance := opsutil.NumericString(r.BalanceUsd)
-	reserved := opsutil.NumericString(r.ReservedUsd)
-	return UsersSummary{
-		UserTotal:       r.UserTotal,
-		BalanceUSD:      balance,
-		ReservedUSD:     reserved,
-		AvailableUSD:    opsutil.SubtractDecimal(balance, reserved),
-		LowBalanceTotal: r.LowBalanceTotal,
-		RequestTotal:    r.RequestTotal,
-		Succeeded:       r.RequestSucceeded,
-		SuccessRate:     opsutil.SuccessRate(r.RequestSucceeded, r.RequestTotal),
-		ConsumptionUSD:  opsutil.NumericString(r.ConsumptionUsd),
-	}, nil
 }
 
 func (s *Service) UsersTable(ctx context.Context, p UsersTableParams) ([]UserRow, int64, error) {

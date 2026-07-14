@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ThankCat/unio-api/internal/app/adminapi"
+	"github.com/ThankCat/unio-api/internal/app/adminapi/capability"
 	"github.com/ThankCat/unio-api/internal/core/adminauth"
 	corecap "github.com/ThankCat/unio-api/internal/core/capability"
 	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
@@ -65,9 +66,9 @@ func (fakeCapabilitySeedService) Materialize(context.Context, int64, string, str
 
 func newCapabilityRouter(
 	t *testing.T,
-	cap adminapi.CapabilityService,
-	sync adminapi.CapabilitySyncService,
-	seed adminapi.CapabilitySeedService,
+	cap capability.CapabilityService,
+	sync capability.CapabilitySyncService,
+	seed capability.CapabilitySeedService,
 ) http.Handler {
 	t.Helper()
 

@@ -5,7 +5,17 @@ import (
 	"net/http"
 
 	"github.com/ThankCat/unio-api/internal/app/adminapi"
+	"github.com/ThankCat/unio-api/internal/app/adminapi/capability"
+	"github.com/ThankCat/unio-api/internal/app/adminapi/channel"
+	"github.com/ThankCat/unio-api/internal/app/adminapi/ledger"
 	"github.com/ThankCat/unio-api/internal/app/adminapi/middleware"
+	"github.com/ThankCat/unio-api/internal/app/adminapi/model"
+	"github.com/ThankCat/unio-api/internal/app/adminapi/overview"
+	"github.com/ThankCat/unio-api/internal/app/adminapi/provider"
+	"github.com/ThankCat/unio-api/internal/app/adminapi/requests"
+	"github.com/ThankCat/unio-api/internal/app/adminapi/route"
+	"github.com/ThankCat/unio-api/internal/app/adminapi/system"
+	"github.com/ThankCat/unio-api/internal/app/adminapi/user"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 )
@@ -15,42 +25,46 @@ type adminHTTPDeps struct {
 	Logger        *slog.Logger
 	Authenticator middleware.AdminAuthenticator
 
-	ProviderService     adminapi.ProviderService
-	ProviderOpsService  adminapi.ProviderOpsService
-	ChannelService      adminapi.ChannelService
-	ChannelTestService  adminapi.ChannelTestService
-	ChannelOpsService   adminapi.ChannelOpsService
-	ModelService        adminapi.ModelService
-	ModelOpsService     adminapi.ModelOpsService
-	ChannelModelService adminapi.ChannelModelService
-	ChannelPriceService adminapi.ChannelPriceService
-	ModelPriceService   adminapi.ModelPriceService
-	RouteService        adminapi.RouteService
-	RouteOpsService     adminapi.RouteOpsService
+	ProviderService     provider.ProviderService
+	ProviderOpsService  provider.ProviderOpsService
+	ChannelService      channel.ChannelService
+	ChannelTestService  channel.ChannelTestService
+	ChannelOpsService   channel.ChannelOpsService
+	ModelService        model.ModelService
+	ModelOpsService     model.ModelOpsService
+	ChannelModelService channel.ChannelModelService
+	ChannelPriceService channel.ChannelPriceService
+	ModelPriceService   model.ModelPriceService
 
-	RequestQueryService adminapi.RequestQueryService
-	LedgerQueryService  adminapi.LedgerQueryService
+	// DEC-027 渠道成本倍率。
+	ChannelCostMultiplierService channel.ChannelCostMultiplierService
+	ChannelRechargeFactorService channel.ChannelRechargeFactorService
+
+	RouteService    route.RouteService
+	RouteOpsService route.RouteOpsService
+
+	RequestQueryService requests.RequestQueryService
+	LedgerQueryService  ledger.LedgerQueryService
 
 	// bill-on-cancel 渠道成本敞口只读视图（DESIGN-bill-on-cancel 阶段一）。
-	CostExposureQueryService adminapi.CostExposureQueryService
+	CostExposureQueryService ledger.CostExposureQueryService
 
-	UserService        adminapi.UserService
-	APIKeyService      adminapi.APIKeyService
-	AdjustmentService  adminapi.AdjustmentService
-	CustomerOpsService adminapi.CustomerOpsService
+	UserService        user.UserService
+	APIKeyService      user.APIKeyService
+	AdjustmentService  user.AdjustmentService
+	CustomerOpsService user.CustomerOpsService
 
-	CapabilityService     adminapi.CapabilityService
-	CapabilitySyncService adminapi.CapabilitySyncService
-	CapabilitySeedService adminapi.CapabilitySeedService
+	CapabilityService     capability.CapabilityService
+	CapabilitySyncService capability.CapabilitySyncService
+	CapabilitySeedService capability.CapabilitySeedService
 
-	CatalogService adminapi.CatalogService
+	CatalogService model.CatalogService
 
-	DashboardService adminapi.DashboardService
+	DashboardService overview.DashboardService
 
-	RecoveryJobQueryService   adminapi.RecoveryJobQueryService
-	ChannelHealthQueryService adminapi.ChannelHealthQueryService
+	RecoveryJobQueryService system.RecoveryJobQueryService
 
-	ProviderSettingsService adminapi.ProviderSettingsService
+	ProviderSettingsService system.ProviderSettingsService
 
 	// 系统配置只读面板（进程级 env 生效值，脱敏）；6 组热路径配置已迁移为运行时配置，不在此列。
 	GatewayConfig config.GatewayConfig
@@ -75,6 +89,10 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		ChannelModelService: deps.ChannelModelService,
 		ChannelPriceService: deps.ChannelPriceService,
 		ModelPriceService:   deps.ModelPriceService,
+
+		ChannelCostMultiplierService: deps.ChannelCostMultiplierService,
+		ChannelRechargeFactorService: deps.ChannelRechargeFactorService,
+
 		RouteService:        deps.RouteService,
 		RouteOpsService:     deps.RouteOpsService,
 		RequestQueryService: deps.RequestQueryService,
@@ -94,9 +112,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 
 		DashboardService: deps.DashboardService,
 
-		RecoveryJobQueryService:   deps.RecoveryJobQueryService,
-		ChannelHealthQueryService: deps.ChannelHealthQueryService,
-
+		RecoveryJobQueryService: deps.RecoveryJobQueryService,
 		ProviderSettingsService: deps.ProviderSettingsService,
 
 		GatewayConfig: deps.GatewayConfig,
