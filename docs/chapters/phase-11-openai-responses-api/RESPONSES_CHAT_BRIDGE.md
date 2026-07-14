@@ -291,7 +291,7 @@ response.output_item.done            # 权威载体：完整 function_call（含
 | timeout | 504 | `api_error` | |
 | bad_request | 400 | `invalid_request_error` | |
 | auth/permission/server/unknown | 502 | `api_error` | 上游凭据问题 **绝不**渲染成客户 401。 |
-| ledger 余额不足 | 429 | `insufficient_quota` | 与 chat 一致。 |
+| ledger 余额不足 | 402 | `insufficient_quota` | 与 chat 一致；用 402 与限流 429 区分。 |
 
 非法 Responses 协议结构 → 400 `invalid_request_error`（带 `param`）。
 原始上游 body / credential / prompt / 完整正文不透传、不进默认审计。

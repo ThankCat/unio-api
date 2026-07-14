@@ -46,19 +46,6 @@ func newUpstreamStatusError(resp *http.Response, operation string) error {
 	)
 }
 
-// newUpstreamSendError 把发送上游请求阶段的网络错误转换成带 category 的结构化错误。
-func newUpstreamSendError(cause error, operation string) error {
-	return adapter.NewUpstreamError(
-		upstreamCategoryForSendError(cause),
-		adapter.UpstreamMetadata{},
-		failure.Wrap(
-			failure.CodeAdapterSendRequestFailed,
-			cause,
-			failure.WithMessage(fmt.Sprintf("anthropic adapter %s", operation)),
-		),
-	)
-}
-
 // newUpstreamSendErrorWithContextCause is used by stream calls whose request
 // context may be canceled by HeaderTimeoutContext before response headers
 // arrive. Some transports surface that as plain "context canceled"; the

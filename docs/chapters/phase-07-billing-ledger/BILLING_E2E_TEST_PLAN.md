@@ -535,7 +535,7 @@ REC-01 → REC-02 → COD-04 → COD-05 → DEL-03 → DEL-04 → AD-01 → AD-0
 | SC-01 emit 前客户端取消 | 9 | PASS | canceled, released, 0 扣费 |
 | SB-02 上游中断（emit 后） | 10 | PASS | failed, partial_stream_estimate, stream_interrupted_without_final_usage, delivery=interrupted, **无 risk_exposure** |
 | SB-01 客户端取消（emit 后） | 11 | PASS | canceled, partial_stream_estimate, stream_client_canceled_without_final_usage, **无 risk_exposure**（原始投诉场景已修） |
-| AUTH-01 余额为 0 | 12 | PASS | 429 insufficient_quota, ledger_insufficient_balance, 0 次上游调用 |
+| AUTH-01 余额为 0 | 12 | PASS | 402 insufficient_quota, ledger_insufficient_balance, 0 次上游调用 |
 | AUTH-02 部分余额授权 | 13 | PASS | authorized=$0.005（封顶可用余额）, captured<authorized |
 | WO-01 非流 actual≫authorized | 14 | PASS | captured=authorized, write_off platform=$0.43, 余额不为负 |
 | WO-02 partial 流封顶 | 15 | PASS | partial_stream_estimate, captured=authorized, write_off platform=$0.0000166 |
