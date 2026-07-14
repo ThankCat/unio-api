@@ -47,6 +47,73 @@ func ScaleCustomerPrice(base CustomerPriceSnapshot, ratio pgtype.Numeric) (Custo
 	return scaled, nil
 }
 
+// ModelPriceToProviderCost 把「模型基准价」向量映射为「成本基数」向量（DEC-031）。
+//
+// DEC-031 令 model_prices 成为售价与成本的唯一基数：真实成本 = 基准价 × 价格倍率 × 充值倍率。
+// model_prices 列与旧 model_reference_costs 列 1:1 对应（*_price ↔ *_cost），故此处只做机械字段映射，
+// 不改数值、NULL 分项保持 NULL。供路由 resolveCandidateCost / 结算 / 前端预览三处共用，避免手写映射漂移；
+// 映射产出的向量再交给 ScaleProviderCostByFactors 缩放。Currency/PricingUnit/FormulaVersion 原样保留。
+func ModelPriceToProviderCost(price CustomerPriceSnapshot) ProviderCostSnapshot {
+	return ProviderCostSnapshot{
+		Currency:               price.Currency,
+		PricingUnit:            price.PricingUnit,
+		UncachedInputCost:      price.UncachedInputPrice,
+		CacheReadInputCost:     price.CacheReadInputPrice,
+		CacheWrite5mInputCost:  price.CacheWrite5mInputPrice,
+		CacheWrite1hInputCost:  price.CacheWrite1hInputPrice,
+		CacheWrite30mInputCost: price.CacheWrite30mInputPrice,
+		OutputCost:             price.OutputPrice,
+		ReasoningOutputCost:    price.ReasoningOutputPrice,
+		FormulaVersion:         price.FormulaVersion,
+	}
+}
+
+// ScaleProviderCostByFactors 把参考成本按「价格倍率 × 充值倍率」缩放（DEC-027）。
+//
+// 两倍率先用 big.Rat 精确相乘，再对每个分项单次缩放并四舍五入到 NUMERIC(20,10)，避免「先各自舍入再相乘」
+// 带来的双重舍入误差，保证路由/结算/快照三处成本一致。任一倍率无效或为负返回 ErrInvalidRate。
+func ScaleProviderCostByFactors(base ProviderCostSnapshot, priceMultiplier, rechargeFactor pgtype.Numeric) (ProviderCostSnapshot, error) {
+	priceRat, err := requiredNonNegativeNumeric(priceMultiplier)
+	if err != nil {
+		return ProviderCostSnapshot{}, err
+	}
+	rechargeRat, err := requiredNonNegativeNumeric(rechargeFactor)
+	if err != nil {
+		return ProviderCostSnapshot{}, err
+	}
+	return scaleProviderCostByRat(base, new(big.Rat).Mul(priceRat, rechargeRat))
+}
+
+// scaleProviderCostByRat 用已合并的 big.Rat 倍率逐分项缩放参考成本（NULL 分项保持 NULL）。
+func scaleProviderCostByRat(base ProviderCostSnapshot, multiplierRat *big.Rat) (ProviderCostSnapshot, error) {
+	scaled := ProviderCostSnapshot{
+		Currency:       base.Currency,
+		PricingUnit:    base.PricingUnit,
+		FormulaVersion: base.FormulaVersion,
+	}
+
+	for _, field := range []struct {
+		base   pgtype.Numeric
+		target *pgtype.Numeric
+	}{
+		{base.UncachedInputCost, &scaled.UncachedInputCost},
+		{base.CacheReadInputCost, &scaled.CacheReadInputCost},
+		{base.CacheWrite5mInputCost, &scaled.CacheWrite5mInputCost},
+		{base.CacheWrite1hInputCost, &scaled.CacheWrite1hInputCost},
+		{base.CacheWrite30mInputCost, &scaled.CacheWrite30mInputCost},
+		{base.OutputCost, &scaled.OutputCost},
+		{base.ReasoningOutputCost, &scaled.ReasoningOutputCost},
+	} {
+		scaledRate, err := scaleRate(field.base, multiplierRat)
+		if err != nil {
+			return ProviderCostSnapshot{}, err
+		}
+		*field.target = scaledRate
+	}
+
+	return scaled, nil
+}
+
 // scaleRate 把单个单价乘以倍率；未配置（NULL）单价保持 NULL，不参与缩放（计费时回退到 uncached/output）。
 func scaleRate(rate pgtype.Numeric, ratio *big.Rat) (pgtype.Numeric, error) {
 	if !rate.Valid {

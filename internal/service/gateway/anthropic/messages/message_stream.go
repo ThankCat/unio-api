@@ -64,6 +64,7 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		RequestRecord:            requestRecord,
 		Principal:                principal,
 		CandidatePrices:          candidatePlan.CandidateSalePrices(),
+		LongContextPolicy:       candidatePlan.LongContextPolicy(),
 		InputTokens:              candidatePlan.ConservativeInputTokens,
 		MaxCompletionTokens:      estimateMaxOutputTokens(req),
 		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),

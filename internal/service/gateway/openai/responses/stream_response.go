@@ -93,6 +93,7 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		RequestRecord:            requestRecord,
 		Principal:                principal,
 		CandidatePrices:          candidatePlan.CandidateSalePrices(),
+		LongContextPolicy:       candidatePlan.LongContextPolicy(),
 		InputTokens:              candidatePlan.ConservativeInputTokens,
 		MaxCompletionTokens:      estimateMaxCompletionTokens(req),
 		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),

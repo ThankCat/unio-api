@@ -12,8 +12,6 @@ import (
 
 // Store 是线路运维聚合所需的只读存储能力（由 *sqlc.Queries 满足）。
 type Store interface {
-	RoutesOpsCounts(ctx context.Context) (sqlc.RoutesOpsCountsRow, error)
-	RoutesOpsAttributeAggregate(ctx context.Context, arg sqlc.RoutesOpsAttributeAggregateParams) (sqlc.RoutesOpsAttributeAggregateRow, error)
 	RoutesOpsTable(ctx context.Context, arg sqlc.RoutesOpsTableParams) ([]sqlc.RoutesOpsTableRow, error)
 	RoutesOpsTableCount(ctx context.Context, arg sqlc.RoutesOpsTableCountParams) (int64, error)
 	RouteOpsDetail(ctx context.Context, arg sqlc.RouteOpsDetailParams) (sqlc.RouteOpsDetailRow, error)
@@ -35,20 +33,6 @@ type Service struct {
 // NewService 创建线路运维聚合服务。
 func NewService(store Store) *Service {
 	return &Service{store: store}
-}
-
-// Summary 是线路总览。
-type Summary struct {
-	Total         int64
-	Enabled       int64
-	Disabled      int64
-	RequestTotal  int64
-	Succeeded     int64
-	SuccessRate   float64
-	FallbackTotal int64
-	FallbackRate  float64
-	NoChannel     int64
-	LatencyP95    float64
 }
 
 // Row 是线路运维主表行（静态配置；请求指标在详情页聚合）。
@@ -154,33 +138,6 @@ func deriveServiceable(status string, requestTotal, requestSucceeded, noChannelT
 	abnormal = noChannelTotal > 0 || (requestTotal >= 20 && rate < 0.9)
 	serviceable = status == "enabled" && !abnormal
 	return serviceable, abnormal
-}
-
-// Summary 聚合线路总览。
-func (s *Service) Summary(ctx context.Context, from, to time.Time) (Summary, error) {
-	counts, err := s.store.RoutesOpsCounts(ctx)
-	if err != nil {
-		return Summary{}, opsutil.StoreFailed(err, "count routes")
-	}
-	agg, err := s.store.RoutesOpsAttributeAggregate(ctx, sqlc.RoutesOpsAttributeAggregateParams{FromTime: opsutil.TsNarg(from), ToTime: opsutil.TsNarg(to)})
-	if err != nil {
-		return Summary{}, opsutil.StoreFailed(err, "aggregate route attribution")
-	}
-	out := Summary{
-		Total:         counts.Total,
-		Enabled:       counts.Enabled,
-		Disabled:      counts.Disabled,
-		RequestTotal:  agg.TerminalTotal,
-		Succeeded:     agg.SucceededTotal,
-		SuccessRate:   opsutil.SuccessRate(agg.SucceededTotal, agg.TerminalTotal),
-		FallbackTotal: agg.FallbackTotal,
-		NoChannel:     agg.NoChannelTotal,
-		LatencyP95:    agg.LatencyP95,
-	}
-	if agg.SucceededTotal > 0 {
-		out.FallbackRate = float64(agg.FallbackTotal) / float64(agg.SucceededTotal)
-	}
-	return out, nil
 }
 
 // Table 返回线路运维主表（分页）。

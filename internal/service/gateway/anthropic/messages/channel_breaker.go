@@ -12,14 +12,6 @@ func (s *MessagesService) candidateAvailable(candidate routing.ChatRouteCandidat
 	return s.lifecycle.CandidateAvailable(candidate)
 }
 
-func (s *MessagesService) breakerAllow(channelKey string) bool {
-	return s.lifecycle.BreakerAllow(channelKey)
-}
-
-func (s *MessagesService) recordChannelHealth(channelKey string, err error) {
-	s.lifecycle.RecordChannelHealth(channelKey, err)
-}
-
 func (s *MessagesService) channelHealthScore(channelKey string) float64 {
 	return s.lifecycle.ChannelHealthScore(channelKey)
 }

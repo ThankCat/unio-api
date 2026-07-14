@@ -198,6 +198,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		RequestRecord:            requestRecord,
 		Principal:                principal,
 		CandidatePrices:          candidatePlan.CandidateSalePrices(),
+		LongContextPolicy:       candidatePlan.LongContextPolicy(),
 		InputTokens:              candidatePlan.ConservativeInputTokens,
 		MaxCompletionTokens:      estimateMaxCompletionTokens(req),
 		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),

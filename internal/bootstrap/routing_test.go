@@ -24,7 +24,16 @@ func (s *fakeChatRouteStore) UserCanUseModel(ctx context.Context, arg sqlc.UserC
 }
 
 func (s *fakeChatRouteStore) FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteCandidatesParams) ([]sqlc.FindRouteCandidatesRow, error) {
-	return s.rows, nil
+	// DEC-027：候选成本需可解析；本测试只验证凭据明文透传，故默认把行标记为绝对成本覆盖
+	// （channel_price_id = channel_id），让 buildChatRouteCandidate 走覆盖路径拿到零成本快照。
+	rows := make([]sqlc.FindRouteCandidatesRow, len(s.rows))
+	copy(rows, s.rows)
+	for i := range rows {
+		if rows[i].ChannelPriceID == 0 && rows[i].ChannelCostMultiplierID == 0 {
+			rows[i].ChannelPriceID = rows[i].ChannelID
+		}
+	}
+	return rows, nil
 }
 
 func (s *fakeChatRouteStore) GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error) {

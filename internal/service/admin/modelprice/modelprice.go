@@ -44,41 +44,49 @@ type Store interface {
 
 // ModelPrice 是 admin 视角的模型基准价事实；金额以十进制字符串承载，可空项用 *string。
 type ModelPrice struct {
-	ID                      int64
-	ModelID                 int64
-	ModelExternalID         string
-	ModelDisplayName        string
-	Currency                string
-	PricingUnit             string
-	UncachedInputPrice      string
-	CacheReadInputPrice     *string
-	CacheWrite5mInputPrice  *string
-	CacheWrite1hInputPrice  *string
-	CacheWrite30mInputPrice *string
-	OutputPrice             string
-	ReasoningOutputPrice    *string
-	Status                  string
-	EffectiveFrom           time.Time
-	EffectiveTo             *time.Time
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
+	ID                          int64
+	ModelID                     int64
+	ModelExternalID             string
+	ModelDisplayName            string
+	Currency                    string
+	PricingUnit                 string
+	UncachedInputPrice          string
+	CacheReadInputPrice         *string
+	CacheWrite5mInputPrice      *string
+	CacheWrite1hInputPrice      *string
+	CacheWrite30mInputPrice     *string
+	OutputPrice                 string
+	ReasoningOutputPrice        *string
+	LongContextEnabled          bool
+	LongContextThreshold        *int64
+	LongContextInputMultiplier  *string
+	LongContextOutputMultiplier *string
+	Status                      string
+	EffectiveFrom               time.Time
+	EffectiveTo                 *time.Time
+	CreatedAt                   time.Time
+	UpdatedAt                   time.Time
 }
 
 // CreateInput 是创建模型基准价的入参；uncached_input/output 必填，其余可空，金额为十进制字符串。
 type CreateInput struct {
-	ModelID                 int64
-	Currency                string
-	PricingUnit             string
-	UncachedInputPrice      string
-	CacheReadInputPrice     *string
-	CacheWrite5mInputPrice  *string
-	CacheWrite1hInputPrice  *string
-	CacheWrite30mInputPrice *string
-	OutputPrice             string
-	ReasoningOutputPrice    *string
-	Status                  string
-	EffectiveFrom           time.Time
-	EffectiveTo             *time.Time
+	ModelID                     int64
+	Currency                    string
+	PricingUnit                 string
+	UncachedInputPrice          string
+	CacheReadInputPrice         *string
+	CacheWrite5mInputPrice      *string
+	CacheWrite1hInputPrice      *string
+	CacheWrite30mInputPrice     *string
+	OutputPrice                 string
+	ReasoningOutputPrice        *string
+	LongContextEnabled          bool
+	LongContextThreshold        *int64
+	LongContextInputMultiplier  *string
+	LongContextOutputMultiplier *string
+	Status                      string
+	EffectiveFrom               time.Time
+	EffectiveTo                 *time.Time
 }
 
 // UpdateInput 是 PATCH 模型基准价的入参：只改启停状态与生效结束时间（关闭窗口）；金额不可改。
@@ -149,6 +157,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ModelPrice, error
 	if err != nil {
 		return ModelPrice{}, err
 	}
+	longContext, err := parseLongContextConfig(in)
+	if err != nil {
+		return ModelPrice{}, err
+	}
 
 	// 基准价必须挂在已存在的 model 上（DB 也有同名外键，这里给清晰 400）。
 	if _, err := s.store.LookupModelByID(ctx, in.ModelID); err != nil {
@@ -165,19 +177,23 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ModelPrice, error
 	}
 
 	row, err := s.store.CreateModelPrice(ctx, sqlc.CreateModelPriceParams{
-		ModelID:                 in.ModelID,
-		Currency:                currency,
-		PricingUnit:             in.PricingUnit,
-		UncachedInputPrice:      amounts.uncachedInputPrice,
-		CacheReadInputPrice:     amounts.cacheReadInputPrice,
-		CacheWrite5mInputPrice:  amounts.cacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:  amounts.cacheWrite1hInputPrice,
-		CacheWrite30mInputPrice: amounts.cacheWrite30mInputPrice,
-		OutputPrice:             amounts.outputPrice,
-		ReasoningOutputPrice:    amounts.reasoningOutputPrice,
-		Status:                  in.Status,
-		EffectiveFrom:           tsParam(&in.EffectiveFrom),
-		EffectiveTo:             tsParam(in.EffectiveTo),
+		ModelID:                     in.ModelID,
+		Currency:                    currency,
+		PricingUnit:                 in.PricingUnit,
+		UncachedInputPrice:          amounts.uncachedInputPrice,
+		CacheReadInputPrice:         amounts.cacheReadInputPrice,
+		CacheWrite5mInputPrice:      amounts.cacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:      amounts.cacheWrite1hInputPrice,
+		CacheWrite30mInputPrice:     amounts.cacheWrite30mInputPrice,
+		OutputPrice:                 amounts.outputPrice,
+		ReasoningOutputPrice:        amounts.reasoningOutputPrice,
+		LongContextEnabled:          longContext.enabled,
+		LongContextThreshold:        longContext.threshold,
+		LongContextInputMultiplier:  longContext.inputMultiplier,
+		LongContextOutputMultiplier: longContext.outputMultiplier,
+		Status:                      in.Status,
+		EffectiveFrom:               tsParam(&in.EffectiveFrom),
+		EffectiveTo:                 tsParam(in.EffectiveTo),
 	})
 	if err != nil {
 		return ModelPrice{}, storeFailed(err, "create model price")
@@ -304,46 +320,120 @@ func parseModelPriceAmounts(in CreateInput) (modelPriceAmounts, error) {
 
 func toModelPrice(c sqlc.ModelPrice) ModelPrice {
 	return ModelPrice{
-		ID:                      c.ID,
-		ModelID:                 c.ModelID,
-		Currency:                c.Currency,
-		PricingUnit:             c.PricingUnit,
-		UncachedInputPrice:      numericString(c.UncachedInputPrice),
-		CacheReadInputPrice:     numericPtr(c.CacheReadInputPrice),
-		CacheWrite5mInputPrice:  numericPtr(c.CacheWrite5mInputPrice),
-		CacheWrite1hInputPrice:  numericPtr(c.CacheWrite1hInputPrice),
-		CacheWrite30mInputPrice: numericPtr(c.CacheWrite30mInputPrice),
-		OutputPrice:             numericString(c.OutputPrice),
-		ReasoningOutputPrice:    numericPtr(c.ReasoningOutputPrice),
-		Status:                  c.Status,
-		EffectiveFrom:           c.EffectiveFrom.Time,
-		EffectiveTo:             timePtr(c.EffectiveTo),
-		CreatedAt:               c.CreatedAt.Time,
-		UpdatedAt:               c.UpdatedAt.Time,
+		ID:                          c.ID,
+		ModelID:                     c.ModelID,
+		Currency:                    c.Currency,
+		PricingUnit:                 c.PricingUnit,
+		UncachedInputPrice:          numericString(c.UncachedInputPrice),
+		CacheReadInputPrice:         numericPtr(c.CacheReadInputPrice),
+		CacheWrite5mInputPrice:      numericPtr(c.CacheWrite5mInputPrice),
+		CacheWrite1hInputPrice:      numericPtr(c.CacheWrite1hInputPrice),
+		CacheWrite30mInputPrice:     numericPtr(c.CacheWrite30mInputPrice),
+		OutputPrice:                 numericString(c.OutputPrice),
+		ReasoningOutputPrice:        numericPtr(c.ReasoningOutputPrice),
+		LongContextEnabled:          c.LongContextEnabled,
+		LongContextThreshold:        int64Ptr(c.LongContextThreshold),
+		LongContextInputMultiplier:  numericPtr(c.LongContextInputMultiplier),
+		LongContextOutputMultiplier: numericPtr(c.LongContextOutputMultiplier),
+		Status:                      c.Status,
+		EffectiveFrom:               c.EffectiveFrom.Time,
+		EffectiveTo:                 timePtr(c.EffectiveTo),
+		CreatedAt:                   c.CreatedAt.Time,
+		UpdatedAt:                   c.UpdatedAt.Time,
 	}
 }
 
 func toModelPriceFromRow(c sqlc.ListModelPricesByModelRow) ModelPrice {
 	return ModelPrice{
-		ID:                      c.ID,
-		ModelID:                 c.ModelID,
-		ModelExternalID:         c.ModelExternalID,
-		ModelDisplayName:        c.ModelDisplayName,
-		Currency:                c.Currency,
-		PricingUnit:             c.PricingUnit,
-		UncachedInputPrice:      numericString(c.UncachedInputPrice),
-		CacheReadInputPrice:     numericPtr(c.CacheReadInputPrice),
-		CacheWrite5mInputPrice:  numericPtr(c.CacheWrite5mInputPrice),
-		CacheWrite1hInputPrice:  numericPtr(c.CacheWrite1hInputPrice),
-		CacheWrite30mInputPrice: numericPtr(c.CacheWrite30mInputPrice),
-		OutputPrice:             numericString(c.OutputPrice),
-		ReasoningOutputPrice:    numericPtr(c.ReasoningOutputPrice),
-		Status:                  c.Status,
-		EffectiveFrom:           c.EffectiveFrom.Time,
-		EffectiveTo:             timePtr(c.EffectiveTo),
-		CreatedAt:               c.CreatedAt.Time,
-		UpdatedAt:               c.UpdatedAt.Time,
+		ID:                          c.ID,
+		ModelID:                     c.ModelID,
+		ModelExternalID:             c.ModelExternalID,
+		ModelDisplayName:            c.ModelDisplayName,
+		Currency:                    c.Currency,
+		PricingUnit:                 c.PricingUnit,
+		UncachedInputPrice:          numericString(c.UncachedInputPrice),
+		CacheReadInputPrice:         numericPtr(c.CacheReadInputPrice),
+		CacheWrite5mInputPrice:      numericPtr(c.CacheWrite5mInputPrice),
+		CacheWrite1hInputPrice:      numericPtr(c.CacheWrite1hInputPrice),
+		CacheWrite30mInputPrice:     numericPtr(c.CacheWrite30mInputPrice),
+		OutputPrice:                 numericString(c.OutputPrice),
+		ReasoningOutputPrice:        numericPtr(c.ReasoningOutputPrice),
+		LongContextEnabled:          c.LongContextEnabled,
+		LongContextThreshold:        int64Ptr(c.LongContextThreshold),
+		LongContextInputMultiplier:  numericPtr(c.LongContextInputMultiplier),
+		LongContextOutputMultiplier: numericPtr(c.LongContextOutputMultiplier),
+		Status:                      c.Status,
+		EffectiveFrom:               c.EffectiveFrom.Time,
+		EffectiveTo:                 timePtr(c.EffectiveTo),
+		CreatedAt:                   c.CreatedAt.Time,
+		UpdatedAt:                   c.UpdatedAt.Time,
 	}
+}
+
+// longContextConfig 是解析后的长上下文阶梯配置（对应 model_prices 四列）。
+type longContextConfig struct {
+	enabled          bool
+	threshold        pgtype.Int8
+	inputMultiplier  pgtype.Numeric
+	outputMultiplier pgtype.Numeric
+}
+
+// parseLongContextConfig 解析长上下文配置：启用时 threshold/倍率必填且 >0；关闭时可保留可选值供展示，或全空。
+func parseLongContextConfig(in CreateInput) (longContextConfig, error) {
+	var out longContextConfig
+	out.enabled = in.LongContextEnabled
+
+	if in.LongContextThreshold != nil {
+		if *in.LongContextThreshold <= 0 {
+			return longContextConfig{}, invalidArgument("long_context_threshold", "must be a positive integer")
+		}
+		out.threshold = pgtype.Int8{Int64: *in.LongContextThreshold, Valid: true}
+	}
+	var err error
+	if out.inputMultiplier, err = parseOptionalPositiveMultiplier("long_context_input_multiplier", in.LongContextInputMultiplier); err != nil {
+		return longContextConfig{}, err
+	}
+	if out.outputMultiplier, err = parseOptionalPositiveMultiplier("long_context_output_multiplier", in.LongContextOutputMultiplier); err != nil {
+		return longContextConfig{}, err
+	}
+
+	if !out.enabled {
+		return out, nil
+	}
+	if !out.threshold.Valid {
+		return longContextConfig{}, invalidArgument("long_context_threshold", "is required when long_context_enabled is true")
+	}
+	if !out.inputMultiplier.Valid {
+		return longContextConfig{}, invalidArgument("long_context_input_multiplier", "is required when long_context_enabled is true")
+	}
+	if !out.outputMultiplier.Valid {
+		return longContextConfig{}, invalidArgument("long_context_output_multiplier", "is required when long_context_enabled is true")
+	}
+	return out, nil
+}
+
+// parseOptionalPositiveMultiplier 解析可选正倍率：nil/空 → NULL；否则须为 >0 的十进制。
+func parseOptionalPositiveMultiplier(field string, raw *string) (pgtype.Numeric, error) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return pgtype.Numeric{Valid: false}, nil
+	}
+	n, err := parseMoney(field, *raw)
+	if err != nil {
+		return pgtype.Numeric{}, err
+	}
+	r, ok := new(big.Rat).SetString(strings.TrimSpace(*raw))
+	if !ok || r.Sign() <= 0 {
+		return pgtype.Numeric{}, invalidArgument(field, "must be a positive decimal amount")
+	}
+	return n, nil
+}
+
+func int64Ptr(v pgtype.Int8) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	out := v.Int64
+	return &out
 }
 
 func validateStatus(status string) error {

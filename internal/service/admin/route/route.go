@@ -411,24 +411,6 @@ func (s *Service) Restore(ctx context.Context, id int64) error {
 	return nil
 }
 
-// MigrateKeys 把源线路下全部 api_key 一键迁到目标线路（§4B 入口①）。返回迁移的 key 数。
-func (s *Service) MigrateKeys(ctx context.Context, sourceID, targetID int64) (int64, error) {
-	if sourceID <= 0 {
-		return 0, invalidArgument("id", "id must be positive")
-	}
-	if err := s.ensureMigrationTarget(ctx, sourceID, targetID); err != nil {
-		return 0, err
-	}
-	moved, err := s.queries.MigrateAPIKeysByRoute(ctx, sqlc.MigrateAPIKeysByRouteParams{
-		SourceRouteID: sourceID,
-		TargetRouteID: targetID,
-	})
-	if err != nil {
-		return 0, storeFailed(err, "migrate route api keys")
-	}
-	return moved, nil
-}
-
 // ensureMigrationTarget 校验迁移目标线路：非自身、存在、且为 enabled（不能迁到停用/归档线路）。
 func (s *Service) ensureMigrationTarget(ctx context.Context, sourceID, targetID int64) error {
 	if targetID <= 0 {

@@ -542,8 +542,8 @@ func TestRouterV1ChatCompletionMapsInsufficientQuota(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected status %d, got %d", http.StatusTooManyRequests, rec.Code)
+	if rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected status %d, got %d", http.StatusPaymentRequired, rec.Code)
 	}
 
 	var body httpx.ErrorResponse
@@ -1261,8 +1261,8 @@ func TestRouterV1ChatCompletionStreamMapsInsufficientQuotaBeforeFirstChunk(t *te
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected status %d, got %d", http.StatusTooManyRequests, rec.Code)
+	if rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected status %d, got %d", http.StatusPaymentRequired, rec.Code)
 	}
 
 	gotBody := rec.Body.String()

@@ -136,8 +136,10 @@ func mapResponsesServiceError(req ResponsesRequest, err error, fallbackCode stri
 
 	switch {
 	case failure.CodeOf(err) == failure.CodeLedgerInsufficientBalance:
+		// 402：与限流 429 区分，避免客户端把余额不足当成限速重试。
+		// body 仍用 insufficient_quota，兼容按 code/type 判断的 OpenAI 客户端。
 		return responsesServiceErrorResponse{
-			status:    http.StatusTooManyRequests,
+			status:    http.StatusPaymentRequired,
 			code:      "insufficient_quota",
 			message:   "You exceeded your current quota. Please check your balance or billing details.",
 			errorType: "insufficient_quota",

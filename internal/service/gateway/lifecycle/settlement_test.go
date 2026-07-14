@@ -178,6 +178,8 @@ func (d *chatSettlementDBDeps) cleanup() {
 		_, _ = d.pool.Exec(ctx, `DELETE FROM providers WHERE id = $1`, d.providerID)
 	}
 	if d.modelID != 0 {
+		// model_prices 以 model_id 外键引用 models（无级联），倍率路径测试会为该模型建基准价行，删模型前先清。
+		_, _ = d.pool.Exec(ctx, `DELETE FROM model_prices WHERE model_id = $1`, d.modelID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM models WHERE id = $1`, d.modelID)
 	}
 	if d.apiKeyID != 0 {
@@ -679,8 +681,8 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get cost snapshot: %v", err)
 	}
-	if costSnapshot.CostPriceID != deps.channelPriceID {
-		t.Fatalf("expected cost price id %d, got %d", deps.channelPriceID, costSnapshot.CostPriceID)
+	if !costSnapshot.CostPriceID.Valid || costSnapshot.CostPriceID.Int64 != deps.channelPriceID {
+		t.Fatalf("expected cost price id %d, got valid=%v value=%d", deps.channelPriceID, costSnapshot.CostPriceID.Valid, costSnapshot.CostPriceID.Int64)
 	}
 	if costSnapshot.ProviderID != deps.providerID || costSnapshot.ChannelID != deps.channelID || costSnapshot.ModelID != deps.modelID {
 		t.Fatalf("unexpected cost snapshot route provider/channel/model %d/%d/%d", costSnapshot.ProviderID, costSnapshot.ChannelID, costSnapshot.ModelID)
@@ -936,8 +938,8 @@ func TestChatSettlementUsesAttemptTimeChannelPrice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get cost snapshot: %v", err)
 	}
-	if costSnapshot.CostPriceID != deps.channelPriceID {
-		t.Fatalf("expected attempt-time channel price id %d for cost, got %d", deps.channelPriceID, costSnapshot.CostPriceID)
+	if !costSnapshot.CostPriceID.Valid || costSnapshot.CostPriceID.Int64 != deps.channelPriceID {
+		t.Fatalf("expected attempt-time channel price id %d for cost, got valid=%v value=%d", deps.channelPriceID, costSnapshot.CostPriceID.Valid, costSnapshot.CostPriceID.Int64)
 	}
 	// 成本同样取 attempt 时刻生效的 seed 行。
 	assertNumericEqual(t, costSnapshot.UncachedInputCost, testNumeric(1_0000000000, -10))
@@ -1006,8 +1008,8 @@ func TestChatSettlementPinsCandidateChannelPrice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get cost snapshot: %v", err)
 	}
-	if costSnapshot.CostPriceID != deps.channelPriceID {
-		t.Fatalf("expected pinned channel price id %d for cost, got %d", deps.channelPriceID, costSnapshot.CostPriceID)
+	if !costSnapshot.CostPriceID.Valid || costSnapshot.CostPriceID.Int64 != deps.channelPriceID {
+		t.Fatalf("expected pinned channel price id %d for cost, got valid=%v value=%d", deps.channelPriceID, costSnapshot.CostPriceID.Valid, costSnapshot.CostPriceID.Int64)
 	}
 }
 
@@ -1040,6 +1042,110 @@ func TestChatSettlementReturnsIdempotentSuccessAfterRequestSucceeded(t *testing.
 	if status := requestStatus(t, deps.ctx, deps.pool, deps.requestRecord.ID); status != string(requestlog.RequestStatusSucceeded) {
 		t.Fatalf("expected request succeeded after replay, got %q", status)
 	}
+}
+
+// TestChatSettlementMultiplierPathComputesAndPinsCost 验证 DEC-027/DEC-031 倍率路径：无绝对覆盖时，结算按
+// pin 的 基准价（model_prices）× 价格倍率 × 充值倍率 算真实成本并冻结进 cost_snapshots，cost_price_id / price_snapshots.price_id 为 NULL，
+// 且成本来源 id + 倍率标量落库，供审计与「改倍率不漂移」。
+func TestChatSettlementMultiplierPathComputesAndPinsCost(t *testing.T) {
+	deps := newChatSettlementDBDeps(t)
+
+	// DEC-031：成本基数复用 model_prices（退役独立参考成本表）。基准价：未缓存 2.0 / 输出 10.0 / 缓存读取 0.2 / reasoning 10.0（名义 USD）。
+	basePrice, err := deps.queries.CreateModelPrice(deps.ctx, sqlc.CreateModelPriceParams{
+		ModelID:              deps.modelID,
+		Currency:             "USD",
+		PricingUnit:          billing.PricingUnitPer1MTokens,
+		UncachedInputPrice:   testNumeric(2_0000000000, -10),
+		CacheReadInputPrice:  testNumeric(2000000000, -10), // 0.2
+		OutputPrice:          testNumeric(10_0000000000, -10),
+		ReasoningOutputPrice: testNumeric(10_0000000000, -10),
+		Status:               "enabled",
+		EffectiveFrom:        pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
+		EffectiveTo:          pgtype.Timestamptz{Valid: false},
+	})
+	if err != nil {
+		t.Fatalf("create model price (cost base): %v", err)
+	}
+	// 渠道默认价格倍率 1.2。
+	mult, err := deps.queries.CreateChannelCostMultiplier(deps.ctx, sqlc.CreateChannelCostMultiplierParams{
+		ChannelID:     deps.channelID,
+		ModelID:       pgtype.Int8{Valid: false},
+		Multiplier:    testNumeric(12, -1), // 1.2
+		Status:        "enabled",
+		EffectiveFrom: pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
+		EffectiveTo:   pgtype.Timestamptz{Valid: false},
+	})
+	if err != nil {
+		t.Fatalf("create channel cost multiplier: %v", err)
+	}
+	// 渠道充值倍率 0.5。
+	recharge, err := deps.queries.CreateChannelRechargeFactor(deps.ctx, sqlc.CreateChannelRechargeFactorParams{
+		ChannelID:     deps.channelID,
+		Factor:        testNumeric(5, -1), // 0.5
+		Status:        "enabled",
+		EffectiveFrom: pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
+		EffectiveTo:   pgtype.Timestamptz{Valid: false},
+	})
+	if err != nil {
+		t.Fatalf("create channel recharge factor: %v", err)
+	}
+
+	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))
+	ledgerService := ledger.NewService(deps.pool, deps.queries)
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerService)
+
+	// 走倍率路径：无绝对覆盖 pin，带上三个来源 pin。
+	params := deps.params()
+	params.ChannelPriceID = 0
+	params.CostBaseModelPriceID = basePrice.ID
+	params.ChannelCostMultiplierID = mult.ID
+	params.ChannelRechargeFactorID = recharge.ID
+
+	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
+		t.Fatalf("settle successful chat (multiplier path): %v", err)
+	}
+
+	costSnapshot, err := deps.queries.GetCostSnapshotByRequest(deps.ctx, deps.requestRecord.ID)
+	if err != nil {
+		t.Fatalf("get cost snapshot: %v", err)
+	}
+	// 倍率路径：cost_price_id 为 NULL，成本来源 id + 倍率标量置位。
+	if costSnapshot.CostPriceID.Valid {
+		t.Fatalf("expected NULL cost_price_id on multiplier path, got %d", costSnapshot.CostPriceID.Int64)
+	}
+	if !costSnapshot.CostBaseModelPriceID.Valid || costSnapshot.CostBaseModelPriceID.Int64 != basePrice.ID {
+		t.Fatalf("expected cost_base_model_price_id %d, got valid=%v value=%d", basePrice.ID, costSnapshot.CostBaseModelPriceID.Valid, costSnapshot.CostBaseModelPriceID.Int64)
+	}
+	if !costSnapshot.ChannelCostMultiplierID.Valid || costSnapshot.ChannelCostMultiplierID.Int64 != mult.ID {
+		t.Fatalf("expected channel_cost_multiplier_id %d, got valid=%v value=%d", mult.ID, costSnapshot.ChannelCostMultiplierID.Valid, costSnapshot.ChannelCostMultiplierID.Int64)
+	}
+	if !costSnapshot.ChannelRechargeFactorID.Valid || costSnapshot.ChannelRechargeFactorID.Int64 != recharge.ID {
+		t.Fatalf("expected channel_recharge_factor_id %d, got valid=%v value=%d", recharge.ID, costSnapshot.ChannelRechargeFactorID.Valid, costSnapshot.ChannelRechargeFactorID.Int64)
+	}
+	assertNumericEqual(t, costSnapshot.CostMultiplier, testNumeric(12, -1)) // 1.2
+	assertNumericEqual(t, costSnapshot.RechargeFactor, testNumeric(5, -1))  // 0.5
+
+	// 真实成本单价 = 基准价（model_prices） × 1.2 × 0.5（= ×0.6）。
+	assertNumericEqual(t, costSnapshot.UncachedInputCost, testNumeric(1_2000000000, -10)) // 2.0 × 0.6
+	assertNumericEqual(t, costSnapshot.OutputCost, testNumeric(6_0000000000, -10))        // 10.0 × 0.6
+	assertNumericEqual(t, costSnapshot.CacheReadInputCost, testNumeric(1200000000, -10))  // 0.2 × 0.6 = 0.12
+	assertNumericEqual(t, costSnapshot.ReasoningOutputCost, testNumeric(6_0000000000, -10))
+
+	// 售价快照 price_id 倍率路径为 NULL（无 channel_prices 行可指）。
+	priceSnapshot, err := deps.queries.GetPriceSnapshotByRequest(deps.ctx, deps.requestRecord.ID)
+	if err != nil {
+		t.Fatalf("get price snapshot: %v", err)
+	}
+	if priceSnapshot.PriceID.Valid {
+		t.Fatalf("expected NULL price_snapshots.price_id on multiplier path, got %d", priceSnapshot.PriceID.Int64)
+	}
+
+	// 传入 billing 的成本快照即为缩放后单价（路由/结算同一套派生）。
+	if len(billingCalculator.costs) != 1 {
+		t.Fatalf("expected one provider cost calculation, got %d", len(billingCalculator.costs))
+	}
+	assertNumericEqual(t, billingCalculator.costs[0].UncachedInputCost, testNumeric(1_2000000000, -10))
+	assertNumericEqual(t, billingCalculator.costs[0].OutputCost, testNumeric(6_0000000000, -10))
 }
 
 func TestChatSettlementRejectsReplayWithDifferentUsage(t *testing.T) {

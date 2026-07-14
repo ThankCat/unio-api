@@ -1,8 +1,6 @@
 package messages
 
 import (
-	"time"
-
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 )
 
@@ -12,20 +10,4 @@ import (
 
 func (s *MessagesService) recordMessageRequest(stream bool, outcome metrics.ChatOutcome) {
 	s.lifecycle.RecordRequest(stream, outcome)
-}
-
-func (s *MessagesService) recordRoutingSelected(providerID int64, channelID int64, model string) {
-	s.lifecycle.RecordRoutingSelected(providerID, channelID, model)
-}
-
-func (s *MessagesService) recordUpstream(providerID int64, channelID int64, duration time.Duration, err error) {
-	s.lifecycle.RecordUpstream(providerID, channelID, duration, err)
-}
-
-func (s *MessagesService) recordSettlement(outcome metrics.SettlementOutcome) {
-	s.lifecycle.RecordSettlement(outcome)
-}
-
-func (s *MessagesService) recordStreamEvent(event metrics.StreamEvent) {
-	s.lifecycle.RecordStreamEvent(event)
 }

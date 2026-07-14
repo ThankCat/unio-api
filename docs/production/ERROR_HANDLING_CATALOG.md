@@ -182,13 +182,13 @@ type Failure struct {
 | `billing_invalid_price` | 售价/成本单价快照缺必需单价或非法 | 500 |
 | `billing_unsupported_pricing_unit` | 不支持的计价单位 | 500 |
 | `billing_unsupported_formula` | 不支持的计费公式 | 500 |
-| `ledger_insufficient_balance` | 余额不足 | ✅ 429 / 422 |
+| `ledger_insufficient_balance` | 余额不足 | ✅ 402 / 422 |
 | `ledger_invalid_amount` | 账本金额参数非法 | 400（Admin） |
 | `ledger_idempotency_conflict` | 幂等键被不同参数复用 | 409（Admin） |
 | `ledger_store_failed` | ledger 事务/存储失败 | 500 |
 | `ledger_reservation_not_found` | 无可结算的冻结记录 | 500 |
 
-> `ledger_insufficient_balance` 是**唯一会被三个协议 handler 显式改写文案**的账本码：OpenAI → `insufficient_quota`（429），Anthropic → `rate_limit_error`（429），Admin → 422。
+> `ledger_insufficient_balance` 是**唯一会被三个协议 handler 显式改写文案**的账本码：OpenAI → `insufficient_quota`（402），Anthropic → `invalid_request_error`（402），Admin → 422。用 402 与限流 429 区分，避免客户端把余额不足当限速重试。
 
 #### gateway —— 编排
 
@@ -270,7 +270,7 @@ adapter 把 provider 错误解析成 8 个稳定分类，gateway 只据此做 re
 
 | 内部错误 | OpenAI status/code | Anthropic status/type | Responses status/code |
 | --- | --- | --- | --- |
-| `ledger_insufficient_balance` | 429 `insufficient_quota` | 429 `rate_limit_error` | 429 `insufficient_quota` |
+| `ledger_insufficient_balance` | 402 `insufficient_quota` | 402 `invalid_request_error` | 402 `insufficient_quota` |
 | `rate_limit_exceeded` / `channel_rate_limited` | 429 `rate_limit_exceeded` | 429 `rate_limit_error` | 429 `rate_limit_exceeded` |
 | `adapter_request_unsupported` | 400 `unsupported_parameter` | 400 `invalid_request_error` | 400 `unsupported_parameter` |
 | `routing_model_not_found` / `not_available` | 404 `model_not_found` | 404 `not_found_error` | 404 `model_not_found` |

@@ -98,6 +98,14 @@ func (p CandidatePlan) CandidateSalePrices() []billing.CustomerPriceSnapshot {
 	return prices
 }
 
+// LongContextPolicy 取候选池共用的长上下文策略（同一请求模型基准价窗口相同；取首个候选即可）。
+func (p CandidatePlan) LongContextPolicy() billing.LongContextPolicy {
+	if len(p.Candidates) == 0 {
+		return billing.LongContextPolicy{}
+	}
+	return p.Candidates[0].Route.LongContextPolicy
+}
+
 // CandidateMaxOutputTokens 取候选池中各模型 models.max_output_tokens 的最大值（0 表示候选均未配置）。
 // 客户未显式给出输出上限时，authorization 用它做保守冻结上界；取最大值保证 fallback 命中
 // 任一候选时预冻结额度都足够（更大的输出上限只会冻结更多，不会少冻结）。

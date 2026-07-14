@@ -92,65 +92,265 @@ type ChatSettlementParams struct {
 	ModelDBID           int64
 	FinalProviderID     int64
 	FinalChannelID      int64
-	// ChannelPriceID 是中标候选在路由/授权时锁定的 channel_prices 行 ID（P1-3）。
+	// ChannelPriceID 是中标候选在路由/授权时锁定的 channel_prices 绝对成本覆盖行 ID（P1-3 / DEC-027）。
 	// settlement 优先按此 ID 取价计费，降低「授权后管理员停用/改窗口」导致结算价漂移到另一行的竞态。
-	// 0 表示未透传（旧数据 / 个别路径），此时回退按 attemptStart 时点重查 active 价。
+	// 0 表示无覆盖（走倍率路径，见下三个 pin）或未透传（旧数据，此时回退按 attemptStart 重查）。
 	ChannelPriceID int64
+	// CostBaseModelPriceID/ChannelCostMultiplierID/ChannelRechargeFactorID 是倍率路径的成本来源 pin（DEC-031）：
+	// 路由/授权锁定的成本基数行（model_prices）+ 价格倍率行 + 充值倍率行 id，透传至此。settlement 按这些不可改行
+	// 确定性重算成本，防「授权后改倍率」漂移。DEC-031：成本基数复用 model_prices，故 CostBaseModelPriceID == 售价侧
+	// ModelPriceID（同一基准价行）。覆盖路径下三者为 0；充值倍率未配时 ChannelRechargeFactorID=0（按 1.0）。
+	CostBaseModelPriceID    int64
+	ChannelCostMultiplierID int64
+	ChannelRechargeFactorID int64
 	// SalePrice 是客户最终售价快照 = 模型基准价 × 线路倍率（DEC-026），路由时算好并透传到结算；
-	// 同一请求所有候选共享、不随命中哪条渠道变。结算用它写收入快照与扣费，ChannelPriceID 仅用于成本。
+	// 同一请求所有候选共享、不随命中哪条渠道变。此处为短上下文牌价；若 LongContextPolicy 触发则结算前再缩放。
 	SalePrice billing.CustomerPriceSnapshot
 	// PriceRatio 是算 SalePrice 用的线路倍率（routes.price_ratio），随 SalePrice 一起快照进 price_snapshots，
 	// 供请求详情/列表恒显示结算当时的倍率与倒推基准价（不随后续改倍率漂移）。
 	PriceRatio pgtype.Numeric
-	Facts      adapter.ResponseFacts
+	// LongContextPolicy 来自售价所用 model_prices 窗口；结算按真实 usage 输入合计决定是否放大售价与成本。
+	LongContextPolicy billing.LongContextPolicy
+	Facts             adapter.ResponseFacts
 }
 
-// resolveSettlementChannelPrice 解析 settlement 计费应使用的 channel_prices 行。
+// settlementCostPins 是结算成本来源 pin（DEC-031）：路由/授权锁定的行 id，透传到结算/恢复。
+type settlementCostPins struct {
+	ChannelPriceID          int64 // 覆盖路径 >0
+	CostBaseModelPriceID    int64 // 倍率路径 >0（成本基数 = model_prices.id，DEC-031）
+	ChannelCostMultiplierID int64 // 倍率路径 >0
+	ChannelRechargeFactorID int64 // 倍率路径且已配 >0（未配按 1.0）
+}
+
+// resolvedSettlementCost 是结算解析出的真实成本快照 + 来源事实（供写 cost_snapshots / recovery job）。
+type resolvedSettlementCost struct {
+	// snapshot 是真实成本单价快照：必填分项已归一；可选分项可为 NULL（计费时回退基价）。
+	snapshot billing.ProviderCostSnapshot
+	// 覆盖路径：channelPriceID>0，其余为 0 / 无效。倍率路径：三个来源 id + 两个标量置位。
+	channelPriceID          int64
+	costBaseModelPriceID    int64
+	channelCostMultiplierID int64
+	costMultiplier          pgtype.Numeric
+	channelRechargeFactorID int64
+	rechargeFactor          pgtype.Numeric
+}
+
+// resolveSettlementCost 解析 settlement 计费应使用的真实成本（DEC-027 倍率 + DEC-031 单基数），优先级：
+//  1. 绝对覆盖 pin（channelPriceID）：channel_prices 金额不可变，按 pin 行取值，不受改价竞态影响。
+//  2. 倍率 pin（成本基数 model_prices 行 × 价格倍率行 × 充值倍率行）：各行金额/倍率不可变，按 pin 行确定性重算，防改倍率漂移。
+//  3. 回退（旧数据 / 缺 pin）：按 attemptStart 时点重查 active 覆盖，无则重查 基准价 × 价格倍率 × 充值倍率。
 //
-// 优先用「中标候选在路由/授权时锁定的 channelPriceID」(P1-3)：channel_prices 金额不可变（改价是新增一行），
-// 只要该行仍存在且归属 (channel, model) 一致，就以它为准——即使管理员随后停用该价或改动生效窗口，结算价也
-// 不会漂移到另一行，从源头消除改价竞态。channelPriceID<=0（旧数据/缺失）或该行已不存在/与路由不一致时，
-// 回退到按 attemptStart 时点重查 FindActiveChannelPrice（保持既有行为）。
-func resolveSettlementChannelPrice(
+// 与 P1-3 同构：pin 行不可改 ⇒ 同 id ⇒ 同结果。任何一步命中即返回；三者皆无 → 未定价，报 settlement failed。
+func resolveSettlementCost(
 	ctx context.Context,
 	queries *sqlc.Queries,
 	channelID int64,
 	modelID int64,
-	channelPriceID int64,
+	pins settlementCostPins,
 	atTime time.Time,
-) (sqlc.ChannelPrice, error) {
-	if channelPriceID > 0 {
-		pinned, err := queries.GetChannelPrice(ctx, channelPriceID)
+) (resolvedSettlementCost, error) {
+	// 1. 覆盖 pin。
+	if pins.ChannelPriceID > 0 {
+		pinned, err := queries.GetChannelPrice(ctx, pins.ChannelPriceID)
 		switch {
 		case err == nil:
-			// 防御：仅当锁定价确实归属本次中标的 (channel, model) 才采用，避免脏 ID 串价。
 			if pinned.ChannelID == channelID && pinned.ModelID == modelID {
-				return pinned, nil
+				return overrideResolvedCost(pinned), nil
 			}
 		case errors.Is(err, pgx.ErrNoRows):
-			// 行已不存在（极少见，价一般不硬删）：回退重查。
+			// 行已不存在（极少见）：回退。
 		default:
-			return sqlc.ChannelPrice{}, failure.Wrap(
-				failure.CodeGatewayChatSettlementFailed,
-				err,
+			return resolvedSettlementCost{}, failure.Wrap(
+				failure.CodeGatewayChatSettlementFailed, err,
 				failure.WithMessage("load pinned channel price for chat settlement"),
 			)
 		}
 	}
 
+	// 2. 倍率 pin。
+	if pins.CostBaseModelPriceID > 0 && pins.ChannelCostMultiplierID > 0 {
+		resolved, ok, err := resolvePinnedMultiplierCost(ctx, queries, channelID, modelID, pins)
+		if err != nil {
+			return resolvedSettlementCost{}, err
+		}
+		if ok {
+			return resolved, nil
+		}
+		// pin 行缺失（极少见）：回退。
+	}
+
+	// 3. 回退：按 attemptStart 重查（覆盖优先，否则参考成本 × 倍率）。
+	return resolveActiveSettlementCost(ctx, queries, channelID, modelID, atTime)
+}
+
+// overrideResolvedCost 从绝对成本覆盖行构造解析结果（沿用 channelPriceCostSnapshot 的 numericOrZero 归一）。
+func overrideResolvedCost(price sqlc.ChannelPrice) resolvedSettlementCost {
+	return resolvedSettlementCost{
+		snapshot:       channelPriceCostSnapshot(price),
+		channelPriceID: price.ID,
+	}
+}
+
+// resolvePinnedMultiplierCost 按 pin 行取成本基数（model_prices）+ 价格倍率 + 充值倍率并算真实成本；pin 行缺失返回 ok=false 供回退。
+// DEC-031：成本基数复用 model_prices（与售价同源），不再走独立参考成本表。
+func resolvePinnedMultiplierCost(
+	ctx context.Context,
+	queries *sqlc.Queries,
+	channelID, modelID int64,
+	pins settlementCostPins,
+) (resolvedSettlementCost, bool, error) {
+	base, err := queries.GetModelPrice(ctx, pins.CostBaseModelPriceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return resolvedSettlementCost{}, false, nil
+		}
+		return resolvedSettlementCost{}, false, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("load pinned cost base model price"))
+	}
+	mult, err := queries.GetChannelCostMultiplier(ctx, pins.ChannelCostMultiplierID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return resolvedSettlementCost{}, false, nil
+		}
+		return resolvedSettlementCost{}, false, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("load pinned channel cost multiplier"))
+	}
+	// 防脏 id 串价：成本基数须属本 model，价格倍率须属本 channel 且（默认 或 本 model 覆盖）。
+	if base.ModelID != modelID || mult.ChannelID != channelID || (mult.ModelID.Valid && mult.ModelID.Int64 != modelID) {
+		return resolvedSettlementCost{}, false, nil
+	}
+
+	rechargeFactor := oneNumeric()
+	rechargeFactorID := int64(0)
+	if pins.ChannelRechargeFactorID > 0 {
+		crf, err := queries.GetChannelRechargeFactor(ctx, pins.ChannelRechargeFactorID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return resolvedSettlementCost{}, false, nil
+			}
+			return resolvedSettlementCost{}, false, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("load pinned channel recharge factor"))
+		}
+		if crf.ChannelID != channelID {
+			return resolvedSettlementCost{}, false, nil
+		}
+		rechargeFactor = crf.Factor
+		rechargeFactorID = crf.ID
+	}
+
+	snapshot, err := scaledMultiplierCostSnapshot(base, mult.Multiplier, rechargeFactor)
+	if err != nil {
+		return resolvedSettlementCost{}, false, err
+	}
+	return resolvedSettlementCost{
+		snapshot:                snapshot,
+		costBaseModelPriceID:    base.ID,
+		channelCostMultiplierID: mult.ID,
+		costMultiplier:          mult.Multiplier,
+		channelRechargeFactorID: rechargeFactorID,
+		rechargeFactor:          rechargeFactor,
+	}, true, nil
+}
+
+// resolveActiveSettlementCost 按 attemptStart 时点重查成本（回退路径）：覆盖优先，否则基准价 × 价格倍率 × 充值倍率。
+// DEC-031：成本基数复用 model_prices（FindActiveModelPrice，与售价解析同源），不再走独立参考成本表。
+func resolveActiveSettlementCost(
+	ctx context.Context,
+	queries *sqlc.Queries,
+	channelID, modelID int64,
+	atTime time.Time,
+) (resolvedSettlementCost, error) {
+	at := pgtype.Timestamptz{Time: atTime, Valid: true}
+
 	price, err := queries.FindActiveChannelPrice(ctx, sqlc.FindActiveChannelPriceParams{
-		ChannelID: channelID,
-		ModelID:   modelID,
-		AtTime:    pgtype.Timestamptz{Time: atTime, Valid: true},
+		ChannelID: channelID, ModelID: modelID, AtTime: at,
+	})
+	switch {
+	case err == nil:
+		return overrideResolvedCost(price), nil
+	case !errors.Is(err, pgx.ErrNoRows):
+		return resolvedSettlementCost{}, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("find active channel price for chat settlement"))
+	}
+
+	base, err := queries.FindActiveModelPrice(ctx, sqlc.FindActiveModelPriceParams{
+		ModelID: modelID, AtTime: at,
 	})
 	if err != nil {
-		return sqlc.ChannelPrice{}, failure.Wrap(
-			failure.CodeGatewayChatSettlementFailed,
-			err,
-			failure.WithMessage("find active channel price for chat settlement"),
+		return resolvedSettlementCost{}, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("find active cost base model price for chat settlement"))
+	}
+	mult, err := queries.FindActiveChannelCostMultiplier(ctx, sqlc.FindActiveChannelCostMultiplierParams{
+		ChannelID: channelID, ModelID: pgtype.Int8{Int64: modelID, Valid: true}, AtTime: at,
+	})
+	if err != nil {
+		return resolvedSettlementCost{}, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("find active channel cost multiplier for chat settlement"))
+	}
+
+	rechargeFactor := oneNumeric()
+	rechargeFactorID := int64(0)
+	crf, err := queries.FindActiveChannelRechargeFactor(ctx, sqlc.FindActiveChannelRechargeFactorParams{
+		ChannelID: channelID, AtTime: at,
+	})
+	switch {
+	case err == nil:
+		rechargeFactor = crf.Factor
+		rechargeFactorID = crf.ID
+	case !errors.Is(err, pgx.ErrNoRows):
+		return resolvedSettlementCost{}, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("find active channel recharge factor for chat settlement"))
+	}
+
+	snapshot, err := scaledMultiplierCostSnapshot(base, mult.Multiplier, rechargeFactor)
+	if err != nil {
+		return resolvedSettlementCost{}, err
+	}
+	return resolvedSettlementCost{
+		snapshot:                snapshot,
+		costBaseModelPriceID:    base.ID,
+		channelCostMultiplierID: mult.ID,
+		costMultiplier:          mult.Multiplier,
+		channelRechargeFactorID: rechargeFactorID,
+		rechargeFactor:          rechargeFactor,
+	}, nil
+}
+
+// scaledMultiplierCostSnapshot 基准价（model_prices）× 价格倍率 × 充值倍率 → 真实成本单价。
+// DEC-031：成本基数复用 model_prices，经 billing.ModelPriceToProviderCost 映射为成本向量（*_price → *_cost，1:1）。
+// 必填分项（uncached/output）空值归一为 0；可选分项保留 NULL，供 CalculateProviderCost 回退到基价
+// （cache_* → uncached，reasoning → output）。切勿把可选分项写成 0，否则会变成「显式免费」少计成本。
+func scaledMultiplierCostSnapshot(base sqlc.ModelPrice, priceMultiplier, rechargeFactor pgtype.Numeric) (billing.ProviderCostSnapshot, error) {
+	scaled, err := billing.ScaleProviderCostByFactors(costBaseSnapshot(base), priceMultiplier, rechargeFactor)
+	if err != nil {
+		return billing.ProviderCostSnapshot{}, failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed, err,
+			failure.WithMessage("scale provider cost by channel multiplier and recharge factor"),
 		)
 	}
-	return price, nil
+	return normalizeCostSnapshotRequiredRates(scaled), nil
+}
+
+// costBaseSnapshot 把模型基准价行映射成 ProviderCostSnapshot（保留 NULL 分项，供缩放后再归一）。
+// DEC-031：基准价 = 成本基数，*_price 列一一对应 *_cost（复用 billing.ModelPriceToProviderCost 保持单一映射）。
+func costBaseSnapshot(base sqlc.ModelPrice) billing.ProviderCostSnapshot {
+	return billing.ModelPriceToProviderCost(billing.CustomerPriceSnapshot{
+		Currency:                base.Currency,
+		PricingUnit:             base.PricingUnit,
+		UncachedInputPrice:      base.UncachedInputPrice,
+		CacheReadInputPrice:     base.CacheReadInputPrice,
+		CacheWrite5mInputPrice:  base.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:  base.CacheWrite1hInputPrice,
+		CacheWrite30mInputPrice: base.CacheWrite30mInputPrice,
+		OutputPrice:             base.OutputPrice,
+		ReasoningOutputPrice:    base.ReasoningOutputPrice,
+		FormulaVersion:          billing.FormulaVersionV1,
+	})
+}
+
+// normalizeCostSnapshotRequiredRates 仅归一必填成本单价（uncached/output）；可选分项保持 NULL 以启用回退计价。
+func normalizeCostSnapshotRequiredRates(c billing.ProviderCostSnapshot) billing.ProviderCostSnapshot {
+	c.UncachedInputCost = numericOrZero(c.UncachedInputCost)
+	c.OutputCost = numericOrZero(c.OutputCost)
+	return c
+}
+
+// oneNumeric 返回 1.0 的 NUMERIC（充值倍率未配置时的缺省，名义即真实）。
+func oneNumeric() pgtype.Numeric {
+	return pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true}
 }
 
 // ValidateChatSettlementFacts 校验 adapter 交给 settlement 的不可变事实。
@@ -406,26 +606,44 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		return err
 	}
 
-	// 阶段 15 + P1-3：优先用中标候选锁定的 channel_prices 行（降低改价竞态），缺失时回退按 attemptStart
-	// 时点重查；一次取回售价 + 成本（同源）。收入不沿用 authorization 锁价；authorization 只负责保守冻结。
-	channelPrice, err := resolveSettlementChannelPrice(
+	// DEC-027：解析真实成本（绝对覆盖 pin > 倍率 pin > attemptStart 回退），一次取回成本快照 + 来源 pin。
+	// 收入不沿用 authorization 锁价；authorization 只负责保守冻结。
+	cost, err := resolveSettlementCost(
 		ctx,
 		txQueries,
 		params.FinalChannelID,
 		params.ModelDBID,
-		params.ChannelPriceID,
+		settlementCostPins{
+			ChannelPriceID:          params.ChannelPriceID,
+			CostBaseModelPriceID:    params.CostBaseModelPriceID,
+			ChannelCostMultiplierID: params.ChannelCostMultiplierID,
+			ChannelRechargeFactorID: params.ChannelRechargeFactorID,
+		},
 		params.AttemptRecord.StartedAt,
 	)
 	if err != nil {
 		return err
 	}
 
-	// 收入快照：客户售价 = 模型基准价 × 线路倍率（DEC-026），由路由透传（params.SalePrice），
-	// 不随命中哪条渠道变。price_id 仍指向命中渠道的 channel_prices 行（成本来源 / 审计参考）。
-	salePrice := params.SalePrice
+	// 收入快照：客户售价 = 模型基准价 × 线路倍率（DEC-026），由路由透传（params.SalePrice），不随命中哪条渠道变。
+	// price_id：覆盖路径指向命中的 channel_prices 行；倍率路径无该行 → 写 NULL（列可空、FK 对 NULL 豁免）。
+	// 长上下文：按真实 usage 输入合计判定是否放大售价/成本（与上游 GPT-5.4+ / sub2api 对齐）。
+	inputTokenSum := billing.LongContextInputTokenSum(facts.Usage)
+	salePrice, longContextApplied, err := billing.ApplyLongContextToCustomerPrice(
+		params.SalePrice,
+		params.LongContextPolicy,
+		inputTokenSum,
+	)
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("apply long-context multiplier to customer sale price"),
+		)
+	}
 	snapshot, err := txQueries.CreatePriceSnapshot(ctx, sqlc.CreatePriceSnapshotParams{
 		RequestRecordID:         params.RequestRecord.ID,
-		PriceID:                 pgtype.Int8{Int64: channelPrice.ID, Valid: true},
+		PriceID:                 nullableInt8(cost.channelPriceID),
 		Currency:                salePrice.Currency,
 		PricingUnit:             salePrice.PricingUnit,
 		UncachedInputPrice:      salePrice.UncachedInputPrice,
@@ -437,12 +655,13 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		ReasoningOutputPrice:    salePrice.ReasoningOutputPrice,
 		FormulaVersion:          billing.FormulaVersionV1,
 		PriceRatio:              params.PriceRatio,
+		LongContextApplied:      longContextApplied,
 	})
 	if err != nil {
 		return err
 	}
 
-	// 计算用户本次请求的花费（按客户售价 = 基准 × 倍率）。
+	// 计算用户本次请求的花费（按客户售价 = 基准 × 倍率，必要时再 × 长上下文倍率）。
 	charge, err := s.billingCalculator.CalculateCustomerCharge(facts.Usage, billing.CustomerPriceSnapshot{
 		Currency:                snapshot.Currency,
 		PricingUnit:             snapshot.PricingUnit,
@@ -459,8 +678,26 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		return err
 	}
 
-	// 成本：同一 channel_prices 行的成本列；某分项为空按 0 入账（成本未知，毛利偏保守）。
-	costSnapshot := channelPriceCostSnapshot(channelPrice)
+	// 成本：解析出的真实成本单价（覆盖值 或 参考价×价格倍率×充值倍率）；某分项为空按 0 入账（毛利偏保守）。
+	// 长上下文触发时同步放大成本向量（与售价同一策略，避免毛利被虚假抬高）。
+	costSnapshot, costLongContextApplied, err := billing.ApplyLongContextToProviderCost(
+		cost.snapshot,
+		params.LongContextPolicy,
+		inputTokenSum,
+	)
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("apply long-context multiplier to provider cost"),
+		)
+	}
+	if costLongContextApplied != longContextApplied {
+		return failure.New(
+			failure.CodeGatewayChatSettlementFailed,
+			failure.WithMessage("long-context applied mismatch between sale price and provider cost"),
+		)
+	}
 	providerCost, err := s.billingCalculator.CalculateProviderCost(facts.Usage, costSnapshot)
 	if err != nil {
 		return failure.Wrap(
@@ -470,10 +707,15 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		)
 	}
 
-	// 写入成本快照（cost_price_id 指向同一 channel_prices 行）。
+	// 写入成本快照：覆盖路径 cost_price_id 置位、倍率列 NULL；倍率路径反之（cost_price_id NULL + 来源 id/标量置位）。
 	_, err = txQueries.CreateCostSnapshot(ctx, sqlc.CreateCostSnapshotParams{
 		RequestRecordID:              params.RequestRecord.ID,
-		CostPriceID:                  channelPrice.ID,
+		CostPriceID:                  nullableInt8(cost.channelPriceID),
+		CostBaseModelPriceID:         nullableInt8(cost.costBaseModelPriceID),
+		ChannelCostMultiplierID:      nullableInt8(cost.channelCostMultiplierID),
+		CostMultiplier:               cost.costMultiplier,
+		ChannelRechargeFactorID:      nullableInt8(cost.channelRechargeFactorID),
+		RechargeFactor:               cost.rechargeFactor,
 		ProviderID:                   params.FinalProviderID,
 		ChannelID:                    params.FinalChannelID,
 		ModelID:                      params.ModelDBID,
@@ -496,6 +738,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		ReasoningOutputCostAmount:    providerCost.ReasoningOutputCostAmount,
 		TotalCostAmount:              providerCost.TotalCostAmount,
 		FormulaVersion:               providerCost.FormulaVersion,
+		LongContextApplied:           longContextApplied,
 	})
 	if err != nil {
 		return failure.Wrap(
@@ -962,19 +1205,19 @@ func ensureSettlementRequestMatches(request sqlc.RequestRecord, params ChatSettl
 
 }
 
-// channelPriceCostSnapshot 把 channel_prices 行的成本列映射成 ProviderCostSnapshot；
-// 阶段 15：某分项成本为空（成本未知）按 0 入账，毛利偏保守，且满足 cost_snapshots 成本列约束。
+// channelPriceCostSnapshot 把 channel_prices 行的成本列映射成 ProviderCostSnapshot。
+// 必填列（uncached/output）空值→0；可选列保留 NULL，由 billing 回退到基价（与客户售价侧一致）。
 func channelPriceCostSnapshot(p sqlc.ChannelPrice) billing.ProviderCostSnapshot {
 	return billing.ProviderCostSnapshot{
 		Currency:               p.Currency,
 		PricingUnit:            p.PricingUnit,
 		UncachedInputCost:      numericOrZero(p.UncachedInputCost),
-		CacheReadInputCost:     numericOrZero(p.CacheReadInputCost),
-		CacheWrite5mInputCost:  numericOrZero(p.CacheWrite5mInputCost),
-		CacheWrite1hInputCost:  numericOrZero(p.CacheWrite1hInputCost),
-		CacheWrite30mInputCost: numericOrZero(p.CacheWrite30mInputCost),
+		CacheReadInputCost:     p.CacheReadInputCost,
+		CacheWrite5mInputCost:  p.CacheWrite5mInputCost,
+		CacheWrite1hInputCost:  p.CacheWrite1hInputCost,
+		CacheWrite30mInputCost: p.CacheWrite30mInputCost,
 		OutputCost:             numericOrZero(p.OutputCost),
-		ReasoningOutputCost:    numericOrZero(p.ReasoningOutputCost),
+		ReasoningOutputCost:    p.ReasoningOutputCost,
 		FormulaVersion:         billing.FormulaVersionV1,
 	}
 }
@@ -985,6 +1228,22 @@ func numericOrZero(v pgtype.Numeric) pgtype.Numeric {
 		return v
 	}
 	return pgtype.Numeric{Int: big.NewInt(0), Exp: 0, Valid: true}
+}
+
+// nullableInt8 把行 id 转成可空 BIGINT 参数：0 → SQL NULL（该来源不适用，如倍率路径的 cost_price_id）。
+func nullableInt8(id int64) pgtype.Int8 {
+	if id == 0 {
+		return pgtype.Int8{Valid: false}
+	}
+	return pgtype.Int8{Int64: id, Valid: true}
+}
+
+// int8OrZero 把可空 BIGINT 列读回 int64：NULL → 0（该来源不适用）。
+func int8OrZero(v pgtype.Int8) int64 {
+	if !v.Valid {
+		return 0
+	}
+	return v.Int64
 }
 
 // ensureSettlementCostSnapshotMatches 校验请求级成本快照是否和本次 settlement 参数、自身重算金额一致。
@@ -1000,8 +1259,12 @@ func ensureSettlementCostSnapshotMatches(snapshot sqlc.CostSnapshot, params Chat
 		return ChatSettlementIdempotencyConflict("cost snapshot upstream model mismatch")
 	}
 
-	if snapshot.CostPriceID <= 0 {
-		return ChatSettlementIdempotencyConflict("cost snapshot price id mismatch")
+	// DEC-031：成本来源必须可辨——覆盖路径有 cost_price_id，倍率路径有 成本基数(model_price) id + 价格倍率 id。
+	hasOverride := snapshot.CostPriceID.Valid && snapshot.CostPriceID.Int64 > 0
+	hasMultiplier := snapshot.CostBaseModelPriceID.Valid && snapshot.CostBaseModelPriceID.Int64 > 0 &&
+		snapshot.ChannelCostMultiplierID.Valid && snapshot.ChannelCostMultiplierID.Int64 > 0
+	if !hasOverride && !hasMultiplier {
+		return ChatSettlementIdempotencyConflict("cost snapshot source mismatch")
 	}
 
 	if snapshot.Currency != cost.Currency ||

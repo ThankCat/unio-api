@@ -25,6 +25,22 @@ func requiredNonNegativeNumeric(value pgtype.Numeric) (*big.Rat, error) {
 	return rat, nil
 }
 
+// requiredPositiveNumeric 将必填 NUMERIC 转换成正有理数（长上下文倍率等，须 > 0）。
+func requiredPositiveNumeric(value pgtype.Numeric) (*big.Rat, error) {
+	rat, err := requiredNonNegativeNumeric(value)
+	if err != nil {
+		return nil, err
+	}
+	if rat.Sign() <= 0 {
+		return nil, failure.Wrap(
+			failure.CodeBillingInvalidPrice,
+			ErrInvalidRate,
+			failure.WithMessage(ErrInvalidRate.Error()),
+		)
+	}
+	return rat, nil
+}
+
 // numericToRat 将 pgtype.Numeric 转成 big.Rat，避免 float64 精度损失。
 func numericToRat(value pgtype.Numeric) (*big.Rat, error) {
 	if !value.Valid || value.NaN || value.InfinityModifier != pgtype.Finite {

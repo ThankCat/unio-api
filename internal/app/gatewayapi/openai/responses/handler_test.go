@@ -144,8 +144,8 @@ func TestResponsesHandler_InsufficientQuota(t *testing.T) {
 
 	rec := postJSON(t, handler, `{"model":"m","input":"hi"}`)
 
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected 429, got %d", rec.Code)
+	if rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d", rec.Code)
 	}
 	errType, code, _ := decodeErrorBody(t, rec)
 	if errType != "insufficient_quota" || code != "insufficient_quota" {

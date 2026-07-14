@@ -376,13 +376,13 @@ func TestRouterV1MessagesMapsInsufficientBalance(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, newMessagesRequest(encodeMessageBody(t, false)))
 
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected status %d, got %d", http.StatusTooManyRequests, rec.Code)
+	if rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected status %d, got %d", http.StatusPaymentRequired, rec.Code)
 	}
 
 	body := decodeAnthropicError(t, rec.Body)
-	if body.Error.Type != "rate_limit_error" {
-		t.Fatalf("expected error type %q, got %q", "rate_limit_error", body.Error.Type)
+	if body.Error.Type != "invalid_request_error" {
+		t.Fatalf("expected error type %q, got %q", "invalid_request_error", body.Error.Type)
 	}
 }
 

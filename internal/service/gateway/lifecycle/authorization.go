@@ -48,7 +48,11 @@ type ChatAuthorizeParams struct {
 	// CandidatePrices 是本次请求保守 fallback 候选池各命中渠道的当前售价（阶段 15）。
 	// 下单时最终渠道未定（可能 fallback），冻结取「按本次 token 估算最贵」的一条候选售价做上界，
 	// 保证实际命中任一候选都不会超过冻结额（cheapest 命中只会更便宜）。
+	// 此处为短上下文牌价；若 LongContextPolicy 对 InputTokens 触发，冻结前会先放大。
 	CandidatePrices []billing.CustomerPriceSnapshot
+
+	// LongContextPolicy 来自候选共用的 model_prices 窗口（同一请求模型基准价相同）。
+	LongContextPolicy billing.LongContextPolicy
 
 	InputTokens int64
 
@@ -162,10 +166,19 @@ func (s *ChatAuthorizationService) AuthorizeChat(ctx context.Context, params Cha
 
 	// 保守上界：在候选池里取「按本次 token 估算」最贵的一条售价做冻结。
 	// 命中任一候选只会 <= 该额度，避免 fallback 到更贵渠道时预冻结不足。
+	// 预估输入已超长上下文阈值时，先按策略放大售价再估算（与结算同阈值，避免长上下文请求预冻结不足）。
 	var worst billing.CustomerCharge
 	found := false
 	for _, price := range params.CandidatePrices {
-		charge, err := s.billing.EstimateAuthorizationAmount(estimate, price)
+		priced, _, err := billing.ApplyLongContextToCustomerPrice(
+			price,
+			params.LongContextPolicy,
+			params.InputTokens,
+		)
+		if err != nil {
+			return ChatAuthorization{}, err
+		}
+		charge, err := s.billing.EstimateAuthorizationAmount(estimate, priced)
 		if err != nil {
 			return ChatAuthorization{}, err
 		}

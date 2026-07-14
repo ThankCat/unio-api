@@ -18,17 +18,10 @@ import (
 
 // Store 是渠道运维聚合所需的只读存储能力（由 *sqlc.Queries 满足）。
 type Store interface {
-	ChannelsOpsCounts(ctx context.Context) (sqlc.ChannelsOpsCountsRow, error)
-	ChannelsOpsAttemptAggregate(ctx context.Context, arg sqlc.ChannelsOpsAttemptAggregateParams) (sqlc.ChannelsOpsAttemptAggregateRow, error)
-	ChannelsOpsThroughput(ctx context.Context, arg sqlc.ChannelsOpsThroughputParams) (sqlc.ChannelsOpsThroughputRow, error)
-	ChannelsOpsHealthDistribution(ctx context.Context, arg sqlc.ChannelsOpsHealthDistributionParams) (sqlc.ChannelsOpsHealthDistributionRow, error)
-	ChannelsOpsRecentError(ctx context.Context, arg sqlc.ChannelsOpsRecentErrorParams) ([]sqlc.ChannelsOpsRecentErrorRow, error)
-	ChannelsOpsPriceCoverage(ctx context.Context) (sqlc.ChannelsOpsPriceCoverageRow, error)
 	ChannelsOpsTable(ctx context.Context, arg sqlc.ChannelsOpsTableParams) ([]sqlc.ChannelsOpsTableRow, error)
 	ChannelsOpsTableCount(ctx context.Context, arg sqlc.ChannelsOpsTableCountParams) (int64, error)
 	ChannelOpsDetail(ctx context.Context, arg sqlc.ChannelOpsDetailParams) (sqlc.ChannelOpsDetailRow, error)
 	ChannelOpsPerformanceTimeseries(ctx context.Context, arg sqlc.ChannelOpsPerformanceTimeseriesParams) ([]sqlc.ChannelOpsPerformanceTimeseriesRow, error)
-	ChannelOpsSuccessBuckets(ctx context.Context, arg sqlc.ChannelOpsSuccessBucketsParams) ([]sqlc.ChannelOpsSuccessBucketsRow, error)
 	ChannelOpsErrors(ctx context.Context, arg sqlc.ChannelOpsErrorsParams) ([]sqlc.ChannelOpsErrorsRow, error)
 	ChannelOpsErrorsCount(ctx context.Context, arg sqlc.ChannelOpsErrorsCountParams) (int64, error)
 	ChannelOpsModels(ctx context.Context, arg sqlc.ChannelOpsModelsParams) ([]sqlc.ChannelOpsModelsRow, error)
@@ -51,39 +44,6 @@ func NewService(store Store, settings *appsettings.SettingsStore) *Service {
 // healthThresholds 读取当前生效的分桶阈值。
 func (s *Service) healthThresholds(ctx context.Context) appsettings.ChannelHealthThresholds {
 	return appsettings.AdminBackendChannelHealthThresholds(ctx, s.settings)
-}
-
-// HealthCounts 是健康四档计数。
-type HealthCounts struct {
-	Healthy   int64
-	Degraded  int64
-	Unhealthy int64
-	NoData    int64
-}
-
-// RecentError 是最近一条渠道错误摘要。
-type RecentError struct {
-	Code        string
-	ChannelName string
-	At          *time.Time
-}
-
-// Summary 是渠道总览雷达（§1.8 11 卡）所需聚合。
-type Summary struct {
-	Total            int64
-	Enabled          int64
-	Disabled         int64
-	Health           HealthCounts
-	AttemptTotal     int64
-	AttemptSucceeded int64
-	SuccessRate      float64
-	TimeoutTotal     int64
-	Latency          opsutil.LatencyStats
-	TPS              float64
-	RecentError      RecentError
-	PriceTotal       int64
-	PriceWithPrice   int64
-	PriceWithCost    int64
 }
 
 // Row 是渠道运维主表行。
@@ -138,14 +98,6 @@ type PerfPoint struct {
 	LatencyAvg       float64
 }
 
-// SuccessBucket 是最近 10 分钟 attempt 成功率桶（与概览渠道表现一致）。
-type SuccessBucket struct {
-	Bucket      time.Time
-	Terminal    int64
-	Succeeded   int64
-	SuccessRate float64
-}
-
 // ErrorRow 是抽屉错误 Tab 行。
 type ErrorRow struct {
 	At                 time.Time
@@ -191,73 +143,6 @@ type TableParams struct {
 	SortDesc   bool
 	Limit      int32
 	Offset     int32
-}
-
-// Summary 聚合渠道总览雷达。
-func (s *Service) Summary(ctx context.Context, from, to time.Time) (Summary, error) {
-	fromTS, toTS := tsNarg(from), tsNarg(to)
-
-	counts, err := s.store.ChannelsOpsCounts(ctx)
-	if err != nil {
-		return Summary{}, storeFailed(err, "count channels")
-	}
-	agg, err := s.store.ChannelsOpsAttemptAggregate(ctx, sqlc.ChannelsOpsAttemptAggregateParams{FromTime: fromTS, ToTime: toTS})
-	if err != nil {
-		return Summary{}, storeFailed(err, "aggregate channel attempts")
-	}
-	tp, err := s.store.ChannelsOpsThroughput(ctx, sqlc.ChannelsOpsThroughputParams{FromTime: fromTS, ToTime: toTS})
-	if err != nil {
-		return Summary{}, storeFailed(err, "aggregate channel throughput")
-	}
-	th := s.healthThresholds(ctx)
-	health, err := s.store.ChannelsOpsHealthDistribution(ctx, sqlc.ChannelsOpsHealthDistributionParams{
-		FromTime:     fromTS,
-		ToTime:       toTS,
-		HealthyRate:  th.HealthyRate,
-		DegradedRate: th.DegradedRate,
-	})
-	if err != nil {
-		return Summary{}, storeFailed(err, "aggregate channel health")
-	}
-	price, err := s.store.ChannelsOpsPriceCoverage(ctx)
-	if err != nil {
-		return Summary{}, storeFailed(err, "aggregate price coverage")
-	}
-	recentRows, err := s.store.ChannelsOpsRecentError(ctx, sqlc.ChannelsOpsRecentErrorParams{FromTime: fromTS, ToTime: toTS})
-	if err != nil {
-		return Summary{}, storeFailed(err, "fetch recent error")
-	}
-
-	out := Summary{
-		Total:            counts.Total,
-		Enabled:          counts.Enabled,
-		Disabled:         counts.Disabled,
-		Health:           HealthCounts{Healthy: health.Healthy, Degraded: health.Degraded, Unhealthy: health.Unhealthy, NoData: health.NoData},
-		AttemptTotal:     agg.AttemptTotal,
-		AttemptSucceeded: agg.AttemptSucceeded,
-		TimeoutTotal:     agg.TimeoutTotal,
-		Latency: opsutil.AttemptLatency(
-			agg.LatencyAvg, agg.LatencyP50, agg.LatencyP90, agg.LatencyP95, agg.LatencyP99,
-			agg.LatencySample, agg.AttemptSucceeded,
-		),
-		PriceTotal:     price.Total,
-		PriceWithPrice: price.WithPrice,
-		PriceWithCost:  price.WithCost,
-	}
-	if agg.AttemptTotal > 0 {
-		out.SuccessRate = float64(agg.AttemptSucceeded) / float64(agg.AttemptTotal)
-	}
-	if tp.GenerationSeconds > 0 {
-		out.TPS = float64(tp.OutputTokens) / tp.GenerationSeconds
-	}
-	if len(recentRows) > 0 {
-		out.RecentError = RecentError{
-			Code:        textValue(recentRows[0].ErrorCode),
-			ChannelName: recentRows[0].ChannelName,
-			At:          timeValue(recentRows[0].CreatedAt),
-		}
-	}
-	return out, nil
 }
 
 // Table 返回渠道运维主表（分页）。
@@ -349,26 +234,6 @@ func (s *Service) Detail(ctx context.Context, channelID int64, from, to time.Tim
 		d.SuccessRate = float64(r.AttemptSucceeded) / float64(r.AttemptTotal)
 	}
 	return d, nil
-}
-
-// SuccessBuckets 返回单渠道最近 10 分钟 attempt 成功率桶。
-func (s *Service) SuccessBuckets(ctx context.Context, channelID int64, from, to time.Time) ([]SuccessBucket, error) {
-	rows, err := s.store.ChannelOpsSuccessBuckets(ctx, sqlc.ChannelOpsSuccessBucketsParams{
-		ChannelID: channelID, FromTime: tsNarg(from), ToTime: tsNarg(to),
-	})
-	if err != nil {
-		return nil, storeFailed(err, "channel ops success buckets")
-	}
-	out := make([]SuccessBucket, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, SuccessBucket{
-			Bucket:      r.Bucket.Time,
-			Terminal:    r.TerminalTotal,
-			Succeeded:   r.SucceededTotal,
-			SuccessRate: r.SuccessRate,
-		})
-	}
-	return out, nil
 }
 
 // PerformanceTimeseries 返回单渠道性能时序。

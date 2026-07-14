@@ -33,7 +33,17 @@ type fakeStore struct {
 // FindRouteCandidates 记录查询参数，并返回测试预设候选结果。
 func (s *fakeStore) FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteCandidatesParams) ([]sqlc.FindRouteCandidatesRow, error) {
 	s.params = arg
-	return s.rows, s.err
+	// DEC-027：候选成本需可解析。这些路由用例只验证选路/排序/超时，不关心成本数值，
+	// 故默认把未设成本来源的行标记为「绝对成本覆盖」（channel_price_id = channel_id），
+	// 让 buildChatRouteCandidate 走覆盖路径拿到零成本快照，避免误判为未定价。
+	rows := make([]sqlc.FindRouteCandidatesRow, len(s.rows))
+	copy(rows, s.rows)
+	for i := range rows {
+		if rows[i].ChannelPriceID == 0 && rows[i].ChannelCostMultiplierID == 0 {
+			rows[i].ChannelPriceID = rows[i].ChannelID
+		}
+	}
+	return rows, s.err
 }
 
 // ModelExistsByID 记录模型存在性诊断参数，并返回测试预设结果。

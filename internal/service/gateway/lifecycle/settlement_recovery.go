@@ -124,21 +124,8 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 		return sqlc.SettlementRecoveryJob{}, err
 	}
 
-	// 阶段 15 + P1-3：补偿任务记录命中渠道的售价（审计快照 + price_id 指向 channel_prices）。
-	// 与正式 settlement 同源解析：优先用中标候选锁定的 channelPriceID，缺失时按 attemptStart 重查。
-	// price_id 持久化下来后，worker 重放 settlement 会以同一行计费，避免改价竞态导致重放价漂移。
-	channelPrice, err := resolveSettlementChannelPrice(
-		ctx,
-		s.queries,
-		params.FinalChannelID,
-		params.ModelDBID,
-		params.ChannelPriceID,
-		params.AttemptRecord.StartedAt,
-	)
-	if err != nil {
-		return sqlc.SettlementRecoveryJob{}, err
-	}
-
+	// P1-3 + DEC-027：补偿任务持久化成本来源 pin（覆盖 price_id 或 倍率三来源 id）+ 售价向量。
+	// worker 重放 settlement 时按这些不可改行确定性复算成本/售价，避免改价/改倍率竞态导致重放漂移。
 	facts := params.Facts
 	serverWebSearchRequests, serverWebFetchRequests := settlementRecoveryServerToolQuantities(facts.Usage.ServerToolUsage)
 	job, err := s.queries.CreateSettlementRecoveryJob(ctx, sqlc.CreateSettlementRecoveryJobParams{
@@ -177,7 +164,10 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 		UsageServerWebFetchRequests:        serverWebFetchRequests,
 		UsageSource:                        string(facts.UsageSource),
 		UsageMappingVersion:                facts.UsageMappingVersion,
-		PriceID:                            channelPrice.ID,
+		PriceID:                            nullableInt8(params.ChannelPriceID),
+		CostBaseModelPriceID:               nullableInt8(params.CostBaseModelPriceID),
+		ChannelCostMultiplierID:            nullableInt8(params.ChannelCostMultiplierID),
+		ChannelRechargeFactorID:            nullableInt8(params.ChannelRechargeFactorID),
 		Currency:                           params.SalePrice.Currency,
 		PricingUnit:                        params.SalePrice.PricingUnit,
 		UncachedInputPrice:                 params.SalePrice.UncachedInputPrice,
@@ -307,6 +297,13 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 	requestRecord := chatSettlementRecoveryRequestRecordFromSQLC(requestRow)
 	attemptRecord := chatSettlementRecoveryAttemptRecordFromSQLC(attemptRow)
 
+	// 长上下文策略绑在 model_prices 窗口上且创建后不可改金额/倍率；倍率路径 CostBaseModelPriceID 即该行。
+	// 覆盖路径下该 pin 为 0，重放时策略为空（不放大）——与「无基准价 pin 可回溯」一致。
+	longContextPolicy, err := s.longContextPolicyFromRecoveryJob(ctx, job)
+	if err != nil {
+		return ChatSettlementParams{}, err
+	}
+
 	return ChatSettlementParams{
 		RequestRecord: requestRecord,
 		AttemptRecord: attemptRecord,
@@ -328,9 +325,12 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 		ModelDBID:         job.ModelID,
 		FinalProviderID:   job.ProviderID,
 		FinalChannelID:    job.ChannelID,
-		// 重放 settlement 沿用 job 落库时锁定的 price_id（成本行，P1-3）；客户售价用 job 落库时算好的
-		// 售价向量（= 基准 × 倍率，DEC-026），保证重放账单与首次一致、不受改价/改倍率竞态影响。
-		ChannelPriceID: job.PriceID,
+		// 重放 settlement 沿用 job 落库时锁定的成本来源 pin（覆盖 price_id 或 倍率三来源 id，P1-3 + DEC-027）；
+		// 客户售价用 job 落库时算好的售价向量（= 基准 × 倍率，DEC-026），保证重放账单与首次一致、不受改价/改倍率竞态影响。
+		ChannelPriceID:          int8OrZero(job.PriceID),
+		CostBaseModelPriceID:    int8OrZero(job.CostBaseModelPriceID),
+		ChannelCostMultiplierID: int8OrZero(job.ChannelCostMultiplierID),
+		ChannelRechargeFactorID: int8OrZero(job.ChannelRechargeFactorID),
 		SalePrice: billing.CustomerPriceSnapshot{
 			Currency:                job.Currency,
 			PricingUnit:             job.PricingUnit,
@@ -343,8 +343,37 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 			ReasoningOutputPrice:    job.ReasoningOutputPrice,
 			FormulaVersion:          job.FormulaVersion,
 		},
-		PriceRatio: job.PriceRatio,
-		Facts:      chatSettlementRecoveryFactsFromJob(job),
+		PriceRatio:        job.PriceRatio,
+		LongContextPolicy: longContextPolicy,
+		Facts:             chatSettlementRecoveryFactsFromJob(job),
+	}, nil
+}
+
+func (s *ChatSettlementRecoveryService) longContextPolicyFromRecoveryJob(ctx context.Context, job sqlc.SettlementRecoveryJob) (billing.LongContextPolicy, error) {
+	modelPriceID := int8OrZero(job.CostBaseModelPriceID)
+	if modelPriceID <= 0 {
+		return billing.LongContextPolicy{}, nil
+	}
+	row, err := s.queries.GetModelPrice(ctx, modelPriceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return billing.LongContextPolicy{}, nil
+		}
+		return billing.LongContextPolicy{}, failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("load model price for long-context policy recovery"),
+		)
+	}
+	threshold := int64(0)
+	if row.LongContextThreshold.Valid {
+		threshold = row.LongContextThreshold.Int64
+	}
+	return billing.LongContextPolicy{
+		Enabled:          row.LongContextEnabled,
+		Threshold:        threshold,
+		InputMultiplier:  row.LongContextInputMultiplier,
+		OutputMultiplier: row.LongContextOutputMultiplier,
 	}, nil
 }
 

@@ -12,11 +12,6 @@ import (
 
 // Store 是模型运维聚合所需的只读存储能力（由 *sqlc.Queries 满足）。
 type Store interface {
-	ModelsOpsCounts(ctx context.Context) (sqlc.ModelsOpsCountsRow, error)
-	ModelsOpsSellability(ctx context.Context) (sqlc.ModelsOpsSellabilityRow, error)
-	ModelsOpsPriceCompleteness(ctx context.Context) (sqlc.ModelsOpsPriceCompletenessRow, error)
-	ModelsOpsRequestAggregate(ctx context.Context, arg sqlc.ModelsOpsRequestAggregateParams) (sqlc.ModelsOpsRequestAggregateRow, error)
-	ModelsOpsMarginUSD(ctx context.Context, arg sqlc.ModelsOpsMarginUSDParams) (sqlc.ModelsOpsMarginUSDRow, error)
 	ModelsOpsTable(ctx context.Context, arg sqlc.ModelsOpsTableParams) ([]sqlc.ModelsOpsTableRow, error)
 	ModelsOpsTableCount(ctx context.Context, arg sqlc.ModelsOpsTableCountParams) (int64, error)
 	ModelOpsDetail(ctx context.Context, arg sqlc.ModelOpsDetailParams) (sqlc.ModelOpsDetailRow, error)
@@ -34,24 +29,6 @@ type Service struct {
 // NewService 创建模型运维聚合服务。
 func NewService(store Store) *Service {
 	return &Service{store: store}
-}
-
-// Summary 是模型总览（8 卡）。
-type Summary struct {
-	Total          int64
-	Enabled        int64
-	Disabled       int64
-	Sellable       int64
-	NoChannel      int64
-	PriceTotal     int64
-	PriceWithPrice int64
-	RequestTotal   int64
-	Succeeded      int64
-	SuccessRate    float64
-	RevenueUSD     string
-	CostUSD        string
-	MarginUSD      string
-	MarginRate     float64
 }
 
 // Row 是模型商品运维主表行（静态元数据 + 渠道/基准价；请求/毛利等指标在详情页聚合）。
@@ -146,53 +123,6 @@ type TableParams struct {
 	SortDesc  bool
 	Limit     int32
 	Offset    int32
-}
-
-// Summary 聚合模型总览（8 卡）。
-func (s *Service) Summary(ctx context.Context, from, to time.Time) (Summary, error) {
-	fromTS, toTS := opsutil.TsNarg(from), opsutil.TsNarg(to)
-
-	counts, err := s.store.ModelsOpsCounts(ctx)
-	if err != nil {
-		return Summary{}, opsutil.StoreFailed(err, "count models")
-	}
-	sell, err := s.store.ModelsOpsSellability(ctx)
-	if err != nil {
-		return Summary{}, opsutil.StoreFailed(err, "aggregate sellability")
-	}
-	price, err := s.store.ModelsOpsPriceCompleteness(ctx)
-	if err != nil {
-		return Summary{}, opsutil.StoreFailed(err, "aggregate price completeness")
-	}
-	reqAgg, err := s.store.ModelsOpsRequestAggregate(ctx, sqlc.ModelsOpsRequestAggregateParams{FromTime: fromTS, ToTime: toTS})
-	if err != nil {
-		return Summary{}, opsutil.StoreFailed(err, "aggregate request")
-	}
-	margin, err := s.store.ModelsOpsMarginUSD(ctx, sqlc.ModelsOpsMarginUSDParams{FromTime: fromTS, ToTime: toTS})
-	if err != nil {
-		return Summary{}, opsutil.StoreFailed(err, "aggregate margin")
-	}
-
-	revenue := opsutil.NumericString(margin.RevenueUsd)
-	cost := opsutil.NumericString(margin.CostUsd)
-	marginAmt := opsutil.SubtractDecimal(revenue, cost)
-
-	return Summary{
-		Total:          counts.Total,
-		Enabled:        counts.Enabled,
-		Disabled:       counts.Disabled,
-		Sellable:       sell.Sellable,
-		NoChannel:      sell.NoChannel,
-		PriceTotal:     price.Total,
-		PriceWithPrice: price.WithPrice,
-		RequestTotal:   reqAgg.TerminalTotal,
-		Succeeded:      reqAgg.SucceededTotal,
-		SuccessRate:    opsutil.SuccessRate(reqAgg.SucceededTotal, reqAgg.TerminalTotal),
-		RevenueUSD:     revenue,
-		CostUSD:        cost,
-		MarginUSD:      marginAmt,
-		MarginRate:     opsutil.Ratio(marginAmt, revenue),
-	}, nil
 }
 
 // Table 返回模型商品运维主表（分页）。

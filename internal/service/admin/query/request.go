@@ -108,6 +108,10 @@ type RequestListItem struct {
 	OutputPriceUnitUSD             *string
 	ReasoningOutputPriceUnitUSD    *string
 
+	// DEC-027 成本来源倍率快照（倍率路径有值，覆盖/旧数据为 nil）：价格倍率 + 充值倍率。
+	ChannelCostMultiplier *string
+	RechargeFactor        *string
+
 	// 用户/Key 展示（key 名 / 前缀 / 明文——明文供列表点击复制，口径同 api-keys 页）。
 	APIKeyName      *string
 	APIKeyPrefix    *string
@@ -201,6 +205,9 @@ type CostSnapshotView struct {
 	OutputCostAmount             *string
 	ReasoningOutputCostAmount    *string
 	TotalCostAmount              *string
+	// DEC-027 成本来源倍率（倍率路径有值，覆盖/旧数据为 null）：价格倍率 + 充值倍率，供请求详情费用处展示新旧倍率。
+	ChannelCostMultiplier *string
+	RechargeFactor        *string
 }
 
 // PriceSnapshotView 是客户售价快照的展示视图：每分项售价单价（per_1m_tokens，USD 字符串）。
@@ -231,6 +238,8 @@ func toCostSnapshotView(c sqlc.CostSnapshot) CostSnapshotView {
 		OutputCostAmount:             opsutil.NumericStringPtr(c.OutputCostAmount),
 		ReasoningOutputCostAmount:    opsutil.NumericStringPtr(c.ReasoningOutputCostAmount),
 		TotalCostAmount:              opsutil.NumericStringPtr(c.TotalCostAmount),
+		ChannelCostMultiplier:        opsutil.NumericStringPtr(c.CostMultiplier),
+		RechargeFactor:               opsutil.NumericStringPtr(c.RechargeFactor),
 	}
 }
 
@@ -458,6 +467,9 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 		CacheWrite30mInputPriceUnitUSD: opsutil.NumericStringPtr(r.CacheWrite30mInputPrice),
 		OutputPriceUnitUSD:             opsutil.NumericStringPtr(r.OutputPrice),
 		ReasoningOutputPriceUnitUSD:    opsutil.NumericStringPtr(r.ReasoningOutputPrice),
+
+		ChannelCostMultiplier: opsutil.NumericStringPtr(r.ChannelCostMultiplier),
+		RechargeFactor:        opsutil.NumericStringPtr(r.RechargeFactor),
 
 		APIKeyName:      textPtr(r.ApiKeyName),
 		APIKeyPrefix:    textPtr(r.ApiKeyPrefix),
