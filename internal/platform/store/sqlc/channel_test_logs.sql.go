@@ -11,20 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countChannelTestLogsByChannel = `-- name: CountChannelTestLogsByChannel :one
-SELECT COUNT(*) AS total
-FROM channel_test_logs
-WHERE channel_id = $1
-`
-
-// CountChannelTestLogsByChannel 返回某渠道检测日志总数（分页用）。
-func (q *Queries) CountChannelTestLogsByChannel(ctx context.Context, channelID int64) (int64, error) {
-	row := q.db.QueryRow(ctx, countChannelTestLogsByChannel, channelID)
-	var total int64
-	err := row.Scan(&total)
-	return total, err
-}
-
 const deleteChannelTestLogsBeyondPerChannel = `-- name: DeleteChannelTestLogsBeyondPerChannel :execrows
 DELETE FROM channel_test_logs AS del
 WHERE del.channel_id = $1
@@ -92,52 +78,4 @@ func (q *Queries) InsertChannelTestLog(ctx context.Context, arg InsertChannelTes
 		arg.UpstreamError,
 	)
 	return err
-}
-
-const listChannelTestLogsByChannel = `-- name: ListChannelTestLogsByChannel :many
-SELECT id, channel_id, created_at, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error
-FROM channel_test_logs
-WHERE channel_id = $1
-ORDER BY created_at DESC, id DESC
-LIMIT $3 OFFSET $2
-`
-
-type ListChannelTestLogsByChannelParams struct {
-	ChannelID  int64
-	PageOffset int32
-	PageLimit  int32
-}
-
-// ListChannelTestLogsByChannel 按渠道倒序分页返回检测日志（详情页「检测日志」区块）。
-func (q *Queries) ListChannelTestLogsByChannel(ctx context.Context, arg ListChannelTestLogsByChannelParams) ([]ChannelTestLog, error) {
-	rows, err := q.db.Query(ctx, listChannelTestLogsByChannel, arg.ChannelID, arg.PageOffset, arg.PageLimit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ChannelTestLog
-	for rows.Next() {
-		var i ChannelTestLog
-		if err := rows.Scan(
-			&i.ID,
-			&i.ChannelID,
-			&i.CreatedAt,
-			&i.Source,
-			&i.Success,
-			&i.ErrorCode,
-			&i.HttpStatus,
-			&i.LatencyMs,
-			&i.TestedModel,
-			&i.CredentialValidAfter,
-			&i.Message,
-			&i.UpstreamError,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }

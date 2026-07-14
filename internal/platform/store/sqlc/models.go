@@ -89,6 +89,19 @@ type ChannelCostExposure struct {
 	CreatedAt            pgtype.Timestamptz
 }
 
+type ChannelCostMultiplier struct {
+	ID            int64
+	ChannelID     int64
+	ModelID       pgtype.Int8
+	Multiplier    pgtype.Numeric
+	Status        string
+	EffectiveFrom pgtype.Timestamptz
+	EffectiveTo   pgtype.Timestamptz
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+	ModelKey      pgtype.Int8
+}
+
 type ChannelModel struct {
 	ID            int64
 	ChannelID     int64
@@ -119,6 +132,17 @@ type ChannelPrice struct {
 	CacheWrite30mInputCost pgtype.Numeric
 }
 
+type ChannelRechargeFactor struct {
+	ID            int64
+	ChannelID     int64
+	Factor        pgtype.Numeric
+	Status        string
+	EffectiveFrom pgtype.Timestamptz
+	EffectiveTo   pgtype.Timestamptz
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
 type ChannelTestLog struct {
 	ID                   int64
 	ChannelID            int64
@@ -137,7 +161,7 @@ type ChannelTestLog struct {
 type CostSnapshot struct {
 	ID                           int64
 	RequestRecordID              int64
-	CostPriceID                  int64
+	CostPriceID                  pgtype.Int8
 	ProviderID                   int64
 	ChannelID                    int64
 	ModelID                      int64
@@ -161,6 +185,12 @@ type CostSnapshot struct {
 	CreatedAt                    pgtype.Timestamptz
 	CacheWrite30mInputCost       pgtype.Numeric
 	CacheWrite30mInputCostAmount pgtype.Numeric
+	CostBaseModelPriceID         pgtype.Int8
+	ChannelCostMultiplierID      pgtype.Int8
+	CostMultiplier               pgtype.Numeric
+	ChannelRechargeFactorID      pgtype.Int8
+	RechargeFactor               pgtype.Numeric
+	LongContextApplied           bool
 }
 
 type LedgerBillingException struct {
@@ -283,22 +313,26 @@ type ModelCatalogLink struct {
 }
 
 type ModelPrice struct {
-	ID                      int64
-	ModelID                 int64
-	Currency                string
-	PricingUnit             string
-	UncachedInputPrice      pgtype.Numeric
-	CacheReadInputPrice     pgtype.Numeric
-	CacheWrite5mInputPrice  pgtype.Numeric
-	CacheWrite1hInputPrice  pgtype.Numeric
-	OutputPrice             pgtype.Numeric
-	ReasoningOutputPrice    pgtype.Numeric
-	Status                  string
-	EffectiveFrom           pgtype.Timestamptz
-	EffectiveTo             pgtype.Timestamptz
-	CreatedAt               pgtype.Timestamptz
-	UpdatedAt               pgtype.Timestamptz
-	CacheWrite30mInputPrice pgtype.Numeric
+	ID                          int64
+	ModelID                     int64
+	Currency                    string
+	PricingUnit                 string
+	UncachedInputPrice          pgtype.Numeric
+	CacheReadInputPrice         pgtype.Numeric
+	CacheWrite5mInputPrice      pgtype.Numeric
+	CacheWrite1hInputPrice      pgtype.Numeric
+	OutputPrice                 pgtype.Numeric
+	ReasoningOutputPrice        pgtype.Numeric
+	Status                      string
+	EffectiveFrom               pgtype.Timestamptz
+	EffectiveTo                 pgtype.Timestamptz
+	CreatedAt                   pgtype.Timestamptz
+	UpdatedAt                   pgtype.Timestamptz
+	CacheWrite30mInputPrice     pgtype.Numeric
+	LongContextEnabled          bool
+	LongContextThreshold        pgtype.Int8
+	LongContextInputMultiplier  pgtype.Numeric
+	LongContextOutputMultiplier pgtype.Numeric
 }
 
 type PriceSnapshot struct {
@@ -317,6 +351,7 @@ type PriceSnapshot struct {
 	CreatedAt               pgtype.Timestamptz
 	PriceRatio              pgtype.Numeric
 	CacheWrite30mInputPrice pgtype.Numeric
+	LongContextApplied      bool
 }
 
 type Provider struct {
@@ -450,7 +485,7 @@ type SettlementRecoveryJob struct {
 	UsageServerWebFetchRequests        int64
 	UsageSource                        string
 	UsageMappingVersion                string
-	PriceID                            int64
+	PriceID                            pgtype.Int8
 	Currency                           string
 	PricingUnit                        string
 	UncachedInputPrice                 pgtype.Numeric
@@ -479,6 +514,9 @@ type SettlementRecoveryJob struct {
 	UsageCacheWrite30mInputTokens      int64
 	UsageCacheWrite30mInputTokensState string
 	CacheWrite30mInputPrice            pgtype.Numeric
+	CostBaseModelPriceID               pgtype.Int8
+	ChannelCostMultiplierID            pgtype.Int8
+	ChannelRechargeFactorID            pgtype.Int8
 }
 
 type UsageLineItem struct {

@@ -125,7 +125,7 @@ func settlementRecoveryJobParams(f settlementRecoveryFixture, nextRunAt time.Tim
 		UsageReasoningOutputTokensState:    "known",
 		UsageSource:                        "upstream_response",
 		UsageMappingVersion:                "openai_chat_usage_v1",
-		PriceID:                            f.channelPrice.ID,
+		PriceID:                            pgtype.Int8{Int64: f.channelPrice.ID, Valid: true},
 		Currency:                           f.channelPrice.Currency,
 		PricingUnit:                        f.channelPrice.PricingUnit,
 		// DEC-026：恢复任务存的是客户售价快照（model_prices×线路倍率）；本 sqlc 持久化测试只验证存取往返，

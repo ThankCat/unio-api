@@ -33,29 +33,14 @@ func TestDashboardQueriesAgainstSchema(t *testing.T) {
 
 	q := sqlc.New(pool)
 
-	if _, err := q.DashboardRequestStatusCounts(ctx, sqlc.DashboardRequestStatusCountsParams{}); err != nil {
-		t.Fatalf("DashboardRequestStatusCounts: %v", err)
-	}
-	if _, err := q.DashboardTokenTotals(ctx, sqlc.DashboardTokenTotalsParams{}); err != nil {
-		t.Fatalf("DashboardTokenTotals: %v", err)
-	}
 	if _, err := q.DashboardRevenueByCurrency(ctx, sqlc.DashboardRevenueByCurrencyParams{}); err != nil {
 		t.Fatalf("DashboardRevenueByCurrency: %v", err)
 	}
 	if _, err := q.DashboardCostByCurrency(ctx, sqlc.DashboardCostByCurrencyParams{}); err != nil {
 		t.Fatalf("DashboardCostByCurrency: %v", err)
 	}
-	if _, err := q.DashboardBalanceByCurrency(ctx); err != nil {
-		t.Fatalf("DashboardBalanceByCurrency: %v", err)
-	}
 	if _, err := q.DashboardBillingExceptionSummary(ctx, sqlc.DashboardBillingExceptionSummaryParams{}); err != nil {
 		t.Fatalf("DashboardBillingExceptionSummary: %v", err)
-	}
-	if _, err := q.DashboardEnabledChannelCount(ctx); err != nil {
-		t.Fatalf("DashboardEnabledChannelCount: %v", err)
-	}
-	if _, err := q.DashboardChannelHealth(ctx, sqlc.DashboardChannelHealthParams{}); err != nil {
-		t.Fatalf("DashboardChannelHealth: %v", err)
 	}
 
 	for _, unit := range []string{"hour", "day"} {

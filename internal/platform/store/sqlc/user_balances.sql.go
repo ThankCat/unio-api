@@ -320,51 +320,6 @@ func (q *Queries) GetUserBalanceForUpdate(ctx context.Context, arg GetUserBalanc
 	return i, err
 }
 
-const listUserBalancesByUser = `-- name: ListUserBalancesByUser :many
-SELECT
-    id,
-    user_id,
-    currency,
-    balance,
-    reserved_balance,
-    created_at,
-    updated_at
-FROM
-    user_balances
-WHERE
-    user_id = $1
-ORDER BY currency
-`
-
-// ListUserBalancesByUser 供 admin 用户详情读取该用户全部币种余额。
-func (q *Queries) ListUserBalancesByUser(ctx context.Context, userID int64) ([]UserBalance, error) {
-	rows, err := q.db.Query(ctx, listUserBalancesByUser, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []UserBalance
-	for rows.Next() {
-		var i UserBalance
-		if err := rows.Scan(
-			&i.ID,
-			&i.UserID,
-			&i.Currency,
-			&i.Balance,
-			&i.ReservedBalance,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const releaseUserReservedBalance = `-- name: ReleaseUserReservedBalance :one
 UPDATE user_balances
 SET

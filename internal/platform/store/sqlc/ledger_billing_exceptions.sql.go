@@ -11,38 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countLedgerBillingExceptions = `-- name: CountLedgerBillingExceptions :one
-SELECT COUNT(*) AS total
-FROM ledger_billing_exceptions
-WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
-  AND ($2::text IS NULL OR event_type = $2::text)
-  AND ($3::text IS NULL OR reason_code = $3::text)
-  AND ($4::timestamptz IS NULL OR created_at >= $4::timestamptz)
-  AND ($5::timestamptz IS NULL OR created_at < $5::timestamptz)
-`
-
-type CountLedgerBillingExceptionsParams struct {
-	UserID     pgtype.Int8
-	EventType  pgtype.Text
-	ReasonCode pgtype.Text
-	FromTime   pgtype.Timestamptz
-	ToTime     pgtype.Timestamptz
-}
-
-// CountLedgerBillingExceptions 返回与 ListLedgerBillingExceptionsPage 相同过滤条件下的总条数。
-func (q *Queries) CountLedgerBillingExceptions(ctx context.Context, arg CountLedgerBillingExceptionsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countLedgerBillingExceptions,
-		arg.UserID,
-		arg.EventType,
-		arg.ReasonCode,
-		arg.FromTime,
-		arg.ToTime,
-	)
-	var total int64
-	err := row.Scan(&total)
-	return total, err
-}
-
 const createLedgerRiskExposureException = `-- name: CreateLedgerRiskExposureException :one
 INSERT INTO ledger_billing_exceptions (
     user_id, request_record_id, reservation_id, event_type,
@@ -171,33 +139,6 @@ func (q *Queries) CreateLedgerWriteOffException(ctx context.Context, arg CreateL
 	return i, err
 }
 
-const getLedgerBillingExceptionByRequest = `-- name: GetLedgerBillingExceptionByRequest :one
-SELECT id, user_id, request_record_id, reservation_id, event_type, actual_amount, captured_amount, platform_amount, currency, reason_code, reason, created_at
-FROM ledger_billing_exceptions
-WHERE request_record_id = $1
-`
-
-// GetLedgerBillingExceptionByRequest 按请求记录 ID 读取该请求的 billing exception（每请求至多一条）。
-func (q *Queries) GetLedgerBillingExceptionByRequest(ctx context.Context, requestRecordID int64) (LedgerBillingException, error) {
-	row := q.db.QueryRow(ctx, getLedgerBillingExceptionByRequest, requestRecordID)
-	var i LedgerBillingException
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.RequestRecordID,
-		&i.ReservationID,
-		&i.EventType,
-		&i.ActualAmount,
-		&i.CapturedAmount,
-		&i.PlatformAmount,
-		&i.Currency,
-		&i.ReasonCode,
-		&i.Reason,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const getLedgerBillingExceptionByReservationID = `-- name: GetLedgerBillingExceptionByReservationID :one
 SELECT id, user_id, request_record_id, reservation_id, event_type, actual_amount, captured_amount, platform_amount, currency, reason_code, reason, created_at
 FROM ledger_billing_exceptions
@@ -223,92 +164,4 @@ func (q *Queries) GetLedgerBillingExceptionByReservationID(ctx context.Context, 
 		&i.CreatedAt,
 	)
 	return i, err
-}
-
-const listLedgerBillingExceptionsPage = `-- name: ListLedgerBillingExceptionsPage :many
-SELECT
-    id,
-    user_id,
-    request_record_id,
-    reservation_id,
-    event_type,
-    actual_amount,
-    captured_amount,
-    platform_amount,
-    currency,
-    reason_code,
-    reason,
-    created_at
-FROM ledger_billing_exceptions
-WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
-  AND ($2::text IS NULL OR event_type = $2::text)
-  AND ($3::text IS NULL OR reason_code = $3::text)
-  AND ($4::timestamptz IS NULL OR created_at >= $4::timestamptz)
-  AND ($5::timestamptz IS NULL OR created_at < $5::timestamptz)
-ORDER BY
-  CASE WHEN COALESCE($6::text, 'created_at') IN ('', 'created_at') AND COALESCE($7::bool, true) THEN created_at END DESC NULLS LAST,
-  CASE WHEN COALESCE($6::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($7::bool, true) THEN created_at END ASC NULLS LAST,
-  CASE WHEN $6::text = 'user_id' AND COALESCE($7::bool, false) THEN user_id END DESC NULLS LAST,
-  CASE WHEN $6::text = 'user_id' AND NOT COALESCE($7::bool, false) THEN user_id END ASC NULLS LAST,
-  CASE WHEN $6::text = 'event_type' AND COALESCE($7::bool, false) THEN event_type END DESC NULLS LAST,
-  CASE WHEN $6::text = 'event_type' AND NOT COALESCE($7::bool, false) THEN event_type END ASC NULLS LAST,
-  id DESC
-LIMIT $9 OFFSET $8
-`
-
-type ListLedgerBillingExceptionsPageParams struct {
-	UserID     pgtype.Int8
-	EventType  pgtype.Text
-	ReasonCode pgtype.Text
-	FromTime   pgtype.Timestamptz
-	ToTime     pgtype.Timestamptz
-	SortField  pgtype.Text
-	SortDesc   pgtype.Bool
-	PageOffset int32
-	PageLimit  int32
-}
-
-// ListLedgerBillingExceptionsPage 供 admin 只读查询台（M6）按用户/事件类型/时间过滤分页倒序列出核销/风险敞口事实。
-// 所有过滤项为 NULL 时不过滤。
-func (q *Queries) ListLedgerBillingExceptionsPage(ctx context.Context, arg ListLedgerBillingExceptionsPageParams) ([]LedgerBillingException, error) {
-	rows, err := q.db.Query(ctx, listLedgerBillingExceptionsPage,
-		arg.UserID,
-		arg.EventType,
-		arg.ReasonCode,
-		arg.FromTime,
-		arg.ToTime,
-		arg.SortField,
-		arg.SortDesc,
-		arg.PageOffset,
-		arg.PageLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []LedgerBillingException
-	for rows.Next() {
-		var i LedgerBillingException
-		if err := rows.Scan(
-			&i.ID,
-			&i.UserID,
-			&i.RequestRecordID,
-			&i.ReservationID,
-			&i.EventType,
-			&i.ActualAmount,
-			&i.CapturedAmount,
-			&i.PlatformAmount,
-			&i.Currency,
-			&i.ReasonCode,
-			&i.Reason,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }

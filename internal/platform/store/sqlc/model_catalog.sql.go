@@ -11,30 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countModelCatalog = `-- name: CountModelCatalog :one
-SELECT COUNT(*) AS total
-FROM model_catalog mc
-WHERE (
-        $1::text IS NULL
-        OR mc.canonical_id ILIKE '%' || $1::text || '%'
-        OR mc.display_name ILIKE '%' || $1::text || '%'
-    )
-  AND ($2::text IS NULL OR mc.lab = $2::text)
-`
-
-type CountModelCatalogParams struct {
-	Q   pgtype.Text
-	Lab pgtype.Text
-}
-
-// CountModelCatalog 返回与 ListModelCatalogPage 相同过滤条件下的总条数。
-func (q *Queries) CountModelCatalog(ctx context.Context, arg CountModelCatalogParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countModelCatalog, arg.Q, arg.Lab)
-	var total int64
-	err := row.Scan(&total)
-	return total, err
-}
-
 const deleteModelCatalogCapabilities = `-- name: DeleteModelCatalogCapabilities :exec
 DELETE FROM model_catalog_capabilities
 WHERE canonical_id = $1
@@ -44,54 +20,6 @@ WHERE canonical_id = $1
 func (q *Queries) DeleteModelCatalogCapabilities(ctx context.Context, canonicalID string) error {
 	_, err := q.db.Exec(ctx, deleteModelCatalogCapabilities, canonicalID)
 	return err
-}
-
-const getModelCatalogEntry = `-- name: GetModelCatalogEntry :one
-SELECT
-    mc.canonical_id, mc.lab, mc.display_name, mc.context_window_tokens, mc.max_output_tokens, mc.input_price_usd_per_million_tokens, mc.output_price_usd_per_million_tokens, mc.release_date, mc.removed_upstream_at, mc.fingerprint, mc.synced_at, mc.created_at, mc.updated_at,
-    (SELECT COUNT(*) FROM model_catalog_links l WHERE l.canonical_id = mc.canonical_id) AS adopted_count
-FROM model_catalog mc
-WHERE mc.canonical_id = $1
-`
-
-type GetModelCatalogEntryRow struct {
-	CanonicalID                    string
-	Lab                            string
-	DisplayName                    string
-	ContextWindowTokens            pgtype.Int8
-	MaxOutputTokens                pgtype.Int8
-	InputPriceUsdPerMillionTokens  pgtype.Numeric
-	OutputPriceUsdPerMillionTokens pgtype.Numeric
-	ReleaseDate                    pgtype.Date
-	RemovedUpstreamAt              pgtype.Timestamptz
-	Fingerprint                    string
-	SyncedAt                       pgtype.Timestamptz
-	CreatedAt                      pgtype.Timestamptz
-	UpdatedAt                      pgtype.Timestamptz
-	AdoptedCount                   int64
-}
-
-// GetModelCatalogEntry 按 canonical_id 读取单条目录详情（连带已采纳次数）。
-func (q *Queries) GetModelCatalogEntry(ctx context.Context, canonicalID string) (GetModelCatalogEntryRow, error) {
-	row := q.db.QueryRow(ctx, getModelCatalogEntry, canonicalID)
-	var i GetModelCatalogEntryRow
-	err := row.Scan(
-		&i.CanonicalID,
-		&i.Lab,
-		&i.DisplayName,
-		&i.ContextWindowTokens,
-		&i.MaxOutputTokens,
-		&i.InputPriceUsdPerMillionTokens,
-		&i.OutputPriceUsdPerMillionTokens,
-		&i.ReleaseDate,
-		&i.RemovedUpstreamAt,
-		&i.Fingerprint,
-		&i.SyncedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.AdoptedCount,
-	)
-	return i, err
 }
 
 const insertModelCatalogCapability = `-- name: InsertModelCatalogCapability :exec
@@ -152,122 +80,6 @@ func (q *Queries) ListModelCatalogCanonicalIDs(ctx context.Context) ([]ListModel
 	for rows.Next() {
 		var i ListModelCatalogCanonicalIDsRow
 		if err := rows.Scan(&i.CanonicalID, &i.RemovedUpstreamAt); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listModelCatalogCapabilities = `-- name: ListModelCatalogCapabilities :many
-SELECT canonical_id, capability_key, support_level, limits
-FROM model_catalog_capabilities
-WHERE canonical_id = $1
-ORDER BY capability_key ASC
-`
-
-// ListModelCatalogCapabilities 列出某目录条目的能力提示（采纳预填 / 刷新 diff 用）。
-func (q *Queries) ListModelCatalogCapabilities(ctx context.Context, canonicalID string) ([]ModelCatalogCapability, error) {
-	rows, err := q.db.Query(ctx, listModelCatalogCapabilities, canonicalID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ModelCatalogCapability
-	for rows.Next() {
-		var i ModelCatalogCapability
-		if err := rows.Scan(
-			&i.CanonicalID,
-			&i.CapabilityKey,
-			&i.SupportLevel,
-			&i.Limits,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listModelCatalogPage = `-- name: ListModelCatalogPage :many
-SELECT
-    mc.canonical_id, mc.lab, mc.display_name, mc.context_window_tokens, mc.max_output_tokens, mc.input_price_usd_per_million_tokens, mc.output_price_usd_per_million_tokens, mc.release_date, mc.removed_upstream_at, mc.fingerprint, mc.synced_at, mc.created_at, mc.updated_at,
-    (SELECT COUNT(*) FROM model_catalog_capabilities cc WHERE cc.canonical_id = mc.canonical_id) AS capability_count,
-    (SELECT COUNT(*) FROM model_catalog_links l WHERE l.canonical_id = mc.canonical_id) AS adopted_count
-FROM model_catalog mc
-WHERE (
-        $1::text IS NULL
-        OR mc.canonical_id ILIKE '%' || $1::text || '%'
-        OR mc.display_name ILIKE '%' || $1::text || '%'
-    )
-  AND ($2::text IS NULL OR mc.lab = $2::text)
-ORDER BY mc.canonical_id
-LIMIT $4 OFFSET $3
-`
-
-type ListModelCatalogPageParams struct {
-	Q          pgtype.Text
-	Lab        pgtype.Text
-	PageOffset int32
-	PageLimit  int32
-}
-
-type ListModelCatalogPageRow struct {
-	CanonicalID                    string
-	Lab                            string
-	DisplayName                    string
-	ContextWindowTokens            pgtype.Int8
-	MaxOutputTokens                pgtype.Int8
-	InputPriceUsdPerMillionTokens  pgtype.Numeric
-	OutputPriceUsdPerMillionTokens pgtype.Numeric
-	ReleaseDate                    pgtype.Date
-	RemovedUpstreamAt              pgtype.Timestamptz
-	Fingerprint                    string
-	SyncedAt                       pgtype.Timestamptz
-	CreatedAt                      pgtype.Timestamptz
-	UpdatedAt                      pgtype.Timestamptz
-	CapabilityCount                int64
-	AdoptedCount                   int64
-}
-
-// ListModelCatalogPage 分页/搜索目录条目，连带能力提示数与已采纳次数；q/lab 为 NULL 时不过滤。
-func (q *Queries) ListModelCatalogPage(ctx context.Context, arg ListModelCatalogPageParams) ([]ListModelCatalogPageRow, error) {
-	rows, err := q.db.Query(ctx, listModelCatalogPage,
-		arg.Q,
-		arg.Lab,
-		arg.PageOffset,
-		arg.PageLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListModelCatalogPageRow
-	for rows.Next() {
-		var i ListModelCatalogPageRow
-		if err := rows.Scan(
-			&i.CanonicalID,
-			&i.Lab,
-			&i.DisplayName,
-			&i.ContextWindowTokens,
-			&i.MaxOutputTokens,
-			&i.InputPriceUsdPerMillionTokens,
-			&i.OutputPriceUsdPerMillionTokens,
-			&i.ReleaseDate,
-			&i.RemovedUpstreamAt,
-			&i.Fingerprint,
-			&i.SyncedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.CapabilityCount,
-			&i.AdoptedCount,
-		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

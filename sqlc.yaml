@@ -2,7 +2,13 @@ version: "2"
 sql:
   - engine: postgresql
     schema: "migrations/*.up.sql"
-    queries: sql/queries
+    # 查询按 surface 分目录（api/admin/worker/shared），仍生成到同一个 sqlc 包。
+    # console 目前无 DB 查询（占位空目录），有查询后在此追加 sql/queries/console。
+    queries:
+      - "sql/queries/shared"
+      - "sql/queries/api"
+      - "sql/queries/admin"
+      - "sql/queries/worker"
     gen:
       go:
         package: sqlc

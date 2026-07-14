@@ -1,2 +1,0 @@
-DROP TABLE IF EXISTS model_catalog_capabilities;
-DROP TABLE IF EXISTS model_catalog;
