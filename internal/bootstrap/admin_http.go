@@ -18,6 +18,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/app/adminapi/user"
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-api/internal/service/admin/gatewayruntime"
 )
 
 // adminHTTPDeps 收拢 admin-server HTTP handler 构建所需的全部 service 依赖。
@@ -39,6 +40,9 @@ type adminHTTPDeps struct {
 	// DEC-027 渠道成本倍率。
 	ChannelCostMultiplierService channel.ChannelCostMultiplierService
 	ChannelRechargeFactorService channel.ChannelRechargeFactorService
+
+	// BreakerClient 可选：渠道列表挂载 gateway 熔断快照。
+	BreakerClient *gatewayruntime.Client
 
 	RouteService    route.RouteService
 	RouteOpsService route.RouteOpsService
@@ -92,6 +96,8 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 
 		ChannelCostMultiplierService: deps.ChannelCostMultiplierService,
 		ChannelRechargeFactorService: deps.ChannelRechargeFactorService,
+
+		BreakerClient: deps.BreakerClient,
 
 		RouteService:        deps.RouteService,
 		RouteOpsService:     deps.RouteOpsService,

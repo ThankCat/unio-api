@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -140,6 +141,120 @@ func (b *ChannelCircuitBreaker) SetEnabled(enabled bool) {
 // Enabled 报告熔断器当前是否启用（供观测）。
 func (b *ChannelCircuitBreaker) Enabled() bool {
 	return !b.disabled.Load()
+}
+
+// CircuitStateName 是熔断状态机对外暴露的稳定字符串（admin / internal API JSON）。
+type CircuitStateName string
+
+const (
+	CircuitStateClosed   CircuitStateName = "closed"
+	CircuitStateOpen     CircuitStateName = "open"
+	CircuitStateHalfOpen CircuitStateName = "half_open"
+)
+
+// ChannelBreakerConfigSnapshot 是熔断阈值的只读快照（毫秒口径，便于 JSON）。
+type ChannelBreakerConfigSnapshot struct {
+	WindowMs       int64   `json:"window_ms"`
+	MinRequests    int     `json:"min_requests"`
+	FailureRatio   float64 `json:"failure_ratio"`
+	OpenDurationMs int64   `json:"open_duration_ms"`
+}
+
+// ChannelBreakerEntry 是单个 channel 的只读熔断状态（不推进状态机）。
+type ChannelBreakerEntry struct {
+	ChannelID        int64            `json:"channel_id"`
+	State            CircuitStateName `json:"state"`
+	Failures         int              `json:"failures"`
+	Successes        int              `json:"successes"`
+	WindowStart      time.Time        `json:"window_start"`
+	OpenedAt         *time.Time       `json:"opened_at,omitempty"`
+	OpenRemainingMs  *int64           `json:"open_remaining_ms,omitempty"`
+	HalfOpenInFlight bool             `json:"half_open_in_flight"`
+	HealthScore      float64          `json:"health_score"`
+}
+
+// ChannelBreakerSnapshot 是进程内熔断器的只读全量快照。
+type ChannelBreakerSnapshot struct {
+	Enabled    bool                         `json:"enabled"`
+	Instance   string                       `json:"instance,omitempty"`
+	ObservedAt time.Time                    `json:"observed_at"`
+	Config     ChannelBreakerConfigSnapshot `json:"config"`
+	Channels   []ChannelBreakerEntry        `json:"channels"`
+}
+
+// Snapshot 返回当前已跟踪 channel 的只读状态，不创建缺失 key、不推进 open→half-open。
+// Instance 由调用方填入（hostname / GATEWAY_INSTANCE_ID）；本方法留空。
+func (b *ChannelCircuitBreaker) Snapshot() ChannelBreakerSnapshot {
+	if b == nil {
+		return ChannelBreakerSnapshot{
+			Enabled:    false,
+			ObservedAt: time.Now().UTC(),
+			Channels:   []ChannelBreakerEntry{},
+		}
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	now := b.now()
+	out := ChannelBreakerSnapshot{
+		Enabled:    !b.disabled.Load(),
+		ObservedAt: now.UTC(),
+		Config: ChannelBreakerConfigSnapshot{
+			WindowMs:       b.cfg.Window.Milliseconds(),
+			MinRequests:    b.cfg.MinRequests,
+			FailureRatio:   b.cfg.FailureRatio,
+			OpenDurationMs: b.cfg.OpenDuration.Milliseconds(),
+		},
+		Channels: make([]ChannelBreakerEntry, 0, len(b.items)),
+	}
+	if !out.Enabled {
+		return out
+	}
+
+	for key, s := range b.items {
+		channelID, err := strconv.ParseInt(key, 10, 64)
+		if err != nil {
+			continue
+		}
+		entry := ChannelBreakerEntry{
+			ChannelID:        channelID,
+			Failures:         s.failures,
+			Successes:        s.successes,
+			WindowStart:      s.windowStart.UTC(),
+			HalfOpenInFlight: s.halfOpenInFlight,
+		}
+		switch s.state {
+		case circuitOpen:
+			entry.State = CircuitStateOpen
+			opened := s.openedAt.UTC()
+			entry.OpenedAt = &opened
+			remaining := b.cfg.OpenDuration - now.Sub(s.openedAt)
+			if remaining < 0 {
+				remaining = 0
+			}
+			ms := remaining.Milliseconds()
+			entry.OpenRemainingMs = &ms
+			entry.HealthScore = 1
+		case circuitHalfOpen:
+			entry.State = CircuitStateHalfOpen
+			entry.HealthScore = 0.75
+		default:
+			entry.State = CircuitStateClosed
+			if now.Sub(s.windowStart) >= b.cfg.Window {
+				entry.Failures = 0
+				entry.Successes = 0
+				entry.HealthScore = 0
+			} else {
+				total := s.failures + s.successes
+				if total > 0 {
+					entry.HealthScore = float64(s.failures) / float64(total)
+				}
+			}
+		}
+		out.Channels = append(out.Channels, entry)
+	}
+	return out
 }
 
 // Available 只读判断 channel 是否可进入 fallback plan，不推进熔断状态。

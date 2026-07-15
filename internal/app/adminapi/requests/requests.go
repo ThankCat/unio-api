@@ -83,6 +83,8 @@ type requestListItemDTO struct {
 	// DEC-027 成本来源倍率（倍率路径有值，覆盖/旧数据为 null）：价格倍率 + 充值倍率。
 	ChannelCostMultiplier *string `json:"channel_cost_multiplier"`
 	RechargeFactor        *string `json:"recharge_factor"`
+	// LongContextApplied 费用是否已按长上下文倍率结算。
+	LongContextApplied bool `json:"long_context_applied"`
 	// 用户/Key（明文供列表点击复制，口径同 api-keys 页）。
 	ApiKeyName            *string  `json:"api_key_name"`
 	ApiKeyPrefix          *string  `json:"api_key_prefix"`
@@ -338,6 +340,7 @@ func toRequestListItemDTO(item query.RequestListItem) requestListItemDTO {
 
 		ChannelCostMultiplier: item.ChannelCostMultiplier,
 		RechargeFactor:        item.RechargeFactor,
+		LongContextApplied:    item.LongContextApplied,
 
 		ApiKeyName:      item.APIKeyName,
 		ApiKeyPrefix:    item.APIKeyPrefix,

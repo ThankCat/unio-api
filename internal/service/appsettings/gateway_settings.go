@@ -337,6 +337,22 @@ func DecodePositiveIntSetting(raw []byte) (int, error) {
 	return n, nil
 }
 
+func encodeBoolSetting(v bool) json.RawMessage {
+	if v {
+		return json.RawMessage("true")
+	}
+	return json.RawMessage("false")
+}
+
+// DecodeBoolSetting 解码 JSON 布尔标量。
+func DecodeBoolSetting(raw []byte) (bool, error) {
+	var v bool
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return false, fmt.Errorf("value must be a boolean: %w", err)
+	}
+	return v, nil
+}
+
 func streamIdleTimeoutDefinition() Definition {
 	return Definition{
 		Key:      GatewayStreamIdleTimeoutKey,
@@ -505,7 +521,7 @@ func defaultChannelTimeoutDefinition() Definition {
 		Label:    "默认渠道超时",
 		Description: "用户请求经网关调用上游时,渠道未配置 timeout_ms 的兜底超时。单位毫秒。" +
 			"渠道行上的 timeout_ms 优先于此默认值。" +
-			"不影响「渠道检测超时」(admin_backend.channel_test_probe_timeout_ms)——检测专用、独立配置。",
+			"不影响「渠道巡检」探测超时(admin_backend.channel_test.probe_timeout_ms)——检测专用、独立配置。",
 		HotReload: true,
 		Default:   encodeMsSetting(DefaultChannelTimeoutSetting),
 		Validate: func(raw json.RawMessage) error {

@@ -425,6 +425,36 @@ SELECT
     c.last_test_latency_ms,
     c.last_test_error,
     c.credential_valid,
+    (
+        SELECT ccm.multiplier
+        FROM channel_cost_multipliers ccm
+        WHERE ccm.channel_id = c.id
+          AND ccm.model_id IS NULL
+          AND ccm.status = 'enabled'
+          AND ccm.effective_from <= now()
+          AND (ccm.effective_to IS NULL OR ccm.effective_to > now())
+        ORDER BY ccm.effective_from DESC, ccm.id DESC
+        LIMIT 1
+    ) AS cost_multiplier,
+    (
+        SELECT COUNT(*)::bigint
+        FROM channel_cost_multipliers ccm
+        WHERE ccm.channel_id = c.id
+          AND ccm.model_id IS NOT NULL
+          AND ccm.status = 'enabled'
+          AND ccm.effective_from <= now()
+          AND (ccm.effective_to IS NULL OR ccm.effective_to > now())
+    ) AS cost_multiplier_overrides,
+    (
+        SELECT crf.factor
+        FROM channel_recharge_factors crf
+        WHERE crf.channel_id = c.id
+          AND crf.status = 'enabled'
+          AND crf.effective_from <= now()
+          AND (crf.effective_to IS NULL OR crf.effective_to > now())
+        ORDER BY crf.effective_from DESC, crf.id DESC
+        LIMIT 1
+    ) AS recharge_factor,
     pr.name AS provider_name,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
@@ -472,6 +502,8 @@ ORDER BY
   CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'status' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.status END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'status' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.status END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'credential_valid' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.credential_valid END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'credential_valid' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.credential_valid END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.created_at END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.created_at END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'latency' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0) END DESC NULLS LAST,

@@ -4,7 +4,7 @@
 // 验证「连得上 + 凭据有效 + 模型可用」；成功记录延迟，失败把上游错误翻译成可读原因（凭据无效 /
 // 模型不可用 / 超时 / 连不上 / 限流 …）。它复用与网关完全一致的 adapter/HTTP 链路，故结果=真实行为。
 //
-// 探测超时取自运行时配置 admin_backend.channel_test_probe_timeout_ms，与用户请求的
+// 探测超时取自运行时配置 admin_backend.channel_test，与用户请求的
 // channels.timeout_ms / gateway.default_channel_timeout_ms 完全正交——检测专用、互不影响。
 //
 // 阶段一只报告不摘除：检测结果只落「最近一次检测」四列，绝不改渠道启停状态；与被动熔断/cooldown 正交。

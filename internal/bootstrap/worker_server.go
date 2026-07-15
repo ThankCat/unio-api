@@ -80,30 +80,31 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 		deps.Logger.Info("model catalog sync worker enabled", "interval", deps.Config.ModelCatalogSync.Interval.String())
 	}
 
-	if deps.Config.ChannelTestWorker.Enabled {
-		// 渠道自动检测复用与网关一致的 adapter/HTTP 探测链路（不走计费/请求记录），
-		// 故 worker-server 需自建一份 adapter registry 供 channeltest 使用。
-		adapterRegistry, err := NewAdapterRegistry(http.DefaultClient, deps.Logger)
-		if err != nil {
-			return nil, err
-		}
-		// 探测超时走运行时配置（与 admin 手动检测同一 key）。worker 无 Redis 时退化为 DB + 本地缓存。
-		settingsStore := appsettings.NewSettingsStore(
-			queries, nil, deps.Config.Redis.KeyNamespace, appsettings.DefaultRegistry(), deps.Logger,
-		)
-		_ = settingsStore.SeedDefaults(ctx)
-		channelTestService := channeltest.NewService(queries, adapterRegistry, settingsStore)
-		units = append(units, workers.NewChannelTestWorker(
-			queries,
-			workerChannelTester{svc: channelTestService},
-			deps.Logger,
-			deps.Config.ChannelTestWorker.Interval,
-			deps.Config.ChannelTestWorker.LogRetentionPerChannel,
-		))
-		deps.Logger.Info("channel test worker enabled",
-			"interval", deps.Config.ChannelTestWorker.Interval.String(),
-			"log_retention_per_channel", deps.Config.ChannelTestWorker.LogRetentionPerChannel)
+	// 渠道自动检测复用与网关一致的 adapter/HTTP 探测链路（不走计费/请求记录），
+	// 故 worker-server 需自建一份 adapter registry 供 channeltest 使用。
+	// 开关 / 间隔 / 保留 / 探测超时均走运行时配置（系统设置 → 运营判定），始终注册 worker，
+	// 由 RunOnce 现读 enabled 决定是否巡检（可热关停，无需重启）。
+	adapterRegistry, err := NewAdapterRegistry(http.DefaultClient, deps.Logger)
+	if err != nil {
+		return nil, err
 	}
+	settingsStore := appsettings.NewSettingsStore(
+		queries, nil, deps.Config.Redis.KeyNamespace, appsettings.DefaultRegistry(), deps.Logger,
+	)
+	_ = settingsStore.SeedDefaults(ctx)
+	channelTestService := channeltest.NewService(queries, adapterRegistry, settingsStore)
+	units = append(units, workers.NewChannelTestWorker(
+		queries,
+		workerChannelTester{svc: channelTestService},
+		settingsStore,
+		deps.Logger,
+	))
+	channelTestCfg := appsettings.AdminBackendChannelTest(ctx, settingsStore)
+	deps.Logger.Info("channel test worker registered",
+		"enabled", channelTestCfg.Enabled,
+		"interval", channelTestCfg.Interval.String(),
+		"log_retention_per_channel", channelTestCfg.LogRetentionPerChannel,
+	)
 
 	runner := workers.NewRunner(
 		deps.Logger,

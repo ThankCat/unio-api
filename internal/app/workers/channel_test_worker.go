@@ -7,6 +7,7 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/platform/failure"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/service/appsettings"
 )
 
 // ChannelTestStore 定义渠道自动检测 worker 所需的存储能力。
@@ -27,22 +28,29 @@ type ChannelCredentialTester interface {
 // 检测通过自动恢复），并按保留策略清理每渠道的检测日志。
 //
 // 调度：以「轮」为单位，每 interval 起一轮；一轮内把所有渠道排进队列，之后每次 RunOnce 只处理队首
-// 一个渠道——避免单次 RunOnce 因慢探测（最长 ~15s）长时间阻塞 runner 上的其它 worker（结算补偿等）。
+// 一个渠道——避免单次 RunOnce 因慢探测长时间阻塞 runner 上的其它 worker（结算补偿等）。
 // 进程内游标，重启后自然从下一轮重新开始（检测是幂等遥测，无需持久进度）。
+//
+// 开关 / 间隔 / 日志保留均取自运行时配置 admin_backend.channel_test（系统设置 → 运营判定），
+// 每轮现读，约 3s 内热生效；settings 为 nil 时走注册表默认。
 type ChannelTestWorker struct {
-	store     ChannelTestStore
-	tester    ChannelCredentialTester
-	logger    *slog.Logger
-	interval  time.Duration
-	retention int32
-	now       func() time.Time
+	store    ChannelTestStore
+	tester   ChannelCredentialTester
+	settings *appsettings.SettingsStore
+	logger   *slog.Logger
+	now      func() time.Time
 
 	nextCycleAt time.Time
 	queue       []int64
 }
 
-// NewChannelTestWorker 创建渠道自动检测 worker。interval<=0 兜底 30m；retention<=0 兜底 200。
-func NewChannelTestWorker(store ChannelTestStore, tester ChannelCredentialTester, logger *slog.Logger, interval time.Duration, retention int) *ChannelTestWorker {
+// NewChannelTestWorker 创建渠道自动检测 worker。settings 可为 nil（单测走默认）。
+func NewChannelTestWorker(
+	store ChannelTestStore,
+	tester ChannelCredentialTester,
+	settings *appsettings.SettingsStore,
+	logger *slog.Logger,
+) *ChannelTestWorker {
 	if store == nil {
 		panic("workers: channel test store is required")
 	}
@@ -52,20 +60,13 @@ func NewChannelTestWorker(store ChannelTestStore, tester ChannelCredentialTester
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if interval <= 0 {
-		interval = 30 * time.Minute
-	}
-	if retention <= 0 {
-		retention = 200
-	}
 
 	return &ChannelTestWorker{
-		store:     store,
-		tester:    tester,
-		logger:    logger,
-		interval:  interval,
-		retention: int32(retention),
-		now:       time.Now,
+		store:    store,
+		tester:   tester,
+		settings: settings,
+		logger:   logger,
+		now:      time.Now,
 	}
 }
 
@@ -74,8 +75,16 @@ func (w *ChannelTestWorker) Name() string {
 	return "channel_test"
 }
 
-// RunOnce 处理当前巡检轮的一个渠道；队列空且未到下一轮时空转。
+// RunOnce 处理当前巡检轮的一个渠道；关闭或队列空且未到下一轮时空转。
 func (w *ChannelTestWorker) RunOnce(ctx context.Context) (bool, error) {
+	cfg := appsettings.AdminBackendChannelTest(ctx, w.settings)
+	if !cfg.Enabled {
+		// 关闭：丢弃进行中队列，并把 nextCycleAt 置为现在——重新开启后立刻起一轮。
+		w.queue = nil
+		w.nextCycleAt = w.now()
+		return false, nil
+	}
+
 	if len(w.queue) == 0 {
 		now := w.now()
 		if now.Before(w.nextCycleAt) {
@@ -86,7 +95,7 @@ func (w *ChannelTestWorker) RunOnce(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		w.nextCycleAt = now.Add(w.interval)
+		w.nextCycleAt = now.Add(cfg.Interval)
 		if len(channels) == 0 {
 			return false, nil
 		}
@@ -107,7 +116,7 @@ func (w *ChannelTestWorker) RunOnce(ctx context.Context) (bool, error) {
 
 	if _, err := w.store.DeleteChannelTestLogsBeyondPerChannel(ctx, sqlc.DeleteChannelTestLogsBeyondPerChannelParams{
 		ChannelID: channelID,
-		Keep:      w.retention,
+		Keep:      int32(cfg.LogRetentionPerChannel),
 	}); err != nil {
 		w.logger.Warn("prune channel test logs failed", "worker", w.Name(), "channel_id", channelID, "error", err.Error())
 	}

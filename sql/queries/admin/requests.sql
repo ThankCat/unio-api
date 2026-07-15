@@ -81,6 +81,8 @@ SELECT
     -- 倍率取结算当时的快照（price_snapshots.price_ratio），历史无快照行为 NULL，展示端回落「—」；
     -- 不再实时读 rt.price_ratio，避免管理员改倍率污染历史请求的倍率与倒推基准价展示。
     ps.price_ratio AS route_price_ratio,
+    -- 售价侧长上下文是否已应用（费用列标识）；无 price 快照时回落成本侧标记。
+    COALESCE(ps.long_context_applied, cs.long_context_applied, false) AS long_context_applied,
     rt.mode AS route_mode,
     m.display_name AS model_display_name,
     m.owned_by AS model_owned_by,

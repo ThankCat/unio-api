@@ -26,6 +26,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/httpmw"
 	"github.com/ThankCat/unio-api/internal/platform/httpx"
+	"github.com/ThankCat/unio-api/internal/service/admin/gatewayruntime"
 )
 
 // RouterDeps 保存构建 admin HTTP router 所需的外部依赖（扁平聚合，按模块分派到各子包 Register）。
@@ -83,6 +84,9 @@ type RouterDeps struct {
 
 	// Provider 全局设置（可编辑）：起步 Anthropic beta 转发策略（app_settings）。
 	ProviderSettingsService system.ProviderSettingsService
+
+	// BreakerClient 可选：渠道列表挂载 gateway 熔断快照。
+	BreakerClient *gatewayruntime.Client
 
 	// 系统配置只读面板（进程级 env 生效值，脱敏）。
 	GatewayConfig config.GatewayConfig
@@ -142,6 +146,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 			PriceService:          deps.ChannelPriceService,
 			CostMultiplierService: deps.ChannelCostMultiplierService,
 			RechargeFactorService: deps.ChannelRechargeFactorService,
+			BreakerClient:         deps.BreakerClient,
 		})
 		model.Register(r, model.Deps{
 			Service:        deps.ModelService,

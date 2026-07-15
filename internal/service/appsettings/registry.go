@@ -82,7 +82,7 @@ func DefaultRegistry() *Registry {
 		failureCooldownDefinition(),
 		concurrencyDefaultsDefinition(),
 		channelHealthThresholdsDefinition(),
-		channelTestProbeTimeoutDefinition(),
+		channelTestDefinition(),
 		dashboardThresholdsDefinition(),
 	)
 }

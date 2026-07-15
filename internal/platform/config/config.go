@@ -13,38 +13,22 @@ import (
 
 // Config 保存服务启动所需的全部配置。
 //
-// 注意:限流全局默认、渠道熔断、流式 idle 超时、渠道 429 冷却、凭据 401 阈值、默认渠道超时
-// 已迁移为运行时配置(app_settings,admin 后台可改、免重启生效),不再从 env 读取——
-// 见 internal/service/appsettings 与 docs/production/DESIGN-env-to-runtime-settings-migration.md。
+// 注意:限流全局默认、渠道熔断、流式 idle 超时、渠道 429 冷却、凭据 401 阈值、默认渠道超时、
+// 渠道自动巡检(开关/间隔/日志保留/探测超时)已迁移为运行时配置(app_settings,admin 后台可改、
+// 免重启生效),不再从 env 读取——见 internal/service/appsettings 与
+// docs/production/DESIGN-env-to-runtime-settings-migration.md。
 type Config struct {
-	HTTP              HTTPConfig
-	Log               LogConfig
-	DB                DBConfig
-	Redis             RedisConfig
-	Worker            WorkerConfig
-	Tracing           TracingConfig
-	ModelCatalogSync  ModelCatalogSyncConfig
-	ChannelTestWorker ChannelTestWorkerConfig
-	Gateway           GatewayConfig
-	Admin             AdminConfig
-	Console           ConsoleConfig
-	TokenEstimate     TokenEstimateConfig
-}
-
-// ChannelTestWorkerConfig 保存渠道自动检测 worker（阶段二）的配置。
-//
-// worker 周期性对所有启用渠道发一个最小合成 "hi" 探测，验证「连得上 + 凭据有效 + 模型可用」，
-// 据此翻 channels.credential_valid（凭据失效自动摘除、检测通过自动恢复）并按 R1(b) 落检测日志。
-// 探测复用 gateway 的 adapter 链路但不走计费/请求记录，故不污染统计、不给客户计费。
-// 探测超时已迁移为运行时配置 admin_backend.channel_test_probe_timeout_ms（系统设置），不在此结构。
-type ChannelTestWorkerConfig struct {
-	// Enabled 来自 CHANNEL_TEST_WORKER_ENABLED（默认 true）。
-	Enabled bool
-	// Interval 来自 CHANNEL_TEST_WORKER_INTERVAL（默认 30m）：巡检间隔。
-	Interval time.Duration
-	// LogRetentionPerChannel 来自 CHANNEL_TEST_LOG_RETENTION_PER_CHANNEL（默认 200，须 > 0）：
-	// 每渠道 channel_test_logs 保留最近 N 条，worker 每轮末尾清理更旧的。
-	LogRetentionPerChannel int
+	HTTP             HTTPConfig
+	Log              LogConfig
+	DB               DBConfig
+	Redis            RedisConfig
+	Worker           WorkerConfig
+	Tracing          TracingConfig
+	ModelCatalogSync ModelCatalogSyncConfig
+	Gateway          GatewayConfig
+	Admin            AdminConfig
+	Console          ConsoleConfig
+	TokenEstimate    TokenEstimateConfig
 }
 
 // TokenEstimateConfig 保存输入 token 估算的媒体处理配置（对齐 new-api GetMediaToken 系列）。
@@ -67,6 +51,14 @@ type TokenEstimateConfig struct {
 type GatewayConfig struct {
 	// HTTPAddr 来自 GATEWAY_HTTP_ADDR；gateway-server 的监听地址。
 	HTTPAddr string
+
+	// InternalToken 来自 GATEWAY_INTERNAL_TOKEN；非空时挂载 /internal/v1/* 只读运维端点。
+	// admin-server 用同一 token 拉取熔断快照；空表示关闭内部端点。
+	InternalToken string
+
+	// InstanceID 来自 GATEWAY_INSTANCE_ID；写入熔断快照的 instance 字段，便于多实例区分。
+	// 空则内部 handler 回退为 hostname。
+	InstanceID string
 
 	// MaxOutputTokensFallback 来自 AUTHORIZATION_MAX_OUTPUT_TOKENS_FALLBACK（默认 4096）。
 	// 客户未显式给出输出上限、且候选模型 models.max_output_tokens 也未配置(NULL)时，
@@ -92,6 +84,12 @@ type AdminConfig struct {
 	// APIToken 来自 ADMIN_API_TOKEN；单管理员极简版的静态访问 token。
 	// 空值表示未配置，运行 admin-server 时启动期失败。
 	APIToken string
+
+	// GatewayInternalURLs 来自 GATEWAY_INTERNAL_URLS（逗号分隔）；admin 拉取熔断快照的 gateway 基址列表。
+	// 空且 InternalToken 非空时，若 GATEWAY_HTTP_ADDR 形如 ":port" 则默认 http://127.0.0.1:port。
+	GatewayInternalURLs []string
+	// GatewayInternalToken 来自 GATEWAY_INTERNAL_TOKEN（与 gateway 共用）；空则不拉取熔断快照。
+	GatewayInternalToken string
 }
 
 // ConsoleConfig 保存 console-server 进程级配置。
@@ -395,24 +393,6 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	channelTestWorkerEnabled, err := getEnvBool("CHANNEL_TEST_WORKER_ENABLED", true)
-	if err != nil {
-		return Config{}, err
-	}
-
-	channelTestWorkerInterval, err := getEnvDuration("CHANNEL_TEST_WORKER_INTERVAL", 30*time.Minute)
-	if err != nil {
-		return Config{}, err
-	}
-
-	channelTestLogRetentionPerChannel, err := getEnvInt("CHANNEL_TEST_LOG_RETENTION_PER_CHANNEL", 200)
-	if err != nil {
-		return Config{}, err
-	}
-	if channelTestLogRetentionPerChannel <= 0 {
-		return Config{}, failure.New(failure.CodeConfigInvalid, failure.WithMessage("CHANNEL_TEST_LOG_RETENTION_PER_CHANNEL must be > 0"))
-	}
-
 	tracingEnabled, err := getEnvBool("OTEL_TRACING_ENABLED", false)
 	if err != nil {
 		return Config{}, err
@@ -541,11 +521,6 @@ func Load() (Config, error) {
 			HTTPTimeout:      modelCatalogSyncHTTPTimeout,
 			MaxResponseBytes: int64(modelCatalogSyncMaxResponseBytes),
 		},
-		ChannelTestWorker: ChannelTestWorkerConfig{
-			Enabled:                channelTestWorkerEnabled,
-			Interval:               channelTestWorkerInterval,
-			LogRetentionPerChannel: channelTestLogRetentionPerChannel,
-		},
 		Tracing: TracingConfig{
 			Enabled:     tracingEnabled,
 			Endpoint:    getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
@@ -555,13 +530,17 @@ func Load() (Config, error) {
 		},
 		Gateway: GatewayConfig{
 			HTTPAddr:                     getEnv("GATEWAY_HTTP_ADDR", ":8520"),
+			InternalToken:                getEnv("GATEWAY_INTERNAL_TOKEN", ""),
+			InstanceID:                   getEnv("GATEWAY_INSTANCE_ID", ""),
 			MaxOutputTokensFallback:      authorizationMaxOutputTokensFallback,
 			PartialAssumedCacheReadRatio: partialAssumedCacheReadRatio,
 			MaxUpstreamResponseBytes:     int64(gatewayMaxUpstreamResponseMB) << 20,
 		},
 		Admin: AdminConfig{
-			HTTPAddr: getEnv("ADMIN_HTTP_ADDR", ":8521"),
-			APIToken: getEnv("ADMIN_API_TOKEN", ""),
+			HTTPAddr:             getEnv("ADMIN_HTTP_ADDR", ":8521"),
+			APIToken:             getEnv("ADMIN_API_TOKEN", ""),
+			GatewayInternalURLs:  resolveGatewayInternalURLs(),
+			GatewayInternalToken: getEnv("GATEWAY_INTERNAL_TOKEN", ""),
 		},
 		Console: ConsoleConfig{
 			HTTPAddr: getEnv("CONSOLE_HTTP_ADDR", ":8522"),
@@ -582,6 +561,32 @@ func getEnv(key string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// resolveGatewayInternalURLs 解析 admin 拉取 gateway 熔断快照的基址列表。
+// 优先 GATEWAY_INTERNAL_URLS（逗号分隔）；若为空且已配置 GATEWAY_INTERNAL_TOKEN，
+// 且 GATEWAY_HTTP_ADDR 为 ":port" 形式，则默认本机 http://127.0.0.1:port（单机开发友好）。
+func resolveGatewayInternalURLs() []string {
+	raw := strings.TrimSpace(os.Getenv("GATEWAY_INTERNAL_URLS"))
+	if raw != "" {
+		parts := strings.Split(raw, ",")
+		out := make([]string, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				out = append(out, strings.TrimRight(p, "/"))
+			}
+		}
+		return out
+	}
+	if strings.TrimSpace(os.Getenv("GATEWAY_INTERNAL_TOKEN")) == "" {
+		return nil
+	}
+	addr := getEnv("GATEWAY_HTTP_ADDR", ":8520")
+	if strings.HasPrefix(addr, ":") {
+		return []string{"http://127.0.0.1" + addr}
+	}
+	return nil
 }
 
 // getEnvInt 读取整数配置；格式错误时让启动流程尽早失败。

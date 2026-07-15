@@ -8,6 +8,8 @@ import (
 	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
 
 	"github.com/ThankCat/unio-api/internal/service/admin/channelops"
+	"github.com/ThankCat/unio-api/internal/service/admin/gatewayruntime"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 )
 
 // ChannelOpsService 定义渠道作战台（§3.3）只读运维聚合所需能力。
@@ -22,37 +24,66 @@ type ChannelOpsService interface {
 
 type channelOpsHandler struct {
 	service ChannelOpsService
+	// breaker 可选：从 gateway 拉取进程内熔断快照并挂到列表行；nil 则不填充。
+	breaker *gatewayruntime.Client
 }
 
 type channelOpsRowDTO struct {
-	ID                int64                     `json:"id"`
-	Name              string                    `json:"name"`
-	Status            string                    `json:"status"`
-	CreatedAt         string                    `json:"created_at"`
-	Protocol          string                    `json:"protocol"`
-	AdapterKey        string                    `json:"adapter_key"`
-	BaseURL           string                    `json:"base_url"`
-	Priority          int32                     `json:"priority"`
-	TimeoutMs         *int32                    `json:"timeout_ms"`
-	ProviderName      string                    `json:"provider_name"`
-	Credential        string                    `json:"credential"`
-	AttemptTotal      int64                     `json:"attempt_total"`
-	AttemptSucceeded  int64                     `json:"attempt_succeeded"`
-	SuccessRate       float64                   `json:"success_rate"`
-	TimeoutTotal      int64                     `json:"timeout_total"`
-	Latency           adminhttp.LatencyStatsDTO `json:"latency"`
-	Health            string                    `json:"health"`
-	BoundModels       int64                     `json:"bound_models"`
-	BoundRoutes       int64                     `json:"bound_routes"`
-	RecentErrorCode   string                    `json:"recent_error_code"`
-	RpmLimit          *int32                    `json:"rpm_limit"`
-	TpmLimit          *int32                    `json:"tpm_limit"`
-	RpdLimit          *int32                    `json:"rpd_limit"`
-	LastTestedAt      *string                   `json:"last_tested_at"`
-	LastTestOK        *bool                     `json:"last_test_ok"`
-	LastTestLatencyMs *int32                    `json:"last_test_latency_ms"`
-	LastTestError     string                    `json:"last_test_error"`
-	CredentialValid   bool                      `json:"credential_valid"`
+	ID                      int64                     `json:"id"`
+	Name                    string                    `json:"name"`
+	Status                  string                    `json:"status"`
+	CreatedAt               string                    `json:"created_at"`
+	Protocol                string                    `json:"protocol"`
+	AdapterKey              string                    `json:"adapter_key"`
+	BaseURL                 string                    `json:"base_url"`
+	Priority                int32                     `json:"priority"`
+	TimeoutMs               *int32                    `json:"timeout_ms"`
+	ProviderName            string                    `json:"provider_name"`
+	Credential              string                    `json:"credential"`
+	AttemptTotal            int64                     `json:"attempt_total"`
+	AttemptSucceeded        int64                     `json:"attempt_succeeded"`
+	SuccessRate             float64                   `json:"success_rate"`
+	TimeoutTotal            int64                     `json:"timeout_total"`
+	Latency                 adminhttp.LatencyStatsDTO `json:"latency"`
+	Health                  string                    `json:"health"`
+	BoundModels             int64                     `json:"bound_models"`
+	BoundRoutes             int64                     `json:"bound_routes"`
+	RecentErrorCode         string                    `json:"recent_error_code"`
+	RpmLimit                *int32                    `json:"rpm_limit"`
+	TpmLimit                *int32                    `json:"tpm_limit"`
+	RpdLimit                *int32                    `json:"rpd_limit"`
+	LastTestedAt            *string                   `json:"last_tested_at"`
+	LastTestOK              *bool                     `json:"last_test_ok"`
+	LastTestLatencyMs       *int32                    `json:"last_test_latency_ms"`
+	LastTestError           string                    `json:"last_test_error"`
+	CredentialValid         bool                      `json:"credential_valid"`
+	CostMultiplier          *string                   `json:"cost_multiplier"`
+	CostMultiplierOverrides int64                     `json:"cost_multiplier_overrides"`
+	RechargeFactor          *string                   `json:"recharge_factor"`
+	// CircuitBreaker 仅在 gateway 报告 open/half_open 时非空（列表名前列徽章）。
+	CircuitBreaker *channelCircuitBreakerDTO `json:"circuit_breaker,omitempty"`
+}
+
+type channelCircuitBreakerDTO struct {
+	State            string                             `json:"state"`
+	Failures         int                                `json:"failures"`
+	Successes        int                                `json:"successes"`
+	WindowStart      *string                            `json:"window_start,omitempty"`
+	OpenedAt         *string                            `json:"opened_at,omitempty"`
+	OpenRemainingMs  *int64                             `json:"open_remaining_ms,omitempty"`
+	HalfOpenInFlight bool                               `json:"half_open_in_flight"`
+	HealthScore      float64                            `json:"health_score"`
+	ObservedAt       string                             `json:"observed_at"`
+	Instances        []channelCircuitBreakerInstanceDTO `json:"instances,omitempty"`
+}
+
+type channelCircuitBreakerInstanceDTO struct {
+	ID               string `json:"id"`
+	State            string `json:"state"`
+	OpenRemainingMs  *int64 `json:"open_remaining_ms,omitempty"`
+	HalfOpenInFlight bool   `json:"half_open_in_flight"`
+	Failures         int    `json:"failures"`
+	Successes        int    `json:"successes"`
 }
 
 type channelOpsDetailDTO struct {
@@ -116,14 +147,15 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sort, err := adminhttp.ParseListSort(r, map[string]struct{}{
-		"name":         {},
-		"requests":     {},
-		"success_rate": {},
-		"latency":      {},
-		"timeout":      {},
-		"bound_models": {},
-		"status":       {},
-		"created_at":   {},
+		"name":             {},
+		"requests":         {},
+		"success_rate":     {},
+		"latency":          {},
+		"timeout":          {},
+		"bound_models":     {},
+		"status":           {},
+		"credential_valid": {},
+		"created_at":       {},
 	}, "success_rate", false)
 	if err != nil {
 		adminhttp.WriteSortError(w, err)
@@ -145,40 +177,82 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
+	breakerByID := map[int64]gatewayruntime.ChannelStatus{}
+	if h.breaker != nil {
+		breakerByID = h.breaker.Statuses(r.Context())
+	}
 	dtos := make([]channelOpsRowDTO, 0, len(rows))
 	for _, row := range rows {
-		dtos = append(dtos, channelOpsRowDTO{
-			ID:                row.ID,
-			Name:              row.Name,
-			Status:            row.Status,
-			CreatedAt:         adminhttp.RFC3339(row.CreatedAt),
-			Protocol:          row.Protocol,
-			AdapterKey:        row.AdapterKey,
-			BaseURL:           row.BaseURL,
-			Priority:          row.Priority,
-			TimeoutMs:         row.TimeoutMs,
-			ProviderName:      row.ProviderName,
-			Credential:        row.Credential,
-			AttemptTotal:      row.AttemptTotal,
-			AttemptSucceeded:  row.AttemptSucceeded,
-			SuccessRate:       row.SuccessRate,
-			TimeoutTotal:      row.TimeoutTotal,
-			Latency:           adminhttp.LatencyStatsFrom(row.Latency),
-			Health:            row.HealthBucket,
-			BoundModels:       row.BoundModels,
-			BoundRoutes:       row.BoundRoutes,
-			RecentErrorCode:   row.RecentErrorCode,
-			RpmLimit:          row.RpmLimit,
-			TpmLimit:          row.TpmLimit,
-			RpdLimit:          row.RpdLimit,
-			LastTestedAt:      adminhttp.RFC3339Ptr(row.LastTestedAt),
-			LastTestOK:        row.LastTestOK,
-			LastTestLatencyMs: row.LastTestLatencyMs,
-			LastTestError:     row.LastTestError,
-			CredentialValid:   row.CredentialValid,
-		})
+		dto := channelOpsRowDTO{
+			ID:                      row.ID,
+			Name:                    row.Name,
+			Status:                  row.Status,
+			CreatedAt:               adminhttp.RFC3339(row.CreatedAt),
+			Protocol:                row.Protocol,
+			AdapterKey:              row.AdapterKey,
+			BaseURL:                 row.BaseURL,
+			Priority:                row.Priority,
+			TimeoutMs:               row.TimeoutMs,
+			ProviderName:            row.ProviderName,
+			Credential:              row.Credential,
+			AttemptTotal:            row.AttemptTotal,
+			AttemptSucceeded:        row.AttemptSucceeded,
+			SuccessRate:             row.SuccessRate,
+			TimeoutTotal:            row.TimeoutTotal,
+			Latency:                 adminhttp.LatencyStatsFrom(row.Latency),
+			Health:                  row.HealthBucket,
+			BoundModels:             row.BoundModels,
+			BoundRoutes:             row.BoundRoutes,
+			RecentErrorCode:         row.RecentErrorCode,
+			RpmLimit:                row.RpmLimit,
+			TpmLimit:                row.TpmLimit,
+			RpdLimit:                row.RpdLimit,
+			LastTestedAt:            adminhttp.RFC3339Ptr(row.LastTestedAt),
+			LastTestOK:              row.LastTestOK,
+			LastTestLatencyMs:       row.LastTestLatencyMs,
+			LastTestError:           row.LastTestError,
+			CredentialValid:         row.CredentialValid,
+			CostMultiplier:          row.CostMultiplier,
+			CostMultiplierOverrides: row.CostMultiplierOverrides,
+			RechargeFactor:          row.RechargeFactor,
+		}
+		if st, ok := breakerByID[row.ID]; ok {
+			dto.CircuitBreaker = toCircuitBreakerDTO(st)
+		}
+		dtos = append(dtos, dto)
 	}
 	adminhttp.WriteList(w, http.StatusOK, dtos, page, total)
+}
+
+func toCircuitBreakerDTO(st gatewayruntime.ChannelStatus) *channelCircuitBreakerDTO {
+	dto := &channelCircuitBreakerDTO{
+		State:            string(st.State),
+		Failures:         st.Failures,
+		Successes:        st.Successes,
+		WindowStart:      adminhttp.RFC3339Ptr(st.WindowStart),
+		OpenedAt:         adminhttp.RFC3339Ptr(st.OpenedAt),
+		OpenRemainingMs:  st.OpenRemainingMs,
+		HalfOpenInFlight: st.HalfOpenInFlight,
+		HealthScore:      st.HealthScore,
+		ObservedAt:       adminhttp.RFC3339(st.ObservedAt),
+	}
+	if st.State == "" {
+		dto.State = string(lifecycle.CircuitStateClosed)
+	}
+	if len(st.Instances) > 0 {
+		dto.Instances = make([]channelCircuitBreakerInstanceDTO, 0, len(st.Instances))
+		for _, inst := range st.Instances {
+			dto.Instances = append(dto.Instances, channelCircuitBreakerInstanceDTO{
+				ID:               inst.ID,
+				State:            string(inst.State),
+				OpenRemainingMs:  inst.OpenRemainingMs,
+				HalfOpenInFlight: inst.HalfOpenInFlight,
+				Failures:         inst.Failures,
+				Successes:        inst.Successes,
+			})
+		}
+	}
+	return dto
 }
 
 func (h *channelOpsHandler) detail(w http.ResponseWriter, r *http.Request) {

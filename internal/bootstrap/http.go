@@ -10,10 +10,12 @@ import (
 	gatewayresponses "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-api/internal/core/auth"
 	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
+	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-api/internal/service/appsettings"
+	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -31,6 +33,8 @@ func NewHTTPHandler(
 	responsesService gatewayresponses.ResponsesService,
 	messagesService gatewayanthropic.MessagesService,
 	metricsRecorder *metrics.Metrics,
+	channelBreaker *lifecycle.ChannelCircuitBreaker,
+	gatewayCfg config.GatewayConfig,
 ) http.Handler {
 	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
 	modelCatalogService := modelcatalog.NewService(queries)
@@ -45,6 +49,10 @@ func NewHTTPHandler(
 		ResponsesService:      responsesService,
 		MessagesService:       messagesService,
 		ModelCatalogService:   modelCatalogService,
+
+		CircuitBreaker: channelBreaker,
+		InternalToken:  gatewayCfg.InternalToken,
+		InstanceID:     gatewayCfg.InstanceID,
 	}
 
 	if metricsRecorder != nil {

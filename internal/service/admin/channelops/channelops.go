@@ -77,6 +77,12 @@ type Row struct {
 	LastTestLatencyMs *int32
 	LastTestError     string
 	CredentialValid   bool
+	// 当前生效的渠道默认价格倍率（model_id=null）；nil=未配置。
+	CostMultiplier *string
+	// 当前生效的逐模型价格倍率覆盖条数。
+	CostMultiplierOverrides int64
+	// 当前生效的充值倍率；nil=未配置（结算按 1.0）。
+	RechargeFactor *string
 }
 
 // Detail 是抽屉概览 attempt 指标。
@@ -192,18 +198,21 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 				r.LatencySample, r.AttemptSucceeded,
 			),
-			HealthBucket:      opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal, th.HealthyRate, th.DegradedRate),
-			BoundModels:       r.BoundModels,
-			BoundRoutes:       r.BoundRoutes,
-			RecentErrorCode:   textValue(r.RecentErrorCode),
-			RpmLimit:          int4Value(r.RpmLimit),
-			TpmLimit:          int4Value(r.TpmLimit),
-			RpdLimit:          int4Value(r.RpdLimit),
-			LastTestedAt:      timeValue(r.LastTestedAt),
-			LastTestOK:        boolValue(r.LastTestOk),
-			LastTestLatencyMs: int4Value(r.LastTestLatencyMs),
-			LastTestError:     textValue(r.LastTestError),
-			CredentialValid:   r.CredentialValid,
+			HealthBucket:            opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal, th.HealthyRate, th.DegradedRate),
+			BoundModels:             r.BoundModels,
+			BoundRoutes:             r.BoundRoutes,
+			RecentErrorCode:         textValue(r.RecentErrorCode),
+			RpmLimit:                int4Value(r.RpmLimit),
+			TpmLimit:                int4Value(r.TpmLimit),
+			RpdLimit:                int4Value(r.RpdLimit),
+			LastTestedAt:            timeValue(r.LastTestedAt),
+			LastTestOK:              boolValue(r.LastTestOk),
+			LastTestLatencyMs:       int4Value(r.LastTestLatencyMs),
+			LastTestError:           textValue(r.LastTestError),
+			CredentialValid:         r.CredentialValid,
+			CostMultiplier:          opsutil.NumericStringPtr(r.CostMultiplier),
+			CostMultiplierOverrides: r.CostMultiplierOverrides,
+			RechargeFactor:          opsutil.NumericStringPtr(r.RechargeFactor),
 		}
 		if r.AttemptTotal > 0 {
 			row.SuccessRate = float64(r.AttemptSucceeded) / float64(r.AttemptTotal)

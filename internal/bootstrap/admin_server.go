@@ -26,6 +26,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/service/admin/customer"
 	"github.com/ThankCat/unio-api/internal/service/admin/customerops"
 	"github.com/ThankCat/unio-api/internal/service/admin/dashboard"
+	"github.com/ThankCat/unio-api/internal/service/admin/gatewayruntime"
 	"github.com/ThankCat/unio-api/internal/service/admin/model"
 	modelcatalogadmin "github.com/ThankCat/unio-api/internal/service/admin/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/service/admin/modelops"
@@ -115,9 +116,14 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	providerOpsService := providerops.NewService(queries, settingsStore)
 	channelService := channel.NewService(queries, adapterRegistry)
 	// 渠道检测复用 gateway adapter registry（同一份 adapter/HTTP 链路，检测结果=真实行为）。
-	// 探测超时取自运行时配置 admin_backend.channel_test_probe_timeout_ms（与用户请求渠道超时正交）。
+	// 探测超时取自运行时配置 admin_backend.channel_test（与用户请求渠道超时正交）。
 	channelTestService := channeltest.NewService(queries, adapterRegistry, settingsStore)
 	channelOpsService := channelops.NewService(queries, settingsStore)
+	breakerClient := gatewayruntime.NewClient(
+		deps.Config.Admin.GatewayInternalURLs,
+		deps.Config.Admin.GatewayInternalToken,
+		deps.Logger,
+	)
 	modelService := model.NewService(queries)
 	modelOpsService := modelops.NewService(queries)
 	channelModelService := channelmodel.NewService(queries)
@@ -172,6 +178,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		ChannelService:      channelService,
 		ChannelTestService:  channelTestService,
 		ChannelOpsService:   channelOpsService,
+		BreakerClient:       breakerClient,
 		ModelService:        modelService,
 		ModelOpsService:     modelOpsService,
 		ChannelModelService: channelModelService,
@@ -200,7 +207,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 		DashboardService: dashboardService,
 
-		RecoveryJobQueryService:   recoveryJobQueryService,
+		RecoveryJobQueryService: recoveryJobQueryService,
 		ProviderSettingsService: appsettings.NewService(settingsStore),
 
 		GatewayConfig: deps.Config.Gateway,

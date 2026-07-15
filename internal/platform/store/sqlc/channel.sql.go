@@ -436,6 +436,36 @@ SELECT
     c.last_test_latency_ms,
     c.last_test_error,
     c.credential_valid,
+    (
+        SELECT ccm.multiplier
+        FROM channel_cost_multipliers ccm
+        WHERE ccm.channel_id = c.id
+          AND ccm.model_id IS NULL
+          AND ccm.status = 'enabled'
+          AND ccm.effective_from <= now()
+          AND (ccm.effective_to IS NULL OR ccm.effective_to > now())
+        ORDER BY ccm.effective_from DESC, ccm.id DESC
+        LIMIT 1
+    ) AS cost_multiplier,
+    (
+        SELECT COUNT(*)::bigint
+        FROM channel_cost_multipliers ccm
+        WHERE ccm.channel_id = c.id
+          AND ccm.model_id IS NOT NULL
+          AND ccm.status = 'enabled'
+          AND ccm.effective_from <= now()
+          AND (ccm.effective_to IS NULL OR ccm.effective_to > now())
+    ) AS cost_multiplier_overrides,
+    (
+        SELECT crf.factor
+        FROM channel_recharge_factors crf
+        WHERE crf.channel_id = c.id
+          AND crf.status = 'enabled'
+          AND crf.effective_from <= now()
+          AND (crf.effective_to IS NULL OR crf.effective_to > now())
+        ORDER BY crf.effective_from DESC, crf.id DESC
+        LIMIT 1
+    ) AS recharge_factor,
     pr.name AS provider_name,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
@@ -483,6 +513,8 @@ ORDER BY
   CASE WHEN $6::text = 'requests' AND NOT COALESCE($7::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') END ASC NULLS LAST,
   CASE WHEN $6::text = 'status' AND COALESCE($7::bool, false) THEN c.status END DESC NULLS LAST,
   CASE WHEN $6::text = 'status' AND NOT COALESCE($7::bool, false) THEN c.status END ASC NULLS LAST,
+  CASE WHEN $6::text = 'credential_valid' AND COALESCE($7::bool, false) THEN c.credential_valid END DESC NULLS LAST,
+  CASE WHEN $6::text = 'credential_valid' AND NOT COALESCE($7::bool, false) THEN c.credential_valid END ASC NULLS LAST,
   CASE WHEN $6::text = 'created_at' AND COALESCE($7::bool, false) THEN c.created_at END DESC NULLS LAST,
   CASE WHEN $6::text = 'created_at' AND NOT COALESCE($7::bool, false) THEN c.created_at END ASC NULLS LAST,
   CASE WHEN $6::text = 'latency' AND COALESCE($7::bool, false) THEN COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0) END DESC NULLS LAST,
@@ -508,37 +540,40 @@ type ChannelsOpsTableParams struct {
 }
 
 type ChannelsOpsTableRow struct {
-	ID                int64
-	Name              string
-	Status            string
-	Protocol          string
-	AdapterKey        string
-	BaseUrl           string
-	Priority          int32
-	TimeoutMs         pgtype.Int4
-	Credential        string
-	RpmLimit          pgtype.Int4
-	TpmLimit          pgtype.Int4
-	RpdLimit          pgtype.Int4
-	CreatedAt         pgtype.Timestamptz
-	LastTestedAt      pgtype.Timestamptz
-	LastTestOk        pgtype.Bool
-	LastTestLatencyMs pgtype.Int4
-	LastTestError     pgtype.Text
-	CredentialValid   bool
-	ProviderName      string
-	AttemptTotal      int64
-	AttemptSucceeded  int64
-	TimeoutTotal      int64
-	LatencySample     int64
-	LatencyAvg        float64
-	LatencyP50        float64
-	LatencyP90        float64
-	LatencyP95        float64
-	LatencyP99        float64
-	BoundModels       int64
-	BoundRoutes       int64
-	RecentErrorCode   pgtype.Text
+	ID                      int64
+	Name                    string
+	Status                  string
+	Protocol                string
+	AdapterKey              string
+	BaseUrl                 string
+	Priority                int32
+	TimeoutMs               pgtype.Int4
+	Credential              string
+	RpmLimit                pgtype.Int4
+	TpmLimit                pgtype.Int4
+	RpdLimit                pgtype.Int4
+	CreatedAt               pgtype.Timestamptz
+	LastTestedAt            pgtype.Timestamptz
+	LastTestOk              pgtype.Bool
+	LastTestLatencyMs       pgtype.Int4
+	LastTestError           pgtype.Text
+	CredentialValid         bool
+	CostMultiplier          pgtype.Numeric
+	CostMultiplierOverrides int64
+	RechargeFactor          pgtype.Numeric
+	ProviderName            string
+	AttemptTotal            int64
+	AttemptSucceeded        int64
+	TimeoutTotal            int64
+	LatencySample           int64
+	LatencyAvg              float64
+	LatencyP50              float64
+	LatencyP90              float64
+	LatencyP95              float64
+	LatencyP99              float64
+	BoundModels             int64
+	BoundRoutes             int64
+	RecentErrorCode         pgtype.Text
 }
 
 // §3.3 渠道作战台只读运维聚合。全部只读。
@@ -584,6 +619,9 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 			&i.LastTestLatencyMs,
 			&i.LastTestError,
 			&i.CredentialValid,
+			&i.CostMultiplier,
+			&i.CostMultiplierOverrides,
+			&i.RechargeFactor,
 			&i.ProviderName,
 			&i.AttemptTotal,
 			&i.AttemptSucceeded,

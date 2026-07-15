@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	gatewayanthropic "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
+	"github.com/ThankCat/unio-api/internal/app/gatewayapi/internalapi"
 	"github.com/ThankCat/unio-api/internal/app/gatewayapi/middleware"
 	gatewaychat "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
 	gatewaymodels "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/models"
@@ -34,6 +35,13 @@ type RouterDeps struct {
 
 	// MetricsHandler 暴露 Prometheus /metrics；nil 表示不挂载该端点。
 	MetricsHandler http.Handler
+
+	// CircuitBreaker 供内部只读快照；nil 或 InternalToken 为空时不挂载 /internal 路由。
+	CircuitBreaker internalapi.CircuitBreakerSnapshotter
+	// InternalToken 来自 GATEWAY_INTERNAL_TOKEN；空表示关闭内部运维端点。
+	InternalToken string
+	// InstanceID 来自 GATEWAY_INSTANCE_ID；空则 handler 回退 hostname。
+	InstanceID string
 }
 
 // NewRouter 创建 API server 使用的 HTTP handler。
@@ -77,6 +85,14 @@ func NewRouter(deps RouterDeps) http.Handler {
 			"status": "ok",
 		})
 	})
+
+	if deps.CircuitBreaker != nil && deps.InternalToken != "" {
+		r.Method(http.MethodGet, "/internal/v1/circuit-breaker", internalapi.CircuitBreakerHandler{
+			Breaker:  deps.CircuitBreaker,
+			Token:    deps.InternalToken,
+			Instance: deps.InstanceID,
+		})
+	}
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(deps.APIKeyAuthenticator))

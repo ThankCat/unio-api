@@ -231,6 +231,8 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		responsesService,
 		messagesService,
 		metricsRecorder,
+		channelBreaker,
+		deps.Config.Gateway,
 	)
 
 	return &GatewayServerApp{

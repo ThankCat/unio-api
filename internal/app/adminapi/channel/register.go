@@ -1,6 +1,10 @@
 package channel
 
-import "github.com/go-chi/chi/v5"
+import (
+	"github.com/go-chi/chi/v5"
+
+	"github.com/ThankCat/unio-api/internal/service/admin/gatewayruntime"
+)
 
 // Deps 是渠道模块的路由依赖（渠道 CRUD/运维/检测/绑定/成本价/成本倍率/充值倍率）。
 type Deps struct {
@@ -11,13 +15,15 @@ type Deps struct {
 	PriceService          ChannelPriceService
 	CostMultiplierService ChannelCostMultiplierService
 	RechargeFactorService ChannelRechargeFactorService
+	// BreakerClient 可选：渠道列表挂载 gateway 熔断快照；nil 则不展示徽章。
+	BreakerClient *gatewayruntime.Client
 }
 
 // Register 注册渠道模块路由。静态 /channels/ops* 与 /channels/adapter-keys 均置于 /channels/{id} 之前。
 func Register(r chi.Router, d Deps) {
 	// §3.3 渠道作战台只读运维聚合：静态 /channels/ops* 必须在 /channels/{id} 之前注册。
 	if d.OpsService != nil {
-		coh := &channelOpsHandler{service: d.OpsService}
+		coh := &channelOpsHandler{service: d.OpsService, breaker: d.BreakerClient}
 		r.Get("/channels/ops", coh.table)
 		r.Get("/channels/{id}/ops/detail", coh.detail)
 		r.Get("/channels/{id}/ops/performance", coh.performance)

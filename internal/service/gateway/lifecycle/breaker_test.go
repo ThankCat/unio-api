@@ -284,3 +284,41 @@ func TestIsChannelFaultError(t *testing.T) {
 		}
 	}
 }
+
+func TestChannelCircuitBreakerSnapshotOpenRemaining(t *testing.T) {
+	b, clock := newTestBreaker(ChannelCircuitBreakerConfig{
+		Window:       time.Minute,
+		MinRequests:  2,
+		FailureRatio: 0.5,
+		OpenDuration: 10 * time.Second,
+	})
+
+	key := "14"
+	b.RecordFailure(key)
+	b.RecordFailure(key)
+	if b.Allow(key) {
+		t.Fatal("expected open")
+	}
+
+	*clock = clock.Add(4 * time.Second)
+	snap := b.Snapshot()
+	if !snap.Enabled {
+		t.Fatal("expected enabled")
+	}
+	if len(snap.Channels) != 1 {
+		t.Fatalf("expected 1 channel, got %d", len(snap.Channels))
+	}
+	ch := snap.Channels[0]
+	if ch.ChannelID != 14 || ch.State != CircuitStateOpen {
+		t.Fatalf("unexpected entry: %+v", ch)
+	}
+	if ch.OpenRemainingMs == nil || *ch.OpenRemainingMs != 6000 {
+		t.Fatalf("expected remaining 6000ms, got %v", ch.OpenRemainingMs)
+	}
+
+	// Snapshot must not advance open → half-open.
+	snap2 := b.Snapshot()
+	if snap2.Channels[0].State != CircuitStateOpen {
+		t.Fatal("snapshot must not mutate open into half-open")
+	}
+}

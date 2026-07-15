@@ -27,7 +27,7 @@ func TestAdminDomainSettingsRegistered(t *testing.T) {
 	reg := DefaultRegistry()
 	for _, key := range []string{
 		AdminBackendChannelHealthKey,
-		AdminBackendChannelTestProbeTimeoutKey,
+		AdminBackendChannelTestKey,
 		AdminFrontendDashboardThresholdsKey,
 	} {
 		def, ok := reg.Get(key)
@@ -43,15 +43,62 @@ func TestAdminDomainSettingsRegistered(t *testing.T) {
 	}
 }
 
-func TestChannelTestProbeTimeoutDefault(t *testing.T) {
-	if DefaultChannelTestProbeTimeoutSetting != 60*time.Second {
-		t.Fatalf("default probe timeout = %v, want 60s", DefaultChannelTestProbeTimeoutSetting)
+func TestChannelTestSettingsDefaults(t *testing.T) {
+	want := ChannelTestSettings{
+		Enabled:                true,
+		Interval:               30 * time.Minute,
+		ProbeTimeout:           60 * time.Second,
+		LogRetentionPerChannel: 200,
 	}
-	if got := AdminBackendChannelTestProbeTimeout(context.Background(), nil); got != DefaultChannelTestProbeTimeoutSetting {
-		t.Fatalf("nil store = %v, want default", got)
+	if got := DefaultChannelTestSettings(); got != want {
+		t.Fatalf("defaults = %+v, want %+v", got, want)
 	}
-	if !strings.HasSuffix(AdminBackendChannelTestProbeTimeoutKey, "_ms") {
-		t.Errorf("duration key %q must end with _ms", AdminBackendChannelTestProbeTimeoutKey)
+	ctx := context.Background()
+	if got := AdminBackendChannelTest(ctx, nil); got != want {
+		t.Fatalf("nil store = %+v, want %+v", got, want)
+	}
+	if got := AdminBackendChannelTestProbeTimeout(ctx, nil); got != want.ProbeTimeout {
+		t.Fatalf("probe timeout accessor = %v", got)
+	}
+	if !AdminBackendChannelTestWorkerEnabled(ctx, nil) {
+		t.Fatal("enabled accessor should be true")
+	}
+	if got := AdminBackendChannelTestWorkerInterval(ctx, nil); got != want.Interval {
+		t.Fatalf("interval accessor = %v", got)
+	}
+	if got := AdminBackendChannelTestLogRetention(ctx, nil); got != want.LogRetentionPerChannel {
+		t.Fatalf("retention accessor = %d", got)
+	}
+}
+
+func TestChannelTestSettingsRoundTrip(t *testing.T) {
+	want := ChannelTestSettings{
+		Enabled:                false,
+		Interval:               15 * time.Minute,
+		ProbeTimeout:           45 * time.Second,
+		LogRetentionPerChannel: 50,
+	}
+	got, err := DecodeChannelTestSettings(encodeChannelTestSettings(want))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got != want {
+		t.Fatalf("round trip = %+v, want %+v", got, want)
+	}
+}
+
+func TestChannelTestSettingsRejectsInvalid(t *testing.T) {
+	cases := map[string]string{
+		"interval zero":   `{"enabled":true,"interval_ms":0,"probe_timeout_ms":60000,"log_retention_per_channel":200}`,
+		"probe zero":      `{"enabled":true,"interval_ms":1800000,"probe_timeout_ms":0,"log_retention_per_channel":200}`,
+		"retention zero":  `{"enabled":true,"interval_ms":1800000,"probe_timeout_ms":60000,"log_retention_per_channel":0}`,
+		"unknown field":   `{"enabled":true,"interval_ms":1800000,"probe_timeout_ms":60000,"log_retention_per_channel":200,"typo":1}`,
+		"string interval": `{"enabled":true,"interval_ms":"30m","probe_timeout_ms":60000,"log_retention_per_channel":200}`,
+	}
+	for name, raw := range cases {
+		if _, err := DecodeChannelTestSettings([]byte(raw)); err == nil {
+			t.Errorf("%s: expected error, got nil", name)
+		}
 	}
 }
 
