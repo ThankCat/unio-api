@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	responsesadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/responses"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 )
 
 // compact_native.go 承载 NativeCompact（原生 /responses/compact 透传）的 service 侧判定辅助。

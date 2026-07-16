@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
-	"github.com/ThankCat/unio-api/internal/service/admin/model"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/model"
 )
 
 // ModelService 定义 adminapi 操作 model 所需的最小能力。

@@ -57,7 +57,7 @@ workers
 ## 完整目录分布图
 
 ```text
-/Users/chenhao/Project/unio-api
+/Users/chenhao/Project/unio-gateway
 ├── cmd
 │   ├── gateway-server
 │   │   └── main.go
@@ -652,7 +652,7 @@ core/billing / core/ledger / core/requestlog
 推荐部署形态：
 
 ```text
-一个 unio-api 通用应用镜像，四个应用容器使用不同 command 启动
+一个 unio-gateway 通用应用镜像，四个应用容器使用不同 command 启动
 或四个进程镜像：gateway-server、admin-server、console-server、worker-server
 再加 PostgreSQL 和 Redis 容器
 ```

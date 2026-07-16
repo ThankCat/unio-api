@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
-	"github.com/ThankCat/unio-api/internal/core/capability"
+	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/core/capability"
 )
 
 // probeOutcome 是某能力字段经 dropUnsupported 后的实际处置。

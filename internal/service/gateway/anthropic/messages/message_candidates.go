@@ -3,11 +3,11 @@ package messages
 import (
 	"context"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
-	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
+	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic/messages"
+	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 func (s *MessagesService) prepareMessageCandidates(ctx context.Context, req gatewayapi.MessageRequest, candidates []routing.ChatRouteCandidate, mode string, stream bool) (lifecycle.CandidatePlan, error) {

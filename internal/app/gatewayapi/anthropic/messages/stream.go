@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic"
+	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic"
 )
 
 // StreamEvent 是 Anthropic Messages 流式响应中的一个具名 SSE 事件。

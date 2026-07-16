@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 func newTestCooldown(defaultCooldown, cap time.Duration, now *time.Time) *ChannelCooldownRegistry {

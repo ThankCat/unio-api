@@ -4,11 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/auth"
-	"github.com/ThankCat/unio-api/internal/core/channel"
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	coreusage "github.com/ThankCat/unio-api/internal/core/usage"
-	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
+	"github.com/ThankCat/unio-gateway/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	coreusage "github.com/ThankCat/unio-gateway/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
 )
 
 func tokenPtr(v int64) *int64 { return &v }

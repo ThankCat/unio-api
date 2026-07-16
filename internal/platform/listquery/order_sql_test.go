@@ -3,7 +3,7 @@ package listquery_test
 import (
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/platform/listquery"
+	"github.com/ThankCat/unio-gateway/internal/platform/listquery"
 )
 
 func TestOrderByCaseUsage(t *testing.T) {

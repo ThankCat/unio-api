@@ -1,7 +1,7 @@
 package chatcompletions
 
 import (
-	"github.com/ThankCat/unio-api/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
 )
 
 // channel_breaker.go 内的方法是 lifecycle.RequestLifecycle 的 receiver-bound forward。

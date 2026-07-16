@@ -3,11 +3,11 @@ package responses
 import (
 	"encoding/json"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
-	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
-	responsesadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/responses"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
+	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
+	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // direct_response.go 承载「上游 responses 直传」分流的 service 侧粘合：把 ingress ResponsesRequest

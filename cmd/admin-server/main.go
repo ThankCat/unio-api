@@ -10,11 +10,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/bootstrap"
-	"github.com/ThankCat/unio-api/internal/platform/config"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/platform/redis"
-	"github.com/ThankCat/unio-api/internal/platform/store"
+	"github.com/ThankCat/unio-gateway/internal/bootstrap"
+	"github.com/ThankCat/unio-gateway/internal/platform/config"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/redis"
+	"github.com/ThankCat/unio-gateway/internal/platform/store"
 )
 
 func main() {

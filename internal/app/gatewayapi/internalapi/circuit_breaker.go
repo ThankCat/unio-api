@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
-	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // CircuitBreakerSnapshotter 是熔断器只读快照能力（由 *lifecycle.ChannelCircuitBreaker 实现）。

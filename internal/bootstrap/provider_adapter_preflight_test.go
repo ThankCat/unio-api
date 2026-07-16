@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 type fakeProviderAdapterStore struct {

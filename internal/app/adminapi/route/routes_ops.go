@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/service/admin/routeops"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/routeops"
 )
 
 // RouteOpsService 定义线路路由作战台（§3.5）只读运维聚合所需能力。

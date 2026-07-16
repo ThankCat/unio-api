@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/blackbox/sdkfixture"
+	"github.com/ThankCat/unio-gateway/internal/blackbox/sdkfixture"
 )
 
 // responses_direct_test.go 覆盖「上游 Responses 直传」黑盒：channel 绑定 adapter_key=openai

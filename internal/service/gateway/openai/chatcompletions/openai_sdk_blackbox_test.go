@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
-	gatewayopenai "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
-	"github.com/ThankCat/unio-api/internal/core/auth"
-	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
+	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi"
+	gatewayopenai "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
 )
 
 // TestOpenAISDKBlackboxHTTPNonStream 通过 HTTP handler 验证 OpenAI SDK 形状的非流式请求（TASK-9.12）。

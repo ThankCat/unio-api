@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
-	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
+	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
+	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 )
 
 func decodeRequest(t *testing.T, body string) gatewayapi.ResponsesRequest {

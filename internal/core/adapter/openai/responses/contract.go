@@ -14,8 +14,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
 )
 
 // ResponsesAdapter 定义 OpenAI 协议族 Responses 直传 adapter 的非流式上游调用能力。

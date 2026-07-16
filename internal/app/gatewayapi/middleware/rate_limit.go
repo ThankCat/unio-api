@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/ThankCat/unio-api/internal/core/auth"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
-	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
-	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
+	"github.com/ThankCat/unio-gateway/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
 )
 
 const (

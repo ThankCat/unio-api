@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"sort"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
+	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 )
 
 // responses_stream.go 负责流式方向翻译：把内部 chatcompletionsadapter.ChatStreamChunk 序列（SSE delta）翻译成

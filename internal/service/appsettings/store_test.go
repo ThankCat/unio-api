@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
 )
 

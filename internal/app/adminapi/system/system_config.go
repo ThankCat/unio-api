@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/platform/config"
+	"github.com/ThankCat/unio-gateway/internal/platform/config"
 )
 
 // systemConfigHandler 暴露进程级（env 生效）网关配置的只读视图。

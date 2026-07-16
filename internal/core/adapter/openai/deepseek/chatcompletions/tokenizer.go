@@ -1,6 +1,6 @@
 package chatcompletions
 
-import chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
+import chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 
 // CountChatInputTokens 按 DeepSeek OpenAI wire 做保守输入估算。
 //

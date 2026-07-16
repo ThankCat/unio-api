@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 const (

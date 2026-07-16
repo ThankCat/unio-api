@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
-	"github.com/ThankCat/unio-api/internal/service/appsettings"
-	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
+	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // fakeSettingsReader 是 applier 单测用的内存配置源。

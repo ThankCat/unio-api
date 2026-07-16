@@ -8,10 +8,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/channel"
-	"github.com/ThankCat/unio-api/internal/core/usage"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 const (

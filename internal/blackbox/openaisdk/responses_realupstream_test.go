@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/blackbox/sdkfixture"
+	"github.com/ThankCat/unio-gateway/internal/blackbox/sdkfixture"
 )
 
 // responses_realupstream_test.go 是 Responses → 真实 DeepSeek 的端到端 smoke（TASK-11.15）。

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/core/auth"
 )
 
 func TestChatCompletionRequestUnmarshalPreservesVendorExtension(t *testing.T) {

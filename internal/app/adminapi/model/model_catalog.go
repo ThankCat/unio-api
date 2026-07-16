@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
-	modelcatalogadmin "github.com/ThankCat/unio-api/internal/service/admin/modelcatalog"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	modelcatalogadmin "github.com/ThankCat/unio-gateway/internal/service/admin/modelcatalog"
 )
 
 // CatalogService 定义 adminapi 操作 models.dev 目录与采纳/刷新/提醒所需的最小能力。

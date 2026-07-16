@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
-	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
+	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
+	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // compact_synthetic.go 实现 SyntheticCompact：无状态降级压缩（DEC-014 / GAP-11-007）。

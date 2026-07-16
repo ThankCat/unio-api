@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
-	"github.com/ThankCat/unio-api/internal/service/admin/channelcostmultiplier"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/channelcostmultiplier"
 )
 
 // ChannelCostMultiplierService 定义 adminapi 操作渠道价格倍率（channel_cost_multipliers）所需的最小能力（DEC-027）。

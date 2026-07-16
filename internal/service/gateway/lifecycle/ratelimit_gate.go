@@ -3,11 +3,11 @@ package lifecycle
 import (
 	"context"
 
-	"github.com/ThankCat/unio-api/internal/core/auth"
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	"github.com/ThankCat/unio-api/internal/core/usage"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
+	"github.com/ThankCat/unio-gateway/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
 )
 
 // RateLimitGuard 抽象 AttemptRunner 在候选循环内依赖的两层限流能力（DEC-027）。

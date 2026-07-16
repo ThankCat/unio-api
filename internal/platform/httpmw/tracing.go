@@ -10,7 +10,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/ThankCat/unio-api/internal/platform/observability/tracing"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/tracing"
 )
 
 // Tracing 为每个 HTTP 请求创建一个 server span，并把上游 trace context 串联进来。

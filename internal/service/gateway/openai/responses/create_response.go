@@ -4,15 +4,15 @@ import (
 	"context"
 	"fmt"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
-	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
-	responsesadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/responses"
-	"github.com/ThankCat/unio-api/internal/core/auth"
-	"github.com/ThankCat/unio-api/internal/core/requestlog"
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
-	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
+	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
+	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
+	"github.com/ThankCat/unio-gateway/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // CreateResponse 编排非流式 Responses 请求，并返回 OpenAI Responses 协议响应对象。

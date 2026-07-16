@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ThankCat/unio-api/internal/core/auth"
-	"github.com/ThankCat/unio-api/internal/core/billing"
-	"github.com/ThankCat/unio-api/internal/core/ledger"
-	"github.com/ThankCat/unio-api/internal/core/requestlog"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/core/billing"
+	"github.com/ThankCat/unio-gateway/internal/core/ledger"
+	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 

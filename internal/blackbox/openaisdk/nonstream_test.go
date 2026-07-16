@@ -16,7 +16,7 @@ import (
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 
-	"github.com/ThankCat/unio-api/internal/blackbox/sdkfixture"
+	"github.com/ThankCat/unio-gateway/internal/blackbox/sdkfixture"
 )
 
 // OAI-SDK-Mock-01：openai-go SDK 通过 unio gateway 调 mock 上游成功的非流式 chat completion。

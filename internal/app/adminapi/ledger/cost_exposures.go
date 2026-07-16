@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/service/admin/query"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
 )
 
 // CostExposureQueryService 定义 adminapi 查询渠道成本敞口所需的最小能力（DESIGN-bill-on-cancel 阶段一）。

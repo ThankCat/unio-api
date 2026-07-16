@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
 
 func mustUnmarshal(t *testing.T, raw string) ResponsesRequest {

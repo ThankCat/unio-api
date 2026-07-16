@@ -11,7 +11,7 @@ import (
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 
-	"github.com/ThankCat/unio-api/internal/blackbox/sdkfixture"
+	"github.com/ThankCat/unio-gateway/internal/blackbox/sdkfixture"
 )
 
 // OAI-SDK-Mock-09：一次成功的 SDK 请求后，DB 中事实链路完整。

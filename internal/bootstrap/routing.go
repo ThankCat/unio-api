@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
 )
 
 // NewChatRouter 创建当前 server 进程使用的 chat routing 组件。

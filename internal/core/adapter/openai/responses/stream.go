@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	adaptersse "github.com/ThankCat/unio-api/internal/core/adapter/sse"
-	"github.com/ThankCat/unio-api/internal/core/channel"
-	"github.com/ThankCat/unio-api/internal/core/usage"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	adaptersse "github.com/ThankCat/unio-gateway/internal/core/adapter/sse"
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // Responses 流式生命周期事件名（adapter 只据此识别终态/封套事件；其余事件原文透传）。

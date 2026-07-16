@@ -3,7 +3,7 @@ package lifecycle
 import (
 	"sync"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 )
 
 // CredentialInvalidator 在渠道被判定「凭据失效」时执行持久化副作用：把 channels.credential_valid

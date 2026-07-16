@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ThankCat/unio-api/internal/core/ledger"
+	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 )
 
 // 调额方向。

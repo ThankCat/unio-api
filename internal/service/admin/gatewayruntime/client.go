@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // ChannelStatus 是按 channel 合并后的熔断视图（供渠道列表徽章）。

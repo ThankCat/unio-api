@@ -13,7 +13,7 @@ import (
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
-	"github.com/ThankCat/unio-api/internal/blackbox/sdkfixture"
+	"github.com/ThankCat/unio-gateway/internal/blackbox/sdkfixture"
 )
 
 // ANT-SDK-Mock-02：anthropic-sdk-go SDK 流式 messages 完整序成功。

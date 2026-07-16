@@ -15,9 +15,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	core "github.com/ThankCat/unio-api/internal/core/capability"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	core "github.com/ThankCat/unio-gateway/internal/core/capability"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
 // Store 是 admin 能力管理所需的数据访问能力（由 core/capability.Store 满足）。

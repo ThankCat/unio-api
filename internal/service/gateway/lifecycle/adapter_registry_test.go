@@ -4,13 +4,13 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter/anthropic"
-	anthropicdeepseek "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/deepseek/messages"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
-	openaideepseek "github.com/ThankCat/unio-api/internal/core/adapter/openai/deepseek/chatcompletions"
-	"github.com/ThankCat/unio-api/internal/core/channel"
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic"
+	anthropicdeepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/deepseek/messages"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter/openai"
+	openaideepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/deepseek/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 func TestAdapterRegistryResolvesCapabilitiesByProtocolAndKey(t *testing.T) {

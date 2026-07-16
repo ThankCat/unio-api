@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
-	"github.com/ThankCat/unio-api/internal/core/channel"
+	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
 )
 
 // TestAdapterUpstreamWireCollapsesOfficialFields 在 HTTP 边界断言路线 C 下沉后的最终出站 wire：

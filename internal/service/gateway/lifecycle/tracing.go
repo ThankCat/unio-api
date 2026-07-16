@@ -7,7 +7,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/ThankCat/unio-api/internal/platform/observability/tracing"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/tracing"
 )
 
 // StartGatewaySpan 启动一个 gateway 业务 span。

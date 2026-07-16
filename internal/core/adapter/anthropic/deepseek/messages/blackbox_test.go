@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
-	"github.com/ThankCat/unio-api/internal/core/channel"
-	"github.com/ThankCat/unio-api/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/usage"
 )
 
 // newBlackboxAdapter 在显式开启黑盒回归时构造真实 DeepSeek Anthropic adapter 与 channel runtime。

@@ -7,11 +7,11 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	core "github.com/ThankCat/unio-api/internal/core/capability"
-	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-	capadmin "github.com/ThankCat/unio-api/internal/service/admin/capability"
+	core "github.com/ThankCat/unio-gateway/internal/core/capability"
+	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	capadmin "github.com/ThankCat/unio-gateway/internal/service/admin/capability"
 )
 
 // fakeStore 实现完整 core/capability.Store，覆盖 admin Store / SyncJobStore / SeedService 三处依赖。

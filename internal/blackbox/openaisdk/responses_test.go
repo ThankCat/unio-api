@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/blackbox/sdkfixture"
+	"github.com/ThankCat/unio-gateway/internal/blackbox/sdkfixture"
 )
 
 // responses_test.go 覆盖 OpenAI Responses API（Codex 兼容）的 mock 黑盒（TASK-11.15）：

@@ -1,6 +1,6 @@
 package lifecycle
 
-import "github.com/ThankCat/unio-api/internal/core/adapter"
+import "github.com/ThankCat/unio-gateway/internal/core/adapter"
 
 // RetryClassifier 定义 gateway 判断一次上游错误是否允许尝试下一个同模型 channel 的能力。
 //

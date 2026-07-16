@@ -9,8 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi/middleware"
-	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
+	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/middleware"
+	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
 )
 
 // routerTestRateLimiter 是 chat completions handler 集成测试使用的「线路+用户」级限流器替身。

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // TestUpstreamErrorPreservesFailureChain 验证 UpstreamError 不破坏 failure.CodeOf 和 errors.Is。

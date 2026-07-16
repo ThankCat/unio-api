@@ -3,7 +3,7 @@ package httpmw
 import (
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
 
 // ClientIP 提取客户端来源 IP（X-Forwarded-For / X-Real-IP / RemoteAddr）并存入 context，

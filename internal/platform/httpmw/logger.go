@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
-	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 )
 
 // statusRecorder 记录 handler 写出的 HTTP 状态码，供请求日志使用。

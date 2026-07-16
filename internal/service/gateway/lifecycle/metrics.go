@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 )
 
 // MetricsRecorder 定义 gateway 记录业务指标所需的能力。

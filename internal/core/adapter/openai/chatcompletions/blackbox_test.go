@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/channel"
-	"github.com/ThankCat/unio-api/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/usage"
 )
 
 // newOfficialBlackboxAdapter 在显式开启黑盒回归时构造官方 1P OpenAI adapter（即协议族 base）。

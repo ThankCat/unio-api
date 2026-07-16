@@ -1,8 +1,8 @@
 package responses
 
 import (
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/usage"
 )
 
 // usageMappingVersionResponses 标记 Responses usage→facts 映射规则版本，用于历史账务复算与回归。

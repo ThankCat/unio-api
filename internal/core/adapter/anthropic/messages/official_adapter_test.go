@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
 )
 
 func TestOfficialAdapterForwardsBetaHeadersPassthrough(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 
-	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 var (

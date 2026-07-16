@@ -7,15 +7,15 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/ThankCat/unio-api/internal/app/workers"
-	"github.com/ThankCat/unio-api/internal/core/billing"
-	"github.com/ThankCat/unio-api/internal/core/ledger"
-	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
-	"github.com/ThankCat/unio-api/internal/platform/config"
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-api/internal/service/admin/channeltest"
-	"github.com/ThankCat/unio-api/internal/service/appsettings"
-	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/app/workers"
+	"github.com/ThankCat/unio-gateway/internal/core/billing"
+	"github.com/ThankCat/unio-gateway/internal/core/ledger"
+	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
+	"github.com/ThankCat/unio-gateway/internal/platform/config"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/channeltest"
+	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // WorkerServerAppDB 定义 worker server app 构建时需要的数据库能力。

@@ -7,8 +7,8 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // upstreamRequestIDHeader 是 OpenAI-compatible 上游返回请求标识的响应头。

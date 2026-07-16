@@ -12,7 +12,7 @@ import (
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
-	"github.com/ThankCat/unio-api/internal/blackbox/sdkfixture"
+	"github.com/ThankCat/unio-gateway/internal/blackbox/sdkfixture"
 )
 
 // ANT-SDK-Mock-05：DEC-012「协议为先」+ DEC-013「anthropic-beta 宽进出站 Drop」

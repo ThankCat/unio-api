@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
-	"github.com/ThankCat/unio-api/internal/service/admin/channelrechargefactor"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/channelrechargefactor"
 )
 
 // ChannelRechargeFactorService 定义 adminapi 操作渠道充值倍率（channel_recharge_factors）所需的最小能力（DEC-027）。

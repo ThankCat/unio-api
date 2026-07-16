@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
-	"github.com/ThankCat/unio-api/internal/core/capability"
+	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
+	"github.com/ThankCat/unio-gateway/internal/core/capability"
 )
 
 // probeOutcome 是某能力字段经 dropUnsupported 后的实际处置。

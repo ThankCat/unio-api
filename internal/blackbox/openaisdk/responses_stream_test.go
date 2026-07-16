@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/blackbox/sdkfixture"
+	"github.com/ThankCat/unio-gateway/internal/blackbox/sdkfixture"
 )
 
 // responses_stream_test.go 覆盖 Responses 流式 SSE 黑盒（TASK-11.15）：mock DeepSeek 的 chat

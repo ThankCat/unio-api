@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	"github.com/ThankCat/unio-api/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/usage"
 )
 
 // partialUsageMappingVersion 标记 partial 估算事实的映射版本，用于历史账务复算与幂等比对。

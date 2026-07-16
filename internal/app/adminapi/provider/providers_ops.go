@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/service/admin/providerops"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/providerops"
 )
 
 // ProviderOpsService 定义服务商聚合视图（§3.2）只读运维聚合所需能力。

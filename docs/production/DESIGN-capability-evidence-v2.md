@@ -432,7 +432,7 @@ ORDER BY last_seen_at DESC;
 5. **手动跑 worker**（不等待 cron）：
 
 ```bash
-cd unio-api
+cd unio-gateway
 set -a && source .env && set +a
 go run ./cmd/worker-server calibrate-capabilities --dry-run
 # 确认 Plan 中 tools.custom / stream 的 EvidenceCount > 0 且 EvidenceKind=strong

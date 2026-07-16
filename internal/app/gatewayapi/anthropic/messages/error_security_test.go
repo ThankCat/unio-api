@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // newUpstreamMessageError 构造一个携带稳定 category 的上游错误，模拟 adapter 返回。

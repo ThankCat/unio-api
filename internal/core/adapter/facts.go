@@ -1,6 +1,6 @@
 package adapter
 
-import "github.com/ThankCat/unio-api/internal/core/usage"
+import "github.com/ThankCat/unio-gateway/internal/core/usage"
 
 // FinishClass 是协议无关的稳定结束分类。
 //

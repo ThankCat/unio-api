@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
 
 // Recoverer 捕获 handler 中的 panic，记录错误日志，并返回统一的 500 JSON 响应。

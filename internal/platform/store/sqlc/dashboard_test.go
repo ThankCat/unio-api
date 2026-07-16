@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
 // TestDashboardQueriesAgainstSchema 仅校验 M9 看板聚合 SQL 在真实 schema 上可执行（well-formed）。

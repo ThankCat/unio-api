@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
+	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 )
 
 // TestDropUnsupportedTypedFields 验证 typed Drop 字段被清零/剔除，且 dropped 列表按字母序稳定。

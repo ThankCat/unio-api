@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic"
+	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic"
 )
 
 func TestEncodeStreamEventFraming(t *testing.T) {

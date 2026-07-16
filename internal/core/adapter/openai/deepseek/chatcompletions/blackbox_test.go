@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
-	"github.com/ThankCat/unio-api/internal/core/channel"
-	"github.com/ThankCat/unio-api/internal/core/usage"
+	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/usage"
 )
 
 // newBlackboxAdapter 在显式开启黑盒回归时构造真实 DeepSeek adapter 与 channel runtime。

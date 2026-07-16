@@ -11,7 +11,7 @@ import (
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
-	"github.com/ThankCat/unio-api/internal/blackbox/sdkfixture"
+	"github.com/ThankCat/unio-gateway/internal/blackbox/sdkfixture"
 )
 
 // ANT-SDK-Real-01：anthropic-sdk-go SDK 通过 unio gateway 对真实 DeepSeek Anthropic

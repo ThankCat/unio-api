@@ -2,7 +2,7 @@
 
 > 提议 **DEC-031**（pending，待审）。修订 **DEC-027**（渠道成本倍率）：保留「价格倍率 × 充值倍率 + 绝对覆盖」整套机制，**去掉重复的「模型参考成本」表**——**`model_prices`（模型基准价）就是成本基数**，不必再录一次。
 >
-> - 撰写基准：对照当前工作区代码（`unio-api` / `unio-admin`，migrations 已 consolidation 为 36 表）逐文件勘探。
+> - 撰写基准：对照当前工作区代码（`unio-gateway` / `unio-admin`，migrations 已 consolidation 为 36 表）逐文件勘探。
 > - **阅读约定**：英文/专业词首次出现配「（中文解释）」；复杂逻辑用「小明」实例。
 > - 本文 = 设计 + 执行计划合一。先读 §1 / §2，再按 §7 实施。
 > - **与 `DESIGN-channel-cost-multiplier.md` 的关系**：该文仍是 DEC-027「倍率成本」正文；**成本基数来源以本文为准**（本文落地后，旧文中凡写「`model_reference_costs` 作基数」的段落视为被修订）。

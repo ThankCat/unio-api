@@ -3,7 +3,7 @@ package messages
 import (
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/core/usage"
 )
 
 func intptr(v int) *int { return &v }

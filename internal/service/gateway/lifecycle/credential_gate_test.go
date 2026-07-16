@@ -4,8 +4,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // recordingInvalidator 记录被翻失效的渠道(线程安全,供并发测试)。

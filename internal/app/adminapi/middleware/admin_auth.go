@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/ThankCat/unio-api/internal/core/adminauth"
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
 
 // AdminAuthenticator 定义 middleware 调用 admin 认证所需的最小能力。

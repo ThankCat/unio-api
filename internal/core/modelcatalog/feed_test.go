@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/capability"
+	"github.com/ThankCat/unio-gateway/internal/core/capability"
 )
 
 const sampleModelsJSON = `{

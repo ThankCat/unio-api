@@ -11,8 +11,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
 )
 
 // MessagesAdapter 定义 Anthropic 协议族非流式 Messages adapter 的协议转换与上游调用能力。

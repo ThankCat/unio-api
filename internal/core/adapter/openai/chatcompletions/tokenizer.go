@@ -1,7 +1,7 @@
 package chatcompletions
 
 import (
-	"github.com/ThankCat/unio-api/internal/core/tokenest"
+	"github.com/ThankCat/unio-gateway/internal/core/tokenest"
 )
 
 // CountChatInputTokens 估算 OpenAI-compatible chat 请求的输入 token（new-api 口径）。

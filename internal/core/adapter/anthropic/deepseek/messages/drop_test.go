@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
+	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
 )
 
 func userMessage(content string) messagesadapter.Message {

@@ -4,13 +4,13 @@ import (
 	"context"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/auth"
-	"github.com/ThankCat/unio-api/internal/core/requestlog"
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
-	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
-	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 )
 
 // RequestLifecycle 把双协议 service 编排骨架共享的协议无关基础设施集中到一处。
@@ -365,12 +365,16 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 		return requestlog.RequestRecord{}, err
 	}
 
-	// 把业务 request_id 写入结构化日志字段，使其与 HTTP correlation_id 在同一条访问日志可关联。
+	// 访问日志：request 创建时即可确定的维度先写入；provider/channel 等 CreateAttempt。
 	logfields.SetRequestID(ctx, requestID)
+	logfields.SetModel(ctx, requestedModelID)
 
 	var routeID *int64
 	if principal != nil {
 		routeID = principal.RouteID
+	}
+	if routeID != nil {
+		logfields.SetRouteID(ctx, *routeID)
 	}
 	var clientIP *string
 	if ip := httpx.ClientIP(ctx); ip != "" {
@@ -406,6 +410,9 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 // CreateAttempt 创建一次上游 channel 尝试记录。
 // attempt 记录 fallback 链路中的单次 provider/channel 调用，必须先于 adapter 调用创建。
 func (l *RequestLifecycle) CreateAttempt(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate) (requestlog.AttemptRecord, error) {
+	// 覆盖为当前尝试；失败停在某次 attempt 时访问日志即显示最后打过的渠道。
+	logfields.SetChannel(ctx, MetricsID(candidate.ProviderID), MetricsID(candidate.Channel.ID))
+
 	return l.requestLog.CreateAttempt(ctx, requestlog.CreateAttemptParams{
 		RequestRecordID:  requestRecord.ID,
 		AttemptIndex:     attemptIndex,

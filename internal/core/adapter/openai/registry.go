@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	chatcompletions "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
-	responsesadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/responses"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	chatcompletions "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 var (

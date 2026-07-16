@@ -13,7 +13,7 @@
 5. 新增 **M9 工作台看板**（运营首页，只读聚合 KPI）。
 6. 路由遵循 REST：路径无动词、状态变更用 PATCH、动作建模成 job/子资源。
 7. **交付方式 = 垂直切片、前后端协同**：不一次性把整套 API 设计死；模块图/资源地图当"北极星契约"，每片端点在做对应 UI 时定稿。
-8. **前端 `unio-admin` 单独建仓库**（与 `unio-api` 平级），不进 `unio-api`；契约靠 `/admin/v1` OpenAPI / 导出类型同步。
+8. **前端 `unio-admin` 单独建仓库**（与 `unio-gateway` 平级），不进 `unio-gateway`；契约靠 `/admin/v1` OpenAPI / 导出类型同步。
 
 ## 范围边界（已确认）
 
@@ -26,9 +26,9 @@
 
 - **垂直切片**：按"屏/工作流"端到端推进，不一次性铺满 API。每片只定该 UI 需要的最小端点，建后端 → 建前端 → 联调 → 下一片。
 - **本文档定位**：模块图与 RESTful 资源地图是**北极星契约/全景参考**，不是一次性施工单；具体端点形态、`draft 态 vs 聚合事务端点`、上线门禁严格度等，在做对应切片时才定稿。
-- **前端 `unio-admin` 独立仓库**（与 `unio-api` 平级），不放进 `unio-api`（沿用 AGENTS.md "前端不进后端仓库"决策）。
-- **契约同步**：`unio-api` 维护 `/admin/v1` OpenAPI / 导出 TS 类型，`unio-admin` 消费；切片粒度小以压住跨仓库漂移。
-- **协作角色**：后端（`unio-api`）+ 前端（`unio-admin`）一起做。
+- **前端 `unio-admin` 独立仓库**（与 `unio-gateway` 平级），不放进 `unio-gateway`（沿用 AGENTS.md "前端不进后端仓库"决策）。
+- **契约同步**：`unio-gateway` 维护 `/admin/v1` OpenAPI / 导出 TS 类型，`unio-admin` 消费；切片粒度小以压住跨仓库漂移。
+- **协作角色**：后端（`unio-gateway`）+ 前端（`unio-admin`）一起做。
 
 ## 模块总览
 

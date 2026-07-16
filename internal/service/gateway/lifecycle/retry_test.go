@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // TestProviderErrorClassifierIsRetryable 验证 retry 决策只对瞬时上游故障放行。

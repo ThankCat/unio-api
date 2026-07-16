@@ -4,9 +4,9 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/service/admin/query"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
 )
 
 // RecoveryJobQueryService 定义 adminapi 查询 settlement recovery job 所需的最小能力（M8 运营任务台）。

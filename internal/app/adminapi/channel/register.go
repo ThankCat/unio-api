@@ -3,7 +3,7 @@ package channel
 import (
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ThankCat/unio-api/internal/service/admin/gatewayruntime"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/gatewayruntime"
 )
 
 // Deps 是渠道模块的路由依赖（渠道 CRUD/运维/检测/绑定/成本价/成本倍率/充值倍率）。

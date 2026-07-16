@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	chatcompletions "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
-	"github.com/ThankCat/unio-api/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	chatcompletions "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
 )
 
 // registryTestChatAdapter 是 registry 测试使用的非流式 adapter 替身。

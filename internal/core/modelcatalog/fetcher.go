@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 const (
@@ -16,7 +16,7 @@ const (
 	defaultMaxResponseBytes = 16 << 20 // 16 MiB，api.json 约 2.2MB，留足余量。
 	modelsResourcePath      = "/models.json"
 	apiResourcePath         = "/api.json"
-	modelCatalogUserAgent   = "unio-api-model-catalog-sync"
+	modelCatalogUserAgent   = "unio-gateway-model-catalog-sync"
 )
 
 // HTTPFetcher 从 models.dev 拉取 models.json（必需）与 api.json（价格，best-effort）。

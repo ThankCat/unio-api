@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
+	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
 )
 
 // Service 是 admin 侧读写全局运行时配置的服务(封装 SettingsStore)。

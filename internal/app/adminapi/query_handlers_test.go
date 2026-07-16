@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi"
-	"github.com/ThankCat/unio-api/internal/core/adminauth"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/service/admin/query"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi"
+	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
 )
 
 type fakeRequestQueryService struct {

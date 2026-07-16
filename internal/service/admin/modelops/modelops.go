@@ -6,8 +6,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-api/internal/service/admin/opsutil"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/opsutil"
 )
 
 // Store 是模型运维聚合所需的只读存储能力（由 *sqlc.Queries 满足）。

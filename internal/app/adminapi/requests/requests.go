@@ -4,12 +4,12 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
-	"github.com/ThankCat/unio-api/internal/app/adminapi/ledger"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/ledger"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ThankCat/unio-api/internal/service/admin/query"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
 )
 
 // RequestQueryService 定义 adminapi 查询请求记录所需的最小能力（M6 只读查询台）。

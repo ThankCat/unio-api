@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"github.com/ThankCat/unio-api/internal/core/tokenest"
+	"github.com/ThankCat/unio-gateway/internal/core/tokenest"
 )
 
 // OpenAI Chat Completions message content part 类型（估算时用于分辨文本/多模态）。

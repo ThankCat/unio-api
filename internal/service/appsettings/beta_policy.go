@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
+	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
 )
 
 // AnthropicBetaPolicyKey 是 app_settings 中 Anthropic beta 策略的 key。

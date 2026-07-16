@@ -7,8 +7,8 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // upstreamRequestID 从上游响应头提取安全的请求标识。

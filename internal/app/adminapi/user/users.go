@@ -4,9 +4,9 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/service/admin/customer"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/customer"
 )
 
 // UserService 定义 adminapi 查询用户所需的最小能力（M7 客户管理）。

@@ -1,6 +1,6 @@
 package adapter
 
-import "github.com/ThankCat/unio-api/internal/core/usage"
+import "github.com/ThankCat/unio-gateway/internal/core/usage"
 
 // ToUsageFacts 把 OpenAI 语义的 ChatUsage 映射为协议无关的 usage.Facts。
 //

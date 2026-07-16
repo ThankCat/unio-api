@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-api/internal/service/admin/opsutil"
-	"github.com/ThankCat/unio-api/internal/service/appsettings"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/opsutil"
+	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 

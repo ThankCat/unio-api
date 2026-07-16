@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi"
-	"github.com/ThankCat/unio-api/internal/core/adminauth"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi"
+	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
 )
 
 const testAdminToken = "s3cret-admin-token"

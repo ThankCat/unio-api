@@ -3,8 +3,8 @@ package middleware
 import (
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/core/auth"
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
 
 // KeyConcurrencyLimiter 定义 ingress 对「线路+用户」在途并发数设限的能力（DEC-029）。

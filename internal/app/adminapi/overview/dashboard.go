@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/service/admin/dashboard"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/dashboard"
 )
 
 // defaultDashboardWindow 是 from/to 均缺省时的默认回看窗口（近 7 天）。

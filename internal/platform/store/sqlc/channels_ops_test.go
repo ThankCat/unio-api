@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
 // TestChannelsOpsQueriesAgainstSchema 校验渠道作战台抽屉 SQL 在真实 schema 上 well-formed。

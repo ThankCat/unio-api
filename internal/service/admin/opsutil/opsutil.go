@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // 健康分桶阈值已迁移为运行时配置 admin_backend.channel_health_thresholds

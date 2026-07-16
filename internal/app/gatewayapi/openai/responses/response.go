@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
 
 // Responses 原生错误的稳定 type / code。Responses error 对象形如

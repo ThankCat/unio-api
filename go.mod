@@ -1,4 +1,4 @@
-module github.com/ThankCat/unio-api
+module github.com/ThankCat/unio-gateway
 
 go 1.25.5
 

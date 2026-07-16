@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/service/admin/customer"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/customer"
 )
 
 type fakeUserService struct {

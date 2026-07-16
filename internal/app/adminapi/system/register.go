@@ -3,7 +3,7 @@ package system
 import (
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ThankCat/unio-api/internal/platform/config"
+	"github.com/ThankCat/unio-gateway/internal/platform/config"
 )
 
 // Deps 是系统设置模块的路由依赖（结算补偿任务只读视图 + 运行时配置 + 进程级配置只读面板）。

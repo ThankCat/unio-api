@@ -1,6 +1,6 @@
 package responses
 
-import gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
+import gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 
 func responsesIntPtr(v *gatewayapi.ResponsesInt) *int {
 	if v == nil {

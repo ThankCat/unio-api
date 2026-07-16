@@ -1,7 +1,7 @@
 package messages
 
 import (
-	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
+	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
 )
 
 // Tokenizer 是 DeepSeek Anthropic 协议族的输入 token 估算器。

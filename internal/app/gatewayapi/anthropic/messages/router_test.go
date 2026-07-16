@@ -14,12 +14,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic"
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi/middleware"
-	"github.com/ThankCat/unio-api/internal/core/auth"
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
+	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic"
+	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/middleware"
+	"github.com/ThankCat/unio-gateway/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
 )
 
 // fakeMessagesAuthenticator 是 /v1/messages 集成测试使用的 API Key 认证器替身。

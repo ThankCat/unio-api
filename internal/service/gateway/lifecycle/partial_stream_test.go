@@ -3,8 +3,8 @@ package lifecycle
 import (
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	coreusage "github.com/ThankCat/unio-api/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	coreusage "github.com/ThankCat/unio-gateway/internal/core/usage"
 )
 
 // TestBuildPartialStreamFactsSplitsInputByAssumedCacheRatio 锁定临时口径：无真实 usage 的 partial 结算

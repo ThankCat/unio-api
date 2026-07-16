@@ -12,9 +12,9 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
-	"github.com/ThankCat/unio-api/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
 )
 
 // Adapter 是 DeepSeek Anthropic endpoint 的 adapter。

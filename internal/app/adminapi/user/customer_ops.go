@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/service/admin/customerops"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/customerops"
 )
 
 // CustomerOpsService 定义客户中心（用户/API Key §3.7）只读运维聚合所需能力。

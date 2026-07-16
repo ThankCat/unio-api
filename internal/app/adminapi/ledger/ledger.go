@@ -4,9 +4,9 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/service/admin/query"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
 )
 
 // LedgerQueryService 定义 adminapi 查询账本流水与计费异常所需的最小能力（M6 只读查询台）。

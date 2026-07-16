@@ -9,9 +9,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi/middleware"
-	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
-	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
+	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/middleware"
+	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
+	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
 )
 
 func ptrInt64(v int64) *int64 { return &v }

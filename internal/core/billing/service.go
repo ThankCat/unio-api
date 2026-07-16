@@ -3,8 +3,8 @@ package billing
 import (
 	"math/big"
 
-	"github.com/ThankCat/unio-api/internal/core/usage"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // Service 负责根据 usage 和 token 单价快照计算客户扣费与平台成本。

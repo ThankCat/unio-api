@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
+	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
 )
 
 // deepseekOutputConfigEfforts 把 Anthropic output_config.effort 归一为 DeepSeek 支持的 high/max。

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/capability"
-	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
+	"github.com/ThankCat/unio-gateway/internal/core/capability"
+	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
 )
 
 type fakeCatalogSyncer struct {

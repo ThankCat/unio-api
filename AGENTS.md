@@ -21,13 +21,13 @@
 后端项目：
 
 ```text
-unio-api = Gateway API + Admin API + Console API + Worker
+unio-gateway = Gateway API + Admin API + Console API + Worker
 ```
 
 前端项目：
 
 ```text
-unio-web = 独立前端项目，不放在 unio-api 中
+unio-web = 独立前端项目，不放在 unio-gateway 中
 ```
 
 公开 API 边界：

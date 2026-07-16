@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
 // newSyncStoreTx 在回滚事务上构造真实 SyncStore，避免污染本地库；未配 DATABASE_URL 时跳过。

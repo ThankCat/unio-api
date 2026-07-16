@@ -15,7 +15,7 @@ func attrMap(attrs []any) map[string]any {
 	return m
 }
 
-// TestFieldsAttrsOmitUnset 验证只输出已设置字段，并由下游填充身份与路由。
+// TestFieldsAttrsOmitUnset 验证只输出已设置字段，并由下游填充身份与路由维度。
 func TestFieldsAttrsOmitUnset(t *testing.T) {
 	ctx, fields := NewContext(context.Background(), "corr-1")
 
@@ -26,7 +26,9 @@ func TestFieldsAttrsOmitUnset(t *testing.T) {
 
 	SetIdentity(ctx, 7, 100)
 	SetRequestID(ctx, "req_abc")
-	SetRoute(ctx, "openai/gpt-4.1", "9123", "123")
+	SetModel(ctx, "openai/gpt-4.1")
+	SetRouteID(ctx, 2)
+	SetChannel(ctx, "9123", "123")
 
 	got := attrMap(fields.Attrs())
 	cases := map[string]any{
@@ -35,6 +37,7 @@ func TestFieldsAttrsOmitUnset(t *testing.T) {
 		"user_id":        int64(7),
 		"api_key_id":     int64(100),
 		"model":          "openai/gpt-4.1",
+		"route_id":       int64(2),
 		"provider":       "9123",
 		"channel":        "123",
 	}
@@ -51,7 +54,9 @@ func TestContextHelpersNoopWithoutHolder(t *testing.T) {
 
 	SetIdentity(ctx, 1, 3)
 	SetRequestID(ctx, "req")
-	SetRoute(ctx, "m", "p", "c")
+	SetModel(ctx, "m")
+	SetRouteID(ctx, 1)
+	SetChannel(ctx, "p", "c")
 
 	if _, ok := FromContext(ctx); ok {
 		t.Fatal("expected no Fields in bare context")
@@ -63,7 +68,9 @@ func TestNilFieldsSettersSafe(t *testing.T) {
 	var f *Fields
 	f.SetIdentity(1, 3)
 	f.SetRequestID("x")
-	f.SetRoute("m", "p", "c")
+	f.SetModel("m")
+	f.SetRouteID(1)
+	f.SetChannel("p", "c")
 	if f.Attrs() != nil {
 		t.Fatal("expected nil Attrs from nil Fields")
 	}

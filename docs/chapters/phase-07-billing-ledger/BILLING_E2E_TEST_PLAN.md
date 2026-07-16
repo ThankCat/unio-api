@@ -88,7 +88,7 @@
 |------|------|
 | PostgreSQL | **Docker** `docker compose up -d postgres`，migration 已 up（含 §0 修复） |
 | Redis | Docker `docker compose up -d redis` |
-| 全部 env | 读本地 **`unio-api/.env`**（Q3） |
+| 全部 env | 读本地 **`unio-gateway/.env`**（Q3） |
 | Gateway | `cmd/gateway-server`，`:8521` |
 | Admin API | `cmd/admin-server`，`:8522`；Token = `.env` 默认 `ADMIN_API_TOKEN`（Q2） |
 | Worker | `cmd/worker-server`（recovery 用例需要） |
@@ -169,7 +169,7 @@ Mock 必须能模拟：
 ### 2.5 服务启动命令（参考）
 
 ```bash
-cd unio-api
+cd unio-gateway
 docker compose up -d postgres redis
 source .env   # DATABASE_URL, REDIS_*, CREDENTIAL_MASTER_KEY, ADMIN_API_TOKEN
 
@@ -599,7 +599,7 @@ REC-01 → REC-02 → COD-04 → COD-05 → DEL-03 → DEL-04 → AD-01 → AD-0
 |---|------|
 | **Q1** | Unio Key = `unio_sk_ohuUc2Zkpspw9Vre5idmZKRXfFX6Vxb2cl52cMZuFLQ` |
 | **Q2** | Admin Token = `.env` 默认 `ADMIN_API_TOKEN` |
-| **Q3** | 全部环境变量用本地 `unio-api/.env` |
+| **Q3** | 全部环境变量用本地 `unio-gateway/.env` |
 | **Q4** | seed 三模型（gpt-5.5 / 5.4 / 5.4-mini）上游均可用，`upstream_model` 同名 |
 | **Q5** | 上游支持原生 `/v1/responses` |
 | **Q6** | stream final usage **偶发丢失**；真实 COD 可能走路线 D，记录 `upstream_finish_reason` 区分上游 vs Unio |

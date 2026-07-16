@@ -3,7 +3,7 @@ package query
 import (
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
 // Usage 是请求详情中的协议无关用量事实（token 各桶 + 来源/映射版本）。

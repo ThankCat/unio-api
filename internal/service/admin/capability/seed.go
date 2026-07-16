@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	core "github.com/ThankCat/unio-api/internal/core/capability"
+	core "github.com/ThankCat/unio-gateway/internal/core/capability"
 )
 
 // Profile 是 admin 视角的一个 adapter 能力画像（用 provider:protocol 作稳定 key）。

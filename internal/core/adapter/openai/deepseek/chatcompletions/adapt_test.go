@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
+	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 )
 
 // TestNormalizeReasoningEffort 验证 reasoning_effort 归一为 DeepSeek 支持的 high/max，未知枚举不识别。

@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 )
 
 // ChannelBreaker 定义 gateway 在选择 channel 时所需的熔断能力。

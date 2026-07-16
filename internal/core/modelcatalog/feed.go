@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/capability"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/core/capability"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // modelsJSONEntry 是 models.dev models.json 的 canonical 模型元数据（按 lab/model 键控）。

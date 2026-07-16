@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/service/admin/modelops"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/modelops"
 )
 
 // ModelOpsService 定义模型商品控制台（§3.4）只读运维聚合所需能力。

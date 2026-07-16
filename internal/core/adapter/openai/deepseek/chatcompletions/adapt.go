@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
+	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 )
 
 // legacyFunctionDef 是 deprecated functions[] 的元素形状（OpenAI legacy function calling）。

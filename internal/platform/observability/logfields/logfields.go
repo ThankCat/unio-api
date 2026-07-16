@@ -1,8 +1,13 @@
 // Package logfields 提供按请求传播的结构化日志字段。
 //
 // 设计动机：HTTP 访问日志在中间件最外层写出，但 user/api_key（认证中间件）
-// 和 request_id/model/provider/channel（gateway）是在更内层才确定的。
+// 和 request_id/model/route_id/provider/channel（gateway）是在更内层才确定的。
 // 通过在请求最外层安装一个可变 *Fields 指针并由下游填充，外层日志即可拿到全量字段。
+//
+// 字段语义：
+//   - model：目标模型（CreateRequest 即可确定）
+//   - route_id：线路（CreateRequest，来自 API Key 绑定）
+//   - provider / channel：当前（最后一次）上游尝试；CreateAttempt 时写入
 //
 // 脱敏原则：这里只承载稳定、非敏感的标识与路由维度。
 // 绝不承载 API key 明文、credential、上游 Authorization、用户 prompt 等敏感内容。
@@ -26,6 +31,8 @@ type Fields struct {
 	userID        int64
 	apiKeyID      int64
 	model         string
+	routeID       int64
+	hasRouteID    bool
 	provider      string
 	channel       string
 }
@@ -65,8 +72,8 @@ func (f *Fields) SetRequestID(requestID string) {
 	f.requestID = requestID
 }
 
-// SetRoute 记录本次请求最终命中的 model/provider/channel。
-func (f *Fields) SetRoute(model string, provider string, channel string) {
+// SetModel 记录请求目标模型。
+func (f *Fields) SetModel(model string) {
 	if f == nil {
 		return
 	}
@@ -74,6 +81,28 @@ func (f *Fields) SetRoute(model string, provider string, channel string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.model = model
+}
+
+// SetRouteID 记录线路（产品语义上的「线路」，非渠道）。
+func (f *Fields) SetRouteID(routeID int64) {
+	if f == nil {
+		return
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.routeID = routeID
+	f.hasRouteID = true
+}
+
+// SetChannel 记录当前（或最后一次）上游尝试的 provider / channel。
+func (f *Fields) SetChannel(provider string, channel string) {
+	if f == nil {
+		return
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.provider = provider
 	f.channel = channel
 }
@@ -87,7 +116,7 @@ func (f *Fields) Attrs() []any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	attrs := make([]any, 0, 16)
+	attrs := make([]any, 0, 18)
 	if f.correlationID != "" {
 		attrs = append(attrs, "correlation_id", f.correlationID)
 	}
@@ -102,6 +131,9 @@ func (f *Fields) Attrs() []any {
 	}
 	if f.model != "" {
 		attrs = append(attrs, "model", f.model)
+	}
+	if f.hasRouteID {
+		attrs = append(attrs, "route_id", f.routeID)
 	}
 	if f.provider != "" {
 		attrs = append(attrs, "provider", f.provider)
@@ -127,9 +159,23 @@ func SetRequestID(ctx context.Context, requestID string) {
 	}
 }
 
-// SetRoute 在 ctx 存在 Fields 时记录命中的 model/provider/channel；否则静默忽略。
-func SetRoute(ctx context.Context, model string, provider string, channel string) {
+// SetModel 在 ctx 存在 Fields 时记录目标模型；否则静默忽略。
+func SetModel(ctx context.Context, model string) {
 	if f, ok := FromContext(ctx); ok {
-		f.SetRoute(model, provider, channel)
+		f.SetModel(model)
+	}
+}
+
+// SetRouteID 在 ctx 存在 Fields 时记录线路；否则静默忽略。
+func SetRouteID(ctx context.Context, routeID int64) {
+	if f, ok := FromContext(ctx); ok {
+		f.SetRouteID(routeID)
+	}
+}
+
+// SetChannel 在 ctx 存在 Fields 时记录 provider/channel；否则静默忽略。
+func SetChannel(ctx context.Context, provider string, channel string) {
+	if f, ok := FromContext(ctx); ok {
+		f.SetChannel(provider, channel)
 	}
 }

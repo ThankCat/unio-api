@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/apikey"
+	"github.com/ThankCat/unio-gateway/internal/core/apikey"
 )
 
 func TestGenerate(t *testing.T) {

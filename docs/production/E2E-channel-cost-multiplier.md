@@ -24,7 +24,7 @@
 ## 1. 环境起服务
 
 ```bash
-cd unio-api
+cd unio-gateway
 source .env                       # 注入 DATABASE_URL / REDIS_ADDR / 加密密钥等
 # 1) 迁移到最新（含 DEC-031 成本基数迁移 000037；迁移已 consolidation，编号以仓库实际为准）——用你平时的迁移方式
 #    e.g. golang-migrate: migrate -path migrations -database "$DATABASE_URL" up

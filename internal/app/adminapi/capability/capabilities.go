@@ -6,13 +6,13 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
 	"github.com/go-chi/chi/v5"
 
-	corecap "github.com/ThankCat/unio-api/internal/core/capability"
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
-	capsvc "github.com/ThankCat/unio-api/internal/service/admin/capability"
+	corecap "github.com/ThankCat/unio-gateway/internal/core/capability"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	capsvc "github.com/ThankCat/unio-gateway/internal/service/admin/capability"
 )
 
 // CapabilityService 定义 adminapi 操作能力数据所需的最小能力（M5）。

@@ -19,11 +19,11 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // tracerName 是本项目所有 span 使用的 instrumentation scope 名称。
-const tracerName = "github.com/ThankCat/unio-api"
+const tracerName = "github.com/ThankCat/unio-gateway"
 
 // Options 保存初始化 trace provider 所需的参数。
 type Options struct {

@@ -3,8 +3,8 @@ package messages
 import (
 	"encoding/json"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
-	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
+	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic/messages"
+	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
 )
 
 func mapGatewayMessagesToAdapter(messages []gatewayapi.Message) []messagesadapter.Message {

@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ThankCat/unio-api/internal/platform/observability/logfields"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 )
 
 // TestLoggerEmitsUnifiedFields 验证访问日志包含 correlation_id 和下游填充的统一字段。
@@ -25,7 +25,9 @@ func TestLoggerEmitsUnifiedFields(t *testing.T) {
 		// 模拟认证和 gateway 下游对同一 *Fields 的填充。
 		logfields.SetIdentity(req.Context(), 7, 100)
 		logfields.SetRequestID(req.Context(), "req_abc")
-		logfields.SetRoute(req.Context(), "openai/gpt-4.1", "9123", "123")
+		logfields.SetModel(req.Context(), "openai/gpt-4.1")
+		logfields.SetRouteID(req.Context(), 2)
+		logfields.SetChannel(req.Context(), "9123", "123")
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -44,6 +46,7 @@ func TestLoggerEmitsUnifiedFields(t *testing.T) {
 		"user_id":        float64(7),
 		"api_key_id":     float64(100),
 		"model":          "openai/gpt-4.1",
+		"route_id":       float64(2),
 		"provider":       "9123",
 		"channel":        "123",
 		"status":         float64(http.StatusOK),

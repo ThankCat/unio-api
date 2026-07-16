@@ -4,10 +4,10 @@ package lifecycle
 import (
 	"errors"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter/anthropic"
-	"github.com/ThankCat/unio-api/internal/core/adapter/openai"
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter/openai"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 var (

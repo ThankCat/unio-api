@@ -8,12 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	messagesadapter "github.com/ThankCat/unio-api/internal/core/adapter/anthropic/messages"
-	"github.com/ThankCat/unio-api/internal/core/requestlog"
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	coreusage "github.com/ThankCat/unio-api/internal/core/usage"
+	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
+	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	coreusage "github.com/ThankCat/unio-gateway/internal/core/usage"
 
-	gatewayapi "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
+	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic/messages"
 )
 
 // mockMessagesUpstream 是一个最小的 Anthropic Messages 上游替身。

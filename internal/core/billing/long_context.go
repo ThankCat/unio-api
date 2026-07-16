@@ -5,7 +5,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/ThankCat/unio-api/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/core/usage"
 )
 
 // LongContextPolicy 是绑定在 model_prices 价格窗口上的长上下文阶梯策略。

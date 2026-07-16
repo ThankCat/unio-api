@@ -1,6 +1,6 @@
 package messages
 
-import "github.com/ThankCat/unio-api/internal/core/usage"
+import "github.com/ThankCat/unio-gateway/internal/core/usage"
 
 // MessageUsage 是 Anthropic Messages 协议族 adapter 解析出的用量事实（wire 形状）。
 //

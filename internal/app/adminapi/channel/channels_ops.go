@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/service/admin/channelops"
-	"github.com/ThankCat/unio-api/internal/service/admin/gatewayruntime"
-	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/channelops"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/gatewayruntime"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // ChannelOpsService 定义渠道作战台（§3.3）只读运维聚合所需能力。

@@ -3,8 +3,8 @@ package chatcompletions
 import (
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
-	"github.com/ThankCat/unio-api/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/usage"
 )
 
 func TestOpenAIFinishClassMapsStableCategories(t *testing.T) {

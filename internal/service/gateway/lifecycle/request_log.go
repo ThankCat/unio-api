@@ -4,8 +4,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // MaxRequestLogInternalErrorDetailBytes 是 request_records.internal_error_detail

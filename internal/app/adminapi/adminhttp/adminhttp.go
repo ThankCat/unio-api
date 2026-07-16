@@ -13,12 +13,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ThankCat/unio-api/internal/core/adminauth"
-	"github.com/ThankCat/unio-api/internal/platform/failure"
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
-	"github.com/ThankCat/unio-api/internal/platform/listquery"
-	"github.com/ThankCat/unio-api/internal/service/admin/dashboard"
-	"github.com/ThankCat/unio-api/internal/service/admin/opsutil"
+	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/listquery"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/dashboard"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/opsutil"
 )
 
 // ---- 响应信封 / 错误映射 ----

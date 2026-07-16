@@ -13,8 +13,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-api/internal/service/appsettings"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 )
 
 // 时间序列指标与时间桶单位的合法取值。

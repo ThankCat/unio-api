@@ -27,12 +27,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/ThankCat/unio-api/internal/bootstrap"
-	"github.com/ThankCat/unio-api/internal/core/apikey"
-	"github.com/ThankCat/unio-api/internal/core/billing"
-	"github.com/ThankCat/unio-api/internal/platform/config"
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-api/internal/service/appsettings"
+	"github.com/ThankCat/unio-gateway/internal/bootstrap"
+	"github.com/ThankCat/unio-gateway/internal/core/apikey"
+	"github.com/ThankCat/unio-gateway/internal/core/billing"
+	"github.com/ThankCat/unio-gateway/internal/platform/config"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 )
 
 // 默认值。

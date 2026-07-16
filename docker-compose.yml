@@ -27,11 +27,15 @@ services:
       # Redis AOF 数据持久化；计费最终事实仍然不能依赖 Redis。
       - redis_data:/data
     healthcheck:
-      test: ["CMD","redis-cli","ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
 
 volumes:
   postgres_data:
+    name: postgres_data
+    external: true
   redis_data:
+    name: redis_data
+    external: true

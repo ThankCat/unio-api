@@ -1,16 +1,16 @@
 package bootstrap
 
 import (
-	"github.com/ThankCat/unio-api/internal/core/billing"
-	"github.com/ThankCat/unio-api/internal/core/ledger"
-	"github.com/ThankCat/unio-api/internal/core/requestlog"
-	"github.com/ThankCat/unio-api/internal/platform/config"
-	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
-	anthropicmessages "github.com/ThankCat/unio-api/internal/service/gateway/anthropic/messages"
-	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
-	gateway "github.com/ThankCat/unio-api/internal/service/gateway/openai/chatcompletions"
-	responsesgateway "github.com/ThankCat/unio-api/internal/service/gateway/openai/responses"
+	"github.com/ThankCat/unio-gateway/internal/core/billing"
+	"github.com/ThankCat/unio-gateway/internal/core/ledger"
+	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
+	"github.com/ThankCat/unio-gateway/internal/platform/config"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	anthropicmessages "github.com/ThankCat/unio-gateway/internal/service/gateway/anthropic/messages"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	gateway "github.com/ThankCat/unio-gateway/internal/service/gateway/openai/chatcompletions"
+	responsesgateway "github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses"
 )
 
 // NewChatGateway 创建当前 server 进程使用的 chat gateway service。

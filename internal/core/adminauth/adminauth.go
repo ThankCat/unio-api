@@ -11,7 +11,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // SubjectAdmin 是单管理员模式下固定的 principal subject。

@@ -1,7 +1,7 @@
 package responses
 
 import (
-	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 var _ ResponsesInputTokenizer = (*Adapter)(nil)

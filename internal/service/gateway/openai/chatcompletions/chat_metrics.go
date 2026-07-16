@@ -1,7 +1,7 @@
 package chatcompletions
 
 import (
-	"github.com/ThankCat/unio-api/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 )
 
 // chat_metrics.go 内的方法是 lifecycle.RequestLifecycle 的 receiver-bound forward。

@@ -7,12 +7,12 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi"
-	"github.com/ThankCat/unio-api/internal/app/adminapi/capability"
-	"github.com/ThankCat/unio-api/internal/core/adminauth"
-	corecap "github.com/ThankCat/unio-api/internal/core/capability"
-	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
-	capsvc "github.com/ThankCat/unio-api/internal/service/admin/capability"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/capability"
+	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
+	corecap "github.com/ThankCat/unio-gateway/internal/core/capability"
+	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
+	capsvc "github.com/ThankCat/unio-gateway/internal/service/admin/capability"
 )
 
 type fakeCapabilityService struct {

@@ -6,14 +6,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	gatewayanthropic "github.com/ThankCat/unio-api/internal/app/gatewayapi/anthropic/messages"
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi/internalapi"
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi/middleware"
-	gatewaychat "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
-	gatewaymodels "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/models"
-	gatewayresponses "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/responses"
-	"github.com/ThankCat/unio-api/internal/platform/httpmw"
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
+	gatewayanthropic "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic/messages"
+	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/internalapi"
+	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/middleware"
+	gatewaychat "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
+	gatewaymodels "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/models"
+	gatewayresponses "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpmw"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
 
 // RouterDeps 保存构建 HTTP router 所需的外部依赖。

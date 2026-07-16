@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/core/auth"
 )
 
 // fakeAPIKeyAuthenticator 是 middleware 测试使用的认证器替身。

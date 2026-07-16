@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 )
 
 // ChannelCooldownRegistry 记录因上游 429 而进入限时冷却的渠道（P2-7），

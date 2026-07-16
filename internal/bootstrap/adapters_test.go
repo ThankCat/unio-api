@@ -3,8 +3,8 @@ package bootstrap
 import (
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/core/routing"
-	"github.com/ThankCat/unio-api/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 func TestNewAdapterRegistryRegistersDeepSeekDualProtocolCapabilities(t *testing.T) {

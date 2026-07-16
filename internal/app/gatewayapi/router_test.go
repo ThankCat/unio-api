@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/app/gatewayapi/middleware"
-	gatewaychat "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/chatcompletions"
-	gatewaymodels "github.com/ThankCat/unio-api/internal/app/gatewayapi/openai/models"
-	"github.com/ThankCat/unio-api/internal/core/auth"
-	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
-	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
+	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/middleware"
+	gatewaychat "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
+	gatewaymodels "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/models"
+	"github.com/ThankCat/unio-gateway/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
 )
 
 // jsonContent 是 router 测试构造 OpenAI message content 的辅助函数。

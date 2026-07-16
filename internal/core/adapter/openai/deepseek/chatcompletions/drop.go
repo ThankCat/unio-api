@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	chatcompletionsadapter "github.com/ThankCat/unio-api/internal/core/adapter/openai/chatcompletions"
+	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 )
 
 // deepseekUserIDPattern / deepseekUserIDMaxLen 是 DeepSeek user_id 的合法约束。

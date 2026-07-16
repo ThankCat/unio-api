@@ -3,7 +3,7 @@ package responses
 import (
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
 
 // endpoints_handler.go 提供 /v1/responses 主创建端点之外的其余 endpoint handler：

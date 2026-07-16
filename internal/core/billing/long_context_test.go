@@ -4,7 +4,7 @@ import (
 	"math/big"
 	"testing"
 
-	coreusage "github.com/ThankCat/unio-api/internal/core/usage"
+	coreusage "github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 

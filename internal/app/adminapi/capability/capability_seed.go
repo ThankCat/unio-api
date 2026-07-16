@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/app/adminapi/adminhttp"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
-	"github.com/ThankCat/unio-api/internal/platform/httpx"
-	capsvc "github.com/ThankCat/unio-api/internal/service/admin/capability"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	capsvc "github.com/ThankCat/unio-gateway/internal/service/admin/capability"
 )
 
 // CapabilitySeedService 定义 adminapi 列出/物化 adapter 画像所需的最小能力（M5）。

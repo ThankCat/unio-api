@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
 // TestListEnabledChannelAdaptersReturnsEnabledBindings 验证 preflight 查询只返回启用 provider 下启用 channel 的 (protocol, adapter_key)。

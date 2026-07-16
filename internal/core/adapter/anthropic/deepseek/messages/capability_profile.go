@@ -3,7 +3,7 @@ package messages
 import (
 	"encoding/json"
 
-	"github.com/ThankCat/unio-api/internal/core/capability"
+	"github.com/ThankCat/unio-gateway/internal/core/capability"
 )
 
 // CapabilityProfile 返回 DeepSeek Anthropic 兼容 adapter 的能力画像，作为 model_capabilities 的
