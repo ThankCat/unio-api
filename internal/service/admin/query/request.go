@@ -401,6 +401,7 @@ func (s *RequestService) Get(ctx context.Context, requestID string, includeInter
 	switch {
 	case err == nil:
 		be := toBillingException(exceptionRow)
+		be.RequestID = record.RequestID
 		detail.BillingException = &be
 	case errors.Is(err, pgx.ErrNoRows):
 		// 无计费异常属常态。

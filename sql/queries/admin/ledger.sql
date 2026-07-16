@@ -53,34 +53,39 @@ WHERE request_record_id = sqlc.arg(request_record_id);
 
 -- name: ListLedgerBillingExceptionsPage :many
 -- ListLedgerBillingExceptionsPage 供 admin 只读查询台（M6）按用户/事件类型/时间过滤分页倒序列出核销/风险敞口事实。
--- 所有过滤项为 NULL 时不过滤。
+-- 联表带出对外 request_id（跳转请求详情）与用户展示字段（用户名/邮箱）。所有过滤项为 NULL 时不过滤。
 SELECT
-    id,
-    user_id,
-    request_record_id,
-    reservation_id,
-    event_type,
-    actual_amount,
-    captured_amount,
-    platform_amount,
-    currency,
-    reason_code,
-    reason,
-    created_at
-FROM ledger_billing_exceptions
-WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::bigint)
-  AND (sqlc.narg('event_type')::text IS NULL OR event_type = sqlc.narg('event_type')::text)
-  AND (sqlc.narg('reason_code')::text IS NULL OR reason_code = sqlc.narg('reason_code')::text)
-  AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
-  AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
+    e.id,
+    e.user_id,
+    u.display_name AS user_display_name,
+    u.email AS user_email,
+    e.request_record_id,
+    r.request_id,
+    e.reservation_id,
+    e.event_type,
+    e.actual_amount,
+    e.captured_amount,
+    e.platform_amount,
+    e.currency,
+    e.reason_code,
+    e.reason,
+    e.created_at
+FROM ledger_billing_exceptions e
+JOIN request_records r ON r.id = e.request_record_id
+JOIN users u ON u.id = e.user_id
+WHERE (sqlc.narg('user_id')::bigint IS NULL OR e.user_id = sqlc.narg('user_id')::bigint)
+  AND (sqlc.narg('event_type')::text IS NULL OR e.event_type = sqlc.narg('event_type')::text)
+  AND (sqlc.narg('reason_code')::text IS NULL OR e.reason_code = sqlc.narg('reason_code')::text)
+  AND (sqlc.narg('from_time')::timestamptz IS NULL OR e.created_at >= sqlc.narg('from_time')::timestamptz)
+  AND (sqlc.narg('to_time')::timestamptz IS NULL OR e.created_at < sqlc.narg('to_time')::timestamptz)
 ORDER BY
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN created_at END DESC NULLS LAST,
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN created_at END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN user_id END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN user_id END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'event_type' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN event_type END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'event_type' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN event_type END ASC NULLS LAST,
-  id DESC
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN e.created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN e.created_at END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN e.user_id END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN e.user_id END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'event_type' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN e.event_type END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'event_type' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN e.event_type END ASC NULLS LAST,
+  e.id DESC
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 
 -- name: CountLedgerBillingExceptions :one
@@ -122,35 +127,38 @@ LIMIT
 
 -- name: ListLedgerEntriesPage :many
 -- ListLedgerEntriesPage 供 admin 只读查询台（M6）按用户/类型/币种/时间过滤分页倒序列出账本流水。
--- 所有过滤项为 NULL 时不过滤。
+-- 联表带出用户展示字段（用户名/邮箱）。所有过滤项为 NULL 时不过滤。
 SELECT
-    id,
-    user_id,
-    request_record_id,
-    entry_type,
-    amount,
-    currency,
-    balance_before,
-    balance_after,
-    idempotency_key,
-    reason,
-    created_at
-FROM ledger_entries
-WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::bigint)
-  AND (sqlc.narg('entry_type')::text IS NULL OR entry_type = sqlc.narg('entry_type')::text)
-  AND (sqlc.narg('currency')::text IS NULL OR currency = sqlc.narg('currency')::text)
-  AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
-  AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
+    e.id,
+    e.user_id,
+    u.display_name AS user_display_name,
+    u.email AS user_email,
+    e.request_record_id,
+    e.entry_type,
+    e.amount,
+    e.currency,
+    e.balance_before,
+    e.balance_after,
+    e.idempotency_key,
+    e.reason,
+    e.created_at
+FROM ledger_entries e
+JOIN users u ON u.id = e.user_id
+WHERE (sqlc.narg('user_id')::bigint IS NULL OR e.user_id = sqlc.narg('user_id')::bigint)
+  AND (sqlc.narg('entry_type')::text IS NULL OR e.entry_type = sqlc.narg('entry_type')::text)
+  AND (sqlc.narg('currency')::text IS NULL OR e.currency = sqlc.narg('currency')::text)
+  AND (sqlc.narg('from_time')::timestamptz IS NULL OR e.created_at >= sqlc.narg('from_time')::timestamptz)
+  AND (sqlc.narg('to_time')::timestamptz IS NULL OR e.created_at < sqlc.narg('to_time')::timestamptz)
 ORDER BY
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN created_at END DESC NULLS LAST,
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN created_at END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN user_id END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN user_id END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'amount' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN amount END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'amount' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN amount END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'entry_type' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN entry_type END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'entry_type' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN entry_type END ASC NULLS LAST,
-  id DESC
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN e.created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN e.created_at END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN e.user_id END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN e.user_id END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'amount' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN e.amount END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'amount' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN e.amount END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'entry_type' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN e.entry_type END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'entry_type' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN e.entry_type END ASC NULLS LAST,
+  e.id DESC
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 
 -- name: CountLedgerEntries :one

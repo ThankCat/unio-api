@@ -60,7 +60,7 @@ type channelOpsRowDTO struct {
 	CostMultiplier          *string                   `json:"cost_multiplier"`
 	CostMultiplierOverrides int64                     `json:"cost_multiplier_overrides"`
 	RechargeFactor          *string                   `json:"recharge_factor"`
-	// CircuitBreaker 仅在 gateway 报告 open/half_open 时非空（列表名前列徽章）。
+	// CircuitBreaker 来自 gateway 熔断快照；无快照时前端按闭合（绿）常驻显示。
 	CircuitBreaker *channelCircuitBreakerDTO `json:"circuit_breaker,omitempty"`
 }
 
@@ -87,13 +87,15 @@ type channelCircuitBreakerInstanceDTO struct {
 }
 
 type channelOpsDetailDTO struct {
-	AttemptTotal     int64                     `json:"attempt_total"`
-	AttemptSucceeded int64                     `json:"attempt_succeeded"`
-	SuccessRate      float64                   `json:"success_rate"`
-	TimeoutTotal     int64                     `json:"timeout_total"`
-	Latency          adminhttp.LatencyStatsDTO `json:"latency"`
-	LastSuccessAt    *string                   `json:"last_success_at"`
-	LastFailureAt    *string                   `json:"last_failure_at"`
+	AttemptTotal     int64                      `json:"attempt_total"`
+	AttemptSucceeded int64                      `json:"attempt_succeeded"`
+	SuccessRate      float64                    `json:"success_rate"`
+	TimeoutTotal     int64                      `json:"timeout_total"`
+	Latency          adminhttp.LatencyStatsDTO  `json:"latency"`
+	LastSuccessAt    *string                    `json:"last_success_at"`
+	LastFailureAt    *string                    `json:"last_failure_at"`
+	// CircuitBreaker 来自 gateway 快照；无快照时省略，前端按闭合显示。
+	CircuitBreaker *channelCircuitBreakerDTO `json:"circuit_breaker,omitempty"`
 }
 
 type channelOpsPerfPointDTO struct {
@@ -271,7 +273,7 @@ func (h *channelOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	adminhttp.WriteData(w, http.StatusOK, channelOpsDetailDTO{
+	dto := channelOpsDetailDTO{
 		AttemptTotal:     d.AttemptTotal,
 		AttemptSucceeded: d.AttemptSucceeded,
 		SuccessRate:      d.SuccessRate,
@@ -279,7 +281,13 @@ func (h *channelOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		Latency:          adminhttp.LatencyStatsFrom(d.Latency),
 		LastSuccessAt:    adminhttp.RFC3339Ptr(d.LastSuccessAt),
 		LastFailureAt:    adminhttp.RFC3339Ptr(d.LastFailureAt),
-	})
+	}
+	if h.breaker != nil {
+		if st, ok := h.breaker.Statuses(r.Context())[id]; ok {
+			dto.CircuitBreaker = toCircuitBreakerDTO(st)
+		}
+	}
+	adminhttp.WriteData(w, http.StatusOK, dto)
 }
 
 func (h *channelOpsHandler) performance(w http.ResponseWriter, r *http.Request) {

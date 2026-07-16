@@ -61,7 +61,7 @@ func NewClient(urls []string, token string, logger *slog.Logger) *Client {
 	}
 }
 
-// Statuses 返回 channel_id → 合并后的熔断状态；仅包含 open / half_open（闭合不展示徽章）。
+// Statuses 返回 channel_id → 合并后的熔断状态（含 closed，供列表常驻徽章）。
 func (c *Client) Statuses(ctx context.Context) map[int64]ChannelStatus {
 	if c == nil || c.Token == "" || len(c.URLs) == 0 {
 		return nil
@@ -100,9 +100,6 @@ func (c *Client) Statuses(ctx context.Context) map[int64]ChannelStatus {
 			instanceID = res.url
 		}
 		for _, ch := range res.snap.Channels {
-			if ch.State != lifecycle.CircuitStateOpen && ch.State != lifecycle.CircuitStateHalfOpen {
-				continue
-			}
 			inst := InstanceStatus{
 				ID:               instanceID,
 				State:            ch.State,
@@ -149,6 +146,16 @@ func (c *Client) Statuses(ctx context.Context) map[int64]ChannelStatus {
 					cur.ObservedAt = res.snap.ObservedAt
 				}
 				cur.HalfOpenInFlight = cur.HalfOpenInFlight || ch.HalfOpenInFlight
+			} else if ch.State == lifecycle.CircuitStateClosed && cur.State == lifecycle.CircuitStateClosed {
+				// 同为闭合：合并窗口样本，取更新的快照时间。
+				cur.Failures += ch.Failures
+				cur.Successes += ch.Successes
+				if res.snap.ObservedAt.After(cur.ObservedAt) {
+					cur.ObservedAt = res.snap.ObservedAt
+					ws := ch.WindowStart
+					cur.WindowStart = &ws
+					cur.HealthScore = ch.HealthScore
+				}
 			}
 		}
 	}

@@ -9,9 +9,9 @@ import (
 
 // LedgerStore 定义账本只读查询所需的存储能力。
 type LedgerStore interface {
-	ListLedgerEntriesPage(ctx context.Context, arg sqlc.ListLedgerEntriesPageParams) ([]sqlc.LedgerEntry, error)
+	ListLedgerEntriesPage(ctx context.Context, arg sqlc.ListLedgerEntriesPageParams) ([]sqlc.ListLedgerEntriesPageRow, error)
 	CountLedgerEntries(ctx context.Context, arg sqlc.CountLedgerEntriesParams) (int64, error)
-	ListLedgerBillingExceptionsPage(ctx context.Context, arg sqlc.ListLedgerBillingExceptionsPageParams) ([]sqlc.LedgerBillingException, error)
+	ListLedgerBillingExceptionsPage(ctx context.Context, arg sqlc.ListLedgerBillingExceptionsPageParams) ([]sqlc.ListLedgerBillingExceptionsPageRow, error)
 	CountLedgerBillingExceptions(ctx context.Context, arg sqlc.CountLedgerBillingExceptionsParams) (int64, error)
 }
 
@@ -46,6 +46,8 @@ type ExceptionListParams struct {
 type LedgerEntry struct {
 	ID              int64
 	UserID          int64
+	UserDisplayName string // 列表联表带出；详情嵌入路径可为空。
+	UserEmail       string
 	RequestRecordID *int64
 	EntryType       string
 	Amount          string
@@ -61,7 +63,10 @@ type LedgerEntry struct {
 type BillingException struct {
 	ID              int64
 	UserID          int64
+	UserDisplayName string // 列表联表带出；详情路径可为空。
+	UserEmail       string
 	RequestRecordID int64
+	RequestID       string // 对外 request_id；列表联表带出，详情路径可能由调用方补齐。
 	ReservationID   int64
 	EventType       string
 	ActualAmount    *string
@@ -113,7 +118,7 @@ func (s *LedgerService) ListEntries(ctx context.Context, params EntryListParams)
 
 	items := make([]LedgerEntry, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, toLedgerEntry(row))
+		items = append(items, toLedgerEntryListRow(row))
 	}
 	return items, total, nil
 }
@@ -148,7 +153,7 @@ func (s *LedgerService) ListBillingExceptions(ctx context.Context, params Except
 
 	items := make([]BillingException, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, toBillingException(row))
+		items = append(items, toBillingExceptionListRow(row))
 	}
 	return items, total, nil
 }
@@ -169,11 +174,49 @@ func toLedgerEntry(e sqlc.LedgerEntry) LedgerEntry {
 	}
 }
 
+func toLedgerEntryListRow(e sqlc.ListLedgerEntriesPageRow) LedgerEntry {
+	return LedgerEntry{
+		ID:              e.ID,
+		UserID:          e.UserID,
+		UserDisplayName: e.UserDisplayName,
+		UserEmail:       e.UserEmail,
+		RequestRecordID: int8Ptr(e.RequestRecordID),
+		EntryType:       e.EntryType,
+		Amount:          numericString(e.Amount),
+		Currency:        e.Currency,
+		BalanceBefore:   numericString(e.BalanceBefore),
+		BalanceAfter:    numericString(e.BalanceAfter),
+		IdempotencyKey:  e.IdempotencyKey,
+		Reason:          e.Reason,
+		CreatedAt:       e.CreatedAt.Time,
+	}
+}
+
 func toBillingException(e sqlc.LedgerBillingException) BillingException {
 	return BillingException{
 		ID:              e.ID,
 		UserID:          e.UserID,
 		RequestRecordID: e.RequestRecordID,
+		ReservationID:   e.ReservationID,
+		EventType:       e.EventType,
+		ActualAmount:    numericPtr(e.ActualAmount),
+		CapturedAmount:  numericString(e.CapturedAmount),
+		PlatformAmount:  numericString(e.PlatformAmount),
+		Currency:        e.Currency,
+		ReasonCode:      e.ReasonCode,
+		Reason:          e.Reason,
+		CreatedAt:       e.CreatedAt.Time,
+	}
+}
+
+func toBillingExceptionListRow(e sqlc.ListLedgerBillingExceptionsPageRow) BillingException {
+	return BillingException{
+		ID:              e.ID,
+		UserID:          e.UserID,
+		UserDisplayName: e.UserDisplayName,
+		UserEmail:       e.UserEmail,
+		RequestRecordID: e.RequestRecordID,
+		RequestID:       e.RequestID,
 		ReservationID:   e.ReservationID,
 		EventType:       e.EventType,
 		ActualAmount:    numericPtr(e.ActualAmount),

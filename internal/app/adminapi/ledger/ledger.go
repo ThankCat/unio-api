@@ -19,6 +19,8 @@ type LedgerQueryService interface {
 type LedgerEntryDTO struct {
 	ID              int64  `json:"id"`
 	UserID          int64  `json:"user_id"`
+	UserDisplayName string `json:"user_display_name"`
+	UserEmail       string `json:"user_email"`
 	RequestRecordID *int64 `json:"request_record_id"`
 	EntryType       string `json:"entry_type"`
 	Amount          string `json:"amount"`
@@ -34,7 +36,10 @@ type LedgerEntryDTO struct {
 type BillingExceptionDTO struct {
 	ID              int64   `json:"id"`
 	UserID          int64   `json:"user_id"`
+	UserDisplayName string  `json:"user_display_name"`
+	UserEmail       string  `json:"user_email"`
 	RequestRecordID int64   `json:"request_record_id"`
+	RequestID       string  `json:"request_id"`
 	ReservationID   int64   `json:"reservation_id"`
 	EventType       string  `json:"event_type"`
 	ActualAmount    *string `json:"actual_amount"`
@@ -157,6 +162,8 @@ func ToLedgerEntryDTO(e query.LedgerEntry) LedgerEntryDTO {
 	return LedgerEntryDTO{
 		ID:              e.ID,
 		UserID:          e.UserID,
+		UserDisplayName: e.UserDisplayName,
+		UserEmail:       e.UserEmail,
 		RequestRecordID: e.RequestRecordID,
 		EntryType:       e.EntryType,
 		Amount:          e.Amount,
@@ -173,7 +180,10 @@ func ToBillingExceptionDTO(e query.BillingException) BillingExceptionDTO {
 	return BillingExceptionDTO{
 		ID:              e.ID,
 		UserID:          e.UserID,
+		UserDisplayName: e.UserDisplayName,
+		UserEmail:       e.UserEmail,
 		RequestRecordID: e.RequestRecordID,
+		RequestID:       e.RequestID,
 		ReservationID:   e.ReservationID,
 		EventType:       e.EventType,
 		ActualAmount:    e.ActualAmount,
