@@ -2,10 +2,10 @@ package workers
 
 import (
 	"context"
-	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
@@ -34,13 +34,13 @@ type OrphanReservationFinalizer interface {
 type OrphanReservationSweeperWorker struct {
 	store        OrphanReservationStore
 	finalizer    OrphanReservationFinalizer
-	logger       *slog.Logger
+	logger       *zap.Logger
 	ageThreshold time.Duration
 	batchSize    int32
 }
 
 // NewOrphanReservationSweeperWorker 创建孤儿预授权清扫 worker。
-func NewOrphanReservationSweeperWorker(store OrphanReservationStore, finalizer OrphanReservationFinalizer, logger *slog.Logger, ageThreshold time.Duration, batchSize int32) *OrphanReservationSweeperWorker {
+func NewOrphanReservationSweeperWorker(store OrphanReservationStore, finalizer OrphanReservationFinalizer, logger *zap.Logger, ageThreshold time.Duration, batchSize int32) *OrphanReservationSweeperWorker {
 	if store == nil {
 		panic("workers: orphan reservation store is required")
 	}
@@ -48,7 +48,7 @@ func NewOrphanReservationSweeperWorker(store OrphanReservationStore, finalizer O
 		panic("workers: orphan reservation finalizer is required")
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	if ageThreshold <= 0 {
 		ageThreshold = defaultOrphanReservationAgeThreshold
@@ -99,12 +99,12 @@ func (w *OrphanReservationSweeperWorker) RunOnce(ctx context.Context) (bool, err
 			break
 		}
 		if err := w.finalizer.FinalizeOrphanReservation(ctx, reservation); err != nil {
-			w.logger.Error("orphan reservation sweep failed",
-				append([]any{
-					"worker", w.Name(),
-					"reservation_id", reservation.ID,
-					"request_record_id", reservation.RequestRecordID,
-				}, failure.LogArgs(err)...)...)
+			fields := append([]zap.Field{
+				zap.String("worker", w.Name()),
+				zap.Int64("reservation_id", reservation.ID),
+				zap.Int64("request_record_id", reservation.RequestRecordID),
+			}, failure.LogFields(err)...)
+			w.logger.Error("orphan reservation sweep failed", fields...)
 			continue
 		}
 		swept++
@@ -113,11 +113,11 @@ func (w *OrphanReservationSweeperWorker) RunOnce(ctx context.Context) (bool, err
 	if swept > 0 {
 		// 孤儿预授权应当极其罕见；批量出现意味着曾发生进程崩溃，附 alert 键便于告警路由。
 		w.logger.Warn("orphan reservations reclaimed",
-			"worker", w.Name(),
-			"swept", swept,
-			"batch", len(rows),
-			"age_threshold", w.ageThreshold.String(),
-			"alert", "orphan_reservation_reclaimed",
+			zap.String("worker", w.Name()),
+			zap.Int("swept", swept),
+			zap.Int("batch", len(rows)),
+			zap.String("age_threshold", w.ageThreshold.String()),
+			zap.String("alert", "orphan_reservation_reclaimed"),
 		)
 	}
 

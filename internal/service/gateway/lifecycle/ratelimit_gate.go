@@ -42,6 +42,15 @@ func (r *AttemptRunner) SetConcurrencyLimiter(limiter ChannelConcurrencyLimiter)
 	r.concurrency = limiter
 }
 
+// SetHeadWaitSource 注入队首短等配置源（通常为 StickyRouter，与 gateway.routing_sticky 热更新同源）。
+// nil 表示关闭短等。
+func (r *AttemptRunner) SetHeadWaitSource(src *StickyRouter) {
+	if r == nil {
+		return
+	}
+	r.headWait = src
+}
+
 // acquireChannelSlot 尝试占用候选渠道的在途名额；未注入限制器时恒放行（no-op release）。
 func (r *AttemptRunner) acquireChannelSlot(candidate routing.ChatRouteCandidate) (func(), bool) {
 	if r.concurrency == nil {

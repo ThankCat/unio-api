@@ -3,8 +3,9 @@
 package lifecycle
 
 import (
-	"log/slog"
 	"os"
+
+	"go.uber.org/zap"
 )
 
 // 本文件是「账单 E2E 构建」（-tags billing_e2e）下的故障注入开关（P2-6）。
@@ -23,11 +24,11 @@ func faultInjectSettlementOnce() bool {
 }
 
 // WarnIfSettlementFaultInjectionConfigured 在 E2E 构建里提示当前注入模式（便于排查）。logger 为 nil 时 no-op。
-func WarnIfSettlementFaultInjectionConfigured(logger *slog.Logger) {
+func WarnIfSettlementFaultInjectionConfigured(logger *zap.Logger) {
 	if logger == nil {
 		return
 	}
 	if v := os.Getenv("BILLING_E2E_INJECT_SETTLEMENT_FAIL"); v != "" {
-		logger.Warn("billing_e2e build: settlement fault injection ACTIVE", "mode", v)
+		logger.Warn("billing_e2e build: settlement fault injection ACTIVE", zap.String("mode", v))
 	}
 }

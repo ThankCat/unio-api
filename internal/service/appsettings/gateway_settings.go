@@ -26,6 +26,7 @@ const (
 	GatewayDefaultChannelTimeoutKey  = "gateway.default_channel_timeout_ms"
 	GatewayFailureCooldownKey        = "gateway.channel_failure_cooldown_ms"
 	GatewayConcurrencyDefaultsKey    = "gateway.concurrency_defaults"
+	GatewayRoutingStickyKey          = "gateway.routing_sticky"
 )
 
 func msToDuration(ms int64) time.Duration {
@@ -510,6 +511,95 @@ func GatewayConcurrencyDefaults(ctx context.Context, store *SettingsStore) Concu
 	s, err := DecodeConcurrencyDefaultsSettings(store.Raw(ctx, GatewayConcurrencyDefaultsKey))
 	if err != nil {
 		return DefaultConcurrencyDefaultsSettings()
+	}
+	return s
+}
+
+// ---- 会话粘性路由全局默认（大 uncache 缺口 P0） ----
+
+// RoutingStickySettings 是跨协议会话 sticky 的全局默认配置。
+// 线路行 sticky_enabled 可覆盖 EnabledDefault（NULL=继承此默认）；TTL 为绝对过期（bind/改绑时设置，
+// 命中不刷新，R2），与上游 prompt cache TTL 解耦。TPMWait/TPMWaitJitter 供 P1 队首短等消费。
+type RoutingStickySettings struct {
+	EnabledDefault bool
+	TTL            time.Duration
+	TPMWait        time.Duration
+	TPMWaitJitter  time.Duration
+}
+
+// DefaultRoutingStickySettings 默认开启 sticky：TTL 60min、队首短等 500ms + 100ms 抖动。
+func DefaultRoutingStickySettings() RoutingStickySettings {
+	return RoutingStickySettings{
+		EnabledDefault: true,
+		TTL:            time.Hour,
+		TPMWait:        500 * time.Millisecond,
+		TPMWaitJitter:  100 * time.Millisecond,
+	}
+}
+
+type routingStickyDoc struct {
+	EnabledDefault  bool  `json:"enabled_default"`
+	TTLMs           int64 `json:"ttl_ms"`
+	TPMWaitMs       int64 `json:"tpm_wait_ms"`
+	TPMWaitJitterMs int64 `json:"tpm_wait_jitter_ms"`
+}
+
+func encodeRoutingStickySettings(s RoutingStickySettings) json.RawMessage {
+	raw, err := json.Marshal(routingStickyDoc{
+		EnabledDefault:  s.EnabledDefault,
+		TTLMs:           durationToMs(s.TTL),
+		TPMWaitMs:       durationToMs(s.TPMWait),
+		TPMWaitJitterMs: durationToMs(s.TPMWaitJitter),
+	})
+	if err != nil {
+		panic(fmt.Sprintf("appsettings: encode routing sticky settings: %v", err))
+	}
+	return raw
+}
+
+// DecodeRoutingStickySettings 解码并校验会话粘性配置（时长为 int 毫秒；拒绝未知字段）。
+// ttl_ms 必须 > 0；tpm_wait_ms / tpm_wait_jitter_ms 允许 0（0=关闭短等/无抖动）。
+func DecodeRoutingStickySettings(raw []byte) (RoutingStickySettings, error) {
+	var doc routingStickyDoc
+	if err := strictUnmarshal(raw, &doc); err != nil {
+		return RoutingStickySettings{}, err
+	}
+	if doc.TTLMs <= 0 {
+		return RoutingStickySettings{}, errors.New("ttl_ms must be > 0")
+	}
+	if doc.TPMWaitMs < 0 || doc.TPMWaitJitterMs < 0 {
+		return RoutingStickySettings{}, errors.New("tpm_wait_ms/tpm_wait_jitter_ms must not be negative")
+	}
+	return RoutingStickySettings{
+		EnabledDefault: doc.EnabledDefault,
+		TTL:            msToDuration(doc.TTLMs),
+		TPMWait:        msToDuration(doc.TPMWaitMs),
+		TPMWaitJitter:  msToDuration(doc.TPMWaitJitterMs),
+	}, nil
+}
+
+func routingStickyDefinition() Definition {
+	return Definition{
+		Key:      GatewayRoutingStickyKey,
+		Category: "gateway",
+		Label:    "会话粘性路由(sticky)",
+		Description: "同会话请求钉住上次成功渠道以保上游 prompt cache（OpenAI prompt_cache_key / " +
+			"Claude Code 会话头）。enabled_default 是线路未单独配置时的默认开关；ttl_ms 是绑定绝对过期" +
+			"（命中不刷新，到期回落线路策略排序）；tpm_wait_ms/抖动是队首 TPM/并发满时的短等（0=不等）。",
+		HotReload: true,
+		Default:   encodeRoutingStickySettings(DefaultRoutingStickySettings()),
+		Validate: func(raw json.RawMessage) error {
+			_, err := DecodeRoutingStickySettings(raw)
+			return err
+		},
+	}
+}
+
+// GatewayRoutingSticky 读取当前生效的会话粘性配置（解码失败回默认）。
+func GatewayRoutingSticky(ctx context.Context, store *SettingsStore) RoutingStickySettings {
+	s, err := DecodeRoutingStickySettings(store.Raw(ctx, GatewayRoutingStickyKey))
+	if err != nil {
+		return DefaultRoutingStickySettings()
 	}
 	return s
 }

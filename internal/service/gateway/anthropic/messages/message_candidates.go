@@ -10,7 +10,9 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
-func (s *MessagesService) prepareMessageCandidates(ctx context.Context, req gatewayapi.MessageRequest, candidates []routing.ChatRouteCandidate, mode string, stream bool) (lifecycle.CandidatePlan, error) {
+// prepareMessageCandidates 生成 Anthropic Messages 的保守 fallback plan。
+// stickyChannelID 是会话粘性既有绑定渠道（0=无），非 0 时置顶该渠道（大 uncache 缺口 P0）。
+func (s *MessagesService) prepareMessageCandidates(ctx context.Context, req gatewayapi.MessageRequest, candidates []routing.ChatRouteCandidate, mode string, stream bool, stickyChannelID int64) (lifecycle.CandidatePlan, error) {
 	capabilities := []lifecycle.AdapterCapability{
 		lifecycle.AdapterCapabilityInputTokenizer,
 	}
@@ -29,6 +31,7 @@ func (s *MessagesService) prepareMessageCandidates(ctx context.Context, req gate
 		EstimateInputTokens: s.messagesInputTokenEstimator(req),
 		Mode:                mode,
 		ChannelHealthScore:  s.channelHealthScore,
+		StickyChannelID:     stickyChannelID,
 	})
 }
 

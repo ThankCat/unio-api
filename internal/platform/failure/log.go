@@ -1,23 +1,25 @@
 package failure
 
-// LogArgs 将 error 展开成 slog 可直接接收的 key/value 参数。
-func LogArgs(err error) []any {
+import "go.uber.org/zap"
+
+// LogFields 将 error 展开成 zap 可直接接收的字段列表。
+func LogFields(err error) []zap.Field {
 	if err == nil {
 		return nil
 	}
 
-	args := []any{
-		"error", err,
+	fields := []zap.Field{
+		zap.Error(err),
 	}
 
 	code := CodeOf(err)
 	if code == "" {
-		return args
+		return fields
 	}
 
-	args = append(args,
-		"error_code", string(code),
-		"error_category", string(code.Category()),
+	fields = append(fields,
+		zap.String("error_code", string(code)),
+		zap.String("error_category", string(code.Category())),
 	)
 
 	for _, field := range FieldsOf(err) {
@@ -25,8 +27,8 @@ func LogArgs(err error) []any {
 			continue
 		}
 
-		args = append(args, field.Key, field.Value)
+		fields = append(fields, zap.Any(field.Key, field.Value))
 	}
 
-	return args
+	return fields
 }

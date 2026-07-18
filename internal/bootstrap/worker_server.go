@@ -3,9 +3,10 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/app/workers"
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
@@ -26,7 +27,7 @@ type WorkerServerAppDB interface {
 
 // WorkerServerAppDeps 表示构建 worker server app 需要的进程级依赖。
 type WorkerServerAppDeps struct {
-	Logger *slog.Logger
+	Logger *zap.Logger
 	Config config.Config
 	DB     WorkerServerAppDB
 }
@@ -77,7 +78,7 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 			deps.Logger,
 			deps.Config.ModelCatalogSync.Interval,
 		))
-		deps.Logger.Info("model catalog sync worker enabled", "interval", deps.Config.ModelCatalogSync.Interval.String())
+		deps.Logger.Info("model catalog sync worker enabled", zap.String("interval", deps.Config.ModelCatalogSync.Interval.String()))
 	}
 
 	// 渠道自动检测复用与网关一致的 adapter/HTTP 探测链路（不走计费/请求记录），
@@ -101,9 +102,9 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 	))
 	channelTestCfg := appsettings.AdminBackendChannelTest(ctx, settingsStore)
 	deps.Logger.Info("channel test worker registered",
-		"enabled", channelTestCfg.Enabled,
-		"interval", channelTestCfg.Interval.String(),
-		"log_retention_per_channel", channelTestCfg.LogRetentionPerChannel,
+		zap.Bool("enabled", channelTestCfg.Enabled),
+		zap.String("interval", channelTestCfg.Interval.String()),
+		zap.Int("log_retention_per_channel", channelTestCfg.LogRetentionPerChannel),
 	)
 
 	runner := workers.NewRunner(

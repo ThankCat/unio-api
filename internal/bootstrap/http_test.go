@@ -2,11 +2,11 @@ package bootstrap
 
 import (
 	"context"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"go.uber.org/zap"
 
 	gatewayanthropic "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic/messages"
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
@@ -56,7 +56,7 @@ func (s fakeHTTPMessagesService) StreamMessage(ctx context.Context, req gatewaya
 }
 
 func TestNewHTTPHandlerBuildsHealthRoute(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	handler := NewHTTPHandler(
 		logger,
 		&sqlc.Queries{},

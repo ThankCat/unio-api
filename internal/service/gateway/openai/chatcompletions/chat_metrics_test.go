@@ -72,6 +72,10 @@ func (r *fakeMetricsRecorder) IncZeroPriceServed(provider string, channel string
 	r.zeroPriceServed = append(r.zeroPriceServed, routingMetric{provider: provider, channel: channel, model: model})
 }
 
+func (r *fakeMetricsRecorder) IncRoutingSkip(string) {}
+
+func (r *fakeMetricsRecorder) ObserveRoutingHeadWait(time.Duration) {}
+
 func TestChatCompletionServiceRecordsSuccessMetrics(t *testing.T) {
 	recorder := &fakeMetricsRecorder{}
 	fakeAdapter := &fakeChatAdapter{chatResp: chatResponse("ok")}

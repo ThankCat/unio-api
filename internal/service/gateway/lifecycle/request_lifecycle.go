@@ -411,7 +411,14 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 // attempt 记录 fallback 链路中的单次 provider/channel 调用，必须先于 adapter 调用创建。
 func (l *RequestLifecycle) CreateAttempt(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate) (requestlog.AttemptRecord, error) {
 	// 覆盖为当前尝试；失败停在某次 attempt 时访问日志即显示最后打过的渠道。
-	logfields.SetChannel(ctx, MetricsID(candidate.ProviderID), MetricsID(candidate.Channel.ID))
+	logfields.SetUpstreamAttempt(ctx, logfields.UpstreamAttempt{
+		ModelID:    candidate.ModelDBID,
+		Router:     candidate.RouteName,
+		ProviderID: candidate.ProviderID,
+		Provider:   candidate.Channel.ProviderSlug,
+		ChannelID:  candidate.Channel.ID,
+		Channel:    candidate.Channel.Name,
+	})
 
 	return l.requestLog.CreateAttempt(ctx, requestlog.CreateAttemptParams{
 		RequestRecordID:  requestRecord.ID,

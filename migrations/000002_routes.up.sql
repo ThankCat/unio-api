@@ -29,6 +29,9 @@ CREATE TABLE public.routes (
     tpm_limit integer,
     rpd_limit integer,
     archived_at timestamp with time zone,
+    -- sticky_enabled: 会话粘性路由开关（大 uncache 缺口 P0）。NULL=继承系统设置
+    -- gateway.routing_sticky.enabled_default；true/false=线路显式覆盖。--
+    sticky_enabled boolean,
     CONSTRAINT ck_routes_archived_at CHECK (((status = 'archived'::text) = (archived_at IS NOT NULL))),
     CONSTRAINT ck_routes_fixed_pool CHECK (((mode <> 'fixed'::text) OR (pool_kind = 'explicit'::text))),
     CONSTRAINT routes_mode_check CHECK ((mode = ANY (ARRAY['cheapest'::text, 'stable'::text, 'fixed'::text, 'random'::text]))),
@@ -71,5 +74,9 @@ ALTER TABLE ONLY public.routes
 -- 实体归档生命周期：providers / channels / routes 三表 status 增第三态 archived，
 -- 并加 archived_at 时间列 + 一致性不变量（archived_at 有值 ⟺ status='archived'）。
 -- 归档 = 只改状态、不删数据、完全可逆；路由候选已按 status='enabled' 过滤，archived 天然被排除。
+-- [sticky_enabled 追加（大 uncache 缺口 P0）]
+-- 会话粘性路由的线路级开关：同会话请求钉住上次成功渠道以保上游 prompt cache。
+-- NULL=继承系统设置 gateway.routing_sticky.enabled_default；true/false=显式覆盖。
+-- 绑定关系存 Redis（sticky:{protocol}:{route_id}:{api_key_id}:{session_key_hash}），本列只持久化开关。
 --
 -- providers

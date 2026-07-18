@@ -5,13 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
@@ -34,16 +36,16 @@ type MessagesService interface {
 
 type messagesHandler struct {
 	service MessagesService
-	logger  *slog.Logger
+	logger  *zap.Logger
 }
 
 // NewMessagesHandler 构造 Anthropic Messages HTTP handler。
 //
 // logger 用于脱敏审计被忽略的 anthropic-beta（仅记录非敏感的 beta 能力名）；
-// 传 nil 时回退 slog.Default()，保证测试和异常装配下也不会 panic。
-func NewMessagesHandler(service MessagesService, logger *slog.Logger) http.Handler {
+// 传 nil 时回退 zap.NewNop()，保证测试和异常装配下也不会 panic。
+func NewMessagesHandler(service MessagesService, logger *zap.Logger) http.Handler {
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	return &messagesHandler{service: service, logger: logger}
 }
@@ -53,6 +55,10 @@ func (h *messagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeMessageValidationError(w, verr)
 		return
 	}
+
+	// x-claude-code-session-id 头是会话粘性路由的首选会话键（实测 Claude Code 必带、跨轮稳定，
+	// 大 uncache 缺口 P0）；只捕获进 ctx，缺失时 service 回退 body metadata.user_id。
+	r = r.WithContext(sessionhint.WithClientSessionID(r.Context(), r.Header.Get("x-claude-code-session-id")))
 
 	h.auditIgnoredBetaHeaders(r)
 
@@ -147,11 +153,9 @@ func (h *messagesHandler) auditIgnoredBetaHeaders(r *http.Request) {
 		return
 	}
 
-	h.logger.LogAttrs(
-		r.Context(),
-		slog.LevelDebug,
+	h.logger.Debug(
 		"anthropic-beta ignored (no-op for current provider)",
-		slog.Any("dropped_beta_headers", tokens),
+		zap.Any("dropped_beta_headers", tokens),
 	)
 }
 

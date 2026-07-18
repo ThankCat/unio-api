@@ -2,8 +2,7 @@ package models
 
 import (
 	"context"
-	"io"
-	"log/slog"
+	"go.uber.org/zap"
 	"net/http"
 	"time"
 
@@ -83,7 +82,7 @@ func newTestRouter(authenticator middleware.APIKeyAuthenticator, _ any, limiter 
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(authenticator))
 		r.Use(middleware.RateLimit(limiter, middleware.RateLimitOptions{
-			Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			Logger: zap.NewNop(),
 		}))
 
 		r.Get("/models", NewModelsHandler(modelCatalogService))

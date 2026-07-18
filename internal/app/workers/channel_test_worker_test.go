@@ -2,9 +2,10 @@ package workers
 
 import (
 	"context"
-	"log/slog"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
@@ -42,7 +43,7 @@ func (t *fakeChannelTester) TestChannel(_ context.Context, channelID int64) erro
 }
 
 func newTestChannelWorker(store ChannelTestStore, tester ChannelCredentialTester) (*ChannelTestWorker, *time.Time) {
-	worker := NewChannelTestWorker(store, tester, nil, slog.Default())
+	worker := NewChannelTestWorker(store, tester, nil, zap.NewNop())
 	clock := new(time.Time)
 	*clock = time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	worker.now = func() time.Time { return *clock }
@@ -89,7 +90,7 @@ func TestChannelTestWorkerRunsCycleWithDefaults(t *testing.T) {
 }
 
 func TestChannelTestWorkerName(t *testing.T) {
-	worker := NewChannelTestWorker(&fakeChannelTestStore{}, &fakeChannelTester{}, nil, slog.Default())
+	worker := NewChannelTestWorker(&fakeChannelTestStore{}, &fakeChannelTester{}, nil, zap.NewNop())
 	if worker.Name() != "channel_test" {
 		t.Fatalf("name = %q", worker.Name())
 	}

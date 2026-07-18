@@ -1,10 +1,10 @@
 package gatewayapi
 
 import (
-	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 
 	gatewayanthropic "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic/messages"
 	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/internalapi"
@@ -18,7 +18,7 @@ import (
 
 // RouterDeps 保存构建 HTTP router 所需的外部依赖。
 type RouterDeps struct {
-	Logger                *slog.Logger
+	Logger                *zap.Logger
 	APIKeyAuthenticator   middleware.APIKeyAuthenticator
 	ChatCompletionService gatewaychat.ChatCompletionService
 	ResponsesService      gatewayresponses.ResponsesService

@@ -10,6 +10,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
@@ -41,6 +42,9 @@ func NewChatCompletionsHandler(service ChatCompletionService) http.Handler {
 // ServeHTTP 解析请求、调用 service，并写出 HTTP 响应。
 func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var req ChatCompletionRequest
+
+	// session-id 头是会话粘性路由的回退会话键（body prompt_cache_key 优先，大 uncache 缺口 P0）。
+	r = r.WithContext(sessionhint.WithClientSessionID(r.Context(), r.Header.Get("session-id")))
 
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
 		writeJSONDecodeError(w, err)

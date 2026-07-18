@@ -2,8 +2,9 @@ package workers
 
 import (
 	"context"
-	"log/slog"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/capability"
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
@@ -31,7 +32,7 @@ type ModelCatalogSyncer interface {
 type ModelCatalogSyncWorker struct {
 	syncer   ModelCatalogSyncer
 	store    modelcatalog.SyncStore
-	logger   *slog.Logger
+	logger   *zap.Logger
 	interval time.Duration
 	now      func() time.Time
 
@@ -41,7 +42,7 @@ type ModelCatalogSyncWorker struct {
 }
 
 // NewModelCatalogSyncWorker 创建 models.dev 同步 worker。
-func NewModelCatalogSyncWorker(syncer ModelCatalogSyncer, store modelcatalog.SyncStore, logger *slog.Logger, interval time.Duration) *ModelCatalogSyncWorker {
+func NewModelCatalogSyncWorker(syncer ModelCatalogSyncer, store modelcatalog.SyncStore, logger *zap.Logger, interval time.Duration) *ModelCatalogSyncWorker {
 	if syncer == nil {
 		panic("workers: model catalog syncer is required")
 	}
@@ -49,7 +50,7 @@ func NewModelCatalogSyncWorker(syncer ModelCatalogSyncer, store modelcatalog.Syn
 		panic("workers: model catalog store is required")
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	if interval <= 0 {
 		interval = 24 * time.Hour
@@ -96,13 +97,16 @@ func (w *ModelCatalogSyncWorker) RunOnce(ctx context.Context) (bool, error) {
 		w.consecutiveFailures++
 		w.retryNotBefore = now.Add(w.retryBackoff())
 
-		args := append([]any{"worker", w.Name(), "consecutive_failures", w.consecutiveFailures}, failure.LogArgs(err)...)
+		fields := append([]zap.Field{
+			zap.String("worker", w.Name()),
+			zap.Int("consecutive_failures", w.consecutiveFailures),
+		}, failure.LogFields(err)...)
 		if w.consecutiveFailures >= modelCatalogSyncFailureAlertThreshold {
 			// 连续失败告警：以稳定 alert 字段标记，供日志告警管线挂钩。
-			args = append(args, "alert", "model_catalog_sync_consecutive_failures")
-			w.logger.Error("model catalog sync repeated failure", args...)
+			fields = append(fields, zap.String("alert", "model_catalog_sync_consecutive_failures"))
+			w.logger.Error("model catalog sync repeated failure", fields...)
 		} else {
-			w.logger.Warn("model catalog sync failed", args...)
+			w.logger.Warn("model catalog sync failed", fields...)
 		}
 
 		return true, nil

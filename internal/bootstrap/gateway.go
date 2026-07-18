@@ -1,6 +1,8 @@
 package bootstrap
 
 import (
+	"go.uber.org/zap"
+
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
@@ -93,6 +95,7 @@ func NewResponsesGateway(
 	metricsRecorder *metrics.Metrics,
 	rateLimitGuard lifecycle.RateLimitGuard,
 	channelBreaker lifecycle.ChannelBreaker,
+	logger *zap.Logger,
 ) *responsesgateway.ResponsesService {
 	if registry == nil {
 		panic("bootstrap: lifecycle adapter registry is required")
@@ -138,6 +141,7 @@ func NewResponsesGateway(
 		chatAuthorizationServer,
 		chatMetrics,
 		channelBreaker,
+		logger,
 	)
 	service.SetRateLimitGuard(rateLimitGuard)
 	return service

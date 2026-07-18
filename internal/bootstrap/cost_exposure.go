@@ -2,7 +2,8 @@ package bootstrap
 
 import (
 	"context"
-	"log/slog"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
@@ -13,10 +14,10 @@ import (
 // 纯追加写；失败记 warn 日志（敞口是观测事实，不阻断请求收口）。
 type costExposureStore struct {
 	queries *sqlc.Queries
-	logger  *slog.Logger
+	logger  *zap.Logger
 }
 
-func newCostExposureStore(queries *sqlc.Queries, logger *slog.Logger) *costExposureStore {
+func newCostExposureStore(queries *sqlc.Queries, logger *zap.Logger) *costExposureStore {
 	return &costExposureStore{queries: queries, logger: logger}
 }
 
@@ -34,15 +35,13 @@ func (s *costExposureStore) RecordChannelCostExposure(ctx context.Context, param
 		Currency:             params.Currency,
 	})
 	if err != nil && s.logger != nil {
-		args := []any{
-			slog.Int64("request_record_id", params.RequestRecordID),
-			slog.Int64("channel_id", params.ChannelID),
-			slog.String("reason", params.Reason),
+		fields := []zap.Field{
+			zap.Int64("request_record_id", params.RequestRecordID),
+			zap.Int64("channel_id", params.ChannelID),
+			zap.String("reason", params.Reason),
 		}
-		for _, a := range failure.LogArgs(err) {
-			args = append(args, a)
-		}
-		s.logger.WarnContext(ctx, "record channel cost exposure failed", args...)
+		fields = append(fields, failure.LogFields(err)...)
+		s.logger.Warn("record channel cost exposure failed", fields...)
 	}
 	return err
 }

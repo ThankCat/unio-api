@@ -2,11 +2,12 @@ package config
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"go.uber.org/zap/zapcore"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
@@ -136,9 +137,16 @@ type HTTPConfig struct {
 	MaxJSONBodyBytes int64
 }
 
+// 日志输出格式（LOG_FORMAT）。
+const (
+	LogFormatConsole = "console"
+	LogFormatJSON    = "json"
+)
+
 // LogConfig 保存结构化日志配置。
 type LogConfig struct {
-	Level slog.Level
+	Level  zapcore.Level
+	Format string // console | json
 }
 
 // DBConfig 保存 PostgreSQL 连接配置。
@@ -238,6 +246,11 @@ func Load() (Config, error) {
 	}
 
 	logLevel, err := parseLogLevel(getEnv("LOG_LEVEL", "info"))
+	if err != nil {
+		return Config{}, err
+	}
+
+	logFormat, err := parseLogFormat(getEnv("LOG_FORMAT", LogFormatConsole))
 	if err != nil {
 		return Config{}, err
 	}
@@ -479,7 +492,8 @@ func Load() (Config, error) {
 			MaxJSONBodyBytes: int64(httpMaxJSONBodyMB) << 20,
 		},
 		Log: LogConfig{
-			Level: logLevel,
+			Level:  logLevel,
+			Format: logFormat,
 		},
 		DB: DBConfig{
 			URL:               getEnv("DATABASE_URL", ""),
@@ -684,21 +698,36 @@ func getEnvFloat(key string, fallback float64) (float64, error) {
 	return f, nil
 }
 
-// parseLogLevel 将环境变量中的日志级别转换为 slog.Level。
-func parseLogLevel(value string) (slog.Level, error) {
+// parseLogLevel 将环境变量中的日志级别转换为 zapcore.Level。
+func parseLogLevel(value string) (zapcore.Level, error) {
 	switch strings.ToLower(value) {
 	case "", "info":
-		return slog.LevelInfo, nil
+		return zapcore.InfoLevel, nil
 	case "debug":
-		return slog.LevelDebug, nil
+		return zapcore.DebugLevel, nil
 	case "warn", "warning":
-		return slog.LevelWarn, nil
+		return zapcore.WarnLevel, nil
 	case "error":
-		return slog.LevelError, nil
+		return zapcore.ErrorLevel, nil
 	default:
-		return slog.LevelInfo, failure.New(
+		return zapcore.InfoLevel, failure.New(
 			failure.CodeConfigUnsupported,
 			failure.WithMessage(fmt.Sprintf("parse LOG_LEVEL: unsupported level %q", value)),
+		)
+	}
+}
+
+// parseLogFormat 将环境变量中的日志格式转换为 console | json。
+func parseLogFormat(value string) (string, error) {
+	switch strings.ToLower(value) {
+	case "", LogFormatConsole:
+		return LogFormatConsole, nil
+	case LogFormatJSON:
+		return LogFormatJSON, nil
+	default:
+		return "", failure.New(
+			failure.CodeConfigUnsupported,
+			failure.WithMessage(fmt.Sprintf("parse LOG_FORMAT: unsupported format %q", value)),
 		)
 	}
 }

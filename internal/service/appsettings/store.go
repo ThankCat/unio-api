@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
-	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
+
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
 // Queries 是 SettingsStore 依赖的最小 DB 能力(由 *sqlc.Queries 实现)。
@@ -35,7 +36,7 @@ type SettingsStore struct {
 	redis    redis.Cmdable // 可为 nil:退化为 DB + 本地缓存(仍可用,仅无跨进程实时)
 	keyNS    string
 	registry *Registry
-	logger   *slog.Logger
+	logger   *zap.Logger
 
 	mu    sync.Mutex
 	local map[string]localEntry
@@ -47,9 +48,9 @@ type localEntry struct {
 }
 
 // NewSettingsStore 创建配置中枢。redis 传 nil 时降级为 DB + 本地缓存。
-func NewSettingsStore(queries Queries, redisClient redis.Cmdable, keyNamespace string, registry *Registry, logger *slog.Logger) *SettingsStore {
+func NewSettingsStore(queries Queries, redisClient redis.Cmdable, keyNamespace string, registry *Registry, logger *zap.Logger) *SettingsStore {
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	if registry == nil {
 		registry = DefaultRegistry()
@@ -73,7 +74,7 @@ func (s *SettingsStore) redisKey(key string) string {
 func (s *SettingsStore) Raw(ctx context.Context, key string) json.RawMessage {
 	def, ok := s.registry.Get(key)
 	if !ok {
-		s.logger.WarnContext(ctx, "appsettings: unknown key requested", slog.String("key", key))
+		s.logger.Warn("appsettings: unknown key requested", zap.String("key", key))
 		return nil
 	}
 
@@ -115,8 +116,8 @@ func (s *SettingsStore) readRedis(ctx context.Context, key string) (json.RawMess
 	raw, err := s.redis.Get(ctx, s.redisKey(key)).Bytes()
 	if err != nil {
 		if !errors.Is(err, redis.Nil) {
-			s.logger.WarnContext(ctx, "appsettings: redis get failed, falling back to db",
-				slog.String("key", key), slog.String("error", err.Error()))
+			s.logger.Warn("appsettings: redis get failed, falling back to db",
+				zap.String("key", key), zap.String("error", err.Error()))
 		}
 		return nil, false
 	}
@@ -128,8 +129,8 @@ func (s *SettingsStore) writeRedis(ctx context.Context, key string, v json.RawMe
 		return
 	}
 	if err := s.redis.Set(ctx, s.redisKey(key), []byte(v), 0).Err(); err != nil {
-		s.logger.WarnContext(ctx, "appsettings: redis set failed (non-fatal)",
-			slog.String("key", key), slog.String("error", err.Error()))
+		s.logger.Warn("appsettings: redis set failed (non-fatal)",
+			zap.String("key", key), zap.String("error", err.Error()))
 	}
 }
 
@@ -137,8 +138,8 @@ func (s *SettingsStore) readDBOrDefault(ctx context.Context, key string, def Def
 	raw, err := s.queries.GetAppSetting(ctx, key)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
-			s.logger.WarnContext(ctx, "appsettings: db read failed, using default",
-				slog.String("key", key), slog.String("error", err.Error()))
+			s.logger.Warn("appsettings: db read failed, using default",
+				zap.String("key", key), zap.String("error", err.Error()))
 		}
 		return def.Default
 	}
@@ -161,8 +162,8 @@ func (s *SettingsStore) SeedDefaults(ctx context.Context) error {
 			Description: def.Description,
 		})
 		if err != nil {
-			s.logger.WarnContext(ctx, "appsettings: seed default failed (non-fatal)",
-				slog.String("key", def.Key), slog.String("error", err.Error()))
+			s.logger.Warn("appsettings: seed default failed (non-fatal)",
+				zap.String("key", def.Key), zap.String("error", err.Error()))
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -192,8 +193,8 @@ func (s *SettingsStore) Set(ctx context.Context, key string, value json.RawMessa
 	}
 
 	// 变更留痕(用户决策:不建审计表,info 日志即可)。
-	s.logger.InfoContext(ctx, "appsettings: setting updated",
-		slog.String("key", key), slog.String("value", string(value)))
+	s.logger.Info("appsettings: setting updated",
+		zap.String("key", key), zap.String("value", string(value)))
 
 	s.writeRedis(ctx, key, value)
 	s.writeLocal(key, value)

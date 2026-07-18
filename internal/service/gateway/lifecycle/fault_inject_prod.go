@@ -3,8 +3,9 @@
 package lifecycle
 
 import (
-	"log/slog"
 	"os"
+
+	"go.uber.org/zap"
 )
 
 // 本文件是「生产构建」下的故障注入开关（P2-6）。
@@ -23,14 +24,14 @@ func faultInjectSettlementOnce() bool { return false }
 //
 // 即便生产构建不读取该 env 生效，运维误设仍可能意味着「以为开了注入其实没开」或配置漂移，
 // 启动期显式告警有助于尽早发现。logger 为 nil 时 no-op。
-func WarnIfSettlementFaultInjectionConfigured(logger *slog.Logger) {
+func WarnIfSettlementFaultInjectionConfigured(logger *zap.Logger) {
 	if logger == nil {
 		return
 	}
 	if v := os.Getenv("BILLING_E2E_INJECT_SETTLEMENT_FAIL"); v != "" {
 		logger.Warn(
 			"BILLING_E2E_INJECT_SETTLEMENT_FAIL is set but ignored in this build; fault injection requires -tags billing_e2e",
-			"value", v,
+			zap.String("value", v),
 		)
 	}
 }

@@ -11,7 +11,8 @@ import (
 
 // prepareChatCandidates 使用共享 lifecycle executor 生成 OpenAI operation 的保守 fallback plan。
 // mode 是解析后的线路策略（cheapest/stable/fixed），决定候选排序（阶段 15）。
-func (s *ChatCompletionService) prepareChatCandidates(ctx context.Context, req gatewayapi.ChatCompletionRequest, candidates []routing.ChatRouteCandidate, mode string, stream bool) (lifecycle.CandidatePlan, error) {
+// stickyChannelID 是会话粘性既有绑定渠道（0=无），非 0 时置顶该渠道（大 uncache 缺口 P0）。
+func (s *ChatCompletionService) prepareChatCandidates(ctx context.Context, req gatewayapi.ChatCompletionRequest, candidates []routing.ChatRouteCandidate, mode string, stream bool, stickyChannelID int64) (lifecycle.CandidatePlan, error) {
 	capabilities := []lifecycle.AdapterCapability{
 		lifecycle.AdapterCapabilityInputTokenizer,
 	}
@@ -30,6 +31,7 @@ func (s *ChatCompletionService) prepareChatCandidates(ctx context.Context, req g
 		EstimateInputTokens: s.chatInputTokenEstimator(req),
 		Mode:                mode,
 		ChannelHealthScore:  s.channelHealthScore,
+		StickyChannelID:     stickyChannelID,
 	})
 }
 

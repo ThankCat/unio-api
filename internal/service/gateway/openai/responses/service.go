@@ -3,6 +3,8 @@ package responses
 import (
 	"context"
 
+	"go.uber.org/zap"
+
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
@@ -54,10 +56,14 @@ type ResponsesService struct {
 	chatAuthorizer lifecycle.ChatAuthorizer
 	lifecycle      *lifecycle.RequestLifecycle
 	attemptRunner  *lifecycle.AttemptRunner
+	logger         *zap.Logger
 
 	// compactNativeFallback 控制 NativeCompact 命中「上游不支持原生 compact」时是否自动回落 SyntheticCompact
 	// （GAP-11-014 / 整改 Q2，默认开启，避免 Codex 断链）。
 	compactNativeFallback bool
+
+	// sticky 是会话粘性路由核心（大 uncache 缺口 P0）；nil 表示未启用（Resolve nil-safe 不粘）。
+	sticky *lifecycle.StickyRouter
 }
 
 // NewResponsesService 创建 Responses gateway service。
@@ -72,9 +78,13 @@ func NewResponsesService(
 	chatAuthorizer lifecycle.ChatAuthorizer,
 	metricsRecorder lifecycle.MetricsRecorder,
 	breaker lifecycle.ChannelBreaker,
+	logger *zap.Logger,
 ) *ResponsesService {
 	if retryClassifier == nil {
 		retryClassifier = lifecycle.NeverRetryClassifier{}
+	}
+	if logger == nil {
+		logger = zap.NewNop()
 	}
 	if candidates == nil {
 		panic("gateway: lifecycle candidate preparer is required")
@@ -106,6 +116,7 @@ func NewResponsesService(
 		chatAuthorizer:        chatAuthorizer,
 		lifecycle:             requestLifecycle,
 		attemptRunner:         lifecycle.NewAttemptRunner(requestLifecycle, retryClassifier, chatSettlement),
+		logger:                logger,
 		compactNativeFallback: true,
 	}
 }
@@ -135,6 +146,18 @@ func (s *ResponsesService) SetCredentialGate(gate lifecycle.CredentialGate) {
 	s.lifecycle.SetCredentialGate(gate)
 }
 
+// SetStickyRouter 注入会话粘性路由核心（大 uncache 缺口 P0）；nil 表示不启用 sticky。
+// 同时把同一 StickyRouter 作为队首短等配置源交给 AttemptRunner（P1，与系统设置热更新同源）。
+func (s *ResponsesService) SetStickyRouter(sticky *lifecycle.StickyRouter) {
+	s.sticky = sticky
+	s.attemptRunner.SetHeadWaitSource(sticky)
+}
+
+// SetRoutingLogger 注入 sticky/skip/wait/failover 结构化日志；nil 表示不打日志。
+func (s *ResponsesService) SetRoutingLogger(logger *zap.Logger) {
+	s.attemptRunner.SetLogger(logger)
+}
+
 // responsesSafeMessage 把 Responses 编排专用 ad-hoc string code 映射成可展示文案；
 // 返回空串表示由 lifecycle 兜底。资金关键 code 与 chatcompletions 复用同一组（AttemptRunner 共享）。
 func responsesSafeMessage(code string) string {
@@ -155,7 +178,8 @@ func responsesSafeMessage(code string) string {
 // 支持上游 responses 直传或可经桥接走 chat 任一即保留，输入 token 估算据候选能力分流（直传 tokenizer
 // vs 桥接 chat tokenizer）。allowDirect=false（CompactHistory 等强制桥接）退回纯 chat 桥接能力与估算。
 // 与 chatcompletions 一致按 stream 选择 Stream/NonStream 变体，避免仅支持一种模式的候选误选/误排。
-func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req gatewayapi.ResponsesRequest, candidates []routing.ChatRouteCandidate, mode string, stream bool, allowDirect bool) (lifecycle.CandidatePlan, error) {
+// stickyChannelID 是会话粘性既有绑定渠道（0=无），非 0 时置顶该渠道（大 uncache 缺口 P0）。
+func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req gatewayapi.ResponsesRequest, candidates []routing.ChatRouteCandidate, mode string, stream bool, allowDirect bool, stickyChannelID int64) (lifecycle.CandidatePlan, error) {
 	var capabilities []lifecycle.AdapterCapability
 	if allowDirect {
 		capabilities = []lifecycle.AdapterCapability{lifecycle.AdapterCapabilityResponsesServeTokenizer}
@@ -182,6 +206,7 @@ func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req g
 		EstimateInputTokens: s.responsesInputTokenEstimator(req, allowDirect),
 		Mode:                mode,
 		ChannelHealthScore:  s.lifecycle.ChannelHealthScore,
+		StickyChannelID:     stickyChannelID,
 	})
 }
 

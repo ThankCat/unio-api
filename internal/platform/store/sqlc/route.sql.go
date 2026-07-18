@@ -82,7 +82,7 @@ func (q *Queries) CountApiKeysByRoute(ctx context.Context, routeID int64) (int64
 }
 
 const createRoute = `-- name: CreateRoute :one
-INSERT INTO routes (name, mode, pool_kind, status, description, price_ratio, rpm_limit, tpm_limit, rpd_limit)
+INSERT INTO routes (name, mode, pool_kind, status, description, price_ratio, rpm_limit, tpm_limit, rpd_limit, sticky_enabled)
 VALUES (
     $1,
     $2,
@@ -92,25 +92,28 @@ VALUES (
     $6,
     $7,
     $8,
-    $9
+    $9,
+    $10
 )
-RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at
+RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled
 `
 
 type CreateRouteParams struct {
-	Name        string
-	Mode        string
-	PoolKind    string
-	Status      string
-	Description pgtype.Text
-	PriceRatio  pgtype.Numeric
-	RpmLimit    pgtype.Int4
-	TpmLimit    pgtype.Int4
-	RpdLimit    pgtype.Int4
+	Name          string
+	Mode          string
+	PoolKind      string
+	Status        string
+	Description   pgtype.Text
+	PriceRatio    pgtype.Numeric
+	RpmLimit      pgtype.Int4
+	TpmLimit      pgtype.Int4
+	RpdLimit      pgtype.Int4
+	StickyEnabled pgtype.Bool
 }
 
 // CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
 // rpm/tpm/rpd_limit 是线路级限流上限（DEC-027：NULL=继承全局默认，0=不限，>0=上限）；
+// sticky_enabled 是会话粘性开关（NULL=继承系统设置默认）；
 // mode/pool_kind 组合的 fixed/explicit 数量约束由 service 层校验。
 func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route, error) {
 	row := q.db.QueryRow(ctx, createRoute,
@@ -123,6 +126,7 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		arg.RpmLimit,
 		arg.TpmLimit,
 		arg.RpdLimit,
+		arg.StickyEnabled,
 	)
 	var i Route
 	err := row.Scan(
@@ -139,6 +143,7 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		&i.TpmLimit,
 		&i.RpdLimit,
 		&i.ArchivedAt,
+		&i.StickyEnabled,
 	)
 	return i, err
 }
@@ -250,7 +255,7 @@ func (q *Queries) ListRouteChannelsDetailed(ctx context.Context, routeID int64) 
 }
 
 const listRoutes = `-- name: ListRoutes :many
-SELECT id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at FROM routes ORDER BY id ASC
+SELECT id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled FROM routes ORDER BY id ASC
 `
 
 // ListRoutes 列出全部线路，供 admin 管理台展示。
@@ -277,6 +282,7 @@ func (q *Queries) ListRoutes(ctx context.Context) ([]Route, error) {
 			&i.TpmLimit,
 			&i.RpdLimit,
 			&i.ArchivedAt,
+			&i.StickyEnabled,
 		); err != nil {
 			return nil, err
 		}
@@ -1002,25 +1008,27 @@ SET name = $1,
     rpm_limit = $7,
     tpm_limit = $8,
     rpd_limit = $9,
+    sticky_enabled = $10,
     updated_at = now()
-WHERE id = $10
-RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at
+WHERE id = $11
+RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled
 `
 
 type UpdateRouteParams struct {
-	Name        string
-	Mode        string
-	PoolKind    string
-	Status      string
-	Description pgtype.Text
-	PriceRatio  pgtype.Numeric
-	RpmLimit    pgtype.Int4
-	TpmLimit    pgtype.Int4
-	RpdLimit    pgtype.Int4
-	ID          int64
+	Name          string
+	Mode          string
+	PoolKind      string
+	Status        string
+	Description   pgtype.Text
+	PriceRatio    pgtype.Numeric
+	RpmLimit      pgtype.Int4
+	TpmLimit      pgtype.Int4
+	RpdLimit      pgtype.Int4
+	StickyEnabled pgtype.Bool
+	ID            int64
 }
 
-// UpdateRoute 更新线路的名称/策略/池类型/启停/简介/售价倍率/线路级限流上限。
+// UpdateRoute 更新线路的名称/策略/池类型/启停/简介/售价倍率/线路级限流上限/会话粘性开关。
 func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route, error) {
 	row := q.db.QueryRow(ctx, updateRoute,
 		arg.Name,
@@ -1032,6 +1040,7 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route
 		arg.RpmLimit,
 		arg.TpmLimit,
 		arg.RpdLimit,
+		arg.StickyEnabled,
 		arg.ID,
 	)
 	var i Route
@@ -1049,6 +1058,7 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route
 		&i.TpmLimit,
 		&i.RpdLimit,
 		&i.ArchivedAt,
+		&i.StickyEnabled,
 	)
 	return i, err
 }

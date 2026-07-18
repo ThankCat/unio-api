@@ -1,8 +1,7 @@
 package adminapi_test
 
 import (
-	"io"
-	"log/slog"
+	"go.uber.org/zap"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -22,7 +21,7 @@ func newTestRouter(t *testing.T) http.Handler {
 	}
 
 	return adminapi.NewRouter(adminapi.RouterDeps{
-		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:             zap.NewNop(),
 		AdminAuthenticator: authenticator,
 	})
 }

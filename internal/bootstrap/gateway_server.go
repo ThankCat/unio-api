@@ -2,8 +2,9 @@ package bootstrap
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
@@ -13,6 +14,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/tracing"
 	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
+	"github.com/ThankCat/unio-gateway/internal/platform/stickysession"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
@@ -27,7 +29,7 @@ type GatewayServerAppDB interface {
 
 // GatewayServerAppDeps 表示构建 gateway server app 需要的进程级依赖。
 type GatewayServerAppDeps struct {
-	Logger *slog.Logger
+	Logger *zap.Logger
 	Config config.Config
 	DB     GatewayServerAppDB
 	Redis  redis.Cmdable
@@ -159,6 +161,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		metricsRecorder,
 		rateLimitGuard,
 		channelBreaker,
+		deps.Logger,
 	)
 	messagesService := NewMessagesGateway(
 		deps.DB,
@@ -207,6 +210,24 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	responsesService.SetCredentialGate(credentialGate)
 	messagesService.SetCredentialGate(credentialGate)
 
+	// 会话粘性路由（大 uncache 缺口 P0）：三协议共享一份 sticky 核心，同会话请求钉住上次成功渠道
+	// 以保上游 prompt cache。绑定存 Redis（fail-open，故障只丢粘性不伤主链路）；全局默认/TTL 由
+	// 系统设置热更新，线路行 sticky_enabled 可覆盖开关。无 Redis（测试装配）时不启用 sticky。
+	var stickyRouter *lifecycle.StickyRouter
+	if deps.Redis != nil {
+		stickySettings := appsettings.GatewayRoutingSticky(ctx, settingsStore)
+		stickyRouter = lifecycle.NewStickyRouter(stickysession.NewStore(deps.Redis, deps.Config.Redis.KeyNamespace, deps.Logger))
+		stickyRouter.SetConfig(stickySettings.EnabledDefault, stickySettings.TTL, stickySettings.TPMWait, stickySettings.TPMWaitJitter)
+		stickyRouter.SetMetrics(metricsRecorder)
+		stickyRouter.SetLogger(deps.Logger)
+		chatCompletionService.SetStickyRouter(stickyRouter)
+		responsesService.SetStickyRouter(stickyRouter)
+		messagesService.SetStickyRouter(stickyRouter)
+		chatCompletionService.SetRoutingLogger(deps.Logger)
+		responsesService.SetRoutingLogger(deps.Logger)
+		messagesService.SetRoutingLogger(deps.Logger)
+	}
+
 	// 配置 applier：周期性把 6 组配置的最新生效值推给上述消费方（admin 改动 ≤ 应用周期内生效）。
 	// 生命周期挂到独立 background context（传入的 ctx 是启动期短时 ctx），随 app.Shutdown 停止。
 	applier := &settingsApplier{
@@ -218,6 +239,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		gate:        credentialGate,
 		router:      chatRouter,
 		concurrency: concurrencyLimiter,
+		sticky:      stickyRouter,
 	}
 	applierCtx, stopApplier := context.WithCancel(context.Background())
 	go applier.run(applierCtx, settingsApplyInterval)

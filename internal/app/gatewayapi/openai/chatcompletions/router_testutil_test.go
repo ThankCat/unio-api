@@ -2,8 +2,7 @@ package chatcompletions
 
 import (
 	"context"
-	"io"
-	"log/slog"
+	"go.uber.org/zap"
 	"net/http"
 	"time"
 
@@ -98,7 +97,7 @@ func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService Cha
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(authenticator))
 		r.Use(middleware.RateLimit(limiter, middleware.RateLimitOptions{
-			Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			Logger: zap.NewNop(),
 		}))
 
 		r.Method(http.MethodPost, "/chat/completions", NewChatCompletionsHandler(chatService))

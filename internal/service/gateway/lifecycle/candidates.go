@@ -69,6 +69,12 @@ type PrepareCandidatesParams struct {
 
 	// ChannelHealthScore 给 stable 排序提供渠道健康分（越小越健康）；nil 时 stable 退化为 priority 序。
 	ChannelHealthScore func(channelKey string) float64
+
+	// StickyChannelID 是会话粘性命中的既有绑定渠道 ID（0=无绑定/未启用）。非 0 时该渠道候选被
+	// 置顶，绝对优先于 Mode 排序与失败软冷却 demote（R5）；其余候选仍按策略序作 fallback。
+	// 该渠道已被硬摘除（不在候选池 / 能力不符 / 熔断 open）时置顶落空，由 CandidatePlan.StickyPinned
+	// 报告，调用方据此清除绑定重选。
+	StickyChannelID int64
 }
 
 // Candidate 是共享 lifecycle 已过滤并估算过的一个可尝试候选。
@@ -87,6 +93,14 @@ type CandidatePlan struct {
 
 	// ConservativeInputTokens 是所有可用 fallback candidates 输入估算的最大值。
 	ConservativeInputTokens int64
+
+	// StickyPinned 报告 StickyChannelID 是否真的被置顶到 fallback 首位。
+	// false 且请求带绑定时说明粘住渠道已被硬摘除，调用方应清除 sticky 绑定（R5）。
+	StickyPinned bool
+
+	// StickyPinnedNonPreferred 报告置顶发生了实际重排（sticky 渠道并非策略排序首选）。
+	// 该占比即 sticky 的成本漂移可见性指标（R2：钉在非 cheapest 首选渠道）。
+	StickyPinnedNonPreferred bool
 }
 
 // CandidateSalePrices 提取候选池各命中渠道的当前售价，供保守预授权上界估算（阶段 15）。
@@ -191,7 +205,33 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 	// 只重排不剔除——候选总数与保守估算不变，唯一候选时顺序天然不变。
 	plan.Candidates = demoteFailureCooled(plan.Candidates, params.FailurePreferred)
 
+	// 会话粘性置顶（大 uncache 缺口 P0）：sticky 绑定渠道移到 fallback 首位，绝对优先于
+	// mode 排序与软冷却 demote（R5，故意放在 demote 之后）。渠道已被硬摘除时置顶落空
+	// （StickyPinned=false），由调用方清除绑定；其余候选顺序不受影响。
+	if params.StickyChannelID != 0 {
+		plan.Candidates, plan.StickyPinned, plan.StickyPinnedNonPreferred = pinStickyCandidate(plan.Candidates, params.StickyChannelID)
+	}
+
 	return plan, nil
+}
+
+// pinStickyCandidate 把命中 channelID 的候选稳定移到列表首位（其余保持相对顺序）。
+// 未找到时原样返回 pinned=false；reordered 报告置顶是否发生实际重排（渠道原本不在首位）。
+func pinStickyCandidate(candidates []Candidate, channelID int64) (out []Candidate, pinned bool, reordered bool) {
+	for i, c := range candidates {
+		if c.Route.Channel.ID != channelID {
+			continue
+		}
+		if i == 0 {
+			return candidates, true, false
+		}
+		result := make([]Candidate, 0, len(candidates))
+		result = append(result, candidates[i])
+		result = append(result, candidates[:i]...)
+		result = append(result, candidates[i+1:]...)
+		return result, true, true
+	}
+	return candidates, false, false
 }
 
 // demoteFailureCooled 把软冷却中的候选稳定移到列表末尾（不剔除、组内保持原相对顺序）。

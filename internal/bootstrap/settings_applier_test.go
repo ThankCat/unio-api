@@ -3,10 +3,11 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"sync"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
@@ -38,9 +39,9 @@ func newApplierFixture() (*settingsApplier, *fakeSettingsReader, *fakeChatRouteS
 	routeStore := &fakeChatRouteStore{}
 	a := &settingsApplier{
 		store:       store,
-		logger:      slog.Default(),
+		logger:      zap.NewNop(),
 		breaker:     lifecycle.NewChannelCircuitBreaker(lifecycle.ChannelCircuitBreakerConfig{}),
-		guard:       NewRateLimitGuard(nil, "test", appsettings.DefaultRateLimitDefaultsSettings(), slog.Default()),
+		guard:       NewRateLimitGuard(nil, "test", appsettings.DefaultRateLimitDefaultsSettings(), zap.NewNop()),
 		cooldown:    lifecycle.NewChannelCooldownRegistry(5*time.Second, 5*time.Minute),
 		gate:        lifecycle.NewChannelCredentialGate(3, nil),
 		router:      routing.NewRouter(routeStore, 30*time.Second),

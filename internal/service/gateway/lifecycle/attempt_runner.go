@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
@@ -22,7 +24,8 @@ import (
 //
 // 不持有 router / registry / candidates / authorizer：候选准备与 authorization 仍由协议 service
 // 在进入循环前完成（它们依赖 typed 请求做 tokenizer 估算），AttemptRunner 只接管 authorization
-// 之后的尝试链路。Anthropic Messages 暂不接入（保留自身循环）。
+// 之后的尝试链路。OpenAI（chat completions / responses）与 Anthropic Messages 均已接入
+//（非流式走 RunNonStream，流式走 RunStreamGeneric）。
 type AttemptRunner struct {
 	lifecycle       *RequestLifecycle
 	retryClassifier RetryClassifier
@@ -34,6 +37,13 @@ type AttemptRunner struct {
 
 	// concurrency 是可选的渠道在途并发限制器（DEC-029）。nil 表示未启用，恒放行。
 	concurrency ChannelConcurrencyLimiter
+
+	// headWait 提供队首 TPM/并发短等预算（大 uncache 缺口 P1）；通常指向共享 StickyRouter。
+	// nil 或 SampleHeadWait=0 表示不等，命中满员立即 failover。
+	headWait *StickyRouter
+
+	// logger 可选：记录 skip / waited_ms / 候选切换（大 uncache 缺口可观测）。
+	logger *zap.Logger
 }
 
 // NewAttemptRunner 构造候选循环驱动。retryClassifier 为 nil 时保守地不重试。
@@ -91,6 +101,10 @@ type RunNonStreamParams struct {
 	// 命中时 runner 既不重试（避免再调上游叠加成本）也不普通释放，而是释放冻结并记 risk_exposure（账务异常），
 	// 杜绝静默白嫖（典型：原生 responses compact 2xx 缺 usage，P0-3）。nil 表示不启用该分类。
 	UpstreamCostWithoutUsage func(err error) bool
+
+	// Sticky 是本请求的会话粘性上下文（大 uncache 缺口 P0）：attempt 成功后 bind/改绑，
+	// 粘住渠道熔断跳过时清绑定。nil 表示本请求不粘（方法 nil-safe）。
+	Sticky *StickySession
 }
 
 // RunResult 汇报候选循环最终的业务 outcome，供协议 service 的 metrics defer 读取。
@@ -177,39 +191,68 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 	defer r.releaseUnreconciledTPM(ctx, res)
 
 	var lastErr error
+	headWaitUsed := false // 队首短等整请求只等一次（R10）
 
-	for _, prepared := range params.Candidates {
+	for candIdx, prepared := range params.Candidates {
 		index := prepared.RouteIndex
 		candidate := prepared.Route
 
 		// channel 处于熔断 open 状态时直接跳过，尝试下一个同模型 channel；
 		// 跳过不产生上游调用，也不写 attempt（attempt_index 允许出现空洞）。
+		// 粘住渠道被熔断跳过属硬摘除：清 sticky 绑定让后续请求重选（R5）。
 		channelKey := MetricsID(candidate.Channel.ID)
 		if !l.BreakerAllow(channelKey) {
+			r.recordRoutingSkip("breaker")
+			r.logRouting(ctx, "routing candidate skipped",
+				zap.Int64("channel_id", candidate.Channel.ID),
+				zap.String("skip_reason", "breaker"),
+			)
+			params.Sticky.ClearIfBound(ctx, candidate.Channel.ID)
 			continue
 		}
 
-		// 渠道在途并发上限（DEC-029）：满员即跳过该候选（与熔断 open 同语义，不写 attempt、不占 RPM/TPM）。
-		// 占到名额后：正常路径在上游调用返回后立即显式释放（避免尝试下一候选时仍占前一渠道名额）；
-		// defer 兜底 early-return / panic（release 幂等，重复调用安全）。
-		releaseSlot, slotOK := r.acquireChannelSlot(candidate)
-		if !slotOK {
-			lastErr = channelConcurrencyLimitedError()
+		// 渠道在途并发 + 渠道级限流预占；队首可短等一次（决议 4 / R10）。
+		isHead := candIdx == 0 && !headWaitUsed
+		admit := r.admitCandidate(ctx, candidate, params.EstimatedTokens, isHead)
+		if admit.waitedMs > 0 {
+			headWaitUsed = true
+			r.logRouting(ctx, "routing head wait",
+				zap.Int64("channel_id", candidate.Channel.ID),
+				zap.Int64("waited_ms", admit.waitedMs),
+				zap.Bool("admitted", admit.admitted),
+			)
+		}
+		if !admit.admitted {
+			lastErr = admit.err
+			if admit.skipReason != "" {
+				r.logRouting(ctx, "routing candidate skipped",
+					zap.Int64("channel_id", candidate.Channel.ID),
+					zap.String("skip_reason", admit.skipReason),
+					zap.Int64("waited_ms", admit.waitedMs),
+				)
+			}
+			// 客户端取消/超时发生在短等期间：尚未建 attempt，释放冻结后直接收口请求。
+			if errors.Is(admit.err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+					return result, releaseErr
+				}
+				result.Outcome = metrics.ChatOutcomeCanceled
+				l.MarkRequestCanceled(ctx, requestRecord, requestlog.AttemptRecord{}, admit.err)
+				return result, admit.err
+			}
+			if errors.Is(admit.err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+					return result, releaseErr
+				}
+				l.MarkRequestFailed(ctx, requestRecord, "request_deadline_exceeded", admit.err)
+				return result, admit.err
+			}
 			continue
 		}
+		releaseSlot := admit.release
 		defer releaseSlot()
-
-		// 渠道级限流预占（P2-8）：命中任一维度即跳过该候选 fallback 到下一渠道（与熔断 open 同语义，不写 attempt）。
-		// 计数后端 fail_closed 故障同样保守跳过该候选；fail_open 时 Guard 内部已放行。
-		if dec, allowed, err := r.guardChannel(ctx, candidate, params.EstimatedTokens); err != nil {
-			releaseSlot()
-			lastErr = err
-			continue
-		} else if !allowed {
-			releaseSlot()
-			lastErr = channelRateLimitedError(dec)
-			continue
-		}
 
 		// 该候选已通过渠道级 TPM 预占（额度已写入窗口）：登记预占，收尾时若非胜出（fallback 落选/失败）则释放。
 		r.recordChannelTPMReservation(res, candidate, params.EstimatedTokens)
@@ -358,6 +401,9 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 
 		// 非流式成功：响应将由协议 service 在本调用返回后写出，交付视为完成（completed）。
 		l.MarkDeliveryCompleted(ctx, requestRecord)
+
+		// attempt 成功：sticky bind/改绑（决议 2）。跳过/失败候选不会走到这里，天然不覆盖绑定。
+		params.Sticky.BindSuccess(ctx, candidate.Channel.ID)
 
 		result.Outcome = metrics.ChatOutcomeSuccess
 		return result, nil

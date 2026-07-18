@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
@@ -188,8 +189,7 @@ func TestRateLimitStoreErrorReturns500(t *testing.T) {
 	nextCalled := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { nextCalled = true })
 
-	logger := slog.New(slog.NewTextHandler(httptest.NewRecorder().Body, nil))
-	handler := RateLimit(limiter, RateLimitOptions{Logger: logger})(next)
+	handler := RateLimit(limiter, RateLimitOptions{Logger: zap.NewNop()})(next)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
 		APIKeyID:  123,

@@ -3,8 +3,7 @@ package gatewayapi
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"log/slog"
+	"go.uber.org/zap"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -125,7 +124,7 @@ func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService gat
 	}
 
 	return NewRouter(RouterDeps{
-		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:                zap.NewNop(),
 		APIKeyAuthenticator:   authenticator,
 		RateLimiter:           limiter,
 		ChatCompletionService: chatService,

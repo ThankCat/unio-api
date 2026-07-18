@@ -3,31 +3,38 @@ package main
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/ThankCat/unio-gateway/internal/bootstrap"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/platform/redis"
 	"github.com/ThankCat/unio-gateway/internal/platform/store"
 )
 
 func main() {
-	preLogger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	preLogger := logging.MustNewConsole()
 
 	cfg, err := config.Load()
 	if err != nil {
-		preLogger.Error("load config failed", failure.LogArgs(err)...)
+		preLogger.Error("load config failed", failure.LogFields(err)...)
 
 		os.Exit(1)
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.Log.Level}))
+	logger, err := logging.New(cfg.Log)
+	if err != nil {
+		preLogger.Error("init logger failed", failure.LogFields(err)...)
+		os.Exit(1)
+	}
+	defer func() { _ = logger.Sync() }()
 
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer startupCancel()
@@ -37,7 +44,7 @@ func main() {
 	// DB 启动期先检查数据库可用，避免服务带病启动。
 	pgPool, err := store.OpenPostgres(startupCtx, cfg.DB)
 	if err != nil {
-		logger.Error("open postgres failed", failure.LogArgs(err)...)
+		logger.Error("open postgres failed", failure.LogFields(err)...)
 		os.Exit(1)
 	}
 	defer pgPool.Close()
@@ -46,11 +53,11 @@ func main() {
 	// Redis
 	redisClient, err := redis.OpenRedis(startupCtx, cfg.Redis)
 	if err != nil {
-		logger.Error("open redis failed", failure.LogArgs(err)...)
+		logger.Error("open redis failed", failure.LogFields(err)...)
 		os.Exit(1)
 	}
 	defer redisClient.Close()
-	logger.Info("redis connected", "addr", cfg.Redis.Addr, "db", cfg.Redis.DB)
+	logger.Info("redis connected", zap.String("addr", cfg.Redis.Addr), zap.Int("db", cfg.Redis.DB))
 
 	// APP
 	app, err := bootstrap.NewGatewayServerApp(startupCtx, bootstrap.GatewayServerAppDeps{
@@ -60,7 +67,7 @@ func main() {
 		Redis:  redisClient,
 	})
 	if err != nil {
-		logger.Error("server app failed", failure.LogArgs(err)...)
+		logger.Error("server app failed", failure.LogFields(err)...)
 		os.Exit(1)
 	}
 
@@ -81,7 +88,7 @@ func main() {
 	errCh := make(chan error, 1)
 
 	go func() {
-		logger.Info("server starting", "addr", cfg.Gateway.HTTPAddr)
+		logger.Info("server starting", zap.String("addr", cfg.Gateway.HTTPAddr))
 
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -98,12 +105,12 @@ func main() {
 	case err, ok := <-errCh:
 		if ok && err != nil {
 			// 服务启动失败时走这里
-			logger.Error("server failed", failure.LogArgs(err)...)
+			logger.Error("server failed", failure.LogFields(err)...)
 			os.Exit(1)
 		}
 	case sig := <-shutdownCh:
 		// 收到 Ctrl+C / SIGTERM 时走这里
-		logger.Info("shutdown signal received", "signal", sig.String())
+		logger.Info("shutdown signal received", zap.String("signal", sig.String()))
 	}
 
 	// 给服务最多 cfg.HTTP.ShutdownTimeout 时间处理完正在进行的请求，然后再退出。
@@ -112,13 +119,13 @@ func main() {
 
 	// Shutdown 会停止接收新请求，并等待已有请求在 ctx 超时前完成。
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Error("server shutdown failed", failure.LogArgs(err)...)
+		logger.Error("server shutdown failed", failure.LogFields(err)...)
 		os.Exit(1)
 	}
 
 	// 关闭可观测性资源（flush 未导出的 trace span）。
 	if err := app.Shutdown(ctx); err != nil {
-		logger.Error("app shutdown failed", failure.LogArgs(err)...)
+		logger.Error("app shutdown failed", failure.LogFields(err)...)
 	}
 
 	logger.Info("server stopped")

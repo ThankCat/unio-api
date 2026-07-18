@@ -2,8 +2,9 @@ package workers
 
 import (
 	"context"
-	"log/slog"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
@@ -37,7 +38,7 @@ type ChannelTestWorker struct {
 	store    ChannelTestStore
 	tester   ChannelCredentialTester
 	settings *appsettings.SettingsStore
-	logger   *slog.Logger
+	logger   *zap.Logger
 	now      func() time.Time
 
 	nextCycleAt time.Time
@@ -49,7 +50,7 @@ func NewChannelTestWorker(
 	store ChannelTestStore,
 	tester ChannelCredentialTester,
 	settings *appsettings.SettingsStore,
-	logger *slog.Logger,
+	logger *zap.Logger,
 ) *ChannelTestWorker {
 	if store == nil {
 		panic("workers: channel test store is required")
@@ -58,7 +59,7 @@ func NewChannelTestWorker(
 		panic("workers: channel credential tester is required")
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 
 	return &ChannelTestWorker{
@@ -110,15 +111,22 @@ func (w *ChannelTestWorker) RunOnce(ctx context.Context) (bool, error) {
 	w.queue = w.queue[1:]
 
 	if err := w.tester.TestChannel(ctx, channelID); err != nil {
-		args := append([]any{"worker", w.Name(), "channel_id", channelID}, failure.LogArgs(err)...)
-		w.logger.Warn("channel auto-test execution failed", args...)
+		fields := append([]zap.Field{
+			zap.String("worker", w.Name()),
+			zap.Int64("channel_id", channelID),
+		}, failure.LogFields(err)...)
+		w.logger.Warn("channel auto-test execution failed", fields...)
 	}
 
 	if _, err := w.store.DeleteChannelTestLogsBeyondPerChannel(ctx, sqlc.DeleteChannelTestLogsBeyondPerChannelParams{
 		ChannelID: channelID,
 		Keep:      int32(cfg.LogRetentionPerChannel),
 	}); err != nil {
-		w.logger.Warn("prune channel test logs failed", "worker", w.Name(), "channel_id", channelID, "error", err.Error())
+		w.logger.Warn("prune channel test logs failed",
+			zap.String("worker", w.Name()),
+			zap.Int64("channel_id", channelID),
+			zap.String("error", err.Error()),
+		)
 	}
 
 	return true, nil

@@ -3,10 +3,10 @@ package workers
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
@@ -42,8 +42,8 @@ func (f *fakeOrphanReservationFinalizer) FinalizeOrphanReservation(ctx context.C
 	return nil
 }
 
-func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+func discardLogger() *zap.Logger {
+	return zap.NewNop()
 }
 
 func TestOrphanReservationSweeperFinalizesBatch(t *testing.T) {

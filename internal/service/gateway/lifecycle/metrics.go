@@ -21,6 +21,10 @@ type MetricsRecorder interface {
 	IncPartialSettlement(reason string)
 	IncRetryableFallback(errorCategory string)
 	IncZeroPriceServed(provider string, channel string, model string)
+	// IncRoutingSkip 记录候选在写 attempt 前被跳过（breaker/concurrency/ratelimit；大 uncache 缺口可观测）。
+	IncRoutingSkip(reason string)
+	// ObserveRoutingHeadWait 记录队首 TPM/并发短等实际等待时长（P1）。
+	ObserveRoutingHeadWait(duration time.Duration)
 }
 
 // MetricsID 把 provider/channel 数据库 ID 转成稳定 label 值。

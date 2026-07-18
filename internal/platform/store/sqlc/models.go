@@ -424,19 +424,20 @@ type RequestRecord struct {
 }
 
 type Route struct {
-	ID          int64
-	Name        string
-	Mode        string
-	PoolKind    string
-	Status      string
-	Description pgtype.Text
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
-	PriceRatio  pgtype.Numeric
-	RpmLimit    pgtype.Int4
-	TpmLimit    pgtype.Int4
-	RpdLimit    pgtype.Int4
-	ArchivedAt  pgtype.Timestamptz
+	ID            int64
+	Name          string
+	Mode          string
+	PoolKind      string
+	Status        string
+	Description   pgtype.Text
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+	PriceRatio    pgtype.Numeric
+	RpmLimit      pgtype.Int4
+	TpmLimit      pgtype.Int4
+	RpdLimit      pgtype.Int4
+	ArchivedAt    pgtype.Timestamptz
+	StickyEnabled pgtype.Bool
 }
 
 type RouteChannel struct {

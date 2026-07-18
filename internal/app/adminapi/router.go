@@ -7,10 +7,10 @@
 package adminapi
 
 import (
-	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/capability"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/channel"
@@ -31,7 +31,7 @@ import (
 
 // RouterDeps 保存构建 admin HTTP router 所需的外部依赖（扁平聚合，按模块分派到各子包 Register）。
 type RouterDeps struct {
-	Logger             *slog.Logger
+	Logger             *zap.Logger
 	AdminAuthenticator middleware.AdminAuthenticator
 
 	ProviderService     provider.ProviderService

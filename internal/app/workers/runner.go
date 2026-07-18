@@ -2,8 +2,9 @@ package workers
 
 import (
 	"context"
-	"log/slog"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
@@ -20,15 +21,15 @@ type Unit interface {
 
 // Runner 顺序调度一组后台 worker，并在空闲时按固定间隔休眠。
 type Runner struct {
-	logger       *slog.Logger
+	logger       *zap.Logger
 	idleInterval time.Duration
 	workers      []Unit
 }
 
 // NewRunner 创建后台 worker runner。
-func NewRunner(logger *slog.Logger, idleInterval time.Duration, units ...Unit) *Runner {
+func NewRunner(logger *zap.Logger, idleInterval time.Duration, units ...Unit) *Runner {
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	if idleInterval <= 0 {
 		idleInterval = defaultRunnerIdleInterval
@@ -63,8 +64,8 @@ func (r *Runner) Run(ctx context.Context) error {
 			// didWork 表示这次是否真的处理了任务。
 			didWork, err := unit.RunOnce(ctx)
 			if err != nil {
-				args := append([]any{"worker", unit.Name()}, failure.LogArgs(err)...)
-				r.logger.Error("worker run failed", args...)
+				fields := append([]zap.Field{zap.String("worker", unit.Name())}, failure.LogFields(err)...)
+				r.logger.Error("worker run failed", fields...)
 			}
 
 			// 一旦某个 worker 做过事情，worked 就保持为 true。

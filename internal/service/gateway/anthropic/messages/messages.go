@@ -9,6 +9,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
@@ -52,11 +53,22 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 		return nil, err
 	}
 
-	candidatePlan, err := s.prepareMessageCandidates(ctx, req, plan.Candidates, plan.RouteMode, false)
+	// 会话粘性（大 uncache 缺口 P0）：x-claude-code-session-id 头优先、metadata.user_id 回退；
+	// 粘住渠道已被硬摘除（不在池/熔断）时清绑定重选（R5）。
+	stickySession := s.sticky.Resolve(ctx, lifecycle.StickyResolveParams{
+		Protocol:           routing.ProtocolAnthropic,
+		RouteID:            principal.RouteID,
+		APIKeyID:           principal.APIKeyID,
+		SessionKey:         sessionhint.AnthropicSessionKey(ctx, req.Metadata),
+		RouteStickyEnabled: plan.RouteStickyEnabled,
+	})
+
+	candidatePlan, err := s.prepareMessageCandidates(ctx, req, plan.Candidates, plan.RouteMode, false, stickySession.BoundChannelID())
 	if err != nil {
 		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return nil, err
 	}
+	stickySession.ApplyPlanOutcome(ctx, candidatePlan)
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
@@ -84,6 +96,7 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 		RequestedModelID: req.Model,
 		ResponseProtocol: requestlog.ProtocolAnthropic,
 		EstimatedTokens:  candidatePlan.ConservativeInputTokens,
+		Sticky:           stickySession,
 		Codes: lifecycle.RunNonStreamCodes{
 			AuthorizationReleaseFailedCode:       "messages_authorization_release_failed",
 			SettlementFailedCode:                 "messages_settlement_failed",

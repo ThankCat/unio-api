@@ -1,0 +1,81 @@
+package lifecycle
+
+import (
+	"context"
+	"testing"
+	"time"
+)
+
+func TestSleepHeadWaitCapsToDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	waited, err := sleepHeadWait(ctx, 500*time.Millisecond)
+	elapsed := time.Since(start)
+
+	// 预算被截到剩余截止时间后定时器先于 ctx.Done 触发时 err 可为 nil；
+	// 关键义是「不等超过客户端超时」，不是「必须以 deadline error 返回」。
+	if waited <= 0 {
+		t.Fatalf("expected positive waited duration, got %v (err=%v)", waited, err)
+	}
+	if elapsed > 200*time.Millisecond {
+		t.Fatalf("sleep should cap to ctx deadline, elapsed=%v", elapsed)
+	}
+}
+
+func TestSleepHeadWaitCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := sleepHeadWait(ctx, 200*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected canceled error")
+	}
+}
+
+func TestSleepHeadWaitZeroNoop(t *testing.T) {
+	waited, err := sleepHeadWait(context.Background(), 0)
+	if err != nil || waited != 0 {
+		t.Fatalf("zero wait must be noop, got waited=%v err=%v", waited, err)
+	}
+}
+
+func TestSampleHeadWaitIncludesJitterBound(t *testing.T) {
+	store := newFakeStickyStore()
+	router := NewStickyRouter(store)
+	router.SetConfig(true, time.Hour, 100*time.Millisecond, 50*time.Millisecond)
+
+	for i := 0; i < 20; i++ {
+		d := router.SampleHeadWait()
+		if d < 100*time.Millisecond || d > 150*time.Millisecond {
+			t.Fatalf("sample out of [100ms,150ms]: %v", d)
+		}
+	}
+
+	router.SetConfig(true, time.Hour, 0, 100*time.Millisecond)
+	if d := router.SampleHeadWait(); d != 0 {
+		t.Fatalf("wait=0 must disable head wait, got %v", d)
+	}
+}
+
+func TestApplyPlanOutcomeClearsOnPinLost(t *testing.T) {
+	store := newFakeStickyStore()
+	router := NewStickyRouter(store)
+	session := router.Resolve(context.Background(), stickyResolveParams("sess"))
+	session.BindSuccess(context.Background(), 7)
+
+	second := router.Resolve(context.Background(), stickyResolveParams("sess"))
+	if second.BoundChannelID() != 7 {
+		t.Fatalf("expected bound 7, got %d", second.BoundChannelID())
+	}
+
+	second.ApplyPlanOutcome(context.Background(), CandidatePlan{StickyPinned: false})
+	if second.BoundChannelID() != 0 {
+		t.Fatal("pin_lost must clear local binding")
+	}
+	third := router.Resolve(context.Background(), stickyResolveParams("sess"))
+	if third.BoundChannelID() != 0 {
+		t.Fatal("pin_lost must clear redis binding")
+	}
+}

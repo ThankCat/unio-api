@@ -120,6 +120,11 @@ type Metrics struct {
 	capabilityCheckTotal    *prometheus.CounterVec
 	capabilityRequiredTotal *prometheus.CounterVec
 	capabilityMissingTotal  *prometheus.CounterVec
+
+	stickyEventsTotal *prometheus.CounterVec
+
+	routingSkipTotal       *prometheus.CounterVec
+	routingHeadWaitSeconds prometheus.Histogram
 }
 
 // New 创建并注册 Unio 全部指标。
@@ -208,6 +213,24 @@ func New() *Metrics {
 			Name: "unio_gateway_capability_missing_total",
 			Help: "Gateway capability 闸门判定为缺失的能力计数，按 ingress 协议、capability key 与缺失层级（model/channel）聚合，用于 enforce 前定位需补声明的能力。",
 		}, []string{"protocol", "capability", "scope"}),
+
+		stickyEventsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_sticky_events_total",
+			Help: "会话粘性路由事件计数（大 uncache 缺口 P0）：hit/miss（绑定查询）、bind/rebind/clear（绑定写入）、" +
+				"pinned_preferred/pinned_non_preferred（置顶渠道是否恰为策略首选——non_preferred 占比即 sticky 成本漂移，R2）、" +
+				"pin_lost（绑定渠道被硬摘除，清绑定重选）。",
+		}, []string{"event"}),
+
+		routingSkipTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_routing_skip_total",
+			Help: "候选在写 attempt 前被跳过的次数（大 uncache 缺口可观测）：reason=breaker/concurrency/ratelimit/ratelimit_store。",
+		}, []string{"reason"}),
+
+		routingHeadWaitSeconds: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "unio_gateway_routing_head_wait_seconds",
+			Help:    "队首候选 TPM/并发短等实际等待时长（秒，P1）。仅在 waited_ms>0 时观测。",
+			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 0.75, 1, 2},
+		}),
 	}
 
 	registry.MustRegister(
@@ -228,6 +251,9 @@ func New() *Metrics {
 		m.capabilityCheckTotal,
 		m.capabilityRequiredTotal,
 		m.capabilityMissingTotal,
+		m.stickyEventsTotal,
+		m.routingSkipTotal,
+		m.routingHeadWaitSeconds,
 	)
 
 	return m
@@ -331,6 +357,29 @@ func (m *Metrics) IncCapabilityRequired(protocol string, capability string) {
 // scope 为缺失层级（model/channel）；capability 为有界的注册能力 key；protocol 为 ingress 协议族。
 func (m *Metrics) IncCapabilityMissing(protocol string, capability string, scope string) {
 	m.capabilityMissingTotal.WithLabelValues(protocol, capability, scope).Inc()
+}
+
+// IncStickyEvent 记录一次会话粘性路由事件（大 uncache 缺口 P0）。
+// event 为有界稳定取值：hit/miss/bind/rebind/clear/pinned_preferred/pinned_non_preferred/pin_lost。
+func (m *Metrics) IncStickyEvent(event string) {
+	m.stickyEventsTotal.WithLabelValues(event).Inc()
+}
+
+// IncRoutingSkip 记录一次候选在写 attempt 前被跳过。
+// reason 为有界稳定取值：breaker/concurrency/ratelimit/ratelimit_store。
+func (m *Metrics) IncRoutingSkip(reason string) {
+	if reason == "" {
+		reason = "unknown"
+	}
+	m.routingSkipTotal.WithLabelValues(reason).Inc()
+}
+
+// ObserveRoutingHeadWait 记录一次队首短等的实际等待时长。
+func (m *Metrics) ObserveRoutingHeadWait(duration time.Duration) {
+	if duration <= 0 {
+		return
+	}
+	m.routingHeadWaitSeconds.Observe(duration.Seconds())
 }
 
 // streamLabel 把是否流式转换成稳定 label 值。

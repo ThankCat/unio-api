@@ -3,11 +3,12 @@ package adminapi_test
 import (
 	"context"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi"
 	achannel "github.com/ThankCat/unio-gateway/internal/app/adminapi/channel"
@@ -143,7 +144,7 @@ func newChannelModelRouter(t *testing.T, cms achannel.ChannelModelService) http.
 	}
 
 	return adminapi.NewRouter(adminapi.RouterDeps{
-		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:              zap.NewNop(),
 		AdminAuthenticator:  authenticator,
 		ChannelModelService: cms,
 	})
@@ -176,7 +177,7 @@ func newChannelPriceRouter(t *testing.T, cps achannel.ChannelPriceService) http.
 	}
 
 	return adminapi.NewRouter(adminapi.RouterDeps{
-		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:              zap.NewNop(),
 		AdminAuthenticator:  authenticator,
 		ChannelPriceService: cps,
 	})
@@ -217,7 +218,7 @@ func newRouteRouter(t *testing.T, rs aroute.RouteService) http.Handler {
 	}
 
 	return adminapi.NewRouter(adminapi.RouterDeps{
-		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:             zap.NewNop(),
 		AdminAuthenticator: authenticator,
 		RouteService:       rs,
 	})
@@ -232,7 +233,7 @@ func newModelRouter(t *testing.T, ms amodel.ModelService) http.Handler {
 	}
 
 	return adminapi.NewRouter(adminapi.RouterDeps{
-		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:             zap.NewNop(),
 		AdminAuthenticator: authenticator,
 		ModelService:       ms,
 	})
@@ -247,7 +248,7 @@ func newServicesRouter(t *testing.T, ps aprovider.ProviderService, cs achannel.C
 	}
 
 	return adminapi.NewRouter(adminapi.RouterDeps{
-		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:             zap.NewNop(),
 		AdminAuthenticator: authenticator,
 		ProviderService:    ps,
 		ChannelService:     cs,

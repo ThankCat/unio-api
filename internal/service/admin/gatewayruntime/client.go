@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
@@ -43,11 +44,11 @@ type Client struct {
 	URLs   []string
 	Token  string
 	HTTP   *http.Client
-	Logger *slog.Logger
+	Logger *zap.Logger
 }
 
 // NewClient 构造客户端；urls/token 为空时 Statuses 恒返回空 map。
-func NewClient(urls []string, token string, logger *slog.Logger) *Client {
+func NewClient(urls []string, token string, logger *zap.Logger) *Client {
 	if len(urls) == 0 || token == "" {
 		return &Client{Logger: logger}
 	}
@@ -88,7 +89,7 @@ func (c *Client) Statuses(ctx context.Context) map[int64]ChannelStatus {
 	for _, res := range results {
 		if res.err != nil {
 			if c.Logger != nil {
-				c.Logger.Warn("gateway circuit-breaker snapshot failed", "url", res.url, "err", res.err)
+				c.Logger.Warn("gateway circuit-breaker snapshot failed", zap.String("url", res.url), zap.Error(res.err))
 			}
 			continue
 		}

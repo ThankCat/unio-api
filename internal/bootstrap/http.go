@@ -1,8 +1,9 @@
 package bootstrap
 
 import (
-	"log/slog"
 	"net/http"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi"
 	gatewayanthropic "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic/messages"
@@ -25,7 +26,7 @@ import (
 // HTTP 中间件(线路+用户 RPM/RPD)与 attempt runner(TPM/渠道级)共用同一默认上限与故障策略,
 // settingsApplier 热更新时只需更新这一个实例。
 func NewHTTPHandler(
-	logger *slog.Logger,
+	logger *zap.Logger,
 	queries *sqlc.Queries,
 	rateLimitGuard *ratelimit.Guard,
 	concurrencyLimiter *ratelimit.ConcurrencyLimiter,
@@ -66,7 +67,7 @@ func NewHTTPHandler(
 
 // NewRateLimitGuard 构造两层限流 Guard（P2-8）：Redis 滑动窗口计数 + 全局默认上限 + 故障策略。
 // 默认上限与故障策略来自运行时配置(gateway.rate_limit_defaults),之后由 settingsApplier 热更新。
-func NewRateLimitGuard(redisClient redis.Cmdable, keyNamespace string, defaults appsettings.RateLimitDefaultsSettings, logger *slog.Logger) *ratelimit.Guard {
+func NewRateLimitGuard(redisClient redis.Cmdable, keyNamespace string, defaults appsettings.RateLimitDefaultsSettings, logger *zap.Logger) *ratelimit.Guard {
 	store := ratelimit.NewSlidingWindowStore(redisClient, keyNamespace)
 	return ratelimit.NewGuard(store, ratelimit.DefaultLimits{
 		RPM: defaults.RPM,

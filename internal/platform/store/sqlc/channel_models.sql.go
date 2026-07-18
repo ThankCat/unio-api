@@ -32,6 +32,7 @@ SELECT
     c.adapter_key AS adapter_key,
     c.protocol AS protocol,
     c.id AS channel_id,
+    c.name AS channel_name,
     c.base_url,
     c.credential,
     c.timeout_ms,
@@ -192,6 +193,7 @@ type FindRouteCandidatesRow struct {
 	AdapterKey                      string
 	Protocol                        string
 	ChannelID                       int64
+	ChannelName                     string
 	BaseUrl                         string
 	Credential                      string
 	TimeoutMs                       pgtype.Int4
@@ -267,6 +269,7 @@ func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidat
 			&i.AdapterKey,
 			&i.Protocol,
 			&i.ChannelID,
+			&i.ChannelName,
 			&i.BaseUrl,
 			&i.Credential,
 			&i.TimeoutMs,

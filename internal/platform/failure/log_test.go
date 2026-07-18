@@ -3,71 +3,82 @@ package failure
 import (
 	"errors"
 	"testing"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
-func TestLogArgsReturnsNilForNilError(t *testing.T) {
-	if args := LogArgs(nil); args != nil {
-		t.Fatalf("expected nil args, got %#v", args)
+func TestLogFieldsReturnsNilForNilError(t *testing.T) {
+	if fields := LogFields(nil); fields != nil {
+		t.Fatalf("expected nil fields, got %#v", fields)
 	}
 }
 
-func TestLogArgsForPlainError(t *testing.T) {
+func TestLogFieldsForPlainError(t *testing.T) {
 	err := errors.New("plain error")
 
-	args := LogArgs(err)
+	fields := LogFields(err)
 
-	assertLogArg(t, args, "error", err)
-	assertNoLogArg(t, args, "error_code")
-	assertNoLogArg(t, args, "error_category")
+	assertLogField(t, fields, "error", "plain error")
+	assertNoLogField(t, fields, "error_code")
+	assertNoLogField(t, fields, "error_category")
 }
 
-func TestLogArgsForFailure(t *testing.T) {
+func TestLogFieldsForFailure(t *testing.T) {
 	err := New(
 		CodeConfigInvalid,
 		WithMessage("parse REDIS_DB as int"),
 	)
 
-	args := LogArgs(err)
+	fields := LogFields(err)
 
-	assertLogArg(t, args, "error", err)
-	assertLogArg(t, args, "error_code", string(CodeConfigInvalid))
-	assertLogArg(t, args, "error_category", string(CategoryConfig))
+	assertLogField(t, fields, "error", err.Error())
+	assertLogField(t, fields, "error_code", string(CodeConfigInvalid))
+	assertLogField(t, fields, "error_category", string(CategoryConfig))
 }
 
-func TestLogArgsIncludesFailureFields(t *testing.T) {
+func TestLogFieldsIncludesFailureFields(t *testing.T) {
 	err := New(
 		CodeConfigInvalid,
 		WithField("config_key", "REDIS_DB"),
 		WithField("", "ignored"),
 	)
 
-	args := LogArgs(err)
+	fields := LogFields(err)
 
-	assertLogArg(t, args, "config_key", "REDIS_DB")
-	assertNoLogArg(t, args, "")
+	assertLogField(t, fields, "config_key", "REDIS_DB")
+	assertNoLogField(t, fields, "")
 }
 
-func assertLogArg(t *testing.T, args []any, key string, want any) {
+func assertLogField(t *testing.T, fields []zap.Field, key string, want any) {
 	t.Helper()
 
-	for i := 0; i+1 < len(args); i += 2 {
-		if args[i] == key {
-			if args[i+1] != want {
-				t.Fatalf("expected log arg %s=%#v, got %#v in %#v", key, want, args[i+1], args)
-			}
-			return
+	for _, f := range fields {
+		if f.Key != key {
+			continue
 		}
+		got := fieldInterface(f)
+		if got != want {
+			t.Fatalf("expected log field %s=%#v, got %#v in %#v", key, want, got, fields)
+		}
+		return
 	}
 
-	t.Fatalf("expected log arg %s=%#v in %#v", key, want, args)
+	t.Fatalf("expected log field %s=%#v in %#v", key, want, fields)
 }
 
-func assertNoLogArg(t *testing.T, args []any, key string) {
+func assertNoLogField(t *testing.T, fields []zap.Field, key string) {
 	t.Helper()
 
-	for i := 0; i+1 < len(args); i += 2 {
-		if args[i] == key {
-			t.Fatalf("expected no log arg %s, got %#v", key, args)
+	for _, f := range fields {
+		if f.Key == key {
+			t.Fatalf("expected no log field %s, got %#v", key, fields)
 		}
 	}
+}
+
+func fieldInterface(f zap.Field) any {
+	enc := zapcore.NewMapObjectEncoder()
+	f.AddTo(enc)
+	return enc.Fields[f.Key]
 }

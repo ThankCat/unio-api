@@ -81,6 +81,7 @@ func DefaultRegistry() *Registry {
 		defaultChannelTimeoutDefinition(),
 		failureCooldownDefinition(),
 		concurrencyDefaultsDefinition(),
+		routingStickyDefinition(),
 		channelHealthThresholdsDefinition(),
 		channelTestDefinition(),
 		dashboardThresholdsDefinition(),

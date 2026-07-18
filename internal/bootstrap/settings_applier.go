@@ -3,8 +3,9 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
@@ -29,7 +30,7 @@ type settingsReader interface {
 // 推送全部经由各消费方的线程安全写入口,只替换标量/小结构,不动进行中的计数与状态机。
 type settingsApplier struct {
 	store  settingsReader
-	logger *slog.Logger
+	logger *zap.Logger
 
 	breaker     *lifecycle.ChannelCircuitBreaker
 	guard       *ratelimit.Guard
@@ -37,6 +38,7 @@ type settingsApplier struct {
 	gate        *lifecycle.ChannelCredentialGate
 	router      *routing.Router
 	concurrency *ratelimit.ConcurrencyLimiter
+	sticky      *lifecycle.StickyRouter
 }
 
 // run 周期性拉取并推送,直到 ctx 取消(随 app shutdown 退出)。
@@ -57,7 +59,7 @@ func (a *settingsApplier) run(ctx context.Context, interval time.Duration) {
 func (a *settingsApplier) safeApply(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			a.logger.ErrorContext(ctx, "settings applier panic recovered", slog.Any("panic", r))
+			a.logger.Error("settings applier panic recovered", zap.Any("panic", r))
 		}
 	}()
 	a.applyOnce(ctx)
@@ -122,9 +124,17 @@ func (a *settingsApplier) applyOnce(ctx context.Context) {
 	} else {
 		a.warnDecode(ctx, appsettings.GatewayDefaultChannelTimeoutKey, err)
 	}
+
+	if a.sticky != nil {
+		if st, err := appsettings.DecodeRoutingStickySettings(a.store.Raw(ctx, appsettings.GatewayRoutingStickyKey)); err == nil {
+			a.sticky.SetConfig(st.EnabledDefault, st.TTL, st.TPMWait, st.TPMWaitJitter)
+		} else {
+			a.warnDecode(ctx, appsettings.GatewayRoutingStickyKey, err)
+		}
+	}
 }
 
-func (a *settingsApplier) warnDecode(ctx context.Context, key string, err error) {
-	a.logger.WarnContext(ctx, "settings applier: decode failed, keeping current value",
-		slog.String("key", key), slog.String("error", err.Error()))
+func (a *settingsApplier) warnDecode(_ context.Context, key string, err error) {
+	a.logger.Warn("settings applier: decode failed, keeping current value",
+		zap.String("key", key), zap.String("error", err.Error()))
 }

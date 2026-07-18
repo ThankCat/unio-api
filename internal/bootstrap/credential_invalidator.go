@@ -2,10 +2,10 @@ package bootstrap
 
 import (
 	"context"
-	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
@@ -17,10 +17,10 @@ import (
 // 全程用独立 background context + 超时，不受在途请求 ctx 取消影响，也不阻塞请求热路径。
 type credentialInvalidator struct {
 	queries *sqlc.Queries
-	logger  *slog.Logger
+	logger  *zap.Logger
 }
 
-func newCredentialInvalidator(queries *sqlc.Queries, logger *slog.Logger) *credentialInvalidator {
+func newCredentialInvalidator(queries *sqlc.Queries, logger *zap.Logger) *credentialInvalidator {
 	return &credentialInvalidator{queries: queries, logger: logger}
 }
 
@@ -33,7 +33,7 @@ func (i *credentialInvalidator) MarkChannelCredentialInvalid(channelID int64) {
 		affected, err := i.queries.SetChannelCredentialInvalid(ctx, channelID)
 		if err != nil {
 			i.logger.Error("mark channel credential invalid failed",
-				slog.Int64("channel_id", channelID), slog.Any("error", err))
+				zap.Int64("channel_id", channelID), zap.Error(err))
 			return
 		}
 		if affected == 0 {
@@ -50,11 +50,11 @@ func (i *credentialInvalidator) MarkChannelCredentialInvalid(channelID int64) {
 			Message:              pgtype.Text{String: "连续 401 达阈值，自动标记凭据失效", Valid: true},
 		}); err != nil {
 			i.logger.Error("insert runtime_401 test log failed",
-				slog.Int64("channel_id", channelID), slog.Any("error", err))
+				zap.Int64("channel_id", channelID), zap.Error(err))
 			return
 		}
 
 		i.logger.Warn("channel credential marked invalid (consecutive 401)",
-			slog.Int64("channel_id", channelID))
+			zap.Int64("channel_id", channelID))
 	}()
 }

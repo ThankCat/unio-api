@@ -1,9 +1,10 @@
 package config
 
 import (
-	"log/slog"
 	"testing"
 	"time"
+
+	"go.uber.org/zap/zapcore"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
@@ -116,13 +117,40 @@ func TestLoadLogLevelDebug(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	if cfg.Log.Level != slog.LevelDebug {
-		t.Fatalf("expected log level %v, got %v", slog.LevelDebug, cfg.Log.Level)
+	if cfg.Log.Level != zapcore.DebugLevel {
+		t.Fatalf("expected log level %v, got %v", zapcore.DebugLevel, cfg.Log.Level)
+	}
+	if cfg.Log.Format != LogFormatConsole {
+		t.Fatalf("expected default log format %q, got %q", LogFormatConsole, cfg.Log.Format)
+	}
+}
+
+func TestLoadLogFormatJSON(t *testing.T) {
+	t.Setenv("LOG_FORMAT", "json")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if cfg.Log.Format != LogFormatJSON {
+		t.Fatalf("expected log format %q, got %q", LogFormatJSON, cfg.Log.Format)
 	}
 }
 
 func TestLoadInvalidLogLevel(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "trace")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	assertConfigFailure(t, err, failure.CodeConfigUnsupported)
+}
+
+func TestLoadInvalidLogFormat(t *testing.T) {
+	t.Setenv("LOG_FORMAT", "text")
 
 	_, err := Load()
 	if err == nil {
@@ -435,6 +463,7 @@ func clearInfrastructureEnv(t *testing.T) {
 		"HTTP_SHUTDOWN_TIMEOUT",
 		"HTTP_MAX_JSON_BODY_MB",
 		"LOG_LEVEL",
+		"LOG_FORMAT",
 		"DATABASE_URL",
 		"POSTGRES_MAX_CONNS",
 		"POSTGRES_MIN_CONNS",

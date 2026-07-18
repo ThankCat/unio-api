@@ -3,6 +3,8 @@ package messages
 import (
 	"context"
 
+	"go.uber.org/zap"
+
 	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
@@ -39,6 +41,9 @@ type MessagesService struct {
 	breaker         lifecycle.ChannelBreaker
 	lifecycle       *lifecycle.RequestLifecycle
 	attemptRunner   *lifecycle.AttemptRunner
+
+	// sticky 是会话粘性路由核心（大 uncache 缺口 P0）；nil 表示未启用（Resolve nil-safe 不粘）。
+	sticky *lifecycle.StickyRouter
 }
 
 // NewMessagesService 创建 Anthropic Messages gateway service。
@@ -117,6 +122,18 @@ func (s *MessagesService) SetChannelCooldownRegistry(registry *lifecycle.Channel
 // SetCredentialGate 注入凭据失效闸门（连续 401 翻 credential_valid=false，阶段二）；nil 表示不启用。
 func (s *MessagesService) SetCredentialGate(gate lifecycle.CredentialGate) {
 	s.lifecycle.SetCredentialGate(gate)
+}
+
+// SetStickyRouter 注入会话粘性路由核心（大 uncache 缺口 P0）；nil 表示不启用 sticky。
+// 同时把同一 StickyRouter 作为队首短等配置源交给 AttemptRunner（P1，与系统设置热更新同源）。
+func (s *MessagesService) SetStickyRouter(sticky *lifecycle.StickyRouter) {
+	s.sticky = sticky
+	s.attemptRunner.SetHeadWaitSource(sticky)
+}
+
+// SetRoutingLogger 注入 sticky/skip/wait/failover 结构化日志；nil 表示不打日志。
+func (s *MessagesService) SetRoutingLogger(logger *zap.Logger) {
+	s.attemptRunner.SetLogger(logger)
 }
 
 // messagesSafeMessage 把 messages 编排专用 ad-hoc string code 映射成可展示文案；

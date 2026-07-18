@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
@@ -56,6 +58,9 @@ type RunStreamParams struct {
 	// 为 nil 时 partial 的 output 记 0（偏保守）。
 	CountOutputTokens func(model string, text string) int64
 	Codes             RunStreamCodes
+
+	// Sticky 是本请求的会话粘性上下文（大 uncache 缺口 P0），语义同 RunNonStreamParams.Sticky。
+	Sticky *StickySession
 }
 
 // StreamChunkMeta 是从一个上游流式 chunk 提取出的协议无关元信息。
@@ -108,6 +113,9 @@ type RunStreamParamsGeneric[C any] struct {
 	// 为 nil 时 partial 的 output 记 0（偏保守）。
 	CountOutputTokens func(model string, text string) int64
 	Codes             RunStreamCodes
+
+	// Sticky 是本请求的会话粘性上下文（大 uncache 缺口 P0），语义同 RunNonStreamParams.Sticky。
+	Sticky *StickySession
 }
 
 // RunStreamCodes 是共享流式候选循环里的审计 code/reason 覆盖项。
@@ -166,6 +174,7 @@ func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (
 		ConservativeInputTokens: params.ConservativeInputTokens,
 		CountOutputTokens:       params.CountOutputTokens,
 		Codes:                   params.Codes,
+		Sticky:                  params.Sticky,
 	})
 }
 
@@ -225,38 +234,66 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 	defer r.releaseUnreconciledTPM(ctx, res)
 
 	var lastErr error
+	headWaitUsed := false // 队首短等整请求只等一次（R10）
 
-	for _, prepared := range params.Candidates {
+	for candIdx, prepared := range params.Candidates {
 		index := prepared.RouteIndex
 		candidate := prepared.Route
 
 		// channel 熔断 open 时跳过该 channel，尝试下一个同模型 channel。
+		// 粘住渠道被熔断跳过属硬摘除：清 sticky 绑定让后续请求重选（R5）。
 		channelKey := MetricsID(candidate.Channel.ID)
 		if !l.BreakerAllow(channelKey) {
+			r.recordRoutingSkip("breaker")
+			r.logRouting(ctx, "routing candidate skipped",
+				zap.Int64("channel_id", candidate.Channel.ID),
+				zap.String("skip_reason", "breaker"),
+			)
+			params.Sticky.ClearIfBound(ctx, candidate.Channel.ID)
 			continue
 		}
 
-		// 渠道在途并发上限（DEC-029）：满员即跳过该候选（与熔断 open 同语义，不写 attempt、不占 RPM/TPM）。
-		// 流式在途窗口 = 从发起上游请求到整段流读完/失败（params.Stream 返回）；正常路径在其返回后
-		// 立即显式释放，defer 兜底 early-return / panic（release 幂等，重复调用安全）。
-		releaseSlot, slotOK := r.acquireChannelSlot(candidate)
-		if !slotOK {
-			lastErr = channelConcurrencyLimitedError()
+		// 渠道在途并发 + 渠道级限流预占；队首可短等一次（决议 4 / R10）。
+		isHead := candIdx == 0 && !headWaitUsed
+		admit := r.admitCandidate(ctx, candidate, params.ConservativeInputTokens, isHead)
+		if admit.waitedMs > 0 {
+			headWaitUsed = true
+			r.logRouting(ctx, "routing head wait",
+				zap.Int64("channel_id", candidate.Channel.ID),
+				zap.Int64("waited_ms", admit.waitedMs),
+				zap.Bool("admitted", admit.admitted),
+			)
+		}
+		if !admit.admitted {
+			lastErr = admit.err
+			if admit.skipReason != "" {
+				r.logRouting(ctx, "routing candidate skipped",
+					zap.Int64("channel_id", candidate.Channel.ID),
+					zap.String("skip_reason", admit.skipReason),
+					zap.Int64("waited_ms", admit.waitedMs),
+				)
+			}
+			if errors.Is(admit.err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+					return result, releaseErr
+				}
+				result.Outcome = metrics.ChatOutcomeCanceled
+				l.MarkRequestCanceled(ctx, requestRecord, requestlog.AttemptRecord{}, admit.err)
+				return result, admit.err
+			}
+			if errors.Is(admit.err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+					return result, releaseErr
+				}
+				l.MarkRequestFailed(ctx, requestRecord, "request_deadline_exceeded", admit.err)
+				return result, admit.err
+			}
 			continue
 		}
+		releaseSlot := admit.release
 		defer releaseSlot()
-
-		// 渠道级限流预占（P2-8）：命中任一维度即跳过该候选 fallback 到下一渠道（与熔断 open 同语义，不写 attempt）。
-		// 计数后端 fail_closed 故障同样保守跳过该候选；fail_open 时 Guard 内部已放行。
-		if dec, allowed, err := r.guardChannel(ctx, candidate, params.ConservativeInputTokens); err != nil {
-			releaseSlot()
-			lastErr = err
-			continue
-		} else if !allowed {
-			releaseSlot()
-			lastErr = channelRateLimitedError(dec)
-			continue
-		}
 
 		// 该候选已通过渠道级 TPM 预占（额度已写入窗口）：登记预占，收尾时若非胜出（fallback 落选/失败）则释放。
 		r.recordChannelTPMReservation(res, candidate, params.ConservativeInputTokens)
@@ -425,6 +462,12 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				l.MarkDeliveryCompleted(ctx, requestRecord)
 			} else {
 				l.MarkDeliveryInterrupted(ctx, requestRecord)
+			}
+
+			// 仅路线 D（上游完整服务、仅缺 usage）视为成功 attempt 参与 sticky 绑定；
+			// 取消/中断不绑（渠道未完整交付，不据此改写粘性事实）。
+			if outcome == metrics.ChatOutcomeSuccess {
+				params.Sticky.BindSuccess(ctx, candidate.Channel.ID)
 			}
 
 			result.Outcome = outcome
@@ -632,6 +675,9 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 
 		// 流式正常结束（路线 A）：所有 chunk 与收尾帧已写出，交付完成。
 		l.MarkDeliveryCompleted(ctx, requestRecord)
+
+		// attempt 成功：sticky bind/改绑（决议 2）。
+		params.Sticky.BindSuccess(ctx, candidate.Channel.ID)
 
 		// 零价渠道误配监控（P2-4）：售价快照全部非正即客户侧 $0 收入，记指标供运维定位误配渠道。
 		if candidate.SalePrice.IsEffectivelyFree() {

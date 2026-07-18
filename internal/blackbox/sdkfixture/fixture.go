@@ -15,8 +15,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log/slog"
 	"math/big"
 	"net/http/httptest"
 	"os"
@@ -26,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/bootstrap"
 	"github.com/ThankCat/unio-gateway/internal/core/apikey"
@@ -242,7 +241,7 @@ func Setup(t *testing.T, opts SetupOptions) *Fixture {
 	f.seed(t, opts, upstreamBaseURL, upstreamAPIKey)
 
 	cfg := blackboxConfig()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 
 	// 运行时配置(app_settings)预置:限流放宽 + fail_open(避免 Redis 抖动挂黑盒)、熔断关闭
 	// (黑盒不验熔断)。经 SettingsStore.Set 写 DB+Redis,gateway 启动读到的即这些值;

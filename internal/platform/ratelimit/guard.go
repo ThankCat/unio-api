@@ -2,10 +2,11 @@ package ratelimit
 
 import (
 	"context"
-	"log/slog"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
@@ -82,11 +83,11 @@ type Guard struct {
 	store    slidingStore
 	defaults atomic.Pointer[DefaultLimits]
 	failOpen atomic.Bool
-	logger   *slog.Logger
+	logger   *zap.Logger
 }
 
 // NewGuard 创建限流 Guard。failOpen 为 true 时计数后端故障放行（仅记录告警），否则故障即拒绝。
-func NewGuard(store slidingStore, defaults DefaultLimits, failOpen bool, logger *slog.Logger) *Guard {
+func NewGuard(store slidingStore, defaults DefaultLimits, failOpen bool, logger *zap.Logger) *Guard {
 	g := &Guard{
 		store:  store,
 		logger: logger,
@@ -180,9 +181,8 @@ func (g *Guard) backfillSubject(ctx context.Context, subject string, delta int64
 		return
 	}
 	if err := g.store.Add(ctx, subject, tpmWindow, tpmBucket, delta); err != nil && g.logger != nil {
-		args := []any{"subject", subject, "delta", delta}
-		args = append(args, failure.LogArgs(err)...)
-		g.logger.Warn("rate limit tpm backfill failed", args...)
+		fields := append([]zap.Field{zap.String("subject", subject), zap.Int64("delta", delta)}, failure.LogFields(err)...)
+		g.logger.Warn("rate limit tpm backfill failed", fields...)
 	}
 }
 
@@ -238,9 +238,8 @@ func (g *Guard) checkSubject(ctx context.Context, subject, dim string, limit int
 func (g *Guard) onStoreError(subject, dim string, err error) (Decision, error) {
 	if g.failOpen.Load() {
 		if g.logger != nil {
-			args := []any{"subject", subject, "dimension", dim}
-			args = append(args, failure.LogArgs(err)...)
-			g.logger.Warn("rate limit store failed; failing open", args...)
+			fields := append([]zap.Field{zap.String("subject", subject), zap.String("dimension", dim)}, failure.LogFields(err)...)
+			g.logger.Warn("rate limit store failed; failing open", fields...)
 		}
 		return Decision{Allowed: true, Dimension: dim}, nil
 	}

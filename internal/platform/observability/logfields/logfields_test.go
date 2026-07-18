@@ -3,24 +3,24 @@ package logfields
 import (
 	"context"
 	"testing"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
-func attrMap(attrs []any) map[string]any {
-	m := make(map[string]any)
-	for i := 0; i+1 < len(attrs); i += 2 {
-		key, _ := attrs[i].(string)
-		m[key] = attrs[i+1]
+func fieldMap(fields []zap.Field) map[string]any {
+	enc := zapcore.NewMapObjectEncoder()
+	for _, f := range fields {
+		f.AddTo(enc)
 	}
-
-	return m
+	return enc.Fields
 }
 
-// TestFieldsAttrsOmitUnset 验证只输出已设置字段，并由下游填充身份与路由维度。
-func TestFieldsAttrsOmitUnset(t *testing.T) {
+// TestFieldsZapFieldsOmitUnset 验证只输出已设置字段，并由下游填充身份与路由维度。
+func TestFieldsZapFieldsOmitUnset(t *testing.T) {
 	ctx, fields := NewContext(context.Background(), "corr-1")
 
-	// 仅 correlation_id 已设置时，其他字段不应出现。
-	if got := attrMap(fields.Attrs()); len(got) != 1 || got["correlation_id"] != "corr-1" {
+	if got := fieldMap(fields.ZapFields()); len(got) != 1 || got["correlation_id"] != "corr-1" {
 		t.Fatalf("expected only correlation_id, got %#v", got)
 	}
 
@@ -28,18 +28,29 @@ func TestFieldsAttrsOmitUnset(t *testing.T) {
 	SetRequestID(ctx, "req_abc")
 	SetModel(ctx, "openai/gpt-4.1")
 	SetRouteID(ctx, 2)
-	SetChannel(ctx, "9123", "123")
+	SetUpstreamAttempt(ctx, UpstreamAttempt{
+		ModelID:    99,
+		Router:     "default-route",
+		ProviderID: 9123,
+		Provider:   "openai",
+		ChannelID:  123,
+		Channel:    "main",
+	})
 
-	got := attrMap(fields.Attrs())
+	got := fieldMap(fields.ZapFields())
 	cases := map[string]any{
 		"correlation_id": "corr-1",
 		"request_id":     "req_abc",
 		"user_id":        int64(7),
 		"api_key_id":     int64(100),
 		"model":          "openai/gpt-4.1",
+		"model_id":       int64(99),
 		"route_id":       int64(2),
-		"provider":       "9123",
-		"channel":        "123",
+		"router":         "default-route",
+		"provider_id":    int64(9123),
+		"provider":       "openai",
+		"channel_id":     int64(123),
+		"channel":        "main",
 	}
 	for key, want := range cases {
 		if got[key] != want {
@@ -56,7 +67,7 @@ func TestContextHelpersNoopWithoutHolder(t *testing.T) {
 	SetRequestID(ctx, "req")
 	SetModel(ctx, "m")
 	SetRouteID(ctx, 1)
-	SetChannel(ctx, "p", "c")
+	SetUpstreamAttempt(ctx, UpstreamAttempt{Provider: "p", Channel: "c"})
 
 	if _, ok := FromContext(ctx); ok {
 		t.Fatal("expected no Fields in bare context")
@@ -69,9 +80,11 @@ func TestNilFieldsSettersSafe(t *testing.T) {
 	f.SetIdentity(1, 3)
 	f.SetRequestID("x")
 	f.SetModel("m")
+	f.SetModelID(1)
 	f.SetRouteID(1)
-	f.SetChannel("p", "c")
-	if f.Attrs() != nil {
-		t.Fatal("expected nil Attrs from nil Fields")
+	f.SetRouter("r")
+	f.SetUpstreamAttempt(UpstreamAttempt{Provider: "p", Channel: "c"})
+	if f.ZapFields() != nil {
+		t.Fatal("expected nil ZapFields from nil Fields")
 	}
 }

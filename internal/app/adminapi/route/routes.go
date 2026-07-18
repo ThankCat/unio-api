@@ -32,14 +32,16 @@ type routeDTO struct {
 	// PriceRatio 客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率），十进制字符串。
 	PriceRatio string `json:"price_ratio"`
 	// RPM/TPM/RPDLimit 线路级限流上限（DEC-027：按 (线路,用户) 计数）；null=继承全局默认，0=不限，>0=上限。
-	RPMLimit    *int64            `json:"rpm_limit"`
-	TPMLimit    *int64            `json:"tpm_limit"`
-	RPDLimit    *int64            `json:"rpd_limit"`
-	Description *string           `json:"description"`
-	Channels    []routeChannelDTO `json:"channels"`
-	CreatedAt   string            `json:"created_at"`
-	UpdatedAt   string            `json:"updated_at"`
-	ArchivedAt  *string           `json:"archived_at"`
+	RPMLimit *int64 `json:"rpm_limit"`
+	TPMLimit *int64 `json:"tpm_limit"`
+	RPDLimit *int64 `json:"rpd_limit"`
+	// StickyEnabled 会话粘性路由开关（大 uncache 缺口 P0）；null=继承系统设置默认，true/false=显式覆盖。
+	StickyEnabled *bool             `json:"sticky_enabled"`
+	Description   *string           `json:"description"`
+	Channels      []routeChannelDTO `json:"channels"`
+	CreatedAt     string            `json:"created_at"`
+	UpdatedAt     string            `json:"updated_at"`
+	ArchivedAt    *string           `json:"archived_at"`
 }
 
 // archiveRouteRequest 归档线路入参：migrate_keys_to 非空时先把该线路全部 key 迁到目标线路再归档。
@@ -65,29 +67,31 @@ type routeChannelDTO struct {
 }
 
 type createRouteRequest struct {
-	Name        string  `json:"name"`
-	Mode        string  `json:"mode"`
-	PoolKind    string  `json:"pool_kind"`
-	Status      string  `json:"status"`
-	PriceRatio  string  `json:"price_ratio"` // 客户售价倍率（十进制字符串，空=默认 1.0）
-	RPMLimit    *int64  `json:"rpm_limit"`   // 线路级限流（null=继承默认，0=不限，>0=上限）
-	TPMLimit    *int64  `json:"tpm_limit"`
-	RPDLimit    *int64  `json:"rpd_limit"`
-	Description *string `json:"description"`
-	ChannelIDs  []int64 `json:"channel_ids"`
+	Name          string  `json:"name"`
+	Mode          string  `json:"mode"`
+	PoolKind      string  `json:"pool_kind"`
+	Status        string  `json:"status"`
+	PriceRatio    string  `json:"price_ratio"`    // 客户售价倍率（十进制字符串，空=默认 1.0）
+	RPMLimit      *int64  `json:"rpm_limit"`      // 线路级限流（null=继承默认，0=不限，>0=上限）
+	TPMLimit      *int64  `json:"tpm_limit"`
+	RPDLimit      *int64  `json:"rpd_limit"`
+	StickyEnabled *bool   `json:"sticky_enabled"` // 会话粘性（null=继承系统设置默认）
+	Description   *string `json:"description"`
+	ChannelIDs    []int64 `json:"channel_ids"`
 }
 
 type updateRouteRequest struct {
-	Name        string  `json:"name"`
-	Mode        string  `json:"mode"`
-	PoolKind    string  `json:"pool_kind"`
-	Status      string  `json:"status"`
-	PriceRatio  string  `json:"price_ratio"` // 客户售价倍率（十进制字符串，空=默认 1.0）
-	RPMLimit    *int64  `json:"rpm_limit"`   // 线路级限流（null=继承默认，0=不限，>0=上限）
-	TPMLimit    *int64  `json:"tpm_limit"`
-	RPDLimit    *int64  `json:"rpd_limit"`
-	Description *string `json:"description"`
-	ChannelIDs  []int64 `json:"channel_ids"`
+	Name          string  `json:"name"`
+	Mode          string  `json:"mode"`
+	PoolKind      string  `json:"pool_kind"`
+	Status        string  `json:"status"`
+	PriceRatio    string  `json:"price_ratio"`    // 客户售价倍率（十进制字符串，空=默认 1.0）
+	RPMLimit      *int64  `json:"rpm_limit"`      // 线路级限流（null=继承默认，0=不限，>0=上限）
+	TPMLimit      *int64  `json:"tpm_limit"`
+	RPDLimit      *int64  `json:"rpd_limit"`
+	StickyEnabled *bool   `json:"sticky_enabled"` // 会话粘性（null=继承系统设置默认）
+	Description   *string `json:"description"`
+	ChannelIDs    []int64 `json:"channel_ids"`
 }
 
 type setRouteChannelsRequest struct {
@@ -132,16 +136,17 @@ func (h *routesHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rt, err := h.service.Create(r.Context(), route.CreateInput{
-		Name:        req.Name,
-		Mode:        req.Mode,
-		PoolKind:    req.PoolKind,
-		Status:      req.Status,
-		PriceRatio:  req.PriceRatio,
-		RPMLimit:    req.RPMLimit,
-		TPMLimit:    req.TPMLimit,
-		RPDLimit:    req.RPDLimit,
-		Description: req.Description,
-		ChannelIDs:  req.ChannelIDs,
+		Name:          req.Name,
+		Mode:          req.Mode,
+		PoolKind:      req.PoolKind,
+		Status:        req.Status,
+		PriceRatio:    req.PriceRatio,
+		RPMLimit:      req.RPMLimit,
+		TPMLimit:      req.TPMLimit,
+		RPDLimit:      req.RPDLimit,
+		StickyEnabled: req.StickyEnabled,
+		Description:   req.Description,
+		ChannelIDs:    req.ChannelIDs,
 	})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -162,17 +167,18 @@ func (h *routesHandler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rt, err := h.service.Update(r.Context(), route.UpdateInput{
-		ID:          id,
-		Name:        req.Name,
-		Mode:        req.Mode,
-		PoolKind:    req.PoolKind,
-		Status:      req.Status,
-		PriceRatio:  req.PriceRatio,
-		RPMLimit:    req.RPMLimit,
-		TPMLimit:    req.TPMLimit,
-		RPDLimit:    req.RPDLimit,
-		Description: req.Description,
-		ChannelIDs:  req.ChannelIDs,
+		ID:            id,
+		Name:          req.Name,
+		Mode:          req.Mode,
+		PoolKind:      req.PoolKind,
+		Status:        req.Status,
+		PriceRatio:    req.PriceRatio,
+		RPMLimit:      req.RPMLimit,
+		TPMLimit:      req.TPMLimit,
+		RPDLimit:      req.RPDLimit,
+		StickyEnabled: req.StickyEnabled,
+		Description:   req.Description,
+		ChannelIDs:    req.ChannelIDs,
 	})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -240,19 +246,20 @@ func toRouteDTO(rt route.Route) routeDTO {
 		})
 	}
 	return routeDTO{
-		ID:          rt.ID,
-		Name:        rt.Name,
-		Mode:        rt.Mode,
-		PoolKind:    rt.PoolKind,
-		Status:      rt.Status,
-		PriceRatio:  rt.PriceRatio,
-		RPMLimit:    rt.RPMLimit,
-		TPMLimit:    rt.TPMLimit,
-		RPDLimit:    rt.RPDLimit,
-		Description: rt.Description,
-		Channels:    channels,
-		CreatedAt:   rt.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:   rt.UpdatedAt.UTC().Format(time.RFC3339),
-		ArchivedAt:  adminhttp.RFC3339Ptr(rt.ArchivedAt),
+		ID:            rt.ID,
+		Name:          rt.Name,
+		Mode:          rt.Mode,
+		PoolKind:      rt.PoolKind,
+		Status:        rt.Status,
+		PriceRatio:    rt.PriceRatio,
+		RPMLimit:      rt.RPMLimit,
+		TPMLimit:      rt.TPMLimit,
+		RPDLimit:      rt.RPDLimit,
+		StickyEnabled: rt.StickyEnabled,
+		Description:   rt.Description,
+		Channels:      channels,
+		CreatedAt:     rt.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:     rt.UpdatedAt.UTC().Format(time.RFC3339),
+		ArchivedAt:    adminhttp.RFC3339Ptr(rt.ArchivedAt),
 	}
 }

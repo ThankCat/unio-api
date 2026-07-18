@@ -1,8 +1,9 @@
 package bootstrap
 
 import (
-	"log/slog"
 	"net/http"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic"
 	anthropicdeepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/deepseek/messages"
@@ -27,8 +28,8 @@ import (
 //     薄封装挂 beta 白名单透传 + base tokenizer，见 providers/anthropic/upgrade-plan N2/N3）。
 //
 // logger 注入到各 provider adapter，用于记录按 DEC-012 出站 Drop 的请求字段；传 nil 时
-// adapter 内部回退到 slog 默认 logger。官方 1P adapter 零 Drop，无需 logger。
-func NewAdapterRegistry(client *http.Client, logger *slog.Logger) (*lifecycle.AdapterRegistry, error) {
+// adapter 内部回退到 zap no-op logger。官方 1P adapter 零 Drop，无需 logger。
+func NewAdapterRegistry(client *http.Client, logger *zap.Logger) (*lifecycle.AdapterRegistry, error) {
 	openAIDeepSeekAdapter := openaideepseek.NewAdapter(client, logger)
 	openAIOfficialAdapter := chatcompletionsadapter.NewAdapter(client)
 	openAIResponsesAdapter := openairesponses.NewAdapter(client)

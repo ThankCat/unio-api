@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/ThankCat/unio-gateway/internal/core/capability"
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
@@ -52,7 +54,7 @@ func (s *fakeCatalogStore) LatestSyncJob(context.Context) (modelcatalog.LatestSy
 
 func ptrTime(t time.Time) *time.Time { return &t }
 
-func newTestCatalogWorker(syncer ModelCatalogSyncer, store modelcatalog.SyncStore, logger *slog.Logger) (*ModelCatalogSyncWorker, *time.Time) {
+func newTestCatalogWorker(syncer ModelCatalogSyncer, store modelcatalog.SyncStore, logger *zap.Logger) (*ModelCatalogSyncWorker, *time.Time) {
 	worker := NewModelCatalogSyncWorker(syncer, store, logger, 24*time.Hour)
 	clock := new(time.Time)
 	*clock = time.Date(2026, 6, 9, 0, 0, 0, 0, time.UTC)
@@ -63,7 +65,7 @@ func newTestCatalogWorker(syncer ModelCatalogSyncer, store modelcatalog.SyncStor
 func TestModelCatalogSyncWorkerRunsWhenNoJob(t *testing.T) {
 	syncer := &fakeCatalogSyncer{}
 	store := &fakeCatalogStore{latest: modelcatalog.LatestSyncJob{Found: false}}
-	worker, _ := newTestCatalogWorker(syncer, store, slog.Default())
+	worker, _ := newTestCatalogWorker(syncer, store, zap.NewNop())
 
 	worked, err := worker.RunOnce(context.Background())
 	if err != nil || !worked {
@@ -77,7 +79,7 @@ func TestModelCatalogSyncWorkerRunsWhenNoJob(t *testing.T) {
 func TestModelCatalogSyncWorkerSkipsWhenRecentSuccess(t *testing.T) {
 	syncer := &fakeCatalogSyncer{}
 	store := &fakeCatalogStore{}
-	worker, clock := newTestCatalogWorker(syncer, store, slog.Default())
+	worker, clock := newTestCatalogWorker(syncer, store, zap.NewNop())
 	store.latest = modelcatalog.LatestSyncJob{
 		Found:      true,
 		Status:     capability.SyncJobStatusSucceeded,
@@ -96,7 +98,7 @@ func TestModelCatalogSyncWorkerSkipsWhenRecentSuccess(t *testing.T) {
 func TestModelCatalogSyncWorkerRunsWhenStale(t *testing.T) {
 	syncer := &fakeCatalogSyncer{}
 	store := &fakeCatalogStore{}
-	worker, clock := newTestCatalogWorker(syncer, store, slog.Default())
+	worker, clock := newTestCatalogWorker(syncer, store, zap.NewNop())
 	store.latest = modelcatalog.LatestSyncJob{
 		Found:      true,
 		Status:     capability.SyncJobStatusSucceeded,
@@ -115,7 +117,7 @@ func TestModelCatalogSyncWorkerRunsWhenStale(t *testing.T) {
 func TestModelCatalogSyncWorkerSkipsWhenRunning(t *testing.T) {
 	syncer := &fakeCatalogSyncer{}
 	store := &fakeCatalogStore{latest: modelcatalog.LatestSyncJob{Found: true, Status: capability.SyncJobStatusRunning}}
-	worker, _ := newTestCatalogWorker(syncer, store, slog.Default())
+	worker, _ := newTestCatalogWorker(syncer, store, zap.NewNop())
 
 	worked, _ := worker.RunOnce(context.Background())
 	if worked || syncer.calls != 0 {
@@ -126,7 +128,7 @@ func TestModelCatalogSyncWorkerSkipsWhenRunning(t *testing.T) {
 func TestModelCatalogSyncWorkerPollThrottle(t *testing.T) {
 	syncer := &fakeCatalogSyncer{}
 	store := &fakeCatalogStore{latest: modelcatalog.LatestSyncJob{Found: false}}
-	worker, _ := newTestCatalogWorker(syncer, store, slog.Default())
+	worker, _ := newTestCatalogWorker(syncer, store, zap.NewNop())
 
 	if _, err := worker.RunOnce(context.Background()); err != nil {
 		t.Fatalf("first run: %v", err)
@@ -142,7 +144,9 @@ func TestModelCatalogSyncWorkerPollThrottle(t *testing.T) {
 
 func TestModelCatalogSyncWorkerConsecutiveFailureAlert(t *testing.T) {
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	encoderCfg := zap.NewProductionEncoderConfig()
+	core := zapcore.NewCore(zapcore.NewJSONEncoder(encoderCfg), zapcore.AddSync(&buf), zapcore.WarnLevel)
+	logger := zap.New(core)
 
 	syncer := &fakeCatalogSyncer{err: errors.New("upstream down")}
 	store := &fakeCatalogStore{latest: modelcatalog.LatestSyncJob{Found: false}}

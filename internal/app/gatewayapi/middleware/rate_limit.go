@@ -2,9 +2,10 @@ package middleware
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"strconv"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
@@ -29,7 +30,7 @@ type RateLimitMetricsRecorder interface {
 // fail_open/fail_closed 策略已下沉到 Guard（按 RATE_LIMIT_FAILURE_POLICY 构造）：
 // 故障 fail_open 时 Guard 返回放行且不报错；fail_closed 时返回错误，中间件据此回 500。
 type RateLimitOptions struct {
-	Logger  *slog.Logger
+	Logger  *zap.Logger
 	Metrics RateLimitMetricsRecorder
 }
 
@@ -104,16 +105,16 @@ func recordRateLimitDecision(recorder RateLimitMetricsRecorder, decision metrics
 }
 
 // logRateLimitFailure 记录限流计数后端故障；只记录 key prefix，不记录完整 API key。
-func logRateLimitFailure(logger *slog.Logger, apiKeyID int64, keyPrefix string, err error) {
+func logRateLimitFailure(logger *zap.Logger, apiKeyID int64, keyPrefix string, err error) {
 	if logger == nil {
 		return
 	}
 
-	args := []any{
-		"api_key_id", apiKeyID,
-		"api_key_prefix", keyPrefix,
+	fields := []zap.Field{
+		zap.Int64("api_key_id", apiKeyID),
+		zap.String("api_key_prefix", keyPrefix),
 	}
-	args = append(args, failure.LogArgs(err)...)
+	fields = append(fields, failure.LogFields(err)...)
 
-	logger.Warn("rate limit failed", args...)
+	logger.Warn("rate limit failed", fields...)
 }

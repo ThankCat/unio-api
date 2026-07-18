@@ -11,8 +11,9 @@ package chatcompletions
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
@@ -22,15 +23,15 @@ import (
 // Adapter 是 DeepSeek OpenAI endpoint 的 adapter。
 type Adapter struct {
 	base   *chatcompletionsadapter.Adapter
-	logger *slog.Logger
+	logger *zap.Logger
 }
 
 // NewAdapter 创建 DeepSeek OpenAI 协议族 adapter。
 //
-// logger 用于记录出站时被 Drop 的请求字段；传 nil 时使用 slog 默认 logger。
-func NewAdapter(client *http.Client, logger *slog.Logger) *Adapter {
+// logger 用于记录出站时被 Drop 的请求字段；传 nil 时使用 zap no-op logger。
+func NewAdapter(client *http.Client, logger *zap.Logger) *Adapter {
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 
 	return &Adapter{
@@ -65,10 +66,10 @@ func (a *Adapter) logDropped(ctx context.Context, dropped []string) {
 		return
 	}
 
-	a.logger.DebugContext(ctx, "deepseek openai adapter dropped unsupported request fields",
-		slog.String("protocol", "openai"),
-		slog.String("adapter_key", "deepseek"),
-		slog.Any("dropped_request_fields", dropped),
+	a.logger.Debug("deepseek openai adapter dropped unsupported request fields",
+		zap.String("protocol", "openai"),
+		zap.String("adapter_key", "deepseek"),
+		zap.Any("dropped_request_fields", dropped),
 	)
 }
 

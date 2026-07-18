@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi"
 	gatewayopenai "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
@@ -127,7 +127,7 @@ func (sdkBlackboxRateLimiter) AllowRouteUserRequest(context.Context, int64, int6
 
 func newSDKBlackboxHandler(service *ChatCompletionService) http.Handler {
 	return gatewayapi.NewRouter(gatewayapi.RouterDeps{
-		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:                zap.NewNop(),
 		APIKeyAuthenticator:   sdkBlackboxAuthenticator{},
 		ChatCompletionService: service,
 		RateLimiter:           sdkBlackboxRateLimiter{},

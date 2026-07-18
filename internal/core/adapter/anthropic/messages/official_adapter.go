@@ -2,8 +2,9 @@ package messages
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
@@ -16,13 +17,13 @@ import (
 //   - MessagesInputTokenizer 复用 base 对完整 wire 的保守估算（upgrade-plan N2）。
 type OfficialAdapter struct {
 	base   *Adapter
-	logger *slog.Logger
+	logger *zap.Logger
 }
 
 // NewOfficialAdapter 创建 Anthropic 官方 1P adapter。
-func NewOfficialAdapter(client *http.Client, logger *slog.Logger) *OfficialAdapter {
+func NewOfficialAdapter(client *http.Client, logger *zap.Logger) *OfficialAdapter {
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 
 	return &OfficialAdapter{
@@ -56,11 +57,11 @@ func (a *OfficialAdapter) applyBetaPolicy(ctx context.Context, req MessageReques
 	policy := activeBetaPolicy(ctx)
 
 	if blocked := blockedBetas(req.AnthropicBeta, policy); len(blocked) > 0 {
-		a.logger.DebugContext(ctx, "anthropic official adapter blocked beta headers per policy",
-			slog.String("protocol", "anthropic"),
-			slog.String("adapter_key", "anthropic"),
-			slog.String("beta_mode", string(policy.Mode)),
-			slog.Any("blocked_beta_headers", blocked),
+		a.logger.Debug("anthropic official adapter blocked beta headers per policy",
+			zap.String("protocol", "anthropic"),
+			zap.String("adapter_key", "anthropic"),
+			zap.String("beta_mode", string(policy.Mode)),
+			zap.Any("blocked_beta_headers", blocked),
 		)
 	}
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
@@ -37,6 +38,10 @@ func NewResponsesHandler(service ResponsesService) http.Handler {
 // ServeHTTP 解析请求、调用 service，并写出 Responses 协议响应。
 func (h *responsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var req ResponsesRequest
+
+	// session-id 头是会话粘性路由的回退会话键（body prompt_cache_key 优先，大 uncache 缺口 P0）；
+	// 只捕获进 ctx，是否可用由 service 提取器判定。
+	r = r.WithContext(sessionhint.WithClientSessionID(r.Context(), r.Header.Get("session-id")))
 
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
 		writeResponsesDecodeError(w, err)

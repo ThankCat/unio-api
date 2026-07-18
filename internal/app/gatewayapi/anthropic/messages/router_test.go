@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic"
 	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/middleware"
@@ -170,10 +170,10 @@ func newMessagesTestRouter(authenticator middleware.APIKeyAuthenticator, service
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(authenticator))
 		r.Use(middleware.RateLimit(limiter, middleware.RateLimitOptions{
-			Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			Logger: zap.NewNop(),
 		}))
 
-		r.Method(http.MethodPost, "/messages", NewMessagesHandler(service, slog.New(slog.NewTextHandler(io.Discard, nil))))
+		r.Method(http.MethodPost, "/messages", NewMessagesHandler(service, zap.NewNop()))
 	})
 
 	return r

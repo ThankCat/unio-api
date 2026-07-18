@@ -2,8 +2,9 @@ package bootstrap
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
+
+	"go.uber.org/zap"
 
 	anthropicdeepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/deepseek/messages"
 	openaideepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/deepseek/chatcompletions"
@@ -49,7 +50,7 @@ type AdminServerAppDB interface {
 
 // AdminServerAppDeps 表示构建 admin server app 需要的进程级依赖。
 type AdminServerAppDeps struct {
-	Logger *slog.Logger
+	Logger *zap.Logger
 	Config config.Config
 	DB     AdminServerAppDB
 	// Redis 供运行时配置中枢(app_settings 实时缓存)写透与读取;nil 时降级为 DB + 本地缓存。

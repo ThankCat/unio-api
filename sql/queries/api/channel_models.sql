@@ -28,6 +28,7 @@ SELECT
     c.adapter_key AS adapter_key,
     c.protocol AS protocol,
     c.id AS channel_id,
+    c.name AS channel_name,
     c.base_url,
     c.credential,
     c.timeout_ms,

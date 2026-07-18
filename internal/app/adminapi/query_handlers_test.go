@@ -2,8 +2,7 @@ package adminapi_test
 
 import (
 	"context"
-	"io"
-	"log/slog"
+	"go.uber.org/zap"
 	"net/http"
 	"strings"
 	"testing"
@@ -62,7 +61,7 @@ func newQueryRouter(t *testing.T, deps adminapi.RouterDeps) http.Handler {
 	if err != nil {
 		t.Fatalf("new authenticator: %v", err)
 	}
-	deps.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	deps.Logger = zap.NewNop()
 	deps.AdminAuthenticator = authenticator
 	return adminapi.NewRouter(deps)
 }

@@ -1,8 +1,9 @@
 package bootstrap
 
 import (
-	"log/slog"
 	"net/http"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/capability"
@@ -23,7 +24,7 @@ import (
 
 // adminHTTPDeps 收拢 admin-server HTTP handler 构建所需的全部 service 依赖。
 type adminHTTPDeps struct {
-	Logger        *slog.Logger
+	Logger        *zap.Logger
 	Authenticator middleware.AdminAuthenticator
 
 	ProviderService     provider.ProviderService

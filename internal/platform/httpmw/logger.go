@@ -1,9 +1,11 @@
 package httpmw
 
 import (
-	"log/slog"
+	"fmt"
 	"net/http"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
@@ -38,7 +40,11 @@ func (r *statusRecorder) Flush() {
 }
 
 // Logger 记录每个 HTTP 请求的基础信息，包括方法、路径、状态码、耗时和请求 ID。
-func Logger(logger *slog.Logger) func(http.Handler) http.Handler {
+// 访问日志级别：5xx 为 ERROR，其余（含 4xx）为 INFO。
+//
+// 消息正文按 method → path → status → duration_ms 排序写出（与 console " | " 分隔对齐）；
+// JSON 附加字段只保留 correlation / 身份 / 路由等上下文，不再重复这四项。
+func Logger(logger *zap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -50,24 +56,23 @@ func Logger(logger *slog.Logger) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(recorder, r)
 
-			// 基础访问字段只包含方法、路径、状态码和耗时；
+			durationMs := time.Since(start).Milliseconds()
+			// method | path | status | duration_ms —— 固定顺序，便于扫读。
+			msg := fmt.Sprintf("%s | %s | %d | %dms", r.Method, r.URL.Path, recorder.status, durationMs)
+
 			// 不记录请求体、用户 prompt、API key 或上游 Authorization。
-			args := []any{
-				"method", r.Method,
-				"path", r.URL.Path,
-				"status", recorder.status,
-				"duration_ms", time.Since(start).Milliseconds(),
-			}
-
-			// 统一结构化字段（correlation_id、request_id、user/project/api_key、model/provider/channel）
-			// 由下游中间件和 gateway 填充到同一个 *logfields.Fields。
-			if fields, ok := logfields.FromContext(r.Context()); ok {
-				args = append(args, fields.Attrs()...)
+			var fields []zap.Field
+			if lf, ok := logfields.FromContext(r.Context()); ok {
+				fields = lf.ZapFields()
 			} else {
-				args = append(args, "correlation_id", httpx.RequestID(r.Context()))
+				fields = []zap.Field{zap.String("correlation_id", httpx.RequestID(r.Context()))}
 			}
 
-			logger.InfoContext(r.Context(), "http request", args...)
+			if recorder.status >= http.StatusInternalServerError {
+				logger.Error(msg, fields...)
+			} else {
+				logger.Info(msg, fields...)
+			}
 		})
 	}
 }

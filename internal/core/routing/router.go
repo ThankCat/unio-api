@@ -3,13 +3,13 @@ package routing
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"math/big"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
@@ -79,6 +79,9 @@ type ChatRouteCandidate struct {
 	Channel       channel.Runtime
 	UpstreamModel string
 
+	// RouteName 是本次请求绑定线路的名称（routes.name），供 access log 的 router 字段使用。
+	RouteName string
+
 	// MaxOutputTokens 是该候选逻辑模型 models.max_output_tokens（0 表示未配置）。
 	// 客户未显式给出输出上限时，authorization 用它（取候选最大值）做保守冻结上界，
 	// 避免按全局兜底偏小导致预冻结不足、超额进平台核销。
@@ -131,6 +134,10 @@ type ChatRoutePlan struct {
 
 	// RouteMode 是本次请求解析出的线路策略（cheapest/stable/fixed），供 lifecycle 候选排序消费（阶段 15）。
 	RouteMode string
+
+	// RouteStickyEnabled 是线路行 sticky_enabled（会话粘性路由开关，大 uncache 缺口 P0）：
+	// nil=继承系统设置 gateway.routing_sticky.enabled_default，true/false=线路显式覆盖。
+	RouteStickyEnabled *bool
 }
 
 // Store 定义 routing 查询候选渠道所需的最小数据库能力。
@@ -141,12 +148,15 @@ type Store interface {
 	GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error)
 }
 
-// resolvedRoute 是线路解析后的最小事实（候选池 + 策略 + 价格倍率）。
+// resolvedRoute 是线路解析后的最小事实（候选池 + 策略 + 价格倍率 + 会话粘性开关）。
 type resolvedRoute struct {
 	ID         int64
+	Name       string
 	Mode       string
 	PoolKind   string
 	PriceRatio pgtype.Numeric
+	// StickyEnabled：nil=继承全局默认，非 nil=线路显式覆盖（大 uncache 缺口 P0）。
+	StickyEnabled *bool
 }
 
 // Router 负责根据 project 和 requested model 选择可用 channel。
@@ -156,14 +166,14 @@ type resolvedRoute struct {
 type Router struct {
 	store               Store
 	defaultTimeoutNanos atomic.Int64
-	logger              *slog.Logger
+	logger              *zap.Logger
 }
 
 // Option 调整 Router 的可选依赖（如日志）。
 type Option func(*Router)
 
 // WithLogger 注入结构化日志器，用于记录被跳过的坏候选（P1-1）。
-func WithLogger(logger *slog.Logger) Option {
+func WithLogger(logger *zap.Logger) Option {
 	return func(r *Router) {
 		if logger != nil {
 			r.logger = logger
@@ -175,7 +185,7 @@ func WithLogger(logger *slog.Logger) Option {
 func NewRouter(store Store, defaultTimeout time.Duration, opts ...Option) *Router {
 	r := &Router{
 		store:  store,
-		logger: slog.Default(),
+		logger: zap.NewNop(),
 	}
 	r.SetDefaultTimeout(defaultTimeout)
 	for _, opt := range opts {
@@ -225,13 +235,13 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 		if err != nil {
 			// P1-1：单个候选凭据缺失/解密失败时跳过该候选并记日志，不让整批 plan 失败；
 			// 只有当全部候选都不可用时才在循环后报 no_available_channel，最大化可用性。
-			r.logger.WarnContext(ctx, "routing: skip unusable candidate",
-				append([]any{
-					"channel_id", row.ChannelID,
-					"provider_slug", row.ProviderSlug,
-					"adapter_key", row.AdapterKey,
-					"upstream_model", row.UpstreamModel,
-				}, failure.LogArgs(err)...)...)
+			fields := append([]zap.Field{
+				zap.Int64("channel_id", row.ChannelID),
+				zap.String("provider_slug", row.ProviderSlug),
+				zap.String("adapter_key", row.AdapterKey),
+				zap.String("upstream_model", row.UpstreamModel),
+			}, failure.LogFields(err)...)
+			r.logger.Warn("routing: skip unusable candidate", fields...)
 			continue
 		}
 		candidates = append(candidates, candidate)
@@ -248,9 +258,10 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 	}
 
 	plan := ChatRoutePlan{
-		RequestedModel: req.ModelID,
-		Candidates:     candidates,
-		RouteMode:      route.Mode,
+		RequestedModel:     req.ModelID,
+		Candidates:         candidates,
+		RouteMode:          route.Mode,
+		RouteStickyEnabled: route.StickyEnabled,
 	}
 
 	return plan, nil
@@ -293,7 +304,12 @@ func (r *Router) loadEnabledRoute(ctx context.Context, id *int64) (resolvedRoute
 	if row.Status != "enabled" {
 		return resolvedRoute{}, false
 	}
-	return resolvedRoute{ID: row.ID, Mode: row.Mode, PoolKind: row.PoolKind, PriceRatio: row.PriceRatio}, true
+	resolved := resolvedRoute{ID: row.ID, Name: row.Name, Mode: row.Mode, PoolKind: row.PoolKind, PriceRatio: row.PriceRatio}
+	if row.StickyEnabled.Valid {
+		enabled := row.StickyEnabled.Bool
+		resolved.StickyEnabled = &enabled
+	}
+	return resolved, true
 }
 
 func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest, route resolvedRoute) ([]sqlc.FindRouteCandidatesRow, error) {
@@ -438,8 +454,10 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		RPDLimit:          int4LimitPtr(row.ChannelRpdLimit),
 		ConcurrencyLimit:  int4LimitPtr(row.ChannelConcurrencyLimit),
 		BillsOnDisconnect: row.ChannelBillsOnDisconnect,
+		RouteName:         route.Name,
 		Channel: channel.Runtime{
 			ID:           row.ChannelID,
+			Name:         row.ChannelName,
 			BaseURL:      row.BaseUrl,
 			APIKey:       apiKey,
 			Timeout:      timeout,

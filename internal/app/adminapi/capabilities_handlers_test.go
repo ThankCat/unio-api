@@ -2,8 +2,7 @@ package adminapi_test
 
 import (
 	"context"
-	"io"
-	"log/slog"
+	"go.uber.org/zap"
 	"net/http"
 	"testing"
 
@@ -78,7 +77,7 @@ func newCapabilityRouter(
 	}
 
 	return adminapi.NewRouter(adminapi.RouterDeps{
-		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:                zap.NewNop(),
 		AdminAuthenticator:    authenticator,
 		CapabilityService:     cap,
 		CapabilitySyncService: sync,

@@ -10,6 +10,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
@@ -188,11 +189,22 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		return err
 	}
 
-	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, plan.RouteMode, false, strat.allowDirect)
+	// 会话粘性（大 uncache 缺口 P0）：提取会话键并 lookup 既有绑定，置顶绑定渠道；
+	// 粘住渠道已被硬摘除（不在池/熔断）时清绑定重选（R5）。
+	stickySession := s.sticky.Resolve(ctx, lifecycle.StickyResolveParams{
+		Protocol:           routing.ProtocolOpenAI,
+		RouteID:            principal.RouteID,
+		APIKeyID:           principal.APIKeyID,
+		SessionKey:         sessionhint.OpenAISessionKey(ctx, req.PromptCacheKey),
+		RouteStickyEnabled: plan.RouteStickyEnabled,
+	})
+
+	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, plan.RouteMode, false, strat.allowDirect, stickySession.BoundChannelID())
 	if err != nil {
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
 	}
+	stickySession.ApplyPlanOutcome(ctx, candidatePlan)
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
@@ -216,6 +228,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		RequestedModelID:         req.Model,
 		ResponseProtocol:         requestlog.ProtocolOpenAI,
 		EstimatedTokens:          candidatePlan.ConservativeInputTokens,
+		Sticky:                   stickySession,
 		ResolveAdapter:           strat.resolve,
 		Invoke:                   strat.invoke,
 		Codes:                    strat.codes,

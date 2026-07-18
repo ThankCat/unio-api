@@ -3,8 +3,9 @@ package responses
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
+
+	"go.uber.org/zap"
 
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
@@ -117,20 +118,20 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 				if err != nil {
 					// 真 404/405（上游无原生 compact、无成本）：按配置安全回落 Synthetic。
 					if s.compactNativeFallback && isNativeCompactUnsupported(err) {
-						slog.WarnContext(ctx, "native compact unsupported; falling back to synthetic compaction",
-							slog.String("adapter_key", candidate.AdapterKey),
-							slog.Int64("channel_id", candidate.Channel.ID),
-							slog.String("upstream_model", candidate.UpstreamModel),
+						s.logger.Warn("native compact unsupported; falling back to synthetic compaction",
+							zap.String("adapter_key", candidate.AdapterKey),
+							zap.Int64("channel_id", candidate.Channel.ID),
+							zap.String("upstream_model", candidate.UpstreamModel),
 						)
 						return s.invokeSyntheticCompact(ctx, candidate, req, chatAdapter, &result)
 					}
 					// 原生 2xx 但缺 usage（上游很可能已计费）：绝不回落白嫖。上抛交由 AttemptRunner 释放冻结 +
 					// 记 risk_exposure（UpstreamCostWithoutUsage 分类命中），并向客户返回上游错误（P0-3）。
 					if isNativeCompactMissingUsage(err) {
-						slog.WarnContext(ctx, "native compact returned 2xx without billable usage; recording risk exposure instead of synthetic freeloading",
-							slog.String("adapter_key", candidate.AdapterKey),
-							slog.Int64("channel_id", candidate.Channel.ID),
-							slog.String("upstream_model", candidate.UpstreamModel),
+						s.logger.Warn("native compact returned 2xx without billable usage; recording risk exposure instead of synthetic freeloading",
+							zap.String("adapter_key", candidate.AdapterKey),
+							zap.Int64("channel_id", candidate.Channel.ID),
+							zap.String("upstream_model", candidate.UpstreamModel),
 						)
 					}
 					return lifecycle.AttemptSuccess{}, err

@@ -4,16 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ThankCat/unio-gateway/internal/platform/config"
-	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"go.uber.org/zap"
+
+	"github.com/ThankCat/unio-gateway/internal/platform/config"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
 type fakeGatewayServerAppDB struct {
@@ -143,7 +143,7 @@ func TestNewGatewayServerAppBuildsHandlerAfterProviderPreflight(t *testing.T) {
 	}
 
 	app, err := NewGatewayServerApp(context.Background(), GatewayServerAppDeps{
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger: zap.NewNop(),
 		Config: newGatewayServerAppTestConfig(),
 		DB:     db,
 	})
@@ -177,7 +177,7 @@ func TestNewGatewayServerAppReturnsProviderAdapterPreflightError(t *testing.T) {
 	}
 
 	app, err := NewGatewayServerApp(context.Background(), GatewayServerAppDeps{
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger: zap.NewNop(),
 		Config: newGatewayServerAppTestConfig(),
 		DB:     db,
 	})
