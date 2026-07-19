@@ -6,12 +6,15 @@
 package adminhttp
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
@@ -20,6 +23,25 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/dashboard"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/opsutil"
 )
+
+type routingMarginMetrics interface {
+	IncRoutingMarginGuard(result string)
+}
+
+type routingMarginMetricsHolder struct {
+	recorder routingMarginMetrics
+}
+
+var routingMarginRecorder atomic.Pointer[routingMarginMetricsHolder]
+
+// SetRoutingMarginMetrics wires configuration-rejection metrics into the shared error mapper.
+func SetRoutingMarginMetrics(recorder routingMarginMetrics) {
+	if recorder == nil {
+		routingMarginRecorder.Store(nil)
+		return
+	}
+	routingMarginRecorder.Store(&routingMarginMetricsHolder{recorder: recorder})
+}
 
 // ---- 响应信封 / 错误映射 ----
 
@@ -34,6 +56,15 @@ func WriteData(w http.ResponseWriter, status int, data any) {
 // 不向客户端透传内部实现或上游原始信息。
 func WriteServiceError(w http.ResponseWriter, err error) {
 	code := failure.CodeOf(err)
+	messageOverride := ""
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.ConstraintName == "ck_non_negative_route_margin" {
+		code = failure.CodeAdminNegativeMargin
+		messageOverride = pgErr.Message
+		if holder := routingMarginRecorder.Load(); holder != nil {
+			holder.recorder.IncRoutingMarginGuard("configuration_rejected")
+		}
+	}
 	status := adminErrorStatus(code)
 
 	codeStr := string(code)
@@ -43,7 +74,9 @@ func WriteServiceError(w http.ResponseWriter, err error) {
 
 	message := "internal error"
 	if status != http.StatusInternalServerError {
-		if m := err.Error(); m != "" {
+		if messageOverride != "" {
+			message = messageOverride
+		} else if m := err.Error(); m != "" {
 			message = m
 		}
 	}
@@ -59,6 +92,8 @@ func adminErrorStatus(code failure.Code) int {
 	case failure.CodeAdminAdapterBindingUnsupported:
 		return http.StatusUnprocessableEntity
 	case failure.CodeAdminPricingWindowOverlap:
+		return http.StatusUnprocessableEntity
+	case failure.CodeAdminNegativeMargin:
 		return http.StatusUnprocessableEntity
 	case failure.CodeAdminNotFound:
 		return http.StatusNotFound

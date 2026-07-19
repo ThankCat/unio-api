@@ -19,15 +19,17 @@ func testPriceRatio() pgtype.Numeric {
 
 // fakeStore 是 routing 测试使用的候选 channel 存储替身。
 type fakeStore struct {
-	params           sqlc.FindRouteCandidatesParams
-	rows             []sqlc.FindRouteCandidatesRow
-	err              error
-	modelExistsID    string
-	modelExists      bool
-	modelExistsErr   error
-	userCanUseParams sqlc.UserCanUseModelParams
-	userCanUse       bool
-	userCanUseErr    error
+	params            sqlc.FindRouteCandidatesParams
+	rows              []sqlc.FindRouteCandidatesRow
+	err               error
+	modelExistsID     string
+	modelExists       bool
+	modelExistsErr    error
+	userCanUseParams  sqlc.UserCanUseModelParams
+	userCanUse        bool
+	userCanUseErr     error
+	routeMode         string
+	routeChannelCount int64
 }
 
 // FindRouteCandidates 记录查询参数，并返回测试预设候选结果。
@@ -41,6 +43,18 @@ func (s *fakeStore) FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteC
 	for i := range rows {
 		if rows[i].ChannelPriceID == 0 && rows[i].ChannelCostMultiplierID == 0 {
 			rows[i].ChannelPriceID = rows[i].ChannelID
+		}
+		if rows[i].BaseCurrency == "" {
+			rows[i].BaseCurrency = "USD"
+			rows[i].BasePricingUnit = "per_1m_tokens"
+			rows[i].UncachedInputPrice = pgtype.Numeric{Int: big.NewInt(0), Valid: true}
+			rows[i].OutputPrice = pgtype.Numeric{Int: big.NewInt(0), Valid: true}
+		}
+		if rows[i].CostCurrency == "" {
+			rows[i].CostCurrency = "USD"
+			rows[i].CostPricingUnit = "per_1m_tokens"
+			rows[i].UncachedInputCost = pgtype.Numeric{Int: big.NewInt(0), Valid: true}
+			rows[i].OutputCost = pgtype.Numeric{Int: big.NewInt(0), Valid: true}
 		}
 	}
 	return rows, s.err
@@ -60,12 +74,34 @@ func (s *fakeStore) UserCanUseModel(ctx context.Context, arg sqlc.UserCanUseMode
 
 // GetRouteByID 返回测试线路；调用方传入 RouteID 触发解析（线路必填）。
 func (s *fakeStore) GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error) {
-	return sqlc.Route{ID: id, Name: "test", Mode: "cheapest", PoolKind: "all", Status: "enabled", PriceRatio: testPriceRatio()}, nil
+	mode := s.routeMode
+	if mode == "" {
+		mode = "balanced"
+	}
+	return sqlc.Route{ID: id, Name: "test", Mode: mode, Status: "enabled", PriceRatio: testPriceRatio()}, nil
+}
+
+func (s *fakeStore) CountRouteChannels(context.Context, int64) (int64, error) {
+	if s.routeChannelCount == 0 {
+		return 1, nil
+	}
+	return s.routeChannelCount, nil
 }
 
 func testRouteID() *int64 {
 	id := int64(1)
 	return &id
+}
+
+func TestRouterRejectsCorruptFixedRoutePool(t *testing.T) {
+	store := &fakeStore{routeMode: "fixed", routeChannelCount: 2}
+	router := NewRouter(store, time.Second)
+	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		UserID: 1, ModelID: "openai/gpt", IngressProtocol: ProtocolOpenAI, Operation: OperationChatCompletions, RouteID: testRouteID(),
+	})
+	if failure.CodeOf(err) != failure.CodeRoutingNoAvailableChannel {
+		t.Fatalf("corrupt fixed pool must fail closed, got %v", err)
+	}
 }
 
 func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {

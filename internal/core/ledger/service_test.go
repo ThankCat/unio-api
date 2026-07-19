@@ -107,8 +107,8 @@ func createLedgerTestRequestRecord(t *testing.T, ctx context.Context, pool *pgxp
 	// 线路必填：先建一条线路供 API Key 绑定（route_id 现为 NOT NULL）。
 	var routeID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO routes (name, mode, pool_kind, status, price_ratio)
-		VALUES ($1, 'cheapest', 'all', 'enabled', 1)
+		INSERT INTO routes (name, mode, status, price_ratio)
+		VALUES ($1, 'balanced', 'enabled', 1)
 		RETURNING id
 	`, fmt.Sprintf("ledger-route-%d", suffix)).Scan(&routeID); err != nil {
 		t.Fatalf("insert ledger test route: %v", err)

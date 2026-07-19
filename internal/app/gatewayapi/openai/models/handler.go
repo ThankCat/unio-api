@@ -12,7 +12,7 @@ import (
 
 // ModelCatalogService 定义 /v1/models handler 依赖的模型目录能力。
 type ModelCatalogService interface {
-	ListAvailableModels(ctx context.Context, userID int64, requiredCapabilities []string) ([]modelcatalog.Model, error)
+	ListAvailableModels(ctx context.Context, userID, routeID int64, requiredCapabilities []string) ([]modelcatalog.Model, error)
 }
 
 // modelsHandler 处理 OpenAI-compatible models API。
@@ -51,8 +51,12 @@ func (h *modelsHandler) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requiredCapabilities := parseCapabilityFilter(r.URL.Query().Get("capability"))
+	if apiKeyPrincipal.RouteID == nil {
+		_ = httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "api key has no route")
+		return
+	}
 
-	models, err := h.service.ListAvailableModels(r.Context(), apiKeyPrincipal.UserID, requiredCapabilities)
+	models, err := h.service.ListAvailableModels(r.Context(), apiKeyPrincipal.UserID, *apiKeyPrincipal.RouteID, requiredCapabilities)
 	if err != nil {
 		_ = httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "list models failed")
 		return

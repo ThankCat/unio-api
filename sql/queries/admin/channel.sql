@@ -368,6 +368,57 @@ UPDATE channels
 SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
 WHERE channels.id = sqlc.arg(id) AND channels.status <> 'archived';
 
+-- name: ArchiveChannelWithReplacement :one
+-- Atomically add one healthy replacement to every affected route, then archive/remove the target.
+WITH replacement AS (
+    SELECT c.id
+    FROM channels c
+    JOIN providers p ON p.id = c.provider_id
+    WHERE c.id = sqlc.arg(replacement_channel_id)
+      AND c.id <> sqlc.arg(id)
+      AND c.status = 'enabled'
+      AND c.credential_valid
+      AND c.credential <> ''
+      AND c.base_url <> ''
+      AND p.status = 'enabled'
+),
+affected_routes AS (
+    SELECT route_id FROM route_channels WHERE channel_id = sqlc.arg(id)
+),
+added AS (
+    INSERT INTO route_channels (route_id, channel_id)
+    SELECT ar.route_id, replacement.id
+    FROM affected_routes ar CROSS JOIN replacement
+    ON CONFLICT (route_id, channel_id) DO NOTHING
+    RETURNING route_id
+),
+archived AS (
+    UPDATE channels
+    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+    WHERE channels.id = sqlc.arg(id)
+      AND channels.status <> 'archived'
+      AND EXISTS (SELECT 1 FROM replacement)
+      AND (SELECT COUNT(*) FROM added) >= 0
+    RETURNING id
+),
+cleared AS (
+    DELETE FROM route_channels WHERE channel_id IN (SELECT id FROM archived)
+    RETURNING route_id
+)
+SELECT COUNT(*)::bigint FROM archived WHERE (SELECT COUNT(*) FROM cleared) >= 0;
+
+-- name: ListEnabledRoutesEmptiedByChannel :many
+-- 归档目标渠道后将失去最后一个显式池成员的启用线路；归档前必须先替换渠道或停用线路。
+SELECT rt.id, rt.name
+FROM routes rt
+JOIN route_channels target ON target.route_id = rt.id AND target.channel_id = sqlc.arg(channel_id)
+WHERE rt.status = 'enabled'
+  AND NOT EXISTS (
+      SELECT 1 FROM route_channels other
+      WHERE other.route_id = rt.id AND other.channel_id <> sqlc.arg(channel_id)
+  )
+ORDER BY rt.id;
+
 -- name: RestoreChannel :execrows
 -- RestoreChannel 取消归档渠道：archived → disabled（archived_at 清空）。名字保持归档时的后缀名
 -- （如需干净名由管理员手动改）。调用方需先保证所属 provider 非 archived（服务层护栏）。
@@ -654,8 +705,8 @@ GROUP BY cm.model_id, m.model_id, m.display_name, cm.upstream_model, cm.status
 ORDER BY attempt_total DESC, m.model_id;
 
 -- name: ChannelOpsRoutes :many
--- ChannelOpsRoutes 引用该渠道的显式线路池（抽屉线路 Tab）。
-SELECT rt.id, rt.name, rt.mode, rt.pool_kind, rt.status, rt.price_ratio
+-- ChannelOpsRoutes 引用该渠道的线路池（抽屉线路 Tab）。
+SELECT rt.id, rt.name, rt.mode, rt.status, rt.price_ratio
 FROM route_channels rc
 JOIN routes rt ON rt.id = rc.route_id
 WHERE rc.channel_id = sqlc.arg('channel_id')

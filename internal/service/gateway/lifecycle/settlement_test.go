@@ -228,8 +228,7 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 	}
 	route, err := d.queries.CreateRoute(d.ctx, sqlc.CreateRouteParams{
 		Name:       fmt.Sprintf("chat-settlement-route-%d", suffix),
-		Mode:       "cheapest",
-		PoolKind:   "all",
+		Mode:       "balanced",
 		Status:     "enabled",
 		PriceRatio: priceRatio,
 	})

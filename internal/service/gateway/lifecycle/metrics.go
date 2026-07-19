@@ -27,6 +27,89 @@ type MetricsRecorder interface {
 	ObserveRoutingHeadWait(duration time.Duration)
 }
 
+type routingBalanceMetricsRecorder interface {
+	ObserveRoutingBalance(mode, result string, poolSize, candidateCount int, loadSkew float64)
+	IncRoutingBalanceSelected(route, channel string)
+	IncRoutingBalanceFallback(route, reason string)
+	IncRoutingCapacityRead(result string)
+	IncRoutingMarginGuard(result string)
+}
+
+type routingTraceMetricsRecorder interface {
+	IncRoutingTraceWrite(result string)
+}
+
+func (l *RequestLifecycle) recordRoutingPlan(in RoutingDecisionTraceInput) {
+	m, ok := l.metrics.(routingBalanceMetricsRecorder)
+	if !ok || in.Attempts > 0 {
+		return
+	}
+	result := "planned"
+	if in.Plan.CapacityDegraded {
+		result = "capacity_degraded"
+	} else if in.Plan.AllCapacityZero {
+		result = "all_capacity_zero"
+	} else if len(in.Plan.Candidates) == 0 {
+		result = "no_candidate"
+	}
+	m.ObserveRoutingBalance(in.Mode, result, in.PoolSize, len(in.Plan.Candidates), routingLoadSkew(in.Plan.Candidates))
+	for _, candidate := range in.Plan.Candidates {
+		readResult := "success"
+		if candidate.Balance.CapacityReadFailed {
+			readResult = "failed"
+		} else if candidate.Balance.CapacityUnknown {
+			readResult = "unknown"
+		}
+		m.IncRoutingCapacityRead(readResult)
+	}
+}
+
+func routingLoadSkew(candidates []Candidate) float64 {
+	if len(candidates) < 2 {
+		return 0
+	}
+	total := 0.0
+	for _, candidate := range candidates {
+		total += candidate.Balance.Weight
+	}
+	if total <= 0 {
+		return 0
+	}
+	minShare, maxShare := 1.0, 0.0
+	for _, candidate := range candidates {
+		share := candidate.Balance.Weight / total
+		if share < minShare {
+			minShare = share
+		}
+		if share > maxShare {
+			maxShare = share
+		}
+	}
+	return maxShare - minShare
+}
+
+func (l *RequestLifecycle) RecordBalanceSelected(routeID *int64, channelID int64) {
+	m, ok := l.metrics.(routingBalanceMetricsRecorder)
+	if !ok || routeID == nil {
+		return
+	}
+	m.IncRoutingBalanceSelected(MetricsID(*routeID), MetricsID(channelID))
+}
+
+func (l *RequestLifecycle) RecordBalanceFallback(routeID *int64, reason string) {
+	m, ok := l.metrics.(routingBalanceMetricsRecorder)
+	if !ok || routeID == nil {
+		return
+	}
+	m.IncRoutingBalanceFallback(MetricsID(*routeID), reason)
+}
+
+func (l *RequestLifecycle) recordMarginGuard(result string) {
+	if m, ok := l.metrics.(routingBalanceMetricsRecorder); ok {
+		m.IncRoutingMarginGuard(result)
+	}
+}
+
 // MetricsID 把 provider/channel 数据库 ID 转成稳定 label 值。
 //
 // provider/channel 由后台管理、取值有界，使用 ID 作为 label 不会引入高基数风险。

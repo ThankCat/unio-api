@@ -46,6 +46,8 @@ type Store interface {
 	UpdateChannelCredential(ctx context.Context, arg sqlc.UpdateChannelCredentialParams) (int64, error)
 	DeleteChannelCascade(ctx context.Context, id int64) (int64, error)
 	ArchiveChannelCascade(ctx context.Context, id int64) (int64, error)
+	ArchiveChannelWithReplacement(ctx context.Context, arg sqlc.ArchiveChannelWithReplacementParams) (int64, error)
+	ListEnabledRoutesEmptiedByChannel(ctx context.Context, channelID int64) ([]sqlc.ListEnabledRoutesEmptiedByChannelRow, error)
 	RestoreChannel(ctx context.Context, id int64) (int64, error)
 }
 
@@ -493,9 +495,51 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 
 // Archive 归档渠道：从所有线路候选池移除、置 archived、释放渠道名（追加 __archived_<id> 后缀）。
 // 幂等：已归档返回 not_found（0 行）。
-func (s *Service) Archive(ctx context.Context, id int64) error {
+func (s *Service) Archive(ctx context.Context, id int64, replacementChannelID *int64) error {
 	if id <= 0 {
 		return invalidArgument("id", "channel id must be positive")
+	}
+	if replacementChannelID != nil {
+		if *replacementChannelID <= 0 || *replacementChannelID == id {
+			return invalidArgument("replacement_channel_id", "replacement channel must be a different positive channel id")
+		}
+		replacement, err := s.store.GetChannel(ctx, *replacementChannelID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return invalidArgument("replacement_channel_id", "replacement channel not found")
+			}
+			return storeFailed(err, "get replacement channel")
+		}
+		if replacement.Status != StatusEnabled || !replacement.CredentialValid || replacement.Credential == "" || replacement.BaseUrl == "" {
+			return conflict("replacement channel must be enabled, credential-valid, and fully configured")
+		}
+		provider, err := s.store.GetProvider(ctx, replacement.ProviderID)
+		if err != nil {
+			return storeFailed(err, "get replacement channel provider")
+		}
+		if provider.Status != StatusEnabled {
+			return conflict("replacement channel provider must be enabled")
+		}
+		affected, err := s.store.ArchiveChannelWithReplacement(ctx, sqlc.ArchiveChannelWithReplacementParams{
+			ID: id, ReplacementChannelID: *replacementChannelID,
+		})
+		if err != nil {
+			return storeFailed(err, "replace and archive channel")
+		}
+		if affected == 0 {
+			return conflict("channel archive could not commit because the target or replacement changed")
+		}
+		return nil
+	}
+	affectedRoutes, err := s.store.ListEnabledRoutesEmptiedByChannel(ctx, id)
+	if err != nil {
+		return storeFailed(err, "check channel archive route impact")
+	}
+	if len(affectedRoutes) > 0 {
+		return conflict(fmt.Sprintf(
+			"archiving channel would empty enabled route %q (%d); replace the channel or disable the route first",
+			affectedRoutes[0].Name, affectedRoutes[0].ID,
+		))
 	}
 	affected, err := s.store.ArchiveChannelCascade(ctx, id)
 	if err != nil {

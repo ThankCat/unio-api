@@ -15,18 +15,25 @@ const DefaultMaxUpstreamErrorSnippetBytes = 2048
 // ReadUpstreamErrorSnippet 从上游「错误响应体」读取一段截断的原文快照。
 //
 // 最多读 DefaultMaxUpstreamErrorSnippetBytes 字节；超出则截断并在末尾标注「…（已截断）」。去首尾空白；
-// 读失败时尽力返回已读到的部分。只在非 2xx 错误路径调用（不用于成功响应）；调用方负责关闭 body。
+// 读失败时尽力返回已读到的部分。主要用于非 2xx 错误路径；调用方负责关闭 body。
 func ReadUpstreamErrorSnippet(r io.Reader) string {
 	const limit = DefaultMaxUpstreamErrorSnippetBytes
 	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil && len(data) == 0 {
+		return ""
+	}
+	return SnippetFromBytes(data)
+}
+
+// SnippetFromBytes 把已读入内存的上游响应体截成排障快照（与 ReadUpstreamErrorSnippet 同上限）。
+// 用于 2xx 但 JSON/协议解析失败：body 已读完，需把原文带回渠道检测 UI。
+func SnippetFromBytes(data []byte) string {
+	const limit = DefaultMaxUpstreamErrorSnippetBytes
 	truncated := len(data) > limit
 	if truncated {
 		data = data[:limit]
 	}
 	snippet := strings.TrimSpace(string(data))
-	if err != nil {
-		return snippet
-	}
 	if truncated && snippet != "" {
 		snippet += " …（已截断）"
 	}

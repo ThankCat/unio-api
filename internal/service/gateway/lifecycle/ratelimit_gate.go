@@ -21,11 +21,15 @@ type RateLimitGuard interface {
 	TokensEnforced(limits ratelimit.Limits) bool
 	BackfillRouteUserTokens(ctx context.Context, routeID, userID int64, delta int64)
 	BackfillChannelTokens(ctx context.Context, channelID int64, delta int64)
+	ChannelTPMSnapshot(ctx context.Context, channelID int64, override *int64) (ratelimit.UsageSnapshot, error)
 }
 
 // SetRateLimitGuard 注入限流 Guard（bootstrap 连线用）。nil 表示不启用限流。
 func (r *AttemptRunner) SetRateLimitGuard(guard RateLimitGuard) {
 	r.guard = guard
+	if r.lifecycle != nil {
+		r.lifecycle.rateLimitGuard = guard
+	}
 }
 
 // ChannelConcurrencyLimiter 定义候选循环在调用上游前占用渠道在途名额的能力（DEC-029）。
@@ -35,11 +39,15 @@ func (r *AttemptRunner) SetRateLimitGuard(guard RateLimitGuard) {
 // release 必须在上游调用完全结束后调用（release 必须幂等，重复调用只释放一次）。
 type ChannelConcurrencyLimiter interface {
 	AcquireChannel(channelID int64, override *int64) (release func(), ok bool)
+	ChannelSnapshot(ctx context.Context, channelID int64, override *int64) (ratelimit.UsageSnapshot, error)
 }
 
 // SetConcurrencyLimiter 注入渠道在途并发限制器（bootstrap 连线用）。nil 表示不启用并发限制。
 func (r *AttemptRunner) SetConcurrencyLimiter(limiter ChannelConcurrencyLimiter) {
 	r.concurrency = limiter
+	if r.lifecycle != nil {
+		r.lifecycle.concurrencyLimiter = limiter
+	}
 }
 
 // SetHeadWaitSource 注入队首短等配置源（通常为 StickyRouter，与 gateway.routing_sticky 热更新同源）。
@@ -77,6 +85,13 @@ func routeUserOf(p *auth.APIKeyPrincipal) (routeID, userID int64, ok bool) {
 		return 0, 0, false
 	}
 	return *p.RouteID, p.UserID, true
+}
+
+func routeIDOf(p *auth.APIKeyPrincipal) *int64 {
+	if p == nil {
+		return nil
+	}
+	return p.RouteID
 }
 
 func channelRateLimits(c routing.ChatRouteCandidate) ratelimit.Limits {

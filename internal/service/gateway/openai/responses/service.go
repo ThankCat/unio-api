@@ -131,6 +131,13 @@ func (s *ResponsesService) SetConcurrencyLimiter(limiter lifecycle.ChannelConcur
 	s.attemptRunner.SetConcurrencyLimiter(limiter)
 }
 
+// SetBalanceConfig 热更新 balanced 调度开关。
+func (s *ResponsesService) SetBalanceConfig(enabled, weightByRemaining bool) {
+	if configurable, ok := s.candidates.(interface{ SetBalanceConfig(bool, bool) }); ok {
+		configurable.SetBalanceConfig(enabled, weightByRemaining)
+	}
+}
+
 // SetCostExposureRecorder 注入成本敞口记录器（DESIGN-bill-on-cancel 阶段一）；nil 表示不启用。
 func (s *ResponsesService) SetCostExposureRecorder(recorder lifecycle.CostExposureRecorder, assumedOutputFallback int64) {
 	s.lifecycle.SetCostExposureRecorder(recorder, assumedOutputFallback)
@@ -156,6 +163,10 @@ func (s *ResponsesService) SetStickyRouter(sticky *lifecycle.StickyRouter) {
 // SetRoutingLogger 注入 sticky/skip/wait/failover 结构化日志；nil 表示不打日志。
 func (s *ResponsesService) SetRoutingLogger(logger *zap.Logger) {
 	s.attemptRunner.SetLogger(logger)
+}
+
+func (s *ResponsesService) SetRoutingTraceRecorder(recorder *lifecycle.RoutingTraceRecorder) {
+	s.lifecycle.SetRoutingTraceRecorder(recorder)
 }
 
 // responsesSafeMessage 把 Responses 编排专用 ad-hoc string code 映射成可展示文案；
@@ -198,15 +209,16 @@ func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req g
 	}
 
 	return s.candidates.PrepareCandidates(ctx, lifecycle.PrepareCandidatesParams{
-		Protocol:            routing.ProtocolOpenAI,
-		Candidates:          candidates,
-		Capabilities:        capabilities,
-		Available:           s.lifecycle.CandidateAvailable,
-		FailurePreferred:    s.lifecycle.CandidateFailurePreferred,
-		EstimateInputTokens: s.responsesInputTokenEstimator(req, allowDirect),
-		Mode:                mode,
-		ChannelHealthScore:  s.lifecycle.ChannelHealthScore,
-		StickyChannelID:     stickyChannelID,
+		Protocol:                routing.ProtocolOpenAI,
+		Candidates:              candidates,
+		Capabilities:            capabilities,
+		Available:               s.lifecycle.CandidateAvailable,
+		FailurePreferred:        s.lifecycle.CandidateFailurePreferred,
+		EstimateInputTokens:     s.responsesInputTokenEstimator(req, allowDirect),
+		Mode:                    mode,
+		ChannelHealthScore:      s.lifecycle.ChannelHealthScore,
+		ChannelCapacitySnapshot: s.lifecycle.ChannelCapacitySnapshot,
+		StickyChannelID:         stickyChannelID,
 	})
 }
 

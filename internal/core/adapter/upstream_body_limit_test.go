@@ -56,6 +56,20 @@ func TestReadUpstreamBodyLimitedAtLimitIsNotExceeded(t *testing.T) {
 	}
 }
 
+func TestSnippetFromBytes(t *testing.T) {
+	if got := SnippetFromBytes([]byte(`  {"error":"x"}  `)); got != `{"error":"x"}` {
+		t.Fatalf("unexpected snippet %q", got)
+	}
+	long := strings.Repeat("a", DefaultMaxUpstreamErrorSnippetBytes+10)
+	got := SnippetFromBytes([]byte(long))
+	if !strings.HasSuffix(got, " …（已截断）") {
+		t.Fatalf("expected truncation marker, got len=%d", len(got))
+	}
+	if len([]byte(strings.TrimSuffix(got, " …（已截断）"))) != DefaultMaxUpstreamErrorSnippetBytes {
+		t.Fatalf("expected truncated to %d bytes", DefaultMaxUpstreamErrorSnippetBytes)
+	}
+}
+
 func TestReadUpstreamBodyLimitedOverLimit(t *testing.T) {
 	t.Cleanup(func() { SetMaxUpstreamResponseBytes(0) })
 	SetMaxUpstreamResponseBytes(8)

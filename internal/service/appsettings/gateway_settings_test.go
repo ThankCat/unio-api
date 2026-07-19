@@ -18,6 +18,7 @@ func TestGatewaySettingsRegistered(t *testing.T) {
 		GatewayDefaultChannelTimeoutKey,
 		GatewayFailureCooldownKey,
 		GatewayConcurrencyDefaultsKey,
+		GatewayRoutingBalanceKey,
 	}
 	for _, key := range keys {
 		def, ok := reg.Get(key)
@@ -36,6 +37,17 @@ func TestGatewaySettingsRegistered(t *testing.T) {
 		if err := def.Validate(def.Default); err != nil {
 			t.Errorf("key %q default fails own validation: %v", key, err)
 		}
+	}
+}
+
+func TestRoutingBalanceSettingsRoundTrip(t *testing.T) {
+	want := RoutingBalanceSettings{Enabled: true, WeightByRemaining: false}
+	got, err := DecodeRoutingBalanceSettings(encodeRoutingBalanceSettings(want))
+	if err != nil || got != want {
+		t.Fatalf("round trip got %+v err=%v, want %+v", got, err, want)
+	}
+	if _, err := DecodeRoutingBalanceSettings([]byte(`{"enabled":true,"weight_by_remaining":true,"bogus":1}`)); err == nil {
+		t.Fatal("unknown field must be rejected")
 	}
 }
 

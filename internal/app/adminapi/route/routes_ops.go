@@ -30,7 +30,6 @@ type routeOpsRowDTO struct {
 	ID           int64  `json:"id"`
 	Name         string `json:"name"`
 	Mode         string `json:"mode"`
-	PoolKind     string `json:"pool_kind"`
 	Status       string `json:"status"`
 	Description  string `json:"description"`
 	PriceRatio   string `json:"price_ratio"`
@@ -143,7 +142,6 @@ func (h *routeOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			ID:           row.ID,
 			Name:         row.Name,
 			Mode:         row.Mode,
-			PoolKind:     row.PoolKind,
 			Status:       row.Status,
 			Description:  row.Description,
 			PriceRatio:   row.PriceRatio,

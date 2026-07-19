@@ -48,14 +48,16 @@ type routerTestRateLimiter struct {
 type routerTestModelCatalogService struct {
 	called    bool
 	projectID int64
+	routeID   int64
 	models    []modelcatalog.Model
 	err       error
 }
 
 // ListAvailableModels 记录收到的 project id，并返回测试预设的模型列表。
-func (s *routerTestModelCatalogService) ListAvailableModels(ctx context.Context, projectID int64, _ []string) ([]modelcatalog.Model, error) {
+func (s *routerTestModelCatalogService) ListAvailableModels(ctx context.Context, projectID, routeID int64, _ []string) ([]modelcatalog.Model, error) {
 	s.called = true
 	s.projectID = projectID
+	s.routeID = routeID
 	return s.models, s.err
 }
 

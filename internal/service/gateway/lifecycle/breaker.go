@@ -1,12 +1,18 @@
 package lifecycle
 
 import (
+	"math"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+)
+
+const (
+	breakerLatencyTarget = 2 * time.Second
+	breakerLatencyWeight = 0.35
 )
 
 // ChannelBreaker 定义 gateway 在选择 channel 时所需的熔断能力。
@@ -18,7 +24,7 @@ type ChannelBreaker interface {
 	// 它不占用 half-open 探测名额；真正尝试前必须继续调用 Allow。
 	Available(channelKey string) bool
 
-	// HealthScore 返回某个 channel 的健康分（越小越健康，0 最佳），供 stable 线路排序。
+	// HealthScore 返回某个 channel 的健康分（越小越健康，0 最佳），供 balanced 权重计算。
 	// 约定：closed 且窗口内有样本 → 近窗口失败率；窗口无样本 → 0；half-open → 偏高；open → 最差(1)。
 	HealthScore(channelKey string) float64
 
@@ -70,6 +76,8 @@ type channelBreakerState struct {
 	successes        int
 	openedAt         time.Time
 	halfOpenInFlight bool
+	latencyEWMA      time.Duration
+	latencySamples   int
 }
 
 // ChannelCircuitBreaker 是按 channel 维度的进程内熔断器。
@@ -171,6 +179,8 @@ type ChannelBreakerEntry struct {
 	OpenRemainingMs  *int64           `json:"open_remaining_ms,omitempty"`
 	HalfOpenInFlight bool             `json:"half_open_in_flight"`
 	HealthScore      float64          `json:"health_score"`
+	ErrorRate        float64          `json:"error_rate"`
+	LatencyEWMAMs    float64          `json:"latency_ewma_ms"`
 }
 
 // ChannelBreakerSnapshot 是进程内熔断器的只读全量快照。
@@ -223,6 +233,7 @@ func (b *ChannelCircuitBreaker) Snapshot() ChannelBreakerSnapshot {
 			Successes:        s.successes,
 			WindowStart:      s.windowStart.UTC(),
 			HalfOpenInFlight: s.halfOpenInFlight,
+			LatencyEWMAMs:    float64(s.latencyEWMA) / float64(time.Millisecond),
 		}
 		switch s.state {
 		case circuitOpen:
@@ -248,8 +259,9 @@ func (b *ChannelCircuitBreaker) Snapshot() ChannelBreakerSnapshot {
 			} else {
 				total := s.failures + s.successes
 				if total > 0 {
-					entry.HealthScore = float64(s.failures) / float64(total)
+					entry.ErrorRate = float64(s.failures) / float64(total)
 				}
+				entry.HealthScore = closedHealthScore(entry.ErrorRate, s.latencyEWMA, s.latencySamples)
 			}
 		}
 		out.Channels = append(out.Channels, entry)
@@ -289,7 +301,7 @@ func (b *ChannelCircuitBreaker) HealthScore(channelKey string) float64 {
 	case circuitOpen:
 		return 1
 	case circuitHalfOpen:
-		// 半开恢复中，比健康闭合差、比熔断好，stable 排序时排在健康渠道之后。
+		// 半开恢复中，比健康闭合差、比熔断好，balanced 时显著降权。
 		return 0.75
 	default:
 		// 窗口已过期视为无近况样本（最优）；避免在只读路径里清零计数。
@@ -300,8 +312,41 @@ func (b *ChannelCircuitBreaker) HealthScore(channelKey string) float64 {
 		if total == 0 {
 			return 0
 		}
-		return float64(s.failures) / float64(total)
+		errorRate := float64(s.failures) / float64(total)
+		return closedHealthScore(errorRate, s.latencyEWMA, s.latencySamples)
 	}
+}
+
+// RecordLatency 记录一次上游尝试耗时的 EWMA，供 balanced 健康因子降权；无样本时保持中性。
+func (b *ChannelCircuitBreaker) RecordLatency(channelKey string, duration time.Duration) {
+	if b == nil || b.disabled.Load() || duration < 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s := b.stateForLocked(channelKey)
+	b.rollLocked(s)
+	if s.latencySamples == 0 {
+		s.latencyEWMA = duration
+	} else {
+		s.latencyEWMA = time.Duration(0.2*float64(duration) + 0.8*float64(s.latencyEWMA))
+	}
+	s.latencySamples++
+}
+
+func closedHealthScore(errorRate float64, latency time.Duration, latencySamples int) float64 {
+	if errorRate < 0 {
+		errorRate = 0
+	}
+	if errorRate > 1 {
+		errorRate = 1
+	}
+	latencyPenalty := 0.0
+	if latencySamples > 0 && latency > 0 {
+		latencyPenalty = float64(latency) / float64(latency+breakerLatencyTarget)
+	}
+	combined := 1 - (1-errorRate)*(1-breakerLatencyWeight*latencyPenalty)
+	return math.Max(0, math.Min(1, combined))
 }
 
 // Allow 实现 ChannelBreaker。
@@ -395,6 +440,8 @@ func (b *ChannelCircuitBreaker) rollLocked(s *channelBreakerState) {
 		s.windowStart = b.now()
 		s.failures = 0
 		s.successes = 0
+		s.latencyEWMA = 0
+		s.latencySamples = 0
 	}
 }
 
@@ -405,6 +452,8 @@ func (b *ChannelCircuitBreaker) openLocked(s *channelBreakerState) {
 	s.failures = 0
 	s.successes = 0
 	s.halfOpenInFlight = false
+	s.latencyEWMA = 0
+	s.latencySamples = 0
 }
 
 // closeLocked 切换到闭合状态并重置计数。调用方必须持锁。
@@ -414,6 +463,8 @@ func (b *ChannelCircuitBreaker) closeLocked(s *channelBreakerState) {
 	s.failures = 0
 	s.successes = 0
 	s.halfOpenInFlight = false
+	s.latencyEWMA = 0
+	s.latencySamples = 0
 }
 
 // IsChannelFaultError 判断一个上游错误是否应计入进程内熔断（瞬时故障保护）。

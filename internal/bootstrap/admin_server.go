@@ -6,6 +6,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 	anthropicdeepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/deepseek/messages"
 	openaideepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/deepseek/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
@@ -15,6 +16,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/tracing"
+	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	capabilityadmin "github.com/ThankCat/unio-gateway/internal/service/admin/capability"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channel"
@@ -37,6 +39,8 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
 	adminroute "github.com/ThankCat/unio-gateway/internal/service/admin/route"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/routeops"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/routeruntime"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/routingtrace"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/redis/go-redis/v9"
 )
@@ -135,6 +139,19 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	channelRechargeFactorService := channelrechargefactor.NewService(queries)
 	routeService := adminroute.NewService(deps.DB, queries)
 	routeOpsService := routeops.NewService(queries)
+	routingTraceService := routingtrace.NewService(queries)
+	var runtimeConcurrency *ratelimit.ConcurrencyLimiter
+	var runtimeRateGuard *ratelimit.Guard
+	if deps.Redis != nil {
+		concurrencySettings := appsettings.GatewayConcurrencyDefaults(ctx, settingsStore)
+		runtimeConcurrency = ratelimit.NewRedisConcurrencyLimiter(
+			deps.Redis, deps.Config.Redis.KeyNamespace, concurrencySettings.KeyLimit, concurrencySettings.ChannelLimit, deps.Logger,
+		)
+		runtimeRateGuard = NewRateLimitGuard(
+			deps.Redis, deps.Config.Redis.KeyNamespace, appsettings.GatewayRateLimitDefaults(ctx, settingsStore), deps.Logger,
+		)
+	}
+	routeRuntimeService := routeruntime.NewService(queries, runtimeConcurrency, runtimeRateGuard, breakerClient, settingsStore)
 
 	// M6 只读查询台：请求记录 / 账本，只读 service 共用同一 sqlc Queries。
 	requestQueryService := query.NewRequestService(queries)
@@ -170,6 +187,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	recoveryJobQueryService := query.NewRecoveryService(queries)
 
 	metricsRecorder := metrics.New()
+	adminhttp.SetRoutingMarginMetrics(metricsRecorder)
 
 	handler := NewAdminHTTPHandler(adminHTTPDeps{
 		Logger:              deps.Logger,
@@ -191,6 +209,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 		RouteService:        routeService,
 		RouteOpsService:     routeOpsService,
+		RoutingTraceService: routingTraceService,
+		RouteRuntimeService: routeRuntimeService,
 		RequestQueryService: requestQueryService,
 		LedgerQueryService:  ledgerQueryService,
 

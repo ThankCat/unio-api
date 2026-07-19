@@ -8,6 +8,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
@@ -24,19 +25,86 @@ import (
 // 创建方式：见 NewRequestLifecycle。两侧 bootstrap 不需要直接构造它，service.go 在懒初始化
 // 阶段（lc()）根据已注入字段组装一次。
 type RequestLifecycle struct {
-	requestLog      requestlog.Service
-	authorizer      ChatAuthorizer
-	metrics         MetricsRecorder
-	breaker         ChannelBreaker
-	cooldowns       *ChannelCooldownRegistry
-	credentialGate  CredentialGate
-	ingressProtocol requestlog.Protocol
-	operation       requestlog.Operation
-	safeMessage     func(code string) string
+	requestLog         requestlog.Service
+	authorizer         ChatAuthorizer
+	metrics            MetricsRecorder
+	breaker            ChannelBreaker
+	cooldowns          *ChannelCooldownRegistry
+	credentialGate     CredentialGate
+	rateLimitGuard     RateLimitGuard
+	concurrencyLimiter ChannelConcurrencyLimiter
+	routingTraces      *RoutingTraceRecorder
+	ingressProtocol    requestlog.Protocol
+	operation          requestlog.Operation
+	safeMessage        func(code string) string
 
 	// costExposures 是可选的成本敞口记录器（DESIGN-bill-on-cancel 阶段一）；nil 表示不启用。
 	costExposures              CostExposureRecorder
 	costExposureOutputFallback int64
+}
+
+// SetRoutingTraceRecorder 注入请求级路由决策持久化器。
+func (l *RequestLifecycle) SetRoutingTraceRecorder(recorder *RoutingTraceRecorder) {
+	if l != nil {
+		l.routingTraces = recorder
+	}
+}
+
+// RecordRoutingDecision 按采样/异常策略写 trace；写失败不影响客户请求。
+func (l *RequestLifecycle) RecordRoutingDecision(ctx context.Context, in RoutingDecisionTraceInput) {
+	if l == nil {
+		return
+	}
+	l.recordRoutingPlan(in)
+	if l.routingTraces != nil {
+		l.routingTraces.Record(context.WithoutCancel(ctx), in)
+	}
+}
+
+// RecordRoutingFailure 100% 保存候选计划生成前的路由异常（无可用渠道、负毛利全摘除等）。
+func (l *RequestLifecycle) RecordRoutingFailure(ctx context.Context, request requestlog.RequestRecord, routeID *int64, err error) {
+	if l == nil || routeID == nil {
+		return
+	}
+	marginGuard := false
+	for _, field := range failure.FieldsOf(err) {
+		if field.Key == "margin_guard_triggered" {
+			marginGuard, _ = field.Value.(bool)
+		}
+	}
+	reason := string(failure.CodeOf(err))
+	if reason == "" {
+		reason = "routing_failure"
+	}
+	if marginGuard {
+		l.recordMarginGuard("runtime_rejected")
+	}
+	l.RecordRoutingDecision(ctx, RoutingDecisionTraceInput{
+		Request: request, RouteID: *routeID, ForceReasons: []string{reason}, MarginGuard: marginGuard,
+	})
+}
+
+// ChannelCapacitySnapshot 组合 channel-global 并发与 TPM 只读快照，供 balanced scorer 使用。
+func (l *RequestLifecycle) ChannelCapacitySnapshot(ctx context.Context, candidate routing.ChatRouteCandidate) (ChannelCapacity, error) {
+	if l == nil {
+		return ChannelCapacity{}, nil
+	}
+	capacity := ChannelCapacity{}
+	if l.concurrencyLimiter != nil {
+		snapshot, err := l.concurrencyLimiter.ChannelSnapshot(ctx, candidate.Channel.ID, candidate.ConcurrencyLimit)
+		if err != nil {
+			return ChannelCapacity{}, err
+		}
+		capacity.Concurrency = CapacitySignal{Used: snapshot.Used, Limit: snapshot.Limit, Known: snapshot.Known}
+	}
+	if l.rateLimitGuard != nil {
+		snapshot, err := l.rateLimitGuard.ChannelTPMSnapshot(ctx, candidate.Channel.ID, candidate.TPMLimit)
+		if err != nil {
+			return ChannelCapacity{}, err
+		}
+		capacity.TPM = CapacitySignal{Used: snapshot.Used, Limit: snapshot.Limit, Known: snapshot.Known}
+	}
+	return capacity, nil
 }
 
 // RequestLifecycleParams 是构造 RequestLifecycle 所需的全部字段。
@@ -179,7 +247,7 @@ func (l *RequestLifecycle) CandidateFailurePreferred(candidate routing.ChatRoute
 	return l.cooldowns.FailurePreferred(MetricsID(candidate.Channel.ID))
 }
 
-// ChannelHealthScore 返回某 channel 的健康分（越小越健康），供 stable 线路排序。
+// ChannelHealthScore 返回某 channel 的健康分（越小越健康），供 balanced 权重计算。
 // nil receiver / nil breaker 等价于「无健康统计」，返回 0（不改变排序）。
 func (l *RequestLifecycle) ChannelHealthScore(channelKey string) float64 {
 	if l == nil || l.breaker == nil {
@@ -290,7 +358,15 @@ func (l *RequestLifecycle) RecordRoutingSelected(providerID int64, channelID int
 // RecordUpstream 记录一次上游 adapter 调用的结果、错误分类和耗时。
 // err 为 nil 表示调用成功；否则用 adapter.UpstreamCategoryOf 提取稳定上游错误分类。
 func (l *RequestLifecycle) RecordUpstream(providerID int64, channelID int64, duration time.Duration, err error) {
-	if l == nil || l.metrics == nil {
+	if l == nil {
+		return
+	}
+	if recorder, ok := l.breaker.(interface {
+		RecordLatency(channelKey string, duration time.Duration)
+	}); ok {
+		recorder.RecordLatency(MetricsID(channelID), duration)
+	}
+	if l.metrics == nil {
 		return
 	}
 

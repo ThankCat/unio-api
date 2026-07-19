@@ -87,13 +87,13 @@ type channelCircuitBreakerInstanceDTO struct {
 }
 
 type channelOpsDetailDTO struct {
-	AttemptTotal     int64                      `json:"attempt_total"`
-	AttemptSucceeded int64                      `json:"attempt_succeeded"`
-	SuccessRate      float64                    `json:"success_rate"`
-	TimeoutTotal     int64                      `json:"timeout_total"`
-	Latency          adminhttp.LatencyStatsDTO  `json:"latency"`
-	LastSuccessAt    *string                    `json:"last_success_at"`
-	LastFailureAt    *string                    `json:"last_failure_at"`
+	AttemptTotal     int64                     `json:"attempt_total"`
+	AttemptSucceeded int64                     `json:"attempt_succeeded"`
+	SuccessRate      float64                   `json:"success_rate"`
+	TimeoutTotal     int64                     `json:"timeout_total"`
+	Latency          adminhttp.LatencyStatsDTO `json:"latency"`
+	LastSuccessAt    *string                   `json:"last_success_at"`
+	LastFailureAt    *string                   `json:"last_failure_at"`
 	// CircuitBreaker 来自 gateway 快照；无快照时省略，前端按闭合显示。
 	CircuitBreaker *channelCircuitBreakerDTO `json:"circuit_breaker,omitempty"`
 }
@@ -131,7 +131,6 @@ type channelOpsRouteDTO struct {
 	ID         int64  `json:"id"`
 	Name       string `json:"name"`
 	Mode       string `json:"mode"`
-	PoolKind   string `json:"pool_kind"`
 	Status     string `json:"status"`
 	PriceRatio string `json:"price_ratio"`
 }
@@ -398,7 +397,6 @@ func (h *channelOpsHandler) routes(w http.ResponseWriter, r *http.Request) {
 			ID:         rt.ID,
 			Name:       rt.Name,
 			Mode:       rt.Mode,
-			PoolKind:   rt.PoolKind,
 			Status:     rt.Status,
 			PriceRatio: rt.PriceRatio,
 		})

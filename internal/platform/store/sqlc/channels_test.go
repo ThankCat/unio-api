@@ -79,13 +79,13 @@ func TestFindRouteCandidatesFiltersByIngressProtocol(t *testing.T) {
 	createChannelPriceForTest(t, ctx, queries, openaiChannelID, modelID, now)
 	createChannelPriceForTest(t, ctx, queries, anthropicChannelID, modelID, now)
 	createModelPriceForTest(t, ctx, queries, modelID, now)
+	routeID := insertRouteWithChannels(t, ctx, tx, openaiChannelID, anthropicChannelID)
 
 	openaiCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: requestedModel,
 		IngressProtocol:  "openai",
 		UserID:           1,
-		PoolKind:         "all",
-		RouteID:          0,
+		RouteID:          routeID,
 		AtTime:           timestamptz(now),
 	})
 	if err != nil {
@@ -105,8 +105,7 @@ func TestFindRouteCandidatesFiltersByIngressProtocol(t *testing.T) {
 		RequestedModelID: requestedModel,
 		IngressProtocol:  "anthropic",
 		UserID:           1,
-		PoolKind:         "all",
-		RouteID:          0,
+		RouteID:          routeID,
 		AtTime:           timestamptz(now),
 	})
 	if err != nil {

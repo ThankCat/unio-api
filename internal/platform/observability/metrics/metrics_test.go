@@ -36,6 +36,12 @@ func TestMetricsExposesRecordedSeries(t *testing.T) {
 	m.IncSettlement(SettlementOutcomeSuccess)
 	m.IncStreamEvent(StreamEventCompleted)
 	m.IncRateLimitDecision(RateLimitDecisionLimited)
+	m.ObserveRoutingBalance("balanced", "planned", 3, 2, 0.25)
+	m.IncRoutingBalanceSelected("42", "123")
+	m.IncRoutingBalanceFallback("42", "upstream_timeout")
+	m.IncRoutingCapacityRead("success")
+	m.IncRoutingMarginGuard("runtime_rejected")
+	m.IncRoutingTraceWrite("success")
 
 	body := scrape(t, m)
 
@@ -49,6 +55,15 @@ func TestMetricsExposesRecordedSeries(t *testing.T) {
 		`unio_gateway_settlement_total{outcome="success"} 1`,
 		`unio_gateway_stream_events_total{event="completed"} 1`,
 		`unio_ratelimit_decisions_total{decision="limited"} 1`,
+		`unio_gateway_routing_balance_total{mode="balanced",result="planned"} 1`,
+		`unio_gateway_routing_balance_candidate_count_count{mode="balanced"} 1`,
+		`unio_gateway_routing_balance_pool_size_count{mode="balanced"} 1`,
+		`unio_gateway_routing_balance_selected_total{channel="123",route="42"} 1`,
+		`unio_gateway_routing_balance_fallback_total{reason="upstream_timeout",route="42"} 1`,
+		`unio_gateway_routing_balance_load_skew_count 1`,
+		`unio_gateway_routing_balance_capacity_read_total{result="success"} 1`,
+		`unio_gateway_routing_margin_guard_total{result="runtime_rejected"} 1`,
+		`unio_gateway_routing_trace_write_total{result="success"} 1`,
 	}
 
 	for _, want := range wants {

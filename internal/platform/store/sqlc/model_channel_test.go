@@ -144,6 +144,29 @@ func insertChannelModel(t *testing.T, ctx context.Context, tx pgx.Tx, channelID 
 	}
 }
 
+// insertRouteWithChannels 创建 balanced 测试线路，并把给定渠道显式加入其唯一候选池。
+func insertRouteWithChannels(t *testing.T, ctx context.Context, tx pgx.Tx, channelIDs ...int64) int64 {
+	t.Helper()
+
+	var routeID int64
+	err := tx.QueryRow(ctx, `
+		INSERT INTO routes (name, mode, status, price_ratio)
+		VALUES ($1, 'balanced', 'enabled', 1)
+		RETURNING id
+	`, fmt.Sprintf("test-route-%d", time.Now().UnixNano())).Scan(&routeID)
+	if err != nil {
+		t.Fatalf("insert test route: %v", err)
+	}
+	for _, channelID := range channelIDs {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO route_channels (route_id, channel_id) VALUES ($1, $2)
+		`, routeID, channelID); err != nil {
+			t.Fatalf("bind channel %d to route %d: %v", channelID, routeID, err)
+		}
+	}
+	return routeID
+}
+
 // createUserForModelPolicy 创建模型策略测试专用 user。
 func createUserForModelPolicy(t *testing.T, ctx context.Context, queries *sqlc.Queries, suffix int64) int64 {
 	t.Helper()
@@ -306,7 +329,19 @@ func TestListAvailableModelsForProjectFiltersDisabledRelations(t *testing.T) {
 	disabledProviderModelID := insertModel(t, ctx, tx, disabledProviderModel, "openai", "enabled")
 	insertChannelModel(t, ctx, tx, disabledProviderChannelID, disabledProviderModelID, "catalog-disabled-provider", "enabled")
 
-	got, err := queries.ListAvailableModelsForUser(ctx, 1)
+	now := time.Now().UTC()
+	for _, modelID := range []int64{visibleModelID, disabledModelID, disabledMappingModelID, disabledChannelModelID, disabledProviderModelID} {
+		createModelPriceForTest(t, ctx, queries, modelID, now)
+	}
+	createChannelPriceForTest(t, ctx, queries, enabledChannelID, visibleModelID, now)
+	createChannelPriceForTest(t, ctx, queries, duplicateChannelID, visibleModelID, now)
+	createChannelPriceForTest(t, ctx, queries, enabledChannelID, disabledModelID, now)
+	createChannelPriceForTest(t, ctx, queries, enabledChannelID, disabledMappingModelID, now)
+	createChannelPriceForTest(t, ctx, queries, disabledChannelID, disabledChannelModelID, now)
+	createChannelPriceForTest(t, ctx, queries, disabledProviderChannelID, disabledProviderModelID, now)
+	routeID := insertRouteWithChannels(t, ctx, tx, enabledChannelID, duplicateChannelID, disabledChannelID, disabledProviderChannelID)
+
+	got, err := queries.ListAvailableModelsForUser(ctx, sqlc.ListAvailableModelsForUserParams{UserID: 1, RouteID: routeID})
 	if err != nil {
 		t.Fatalf("list available models: %v", err)
 	}
@@ -338,7 +373,7 @@ func TestListAvailableModelsForProjectFiltersDisabledRelations(t *testing.T) {
 		t.Fatalf("expected visible model %q once, got %d in %#v", visibleModel, visibleCount, got)
 	}
 
-	zeroProject, err := queries.ListAvailableModelsForUser(ctx, 0)
+	zeroProject, err := queries.ListAvailableModelsForUser(ctx, sqlc.ListAvailableModelsForUserParams{UserID: 0, RouteID: routeID})
 	if err != nil {
 		t.Fatalf("list available models for zero project: %v", err)
 	}
@@ -381,8 +416,12 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 	createChannelPriceForTest(t, ctx, queries, secondaryChannelID, modelID, now)
 	// DEC-026：模型需有基准价（× 线路倍率得客户售价），否则候选被过滤。
 	createModelPriceForTest(t, ctx, queries, modelID, now)
+	routeID := insertRouteWithChannels(t, ctx, tx,
+		fallbackChannelID, primaryChannelID, secondaryChannelID,
+		disabledChannelID, disabledMappingChannelID, disabledProviderChannelID,
+	)
 
-	got, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(requestedModel, 1))
+	got, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(requestedModel, 1, routeID))
 	if err != nil {
 		t.Fatalf("find route candidates: %v", err)
 	}
@@ -423,7 +462,7 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 	disabledModelID := insertModel(t, ctx, tx, disabledModel, "openai", "disabled")
 	insertChannelModel(t, ctx, tx, primaryChannelID, disabledModelID, "gpt-routing-disabled-model", "enabled")
 
-	disabledModelCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(disabledModel, 1))
+	disabledModelCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(disabledModel, 1, routeID))
 	if err != nil {
 		t.Fatalf("find disabled model candidates: %v", err)
 	}
@@ -431,12 +470,59 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 		t.Fatalf("expected disabled model to have no candidates, got %d", len(disabledModelCandidates))
 	}
 
-	unknownCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(fmt.Sprintf("openai/routing-unknown-%d", suffix), 1))
+	unknownCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(fmt.Sprintf("openai/routing-unknown-%d", suffix), 1, routeID))
 	if err != nil {
 		t.Fatalf("find unknown model candidates: %v", err)
 	}
 	if len(unknownCandidates) != 0 {
 		t.Fatalf("expected unknown model to have no candidates, got %d", len(unknownCandidates))
+	}
+}
+
+func TestRoutePoolExcludesUnboundChannelAndModel(t *testing.T) {
+	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	suffix := time.Now().UnixNano()
+	timeoutMS := int32(15000)
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("route-boundary-%d", suffix), "enabled")
+	boundChannelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("route-bound-%d", suffix), "enabled", 20, &timeoutMS)
+	unboundChannelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("route-unbound-%d", suffix), "enabled", 1, &timeoutMS)
+
+	sharedModel := fmt.Sprintf("openai/route-shared-%d", suffix)
+	sharedModelID := insertModel(t, ctx, tx, sharedModel, "openai", "enabled")
+	insertChannelModel(t, ctx, tx, boundChannelID, sharedModelID, "shared-bound", "enabled")
+	insertChannelModel(t, ctx, tx, unboundChannelID, sharedModelID, "shared-unbound", "enabled")
+
+	unboundOnlyModel := fmt.Sprintf("openai/route-unbound-only-%d", suffix)
+	unboundOnlyModelID := insertModel(t, ctx, tx, unboundOnlyModel, "openai", "enabled")
+	insertChannelModel(t, ctx, tx, unboundChannelID, unboundOnlyModelID, "unbound-only", "enabled")
+
+	now := time.Now().UTC()
+	createModelPriceForTest(t, ctx, queries, sharedModelID, now)
+	createModelPriceForTest(t, ctx, queries, unboundOnlyModelID, now)
+	createChannelPriceForTest(t, ctx, queries, boundChannelID, sharedModelID, now)
+	createChannelPriceForTest(t, ctx, queries, unboundChannelID, sharedModelID, now)
+	createChannelPriceForTest(t, ctx, queries, unboundChannelID, unboundOnlyModelID, now)
+	routeID := insertRouteWithChannels(t, ctx, tx, boundChannelID)
+
+	candidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(sharedModel, 1, routeID))
+	if err != nil {
+		t.Fatalf("find route-bound candidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].ChannelID != boundChannelID {
+		t.Fatalf("expected only bound channel %d, got %#v", boundChannelID, candidates)
+	}
+
+	models, err := queries.ListAvailableModelsForUser(ctx, sqlc.ListAvailableModelsForUserParams{UserID: 1, RouteID: routeID})
+	if err != nil {
+		t.Fatalf("list route-bound models: %v", err)
+	}
+	if !listContainsModel(models, sharedModel) {
+		t.Fatalf("expected shared model %q to remain visible, got %#v", sharedModel, models)
+	}
+	if listContainsModel(models, unboundOnlyModel) {
+		t.Fatalf("unbound-only model %q must not be visible, got %#v", unboundOnlyModel, models)
 	}
 }
 
@@ -465,8 +551,9 @@ func TestProjectModelPolicyDeniedFiltersCatalogAndRouting(t *testing.T) {
 	createChannelPriceForTest(t, ctx, queries, channelID, deniedModelID, time.Now().UTC())
 	createModelPriceForTest(t, ctx, queries, visibleModelID, time.Now().UTC())
 	createModelPriceForTest(t, ctx, queries, deniedModelID, time.Now().UTC())
+	routeID := insertRouteWithChannels(t, ctx, tx, channelID)
 
-	models, err := queries.ListAvailableModelsForUser(ctx, projectID)
+	models, err := queries.ListAvailableModelsForUser(ctx, sqlc.ListAvailableModelsForUserParams{UserID: projectID, RouteID: routeID})
 	if err != nil {
 		t.Fatalf("list available models for denied policy: %v", err)
 	}
@@ -477,7 +564,7 @@ func TestProjectModelPolicyDeniedFiltersCatalogAndRouting(t *testing.T) {
 		t.Fatalf("expected denied model %q to be filtered from catalog, got %#v", deniedModel, models)
 	}
 
-	visibleCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(visibleModel, projectID))
+	visibleCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(visibleModel, projectID, routeID))
 	if err != nil {
 		t.Fatalf("find visible route candidates: %v", err)
 	}
@@ -485,7 +572,7 @@ func TestProjectModelPolicyDeniedFiltersCatalogAndRouting(t *testing.T) {
 		t.Fatalf("expected visible model to have 1 candidate, got %d: %#v", len(visibleCandidates), visibleCandidates)
 	}
 
-	deniedCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(deniedModel, projectID))
+	deniedCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(deniedModel, projectID, routeID))
 	if err != nil {
 		t.Fatalf("find denied route candidates: %v", err)
 	}
@@ -519,8 +606,9 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 	createChannelPriceForTest(t, ctx, queries, channelID, inheritedModelID, time.Now().UTC())
 	createModelPriceForTest(t, ctx, queries, allowedModelID, time.Now().UTC())
 	createModelPriceForTest(t, ctx, queries, inheritedModelID, time.Now().UTC())
+	routeID := insertRouteWithChannels(t, ctx, tx, channelID)
 
-	models, err := queries.ListAvailableModelsForUser(ctx, projectID)
+	models, err := queries.ListAvailableModelsForUser(ctx, sqlc.ListAvailableModelsForUserParams{UserID: projectID, RouteID: routeID})
 	if err != nil {
 		t.Fatalf("list available models for allow-list policy: %v", err)
 	}
@@ -531,7 +619,7 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 		t.Fatalf("expected inherited model %q to be filtered in allow-list mode, got %#v", inheritedModel, models)
 	}
 
-	allowedCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(allowedModel, projectID))
+	allowedCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(allowedModel, projectID, routeID))
 	if err != nil {
 		t.Fatalf("find allowed route candidates: %v", err)
 	}
@@ -539,7 +627,7 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 		t.Fatalf("expected allowed model to have 1 candidate, got %d: %#v", len(allowedCandidates), allowedCandidates)
 	}
 
-	inheritedCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(inheritedModel, projectID))
+	inheritedCandidates, err := queries.FindRouteCandidates(ctx, routeCandidatesParams(inheritedModel, projectID, routeID))
 	if err != nil {
 		t.Fatalf("find inherited route candidates: %v", err)
 	}
@@ -589,14 +677,13 @@ func createModelPriceForTest(t *testing.T, ctx context.Context, queries *sqlc.Qu
 	}
 }
 
-// routeCandidatesParams 构造默认线路（内置经济：pool=all）的候选查询参数，at_time 取当前。
-func routeCandidatesParams(model string, projectID int64) sqlc.FindRouteCandidatesParams {
+// routeCandidatesParams 构造显式线路池的候选查询参数，at_time 取当前。
+func routeCandidatesParams(model string, projectID, routeID int64) sqlc.FindRouteCandidatesParams {
 	return sqlc.FindRouteCandidatesParams{
 		RequestedModelID: model,
 		IngressProtocol:  "openai",
 		UserID:           projectID,
-		PoolKind:         "all",
-		RouteID:          0,
+		RouteID:          routeID,
 		AtTime:           timestamptz(time.Now().UTC()),
 	}
 }
@@ -651,8 +738,14 @@ func TestListAvailableModelsForProjectReturnsCapTags(t *testing.T) {
 	unprovisioned := fmt.Sprintf("openai/cap-unprovisioned-%d", suffix)
 	unprovisionedID := insertModel(t, ctx, tx, unprovisioned, "openai", "enabled")
 	insertChannelModel(t, ctx, tx, channelID, unprovisionedID, "cap-unprovisioned", "enabled")
+	now := time.Now().UTC()
+	createModelPriceForTest(t, ctx, queries, provisionedID, now)
+	createModelPriceForTest(t, ctx, queries, unprovisionedID, now)
+	createChannelPriceForTest(t, ctx, queries, channelID, provisionedID, now)
+	createChannelPriceForTest(t, ctx, queries, channelID, unprovisionedID, now)
+	routeID := insertRouteWithChannels(t, ctx, tx, channelID)
 
-	models, err := queries.ListAvailableModelsForUser(ctx, projectID)
+	models, err := queries.ListAvailableModelsForUser(ctx, sqlc.ListAvailableModelsForUserParams{UserID: projectID, RouteID: routeID})
 	if err != nil {
 		t.Fatalf("list available models: %v", err)
 	}

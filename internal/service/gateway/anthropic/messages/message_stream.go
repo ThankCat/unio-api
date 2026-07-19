@@ -51,6 +51,7 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)
 	if err != nil {
+		s.lifecycle.RecordRoutingFailure(ctx, requestRecord, principal.RouteID, err)
 		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
 	}
@@ -71,12 +72,18 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		return err
 	}
 	stickySession.ApplyPlanOutcome(ctx, candidatePlan)
+	if principal.RouteID != nil {
+		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
+			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
+			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+		})
+	}
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
 		Principal:                principal,
 		CandidatePrices:          candidatePlan.CandidateSalePrices(),
-		LongContextPolicy:       candidatePlan.LongContextPolicy(),
+		LongContextPolicy:        candidatePlan.LongContextPolicy(),
 		InputTokens:              candidatePlan.ConservativeInputTokens,
 		MaxCompletionTokens:      estimateMaxOutputTokens(req),
 		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),
@@ -137,6 +144,12 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		},
 		ChunkMeta: messagesStreamChunkMeta,
 	})
+	if runResult.Attempts > 1 && principal.RouteID != nil {
+		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
+			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
+			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(), Attempts: runResult.Attempts,
+		})
+	}
 	outcome = runResult.Outcome
 	return err
 }

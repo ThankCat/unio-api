@@ -86,8 +86,7 @@ func createIdentity(t *testing.T, ctx context.Context, queries *sqlc.Queries) te
 	}
 	route, err := queries.CreateRoute(ctx, sqlc.CreateRouteParams{
 		Name:       fmt.Sprintf("requestlog-route-%d", suffix),
-		Mode:       "cheapest",
-		PoolKind:   "all",
+		Mode:       "balanced",
 		Status:     "enabled",
 		PriceRatio: priceRatio,
 	})

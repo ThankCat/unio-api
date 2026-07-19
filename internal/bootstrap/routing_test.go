@@ -32,12 +32,24 @@ func (s *fakeChatRouteStore) FindRouteCandidates(ctx context.Context, arg sqlc.F
 		if rows[i].ChannelPriceID == 0 && rows[i].ChannelCostMultiplierID == 0 {
 			rows[i].ChannelPriceID = rows[i].ChannelID
 		}
+		rows[i].BaseCurrency = "USD"
+		rows[i].BasePricingUnit = "per_1m_tokens"
+		rows[i].UncachedInputPrice = pgtype.Numeric{Int: big.NewInt(0), Valid: true}
+		rows[i].OutputPrice = pgtype.Numeric{Int: big.NewInt(0), Valid: true}
+		rows[i].CostCurrency = "USD"
+		rows[i].CostPricingUnit = "per_1m_tokens"
+		rows[i].UncachedInputCost = pgtype.Numeric{Int: big.NewInt(0), Valid: true}
+		rows[i].OutputCost = pgtype.Numeric{Int: big.NewInt(0), Valid: true}
 	}
 	return rows, nil
 }
 
 func (s *fakeChatRouteStore) GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error) {
-	return sqlc.Route{ID: id, Name: "test", Mode: "cheapest", PoolKind: "all", Status: "enabled", PriceRatio: pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true}}, nil
+	return sqlc.Route{ID: id, Name: "test", Mode: "balanced", Status: "enabled", PriceRatio: pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true}}, nil
+}
+
+func (s *fakeChatRouteStore) CountRouteChannels(context.Context, int64) (int64, error) {
+	return 1, nil
 }
 
 func testRouteID() *int64 {

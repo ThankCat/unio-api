@@ -15,25 +15,31 @@ import (
 )
 
 type fakeProviderStore struct {
-	providers   []sqlc.Provider
-	getRow      sqlc.Provider
-	getErr      error
-	createRow   sqlc.Provider
-	createErr   error
-	createParam sqlc.CreateProviderParams
-	createCalls int
-	updateRow   sqlc.Provider
-	updateErr   error
-	deleteAff   int64
-	deleteErr   error
-	deleteID    int64
-	deleteCalls int
-	archiveAff  int64
-	archiveErr  error
-	archiveID   int64
-	restoreAff  int64
-	restoreErr  error
-	restoreID   int64
+	providers               []sqlc.Provider
+	getRow                  sqlc.Provider
+	getErr                  error
+	createRow               sqlc.Provider
+	createErr               error
+	createParam             sqlc.CreateProviderParams
+	createCalls             int
+	updateRow               sqlc.Provider
+	updateErr               error
+	deleteAff               int64
+	deleteErr               error
+	deleteID                int64
+	deleteCalls             int
+	archiveAff              int64
+	archiveErr              error
+	archiveID               int64
+	getChannelRow           sqlc.Channel
+	getChannelErr           error
+	archiveReplacementAff   int64
+	archiveReplacementParam sqlc.ArchiveProviderWithReplacementParams
+	emptyRoutes             []sqlc.ListEnabledRoutesEmptiedByProviderRow
+	emptyRouteErr           error
+	restoreAff              int64
+	restoreErr              error
+	restoreID               int64
 }
 
 func (s *fakeProviderStore) ListProvidersPage(context.Context, sqlc.ListProvidersPageParams) ([]sqlc.Provider, error) {
@@ -46,6 +52,10 @@ func (s *fakeProviderStore) CountProviders(context.Context, sqlc.CountProvidersP
 
 func (s *fakeProviderStore) GetProvider(_ context.Context, _ int64) (sqlc.Provider, error) {
 	return s.getRow, s.getErr
+}
+
+func (s *fakeProviderStore) GetChannel(_ context.Context, _ int64) (sqlc.Channel, error) {
+	return s.getChannelRow, s.getChannelErr
 }
 
 func (s *fakeProviderStore) CreateProvider(_ context.Context, arg sqlc.CreateProviderParams) (sqlc.Provider, error) {
@@ -67,6 +77,15 @@ func (s *fakeProviderStore) DeleteProvider(_ context.Context, id int64) (int64, 
 func (s *fakeProviderStore) ArchiveProviderCascade(_ context.Context, id int64) (int64, error) {
 	s.archiveID = id
 	return s.archiveAff, s.archiveErr
+}
+
+func (s *fakeProviderStore) ArchiveProviderWithReplacement(_ context.Context, arg sqlc.ArchiveProviderWithReplacementParams) (int64, error) {
+	s.archiveReplacementParam = arg
+	return s.archiveReplacementAff, s.archiveErr
+}
+
+func (s *fakeProviderStore) ListEnabledRoutesEmptiedByProvider(context.Context, int64) ([]sqlc.ListEnabledRoutesEmptiedByProviderRow, error) {
+	return s.emptyRoutes, s.emptyRouteErr
 }
 
 func (s *fakeProviderStore) RestoreProvider(_ context.Context, id int64) (int64, error) {
@@ -203,7 +222,7 @@ func TestDeleteConflictOnForeignKeyViolation(t *testing.T) {
 func TestArchiveAndRestore(t *testing.T) {
 	store := &fakeProviderStore{archiveAff: 1, restoreAff: 1}
 	svc := provider.NewService(store)
-	if err := svc.Archive(context.Background(), 7); err != nil {
+	if err := svc.Archive(context.Background(), 7, nil); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
 	if store.archiveID != 7 {
@@ -214,5 +233,40 @@ func TestArchiveAndRestore(t *testing.T) {
 	}
 	if store.restoreID != 7 {
 		t.Fatalf("expected restore id 7, got %d", store.restoreID)
+	}
+}
+
+func TestArchiveRejectsEmptyingEnabledRoute(t *testing.T) {
+	store := &fakeProviderStore{
+		archiveAff:  1,
+		emptyRoutes: []sqlc.ListEnabledRoutesEmptiedByProviderRow{{ID: 3, Name: "production"}},
+	}
+	err := provider.NewService(store).Archive(context.Background(), 7, nil)
+	if failure.CodeOf(err) != failure.CodeAdminConflict {
+		t.Fatalf("expected conflict, got %v", err)
+	}
+	if store.archiveID != 0 {
+		t.Fatal("archive mutation must not run when an enabled route would be emptied")
+	}
+}
+
+func TestArchiveAtomicallyReplacesProviderChannels(t *testing.T) {
+	replacementID := int64(11)
+	store := &fakeProviderStore{
+		getRow: sqlc.Provider{ID: 8, Status: "enabled"},
+		getChannelRow: sqlc.Channel{
+			ID: replacementID, ProviderID: 8, Status: "enabled", CredentialValid: true,
+			Credential: "sk-live", BaseUrl: "https://upstream.example/v1",
+		},
+		archiveReplacementAff: 1,
+	}
+	if err := provider.NewService(store).Archive(context.Background(), 7, &replacementID); err != nil {
+		t.Fatalf("replace and archive provider: %v", err)
+	}
+	if store.archiveReplacementParam.ID != 7 || store.archiveReplacementParam.ReplacementChannelID != replacementID {
+		t.Fatalf("unexpected atomic archive params: %+v", store.archiveReplacementParam)
+	}
+	if store.archiveID != 0 {
+		t.Fatal("legacy archive mutation must not run for replacement operation")
 	}
 }

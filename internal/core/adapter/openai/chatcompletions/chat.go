@@ -109,19 +109,30 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 		)
 	}
 
+	requestID := upstreamResp.Header.Get(upstreamRequestIDHeader)
 	var upstreamRespBody chatCompletionResponse
 	if err := json.Unmarshal(body, &upstreamRespBody); err != nil {
-		return nil, failure.Wrap(
-			failure.CodeAdapterDecodeResponseFailed,
-			err,
-			failure.WithMessage("openai adapter decode chat completion response"),
+		return nil, newUpstreamProtocolError(
+			upstreamResp.StatusCode,
+			requestID,
+			body,
+			failure.Wrap(
+				failure.CodeAdapterDecodeResponseFailed,
+				err,
+				failure.WithMessage("openai adapter decode chat completion response"),
+			),
 		)
 	}
 
 	if len(upstreamRespBody.Choices) == 0 {
-		return nil, failure.New(
-			failure.CodeAdapterInvalidResponse,
-			failure.WithMessage("openai adapter empty chat completion choices"),
+		return nil, newUpstreamProtocolError(
+			upstreamResp.StatusCode,
+			requestID,
+			body,
+			failure.New(
+				failure.CodeAdapterInvalidResponse,
+				failure.WithMessage("openai adapter empty chat completion choices"),
+			),
 		)
 	}
 
@@ -132,17 +143,22 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 
 	toolCalls, err := wireToolCallsToAdapter(upstreamRespBody.Choices[0].Message.ToolCalls)
 	if err != nil {
-		return nil, failure.Wrap(
-			failure.CodeAdapterDecodeResponseFailed,
-			err,
-			failure.WithMessage("openai adapter decode chat completion tool_calls"),
+		return nil, newUpstreamProtocolError(
+			upstreamResp.StatusCode,
+			requestID,
+			body,
+			failure.Wrap(
+				failure.CodeAdapterDecodeResponseFailed,
+				err,
+				failure.WithMessage("openai adapter decode chat completion tool_calls"),
+			),
 		)
 	}
 
 	finishReason := upstreamFinishReason(upstreamRespBody.Choices[0])
 	meta := adapter.UpstreamMetadata{
 		StatusCode: upstreamResp.StatusCode,
-		RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
+		RequestID:  requestID,
 	}
 
 	choice := upstreamRespBody.Choices[0]

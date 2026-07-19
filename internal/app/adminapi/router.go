@@ -29,6 +29,11 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/gatewayruntime"
 )
 
+type RoutingTraceService interface {
+	route.RoutingTraceService
+	requests.RoutingTraceService
+}
+
 // RouterDeps 保存构建 admin HTTP router 所需的外部依赖（扁平聚合，按模块分派到各子包 Register）。
 type RouterDeps struct {
 	Logger             *zap.Logger
@@ -47,6 +52,8 @@ type RouterDeps struct {
 	ChannelPriceService channel.ChannelPriceService
 	RouteService        route.RouteService
 	RouteOpsService     route.RouteOpsService
+	RoutingTraceService RoutingTraceService
+	RouteRuntimeService route.RuntimeService
 
 	// DEC-026：模型基准售价（客户售价 = 模型基准价 × 线路倍率）。
 	ModelPriceService model.ModelPriceService
@@ -155,8 +162,10 @@ func NewRouter(deps RouterDeps) http.Handler {
 			CatalogService: deps.CatalogService,
 		})
 		route.Register(r, route.Deps{
-			Service:    deps.RouteService,
-			OpsService: deps.RouteOpsService,
+			Service:             deps.RouteService,
+			OpsService:          deps.RouteOpsService,
+			RoutingTraceService: deps.RoutingTraceService,
+			RuntimeService:      deps.RouteRuntimeService,
 		})
 		capability.Register(r, capability.Deps{
 			Service:     deps.CapabilityService,
@@ -169,7 +178,10 @@ func NewRouter(deps RouterDeps) http.Handler {
 			AdjustmentService: deps.AdjustmentService,
 			OpsService:        deps.CustomerOpsService,
 		})
-		requests.Register(r, requests.Deps{Service: deps.RequestQueryService})
+		requests.Register(r, requests.Deps{
+			Service:             deps.RequestQueryService,
+			RoutingTraceService: deps.RoutingTraceService,
+		})
 		ledger.Register(r, ledger.Deps{
 			Service:             deps.LedgerQueryService,
 			CostExposureService: deps.CostExposureQueryService,

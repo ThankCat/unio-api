@@ -131,8 +131,9 @@ type ChatRouteCandidate struct {
 type ChatRoutePlan struct {
 	RequestedModel string
 	Candidates     []ChatRouteCandidate
+	PoolSize       int
 
-	// RouteMode 是本次请求解析出的线路策略（cheapest/stable/fixed），供 lifecycle 候选排序消费（阶段 15）。
+	// RouteMode 是本次请求解析出的线路策略（balanced/fixed），供 lifecycle 候选排序消费。
 	RouteMode string
 
 	// RouteStickyEnabled 是线路行 sticky_enabled（会话粘性路由开关，大 uncache 缺口 P0）：
@@ -146,14 +147,14 @@ type Store interface {
 	UserCanUseModel(ctx context.Context, arg sqlc.UserCanUseModelParams) (bool, error)
 	FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteCandidatesParams) ([]sqlc.FindRouteCandidatesRow, error)
 	GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error)
+	CountRouteChannels(ctx context.Context, routeID int64) (int64, error)
 }
 
-// resolvedRoute 是线路解析后的最小事实（候选池 + 策略 + 价格倍率 + 会话粘性开关）。
+// resolvedRoute 是线路解析后的最小事实（策略 + 价格倍率 + 会话粘性开关）。
 type resolvedRoute struct {
 	ID         int64
 	Name       string
 	Mode       string
-	PoolKind   string
 	PriceRatio pgtype.Numeric
 	// StickyEnabled：nil=继承全局默认，非 nil=线路显式覆盖（大 uncache 缺口 P0）。
 	StickyEnabled *bool
@@ -223,6 +224,23 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 	if err != nil {
 		return ChatRoutePlan{}, err
 	}
+	poolSize, err := r.store.CountRouteChannels(ctx, route.ID)
+	if err != nil {
+		return ChatRoutePlan{}, failure.Wrap(
+			failure.CodeRoutingStoreFailed, err,
+			failure.WithMessage("count route channels"),
+		)
+	}
+	if route.Mode == "fixed" {
+		if poolSize != 1 {
+			return ChatRoutePlan{}, failure.Wrap(
+				failure.CodeRoutingNoAvailableChannel, ErrNoAvailableChannel,
+				failure.WithMessage("fixed route must contain exactly one channel"),
+				failure.WithField("route_id", route.ID),
+				failure.WithField("pool_size", poolSize),
+			)
+		}
+	}
 
 	rows, err := r.findCandidateRows(ctx, req, route)
 	if err != nil {
@@ -230,9 +248,13 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 	}
 
 	candidates := make([]ChatRouteCandidate, 0, len(rows))
+	marginFiltered := false
 	for _, row := range rows {
 		candidate, err := r.buildChatRouteCandidate(ctx, row, route)
 		if err != nil {
+			if failure.CodeOf(err) == failure.CodeRoutingNegativeMargin {
+				marginFiltered = true
+			}
 			// P1-1：单个候选凭据缺失/解密失败时跳过该候选并记日志，不让整批 plan 失败；
 			// 只有当全部候选都不可用时才在循环后报 no_available_channel，最大化可用性。
 			fields := append([]zap.Field{
@@ -250,16 +272,21 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 	// rows 非空（findCandidateRows 已区分 model 不存在/不可用/无渠道），若到此处候选全被跳过，
 	// 说明命中渠道的凭据全部不可用：报 no_available_channel 而非泄露底层凭据错误。
 	if len(candidates) == 0 {
+		options := []failure.Option{failure.WithMessage("all matched channels are unusable")}
+		if marginFiltered {
+			options = append(options, failure.WithField("margin_guard_triggered", true))
+		}
 		return ChatRoutePlan{}, failure.Wrap(
 			failure.CodeRoutingNoAvailableChannel,
 			ErrNoAvailableChannel,
-			failure.WithMessage("all matched channels are unusable (credential missing)"),
+			options...,
 		)
 	}
 
 	plan := ChatRoutePlan{
 		RequestedModel:     req.ModelID,
 		Candidates:         candidates,
+		PoolSize:           int(poolSize),
 		RouteMode:          route.Mode,
 		RouteStickyEnabled: route.StickyEnabled,
 	}
@@ -304,7 +331,7 @@ func (r *Router) loadEnabledRoute(ctx context.Context, id *int64) (resolvedRoute
 	if row.Status != "enabled" {
 		return resolvedRoute{}, false
 	}
-	resolved := resolvedRoute{ID: row.ID, Name: row.Name, Mode: row.Mode, PoolKind: row.PoolKind, PriceRatio: row.PriceRatio}
+	resolved := resolvedRoute{ID: row.ID, Name: row.Name, Mode: row.Mode, PriceRatio: row.PriceRatio}
 	if row.StickyEnabled.Valid {
 		enabled := row.StickyEnabled.Bool
 		resolved.StickyEnabled = &enabled
@@ -318,7 +345,6 @@ func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest, ro
 		RequestedModelID: req.ModelID,
 		IngressProtocol:  req.IngressProtocol,
 		UserID:           req.UserID,
-		PoolKind:         route.PoolKind,
 		RouteID:          route.ID,
 		AtTime:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
 	})
@@ -441,6 +467,21 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 	channelCost, costBaseModelPriceID, channelCostMultiplierID, channelRechargeFactorID, err := resolveCandidateCost(row, basePrice)
 	if err != nil {
 		return ChatRouteCandidate{}, err
+	}
+	violations, err := billing.ValidateNonNegativeMargin(salePrice, channelCost)
+	if err != nil || len(violations) > 0 {
+		fields := []failure.Option{
+			failure.WithMessage("candidate rejected by negative margin guard"),
+			failure.WithField("channel_id", row.ChannelID),
+			failure.WithField("model_id", row.RequestedModelID),
+		}
+		if len(violations) > 0 {
+			fields = append(fields, failure.WithField("component", violations[0].Component))
+		}
+		if err != nil {
+			return ChatRouteCandidate{}, failure.Wrap(failure.CodeRoutingNegativeMargin, err, fields...)
+		}
+		return ChatRouteCandidate{}, failure.New(failure.CodeRoutingNegativeMargin, fields...)
 	}
 
 	return ChatRouteCandidate{

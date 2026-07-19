@@ -63,9 +63,10 @@ type UpstreamMetadata struct {
 	// 0 表示上游未提供或无法解析；>0 时 gateway 据此对该渠道做限时 cooldown（跳过 fallback）。
 	RetryAfter time.Duration
 
-	// ResponseSnippet 是上游「错误响应体」的截断原文快照（仅非 2xx 错误路径填充）。
-	// 用途：渠道检测把上游完整错误记进 channel_test_logs 便于排障——adapter 仍只按 HTTP status
-	// 分类（不解析此原文），gateway retry/fallback 也不依赖它；正常响应与 gateway 请求记录不使用此字段。
+	// ResponseSnippet 是上游响应体的截断原文快照。
+	// 用途：渠道检测把上游完整错误/异常响应记进 channel_test_logs 便于排障——adapter 仍只按 HTTP status
+	// 分类（不解析此原文），gateway retry/fallback 也不依赖它；gateway 请求记录不消费此字段。
+	// 填充场景：非 2xx 错误体；以及 2xx 但协议解析失败（JSON 不符 / 空 choices 等）。
 	ResponseSnippet string
 }
 

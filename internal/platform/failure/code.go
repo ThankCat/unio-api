@@ -215,6 +215,9 @@ const (
 
 	// CodeRoutingProtocolInvalid 表示 routing 请求没有携带受支持的 ingress 协议族。
 	CodeRoutingProtocolInvalid Code = "routing_protocol_invalid"
+
+	// CodeRoutingNegativeMargin 表示候选当前售价低于渠道成本，运行时已硬摘除。
+	CodeRoutingNegativeMargin Code = "routing_negative_margin"
 )
 
 const (
@@ -419,6 +422,9 @@ const (
 
 	// CodeAdminPricingWindowOverlap 表示新建/调整的价格生效窗口与同一 channel/model 现有启用窗口重叠。
 	CodeAdminPricingWindowOverlap Code = "admin_pricing_window_overlap"
+
+	// CodeAdminNegativeMargin 表示配置会让某条启用线路出现负毛利。
+	CodeAdminNegativeMargin Code = "admin_negative_margin"
 
 	// CodeAdminStoreFailed 表示 admin 管理存储访问失败。
 	CodeAdminStoreFailed Code = "admin_store_failed"

@@ -14,7 +14,7 @@ import (
 
 // 会话粘性路由（sticky routing，大 uncache 缺口 P0）。
 //
-// 问题：多轮对话每请求按 cheapest/stable 重排候选，同会话请求漂移到不同上游渠道导致
+// 问题：多轮对话每请求按 balanced 重排候选，同会话请求漂移到不同上游渠道导致
 // prompt cache 断裂，本应 cache_read 计价的上下文变成大量 uncached_input，客户话费暴涨。
 // 方案：协议提取器产出 sessionKey（OpenAI prompt_cache_key / Claude Code 会话头）→
 // 协议无关核心以 (protocol, route, api_key, session) 为键在 Redis 记住上次成功渠道 →
@@ -151,6 +151,7 @@ func (r *StickyRouter) Resolve(ctx context.Context, params StickyResolveParams) 
 		key:    stickyRedisKey(params.Protocol, *params.RouteID, params.APIKeyID, params.SessionKey),
 	}
 	session.boundChannelID, _ = r.store.Lookup(ctx, session.key)
+	session.resolvedChannelID = session.boundChannelID
 	if session.boundChannelID != 0 {
 		r.inc("hit")
 		r.logSticky(ctx, "sticky hit",
@@ -172,6 +173,8 @@ type StickySession struct {
 	router         *StickyRouter
 	key            string
 	boundChannelID int64
+	// resolvedChannelID stays immutable so clearing or rebinding cannot erase trace facts.
+	resolvedChannelID int64
 }
 
 // Enabled 报告本请求是否启用 sticky（有会话键且线路/全局开关打开）。
@@ -185,6 +188,14 @@ func (s *StickySession) BoundChannelID() int64 {
 		return 0
 	}
 	return s.boundChannelID
+}
+
+// ResolvedChannelID returns the binding observed at the start of this request.
+func (s *StickySession) ResolvedChannelID() int64 {
+	if s == nil {
+		return 0
+	}
+	return s.resolvedChannelID
 }
 
 // ApplyPlanOutcome 消费 PrepareCandidates 置顶结果：记录 pinned_* / pin_lost 指标，

@@ -412,11 +412,10 @@ func (f *Fixture) seed(t *testing.T, opts SetupOptions, upstreamBaseURL string, 
 		t.Fatalf("generate api key: %v", err)
 	}
 
-	// 线路必填：先建一条 pool_kind=all 的线路供 API Key 绑定（route_id 现为 NOT NULL）。
+	// 线路必填：先建线路供 API Key 绑定，渠道创建后再显式加入线路池。
 	route, err := f.Queries.CreateRoute(f.ctx, sqlc.CreateRouteParams{
 		Name:       fmt.Sprintf("blackbox-route-%d", suffix),
-		Mode:       "cheapest",
-		PoolKind:   "all",
+		Mode:       "balanced",
 		Status:     "enabled",
 		PriceRatio: pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true},
 	})
@@ -460,6 +459,9 @@ func (f *Fixture) seed(t *testing.T, opts SetupOptions, upstreamBaseURL string, 
 		t.Fatalf("insert channel: %v", err)
 	}
 	f.ChannelID = channelID
+	if err := f.Queries.AddRouteChannel(f.ctx, sqlc.AddRouteChannelParams{RouteID: route.ID, ChannelID: channelID}); err != nil {
+		t.Fatalf("bind channel to route: %v", err)
+	}
 
 	var modelDBID int64
 	if err := f.Pool.QueryRow(f.ctx, `

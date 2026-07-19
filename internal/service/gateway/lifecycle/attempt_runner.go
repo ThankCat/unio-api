@@ -25,7 +25,7 @@ import (
 // 不持有 router / registry / candidates / authorizer：候选准备与 authorization 仍由协议 service
 // 在进入循环前完成（它们依赖 typed 请求做 tokenizer 估算），AttemptRunner 只接管 authorization
 // 之后的尝试链路。OpenAI（chat completions / responses）与 Anthropic Messages 均已接入
-//（非流式走 RunNonStream，流式走 RunStreamGeneric）。
+// （非流式走 RunNonStream，流式走 RunStreamGeneric）。
 type AttemptRunner struct {
 	lifecycle       *RequestLifecycle
 	retryClassifier RetryClassifier
@@ -109,7 +109,8 @@ type RunNonStreamParams struct {
 
 // RunResult 汇报候选循环最终的业务 outcome，供协议 service 的 metrics defer 读取。
 type RunResult struct {
-	Outcome metrics.ChatOutcome
+	Outcome  metrics.ChatOutcome
+	Attempts int
 }
 
 // RunNonStreamCodes 是共享非流式候选循环里的审计 code/reason 覆盖项。
@@ -208,6 +209,9 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 				zap.String("skip_reason", "breaker"),
 			)
 			params.Sticky.ClearIfBound(ctx, candidate.Channel.ID)
+			if candIdx+1 < len(params.Candidates) {
+				l.RecordBalanceFallback(routeIDOf(params.Principal), "breaker")
+			}
 			continue
 		}
 
@@ -249,6 +253,9 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 				l.MarkRequestFailed(ctx, requestRecord, "request_deadline_exceeded", admit.err)
 				return result, admit.err
 			}
+			if candIdx+1 < len(params.Candidates) {
+				l.RecordBalanceFallback(routeIDOf(params.Principal), admit.skipReason)
+			}
 			continue
 		}
 		releaseSlot := admit.release
@@ -267,6 +274,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			l.MarkRequestFailed(ctx, requestRecord, "request_attempt_create_failed", err)
 			return result, err
 		}
+		result.Attempts++
 
 		if params.ResolveAdapter != nil {
 			if err := params.ResolveAdapter(candidate); err != nil {
@@ -340,11 +348,16 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			}
 			// 可重试错误切换候选：前一候选可能已在上游产生成本却不会被结算（P2-3），记指标供监控。
 			l.RecordRetryableFallback(err)
+			if candIdx+1 < len(params.Candidates) {
+				category, _ := adapter.UpstreamCategoryOf(err)
+				l.RecordBalanceFallback(routeIDOf(params.Principal), "upstream_"+string(category))
+			}
 			lastErr = err
 			continue
 		}
 
 		l.RecordRoutingSelected(candidate.ProviderID, candidate.Channel.ID, params.RequestedModelID)
+		l.RecordBalanceSelected(routeIDOf(params.Principal), candidate.Channel.ID)
 
 		// 非流式成功请求的账务事实必须在 settlement 事务内一起提交，不能先返回响应再异步扣费。
 		settleCtx, settleSpan := StartGatewaySpan(ctx, "gateway.settlement")

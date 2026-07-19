@@ -81,8 +81,19 @@ func (q *Queries) CountApiKeysByRoute(ctx context.Context, routeID int64) (int64
 	return total, err
 }
 
+const countRouteChannels = `-- name: CountRouteChannels :one
+SELECT COUNT(*) FROM route_channels WHERE route_id = $1
+`
+
+func (q *Queries) CountRouteChannels(ctx context.Context, routeID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countRouteChannels, routeID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createRoute = `-- name: CreateRoute :one
-INSERT INTO routes (name, mode, pool_kind, status, description, price_ratio, rpm_limit, tpm_limit, rpd_limit, sticky_enabled)
+INSERT INTO routes (name, mode, status, description, price_ratio, rpm_limit, tpm_limit, rpd_limit, sticky_enabled)
 VALUES (
     $1,
     $2,
@@ -92,16 +103,14 @@ VALUES (
     $6,
     $7,
     $8,
-    $9,
-    $10
+    $9
 )
-RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled
+RETURNING id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled
 `
 
 type CreateRouteParams struct {
 	Name          string
 	Mode          string
-	PoolKind      string
 	Status        string
 	Description   pgtype.Text
 	PriceRatio    pgtype.Numeric
@@ -114,12 +123,11 @@ type CreateRouteParams struct {
 // CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
 // rpm/tpm/rpd_limit 是线路级限流上限（DEC-027：NULL=继承全局默认，0=不限，>0=上限）；
 // sticky_enabled 是会话粘性开关（NULL=继承系统设置默认）；
-// mode/pool_kind 组合的 fixed/explicit 数量约束由 service 层校验。
+// balanced/fixed 的渠道数量约束由 service 层校验。
 func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route, error) {
 	row := q.db.QueryRow(ctx, createRoute,
 		arg.Name,
 		arg.Mode,
-		arg.PoolKind,
 		arg.Status,
 		arg.Description,
 		arg.PriceRatio,
@@ -133,7 +141,6 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		&i.ID,
 		&i.Name,
 		&i.Mode,
-		&i.PoolKind,
 		&i.Status,
 		&i.Description,
 		&i.CreatedAt,
@@ -255,7 +262,7 @@ func (q *Queries) ListRouteChannelsDetailed(ctx context.Context, routeID int64) 
 }
 
 const listRoutes = `-- name: ListRoutes :many
-SELECT id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled FROM routes ORDER BY id ASC
+SELECT id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled FROM routes ORDER BY id ASC
 `
 
 // ListRoutes 列出全部线路，供 admin 管理台展示。
@@ -272,7 +279,6 @@ func (q *Queries) ListRoutes(ctx context.Context) ([]Route, error) {
 			&i.ID,
 			&i.Name,
 			&i.Mode,
-			&i.PoolKind,
 			&i.Status,
 			&i.Description,
 			&i.CreatedAt,
@@ -413,7 +419,7 @@ type RouteOpsChannelPoolRow struct {
 	ProviderName  string
 }
 
-// RouteOpsChannelPool 线路显式渠道池成员（pool_kind='explicit'）+ 渠道健康（抽屉渠道池 Tab）。
+// RouteOpsChannelPool 线路渠道池成员 + 渠道健康（抽屉渠道池 Tab）。
 func (q *Queries) RouteOpsChannelPool(ctx context.Context, routeID int64) ([]RouteOpsChannelPoolRow, error) {
 	rows, err := q.db.Query(ctx, routeOpsChannelPool, routeID)
 	if err != nil {
@@ -647,10 +653,7 @@ WHERE (
         )
     )
 )
-AND (
-    rt.pool_kind = 'all'
-    OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
-)
+AND cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
 GROUP BY m.id, m.model_id, m.display_name
 ORDER BY m.model_id
 LIMIT 500
@@ -772,13 +775,221 @@ func (q *Queries) RouteOpsRequestsCount(ctx context.Context, arg RouteOpsRequest
 	return total, err
 }
 
+const routeRuntimeChannelStats = `-- name: RouteRuntimeChannelStats :many
+SELECT
+    rc.channel_id,
+    COUNT(DISTINCT rr.id) FILTER (
+        WHERE rr.created_at >= $1::timestamptz - interval '1 minute'
+          AND rr.final_channel_id = rc.channel_id
+    )::bigint AS selected_1m,
+    COUNT(DISTINCT rr.id) FILTER (
+        WHERE rr.created_at >= $1::timestamptz - interval '5 minutes'
+          AND rr.final_channel_id = rc.channel_id
+    )::bigint AS selected_5m,
+    COUNT(a.id) FILTER (
+        WHERE a.created_at >= $1::timestamptz - interval '1 minute'
+          AND a.channel_id = rc.channel_id
+          AND a.attempt_index > 0
+    )::bigint AS fallback_1m
+FROM route_channels rc
+LEFT JOIN request_records rr
+  ON rr.route_id = rc.route_id
+ AND rr.created_at >= $1::timestamptz - interval '5 minutes'
+LEFT JOIN request_attempts a
+  ON a.request_record_id = rr.id
+ AND a.channel_id = rc.channel_id
+WHERE rc.route_id = $2
+GROUP BY rc.channel_id
+ORDER BY rc.channel_id
+`
+
+type RouteRuntimeChannelStatsParams struct {
+	ObservedAt pgtype.Timestamptz
+	RouteID    int64
+}
+
+type RouteRuntimeChannelStatsRow struct {
+	ChannelID  int64
+	Selected1m int64
+	Selected5m int64
+	Fallback1m int64
+}
+
+// Recent final selections and fallback attempts for channels in one explicit route pool.
+func (q *Queries) RouteRuntimeChannelStats(ctx context.Context, arg RouteRuntimeChannelStatsParams) ([]RouteRuntimeChannelStatsRow, error) {
+	rows, err := q.db.Query(ctx, routeRuntimeChannelStats, arg.ObservedAt, arg.RouteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RouteRuntimeChannelStatsRow
+	for rows.Next() {
+		var i RouteRuntimeChannelStatsRow
+		if err := rows.Scan(
+			&i.ChannelID,
+			&i.Selected1m,
+			&i.Selected5m,
+			&i.Fallback1m,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const routeRuntimePool = `-- name: RouteRuntimePool :many
+SELECT
+    rt.id AS route_id,
+    rt.mode,
+    rt.status AS route_status,
+    c.id AS channel_id,
+    c.name AS channel_name,
+    c.status AS channel_status,
+    c.credential_valid,
+    (c.credential <> '')::boolean AS has_credential,
+    (c.base_url <> '')::boolean AS has_base_url,
+    c.protocol,
+    c.adapter_key,
+    c.priority,
+    c.tpm_limit,
+    c.concurrency_limit,
+    p.id AS provider_id,
+    p.name AS provider_name,
+    p.status AS provider_status,
+    (m.id IS NOT NULL)::boolean AS model_exists,
+    COALESCE(m.status, '')::text AS model_status,
+    COALESCE(cm.status, '')::text AS binding_status,
+    (base.id IS NOT NULL)::boolean AS has_model_price,
+    COALESCE((cost.id IS NOT NULL OR mult.id IS NOT NULL), false)::boolean AS has_channel_cost
+FROM routes rt
+JOIN route_channels rc ON rc.route_id = rt.id
+JOIN channels c ON c.id = rc.channel_id
+JOIN providers p ON p.id = c.provider_id
+LEFT JOIN models m
+  ON NULLIF($1::text, '') IS NOT NULL
+ AND m.model_id = $1::text
+LEFT JOIN channel_models cm ON cm.channel_id = c.id AND cm.model_id = m.id
+LEFT JOIN LATERAL (
+    SELECT mp.id
+    FROM model_prices mp
+    WHERE mp.model_id = m.id
+      AND mp.status = 'enabled'
+      AND mp.effective_from <= $2
+      AND (mp.effective_to IS NULL OR mp.effective_to > $2)
+    ORDER BY mp.effective_from DESC, mp.id DESC
+    LIMIT 1
+) base ON TRUE
+LEFT JOIN LATERAL (
+    SELECT cp.id
+    FROM channel_prices cp
+    WHERE cp.channel_id = c.id
+      AND cp.model_id = m.id
+      AND cp.status = 'enabled'
+      AND cp.effective_from <= $2
+      AND (cp.effective_to IS NULL OR cp.effective_to > $2)
+    ORDER BY cp.effective_from DESC, cp.id DESC
+    LIMIT 1
+) cost ON TRUE
+LEFT JOIN LATERAL (
+    SELECT ccm.id
+    FROM channel_cost_multipliers ccm
+    WHERE ccm.channel_id = c.id
+      AND (ccm.model_id = m.id OR ccm.model_id IS NULL)
+      AND ccm.status = 'enabled'
+      AND ccm.effective_from <= $2
+      AND (ccm.effective_to IS NULL OR ccm.effective_to > $2)
+    ORDER BY (ccm.model_id IS NULL) ASC, ccm.effective_from DESC, ccm.id DESC
+    LIMIT 1
+) mult ON TRUE
+WHERE rt.id = $3
+ORDER BY c.priority, c.id
+`
+
+type RouteRuntimePoolParams struct {
+	ModelID string
+	AtTime  pgtype.Timestamptz
+	RouteID int64
+}
+
+type RouteRuntimePoolRow struct {
+	RouteID          int64
+	Mode             string
+	RouteStatus      string
+	ChannelID        int64
+	ChannelName      string
+	ChannelStatus    string
+	CredentialValid  bool
+	HasCredential    bool
+	HasBaseUrl       bool
+	Protocol         string
+	AdapterKey       string
+	Priority         int32
+	TpmLimit         pgtype.Int4
+	ConcurrencyLimit pgtype.Int4
+	ProviderID       int64
+	ProviderName     string
+	ProviderStatus   string
+	ModelExists      bool
+	ModelStatus      string
+	BindingStatus    string
+	HasModelPrice    bool
+	HasChannelCost   bool
+}
+
+// RouteRuntimePool returns every explicitly bound channel plus DB hard-filter facts.
+func (q *Queries) RouteRuntimePool(ctx context.Context, arg RouteRuntimePoolParams) ([]RouteRuntimePoolRow, error) {
+	rows, err := q.db.Query(ctx, routeRuntimePool, arg.ModelID, arg.AtTime, arg.RouteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RouteRuntimePoolRow
+	for rows.Next() {
+		var i RouteRuntimePoolRow
+		if err := rows.Scan(
+			&i.RouteID,
+			&i.Mode,
+			&i.RouteStatus,
+			&i.ChannelID,
+			&i.ChannelName,
+			&i.ChannelStatus,
+			&i.CredentialValid,
+			&i.HasCredential,
+			&i.HasBaseUrl,
+			&i.Protocol,
+			&i.AdapterKey,
+			&i.Priority,
+			&i.TpmLimit,
+			&i.ConcurrencyLimit,
+			&i.ProviderID,
+			&i.ProviderName,
+			&i.ProviderStatus,
+			&i.ModelExists,
+			&i.ModelStatus,
+			&i.BindingStatus,
+			&i.HasModelPrice,
+			&i.HasChannelCost,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const routesOpsTable = `-- name: RoutesOpsTable :many
 
 SELECT
     rt.id,
     rt.name,
     rt.mode,
-    rt.pool_kind,
     rt.status,
     rt.description,
     rt.price_ratio,
@@ -815,10 +1026,7 @@ SELECT
                 )
             )
         )
-        AND (
-            rt.pool_kind = 'all'
-            OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
-        )
+        AND cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
     ) AS models_count
 FROM routes rt
 WHERE ($1::text IS NULL OR rt.status = $1::text)
@@ -866,10 +1074,7 @@ ORDER BY
                 )
             )
         )
-        AND (
-            rt.pool_kind = 'all'
-            OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
-        )
+        AND cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
     ) END DESC NULLS LAST,
   CASE WHEN $3::text = 'models' AND NOT COALESCE($4::bool, false) THEN (
         SELECT COUNT(DISTINCT m.id)
@@ -897,10 +1102,7 @@ ORDER BY
                 )
             )
         )
-        AND (
-            rt.pool_kind = 'all'
-            OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
-        )
+        AND cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
     ) END ASC NULLS LAST,
   rt.name
 LIMIT $6 OFFSET $5
@@ -919,7 +1121,6 @@ type RoutesOpsTableRow struct {
 	ID           int64
 	Name         string
 	Mode         string
-	PoolKind     string
 	Status       string
 	Description  pgtype.Text
 	PriceRatio   pgtype.Numeric
@@ -956,7 +1157,6 @@ func (q *Queries) RoutesOpsTable(ctx context.Context, arg RoutesOpsTableParams) 
 			&i.ID,
 			&i.Name,
 			&i.Mode,
-			&i.PoolKind,
 			&i.Status,
 			&i.Description,
 			&i.PriceRatio,
@@ -1001,23 +1201,21 @@ const updateRoute = `-- name: UpdateRoute :one
 UPDATE routes
 SET name = $1,
     mode = $2,
-    pool_kind = $3,
-    status = $4,
-    description = $5,
-    price_ratio = $6,
-    rpm_limit = $7,
-    tpm_limit = $8,
-    rpd_limit = $9,
-    sticky_enabled = $10,
+    status = $3,
+    description = $4,
+    price_ratio = $5,
+    rpm_limit = $6,
+    tpm_limit = $7,
+    rpd_limit = $8,
+    sticky_enabled = $9,
     updated_at = now()
-WHERE id = $11
-RETURNING id, name, mode, pool_kind, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled
+WHERE id = $10
+RETURNING id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled
 `
 
 type UpdateRouteParams struct {
 	Name          string
 	Mode          string
-	PoolKind      string
 	Status        string
 	Description   pgtype.Text
 	PriceRatio    pgtype.Numeric
@@ -1028,12 +1226,11 @@ type UpdateRouteParams struct {
 	ID            int64
 }
 
-// UpdateRoute 更新线路的名称/策略/池类型/启停/简介/售价倍率/线路级限流上限/会话粘性开关。
+// UpdateRoute 更新线路的名称/策略/启停/简介/售价倍率/线路级限流上限/会话粘性开关。
 func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route, error) {
 	row := q.db.QueryRow(ctx, updateRoute,
 		arg.Name,
 		arg.Mode,
-		arg.PoolKind,
 		arg.Status,
 		arg.Description,
 		arg.PriceRatio,
@@ -1048,7 +1245,6 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route
 		&i.ID,
 		&i.Name,
 		&i.Mode,
-		&i.PoolKind,
 		&i.Status,
 		&i.Description,
 		&i.CreatedAt,

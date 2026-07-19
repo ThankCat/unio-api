@@ -85,6 +85,9 @@ func TestStickyResolveMissThenBindSuccess(t *testing.T) {
 	if second.BoundChannelID() != 101 {
 		t.Fatalf("expected bound channel 101, got %d", second.BoundChannelID())
 	}
+	if second.ResolvedChannelID() != 101 {
+		t.Fatalf("expected resolved channel 101, got %d", second.ResolvedChannelID())
+	}
 	second.BindSuccess(context.Background(), 101)
 	if len(store.bindCalls) != 1 || len(store.rebindCalls) != 0 {
 		t.Fatalf("same-channel success must not touch binding, got bind=%d rebind=%d", len(store.bindCalls), len(store.rebindCalls))
@@ -130,6 +133,9 @@ func TestStickyClearSemantics(t *testing.T) {
 	}
 	if second.BoundChannelID() != 0 {
 		t.Fatalf("expected bound channel reset after clear, got %d", second.BoundChannelID())
+	}
+	if second.ResolvedChannelID() != 101 {
+		t.Fatalf("resolved channel must remain stable for tracing, got %d", second.ResolvedChannelID())
 	}
 	// 已清后重复清：no-op。
 	second.ClearBinding(context.Background())
@@ -204,7 +210,7 @@ func TestStickyRedisKeyShape(t *testing.T) {
 	}
 }
 
-// TestPrepareCandidatesStickyPinOverridesModeAndDemote 验证 sticky 置顶绝对优先于 cheapest 排序
+// TestPrepareCandidatesStickyPinOverridesModeAndDemote 验证 sticky 置顶绝对优先于 balanced 排序
 // 与失败软冷却 demote（R5），且渠道不在池时 StickyPinned=false（调用方据此清绑定）。
 func TestPrepareCandidatesStickyPinOverridesModeAndDemote(t *testing.T) {
 	executor := NewExecutor(candidateCapabilityRegistry{

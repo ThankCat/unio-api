@@ -23,6 +23,10 @@ type settingsReader interface {
 	Raw(ctx context.Context, key string) json.RawMessage
 }
 
+type balanceConfigTarget interface {
+	SetBalanceConfig(enabled, weightByRemaining bool)
+}
+
 // settingsApplier 把运行时配置的最新值周期性推给 gateway 各热路径消费方。
 //
 // 为什么轮询推送而不是每请求现读 SettingsStore:这 6 组每请求都要用,直接现读会给热路径加
@@ -32,13 +36,15 @@ type settingsApplier struct {
 	store  settingsReader
 	logger *zap.Logger
 
-	breaker     *lifecycle.ChannelCircuitBreaker
-	guard       *ratelimit.Guard
-	cooldown    *lifecycle.ChannelCooldownRegistry
-	gate        *lifecycle.ChannelCredentialGate
-	router      *routing.Router
-	concurrency *ratelimit.ConcurrencyLimiter
-	sticky      *lifecycle.StickyRouter
+	breaker        *lifecycle.ChannelCircuitBreaker
+	guard          *ratelimit.Guard
+	cooldown       *lifecycle.ChannelCooldownRegistry
+	gate           *lifecycle.ChannelCredentialGate
+	router         *routing.Router
+	concurrency    *ratelimit.ConcurrencyLimiter
+	sticky         *lifecycle.StickyRouter
+	balanceTargets []balanceConfigTarget
+	routingTrace   *lifecycle.RoutingTraceRecorder
 }
 
 // run 周期性拉取并推送,直到 ctx 取消(随 app shutdown 退出)。
@@ -111,6 +117,22 @@ func (a *settingsApplier) applyOnce(ctx context.Context) {
 		a.concurrency.SetDefaults(cc.KeyLimit, cc.ChannelLimit)
 	} else {
 		a.warnDecode(ctx, appsettings.GatewayConcurrencyDefaultsKey, err)
+	}
+
+	if balance, err := appsettings.DecodeRoutingBalanceSettings(a.store.Raw(ctx, appsettings.GatewayRoutingBalanceKey)); err == nil {
+		for _, target := range a.balanceTargets {
+			target.SetBalanceConfig(balance.Enabled, balance.WeightByRemaining)
+		}
+	} else {
+		a.warnDecode(ctx, appsettings.GatewayRoutingBalanceKey, err)
+	}
+
+	if traceSettings, err := appsettings.DecodeRoutingTraceSettings(a.store.Raw(ctx, appsettings.GatewayRoutingTraceKey)); err == nil {
+		if a.routingTrace != nil {
+			a.routingTrace.SetSampleRate(traceSettings.SampleRate)
+		}
+	} else {
+		a.warnDecode(ctx, appsettings.GatewayRoutingTraceKey, err)
 	}
 
 	if n, err := appsettings.DecodePositiveIntSetting(a.store.Raw(ctx, appsettings.GatewayCredential401ThresholdKey)); err == nil {

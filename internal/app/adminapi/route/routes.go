@@ -2,6 +2,7 @@ package route
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -24,11 +25,10 @@ type RouteService interface {
 }
 
 type routeDTO struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	Mode     string `json:"mode"`
-	PoolKind string `json:"pool_kind"`
-	Status   string `json:"status"`
+	ID     int64  `json:"id"`
+	Name   string `json:"name"`
+	Mode   string `json:"mode"`
+	Status string `json:"status"`
 	// PriceRatio 客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率），十进制字符串。
 	PriceRatio string `json:"price_ratio"`
 	// RPM/TPM/RPDLimit 线路级限流上限（DEC-027：按 (线路,用户) 计数）；null=继承全局默认，0=不限，>0=上限。
@@ -69,10 +69,9 @@ type routeChannelDTO struct {
 type createRouteRequest struct {
 	Name          string  `json:"name"`
 	Mode          string  `json:"mode"`
-	PoolKind      string  `json:"pool_kind"`
 	Status        string  `json:"status"`
-	PriceRatio    string  `json:"price_ratio"`    // 客户售价倍率（十进制字符串，空=默认 1.0）
-	RPMLimit      *int64  `json:"rpm_limit"`      // 线路级限流（null=继承默认，0=不限，>0=上限）
+	PriceRatio    string  `json:"price_ratio"` // 客户售价倍率（十进制字符串，空=默认 1.0）
+	RPMLimit      *int64  `json:"rpm_limit"`   // 线路级限流（null=继承默认，0=不限，>0=上限）
 	TPMLimit      *int64  `json:"tpm_limit"`
 	RPDLimit      *int64  `json:"rpd_limit"`
 	StickyEnabled *bool   `json:"sticky_enabled"` // 会话粘性（null=继承系统设置默认）
@@ -83,10 +82,9 @@ type createRouteRequest struct {
 type updateRouteRequest struct {
 	Name          string  `json:"name"`
 	Mode          string  `json:"mode"`
-	PoolKind      string  `json:"pool_kind"`
 	Status        string  `json:"status"`
-	PriceRatio    string  `json:"price_ratio"`    // 客户售价倍率（十进制字符串，空=默认 1.0）
-	RPMLimit      *int64  `json:"rpm_limit"`      // 线路级限流（null=继承默认，0=不限，>0=上限）
+	PriceRatio    string  `json:"price_ratio"` // 客户售价倍率（十进制字符串，空=默认 1.0）
+	RPMLimit      *int64  `json:"rpm_limit"`   // 线路级限流（null=继承默认，0=不限，>0=上限）
 	TPMLimit      *int64  `json:"tpm_limit"`
 	RPDLimit      *int64  `json:"rpd_limit"`
 	StickyEnabled *bool   `json:"sticky_enabled"` // 会话粘性（null=继承系统设置默认）
@@ -138,7 +136,6 @@ func (h *routesHandler) create(w http.ResponseWriter, r *http.Request) {
 	rt, err := h.service.Create(r.Context(), route.CreateInput{
 		Name:          req.Name,
 		Mode:          req.Mode,
-		PoolKind:      req.PoolKind,
 		Status:        req.Status,
 		PriceRatio:    req.PriceRatio,
 		RPMLimit:      req.RPMLimit,
@@ -170,7 +167,6 @@ func (h *routesHandler) update(w http.ResponseWriter, r *http.Request) {
 		ID:            id,
 		Name:          req.Name,
 		Mode:          req.Mode,
-		PoolKind:      req.PoolKind,
 		Status:        req.Status,
 		PriceRatio:    req.PriceRatio,
 		RPMLimit:      req.RPMLimit,
@@ -208,7 +204,10 @@ func (h *routesHandler) archive(w http.ResponseWriter, r *http.Request) {
 	}
 	var req archiveRouteRequest
 	// body 可选：无 body 时按「不迁移」处理（有 key 则被拦截）。
-	_ = httpx.DecodeJSON(w, r, &req)
+	if err := httpx.DecodeJSON(w, r, &req); err != nil && !errors.Is(err, httpx.ErrEmptyJSONBody) {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
 
 	warnings, err := h.service.Archive(r.Context(), id, req.MigrateKeysTo)
 	if err != nil {
@@ -249,7 +248,6 @@ func toRouteDTO(rt route.Route) routeDTO {
 		ID:            rt.ID,
 		Name:          rt.Name,
 		Mode:          rt.Mode,
-		PoolKind:      rt.PoolKind,
 		Status:        rt.Status,
 		PriceRatio:    rt.PriceRatio,
 		RPMLimit:      rt.RPMLimit,

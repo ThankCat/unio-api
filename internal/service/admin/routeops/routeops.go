@@ -40,7 +40,6 @@ type Row struct {
 	ID           int64
 	Name         string
 	Mode         string
-	PoolKind     string
 	Status       string
 	Description  string
 	PriceRatio   string
@@ -166,7 +165,6 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			ID:           r.ID,
 			Name:         r.Name,
 			Mode:         r.Mode,
-			PoolKind:     r.PoolKind,
 			Status:       r.Status,
 			Description:  opsutil.TextValue(r.Description),
 			PriceRatio:   opsutil.NumericString(r.PriceRatio),

@@ -125,6 +125,16 @@ type Metrics struct {
 
 	routingSkipTotal       *prometheus.CounterVec
 	routingHeadWaitSeconds prometheus.Histogram
+
+	routingBalanceTotal          *prometheus.CounterVec
+	routingBalanceCandidateCount *prometheus.HistogramVec
+	routingBalancePoolSize       *prometheus.HistogramVec
+	routingBalanceSelected       *prometheus.CounterVec
+	routingBalanceFallback       *prometheus.CounterVec
+	routingBalanceLoadSkew       prometheus.Histogram
+	routingCapacityRead          *prometheus.CounterVec
+	routingMarginGuard           *prometheus.CounterVec
+	routingTraceWrite            *prometheus.CounterVec
 }
 
 // New 创建并注册 Unio 全部指标。
@@ -231,6 +241,46 @@ func New() *Metrics {
 			Help:    "队首候选 TPM/并发短等实际等待时长（秒，P1）。仅在 waited_ms>0 时观测。",
 			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 0.75, 1, 2},
 		}),
+
+		routingBalanceTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_routing_balance_total",
+			Help: "P3 route scheduling decisions by mode and bounded result.",
+		}, []string{"mode", "result"}),
+		routingBalanceCandidateCount: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "unio_gateway_routing_balance_candidate_count",
+			Help:    "Eligible candidate count after hard filters.",
+			Buckets: []float64{0, 1, 2, 3, 5, 8, 13, 21},
+		}, []string{"mode"}),
+		routingBalancePoolSize: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "unio_gateway_routing_balance_pool_size",
+			Help:    "Explicit route channel pool size.",
+			Buckets: []float64{0, 1, 2, 3, 5, 8, 13, 21},
+		}, []string{"mode"}),
+		routingBalanceSelected: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_routing_balance_selected_total",
+			Help: "Actual successful route/channel selections.",
+		}, []string{"route", "channel"}),
+		routingBalanceFallback: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_routing_balance_fallback_total",
+			Help: "In-route fallback transitions by bounded reason.",
+		}, []string{"route", "reason"}),
+		routingBalanceLoadSkew: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "unio_gateway_routing_balance_load_skew",
+			Help:    "Difference between maximum and minimum normalized candidate weights.",
+			Buckets: []float64{0, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 1},
+		}),
+		routingCapacityRead: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_routing_balance_capacity_read_total",
+			Help: "Channel capacity snapshot reads by result.",
+		}, []string{"result"}),
+		routingMarginGuard: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_routing_margin_guard_total",
+			Help: "Negative-margin guard outcomes.",
+		}, []string{"result"}),
+		routingTraceWrite: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_routing_trace_write_total",
+			Help: "Routing decision trace persistence outcomes.",
+		}, []string{"result"}),
 	}
 
 	registry.MustRegister(
@@ -254,6 +304,15 @@ func New() *Metrics {
 		m.stickyEventsTotal,
 		m.routingSkipTotal,
 		m.routingHeadWaitSeconds,
+		m.routingBalanceTotal,
+		m.routingBalanceCandidateCount,
+		m.routingBalancePoolSize,
+		m.routingBalanceSelected,
+		m.routingBalanceFallback,
+		m.routingBalanceLoadSkew,
+		m.routingCapacityRead,
+		m.routingMarginGuard,
+		m.routingTraceWrite,
 	)
 
 	return m
@@ -380,6 +439,44 @@ func (m *Metrics) ObserveRoutingHeadWait(duration time.Duration) {
 		return
 	}
 	m.routingHeadWaitSeconds.Observe(duration.Seconds())
+}
+
+func (m *Metrics) ObserveRoutingBalance(mode, result string, poolSize, candidateCount int, loadSkew float64) {
+	if mode == "" {
+		mode = "unknown"
+	}
+	if result == "" {
+		result = "unknown"
+	}
+	m.routingBalanceTotal.WithLabelValues(mode, result).Inc()
+	m.routingBalancePoolSize.WithLabelValues(mode).Observe(float64(poolSize))
+	m.routingBalanceCandidateCount.WithLabelValues(mode).Observe(float64(candidateCount))
+	if loadSkew >= 0 {
+		m.routingBalanceLoadSkew.Observe(loadSkew)
+	}
+}
+
+func (m *Metrics) IncRoutingBalanceSelected(route, channel string) {
+	m.routingBalanceSelected.WithLabelValues(route, channel).Inc()
+}
+
+func (m *Metrics) IncRoutingBalanceFallback(route, reason string) {
+	if reason == "" {
+		reason = "unknown"
+	}
+	m.routingBalanceFallback.WithLabelValues(route, reason).Inc()
+}
+
+func (m *Metrics) IncRoutingCapacityRead(result string) {
+	m.routingCapacityRead.WithLabelValues(result).Inc()
+}
+
+func (m *Metrics) IncRoutingMarginGuard(result string) {
+	m.routingMarginGuard.WithLabelValues(result).Inc()
+}
+
+func (m *Metrics) IncRoutingTraceWrite(result string) {
+	m.routingTraceWrite.WithLabelValues(result).Inc()
 }
 
 // streamLabel 把是否流式转换成稳定 label 值。

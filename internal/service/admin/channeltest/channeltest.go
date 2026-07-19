@@ -358,7 +358,12 @@ func classifyProbeError(err error, probeTimeout time.Duration, waited time.Durat
 	status := meta.StatusCode
 
 	if !hasCategory {
-		// 非 UpstreamError：多为已连通但响应无法解析 / 协议不符，或本地请求构造失败。
+		// 非 UpstreamError：多为本地请求构造失败等（2xx 协议解析失败现已带 UpstreamError+snippet）。
+		return ErrCodeProtocolError, "响应解析失败或协议不符（可能已连通但返回不符合预期）"
+	}
+
+	// 2xx + unknown：上游已响应但 body 不符协议（decode/空 choices），仍归 protocol_error。
+	if category == adapter.UpstreamErrorUnknown && status >= http.StatusOK && status < http.StatusMultipleChoices {
 		return ErrCodeProtocolError, "响应解析失败或协议不符（可能已连通但返回不符合预期）"
 	}
 

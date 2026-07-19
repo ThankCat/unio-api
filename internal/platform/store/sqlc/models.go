@@ -427,7 +427,6 @@ type Route struct {
 	ID            int64
 	Name          string
 	Mode          string
-	PoolKind      string
 	Status        string
 	Description   pgtype.Text
 	CreatedAt     pgtype.Timestamptz
@@ -443,6 +442,33 @@ type Route struct {
 type RouteChannel struct {
 	RouteID   int64
 	ChannelID int64
+}
+
+type RoutingDecisionTrace struct {
+	ID                   int64
+	RequestRecordID      int64
+	RouteID              int64
+	Mode                 string
+	RequestedModelID     string
+	Protocol             string
+	Operation            string
+	PoolSize             int32
+	CandidateCount       int32
+	StickyChannelID      pgtype.Int8
+	StickyPinned         bool
+	StickyInvalid        bool
+	CapacityDegraded     bool
+	AllCapacityZero      bool
+	MarginGuardTriggered bool
+	Abnormal             bool
+	AbnormalReasons      []string
+	CandidateScores      []byte
+	SelectedOrder        []int64
+	FallbackChain        []byte
+	AlgorithmVersion     string
+	Sampled              bool
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
 }
 
 type SchemaHealthCheck struct {

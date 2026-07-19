@@ -27,6 +27,7 @@ const (
 	GatewayFailureCooldownKey        = "gateway.channel_failure_cooldown_ms"
 	GatewayConcurrencyDefaultsKey    = "gateway.concurrency_defaults"
 	GatewayRoutingStickyKey          = "gateway.routing_sticky"
+	GatewayRoutingBalanceKey         = "gateway.routing_balance"
 )
 
 func msToDuration(ms int64) time.Duration {
@@ -511,6 +512,62 @@ func GatewayConcurrencyDefaults(ctx context.Context, store *SettingsStore) Concu
 	s, err := DecodeConcurrencyDefaultsSettings(store.Raw(ctx, GatewayConcurrencyDefaultsKey))
 	if err != nil {
 		return DefaultConcurrencyDefaultsSettings()
+	}
+	return s
+}
+
+// ---- balanced 容量调度 ----
+
+// RoutingBalanceSettings 控制 balanced 在线路池内是否读取容量，以及是否按剩余容量加权。
+type RoutingBalanceSettings struct {
+	Enabled           bool
+	WeightByRemaining bool
+}
+
+func DefaultRoutingBalanceSettings() RoutingBalanceSettings {
+	return RoutingBalanceSettings{Enabled: true, WeightByRemaining: true}
+}
+
+type routingBalanceDoc struct {
+	Enabled           bool `json:"enabled"`
+	WeightByRemaining bool `json:"weight_by_remaining"`
+}
+
+func encodeRoutingBalanceSettings(s RoutingBalanceSettings) json.RawMessage {
+	raw, err := json.Marshal(routingBalanceDoc(s))
+	if err != nil {
+		panic(fmt.Sprintf("appsettings: encode routing balance: %v", err))
+	}
+	return raw
+}
+
+func DecodeRoutingBalanceSettings(raw []byte) (RoutingBalanceSettings, error) {
+	var doc routingBalanceDoc
+	if err := strictUnmarshal(raw, &doc); err != nil {
+		return RoutingBalanceSettings{}, err
+	}
+	return RoutingBalanceSettings(doc), nil
+}
+
+func routingBalanceDefinition() Definition {
+	return Definition{
+		Key:         GatewayRoutingBalanceKey,
+		Category:    "gateway",
+		Label:       "线路负载均衡",
+		Description: "balanced 仅在线路显式渠道池内调度。enabled=false 时池内均匀分流；weight_by_remaining=false 时不读取容量、仅按健康度加权。",
+		HotReload:   true,
+		Default:     encodeRoutingBalanceSettings(DefaultRoutingBalanceSettings()),
+		Validate: func(raw json.RawMessage) error {
+			_, err := DecodeRoutingBalanceSettings(raw)
+			return err
+		},
+	}
+}
+
+func GatewayRoutingBalance(ctx context.Context, store *SettingsStore) RoutingBalanceSettings {
+	s, err := DecodeRoutingBalanceSettings(store.Raw(ctx, GatewayRoutingBalanceKey))
+	if err != nil {
+		return DefaultRoutingBalanceSettings()
 	}
 	return s
 }

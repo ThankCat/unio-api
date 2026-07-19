@@ -235,6 +235,22 @@ func TestChannelCircuitBreakerSetEnabled(t *testing.T) {
 	}
 }
 
+func TestChannelCircuitBreakerHealthScoreIncludesLatency(t *testing.T) {
+	fast := NewChannelCircuitBreaker(ChannelCircuitBreakerConfig{Window: time.Minute})
+	slow := NewChannelCircuitBreaker(ChannelCircuitBreakerConfig{Window: time.Minute})
+	for range 5 {
+		fast.RecordLatency("1", 100*time.Millisecond)
+		fast.RecordSuccess("1")
+		slow.RecordLatency("1", 5*time.Second)
+		slow.RecordSuccess("1")
+	}
+	fastScore := fast.HealthScore("1")
+	slowScore := slow.HealthScore("1")
+	if fastScore <= 0 || slowScore <= fastScore || slowScore >= 1 {
+		t.Fatalf("expected latency to monotonically lower health without hard exclusion: fast=%v slow=%v", fastScore, slowScore)
+	}
+}
+
 // TestChannelCircuitBreakerConcurrentReload 在 -race 下验证热改与热路径读写无竞态。
 func TestChannelCircuitBreakerConcurrentReload(t *testing.T) {
 	b := NewChannelCircuitBreaker(ChannelCircuitBreakerConfig{})

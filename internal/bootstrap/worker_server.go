@@ -106,6 +106,13 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 		zap.String("interval", channelTestCfg.Interval.String()),
 		zap.Int("log_retention_per_channel", channelTestCfg.LogRetentionPerChannel),
 	)
+	units = append(units, workers.NewRoutingTraceRetentionWorker(queries, settingsStore))
+	routingTraceCfg := appsettings.GatewayRoutingTrace(ctx, settingsStore)
+	deps.Logger.Info("routing trace retention worker registered",
+		zap.String("retention", routingTraceCfg.Retention.String()),
+		zap.Int32("batch_size", routingTraceCfg.CleanupBatchSize),
+		zap.String("cleanup_interval", routingTraceCfg.CleanupInterval.String()),
+	)
 
 	runner := workers.NewRunner(
 		deps.Logger,

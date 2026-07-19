@@ -52,6 +52,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)
 	if err != nil {
+		s.lifecycle.RecordRoutingFailure(ctx, requestRecord, principal.RouteID, err)
 		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return nil, err
 	}
@@ -72,12 +73,18 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		return nil, err
 	}
 	stickySession.ApplyPlanOutcome(ctx, candidatePlan)
+	if principal.RouteID != nil {
+		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
+			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
+			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+		})
+	}
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
 		Principal:                principal,
 		CandidatePrices:          candidatePlan.CandidateSalePrices(),
-		LongContextPolicy:       candidatePlan.LongContextPolicy(),
+		LongContextPolicy:        candidatePlan.LongContextPolicy(),
 		InputTokens:              candidatePlan.ConservativeInputTokens,
 		MaxCompletionTokens:      estimateMaxCompletionTokens(req),
 		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),
@@ -128,6 +135,12 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 			return lifecycle.AttemptSuccess{ResponseID: resp.ID, Facts: resp.Facts}, nil
 		},
 	})
+	if runResult.Attempts > 1 && principal.RouteID != nil {
+		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
+			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
+			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(), Attempts: runResult.Attempts,
+		})
+	}
 	outcome = runResult.Outcome
 	if err != nil {
 		return nil, err

@@ -15,6 +15,20 @@ import (
 // 用于渠道审计和 observability，不包含敏感信息。
 const upstreamRequestIDHeader = "X-Request-Id"
 
+// newUpstreamProtocolError 把「已拿到 2xx 响应但 body 无法按协议解析」收成结构化错误。
+// Category=unknown（网关侧不重试）；ResponseSnippet 带上响应原文供渠道检测展示。
+func newUpstreamProtocolError(statusCode int, requestID string, body []byte, cause error) error {
+	return adapter.NewUpstreamError(
+		adapter.UpstreamErrorUnknown,
+		adapter.UpstreamMetadata{
+			StatusCode:      statusCode,
+			RequestID:       requestID,
+			ResponseSnippet: adapter.SnippetFromBytes(body),
+		},
+		cause,
+	)
+}
+
 // newUpstreamStatusError 把上游非 2xx 响应转换成带稳定 category 和 metadata 的结构化错误。
 //
 // cause 仍使用 failure.CodeAdapterUpstreamStatus，因此 failure.CodeOf 和既有

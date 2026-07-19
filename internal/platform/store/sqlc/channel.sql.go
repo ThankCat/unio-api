@@ -31,6 +31,58 @@ func (q *Queries) ArchiveChannelCascade(ctx context.Context, id int64) (int64, e
 	return result.RowsAffected(), nil
 }
 
+const archiveChannelWithReplacement = `-- name: ArchiveChannelWithReplacement :one
+WITH replacement AS (
+    SELECT c.id
+    FROM channels c
+    JOIN providers p ON p.id = c.provider_id
+    WHERE c.id = $1
+      AND c.id <> $2
+      AND c.status = 'enabled'
+      AND c.credential_valid
+      AND c.credential <> ''
+      AND c.base_url <> ''
+      AND p.status = 'enabled'
+),
+affected_routes AS (
+    SELECT route_id FROM route_channels WHERE channel_id = $2
+),
+added AS (
+    INSERT INTO route_channels (route_id, channel_id)
+    SELECT ar.route_id, replacement.id
+    FROM affected_routes ar CROSS JOIN replacement
+    ON CONFLICT (route_id, channel_id) DO NOTHING
+    RETURNING route_id
+),
+archived AS (
+    UPDATE channels
+    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+    WHERE channels.id = $2
+      AND channels.status <> 'archived'
+      AND EXISTS (SELECT 1 FROM replacement)
+      AND (SELECT COUNT(*) FROM added) >= 0
+    RETURNING id
+),
+cleared AS (
+    DELETE FROM route_channels WHERE channel_id IN (SELECT id FROM archived)
+    RETURNING route_id
+)
+SELECT COUNT(*)::bigint FROM archived WHERE (SELECT COUNT(*) FROM cleared) >= 0
+`
+
+type ArchiveChannelWithReplacementParams struct {
+	ReplacementChannelID int64
+	ID                   int64
+}
+
+// Atomically add one healthy replacement to every affected route, then archive/remove the target.
+func (q *Queries) ArchiveChannelWithReplacement(ctx context.Context, arg ArchiveChannelWithReplacementParams) (int64, error) {
+	row := q.db.QueryRow(ctx, archiveChannelWithReplacement, arg.ReplacementChannelID, arg.ID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const channelOpsDetail = `-- name: ChannelOpsDetail :one
 SELECT
     COUNT(*) FILTER (WHERE status = 'succeeded' OR fault_party = 'upstream') AS attempt_total,
@@ -371,7 +423,7 @@ func (q *Queries) ChannelOpsPerformanceTimeseries(ctx context.Context, arg Chann
 }
 
 const channelOpsRoutes = `-- name: ChannelOpsRoutes :many
-SELECT rt.id, rt.name, rt.mode, rt.pool_kind, rt.status, rt.price_ratio
+SELECT rt.id, rt.name, rt.mode, rt.status, rt.price_ratio
 FROM route_channels rc
 JOIN routes rt ON rt.id = rc.route_id
 WHERE rc.channel_id = $1
@@ -382,12 +434,11 @@ type ChannelOpsRoutesRow struct {
 	ID         int64
 	Name       string
 	Mode       string
-	PoolKind   string
 	Status     string
 	PriceRatio pgtype.Numeric
 }
 
-// ChannelOpsRoutes 引用该渠道的显式线路池（抽屉线路 Tab）。
+// ChannelOpsRoutes 引用该渠道的线路池（抽屉线路 Tab）。
 func (q *Queries) ChannelOpsRoutes(ctx context.Context, channelID int64) ([]ChannelOpsRoutesRow, error) {
 	rows, err := q.db.Query(ctx, channelOpsRoutes, channelID)
 	if err != nil {
@@ -401,7 +452,6 @@ func (q *Queries) ChannelOpsRoutes(ctx context.Context, channelID int64) ([]Chan
 			&i.ID,
 			&i.Name,
 			&i.Mode,
-			&i.PoolKind,
 			&i.Status,
 			&i.PriceRatio,
 		); err != nil {
@@ -1715,6 +1765,44 @@ func (q *Queries) ListEnabledChannelRechargeFactorWindows(ctx context.Context, a
 	for rows.Next() {
 		var i ListEnabledChannelRechargeFactorWindowsRow
 		if err := rows.Scan(&i.ID, &i.EffectiveFrom, &i.EffectiveTo); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEnabledRoutesEmptiedByChannel = `-- name: ListEnabledRoutesEmptiedByChannel :many
+SELECT rt.id, rt.name
+FROM routes rt
+JOIN route_channels target ON target.route_id = rt.id AND target.channel_id = $1
+WHERE rt.status = 'enabled'
+  AND NOT EXISTS (
+      SELECT 1 FROM route_channels other
+      WHERE other.route_id = rt.id AND other.channel_id <> $1
+  )
+ORDER BY rt.id
+`
+
+type ListEnabledRoutesEmptiedByChannelRow struct {
+	ID   int64
+	Name string
+}
+
+// 归档目标渠道后将失去最后一个显式池成员的启用线路；归档前必须先替换渠道或停用线路。
+func (q *Queries) ListEnabledRoutesEmptiedByChannel(ctx context.Context, channelID int64) ([]ListEnabledRoutesEmptiedByChannelRow, error) {
+	rows, err := q.db.Query(ctx, listEnabledRoutesEmptiedByChannel, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEnabledRoutesEmptiedByChannelRow
+	for rows.Next() {
+		var i ListEnabledRoutesEmptiedByChannelRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

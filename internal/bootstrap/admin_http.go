@@ -45,8 +45,10 @@ type adminHTTPDeps struct {
 	// BreakerClient 可选：渠道列表挂载 gateway 熔断快照。
 	BreakerClient *gatewayruntime.Client
 
-	RouteService    route.RouteService
-	RouteOpsService route.RouteOpsService
+	RouteService        route.RouteService
+	RouteOpsService     route.RouteOpsService
+	RoutingTraceService adminapi.RoutingTraceService
+	RouteRuntimeService route.RuntimeService
 
 	RequestQueryService requests.RequestQueryService
 	LedgerQueryService  ledger.LedgerQueryService
@@ -102,6 +104,8 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 
 		RouteService:        deps.RouteService,
 		RouteOpsService:     deps.RouteOpsService,
+		RoutingTraceService: deps.RoutingTraceService,
+		RouteRuntimeService: deps.RouteRuntimeService,
 		RequestQueryService: deps.RequestQueryService,
 		LedgerQueryService:  deps.LedgerQueryService,
 

@@ -47,7 +47,7 @@ type ChatAuthorizeParams struct {
 
 	// CandidatePrices 是本次请求保守 fallback 候选池各命中渠道的当前售价（阶段 15）。
 	// 下单时最终渠道未定（可能 fallback），冻结取「按本次 token 估算最贵」的一条候选售价做上界，
-	// 保证实际命中任一候选都不会超过冻结额（cheapest 命中只会更便宜）。
+	// 保证 balanced/fixed 实际命中任一候选都不会超过冻结额。
 	// 此处为短上下文牌价；若 LongContextPolicy 对 InputTokens 触发，冻结前会先放大。
 	CandidatePrices []billing.CustomerPriceSnapshot
 

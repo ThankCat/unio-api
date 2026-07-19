@@ -23,15 +23,16 @@ func (s *MessagesService) prepareMessageCandidates(ctx context.Context, req gate
 	}
 
 	return s.candidates.PrepareCandidates(ctx, lifecycle.PrepareCandidatesParams{
-		Protocol:            routing.ProtocolAnthropic,
-		Candidates:          candidates,
-		Capabilities:        capabilities,
-		Available:           s.candidateAvailable,
-		FailurePreferred:    s.lifecycle.CandidateFailurePreferred,
-		EstimateInputTokens: s.messagesInputTokenEstimator(req),
-		Mode:                mode,
-		ChannelHealthScore:  s.channelHealthScore,
-		StickyChannelID:     stickyChannelID,
+		Protocol:                routing.ProtocolAnthropic,
+		Candidates:              candidates,
+		Capabilities:            capabilities,
+		Available:               s.candidateAvailable,
+		FailurePreferred:        s.lifecycle.CandidateFailurePreferred,
+		EstimateInputTokens:     s.messagesInputTokenEstimator(req),
+		Mode:                    mode,
+		ChannelHealthScore:      s.channelHealthScore,
+		ChannelCapacitySnapshot: s.lifecycle.ChannelCapacitySnapshot,
+		StickyChannelID:         stickyChannelID,
 	})
 }
 

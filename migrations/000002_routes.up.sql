@@ -1,5 +1,5 @@
 -- Route 是面向客户的「线路 / 渠道商品」（阶段 15）。
--- 线路只决定「候选池 + 排序策略」，叠加在既有能力闸门 / 熔断 / 协议过滤之上，不改变它们。
+-- 线路决定「显式渠道池 + 调度策略」，叠加在既有能力闸门 / 熔断 / 协议过滤之上，不改变它们。
 CREATE SEQUENCE public.routes_id_seq
     START WITH 1
     INCREMENT BY 1
@@ -12,10 +12,8 @@ CREATE TABLE public.routes (
     id bigint NOT NULL,
     -- name: 对外商品名（经济 / 稳定 / C-专线 ...），全局唯一。--
     name text NOT NULL,
-    -- mode: 选路策略。cheapest=按售价升序；stable=按渠道健康；fixed=锁定单条渠道。--
+    -- mode: 选路策略。balanced=显式池内负载均衡；fixed=锁定单条渠道。--
     mode text NOT NULL,
-    -- pool_kind: 候选池类型。all=该模型全量可路由渠道（动态）；explicit=运营手挑渠道。--
-    pool_kind text NOT NULL,
     -- status: 线路启停状态。--
     status text NOT NULL,
     -- description: 线路简介（展示给客户的商品说明）。--
@@ -33,10 +31,8 @@ CREATE TABLE public.routes (
     -- gateway.routing_sticky.enabled_default；true/false=线路显式覆盖。--
     sticky_enabled boolean,
     CONSTRAINT ck_routes_archived_at CHECK (((status = 'archived'::text) = (archived_at IS NOT NULL))),
-    CONSTRAINT ck_routes_fixed_pool CHECK (((mode <> 'fixed'::text) OR (pool_kind = 'explicit'::text))),
-    CONSTRAINT routes_mode_check CHECK ((mode = ANY (ARRAY['cheapest'::text, 'stable'::text, 'fixed'::text, 'random'::text]))),
+    CONSTRAINT routes_mode_check CHECK ((mode = ANY (ARRAY['balanced'::text, 'fixed'::text]))),
     CONSTRAINT routes_name_check CHECK ((name <> ''::text)),
-    CONSTRAINT routes_pool_kind_check CHECK ((pool_kind = ANY (ARRAY['all'::text, 'explicit'::text]))),
     CONSTRAINT routes_price_ratio_check CHECK ((price_ratio >= (0)::numeric)),
     CONSTRAINT routes_rpd_limit_check CHECK (((rpd_limit IS NULL) OR (rpd_limit >= 0))),
     CONSTRAINT routes_rpm_limit_check CHECK (((rpm_limit IS NULL) OR (rpm_limit >= 0))),
@@ -68,8 +64,6 @@ ALTER TABLE ONLY public.routes
 -- 三列均可空：NULL 表示「继承全局默认」，0 表示「显式不限」，>0 表示具体上限。
 -- 计数在 Redis 滑动窗口按 (线路, 用户) 复合主体执行（同一用户在该线路下的所有 Key 共享一个桶，
 -- 多建 Key 无法放大配额）；本列只持久化线路的「上限模板」。
--- [000065_add_routes_mode_random]
--- 线路选路策略新增 random：每次请求对候选顺序随机洗牌，仍保留完整 fallback。
 -- [000066_add_archived_status]
 -- 实体归档生命周期：providers / channels / routes 三表 status 增第三态 archived，
 -- 并加 archived_at 时间列 + 一致性不变量（archived_at 有值 ⟺ status='archived'）。

@@ -1,0 +1,11 @@
+DROP TRIGGER IF EXISTS trg_channel_recharge_factors_margin_guard ON channel_recharge_factors;
+DROP TRIGGER IF EXISTS trg_channel_cost_multipliers_margin_guard ON channel_cost_multipliers;
+DROP TRIGGER IF EXISTS trg_channel_prices_margin_guard ON channel_prices;
+DROP TRIGGER IF EXISTS trg_model_prices_margin_guard ON model_prices;
+DROP TRIGGER IF EXISTS trg_channel_models_margin_guard ON channel_models;
+DROP TRIGGER IF EXISTS trg_providers_margin_guard ON providers;
+DROP TRIGGER IF EXISTS trg_channels_margin_guard ON channels;
+DROP TRIGGER IF EXISTS trg_models_margin_guard ON models;
+DROP TRIGGER IF EXISTS trg_route_channels_margin_guard ON route_channels;
+DROP TRIGGER IF EXISTS trg_routes_margin_guard ON routes;
+DROP FUNCTION IF EXISTS assert_non_negative_route_margins();

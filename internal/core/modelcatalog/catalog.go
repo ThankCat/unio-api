@@ -17,7 +17,7 @@ type Model struct {
 
 // Store 定义 model catalog 读取可用模型所需的最小数据库能力。
 type Store interface {
-	ListAvailableModelsForUser(ctx context.Context, userID int64) ([]sqlc.ListAvailableModelsForUserRow, error)
+	ListAvailableModelsForUser(ctx context.Context, arg sqlc.ListAvailableModelsForUserParams) ([]sqlc.ListAvailableModelsForUserRow, error)
 }
 
 // Service 负责查询当前 user 可见的模型列表。
@@ -35,9 +35,9 @@ func NewService(store Store) *Service {
 // requiredCapabilities 非空时按 cap-tags 做 AND 过滤（模型 cap 集合必须包含全部请求 cap），
 // 供 /v1/models?capability=a,b 预检；空过滤返回全部可见模型。未识别的 capability key 不报错，
 // 自然匹配不到模型（lenient filter 语义）。
-func (s *Service) ListAvailableModels(ctx context.Context, userID int64, requiredCapabilities []string) ([]Model, error) {
+func (s *Service) ListAvailableModels(ctx context.Context, userID, routeID int64, requiredCapabilities []string) ([]Model, error) {
 	// TODO(阶段6/production): [GAP-6-006] /v1/models 已支持 user_model_policies 模型 allow-list/deny-list 与 cap-tags 暴露，但尚未表达用户禁用、预算约束或专属 channel 策略；与 routing 共用 user/channel policy，预算可用性由 reservation 统一判断。
-	rows, err := s.store.ListAvailableModelsForUser(ctx, userID)
+	rows, err := s.store.ListAvailableModelsForUser(ctx, sqlc.ListAvailableModelsForUserParams{UserID: userID, RouteID: routeID})
 	if err != nil {
 		return nil, failure.Wrap(
 			failure.CodeModelCatalogStoreFailed,

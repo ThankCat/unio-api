@@ -66,6 +66,13 @@ type Decision struct {
 	ResetAt   time.Time
 }
 
+// UsageSnapshot 是限流/并发容量的只读快照。Limit<=0 表示不限，Known=false 表示数据源不可用。
+type UsageSnapshot struct {
+	Used  int64
+	Limit int64
+	Known bool
+}
+
 // slidingStore 抽象 Guard 依赖的滑动窗口计数能力，便于单测注入。
 type slidingStore interface {
 	// CheckAndAdd 严格门槛：sum+amount>limit 即拒（用于 RPM/RPD 请求计数维度）。
@@ -164,6 +171,24 @@ func (g *Guard) AllowChannel(ctx context.Context, channelID int64, limits Limits
 // TokensEnforced 报告某主体的 TPM 是否实际生效（>0），供调用方决定是否需要结算回填。
 func (g *Guard) TokensEnforced(limits Limits) bool {
 	return effectiveLimit(limits.TPM, g.defaultLimits().TPM) > 0
+}
+
+// ChannelTPMSnapshot 只读汇总 channel 当前 TPM 窗口，不占用 token、不刷新桶 TTL。
+func (g *Guard) ChannelTPMSnapshot(ctx context.Context, channelID int64, override *int64) (UsageSnapshot, error) {
+	if g == nil {
+		return UsageSnapshot{}, nil
+	}
+	limit := effectiveLimit(override, g.defaultLimits().TPM)
+	if limit <= 0 {
+		return UsageSnapshot{Limit: 0, Known: true}, nil
+	}
+	result, err := g.store.CheckThenAdd(
+		ctx, subjectFor(ScopeChannel, channelID, DimensionTPM), limit, tpmWindow, tpmBucket, 0,
+	)
+	if err != nil {
+		return UsageSnapshot{}, err
+	}
+	return UsageSnapshot{Used: max(result.Count, 0), Limit: limit, Known: true}, nil
 }
 
 // BackfillRouteUserTokens 在结算拿到真实 token 用量后，按 (actual-est) 修正「线路+用户」的 TPM 计数（delta 可为负）。

@@ -11,29 +11,18 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
-// TestExecutorPrepareCandidatesCheapestOrdersByChannelCost 验证 cheapest 线路按命中渠道成本升序排序候选（DEC-026）。
-// 售价已由 线路 × 模型 固定，cheapest 在池内挑成本最低 = 平台毛利最大。
-func TestExecutorPrepareCandidatesCheapestOrdersByChannelCost(t *testing.T) {
+func TestExecutorPrepareCandidatesBalancedUsesCapacityWithoutReplacement(t *testing.T) {
 	executor := NewExecutor(candidateCapabilityRegistry{
 		allowed: map[int64]bool{1: true, 2: true, 3: true},
 	})
-
-	withCost := func(id, output int64) routing.ChatRouteCandidate {
-		c := candidateRoute(id, "openai")
-		c.ChannelCost = billing.ProviderCostSnapshot{
-			UncachedInputCost: gatewayTestNumeric(1, 0),
-			OutputCost:        gatewayTestNumeric(output, 0),
-		}
-		return c
-	}
+	executor.SetRandomSource(func() float64 { return 0.5 })
 
 	plan, err := executor.PrepareCandidates(context.Background(), PrepareCandidatesParams{
 		Protocol: "openai",
-		// SQL priority 基序：id1(成本贵=10) → id2(中=5) → id3(便宜=2)。
 		Candidates: []routing.ChatRouteCandidate{
-			withCost(1, 10),
-			withCost(2, 5),
-			withCost(3, 2),
+			candidateRoute(1, "openai"),
+			candidateRoute(2, "openai"),
+			candidateRoute(3, "openai"),
 		},
 		Capabilities: []AdapterCapability{
 			AdapterCapabilityNonStream,
@@ -42,61 +31,61 @@ func TestExecutorPrepareCandidatesCheapestOrdersByChannelCost(t *testing.T) {
 		EstimateInputTokens: func(_ context.Context, _ routing.ChatRouteCandidate) (int64, error) {
 			return 1, nil
 		},
-		Mode: "cheapest",
+		Mode: "balanced",
+		ChannelCapacitySnapshot: func(_ context.Context, candidate routing.ChatRouteCandidate) (ChannelCapacity, error) {
+			remaining := map[int64]int64{1: 1, 2: 6, 3: 0}[candidate.Channel.ID]
+			return ChannelCapacity{
+				Concurrency: CapacitySignal{Used: 10 - remaining, Limit: 10, Known: true},
+				TPM:         CapacitySignal{Used: 0, Limit: 100, Known: true},
+			}, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("PrepareCandidates returned error: %v", err)
 	}
 
-	// cheapest：按成本升序 → id3(2) → id2(5) → id1(10)。
-	want := []int64{3, 2, 1}
+	// 权重为 0.1/0.6/0；固定 draw=0.5 先命中 2，再命中 1，零容量 3 保留在 fallback 尾部。
+	want := []int64{2, 1, 3}
 	if len(plan.Candidates) != len(want) {
 		t.Fatalf("expected %d candidates, got %d", len(want), len(plan.Candidates))
 	}
 	for i, c := range plan.Candidates {
 		if c.Route.Channel.ID != want[i] {
-			t.Fatalf("cheapest order position %d: expected channel %d, got %d", i, want[i], c.Route.Channel.ID)
+			t.Fatalf("balanced order position %d: expected channel %d, got %d", i, want[i], c.Route.Channel.ID)
 		}
+	}
+	if plan.Candidates[2].Balance.Weight != 0 {
+		t.Fatalf("expected zero-capacity fallback weight 0, got %v", plan.Candidates[2].Balance.Weight)
 	}
 }
 
-// TestSortCandidatesByModeRandomShufflesKeepingSet 验证 random 策略洗牌：候选集合不变（仍保留全部 fallback），
-// 且多次洗牌能产生与基序不同的顺序（20 次全部相同的概率约 (1/6)^20，可忽略）。
-func TestSortCandidatesByModeRandomShufflesKeepingSet(t *testing.T) {
-	in := []routing.ChatRouteCandidate{
-		candidateRoute(1, "a"),
-		candidateRoute(2, "b"),
-		candidateRoute(3, "c"),
-	}
+func TestBalancedScoreIgnoresChannelCost(t *testing.T) {
+	expensive := candidateRoute(1, "openai")
+	expensive.ChannelCost = billing.ProviderCostSnapshot{OutputCost: gatewayTestNumeric(100, 0)}
+	cheap := candidateRoute(2, "openai")
+	cheap.ChannelCost = billing.ProviderCostSnapshot{OutputCost: gatewayTestNumeric(1, 0)}
 
-	sawDifferentOrder := false
-	for range 20 {
-		out := sortCandidatesByMode(in, "random", nil)
-		if len(out) != len(in) {
-			t.Fatalf("random mode changed candidate count: got %d, want %d", len(out), len(in))
-		}
-		seen := map[int64]bool{}
-		for _, c := range out {
-			seen[c.Channel.ID] = true
-		}
-		for _, c := range in {
-			if !seen[c.Channel.ID] {
-				t.Fatalf("random mode dropped channel %d", c.Channel.ID)
-			}
-		}
-		if out[0].Channel.ID != in[0].Channel.ID || out[1].Channel.ID != in[1].Channel.ID {
-			sawDifferentOrder = true
-		}
+	order := func(in []routing.ChatRouteCandidate) []routing.ChatRouteCandidate {
+		out, _, _, _ := orderBalancedCandidates(context.Background(), in, "balanced", nil, nil, func() float64 { return 0 }, BalanceConfig{Enabled: true, WeightByRemaining: true})
+		return out
 	}
-	if !sawDifferentOrder {
-		t.Fatal("random mode never produced an order different from base priority order in 20 shuffles")
+	first := order([]routing.ChatRouteCandidate{expensive, cheap})
+	second := order([]routing.ChatRouteCandidate{cheap, expensive})
+	if first[0].Channel.ID != expensive.Channel.ID || second[0].Channel.ID != cheap.Channel.ID {
+		t.Fatalf("equal-load balanced order must not use cost: first=%d second=%d", first[0].Channel.ID, second[0].Channel.ID)
 	}
+}
 
-	// 入参不被修改（洗牌发生在副本上）。
-	for i, want := range []int64{1, 2, 3} {
-		if in[i].Channel.ID != want {
-			t.Fatalf("input slice mutated at %d: got %d, want %d", i, in[i].Channel.ID, want)
+func TestBalancedAllZeroChoosesLeastPressureThenKeepsFallback(t *testing.T) {
+	in := []routing.ChatRouteCandidate{candidateRoute(1, "openai"), candidateRoute(2, "openai")}
+	out, _, _, allZero := orderBalancedCandidates(context.Background(), in, "balanced", func(_ context.Context, c routing.ChatRouteCandidate) (ChannelCapacity, error) {
+		if c.Channel.ID == 1 {
+			return ChannelCapacity{Concurrency: CapacitySignal{Used: 10, Limit: 10, Known: true}, TPM: CapacitySignal{Used: 90, Limit: 100, Known: true}}, nil
 		}
+		return ChannelCapacity{Concurrency: CapacitySignal{Used: 10, Limit: 10, Known: true}, TPM: CapacitySignal{Used: 20, Limit: 100, Known: true}}, nil
+	}, nil, func() float64 { return 0 }, BalanceConfig{Enabled: true, WeightByRemaining: true})
+	if !allZero || len(out) != 2 || out[0].Channel.ID != 2 {
+		t.Fatalf("expected least-pressure channel 2 first with full fallback, allZero=%v order=%v", allZero, []int64{out[0].Channel.ID, out[1].Channel.ID})
 	}
 }
 

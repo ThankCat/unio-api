@@ -72,6 +72,73 @@ UPDATE providers
 SET status = 'archived', archived_at = now()
 WHERE providers.id = sqlc.arg(id) AND providers.status <> 'archived';
 
+-- name: ArchiveProviderWithReplacement :one
+-- Atomically add one external healthy replacement to affected routes, archive all target channels, then archive provider.
+WITH replacement AS (
+    SELECT c.id
+    FROM channels c
+    JOIN providers p ON p.id = c.provider_id
+    WHERE c.id = sqlc.arg(replacement_channel_id)
+      AND c.provider_id <> sqlc.arg(id)
+      AND c.status = 'enabled'
+      AND c.credential_valid
+      AND c.credential <> ''
+      AND c.base_url <> ''
+      AND p.status = 'enabled'
+),
+affected_routes AS (
+    SELECT DISTINCT rc.route_id
+    FROM route_channels rc
+    JOIN channels c ON c.id = rc.channel_id
+    WHERE c.provider_id = sqlc.arg(id)
+),
+added AS (
+    INSERT INTO route_channels (route_id, channel_id)
+    SELECT ar.route_id, replacement.id
+    FROM affected_routes ar CROSS JOIN replacement
+    ON CONFLICT (route_id, channel_id) DO NOTHING
+    RETURNING route_id
+),
+archived_channels AS (
+    UPDATE channels
+    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+    WHERE provider_id = sqlc.arg(id)
+      AND status <> 'archived'
+      AND EXISTS (SELECT 1 FROM replacement)
+      AND (SELECT COUNT(*) FROM added) >= 0
+    RETURNING channels.id
+),
+cleared_pools AS (
+    DELETE FROM route_channels WHERE channel_id IN (SELECT id FROM archived_channels)
+    RETURNING route_id
+),
+archived_provider AS (
+    UPDATE providers
+    SET status = 'archived', archived_at = now()
+    WHERE providers.id = sqlc.arg(id)
+      AND providers.status <> 'archived'
+      AND EXISTS (SELECT 1 FROM replacement)
+      AND (SELECT COUNT(*) FROM cleared_pools) >= 0
+    RETURNING providers.id
+)
+SELECT COUNT(*)::bigint FROM archived_provider;
+
+-- name: ListEnabledRoutesEmptiedByProvider :many
+-- 归档目标 provider 全部渠道后将失去最后一个显式池成员的启用线路。
+SELECT DISTINCT rt.id, rt.name
+FROM routes rt
+JOIN route_channels target ON target.route_id = rt.id
+JOIN channels target_channel ON target_channel.id = target.channel_id AND target_channel.provider_id = sqlc.arg(provider_id)
+WHERE rt.status = 'enabled'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM route_channels other
+      JOIN channels other_channel ON other_channel.id = other.channel_id
+      WHERE other.route_id = rt.id
+        AND other_channel.provider_id <> sqlc.arg(provider_id)
+  )
+ORDER BY rt.id;
+
 -- name: RestoreProvider :execrows
 -- RestoreProvider 取消归档 provider：archived → disabled（archived_at 清空）。不向下级联恢复渠道。
 UPDATE providers

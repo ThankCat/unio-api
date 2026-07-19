@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/rand/v2"
-	"sort"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"sync/atomic"
 
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
@@ -63,12 +61,16 @@ type PrepareCandidatesParams struct {
 	// EstimateInputTokens 对每个可用 fallback candidate 做 provider-specific 保守估算。
 	EstimateInputTokens CandidateInputTokenEstimator
 
-	// Mode 是线路策略（cheapest/stable/fixed，阶段 15）；空串保持 SQL routing 的 priority 基序。
+	// Mode 是线路策略（balanced/fixed）；fixed 保持唯一候选，balanced 按容量和健康度排序。
 	// 排序叠加在能力过滤/熔断可用性之前，故最终 fallback 顺序即策略顺序。
 	Mode string
 
-	// ChannelHealthScore 给 stable 排序提供渠道健康分（越小越健康）；nil 时 stable 退化为 priority 序。
+	// ChannelHealthScore 给 balanced 提供渠道健康分（0 最佳、1 最差）；nil 时使用中性健康因子。
 	ChannelHealthScore func(channelKey string) float64
+
+	// ChannelCapacitySnapshot 只读返回 channel-global 并发/TPM 容量，不得预占配额。
+	// nil 或读取失败时按未知信号退化，真正 admit 仍由 attempt runner 原子执行。
+	ChannelCapacitySnapshot ChannelCapacitySnapshotReader
 
 	// StickyChannelID 是会话粘性命中的既有绑定渠道 ID（0=无绑定/未启用）。非 0 时该渠道候选被
 	// 置顶，绝对优先于 Mode 排序与失败软冷却 demote（R5）；其余候选仍按策略序作 fallback。
@@ -84,6 +86,9 @@ type Candidate struct {
 
 	// Route 是 routing 返回的 channel 运行时参数与 provider/model 事实。
 	Route routing.ChatRouteCandidate
+
+	// Balance 是 balanced 调度使用的容量、健康与权重事实，供日志、trace 和 Admin 复用。
+	Balance BalanceScore
 }
 
 // CandidatePlan 是 authorization 与 attempt 共用的保守 fallback 计划。
@@ -99,8 +104,21 @@ type CandidatePlan struct {
 	StickyPinned bool
 
 	// StickyPinnedNonPreferred 报告置顶发生了实际重排（sticky 渠道并非策略排序首选）。
-	// 该占比即 sticky 的成本漂移可见性指标（R2：钉在非 cheapest 首选渠道）。
+	// 该占比用于观察 sticky 覆盖 balanced 首选顺序的频率。
 	StickyPinnedNonPreferred bool
+
+	// CapacityDegraded 表示至少一个容量快照读取失败；AllCapacityZero 表示所有候选容量分均为 0。
+	CapacityDegraded bool
+	AllCapacityZero  bool
+
+	// Excluded records capability and breaker/cooldown hard filters from the SQL candidate plan.
+	Excluded []CandidateExclusion
+}
+
+type CandidateExclusion struct {
+	ChannelID  int64
+	RouteIndex int
+	Reason     string
 }
 
 // CandidateSalePrices 提取候选池各命中渠道的当前售价，供保守预授权上界估算（阶段 15）。
@@ -139,6 +157,14 @@ func (p CandidatePlan) CandidateMaxOutputTokens() int64 {
 // 复用该类型，避免协议 service 各自实现不同的 fallback 风险边界。
 type Executor struct {
 	registry CandidateCapabilityRegistry
+	random   func() float64
+	balance  atomic.Pointer[BalanceConfig]
+}
+
+// BalanceConfig 是 balanced 的热更新开关。
+type BalanceConfig struct {
+	Enabled           bool
+	WeightByRemaining bool
 }
 
 // NewExecutor 创建共享 lifecycle executor。
@@ -147,7 +173,25 @@ func NewExecutor(registry CandidateCapabilityRegistry) *Executor {
 		panic("lifecycle: adapter capability registry is required")
 	}
 
-	return &Executor{registry: registry}
+	executor := &Executor{registry: registry, random: rand.Float64}
+	executor.SetBalanceConfig(true, true)
+	return executor
+}
+
+// SetBalanceConfig 原子替换 balanced 调度开关。
+func (e *Executor) SetBalanceConfig(enabled, weightByRemaining bool) {
+	if e == nil {
+		return
+	}
+	e.balance.Store(&BalanceConfig{Enabled: enabled, WeightByRemaining: weightByRemaining})
+}
+
+// SetRandomSource 替换 balanced 随机源。生产默认使用 math/rand/v2，测试传固定 seed。
+func (e *Executor) SetRandomSource(random func() float64) {
+	if e == nil || random == nil {
+		return
+	}
+	e.random = random
 }
 
 // PrepareCandidates 按 capability、熔断可用性和候选级保守估算生成 fallback plan。
@@ -159,20 +203,44 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 		)
 	}
 
-	// 先按线路策略排序，再做能力过滤 / 熔断可用性 / 估算；过滤保持顺序，故策略顺序即最终 fallback 顺序。
-	ordered := sortCandidatesByMode(params.Candidates, params.Mode, params.ChannelHealthScore)
-
-	filtered := e.registry.FilterCandidates(params.Protocol, ordered, params.Capabilities...)
-	routeIndexes := candidateRouteIndexes(ordered)
+	// 先做能力与 breaker/cooldown 硬过滤，再读取容量并排序，避免为不可尝试渠道读取运行时状态。
+	filtered := e.registry.FilterCandidates(params.Protocol, params.Candidates, params.Capabilities...)
+	filteredIDs := make(map[int64]struct{}, len(filtered))
+	for _, candidate := range filtered {
+		filteredIDs[candidate.Channel.ID] = struct{}{}
+	}
+	excluded := make([]CandidateExclusion, 0, len(params.Candidates)-len(filtered))
+	for index, candidate := range params.Candidates {
+		if _, ok := filteredIDs[candidate.Channel.ID]; !ok {
+			excluded = append(excluded, CandidateExclusion{ChannelID: candidate.Channel.ID, RouteIndex: index, Reason: "capability_unsupported"})
+		}
+	}
+	available := make([]routing.ChatRouteCandidate, 0, len(filtered))
+	for _, candidate := range filtered {
+		if params.Available == nil || params.Available(candidate) {
+			available = append(available, candidate)
+		} else {
+			excluded = append(excluded, CandidateExclusion{
+				ChannelID: candidate.Channel.ID, RouteIndex: candidateRouteIndexes(params.Candidates)[candidate.Channel.ID], Reason: "breaker_or_cooldown",
+			})
+		}
+	}
+	config := e.balance.Load()
+	if config == nil {
+		config = &BalanceConfig{Enabled: true, WeightByRemaining: true}
+	}
+	ordered, scores, degraded, allZero := orderBalancedCandidates(
+		ctx, available, params.Mode, params.ChannelCapacitySnapshot, params.ChannelHealthScore, e.random, *config,
+	)
+	routeIndexes := candidateRouteIndexes(params.Candidates)
 
 	plan := CandidatePlan{
-		Candidates: make([]Candidate, 0, len(filtered)),
+		Candidates:       make([]Candidate, 0, len(ordered)),
+		CapacityDegraded: degraded,
+		AllCapacityZero:  allZero,
+		Excluded:         excluded,
 	}
-	for _, candidate := range filtered {
-		if params.Available != nil && !params.Available(candidate) {
-			continue
-		}
-
+	for _, candidate := range ordered {
 		inputTokens, err := params.EstimateInputTokens(ctx, candidate)
 		if err != nil {
 			return CandidatePlan{}, candidateEstimateFailure(err, "estimate candidate input tokens")
@@ -187,6 +255,7 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 		plan.Candidates = append(plan.Candidates, Candidate{
 			RouteIndex: routeIndexes[candidate.Channel.ID],
 			Route:      candidate,
+			Balance:    scores[candidate.Channel.ID],
 		})
 		if inputTokens > plan.ConservativeInputTokens {
 			plan.ConservativeInputTokens = inputTokens
@@ -254,61 +323,6 @@ func demoteFailureCooled(candidates []Candidate, preferred CandidateAvailability
 		return candidates
 	}
 	return append(healthy, cooled...)
-}
-
-// sortCandidatesByMode 按线路策略对候选稳定排序（返回新切片，不改入参）。
-//   - cheapest：按命中渠道代表成本升序（output_cost 为主键，uncached_input_cost 次之）；
-//     售价已由 线路 × 模型 固定（DEC-026），池内挑成本最低 = 平台毛利最大。
-//   - stable：按渠道健康分升序（越小越健康）；health 为 nil 时保持 priority 基序。
-//   - random：每次请求对候选顺序随机洗牌（仍保留 fallback，仅改变尝试顺序）。
-//   - fixed/其它：保持 SQL routing 的 priority 基序（fixed 池本就只有一条候选）。
-//
-// 稳定排序保证同键候选保留 SQL 的 priority 顺序，故平手回落 priority。
-func sortCandidatesByMode(in []routing.ChatRouteCandidate, mode string, health func(channelKey string) float64) []routing.ChatRouteCandidate {
-	out := make([]routing.ChatRouteCandidate, len(in))
-	copy(out, in)
-
-	switch mode {
-	case "cheapest":
-		sort.SliceStable(out, func(i, j int) bool {
-			return costSnapshotLess(out[i].ChannelCost, out[j].ChannelCost)
-		})
-	case "stable":
-		if health != nil {
-			sort.SliceStable(out, func(i, j int) bool {
-				return health(MetricsID(out[i].Channel.ID)) < health(MetricsID(out[j].Channel.ID))
-			})
-		}
-	case "random":
-		rand.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
-	}
-
-	return out
-}
-
-// costSnapshotLess 定义 cheapest（按成本）排序的代表成本口径：output_cost 优先，uncached_input_cost 次之。
-// 无效/缺失成本视为更大（compareNumeric 把无效值排到末尾），优先选有明确成本的渠道。
-func costSnapshotLess(a, b billing.ProviderCostSnapshot) bool {
-	if c := compareNumeric(a.OutputCost, b.OutputCost); c != 0 {
-		return c < 0
-	}
-	return compareNumeric(a.UncachedInputCost, b.UncachedInputCost) < 0
-}
-
-// compareNumeric 比较两个 NUMERIC：返回 -1/0/1；无效值视为更大（排到末尾）。
-func compareNumeric(a, b pgtype.Numeric) int {
-	ra, oka := chatSettlementNumericRat(a)
-	rb, okb := chatSettlementNumericRat(b)
-	switch {
-	case !oka && !okb:
-		return 0
-	case !oka:
-		return 1
-	case !okb:
-		return -1
-	default:
-		return ra.Cmp(rb)
-	}
 }
 
 func candidateRouteIndexes(candidates []routing.ChatRouteCandidate) map[int64]int {

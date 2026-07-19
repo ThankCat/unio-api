@@ -1,7 +1,7 @@
 // Package route 编排 admin 管理端的线路（routes / 渠道商品）读写（阶段 15）。
 //
-// 线路决定「候选池 + 排序策略」：自定义线路可手挑渠道池（explicit），fixed 模式锁定恰好一条渠道。
-// 约束在 service 层强校验（DB 仅有 fixed 的弱约束），给出可读错误。
+// 线路决定「显式渠道池 + 调度策略」：balanced 在线路池内均衡调度，fixed 锁定恰好一条渠道。
+// 渠道数量约束在 service 层强校验，给出可读错误。
 package route
 
 import (
@@ -20,19 +20,10 @@ import (
 )
 
 const (
-	// ModeCheapest 按售价升序选路。
-	ModeCheapest = "cheapest"
-	// ModeStable 按渠道健康选路。
-	ModeStable = "stable"
+	// ModeBalanced 在线路渠道池内按容量和健康度负载均衡。
+	ModeBalanced = "balanced"
 	// ModeFixed 锁定单条渠道。
 	ModeFixed = "fixed"
-	// ModeRandom 每次请求随机洗牌候选顺序（仍保留 fallback）。
-	ModeRandom = "random"
-
-	// PoolAll 动态全量候选池。
-	PoolAll = "all"
-	// PoolExplicit 运营手挑渠道池。
-	PoolExplicit = "explicit"
 
 	// StatusEnabled 线路启用。
 	StatusEnabled = "enabled"
@@ -60,11 +51,10 @@ func NewService(db TxBeginner, queries *sqlc.Queries) *Service {
 
 // Route 是 admin 视角的线路事实（含渠道池）。
 type Route struct {
-	ID       int64
-	Name     string
-	Mode     string
-	PoolKind string
-	Status   string
+	ID     int64
+	Name   string
+	Mode   string
+	Status string
 	// PriceRatio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；十进制字符串承载，避免精度丢失。
 	PriceRatio string
 	// RPMLimit/TPMLimit/RPDLimit 是线路级限流上限（DEC-027：按 (线路,用户) 计数）：
@@ -102,7 +92,6 @@ type RouteChannel struct {
 type CreateInput struct {
 	Name       string
 	Mode       string
-	PoolKind   string
 	Status     string
 	PriceRatio string
 	RPMLimit   *int64
@@ -120,7 +109,6 @@ type UpdateInput struct {
 	ID         int64
 	Name       string
 	Mode       string
-	PoolKind   string
 	Status     string
 	PriceRatio string
 	RPMLimit   *int64
@@ -132,7 +120,7 @@ type UpdateInput struct {
 	ChannelIDs    []int64
 }
 
-// List 列出全部线路，含 explicit 线路的渠道池。
+// List 列出全部线路及各自渠道池。
 func (s *Service) List(ctx context.Context) ([]Route, error) {
 	rows, err := s.queries.ListRoutes(ctx)
 	if err != nil {
@@ -141,13 +129,11 @@ func (s *Service) List(ctx context.Context) ([]Route, error) {
 	out := make([]Route, 0, len(rows))
 	for _, row := range rows {
 		r := toRoute(row)
-		if row.PoolKind == PoolExplicit {
-			channels, err := s.listChannels(ctx, row.ID)
-			if err != nil {
-				return nil, err
-			}
-			r.Channels = channels
+		channels, err := s.listChannels(ctx, row.ID)
+		if err != nil {
+			return nil, err
 		}
+		r.Channels = channels
 		out = append(out, r)
 	}
 	return out, nil
@@ -166,20 +152,18 @@ func (s *Service) Get(ctx context.Context, id int64) (Route, error) {
 		return Route{}, storeFailed(err, "get route")
 	}
 	r := toRoute(row)
-	if row.PoolKind == PoolExplicit {
-		channels, err := s.listChannels(ctx, id)
-		if err != nil {
-			return Route{}, err
-		}
-		r.Channels = channels
+	channels, err := s.listChannels(ctx, id)
+	if err != nil {
+		return Route{}, err
 	}
+	r.Channels = channels
 	return r, nil
 }
 
 // Create 创建自定义线路（事务内建线路 + 渠道池）。
 func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 	name := strings.TrimSpace(in.Name)
-	if err := validateRouteShape(name, in.Mode, in.PoolKind, in.Status, in.ChannelIDs); err != nil {
+	if err := validateRouteShape(name, in.Mode, in.Status, in.ChannelIDs); err != nil {
 		return Route{}, err
 	}
 	priceRatio, err := parsePriceRatio(in.PriceRatio)
@@ -200,7 +184,6 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 	row, err := q.CreateRoute(ctx, sqlc.CreateRouteParams{
 		Name:          name,
 		Mode:          in.Mode,
-		PoolKind:      in.PoolKind,
 		Status:        in.Status,
 		PriceRatio:    priceRatio,
 		RpmLimit:      int4Narg(in.RPMLimit),
@@ -233,7 +216,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 		return Route{}, invalidArgument("id", "id must be positive")
 	}
 	name := strings.TrimSpace(in.Name)
-	if err := validateRouteShape(name, in.Mode, in.PoolKind, in.Status, in.ChannelIDs); err != nil {
+	if err := validateRouteShape(name, in.Mode, in.Status, in.ChannelIDs); err != nil {
 		return Route{}, err
 	}
 	priceRatio, err := parsePriceRatio(in.PriceRatio)
@@ -262,7 +245,6 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 		ID:            in.ID,
 		Name:          name,
 		Mode:          in.Mode,
-		PoolKind:      in.PoolKind,
 		Status:        in.Status,
 		PriceRatio:    priceRatio,
 		RpmLimit:      int4Narg(in.RPMLimit),
@@ -291,7 +273,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 	return s.Get(ctx, in.ID)
 }
 
-// SetChannels 整体替换 explicit 线路的渠道池（事务内 delete + insert）。
+// SetChannels 整体替换线路渠道池（事务内 delete + insert）。
 func (s *Service) SetChannels(ctx context.Context, id int64, channelIDs []int64) (Route, error) {
 	if id <= 0 {
 		return Route{}, invalidArgument("id", "id must be positive")
@@ -304,10 +286,7 @@ func (s *Service) SetChannels(ctx context.Context, id int64, channelIDs []int64)
 		}
 		return Route{}, storeFailed(err, "load route")
 	}
-	if existing.PoolKind != PoolExplicit {
-		return Route{}, invalidArgument("pool_kind", "only explicit-pool routes can set channels")
-	}
-	if err := validatePoolCount(existing.Mode, existing.PoolKind, channelIDs); err != nil {
+	if err := validatePoolCount(existing.Mode, channelIDs); err != nil {
 		return Route{}, err
 	}
 
@@ -491,45 +470,37 @@ func addRouteChannels(ctx context.Context, q *sqlc.Queries, routeID int64, chann
 	return nil
 }
 
-func validateRouteShape(name, mode, poolKind, status string, channelIDs []int64) error {
+func validateRouteShape(name, mode, status string, channelIDs []int64) error {
 	if name == "" {
 		return invalidArgument("name", "name is required")
 	}
 	switch mode {
-	case ModeCheapest, ModeStable, ModeFixed, ModeRandom:
+	case ModeBalanced, ModeFixed:
 	default:
-		return invalidArgument("mode", "mode must be cheapest, stable, fixed or random")
-	}
-	switch poolKind {
-	case PoolAll, PoolExplicit:
-	default:
-		return invalidArgument("pool_kind", "pool_kind must be all or explicit")
+		return invalidArgument("mode", "mode must be balanced or fixed")
 	}
 	switch status {
 	case StatusEnabled, StatusDisabled:
 	default:
 		return invalidArgument("status", "status must be enabled or disabled")
 	}
-	if mode == ModeFixed && poolKind != PoolExplicit {
-		return invalidArgument("pool_kind", "fixed route must use an explicit pool")
-	}
-	return validatePoolCount(mode, poolKind, channelIDs)
+	return validatePoolCount(mode, channelIDs)
 }
 
-func validatePoolCount(mode, poolKind string, channelIDs []int64) error {
-	switch poolKind {
-	case PoolAll:
-		if len(channelIDs) > 0 {
-			return invalidArgument("channel_ids", "all-pool route must not list channels")
+func validatePoolCount(mode string, channelIDs []int64) error {
+	unique := make(map[int64]struct{}, len(channelIDs))
+	for _, channelID := range channelIDs {
+		if channelID <= 0 {
+			return invalidArgument("channel_ids", "channel id must be positive")
 		}
-	case PoolExplicit:
-		if mode == ModeFixed {
-			if len(channelIDs) != 1 {
-				return invalidArgument("channel_ids", "fixed route must list exactly one channel")
-			}
-		} else if len(channelIDs) == 0 {
-			return invalidArgument("channel_ids", "explicit-pool route must list at least one channel")
+		unique[channelID] = struct{}{}
+	}
+	if mode == ModeFixed {
+		if len(unique) != 1 {
+			return invalidArgument("channel_ids", "fixed route must list exactly one channel")
 		}
+	} else if len(unique) == 0 {
+		return invalidArgument("channel_ids", "balanced route must list at least one channel")
 	}
 	return nil
 }
@@ -539,7 +510,6 @@ func toRoute(r sqlc.Route) Route {
 		ID:         r.ID,
 		Name:       r.Name,
 		Mode:       r.Mode,
-		PoolKind:   r.PoolKind,
 		Status:     r.Status,
 		PriceRatio: numericString(r.PriceRatio),
 		RPMLimit:   int4ToPtr(r.RpmLimit),

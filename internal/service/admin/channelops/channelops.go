@@ -133,7 +133,6 @@ type RouteRow struct {
 	ID         int64
 	Name       string
 	Mode       string
-	PoolKind   string
 	Status     string
 	PriceRatio string
 }
@@ -331,7 +330,6 @@ func (s *Service) Routes(ctx context.Context, channelID int64) ([]RouteRow, erro
 			ID:         r.ID,
 			Name:       r.Name,
 			Mode:       r.Mode,
-			PoolKind:   r.PoolKind,
 			Status:     r.Status,
 			PriceRatio: opsutil.NumericString(r.PriceRatio),
 		})

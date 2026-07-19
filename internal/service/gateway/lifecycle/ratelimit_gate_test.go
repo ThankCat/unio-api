@@ -79,6 +79,10 @@ func (f *fakeReservationGuard) BackfillChannelTokens(_ context.Context, channelI
 	f.channel[channelID] += delta
 }
 
+func (f *fakeReservationGuard) ChannelTPMSnapshot(context.Context, int64, *int64) (ratelimit.UsageSnapshot, error) {
+	return ratelimit.UsageSnapshot{}, nil
+}
+
 func principalWithTPM(routeID, userID, tpm int64) *auth.APIKeyPrincipal {
 	return &auth.APIKeyPrincipal{UserID: userID, RouteID: tokenPtr(routeID), TPMLimit: tokenPtr(tpm)}
 }

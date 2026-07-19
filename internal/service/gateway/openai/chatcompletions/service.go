@@ -110,6 +110,13 @@ func (s *ChatCompletionService) SetConcurrencyLimiter(limiter lifecycle.ChannelC
 	s.attemptRunner.SetConcurrencyLimiter(limiter)
 }
 
+// SetBalanceConfig 热更新 balanced 调度开关。
+func (s *ChatCompletionService) SetBalanceConfig(enabled, weightByRemaining bool) {
+	if configurable, ok := s.candidates.(interface{ SetBalanceConfig(bool, bool) }); ok {
+		configurable.SetBalanceConfig(enabled, weightByRemaining)
+	}
+}
+
 // SetCostExposureRecorder 注入成本敞口记录器（DESIGN-bill-on-cancel 阶段一）；nil 表示不启用。
 func (s *ChatCompletionService) SetCostExposureRecorder(recorder lifecycle.CostExposureRecorder, assumedOutputFallback int64) {
 	s.lifecycle.SetCostExposureRecorder(recorder, assumedOutputFallback)
@@ -135,6 +142,10 @@ func (s *ChatCompletionService) SetStickyRouter(sticky *lifecycle.StickyRouter) 
 // SetRoutingLogger 注入 sticky/skip/wait/failover 结构化日志；nil 表示不打日志。
 func (s *ChatCompletionService) SetRoutingLogger(logger *zap.Logger) {
 	s.attemptRunner.SetLogger(logger)
+}
+
+func (s *ChatCompletionService) SetRoutingTraceRecorder(recorder *lifecycle.RoutingTraceRecorder) {
+	s.lifecycle.SetRoutingTraceRecorder(recorder)
 }
 
 // chatCompletionsSafeMessage 把 chat-completion 编排专用 ad-hoc string code 映射成可展示文案；

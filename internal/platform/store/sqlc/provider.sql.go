@@ -38,6 +38,70 @@ func (q *Queries) ArchiveProviderCascade(ctx context.Context, id int64) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const archiveProviderWithReplacement = `-- name: ArchiveProviderWithReplacement :one
+WITH replacement AS (
+    SELECT c.id
+    FROM channels c
+    JOIN providers p ON p.id = c.provider_id
+    WHERE c.id = $1
+      AND c.provider_id <> $2
+      AND c.status = 'enabled'
+      AND c.credential_valid
+      AND c.credential <> ''
+      AND c.base_url <> ''
+      AND p.status = 'enabled'
+),
+affected_routes AS (
+    SELECT DISTINCT rc.route_id
+    FROM route_channels rc
+    JOIN channels c ON c.id = rc.channel_id
+    WHERE c.provider_id = $2
+),
+added AS (
+    INSERT INTO route_channels (route_id, channel_id)
+    SELECT ar.route_id, replacement.id
+    FROM affected_routes ar CROSS JOIN replacement
+    ON CONFLICT (route_id, channel_id) DO NOTHING
+    RETURNING route_id
+),
+archived_channels AS (
+    UPDATE channels
+    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+    WHERE provider_id = $2
+      AND status <> 'archived'
+      AND EXISTS (SELECT 1 FROM replacement)
+      AND (SELECT COUNT(*) FROM added) >= 0
+    RETURNING channels.id
+),
+cleared_pools AS (
+    DELETE FROM route_channels WHERE channel_id IN (SELECT id FROM archived_channels)
+    RETURNING route_id
+),
+archived_provider AS (
+    UPDATE providers
+    SET status = 'archived', archived_at = now()
+    WHERE providers.id = $2
+      AND providers.status <> 'archived'
+      AND EXISTS (SELECT 1 FROM replacement)
+      AND (SELECT COUNT(*) FROM cleared_pools) >= 0
+    RETURNING providers.id
+)
+SELECT COUNT(*)::bigint FROM archived_provider
+`
+
+type ArchiveProviderWithReplacementParams struct {
+	ReplacementChannelID int64
+	ID                   int64
+}
+
+// Atomically add one external healthy replacement to affected routes, archive all target channels, then archive provider.
+func (q *Queries) ArchiveProviderWithReplacement(ctx context.Context, arg ArchiveProviderWithReplacementParams) (int64, error) {
+	row := q.db.QueryRow(ctx, archiveProviderWithReplacement, arg.ReplacementChannelID, arg.ID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countProviders = `-- name: CountProviders :one
 SELECT COUNT(*) AS total
 FROM providers
@@ -126,6 +190,48 @@ func (q *Queries) GetProvider(ctx context.Context, id int64) (Provider, error) {
 		&i.ArchivedAt,
 	)
 	return i, err
+}
+
+const listEnabledRoutesEmptiedByProvider = `-- name: ListEnabledRoutesEmptiedByProvider :many
+SELECT DISTINCT rt.id, rt.name
+FROM routes rt
+JOIN route_channels target ON target.route_id = rt.id
+JOIN channels target_channel ON target_channel.id = target.channel_id AND target_channel.provider_id = $1
+WHERE rt.status = 'enabled'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM route_channels other
+      JOIN channels other_channel ON other_channel.id = other.channel_id
+      WHERE other.route_id = rt.id
+        AND other_channel.provider_id <> $1
+  )
+ORDER BY rt.id
+`
+
+type ListEnabledRoutesEmptiedByProviderRow struct {
+	ID   int64
+	Name string
+}
+
+// 归档目标 provider 全部渠道后将失去最后一个显式池成员的启用线路。
+func (q *Queries) ListEnabledRoutesEmptiedByProvider(ctx context.Context, providerID int64) ([]ListEnabledRoutesEmptiedByProviderRow, error) {
+	rows, err := q.db.Query(ctx, listEnabledRoutesEmptiedByProvider, providerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEnabledRoutesEmptiedByProviderRow
+	for rows.Next() {
+		var i ListEnabledRoutesEmptiedByProviderRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listProviders = `-- name: ListProviders :many

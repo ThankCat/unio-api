@@ -11,11 +11,13 @@ import (
 
 // fakeCatalogStore 是 catalog service 单测用的可用模型查询替身。
 type fakeCatalogStore struct {
-	rows []sqlc.ListAvailableModelsForUserRow
-	err  error
+	rows      []sqlc.ListAvailableModelsForUserRow
+	err       error
+	lastInput sqlc.ListAvailableModelsForUserParams
 }
 
-func (s *fakeCatalogStore) ListAvailableModelsForUser(_ context.Context, _ int64) ([]sqlc.ListAvailableModelsForUserRow, error) {
+func (s *fakeCatalogStore) ListAvailableModelsForUser(_ context.Context, in sqlc.ListAvailableModelsForUserParams) ([]sqlc.ListAvailableModelsForUserRow, error) {
+	s.lastInput = in
 	return s.rows, s.err
 }
 
@@ -27,12 +29,15 @@ func TestListAvailableModelsMapsCapabilities(t *testing.T) {
 		},
 	}
 
-	models, err := NewService(store).ListAvailableModels(context.Background(), 42, nil)
+	models, err := NewService(store).ListAvailableModels(context.Background(), 42, 7, nil)
 	if err != nil {
 		t.Fatalf("list available models: %v", err)
 	}
 	if len(models) != 2 {
 		t.Fatalf("expected 2 models, got %d", len(models))
+	}
+	if store.lastInput.UserID != 42 || store.lastInput.RouteID != 7 {
+		t.Fatalf("expected user 42 / route 7, got user %d / route %d", store.lastInput.UserID, store.lastInput.RouteID)
 	}
 
 	if models[0].ID != "openai/gpt-4.1" {
@@ -60,7 +65,7 @@ func TestListAvailableModelsCapabilityFilterAND(t *testing.T) {
 		},
 	}
 
-	models, err := NewService(store).ListAvailableModels(context.Background(), 42, []string{"image.input", "tools.function"})
+	models, err := NewService(store).ListAvailableModels(context.Background(), 42, 7, []string{"image.input", "tools.function"})
 	if err != nil {
 		t.Fatalf("list available models: %v", err)
 	}
@@ -81,7 +86,7 @@ func TestListAvailableModelsEmptyFilterReturnsAll(t *testing.T) {
 		},
 	}
 
-	models, err := NewService(store).ListAvailableModels(context.Background(), 42, []string{})
+	models, err := NewService(store).ListAvailableModels(context.Background(), 42, 7, []string{})
 	if err != nil {
 		t.Fatalf("list available models: %v", err)
 	}
@@ -93,7 +98,7 @@ func TestListAvailableModelsEmptyFilterReturnsAll(t *testing.T) {
 func TestListAvailableModelsStoreError(t *testing.T) {
 	store := &fakeCatalogStore{err: errors.New("db down")}
 
-	_, err := NewService(store).ListAvailableModels(context.Background(), 42, nil)
+	_, err := NewService(store).ListAvailableModels(context.Background(), 42, 7, nil)
 	if err == nil {
 		t.Fatal("expected error when store fails")
 	}

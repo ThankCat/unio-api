@@ -174,6 +174,16 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		rateLimitGuard,
 		channelBreaker,
 	)
+	routingTraceRecorder := lifecycle.NewRoutingTraceRecorder(queries, deps.Logger)
+	routingTraceRecorder.SetMetrics(metricsRecorder)
+	routingTraceRecorder.SetSampleRate(appsettings.GatewayRoutingTrace(ctx, settingsStore).SampleRate)
+	chatCompletionService.SetRoutingTraceRecorder(routingTraceRecorder)
+	responsesService.SetRoutingTraceRecorder(routingTraceRecorder)
+	messagesService.SetRoutingTraceRecorder(routingTraceRecorder)
+	balanceSettings := appsettings.GatewayRoutingBalance(ctx, settingsStore)
+	chatCompletionService.SetBalanceConfig(balanceSettings.Enabled, balanceSettings.WeightByRemaining)
+	responsesService.SetBalanceConfig(balanceSettings.Enabled, balanceSettings.WeightByRemaining)
+	messagesService.SetBalanceConfig(balanceSettings.Enabled, balanceSettings.WeightByRemaining)
 
 	// 渠道级 429 冷却注册表（P2-7）：三协议 service 共享一份，使任一协议命中的 429 都能即时
 	// 让该渠道在冷却窗口内被 routing fallback 跳过。冷却到期自动恢复。
@@ -185,10 +195,12 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	responsesService.SetChannelCooldownRegistry(channelCooldown)
 	messagesService.SetChannelCooldownRegistry(channelCooldown)
 
-	// 在途并发限制器（DEC-029）：进程内单实例，两级共用——ingress 中间件（线路+用户）与
-	// attempt runner（渠道级，渠道行 concurrency_limit 可覆盖默认）。
+	// 在途并发限制器（P3）：Redis 租约在多 gateway/多线路间共享，两级共用——ingress 中间件
+	// （线路+用户）与 attempt runner（渠道级，渠道行 concurrency_limit 可覆盖默认）。
 	concurrencySettings := appsettings.GatewayConcurrencyDefaults(ctx, settingsStore)
-	concurrencyLimiter := ratelimit.NewConcurrencyLimiter(concurrencySettings.KeyLimit, concurrencySettings.ChannelLimit)
+	concurrencyLimiter := ratelimit.NewRedisConcurrencyLimiter(
+		deps.Redis, deps.Config.Redis.KeyNamespace, concurrencySettings.KeyLimit, concurrencySettings.ChannelLimit, deps.Logger,
+	)
 	chatCompletionService.SetConcurrencyLimiter(concurrencyLimiter)
 	responsesService.SetConcurrencyLimiter(concurrencyLimiter)
 	messagesService.SetConcurrencyLimiter(concurrencyLimiter)
@@ -231,15 +243,17 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	// 配置 applier：周期性把 6 组配置的最新生效值推给上述消费方（admin 改动 ≤ 应用周期内生效）。
 	// 生命周期挂到独立 background context（传入的 ctx 是启动期短时 ctx），随 app.Shutdown 停止。
 	applier := &settingsApplier{
-		store:       settingsStore,
-		logger:      deps.Logger,
-		breaker:     channelBreaker,
-		guard:       rateLimitGuard,
-		cooldown:    channelCooldown,
-		gate:        credentialGate,
-		router:      chatRouter,
-		concurrency: concurrencyLimiter,
-		sticky:      stickyRouter,
+		store:          settingsStore,
+		logger:         deps.Logger,
+		breaker:        channelBreaker,
+		guard:          rateLimitGuard,
+		cooldown:       channelCooldown,
+		gate:           credentialGate,
+		router:         chatRouter,
+		concurrency:    concurrencyLimiter,
+		sticky:         stickyRouter,
+		balanceTargets: []balanceConfigTarget{chatCompletionService, responsesService, messagesService},
+		routingTrace:   routingTraceRecorder,
 	}
 	applierCtx, stopApplier := context.WithCancel(context.Background())
 	go applier.run(applierCtx, settingsApplyInterval)

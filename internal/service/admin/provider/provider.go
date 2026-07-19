@@ -36,10 +36,13 @@ type Store interface {
 	ListProvidersPage(ctx context.Context, arg sqlc.ListProvidersPageParams) ([]sqlc.Provider, error)
 	CountProviders(ctx context.Context, arg sqlc.CountProvidersParams) (int64, error)
 	GetProvider(ctx context.Context, id int64) (sqlc.Provider, error)
+	GetChannel(ctx context.Context, id int64) (sqlc.Channel, error)
 	CreateProvider(ctx context.Context, arg sqlc.CreateProviderParams) (sqlc.Provider, error)
 	UpdateProvider(ctx context.Context, arg sqlc.UpdateProviderParams) (sqlc.Provider, error)
 	DeleteProvider(ctx context.Context, id int64) (int64, error)
 	ArchiveProviderCascade(ctx context.Context, id int64) (int64, error)
+	ArchiveProviderWithReplacement(ctx context.Context, arg sqlc.ArchiveProviderWithReplacementParams) (int64, error)
+	ListEnabledRoutesEmptiedByProvider(ctx context.Context, providerID int64) ([]sqlc.ListEnabledRoutesEmptiedByProviderRow, error)
 	RestoreProvider(ctx context.Context, id int64) (int64, error)
 }
 
@@ -246,9 +249,54 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 
 // Archive 归档 provider：单事务内级联归档名下渠道（释放渠道名）+ 从线路池移除，再置 provider archived。
 // slug 不变。幂等：已归档返回 not_found（0 行）。恢复不向下级联。
-func (s *Service) Archive(ctx context.Context, id int64) error {
+func (s *Service) Archive(ctx context.Context, id int64, replacementChannelID *int64) error {
 	if id <= 0 {
 		return invalidArgument("id", "provider id must be positive")
+	}
+	if replacementChannelID != nil {
+		if *replacementChannelID <= 0 {
+			return invalidArgument("replacement_channel_id", "replacement channel id must be positive")
+		}
+		replacement, err := s.store.GetChannel(ctx, *replacementChannelID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return invalidArgument("replacement_channel_id", "replacement channel not found")
+			}
+			return storeFailed(err, "get replacement channel")
+		}
+		if replacement.ProviderID == id {
+			return invalidArgument("replacement_channel_id", "replacement channel must belong to another provider")
+		}
+		if replacement.Status != StatusEnabled || !replacement.CredentialValid || replacement.Credential == "" || replacement.BaseUrl == "" {
+			return conflict("replacement channel must be enabled, credential-valid, and fully configured")
+		}
+		replacementProvider, err := s.store.GetProvider(ctx, replacement.ProviderID)
+		if err != nil {
+			return storeFailed(err, "get replacement channel provider")
+		}
+		if replacementProvider.Status != StatusEnabled {
+			return conflict("replacement channel provider must be enabled")
+		}
+		affected, err := s.store.ArchiveProviderWithReplacement(ctx, sqlc.ArchiveProviderWithReplacementParams{
+			ID: id, ReplacementChannelID: *replacementChannelID,
+		})
+		if err != nil {
+			return storeFailed(err, "replace and archive provider")
+		}
+		if affected == 0 {
+			return conflict("provider archive could not commit because the target or replacement changed")
+		}
+		return nil
+	}
+	affectedRoutes, err := s.store.ListEnabledRoutesEmptiedByProvider(ctx, id)
+	if err != nil {
+		return storeFailed(err, "check provider archive route impact")
+	}
+	if len(affectedRoutes) > 0 {
+		return conflict(fmt.Sprintf(
+			"archiving provider would empty enabled route %q (%d); replace its channels or disable the route first",
+			affectedRoutes[0].Name, affectedRoutes[0].ID,
+		))
 	}
 	affected, err := s.store.ArchiveProviderCascade(ctx, id)
 	if err != nil {

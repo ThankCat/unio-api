@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,7 +23,7 @@ type ChannelService interface {
 	Update(ctx context.Context, in channel.UpdateInput) (channel.Channel, error)
 	RotateCredential(ctx context.Context, in channel.RotateCredentialInput) error
 	Delete(ctx context.Context, id int64) error
-	Archive(ctx context.Context, id int64) error
+	Archive(ctx context.Context, id int64, replacementChannelID *int64) error
 	Restore(ctx context.Context, id int64) error
 	// AdapterKeyOptions 列出可选 adapter_key 枚举，供前端下拉而非手填。
 	AdapterKeyOptions() []channel.AdapterKeyOption
@@ -328,7 +329,14 @@ func (h *channelsHandler) archive(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	if err := h.service.Archive(r.Context(), id); err != nil {
+	var req struct {
+		ReplacementChannelID *int64 `json:"replacement_channel_id"`
+	}
+	if err := httpx.DecodeJSON(w, r, &req); err != nil && !errors.Is(err, httpx.ErrEmptyJSONBody) {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	if err := h.service.Archive(r.Context(), id, req.ReplacementChannelID); err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}

@@ -250,6 +250,9 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				zap.String("skip_reason", "breaker"),
 			)
 			params.Sticky.ClearIfBound(ctx, candidate.Channel.ID)
+			if candIdx+1 < len(params.Candidates) {
+				l.RecordBalanceFallback(routeIDOf(params.Principal), "breaker")
+			}
 			continue
 		}
 
@@ -290,6 +293,9 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				l.MarkRequestFailed(ctx, requestRecord, "request_deadline_exceeded", admit.err)
 				return result, admit.err
 			}
+			if candIdx+1 < len(params.Candidates) {
+				l.RecordBalanceFallback(routeIDOf(params.Principal), admit.skipReason)
+			}
 			continue
 		}
 		releaseSlot := admit.release
@@ -309,6 +315,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			l.MarkRequestFailed(ctx, requestRecord, "request_attempt_create_failed", err)
 			return result, err
 		}
+		result.Attempts++
 
 		if params.ResolveAdapter != nil {
 			if err := params.ResolveAdapter(candidate); err != nil {
@@ -359,6 +366,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			}
 
 			l.RecordRoutingSelected(candidate.ProviderID, candidate.Channel.ID, params.RequestedModelID)
+			l.RecordBalanceSelected(routeIDOf(params.Principal), candidate.Channel.ID)
 
 			settlementCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
@@ -620,6 +628,10 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 
 			// 首字节前可重试错误切换候选：前一候选可能已在上游产生成本却不会被结算（P2-3），记指标供监控。
 			l.RecordRetryableFallback(err)
+			if candIdx+1 < len(params.Candidates) {
+				category, _ := adapter.UpstreamCategoryOf(err)
+				l.RecordBalanceFallback(routeIDOf(params.Principal), "upstream_"+string(category))
+			}
 			lastErr = err
 			continue
 		}

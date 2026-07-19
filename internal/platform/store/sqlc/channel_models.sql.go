@@ -13,7 +13,7 @@ import (
 
 const findRouteCandidates = `-- name: FindRouteCandidates :many
 WITH user_scope AS (
-    SELECT $6::BIGINT AS user_id
+    SELECT $5::BIGINT AS user_id
 ),
 user_policy_mode AS (
     SELECT EXISTS (
@@ -144,14 +144,11 @@ WHERE m.model_id = $2
   AND p.status = 'enabled'
   -- 已定价（DEC-031）：base 基准价 INNER JOIN 已保证存在；成本可解析 = 绝对覆盖存在 OR 价格倍率存在。
   AND (cost.id IS NOT NULL OR mult.id IS NOT NULL)
-  AND (
-    $4::TEXT = 'all'
-        OR EXISTS (
+  AND EXISTS (
         SELECT 1
         FROM route_channels rc
-        WHERE rc.route_id = $5
+        WHERE rc.route_id = $4
           AND rc.channel_id = c.id
-    )
   )
   AND NOT EXISTS (
     SELECT 1
@@ -179,7 +176,6 @@ type FindRouteCandidatesParams struct {
 	AtTime           pgtype.Timestamptz
 	RequestedModelID string
 	IngressProtocol  string
-	PoolKind         string
 	RouteID          int64
 	UserID           int64
 }
@@ -236,11 +232,11 @@ type FindRouteCandidatesRow struct {
 
 // FindRouteCandidates 按请求模型、用户策略与线路查找可用 channel 路由候选（DEC-026 售价倍率 + DEC-027 成本倍率 + DEC-031 单基数）。
 // 在既有过滤（model/channel/provider/cm enabled + 协议 + 用户 allow/deny）之上叠加：
-//  1. 线路候选池：pool_kind='explicit' 时候选 ∩ route_channels（fixed 即只剩一条）；
+//  1. 线路候选池：候选必须属于 route_channels（fixed 即只剩一条）；
 //  2. 已定价过滤：候选必须有 model_prices 基准价（base，INNER JOIN 保证），且渠道成本可解析——
 //     「有 channel_prices 绝对成本覆盖」 OR 「有 channel_cost_multipliers 价格倍率」（否则排除，不参与计费）；
 //  3. 带回基准价（base）：Go 侧 × 线路倍率算客户售价（DEC-026），并 × 价格倍率 × 充值倍率算真实成本（DEC-031 同一基数）；
-//     成本三来源：绝对覆盖 cost（若有）/ 价格倍率 mult + 充值倍率 recharge（供 Go 侧 ScaleProviderCostByFactors 派生真实成本、cheapest 排序与毛利结算），带回来源行 id 作 pin。
+//     成本三来源：绝对覆盖 cost（若有）/ 价格倍率 mult + 充值倍率 recharge（供 Go 侧 ScaleProviderCostByFactors 派生真实成本与毛利结算），带回来源行 id 作 pin。
 //
 // 成本解析优先级（Go 侧）：绝对覆盖 > 基准价 × 价格倍率 × 充值倍率（缺省 1.0）；排序/策略在 Go 侧完成，此处仅给稳定 priority 基序。
 // DEC-031：退役 model_reference_costs，成本基数复用 base（model_prices）；成本基数 pin = model_price_id（base.id）。
@@ -249,7 +245,6 @@ func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidat
 		arg.AtTime,
 		arg.RequestedModelID,
 		arg.IngressProtocol,
-		arg.PoolKind,
 		arg.RouteID,
 		arg.UserID,
 	)

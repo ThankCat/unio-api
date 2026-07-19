@@ -17,6 +17,9 @@ INSERT INTO route_channels (route_id, channel_id)
 VALUES (sqlc.arg(route_id), sqlc.arg(channel_id))
 ON CONFLICT (route_id, channel_id) DO NOTHING;
 
+-- name: CountRouteChannels :one
+SELECT COUNT(*) FROM route_channels WHERE route_id = sqlc.arg(route_id);
+
 -- name: DeleteRouteChannels :exec
 -- DeleteRouteChannels 清空某线路的渠道池（设置渠道池前先清空，整体在事务内重建）。
 DELETE FROM route_channels WHERE route_id = sqlc.arg(route_id);
@@ -25,12 +28,11 @@ DELETE FROM route_channels WHERE route_id = sqlc.arg(route_id);
 -- CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
 -- rpm/tpm/rpd_limit 是线路级限流上限（DEC-027：NULL=继承全局默认，0=不限，>0=上限）；
 -- sticky_enabled 是会话粘性开关（NULL=继承系统设置默认）；
--- mode/pool_kind 组合的 fixed/explicit 数量约束由 service 层校验。
-INSERT INTO routes (name, mode, pool_kind, status, description, price_ratio, rpm_limit, tpm_limit, rpd_limit, sticky_enabled)
+-- balanced/fixed 的渠道数量约束由 service 层校验。
+INSERT INTO routes (name, mode, status, description, price_ratio, rpm_limit, tpm_limit, rpd_limit, sticky_enabled)
 VALUES (
     sqlc.arg(name),
     sqlc.arg(mode),
-    sqlc.arg(pool_kind),
     sqlc.arg(status),
     sqlc.narg(description),
     sqlc.arg(price_ratio),
@@ -46,11 +48,10 @@ RETURNING *;
 SELECT * FROM routes ORDER BY id ASC;
 
 -- name: UpdateRoute :one
--- UpdateRoute 更新线路的名称/策略/池类型/启停/简介/售价倍率/线路级限流上限/会话粘性开关。
+-- UpdateRoute 更新线路的名称/策略/启停/简介/售价倍率/线路级限流上限/会话粘性开关。
 UPDATE routes
 SET name = sqlc.arg(name),
     mode = sqlc.arg(mode),
-    pool_kind = sqlc.arg(pool_kind),
     status = sqlc.arg(status),
     description = sqlc.narg(description),
     price_ratio = sqlc.arg(price_ratio),
@@ -115,7 +116,6 @@ SELECT
     rt.id,
     rt.name,
     rt.mode,
-    rt.pool_kind,
     rt.status,
     rt.description,
     rt.price_ratio,
@@ -152,10 +152,7 @@ SELECT
                 )
             )
         )
-        AND (
-            rt.pool_kind = 'all'
-            OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
-        )
+        AND cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
     ) AS models_count
 FROM routes rt
 WHERE (sqlc.narg('status')::text IS NULL OR rt.status = sqlc.narg('status')::text)
@@ -203,10 +200,7 @@ ORDER BY
                 )
             )
         )
-        AND (
-            rt.pool_kind = 'all'
-            OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
-        )
+        AND cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
     ) END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'models' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (
         SELECT COUNT(DISTINCT m.id)
@@ -234,10 +228,7 @@ ORDER BY
                 )
             )
         )
-        AND (
-            rt.pool_kind = 'all'
-            OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
-        )
+        AND cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
     ) END ASC NULLS LAST,
   rt.name
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
@@ -307,16 +298,13 @@ WHERE (
         )
     )
 )
-AND (
-    rt.pool_kind = 'all'
-    OR cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
-)
+AND cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
 GROUP BY m.id, m.model_id, m.display_name
 ORDER BY m.model_id
 LIMIT 500;
 
 -- name: RouteOpsChannelPool :many
--- RouteOpsChannelPool 线路显式渠道池成员（pool_kind='explicit'）+ 渠道健康（抽屉渠道池 Tab）。
+-- RouteOpsChannelPool 线路渠道池成员 + 渠道健康（抽屉渠道池 Tab）。
 SELECT
     c.id AS channel_id,
     c.name AS channel_name,
@@ -337,6 +325,102 @@ JOIN api_keys k ON k.user_id = u.id
 WHERE k.route_id = sqlc.arg('route_id')
 ORDER BY u.id
 LIMIT 200;
+
+-- name: RouteRuntimePool :many
+-- RouteRuntimePool returns every explicitly bound channel plus DB hard-filter facts.
+SELECT
+    rt.id AS route_id,
+    rt.mode,
+    rt.status AS route_status,
+    c.id AS channel_id,
+    c.name AS channel_name,
+    c.status AS channel_status,
+    c.credential_valid,
+    (c.credential <> '')::boolean AS has_credential,
+    (c.base_url <> '')::boolean AS has_base_url,
+    c.protocol,
+    c.adapter_key,
+    c.priority,
+    c.tpm_limit,
+    c.concurrency_limit,
+    p.id AS provider_id,
+    p.name AS provider_name,
+    p.status AS provider_status,
+    (m.id IS NOT NULL)::boolean AS model_exists,
+    COALESCE(m.status, '')::text AS model_status,
+    COALESCE(cm.status, '')::text AS binding_status,
+    (base.id IS NOT NULL)::boolean AS has_model_price,
+    COALESCE((cost.id IS NOT NULL OR mult.id IS NOT NULL), false)::boolean AS has_channel_cost
+FROM routes rt
+JOIN route_channels rc ON rc.route_id = rt.id
+JOIN channels c ON c.id = rc.channel_id
+JOIN providers p ON p.id = c.provider_id
+LEFT JOIN models m
+  ON NULLIF(sqlc.arg(model_id)::text, '') IS NOT NULL
+ AND m.model_id = sqlc.arg(model_id)::text
+LEFT JOIN channel_models cm ON cm.channel_id = c.id AND cm.model_id = m.id
+LEFT JOIN LATERAL (
+    SELECT mp.id
+    FROM model_prices mp
+    WHERE mp.model_id = m.id
+      AND mp.status = 'enabled'
+      AND mp.effective_from <= sqlc.arg(at_time)
+      AND (mp.effective_to IS NULL OR mp.effective_to > sqlc.arg(at_time))
+    ORDER BY mp.effective_from DESC, mp.id DESC
+    LIMIT 1
+) base ON TRUE
+LEFT JOIN LATERAL (
+    SELECT cp.id
+    FROM channel_prices cp
+    WHERE cp.channel_id = c.id
+      AND cp.model_id = m.id
+      AND cp.status = 'enabled'
+      AND cp.effective_from <= sqlc.arg(at_time)
+      AND (cp.effective_to IS NULL OR cp.effective_to > sqlc.arg(at_time))
+    ORDER BY cp.effective_from DESC, cp.id DESC
+    LIMIT 1
+) cost ON TRUE
+LEFT JOIN LATERAL (
+    SELECT ccm.id
+    FROM channel_cost_multipliers ccm
+    WHERE ccm.channel_id = c.id
+      AND (ccm.model_id = m.id OR ccm.model_id IS NULL)
+      AND ccm.status = 'enabled'
+      AND ccm.effective_from <= sqlc.arg(at_time)
+      AND (ccm.effective_to IS NULL OR ccm.effective_to > sqlc.arg(at_time))
+    ORDER BY (ccm.model_id IS NULL) ASC, ccm.effective_from DESC, ccm.id DESC
+    LIMIT 1
+) mult ON TRUE
+WHERE rt.id = sqlc.arg(route_id)
+ORDER BY c.priority, c.id;
+
+-- name: RouteRuntimeChannelStats :many
+-- Recent final selections and fallback attempts for channels in one explicit route pool.
+SELECT
+    rc.channel_id,
+    COUNT(DISTINCT rr.id) FILTER (
+        WHERE rr.created_at >= sqlc.arg(observed_at)::timestamptz - interval '1 minute'
+          AND rr.final_channel_id = rc.channel_id
+    )::bigint AS selected_1m,
+    COUNT(DISTINCT rr.id) FILTER (
+        WHERE rr.created_at >= sqlc.arg(observed_at)::timestamptz - interval '5 minutes'
+          AND rr.final_channel_id = rc.channel_id
+    )::bigint AS selected_5m,
+    COUNT(a.id) FILTER (
+        WHERE a.created_at >= sqlc.arg(observed_at)::timestamptz - interval '1 minute'
+          AND a.channel_id = rc.channel_id
+          AND a.attempt_index > 0
+    )::bigint AS fallback_1m
+FROM route_channels rc
+LEFT JOIN request_records rr
+  ON rr.route_id = rc.route_id
+ AND rr.created_at >= sqlc.arg(observed_at)::timestamptz - interval '5 minutes'
+LEFT JOIN request_attempts a
+  ON a.request_record_id = rr.id
+ AND a.channel_id = rc.channel_id
+WHERE rc.route_id = sqlc.arg(route_id)
+GROUP BY rc.channel_id
+ORDER BY rc.channel_id;
 
 -- name: RouteOpsBoundKeys :many
 -- RouteOpsBoundKeys 绑定本线路的 API Key（抽屉绑定 Tab，P0）。状态由时间戳派生。

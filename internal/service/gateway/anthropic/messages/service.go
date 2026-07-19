@@ -109,6 +109,13 @@ func (s *MessagesService) SetConcurrencyLimiter(limiter lifecycle.ChannelConcurr
 	s.attemptRunner.SetConcurrencyLimiter(limiter)
 }
 
+// SetBalanceConfig 热更新 balanced 调度开关。
+func (s *MessagesService) SetBalanceConfig(enabled, weightByRemaining bool) {
+	if configurable, ok := s.candidates.(interface{ SetBalanceConfig(bool, bool) }); ok {
+		configurable.SetBalanceConfig(enabled, weightByRemaining)
+	}
+}
+
 // SetCostExposureRecorder 注入成本敞口记录器（DESIGN-bill-on-cancel 阶段一）；nil 表示不启用。
 func (s *MessagesService) SetCostExposureRecorder(recorder lifecycle.CostExposureRecorder, assumedOutputFallback int64) {
 	s.lifecycle.SetCostExposureRecorder(recorder, assumedOutputFallback)
@@ -134,6 +141,10 @@ func (s *MessagesService) SetStickyRouter(sticky *lifecycle.StickyRouter) {
 // SetRoutingLogger 注入 sticky/skip/wait/failover 结构化日志；nil 表示不打日志。
 func (s *MessagesService) SetRoutingLogger(logger *zap.Logger) {
 	s.attemptRunner.SetLogger(logger)
+}
+
+func (s *MessagesService) SetRoutingTraceRecorder(recorder *lifecycle.RoutingTraceRecorder) {
+	s.lifecycle.SetRoutingTraceRecorder(recorder)
 }
 
 // messagesSafeMessage 把 messages 编排专用 ad-hoc string code 映射成可展示文案；

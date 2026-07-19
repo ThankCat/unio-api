@@ -79,26 +79,37 @@ func (a *Adapter) Messages(ctx context.Context, ch channel.Runtime, req MessageR
 		)
 	}
 
+	requestID := upstreamRequestID(httpResp.Header)
 	var wire messagesResponse
 	if err := json.Unmarshal(body, &wire); err != nil {
-		return nil, failure.Wrap(
-			failure.CodeAdapterDecodeResponseFailed,
-			err,
-			failure.WithMessage("anthropic adapter decode messages response"),
+		return nil, newUpstreamProtocolError(
+			httpResp.StatusCode,
+			requestID,
+			body,
+			failure.Wrap(
+				failure.CodeAdapterDecodeResponseFailed,
+				err,
+				failure.WithMessage("anthropic adapter decode messages response"),
+			),
 		)
 	}
 
 	if wire.ID == "" || len(wire.Content) == 0 {
-		return nil, failure.New(
-			failure.CodeAdapterInvalidResponse,
-			failure.WithMessage("anthropic adapter empty messages response"),
+		return nil, newUpstreamProtocolError(
+			httpResp.StatusCode,
+			requestID,
+			body,
+			failure.New(
+				failure.CodeAdapterInvalidResponse,
+				failure.WithMessage("anthropic adapter empty messages response"),
+			),
 		)
 	}
 
 	usage := messageUsageFromWire(wire.Usage)
 	meta := adapter.UpstreamMetadata{
 		StatusCode: httpResp.StatusCode,
-		RequestID:  upstreamRequestID(httpResp.Header),
+		RequestID:  requestID,
 	}
 	rawReason := derefString(wire.StopReason)
 

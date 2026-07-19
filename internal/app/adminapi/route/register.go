@@ -4,8 +4,10 @@ import "github.com/go-chi/chi/v5"
 
 // Deps 是线路模块的路由依赖。
 type Deps struct {
-	Service    RouteService
-	OpsService RouteOpsService
+	Service             RouteService
+	OpsService          RouteOpsService
+	RoutingTraceService RoutingTraceService
+	RuntimeService      RuntimeService
 }
 
 // Register 注册线路模块路由。静态 /routes/ops 必须在 /routes/{id} 之前注册。
@@ -21,6 +23,14 @@ func Register(r chi.Router, d Deps) {
 		r.Get("/routes/{id}/ops/performance", roh.performance)
 		r.Get("/routes/{id}/ops/models", roh.models)
 		r.Get("/routes/{id}/ops/requests", roh.requests)
+	}
+	if d.RoutingTraceService != nil {
+		rth := &routingTraceHandler{service: d.RoutingTraceService}
+		r.Get("/routes/{id}/ops/decisions", rth.list)
+	}
+	if d.RuntimeService != nil {
+		ruh := &runtimeHandler{service: d.RuntimeService}
+		r.Get("/routes/{id}/ops/runtime", ruh.get)
 	}
 
 	if d.Service != nil {

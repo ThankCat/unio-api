@@ -15,26 +15,30 @@ import (
 )
 
 type fakeChannelStore struct {
-	provider      sqlc.Provider
-	providerErr   error
-	createRow     sqlc.Channel
-	createErr     error
-	createParam   sqlc.CreateChannelParams
-	createCalls   int
-	credentialAff int64
-	credentialErr error
-	deleteAff     int64
-	deleteErr     error
-	deleteID      int64
-	deleteCalls   int
-	getRow        sqlc.Channel
-	getErr        error
-	archiveAff    int64
-	archiveErr    error
-	archiveID     int64
-	restoreAff    int64
-	restoreErr    error
-	restoreID     int64
+	provider                sqlc.Provider
+	providerErr             error
+	createRow               sqlc.Channel
+	createErr               error
+	createParam             sqlc.CreateChannelParams
+	createCalls             int
+	credentialAff           int64
+	credentialErr           error
+	deleteAff               int64
+	deleteErr               error
+	deleteID                int64
+	deleteCalls             int
+	getRow                  sqlc.Channel
+	getErr                  error
+	archiveAff              int64
+	archiveErr              error
+	archiveID               int64
+	archiveReplacementAff   int64
+	archiveReplacementParam sqlc.ArchiveChannelWithReplacementParams
+	emptyRoutes             []sqlc.ListEnabledRoutesEmptiedByChannelRow
+	emptyRouteErr           error
+	restoreAff              int64
+	restoreErr              error
+	restoreID               int64
 
 	rateLimitsParam sqlc.SetChannelRateLimitsParams
 	rateLimitsCalls int
@@ -87,6 +91,13 @@ func (s *fakeChannelStore) DeleteChannelCascade(_ context.Context, id int64) (in
 func (s *fakeChannelStore) ArchiveChannelCascade(_ context.Context, id int64) (int64, error) {
 	s.archiveID = id
 	return s.archiveAff, s.archiveErr
+}
+func (s *fakeChannelStore) ArchiveChannelWithReplacement(_ context.Context, arg sqlc.ArchiveChannelWithReplacementParams) (int64, error) {
+	s.archiveReplacementParam = arg
+	return s.archiveReplacementAff, s.archiveErr
+}
+func (s *fakeChannelStore) ListEnabledRoutesEmptiedByChannel(context.Context, int64) ([]sqlc.ListEnabledRoutesEmptiedByChannelRow, error) {
+	return s.emptyRoutes, s.emptyRouteErr
 }
 func (s *fakeChannelStore) RestoreChannel(_ context.Context, id int64) (int64, error) {
 	s.restoreID = id
@@ -327,7 +338,7 @@ func TestDeleteConflictOnForeignKeyViolation(t *testing.T) {
 func TestArchiveAndRestore(t *testing.T) {
 	store := &fakeChannelStore{archiveAff: 1, restoreAff: 1, getRow: sqlc.Channel{ID: 9, ProviderID: 3, Status: "archived"}, provider: sqlc.Provider{ID: 3, Status: "enabled"}}
 	svc := newChannelService(store)
-	if err := svc.Archive(context.Background(), 9); err != nil {
+	if err := svc.Archive(context.Background(), 9, nil); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
 	if store.archiveID != 9 {
@@ -338,6 +349,41 @@ func TestArchiveAndRestore(t *testing.T) {
 	}
 	if store.restoreID != 9 {
 		t.Fatalf("expected restore id 9, got %d", store.restoreID)
+	}
+}
+
+func TestArchiveRejectsEmptyingEnabledRoute(t *testing.T) {
+	store := &fakeChannelStore{
+		archiveAff:  1,
+		emptyRoutes: []sqlc.ListEnabledRoutesEmptiedByChannelRow{{ID: 3, Name: "production"}},
+	}
+	err := newChannelService(store).Archive(context.Background(), 9, nil)
+	if failure.CodeOf(err) != failure.CodeAdminConflict {
+		t.Fatalf("expected conflict, got %v", err)
+	}
+	if store.archiveID != 0 {
+		t.Fatal("archive mutation must not run when an enabled route would be emptied")
+	}
+}
+
+func TestArchiveAtomicallyReplacesChannel(t *testing.T) {
+	replacementID := int64(10)
+	store := &fakeChannelStore{
+		getRow: sqlc.Channel{
+			ID: replacementID, ProviderID: 3, Status: "enabled", CredentialValid: true,
+			Credential: "sk-live", BaseUrl: "https://upstream.example/v1",
+		},
+		provider:              sqlc.Provider{ID: 3, Status: "enabled"},
+		archiveReplacementAff: 1,
+	}
+	if err := newChannelService(store).Archive(context.Background(), 9, &replacementID); err != nil {
+		t.Fatalf("replace and archive channel: %v", err)
+	}
+	if store.archiveReplacementParam.ID != 9 || store.archiveReplacementParam.ReplacementChannelID != replacementID {
+		t.Fatalf("unexpected atomic archive params: %+v", store.archiveReplacementParam)
+	}
+	if store.archiveID != 0 {
+		t.Fatal("legacy archive mutation must not run for replacement operation")
 	}
 }
 

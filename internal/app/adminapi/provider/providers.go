@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -19,7 +20,7 @@ type ProviderService interface {
 	Create(ctx context.Context, in provider.CreateInput) (provider.Provider, error)
 	Update(ctx context.Context, in provider.UpdateInput) (provider.Provider, error)
 	Delete(ctx context.Context, id int64) error
-	Archive(ctx context.Context, id int64) error
+	Archive(ctx context.Context, id int64, replacementChannelID *int64) error
 	Restore(ctx context.Context, id int64) error
 }
 
@@ -138,7 +139,14 @@ func (h *providersHandler) archive(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	if err := h.service.Archive(r.Context(), id); err != nil {
+	var req struct {
+		ReplacementChannelID *int64 `json:"replacement_channel_id"`
+	}
+	if err := httpx.DecodeJSON(w, r, &req); err != nil && !errors.Is(err, httpx.ErrEmptyJSONBody) {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	if err := h.service.Archive(r.Context(), id, req.ReplacementChannelID); err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}

@@ -26,14 +26,15 @@ import (
 )
 
 type fakeProviderService struct {
-	listOut   []provider.Provider
-	getOut    provider.Provider
-	getErr    error
-	createOut provider.Provider
-	createErr error
-	updateOut provider.Provider
-	updateErr error
-	deleteErr error
+	listOut            []provider.Provider
+	getOut             provider.Provider
+	getErr             error
+	createOut          provider.Provider
+	createErr          error
+	updateOut          provider.Provider
+	updateErr          error
+	deleteErr          error
+	archiveReplacement *int64
 }
 
 func (s *fakeProviderService) List(context.Context, provider.ListParams) (provider.ListResult, error) {
@@ -51,15 +52,19 @@ func (s *fakeProviderService) Update(context.Context, provider.UpdateInput) (pro
 func (s *fakeProviderService) Delete(context.Context, int64) error {
 	return s.deleteErr
 }
-func (s *fakeProviderService) Archive(context.Context, int64) error { return nil }
+func (s *fakeProviderService) Archive(_ context.Context, _ int64, replacement *int64) error {
+	s.archiveReplacement = replacement
+	return nil
+}
 func (s *fakeProviderService) Restore(context.Context, int64) error { return nil }
 
 type fakeChannelService struct {
-	createOut         channel.Channel
-	createErr         error
-	rotateErr         error
-	deleteErr         error
-	adapterKeyOptions []channel.AdapterKeyOption
+	createOut          channel.Channel
+	createErr          error
+	rotateErr          error
+	deleteErr          error
+	adapterKeyOptions  []channel.AdapterKeyOption
+	archiveReplacement *int64
 }
 
 func (s *fakeChannelService) List(context.Context, channel.ListParams) (channel.ListResult, error) {
@@ -80,7 +85,10 @@ func (s *fakeChannelService) RotateCredential(context.Context, channel.RotateCre
 func (s *fakeChannelService) Delete(context.Context, int64) error {
 	return s.deleteErr
 }
-func (s *fakeChannelService) Archive(context.Context, int64) error { return nil }
+func (s *fakeChannelService) Archive(_ context.Context, _ int64, replacement *int64) error {
+	s.archiveReplacement = replacement
+	return nil
+}
 func (s *fakeChannelService) Restore(context.Context, int64) error { return nil }
 func (s *fakeChannelService) AdapterKeyOptions() []channel.AdapterKeyOption {
 	return s.adapterKeyOptions
@@ -313,6 +321,62 @@ func TestDeleteProviderConflictReturns409(t *testing.T) {
 	}
 }
 
+func TestArchiveProviderAcceptsReplacement(t *testing.T) {
+	svc := &fakeProviderService{}
+	handler := newServicesRouter(t, svc, nil)
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers/7/archive", `{"replacement_channel_id":10}`, true)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if svc.archiveReplacement == nil || *svc.archiveReplacement != 10 {
+		t.Fatalf("replacement channel was not forwarded: %v", svc.archiveReplacement)
+	}
+}
+
+func TestArchiveProviderAcceptsEmptyBody(t *testing.T) {
+	svc := &fakeProviderService{}
+	handler := newServicesRouter(t, svc, nil)
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers/7/archive", "", true)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if svc.archiveReplacement != nil {
+		t.Fatalf("unexpected replacement channel: %v", svc.archiveReplacement)
+	}
+}
+
+func TestArchiveChannelAcceptsReplacement(t *testing.T) {
+	svc := &fakeChannelService{}
+	handler := newServicesRouter(t, nil, svc)
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/9/archive", `{"replacement_channel_id":10}`, true)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if svc.archiveReplacement == nil || *svc.archiveReplacement != 10 {
+		t.Fatalf("replacement channel was not forwarded: %v", svc.archiveReplacement)
+	}
+}
+
+func TestArchiveChannelRejectsMalformedJSON(t *testing.T) {
+	handler := newServicesRouter(t, nil, &fakeChannelService{})
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/9/archive", `{`, true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestArchiveChannelAcceptsEmptyBody(t *testing.T) {
+	svc := &fakeChannelService{}
+	handler := newServicesRouter(t, nil, svc)
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/9/archive", "", true)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if svc.archiveReplacement != nil {
+		t.Fatalf("unexpected replacement channel: %v", svc.archiveReplacement)
+	}
+}
+
 func TestCreateChannelUnsupportedBindingReturns422(t *testing.T) {
 	handler := newServicesRouter(t, nil, &fakeChannelService{createErr: failure.New(failure.CodeAdminAdapterBindingUnsupported, failure.WithMessage("unsupported"))})
 
@@ -489,9 +553,9 @@ func TestChannelPricesRequireToken(t *testing.T) {
 }
 
 func TestCreateRouteReturns201(t *testing.T) {
-	handler := newRouteRouter(t, &fakeRouteService{createOut: route.Route{ID: 3, Name: "C-line", Mode: "fixed", PoolKind: "explicit", Status: "enabled"}})
+	handler := newRouteRouter(t, &fakeRouteService{createOut: route.Route{ID: 3, Name: "C-line", Mode: "fixed", Status: "enabled"}})
 
-	body := `{"name":"C-line","mode":"fixed","pool_kind":"explicit","status":"enabled","channel_ids":[5]}`
+	body := `{"name":"C-line","mode":"fixed","status":"enabled","channel_ids":[5]}`
 	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/routes", body, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
@@ -501,7 +565,7 @@ func TestCreateRouteReturns201(t *testing.T) {
 func TestCreateRouteFixedValidationReturns400(t *testing.T) {
 	handler := newRouteRouter(t, &fakeRouteService{createErr: failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("fixed route must list exactly one channel"), failure.WithField("field", "channel_ids"))})
 
-	body := `{"name":"C-line","mode":"fixed","pool_kind":"explicit","status":"enabled","channel_ids":[]}`
+	body := `{"name":"C-line","mode":"fixed","status":"enabled","channel_ids":[]}`
 	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/routes", body, true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())

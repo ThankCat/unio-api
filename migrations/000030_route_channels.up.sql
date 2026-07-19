@@ -1,5 +1,5 @@
--- Route channel 是自定义线路（pool_kind='explicit'）的渠道池成员（阶段 15）。
--- pool_kind='all' 的线路不得有 route_channels 行；mode='fixed' 必须恰好一条（由 service 层强校验）。
+-- Route channel 是线路唯一的显式渠道池来源。
+-- 所有线路至少一条；mode='fixed' 必须恰好一条（由 service 层强校验）。
 CREATE TABLE public.route_channels (
     -- route_id: 所属线路，线路删除时级联清理。--
     route_id bigint NOT NULL,
