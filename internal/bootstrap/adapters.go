@@ -30,6 +30,8 @@ import (
 // logger 注入到各 provider adapter，用于记录按 DEC-012 出站 Drop 的请求字段；传 nil 时
 // adapter 内部回退到 zap no-op logger。官方 1P adapter 零 Drop，无需 logger。
 func NewAdapterRegistry(client *http.Client, logger *zap.Logger) (*lifecycle.AdapterRegistry, error) {
+	client = upstreamHTTPClient(client)
+
 	openAIDeepSeekAdapter := openaideepseek.NewAdapter(client, logger)
 	openAIOfficialAdapter := chatcompletionsadapter.NewAdapter(client)
 	openAIResponsesAdapter := openairesponses.NewAdapter(client)
@@ -81,4 +83,17 @@ func NewAdapterRegistry(client *http.Client, logger *zap.Logger) (*lifecycle.Ada
 	}
 
 	return lifecycle.NewAdapterRegistry(openAIRegistry, anthropicRegistry)
+}
+
+// upstreamHTTPClient preserves the caller's transport/timeouts while making one adapter call
+// correspond to at most one real HTTP request. In particular, 307/308 must not replay POST bodies.
+func upstreamHTTPClient(base *http.Client) *http.Client {
+	if base == nil {
+		base = http.DefaultClient
+	}
+	client := *base
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &client
 }

@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ThankCat/unio-gateway/internal/core/runtimecontrol"
+	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/provider"
@@ -40,6 +42,7 @@ type fakeProviderStore struct {
 	restoreAff              int64
 	restoreErr              error
 	restoreID               int64
+	endpoints               []sqlc.ProviderEndpoint
 }
 
 func (s *fakeProviderStore) ListProvidersPage(context.Context, sqlc.ListProvidersPageParams) ([]sqlc.Provider, error) {
@@ -91,6 +94,36 @@ func (s *fakeProviderStore) ListEnabledRoutesEmptiedByProvider(context.Context, 
 func (s *fakeProviderStore) RestoreProvider(_ context.Context, id int64) (int64, error) {
 	s.restoreID = id
 	return s.restoreAff, s.restoreErr
+}
+
+func (s *fakeProviderStore) ListProviderEndpointsByProvider(context.Context, int64) ([]sqlc.ProviderEndpoint, error) {
+	return s.endpoints, nil
+}
+
+type fakeProviderFencePublisher struct {
+	result runtimecontrol.PublishResult
+}
+
+func (p *fakeProviderFencePublisher) Publish(context.Context, runtimecontrol.EndpointFenceRequest) (runtimecontrol.PublishResult, error) {
+	return p.result, nil
+}
+
+func (*fakeProviderFencePublisher) WithEndpointLocks(context.Context, int64, []int64, func(context.Context, pgx.Tx) error) error {
+	return nil
+}
+
+type fakeProviderFenceOps struct{}
+
+func (fakeProviderFenceOps) PrepareEndpointStatusRevisionBatch(context.Context, int64, []breakerstore.EndpointStatusRevisionTransition, int, string, string) (breakerstore.FenceResult, error) {
+	return "", nil
+}
+
+func (fakeProviderFenceOps) CommitEndpointStatusRevisionBatch(context.Context, int64, []breakerstore.EndpointStatusRevisionTransition, string, string) (breakerstore.FenceResult, error) {
+	return "", nil
+}
+
+func (fakeProviderFenceOps) AbortEndpointStatusRevisionBatch(context.Context, int64, []breakerstore.EndpointStatusRevisionTransition, string, string) (breakerstore.FenceResult, error) {
+	return "", nil
 }
 
 func TestCreateRejectsInvalidArguments(t *testing.T) {
@@ -167,6 +200,37 @@ func TestUpdateNotFound(t *testing.T) {
 	}
 }
 
+func TestUpdateReturnsPendingAndCountsOnlyEffectiveEndpointTransitions(t *testing.T) {
+	store := &fakeProviderStore{
+		getRow: sqlc.Provider{ID: 7, Name: "OpenAI", Status: provider.StatusEnabled},
+		endpoints: []sqlc.ProviderEndpoint{
+			{ID: 11, ProviderID: 7, Status: provider.StatusEnabled, BaseUrlRevision: 1, StatusRevision: 3},
+			{ID: 12, ProviderID: 7, Status: provider.StatusDisabled, BaseUrlRevision: 1, StatusRevision: 5},
+			{ID: 13, ProviderID: 7, Status: provider.StatusArchived, BaseUrlRevision: 1, StatusRevision: 8},
+		},
+	}
+	fencePublisher := &fakeProviderFencePublisher{result: runtimecontrol.PublishResult{
+		State: runtimecontrol.PublishRuntimeSyncPending,
+	}}
+	svc := provider.NewService(store).WithStatusFencer(
+		provider.NewStatusFencer(fencePublisher, fakeProviderFenceOps{}),
+		nil,
+	)
+
+	got, err := svc.Update(context.Background(), provider.UpdateInput{
+		ID: 7, Name: "OpenAI", Status: provider.StatusDisabled,
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !got.RuntimeSyncPending {
+		t.Fatal("expected runtime sync pending")
+	}
+	if got.AffectedEndpointCount != 1 {
+		t.Fatalf("expected only the enabled endpoint to transition, got %d", got.AffectedEndpointCount)
+	}
+}
+
 func TestDeleteRejectsInvalidID(t *testing.T) {
 	store := &fakeProviderStore{}
 	err := provider.NewService(store).Delete(context.Background(), 0)
@@ -222,13 +286,13 @@ func TestDeleteConflictOnForeignKeyViolation(t *testing.T) {
 func TestArchiveAndRestore(t *testing.T) {
 	store := &fakeProviderStore{archiveAff: 1, restoreAff: 1}
 	svc := provider.NewService(store)
-	if err := svc.Archive(context.Background(), 7, nil); err != nil {
+	if _, err := svc.Archive(context.Background(), 7, nil); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
 	if store.archiveID != 7 {
 		t.Fatalf("expected archive id 7, got %d", store.archiveID)
 	}
-	if err := svc.Restore(context.Background(), 7); err != nil {
+	if _, err := svc.Restore(context.Background(), 7); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	if store.restoreID != 7 {
@@ -241,7 +305,7 @@ func TestArchiveRejectsEmptyingEnabledRoute(t *testing.T) {
 		archiveAff:  1,
 		emptyRoutes: []sqlc.ListEnabledRoutesEmptiedByProviderRow{{ID: 3, Name: "production"}},
 	}
-	err := provider.NewService(store).Archive(context.Background(), 7, nil)
+	_, err := provider.NewService(store).Archive(context.Background(), 7, nil)
 	if failure.CodeOf(err) != failure.CodeAdminConflict {
 		t.Fatalf("expected conflict, got %v", err)
 	}
@@ -255,12 +319,12 @@ func TestArchiveAtomicallyReplacesProviderChannels(t *testing.T) {
 	store := &fakeProviderStore{
 		getRow: sqlc.Provider{ID: 8, Status: "enabled"},
 		getChannelRow: sqlc.Channel{
-			ID: replacementID, ProviderID: 8, Status: "enabled", CredentialValid: true,
-			Credential: "sk-live", BaseUrl: "https://upstream.example/v1",
+			ID: replacementID, ProviderID: 8, ProviderEndpointID: 3, Status: "enabled", CredentialValid: true,
+			Credential: "sk-live",
 		},
 		archiveReplacementAff: 1,
 	}
-	if err := provider.NewService(store).Archive(context.Background(), 7, &replacementID); err != nil {
+	if _, err := provider.NewService(store).Archive(context.Background(), 7, &replacementID); err != nil {
 		t.Fatalf("replace and archive provider: %v", err)
 	}
 	if store.archiveReplacementParam.ID != 7 || store.archiveReplacementParam.ReplacementChannelID != replacementID {

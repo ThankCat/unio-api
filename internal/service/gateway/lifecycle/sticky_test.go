@@ -210,9 +210,9 @@ func TestStickyRedisKeyShape(t *testing.T) {
 	}
 }
 
-// TestPrepareCandidatesStickyPinOverridesModeAndDemote 验证 sticky 置顶绝对优先于 balanced 排序
-// 与失败软冷却 demote（R5），且渠道不在池时 StickyPinned=false（调用方据此清绑定）。
-func TestPrepareCandidatesStickyPinOverridesModeAndDemote(t *testing.T) {
+// TestPrepareCandidatesStickyPinOverridesMode 验证 sticky 置顶绝对优先于 balanced 排序（R5），
+// 且渠道不在池时 StickyPinned=false（调用方据此清绑定）。
+func TestPrepareCandidatesStickyPinOverridesMode(t *testing.T) {
 	executor := NewExecutor(candidateCapabilityRegistry{
 		allowed: map[int64]bool{1: true, 2: true, 3: true},
 	})
@@ -226,10 +226,6 @@ func TestPrepareCandidatesStickyPinOverridesModeAndDemote(t *testing.T) {
 		},
 		EstimateInputTokens: func(_ context.Context, _ routing.ChatRouteCandidate) (int64, error) {
 			return 1, nil
-		},
-		// channel 2 处于失败软冷却（demote 到队尾）——sticky 置顶必须压过它。
-		FailurePreferred: func(c routing.ChatRouteCandidate) bool {
-			return c.Channel.ID != 2
 		},
 		StickyChannelID: 2,
 	}
@@ -245,7 +241,7 @@ func TestPrepareCandidatesStickyPinOverridesModeAndDemote(t *testing.T) {
 		t.Fatalf("expected sticky channel 2 pinned to front, got %d", plan.Candidates[0].Route.Channel.ID)
 	}
 	if !plan.StickyPinnedNonPreferred {
-		t.Fatal("expected StickyPinnedNonPreferred when sticky channel was demoted away from front")
+		t.Fatal("expected StickyPinnedNonPreferred when sticky channel was not first")
 	}
 	if len(plan.Candidates) != 3 {
 		t.Fatalf("pin must not drop candidates, got %d", len(plan.Candidates))

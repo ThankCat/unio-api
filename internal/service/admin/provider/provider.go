@@ -62,13 +62,21 @@ type ListResult struct {
 
 // Provider 是 admin 视角的 provider 业务事实。
 type Provider struct {
-	ID         int64
-	Slug       string
-	Name       string
-	Status     string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	ArchivedAt *time.Time
+	ID                    int64
+	Slug                  string
+	Name                  string
+	Status                string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	ArchivedAt            *time.Time
+	RuntimeSyncPending    bool
+	AffectedEndpointCount int
+}
+
+// StatusChangeResult 是 Provider 状态写入后可安全返回给 Admin 的运行态同步摘要。
+type StatusChangeResult struct {
+	RuntimeSyncPending    bool
+	AffectedEndpointCount int
 }
 
 // CreateInput 是创建 provider 的入参。
@@ -87,12 +95,23 @@ type UpdateInput struct {
 
 // Service 编排 provider 管理读写。
 type Service struct {
-	store Store
+	store    Store
+	fencer   *StatusFencer
+	batchMax func(context.Context) int
 }
 
 // NewService 创建 provider 管理服务。
 func NewService(store Store) *Service {
-	return &Service{store: store}
+	return &Service{store: store, batchMax: func(context.Context) int { return 256 }}
+}
+
+// WithStatusFencer enables the production Provider status batch fence.
+func (s *Service) WithStatusFencer(fencer *StatusFencer, batchMax func(context.Context) int) *Service {
+	s.fencer = fencer
+	if batchMax != nil {
+		s.batchMax = batchMax
+	}
+	return s
 }
 
 // List 按 params 过滤分页列出 provider，并返回过滤后的总数。
@@ -197,6 +216,34 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Provider, error) 
 		return Provider{}, err
 	}
 
+	current, err := s.store.GetProvider(ctx, in.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Provider{}, notFound("provider not found")
+		}
+		return Provider{}, storeFailed(err, "get provider")
+	}
+	if current.Status != status && s.fencer != nil {
+		endpoints, err := s.listEndpoints(ctx, in.ID)
+		if err != nil {
+			return Provider{}, err
+		}
+		result, err := s.fencer.publish(ctx, providerStatusChange{
+			Current: current, NextName: name, NextStatus: status,
+			Endpoints: endpoints, MaxBatch: s.batchMax(ctx),
+		})
+		if err != nil {
+			return Provider{}, err
+		}
+		updated, err := s.Get(ctx, in.ID)
+		if err != nil {
+			return Provider{}, err
+		}
+		updated.RuntimeSyncPending = result.RuntimeSyncPending
+		updated.AffectedEndpointCount = result.AffectedEndpointCount
+		return updated, nil
+	}
+
 	row, err := s.store.UpdateProvider(ctx, sqlc.UpdateProviderParams{
 		ID:     in.ID,
 		Name:   name,
@@ -249,78 +296,149 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 
 // Archive 归档 provider：单事务内级联归档名下渠道（释放渠道名）+ 从线路池移除，再置 provider archived。
 // slug 不变。幂等：已归档返回 not_found（0 行）。恢复不向下级联。
-func (s *Service) Archive(ctx context.Context, id int64, replacementChannelID *int64) error {
+func (s *Service) Archive(ctx context.Context, id int64, replacementChannelID *int64) (StatusChangeResult, error) {
 	if id <= 0 {
-		return invalidArgument("id", "provider id must be positive")
+		return StatusChangeResult{}, invalidArgument("id", "provider id must be positive")
+	}
+	var current sqlc.Provider
+	if s.fencer != nil {
+		var err error
+		current, err = s.store.GetProvider(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return StatusChangeResult{}, notFound("provider not found")
+			}
+			return StatusChangeResult{}, storeFailed(err, "get provider")
+		}
+		if current.Status == StatusArchived {
+			return StatusChangeResult{}, notFound("provider not found or already archived")
+		}
 	}
 	if replacementChannelID != nil {
 		if *replacementChannelID <= 0 {
-			return invalidArgument("replacement_channel_id", "replacement channel id must be positive")
+			return StatusChangeResult{}, invalidArgument("replacement_channel_id", "replacement channel id must be positive")
 		}
 		replacement, err := s.store.GetChannel(ctx, *replacementChannelID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return invalidArgument("replacement_channel_id", "replacement channel not found")
+				return StatusChangeResult{}, invalidArgument("replacement_channel_id", "replacement channel not found")
 			}
-			return storeFailed(err, "get replacement channel")
+			return StatusChangeResult{}, storeFailed(err, "get replacement channel")
 		}
 		if replacement.ProviderID == id {
-			return invalidArgument("replacement_channel_id", "replacement channel must belong to another provider")
+			return StatusChangeResult{}, invalidArgument("replacement_channel_id", "replacement channel must belong to another provider")
 		}
-		if replacement.Status != StatusEnabled || !replacement.CredentialValid || replacement.Credential == "" || replacement.BaseUrl == "" {
-			return conflict("replacement channel must be enabled, credential-valid, and fully configured")
+		if replacement.Status != StatusEnabled || !replacement.CredentialValid || replacement.Credential == "" {
+			return StatusChangeResult{}, conflict("replacement channel must be enabled, credential-valid, and fully configured")
 		}
 		replacementProvider, err := s.store.GetProvider(ctx, replacement.ProviderID)
 		if err != nil {
-			return storeFailed(err, "get replacement channel provider")
+			return StatusChangeResult{}, storeFailed(err, "get replacement channel provider")
 		}
 		if replacementProvider.Status != StatusEnabled {
-			return conflict("replacement channel provider must be enabled")
+			return StatusChangeResult{}, conflict("replacement channel provider must be enabled")
+		}
+		if s.fencer != nil {
+			endpoints, err := s.listEndpoints(ctx, id)
+			if err != nil {
+				return StatusChangeResult{}, err
+			}
+			return s.fencer.publish(ctx, providerStatusChange{
+				Current: current, NextName: current.Name, NextStatus: StatusArchived,
+				Endpoints: endpoints, MaxBatch: s.batchMax(ctx), Archive: true,
+				ArchiveReplacementID: replacementChannelID,
+			})
 		}
 		affected, err := s.store.ArchiveProviderWithReplacement(ctx, sqlc.ArchiveProviderWithReplacementParams{
 			ID: id, ReplacementChannelID: *replacementChannelID,
 		})
 		if err != nil {
-			return storeFailed(err, "replace and archive provider")
+			return StatusChangeResult{}, storeFailed(err, "replace and archive provider")
 		}
 		if affected == 0 {
-			return conflict("provider archive could not commit because the target or replacement changed")
+			return StatusChangeResult{}, conflict("provider archive could not commit because the target or replacement changed")
 		}
-		return nil
+		return StatusChangeResult{}, nil
 	}
 	affectedRoutes, err := s.store.ListEnabledRoutesEmptiedByProvider(ctx, id)
 	if err != nil {
-		return storeFailed(err, "check provider archive route impact")
+		return StatusChangeResult{}, storeFailed(err, "check provider archive route impact")
 	}
 	if len(affectedRoutes) > 0 {
-		return conflict(fmt.Sprintf(
+		return StatusChangeResult{}, conflict(fmt.Sprintf(
 			"archiving provider would empty enabled route %q (%d); replace its channels or disable the route first",
 			affectedRoutes[0].Name, affectedRoutes[0].ID,
 		))
 	}
+	if s.fencer != nil {
+		endpoints, err := s.listEndpoints(ctx, id)
+		if err != nil {
+			return StatusChangeResult{}, err
+		}
+		return s.fencer.publish(ctx, providerStatusChange{
+			Current: current, NextName: current.Name, NextStatus: StatusArchived,
+			Endpoints: endpoints, MaxBatch: s.batchMax(ctx), Archive: true,
+		})
+	}
 	affected, err := s.store.ArchiveProviderCascade(ctx, id)
 	if err != nil {
-		return storeFailed(err, "archive provider")
+		return StatusChangeResult{}, storeFailed(err, "archive provider")
 	}
 	if affected == 0 {
-		return notFound("provider not found or already archived")
+		return StatusChangeResult{}, notFound("provider not found or already archived")
 	}
-	return nil
+	return StatusChangeResult{}, nil
 }
 
 // Restore 取消归档 provider：archived → disabled。名下渠道保持归档，需逐个恢复。
-func (s *Service) Restore(ctx context.Context, id int64) error {
+func (s *Service) Restore(ctx context.Context, id int64) (StatusChangeResult, error) {
 	if id <= 0 {
-		return invalidArgument("id", "provider id must be positive")
+		return StatusChangeResult{}, invalidArgument("id", "provider id must be positive")
+	}
+	if s.fencer != nil {
+		current, err := s.store.GetProvider(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return StatusChangeResult{}, notFound("provider not found")
+			}
+			return StatusChangeResult{}, storeFailed(err, "get provider")
+		}
+		if current.Status != StatusArchived {
+			return StatusChangeResult{}, notFound("provider not found or not archived")
+		}
+		endpoints, err := s.listEndpoints(ctx, id)
+		if err != nil {
+			return StatusChangeResult{}, err
+		}
+		return s.fencer.publish(ctx, providerStatusChange{
+			Current: current, NextName: current.Name, NextStatus: StatusDisabled,
+			Endpoints: endpoints, MaxBatch: s.batchMax(ctx), Restore: true,
+		})
 	}
 	affected, err := s.store.RestoreProvider(ctx, id)
 	if err != nil {
-		return storeFailed(err, "restore provider")
+		return StatusChangeResult{}, storeFailed(err, "restore provider")
 	}
 	if affected == 0 {
-		return notFound("provider not found or not archived")
+		return StatusChangeResult{}, notFound("provider not found or not archived")
 	}
-	return nil
+	return StatusChangeResult{}, nil
+}
+
+type providerEndpointLister interface {
+	ListProviderEndpointsByProvider(ctx context.Context, providerID int64) ([]sqlc.ProviderEndpoint, error)
+}
+
+func (s *Service) listEndpoints(ctx context.Context, providerID int64) ([]sqlc.ProviderEndpoint, error) {
+	lister, ok := s.store.(providerEndpointLister)
+	if !ok {
+		return nil, storeFailed(errors.New("provider endpoint lister is not configured"), "list provider endpoints")
+	}
+	rows, err := lister.ListProviderEndpointsByProvider(ctx, providerID)
+	if err != nil {
+		return nil, storeFailed(err, "list provider endpoints")
+	}
+	return rows, nil
 }
 
 func toProvider(p sqlc.Provider) Provider {

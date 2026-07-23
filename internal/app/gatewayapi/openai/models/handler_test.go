@@ -7,11 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
-	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
 )
 
 // modelsTestAPIKeyAuthenticator 是 models 测试使用的 API Key 认证器。
@@ -220,82 +218,5 @@ func TestRouterModelsServiceError(t *testing.T) {
 
 	if body.Error.Code != "internal_error" {
 		t.Fatalf("expected error code %q, got %q", "internal_error", body.Error.Code)
-	}
-}
-
-func TestRouterModelsUsesRateLimit(t *testing.T) {
-	authenticator := &modelsTestAPIKeyAuthenticator{
-		principal: &auth.APIKeyPrincipal{
-			APIKeyID:  1,
-			UserID:    1,
-			RouteID:   ptrInt64(9),
-			KeyPrefix: "unio_sk_test",
-		},
-	}
-	limiter := &routerTestRateLimiter{
-		decision: ratelimit.Decision{
-			Allowed:   true,
-			Limit:     60,
-			Remaining: 59,
-			ResetAt:   time.Date(2026, 5, 8, 10, 1, 0, 0, time.UTC),
-		},
-	}
-	handler := newTestRouter(authenticator, nil, limiter)
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
-	}
-
-	if limiter.routeID != 9 || limiter.userID != 1 {
-		t.Fatalf("expected rate limit route 9 / user 1, got route %d / user %d", limiter.routeID, limiter.userID)
-	}
-}
-
-func TestRouterModelsRateLimited(t *testing.T) {
-	authenticator := &modelsTestAPIKeyAuthenticator{
-		principal: &auth.APIKeyPrincipal{
-			APIKeyID:  1,
-			UserID:    1,
-			RouteID:   ptrInt64(9),
-			KeyPrefix: "unio_sk_test",
-		},
-	}
-	limiter := &routerTestRateLimiter{
-		decision: ratelimit.Decision{
-			Allowed:   false,
-			Limit:     60,
-			Remaining: 0,
-			ResetAt:   time.Date(2026, 5, 8, 10, 1, 0, 0, time.UTC),
-		},
-	}
-	handler := newTestRouter(authenticator, nil, limiter)
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected status %d, got %d", http.StatusTooManyRequests, rec.Code)
-	}
-
-	var body struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
-	}
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("decode response body: %v", err)
-	}
-
-	if body.Error.Code != "rate_limited" {
-		t.Fatalf("expected error code %q, got %q", "rate_limited", body.Error.Code)
 	}
 }

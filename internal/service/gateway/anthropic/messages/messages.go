@@ -13,10 +13,11 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
-// CreateMessage 编排非流式 Anthropic Messages 请求，并返回原生 Message 响应。
-func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.MessageRequest) (*gatewayapi.MessageResponse, error) {
+// CreateMessage 编排非流式 Anthropic Messages 请求，并返回公开 DTO 与内部交付 finalizer。
+func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.MessageRequest) (*lifecycle.NonStreamResult[*gatewayapi.MessageResponse], error) {
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
 		return nil, failure.Wrap(
@@ -76,6 +77,10 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
 		})
 	}
+	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
+		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
+		return nil, err
+	}
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
@@ -132,10 +137,11 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 			return lifecycle.AttemptSuccess{ResponseID: resp.ID, Facts: resp.Facts}, nil
 		},
 	})
-	if runResult.Attempts > 1 && principal.RouteID != nil {
+	if runResult.RoutingFallback && principal.RouteID != nil {
 		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
 			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
-			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(), Attempts: runResult.Attempts,
+			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+			FallbackOccurred: true, FallbackChain: runResult.TransportChain,
 		})
 	}
 	outcome = runResult.Outcome
@@ -143,5 +149,5 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 		return nil, err
 	}
 	resp := mapAdapterResponseToGateway(req.Model, *adapterResp)
-	return &resp, nil
+	return lifecycle.NewNonStreamResult(&resp, runResult.Delivery), nil
 }

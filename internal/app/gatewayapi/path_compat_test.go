@@ -28,6 +28,7 @@ func TestCanonicalizeV1Path(t *testing.T) {
 		{"unknown root path kept for clean 404", "/not-found", "/not-found"},
 		{"unknown v1 path collapsed but not invented", "/v1/v1/not-found", "/v1/not-found"},
 		{"healthz exempt", "/healthz", "/healthz"},
+		{"readyz exempt", "/readyz", "/readyz"},
 		{"metrics exempt", "/metrics", "/metrics"},
 		{"root exempt", "/", "/"},
 	}

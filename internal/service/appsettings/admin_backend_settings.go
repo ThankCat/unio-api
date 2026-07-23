@@ -13,8 +13,8 @@ import (
 // 本地 3s 缓存即可满足生效时效(admin QPS 低,不走 applier)。
 // 渠道检测 worker 同样现读本域(可无 Redis,退化为 DB + 本地缓存)。
 
-// AdminBackendChannelHealthKey 是渠道健康分桶阈值在 app_settings 中的 key。
-const AdminBackendChannelHealthKey = "admin_backend.channel_health_thresholds"
+// P4 §2.10/§8.3：admin_backend.channel_health_thresholds 主观健康分桶阈值已删除；
+// 运营只看客观事实（成功率、失败次数、流式 TTFT、总耗时、熔断、容量、权重），不再按阈值分桶。
 
 // AdminBackendChannelTestKey 是渠道检测/自动巡检的聚合配置(开关、间隔、探测超时、日志保留)。
 const AdminBackendChannelTestKey = "admin_backend.channel_test"
@@ -31,78 +31,6 @@ const DefaultChannelTestWorkerIntervalSetting = 30 * time.Minute
 
 // DefaultChannelTestLogRetentionSetting 与迁移前 CHANNEL_TEST_LOG_RETENTION_PER_CHANNEL 默认一致。
 const DefaultChannelTestLogRetentionSetting = 200
-
-// ChannelHealthThresholds 是渠道健康分桶阈值(按区间内 attempt 成功率):
-// >= HealthyRate 为 healthy,>= DegradedRate 为 degraded,否则 unhealthy(无样本 no_data)。
-// 纯运维展示分类,不影响路由/计费。
-type ChannelHealthThresholds struct {
-	HealthyRate  float64
-	DegradedRate float64
-}
-
-// DefaultChannelHealthThresholds 与迁移前散落各包的 0.95/0.80 硬编码一致。
-func DefaultChannelHealthThresholds() ChannelHealthThresholds {
-	return ChannelHealthThresholds{HealthyRate: 0.95, DegradedRate: 0.80}
-}
-
-type channelHealthThresholdsDoc struct {
-	HealthyRate  float64 `json:"healthy_rate"`
-	DegradedRate float64 `json:"degraded_rate"`
-}
-
-func encodeChannelHealthThresholds(t ChannelHealthThresholds) json.RawMessage {
-	raw, err := json.Marshal(channelHealthThresholdsDoc{
-		HealthyRate:  t.HealthyRate,
-		DegradedRate: t.DegradedRate,
-	})
-	if err != nil {
-		panic(fmt.Sprintf("appsettings: encode channel health thresholds: %v", err))
-	}
-	return raw
-}
-
-// DecodeChannelHealthThresholds 解码并校验分桶阈值(拒绝未知字段;0 < degraded < healthy <= 1)。
-func DecodeChannelHealthThresholds(raw []byte) (ChannelHealthThresholds, error) {
-	var doc channelHealthThresholdsDoc
-	if err := strictUnmarshal(raw, &doc); err != nil {
-		return ChannelHealthThresholds{}, err
-	}
-	t := ChannelHealthThresholds{HealthyRate: doc.HealthyRate, DegradedRate: doc.DegradedRate}
-	if t.DegradedRate <= 0 || t.HealthyRate > 1 || t.DegradedRate >= t.HealthyRate {
-		return ChannelHealthThresholds{}, errors.New("thresholds must satisfy 0 < degraded_rate < healthy_rate <= 1")
-	}
-	return t, nil
-}
-
-func channelHealthThresholdsDefinition() Definition {
-	return Definition{
-		Key:      AdminBackendChannelHealthKey,
-		Category: "admin_backend",
-		Label:    "渠道健康分桶阈值",
-		Description: "按区间内 attempt 成功率给渠道分桶:≥healthy_rate 为 healthy,≥degraded_rate 为 degraded," +
-			"否则 unhealthy。仅影响后台健康展示/分布统计,不影响路由与计费。须满足 0 < degraded_rate < healthy_rate ≤ 1。" +
-			"默认与前端「请求成功率」告警档位(admin_frontend.dashboard_thresholds)对齐,但两者主体不同、可独立调档。",
-		HotReload: true,
-		Default:   encodeChannelHealthThresholds(DefaultChannelHealthThresholds()),
-		Validate: func(raw json.RawMessage) error {
-			_, err := DecodeChannelHealthThresholds(raw)
-			return err
-		},
-	}
-}
-
-// AdminBackendChannelHealthThresholds 读取当前生效的分桶阈值。
-// store 为 nil(如单测)或解码失败时回默认——展示分类兜底默认无风险。
-func AdminBackendChannelHealthThresholds(ctx context.Context, store *SettingsStore) ChannelHealthThresholds {
-	if store == nil {
-		return DefaultChannelHealthThresholds()
-	}
-	t, err := DecodeChannelHealthThresholds(store.Raw(ctx, AdminBackendChannelHealthKey))
-	if err != nil {
-		return DefaultChannelHealthThresholds()
-	}
-	return t
-}
 
 // ---- 渠道检测 / 自动巡检(聚合) ----
 

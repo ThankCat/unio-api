@@ -123,7 +123,7 @@ func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 
 	selectedChannel := channel.Runtime{
 		ID:      123,
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}
@@ -228,7 +228,7 @@ func TestAdapterChatCompletionsPreservesResponseFields(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 
 	got, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{
@@ -307,7 +307,7 @@ func TestAdapterChatCompletionsReturnsErrorForMissingUsage(t *testing.T) {
 			openAIAdapter := newTestAdapter(server.Client())
 
 			_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
-				BaseURL: server.URL + "/v1",
+				BaseURL: server.URL,
 				APIKey:  "test-secret",
 				Timeout: 30 * time.Second,
 			}, ChatRequest{
@@ -336,7 +336,7 @@ func TestAdapterChatCompletionsReturnsErrorForUpstreamStatus(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{
@@ -374,7 +374,7 @@ func TestAdapterChatCompletionsRejectsOversizedResponseBody(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{
@@ -401,7 +401,7 @@ func TestAdapterStreamChatCompletionsTransportFailureIsRetryableServerError(t *t
 
 	_, err := newTestAdapter(server.Client()).StreamChatCompletions(
 		context.Background(),
-		channel.Runtime{BaseURL: server.URL + "/v1", APIKey: "test-secret", Timeout: 30 * time.Second},
+		channel.Runtime{BaseURL: server.URL, APIKey: "test-secret", Timeout: 30 * time.Second},
 		adapterChatRequestWithParams(),
 		func(ChatStreamChunk) error { return nil },
 	)
@@ -430,7 +430,7 @@ func TestAdapterStreamChatCompletionsIncompleteStreamIsRetryableServerError(t *t
 
 	_, err := newTestAdapter(server.Client()).StreamChatCompletions(
 		context.Background(),
-		channel.Runtime{BaseURL: server.URL + "/v1", APIKey: "test-secret", Timeout: 30 * time.Second},
+		channel.Runtime{BaseURL: server.URL, APIKey: "test-secret", Timeout: 30 * time.Second},
 		adapterChatRequestWithParams(),
 		func(ChatStreamChunk) error { return nil },
 	)
@@ -472,7 +472,7 @@ func TestAdapterStreamChatCompletionsIdleTimeout(t *testing.T) {
 	_, err := openAIAdapter.StreamChatCompletions(
 		context.Background(),
 		channel.Runtime{
-			BaseURL: server.URL + "/v1",
+			BaseURL: server.URL,
 			APIKey:  "test-secret",
 			Timeout: 5 * time.Second,
 		},
@@ -499,7 +499,7 @@ func TestAdapterChatCompletionsUsesChannelTimeout(t *testing.T) {
 	_, err := openAIAdapter.ChatCompletions(
 		context.Background(),
 		channel.Runtime{
-			BaseURL: server.URL + "/v1",
+			BaseURL: server.URL,
 			APIKey:  "test-secret",
 			Timeout: 50 * time.Millisecond,
 		},
@@ -643,7 +643,7 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 	selectedChannel := channel.Runtime{
 		ID:      123,
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}
@@ -784,7 +784,7 @@ func TestAdapterStreamChatCompletionsParsesMultilineSSEEvent(t *testing.T) {
 
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{
@@ -832,7 +832,7 @@ func TestAdapterStreamChatCompletionsParsesOpenAIRawSSEFixture(t *testing.T) {
 
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{
@@ -902,7 +902,7 @@ func TestAdapterStreamChatCompletionsPreservesChunkFields(t *testing.T) {
 
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{
@@ -964,7 +964,7 @@ func TestAdapterStreamChatCompletionsParsesDeepSeekUsageTail(t *testing.T) {
 	got := make([]ChatStreamChunk, 0)
 	outcome, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		ProviderSlug: "deepseek",
-		BaseURL:      server.URL + "/v1",
+		BaseURL:      server.URL,
 		APIKey:       "test-secret",
 		Timeout:      30 * time.Second,
 	}, ChatRequest{
@@ -1025,7 +1025,7 @@ func TestAdapterStreamChatCompletionsForwardsDeepSeekReasoningContent(t *testing
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		ProviderSlug: "deepseek",
-		BaseURL:      server.URL + "/v1",
+		BaseURL:      server.URL,
 		APIKey:       "test-secret",
 		Timeout:      30 * time.Second,
 	}, ChatRequest{
@@ -1073,7 +1073,7 @@ func TestAdapterStreamChatCompletionsDoesNotForwardReasoningWithoutDeepSeekNorma
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
 		ProviderSlug: "openai",
-		BaseURL:      server.URL + "/v1",
+		BaseURL:      server.URL,
 		APIKey:       "test-secret",
 		Timeout:      30 * time.Second,
 	}, ChatRequest{
@@ -1127,7 +1127,7 @@ func TestAdapterStreamChatCompletionsParsesLargeSSEEvent(t *testing.T) {
 
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{
@@ -1160,7 +1160,7 @@ func TestAdapterStreamChatCompletionsReturnsErrorForUpstreamStatus(t *testing.T)
 	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{
@@ -1193,7 +1193,7 @@ func TestAdapterStreamChatCompletionsReturnsErrorForBadSSEJSON(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{
@@ -1254,7 +1254,7 @@ func TestAdapterStreamChatCompletionsStopsWhenEmitReturnsError(t *testing.T) {
 
 	emitCalls := 0
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{
@@ -1330,7 +1330,7 @@ func TestAdapterStreamChatCompletionsStopsAtDone(t *testing.T) {
 
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{
@@ -1373,7 +1373,7 @@ func TestAdapterStreamChatCompletionsReturnsFactsWithTailErrorBeforeDone(t *test
 	outcome, err := newTestAdapter(server.Client()).StreamChatCompletions(
 		context.Background(),
 		channel.Runtime{
-			BaseURL: server.URL + "/v1",
+			BaseURL: server.URL,
 			APIKey:  "test-secret",
 			Timeout: 30 * time.Second,
 		},

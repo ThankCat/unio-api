@@ -99,20 +99,21 @@ func derefInt64(value *int64) int64 {
 
 // chatSettlementDBDeps 保存 chat settlement 集成测试依赖。
 type chatSettlementDBDeps struct {
-	ctx            context.Context
-	cancel         context.CancelFunc
-	pool           *pgxpool.Pool
-	queries        *sqlc.Queries
-	userID         int64
-	apiKeyID       int64
-	routeID        int64
-	providerID     int64
-	channelID      int64
-	modelID        int64
-	channelPriceID int64
-	reservationID  int64
-	requestRecord  sqlc.RequestRecord
-	attemptRecord  sqlc.RequestAttempt
+	ctx                context.Context
+	cancel             context.CancelFunc
+	pool               *pgxpool.Pool
+	queries            *sqlc.Queries
+	userID             int64
+	apiKeyID           int64
+	routeID            int64
+	providerID         int64
+	providerEndpointID int64
+	channelID          int64
+	modelID            int64
+	channelPriceID     int64
+	reservationID      int64
+	requestRecord      sqlc.RequestRecord
+	attemptRecord      sqlc.RequestAttempt
 }
 
 // newChatSettlementDBDeps 创建带真实数据库记录的 chat settlement 测试依赖。
@@ -173,6 +174,9 @@ func (d *chatSettlementDBDeps) cleanup() {
 	}
 	if d.channelID != 0 {
 		_, _ = d.pool.Exec(ctx, `DELETE FROM channels WHERE id = $1`, d.channelID)
+	}
+	if d.providerEndpointID != 0 {
+		_, _ = d.pool.Exec(ctx, `DELETE FROM provider_endpoints WHERE id = $1`, d.providerEndpointID)
 	}
 	if d.providerID != 0 {
 		_, _ = d.pool.Exec(ctx, `DELETE FROM providers WHERE id = $1`, d.providerID)
@@ -251,7 +255,7 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 	d.apiKeyID = apiKey.ID
 
 	d.providerID = insertChatSettlementProvider(t, d.ctx, d.pool, suffix)
-	d.channelID = insertChatSettlementChannel(t, d.ctx, d.pool, d.providerID, suffix)
+	d.channelID, d.providerEndpointID = insertChatSettlementChannel(t, d.ctx, d.pool, d.providerID, suffix)
 	d.modelID = insertChatSettlementModel(t, d.ctx, d.pool, suffix)
 	insertChatSettlementChannelModel(t, d.ctx, d.pool, d.channelID, d.modelID)
 
@@ -300,21 +304,27 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 	d.requestRecord = requestRecord
 
 	attemptRecord, err := d.queries.CreateRequestAttempt(d.ctx, sqlc.CreateRequestAttemptParams{
-		RequestRecordID:       requestRecord.ID,
-		AttemptIndex:          0,
-		ProviderID:            d.providerID,
-		ChannelID:             d.channelID,
-		AdapterKey:            "openai",
-		UpstreamModel:         "gpt-4.1",
-		UpstreamProtocol:      string(requestlog.ProtocolOpenAI),
-		UpstreamResponseModel: pgtype.Text{Valid: false},
-		Status:                string(requestlog.AttemptStatusRunning),
-		UpstreamStatusCode:    pgtype.Int4{Valid: false},
-		UpstreamRequestID:     pgtype.Text{Valid: false},
-		ErrorCode:             pgtype.Text{Valid: false},
-		ErrorMessage:          pgtype.Text{Valid: false},
-		StartedAt:             pgtype.Timestamptz{Time: time.Now(), Valid: true},
-		CompletedAt:           pgtype.Timestamptz{Valid: false},
+		RequestRecordID:                 requestRecord.ID,
+		AttemptIndex:                    0,
+		ProviderID:                      d.providerID,
+		ProviderEndpointID:              d.providerEndpointID,
+		ChannelID:                       d.channelID,
+		ProviderEndpointBaseUrlRevision: 1,
+		ProviderEndpointStatusRevision:  1,
+		ChannelConfigRevision:           1,
+		RoutingCandidateIndex:           0,
+		AdapterKey:                      "openai",
+		UpstreamModel:                   "gpt-4.1",
+		UpstreamProtocol:                string(requestlog.ProtocolOpenAI),
+		UpstreamOperation:               string(requestlog.UpstreamOperationChatCompletions),
+		UpstreamResponseModel:           pgtype.Text{Valid: false},
+		Status:                          string(requestlog.AttemptStatusRunning),
+		UpstreamStatusCode:              pgtype.Int4{Valid: false},
+		UpstreamRequestID:               pgtype.Text{Valid: false},
+		ErrorCode:                       pgtype.Text{Valid: false},
+		ErrorMessage:                    pgtype.Text{Valid: false},
+		StartedAt:                       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		CompletedAt:                     pgtype.Timestamptz{Valid: false},
 	})
 	if err != nil {
 		t.Fatalf("create request attempt: %v", err)
@@ -444,20 +454,29 @@ func insertChatSettlementProvider(t *testing.T, ctx context.Context, pool *pgxpo
 }
 
 // insertChatSettlementChannel 插入测试 channel。
-func insertChatSettlementChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, providerID int64, suffix int64) int64 {
+func insertChatSettlementChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, providerID int64, suffix int64) (int64, int64) {
 	t.Helper()
+
+	var endpointID int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO provider_endpoints (provider_id, name, base_url, status)
+		VALUES ($1, $2, $3, 'enabled')
+		RETURNING id
+	`, providerID, fmt.Sprintf("chat-settlement-ep-%d", suffix), fmt.Sprintf("https://example-%d.test", suffix)).Scan(&endpointID); err != nil {
+		t.Fatalf("insert provider endpoint: %v", err)
+	}
 
 	var id int64
 	err := pool.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms)
-		VALUES ($1, $2, 'openai', 'openai', $3, $4, $5, $6, $7)
+		INSERT INTO channels (provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
+		VALUES ($1, $2, $3, 'openai', 'openai', $4, $5, $6, $7)
 		RETURNING id
-	`, providerID, fmt.Sprintf("chat-settlement-channel-%d", suffix), "https://example.test/v1", "sk-chat-settlement-test", "enabled", 10, 30000).Scan(&id)
+	`, providerID, endpointID, fmt.Sprintf("chat-settlement-channel-%d", suffix), "sk-chat-settlement-test", "enabled", 10, 30000).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
 
-	return id
+	return id, endpointID
 }
 
 // insertChatSettlementModel 插入测试 model。

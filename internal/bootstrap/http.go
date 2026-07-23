@@ -11,31 +11,21 @@ import (
 	gatewayresponses "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
-	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
-	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
-	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
-	"github.com/redis/go-redis/v9"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
 // NewHTTPHandler 创建当前 server 进程使用的 HTTP handler。
-//
-// rateLimitGuard 是进程内唯一的限流 Guard(与三协议 service 共用同一实例,DEC §11.5)：
-// HTTP 中间件(线路+用户 RPM/RPD)与 attempt runner(TPM/渠道级)共用同一默认上限与故障策略,
-// settingsApplier 热更新时只需更新这一个实例。
 func NewHTTPHandler(
 	logger *zap.Logger,
 	queries *sqlc.Queries,
-	rateLimitGuard *ratelimit.Guard,
-	concurrencyLimiter *ratelimit.ConcurrencyLimiter,
+	requestAdmission *requestadmission.Manager,
 	chatCompletionService gatewayopenai.ChatCompletionService,
 	responsesService gatewayresponses.ResponsesService,
 	messagesService gatewayanthropic.MessagesService,
 	metricsRecorder *metrics.Metrics,
-	channelBreaker *lifecycle.ChannelCircuitBreaker,
-	gatewayCfg config.GatewayConfig,
+	readiness gatewayapi.ReadinessProbe,
 ) http.Handler {
 	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
 	modelCatalogService := modelcatalog.NewService(queries)
@@ -43,35 +33,19 @@ func NewHTTPHandler(
 	deps := gatewayapi.RouterDeps{
 		Logger:              logger,
 		APIKeyAuthenticator: apiKeyAuthenticator,
-		RateLimiter:         rateLimitGuard,
-		ConcurrencyLimiter:  concurrencyLimiter,
+		RequestAdmission:    requestAdmission,
+		Readiness:           readiness,
 
 		ChatCompletionService: chatCompletionService,
 		ResponsesService:      responsesService,
 		MessagesService:       messagesService,
 		ModelCatalogService:   modelCatalogService,
-
-		CircuitBreaker: channelBreaker,
-		InternalToken:  gatewayCfg.InternalToken,
-		InstanceID:     gatewayCfg.InstanceID,
 	}
 
 	if metricsRecorder != nil {
 		deps.HTTPMetrics = metricsRecorder
-		deps.RateLimitMetrics = metricsRecorder
 		deps.MetricsHandler = metricsRecorder.Handler()
 	}
 
 	return gatewayapi.NewRouter(deps)
-}
-
-// NewRateLimitGuard 构造两层限流 Guard（P2-8）：Redis 滑动窗口计数 + 全局默认上限 + 故障策略。
-// 默认上限与故障策略来自运行时配置(gateway.rate_limit_defaults),之后由 settingsApplier 热更新。
-func NewRateLimitGuard(redisClient redis.Cmdable, keyNamespace string, defaults appsettings.RateLimitDefaultsSettings, logger *zap.Logger) *ratelimit.Guard {
-	store := ratelimit.NewSlidingWindowStore(redisClient, keyNamespace)
-	return ratelimit.NewGuard(store, ratelimit.DefaultLimits{
-		RPM: defaults.RPM,
-		TPM: defaults.TPM,
-		RPD: defaults.RPD,
-	}, defaults.FailOpen(), logger)
 }

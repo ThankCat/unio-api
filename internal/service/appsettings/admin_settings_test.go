@@ -26,7 +26,6 @@ func TestRegistryCategoryMatchesKeyPrefix(t *testing.T) {
 func TestAdminDomainSettingsRegistered(t *testing.T) {
 	reg := DefaultRegistry()
 	for _, key := range []string{
-		AdminBackendChannelHealthKey,
 		AdminBackendChannelTestKey,
 		AdminFrontendDashboardThresholdsKey,
 	} {
@@ -99,50 +98,6 @@ func TestChannelTestSettingsRejectsInvalid(t *testing.T) {
 		if _, err := DecodeChannelTestSettings([]byte(raw)); err == nil {
 			t.Errorf("%s: expected error, got nil", name)
 		}
-	}
-}
-
-func TestChannelHealthThresholdsRoundTrip(t *testing.T) {
-	want := ChannelHealthThresholds{HealthyRate: 0.99, DegradedRate: 0.5}
-	got, err := DecodeChannelHealthThresholds(encodeChannelHealthThresholds(want))
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got != want {
-		t.Fatalf("round trip = %+v, want %+v", got, want)
-	}
-}
-
-func TestChannelHealthThresholdsDefaultsMatchLegacyConstants(t *testing.T) {
-	// 与迁移前散落各包的 0.95/0.80 对齐(迁移不改行为)。
-	got := DefaultChannelHealthThresholds()
-	if got.HealthyRate != 0.95 || got.DegradedRate != 0.80 {
-		t.Fatalf("defaults = %+v, want 0.95/0.80", got)
-	}
-}
-
-func TestChannelHealthThresholdsRejectsInvalid(t *testing.T) {
-	cases := map[string]string{
-		"degraded zero":       `{"healthy_rate":0.95,"degraded_rate":0}`,
-		"degraded negative":   `{"healthy_rate":0.95,"degraded_rate":-0.1}`,
-		"healthy above one":   `{"healthy_rate":1.5,"degraded_rate":0.8}`,
-		"degraded >= healthy": `{"healthy_rate":0.8,"degraded_rate":0.9}`,
-		"equal":               `{"healthy_rate":0.9,"degraded_rate":0.9}`,
-		"unknown field":       `{"healthy_rate":0.95,"degraded_rate":0.8,"typo":1}`,
-	}
-	for name, raw := range cases {
-		if _, err := DecodeChannelHealthThresholds([]byte(raw)); err == nil {
-			t.Errorf("%s: expected error, got nil", name)
-		}
-	}
-}
-
-// TestAdminBackendChannelHealthThresholdsNilStore 验证 nil store 回默认
-// (admin service 单测传 nil 即走旧硬编码行为)。
-func TestAdminBackendChannelHealthThresholdsNilStore(t *testing.T) {
-	got := AdminBackendChannelHealthThresholds(context.Background(), nil)
-	if got != DefaultChannelHealthThresholds() {
-		t.Fatalf("nil store should yield defaults, got %+v", got)
 	}
 }
 

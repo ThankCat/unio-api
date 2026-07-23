@@ -14,27 +14,28 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
-// CreateResponse 编排非流式 Responses 请求，并返回 OpenAI Responses 协议响应对象。
+// CreateResponse 编排非流式 Responses 请求，并返回公开 DTO 与内部交付 finalizer。
 //
 // 按候选 adapter 能力分流（DEC：上游 responses 直传 + 第三方桥接）：
 //   - 直传候选（adapter 原生支持上游 /responses）：直连上游 /responses，响应原文透传（仅改写 model 回显）；
 //   - 桥接候选（chat-only 第三方，如 deepseek）：沿用 DEC-014 responses→chat 桥接，再翻译回 Responses 响应。
 //
 // 两条路径产出统一 adapter.ResponseFacts，资金关键循环、attempt 审计与终态写入由共享 AttemptRunner 承担。
-func (s *ResponsesService) CreateResponse(ctx context.Context, req gatewayapi.ResponsesRequest) (*gatewayapi.ResponsesResponse, error) {
-	result, err := s.executeResponse(ctx, req, true)
+func (s *ResponsesService) CreateResponse(ctx context.Context, req gatewayapi.ResponsesRequest) (*lifecycle.NonStreamResult[*gatewayapi.ResponsesResponse], error) {
+	result, delivery, err := s.executeResponse(ctx, req, true)
 	if err != nil {
 		return nil, err
 	}
 	if result.direct != nil {
 		// 直传：原文透传上游响应体，仅改写顶层 model 回显为客户请求名（零转换）。
 		data := rewriteResponsesModel(result.direct.Raw, req.Model)
-		return gatewayapi.RawResponsesResponse(data), nil
+		return lifecycle.NewNonStreamResult(gatewayapi.RawResponsesResponse(data), delivery), nil
 	}
 	resp := mapChatResponseToResponses(req, *result.chat)
-	return &resp, nil
+	return lifecycle.NewNonStreamResult(&resp, delivery), nil
 }
 
 // responseResult 是一次非流式 Responses 成功调用的判别式结果：恰好其一非空。
@@ -52,6 +53,11 @@ type nonStreamStrategy struct {
 	allowDirect bool
 	resolve     lifecycle.ResolveAdapter
 	invoke      lifecycle.NonStreamInvoke
+
+	// operationForCandidate and transparentFallback are used by Compact to represent Native
+	// 404/405 -> Synthetic as two separately admitted transports. Other Responses paths leave both nil.
+	operationForCandidate lifecycle.NonStreamOperationResolver
+	transparentFallback   *lifecycle.NonStreamTransparentFallback
 
 	// upstreamCostWithoutUsage 可选：命中时 runner 释放冻结并记 risk_exposure（不重试/不普通释放），
 	// 用于「上游可能已计费但无可靠 usage」（compact 2xx 缺 usage，P0-3）。nil 表示沿用普通失败语义。
@@ -77,13 +83,13 @@ func multiAgentBridgeUnsupported() error {
 //
 // allowDirect=false 时强制全部走桥接（与 CompactHistory 的 synthetic 估算口径一致）。协议差异（直传/
 // 桥接调用与响应捕获）由 resolve/invoke 闭包按候选注入，scaffold 复用 runNonStream。
-func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.ResponsesRequest, allowDirect bool) (responseResult, error) {
+func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.ResponsesRequest, allowDirect bool) (responseResult, lifecycle.DeliveryFinalizer, error) {
 	var (
 		chatAdapter   chatcompletionsadapter.ChatAdapter
 		directAdapter responsesadapter.ResponsesAdapter
 		result        responseResult
 	)
-	err := s.runNonStream(ctx, req, nonStreamStrategy{
+	delivery, err := s.runNonStream(ctx, req, nonStreamStrategy{
 		allowDirect: allowDirect,
 		resolve: func(candidate routing.ChatRouteCandidate) error {
 			if allowDirect && s.registry.HasResponses(candidate.AdapterKey) {
@@ -139,7 +145,7 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 			return lifecycle.AttemptSuccess{ResponseID: resp.ID, Facts: resp.Facts}, nil
 		},
 	})
-	return result, err
+	return result, delivery, err
 }
 
 // runNonStream 执行 authorization 之后由共享 AttemptRunner 驱动的非流式 Responses 候选 fallback 计费循环。
@@ -147,10 +153,10 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 // 本方法承担 routing、authorization、共享候选循环、metrics outcome 与终态写入；协议/路径差异（候选能力
 // 过滤口径、per-candidate 上游调用与响应捕获）由 strat 注入。CreateResponse（直传/桥接）与 CompactHistory
 // （native/synthetic）共用本 scaffold，资金关键链路只此一份。
-func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.ResponsesRequest, strat nonStreamStrategy) error {
+func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.ResponsesRequest, strat nonStreamStrategy) (lifecycle.DeliveryFinalizer, error) {
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
-		return failure.Wrap(
+		return nil, failure.Wrap(
 			failure.CodeAuthMissingAPIKey,
 			auth.ErrMissingAPIKey,
 			failure.WithMessage(auth.ErrMissingAPIKey.Error()),
@@ -163,7 +169,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	}
 	requestRecord, err := s.lifecycle.CreateRequest(ctx, principal, req.Model, false, lifecycle.NormalizeOpenAIEffort(effort, req.Model))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// outcome 默认 failed，仅成功/取消路径覆盖；defer 保证每个请求只计一次，不遗漏提前返回的失败分支。
@@ -187,7 +193,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	if err != nil {
 		s.lifecycle.RecordRoutingFailure(ctx, requestRecord, principal.RouteID, err)
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
-		return err
+		return nil, err
 	}
 
 	// 会话粘性（大 uncache 缺口 P0）：提取会话键并 lookup 既有绑定，置顶绑定渠道；
@@ -203,7 +209,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, plan.RouteMode, false, strat.allowDirect, stickySession.BoundChannelID())
 	if err != nil {
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
-		return err
+		return nil, err
 	}
 	stickySession.ApplyPlanOutcome(ctx, candidatePlan)
 	if principal.RouteID != nil {
@@ -211,6 +217,10 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
 		})
+	}
+	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
+		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
+		return nil, err
 	}
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
@@ -224,7 +234,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	})
 	if err != nil {
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, "chat_authorization_failed", err)
-		return err
+		return nil, err
 	}
 
 	runResult, err := s.attemptRunner.RunNonStream(ctx, lifecycle.RunNonStreamParams{
@@ -238,15 +248,18 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		Sticky:                   stickySession,
 		ResolveAdapter:           strat.resolve,
 		Invoke:                   strat.invoke,
+		OperationForCandidate:    strat.operationForCandidate,
+		TransparentFallback:      strat.transparentFallback,
 		Codes:                    strat.codes,
 		UpstreamCostWithoutUsage: strat.upstreamCostWithoutUsage,
 	})
-	if runResult.Attempts > 1 && principal.RouteID != nil {
+	if runResult.RoutingFallback && principal.RouteID != nil {
 		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
 			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
-			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(), Attempts: runResult.Attempts,
+			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+			FallbackOccurred: true, FallbackChain: runResult.TransportChain,
 		})
 	}
 	outcome = runResult.Outcome
-	return err
+	return runResult.Delivery, err
 }

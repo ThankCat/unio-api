@@ -131,25 +131,49 @@ type responsesStreamCarrier struct {
 func responsesStreamCarrierMeta(c responsesStreamCarrier) lifecycle.StreamChunkMeta {
 	if c.direct != nil {
 		return lifecycle.StreamChunkMeta{
-			ID:           c.direct.ResponseID,
-			FinishReason: c.direct.FinishReason,
-			Usage:        c.direct.Usage,
-			SuppressEmit: false,
-			VisibleText:  directResponsesVisibleText(*c.direct),
+			ID:                 c.direct.ResponseID,
+			FinishReason:       c.direct.FinishReason,
+			Usage:              c.direct.Usage,
+			SuppressEmit:       false,
+			FirstTokenEligible: directResponsesFirstTokenEligible(c.direct.EventType),
+			VisibleText:        directResponsesVisibleText(*c.direct),
 		}
 	}
 
 	chunk := c.chat
 	meta := lifecycle.StreamChunkMeta{
-		ID:           chunk.ID,
-		Usage:        chunk.Usage,
-		SuppressEmit: chunk.Usage != nil,
-		VisibleText:  chunk.Content,
+		ID:                 chunk.ID,
+		Usage:              chunk.Usage,
+		SuppressEmit:       chunk.Usage != nil,
+		FirstTokenEligible: chatBridgeFirstTokenEligible(*chunk),
+		VisibleText:        chunk.Content,
 	}
 	if chunk.FinishReason != nil {
 		meta.FinishReason = *chunk.FinishReason
 	}
 	return meta
+}
+
+func directResponsesFirstTokenEligible(eventType string) bool {
+	switch eventType {
+	case gatewayapi.EventResponseCreated,
+		gatewayapi.EventOutputTextDelta,
+		gatewayapi.EventReasoningTextDelta,
+		gatewayapi.EventReasoningSummaryTextDelta,
+		gatewayapi.EventFunctionCallArgsDelta:
+		return true
+	default:
+		return false
+	}
+}
+
+func chatBridgeFirstTokenEligible(chunk chatcompletionsadapter.ChatStreamChunk) bool {
+	return chunk.Role != "" ||
+		chunk.Content != "" ||
+		(chunk.ReasoningContent != nil && *chunk.ReasoningContent != "") ||
+		len(chunk.ToolCalls) > 0 ||
+		(chunk.Refusal != nil && *chunk.Refusal != "") ||
+		len(chunk.FunctionCall) > 0
 }
 
 // directResponsesVisibleText extracts customer-visible text deltas from raw Responses stream events.

@@ -101,6 +101,8 @@ type fakeMessagesRequestLog struct {
 	createRequests        []requestlog.CreateRequestParams
 	markRequestFailedArgs []requestlog.MarkRequestFailedParams
 	markRequestCanceled   []requestlog.MarkRequestCanceledParams
+	deliveryCompleted     []int64
+	deliveryInterrupted   []int64
 	createAttempts        []requestlog.CreateAttemptParams
 	capabilityResults     []string
 }
@@ -127,6 +129,16 @@ func (s *fakeMessagesRequestLog) MarkRequestRunning(ctx context.Context, id int6
 
 func (s *fakeMessagesRequestLog) MarkRequestResponseStarted(ctx context.Context, params requestlog.MarkResponseStartedParams) (requestlog.RequestRecord, error) {
 	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusRunning, ResponseStartedAt: &params.ResponseStartedAt}, nil
+}
+
+func (s *fakeMessagesRequestLog) MarkRequestDeliveryCompleted(_ context.Context, id int64, completedAt time.Time) (requestlog.RequestRecord, error) {
+	s.deliveryCompleted = append(s.deliveryCompleted, id)
+	return requestlog.RequestRecord{ID: id, DeliveryStatus: requestlog.DeliveryStatusCompleted, ResponseCompletedAt: &completedAt}, nil
+}
+
+func (s *fakeMessagesRequestLog) MarkRequestDeliveryInterrupted(_ context.Context, id int64) (requestlog.RequestRecord, error) {
+	s.deliveryInterrupted = append(s.deliveryInterrupted, id)
+	return requestlog.RequestRecord{ID: id, DeliveryStatus: requestlog.DeliveryStatusInterrupted}, nil
 }
 
 func (s *fakeMessagesRequestLog) MarkRequestSucceeded(ctx context.Context, params requestlog.MarkRequestSucceededParams) (requestlog.RequestRecord, error) {
@@ -316,7 +328,6 @@ func newMessagesServiceForTest(router MessagesRouter, registry AdapterRegistry, 
 		settlement,
 		authorizer,
 		nil,
-		nil,
 	)
 }
 
@@ -335,9 +346,19 @@ func TestCreateMessageReturnsResponseAndSettlesWithAnthropicFacts(t *testing.T) 
 		authorizer,
 	)
 
-	resp, err := service.CreateMessage(contextWithPrincipal(42), messageRequest())
+	result, err := service.CreateMessage(contextWithPrincipal(42), messageRequest())
 	if err != nil {
 		t.Fatalf("CreateMessage returned err: %v", err)
+	}
+	resp := result.Response
+	if len(service.requestLog.(*fakeMessagesRequestLog).deliveryCompleted) != 0 || len(service.requestLog.(*fakeMessagesRequestLog).deliveryInterrupted) != 0 {
+		t.Fatal("delivery must stay not_started before the handler write")
+	}
+	if err := result.FinalizeDelivery(func(*gatewayapi.MessageResponse) error { return nil }); err != nil {
+		t.Fatalf("finalize delivery: %v", err)
+	}
+	if len(service.requestLog.(*fakeMessagesRequestLog).deliveryCompleted) != 1 {
+		t.Fatal("expected one completed delivery")
 	}
 	if resp == nil || resp.Type != "message" || resp.Role != "assistant" {
 		t.Fatalf("unexpected response: %#v", resp)
@@ -354,6 +375,9 @@ func TestCreateMessageReturnsResponseAndSettlesWithAnthropicFacts(t *testing.T) 
 		t.Fatalf("expected one settlement attempt, got %d", len(settlement.params))
 	}
 	settled := settlement.params[0]
+	if settled.ResponseStartedAt != nil {
+		t.Fatalf("non-stream response_started_at = %v, want nil", settled.ResponseStartedAt)
+	}
 	if settled.ResponseProtocol != requestlog.ProtocolAnthropic {
 		t.Fatalf("expected anthropic settlement protocol, got %q", settled.ResponseProtocol)
 	}

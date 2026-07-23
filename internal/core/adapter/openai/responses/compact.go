@@ -51,7 +51,10 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 		defer cancel()
 	}
 
-	url := strings.TrimRight(ch.BaseURL, "/") + "/responses/compact"
+	url, err := adapter.BuildUpstreamURL(ch.BaseURL, adapter.OperationPathResponsesCompact)
+	if err != nil {
+		return nil, err
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(req.Body))
 	if err != nil {
 		return nil, failure.Wrap(
@@ -63,6 +66,7 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", ch.APIKey))
 
+	adapter.MarkTransportStarted(ctx)
 	upstreamResp, err := a.client.Do(httpReq)
 	if err != nil {
 		return nil, newUpstreamSendError(err, "send responses compact request")
@@ -71,10 +75,17 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 
 	// 上游不提供原生 compact endpoint（404/405）：收敛为 ErrCompactUnsupported，由 service 回落 Synthetic。
 	if upstreamResp.StatusCode == http.StatusNotFound || upstreamResp.StatusCode == http.StatusMethodNotAllowed {
-		return nil, failure.Wrap(
-			failure.CodeAdapterRequestUnsupported,
-			ErrCompactUnsupported,
-			failure.WithMessage(fmt.Sprintf("upstream does not support native /responses/compact (status %d)", upstreamResp.StatusCode)),
+		return nil, adapter.NewUpstreamError(
+			upstreamCategoryForStatus(upstreamResp.StatusCode),
+			adapter.UpstreamMetadata{
+				StatusCode: upstreamResp.StatusCode,
+				RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
+			},
+			failure.Wrap(
+				failure.CodeAdapterRequestUnsupported,
+				ErrCompactUnsupported,
+				failure.WithMessage(fmt.Sprintf("upstream does not support native /responses/compact (status %d)", upstreamResp.StatusCode)),
+			),
 		)
 	}
 	if upstreamResp.StatusCode < http.StatusOK || upstreamResp.StatusCode >= http.StatusMultipleChoices {
@@ -108,6 +119,9 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 	if parsed.Error != nil {
 		return nil, newUpstreamStreamError(meta, parsed.Error.Code, parsed.Error.Message)
 	}
+	if strings.TrimSpace(parsed.Model) == "" {
+		parsed.Model = modelFromRequestBody(req.Body)
+	}
 
 	chatUsage, ok := chatUsageFromWire(parsed.Usage)
 	if !ok {
@@ -124,6 +138,16 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 		Upstream:   meta,
 		Facts:      facts,
 	}, nil
+}
+
+func modelFromRequestBody(body json.RawMessage) string {
+	var req struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(req.Model)
 }
 
 // compactMissingUsageError 构造「原生 compact 返回 2xx 但拿不到可计费 usage」的结构化上游错误。

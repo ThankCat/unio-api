@@ -11,12 +11,161 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const applyChannelProbeResult = `-- name: ApplyChannelProbeResult :one
+WITH matching AS MATERIALIZED (
+    SELECT c.id, c.credential_valid
+    FROM channels c
+    JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
+    WHERE c.id = $1
+      AND c.config_revision = $2
+      AND pe.base_url_revision = $3
+      AND pe.status_revision = $4
+    FOR UPDATE OF c
+), applied AS (
+    UPDATE channels AS c
+    SET last_tested_at = now(),
+        last_test_ok = $5,
+        last_test_latency_ms = $6,
+        last_test_error = $7,
+        credential_valid = COALESCE($8::boolean, c.credential_valid),
+        config_revision = c.config_revision + CASE
+            WHEN $8::boolean IS NOT NULL
+             AND c.credential_valid IS DISTINCT FROM $8::boolean
+            THEN 1 ELSE 0
+        END,
+        updated_at = CASE
+            WHEN $8::boolean IS NOT NULL
+             AND c.credential_valid IS DISTINCT FROM $8::boolean
+            THEN now() ELSE c.updated_at
+        END
+    FROM matching
+    WHERE c.id = matching.id
+    RETURNING
+        c.id,
+        c.credential_valid,
+        c.config_revision,
+        (matching.credential_valid IS DISTINCT FROM c.credential_valid)::boolean AS state_change_applied
+), current_state AS (
+    SELECT
+        applied.id,
+        applied.credential_valid,
+        applied.config_revision,
+        TRUE AS result_applied,
+        applied.state_change_applied
+    FROM applied
+    UNION ALL
+    SELECT
+        c.id,
+        c.credential_valid,
+        c.config_revision,
+        FALSE AS result_applied,
+        FALSE AS state_change_applied
+    FROM channels c
+    WHERE c.id = $1
+      AND NOT EXISTS (SELECT 1 FROM applied)
+    LIMIT 1
+), logged AS (
+    INSERT INTO channel_test_logs (
+        channel_id,
+        source,
+        success,
+        error_code,
+        http_status,
+        latency_ms,
+        tested_model,
+        credential_valid_after,
+        message,
+        upstream_error,
+        tested_endpoint_base_url_revision,
+        tested_endpoint_status_revision,
+        tested_config_revision,
+        state_change_applied
+    )
+    SELECT
+        current_state.id,
+        $9,
+        $5,
+        $10,
+        $11,
+        $6,
+        $12,
+        current_state.credential_valid,
+        $7,
+        $13,
+        $3,
+        $4,
+        $2,
+        current_state.state_change_applied
+    FROM current_state
+    RETURNING channel_id, credential_valid_after, state_change_applied
+)
+SELECT
+    current_state.result_applied,
+    logged.state_change_applied,
+    logged.credential_valid_after,
+    current_state.config_revision AS current_config_revision
+FROM current_state
+JOIN logged ON logged.channel_id = current_state.id
+`
+
+type ApplyChannelProbeResultParams struct {
+	ChannelID                       int64
+	ExpectedConfigRevision          int64
+	ExpectedEndpointBaseUrlRevision int64
+	ExpectedEndpointStatusRevision  int64
+	Success                         pgtype.Bool
+	LastTestLatencyMs               pgtype.Int4
+	LastTestError                   pgtype.Text
+	NextCredentialValid             pgtype.Bool
+	Source                          string
+	ErrorCode                       pgtype.Text
+	HttpStatus                      pgtype.Int4
+	TestedModel                     pgtype.Text
+	UpstreamError                   pgtype.Text
+}
+
+type ApplyChannelProbeResultRow struct {
+	ResultApplied         bool
+	StateChangeApplied    bool
+	CredentialValidAfter  bool
+	CurrentConfigRevision int64
+}
+
+// ApplyChannelProbeResult 按 Channel config + Endpoint BaseURL/status 三类 expected revision 原子应用检测摘要与 credential_valid，
+// 并无论 current/stale 都写一条带 tested revisions 的历史日志；stale 结果不覆盖当前摘要或凭据状态。
+func (q *Queries) ApplyChannelProbeResult(ctx context.Context, arg ApplyChannelProbeResultParams) (ApplyChannelProbeResultRow, error) {
+	row := q.db.QueryRow(ctx, applyChannelProbeResult,
+		arg.ChannelID,
+		arg.ExpectedConfigRevision,
+		arg.ExpectedEndpointBaseUrlRevision,
+		arg.ExpectedEndpointStatusRevision,
+		arg.Success,
+		arg.LastTestLatencyMs,
+		arg.LastTestError,
+		arg.NextCredentialValid,
+		arg.Source,
+		arg.ErrorCode,
+		arg.HttpStatus,
+		arg.TestedModel,
+		arg.UpstreamError,
+	)
+	var i ApplyChannelProbeResultRow
+	err := row.Scan(
+		&i.ResultApplied,
+		&i.StateChangeApplied,
+		&i.CredentialValidAfter,
+		&i.CurrentConfigRevision,
+	)
+	return i, err
+}
+
 const archiveChannelCascade = `-- name: ArchiveChannelCascade :execrows
 WITH cleared_pools AS (
     DELETE FROM route_channels WHERE channel_id = $1
 )
 UPDATE channels
-SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text,
+    config_revision = config_revision + 1, updated_at = now()
 WHERE channels.id = $1 AND channels.status <> 'archived'
 `
 
@@ -36,12 +185,14 @@ WITH replacement AS (
     SELECT c.id
     FROM channels c
     JOIN providers p ON p.id = c.provider_id
+    JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
     WHERE c.id = $1
       AND c.id <> $2
       AND c.status = 'enabled'
       AND c.credential_valid
       AND c.credential <> ''
-      AND c.base_url <> ''
+      AND pe.base_url <> ''
+      AND pe.status = 'enabled'
       AND p.status = 'enabled'
 ),
 affected_routes AS (
@@ -56,7 +207,8 @@ added AS (
 ),
 archived AS (
     UPDATE channels
-    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text,
+        config_revision = config_revision + 1, updated_at = now()
     WHERE channels.id = $2
       AND channels.status <> 'archived'
       AND EXISTS (SELECT 1 FROM replacement)
@@ -473,7 +625,7 @@ SELECT
     c.status,
     c.protocol,
     c.adapter_key,
-    c.base_url,
+    pe.base_url,
     c.priority,
     c.timeout_ms,
     c.credential,
@@ -546,6 +698,7 @@ SELECT
     ) AS recent_error_code
 FROM channels c
 JOIN providers pr ON pr.id = c.provider_id
+JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
 LEFT JOIN request_attempts a
     ON a.channel_id = c.id
     AND ($1::timestamptz IS NULL OR a.created_at >= $1::timestamptz)
@@ -553,7 +706,7 @@ LEFT JOIN request_attempts a
 WHERE ($3::text IS NULL OR c.status = $3::text)
   AND ($4::bigint IS NULL OR c.provider_id = $4::bigint)
   AND ($5::text IS NULL OR c.name ILIKE '%' || $5::text || '%')
-GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, c.base_url, c.priority, c.timeout_ms, c.credential, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.created_at, c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name
+GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, pe.base_url, c.priority, c.timeout_ms, c.credential, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.created_at, c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name
 ORDER BY
   CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END DESC NULLS LAST,
   CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END ASC NULLS LAST,
@@ -718,6 +871,77 @@ func (q *Queries) ChannelsOpsTableCount(ctx context.Context, arg ChannelsOpsTabl
 	return total, err
 }
 
+const commitChannelAdmissionLimitsAtRevision = `-- name: CommitChannelAdmissionLimitsAtRevision :one
+UPDATE channels
+SET rpm_limit = $1,
+    tpm_limit = $2,
+    rpd_limit = $3,
+    concurrency_limit = $4,
+    admission_limits_revision = $5,
+    updated_at = now()
+WHERE id = $6
+  AND admission_limits_revision = $7
+  AND $5 = $7 + 1
+  AND ROW(rpm_limit, tpm_limit, rpd_limit, concurrency_limit) IS DISTINCT FROM ROW(
+      $1, $2, $3, $4
+  )
+RETURNING id, provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+`
+
+type CommitChannelAdmissionLimitsAtRevisionParams struct {
+	RpmLimit         pgtype.Int4
+	TpmLimit         pgtype.Int4
+	RpdLimit         pgtype.Int4
+	ConcurrencyLimit pgtype.Int4
+	NextRevision     int64
+	ID               int64
+	CurrentRevision  int64
+}
+
+// CommitChannelAdmissionLimitsAtRevision 只供 runtimecontrol.Publisher 的 BusinessCommit 事务调用：
+// 在 expected revision 仍匹配且四维语义真变化时一次写值并推进 admission_limits_revision。
+// 普通 Channel 更新不得调用无 revision 的直接覆盖查询。
+func (q *Queries) CommitChannelAdmissionLimitsAtRevision(ctx context.Context, arg CommitChannelAdmissionLimitsAtRevisionParams) (Channel, error) {
+	row := q.db.QueryRow(ctx, commitChannelAdmissionLimitsAtRevision,
+		arg.RpmLimit,
+		arg.TpmLimit,
+		arg.RpdLimit,
+		arg.ConcurrencyLimit,
+		arg.NextRevision,
+		arg.ID,
+		arg.CurrentRevision,
+	)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.ProviderID,
+		&i.ProviderEndpointID,
+		&i.Name,
+		&i.Protocol,
+		&i.AdapterKey,
+		&i.Credential,
+		&i.ConfigRevision,
+		&i.AdmissionLimitsRevision,
+		&i.Status,
+		&i.Priority,
+		&i.TimeoutMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RpmLimit,
+		&i.TpmLimit,
+		&i.RpdLimit,
+		&i.LastTestedAt,
+		&i.LastTestOk,
+		&i.LastTestLatencyMs,
+		&i.LastTestError,
+		&i.CredentialValid,
+		&i.ArchivedAt,
+		&i.ConcurrencyLimit,
+		&i.UpstreamBillsOnDisconnect,
+	)
+	return i, err
+}
+
 const countChannelTestLogsByChannel = `-- name: CountChannelTestLogsByChannel :one
 SELECT COUNT(*) AS total
 FROM channel_test_logs
@@ -735,12 +959,13 @@ func (q *Queries) CountChannelTestLogsByChannel(ctx context.Context, channelID i
 const countChannels = `-- name: CountChannels :one
 SELECT COUNT(*) AS total
 FROM channels c
+JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
 WHERE ($1::bigint IS NULL OR c.provider_id = $1::bigint)
   AND ($2::text IS NULL OR c.status = $2::text)
   AND (
     $3::text IS NULL
     OR c.name ILIKE '%' || $3::text || '%'
-    OR c.base_url ILIKE '%' || $3::text || '%'
+    OR pe.base_url ILIKE '%' || $3::text || '%'
   )
 `
 
@@ -759,45 +984,66 @@ func (q *Queries) CountChannels(ctx context.Context, arg CountChannelsParams) (i
 }
 
 const createChannel = `-- name: CreateChannel :one
-INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+INSERT INTO channels (
+    provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, status, priority, timeout_ms,
+    rpm_limit, tpm_limit, rpd_limit, concurrency_limit, upstream_bills_on_disconnect
+)
+VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9,
+    $10, $11, $12, $13,
+    $14
+)
+RETURNING id, provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
 `
 
 type CreateChannelParams struct {
-	ProviderID int64
-	Name       string
-	Protocol   string
-	AdapterKey string
-	BaseUrl    string
-	Credential string
-	Status     string
-	Priority   int32
-	TimeoutMs  pgtype.Int4
+	ProviderID                int64
+	ProviderEndpointID        int64
+	Name                      string
+	Protocol                  string
+	AdapterKey                string
+	Credential                string
+	Status                    string
+	Priority                  int32
+	TimeoutMs                 pgtype.Int4
+	RpmLimit                  pgtype.Int4
+	TpmLimit                  pgtype.Int4
+	RpdLimit                  pgtype.Int4
+	ConcurrencyLimit          pgtype.Int4
+	UpstreamBillsOnDisconnect bool
 }
 
 // CreateChannel 创建 channel；credential 为明文上游凭据，protocol+adapter_key 复合键须先在 adapter registry 校验存在。
+// 四维限额随业务行一次写入，初始 admission_limits_revision 固定使用表默认值 1；随后同步安装 revision=1 Redis control。
 func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (Channel, error) {
 	row := q.db.QueryRow(ctx, createChannel,
 		arg.ProviderID,
+		arg.ProviderEndpointID,
 		arg.Name,
 		arg.Protocol,
 		arg.AdapterKey,
-		arg.BaseUrl,
 		arg.Credential,
 		arg.Status,
 		arg.Priority,
 		arg.TimeoutMs,
+		arg.RpmLimit,
+		arg.TpmLimit,
+		arg.RpdLimit,
+		arg.ConcurrencyLimit,
+		arg.UpstreamBillsOnDisconnect,
 	)
 	var i Channel
 	err := row.Scan(
 		&i.ID,
 		&i.ProviderID,
+		&i.ProviderEndpointID,
 		&i.Name,
 		&i.Protocol,
 		&i.AdapterKey,
-		&i.BaseUrl,
 		&i.Credential,
+		&i.ConfigRevision,
+		&i.AdmissionLimitsRevision,
 		&i.Status,
 		&i.Priority,
 		&i.TimeoutMs,
@@ -1117,7 +1363,7 @@ func (q *Queries) DeleteChannelModel(ctx context.Context, arg DeleteChannelModel
 }
 
 const getChannel = `-- name: GetChannel :one
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+SELECT id, provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
 FROM channels
 WHERE id = $1
 LIMIT 1
@@ -1130,11 +1376,13 @@ func (q *Queries) GetChannel(ctx context.Context, id int64) (Channel, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.ProviderID,
+		&i.ProviderEndpointID,
 		&i.Name,
 		&i.Protocol,
 		&i.AdapterKey,
-		&i.BaseUrl,
 		&i.Credential,
+		&i.ConfigRevision,
+		&i.AdmissionLimitsRevision,
 		&i.Status,
 		&i.Priority,
 		&i.TimeoutMs,
@@ -1179,6 +1427,63 @@ func (q *Queries) GetChannelModel(ctx context.Context, arg GetChannelModelParams
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getChannelProbeSnapshot = `-- name: GetChannelProbeSnapshot :one
+SELECT
+    c.id AS channel_id,
+    c.provider_id,
+    c.provider_endpoint_id,
+    c.protocol,
+    c.adapter_key,
+    c.credential,
+    c.credential_valid,
+    c.config_revision,
+    p.slug AS provider_slug,
+    pe.base_url AS endpoint_base_url,
+    pe.base_url_revision AS endpoint_base_url_revision,
+    pe.status_revision AS endpoint_status_revision
+FROM channels c
+JOIN providers p ON p.id = c.provider_id
+JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
+WHERE c.id = $1
+LIMIT 1
+`
+
+type GetChannelProbeSnapshotRow struct {
+	ChannelID               int64
+	ProviderID              int64
+	ProviderEndpointID      int64
+	Protocol                string
+	AdapterKey              string
+	Credential              string
+	CredentialValid         bool
+	ConfigRevision          int64
+	ProviderSlug            string
+	EndpointBaseUrl         string
+	EndpointBaseUrlRevision int64
+	EndpointStatusRevision  int64
+}
+
+// GetChannelProbeSnapshot 一次读取主动检测所需的 Channel、Provider 与 Endpoint 冻结事实；检测结果只允许按三类 revision CAS 回写。
+func (q *Queries) GetChannelProbeSnapshot(ctx context.Context, channelID int64) (GetChannelProbeSnapshotRow, error) {
+	row := q.db.QueryRow(ctx, getChannelProbeSnapshot, channelID)
+	var i GetChannelProbeSnapshotRow
+	err := row.Scan(
+		&i.ChannelID,
+		&i.ProviderID,
+		&i.ProviderEndpointID,
+		&i.Protocol,
+		&i.AdapterKey,
+		&i.Credential,
+		&i.CredentialValid,
+		&i.ConfigRevision,
+		&i.ProviderSlug,
+		&i.EndpointBaseUrl,
+		&i.EndpointBaseUrlRevision,
+		&i.EndpointStatusRevision,
 	)
 	return i, err
 }
@@ -1446,7 +1751,7 @@ func (q *Queries) ListChannelRechargeFactorsByChannel(ctx context.Context, chann
 }
 
 const listChannelTestLogsByChannel = `-- name: ListChannelTestLogsByChannel :many
-SELECT id, channel_id, created_at, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error
+SELECT id, channel_id, created_at, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error, tested_endpoint_base_url_revision, tested_endpoint_status_revision, tested_config_revision, state_change_applied
 FROM channel_test_logs
 WHERE channel_id = $1
 ORDER BY created_at DESC, id DESC
@@ -1482,6 +1787,10 @@ func (q *Queries) ListChannelTestLogsByChannel(ctx context.Context, arg ListChan
 			&i.CredentialValidAfter,
 			&i.Message,
 			&i.UpstreamError,
+			&i.TestedEndpointBaseUrlRevision,
+			&i.TestedEndpointStatusRevision,
+			&i.TestedConfigRevision,
+			&i.StateChangeApplied,
 		); err != nil {
 			return nil, err
 		}
@@ -1494,7 +1803,7 @@ func (q *Queries) ListChannelTestLogsByChannel(ctx context.Context, arg ListChan
 }
 
 const listChannelsByProvider = `-- name: ListChannelsByProvider :many
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+SELECT id, provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
 FROM channels
 WHERE provider_id = $1
 ORDER BY priority, id
@@ -1513,11 +1822,66 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 		if err := rows.Scan(
 			&i.ID,
 			&i.ProviderID,
+			&i.ProviderEndpointID,
 			&i.Name,
 			&i.Protocol,
 			&i.AdapterKey,
-			&i.BaseUrl,
 			&i.Credential,
+			&i.ConfigRevision,
+			&i.AdmissionLimitsRevision,
+			&i.Status,
+			&i.Priority,
+			&i.TimeoutMs,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.RpmLimit,
+			&i.TpmLimit,
+			&i.RpdLimit,
+			&i.LastTestedAt,
+			&i.LastTestOk,
+			&i.LastTestLatencyMs,
+			&i.LastTestError,
+			&i.CredentialValid,
+			&i.ArchivedAt,
+			&i.ConcurrencyLimit,
+			&i.UpstreamBillsOnDisconnect,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChannelsForRuntimeControlRestore = `-- name: ListChannelsForRuntimeControlRestore :many
+SELECT id, provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+FROM channels
+ORDER BY id
+`
+
+// ListChannelsForRuntimeControlRestore 返回启动期恢复 Channel admission control 所需的 PostgreSQL 权威事实。
+func (q *Queries) ListChannelsForRuntimeControlRestore(ctx context.Context) ([]Channel, error) {
+	rows, err := q.db.Query(ctx, listChannelsForRuntimeControlRestore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Channel
+	for rows.Next() {
+		var i Channel
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProviderID,
+			&i.ProviderEndpointID,
+			&i.Name,
+			&i.Protocol,
+			&i.AdapterKey,
+			&i.Credential,
+			&i.ConfigRevision,
+			&i.AdmissionLimitsRevision,
 			&i.Status,
 			&i.Priority,
 			&i.TimeoutMs,
@@ -1547,19 +1911,22 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 
 const listChannelsPage = `-- name: ListChannelsPage :many
 SELECT
-    c.id, c.provider_id, c.name, c.protocol, c.adapter_key, c.base_url,
+    c.id, c.provider_id, c.provider_endpoint_id, c.name, c.protocol, c.adapter_key, pe.base_url,
     c.credential, c.status, c.priority, c.timeout_ms, c.created_at, c.updated_at,
     c.rpm_limit, c.tpm_limit, c.rpd_limit, c.concurrency_limit, c.upstream_bills_on_disconnect,
     c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
+    c.config_revision, c.admission_limits_revision,
+    pe.name AS provider_endpoint_name, pe.status AS provider_endpoint_status,
     p.name AS provider_name
 FROM channels c
 JOIN providers p ON p.id = c.provider_id
+JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
 WHERE ($1::bigint IS NULL OR c.provider_id = $1::bigint)
   AND ($2::text IS NULL OR c.status = $2::text)
   AND (
     $3::text IS NULL
     OR c.name ILIKE '%' || $3::text || '%'
-    OR c.base_url ILIKE '%' || $3::text || '%'
+    OR pe.base_url ILIKE '%' || $3::text || '%'
   )
 ORDER BY c.priority, c.id
 LIMIT $5 OFFSET $4
@@ -1576,6 +1943,7 @@ type ListChannelsPageParams struct {
 type ListChannelsPageRow struct {
 	ID                        int64
 	ProviderID                int64
+	ProviderEndpointID        int64
 	Name                      string
 	Protocol                  string
 	AdapterKey                string
@@ -1596,6 +1964,10 @@ type ListChannelsPageRow struct {
 	LastTestLatencyMs         pgtype.Int4
 	LastTestError             pgtype.Text
 	CredentialValid           bool
+	ConfigRevision            int64
+	AdmissionLimitsRevision   int64
+	ProviderEndpointName      string
+	ProviderEndpointStatus    string
 	ProviderName              string
 }
 
@@ -1618,6 +1990,7 @@ func (q *Queries) ListChannelsPage(ctx context.Context, arg ListChannelsPagePara
 		if err := rows.Scan(
 			&i.ID,
 			&i.ProviderID,
+			&i.ProviderEndpointID,
 			&i.Name,
 			&i.Protocol,
 			&i.AdapterKey,
@@ -1638,6 +2011,10 @@ func (q *Queries) ListChannelsPage(ctx context.Context, arg ListChannelsPagePara
 			&i.LastTestLatencyMs,
 			&i.LastTestError,
 			&i.CredentialValid,
+			&i.ConfigRevision,
+			&i.AdmissionLimitsRevision,
+			&i.ProviderEndpointName,
+			&i.ProviderEndpointStatus,
 			&i.ProviderName,
 		); err != nil {
 			return nil, err
@@ -1813,9 +2190,123 @@ func (q *Queries) ListEnabledRoutesEmptiedByChannel(ctx context.Context, channel
 	return items, nil
 }
 
+const prepareChannelCredentialRotation = `-- name: PrepareChannelCredentialRotation :one
+WITH current AS MATERIALIZED (
+    SELECT c.id, c.credential AS previous_credential, c.credential_valid AS previous_credential_valid
+    FROM channels AS c
+    WHERE c.id = $1
+    FOR UPDATE
+), updated AS (
+    UPDATE channels AS c
+    SET credential = $2,
+        credential_valid = CASE
+            WHEN current.previous_credential IS DISTINCT FROM $2 THEN FALSE
+            ELSE c.credential_valid
+        END,
+        last_tested_at = CASE
+            WHEN current.previous_credential IS DISTINCT FROM $2 THEN NULL
+            ELSE c.last_tested_at
+        END,
+        last_test_ok = CASE
+            WHEN current.previous_credential IS DISTINCT FROM $2 THEN NULL
+            ELSE c.last_test_ok
+        END,
+        last_test_latency_ms = CASE
+            WHEN current.previous_credential IS DISTINCT FROM $2 THEN NULL
+            ELSE c.last_test_latency_ms
+        END,
+        last_test_error = CASE
+            WHEN current.previous_credential IS DISTINCT FROM $2 THEN NULL
+            ELSE c.last_test_error
+        END,
+        config_revision = c.config_revision + CASE
+            WHEN current.previous_credential IS DISTINCT FROM $2 THEN 1
+            ELSE 0
+        END,
+        updated_at = CASE
+            WHEN current.previous_credential IS DISTINCT FROM $2 THEN now()
+            ELSE c.updated_at
+        END
+    FROM current
+    WHERE c.id = current.id
+    RETURNING
+        c.id AS channel_id,
+        c.provider_id,
+        c.provider_endpoint_id,
+        c.protocol,
+        c.adapter_key,
+        c.credential,
+        c.credential_valid,
+        c.config_revision,
+        (current.previous_credential IS DISTINCT FROM $2)::boolean AS credential_changed
+)
+SELECT
+    updated.channel_id,
+    updated.provider_id,
+    updated.provider_endpoint_id,
+    updated.protocol,
+    updated.adapter_key,
+    updated.credential,
+    updated.credential_valid,
+    updated.config_revision,
+    updated.credential_changed,
+    p.slug AS provider_slug,
+    pe.base_url AS endpoint_base_url,
+    pe.base_url_revision AS endpoint_base_url_revision,
+    pe.status_revision AS endpoint_status_revision
+FROM updated
+JOIN providers p ON p.id = updated.provider_id
+JOIN provider_endpoints pe ON pe.id = updated.provider_endpoint_id
+`
+
+type PrepareChannelCredentialRotationParams struct {
+	ChannelID  int64
+	Credential string
+}
+
+type PrepareChannelCredentialRotationRow struct {
+	ChannelID               int64
+	ProviderID              int64
+	ProviderEndpointID      int64
+	Protocol                string
+	AdapterKey              string
+	Credential              string
+	CredentialValid         bool
+	ConfigRevision          int64
+	CredentialChanged       bool
+	ProviderSlug            string
+	EndpointBaseUrl         string
+	EndpointBaseUrlRevision int64
+	EndpointStatusRevision  int64
+}
+
+// PrepareChannelCredentialRotation 原子判定同值/真变化并保存 credential。真变化只推进一次 config_revision，
+// 同时先把 credential_valid 置 false、清空只属于旧 credential 的最近检测摘要；随后即时检测按返回的三类 revision 做 CAS。
+func (q *Queries) PrepareChannelCredentialRotation(ctx context.Context, arg PrepareChannelCredentialRotationParams) (PrepareChannelCredentialRotationRow, error) {
+	row := q.db.QueryRow(ctx, prepareChannelCredentialRotation, arg.ChannelID, arg.Credential)
+	var i PrepareChannelCredentialRotationRow
+	err := row.Scan(
+		&i.ChannelID,
+		&i.ProviderID,
+		&i.ProviderEndpointID,
+		&i.Protocol,
+		&i.AdapterKey,
+		&i.Credential,
+		&i.CredentialValid,
+		&i.ConfigRevision,
+		&i.CredentialChanged,
+		&i.ProviderSlug,
+		&i.EndpointBaseUrl,
+		&i.EndpointBaseUrlRevision,
+		&i.EndpointStatusRevision,
+	)
+	return i, err
+}
+
 const restoreChannel = `-- name: RestoreChannel :execrows
 UPDATE channels
-SET status = 'disabled', archived_at = NULL
+SET status = 'disabled', archived_at = NULL,
+    config_revision = config_revision + 1, updated_at = now()
 WHERE id = $1 AND status = 'archived'
 `
 
@@ -1833,7 +2324,7 @@ const setChannelBillingBehavior = `-- name: SetChannelBillingBehavior :one
 UPDATE channels
 SET upstream_bills_on_disconnect = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+RETURNING id, provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
 `
 
 type SetChannelBillingBehaviorParams struct {
@@ -1849,11 +2340,13 @@ func (q *Queries) SetChannelBillingBehavior(ctx context.Context, arg SetChannelB
 	err := row.Scan(
 		&i.ID,
 		&i.ProviderID,
+		&i.ProviderEndpointID,
 		&i.Name,
 		&i.Protocol,
 		&i.AdapterKey,
-		&i.BaseUrl,
 		&i.Credential,
+		&i.ConfigRevision,
+		&i.AdmissionLimitsRevision,
 		&i.Status,
 		&i.Priority,
 		&i.TimeoutMs,
@@ -1887,60 +2380,6 @@ func (q *Queries) SetChannelCredentialValid(ctx context.Context, id int64) (int6
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const setChannelRateLimits = `-- name: SetChannelRateLimits :one
-UPDATE channels
-SET rpm_limit = $1, tpm_limit = $2, rpd_limit = $3, concurrency_limit = $4, updated_at = now()
-WHERE id = $5
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
-`
-
-type SetChannelRateLimitsParams struct {
-	RpmLimit         pgtype.Int4
-	TpmLimit         pgtype.Int4
-	RpdLimit         pgtype.Int4
-	ConcurrencyLimit pgtype.Int4
-	ID               int64
-}
-
-// SetChannelRateLimits 设置/清除 channel 的渠道级限流上限（P2-8）与在途并发上限（DEC-029）；
-// 各列 NULL=继承全局默认，0=不限，>0=具体上限。
-func (q *Queries) SetChannelRateLimits(ctx context.Context, arg SetChannelRateLimitsParams) (Channel, error) {
-	row := q.db.QueryRow(ctx, setChannelRateLimits,
-		arg.RpmLimit,
-		arg.TpmLimit,
-		arg.RpdLimit,
-		arg.ConcurrencyLimit,
-		arg.ID,
-	)
-	var i Channel
-	err := row.Scan(
-		&i.ID,
-		&i.ProviderID,
-		&i.Name,
-		&i.Protocol,
-		&i.AdapterKey,
-		&i.BaseUrl,
-		&i.Credential,
-		&i.Status,
-		&i.Priority,
-		&i.TimeoutMs,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.RpmLimit,
-		&i.TpmLimit,
-		&i.RpdLimit,
-		&i.LastTestedAt,
-		&i.LastTestOk,
-		&i.LastTestLatencyMs,
-		&i.LastTestError,
-		&i.CredentialValid,
-		&i.ArchivedAt,
-		&i.ConcurrencyLimit,
-		&i.UpstreamBillsOnDisconnect,
-	)
-	return i, err
 }
 
 const setChannelTestResult = `-- name: SetChannelTestResult :execrows
@@ -1978,25 +2417,38 @@ func (q *Queries) SetChannelTestResult(ctx context.Context, arg SetChannelTestRe
 
 const updateChannel = `-- name: UpdateChannel :one
 UPDATE channels
-SET name = $1, base_url = $2, status = $3, priority = $4, timeout_ms = $5, updated_at = now()
+SET name = $1,
+    provider_endpoint_id = $2,
+    status = $3,
+    priority = $4,
+    timeout_ms = $5,
+    config_revision = config_revision + (
+        CASE WHEN (
+            provider_endpoint_id IS DISTINCT FROM $2
+            OR status IS DISTINCT FROM $3
+            OR timeout_ms IS DISTINCT FROM $5
+        ) THEN 1 ELSE 0 END
+    ),
+    updated_at = now()
 WHERE id = $6
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+RETURNING id, provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
 `
 
 type UpdateChannelParams struct {
-	Name      string
-	BaseUrl   string
-	Status    string
-	Priority  int32
-	TimeoutMs pgtype.Int4
-	ID        int64
+	Name               string
+	ProviderEndpointID int64
+	Status             string
+	Priority           int32
+	TimeoutMs          pgtype.Int4
+	ID                 int64
 }
 
-// UpdateChannel 更新 channel 的展示名、上游地址、启停状态、优先级与超时；protocol、adapter_key 与凭据不在此更新。
+// UpdateChannel 更新 channel 的展示名、绑定 Endpoint、启停状态、优先级与超时；protocol、adapter_key 与凭据不在此更新。
+// [P4 §4.4] base_url 已移除（地址归 provider_endpoints）；config_revision 递增由服务层在真变化时于同事务处理。
 func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (Channel, error) {
 	row := q.db.QueryRow(ctx, updateChannel,
 		arg.Name,
-		arg.BaseUrl,
+		arg.ProviderEndpointID,
 		arg.Status,
 		arg.Priority,
 		arg.TimeoutMs,
@@ -2006,11 +2458,13 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 	err := row.Scan(
 		&i.ID,
 		&i.ProviderID,
+		&i.ProviderEndpointID,
 		&i.Name,
 		&i.Protocol,
 		&i.AdapterKey,
-		&i.BaseUrl,
 		&i.Credential,
+		&i.ConfigRevision,
+		&i.AdmissionLimitsRevision,
 		&i.Status,
 		&i.Priority,
 		&i.TimeoutMs,

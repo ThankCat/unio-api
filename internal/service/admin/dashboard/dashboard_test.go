@@ -129,12 +129,12 @@ func TestRadarAggregates(t *testing.T) {
 			{EventType: "write_off", Total: 3, PlatformAmount: mustNumeric(t, "1.25")},
 		},
 		badChannels: []sqlc.DashboardRadarBadChannelsRow{
-			{ChannelID: 9, Name: "ch-bad", Status: "enabled", AttemptTotal: 100, AttemptSucceeded: 50},
+			{ChannelID: 9, Name: "ch-bad", Status: "enabled", AttemptTotal: 100, AttemptSucceeded: 50, AttemptFailed: 45},
 		},
 	}
 
 	now := time.Now()
-	out, err := NewService(store, nil).Radar(context.Background(), now.Add(-24*time.Hour), now)
+	out, err := NewService(store).Radar(context.Background(), now.Add(-24*time.Hour), now)
 	if err != nil {
 		t.Fatalf("radar: %v", err)
 	}
@@ -171,17 +171,17 @@ func TestRadarAggregates(t *testing.T) {
 	if out.Settlement.Dead != 1 {
 		t.Fatalf("dead backlog = %d, want 1", out.Settlement.Dead)
 	}
-	// dead>0 + 异常渠道 unhealthy + 计费异常 → 至少 3 个行动项。
+	// 主观渠道健康行动项已删除；这里只保留结算与计费客观异常。
 	if len(out.ActionItems) < 2 {
 		t.Fatalf("action items = %d, want >= 2", len(out.ActionItems))
 	}
-	if len(out.BadChannels) != 1 || out.BadChannels[0].Bucket != "unhealthy" {
+	if len(out.BadChannels) != 1 || out.BadChannels[0].AttemptFailed != 45 {
 		t.Fatalf("bad channels = %+v", out.BadChannels)
 	}
 }
 
 func TestBreakdownInvalidDimension(t *testing.T) {
-	_, err := NewService(&fakeStore{}, nil).Breakdown(context.Background(), "bogus", time.Time{}, time.Now())
+	_, err := NewService(&fakeStore{}).Breakdown(context.Background(), "bogus", time.Time{}, time.Now())
 	if err == nil {
 		t.Fatal("expected error for invalid dimension")
 	}
@@ -202,7 +202,7 @@ func TestTimeseriesDispatch(t *testing.T) {
 			{Bucket: pgtype.Timestamptz{Time: time.Now(), Valid: true}, Currency: "USD", Total: mustNumeric(t, "0.75")},
 		},
 	}
-	svc := NewService(store, nil)
+	svc := NewService(store)
 
 	reqSeries, err := svc.Timeseries(context.Background(), MetricRequests, IntervalMinute, time.Time{}, time.Time{})
 	if err != nil {
@@ -236,7 +236,7 @@ func TestTimeseriesDispatch(t *testing.T) {
 }
 
 func TestTimeseriesRejectsBadArgs(t *testing.T) {
-	svc := NewService(&fakeStore{}, nil)
+	svc := NewService(&fakeStore{})
 
 	if _, err := svc.Timeseries(context.Background(), "bogus", IntervalHour, time.Time{}, time.Time{}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
 		t.Fatalf("expected invalid argument for bad metric, got %v", err)

@@ -75,9 +75,6 @@ const (
 	// RateLimitDecisionLimited 表示请求被限流拒绝。
 	RateLimitDecisionLimited RateLimitDecision = "limited"
 
-	// RateLimitDecisionFailOpen 表示 Redis 故障且按 fail-open 放行。
-	RateLimitDecisionFailOpen RateLimitDecision = "redis_failure_fail_open"
-
 	// RateLimitDecisionFailClosed 表示 Redis 故障且按 fail-closed 拒绝。
 	RateLimitDecisionFailClosed RateLimitDecision = "redis_failure_fail_closed"
 )
@@ -135,6 +132,38 @@ type Metrics struct {
 	routingCapacityRead          *prometheus.CounterVec
 	routingMarginGuard           *prometheus.CounterVec
 	routingTraceWrite            *prometheus.CounterVec
+
+	breakerState                          *prometheus.GaugeVec
+	breakerTransitionTotal                *prometheus.CounterVec
+	breakerSkipTotal                      *prometheus.CounterVec
+	breakerStoreOperationTotal            *prometheus.CounterVec
+	breakerStoreLatencySeconds            *prometheus.HistogramVec
+	breakerStoreUnavailable               prometheus.Gauge
+	breakerStoreReady                     prometheus.Gauge
+	runtimeStateIntegrity                 *prometheus.GaugeVec
+	runtimeStateLossRecoveryTotal         *prometheus.CounterVec
+	requestAdmissionOperationTotal        *prometheus.CounterVec
+	requestAdmissionActive                prometheus.Gauge
+	breakerPermitOperationTotal           *prometheus.CounterVec
+	breakerPermitActive                   prometheus.Gauge
+	breakerIgnoredResultTotal             *prometheus.CounterVec
+	channelConfigRevisionMismatchTotal    *prometheus.CounterVec
+	channelCredentialVerificationTotal    *prometheus.CounterVec
+	endpointBaseURLRevisionFence          *prometheus.GaugeVec
+	endpointBaseURLRevisionPendingSeconds *prometheus.GaugeVec
+	endpointStatusRevisionFence           *prometheus.GaugeVec
+	endpointStatusRevisionPendingSeconds  *prometheus.GaugeVec
+	endpointStatusRevisionMismatchTotal   *prometheus.CounterVec
+	runtimeControlOperationTotal          *prometheus.CounterVec
+	runtimeControlPending                 *prometheus.GaugeVec
+	runtimeControlPendingSeconds          *prometheus.GaugeVec
+	runtimeControlRevisionMismatchTotal   *prometheus.CounterVec
+	runtimeControlRecoveryTotal           *prometheus.CounterVec
+	endpointFailureTotal                  *prometheus.CounterVec
+	channelFailureTotal                   *prometheus.CounterVec
+	upstreamTTFTSeconds                   *prometheus.HistogramVec
+	upstreamTotalDurationSeconds          *prometheus.HistogramVec
+	balancedFinalWeight                   *prometheus.GaugeVec
 }
 
 // New 创建并注册 Unio 全部指标。
@@ -281,6 +310,134 @@ func New() *Metrics {
 			Name: "unio_gateway_routing_trace_write_total",
 			Help: "Routing decision trace persistence outcomes.",
 		}, []string{"result"}),
+
+		breakerState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "unio_gateway_breaker_state",
+			Help: "Current breaker state; exactly one state is 1 for each scope and business ID.",
+		}, []string{"scope", "id", "state"}),
+		breakerTransitionTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_breaker_transition_total",
+			Help: "Breaker state transitions by bounded scope, state and reason.",
+		}, []string{"scope", "from", "to", "reason"}),
+		breakerSkipTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_breaker_skip_total",
+			Help: "Candidate skips caused by breaker or another authoritative runtime gate.",
+		}, []string{"scope", "reason"}),
+		breakerStoreOperationTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_breaker_store_operation_total",
+			Help: "BreakerStore operations by bounded operation and result.",
+		}, []string{"operation", "result"}),
+		breakerStoreLatencySeconds: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "unio_gateway_breaker_store_latency_seconds",
+			Help:    "BreakerStore operation latency in seconds.",
+			Buckets: apiLatencyBuckets,
+		}, []string{"operation"}),
+		breakerStoreUnavailable: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "unio_gateway_breaker_store_unavailable",
+			Help: "Whether the latest BreakerStore health observation was unavailable.",
+		}),
+		breakerStoreReady: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "unio_gateway_breaker_store_ready",
+			Help: "Whether BreakerStore and its required runtime controls are ready.",
+		}),
+		runtimeStateIntegrity: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "unio_gateway_runtime_state_integrity",
+			Help: "Runtime integrity state; exactly one bounded state is 1.",
+		}, []string{"state"}),
+		runtimeStateLossRecoveryTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_runtime_state_loss_recovery_total",
+			Help: "Durable runtime-state loss recovery outcomes.",
+		}, []string{"result"}),
+		requestAdmissionOperationTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_request_admission_operation_total",
+			Help: "Request-admission token operations by bounded operation and result.",
+		}, []string{"operation", "result"}),
+		requestAdmissionActive: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "unio_gateway_request_admission_active",
+			Help: "Active request-admission sessions owned by this process.",
+		}),
+		breakerPermitOperationTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_breaker_permit_operation_total",
+			Help: "AttemptPermit operations by bounded operation and result.",
+		}, []string{"operation", "result"}),
+		breakerPermitActive: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "unio_gateway_breaker_permit_active",
+			Help: "Active AttemptPermits owned by this process.",
+		}),
+		breakerIgnoredResultTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_breaker_ignored_result_total",
+			Help: "Upstream results ignored by breaker attribution, by bounded scope and reason.",
+		}, []string{"scope", "reason"}),
+		channelConfigRevisionMismatchTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_channel_config_revision_mismatch_total",
+			Help: "Channel configuration revision mismatches by bounded operation.",
+		}, []string{"operation"}),
+		channelCredentialVerificationTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_channel_credential_rotation_verification_total",
+			Help: "Credential rotation verification outcomes.",
+		}, []string{"state"}),
+		endpointBaseURLRevisionFence: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "unio_gateway_endpoint_base_url_revision_fence",
+			Help: "Endpoint BaseURL revision fence state.",
+		}, []string{"endpoint_id", "state"}),
+		endpointBaseURLRevisionPendingSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "unio_gateway_endpoint_base_url_revision_pending_seconds",
+			Help: "Seconds the Endpoint BaseURL revision fence has remained pending.",
+		}, []string{"endpoint_id"}),
+		endpointStatusRevisionFence: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "unio_gateway_endpoint_status_revision_fence",
+			Help: "Endpoint status revision fence state.",
+		}, []string{"endpoint_id", "state"}),
+		endpointStatusRevisionPendingSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "unio_gateway_endpoint_status_revision_pending_seconds",
+			Help: "Seconds the Endpoint status revision fence has remained pending.",
+		}, []string{"endpoint_id"}),
+		endpointStatusRevisionMismatchTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_endpoint_status_revision_mismatch_total",
+			Help: "Endpoint status revision mismatches by bounded operation.",
+		}, []string{"operation"}),
+		runtimeControlOperationTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_runtime_control_operation_total",
+			Help: "Durable runtime-control operations by fixed target, operation and result.",
+		}, []string{"target", "operation", "result"}),
+		runtimeControlPending: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "unio_gateway_runtime_control_pending",
+			Help: "Whether a fixed runtime-control target has pending durable work.",
+		}, []string{"target"}),
+		runtimeControlPendingSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "unio_gateway_runtime_control_pending_seconds",
+			Help: "Age in seconds of pending work for a fixed runtime-control target.",
+		}, []string{"target"}),
+		runtimeControlRevisionMismatchTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_runtime_control_revision_mismatch_total",
+			Help: "Runtime-control revision mismatches by fixed target and bounded operation.",
+		}, []string{"target", "operation"}),
+		runtimeControlRecoveryTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_runtime_control_recovery_total",
+			Help: "Runtime-control reconciliation outcomes by fixed target.",
+		}, []string{"target", "result"}),
+		endpointFailureTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_endpoint_failure_total",
+			Help: "Endpoint-attributed failures by business ID and bounded category.",
+		}, []string{"endpoint_id", "category"}),
+		channelFailureTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_channel_failure_total",
+			Help: "Channel-attributed failures by business ID and bounded category.",
+		}, []string{"channel_id", "category"}),
+		upstreamTTFTSeconds: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "unio_gateway_upstream_ttft_seconds",
+			Help:    "Upstream first-token latency. Only valid streaming samples are observed.",
+			Buckets: upstreamLatencyBuckets,
+		}, []string{"provider_id", "endpoint_id", "channel_id", "protocol", "operation", "sample_source"}),
+		upstreamTotalDurationSeconds: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "unio_gateway_upstream_total_duration_seconds",
+			Help:    "Full upstream transport duration for streaming and non-streaming attempts.",
+			Buckets: upstreamLatencyBuckets,
+		}, []string{"provider_id", "endpoint_id", "channel_id", "protocol", "operation", "mode"}),
+		balancedFinalWeight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "unio_gateway_balanced_final_weight",
+			Help: "Latest balanced-routing final weight by route and channel business ID.",
+		}, []string{"route_id", "channel_id"}),
 	}
 
 	registry.MustRegister(
@@ -313,6 +470,37 @@ func New() *Metrics {
 		m.routingCapacityRead,
 		m.routingMarginGuard,
 		m.routingTraceWrite,
+		m.breakerState,
+		m.breakerTransitionTotal,
+		m.breakerSkipTotal,
+		m.breakerStoreOperationTotal,
+		m.breakerStoreLatencySeconds,
+		m.breakerStoreUnavailable,
+		m.breakerStoreReady,
+		m.runtimeStateIntegrity,
+		m.runtimeStateLossRecoveryTotal,
+		m.requestAdmissionOperationTotal,
+		m.requestAdmissionActive,
+		m.breakerPermitOperationTotal,
+		m.breakerPermitActive,
+		m.breakerIgnoredResultTotal,
+		m.channelConfigRevisionMismatchTotal,
+		m.channelCredentialVerificationTotal,
+		m.endpointBaseURLRevisionFence,
+		m.endpointBaseURLRevisionPendingSeconds,
+		m.endpointStatusRevisionFence,
+		m.endpointStatusRevisionPendingSeconds,
+		m.endpointStatusRevisionMismatchTotal,
+		m.runtimeControlOperationTotal,
+		m.runtimeControlPending,
+		m.runtimeControlPendingSeconds,
+		m.runtimeControlRevisionMismatchTotal,
+		m.runtimeControlRecoveryTotal,
+		m.endpointFailureTotal,
+		m.channelFailureTotal,
+		m.upstreamTTFTSeconds,
+		m.upstreamTotalDurationSeconds,
+		m.balancedFinalWeight,
 	)
 
 	return m
@@ -477,6 +665,167 @@ func (m *Metrics) IncRoutingMarginGuard(result string) {
 
 func (m *Metrics) IncRoutingTraceWrite(result string) {
 	m.routingTraceWrite.WithLabelValues(result).Inc()
+}
+
+// SetBreakerState exposes one-hot state for a channel or Endpoint breaker.
+func (m *Metrics) SetBreakerState(scope, id, state string) {
+	for _, candidate := range []string{"closed", "open", "half_open"} {
+		value := 0.0
+		if candidate == state {
+			value = 1
+		}
+		m.breakerState.WithLabelValues(scope, id, candidate).Set(value)
+	}
+}
+
+func (m *Metrics) IncBreakerTransition(scope, from, to, reason string) {
+	m.breakerTransitionTotal.WithLabelValues(scope, from, to, reason).Inc()
+}
+
+func (m *Metrics) IncBreakerSkip(scope, reason string) {
+	m.breakerSkipTotal.WithLabelValues(scope, reason).Inc()
+}
+
+func (m *Metrics) ObserveBreakerStoreOperation(operation, result string, duration time.Duration) {
+	m.breakerStoreOperationTotal.WithLabelValues(operation, result).Inc()
+	m.breakerStoreLatencySeconds.WithLabelValues(operation).Observe(duration.Seconds())
+}
+
+func (m *Metrics) SetBreakerStoreHealth(ready, unavailable bool) {
+	m.breakerStoreReady.Set(boolFloat(ready))
+	m.breakerStoreUnavailable.Set(boolFloat(unavailable))
+}
+
+func (m *Metrics) SetRuntimeStateIntegrity(state string) {
+	for _, candidate := range []string{"ready", "lost"} {
+		value := 0.0
+		if candidate == state {
+			value = 1
+		}
+		m.runtimeStateIntegrity.WithLabelValues(candidate).Set(value)
+	}
+}
+
+func (m *Metrics) IncRuntimeStateLossRecovery(result string) {
+	m.runtimeStateLossRecoveryTotal.WithLabelValues(result).Inc()
+}
+
+func (m *Metrics) IncRequestAdmissionOperation(operation, result string) {
+	m.requestAdmissionOperationTotal.WithLabelValues(operation, result).Inc()
+}
+
+func (m *Metrics) AddRequestAdmissionActive(delta float64) {
+	m.requestAdmissionActive.Add(delta)
+}
+
+func (m *Metrics) IncBreakerPermitOperation(operation, result string) {
+	m.breakerPermitOperationTotal.WithLabelValues(operation, result).Inc()
+}
+
+func (m *Metrics) AddBreakerPermitActive(delta float64) {
+	m.breakerPermitActive.Add(delta)
+}
+
+func (m *Metrics) IncBreakerIgnoredResult(scope, reason string) {
+	m.breakerIgnoredResultTotal.WithLabelValues(scope, reason).Inc()
+}
+
+func (m *Metrics) IncChannelConfigRevisionMismatch(operation string) {
+	m.channelConfigRevisionMismatchTotal.WithLabelValues(operation).Inc()
+}
+
+func (m *Metrics) IncChannelCredentialRotationVerification(state string) {
+	m.channelCredentialVerificationTotal.WithLabelValues(state).Inc()
+}
+
+func (m *Metrics) SetEndpointBaseURLRevisionFence(endpointID, state string, pending time.Duration) {
+	setFenceState(m.endpointBaseURLRevisionFence, endpointID, state)
+	m.endpointBaseURLRevisionPendingSeconds.WithLabelValues(endpointID).Set(nonNegativeSeconds(pending))
+}
+
+func (m *Metrics) SetEndpointStatusRevisionFence(endpointID, state string, pending time.Duration) {
+	setFenceState(m.endpointStatusRevisionFence, endpointID, state)
+	m.endpointStatusRevisionPendingSeconds.WithLabelValues(endpointID).Set(nonNegativeSeconds(pending))
+}
+
+func (m *Metrics) IncEndpointStatusRevisionMismatch(operation string) {
+	m.endpointStatusRevisionMismatchTotal.WithLabelValues(operation).Inc()
+}
+
+func (m *Metrics) IncRuntimeControlOperation(target, operation, result string) {
+	m.runtimeControlOperationTotal.WithLabelValues(target, operation, result).Inc()
+}
+
+func (m *Metrics) SetRuntimeControlPending(target string, pending bool, age time.Duration) {
+	m.runtimeControlPending.WithLabelValues(target).Set(boolFloat(pending))
+	if !pending {
+		age = 0
+	}
+	m.runtimeControlPendingSeconds.WithLabelValues(target).Set(nonNegativeSeconds(age))
+}
+
+func (m *Metrics) IncRuntimeControlRevisionMismatch(target, operation string) {
+	m.runtimeControlRevisionMismatchTotal.WithLabelValues(target, operation).Inc()
+}
+
+func (m *Metrics) IncRuntimeControlRecovery(target, result string) {
+	m.runtimeControlRecoveryTotal.WithLabelValues(target, result).Inc()
+}
+
+func (m *Metrics) IncEndpointFailure(endpointID, category string) {
+	m.endpointFailureTotal.WithLabelValues(endpointID, category).Inc()
+}
+
+func (m *Metrics) IncChannelFailure(channelID, category string) {
+	m.channelFailureTotal.WithLabelValues(channelID, category).Inc()
+}
+
+// ObserveUpstreamTiming records total duration for every real transport and TTFT only for a
+// valid stream-only FirstToken sample. A nil TTFT therefore emits no TTFT observation.
+func (m *Metrics) ObserveUpstreamTiming(
+	providerID, endpointID, channelID, protocol, operation, mode string,
+	total time.Duration,
+	ttft *time.Duration,
+) {
+	m.upstreamTotalDurationSeconds.WithLabelValues(
+		providerID, endpointID, channelID, protocol, operation, mode,
+	).Observe(nonNegativeSeconds(total))
+	if ttft != nil && *ttft >= 0 {
+		m.upstreamTTFTSeconds.WithLabelValues(
+			providerID, endpointID, channelID, protocol, operation, "stream_only",
+		).Observe(ttft.Seconds())
+	}
+}
+
+func (m *Metrics) SetBalancedFinalWeight(routeID, channelID string, weight float64) {
+	if weight < 0 {
+		weight = 0
+	}
+	m.balancedFinalWeight.WithLabelValues(routeID, channelID).Set(weight)
+}
+
+func setFenceState(gauge *prometheus.GaugeVec, endpointID, state string) {
+	for _, candidate := range []string{"active", "pending"} {
+		value := 0.0
+		if candidate == state {
+			value = 1
+		}
+		gauge.WithLabelValues(endpointID, candidate).Set(value)
+	}
+}
+
+func nonNegativeSeconds(duration time.Duration) float64 {
+	if duration < 0 {
+		return 0
+	}
+	return duration.Seconds()
+}
+
+func boolFloat(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 // streamLabel 把是否流式转换成稳定 label 值。

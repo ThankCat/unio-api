@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/logging"
+	platformredis "github.com/ThankCat/unio-gateway/internal/platform/redis"
 	"github.com/ThankCat/unio-gateway/internal/platform/store"
 )
 
@@ -58,10 +59,19 @@ func runWorkerServer(cfg config.Config, logger *zap.Logger) {
 	defer pgPool.Close()
 	logger.Info("postgres connected")
 
+	redisClient, err := platformredis.OpenRedis(startupCtx, cfg.Redis)
+	if err != nil {
+		logger.Error("open redis failed", failure.LogFields(err)...)
+		os.Exit(1)
+	}
+	defer redisClient.Close()
+	logger.Info("redis connected", zap.String("addr", cfg.Redis.Addr), zap.Int("db", cfg.Redis.DB))
+
 	app, err := bootstrap.NewWorkerServerApp(startupCtx, bootstrap.WorkerServerAppDeps{
 		Logger: logger,
 		Config: cfg,
 		DB:     pgPool,
+		Redis:  redisClient,
 	})
 	if err != nil {
 		logger.Error("worker app failed", failure.LogFields(err)...)

@@ -13,8 +13,9 @@ import (
 
 // ChannelTestStore 定义渠道自动检测 worker 所需的存储能力。
 type ChannelTestStore interface {
-	// ListChannelsForCredentialTest 返回所有启用渠道（失效的排在前面优先复检）。
-	ListChannelsForCredentialTest(ctx context.Context) ([]sqlc.Channel, error)
+	// ListChannelsForCredentialTest 返回所有启用渠道（失效的排在前面优先复检）；
+	// P4 §4.4 起连带所绑定 ProviderEndpoint 的 base_url 与两类 revision。
+	ListChannelsForCredentialTest(ctx context.Context) ([]sqlc.ListChannelsForCredentialTestRow, error)
 	// DeleteChannelTestLogsBeyondPerChannel 每渠道保留最近 keep 条检测日志，删更旧的（R1）。
 	DeleteChannelTestLogsBeyondPerChannel(ctx context.Context, arg sqlc.DeleteChannelTestLogsBeyondPerChannelParams) (int64, error)
 }

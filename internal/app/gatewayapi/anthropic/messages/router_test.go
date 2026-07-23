@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
@@ -19,7 +18,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
-	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // fakeMessagesAuthenticator 是 /v1/messages 集成测试使用的 API Key 认证器替身。
@@ -46,45 +45,24 @@ func newMessagesAuthenticator() *fakeMessagesAuthenticator {
 	}
 }
 
-// messagesRateLimiter 是 /v1/messages 集成测试使用的限流器替身。
-type messagesRateLimiter struct {
-	decision ratelimit.Decision
-	err      error
-}
-
-// AllowRouteUserRequest 返回测试预设的限流判断结果。
-func (l *messagesRateLimiter) AllowRouteUserRequest(_ context.Context, _, _ int64, _ ratelimit.Limits) (ratelimit.Decision, error) {
-	return l.decision, l.err
-}
-
-// newAllowingMessagesRateLimiter 创建默认放行请求的测试限流器。
-func newAllowingMessagesRateLimiter() *messagesRateLimiter {
-	return &messagesRateLimiter{
-		decision: ratelimit.Decision{
-			Allowed:   true,
-			Limit:     60,
-			Remaining: 59,
-			ResetAt:   time.Date(2026, 6, 2, 10, 1, 0, 0, time.UTC),
-		},
-	}
-}
-
 // fakeMessagesService 是 /v1/messages handler 测试使用的 service 替身。
 //
 // 它不依赖 gateway/adapter 组合，只按测试预设返回非流式响应、错误，或逐帧发出
 // Anthropic 原生 SSE 帧，用来验证 handler 的鉴权、ingress 校验与 SSE 写出行为。
 type fakeMessagesService struct {
-	createCalled       bool
-	streamCalled       bool
-	req                MessageRequest
-	createResp         *MessageResponse
-	err                error
-	streamFrames       []StreamFrame
-	streamErrAfterEmit error
+	createCalled        bool
+	streamCalled        bool
+	req                 MessageRequest
+	createResp          *MessageResponse
+	err                 error
+	streamFrames        []StreamFrame
+	streamErrAfterEmit  error
+	deliveryCompleted   int
+	deliveryInterrupted int
 }
 
 // CreateMessage 记录 handler 传入的请求，并返回测试预设的非流式响应或错误。
-func (s *fakeMessagesService) CreateMessage(ctx context.Context, req MessageRequest) (*MessageResponse, error) {
+func (s *fakeMessagesService) CreateMessage(ctx context.Context, req MessageRequest) (*lifecycle.NonStreamResult[*MessageResponse], error) {
 	s.createCalled = true
 	s.req = req
 
@@ -93,10 +71,17 @@ func (s *fakeMessagesService) CreateMessage(ctx context.Context, req MessageRequ
 	}
 
 	if s.createResp != nil {
-		return s.createResp, nil
+		return lifecycle.NewNonStreamResult(s.createResp, s.deliveryFinalizer()), nil
 	}
 
-	return defaultMessageResponse(req.Model), nil
+	return lifecycle.NewNonStreamResult(defaultMessageResponse(req.Model), s.deliveryFinalizer()), nil
+}
+
+func (s *fakeMessagesService) deliveryFinalizer() lifecycle.DeliveryFinalizer {
+	return lifecycle.NewDeliveryFinalizer(
+		func() { s.deliveryCompleted++ },
+		func() { s.deliveryInterrupted++ },
+	)
 }
 
 // StreamMessage 记录流式请求，先发出预设错误，否则逐帧 emit 后返回 emit 完成后的错误。
@@ -153,26 +138,19 @@ func defaultStreamFrames(model string) []StreamFrame {
 	}
 }
 
-// newMessagesTestRouter 创建仅含 /v1/messages 路由的测试 router，挂载与生产一致的鉴权与限流中间件。
+// newMessagesTestRouter 创建仅含 /v1/messages 路由的测试 router，挂载生产鉴权；
+// request admission 的生命周期与 Anthropic 错误映射由 middleware 测试独立覆盖。
 //
 // 它不引入 gatewayapi 根包，避免 messages → gatewayapi → messages 的测试编译环；
 // 顶层 httpmw（request id/metrics/logger）在 gatewayapi router_test.go 中单独验证。
-func newMessagesTestRouter(authenticator middleware.APIKeyAuthenticator, service MessagesService, limiter middleware.KeyRateLimiter) http.Handler {
+func newMessagesTestRouter(authenticator middleware.APIKeyAuthenticator, service MessagesService, _ any) http.Handler {
 	if service == nil {
 		service = &fakeMessagesService{}
-	}
-
-	if limiter == nil {
-		limiter = newAllowingMessagesRateLimiter()
 	}
 
 	r := chi.NewRouter()
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(authenticator))
-		r.Use(middleware.RateLimit(limiter, middleware.RateLimitOptions{
-			Logger: zap.NewNop(),
-		}))
-
 		r.Method(http.MethodPost, "/messages", NewMessagesHandler(service, zap.NewNop()))
 	})
 

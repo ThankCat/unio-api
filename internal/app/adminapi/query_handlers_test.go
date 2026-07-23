@@ -2,6 +2,7 @@ package adminapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"go.uber.org/zap"
 	"net/http"
 	"strings"
@@ -109,6 +110,37 @@ func TestGetRequestIncludeInternalReturnsDetail(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "internal_error_detail") {
 		t.Fatalf("detail with include_internal must contain internal_error_detail: %s", rec.Body.String())
+	}
+}
+
+func TestGetRequestReturnsUpstreamAttemptTimings(t *testing.T) {
+	totalMs := int64(2500)
+	ttftMs := int64(250)
+	rqs := &fakeRequestQueryService{getOut: query.RequestDetail{
+		RequestSummary: query.RequestSummary{ID: 1, RequestID: "req_1", Stream: true, Status: "succeeded"},
+		Attempts:       []query.Attempt{{ID: 10, UpstreamTotalMs: &totalMs, UpstreamTTFTMs: &ttftMs}},
+	}}
+	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests/req_1", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data struct {
+			Attempts []struct {
+				UpstreamTotalMs *int64 `json:"upstream_total_ms"`
+				UpstreamTTFTMs  *int64 `json:"upstream_ttft_ms"`
+			} `json:"attempts"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Data.Attempts) != 1 || response.Data.Attempts[0].UpstreamTotalMs == nil ||
+		*response.Data.Attempts[0].UpstreamTotalMs != totalMs || response.Data.Attempts[0].UpstreamTTFTMs == nil ||
+		*response.Data.Attempts[0].UpstreamTTFTMs != ttftMs {
+		t.Fatalf("unexpected upstream timing response: %+v", response.Data.Attempts)
 	}
 }
 

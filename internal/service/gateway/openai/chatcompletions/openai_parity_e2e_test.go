@@ -59,7 +59,7 @@ func newOpenAIAdapterRegistry(client *http.Client) AdapterRegistry {
 
 func deepseekRouteCandidate(server *mockUpstream, channelID int64) routing.ChatRouteCandidate {
 	candidate := routeCandidate("openai", channelID, "deepseek-v4-pro")
-	candidate.Channel.BaseURL = server.server.URL + "/v1"
+	candidate.Channel.BaseURL = server.server.URL
 	candidate.Channel.ProviderSlug = "deepseek"
 	return candidate
 }
@@ -141,11 +141,12 @@ func TestOpenAISDKShapeNonStreamChatC1(t *testing.T) {
 		t.Fatalf("unmarshal sdk-shaped request: %v", err)
 	}
 
-	got, err := service.CreateChatCompletion(contextWithPrincipal(42), req)
+	result, err := service.CreateChatCompletion(contextWithPrincipal(42), req)
 	if err != nil {
 		t.Fatalf("CreateChatCompletion returned err: %v", err)
 	}
 
+	got := result.Response
 	if got.Choices[0].Message.ContentString() != "hello" {
 		t.Fatalf("got content %q, want hello", got.Choices[0].Message.ContentString())
 	}
@@ -204,11 +205,12 @@ func TestOpenAISDKShapeNonStreamPreservesResponseFields(t *testing.T) {
 		t.Fatalf("unmarshal request: %v", err)
 	}
 
-	got, err := service.CreateChatCompletion(contextWithPrincipal(42), req)
+	result, err := service.CreateChatCompletion(contextWithPrincipal(42), req)
 	if err != nil {
 		t.Fatalf("CreateChatCompletion returned err: %v", err)
 	}
 
+	got := result.Response
 	if got.Created != 1710000123 {
 		t.Fatalf("created = %d, want 1710000123", got.Created)
 	}
@@ -369,7 +371,7 @@ func TestDeepSeekDS01NonStreamReasoning(t *testing.T) {
 
 	service, _ := newParityService(t, upstream)
 
-	got, err := service.CreateChatCompletion(contextWithPrincipal(42), gatewayapi.ChatCompletionRequest{
+	result, err := service.CreateChatCompletion(contextWithPrincipal(42), gatewayapi.ChatCompletionRequest{
 		Model: "deepseek/deepseek-v4-pro",
 		Messages: []gatewayapi.ChatMessage{
 			{Role: "user", Content: jsonContent("question")},
@@ -379,6 +381,7 @@ func TestDeepSeekDS01NonStreamReasoning(t *testing.T) {
 		t.Fatalf("CreateChatCompletion returned err: %v", err)
 	}
 
+	got := result.Response
 	if got.Choices[0].Message.ContentString() != "final answer" {
 		t.Fatalf("got content %q, want final answer", got.Choices[0].Message.ContentString())
 	}
@@ -481,7 +484,7 @@ func TestDeepSeekDS04ThinkingDisabled(t *testing.T) {
 
 	service, _ := newParityService(t, upstream)
 
-	got, err := service.CreateChatCompletion(contextWithPrincipal(42), gatewayapi.ChatCompletionRequest{
+	result, err := service.CreateChatCompletion(contextWithPrincipal(42), gatewayapi.ChatCompletionRequest{
 		Model: "deepseek/deepseek-v4-pro",
 		Messages: []gatewayapi.ChatMessage{
 			{Role: "user", Content: jsonContent("hi")},
@@ -494,6 +497,7 @@ func TestDeepSeekDS04ThinkingDisabled(t *testing.T) {
 		t.Fatalf("CreateChatCompletion returned err: %v", err)
 	}
 
+	got := result.Response
 	if got.Choices[0].Message.ReasoningContent != nil {
 		t.Fatalf("expected no reasoning_content, got %+v", got.Choices[0].Message.ReasoningContent)
 	}
@@ -691,7 +695,7 @@ func TestDeepSeekRouteCandidateSetsProviderSlug(t *testing.T) {
 	if candidate.Channel.ProviderSlug != "deepseek" {
 		t.Fatalf("got provider slug %q, want deepseek", candidate.Channel.ProviderSlug)
 	}
-	if candidate.Channel.BaseURL != upstream.server.URL+"/v1" {
+	if candidate.Channel.BaseURL != upstream.server.URL {
 		t.Fatalf("unexpected base url %q", candidate.Channel.BaseURL)
 	}
 	_ = channel.Runtime{ProviderSlug: candidate.Channel.ProviderSlug}

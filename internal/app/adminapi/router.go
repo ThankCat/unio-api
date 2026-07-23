@@ -19,6 +19,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/model"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/overview"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/provider"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/providerendpoint"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/requests"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/route"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/system"
@@ -26,7 +27,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpmw"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/gatewayruntime"
 )
 
 type RoutingTraceService interface {
@@ -39,14 +39,17 @@ type RouterDeps struct {
 	Logger             *zap.Logger
 	AdminAuthenticator middleware.AdminAuthenticator
 
-	ProviderService     provider.ProviderService
-	ProviderOpsService  provider.ProviderOpsService
-	ChannelService      channel.ChannelService
-	ChannelTestService  channel.ChannelTestService
-	ChannelOpsService   channel.ChannelOpsService
-	ModelService        model.ModelService
-	ModelOpsService     model.ModelOpsService
-	ChannelModelService channel.ChannelModelService
+	ProviderService         provider.ProviderService
+	ProviderOpsService      provider.ProviderOpsService
+	ProviderEndpointService providerendpoint.ProviderEndpointService
+	ProviderEndpointBreaker providerendpoint.BreakerRuntime
+	ChannelService          channel.ChannelService
+	ChannelBreaker          channel.BreakerRuntime
+	ChannelTestService      channel.ChannelTestService
+	ChannelOpsService       channel.ChannelOpsService
+	ModelService            model.ModelService
+	ModelOpsService         model.ModelOpsService
+	ChannelModelService     channel.ChannelModelService
 
 	// 渠道-模型成本价（绝对覆盖）+ 线路（渠道商品）。
 	ChannelPriceService channel.ChannelPriceService
@@ -87,13 +90,11 @@ type RouterDeps struct {
 	DashboardService overview.DashboardService
 
 	// M8 系统/任务/健康（横切）：结算补偿任务只读视图
-	RecoveryJobQueryService system.RecoveryJobQueryService
+	RecoveryJobQueryService   system.RecoveryJobQueryService
+	RuntimeDiagnosticsService system.RuntimeDiagnosticsService
 
 	// Provider 全局设置（可编辑）：起步 Anthropic beta 转发策略（app_settings）。
 	ProviderSettingsService system.ProviderSettingsService
-
-	// BreakerClient 可选：渠道列表挂载 gateway 熔断快照。
-	BreakerClient *gatewayruntime.Client
 
 	// 系统配置只读面板（进程级 env 生效值，脱敏）。
 	GatewayConfig config.GatewayConfig
@@ -145,6 +146,10 @@ func NewRouter(deps RouterDeps) http.Handler {
 			Service:    deps.ProviderService,
 			OpsService: deps.ProviderOpsService,
 		})
+		providerendpoint.Register(r, providerendpoint.Deps{
+			Service: deps.ProviderEndpointService,
+			Breaker: deps.ProviderEndpointBreaker,
+		})
 		channel.Register(r, channel.Deps{
 			Service:               deps.ChannelService,
 			OpsService:            deps.ChannelOpsService,
@@ -153,7 +158,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 			PriceService:          deps.ChannelPriceService,
 			CostMultiplierService: deps.ChannelCostMultiplierService,
 			RechargeFactorService: deps.ChannelRechargeFactorService,
-			BreakerClient:         deps.BreakerClient,
+			Breaker:               deps.ChannelBreaker,
 		})
 		model.Register(r, model.Deps{
 			Service:        deps.ModelService,
@@ -187,11 +192,12 @@ func NewRouter(deps RouterDeps) http.Handler {
 			CostExposureService: deps.CostExposureQueryService,
 		})
 		system.Register(r, system.Deps{
-			RecoveryJobService:      deps.RecoveryJobQueryService,
-			ProviderSettingsService: deps.ProviderSettingsService,
-			GatewayConfig:           deps.GatewayConfig,
-			WorkerConfig:            deps.WorkerConfig,
-			HTTPConfig:              deps.HTTPConfig,
+			RecoveryJobService:        deps.RecoveryJobQueryService,
+			ProviderSettingsService:   deps.ProviderSettingsService,
+			RuntimeDiagnosticsService: deps.RuntimeDiagnosticsService,
+			GatewayConfig:             deps.GatewayConfig,
+			WorkerConfig:              deps.WorkerConfig,
+			HTTPConfig:                deps.HTTPConfig,
 		})
 	})
 

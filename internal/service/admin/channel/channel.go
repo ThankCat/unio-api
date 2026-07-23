@@ -7,6 +7,9 @@ package channel
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -17,6 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ThankCat/unio-gateway/internal/core/runtimecontrol"
+	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
@@ -36,19 +41,30 @@ const (
 // Store 定义 channel 管理所需的存储能力。
 type Store interface {
 	GetProvider(ctx context.Context, id int64) (sqlc.Provider, error)
+	GetProviderEndpoint(ctx context.Context, id int64) (sqlc.ProviderEndpoint, error)
 	ListChannelsPage(ctx context.Context, arg sqlc.ListChannelsPageParams) ([]sqlc.ListChannelsPageRow, error)
 	CountChannels(ctx context.Context, arg sqlc.CountChannelsParams) (int64, error)
 	GetChannel(ctx context.Context, id int64) (sqlc.Channel, error)
 	CreateChannel(ctx context.Context, arg sqlc.CreateChannelParams) (sqlc.Channel, error)
 	UpdateChannel(ctx context.Context, arg sqlc.UpdateChannelParams) (sqlc.Channel, error)
-	SetChannelRateLimits(ctx context.Context, arg sqlc.SetChannelRateLimitsParams) (sqlc.Channel, error)
 	SetChannelBillingBehavior(ctx context.Context, arg sqlc.SetChannelBillingBehaviorParams) (sqlc.Channel, error)
-	UpdateChannelCredential(ctx context.Context, arg sqlc.UpdateChannelCredentialParams) (int64, error)
 	DeleteChannelCascade(ctx context.Context, id int64) (int64, error)
 	ArchiveChannelCascade(ctx context.Context, id int64) (int64, error)
 	ArchiveChannelWithReplacement(ctx context.Context, arg sqlc.ArchiveChannelWithReplacementParams) (int64, error)
 	ListEnabledRoutesEmptiedByChannel(ctx context.Context, channelID int64) ([]sqlc.ListEnabledRoutesEmptiedByChannelRow, error)
 	RestoreChannel(ctx context.Context, id int64) (int64, error)
+}
+
+// RuntimeControlPublisher 是 Channel 四维限额的 durable publisher。
+type RuntimeControlPublisher interface {
+	Publish(ctx context.Context, req runtimecontrol.PublishRequest) (runtimecontrol.PublishResult, error)
+}
+
+// AdmissionControlStore 提供 Channel admission control 的定位、初始化与只读核对能力。
+type AdmissionControlStore interface {
+	ChannelAdmissionControl(channelID int64) breakerstore.ControlTarget
+	RestoreMissingControl(ctx context.Context, target breakerstore.ControlTarget, revision int64, payload string) (bool, error)
+	ReadControl(ctx context.Context, target breakerstore.ControlTarget, expectedRevision int64) (breakerstore.ControlSnapshot, error)
 }
 
 // AdapterRegistry 暴露 channel 写入前校验复合键是否被当前进程支持的最小能力，
@@ -77,19 +93,31 @@ type Channel struct {
 	ID           int64
 	ProviderID   int64
 	ProviderName string
-	Name         string
-	Protocol     string
-	AdapterKey   string
-	BaseURL      string
-	Credential   string
-	Status       string
-	Priority     int32
-	TimeoutMs    *int32
-	// RPMLimit/TPMLimit/RPDLimit 是渠道级限流上限（P2-8）：nil=继承全局默认，0=不限，>0=具体上限。
+	// ProviderEndpointID 是 channel 绑定的 ProviderEndpoint（唯一 API Root/公共故障域）。
+	ProviderEndpointID int64
+	// ProviderEndpointName / ProviderEndpointStatus / BaseURL 为只读展示，来源于所绑定 Endpoint。
+	ProviderEndpointName            string
+	ProviderEndpointStatus          string
+	ProviderEndpointBaseURLRevision int64
+	ProviderEndpointStatusRevision  int64
+	// ConfigRevision / AdmissionLimitsRevision 为只读返回（P4 §4.4）。
+	ConfigRevision          int64
+	AdmissionLimitsRevision int64
+	// RuntimeSyncPending 表示 PostgreSQL 已保存，但 revision 对应的 Redis control 尚未确认 active。
+	RuntimeSyncPending bool
+	Name               string
+	Protocol           string
+	AdapterKey         string
+	BaseURL            string
+	Credential         string
+	Status             string
+	Priority           int32
+	TimeoutMs          *int32
+	// RPMLimit/TPMLimit/RPDLimit 是渠道级限流上限（P2-8）：nil=继承渠道默认限流，0=不限，>0=具体上限。
 	RPMLimit *int64
 	TPMLimit *int64
 	RPDLimit *int64
-	// ConcurrencyLimit 是渠道在途并发上限（DEC-029）：nil=继承全局默认，0=不限，>0=具体上限。
+	// ConcurrencyLimit 是渠道在途并发上限（DEC-029）：nil=继承并发默认 channel_limit，0=不限，>0=具体上限。
 	ConcurrencyLimit *int64
 	// BillsOnDisconnect 标记上游「断开仍计费」（DESIGN-bill-on-cancel 阶段一）：
 	// true 时失败/取消路径会记平台成本敞口，纯观测不影响路由与客户计费。
@@ -103,6 +131,43 @@ type Channel struct {
 	LastTestOK        *bool
 	LastTestLatencyMs *int32
 	LastTestError     *string
+}
+
+// AdmissionLimits 是 Channel 四维限额的完整覆盖值。三维 rate 的 nil=继承渠道默认限流，
+// concurrency 的 nil=继承并发默认 channel_limit；0=不限，正数=明确上限。
+type AdmissionLimits struct {
+	RPM         *int64
+	RPD         *int64
+	TPM         *int64
+	Concurrency *int64
+}
+
+type admissionLimitsPayload struct {
+	RPM         *int64 `json:"rpm"`
+	RPD         *int64 `json:"rpd"`
+	TPM         *int64 `json:"tpm"`
+	Concurrency *int64 `json:"concurrency"`
+}
+
+// CanonicalAdmissionLimitsPayload 返回 Redis admission control 使用的规范化完整 JSON。
+// 字段固定存在，因此 nil 会稳定编码为 null（继承），不会与 0（不限）混淆。
+func CanonicalAdmissionLimitsPayload(limits AdmissionLimits) (string, error) {
+	if err := validateChannelRateLimits(limits.RPM, limits.TPM, limits.RPD, limits.Concurrency); err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(admissionLimitsPayload{
+		RPM: limits.RPM, RPD: limits.RPD, TPM: limits.TPM, Concurrency: limits.Concurrency,
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+// CanonicalAdmissionLimitsPayloadFromChannel 从 PostgreSQL Channel 事实还原同一规范 payload，
+// 供启动恢复和 runtime-control reconciler 共用，避免各处猜测 JSON schema。
+func CanonicalAdmissionLimitsPayloadFromChannel(row sqlc.Channel) (string, error) {
+	return CanonicalAdmissionLimitsPayload(admissionLimitsFromChannel(row))
 }
 
 // ListParams 是分页/过滤列出 channel 的入参；ProviderID<=0、Status/Query 为空表示不过滤。
@@ -124,16 +189,17 @@ type ListResult struct {
 //
 // AdapterKey 可选：留空时默认为 Protocol 同名的忠实透传 adapter（见 Create 注释）。
 type CreateInput struct {
-	ProviderID int64
-	Name       string
-	Protocol   string
-	AdapterKey string
-	BaseURL    string
-	Credential string
-	Status     string
-	Priority   int32
-	TimeoutMs  *int32
-	// RateLimitsProvided=true 时按 RPM/TPM/RPD/并发 设置渠道级限流（各值 nil=继承全局默认，0=不限，>0=具体上限）。
+	ProviderID         int64
+	ProviderEndpointID int64
+	Name               string
+	Protocol           string
+	AdapterKey         string
+	Credential         string
+	Status             string
+	Priority           int32
+	TimeoutMs          *int32
+	// RateLimitsProvided=true 时按 RPM/TPM/RPD/并发设置渠道级限流；rate 的 nil 继承渠道默认限流，
+	// concurrency 的 nil 继承并发默认 channel_limit，0=不限，>0=具体上限。
 	RateLimitsProvided bool
 	RPMLimit           *int64
 	TPMLimit           *int64
@@ -145,12 +211,12 @@ type CreateInput struct {
 
 // UpdateInput 是更新 channel 的入参；protocol、adapter_key 与凭据不在此修改。
 type UpdateInput struct {
-	ID        int64
-	Name      string
-	BaseURL   string
-	Status    string
-	Priority  int32
-	TimeoutMs *int32
+	ID                 int64
+	Name               string
+	ProviderEndpointID int64
+	Status             string
+	Priority           int32
+	TimeoutMs          *int32
 	// RateLimitsProvided=true 时按 RPM/TPM/RPD/并发 原子设置渠道级限流。
 	RateLimitsProvided bool
 	RPMLimit           *int64
@@ -167,15 +233,82 @@ type RotateCredentialInput struct {
 	Credential string
 }
 
+type CredentialVerificationState string
+
+const (
+	CredentialVerificationPassed          CredentialVerificationState = "passed"
+	CredentialVerificationFailed          CredentialVerificationState = "failed"
+	CredentialVerificationStale           CredentialVerificationState = "stale"
+	CredentialVerificationExecutionFailed CredentialVerificationState = "execution_failed"
+	CredentialVerificationNotRequired     CredentialVerificationState = "not_required"
+)
+
+// CredentialProbeResult 是凭据轮换响应中可安全返回的主动检测事实，不含 credential。
+type CredentialProbeResult struct {
+	Success       bool
+	LatencyMs     int64
+	TestedModel   string
+	HTTPStatus    int
+	ErrorCode     string
+	Message       string
+	UpstreamError string
+	TestedAt      time.Time
+}
+
+type CredentialVerification struct {
+	State                         CredentialVerificationState
+	TestedEndpointBaseURLRevision *int64
+	TestedEndpointStatusRevision  *int64
+	TestedConfigRevision          *int64
+	StateChangeApplied            bool
+	CredentialValidAfter          bool
+	Result                        *CredentialProbeResult
+}
+
+// RotateCredentialResult 明确区分「凭据已保存」与「即时检测是否通过」。
+type RotateCredentialResult struct {
+	CredentialSaved       bool
+	CredentialChanged     bool
+	SavedConfigRevision   int64
+	Verification          CredentialVerification
+	CurrentConfigRevision int64
+}
+
+// CredentialRotator 由 channeltest application service 实现，拥有原子保存、真实探测和 revision CAS。
+type CredentialRotator interface {
+	RotateCredentialAndTest(ctx context.Context, in RotateCredentialInput) (RotateCredentialResult, error)
+}
+
 // Service 编排 channel 管理读写。
 type Service struct {
-	store    Store
-	registry AdapterRegistry
+	store             Store
+	registry          AdapterRegistry
+	credentialRotator CredentialRotator
+	runtimePublisher  RuntimeControlPublisher
+	runtimeStore      AdmissionControlStore
 }
 
 // NewService 创建 channel 管理服务。
 func NewService(store Store, registry AdapterRegistry) *Service {
 	return &Service{store: store, registry: registry}
+}
+
+// WithRuntimeControl 注入 Channel 四维限额的 durable publisher 与 Redis control store。
+// 生产 bootstrap 必须注入；缺失时限额真变化会 fail-closed，创建结果会标记 runtime_sync_pending。
+func (s *Service) WithRuntimeControl(publisher RuntimeControlPublisher, runtimeStore AdmissionControlStore) *Service {
+	if s != nil {
+		s.runtimePublisher = publisher
+		s.runtimeStore = runtimeStore
+	}
+	return s
+}
+
+// WithCredentialRotator 接入凭据保存 + 即时检测编排；生产 bootstrap 必须注入。
+func (s *Service) WithCredentialRotator(rotator CredentialRotator) *Service {
+	if s != nil {
+		s.credentialRotator = rotator
+	}
+	return s
 }
 
 // AdapterKeyOptions 列出当前进程在受支持协议族下注册的全部 adapter_key，
@@ -222,7 +355,14 @@ func (s *Service) List(ctx context.Context, params ListParams) (ListResult, erro
 
 	items := make([]Channel, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, toChannelRow(row))
+		item := toChannelRow(row)
+		payload, payloadErr := CanonicalAdmissionLimitsPayload(AdmissionLimits{
+			RPM: item.RPMLimit, RPD: item.RPDLimit, TPM: item.TPMLimit, Concurrency: item.ConcurrencyLimit,
+		})
+		item.RuntimeSyncPending = payloadErr != nil || !s.admissionControlIsActive(
+			ctx, item.ID, item.AdmissionLimitsRevision, payload,
+		)
+		items = append(items, item)
 	}
 
 	return ListResult{Items: items, Total: total}, nil
@@ -242,7 +382,12 @@ func (s *Service) Get(ctx context.Context, id int64) (Channel, error) {
 		return Channel{}, storeFailed(err, "get channel")
 	}
 
-	return s.enrichProviderName(ctx, toChannel(row))
+	ch := toChannel(row)
+	payload, payloadErr := CanonicalAdmissionLimitsPayloadFromChannel(row)
+	ch.RuntimeSyncPending = payloadErr != nil || !s.admissionControlIsActive(
+		ctx, row.ID, row.AdmissionLimitsRevision, payload,
+	)
+	return s.enrichProviderName(ctx, ch)
 }
 
 // Create 创建 channel：校验复合键在 registry 注册、provider 存在，再加密凭据落库。
@@ -250,11 +395,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	name := strings.TrimSpace(in.Name)
 	protocol := strings.TrimSpace(in.Protocol)
 	adapterKey := strings.TrimSpace(in.AdapterKey)
-	baseURL := strings.TrimSpace(in.BaseURL)
 	status := strings.TrimSpace(in.Status)
 
 	if in.ProviderID <= 0 {
 		return Channel{}, invalidArgument("provider_id", "provider_id must be positive")
+	}
+	if in.ProviderEndpointID <= 0 {
+		return Channel{}, invalidArgument("provider_endpoint_id", "provider_endpoint_id must be positive")
 	}
 	if name == "" {
 		return Channel{}, invalidArgument("name", "name is required")
@@ -268,9 +415,6 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	if adapterKey == "" {
 		adapterKey = protocol
 	}
-	if err := validateBaseURL(baseURL); err != nil {
-		return Channel{}, err
-	}
 	if err := validateStatus(status); err != nil {
 		return Channel{}, err
 	}
@@ -278,6 +422,21 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		return Channel{}, invalidArgument("priority", "priority must be >= 0")
 	}
 	if err := validateTimeout(in.TimeoutMs); err != nil {
+		return Channel{}, err
+	}
+	if in.RateLimitsProvided {
+		if err := validateChannelRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit, in.ConcurrencyLimit); err != nil {
+			return Channel{}, err
+		}
+	}
+	limits := AdmissionLimits{}
+	if in.RateLimitsProvided {
+		limits = AdmissionLimits{
+			RPM: in.RPMLimit, RPD: in.RPDLimit, TPM: in.TPMLimit, Concurrency: in.ConcurrencyLimit,
+		}
+	}
+	admissionPayload, err := CanonicalAdmissionLimitsPayload(limits)
+	if err != nil {
 		return Channel{}, err
 	}
 	if strings.TrimSpace(in.Credential) == "" {
@@ -301,16 +460,30 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		return Channel{}, storeFailed(err, "load provider for channel")
 	}
 
+	// P4 §4.4：Channel 必须绑定同一 Provider 下的 Endpoint（复合外键在 DB 兜底，这里给出可读错误）。
+	if _, err := s.resolveEndpointForProvider(ctx, in.ProviderEndpointID, in.ProviderID); err != nil {
+		return Channel{}, err
+	}
+
+	billsOnDisconnect := false
+	if in.BillsOnDisconnect != nil {
+		billsOnDisconnect = *in.BillsOnDisconnect
+	}
 	row, err := s.store.CreateChannel(ctx, sqlc.CreateChannelParams{
-		ProviderID: in.ProviderID,
-		Name:       name,
-		Protocol:   protocol,
-		AdapterKey: adapterKey,
-		BaseUrl:    baseURL,
-		Credential: strings.TrimSpace(in.Credential),
-		Status:     status,
-		Priority:   in.Priority,
-		TimeoutMs:  timeoutParam(in.TimeoutMs),
+		ProviderID:                in.ProviderID,
+		ProviderEndpointID:        in.ProviderEndpointID,
+		Name:                      name,
+		Protocol:                  protocol,
+		AdapterKey:                adapterKey,
+		Credential:                strings.TrimSpace(in.Credential),
+		Status:                    status,
+		Priority:                  in.Priority,
+		TimeoutMs:                 timeoutParam(in.TimeoutMs),
+		RpmLimit:                  rateLimitParam(limits.RPM),
+		TpmLimit:                  rateLimitParam(limits.TPM),
+		RpdLimit:                  rateLimitParam(limits.RPD),
+		ConcurrencyLimit:          rateLimitParam(limits.Concurrency),
+		UpstreamBillsOnDisconnect: billsOnDisconnect,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -322,36 +495,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		return Channel{}, storeFailed(err, "create channel")
 	}
 
-	// 渠道级限流作为独立 UPDATE（CreateChannel 不接收 rpm/tpm/rpd），创建后按需补设（P2-8）。
-	if in.RateLimitsProvided {
-		if err := validateChannelRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit, in.ConcurrencyLimit); err != nil {
-			return Channel{}, err
-		}
-		limited, err := s.store.SetChannelRateLimits(ctx, sqlc.SetChannelRateLimitsParams{
-			ID:               row.ID,
-			RpmLimit:         rateLimitParam(in.RPMLimit),
-			TpmLimit:         rateLimitParam(in.TPMLimit),
-			RpdLimit:         rateLimitParam(in.RPDLimit),
-			ConcurrencyLimit: rateLimitParam(in.ConcurrencyLimit),
-		})
-		if err != nil {
-			return Channel{}, storeFailed(err, "set channel rate limits")
-		}
-		row = limited
-	}
-
-	if in.BillsOnDisconnect != nil {
-		flagged, err := s.store.SetChannelBillingBehavior(ctx, sqlc.SetChannelBillingBehaviorParams{
-			ID:                        row.ID,
-			UpstreamBillsOnDisconnect: *in.BillsOnDisconnect,
-		})
-		if err != nil {
-			return Channel{}, storeFailed(err, "set channel billing behavior")
-		}
-		row = flagged
-	}
-
-	return s.enrichProviderName(ctx, toChannel(row))
+	ch := toChannel(row)
+	ch.RuntimeSyncPending = !s.initializeAdmissionControl(ctx, row, admissionPayload)
+	return s.enrichProviderName(ctx, ch)
 }
 
 // Update 更新 channel 的展示名、上游地址、状态、优先级与超时。
@@ -360,14 +506,13 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 		return Channel{}, invalidArgument("id", "channel id must be positive")
 	}
 	name := strings.TrimSpace(in.Name)
-	baseURL := strings.TrimSpace(in.BaseURL)
 	status := strings.TrimSpace(in.Status)
 
 	if name == "" {
 		return Channel{}, invalidArgument("name", "name is required")
 	}
-	if err := validateBaseURL(baseURL); err != nil {
-		return Channel{}, err
+	if in.ProviderEndpointID <= 0 {
+		return Channel{}, invalidArgument("provider_endpoint_id", "provider_endpoint_id must be positive")
 	}
 	if err := validateStatus(status); err != nil {
 		return Channel{}, err
@@ -379,13 +524,41 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 		return Channel{}, err
 	}
 
+	// P4 §4.4：换绑 Endpoint 必须仍属于该 channel 的 Provider。
+	cur, err := s.store.GetChannel(ctx, in.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Channel{}, notFound("channel not found")
+		}
+		return Channel{}, storeFailed(err, "get channel for update")
+	}
+	if _, err := s.resolveEndpointForProvider(ctx, in.ProviderEndpointID, cur.ProviderID); err != nil {
+		return Channel{}, err
+	}
+	if in.RateLimitsProvided {
+		desiredLimits := AdmissionLimits{
+			RPM: in.RPMLimit, RPD: in.RPDLimit, TPM: in.TPMLimit, Concurrency: in.ConcurrencyLimit,
+		}
+		desiredPayload, payloadErr := CanonicalAdmissionLimitsPayload(desiredLimits)
+		if payloadErr != nil {
+			return Channel{}, payloadErr
+		}
+		currentPayload, payloadErr := CanonicalAdmissionLimitsPayloadFromChannel(cur)
+		if payloadErr != nil {
+			return Channel{}, storeFailed(payloadErr, "encode current channel admission limits")
+		}
+		if currentPayload != desiredPayload {
+			return s.updateWithPublishedAdmissionLimits(ctx, in, cur, desiredLimits, desiredPayload)
+		}
+	}
+
 	row, err := s.store.UpdateChannel(ctx, sqlc.UpdateChannelParams{
-		ID:        in.ID,
-		Name:      name,
-		BaseUrl:   baseURL,
-		Status:    status,
-		Priority:  in.Priority,
-		TimeoutMs: timeoutParam(in.TimeoutMs),
+		ID:                 in.ID,
+		Name:               name,
+		ProviderEndpointID: in.ProviderEndpointID,
+		Status:             status,
+		Priority:           in.Priority,
+		TimeoutMs:          timeoutParam(in.TimeoutMs),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -395,26 +568,6 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 			return Channel{}, conflict("channel name already exists for this provider")
 		}
 		return Channel{}, storeFailed(err, "update channel")
-	}
-
-	if in.RateLimitsProvided {
-		if err := validateChannelRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit, in.ConcurrencyLimit); err != nil {
-			return Channel{}, err
-		}
-		limited, err := s.store.SetChannelRateLimits(ctx, sqlc.SetChannelRateLimitsParams{
-			ID:               in.ID,
-			RpmLimit:         rateLimitParam(in.RPMLimit),
-			TpmLimit:         rateLimitParam(in.TPMLimit),
-			RpdLimit:         rateLimitParam(in.RPDLimit),
-			ConcurrencyLimit: rateLimitParam(in.ConcurrencyLimit),
-		})
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return Channel{}, notFound("channel not found")
-			}
-			return Channel{}, storeFailed(err, "set channel rate limits")
-		}
-		row = limited
 	}
 
 	if in.BillsOnDisconnect != nil {
@@ -431,30 +584,163 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 		row = flagged
 	}
 
-	return s.enrichProviderName(ctx, toChannel(row))
+	ch := toChannel(row)
+	if payload, payloadErr := CanonicalAdmissionLimitsPayloadFromChannel(row); payloadErr == nil {
+		ch.RuntimeSyncPending = !s.admissionControlIsActive(ctx, row.ID, row.AdmissionLimitsRevision, payload)
+	} else {
+		ch.RuntimeSyncPending = true
+	}
+	return s.enrichProviderName(ctx, ch)
 }
 
-// RotateCredential 轮换 channel 上游凭据；目标不存在返回 not_found。
-func (s *Service) RotateCredential(ctx context.Context, in RotateCredentialInput) error {
-	if in.ID <= 0 {
-		return invalidArgument("id", "channel id must be positive")
+func (s *Service) updateWithPublishedAdmissionLimits(
+	ctx context.Context,
+	in UpdateInput,
+	current sqlc.Channel,
+	limits AdmissionLimits,
+	payload string,
+) (Channel, error) {
+	if s.runtimePublisher == nil || s.runtimeStore == nil {
+		return Channel{}, failure.New(
+			failure.CodeGatewayBreakerStoreUnavailable,
+			failure.WithMessage("channel: admission runtime-control publisher unavailable"),
+		)
 	}
-	if strings.TrimSpace(in.Credential) == "" {
-		return invalidArgument("credential", "credential is required")
+	token, err := newAdmissionControlToken()
+	if err != nil {
+		return Channel{}, failure.Wrap(
+			failure.CodeConfigInvalid,
+			err,
+			failure.WithMessage("channel: generate admission runtime-control token"),
+		)
 	}
 
-	affected, err := s.store.UpdateChannelCredential(ctx, sqlc.UpdateChannelCredentialParams{
-		ID:         in.ID,
-		Credential: strings.TrimSpace(in.Credential),
+	nextRevision := current.AdmissionLimitsRevision + 1
+	channelID := current.ID
+	var committedRow sqlc.Channel
+	publishResult, err := s.runtimePublisher.Publish(ctx, runtimecontrol.PublishRequest{
+		Kind:            runtimecontrol.KindChannelAdmissionLimits,
+		Target:          s.runtimeStore.ChannelAdmissionControl(channelID),
+		Token:           token,
+		Payload:         payload,
+		CurrentRevision: current.AdmissionLimitsRevision,
+		NextRevision:    nextRevision,
+		ChannelID:       &channelID,
+		BusinessCommit: func(ctx context.Context, tx pgx.Tx) error {
+			qtx := sqlc.New(tx)
+			row, updateErr := qtx.UpdateChannel(ctx, sqlc.UpdateChannelParams{
+				ID:                 in.ID,
+				Name:               strings.TrimSpace(in.Name),
+				ProviderEndpointID: in.ProviderEndpointID,
+				Status:             strings.TrimSpace(in.Status),
+				Priority:           in.Priority,
+				TimeoutMs:          timeoutParam(in.TimeoutMs),
+			})
+			if updateErr != nil {
+				return channelUpdateError(updateErr)
+			}
+			row, updateErr = qtx.CommitChannelAdmissionLimitsAtRevision(ctx, sqlc.CommitChannelAdmissionLimitsAtRevisionParams{
+				RpmLimit:         rateLimitParam(limits.RPM),
+				TpmLimit:         rateLimitParam(limits.TPM),
+				RpdLimit:         rateLimitParam(limits.RPD),
+				ConcurrencyLimit: rateLimitParam(limits.Concurrency),
+				NextRevision:     nextRevision,
+				ID:               channelID,
+				CurrentRevision:  current.AdmissionLimitsRevision,
+			})
+			if updateErr != nil {
+				if errors.Is(updateErr, pgx.ErrNoRows) {
+					return conflict("channel admission limits changed during publish; retry with current state")
+				}
+				return storeFailed(updateErr, "commit channel admission limits")
+			}
+			if in.BillsOnDisconnect != nil {
+				row, updateErr = qtx.SetChannelBillingBehavior(ctx, sqlc.SetChannelBillingBehaviorParams{
+					ID: channelID, UpstreamBillsOnDisconnect: *in.BillsOnDisconnect,
+				})
+				if updateErr != nil {
+					return channelUpdateError(updateErr)
+				}
+			}
+			committedRow = row
+			return nil
+		},
 	})
 	if err != nil {
-		return storeFailed(err, "rotate channel credential")
+		return Channel{}, err
 	}
-	if affected == 0 {
-		return notFound("channel not found")
+	if publishResult.State != runtimecontrol.PublishCommitted && publishResult.State != runtimecontrol.PublishRuntimeSyncPending {
+		return Channel{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("channel: admission runtime-control publish did not commit business state"),
+		)
 	}
 
-	return nil
+	row := committedRow
+	if row.ID == 0 {
+		row, err = s.store.GetChannel(ctx, channelID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return Channel{}, notFound("channel not found after admission limits publish")
+			}
+			return Channel{}, storeFailed(err, "get channel after admission limits publish")
+		}
+	}
+	ch := toChannel(row)
+	ch.RuntimeSyncPending = publishResult.State == runtimecontrol.PublishRuntimeSyncPending
+	return s.enrichProviderName(ctx, ch)
+}
+
+func channelUpdateError(err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return notFound("channel not found")
+	}
+	if isUniqueViolation(err) {
+		return conflict("channel name already exists for this provider")
+	}
+	return storeFailed(err, "update channel")
+}
+
+func (s *Service) initializeAdmissionControl(ctx context.Context, row sqlc.Channel, payload string) bool {
+	if s.runtimeStore == nil || row.AdmissionLimitsRevision <= 0 {
+		return false
+	}
+	target := s.runtimeStore.ChannelAdmissionControl(row.ID)
+	if _, err := s.runtimeStore.RestoreMissingControl(ctx, target, row.AdmissionLimitsRevision, payload); err != nil {
+		return false
+	}
+	return s.admissionControlIsActive(ctx, row.ID, row.AdmissionLimitsRevision, payload)
+}
+
+func (s *Service) admissionControlIsActive(ctx context.Context, channelID, revision int64, payload string) bool {
+	if s.runtimeStore == nil {
+		return false
+	}
+	snapshot, err := s.runtimeStore.ReadControl(
+		ctx,
+		s.runtimeStore.ChannelAdmissionControl(channelID),
+		revision,
+	)
+	return err == nil &&
+		snapshot.SyncState == "active" &&
+		snapshot.ActiveRevision == revision &&
+		snapshot.PendingRevision == 0 &&
+		snapshot.ActivePayload == payload
+}
+
+// RotateCredential 原子保存 channel 上游凭据并同步执行 revision-safe 主动检测。
+func (s *Service) RotateCredential(ctx context.Context, in RotateCredentialInput) (RotateCredentialResult, error) {
+	if in.ID <= 0 {
+		return RotateCredentialResult{}, invalidArgument("id", "channel id must be positive")
+	}
+	in.Credential = strings.TrimSpace(in.Credential)
+	if in.Credential == "" {
+		return RotateCredentialResult{}, invalidArgument("credential", "credential is required")
+	}
+	if s.credentialRotator == nil {
+		return RotateCredentialResult{}, storeFailed(errors.New("credential rotator is unavailable"), "rotate channel credential")
+	}
+	return s.credentialRotator.RotateCredentialAndTest(ctx, in)
 }
 
 // Delete 物理删除 channel，用于清理录错的脏数据，并级联清理它自身的配置子表
@@ -510,7 +796,7 @@ func (s *Service) Archive(ctx context.Context, id int64, replacementChannelID *i
 			}
 			return storeFailed(err, "get replacement channel")
 		}
-		if replacement.Status != StatusEnabled || !replacement.CredentialValid || replacement.Credential == "" || replacement.BaseUrl == "" {
+		if replacement.Status != StatusEnabled || !replacement.CredentialValid || replacement.Credential == "" {
 			return conflict("replacement channel must be enabled, credential-valid, and fully configured")
 		}
 		provider, err := s.store.GetProvider(ctx, replacement.ProviderID)
@@ -587,24 +873,26 @@ func (s *Service) Restore(ctx context.Context, id int64) error {
 
 func toChannel(c sqlc.Channel) Channel {
 	return Channel{
-		ID:                c.ID,
-		ProviderID:        c.ProviderID,
-		Name:              c.Name,
-		Protocol:          c.Protocol,
-		AdapterKey:        c.AdapterKey,
-		BaseURL:           c.BaseUrl,
-		Credential:        c.Credential,
-		Status:            c.Status,
-		Priority:          c.Priority,
-		TimeoutMs:         timeoutResult(c.TimeoutMs),
-		RPMLimit:          rateLimitResult(c.RpmLimit),
-		TPMLimit:          rateLimitResult(c.TpmLimit),
-		RPDLimit:          rateLimitResult(c.RpdLimit),
-		ConcurrencyLimit:  rateLimitResult(c.ConcurrencyLimit),
-		BillsOnDisconnect: c.UpstreamBillsOnDisconnect,
-		CreatedAt:         c.CreatedAt.Time,
-		UpdatedAt:         c.UpdatedAt.Time,
-		ArchivedAt:        timestampResult(c.ArchivedAt),
+		ID:                      c.ID,
+		ProviderID:              c.ProviderID,
+		ProviderEndpointID:      c.ProviderEndpointID,
+		ConfigRevision:          c.ConfigRevision,
+		AdmissionLimitsRevision: c.AdmissionLimitsRevision,
+		Name:                    c.Name,
+		Protocol:                c.Protocol,
+		AdapterKey:              c.AdapterKey,
+		Credential:              c.Credential,
+		Status:                  c.Status,
+		Priority:                c.Priority,
+		TimeoutMs:               timeoutResult(c.TimeoutMs),
+		RPMLimit:                rateLimitResult(c.RpmLimit),
+		TPMLimit:                rateLimitResult(c.TpmLimit),
+		RPDLimit:                rateLimitResult(c.RpdLimit),
+		ConcurrencyLimit:        rateLimitResult(c.ConcurrencyLimit),
+		BillsOnDisconnect:       c.UpstreamBillsOnDisconnect,
+		CreatedAt:               c.CreatedAt.Time,
+		UpdatedAt:               c.UpdatedAt.Time,
+		ArchivedAt:              timestampResult(c.ArchivedAt),
 
 		LastTestedAt:      timestampResult(c.LastTestedAt),
 		LastTestOK:        boolResult(c.LastTestOk),
@@ -613,42 +901,76 @@ func toChannel(c sqlc.Channel) Channel {
 	}
 }
 
-func (s *Service) enrichProviderName(ctx context.Context, ch Channel) (Channel, error) {
-	if ch.ProviderID <= 0 {
-		return ch, nil
-	}
-	provider, err := s.store.GetProvider(ctx, ch.ProviderID)
+// resolveEndpointForProvider 校验 Endpoint 存在且归属指定 Provider（复合外键的可读前置校验）。
+func (s *Service) resolveEndpointForProvider(ctx context.Context, endpointID, providerID int64) (sqlc.ProviderEndpoint, error) {
+	ep, err := s.store.GetProviderEndpoint(ctx, endpointID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ch, nil
+			return sqlc.ProviderEndpoint{}, invalidArgument("provider_endpoint_id", "provider endpoint not found")
 		}
-		return Channel{}, storeFailed(err, "load provider for channel")
+		return sqlc.ProviderEndpoint{}, storeFailed(err, "load provider endpoint for channel")
 	}
-	ch.ProviderName = provider.Name
+	if ep.ProviderID != providerID {
+		return sqlc.ProviderEndpoint{}, invalidArgument("provider_endpoint_id", "provider endpoint does not belong to the channel provider")
+	}
+	return ep, nil
+}
+
+func (s *Service) enrichProviderName(ctx context.Context, ch Channel) (Channel, error) {
+	if ch.ProviderID > 0 {
+		provider, err := s.store.GetProvider(ctx, ch.ProviderID)
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return Channel{}, storeFailed(err, "load provider for channel")
+			}
+		} else {
+			ch.ProviderName = provider.Name
+		}
+	}
+	// 单条读取时从所绑定 Endpoint 只读带出 base_url/name/status（列表由 JOIN 直接带出）。
+	if ch.ProviderEndpointID > 0 && ch.BaseURL == "" {
+		ep, err := s.store.GetProviderEndpoint(ctx, ch.ProviderEndpointID)
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return Channel{}, storeFailed(err, "load provider endpoint for channel")
+			}
+		} else {
+			ch.BaseURL = ep.BaseUrl
+			ch.ProviderEndpointName = ep.Name
+			ch.ProviderEndpointStatus = ep.Status
+			ch.ProviderEndpointBaseURLRevision = ep.BaseUrlRevision
+			ch.ProviderEndpointStatusRevision = ep.StatusRevision
+		}
+	}
 	return ch, nil
 }
 
 // toChannelRow 映射分页列表行，额外带出 JOIN 出的 provider 名称。
 func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 	return Channel{
-		ID:                c.ID,
-		ProviderID:        c.ProviderID,
-		ProviderName:      c.ProviderName,
-		Name:              c.Name,
-		Protocol:          c.Protocol,
-		AdapterKey:        c.AdapterKey,
-		BaseURL:           c.BaseUrl,
-		Credential:        c.Credential,
-		Status:            c.Status,
-		Priority:          c.Priority,
-		TimeoutMs:         timeoutResult(c.TimeoutMs),
-		RPMLimit:          rateLimitResult(c.RpmLimit),
-		TPMLimit:          rateLimitResult(c.TpmLimit),
-		RPDLimit:          rateLimitResult(c.RpdLimit),
-		ConcurrencyLimit:  rateLimitResult(c.ConcurrencyLimit),
-		BillsOnDisconnect: c.UpstreamBillsOnDisconnect,
-		CreatedAt:         c.CreatedAt.Time,
-		UpdatedAt:         c.UpdatedAt.Time,
+		ID:                      c.ID,
+		ProviderID:              c.ProviderID,
+		ProviderName:            c.ProviderName,
+		ProviderEndpointID:      c.ProviderEndpointID,
+		ProviderEndpointName:    c.ProviderEndpointName,
+		ProviderEndpointStatus:  c.ProviderEndpointStatus,
+		ConfigRevision:          c.ConfigRevision,
+		AdmissionLimitsRevision: c.AdmissionLimitsRevision,
+		Name:                    c.Name,
+		Protocol:                c.Protocol,
+		AdapterKey:              c.AdapterKey,
+		BaseURL:                 c.BaseUrl,
+		Credential:              c.Credential,
+		Status:                  c.Status,
+		Priority:                c.Priority,
+		TimeoutMs:               timeoutResult(c.TimeoutMs),
+		RPMLimit:                rateLimitResult(c.RpmLimit),
+		TPMLimit:                rateLimitResult(c.TpmLimit),
+		RPDLimit:                rateLimitResult(c.RpdLimit),
+		ConcurrencyLimit:        rateLimitResult(c.ConcurrencyLimit),
+		BillsOnDisconnect:       c.UpstreamBillsOnDisconnect,
+		CreatedAt:               c.CreatedAt.Time,
+		UpdatedAt:               c.UpdatedAt.Time,
 
 		LastTestedAt:      timestampResult(c.LastTestedAt),
 		LastTestOK:        boolResult(c.LastTestOk),
@@ -657,7 +979,7 @@ func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 	}
 }
 
-// rateLimitParam 把 *int64 转成可空 pgtype.Int4（nil=NULL 继承全局默认；含 0=显式不限）。
+// rateLimitParam 把 *int64 转成可空 pgtype.Int4（nil=NULL 继承对应系统默认；含 0=显式不限）。
 func rateLimitParam(v *int64) pgtype.Int4 {
 	if v == nil {
 		return pgtype.Int4{Valid: false}
@@ -665,13 +987,30 @@ func rateLimitParam(v *int64) pgtype.Int4 {
 	return pgtype.Int4{Int32: int32(*v), Valid: true}
 }
 
-// rateLimitResult 把可空 pgtype.Int4 转成 *int64（nil=继承全局默认）。
+// rateLimitResult 把可空 pgtype.Int4 转成 *int64（nil=继承对应系统默认）。
 func rateLimitResult(v pgtype.Int4) *int64 {
 	if !v.Valid {
 		return nil
 	}
 	out := int64(v.Int32)
 	return &out
+}
+
+func admissionLimitsFromChannel(row sqlc.Channel) AdmissionLimits {
+	return AdmissionLimits{
+		RPM:         rateLimitResult(row.RpmLimit),
+		RPD:         rateLimitResult(row.RpdLimit),
+		TPM:         rateLimitResult(row.TpmLimit),
+		Concurrency: rateLimitResult(row.ConcurrencyLimit),
+	}
+}
+
+func newAdmissionControlToken() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return "rctl_channel_" + hex.EncodeToString(raw[:]), nil
 }
 
 // validateChannelRateLimits 校验渠道级限流非负（限流上限不能为负数）。

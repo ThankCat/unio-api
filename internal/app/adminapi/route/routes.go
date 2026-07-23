@@ -31,7 +31,7 @@ type routeDTO struct {
 	Status string `json:"status"`
 	// PriceRatio 客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率），十进制字符串。
 	PriceRatio string `json:"price_ratio"`
-	// RPM/TPM/RPDLimit 线路级限流上限（DEC-027：按 (线路,用户) 计数）；null=继承全局默认，0=不限，>0=上限。
+	// RPM/TPM/RPDLimit 线路级限流上限（DEC-027：按 (线路,用户) 计数）；null=继承线路默认限流，0=不限，>0=上限。
 	RPMLimit *int64 `json:"rpm_limit"`
 	TPMLimit *int64 `json:"tpm_limit"`
 	RPDLimit *int64 `json:"rpd_limit"`

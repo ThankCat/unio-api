@@ -16,6 +16,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 const (
@@ -30,7 +31,7 @@ var supportedAnthropicVersions = map[string]struct{}{
 
 // MessagesService 定义 Anthropic Messages handler 依赖的业务能力。
 type MessagesService interface {
-	CreateMessage(ctx context.Context, req MessageRequest) (*MessageResponse, error)
+	CreateMessage(ctx context.Context, req MessageRequest) (*lifecycle.NonStreamResult[*MessageResponse], error)
 	StreamMessage(ctx context.Context, req MessageRequest, emit func(StreamFrame) error) error
 }
 
@@ -99,13 +100,15 @@ func (h *messagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.service.CreateMessage(r.Context(), req)
+	result, err := h.service.CreateMessage(r.Context(), req)
 	if err != nil {
 		writeMessageServiceError(w, req, err)
 		return
 	}
 
-	_ = httpx.WriteJSON(w, http.StatusOK, resp)
+	_ = result.FinalizeDelivery(func(resp *MessageResponse) error {
+		return httpx.WriteJSON(w, http.StatusOK, resp)
+	})
 }
 
 func validateAnthropicIngressHeaders(r *http.Request) *messageValidationError {
@@ -193,6 +196,7 @@ func writeJSONDecodeError(w http.ResponseWriter, err error) {
 
 func writeMessageServiceError(w http.ResponseWriter, req MessageRequest, err error) {
 	status, errorType, message := mapMessageServiceError(req, err)
+	httpx.SetRetryAfter(w, lifecycle.ProvableRetryAfter(err))
 	_ = writeAnthropicError(w, status, errorType, message, "")
 }
 
@@ -205,6 +209,8 @@ func mapMessageServiceError(req MessageRequest, err error) (status int, errorTyp
 	case failure.CodeOf(err) == failure.CodeRateLimitExceeded, failure.CodeOf(err) == failure.CodeGatewayChannelRateLimited, failure.CodeOf(err) == failure.CodeGatewayChannelConcurrencyLimited:
 		// Key 级 TPM 或渠道级 RPM/TPM/RPD 限流命中（P2-8）：统一 429，不泄露具体维度阈值。
 		return http.StatusTooManyRequests, "rate_limit_error", "You have exceeded the rate limit. Please slow down and retry later."
+	case isMessageRequestAdmissionUnavailable(err):
+		return http.StatusServiceUnavailable, "api_error", "The service is temporarily unavailable."
 	case failure.CodeOf(err) == failure.CodeAdapterRequestUnsupported:
 		return http.StatusBadRequest, "invalid_request_error", "This model does not support one of the request parameters."
 	case errors.Is(err, routing.ErrModelNotFound), errors.Is(err, routing.ErrModelNotAvailable):
@@ -220,6 +226,20 @@ func mapMessageServiceError(req MessageRequest, err error) (status int, errorTyp
 	}
 
 	return http.StatusInternalServerError, "api_error", "request failed"
+}
+
+func isMessageRequestAdmissionUnavailable(err error) bool {
+	switch failure.CodeOf(err) {
+	case failure.CodeGatewayBreakerStoreUnavailable,
+		failure.CodeGatewayRuntimeSyncRequired,
+		failure.CodeGatewayRuntimeStateLost,
+		failure.CodeGatewayBreakerPermitConflict,
+		failure.CodeDependencyRedisUnavailable,
+		failure.CodeDependencyPostgresUnavailable:
+		return true
+	default:
+		return false
+	}
 }
 
 // mapUpstreamMessageError 把上游错误分类映射成 Anthropic 原生错误响应。

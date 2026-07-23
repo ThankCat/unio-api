@@ -18,6 +18,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
 // ChatTxBeginner 定义 chat settlement 开启数据库事务所需能力。
@@ -524,6 +525,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 				failure.WithMessage("commit idempotent chat settlement replay"),
 			)
 		}
+		publishRequestAdmissionUsage(ctx, params.Facts)
 		return nil
 
 	default:
@@ -844,8 +846,16 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 			failure.WithMessage("commit chat settlement transaction"),
 		)
 	}
+	publishRequestAdmissionUsage(ctx, params.Facts)
 
 	return nil
+}
+
+func publishRequestAdmissionUsage(ctx context.Context, facts adapter.ResponseFacts) {
+	if facts.UsageSource.IsPartialEstimate() {
+		return
+	}
+	requestadmission.PublishAuthoritativeUsage(ctx, billableTPMTokens(facts.Usage))
 }
 
 // FinalizeDeadChatSettlement 收口一条「补偿任务已 dead、但请求仍停留在 running」的资金/状态残留。

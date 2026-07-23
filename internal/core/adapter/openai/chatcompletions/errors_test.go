@@ -42,7 +42,7 @@ func TestAdapterChatCompletionsClassifiesUpstreamStatus(t *testing.T) {
 			openAIAdapter := newTestAdapter(server.Client())
 
 			_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
-				BaseURL: server.URL + "/v1",
+				BaseURL: server.URL,
 				APIKey:  "test-secret",
 				Timeout: 30 * time.Second,
 			}, ChatRequest{
@@ -95,7 +95,7 @@ func TestAdapterChatCompletionsClassifiesTimeoutAsUpstreamCategory(t *testing.T)
 	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 50 * time.Millisecond,
 	}, ChatRequest{
@@ -151,7 +151,7 @@ func TestAdapterChatCompletionsClassifiesCanceledAsUpstreamCategory(t *testing.T
 	}()
 
 	_, err := openAIAdapter.ChatCompletions(ctx, channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{
@@ -197,7 +197,7 @@ func TestAdapterChatCompletionsPopulatesSuccessMetadata(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 
 	got, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{
@@ -240,7 +240,7 @@ func TestAdapterStreamChatCompletionsPopulatesUsageChunkMetadata(t *testing.T) {
 
 	var usageChunk *ChatStreamChunk
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{
@@ -284,7 +284,7 @@ func TestAdapterStreamChatCompletionsClassifiesUpstreamStatus(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL + "/v1",
+		BaseURL: server.URL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}, ChatRequest{

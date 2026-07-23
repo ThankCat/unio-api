@@ -101,7 +101,7 @@ func TestResponsesMockNonStreamSucceeds(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 	})
 
 	resp := doResponses(t, http.MethodPost, f.BaseURL+"/responses", f.APIKey,
@@ -162,7 +162,7 @@ func TestResponsesMockSettlementWritesAuditTrail(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 	})
 
 	resp := doResponses(t, http.MethodPost, f.BaseURL+"/responses", f.APIKey,
@@ -251,7 +251,7 @@ func TestResponsesBackgroundRejected(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 	})
 
 	resp := doResponses(t, http.MethodPost, f.BaseURL+"/responses", f.APIKey,
@@ -279,7 +279,7 @@ func TestResponsesStatelessUnsupported(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 	})
 
 	cases := []struct {
@@ -317,7 +317,7 @@ func TestResponsesCompact(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 	})
 
 	resp := doResponses(t, http.MethodPost, f.BaseURL+"/responses/compact", f.APIKey,
@@ -359,7 +359,7 @@ func TestResponsesInputTokens(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 	})
 
 	resp := doResponses(t, http.MethodPost, f.BaseURL+"/responses/input_tokens", f.APIKey,

@@ -1,9 +1,9 @@
 // Package sessionhint 在 ingress 与 gateway service 之间传递客户端会话标识
-//（会话粘性路由的会话键来源之一，大 uncache 缺口 P0）。
+// （会话粘性路由的会话键来源之一，大 uncache 缺口 P0）。
 //
 // HTTP handler 从请求头捕获会话 ID（OpenAI 族：session-id；Anthropic 族：
 // x-claude-code-session-id）写入 ctx；协议 service 按各自协议的提取顺序消费
-//（body 字段优先，头部回退）。只传递不解释：这里不做任何格式校验，是否可用由提取器判定。
+// （body 字段优先，头部回退）。只传递不解释：这里不做任何格式校验，是否可用由提取器判定。
 package sessionhint
 
 import (
@@ -31,7 +31,7 @@ func ClientSessionID(ctx context.Context) string {
 }
 
 // maxSessionKeyLength 是会话键的保守长度上限：会话键是客户端可控输入，超长直接视为无信号
-//（入 Redis 键前还会定长哈希，这里只挡明显滥用）。
+// （入 Redis 键前还会定长哈希，这里只挡明显滥用）。
 const maxSessionKeyLength = 512
 
 // OpenAISessionKey 按 OpenAI 族提取顺序产出 sticky 会话键（决议 6）：

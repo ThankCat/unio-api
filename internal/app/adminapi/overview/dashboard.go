@@ -193,8 +193,8 @@ type badChannelDTO struct {
 	Status           string  `json:"status"`
 	AttemptTotal     int64   `json:"attempt_total"`
 	AttemptSucceeded int64   `json:"attempt_succeeded"`
+	AttemptFailed    int64   `json:"attempt_failed"`
 	SuccessRate      float64 `json:"success_rate"`
-	Bucket           string  `json:"bucket"`
 	RecentErrorCode  string  `json:"recent_error_code"`
 }
 
@@ -230,7 +230,6 @@ type breakdownRowDTO struct {
 	Latency        adminhttp.LatencyStatsDTO `json:"latency"`
 	LatencyP95     float64                   `json:"latency_p95"`
 	AvgTPS         float64                   `json:"avg_tps"`
-	HealthBucket   string                    `json:"health_bucket"`
 	RecentError    string                    `json:"recent_error"`
 	ChannelCount   int64                     `json:"channel_count"`
 	SuccessBuckets []successBucketDTO        `json:"success_buckets,omitempty"`
@@ -332,7 +331,6 @@ func (h *dashboardHandler) breakdown(w http.ResponseWriter, r *http.Request) {
 			},
 			LatencyP95:     row.LatencyP95,
 			AvgTPS:         row.AvgTPS,
-			HealthBucket:   row.HealthBucket,
 			RecentError:    row.RecentError,
 			ChannelCount:   row.ChannelCount,
 			SuccessBuckets: successBuckets,
@@ -448,8 +446,8 @@ func toRadarDTO(r dashboard.RadarReport) radarDTO {
 			Status:           b.Status,
 			AttemptTotal:     b.AttemptTotal,
 			AttemptSucceeded: b.AttemptSucceeded,
+			AttemptFailed:    b.AttemptFailed,
 			SuccessRate:      b.SuccessRate,
-			Bucket:           b.Bucket,
 			RecentErrorCode:  b.RecentErrorCode,
 		})
 	}

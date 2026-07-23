@@ -2,8 +2,6 @@ package channel
 
 import (
 	"github.com/go-chi/chi/v5"
-
-	"github.com/ThankCat/unio-gateway/internal/service/admin/gatewayruntime"
 )
 
 // Deps 是渠道模块的路由依赖（渠道 CRUD/运维/检测/绑定/成本价/成本倍率/充值倍率）。
@@ -15,21 +13,28 @@ type Deps struct {
 	PriceService          ChannelPriceService
 	CostMultiplierService ChannelCostMultiplierService
 	RechargeFactorService ChannelRechargeFactorService
-	// BreakerClient 可选：渠道列表挂载 gateway 熔断快照；nil 则不展示徽章。
-	BreakerClient *gatewayruntime.Client
+	// Breaker 可选：P4 Redis 全局 breaker 只读运行态与复位（§8.4/§8.5）；nil 时 ops/runtime 与复位返回 503。
+	Breaker BreakerRuntime
 }
 
 // Register 注册渠道模块路由。静态 /channels/ops* 与 /channels/adapter-keys 均置于 /channels/{id} 之前。
 func Register(r chi.Router, d Deps) {
 	// §3.3 渠道作战台只读运维聚合：静态 /channels/ops* 必须在 /channels/{id} 之前注册。
 	if d.OpsService != nil {
-		coh := &channelOpsHandler{service: d.OpsService, breaker: d.BreakerClient}
+		coh := &channelOpsHandler{service: d.OpsService}
 		r.Get("/channels/ops", coh.table)
 		r.Get("/channels/{id}/ops/detail", coh.detail)
 		r.Get("/channels/{id}/ops/performance", coh.performance)
 		r.Get("/channels/{id}/ops/errors", coh.errors)
 		r.Get("/channels/{id}/ops/models", coh.models)
 		r.Get("/channels/{id}/ops/routes", coh.routes)
+	}
+
+	// P4 §8.5：Channel breaker 只读运行态 + 显式复位（Redis 全局 breaker）。静态 /ops 段置于 /{id} 之前。
+	{
+		cbh := &channelBreakerHandler{service: d.Service, breaker: d.Breaker}
+		r.Get("/channels/{id}/ops/runtime", cbh.runtime)
+		r.Delete("/channels/{id}/ops/circuit-breaker", cbh.reset)
 	}
 
 	if d.Service != nil {
@@ -43,7 +48,7 @@ func Register(r chi.Router, d Deps) {
 		r.Delete("/channels/{id}", ch.delete)
 		r.Post("/channels/{id}/archive", ch.archive)
 		r.Post("/channels/{id}/restore", ch.restore)
-		// credential 只写不回：用子资源 PUT 轮换，成功返回 204。
+		// credential PUT 原子保存并同步返回五态验证结果，不回显 credential。
 		r.Put("/channels/{id}/credential", ch.rotateCredential)
 	}
 

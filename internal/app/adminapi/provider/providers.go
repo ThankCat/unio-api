@@ -20,19 +20,26 @@ type ProviderService interface {
 	Create(ctx context.Context, in provider.CreateInput) (provider.Provider, error)
 	Update(ctx context.Context, in provider.UpdateInput) (provider.Provider, error)
 	Delete(ctx context.Context, id int64) error
-	Archive(ctx context.Context, id int64, replacementChannelID *int64) error
-	Restore(ctx context.Context, id int64) error
+	Archive(ctx context.Context, id int64, replacementChannelID *int64) (provider.StatusChangeResult, error)
+	Restore(ctx context.Context, id int64) (provider.StatusChangeResult, error)
 }
 
 // providerDTO 是 provider 的 admin API 响应体。
 type providerDTO struct {
-	ID         int64   `json:"id"`
-	Slug       string  `json:"slug"`
-	Name       string  `json:"name"`
-	Status     string  `json:"status"`
-	CreatedAt  string  `json:"created_at"`
-	UpdatedAt  string  `json:"updated_at"`
-	ArchivedAt *string `json:"archived_at"`
+	ID                    int64   `json:"id"`
+	Slug                  string  `json:"slug"`
+	Name                  string  `json:"name"`
+	Status                string  `json:"status"`
+	CreatedAt             string  `json:"created_at"`
+	UpdatedAt             string  `json:"updated_at"`
+	ArchivedAt            *string `json:"archived_at"`
+	RuntimeSyncPending    bool    `json:"runtime_sync_pending"`
+	AffectedEndpointCount int     `json:"affected_endpoint_count"`
+}
+
+type providerStatusChangeDTO struct {
+	RuntimeSyncPending    bool `json:"runtime_sync_pending"`
+	AffectedEndpointCount int  `json:"affected_endpoint_count"`
 }
 
 type createProviderRequest struct {
@@ -146,11 +153,12 @@ func (h *providersHandler) archive(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	if err := h.service.Archive(r.Context(), id, req.ReplacementChannelID); err != nil {
+	result, err := h.service.Archive(r.Context(), id, req.ReplacementChannelID)
+	if err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	adminhttp.WriteData(w, http.StatusOK, toProviderStatusChangeDTO(result))
 }
 
 func (h *providersHandler) restore(w http.ResponseWriter, r *http.Request) {
@@ -159,21 +167,31 @@ func (h *providersHandler) restore(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	if err := h.service.Restore(r.Context(), id); err != nil {
+	result, err := h.service.Restore(r.Context(), id)
+	if err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	adminhttp.WriteData(w, http.StatusOK, toProviderStatusChangeDTO(result))
 }
 
 func toProviderDTO(p provider.Provider) providerDTO {
 	return providerDTO{
-		ID:         p.ID,
-		Slug:       p.Slug,
-		Name:       p.Name,
-		Status:     p.Status,
-		CreatedAt:  p.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:  p.UpdatedAt.UTC().Format(time.RFC3339),
-		ArchivedAt: adminhttp.RFC3339Ptr(p.ArchivedAt),
+		ID:                    p.ID,
+		Slug:                  p.Slug,
+		Name:                  p.Name,
+		Status:                p.Status,
+		CreatedAt:             p.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:             p.UpdatedAt.UTC().Format(time.RFC3339),
+		ArchivedAt:            adminhttp.RFC3339Ptr(p.ArchivedAt),
+		RuntimeSyncPending:    p.RuntimeSyncPending,
+		AffectedEndpointCount: p.AffectedEndpointCount,
+	}
+}
+
+func toProviderStatusChangeDTO(result provider.StatusChangeResult) providerStatusChangeDTO {
+	return providerStatusChangeDTO{
+		RuntimeSyncPending:    result.RuntimeSyncPending,
+		AffectedEndpointCount: result.AffectedEndpointCount,
 	}
 }

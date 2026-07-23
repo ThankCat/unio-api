@@ -98,13 +98,16 @@ func (r *fakeRegistry) HasResponsesCompact(key string) bool {
 }
 
 type fakeChatAdapter struct {
-	req  chatcompletionsadapter.ChatRequest
-	resp *chatcompletionsadapter.ChatResponse
-	err  error
+	called int
+	req    chatcompletionsadapter.ChatRequest
+	resp   *chatcompletionsadapter.ChatResponse
+	err    error
 }
 
-func (a *fakeChatAdapter) ChatCompletions(_ context.Context, _ channel.Runtime, req chatcompletionsadapter.ChatRequest) (*chatcompletionsadapter.ChatResponse, error) {
+func (a *fakeChatAdapter) ChatCompletions(ctx context.Context, _ channel.Runtime, req chatcompletionsadapter.ChatRequest) (*chatcompletionsadapter.ChatResponse, error) {
+	a.called++
 	a.req = req
+	adapter.MarkTransportStarted(ctx)
 	return a.resp, a.err
 }
 
@@ -145,12 +148,15 @@ func (a *fakeAuthorizer) ReleaseChatForBillingException(_ context.Context, param
 }
 
 type fakeRequestLog struct {
-	createRequests    []requestlog.CreateRequestParams
-	markFailed        []requestlog.MarkRequestFailedParams
-	markAttemptFailed []requestlog.MarkAttemptFailedParams
-	capabilityResults []string
-	nextRequestID     int64
-	nextAttemptID     int64
+	createRequests      []requestlog.CreateRequestParams
+	createAttempts      []requestlog.CreateAttemptParams
+	markFailed          []requestlog.MarkRequestFailedParams
+	markAttemptFailed   []requestlog.MarkAttemptFailedParams
+	deliveryCompleted   []int64
+	deliveryInterrupted []int64
+	capabilityResults   []string
+	nextRequestID       int64
+	nextAttemptID       int64
 }
 
 func (s *fakeRequestLog) SetCapabilityCheckResult(_ context.Context, _ int64, result string) error {
@@ -186,6 +192,16 @@ func (s *fakeRequestLog) MarkRequestResponseStarted(_ context.Context, params re
 	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusRunning, ResponseStartedAt: &params.ResponseStartedAt}, nil
 }
 
+func (s *fakeRequestLog) MarkRequestDeliveryCompleted(_ context.Context, id int64, completedAt time.Time) (requestlog.RequestRecord, error) {
+	s.deliveryCompleted = append(s.deliveryCompleted, id)
+	return requestlog.RequestRecord{ID: id, DeliveryStatus: requestlog.DeliveryStatusCompleted, ResponseCompletedAt: &completedAt}, nil
+}
+
+func (s *fakeRequestLog) MarkRequestDeliveryInterrupted(_ context.Context, id int64) (requestlog.RequestRecord, error) {
+	s.deliveryInterrupted = append(s.deliveryInterrupted, id)
+	return requestlog.RequestRecord{ID: id, DeliveryStatus: requestlog.DeliveryStatusInterrupted}, nil
+}
+
 func (s *fakeRequestLog) MarkRequestSucceeded(_ context.Context, params requestlog.MarkRequestSucceededParams) (requestlog.RequestRecord, error) {
 	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusSucceeded}, nil
 }
@@ -208,18 +224,21 @@ func (s *fakeRequestLog) MarkSettledRequestFailed(_ context.Context, params requ
 }
 
 func (s *fakeRequestLog) CreateAttempt(_ context.Context, params requestlog.CreateAttemptParams) (requestlog.AttemptRecord, error) {
+	s.createAttempts = append(s.createAttempts, params)
 	id := s.nextAttemptID
 	s.nextAttemptID++
 	return requestlog.AttemptRecord{
-		ID:              id,
-		RequestRecordID: params.RequestRecordID,
-		AttemptIndex:    params.AttemptIndex,
-		ProviderID:      params.ProviderID,
-		ChannelID:       params.ChannelID,
-		AdapterKey:      params.AdapterKey,
-		UpstreamModel:   params.UpstreamModel,
-		Status:          requestlog.AttemptStatusRunning,
-		StartedAt:       params.StartedAt,
+		ID:                    id,
+		RequestRecordID:       params.RequestRecordID,
+		AttemptIndex:          params.AttemptIndex,
+		ProviderID:            params.ProviderID,
+		ChannelID:             params.ChannelID,
+		AdapterKey:            params.AdapterKey,
+		UpstreamModel:         params.UpstreamModel,
+		RoutingCandidateIndex: params.RoutingCandidateIndex,
+		UpstreamOperation:     params.UpstreamOperation,
+		Status:                requestlog.AttemptStatusRunning,
+		StartedAt:             params.StartedAt,
 	}, nil
 }
 
@@ -290,7 +309,7 @@ func candidate(adapterKey string, channelID int64, upstreamModel string) routing
 		AdapterKey: adapterKey,
 		Channel: channel.Runtime{
 			ID:      channelID,
-			BaseURL: "https://example.test/v1",
+			BaseURL: "https://example.test",
 			APIKey:  "secret",
 			Timeout: 30 * time.Second,
 		},
@@ -338,7 +357,6 @@ func newServiceForTest(router ChatRouter, registry AdapterRegistry, settlement l
 		authorizer,
 		nil,
 		nil,
-		nil,
 	)
 }
 
@@ -366,7 +384,6 @@ func TestPrepareResponsesCandidatesStreamCapability(t *testing.T) {
 		newFakeRequestLog(),
 		&fakeSettlement{},
 		&fakeAuthorizer{},
-		nil,
 		nil,
 		nil,
 	)
@@ -414,9 +431,20 @@ func TestCreateResponse_HappyPath(t *testing.T) {
 
 	svc := newServiceForTest(router, registry, settlement, authorizer, requestLog)
 
-	resp, err := svc.CreateResponse(ctxWithPrincipal(), instructionsRequest())
+	result, err := svc.CreateResponse(ctxWithPrincipal(), instructionsRequest())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+
+	resp := result.Response
+	if len(requestLog.deliveryCompleted) != 0 || len(requestLog.deliveryInterrupted) != 0 {
+		t.Fatal("delivery must stay not_started before the handler write")
+	}
+	if err := result.FinalizeDelivery(func(*gatewayapi.ResponsesResponse) error { return nil }); err != nil {
+		t.Fatalf("finalize delivery: %v", err)
+	}
+	if len(requestLog.deliveryCompleted) != 1 || len(requestLog.deliveryInterrupted) != 0 {
+		t.Fatalf("expected one completed delivery, completed=%v interrupted=%v", requestLog.deliveryCompleted, requestLog.deliveryInterrupted)
 	}
 
 	// 请求审计落 Operation=responses、IngressProtocol=openai。
@@ -448,6 +476,9 @@ func TestCreateResponse_HappyPath(t *testing.T) {
 	if settlement.params[0].ResponseModelID != "unio-deepseek" {
 		t.Fatalf("expected settlement response model unio-deepseek, got %q", settlement.params[0].ResponseModelID)
 	}
+	if settlement.params[0].ResponseStartedAt != nil {
+		t.Fatalf("non-stream response_started_at = %v, want nil", settlement.params[0].ResponseStartedAt)
+	}
 
 	// 响应翻译回 Responses 形状。
 	if resp.Object != "response" || resp.Model != "unio-deepseek" || resp.Status != "completed" {
@@ -477,8 +508,9 @@ func TestCreateResponse_AdapterNotRegistered(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unregistered adapter")
 	}
-	if len(requestLog.markAttemptFailed) != 1 || requestLog.markAttemptFailed[0].ErrorCode != string(failure.CodeGatewayAdapterNotRegistered) {
-		t.Fatalf("expected attempt failure adapter_not_registered, got %+v", requestLog.markAttemptFailed)
+	if len(requestLog.createAttempts) != 0 || len(requestLog.markAttemptFailed) != 0 {
+		t.Fatalf("pre-transport adapter lookup must not create or fail an upstream attempt: created=%d failed=%+v",
+			len(requestLog.createAttempts), requestLog.markAttemptFailed)
 	}
 	if len(requestLog.markFailed) != 1 || requestLog.markFailed[0].ErrorCode != string(failure.CodeGatewayAdapterNotRegistered) {
 		t.Fatalf("expected request failure adapter_not_registered, got %+v", requestLog.markFailed)

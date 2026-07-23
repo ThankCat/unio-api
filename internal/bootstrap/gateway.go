@@ -17,7 +17,6 @@ import (
 
 // NewChatGateway 创建当前 server 进程使用的 chat gateway service。
 // metricsRecorder 可为 nil，表示不采集业务指标。
-// channelBreaker 为三协议共享的熔断器单实例（运行时配置驱动，enabled 为内部原子开关）；nil 表示不启用熔断。
 func NewChatGateway(
 	db lifecycle.ChatTxBeginner,
 	queries *sqlc.Queries,
@@ -26,8 +25,6 @@ func NewChatGateway(
 	workerConfig config.WorkerConfig,
 	gatewayConfig config.GatewayConfig,
 	metricsRecorder *metrics.Metrics,
-	rateLimitGuard lifecycle.RateLimitGuard,
-	channelBreaker lifecycle.ChannelBreaker,
 ) *gateway.ChatCompletionService {
 	if registry == nil {
 		panic("bootstrap: lifecycle adapter registry is required")
@@ -74,9 +71,7 @@ func NewChatGateway(
 		chatSettlementExecutor,
 		chatAuthorizationServer,
 		chatMetrics,
-		channelBreaker,
 	)
-	service.SetRateLimitGuard(rateLimitGuard)
 	return service
 }
 
@@ -84,7 +79,7 @@ func NewChatGateway(
 //
 // 复用与 chat 相同的 OpenAI routing / adapter / settlement / authorization；只把 ingress operation
 // 落为 responses，候选 fallback 计费循环走共享 lifecycle.AttemptRunner。本阶段不牵扯 Anthropic Messages。
-// metricsRecorder 可为 nil，表示不采集业务指标。channelBreaker 为三协议共享单实例；nil 表示不启用熔断。
+// metricsRecorder 可为 nil，表示不采集业务指标。
 func NewResponsesGateway(
 	db lifecycle.ChatTxBeginner,
 	queries *sqlc.Queries,
@@ -93,8 +88,6 @@ func NewResponsesGateway(
 	workerConfig config.WorkerConfig,
 	gatewayConfig config.GatewayConfig,
 	metricsRecorder *metrics.Metrics,
-	rateLimitGuard lifecycle.RateLimitGuard,
-	channelBreaker lifecycle.ChannelBreaker,
 	logger *zap.Logger,
 ) *responsesgateway.ResponsesService {
 	if registry == nil {
@@ -140,15 +133,12 @@ func NewResponsesGateway(
 		chatSettlementExecutor,
 		chatAuthorizationServer,
 		chatMetrics,
-		channelBreaker,
 		logger,
 	)
-	service.SetRateLimitGuard(rateLimitGuard)
 	return service
 }
 
 // NewMessagesGateway 创建 Anthropic Messages gateway service。
-// channelBreaker 为三协议共享的熔断器单实例；nil 表示不启用熔断。
 func NewMessagesGateway(
 	db lifecycle.ChatTxBeginner,
 	queries *sqlc.Queries,
@@ -157,8 +147,6 @@ func NewMessagesGateway(
 	workerConfig config.WorkerConfig,
 	gatewayConfig config.GatewayConfig,
 	metricsRecorder *metrics.Metrics,
-	rateLimitGuard lifecycle.RateLimitGuard,
-	channelBreaker lifecycle.ChannelBreaker,
 ) *anthropicmessages.MessagesService {
 	if registry == nil {
 		panic("bootstrap: lifecycle adapter registry is required")
@@ -203,8 +191,6 @@ func NewMessagesGateway(
 		chatSettlementExecutor,
 		chatAuthorizationServer,
 		chatMetrics,
-		channelBreaker,
 	)
-	service.SetRateLimitGuard(rateLimitGuard)
 	return service
 }

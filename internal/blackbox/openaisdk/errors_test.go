@@ -30,7 +30,7 @@ func TestOAISDKMockUpstreamRateLimitMapsTo429(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 	})
 
 	client := openai.NewClient(
@@ -60,7 +60,7 @@ func TestOAISDKMockUpstreamBadRequestMapsTo400(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 	})
 
 	client := openai.NewClient(
@@ -93,7 +93,7 @@ func TestOAISDKMockUpstreamAuthMapsTo502NotClient401(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 	})
 
 	client := openai.NewClient(
@@ -127,7 +127,7 @@ func TestOAISDKMockUpstreamServerErrorMapsTo502(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 	})
 
 	client := openai.NewClient(
@@ -161,7 +161,7 @@ func TestOAISDKMockUpstreamTimeoutMapsTo504(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:             sdkfixture.UpstreamMock,
-		UpstreamBaseURL:  mock.URL + "/v1",
+		UpstreamBaseURL:  mock.URL,
 		ChannelTimeoutMS: 500, // 500ms 强制 channel 超时
 	})
 

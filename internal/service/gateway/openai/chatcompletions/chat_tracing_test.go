@@ -34,7 +34,6 @@ func TestChatCompletionServiceCreatesSpanHierarchy(t *testing.T) {
 		newChatCompletionSettlementForTest(),
 		&fakeChatAuthorizer{authorization: lifecycle.ChatAuthorization{ReservationID: 1}},
 		nil,
-		nil,
 	)
 
 	if _, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest()); err != nil {

@@ -9,19 +9,25 @@ import (
 	"testing"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 type fakeResponsesService struct {
-	resp       *ResponsesResponse
-	compact    *CompactHistoryResponse
-	inputCount *InputTokenCountResponse
-	err        error
-	got        ResponsesRequest
+	resp                *ResponsesResponse
+	compact             *CompactHistoryResponse
+	inputCount          *InputTokenCountResponse
+	err                 error
+	got                 ResponsesRequest
+	deliveryCompleted   int
+	deliveryInterrupted int
 }
 
-func (s *fakeResponsesService) CreateResponse(_ context.Context, req ResponsesRequest) (*ResponsesResponse, error) {
+func (s *fakeResponsesService) CreateResponse(_ context.Context, req ResponsesRequest) (*lifecycle.NonStreamResult[*ResponsesResponse], error) {
 	s.got = req
-	return s.resp, s.err
+	if s.err != nil {
+		return nil, s.err
+	}
+	return lifecycle.NewNonStreamResult(s.resp, s.deliveryFinalizer()), nil
 }
 
 func (s *fakeResponsesService) StreamResponse(_ context.Context, req ResponsesRequest, emit func(ResponsesStreamEvent) error) error {
@@ -32,9 +38,19 @@ func (s *fakeResponsesService) StreamResponse(_ context.Context, req ResponsesRe
 	return emit(ResponsesStreamEvent{Type: EventResponseCreated})
 }
 
-func (s *fakeResponsesService) CompactHistory(_ context.Context, req ResponsesRequest) (*CompactHistoryResponse, error) {
+func (s *fakeResponsesService) CompactHistory(_ context.Context, req ResponsesRequest) (*lifecycle.NonStreamResult[*CompactHistoryResponse], error) {
 	s.got = req
-	return s.compact, s.err
+	if s.err != nil {
+		return nil, s.err
+	}
+	return lifecycle.NewNonStreamResult(s.compact, s.deliveryFinalizer()), nil
+}
+
+func (s *fakeResponsesService) deliveryFinalizer() lifecycle.DeliveryFinalizer {
+	return lifecycle.NewDeliveryFinalizer(
+		func() { s.deliveryCompleted++ },
+		func() { s.deliveryInterrupted++ },
+	)
 }
 
 func (s *fakeResponsesService) CountInputTokens(_ context.Context, req ResponsesRequest) (*InputTokenCountResponse, error) {

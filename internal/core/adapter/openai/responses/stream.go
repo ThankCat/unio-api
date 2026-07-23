@@ -66,6 +66,7 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 		return adapter.StreamOutcome{}, err
 	}
 
+	adapter.MarkTransportStarted(streamCtx)
 	upstreamResp, err := a.client.Do(httpReq)
 	ctxCause := context.Cause(streamCtx)
 	headersReceived()

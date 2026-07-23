@@ -25,7 +25,7 @@ const defaultPartialAssumedCacheReadRatio = 0.60
 // TODO(临时方案 · billing): 这只是一个固定比例的临时口径。最优方案是「根据该用户/会话距本次失败最近的
 // 一次成功请求的真实缓存率来拆分」（缓存率强自相关，预测精度高），fallback 再退回本固定比例。
 // 届时应把本固定比例替换为「历史缓存率 → 本固定比例」的兜底链，并注意：仅用于 partial 估算的输入拆分，
-// 不影响冻结/限流/真实 usage/非流式（见 attempt_runner_stream.go 的 settleStreamFacts 与 releaseUnreconciledTPM）。
+// 不影响冻结、RequestAdmission usage 对账、真实 usage 或非流式结算。
 //
 // 注意：仅当客户售价配置了 cache_read 单价时该拆分才真正生效——否则 billing 会把 cache_read 回退到
 // uncached 单价（见 core/billing/price.go），拆分退化为「全 uncached」而静默失效。

@@ -74,8 +74,8 @@ func TestScaleProviderCostByFactorsCombinesPriceAndRecharge(t *testing.T) {
 		t.Fatalf("ScaleProviderCostByFactors: %v", err)
 	}
 
-	assertScaledRate(t, "uncached_input", scaled.UncachedInputCost, big.NewRat(12, 10))    // 2.0 × 0.6 = 1.2
-	assertScaledRate(t, "output", scaled.OutputCost, big.NewRat(6, 1))                     // 10.0 × 0.6 = 6.0
+	assertScaledRate(t, "uncached_input", scaled.UncachedInputCost, big.NewRat(12, 10))     // 2.0 × 0.6 = 1.2
+	assertScaledRate(t, "output", scaled.OutputCost, big.NewRat(6, 1))                      // 10.0 × 0.6 = 6.0
 	assertScaledRate(t, "reasoning_output", scaled.ReasoningOutputCost, big.NewRat(24, 10)) // 4.0 × 0.6 = 2.4
 	if scaled.CacheReadInputCost.Valid {
 		t.Fatal("expected NULL cache_read cost to stay NULL after scaling")

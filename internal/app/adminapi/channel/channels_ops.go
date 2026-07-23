@@ -8,8 +8,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelops"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/gatewayruntime"
-	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // ChannelOpsService 定义渠道作战台（§3.3）只读运维聚合所需能力。
@@ -24,8 +22,6 @@ type ChannelOpsService interface {
 
 type channelOpsHandler struct {
 	service ChannelOpsService
-	// breaker 可选：从 gateway 拉取进程内熔断快照并挂到列表行；nil 则不填充。
-	breaker *gatewayruntime.Client
 }
 
 type channelOpsRowDTO struct {
@@ -45,7 +41,6 @@ type channelOpsRowDTO struct {
 	SuccessRate             float64                   `json:"success_rate"`
 	TimeoutTotal            int64                     `json:"timeout_total"`
 	Latency                 adminhttp.LatencyStatsDTO `json:"latency"`
-	Health                  string                    `json:"health"`
 	BoundModels             int64                     `json:"bound_models"`
 	BoundRoutes             int64                     `json:"bound_routes"`
 	RecentErrorCode         string                    `json:"recent_error_code"`
@@ -60,30 +55,6 @@ type channelOpsRowDTO struct {
 	CostMultiplier          *string                   `json:"cost_multiplier"`
 	CostMultiplierOverrides int64                     `json:"cost_multiplier_overrides"`
 	RechargeFactor          *string                   `json:"recharge_factor"`
-	// CircuitBreaker 来自 gateway 熔断快照；无快照时前端按闭合（绿）常驻显示。
-	CircuitBreaker *channelCircuitBreakerDTO `json:"circuit_breaker,omitempty"`
-}
-
-type channelCircuitBreakerDTO struct {
-	State            string                             `json:"state"`
-	Failures         int                                `json:"failures"`
-	Successes        int                                `json:"successes"`
-	WindowStart      *string                            `json:"window_start,omitempty"`
-	OpenedAt         *string                            `json:"opened_at,omitempty"`
-	OpenRemainingMs  *int64                             `json:"open_remaining_ms,omitempty"`
-	HalfOpenInFlight bool                               `json:"half_open_in_flight"`
-	HealthScore      float64                            `json:"health_score"`
-	ObservedAt       string                             `json:"observed_at"`
-	Instances        []channelCircuitBreakerInstanceDTO `json:"instances,omitempty"`
-}
-
-type channelCircuitBreakerInstanceDTO struct {
-	ID               string `json:"id"`
-	State            string `json:"state"`
-	OpenRemainingMs  *int64 `json:"open_remaining_ms,omitempty"`
-	HalfOpenInFlight bool   `json:"half_open_in_flight"`
-	Failures         int    `json:"failures"`
-	Successes        int    `json:"successes"`
 }
 
 type channelOpsDetailDTO struct {
@@ -94,8 +65,6 @@ type channelOpsDetailDTO struct {
 	Latency          adminhttp.LatencyStatsDTO `json:"latency"`
 	LastSuccessAt    *string                   `json:"last_success_at"`
 	LastFailureAt    *string                   `json:"last_failure_at"`
-	// CircuitBreaker 来自 gateway 快照；无快照时省略，前端按闭合显示。
-	CircuitBreaker *channelCircuitBreakerDTO `json:"circuit_breaker,omitempty"`
 }
 
 type channelOpsPerfPointDTO struct {
@@ -178,10 +147,6 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	breakerByID := map[int64]gatewayruntime.ChannelStatus{}
-	if h.breaker != nil {
-		breakerByID = h.breaker.Statuses(r.Context())
-	}
 	dtos := make([]channelOpsRowDTO, 0, len(rows))
 	for _, row := range rows {
 		dto := channelOpsRowDTO{
@@ -201,7 +166,6 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			SuccessRate:             row.SuccessRate,
 			TimeoutTotal:            row.TimeoutTotal,
 			Latency:                 adminhttp.LatencyStatsFrom(row.Latency),
-			Health:                  row.HealthBucket,
 			BoundModels:             row.BoundModels,
 			BoundRoutes:             row.BoundRoutes,
 			RecentErrorCode:         row.RecentErrorCode,
@@ -217,43 +181,9 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			CostMultiplierOverrides: row.CostMultiplierOverrides,
 			RechargeFactor:          row.RechargeFactor,
 		}
-		if st, ok := breakerByID[row.ID]; ok {
-			dto.CircuitBreaker = toCircuitBreakerDTO(st)
-		}
 		dtos = append(dtos, dto)
 	}
 	adminhttp.WriteList(w, http.StatusOK, dtos, page, total)
-}
-
-func toCircuitBreakerDTO(st gatewayruntime.ChannelStatus) *channelCircuitBreakerDTO {
-	dto := &channelCircuitBreakerDTO{
-		State:            string(st.State),
-		Failures:         st.Failures,
-		Successes:        st.Successes,
-		WindowStart:      adminhttp.RFC3339Ptr(st.WindowStart),
-		OpenedAt:         adminhttp.RFC3339Ptr(st.OpenedAt),
-		OpenRemainingMs:  st.OpenRemainingMs,
-		HalfOpenInFlight: st.HalfOpenInFlight,
-		HealthScore:      st.HealthScore,
-		ObservedAt:       adminhttp.RFC3339(st.ObservedAt),
-	}
-	if st.State == "" {
-		dto.State = string(lifecycle.CircuitStateClosed)
-	}
-	if len(st.Instances) > 0 {
-		dto.Instances = make([]channelCircuitBreakerInstanceDTO, 0, len(st.Instances))
-		for _, inst := range st.Instances {
-			dto.Instances = append(dto.Instances, channelCircuitBreakerInstanceDTO{
-				ID:               inst.ID,
-				State:            string(inst.State),
-				OpenRemainingMs:  inst.OpenRemainingMs,
-				HalfOpenInFlight: inst.HalfOpenInFlight,
-				Failures:         inst.Failures,
-				Successes:        inst.Successes,
-			})
-		}
-	}
-	return dto
 }
 
 func (h *channelOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
@@ -280,11 +210,6 @@ func (h *channelOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		Latency:          adminhttp.LatencyStatsFrom(d.Latency),
 		LastSuccessAt:    adminhttp.RFC3339Ptr(d.LastSuccessAt),
 		LastFailureAt:    adminhttp.RFC3339Ptr(d.LastFailureAt),
-	}
-	if h.breaker != nil {
-		if st, ok := h.breaker.Statuses(r.Context())[id]; ok {
-			dto.CircuitBreaker = toCircuitBreakerDTO(st)
-		}
 	}
 	adminhttp.WriteData(w, http.StatusOK, dto)
 }

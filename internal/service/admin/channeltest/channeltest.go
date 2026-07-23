@@ -22,9 +22,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
-	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	corechannel "github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	adminchannel "github.com/ThankCat/unio-gateway/internal/service/admin/channel"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 )
 
@@ -46,13 +47,11 @@ const (
 // Store 定义渠道检测所需的存储能力。
 type Store interface {
 	GetChannel(ctx context.Context, id int64) (sqlc.Channel, error)
-	GetProvider(ctx context.Context, id int64) (sqlc.Provider, error)
+	GetChannelProbeSnapshot(ctx context.Context, channelID int64) (sqlc.GetChannelProbeSnapshotRow, error)
+	PrepareChannelCredentialRotation(ctx context.Context, arg sqlc.PrepareChannelCredentialRotationParams) (sqlc.PrepareChannelCredentialRotationRow, error)
+	ApplyChannelProbeResult(ctx context.Context, arg sqlc.ApplyChannelProbeResultParams) (sqlc.ApplyChannelProbeResultRow, error)
+	InsertPermissionRecheckLog(ctx context.Context, arg sqlc.InsertPermissionRecheckLogParams) (int64, error)
 	ListChannelModelsByChannel(ctx context.Context, channelID int64) ([]sqlc.ListChannelModelsByChannelRow, error)
-	SetChannelTestResult(ctx context.Context, arg sqlc.SetChannelTestResultParams) (int64, error)
-	// 阶段二凭据闸门：检测成功→翻有效、credential_invalid→翻失效（均幂等，返回受影响行数判断是否跳变）。
-	SetChannelCredentialValid(ctx context.Context, id int64) (int64, error)
-	SetChannelCredentialInvalid(ctx context.Context, id int64) (int64, error)
-	InsertChannelTestLog(ctx context.Context, arg sqlc.InsertChannelTestLogParams) error
 	ListChannelTestLogsByChannel(ctx context.Context, arg sqlc.ListChannelTestLogsByChannelParams) ([]sqlc.ChannelTestLog, error)
 	CountChannelTestLogsByChannel(ctx context.Context, channelID int64) (int64, error)
 }
@@ -60,13 +59,15 @@ type Store interface {
 // Prober 向渠道真实上游发一次最小请求（复用与网关一致的 adapter/HTTP 链路）。
 // 由 gateway lifecycle 的 AdapterRegistry 实现，bootstrap 注入；此处以接口解耦，便于测试替身。
 type Prober interface {
-	ProbeChannel(ctx context.Context, protocol, adapterKey string, rt channel.Runtime, upstreamModel string) (int, error)
+	ProbeChannel(ctx context.Context, protocol, adapterKey string, rt corechannel.Runtime, upstreamModel string) (int, error)
 }
 
 // 检测事件来源（写入 channel_test_logs.source）。
 const (
-	SourceManual = "manual" // 管理员在控制台手动点「检测」
-	SourceWorker = "worker" // 渠道自动检测 worker 周期巡检
+	SourceManual            = "manual"             // 管理员在控制台手动点「检测」
+	SourceWorker            = "worker"             // 渠道自动检测 worker 周期巡检
+	SourceCredentialRotate  = "credential_rotate"  // credential PUT 保存后即时检测
+	SourcePermissionRecheck = "permission_recheck" // 403 Channel-Model 自动复检（只写审计）
 )
 
 // TestInput 是一次渠道检测入参。
@@ -90,11 +91,34 @@ type TestResult struct {
 	TestedAt      time.Time
 }
 
+// PermissionRecheckInput 固化 403 发生时的内部绑定身份与三类 revision。
+// ModelID 是数据库内部 models.id；Redis/worker 不传递模型字符串、credential、URL 或请求正文。
+type PermissionRecheckInput struct {
+	ChannelID               int64
+	ModelID                 int64
+	ChannelConfigRevision   int64
+	EndpointBaseURLRevision int64
+	EndpointStatusRevision  int64
+}
+
+// PermissionRecheckResult 是一次只针对指定绑定的真实探测结果。
+// Stale 表示探测前或探测后 PostgreSQL 当前绑定已经不再匹配领取时身份，结果只能审计。
+type PermissionRecheckResult struct {
+	Probe TestResult
+	Stale bool
+}
+
 // Service 编排渠道主动检测：选模型 → 构造 Runtime → 发探测请求 → 归类 → 落库。
 type Service struct {
 	store    Store
 	prober   Prober
 	settings *appsettings.SettingsStore
+	metrics  CredentialRotationMetrics
+}
+
+// CredentialRotationMetrics records only the bounded five-state verification result.
+type CredentialRotationMetrics interface {
+	IncChannelCredentialRotationVerification(state string)
 }
 
 // NewService 创建渠道检测服务。settings 可为 nil（单测），此时探测超时回代码默认。
@@ -106,62 +130,226 @@ func NewService(store Store, prober Prober, settings *appsettings.SettingsStore)
 	}
 }
 
-// Test 对指定渠道执行一次主动检测，并持久化「最近一次检测结果」。
+// SetMetrics attaches optional credential-rotation telemetry.
+func (s *Service) SetMetrics(recorder CredentialRotationMetrics) {
+	if s != nil {
+		s.metrics = recorder
+	}
+}
+
+type probeSnapshot struct {
+	ChannelID               int64
+	Protocol                string
+	AdapterKey              string
+	Credential              string
+	CredentialValid         bool
+	ConfigRevision          int64
+	ProviderSlug            string
+	EndpointBaseURL         string
+	EndpointBaseURLRevision int64
+	EndpointStatusRevision  int64
+}
+
+// Test 对指定渠道执行一次主动检测。读取、探测与结果回写均冻结三类 revision；迟到结果只写历史日志。
 func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 	if in.ChannelID <= 0 {
 		return TestResult{}, invalidArgument("id", "channel id must be positive")
 	}
 
-	ch, err := s.store.GetChannel(ctx, in.ChannelID)
+	row, err := s.store.GetChannelProbeSnapshot(ctx, in.ChannelID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return TestResult{}, notFound("channel not found")
 		}
-		return TestResult{}, storeFailed(err, "get channel")
+		return TestResult{}, storeFailed(err, "get channel probe snapshot")
 	}
+	snapshot := probeSnapshotFromRow(row)
+	workCtx, cancel := s.detachedOperationContext(ctx)
+	defer cancel()
 
-	candidates, err := s.resolveUpstreamCandidates(ctx, in.ChannelID, strings.TrimSpace(in.Model))
+	result, err := s.executeProbe(workCtx, snapshot, strings.TrimSpace(in.Model))
 	if err != nil {
 		return TestResult{}, err
 	}
+	if _, err := s.applyProbeResult(workCtx, snapshot, in.Source, result); err != nil {
+		return TestResult{}, storeFailed(err, "persist channel probe result")
+	}
+	return result, nil
+}
 
-	// 检测超时只读系统设置，绝不使用渠道 timeout_ms（那是用户请求超时）。
-	pt := appsettings.AdminBackendChannelTestProbeTimeout(ctx, s.settings)
-	rt := channel.Runtime{
-		ID:           ch.ID,
-		BaseURL:      ch.BaseUrl,
-		APIKey:       strings.TrimSpace(ch.Credential),
-		Timeout:      pt,
-		ProviderSlug: s.providerSlug(ctx, ch.ProviderID),
+// RecheckPermission 复用渠道检测 adapter 链路，对指定内部 model_id 的当前绑定发一次真实探测。
+// 它只写 source=permission_recheck 审计，不调用 ApplyChannelProbeResult，因此 403/401/其它失败
+// 都不会翻整个 Channel 的 credential_valid 或覆盖 last_test_*。调用方随后按 Stale/Success CAS 收口 Redis。
+func (s *Service) RecheckPermission(ctx context.Context, in PermissionRecheckInput) (PermissionRecheckResult, error) {
+	if in.ChannelID <= 0 || in.ModelID <= 0 || in.ChannelConfigRevision <= 0 ||
+		in.EndpointBaseURLRevision <= 0 || in.EndpointStatusRevision <= 0 {
+		return PermissionRecheckResult{}, invalidArgument("permission_recheck", "permission recheck identity is invalid")
 	}
 
-	// 逐个候选探测。自动选模型（未显式指定 model）时，若命中「模型不可用/端点不存在」，
-	// 顺延到下一个启用绑定——避免绑定列表里排在前面的坏模型（如已下线的旧模型返回 404）
-	// 让整条渠道被误判为异常。其它失败（凭据无效/超时/限流/连不上…）属渠道级问题，换模型
-	// 无意义，立即停止并上报。显式指定 model 时候选只有一个，天然不会顺延。
-	// 探测用独立超时上下文：不要继承 admin HTTP 请求的 ReadTimeout/WriteTimeout/客户端断开。
-	// 否则会出现「文案写系统检测超时，延迟却只有 ~10s（HTTP_READ_TIMEOUT）」的错位——
-	// 实际是入口请求 ctx 先被掐断，classify 却仍按 probeTimeout 报错。
+	snapshot, binding, stale, err := s.permissionRecheckSnapshot(ctx, in)
+	if err != nil {
+		return PermissionRecheckResult{}, err
+	}
+	if stale {
+		result := PermissionRecheckResult{Stale: true, Probe: stalePermissionProbe(binding.UpstreamModel)}
+		if snapshot.ChannelID > 0 {
+			if err := s.insertPermissionRecheckAudit(ctx, in, result); err != nil {
+				return PermissionRecheckResult{}, err
+			}
+		}
+		return result, nil
+	}
+
+	probeTimeout := appsettings.AdminBackendChannelTestProbeTimeout(ctx, s.settings)
+	workCtx, cancel := context.WithTimeout(ctx, probeTimeout+10*time.Second)
+	probe := s.executeProbeCandidates(workCtx, snapshot, []string{binding.UpstreamModel})
+	cancel()
+	// permission_recheck 审计禁止持久化/向 worker 暴露上游响应 body；只保留稳定归类与状态码。
+	probe.UpstreamError = ""
+
+	// 探测可能跨过配置更新；完成后必须重新读取三类 revision 和同一 model_id 绑定。
+	_, currentBinding, postProbeStale, err := s.permissionRecheckSnapshot(ctx, in)
+	if err != nil {
+		return PermissionRecheckResult{}, err
+	}
+	if !postProbeStale && currentBinding.UpstreamModel != binding.UpstreamModel {
+		postProbeStale = true
+	}
+	result := PermissionRecheckResult{Probe: probe, Stale: postProbeStale}
+	if result.Stale {
+		result.Probe.Message = stalePermissionMessage(result.Probe.Message)
+	}
+	if err := s.insertPermissionRecheckAudit(ctx, in, result); err != nil {
+		return PermissionRecheckResult{}, err
+	}
+	return result, nil
+}
+
+// RotateCredentialAndTest 原子保存 credential，并在独立有界 context 中用保存时快照即时检测。
+// 保存成功后的任何检测编排错误都返回 execution_failed，不把已提交保存伪装成 HTTP 失败。
+func (s *Service) RotateCredentialAndTest(ctx context.Context, in adminchannel.RotateCredentialInput) (result adminchannel.RotateCredentialResult, resultErr error) {
+	defer func() {
+		if resultErr == nil && result.CredentialSaved && result.Verification.State != "" && s.metrics != nil {
+			s.metrics.IncChannelCredentialRotationVerification(string(result.Verification.State))
+		}
+	}()
+
+	prepared, err := s.store.PrepareChannelCredentialRotation(ctx, sqlc.PrepareChannelCredentialRotationParams{
+		ChannelID:  in.ID,
+		Credential: strings.TrimSpace(in.Credential),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return adminchannel.RotateCredentialResult{}, notFound("channel not found")
+		}
+		return adminchannel.RotateCredentialResult{}, storeFailed(err, "save channel credential")
+	}
+
+	snapshot := probeSnapshotFromRotation(prepared)
+	result = adminchannel.RotateCredentialResult{
+		CredentialSaved:       true,
+		CredentialChanged:     prepared.CredentialChanged,
+		SavedConfigRevision:   prepared.ConfigRevision,
+		CurrentConfigRevision: prepared.ConfigRevision,
+	}
+	if !prepared.CredentialChanged && prepared.CredentialValid {
+		result.Verification = adminchannel.CredentialVerification{
+			State:                adminchannel.CredentialVerificationNotRequired,
+			CredentialValidAfter: true,
+		}
+		return result, nil
+	}
+
+	setTestedRevisions(&result.Verification, snapshot)
+	workCtx, cancel := s.detachedOperationContext(ctx)
+	defer cancel()
+
+	probeResult, err := s.executeProbe(workCtx, snapshot, "")
+	if err != nil {
+		s.populateExecutionFailed(workCtx, &result, snapshot, nil)
+		return result, nil
+	}
+	result.Verification.Result = credentialProbeResult(probeResult)
+
+	applied, err := s.applyProbeResult(workCtx, snapshot, SourceCredentialRotate, probeResult)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			result.Verification.State = adminchannel.CredentialVerificationStale
+			result.Verification.StateChangeApplied = false
+			result.Verification.CredentialValidAfter = false
+			return result, nil
+		}
+		s.populateExecutionFailed(workCtx, &result, snapshot, &probeResult)
+		return result, nil
+	}
+	result.CurrentConfigRevision = applied.CurrentConfigRevision
+	result.Verification.StateChangeApplied = applied.StateChangeApplied
+	result.Verification.CredentialValidAfter = applied.CredentialValidAfter
+	switch {
+	case !applied.ResultApplied:
+		result.Verification.State = adminchannel.CredentialVerificationStale
+	case probeResult.Success:
+		result.Verification.State = adminchannel.CredentialVerificationPassed
+	default:
+		result.Verification.State = adminchannel.CredentialVerificationFailed
+	}
+	return result, nil
+}
+
+func probeSnapshotFromRow(row sqlc.GetChannelProbeSnapshotRow) probeSnapshot {
+	return probeSnapshot{
+		ChannelID: row.ChannelID, Protocol: row.Protocol, AdapterKey: row.AdapterKey,
+		Credential: row.Credential, CredentialValid: row.CredentialValid, ConfigRevision: row.ConfigRevision,
+		ProviderSlug: row.ProviderSlug, EndpointBaseURL: row.EndpointBaseUrl,
+		EndpointBaseURLRevision: row.EndpointBaseUrlRevision, EndpointStatusRevision: row.EndpointStatusRevision,
+	}
+}
+
+func probeSnapshotFromRotation(row sqlc.PrepareChannelCredentialRotationRow) probeSnapshot {
+	return probeSnapshot{
+		ChannelID: row.ChannelID, Protocol: row.Protocol, AdapterKey: row.AdapterKey,
+		Credential: row.Credential, CredentialValid: row.CredentialValid, ConfigRevision: row.ConfigRevision,
+		ProviderSlug: row.ProviderSlug, EndpointBaseURL: row.EndpointBaseUrl,
+		EndpointBaseURLRevision: row.EndpointBaseUrlRevision, EndpointStatusRevision: row.EndpointStatusRevision,
+	}
+}
+
+func (s *Service) detachedOperationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	probeTimeout := appsettings.AdminBackendChannelTestProbeTimeout(ctx, s.settings)
+	return context.WithTimeout(context.WithoutCancel(ctx), probeTimeout+10*time.Second)
+}
+
+func (s *Service) executeProbe(ctx context.Context, snapshot probeSnapshot, model string) (TestResult, error) {
+	candidates, err := s.resolveUpstreamCandidates(ctx, snapshot.ChannelID, model)
+	if err != nil {
+		return TestResult{}, err
+	}
+	return s.executeProbeCandidates(ctx, snapshot, candidates), nil
+}
+
+func (s *Service) executeProbeCandidates(ctx context.Context, snapshot probeSnapshot, candidates []string) TestResult {
+	probeTimeout := appsettings.AdminBackendChannelTestProbeTimeout(ctx, s.settings)
+	runtime := corechannel.Runtime{
+		ID: snapshot.ChannelID, BaseURL: snapshot.EndpointBaseURL,
+		APIKey: strings.TrimSpace(snapshot.Credential), Timeout: probeTimeout, ProviderSlug: snapshot.ProviderSlug,
+	}
 	var result TestResult
 	for i, upstreamModel := range candidates {
 		start := time.Now()
-		probeCtx, probeCancel := context.WithTimeout(context.WithoutCancel(ctx), pt)
-		status, probeErr := s.prober.ProbeChannel(probeCtx, ch.Protocol, ch.AdapterKey, rt, upstreamModel)
+		probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
+		status, probeErr := s.prober.ProbeChannel(probeCtx, snapshot.Protocol, snapshot.AdapterKey, runtime, upstreamModel)
 		latency := time.Since(start)
 		probeCancel()
 
 		result = TestResult{
-			LatencyMs:   latency.Milliseconds(),
-			TestedModel: upstreamModel,
-			HTTPStatus:  status,
-			TestedAt:    time.Now().UTC(),
+			LatencyMs: latency.Milliseconds(), TestedModel: upstreamModel,
+			HTTPStatus: status, TestedAt: time.Now().UTC(),
 		}
 		if probeErr == nil {
 			result.Success = true
 			break
 		}
-		result.ErrorCode, result.Message = classifyProbeError(probeErr, pt, latency)
-		// 把上游返回的原始错误体（截断快照）一并记下，供排障时看到完整错误而非只有归类后的中文原因。
+		result.ErrorCode, result.Message = classifyProbeError(probeErr, probeTimeout, latency)
 		if meta, ok := adapter.UpstreamMetadataOf(probeErr); ok {
 			result.UpstreamError = meta.ResponseSnippet
 		}
@@ -169,62 +357,137 @@ func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 			break
 		}
 	}
-
-	if _, err := s.store.SetChannelTestResult(ctx, sqlc.SetChannelTestResultParams{
-		ID:                in.ChannelID,
-		LastTestOk:        pgtype.Bool{Bool: result.Success, Valid: true},
-		LastTestLatencyMs: pgtype.Int4{Int32: clampInt32(result.LatencyMs), Valid: true},
-		LastTestError:     testErrorParam(result),
-	}); err != nil {
-		return TestResult{}, storeFailed(err, "persist channel test result")
-	}
-
-	if err := s.applyCredentialState(ctx, ch, in.Source, result); err != nil {
-		return TestResult{}, err
-	}
-
-	return result, nil
+	return result
 }
 
-// applyCredentialState 按检测结果翻 credential_valid（C-7）并落一条检测日志。
-//
-// 翻牌：成功→有效、credential_invalid→失效、其它失败不动。均幂等。
-// 写日志口径：每次检测都写一条——手动是管理员显式留痕，worker 是巡检心跳。
-// 过去 worker 成功且状态未变时被静默（防刷屏），但这样检测日志里自动巡检「只剩失败行」，
-// 会被误读成「自动巡检老是异常」；现改为成功也留痕（每渠道每轮一条，总量由
-// LogRetentionPerChannel 控制）。日志写入 best-effort，失败不影响检测结果。
-func (s *Service) applyCredentialState(ctx context.Context, ch sqlc.Channel, source string, result TestResult) error {
+func (s *Service) permissionRecheckSnapshot(
+	ctx context.Context,
+	in PermissionRecheckInput,
+) (probeSnapshot, sqlc.ListChannelModelsByChannelRow, bool, error) {
+	row, err := s.store.GetChannelProbeSnapshot(ctx, in.ChannelID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return probeSnapshot{}, sqlc.ListChannelModelsByChannelRow{}, true, nil
+		}
+		return probeSnapshot{}, sqlc.ListChannelModelsByChannelRow{}, false, storeFailed(err, "get permission recheck snapshot")
+	}
+	snapshot := probeSnapshotFromRow(row)
+	bindings, err := s.store.ListChannelModelsByChannel(ctx, in.ChannelID)
+	if err != nil {
+		return probeSnapshot{}, sqlc.ListChannelModelsByChannelRow{}, false, storeFailed(err, "list permission recheck bindings")
+	}
+	var binding sqlc.ListChannelModelsByChannelRow
+	found := false
+	for _, candidate := range bindings {
+		if candidate.ModelID == in.ModelID {
+			binding = candidate
+			found = true
+			break
+		}
+	}
+	stale := snapshot.ConfigRevision != in.ChannelConfigRevision ||
+		snapshot.EndpointBaseURLRevision != in.EndpointBaseURLRevision ||
+		snapshot.EndpointStatusRevision != in.EndpointStatusRevision ||
+		!found || binding.Status != channelModelStatusEnabled
+	return snapshot, binding, stale, nil
+}
+
+func (s *Service) insertPermissionRecheckAudit(
+	ctx context.Context,
+	in PermissionRecheckInput,
+	result PermissionRecheckResult,
+) error {
+	probe := result.Probe
+	message := probe.Message
+	if result.Stale {
+		message = stalePermissionMessage(message)
+	}
+	_, err := s.store.InsertPermissionRecheckLog(ctx, sqlc.InsertPermissionRecheckLogParams{
+		ChannelID: in.ChannelID, Success: probe.Success,
+		ErrorCode: optText(probe.ErrorCode), HttpStatus: optInt4(int32(probe.HTTPStatus)),
+		LatencyMs: optInt4(clampInt32(probe.LatencyMs)), TestedModel: optText(probe.TestedModel),
+		Message:                       optText(message),
+		TestedEndpointBaseUrlRevision: pgtype.Int8{Int64: in.EndpointBaseURLRevision, Valid: true},
+		TestedEndpointStatusRevision:  pgtype.Int8{Int64: in.EndpointStatusRevision, Valid: true},
+		TestedConfigRevision:          pgtype.Int8{Int64: in.ChannelConfigRevision, Valid: true},
+	})
+	if err != nil {
+		return storeFailed(err, "insert permission recheck audit")
+	}
+	return nil
+}
+
+func stalePermissionProbe(testedModel string) TestResult {
+	return TestResult{
+		Success: false, TestedModel: testedModel, ErrorCode: "stale_revision",
+		Message:  "权限复检对应的渠道、端点或模型绑定已变化，旧结果仅留审计",
+		TestedAt: time.Now().UTC(),
+	}
+}
+
+func stalePermissionMessage(message string) string {
+	const suffix = "权限复检期间配置已变化，结果仅留审计"
+	if message == "" {
+		return suffix
+	}
+	if strings.Contains(message, suffix) {
+		return message
+	}
+	return message + "；" + suffix
+}
+
+func (s *Service) applyProbeResult(ctx context.Context, snapshot probeSnapshot, source string, result TestResult) (sqlc.ApplyChannelProbeResultRow, error) {
 	if source == "" {
 		source = SourceManual
 	}
-
-	credentialValidAfter := ch.CredentialValid
+	nextCredentialValid := pgtype.Bool{}
 	switch {
 	case result.Success:
-		if _, err := s.store.SetChannelCredentialValid(ctx, ch.ID); err != nil {
-			return storeFailed(err, "set channel credential valid")
-		}
-		credentialValidAfter = true
+		nextCredentialValid = pgtype.Bool{Bool: true, Valid: true}
 	case result.ErrorCode == ErrCodeCredentialInvalid:
-		if _, err := s.store.SetChannelCredentialInvalid(ctx, ch.ID); err != nil {
-			return storeFailed(err, "set channel credential invalid")
-		}
-		credentialValidAfter = false
+		nextCredentialValid = pgtype.Bool{Bool: false, Valid: true}
 	}
-
-	_ = s.store.InsertChannelTestLog(ctx, sqlc.InsertChannelTestLogParams{
-		ChannelID:            ch.ID,
-		Source:               source,
-		Success:              result.Success,
-		ErrorCode:            optText(result.ErrorCode),
-		HttpStatus:           optInt4(int32(result.HTTPStatus)),
-		LatencyMs:            pgtype.Int4{Int32: clampInt32(result.LatencyMs), Valid: true},
-		TestedModel:          optText(result.TestedModel),
-		CredentialValidAfter: credentialValidAfter,
-		Message:              optText(result.Message),
-		UpstreamError:        optText(result.UpstreamError),
+	return s.store.ApplyChannelProbeResult(ctx, sqlc.ApplyChannelProbeResultParams{
+		ChannelID: snapshot.ChannelID, ExpectedConfigRevision: snapshot.ConfigRevision,
+		ExpectedEndpointBaseUrlRevision: snapshot.EndpointBaseURLRevision,
+		ExpectedEndpointStatusRevision:  snapshot.EndpointStatusRevision,
+		Success:                         pgtype.Bool{Bool: result.Success, Valid: true},
+		LastTestLatencyMs:               pgtype.Int4{Int32: clampInt32(result.LatencyMs), Valid: true},
+		LastTestError:                   testErrorParam(result), NextCredentialValid: nextCredentialValid,
+		Source: source, ErrorCode: optText(result.ErrorCode), HttpStatus: optInt4(int32(result.HTTPStatus)),
+		TestedModel: optText(result.TestedModel), UpstreamError: optText(result.UpstreamError),
 	})
-	return nil
+}
+
+func setTestedRevisions(verification *adminchannel.CredentialVerification, snapshot probeSnapshot) {
+	verification.TestedEndpointBaseURLRevision = int64Ptr(snapshot.EndpointBaseURLRevision)
+	verification.TestedEndpointStatusRevision = int64Ptr(snapshot.EndpointStatusRevision)
+	verification.TestedConfigRevision = int64Ptr(snapshot.ConfigRevision)
+}
+
+func (s *Service) populateExecutionFailed(ctx context.Context, result *adminchannel.RotateCredentialResult, snapshot probeSnapshot, probe *TestResult) {
+	result.Verification.State = adminchannel.CredentialVerificationExecutionFailed
+	result.Verification.StateChangeApplied = false
+	result.Verification.CredentialValidAfter = snapshot.CredentialValid
+	if probe != nil {
+		result.Verification.Result = credentialProbeResult(*probe)
+	}
+	if current, err := s.store.GetChannel(ctx, snapshot.ChannelID); err == nil {
+		result.CurrentConfigRevision = current.ConfigRevision
+		result.Verification.CredentialValidAfter = current.CredentialValid
+	}
+}
+
+func credentialProbeResult(result TestResult) *adminchannel.CredentialProbeResult {
+	return &adminchannel.CredentialProbeResult{
+		Success: result.Success, LatencyMs: result.LatencyMs, TestedModel: result.TestedModel,
+		HTTPStatus: result.HTTPStatus, ErrorCode: result.ErrorCode, Message: result.Message,
+		UpstreamError: result.UpstreamError, TestedAt: result.TestedAt,
+	}
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
 }
 
 // optText 空串→NULL。
@@ -245,17 +508,21 @@ func optInt4(v int32) pgtype.Int4 {
 
 // LogEntry 是一条渠道检测/凭据事件日志（详情页「检测日志」区块展示）。
 type LogEntry struct {
-	ID                   int64
-	CreatedAt            time.Time
-	Source               string
-	Success              bool
-	ErrorCode            string
-	HTTPStatus           int
-	LatencyMs            int64
-	TestedModel          string
-	CredentialValidAfter bool
-	Message              string
-	UpstreamError        string
+	ID                            int64
+	CreatedAt                     time.Time
+	Source                        string
+	Success                       bool
+	ErrorCode                     string
+	HTTPStatus                    int
+	LatencyMs                     int64
+	TestedModel                   string
+	CredentialValidAfter          bool
+	Message                       string
+	UpstreamError                 string
+	TestedEndpointBaseURLRevision *int64
+	TestedEndpointStatusRevision  *int64
+	TestedConfigRevision          *int64
+	StateChangeApplied            bool
 }
 
 // ListLogs 分页返回某渠道的检测日志（倒序）。返回本页 + 总数。
@@ -281,17 +548,14 @@ func (s *Service) ListLogs(ctx context.Context, channelID int64, limit, offset i
 	out := make([]LogEntry, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, LogEntry{
-			ID:                   r.ID,
-			CreatedAt:            r.CreatedAt.Time,
-			Source:               r.Source,
-			Success:              r.Success,
-			ErrorCode:            r.ErrorCode.String,
-			HTTPStatus:           int(r.HttpStatus.Int32),
-			LatencyMs:            int64(r.LatencyMs.Int32),
-			TestedModel:          r.TestedModel.String,
-			CredentialValidAfter: r.CredentialValidAfter,
-			Message:              r.Message.String,
-			UpstreamError:        r.UpstreamError.String,
+			ID: r.ID, CreatedAt: r.CreatedAt.Time, Source: r.Source, Success: r.Success,
+			ErrorCode: r.ErrorCode.String, HTTPStatus: int(r.HttpStatus.Int32), LatencyMs: int64(r.LatencyMs.Int32),
+			TestedModel: r.TestedModel.String, CredentialValidAfter: r.CredentialValidAfter,
+			Message: r.Message.String, UpstreamError: r.UpstreamError.String,
+			TestedEndpointBaseURLRevision: nullableInt64(r.TestedEndpointBaseUrlRevision),
+			TestedEndpointStatusRevision:  nullableInt64(r.TestedEndpointStatusRevision),
+			TestedConfigRevision:          nullableInt64(r.TestedConfigRevision),
+			StateChangeApplied:            r.StateChangeApplied,
 		})
 	}
 	return out, total, nil
@@ -336,17 +600,11 @@ func (s *Service) resolveUpstreamCandidates(ctx context.Context, channelID int64
 	return candidates, nil
 }
 
-// providerSlug 取渠道所属 provider 的 slug 供 adapter 选择 provider 专属处理；
-// 拿不到不阻断检测（ProviderSlug 只影响流式翻译，非流式探测不依赖）。
-func (s *Service) providerSlug(ctx context.Context, providerID int64) string {
-	if providerID <= 0 {
-		return ""
+func nullableInt64(value pgtype.Int8) *int64 {
+	if !value.Valid {
+		return nil
 	}
-	p, err := s.store.GetProvider(ctx, providerID)
-	if err != nil {
-		return ""
-	}
-	return p.Slug
+	return &value.Int64
 }
 
 // classifyProbeError 把 adapter 返回的上游错误归类成稳定错误码 + 可读中文原因。

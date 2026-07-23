@@ -117,15 +117,16 @@ docs/production/RELEASE_BLOCKERS.md
 
 - Gateway：请求编排层。
 - Provider：业务服务商，例如 OpenAI、Anthropic、Gemini。
-- Channel：某个 provider 下的具体上游渠道，包含凭据、base URL、优先级、健康状态、模型映射和价格策略等业务数据。
+- ProviderEndpoint：某个 provider 下的唯一 API Root 与公共故障域，持有规范化 BaseURL。
+- Channel：某个 ProviderEndpoint 下的一组账号级上游渠道事实，包含凭据、协议、adapter、优先级、运行状态、模型映射和价格策略，不持有 BaseURL。
 - Adapter：纯代码能力，只做协议转换、请求发送、响应解析、stream parser、usage/error 映射。
 - `channel.Runtime`：gateway/routing 选中 channel 后传给 adapter 的运行时参数，不等于数据库里的 channel 业务实体。
 
 硬规则：
 
 - Adapter 不读取 env，不查数据库，不保存业务状态。
-- Gateway/routing 负责选择 model、provider、channel，并把运行时 channel 参数交给 adapter。
-- Provider、channel、model、price、fallback、health、rate policy 属于业务数据，最终必须进数据库并由后台管理，不能设计成正式 env/config 来源。
+- Gateway/routing 负责选择 model、provider、endpoint、channel，并把运行时 channel 参数交给 adapter。
+- Provider、endpoint、channel、model、price、fallback、health、rate policy 属于业务数据，最终必须进数据库并由后台管理，不能设计成正式 env/config 来源。
 - Billing/ledger 必须记录 request、model、provider、channel、price snapshot、cost snapshot 和 usage。
 - 金额、余额、token 计费数据不要使用 float。
 - Redis 不能作为金额或余额的最终事实来源。

@@ -37,7 +37,7 @@ type APIKeyPrincipal struct {
 	RouteID *int64
 
 	// RPMLimit/TPMLimit/RPDLimit 是限流上限，取自 Key 绑定的线路（DEC-027：限流归线路，
-	// 按 (线路,用户) 计数）：nil 表示「继承全局默认」，0 表示「显式不限」，>0 表示具体上限
+	// 按 (线路,用户) 计数）：nil 表示「继承线路默认限流」，0 表示「显式不限」，>0 表示具体上限
 	// （每分钟请求/每分钟 token/每日请求）。api_keys 自身的旧限流列已废弃、不再参与认证。
 	RPMLimit *int64
 	TPMLimit *int64
@@ -155,7 +155,7 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 	}, nil
 }
 
-// int4Ptr 把可空 pgtype.Int4 转成 *int64（限流上限可空，nil=继承全局默认）。
+// int4Ptr 把可空线路限流上限转成 *int64（nil=继承线路默认限流）。
 func int4Ptr(v pgtype.Int4) *int64 {
 	if !v.Valid {
 		return nil

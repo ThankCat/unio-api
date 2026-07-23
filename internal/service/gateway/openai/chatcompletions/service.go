@@ -25,10 +25,8 @@ type AdapterRegistry interface {
 
 // ChatCompletionService 编排 chat completion 请求的 routing、adapter 调用、request log 和结算。
 //
-// 协议无关基础设施（request log / metrics / breaker / chat authorizer 的 release 流程 + ad-hoc
-// code 文案 + ingress 协议常量）由 lifecycle.RequestLifecycle 统一承担，在构造时立即 bundle，
-// 由本文件内部 helper lc() 返回。两侧 service 的 thin wrapper（channel_breaker /
-// chat_authorization / chat_metrics / chat_request_record）都改为 1-line forward 到 lifecycle。
+// 协议无关基础设施（request log / metrics / chat authorizer 的 release 流程 + ad-hoc
+// code 文案 + ingress 协议常量）由 lifecycle.RequestLifecycle 统一承担，在构造时立即 bundle。
 type ChatCompletionService struct {
 	router          ChatRouter
 	registry        AdapterRegistry
@@ -38,7 +36,6 @@ type ChatCompletionService struct {
 	chatSettlement  lifecycle.ChatSettlementExecutor
 	chatAuthorizer  lifecycle.ChatAuthorizer
 	metrics         lifecycle.MetricsRecorder
-	breaker         lifecycle.ChannelBreaker
 	lifecycle       *lifecycle.RequestLifecycle
 	attemptRunner   *lifecycle.AttemptRunner
 
@@ -47,7 +44,7 @@ type ChatCompletionService struct {
 }
 
 // NewChatCompletionService 创建聊天补全 gateway service。
-// metricsRecorder 和 breaker 均可为 nil，分别表示不采集业务指标、不启用 channel 熔断。
+// metricsRecorder 可为 nil，表示不采集业务指标。
 func NewChatCompletionService(
 	router ChatRouter,
 	registry AdapterRegistry,
@@ -57,7 +54,6 @@ func NewChatCompletionService(
 	chatSettlement lifecycle.ChatSettlementExecutor,
 	chatAuthorizer lifecycle.ChatAuthorizer,
 	metricsRecorder lifecycle.MetricsRecorder,
-	breaker lifecycle.ChannelBreaker,
 ) *ChatCompletionService {
 	if retryClassifier == nil {
 		retryClassifier = lifecycle.NeverRetryClassifier{}
@@ -79,7 +75,6 @@ func NewChatCompletionService(
 		RequestLog:      requestLog,
 		Authorizer:      chatAuthorizer,
 		Metrics:         metricsRecorder,
-		Breaker:         breaker,
 		IngressProtocol: requestlog.ProtocolOpenAI,
 		Operation:       requestlog.OperationChatCompletions,
 		SafeMessage:     chatCompletionsSafeMessage,
@@ -94,37 +89,19 @@ func NewChatCompletionService(
 		chatSettlement:  chatSettlement,
 		chatAuthorizer:  chatAuthorizer,
 		metrics:         metricsRecorder,
-		breaker:         breaker,
 		lifecycle:       requestLifecycle,
 		attemptRunner:   lifecycle.NewAttemptRunner(requestLifecycle, retryClassifier, chatSettlement),
 	}
 }
 
-// SetRateLimitGuard 注入两层限流 Guard（P2-8），转发给候选循环驱动；nil 表示不启用限流。
-func (s *ChatCompletionService) SetRateLimitGuard(guard lifecycle.RateLimitGuard) {
-	s.attemptRunner.SetRateLimitGuard(guard)
-}
-
-// SetConcurrencyLimiter 注入渠道在途并发限制器（DEC-029），转发给候选循环驱动；nil 表示不启用。
-func (s *ChatCompletionService) SetConcurrencyLimiter(limiter lifecycle.ChannelConcurrencyLimiter) {
-	s.attemptRunner.SetConcurrencyLimiter(limiter)
-}
-
-// SetBalanceConfig 热更新 balanced 调度开关。
-func (s *ChatCompletionService) SetBalanceConfig(enabled, weightByRemaining bool) {
-	if configurable, ok := s.candidates.(interface{ SetBalanceConfig(bool, bool) }); ok {
-		configurable.SetBalanceConfig(enabled, weightByRemaining)
-	}
+// SetAttemptPermitManager 注入三协议共享的候选级全局准入管理器。
+func (s *ChatCompletionService) SetAttemptPermitManager(manager *lifecycle.AttemptPermitManager) {
+	s.attemptRunner.SetAttemptPermitManager(manager)
 }
 
 // SetCostExposureRecorder 注入成本敞口记录器（DESIGN-bill-on-cancel 阶段一）；nil 表示不启用。
 func (s *ChatCompletionService) SetCostExposureRecorder(recorder lifecycle.CostExposureRecorder, assumedOutputFallback int64) {
 	s.lifecycle.SetCostExposureRecorder(recorder, assumedOutputFallback)
-}
-
-// SetChannelCooldownRegistry 注入渠道级 429 冷却注册表（P2-7），转发给共享 lifecycle；nil 表示不启用冷却。
-func (s *ChatCompletionService) SetChannelCooldownRegistry(registry *lifecycle.ChannelCooldownRegistry) {
-	s.lifecycle.SetChannelCooldownRegistry(registry)
 }
 
 // SetCredentialGate 注入凭据失效闸门（连续 401 翻 credential_valid=false，阶段二）；nil 表示不启用。

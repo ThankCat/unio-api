@@ -111,6 +111,7 @@ func TestLoadInvalidTracingSampleRatio(t *testing.T) {
 
 func TestLoadLogLevelDebug(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("LOG_FORMAT", "")
 
 	cfg, err := Load()
 	if err != nil {

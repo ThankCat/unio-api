@@ -12,12 +12,12 @@ import (
 )
 
 type fakeChannelTestStore struct {
-	channels []sqlc.Channel
+	channels []sqlc.ListChannelsForCredentialTestRow
 	listErr  error
 	pruned   []sqlc.DeleteChannelTestLogsBeyondPerChannelParams
 }
 
-func (s *fakeChannelTestStore) ListChannelsForCredentialTest(context.Context) ([]sqlc.Channel, error) {
+func (s *fakeChannelTestStore) ListChannelsForCredentialTest(context.Context) ([]sqlc.ListChannelsForCredentialTestRow, error) {
 	if s.listErr != nil {
 		return nil, s.listErr
 	}
@@ -51,7 +51,7 @@ func newTestChannelWorker(store ChannelTestStore, tester ChannelCredentialTester
 }
 
 func TestChannelTestWorkerRunsCycleWithDefaults(t *testing.T) {
-	store := &fakeChannelTestStore{channels: []sqlc.Channel{{ID: 7}, {ID: 8}}}
+	store := &fakeChannelTestStore{channels: []sqlc.ListChannelsForCredentialTestRow{{ID: 7}, {ID: 8}}}
 	tester := &fakeChannelTester{}
 	worker, clock := newTestChannelWorker(store, tester)
 

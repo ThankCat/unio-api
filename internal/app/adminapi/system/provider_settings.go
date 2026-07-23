@@ -18,7 +18,7 @@ import (
 // 通用 List/SetRaw 驱动配置面板;beta 专用方法为便捷的 typed 入口。
 type ProviderSettingsService interface {
 	List(ctx context.Context) []appsettings.SettingItem
-	SetRaw(ctx context.Context, key string, value json.RawMessage) error
+	SetRawWithResult(ctx context.Context, key string, value json.RawMessage) (appsettings.SettingWriteResult, error)
 	GetAnthropicBetaPolicy(ctx context.Context) messagesadapter.BetaPolicy
 	SetAnthropicBetaPolicy(ctx context.Context, policy messagesadapter.BetaPolicy) error
 }
@@ -34,6 +34,11 @@ type settingItemDTO struct {
 	Default     json.RawMessage `json:"default"`
 	Value       json.RawMessage `json:"value"`
 	Source      string          `json:"source"`
+	Revision    int64           `json:"revision"`
+
+	RuntimeActiveRevision  int64  `json:"runtime_active_revision,omitempty"`
+	RuntimePendingRevision int64  `json:"runtime_pending_revision,omitempty"`
+	RuntimeSyncState       string `json:"runtime_sync_state,omitempty"`
 }
 
 func (h *providerSettingsHandler) listSettings(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +54,11 @@ func (h *providerSettingsHandler) listSettings(w http.ResponseWriter, r *http.Re
 			Default:     it.Default,
 			Value:       it.Value,
 			Source:      it.Source,
+			Revision:    it.Revision,
+
+			RuntimeActiveRevision:  it.RuntimeActiveRevision,
+			RuntimePendingRevision: it.RuntimePendingRevision,
+			RuntimeSyncState:       it.RuntimeSyncState,
 		})
 	}
 	adminhttp.WriteData(w, http.StatusOK, dtos)
@@ -61,7 +71,12 @@ func (h *providerSettingsHandler) putSetting(w http.ResponseWriter, r *http.Requ
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	if err := h.service.SetRaw(r.Context(), key, value); err != nil {
+	result, err := h.service.SetRawWithResult(r.Context(), key, value)
+	if err != nil {
+		if failure.CodeOf(err) != "" {
+			adminhttp.WriteServiceError(w, err)
+			return
+		}
 		adminhttp.WriteServiceError(w, failure.New(
 			failure.CodeAdminInvalidArgument,
 			failure.WithMessage(err.Error()),
@@ -69,7 +84,7 @@ func (h *providerSettingsHandler) putSetting(w http.ResponseWriter, r *http.Requ
 		))
 		return
 	}
-	adminhttp.WriteData(w, http.StatusOK, map[string]string{"key": key, "status": "saved"})
+	adminhttp.WriteData(w, http.StatusOK, result)
 }
 
 // anthropicBetaPolicyDTO 是 Anthropic beta 策略的 admin API 请求/响应体。

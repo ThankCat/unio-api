@@ -9,6 +9,7 @@ import (
 var v1CompatExemptPaths = map[string]struct{}{
 	"/":        {},
 	"/healthz": {},
+	"/readyz":  {},
 	"/metrics": {},
 }
 

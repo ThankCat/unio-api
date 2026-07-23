@@ -21,7 +21,7 @@ type ChannelService interface {
 	Get(ctx context.Context, id int64) (channel.Channel, error)
 	Create(ctx context.Context, in channel.CreateInput) (channel.Channel, error)
 	Update(ctx context.Context, in channel.UpdateInput) (channel.Channel, error)
-	RotateCredential(ctx context.Context, in channel.RotateCredentialInput) error
+	RotateCredential(ctx context.Context, in channel.RotateCredentialInput) (channel.RotateCredentialResult, error)
 	Delete(ctx context.Context, id int64) error
 	Archive(ctx context.Context, id int64, replacementChannelID *int64) error
 	Restore(ctx context.Context, id int64) error
@@ -35,20 +35,29 @@ type channelDTO struct {
 	ID           int64  `json:"id"`
 	ProviderID   int64  `json:"provider_id"`
 	ProviderName string `json:"provider_name"`
-	Name         string `json:"name"`
-	Protocol     string `json:"protocol"`
-	AdapterKey   string `json:"adapter_key"`
-	BaseURL      string `json:"base_url"`
+	// ProviderEndpointID 是 channel 绑定的 ProviderEndpoint（P4 §4.4）。
+	ProviderEndpointID     int64  `json:"provider_endpoint_id"`
+	ProviderEndpointName   string `json:"provider_endpoint_name"`
+	ProviderEndpointStatus string `json:"provider_endpoint_status"`
+	Name                   string `json:"name"`
+	Protocol               string `json:"protocol"`
+	AdapterKey             string `json:"adapter_key"`
+	// BaseURL 只读，来源于所绑定 Endpoint（channel 不再持有 base_url）。
+	BaseURL string `json:"base_url"`
+	// ConfigRevision / AdmissionLimitsRevision 只读返回（P4 §4.4）。
+	ConfigRevision          int64 `json:"config_revision"`
+	AdmissionLimitsRevision int64 `json:"admission_limits_revision"`
+	RuntimeSyncPending      bool  `json:"runtime_sync_pending"`
 	// Credential 是明文上游 API key（产品决策：明文存储，管理端可查看/复制/编辑）。
 	Credential string `json:"credential"`
 	Status     string `json:"status"`
 	Priority   int32  `json:"priority"`
 	TimeoutMs  *int32 `json:"timeout_ms"`
-	// RPMLimit/TPMLimit/RPDLimit：渠道级限流上限（P2-8）。null=继承全局默认，0=不限，>0=具体上限。
+	// RPMLimit/TPMLimit/RPDLimit：渠道级限流上限（P2-8）。null=继承渠道默认限流，0=不限，>0=具体上限。
 	RPMLimit *int64 `json:"rpm_limit"`
 	TPMLimit *int64 `json:"tpm_limit"`
 	RPDLimit *int64 `json:"rpd_limit"`
-	// ConcurrencyLimit：渠道在途并发上限（DEC-029）。null=继承全局默认，0=不限，>0=具体上限。
+	// ConcurrencyLimit：渠道在途并发上限（DEC-029）。null=继承并发默认 channel_limit，0=不限，>0=具体上限。
 	ConcurrencyLimit *int64 `json:"concurrency_limit"`
 	// BillsOnDisconnect：上游「断开仍计费」标记（DESIGN-bill-on-cancel 阶段一）。
 	// true 时失败/取消路径记平台成本敞口，纯观测不影响路由与客户计费。
@@ -72,13 +81,13 @@ type adapterKeyOptionDTO struct {
 }
 
 // rateLimitsRequest 是渠道级限流的可选嵌套对象（P2-8，渠道层保护上游）。
-// 整个对象缺省=不变；存在即原子替换三维：各字段 null/缺省=继承全局默认(NULL)，数字（含 0）=显式设定（0=不限）。
+// 整个对象缺省=不变；存在即原子替换三维：rate 字段 null/缺省=继承渠道默认限流(NULL)，数字（含 0）=显式设定（0=不限）。
 // 注：Key/线路侧限流已归线路（DEC-027），此类型仅服务于渠道级限流。
 type rateLimitsRequest struct {
 	RPM *int64 `json:"rpm"`
 	TPM *int64 `json:"tpm"`
 	RPD *int64 `json:"rpd"`
-	// Concurrency 是渠道在途并发上限（DEC-029），语义同其余维度：null=继承全局默认，0=不限。
+	// Concurrency 是渠道在途并发上限（DEC-029）：null=继承并发默认 channel_limit，0=不限。
 	Concurrency *int64 `json:"concurrency"`
 }
 
@@ -100,33 +109,51 @@ func validateRateLimits(rl *rateLimitsRequest) error {
 }
 
 type createChannelRequest struct {
-	ProviderID int64              `json:"provider_id"`
-	Name       string             `json:"name"`
-	Protocol   string             `json:"protocol"`
-	AdapterKey string             `json:"adapter_key"`
-	BaseURL    string             `json:"base_url"`
-	Credential string             `json:"credential"`
-	Status     string             `json:"status"`
-	Priority   int32              `json:"priority"`
-	TimeoutMs  *int32             `json:"timeout_ms"`
-	RateLimits *rateLimitsRequest `json:"rate_limits"` // 可选渠道级限流；不传表示全继承全局默认
+	ProviderID         int64              `json:"provider_id"`
+	ProviderEndpointID int64              `json:"provider_endpoint_id"`
+	Name               string             `json:"name"`
+	Protocol           string             `json:"protocol"`
+	AdapterKey         string             `json:"adapter_key"`
+	Credential         string             `json:"credential"`
+	Status             string             `json:"status"`
+	Priority           int32              `json:"priority"`
+	TimeoutMs          *int32             `json:"timeout_ms"`
+	RateLimits         *rateLimitsRequest `json:"rate_limits"` // 可选渠道级限流；不传表示全继承渠道默认限流
 	// BillsOnDisconnect 可选：上游「断开仍计费」标记；缺省=false（正常上游）。
 	BillsOnDisconnect *bool `json:"upstream_bills_on_disconnect"`
 }
 
 type updateChannelRequest struct {
-	Name       string             `json:"name"`
-	BaseURL    string             `json:"base_url"`
-	Status     string             `json:"status"`
-	Priority   int32              `json:"priority"`
-	TimeoutMs  *int32             `json:"timeout_ms"`
-	RateLimits *rateLimitsRequest `json:"rate_limits"` // 对象缺省=不变，存在即原子替换三维限流
+	Name               string             `json:"name"`
+	ProviderEndpointID int64              `json:"provider_endpoint_id"`
+	Status             string             `json:"status"`
+	Priority           int32              `json:"priority"`
+	TimeoutMs          *int32             `json:"timeout_ms"`
+	RateLimits         *rateLimitsRequest `json:"rate_limits"` // 对象缺省=不变，存在即原子替换三维限流
 	// BillsOnDisconnect 可选：上游「断开仍计费」标记；缺省=不变。
 	BillsOnDisconnect *bool `json:"upstream_bills_on_disconnect"`
 }
 
 type rotateChannelCredentialRequest struct {
 	Credential string `json:"credential"`
+}
+
+type rotateCredentialResultDTO struct {
+	CredentialSaved       bool                      `json:"credential_saved"`
+	CredentialChanged     bool                      `json:"credential_changed"`
+	SavedConfigRevision   int64                     `json:"saved_config_revision"`
+	Verification          credentialVerificationDTO `json:"verification"`
+	CurrentConfigRevision int64                     `json:"current_config_revision"`
+}
+
+type credentialVerificationDTO struct {
+	State                         string                `json:"state"`
+	TestedEndpointBaseURLRevision *int64                `json:"tested_endpoint_base_url_revision"`
+	TestedEndpointStatusRevision  *int64                `json:"tested_endpoint_status_revision"`
+	TestedConfigRevision          *int64                `json:"tested_config_revision"`
+	StateChangeApplied            bool                  `json:"state_change_applied"`
+	CredentialValidAfter          bool                  `json:"credential_valid_after"`
+	Result                        *channelTestResultDTO `json:"result"`
 }
 
 type channelsHandler struct {
@@ -213,15 +240,15 @@ func (h *channelsHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	in := channel.CreateInput{
-		ProviderID: req.ProviderID,
-		Name:       req.Name,
-		Protocol:   req.Protocol,
-		AdapterKey: req.AdapterKey,
-		BaseURL:    req.BaseURL,
-		Credential: req.Credential,
-		Status:     req.Status,
-		Priority:   req.Priority,
-		TimeoutMs:  req.TimeoutMs,
+		ProviderID:         req.ProviderID,
+		ProviderEndpointID: req.ProviderEndpointID,
+		Name:               req.Name,
+		Protocol:           req.Protocol,
+		AdapterKey:         req.AdapterKey,
+		Credential:         req.Credential,
+		Status:             req.Status,
+		Priority:           req.Priority,
+		TimeoutMs:          req.TimeoutMs,
 	}
 	if req.RateLimits != nil {
 		in.RateLimitsProvided = true
@@ -260,12 +287,12 @@ func (h *channelsHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	in := channel.UpdateInput{
-		ID:        id,
-		Name:      req.Name,
-		BaseURL:   req.BaseURL,
-		Status:    req.Status,
-		Priority:  req.Priority,
-		TimeoutMs: req.TimeoutMs,
+		ID:                 id,
+		Name:               req.Name,
+		ProviderEndpointID: req.ProviderEndpointID,
+		Status:             req.Status,
+		Priority:           req.Priority,
+		TimeoutMs:          req.TimeoutMs,
 	}
 	if req.RateLimits != nil {
 		in.RateLimitsProvided = true
@@ -298,16 +325,46 @@ func (h *channelsHandler) rotateCredential(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := h.service.RotateCredential(r.Context(), channel.RotateCredentialInput{
+	result, err := h.service.RotateCredential(r.Context(), channel.RotateCredentialInput{
 		ID:         id,
 		Credential: req.Credential,
-	}); err != nil {
+	})
+	if err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
+	adminhttp.WriteData(w, http.StatusOK, toRotateCredentialResultDTO(result))
+}
 
-	// 凭据只写不回；轮换成功返回 204 无响应体。
-	w.WriteHeader(http.StatusNoContent)
+func toRotateCredentialResultDTO(result channel.RotateCredentialResult) rotateCredentialResultDTO {
+	dto := rotateCredentialResultDTO{
+		CredentialSaved: result.CredentialSaved, CredentialChanged: result.CredentialChanged,
+		SavedConfigRevision: result.SavedConfigRevision, CurrentConfigRevision: result.CurrentConfigRevision,
+		Verification: credentialVerificationDTO{
+			State:                         string(result.Verification.State),
+			TestedEndpointBaseURLRevision: result.Verification.TestedEndpointBaseURLRevision,
+			TestedEndpointStatusRevision:  result.Verification.TestedEndpointStatusRevision,
+			TestedConfigRevision:          result.Verification.TestedConfigRevision,
+			StateChangeApplied:            result.Verification.StateChangeApplied,
+			CredentialValidAfter:          result.Verification.CredentialValidAfter,
+		},
+	}
+	if probe := result.Verification.Result; probe != nil {
+		test := channelTestResultDTO{
+			Success: probe.Success, LatencyMs: probe.LatencyMs, TestedModel: probe.TestedModel,
+			HTTPStatus: probe.HTTPStatus, Message: probe.Message, TestedAt: probe.TestedAt.UTC().Format(time.RFC3339),
+		}
+		if probe.ErrorCode != "" {
+			code := probe.ErrorCode
+			test.ErrorCode = &code
+		}
+		if probe.UpstreamError != "" {
+			upstreamError := probe.UpstreamError
+			test.UpstreamError = &upstreamError
+		}
+		dto.Verification.Result = &test
+	}
+	return dto
 }
 
 func (h *channelsHandler) delete(w http.ResponseWriter, r *http.Request) {
@@ -358,25 +415,31 @@ func (h *channelsHandler) restore(w http.ResponseWriter, r *http.Request) {
 
 func toChannelDTO(c channel.Channel) channelDTO {
 	return channelDTO{
-		ID:                c.ID,
-		ProviderID:        c.ProviderID,
-		ProviderName:      c.ProviderName,
-		Name:              c.Name,
-		Protocol:          c.Protocol,
-		AdapterKey:        c.AdapterKey,
-		BaseURL:           c.BaseURL,
-		Credential:        c.Credential,
-		Status:            c.Status,
-		Priority:          c.Priority,
-		TimeoutMs:         c.TimeoutMs,
-		RPMLimit:          c.RPMLimit,
-		TPMLimit:          c.TPMLimit,
-		RPDLimit:          c.RPDLimit,
-		ConcurrencyLimit:  c.ConcurrencyLimit,
-		BillsOnDisconnect: c.BillsOnDisconnect,
-		CreatedAt:         c.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:         c.UpdatedAt.UTC().Format(time.RFC3339),
-		ArchivedAt:        formatOptionalTime(c.ArchivedAt),
+		ID:                      c.ID,
+		ProviderID:              c.ProviderID,
+		ProviderName:            c.ProviderName,
+		ProviderEndpointID:      c.ProviderEndpointID,
+		ProviderEndpointName:    c.ProviderEndpointName,
+		ProviderEndpointStatus:  c.ProviderEndpointStatus,
+		ConfigRevision:          c.ConfigRevision,
+		AdmissionLimitsRevision: c.AdmissionLimitsRevision,
+		RuntimeSyncPending:      c.RuntimeSyncPending,
+		Name:                    c.Name,
+		Protocol:                c.Protocol,
+		AdapterKey:              c.AdapterKey,
+		BaseURL:                 c.BaseURL,
+		Credential:              c.Credential,
+		Status:                  c.Status,
+		Priority:                c.Priority,
+		TimeoutMs:               c.TimeoutMs,
+		RPMLimit:                c.RPMLimit,
+		TPMLimit:                c.TPMLimit,
+		RPDLimit:                c.RPDLimit,
+		ConcurrencyLimit:        c.ConcurrencyLimit,
+		BillsOnDisconnect:       c.BillsOnDisconnect,
+		CreatedAt:               c.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:               c.UpdatedAt.UTC().Format(time.RFC3339),
+		ArchivedAt:              formatOptionalTime(c.ArchivedAt),
 
 		LastTestedAt:      formatOptionalTime(c.LastTestedAt),
 		LastTestOK:        c.LastTestOK,

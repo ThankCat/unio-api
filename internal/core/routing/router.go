@@ -72,12 +72,19 @@ type ChatRouteRequest struct {
 
 // ChatRouteCandidate 表示一个可尝试的 chat 上游候选。
 type ChatRouteCandidate struct {
-	ModelDBID     int64
-	ProviderID    int64
-	AdapterKey    string
-	Protocol      string
-	Channel       channel.Runtime
-	UpstreamModel string
+	ModelDBID  int64
+	ProviderID int64
+	// Endpoint identity and revisions are immutable facts of this candidate.
+	// Admission and audit code must not infer them later from mutable rows.
+	ProviderEndpointID              int64
+	ProviderEndpointBaseURLRevision int64
+	ProviderEndpointStatusRevision  int64
+	ChannelConfigRevision           int64
+	ChannelAdmissionLimitsRevision  int64
+	AdapterKey                      string
+	Protocol                        string
+	Channel                         channel.Runtime
+	UpstreamModel                   string
 
 	// RouteName 是本次请求绑定线路的名称（routes.name），供 access log 的 router 字段使用。
 	RouteName string
@@ -111,15 +118,18 @@ type ChatRouteCandidate struct {
 	ChannelRechargeFactorID int64
 	// ChannelCost 是命中渠道当前生效的上游真实成本快照（覆盖值 或 基准价×价格倍率×充值倍率）；毛利 = SalePrice − ChannelCost。
 	ChannelCost billing.ProviderCostSnapshot
+	// CostRatio 是七个归一化计价分项中最大的 provider 成本/客户售价比率。
+	// routing 在负毛利校验后冻结该值，balanced 调度只消费该不可变事实。
+	CostRatio float64
 
 	// RPMLimit/TPMLimit/RPDLimit 是该候选命中渠道的渠道级限流上限（P2-8）：
-	// nil 表示「继承全局默认」，0 表示「显式不限」，>0 表示具体上限。调用上游前在 attempt runner 生效。
+	// nil 表示「继承渠道默认限流」，0 表示「显式不限」，>0 表示具体上限。调用上游前在 attempt runner 生效。
 	RPMLimit *int64
 	TPMLimit *int64
 	RPDLimit *int64
 
 	// ConcurrencyLimit 是该候选命中渠道的在途并发上限（DEC-029）：
-	// nil=继承全局默认，0=显式不限，>0=具体上限。命中时该候选被跳过 fallback 到下一渠道。
+	// nil=继承并发默认 channel_limit，0=显式不限，>0=具体上限。命中时该候选被跳过 fallback 到下一渠道。
 	ConcurrencyLimit *int64
 
 	// BillsOnDisconnect 标记该候选渠道的上游「断开仍计费」（DESIGN-bill-on-cancel 阶段一）：
@@ -408,7 +418,7 @@ func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest, ro
 	)
 }
 
-// int4LimitPtr 把可空 pgtype.Int4 限流上限转成 *int64（nil=继承全局默认，0=不限，>0=上限）。
+// int4LimitPtr 把可空渠道限流上限转成 *int64（nil=继承渠道默认限流，0=不限，>0=上限）。
 func int4LimitPtr(v pgtype.Int4) *int64 {
 	if !v.Valid {
 		return nil
@@ -483,19 +493,34 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		}
 		return ChatRouteCandidate{}, failure.New(failure.CodeRoutingNegativeMargin, fields...)
 	}
+	costRatio, err := billing.ProviderCostToSaleRatio(salePrice, channelCost)
+	if err != nil {
+		return ChatRouteCandidate{}, failure.Wrap(
+			failure.CodeRoutingNegativeMargin,
+			err,
+			failure.WithMessage("calculate candidate provider cost to sale ratio"),
+			failure.WithField("channel_id", row.ChannelID),
+			failure.WithField("model_id", row.RequestedModelID),
+		)
+	}
 
 	return ChatRouteCandidate{
-		ModelDBID:         row.ModelDbID,
-		ProviderID:        row.ProviderID,
-		AdapterKey:        row.AdapterKey,
-		Protocol:          row.Protocol,
-		MaxOutputTokens:   maxOutputTokens,
-		RPMLimit:          int4LimitPtr(row.ChannelRpmLimit),
-		TPMLimit:          int4LimitPtr(row.ChannelTpmLimit),
-		RPDLimit:          int4LimitPtr(row.ChannelRpdLimit),
-		ConcurrencyLimit:  int4LimitPtr(row.ChannelConcurrencyLimit),
-		BillsOnDisconnect: row.ChannelBillsOnDisconnect,
-		RouteName:         route.Name,
+		ModelDBID:                       row.ModelDbID,
+		ProviderID:                      row.ProviderID,
+		ProviderEndpointID:              row.ProviderEndpointID,
+		ProviderEndpointBaseURLRevision: row.ProviderEndpointBaseUrlRevision,
+		ProviderEndpointStatusRevision:  row.ProviderEndpointStatusRevision,
+		ChannelConfigRevision:           row.ChannelConfigRevision,
+		ChannelAdmissionLimitsRevision:  row.ChannelAdmissionLimitsRevision,
+		AdapterKey:                      row.AdapterKey,
+		Protocol:                        row.Protocol,
+		MaxOutputTokens:                 maxOutputTokens,
+		RPMLimit:                        int4LimitPtr(row.ChannelRpmLimit),
+		TPMLimit:                        int4LimitPtr(row.ChannelTpmLimit),
+		RPDLimit:                        int4LimitPtr(row.ChannelRpdLimit),
+		ConcurrencyLimit:                int4LimitPtr(row.ChannelConcurrencyLimit),
+		BillsOnDisconnect:               row.ChannelBillsOnDisconnect,
+		RouteName:                       route.Name,
 		Channel: channel.Runtime{
 			ID:           row.ChannelID,
 			Name:         row.ChannelName,
@@ -514,6 +539,7 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		ChannelCostMultiplierID: channelCostMultiplierID,
 		ChannelRechargeFactorID: channelRechargeFactorID,
 		ChannelCost:             channelCost,
+		CostRatio:               costRatio,
 	}, nil
 }
 

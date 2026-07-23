@@ -1,6 +1,7 @@
 package appsettings
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -11,12 +12,12 @@ func TestGatewaySettingsRegistered(t *testing.T) {
 	reg := DefaultRegistry()
 	keys := []string{
 		GatewayCircuitBreakerKey,
-		GatewayRateLimitDefaultsKey,
+		GatewayRouteRateLimitDefaultsKey,
+		GatewayChannelRateLimitDefaultsKey,
 		GatewayStreamIdleTimeoutKey,
 		GatewayChannelCooldownKey,
 		GatewayCredential401ThresholdKey,
 		GatewayDefaultChannelTimeoutKey,
-		GatewayFailureCooldownKey,
 		GatewayConcurrencyDefaultsKey,
 		GatewayRoutingBalanceKey,
 	}
@@ -41,35 +42,66 @@ func TestGatewaySettingsRegistered(t *testing.T) {
 }
 
 func TestRoutingBalanceSettingsRoundTrip(t *testing.T) {
-	want := RoutingBalanceSettings{Enabled: true, WeightByRemaining: false}
+	want := RoutingBalanceSettings{
+		TTFTTarget:           2500 * time.Millisecond,
+		TTFTWeight:           0.4,
+		CostWeight:           0.6,
+		MinimumRoutingFactor: 0.08,
+		TTFTEWMAAlpha:        0.25,
+		Enabled:              true,
+		WeightByRemaining:    true,
+	}
 	got, err := DecodeRoutingBalanceSettings(encodeRoutingBalanceSettings(want))
 	if err != nil || got != want {
 		t.Fatalf("round trip got %+v err=%v, want %+v", got, err, want)
 	}
-	if _, err := DecodeRoutingBalanceSettings([]byte(`{"enabled":true,"weight_by_remaining":true,"bogus":1}`)); err == nil {
-		t.Fatal("unknown field must be rejected")
+	invalid := []string{
+		`{"ttft_target_ms":0,"ttft_weight":0.35,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
+		`{"ttft_target_ms":2000,"ttft_weight":1.1,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
+		`{"ttft_target_ms":2000,"ttft_weight":0.35,"minimum_routing_factor":0,"ttft_ewma_alpha":0.2}`,
+		`{"ttft_target_ms":2000,"ttft_weight":0.35,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0}`,
+		`{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":-0.1,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
+		`{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":1.1,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
+		`{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":null,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
+		`{"ttft_target_ms":2000,"cost_weight":0.5,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
+		`{"enabled":true,"weight_by_remaining":true}`,
+		`{"ttft_target_ms":2000,"ttft_weight":0.35,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2,"bogus":1}`,
+	}
+	for _, raw := range invalid {
+		if _, err := DecodeRoutingBalanceSettings([]byte(raw)); err == nil {
+			t.Fatalf("invalid routing balance accepted: %s", raw)
+		}
+	}
+}
+
+func TestRoutingBalanceCostWeightDefaultsAndLegacyCompatibility(t *testing.T) {
+	defaults := DefaultRoutingBalanceSettings()
+	if defaults.CostWeight != 0.5 {
+		t.Fatalf("fresh default cost weight = %v, want 0.5", defaults.CostWeight)
+	}
+	if raw := string(encodeRoutingBalanceSettings(defaults)); !strings.Contains(raw, `"cost_weight":0.5`) {
+		t.Fatalf("new encoder must include cost_weight: %s", raw)
+	}
+
+	legacy := []byte(`{"ttft_target_ms":2000,"ttft_weight":0.35,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`)
+	decoded, err := DecodeRoutingBalanceSettings(legacy)
+	if err != nil {
+		t.Fatalf("decode legacy routing balance: %v", err)
+	}
+	if decoded.CostWeight != 0 {
+		t.Fatalf("legacy payload cost weight = %v, want revision-stable 0", decoded.CostWeight)
+	}
+	if raw := string(encodeRoutingBalanceSettings(decoded)); !strings.Contains(raw, `"cost_weight":0`) {
+		t.Fatalf("canonical legacy payload must explicitly encode cost_weight=0: %s", raw)
 	}
 }
 
 // TestDurationKeysCarryMsSuffix 时长类标量 key 必须带 _ms 后缀,与值单位(毫秒)自证一致。
 func TestDurationKeysCarryMsSuffix(t *testing.T) {
-	for _, key := range []string{GatewayStreamIdleTimeoutKey, GatewayDefaultChannelTimeoutKey, GatewayFailureCooldownKey} {
+	for _, key := range []string{GatewayStreamIdleTimeoutKey, GatewayDefaultChannelTimeoutKey} {
 		if !strings.HasSuffix(key, "_ms") {
 			t.Errorf("duration key %q must end with _ms", key)
 		}
-	}
-}
-
-func TestFailureCooldownSettingDecoding(t *testing.T) {
-	// 0=关闭 合法；负数非法；默认 5000ms。
-	if d, err := DecodeNonNegativeMsSetting([]byte(`0`)); err != nil || d != 0 {
-		t.Fatalf("zero should decode as disabled: d=%v err=%v", d, err)
-	}
-	if _, err := DecodeNonNegativeMsSetting([]byte(`-1`)); err == nil {
-		t.Fatal("negative must be rejected")
-	}
-	if d, err := DecodeNonNegativeMsSetting(encodeMsSetting(DefaultFailureCooldownSetting)); err != nil || d != 5*time.Second {
-		t.Fatalf("default failure cooldown = %v (err=%v), want 5s", d, err)
 	}
 }
 
@@ -95,65 +127,79 @@ func TestConcurrencyDefaultsSettingsRoundTrip(t *testing.T) {
 }
 
 func TestCircuitBreakerSettingsRoundTrip(t *testing.T) {
-	want := CircuitBreakerSettings{
-		Enabled:      false,
-		Window:       45 * time.Second,
-		MinRequests:  10,
-		FailureRatio: 0.8,
-		OpenDuration: time.Minute,
-	}
+	want := DefaultCircuitBreakerSettings()
+	want.Enabled = false
+	want.Window = 45 * time.Second
+	want.MinRequests = 10
+	want.FailureRatio = 0.8
 	got, err := DecodeCircuitBreakerSettings(encodeCircuitBreakerSettings(want))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("round trip = %+v, want %+v", got, want)
 	}
 }
 
-func TestCircuitBreakerSettingsDefaultMatchesEnvDefaults(t *testing.T) {
-	// 与原 CIRCUIT_BREAKER_* env 默认对齐(迁移不改变行为)。
+func TestCircuitBreakerSettingsDefaultMatchesP4Decision(t *testing.T) {
 	got := DefaultCircuitBreakerSettings()
-	want := CircuitBreakerSettings{
-		Enabled:      true,
-		Window:       30 * time.Second,
-		MinRequests:  20,
-		FailureRatio: 0.5,
-		OpenDuration: 30 * time.Second,
+	if !got.Enabled || got.Window != 30*time.Second || got.MinRequests != 20 || got.FailureRatio != 0.5 {
+		t.Fatalf("breaker defaults mismatch: %+v", got)
 	}
-	if got != want {
-		t.Fatalf("defaults = %+v, want %+v", got, want)
+	if got.ConsecutiveFailures != 3 || got.ConsecutiveWindow != 10*time.Second || got.HalfOpenSuccesses != 2 {
+		t.Fatalf("breaker trigger defaults mismatch: %+v", got)
+	}
+	if got.AttemptPermitTTL != 30*time.Second || got.AttemptPermitRenewInterval != 10*time.Second || got.AttemptPermitTerminalTTL != 5*time.Minute {
+		t.Fatalf("permit defaults mismatch: %+v", got)
+	}
+	if got.EndpointStatusBatchMax != 256 || !reflect.DeepEqual(got.OpenDurations, []time.Duration{15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute}) {
+		t.Fatalf("breaker backoff defaults mismatch: %+v", got)
 	}
 }
 
 // TestCircuitBreakerEncodesMsIntegers 验证时长以 int 毫秒持久化(单位内嵌字段名,拒绝字符串)。
 func TestCircuitBreakerEncodesMsIntegers(t *testing.T) {
 	raw := string(encodeCircuitBreakerSettings(DefaultCircuitBreakerSettings()))
-	if !strings.Contains(raw, `"window_ms":30000`) || !strings.Contains(raw, `"open_duration_ms":30000`) {
+	if !strings.Contains(raw, `"window_ms":30000`) || !strings.Contains(raw, `"open_durations_ms":[15000,30000,60000,120000,300000]`) {
 		t.Fatalf("durations must encode as int ms: %s", raw)
+	}
+	if strings.Contains(raw, "open_duration_ms") {
+		t.Fatalf("legacy open_duration_ms must not be encoded: %s", raw)
 	}
 }
 
 func TestCircuitBreakerSettingsRejectsInvalid(t *testing.T) {
-	cases := map[string]string{
-		"zero window":       `{"enabled":true,"window_ms":0,"min_requests":20,"failure_ratio":0.5,"open_duration_ms":30000}`,
-		"negative window":   `{"enabled":true,"window_ms":-1,"min_requests":20,"failure_ratio":0.5,"open_duration_ms":30000}`,
-		"zero min_requests": `{"enabled":true,"window_ms":30000,"min_requests":0,"failure_ratio":0.5,"open_duration_ms":30000}`,
-		"ratio zero":        `{"enabled":true,"window_ms":30000,"min_requests":20,"failure_ratio":0,"open_duration_ms":30000}`,
-		"ratio above one":   `{"enabled":true,"window_ms":30000,"min_requests":20,"failure_ratio":1.5,"open_duration_ms":30000}`,
-		"zero open":         `{"enabled":true,"window_ms":30000,"min_requests":20,"failure_ratio":0.5,"open_duration_ms":0}`,
-		"string duration":   `{"enabled":true,"window_ms":"30s","min_requests":20,"failure_ratio":0.5,"open_duration_ms":30000}`,
-		"legacy field":      `{"enabled":true,"window":"30s","min_requests":20,"failure_ratio":0.5,"open_duration":"30s"}`,
+	cases := map[string]func(*CircuitBreakerSettings){
+		"zero window":        func(s *CircuitBreakerSettings) { s.Window = 0 },
+		"one min request":    func(s *CircuitBreakerSettings) { s.MinRequests = 1 },
+		"ratio zero":         func(s *CircuitBreakerSettings) { s.FailureRatio = 0 },
+		"consecutive zero":   func(s *CircuitBreakerSettings) { s.ConsecutiveFailures = 0 },
+		"renew too slow":     func(s *CircuitBreakerSettings) { s.AttemptPermitRenewInterval = 11 * time.Second },
+		"terminal too short": func(s *CircuitBreakerSettings) { s.AttemptPermitTerminalTTL = time.Second },
+		"batch too large":    func(s *CircuitBreakerSettings) { s.EndpointStatusBatchMax = 1025 },
+		"no open durations":  func(s *CircuitBreakerSettings) { s.OpenDurations = nil },
+		"descending backoff": func(s *CircuitBreakerSettings) { s.OpenDurations = []time.Duration{time.Minute, time.Second} },
+		"distinct too low":   func(s *CircuitBreakerSettings) { s.EndpointAmbiguousDistinctChannels = 1 },
 	}
-	for name, raw := range cases {
-		if _, err := DecodeCircuitBreakerSettings([]byte(raw)); err == nil {
+	for name, mutate := range cases {
+		settings := DefaultCircuitBreakerSettings()
+		mutate(&settings)
+		if _, err := DecodeCircuitBreakerSettings(encodeCircuitBreakerSettings(settings)); err == nil {
 			t.Errorf("%s: expected error, got nil", name)
+		}
+	}
+	for _, legacy := range []string{
+		`{"enabled":true,"window_ms":30000,"min_requests":20,"failure_ratio":0.5,"open_duration_ms":30000}`,
+		`{"enabled":true,"window":"30s","min_requests":20,"failure_ratio":0.5,"open_duration":"30s"}`,
+	} {
+		if _, err := DecodeCircuitBreakerSettings([]byte(legacy)); err == nil {
+			t.Errorf("legacy breaker shape accepted: %s", legacy)
 		}
 	}
 }
 
 func TestRateLimitDefaultsRoundTrip(t *testing.T) {
-	want := RateLimitDefaultsSettings{RPM: 120, TPM: 90000, RPD: 5000, FailurePolicy: RateLimitFailOpen}
+	want := RateLimitDefaultsSettings{RPM: 120, TPM: 90000, RPD: 5000}
 	got, err := DecodeRateLimitDefaultsSettings(encodeRateLimitDefaultsSettings(want))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
@@ -161,29 +207,22 @@ func TestRateLimitDefaultsRoundTrip(t *testing.T) {
 	if got != want {
 		t.Fatalf("round trip = %+v, want %+v", got, want)
 	}
-	if !got.FailOpen() {
-		t.Fatal("FailOpen() = false for fail_open policy")
-	}
 }
 
-func TestRateLimitDefaultsDefaultMatchesEnvDefaults(t *testing.T) {
+func TestRateLimitDefaultsDefaultIsUnlimited(t *testing.T) {
 	got := DefaultRateLimitDefaultsSettings()
-	want := RateLimitDefaultsSettings{RPM: 60, TPM: 0, RPD: 0, FailurePolicy: RateLimitFailClosed}
+	want := RateLimitDefaultsSettings{RPM: 0, TPM: 0, RPD: 0}
 	if got != want {
 		t.Fatalf("defaults = %+v, want %+v", got, want)
-	}
-	if got.FailOpen() {
-		t.Fatal("FailOpen() = true for fail_closed policy")
 	}
 }
 
 func TestRateLimitDefaultsRejectsInvalid(t *testing.T) {
 	cases := map[string]string{
-		"negative rpm":   `{"rpm":-1,"tpm":0,"rpd":0,"failure_policy":"fail_closed"}`,
-		"negative tpm":   `{"rpm":60,"tpm":-1,"rpd":0,"failure_policy":"fail_closed"}`,
-		"negative rpd":   `{"rpm":60,"tpm":0,"rpd":-1,"failure_policy":"fail_closed"}`,
-		"bad policy":     `{"rpm":60,"tpm":0,"rpd":0,"failure_policy":"explode"}`,
-		"missing policy": `{"rpm":60,"tpm":0,"rpd":0,"failure_policy":""}`,
+		"negative rpm":  `{"rpm":-1,"tpm":0,"rpd":0}`,
+		"negative tpm":  `{"rpm":60,"tpm":-1,"rpd":0}`,
+		"negative rpd":  `{"rpm":60,"tpm":0,"rpd":-1}`,
+		"legacy policy": `{"rpm":60,"tpm":0,"rpd":0,"failure_policy":"fail_open"}`,
 	}
 	for name, raw := range cases {
 		if _, err := DecodeRateLimitDefaultsSettings([]byte(raw)); err == nil {

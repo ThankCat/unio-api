@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	adaptersse "github.com/ThankCat/unio-gateway/internal/core/adapter/sse"
@@ -61,7 +60,10 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 		defer cancel()
 	}
 
-	url := strings.TrimRight(ch.BaseURL, "/") + "/chat/completions"
+	url, err := adapter.BuildUpstreamURL(ch.BaseURL, adapter.OperationPathChatCompletions)
+	if err != nil {
+		return nil, err
+	}
 
 	buf, err := encodeRequestBody(req, false)
 	if err != nil {
@@ -83,6 +85,7 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", ch.APIKey))
 
+	adapter.MarkTransportStarted(ctx)
 	upstreamResp, err := a.client.Do(request)
 	if err != nil {
 		return nil, newUpstreamSendError(err, "send chat completion request")
@@ -206,7 +209,10 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	streamCtx, headersReceived, resetIdle, cancel := adapter.StreamTimeoutContext(ctx, ch.Timeout, adapter.StreamIdleTimeout())
 	defer cancel()
 
-	url := strings.TrimRight(ch.BaseURL, "/") + "/chat/completions"
+	url, err := adapter.BuildUpstreamURL(ch.BaseURL, adapter.OperationPathChatCompletions)
+	if err != nil {
+		return adapter.StreamOutcome{}, err
+	}
 
 	buf, err := encodeRequestBody(req, true)
 	if err != nil {
@@ -229,6 +235,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	request.Header.Set("Accept", "text/event-stream")
 	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", ch.APIKey))
 
+	adapter.MarkTransportStarted(streamCtx)
 	upstreamResp, err := a.client.Do(request)
 	ctxCause := context.Cause(streamCtx)
 	headersReceived()

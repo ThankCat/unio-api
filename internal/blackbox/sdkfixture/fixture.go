@@ -17,7 +17,9 @@ import (
 	"fmt"
 	"math/big"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,8 +31,10 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/bootstrap"
 	"github.com/ThankCat/unio-gateway/internal/core/apikey"
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
+	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	adminchannel "github.com/ThankCat/unio-gateway/internal/service/admin/channel"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 )
 
@@ -44,7 +48,7 @@ const (
 type UpstreamMode int
 
 const (
-	// UpstreamReal 使用真实 DeepSeek 上游。
+	// UpstreamReal 使用 gated 真实上游；RealUpstreamEnv 为空时使用现有 DeepSeek 配置。
 	//
 	// 前置 env：
 	//   - DEEPSEEK_BLACKBOX=1
@@ -53,16 +57,36 @@ const (
 	// 任一缺失即 t.Skip，与 adapter 层 DS-OAI / DS-ANT 黑盒约定一致。
 	UpstreamReal UpstreamMode = iota
 
-	// UpstreamMock 把 channel.base_url 指向调用方传入的 httptest mock server，
+	// UpstreamMock 把 ProviderEndpoint base_url 指向调用方传入的 httptest mock server，
 	// 用于错误映射、fallback、Drop 字段、边界等不依赖真实上游的用例。
 	UpstreamMock
 )
+
+// RealUpstreamEnv 描述一组 gated 真实上游环境变量。
+//
+// 字段只保存环境变量名，不保存对应值。Setup 在 fixture 内部读取 API key 并直接写入
+// 临时 channel credential，调用方测试不会接触或输出真实上游密钥。
+type RealUpstreamEnv struct {
+	// GateEnv 必须等于 "1"，否则测试跳过。
+	GateEnv string
+	// BaseURLEnv 必须是无 operation path 的 http(s) API root。
+	BaseURLEnv string
+	// APIKeyEnv 缺失时测试跳过。
+	APIKeyEnv string
+	// ModelEnv 可选；设置后缺失时测试跳过，并作为默认 ModelID / UpstreamModel。
+	ModelEnv string
+}
 
 // SetupOptions 定义 fixture 装配选项。
 type SetupOptions struct {
 	Mode UpstreamMode
 
-	// UpstreamBaseURL 当 Mode=UpstreamMock 时必填，例如 mockServer.URL + "/v1"。
+	// RealUpstreamEnv 在 Mode=UpstreamReal 时可选。为空时保留现有 DeepSeek gate、
+	// API key 与 protocol-specific root；非空时按描述解析任意兼容上游。
+	RealUpstreamEnv *RealUpstreamEnv
+
+	// UpstreamBaseURL 当 Mode=UpstreamMock 时必填，使用 ProviderEndpoint root，
+	// 例如 mockServer.URL；adapter 会追加完整的 /v1/... operation path。
 	UpstreamBaseURL string
 	// UpstreamAPIKey 当 Mode=UpstreamMock 时可选；为空时默认 "sk-test-mock"。
 	UpstreamAPIKey string
@@ -121,6 +145,7 @@ type Fixture struct {
 	ctx                     context.Context
 	cancel                  context.CancelFunc
 	redisClient             redis.UniversalClient
+	breakerStore            *breakerstore.Store
 	suffix                  int64
 	fallbackChannelIDs      []int64
 	fallbackChannelPriceIDs []int64
@@ -136,13 +161,20 @@ func Setup(t *testing.T, opts SetupOptions) *Fixture {
 		t.Skip("DATABASE_URL is not set")
 	}
 
-	if opts.Mode == UpstreamReal {
+	var (
+		upstreamBaseURL string
+		upstreamAPIKey  string
+	)
+	if opts.Mode == UpstreamReal && opts.RealUpstreamEnv == nil {
 		if os.Getenv("DEEPSEEK_BLACKBOX") != "1" {
 			t.Skip("DEEPSEEK_BLACKBOX is not set to 1")
 		}
 		if os.Getenv("DEEPSEEK_API_KEY") == "" {
 			t.Skip("DEEPSEEK_API_KEY is not set")
 		}
+		upstreamAPIKey = os.Getenv("DEEPSEEK_API_KEY")
+	} else if opts.Mode == UpstreamReal {
+		upstreamBaseURL, upstreamAPIKey = resolveRealUpstream(t, &opts, *opts.RealUpstreamEnv)
 	}
 	if opts.Mode == UpstreamMock && opts.UpstreamBaseURL == "" {
 		t.Fatalf("sdkfixture: UpstreamMock mode requires UpstreamBaseURL")
@@ -167,11 +199,11 @@ func Setup(t *testing.T, opts SetupOptions) *Fixture {
 	if opts.UpstreamModel == "" {
 		opts.UpstreamModel = opts.ModelID
 	}
-	upstreamAPIKey := opts.UpstreamAPIKey
 	if upstreamAPIKey == "" {
-		if opts.Mode == UpstreamReal {
-			upstreamAPIKey = os.Getenv("DEEPSEEK_API_KEY")
-		} else {
+		upstreamAPIKey = opts.UpstreamAPIKey
+	}
+	if upstreamAPIKey == "" {
+		if opts.Mode == UpstreamMock {
 			upstreamAPIKey = "sk-test-mock"
 		}
 	}
@@ -226,24 +258,37 @@ func Setup(t *testing.T, opts SetupOptions) *Fixture {
 		redisClient:   redisClient,
 		suffix:        time.Now().UnixNano(),
 	}
+	cleanupRegistered := false
+	defer func() {
+		if !cleanupRegistered {
+			f.teardown(t)
+		}
+	}()
 
-	upstreamBaseURL := opts.UpstreamBaseURL
-	if opts.Mode == UpstreamReal {
+	if upstreamBaseURL == "" {
+		upstreamBaseURL = opts.UpstreamBaseURL
+	}
+	if opts.Mode == UpstreamReal && opts.RealUpstreamEnv == nil {
 		switch opts.Protocol {
 		case "anthropic":
 			// adapter 拼 <base>/v1/messages → https://api.deepseek.com/anthropic/v1/messages。
 			upstreamBaseURL = "https://api.deepseek.com/anthropic"
 		default:
-			upstreamBaseURL = "https://api.deepseek.com/v1"
+			upstreamBaseURL = "https://api.deepseek.com"
 		}
 	}
 
 	f.seed(t, opts, upstreamBaseURL, upstreamAPIKey)
 
 	cfg := blackboxConfig()
+	f.breakerStore = breakerstore.NewStore(redisClient, cfg.Redis.KeyNamespace)
 	logger := zap.NewNop()
+	if os.Getenv("BLACKBOX_DEBUG_LOGS") == "1" {
+		logger = zap.NewExample()
+		t.Cleanup(func() { _ = logger.Sync() })
+	}
 
-	// 运行时配置(app_settings)预置:限流放宽 + fail_open(避免 Redis 抖动挂黑盒)、熔断关闭
+	// 运行时配置(app_settings)预置：限流放宽并关闭 breaker 门禁；Redis 故障仍固定 fail-closed。
 	// (黑盒不验熔断)。经 SettingsStore.Set 写 DB+Redis,gateway 启动读到的即这些值;
 	// 启动 seed 是 DO NOTHING,不会覆盖。
 	f.seedRuntimeSettings(t, cfg)
@@ -255,7 +300,6 @@ func Setup(t *testing.T, opts SetupOptions) *Fixture {
 		Redis:  redisClient,
 	})
 	if err != nil {
-		f.teardown(t)
 		t.Fatalf("NewGatewayServerApp: %v", err)
 	}
 
@@ -269,8 +313,61 @@ func Setup(t *testing.T, opts SetupOptions) *Fixture {
 		_ = app.Shutdown(context.Background())
 		f.teardown(t)
 	})
+	// Registered after teardown so LIFO cleanup prints the last sanitized audit
+	// snapshot while the fixture rows and database connection still exist.
+	f.registerFailureAuditDiagnostics(t)
+	cleanupRegistered = true
 
 	return f
+}
+
+func resolveRealUpstream(t *testing.T, opts *SetupOptions, env RealUpstreamEnv) (string, string) {
+	t.Helper()
+
+	if env.GateEnv == "" || env.BaseURLEnv == "" || env.APIKeyEnv == "" {
+		t.Fatal("sdkfixture: RealUpstreamEnv requires GateEnv, BaseURLEnv, and APIKeyEnv")
+	}
+	if os.Getenv(env.GateEnv) != "1" {
+		t.Skipf("%s is not set to 1", env.GateEnv)
+	}
+
+	baseURL := strings.TrimSpace(os.Getenv(env.BaseURLEnv))
+	if baseURL == "" {
+		t.Skipf("%s is not set", env.BaseURLEnv)
+	}
+	baseURL = requireAPIRoot(t, env.BaseURLEnv, baseURL)
+
+	apiKey := os.Getenv(env.APIKeyEnv)
+	if apiKey == "" {
+		t.Skipf("%s is not set", env.APIKeyEnv)
+	}
+
+	if env.ModelEnv != "" {
+		model := strings.TrimSpace(os.Getenv(env.ModelEnv))
+		if model == "" {
+			t.Skipf("%s is not set", env.ModelEnv)
+		}
+		if opts.ModelID == "" {
+			opts.ModelID = model
+		}
+		if opts.UpstreamModel == "" {
+			opts.UpstreamModel = model
+		}
+	}
+
+	return baseURL, apiKey
+}
+
+func requireAPIRoot(t *testing.T, envName string, raw string) string {
+	t.Helper()
+
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
+		parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		t.Fatalf("sdkfixture: %s must be an http(s) API root without credentials, path, query, or fragment", envName)
+	}
+	parsed.Path = ""
+	return parsed.String()
 }
 
 // AddFallbackChannel 给当前 fixture 的 model 再注册一个 fallback channel：
@@ -288,12 +385,22 @@ func Setup(t *testing.T, opts SetupOptions) *Fixture {
 func (f *Fixture) AddFallbackChannel(t *testing.T, baseURL string, priority int32) int64 {
 	t.Helper()
 
+	// P4 §4.4：base_url 归属 ProviderEndpoint；fallback 建一个同 Provider 下的 enabled Endpoint。
+	var fallbackEndpointID int64
+	if err := f.Pool.QueryRow(f.ctx, `
+		INSERT INTO provider_endpoints (provider_id, name, base_url, status)
+		VALUES ($1, $2, $3, 'enabled')
+		RETURNING id
+	`, f.ProviderID, fmt.Sprintf("blackbox-fallback-ep-%d", f.suffix), baseURL).Scan(&fallbackEndpointID); err != nil {
+		t.Fatalf("insert fallback provider endpoint: %v", err)
+	}
+
 	var fallbackID int64
 	if err := f.Pool.QueryRow(f.ctx, `
-		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms)
-		VALUES ($1, $2, (SELECT protocol FROM channels WHERE id = $3), (SELECT adapter_key FROM channels WHERE id = $3), $4, $5, 'enabled', $6, 60000)
+		INSERT INTO channels (provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
+		VALUES ($1, $2, $3, (SELECT protocol FROM channels WHERE id = $4), (SELECT adapter_key FROM channels WHERE id = $4), $5, 'enabled', $6, 60000)
 		RETURNING id
-	`, f.ProviderID, fmt.Sprintf("blackbox-fallback-%d", f.suffix), f.ChannelID, baseURL, "sk-fallback-test", priority).Scan(&fallbackID); err != nil {
+	`, f.ProviderID, fallbackEndpointID, fmt.Sprintf("blackbox-fallback-%d", f.suffix), f.ChannelID, "sk-fallback-test", priority).Scan(&fallbackID); err != nil {
 		t.Fatalf("insert fallback channel: %v", err)
 	}
 
@@ -302,6 +409,12 @@ func (f *Fixture) AddFallbackChannel(t *testing.T, baseURL string, priority int3
 		VALUES ($1, $2, $3, 'enabled')
 	`, fallbackID, f.ModelDBID, f.UpstreamModel); err != nil {
 		t.Fatalf("insert fallback channel_model: %v", err)
+	}
+	if err := f.Queries.AddRouteChannel(f.ctx, sqlc.AddRouteChannelParams{
+		RouteID:   f.RouteID,
+		ChannelID: fallbackID,
+	}); err != nil {
+		t.Fatalf("bind fallback channel to route: %v", err)
 	}
 
 	// 复制主 channel 的渠道成本价形状（DEC-026：渠道只录成本），价格单元/币种/费率保持一致
@@ -324,59 +437,101 @@ func (f *Fixture) AddFallbackChannel(t *testing.T, baseURL string, priority int3
 	}
 	f.fallbackChannelPriceIDs = append(f.fallbackChannelPriceIDs, fallbackCostPrice.ID)
 
+	// 生产 Admin 创建 Endpoint/Channel 时会同步初始化 Redis control。fixture 在 Gateway 启动后
+	// 直接写 DB，也必须完成同一动作；否则 P4 fail-closed 会把刚加入的 fallback 排除到下一次
+	// 后台 reconciler 扫描之后，测试无法验证即时 fallback。
+	if _, err := f.breakerStore.InitEndpointControl(f.ctx, fallbackEndpointID, 1, 1, "enabled"); err != nil {
+		t.Fatalf("initialize fallback endpoint runtime control: %v", err)
+	}
+	fallbackChannel, err := f.Queries.GetChannel(f.ctx, fallbackID)
+	if err != nil {
+		t.Fatalf("read fallback channel for runtime control: %v", err)
+	}
+	payload, err := adminchannel.CanonicalAdmissionLimitsPayloadFromChannel(fallbackChannel)
+	if err != nil {
+		t.Fatalf("encode fallback channel admission control: %v", err)
+	}
+	target := f.breakerStore.ChannelAdmissionControl(fallbackID)
+	if _, err := f.breakerStore.RestoreMissingControl(
+		f.ctx, target, fallbackChannel.AdmissionLimitsRevision, payload,
+	); err != nil {
+		t.Fatalf("initialize fallback channel admission control: %v", err)
+	}
+	control, err := f.breakerStore.ReadControl(f.ctx, target, fallbackChannel.AdmissionLimitsRevision)
+	if err != nil {
+		t.Fatalf("verify fallback channel admission control: %v", err)
+	}
+	if control.SyncState != "active" || control.PendingRevision != 0 ||
+		control.ActiveRevision != fallbackChannel.AdmissionLimitsRevision || control.ActivePayload != payload {
+		t.Fatalf("fallback channel admission control is not active: %+v", control)
+	}
+
 	f.fallbackChannelIDs = append(f.fallbackChannelIDs, fallbackID)
 	return fallbackID
 }
 
 // teardown 清理 DB 测试数据（按外键反序删除），关闭 Redis 与 pool。
 func (f *Fixture) teardown(t *testing.T) {
+	t.Helper()
 	ctx := context.Background()
+	deleteRows := func(label, query string, args ...any) {
+		t.Helper()
+		if _, err := f.Pool.Exec(ctx, query, args...); err != nil {
+			t.Errorf("cleanup %s: %v", label, err)
+		}
+	}
 
 	if f.APIKeyID != 0 {
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM ledger_billing_exceptions WHERE user_id = $1`, f.UserID)
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM ledger_reservations WHERE user_id = $1`, f.UserID)
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM ledger_entries WHERE user_id = $1`, f.UserID)
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM settlement_recovery_jobs WHERE request_record_id IN (SELECT id FROM request_records WHERE user_id = $1)`, f.UserID)
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM cost_snapshots WHERE request_record_id IN (SELECT id FROM request_records WHERE user_id = $1)`, f.UserID)
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM price_snapshots WHERE request_record_id IN (SELECT id FROM request_records WHERE user_id = $1)`, f.UserID)
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM usage_line_items WHERE request_record_id IN (SELECT id FROM request_records WHERE user_id = $1)`, f.UserID)
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM usage_records WHERE request_record_id IN (SELECT id FROM request_records WHERE user_id = $1)`, f.UserID)
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM request_attempts WHERE request_record_id IN (SELECT id FROM request_records WHERE user_id = $1)`, f.UserID)
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM request_records WHERE user_id = $1`, f.UserID)
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM user_balances WHERE user_id = $1`, f.UserID)
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM api_keys WHERE id = $1`, f.APIKeyID)
+		deleteRows("billing exceptions", `DELETE FROM ledger_billing_exceptions WHERE user_id = $1`, f.UserID)
+		deleteRows("settlement recovery jobs", `DELETE FROM settlement_recovery_jobs WHERE request_record_id IN (SELECT id FROM request_records WHERE user_id = $1)`, f.UserID)
+		deleteRows("cost exposures", `DELETE FROM channel_cost_exposures WHERE request_record_id IN (SELECT id FROM request_records WHERE user_id = $1)`, f.UserID)
+		deleteRows("ledger reservations", `DELETE FROM ledger_reservations WHERE user_id = $1`, f.UserID)
+		deleteRows("ledger entries", `DELETE FROM ledger_entries WHERE user_id = $1`, f.UserID)
+		deleteRows("cost snapshots", `DELETE FROM cost_snapshots WHERE request_record_id IN (SELECT id FROM request_records WHERE user_id = $1)`, f.UserID)
+		deleteRows("price snapshots", `DELETE FROM price_snapshots WHERE request_record_id IN (SELECT id FROM request_records WHERE user_id = $1)`, f.UserID)
+		deleteRows("usage line items", `DELETE FROM usage_line_items WHERE usage_record_id IN (SELECT id FROM usage_records WHERE request_record_id IN (SELECT id FROM request_records WHERE user_id = $1))`, f.UserID)
+		deleteRows("usage records", `DELETE FROM usage_records WHERE request_record_id IN (SELECT id FROM request_records WHERE user_id = $1)`, f.UserID)
+		deleteRows("request attempts", `DELETE FROM request_attempts WHERE request_record_id IN (SELECT id FROM request_records WHERE user_id = $1)`, f.UserID)
+		deleteRows("request records", `DELETE FROM request_records WHERE user_id = $1`, f.UserID)
+		deleteRows("user balances", `DELETE FROM user_balances WHERE user_id = $1`, f.UserID)
+		deleteRows("API key", `DELETE FROM api_keys WHERE id = $1`, f.APIKeyID)
 	}
 	if f.RouteID != 0 {
 		// 线路被 api_keys.route_id 外键引用，必须在 api_keys 删除后再删。
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM routes WHERE id = $1`, f.RouteID)
+		deleteRows("route", `DELETE FROM routes WHERE id = $1`, f.RouteID)
 	}
 	if f.ChannelPriceID != 0 {
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM channel_prices WHERE id = $1`, f.ChannelPriceID)
+		deleteRows("channel price", `DELETE FROM channel_prices WHERE id = $1`, f.ChannelPriceID)
 	}
 	if f.ModelPriceID != 0 {
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM model_prices WHERE id = $1`, f.ModelPriceID)
+		deleteRows("model price", `DELETE FROM model_prices WHERE id = $1`, f.ModelPriceID)
 	}
 	for _, fbCostID := range f.fallbackChannelPriceIDs {
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM channel_prices WHERE id = $1`, fbCostID)
+		deleteRows("fallback channel price", `DELETE FROM channel_prices WHERE id = $1`, fbCostID)
 	}
 	for _, fbID := range f.fallbackChannelIDs {
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM channel_models WHERE channel_id = $1`, fbID)
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM channels WHERE id = $1`, fbID)
+		deleteRows("fallback channel model", `DELETE FROM channel_models WHERE channel_id = $1`, fbID)
+		deleteRows("fallback runtime-control operations", `DELETE FROM runtime_control_operations WHERE channel_id = $1`, fbID)
+		deleteRows("fallback channel", `DELETE FROM channels WHERE id = $1`, fbID)
 	}
 	if f.ChannelID != 0 && f.ModelDBID != 0 {
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM channel_models WHERE channel_id = $1 AND model_id = $2`, f.ChannelID, f.ModelDBID)
+		deleteRows("channel model", `DELETE FROM channel_models WHERE channel_id = $1 AND model_id = $2`, f.ChannelID, f.ModelDBID)
 	}
 	if f.ChannelID != 0 {
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM channels WHERE id = $1`, f.ChannelID)
+		deleteRows("runtime-control operations", `DELETE FROM runtime_control_operations WHERE channel_id = $1`, f.ChannelID)
+		deleteRows("channel", `DELETE FROM channels WHERE id = $1`, f.ChannelID)
 	}
 	if f.ProviderID != 0 {
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM providers WHERE id = $1`, f.ProviderID)
+		// P4 §4.2：channels 已删，先删该 Provider 下的 ProviderEndpoint 再删 Provider（外键反序）。
+		deleteRows("endpoint routing operations", `DELETE FROM endpoint_routing_operations WHERE provider_id = $1`, f.ProviderID)
+		deleteRows("provider endpoints", `DELETE FROM provider_endpoints WHERE provider_id = $1`, f.ProviderID)
+		deleteRows("provider", `DELETE FROM providers WHERE id = $1`, f.ProviderID)
 	}
 	if f.ModelDBID != 0 {
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM models WHERE id = $1`, f.ModelDBID)
+		deleteRows("model", `DELETE FROM models WHERE id = $1`, f.ModelDBID)
 	}
 	if f.UserID != 0 {
-		_, _ = f.Pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, f.UserID)
+		deleteRows("user", `DELETE FROM users WHERE id = $1`, f.UserID)
 	}
 
 	if f.redisClient != nil {
@@ -450,12 +605,22 @@ func (f *Fixture) seed(t *testing.T, opts SetupOptions, upstreamBaseURL string, 
 	}
 	f.ProviderID = providerID
 
+	// P4 §4.4：base_url 归属 ProviderEndpoint；主 channel 建一个同 Provider 下的 enabled Endpoint。
+	var endpointID int64
+	if err := f.Pool.QueryRow(f.ctx, `
+		INSERT INTO provider_endpoints (provider_id, name, base_url, status)
+		VALUES ($1, $2, $3, 'enabled')
+		RETURNING id
+	`, providerID, fmt.Sprintf("blackbox-ep-%d", suffix), upstreamBaseURL).Scan(&endpointID); err != nil {
+		t.Fatalf("insert provider endpoint: %v", err)
+	}
+
 	var channelID int64
 	if err := f.Pool.QueryRow(f.ctx, `
-		INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms)
+		INSERT INTO channels (provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
 		VALUES ($1, $2, $3, $4, $5, $6, 'enabled', 10, $7)
 		RETURNING id
-	`, providerID, fmt.Sprintf("blackbox-channel-%d", suffix), opts.Protocol, opts.AdapterKey, upstreamBaseURL, upstreamAPIKey, opts.ChannelTimeoutMS).Scan(&channelID); err != nil {
+	`, providerID, endpointID, fmt.Sprintf("blackbox-channel-%d", suffix), opts.Protocol, opts.AdapterKey, upstreamAPIKey, opts.ChannelTimeoutMS).Scan(&channelID); err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
 	f.ChannelID = channelID
@@ -536,9 +701,14 @@ func (f *Fixture) seed(t *testing.T, opts SetupOptions, upstreamBaseURL string, 
 // blackboxConfig 返回 fixture 使用的最小可用 config。
 // 限流/熔断已迁移为运行时配置,由 seedRuntimeSettings 写入 app_settings(见 Setup)。
 func blackboxConfig() config.Config {
+	redisNamespace := os.Getenv("REDIS_KEY_NAMESPACE")
+	if redisNamespace == "" {
+		redisNamespace = defaultRedisNamespace
+	}
+
 	return config.Config{
 		Redis: config.RedisConfig{
-			KeyNamespace: defaultRedisNamespace,
+			KeyNamespace: redisNamespace,
 		},
 		Worker: config.WorkerConfig{
 			StartupTimeout:                  5 * time.Second,
@@ -551,13 +721,13 @@ func blackboxConfig() config.Config {
 }
 
 // seedRuntimeSettings 在 gateway app 构建前写入黑盒需要的运行时配置:
-//   - 限流默认 RPM=10000 + fail_open,避免偶发 Redis 抖动让黑盒挂掉;
+//   - 限流默认 RPM=10000；P4 固定 fail-closed，不再写入已删除的 fail_open 字段；
 //   - 熔断关闭,黑盒不验熔断(熔断有专门单测);
 //   - 429 冷却关闭:对齐迁移前 blackboxConfig 未设 Gateway 配置的零值行为——SDK 对 429 会自动
 //     重试,若冷却开启,重试会因唯一渠道在冷却中而拿到 503,破坏「上游 429→客户 429」断言
 //     (冷却行为有专门单测)。
 //
-// 隔离原则:**只写 Redis(unio:blackbox 命名空间),绝不写 DB**。app_settings 表是全局单行,
+// 隔离原则:**只写配置的 Redis 命名空间,绝不写 DB**。app_settings 表是全局单行,
 // DATABASE_URL 常指向开发库,若经 SettingsStore.Set 写透 DB 会把黑盒专用值(如熔断关闭)持久
 // 覆盖运维真实配置。SettingsStore 读序为 本地→Redis→DB,黑盒命名空间的 Redis 命中即生效,
 // 与 dev(unio:dev)互不可见;gateway 启动初值与 applier 周期读取走同一路径,行为一致。
@@ -565,9 +735,11 @@ func (f *Fixture) seedRuntimeSettings(t *testing.T, cfg config.Config) {
 	t.Helper()
 
 	values := map[string]string{
-		appsettings.GatewayRateLimitDefaultsKey: `{"rpm":10000,"tpm":0,"rpd":0,"failure_policy":"fail_open"}`,
-		appsettings.GatewayCircuitBreakerKey:    `{"enabled":false,"window_ms":30000,"min_requests":20,"failure_ratio":0.5,"open_duration_ms":30000}`,
-		appsettings.GatewayChannelCooldownKey:   `{"cooldown_ms":0,"cap_ms":0}`,
+		appsettings.GatewayRouteRateLimitDefaultsKey:   `{"rpm":10000,"tpm":0,"rpd":0}`,
+		appsettings.GatewayChannelRateLimitDefaultsKey: `{"rpm":10000,"tpm":0,"rpd":0}`,
+		appsettings.GatewayCircuitBreakerKey:           `{"enabled":false,"window_ms":30000,"min_requests":20,"failure_ratio":0.5,"consecutive_failures":3,"consecutive_window_ms":10000,"half_open_successes":2,"attempt_permit_ttl_ms":30000,"attempt_permit_renew_interval_ms":10000,"attempt_permit_terminal_ttl_ms":300000,"endpoint_base_url_revision_operation_ttl_ms":86400000,"endpoint_status_revision_operation_ttl_ms":86400000,"endpoint_status_batch_max":256,"open_durations_ms":[15000,30000,60000,120000,300000],"endpoint_ambiguous_distinct_channels":2,"endpoint_ambiguous_distinct_models":2}`,
+		appsettings.GatewayChannelCooldownKey:          `{"cooldown_ms":0,"cap_ms":0}`,
+		appsettings.GatewayRoutingTraceKey:             `{"sample_rate":1,"retention_days":7,"cleanup_batch_size":500,"cleanup_interval_ms":3600000}`,
 	}
 	registry := appsettings.DefaultRegistry()
 	for key, value := range values {

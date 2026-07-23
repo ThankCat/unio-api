@@ -37,7 +37,6 @@ type Decision struct {
 	StickyChannelID      *int64
 	StickyPinned         bool
 	StickyInvalid        bool
-	CapacityDegraded     bool
 	AllCapacityZero      bool
 	MarginGuardTriggered bool
 	Abnormal             bool
@@ -100,7 +99,7 @@ func fromListRow(row sqlc.ListRouteRoutingDecisionTracesRow) Decision {
 		row.ID, row.RequestRecordID, row.RequestID, row.RequestStatus, row.RouteID,
 		row.Mode, row.RequestedModelID, row.Protocol, row.Operation, row.PoolSize,
 		row.CandidateCount, row.StickyChannelID, row.StickyPinned, row.StickyInvalid,
-		row.CapacityDegraded, row.AllCapacityZero, row.MarginGuardTriggered, row.Abnormal,
+		row.AllCapacityZero, row.MarginGuardTriggered, row.Abnormal,
 		row.AbnormalReasons, row.CandidateScores, row.SelectedOrder, row.FallbackChain,
 		row.FinalChannelID, row.AlgorithmVersion, row.Sampled, row.CreatedAt, row.UpdatedAt,
 	)
@@ -111,7 +110,7 @@ func fromGetRow(row sqlc.GetRoutingDecisionTraceByRequestIDRow) Decision {
 		row.ID, row.RequestRecordID, row.RequestID, row.RequestStatus, row.RouteID,
 		row.Mode, row.RequestedModelID, row.Protocol, row.Operation, row.PoolSize,
 		row.CandidateCount, row.StickyChannelID, row.StickyPinned, row.StickyInvalid,
-		row.CapacityDegraded, row.AllCapacityZero, row.MarginGuardTriggered, row.Abnormal,
+		row.AllCapacityZero, row.MarginGuardTriggered, row.Abnormal,
 		row.AbnormalReasons, row.CandidateScores, row.SelectedOrder, row.FallbackChain,
 		row.FinalChannelID, row.AlgorithmVersion, row.Sampled, row.CreatedAt, row.UpdatedAt,
 	)
@@ -124,7 +123,7 @@ func decisionFromFields(
 	mode, requestedModelID, protocol, operation string,
 	poolSize, candidateCount int32,
 	stickyChannelID pgtype.Int8,
-	stickyPinned, stickyInvalid, capacityDegraded, allCapacityZero, marginGuardTriggered, abnormal bool,
+	stickyPinned, stickyInvalid, allCapacityZero, marginGuardTriggered, abnormal bool,
 	abnormalReasons []string,
 	candidateScores []byte,
 	selectedOrder []int64,
@@ -149,7 +148,6 @@ func decisionFromFields(
 		StickyChannelID:      int8Ptr(stickyChannelID),
 		StickyPinned:         stickyPinned,
 		StickyInvalid:        stickyInvalid,
-		CapacityDegraded:     capacityDegraded,
 		AllCapacityZero:      allCapacityZero,
 		MarginGuardTriggered: marginGuardTriggered,
 		Abnormal:             abnormal,

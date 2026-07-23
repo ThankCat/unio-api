@@ -4,6 +4,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 )
 
@@ -33,21 +37,96 @@ type routingBalanceMetricsRecorder interface {
 	IncRoutingBalanceFallback(route, reason string)
 	IncRoutingCapacityRead(result string)
 	IncRoutingMarginGuard(result string)
+	SetBalancedFinalWeight(route, channel string, weight float64)
 }
 
 type routingTraceMetricsRecorder interface {
 	IncRoutingTraceWrite(result string)
 }
 
+type breakerRoutingMetricsRecorder interface {
+	SetBreakerState(scope, id, state string)
+	IncBreakerSkip(scope, reason string)
+	IncChannelConfigRevisionMismatch(operation string)
+	IncEndpointStatusRevisionMismatch(operation string)
+}
+
+type attemptRuntimeMetricsRecorder interface {
+	ObserveUpstreamTiming(providerID, endpointID, channelID, protocol, operation, mode string, total time.Duration, ttft *time.Duration)
+	IncEndpointFailure(endpointID, category string)
+	IncChannelFailure(channelID, category string)
+}
+
+// RecordAttemptRuntimeMetrics records transport timing and the same bounded failure attribution
+// submitted to BreakerStore. A missing transport boundary produces no upstream observation.
+func (l *RequestLifecycle) RecordAttemptRuntimeMetrics(
+	candidate routing.ChatRouteCandidate,
+	operation requestlog.UpstreamOperation,
+	stream bool,
+	facts AttemptTimingFacts,
+	outcome breakerstore.FinishOutcome,
+	err error,
+) {
+	if l == nil {
+		return
+	}
+	m, ok := l.metrics.(attemptRuntimeMetricsRecorder)
+	if !ok || facts.UpstreamStartedAt == nil || facts.UpstreamCompletedAt == nil {
+		return
+	}
+
+	total := facts.UpstreamCompletedAt.Sub(*facts.UpstreamStartedAt)
+	if total < 0 {
+		total = 0
+	}
+	var ttft *time.Duration
+	if stream && facts.UpstreamFirstTokenAt != nil {
+		duration := facts.UpstreamFirstTokenAt.Sub(*facts.UpstreamStartedAt)
+		if duration < 0 {
+			duration = 0
+		}
+		ttft = &duration
+	}
+	mode := "non_stream"
+	if stream {
+		mode = "stream"
+	}
+	m.ObserveUpstreamTiming(
+		MetricsID(candidate.ProviderID),
+		MetricsID(candidate.ProviderEndpointID),
+		MetricsID(candidate.Channel.ID),
+		candidate.Protocol,
+		string(operation),
+		mode,
+		total,
+		ttft,
+	)
+
+	category := attemptFailureMetricCategory(err)
+	if outcome.EndpointEvidence != breakerstore.EndpointEvidenceNone {
+		m.IncEndpointFailure(MetricsID(candidate.ProviderEndpointID), string(outcome.EndpointEvidence))
+	} else if outcome.EndpointOutcome == breakerstore.OutcomeEligibleFailure {
+		m.IncEndpointFailure(MetricsID(candidate.ProviderEndpointID), category)
+	}
+	if outcome.ChannelOutcome == breakerstore.OutcomeEligibleFailure {
+		m.IncChannelFailure(MetricsID(candidate.Channel.ID), category)
+	}
+}
+
+func attemptFailureMetricCategory(err error) string {
+	if category, ok := adapter.UpstreamCategoryOf(err); ok && category != "" {
+		return string(category)
+	}
+	return "unknown"
+}
+
 func (l *RequestLifecycle) recordRoutingPlan(in RoutingDecisionTraceInput) {
 	m, ok := l.metrics.(routingBalanceMetricsRecorder)
-	if !ok || in.Attempts > 0 {
+	if !ok || in.FallbackOccurred {
 		return
 	}
 	result := "planned"
-	if in.Plan.CapacityDegraded {
-		result = "capacity_degraded"
-	} else if in.Plan.AllCapacityZero {
+	if in.Plan.AllCapacityZero {
 		result = "all_capacity_zero"
 	} else if len(in.Plan.Candidates) == 0 {
 		result = "no_candidate"
@@ -61,6 +140,44 @@ func (l *RequestLifecycle) recordRoutingPlan(in RoutingDecisionTraceInput) {
 			readResult = "unknown"
 		}
 		m.IncRoutingCapacityRead(readResult)
+		m.SetBalancedFinalWeight(MetricsID(in.RouteID), MetricsID(candidate.Route.Channel.ID), candidate.Balance.Weight)
+	}
+	for _, excluded := range in.Plan.Excluded {
+		m.SetBalancedFinalWeight(MetricsID(in.RouteID), MetricsID(excluded.ChannelID), 0)
+	}
+	l.recordBreakerRoutingFacts(in.Plan)
+}
+
+func (l *RequestLifecycle) recordBreakerRoutingFacts(plan CandidatePlan) {
+	m, ok := l.metrics.(breakerRoutingMetricsRecorder)
+	if !ok {
+		return
+	}
+	for _, candidate := range plan.Candidates {
+		recordBreakerStates(m, candidate.Route, candidate.Balance)
+	}
+	for _, excluded := range plan.Excluded {
+		recordBreakerStates(m, excluded.Route, excluded.Balance)
+		switch excluded.Reason {
+		case "stale_config_revision":
+			m.IncChannelConfigRevisionMismatch("snapshot")
+		case "stale_status_revision":
+			m.IncEndpointStatusRevisionMismatch("snapshot")
+		}
+		scope := "channel"
+		if excluded.Balance.EndpointBreakerState == "open" || excluded.Balance.EndpointBreakerState == "half_open" {
+			scope = "endpoint"
+		}
+		m.IncBreakerSkip(scope, excluded.Reason)
+	}
+}
+
+func recordBreakerStates(m breakerRoutingMetricsRecorder, candidate routing.ChatRouteCandidate, score BalanceScore) {
+	if score.EndpointBreakerState != "" && candidate.ProviderEndpointID > 0 {
+		m.SetBreakerState("endpoint", MetricsID(candidate.ProviderEndpointID), score.EndpointBreakerState)
+	}
+	if score.ChannelBreakerState != "" && candidate.Channel.ID > 0 {
+		m.SetBreakerState("channel", MetricsID(candidate.Channel.ID), score.ChannelBreakerState)
 	}
 }
 

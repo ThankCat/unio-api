@@ -33,7 +33,7 @@ func TestOAISDKMockSettlementWritesAuditTrail(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 	})
 
 	client := openai.NewClient(
@@ -120,7 +120,7 @@ func TestOAISDKMockSettlementWritesAuditTrail(t *testing.T) {
 		t.Errorf("request_attempts.upstream_status_code = %v, want 200", upstreamStatusInt)
 	}
 
-	// 3) usage_records（协议无关 facts 维度，列名见 migrations/000011_create_usage_records.up.sql）
+	// 3) usage_records（协议无关 facts 维度，列名见 migrations/000035_usage_records.up.sql）
 	var (
 		usageUncached int64
 		usageCacheR   int64

@@ -4,11 +4,11 @@ package providerops
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/opsutil"
-	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 )
 
 // Store 是服务商运维聚合所需的只读存储能力（由 *sqlc.Queries 满足）。
@@ -28,19 +28,11 @@ type Store interface {
 // Service 提供服务商运维只读聚合。
 type Service struct {
 	store Store
-	// settings 供每请求现读健康分桶阈值(admin_backend.channel_health_thresholds);
-	// nil(单测)回代码默认。
-	settings *appsettings.SettingsStore
 }
 
 // NewService 创建服务商运维聚合服务。
-func NewService(store Store, settings *appsettings.SettingsStore) *Service {
-	return &Service{store: store, settings: settings}
-}
-
-// healthThresholds 读取当前生效的分桶阈值。
-func (s *Service) healthThresholds(ctx context.Context) appsettings.ChannelHealthThresholds {
-	return appsettings.AdminBackendChannelHealthThresholds(ctx, s.settings)
+func NewService(store Store) *Service {
+	return &Service{store: store}
 }
 
 // Row 是服务商运维主表行（静态元数据；指标在详情页聚合）。
@@ -50,9 +42,18 @@ type Row struct {
 	Name         string
 	Status       string
 	CreatedAt    time.Time
+	Endpoints    []EndpointSummary
 	ChannelTotal int64
 	ModelsCount  int64
 	RoutesCount  int64
+}
+
+// EndpointSummary 是 Provider 主表内展示的 Endpoint 业务事实，不包含 Redis 运行态。
+type EndpointSummary struct {
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	BaseURL string `json:"base_url"`
+	Status  string `json:"status"`
 }
 
 // Detail 是详情页概览（含 attempt/延迟/Token/利润/TPS 等运维指标）。
@@ -64,7 +65,6 @@ type Detail struct {
 	SuccessRate      float64
 	TimeoutTotal     int64
 	Latency          opsutil.LatencyStats
-	HealthBucket     string
 	Tokens           int64
 	RevenueUSD       string
 	CostUSD          string
@@ -103,7 +103,6 @@ type ChannelRow struct {
 	AttemptSucceeded int64
 	SuccessRate      float64
 	Latency          opsutil.LatencyStats
-	HealthBucket     string
 }
 
 // PerfPoint 是抽屉性能 Tab 时序点。
@@ -156,12 +155,20 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 	}
 	out := make([]Row, 0, len(rows))
 	for _, r := range rows {
+		var endpoints []EndpointSummary
+		if err := json.Unmarshal([]byte(r.Endpoints), &endpoints); err != nil {
+			return nil, 0, opsutil.StoreFailed(err, "decode provider endpoint summaries")
+		}
+		if endpoints == nil {
+			endpoints = []EndpointSummary{}
+		}
 		out = append(out, Row{
 			ID:           r.ID,
 			Slug:         r.Slug,
 			Name:         r.Name,
 			Status:       r.Status,
 			CreatedAt:    r.CreatedAt.Time,
+			Endpoints:    endpoints,
 			ChannelTotal: r.ChannelTotal,
 			ModelsCount:  r.ModelsCount,
 			RoutesCount:  r.RoutesCount,
@@ -176,7 +183,6 @@ func (s *Service) Detail(ctx context.Context, providerID int64, from, to time.Ti
 	if err != nil {
 		return Detail{}, opsutil.StoreFailed(err, "provider ops detail")
 	}
-	th := s.healthThresholds(ctx)
 	revenue := opsutil.NumericString(r.RevenueUsd)
 	cost := opsutil.NumericString(r.CostUsd)
 	return Detail{
@@ -190,12 +196,11 @@ func (s *Service) Detail(ctx context.Context, providerID int64, from, to time.Ti
 			r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 			r.LatencySample, r.AttemptSucceeded,
 		),
-		HealthBucket: opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal, th.HealthyRate, th.DegradedRate),
-		Tokens:       r.TokensTotal,
-		RevenueUSD:   revenue,
-		CostUSD:      cost,
-		MarginUSD:    opsutil.SubtractDecimal(revenue, cost),
-		AvgTPS:       r.AvgTps,
+		Tokens:     r.TokensTotal,
+		RevenueUSD: revenue,
+		CostUSD:    cost,
+		MarginUSD:  opsutil.SubtractDecimal(revenue, cost),
+		AvgTPS:     r.AvgTps,
 	}, nil
 }
 
@@ -244,7 +249,6 @@ func (s *Service) Channels(ctx context.Context, providerID int64, from, to time.
 	if err != nil {
 		return nil, opsutil.StoreFailed(err, "provider ops channels")
 	}
-	th := s.healthThresholds(ctx)
 	out := make([]ChannelRow, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, ChannelRow{
@@ -259,7 +263,6 @@ func (s *Service) Channels(ctx context.Context, providerID int64, from, to time.
 				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 				r.LatencySample, r.AttemptSucceeded,
 			),
-			HealthBucket: opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal, th.HealthyRate, th.DegradedRate),
 		})
 	}
 	return out, nil

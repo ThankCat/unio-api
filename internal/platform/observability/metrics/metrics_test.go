@@ -99,3 +99,75 @@ func TestObserveUpstreamSuccessForcesNoneCategory(t *testing.T) {
 		t.Error("successful upstream must not record a non-none error category")
 	}
 }
+
+func TestP4MetricsExposeBoundedRuntimeFacts(t *testing.T) {
+	m := New()
+	ttft := 250 * time.Millisecond
+
+	m.SetBreakerState("channel", "17", "open")
+	m.IncBreakerTransition("channel", "closed", "open", "consecutive_failure")
+	m.IncBreakerSkip("endpoint", "open")
+	m.ObserveBreakerStoreOperation("acquire_attempt", "allowed", 10*time.Millisecond)
+	m.SetBreakerStoreHealth(true, false)
+	m.SetRuntimeStateIntegrity("ready")
+	m.IncRuntimeStateLossRecovery("committed")
+	m.IncRequestAdmissionOperation("acquire", "allowed")
+	m.AddRequestAdmissionActive(1)
+	m.IncBreakerPermitOperation("finish", "applied")
+	m.AddBreakerPermitActive(1)
+	m.IncBreakerIgnoredResult("endpoint", "stale_revision")
+	m.IncChannelConfigRevisionMismatch("finish")
+	m.IncChannelCredentialRotationVerification("passed")
+	m.SetEndpointBaseURLRevisionFence("23", "pending", 3*time.Second)
+	m.SetEndpointStatusRevisionFence("23", "active", 0)
+	m.IncEndpointStatusRevisionMismatch("acquire")
+	m.IncRuntimeControlOperation("circuit_breaker", "commit", "success")
+	m.SetRuntimeControlPending("circuit_breaker", true, 2*time.Second)
+	m.IncRuntimeControlRevisionMismatch("circuit_breaker", "acquire")
+	m.IncRuntimeControlRecovery("circuit_breaker", "committed")
+	m.IncEndpointFailure("23", "http_500")
+	m.IncChannelFailure("17", "server")
+	m.ObserveUpstreamTiming("11", "23", "17", "openai", "responses", "stream", time.Second, &ttft)
+	m.ObserveUpstreamTiming("11", "23", "17", "openai", "responses", "non_stream", 2*time.Second, nil)
+	m.SetBalancedFinalWeight("31", "17", 0.75)
+
+	body := scrape(t, m)
+	wants := []string{
+		`unio_gateway_breaker_state{id="17",scope="channel",state="open"} 1`,
+		`unio_gateway_breaker_transition_total{from="closed",reason="consecutive_failure",scope="channel",to="open"} 1`,
+		`unio_gateway_breaker_skip_total{reason="open",scope="endpoint"} 1`,
+		`unio_gateway_breaker_store_operation_total{operation="acquire_attempt",result="allowed"} 1`,
+		`unio_gateway_breaker_store_latency_seconds_count{operation="acquire_attempt"} 1`,
+		`unio_gateway_breaker_store_ready 1`,
+		`unio_gateway_breaker_store_unavailable 0`,
+		`unio_gateway_runtime_state_integrity{state="ready"} 1`,
+		`unio_gateway_runtime_state_loss_recovery_total{result="committed"} 1`,
+		`unio_gateway_request_admission_operation_total{operation="acquire",result="allowed"} 1`,
+		`unio_gateway_request_admission_active 1`,
+		`unio_gateway_breaker_permit_operation_total{operation="finish",result="applied"} 1`,
+		`unio_gateway_breaker_permit_active 1`,
+		`unio_gateway_breaker_ignored_result_total{reason="stale_revision",scope="endpoint"} 1`,
+		`unio_gateway_channel_config_revision_mismatch_total{operation="finish"} 1`,
+		`unio_gateway_channel_credential_rotation_verification_total{state="passed"} 1`,
+		`unio_gateway_endpoint_base_url_revision_fence{endpoint_id="23",state="pending"} 1`,
+		`unio_gateway_endpoint_base_url_revision_pending_seconds{endpoint_id="23"} 3`,
+		`unio_gateway_endpoint_status_revision_fence{endpoint_id="23",state="active"} 1`,
+		`unio_gateway_endpoint_status_revision_mismatch_total{operation="acquire"} 1`,
+		`unio_gateway_runtime_control_operation_total{operation="commit",result="success",target="circuit_breaker"} 1`,
+		`unio_gateway_runtime_control_pending{target="circuit_breaker"} 1`,
+		`unio_gateway_runtime_control_pending_seconds{target="circuit_breaker"} 2`,
+		`unio_gateway_runtime_control_revision_mismatch_total{operation="acquire",target="circuit_breaker"} 1`,
+		`unio_gateway_runtime_control_recovery_total{result="committed",target="circuit_breaker"} 1`,
+		`unio_gateway_endpoint_failure_total{category="http_500",endpoint_id="23"} 1`,
+		`unio_gateway_channel_failure_total{category="server",channel_id="17"} 1`,
+		`unio_gateway_upstream_ttft_seconds_count{channel_id="17",endpoint_id="23",operation="responses",protocol="openai",provider_id="11",sample_source="stream_only"} 1`,
+		`unio_gateway_upstream_total_duration_seconds_count{channel_id="17",endpoint_id="23",mode="stream",operation="responses",protocol="openai",provider_id="11"} 1`,
+		`unio_gateway_upstream_total_duration_seconds_count{channel_id="17",endpoint_id="23",mode="non_stream",operation="responses",protocol="openai",provider_id="11"} 1`,
+		`unio_gateway_balanced_final_weight{channel_id="17",route_id="31"} 0.75`,
+	}
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics output missing series:\n%s", want)
+		}
+	}
+}

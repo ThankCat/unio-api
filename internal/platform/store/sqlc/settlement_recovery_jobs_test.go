@@ -37,7 +37,7 @@ func createSettlementRecoveryFixture(t *testing.T, ctx context.Context, tx pgx.T
 	channelPrice := createChannelPriceForTest(t, ctx, queries, channelID, modelID, time.Now().UTC())
 
 	request := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("settlement-recovery-request-%d", suffix))
-	attempt, err := queries.CreateRequestAttempt(ctx, sqlc.CreateRequestAttemptParams{
+	attempt, err := queries.CreateRequestAttempt(ctx, withRequestAttemptRuntimeIdentity(t, ctx, tx, channelID, sqlc.CreateRequestAttemptParams{
 		RequestRecordID:       request.ID,
 		AttemptIndex:          0,
 		ProviderID:            providerID,
@@ -60,7 +60,7 @@ func createSettlementRecoveryFixture(t *testing.T, ctx context.Context, tx pgx.T
 		UsageMappingVersion:   pgtype.Text{Valid: false},
 		StartedAt:             timestamptz(time.Now().UTC()),
 		CompletedAt:           nullTimestamptz(),
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create request attempt: %v", err)
 	}

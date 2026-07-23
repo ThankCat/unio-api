@@ -16,6 +16,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
 // partialOutputTokenCounter 按 upstream model 估算可见输出文本的 token 数，供 partial settlement 使用。
@@ -107,6 +108,10 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
 		})
 	}
+	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
+		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
+		return err
+	}
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
@@ -128,7 +133,22 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		// usedDirect 记录成功路径是否走了直传：直传的 response.completed 已原文透传，收尾不再补发。
 		usedDirect bool
 	)
-	encoder := newStreamEncoder(req, newResponsesID("resp"), time.Now().Unix(), emit)
+	var activeWriteAck lifecycle.StreamWriteAck
+	acknowledgedEmit := func(event gatewayapi.ResponsesStreamEvent) error {
+		if err := emit(event); err != nil {
+			return err
+		}
+		if activeWriteAck != nil {
+			activeWriteAck()
+		}
+		return nil
+	}
+	withWriteAck := func(ack lifecycle.StreamWriteAck, write func() error) error {
+		activeWriteAck = ack
+		defer func() { activeWriteAck = nil }()
+		return write()
+	}
+	encoder := newStreamEncoder(req, newResponsesID("resp"), time.Now().Unix(), acknowledgedEmit)
 
 	runResult, err := lifecycle.RunStreamGeneric(ctx, s.attemptRunner, lifecycle.RunStreamParamsGeneric[responsesStreamCarrier]{
 		RequestRecord:           requestRecord,
@@ -190,27 +210,32 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 			lifecycle.EndGatewaySpan(streamSpan, streamErr)
 			return streamOutcome.Facts, streamErr
 		},
-		EmitChunk: func(carrier responsesStreamCarrier) error {
-			if carrier.direct != nil {
-				usedDirect = true
-				return emitDirectStreamEvent(emit, req.Model, *carrier.direct)
-			}
-			return encoder.Handle(*carrier.chat)
+		EmitChunk: func(carrier responsesStreamCarrier, ack lifecycle.StreamWriteAck) error {
+			return withWriteAck(ack, func() error {
+				if carrier.direct != nil {
+					usedDirect = true
+					return emitDirectStreamEvent(acknowledgedEmit, req.Model, *carrier.direct)
+				}
+				return encoder.Handle(*carrier.chat)
+			})
 		},
-		Finish: func(_ string, finalUsage adapter.ChatUsage, finishReason string) error {
-			if usedDirect {
-				// 直传：response.completed 已在流中由上游原文透传，无需补发收尾帧。
-				return nil
-			}
-			usage := finalUsage
-			return encoder.Complete(finishReason, &usage)
+		Finish: func(_ string, finalUsage adapter.ChatUsage, finishReason string, ack lifecycle.StreamWriteAck) error {
+			return withWriteAck(ack, func() error {
+				if usedDirect {
+					// 直传：response.completed 已在流中由上游原文透传，无需补发收尾帧。
+					return nil
+				}
+				usage := finalUsage
+				return encoder.Complete(finishReason, &usage)
+			})
 		},
 		ChunkMeta: responsesStreamCarrierMeta,
 	})
-	if runResult.Attempts > 1 && principal.RouteID != nil {
+	if runResult.RoutingFallback && principal.RouteID != nil {
 		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
 			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
-			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(), Attempts: runResult.Attempts,
+			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+			FallbackOccurred: true, FallbackChain: runResult.TransportChain,
 		})
 	}
 	outcome = runResult.Outcome

@@ -158,6 +158,8 @@ type attemptDTO struct {
 	ErrorMessage          *string `json:"error_message"`
 	InternalErrorDetail   *string `json:"internal_error_detail,omitempty"`
 	ResponseStartedAt     *string `json:"response_started_at"`
+	UpstreamTotalMs       *int64  `json:"upstream_total_ms"`
+	UpstreamTTFTMs        *int64  `json:"upstream_ttft_ms"`
 	FinalUsageReceived    bool    `json:"final_usage_received"`
 	StartedAt             string  `json:"started_at"`
 	CompletedAt           *string `json:"completed_at"`
@@ -455,6 +457,8 @@ func toAttemptDTO(a query.Attempt) attemptDTO {
 		ErrorMessage:          a.ErrorMessage,
 		InternalErrorDetail:   a.InternalErrorDetail,
 		ResponseStartedAt:     adminhttp.RFC3339Ptr(a.ResponseStartedAt),
+		UpstreamTotalMs:       a.UpstreamTotalMs,
+		UpstreamTTFTMs:        a.UpstreamTTFTMs,
 		FinalUsageReceived:    a.FinalUsageReceived,
 		StartedAt:             adminhttp.RFC3339(a.StartedAt),
 		CompletedAt:           adminhttp.RFC3339Ptr(a.CompletedAt),

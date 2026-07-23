@@ -13,14 +13,15 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // ResponsesService 定义 Responses handler 依赖的业务能力。
 type ResponsesService interface {
-	CreateResponse(ctx context.Context, req ResponsesRequest) (*ResponsesResponse, error)
+	CreateResponse(ctx context.Context, req ResponsesRequest) (*lifecycle.NonStreamResult[*ResponsesResponse], error)
 	StreamResponse(ctx context.Context, req ResponsesRequest, emit func(ResponsesStreamEvent) error) error
 	// CompactHistory 无状态降级压缩会话历史（POST /v1/responses/compact）。
-	CompactHistory(ctx context.Context, req ResponsesRequest) (*CompactHistoryResponse, error)
+	CompactHistory(ctx context.Context, req ResponsesRequest) (*lifecycle.NonStreamResult[*CompactHistoryResponse], error)
 	// CountInputTokens 本地估算请求 input token（POST /v1/responses/input_tokens），不调上游、不计费。
 	CountInputTokens(ctx context.Context, req ResponsesRequest) (*InputTokenCountResponse, error)
 }
@@ -87,13 +88,15 @@ func (h *responsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.service.CreateResponse(r.Context(), req)
+	result, err := h.service.CreateResponse(r.Context(), req)
 	if err != nil {
 		writeResponsesServiceError(w, req, err, "internal_error", "responses request failed")
 		return
 	}
 
-	_ = httpx.WriteJSON(w, http.StatusOK, resp)
+	_ = result.FinalizeDelivery(func(resp *ResponsesResponse) error {
+		return httpx.WriteJSON(w, http.StatusOK, resp)
+	})
 }
 
 // openAIBetaHeader 读取并合并 OpenAI-Beta 头（可能多次出现），去空白后以逗号连接;无则返回空串。
@@ -121,6 +124,7 @@ type responsesServiceErrorResponse struct {
 // writeResponsesServiceError 将内部业务错误写成 Responses 原生 JSON error（BRIDGE §7）。
 func writeResponsesServiceError(w http.ResponseWriter, req ResponsesRequest, err error, fallbackCode string, fallbackMessage string) {
 	resp := mapResponsesServiceError(req, err, fallbackCode, fallbackMessage)
+	httpx.SetRetryAfter(w, lifecycle.ProvableRetryAfter(err))
 
 	_ = httpx.WriteOpenAIError(
 		w,
@@ -157,6 +161,14 @@ func mapResponsesServiceError(req ResponsesRequest, err error, fallbackCode stri
 			code:      "rate_limit_exceeded",
 			message:   "You have exceeded the rate limit. Please slow down and retry later.",
 			errorType: "rate_limit_error",
+			param:     nil,
+		}
+	case isResponsesRequestAdmissionUnavailable(err):
+		return responsesServiceErrorResponse{
+			status:    http.StatusServiceUnavailable,
+			code:      "service_unavailable",
+			message:   "The service is temporarily unavailable.",
+			errorType: "api_error",
 			param:     nil,
 		}
 	case failure.CodeOf(err) == failure.CodeAdapterRequestUnsupported:
@@ -200,6 +212,20 @@ func mapResponsesServiceError(req ResponsesRequest, err error, fallbackCode stri
 		message:   fallbackMessage,
 		errorType: "api_error",
 		param:     nil,
+	}
+}
+
+func isResponsesRequestAdmissionUnavailable(err error) bool {
+	switch failure.CodeOf(err) {
+	case failure.CodeGatewayBreakerStoreUnavailable,
+		failure.CodeGatewayRuntimeSyncRequired,
+		failure.CodeGatewayRuntimeStateLost,
+		failure.CodeGatewayBreakerPermitConflict,
+		failure.CodeDependencyRedisUnavailable,
+		failure.CodeDependencyPostgresUnavailable:
+		return true
+	default:
+		return false
 	}
 }
 

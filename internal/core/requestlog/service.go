@@ -33,6 +33,18 @@ const (
 	OperationResponses       Operation = "responses"
 )
 
+// UpstreamOperation identifies the concrete transport recorded by an attempt.
+// It is separate from the public ingress Operation because one request can
+// execute more than one upstream operation (for example Responses Compact).
+type UpstreamOperation string
+
+const (
+	UpstreamOperationChatCompletions  UpstreamOperation = "chat_completions"
+	UpstreamOperationResponses        UpstreamOperation = "responses"
+	UpstreamOperationResponsesCompact UpstreamOperation = "responses_compact"
+	UpstreamOperationMessages         UpstreamOperation = "messages"
+)
+
 // DeliveryStatus 表示客户响应交付状态，与 settlement 状态分开记录。
 type DeliveryStatus string
 
@@ -152,41 +164,58 @@ type MarkRequestCanceledParams struct {
 
 // CreateAttemptParams 表示创建 request attempt 所需的上游尝试事实。
 type CreateAttemptParams struct {
-	RequestRecordID  int64
-	AttemptIndex     int
-	ProviderID       int64
-	ChannelID        int64
-	AdapterKey       string
-	UpstreamModel    string
-	UpstreamProtocol Protocol
-	StartedAt        time.Time
+	RequestRecordID                 int64
+	AttemptIndex                    int
+	ProviderID                      int64
+	ChannelID                       int64
+	AdapterKey                      string
+	UpstreamModel                   string
+	UpstreamProtocol                Protocol
+	ProviderEndpointID              *int64
+	ProviderEndpointBaseURLRevision *int64
+	ProviderEndpointStatusRevision  *int64
+	ChannelConfigRevision           *int64
+	RoutingCandidateIndex           *int
+	UpstreamOperation               UpstreamOperation
+	StartedAt                       time.Time
 }
 
 // AttemptRecord 表示一次上游 channel 尝试记录。
 type AttemptRecord struct {
-	ID                    int64
-	RequestRecordID       int64
-	AttemptIndex          int
-	ProviderID            int64
-	ChannelID             int64
-	AdapterKey            string
-	UpstreamModel         string
-	UpstreamProtocol      Protocol
-	UpstreamResponseID    *string
-	UpstreamResponseModel *string
-	UpstreamFinishReason  *string
-	FinishClass           *string
-	Status                AttemptStatus
-	UpstreamStatusCode    *int
-	UpstreamRequestID     *string
-	ErrorCode             *string
-	ErrorMessage          *string
-	InternalErrorDetail   *string
-	ResponseStartedAt     *time.Time
-	FinalUsageReceived    bool
-	UsageMappingVersion   *string
-	StartedAt             time.Time
-	CompletedAt           *time.Time
+	ID                              int64
+	RequestRecordID                 int64
+	AttemptIndex                    int
+	ProviderID                      int64
+	ChannelID                       int64
+	AdapterKey                      string
+	UpstreamModel                   string
+	UpstreamProtocol                Protocol
+	ProviderEndpointID              *int64
+	ProviderEndpointBaseURLRevision *int64
+	ProviderEndpointStatusRevision  *int64
+	ChannelConfigRevision           *int64
+	RoutingCandidateIndex           *int
+	UpstreamOperation               UpstreamOperation
+	UpstreamResponseID              *string
+	UpstreamResponseModel           *string
+	UpstreamFinishReason            *string
+	FinishClass                     *string
+	Status                          AttemptStatus
+	UpstreamStatusCode              *int
+	UpstreamRequestID               *string
+	ErrorCode                       *string
+	ErrorMessage                    *string
+	InternalErrorDetail             *string
+	ResponseStartedAt               *time.Time
+	UpstreamStartedAt               *time.Time
+	UpstreamFirstTokenAt            *time.Time
+	UpstreamCompletedAt             *time.Time
+	BreakerEndpointDisposition      *string
+	BreakerChannelDisposition       *string
+	FinalUsageReceived              bool
+	UsageMappingVersion             *string
+	StartedAt                       time.Time
+	CompletedAt                     *time.Time
 }
 
 // MarkAttemptSucceededParams 表示标记上游尝试成功所需的最终事实。
@@ -228,6 +257,22 @@ type MarkAttemptResponseStartedParams struct {
 	ResponseStartedAt time.Time
 }
 
+// RecordAttemptTimingParams carries first-write-wins upstream transport facts.
+// Nil values mean that lifecycle has not observed that boundary yet.
+type RecordAttemptTimingParams struct {
+	ID                   int64
+	UpstreamStartedAt    *time.Time
+	UpstreamFirstTokenAt *time.Time
+	UpstreamCompletedAt  *time.Time
+}
+
+// RecordAttemptBreakerDispositionParams first-write-wins 地保存 AttemptPermit Finish 的双作用域结果。
+type RecordAttemptBreakerDispositionParams struct {
+	ID                  int64
+	EndpointDisposition string
+	ChannelDisposition  string
+}
+
 // MarkAttemptFailedParams 表示标记上游尝试失败所需的错误事实。
 type MarkAttemptFailedParams struct {
 	ID                  int64
@@ -254,6 +299,8 @@ type Service interface {
 	CreateRequest(ctx context.Context, params CreateRequestParams) (RequestRecord, error)
 	MarkRequestRunning(ctx context.Context, id int64) (RequestRecord, error)
 	MarkRequestResponseStarted(ctx context.Context, params MarkResponseStartedParams) (RequestRecord, error)
+	MarkRequestDeliveryCompleted(ctx context.Context, id int64, completedAt time.Time) (RequestRecord, error)
+	MarkRequestDeliveryInterrupted(ctx context.Context, id int64) (RequestRecord, error)
 	MarkRequestSucceeded(ctx context.Context, params MarkRequestSucceededParams) (RequestRecord, error)
 	MarkSettledRequestFailed(ctx context.Context, params MarkSettledRequestFailedParams) (RequestRecord, error)
 	MarkSettledRequestCanceled(ctx context.Context, params MarkSettledRequestCanceledParams) (RequestRecord, error)

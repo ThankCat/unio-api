@@ -16,27 +16,22 @@ import (
 
 // RequestLifecycle 把双协议 service 编排骨架共享的协议无关基础设施集中到一处。
 //
-// 它持有 request log / metrics / channel breaker / chat authorizer 这些 lifecycle 依赖，
+// 它持有 request log / metrics / chat authorizer 这些 lifecycle 依赖，
 // 以及单一协议特定的取值（IngressProtocol、Operation、SafeMessageMapper），统一暴露给两侧
-// service 编排骨架使用。这样 OpenAI ChatCompletions 与 Anthropic Messages 各自的
-// channel_breaker / *_authorization / *_metrics / *_request_record thin wrapper 实现可以收口
-// 为同一份代码——两侧 service 只保留协议族命名的 1-line forward，避免逐字复制。
+// service 编排骨架使用，使 OpenAI ChatCompletions 与 Anthropic Messages 的授权、指标和
+// request record 行为收口为同一份代码。
 //
 // 创建方式：见 NewRequestLifecycle。两侧 bootstrap 不需要直接构造它，service.go 在懒初始化
 // 阶段（lc()）根据已注入字段组装一次。
 type RequestLifecycle struct {
-	requestLog         requestlog.Service
-	authorizer         ChatAuthorizer
-	metrics            MetricsRecorder
-	breaker            ChannelBreaker
-	cooldowns          *ChannelCooldownRegistry
-	credentialGate     CredentialGate
-	rateLimitGuard     RateLimitGuard
-	concurrencyLimiter ChannelConcurrencyLimiter
-	routingTraces      *RoutingTraceRecorder
-	ingressProtocol    requestlog.Protocol
-	operation          requestlog.Operation
-	safeMessage        func(code string) string
+	requestLog      requestlog.Service
+	authorizer      ChatAuthorizer
+	metrics         MetricsRecorder
+	credentialGate  CredentialGate
+	routingTraces   *RoutingTraceRecorder
+	ingressProtocol requestlog.Protocol
+	operation       requestlog.Operation
+	safeMessage     func(code string) string
 
 	// costExposures 是可选的成本敞口记录器（DESIGN-bill-on-cancel 阶段一）；nil 表示不启用。
 	costExposures              CostExposureRecorder
@@ -84,29 +79,6 @@ func (l *RequestLifecycle) RecordRoutingFailure(ctx context.Context, request req
 	})
 }
 
-// ChannelCapacitySnapshot 组合 channel-global 并发与 TPM 只读快照，供 balanced scorer 使用。
-func (l *RequestLifecycle) ChannelCapacitySnapshot(ctx context.Context, candidate routing.ChatRouteCandidate) (ChannelCapacity, error) {
-	if l == nil {
-		return ChannelCapacity{}, nil
-	}
-	capacity := ChannelCapacity{}
-	if l.concurrencyLimiter != nil {
-		snapshot, err := l.concurrencyLimiter.ChannelSnapshot(ctx, candidate.Channel.ID, candidate.ConcurrencyLimit)
-		if err != nil {
-			return ChannelCapacity{}, err
-		}
-		capacity.Concurrency = CapacitySignal{Used: snapshot.Used, Limit: snapshot.Limit, Known: snapshot.Known}
-	}
-	if l.rateLimitGuard != nil {
-		snapshot, err := l.rateLimitGuard.ChannelTPMSnapshot(ctx, candidate.Channel.ID, candidate.TPMLimit)
-		if err != nil {
-			return ChannelCapacity{}, err
-		}
-		capacity.TPM = CapacitySignal{Used: snapshot.Used, Limit: snapshot.Limit, Known: snapshot.Known}
-	}
-	return capacity, nil
-}
-
 // RequestLifecycleParams 是构造 RequestLifecycle 所需的全部字段。
 //
 // SafeMessage 用于 service-specific ad-hoc string code（例如 "chat_authorization_failed" /
@@ -116,7 +88,6 @@ type RequestLifecycleParams struct {
 	RequestLog      requestlog.Service
 	Authorizer      ChatAuthorizer
 	Metrics         MetricsRecorder
-	Breaker         ChannelBreaker
 	IngressProtocol requestlog.Protocol
 	Operation       requestlog.Operation
 	SafeMessage     func(code string) string
@@ -124,8 +95,8 @@ type RequestLifecycleParams struct {
 
 // NewRequestLifecycle 构造一个协议无关编排基础设施 bundle。
 //
-// RequestLog 必填；Authorizer 必填；其余字段允许为 nil（Metrics、Breaker、SafeMessage 缺省
-// 都等价于「不采集 / 不熔断 / 仅按协议无关兜底文案」）。IngressProtocol 与 Operation 必填，
+// RequestLog 必填；Authorizer 必填；其余字段允许为 nil（Metrics、SafeMessage 缺省
+// 等价于「不采集 / 仅按协议无关兜底文案」）。IngressProtocol 与 Operation 必填，
 // 它们决定 request_records 的协议归属与 operation 列。
 func NewRequestLifecycle(params RequestLifecycleParams) *RequestLifecycle {
 	if params.RequestLog == nil {
@@ -145,138 +116,14 @@ func NewRequestLifecycle(params RequestLifecycleParams) *RequestLifecycle {
 		requestLog:      params.RequestLog,
 		authorizer:      params.Authorizer,
 		metrics:         params.Metrics,
-		breaker:         params.Breaker,
 		ingressProtocol: params.IngressProtocol,
 		operation:       params.Operation,
 		safeMessage:     params.SafeMessage,
 	}
 }
 
-// ---------------------------------------------------------------------------
-// channel breaker：双协议共享熔断只读判定与状态记录。
-// ---------------------------------------------------------------------------
-
-// CandidateAvailable 在启用熔断时只读判断候选是否可进入保守 fallback plan。
-// 不占用 half-open 探测名额；真正尝试前必须继续 BreakerAllow。
-//
-// nil receiver / nil breaker 都等价于「未启用熔断」，全部放行——这与抽取前
-// service.candidateAvailable 的语义一致，也允许只关心 candidate planning 的单元测试
-// 用字面量构造 service 时不必同时构造 RequestLifecycle。
-//
-// 同时考虑 P2-7 渠道级 429 冷却：处于冷却窗口内的渠道一并排除出 plan。
-func (l *RequestLifecycle) CandidateAvailable(candidate routing.ChatRouteCandidate) bool {
-	if l == nil {
-		return true
-	}
-	channelKey := MetricsID(candidate.Channel.ID)
-	if !l.cooldowns.Allowed(channelKey) {
-		return false
-	}
-	if l.breaker == nil {
-		return true
-	}
-
-	return l.breaker.Available(channelKey)
-}
-
-// BreakerAllow 在启用熔断时判断是否允许尝试该 channel；未启用时始终放行。
-// nil receiver / nil breaker 等价于「未启用熔断」，全部放行。
-//
-// 同时考虑 P2-7 渠道级 429 冷却：处于冷却窗口内的渠道直接跳过，不占用 half-open 探测名额。
-func (l *RequestLifecycle) BreakerAllow(channelKey string) bool {
-	if l == nil {
-		return true
-	}
-	if !l.cooldowns.Allowed(channelKey) {
-		return false
-	}
-	if l.breaker == nil {
-		return true
-	}
-
-	return l.breaker.Allow(channelKey)
-}
-
-// SetChannelCooldownRegistry 注入 P2-7 渠道级 429 冷却注册表；nil 表示不启用冷却。
-func (l *RequestLifecycle) SetChannelCooldownRegistry(registry *ChannelCooldownRegistry) {
-	if l == nil {
-		return
-	}
-	l.cooldowns = registry
-}
-
-// RecordChannelRateLimit 在上游返回 429 时按 Retry-After 登记渠道冷却（P2-7）。
-//
-// 仅对 rate_limit 分类生效；其它错误 no-op。nil 冷却注册表（未启用）时 no-op。
-// 返回是否成功登记冷却，便于调用方观测/记录。
-func (l *RequestLifecycle) RecordChannelRateLimit(channelKey string, err error) bool {
-	if l == nil || l.cooldowns == nil {
-		return false
-	}
-	retryAfter, ok := channelRateLimitRetryAfter(err)
-	if !ok {
-		return false
-	}
-	_, recorded := l.cooldowns.RecordRateLimit(channelKey, retryAfter)
-	return recorded
-}
-
-// RecordChannelFailureCooldown 在上游 timeout/5xx 类故障后登记渠道失败软冷却（DEC-029）。
-//
-// 仅对 timeout/server_error 分类生效；其它错误 no-op。nil 冷却注册表（未启用）时 no-op。
-// 软冷却只影响后续请求的候选排序偏好（demote），不会把候选池清空（唯一渠道保护）。
-func (l *RequestLifecycle) RecordChannelFailureCooldown(channelKey string, err error) bool {
-	if l == nil || l.cooldowns == nil {
-		return false
-	}
-	if !isFailureCooldownError(err) {
-		return false
-	}
-	_, recorded := l.cooldowns.RecordFailure(channelKey)
-	return recorded
-}
-
-// CandidateFailurePreferred 报告候选渠道当前是否不在失败软冷却窗口内（true=可正常优先使用）。
-//
-// 供 PrepareCandidates 的 FailurePreferred 软偏好使用：软冷却中的候选被 demote 到 fallback
-// 顺序末尾而非剔除，故唯一候选时行为不变（DEC-029）。
-func (l *RequestLifecycle) CandidateFailurePreferred(candidate routing.ChatRouteCandidate) bool {
-	if l == nil || l.cooldowns == nil {
-		return true
-	}
-	return l.cooldowns.FailurePreferred(MetricsID(candidate.Channel.ID))
-}
-
-// ChannelHealthScore 返回某 channel 的健康分（越小越健康），供 balanced 权重计算。
-// nil receiver / nil breaker 等价于「无健康统计」，返回 0（不改变排序）。
-func (l *RequestLifecycle) ChannelHealthScore(channelKey string) float64 {
-	if l == nil || l.breaker == nil {
-		return 0
-	}
-
-	return l.breaker.HealthScore(channelKey)
-}
-
-// RecordChannelHealth 按错误分类把一次上游尝试结果记入熔断器。
-// 只有归因于 channel 的失败才计为失败；bad_request/canceled 等不惩罚渠道。
-// 每次被放行的尝试都必须恰好记录一次，以正确收口 half-open 探测。
-//
-// nil receiver / nil breaker 等价于「未启用熔断」，no-op。
-func (l *RequestLifecycle) RecordChannelHealth(channelKey string, err error) {
-	if l == nil || l.breaker == nil {
-		return
-	}
-
-	if IsChannelFaultError(err) {
-		l.breaker.RecordFailure(channelKey)
-		return
-	}
-
-	l.breaker.RecordSuccess(channelKey)
-}
-
 // SetCredentialGate 注入凭据失效闸门（连续 401 翻 credential_valid=false）。nil 表示不启用。
-// 与 SetChannelCooldownRegistry 一样是可选的启动期后置注入。
+// 这是可选的启动期后置注入。
 func (l *RequestLifecycle) SetCredentialGate(gate CredentialGate) {
 	if l == nil {
 		return
@@ -284,13 +131,18 @@ func (l *RequestLifecycle) SetCredentialGate(gate CredentialGate) {
 	l.credentialGate = gate
 }
 
-// RecordCredentialResult 把一次上游尝试结果喂给凭据闸门（按 channel id）。
+// RecordCredentialResult 把一次上游尝试结果连同其冻结的 Channel/Endpoint 版本喂给凭据闸门。
 // nil receiver / nil gate 等价于「未启用凭据闸门」，no-op。
-func (l *RequestLifecycle) RecordCredentialResult(channelID int64, err error) {
+func (l *RequestLifecycle) RecordCredentialResult(candidate routing.ChatRouteCandidate, err error) {
 	if l == nil || l.credentialGate == nil {
 		return
 	}
-	l.credentialGate.RecordResult(channelID, err)
+	l.credentialGate.RecordResult(CredentialRevision{
+		ChannelID:               candidate.Channel.ID,
+		ChannelConfigRevision:   candidate.ChannelConfigRevision,
+		EndpointBaseURLRevision: candidate.ProviderEndpointBaseURLRevision,
+		EndpointStatusRevision:  candidate.ProviderEndpointStatusRevision,
+	}, err)
 }
 
 // ---------------------------------------------------------------------------
@@ -360,11 +212,6 @@ func (l *RequestLifecycle) RecordRoutingSelected(providerID int64, channelID int
 func (l *RequestLifecycle) RecordUpstream(providerID int64, channelID int64, duration time.Duration, err error) {
 	if l == nil {
 		return
-	}
-	if recorder, ok := l.breaker.(interface {
-		RecordLatency(channelKey string, duration time.Duration)
-	}); ok {
-		recorder.RecordLatency(MetricsID(channelID), duration)
 	}
 	if l.metrics == nil {
 		return
@@ -486,6 +333,27 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 // CreateAttempt 创建一次上游 channel 尝试记录。
 // attempt 记录 fallback 链路中的单次 provider/channel 调用，必须先于 adapter 调用创建。
 func (l *RequestLifecycle) CreateAttempt(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate) (requestlog.AttemptRecord, error) {
+	return l.CreateAttemptForOperation(
+		ctx,
+		requestRecord,
+		attemptIndex,
+		attemptIndex,
+		candidate,
+		l.upstreamOperation(),
+	)
+}
+
+// CreateAttemptForOperation freezes routing identity separately from the real
+// transport sequence. Compact fallback can therefore create two consecutive
+// attempts while retaining the same routing candidate index.
+func (l *RequestLifecycle) CreateAttemptForOperation(
+	ctx context.Context,
+	requestRecord requestlog.RequestRecord,
+	attemptIndex int,
+	routingCandidateIndex int,
+	candidate routing.ChatRouteCandidate,
+	operation requestlog.UpstreamOperation,
+) (requestlog.AttemptRecord, error) {
 	// 覆盖为当前尝试；失败停在某次 attempt 时访问日志即显示最后打过的渠道。
 	logfields.SetUpstreamAttempt(ctx, logfields.UpstreamAttempt{
 		ModelID:    candidate.ModelDBID,
@@ -497,15 +365,55 @@ func (l *RequestLifecycle) CreateAttempt(ctx context.Context, requestRecord requ
 	})
 
 	return l.requestLog.CreateAttempt(ctx, requestlog.CreateAttemptParams{
-		RequestRecordID:  requestRecord.ID,
-		AttemptIndex:     attemptIndex,
-		ProviderID:       candidate.ProviderID,
-		ChannelID:        candidate.Channel.ID,
-		AdapterKey:       candidate.AdapterKey,
-		UpstreamModel:    candidate.UpstreamModel,
-		UpstreamProtocol: requestlog.Protocol(candidate.Protocol),
-		StartedAt:        time.Now(),
+		RequestRecordID:                 requestRecord.ID,
+		AttemptIndex:                    attemptIndex,
+		ProviderID:                      candidate.ProviderID,
+		ChannelID:                       candidate.Channel.ID,
+		AdapterKey:                      candidate.AdapterKey,
+		UpstreamModel:                   candidate.UpstreamModel,
+		UpstreamProtocol:                requestlog.Protocol(candidate.Protocol),
+		ProviderEndpointID:              positiveInt64Ptr(candidate.ProviderEndpointID),
+		ProviderEndpointBaseURLRevision: positiveInt64Ptr(candidate.ProviderEndpointBaseURLRevision),
+		ProviderEndpointStatusRevision:  positiveInt64Ptr(candidate.ProviderEndpointStatusRevision),
+		ChannelConfigRevision:           positiveInt64Ptr(candidate.ChannelConfigRevision),
+		RoutingCandidateIndex:           nonNegativeIntPtr(routingCandidateIndex),
+		UpstreamOperation:               operation,
+		StartedAt:                       time.Now(),
 	})
+}
+
+func upstreamOperationForRequest(operation requestlog.Operation) requestlog.UpstreamOperation {
+	switch operation {
+	case requestlog.OperationChatCompletions:
+		return requestlog.UpstreamOperationChatCompletions
+	case requestlog.OperationResponses:
+		return requestlog.UpstreamOperationResponses
+	case requestlog.OperationMessages:
+		return requestlog.UpstreamOperationMessages
+	default:
+		return ""
+	}
+}
+
+func (l *RequestLifecycle) upstreamOperation() requestlog.UpstreamOperation {
+	if l == nil {
+		return ""
+	}
+	return upstreamOperationForRequest(l.operation)
+}
+
+func positiveInt64Ptr(value int64) *int64 {
+	if value <= 0 {
+		return nil
+	}
+	return &value
+}
+
+func nonNegativeIntPtr(value int) *int {
+	if value < 0 {
+		return nil
+	}
+	return &value
 }
 
 // MarkResponseStarted 尽力记录首个客户可见响应时间。
@@ -526,41 +434,63 @@ func (l *RequestLifecycle) MarkResponseStarted(ctx context.Context, requestRecor
 	})
 }
 
-// deliveryStatusMarker 是交付状态机的可选写入能力。
-//
-// 生产注入的 requestlog.Service 实现（*requestlog.Store）满足它；测试 fake 不实现时交付写入静默跳过。
-// 交付状态只服务审计/展示（Admin），与 settlement 状态相互独立，写失败绝不影响主响应链路。
-type deliveryStatusMarker interface {
-	MarkRequestDeliveryCompleted(ctx context.Context, id int64, completedAt time.Time) (requestlog.RequestRecord, error)
-	MarkRequestDeliveryInterrupted(ctx context.Context, id int64) (requestlog.RequestRecord, error)
+type attemptTimingRecorder interface {
+	RecordAttemptTiming(ctx context.Context, params requestlog.RecordAttemptTimingParams) (requestlog.AttemptRecord, error)
+}
+
+type attemptBreakerDispositionRecorder interface {
+	RecordAttemptBreakerDisposition(ctx context.Context, params requestlog.RecordAttemptBreakerDispositionParams) (requestlog.AttemptRecord, error)
+}
+
+// RecordAttemptTiming first-write-wins 地保存 upstream transport 时间事实。
+// 该写入脱离客户取消；流式 FirstToken 到达和 adapter 返回各调用一次。
+func (l *RequestLifecycle) RecordAttemptTiming(ctx context.Context, attemptRecord requestlog.AttemptRecord, facts AttemptTimingFacts) {
+	recorder, ok := l.requestLog.(attemptTimingRecorder)
+	if !ok || attemptRecord.ID == 0 {
+		return
+	}
+
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	_, _ = recorder.RecordAttemptTiming(auditCtx, requestlog.RecordAttemptTimingParams{
+		ID:                   attemptRecord.ID,
+		UpstreamStartedAt:    facts.UpstreamStartedAt,
+		UpstreamFirstTokenAt: facts.UpstreamFirstTokenAt,
+		UpstreamCompletedAt:  facts.UpstreamCompletedAt,
+	})
+}
+
+// RecordAttemptBreakerDisposition first-write-wins 保存 Finish applied/stale 结果；审计失败不改写客户结果。
+func (l *RequestLifecycle) RecordAttemptBreakerDisposition(ctx context.Context, attemptRecord requestlog.AttemptRecord, endpoint, channel string) {
+	recorder, ok := l.requestLog.(attemptBreakerDispositionRecorder)
+	if !ok || attemptRecord.ID == 0 {
+		return
+	}
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	_, _ = recorder.RecordAttemptBreakerDisposition(auditCtx, requestlog.RecordAttemptBreakerDispositionParams{
+		ID:                  attemptRecord.ID,
+		EndpointDisposition: endpoint,
+		ChannelDisposition:  channel,
+	})
 }
 
 // MarkDeliveryCompleted 尽力把请求交付状态推进到 completed（响应已完整交给客户写出路径）。
 // 最佳努力审计：脱离请求 ctx 取消，写失败不影响已成功的主链路与账务。
 func (l *RequestLifecycle) MarkDeliveryCompleted(ctx context.Context, requestRecord requestlog.RequestRecord) {
-	marker, ok := l.requestLog.(deliveryStatusMarker)
-	if !ok {
-		return
-	}
-
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
 
-	_, _ = marker.MarkRequestDeliveryCompleted(auditCtx, requestRecord.ID, time.Now())
+	_, _ = l.requestLog.MarkRequestDeliveryCompleted(auditCtx, requestRecord.ID, time.Now())
 }
 
 // MarkDeliveryInterrupted 尽力把请求交付状态推进到 interrupted（客户端取消、上游中断或尾部错误，
 // 客户未拿到完整响应）。最佳努力审计，写失败不影响主链路与账务。
 func (l *RequestLifecycle) MarkDeliveryInterrupted(ctx context.Context, requestRecord requestlog.RequestRecord) {
-	marker, ok := l.requestLog.(deliveryStatusMarker)
-	if !ok {
-		return
-	}
-
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
 
-	_, _ = marker.MarkRequestDeliveryInterrupted(auditCtx, requestRecord.ID)
+	_, _ = l.requestLog.MarkRequestDeliveryInterrupted(auditCtx, requestRecord.ID)
 }
 
 // MarkRequestFailed 把 request record 标记为失败。

@@ -6,7 +6,7 @@
 //   - 金额一律十进制字符串承载，绝不经 float；毛利用 big.Rat 精确相减（见 helpers.go）。
 //   - 收入/成本/毛利/余额一律按币种分组，绝不跨币种相加。
 //   - 时间区间 [from, to)（左闭右开），与 M6 列表过滤一致。
-//   - channel 无 health 列，健康从区间内 request_attempts 成功率推导并分桶。
+//   - 不派生 healthy/degraded/unhealthy 等主观结论，只返回区间客观事实。
 package dashboard
 
 import (
@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 )
 
 // 时间序列指标与时间桶单位的合法取值。
@@ -115,19 +114,11 @@ type Series struct {
 // Service 提供工作台看板只读聚合。
 type Service struct {
 	store Store
-	// settings 供每请求现读健康分桶阈值(admin_backend.channel_health_thresholds);
-	// nil(单测)回代码默认。
-	settings *appsettings.SettingsStore
 }
 
 // NewService 创建工作台看板只读聚合服务。
-func NewService(store Store, settings *appsettings.SettingsStore) *Service {
-	return &Service{store: store, settings: settings}
-}
-
-// healthThresholds 读取当前生效的分桶阈值。
-func (s *Service) healthThresholds(ctx context.Context) appsettings.ChannelHealthThresholds {
-	return appsettings.AdminBackendChannelHealthThresholds(ctx, s.settings)
+func NewService(store Store) *Service {
+	return &Service{store: store}
 }
 
 // Timeseries 按 metric 分派返回 [from, to) 区间内按时间桶聚合的序列。
@@ -203,4 +194,3 @@ func moneyByCurrency2(rows []sqlc.DashboardCostByCurrencyRow) []MoneyByCurrency 
 	}
 	return out
 }
-

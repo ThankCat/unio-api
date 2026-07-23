@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -134,58 +132,54 @@ func (r *fakeGatewayServerAppRows) Conn() *pgx.Conn {
 	return nil
 }
 
-func TestNewGatewayServerAppBuildsHandlerAfterProviderPreflight(t *testing.T) {
+func TestGatewayServerProviderAdapterPreflightAcceptsEnabledBindings(t *testing.T) {
 	db := &fakeGatewayServerAppDB{
 		rows: []sqlc.ListEnabledChannelAdaptersRow{
 			{ChannelID: 1, Protocol: "openai", AdapterKey: "deepseek", ProviderSlug: "deepseek"},
 			{ChannelID: 2, Protocol: "anthropic", AdapterKey: "deepseek", ProviderSlug: "deepseek"},
 		},
 	}
-
-	app, err := NewGatewayServerApp(context.Background(), GatewayServerAppDeps{
-		Logger: zap.NewNop(),
-		Config: newGatewayServerAppTestConfig(),
-		DB:     db,
-	})
+	registry, err := NewAdapterRegistry(nil, zap.NewNop())
 	if err != nil {
-		t.Fatalf("NewGatewayServerApp returned error: %v", err)
+		t.Fatalf("NewAdapterRegistry returned error: %v", err)
 	}
-	if app == nil || app.Handler == nil {
-		t.Fatal("expected server app with handler")
+	preflight := NewProviderAdapterPreflight(sqlc.New(db), registry)
+	if err := preflight.ValidateEnabledChannelBindings(context.Background()); err != nil {
+		t.Fatalf("ValidateEnabledChannelBindings returned error: %v", err)
 	}
 	if db.queryCount != 1 {
 		t.Fatalf("expected provider adapter preflight query once, got %d", db.queryCount)
 	}
+}
 
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	rec := httptest.NewRecorder()
-	app.Handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d with body %q", http.StatusOK, rec.Code, rec.Body.String())
+func TestNewGatewayServerAppRequiresRedis(t *testing.T) {
+	app, err := NewGatewayServerApp(context.Background(), GatewayServerAppDeps{
+		Logger: zap.NewNop(),
+		Config: newGatewayServerAppTestConfig(),
+		DB:     &fakeGatewayServerAppDB{},
+	})
+	if err == nil || err.Error() != "gateway-server: redis is required" {
+		t.Fatalf("expected required Redis error, got %v", err)
 	}
-	if rec.Body.String() != "{\"status\":\"ok\"}\n" {
-		t.Fatalf("unexpected health response body %q", rec.Body.String())
+	if app != nil {
+		t.Fatal("expected no server app without Redis")
 	}
 }
 
-func TestNewGatewayServerAppReturnsProviderAdapterPreflightError(t *testing.T) {
+func TestGatewayServerProviderAdapterPreflightRejectsUnknownBinding(t *testing.T) {
 	db := &fakeGatewayServerAppDB{
 		rows: []sqlc.ListEnabledChannelAdaptersRow{
 			{ChannelID: 1, Protocol: "openai", AdapterKey: "unknown", ProviderSlug: "unknown"},
 		},
 	}
-
-	app, err := NewGatewayServerApp(context.Background(), GatewayServerAppDeps{
-		Logger: zap.NewNop(),
-		Config: newGatewayServerAppTestConfig(),
-		DB:     db,
-	})
+	registry, err := NewAdapterRegistry(nil, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewAdapterRegistry returned error: %v", err)
+	}
+	preflight := NewProviderAdapterPreflight(sqlc.New(db), registry)
+	err = preflight.ValidateEnabledChannelBindings(context.Background())
 	if err == nil {
 		t.Fatal("expected preflight error")
-	}
-	if app != nil {
-		t.Fatal("expected no server app when preflight fails")
 	}
 	if !errors.Is(err, ErrProviderAdapterCapabilityMissing) {
 		t.Fatalf("expected ErrProviderAdapterCapabilityMissing, got %v", err)
@@ -193,7 +187,7 @@ func TestNewGatewayServerAppReturnsProviderAdapterPreflightError(t *testing.T) {
 }
 
 func newGatewayServerAppTestConfig() config.Config {
-	// 限流/熔断等 6 组已迁移为运行时配置(app_settings):fake DB 读不到行时回退注册表默认。
+	// Gateway 热路径配置已迁移为运行时配置(app_settings):fake DB 读不到行时回退注册表默认。
 	return config.Config{
 		Redis: config.RedisConfig{KeyNamespace: "unio:test"},
 	}

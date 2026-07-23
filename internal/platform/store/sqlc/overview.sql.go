@@ -753,14 +753,19 @@ SELECT
         END), 0)::float8 AS latency_p95,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE
-            WHEN r.response_started_at IS NOT NULL
+            WHEN r.stream = TRUE AND r.response_started_at IS NOT NULL
             THEN (EXTRACT(EPOCH FROM (r.response_started_at - r.started_at)) * 1000)::float8
         END), 0)::float8 AS ttft_p95,
     COALESCE(SUM(u.output_tokens_total) FILTER (WHERE r.status = 'succeeded'), 0)::bigint AS output_tokens,
     COALESCE(SUM(
         CASE
             WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-            THEN EXTRACT(EPOCH FROM (r.completed_at - COALESCE(r.response_started_at, r.started_at)))
+            THEN EXTRACT(EPOCH FROM (
+                r.completed_at - COALESCE(
+                    CASE WHEN r.stream = TRUE THEN r.response_started_at END,
+                    r.started_at
+                )
+            ))
         END
     ), 0)::float8 AS generation_seconds
 FROM request_records r
@@ -820,6 +825,7 @@ SELECT
     c.status,
     COUNT(a.id) AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
+    COUNT(a.id) FILTER (WHERE a.status = 'failed' AND a.fault_party = 'upstream') AS attempt_failed,
     (
         SELECT a2.error_code
         FROM request_attempts a2
@@ -837,8 +843,9 @@ LEFT JOIN request_attempts a
     AND ($2::timestamptz IS NULL OR a.created_at < $2::timestamptz)
 GROUP BY c.id, c.name, c.status
 HAVING COUNT(a.id) > 0
-ORDER BY (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id), 0)) ASC NULLS LAST,
-         COUNT(a.id) DESC
+ORDER BY COUNT(a.id) FILTER (WHERE a.status = 'failed' AND a.fault_party = 'upstream') DESC,
+         COUNT(a.id) DESC,
+         c.id ASC
 LIMIT 10
 `
 
@@ -853,11 +860,11 @@ type DashboardRadarBadChannelsRow struct {
 	Status           string
 	AttemptTotal     int64
 	AttemptSucceeded int64
+	AttemptFailed    int64
 	RecentErrorCode  pgtype.Text
 }
 
-// DashboardRadarBadChannels 返回区间内有尝试的渠道里「最差」的若干条（精简列，§1.8）：
-// 渠道 + 健康（service 据成功率分桶）+ 成功率 + 最近错误码。完整列表去渠道页。
+// DashboardRadarBadChannels 返回区间内真实上游失败最多的渠道（精简客观事实）。
 func (q *Queries) DashboardRadarBadChannels(ctx context.Context, arg DashboardRadarBadChannelsParams) ([]DashboardRadarBadChannelsRow, error) {
 	rows, err := q.db.Query(ctx, dashboardRadarBadChannels, arg.FromTime, arg.ToTime)
 	if err != nil {
@@ -873,6 +880,7 @@ func (q *Queries) DashboardRadarBadChannels(ctx context.Context, arg DashboardRa
 			&i.Status,
 			&i.AttemptTotal,
 			&i.AttemptSucceeded,
+			&i.AttemptFailed,
 			&i.RecentErrorCode,
 		); err != nil {
 			return nil, err
@@ -915,7 +923,7 @@ FROM (
             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8
         END AS lat_ms,
         CASE
-            WHEN response_started_at IS NOT NULL
+            WHEN stream = TRUE AND response_started_at IS NOT NULL
             THEN (EXTRACT(EPOCH FROM (response_started_at - started_at)) * 1000)::float8
         END AS ttft_ms
     FROM request_records
@@ -955,7 +963,7 @@ type DashboardRadarRequestPerfRow struct {
 // 时间区间 [from, to)（左闭右开）；可空 from_time/to_time（narg，NULL = 不过滤）。
 // 性能/延迟以 request_records 时间戳推导（无预存延迟列）：
 //
-//	延迟 = completed_at - started_at；TTFT = response_started_at - started_at（毫秒）。
+//	延迟 = completed_at - started_at；TTFT 仅对 stream=true 使用 response_started_at - started_at（毫秒）。
 //
 // percentile_cont 自动忽略 ORDER BY 中的 NULL 行，故用 CASE 把非目标行置 NULL。
 // DashboardRadarRequestPerf 在区间内一次性返回请求终态计数 + 超时数 + 延迟/TTFT 分位数（request 粒度）。
@@ -1012,7 +1020,12 @@ SELECT
     COALESCE(SUM(
         CASE
             WHEN r.completed_at IS NOT NULL
-            THEN EXTRACT(EPOCH FROM (r.completed_at - COALESCE(r.response_started_at, r.started_at)))
+            THEN EXTRACT(EPOCH FROM (
+                r.completed_at - COALESCE(
+                    CASE WHEN r.stream = TRUE THEN r.response_started_at END,
+                    r.started_at
+                )
+            ))
         END
     ), 0)::float8 AS generation_seconds
 FROM request_records r
@@ -1033,7 +1046,7 @@ type DashboardRadarThroughputRow struct {
 }
 
 // DashboardRadarThroughput 汇总成功请求的输出 token 与生成耗时（秒），service 据此算 TPS。
-// 生成耗时优先用 completed_at - response_started_at（首 token 之后），缺 TTFT 时退回 started_at。
+// 流式生成耗时优先用 completed_at - response_started_at；非流式和缺 TTFT 时使用 started_at。
 func (q *Queries) DashboardRadarThroughput(ctx context.Context, arg DashboardRadarThroughputParams) (DashboardRadarThroughputRow, error) {
 	row := q.db.QueryRow(ctx, dashboardRadarThroughput, arg.FromTime, arg.ToTime)
 	var i DashboardRadarThroughputRow

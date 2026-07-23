@@ -9,25 +9,25 @@ import (
 	"time"
 )
 
-// 本文件登记 6 组 gateway 热路径运行时配置(迁移自 env,DEC:db_only + 全热改):
-// 熔断器 / 限流全局默认 / 流式 idle 超时 / 渠道 429 冷却 / 凭据 401 阈值 / 默认渠道超时。
-// 值形状与校验对齐原 config.go 的 env 校验。
+// 本文件登记 gateway 热路径运行时配置。P4 的 breaker、rate/concurrency defaults 与
+// routing balance 由 Redis committed runtime control 驱动；其余配置继续通过 settings applier
+// 热更新。429 cooldown 是 Redis 全局事实，不属于已删除的 timeout/5xx 进程内失败软冷却。
 //
 // 单位约定(用户决策):时长一律 int 毫秒,字段/key 带 _ms 后缀(对齐 channels.timeout_ms 惯例),
 // 不用 "10m" 之类的 duration 字符串;比例用 (0,1] 浮点;计数用普通整数。
 
 // gateway 配置在 app_settings 中的 key。
 const (
-	GatewayCircuitBreakerKey         = "gateway.circuit_breaker"
-	GatewayRateLimitDefaultsKey      = "gateway.rate_limit_defaults"
-	GatewayStreamIdleTimeoutKey      = "gateway.stream_idle_timeout_ms"
-	GatewayChannelCooldownKey        = "gateway.channel_ratelimit_cooldown"
-	GatewayCredential401ThresholdKey = "gateway.credential_401_threshold"
-	GatewayDefaultChannelTimeoutKey  = "gateway.default_channel_timeout_ms"
-	GatewayFailureCooldownKey        = "gateway.channel_failure_cooldown_ms"
-	GatewayConcurrencyDefaultsKey    = "gateway.concurrency_defaults"
-	GatewayRoutingStickyKey          = "gateway.routing_sticky"
-	GatewayRoutingBalanceKey         = "gateway.routing_balance"
+	GatewayCircuitBreakerKey           = "gateway.circuit_breaker"
+	GatewayRouteRateLimitDefaultsKey   = "gateway.route_rate_limit_defaults"
+	GatewayChannelRateLimitDefaultsKey = "gateway.channel_rate_limit_defaults"
+	GatewayStreamIdleTimeoutKey        = "gateway.stream_idle_timeout_ms"
+	GatewayChannelCooldownKey          = "gateway.channel_ratelimit_cooldown"
+	GatewayCredential401ThresholdKey   = "gateway.credential_401_threshold"
+	GatewayDefaultChannelTimeoutKey    = "gateway.default_channel_timeout_ms"
+	GatewayConcurrencyDefaultsKey      = "gateway.concurrency_defaults"
+	GatewayRoutingStickyKey            = "gateway.routing_sticky"
+	GatewayRoutingBalanceKey           = "gateway.routing_balance"
 )
 
 func msToDuration(ms int64) time.Duration {
@@ -48,41 +48,93 @@ func strictUnmarshal(raw []byte, v any) error {
 
 // ---- 熔断器 ----
 
-// CircuitBreakerSettings 是渠道熔断器的运行时配置(enabled 亦可热改:关闭时熔断器放行且不记状态)。
+// CircuitBreakerSettings 是 P4 Endpoint/Channel 全局熔断与 permit 生命周期配置。
+// OpenDuration 仅供 Phase E 删除前的旧进程内 breaker 兼容使用，JSON 不再包含该字段。
 type CircuitBreakerSettings struct {
-	Enabled      bool
-	Window       time.Duration
-	MinRequests  int
-	FailureRatio float64
+	Enabled                             bool
+	Window                              time.Duration
+	MinRequests                         int
+	FailureRatio                        float64
+	ConsecutiveFailures                 int
+	ConsecutiveWindow                   time.Duration
+	HalfOpenSuccesses                   int
+	AttemptPermitTTL                    time.Duration
+	AttemptPermitRenewInterval          time.Duration
+	AttemptPermitTerminalTTL            time.Duration
+	EndpointBaseURLRevisionOperationTTL time.Duration
+	EndpointStatusRevisionOperationTTL  time.Duration
+	EndpointStatusBatchMax              int
+	OpenDurations                       []time.Duration
+	EndpointAmbiguousDistinctChannels   int
+	EndpointAmbiguousDistinctModels     int
+
 	OpenDuration time.Duration
 }
 
-// DefaultCircuitBreakerSettings 与原 CIRCUIT_BREAKER_* env 默认一致。
+// DefaultCircuitBreakerSettings 返回 P4 §4.8 的已决议默认值。
 func DefaultCircuitBreakerSettings() CircuitBreakerSettings {
 	return CircuitBreakerSettings{
-		Enabled:      true,
-		Window:       30 * time.Second,
-		MinRequests:  20,
-		FailureRatio: 0.5,
-		OpenDuration: 30 * time.Second,
+		Enabled:                             true,
+		Window:                              30 * time.Second,
+		MinRequests:                         20,
+		FailureRatio:                        0.5,
+		ConsecutiveFailures:                 3,
+		ConsecutiveWindow:                   10 * time.Second,
+		HalfOpenSuccesses:                   2,
+		AttemptPermitTTL:                    30 * time.Second,
+		AttemptPermitRenewInterval:          10 * time.Second,
+		AttemptPermitTerminalTTL:            5 * time.Minute,
+		EndpointBaseURLRevisionOperationTTL: 24 * time.Hour,
+		EndpointStatusRevisionOperationTTL:  24 * time.Hour,
+		EndpointStatusBatchMax:              256,
+		OpenDurations:                       []time.Duration{15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute},
+		EndpointAmbiguousDistinctChannels:   2,
+		EndpointAmbiguousDistinctModels:     2,
+		OpenDuration:                        15 * time.Second,
 	}
 }
 
 type circuitBreakerDoc struct {
-	Enabled        bool    `json:"enabled"`
-	WindowMs       int64   `json:"window_ms"`
-	MinRequests    int     `json:"min_requests"`
-	FailureRatio   float64 `json:"failure_ratio"`
-	OpenDurationMs int64   `json:"open_duration_ms"`
+	Enabled                               bool    `json:"enabled"`
+	WindowMs                              int64   `json:"window_ms"`
+	MinRequests                           int     `json:"min_requests"`
+	FailureRatio                          float64 `json:"failure_ratio"`
+	ConsecutiveFailures                   int     `json:"consecutive_failures"`
+	ConsecutiveWindowMs                   int64   `json:"consecutive_window_ms"`
+	HalfOpenSuccesses                     int     `json:"half_open_successes"`
+	AttemptPermitTTLMs                    int64   `json:"attempt_permit_ttl_ms"`
+	AttemptPermitRenewIntervalMs          int64   `json:"attempt_permit_renew_interval_ms"`
+	AttemptPermitTerminalTTLMs            int64   `json:"attempt_permit_terminal_ttl_ms"`
+	EndpointBaseURLRevisionOperationTTLMs int64   `json:"endpoint_base_url_revision_operation_ttl_ms"`
+	EndpointStatusRevisionOperationTTLMs  int64   `json:"endpoint_status_revision_operation_ttl_ms"`
+	EndpointStatusBatchMax                int     `json:"endpoint_status_batch_max"`
+	OpenDurationsMs                       []int64 `json:"open_durations_ms"`
+	EndpointAmbiguousDistinctChannels     int     `json:"endpoint_ambiguous_distinct_channels"`
+	EndpointAmbiguousDistinctModels       int     `json:"endpoint_ambiguous_distinct_models"`
 }
 
 func encodeCircuitBreakerSettings(s CircuitBreakerSettings) json.RawMessage {
+	openDurations := make([]int64, 0, len(s.OpenDurations))
+	for _, d := range s.OpenDurations {
+		openDurations = append(openDurations, durationToMs(d))
+	}
 	raw, err := json.Marshal(circuitBreakerDoc{
-		Enabled:        s.Enabled,
-		WindowMs:       durationToMs(s.Window),
-		MinRequests:    s.MinRequests,
-		FailureRatio:   s.FailureRatio,
-		OpenDurationMs: durationToMs(s.OpenDuration),
+		Enabled:                               s.Enabled,
+		WindowMs:                              durationToMs(s.Window),
+		MinRequests:                           s.MinRequests,
+		FailureRatio:                          s.FailureRatio,
+		ConsecutiveFailures:                   s.ConsecutiveFailures,
+		ConsecutiveWindowMs:                   durationToMs(s.ConsecutiveWindow),
+		HalfOpenSuccesses:                     s.HalfOpenSuccesses,
+		AttemptPermitTTLMs:                    durationToMs(s.AttemptPermitTTL),
+		AttemptPermitRenewIntervalMs:          durationToMs(s.AttemptPermitRenewInterval),
+		AttemptPermitTerminalTTLMs:            durationToMs(s.AttemptPermitTerminalTTL),
+		EndpointBaseURLRevisionOperationTTLMs: durationToMs(s.EndpointBaseURLRevisionOperationTTL),
+		EndpointStatusRevisionOperationTTLMs:  durationToMs(s.EndpointStatusRevisionOperationTTL),
+		EndpointStatusBatchMax:                s.EndpointStatusBatchMax,
+		OpenDurationsMs:                       openDurations,
+		EndpointAmbiguousDistinctChannels:     s.EndpointAmbiguousDistinctChannels,
+		EndpointAmbiguousDistinctModels:       s.EndpointAmbiguousDistinctModels,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("appsettings: encode circuit breaker settings: %v", err))
@@ -97,24 +149,62 @@ func DecodeCircuitBreakerSettings(raw []byte) (CircuitBreakerSettings, error) {
 		return CircuitBreakerSettings{}, err
 	}
 	s := CircuitBreakerSettings{
-		Enabled:      doc.Enabled,
-		Window:       msToDuration(doc.WindowMs),
-		MinRequests:  doc.MinRequests,
-		FailureRatio: doc.FailureRatio,
-		OpenDuration: msToDuration(doc.OpenDurationMs),
+		Enabled:                             doc.Enabled,
+		Window:                              msToDuration(doc.WindowMs),
+		MinRequests:                         doc.MinRequests,
+		FailureRatio:                        doc.FailureRatio,
+		ConsecutiveFailures:                 doc.ConsecutiveFailures,
+		ConsecutiveWindow:                   msToDuration(doc.ConsecutiveWindowMs),
+		HalfOpenSuccesses:                   doc.HalfOpenSuccesses,
+		AttemptPermitTTL:                    msToDuration(doc.AttemptPermitTTLMs),
+		AttemptPermitRenewInterval:          msToDuration(doc.AttemptPermitRenewIntervalMs),
+		AttemptPermitTerminalTTL:            msToDuration(doc.AttemptPermitTerminalTTLMs),
+		EndpointBaseURLRevisionOperationTTL: msToDuration(doc.EndpointBaseURLRevisionOperationTTLMs),
+		EndpointStatusRevisionOperationTTL:  msToDuration(doc.EndpointStatusRevisionOperationTTLMs),
+		EndpointStatusBatchMax:              doc.EndpointStatusBatchMax,
+		EndpointAmbiguousDistinctChannels:   doc.EndpointAmbiguousDistinctChannels,
+		EndpointAmbiguousDistinctModels:     doc.EndpointAmbiguousDistinctModels,
 	}
 	if doc.WindowMs <= 0 {
 		return CircuitBreakerSettings{}, errors.New("window_ms must be > 0")
 	}
-	if s.MinRequests <= 0 {
-		return CircuitBreakerSettings{}, errors.New("min_requests must be > 0")
+	if s.MinRequests < 2 {
+		return CircuitBreakerSettings{}, errors.New("min_requests must be >= 2")
 	}
 	if s.FailureRatio <= 0 || s.FailureRatio > 1 {
 		return CircuitBreakerSettings{}, errors.New("failure_ratio must be within (0, 1]")
 	}
-	if doc.OpenDurationMs <= 0 {
-		return CircuitBreakerSettings{}, errors.New("open_duration_ms must be > 0")
+	if s.ConsecutiveFailures < 1 || doc.ConsecutiveWindowMs <= 0 {
+		return CircuitBreakerSettings{}, errors.New("consecutive_failures and consecutive_window_ms must be > 0")
 	}
+	if s.HalfOpenSuccesses < 2 {
+		return CircuitBreakerSettings{}, errors.New("half_open_successes must be >= 2")
+	}
+	if doc.AttemptPermitTTLMs <= 0 || doc.AttemptPermitRenewIntervalMs <= 0 || doc.AttemptPermitTerminalTTLMs < doc.AttemptPermitTTLMs {
+		return CircuitBreakerSettings{}, errors.New("invalid attempt permit ttl settings")
+	}
+	if doc.AttemptPermitRenewIntervalMs*3 > doc.AttemptPermitTTLMs {
+		return CircuitBreakerSettings{}, errors.New("attempt_permit_renew_interval_ms * 3 must be <= attempt_permit_ttl_ms")
+	}
+	if doc.EndpointBaseURLRevisionOperationTTLMs <= 0 || doc.EndpointStatusRevisionOperationTTLMs <= 0 {
+		return CircuitBreakerSettings{}, errors.New("endpoint revision operation ttl must be > 0")
+	}
+	if s.EndpointStatusBatchMax < 1 || s.EndpointStatusBatchMax > 1024 {
+		return CircuitBreakerSettings{}, errors.New("endpoint_status_batch_max must be within [1, 1024]")
+	}
+	if len(doc.OpenDurationsMs) == 0 {
+		return CircuitBreakerSettings{}, errors.New("open_durations_ms must not be empty")
+	}
+	for i, ms := range doc.OpenDurationsMs {
+		if ms <= 0 || (i > 0 && ms < doc.OpenDurationsMs[i-1]) {
+			return CircuitBreakerSettings{}, errors.New("open_durations_ms must be positive and non-decreasing")
+		}
+		s.OpenDurations = append(s.OpenDurations, msToDuration(ms))
+	}
+	if s.EndpointAmbiguousDistinctChannels < 2 || s.EndpointAmbiguousDistinctModels < 2 {
+		return CircuitBreakerSettings{}, errors.New("endpoint ambiguous distinct thresholds must be >= 2")
+	}
+	s.OpenDuration = s.OpenDurations[0]
 	return s, nil
 }
 
@@ -122,9 +212,10 @@ func circuitBreakerDefinition() Definition {
 	return Definition{
 		Key:      GatewayCircuitBreakerKey,
 		Category: "gateway",
-		Label:    "渠道熔断器",
-		Description: "按渠道统计固定窗口错误率,超阈值熔断(open_duration_ms 后半开探测)。" +
-			"enabled=false 时放行全部且不记状态。window_ms/open_duration_ms 单位毫秒;failure_ratio∈(0,1]。",
+		Label:    "全局熔断器",
+		Description: "Endpoint 与渠道共享的 Redis 熔断状态机及 attempt permit 生命周期。" +
+			"支持快速连续失败、比例触发、half-open 双成功恢复和分级退避；时长单位毫秒。" +
+			"enabled=false 只关闭 breaker 门禁，不关闭 permit、Endpoint 围栏或限额；Redis 故障始终拒绝准入。",
 		HotReload: true,
 		Default:   encodeCircuitBreakerSettings(DefaultCircuitBreakerSettings()),
 		Validate: func(raw json.RawMessage) error {
@@ -143,71 +234,55 @@ func GatewayCircuitBreaker(ctx context.Context, store *SettingsStore) CircuitBre
 	return s
 }
 
-// ---- 限流全局默认 ----
+// ---- 线路/渠道限流默认 ----
 
-// RateLimitFailurePolicy 的合法取值。
-const (
-	RateLimitFailClosed = "fail_closed"
-	RateLimitFailOpen   = "fail_open"
-)
-
-// RateLimitDefaultsSettings 是两层限流(线路+用户 / 渠道)的全局默认上限与故障策略。
-// RPM/TPM/RPD 为 0 表示该维度默认不限;具体主体可在 api_keys/channels 行覆盖。
+// RateLimitDefaultsSettings 是线路或渠道使用的 RPM/TPM/RPD 默认。
+// RPM/TPM/RPD 为 0 表示该维度默认不限；具体主体可在 routes/channels 行覆盖。
 type RateLimitDefaultsSettings struct {
-	RPM           int64
-	TPM           int64
-	RPD           int64
-	FailurePolicy string
+	RPM int64
+	TPM int64
+	RPD int64
 }
 
-// FailOpen 报告计数后端故障时是否放行。
-func (s RateLimitDefaultsSettings) FailOpen() bool {
-	return s.FailurePolicy == RateLimitFailOpen
-}
-
-// DefaultRateLimitDefaultsSettings 与原 RATE_LIMIT_* env 默认一致。
+// DefaultRateLimitDefaultsSettings 按 DEC-053/DEC-054 默认三维均不限；显式线路或渠道限额仍可覆盖。
 func DefaultRateLimitDefaultsSettings() RateLimitDefaultsSettings {
-	return RateLimitDefaultsSettings{RPM: 60, TPM: 0, RPD: 0, FailurePolicy: RateLimitFailClosed}
+	return RateLimitDefaultsSettings{RPM: 0, TPM: 0, RPD: 0}
 }
 
 type rateLimitDefaultsDoc struct {
-	RPM           int64  `json:"rpm"`
-	TPM           int64  `json:"tpm"`
-	RPD           int64  `json:"rpd"`
-	FailurePolicy string `json:"failure_policy"`
+	RPM int64 `json:"rpm"`
+	TPM int64 `json:"tpm"`
+	RPD int64 `json:"rpd"`
 }
 
 func encodeRateLimitDefaultsSettings(s RateLimitDefaultsSettings) json.RawMessage {
-	raw, err := json.Marshal(rateLimitDefaultsDoc(s))
+	raw, err := json.Marshal(rateLimitDefaultsDoc{RPM: s.RPM, TPM: s.TPM, RPD: s.RPD})
 	if err != nil {
 		panic(fmt.Sprintf("appsettings: encode rate limit defaults: %v", err))
 	}
 	return raw
 }
 
-// DecodeRateLimitDefaultsSettings 解码并校验限流全局默认配置(拒绝未知字段)。
+// DecodeRateLimitDefaultsSettings 解码并校验默认限流配置(拒绝未知字段)。
 func DecodeRateLimitDefaultsSettings(raw []byte) (RateLimitDefaultsSettings, error) {
 	var doc rateLimitDefaultsDoc
 	if err := strictUnmarshal(raw, &doc); err != nil {
 		return RateLimitDefaultsSettings{}, err
 	}
-	s := RateLimitDefaultsSettings(doc)
+	s := RateLimitDefaultsSettings{RPM: doc.RPM, TPM: doc.TPM, RPD: doc.RPD}
 	if s.RPM < 0 || s.TPM < 0 || s.RPD < 0 {
 		return RateLimitDefaultsSettings{}, errors.New("rpm/tpm/rpd must be zero or positive")
-	}
-	if s.FailurePolicy != RateLimitFailClosed && s.FailurePolicy != RateLimitFailOpen {
-		return RateLimitDefaultsSettings{}, fmt.Errorf("invalid failure_policy %q (want fail_closed|fail_open)", s.FailurePolicy)
 	}
 	return s, nil
 }
 
-func rateLimitDefaultsDefinition() Definition {
+func routeRateLimitDefaultsDefinition() Definition {
 	return Definition{
-		Key:      GatewayRateLimitDefaultsKey,
+		Key:      GatewayRouteRateLimitDefaultsKey,
 		Category: "gateway",
-		Label:    "限流全局默认(RPM/TPM/RPD)",
-		Description: "未在 API Key/渠道上单独配置时生效的全局默认上限,0=该维度不限。" +
-			"failure_policy 决定 Redis 计数故障时 fail_closed(拒绝)或 fail_open(放行)。",
+		Label:    "线路默认限流(RPM/TPM/RPD)",
+		Description: "线路未单独配置时，按(线路,用户)生效的默认上限，0=该维度不限。" +
+			"Redis revisioned control 是执行权威；Redis 或 BreakerStore 故障固定拒绝准入，不提供绕过开关。",
 		HotReload: true,
 		Default:   encodeRateLimitDefaultsSettings(DefaultRateLimitDefaultsSettings()),
 		Validate: func(raw json.RawMessage) error {
@@ -217,9 +292,34 @@ func rateLimitDefaultsDefinition() Definition {
 	}
 }
 
-// GatewayRateLimitDefaults 读取当前生效的限流全局默认(解码失败回默认)。
-func GatewayRateLimitDefaults(ctx context.Context, store *SettingsStore) RateLimitDefaultsSettings {
-	s, err := DecodeRateLimitDefaultsSettings(store.Raw(ctx, GatewayRateLimitDefaultsKey))
+func channelRateLimitDefaultsDefinition() Definition {
+	return Definition{
+		Key:      GatewayChannelRateLimitDefaultsKey,
+		Category: "gateway",
+		Label:    "渠道默认限流(RPM/TPM/RPD)",
+		Description: "渠道未单独配置时生效的默认上限，0=该维度不限。" +
+			"渠道限流只影响候选渠道准入，命中后跳过该渠道并继续 fallback；Redis 故障固定拒绝准入。",
+		HotReload: true,
+		Default:   encodeRateLimitDefaultsSettings(DefaultRateLimitDefaultsSettings()),
+		Validate: func(raw json.RawMessage) error {
+			_, err := DecodeRateLimitDefaultsSettings(raw)
+			return err
+		},
+	}
+}
+
+// GatewayRouteRateLimitDefaults 读取当前生效的线路默认限流(解码失败回默认)。
+func GatewayRouteRateLimitDefaults(ctx context.Context, store *SettingsStore) RateLimitDefaultsSettings {
+	s, err := DecodeRateLimitDefaultsSettings(store.Raw(ctx, GatewayRouteRateLimitDefaultsKey))
+	if err != nil {
+		return DefaultRateLimitDefaultsSettings()
+	}
+	return s
+}
+
+// GatewayChannelRateLimitDefaults 读取当前生效的渠道默认限流(解码失败回默认)。
+func GatewayChannelRateLimitDefaults(ctx context.Context, store *SettingsStore) RateLimitDefaultsSettings {
+	s, err := DecodeRateLimitDefaultsSettings(store.Raw(ctx, GatewayChannelRateLimitDefaultsKey))
 	if err != nil {
 		return DefaultRateLimitDefaultsSettings()
 	}
@@ -405,49 +505,6 @@ func GatewayCredential401Threshold(ctx context.Context, store *SettingsStore) in
 	return n
 }
 
-// ---- 渠道失败软冷却（DEC-029） ----
-
-// DefaultFailureCooldownSetting 是 timeout/5xx 失败后的默认软冷却时长（对齐 LiteLLM 默认 5s 冷却）。
-const DefaultFailureCooldownSetting = 5 * time.Second
-
-// DecodeNonNegativeMsSetting 解码 int 毫秒标量值，要求 >= 0（0=关闭该功能），返回 time.Duration。
-func DecodeNonNegativeMsSetting(raw []byte) (time.Duration, error) {
-	var ms int64
-	if err := json.Unmarshal(raw, &ms); err != nil {
-		return 0, fmt.Errorf("value must be an integer of milliseconds: %w", err)
-	}
-	if ms < 0 {
-		return 0, errors.New("milliseconds must not be negative")
-	}
-	return msToDuration(ms), nil
-}
-
-func failureCooldownDefinition() Definition {
-	return Definition{
-		Key:      GatewayFailureCooldownKey,
-		Category: "gateway",
-		Label:    "渠道失败软冷却",
-		Description: "渠道发生 timeout/5xx 类上游故障后，把它软冷却这么长时间：期间新请求的候选排序把该渠道" +
-			"demote 到末尾（健康渠道优先），让紧随其后的客户端重试快速绕开慢渠道。只重排不剔除——" +
-			"该模型只有一条可用渠道时行为不变（唯一渠道保护）。单位毫秒，0=关闭。",
-		HotReload: true,
-		Default:   encodeMsSetting(DefaultFailureCooldownSetting),
-		Validate: func(raw json.RawMessage) error {
-			_, err := DecodeNonNegativeMsSetting(raw)
-			return err
-		},
-	}
-}
-
-// GatewayFailureCooldown 读取当前生效的渠道失败软冷却时长（解码失败回默认；0=关闭）。
-func GatewayFailureCooldown(ctx context.Context, store *SettingsStore) time.Duration {
-	d, err := DecodeNonNegativeMsSetting(store.Raw(ctx, GatewayFailureCooldownKey))
-	if err != nil {
-		return DefaultFailureCooldownSetting
-	}
-	return d
-}
-
 // ---- 在途并发全局默认（DEC-029） ----
 
 // ConcurrencyDefaultsSettings 是两级在途并发上限的全局默认（0=该级不限）。
@@ -518,23 +575,47 @@ func GatewayConcurrencyDefaults(ctx context.Context, store *SettingsStore) Concu
 
 // ---- balanced 容量调度 ----
 
-// RoutingBalanceSettings 控制 balanced 在线路池内是否读取容量，以及是否按剩余容量加权。
+// RoutingBalanceSettings 是 balanced 的容量、错误率与 stream-only TTFT 组合权重配置。
+// Enabled/WeightByRemaining 仅供 Phase E 删除前的旧评分器兼容，JSON 不再包含这两个字段。
 type RoutingBalanceSettings struct {
+	TTFTTarget           time.Duration
+	TTFTWeight           float64
+	CostWeight           float64
+	MinimumRoutingFactor float64
+	TTFTEWMAAlpha        float64
+
 	Enabled           bool
 	WeightByRemaining bool
 }
 
 func DefaultRoutingBalanceSettings() RoutingBalanceSettings {
-	return RoutingBalanceSettings{Enabled: true, WeightByRemaining: true}
+	return RoutingBalanceSettings{
+		TTFTTarget:           2 * time.Second,
+		TTFTWeight:           0.35,
+		CostWeight:           0.5,
+		MinimumRoutingFactor: 0.05,
+		TTFTEWMAAlpha:        0.2,
+		Enabled:              true,
+		WeightByRemaining:    true,
+	}
 }
 
 type routingBalanceDoc struct {
-	Enabled           bool `json:"enabled"`
-	WeightByRemaining bool `json:"weight_by_remaining"`
+	TTFTTargetMs         int64   `json:"ttft_target_ms"`
+	TTFTWeight           float64 `json:"ttft_weight"`
+	CostWeight           float64 `json:"cost_weight"`
+	MinimumRoutingFactor float64 `json:"minimum_routing_factor"`
+	TTFTEWMAAlpha        float64 `json:"ttft_ewma_alpha"`
 }
 
 func encodeRoutingBalanceSettings(s RoutingBalanceSettings) json.RawMessage {
-	raw, err := json.Marshal(routingBalanceDoc(s))
+	raw, err := json.Marshal(routingBalanceDoc{
+		TTFTTargetMs:         durationToMs(s.TTFTTarget),
+		TTFTWeight:           s.TTFTWeight,
+		CostWeight:           s.CostWeight,
+		MinimumRoutingFactor: s.MinimumRoutingFactor,
+		TTFTEWMAAlpha:        s.TTFTEWMAAlpha,
+	})
 	if err != nil {
 		panic(fmt.Sprintf("appsettings: encode routing balance: %v", err))
 	}
@@ -546,17 +627,58 @@ func DecodeRoutingBalanceSettings(raw []byte) (RoutingBalanceSettings, error) {
 	if err := strictUnmarshal(raw, &doc); err != nil {
 		return RoutingBalanceSettings{}, err
 	}
-	return RoutingBalanceSettings(doc), nil
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return RoutingBalanceSettings{}, err
+	}
+	for _, name := range []string{"ttft_target_ms", "ttft_weight", "minimum_routing_factor", "ttft_ewma_alpha"} {
+		value, ok := fields[name]
+		if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return RoutingBalanceSettings{}, fmt.Errorf("%s is required", name)
+		}
+	}
+	_, hasCostWeight := fields["cost_weight"]
+	if len(fields) != 4 && !(len(fields) == 5 && hasCostWeight) {
+		return RoutingBalanceSettings{}, errors.New("routing balance payload must use the legacy four-field or current five-field shape")
+	}
+	if hasCostWeight && bytes.Equal(bytes.TrimSpace(fields["cost_weight"]), []byte("null")) {
+		return RoutingBalanceSettings{}, errors.New("cost_weight must be within [0, 1]")
+	}
+	if doc.TTFTTargetMs <= 0 {
+		return RoutingBalanceSettings{}, errors.New("ttft_target_ms must be > 0")
+	}
+	if doc.TTFTWeight < 0 || doc.TTFTWeight > 1 {
+		return RoutingBalanceSettings{}, errors.New("ttft_weight must be within [0, 1]")
+	}
+	if doc.CostWeight < 0 || doc.CostWeight > 1 {
+		return RoutingBalanceSettings{}, errors.New("cost_weight must be within [0, 1]")
+	}
+	if doc.MinimumRoutingFactor <= 0 || doc.MinimumRoutingFactor > 1 {
+		return RoutingBalanceSettings{}, errors.New("minimum_routing_factor must be within (0, 1]")
+	}
+	if doc.TTFTEWMAAlpha <= 0 || doc.TTFTEWMAAlpha > 1 {
+		return RoutingBalanceSettings{}, errors.New("ttft_ewma_alpha must be within (0, 1]")
+	}
+	return RoutingBalanceSettings{
+		TTFTTarget:           msToDuration(doc.TTFTTargetMs),
+		TTFTWeight:           doc.TTFTWeight,
+		CostWeight:           doc.CostWeight,
+		MinimumRoutingFactor: doc.MinimumRoutingFactor,
+		TTFTEWMAAlpha:        doc.TTFTEWMAAlpha,
+		Enabled:              true,
+		WeightByRemaining:    true,
+	}, nil
 }
 
 func routingBalanceDefinition() Definition {
 	return Definition{
-		Key:         GatewayRoutingBalanceKey,
-		Category:    "gateway",
-		Label:       "线路负载均衡",
-		Description: "balanced 仅在线路显式渠道池内调度。enabled=false 时池内均匀分流；weight_by_remaining=false 时不读取容量、仅按健康度加权。",
-		HotReload:   true,
-		Default:     encodeRoutingBalanceSettings(DefaultRoutingBalanceSettings()),
+		Key:      GatewayRoutingBalanceKey,
+		Category: "gateway",
+		Label:    "线路负载均衡",
+		Description: "balanced 在线路显式渠道池内组合容量、成本、客观错误率与 stream-only TTFT EWMA。" +
+			"流式和非流式调度共用流式 TTFT 样本；无样本时延迟项保持中性。",
+		HotReload: true,
+		Default:   encodeRoutingBalanceSettings(DefaultRoutingBalanceSettings()),
 		Validate: func(raw json.RawMessage) error {
 			_, err := DecodeRoutingBalanceSettings(raw)
 			return err

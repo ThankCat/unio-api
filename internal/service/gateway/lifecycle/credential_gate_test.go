@@ -10,20 +10,27 @@ import (
 
 // recordingInvalidator 记录被翻失效的渠道(线程安全,供并发测试)。
 type recordingInvalidator struct {
-	mu  sync.Mutex
-	ids []int64
+	mu        sync.Mutex
+	revisions []CredentialRevision
 }
 
-func (r *recordingInvalidator) MarkChannelCredentialInvalid(channelID int64) {
+func (r *recordingInvalidator) MarkChannelCredentialInvalid(revision CredentialRevision) {
 	r.mu.Lock()
-	r.ids = append(r.ids, channelID)
+	r.revisions = append(r.revisions, revision)
 	r.mu.Unlock()
 }
 
 func (r *recordingInvalidator) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.ids)
+	return len(r.revisions)
+}
+
+func credentialRevision(channelID, configRevision int64) CredentialRevision {
+	return CredentialRevision{
+		ChannelID: channelID, ChannelConfigRevision: configRevision,
+		EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
+	}
 }
 
 func authErr() error {
@@ -34,12 +41,13 @@ func TestCredentialGateTripsAtThreshold(t *testing.T) {
 	inv := &recordingInvalidator{}
 	g := NewChannelCredentialGate(3, inv)
 
-	g.RecordResult(7, authErr())
-	g.RecordResult(7, authErr())
+	revision := credentialRevision(7, 3)
+	g.RecordResult(revision, authErr())
+	g.RecordResult(revision, authErr())
 	if inv.count() != 0 {
 		t.Fatal("should not trip below threshold")
 	}
-	g.RecordResult(7, authErr())
+	g.RecordResult(revision, authErr())
 	if inv.count() != 1 {
 		t.Fatalf("should trip at threshold, got %d invalidations", inv.count())
 	}
@@ -49,24 +57,26 @@ func TestCredentialGateSetThresholdTakesEffect(t *testing.T) {
 	inv := &recordingInvalidator{}
 	g := NewChannelCredentialGate(5, inv)
 
-	g.RecordResult(7, authErr())
-	g.RecordResult(7, authErr())
+	revision := credentialRevision(7, 3)
+	g.RecordResult(revision, authErr())
+	g.RecordResult(revision, authErr())
 
 	// 热改阈值为 3:已有连续计数 2 保留,下一次 401 即达标。
 	g.SetThreshold(3)
-	g.RecordResult(7, authErr())
+	g.RecordResult(revision, authErr())
 	if inv.count() != 1 {
 		t.Fatalf("should trip using hot-reloaded threshold, got %d", inv.count())
 	}
 
 	// <=0 沿用兜底 3。
 	g.SetThreshold(0)
-	g.RecordResult(8, authErr())
-	g.RecordResult(8, authErr())
+	revision = credentialRevision(8, 4)
+	g.RecordResult(revision, authErr())
+	g.RecordResult(revision, authErr())
 	if inv.count() != 1 {
 		t.Fatal("fallback threshold should be 3, not lower")
 	}
-	g.RecordResult(8, authErr())
+	g.RecordResult(revision, authErr())
 	if inv.count() != 2 {
 		t.Fatalf("fallback threshold 3 should trip, got %d", inv.count())
 	}
@@ -83,8 +93,32 @@ func TestCredentialGateConcurrentReload(t *testing.T) {
 		}
 	}()
 	for i := 0; i < 500; i++ {
-		g.RecordResult(1, authErr())
-		g.RecordResult(1, nil)
+		revision := credentialRevision(1, 1)
+		g.RecordResult(revision, authErr())
+		g.RecordResult(revision, nil)
 	}
 	<-done
+}
+
+func TestCredentialGateKeepsRevisionsIsolated(t *testing.T) {
+	inv := &recordingInvalidator{}
+	g := NewChannelCredentialGate(2, inv)
+	oldRevision := credentialRevision(7, 3)
+	newRevision := credentialRevision(7, 4)
+
+	g.RecordResult(oldRevision, authErr())
+	g.RecordResult(newRevision, authErr())
+	if inv.count() != 0 {
+		t.Fatal("401 results from different channel generations must not share a counter")
+	}
+	g.RecordResult(newRevision, authErr())
+	if inv.count() != 1 {
+		t.Fatalf("current generation should trip independently, got %d invalidations", inv.count())
+	}
+	inv.mu.Lock()
+	got := inv.revisions[0]
+	inv.mu.Unlock()
+	if got != newRevision {
+		t.Fatalf("invalidated revision=%+v, want %+v", got, newRevision)
+	}
 }

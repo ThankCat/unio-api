@@ -31,8 +31,12 @@ func TestArchiveChannelWithReplacementKeepsFixedRouteNonEmpty(t *testing.T) {
 		t.Fatalf("replace and archive channel: affected=%d err=%v", affected, err)
 	}
 	var status string
-	if err := tx.QueryRow(ctx, `SELECT status FROM channels WHERE id=$1`, targetID).Scan(&status); err != nil || status != "archived" {
+	var configRevision int64
+	if err := tx.QueryRow(ctx, `SELECT status, config_revision FROM channels WHERE id=$1`, targetID).Scan(&status, &configRevision); err != nil || status != "archived" {
 		t.Fatalf("target channel not archived: status=%q err=%v", status, err)
+	}
+	if configRevision != 2 {
+		t.Fatalf("archive must advance channel config revision, got %d", configRevision)
 	}
 	var count int64
 	var onlyChannelID int64
@@ -68,14 +72,41 @@ func TestArchiveProviderWithReplacementKeepsRouteNonEmpty(t *testing.T) {
 		t.Fatalf("replace and archive provider: affected=%d err=%v", affected, err)
 	}
 	var providerStatus, channelStatus string
-	if err := tx.QueryRow(ctx, `SELECT p.status, c.status FROM providers p JOIN channels c ON c.provider_id=p.id WHERE p.id=$1`, targetProviderID).Scan(&providerStatus, &channelStatus); err != nil {
+	var channelConfigRevision int64
+	if err := tx.QueryRow(ctx, `SELECT p.status, c.status, c.config_revision FROM providers p JOIN channels c ON c.provider_id=p.id WHERE p.id=$1`, targetProviderID).Scan(&providerStatus, &channelStatus, &channelConfigRevision); err != nil {
 		t.Fatalf("read archived provider/channel: %v", err)
 	}
 	if providerStatus != "archived" || channelStatus != "archived" {
 		t.Fatalf("unexpected archive states: provider=%s channel=%s", providerStatus, channelStatus)
 	}
+	if channelConfigRevision != 2 {
+		t.Fatalf("provider cascade archive must advance channel config revision, got %d", channelConfigRevision)
+	}
 	var count int64
 	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM route_channels WHERE route_id=$1 AND channel_id=$2`, route.ID, replacementChannelID).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("replacement missing from route: count=%d err=%v", count, err)
+	}
+}
+
+func TestArchiveAndRestoreChannelEachAdvanceConfigRevision(t *testing.T) {
+	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+	suffix := time.Now().UnixNano()
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("archive-restore-provider-%d", suffix), "enabled")
+	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("archive-restore-channel-%d", suffix), "enabled", 1, nil)
+
+	if affected, err := queries.ArchiveChannelCascade(ctx, channelID); err != nil || affected != 1 {
+		t.Fatalf("archive channel: affected=%d err=%v", affected, err)
+	}
+	if affected, err := queries.RestoreChannel(ctx, channelID); err != nil || affected != 1 {
+		t.Fatalf("restore channel: affected=%d err=%v", affected, err)
+	}
+	var status string
+	var revision int64
+	if err := tx.QueryRow(ctx, `SELECT status, config_revision FROM channels WHERE id=$1`, channelID).Scan(&status, &revision); err != nil {
+		t.Fatal(err)
+	}
+	if status != "disabled" || revision != 3 {
+		t.Fatalf("archive+restore status/revision=%s/%d, want disabled/3", status, revision)
 	}
 }

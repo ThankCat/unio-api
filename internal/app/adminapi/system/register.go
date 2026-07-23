@@ -8,8 +8,9 @@ import (
 
 // Deps 是系统设置模块的路由依赖（结算补偿任务只读视图 + 运行时配置 + 进程级配置只读面板）。
 type Deps struct {
-	RecoveryJobService      RecoveryJobQueryService
-	ProviderSettingsService ProviderSettingsService
+	RecoveryJobService        RecoveryJobQueryService
+	ProviderSettingsService   ProviderSettingsService
+	RuntimeDiagnosticsService RuntimeDiagnosticsService
 
 	// 进程级 env 生效阈值（脱敏）快照，恒有效，故 /system/config 无条件注册。
 	GatewayConfig config.GatewayConfig
@@ -19,6 +20,11 @@ type Deps struct {
 
 // Register 注册系统设置模块路由。
 func Register(r chi.Router, d Deps) {
+	if d.RuntimeDiagnosticsService != nil {
+		h := &runtimeDiagnosticsHandler{service: d.RuntimeDiagnosticsService}
+		r.Get("/system/runtime-diagnostics", h.get)
+	}
+
 	// M8 系统/任务/健康：结算补偿任务只读视图（列表脱敏内部详情，详情按 ?include_internal 回显）。
 	if d.RecoveryJobService != nil {
 		rjh := &recoveryJobsHandler{service: d.RecoveryJobService}

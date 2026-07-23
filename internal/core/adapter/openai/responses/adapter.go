@@ -61,6 +61,7 @@ func (a *Adapter) CreateResponse(ctx context.Context, ch channel.Runtime, req Re
 		return nil, err
 	}
 
+	adapter.MarkTransportStarted(ctx)
 	upstreamResp, err := a.client.Do(httpReq)
 	if err != nil {
 		return nil, newUpstreamSendError(err, "send responses request")
@@ -140,7 +141,10 @@ func (a *Adapter) newUpstreamRequest(ctx context.Context, ch channel.Runtime, re
 		)
 	}
 
-	url := strings.TrimRight(ch.BaseURL, "/") + "/responses"
+	url, err := adapter.BuildUpstreamURL(ch.BaseURL, adapter.OperationPathResponses)
+	if err != nil {
+		return nil, err
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(req.Body))
 	if err != nil {
 		return nil, failure.Wrap(

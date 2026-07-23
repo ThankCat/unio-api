@@ -383,7 +383,7 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("request-attempt-channel-%d", suffix), "enabled", 10, nil)
 	record := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("request-attempt-%d", suffix))
 
-	secondAttempt, err := queries.CreateRequestAttempt(ctx, sqlc.CreateRequestAttemptParams{
+	secondAttempt, err := queries.CreateRequestAttempt(ctx, withRequestAttemptRuntimeIdentity(t, ctx, tx, channelID, sqlc.CreateRequestAttemptParams{
 		RequestRecordID:       record.ID,
 		AttemptIndex:          1,
 		ProviderID:            providerID,
@@ -399,12 +399,12 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 		ErrorMessage:          pgtype.Text{Valid: false},
 		StartedAt:             pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		CompletedAt:           pgtype.Timestamptz{Valid: false},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create second attempt: %v", err)
 	}
 
-	firstAttempt, err := queries.CreateRequestAttempt(ctx, sqlc.CreateRequestAttemptParams{
+	firstAttempt, err := queries.CreateRequestAttempt(ctx, withRequestAttemptRuntimeIdentity(t, ctx, tx, channelID, sqlc.CreateRequestAttemptParams{
 		RequestRecordID:       record.ID,
 		AttemptIndex:          0,
 		ProviderID:            providerID,
@@ -420,7 +420,7 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 		ErrorMessage:          pgtype.Text{Valid: false},
 		StartedAt:             pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		CompletedAt:           pgtype.Timestamptz{Valid: false},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create first attempt: %v", err)
 	}
@@ -477,7 +477,7 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 		t.Fatalf("expected attempts ordered by index, got ids %d then %d", attempts[0].ID, attempts[1].ID)
 	}
 
-	_, err = queries.CreateRequestAttempt(ctx, sqlc.CreateRequestAttemptParams{
+	_, err = queries.CreateRequestAttempt(ctx, withRequestAttemptRuntimeIdentity(t, ctx, tx, channelID, sqlc.CreateRequestAttemptParams{
 		RequestRecordID:       record.ID,
 		AttemptIndex:          0,
 		ProviderID:            providerID,
@@ -493,7 +493,7 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 		ErrorMessage:          pgtype.Text{Valid: false},
 		StartedAt:             pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		CompletedAt:           pgtype.Timestamptz{Valid: false},
-	})
+	}))
 	if err == nil {
 		t.Fatal("expected duplicate attempt_index error")
 	}
@@ -512,7 +512,7 @@ func TestRequestAttemptStateMachineKeepsTerminalFacts(t *testing.T) {
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("attempt-state-channel-%d", suffix), "enabled", 10, nil)
 	record := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("attempt-state-%d", suffix))
 
-	attempt, err := queries.CreateRequestAttempt(ctx, sqlc.CreateRequestAttemptParams{
+	attempt, err := queries.CreateRequestAttempt(ctx, withRequestAttemptRuntimeIdentity(t, ctx, tx, channelID, sqlc.CreateRequestAttemptParams{
 		RequestRecordID:       record.ID,
 		AttemptIndex:          0,
 		ProviderID:            providerID,
@@ -528,7 +528,7 @@ func TestRequestAttemptStateMachineKeepsTerminalFacts(t *testing.T) {
 		ErrorMessage:          pgtype.Text{Valid: false},
 		StartedAt:             pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		CompletedAt:           pgtype.Timestamptz{Valid: false},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create attempt: %v", err)
 	}
@@ -614,7 +614,7 @@ func TestRequestAttemptResponseStartedCanBeRecordedBeforeTerminal(t *testing.T) 
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("attempt-start-channel-%d", suffix), "enabled", 10, nil)
 	record := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("attempt-start-%d", suffix))
 
-	attempt, err := queries.CreateRequestAttempt(ctx, sqlc.CreateRequestAttemptParams{
+	attempt, err := queries.CreateRequestAttempt(ctx, withRequestAttemptRuntimeIdentity(t, ctx, tx, channelID, sqlc.CreateRequestAttemptParams{
 		RequestRecordID:       record.ID,
 		AttemptIndex:          0,
 		ProviderID:            providerID,
@@ -630,7 +630,7 @@ func TestRequestAttemptResponseStartedCanBeRecordedBeforeTerminal(t *testing.T) 
 		ErrorMessage:          pgtype.Text{Valid: false},
 		StartedAt:             pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		CompletedAt:           pgtype.Timestamptz{Valid: false},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create attempt: %v", err)
 	}

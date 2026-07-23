@@ -18,6 +18,7 @@ import (
 // Queries 是 SettingsStore 依赖的最小 DB 能力(由 *sqlc.Queries 实现)。
 type Queries interface {
 	GetAppSetting(ctx context.Context, key string) ([]byte, error)
+	GetAppSettingRecord(ctx context.Context, key string) (sqlc.GetAppSettingRecordRow, error)
 	UpsertAppSetting(ctx context.Context, arg sqlc.UpsertAppSettingParams) error
 	SeedAppSetting(ctx context.Context, arg sqlc.SeedAppSettingParams) error
 }
@@ -178,6 +179,9 @@ func (s *SettingsStore) Set(ctx context.Context, key string, value json.RawMessa
 	if !ok {
 		return fmt.Errorf("appsettings: unknown key %q", key)
 	}
+	if isRuntimeControlSetting(key) {
+		return fmt.Errorf("appsettings: key %q requires durable runtime-control publisher", key)
+	}
 	if def.Validate != nil {
 		if err := def.Validate(value); err != nil {
 			return err
@@ -199,6 +203,35 @@ func (s *SettingsStore) Set(ctx context.Context, key string, value json.RawMessa
 	s.writeRedis(ctx, key, value)
 	s.writeLocal(key, value)
 	return nil
+}
+
+// SettingRecord 是 app_settings 的 PostgreSQL 管理事实；关键 P4 设置不得从普通 Redis cache 推断 revision。
+type SettingRecord struct {
+	Key         string
+	Value       json.RawMessage
+	Description string
+	Revision    int64
+}
+
+// Record 强一致读取 PostgreSQL 设置行及 revision。
+func (s *SettingsStore) Record(ctx context.Context, key string) (SettingRecord, error) {
+	row, err := s.queries.GetAppSettingRecord(ctx, key)
+	if err != nil {
+		return SettingRecord{}, err
+	}
+	return SettingRecord{
+		Key:         row.Key,
+		Value:       json.RawMessage(row.Value),
+		Description: row.Description,
+		Revision:    row.Revision,
+	}, nil
+}
+
+// PublishCache 在 durable control 已确认 committed 后刷新普通 settings 镜像与本地缓存。
+// 该缓存只服务旧的普通设置读取面，不是五个 P4 关键设置的执行权威。
+func (s *SettingsStore) PublishCache(ctx context.Context, key string, value json.RawMessage) {
+	s.writeRedis(ctx, key, value)
+	s.writeLocal(key, value)
 }
 
 // EffectiveView 是某个 key 在「本进程此刻」的生效快照(供可观测接口)。

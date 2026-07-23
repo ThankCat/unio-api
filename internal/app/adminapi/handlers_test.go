@@ -35,6 +35,8 @@ type fakeProviderService struct {
 	updateErr          error
 	deleteErr          error
 	archiveReplacement *int64
+	archiveOut         provider.StatusChangeResult
+	restoreOut         provider.StatusChangeResult
 }
 
 func (s *fakeProviderService) List(context.Context, provider.ListParams) (provider.ListResult, error) {
@@ -52,15 +54,20 @@ func (s *fakeProviderService) Update(context.Context, provider.UpdateInput) (pro
 func (s *fakeProviderService) Delete(context.Context, int64) error {
 	return s.deleteErr
 }
-func (s *fakeProviderService) Archive(_ context.Context, _ int64, replacement *int64) error {
+func (s *fakeProviderService) Archive(_ context.Context, _ int64, replacement *int64) (provider.StatusChangeResult, error) {
 	s.archiveReplacement = replacement
-	return nil
+	return s.archiveOut, nil
 }
-func (s *fakeProviderService) Restore(context.Context, int64) error { return nil }
+func (s *fakeProviderService) Restore(context.Context, int64) (provider.StatusChangeResult, error) {
+	return s.restoreOut, nil
+}
 
 type fakeChannelService struct {
+	getOut             channel.Channel
+	getErr             error
 	createOut          channel.Channel
 	createErr          error
+	rotateOut          channel.RotateCredentialResult
 	rotateErr          error
 	deleteErr          error
 	adapterKeyOptions  []channel.AdapterKeyOption
@@ -71,7 +78,7 @@ func (s *fakeChannelService) List(context.Context, channel.ListParams) (channel.
 	return channel.ListResult{}, nil
 }
 func (s *fakeChannelService) Get(context.Context, int64) (channel.Channel, error) {
-	return channel.Channel{}, nil
+	return s.getOut, s.getErr
 }
 func (s *fakeChannelService) Create(context.Context, channel.CreateInput) (channel.Channel, error) {
 	return s.createOut, s.createErr
@@ -79,8 +86,8 @@ func (s *fakeChannelService) Create(context.Context, channel.CreateInput) (chann
 func (s *fakeChannelService) Update(context.Context, channel.UpdateInput) (channel.Channel, error) {
 	return channel.Channel{}, nil
 }
-func (s *fakeChannelService) RotateCredential(context.Context, channel.RotateCredentialInput) error {
-	return s.rotateErr
+func (s *fakeChannelService) RotateCredential(context.Context, channel.RotateCredentialInput) (channel.RotateCredentialResult, error) {
+	return s.rotateOut, s.rotateErr
 }
 func (s *fakeChannelService) Delete(context.Context, int64) error {
 	return s.deleteErr
@@ -300,6 +307,24 @@ func TestProvidersRequireToken(t *testing.T) {
 	}
 }
 
+func TestUpdateProviderReturnsRuntimeSyncSummary(t *testing.T) {
+	handler := newServicesRouter(t, &fakeProviderService{updateOut: provider.Provider{
+		ID: 7, Slug: "openai", Name: "OpenAI", Status: "disabled",
+		RuntimeSyncPending: true, AffectedEndpointCount: 2,
+	}}, nil)
+
+	rec := doAdmin(t, handler, http.MethodPatch, "/admin/v1/providers/7", `{"name":"OpenAI","status":"disabled"}`, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`"runtime_sync_pending":true`, `"affected_endpoint_count":2`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response missing %s: %s", want, body)
+		}
+	}
+}
+
 func TestDeleteProviderReturns204(t *testing.T) {
 	handler := newServicesRouter(t, &fakeProviderService{}, nil)
 
@@ -322,14 +347,27 @@ func TestDeleteProviderConflictReturns409(t *testing.T) {
 }
 
 func TestArchiveProviderAcceptsReplacement(t *testing.T) {
-	svc := &fakeProviderService{}
+	svc := &fakeProviderService{archiveOut: provider.StatusChangeResult{
+		RuntimeSyncPending: true, AffectedEndpointCount: 2,
+	}}
 	handler := newServicesRouter(t, svc, nil)
 	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers/7/archive", `{"replacement_channel_id":10}`, true)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d (%s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
 	if svc.archiveReplacement == nil || *svc.archiveReplacement != 10 {
 		t.Fatalf("replacement channel was not forwarded: %v", svc.archiveReplacement)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`"runtime_sync_pending":true`, `"affected_endpoint_count":2`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response missing %s: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{`"token"`, `"payload"`, `"payload_hash"`, `"base_url"`} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("response leaked operation detail %s: %s", forbidden, body)
+		}
 	}
 }
 
@@ -337,11 +375,28 @@ func TestArchiveProviderAcceptsEmptyBody(t *testing.T) {
 	svc := &fakeProviderService{}
 	handler := newServicesRouter(t, svc, nil)
 	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers/7/archive", "", true)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d (%s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
 	if svc.archiveReplacement != nil {
 		t.Fatalf("unexpected replacement channel: %v", svc.archiveReplacement)
+	}
+}
+
+func TestRestoreProviderReturnsCommittedRuntimeSummary(t *testing.T) {
+	handler := newServicesRouter(t, &fakeProviderService{restoreOut: provider.StatusChangeResult{
+		AffectedEndpointCount: 1,
+	}}, nil)
+
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers/7/restore", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`"runtime_sync_pending":false`, `"affected_endpoint_count":1`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response missing %s: %s", want, body)
+		}
 	}
 }
 
@@ -403,12 +458,28 @@ func TestListAdapterKeysReturnsOptions(t *testing.T) {
 	}
 }
 
-func TestRotateChannelCredentialReturns204(t *testing.T) {
-	handler := newServicesRouter(t, nil, &fakeChannelService{})
+func TestRotateChannelCredentialReturnsVerificationResult(t *testing.T) {
+	baseURLRevision, statusRevision, configRevision := int64(3), int64(4), int64(8)
+	handler := newServicesRouter(t, nil, &fakeChannelService{rotateOut: channel.RotateCredentialResult{
+		CredentialSaved: true, CredentialChanged: true, SavedConfigRevision: 8, CurrentConfigRevision: 9,
+		Verification: channel.CredentialVerification{
+			State:                         channel.CredentialVerificationPassed,
+			TestedEndpointBaseURLRevision: &baseURLRevision,
+			TestedEndpointStatusRevision:  &statusRevision,
+			TestedConfigRevision:          &configRevision,
+			StateChangeApplied:            true, CredentialValidAfter: true,
+		},
+	}})
 
 	rec := doAdmin(t, handler, http.MethodPut, "/admin/v1/channels/5/credential", `{"credential":"sk-new"}`, true)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusNoContent, rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`"credential_saved":true`, `"credential_changed":true`, `"state":"passed"`, `"current_config_revision":9`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response missing %s: %s", want, body)
+		}
 	}
 }
 

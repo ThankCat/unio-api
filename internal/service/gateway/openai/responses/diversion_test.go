@@ -79,11 +79,12 @@ func TestCreateResponse_DirectPassthrough(t *testing.T) {
 
 	svc := newServiceForTest(router, registry, settlement, authorizer, requestLog)
 
-	resp, err := svc.CreateResponse(ctxWithPrincipal(), directRequest())
+	result, err := svc.CreateResponse(ctxWithPrincipal(), directRequest())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	resp := result.Response
 	// 直传 adapter 命中一次，桥接 chat adapter 完全未触达。
 	if directAdapter.called != 1 {
 		t.Fatalf("expected direct adapter called once, got %d", directAdapter.called)
@@ -148,11 +149,12 @@ func TestCreateResponse_DiversionDeepseekToBridge(t *testing.T) {
 
 	svc := newServiceForTest(router, registry, settlement, authorizer, requestLog)
 
-	resp, err := svc.CreateResponse(ctxWithPrincipal(), instructionsRequest())
+	result, err := svc.CreateResponse(ctxWithPrincipal(), instructionsRequest())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	resp := result.Response
 	// 直传 adapter 零触达；桥接 chat adapter 命中。
 	if directAdapter.called != 0 {
 		t.Fatalf("direct adapter must not be invoked for chat-only candidate, called %d", directAdapter.called)

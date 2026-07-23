@@ -5,8 +5,6 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/opsutil"
-	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -67,15 +65,15 @@ type ActionItem struct {
 	Deeplink string
 }
 
-// BadChannel 是异常渠道 Top 精简行（§1.8：渠道·健康·成功率·最近错误）。
+// BadChannel 是失败渠道 Top 精简行，只包含区间客观事实。
 type BadChannel struct {
 	ChannelID        int64
 	Name             string
 	Status           string
 	AttemptTotal     int64
 	AttemptSucceeded int64
+	AttemptFailed    int64
 	SuccessRate      float64
-	Bucket           string
 	RecentErrorCode  string
 }
 
@@ -135,7 +133,6 @@ type BreakdownRow struct {
 	Latency        LatencyStats
 	LatencyP95     float64 // route/model 维度仍用 P95 单值
 	AvgTPS         float64 // provider/channel 维度：成功 attempt 的加权平均输出速度
-	HealthBucket   string  // healthy/degraded/unhealthy/no_data（按请求成功率分桶）
 	RecentError    string
 	ChannelCount   int64           // provider 维度：命中渠道数
 	SuccessBuckets []SuccessBucket // channel 维度：最近 10 分钟 attempt 成功率桶
@@ -276,7 +273,7 @@ func (s *Service) Radar(ctx context.Context, from, to time.Time) (RadarReport, e
 	report.BillingExceptionAmount = pickCurrency(exceptionAmounts(exceptionRows), displayCurrency)
 	report.Settlement = SettlementBacklog{Active: backlog.ActiveTotal, Dead: backlog.DeadTotal}
 
-	report.BadChannels = badChannels(badRows, s.healthThresholds(ctx))
+	report.BadChannels = badChannels(badRows)
 	report.ActionItems = buildActionItems(report)
 
 	return report, nil
@@ -285,7 +282,6 @@ func (s *Service) Radar(ctx context.Context, from, to time.Time) (RadarReport, e
 // Breakdown 返回某维度（provider|channel|model|route）的表现 Top 精简行。
 func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time.Time) ([]BreakdownRow, error) {
 	fromTS, toTS := tsNarg(from), tsNarg(to)
-	th := s.healthThresholds(ctx)
 	switch dimension {
 	case BreakdownProvider:
 		rows, err := s.store.DashboardBreakdownProvider(ctx, sqlc.DashboardBreakdownProviderParams{FromTime: fromTS, ToTime: toTS})
@@ -304,7 +300,7 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 				AvgTPS:       r.AvgTps,
 			}
 			applyBreakdownMoney(&br, r.RevenueUsd, r.CostUsd)
-			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal, th)
+			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal)
 			id := r.ProviderID
 			br.RefID = &id
 			br.Label = r.ProviderName
@@ -327,7 +323,7 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 				LatencyP95: r.LatencyP95,
 			}
 			applyBreakdownMoney(&br, r.RevenueUsd, r.CostUsd)
-			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal, th)
+			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal)
 			// route_id 在 DB 层 NOT NULL（线路必填），恒有值。
 			id := r.RouteID
 			br.RefID = &id
@@ -375,7 +371,7 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 				SuccessBuckets: bucketsByChannel[r.ChannelID],
 			}
 			applyBreakdownMoney(&br, r.RevenueUsd, r.CostUsd)
-			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal, th)
+			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal)
 			id := r.ChannelID
 			br.RefID = &id
 			br.Label = r.ChannelName
@@ -402,7 +398,7 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 				LatencyP95: r.LatencyP95,
 			}
 			applyBreakdownMoney(&br, r.RevenueUsd, r.CostUsd)
-			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal, th)
+			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal)
 			out = append(out, br)
 		}
 		return out, nil
@@ -466,12 +462,11 @@ func requestLatencyStats(avg, p50, p90, p95, p99 float64, sample, succeeded int6
 	return s
 }
 
-func fillBreakdownCounts(br *BreakdownRow, succeeded, terminal, failed int64, th appsettings.ChannelHealthThresholds) {
+func fillBreakdownCounts(br *BreakdownRow, succeeded, terminal, failed int64) {
 	br.Terminal = terminal
 	br.Succeeded = succeeded
 	br.Failed = failed
 	br.SuccessRate = successRate(succeeded, terminal)
-	br.HealthBucket = opsutil.HealthBucket(succeeded, terminal, th.HealthyRate, th.DegradedRate)
 }
 
 func applyBreakdownMoney(br *BreakdownRow, revenue, cost pgtype.Numeric) {
@@ -480,7 +475,7 @@ func applyBreakdownMoney(br *BreakdownRow, revenue, cost pgtype.Numeric) {
 	br.MarginUSD = subtractDecimal(br.RevenueUSD, br.CostUSD)
 }
 
-func badChannels(rows []sqlc.DashboardRadarBadChannelsRow, th appsettings.ChannelHealthThresholds) []BadChannel {
+func badChannels(rows []sqlc.DashboardRadarBadChannelsRow) []BadChannel {
 	out := make([]BadChannel, 0, len(rows))
 	for _, r := range rows {
 		bc := BadChannel{
@@ -489,8 +484,8 @@ func badChannels(rows []sqlc.DashboardRadarBadChannelsRow, th appsettings.Channe
 			Status:           r.Status,
 			AttemptTotal:     r.AttemptTotal,
 			AttemptSucceeded: r.AttemptSucceeded,
+			AttemptFailed:    r.AttemptFailed,
 			SuccessRate:      successRate(r.AttemptSucceeded, r.AttemptTotal),
-			Bucket:           opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal, th.HealthyRate, th.DegradedRate),
 		}
 		if r.RecentErrorCode.Valid {
 			bc.RecentErrorCode = r.RecentErrorCode.String
@@ -518,16 +513,6 @@ func buildActionItems(r RadarReport) []ActionItem {
 			Detail:   "区间内新增计费异常事件",
 			Deeplink: "/ledger?tab=exceptions",
 		})
-	}
-	for _, bc := range r.BadChannels {
-		if bc.Bucket == "unhealthy" {
-			items = append(items, ActionItem{
-				Kind: "channel", Severity: "warning",
-				Title:    "渠道不健康：" + bc.Name,
-				Detail:   "近区间成功率偏低，建议检查上游与凭据",
-				Deeplink: "/channels",
-			})
-		}
 	}
 	return items
 }

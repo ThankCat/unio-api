@@ -58,7 +58,7 @@ type Route struct {
 	// PriceRatio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；十进制字符串承载，避免精度丢失。
 	PriceRatio string
 	// RPMLimit/TPMLimit/RPDLimit 是线路级限流上限（DEC-027：按 (线路,用户) 计数）：
-	// nil=继承全局默认，0=显式不限，>0=具体上限。
+	// nil=继承线路默认限流，0=显式不限，>0=具体上限。
 	RPMLimit *int64
 	TPMLimit *int64
 	RPDLimit *int64
@@ -88,7 +88,7 @@ type RouteChannel struct {
 }
 
 // CreateInput 创建线路入参。PriceRatio 为客户售价倍率（十进制字符串，空=默认 1.0）。
-// RPM/TPM/RPDLimit 为线路级限流上限（nil=继承全局默认，0=不限，>0=上限）。
+// RPM/TPM/RPDLimit 为线路级限流上限（nil=继承线路默认限流，0=不限，>0=上限）。
 type CreateInput struct {
 	Name       string
 	Mode       string
@@ -104,7 +104,7 @@ type CreateInput struct {
 }
 
 // UpdateInput 更新线路入参（含渠道池整体替换）。PriceRatio 为客户售价倍率（十进制字符串，空=默认 1.0）。
-// RPM/TPM/RPDLimit 为线路级限流上限（nil=继承全局默认，0=不限，>0=上限）。
+// RPM/TPM/RPDLimit 为线路级限流上限（nil=继承线路默认限流，0=不限，>0=上限）。
 type UpdateInput struct {
 	ID         int64
 	Name       string
@@ -558,7 +558,7 @@ func validateRateLimits(rpm, tpm, rpd *int64) error {
 	return nil
 }
 
-// int4Narg 把 *int64 转成可空 pgtype.Int4（nil=NULL 继承全局默认；含 0=显式不限）。
+// int4Narg 把 *int64 转成可空 pgtype.Int4（nil=NULL 继承线路默认限流；含 0=显式不限）。
 func int4Narg(v *int64) pgtype.Int4 {
 	if v == nil {
 		return pgtype.Int4{Valid: false}
@@ -566,7 +566,7 @@ func int4Narg(v *int64) pgtype.Int4 {
 	return pgtype.Int4{Int32: int32(*v), Valid: true}
 }
 
-// int4ToPtr 把可空 pgtype.Int4 转成 *int64（nil=继承全局默认）。
+// int4ToPtr 把可空 pgtype.Int4 转成 *int64（nil=继承线路默认限流）。
 func int4ToPtr(v pgtype.Int4) *int64 {
 	if !v.Valid {
 		return nil

@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
 // partialOutputTokenCounter 按 upstream model 估算一段可见输出文本的 token 数，供 partial settlement 使用。
@@ -90,6 +91,10 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
 		})
 	}
+	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
+		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
+		return err
+	}
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
@@ -139,25 +144,34 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 			lifecycle.EndGatewaySpan(streamSpan, streamErr)
 			return streamOutcome.Facts, streamErr
 		},
-		EmitChunk: func(chunk chatcompletionsadapter.ChatStreamChunk) error {
+		EmitChunk: func(chunk chatcompletionsadapter.ChatStreamChunk, ack lifecycle.StreamWriteAck) error {
 			chunkResp := mapAdapterStreamChunkToGateway(req.Model, chunk, req.StreamIncludeUsage())
 			// 优先透传上游 chunk created；仅当上游未给出（0）时回退本地时间。
 			if chunkResp.Created == 0 {
 				chunkResp.Created = time.Now().Unix()
 			}
-			return emit(chunkResp)
+			if err := emit(chunkResp); err != nil {
+				return err
+			}
+			ack()
+			return nil
 		},
-		Finish: func(streamID string, finalUsage adapter.ChatUsage, _ string) error {
+		Finish: func(streamID string, finalUsage adapter.ChatUsage, _ string, ack lifecycle.StreamWriteAck) error {
 			if !req.StreamIncludeUsage() {
 				return nil
 			}
-			return emitClientStreamUsage(emit, req, streamID, finalUsage)
+			if err := emitClientStreamUsage(emit, req, streamID, finalUsage); err != nil {
+				return err
+			}
+			ack()
+			return nil
 		},
 	})
-	if runResult.Attempts > 1 && principal.RouteID != nil {
+	if runResult.RoutingFallback && principal.RouteID != nil {
 		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
 			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
-			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(), Attempts: runResult.Attempts,
+			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+			FallbackOccurred: true, FallbackChain: runResult.TransportChain,
 		})
 	}
 	outcome = runResult.Outcome

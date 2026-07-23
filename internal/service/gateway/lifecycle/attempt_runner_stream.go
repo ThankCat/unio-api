@@ -12,6 +12,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 )
@@ -24,16 +25,18 @@ import (
 // 闭包自行开启/结束（与非流式 Invoke 一致）。
 type StreamUpstream func(ctx context.Context, candidate routing.ChatRouteCandidate, onChunk func(chatcompletionsadapter.ChatStreamChunk) error) (*adapter.ResponseFacts, error)
 
+// StreamWriteAck 必须在一个客户 SSE 帧成功写出后调用。一个上游 chunk 可能展开为多个客户帧，
+// 因此确认动作由协议 encoder 在每次真实 write 成功后触发。
+type StreamWriteAck func()
+
 // EmitStreamChunk 由协议把单个上游内容 chunk 翻译为协议 SSE 帧（chat chunk / responses 命名事件）。
-//
-// runner 只在「非 usage、非纯 id」的内容 chunk 上调用它，并已先行置 emitted、计数 stream started。
-type EmitStreamChunk func(chunk chatcompletionsadapter.ChatStreamChunk) error
+type EmitStreamChunk func(chunk chatcompletionsadapter.ChatStreamChunk, ack StreamWriteAck) error
 
 // FinishStream 在流式结算成功后，让协议写出收尾帧。
 //
 // chat 按 include_usage 决定是否写 usage chunk；responses 总是写 response.completed。是否真正写帧的
 // 协议差异由闭包内部决定，runner 在成功路径上总会调用一次。
-type FinishStream func(streamID string, finalUsage adapter.ChatUsage, finishReason string) error
+type FinishStream func(streamID string, finalUsage adapter.ChatUsage, finishReason string, ack StreamWriteAck) error
 
 // RunStreamParams 是驱动一次流式候选 fallback 循环所需的协议无关参数（chat chunk 载体）。
 //
@@ -72,10 +75,11 @@ type RunStreamParams struct {
 //   - SuppressEmit 为 true 时该 chunk 仅用于内部事实提取（如 chat 的 usage 控制 chunk），
 //     不写客户 SSE、也不置 emitted（保持「首字节前可 fallback」语义）。
 type StreamChunkMeta struct {
-	ID           string
-	FinishReason string
-	Usage        *adapter.ChatUsage
-	SuppressEmit bool
+	ID                 string
+	FinishReason       string
+	Usage              *adapter.ChatUsage
+	SuppressEmit       bool
+	FirstTokenEligible bool // 独立协议元数据，不得由 !SuppressEmit 推导。
 
 	// VisibleText 是该 chunk 对客户可见的输出文本增量，仅供流式 partial settlement 估算 output token。
 	// 不参与 full bill（账务只认 adapter facts）；usage 控制 chunk / 非文本帧应为空。
@@ -86,7 +90,7 @@ type StreamChunkMeta struct {
 type StreamUpstreamGeneric[C any] func(ctx context.Context, candidate routing.ChatRouteCandidate, onChunk func(C) error) (*adapter.ResponseFacts, error)
 
 // EmitStreamChunkGeneric 把单个上游内容 chunk 翻译/透传为协议 SSE 帧（泛型载体版）。
-type EmitStreamChunkGeneric[C any] func(chunk C) error
+type EmitStreamChunkGeneric[C any] func(chunk C, ack StreamWriteAck) error
 
 // RunStreamParamsGeneric 是泛型流式候选 fallback 循环参数。
 //
@@ -182,15 +186,25 @@ func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (
 // 普通内容 chunk 透传。
 func chatStreamChunkMeta(chunk chatcompletionsadapter.ChatStreamChunk) StreamChunkMeta {
 	meta := StreamChunkMeta{
-		ID:           chunk.ID,
-		Usage:        chunk.Usage,
-		SuppressEmit: chunk.Usage != nil,
-		VisibleText:  chunk.Content,
+		ID:                 chunk.ID,
+		Usage:              chunk.Usage,
+		SuppressEmit:       chunk.Usage != nil,
+		FirstTokenEligible: chatChunkFirstTokenEligible(chunk),
+		VisibleText:        chunk.Content,
 	}
 	if chunk.FinishReason != nil {
 		meta.FinishReason = *chunk.FinishReason
 	}
 	return meta
+}
+
+func chatChunkFirstTokenEligible(chunk chatcompletionsadapter.ChatStreamChunk) bool {
+	return chunk.Role != "" ||
+		chunk.Content != "" ||
+		(chunk.ReasoningContent != nil && *chunk.ReasoningContent != "") ||
+		len(chunk.ToolCalls) > 0 ||
+		(chunk.Refusal != nil && *chunk.Refusal != "") ||
+		len(chunk.FunctionCall) > 0
 }
 
 // RunStreamGeneric 执行 authorization 之后的流式候选 fallback 循环（泛型载体）。
@@ -208,106 +222,87 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 	authorization := params.Authorization
 	codes := params.Codes.withDefaults()
 
-	// Key 级 TPM 预占（P2-8）：RPM/RPD 已在 ingress 中间件处理，这里只做 token 维度。
-	// 命中即释放冻结并以 429 上抛；计数后端 fail_closed 故障同样释放冻结后上抛。
-	if dec, allowed, err := r.guardKeyTokens(ctx, params.Principal, params.ConservativeInputTokens); err != nil {
-		if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-			l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
-			return result, releaseErr
-		}
-		l.MarkRequestFailed(ctx, requestRecord, string(failure.CodeRateLimitStoreFailed), err)
-		return result, err
-	} else if !allowed {
-		if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-			l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
-			return result, releaseErr
-		}
-		rlErr := keyTokenRateLimitError(dec)
-		l.MarkRequestFailed(ctx, requestRecord, string(failure.CodeRateLimitExceeded), rlErr)
-		return result, rlErr
-	}
-
-	// TPM 预占跟踪（DEC-028）：登记已实际生效的 route+user 预占，收尾时释放所有未被结算回填对账的预占
-	// （失败/取消/无结算的 route+user，以及 fallback 落选/失败的候选渠道），避免额度泄漏在 TPM 窗口。
-	res := &tpmReservations{}
-	r.recordKeyTPMReservation(res, params.Principal, params.ConservativeInputTokens)
-	defer r.releaseUnreconciledTPM(ctx, res)
-
 	var lastErr error
-	headWaitUsed := false // 队首短等整请求只等一次（R10）
+	denials := attemptDenialSummary{capacityOnly: true}
+	headWaitUsed := false
 
 	for candIdx, prepared := range params.Candidates {
 		index := prepared.RouteIndex
 		candidate := prepared.Route
 
-		// channel 熔断 open 时跳过该 channel，尝试下一个同模型 channel。
-		// 粘住渠道被熔断跳过属硬摘除：清 sticky 绑定让后续请求重选（R5）。
-		channelKey := MetricsID(candidate.Channel.ID)
-		if !l.BreakerAllow(channelKey) {
-			r.recordRoutingSkip("breaker")
-			r.logRouting(ctx, "routing candidate skipped",
-				zap.Int64("channel_id", candidate.Channel.ID),
-				zap.String("skip_reason", "breaker"),
-			)
-			params.Sticky.ClearIfBound(ctx, candidate.Channel.ID)
-			if candIdx+1 < len(params.Candidates) {
-				l.RecordBalanceFallback(routeIDOf(params.Principal), "breaker")
+		// Adapter lookup is local and side-effect free, so do it before acquiring candidate resources.
+		if params.ResolveAdapter != nil {
+			if err := params.ResolveAdapter(candidate); err != nil {
+				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+					return result, releaseErr
+				}
+				l.MarkRequestFailed(ctx, requestRecord, "adapter_not_registered", err)
+				return result, err
 			}
-			continue
 		}
 
-		// 渠道在途并发 + 渠道级限流预占；队首可短等一次（决议 4 / R10）。
-		isHead := candIdx == 0 && !headWaitUsed
-		admit := r.admitCandidate(ctx, candidate, params.ConservativeInputTokens, isHead)
-		if admit.waitedMs > 0 {
-			headWaitUsed = true
-			r.logRouting(ctx, "routing head wait",
-				zap.Int64("channel_id", candidate.Channel.ID),
-				zap.Int64("waited_ms", admit.waitedMs),
-				zap.Bool("admitted", admit.admitted),
-			)
-		}
-		if !admit.admitted {
-			lastErr = admit.err
-			if admit.skipReason != "" {
+		var permitOwner *AttemptPermitOwner
+		if r.permitManager != nil {
+			admission, owner, err := r.acquireAttemptWithHeadWait(ctx, AttemptPermitAcquireParams{
+				Candidate:            candidate,
+				UpstreamOperation:    l.upstreamOperation(),
+				RequestMode:          breakerstore.ModeStream,
+				EstimatedInputTokens: params.ConservativeInputTokens,
+			}, candIdx == 0, &headWaitUsed)
+			if err != nil {
+				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+					return result, releaseErr
+				}
+				l.MarkRequestFailed(ctx, requestRecord, RoutingFailureCode(err), err)
+				return result, err
+			}
+			if admission.Mode == breakerstore.AdmissionDenied {
+				if admission.Reason == breakerstore.ReasonBreakerStoreUnavailable {
+					err := failure.New(failure.CodeGatewayBreakerStoreUnavailable, failure.WithMessage("attempt admission store unavailable"))
+					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+						return result, releaseErr
+					}
+					l.MarkRequestFailed(ctx, requestRecord, string(failure.CodeGatewayBreakerStoreUnavailable), err)
+					return result, err
+				}
+				denials.Record(admission.Reason)
+				skipReason := attemptDeniedSkipReason(admission.Reason)
+				r.recordRoutingSkip(skipReason)
 				r.logRouting(ctx, "routing candidate skipped",
 					zap.Int64("channel_id", candidate.Channel.ID),
-					zap.String("skip_reason", admit.skipReason),
-					zap.Int64("waited_ms", admit.waitedMs),
+					zap.String("skip_reason", skipReason),
 				)
-			}
-			if errors.Is(admit.err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
-					return result, releaseErr
+				if admission.Reason == breakerstore.ReasonOpen || admission.Reason == breakerstore.ReasonHalfOpenBusy {
+					params.Sticky.ClearIfBound(ctx, candidate.Channel.ID)
 				}
-				result.Outcome = metrics.ChatOutcomeCanceled
-				l.MarkRequestCanceled(ctx, requestRecord, requestlog.AttemptRecord{}, admit.err)
-				return result, admit.err
-			}
-			if errors.Is(admit.err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
-					return result, releaseErr
+				if candIdx+1 < len(params.Candidates) {
+					result.RoutingFallback = true
+					l.RecordBalanceFallback(routeIDOf(params.Principal), skipReason)
 				}
-				l.MarkRequestFailed(ctx, requestRecord, "request_deadline_exceeded", admit.err)
-				return result, admit.err
+				continue
 			}
-			if candIdx+1 < len(params.Candidates) {
-				l.RecordBalanceFallback(routeIDOf(params.Principal), admit.skipReason)
-			}
-			continue
+			permitOwner = owner
+			// Install the terminal fallback before attempt persistence and stream setup can fail or panic.
+			defer abortAttemptPermitOnExit(ctx, permitOwner)
 		}
-		releaseSlot := admit.release
-		defer releaseSlot()
-
-		// 该候选已通过渠道级 TPM 预占（额度已写入窗口）：登记预占，收尾时若非胜出（fallback 落选/失败）则释放。
-		r.recordChannelTPMReservation(res, candidate, params.ConservativeInputTokens)
 
 		// 每个 stream candidate 也必须先创建 attempt：流式失败可能发生在首 chunk 前、首 chunk 后或
 		// 客户端取消时，提前记录 attempt 才能审计这些状态。
-		attemptRecord, err := l.CreateAttempt(ctx, requestRecord, index, candidate)
+		attemptRecord, err := l.CreateAttemptForOperation(
+			ctx,
+			requestRecord,
+			result.Attempts,
+			index,
+			candidate,
+			l.upstreamOperation(),
+		)
 		if err != nil {
+			if permitOwner != nil {
+				_ = permitOwner.Abort(ctx)
+			}
 			if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 				l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 				return result, releaseErr
@@ -315,19 +310,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			l.MarkRequestFailed(ctx, requestRecord, "request_attempt_create_failed", err)
 			return result, err
 		}
-		result.Attempts++
-
-		if params.ResolveAdapter != nil {
-			if err := params.ResolveAdapter(candidate); err != nil {
-				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
-					return result, releaseErr
-				}
-				l.MarkAttemptFailed(ctx, attemptRecord, "adapter_not_registered", err)
-				l.MarkRequestFailed(ctx, requestRecord, "adapter_not_registered", err)
-				return result, err
-			}
-		}
+		result.recordTransportAttempt(candidate, l.upstreamOperation())
 
 		// emitted 表示是否已向客户端写出过 SSE 帧。一旦写出开始就不能再 fallback，否则同一个 SSE
 		// 响应会混入不同上游内容。
@@ -354,6 +337,10 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 
 		// responseStartedAt 记录第一个真正对客户可见的上游 chunk 到达时间，用于 TTFT。
 		var responseStartedAt *time.Time
+
+		timingObserver := NewAttemptTimingObserver(true)
+		attemptCtx := adapter.WithAttemptTimingObserver(ctx, timingObserver)
+		firstTokenPersisted := false
 
 		// settleStreamFacts 使用 adapter 最终 facts 结算流式请求。结算不能依赖原始请求 ctx：客户端
 		// 可能已断开，但只要上游已返回 final usage，平台就有准确账务事实，必须尽力完成结算。
@@ -404,19 +391,6 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			})
 			EndSettlementSpan(settleSpan, settleErr)
 			l.RecordSettlement(SettlementOutcomeFromErr(settleErr))
-			// 结算成功（或已交 recovery 接管）后按真实 billable token 回填 Key/channel 的 TPM 计数差额（P2-8），
-			// 并标记该 route+user 与胜出 channel 的预占已对账——收尾释放不再回退它们（DEC-028）。
-			//
-			// 仅当拿到「真实」usage 时才回填并对账。partial 估算（流中断/客户端取消/缺 final usage）不含真实
-			// cache 拆分、把全部输入按「未缓存」计，若据此回填 billableTPMTokens≈预占额→退款为 0，预占无法退回，
-			// 会把用户 TPM 窗口顶到上限、连累后续请求（上游流中断不应惩罚用户限流）。此时保持未对账，
-			// 由收尾 releaseUnreconciledTPM 退还整笔 route+user 与 channel 预占，使窗口回落。
-			if settleErr == nil || IsChatSettlementRecoveryScheduled(settleErr) {
-				if !streamFacts.UsageSource.IsPartialEstimate() {
-					r.backfillRateTokens(ctx, params.Principal, candidate, params.ConservativeInputTokens, streamFacts.Usage)
-					res.markReconciled(candidate.Channel.ID)
-				}
-			}
 			return settleErr
 		}
 
@@ -486,8 +460,30 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		}
 		_ = finishPartial
 
+		acknowledgeWrite := func() {
+			if emitted {
+				return
+			}
+			now := time.Now()
+			responseStartedAt = &now
+			emitted = true
+			l.MarkResponseStarted(ctx, requestRecord, attemptRecord, now)
+			l.RecordStreamEvent(metrics.StreamEventStarted)
+		}
+
 		onChunk := func(chunk C) error {
 			meta := params.ChunkMeta(chunk)
+			if meta.FirstTokenEligible && !firstTokenPersisted {
+				adapter.MarkFirstTokenEligible(attemptCtx)
+				facts := timingObserver.Snapshot()
+				if facts.UpstreamFirstTokenAt != nil {
+					firstTokenPersisted = true
+					// FirstToken persistence must not delay the customer's first SSE frame.
+					// The synchronous write after adapter return still guarantees the
+					// complete snapshot is stored before settlement/recovery starts.
+					go l.RecordAttemptTiming(ctx, attemptRecord, facts)
+				}
+			}
 			if meta.ID != "" {
 				streamResponseID = meta.ID
 			}
@@ -506,37 +502,111 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				return nil
 			}
 
-			if !emitted {
-				now := time.Now()
-				responseStartedAt = &now
-				emitted = true
-				l.MarkResponseStarted(ctx, requestRecord, attemptRecord, now)
-				l.RecordStreamEvent(metrics.StreamEventStarted)
-			}
+			chunkAcked := false
+			err := params.EmitChunk(chunk, func() {
+				chunkAcked = true
+				acknowledgeWrite()
+			})
 
-			// 累计已 emit 可见文本的估算 output token，供 partial settlement（无 final usage 时）使用。
-			if params.CountOutputTokens != nil && meta.VisibleText != "" {
+			// 只累计至少有一个客户帧成功写出的可见文本。若 encoder 在后续帧失败，仍按已确认交付
+			// 的上游增量保守估算 partial usage。
+			if chunkAcked && params.CountOutputTokens != nil && meta.VisibleText != "" {
 				partialOutputTokens += params.CountOutputTokens(candidate.UpstreamModel, meta.VisibleText)
 			}
 
-			return params.EmitChunk(chunk)
+			return err
 		}
 
 		upstreamStart := time.Now()
-		streamFacts, err = params.Stream(ctx, candidate, onChunk)
-		// 整段流已读完/失败，立即归还渠道在途名额（settlement/收尾帧不占上游容量）。
-		releaseSlot()
+		var panicValue any
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					panicValue = recovered
+				}
+			}()
+			streamFacts, err = params.Stream(attemptCtx, candidate, onChunk)
+		}()
+		adapter.MarkTransportCompleted(attemptCtx)
+		timingFacts := timingObserver.Snapshot()
+		l.RecordAttemptTiming(ctx, attemptRecord, timingFacts)
+		outcomeErr := err
+		if panicValue != nil {
+			outcomeErr = errAttemptInvokePanic
+		}
+		finishOutcome := streamFinishOutcome(streamFacts, timingFacts, outcomeErr)
+
+		if permitOwner != nil {
+			if timingFacts.UpstreamStartedAt == nil {
+				if abortErr := permitOwner.Abort(ctx); abortErr != nil {
+					r.logRouting(ctx, "stream attempt permit abort result unknown",
+						zap.Int64("channel_id", candidate.Channel.ID),
+						zap.Error(abortErr),
+					)
+				}
+			} else {
+				finishResult, finishErr := permitOwner.FinishTransport(
+					ctx,
+					finishOutcome,
+					outcomeErr,
+				)
+				if finishErr != nil {
+					if errors.Is(finishErr, ErrAttemptRuntimeFeedback) {
+						l.RecordAttemptBreakerDisposition(
+							ctx,
+							attemptRecord,
+							string(finishResult.EndpointDisposition),
+							string(finishResult.ChannelDisposition),
+						)
+						r.logRouting(ctx, "stream attempt runtime feedback failed",
+							zap.Int64("channel_id", candidate.Channel.ID),
+							zap.Error(finishErr),
+						)
+						err = finishErr
+					} else {
+						l.RecordAttemptBreakerDisposition(
+							ctx,
+							attemptRecord,
+							string(breakerstore.DispositionResultUnknown),
+							string(breakerstore.DispositionResultUnknown),
+						)
+						r.logRouting(ctx, "stream attempt permit finish result unknown",
+							zap.Int64("channel_id", candidate.Channel.ID),
+							zap.Error(finishErr),
+						)
+						if err != nil {
+							err = errors.Join(errAttemptPermitFinish, finishErr, err)
+						}
+					}
+				} else {
+					l.RecordAttemptBreakerDisposition(
+						ctx,
+						attemptRecord,
+						string(finishResult.EndpointDisposition),
+						string(finishResult.ChannelDisposition),
+					)
+				}
+			}
+		}
+
+		l.RecordAttemptRuntimeMetrics(candidate, attemptRecord.UpstreamOperation, true, timingFacts, finishOutcome, outcomeErr)
 		l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
-		l.RecordChannelHealth(channelKey, err)
-		l.RecordCredentialResult(candidate.Channel.ID, err)
+		l.RecordCredentialResult(candidate, err)
+		if panicValue != nil {
+			panic(panicValue)
+		}
+		if (errors.Is(err, ErrAttemptRuntimeFeedback) || errors.Is(err, errAttemptPermitFinish)) &&
+			streamFacts == nil && !emitted {
+			l.MarkAttemptFailed(ctx, attemptRecord, FailureCodeOrFallback(err, string(failure.CodeGatewayBreakerStoreUnavailable)), err)
+			if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+				l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+				return result, releaseErr
+			}
+			l.MarkRequestFailed(ctx, requestRecord, RoutingFailureCode(err), err)
+			return result, err
+		}
 
 		if err != nil {
-			// 上游 429：按 Retry-After 登记渠道冷却，后续 fallback 在冷却窗口内直接跳过该渠道（P2-7）。
-			l.RecordChannelRateLimit(channelKey, err)
-
-			// 上游 timeout/5xx：登记失败软冷却，让紧随其后的请求（含客户端重试）优先绕开该渠道（DEC-029）。
-			l.RecordChannelFailureCooldown(channelKey, err)
-
 			// 有 final usage 时优先结算：上游已给出准确 token 用量，即使尾部出错也不能让已产生成本的请求免费。
 			if streamFacts != nil {
 				if settleErr := settleStreamFacts(); settleErr != nil {
@@ -594,7 +664,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 					return finishPartial(PartialReasonInterrupted, metrics.ChatOutcomeFailed, metrics.StreamEventInterrupted, false, err)
 				}
 				// 已 emit 帧但无可用输出内容（仅控制帧/空内容后上游中断）：视同「上游流中断、无可用输出」——
-				// 一分钱不扣、全额释放预扣（对齐 new-api PR #4199）；TPM 预占由收尾 releaseUnreconciledTPM 退还。
+				// 一分钱不扣、全额释放预扣（对齐 new-api PR #4199）；入口 TPM 由 RequestAdmission 收口。
 				l.MarkAttemptFailed(ctx, attemptRecord, "stream_adapter_error", err)
 				// 客户侧不扣费，但 bill-on-disconnect 上游已开始生成、大概率照常计费：记平台成本敞口（阶段一）。
 				l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, err)
@@ -629,6 +699,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			// 首字节前可重试错误切换候选：前一候选可能已在上游产生成本却不会被结算（P2-3），记指标供监控。
 			l.RecordRetryableFallback(err)
 			if candIdx+1 < len(params.Candidates) {
+				result.RoutingFallback = true
 				category, _ := adapter.UpstreamCategoryOf(err)
 				l.RecordBalanceFallback(routeIDOf(params.Principal), "upstream_"+string(category))
 			}
@@ -680,7 +751,10 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 
 		// B4：streamFacts 非空即 full bill；finalUsage 仅用于客户收尾帧，缺失时跳过（不影响计费）。
 		if finalUsage != nil {
-			if err := params.Finish(streamResponseID, *finalUsage, finishReason); err != nil {
+			if err := params.Finish(streamResponseID, *finalUsage, finishReason, acknowledgeWrite); err != nil {
+				if emitted {
+					l.MarkDeliveryInterrupted(ctx, requestRecord)
+				}
 				return result, err
 			}
 		}
@@ -710,6 +784,16 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		return result, lastErr
 	}
 
+	if denials.seen {
+		if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+			l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+			return result, releaseErr
+		}
+		err := denials.FinalError()
+		l.MarkRequestFailed(ctx, requestRecord, RoutingFailureCode(err), err)
+		return result, err
+	}
+
 	if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 		l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 		return result, releaseErr
@@ -722,4 +806,31 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 	)
 	l.MarkRequestFailed(ctx, requestRecord, "no_available_channel", err)
 	return result, err
+}
+
+func streamFinishOutcome(facts *adapter.ResponseFacts, timing AttemptTimingFacts, err error) breakerstore.FinishOutcome {
+	out := breakerstore.FinishOutcome{
+		EndpointOutcome: breakerstore.OutcomeIgnored,
+		ChannelOutcome:  breakerstore.OutcomeIgnored,
+		FirstTokenMs:    timing.FirstTokenMs(),
+	}
+	if facts != nil && !facts.UsageSource.IsPartialEstimate() {
+		actual := billableTPMTokens(facts.Usage)
+		out.ChannelTPMActual = &actual
+	}
+	if err == nil && facts != nil {
+		out.EndpointOutcome = breakerstore.OutcomeEligibleSuccess
+		out.ChannelOutcome = breakerstore.OutcomeEligibleSuccess
+		return out
+	}
+	if err == nil {
+		// A transport that completed without protocol/usage facts is a channel protocol failure.
+		out.ChannelOutcome = breakerstore.OutcomeEligibleFailure
+		return out
+	}
+	if nonStreamChannelFailureEligible(err) {
+		out.ChannelOutcome = breakerstore.OutcomeEligibleFailure
+	}
+	applyEndpointFailureAttribution(&out, timing, true, err)
+	return out
 }

@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"errors"
+	"math"
 	"math/big"
 	"testing"
 	"time"
@@ -108,14 +109,19 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
-				RequestedModelID: "openai/gpt-4.1",
-				ProviderID:       11,
-				AdapterKey:       "openai",
-				ChannelID:        123,
-				BaseUrl:          "https://api.openai.example/v1",
-				Credential:       "secret://openai/main",
-				TimeoutMs:        pgtype.Int4{Int32: 15000, Valid: true},
-				UpstreamModel:    "gpt-4.1",
+				RequestedModelID:                "openai/gpt-4.1",
+				ProviderID:                      11,
+				ProviderEndpointID:              21,
+				ProviderEndpointBaseUrlRevision: 3,
+				ProviderEndpointStatusRevision:  4,
+				ChannelConfigRevision:           5,
+				ChannelAdmissionLimitsRevision:  6,
+				AdapterKey:                      "openai",
+				ChannelID:                       123,
+				BaseUrl:                         "https://api.openai.example/v1",
+				Credential:                      "secret://openai/main",
+				TimeoutMs:                       pgtype.Int4{Int32: 15000, Valid: true},
+				UpstreamModel:                   "gpt-4.1",
 			},
 			{
 				RequestedModelID: "openai/gpt-4.1",
@@ -162,6 +168,12 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	if first.ProviderID != 11 {
 		t.Fatalf("expected provider id %d, got %d", int64(11), first.ProviderID)
 	}
+	if first.ProviderEndpointID != 21 || first.ProviderEndpointBaseURLRevision != 3 || first.ProviderEndpointStatusRevision != 4 {
+		t.Fatalf("endpoint snapshot was not preserved: %+v", first)
+	}
+	if first.ChannelConfigRevision != 5 || first.ChannelAdmissionLimitsRevision != 6 {
+		t.Fatalf("channel revisions were not preserved: %+v", first)
+	}
 	if first.AdapterKey != "openai" {
 		t.Fatalf("expected adapter key %q, got %q", "openai", first.AdapterKey)
 	}
@@ -191,6 +203,47 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	}
 	if second.Channel.Timeout != 30*time.Second {
 		t.Fatalf("expected second timeout %v, got %v", 30*time.Second, second.Channel.Timeout)
+	}
+}
+
+func TestRouterPlanChatFreezesProviderCostToSaleRatio(t *testing.T) {
+	store := &fakeStore{rows: []sqlc.FindRouteCandidatesRow{{
+		RequestedModelID: "openai/gpt-4.1",
+		ModelDbID:        10,
+		AdapterKey:       "openai",
+		Protocol:         ProtocolOpenAI,
+		ChannelID:        123,
+		BaseUrl:          "https://api.openai.example/v1",
+		Credential:       "secret://openai/main",
+		UpstreamModel:    "gpt-4.1",
+		ChannelPriceID:   99,
+		BaseCurrency:     "USD",
+		BasePricingUnit:  "per_1m_tokens",
+		UncachedInputPrice: pgtype.Numeric{
+			Int: big.NewInt(10), Valid: true,
+		},
+		OutputPrice:     pgtype.Numeric{Int: big.NewInt(20), Valid: true},
+		CostCurrency:    "USD",
+		CostPricingUnit: "per_1m_tokens",
+		UncachedInputCost: pgtype.Numeric{
+			Int: big.NewInt(2), Valid: true,
+		},
+		OutputCost: pgtype.Numeric{Int: big.NewInt(8), Valid: true},
+	}}}
+	router := NewRouter(store, 30*time.Second)
+
+	plan, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI, RouteID: testRouteID(),
+	})
+	if err != nil {
+		t.Fatalf("PlanChat returned error: %v", err)
+	}
+	if len(plan.Candidates) != 1 {
+		t.Fatalf("candidate count = %d, want 1", len(plan.Candidates))
+	}
+	// max(2/10, 8/20) = 0.4; optional components use the same input/output fallbacks.
+	if math.Abs(plan.Candidates[0].CostRatio-0.4) > 1e-12 {
+		t.Fatalf("CostRatio = %v, want 0.4", plan.Candidates[0].CostRatio)
 	}
 }
 

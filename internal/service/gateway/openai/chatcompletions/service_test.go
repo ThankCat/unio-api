@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -82,10 +83,13 @@ func (c *fakeRetryClassifier) IsRetryable(err error) bool {
 type fakeRequestLogService struct {
 	nextRequestID int64
 	nextAttemptID int64
+	timingMu      sync.Mutex
 
 	createRequests                 []requestlog.CreateRequestParams
 	markRequestRunningIDs          []int64
 	markResponseStartedArgs        []requestlog.MarkResponseStartedParams
+	markDeliveryCompletedIDs       []int64
+	markDeliveryInterruptedIDs     []int64
 	markRequestSucceededArgs       []requestlog.MarkRequestSucceededParams
 	markSettledRequestCanceledArgs []requestlog.MarkSettledRequestCanceledParams
 	markRequestFailedArgs          []requestlog.MarkRequestFailedParams
@@ -94,6 +98,7 @@ type fakeRequestLogService struct {
 
 	createAttempts                 []requestlog.CreateAttemptParams
 	markAttemptStartedArgs         []requestlog.MarkAttemptResponseStartedParams
+	recordAttemptTimingArgs        []requestlog.RecordAttemptTimingParams
 	markAttemptSucceededArgs       []requestlog.MarkAttemptSucceededParams
 	markSettledAttemptCanceledArgs []requestlog.MarkSettledAttemptCanceledParams
 	markAttemptFailedArgs          []requestlog.MarkAttemptFailedParams
@@ -223,6 +228,16 @@ func (s *fakeRequestLogService) MarkRequestResponseStarted(ctx context.Context, 
 	}, nil
 }
 
+func (s *fakeRequestLogService) MarkRequestDeliveryCompleted(_ context.Context, id int64, completedAt time.Time) (requestlog.RequestRecord, error) {
+	s.markDeliveryCompletedIDs = append(s.markDeliveryCompletedIDs, id)
+	return requestlog.RequestRecord{ID: id, DeliveryStatus: requestlog.DeliveryStatusCompleted, ResponseCompletedAt: &completedAt}, nil
+}
+
+func (s *fakeRequestLogService) MarkRequestDeliveryInterrupted(_ context.Context, id int64) (requestlog.RequestRecord, error) {
+	s.markDeliveryInterruptedIDs = append(s.markDeliveryInterruptedIDs, id)
+	return requestlog.RequestRecord{ID: id, DeliveryStatus: requestlog.DeliveryStatusInterrupted}, nil
+}
+
 // SetCapabilityCheckResult 记录 capability 闸门判定结论审计写入。
 func (s *fakeRequestLogService) SetCapabilityCheckResult(_ context.Context, _ int64, result string) error {
 	s.capabilityResults = append(s.capabilityResults, result)
@@ -307,6 +322,19 @@ func (s *fakeRequestLogService) MarkAttemptResponseStarted(ctx context.Context, 
 	}, nil
 }
 
+func (s *fakeRequestLogService) RecordAttemptTiming(_ context.Context, params requestlog.RecordAttemptTimingParams) (requestlog.AttemptRecord, error) {
+	s.timingMu.Lock()
+	defer s.timingMu.Unlock()
+	s.recordAttemptTimingArgs = append(s.recordAttemptTimingArgs, params)
+	return requestlog.AttemptRecord{ID: params.ID}, nil
+}
+
+func (s *fakeRequestLogService) attemptTimingSnapshots() []requestlog.RecordAttemptTimingParams {
+	s.timingMu.Lock()
+	defer s.timingMu.Unlock()
+	return append([]requestlog.RecordAttemptTimingParams(nil), s.recordAttemptTimingArgs...)
+}
+
 // MarkAttemptSucceeded 记录 attempt succeeded 状态变更。
 func (s *fakeRequestLogService) MarkAttemptSucceeded(ctx context.Context, params requestlog.MarkAttemptSucceededParams) (requestlog.AttemptRecord, error) {
 	s.markAttemptSucceededArgs = append(s.markAttemptSucceededArgs, params)
@@ -372,6 +400,7 @@ func (a *fakeChatAdapter) ChatCompletions(ctx context.Context, ch channel.Runtim
 	a.chatCalled++
 	a.chatReq = req
 	a.ch = ch
+	adapter.MarkTransportStarted(ctx)
 
 	return a.chatResp, a.chatErr
 }
@@ -381,6 +410,7 @@ func (a *fakeChatAdapter) StreamChatCompletions(ctx context.Context, ch channel.
 	a.streamCalled++
 	a.streamReq = req
 	a.ch = ch
+	adapter.MarkTransportStarted(ctx)
 
 	if a.streamErr != nil && len(a.streamResp) == 0 {
 		return adapter.StreamOutcome{}, a.streamErr
@@ -506,12 +536,17 @@ func routePlan(candidates ...routing.ChatRouteCandidate) routing.ChatRoutePlan {
 // routeCandidate 创建测试用 route candidate。
 func routeCandidate(adapterKey string, channelID int64, upstreamModel string) routing.ChatRouteCandidate {
 	return routing.ChatRouteCandidate{
-		ModelDBID:  1000 + channelID,
-		ProviderID: 9000 + channelID,
-		AdapterKey: adapterKey,
+		ModelDBID:                       1000 + channelID,
+		ProviderID:                      9000 + channelID,
+		ProviderEndpointID:              8000 + channelID,
+		ProviderEndpointBaseURLRevision: 3,
+		ProviderEndpointStatusRevision:  4,
+		ChannelConfigRevision:           5,
+		ChannelAdmissionLimitsRevision:  6,
+		AdapterKey:                      adapterKey,
 		Channel: channel.Runtime{
 			ID:      channelID,
-			BaseURL: "https://example.test/v1",
+			BaseURL: "https://example.test",
 			APIKey:  "test-secret",
 			Timeout: 30 * time.Second,
 		},
@@ -594,7 +629,6 @@ func newChatCompletionServiceForTestWithAuthorizer(router ChatRouter, registry A
 		settlement,
 		authorizer,
 		nil,
-		nil,
 	)
 }
 
@@ -617,9 +651,20 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	}
 	service := newChatCompletionServiceForTestWithAuthorizer(router, registry, nil, requestLog, settlement, authorizer)
 
-	got, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequestWithParams())
+	result, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequestWithParams())
 	if err != nil {
 		t.Fatalf("CreateChatCompletion returned err: %v", err)
+	}
+
+	got := result.Response
+	if len(requestLog.markDeliveryCompletedIDs) != 0 || len(requestLog.markDeliveryInterruptedIDs) != 0 {
+		t.Fatalf("delivery must stay not_started before the handler write, completed=%v interrupted=%v", requestLog.markDeliveryCompletedIDs, requestLog.markDeliveryInterruptedIDs)
+	}
+	if err := result.FinalizeDelivery(func(*gatewayapi.ChatCompletionResponse) error { return nil }); err != nil {
+		t.Fatalf("finalize delivery: %v", err)
+	}
+	if len(requestLog.markDeliveryCompletedIDs) != 1 || len(requestLog.markDeliveryInterruptedIDs) != 0 {
+		t.Fatalf("expected one completed delivery, completed=%v interrupted=%v", requestLog.markDeliveryCompletedIDs, requestLog.markDeliveryInterruptedIDs)
 	}
 
 	if !router.called {
@@ -683,10 +728,42 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	if requestLog.createAttempts[0].ChannelID != 123 {
 		t.Fatalf("expected attempt channel id %d, got %d", int64(123), requestLog.createAttempts[0].ChannelID)
 	}
+	attempt := requestLog.createAttempts[0]
+	if attempt.ProviderEndpointID == nil || *attempt.ProviderEndpointID != 8123 {
+		t.Fatalf("expected frozen endpoint id 8123, got %v", attempt.ProviderEndpointID)
+	}
+	if attempt.ProviderEndpointBaseURLRevision == nil || *attempt.ProviderEndpointBaseURLRevision != 3 ||
+		attempt.ProviderEndpointStatusRevision == nil || *attempt.ProviderEndpointStatusRevision != 4 ||
+		attempt.ChannelConfigRevision == nil || *attempt.ChannelConfigRevision != 5 {
+		t.Fatalf("expected frozen candidate revisions, got %+v", attempt)
+	}
+	if attempt.RoutingCandidateIndex == nil || *attempt.RoutingCandidateIndex != 0 {
+		t.Fatalf("expected routing candidate index 0, got %v", attempt.RoutingCandidateIndex)
+	}
+	if attempt.UpstreamOperation != requestlog.UpstreamOperationChatCompletions {
+		t.Fatalf("expected chat_completions upstream operation, got %q", attempt.UpstreamOperation)
+	}
 	if len(settlement.params) != 1 {
 		t.Fatalf("expected one settlement call, got %d", len(settlement.params))
 	}
 	settlementParams := settlement.params[0]
+	if settlementParams.ResponseStartedAt != nil {
+		t.Fatalf("non-stream response_started_at = %v, want nil", settlementParams.ResponseStartedAt)
+	}
+	if len(requestLog.markResponseStartedArgs) != 0 || len(requestLog.markAttemptStartedArgs) != 0 {
+		t.Fatalf("non-stream must not persist delivery response start: request=%d attempt=%d", len(requestLog.markResponseStartedArgs), len(requestLog.markAttemptStartedArgs))
+	}
+	nonStreamTimings := requestLog.attemptTimingSnapshots()
+	if len(nonStreamTimings) != 1 {
+		t.Fatalf("non-stream timing writes = %d, want 1", len(nonStreamTimings))
+	}
+	nonStreamTiming := nonStreamTimings[0]
+	if nonStreamTiming.ID != 1 || nonStreamTiming.UpstreamStartedAt == nil || nonStreamTiming.UpstreamCompletedAt == nil {
+		t.Fatalf("non-stream timing facts incomplete: %+v", nonStreamTiming)
+	}
+	if nonStreamTiming.UpstreamFirstTokenAt != nil {
+		t.Fatalf("non-stream FirstToken must stay nil: %+v", nonStreamTiming)
+	}
 	if settlementParams.RequestRecord.ID != 1 {
 		t.Fatalf("expected settlement request record id 1, got %d", settlementParams.RequestRecord.ID)
 	}
@@ -999,17 +1076,11 @@ func TestChatCompletionServiceCreateChatCompletionReturnsMissingAdapterWithoutRe
 	if len(authorizer.releaseParams) != 1 {
 		t.Fatalf("expected authorization release after defensive adapter lookup fails, got %d", len(authorizer.releaseParams))
 	}
-	if len(requestLog.createAttempts) != 1 {
-		t.Fatalf("expected one attempt for missing adapter, got %d", len(requestLog.createAttempts))
+	if len(requestLog.createAttempts) != 0 {
+		t.Fatalf("pre-transport adapter lookup must not create an attempt, got %d", len(requestLog.createAttempts))
 	}
-	if len(requestLog.markAttemptFailedArgs) != 1 {
-		t.Fatalf("expected one failed attempt, got %d", len(requestLog.markAttemptFailedArgs))
-	}
-	if requestLog.markAttemptFailedArgs[0].ErrorCode != string(failure.CodeGatewayAdapterNotRegistered) {
-		t.Fatalf("expected %q, got %q", failure.CodeGatewayAdapterNotRegistered, requestLog.markAttemptFailedArgs[0].ErrorCode)
-	}
-	if requestLog.markAttemptFailedArgs[0].UpstreamStatusCode != nil {
-		t.Fatalf("expected unknown upstream status to stay nil, got %v", requestLog.markAttemptFailedArgs[0].UpstreamStatusCode)
+	if len(requestLog.markAttemptFailedArgs) != 0 {
+		t.Fatalf("pre-transport adapter lookup must not record an upstream attempt failure, got %d", len(requestLog.markAttemptFailedArgs))
 	}
 	if len(requestLog.markRequestFailedArgs) != 1 {
 		t.Fatalf("expected one failed request, got %d", len(requestLog.markRequestFailedArgs))
@@ -1092,10 +1163,11 @@ func TestChatCompletionServiceCreateChatCompletionFallsBackOnRetryableAdapterErr
 		authorizer,
 	)
 
-	got, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
+	result, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
 	if err != nil {
 		t.Fatalf("CreateChatCompletion returned err: %v", err)
 	}
+	got := result.Response
 	if firstAdapter.chatCalled != 1 {
 		t.Fatalf("expected first adapter to be called once, got %d", firstAdapter.chatCalled)
 	}
@@ -1469,6 +1541,22 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 	if len(settlement.params) != 1 {
 		t.Fatalf("expected one settlement call, got %d", len(settlement.params))
 	}
+	var finalTiming *requestlog.RecordAttemptTimingParams
+	for _, timing := range requestLog.attemptTimingSnapshots() {
+		if timing.UpstreamCompletedAt != nil {
+			current := timing
+			finalTiming = &current
+		}
+	}
+	if finalTiming == nil || finalTiming.ID != 1 || finalTiming.UpstreamStartedAt == nil || finalTiming.UpstreamFirstTokenAt == nil {
+		t.Fatalf("stream final timing snapshot missing start/FirstToken/completed: %+v", finalTiming)
+	}
+	if finalTiming.UpstreamFirstTokenAt.Before(*finalTiming.UpstreamStartedAt) || finalTiming.UpstreamCompletedAt.Before(*finalTiming.UpstreamFirstTokenAt) {
+		t.Fatalf("stream timing order invalid: %+v", finalTiming)
+	}
+	if settlement.params[0].ResponseStartedAt == nil {
+		t.Fatal("stream settlement must keep customer delivery response_started_at")
+	}
 	if settlement.params[0].AttemptRecord.ID != 1 {
 		t.Fatalf("expected settlement attempt id 1, got %d", settlement.params[0].AttemptRecord.ID)
 	}
@@ -1557,6 +1645,77 @@ func TestChatCompletionServiceStreamChatCompletionEmitsClientUsageWhenRequested(
 	}
 	if chunks[1].ID != "chatcmpl_mock" {
 		t.Fatalf("expected usage chunk id %q, got %q", "chatcmpl_mock", chunks[1].ID)
+	}
+}
+
+func TestChatCompletionServiceStreamFirstWriteFailureDoesNotMarkDeliveryStarted(t *testing.T) {
+	writeErr := errors.New("client stream write failed")
+	requestLog := newFakeRequestLogService()
+	service := newChatCompletionServiceForTest(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
+		&fakeAdapterRegistry{streamChatAdapters: map[string]chatcompletionsadapter.StreamChatAdapter{
+			"openai": &fakeChatAdapter{streamResp: []chatcompletionsadapter.ChatStreamChunk{{
+				ID: "chatcmpl_mock", Model: "gpt-4.1", Role: "assistant", Content: "not delivered",
+			}}},
+		}},
+		nil,
+		requestLog,
+		newChatCompletionSettlementForTest(),
+	)
+
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(gatewayapi.ChatCompletionStreamResponse) error {
+		return writeErr
+	})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("expected client write error, got %v", err)
+	}
+	if len(requestLog.markResponseStartedArgs) != 0 || len(requestLog.markAttemptStartedArgs) != 0 {
+		t.Fatalf("failed first write must keep delivery not_started: request=%d attempt=%d",
+			len(requestLog.markResponseStartedArgs), len(requestLog.markAttemptStartedArgs))
+	}
+	if len(requestLog.markDeliveryCompletedIDs) != 0 || len(requestLog.markDeliveryInterruptedIDs) != 0 {
+		t.Fatalf("failed first write must not invent a delivery terminal: completed=%v interrupted=%v",
+			requestLog.markDeliveryCompletedIDs, requestLog.markDeliveryInterruptedIDs)
+	}
+}
+
+func TestChatCompletionServiceStreamFinalWriteFailureMarksDeliveryInterrupted(t *testing.T) {
+	writeErr := errors.New("client usage write failed")
+	requestLog := newFakeRequestLogService()
+	service := newChatCompletionServiceForTest(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
+		&fakeAdapterRegistry{streamChatAdapters: map[string]chatcompletionsadapter.StreamChatAdapter{
+			"openai": &fakeChatAdapter{streamResp: []chatcompletionsadapter.ChatStreamChunk{
+				{ID: "chatcmpl_mock", Model: "gpt-4.1", Role: "assistant", Content: "delivered"},
+				streamUsageChunk("gpt-4.1"),
+			}},
+		}},
+		nil,
+		requestLog,
+		newChatCompletionSettlementForTest(),
+	)
+	req := chatRequest()
+	includeUsage := true
+	req.StreamOptions = &gatewayapi.ChatCompletionStreamOptions{IncludeUsage: &includeUsage}
+	writes := 0
+
+	err := service.StreamChatCompletion(contextWithPrincipal(42), req, func(gatewayapi.ChatCompletionStreamResponse) error {
+		writes++
+		if writes == 2 {
+			return writeErr
+		}
+		return nil
+	})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("expected final client write error, got %v", err)
+	}
+	if len(requestLog.markResponseStartedArgs) != 1 || len(requestLog.markAttemptStartedArgs) != 1 {
+		t.Fatalf("first successful frame must mark delivery started once: request=%d attempt=%d",
+			len(requestLog.markResponseStartedArgs), len(requestLog.markAttemptStartedArgs))
+	}
+	if len(requestLog.markDeliveryCompletedIDs) != 0 || len(requestLog.markDeliveryInterruptedIDs) != 1 {
+		t.Fatalf("failed final frame must interrupt delivery: completed=%v interrupted=%v",
+			requestLog.markDeliveryCompletedIDs, requestLog.markDeliveryInterruptedIDs)
 	}
 }
 

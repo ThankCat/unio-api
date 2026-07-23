@@ -36,8 +36,6 @@ func TestNewChatGatewayBuildsService(t *testing.T) {
 		config.WorkerConfig{},
 		config.GatewayConfig{},
 		nil,
-		nil,
-		nil,
 	)
 	if service == nil {
 		t.Fatal("expected chat gateway service")

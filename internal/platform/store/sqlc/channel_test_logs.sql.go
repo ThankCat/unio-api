@@ -41,24 +41,30 @@ func (q *Queries) DeleteChannelTestLogsBeyondPerChannel(ctx context.Context, arg
 const insertChannelTestLog = `-- name: InsertChannelTestLog :exec
 
 INSERT INTO channel_test_logs (
-    channel_id, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error
+    channel_id, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error,
+    tested_endpoint_base_url_revision, tested_endpoint_status_revision, tested_config_revision, state_change_applied
 ) VALUES (
     $1, $2, $3, $4,
-    $5, $6, $7, $8, $9, $10
+    $5, $6, $7, $8, $9, $10,
+    $11, $12, $13, $14
 )
 `
 
 type InsertChannelTestLogParams struct {
-	ChannelID            int64
-	Source               string
-	Success              bool
-	ErrorCode            pgtype.Text
-	HttpStatus           pgtype.Int4
-	LatencyMs            pgtype.Int4
-	TestedModel          pgtype.Text
-	CredentialValidAfter bool
-	Message              pgtype.Text
-	UpstreamError        pgtype.Text
+	ChannelID                     int64
+	Source                        string
+	Success                       bool
+	ErrorCode                     pgtype.Text
+	HttpStatus                    pgtype.Int4
+	LatencyMs                     pgtype.Int4
+	TestedModel                   pgtype.Text
+	CredentialValidAfter          bool
+	Message                       pgtype.Text
+	UpstreamError                 pgtype.Text
+	TestedEndpointBaseUrlRevision pgtype.Int8
+	TestedEndpointStatusRevision  pgtype.Int8
+	TestedConfigRevision          pgtype.Int8
+	StateChangeApplied            bool
 }
 
 // channel_test_logs：渠道凭据有效性事件历史（worker 巡检 / 手动检测 / 运行时 401 翻失效）。
@@ -76,6 +82,59 @@ func (q *Queries) InsertChannelTestLog(ctx context.Context, arg InsertChannelTes
 		arg.CredentialValidAfter,
 		arg.Message,
 		arg.UpstreamError,
+		arg.TestedEndpointBaseUrlRevision,
+		arg.TestedEndpointStatusRevision,
+		arg.TestedConfigRevision,
+		arg.StateChangeApplied,
 	)
 	return err
+}
+
+const insertPermissionRecheckLog = `-- name: InsertPermissionRecheckLog :execrows
+INSERT INTO channel_test_logs (
+    channel_id, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error,
+    tested_endpoint_base_url_revision, tested_endpoint_status_revision, tested_config_revision, state_change_applied
+)
+SELECT
+    c.id, 'permission_recheck', $1, $2, $3,
+    $4, $5, c.credential_valid, $6, NULL,
+    $7, $8,
+    $9, false
+FROM channels c
+WHERE c.id = $10
+`
+
+type InsertPermissionRecheckLogParams struct {
+	Success                       bool
+	ErrorCode                     pgtype.Text
+	HttpStatus                    pgtype.Int4
+	LatencyMs                     pgtype.Int4
+	TestedModel                   pgtype.Text
+	Message                       pgtype.Text
+	TestedEndpointBaseUrlRevision pgtype.Int8
+	TestedEndpointStatusRevision  pgtype.Int8
+	TestedConfigRevision          pgtype.Int8
+	ChannelID                     int64
+}
+
+// 403 Channel-Model 自动复检只写审计，不覆盖 channels.last_test_* 或 credential_valid。
+// credential_valid_after 在 INSERT 时直接读取数据库当前事实，调用方不能猜测；upstream_error 固定 NULL，
+// 禁止把 credential、响应 body 或其它上游敏感内容写入复检日志。
+func (q *Queries) InsertPermissionRecheckLog(ctx context.Context, arg InsertPermissionRecheckLogParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertPermissionRecheckLog,
+		arg.Success,
+		arg.ErrorCode,
+		arg.HttpStatus,
+		arg.LatencyMs,
+		arg.TestedModel,
+		arg.Message,
+		arg.TestedEndpointBaseUrlRevision,
+		arg.TestedEndpointStatusRevision,
+		arg.TestedConfigRevision,
+		arg.ChannelID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

@@ -32,6 +32,14 @@ func (f *fakeQueries) GetAppSetting(_ context.Context, key string) ([]byte, erro
 	return v, nil
 }
 
+func (f *fakeQueries) GetAppSettingRecord(_ context.Context, key string) (sqlc.GetAppSettingRecordRow, error) {
+	v, err := f.GetAppSetting(context.Background(), key)
+	if err != nil {
+		return sqlc.GetAppSettingRecordRow{}, err
+	}
+	return sqlc.GetAppSettingRecordRow{Key: key, Value: v, Revision: 1}, nil
+}
+
 func (f *fakeQueries) UpsertAppSetting(_ context.Context, arg sqlc.UpsertAppSettingParams) error {
 	f.data[arg.Key] = arg.Value
 	return nil
@@ -89,9 +97,19 @@ func TestSetRejectsInvalidMode(t *testing.T) {
 
 func TestSetRejectsUnknownKey(t *testing.T) {
 	store := newTestStore(newFakeQueries())
-	err := store.Set(context.Background(), "does.not.exist", json.RawMessage(`{}`))
+	for _, key := range []string{"does.not.exist", "gateway.rate_limit_defaults"} {
+		err := store.Set(context.Background(), key, json.RawMessage(`{}`))
+		if err == nil {
+			t.Fatalf("expected error for unknown key %q", key)
+		}
+	}
+}
+
+func TestSettingsStoreRejectsCriticalSettingDirectWrite(t *testing.T) {
+	store := newTestStore(newFakeQueries())
+	err := store.Set(context.Background(), GatewayRouteRateLimitDefaultsKey, json.RawMessage(`{"rpm":60,"tpm":0,"rpd":0}`))
 	if err == nil {
-		t.Fatal("expected error for unknown key")
+		t.Fatal("critical setting must require durable runtime-control publisher")
 	}
 }
 

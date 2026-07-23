@@ -22,7 +22,6 @@ type RoutingDecisionDTO struct {
 	StickyChannelID      *int64          `json:"sticky_channel_id"`
 	StickyPinned         bool            `json:"sticky_pinned"`
 	StickyInvalid        bool            `json:"sticky_invalid"`
-	CapacityDegraded     bool            `json:"capacity_degraded"`
 	AllCapacityZero      bool            `json:"all_capacity_zero"`
 	MarginGuardTriggered bool            `json:"margin_guard_triggered"`
 	Abnormal             bool            `json:"abnormal"`
@@ -44,7 +43,7 @@ func NewRoutingDecisionDTO(d routingtrace.Decision) RoutingDecisionDTO {
 		RequestedModelID: d.RequestedModelID, Protocol: d.Protocol, Operation: d.Operation,
 		PoolSize: d.PoolSize, CandidateCount: d.CandidateCount, StickyChannelID: d.StickyChannelID,
 		StickyPinned: d.StickyPinned, StickyInvalid: d.StickyInvalid,
-		CapacityDegraded: d.CapacityDegraded, AllCapacityZero: d.AllCapacityZero,
+		AllCapacityZero:      d.AllCapacityZero,
 		MarginGuardTriggered: d.MarginGuardTriggered, Abnormal: d.Abnormal,
 		AbnormalReasons: d.AbnormalReasons, CandidateScores: d.CandidateScores,
 		SelectedOrder: d.SelectedOrder, FallbackChain: d.FallbackChain,

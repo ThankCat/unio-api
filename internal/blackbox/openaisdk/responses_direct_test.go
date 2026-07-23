@@ -100,7 +100,7 @@ func writeMockResponsesStream(w http.ResponseWriter, events []responsesUpstreamE
 func directResponsesOptions(mockURL string) sdkfixture.SetupOptions {
 	return sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mockURL + "/v1",
+		UpstreamBaseURL: mockURL,
 		// 官方 1P key=openai 现含 responses 直传槽（HasResponses=true → 直传分流）。
 		AdapterKey: "openai",
 		// 用 test-only model id，避免与本地 dev DB 残留的真实模型行（如 gpt-5.5）撞 models_model_id_key。

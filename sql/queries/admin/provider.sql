@@ -61,7 +61,8 @@ DELETE FROM providers WHERE id = sqlc.arg(id);
 -- 返回 providers 受影响行数（0 = provider 不存在或已归档）。恢复不向下级联，需逐个恢复渠道。
 WITH archived_channels AS (
     UPDATE channels
-    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text,
+        config_revision = config_revision + 1, updated_at = now()
     WHERE provider_id = sqlc.arg(id) AND status <> 'archived'
     RETURNING id
 ),
@@ -78,12 +79,14 @@ WITH replacement AS (
     SELECT c.id
     FROM channels c
     JOIN providers p ON p.id = c.provider_id
+    JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
     WHERE c.id = sqlc.arg(replacement_channel_id)
       AND c.provider_id <> sqlc.arg(id)
       AND c.status = 'enabled'
       AND c.credential_valid
       AND c.credential <> ''
-      AND c.base_url <> ''
+      AND pe.base_url <> ''
+      AND pe.status = 'enabled'
       AND p.status = 'enabled'
 ),
 affected_routes AS (
@@ -101,7 +104,8 @@ added AS (
 ),
 archived_channels AS (
     UPDATE channels
-    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text,
+        config_revision = config_revision + 1, updated_at = now()
     WHERE provider_id = sqlc.arg(id)
       AND status <> 'archived'
       AND EXISTS (SELECT 1 FROM replacement)
@@ -157,6 +161,19 @@ SELECT
     p.name,
     p.status,
     p.created_at,
+    COALESCE((
+        SELECT jsonb_agg(
+            jsonb_build_object(
+                'id', pe.id,
+                'name', pe.name,
+                'base_url', pe.base_url,
+                'status', pe.status
+            )
+            ORDER BY pe.id
+        )
+        FROM provider_endpoints pe
+        WHERE pe.provider_id = p.id
+    ), '[]'::jsonb)::text AS endpoints,
     (SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id) AS channel_total,
     (
         SELECT COUNT(DISTINCT cm.model_id)
@@ -324,7 +341,7 @@ LIMIT 500;
 SELECT
     c.id,
     c.name,
-    c.base_url,
+    pe.base_url,
     c.status,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
@@ -344,12 +361,13 @@ SELECT
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99
 FROM channels c
+JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
 LEFT JOIN request_attempts a
     ON a.channel_id = c.id
     AND (sqlc.narg('from_time')::timestamptz IS NULL OR a.created_at >= sqlc.narg('from_time')::timestamptz)
     AND (sqlc.narg('to_time')::timestamptz IS NULL OR a.created_at < sqlc.narg('to_time')::timestamptz)
 WHERE c.provider_id = sqlc.arg('provider_id')
-GROUP BY c.id, c.name, c.base_url, c.status
+GROUP BY c.id, c.name, pe.base_url, c.status
 ORDER BY attempt_total DESC, c.id;
 
 -- name: ProviderOpsPerformanceTimeseries :many

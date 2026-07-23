@@ -98,11 +98,12 @@ func TestAnthropicSDKShapeNonStreamMessage(t *testing.T) {
 		&fakeMessagesAuthorizer{},
 	)
 
-	got, err := service.CreateMessage(contextWithPrincipal(42), messageRequest())
+	result, err := service.CreateMessage(contextWithPrincipal(42), messageRequest())
 	if err != nil {
 		t.Fatalf("CreateMessage returned err: %v", err)
 	}
 
+	got := result.Response
 	if got.Type != "message" || got.Role != "assistant" {
 		t.Fatalf("unexpected response envelope: type=%q role=%q", got.Type, got.Role)
 	}

@@ -15,7 +15,7 @@ import (
 // 杜绝后台静默。此处只回显非敏感运维阈值（兜底 token、补偿、HTTP 超时），绝不回显任何
 // 凭据/密钥/DSN（DATABASE_URL、REDIS_PASSWORD、CREDENTIAL_MASTER_KEY、ADMIN_API_TOKEN 等）。
 //
-// 限流全局默认、渠道熔断、流式 idle 超时、渠道 429 冷却、凭据 401 阈值、默认渠道超时已迁移为
+// 线路/渠道默认限流、渠道熔断、流式 idle 超时、渠道 429 冷却、凭据 401 阈值、默认渠道超时已迁移为
 // 运行时配置（app_settings），从本只读面板移除，改在「运行时配置」可编辑面板管理（/settings）。
 //
 // 注意：admin-server 与 gateway-server 是独立进程，此处反映的是 admin 进程启动时读到的 env。

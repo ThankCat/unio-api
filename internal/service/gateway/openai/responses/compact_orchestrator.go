@@ -10,6 +10,7 @@ import (
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
+	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
@@ -36,20 +37,20 @@ type compactResult struct {
 //
 // 缺省 instructions 时注入兜底压缩指令（Codex 通常自带；缺省时直发历史会让模型续写而非压缩）。
 // 注入对 Native 透传无害（instructions 是 compact 合法字段，且原始 RawBody 透传优先），对 Synthetic 必要。
-func (s *ResponsesService) CompactHistory(ctx context.Context, req gatewayapi.ResponsesRequest) (*gatewayapi.CompactHistoryResponse, error) {
+func (s *ResponsesService) CompactHistory(ctx context.Context, req gatewayapi.ResponsesRequest) (*lifecycle.NonStreamResult[*gatewayapi.CompactHistoryResponse], error) {
 	if req.Instructions == nil || strings.TrimSpace(*req.Instructions) == "" {
 		def := defaultCompactionInstruction
 		req.Instructions = &def
 	}
 
-	result, err := s.executeCompact(ctx, req)
+	result, delivery, err := s.executeCompact(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	if result.native != nil {
 		// NativeCompact：原文透传上游压缩响应体，仅改写顶层 model 回显为客户请求名。
 		data := rewriteResponsesModel(result.native.Raw, req.Model)
-		return gatewayapi.RawCompactHistoryResponse(data), nil
+		return lifecycle.NewNonStreamResult(gatewayapi.RawCompactHistoryResponse(data), delivery), nil
 	}
 	if result.synthetic == nil {
 		return nil, failure.New(
@@ -58,20 +59,20 @@ func (s *ResponsesService) CompactHistory(ctx context.Context, req gatewayapi.Re
 		)
 	}
 	resp := mapChatResponseToCompaction(*result.synthetic)
-	return &resp, nil
+	return lifecycle.NewNonStreamResult(&resp, delivery), nil
 }
 
 // executeCompact 执行 compact 双路径候选 fallback 计费循环，按候选 adapter 能力分流 Native/Synthetic。
 //
-// 候选过滤/估算复用 chat 桥接口径（allowDirect=false，与历史 compact 行为一致，零回归）；per-candidate
-// 在 invoke 内分叉：注册了原生 compact 能力者走 NativeCompact，命中「上游不支持」时按配置回落 Synthetic（Q2）。
-func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.ResponsesRequest) (compactResult, error) {
+// 候选过滤/估算复用 chat 桥接口径（allowDirect=false，与历史 compact 行为一致，零回归）。Native
+// 404/405 回落由 lifecycle 作为同候选的第二次独立 transport 执行，拥有新的 permit 和 attempt。
+func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.ResponsesRequest) (compactResult, lifecycle.DeliveryFinalizer, error) {
 	var (
 		compactAdapter responsesadapter.ResponsesCompactAdapter
 		chatAdapter    chatcompletionsadapter.ChatAdapter
 		result         compactResult
 	)
-	err := s.runNonStream(ctx, req, nonStreamStrategy{
+	delivery, err := s.runNonStream(ctx, req, nonStreamStrategy{
 		allowDirect: false,
 		// 原生 2xx 缺 usage（上游很可能已计费）：runner 释放冻结 + 记 risk_exposure，不重复白嫖（P0-3）。
 		upstreamCostWithoutUsage: isNativeCompactMissingUsage,
@@ -79,6 +80,12 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 			UpstreamCostWithoutUsageCode:       "responses_compact_cost_without_usage",
 			UpstreamCostWithoutUsageReasonCode: "responses_compact_missing_usage",
 			UpstreamCostWithoutUsageReason:     "native /responses/compact returned 2xx without billable usage; upstream cost may have been incurred",
+		},
+		operationForCandidate: func(candidate routing.ChatRouteCandidate) requestlog.UpstreamOperation {
+			if s.registry.HasResponsesCompact(candidate.AdapterKey) {
+				return requestlog.UpstreamOperationResponsesCompact
+			}
+			return requestlog.UpstreamOperationChatCompletions
 		},
 		resolve: func(candidate routing.ChatRouteCandidate) error {
 			if s.registry.HasResponsesCompact(candidate.AdapterKey) {
@@ -90,10 +97,6 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 					)
 				}
 				compactAdapter = adapter
-				// 解析同 adapter_key 的 chat 能力，供 Native 不支持时回落 Synthetic（Q2，best-effort）。
-				if chat, ok := s.registry.Chat(candidate.AdapterKey); ok {
-					chatAdapter = chat
-				}
 				return nil
 			}
 			chat, ok := s.registry.Chat(candidate.AdapterKey)
@@ -116,15 +119,6 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 				resp, err := compactAdapter.CompactResponse(adapterCtx, candidate.Channel, responsesadapter.Request{Body: body})
 				lifecycle.EndGatewaySpan(adapterSpan, err)
 				if err != nil {
-					// 真 404/405（上游无原生 compact、无成本）：按配置安全回落 Synthetic。
-					if s.compactNativeFallback && isNativeCompactUnsupported(err) {
-						s.logger.Warn("native compact unsupported; falling back to synthetic compaction",
-							zap.String("adapter_key", candidate.AdapterKey),
-							zap.Int64("channel_id", candidate.Channel.ID),
-							zap.String("upstream_model", candidate.UpstreamModel),
-						)
-						return s.invokeSyntheticCompact(ctx, candidate, req, chatAdapter, &result)
-					}
 					// 原生 2xx 但缺 usage（上游很可能已计费）：绝不回落白嫖。上抛交由 AttemptRunner 释放冻结 +
 					// 记 risk_exposure（UpstreamCostWithoutUsage 分类命中），并向客户返回上游错误（P0-3）。
 					if isNativeCompactMissingUsage(err) {
@@ -141,6 +135,36 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 			}
 			return s.invokeSyntheticCompact(ctx, candidate, req, chatAdapter, &result)
 		},
+		transparentFallback: &lifecycle.NonStreamTransparentFallback{
+			Match: func(candidate routing.ChatRouteCandidate, err error) bool {
+				matched := s.compactNativeFallback &&
+					s.registry.HasResponsesCompact(candidate.AdapterKey) &&
+					isNativeCompactUnsupported(err)
+				if matched {
+					s.logger.Warn("native compact unsupported; falling back to a separately admitted synthetic compaction",
+						zap.String("adapter_key", candidate.AdapterKey),
+						zap.Int64("channel_id", candidate.Channel.ID),
+						zap.String("upstream_model", candidate.UpstreamModel),
+					)
+				}
+				return matched
+			},
+			UpstreamOperation: requestlog.UpstreamOperationChatCompletions,
+			ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
+				chat, ok := s.registry.Chat(candidate.AdapterKey)
+				if !ok {
+					return failure.New(
+						failure.CodeGatewayAdapterNotRegistered,
+						failure.WithMessage(fmt.Sprintf("gateway chat adapter %q not registered", candidate.AdapterKey)),
+					)
+				}
+				chatAdapter = chat
+				return nil
+			},
+			Invoke: func(ctx context.Context, candidate routing.ChatRouteCandidate) (lifecycle.AttemptSuccess, error) {
+				return s.invokeSyntheticCompact(ctx, candidate, req, chatAdapter, &result)
+			},
+		},
 	})
-	return result, err
+	return result, delivery, err
 }

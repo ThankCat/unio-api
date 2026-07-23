@@ -11,6 +11,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 )
@@ -30,15 +31,9 @@ type AttemptRunner struct {
 	lifecycle       *RequestLifecycle
 	retryClassifier RetryClassifier
 	settlement      ChatSettlementExecutor
+	permitManager   *AttemptPermitManager
 
-	// guard 是可选的两层限流 Guard（P2-8）：Key 级 TPM 预占、channel 级 RPM/RPD/TPM 预占与结算回填。
-	// nil 表示未启用限流，所有 guard 调用放行，保证未注入限流的调用点零行为变化。
-	guard RateLimitGuard
-
-	// concurrency 是可选的渠道在途并发限制器（DEC-029）。nil 表示未启用，恒放行。
-	concurrency ChannelConcurrencyLimiter
-
-	// headWait 提供队首 TPM/并发短等预算（大 uncache 缺口 P1）；通常指向共享 StickyRouter。
+	// headWait 保留 sticky 队首短等配置源，供 permit 容量重试策略使用。
 	// nil 或 SampleHeadWait=0 表示不等，命中满员立即 failover。
 	headWait *StickyRouter
 
@@ -58,6 +53,15 @@ func NewAttemptRunner(lc *RequestLifecycle, retryClassifier RetryClassifier, set
 		retryClassifier = NeverRetryClassifier{}
 	}
 	return &AttemptRunner{lifecycle: lc, retryClassifier: retryClassifier, settlement: settlement}
+}
+
+// SetAttemptPermitManager 注入候选级全局准入。生产 generation 路径必须注入共享 manager。
+// nil 仅保留给不经过 HTTP request-admission wrapper 的直接 service 单元测试/维护调用。
+func (r *AttemptRunner) SetAttemptPermitManager(manager *AttemptPermitManager) {
+	if r == nil {
+		return
+	}
+	r.permitManager = manager
 }
 
 // AttemptSuccess 是一次成功上游调用交给 settlement 的协议无关事实。
@@ -81,6 +85,20 @@ type ResolveAdapter func(candidate routing.ChatRouteCandidate) error
 // 供后续映射，并返回结算所需 AttemptSuccess；失败时返回稳定错误交由 runner 分类。
 type NonStreamInvoke func(ctx context.Context, candidate routing.ChatRouteCandidate) (AttemptSuccess, error)
 
+// NonStreamOperationResolver selects the concrete upstream transport for one candidate.
+// A nil resolver preserves the request lifecycle's default operation.
+type NonStreamOperationResolver func(candidate routing.ChatRouteCandidate) requestlog.UpstreamOperation
+
+// NonStreamTransparentFallback describes one optional second transport on the same routing
+// candidate. It is intentionally narrow: the first attempt is already terminal before Match is
+// evaluated, and the second transport must pass a fresh permit admission and create a new attempt.
+type NonStreamTransparentFallback struct {
+	Match             func(candidate routing.ChatRouteCandidate, err error) bool
+	UpstreamOperation requestlog.UpstreamOperation
+	ResolveAdapter    ResolveAdapter
+	Invoke            NonStreamInvoke
+}
+
 // RunNonStreamParams 是驱动一次非流式候选 fallback 循环所需的协议无关参数。
 type RunNonStreamParams struct {
 	RequestRecord    requestlog.RequestRecord
@@ -92,6 +110,12 @@ type RunNonStreamParams struct {
 	ResolveAdapter   ResolveAdapter
 	Invoke           NonStreamInvoke
 	Codes            RunNonStreamCodes
+
+	// OperationForCandidate overrides the default upstream operation for the primary transport.
+	// TransparentFallback, when matched, performs exactly one separately admitted transport on the
+	// same candidate. Compact Native 404/405 -> Synthetic is the only current consumer.
+	OperationForCandidate NonStreamOperationResolver
+	TransparentFallback   *NonStreamTransparentFallback
 
 	// EstimatedTokens 是本请求保守预估的输入 token 数，用于 TPM 限流的上游调用前预占（P2-8）。
 	// 结算后由 runner 按真实 billable token 回填差额。0 表示不参与 TPM 预占（仍走 RPM/RPD）。
@@ -109,8 +133,29 @@ type RunNonStreamParams struct {
 
 // RunResult 汇报候选循环最终的业务 outcome，供协议 service 的 metrics defer 读取。
 type RunResult struct {
-	Outcome  metrics.ChatOutcome
-	Attempts int
+	Outcome         metrics.ChatOutcome
+	Attempts        int
+	RoutingFallback bool
+	TransportChain  []TransportAttempt
+
+	// Delivery is set only when a non-stream request has settled successfully.
+	// The HTTP handler owns its single terminal transition after the JSON write.
+	Delivery DeliveryFinalizer
+}
+
+// TransportAttempt is one persisted attempt that proceeds to a real upstream
+// transport. Admission-denied candidates are intentionally absent from this chain.
+type TransportAttempt struct {
+	ChannelID         int64                        `json:"channel_id"`
+	UpstreamOperation requestlog.UpstreamOperation `json:"upstream_operation"`
+}
+
+func (r *RunResult) recordTransportAttempt(candidate routing.ChatRouteCandidate, operation requestlog.UpstreamOperation) {
+	r.Attempts++
+	r.TransportChain = append(r.TransportChain, TransportAttempt{
+		ChannelID:         candidate.Channel.ID,
+		UpstreamOperation: operation,
+	})
 }
 
 // RunNonStreamCodes 是共享非流式候选循环里的审计 code/reason 覆盖项。
@@ -166,107 +211,91 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 	authorization := params.Authorization
 	codes := params.Codes.withDefaults()
 
-	// Key 级 TPM 预占（P2-8）：RPM/RPD 已在 ingress 中间件处理，这里只做 token 维度。
-	// 命中即释放冻结并以 429 上抛；计数后端 fail_closed 故障同样释放冻结后上抛。
-	if dec, allowed, err := r.guardKeyTokens(ctx, params.Principal, params.EstimatedTokens); err != nil {
-		if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-			l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
-			return result, releaseErr
-		}
-		l.MarkRequestFailed(ctx, requestRecord, string(failure.CodeRateLimitStoreFailed), err)
-		return result, err
-	} else if !allowed {
-		if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-			l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
-			return result, releaseErr
-		}
-		rlErr := keyTokenRateLimitError(dec)
-		l.MarkRequestFailed(ctx, requestRecord, string(failure.CodeRateLimitExceeded), rlErr)
-		return result, rlErr
-	}
-
-	// TPM 预占跟踪（DEC-028）：登记已实际生效的 route+user 预占，收尾时释放所有未被结算回填对账的预占
-	// （失败/取消/无结算的 route+user，以及 fallback 落选/失败的候选渠道），避免额度泄漏在 TPM 窗口。
-	res := &tpmReservations{}
-	r.recordKeyTPMReservation(res, params.Principal, params.EstimatedTokens)
-	defer r.releaseUnreconciledTPM(ctx, res)
-
 	var lastErr error
-	headWaitUsed := false // 队首短等整请求只等一次（R10）
+	denials := attemptDenialSummary{capacityOnly: true}
+	headWaitUsed := false
 
 	for candIdx, prepared := range params.Candidates {
 		index := prepared.RouteIndex
 		candidate := prepared.Route
+		operation := l.upstreamOperation()
+		if params.OperationForCandidate != nil {
+			operation = params.OperationForCandidate(candidate)
+		}
 
-		// channel 处于熔断 open 状态时直接跳过，尝试下一个同模型 channel；
-		// 跳过不产生上游调用，也不写 attempt（attempt_index 允许出现空洞）。
-		// 粘住渠道被熔断跳过属硬摘除：清 sticky 绑定让后续请求重选（R5）。
-		channelKey := MetricsID(candidate.Channel.ID)
-		if !l.BreakerAllow(channelKey) {
-			r.recordRoutingSkip("breaker")
-			r.logRouting(ctx, "routing candidate skipped",
-				zap.Int64("channel_id", candidate.Channel.ID),
-				zap.String("skip_reason", "breaker"),
-			)
-			params.Sticky.ClearIfBound(ctx, candidate.Channel.ID)
-			if candIdx+1 < len(params.Candidates) {
-				l.RecordBalanceFallback(routeIDOf(params.Principal), "breaker")
+		// adapter lookup 是本地、无副作用步骤，必须先于 Redis 候选准入。
+		if params.ResolveAdapter != nil {
+			if err := params.ResolveAdapter(candidate); err != nil {
+				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+					return result, releaseErr
+				}
+				l.MarkRequestFailed(ctx, requestRecord, "adapter_not_registered", err)
+				return result, err
 			}
-			continue
 		}
 
-		// 渠道在途并发 + 渠道级限流预占；队首可短等一次（决议 4 / R10）。
-		isHead := candIdx == 0 && !headWaitUsed
-		admit := r.admitCandidate(ctx, candidate, params.EstimatedTokens, isHead)
-		if admit.waitedMs > 0 {
-			headWaitUsed = true
-			r.logRouting(ctx, "routing head wait",
-				zap.Int64("channel_id", candidate.Channel.ID),
-				zap.Int64("waited_ms", admit.waitedMs),
-				zap.Bool("admitted", admit.admitted),
-			)
-		}
-		if !admit.admitted {
-			lastErr = admit.err
-			if admit.skipReason != "" {
+		var permitOwner *AttemptPermitOwner
+		if r.permitManager != nil {
+			admission, owner, err := r.acquireAttemptWithHeadWait(ctx, AttemptPermitAcquireParams{
+				Candidate:            candidate,
+				UpstreamOperation:    operation,
+				RequestMode:          breakerstore.ModeNonStream,
+				EstimatedInputTokens: params.EstimatedTokens,
+			}, candIdx == 0, &headWaitUsed)
+			if err != nil {
+				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+					return result, releaseErr
+				}
+				l.MarkRequestFailed(ctx, requestRecord, RoutingFailureCode(err), err)
+				return result, err
+			}
+			if admission.Mode == breakerstore.AdmissionDenied {
+				if admission.Reason == breakerstore.ReasonBreakerStoreUnavailable {
+					err := failure.New(failure.CodeGatewayBreakerStoreUnavailable, failure.WithMessage("attempt admission store unavailable"))
+					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+						return result, releaseErr
+					}
+					l.MarkRequestFailed(ctx, requestRecord, string(failure.CodeGatewayBreakerStoreUnavailable), err)
+					return result, err
+				}
+				denials.Record(admission.Reason)
+				skipReason := attemptDeniedSkipReason(admission.Reason)
+				r.recordRoutingSkip(skipReason)
 				r.logRouting(ctx, "routing candidate skipped",
 					zap.Int64("channel_id", candidate.Channel.ID),
-					zap.String("skip_reason", admit.skipReason),
-					zap.Int64("waited_ms", admit.waitedMs),
+					zap.String("skip_reason", skipReason),
 				)
-			}
-			// 客户端取消/超时发生在短等期间：尚未建 attempt，释放冻结后直接收口请求。
-			if errors.Is(admit.err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
-					return result, releaseErr
+				if admission.Reason == breakerstore.ReasonOpen || admission.Reason == breakerstore.ReasonHalfOpenBusy {
+					params.Sticky.ClearIfBound(ctx, candidate.Channel.ID)
 				}
-				result.Outcome = metrics.ChatOutcomeCanceled
-				l.MarkRequestCanceled(ctx, requestRecord, requestlog.AttemptRecord{}, admit.err)
-				return result, admit.err
-			}
-			if errors.Is(admit.err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
-					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
-					return result, releaseErr
+				if candIdx+1 < len(params.Candidates) {
+					result.RoutingFallback = true
+					l.RecordBalanceFallback(routeIDOf(params.Principal), skipReason)
 				}
-				l.MarkRequestFailed(ctx, requestRecord, "request_deadline_exceeded", admit.err)
-				return result, admit.err
+				continue
 			}
-			if candIdx+1 < len(params.Candidates) {
-				l.RecordBalanceFallback(routeIDOf(params.Principal), admit.skipReason)
-			}
-			continue
+			permitOwner = owner
+			// Arm the terminal fallback before attempt persistence or any other fallible work.
+			// Abort is first-terminal-wins, so this is a no-op after the normal Finish/Abort path.
+			defer abortAttemptPermitOnExit(ctx, permitOwner)
 		}
-		releaseSlot := admit.release
-		defer releaseSlot()
 
-		// 该候选已通过渠道级 TPM 预占（额度已写入窗口）：登记预占，收尾时若非胜出（fallback 落选/失败）则释放。
-		r.recordChannelTPMReservation(res, candidate, params.EstimatedTokens)
-
-		// 每个 candidate 都先创建 attempt，再调用 adapter，保证 fallback 链路可在 request_attempts 还原。
-		attemptRecord, err := l.CreateAttempt(ctx, requestRecord, index, candidate)
+		// permit 成功后才创建 attempt；创建失败必须 Abort 精确归还全部候选资源。
+		attemptRecord, err := l.CreateAttemptForOperation(
+			ctx,
+			requestRecord,
+			result.Attempts,
+			index,
+			candidate,
+			operation,
+		)
 		if err != nil {
+			if permitOwner != nil {
+				_ = permitOwner.Abort(ctx)
+			}
 			if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 				l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 				return result, releaseErr
@@ -274,28 +303,124 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			l.MarkRequestFailed(ctx, requestRecord, "request_attempt_create_failed", err)
 			return result, err
 		}
-		result.Attempts++
+		result.recordTransportAttempt(candidate, operation)
 
-		if params.ResolveAdapter != nil {
-			if err := params.ResolveAdapter(candidate); err != nil {
+		upstreamStart := time.Now()
+		success, err := r.invokeNonStreamAttempt(ctx, candidate, attemptRecord, permitOwner, params.Invoke)
+		l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
+		l.RecordCredentialResult(candidate, err)
+		if errors.Is(err, ErrAttemptRuntimeFeedback) || errors.Is(err, errAttemptPermitFinish) {
+			l.MarkAttemptFailed(ctx, attemptRecord, FailureCodeOrFallback(err, string(failure.CodeGatewayBreakerStoreUnavailable)), err)
+			if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+				l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+				return result, releaseErr
+			}
+			l.MarkRequestFailed(ctx, requestRecord, RoutingFailureCode(err), err)
+			return result, err
+		}
+
+		// A transparent fallback is a second real transport, not an adapter-internal retry. The first
+		// permit has already reached Finish/Abort inside invokeNonStreamAttempt. Only after recording
+		// that attempt do we resolve and freshly admit the second operation.
+		fallback := params.TransparentFallback
+		if err != nil && fallback != nil && fallback.Match != nil && fallback.Match(candidate, err) {
+			result.RoutingFallback = true
+			l.MarkAttemptFailed(ctx, attemptRecord, "adapter_error", err)
+			l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.EstimatedTokens, err)
+
+			if fallback.ResolveAdapter != nil {
+				if resolveErr := fallback.ResolveAdapter(candidate); resolveErr != nil {
+					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+						return result, releaseErr
+					}
+					l.MarkRequestFailed(ctx, requestRecord, "adapter_not_registered", resolveErr)
+					return result, resolveErr
+				}
+			}
+
+			var fallbackOwner *AttemptPermitOwner
+			if r.permitManager != nil {
+				admission, owner, acquireErr := r.acquireAttemptWithHeadWait(ctx, AttemptPermitAcquireParams{
+					Candidate:            candidate,
+					UpstreamOperation:    fallback.UpstreamOperation,
+					RequestMode:          breakerstore.ModeNonStream,
+					EstimatedInputTokens: params.EstimatedTokens,
+				}, candIdx == 0, &headWaitUsed)
+				if acquireErr != nil {
+					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+						return result, releaseErr
+					}
+					l.MarkRequestFailed(ctx, requestRecord, RoutingFailureCode(acquireErr), acquireErr)
+					return result, acquireErr
+				}
+				if admission.Mode == breakerstore.AdmissionDenied {
+					if admission.Reason == breakerstore.ReasonBreakerStoreUnavailable {
+						storeErr := failure.New(failure.CodeGatewayBreakerStoreUnavailable, failure.WithMessage("attempt admission store unavailable"))
+						if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+							l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+							return result, releaseErr
+						}
+						l.MarkRequestFailed(ctx, requestRecord, string(failure.CodeGatewayBreakerStoreUnavailable), storeErr)
+						return result, storeErr
+					}
+					denials.Record(admission.Reason)
+					skipReason := attemptDeniedSkipReason(admission.Reason)
+					r.recordRoutingSkip(skipReason)
+					r.logRouting(ctx, "routing candidate transparent fallback skipped",
+						zap.Int64("channel_id", candidate.Channel.ID),
+						zap.String("skip_reason", skipReason),
+					)
+					if admission.Reason == breakerstore.ReasonOpen || admission.Reason == breakerstore.ReasonHalfOpenBusy {
+						params.Sticky.ClearIfBound(ctx, candidate.Channel.ID)
+					}
+					if candIdx+1 < len(params.Candidates) {
+						l.RecordBalanceFallback(routeIDOf(params.Principal), skipReason)
+					}
+					continue
+				}
+				fallbackOwner = owner
+				// Compact's synthetic fallback owns a second permit and needs the same panic/early-return guard.
+				defer abortAttemptPermitOnExit(ctx, fallbackOwner)
+			}
+
+			fallbackAttempt, createErr := l.CreateAttemptForOperation(
+				ctx,
+				requestRecord,
+				result.Attempts,
+				index,
+				candidate,
+				fallback.UpstreamOperation,
+			)
+			if createErr != nil {
+				if fallbackOwner != nil {
+					_ = fallbackOwner.Abort(ctx)
+				}
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 					return result, releaseErr
 				}
-				l.MarkAttemptFailed(ctx, attemptRecord, "adapter_not_registered", err)
-				l.MarkRequestFailed(ctx, requestRecord, "adapter_not_registered", err)
+				l.MarkRequestFailed(ctx, requestRecord, "request_attempt_create_failed", createErr)
+				return result, createErr
+			}
+			result.recordTransportAttempt(candidate, fallback.UpstreamOperation)
+			attemptRecord = fallbackAttempt
+
+			upstreamStart = time.Now()
+			success, err = r.invokeNonStreamAttempt(ctx, candidate, attemptRecord, fallbackOwner, fallback.Invoke)
+			l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
+			l.RecordCredentialResult(candidate, err)
+			if errors.Is(err, ErrAttemptRuntimeFeedback) || errors.Is(err, errAttemptPermitFinish) {
+				l.MarkAttemptFailed(ctx, attemptRecord, FailureCodeOrFallback(err, string(failure.CodeGatewayBreakerStoreUnavailable)), err)
+				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+					return result, releaseErr
+				}
+				l.MarkRequestFailed(ctx, requestRecord, RoutingFailureCode(err), err)
 				return result, err
 			}
 		}
-
-		upstreamStart := time.Now()
-		success, err := params.Invoke(ctx, candidate)
-		responseStartedAt := time.Now()
-		// 上游调用已结束，立即归还渠道在途名额（结算/审计不占上游容量）。
-		releaseSlot()
-		l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
-		l.RecordChannelHealth(channelKey, err)
-		l.RecordCredentialResult(candidate.Channel.ID, err)
 		if err != nil {
 			// 客户端取消不是上游失败，也不触发 fallback；此时还没进入 settlement，不写账务。
 			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
@@ -311,12 +436,6 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			}
 
 			l.MarkAttemptFailed(ctx, attemptRecord, "adapter_error", err)
-
-			// 上游 429：按 Retry-After 登记渠道冷却，后续 fallback 在冷却窗口内直接跳过该渠道（P2-7）。
-			l.RecordChannelRateLimit(channelKey, err)
-
-			// 上游 timeout/5xx：登记失败软冷却，让紧随其后的请求（含客户端重试）优先绕开该渠道（DEC-029）。
-			l.RecordChannelFailureCooldown(channelKey, err)
 
 			// bill-on-disconnect 渠道的 timeout/5xx：上游可能已生成并计费，记平台成本敞口（阶段一）。
 			l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.EstimatedTokens, err)
@@ -349,6 +468,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			// 可重试错误切换候选：前一候选可能已在上游产生成本却不会被结算（P2-3），记指标供监控。
 			l.RecordRetryableFallback(err)
 			if candIdx+1 < len(params.Candidates) {
+				result.RoutingFallback = true
 				category, _ := adapter.UpstreamCategoryOf(err)
 				l.RecordBalanceFallback(routeIDOf(params.Principal), "upstream_"+string(category))
 			}
@@ -369,7 +489,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			ResponseProtocol:        params.ResponseProtocol,
 			ResponseID:              success.ResponseID,
 			ResponseModelID:         params.RequestedModelID,
-			ResponseStartedAt:       &responseStartedAt,
+			ResponseStartedAt:       nil,
 			ModelDBID:               candidate.ModelDBID,
 			FinalProviderID:         candidate.ProviderID,
 			FinalChannelID:          candidate.Channel.ID,
@@ -402,23 +522,16 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			return result, settleErr
 		}
 
-		// 结算成功后按真实 billable token 回填 Key/channel 的 TPM 计数差额（P2-8），并标记该 route+user 与
-		// 胜出 channel 的预占已对账——收尾释放不再回退它们（其余落选候选仍会被释放，DEC-028）。
-		r.backfillRateTokens(ctx, params.Principal, candidate, params.EstimatedTokens, success.Facts.Usage)
-		res.markReconciled(candidate.Channel.ID)
-
 		// 零价渠道误配监控（P2-4）：售价快照全部非正即客户侧 $0 收入，记指标供运维定位误配渠道。
 		if candidate.SalePrice.IsEffectivelyFree() {
 			l.RecordZeroPriceServed(candidate.ProviderID, candidate.Channel.ID, params.RequestedModelID)
 		}
 
-		// 非流式成功：响应将由协议 service 在本调用返回后写出，交付视为完成（completed）。
-		l.MarkDeliveryCompleted(ctx, requestRecord)
-
 		// attempt 成功：sticky bind/改绑（决议 2）。跳过/失败候选不会走到这里，天然不覆盖绑定。
 		params.Sticky.BindSuccess(ctx, candidate.Channel.ID)
 
 		result.Outcome = metrics.ChatOutcomeSuccess
+		result.Delivery = l.NewNonStreamDeliveryFinalizer(ctx, requestRecord)
 		return result, nil
 	}
 
@@ -429,6 +542,16 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 		}
 		l.MarkRequestFailed(ctx, requestRecord, "adapter_error", lastErr)
 		return result, lastErr
+	}
+
+	if denials.seen {
+		if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
+			l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
+			return result, releaseErr
+		}
+		err := denials.FinalError()
+		l.MarkRequestFailed(ctx, requestRecord, RoutingFailureCode(err), err)
+		return result, err
 	}
 
 	if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {

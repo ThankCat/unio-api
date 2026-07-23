@@ -1,7 +1,7 @@
 // Package channelops 提供渠道作战台（§3.3）的只读运维聚合。
 // 全部只读、复用既有事实表（request_attempts / request_records / usage_records /
 // channel_models / channel_prices / route_channels）。性能/成功率按 attempt 粒度，
-// TPS 按最终成功渠道归因（无 per-attempt usage）。健康分桶阈值与概览一致。
+// TPS 按最终成功渠道归因（无 per-attempt usage）；不派生主观健康分桶。
 package channelops
 
 import (
@@ -13,7 +13,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/opsutil"
-	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 )
 
 // Store 是渠道运维聚合所需的只读存储能力（由 *sqlc.Queries 满足）。
@@ -31,19 +30,11 @@ type Store interface {
 // Service 提供渠道运维只读聚合。
 type Service struct {
 	store Store
-	// settings 供每请求现读健康分桶阈值(admin_backend.channel_health_thresholds);
-	// nil(单测)回代码默认。
-	settings *appsettings.SettingsStore
 }
 
 // NewService 创建渠道运维聚合服务。
-func NewService(store Store, settings *appsettings.SettingsStore) *Service {
-	return &Service{store: store, settings: settings}
-}
-
-// healthThresholds 读取当前生效的分桶阈值。
-func (s *Service) healthThresholds(ctx context.Context) appsettings.ChannelHealthThresholds {
-	return appsettings.AdminBackendChannelHealthThresholds(ctx, s.settings)
+func NewService(store Store) *Service {
+	return &Service{store: store}
 }
 
 // Row 是渠道运维主表行。
@@ -64,11 +55,10 @@ type Row struct {
 	SuccessRate      float64
 	TimeoutTotal     int64
 	Latency          opsutil.LatencyStats
-	HealthBucket     string
 	BoundModels      int64
 	BoundRoutes      int64
 	RecentErrorCode  string
-	// 渠道级限流上限（P2-8）：nil=继承全局默认，0=不限，>0=具体上限。
+	// 渠道级限流上限（P2-8）：nil=继承渠道默认限流，0=不限，>0=具体上限。
 	RpmLimit          *int32
 	TpmLimit          *int32
 	RpdLimit          *int32
@@ -175,7 +165,6 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 		return nil, 0, storeFailed(err, "count channel ops table")
 	}
 
-	th := s.healthThresholds(ctx)
 	out := make([]Row, 0, len(rows))
 	for _, r := range rows {
 		row := Row{
@@ -197,7 +186,6 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 				r.LatencySample, r.AttemptSucceeded,
 			),
-			HealthBucket:            opsutil.HealthBucket(r.AttemptSucceeded, r.AttemptTotal, th.HealthyRate, th.DegradedRate),
 			BoundModels:             r.BoundModels,
 			BoundRoutes:             r.BoundRoutes,
 			RecentErrorCode:         textValue(r.RecentErrorCode),

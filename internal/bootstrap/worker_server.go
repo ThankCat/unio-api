@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/app/workers"
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
+	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channeltest"
@@ -30,6 +32,7 @@ type WorkerServerAppDeps struct {
 	Logger *zap.Logger
 	Config config.Config
 	DB     WorkerServerAppDB
+	Redis  redis.Cmdable
 }
 
 // WorkerServerApp 表示当前 worker-server 进程已经装配完成的后台任务应用。
@@ -39,6 +42,9 @@ type WorkerServerApp struct {
 
 // NewWorkerServerApp 装配当前 worker-server 进程的后台任务应用。
 func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerServerApp, error) {
+	if deps.Redis == nil {
+		return nil, fmt.Errorf("worker-server: redis is required")
+	}
 	queries := sqlc.New(deps.DB)
 	ledgerService := ledger.NewService(deps.DB, queries)
 	chatSettlementService := lifecycle.NewChatSettlementService(
@@ -90,10 +96,24 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 		return nil, err
 	}
 	settingsStore := appsettings.NewSettingsStore(
-		queries, nil, deps.Config.Redis.KeyNamespace, appsettings.DefaultRegistry(), deps.Logger,
+		queries, deps.Redis, deps.Config.Redis.KeyNamespace, appsettings.DefaultRegistry(), deps.Logger,
 	)
 	_ = settingsStore.SeedDefaults(ctx)
 	channelTestService := channeltest.NewService(queries, adapterRegistry, settingsStore)
+	permissionStore := breakerstore.NewStore(deps.Redis, deps.Config.Redis.KeyNamespace)
+	if err := permissionStore.VerifySingleNodeDeployment(ctx); err != nil {
+		return nil, err
+	}
+	if err := permissionStore.Ping(ctx); err != nil {
+		return nil, err
+	}
+	units = append(units, workers.NewPermissionRecheckWorker(
+		permissionStore,
+		channelTestService,
+		settingsStore,
+		defaultWorkerID("permission-recheck"),
+		deps.Logger,
+	))
 	units = append(units, workers.NewChannelTestWorker(
 		queries,
 		workerChannelTester{svc: channelTestService},

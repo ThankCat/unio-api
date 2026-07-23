@@ -230,29 +230,46 @@ func (s *Store) MarkRequestCanceled(ctx context.Context, params MarkRequestCance
 
 // CreateAttempt 创建一条 running request attempt。
 func (s *Store) CreateAttempt(ctx context.Context, params CreateAttemptParams) (AttemptRecord, error) {
+	if params.ProviderEndpointID == nil || *params.ProviderEndpointID <= 0 ||
+		params.ProviderEndpointBaseURLRevision == nil || *params.ProviderEndpointBaseURLRevision <= 0 ||
+		params.ProviderEndpointStatusRevision == nil || *params.ProviderEndpointStatusRevision <= 0 ||
+		params.ChannelConfigRevision == nil || *params.ChannelConfigRevision <= 0 ||
+		params.RoutingCandidateIndex == nil || *params.RoutingCandidateIndex < 0 ||
+		params.UpstreamOperation == "" {
+		return AttemptRecord{}, requestLogStoreFailure(
+			errors.New("request attempt routing identity is incomplete"),
+			"create request attempt",
+		)
+	}
 	row, err := s.queries.CreateRequestAttempt(ctx, sqlc.CreateRequestAttemptParams{
-		RequestRecordID:       params.RequestRecordID,
-		AttemptIndex:          int32(params.AttemptIndex),
-		ProviderID:            params.ProviderID,
-		ChannelID:             params.ChannelID,
-		AdapterKey:            params.AdapterKey,
-		UpstreamModel:         params.UpstreamModel,
-		UpstreamProtocol:      string(params.UpstreamProtocol),
-		UpstreamResponseID:    pgtype.Text{Valid: false},
-		UpstreamResponseModel: pgtype.Text{Valid: false},
-		UpstreamFinishReason:  pgtype.Text{Valid: false},
-		FinishClass:           pgtype.Text{Valid: false},
-		Status:                string(AttemptStatusRunning),
-		UpstreamStatusCode:    pgtype.Int4{Valid: false},
-		UpstreamRequestID:     pgtype.Text{Valid: false},
-		ErrorCode:             pgtype.Text{Valid: false},
-		ErrorMessage:          pgtype.Text{Valid: false},
-		InternalErrorDetail:   pgtype.Text{Valid: false},
-		ResponseStartedAt:     pgtype.Timestamptz{Valid: false},
-		FinalUsageReceived:    false,
-		UsageMappingVersion:   pgtype.Text{Valid: false},
-		StartedAt:             timestamptz(params.StartedAt),
-		CompletedAt:           pgtype.Timestamptz{Valid: false},
+		RequestRecordID:                 params.RequestRecordID,
+		AttemptIndex:                    int32(params.AttemptIndex),
+		ProviderID:                      params.ProviderID,
+		ChannelID:                       params.ChannelID,
+		AdapterKey:                      params.AdapterKey,
+		UpstreamModel:                   params.UpstreamModel,
+		UpstreamProtocol:                string(params.UpstreamProtocol),
+		ProviderEndpointID:              *params.ProviderEndpointID,
+		ProviderEndpointBaseUrlRevision: *params.ProviderEndpointBaseURLRevision,
+		ProviderEndpointStatusRevision:  *params.ProviderEndpointStatusRevision,
+		ChannelConfigRevision:           *params.ChannelConfigRevision,
+		RoutingCandidateIndex:           int32(*params.RoutingCandidateIndex),
+		UpstreamOperation:               string(params.UpstreamOperation),
+		UpstreamResponseID:              pgtype.Text{Valid: false},
+		UpstreamResponseModel:           pgtype.Text{Valid: false},
+		UpstreamFinishReason:            pgtype.Text{Valid: false},
+		FinishClass:                     pgtype.Text{Valid: false},
+		Status:                          string(AttemptStatusRunning),
+		UpstreamStatusCode:              pgtype.Int4{Valid: false},
+		UpstreamRequestID:               pgtype.Text{Valid: false},
+		ErrorCode:                       pgtype.Text{Valid: false},
+		ErrorMessage:                    pgtype.Text{Valid: false},
+		InternalErrorDetail:             pgtype.Text{Valid: false},
+		ResponseStartedAt:               pgtype.Timestamptz{Valid: false},
+		FinalUsageReceived:              false,
+		UsageMappingVersion:             pgtype.Text{Valid: false},
+		StartedAt:                       timestamptz(params.StartedAt),
+		CompletedAt:                     pgtype.Timestamptz{Valid: false},
 	})
 	if err != nil {
 		return AttemptRecord{}, requestLogStoreFailure(err, "create request attempt")
@@ -274,6 +291,40 @@ func (s *Store) MarkAttemptResponseStarted(ctx context.Context, params MarkAttem
 		return AttemptRecord{}, requestLogStoreFailure(err, "mark request attempt response started")
 	}
 
+	return attemptRecordFromSQLC(sqlc.RequestAttempt(row)), nil
+}
+
+// RecordAttemptTiming first-write-wins 地保存一次真实 upstream transport 的时间边界。
+func (s *Store) RecordAttemptTiming(ctx context.Context, params RecordAttemptTimingParams) (AttemptRecord, error) {
+	row, err := s.queries.RecordRequestAttemptUpstreamTiming(ctx, sqlc.RecordRequestAttemptUpstreamTimingParams{
+		UpstreamStartedAt:    optionalTimestamptz(params.UpstreamStartedAt),
+		UpstreamFirstTokenAt: optionalTimestamptz(params.UpstreamFirstTokenAt),
+		UpstreamCompletedAt:  optionalTimestamptz(params.UpstreamCompletedAt),
+		AttemptID:            params.ID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AttemptRecord{}, requestLogStateTransitionFailure("record request attempt upstream timing")
+		}
+		return AttemptRecord{}, requestLogStoreFailure(err, "record request attempt upstream timing")
+	}
+
+	return attemptRecordFromSQLC(sqlc.RequestAttempt(row)), nil
+}
+
+// RecordAttemptBreakerDisposition first-write-wins 地保存 BreakerStore Finish disposition。
+func (s *Store) RecordAttemptBreakerDisposition(ctx context.Context, params RecordAttemptBreakerDispositionParams) (AttemptRecord, error) {
+	row, err := s.queries.RecordRequestAttemptBreakerDisposition(ctx, sqlc.RecordRequestAttemptBreakerDispositionParams{
+		BreakerEndpointDisposition: pgtype.Text{String: params.EndpointDisposition, Valid: params.EndpointDisposition != ""},
+		BreakerChannelDisposition:  pgtype.Text{String: params.ChannelDisposition, Valid: params.ChannelDisposition != ""},
+		AttemptID:                  params.ID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AttemptRecord{}, requestLogStateTransitionFailure("record request attempt breaker disposition")
+		}
+		return AttemptRecord{}, requestLogStoreFailure(err, "record request attempt breaker disposition")
+	}
 	return attemptRecordFromSQLC(sqlc.RequestAttempt(row)), nil
 }
 
@@ -429,29 +480,40 @@ func requestRecordFromSQLC(row sqlc.RequestRecord) RequestRecord {
 // attemptRecordFromSQLC 将 sqlc attempt row 转成 requestlog 领域 DTO。
 func attemptRecordFromSQLC(row sqlc.RequestAttempt) AttemptRecord {
 	return AttemptRecord{
-		ID:                    row.ID,
-		RequestRecordID:       row.RequestRecordID,
-		AttemptIndex:          int(row.AttemptIndex),
-		ProviderID:            row.ProviderID,
-		ChannelID:             row.ChannelID,
-		AdapterKey:            row.AdapterKey,
-		UpstreamModel:         row.UpstreamModel,
-		UpstreamProtocol:      Protocol(row.UpstreamProtocol),
-		UpstreamResponseID:    textPtr(row.UpstreamResponseID),
-		UpstreamResponseModel: textPtr(row.UpstreamResponseModel),
-		UpstreamFinishReason:  textPtr(row.UpstreamFinishReason),
-		FinishClass:           textPtr(row.FinishClass),
-		Status:                AttemptStatus(row.Status),
-		UpstreamStatusCode:    intPtr(row.UpstreamStatusCode),
-		UpstreamRequestID:     textPtr(row.UpstreamRequestID),
-		ErrorCode:             textPtr(row.ErrorCode),
-		ErrorMessage:          textPtr(row.ErrorMessage),
-		InternalErrorDetail:   textPtr(row.InternalErrorDetail),
-		ResponseStartedAt:     timePtr(row.ResponseStartedAt),
-		FinalUsageReceived:    row.FinalUsageReceived,
-		UsageMappingVersion:   textPtr(row.UsageMappingVersion),
-		StartedAt:             row.StartedAt.Time,
-		CompletedAt:           timePtr(row.CompletedAt),
+		ID:                              row.ID,
+		RequestRecordID:                 row.RequestRecordID,
+		AttemptIndex:                    int(row.AttemptIndex),
+		ProviderID:                      row.ProviderID,
+		ChannelID:                       row.ChannelID,
+		AdapterKey:                      row.AdapterKey,
+		UpstreamModel:                   row.UpstreamModel,
+		UpstreamProtocol:                Protocol(row.UpstreamProtocol),
+		ProviderEndpointID:              int64ValuePtr(row.ProviderEndpointID),
+		ProviderEndpointBaseURLRevision: int64ValuePtr(row.ProviderEndpointBaseUrlRevision),
+		ProviderEndpointStatusRevision:  int64ValuePtr(row.ProviderEndpointStatusRevision),
+		ChannelConfigRevision:           int64ValuePtr(row.ChannelConfigRevision),
+		RoutingCandidateIndex:           int32ValuePtr(row.RoutingCandidateIndex),
+		UpstreamOperation:               UpstreamOperation(row.UpstreamOperation),
+		UpstreamResponseID:              textPtr(row.UpstreamResponseID),
+		UpstreamResponseModel:           textPtr(row.UpstreamResponseModel),
+		UpstreamFinishReason:            textPtr(row.UpstreamFinishReason),
+		FinishClass:                     textPtr(row.FinishClass),
+		Status:                          AttemptStatus(row.Status),
+		UpstreamStatusCode:              intPtr(row.UpstreamStatusCode),
+		UpstreamRequestID:               textPtr(row.UpstreamRequestID),
+		ErrorCode:                       textPtr(row.ErrorCode),
+		ErrorMessage:                    textPtr(row.ErrorMessage),
+		InternalErrorDetail:             textPtr(row.InternalErrorDetail),
+		ResponseStartedAt:               timePtr(row.ResponseStartedAt),
+		UpstreamStartedAt:               timePtr(row.UpstreamStartedAt),
+		UpstreamFirstTokenAt:            timePtr(row.UpstreamFirstTokenAt),
+		UpstreamCompletedAt:             timePtr(row.UpstreamCompletedAt),
+		BreakerEndpointDisposition:      textPtr(row.BreakerEndpointDisposition),
+		BreakerChannelDisposition:       textPtr(row.BreakerChannelDisposition),
+		FinalUsageReceived:              row.FinalUsageReceived,
+		UsageMappingVersion:             textPtr(row.UsageMappingVersion),
+		StartedAt:                       row.StartedAt.Time,
+		CompletedAt:                     timePtr(row.CompletedAt),
 	}
 }
 
@@ -473,6 +535,13 @@ func int4OrNull(v *int32) pgtype.Int4 {
 		return pgtype.Int4{Valid: false}
 	}
 	return pgtype.Int4{Int32: *v, Valid: true}
+}
+
+func textValue(v pgtype.Text) string {
+	if !v.Valid {
+		return ""
+	}
+	return v.String
 }
 
 func textOrNull(v *string) pgtype.Text {
@@ -552,6 +621,10 @@ func int64Ptr(i pgtype.Int8) *int64 {
 	return &i.Int64
 }
 
+func int64ValuePtr(value int64) *int64 {
+	return &value
+}
+
 // intPtr 将 pgtype.Int4 转成可选 int。
 func intPtr(value pgtype.Int4) *int {
 	if !value.Valid {
@@ -559,6 +632,11 @@ func intPtr(value pgtype.Int4) *int {
 	}
 
 	n := int(value.Int32)
+	return &n
+}
+
+func int32ValuePtr(value int32) *int {
+	n := int(value)
 	return &n
 }
 

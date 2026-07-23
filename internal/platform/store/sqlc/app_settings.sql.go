@@ -27,6 +27,262 @@ func (q *Queries) GetAppSetting(ctx context.Context, key string) ([]byte, error)
 	return value, err
 }
 
+const getAppSettingRecord = `-- name: GetAppSettingRecord :one
+SELECT key, value, description, updated_at, revision
+FROM app_settings
+WHERE key = $1
+`
+
+type GetAppSettingRecordRow struct {
+	Key         string
+	Value       []byte
+	Description string
+	UpdatedAt   pgtype.Timestamptz
+	Revision    int64
+}
+
+// GetAppSettingRecord 读取设置业务行及其单调 revision，供 P4 runtime-control 发布和同步状态比较。
+func (q *Queries) GetAppSettingRecord(ctx context.Context, key string) (GetAppSettingRecordRow, error) {
+	row := q.db.QueryRow(ctx, getAppSettingRecord, key)
+	var i GetAppSettingRecordRow
+	err := row.Scan(
+		&i.Key,
+		&i.Value,
+		&i.Description,
+		&i.UpdatedAt,
+		&i.Revision,
+	)
+	return i, err
+}
+
+const getAppSettingRecordForUpdate = `-- name: GetAppSettingRecordForUpdate :one
+SELECT key, value, description, updated_at, revision
+FROM app_settings
+WHERE key = $1
+FOR UPDATE
+`
+
+type GetAppSettingRecordForUpdateRow struct {
+	Key         string
+	Value       []byte
+	Description string
+	UpdatedAt   pgtype.Timestamptz
+	Revision    int64
+}
+
+// GetAppSettingRecordForUpdate 在 epoch 事务中锁定维护保留行，防止并发 coordinator 跨越 PostgreSQL 状态。
+func (q *Queries) GetAppSettingRecordForUpdate(ctx context.Context, key string) (GetAppSettingRecordForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getAppSettingRecordForUpdate, key)
+	var i GetAppSettingRecordForUpdateRow
+	err := row.Scan(
+		&i.Key,
+		&i.Value,
+		&i.Description,
+		&i.UpdatedAt,
+		&i.Revision,
+	)
+	return i, err
+}
+
+const getGatewayAdmissionControlRevisions = `-- name: GetGatewayAdmissionControlRevisions :one
+SELECT
+    epoch.value AS runtime_state_epoch_value,
+    epoch.revision AS runtime_state_epoch_revision,
+    route_rate_limit.revision AS route_rate_limit_defaults_revision,
+    channel_rate_limit.revision AS channel_rate_limit_defaults_revision,
+    concurrency.revision AS concurrency_defaults_revision
+FROM app_settings AS epoch
+JOIN app_settings AS route_rate_limit
+  ON route_rate_limit.key = 'gateway.route_rate_limit_defaults'
+JOIN app_settings AS channel_rate_limit
+  ON channel_rate_limit.key = 'gateway.channel_rate_limit_defaults'
+JOIN app_settings AS concurrency
+  ON concurrency.key = 'gateway.concurrency_defaults'
+WHERE epoch.key = 'gateway.runtime_state_epoch'
+`
+
+type GetGatewayAdmissionControlRevisionsRow struct {
+	RuntimeStateEpochValue           []byte
+	RuntimeStateEpochRevision        int64
+	RouteRateLimitDefaultsRevision   int64
+	ChannelRateLimitDefaultsRevision int64
+	ConcurrencyDefaultsRevision      int64
+}
+
+// GetGatewayAdmissionControlRevisions 在同一 PostgreSQL statement snapshot 中读取完整性 epoch、线路限流、渠道限流与全局并发 revision；任一必需行缺失时返回 no rows。
+func (q *Queries) GetGatewayAdmissionControlRevisions(ctx context.Context) (GetGatewayAdmissionControlRevisionsRow, error) {
+	row := q.db.QueryRow(ctx, getGatewayAdmissionControlRevisions)
+	var i GetGatewayAdmissionControlRevisionsRow
+	err := row.Scan(
+		&i.RuntimeStateEpochValue,
+		&i.RuntimeStateEpochRevision,
+		&i.RouteRateLimitDefaultsRevision,
+		&i.ChannelRateLimitDefaultsRevision,
+		&i.ConcurrencyDefaultsRevision,
+	)
+	return i, err
+}
+
+const getGatewayRoutingControlRevisions = `-- name: GetGatewayRoutingControlRevisions :one
+SELECT
+    epoch.value AS runtime_state_epoch_value,
+    epoch.revision AS runtime_state_epoch_revision,
+    circuit_breaker.revision AS circuit_breaker_revision,
+    routing_balance.revision AS routing_balance_revision
+FROM app_settings AS epoch
+JOIN app_settings AS circuit_breaker
+  ON circuit_breaker.key = 'gateway.circuit_breaker'
+JOIN app_settings AS routing_balance
+  ON routing_balance.key = 'gateway.routing_balance'
+WHERE epoch.key = 'gateway.runtime_state_epoch'
+`
+
+type GetGatewayRoutingControlRevisionsRow struct {
+	RuntimeStateEpochValue    []byte
+	RuntimeStateEpochRevision int64
+	CircuitBreakerRevision    int64
+	RoutingBalanceRevision    int64
+}
+
+// GetGatewayRoutingControlRevisions 在同一 PostgreSQL statement snapshot 中读取完整性 epoch 与候选路由所需 breaker/balance revision；任一必需行缺失时返回 no rows。
+func (q *Queries) GetGatewayRoutingControlRevisions(ctx context.Context) (GetGatewayRoutingControlRevisionsRow, error) {
+	row := q.db.QueryRow(ctx, getGatewayRoutingControlRevisions)
+	var i GetGatewayRoutingControlRevisionsRow
+	err := row.Scan(
+		&i.RuntimeStateEpochValue,
+		&i.RuntimeStateEpochRevision,
+		&i.CircuitBreakerRevision,
+		&i.RoutingBalanceRevision,
+	)
+	return i, err
+}
+
+const getGatewayRuntimeReadinessSnapshot = `-- name: GetGatewayRuntimeReadinessSnapshot :one
+SELECT
+    epoch.value AS runtime_state_epoch_value,
+    epoch.revision AS runtime_state_epoch_revision,
+    route_rate_limit.revision AS route_rate_limit_defaults_revision,
+    channel_rate_limit.revision AS channel_rate_limit_defaults_revision,
+    concurrency.revision AS concurrency_defaults_revision,
+    circuit_breaker.revision AS circuit_breaker_revision,
+    routing_balance.revision AS routing_balance_revision,
+    CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM runtime_control_operations AS operation
+        WHERE operation.state <> ALL (ARRAY['committed'::text, 'aborted'::text])
+          AND (
+              operation.kind = 'runtime_state_epoch'
+              OR operation.kind = 'channel_admission_limits'
+              OR (
+                  operation.kind = 'app_setting'
+                  AND operation.setting_key = ANY (ARRAY[
+                      'gateway.route_rate_limit_defaults'::text,
+                      'gateway.channel_rate_limit_defaults'::text,
+                      'gateway.concurrency_defaults'::text,
+                      'gateway.circuit_breaker'::text,
+                      'gateway.routing_balance'::text
+                  ])
+              )
+          )
+    )
+    AND NOT EXISTS (
+        SELECT 1
+        FROM endpoint_routing_operations AS operation
+        WHERE operation.state <> ALL (ARRAY['committed'::text, 'aborted'::text])
+    ) THEN TRUE ELSE FALSE END AS runtime_operations_reconciled,
+    CASE WHEN
+        epoch.value ->> 'state' = 'ready'
+        AND EXISTS (
+            SELECT 1
+            FROM runtime_control_operations AS operation
+            WHERE operation.kind = 'runtime_state_epoch'
+              AND operation.state = 'awaiting_release'
+              AND operation.next_revision = epoch.revision
+              AND operation.epoch_transition ->> 'new_epoch' = epoch.value ->> 'epoch'
+              AND operation.epoch_transition ->> 'reason' IN ('state_loss', 'restore')
+              AND operation.recovery_evidence ->> 'status' = 'approved'
+              AND operation.release_evidence IS NULL
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM runtime_control_operations AS operation
+            WHERE operation.state <> ALL (ARRAY['committed'::text, 'aborted'::text])
+              AND (
+                  operation.kind = 'runtime_state_epoch'
+                  OR operation.kind = 'channel_admission_limits'
+                  OR (
+                      operation.kind = 'app_setting'
+                      AND operation.setting_key = ANY (ARRAY[
+                          'gateway.route_rate_limit_defaults'::text,
+                          'gateway.channel_rate_limit_defaults'::text,
+                          'gateway.concurrency_defaults'::text,
+                          'gateway.circuit_breaker'::text,
+                          'gateway.routing_balance'::text
+                      ])
+                  )
+              )
+              AND NOT (
+                  operation.kind = 'runtime_state_epoch'
+                  AND operation.state = 'awaiting_release'
+                  AND operation.next_revision = epoch.revision
+                  AND operation.epoch_transition ->> 'new_epoch' = epoch.value ->> 'epoch'
+                  AND operation.epoch_transition ->> 'reason' IN ('state_loss', 'restore')
+                  AND operation.recovery_evidence ->> 'status' = 'approved'
+                  AND operation.release_evidence IS NULL
+              )
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM endpoint_routing_operations AS operation
+            WHERE operation.state <> ALL (ARRAY['committed'::text, 'aborted'::text])
+        )
+    THEN TRUE ELSE FALSE END AS runtime_maintenance_smoke_allowed
+FROM app_settings AS epoch
+JOIN app_settings AS route_rate_limit
+  ON route_rate_limit.key = 'gateway.route_rate_limit_defaults'
+JOIN app_settings AS channel_rate_limit
+  ON channel_rate_limit.key = 'gateway.channel_rate_limit_defaults'
+JOIN app_settings AS concurrency
+  ON concurrency.key = 'gateway.concurrency_defaults'
+JOIN app_settings AS circuit_breaker
+  ON circuit_breaker.key = 'gateway.circuit_breaker'
+JOIN app_settings AS routing_balance
+  ON routing_balance.key = 'gateway.routing_balance'
+WHERE epoch.key = 'gateway.runtime_state_epoch'
+`
+
+type GetGatewayRuntimeReadinessSnapshotRow struct {
+	RuntimeStateEpochValue           []byte
+	RuntimeStateEpochRevision        int64
+	RouteRateLimitDefaultsRevision   int64
+	ChannelRateLimitDefaultsRevision int64
+	ConcurrencyDefaultsRevision      int64
+	CircuitBreakerRevision           int64
+	RoutingBalanceRevision           int64
+	RuntimeOperationsReconciled      bool
+	RuntimeMaintenanceSmokeAllowed   bool
+}
+
+// GetGatewayRuntimeReadinessSnapshot 在同一 statement snapshot 中读取 readiness 所需的 epoch 与五个关键 control revision，
+// 并确认关键 setting、Channel admission 与 Endpoint 围栏的持久操作均已终结。
+// 任一必需行缺失时返回 no rows，Gateway 必须 fail-closed。
+func (q *Queries) GetGatewayRuntimeReadinessSnapshot(ctx context.Context) (GetGatewayRuntimeReadinessSnapshotRow, error) {
+	row := q.db.QueryRow(ctx, getGatewayRuntimeReadinessSnapshot)
+	var i GetGatewayRuntimeReadinessSnapshotRow
+	err := row.Scan(
+		&i.RuntimeStateEpochValue,
+		&i.RuntimeStateEpochRevision,
+		&i.RouteRateLimitDefaultsRevision,
+		&i.ChannelRateLimitDefaultsRevision,
+		&i.ConcurrencyDefaultsRevision,
+		&i.CircuitBreakerRevision,
+		&i.RoutingBalanceRevision,
+		&i.RuntimeOperationsReconciled,
+		&i.RuntimeMaintenanceSmokeAllowed,
+	)
+	return i, err
+}
+
 const listAppSettings = `-- name: ListAppSettings :many
 SELECT key, value, description, updated_at
 FROM app_settings
@@ -86,13 +342,92 @@ func (q *Queries) SeedAppSetting(ctx context.Context, arg SeedAppSettingParams) 
 	return err
 }
 
+const seedRuntimeStateEpoch = `-- name: SeedRuntimeStateEpoch :execrows
+INSERT INTO app_settings (key, value, description, revision, updated_at)
+VALUES (
+    'gateway.runtime_state_epoch',
+    $1::jsonb,
+    '网关 Redis 运行态完整性 epoch（维护专用，不对外编辑）',
+    1,
+    now()
+)
+ON CONFLICT (key) DO NOTHING
+`
+
+// SeedRuntimeStateEpoch 仅供受信任的 bootstrap/恢复 use-case 创建非普通设置行；普通 settings registry/API 不得调用。
+func (q *Queries) SeedRuntimeStateEpoch(ctx context.Context, value []byte) (int64, error) {
+	result, err := q.db.Exec(ctx, seedRuntimeStateEpoch, value)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateAppSettingAtRevision = `-- name: UpdateAppSettingAtRevision :one
+UPDATE app_settings
+SET value = $1::jsonb,
+    description = $2,
+    revision = $3,
+    updated_at = now()
+WHERE key = $4
+  AND revision = $5
+  AND $3 = $5 + 1
+  AND value IS DISTINCT FROM $1::jsonb
+RETURNING key, value, description, updated_at, revision
+`
+
+type UpdateAppSettingAtRevisionParams struct {
+	Value           []byte
+	Description     string
+	NextRevision    int64
+	Key             string
+	CurrentRevision int64
+}
+
+type UpdateAppSettingAtRevisionRow struct {
+	Key         string
+	Value       []byte
+	Description string
+	UpdatedAt   pgtype.Timestamptz
+	Revision    int64
+}
+
+// UpdateAppSettingAtRevision 在 runtime-control 的业务事务中 CAS 提交关键设置及 next revision。
+func (q *Queries) UpdateAppSettingAtRevision(ctx context.Context, arg UpdateAppSettingAtRevisionParams) (UpdateAppSettingAtRevisionRow, error) {
+	row := q.db.QueryRow(ctx, updateAppSettingAtRevision,
+		arg.Value,
+		arg.Description,
+		arg.NextRevision,
+		arg.Key,
+		arg.CurrentRevision,
+	)
+	var i UpdateAppSettingAtRevisionRow
+	err := row.Scan(
+		&i.Key,
+		&i.Value,
+		&i.Description,
+		&i.UpdatedAt,
+		&i.Revision,
+	)
+	return i, err
+}
+
 const upsertAppSetting = `-- name: UpsertAppSetting :exec
 INSERT INTO app_settings (key, value, description, updated_at)
 VALUES ($1, $2, $3, now())
 ON CONFLICT (key) DO UPDATE
 SET value = EXCLUDED.value,
     description = EXCLUDED.description,
-    updated_at = now()
+    revision = app_settings.revision + CASE
+        WHEN app_settings.value IS DISTINCT FROM EXCLUDED.value THEN 1
+        ELSE 0
+    END,
+    updated_at = CASE
+        WHEN app_settings.value IS DISTINCT FROM EXCLUDED.value
+          OR app_settings.description IS DISTINCT FROM EXCLUDED.description
+        THEN now()
+        ELSE app_settings.updated_at
+    END
 `
 
 type UpsertAppSettingParams struct {
@@ -101,7 +436,7 @@ type UpsertAppSettingParams struct {
 	Description string
 }
 
-// UpsertAppSetting 写入/覆盖设置内容与说明,并刷新 updated_at。
+// UpsertAppSetting 写入普通设置；只有 JSONB 语义值真变化时递增 revision，重复写同值不推进。
 func (q *Queries) UpsertAppSetting(ctx context.Context, arg UpsertAppSettingParams) error {
 	_, err := q.db.Exec(ctx, upsertAppSetting, arg.Key, arg.Value, arg.Description)
 	return err

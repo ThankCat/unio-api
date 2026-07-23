@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
 // StreamMessage 编排流式 Anthropic Messages 请求，并通过 emit 写出原生 SSE 事件。
@@ -78,6 +79,10 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
 		})
 	}
+	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
+		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
+		return err
+	}
 
 	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
@@ -129,25 +134,34 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 			lifecycle.EndGatewaySpan(streamSpan, streamErr)
 			return streamOutcome.Facts, streamErr
 		},
-		EmitChunk: func(ev messagesadapter.MessageStreamEvent) error {
-			return emit(gatewayapi.StreamFrame{
+		EmitChunk: func(ev messagesadapter.MessageStreamEvent, ack lifecycle.StreamWriteAck) error {
+			if err := emit(gatewayapi.StreamFrame{
 				EventType: ev.Type,
 				Data:      patchStreamEventCatalogModel(req.Model, ev),
-			})
+			}); err != nil {
+				return err
+			}
+			ack()
+			return nil
 		},
-		Finish: func(_ string, _ adapter.ChatUsage, _ string) error {
+		Finish: func(_ string, _ adapter.ChatUsage, _ string, ack lifecycle.StreamWriteAck) error {
 			stopPayload, marshalErr := json.Marshal(gatewayapi.StreamMessageStop{Type: "message_stop"})
 			if marshalErr != nil {
 				return marshalErr
 			}
-			return emit(gatewayapi.StreamFrame{EventType: "message_stop", Data: stopPayload})
+			if err := emit(gatewayapi.StreamFrame{EventType: "message_stop", Data: stopPayload}); err != nil {
+				return err
+			}
+			ack()
+			return nil
 		},
 		ChunkMeta: messagesStreamChunkMeta,
 	})
-	if runResult.Attempts > 1 && principal.RouteID != nil {
+	if runResult.RoutingFallback && principal.RouteID != nil {
 		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
 			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
-			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(), Attempts: runResult.Attempts,
+			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+			FallbackOccurred: true, FallbackChain: runResult.TransportChain,
 		})
 	}
 	outcome = runResult.Outcome
@@ -160,7 +174,8 @@ func anthropicPartialOutputTokenCounter(_ string, text string) int64 {
 
 func messagesStreamChunkMeta(ev messagesadapter.MessageStreamEvent) lifecycle.StreamChunkMeta {
 	meta := lifecycle.StreamChunkMeta{
-		VisibleText: parseStreamTextDelta(ev),
+		FirstTokenEligible: ev.Type == "message_start" || ev.Type == "content_block_delta",
+		VisibleText:        parseStreamTextDelta(ev),
 	}
 	if ev.Type == "message_start" {
 		meta.ID = parseStreamMessageID(ev.Data)

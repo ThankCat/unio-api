@@ -373,6 +373,18 @@ const (
 
 	// CodeGatewayRequestOrphanReclaimed 表示进程崩溃遗留的孤儿请求被清扫 worker 释放冻结并收口为 failed。
 	CodeGatewayRequestOrphanReclaimed Code = "gateway_request_orphan_reclaimed"
+
+	// CodeGatewayBreakerPermitConflict 表示 AttemptPermit 幂等键冲突（同 permit_id 不同准入指纹，P4 §5.3）。
+	CodeGatewayBreakerPermitConflict Code = "gateway_breaker_permit_conflict"
+
+	// CodeGatewayBreakerStoreUnavailable 表示 Redis/BreakerStore 基础设施故障，按 P4-D08 fail-closed。
+	CodeGatewayBreakerStoreUnavailable Code = "gateway_breaker_store_unavailable"
+
+	// CodeGatewayRuntimeSyncRequired 表示 PostgreSQL 运行态必需事实缺失或非法，需要先完成 control 对账。
+	CodeGatewayRuntimeSyncRequired Code = "gateway_runtime_sync_required"
+
+	// CodeGatewayRuntimeStateLost 表示 PostgreSQL 完整性 epoch 尚未 ready，新准入必须 fail-closed。
+	CodeGatewayRuntimeStateLost Code = "gateway_runtime_state_lost"
 )
 
 const (

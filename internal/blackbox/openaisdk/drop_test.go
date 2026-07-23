@@ -34,7 +34,7 @@ func TestOAISDKMockDropUnsupportedFields(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 	})
 
 	client := openai.NewClient(

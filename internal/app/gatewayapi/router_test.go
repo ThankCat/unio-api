@@ -16,7 +16,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
-	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // jsonContent 是 router 测试构造 OpenAI message content 的辅助函数。
@@ -38,12 +38,6 @@ func (a *routerTestAPIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, 
 	return a.principal, a.err
 }
 
-// routerTestRateLimiter 是 router 测试使用的「线路+用户」级限流器替身。
-type routerTestRateLimiter struct {
-	decision ratelimit.Decision
-	err      error
-}
-
 // routerTestModelCatalogService 是 router 测试使用的模型目录 service 替身。
 type routerTestModelCatalogService struct {
 	called    bool
@@ -61,17 +55,12 @@ func (s *routerTestModelCatalogService) ListAvailableModels(ctx context.Context,
 	return s.models, s.err
 }
 
-// AllowRouteUserRequest 返回测试预设的限流判断结果。
-func (l *routerTestRateLimiter) AllowRouteUserRequest(_ context.Context, _, _ int64, _ ratelimit.Limits) (ratelimit.Decision, error) {
-	return l.decision, l.err
-}
-
 // routerTestChatCompletionService 是 router 测试使用的 chat completion service 替身。
 type routerTestChatCompletionService struct{}
 
 // CreateChatCompletion 返回固定响应，避免 router 测试依赖 gateway/provider 组合。
-func (s *routerTestChatCompletionService) CreateChatCompletion(ctx context.Context, req gatewaychat.ChatCompletionRequest) (*gatewaychat.ChatCompletionResponse, error) {
-	return &gatewaychat.ChatCompletionResponse{
+func (s *routerTestChatCompletionService) CreateChatCompletion(ctx context.Context, req gatewaychat.ChatCompletionRequest) (*lifecycle.NonStreamResult[*gatewaychat.ChatCompletionResponse], error) {
+	resp := &gatewaychat.ChatCompletionResponse{
 		ID:      "chatcmpl_test",
 		Object:  "chat.completion",
 		Created: time.Now().Unix(),
@@ -87,7 +76,8 @@ func (s *routerTestChatCompletionService) CreateChatCompletion(ctx context.Conte
 			},
 		},
 		Usage: gatewaychat.ChatCompletionUsage{},
-	}, nil
+	}
+	return lifecycle.NewNonStreamResult(resp, lifecycle.NewDeliveryFinalizer(func() {}, func() {})), nil
 }
 
 // StreamChatCompletion 发出固定流式响应，避免 router 测试依赖 gateway/adapter 组合。
@@ -111,13 +101,9 @@ func (s *routerTestChatCompletionService) StreamChatCompletion(ctx context.Conte
 }
 
 // newTestRouter 创建带默认测试依赖的 router。
-func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService gatewaychat.ChatCompletionService, limiter middleware.KeyRateLimiter, modelCatalogServices ...gatewaymodels.ModelCatalogService) http.Handler {
+func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService gatewaychat.ChatCompletionService, _ any, modelCatalogServices ...gatewaymodels.ModelCatalogService) http.Handler {
 	if chatService == nil {
 		chatService = &routerTestChatCompletionService{}
-	}
-
-	if limiter == nil {
-		limiter = newAllowingRateLimiter()
 	}
 
 	modelCatalogService := gatewaymodels.ModelCatalogService(&routerTestModelCatalogService{})
@@ -128,22 +114,9 @@ func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService gat
 	return NewRouter(RouterDeps{
 		Logger:                zap.NewNop(),
 		APIKeyAuthenticator:   authenticator,
-		RateLimiter:           limiter,
 		ChatCompletionService: chatService,
 		ModelCatalogService:   modelCatalogService,
 	})
-}
-
-// newAllowingRateLimiter 创建默认允许请求通过的测试限流器。
-func newAllowingRateLimiter() *routerTestRateLimiter {
-	return &routerTestRateLimiter{
-		decision: ratelimit.Decision{
-			Allowed:   true,
-			Limit:     60,
-			Remaining: 59,
-			ResetAt:   time.Date(2026, 5, 8, 10, 1, 0, 0, time.UTC),
-		},
-	}
 }
 
 func TestRouterHealthz(t *testing.T) {
@@ -174,6 +147,36 @@ func TestRouterHealthz(t *testing.T) {
 
 	if body.Status != "ok" {
 		t.Fatalf("expected status body %q, got %q", "ok", body.Status)
+	}
+}
+
+type readinessProbeStub struct {
+	ready  bool
+	reason string
+}
+
+func (p readinessProbeStub) Check(context.Context) (bool, string) { return p.ready, p.reason }
+
+func TestRouterReadyzIsDynamicAndKeepsHealthzLive(t *testing.T) {
+	handler := NewRouter(RouterDeps{Logger: zap.NewNop(), Readiness: readinessProbeStub{ready: false, reason: "redis_unavailable"}})
+
+	readyResponse := httptest.NewRecorder()
+	handler.ServeHTTP(readyResponse, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if readyResponse.Code != http.StatusServiceUnavailable || readyResponse.Body.String() != "{\"status\":\"not_ready\"}\n" {
+		t.Fatalf("unexpected not-ready response: code=%d body=%q", readyResponse.Code, readyResponse.Body.String())
+	}
+
+	healthResponse := httptest.NewRecorder()
+	handler.ServeHTTP(healthResponse, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if healthResponse.Code != http.StatusOK {
+		t.Fatalf("liveness must remain healthy, got %d", healthResponse.Code)
+	}
+
+	handler = NewRouter(RouterDeps{Logger: zap.NewNop(), Readiness: readinessProbeStub{ready: true, reason: "ready"}})
+	readyResponse = httptest.NewRecorder()
+	handler.ServeHTTP(readyResponse, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if readyResponse.Code != http.StatusOK || readyResponse.Body.String() != "{\"status\":\"ready\"}\n" {
+		t.Fatalf("unexpected ready response: code=%d body=%q", readyResponse.Code, readyResponse.Body.String())
 	}
 }
 
@@ -213,6 +216,24 @@ func TestRouterNotFound(t *testing.T) {
 
 	if body.Error.Message != "route not found" {
 		t.Fatalf("expected error message %q, got %q", "route not found", body.Error.Message)
+	}
+}
+
+func TestRouterLegacyCircuitBreakerEndpointIsGone(t *testing.T) {
+	authenticator := &routerTestAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 1, KeyPrefix: "unio_sk_test"},
+	}
+	handle := newTestRouter(authenticator, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/circuit-breaker", nil)
+	rec := httptest.NewRecorder()
+	handle.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("legacy circuit-breaker endpoint status = %d, want 404", rec.Code)
+	}
+	if code := decodeRouterError(t, rec); code != "not_found" {
+		t.Fatalf("legacy circuit-breaker endpoint error = %q, want not_found", code)
 	}
 }
 

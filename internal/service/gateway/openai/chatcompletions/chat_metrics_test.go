@@ -92,7 +92,6 @@ func TestChatCompletionServiceRecordsSuccessMetrics(t *testing.T) {
 		newChatCompletionSettlementForTest(),
 		&fakeChatAuthorizer{authorization: lifecycle.ChatAuthorization{ReservationID: 1}},
 		recorder,
-		nil,
 	)
 
 	if _, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest()); err != nil {
@@ -135,7 +134,6 @@ func TestChatCompletionServiceRecordsStreamSuccessMetrics(t *testing.T) {
 		newChatCompletionSettlementForTest(),
 		&fakeChatAuthorizer{authorization: lifecycle.ChatAuthorization{ReservationID: 1}},
 		recorder,
-		nil,
 	)
 
 	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(gatewayapi.ChatCompletionStreamResponse) error {

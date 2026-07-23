@@ -67,7 +67,7 @@ type ResponsesService struct {
 }
 
 // NewResponsesService 创建 Responses gateway service。
-// metricsRecorder 与 breaker 均可为 nil，分别表示不采集业务指标、不启用 channel 熔断。
+// metricsRecorder 可为 nil，表示不采集业务指标。
 func NewResponsesService(
 	router ChatRouter,
 	registry AdapterRegistry,
@@ -77,7 +77,6 @@ func NewResponsesService(
 	chatSettlement lifecycle.ChatSettlementExecutor,
 	chatAuthorizer lifecycle.ChatAuthorizer,
 	metricsRecorder lifecycle.MetricsRecorder,
-	breaker lifecycle.ChannelBreaker,
 	logger *zap.Logger,
 ) *ResponsesService {
 	if retryClassifier == nil {
@@ -103,7 +102,6 @@ func NewResponsesService(
 		RequestLog:      requestLog,
 		Authorizer:      chatAuthorizer,
 		Metrics:         metricsRecorder,
-		Breaker:         breaker,
 		IngressProtocol: requestlog.ProtocolOpenAI,
 		Operation:       requestlog.OperationResponses,
 		SafeMessage:     responsesSafeMessage,
@@ -121,31 +119,14 @@ func NewResponsesService(
 	}
 }
 
-// SetRateLimitGuard 注入两层限流 Guard（P2-8），转发给候选循环驱动；nil 表示不启用限流。
-func (s *ResponsesService) SetRateLimitGuard(guard lifecycle.RateLimitGuard) {
-	s.attemptRunner.SetRateLimitGuard(guard)
-}
-
-// SetConcurrencyLimiter 注入渠道在途并发限制器（DEC-029），转发给候选循环驱动；nil 表示不启用。
-func (s *ResponsesService) SetConcurrencyLimiter(limiter lifecycle.ChannelConcurrencyLimiter) {
-	s.attemptRunner.SetConcurrencyLimiter(limiter)
-}
-
-// SetBalanceConfig 热更新 balanced 调度开关。
-func (s *ResponsesService) SetBalanceConfig(enabled, weightByRemaining bool) {
-	if configurable, ok := s.candidates.(interface{ SetBalanceConfig(bool, bool) }); ok {
-		configurable.SetBalanceConfig(enabled, weightByRemaining)
-	}
+// SetAttemptPermitManager 注入三协议共享的候选级全局准入管理器。
+func (s *ResponsesService) SetAttemptPermitManager(manager *lifecycle.AttemptPermitManager) {
+	s.attemptRunner.SetAttemptPermitManager(manager)
 }
 
 // SetCostExposureRecorder 注入成本敞口记录器（DESIGN-bill-on-cancel 阶段一）；nil 表示不启用。
 func (s *ResponsesService) SetCostExposureRecorder(recorder lifecycle.CostExposureRecorder, assumedOutputFallback int64) {
 	s.lifecycle.SetCostExposureRecorder(recorder, assumedOutputFallback)
-}
-
-// SetChannelCooldownRegistry 注入渠道级 429 冷却注册表（P2-7），转发给共享 lifecycle；nil 表示不启用冷却。
-func (s *ResponsesService) SetChannelCooldownRegistry(registry *lifecycle.ChannelCooldownRegistry) {
-	s.lifecycle.SetChannelCooldownRegistry(registry)
 }
 
 // SetCredentialGate 注入凭据失效闸门（连续 401 翻 credential_valid=false，阶段二）；nil 表示不启用。
@@ -209,16 +190,12 @@ func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req g
 	}
 
 	return s.candidates.PrepareCandidates(ctx, lifecycle.PrepareCandidatesParams{
-		Protocol:                routing.ProtocolOpenAI,
-		Candidates:              candidates,
-		Capabilities:            capabilities,
-		Available:               s.lifecycle.CandidateAvailable,
-		FailurePreferred:        s.lifecycle.CandidateFailurePreferred,
-		EstimateInputTokens:     s.responsesInputTokenEstimator(req, allowDirect),
-		Mode:                    mode,
-		ChannelHealthScore:      s.lifecycle.ChannelHealthScore,
-		ChannelCapacitySnapshot: s.lifecycle.ChannelCapacitySnapshot,
-		StickyChannelID:         stickyChannelID,
+		Protocol:            routing.ProtocolOpenAI,
+		Candidates:          candidates,
+		Capabilities:        capabilities,
+		EstimateInputTokens: s.responsesInputTokenEstimator(req, allowDirect),
+		Mode:                mode,
+		StickyChannelID:     stickyChannelID,
 	})
 }
 

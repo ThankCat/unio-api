@@ -13,6 +13,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // fakeAPIKeyAuthenticator 是 chat completions 测试使用的 API Key 认证器。
@@ -314,20 +315,28 @@ func TestRouterV1ChatCompletionWithMissingMessages(t *testing.T) {
 
 // fakeChatCompletionService 是 chat completions 测试使用的 service 替身。
 type fakeChatCompletionService struct {
-	createCalled       bool
-	streamCalled       bool
-	req                ChatCompletionRequest
-	createResp         *ChatCompletionResponse
-	streamResp         []ChatCompletionStreamResponse
-	err                error
-	streamErrAfterEmit error
+	createCalled        bool
+	streamCalled        bool
+	req                 ChatCompletionRequest
+	createResp          *ChatCompletionResponse
+	streamResp          []ChatCompletionStreamResponse
+	err                 error
+	streamErrAfterEmit  error
+	deliveryCompleted   int
+	deliveryInterrupted int
 }
 
 // CreateChatCompletion 记录 handler 传入的请求，并返回测试预设的响应。
-func (s *fakeChatCompletionService) CreateChatCompletion(ctx context.Context, req ChatCompletionRequest) (*ChatCompletionResponse, error) {
+func (s *fakeChatCompletionService) CreateChatCompletion(ctx context.Context, req ChatCompletionRequest) (*lifecycle.NonStreamResult[*ChatCompletionResponse], error) {
 	s.createCalled = true
 	s.req = req
-	return s.createResp, s.err
+	if s.err != nil {
+		return nil, s.err
+	}
+	return lifecycle.NewNonStreamResult(s.createResp, lifecycle.NewDeliveryFinalizer(
+		func() { s.deliveryCompleted++ },
+		func() { s.deliveryInterrupted++ },
+	)), nil
 }
 
 // StreamChatCompletion 记录 handler 传入的流式请求，并逐个发出测试预设响应。

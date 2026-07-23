@@ -36,13 +36,15 @@ func (h *compactHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.service.CompactHistory(r.Context(), req)
+	result, err := h.service.CompactHistory(r.Context(), req)
 	if err != nil {
 		writeResponsesServiceError(w, req, err, "internal_error", "responses compact failed")
 		return
 	}
 
-	_ = httpx.WriteJSON(w, http.StatusOK, resp)
+	_ = result.FinalizeDelivery(func(resp *CompactHistoryResponse) error {
+		return httpx.WriteJSON(w, http.StatusOK, resp)
+	})
 }
 
 // inputTokensHandler 处理 POST /v1/responses/input_tokens。

@@ -61,7 +61,7 @@ ALTER TABLE ONLY public.routes
 -- 移除内置线路（经济/稳定）及 is_builtin 标识；线路须显式绑定到 API Key 或项目默认。
 -- [000059_add_routes_rate_limits]
 -- 为线路增加线路级限流上限（DEC-027）：RPM 每分钟请求 / TPM 每分钟 token / RPD 每日请求。
--- 三列均可空：NULL 表示「继承全局默认」，0 表示「显式不限」，>0 表示具体上限。
+-- 三列均可空：NULL 表示「继承线路默认限流」，0 表示「显式不限」，>0 表示具体上限。
 -- 计数在 Redis 滑动窗口按 (线路, 用户) 复合主体执行（同一用户在该线路下的所有 Key 共享一个桶，
 -- 多建 Key 无法放大配额）；本列只持久化线路的「上限模板」。
 -- [000066_add_archived_status]

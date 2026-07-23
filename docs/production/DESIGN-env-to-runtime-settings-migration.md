@@ -7,6 +7,13 @@
 > 「系统 → 运行时配置」页(`RuntimeGatewaySettings.tsx`,含「已偏离代码默认」标记)。
 > 建立:2026-07-08。依赖:`DESIGN-runtime-settings.md`(运行时配置系统:app_settings + Redis 实时缓存 + 注册表)。
 > 决策(用户已定):**① 优先关系 = `db_only`**(这批从 `config.go` 移除,只留注册表默认 + DB);**② 范围 = 6 组一次性做完**;**③ 全部要求热改(免重启生效)**;**④ applyInterval=5s**;**⑤ 启动 seed(缺行写默认,DO NOTHING)**;**⑥ 熔断/限流均重构为共享单实例(§3.4 选 a)**;**⑦ 不做变更审计**。
+>
+> P4 后续修订：DEC-053 已把当前限流代码默认改为 `RPM=0、TPM=0、RPD=0`；DEC-054 又把
+> `gateway.rate_limit_defaults` 拆为 `gateway.route_rate_limit_defaults` 与
+> `gateway.channel_rate_limit_defaults` 两套独立 Redis revisioned control，并删除
+> `failure_policy`，统一 fail-closed。下文关于限流共享 key、共享 Guard、由 settingsApplier
+> 驱动限流的描述，以及 `60/0/0/fail_closed`，均只记录 2026-07-08 首次迁移时的历史基线，
+> 不代表当前架构或默认值；settingsApplier 对其他非准入类设置仍继续使用。
 
 ---
 
@@ -86,7 +93,7 @@
 | key | 值形状(JSON) | 默认 | 校验 |
 |---|---|---|---|
 | `gateway.circuit_breaker` | `{enabled,window_ms,min_requests,failure_ratio,open_duration_ms}` | 见 §1 | ratio∈(0,1]、时长>0、min>0 |
-| `gateway.rate_limit_defaults` | `{rpm,tpm,rpd,failure_policy}` | 60/0/0/fail_closed | ≥0;policy∈{fail_closed,fail_open} |
+| `gateway.rate_limit_defaults`（已废止，历史） | `{rpm,tpm,rpd,failure_policy}` | 60/0/0/fail_closed | ≥0;policy∈{fail_closed,fail_open} |
 | `gateway.stream_idle_timeout_ms` | `600000`(int 毫秒) | 10min | >0 |
 | `gateway.channel_ratelimit_cooldown` | `{cooldown_ms,cap_ms}` | 5000/300000 | ≥0 |
 | `gateway.credential_401_threshold` | `3`(整数,次) | 3 | >0 |

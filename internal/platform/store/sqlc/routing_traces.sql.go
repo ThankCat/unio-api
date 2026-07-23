@@ -48,7 +48,7 @@ func (q *Queries) DeleteExpiredRoutingDecisionTraces(ctx context.Context, arg De
 }
 
 const getRoutingDecisionTraceByRequestID = `-- name: GetRoutingDecisionTraceByRequestID :one
-SELECT t.id, t.request_record_id, t.route_id, t.mode, t.requested_model_id, t.protocol, t.operation, t.pool_size, t.candidate_count, t.sticky_channel_id, t.sticky_pinned, t.sticky_invalid, t.capacity_degraded, t.all_capacity_zero, t.margin_guard_triggered, t.abnormal, t.abnormal_reasons, t.candidate_scores, t.selected_order, t.fallback_chain, t.algorithm_version, t.sampled, t.created_at, t.updated_at, r.request_id, r.status AS request_status, r.final_channel_id
+SELECT t.id, t.request_record_id, t.route_id, t.mode, t.requested_model_id, t.protocol, t.operation, t.pool_size, t.candidate_count, t.sticky_channel_id, t.sticky_pinned, t.sticky_invalid, t.all_capacity_zero, t.margin_guard_triggered, t.abnormal, t.abnormal_reasons, t.candidate_scores, t.selected_order, t.fallback_chain, t.algorithm_version, t.sampled, t.created_at, t.updated_at, r.request_id, r.status AS request_status, r.final_channel_id
 FROM routing_decision_traces t
 JOIN request_records r ON r.id = t.request_record_id
 WHERE r.request_id = $1
@@ -68,7 +68,6 @@ type GetRoutingDecisionTraceByRequestIDRow struct {
 	StickyChannelID      pgtype.Int8
 	StickyPinned         bool
 	StickyInvalid        bool
-	CapacityDegraded     bool
 	AllCapacityZero      bool
 	MarginGuardTriggered bool
 	Abnormal             bool
@@ -101,7 +100,6 @@ func (q *Queries) GetRoutingDecisionTraceByRequestID(ctx context.Context, reques
 		&i.StickyChannelID,
 		&i.StickyPinned,
 		&i.StickyInvalid,
-		&i.CapacityDegraded,
 		&i.AllCapacityZero,
 		&i.MarginGuardTriggered,
 		&i.Abnormal,
@@ -121,7 +119,7 @@ func (q *Queries) GetRoutingDecisionTraceByRequestID(ctx context.Context, reques
 }
 
 const listRouteRoutingDecisionTraces = `-- name: ListRouteRoutingDecisionTraces :many
-SELECT t.id, t.request_record_id, t.route_id, t.mode, t.requested_model_id, t.protocol, t.operation, t.pool_size, t.candidate_count, t.sticky_channel_id, t.sticky_pinned, t.sticky_invalid, t.capacity_degraded, t.all_capacity_zero, t.margin_guard_triggered, t.abnormal, t.abnormal_reasons, t.candidate_scores, t.selected_order, t.fallback_chain, t.algorithm_version, t.sampled, t.created_at, t.updated_at, r.request_id, r.status AS request_status, r.final_channel_id
+SELECT t.id, t.request_record_id, t.route_id, t.mode, t.requested_model_id, t.protocol, t.operation, t.pool_size, t.candidate_count, t.sticky_channel_id, t.sticky_pinned, t.sticky_invalid, t.all_capacity_zero, t.margin_guard_triggered, t.abnormal, t.abnormal_reasons, t.candidate_scores, t.selected_order, t.fallback_chain, t.algorithm_version, t.sampled, t.created_at, t.updated_at, r.request_id, r.status AS request_status, r.final_channel_id
 FROM routing_decision_traces t
 JOIN request_records r ON r.id = t.request_record_id
 WHERE t.route_id = $1
@@ -148,7 +146,6 @@ type ListRouteRoutingDecisionTracesRow struct {
 	StickyChannelID      pgtype.Int8
 	StickyPinned         bool
 	StickyInvalid        bool
-	CapacityDegraded     bool
 	AllCapacityZero      bool
 	MarginGuardTriggered bool
 	Abnormal             bool
@@ -187,7 +184,6 @@ func (q *Queries) ListRouteRoutingDecisionTraces(ctx context.Context, arg ListRo
 			&i.StickyChannelID,
 			&i.StickyPinned,
 			&i.StickyInvalid,
-			&i.CapacityDegraded,
 			&i.AllCapacityZero,
 			&i.MarginGuardTriggered,
 			&i.Abnormal,
@@ -217,7 +213,7 @@ const upsertRoutingDecisionTrace = `-- name: UpsertRoutingDecisionTrace :exec
 INSERT INTO routing_decision_traces (
     request_record_id, route_id, mode, requested_model_id, protocol, operation,
     pool_size, candidate_count, sticky_channel_id, sticky_pinned, sticky_invalid,
-    capacity_degraded, all_capacity_zero, margin_guard_triggered, abnormal,
+    all_capacity_zero, margin_guard_triggered, abnormal,
     abnormal_reasons, candidate_scores, selected_order, fallback_chain,
     algorithm_version, sampled
 ) VALUES (
@@ -225,9 +221,9 @@ INSERT INTO routing_decision_traces (
     $4, $5, $6,
     $7, $8, $9,
     $10, $11, $12,
-    $13, $14, $15,
-    $16, $17, $18,
-    $19, $20, $21
+    $13, $14,
+    $15, $16, $17,
+    $18, $19, $20
 )
 ON CONFLICT (request_record_id) DO UPDATE SET
     pool_size = EXCLUDED.pool_size,
@@ -235,7 +231,6 @@ ON CONFLICT (request_record_id) DO UPDATE SET
     sticky_channel_id = EXCLUDED.sticky_channel_id,
     sticky_pinned = EXCLUDED.sticky_pinned,
     sticky_invalid = EXCLUDED.sticky_invalid,
-    capacity_degraded = EXCLUDED.capacity_degraded,
     all_capacity_zero = EXCLUDED.all_capacity_zero,
     margin_guard_triggered = EXCLUDED.margin_guard_triggered,
     abnormal = routing_decision_traces.abnormal OR EXCLUDED.abnormal,
@@ -259,7 +254,6 @@ type UpsertRoutingDecisionTraceParams struct {
 	StickyChannelID      pgtype.Int8
 	StickyPinned         bool
 	StickyInvalid        bool
-	CapacityDegraded     bool
 	AllCapacityZero      bool
 	MarginGuardTriggered bool
 	Abnormal             bool
@@ -284,7 +278,6 @@ func (q *Queries) UpsertRoutingDecisionTrace(ctx context.Context, arg UpsertRout
 		arg.StickyChannelID,
 		arg.StickyPinned,
 		arg.StickyInvalid,
-		arg.CapacityDegraded,
 		arg.AllCapacityZero,
 		arg.MarginGuardTriggered,
 		arg.Abnormal,

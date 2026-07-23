@@ -246,7 +246,7 @@ RETURNING *;
 
 -- name: ListChannelTestLogsByChannel :many
 -- ListChannelTestLogsByChannel 按渠道倒序分页返回检测日志（详情页「检测日志」区块）。
-SELECT id, channel_id, created_at, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error
+SELECT id, channel_id, created_at, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error, tested_endpoint_base_url_revision, tested_endpoint_status_revision, tested_config_revision, state_change_applied
 FROM channel_test_logs
 WHERE channel_id = sqlc.arg(channel_id)
 ORDER BY created_at DESC, id DESC
@@ -260,27 +260,36 @@ WHERE channel_id = sqlc.arg(channel_id);
 
 -- name: ListChannelsByProvider :many
 -- ListChannelsByProvider 列出指定 provider 下的 channel，按 priority、id 升序。
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+SELECT id, provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
 FROM channels
 WHERE provider_id = $1
 ORDER BY priority, id;
 
+-- name: ListChannelsForRuntimeControlRestore :many
+-- ListChannelsForRuntimeControlRestore 返回启动期恢复 Channel admission control 所需的 PostgreSQL 权威事实。
+SELECT id, provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+FROM channels
+ORDER BY id;
+
 -- name: ListChannelsPage :many
 -- ListChannelsPage 按 provider/状态/关键字过滤后分页列出 channel，连带 provider 名称；过滤项为 NULL 时不过滤。
 SELECT
-    c.id, c.provider_id, c.name, c.protocol, c.adapter_key, c.base_url,
+    c.id, c.provider_id, c.provider_endpoint_id, c.name, c.protocol, c.adapter_key, pe.base_url,
     c.credential, c.status, c.priority, c.timeout_ms, c.created_at, c.updated_at,
     c.rpm_limit, c.tpm_limit, c.rpd_limit, c.concurrency_limit, c.upstream_bills_on_disconnect,
     c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
+    c.config_revision, c.admission_limits_revision,
+    pe.name AS provider_endpoint_name, pe.status AS provider_endpoint_status,
     p.name AS provider_name
 FROM channels c
 JOIN providers p ON p.id = c.provider_id
+JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
 WHERE (sqlc.narg('provider_id')::bigint IS NULL OR c.provider_id = sqlc.narg('provider_id')::bigint)
   AND (sqlc.narg('status')::text IS NULL OR c.status = sqlc.narg('status')::text)
   AND (
     sqlc.narg('q')::text IS NULL
     OR c.name ILIKE '%' || sqlc.narg('q')::text || '%'
-    OR c.base_url ILIKE '%' || sqlc.narg('q')::text || '%'
+    OR pe.base_url ILIKE '%' || sqlc.narg('q')::text || '%'
   )
 ORDER BY c.priority, c.id
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
@@ -289,41 +298,264 @@ LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 -- CountChannels 返回与 ListChannelsPage 相同过滤条件下的总条数。
 SELECT COUNT(*) AS total
 FROM channels c
+JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
 WHERE (sqlc.narg('provider_id')::bigint IS NULL OR c.provider_id = sqlc.narg('provider_id')::bigint)
   AND (sqlc.narg('status')::text IS NULL OR c.status = sqlc.narg('status')::text)
   AND (
     sqlc.narg('q')::text IS NULL
     OR c.name ILIKE '%' || sqlc.narg('q')::text || '%'
-    OR c.base_url ILIKE '%' || sqlc.narg('q')::text || '%'
+    OR pe.base_url ILIKE '%' || sqlc.narg('q')::text || '%'
   );
 
 -- name: GetChannel :one
 -- GetChannel 按 id 读取单个 channel。
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+SELECT id, provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
 FROM channels
 WHERE id = $1
 LIMIT 1;
 
+-- name: GetChannelProbeSnapshot :one
+-- GetChannelProbeSnapshot 一次读取主动检测所需的 Channel、Provider 与 Endpoint 冻结事实；检测结果只允许按三类 revision CAS 回写。
+SELECT
+    c.id AS channel_id,
+    c.provider_id,
+    c.provider_endpoint_id,
+    c.protocol,
+    c.adapter_key,
+    c.credential,
+    c.credential_valid,
+    c.config_revision,
+    p.slug AS provider_slug,
+    pe.base_url AS endpoint_base_url,
+    pe.base_url_revision AS endpoint_base_url_revision,
+    pe.status_revision AS endpoint_status_revision
+FROM channels c
+JOIN providers p ON p.id = c.provider_id
+JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
+WHERE c.id = sqlc.arg(channel_id)
+LIMIT 1;
+
+-- name: PrepareChannelCredentialRotation :one
+-- PrepareChannelCredentialRotation 原子判定同值/真变化并保存 credential。真变化只推进一次 config_revision，
+-- 同时先把 credential_valid 置 false、清空只属于旧 credential 的最近检测摘要；随后即时检测按返回的三类 revision 做 CAS。
+WITH current AS MATERIALIZED (
+    SELECT c.id, c.credential AS previous_credential, c.credential_valid AS previous_credential_valid
+    FROM channels AS c
+    WHERE c.id = sqlc.arg(channel_id)
+    FOR UPDATE
+), updated AS (
+    UPDATE channels AS c
+    SET credential = sqlc.arg(credential),
+        credential_valid = CASE
+            WHEN current.previous_credential IS DISTINCT FROM sqlc.arg(credential) THEN FALSE
+            ELSE c.credential_valid
+        END,
+        last_tested_at = CASE
+            WHEN current.previous_credential IS DISTINCT FROM sqlc.arg(credential) THEN NULL
+            ELSE c.last_tested_at
+        END,
+        last_test_ok = CASE
+            WHEN current.previous_credential IS DISTINCT FROM sqlc.arg(credential) THEN NULL
+            ELSE c.last_test_ok
+        END,
+        last_test_latency_ms = CASE
+            WHEN current.previous_credential IS DISTINCT FROM sqlc.arg(credential) THEN NULL
+            ELSE c.last_test_latency_ms
+        END,
+        last_test_error = CASE
+            WHEN current.previous_credential IS DISTINCT FROM sqlc.arg(credential) THEN NULL
+            ELSE c.last_test_error
+        END,
+        config_revision = c.config_revision + CASE
+            WHEN current.previous_credential IS DISTINCT FROM sqlc.arg(credential) THEN 1
+            ELSE 0
+        END,
+        updated_at = CASE
+            WHEN current.previous_credential IS DISTINCT FROM sqlc.arg(credential) THEN now()
+            ELSE c.updated_at
+        END
+    FROM current
+    WHERE c.id = current.id
+    RETURNING
+        c.id AS channel_id,
+        c.provider_id,
+        c.provider_endpoint_id,
+        c.protocol,
+        c.adapter_key,
+        c.credential,
+        c.credential_valid,
+        c.config_revision,
+        (current.previous_credential IS DISTINCT FROM sqlc.arg(credential))::boolean AS credential_changed
+)
+SELECT
+    updated.channel_id,
+    updated.provider_id,
+    updated.provider_endpoint_id,
+    updated.protocol,
+    updated.adapter_key,
+    updated.credential,
+    updated.credential_valid,
+    updated.config_revision,
+    updated.credential_changed,
+    p.slug AS provider_slug,
+    pe.base_url AS endpoint_base_url,
+    pe.base_url_revision AS endpoint_base_url_revision,
+    pe.status_revision AS endpoint_status_revision
+FROM updated
+JOIN providers p ON p.id = updated.provider_id
+JOIN provider_endpoints pe ON pe.id = updated.provider_endpoint_id;
+
+-- name: ApplyChannelProbeResult :one
+-- ApplyChannelProbeResult 按 Channel config + Endpoint BaseURL/status 三类 expected revision 原子应用检测摘要与 credential_valid，
+-- 并无论 current/stale 都写一条带 tested revisions 的历史日志；stale 结果不覆盖当前摘要或凭据状态。
+WITH matching AS MATERIALIZED (
+    SELECT c.id, c.credential_valid
+    FROM channels c
+    JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
+    WHERE c.id = sqlc.arg(channel_id)
+      AND c.config_revision = sqlc.arg(expected_config_revision)
+      AND pe.base_url_revision = sqlc.arg(expected_endpoint_base_url_revision)
+      AND pe.status_revision = sqlc.arg(expected_endpoint_status_revision)
+    FOR UPDATE OF c
+), applied AS (
+    UPDATE channels AS c
+    SET last_tested_at = now(),
+        last_test_ok = sqlc.arg(success),
+        last_test_latency_ms = sqlc.narg(last_test_latency_ms),
+        last_test_error = sqlc.narg(last_test_error),
+        credential_valid = COALESCE(sqlc.narg(next_credential_valid)::boolean, c.credential_valid),
+        config_revision = c.config_revision + CASE
+            WHEN sqlc.narg(next_credential_valid)::boolean IS NOT NULL
+             AND c.credential_valid IS DISTINCT FROM sqlc.narg(next_credential_valid)::boolean
+            THEN 1 ELSE 0
+        END,
+        updated_at = CASE
+            WHEN sqlc.narg(next_credential_valid)::boolean IS NOT NULL
+             AND c.credential_valid IS DISTINCT FROM sqlc.narg(next_credential_valid)::boolean
+            THEN now() ELSE c.updated_at
+        END
+    FROM matching
+    WHERE c.id = matching.id
+    RETURNING
+        c.id,
+        c.credential_valid,
+        c.config_revision,
+        (matching.credential_valid IS DISTINCT FROM c.credential_valid)::boolean AS state_change_applied
+), current_state AS (
+    SELECT
+        applied.id,
+        applied.credential_valid,
+        applied.config_revision,
+        TRUE AS result_applied,
+        applied.state_change_applied
+    FROM applied
+    UNION ALL
+    SELECT
+        c.id,
+        c.credential_valid,
+        c.config_revision,
+        FALSE AS result_applied,
+        FALSE AS state_change_applied
+    FROM channels c
+    WHERE c.id = sqlc.arg(channel_id)
+      AND NOT EXISTS (SELECT 1 FROM applied)
+    LIMIT 1
+), logged AS (
+    INSERT INTO channel_test_logs (
+        channel_id,
+        source,
+        success,
+        error_code,
+        http_status,
+        latency_ms,
+        tested_model,
+        credential_valid_after,
+        message,
+        upstream_error,
+        tested_endpoint_base_url_revision,
+        tested_endpoint_status_revision,
+        tested_config_revision,
+        state_change_applied
+    )
+    SELECT
+        current_state.id,
+        sqlc.arg(source),
+        sqlc.arg(success),
+        sqlc.narg(error_code),
+        sqlc.narg(http_status),
+        sqlc.narg(last_test_latency_ms),
+        sqlc.narg(tested_model),
+        current_state.credential_valid,
+        sqlc.narg(last_test_error),
+        sqlc.narg(upstream_error),
+        sqlc.arg(expected_endpoint_base_url_revision),
+        sqlc.arg(expected_endpoint_status_revision),
+        sqlc.arg(expected_config_revision),
+        current_state.state_change_applied
+    FROM current_state
+    RETURNING channel_id, credential_valid_after, state_change_applied
+)
+SELECT
+    current_state.result_applied,
+    logged.state_change_applied,
+    logged.credential_valid_after,
+    current_state.config_revision AS current_config_revision
+FROM current_state
+JOIN logged ON logged.channel_id = current_state.id;
+
 -- name: CreateChannel :one
 -- CreateChannel 创建 channel；credential 为明文上游凭据，protocol+adapter_key 复合键须先在 adapter registry 校验存在。
-INSERT INTO channels (provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms)
-VALUES (sqlc.arg(provider_id), sqlc.arg(name), sqlc.arg(protocol), sqlc.arg(adapter_key), sqlc.arg(base_url), sqlc.arg(credential), sqlc.arg(status), sqlc.arg(priority), sqlc.arg(timeout_ms))
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect;
+-- 四维限额随业务行一次写入，初始 admission_limits_revision 固定使用表默认值 1；随后同步安装 revision=1 Redis control。
+INSERT INTO channels (
+    provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, status, priority, timeout_ms,
+    rpm_limit, tpm_limit, rpd_limit, concurrency_limit, upstream_bills_on_disconnect
+)
+VALUES (
+    sqlc.arg(provider_id), sqlc.arg(provider_endpoint_id), sqlc.arg(name), sqlc.arg(protocol), sqlc.arg(adapter_key),
+    sqlc.arg(credential), sqlc.arg(status), sqlc.arg(priority), sqlc.arg(timeout_ms),
+    sqlc.narg(rpm_limit), sqlc.narg(tpm_limit), sqlc.narg(rpd_limit), sqlc.narg(concurrency_limit),
+    sqlc.arg(upstream_bills_on_disconnect)
+)
+RETURNING id, provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect;
 
 -- name: UpdateChannel :one
--- UpdateChannel 更新 channel 的展示名、上游地址、启停状态、优先级与超时；protocol、adapter_key 与凭据不在此更新。
+-- UpdateChannel 更新 channel 的展示名、绑定 Endpoint、启停状态、优先级与超时；protocol、adapter_key 与凭据不在此更新。
+-- [P4 §4.4] base_url 已移除（地址归 provider_endpoints）；config_revision 递增由服务层在真变化时于同事务处理。
 UPDATE channels
-SET name = sqlc.arg(name), base_url = sqlc.arg(base_url), status = sqlc.arg(status), priority = sqlc.arg(priority), timeout_ms = sqlc.arg(timeout_ms), updated_at = now()
+SET name = sqlc.arg(name),
+    provider_endpoint_id = sqlc.arg(provider_endpoint_id),
+    status = sqlc.arg(status),
+    priority = sqlc.arg(priority),
+    timeout_ms = sqlc.arg(timeout_ms),
+    config_revision = config_revision + (
+        CASE WHEN (
+            provider_endpoint_id IS DISTINCT FROM sqlc.arg(provider_endpoint_id)
+            OR status IS DISTINCT FROM sqlc.arg(status)
+            OR timeout_ms IS DISTINCT FROM sqlc.arg(timeout_ms)
+        ) THEN 1 ELSE 0 END
+    ),
+    updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect;
+RETURNING id, provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect;
 
--- name: SetChannelRateLimits :one
--- SetChannelRateLimits 设置/清除 channel 的渠道级限流上限（P2-8）与在途并发上限（DEC-029）；
--- 各列 NULL=继承全局默认，0=不限，>0=具体上限。
+-- name: CommitChannelAdmissionLimitsAtRevision :one
+-- CommitChannelAdmissionLimitsAtRevision 只供 runtimecontrol.Publisher 的 BusinessCommit 事务调用：
+-- 在 expected revision 仍匹配且四维语义真变化时一次写值并推进 admission_limits_revision。
+-- 普通 Channel 更新不得调用无 revision 的直接覆盖查询。
 UPDATE channels
-SET rpm_limit = sqlc.narg(rpm_limit), tpm_limit = sqlc.narg(tpm_limit), rpd_limit = sqlc.narg(rpd_limit), concurrency_limit = sqlc.narg(concurrency_limit), updated_at = now()
+SET rpm_limit = sqlc.narg(rpm_limit),
+    tpm_limit = sqlc.narg(tpm_limit),
+    rpd_limit = sqlc.narg(rpd_limit),
+    concurrency_limit = sqlc.narg(concurrency_limit),
+    admission_limits_revision = sqlc.arg(next_revision),
+    updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect;
+  AND admission_limits_revision = sqlc.arg(current_revision)
+  AND sqlc.arg(next_revision) = sqlc.arg(current_revision) + 1
+  AND ROW(rpm_limit, tpm_limit, rpd_limit, concurrency_limit) IS DISTINCT FROM ROW(
+      sqlc.narg(rpm_limit), sqlc.narg(tpm_limit), sqlc.narg(rpd_limit), sqlc.narg(concurrency_limit)
+  )
+RETURNING id, provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect;
 
 -- name: SetChannelBillingBehavior :one
 -- SetChannelBillingBehavior 设置渠道「断开仍计费」标记（DESIGN-bill-on-cancel 阶段一）。
@@ -331,7 +563,7 @@ RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, st
 UPDATE channels
 SET upstream_bills_on_disconnect = sqlc.arg(upstream_bills_on_disconnect), updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect;
+RETURNING id, provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect;
 
 -- name: SetChannelTestResult :execrows
 -- SetChannelTestResult 写入渠道「最近一次主动检测结果」（渠道检测，阶段一）。
@@ -365,7 +597,8 @@ WITH cleared_pools AS (
     DELETE FROM route_channels WHERE channel_id = sqlc.arg(id)
 )
 UPDATE channels
-SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text,
+    config_revision = config_revision + 1, updated_at = now()
 WHERE channels.id = sqlc.arg(id) AND channels.status <> 'archived';
 
 -- name: ArchiveChannelWithReplacement :one
@@ -374,12 +607,14 @@ WITH replacement AS (
     SELECT c.id
     FROM channels c
     JOIN providers p ON p.id = c.provider_id
+    JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
     WHERE c.id = sqlc.arg(replacement_channel_id)
       AND c.id <> sqlc.arg(id)
       AND c.status = 'enabled'
       AND c.credential_valid
       AND c.credential <> ''
-      AND c.base_url <> ''
+      AND pe.base_url <> ''
+      AND pe.status = 'enabled'
       AND p.status = 'enabled'
 ),
 affected_routes AS (
@@ -394,7 +629,8 @@ added AS (
 ),
 archived AS (
     UPDATE channels
-    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text,
+        config_revision = config_revision + 1, updated_at = now()
     WHERE channels.id = sqlc.arg(id)
       AND channels.status <> 'archived'
       AND EXISTS (SELECT 1 FROM replacement)
@@ -423,7 +659,8 @@ ORDER BY rt.id;
 -- RestoreChannel 取消归档渠道：archived → disabled（archived_at 清空）。名字保持归档时的后缀名
 -- （如需干净名由管理员手动改）。调用方需先保证所属 provider 非 archived（服务层护栏）。
 UPDATE channels
-SET status = 'disabled', archived_at = NULL
+SET status = 'disabled', archived_at = NULL,
+    config_revision = config_revision + 1, updated_at = now()
 WHERE id = sqlc.arg(id) AND status = 'archived';
 
 -- name: DeleteChannelCascade :execrows
@@ -463,7 +700,7 @@ SELECT
     c.status,
     c.protocol,
     c.adapter_key,
-    c.base_url,
+    pe.base_url,
     c.priority,
     c.timeout_ms,
     c.credential,
@@ -536,6 +773,7 @@ SELECT
     ) AS recent_error_code
 FROM channels c
 JOIN providers pr ON pr.id = c.provider_id
+JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
 LEFT JOIN request_attempts a
     ON a.channel_id = c.id
     AND (sqlc.narg('from_time')::timestamptz IS NULL OR a.created_at >= sqlc.narg('from_time')::timestamptz)
@@ -543,7 +781,7 @@ LEFT JOIN request_attempts a
 WHERE (sqlc.narg('status')::text IS NULL OR c.status = sqlc.narg('status')::text)
   AND (sqlc.narg('provider_id')::bigint IS NULL OR c.provider_id = sqlc.narg('provider_id')::bigint)
   AND (sqlc.narg('search')::text IS NULL OR c.name ILIKE '%' || sqlc.narg('search')::text || '%')
-GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, c.base_url, c.priority, c.timeout_ms, c.credential, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.created_at, c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name
+GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, pe.base_url, c.priority, c.timeout_ms, c.credential, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.created_at, c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name
 ORDER BY
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END DESC NULLS LAST,
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END ASC NULLS LAST,

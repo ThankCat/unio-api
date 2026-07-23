@@ -22,7 +22,13 @@ INSERT INTO request_attempts (
     final_usage_received,
     usage_mapping_version,
     started_at,
-    completed_at
+    completed_at,
+    provider_endpoint_id,
+    provider_endpoint_base_url_revision,
+    provider_endpoint_status_revision,
+    channel_config_revision,
+    routing_candidate_index,
+    upstream_operation
 )
 VALUES (
            sqlc.arg(request_record_id),
@@ -46,7 +52,13 @@ VALUES (
            sqlc.arg(final_usage_received),
            sqlc.arg(usage_mapping_version),
            sqlc.arg(started_at),
-           sqlc.arg(completed_at)
+           sqlc.arg(completed_at),
+           sqlc.arg(provider_endpoint_id),
+           sqlc.arg(provider_endpoint_base_url_revision),
+           sqlc.arg(provider_endpoint_status_revision),
+           sqlc.arg(channel_config_revision),
+           sqlc.arg(routing_candidate_index),
+           sqlc.arg(upstream_operation)
        )
 RETURNING
     id,
@@ -73,6 +85,17 @@ RETURNING
     started_at,
     completed_at,
     created_at,
+    upstream_started_at,
+    upstream_first_token_at,
+    upstream_completed_at,
+    provider_endpoint_id,
+    provider_endpoint_base_url_revision,
+    provider_endpoint_status_revision,
+    channel_config_revision,
+    routing_candidate_index,
+    upstream_operation,
+    breaker_endpoint_disposition,
+    breaker_channel_disposition,
     fault_party;
 
 -- name: MarkRequestAttemptResponseStarted :one
@@ -94,6 +117,23 @@ FROM request_attempts
 WHERE request_attempts.id = sqlc.arg(attempt_id)
   AND request_attempts.response_started_at IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM updated);
+
+-- name: RecordRequestAttemptUpstreamTiming :one
+-- RecordRequestAttemptUpstreamTiming first-write-wins 地保存真实 transport/FirstToken/completion 边界。
+UPDATE request_attempts
+SET upstream_started_at = COALESCE(request_attempts.upstream_started_at, sqlc.narg(upstream_started_at)),
+    upstream_first_token_at = COALESCE(request_attempts.upstream_first_token_at, sqlc.narg(upstream_first_token_at)),
+    upstream_completed_at = COALESCE(request_attempts.upstream_completed_at, sqlc.narg(upstream_completed_at))
+WHERE request_attempts.id = sqlc.arg(attempt_id)
+RETURNING *;
+
+-- name: RecordRequestAttemptBreakerDisposition :one
+-- RecordRequestAttemptBreakerDisposition 保留首次已确认的 Finish disposition，重复终态不得覆盖。
+UPDATE request_attempts
+SET breaker_endpoint_disposition = COALESCE(request_attempts.breaker_endpoint_disposition, sqlc.narg(breaker_endpoint_disposition)),
+    breaker_channel_disposition = COALESCE(request_attempts.breaker_channel_disposition, sqlc.narg(breaker_channel_disposition))
+WHERE request_attempts.id = sqlc.arg(attempt_id)
+RETURNING *;
 
 -- name: MarkRequestAttemptSucceeded :one
 -- MarkRequestAttemptSucceeded 将 running attempt 原子推进到 succeeded，重复 succeeded 返回第一次成功事实。

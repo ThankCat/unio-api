@@ -34,7 +34,7 @@ graph TD
   - 用户甲建 3 把 Key 全绑该线路 → 三把 Key **共享** 100（甲永远打不出 >100，多建 Key 无法放大配额）。✅ 防止打爆上游
   - 用户乙另有 1 把 Key → 乙**独立** 100，与甲不共享。✅ 不同用户不互相挤占
 - **上游硬天花板仍由渠道级限流兜底**：线路/用户限流管「每个客户公平用量」，渠道限流管「别把某条上游打挂」，两层正交。
-- 三值语义沿用现有约定：`NULL`=继承全局默认；`0`=显式不限；`>0`=具体上限。
+- 三值语义沿用现有约定：`NULL`=继承线路默认限流；`0`=显式不限；`>0`=具体上限。
 
 > **为什么不是按 Key 计数**：按 Key 计数时，一个用户建 N 把 Key 就能拿到 N×上限，等于把线路限流架空、直接打爆上游。按 (线路, 用户) 计数才能既给不同客户独立配额、又让单个客户无法通过多建 Key 放大用量。
 
@@ -112,7 +112,7 @@ graph TD
 ```sql
 -- 000059_add_routes_rate_limits.up.sql
 -- 为线路增加线路级限流上限：RPM 每分钟请求 / TPM 每分钟 token / RPD 每日请求。
--- 三列均可空：NULL=继承全局默认，0=显式不限，>0=具体上限。
+-- 三列均可空：NULL=继承线路默认限流，0=显式不限，>0=具体上限。
 -- 计数在 Redis 滑动窗口按 (线路, 用户) 复合主体执行；本列只持久化线路的"上限模板"。
 ALTER TABLE routes
     ADD COLUMN rpm_limit INTEGER CHECK (rpm_limit IS NULL OR rpm_limit >= 0),
@@ -127,7 +127,7 @@ ALTER TABLE routes
     DROP COLUMN IF EXISTS rpd_limit;
 ```
 
-内置线路（经济/稳定）默认三列 NULL（继承全局默认），零配置可用。
+内置线路（经济/稳定）默认三列 NULL（继承线路默认限流），零配置可用。
 
 ### 5.2 api_keys 旧限流列（分两步，见 §12 待决 Q2）
 - **本次（推荐）**：**保留列、停用逻辑**——代码/UI 不再读写，列上加注释「deprecated：限流已归线路」。避免一次性 DROP 带来的回滚风险。
@@ -179,7 +179,7 @@ ALTER TABLE routes
 - `src/components/routes/RouteFormDialog.tsx`：在「售价倍率」之后加一组限流输入，**复用**渠道表单的成熟组件模式（`src/components/channels/ChannelFormDialog.tsx` 已有范例）：
   - RPM：普通数字 `Input`（量级小）。
   - TPM / RPD：`RateLimitInput`（数字 + 单位 K/M/B）。
-  - 文案：「线路级限流（绑定该线路的**每个用户**合计生效，多建 Key 不放大配额）：留空=继承全局默认，0=不限」。
+  - 文案：「线路级限流（绑定该线路的**每个用户**合计生效，多建 Key 不放大配额）：留空=继承线路默认限流，0=不限」。
 - `src/lib/api/routes.ts`：`Route` + `CreateRouteInput` + `UpdateRouteInput` 增加 `rpm_limit/tpm_limit/rpd_limit: number | null`。
 
 ### 7.2 创建/编辑 API Key：移除「令牌级限流」
@@ -290,9 +290,11 @@ ALTER TABLE routes
 - **推荐**：**认证期 JOIN routes**（principal 携带）。因为 ingress RPM/RPD 在路由之前，只有 principal；统一从 principal 取，TPM 也一致。
 - **备选**：TPM 走 routing 已加载的线路值、RPM/RPD 走 principal——来源不统一、易漂移，不推荐。
 
-### Q5. 全局默认值是否需要调整？
-- 现状 `RATE_LIMIT_DEFAULT_RPM=60`（`.env` 另有遗留的 `RATE_LIMIT_DEFAULT_LIMIT/WINDOW`，实际生效以 `RATE_LIMIT_DEFAULT_RPM/TPM/RPD` 为准）。
-- **推荐**：默认值不动；线路留空即继承 60 RPM。运营给每条线路显式配置后即覆盖。建议顺手在 `.env.example` 注释澄清「Key 不再单独配限流，线路留空则用这些默认」。
+### Q5. 线路与渠道默认值是否需要调整？
+- **最终决议（DEC-053、DEC-054，2026-07-23）**：`gateway.route_rate_limit_defaults` 与
+  `gateway.channel_rate_limit_defaults` 分开配置，默认都为 `RPM=0、TPM=0、RPD=0`，三维均不限。
+- 线路/API Key 的空值只继承线路默认限流；Channel 的空值只继承渠道默认限流，两套 revision/control
+  互不继承。需要保护时显式填写正数；不限只关闭拒绝门槛，Redis 仍持续记录用量，便于后续按实际峰值制定限额。
 
 ### Q6. 「不知道会有多少用户 / 多少请求」怎么定线路限流？
 - 这是运营问题，不是技术阻塞（new-api 也不按用户数反推）。**推荐运营心法**：
@@ -309,7 +311,7 @@ ALTER TABLE routes
 >
 > - **背景**：DEC-026 已确立"线路=分组/档、挂在 Key 上"。限流作为档的属性，应随之归线路，而非由客户在创建 Key 时填写。
 > - **决策**：
->   1. 限流上限（RPM/TPM/RPD）定义在 `routes`；`NULL`=继承全局默认、`0`=不限、`>0`=上限。
+>   1. 限流上限（RPM/TPM/RPD）定义在 `routes`；`NULL`=继承线路默认限流、`0`=不限、`>0`=上限。
 >   2. 计数按 **(线路, 用户)** 复合主体（subject=`route:<routeID>:user:<userID>:<dim>`）：同一用户在该线路下所有 Key 共享一个桶（多建 Key 不放大配额、防打爆上游）；不同用户各自独立。**明确否决"按 Key 计数"**。
 >   3. 创建/编辑 API Key 不再配置限流；令牌级限流列停用（后续删除）。
 >   4. 渠道级限流（上游硬天花板）与限流内核（Guard/Redis 滑动窗口）保持不变。

@@ -27,14 +27,22 @@ type providerOpsHandler struct {
 }
 
 type providerOpsRowDTO struct {
-	ID           int64  `json:"id"`
-	Slug         string `json:"slug"`
-	Name         string `json:"name"`
-	Status       string `json:"status"`
-	CreatedAt    string `json:"created_at"`
-	ChannelTotal int64  `json:"channel_total"`
-	ModelsCount  int64  `json:"models_count"`
-	RoutesCount  int64  `json:"routes_count"`
+	ID           int64                    `json:"id"`
+	Slug         string                   `json:"slug"`
+	Name         string                   `json:"name"`
+	Status       string                   `json:"status"`
+	CreatedAt    string                   `json:"created_at"`
+	Endpoints    []providerOpsEndpointDTO `json:"endpoints"`
+	ChannelTotal int64                    `json:"channel_total"`
+	ModelsCount  int64                    `json:"models_count"`
+	RoutesCount  int64                    `json:"routes_count"`
+}
+
+type providerOpsEndpointDTO struct {
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	BaseURL string `json:"base_url"`
+	Status  string `json:"status"`
 }
 
 type providerOpsDetailDTO struct {
@@ -45,7 +53,6 @@ type providerOpsDetailDTO struct {
 	SuccessRate      float64                   `json:"success_rate"`
 	TimeoutTotal     int64                     `json:"timeout_total"`
 	Latency          adminhttp.LatencyStatsDTO `json:"latency"`
-	Health           string                    `json:"health"`
 	Tokens           int64                     `json:"tokens"`
 	RevenueUSD       string                    `json:"revenue_usd"`
 	CostUSD          string                    `json:"cost_usd"`
@@ -80,7 +87,6 @@ type providerOpsChannelDTO struct {
 	AttemptSucceeded int64                     `json:"attempt_succeeded"`
 	SuccessRate      float64                   `json:"success_rate"`
 	Latency          adminhttp.LatencyStatsDTO `json:"latency"`
-	Health           string                    `json:"health"`
 }
 
 type providerOpsPerfPointDTO struct {
@@ -128,18 +134,32 @@ func (h *providerOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]providerOpsRowDTO, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, providerOpsRowDTO{
-			ID:           row.ID,
-			Slug:         row.Slug,
-			Name:         row.Name,
-			Status:       row.Status,
-			CreatedAt:    adminhttp.RFC3339(row.CreatedAt),
-			ChannelTotal: row.ChannelTotal,
-			ModelsCount:  row.ModelsCount,
-			RoutesCount:  row.RoutesCount,
-		})
+		out = append(out, providerOpsRowDTOFrom(row))
 	}
 	adminhttp.WriteList(w, http.StatusOK, out, page, total)
+}
+
+func providerOpsRowDTOFrom(row providerops.Row) providerOpsRowDTO {
+	endpoints := make([]providerOpsEndpointDTO, 0, len(row.Endpoints))
+	for _, endpoint := range row.Endpoints {
+		endpoints = append(endpoints, providerOpsEndpointDTO{
+			ID:      endpoint.ID,
+			Name:    endpoint.Name,
+			BaseURL: endpoint.BaseURL,
+			Status:  endpoint.Status,
+		})
+	}
+	return providerOpsRowDTO{
+		ID:           row.ID,
+		Slug:         row.Slug,
+		Name:         row.Name,
+		Status:       row.Status,
+		CreatedAt:    adminhttp.RFC3339(row.CreatedAt),
+		Endpoints:    endpoints,
+		ChannelTotal: row.ChannelTotal,
+		ModelsCount:  row.ModelsCount,
+		RoutesCount:  row.RoutesCount,
+	}
 }
 
 func (h *providerOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +186,6 @@ func (h *providerOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		SuccessRate:      d.SuccessRate,
 		TimeoutTotal:     d.TimeoutTotal,
 		Latency:          adminhttp.LatencyStatsFrom(d.Latency),
-		Health:           d.HealthBucket,
 		Tokens:           d.Tokens,
 		RevenueUSD:       d.RevenueUSD,
 		CostUSD:          d.CostUSD,
@@ -256,7 +275,6 @@ func (h *providerOpsHandler) channels(w http.ResponseWriter, r *http.Request) {
 			AttemptSucceeded: c.AttemptSucceeded,
 			SuccessRate:      c.SuccessRate,
 			Latency:          adminhttp.LatencyStatsFrom(c.Latency),
-			Health:           c.HealthBucket,
 		})
 	}
 	adminhttp.WriteData(w, http.StatusOK, out)

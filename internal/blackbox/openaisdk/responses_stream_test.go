@@ -129,7 +129,7 @@ func TestResponsesMockStreamSucceeds(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 	})
 
 	resp := doResponses(t, http.MethodPost, f.BaseURL+"/responses", f.APIKey,
@@ -203,7 +203,7 @@ func TestResponsesMockStreamReasoning(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 		ModelID:         "deepseek-v4-pro",
 		UpstreamModel:   "deepseek-v4-pro",
 	})
@@ -271,7 +271,7 @@ func TestResponsesRealCodexFixtureRoundTrips(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: mock.URL + "/v1",
+		UpstreamBaseURL: mock.URL,
 	})
 
 	// 真实 Codex 模型名（gpt-5-codex）不在 fixture 模型目录里；改成可路由模型即可端到端回放。

@@ -11,7 +11,6 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
-	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
@@ -20,11 +19,25 @@ import (
 type fakeSettingsReader struct {
 	mu     sync.Mutex
 	values map[string]json.RawMessage
+	reads  map[string]int
+}
+
+type fakeChannel429PolicyTarget struct {
+	defaultCooldown time.Duration
+	cap             time.Duration
+	calls           int
+}
+
+func (f *fakeChannel429PolicyTarget) SetChannel429CooldownPolicy(defaultCooldown, cap time.Duration) {
+	f.defaultCooldown = defaultCooldown
+	f.cap = cap
+	f.calls++
 }
 
 func (f *fakeSettingsReader) Raw(_ context.Context, key string) json.RawMessage {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.reads[key]++
 	return f.values[key]
 }
 
@@ -35,82 +48,81 @@ func (f *fakeSettingsReader) set(key, value string) {
 }
 
 func newApplierFixture() (*settingsApplier, *fakeSettingsReader, *fakeChatRouteStore) {
-	store := &fakeSettingsReader{values: map[string]json.RawMessage{}}
+	store := &fakeSettingsReader{values: map[string]json.RawMessage{}, reads: map[string]int{}}
 	routeStore := &fakeChatRouteStore{}
 	a := &settingsApplier{
-		store:       store,
-		logger:      zap.NewNop(),
-		breaker:     lifecycle.NewChannelCircuitBreaker(lifecycle.ChannelCircuitBreakerConfig{}),
-		guard:       NewRateLimitGuard(nil, "test", appsettings.DefaultRateLimitDefaultsSettings(), zap.NewNop()),
-		cooldown:    lifecycle.NewChannelCooldownRegistry(5*time.Second, 5*time.Minute),
-		gate:        lifecycle.NewChannelCredentialGate(3, nil),
-		router:      routing.NewRouter(routeStore, 30*time.Second),
-		concurrency: ratelimit.NewConcurrencyLimiter(0, 0),
+		store:  store,
+		logger: zap.NewNop(),
+		gate:   lifecycle.NewChannelCredentialGate(3, nil),
+		router: routing.NewRouter(routeStore, 30*time.Second),
 	}
 	return a, store, routeStore
 }
 
-// TestSettingsApplierAppliesAllSixGroups 验证「改配置源 → applyOnce → 消费方生效」闭环。
-func TestSettingsApplierAppliesAllSixGroups(t *testing.T) {
+// TestSettingsApplierAppliesLocalSettings 验证非准入类本机配置仍能热更新。
+func TestSettingsApplierAppliesLocalSettings(t *testing.T) {
 	t.Cleanup(func() { adapter.SetStreamIdleTimeout(0) })
 	a, store, _ := newApplierFixture()
+	channel429 := &fakeChannel429PolicyTarget{}
+	a.channel429 = channel429
 
-	store.set(appsettings.GatewayCircuitBreakerKey,
-		`{"enabled":false,"window_ms":60000,"min_requests":5,"failure_ratio":0.9,"open_duration_ms":45000}`)
-	store.set(appsettings.GatewayRateLimitDefaultsKey,
-		`{"rpm":120,"tpm":90000,"rpd":5000,"failure_policy":"fail_open"}`)
 	store.set(appsettings.GatewayStreamIdleTimeoutKey, `900000`)
-	store.set(appsettings.GatewayChannelCooldownKey, `{"cooldown_ms":9000,"cap_ms":120000}`)
 	store.set(appsettings.GatewayCredential401ThresholdKey, `7`)
 	store.set(appsettings.GatewayDefaultChannelTimeoutKey, `42000`)
-	store.set(appsettings.GatewayFailureCooldownKey, `7000`)
-	store.set(appsettings.GatewayConcurrencyDefaultsKey, `{"key_limit":1,"channel_limit":2}`)
+	store.set(appsettings.GatewayChannelCooldownKey, `{"cooldown_ms":5000,"cap_ms":300000}`)
 
 	a.applyOnce(context.Background())
 
-	if a.breaker.Enabled() {
-		t.Error("breaker should be disabled after apply")
-	}
 	if got := adapter.StreamIdleTimeout(); got != 15*time.Minute {
 		t.Errorf("stream idle timeout = %v, want 15m", got)
 	}
-	// guard:热改后 TokensEnforced 反映新默认 TPM(>0 即 enforced)。
-	if !a.guard.TokensEnforced(ratelimit.Limits{}) {
-		t.Error("guard TPM default should be enforced after apply")
+	if channel429.calls != 1 || channel429.defaultCooldown != 5*time.Second || channel429.cap != 5*time.Minute {
+		t.Errorf("channel 429 policy = calls:%d default:%v cap:%v", channel429.calls, channel429.defaultCooldown, channel429.cap)
 	}
-	// cooldown:无 Retry-After 时用新默认 9s。
-	until, ok := a.cooldown.RecordRateLimit("c", 0)
-	if !ok || time.Until(until) > 10*time.Second {
-		t.Errorf("cooldown not applied: ok=%v until=%v", ok, until)
+
+	store.set(appsettings.GatewayChannelCooldownKey, `{"cooldown_ms":7000,"cap_ms":90000}`)
+	a.applyOnce(context.Background())
+	if channel429.calls != 2 || channel429.defaultCooldown != 7*time.Second || channel429.cap != 90*time.Second {
+		t.Errorf("hot-reloaded channel 429 policy = calls:%d default:%v cap:%v", channel429.calls, channel429.defaultCooldown, channel429.cap)
 	}
-	// 失败软冷却:热改后 RecordFailure 生效(7s)。
-	if _, ok := a.cooldown.RecordFailure("c"); !ok {
-		t.Error("failure cooldown should be enabled after apply")
+}
+
+func TestSettingsApplierDoesNotReadRuntimeControlSettings(t *testing.T) {
+	a, store, _ := newApplierFixture()
+	a.applyOnce(context.Background())
+
+	for _, key := range []string{
+		appsettings.GatewayCircuitBreakerKey,
+		appsettings.GatewayRouteRateLimitDefaultsKey,
+		appsettings.GatewayChannelRateLimitDefaultsKey,
+		appsettings.GatewayConcurrencyDefaultsKey,
+		appsettings.GatewayRoutingBalanceKey,
+	} {
+		if store.reads[key] != 0 {
+			t.Errorf("settings applier must not read runtime control key %q", key)
+		}
 	}
-	// 并发默认:key_limit=1 生效,第二个在途请求被拒。
-	release, ok := a.concurrency.AcquireRouteUser(1, 1)
-	if !ok {
-		t.Fatal("first in-flight should be allowed")
-	}
-	if _, ok := a.concurrency.AcquireRouteUser(1, 1); ok {
-		t.Error("second in-flight should be rejected after key_limit=1 applied")
-	}
-	release()
 }
 
 // TestSettingsApplierKeepsCurrentOnDecodeError 验证坏数据不推送、保持当前值。
 func TestSettingsApplierKeepsCurrentOnDecodeError(t *testing.T) {
 	t.Cleanup(func() { adapter.SetStreamIdleTimeout(0) })
 	a, store, _ := newApplierFixture()
+	channel429 := &fakeChannel429PolicyTarget{defaultCooldown: 5 * time.Second, cap: time.Minute}
+	a.channel429 = channel429
 
 	adapter.SetStreamIdleTimeout(10 * time.Minute)
 	store.set(appsettings.GatewayStreamIdleTimeoutKey, `"not-an-int"`)
 	store.set(appsettings.GatewayCredential401ThresholdKey, `-1`)
+	store.set(appsettings.GatewayChannelCooldownKey, `{"cooldown_ms":-1,"cap_ms":60000}`)
 
 	a.applyOnce(context.Background())
 
 	if got := adapter.StreamIdleTimeout(); got != 10*time.Minute {
 		t.Errorf("stream idle timeout should keep current 10m on decode error, got %v", got)
+	}
+	if channel429.calls != 0 || channel429.defaultCooldown != 5*time.Second || channel429.cap != time.Minute {
+		t.Errorf("invalid channel 429 policy changed current value: %+v", channel429)
 	}
 }
 

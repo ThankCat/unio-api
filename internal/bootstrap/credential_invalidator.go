@@ -4,10 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // credentialInvalidator 是 lifecycle.CredentialInvalidator 的生产实现（阶段二凭据闸门）。
@@ -25,36 +25,28 @@ func newCredentialInvalidator(queries *sqlc.Queries, logger *zap.Logger) *creden
 }
 
 // MarkChannelCredentialInvalid 实现 lifecycle.CredentialInvalidator。
-func (i *credentialInvalidator) MarkChannelCredentialInvalid(channelID int64) {
+func (i *credentialInvalidator) MarkChannelCredentialInvalid(revision lifecycle.CredentialRevision) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		affected, err := i.queries.SetChannelCredentialInvalid(ctx, channelID)
+		applied, err := i.queries.ApplyRuntime401CredentialInvalidation(ctx, sqlc.ApplyRuntime401CredentialInvalidationParams{
+			ChannelID:                       revision.ChannelID,
+			ExpectedConfigRevision:          revision.ChannelConfigRevision,
+			ExpectedEndpointBaseUrlRevision: revision.EndpointBaseURLRevision,
+			ExpectedEndpointStatusRevision:  revision.EndpointStatusRevision,
+		})
 		if err != nil {
 			i.logger.Error("mark channel credential invalid failed",
-				zap.Int64("channel_id", channelID), zap.Error(err))
+				zap.Int64("channel_id", revision.ChannelID), zap.Error(err))
 			return
 		}
-		if affected == 0 {
-			// 已是 invalid（并发下别的实例先翻了），非跳变，不重复写日志。
-			return
-		}
-
-		if err := i.queries.InsertChannelTestLog(ctx, sqlc.InsertChannelTestLogParams{
-			ChannelID:            channelID,
-			Source:               "runtime_401",
-			Success:              false,
-			ErrorCode:            pgtype.Text{String: "credential_invalid", Valid: true},
-			CredentialValidAfter: false,
-			Message:              pgtype.Text{String: "连续 401 达阈值，自动标记凭据失效", Valid: true},
-		}); err != nil {
-			i.logger.Error("insert runtime_401 test log failed",
-				zap.Int64("channel_id", channelID), zap.Error(err))
+		if !applied.StateChangeApplied {
 			return
 		}
 
 		i.logger.Warn("channel credential marked invalid (consecutive 401)",
-			zap.Int64("channel_id", channelID))
+			zap.Int64("channel_id", revision.ChannelID),
+			zap.Int64("config_revision", applied.CurrentConfigRevision))
 	}()
 }

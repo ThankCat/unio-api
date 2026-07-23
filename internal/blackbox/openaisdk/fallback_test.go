@@ -46,10 +46,10 @@ func TestOAISDKMockFallbackToSecondaryChannel(t *testing.T) {
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
 		Mode:            sdkfixture.UpstreamMock,
-		UpstreamBaseURL: primary.URL + "/v1",
+		UpstreamBaseURL: primary.URL,
 	})
 	// priority 数字越大优先级越低 => primary 默认 10，secondary 设 20 作为 fallback。
-	f.AddFallbackChannel(t, secondary.URL+"/v1", 20)
+	f.AddFallbackChannel(t, secondary.URL, 20)
 
 	client := openai.NewClient(
 		option.WithBaseURL(f.BaseURL),
@@ -65,7 +65,22 @@ func TestOAISDKMockFallbackToSecondaryChannel(t *testing.T) {
 		Messages: []openai.ChatCompletionMessageParamUnion{openai.UserMessage("hi")},
 	})
 	if err != nil {
-		t.Fatalf("expected fallback success, got error: %v", err)
+		var errorCode, internalDetail string
+		_ = f.Pool.QueryRow(context.Background(), `
+			SELECT COALESCE(error_code, ''), COALESCE(internal_error_detail, '')
+			FROM request_records
+			WHERE user_id = $1
+			ORDER BY id DESC
+			LIMIT 1
+		`, f.UserID).Scan(&errorCode, &internalDetail)
+		t.Fatalf(
+			"expected fallback success, got error: %v (primary_calls=%d secondary_calls=%d error_code=%q detail=%q)",
+			err,
+			atomic.LoadInt32(&primaryCalls),
+			atomic.LoadInt32(&secondaryCalls),
+			errorCode,
+			internalDetail,
+		)
 	}
 	if got := resp.Choices[0].Message.Content; got != "from secondary" {
 		t.Fatalf("expected fallback response 'from secondary', got %q", got)

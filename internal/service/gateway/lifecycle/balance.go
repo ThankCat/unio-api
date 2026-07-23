@@ -8,7 +8,11 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 )
 
-const minimumHealthFactor = 0.05
+const (
+	defaultTTFTTargetMs         = int64(2000)
+	defaultTTFTWeight           = 0.35
+	defaultMinimumRoutingFactor = 0.05
+)
 
 // CapacitySignal 是一个 channel-global 容量维度的只读事实。Limit<=0 表示显式不限。
 type CapacitySignal struct {
@@ -19,8 +23,13 @@ type CapacitySignal struct {
 
 // ChannelCapacity 是 balanced scorer 使用的并发和 TPM 快照。
 type ChannelCapacity struct {
-	Concurrency CapacitySignal
-	TPM         CapacitySignal
+	Concurrency  CapacitySignal
+	TPM          CapacitySignal
+	ErrorRate    float64
+	TTFTEWMAMs   float64
+	TTFTSamples  int64
+	HalfOpen     bool
+	RuntimeKnown bool
 }
 
 // ChannelCapacitySnapshotReader 读取候选渠道的全局容量；读取不能产生预占或推进状态机。
@@ -28,14 +37,49 @@ type ChannelCapacitySnapshotReader func(context.Context, routing.ChatRouteCandid
 
 // BalanceScore 保存一次候选评分的完整组成，供调度、trace 和运行时后台共用。
 type BalanceScore struct {
-	ConcurrencyRemaining *float64
-	TPMRemaining         *float64
-	CapacityScore        float64
-	HealthFactor         float64
-	Weight               float64
-	Pressure             float64
-	CapacityUnknown      bool
-	CapacityReadFailed   bool
+	EndpointID                              int64
+	CandidateEndpointBaseURLRevision        int64
+	RuntimeEndpointBaseURLRevision          int64
+	EndpointBaseURLRevisionCurrent          bool
+	CandidateEndpointStatusRevision         int64
+	RuntimeEndpointStatusRevision           int64
+	EndpointStatusRevisionCurrent           bool
+	CandidateChannelConfigRevision          int64
+	RuntimeChannelConfigRevision            *int64
+	ChannelConfigRevisionCurrent            bool
+	CandidateChannelAdmissionLimitsRevision int64
+	RuntimeChannelAdmissionLimitsRevision   int64
+	ChannelAdmissionLimitsRevisionCurrent   bool
+	RouteRateLimitsRevision                 int64
+	ChannelRateLimitsRevision               int64
+	GlobalConcurrencyRevision               int64
+	CircuitBreakerRevision                  int64
+	ConcurrencyRemaining                    *float64
+	TPMRemaining                            *float64
+	CapacityScore                           float64
+	ErrorRate                               float64
+	ErrorSamples                            int64
+	TTFTEWMAMs                              float64
+	TTFTSamples                             int64
+	TTFTSampleSource                        string
+	LatencyPenalty                          float64
+	RoutingFactor                           float64
+	CostRatio                               float64
+	CostWeight                              float64
+	CostFactor                              float64
+	RoutingBalanceRevision                  int64
+	Weight                                  float64
+	Pressure                                float64
+	CapacityUnknown                         bool
+	CapacityReadFailed                      bool
+	RuntimeControlState                     string
+	RuntimeRevisionCurrent                  bool
+	EndpointBreakerState                    string
+	ChannelBreakerState                     string
+	CooldownRemainingMs                     int64
+	ModelPermissionPaused                   bool
+	ModelPermissionRecheckState             string
+	BreakerStoreAdmission                   string
 }
 
 type scoredCandidate struct {
@@ -48,45 +92,42 @@ func orderBalancedCandidates(
 	in []routing.ChatRouteCandidate,
 	mode string,
 	capacity ChannelCapacitySnapshotReader,
-	health func(string) float64,
 	random func() float64,
 	config BalanceConfig,
-) ([]routing.ChatRouteCandidate, map[int64]BalanceScore, bool, bool) {
+) ([]routing.ChatRouteCandidate, map[int64]BalanceScore, bool) {
 	entries := make([]scoredCandidate, 0, len(in))
 	scores := make(map[int64]BalanceScore, len(in))
 	if mode != "balanced" {
 		out := append([]routing.ChatRouteCandidate(nil), in...)
 		for _, candidate := range out {
-			score := BalanceScore{CapacityScore: 1, HealthFactor: 1, Weight: 1, CapacityUnknown: true}
+			snapshot := ChannelCapacity{}
+			if capacity != nil {
+				if value, err := capacity(ctx, candidate); err == nil {
+					snapshot = value
+				}
+			}
+			score := scoreCapacity(snapshot, config)
+			score = recordNeutralCostFactor(score, candidate.CostRatio, config)
 			scores[candidate.Channel.ID] = score
 		}
-		return out, scores, false, false
+		return out, scores, false
 	}
 
-	degraded := false
 	allUnknown := true
 	allZero := len(in) > 0
 	for _, candidate := range in {
 		snapshot := ChannelCapacity{}
 		readFailed := false
-		if !config.Enabled || !config.WeightByRemaining {
-			snapshot = ChannelCapacity{
-				Concurrency: CapacitySignal{Limit: 0, Known: true},
-				TPM:         CapacitySignal{Limit: 0, Known: true},
-			}
-		} else if capacity != nil {
+		if capacity != nil {
 			var err error
 			snapshot, err = capacity(ctx, candidate)
 			if err != nil {
-				degraded, readFailed = true, true
+				readFailed = true
 				snapshot = ChannelCapacity{}
 			}
 		}
-		healthValue := healthScore(health, candidate.Channel.ID)
-		if !config.Enabled {
-			healthValue = 0
-		}
-		score := scoreCapacity(snapshot, healthValue)
+		score := scoreCapacity(snapshot, config)
+		score = ApplyCostFactor(score, candidate.CostRatio, config)
 		score.CapacityReadFailed = readFailed
 		if !score.CapacityUnknown {
 			allUnknown = false
@@ -97,32 +138,45 @@ func orderBalancedCandidates(
 		entries = append(entries, scoredCandidate{route: candidate, score: score})
 	}
 
-	// 所有容量维度均未知时严格退化为池内均匀随机，不让健康或 SQL priority 伪装成容量事实。
+	// 所有容量维度均未知时让容量和健康度退化为中性值，仍保留已冻结的成本因子。
 	if allUnknown {
 		allZero = false
 		for i := range entries {
 			entries[i].score.CapacityScore = 1
-			entries[i].score.HealthFactor = 1
-			entries[i].score.Weight = 1
+			entries[i].score.RoutingFactor = 1
+			entries[i].score.Weight = entries[i].score.CostFactor
 		}
 	}
 
-	if allZero {
-		// 所有候选容量为零时，最低压力候选排首进入现有队首短等；其余仍保留在线路内 fallback。
-		sort.SliceStable(entries, func(i, j int) bool { return entries[i].score.Pressure < entries[j].score.Pressure })
-	} else {
-		entries = weightedWithoutReplacement(entries, random)
+	closed := make([]scoredCandidate, 0, len(entries))
+	halfOpen := make([]scoredCandidate, 0)
+	for _, entry := range entries {
+		if entry.score.Weight == 0 && entry.score.RoutingFactor == 0 {
+			halfOpen = append(halfOpen, entry)
+			continue
+		}
+		closed = append(closed, entry)
 	}
+
+	if allZero && len(closed) > 0 {
+		// 所有候选容量为零时，最低压力候选排首进入现有队首短等；其余仍保留在线路内 fallback。
+		sort.SliceStable(closed, func(i, j int) bool { return closed[i].score.Pressure < closed[j].score.Pressure })
+	} else {
+		closed = weightedWithoutReplacement(closed, random)
+	}
+	// half-open 只保序进入独立 probe fallback，不参与普通 weighted random。
+	entries = append(closed, halfOpen...)
 
 	out := make([]routing.ChatRouteCandidate, 0, len(entries))
 	for _, entry := range entries {
 		out = append(out, entry.route)
 		scores[entry.route.Channel.ID] = entry.score
 	}
-	return out, scores, degraded, allZero
+	return out, scores, allZero
 }
 
-func scoreCapacity(snapshot ChannelCapacity, healthScore float64) BalanceScore {
+func scoreCapacity(snapshot ChannelCapacity, config BalanceConfig) BalanceScore {
+	config = normalizedBalanceConfig(config)
 	concurrencyRemaining, concurrencyPressure := remainingRatio(snapshot.Concurrency)
 	tpmRemaining, tpmPressure := remainingRatio(snapshot.TPM)
 
@@ -135,21 +189,81 @@ func scoreCapacity(snapshot ChannelCapacity, healthScore float64) BalanceScore {
 	case tpmRemaining != nil:
 		capacity = *tpmRemaining
 	}
-	healthFactor := math.Max(minimumHealthFactor, 1-clamp01(healthScore))
+	errorRate := snapshot.ErrorRate
+	errorRate = clamp01(errorRate)
+	latencyPenalty := 0.0
+	if snapshot.TTFTSamples > 0 {
+		latencyPenalty = snapshot.TTFTEWMAMs / (snapshot.TTFTEWMAMs + float64(config.TTFTTargetMs))
+		latencyPenalty = clamp01(latencyPenalty)
+	}
+	routingFactor := math.Max(config.MinimumRoutingFactor,
+		(1-errorRate)*(1-config.TTFTWeight*latencyPenalty))
+	weight := capacity * routingFactor
+	if snapshot.HalfOpen {
+		routingFactor = 0
+		weight = 0
+	}
 	return BalanceScore{
-		ConcurrencyRemaining: concurrencyRemaining,
-		TPMRemaining:         tpmRemaining,
-		CapacityScore:        capacity,
-		HealthFactor:         healthFactor,
-		Weight:               capacity * healthFactor,
-		Pressure:             combinedPressure(concurrencyRemaining != nil, concurrencyPressure, tpmRemaining != nil, tpmPressure),
-		CapacityUnknown:      concurrencyRemaining == nil && tpmRemaining == nil,
+		ConcurrencyRemaining:   concurrencyRemaining,
+		TPMRemaining:           tpmRemaining,
+		CapacityScore:          capacity,
+		ErrorRate:              errorRate,
+		TTFTEWMAMs:             snapshot.TTFTEWMAMs,
+		TTFTSamples:            snapshot.TTFTSamples,
+		TTFTSampleSource:       "stream_only",
+		LatencyPenalty:         latencyPenalty,
+		RoutingFactor:          routingFactor,
+		CostFactor:             1,
+		RoutingBalanceRevision: config.Revision,
+		Weight:                 weight,
+		Pressure:               combinedPressure(concurrencyRemaining != nil, concurrencyPressure, tpmRemaining != nil, tpmPressure),
+		CapacityUnknown:        concurrencyRemaining == nil && tpmRemaining == nil,
 	}
 }
 
-// ScoreBalanceCandidate exposes the scheduler's scorer for read-only admin diagnostics.
-func ScoreBalanceCandidate(snapshot ChannelCapacity, healthScore float64) BalanceScore {
-	return scoreCapacity(snapshot, healthScore)
+// ScoreBalanceCandidateWithConfig is the shared read-only scorer for Gateway routing and Admin.
+// Callers must pass the active routing-balance payload returned by SnapshotMany.
+func ScoreBalanceCandidateWithConfig(snapshot ChannelCapacity, config BalanceConfig) BalanceScore {
+	return scoreCapacity(snapshot, config)
+}
+
+// ApplyCostFactor adds the cost-aware routing factor to an existing capacity and
+// health score. Gateway and Admin share this helper so displayed and executed weights
+// use exactly the same formula.
+func ApplyCostFactor(score BalanceScore, costRatio float64, config BalanceConfig) BalanceScore {
+	config = normalizedBalanceConfig(config)
+	score.CostRatio = costRatio
+	score.CostWeight = config.CostWeight
+	score.CostFactor = math.Max(
+		config.MinimumRoutingFactor,
+		1-config.CostWeight*clamp01(costRatio),
+	)
+	score.Weight *= score.CostFactor
+	return score
+}
+
+func recordNeutralCostFactor(score BalanceScore, costRatio float64, config BalanceConfig) BalanceScore {
+	config = normalizedBalanceConfig(config)
+	score.CostRatio = costRatio
+	score.CostWeight = config.CostWeight
+	score.CostFactor = 1
+	return score
+}
+
+func normalizedBalanceConfig(config BalanceConfig) BalanceConfig {
+	if config.TTFTTargetMs <= 0 {
+		config.TTFTTargetMs = defaultTTFTTargetMs
+	}
+	if config.TTFTWeight < 0 || config.TTFTWeight > 1 {
+		config.TTFTWeight = defaultTTFTWeight
+	}
+	if config.MinimumRoutingFactor <= 0 || config.MinimumRoutingFactor > 1 {
+		config.MinimumRoutingFactor = defaultMinimumRoutingFactor
+	}
+	if math.IsNaN(config.CostWeight) || config.CostWeight < 0 || config.CostWeight > 1 {
+		config.CostWeight = 0
+	}
+	return config
 }
 
 func combinedPressure(concurrencyKnown bool, concurrencyPressure float64, tpmKnown bool, tpmPressure float64) float64 {
@@ -177,13 +291,6 @@ func remainingRatio(signal CapacitySignal) (*float64, float64) {
 	pressure := clamp01(float64(used) / float64(signal.Limit))
 	remaining := 1 - pressure
 	return &remaining, pressure
-}
-
-func healthScore(health func(string) float64, channelID int64) float64 {
-	if health == nil {
-		return 0
-	}
-	return health(MetricsID(channelID))
 }
 
 func weightedWithoutReplacement(in []scoredCandidate, random func() float64) []scoredCandidate {

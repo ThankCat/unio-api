@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"math/rand/v2"
-	"sync/atomic"
 
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
 var (
@@ -49,28 +50,12 @@ type PrepareCandidatesParams struct {
 	// Capabilities 是本次 operation 在调用上游前必须具备的代码能力。
 	Capabilities []AdapterCapability
 
-	// Available 过滤当前处于熔断冷却期的 channel；nil 表示全部可用。
-	Available CandidateAvailability
-
-	// FailurePreferred 是失败软冷却的「偏好」判定（DEC-029）：返回 false 的候选不被剔除，
-	// 而是 demote 到 fallback 顺序末尾——健康候选优先，软冷却候选仍作最后兜底。
-	// 全部候选都在软冷却中时顺序不变，故唯一候选场景行为完全不受影响（唯一渠道保护）。
-	// nil 表示不启用软偏好。
-	FailurePreferred CandidateAvailability
-
 	// EstimateInputTokens 对每个可用 fallback candidate 做 provider-specific 保守估算。
 	EstimateInputTokens CandidateInputTokenEstimator
 
 	// Mode 是线路策略（balanced/fixed）；fixed 保持唯一候选，balanced 按容量和健康度排序。
 	// 排序叠加在能力过滤/熔断可用性之前，故最终 fallback 顺序即策略顺序。
 	Mode string
-
-	// ChannelHealthScore 给 balanced 提供渠道健康分（0 最佳、1 最差）；nil 时使用中性健康因子。
-	ChannelHealthScore func(channelKey string) float64
-
-	// ChannelCapacitySnapshot 只读返回 channel-global 并发/TPM 容量，不得预占配额。
-	// nil 或读取失败时按未知信号退化，真正 admit 仍由 attempt runner 原子执行。
-	ChannelCapacitySnapshot ChannelCapacitySnapshotReader
 
 	// StickyChannelID 是会话粘性命中的既有绑定渠道 ID（0=无绑定/未启用）。非 0 时该渠道候选被
 	// 置顶，绝对优先于 Mode 排序与失败软冷却 demote（R5）；其余候选仍按策略序作 fallback。
@@ -107,9 +92,8 @@ type CandidatePlan struct {
 	// 该占比用于观察 sticky 覆盖 balanced 首选顺序的频率。
 	StickyPinnedNonPreferred bool
 
-	// CapacityDegraded 表示至少一个容量快照读取失败；AllCapacityZero 表示所有候选容量分均为 0。
-	CapacityDegraded bool
-	AllCapacityZero  bool
+	// AllCapacityZero 表示所有候选容量分均为 0。
+	AllCapacityZero bool
 
 	// Excluded records capability and breaker/cooldown hard filters from the SQL candidate plan.
 	Excluded []CandidateExclusion
@@ -119,6 +103,8 @@ type CandidateExclusion struct {
 	ChannelID  int64
 	RouteIndex int
 	Reason     string
+	Route      routing.ChatRouteCandidate
+	Balance    BalanceScore
 }
 
 // CandidateSalePrices 提取候选池各命中渠道的当前售价，供保守预授权上界估算（阶段 15）。
@@ -158,13 +144,15 @@ func (p CandidatePlan) CandidateMaxOutputTokens() int64 {
 type Executor struct {
 	registry CandidateCapabilityRegistry
 	random   func() float64
-	balance  atomic.Pointer[BalanceConfig]
 }
 
-// BalanceConfig 是 balanced 的热更新开关。
+// BalanceConfig 是 Redis committed routing-balance control 的评分参数。
 type BalanceConfig struct {
-	Enabled           bool
-	WeightByRemaining bool
+	Revision             int64
+	TTFTTargetMs         int64
+	TTFTWeight           float64
+	CostWeight           float64
+	MinimumRoutingFactor float64
 }
 
 // NewExecutor 创建共享 lifecycle executor。
@@ -173,17 +161,7 @@ func NewExecutor(registry CandidateCapabilityRegistry) *Executor {
 		panic("lifecycle: adapter capability registry is required")
 	}
 
-	executor := &Executor{registry: registry, random: rand.Float64}
-	executor.SetBalanceConfig(true, true)
-	return executor
-}
-
-// SetBalanceConfig 原子替换 balanced 调度开关。
-func (e *Executor) SetBalanceConfig(enabled, weightByRemaining bool) {
-	if e == nil {
-		return
-	}
-	e.balance.Store(&BalanceConfig{Enabled: enabled, WeightByRemaining: weightByRemaining})
+	return &Executor{registry: registry, random: rand.Float64}
 }
 
 // SetRandomSource 替换 balanced 随机源。生产默认使用 math/rand/v2，测试传固定 seed。
@@ -203,7 +181,7 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 		)
 	}
 
-	// 先做能力与 breaker/cooldown 硬过滤，再读取容量并排序，避免为不可尝试渠道读取运行时状态。
+	// 先做代码能力过滤，再以一次 Redis SnapshotMany 同时完成所有运行态硬门禁和评分读取。
 	filtered := e.registry.FilterCandidates(params.Protocol, params.Candidates, params.Capabilities...)
 	filteredIDs := make(map[int64]struct{}, len(filtered))
 	for _, candidate := range filtered {
@@ -212,33 +190,147 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 	excluded := make([]CandidateExclusion, 0, len(params.Candidates)-len(filtered))
 	for index, candidate := range params.Candidates {
 		if _, ok := filteredIDs[candidate.Channel.ID]; !ok {
-			excluded = append(excluded, CandidateExclusion{ChannelID: candidate.Channel.ID, RouteIndex: index, Reason: "capability_unsupported"})
-		}
-	}
-	available := make([]routing.ChatRouteCandidate, 0, len(filtered))
-	for _, candidate := range filtered {
-		if params.Available == nil || params.Available(candidate) {
-			available = append(available, candidate)
-		} else {
 			excluded = append(excluded, CandidateExclusion{
-				ChannelID: candidate.Channel.ID, RouteIndex: candidateRouteIndexes(params.Candidates)[candidate.Channel.ID], Reason: "breaker_or_cooldown",
+				ChannelID: candidate.Channel.ID, RouteIndex: index,
+				Reason: "capability_unsupported", Route: candidate,
 			})
 		}
 	}
-	config := e.balance.Load()
-	if config == nil {
-		config = &BalanceConfig{Enabled: true, WeightByRemaining: true}
+	if len(filtered) == 0 {
+		return CandidatePlan{}, noAvailableCandidateError()
 	}
-	ordered, scores, degraded, allZero := orderBalancedCandidates(
-		ctx, available, params.Mode, params.ChannelCapacitySnapshot, params.ChannelHealthScore, e.random, *config,
-	)
 	routeIndexes := candidateRouteIndexes(params.Candidates)
+	runtimeInputs := make([]breakerstore.SnapshotCandidateInput, 0, len(filtered))
+	for _, candidate := range filtered {
+		runtimeInputs = append(runtimeInputs, breakerstore.SnapshotCandidateInput{
+			EndpointID: candidate.ProviderEndpointID, ChannelID: candidate.Channel.ID,
+			EndpointBaseURLRevision:  candidate.ProviderEndpointBaseURLRevision,
+			EndpointStatusRevision:   candidate.ProviderEndpointStatusRevision,
+			ChannelConfigRevision:    candidate.ChannelConfigRevision,
+			ChannelAdmissionRevision: candidate.ChannelAdmissionLimitsRevision,
+		})
+	}
+	runtimeResult, runtimePresent, err := requestadmission.SnapshotManyIfPresent(ctx, filtered[0].ModelDBID, runtimeInputs)
+	if err != nil {
+		return CandidatePlan{}, err
+	}
+	available := make([]routing.ChatRouteCandidate, 0, len(filtered))
+	runtimeCapacity := make(map[int64]ChannelCapacity, len(filtered))
+	runtimeSnapshots := make(map[int64]breakerstore.CandidateSnapshot, len(filtered))
+	capabilityExclusions := len(excluded)
+	rateLimitedSnapshots := 0
+	minCooldownRemainingMs := int64(0)
+	if runtimePresent {
+		if len(runtimeResult.Candidates) != len(filtered) {
+			return CandidatePlan{}, failure.New(
+				failure.CodeGatewayRuntimeSyncRequired,
+				failure.WithMessage("candidate runtime snapshot count does not match routing candidates"),
+			)
+		}
+		for index, candidate := range filtered {
+			snapshot := runtimeResult.Candidates[index]
+			runtimeSnapshots[candidate.Channel.ID] = snapshot
+			switch snapshot.Status {
+			case breakerstore.CandidateSnapshotCurrent, breakerstore.CandidateSnapshotNoSample,
+				breakerstore.CandidateSnapshotHalfOpen:
+				available = append(available, candidate)
+				errorRate := snapshot.Channel.ErrorRate
+				ttftEWMA := snapshot.Channel.TTFTEWMAMs
+				ttftSamples := snapshot.Channel.TTFTSamples
+				if snapshot.Status == breakerstore.CandidateSnapshotNoSample {
+					errorRate, ttftEWMA, ttftSamples = 0, 0, 0
+				}
+				runtimeCapacity[candidate.Channel.ID] = ChannelCapacity{
+					Concurrency: CapacitySignal{Used: snapshot.Concurrency.Used, Limit: snapshot.Concurrency.Limit, Known: true},
+					TPM:         CapacitySignal{Used: snapshot.TPM.Used, Limit: snapshot.TPM.Limit, Known: true},
+					ErrorRate:   errorRate, TTFTEWMAMs: ttftEWMA,
+					TTFTSamples:  ttftSamples,
+					HalfOpen:     snapshot.Status == breakerstore.CandidateSnapshotHalfOpen,
+					RuntimeKnown: true,
+				}
+			default:
+				if snapshot.Status == breakerstore.CandidateSnapshotRateLimited {
+					rateLimitedSnapshots++
+					if snapshot.CooldownRemainingMs > 0 &&
+						(minCooldownRemainingMs == 0 || snapshot.CooldownRemainingMs < minCooldownRemainingMs) {
+						minCooldownRemainingMs = snapshot.CooldownRemainingMs
+					}
+				}
+				excluded = append(excluded, CandidateExclusion{
+					ChannelID: candidate.Channel.ID, RouteIndex: routeIndexes[candidate.Channel.ID],
+					Reason: string(snapshot.Status), Route: candidate,
+				})
+			}
+		}
+	} else {
+		// Direct unit tests and maintenance callers may omit the HTTP-owned request session.
+		// Without the Redis snapshot there is no authoritative runtime signal, so preserve SQL order
+		// with neutral scores instead of consulting retired in-process breaker/health hooks.
+		available = append(available, filtered...)
+	}
+	if len(available) == 0 {
+		if runtimePresent && capabilityExclusions == 0 && rateLimitedSnapshots == len(filtered) {
+			return CandidatePlan{}, failure.New(
+				failure.CodeGatewayChannelRateLimited,
+				failure.WithMessage("all candidate channels are in upstream rate-limit cooldown"),
+				failure.WithField("retry_after_ms", minCooldownRemainingMs),
+			)
+		}
+		return CandidatePlan{}, noAvailableCandidateError()
+	}
+	selectedConfig := BalanceConfig{}
+	orderingMode := params.Mode
+	var capacityReader ChannelCapacitySnapshotReader
+	if runtimePresent {
+		selectedConfig = BalanceConfig{
+			Revision:             runtimeResult.RoutingBalance.Revision,
+			TTFTTargetMs:         runtimeResult.RoutingBalance.TTFTTargetMs,
+			TTFTWeight:           runtimeResult.RoutingBalance.TTFTWeight,
+			CostWeight:           runtimeResult.RoutingBalance.CostWeight,
+			MinimumRoutingFactor: runtimeResult.RoutingBalance.MinimumRoutingFactor,
+		}
+		capacityReader = func(_ context.Context, candidate routing.ChatRouteCandidate) (ChannelCapacity, error) {
+			return runtimeCapacity[candidate.Channel.ID], nil
+		}
+	} else {
+		// A missing request session has no authoritative facts to justify weighted routing.
+		// Preserve the SQL order while still producing neutral scores for test/maintenance callers.
+		orderingMode = ""
+	}
+	ordered, scores, allZero := orderBalancedCandidates(
+		ctx, available, orderingMode, capacityReader, e.random, selectedConfig,
+	)
+	if runtimePresent {
+		for _, candidate := range available {
+			score := scores[candidate.Channel.ID]
+			scores[candidate.Channel.ID] = enrichBalanceScore(score, candidate, runtimeSnapshots[candidate.Channel.ID], runtimeResult)
+		}
+		for index := range excluded {
+			snapshot, ok := runtimeSnapshots[excluded[index].ChannelID]
+			if !ok {
+				score := recordNeutralCostFactor(BalanceScore{}, excluded[index].Route.CostRatio, selectedConfig)
+				if params.Mode == "balanced" {
+					score = ApplyCostFactor(score, excluded[index].Route.CostRatio, selectedConfig)
+				}
+				score.Weight = 0
+				excluded[index].Balance = score
+				continue
+			}
+			score := scoreCapacity(channelCapacityFromRuntimeSnapshot(snapshot), selectedConfig)
+			if params.Mode == "balanced" {
+				score = ApplyCostFactor(score, excluded[index].Route.CostRatio, selectedConfig)
+			} else {
+				score = recordNeutralCostFactor(score, excluded[index].Route.CostRatio, selectedConfig)
+			}
+			score.Weight = 0
+			excluded[index].Balance = enrichBalanceScore(score, excluded[index].Route, snapshot, runtimeResult)
+		}
+	}
 
 	plan := CandidatePlan{
-		Candidates:       make([]Candidate, 0, len(ordered)),
-		CapacityDegraded: degraded,
-		AllCapacityZero:  allZero,
-		Excluded:         excluded,
+		Candidates:      make([]Candidate, 0, len(ordered)),
+		AllCapacityZero: allZero,
+		Excluded:        excluded,
 	}
 	for _, candidate := range ordered {
 		inputTokens, err := params.EstimateInputTokens(ctx, candidate)
@@ -263,25 +355,25 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 	}
 
 	if len(plan.Candidates) == 0 {
-		return CandidatePlan{}, failure.Wrap(
-			failure.CodeRoutingNoAvailableChannel,
-			routing.ErrNoAvailableChannel,
-			failure.WithMessage(routing.ErrNoAvailableChannel.Error()),
-		)
+		return CandidatePlan{}, noAvailableCandidateError()
 	}
 
-	// 失败软冷却 demote（DEC-029）：健康候选保序在前，软冷却候选保序垫后。
-	// 只重排不剔除——候选总数与保守估算不变，唯一候选时顺序天然不变。
-	plan.Candidates = demoteFailureCooled(plan.Candidates, params.FailurePreferred)
-
 	// 会话粘性置顶（大 uncache 缺口 P0）：sticky 绑定渠道移到 fallback 首位，绝对优先于
-	// mode 排序与软冷却 demote（R5，故意放在 demote 之后）。渠道已被硬摘除时置顶落空
+	// mode 排序（R5）。渠道已被硬摘除时置顶落空
 	// （StickyPinned=false），由调用方清除绑定；其余候选顺序不受影响。
 	if params.StickyChannelID != 0 {
 		plan.Candidates, plan.StickyPinned, plan.StickyPinnedNonPreferred = pinStickyCandidate(plan.Candidates, params.StickyChannelID)
 	}
 
 	return plan, nil
+}
+
+func noAvailableCandidateError() error {
+	return failure.Wrap(
+		failure.CodeRoutingNoAvailableChannel,
+		routing.ErrNoAvailableChannel,
+		failure.WithMessage(routing.ErrNoAvailableChannel.Error()),
+	)
 }
 
 // pinStickyCandidate 把命中 channelID 的候选稳定移到列表首位（其余保持相对顺序）。
@@ -303,28 +395,6 @@ func pinStickyCandidate(candidates []Candidate, channelID int64) (out []Candidat
 	return candidates, false, false
 }
 
-// demoteFailureCooled 把软冷却中的候选稳定移到列表末尾（不剔除、组内保持原相对顺序）。
-// preferred 为 nil 时原样返回。
-func demoteFailureCooled(candidates []Candidate, preferred CandidateAvailability) []Candidate {
-	if preferred == nil || len(candidates) < 2 {
-		return candidates
-	}
-
-	healthy := make([]Candidate, 0, len(candidates))
-	cooled := make([]Candidate, 0)
-	for _, c := range candidates {
-		if preferred(c.Route) {
-			healthy = append(healthy, c)
-		} else {
-			cooled = append(cooled, c)
-		}
-	}
-	if len(cooled) == 0 || len(healthy) == 0 {
-		return candidates
-	}
-	return append(healthy, cooled...)
-}
-
 func candidateRouteIndexes(candidates []routing.ChatRouteCandidate) map[int64]int {
 	indexes := make(map[int64]int, len(candidates))
 	for index, candidate := range candidates {
@@ -341,4 +411,77 @@ func candidateEstimateFailure(cause error, message string) error {
 		cause,
 		failure.WithMessage(message),
 	)
+}
+
+func channelCapacityFromRuntimeSnapshot(snapshot breakerstore.CandidateSnapshot) ChannelCapacity {
+	channel := snapshot.Channel
+	if snapshot.Status == breakerstore.CandidateSnapshotNoSample {
+		channel = breakerstore.ScopeSnapshot{}
+	}
+	return ChannelCapacity{
+		Concurrency:  CapacitySignal{Used: snapshot.Concurrency.Used, Limit: snapshot.Concurrency.Limit, Known: true},
+		TPM:          CapacitySignal{Used: snapshot.TPM.Used, Limit: snapshot.TPM.Limit, Known: true},
+		ErrorRate:    channel.ErrorRate,
+		TTFTEWMAMs:   channel.TTFTEWMAMs,
+		TTFTSamples:  channel.TTFTSamples,
+		HalfOpen:     snapshot.Status == breakerstore.CandidateSnapshotHalfOpen,
+		RuntimeKnown: true,
+	}
+}
+
+func enrichBalanceScore(
+	score BalanceScore,
+	candidate routing.ChatRouteCandidate,
+	snapshot breakerstore.CandidateSnapshot,
+	result breakerstore.SnapshotManyResult,
+) BalanceScore {
+	channel := snapshot.Channel
+	if snapshot.Status == breakerstore.CandidateSnapshotNoSample {
+		channel = breakerstore.ScopeSnapshot{}
+	}
+	score.EndpointID = candidate.ProviderEndpointID
+	score.CandidateEndpointBaseURLRevision = candidate.ProviderEndpointBaseURLRevision
+	score.RuntimeEndpointBaseURLRevision = snapshot.Endpoint.BaseURLRevision
+	score.EndpointBaseURLRevisionCurrent = snapshot.Endpoint.BaseURLRevision == candidate.ProviderEndpointBaseURLRevision
+	score.CandidateEndpointStatusRevision = candidate.ProviderEndpointStatusRevision
+	score.RuntimeEndpointStatusRevision = snapshot.Endpoint.StatusRevision
+	score.EndpointStatusRevisionCurrent = snapshot.Endpoint.StatusRevision == candidate.ProviderEndpointStatusRevision
+	score.CandidateChannelConfigRevision = candidate.ChannelConfigRevision
+	score.RuntimeChannelConfigRevision = positiveRevisionPtr(channel.ChannelConfigRevision)
+	score.ChannelConfigRevisionCurrent = channel.ChannelConfigRevision == candidate.ChannelConfigRevision
+	score.CandidateChannelAdmissionLimitsRevision = candidate.ChannelAdmissionLimitsRevision
+	score.RuntimeChannelAdmissionLimitsRevision = snapshot.Candidate.ChannelAdmissionRevision
+	score.ChannelAdmissionLimitsRevisionCurrent = snapshot.Candidate.ChannelAdmissionRevision == candidate.ChannelAdmissionLimitsRevision
+	score.RouteRateLimitsRevision = result.RouteRateRevision
+	score.ChannelRateLimitsRevision = result.ChannelRateRevision
+	score.GlobalConcurrencyRevision = result.GlobalConcurrencyRevision
+	score.CircuitBreakerRevision = result.CircuitBreakerRevision
+	score.ErrorSamples = channel.SampleCount
+	score.EndpointBreakerState = traceBreakerState(snapshot.Endpoint)
+	score.ChannelBreakerState = traceBreakerState(channel)
+	score.CooldownRemainingMs = snapshot.CooldownRemainingMs
+	score.ModelPermissionPaused = snapshot.ModelPermissionPaused
+	score.ModelPermissionRecheckState = snapshot.ModelPermissionRecheckState
+	score.RuntimeControlState = "active"
+	score.RuntimeRevisionCurrent = true
+	score.BreakerStoreAdmission = "normal"
+	return score
+}
+
+func positiveRevisionPtr(revision int64) *int64 {
+	if revision <= 0 {
+		return nil
+	}
+	value := revision
+	return &value
+}
+
+func traceBreakerState(snapshot breakerstore.ScopeSnapshot) string {
+	if !snapshot.Exists {
+		return ""
+	}
+	if snapshot.State == breakerstore.StateOpen && snapshot.OpenRemainingMs <= 0 {
+		return string(breakerstore.StateHalfOpen)
+	}
+	return string(snapshot.State)
 }

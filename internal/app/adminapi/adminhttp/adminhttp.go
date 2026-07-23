@@ -113,6 +113,9 @@ func adminErrorStatus(code failure.Code) int {
 		return http.StatusBadRequest
 	case failure.CodeCapabilityNotFound:
 		return http.StatusNotFound
+	// P4 §8.4：Redis/BreakerStore 基础设施故障 → 503（准入/运行态数据源不可用），与普通 500 区分。
+	case failure.CodeGatewayBreakerStoreUnavailable, failure.CodeDependencyRedisUnavailable:
+		return http.StatusServiceUnavailable
 	}
 
 	if code.Category() == failure.CategoryHTTP {

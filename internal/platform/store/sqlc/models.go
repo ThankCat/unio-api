@@ -34,6 +34,7 @@ type AppSetting struct {
 	Value       []byte
 	UpdatedAt   pgtype.Timestamptz
 	Description string
+	Revision    int64
 }
 
 type CapabilityKey struct {
@@ -52,11 +53,13 @@ type CapabilityKey struct {
 type Channel struct {
 	ID                        int64
 	ProviderID                int64
+	ProviderEndpointID        int64
 	Name                      string
 	Protocol                  string
 	AdapterKey                string
-	BaseUrl                   string
 	Credential                string
+	ConfigRevision            int64
+	AdmissionLimitsRevision   int64
 	Status                    string
 	Priority                  int32
 	TimeoutMs                 pgtype.Int4
@@ -144,18 +147,22 @@ type ChannelRechargeFactor struct {
 }
 
 type ChannelTestLog struct {
-	ID                   int64
-	ChannelID            int64
-	CreatedAt            pgtype.Timestamptz
-	Source               string
-	Success              bool
-	ErrorCode            pgtype.Text
-	HttpStatus           pgtype.Int4
-	LatencyMs            pgtype.Int4
-	TestedModel          pgtype.Text
-	CredentialValidAfter bool
-	Message              pgtype.Text
-	UpstreamError        pgtype.Text
+	ID                            int64
+	ChannelID                     int64
+	CreatedAt                     pgtype.Timestamptz
+	Source                        string
+	Success                       bool
+	ErrorCode                     pgtype.Text
+	HttpStatus                    pgtype.Int4
+	LatencyMs                     pgtype.Int4
+	TestedModel                   pgtype.Text
+	CredentialValidAfter          bool
+	Message                       pgtype.Text
+	UpstreamError                 pgtype.Text
+	TestedEndpointBaseUrlRevision pgtype.Int8
+	TestedEndpointStatusRevision  pgtype.Int8
+	TestedConfigRevision          pgtype.Int8
+	StateChangeApplied            bool
 }
 
 type CostSnapshot struct {
@@ -191,6 +198,20 @@ type CostSnapshot struct {
 	ChannelRechargeFactorID      pgtype.Int8
 	RechargeFactor               pgtype.Numeric
 	LongContextApplied           bool
+}
+
+type EndpointRoutingOperation struct {
+	ID          int64
+	Token       string
+	Kind        string
+	ProviderID  pgtype.Int8
+	EndpointID  pgtype.Int8
+	Transitions []byte
+	PayloadHash string
+	State       string
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	CompletedAt pgtype.Timestamptz
 }
 
 type LedgerBillingException struct {
@@ -364,63 +385,88 @@ type Provider struct {
 	ArchivedAt pgtype.Timestamptz
 }
 
+type ProviderEndpoint struct {
+	ID              int64
+	ProviderID      int64
+	Name            string
+	BaseUrl         string
+	BaseUrlRevision int64
+	Status          string
+	StatusRevision  int64
+	ArchivedAt      pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+}
+
 type RequestAttempt struct {
-	ID                    int64
-	RequestRecordID       int64
-	AttemptIndex          int32
-	ProviderID            int64
-	ChannelID             int64
-	AdapterKey            string
-	UpstreamModel         string
-	UpstreamProtocol      string
-	UpstreamResponseID    pgtype.Text
-	UpstreamResponseModel pgtype.Text
-	UpstreamFinishReason  pgtype.Text
-	FinishClass           pgtype.Text
-	Status                string
-	UpstreamStatusCode    pgtype.Int4
-	UpstreamRequestID     pgtype.Text
-	ErrorCode             pgtype.Text
-	ErrorMessage          pgtype.Text
-	InternalErrorDetail   pgtype.Text
-	ResponseStartedAt     pgtype.Timestamptz
-	FinalUsageReceived    bool
-	UsageMappingVersion   pgtype.Text
-	StartedAt             pgtype.Timestamptz
-	CompletedAt           pgtype.Timestamptz
-	CreatedAt             pgtype.Timestamptz
-	FaultParty            pgtype.Text
+	ID                              int64
+	RequestRecordID                 int64
+	AttemptIndex                    int32
+	ProviderID                      int64
+	ChannelID                       int64
+	AdapterKey                      string
+	UpstreamModel                   string
+	UpstreamProtocol                string
+	UpstreamResponseID              pgtype.Text
+	UpstreamResponseModel           pgtype.Text
+	UpstreamFinishReason            pgtype.Text
+	FinishClass                     pgtype.Text
+	Status                          string
+	UpstreamStatusCode              pgtype.Int4
+	UpstreamRequestID               pgtype.Text
+	ErrorCode                       pgtype.Text
+	ErrorMessage                    pgtype.Text
+	InternalErrorDetail             pgtype.Text
+	ResponseStartedAt               pgtype.Timestamptz
+	FinalUsageReceived              bool
+	UsageMappingVersion             pgtype.Text
+	StartedAt                       pgtype.Timestamptz
+	CompletedAt                     pgtype.Timestamptz
+	CreatedAt                       pgtype.Timestamptz
+	UpstreamStartedAt               pgtype.Timestamptz
+	UpstreamFirstTokenAt            pgtype.Timestamptz
+	UpstreamCompletedAt             pgtype.Timestamptz
+	ProviderEndpointID              int64
+	ProviderEndpointBaseUrlRevision int64
+	ProviderEndpointStatusRevision  int64
+	ChannelConfigRevision           int64
+	RoutingCandidateIndex           int32
+	UpstreamOperation               string
+	BreakerEndpointDisposition      pgtype.Text
+	BreakerChannelDisposition       pgtype.Text
+	FaultParty                      pgtype.Text
 }
 
 type RequestRecord struct {
-	ID                    int64
-	RequestID             string
-	UserID                int64
-	ApiKeyID              int64
-	RequestedModelID      string
-	IngressProtocol       string
-	Operation             string
-	ResponseModelID       pgtype.Text
-	ResponseProtocol      pgtype.Text
-	ResponseID            pgtype.Text
-	Stream                bool
-	Status                string
-	FinalProviderID       pgtype.Int8
-	FinalChannelID        pgtype.Int8
-	ErrorCode             pgtype.Text
-	ErrorMessage          pgtype.Text
-	InternalErrorDetail   pgtype.Text
-	DeliveryStatus        string
-	ResponseStartedAt     pgtype.Timestamptz
-	ResponseCompletedAt   pgtype.Timestamptz
-	StartedAt             pgtype.Timestamptz
-	CompletedAt           pgtype.Timestamptz
-	CreatedAt             pgtype.Timestamptz
-	UpdatedAt             pgtype.Timestamptz
-	RouteID               pgtype.Int8
-	ReasoningEffort       pgtype.Text
-	ReasoningBudgetTokens pgtype.Int4
-	ClientIp              pgtype.Text
+	ID                      int64
+	RequestID               string
+	UserID                  int64
+	ApiKeyID                int64
+	RequestedModelID        string
+	IngressProtocol         string
+	Operation               string
+	ResponseModelID         pgtype.Text
+	ResponseProtocol        pgtype.Text
+	ResponseID              pgtype.Text
+	Stream                  bool
+	Status                  string
+	FinalProviderID         pgtype.Int8
+	FinalProviderEndpointID pgtype.Int8
+	FinalChannelID          pgtype.Int8
+	ErrorCode               pgtype.Text
+	ErrorMessage            pgtype.Text
+	InternalErrorDetail     pgtype.Text
+	DeliveryStatus          string
+	ResponseStartedAt       pgtype.Timestamptz
+	ResponseCompletedAt     pgtype.Timestamptz
+	StartedAt               pgtype.Timestamptz
+	CompletedAt             pgtype.Timestamptz
+	CreatedAt               pgtype.Timestamptz
+	UpdatedAt               pgtype.Timestamptz
+	RouteID                 pgtype.Int8
+	ReasoningEffort         pgtype.Text
+	ReasoningBudgetTokens   pgtype.Int4
+	ClientIp                pgtype.Text
 }
 
 type Route struct {
@@ -457,7 +503,6 @@ type RoutingDecisionTrace struct {
 	StickyChannelID      pgtype.Int8
 	StickyPinned         bool
 	StickyInvalid        bool
-	CapacityDegraded     bool
 	AllCapacityZero      bool
 	MarginGuardTriggered bool
 	Abnormal             bool
@@ -469,6 +514,25 @@ type RoutingDecisionTrace struct {
 	Sampled              bool
 	CreatedAt            pgtype.Timestamptz
 	UpdatedAt            pgtype.Timestamptz
+}
+
+type RuntimeControlOperation struct {
+	ID                 int64
+	Token              string
+	Kind               string
+	ChannelID          pgtype.Int8
+	SettingKey         pgtype.Text
+	CurrentRevision    int64
+	NextRevision       int64
+	PayloadHash        string
+	EpochTransition    []byte
+	ExpectedMarkerHash pgtype.Text
+	RecoveryEvidence   []byte
+	ReleaseEvidence    []byte
+	State              string
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+	CompletedAt        pgtype.Timestamptz
 }
 
 type SchemaHealthCheck struct {

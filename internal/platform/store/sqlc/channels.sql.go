@@ -7,29 +7,140 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const listChannelsForCredentialTest = `-- name: ListChannelsForCredentialTest :many
-SELECT id, provider_id, name, protocol, adapter_key, base_url, credential, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
-FROM channels
-WHERE status = 'enabled'
-ORDER BY credential_valid ASC, priority, id
+const applyRuntime401CredentialInvalidation = `-- name: ApplyRuntime401CredentialInvalidation :one
+WITH matching AS MATERIALIZED (
+    SELECT c.id, c.credential_valid, c.config_revision
+    FROM channels c
+    JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
+    WHERE c.id = $1
+      AND c.config_revision = $2
+      AND pe.base_url_revision = $3
+      AND pe.status_revision = $4
+    FOR UPDATE OF c
+), applied AS (
+    UPDATE channels c
+    SET credential_valid = FALSE,
+        config_revision = c.config_revision + 1,
+        updated_at = now()
+    FROM matching
+    WHERE c.id = matching.id
+      AND matching.credential_valid = TRUE
+    RETURNING c.id, c.credential_valid, c.config_revision
+), current_state AS (
+    SELECT applied.id, applied.credential_valid, applied.config_revision, TRUE AS state_change_applied
+    FROM applied
+    UNION ALL
+    SELECT c.id, c.credential_valid, c.config_revision, FALSE AS state_change_applied
+    FROM channels c
+    WHERE c.id = $1
+      AND NOT EXISTS (SELECT 1 FROM applied)
+    LIMIT 1
+), logged AS (
+    INSERT INTO channel_test_logs (
+        channel_id, source, success, error_code, credential_valid_after, message,
+        tested_endpoint_base_url_revision, tested_endpoint_status_revision,
+        tested_config_revision, state_change_applied
+    )
+    SELECT
+        current_state.id, 'runtime_401', FALSE, 'credential_invalid', current_state.credential_valid,
+        '连续 401 达阈值，按冻结版本尝试标记凭据失效',
+        $3, $4,
+        $2, current_state.state_change_applied
+    FROM current_state
+    RETURNING channel_id
+)
+SELECT current_state.state_change_applied, current_state.credential_valid AS credential_valid_after,
+       current_state.config_revision AS current_config_revision
+FROM current_state
+JOIN logged ON logged.channel_id = current_state.id
 `
+
+type ApplyRuntime401CredentialInvalidationParams struct {
+	ChannelID                       int64
+	ExpectedConfigRevision          int64
+	ExpectedEndpointBaseUrlRevision int64
+	ExpectedEndpointStatusRevision  int64
+}
+
+type ApplyRuntime401CredentialInvalidationRow struct {
+	StateChangeApplied    bool
+	CredentialValidAfter  bool
+	CurrentConfigRevision int64
+}
+
+// ApplyRuntime401CredentialInvalidation 将达到阈值的运行时 401 按当次 Channel config 与 Endpoint
+// BaseURL/status 三类 expected revision 做原子 CAS。只有三类 revision 仍匹配且 credential_valid=true
+// 时才翻 false 并推进 config_revision；迟到结果只写 state_change_applied=false 的审计行。
+func (q *Queries) ApplyRuntime401CredentialInvalidation(ctx context.Context, arg ApplyRuntime401CredentialInvalidationParams) (ApplyRuntime401CredentialInvalidationRow, error) {
+	row := q.db.QueryRow(ctx, applyRuntime401CredentialInvalidation,
+		arg.ChannelID,
+		arg.ExpectedConfigRevision,
+		arg.ExpectedEndpointBaseUrlRevision,
+		arg.ExpectedEndpointStatusRevision,
+	)
+	var i ApplyRuntime401CredentialInvalidationRow
+	err := row.Scan(&i.StateChangeApplied, &i.CredentialValidAfter, &i.CurrentConfigRevision)
+	return i, err
+}
+
+const listChannelsForCredentialTest = `-- name: ListChannelsForCredentialTest :many
+SELECT c.id, c.provider_id, c.provider_endpoint_id, c.name, c.protocol, c.adapter_key, pe.base_url, c.credential, c.status, c.priority, c.timeout_ms, c.created_at, c.updated_at, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid, c.archived_at, c.concurrency_limit, c.upstream_bills_on_disconnect, c.config_revision, c.admission_limits_revision, pe.base_url_revision AS provider_endpoint_base_url_revision, pe.status_revision AS provider_endpoint_status_revision
+FROM channels c
+JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
+WHERE c.status = 'enabled'
+ORDER BY c.credential_valid ASC, c.priority, c.id
+`
+
+type ListChannelsForCredentialTestRow struct {
+	ID                              int64
+	ProviderID                      int64
+	ProviderEndpointID              int64
+	Name                            string
+	Protocol                        string
+	AdapterKey                      string
+	BaseUrl                         string
+	Credential                      string
+	Status                          string
+	Priority                        int32
+	TimeoutMs                       pgtype.Int4
+	CreatedAt                       pgtype.Timestamptz
+	UpdatedAt                       pgtype.Timestamptz
+	RpmLimit                        pgtype.Int4
+	TpmLimit                        pgtype.Int4
+	RpdLimit                        pgtype.Int4
+	LastTestedAt                    pgtype.Timestamptz
+	LastTestOk                      pgtype.Bool
+	LastTestLatencyMs               pgtype.Int4
+	LastTestError                   pgtype.Text
+	CredentialValid                 bool
+	ArchivedAt                      pgtype.Timestamptz
+	ConcurrencyLimit                pgtype.Int4
+	UpstreamBillsOnDisconnect       bool
+	ConfigRevision                  int64
+	AdmissionLimitsRevision         int64
+	ProviderEndpointBaseUrlRevision int64
+	ProviderEndpointStatusRevision  int64
+}
 
 // ListChannelsForCredentialTest 供渠道自动检测 worker 巡检：所有启用渠道（含 credential_valid=false 以便恢复），
 // 失效的排在前面（优先复检以尽快恢复），再按 priority、id。
-func (q *Queries) ListChannelsForCredentialTest(ctx context.Context) ([]Channel, error) {
+func (q *Queries) ListChannelsForCredentialTest(ctx context.Context) ([]ListChannelsForCredentialTestRow, error) {
 	rows, err := q.db.Query(ctx, listChannelsForCredentialTest)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Channel
+	var items []ListChannelsForCredentialTestRow
 	for rows.Next() {
-		var i Channel
+		var i ListChannelsForCredentialTestRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.ProviderID,
+			&i.ProviderEndpointID,
 			&i.Name,
 			&i.Protocol,
 			&i.AdapterKey,
@@ -51,6 +162,10 @@ func (q *Queries) ListChannelsForCredentialTest(ctx context.Context) ([]Channel,
 			&i.ArchivedAt,
 			&i.ConcurrencyLimit,
 			&i.UpstreamBillsOnDisconnect,
+			&i.ConfigRevision,
+			&i.AdmissionLimitsRevision,
+			&i.ProviderEndpointBaseUrlRevision,
+			&i.ProviderEndpointStatusRevision,
 		); err != nil {
 			return nil, err
 		}
@@ -106,21 +221,4 @@ func (q *Queries) ListEnabledChannelAdapters(ctx context.Context) ([]ListEnabled
 		return nil, err
 	}
 	return items, nil
-}
-
-const setChannelCredentialInvalid = `-- name: SetChannelCredentialInvalid :execrows
-UPDATE channels
-SET credential_valid = FALSE
-WHERE id = $1 AND credential_valid = TRUE
-`
-
-// SetChannelCredentialInvalid 将渠道标记为「凭据失效」（阶段二闸门）。幂等：仅在 true→false 跳变时
-// 写入并返回受影响行数=1，供调用方据此决定是否补写一条 channel_test_logs（避免重复写日志）。
-// 不改 status（与管理员启停正交），不改 updated_at（这是系统遥测，非配置变更）。
-func (q *Queries) SetChannelCredentialInvalid(ctx context.Context, id int64) (int64, error) {
-	result, err := q.db.Exec(ctx, setChannelCredentialInvalid, id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }

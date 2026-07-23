@@ -188,6 +188,14 @@ func (s *captureAttemptFailedLog) MarkRequestResponseStarted(context.Context, re
 	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkRequestResponseStarted")
 }
 
+func (s *captureAttemptFailedLog) MarkRequestDeliveryCompleted(context.Context, int64, time.Time) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkRequestDeliveryCompleted")
+}
+
+func (s *captureAttemptFailedLog) MarkRequestDeliveryInterrupted(context.Context, int64) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkRequestDeliveryInterrupted")
+}
+
 func (s *captureAttemptFailedLog) MarkRequestSucceeded(context.Context, requestlog.MarkRequestSucceededParams) (requestlog.RequestRecord, error) {
 	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkRequestSucceeded")
 }

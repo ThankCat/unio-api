@@ -12,9 +12,8 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
-// 健康分桶阈值已迁移为运行时配置 admin_backend.channel_health_thresholds
-// (appsettings.AdminBackendChannelHealthThresholds),调用方读取后显式传入 HealthBucket——
-// opsutil 保持纯函数、不依赖 appsettings。
+// P4 §2.10/§8.3：主观「健康分桶」(healthy/degraded/unhealthy) 已删除；运营只看客观事实
+// （成功率、失败次数、流式 TTFT、总耗时、熔断状态、容量、权重）。此处不再提供 HealthBucket。
 
 // TsNarg 把可选时间过滤值转成 pgtype.Timestamptz：零值表示不过滤（SQL NULL）。
 func TsNarg(t time.Time) pgtype.Timestamptz {
@@ -78,24 +77,6 @@ func SuccessRate(succeeded, total int64) float64 {
 		return 0
 	}
 	return float64(succeeded) / float64(total)
-}
-
-// HealthBucket 按成功率与样本量分桶：healthy / degraded / unhealthy / no_data。
-// 阈值(healthyRate/degradedRate)来自运行时配置,由调用方传入(须满足 0 < degraded < healthy <= 1,
-// 写入口已校验,此处不重复防御)。
-func HealthBucket(succeeded, total int64, healthyRate, degradedRate float64) string {
-	if total == 0 {
-		return "no_data"
-	}
-	rate := float64(succeeded) / float64(total)
-	switch {
-	case rate >= healthyRate:
-		return "healthy"
-	case rate >= degradedRate:
-		return "degraded"
-	default:
-		return "unhealthy"
-	}
 }
 
 // NumericString 把 NUMERIC 精确格式化为十进制字符串（不经 float）；NULL/NaN/Inf → "0"。

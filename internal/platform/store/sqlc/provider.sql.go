@@ -14,7 +14,8 @@ import (
 const archiveProviderCascade = `-- name: ArchiveProviderCascade :execrows
 WITH archived_channels AS (
     UPDATE channels
-    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text,
+        config_revision = config_revision + 1, updated_at = now()
     WHERE provider_id = $1 AND status <> 'archived'
     RETURNING id
 ),
@@ -43,12 +44,14 @@ WITH replacement AS (
     SELECT c.id
     FROM channels c
     JOIN providers p ON p.id = c.provider_id
+    JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
     WHERE c.id = $1
       AND c.provider_id <> $2
       AND c.status = 'enabled'
       AND c.credential_valid
       AND c.credential <> ''
-      AND c.base_url <> ''
+      AND pe.base_url <> ''
+      AND pe.status = 'enabled'
       AND p.status = 'enabled'
 ),
 affected_routes AS (
@@ -66,7 +69,8 @@ added AS (
 ),
 archived_channels AS (
     UPDATE channels
-    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text
+    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text,
+        config_revision = config_revision + 1, updated_at = now()
     WHERE provider_id = $2
       AND status <> 'archived'
       AND EXISTS (SELECT 1 FROM replacement)
@@ -361,7 +365,7 @@ const providerOpsChannels = `-- name: ProviderOpsChannels :many
 SELECT
     c.id,
     c.name,
-    c.base_url,
+    pe.base_url,
     c.status,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
@@ -381,12 +385,13 @@ SELECT
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99
 FROM channels c
+JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
 LEFT JOIN request_attempts a
     ON a.channel_id = c.id
     AND ($1::timestamptz IS NULL OR a.created_at >= $1::timestamptz)
     AND ($2::timestamptz IS NULL OR a.created_at < $2::timestamptz)
 WHERE c.provider_id = $3
-GROUP BY c.id, c.name, c.base_url, c.status
+GROUP BY c.id, c.name, pe.base_url, c.status
 ORDER BY attempt_total DESC, c.id
 `
 
@@ -481,7 +486,7 @@ tps AS (
       AND ($3::timestamptz IS NULL OR a.created_at < $3::timestamptz)
 ),
 attempts AS (
-    SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, fault_party
+    SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_endpoint_id, provider_endpoint_base_url_revision, provider_endpoint_status_revision, channel_config_revision, routing_candidate_index, upstream_operation, breaker_endpoint_disposition, breaker_channel_disposition, fault_party
     FROM request_attempts a
     WHERE a.provider_id = $1
       AND ($2::timestamptz IS NULL OR a.created_at >= $2::timestamptz)
@@ -802,6 +807,19 @@ SELECT
     p.name,
     p.status,
     p.created_at,
+    COALESCE((
+        SELECT jsonb_agg(
+            jsonb_build_object(
+                'id', pe.id,
+                'name', pe.name,
+                'base_url', pe.base_url,
+                'status', pe.status
+            )
+            ORDER BY pe.id
+        )
+        FROM provider_endpoints pe
+        WHERE pe.provider_id = p.id
+    ), '[]'::jsonb)::text AS endpoints,
     (SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id) AS channel_total,
     (
         SELECT COUNT(DISTINCT cm.model_id)
@@ -877,6 +895,7 @@ type ProvidersOpsTableRow struct {
 	Name         string
 	Status       string
 	CreatedAt    pgtype.Timestamptz
+	Endpoints    string
 	ChannelTotal int64
 	ModelsCount  int64
 	RoutesCount  int64
@@ -908,6 +927,7 @@ func (q *Queries) ProvidersOpsTable(ctx context.Context, arg ProvidersOpsTablePa
 			&i.Name,
 			&i.Status,
 			&i.CreatedAt,
+			&i.Endpoints,
 			&i.ChannelTotal,
 			&i.ModelsCount,
 			&i.RoutesCount,

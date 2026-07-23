@@ -164,10 +164,14 @@ type Attempt struct {
 	ErrorMessage        *string
 	InternalErrorDetail *string
 	ResponseStartedAt   *time.Time
-	FinalUsageReceived  bool
-	StartedAt           time.Time
-	CompletedAt         *time.Time
-	CreatedAt           time.Time
+	// UpstreamTotalMs 只由 upstream_completed_at - upstream_started_at 派生。
+	UpstreamTotalMs *int64
+	// UpstreamTTFTMs 只对流式请求由 upstream_first_token_at - upstream_started_at 派生。
+	UpstreamTTFTMs     *int64
+	FinalUsageReceived bool
+	StartedAt          time.Time
+	CompletedAt        *time.Time
+	CreatedAt          time.Time
 }
 
 // RequestDetail 是请求详情聚合：请求事实 + 上游尝试链 + usage + 账本流水 + 计费异常。
@@ -337,7 +341,7 @@ func (s *RequestService) Get(ctx context.Context, requestID string, includeInter
 	}
 	detail.Attempts = make([]Attempt, 0, len(attemptRows))
 	for _, a := range attemptRows {
-		detail.Attempts = append(detail.Attempts, toAttempt(a, includeInternal))
+		detail.Attempts = append(detail.Attempts, toAttempt(a, includeInternal, record.Stream))
 	}
 
 	usageRow, err := s.store.GetUsageRecordByRequest(ctx, record.ID)
@@ -502,14 +506,14 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 			item.LatencyMs = &ms
 		}
 	}
-	if r.ResponseStartedAt.Valid {
+	if r.Stream && r.ResponseStartedAt.Valid {
 		ttft := r.ResponseStartedAt.Time.Sub(started).Milliseconds()
 		if ttft >= 0 {
 			item.TtftMs = &ttft
 		}
 	}
 	// TPS = 输出 token / 生成时长（completed - response_started）。
-	if r.CompletedAt.Valid && r.ResponseStartedAt.Valid && r.OutputTokensTotal > 0 {
+	if r.Stream && r.CompletedAt.Valid && r.ResponseStartedAt.Valid && r.OutputTokensTotal > 0 {
 		genSec := r.CompletedAt.Time.Sub(r.ResponseStartedAt.Time).Seconds()
 		if genSec > 0 {
 			tps := float64(r.OutputTokensTotal) / genSec
@@ -548,7 +552,7 @@ func summaryFromRecord(r sqlc.RequestRecord) RequestSummary {
 	}
 }
 
-func toAttempt(a sqlc.RequestAttempt, includeInternal bool) Attempt {
+func toAttempt(a sqlc.RequestAttempt, includeInternal, stream bool) Attempt {
 	out := Attempt{
 		ID:                    a.ID,
 		AttemptIndex:          a.AttemptIndex,
@@ -572,6 +576,18 @@ func toAttempt(a sqlc.RequestAttempt, includeInternal bool) Attempt {
 		StartedAt:             a.StartedAt.Time,
 		CompletedAt:           timePtr(a.CompletedAt),
 		CreatedAt:             a.CreatedAt.Time,
+	}
+	if a.UpstreamStartedAt.Valid && a.UpstreamCompletedAt.Valid {
+		ms := a.UpstreamCompletedAt.Time.Sub(a.UpstreamStartedAt.Time).Milliseconds()
+		if ms >= 0 {
+			out.UpstreamTotalMs = &ms
+		}
+	}
+	if stream && a.UpstreamStartedAt.Valid && a.UpstreamFirstTokenAt.Valid {
+		ms := a.UpstreamFirstTokenAt.Time.Sub(a.UpstreamStartedAt.Time).Milliseconds()
+		if ms >= 0 {
+			out.UpstreamTTFTMs = &ms
+		}
 	}
 	if includeInternal {
 		out.InternalErrorDetail = textPtr(a.InternalErrorDetail)

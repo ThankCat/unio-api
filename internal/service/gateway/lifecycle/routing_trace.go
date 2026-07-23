@@ -17,7 +17,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
-const routingTraceAlgorithmVersion = "balanced_v1"
+const routingTraceAlgorithmVersion = "balanced_v3_cost"
 
 // RoutingTraceStore 是 trace recorder 唯一需要的持久化能力。
 type RoutingTraceStore interface {
@@ -70,31 +70,66 @@ func (r *RoutingTraceRecorder) SetSampleRate(rate float64) {
 
 // RoutingDecisionTraceInput 是一次计划或 fallback 后的 trace 输入。
 type RoutingDecisionTraceInput struct {
-	Request         requestlog.RequestRecord
-	RouteID         int64
-	Mode            string
-	PoolSize        int
-	Plan            CandidatePlan
-	StickyChannelID int64
-	ForceReasons    []string
-	FallbackChain   any
-	Attempts        int
-	MarginGuard     bool
+	Request          requestlog.RequestRecord
+	RouteID          int64
+	Mode             string
+	PoolSize         int
+	Plan             CandidatePlan
+	StickyChannelID  int64
+	ForceReasons     []string
+	FallbackChain    []TransportAttempt
+	FallbackOccurred bool
+	MarginGuard      bool
 }
 
 type traceCandidateScore struct {
-	ChannelID            int64    `json:"channel_id"`
-	RouteIndex           int      `json:"route_index"`
-	Eligible             bool     `json:"eligible"`
-	ExcludedReason       string   `json:"excluded_reason,omitempty"`
-	ConcurrencyRemaining *float64 `json:"concurrency_remaining"`
-	TPMRemaining         *float64 `json:"tpm_remaining"`
-	CapacityScore        float64  `json:"capacity_score"`
-	HealthFactor         float64  `json:"health_factor"`
-	Weight               float64  `json:"weight"`
-	Pressure             float64  `json:"pressure"`
-	CapacityUnknown      bool     `json:"capacity_unknown"`
-	CapacityReadFailed   bool     `json:"capacity_read_failed"`
+	EndpointID                              int64    `json:"endpoint_id"`
+	ChannelID                               int64    `json:"channel_id"`
+	RouteIndex                              int      `json:"route_index"`
+	Eligible                                bool     `json:"eligible"`
+	ExcludedReason                          string   `json:"excluded_reason,omitempty"`
+	CandidateEndpointBaseURLRevision        int64    `json:"candidate_endpoint_base_url_revision"`
+	RuntimeEndpointBaseURLRevision          int64    `json:"runtime_endpoint_base_url_revision"`
+	EndpointBaseURLRevisionCurrent          bool     `json:"endpoint_base_url_revision_current"`
+	CandidateEndpointStatusRevision         int64    `json:"candidate_endpoint_status_revision"`
+	RuntimeEndpointStatusRevision           int64    `json:"runtime_endpoint_status_revision"`
+	EndpointStatusRevisionCurrent           bool     `json:"endpoint_status_revision_current"`
+	CandidateChannelConfigRevision          int64    `json:"candidate_channel_config_revision"`
+	RuntimeChannelConfigRevision            *int64   `json:"runtime_channel_config_revision"`
+	ChannelConfigRevisionCurrent            bool     `json:"channel_config_revision_current"`
+	CandidateChannelAdmissionLimitsRevision int64    `json:"candidate_channel_admission_limits_revision"`
+	RuntimeChannelAdmissionLimitsRevision   int64    `json:"runtime_channel_admission_limits_revision"`
+	ChannelAdmissionLimitsRevisionCurrent   bool     `json:"channel_admission_limits_revision_current"`
+	RouteRateLimitsRevision                 int64    `json:"route_rate_limits_revision"`
+	ChannelRateLimitsRevision               int64    `json:"channel_rate_limits_revision"`
+	GlobalConcurrencyRevision               int64    `json:"global_concurrency_revision"`
+	CircuitBreakerRevision                  int64    `json:"circuit_breaker_revision"`
+	RuntimeControlState                     string   `json:"runtime_control_state"`
+	RuntimeRevisionCurrent                  bool     `json:"runtime_revision_current"`
+	EndpointBreakerState                    string   `json:"endpoint_breaker_state,omitempty"`
+	ChannelBreakerState                     string   `json:"channel_breaker_state,omitempty"`
+	BreakerStoreAdmission                   string   `json:"breaker_store_admission"`
+	ConcurrencyRemaining                    *float64 `json:"concurrency_remaining"`
+	TPMRemaining                            *float64 `json:"tpm_remaining"`
+	CapacityScore                           float64  `json:"capacity_score"`
+	ErrorRate                               float64  `json:"error_rate"`
+	ErrorSamples                            int64    `json:"error_samples"`
+	TTFTEWMAMs                              float64  `json:"ttft_ewma_ms"`
+	TTFTSamples                             int64    `json:"ttft_samples"`
+	TTFTSampleSource                        string   `json:"ttft_sample_source"`
+	LatencyPenalty                          float64  `json:"latency_penalty"`
+	RoutingFactor                           float64  `json:"routing_factor"`
+	CostRatio                               float64  `json:"cost_ratio"`
+	CostWeight                              float64  `json:"cost_weight"`
+	CostFactor                              float64  `json:"cost_factor"`
+	RoutingBalanceRevision                  int64    `json:"routing_balance_revision"`
+	Weight                                  float64  `json:"final_weight"`
+	Pressure                                float64  `json:"pressure"`
+	CapacityUnknown                         bool     `json:"capacity_unknown"`
+	CapacityReadFailed                      bool     `json:"capacity_read_failed"`
+	CooldownRemainingMs                     int64    `json:"cooldown_remaining_ms"`
+	ModelPermissionPaused                   bool     `json:"model_permission_paused"`
+	ModelPermissionRecheckState             string   `json:"model_permission_recheck_state"`
 }
 
 func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTraceInput) {
@@ -103,13 +138,10 @@ func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTra
 	}
 	// pgx encodes a nil []string as SQL NULL, while abnormal_reasons is NOT NULL.
 	reasons := append(make([]string, 0, len(in.ForceReasons)+4), in.ForceReasons...)
-	if in.Attempts > 1 {
+	if in.FallbackOccurred {
 		reasons = append(reasons, "fallback")
 	}
 	stickyInvalid := in.StickyChannelID != 0 && !in.Plan.StickyPinned
-	if in.Plan.CapacityDegraded {
-		reasons = append(reasons, "capacity_degraded")
-	}
 	if in.Plan.AllCapacityZero {
 		reasons = append(reasons, "all_capacity_zero")
 	}
@@ -177,11 +209,19 @@ func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTra
 					routeIndex = candidate.RouteIndex
 				} else if excluded, exists := planExcluded[row.ChannelID]; exists {
 					routeIndex = excluded.RouteIndex
+					candidate = Candidate{Route: excluded.Route, Balance: excluded.Balance}
 					if reason == "" {
 						reason = excluded.Reason
 					}
 				} else if reason == "" {
 					reason = "not_in_candidate_plan"
+				}
+				if candidate.Balance.EndpointID == 0 {
+					candidate.Balance.EndpointID = row.ProviderEndpointID
+					candidate.Balance.CandidateEndpointBaseURLRevision = row.ProviderEndpointBaseUrlRevision
+					candidate.Balance.CandidateEndpointStatusRevision = row.ProviderEndpointStatusRevision
+					candidate.Balance.CandidateChannelConfigRevision = row.ChannelConfigRevision
+					candidate.Balance.CandidateChannelAdmissionLimitsRevision = row.ChannelAdmissionLimitsRevision
 				}
 				scores = append(scores, traceScore(candidate, row.ChannelID, routeIndex, selected && reason == "", reason))
 			}
@@ -192,7 +232,7 @@ func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTra
 			scores = append(scores, traceScore(candidate, candidate.Route.Channel.ID, candidate.RouteIndex, true, ""))
 		}
 		for _, excluded := range in.Plan.Excluded {
-			scores = append(scores, traceScore(Candidate{}, excluded.ChannelID, excluded.RouteIndex, false, excluded.Reason))
+			scores = append(scores, traceScore(Candidate{Route: excluded.Route, Balance: excluded.Balance}, excluded.ChannelID, excluded.RouteIndex, false, excluded.Reason))
 		}
 	}
 	scoreJSON, err := json.Marshal(scores)
@@ -202,14 +242,7 @@ func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTra
 		return
 	}
 	fallbackJSON := []byte("[]")
-	if in.FallbackChain == nil && in.Attempts > 0 {
-		attempted := in.Attempts
-		if attempted > len(order) {
-			attempted = len(order)
-		}
-		in.FallbackChain = order[:attempted]
-	}
-	if in.FallbackChain != nil {
+	if len(in.FallbackChain) > 0 {
 		fallbackJSON, err = json.Marshal(in.FallbackChain)
 		if err != nil {
 			r.logger.Error("marshal routing trace fallback", zap.Error(err))
@@ -233,7 +266,6 @@ func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTra
 		StickyChannelID:      stickyID,
 		StickyPinned:         in.Plan.StickyPinned,
 		StickyInvalid:        stickyInvalid,
-		CapacityDegraded:     in.Plan.CapacityDegraded,
 		AllCapacityZero:      in.Plan.AllCapacityZero,
 		MarginGuardTriggered: in.MarginGuard,
 		Abnormal:             abnormal,
@@ -259,12 +291,43 @@ func (r *RoutingTraceRecorder) recordWriteMetric(result string) {
 
 func traceScore(candidate Candidate, channelID int64, routeIndex int, eligible bool, excludedReason string) traceCandidateScore {
 	return traceCandidateScore{
-		ChannelID: channelID, RouteIndex: routeIndex, Eligible: eligible, ExcludedReason: excludedReason,
-		ConcurrencyRemaining: candidate.Balance.ConcurrencyRemaining,
-		TPMRemaining:         candidate.Balance.TPMRemaining,
-		CapacityScore:        candidate.Balance.CapacityScore, HealthFactor: candidate.Balance.HealthFactor,
+		EndpointID: candidate.Balance.EndpointID,
+		ChannelID:  channelID, RouteIndex: routeIndex, Eligible: eligible, ExcludedReason: excludedReason,
+		CandidateEndpointBaseURLRevision:        candidate.Balance.CandidateEndpointBaseURLRevision,
+		RuntimeEndpointBaseURLRevision:          candidate.Balance.RuntimeEndpointBaseURLRevision,
+		EndpointBaseURLRevisionCurrent:          candidate.Balance.EndpointBaseURLRevisionCurrent,
+		CandidateEndpointStatusRevision:         candidate.Balance.CandidateEndpointStatusRevision,
+		RuntimeEndpointStatusRevision:           candidate.Balance.RuntimeEndpointStatusRevision,
+		EndpointStatusRevisionCurrent:           candidate.Balance.EndpointStatusRevisionCurrent,
+		CandidateChannelConfigRevision:          candidate.Balance.CandidateChannelConfigRevision,
+		RuntimeChannelConfigRevision:            candidate.Balance.RuntimeChannelConfigRevision,
+		ChannelConfigRevisionCurrent:            candidate.Balance.ChannelConfigRevisionCurrent,
+		CandidateChannelAdmissionLimitsRevision: candidate.Balance.CandidateChannelAdmissionLimitsRevision,
+		RuntimeChannelAdmissionLimitsRevision:   candidate.Balance.RuntimeChannelAdmissionLimitsRevision,
+		ChannelAdmissionLimitsRevisionCurrent:   candidate.Balance.ChannelAdmissionLimitsRevisionCurrent,
+		RouteRateLimitsRevision:                 candidate.Balance.RouteRateLimitsRevision,
+		ChannelRateLimitsRevision:               candidate.Balance.ChannelRateLimitsRevision,
+		GlobalConcurrencyRevision:               candidate.Balance.GlobalConcurrencyRevision,
+		CircuitBreakerRevision:                  candidate.Balance.CircuitBreakerRevision,
+		RuntimeControlState:                     candidate.Balance.RuntimeControlState,
+		RuntimeRevisionCurrent:                  candidate.Balance.RuntimeRevisionCurrent,
+		EndpointBreakerState:                    candidate.Balance.EndpointBreakerState,
+		ChannelBreakerState:                     candidate.Balance.ChannelBreakerState,
+		BreakerStoreAdmission:                   candidate.Balance.BreakerStoreAdmission,
+		ConcurrencyRemaining:                    candidate.Balance.ConcurrencyRemaining,
+		TPMRemaining:                            candidate.Balance.TPMRemaining,
+		CapacityScore:                           candidate.Balance.CapacityScore, ErrorRate: candidate.Balance.ErrorRate,
+		ErrorSamples: candidate.Balance.ErrorSamples,
+		TTFTEWMAMs:   candidate.Balance.TTFTEWMAMs, TTFTSamples: candidate.Balance.TTFTSamples,
+		TTFTSampleSource: candidate.Balance.TTFTSampleSource, LatencyPenalty: candidate.Balance.LatencyPenalty,
+		RoutingFactor: candidate.Balance.RoutingFactor,
+		CostRatio:     candidate.Balance.CostRatio, CostWeight: candidate.Balance.CostWeight,
+		CostFactor: candidate.Balance.CostFactor, RoutingBalanceRevision: candidate.Balance.RoutingBalanceRevision,
 		Weight: candidate.Balance.Weight, Pressure: candidate.Balance.Pressure,
 		CapacityUnknown: candidate.Balance.CapacityUnknown, CapacityReadFailed: candidate.Balance.CapacityReadFailed,
+		CooldownRemainingMs:         candidate.Balance.CooldownRemainingMs,
+		ModelPermissionPaused:       candidate.Balance.ModelPermissionPaused,
+		ModelPermissionRecheckState: candidate.Balance.ModelPermissionRecheckState,
 	}
 }
 

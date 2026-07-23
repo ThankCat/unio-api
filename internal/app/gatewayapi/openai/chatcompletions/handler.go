@@ -13,6 +13,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 const (
@@ -25,7 +26,7 @@ const (
 
 // ChatCompletionService 定义 chat completions handler 依赖的业务能力。
 type ChatCompletionService interface {
-	CreateChatCompletion(ctx context.Context, req ChatCompletionRequest) (*ChatCompletionResponse, error)
+	CreateChatCompletion(ctx context.Context, req ChatCompletionRequest) (*lifecycle.NonStreamResult[*ChatCompletionResponse], error)
 	StreamChatCompletion(ctx context.Context, req ChatCompletionRequest, emit func(ChatCompletionStreamResponse) error) error
 }
 
@@ -93,7 +94,7 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	resp, err := h.service.CreateChatCompletion(r.Context(), req)
+	result, err := h.service.CreateChatCompletion(r.Context(), req)
 	if err != nil {
 		writeChatServiceError(
 			w,
@@ -105,7 +106,9 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	_ = httpx.WriteJSON(w, http.StatusOK, resp)
+	_ = result.FinalizeDelivery(func(resp *ChatCompletionResponse) error {
+		return httpx.WriteJSON(w, http.StatusOK, resp)
+	})
 }
 
 // stringPtr 返回字符串指针，用于构造 optional 字段。
@@ -125,6 +128,7 @@ type chatServiceErrorResponse struct {
 // writeChatServiceError 将 chat service 错误写成 OpenAI-compatible JSON error。
 func writeChatServiceError(w http.ResponseWriter, req ChatCompletionRequest, err error, fallbackCode string, fallbackMessage string) {
 	resp := mapChatServiceError(req, err, fallbackCode, fallbackMessage)
+	httpx.SetRetryAfter(w, lifecycle.ProvableRetryAfter(err))
 
 	_ = httpx.WriteOpenAIError(
 		w,
@@ -158,6 +162,14 @@ func mapChatServiceError(req ChatCompletionRequest, err error, fallbackCode stri
 			code:      "rate_limit_exceeded",
 			message:   "You have exceeded the rate limit. Please slow down and retry later.",
 			errorType: "rate_limit_error",
+			param:     nil,
+		}
+	case isRequestAdmissionUnavailable(err):
+		return chatServiceErrorResponse{
+			status:    http.StatusServiceUnavailable,
+			code:      "service_unavailable",
+			message:   "The service is temporarily unavailable.",
+			errorType: "api_error",
 			param:     nil,
 		}
 	case failure.CodeOf(err) == failure.CodeAdapterRequestUnsupported:
@@ -204,6 +216,20 @@ func mapChatServiceError(req ChatCompletionRequest, err error, fallbackCode stri
 		message:   fallbackMessage,
 		errorType: "api_error",
 		param:     nil,
+	}
+}
+
+func isRequestAdmissionUnavailable(err error) bool {
+	switch failure.CodeOf(err) {
+	case failure.CodeGatewayBreakerStoreUnavailable,
+		failure.CodeGatewayRuntimeSyncRequired,
+		failure.CodeGatewayRuntimeStateLost,
+		failure.CodeGatewayBreakerPermitConflict,
+		failure.CodeDependencyRedisUnavailable,
+		failure.CodeDependencyPostgresUnavailable:
+		return true
+	default:
+		return false
 	}
 }
 

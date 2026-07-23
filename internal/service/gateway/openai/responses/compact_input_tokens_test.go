@@ -21,14 +21,28 @@ func TestCompactHistory_HappyPath(t *testing.T) {
 
 	svc := newServiceForTest(router, registry, settlement, &fakeAuthorizer{}, requestLog)
 
-	resp, err := svc.CompactHistory(ctxWithPrincipal(), instructionsRequest())
+	result, err := svc.CompactHistory(ctxWithPrincipal(), instructionsRequest())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+
+	resp := result.Response
+	if len(requestLog.deliveryCompleted) != 0 || len(requestLog.deliveryInterrupted) != 0 {
+		t.Fatal("compact delivery must stay not_started before the handler write")
+	}
+	if err := result.FinalizeDelivery(func(*gatewayapi.CompactHistoryResponse) error { return nil }); err != nil {
+		t.Fatalf("finalize compact delivery: %v", err)
+	}
+	if len(requestLog.deliveryCompleted) != 1 || len(requestLog.deliveryInterrupted) != 0 {
+		t.Fatalf("expected one completed compact delivery, completed=%v interrupted=%v", requestLog.deliveryCompleted, requestLog.deliveryInterrupted)
 	}
 
 	// compact 是一次可计费上游调用：走完整 settlement，operation 仍为 responses。
 	if len(settlement.params) != 1 {
 		t.Fatalf("expected compact to settle once, got %d", len(settlement.params))
+	}
+	if settlement.params[0].ResponseStartedAt != nil {
+		t.Fatalf("non-stream compact response_started_at = %v, want nil", settlement.params[0].ResponseStartedAt)
 	}
 	if len(requestLog.createRequests) != 1 || requestLog.createRequests[0].Operation != "responses" {
 		t.Fatalf("expected one responses request record, got %+v", requestLog.createRequests)

@@ -27,10 +27,11 @@ func TestChatCompletionServiceCreateChatCompletionReturnsResponseWhenRecoverySch
 		authorizer,
 	)
 
-	got, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
+	result, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
 	if err != nil {
 		t.Fatalf("expected response after recovery scheduled, got err: %v", err)
 	}
+	got := result.Response
 	if got == nil || got.Choices[0].Message.ContentString() != "adapter response" {
 		t.Fatalf("expected adapter response to be returned, got %#v", got)
 	}

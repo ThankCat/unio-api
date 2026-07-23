@@ -150,6 +150,50 @@ func TestRequestServiceGetIncludeInternal(t *testing.T) {
 	}
 }
 
+func TestRequestServiceGetDerivesUpstreamTimingByRequestMode(t *testing.T) {
+	upstreamStarted := time.Date(2026, 6, 1, 0, 0, 1, 0, time.UTC)
+	upstreamFirstToken := upstreamStarted.Add(250 * time.Millisecond)
+	upstreamCompleted := upstreamStarted.Add(2500 * time.Millisecond)
+
+	for _, tt := range []struct {
+		name       string
+		stream     bool
+		wantTTFTMs *int64
+	}{
+		{name: "stream", stream: true, wantTTFTMs: int64Ptr(250)},
+		{name: "non-stream", stream: false, wantTTFTMs: nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStoreWithDetail()
+			store.record.Stream = tt.stream
+			store.attempts[0].UpstreamStartedAt = pgtype.Timestamptz{Time: upstreamStarted, Valid: true}
+			// 非流式 fixture 也故意带首字时间，验证管理查询不会把脏数据展示成 TTFT。
+			store.attempts[0].UpstreamFirstTokenAt = pgtype.Timestamptz{Time: upstreamFirstToken, Valid: true}
+			store.attempts[0].UpstreamCompletedAt = pgtype.Timestamptz{Time: upstreamCompleted, Valid: true}
+
+			detail, err := query.NewRequestService(store).Get(context.Background(), "req_1", false)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			attempt := detail.Attempts[0]
+			if attempt.UpstreamTotalMs == nil || *attempt.UpstreamTotalMs != 2500 {
+				t.Fatalf("upstream total = %v, want 2500", attempt.UpstreamTotalMs)
+			}
+			if tt.wantTTFTMs == nil {
+				if attempt.UpstreamTTFTMs != nil {
+					t.Fatalf("non-stream upstream TTFT = %v, want nil", *attempt.UpstreamTTFTMs)
+				}
+			} else if attempt.UpstreamTTFTMs == nil || *attempt.UpstreamTTFTMs != *tt.wantTTFTMs {
+				t.Fatalf("upstream TTFT = %v, want %d", attempt.UpstreamTTFTMs, *tt.wantTTFTMs)
+			}
+		})
+	}
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
+}
+
 func TestRequestServiceGetNotFound(t *testing.T) {
 	svc := query.NewRequestService(&fakeRequestStore{recordErr: pgx.ErrNoRows})
 
@@ -187,5 +231,38 @@ func TestRequestServiceListMapsTotal(t *testing.T) {
 	}
 	if len(items) != 2 || items[0].RequestID != "req_1" {
 		t.Fatalf("unexpected items: %+v", items)
+	}
+}
+
+func TestRequestServiceListIgnoresLegacyNonStreamResponseStartedAt(t *testing.T) {
+	started := time.Date(2026, 7, 22, 1, 0, 0, 0, time.UTC)
+	responseStarted := started.Add(250 * time.Millisecond)
+	completed := started.Add(2 * time.Second)
+	store := &fakeRequestStore{
+		listRows: []sqlc.ListRequestRecordsPageRow{{
+			ID:                1,
+			RequestID:         "req_legacy_non_stream",
+			Stream:            false,
+			Status:            "succeeded",
+			StartedAt:         pgtype.Timestamptz{Time: started, Valid: true},
+			ResponseStartedAt: pgtype.Timestamptz{Time: responseStarted, Valid: true},
+			CompletedAt:       pgtype.Timestamptz{Time: completed, Valid: true},
+			OutputTokensTotal: 100,
+		}},
+		total: 1,
+	}
+
+	items, _, err := query.NewRequestService(store).List(context.Background(), query.RequestListParams{Limit: 1})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1", len(items))
+	}
+	if items[0].LatencyMs == nil || *items[0].LatencyMs != 2000 {
+		t.Fatalf("latency = %v, want 2000", items[0].LatencyMs)
+	}
+	if items[0].TtftMs != nil || items[0].TPS != nil {
+		t.Fatalf("legacy non-stream timing leaked TTFT/TPS: ttft=%v tps=%v", items[0].TtftMs, items[0].TPS)
 	}
 }

@@ -121,7 +121,7 @@ type CreateRouteParams struct {
 }
 
 // CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
-// rpm/tpm/rpd_limit 是线路级限流上限（DEC-027：NULL=继承全局默认，0=不限，>0=上限）；
+// rpm/tpm/rpd_limit 是线路级限流上限（DEC-027：NULL=继承线路默认限流，0=不限，>0=上限）；
 // sticky_enabled 是会话粘性开关（NULL=继承系统设置默认）；
 // balanced/fixed 的渠道数量约束由 service 层校验。
 func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route, error) {
@@ -846,35 +846,73 @@ SELECT
     rt.id AS route_id,
     rt.mode,
     rt.status AS route_status,
+    rt.price_ratio,
     c.id AS channel_id,
     c.name AS channel_name,
     c.status AS channel_status,
     c.credential_valid,
     (c.credential <> '')::boolean AS has_credential,
-    (c.base_url <> '')::boolean AS has_base_url,
+    (pe.base_url <> '')::boolean AS has_base_url,
     c.protocol,
     c.adapter_key,
     c.priority,
     c.tpm_limit,
     c.concurrency_limit,
+    c.config_revision AS channel_config_revision,
+    c.admission_limits_revision AS channel_admission_limits_revision,
+    pe.id AS provider_endpoint_id,
+    pe.name AS provider_endpoint_name,
+    pe.status AS provider_endpoint_status,
+    pe.base_url AS provider_endpoint_base_url,
+    pe.base_url_revision AS provider_endpoint_base_url_revision,
+    pe.status_revision AS provider_endpoint_status_revision,
     p.id AS provider_id,
     p.name AS provider_name,
     p.status AS provider_status,
+    COALESCE(m.id, 0)::bigint AS model_db_id,
     (m.id IS NOT NULL)::boolean AS model_exists,
     COALESCE(m.status, '')::text AS model_status,
     COALESCE(cm.status, '')::text AS binding_status,
     (base.id IS NOT NULL)::boolean AS has_model_price,
-    COALESCE((cost.id IS NOT NULL OR mult.id IS NOT NULL), false)::boolean AS has_channel_cost
+    COALESCE((cost.id IS NOT NULL OR mult.id IS NOT NULL), false)::boolean AS has_channel_cost,
+    COALESCE(base.id, 0)::bigint AS model_price_id,
+    COALESCE(base.currency, '')::text AS base_currency,
+    COALESCE(base.pricing_unit, '')::text AS base_pricing_unit,
+    base.uncached_input_price,
+    base.cache_read_input_price,
+    base.cache_write_5m_input_price,
+    base.cache_write_1h_input_price,
+    base.cache_write_30m_input_price,
+    base.output_price,
+    base.reasoning_output_price,
+    COALESCE(cost.id, 0)::bigint AS channel_price_id,
+    COALESCE(cost.currency, '')::text AS cost_currency,
+    COALESCE(cost.pricing_unit, '')::text AS cost_pricing_unit,
+    cost.uncached_input_cost,
+    cost.cache_read_input_cost,
+    cost.cache_write_5m_input_cost,
+    cost.cache_write_1h_input_cost,
+    cost.cache_write_30m_input_cost,
+    cost.output_cost,
+    cost.reasoning_output_cost,
+    COALESCE(mult.id, 0)::bigint AS channel_cost_multiplier_id,
+    mult.multiplier AS cost_multiplier,
+    COALESCE(recharge.id, 0)::bigint AS channel_recharge_factor_id,
+    recharge.factor AS recharge_factor
 FROM routes rt
 JOIN route_channels rc ON rc.route_id = rt.id
 JOIN channels c ON c.id = rc.channel_id
 JOIN providers p ON p.id = c.provider_id
+JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
 LEFT JOIN models m
   ON NULLIF($1::text, '') IS NOT NULL
  AND m.model_id = $1::text
 LEFT JOIN channel_models cm ON cm.channel_id = c.id AND cm.model_id = m.id
 LEFT JOIN LATERAL (
-    SELECT mp.id
+    SELECT mp.id, mp.currency, mp.pricing_unit,
+           mp.uncached_input_price, mp.cache_read_input_price,
+           mp.cache_write_5m_input_price, mp.cache_write_1h_input_price,
+           mp.cache_write_30m_input_price, mp.output_price, mp.reasoning_output_price
     FROM model_prices mp
     WHERE mp.model_id = m.id
       AND mp.status = 'enabled'
@@ -884,7 +922,10 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) base ON TRUE
 LEFT JOIN LATERAL (
-    SELECT cp.id
+    SELECT cp.id, cp.currency, cp.pricing_unit,
+           cp.uncached_input_cost, cp.cache_read_input_cost,
+           cp.cache_write_5m_input_cost, cp.cache_write_1h_input_cost,
+           cp.cache_write_30m_input_cost, cp.output_cost, cp.reasoning_output_cost
     FROM channel_prices cp
     WHERE cp.channel_id = c.id
       AND cp.model_id = m.id
@@ -895,7 +936,7 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) cost ON TRUE
 LEFT JOIN LATERAL (
-    SELECT ccm.id
+    SELECT ccm.id, ccm.multiplier
     FROM channel_cost_multipliers ccm
     WHERE ccm.channel_id = c.id
       AND (ccm.model_id = m.id OR ccm.model_id IS NULL)
@@ -905,6 +946,16 @@ LEFT JOIN LATERAL (
     ORDER BY (ccm.model_id IS NULL) ASC, ccm.effective_from DESC, ccm.id DESC
     LIMIT 1
 ) mult ON TRUE
+LEFT JOIN LATERAL (
+    SELECT crf.id, crf.factor
+    FROM channel_recharge_factors crf
+    WHERE crf.channel_id = c.id
+      AND crf.status = 'enabled'
+      AND crf.effective_from <= $2
+      AND (crf.effective_to IS NULL OR crf.effective_to > $2)
+    ORDER BY crf.effective_from DESC, crf.id DESC
+    LIMIT 1
+) recharge ON TRUE
 WHERE rt.id = $3
 ORDER BY c.priority, c.id
 `
@@ -916,28 +967,62 @@ type RouteRuntimePoolParams struct {
 }
 
 type RouteRuntimePoolRow struct {
-	RouteID          int64
-	Mode             string
-	RouteStatus      string
-	ChannelID        int64
-	ChannelName      string
-	ChannelStatus    string
-	CredentialValid  bool
-	HasCredential    bool
-	HasBaseUrl       bool
-	Protocol         string
-	AdapterKey       string
-	Priority         int32
-	TpmLimit         pgtype.Int4
-	ConcurrencyLimit pgtype.Int4
-	ProviderID       int64
-	ProviderName     string
-	ProviderStatus   string
-	ModelExists      bool
-	ModelStatus      string
-	BindingStatus    string
-	HasModelPrice    bool
-	HasChannelCost   bool
+	RouteID                         int64
+	Mode                            string
+	RouteStatus                     string
+	PriceRatio                      pgtype.Numeric
+	ChannelID                       int64
+	ChannelName                     string
+	ChannelStatus                   string
+	CredentialValid                 bool
+	HasCredential                   bool
+	HasBaseUrl                      bool
+	Protocol                        string
+	AdapterKey                      string
+	Priority                        int32
+	TpmLimit                        pgtype.Int4
+	ConcurrencyLimit                pgtype.Int4
+	ChannelConfigRevision           int64
+	ChannelAdmissionLimitsRevision  int64
+	ProviderEndpointID              int64
+	ProviderEndpointName            string
+	ProviderEndpointStatus          string
+	ProviderEndpointBaseUrl         string
+	ProviderEndpointBaseUrlRevision int64
+	ProviderEndpointStatusRevision  int64
+	ProviderID                      int64
+	ProviderName                    string
+	ProviderStatus                  string
+	ModelDbID                       int64
+	ModelExists                     bool
+	ModelStatus                     string
+	BindingStatus                   string
+	HasModelPrice                   bool
+	HasChannelCost                  bool
+	ModelPriceID                    int64
+	BaseCurrency                    string
+	BasePricingUnit                 string
+	UncachedInputPrice              pgtype.Numeric
+	CacheReadInputPrice             pgtype.Numeric
+	CacheWrite5mInputPrice          pgtype.Numeric
+	CacheWrite1hInputPrice          pgtype.Numeric
+	CacheWrite30mInputPrice         pgtype.Numeric
+	OutputPrice                     pgtype.Numeric
+	ReasoningOutputPrice            pgtype.Numeric
+	ChannelPriceID                  int64
+	CostCurrency                    string
+	CostPricingUnit                 string
+	UncachedInputCost               pgtype.Numeric
+	CacheReadInputCost              pgtype.Numeric
+	CacheWrite5mInputCost           pgtype.Numeric
+	CacheWrite1hInputCost           pgtype.Numeric
+	CacheWrite30mInputCost          pgtype.Numeric
+	OutputCost                      pgtype.Numeric
+	ReasoningOutputCost             pgtype.Numeric
+	ChannelCostMultiplierID         int64
+	CostMultiplier                  pgtype.Numeric
+	ChannelRechargeFactorID         int64
+	RechargeFactor                  pgtype.Numeric
 }
 
 // RouteRuntimePool returns every explicitly bound channel plus DB hard-filter facts.
@@ -954,6 +1039,7 @@ func (q *Queries) RouteRuntimePool(ctx context.Context, arg RouteRuntimePoolPara
 			&i.RouteID,
 			&i.Mode,
 			&i.RouteStatus,
+			&i.PriceRatio,
 			&i.ChannelID,
 			&i.ChannelName,
 			&i.ChannelStatus,
@@ -965,14 +1051,47 @@ func (q *Queries) RouteRuntimePool(ctx context.Context, arg RouteRuntimePoolPara
 			&i.Priority,
 			&i.TpmLimit,
 			&i.ConcurrencyLimit,
+			&i.ChannelConfigRevision,
+			&i.ChannelAdmissionLimitsRevision,
+			&i.ProviderEndpointID,
+			&i.ProviderEndpointName,
+			&i.ProviderEndpointStatus,
+			&i.ProviderEndpointBaseUrl,
+			&i.ProviderEndpointBaseUrlRevision,
+			&i.ProviderEndpointStatusRevision,
 			&i.ProviderID,
 			&i.ProviderName,
 			&i.ProviderStatus,
+			&i.ModelDbID,
 			&i.ModelExists,
 			&i.ModelStatus,
 			&i.BindingStatus,
 			&i.HasModelPrice,
 			&i.HasChannelCost,
+			&i.ModelPriceID,
+			&i.BaseCurrency,
+			&i.BasePricingUnit,
+			&i.UncachedInputPrice,
+			&i.CacheReadInputPrice,
+			&i.CacheWrite5mInputPrice,
+			&i.CacheWrite1hInputPrice,
+			&i.CacheWrite30mInputPrice,
+			&i.OutputPrice,
+			&i.ReasoningOutputPrice,
+			&i.ChannelPriceID,
+			&i.CostCurrency,
+			&i.CostPricingUnit,
+			&i.UncachedInputCost,
+			&i.CacheReadInputCost,
+			&i.CacheWrite5mInputCost,
+			&i.CacheWrite1hInputCost,
+			&i.CacheWrite30mInputCost,
+			&i.OutputCost,
+			&i.ReasoningOutputCost,
+			&i.ChannelCostMultiplierID,
+			&i.CostMultiplier,
+			&i.ChannelRechargeFactorID,
+			&i.RechargeFactor,
 		); err != nil {
 			return nil, err
 		}

@@ -20,7 +20,7 @@ import (
 func testChannel(baseURL string) channel.Runtime {
 	return channel.Runtime{
 		ID:      123,
-		BaseURL: baseURL + "/v1",
+		BaseURL: baseURL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}
@@ -255,20 +255,51 @@ func TestCompactResponseForwardsBodyAndParsesFacts(t *testing.T) {
 	}
 }
 
-// TestCompactResponseNotFoundReturnsUnsupported 验证上游无原生 compact endpoint（404）收敛为 ErrCompactUnsupported，
-// 供 service 回落 Synthetic。
-func TestCompactResponseNotFoundReturnsUnsupported(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "not found", http.StatusNotFound)
+func TestCompactResponseUsesRequestModelWhenUpstreamOmitsModel(t *testing.T) {
+	respBody := `{"id":"resp_c","object":"response","output":[{"type":"compaction","encrypted_content":"enc"}],"usage":{"input_tokens":40,"output_tokens":6,"total_tokens":46}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(respBody))
 	}))
 	defer server.Close()
 
-	_, err := NewAdapter(server.Client()).CompactResponse(context.Background(), testChannel(server.URL), Request{Body: json.RawMessage(`{"model":"gpt-5.5"}`)})
-	if err == nil {
-		t.Fatal("expected error for 404")
+	reqBody := json.RawMessage(`{"model":"gpt-5.6-sol","input":"hello","instructions":"compact"}`)
+	got, err := NewAdapter(server.Client()).CompactResponse(context.Background(), testChannel(server.URL), Request{Body: reqBody})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !errors.Is(err, ErrCompactUnsupported) {
-		t.Fatalf("expected ErrCompactUnsupported, got %v", err)
+	if string(got.Raw) != respBody {
+		t.Fatalf("raw passthrough mismatch:\n got %s\nwant %s", got.Raw, respBody)
+	}
+	if got.Model != "gpt-5.6-sol" || got.Facts.UpstreamModel != "gpt-5.6-sol" {
+		t.Fatalf("model fallback = response:%q facts:%q, want gpt-5.6-sol", got.Model, got.Facts.UpstreamModel)
+	}
+}
+
+// TestCompactResponseUnsupportedPreservesStatus 验证原生 compact 的 404/405 收敛为 sentinel，
+// 同时保留真实状态和 request id，供 attempt 审计与 breaker ignored attribution 使用。
+func TestCompactResponseUnsupportedPreservesStatus(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusMethodNotAllowed} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set(upstreamRequestIDHeader, "req-compact-unsupported")
+				http.Error(w, http.StatusText(status), status)
+			}))
+			defer server.Close()
+
+			_, err := NewAdapter(server.Client()).CompactResponse(context.Background(), testChannel(server.URL), Request{Body: json.RawMessage(`{"model":"gpt-5.5"}`)})
+			if err == nil {
+				t.Fatalf("expected error for %d", status)
+			}
+			if !errors.Is(err, ErrCompactUnsupported) {
+				t.Fatalf("expected ErrCompactUnsupported, got %v", err)
+			}
+			meta, ok := adapter.UpstreamMetadataOf(err)
+			if !ok || meta.StatusCode != status || meta.RequestID != "req-compact-unsupported" {
+				t.Fatalf("unsupported metadata = %+v ok=%v, want status=%d and request id", meta, ok, status)
+			}
+		})
 	}
 }
 

@@ -4,122 +4,46 @@ import (
 	"context"
 	"time"
 
-	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 )
 
-// candidateAdmitResult 是一次候选准入（并发槽 + 渠道级限流）的结果。
-type candidateAdmitResult struct {
-	release    func()
-	admitted   bool
-	waitedMs   int64
-	skipReason string // breaker 不走本函数；concurrency / ratelimit / ratelimit_store
-	err        error
+// SetHeadWaitSource 保留 sticky 的队首短等配置源；nil 表示关闭短等。
+func (r *AttemptRunner) SetHeadWaitSource(src *StickyRouter) {
+	if r != nil {
+		r.headWait = src
+	}
 }
 
-// admitCandidate 占用渠道并发名额并做渠道级限流预占。
-//
-// 队首短等（决议 4 / R10）：仅对 isHead 候选、且本请求尚未等过时，在并发满或渠道 TPM/RPM 满
-// 时 sleep 一次（预算来自 StickyRouter.SampleHeadWait），等待期间不持有名额/预占，再重试准入；
-// 超时或仍满则跳过该候选走 failover。非队首候选直接跳过，不等。
-func (r *AttemptRunner) admitCandidate(
+// acquireAttemptWithHeadWait retries the first candidate once after a capacity denial.
+// A denied Acquire owns no candidate resources, so the wait is resource-free and the retry
+// receives a fresh permit ID and current runtime-control revisions.
+func (r *AttemptRunner) acquireAttemptWithHeadWait(
 	ctx context.Context,
-	candidate routing.ChatRouteCandidate,
-	estTokens int64,
+	params AttemptPermitAcquireParams,
 	isHead bool,
-) candidateAdmitResult {
-	budget := time.Duration(0)
-	if isHead && r.headWait != nil {
-		budget = r.headWait.SampleHeadWait()
+	headWaitUsed *bool,
+) (breakerstore.AttemptAdmission, *AttemptPermitOwner, error) {
+	admission, owner, err := r.permitManager.Acquire(ctx, params)
+	if err != nil || admission.Mode != breakerstore.AdmissionDenied || !isHead ||
+		headWaitUsed == nil || *headWaitUsed || r.headWait == nil || !isCapacityDenial(admission.Reason) {
+		return admission, owner, err
 	}
 
-	waitedTotal := time.Duration(0)
-	retried := false
-
-	for {
-		releaseSlot, slotOK := r.acquireChannelSlot(candidate)
-		if !slotOK {
-			if !retried && budget > 0 {
-				waited, err := sleepHeadWait(ctx, budget)
-				waitedTotal += waited
-				if err != nil {
-					return candidateAdmitResult{
-						release:    func() {},
-						admitted:   false,
-						waitedMs:   waitedTotal.Milliseconds(),
-						skipReason: "concurrency",
-						err:        err,
-					}
-				}
-				retried = true
-				continue
-			}
-			r.recordRoutingSkip("concurrency")
-			if waitedTotal > 0 {
-				r.recordHeadWait(waitedTotal)
-			}
-			return candidateAdmitResult{
-				release:    func() {},
-				admitted:   false,
-				waitedMs:   waitedTotal.Milliseconds(),
-				skipReason: "concurrency",
-				err:        channelConcurrencyLimitedError(),
-			}
-		}
-
-		dec, allowed, err := r.guardChannel(ctx, candidate, estTokens)
-		if err != nil {
-			releaseSlot()
-			r.recordRoutingSkip("ratelimit_store")
-			if waitedTotal > 0 {
-				r.recordHeadWait(waitedTotal)
-			}
-			return candidateAdmitResult{
-				release:    func() {},
-				admitted:   false,
-				waitedMs:   waitedTotal.Milliseconds(),
-				skipReason: "ratelimit_store",
-				err:        err,
-			}
-		}
-		if !allowed {
-			releaseSlot()
-			if !retried && budget > 0 {
-				waited, sleepErr := sleepHeadWait(ctx, budget)
-				waitedTotal += waited
-				if sleepErr != nil {
-					return candidateAdmitResult{
-						release:    func() {},
-						admitted:   false,
-						waitedMs:   waitedTotal.Milliseconds(),
-						skipReason: "ratelimit",
-						err:        sleepErr,
-					}
-				}
-				retried = true
-				continue
-			}
-			r.recordRoutingSkip("ratelimit")
-			if waitedTotal > 0 {
-				r.recordHeadWait(waitedTotal)
-			}
-			return candidateAdmitResult{
-				release:    func() {},
-				admitted:   false,
-				waitedMs:   waitedTotal.Milliseconds(),
-				skipReason: "ratelimit",
-				err:        channelRateLimitedError(dec),
-			}
-		}
-
-		if waitedTotal > 0 {
-			r.recordHeadWait(waitedTotal)
-		}
-		return candidateAdmitResult{
-			release:  releaseSlot,
-			admitted: true,
-			waitedMs: waitedTotal.Milliseconds(),
-		}
+	budget := r.headWait.SampleHeadWait()
+	if budget <= 0 {
+		return admission, owner, nil
 	}
+	*headWaitUsed = true
+	waited, waitErr := sleepHeadWait(ctx, budget)
+	r.recordHeadWait(waited)
+	if waitErr != nil {
+		return admission, nil, waitErr
+	}
+	return r.permitManager.Acquire(ctx, params)
+}
+
+func isCapacityDenial(reason breakerstore.DeniedReason) bool {
+	return reason == breakerstore.ReasonConcurrencyLimited || reason == breakerstore.ReasonRateLimited
 }
 
 // sleepHeadWait 等待 d，但不超过 ctx 剩余截止时间（计入客户端超时预算，R10）。

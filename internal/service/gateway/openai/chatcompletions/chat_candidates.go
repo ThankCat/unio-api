@@ -23,16 +23,12 @@ func (s *ChatCompletionService) prepareChatCandidates(ctx context.Context, req g
 	}
 
 	return s.candidates.PrepareCandidates(ctx, lifecycle.PrepareCandidatesParams{
-		Protocol:                routing.ProtocolOpenAI,
-		Candidates:              candidates,
-		Capabilities:            capabilities,
-		Available:               s.candidateAvailable,
-		FailurePreferred:        s.lifecycle.CandidateFailurePreferred,
-		EstimateInputTokens:     s.chatInputTokenEstimator(req),
-		Mode:                    mode,
-		ChannelHealthScore:      s.channelHealthScore,
-		ChannelCapacitySnapshot: s.lifecycle.ChannelCapacitySnapshot,
-		StickyChannelID:         stickyChannelID,
+		Protocol:            routing.ProtocolOpenAI,
+		Candidates:          candidates,
+		Capabilities:        capabilities,
+		EstimateInputTokens: s.chatInputTokenEstimator(req),
+		Mode:                mode,
+		StickyChannelID:     stickyChannelID,
 	})
 }
 

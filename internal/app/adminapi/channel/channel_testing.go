@@ -72,17 +72,21 @@ func (h *channelTestHandler) test(w http.ResponseWriter, r *http.Request) {
 
 // channelTestLogDTO 是一条渠道检测/凭据事件日志（详情页「检测日志」区块）。
 type channelTestLogDTO struct {
-	ID                   int64   `json:"id"`
-	CreatedAt            string  `json:"created_at"`
-	Source               string  `json:"source"`
-	Success              bool    `json:"success"`
-	ErrorCode            *string `json:"error_code"`
-	HTTPStatus           *int    `json:"http_status"`
-	LatencyMs            int64   `json:"latency_ms"`
-	TestedModel          string  `json:"tested_model"`
-	CredentialValidAfter bool    `json:"credential_valid_after"`
-	Message              string  `json:"message"`
-	UpstreamError        *string `json:"upstream_error"`
+	ID                            int64   `json:"id"`
+	CreatedAt                     string  `json:"created_at"`
+	Source                        string  `json:"source"`
+	Success                       bool    `json:"success"`
+	ErrorCode                     *string `json:"error_code"`
+	HTTPStatus                    *int    `json:"http_status"`
+	LatencyMs                     int64   `json:"latency_ms"`
+	TestedModel                   string  `json:"tested_model"`
+	CredentialValidAfter          bool    `json:"credential_valid_after"`
+	Message                       string  `json:"message"`
+	UpstreamError                 *string `json:"upstream_error"`
+	TestedEndpointBaseURLRevision *int64  `json:"tested_endpoint_base_url_revision"`
+	TestedEndpointStatusRevision  *int64  `json:"tested_endpoint_status_revision"`
+	TestedConfigRevision          *int64  `json:"tested_config_revision"`
+	StateChangeApplied            bool    `json:"state_change_applied"`
 }
 
 // testLogs 分页返回某渠道的检测日志（GET /channels/{id}/test-logs）。
@@ -103,14 +107,18 @@ func (h *channelTestHandler) testLogs(w http.ResponseWriter, r *http.Request) {
 	out := make([]channelTestLogDTO, 0, len(logs))
 	for _, l := range logs {
 		dto := channelTestLogDTO{
-			ID:                   l.ID,
-			CreatedAt:            l.CreatedAt.UTC().Format(time.RFC3339),
-			Source:               l.Source,
-			Success:              l.Success,
-			LatencyMs:            l.LatencyMs,
-			TestedModel:          l.TestedModel,
-			CredentialValidAfter: l.CredentialValidAfter,
-			Message:              l.Message,
+			ID:                            l.ID,
+			CreatedAt:                     l.CreatedAt.UTC().Format(time.RFC3339),
+			Source:                        l.Source,
+			Success:                       l.Success,
+			LatencyMs:                     l.LatencyMs,
+			TestedModel:                   l.TestedModel,
+			CredentialValidAfter:          l.CredentialValidAfter,
+			Message:                       l.Message,
+			TestedEndpointBaseURLRevision: l.TestedEndpointBaseURLRevision,
+			TestedEndpointStatusRevision:  l.TestedEndpointStatusRevision,
+			TestedConfigRevision:          l.TestedConfigRevision,
+			StateChangeApplied:            l.StateChangeApplied,
 		}
 		if l.ErrorCode != "" {
 			code := l.ErrorCode

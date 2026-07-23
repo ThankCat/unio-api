@@ -14,7 +14,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi"
 	gatewayopenai "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
-	"github.com/ThankCat/unio-gateway/internal/platform/ratelimit"
 )
 
 // TestOpenAISDKBlackboxHTTPNonStream 通过 HTTP handler 验证 OpenAI SDK 形状的非流式请求（TASK-9.12）。
@@ -119,17 +118,10 @@ func (sdkBlackboxAuthenticator) AuthenticateAPIKey(_ context.Context, _ string) 
 	return &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 42, KeyPrefix: "unio_sk_test"}, nil
 }
 
-type sdkBlackboxRateLimiter struct{}
-
-func (sdkBlackboxRateLimiter) AllowRouteUserRequest(context.Context, int64, int64, ratelimit.Limits) (ratelimit.Decision, error) {
-	return ratelimit.Decision{Allowed: true}, nil
-}
-
 func newSDKBlackboxHandler(service *ChatCompletionService) http.Handler {
 	return gatewayapi.NewRouter(gatewayapi.RouterDeps{
 		Logger:                zap.NewNop(),
 		APIKeyAuthenticator:   sdkBlackboxAuthenticator{},
 		ChatCompletionService: service,
-		RateLimiter:           sdkBlackboxRateLimiter{},
 	})
 }
