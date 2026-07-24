@@ -30,7 +30,7 @@ func normalizeOutputConfigEffort(effort string) (string, bool) {
 	return normalized, ok
 }
 
-// deepseekSupportedContentBlocks 是 DeepSeek Anthropic endpoint 支持的 content block 类型。
+// deepseekSupportedContentBlocks 是 DeepSeek Anthropic origin 支持的 content block 类型。
 //
 // 见 DEEPSEEK_ANTHROPIC_MAPPING.md §5 与 DEC-012：其余 block（image/document/redacted_thinking/
 // MCP/container_upload 等）在出站时 Drop，不写入 upstream content。

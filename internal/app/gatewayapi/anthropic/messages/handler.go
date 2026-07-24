@@ -147,7 +147,7 @@ func anthropicBetaTokens(r *http.Request) []string {
 // auditIgnoredBetaHeaders 脱敏审计被忽略的 anthropic-beta（DEC-013）。
 //
 // 按 DEC-012「协议为先」：ingress 不因 provider 能力拒绝 beta（不再 400），而是接受后在
-// provider 映射层 Drop。当前 DeepSeek Anthropic endpoint 忽略所有 beta 且出站不发送，
+// provider 映射层 Drop。当前 DeepSeek Anthropic origin 忽略所有 beta 且出站不发送，
 // 因此 beta 对行为无影响——这里只做脱敏审计（beta 是非敏感能力名），既不静默吞掉，也不在
 // 响应里假装某 beta 已生效。未来接入真实 Anthropic 1P adapter 时，应改为按登记表 Pass 转发。
 func (h *messagesHandler) auditIgnoredBetaHeaders(r *http.Request) {

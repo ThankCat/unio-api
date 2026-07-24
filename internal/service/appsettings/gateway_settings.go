@@ -48,7 +48,7 @@ func strictUnmarshal(raw []byte, v any) error {
 
 // ---- 熔断器 ----
 
-// CircuitBreakerSettings 是 P4 Endpoint/Channel 全局熔断与 permit 生命周期配置。
+// CircuitBreakerSettings 是 P4 Origin/Channel 全局熔断与 permit 生命周期配置。
 // OpenDuration 仅供 Phase E 删除前的旧进程内 breaker 兼容使用，JSON 不再包含该字段。
 type CircuitBreakerSettings struct {
 	Enabled                             bool
@@ -61,12 +61,12 @@ type CircuitBreakerSettings struct {
 	AttemptPermitTTL                    time.Duration
 	AttemptPermitRenewInterval          time.Duration
 	AttemptPermitTerminalTTL            time.Duration
-	EndpointBaseURLRevisionOperationTTL time.Duration
-	EndpointStatusRevisionOperationTTL  time.Duration
-	EndpointStatusBatchMax              int
+	OriginBaseURLRevisionOperationTTL time.Duration
+	OriginStatusRevisionOperationTTL  time.Duration
+	OriginStatusBatchMax              int
 	OpenDurations                       []time.Duration
-	EndpointAmbiguousDistinctChannels   int
-	EndpointAmbiguousDistinctModels     int
+	OriginAmbiguousDistinctChannels   int
+	OriginAmbiguousDistinctModels     int
 
 	OpenDuration time.Duration
 }
@@ -84,12 +84,12 @@ func DefaultCircuitBreakerSettings() CircuitBreakerSettings {
 		AttemptPermitTTL:                    30 * time.Second,
 		AttemptPermitRenewInterval:          10 * time.Second,
 		AttemptPermitTerminalTTL:            5 * time.Minute,
-		EndpointBaseURLRevisionOperationTTL: 24 * time.Hour,
-		EndpointStatusRevisionOperationTTL:  24 * time.Hour,
-		EndpointStatusBatchMax:              256,
+		OriginBaseURLRevisionOperationTTL: 24 * time.Hour,
+		OriginStatusRevisionOperationTTL:  24 * time.Hour,
+		OriginStatusBatchMax:              256,
 		OpenDurations:                       []time.Duration{15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute},
-		EndpointAmbiguousDistinctChannels:   2,
-		EndpointAmbiguousDistinctModels:     2,
+		OriginAmbiguousDistinctChannels:   2,
+		OriginAmbiguousDistinctModels:     2,
 		OpenDuration:                        15 * time.Second,
 	}
 }
@@ -105,12 +105,12 @@ type circuitBreakerDoc struct {
 	AttemptPermitTTLMs                    int64   `json:"attempt_permit_ttl_ms"`
 	AttemptPermitRenewIntervalMs          int64   `json:"attempt_permit_renew_interval_ms"`
 	AttemptPermitTerminalTTLMs            int64   `json:"attempt_permit_terminal_ttl_ms"`
-	EndpointBaseURLRevisionOperationTTLMs int64   `json:"endpoint_base_url_revision_operation_ttl_ms"`
-	EndpointStatusRevisionOperationTTLMs  int64   `json:"endpoint_status_revision_operation_ttl_ms"`
-	EndpointStatusBatchMax                int     `json:"endpoint_status_batch_max"`
+	OriginBaseURLRevisionOperationTTLMs int64   `json:"origin_base_url_revision_operation_ttl_ms"`
+	OriginStatusRevisionOperationTTLMs  int64   `json:"origin_status_revision_operation_ttl_ms"`
+	OriginStatusBatchMax                int     `json:"origin_status_batch_max"`
 	OpenDurationsMs                       []int64 `json:"open_durations_ms"`
-	EndpointAmbiguousDistinctChannels     int     `json:"endpoint_ambiguous_distinct_channels"`
-	EndpointAmbiguousDistinctModels       int     `json:"endpoint_ambiguous_distinct_models"`
+	OriginAmbiguousDistinctChannels     int     `json:"origin_ambiguous_distinct_channels"`
+	OriginAmbiguousDistinctModels       int     `json:"origin_ambiguous_distinct_models"`
 }
 
 func encodeCircuitBreakerSettings(s CircuitBreakerSettings) json.RawMessage {
@@ -129,12 +129,12 @@ func encodeCircuitBreakerSettings(s CircuitBreakerSettings) json.RawMessage {
 		AttemptPermitTTLMs:                    durationToMs(s.AttemptPermitTTL),
 		AttemptPermitRenewIntervalMs:          durationToMs(s.AttemptPermitRenewInterval),
 		AttemptPermitTerminalTTLMs:            durationToMs(s.AttemptPermitTerminalTTL),
-		EndpointBaseURLRevisionOperationTTLMs: durationToMs(s.EndpointBaseURLRevisionOperationTTL),
-		EndpointStatusRevisionOperationTTLMs:  durationToMs(s.EndpointStatusRevisionOperationTTL),
-		EndpointStatusBatchMax:                s.EndpointStatusBatchMax,
+		OriginBaseURLRevisionOperationTTLMs: durationToMs(s.OriginBaseURLRevisionOperationTTL),
+		OriginStatusRevisionOperationTTLMs:  durationToMs(s.OriginStatusRevisionOperationTTL),
+		OriginStatusBatchMax:                s.OriginStatusBatchMax,
 		OpenDurationsMs:                       openDurations,
-		EndpointAmbiguousDistinctChannels:     s.EndpointAmbiguousDistinctChannels,
-		EndpointAmbiguousDistinctModels:       s.EndpointAmbiguousDistinctModels,
+		OriginAmbiguousDistinctChannels:     s.OriginAmbiguousDistinctChannels,
+		OriginAmbiguousDistinctModels:       s.OriginAmbiguousDistinctModels,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("appsettings: encode circuit breaker settings: %v", err))
@@ -159,11 +159,11 @@ func DecodeCircuitBreakerSettings(raw []byte) (CircuitBreakerSettings, error) {
 		AttemptPermitTTL:                    msToDuration(doc.AttemptPermitTTLMs),
 		AttemptPermitRenewInterval:          msToDuration(doc.AttemptPermitRenewIntervalMs),
 		AttemptPermitTerminalTTL:            msToDuration(doc.AttemptPermitTerminalTTLMs),
-		EndpointBaseURLRevisionOperationTTL: msToDuration(doc.EndpointBaseURLRevisionOperationTTLMs),
-		EndpointStatusRevisionOperationTTL:  msToDuration(doc.EndpointStatusRevisionOperationTTLMs),
-		EndpointStatusBatchMax:              doc.EndpointStatusBatchMax,
-		EndpointAmbiguousDistinctChannels:   doc.EndpointAmbiguousDistinctChannels,
-		EndpointAmbiguousDistinctModels:     doc.EndpointAmbiguousDistinctModels,
+		OriginBaseURLRevisionOperationTTL: msToDuration(doc.OriginBaseURLRevisionOperationTTLMs),
+		OriginStatusRevisionOperationTTL:  msToDuration(doc.OriginStatusRevisionOperationTTLMs),
+		OriginStatusBatchMax:              doc.OriginStatusBatchMax,
+		OriginAmbiguousDistinctChannels:   doc.OriginAmbiguousDistinctChannels,
+		OriginAmbiguousDistinctModels:     doc.OriginAmbiguousDistinctModels,
 	}
 	if doc.WindowMs <= 0 {
 		return CircuitBreakerSettings{}, errors.New("window_ms must be > 0")
@@ -186,11 +186,11 @@ func DecodeCircuitBreakerSettings(raw []byte) (CircuitBreakerSettings, error) {
 	if doc.AttemptPermitRenewIntervalMs*3 > doc.AttemptPermitTTLMs {
 		return CircuitBreakerSettings{}, errors.New("attempt_permit_renew_interval_ms * 3 must be <= attempt_permit_ttl_ms")
 	}
-	if doc.EndpointBaseURLRevisionOperationTTLMs <= 0 || doc.EndpointStatusRevisionOperationTTLMs <= 0 {
-		return CircuitBreakerSettings{}, errors.New("endpoint revision operation ttl must be > 0")
+	if doc.OriginBaseURLRevisionOperationTTLMs <= 0 || doc.OriginStatusRevisionOperationTTLMs <= 0 {
+		return CircuitBreakerSettings{}, errors.New("origin revision operation ttl must be > 0")
 	}
-	if s.EndpointStatusBatchMax < 1 || s.EndpointStatusBatchMax > 1024 {
-		return CircuitBreakerSettings{}, errors.New("endpoint_status_batch_max must be within [1, 1024]")
+	if s.OriginStatusBatchMax < 1 || s.OriginStatusBatchMax > 1024 {
+		return CircuitBreakerSettings{}, errors.New("origin_status_batch_max must be within [1, 1024]")
 	}
 	if len(doc.OpenDurationsMs) == 0 {
 		return CircuitBreakerSettings{}, errors.New("open_durations_ms must not be empty")
@@ -201,8 +201,8 @@ func DecodeCircuitBreakerSettings(raw []byte) (CircuitBreakerSettings, error) {
 		}
 		s.OpenDurations = append(s.OpenDurations, msToDuration(ms))
 	}
-	if s.EndpointAmbiguousDistinctChannels < 2 || s.EndpointAmbiguousDistinctModels < 2 {
-		return CircuitBreakerSettings{}, errors.New("endpoint ambiguous distinct thresholds must be >= 2")
+	if s.OriginAmbiguousDistinctChannels < 2 || s.OriginAmbiguousDistinctModels < 2 {
+		return CircuitBreakerSettings{}, errors.New("origin ambiguous distinct thresholds must be >= 2")
 	}
 	s.OpenDuration = s.OpenDurations[0]
 	return s, nil
@@ -213,9 +213,9 @@ func circuitBreakerDefinition() Definition {
 		Key:      GatewayCircuitBreakerKey,
 		Category: "gateway",
 		Label:    "全局熔断器",
-		Description: "Endpoint 与渠道共享的 Redis 熔断状态机及 attempt permit 生命周期。" +
+		Description: "Origin 与渠道共享的 Redis 熔断状态机及 attempt permit 生命周期。" +
 			"支持快速连续失败、比例触发、half-open 双成功恢复和分级退避；时长单位毫秒。" +
-			"enabled=false 只关闭 breaker 门禁，不关闭 permit、Endpoint 围栏或限额；Redis 故障始终拒绝准入。",
+			"enabled=false 只关闭 breaker 门禁，不关闭 permit、Origin 围栏或限额；Redis 故障始终拒绝准入。",
 		HotReload: true,
 		Default:   encodeCircuitBreakerSettings(DefaultCircuitBreakerSettings()),
 		Validate: func(raw json.RawMessage) error {

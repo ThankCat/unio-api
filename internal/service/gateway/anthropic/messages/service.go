@@ -75,7 +75,7 @@ func NewMessagesService(
 		Authorizer:      chatAuthorizer,
 		Metrics:         metricsRecorder,
 		IngressProtocol: requestlog.ProtocolAnthropic,
-		Operation:       requestlog.OperationMessages,
+		Endpoint:       requestlog.EndpointMessages,
 		SafeMessage:     messagesSafeMessage,
 	})
 
@@ -93,7 +93,7 @@ func NewMessagesService(
 	}
 }
 
-// SetAttemptPermitManager 注入三协议共享的候选级全局准入管理器。
+// SetAttemptPermitManager 注入三上游源站共享的候选级全局准入管理器。
 func (s *MessagesService) SetAttemptPermitManager(manager *lifecycle.AttemptPermitManager) {
 	s.attemptRunner.SetAttemptPermitManager(manager)
 }

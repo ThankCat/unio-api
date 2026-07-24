@@ -209,7 +209,7 @@ func TestCheckerClearsFaultOnlyThroughExplicitPostReconciliationPath(t *testing.
 	}
 }
 
-func TestCheckerRefusesClearWhileDurableOperationIsPending(t *testing.T) {
+func TestCheckerRefusesClearWhileDurableEndpointIsPending(t *testing.T) {
 	row := readyRow(t)
 	row.RuntimeOperationsReconciled = false
 	store := &storeStub{clearResult: breakerstore.RuntimeReadinessResult{Ready: true, Reason: "ready"}}

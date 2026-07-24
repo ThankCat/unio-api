@@ -41,15 +41,15 @@ type channelBreakerSnapshotDTO struct {
 
 type channelRuntimeDTO struct {
 	ID                              int64                      `json:"id"`
-	ProviderEndpointID              int64                      `json:"provider_endpoint_id"`
-	EndpointBaseURLRevision         int64                      `json:"endpoint_base_url_revision"`
-	EndpointStatusRevision          int64                      `json:"endpoint_status_revision"`
+	ProviderOriginID              int64                      `json:"provider_origin_id"`
+	OriginBaseURLRevision         int64                      `json:"origin_base_url_revision"`
+	OriginStatusRevision          int64                      `json:"origin_status_revision"`
 	ConfigRevision                  int64                      `json:"config_revision"`
 	AdmissionLimitsRevision         int64                      `json:"admission_limits_revision"`
 	RuntimeSyncState                string                     `json:"runtime_sync_state"`
-	RuntimeProviderEndpointID       *int64                     `json:"runtime_provider_endpoint_id"`
-	RuntimeEndpointBaseURLRevision  *int64                     `json:"runtime_endpoint_base_url_revision"`
-	RuntimeEndpointStatusRevision   *int64                     `json:"runtime_endpoint_status_revision"`
+	RuntimeProviderOriginID       *int64                     `json:"runtime_provider_origin_id"`
+	RuntimeOriginBaseURLRevision  *int64                     `json:"runtime_origin_base_url_revision"`
+	RuntimeOriginStatusRevision   *int64                     `json:"runtime_origin_status_revision"`
 	RuntimeConfigRevision           *int64                     `json:"runtime_config_revision"`
 	RuntimeAdmissionActiveRevision  *int64                     `json:"runtime_admission_active_revision"`
 	RuntimeAdmissionPendingRevision *int64                     `json:"runtime_admission_pending_revision"`
@@ -137,14 +137,14 @@ func (h *channelBreakerHandler) loadRuntime(ctx context.Context, id int64) (chan
 
 	dto := channelRuntimeDTO{
 		ID:                              ch.ID,
-		ProviderEndpointID:              ch.ProviderEndpointID,
-		EndpointBaseURLRevision:         ch.ProviderEndpointBaseURLRevision,
-		EndpointStatusRevision:          ch.ProviderEndpointStatusRevision,
+		ProviderOriginID:              ch.ProviderOriginID,
+		OriginBaseURLRevision:         ch.ProviderOriginBaseURLRevision,
+		OriginStatusRevision:          ch.ProviderOriginStatusRevision,
 		ConfigRevision:                  ch.ConfigRevision,
 		AdmissionLimitsRevision:         ch.AdmissionLimitsRevision,
-		RuntimeProviderEndpointID:       positiveRuntimeInt64(snapshot.ProviderEndpointID),
-		RuntimeEndpointBaseURLRevision:  positiveRuntimeInt64(snapshot.BaseURLRevision),
-		RuntimeEndpointStatusRevision:   positiveRuntimeInt64(snapshot.StatusRevision),
+		RuntimeProviderOriginID:       positiveRuntimeInt64(snapshot.ProviderOriginID),
+		RuntimeOriginBaseURLRevision:  positiveRuntimeInt64(snapshot.BaseURLRevision),
+		RuntimeOriginStatusRevision:   positiveRuntimeInt64(snapshot.StatusRevision),
 		RuntimeConfigRevision:           positiveRuntimeInt64(snapshot.ChannelConfigRevision),
 		RuntimeAdmissionActiveRevision:  positiveRuntimeInt64(control.ActiveRevision),
 		RuntimeAdmissionPendingRevision: positiveRuntimeInt64(control.PendingRevision),
@@ -174,9 +174,9 @@ func classifyChannelRuntimeSync(ch adminchannel.Channel, snapshot breakerstore.S
 	if !snapshot.Exists {
 		return "active"
 	}
-	if snapshot.ProviderEndpointID != ch.ProviderEndpointID ||
-		snapshot.BaseURLRevision != ch.ProviderEndpointBaseURLRevision ||
-		snapshot.StatusRevision != ch.ProviderEndpointStatusRevision ||
+	if snapshot.ProviderOriginID != ch.ProviderOriginID ||
+		snapshot.BaseURLRevision != ch.ProviderOriginBaseURLRevision ||
+		snapshot.StatusRevision != ch.ProviderOriginStatusRevision ||
 		snapshot.ChannelConfigRevision != ch.ConfigRevision {
 		return "stale"
 	}

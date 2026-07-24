@@ -73,23 +73,23 @@ func TestP4StateEpochPrepareCrashE2E(t *testing.T) {
 	applicationName := "p4_prepare_crash_" + randomSuffix(t)
 	running := startPrepareCrashMaintenanceCommand(t, h, maintenanceBinary, applicationName, beginArgs...)
 
-	operation, transition, pendingMarker := waitForBlockedEpochPreparedCAS(
+	endpoint, transition, pendingMarker := waitForBlockedEpochPreparedCAS(
 		t, pool, queries, integrityStore, running, applicationName, 10*time.Second,
 	)
-	if operation.State != "preparing" {
-		t.Fatalf("blocked epoch operation state=%q want=preparing", operation.State)
+	if endpoint.State != "preparing" {
+		t.Fatalf("blocked epoch endpoint state=%q want=preparing", endpoint.State)
 	}
-	assertPendingMarker(t, pendingMarker, operation, transition)
+	assertPendingMarker(t, pendingMarker, endpoint, transition)
 	assertSameEpochRecord(t, initialEpoch, readStateEpoch(t, queries), "blocked redis prepare")
-	operationCount := countRuntimeStateEpochOperations(t, pool)
+	endpointCount := countRuntimeStateEpochOperations(t, pool)
 
 	running.killAndWait(t)
 	terminateMaintenanceApplicationBackends(t, pool, applicationName)
 	waitForMaintenanceApplicationExit(t, pool, applicationName, 5*time.Second)
-	afterCrash := readNonterminalEpochOperation(t, queries)
-	assertOperationUnchanged(t, operation, afterCrash)
+	afterCrash := readNonterminalEpochEndpoint(t, queries)
+	assertEndpointUnchanged(t, endpoint, afterCrash)
 	assertSameEpochRecord(t, initialEpoch, readStateEpoch(t, queries), "prepare crash rollback")
-	assertPendingMarker(t, readStateIntegrity(t, integrityStore), operation, transition)
+	assertPendingMarker(t, readStateIntegrity(t, integrityStore), endpoint, transition)
 
 	// The killed transaction is gone before this unlock, so it cannot advance after
 	// the test releases the blocker. The next command must perform the recovery.
@@ -98,24 +98,24 @@ func TestP4StateEpochPrepareCrashE2E(t *testing.T) {
 		t,
 		h.redis,
 		markerKey,
-		h.namespace+":runtime-control:v1:op:"+operation.Token,
+		h.namespace+":runtime-control:v1:op:"+endpoint.Token,
 	)
 	if marker := readStateIntegrity(t, integrityStore); marker.Exists {
 		t.Fatalf("prepare-crash pending marker was not removed: %+v", marker)
 	}
 
 	assertMaintenanceState(t, runMaintenanceCommand(t, h, maintenanceBinary, beginArgs...), "awaiting_maintenance")
-	recoveredOperation := readNonterminalEpochOperation(t, queries)
-	recoveredTransition := decodeEpochTransition(t, recoveredOperation)
+	recoveredEndpoint := readNonterminalEpochEndpoint(t, queries)
+	recoveredTransition := decodeEpochTransition(t, recoveredEndpoint)
 	recoveringEpoch := readStateEpoch(t, queries)
-	assertOperationIdentity(t, operation, recoveredOperation)
-	if recoveredOperation.State != "db_committed" ||
-		string(recoveredOperation.EpochTransition) != string(operation.EpochTransition) ||
-		countRuntimeStateEpochOperations(t, pool) != operationCount {
+	assertEndpointIdentity(t, endpoint, recoveredEndpoint)
+	if recoveredEndpoint.State != "db_committed" ||
+		string(recoveredEndpoint.EpochTransition) != string(endpoint.EpochTransition) ||
+		countRuntimeStateEpochOperations(t, pool) != endpointCount {
 		t.Fatalf(
-			"prepare-crash recovery replaced or aborted the immutable operation: before=%+v after=%+v",
-			operation,
-			recoveredOperation,
+			"prepare-crash recovery replaced or aborted the immutable endpoint: before=%+v after=%+v",
+			endpoint,
+			recoveredEndpoint,
 		)
 	}
 	assertRecoveringTransition(
@@ -123,7 +123,7 @@ func TestP4StateEpochPrepareCrashE2E(t *testing.T) {
 		initialEpoch,
 		recoveringEpoch,
 		recoveredTransition,
-		recoveredOperation,
+		recoveredEndpoint,
 		readStateIntegrity(t, integrityStore),
 		recoveryID,
 		runtimecontrol.StateEpochReasonRestore,
@@ -149,15 +149,15 @@ func TestP4StateEpochPrepareCrashE2E(t *testing.T) {
 
 	readyLockedEpoch := readStateEpoch(t, queries)
 	readyLockedMarker := readStateIntegrity(t, integrityStore)
-	awaitingRelease := readNonterminalEpochOperation(t, queries)
+	awaitingRelease := readNonterminalEpochEndpoint(t, queries)
 	if readyLockedEpoch.Value.State != runtimecontrol.StateEpochReady || readyLockedEpoch.Value.ActivatedAt == nil ||
 		readyLockedEpoch.Value.Epoch != recoveredTransition.NewEpoch ||
 		readyLockedEpoch.Revision != recoveredTransition.NewRevision ||
 		!readyLockedMarker.Ready(recoveredTransition.NewEpoch, recoveredTransition.NewRevision) ||
-		readyLockedMarker.LastOperationToken != operation.Token ||
-		awaitingRelease.Token != operation.Token || awaitingRelease.State != "awaiting_release" {
+		readyLockedMarker.LastOperationToken != endpoint.Token ||
+		awaitingRelease.Token != endpoint.Token || awaitingRelease.State != "awaiting_release" {
 		t.Fatalf(
-			"prepare-crash commit did not preserve the recovered operation: epoch=%+v marker=%+v operation=%+v",
+			"prepare-crash commit did not preserve the recovered endpoint: epoch=%+v marker=%+v endpoint=%+v",
 			readyLockedEpoch,
 			readyLockedMarker,
 			awaitingRelease,
@@ -180,11 +180,11 @@ func TestP4StateEpochPrepareCrashE2E(t *testing.T) {
 	assertMaintenanceState(t, runMaintenanceCommand(t, h, maintenanceBinary, releaseArgs...), "ready")
 	assertSameEpochRecord(t, readyLockedEpoch, readStateEpoch(t, queries), "prepare-crash release")
 	if _, err := queries.GetNonterminalRuntimeStateEpochOperation(context.Background()); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("prepare-crash release left a nonterminal epoch operation: %v", err)
+		t.Fatalf("prepare-crash release left a nonterminal epoch endpoint: %v", err)
 	}
 	latest, err := queries.GetLatestCommittedRuntimeStateEpochOperation(context.Background())
-	if err != nil || latest.Token != operation.Token || latest.State != "committed" || len(latest.ReleaseEvidence) == 0 {
-		t.Fatalf("prepare-crash release did not commit the recovered operation: operation=%+v err=%v", latest, err)
+	if err != nil || latest.Token != endpoint.Token || latest.State != "committed" || len(latest.ReleaseEvidence) == 0 {
+		t.Fatalf("prepare-crash release did not commit the recovered endpoint: endpoint=%+v err=%v", latest, err)
 	}
 	for _, gateway := range h.gateways {
 		h.waitReadiness(t, gateway, http.StatusOK, 5*time.Second)
@@ -378,26 +378,26 @@ func waitForBlockedEpochPreparedCAS(
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		operation, operationErr := queries.GetNonterminalRuntimeStateEpochOperation(ctx)
-		if operationErr == nil {
-			lastState = operation.State
-			transition, transitionErr := runtimecontrol.DecodeStateEpochTransition(operation.EpochTransition)
+		endpoint, endpointErr := queries.GetNonterminalRuntimeStateEpochOperation(ctx)
+		if endpointErr == nil {
+			lastState = endpoint.State
+			transition, transitionErr := runtimecontrol.DecodeStateEpochTransition(endpoint.EpochTransition)
 			marker, markerErr := store.StateIntegrity(ctx)
 			lastMarker = marker
 			waiters, waiterErr := prepareCrashApplicationCount(ctx, pool, applicationName, true)
 			lastWaiters = waiters
-			if operation.State == "preparing" && transitionErr == nil && markerErr == nil && waiterErr == nil &&
-				marker.Exists && marker.State == "pending" && marker.OperationToken == operation.Token &&
-				marker.TransitionHash == operation.PayloadHash && waiters == 1 {
+			if endpoint.State == "preparing" && transitionErr == nil && markerErr == nil && waiterErr == nil &&
+				marker.Exists && marker.State == "pending" && marker.OperationToken == endpoint.Token &&
+				marker.TransitionHash == endpoint.PayloadHash && waiters == 1 {
 				cancel()
-				return operation, transition, marker
+				return endpoint, transition, marker
 			}
 		}
 		cancel()
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf(
-		"prepared CAS did not block within %s: operation_state=%q marker=%+v waiters=%d",
+		"prepared CAS did not block within %s: endpoint_state=%q marker=%+v waiters=%d",
 		timeout,
 		lastState,
 		lastMarker,

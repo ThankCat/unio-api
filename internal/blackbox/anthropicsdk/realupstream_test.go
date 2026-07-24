@@ -15,7 +15,7 @@ import (
 )
 
 // ANT-SDK-Real-01：anthropic-sdk-go SDK 通过 unio gateway 对真实 DeepSeek Anthropic
-// endpoint 发起非流式请求。
+// origin 发起非流式请求。
 //
 // gate：DEEPSEEK_BLACKBOX=1 + DEEPSEEK_API_KEY（任一缺失 t.Skip）。
 //
@@ -37,7 +37,7 @@ func TestANTSDKRealNonStream(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// DeepSeek Anthropic endpoint 默认会同时输出 thinking + text，MaxTokens 必须留够
+	// DeepSeek Anthropic origin 默认会同时输出 thinking + text，MaxTokens 必须留够
 	// 让 final text 能出来；过低会出现 stop_reason=max_tokens 且 content 只有 thinking。
 	msg, err := client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.Model(f.ModelID),
@@ -85,7 +85,7 @@ func TestANTSDKRealNonStream(t *testing.T) {
 	}
 }
 
-// ANT-SDK-Real-02：anthropic-sdk-go SDK 流式真实 DeepSeek Anthropic endpoint。
+// ANT-SDK-Real-02：anthropic-sdk-go SDK 流式真实 DeepSeek Anthropic origin。
 //
 // 验证 named-event SSE parser、accumulator、settlement 在真实 DeepSeek 上端到端可用。
 func TestANTSDKRealStream(t *testing.T) {

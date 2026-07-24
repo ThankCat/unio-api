@@ -7,7 +7,7 @@ CREATE TABLE public.routing_decision_traces (
     mode text NOT NULL,
     requested_model_id text NOT NULL,
     protocol text NOT NULL,
-    operation text NOT NULL,
+    endpoint text NOT NULL,
     pool_size integer DEFAULT 0 NOT NULL,
     candidate_count integer DEFAULT 0 NOT NULL,
     sticky_channel_id bigint,

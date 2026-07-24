@@ -34,12 +34,12 @@ type providerDTO struct {
 	UpdatedAt             string  `json:"updated_at"`
 	ArchivedAt            *string `json:"archived_at"`
 	RuntimeSyncPending    bool    `json:"runtime_sync_pending"`
-	AffectedEndpointCount int     `json:"affected_endpoint_count"`
+	AffectedOriginCount int     `json:"affected_origin_count"`
 }
 
 type providerStatusChangeDTO struct {
 	RuntimeSyncPending    bool `json:"runtime_sync_pending"`
-	AffectedEndpointCount int  `json:"affected_endpoint_count"`
+	AffectedOriginCount int  `json:"affected_origin_count"`
 }
 
 type createProviderRequest struct {
@@ -185,13 +185,13 @@ func toProviderDTO(p provider.Provider) providerDTO {
 		UpdatedAt:             p.UpdatedAt.UTC().Format(time.RFC3339),
 		ArchivedAt:            adminhttp.RFC3339Ptr(p.ArchivedAt),
 		RuntimeSyncPending:    p.RuntimeSyncPending,
-		AffectedEndpointCount: p.AffectedEndpointCount,
+		AffectedOriginCount: p.AffectedOriginCount,
 	}
 }
 
 func toProviderStatusChangeDTO(result provider.StatusChangeResult) providerStatusChangeDTO {
 	return providerStatusChangeDTO{
 		RuntimeSyncPending:    result.RuntimeSyncPending,
-		AffectedEndpointCount: result.AffectedEndpointCount,
+		AffectedOriginCount: result.AffectedOriginCount,
 	}
 }

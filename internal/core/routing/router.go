@@ -27,12 +27,12 @@ const (
 )
 
 const (
-	// OperationChatCompletions 是 OpenAI Chat Completions ingress 表面。
-	OperationChatCompletions = "chat_completions"
-	// OperationMessages 是 Anthropic Messages ingress 表面。
-	OperationMessages = "messages"
-	// OperationResponses 是 OpenAI Responses ingress 表面。
-	OperationResponses = "responses"
+	// EndpointChatCompletions 是 OpenAI Chat Completions ingress 表面。
+	EndpointChatCompletions = "chat_completions"
+	// EndpointMessages 是 Anthropic Messages ingress 表面。
+	EndpointMessages = "messages"
+	// EndpointResponses 是 OpenAI Responses ingress 表面。
+	EndpointResponses = "responses"
 )
 
 var (
@@ -63,8 +63,8 @@ type ChatRouteRequest struct {
 	// IngressProtocol 是客户请求的协议族（如 openai）；routing 只返回同协议 channel 候选。
 	IngressProtocol string
 
-	// Operation 是本次请求的 ingress 表面（chat_completions/messages/responses），供审计/日志维度。
-	Operation string
+	// Endpoint 是本次请求的 ingress 表面（chat_completions/messages/responses），供审计/日志维度。
+	Endpoint string
 
 	// RouteID 是 API Key 绑定的线路 ID（线路必填，恒有值）；线路缺失或已停用则拒绝请求（无默认回落）。
 	RouteID *int64
@@ -74,11 +74,11 @@ type ChatRouteRequest struct {
 type ChatRouteCandidate struct {
 	ModelDBID  int64
 	ProviderID int64
-	// Endpoint identity and revisions are immutable facts of this candidate.
+	// Origin identity and revisions are immutable facts of this candidate.
 	// Admission and audit code must not infer them later from mutable rows.
-	ProviderEndpointID              int64
-	ProviderEndpointBaseURLRevision int64
-	ProviderEndpointStatusRevision  int64
+	ProviderOriginID              int64
+	ProviderOriginBaseURLRevision int64
+	ProviderOriginStatusRevision  int64
 	ChannelConfigRevision           int64
 	ChannelAdmissionLimitsRevision  int64
 	AdapterKey                      string
@@ -507,9 +507,9 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 	return ChatRouteCandidate{
 		ModelDBID:                       row.ModelDbID,
 		ProviderID:                      row.ProviderID,
-		ProviderEndpointID:              row.ProviderEndpointID,
-		ProviderEndpointBaseURLRevision: row.ProviderEndpointBaseUrlRevision,
-		ProviderEndpointStatusRevision:  row.ProviderEndpointStatusRevision,
+		ProviderOriginID:              row.ProviderOriginID,
+		ProviderOriginBaseURLRevision: row.ProviderOriginBaseUrlRevision,
+		ProviderOriginStatusRevision:  row.ProviderOriginStatusRevision,
 		ChannelConfigRevision:           row.ChannelConfigRevision,
 		ChannelAdmissionLimitsRevision:  row.ChannelAdmissionLimitsRevision,
 		AdapterKey:                      row.AdapterKey,

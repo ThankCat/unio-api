@@ -21,7 +21,7 @@ import (
 //   - OpenAI 协议族：DeepSeek（adapter_key="deepseek"，chat-only）与 OpenAI 官方 1P
 //     （adapter_key="openai"）。官方 1P 在同一个 adapter_key 上同时承载 chat completions 直传
 //     与上游 responses 直传（chat 三槽 + responses 三槽），故一个 channel 即可服务 /chat/completions
-//     与 /responses 两个端点：前者直连上游 /chat/completions、后者直连上游 /responses，皆零 Drop
+//     与 /responses 两个上游源站：前者直连上游 /chat/completions、后者直连上游 /responses，皆零 Drop
 //     忠实透传（见 providers/openai/upgrade-plan N2）。chat-only 第三方（如 DeepSeek）不注册
 //     responses 三槽，gateway 据 HasResponses 自动落 responses→chat 桥接（DEC-014）。
 //   - Anthropic 协议族：DeepSeek（adapter_key="deepseek"）与 Anthropic 官方 1P（adapter_key="anthropic"，
@@ -44,7 +44,7 @@ func NewAdapterRegistry(client *http.Client, logger *zap.Logger) (*lifecycle.Ada
 			ChatInputTokenizer: openAIDeepSeekAdapter,
 		},
 		// OpenAI 官方 1P：单个 adapter_key=openai 同时承载 chat completions 与 responses 直传
-		// 两组能力。一个 channel 绑定它即可服务两个端点（gateway 据 HasResponses 分流：/responses
+		// 两组能力。一个 channel 绑定它即可服务两个上游源站（gateway 据 HasResponses 分流：/responses
 		// 走 responses 直传、/chat/completions 走 chat 直传）。
 		openai.Registration{
 			Key:                     "openai",

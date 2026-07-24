@@ -54,17 +54,17 @@ func TestResponsesRealNonStream(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	dbCtx, dbCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer dbCancel()
-	var rrStatus, rrOperation string
+	var rrStatus, rrEndpoint string
 	if err := f.Pool.QueryRow(dbCtx, `
-		SELECT status, operation FROM request_records WHERE user_id = $1 ORDER BY id DESC LIMIT 1
-	`, f.UserID).Scan(&rrStatus, &rrOperation); err != nil {
+		SELECT status, endpoint FROM request_records WHERE user_id = $1 ORDER BY id DESC LIMIT 1
+	`, f.UserID).Scan(&rrStatus, &rrEndpoint); err != nil {
 		t.Fatalf("query final status: %v", err)
 	}
 	if rrStatus != "succeeded" {
 		t.Errorf("request_records.status = %q, want succeeded", rrStatus)
 	}
-	if rrOperation != "responses" {
-		t.Errorf("request_records.operation = %q, want responses", rrOperation)
+	if rrEndpoint != "responses" {
+		t.Errorf("request_records.endpoint = %q, want responses", rrEndpoint)
 	}
 }
 

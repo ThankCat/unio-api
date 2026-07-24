@@ -98,7 +98,7 @@ func TestRouterRejectsCorruptFixedRoutePool(t *testing.T) {
 	store := &fakeStore{routeMode: "fixed", routeChannelCount: 2}
 	router := NewRouter(store, time.Second)
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		UserID: 1, ModelID: "openai/gpt", IngressProtocol: ProtocolOpenAI, Operation: OperationChatCompletions, RouteID: testRouteID(),
+		UserID: 1, ModelID: "openai/gpt", IngressProtocol: ProtocolOpenAI, Endpoint: EndpointChatCompletions, RouteID: testRouteID(),
 	})
 	if failure.CodeOf(err) != failure.CodeRoutingNoAvailableChannel {
 		t.Fatalf("corrupt fixed pool must fail closed, got %v", err)
@@ -111,9 +111,9 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 			{
 				RequestedModelID:                "openai/gpt-4.1",
 				ProviderID:                      11,
-				ProviderEndpointID:              21,
-				ProviderEndpointBaseUrlRevision: 3,
-				ProviderEndpointStatusRevision:  4,
+				ProviderOriginID:              21,
+				ProviderOriginBaseUrlRevision: 3,
+				ProviderOriginStatusRevision:  4,
 				ChannelConfigRevision:           5,
 				ChannelAdmissionLimitsRevision:  6,
 				AdapterKey:                      "openai",
@@ -168,8 +168,8 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	if first.ProviderID != 11 {
 		t.Fatalf("expected provider id %d, got %d", int64(11), first.ProviderID)
 	}
-	if first.ProviderEndpointID != 21 || first.ProviderEndpointBaseURLRevision != 3 || first.ProviderEndpointStatusRevision != 4 {
-		t.Fatalf("endpoint snapshot was not preserved: %+v", first)
+	if first.ProviderOriginID != 21 || first.ProviderOriginBaseURLRevision != 3 || first.ProviderOriginStatusRevision != 4 {
+		t.Fatalf("origin snapshot was not preserved: %+v", first)
 	}
 	if first.ChannelConfigRevision != 5 || first.ChannelAdmissionLimitsRevision != 6 {
 		t.Fatalf("channel revisions were not preserved: %+v", first)

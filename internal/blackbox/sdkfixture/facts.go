@@ -16,7 +16,7 @@ import (
 // RequestFactsExpectation 是真实上游 smoke 共用的最小请求、TTFT、usage 与落账断言。
 type RequestFactsExpectation struct {
 	IngressProtocol string
-	Operation       string
+	Endpoint       string
 	Stream          bool
 }
 
@@ -70,8 +70,8 @@ func (f *Fixture) AssertLatestRequestFacts(t *testing.T, want RequestFactsExpect
 	if facts.ingressProtocol != want.IngressProtocol {
 		t.Errorf("request_records.ingress_protocol = %q, want %q", facts.ingressProtocol, want.IngressProtocol)
 	}
-	if facts.operation != want.Operation {
-		t.Errorf("request_records.operation = %q, want %q", facts.operation, want.Operation)
+	if facts.endpoint != want.Endpoint {
+		t.Errorf("request_records.endpoint = %q, want %q", facts.endpoint, want.Endpoint)
 	}
 	if facts.stream != want.Stream {
 		t.Errorf("request_records.stream = %v, want %v", facts.stream, want.Stream)
@@ -117,10 +117,10 @@ func (f *Fixture) AssertLatestRequestFacts(t *testing.T, want RequestFactsExpect
 		t.Errorf("billing snapshots = price:%d cost:%d, want 1 each",
 			facts.priceSnapshotCount, facts.costSnapshotCount)
 	}
-	if facts.traceRouteID != f.RouteID || facts.traceProtocol != want.IngressProtocol || facts.traceOperation != want.Operation {
-		t.Errorf("routing trace identity = route:%d protocol:%q operation:%q, want route:%d protocol:%q operation:%q",
-			facts.traceRouteID, facts.traceProtocol, facts.traceOperation,
-			f.RouteID, want.IngressProtocol, want.Operation)
+	if facts.traceRouteID != f.RouteID || facts.traceProtocol != want.IngressProtocol || facts.traceEndpoint != want.Endpoint {
+		t.Errorf("routing trace identity = route:%d protocol:%q endpoint:%q, want route:%d protocol:%q endpoint:%q",
+			facts.traceRouteID, facts.traceProtocol, facts.traceEndpoint,
+			f.RouteID, want.IngressProtocol, want.Endpoint)
 	}
 	if facts.traceCandidateCount < 1 || !slices.Contains(facts.traceSelectedOrder, f.ChannelID) || facts.traceAlgorithmVersion == "" {
 		t.Errorf("routing trace plan is incomplete: candidates=%d selected=%v algorithm_empty=%v",
@@ -134,7 +134,7 @@ type latestRequestFacts struct {
 	requestID             int64
 	requestStatus         string
 	ingressProtocol       string
-	operation             string
+	endpoint             string
 	stream                bool
 	finalChannelID        pgtype.Int8
 	attemptStatus         string
@@ -152,7 +152,7 @@ type latestRequestFacts struct {
 	costSnapshotCount     int64
 	traceRouteID          int64
 	traceProtocol         string
-	traceOperation        string
+	traceEndpoint        string
 	traceCandidateCount   int32
 	traceSelectedOrder    []int64
 	traceAlgorithmVersion string
@@ -168,13 +168,13 @@ func (f latestRequestFacts) complete(stream bool) bool {
 func (f *Fixture) loadLatestRequestFacts(ctx context.Context) (latestRequestFacts, error) {
 	var facts latestRequestFacts
 	if err := f.Pool.QueryRow(ctx, `
-		SELECT id, status, ingress_protocol, operation, stream, final_channel_id
+		SELECT id, status, ingress_protocol, endpoint, stream, final_channel_id
 		FROM request_records
 		WHERE user_id = $1
 		ORDER BY id DESC
 		LIMIT 1
 	`, f.UserID).Scan(
-		&facts.requestID, &facts.requestStatus, &facts.ingressProtocol, &facts.operation,
+		&facts.requestID, &facts.requestStatus, &facts.ingressProtocol, &facts.endpoint,
 		&facts.stream, &facts.finalChannelID,
 	); err != nil {
 		return facts, err
@@ -226,11 +226,11 @@ func (f *Fixture) loadLatestRequestFacts(ctx context.Context) (latestRequestFact
 	}
 
 	if err := f.Pool.QueryRow(ctx, `
-		SELECT route_id, protocol, operation, candidate_count, selected_order, algorithm_version
+		SELECT route_id, protocol, endpoint, candidate_count, selected_order, algorithm_version
 		FROM routing_decision_traces
 		WHERE request_record_id = $1
 	`, facts.requestID).Scan(
-		&facts.traceRouteID, &facts.traceProtocol, &facts.traceOperation,
+		&facts.traceRouteID, &facts.traceProtocol, &facts.traceEndpoint,
 		&facts.traceCandidateCount, &facts.traceSelectedOrder, &facts.traceAlgorithmVersion,
 	); err != nil {
 		return facts, err

@@ -41,7 +41,7 @@ const (
 // Store 定义 channel 管理所需的存储能力。
 type Store interface {
 	GetProvider(ctx context.Context, id int64) (sqlc.Provider, error)
-	GetProviderEndpoint(ctx context.Context, id int64) (sqlc.ProviderEndpoint, error)
+	GetProviderOrigin(ctx context.Context, id int64) (sqlc.ProviderOrigin, error)
 	ListChannelsPage(ctx context.Context, arg sqlc.ListChannelsPageParams) ([]sqlc.ListChannelsPageRow, error)
 	CountChannels(ctx context.Context, arg sqlc.CountChannelsParams) (int64, error)
 	GetChannel(ctx context.Context, id int64) (sqlc.Channel, error)
@@ -93,13 +93,13 @@ type Channel struct {
 	ID           int64
 	ProviderID   int64
 	ProviderName string
-	// ProviderEndpointID 是 channel 绑定的 ProviderEndpoint（唯一 API Root/公共故障域）。
-	ProviderEndpointID int64
-	// ProviderEndpointName / ProviderEndpointStatus / BaseURL 为只读展示，来源于所绑定 Endpoint。
-	ProviderEndpointName            string
-	ProviderEndpointStatus          string
-	ProviderEndpointBaseURLRevision int64
-	ProviderEndpointStatusRevision  int64
+	// ProviderOriginID 是 channel 绑定的 ProviderOrigin（唯一 API Root/公共故障域）。
+	ProviderOriginID int64
+	// ProviderOriginName / ProviderOriginStatus / BaseURL 为只读展示，来源于所绑定 Origin。
+	ProviderOriginName            string
+	ProviderOriginStatus          string
+	ProviderOriginBaseURLRevision int64
+	ProviderOriginStatusRevision  int64
 	// ConfigRevision / AdmissionLimitsRevision 为只读返回（P4 §4.4）。
 	ConfigRevision          int64
 	AdmissionLimitsRevision int64
@@ -126,7 +126,7 @@ type Channel struct {
 	UpdatedAt         time.Time
 	ArchivedAt        *time.Time
 	// LastTested* 是最近一次主动检测结果（渠道检测，阶段一）：全 nil 表示从未检测。
-	// 仅由检测端点写入，不参与路由/计费，也不改渠道启停状态。
+	// 仅由检测上游源站写入，不参与路由/计费，也不改渠道启停状态。
 	LastTestedAt      *time.Time
 	LastTestOK        *bool
 	LastTestLatencyMs *int32
@@ -190,7 +190,7 @@ type ListResult struct {
 // AdapterKey 可选：留空时默认为 Protocol 同名的忠实透传 adapter（见 Create 注释）。
 type CreateInput struct {
 	ProviderID         int64
-	ProviderEndpointID int64
+	ProviderOriginID int64
 	Name               string
 	Protocol           string
 	AdapterKey         string
@@ -213,7 +213,7 @@ type CreateInput struct {
 type UpdateInput struct {
 	ID                 int64
 	Name               string
-	ProviderEndpointID int64
+	ProviderOriginID int64
 	Status             string
 	Priority           int32
 	TimeoutMs          *int32
@@ -257,8 +257,8 @@ type CredentialProbeResult struct {
 
 type CredentialVerification struct {
 	State                         CredentialVerificationState
-	TestedEndpointBaseURLRevision *int64
-	TestedEndpointStatusRevision  *int64
+	TestedOriginBaseURLRevision *int64
+	TestedOriginStatusRevision  *int64
 	TestedConfigRevision          *int64
 	StateChangeApplied            bool
 	CredentialValidAfter          bool
@@ -400,8 +400,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	if in.ProviderID <= 0 {
 		return Channel{}, invalidArgument("provider_id", "provider_id must be positive")
 	}
-	if in.ProviderEndpointID <= 0 {
-		return Channel{}, invalidArgument("provider_endpoint_id", "provider_endpoint_id must be positive")
+	if in.ProviderOriginID <= 0 {
+		return Channel{}, invalidArgument("provider_origin_id", "provider_origin_id must be positive")
 	}
 	if name == "" {
 		return Channel{}, invalidArgument("name", "name is required")
@@ -460,8 +460,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		return Channel{}, storeFailed(err, "load provider for channel")
 	}
 
-	// P4 §4.4：Channel 必须绑定同一 Provider 下的 Endpoint（复合外键在 DB 兜底，这里给出可读错误）。
-	if _, err := s.resolveEndpointForProvider(ctx, in.ProviderEndpointID, in.ProviderID); err != nil {
+	// P4 §4.4：Channel 必须绑定同一 Provider 下的 Origin（复合外键在 DB 兜底，这里给出可读错误）。
+	if _, err := s.resolveOriginForProvider(ctx, in.ProviderOriginID, in.ProviderID); err != nil {
 		return Channel{}, err
 	}
 
@@ -471,7 +471,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	}
 	row, err := s.store.CreateChannel(ctx, sqlc.CreateChannelParams{
 		ProviderID:                in.ProviderID,
-		ProviderEndpointID:        in.ProviderEndpointID,
+		ProviderOriginID:        in.ProviderOriginID,
 		Name:                      name,
 		Protocol:                  protocol,
 		AdapterKey:                adapterKey,
@@ -511,8 +511,8 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	if name == "" {
 		return Channel{}, invalidArgument("name", "name is required")
 	}
-	if in.ProviderEndpointID <= 0 {
-		return Channel{}, invalidArgument("provider_endpoint_id", "provider_endpoint_id must be positive")
+	if in.ProviderOriginID <= 0 {
+		return Channel{}, invalidArgument("provider_origin_id", "provider_origin_id must be positive")
 	}
 	if err := validateStatus(status); err != nil {
 		return Channel{}, err
@@ -524,7 +524,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 		return Channel{}, err
 	}
 
-	// P4 §4.4：换绑 Endpoint 必须仍属于该 channel 的 Provider。
+	// P4 §4.4：换绑 Origin 必须仍属于该 channel 的 Provider。
 	cur, err := s.store.GetChannel(ctx, in.ID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -532,7 +532,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 		}
 		return Channel{}, storeFailed(err, "get channel for update")
 	}
-	if _, err := s.resolveEndpointForProvider(ctx, in.ProviderEndpointID, cur.ProviderID); err != nil {
+	if _, err := s.resolveOriginForProvider(ctx, in.ProviderOriginID, cur.ProviderID); err != nil {
 		return Channel{}, err
 	}
 	if in.RateLimitsProvided {
@@ -555,7 +555,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	row, err := s.store.UpdateChannel(ctx, sqlc.UpdateChannelParams{
 		ID:                 in.ID,
 		Name:               name,
-		ProviderEndpointID: in.ProviderEndpointID,
+		ProviderOriginID: in.ProviderOriginID,
 		Status:             status,
 		Priority:           in.Priority,
 		TimeoutMs:          timeoutParam(in.TimeoutMs),
@@ -631,7 +631,7 @@ func (s *Service) updateWithPublishedAdmissionLimits(
 			row, updateErr := qtx.UpdateChannel(ctx, sqlc.UpdateChannelParams{
 				ID:                 in.ID,
 				Name:               strings.TrimSpace(in.Name),
-				ProviderEndpointID: in.ProviderEndpointID,
+				ProviderOriginID: in.ProviderOriginID,
 				Status:             strings.TrimSpace(in.Status),
 				Priority:           in.Priority,
 				TimeoutMs:          timeoutParam(in.TimeoutMs),
@@ -875,7 +875,7 @@ func toChannel(c sqlc.Channel) Channel {
 	return Channel{
 		ID:                      c.ID,
 		ProviderID:              c.ProviderID,
-		ProviderEndpointID:      c.ProviderEndpointID,
+		ProviderOriginID:      c.ProviderOriginID,
 		ConfigRevision:          c.ConfigRevision,
 		AdmissionLimitsRevision: c.AdmissionLimitsRevision,
 		Name:                    c.Name,
@@ -901,17 +901,17 @@ func toChannel(c sqlc.Channel) Channel {
 	}
 }
 
-// resolveEndpointForProvider 校验 Endpoint 存在且归属指定 Provider（复合外键的可读前置校验）。
-func (s *Service) resolveEndpointForProvider(ctx context.Context, endpointID, providerID int64) (sqlc.ProviderEndpoint, error) {
-	ep, err := s.store.GetProviderEndpoint(ctx, endpointID)
+// resolveOriginForProvider 校验 Origin 存在且归属指定 Provider（复合外键的可读前置校验）。
+func (s *Service) resolveOriginForProvider(ctx context.Context, originID, providerID int64) (sqlc.ProviderOrigin, error) {
+	ep, err := s.store.GetProviderOrigin(ctx, originID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return sqlc.ProviderEndpoint{}, invalidArgument("provider_endpoint_id", "provider endpoint not found")
+			return sqlc.ProviderOrigin{}, invalidArgument("provider_origin_id", "provider origin not found")
 		}
-		return sqlc.ProviderEndpoint{}, storeFailed(err, "load provider endpoint for channel")
+		return sqlc.ProviderOrigin{}, storeFailed(err, "load provider origin for channel")
 	}
 	if ep.ProviderID != providerID {
-		return sqlc.ProviderEndpoint{}, invalidArgument("provider_endpoint_id", "provider endpoint does not belong to the channel provider")
+		return sqlc.ProviderOrigin{}, invalidArgument("provider_origin_id", "provider origin does not belong to the channel provider")
 	}
 	return ep, nil
 }
@@ -927,19 +927,19 @@ func (s *Service) enrichProviderName(ctx context.Context, ch Channel) (Channel, 
 			ch.ProviderName = provider.Name
 		}
 	}
-	// 单条读取时从所绑定 Endpoint 只读带出 base_url/name/status（列表由 JOIN 直接带出）。
-	if ch.ProviderEndpointID > 0 && ch.BaseURL == "" {
-		ep, err := s.store.GetProviderEndpoint(ctx, ch.ProviderEndpointID)
+	// 单条读取时从所绑定 Origin 只读带出 base_url/name/status（列表由 JOIN 直接带出）。
+	if ch.ProviderOriginID > 0 && ch.BaseURL == "" {
+		ep, err := s.store.GetProviderOrigin(ctx, ch.ProviderOriginID)
 		if err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
-				return Channel{}, storeFailed(err, "load provider endpoint for channel")
+				return Channel{}, storeFailed(err, "load provider origin for channel")
 			}
 		} else {
 			ch.BaseURL = ep.BaseUrl
-			ch.ProviderEndpointName = ep.Name
-			ch.ProviderEndpointStatus = ep.Status
-			ch.ProviderEndpointBaseURLRevision = ep.BaseUrlRevision
-			ch.ProviderEndpointStatusRevision = ep.StatusRevision
+			ch.ProviderOriginName = ep.Name
+			ch.ProviderOriginStatus = ep.Status
+			ch.ProviderOriginBaseURLRevision = ep.BaseUrlRevision
+			ch.ProviderOriginStatusRevision = ep.StatusRevision
 		}
 	}
 	return ch, nil
@@ -951,9 +951,9 @@ func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 		ID:                      c.ID,
 		ProviderID:              c.ProviderID,
 		ProviderName:            c.ProviderName,
-		ProviderEndpointID:      c.ProviderEndpointID,
-		ProviderEndpointName:    c.ProviderEndpointName,
-		ProviderEndpointStatus:  c.ProviderEndpointStatus,
+		ProviderOriginID:      c.ProviderOriginID,
+		ProviderOriginName:    c.ProviderOriginName,
+		ProviderOriginStatus:  c.ProviderOriginStatus,
 		ConfigRevision:          c.ConfigRevision,
 		AdmissionLimitsRevision: c.AdmissionLimitsRevision,
 		Name:                    c.Name,

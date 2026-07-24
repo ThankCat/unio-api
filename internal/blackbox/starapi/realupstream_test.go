@@ -55,7 +55,7 @@ func TestStarAPIOpenAIChatNonStream(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Operation:       "chat_completions",
+		Endpoint:       "chat_completions",
 		Stream:          false,
 	})
 }
@@ -103,7 +103,7 @@ func TestStarAPIOpenAIChatStream(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Operation:       "chat_completions",
+		Endpoint:       "chat_completions",
 		Stream:          true,
 	})
 }
@@ -127,7 +127,7 @@ func TestStarAPIOpenAIResponsesNonStream(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Operation:       "responses",
+		Endpoint:       "responses",
 		Stream:          false,
 	})
 }
@@ -167,7 +167,7 @@ func TestStarAPIOpenAIResponsesStream(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Operation:       "responses",
+		Endpoint:       "responses",
 		Stream:          true,
 	})
 }
@@ -184,11 +184,11 @@ func TestStarAPIOpenAIResponsesCompactNative(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Operation:       "responses",
+		Endpoint:       "responses",
 		Stream:          false,
 	})
 	assertLatestCompactAttempts(t, f, []compactAttemptWant{
-		{operation: "responses_compact", status: "succeeded", statusCode: http.StatusOK},
+		{endpoint: "responses_compact", status: "succeeded", statusCode: http.StatusOK},
 	})
 }
 
@@ -204,11 +204,11 @@ func TestStarAPIOpenAIResponsesCompactSyntheticDirect(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Operation:       "responses",
+		Endpoint:       "responses",
 		Stream:          false,
 	})
 	assertLatestCompactAttempts(t, f, []compactAttemptWant{
-		{operation: "chat_completions", status: "succeeded", statusCode: http.StatusOK},
+		{endpoint: "chat_completions", status: "succeeded", statusCode: http.StatusOK},
 	})
 }
 
@@ -236,12 +236,12 @@ func TestStarAPIOpenAIResponsesCompactProxyFallback(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Operation:       "responses",
+		Endpoint:       "responses",
 		Stream:          false,
 	})
 	assertLatestCompactAttempts(t, f, []compactAttemptWant{
-		{operation: "responses_compact", status: "failed", statusCode: http.StatusNotFound},
-		{operation: "chat_completions", status: "succeeded", statusCode: http.StatusOK},
+		{endpoint: "responses_compact", status: "failed", statusCode: http.StatusNotFound},
+		{endpoint: "chat_completions", status: "succeeded", statusCode: http.StatusOK},
 	})
 }
 
@@ -270,7 +270,7 @@ func TestStarAPIAnthropicMessagesNonStream(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "anthropic",
-		Operation:       "messages",
+		Endpoint:       "messages",
 		Stream:          false,
 	})
 }
@@ -316,7 +316,7 @@ func TestStarAPIAnthropicMessagesStream(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "anthropic",
-		Operation:       "messages",
+		Endpoint:       "messages",
 		Stream:          true,
 	})
 }
@@ -496,7 +496,7 @@ func assertCompactOutput(t *testing.T, body []byte) {
 }
 
 type compactAttemptWant struct {
-	operation  string
+	endpoint  string
 	status     string
 	statusCode int32
 }
@@ -522,7 +522,7 @@ func assertLatestCompactAttempts(t *testing.T, f *sdkfixture.Fixture, want []com
 	}
 
 	rows, err := f.Pool.Query(ctx, `
-		SELECT attempt_index, status, upstream_status_code, upstream_operation,
+		SELECT attempt_index, status, upstream_status_code, upstream_endpoint,
 		       response_started_at, upstream_first_token_at
 		FROM request_attempts
 		WHERE request_record_id = $1
@@ -537,7 +537,7 @@ func assertLatestCompactAttempts(t *testing.T, f *sdkfixture.Fixture, want []com
 		index             int32
 		status            string
 		statusCode        pgtype.Int4
-		operation         string
+		endpoint         string
 		responseStartedAt pgtype.Timestamptz
 		firstTokenAt      pgtype.Timestamptz
 	}
@@ -546,12 +546,12 @@ func assertLatestCompactAttempts(t *testing.T, f *sdkfixture.Fixture, want []com
 			index             int32
 			status            string
 			statusCode        pgtype.Int4
-			operation         string
+			endpoint         string
 			responseStartedAt pgtype.Timestamptz
 			firstTokenAt      pgtype.Timestamptz
 		}
 		if err := rows.Scan(
-			&item.index, &item.status, &item.statusCode, &item.operation,
+			&item.index, &item.status, &item.statusCode, &item.endpoint,
 			&item.responseStartedAt, &item.firstTokenAt,
 		); err != nil {
 			t.Fatalf("scan compact attempt: %v", err)
@@ -568,9 +568,9 @@ func assertLatestCompactAttempts(t *testing.T, f *sdkfixture.Fixture, want []com
 		if got[i].index != int32(i) {
 			t.Errorf("compact attempt[%d] index=%d want %d", i, got[i].index, i)
 		}
-		if got[i].operation != want[i].operation || got[i].status != want[i].status {
-			t.Errorf("compact attempt[%d] operation/status=%q/%q want %q/%q",
-				i, got[i].operation, got[i].status, want[i].operation, want[i].status)
+		if got[i].endpoint != want[i].endpoint || got[i].status != want[i].status {
+			t.Errorf("compact attempt[%d] endpoint/status=%q/%q want %q/%q",
+				i, got[i].endpoint, got[i].status, want[i].endpoint, want[i].status)
 		}
 		if !got[i].statusCode.Valid || got[i].statusCode.Int32 != want[i].statusCode {
 			t.Errorf("compact attempt[%d] status_code=%v want %d", i, got[i].statusCode, want[i].statusCode)

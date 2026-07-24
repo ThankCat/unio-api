@@ -1,5 +1,5 @@
-// Package providerendpoint 暴露 admin 管理端 ProviderEndpoint 的 HTTP 表面（P4 §8.1、§8.5）。
-package providerendpoint
+// Package providerorigin 暴露 admin 管理端 ProviderOrigin 的 HTTP 表面（P4 §8.1、§8.5）。
+package providerorigin
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/providerendpoint"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/providerorigin"
 )
 
 // BreakerRuntime 暴露 admin 只读运行态与显式复位（§8.4/§8.5）；由 *breakerstore.Store 实现。
@@ -68,18 +68,18 @@ func toBreakerSnapshotDTO(s breakerstore.ScopeSnapshot) breakerSnapshotDTO {
 	}
 }
 
-// ProviderEndpointService 定义 adminapi 操作 ProviderEndpoint 所需的最小能力。
-type ProviderEndpointService interface {
-	List(ctx context.Context, params providerendpoint.ListParams) (providerendpoint.ListResult, error)
-	Get(ctx context.Context, id int64) (providerendpoint.ProviderEndpoint, error)
-	Create(ctx context.Context, in providerendpoint.CreateInput) (providerendpoint.ProviderEndpoint, error)
-	UpdateName(ctx context.Context, id int64, name string) (providerendpoint.ProviderEndpoint, error)
-	UpdateStatus(ctx context.Context, id int64, status string) (providerendpoint.ProviderEndpoint, error)
-	UpdateBaseURL(ctx context.Context, id int64, baseURL string) (providerendpoint.ProviderEndpoint, error)
-	UpdateRouting(ctx context.Context, id int64, baseURL, status string) (providerendpoint.ProviderEndpoint, error)
+// ProviderOriginService 定义 adminapi 操作 ProviderOrigin 所需的最小能力。
+type ProviderOriginService interface {
+	List(ctx context.Context, params providerorigin.ListParams) (providerorigin.ListResult, error)
+	Get(ctx context.Context, id int64) (providerorigin.ProviderOrigin, error)
+	Create(ctx context.Context, in providerorigin.CreateInput) (providerorigin.ProviderOrigin, error)
+	UpdateName(ctx context.Context, id int64, name string) (providerorigin.ProviderOrigin, error)
+	UpdateStatus(ctx context.Context, id int64, status string) (providerorigin.ProviderOrigin, error)
+	UpdateBaseURL(ctx context.Context, id int64, baseURL string) (providerorigin.ProviderOrigin, error)
+	UpdateRouting(ctx context.Context, id int64, baseURL, status string) (providerorigin.ProviderOrigin, error)
 }
 
-type providerEndpointDTO struct {
+type providerOriginDTO struct {
 	ID                            int64   `json:"id"`
 	ProviderID                    int64   `json:"provider_id"`
 	ProviderName                  string  `json:"provider_name"`
@@ -126,7 +126,7 @@ type updateRoutingRequest struct {
 }
 
 type handler struct {
-	service ProviderEndpointService
+	service ProviderOriginService
 	breaker BreakerRuntime // 可空：Redis 缺失时运行态/复位不可用
 }
 
@@ -140,7 +140,7 @@ func (h *handler) runtime(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, failure.New(failure.CodeGatewayBreakerStoreUnavailable, failure.WithMessage("breaker runtime data source unavailable")))
 		return
 	}
-	snap, err := h.breaker.Snapshot(r.Context(), breakerstore.ScopeEndpoint, id)
+	snap, err := h.breaker.Snapshot(r.Context(), breakerstore.ScopeOrigin, id)
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
@@ -158,11 +158,11 @@ func (h *handler) resetBreaker(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, failure.New(failure.CodeGatewayBreakerStoreUnavailable, failure.WithMessage("breaker runtime data source unavailable")))
 		return
 	}
-	if _, err := h.breaker.Reset(r.Context(), breakerstore.ScopeEndpoint, id); err != nil {
+	if _, err := h.breaker.Reset(r.Context(), breakerstore.ScopeOrigin, id); err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	snap, err := h.breaker.Snapshot(r.Context(), breakerstore.ScopeEndpoint, id)
+	snap, err := h.breaker.Snapshot(r.Context(), breakerstore.ScopeOrigin, id)
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
@@ -185,7 +185,7 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		providerID = parsed
 	}
 	page := adminhttp.ParsePage(r)
-	result, err := h.service.List(r.Context(), providerendpoint.ListParams{
+	result, err := h.service.List(r.Context(), providerorigin.ListParams{
 		ProviderID: providerID,
 		Status:     adminhttp.ListStatus(r),
 		Query:      strings.TrimSpace(r.URL.Query().Get("q")),
@@ -196,7 +196,7 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	dtos := make([]providerEndpointDTO, 0, len(result.Items))
+	dtos := make([]providerOriginDTO, 0, len(result.Items))
 	for _, ep := range result.Items {
 		dtos = append(dtos, h.toDTOWithRuntime(r.Context(), ep))
 	}
@@ -223,7 +223,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	ep, err := h.service.Create(r.Context(), providerendpoint.CreateInput{
+	ep, err := h.service.Create(r.Context(), providerorigin.CreateInput{
 		ProviderID: req.ProviderID,
 		Name:       req.Name,
 		BaseURL:    req.BaseURL,
@@ -312,12 +312,12 @@ func (h *handler) updateRouting(w http.ResponseWriter, r *http.Request) {
 	adminhttp.WriteData(w, http.StatusOK, toDTO(ep))
 }
 
-func toDTO(ep providerendpoint.ProviderEndpoint) providerEndpointDTO {
+func toDTO(ep providerorigin.ProviderOrigin) providerOriginDTO {
 	runtimeState := "active"
 	if ep.RuntimeSyncPending {
 		runtimeState = "runtime_sync_pending"
 	}
-	dto := providerEndpointDTO{
+	dto := providerOriginDTO{
 		ID:                 ep.ID,
 		ProviderID:         ep.ProviderID,
 		ProviderName:       ep.ProviderName,
@@ -339,20 +339,20 @@ func toDTO(ep providerendpoint.ProviderEndpoint) providerEndpointDTO {
 	return dto
 }
 
-func (h *handler) toDTOWithRuntime(ctx context.Context, ep providerendpoint.ProviderEndpoint) providerEndpointDTO {
+func (h *handler) toDTOWithRuntime(ctx context.Context, ep providerorigin.ProviderOrigin) providerOriginDTO {
 	dto := toDTO(ep)
 	if h.breaker == nil {
 		dto.RuntimeSyncPending = false
 		dto.RuntimeSyncState = "store_unavailable"
 		return dto
 	}
-	snapshot, err := h.breaker.Snapshot(ctx, breakerstore.ScopeEndpoint, ep.ID)
+	snapshot, err := h.breaker.Snapshot(ctx, breakerstore.ScopeOrigin, ep.ID)
 	if err != nil {
 		dto.RuntimeSyncPending = false
 		dto.RuntimeSyncState = "store_unavailable"
 		return dto
 	}
-	dto.RuntimeSyncState = classifyEndpointRuntimeSync(ep, snapshot)
+	dto.RuntimeSyncState = classifyOriginRuntimeSync(ep, snapshot)
 	dto.RuntimeSyncPending = dto.RuntimeSyncState == "runtime_sync_pending"
 	dto.RuntimeActiveBaseURLRevision = positiveInt64(snapshot.BaseURLRevision)
 	dto.RuntimePendingBaseURLRevision = positiveInt64(snapshot.PendingBaseURLRevision)
@@ -365,7 +365,7 @@ func (h *handler) toDTOWithRuntime(ctx context.Context, ep providerendpoint.Prov
 	return dto
 }
 
-func classifyEndpointRuntimeSync(ep providerendpoint.ProviderEndpoint, snapshot breakerstore.ScopeSnapshot) string {
+func classifyOriginRuntimeSync(ep providerorigin.ProviderOrigin, snapshot breakerstore.ScopeSnapshot) string {
 	if !snapshot.Exists || !snapshot.ControlPresent {
 		return "runtime_sync_required"
 	}

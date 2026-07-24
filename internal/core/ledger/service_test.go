@@ -132,7 +132,7 @@ func createLedgerTestRequestRecord(t *testing.T, ctx context.Context, pool *pgxp
 			api_key_id,
 			requested_model_id,
 			ingress_protocol,
-			operation,
+			endpoint,
 			stream,
 			status,
 			started_at

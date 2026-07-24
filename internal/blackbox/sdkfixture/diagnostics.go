@@ -29,7 +29,7 @@ type failureAuditSnapshot struct {
 	upstreamStartedAt    pgtype.Timestamptz
 	upstreamFirstTokenAt pgtype.Timestamptz
 	upstreamCompletedAt  pgtype.Timestamptz
-	endpointDisposition  string
+	originDisposition  string
 	channelDisposition   string
 }
 
@@ -70,7 +70,7 @@ func (f *Fixture) loadFailureAuditSnapshot(ctx context.Context) (failureAuditSna
 			ra.upstream_started_at,
 			ra.upstream_first_token_at,
 			ra.upstream_completed_at,
-			COALESCE(ra.breaker_endpoint_disposition, ''),
+			COALESCE(ra.breaker_origin_disposition, ''),
 			COALESCE(ra.breaker_channel_disposition, '')
 		FROM request_records rr
 		LEFT JOIN LATERAL (
@@ -97,7 +97,7 @@ func (f *Fixture) loadFailureAuditSnapshot(ctx context.Context) (failureAuditSna
 		&snapshot.upstreamStartedAt,
 		&snapshot.upstreamFirstTokenAt,
 		&snapshot.upstreamCompletedAt,
-		&snapshot.endpointDisposition,
+		&snapshot.originDisposition,
 		&snapshot.channelDisposition,
 	)
 	return snapshot, err
@@ -108,7 +108,7 @@ func formatFailureAuditSnapshot(snapshot failureAuditSnapshot) string {
 		"request_record_id=%d request_status=%q request_error_code=%q delivery_status=%q request_response_started=%t "+
 			"attempt_id=%s attempt_status=%q attempt_error_code=%q fault_party=%q upstream_status_code=%s "+
 			"failure_stage=%q transport_started=%t first_token=%t transport_completed=%t transport_duration_ms=%s "+
-			"endpoint_disposition=%q channel_disposition=%q",
+			"origin_disposition=%q channel_disposition=%q",
 		snapshot.requestID,
 		snapshot.requestStatus,
 		snapshot.requestErrorCode,
@@ -124,7 +124,7 @@ func formatFailureAuditSnapshot(snapshot failureAuditSnapshot) string {
 		snapshot.upstreamFirstTokenAt.Valid,
 		snapshot.upstreamCompletedAt.Valid,
 		formatTransportDurationMS(snapshot),
-		snapshot.endpointDisposition,
+		snapshot.originDisposition,
 		snapshot.channelDisposition,
 	)
 }

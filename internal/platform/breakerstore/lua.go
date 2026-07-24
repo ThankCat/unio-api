@@ -8,12 +8,12 @@ package breakerstore
 
 // luaGateAndAcquire 实现 AcquireAttempt 的 breaker 门禁 + half-open 租约 + 并发租约 + permit 创建。
 //
-// KEYS[1]=endpoint state, KEYS[2]=channel state, KEYS[3]=channel concurrency zset, KEYS[4]=permit hash
+// KEYS[1]=origin state, KEYS[2]=channel state, KEYS[3]=channel concurrency zset, KEYS[4]=permit hash
 // ARGV: 见 acquireArgv 组装顺序。
 //
 // 返回：
 //
-//	{"permit", endpoint_gen, channel_gen, endpoint_probe(0/1), channel_probe(0/1), lease_until_ms, acquired_at_ms}
+//	{"permit", origin_gen, channel_gen, origin_probe(0/1), channel_probe(0/1), lease_until_ms, acquired_at_ms}
 //	{"denied", reason}
 //	{"conflict"}  -- 同 permit_id 不同指纹
 //	{"idempotent", ...permit fields}  -- 同 permit_id 同指纹重试
@@ -23,7 +23,7 @@ local function now_ms()
   return tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 end
 
-local endpoint_key = KEYS[1]
+local origin_key = KEYS[1]
 local channel_key = KEYS[2]
 local conc_key = KEYS[3]
 local permit_key = KEYS[4]
@@ -44,10 +44,10 @@ local instance_proof = KEYS[17]
 local permit_id = ARGV[1]
 local fingerprint = ARGV[2]
 local request_admission_id = ARGV[3]
-local endpoint_id = ARGV[4]
+local origin_id = ARGV[4]
 local channel_id = ARGV[5]
-local endpoint_base_url_rev = ARGV[6]
-local endpoint_status_rev = ARGV[7]
+local origin_base_url_rev = ARGV[6]
+local origin_status_rev = ARGV[7]
 local channel_config_rev = ARGV[8]
 local model_id = ARGV[9]
 local upstream_operation = ARGV[10]
@@ -59,8 +59,8 @@ local expected_breaker_rev = tonumber(ARGV[15])
 local estimate = tonumber(ARGV[16])
 local expected_integrity_epoch = ARGV[17]
 local expected_integrity_revision = ARGV[18]
--- Endpoint control 围栏校验开关（enforce=1 时要求 control 存在、effective_status=enabled、无 pending、revision 匹配，§5.3.2）。
-local enforce_endpoint_control = tonumber(ARGV[19])
+-- Origin control 围栏校验开关（enforce=1 时要求 control 存在、effective_status=enabled、无 pending、revision 匹配，§5.3.2）。
+local enforce_origin_control = tonumber(ARGV[19])
 
 if redis.call('EXISTS', fault_latch) == 1 then
   return {'denied', 'breaker_store_unavailable'}
@@ -105,9 +105,9 @@ if redis.call('EXISTS', permit_key) == 1 then
     return {'conflict'}
   end
   return {'idempotent',
-    redis.call('HGET', permit_key, 'endpoint_state_generation'),
+    redis.call('HGET', permit_key, 'origin_state_generation'),
     redis.call('HGET', permit_key, 'channel_state_generation'),
-    redis.call('HGET', permit_key, 'endpoint_half_open_probe'),
+    redis.call('HGET', permit_key, 'origin_half_open_probe'),
     redis.call('HGET', permit_key, 'channel_half_open_probe'),
     redis.call('HGET', permit_key, 'lease_until_ms'),
     redis.call('HGET', permit_key, 'acquired_at_ms'),
@@ -191,33 +191,33 @@ if permission_key ~= '' and redis.call('EXISTS', permission_key) == 1 then
   local p_state = redis.call('HGET', permission_key, 'recheck_state')
   if p_state ~= 'cleared' then
     local p_cfg = redis.call('HGET', permission_key, 'channel_config_revision')
-    local p_burl = redis.call('HGET', permission_key, 'endpoint_base_url_revision')
-    local p_sts = redis.call('HGET', permission_key, 'endpoint_status_revision')
-    if p_cfg == channel_config_rev and p_burl == endpoint_base_url_rev and p_sts == endpoint_status_rev then
+    local p_burl = redis.call('HGET', permission_key, 'origin_base_url_revision')
+    local p_sts = redis.call('HGET', permission_key, 'origin_status_revision')
+    if p_cfg == channel_config_rev and p_burl == origin_base_url_rev and p_sts == origin_status_rev then
       return {'denied', 'model_permission_paused'}
     end
   end
 end
 
--- Endpoint control 围栏校验（§5.3.2）：control 缺失/ pending / effective_status 非 enabled / revision 落后均拒绝。
-if enforce_endpoint_control == 1 then
-  if redis.call('HGET', endpoint_key, 'control_present') ~= '1' then return {'denied', 'runtime_sync_required'} end
-  if redis.call('HGET', endpoint_key, 'base_url_revision_state') == 'pending' then return {'denied', 'runtime_sync_required'} end
-  if redis.call('HGET', endpoint_key, 'status_revision_state') == 'pending' then return {'denied', 'runtime_sync_required'} end
-  local cur_srev = redis.call('HGET', endpoint_key, 'status_revision')
-  local cur_burl = redis.call('HGET', endpoint_key, 'base_url_revision')
-  if cur_srev ~= endpoint_status_rev then return {'denied', 'stale_status_revision'} end
-  if cur_burl ~= endpoint_base_url_rev then return {'denied', 'stale_revision'} end
-  if redis.call('HGET', endpoint_key, 'effective_status') ~= 'enabled' then return {'denied', 'stale_status_revision'} end
+-- Origin control 围栏校验（§5.3.2）：control 缺失/ pending / effective_status 非 enabled / revision 落后均拒绝。
+if enforce_origin_control == 1 then
+  if redis.call('HGET', origin_key, 'control_present') ~= '1' then return {'denied', 'runtime_sync_required'} end
+  if redis.call('HGET', origin_key, 'base_url_revision_state') == 'pending' then return {'denied', 'runtime_sync_required'} end
+  if redis.call('HGET', origin_key, 'status_revision_state') == 'pending' then return {'denied', 'runtime_sync_required'} end
+  local cur_srev = redis.call('HGET', origin_key, 'status_revision')
+  local cur_burl = redis.call('HGET', origin_key, 'base_url_revision')
+  if cur_srev ~= origin_status_rev then return {'denied', 'stale_status_revision'} end
+  if cur_burl ~= origin_base_url_rev then return {'denied', 'stale_revision'} end
+  if redis.call('HGET', origin_key, 'effective_status') ~= 'enabled' then return {'denied', 'stale_status_revision'} end
 end
 
--- Channel state 绑定 PostgreSQL 候选的 Endpoint 身份与三类 revision。只计算是否需要 rotate，
--- 在所有业务门槛通过前不修改状态；候选落后或同 config revision 却换 Endpoint 时直接拒绝。
+-- Channel state 绑定 PostgreSQL 候选的 Origin 身份与三类 revision。只计算是否需要 rotate，
+-- 在所有业务门槛通过前不修改状态；候选落后或同 config revision 却换 Origin 时直接拒绝。
 local channel_exists = redis.call('EXISTS', channel_key)
 local channel_rotate = 0
 if channel_exists == 1 then
   local stored_cfg_raw = redis.call('HGET', channel_key, 'channel_config_revision')
-  local stored_ep_raw = redis.call('HGET', channel_key, 'provider_endpoint_id')
+  local stored_ep_raw = redis.call('HGET', channel_key, 'provider_origin_id')
   local stored_burl_raw = redis.call('HGET', channel_key, 'base_url_revision')
   local stored_status_raw = redis.call('HGET', channel_key, 'status_revision')
   local stored_state = redis.call('HGET', channel_key, 'state')
@@ -234,11 +234,11 @@ if channel_exists == 1 then
       local stored_ep = tonumber(stored_ep_raw)
       local stored_burl = tonumber(stored_burl_raw)
       local stored_status = tonumber(stored_status_raw)
-      local candidate_ep = tonumber(endpoint_id)
-      local candidate_burl = tonumber(endpoint_base_url_rev)
-      local candidate_status = tonumber(endpoint_status_rev)
+      local candidate_ep = tonumber(origin_id)
+      local candidate_burl = tonumber(origin_base_url_rev)
+      local candidate_status = tonumber(origin_status_rev)
       if stored_ep == nil or stored_burl == nil or stored_status == nil then
-        return redis.error_reply('malformed channel endpoint binding')
+        return redis.error_reply('malformed channel origin binding')
       end
       if stored_ep ~= candidate_ep then return {'denied', 'stale_config_revision'} end
       if stored_burl > candidate_burl then return {'denied', 'stale_revision'} end
@@ -250,7 +250,7 @@ else
   channel_rotate = 1
 end
 
-local ep_allow, ep_probe, ep_reason = gate(endpoint_key, 0)
+local ep_allow, ep_probe, ep_reason = gate(origin_key, 0)
 if not ep_allow then return {'denied', ep_reason} end
 local ch_allow, ch_probe, ch_reason = gate(channel_key, channel_rotate)
 if not ch_allow then return {'denied', ch_reason} end
@@ -286,7 +286,7 @@ if estimate > 0 then
 end
 redis.call('ZREMRANGEBYSCORE', conc_key, '-inf', now)
 
-local function ensure_endpoint_state(state_key)
+local function ensure_origin_state(state_key)
   if redis.call('EXISTS', state_key) == 0 then
     redis.call('HSET', state_key,
       'state', 'closed', 'state_generation', '1', 'window_started_at_ms', now,
@@ -294,7 +294,7 @@ local function ensure_endpoint_state(state_key)
       'open_level', '0', 'half_open_successes', '0', 'last_transition_at_ms', now)
   end
 end
-ensure_endpoint_state(endpoint_key)
+ensure_origin_state(origin_key)
 
 if channel_rotate == 1 then
   local gen = 1
@@ -302,9 +302,9 @@ if channel_rotate == 1 then
     gen = (tonumber(redis.call('HGET', channel_key, 'state_generation')) or 0) + 1
   end
   redis.call('HSET', channel_key,
-    'provider_endpoint_id', endpoint_id,
-    'base_url_revision', endpoint_base_url_rev,
-    'status_revision', endpoint_status_rev,
+    'provider_origin_id', origin_id,
+    'base_url_revision', origin_base_url_rev,
+    'status_revision', origin_status_rev,
     'channel_config_revision', channel_config_rev,
     'state', 'closed', 'state_generation', gen, 'window_started_at_ms', now,
     'eligible_successes', '0', 'eligible_failures', '0', 'consecutive_eligible_failures', '0',
@@ -330,7 +330,7 @@ local function take_probe(state_key, probe)
   return tonumber(redis.call('HGET', state_key, 'state_generation')) or 1
 end
 
-local ep_gen = take_probe(endpoint_key, ep_probe)
+local ep_gen = take_probe(origin_key, ep_probe)
 local ch_gen = take_probe(channel_key, ch_probe)
 
 if conc_key ~= '' then
@@ -345,20 +345,20 @@ redis.call('HSET', permit_key,
   'request_admission_id', request_admission_id,
   'runtime_integrity_epoch', expected_integrity_epoch,
   'runtime_integrity_revision', expected_integrity_revision,
-  'endpoint_id', endpoint_id,
+  'origin_id', origin_id,
   'channel_id', channel_id,
-  'endpoint_base_url_revision', endpoint_base_url_rev,
-  'endpoint_status_revision', endpoint_status_rev,
-  'endpoint_control_enforced', enforce_endpoint_control,
-  'endpoint_base_url_fence_generation', redis.call('HGET', endpoint_key, 'base_url_fence_generation') or '0',
-  'endpoint_status_fence_generation', redis.call('HGET', endpoint_key, 'status_fence_generation') or '0',
+  'origin_base_url_revision', origin_base_url_rev,
+  'origin_status_revision', origin_status_rev,
+  'origin_control_enforced', enforce_origin_control,
+  'origin_base_url_fence_generation', redis.call('HGET', origin_key, 'base_url_fence_generation') or '0',
+  'origin_status_fence_generation', redis.call('HGET', origin_key, 'status_fence_generation') or '0',
   'channel_config_revision', channel_config_rev,
   'model_id', model_id,
   'upstream_operation', upstream_operation,
   'request_mode', request_mode,
-  'endpoint_state_generation', ep_gen,
+  'origin_state_generation', ep_gen,
   'channel_state_generation', ch_gen,
-  'endpoint_half_open_probe', ep_probe,
+  'origin_half_open_probe', ep_probe,
   'channel_half_open_probe', ch_probe,
   'concurrency_channel_id', channel_id,
   'admission_enforced', '1',
@@ -384,10 +384,10 @@ return {'permit', ep_gen, ch_gen, ep_probe, ch_probe, lease_until, now,
 // luaAttemptPermitLifecycleGuard 在 Renew/Finish/Abort 的任何写入前校验调用方 expected epoch、
 // Redis marker 与服务端 permit hash。三方 epoch 或 permit 身份不一致时只返回稳定结果，不修改 key。
 //
-// Common KEYS: marker, permit, endpoint state, channel state, channel concurrency zset.
-// Common ARGV: permit_id, epoch, epoch_revision, request_admission_id, endpoint_id, channel_id,
+// Common KEYS: marker, permit, origin state, channel state, channel concurrency zset.
+// Common ARGV: permit_id, epoch, epoch_revision, request_admission_id, origin_id, channel_id,
 // base_url_revision, status_revision, channel_config_revision, model_id, operation, request_mode,
-// endpoint_generation, channel_generation, endpoint_probe, channel_probe.
+// origin_generation, channel_generation, origin_probe, channel_probe.
 const luaAttemptPermitLifecycleGuard = `
 local function attempt_key_type(key)
   local reply = redis.call('TYPE', key)
@@ -424,17 +424,17 @@ local function validate_attempt_permit_lifecycle()
   local identities = {
     {'permit_id', 1},
     {'request_admission_id', 4},
-    {'endpoint_id', 5},
+    {'origin_id', 5},
     {'channel_id', 6},
-    {'endpoint_base_url_revision', 7},
-    {'endpoint_status_revision', 8},
+    {'origin_base_url_revision', 7},
+    {'origin_status_revision', 8},
     {'channel_config_revision', 9},
     {'model_id', 10},
     {'upstream_operation', 11},
     {'request_mode', 12},
-    {'endpoint_state_generation', 13},
+    {'origin_state_generation', 13},
     {'channel_state_generation', 14},
-    {'endpoint_half_open_probe', 15},
+    {'origin_half_open_probe', 15},
     {'channel_half_open_probe', 16},
     {'concurrency_channel_id', 6}
   }
@@ -449,19 +449,19 @@ local function validate_attempt_permit_lifecycle()
     return 'runtime_sync_required'
   end
 
-  local endpoint_control_enforced = redis.call('HGET', permit_key, 'endpoint_control_enforced')
-  local endpoint_base_fence = redis.call('HGET', permit_key, 'endpoint_base_url_fence_generation')
-  local endpoint_status_fence = redis.call('HGET', permit_key, 'endpoint_status_fence_generation')
-  if (endpoint_control_enforced ~= '0' and endpoint_control_enforced ~= '1') or
-      type(endpoint_base_fence) ~= 'string' or string.match(endpoint_base_fence, '^%d+$') == nil or
-      type(endpoint_status_fence) ~= 'string' or string.match(endpoint_status_fence, '^%d+$') == nil then
+  local origin_control_enforced = redis.call('HGET', permit_key, 'origin_control_enforced')
+  local origin_base_fence = redis.call('HGET', permit_key, 'origin_base_url_fence_generation')
+  local origin_status_fence = redis.call('HGET', permit_key, 'origin_status_fence_generation')
+  if (origin_control_enforced ~= '0' and origin_control_enforced ~= '1') or
+      type(origin_base_fence) ~= 'string' or string.match(origin_base_fence, '^%d+$') == nil or
+      type(origin_status_fence) ~= 'string' or string.match(origin_status_fence, '^%d+$') == nil then
     return 'runtime_sync_required'
   end
 
-  local endpoint_type = attempt_key_type(KEYS[3])
+  local origin_type = attempt_key_type(KEYS[3])
   local channel_type = attempt_key_type(KEYS[4])
   local concurrency_type = attempt_key_type(KEYS[5])
-  if (endpoint_type ~= 'none' and endpoint_type ~= 'hash') or
+  if (origin_type ~= 'none' and origin_type ~= 'hash') or
       (channel_type ~= 'none' and channel_type ~= 'hash') or
       (concurrency_type ~= 'none' and concurrency_type ~= 'zset') then
     return 'runtime_sync_required'
@@ -489,11 +489,11 @@ end
 // 双触发状态机；stream permit 且有有效 FirstToken 时更新 TTFT EWMA。
 //
 // KEYS[1..5] 与 guard 相同，KEYS[6]=gateway.circuit_breaker runtime control,
-// KEYS[7]=gateway.routing_balance runtime control，KEYS[8..9]=本次类别的 Endpoint distinct
-// Channel/model 证据集合。ARGV[1..16] 与 guard 相同，ARGV[17]=endpoint outcome,
+// KEYS[7]=gateway.routing_balance runtime control，KEYS[8..9]=本次类别的 Origin distinct
+// Channel/model 证据集合。ARGV[1..16] 与 guard 相同，ARGV[17]=origin outcome,
 // [18]=channel outcome, [19]=first_token_ms(空串表示无样本), [20]=actual TPM(空串表示无权威 usage),
-// [21]=endpoint evidence category(空串表示无条件证据)。breaker 与 TTFT alpha 只读 Redis committed active control。
-// 返回 {endpoint_disposition, channel_disposition}。
+// [21]=origin evidence category(空串表示无条件证据)。breaker 与 TTFT alpha 只读 Redis committed active control。
+// 返回 {origin_disposition, channel_disposition}。
 const luaFinish = luaAuthoritativeControlHelpers + luaAttemptPermitLifecycleGuard + `
 local function now_ms()
   local t = redis.call('TIME')
@@ -508,7 +508,7 @@ end
 
 local marker_key = KEYS[1]
 local permit_key = KEYS[2]
-local endpoint_key = KEYS[3]
+local origin_key = KEYS[3]
 local channel_key = KEYS[4]
 local conc_key = KEYS[5]
 local breaker_ctl = KEYS[6]
@@ -521,7 +521,7 @@ local ep_outcome = ARGV[17]
 local ch_outcome = ARGV[18]
 local first_token_ms = ARGV[19]
 local tpm_actual = ARGV[20] -- '' 表示无权威 usage
-local endpoint_evidence = ARGV[21]
+local origin_evidence = ARGV[21]
 
 local now = now_ms()
 
@@ -531,7 +531,7 @@ if lifecycle_guard ~= nil then
   return {lifecycle_guard, lifecycle_guard}
 end
 if redis.call('HGET', permit_key, 'status') ~= 'active' then
-  return {redis.call('HGET', permit_key, 'endpoint_disposition') or 'terminal_conflict',
+  return {redis.call('HGET', permit_key, 'origin_disposition') or 'terminal_conflict',
           redis.call('HGET', permit_key, 'channel_disposition') or 'terminal_conflict'}
 end
 
@@ -583,25 +583,25 @@ if redis.call('HGET', permit_key, 'admission_enforced') == '1' then
   end
 end
 
--- Endpoint fence 在 permit 服务端记录中冻结。prepare 即使最终 abort，也已永久推进 fence generation；
--- 因此旧 permit 的真实结果只能收口资源，不得写 Endpoint 或任一子 Channel 的当前 breaker/TTFT。
-local endpoint_fence_disposition = nil
-if redis.call('HGET', permit_key, 'endpoint_control_enforced') == '1' then
-  local stored_base_fence = redis.call('HGET', permit_key, 'endpoint_base_url_fence_generation')
-  local stored_status_fence = redis.call('HGET', permit_key, 'endpoint_status_fence_generation')
-  local current_base_fence = redis.call('HGET', endpoint_key, 'base_url_fence_generation')
-  local current_status_fence = redis.call('HGET', endpoint_key, 'status_fence_generation')
+-- Origin fence 在 permit 服务端记录中冻结。prepare 即使最终 abort，也已永久推进 fence generation；
+-- 因此旧 permit 的真实结果只能收口资源，不得写 Origin 或任一子 Channel 的当前 breaker/TTFT。
+local origin_fence_disposition = nil
+if redis.call('HGET', permit_key, 'origin_control_enforced') == '1' then
+  local stored_base_fence = redis.call('HGET', permit_key, 'origin_base_url_fence_generation')
+  local stored_status_fence = redis.call('HGET', permit_key, 'origin_status_fence_generation')
+  local current_base_fence = redis.call('HGET', origin_key, 'base_url_fence_generation')
+  local current_status_fence = redis.call('HGET', origin_key, 'status_fence_generation')
   if stored_base_fence == false or stored_status_fence == false or
       current_base_fence == false or current_status_fence == false then
-    endpoint_fence_disposition = 'runtime_sync_required'
-  elseif redis.call('HGET', endpoint_key, 'status_revision_state') ~= 'active' or
+    origin_fence_disposition = 'runtime_sync_required'
+  elseif redis.call('HGET', origin_key, 'status_revision_state') ~= 'active' or
       current_status_fence ~= stored_status_fence or
-      redis.call('HGET', endpoint_key, 'status_revision') ~= redis.call('HGET', permit_key, 'endpoint_status_revision') then
-    endpoint_fence_disposition = 'stale_status_revision'
-  elseif redis.call('HGET', endpoint_key, 'base_url_revision_state') ~= 'active' or
+      redis.call('HGET', origin_key, 'status_revision') ~= redis.call('HGET', permit_key, 'origin_status_revision') then
+    origin_fence_disposition = 'stale_status_revision'
+  elseif redis.call('HGET', origin_key, 'base_url_revision_state') ~= 'active' or
       current_base_fence ~= stored_base_fence or
-      redis.call('HGET', endpoint_key, 'base_url_revision') ~= redis.call('HGET', permit_key, 'endpoint_base_url_revision') then
-    endpoint_fence_disposition = 'stale_revision'
+      redis.call('HGET', origin_key, 'base_url_revision') ~= redis.call('HGET', permit_key, 'origin_base_url_revision') then
+    origin_fence_disposition = 'stale_revision'
   end
 end
 
@@ -610,28 +610,28 @@ if redis.call('EXISTS', channel_key) == 0 then
   channel_fence_disposition = 'stale_generation'
 elseif redis.call('HGET', channel_key, 'channel_config_revision') ~= redis.call('HGET', permit_key, 'channel_config_revision') then
   channel_fence_disposition = 'stale_config_revision'
-elseif redis.call('HGET', channel_key, 'provider_endpoint_id') ~= redis.call('HGET', permit_key, 'endpoint_id') then
+elseif redis.call('HGET', channel_key, 'provider_origin_id') ~= redis.call('HGET', permit_key, 'origin_id') then
   channel_fence_disposition = 'stale_config_revision'
-elseif redis.call('HGET', channel_key, 'status_revision') ~= redis.call('HGET', permit_key, 'endpoint_status_revision') then
+elseif redis.call('HGET', channel_key, 'status_revision') ~= redis.call('HGET', permit_key, 'origin_status_revision') then
   channel_fence_disposition = 'stale_status_revision'
-elseif redis.call('HGET', channel_key, 'base_url_revision') ~= redis.call('HGET', permit_key, 'endpoint_base_url_revision') then
+elseif redis.call('HGET', channel_key, 'base_url_revision') ~= redis.call('HGET', permit_key, 'origin_base_url_revision') then
   channel_fence_disposition = 'stale_revision'
 end
 
--- 条件 Endpoint 故障必须在同一次 Finish 中原子收集多 Gateway 共享证据。集合使用固定窗口，
+-- 条件 Origin 故障必须在同一次 Finish 中原子收集多 Gateway 共享证据。集合使用固定窗口，
 -- 且最多保存配置阈值数量的整数 ID，避免随 Channel/model 数量无界增长。
 local evidence_disposition = nil
-if endpoint_evidence ~= '' then
-  if endpoint_fence_disposition ~= nil then
-    evidence_disposition = endpoint_fence_disposition
+if origin_evidence ~= '' then
+  if origin_fence_disposition ~= nil then
+    evidence_disposition = origin_fence_disposition
   elseif not breaker_config_valid then
     evidence_disposition = 'runtime_sync_required'
   elseif breaker_enabled == 0 then
     evidence_disposition = 'not_applicable'
-  elseif redis.call('EXISTS', endpoint_key) == 0 then
+  elseif redis.call('EXISTS', origin_key) == 0 then
     evidence_disposition = 'stale_generation'
-  elseif (tonumber(redis.call('HGET', endpoint_key, 'state_generation')) or 0) ~=
-      (tonumber(redis.call('HGET', permit_key, 'endpoint_state_generation')) or -1) then
+  elseif (tonumber(redis.call('HGET', origin_key, 'state_generation')) or 0) ~=
+      (tonumber(redis.call('HGET', permit_key, 'origin_state_generation')) or -1) then
     evidence_disposition = 'stale_generation'
   else
     local channel_key_type = attempt_key_type(evidence_channels_key)
@@ -640,8 +640,8 @@ if endpoint_evidence ~= '' then
         (model_key_type ~= 'none' and model_key_type ~= 'set') then
       evidence_disposition = 'runtime_sync_required'
     else
-      local channel_limit = breaker.endpoint_ambiguous_distinct_channels
-      local model_limit = breaker.endpoint_ambiguous_distinct_models
+      local channel_limit = breaker.origin_ambiguous_distinct_channels
+      local model_limit = breaker.origin_ambiguous_distinct_models
       local channel_id = redis.call('HGET', permit_key, 'channel_id')
       local model_id = redis.call('HGET', permit_key, 'model_id')
 
@@ -801,12 +801,12 @@ local function apply_scope(state_key, outcome, permit_gen_field, permit_probe_fi
   return 'applied'
 end
 
-local ep_disp = endpoint_fence_disposition
+local ep_disp = origin_fence_disposition
 if ep_disp == nil then ep_disp = evidence_disposition end
 if ep_disp == nil then
-  ep_disp = apply_scope(endpoint_key, ep_outcome, 'endpoint_state_generation', 'endpoint_half_open_probe', 0)
+  ep_disp = apply_scope(origin_key, ep_outcome, 'origin_state_generation', 'origin_half_open_probe', 0)
 end
-local ch_disp = endpoint_fence_disposition
+local ch_disp = origin_fence_disposition
 if ch_disp == nil then ch_disp = channel_fence_disposition end
 if ch_disp == nil then
   ch_disp = apply_scope(channel_key, ch_outcome, 'channel_state_generation', 'channel_half_open_probe', 1)
@@ -815,7 +815,7 @@ end
 -- 写 permit 终态（first-terminal-wins tombstone）。
 local terminal_ttl = tonumber(redis.call('HGET', permit_key, 'terminal_ttl_ms')) or 300000
 redis.call('HSET', permit_key, 'status', 'finished', 'terminal_at_ms', now,
-  'endpoint_disposition', ep_disp, 'channel_disposition', ch_disp)
+  'origin_disposition', ep_disp, 'channel_disposition', ch_disp)
 redis.call('PEXPIRE', permit_key, terminal_ttl)
 
 return {ep_disp, ch_disp}
@@ -830,7 +830,7 @@ local function now_ms()
 end
 local marker_key = KEYS[1]
 local permit_key = KEYS[2]
-local endpoint_key = KEYS[3]
+local origin_key = KEYS[3]
 local channel_key = KEYS[4]
 local conc_key = KEYS[5]
 local permit_id = ARGV[1]
@@ -865,7 +865,7 @@ local function release_probe(state_key, probe_field)
     end
   end
 end
-release_probe(endpoint_key, 'endpoint_half_open_probe')
+release_probe(origin_key, 'origin_half_open_probe')
 release_probe(channel_key, 'channel_half_open_probe')
 
 local terminal_ttl = tonumber(redis.call('HGET', permit_key, 'terminal_ttl_ms')) or 300000
@@ -883,7 +883,7 @@ local function now_ms()
 end
 local marker_key = KEYS[1]
 local permit_key = KEYS[2]
-local endpoint_key = KEYS[3]
+local origin_key = KEYS[3]
 local channel_key = KEYS[4]
 local conc_key = KEYS[5]
 local permit_id = ARGV[1]
@@ -908,21 +908,21 @@ if conc_key ~= '' then
   end
 end
 
-local endpoint_fence_current = true
-if redis.call('HGET', permit_key, 'endpoint_control_enforced') == '1' then
-  endpoint_fence_current =
-    redis.call('HGET', endpoint_key, 'base_url_revision_state') == 'active' and
-    redis.call('HGET', endpoint_key, 'status_revision_state') == 'active' and
-    redis.call('HGET', endpoint_key, 'base_url_fence_generation') == redis.call('HGET', permit_key, 'endpoint_base_url_fence_generation') and
-    redis.call('HGET', endpoint_key, 'status_fence_generation') == redis.call('HGET', permit_key, 'endpoint_status_fence_generation') and
-    redis.call('HGET', endpoint_key, 'base_url_revision') == redis.call('HGET', permit_key, 'endpoint_base_url_revision') and
-    redis.call('HGET', endpoint_key, 'status_revision') == redis.call('HGET', permit_key, 'endpoint_status_revision')
+local origin_fence_current = true
+if redis.call('HGET', permit_key, 'origin_control_enforced') == '1' then
+  origin_fence_current =
+    redis.call('HGET', origin_key, 'base_url_revision_state') == 'active' and
+    redis.call('HGET', origin_key, 'status_revision_state') == 'active' and
+    redis.call('HGET', origin_key, 'base_url_fence_generation') == redis.call('HGET', permit_key, 'origin_base_url_fence_generation') and
+    redis.call('HGET', origin_key, 'status_fence_generation') == redis.call('HGET', permit_key, 'origin_status_fence_generation') and
+    redis.call('HGET', origin_key, 'base_url_revision') == redis.call('HGET', permit_key, 'origin_base_url_revision') and
+    redis.call('HGET', origin_key, 'status_revision') == redis.call('HGET', permit_key, 'origin_status_revision')
 end
-local channel_fence_current = endpoint_fence_current and
+local channel_fence_current = origin_fence_current and
   redis.call('HGET', channel_key, 'channel_config_revision') == redis.call('HGET', permit_key, 'channel_config_revision') and
-  redis.call('HGET', channel_key, 'provider_endpoint_id') == redis.call('HGET', permit_key, 'endpoint_id') and
-  redis.call('HGET', channel_key, 'base_url_revision') == redis.call('HGET', permit_key, 'endpoint_base_url_revision') and
-  redis.call('HGET', channel_key, 'status_revision') == redis.call('HGET', permit_key, 'endpoint_status_revision')
+  redis.call('HGET', channel_key, 'provider_origin_id') == redis.call('HGET', permit_key, 'origin_id') and
+  redis.call('HGET', channel_key, 'base_url_revision') == redis.call('HGET', permit_key, 'origin_base_url_revision') and
+  redis.call('HGET', channel_key, 'status_revision') == redis.call('HGET', permit_key, 'origin_status_revision')
 
 local function renew_probe(state_key, gen_field, probe_field, fence_current)
   if fence_current and redis.call('HGET', permit_key, probe_field) == '1' then
@@ -933,14 +933,14 @@ local function renew_probe(state_key, gen_field, probe_field, fence_current)
     end
   end
 end
-renew_probe(endpoint_key, 'endpoint_state_generation', 'endpoint_half_open_probe', endpoint_fence_current)
+renew_probe(origin_key, 'origin_state_generation', 'origin_half_open_probe', origin_fence_current)
 renew_probe(channel_key, 'channel_state_generation', 'channel_half_open_probe', channel_fence_current)
 
 return {'renewed', new_lease}
 `
 
 // luaReset 原子递增作用域 state_generation 并恢复 closed/no-sample（不删 key），旧 permit 随后 no-op。
-// KEYS[1]=state key；Endpoint reset 时 KEYS[2..] 是三类 bounded evidence sets。返回 {new_generation}。
+// KEYS[1]=state key；Origin reset 时 KEYS[2..] 是三类 bounded evidence sets。返回 {new_generation}。
 const luaReset = `
 local function now_ms()
   local t = redis.call('TIME')
@@ -979,14 +979,14 @@ return {'present', now, remaining, h}
 `
 
 // luaSnapshotMany 是 routing 的只读线性化点。它一次校验完整性 marker、四项候选 control、
-// 每个 Endpoint/Channel control 与 stable resource，并返回评分所需的原始事实；任一 runtime-sync
+// 每个 Origin/Channel control 与 stable resource，并返回评分所需的原始事实；任一 runtime-sync
 // 或数据形状错误都拒绝整批，绝不返回可被部分使用的结果。
 //
 // KEYS: marker, channel-rate, global-concurrency, circuit-breaker, routing-balance，随后每候选：
-// endpoint, channel, channel-concurrency-zset, 429-cooldown, model-permission, channel-admission-control；
+// origin, channel, channel-concurrency-zset, 429-cooldown, model-permission, channel-admission-control；
 // 最后两个 key 是 infrastructure-fault latch 与 Redis instance reconciliation proof。
 // ARGV: count, model_id, epoch, epoch_revision, 四项 expected revision；随后每候选：
-// endpoint_id, channel_id, base_url_revision, status_revision, config_revision,
+// origin_id, channel_id, base_url_revision, status_revision, config_revision,
 // channel_admission_revision, channel_rpm_bucket_prefix, channel_rpd_bucket_prefix,
 // channel_tpm_bucket_prefix。
 const luaSnapshotMany = luaRedisInstanceHelpers + luaAuthoritativeControlHelpers + `
@@ -1066,7 +1066,7 @@ local rows = {}
 for candidate = 1, count do
   local key_offset = 5 + (candidate - 1) * 6
   local arg_offset = 8 + (candidate - 1) * 9
-  local endpoint_key = KEYS[key_offset + 1]
+  local origin_key = KEYS[key_offset + 1]
   local channel_key = KEYS[key_offset + 2]
   local concurrency_key = KEYS[key_offset + 3]
   local cooldown_key = KEYS[key_offset + 4]
@@ -1080,9 +1080,9 @@ for candidate = 1, count do
   local rpd_key = ARGV[arg_offset + 8] .. day_bucket
   local tpm_key = ARGV[arg_offset + 9] .. minute_bucket
 
-  local endpoint_type = redis_key_type(endpoint_key)
+  local origin_type = redis_key_type(origin_key)
   local channel_type = redis_key_type(channel_key)
-  if (endpoint_type ~= 'none' and endpoint_type ~= 'hash') or
+  if (origin_type ~= 'none' and origin_type ~= 'hash') or
       (channel_type ~= 'none' and channel_type ~= 'hash') then
     return redis.error_reply('WRONGTYPE snapshot state key must be a hash')
   end
@@ -1121,8 +1121,8 @@ for candidate = 1, count do
     if permission_state == '' then return {'error', 'runtime_sync_required'} end
     if permission_state ~= 'cleared' and
         redis.call('HGET', permission_key, 'channel_config_revision') == expected_config_revision and
-        redis.call('HGET', permission_key, 'endpoint_base_url_revision') == expected_base_url_revision and
-        redis.call('HGET', permission_key, 'endpoint_status_revision') == expected_status_revision then
+        redis.call('HGET', permission_key, 'origin_base_url_revision') == expected_base_url_revision and
+        redis.call('HGET', permission_key, 'origin_status_revision') == expected_status_revision then
       permission_paused = 1
     end
   end
@@ -1131,7 +1131,7 @@ for candidate = 1, count do
     cooldown_remaining, permission_paused, permission_state,
     concurrency_used, effective_concurrency,
     rpm_used, effective_rpm, rpd_used, effective_rpd, tpm_used, effective_tpm,
-    read_snapshot(endpoint_key), read_snapshot(channel_key),
+    read_snapshot(origin_key), read_snapshot(channel_key),
     redis.call('HGET', channel_ctl, 'active_payload'), redis.call('HGET', channel_ctl, 'active_payload_hash')
   }
 end
@@ -1199,8 +1199,8 @@ local same_identity = exists and
   redis.call('HGET', key, 'channel_id') == ARGV[4] and
   redis.call('HGET', key, 'model_id') == ARGV[5]
 local current_config_revision = tonumber(redis.call('HGET', key, 'channel_config_revision'))
-local current_base_url_revision = tonumber(redis.call('HGET', key, 'endpoint_base_url_revision'))
-local current_status_revision = tonumber(redis.call('HGET', key, 'endpoint_status_revision'))
+local current_base_url_revision = tonumber(redis.call('HGET', key, 'origin_base_url_revision'))
+local current_status_revision = tonumber(redis.call('HGET', key, 'origin_status_revision'))
 local incoming_config_revision = tonumber(ARGV[1])
 local incoming_base_url_revision = tonumber(ARGV[2])
 local incoming_status_revision = tonumber(ARGV[3])
@@ -1214,8 +1214,8 @@ end
 
 local same_revision = same_identity and
   redis.call('HGET', key, 'channel_config_revision') == ARGV[1] and
-  redis.call('HGET', key, 'endpoint_base_url_revision') == ARGV[2] and
-  redis.call('HGET', key, 'endpoint_status_revision') == ARGV[3]
+  redis.call('HGET', key, 'origin_base_url_revision') == ARGV[2] and
+  redis.call('HGET', key, 'origin_status_revision') == ARGV[3]
 
 if same_revision then
   local state = redis.call('HGET', key, 'recheck_state') or ''
@@ -1228,8 +1228,8 @@ end
 
 redis.call('HSET', key,
   'channel_config_revision', ARGV[1],
-  'endpoint_base_url_revision', ARGV[2],
-  'endpoint_status_revision', ARGV[3],
+  'origin_base_url_revision', ARGV[2],
+  'origin_status_revision', ARGV[3],
   'channel_id', ARGV[4],
   'model_id', ARGV[5],
   'paused_at_ms', now,
@@ -1256,8 +1256,8 @@ if redis.call('EXISTS', key) == 0 then
   return {'absent'}
 end
 local p_cfg = redis.call('HGET', key, 'channel_config_revision')
-local p_burl = redis.call('HGET', key, 'endpoint_base_url_revision')
-local p_sts = redis.call('HGET', key, 'endpoint_status_revision')
+local p_burl = redis.call('HGET', key, 'origin_base_url_revision')
+local p_sts = redis.call('HGET', key, 'origin_status_revision')
 if p_cfg == ARGV[1] and p_burl == ARGV[2] and p_sts == ARGV[3] then
   redis.call('HSET', key, 'recheck_state', 'cleared', 'last_rechecked_at_ms', now_ms())
   redis.call('HDEL', key, 'claim_token', 'claimed_by', 'claim_until_ms')

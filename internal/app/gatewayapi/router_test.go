@@ -219,7 +219,7 @@ func TestRouterNotFound(t *testing.T) {
 	}
 }
 
-func TestRouterLegacyCircuitBreakerEndpointIsGone(t *testing.T) {
+func TestRouterLegacyCircuitBreakerOriginIsGone(t *testing.T) {
 	authenticator := &routerTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 1, KeyPrefix: "unio_sk_test"},
 	}
@@ -230,10 +230,10 @@ func TestRouterLegacyCircuitBreakerEndpointIsGone(t *testing.T) {
 	handle.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("legacy circuit-breaker endpoint status = %d, want 404", rec.Code)
+		t.Fatalf("legacy circuit-breaker origin status = %d, want 404", rec.Code)
 	}
 	if code := decodeRouterError(t, rec); code != "not_found" {
-		t.Fatalf("legacy circuit-breaker endpoint error = %q, want not_found", code)
+		t.Fatalf("legacy circuit-breaker origin error = %q, want not_found", code)
 	}
 }
 
@@ -301,7 +301,7 @@ func decodeRouterError(t *testing.T, rec *httptest.ResponseRecorder) string {
 func TestRouterResponsesStatelessUnsupported(t *testing.T) {
 	handle := routerWithPrincipal()
 
-	// 有状态 endpoint 全部 501 unsupported_endpoint_stateless（无服务端存储）。
+	// 有状态 origin 全部 501 unsupported_origin_stateless（无服务端存储）。
 	cases := []struct {
 		method string
 		path   string
@@ -320,8 +320,8 @@ func TestRouterResponsesStatelessUnsupported(t *testing.T) {
 		if rec.Code != http.StatusNotImplemented {
 			t.Fatalf("%s %s: expected 501, got %d", tc.method, tc.path, rec.Code)
 		}
-		if code := decodeRouterError(t, rec); code != "unsupported_endpoint_stateless" {
-			t.Fatalf("%s %s: expected unsupported_endpoint_stateless, got %q", tc.method, tc.path, code)
+		if code := decodeRouterError(t, rec); code != "unsupported_origin_stateless" {
+			t.Fatalf("%s %s: expected unsupported_origin_stateless, got %q", tc.method, tc.path, code)
 		}
 	}
 }

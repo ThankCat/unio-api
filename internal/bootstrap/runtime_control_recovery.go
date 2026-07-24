@@ -18,7 +18,7 @@ import (
 const runtimeControlReconcileInterval = 5 * time.Second
 
 // reconcileAllRuntimeControls performs one fail-closed reconciliation pass for both durable control
-// families. Endpoint routing operations are resolved before stable controls are restored.
+// families. Origin routing operations are resolved before stable controls are restored.
 func reconcileAllRuntimeControls(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -27,12 +27,12 @@ func reconcileAllRuntimeControls(
 	telemetry *runtimeControlTelemetry,
 ) error {
 	observation := telemetry.capture(ctx, pool)
-	endpointReconciler := runtimecontrol.NewEndpointRoutingReconciler(pool, controls)
+	originReconciler := runtimecontrol.NewOriginRoutingReconciler(pool, controls)
 	if telemetry != nil {
-		endpointReconciler.WithObserver(telemetry)
+		originReconciler.WithObserver(telemetry)
 	}
-	if _, err := endpointReconciler.Reconcile(ctx); err != nil {
-		telemetry.passFailed("endpoint_routing", err, observation)
+	if _, err := originReconciler.Reconcile(ctx); err != nil {
+		telemetry.passFailed("origin_routing", err, observation)
 		return err
 	}
 	if err := reconcileRuntimeControls(ctx, pool, settings, controls); err != nil {
@@ -99,7 +99,7 @@ func runRuntimeControlReconciler(
 }
 
 // captureRuntimeReconciliationProof reads the complete PostgreSQL authority set after a successful
-// pass. The clear Lua atomically compares every listed Endpoint and Channel control with Redis.
+// pass. The clear Lua atomically compares every listed Origin and Channel control with Redis.
 func captureRuntimeReconciliationProof(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -109,26 +109,26 @@ func captureRuntimeReconciliationProof(
 	rows, err := pool.Query(ctx, `
 		SELECT p.status, pe.id, pe.base_url_revision, pe.status_revision, pe.status
 		FROM providers p
-		JOIN provider_endpoints pe ON pe.provider_id = p.id
+		JOIN provider_origins pe ON pe.provider_id = p.id
 		ORDER BY p.id, pe.id`)
 	if err != nil {
 		return breakerstore.RuntimeReconciliationProof{}, err
 	}
 	for rows.Next() {
-		var providerStatus, endpointStatus string
-		var endpoint breakerstore.RuntimeEndpointControlProof
+		var providerStatus, originStatus string
+		var origin breakerstore.RuntimeOriginControlProof
 		if err := rows.Scan(
 			&providerStatus,
-			&endpoint.EndpointID,
-			&endpoint.BaseURLRevision,
-			&endpoint.StatusRevision,
-			&endpointStatus,
+			&origin.OriginID,
+			&origin.BaseURLRevision,
+			&origin.StatusRevision,
+			&originStatus,
 		); err != nil {
 			rows.Close()
 			return breakerstore.RuntimeReconciliationProof{}, err
 		}
-		endpoint.EffectiveStatus = runtimecontrol.EffectiveEndpointStatus(providerStatus, endpointStatus)
-		proof.EndpointControls = append(proof.EndpointControls, endpoint)
+		origin.EffectiveStatus = runtimecontrol.EffectiveOriginStatus(providerStatus, originStatus)
+		proof.OriginControls = append(proof.OriginControls, origin)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()

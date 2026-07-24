@@ -48,14 +48,14 @@ CREATE TABLE public.request_attempts (
     upstream_first_token_at timestamp with time zone,
     upstream_completed_at timestamp with time zone,
     -- [P4 §4.7] attempt 创建时冻结的不可变身份/版本快照；真实 attempt 必须完整记录。
-    provider_endpoint_id bigint NOT NULL,
-    provider_endpoint_base_url_revision bigint NOT NULL,
-    provider_endpoint_status_revision bigint NOT NULL,
+    provider_origin_id bigint NOT NULL,
+    provider_origin_base_url_revision bigint NOT NULL,
+    provider_origin_status_revision bigint NOT NULL,
     channel_config_revision bigint NOT NULL,
     routing_candidate_index integer NOT NULL,
-    upstream_operation text NOT NULL,
+    upstream_endpoint text NOT NULL,
     -- [P4 §4.7] Finish 终态收口时写入的 breaker applied/stale disposition。
-    breaker_endpoint_disposition text,
+    breaker_origin_disposition text,
     breaker_channel_disposition text,
     fault_party text GENERATED ALWAYS AS (
 CASE
@@ -77,12 +77,12 @@ END) STORED,
     CONSTRAINT ck_request_attempts_upstream_first_after_start CHECK (((upstream_first_token_at IS NULL) OR ((upstream_started_at IS NOT NULL) AND (upstream_started_at <= upstream_first_token_at)))),
     CONSTRAINT ck_request_attempts_upstream_completed_after_start CHECK (((upstream_completed_at IS NULL) OR ((upstream_started_at IS NOT NULL) AND (upstream_started_at <= upstream_completed_at)))),
     CONSTRAINT ck_request_attempts_upstream_first_before_completed CHECK (((upstream_first_token_at IS NULL) OR (upstream_completed_at IS NULL) OR (upstream_first_token_at <= upstream_completed_at))),
-    CONSTRAINT request_attempts_provider_endpoint_base_url_revision_check CHECK ((provider_endpoint_base_url_revision >= 1)),
-    CONSTRAINT request_attempts_provider_endpoint_status_revision_check CHECK ((provider_endpoint_status_revision >= 1)),
+    CONSTRAINT request_attempts_provider_origin_base_url_revision_check CHECK ((provider_origin_base_url_revision >= 1)),
+    CONSTRAINT request_attempts_provider_origin_status_revision_check CHECK ((provider_origin_status_revision >= 1)),
     CONSTRAINT request_attempts_channel_config_revision_check CHECK ((channel_config_revision >= 1)),
     CONSTRAINT request_attempts_routing_candidate_index_check CHECK ((routing_candidate_index >= 0)),
-    CONSTRAINT request_attempts_upstream_operation_check CHECK ((upstream_operation = ANY (ARRAY['chat_completions'::text, 'responses'::text, 'responses_compact'::text, 'messages'::text]))),
-    CONSTRAINT request_attempts_breaker_endpoint_disposition_check CHECK (((breaker_endpoint_disposition IS NULL) OR (breaker_endpoint_disposition = ANY (ARRAY['applied'::text, 'stale_revision'::text, 'stale_status_revision'::text, 'stale_config_revision'::text, 'stale_generation'::text, 'runtime_state_lost'::text, 'stale_integrity_epoch'::text, 'runtime_sync_required'::text, 'expired'::text, 'unknown_permit'::text, 'terminal_conflict'::text, 'result_unknown'::text, 'not_applicable'::text])))),
+    CONSTRAINT request_attempts_upstream_endpoint_check CHECK ((upstream_endpoint = ANY (ARRAY['chat_completions'::text, 'responses'::text, 'responses_compact'::text, 'messages'::text]))),
+    CONSTRAINT request_attempts_breaker_origin_disposition_check CHECK (((breaker_origin_disposition IS NULL) OR (breaker_origin_disposition = ANY (ARRAY['applied'::text, 'stale_revision'::text, 'stale_status_revision'::text, 'stale_config_revision'::text, 'stale_generation'::text, 'runtime_state_lost'::text, 'stale_integrity_epoch'::text, 'runtime_sync_required'::text, 'expired'::text, 'unknown_permit'::text, 'terminal_conflict'::text, 'result_unknown'::text, 'not_applicable'::text])))),
     CONSTRAINT request_attempts_breaker_channel_disposition_check CHECK (((breaker_channel_disposition IS NULL) OR (breaker_channel_disposition = ANY (ARRAY['applied'::text, 'stale_revision'::text, 'stale_status_revision'::text, 'stale_config_revision'::text, 'stale_generation'::text, 'runtime_state_lost'::text, 'stale_integrity_epoch'::text, 'runtime_sync_required'::text, 'expired'::text, 'unknown_permit'::text, 'terminal_conflict'::text, 'result_unknown'::text, 'not_applicable'::text]))))
 );
 
@@ -112,10 +112,10 @@ ALTER TABLE ONLY public.request_attempts
 ALTER TABLE ONLY public.request_attempts
     ADD CONSTRAINT request_attempts_request_record_id_fkey FOREIGN KEY (request_record_id) REFERENCES public.request_records(id);
 
-CREATE INDEX idx_request_attempts_provider_endpoint_id ON public.request_attempts USING btree (provider_endpoint_id);
+CREATE INDEX idx_request_attempts_provider_origin_id ON public.request_attempts USING btree (provider_origin_id);
 
 ALTER TABLE ONLY public.request_attempts
-    ADD CONSTRAINT request_attempts_provider_endpoint_id_fkey FOREIGN KEY (provider_endpoint_id) REFERENCES public.provider_endpoints(id);
+    ADD CONSTRAINT request_attempts_provider_origin_id_fkey FOREIGN KEY (provider_origin_id) REFERENCES public.provider_origins(id);
 
 -- ---------------------------------------------------------------------------
 -- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：

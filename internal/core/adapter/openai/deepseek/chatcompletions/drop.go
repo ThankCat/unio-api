@@ -12,13 +12,13 @@ import (
 
 // deepseekUserIDPattern / deepseekUserIDMaxLen 是 DeepSeek user_id 的合法约束。
 //
-// DeepSeek OpenAI 兼容端点的终端用户标识是顶层 user_id（字符集 [a-zA-Z0-9_-]、长度 ≤512），
+// DeepSeek OpenAI 兼容上游源站的终端用户标识是顶层 user_id（字符集 [a-zA-Z0-9_-]、长度 ≤512），
 // 与 OpenAI 自由格式的 user 不同（见 DEEPSEEK_OPENAI_MAPPING.md §2 与 DeepSeek API 文档）。
 var deepseekUserIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 const deepseekUserIDMaxLen = 512
 
-// deepseekAllowedExtensions 是 DeepSeek OpenAI endpoint 允许进入 upstream wire 的顶层 extension 白名单。
+// deepseekAllowedExtensions 是 DeepSeek OpenAI origin 允许进入 upstream wire 的顶层 extension 白名单。
 //
 // 见 DEEPSEEK_OPENAI_MAPPING.md §2 与 DEC-012：thinking / logprobs / top_logprobs 为 Pass，
 // 其余未登记或不可转换的 extension 一律 Drop（不进入 upstream body）。
@@ -28,7 +28,7 @@ var deepseekAllowedExtensions = map[string]bool{
 	"top_logprobs": true,
 }
 
-// unsupportedContentPartTypes 是 DeepSeek OpenAI endpoint 无法保持语义的 message content part 类型。
+// unsupportedContentPartTypes 是 DeepSeek OpenAI origin 无法保持语义的 message content part 类型。
 //
 // 见 DEEPSEEK_OPENAI_MAPPING.md §3：image_url / input_audio / file 多模态 part 在出站时 Drop。
 var unsupportedContentPartTypes = map[string]bool{

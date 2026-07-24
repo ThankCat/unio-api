@@ -9,7 +9,7 @@ import (
 )
 
 // TestGatewayRuntimeReadinessSnapshotBlocksAllPendingRoutingControls verifies that readiness
-// observes the two durable operation families which are scoped below the five critical settings.
+// observes the two durable endpoint families which are scoped below the five critical settings.
 func TestGatewayRuntimeReadinessSnapshotBlocksAllPendingRoutingControls(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
 	defer cleanup()
@@ -30,14 +30,14 @@ func TestGatewayRuntimeReadinessSnapshotBlocksAllPendingRoutingControls(t *testi
 
 	suffix := time.Now().UnixNano()
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("readiness-%d", suffix), "enabled")
-	endpointID := insertProviderEndpoint(
+	originID := insertProviderOrigin(
 		t, ctx, tx, providerID, "readiness", fmt.Sprintf("https://readiness-%d.example.test", suffix), "enabled",
 	)
 	var channelID int64
 	if err := tx.QueryRow(ctx, `INSERT INTO channels (
-		provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, status, priority
+		provider_id, provider_origin_id, name, protocol, adapter_key, credential, status, priority
 	) VALUES ($1, $2, 'readiness', 'openai', 'openai', 'sk-readiness', 'enabled', 1)
-	RETURNING id`, providerID, endpointID).Scan(&channelID); err != nil {
+	RETURNING id`, providerID, originID).Scan(&channelID); err != nil {
 		t.Fatalf("seed channel: %v", err)
 	}
 
@@ -46,7 +46,7 @@ func TestGatewayRuntimeReadinessSnapshotBlocksAllPendingRoutingControls(t *testi
 		t.Fatalf("read baseline readiness: %v", err)
 	}
 	if !baseline.RuntimeOperationsReconciled {
-		t.Fatal("expected clean durable operation baseline")
+		t.Fatal("expected clean durable endpoint baseline")
 	}
 
 	channelToken := fmt.Sprintf("readiness-channel-%d", suffix)
@@ -54,22 +54,22 @@ func TestGatewayRuntimeReadinessSnapshotBlocksAllPendingRoutingControls(t *testi
 		token, kind, channel_id, current_revision, next_revision, payload_hash, state
 	) VALUES ($1, 'channel_admission_limits', $2, 1, 2, 'pending-channel', 'preparing')`,
 		channelToken, channelID); err != nil {
-		t.Fatalf("seed pending channel operation: %v", err)
+		t.Fatalf("seed pending channel endpoint: %v", err)
 	}
 	assertRuntimeOperationsPending(t, queries, "channel admission")
 	if _, err := tx.Exec(ctx, `UPDATE runtime_control_operations
 		SET state='aborted', completed_at=now() WHERE token=$1`, channelToken); err != nil {
-		t.Fatalf("finish channel operation: %v", err)
+		t.Fatalf("finish channel endpoint: %v", err)
 	}
 
-	endpointToken := fmt.Sprintf("readiness-endpoint-%d", suffix)
-	if _, err := tx.Exec(ctx, `INSERT INTO endpoint_routing_operations (
-		token, kind, provider_id, endpoint_id, transitions, payload_hash, state
-	) VALUES ($1, 'status', $2, $3, '{}'::jsonb, 'pending-endpoint', 'preparing')`,
-		endpointToken, providerID, endpointID); err != nil {
-		t.Fatalf("seed pending endpoint operation: %v", err)
+	originToken := fmt.Sprintf("readiness-origin-%d", suffix)
+	if _, err := tx.Exec(ctx, `INSERT INTO origin_routing_operations (
+		token, kind, provider_id, origin_id, transitions, payload_hash, state
+	) VALUES ($1, 'status', $2, $3, '{}'::jsonb, 'pending-origin', 'preparing')`,
+		originToken, providerID, originID); err != nil {
+		t.Fatalf("seed pending origin endpoint: %v", err)
 	}
-	assertRuntimeOperationsPending(t, queries, "endpoint routing")
+	assertRuntimeOperationsPending(t, queries, "origin routing")
 }
 
 func assertRuntimeOperationsPending(t *testing.T, queries *sqlc.Queries, label string) {
@@ -79,6 +79,6 @@ func assertRuntimeOperationsPending(t *testing.T, queries *sqlc.Queries, label s
 		t.Fatalf("read %s readiness: %v", label, err)
 	}
 	if row.RuntimeOperationsReconciled {
-		t.Fatalf("pending %s operation must block readiness", label)
+		t.Fatalf("pending %s endpoint must block readiness", label)
 	}
 }

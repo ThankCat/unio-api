@@ -14,7 +14,7 @@ import (
 // ChannelTestStore 定义渠道自动检测 worker 所需的存储能力。
 type ChannelTestStore interface {
 	// ListChannelsForCredentialTest 返回所有启用渠道（失效的排在前面优先复检）；
-	// P4 §4.4 起连带所绑定 ProviderEndpoint 的 base_url 与两类 revision。
+	// P4 §4.4 起连带所绑定 ProviderOrigin 的 base_url 与两类 revision。
 	ListChannelsForCredentialTest(ctx context.Context) ([]sqlc.ListChannelsForCredentialTestRow, error)
 	// DeleteChannelTestLogsBeyondPerChannel 每渠道保留最近 keep 条检测日志，删更旧的（R1）。
 	DeleteChannelTestLogsBeyondPerChannel(ctx context.Context, arg sqlc.DeleteChannelTestLogsBeyondPerChannelParams) (int64, error)
@@ -116,7 +116,16 @@ func (w *ChannelTestWorker) RunOnce(ctx context.Context) (bool, error) {
 			zap.String("worker", w.Name()),
 			zap.Int64("channel_id", channelID),
 		}, failure.LogFields(err)...)
-		w.logger.Warn("channel auto-test execution failed", fields...)
+		// 巡检遇到「配置态/生命周期竞态」而非检测失败时降噪（记 Info 跳过即可）：
+		//   - CodeAdminInvalidArgument：渠道启用但无启用模型绑定，无从合成检测（新建未绑模型的常见中间态）；
+		//   - CodeAdminNotFound：渠道在「排队 → 执行」之间被删除（巡检以「轮」为单位，天然存在竞态）。
+		// 其余错误（凭据失效、上游异常、存储错误等）仍按检测失败 WARN 告警。
+		switch failure.CodeOf(err) {
+		case failure.CodeAdminInvalidArgument, failure.CodeAdminNotFound:
+			w.logger.Info("channel auto-test skipped", fields...)
+		default:
+			w.logger.Warn("channel auto-test execution failed", fields...)
+		}
 	}
 
 	if _, err := w.store.DeleteChannelTestLogsBeyondPerChannel(ctx, sqlc.DeleteChannelTestLogsBeyondPerChannelParams{

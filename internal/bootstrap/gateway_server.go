@@ -164,7 +164,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	_ = settingsStore.SeedDefaults(ctx)
 	var runtimeControlPool *pgxpool.Pool
 	if sharedBreakerStore != nil {
-		// Endpoint 围栏、普通 runtime control、四个关键 setting 与全部 Channel admission
+		// Origin 围栏、普通 runtime control、四个关键 setting 与全部 Channel admission
 		// 必须按顺序先收口，Gateway-only 部署也不能依赖 Admin 进程恢复运行态。
 		// marker/epoch 不匹配时即使 control 已重建，/readyz 仍会保持 fail-closed。
 		pool, ok := deps.DB.(*pgxpool.Pool)
@@ -184,7 +184,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		if err != nil {
 			return nil, err
 		}
-		// Only a successful full Endpoint/Channel/critical-control reconciliation may clear a
+		// Only a successful full Origin/Channel/critical-control reconciliation may clear a
 		// request-time infrastructure fault latch. /readyz itself remains read-only.
 		if reconciled, reason := runtimeReadinessChecker.ClearStoreFaultAfterReconciliation(ctx, reconciliationProof); !reconciled {
 			return nil, fmt.Errorf("bootstrap: gateway runtime reconciliation proof was rejected: %s", reason)
@@ -262,7 +262,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	responsesService.SetCostExposureRecorder(costExposureRecorder, deps.Config.Gateway.MaxOutputTokensFallback)
 	messagesService.SetCostExposureRecorder(costExposureRecorder, deps.Config.Gateway.MaxOutputTokensFallback)
 
-	// 凭据失效闸门（阶段二）：三协议共享一份进程内「连续 401」计数器；达阈值时异步把
+	// 凭据失效闸门（阶段二）：三上游源站共享一份进程内「连续 401」计数器；达阈值时异步把
 	// channels.credential_valid 翻 false + 写 runtime_401 日志，后续请求在路由候选层直接跳过该渠道。
 	credentialGate := lifecycle.NewChannelCredentialGate(
 		appsettings.GatewayCredential401Threshold(ctx, settingsStore),
@@ -272,7 +272,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	responsesService.SetCredentialGate(credentialGate)
 	messagesService.SetCredentialGate(credentialGate)
 
-	// 会话粘性路由（大 uncache 缺口 P0）：三协议共享一份 sticky 核心，同会话请求钉住上次成功渠道
+	// 会话粘性路由（大 uncache 缺口 P0）：三上游源站共享一份 sticky 核心，同会话请求钉住上次成功渠道
 	// 以保上游 prompt cache。绑定存 Redis（fail-open，故障只丢粘性不伤主链路）；全局默认/TTL 由
 	// 系统设置热更新，线路行 sticky_enabled 可覆盖开关。无 Redis（测试装配）时不启用 sticky。
 	var stickyRouter *lifecycle.StickyRouter

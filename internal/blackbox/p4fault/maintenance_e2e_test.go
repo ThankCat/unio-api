@@ -30,7 +30,7 @@ const maintenanceOperatorRef = "p4-fault-e2e"
 type maintenanceLossMode string
 
 const (
-	maintenanceMarkerOperationLoss maintenanceLossMode = "marker_operation_loss"
+	maintenanceMarkerEndpointLoss maintenanceLossMode = "marker_endpoint_loss"
 	maintenanceFullRedisLoss       maintenanceLossMode = "full_redis_loss"
 	maintenanceAOFRestoreLoss      maintenanceLossMode = "aof_restore_loss"
 	maintenanceRDBRestoreLoss      maintenanceLossMode = "rdb_restore_loss"
@@ -107,19 +107,19 @@ func runStateLossMaintenanceE2E(t *testing.T, h *faultHarness, lossMode maintena
 	}
 	assertMaintenanceState(t, runMaintenanceCommand(t, h, maintenanceBinary, beginArgs...), "awaiting_maintenance")
 
-	operation := readNonterminalEpochOperation(t, queries)
-	transition := decodeEpochTransition(t, operation)
+	endpoint := readNonterminalEpochEndpoint(t, queries)
+	transition := decodeEpochTransition(t, endpoint)
 	recoveringEpoch := readStateEpoch(t, queries)
 	pendingMarker := readStateIntegrity(t, integrityStore)
 	assertRecoveringTransition(
-		t, initialEpoch, recoveringEpoch, transition, operation, pendingMarker,
+		t, initialEpoch, recoveringEpoch, transition, endpoint, pendingMarker,
 		recoveryID, runtimecontrol.StateEpochReasonRestore,
 	)
 
-	// The same pending marker and immutable operation must make begin idempotent.
+	// The same pending marker and immutable endpoint must make begin idempotent.
 	assertMaintenanceState(t, runMaintenanceCommand(t, h, maintenanceBinary, beginArgs...), "awaiting_maintenance")
-	assertOperationIdentity(t, operation, readNonterminalEpochOperation(t, queries))
-	assertPendingMarker(t, readStateIntegrity(t, integrityStore), operation, transition)
+	assertEndpointIdentity(t, endpoint, readNonterminalEpochEndpoint(t, queries))
+	assertPendingMarker(t, readStateIntegrity(t, integrityStore), endpoint, transition)
 
 	if lossMode == maintenanceAOFRestoreLoss || lossMode == maintenanceRDBRestoreLoss {
 		controlKey := h.namespace + ":runtime-control:v1:setting:gateway.circuit_breaker"
@@ -135,7 +135,7 @@ func runStateLossMaintenanceE2E(t *testing.T, h *faultHarness, lossMode maintena
 			t.Fatalf("%s did not bring back the old ready marker: %+v", lossMode, restoredMarker)
 		}
 		assertSameEpochRecord(t, recoveringEpoch, readStateEpoch(t, queries), string(lossMode))
-		assertOperationUnchanged(t, operation, readNonterminalEpochOperation(t, queries))
+		assertEndpointUnchanged(t, endpoint, readNonterminalEpochEndpoint(t, queries))
 
 		// PostgreSQL is already on the new recovering epoch. Even though Redis now
 		// contains the old ready files, neither Gateway may treat them as current.
@@ -149,28 +149,28 @@ func runStateLossMaintenanceE2E(t *testing.T, h *faultHarness, lossMode maintena
 		pauseGatewayProcesses(t, h.gateways[:])
 		gatewaysPaused = true
 		assertMaintenanceState(t, runMaintenanceCommand(t, h, maintenanceBinary, beginArgs...), "awaiting_maintenance")
-		assertOperationUnchanged(t, operation, readNonterminalEpochOperation(t, queries))
-		assertPendingMarker(t, readStateIntegrity(t, integrityStore), operation, transition)
+		assertEndpointUnchanged(t, endpoint, readNonterminalEpochEndpoint(t, queries))
+		assertPendingMarker(t, readStateIntegrity(t, integrityStore), endpoint, transition)
 	} else {
 		// A declared RDB/AOF rollback can bring the durable old ready marker back.
-		// The same operation must rebuild its pending fence before any Gateway runs.
+		// The same endpoint must rebuild its pending fence before any Gateway runs.
 		replaceRedisHash(t, h.redis, markerKey, oldReadyMarker)
 		assertMaintenanceState(t, runMaintenanceCommand(t, h, maintenanceBinary, beginArgs...), "awaiting_maintenance")
-		assertOperationIdentity(t, operation, readNonterminalEpochOperation(t, queries))
-		assertPendingMarker(t, readStateIntegrity(t, integrityStore), operation, transition)
+		assertEndpointIdentity(t, endpoint, readNonterminalEpochEndpoint(t, queries))
+		assertPendingMarker(t, readStateIntegrity(t, integrityStore), endpoint, transition)
 
-		// A restore can also lose the marker and Redis operation entirely. PostgreSQL's
+		// A restore can also lose the marker and Redis endpoint entirely. PostgreSQL's
 		// immutable transition must reconstruct both without creating another epoch.
-		// The standard suite removes only the marker and Redis operation; the opt-in
+		// The standard suite removes only the marker and Redis endpoint; the opt-in
 		// full-loss drill uses FLUSHDB. Both must complete the same maintenance lifecycle,
 		// while public readiness remains closed until Release.
 		switch lossMode {
-		case maintenanceMarkerOperationLoss:
+		case maintenanceMarkerEndpointLoss:
 			deleteRedisKeys(
 				t,
 				h.redis,
 				markerKey,
-				h.namespace+":runtime-control:v1:op:"+operation.Token,
+				h.namespace+":runtime-control:v1:op:"+endpoint.Token,
 			)
 		case maintenanceFullRedisLoss:
 			flushIsolatedRedis(t, h.redis)
@@ -178,15 +178,15 @@ func runStateLossMaintenanceE2E(t *testing.T, h *faultHarness, lossMode maintena
 			t.Fatalf("unsupported maintenance loss mode %q", lossMode)
 		}
 		assertMaintenanceState(t, runMaintenanceCommand(t, h, maintenanceBinary, beginArgs...), "awaiting_maintenance")
-		operation = readNonterminalEpochOperation(t, queries)
-		if !operation.ExpectedMarkerHash.Valid || operation.ExpectedMarkerHash.String != breakerstore.StateEpochExpectedMarkerAbsent {
-			t.Fatalf("absent marker was not classified durably: %+v", operation.ExpectedMarkerHash)
+		endpoint = readNonterminalEpochEndpoint(t, queries)
+		if !endpoint.ExpectedMarkerHash.Valid || endpoint.ExpectedMarkerHash.String != breakerstore.StateEpochExpectedMarkerAbsent {
+			t.Fatalf("absent marker was not classified durably: %+v", endpoint.ExpectedMarkerHash)
 		}
-		assertPendingMarker(t, readStateIntegrity(t, integrityStore), operation, transition)
+		assertPendingMarker(t, readStateIntegrity(t, integrityStore), endpoint, transition)
 		pendingAfterAbsent := readRedisHash(t, h.redis, markerKey)
 
 		// An unrelated ready marker is never adopted or overwritten. Restore the
-		// captured same-operation pending hash only after proving the conflict path.
+		// captured same-endpoint pending hash only after proving the conflict path.
 		conflictEpoch := strings.Repeat("f", 32)
 		conflictRevision := transition.NewRevision + 99
 		replaceRedisHash(t, h.redis, markerKey, map[string]string{
@@ -200,16 +200,16 @@ func runStateLossMaintenanceE2E(t *testing.T, h *faultHarness, lossMode maintena
 		if !conflictingMarker.Ready(conflictEpoch, conflictRevision) {
 			t.Fatalf("conflicting marker was overwritten: %+v", conflictingMarker)
 		}
-		conflictOperation := readNonterminalEpochOperation(t, queries)
-		assertOperationIdentity(t, operation, conflictOperation)
-		if !conflictOperation.ExpectedMarkerHash.Valid || conflictOperation.ExpectedMarkerHash.String != breakerstore.StateEpochExpectedMarkerAbsent {
-			t.Fatalf("conflict changed durable expected marker: %+v", conflictOperation.ExpectedMarkerHash)
+		conflictEndpoint := readNonterminalEpochEndpoint(t, queries)
+		assertEndpointIdentity(t, endpoint, conflictEndpoint)
+		if !conflictEndpoint.ExpectedMarkerHash.Valid || conflictEndpoint.ExpectedMarkerHash.String != breakerstore.StateEpochExpectedMarkerAbsent {
+			t.Fatalf("conflict changed durable expected marker: %+v", conflictEndpoint.ExpectedMarkerHash)
 		}
 		assertSameEpochRecord(t, recoveringEpoch, readStateEpoch(t, queries), "marker conflict")
 
 		replaceRedisHash(t, h.redis, markerKey, pendingAfterAbsent)
 		assertMaintenanceState(t, runMaintenanceCommand(t, h, maintenanceBinary, beginArgs...), "awaiting_maintenance")
-		assertPendingMarker(t, readStateIntegrity(t, integrityStore), operation, transition)
+		assertPendingMarker(t, readStateIntegrity(t, integrityStore), endpoint, transition)
 	}
 
 	resumeGatewayProcesses(h.gateways[:])
@@ -233,23 +233,23 @@ func runStateLossMaintenanceE2E(t *testing.T, h *faultHarness, lossMode maintena
 
 	readyLockedEpoch := readStateEpoch(t, queries)
 	readyLockedMarker := readStateIntegrity(t, integrityStore)
-	awaitingRelease := readNonterminalEpochOperation(t, queries)
+	awaitingRelease := readNonterminalEpochEndpoint(t, queries)
 	if readyLockedEpoch.Value.State != runtimecontrol.StateEpochReady || readyLockedEpoch.Value.ActivatedAt == nil ||
 		readyLockedEpoch.Value.Epoch != transition.NewEpoch || readyLockedEpoch.Revision != transition.NewRevision {
 		t.Fatalf("commit did not activate the bound ready epoch: %+v", readyLockedEpoch)
 	}
 	if !readyLockedMarker.Ready(transition.NewEpoch, transition.NewRevision) ||
-		readyLockedMarker.LastOperationToken != operation.Token || awaitingRelease.State != "awaiting_release" {
-		t.Fatalf("commit did not keep the maintenance lock: marker=%+v operation=%+v", readyLockedMarker, awaitingRelease)
+		readyLockedMarker.LastOperationToken != endpoint.Token || awaitingRelease.State != "awaiting_release" {
+		t.Fatalf("commit did not keep the maintenance lock: marker=%+v endpoint=%+v", readyLockedMarker, awaitingRelease)
 	}
 	for _, gateway := range h.gateways {
 		h.assertReadiness(t, gateway, http.StatusServiceUnavailable)
 	}
 
 	// A lost Commit response retries against the same new-ready marker and never
-	// rotates the epoch or creates a second operation.
+	// rotates the epoch or creates a second endpoint.
 	assertMaintenanceState(t, runMaintenanceCommand(t, h, maintenanceBinary, commitArgs...), "awaiting_release")
-	assertOperationIdentity(t, awaitingRelease, readNonterminalEpochOperation(t, queries))
+	assertEndpointIdentity(t, awaitingRelease, readNonterminalEpochEndpoint(t, queries))
 	assertSameEpochRecord(t, readyLockedEpoch, readStateEpoch(t, queries), "commit retry")
 	waitForMaintenanceSmokeAdmission(t, h, integrityStore, queries, 15*time.Second)
 
@@ -270,22 +270,22 @@ func runStateLossMaintenanceE2E(t *testing.T, h *faultHarness, lossMode maintena
 		t.Fatalf(
 			"failed smoke did not reach upstream: status=%d body=%s upstream_delta=%d "+
 				"ready_status=%d ready_body=%s ready_err=%v infrastructure_fault=%v reconciliation_proof=%v "+
-				"loss_mode=%s epoch=%+v operation_state=%s marker=%+v readiness_snapshot=%+v readiness_snapshot_err=%v gateway_log=%s",
+				"loss_mode=%s epoch=%+v endpoint_state=%s marker=%+v readiness_snapshot=%+v readiness_snapshot_err=%v gateway_log=%s",
 			status, body, afterFailure.total-beforeFailure.total,
 			readyStatus, readyBody, readyErr, faultExists, proofExists,
-			lossMode, readStateEpoch(t, queries), readNonterminalEpochOperation(t, queries).State,
+			lossMode, readStateEpoch(t, queries), readNonterminalEpochEndpoint(t, queries).State,
 			readStateIntegrity(t, integrityStore), readinessSnapshot, readinessSnapshotErr, h.gateways[0].logs(),
 		)
 	}
 	assertSameEpochRecord(t, readyLockedEpoch, readStateEpoch(t, queries), "failed smoke")
-	assertOperationIdentity(t, awaitingRelease, readNonterminalEpochOperation(t, queries))
+	assertEndpointIdentity(t, awaitingRelease, readNonterminalEpochEndpoint(t, queries))
 	if marker := readStateIntegrity(t, integrityStore); !marker.Ready(transition.NewEpoch, transition.NewRevision) {
 		t.Fatalf("failed smoke changed ready marker: %+v", marker)
 	}
 
 	smokeCheckedAt, smokeSummary := runSixModeMaintenanceSmoke(t, h)
 
-	// Evidence collected before Redis/PG activation must not unlock the operation.
+	// Evidence collected before Redis/PG activation must not unlock the endpoint.
 	preCommitRelease := releaseMaintenanceEvidence(
 		t, transition, readyLockedEpoch.Value.ActivatedAt.Add(-time.Nanosecond), "pre-commit-smoke",
 	)
@@ -297,7 +297,7 @@ func runStateLossMaintenanceE2E(t *testing.T, h *faultHarness, lossMode maintena
 		"--revision", strconv.FormatInt(transition.NewRevision, 10),
 	}
 	runMaintenanceCommandExpectFailure(t, h, maintenanceBinary, invalidReleaseArgs...)
-	assertOperationIdentity(t, awaitingRelease, readNonterminalEpochOperation(t, queries))
+	assertEndpointIdentity(t, awaitingRelease, readNonterminalEpochEndpoint(t, queries))
 	assertSameEpochRecord(t, readyLockedEpoch, readStateEpoch(t, queries), "invalid release evidence")
 
 	releaseEvidence := releaseMaintenanceEvidence(
@@ -316,11 +316,11 @@ func runStateLossMaintenanceE2E(t *testing.T, h *faultHarness, lossMode maintena
 	assertMaintenanceState(t, runMaintenanceCommand(t, h, maintenanceBinary, releaseArgs...), "ready")
 	assertSameEpochRecord(t, readyLockedEpoch, readStateEpoch(t, queries), "release")
 	if _, err := queries.GetNonterminalRuntimeStateEpochOperation(context.Background()); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("release left a nonterminal epoch operation: %v", err)
+		t.Fatalf("release left a nonterminal epoch endpoint: %v", err)
 	}
 	latest, err := queries.GetLatestCommittedRuntimeStateEpochOperation(context.Background())
-	if err != nil || latest.Token != operation.Token || latest.State != "committed" || len(latest.ReleaseEvidence) == 0 {
-		t.Fatalf("release did not durably finish the same operation: operation=%+v err=%v", latest, err)
+	if err != nil || latest.Token != endpoint.Token || latest.State != "committed" || len(latest.ReleaseEvidence) == 0 {
+		t.Fatalf("release did not durably finish the same endpoint: endpoint=%+v err=%v", latest, err)
 	}
 	for _, gateway := range h.gateways {
 		h.waitReadiness(t, gateway, http.StatusOK, 5*time.Second)
@@ -351,7 +351,7 @@ func runRepeatedStateLossMaintenanceCycle(
 	queries *sqlc.Queries,
 	integrityStore *breakerstore.Store,
 	currentEpoch runtimecontrol.StateEpochRecord,
-	previousOperation sqlc.RuntimeControlOperation,
+	previousEndpoint sqlc.RuntimeControlOperation,
 	staleBeginArgs []string,
 	staleCommitArgs []string,
 	staleReleaseArgs []string,
@@ -381,27 +381,27 @@ func runRepeatedStateLossMaintenanceCycle(
 	}
 	assertMaintenanceState(t, runMaintenanceCommand(t, h, maintenanceBinary, beginArgs...), "awaiting_maintenance")
 
-	operation := readNonterminalEpochOperation(t, queries)
-	transition := decodeEpochTransition(t, operation)
+	endpoint := readNonterminalEpochEndpoint(t, queries)
+	transition := decodeEpochTransition(t, endpoint)
 	recoveringEpoch := readStateEpoch(t, queries)
 	assertRecoveringTransition(
 		t,
 		currentEpoch,
 		recoveringEpoch,
 		transition,
-		operation,
+		endpoint,
 		readStateIntegrity(t, integrityStore),
 		recoveryID,
 		runtimecontrol.StateEpochReasonStateLoss,
 	)
-	if operation.Token == previousOperation.Token ||
-		operation.CurrentRevision != currentEpoch.Revision || operation.NextRevision != currentEpoch.Revision+1 {
-		t.Fatalf("repeated state loss reused the old operation: previous=%+v current=%+v", previousOperation, operation)
+	if endpoint.Token == previousEndpoint.Token ||
+		endpoint.CurrentRevision != currentEpoch.Revision || endpoint.NextRevision != currentEpoch.Revision+1 {
+		t.Fatalf("repeated state loss reused the old endpoint: previous=%+v current=%+v", previousEndpoint, endpoint)
 	}
 
-	// A completed recovery cannot be reused once the next operation is active.
+	// A completed recovery cannot be reused once the next endpoint is active.
 	runMaintenanceCommandExpectFailure(t, h, maintenanceBinary, staleBeginArgs...)
-	assertOperationUnchanged(t, operation, readNonterminalEpochOperation(t, queries))
+	assertEndpointUnchanged(t, endpoint, readNonterminalEpochEndpoint(t, queries))
 	assertSameEpochRecord(t, recoveringEpoch, readStateEpoch(t, queries), "stale begin")
 
 	resumeGatewayProcesses(h.gateways[:])
@@ -420,22 +420,22 @@ func runRepeatedStateLossMaintenanceCycle(
 		"--revision", strconv.FormatInt(transition.NewRevision, 10),
 	}
 
-	// The previous operation's identity and approved evidence cannot commit this one.
+	// The previous endpoint's identity and approved evidence cannot commit this one.
 	runMaintenanceCommandExpectFailure(t, h, maintenanceBinary, staleCommitArgs...)
-	assertOperationUnchanged(t, operation, readNonterminalEpochOperation(t, queries))
+	assertEndpointUnchanged(t, endpoint, readNonterminalEpochEndpoint(t, queries))
 	assertSameEpochRecord(t, recoveringEpoch, readStateEpoch(t, queries), "stale commit evidence")
 
 	assertMaintenanceState(t, runMaintenanceCommand(t, h, maintenanceBinary, commitArgs...), "awaiting_release")
 	readyLockedEpoch := readStateEpoch(t, queries)
 	readyLockedMarker := readStateIntegrity(t, integrityStore)
-	awaitingRelease := readNonterminalEpochOperation(t, queries)
+	awaitingRelease := readNonterminalEpochEndpoint(t, queries)
 	if readyLockedEpoch.Value.State != runtimecontrol.StateEpochReady || readyLockedEpoch.Value.ActivatedAt == nil ||
 		readyLockedEpoch.Value.Epoch != transition.NewEpoch || readyLockedEpoch.Revision != currentEpoch.Revision+1 ||
 		!readyLockedMarker.Ready(transition.NewEpoch, transition.NewRevision) ||
-		readyLockedMarker.LastOperationToken != operation.Token || awaitingRelease.State != "awaiting_release" ||
-		awaitingRelease.Token != operation.Token {
+		readyLockedMarker.LastOperationToken != endpoint.Token || awaitingRelease.State != "awaiting_release" ||
+		awaitingRelease.Token != endpoint.Token {
 		t.Fatalf(
-			"repeated state-loss commit did not keep the new maintenance lock: epoch=%+v marker=%+v operation=%+v",
+			"repeated state-loss commit did not keep the new maintenance lock: epoch=%+v marker=%+v endpoint=%+v",
 			readyLockedEpoch,
 			readyLockedMarker,
 			awaitingRelease,
@@ -445,9 +445,9 @@ func runRepeatedStateLossMaintenanceCycle(
 		h.assertReadiness(t, gateway, http.StatusServiceUnavailable)
 	}
 
-	// The previous operation's smoke evidence cannot release the new lock.
+	// The previous endpoint's smoke evidence cannot release the new lock.
 	runMaintenanceCommandExpectFailure(t, h, maintenanceBinary, staleReleaseArgs...)
-	assertOperationUnchanged(t, awaitingRelease, readNonterminalEpochOperation(t, queries))
+	assertEndpointUnchanged(t, awaitingRelease, readNonterminalEpochEndpoint(t, queries))
 	assertSameEpochRecord(t, readyLockedEpoch, readStateEpoch(t, queries), "stale release evidence")
 	for _, gateway := range h.gateways {
 		h.assertReadiness(t, gateway, http.StatusServiceUnavailable)
@@ -466,12 +466,12 @@ func runRepeatedStateLossMaintenanceCycle(
 	assertMaintenanceState(t, runMaintenanceCommand(t, h, maintenanceBinary, releaseArgs...), "ready")
 	assertSameEpochRecord(t, readyLockedEpoch, readStateEpoch(t, queries), "repeated state-loss release")
 	if _, err := queries.GetNonterminalRuntimeStateEpochOperation(context.Background()); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("repeated state-loss release left a nonterminal epoch operation: %v", err)
+		t.Fatalf("repeated state-loss release left a nonterminal epoch endpoint: %v", err)
 	}
 	latest, err := queries.GetLatestCommittedRuntimeStateEpochOperation(context.Background())
-	if err != nil || latest.Token != operation.Token || latest.Token == previousOperation.Token ||
+	if err != nil || latest.Token != endpoint.Token || latest.Token == previousEndpoint.Token ||
 		latest.State != "committed" || len(latest.ReleaseEvidence) == 0 {
-		t.Fatalf("repeated state-loss release did not finish the new operation: operation=%+v err=%v", latest, err)
+		t.Fatalf("repeated state-loss release did not finish the new endpoint: endpoint=%+v err=%v", latest, err)
 	}
 	for _, gateway := range h.gateways {
 		h.waitReadiness(t, gateway, http.StatusOK, 5*time.Second)
@@ -602,20 +602,20 @@ func readStateEpoch(t *testing.T, queries *sqlc.Queries) runtimecontrol.StateEpo
 	return runtimecontrol.StateEpochRecord{Value: epoch, Revision: row.Revision}
 }
 
-func readNonterminalEpochOperation(t *testing.T, queries *sqlc.Queries) sqlc.RuntimeControlOperation {
+func readNonterminalEpochEndpoint(t *testing.T, queries *sqlc.Queries) sqlc.RuntimeControlOperation {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	operation, err := queries.GetNonterminalRuntimeStateEpochOperation(ctx)
+	endpoint, err := queries.GetNonterminalRuntimeStateEpochOperation(ctx)
 	if err != nil {
-		t.Fatalf("read nonterminal runtime state operation: %v", err)
+		t.Fatalf("read nonterminal runtime state endpoint: %v", err)
 	}
-	return operation
+	return endpoint
 }
 
-func decodeEpochTransition(t *testing.T, operation sqlc.RuntimeControlOperation) runtimecontrol.StateEpochTransition {
+func decodeEpochTransition(t *testing.T, endpoint sqlc.RuntimeControlOperation) runtimecontrol.StateEpochTransition {
 	t.Helper()
-	transition, err := runtimecontrol.DecodeStateEpochTransition(operation.EpochTransition)
+	transition, err := runtimecontrol.DecodeStateEpochTransition(endpoint.EpochTransition)
 	if err != nil {
 		t.Fatalf("decode runtime state transition: %v", err)
 	}
@@ -637,7 +637,7 @@ func assertRecoveringTransition(
 	t *testing.T,
 	initial, recovering runtimecontrol.StateEpochRecord,
 	transition runtimecontrol.StateEpochTransition,
-	operation sqlc.RuntimeControlOperation,
+	endpoint sqlc.RuntimeControlOperation,
 	marker breakerstore.StateIntegritySnapshot,
 	recoveryID string,
 	reason runtimecontrol.StateEpochReason,
@@ -652,43 +652,43 @@ func assertRecoveringTransition(
 	}
 	if recovering.Value.State != runtimecontrol.StateEpochRecovering ||
 		recovering.Value.Epoch != transition.NewEpoch || recovering.Revision != transition.NewRevision ||
-		operation.State != "db_committed" {
-		t.Fatalf("begin did not establish recovering/db_committed: epoch=%+v operation=%+v", recovering, operation)
+		endpoint.State != "db_committed" {
+		t.Fatalf("begin did not establish recovering/db_committed: epoch=%+v endpoint=%+v", recovering, endpoint)
 	}
-	assertPendingMarker(t, marker, operation, transition)
+	assertPendingMarker(t, marker, endpoint, transition)
 }
 
 func assertPendingMarker(
 	t *testing.T,
 	marker breakerstore.StateIntegritySnapshot,
-	operation sqlc.RuntimeControlOperation,
+	endpoint sqlc.RuntimeControlOperation,
 	transition runtimecontrol.StateEpochTransition,
 ) {
 	t.Helper()
 	if !marker.Exists || marker.State != "pending" ||
-		marker.OperationToken != operation.Token || marker.TransitionHash != operation.PayloadHash ||
+		marker.OperationToken != endpoint.Token || marker.TransitionHash != endpoint.PayloadHash ||
 		marker.NewEpoch != transition.NewEpoch || marker.NewRevision != transition.NewRevision {
-		t.Fatalf("runtime state marker is not the bound pending fence: marker=%+v operation=%+v", marker, operation)
+		t.Fatalf("runtime state marker is not the bound pending fence: marker=%+v endpoint=%+v", marker, endpoint)
 	}
 }
 
-func assertOperationIdentity(t *testing.T, want, got sqlc.RuntimeControlOperation) {
+func assertEndpointIdentity(t *testing.T, want, got sqlc.RuntimeControlOperation) {
 	t.Helper()
 	if got.Token != want.Token || got.PayloadHash != want.PayloadHash ||
 		got.CurrentRevision != want.CurrentRevision || got.NextRevision != want.NextRevision {
-		t.Fatalf("runtime state operation identity changed: want=%+v got=%+v", want, got)
+		t.Fatalf("runtime state endpoint identity changed: want=%+v got=%+v", want, got)
 	}
 }
 
-func assertOperationUnchanged(t *testing.T, want, got sqlc.RuntimeControlOperation) {
+func assertEndpointUnchanged(t *testing.T, want, got sqlc.RuntimeControlOperation) {
 	t.Helper()
-	assertOperationIdentity(t, want, got)
+	assertEndpointIdentity(t, want, got)
 	if got.State != want.State ||
 		got.ExpectedMarkerHash.Valid != want.ExpectedMarkerHash.Valid ||
 		got.ExpectedMarkerHash.String != want.ExpectedMarkerHash.String ||
 		string(got.RecoveryEvidence) != string(want.RecoveryEvidence) ||
 		string(got.ReleaseEvidence) != string(want.ReleaseEvidence) {
-		t.Fatalf("runtime state operation changed after rejected command: want=%+v got=%+v", want, got)
+		t.Fatalf("runtime state endpoint changed after rejected command: want=%+v got=%+v", want, got)
 	}
 }
 
@@ -757,7 +757,7 @@ func waitForRecoveredRuntimeControls(t *testing.T, h *faultHarness, timeout time
 		h.namespace + ":runtime-control:v1:setting:gateway.routing_balance",
 		h.namespace + ":admission:v1:channel:" + formatID(h.seed.openAIChannelID),
 		h.namespace + ":admission:v1:channel:" + formatID(h.seed.anthropicChannelID),
-		h.namespace + ":breaker:v2:endpoint:" + formatID(h.seed.endpointID),
+		h.namespace + ":breaker:v2:origin:" + formatID(h.seed.originID),
 	}
 	deadline := time.Now().Add(timeout)
 	var existing int64
@@ -815,7 +815,7 @@ func waitForMaintenanceSmokeAdmission(
 		t.Fatalf("decode maintenance smoke epoch: %v", err)
 	}
 	if !snapshot.RuntimeMaintenanceSmokeAllowed {
-		t.Fatalf("durable maintenance operation does not allow smoke: %+v", snapshot)
+		t.Fatalf("durable maintenance endpoint does not allow smoke: %+v", snapshot)
 	}
 	readinessInput := breakerstore.RuntimeReadinessInput{
 		Epoch:                    epoch.Epoch,

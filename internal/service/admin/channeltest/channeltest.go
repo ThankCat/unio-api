@@ -35,7 +35,7 @@ const channelModelStatusEnabled = "enabled"
 // 检测失败的稳定错误码（供前端按类型渲染 / 运营归因）。
 const (
 	ErrCodeCredentialInvalid = "credential_invalid" // 凭据无效 / 无权限（401/403）
-	ErrCodeModelUnavailable  = "model_unavailable"  // 模型不可用 / 端点不存在（404/其余 4xx）
+	ErrCodeModelUnavailable  = "model_unavailable"  // 模型不可用 / 上游源站不存在（404/其余 4xx）
 	ErrCodeTimeout           = "timeout"            // 超时（未在超时时间内响应）
 	ErrCodeUnreachable       = "unreachable"        // 连不上（连接失败 / DNS / 网络错误）
 	ErrCodeRateLimited       = "rate_limited"       // 上游限流（429，可重试，不代表渠道坏）
@@ -97,8 +97,8 @@ type PermissionRecheckInput struct {
 	ChannelID               int64
 	ModelID                 int64
 	ChannelConfigRevision   int64
-	EndpointBaseURLRevision int64
-	EndpointStatusRevision  int64
+	OriginBaseURLRevision int64
+	OriginStatusRevision  int64
 }
 
 // PermissionRecheckResult 是一次只针对指定绑定的真实探测结果。
@@ -145,9 +145,9 @@ type probeSnapshot struct {
 	CredentialValid         bool
 	ConfigRevision          int64
 	ProviderSlug            string
-	EndpointBaseURL         string
-	EndpointBaseURLRevision int64
-	EndpointStatusRevision  int64
+	OriginBaseURL         string
+	OriginBaseURLRevision int64
+	OriginStatusRevision  int64
 }
 
 // Test 对指定渠道执行一次主动检测。读取、探测与结果回写均冻结三类 revision；迟到结果只写历史日志。
@@ -182,7 +182,7 @@ func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 // 都不会翻整个 Channel 的 credential_valid 或覆盖 last_test_*。调用方随后按 Stale/Success CAS 收口 Redis。
 func (s *Service) RecheckPermission(ctx context.Context, in PermissionRecheckInput) (PermissionRecheckResult, error) {
 	if in.ChannelID <= 0 || in.ModelID <= 0 || in.ChannelConfigRevision <= 0 ||
-		in.EndpointBaseURLRevision <= 0 || in.EndpointStatusRevision <= 0 {
+		in.OriginBaseURLRevision <= 0 || in.OriginStatusRevision <= 0 {
 		return PermissionRecheckResult{}, invalidArgument("permission_recheck", "permission recheck identity is invalid")
 	}
 
@@ -300,8 +300,8 @@ func probeSnapshotFromRow(row sqlc.GetChannelProbeSnapshotRow) probeSnapshot {
 	return probeSnapshot{
 		ChannelID: row.ChannelID, Protocol: row.Protocol, AdapterKey: row.AdapterKey,
 		Credential: row.Credential, CredentialValid: row.CredentialValid, ConfigRevision: row.ConfigRevision,
-		ProviderSlug: row.ProviderSlug, EndpointBaseURL: row.EndpointBaseUrl,
-		EndpointBaseURLRevision: row.EndpointBaseUrlRevision, EndpointStatusRevision: row.EndpointStatusRevision,
+		ProviderSlug: row.ProviderSlug, OriginBaseURL: row.OriginBaseUrl,
+		OriginBaseURLRevision: row.OriginBaseUrlRevision, OriginStatusRevision: row.OriginStatusRevision,
 	}
 }
 
@@ -309,8 +309,8 @@ func probeSnapshotFromRotation(row sqlc.PrepareChannelCredentialRotationRow) pro
 	return probeSnapshot{
 		ChannelID: row.ChannelID, Protocol: row.Protocol, AdapterKey: row.AdapterKey,
 		Credential: row.Credential, CredentialValid: row.CredentialValid, ConfigRevision: row.ConfigRevision,
-		ProviderSlug: row.ProviderSlug, EndpointBaseURL: row.EndpointBaseUrl,
-		EndpointBaseURLRevision: row.EndpointBaseUrlRevision, EndpointStatusRevision: row.EndpointStatusRevision,
+		ProviderSlug: row.ProviderSlug, OriginBaseURL: row.OriginBaseUrl,
+		OriginBaseURLRevision: row.OriginBaseUrlRevision, OriginStatusRevision: row.OriginStatusRevision,
 	}
 }
 
@@ -330,7 +330,7 @@ func (s *Service) executeProbe(ctx context.Context, snapshot probeSnapshot, mode
 func (s *Service) executeProbeCandidates(ctx context.Context, snapshot probeSnapshot, candidates []string) TestResult {
 	probeTimeout := appsettings.AdminBackendChannelTestProbeTimeout(ctx, s.settings)
 	runtime := corechannel.Runtime{
-		ID: snapshot.ChannelID, BaseURL: snapshot.EndpointBaseURL,
+		ID: snapshot.ChannelID, BaseURL: snapshot.OriginBaseURL,
 		APIKey: strings.TrimSpace(snapshot.Credential), Timeout: probeTimeout, ProviderSlug: snapshot.ProviderSlug,
 	}
 	var result TestResult
@@ -386,8 +386,8 @@ func (s *Service) permissionRecheckSnapshot(
 		}
 	}
 	stale := snapshot.ConfigRevision != in.ChannelConfigRevision ||
-		snapshot.EndpointBaseURLRevision != in.EndpointBaseURLRevision ||
-		snapshot.EndpointStatusRevision != in.EndpointStatusRevision ||
+		snapshot.OriginBaseURLRevision != in.OriginBaseURLRevision ||
+		snapshot.OriginStatusRevision != in.OriginStatusRevision ||
 		!found || binding.Status != channelModelStatusEnabled
 	return snapshot, binding, stale, nil
 }
@@ -407,8 +407,8 @@ func (s *Service) insertPermissionRecheckAudit(
 		ErrorCode: optText(probe.ErrorCode), HttpStatus: optInt4(int32(probe.HTTPStatus)),
 		LatencyMs: optInt4(clampInt32(probe.LatencyMs)), TestedModel: optText(probe.TestedModel),
 		Message:                       optText(message),
-		TestedEndpointBaseUrlRevision: pgtype.Int8{Int64: in.EndpointBaseURLRevision, Valid: true},
-		TestedEndpointStatusRevision:  pgtype.Int8{Int64: in.EndpointStatusRevision, Valid: true},
+		TestedOriginBaseUrlRevision: pgtype.Int8{Int64: in.OriginBaseURLRevision, Valid: true},
+		TestedOriginStatusRevision:  pgtype.Int8{Int64: in.OriginStatusRevision, Valid: true},
 		TestedConfigRevision:          pgtype.Int8{Int64: in.ChannelConfigRevision, Valid: true},
 	})
 	if err != nil {
@@ -420,7 +420,7 @@ func (s *Service) insertPermissionRecheckAudit(
 func stalePermissionProbe(testedModel string) TestResult {
 	return TestResult{
 		Success: false, TestedModel: testedModel, ErrorCode: "stale_revision",
-		Message:  "权限复检对应的渠道、端点或模型绑定已变化，旧结果仅留审计",
+		Message:  "权限复检对应的渠道、上游源站或模型绑定已变化，旧结果仅留审计",
 		TestedAt: time.Now().UTC(),
 	}
 }
@@ -449,8 +449,8 @@ func (s *Service) applyProbeResult(ctx context.Context, snapshot probeSnapshot, 
 	}
 	return s.store.ApplyChannelProbeResult(ctx, sqlc.ApplyChannelProbeResultParams{
 		ChannelID: snapshot.ChannelID, ExpectedConfigRevision: snapshot.ConfigRevision,
-		ExpectedEndpointBaseUrlRevision: snapshot.EndpointBaseURLRevision,
-		ExpectedEndpointStatusRevision:  snapshot.EndpointStatusRevision,
+		ExpectedOriginBaseUrlRevision: snapshot.OriginBaseURLRevision,
+		ExpectedOriginStatusRevision:  snapshot.OriginStatusRevision,
 		Success:                         pgtype.Bool{Bool: result.Success, Valid: true},
 		LastTestLatencyMs:               pgtype.Int4{Int32: clampInt32(result.LatencyMs), Valid: true},
 		LastTestError:                   testErrorParam(result), NextCredentialValid: nextCredentialValid,
@@ -460,8 +460,8 @@ func (s *Service) applyProbeResult(ctx context.Context, snapshot probeSnapshot, 
 }
 
 func setTestedRevisions(verification *adminchannel.CredentialVerification, snapshot probeSnapshot) {
-	verification.TestedEndpointBaseURLRevision = int64Ptr(snapshot.EndpointBaseURLRevision)
-	verification.TestedEndpointStatusRevision = int64Ptr(snapshot.EndpointStatusRevision)
+	verification.TestedOriginBaseURLRevision = int64Ptr(snapshot.OriginBaseURLRevision)
+	verification.TestedOriginStatusRevision = int64Ptr(snapshot.OriginStatusRevision)
 	verification.TestedConfigRevision = int64Ptr(snapshot.ConfigRevision)
 }
 
@@ -519,8 +519,8 @@ type LogEntry struct {
 	CredentialValidAfter          bool
 	Message                       string
 	UpstreamError                 string
-	TestedEndpointBaseURLRevision *int64
-	TestedEndpointStatusRevision  *int64
+	TestedOriginBaseURLRevision *int64
+	TestedOriginStatusRevision  *int64
 	TestedConfigRevision          *int64
 	StateChangeApplied            bool
 }
@@ -552,8 +552,8 @@ func (s *Service) ListLogs(ctx context.Context, channelID int64, limit, offset i
 			ErrorCode: r.ErrorCode.String, HTTPStatus: int(r.HttpStatus.Int32), LatencyMs: int64(r.LatencyMs.Int32),
 			TestedModel: r.TestedModel.String, CredentialValidAfter: r.CredentialValidAfter,
 			Message: r.Message.String, UpstreamError: r.UpstreamError.String,
-			TestedEndpointBaseURLRevision: nullableInt64(r.TestedEndpointBaseUrlRevision),
-			TestedEndpointStatusRevision:  nullableInt64(r.TestedEndpointStatusRevision),
+			TestedOriginBaseURLRevision: nullableInt64(r.TestedOriginBaseUrlRevision),
+			TestedOriginStatusRevision:  nullableInt64(r.TestedOriginStatusRevision),
 			TestedConfigRevision:          nullableInt64(r.TestedConfigRevision),
 			StateChangeApplied:            r.StateChangeApplied,
 		})
@@ -636,7 +636,7 @@ func classifyProbeError(err error, probeTimeout time.Duration, waited time.Durat
 		return ErrCodeTimeout, fmt.Sprintf("检测超时：上游在 %.0fs 内未响应", timeoutSecondsForMessage(probeTimeout, waited))
 	case adapter.UpstreamErrorBadRequest:
 		if status == http.StatusNotFound {
-			return ErrCodeModelUnavailable, "上游未找到该模型或端点（404）"
+			return ErrCodeModelUnavailable, "上游未找到该模型或上游源站（404）"
 		}
 		return ErrCodeModelUnavailable, fmt.Sprintf("上游拒绝请求（%d）：可能模型不可用或参数不被支持", status)
 	case adapter.UpstreamErrorCanceled:

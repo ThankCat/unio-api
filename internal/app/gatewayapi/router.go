@@ -34,7 +34,7 @@ type RouterDeps struct {
 	// HTTPMetrics 记录 HTTP 层请求指标；nil 表示不采集。
 	HTTPMetrics httpmw.MetricsRecorder
 
-	// MetricsHandler 暴露 Prometheus /metrics；nil 表示不挂载该端点。
+	// MetricsHandler 暴露 Prometheus /metrics；nil 表示不挂载该上游源站。
 	MetricsHandler http.Handler
 }
 
@@ -111,8 +111,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 		r.Method(http.MethodPost, "/chat/completions", admitted("/v1/chat/completions", middleware.RequestAdmissionOpenAI,
 			gatewaychat.NewChatCompletionsHandler(deps.ChatCompletionService)))
 
-		// OpenAI Responses API（Codex 兼容）。compact/input_tokens 是 /responses 子集协议；
-		// 有状态 endpoint（retrieve/delete/cancel/input_items）Unio 无服务端存储，统一 501。
+		// OpenAI Responses API（Codex 兼容）。compact/input_tokens 是 /responses 子上游源站；
+		// 有状态 origin（retrieve/delete/cancel/input_items）Unio 无服务端存储，统一 501。
 		r.Method(http.MethodPost, "/responses", admitted("/v1/responses", middleware.RequestAdmissionOpenAI,
 			gatewayresponses.NewResponsesHandler(deps.ResponsesService)))
 		r.Method(http.MethodPost, "/responses/compact", admitted("/v1/responses/compact", middleware.RequestAdmissionOpenAI,

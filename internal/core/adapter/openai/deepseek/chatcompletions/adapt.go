@@ -39,7 +39,7 @@ func normalizeReasoningEffort(effort string) (string, bool) {
 
 // adaptMaxCompletionTokens 把 OpenAI 新版 max_completion_tokens 塌缩为 DeepSeek wire 的 max_tokens。
 //
-// DeepSeek 端点只认 max_tokens；客户同时传两者时优先 completion tokens（路线 C 前 base 的
+// DeepSeek 上游源站只认 max_tokens；客户同时传两者时优先 completion tokens（路线 C 前 base 的
 // 既有冲突规则，见 DEEPSEEK_OPENAI_MAPPING §2 / protocol-and-params §2）。这是 Adapt 不是 Drop，
 // 不计入 dropped 审计。req 为值传递，改写对调用方无副作用。
 func adaptMaxCompletionTokens(req chatcompletionsadapter.ChatRequest) chatcompletionsadapter.ChatRequest {

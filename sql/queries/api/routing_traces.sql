@@ -1,13 +1,13 @@
 -- name: UpsertRoutingDecisionTrace :exec
 INSERT INTO routing_decision_traces (
-    request_record_id, route_id, mode, requested_model_id, protocol, operation,
+    request_record_id, route_id, mode, requested_model_id, protocol, endpoint,
     pool_size, candidate_count, sticky_channel_id, sticky_pinned, sticky_invalid,
     all_capacity_zero, margin_guard_triggered, abnormal,
     abnormal_reasons, candidate_scores, selected_order, fallback_chain,
     algorithm_version, sampled
 ) VALUES (
     sqlc.arg(request_record_id), sqlc.arg(route_id), sqlc.arg(mode),
-    sqlc.arg(requested_model_id), sqlc.arg(protocol), sqlc.arg(operation),
+    sqlc.arg(requested_model_id), sqlc.arg(protocol), sqlc.arg(endpoint),
     sqlc.arg(pool_size), sqlc.arg(candidate_count), sqlc.narg(sticky_channel_id),
     sqlc.arg(sticky_pinned), sqlc.arg(sticky_invalid), sqlc.arg(all_capacity_zero),
     sqlc.arg(margin_guard_triggered), sqlc.arg(abnormal),

@@ -81,11 +81,11 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 			UpstreamCostWithoutUsageReasonCode: "responses_compact_missing_usage",
 			UpstreamCostWithoutUsageReason:     "native /responses/compact returned 2xx without billable usage; upstream cost may have been incurred",
 		},
-		operationForCandidate: func(candidate routing.ChatRouteCandidate) requestlog.UpstreamOperation {
+		endpointForCandidate: func(candidate routing.ChatRouteCandidate) requestlog.UpstreamEndpoint {
 			if s.registry.HasResponsesCompact(candidate.AdapterKey) {
-				return requestlog.UpstreamOperationResponsesCompact
+				return requestlog.UpstreamEndpointResponsesCompact
 			}
-			return requestlog.UpstreamOperationChatCompletions
+			return requestlog.UpstreamEndpointChatCompletions
 		},
 		resolve: func(candidate routing.ChatRouteCandidate) error {
 			if s.registry.HasResponsesCompact(candidate.AdapterKey) {
@@ -149,7 +149,7 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 				}
 				return matched
 			},
-			UpstreamOperation: requestlog.UpstreamOperationChatCompletions,
+			UpstreamEndpoint: requestlog.UpstreamEndpointChatCompletions,
 			ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
 				chat, ok := s.registry.Chat(candidate.AdapterKey)
 				if !ok {

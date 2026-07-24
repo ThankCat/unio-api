@@ -78,7 +78,7 @@ func (c *Checker) Check(ctx context.Context) (bool, string) {
 }
 
 // ClearStoreFaultAfterReconciliation is called only by the background reconciler after it has
-// strictly reconciled every Endpoint fence, Channel admission control, critical setting, and
+// strictly reconciled every Origin fence, Channel admission control, critical setting, and
 // durable operation. A regular /readyz probe never invokes this mutation.
 func (c *Checker) ClearStoreFaultAfterReconciliation(
 	ctx context.Context,

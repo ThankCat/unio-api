@@ -107,7 +107,7 @@ type chatSettlementDBDeps struct {
 	apiKeyID           int64
 	routeID            int64
 	providerID         int64
-	providerEndpointID int64
+	providerOriginID int64
 	channelID          int64
 	modelID            int64
 	channelPriceID     int64
@@ -175,8 +175,8 @@ func (d *chatSettlementDBDeps) cleanup() {
 	if d.channelID != 0 {
 		_, _ = d.pool.Exec(ctx, `DELETE FROM channels WHERE id = $1`, d.channelID)
 	}
-	if d.providerEndpointID != 0 {
-		_, _ = d.pool.Exec(ctx, `DELETE FROM provider_endpoints WHERE id = $1`, d.providerEndpointID)
+	if d.providerOriginID != 0 {
+		_, _ = d.pool.Exec(ctx, `DELETE FROM provider_origins WHERE id = $1`, d.providerOriginID)
 	}
 	if d.providerID != 0 {
 		_, _ = d.pool.Exec(ctx, `DELETE FROM providers WHERE id = $1`, d.providerID)
@@ -255,7 +255,7 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 	d.apiKeyID = apiKey.ID
 
 	d.providerID = insertChatSettlementProvider(t, d.ctx, d.pool, suffix)
-	d.channelID, d.providerEndpointID = insertChatSettlementChannel(t, d.ctx, d.pool, d.providerID, suffix)
+	d.channelID, d.providerOriginID = insertChatSettlementChannel(t, d.ctx, d.pool, d.providerID, suffix)
 	d.modelID = insertChatSettlementModel(t, d.ctx, d.pool, suffix)
 	insertChatSettlementChannelModel(t, d.ctx, d.pool, d.channelID, d.modelID)
 
@@ -284,7 +284,7 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 		ApiKeyID:         apiKey.ID,
 		RequestedModelID: "openai/gpt-4.1",
 		IngressProtocol:  string(requestlog.ProtocolOpenAI),
-		Operation:        string(requestlog.OperationChatCompletions),
+		Endpoint:        string(requestlog.EndpointChatCompletions),
 		ResponseModelID:  pgtype.Text{Valid: false},
 		ResponseProtocol: pgtype.Text{Valid: false},
 		ResponseID:       pgtype.Text{Valid: false},
@@ -307,16 +307,16 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 		RequestRecordID:                 requestRecord.ID,
 		AttemptIndex:                    0,
 		ProviderID:                      d.providerID,
-		ProviderEndpointID:              d.providerEndpointID,
+		ProviderOriginID:              d.providerOriginID,
 		ChannelID:                       d.channelID,
-		ProviderEndpointBaseUrlRevision: 1,
-		ProviderEndpointStatusRevision:  1,
+		ProviderOriginBaseUrlRevision: 1,
+		ProviderOriginStatusRevision:  1,
 		ChannelConfigRevision:           1,
 		RoutingCandidateIndex:           0,
 		AdapterKey:                      "openai",
 		UpstreamModel:                   "gpt-4.1",
 		UpstreamProtocol:                string(requestlog.ProtocolOpenAI),
-		UpstreamOperation:               string(requestlog.UpstreamOperationChatCompletions),
+		UpstreamEndpoint:               string(requestlog.UpstreamEndpointChatCompletions),
 		UpstreamResponseModel:           pgtype.Text{Valid: false},
 		Status:                          string(requestlog.AttemptStatusRunning),
 		UpstreamStatusCode:              pgtype.Int4{Valid: false},
@@ -457,26 +457,26 @@ func insertChatSettlementProvider(t *testing.T, ctx context.Context, pool *pgxpo
 func insertChatSettlementChannel(t *testing.T, ctx context.Context, pool *pgxpool.Pool, providerID int64, suffix int64) (int64, int64) {
 	t.Helper()
 
-	var endpointID int64
+	var originID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO provider_endpoints (provider_id, name, base_url, status)
+		INSERT INTO provider_origins (provider_id, name, base_url, status)
 		VALUES ($1, $2, $3, 'enabled')
 		RETURNING id
-	`, providerID, fmt.Sprintf("chat-settlement-ep-%d", suffix), fmt.Sprintf("https://example-%d.test", suffix)).Scan(&endpointID); err != nil {
-		t.Fatalf("insert provider endpoint: %v", err)
+	`, providerID, fmt.Sprintf("chat-settlement-ep-%d", suffix), fmt.Sprintf("https://example-%d.test", suffix)).Scan(&originID); err != nil {
+		t.Fatalf("insert provider origin: %v", err)
 	}
 
 	var id int64
 	err := pool.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
+		INSERT INTO channels (provider_id, provider_origin_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
 		VALUES ($1, $2, $3, 'openai', 'openai', $4, $5, $6, $7)
 		RETURNING id
-	`, providerID, endpointID, fmt.Sprintf("chat-settlement-channel-%d", suffix), "sk-chat-settlement-test", "enabled", 10, 30000).Scan(&id)
+	`, providerID, originID, fmt.Sprintf("chat-settlement-channel-%d", suffix), "sk-chat-settlement-test", "enabled", 10, 30000).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
 
-	return id, endpointID
+	return id, originID
 }
 
 // insertChatSettlementModel 插入测试 model。

@@ -122,7 +122,7 @@ func applySnapshotFields(snap *ScopeSnapshot, fields []interface{}, nowMs int64)
 	if snap.PendingStatusRevision, err = optionalInt64(m, "pending_status_revision"); err != nil {
 		return err
 	}
-	if snap.ProviderEndpointID, err = optionalInt64(m, "provider_endpoint_id"); err != nil {
+	if snap.ProviderOriginID, err = optionalInt64(m, "provider_origin_id"); err != nil {
 		return err
 	}
 	if snap.ChannelConfigRevision, err = optionalInt64(m, "channel_config_revision"); err != nil {
@@ -151,7 +151,7 @@ func applySnapshotFields(snap *ScopeSnapshot, fields []interface{}, nowMs int64)
 		"state_generation",
 		"base_url_revision",
 		"status_revision",
-		"provider_endpoint_id",
+		"provider_origin_id",
 		"channel_config_revision",
 		"base_url_fence_generation",
 		"status_fence_generation",
@@ -187,7 +187,7 @@ func applySnapshotFields(snap *ScopeSnapshot, fields []interface{}, nowMs int64)
 		if snap.BaseURLRevision == 0 || snap.StatusRevision == 0 ||
 			snap.BaseURLRevisionState == "" || snap.StatusRevisionState == "" ||
 			!validEffectiveStatus(snap.EffectiveStatus) {
-			return errors.New("snapshot endpoint control is incomplete")
+			return errors.New("snapshot origin control is incomplete")
 		}
 	}
 	_, hasTTFT := m["ttft_ewma_ms"]
@@ -198,26 +198,26 @@ func applySnapshotFields(snap *ScopeSnapshot, fields []interface{}, nowMs int64)
 	return nil
 }
 
-func classifyCandidateSnapshot(candidate SnapshotCandidateInput, endpoint, channel ScopeSnapshot) CandidateSnapshotStatus {
-	if !endpoint.Exists || !endpoint.ControlPresent {
+func classifyCandidateSnapshot(candidate SnapshotCandidateInput, origin, channel ScopeSnapshot) CandidateSnapshotStatus {
+	if !origin.Exists || !origin.ControlPresent {
 		return CandidateSnapshotRuntimeSyncRequired
 	}
-	if endpoint.BaseURLRevisionState == "pending" || endpoint.StatusRevisionState == "pending" {
+	if origin.BaseURLRevisionState == "pending" || origin.StatusRevisionState == "pending" {
 		return CandidateSnapshotRuntimeSyncPending
 	}
-	if endpoint.BaseURLRevision < candidate.EndpointBaseURLRevision {
+	if origin.BaseURLRevision < candidate.OriginBaseURLRevision {
 		return CandidateSnapshotRuntimeSyncRequired
 	}
-	if endpoint.BaseURLRevision > candidate.EndpointBaseURLRevision {
+	if origin.BaseURLRevision > candidate.OriginBaseURLRevision {
 		return CandidateSnapshotStaleRevision
 	}
-	if endpoint.StatusRevision < candidate.EndpointStatusRevision {
+	if origin.StatusRevision < candidate.OriginStatusRevision {
 		return CandidateSnapshotRuntimeSyncRequired
 	}
-	if endpoint.StatusRevision > candidate.EndpointStatusRevision {
+	if origin.StatusRevision > candidate.OriginStatusRevision {
 		return CandidateSnapshotStaleStatusRevision
 	}
-	if !channel.Exists || channel.ChannelConfigRevision == 0 || channel.ProviderEndpointID == 0 ||
+	if !channel.Exists || channel.ChannelConfigRevision == 0 || channel.ProviderOriginID == 0 ||
 		channel.BaseURLRevision == 0 || channel.StatusRevision == 0 {
 		return CandidateSnapshotNoSample
 	}
@@ -227,19 +227,19 @@ func classifyCandidateSnapshot(candidate SnapshotCandidateInput, endpoint, chann
 	if channel.ChannelConfigRevision > candidate.ChannelConfigRevision {
 		return CandidateSnapshotStaleConfigRevision
 	}
-	if channel.ProviderEndpointID != candidate.EndpointID {
+	if channel.ProviderOriginID != candidate.OriginID {
 		return CandidateSnapshotStaleConfigRevision
 	}
-	if channel.BaseURLRevision < candidate.EndpointBaseURLRevision {
+	if channel.BaseURLRevision < candidate.OriginBaseURLRevision {
 		return CandidateSnapshotNoSample
 	}
-	if channel.BaseURLRevision > candidate.EndpointBaseURLRevision {
+	if channel.BaseURLRevision > candidate.OriginBaseURLRevision {
 		return CandidateSnapshotStaleRevision
 	}
-	if channel.StatusRevision < candidate.EndpointStatusRevision {
+	if channel.StatusRevision < candidate.OriginStatusRevision {
 		return CandidateSnapshotNoSample
 	}
-	if channel.StatusRevision > candidate.EndpointStatusRevision {
+	if channel.StatusRevision > candidate.OriginStatusRevision {
 		return CandidateSnapshotStaleStatusRevision
 	}
 	return CandidateSnapshotCurrent
@@ -321,23 +321,23 @@ func parseSnapshotManyReply(in SnapshotManyInput, reply []interface{}) (Snapshot
 			return SnapshotManyResult{}, snapshotManyRejected(string(ReasonRuntimeSyncRequired))
 		}
 		candidate := in.Candidates[index]
-		endpoint, err := parseSnapshotRow(ScopeEndpoint, candidate.EndpointID, row[11])
+		origin, err := parseSnapshotRow(ScopeOrigin, candidate.OriginID, row[11])
 		if err != nil {
-			return SnapshotManyResult{}, storeUnavailable(err, "breakerstore snapshot many endpoint row")
+			return SnapshotManyResult{}, storeUnavailable(err, "breakerstore snapshot many origin row")
 		}
 		channel, err := parseSnapshotRow(ScopeChannel, candidate.ChannelID, row[12])
 		if err != nil {
 			return SnapshotManyResult{}, storeUnavailable(err, "breakerstore snapshot many channel row")
 		}
-		status := classifyCandidateSnapshot(candidate, endpoint, channel)
+		status := classifyCandidateSnapshot(candidate, origin, channel)
 		switch status {
 		case CandidateSnapshotRuntimeSyncRequired, CandidateSnapshotRuntimeSyncPending,
 			CandidateSnapshotStaleRevision, CandidateSnapshotStaleStatusRevision, CandidateSnapshotStaleConfigRevision:
 			return SnapshotManyResult{}, snapshotManyRejected(string(status))
 		}
-		status = classifyCandidateGate(status, endpoint, channel, values[0], values[1] == 1, breakerEnabled == 1)
+		status = classifyCandidateGate(status, origin, channel, values[0], values[1] == 1, breakerEnabled == 1)
 		result.Candidates = append(result.Candidates, CandidateSnapshot{
-			Candidate: candidate, Status: status, Endpoint: endpoint, Channel: channel,
+			Candidate: candidate, Status: status, Origin: origin, Channel: channel,
 			Concurrency:         CapacityUsage{Used: values[2], Limit: values[3]},
 			RPM:                 CapacityUsage{Used: values[4], Limit: values[5]},
 			RPD:                 CapacityUsage{Used: values[6], Limit: values[7]},
@@ -364,12 +364,12 @@ func validSnapshotControlProof(raw interface{}) bool {
 
 func classifyCandidateGate(
 	identity CandidateSnapshotStatus,
-	endpoint, channel ScopeSnapshot,
+	origin, channel ScopeSnapshot,
 	cooldownRemainingMs int64,
 	permissionPaused, breakerEnabled bool,
 ) CandidateSnapshotStatus {
-	if endpoint.EffectiveStatus != "enabled" {
-		return CandidateSnapshotEndpointDisabled
+	if origin.EffectiveStatus != "enabled" {
+		return CandidateSnapshotOriginDisabled
 	}
 	if cooldownRemainingMs > 0 {
 		return CandidateSnapshotRateLimited
@@ -380,7 +380,7 @@ func classifyCandidateGate(
 	if !breakerEnabled {
 		return identity
 	}
-	epGate := scopeGate(endpoint)
+	epGate := scopeGate(origin)
 	chGate := scopeGate(channel)
 	if epGate == CandidateSnapshotOpen || chGate == CandidateSnapshotOpen {
 		return CandidateSnapshotOpen

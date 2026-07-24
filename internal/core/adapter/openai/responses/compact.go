@@ -15,7 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
-// ErrCompactUnsupported 表示上游确实不提供原生 /responses/compact endpoint（404/405）——上游未处理、
+// ErrCompactUnsupported 表示上游确实不提供原生 /responses/compact origin（404/405）——上游未处理、
 // 无成本：service 据此安全回落 SyntheticCompact（chat 摘要按真实 token 计费），避免 Codex 断链。
 var ErrCompactUnsupported = errors.New("openai responses adapter native compact unsupported")
 
@@ -73,7 +73,7 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 	}
 	defer upstreamResp.Body.Close()
 
-	// 上游不提供原生 compact endpoint（404/405）：收敛为 ErrCompactUnsupported，由 service 回落 Synthetic。
+	// 上游不提供原生 compact origin（404/405）：收敛为 ErrCompactUnsupported，由 service 回落 Synthetic。
 	if upstreamResp.StatusCode == http.StatusNotFound || upstreamResp.StatusCode == http.StatusMethodNotAllowed {
 		return nil, adapter.NewUpstreamError(
 			upstreamCategoryForStatus(upstreamResp.StatusCode),

@@ -451,7 +451,7 @@ func chatSettlementRecoveryRequestRecordFromSQLC(row sqlc.RequestRecord) request
 		APIKeyID:            row.ApiKeyID,
 		RequestedModelID:    row.RequestedModelID,
 		IngressProtocol:     requestlog.Protocol(row.IngressProtocol),
-		Operation:           requestlog.Operation(row.Operation),
+		Endpoint:            requestlog.Endpoint(row.Endpoint),
 		ResponseModelID:     chatSettlementTextPtr(row.ResponseModelID),
 		ResponseProtocol:    chatSettlementTextPtr(row.ResponseProtocol),
 		ResponseID:          chatSettlementTextPtr(row.ResponseID),

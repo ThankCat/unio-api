@@ -25,7 +25,7 @@ func TestPermissionRecheckQueueClaimBackoffAndClear(t *testing.T) {
 	fields := client.HGetAll(ctx, s.keys.channelModelPermission(channelID, modelID)).Val()
 	for field, want := range map[string]string{
 		"channel_id": "71", "model_id": "701", "channel_config_revision": "5",
-		"endpoint_base_url_revision": "3", "endpoint_status_revision": "4",
+		"origin_base_url_revision": "3", "origin_status_revision": "4",
 		"recheck_state": "queued", "last_rechecked_at_ms": "0",
 	} {
 		if fields[field] != want {

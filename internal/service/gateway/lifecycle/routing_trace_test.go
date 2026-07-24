@@ -45,7 +45,7 @@ func TestRoutingTraceRecorderSamplesNormalAndAlwaysWritesFallback(t *testing.T) 
 	recorder.SetSampleRate(0)
 	request := requestlog.RequestRecord{
 		ID: 1, RequestID: "req-unsampled", RequestedModelID: "openai/gpt",
-		IngressProtocol: requestlog.ProtocolOpenAI, Operation: requestlog.OperationChatCompletions,
+		IngressProtocol: requestlog.ProtocolOpenAI, Endpoint: requestlog.EndpointChatCompletions,
 	}
 	plan := CandidatePlan{Candidates: []Candidate{{Route: candidateRoute(7, "openai"), Balance: BalanceScore{CapacityScore: 0.5, RoutingFactor: 0.8, Weight: 0.4}}}}
 
@@ -62,8 +62,8 @@ func TestRoutingTraceRecorderSamplesNormalAndAlwaysWritesFallback(t *testing.T) 
 		Request: request, RouteID: 3, Mode: "balanced", PoolSize: 2, Plan: plan,
 		FallbackOccurred: true,
 		FallbackChain: []TransportAttempt{
-			{ChannelID: 7, UpstreamOperation: requestlog.UpstreamOperationResponsesCompact},
-			{ChannelID: 7, UpstreamOperation: requestlog.UpstreamOperationChatCompletions},
+			{ChannelID: 7, UpstreamEndpoint: requestlog.UpstreamEndpointResponsesCompact},
+			{ChannelID: 7, UpstreamEndpoint: requestlog.UpstreamEndpointChatCompletions},
 		},
 	})
 	if len(store.writes) != 1 {
@@ -84,8 +84,8 @@ func TestRoutingTraceRecorderSamplesNormalAndAlwaysWritesFallback(t *testing.T) 
 		t.Fatalf("decode fallback chain: %v", err)
 	}
 	if len(chain) != 2 || chain[0].ChannelID != 7 || chain[1].ChannelID != 7 ||
-		chain[0].UpstreamOperation != requestlog.UpstreamOperationResponsesCompact ||
-		chain[1].UpstreamOperation != requestlog.UpstreamOperationChatCompletions {
+		chain[0].UpstreamEndpoint != requestlog.UpstreamEndpointResponsesCompact ||
+		chain[1].UpstreamEndpoint != requestlog.UpstreamEndpointChatCompletions {
 		t.Fatalf("same-channel transport attempts lost from trace: %+v", chain)
 	}
 }
@@ -101,12 +101,12 @@ func TestRoutingTraceFallbackChainUsesActualTransportAfterAdmissionSkip(t *testi
 	recorder.Record(context.Background(), RoutingDecisionTraceInput{
 		Request: requestlog.RequestRecord{
 			ID: 3, RequestID: "req-admission-skip", RequestedModelID: "openai/gpt",
-			IngressProtocol: requestlog.ProtocolOpenAI, Operation: requestlog.OperationResponses,
+			IngressProtocol: requestlog.ProtocolOpenAI, Endpoint: requestlog.EndpointResponses,
 		},
 		RouteID: 3, Mode: "balanced", PoolSize: 2, Plan: plan,
 		FallbackOccurred: true,
 		FallbackChain: []TransportAttempt{{
-			ChannelID: 8, UpstreamOperation: requestlog.UpstreamOperationResponses,
+			ChannelID: 8, UpstreamEndpoint: requestlog.UpstreamEndpointResponses,
 		}},
 	})
 	if len(store.writes) != 1 {
@@ -116,7 +116,7 @@ func TestRoutingTraceFallbackChainUsesActualTransportAfterAdmissionSkip(t *testi
 	if err := json.Unmarshal(store.writes[0].FallbackChain, &chain); err != nil {
 		t.Fatalf("decode fallback chain: %v", err)
 	}
-	if len(chain) != 1 || chain[0].ChannelID != 8 || chain[0].UpstreamOperation != requestlog.UpstreamOperationResponses {
+	if len(chain) != 1 || chain[0].ChannelID != 8 || chain[0].UpstreamEndpoint != requestlog.UpstreamEndpointResponses {
 		t.Fatalf("fallback chain must contain only the real transport attempt: %+v", chain)
 	}
 }
@@ -146,7 +146,7 @@ func TestRoutingTraceSampledNormalUsesEmptyReasons(t *testing.T) {
 	recorder.Record(context.Background(), RoutingDecisionTraceInput{
 		Request: requestlog.RequestRecord{
 			ID: 2, RequestID: "req-sampled-normal", RequestedModelID: "openai/gpt",
-			IngressProtocol: requestlog.ProtocolOpenAI, Operation: requestlog.OperationResponses,
+			IngressProtocol: requestlog.ProtocolOpenAI, Endpoint: requestlog.EndpointResponses,
 		},
 		RouteID: 3, Mode: "balanced", PoolSize: 1,
 		Plan: CandidatePlan{Candidates: []Candidate{{Route: candidateRoute(7, "openai")}}},
@@ -183,20 +183,20 @@ func TestRoutingTraceIncludesFullPoolExclusionReasons(t *testing.T) {
 	recorder := NewRoutingTraceRecorder(store, zap.NewNop())
 	request := requestlog.RequestRecord{
 		ID: 11, RequestID: "req-full-pool", RequestedModelID: "openai/gpt",
-		IngressProtocol: requestlog.ProtocolOpenAI, Operation: requestlog.OperationChatCompletions,
+		IngressProtocol: requestlog.ProtocolOpenAI, Endpoint: requestlog.EndpointChatCompletions,
 	}
 	plan := CandidatePlan{
 		Candidates: []Candidate{{Route: candidateRoute(7, "openai"), Balance: BalanceScore{
-			EndpointID: 21, CandidateEndpointBaseURLRevision: 3, RuntimeEndpointBaseURLRevision: 3,
-			EndpointBaseURLRevisionCurrent: true, CandidateEndpointStatusRevision: 4,
-			RuntimeEndpointStatusRevision: 4, EndpointStatusRevisionCurrent: true,
+			OriginID: 21, CandidateOriginBaseURLRevision: 3, RuntimeOriginBaseURLRevision: 3,
+			OriginBaseURLRevisionCurrent: true, CandidateOriginStatusRevision: 4,
+			RuntimeOriginStatusRevision: 4, OriginStatusRevisionCurrent: true,
 			CandidateChannelConfigRevision: 7, RuntimeChannelConfigRevision: &runtimeConfigRevision,
 			ChannelConfigRevisionCurrent: true, CandidateChannelAdmissionLimitsRevision: 5,
 			RuntimeChannelAdmissionLimitsRevision: 5, ChannelAdmissionLimitsRevisionCurrent: true,
 			RouteRateLimitsRevision: 3, ChannelRateLimitsRevision: 7,
 			GlobalConcurrencyRevision: 2, CircuitBreakerRevision: 6,
 			RoutingBalanceRevision: 4, RuntimeControlState: "active", RuntimeRevisionCurrent: true,
-			EndpointBreakerState: "closed", ChannelBreakerState: "closed", BreakerStoreAdmission: "normal",
+			OriginBreakerState: "closed", ChannelBreakerState: "closed", BreakerStoreAdmission: "normal",
 			CapacityScore: 0.5, ErrorRate: 0.1, ErrorSamples: 20, TTFTEWMAMs: 820,
 			TTFTSamples: 18, TTFTSampleSource: "stream_only", RoutingFactor: 0.8,
 			CostRatio: 0.4, CostWeight: 0.5, CostFactor: 0.8, Weight: 0.32,
@@ -216,7 +216,7 @@ func TestRoutingTraceIncludesFullPoolExclusionReasons(t *testing.T) {
 	if len(scores) != 2 || !scores[0].Eligible || scores[1].Eligible || scores[1].ExcludedReason != "capability_unsupported" {
 		t.Fatalf("unexpected full-pool diagnostics: %+v", scores)
 	}
-	if scores[0].EndpointID != 21 || !scores[0].EndpointStatusRevisionCurrent ||
+	if scores[0].OriginID != 21 || !scores[0].OriginStatusRevisionCurrent ||
 		scores[0].RuntimeChannelConfigRevision == nil || *scores[0].RuntimeChannelConfigRevision != 7 ||
 		scores[0].RouteRateLimitsRevision != 3 || scores[0].ChannelRateLimitsRevision != 7 ||
 		scores[0].CircuitBreakerRevision != 6 ||

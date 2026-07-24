@@ -121,13 +121,13 @@ type metricsStub struct {
 	active     float64
 }
 
-func (m *metricsStub) IncRequestAdmissionOperation(operation, result string) {
+func (m *metricsStub) IncRequestAdmissionOperation(endpoint, result string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.operations == nil {
 		m.operations = make(map[string]int)
 	}
-	m.operations[operation+"/"+result]++
+	m.operations[endpoint+"/"+result]++
 }
 
 func (m *metricsStub) AddRequestAdmissionActive(delta float64) {
@@ -282,7 +282,7 @@ func TestSessionSnapshotInjectsFrozenAdmissionAndFreshRoutingRevisions(t *testin
 	}
 	ctx := ContextWithUsageSession(context.Background(), result.Session.Usage())
 	candidates := []breakerstore.SnapshotCandidateInput{{
-		EndpointID: 30, ChannelID: 40, EndpointBaseURLRevision: 2, EndpointStatusRevision: 3,
+		OriginID: 30, ChannelID: 40, OriginBaseURLRevision: 2, OriginStatusRevision: 3,
 		ChannelConfigRevision: 4, ChannelAdmissionRevision: 5,
 	}}
 	snapshot, present, err := SnapshotManyIfPresent(ctx, 50, candidates)

@@ -11,8 +11,8 @@ CREATE TABLE public.channels (
     id bigint NOT NULL,
     -- provider_id: channel 所属 provider ID（供应商/记账主体）。--
     provider_id bigint NOT NULL,
-    -- provider_endpoint_id: channel 绑定的 ProviderEndpoint（唯一 API Root/公共故障域），base_url 由此派生。--
-    provider_endpoint_id bigint NOT NULL,
+    -- provider_origin_id: channel 绑定的 ProviderOrigin（唯一 API Root/公共故障域），base_url 由此派生。--
+    provider_origin_id bigint NOT NULL,
     -- name: provider 内 channel 名称。--
     name text NOT NULL,
     -- protocol: channel 对外协议族，决定 ingress 路由与 adapter 协议族；routing 只命中同协议 channel。--
@@ -21,7 +21,7 @@ CREATE TABLE public.channels (
     adapter_key text NOT NULL,
     -- credential: 上游 API key，明文存储，便于管理端查看/复制/编辑（产品决策：渠道凭据不加密）。--
     credential text NOT NULL,
-    -- config_revision: PostgreSQL 权威单调配置版本；provider_endpoint_id/protocol/adapter_key/credential/credential_valid/timeout_ms/status 真变化时同事务 +1。--
+    -- config_revision: PostgreSQL 权威单调配置版本；provider_origin_id/protocol/adapter_key/credential/credential_valid/timeout_ms/status 真变化时同事务 +1。--
     config_revision bigint DEFAULT 1 NOT NULL,
     -- admission_limits_revision: 四维限额（rpm/tpm/rpd/concurrency）有效值真变化时 +1，不复用 config_revision。--
     admission_limits_revision bigint DEFAULT 1 NOT NULL,
@@ -82,14 +82,14 @@ CREATE INDEX idx_channels_protocol ON public.channels USING btree (protocol);
 
 CREATE INDEX idx_channels_provider_id ON public.channels USING btree (provider_id);
 
-CREATE INDEX idx_channels_provider_endpoint_id ON public.channels USING btree (provider_endpoint_id);
+CREATE INDEX idx_channels_provider_origin_id ON public.channels USING btree (provider_origin_id);
 
 ALTER TABLE ONLY public.channels
     ADD CONSTRAINT channels_provider_id_fkey FOREIGN KEY (provider_id) REFERENCES public.providers(id);
 
--- 复合外键：保证所选 Endpoint 属于同一 Provider，避免供应商/账务/归档关系漂移。
+-- 复合外键：保证所选 Origin 属于同一 Provider，避免供应商/账务/归档关系漂移。
 ALTER TABLE ONLY public.channels
-    ADD CONSTRAINT channels_provider_endpoint_fkey FOREIGN KEY (provider_endpoint_id, provider_id) REFERENCES public.provider_endpoints(id, provider_id);
+    ADD CONSTRAINT channels_provider_origin_fkey FOREIGN KEY (provider_origin_id, provider_id) REFERENCES public.provider_origins(id, provider_id);
 
 -- ---------------------------------------------------------------------------
 -- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：
@@ -102,7 +102,7 @@ ALTER TABLE ONLY public.channels
 -- 为 channel 增加「最近一次主动检测结果」四列（渠道检测 / 一键测渠道，阶段一）。
 -- 主动检测 = 用渠道自己的 base_url + 凭据，挑一个绑定模型发一个最小 "hi" 请求，
 -- 验证「连得上 + 凭据有效 + 模型可用」，记录延迟与可读失败原因。与被动熔断/cooldown 正交。
--- 四列均可空：从未检测过时全为 NULL；仅由检测端点写入，不参与路由/计费，不改渠道启停状态。
+-- 四列均可空：从未检测过时全为 NULL；仅由检测上游源站写入，不参与路由/计费，不改渠道启停状态。
 -- [000062_add_channels_credential_valid]
 -- 为 channel 增加「凭据是否有效」闸门列（阶段二：真摘除 + 检测通过才恢复）。
 -- credential_valid=false 表示系统判定该渠道凭据失效（连续 401 或检测判定 credential_invalid），
@@ -127,6 +127,6 @@ ALTER TABLE ONLY public.channels
 -- 会向 channel_cost_exposures 记一条平台成本敞口（保守上界估算），供成本对账与渠道横向比较。
 -- 不影响路由与客户计费，纯平台侧观测。
 -- [P4 ROUTING_P4_GLOBAL_BREAKER_PROVIDER_PLAN §4.4]
--- 单故障域改造：删除 channels.base_url（地址唯一归属 provider_endpoints），新增必填 provider_endpoint_id
--- 与 (provider_endpoint_id, provider_id) -> provider_endpoints(id, provider_id) 复合外键；
+-- 单故障域改造：删除 channels.base_url（地址唯一归属 provider_origins），新增必填 provider_origin_id
+-- 与 (provider_origin_id, provider_id) -> provider_origins(id, provider_id) 复合外键；
 -- 新增单调 config_revision（配置/凭据状态真变化 +1）与独立 admission_limits_revision（四维限额真变化 +1）。

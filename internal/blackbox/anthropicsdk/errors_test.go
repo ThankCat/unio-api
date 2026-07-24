@@ -17,7 +17,7 @@ import (
 )
 
 // writeUpstreamError 写一个上游错误响应。
-// DeepSeek 的 Anthropic endpoint 错误体是 OpenAI 风格信封，但 adapter 只按 HTTP status 分类，
+// DeepSeek 的 Anthropic origin 错误体是 OpenAI 风格信封，但 adapter 只按 HTTP status 分类，
 // gatewayapi/anthropic 再渲染原生 Anthropic error shape，所以 mock 端写什么 body 都不影响
 // 客户视角的 type/status 映射。这里写 OpenAI 风格保持真实性。
 func writeUpstreamError(w http.ResponseWriter, status int, message string) {

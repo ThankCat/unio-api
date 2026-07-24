@@ -44,7 +44,7 @@ WITH replacement AS (
     SELECT c.id
     FROM channels c
     JOIN providers p ON p.id = c.provider_id
-    JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
+    JOIN provider_origins pe ON pe.id = c.provider_origin_id
     WHERE c.id = $1
       AND c.provider_id <> $2
       AND c.status = 'enabled'
@@ -159,12 +159,31 @@ func (q *Queries) CreateProvider(ctx context.Context, arg CreateProviderParams) 
 }
 
 const deleteProvider = `-- name: DeleteProvider :execrows
-DELETE FROM providers WHERE id = $1
+WITH released_origin_ops AS (
+    UPDATE origin_routing_operations
+    SET provider_id = NULL, origin_id = NULL, updated_at = now()
+    WHERE provider_id = $1
+      AND state IN ('committed', 'aborted')
+),
+deleted_origins AS (
+    DELETE FROM provider_origins WHERE provider_origins.provider_id = $1
+)
+DELETE FROM providers WHERE providers.id = $1
 `
 
 // DeleteProvider 物理删除 provider，用于清理录错且从未使用的脏数据。
-// provider 无自身配置子表，故不级联：名下仍有 channel，或被 request/cost 历史（NO ACTION 外键）
-// 引用时，DB 拒绝删除（23503），上层降级为 conflict，提示先删渠道或改用停用。
+// provider 自身子表只有「上游源站」provider_origins（P4 引入）：本语句在单条数据修改型 CTE 内
+// 连带清理源站及其操作日志——
+//  1. 终态（committed/aborted）origin_routing_operations 置空 provider_id/origin_id（保留 transitions
+//     审计摘要，释放其对 providers/provider_origins 的 RESTRICT 外键），符合 000009 迁移「永久删除前
+//     置空但保留摘要」的既定设计；未终态（preparing/prepared/db_committed）操作仍以 RESTRICT 挡删，
+//     避免删除进行中的运行态操作。
+//  2. 删除该 provider 名下所有源站。
+//
+// 源站/provider 本身不做请求/账务级联：一旦名下仍有 channel，或 provider/其源站被请求/账务历史
+// （request_records/request_attempts/cost_snapshots/channel_cost_exposures/settlement_recovery_jobs
+// 等 NO ACTION 外键）引用，整条语句报 23503 全部回滚，上层降级为 conflict，提示先删渠道或改用停用。
+// 数据修改型 CTE 保证三段各执行一次、外键在语句末统一校验，故清子表 + 删主体在单语句内原子完成。
 func (q *Queries) DeleteProvider(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteProvider, id)
 	if err != nil {
@@ -385,7 +404,7 @@ SELECT
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99
 FROM channels c
-JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
+JOIN provider_origins pe ON pe.id = c.provider_origin_id
 LEFT JOIN request_attempts a
     ON a.channel_id = c.id
     AND ($1::timestamptz IS NULL OR a.created_at >= $1::timestamptz)
@@ -486,7 +505,7 @@ tps AS (
       AND ($3::timestamptz IS NULL OR a.created_at < $3::timestamptz)
 ),
 attempts AS (
-    SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_endpoint_id, provider_endpoint_base_url_revision, provider_endpoint_status_revision, channel_config_revision, routing_candidate_index, upstream_operation, breaker_endpoint_disposition, breaker_channel_disposition, fault_party
+    SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_id, provider_origin_base_url_revision, provider_origin_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_origin_disposition, breaker_channel_disposition, fault_party
     FROM request_attempts a
     WHERE a.provider_id = $1
       AND ($2::timestamptz IS NULL OR a.created_at >= $2::timestamptz)
@@ -817,9 +836,9 @@ SELECT
             )
             ORDER BY pe.id
         )
-        FROM provider_endpoints pe
+        FROM provider_origins pe
         WHERE pe.provider_id = p.id
-    ), '[]'::jsonb)::text AS endpoints,
+    ), '[]'::jsonb)::text AS origins,
     (SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id) AS channel_total,
     (
         SELECT COUNT(DISTINCT cm.model_id)
@@ -895,7 +914,7 @@ type ProvidersOpsTableRow struct {
 	Name         string
 	Status       string
 	CreatedAt    pgtype.Timestamptz
-	Endpoints    string
+	Origins      string
 	ChannelTotal int64
 	ModelsCount  int64
 	RoutesCount  int64
@@ -927,7 +946,7 @@ func (q *Queries) ProvidersOpsTable(ctx context.Context, arg ProvidersOpsTablePa
 			&i.Name,
 			&i.Status,
 			&i.CreatedAt,
-			&i.Endpoints,
+			&i.Origins,
 			&i.ChannelTotal,
 			&i.ModelsCount,
 			&i.RoutesCount,

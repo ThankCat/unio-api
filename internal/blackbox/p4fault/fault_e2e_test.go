@@ -15,8 +15,8 @@ func TestP4FaultE2E(t *testing.T) {
 	}
 
 	h := setupFaultHarness(t)
-	mustRun(t, "maintenance_marker_operation_recovery_smoke_release", func(t *testing.T) {
-		runStateLossMaintenanceE2E(t, h, maintenanceMarkerOperationLoss)
+	mustRun(t, "maintenance_marker_endpoint_recovery_smoke_release", func(t *testing.T) {
+		runStateLossMaintenanceE2E(t, h, maintenanceMarkerEndpointLoss)
 	})
 	mustRun(t, "baseline_six_protocol_modes", func(t *testing.T) {
 		before := h.upstream.snapshot()

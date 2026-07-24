@@ -14,7 +14,7 @@ import (
 
 type Store interface {
 	GetAppSettingRecord(ctx context.Context, key string) (sqlc.GetAppSettingRecordRow, error)
-	ListNonterminalEndpointRoutingOperations(ctx context.Context) ([]sqlc.EndpointRoutingOperation, error)
+	ListNonterminalOriginRoutingOperations(ctx context.Context) ([]sqlc.OriginRoutingOperation, error)
 	ListNonterminalRuntimeControlOperations(ctx context.Context) ([]sqlc.RuntimeControlOperation, error)
 }
 
@@ -44,7 +44,7 @@ type OperationSummary struct {
 }
 
 type Operations struct {
-	EndpointRouting OperationSummary
+	OriginRouting OperationSummary
 	RuntimeControl  OperationSummary
 }
 
@@ -75,9 +75,9 @@ func (s *Service) Get(ctx context.Context) (Diagnostics, error) {
 	if err != nil {
 		return Diagnostics{}, fmt.Errorf("runtime diagnostics: read state epoch: %w", err)
 	}
-	endpointOperations, err := s.store.ListNonterminalEndpointRoutingOperations(ctx)
+	originOperations, err := s.store.ListNonterminalOriginRoutingOperations(ctx)
 	if err != nil {
-		return Diagnostics{}, fmt.Errorf("runtime diagnostics: list endpoint operations: %w", err)
+		return Diagnostics{}, fmt.Errorf("runtime diagnostics: list origin operations: %w", err)
 	}
 	runtimeOperations, err := s.store.ListNonterminalRuntimeControlOperations(ctx)
 	if err != nil {
@@ -100,13 +100,13 @@ func (s *Service) Get(ctx context.Context) (Diagnostics, error) {
 			State: epochState, Revision: epochRow.Revision, Match: epochMatch,
 		},
 		Operations: Operations{
-			EndpointRouting: summarizeEndpointOperations(now, endpointOperations),
+			OriginRouting: summarizeOriginOperations(now, originOperations),
 			RuntimeControl:  summarizeRuntimeOperations(now, runtimeOperations),
 		},
 	}, nil
 }
 
-func summarizeEndpointOperations(now time.Time, operations []sqlc.EndpointRoutingOperation) OperationSummary {
+func summarizeOriginOperations(now time.Time, operations []sqlc.OriginRoutingOperation) OperationSummary {
 	times := make([]time.Time, 0, len(operations))
 	for _, operation := range operations {
 		if operation.CreatedAt.Valid {

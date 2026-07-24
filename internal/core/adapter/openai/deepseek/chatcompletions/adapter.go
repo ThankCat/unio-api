@@ -20,7 +20,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 )
 
-// Adapter 是 DeepSeek OpenAI endpoint 的 adapter。
+// Adapter 是 DeepSeek OpenAI origin 的 adapter。
 type Adapter struct {
 	base   *chatcompletionsadapter.Adapter
 	logger *zap.Logger

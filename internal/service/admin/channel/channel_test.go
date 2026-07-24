@@ -20,8 +20,8 @@ import (
 type fakeChannelStore struct {
 	provider                sqlc.Provider
 	providerErr             error
-	endpoint                sqlc.ProviderEndpoint
-	endpointErr             error
+	origin                sqlc.ProviderOrigin
+	originErr             error
 	createRow               sqlc.Channel
 	createErr               error
 	createParam             sqlc.CreateChannelParams
@@ -55,8 +55,8 @@ type fakeChannelStore struct {
 func (s *fakeChannelStore) GetProvider(_ context.Context, _ int64) (sqlc.Provider, error) {
 	return s.provider, s.providerErr
 }
-func (s *fakeChannelStore) GetProviderEndpoint(_ context.Context, _ int64) (sqlc.ProviderEndpoint, error) {
-	return s.endpoint, s.endpointErr
+func (s *fakeChannelStore) GetProviderOrigin(_ context.Context, _ int64) (sqlc.ProviderOrigin, error) {
+	return s.origin, s.originErr
 }
 func (s *fakeChannelStore) ListChannelsPage(context.Context, sqlc.ListChannelsPageParams) ([]sqlc.ListChannelsPageRow, error) {
 	return nil, nil
@@ -176,7 +176,7 @@ func (r *fakeCredentialRotator) RotateCredentialAndTest(_ context.Context, in ch
 func validCreateInput() channel.CreateInput {
 	return channel.CreateInput{
 		ProviderID:         1,
-		ProviderEndpointID: 1,
+		ProviderOriginID: 1,
 		Name:               "primary",
 		Protocol:           channel.ProtocolOpenAI,
 		AdapterKey:         "deepseek",
@@ -190,13 +190,13 @@ func int64Ptr(v int64) *int64 { return &v }
 
 func validUpdateInput() channel.UpdateInput {
 	return channel.UpdateInput{
-		ID: 9, Name: "primary", ProviderEndpointID: 1, Status: channel.StatusEnabled, Priority: 10,
+		ID: 9, Name: "primary", ProviderOriginID: 1, Status: channel.StatusEnabled, Priority: 10,
 	}
 }
 
 func runtimeChannelRow(revision int64) sqlc.Channel {
 	return sqlc.Channel{
-		ID: 9, ProviderID: 1, ProviderEndpointID: 1, Name: "primary", Protocol: "openai", AdapterKey: "openai",
+		ID: 9, ProviderID: 1, ProviderOriginID: 1, Name: "primary", Protocol: "openai", AdapterKey: "openai",
 		Credential: "sk-live", Status: channel.StatusEnabled, Priority: 10, ConfigRevision: 1,
 		AdmissionLimitsRevision: revision,
 	}
@@ -231,7 +231,7 @@ func TestCreatePersistsLimitsAndInitializesRevisionOneControl(t *testing.T) {
 	row.ConcurrencyLimit = pgtype.Int4{Int32: 2, Valid: true}
 	store := &fakeChannelStore{
 		provider:  sqlc.Provider{ID: 1, Name: "Provider"},
-		endpoint:  sqlc.ProviderEndpoint{ID: 1, ProviderID: 1, Name: "Primary", Status: "enabled", BaseUrl: "https://api.example.test"},
+		origin:  sqlc.ProviderOrigin{ID: 1, ProviderID: 1, Name: "Primary", Status: "enabled", BaseUrl: "https://api.example.test"},
 		createRow: row,
 	}
 	control := &fakeAdmissionControlStore{readSnapshot: breakerstore.ControlSnapshot{
@@ -268,7 +268,7 @@ func TestUpdateNoopAdmissionLimitsDoesNotPublishOrIncrement(t *testing.T) {
 	current.RpmLimit = pgtype.Int4{Int32: 10, Valid: true}
 	store := &fakeChannelStore{
 		provider: sqlc.Provider{ID: 1, Name: "Provider"},
-		endpoint: sqlc.ProviderEndpoint{ID: 1, ProviderID: 1, Status: "enabled", BaseUrl: "https://api.example.test"},
+		origin: sqlc.ProviderOrigin{ID: 1, ProviderID: 1, Status: "enabled", BaseUrl: "https://api.example.test"},
 		getRow:   current, updateRow: current,
 	}
 	publisher := &fakeRuntimePublisher{}
@@ -297,7 +297,7 @@ func TestUpdateChangedAdmissionLimitsPublishesExactlyNextRevision(t *testing.T) 
 	updated.RpmLimit = pgtype.Int4{Int32: 10, Valid: true}
 	store := &fakeChannelStore{
 		provider: sqlc.Provider{ID: 1, Name: "Provider"},
-		endpoint: sqlc.ProviderEndpoint{ID: 1, ProviderID: 1, Status: "enabled", BaseUrl: "https://api.example.test"},
+		origin: sqlc.ProviderOrigin{ID: 1, ProviderID: 1, Status: "enabled", BaseUrl: "https://api.example.test"},
 		getRows:  []sqlc.Channel{current, updated},
 	}
 	publisher := &fakeRuntimePublisher{result: runtimecontrol.PublishResult{State: runtimecontrol.PublishCommitted, ActiveRevision: 5}}
@@ -329,7 +329,7 @@ func TestUpdateChangedAdmissionLimitsPublishesExactlyNextRevision(t *testing.T) 
 func TestUpdateChangedAdmissionLimitsFailsClosedWithoutPublisher(t *testing.T) {
 	current := runtimeChannelRow(2)
 	store := &fakeChannelStore{
-		endpoint: sqlc.ProviderEndpoint{ID: 1, ProviderID: 1},
+		origin: sqlc.ProviderOrigin{ID: 1, ProviderID: 1},
 		getRow:   current,
 	}
 	in := validUpdateInput()
@@ -348,7 +348,7 @@ func TestUpdateChangedAdmissionLimitsFailsClosedWithoutPublisher(t *testing.T) {
 func TestUpdateChangedAdmissionLimitsDoesNotMutateOnPublisherError(t *testing.T) {
 	current := runtimeChannelRow(2)
 	store := &fakeChannelStore{
-		endpoint: sqlc.ProviderEndpoint{ID: 1, ProviderID: 1},
+		origin: sqlc.ProviderOrigin{ID: 1, ProviderID: 1},
 		getRow:   current,
 	}
 	publisher := &fakeRuntimePublisher{err: context.DeadlineExceeded}
@@ -372,7 +372,7 @@ func TestUpdatePendingPublishReturnsCommittedDatabaseRevision(t *testing.T) {
 	updated := runtimeChannelRow(8)
 	updated.ConcurrencyLimit = pgtype.Int4{Int32: 3, Valid: true}
 	store := &fakeChannelStore{
-		provider: sqlc.Provider{ID: 1}, endpoint: sqlc.ProviderEndpoint{ID: 1, ProviderID: 1},
+		provider: sqlc.Provider{ID: 1}, origin: sqlc.ProviderOrigin{ID: 1, ProviderID: 1},
 		getRows: []sqlc.Channel{current, updated},
 	}
 	publisher := &fakeRuntimePublisher{result: runtimecontrol.PublishResult{State: runtimecontrol.PublishRuntimeSyncPending}}
@@ -407,7 +407,7 @@ func TestCreateRejectsUnsupportedAdapterBinding(t *testing.T) {
 func TestCreateRejectsInvalidArguments(t *testing.T) {
 	cases := map[string]func(in *channel.CreateInput){
 		"bad protocol":  func(in *channel.CreateInput) { in.Protocol = "grpc" },
-		"zero endpoint": func(in *channel.CreateInput) { in.ProviderEndpointID = 0 },
+		"zero origin": func(in *channel.CreateInput) { in.ProviderOriginID = 0 },
 		"empty name":    func(in *channel.CreateInput) { in.Name = " " },
 		"empty cred":    func(in *channel.CreateInput) { in.Credential = "" },
 		"neg priority":  func(in *channel.CreateInput) { in.Priority = -1 },
@@ -440,9 +440,9 @@ func TestCreatePersistsPlaintextCredential(t *testing.T) {
 	now := time.Now()
 	store := &fakeChannelStore{
 		provider: sqlc.Provider{ID: 1, Slug: "openai", Status: "enabled"},
-		endpoint: sqlc.ProviderEndpoint{ID: 1, ProviderID: 1, Status: "enabled", BaseUrl: "https://api.example.test"},
+		origin: sqlc.ProviderOrigin{ID: 1, ProviderID: 1, Status: "enabled", BaseUrl: "https://api.example.test"},
 		createRow: sqlc.Channel{
-			ID: 9, ProviderID: 1, ProviderEndpointID: 1, Name: "primary", Protocol: "openai", AdapterKey: "deepseek",
+			ID: 9, ProviderID: 1, ProviderOriginID: 1, Name: "primary", Protocol: "openai", AdapterKey: "deepseek",
 			Status: "enabled", Priority: 10,
 			CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
 			UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true},
@@ -478,8 +478,8 @@ func TestCreateDefaultsAdapterKeyToProtocol(t *testing.T) {
 		t.Run(tc.protocol, func(t *testing.T) {
 			store := &fakeChannelStore{
 				provider:  sqlc.Provider{ID: 1, Slug: "p", Status: "enabled"},
-				endpoint:  sqlc.ProviderEndpoint{ID: 1, ProviderID: 1, Status: "enabled", BaseUrl: "https://api.example.test"},
-				createRow: sqlc.Channel{ID: 1, ProviderID: 1, ProviderEndpointID: 1, Name: "primary", Protocol: tc.protocol, AdapterKey: tc.wantKey},
+				origin:  sqlc.ProviderOrigin{ID: 1, ProviderID: 1, Status: "enabled", BaseUrl: "https://api.example.test"},
+				createRow: sqlc.Channel{ID: 1, ProviderID: 1, ProviderOriginID: 1, Name: "primary", Protocol: tc.protocol, AdapterKey: tc.wantKey},
 			}
 			svc := channel.NewService(store, fakeRegistry{has: true})
 
@@ -642,7 +642,7 @@ func TestArchiveAtomicallyReplacesChannel(t *testing.T) {
 	replacementID := int64(10)
 	store := &fakeChannelStore{
 		getRow: sqlc.Channel{
-			ID: replacementID, ProviderID: 3, ProviderEndpointID: 5, Status: "enabled", CredentialValid: true,
+			ID: replacementID, ProviderID: 3, ProviderOriginID: 5, Status: "enabled", CredentialValid: true,
 			Credential: "sk-live",
 		},
 		provider:              sqlc.Provider{ID: 3, Status: "enabled"},
@@ -655,7 +655,7 @@ func TestArchiveAtomicallyReplacesChannel(t *testing.T) {
 		t.Fatalf("unexpected atomic archive params: %+v", store.archiveReplacementParam)
 	}
 	if store.archiveID != 0 {
-		t.Fatal("legacy archive mutation must not run for replacement operation")
+		t.Fatal("legacy archive mutation must not run for replacement endpoint")
 	}
 }
 

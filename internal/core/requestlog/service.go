@@ -24,25 +24,25 @@ const (
 	ProtocolAnthropic Protocol = "anthropic"
 )
 
-// Operation 表示公开 Gateway API 操作。
-type Operation string
+// Endpoint 表示公开 Gateway API 操作。
+type Endpoint string
 
 const (
-	OperationChatCompletions Operation = "chat_completions"
-	OperationMessages        Operation = "messages"
-	OperationResponses       Operation = "responses"
+	EndpointChatCompletions Endpoint = "chat_completions"
+	EndpointMessages        Endpoint = "messages"
+	EndpointResponses       Endpoint = "responses"
 )
 
-// UpstreamOperation identifies the concrete transport recorded by an attempt.
-// It is separate from the public ingress Operation because one request can
-// execute more than one upstream operation (for example Responses Compact).
-type UpstreamOperation string
+// UpstreamEndpoint identifies the concrete transport recorded by an attempt.
+// It is separate from the public ingress Endpoint because one request can
+// execute more than one upstream endpoint (for example Responses Compact).
+type UpstreamEndpoint string
 
 const (
-	UpstreamOperationChatCompletions  UpstreamOperation = "chat_completions"
-	UpstreamOperationResponses        UpstreamOperation = "responses"
-	UpstreamOperationResponsesCompact UpstreamOperation = "responses_compact"
-	UpstreamOperationMessages         UpstreamOperation = "messages"
+	UpstreamEndpointChatCompletions  UpstreamEndpoint = "chat_completions"
+	UpstreamEndpointResponses        UpstreamEndpoint = "responses"
+	UpstreamEndpointResponsesCompact UpstreamEndpoint = "responses_compact"
+	UpstreamEndpointMessages         UpstreamEndpoint = "messages"
 )
 
 // DeliveryStatus 表示客户响应交付状态，与 settlement 状态分开记录。
@@ -72,7 +72,7 @@ type CreateRequestParams struct {
 	APIKeyID         int64
 	RequestedModelID string
 	IngressProtocol  Protocol
-	Operation        Operation
+	Endpoint        Endpoint
 	Stream           bool
 	StartedAt        time.Time
 	// 批二富化（均可空）：线路快照 / 归一推理强度 + 原始预算 / 客户端 IP。
@@ -90,7 +90,7 @@ type RequestRecord struct {
 	APIKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     Protocol
-	Operation           Operation
+	Endpoint           Endpoint
 	ResponseModelID     *string
 	ResponseProtocol    *string
 	ResponseID          *string
@@ -171,12 +171,12 @@ type CreateAttemptParams struct {
 	AdapterKey                      string
 	UpstreamModel                   string
 	UpstreamProtocol                Protocol
-	ProviderEndpointID              *int64
-	ProviderEndpointBaseURLRevision *int64
-	ProviderEndpointStatusRevision  *int64
+	ProviderOriginID              *int64
+	ProviderOriginBaseURLRevision *int64
+	ProviderOriginStatusRevision  *int64
 	ChannelConfigRevision           *int64
 	RoutingCandidateIndex           *int
-	UpstreamOperation               UpstreamOperation
+	UpstreamEndpoint               UpstreamEndpoint
 	StartedAt                       time.Time
 }
 
@@ -190,12 +190,12 @@ type AttemptRecord struct {
 	AdapterKey                      string
 	UpstreamModel                   string
 	UpstreamProtocol                Protocol
-	ProviderEndpointID              *int64
-	ProviderEndpointBaseURLRevision *int64
-	ProviderEndpointStatusRevision  *int64
+	ProviderOriginID              *int64
+	ProviderOriginBaseURLRevision *int64
+	ProviderOriginStatusRevision  *int64
 	ChannelConfigRevision           *int64
 	RoutingCandidateIndex           *int
-	UpstreamOperation               UpstreamOperation
+	UpstreamEndpoint               UpstreamEndpoint
 	UpstreamResponseID              *string
 	UpstreamResponseModel           *string
 	UpstreamFinishReason            *string
@@ -210,7 +210,7 @@ type AttemptRecord struct {
 	UpstreamStartedAt               *time.Time
 	UpstreamFirstTokenAt            *time.Time
 	UpstreamCompletedAt             *time.Time
-	BreakerEndpointDisposition      *string
+	BreakerOriginDisposition      *string
 	BreakerChannelDisposition       *string
 	FinalUsageReceived              bool
 	UsageMappingVersion             *string
@@ -269,7 +269,7 @@ type RecordAttemptTimingParams struct {
 // RecordAttemptBreakerDispositionParams first-write-wins 地保存 AttemptPermit Finish 的双作用域结果。
 type RecordAttemptBreakerDispositionParams struct {
 	ID                  int64
-	EndpointDisposition string
+	OriginDisposition string
 	ChannelDisposition  string
 }
 

@@ -520,7 +520,7 @@ type seedFacts struct {
 	modelID            string
 	userID             int64
 	routeID            int64
-	endpointID         int64
+	originID         int64
 	openAIChannelID    int64
 	anthropicChannelID int64
 }
@@ -587,13 +587,13 @@ func migrateAndSeed(t *testing.T, root, databaseURL, upstreamURL string, options
 	`).Scan(&providerID); err != nil {
 		t.Fatalf("seed provider: %v", err)
 	}
-	var endpointID int64
+	var originID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO provider_endpoints (provider_id, name, base_url, status)
-		VALUES ($1, 'P4 Fault Endpoint', $2, 'enabled')
+		INSERT INTO provider_origins (provider_id, name, base_url, status)
+		VALUES ($1, 'P4 Fault Origin', $2, 'enabled')
 		RETURNING id
-	`, providerID, upstreamURL).Scan(&endpointID); err != nil {
-		t.Fatalf("seed provider endpoint: %v", err)
+	`, providerID, upstreamURL).Scan(&originID); err != nil {
+		t.Fatalf("seed provider origin: %v", err)
 	}
 
 	const modelID = "p4-fault-model"
@@ -614,12 +614,12 @@ func migrateAndSeed(t *testing.T, root, databaseURL, upstreamURL string, options
 		var channelID int64
 		if err := pool.QueryRow(ctx, `
 			INSERT INTO channels (
-				provider_id, provider_endpoint_id, name, protocol, adapter_key,
+				provider_id, provider_origin_id, name, protocol, adapter_key,
 				credential, status, priority, timeout_ms
 			)
 			VALUES ($1, $2, $3, $4, $5, 'p4-fault-upstream-key', 'enabled', $6, 5000)
 			RETURNING id
-		`, providerID, endpointID, "P4 Fault "+protocol, protocol, adapterKey, priority).Scan(&channelID); err != nil {
+		`, providerID, originID, "P4 Fault "+protocol, protocol, adapterKey, priority).Scan(&channelID); err != nil {
 			t.Fatalf("seed %s channel: %v", protocol, err)
 		}
 		if _, err := pool.Exec(ctx, `
@@ -664,7 +664,7 @@ func migrateAndSeed(t *testing.T, root, databaseURL, upstreamURL string, options
 	}
 
 	return seedFacts{
-		apiKey: generatedKey.Plaintext, modelID: modelID, userID: user.ID, routeID: route.ID, endpointID: endpointID,
+		apiKey: generatedKey.Plaintext, modelID: modelID, userID: user.ID, routeID: route.ID, originID: originID,
 		openAIChannelID: openAIChannelID, anthropicChannelID: anthropicChannelID,
 	}
 }

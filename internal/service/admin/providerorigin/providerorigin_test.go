@@ -1,4 +1,4 @@
-package providerendpoint_test
+package providerorigin_test
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/providerendpoint"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/providerorigin"
 )
 
 func TestNormalizeBaseURL(t *testing.T) {
@@ -22,7 +22,7 @@ func TestNormalizeBaseURL(t *testing.T) {
 		"  https://example.com  ":          "https://example.com",
 	}
 	for in, want := range ok {
-		got, err := providerendpoint.NormalizeBaseURL(in)
+		got, err := providerorigin.NormalizeBaseURL(in)
 		if err != nil {
 			t.Fatalf("NormalizeBaseURL(%q) unexpected err: %v", in, err)
 		}
@@ -41,7 +41,7 @@ func TestNormalizeBaseURL(t *testing.T) {
 		"https://",                      // no host
 	}
 	for _, in := range bad {
-		if _, err := providerendpoint.NormalizeBaseURL(in); err == nil {
+		if _, err := providerorigin.NormalizeBaseURL(in); err == nil {
 			t.Fatalf("NormalizeBaseURL(%q) expected error, got nil", in)
 		} else if failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
 			t.Fatalf("NormalizeBaseURL(%q) code = %q, want invalid_argument", in, failure.CodeOf(err))
@@ -54,33 +54,33 @@ func TestNormalizeBaseURL(t *testing.T) {
 type fakeStore struct {
 	provider    sqlc.Provider
 	providerErr error
-	createRow   sqlc.ProviderEndpoint
+	createRow   sqlc.ProviderOrigin
 	createErr   error
-	createParam sqlc.CreateProviderEndpointParams
+	createParam sqlc.CreateProviderOriginParams
 	createCalls int
 }
 
 func (f *fakeStore) GetProvider(context.Context, int64) (sqlc.Provider, error) {
 	return f.provider, f.providerErr
 }
-func (f *fakeStore) CreateProviderEndpoint(_ context.Context, arg sqlc.CreateProviderEndpointParams) (sqlc.ProviderEndpoint, error) {
+func (f *fakeStore) CreateProviderOrigin(_ context.Context, arg sqlc.CreateProviderOriginParams) (sqlc.ProviderOrigin, error) {
 	f.createParam = arg
 	f.createCalls++
 	return f.createRow, f.createErr
 }
-func (f *fakeStore) GetProviderEndpoint(context.Context, int64) (sqlc.ProviderEndpoint, error) {
-	return sqlc.ProviderEndpoint{}, pgx.ErrNoRows
+func (f *fakeStore) GetProviderOrigin(context.Context, int64) (sqlc.ProviderOrigin, error) {
+	return sqlc.ProviderOrigin{}, pgx.ErrNoRows
 }
-func (f *fakeStore) ListProviderEndpointsPage(context.Context, sqlc.ListProviderEndpointsPageParams) ([]sqlc.ListProviderEndpointsPageRow, error) {
+func (f *fakeStore) ListProviderOriginsPage(context.Context, sqlc.ListProviderOriginsPageParams) ([]sqlc.ListProviderOriginsPageRow, error) {
 	return nil, nil
 }
-func (f *fakeStore) CountProviderEndpoints(context.Context, sqlc.CountProviderEndpointsParams) (int64, error) {
+func (f *fakeStore) CountProviderOrigins(context.Context, sqlc.CountProviderOriginsParams) (int64, error) {
 	return 0, nil
 }
-func (f *fakeStore) UpdateProviderEndpointName(context.Context, sqlc.UpdateProviderEndpointNameParams) (sqlc.ProviderEndpoint, error) {
-	return sqlc.ProviderEndpoint{}, pgx.ErrNoRows
+func (f *fakeStore) UpdateProviderOriginName(context.Context, sqlc.UpdateProviderOriginNameParams) (sqlc.ProviderOrigin, error) {
+	return sqlc.ProviderOrigin{}, pgx.ErrNoRows
 }
-func (f *fakeStore) CountChannelsByProviderEndpoint(context.Context, int64) (int64, error) {
+func (f *fakeStore) CountChannelsByProviderOrigin(context.Context, int64) (int64, error) {
 	return 0, nil
 }
 
@@ -89,7 +89,7 @@ type fakeControl struct {
 	called bool
 }
 
-func (c *fakeControl) InitEndpointControl(context.Context, int64, int64, int64, string) (bool, error) {
+func (c *fakeControl) InitOriginControl(context.Context, int64, int64, int64, string) (bool, error) {
 	c.called = true
 	return true, c.err
 }
@@ -97,15 +97,15 @@ func (c *fakeControl) InitEndpointControl(context.Context, int64, int64, int64, 
 func TestCreateNormalizesAndInitializesControl(t *testing.T) {
 	store := &fakeStore{
 		provider: sqlc.Provider{ID: 1, Status: "enabled"},
-		createRow: sqlc.ProviderEndpoint{
+		createRow: sqlc.ProviderOrigin{
 			ID: 5, ProviderID: 1, Name: "StarAPI", BaseUrl: "https://open.codex521.cc",
 			BaseUrlRevision: 1, Status: "enabled", StatusRevision: 1,
 		},
 	}
 	ctrl := &fakeControl{}
-	svc := providerendpoint.NewService(store, ctrl)
+	svc := providerorigin.NewService(store, ctrl)
 
-	ep, err := svc.Create(context.Background(), providerendpoint.CreateInput{
+	ep, err := svc.Create(context.Background(), providerorigin.CreateInput{
 		ProviderID: 1, Name: "StarAPI", BaseURL: "https://Open.Codex521.cc/", Status: "enabled",
 	})
 	if err != nil {
@@ -115,7 +115,7 @@ func TestCreateNormalizesAndInitializesControl(t *testing.T) {
 		t.Fatalf("persisted base_url = %q, want normalized", store.createParam.BaseUrl)
 	}
 	if !ctrl.called {
-		t.Fatalf("InitEndpointControl must be called on create")
+		t.Fatalf("InitOriginControl must be called on create")
 	}
 	if ep.RuntimeSyncPending {
 		t.Fatalf("control init succeeded; RuntimeSyncPending should be false")
@@ -124,25 +124,25 @@ func TestCreateNormalizesAndInitializesControl(t *testing.T) {
 
 func TestCreateProviderNotFound(t *testing.T) {
 	store := &fakeStore{providerErr: pgx.ErrNoRows}
-	svc := providerendpoint.NewService(store, &fakeControl{})
-	_, err := svc.Create(context.Background(), providerendpoint.CreateInput{
+	svc := providerorigin.NewService(store, &fakeControl{})
+	_, err := svc.Create(context.Background(), providerorigin.CreateInput{
 		ProviderID: 9, Name: "x", BaseURL: "https://x.example", Status: "enabled",
 	})
 	if failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
 		t.Fatalf("want invalid_argument for missing provider, got %v", failure.CodeOf(err))
 	}
 	if store.createCalls != 0 {
-		t.Fatalf("must not create endpoint when provider missing")
+		t.Fatalf("must not create origin when provider missing")
 	}
 }
 
 func TestCreateControlFailureMarksRuntimeSyncPending(t *testing.T) {
 	store := &fakeStore{
 		provider:  sqlc.Provider{ID: 1, Status: "enabled"},
-		createRow: sqlc.ProviderEndpoint{ID: 5, ProviderID: 1, Name: "n", BaseUrl: "https://x.example", BaseUrlRevision: 1, Status: "enabled", StatusRevision: 1},
+		createRow: sqlc.ProviderOrigin{ID: 5, ProviderID: 1, Name: "n", BaseUrl: "https://x.example", BaseUrlRevision: 1, Status: "enabled", StatusRevision: 1},
 	}
-	svc := providerendpoint.NewService(store, &fakeControl{err: context.DeadlineExceeded})
-	ep, err := svc.Create(context.Background(), providerendpoint.CreateInput{
+	svc := providerorigin.NewService(store, &fakeControl{err: context.DeadlineExceeded})
+	ep, err := svc.Create(context.Background(), providerorigin.CreateInput{
 		ProviderID: 1, Name: "n", BaseURL: "https://x.example", Status: "enabled",
 	})
 	if err != nil {

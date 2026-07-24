@@ -32,13 +32,13 @@ type providerOpsRowDTO struct {
 	Name         string                   `json:"name"`
 	Status       string                   `json:"status"`
 	CreatedAt    string                   `json:"created_at"`
-	Endpoints    []providerOpsEndpointDTO `json:"endpoints"`
+	Origins    []providerOpsOriginDTO `json:"origins"`
 	ChannelTotal int64                    `json:"channel_total"`
 	ModelsCount  int64                    `json:"models_count"`
 	RoutesCount  int64                    `json:"routes_count"`
 }
 
-type providerOpsEndpointDTO struct {
+type providerOpsOriginDTO struct {
 	ID      int64  `json:"id"`
 	Name    string `json:"name"`
 	BaseURL string `json:"base_url"`
@@ -140,13 +140,13 @@ func (h *providerOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 }
 
 func providerOpsRowDTOFrom(row providerops.Row) providerOpsRowDTO {
-	endpoints := make([]providerOpsEndpointDTO, 0, len(row.Endpoints))
-	for _, endpoint := range row.Endpoints {
-		endpoints = append(endpoints, providerOpsEndpointDTO{
-			ID:      endpoint.ID,
-			Name:    endpoint.Name,
-			BaseURL: endpoint.BaseURL,
-			Status:  endpoint.Status,
+	origins := make([]providerOpsOriginDTO, 0, len(row.Origins))
+	for _, origin := range row.Origins {
+		origins = append(origins, providerOpsOriginDTO{
+			ID:      origin.ID,
+			Name:    origin.Name,
+			BaseURL: origin.BaseURL,
+			Status:  origin.Status,
 		})
 	}
 	return providerOpsRowDTO{
@@ -155,7 +155,7 @@ func providerOpsRowDTOFrom(row providerops.Row) providerOpsRowDTO {
 		Name:         row.Name,
 		Status:       row.Status,
 		CreatedAt:    adminhttp.RFC3339(row.CreatedAt),
-		Endpoints:    endpoints,
+		Origins:    origins,
 		ChannelTotal: row.ChannelTotal,
 		ModelsCount:  row.ModelsCount,
 		RoutesCount:  row.RoutesCount,

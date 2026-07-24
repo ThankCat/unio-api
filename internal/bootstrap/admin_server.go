@@ -9,7 +9,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 	apichannel "github.com/ThankCat/unio-gateway/internal/app/adminapi/channel"
-	apiproviderendpoint "github.com/ThankCat/unio-gateway/internal/app/adminapi/providerendpoint"
+	apiproviderorigin "github.com/ThankCat/unio-gateway/internal/app/adminapi/providerorigin"
 	anthropicdeepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/deepseek/messages"
 	openaideepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/deepseek/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
@@ -38,7 +38,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelops"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelprice"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/provider"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/providerendpoint"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/providerorigin"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/providerops"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
 	adminroute "github.com/ThankCat/unio-gateway/internal/service/admin/route"
@@ -132,11 +132,11 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 	providerService := provider.NewService(queries)
 	providerOpsService := providerops.NewService(queries)
-	// P4 §8.1：ProviderEndpoint CRUD。create 需初始化可恢复的 Redis Endpoint control（§4.2.18）；
-	// Redis 缺失时 control 为 nil，create 跳过初始化（Endpoint 在 control 恢复前不可被准入，fail-closed）。
-	var endpointControl providerendpoint.ControlInitializer
-	var endpointFencer *providerendpoint.EndpointFencer
-	var endpointBreakerRuntime apiproviderendpoint.BreakerRuntime
+	// P4 §8.1：ProviderOrigin CRUD。create 需初始化可恢复的 Redis Origin control（§4.2.18）；
+	// Redis 缺失时 control 为 nil，create 跳过初始化（Origin 在 control 恢复前不可被准入，fail-closed）。
+	var originControl providerorigin.ControlInitializer
+	var originFencer *providerorigin.OriginFencer
+	var originBreakerRuntime apiproviderorigin.BreakerRuntime
 	var channelBreakerRuntime apichannel.BreakerRuntime
 	var settingsRuntimePublisher appsettings.RuntimeControlPublisher
 	var settingsRuntimeStore appsettings.RuntimeControlStore
@@ -157,13 +157,13 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 			runtimeReconcilerCancel = cancel
 			go runRuntimeControlReconciler(reconcileCtx, pool, settingsStore, breakerStore, runtimeTelemetry)
 		}
-		endpointControl = breakerStore
-		endpointBreakerRuntime = breakerStore
+		originControl = breakerStore
+		originBreakerRuntime = breakerStore
 		channelBreakerRuntime = breakerStore
-		// status/base_url 热更新走可恢复围栏（endpoint_routing_operations + Redis fence）；需要 DB pool。
+		// status/base_url 热更新走可恢复围栏（origin_routing_operations + Redis fence）；需要 DB pool。
 		if pool, ok := deps.DB.(*pgxpool.Pool); ok {
-			endpointFencer = providerendpoint.NewEndpointFencer(
-				runtimecontrol.NewEndpointFencePublisher(pool), breakerStore,
+			originFencer = providerorigin.NewOriginFencer(
+				runtimecontrol.NewOriginFencePublisher(pool), breakerStore,
 			)
 			publisher := runtimecontrol.NewPublisher(pool, breakerStore)
 			settingsRuntimePublisher = publisher
@@ -172,17 +172,17 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 			channelRuntimeStore = breakerStore
 		}
 	}
-	providerEndpointService := providerendpoint.NewService(queries, endpointControl)
+	providerOriginService := providerorigin.NewService(queries, originControl)
 	if pool, ok := deps.DB.(*pgxpool.Pool); ok {
-		providerEndpointService.WithTransactionalDB(pool)
+		providerOriginService.WithTransactionalDB(pool)
 	}
-	if endpointFencer != nil {
-		providerEndpointService = providerEndpointService.WithFencer(endpointFencer)
+	if originFencer != nil {
+		providerOriginService = providerOriginService.WithFencer(originFencer)
 		if pool, ok := deps.DB.(*pgxpool.Pool); ok && sharedBreakerStore != nil {
 			providerService.WithStatusFencer(
-				provider.NewStatusFencer(runtimecontrol.NewEndpointFencePublisher(pool), sharedBreakerStore),
+				provider.NewStatusFencer(runtimecontrol.NewOriginFencePublisher(pool), sharedBreakerStore),
 				func(ctx context.Context) int {
-					return appsettings.GatewayCircuitBreaker(ctx, settingsStore).EndpointStatusBatchMax
+					return appsettings.GatewayCircuitBreaker(ctx, settingsStore).OriginStatusBatchMax
 				},
 			)
 		}
@@ -262,8 +262,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		Authenticator:           authenticator,
 		ProviderService:         providerService,
 		ProviderOpsService:      providerOpsService,
-		ProviderEndpointService: providerEndpointService,
-		ProviderEndpointBreaker: endpointBreakerRuntime,
+		ProviderOriginService: providerOriginService,
+		ProviderOriginBreaker: originBreakerRuntime,
 		ChannelService:          channelService,
 		ChannelBreaker:          channelBreakerRuntime,
 		ChannelTestService:      channelTestService,

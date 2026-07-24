@@ -60,7 +60,7 @@ func (s *routerTestChatCompletionService) StreamChatCompletion(ctx context.Conte
 // request admission 的生命周期与协议映射由 middleware/request_admission_test.go 独立覆盖。
 //
 // 它不引入 gatewayapi 根包，避免子包 → gatewayapi → 子包的测试编译环；
-// 顶层 httpmw（request id/metrics/logger）与跨 operation 路由（models）在
+// 顶层 httpmw（request id/metrics/logger）与跨 endpoint 路由（models）在
 // gatewayapi router_test.go 和 models 子包中单独验证。
 func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService ChatCompletionService, _ any) http.Handler {
 	if chatService == nil {

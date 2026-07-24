@@ -68,20 +68,20 @@ type Channel struct {
 	ProviderID                      int64
 	ProviderName                    string
 	ProviderStatus                  string
-	ProviderEndpointID              int64
-	ProviderEndpointName            string
-	ProviderEndpointStatus          string
-	EndpointBaseURLRevision         int64
-	EndpointStatusRevision          int64
-	RuntimeEndpointBaseURLRevision  int64
-	RuntimeEndpointStatusRevision   int64
-	PendingEndpointBaseURLRevision  *int64
-	PendingEndpointStatusRevision   *int64
-	EndpointBaseURLRevisionCurrent  bool
-	EndpointStatusRevisionCurrent   bool
-	EndpointStateGeneration         int64
-	EndpointBaseURLFenceGeneration  int64
-	EndpointStatusFenceGeneration   int64
+	ProviderOriginID              int64
+	ProviderOriginName            string
+	ProviderOriginStatus          string
+	OriginBaseURLRevision         int64
+	OriginStatusRevision          int64
+	RuntimeOriginBaseURLRevision  int64
+	RuntimeOriginStatusRevision   int64
+	PendingOriginBaseURLRevision  *int64
+	PendingOriginStatusRevision   *int64
+	OriginBaseURLRevisionCurrent  bool
+	OriginStatusRevisionCurrent   bool
+	OriginStateGeneration         int64
+	OriginBaseURLFenceGeneration  int64
+	OriginStatusFenceGeneration   int64
 	ChannelConfigRevision           int64
 	RuntimeChannelConfigRevision    *int64
 	ChannelConfigRevisionCurrent    bool
@@ -120,8 +120,8 @@ type Channel struct {
 	Pressure                        float64
 	CapacityUnknown                 bool
 	CapacityReadFailed              bool
-	EndpointBreakerState            *string
-	EndpointOpenRemainingMs         *int64
+	OriginBreakerState            *string
+	OriginOpenRemainingMs         *int64
 	ChannelBreakerState             *string
 	ChannelOpenRemainingMs          *int64
 	ErrorRate                       *float64
@@ -268,10 +268,10 @@ func (s *Service) Get(ctx context.Context, params Params) (Runtime, error) {
 			return runtime, nil
 		}
 		input.Candidates = append(input.Candidates, breakerstore.SnapshotCandidateInput{
-			EndpointID:               row.ProviderEndpointID,
+			OriginID:               row.ProviderOriginID,
 			ChannelID:                row.ChannelID,
-			EndpointBaseURLRevision:  row.ProviderEndpointBaseUrlRevision,
-			EndpointStatusRevision:   row.ProviderEndpointStatusRevision,
+			OriginBaseURLRevision:  row.ProviderOriginBaseUrlRevision,
+			OriginStatusRevision:   row.ProviderOriginStatusRevision,
 			ChannelConfigRevision:    row.ChannelConfigRevision,
 			ChannelAdmissionRevision: row.ChannelAdmissionLimitsRevision,
 		})
@@ -307,10 +307,10 @@ func populateChannels(runtime *Runtime, rows []sqlc.RouteRuntimePoolRow, statsRo
 		channel := Channel{
 			ChannelID: row.ChannelID, ChannelName: row.ChannelName, ChannelStatus: row.ChannelStatus,
 			ProviderID: row.ProviderID, ProviderName: row.ProviderName, ProviderStatus: row.ProviderStatus,
-			ProviderEndpointID: row.ProviderEndpointID, ProviderEndpointName: row.ProviderEndpointName,
-			ProviderEndpointStatus:         row.ProviderEndpointStatus,
-			EndpointBaseURLRevision:        row.ProviderEndpointBaseUrlRevision,
-			EndpointStatusRevision:         row.ProviderEndpointStatusRevision,
+			ProviderOriginID: row.ProviderOriginID, ProviderOriginName: row.ProviderOriginName,
+			ProviderOriginStatus:         row.ProviderOriginStatus,
+			OriginBaseURLRevision:        row.ProviderOriginBaseUrlRevision,
+			OriginStatusRevision:         row.ProviderOriginStatusRevision,
 			ChannelConfigRevision:          row.ChannelConfigRevision,
 			ChannelAdmissionLimitsRevision: row.ChannelAdmissionLimitsRevision,
 			Protocol:                       row.Protocol, AdapterKey: row.AdapterKey, Priority: row.Priority,
@@ -357,17 +357,17 @@ func applySnapshot(
 			// Do not expose or score its breaker and TTFT samples.
 			channelSnapshot = breakerstore.ScopeSnapshot{}
 		}
-		channel.EndpointBreakerState, channel.EndpointOpenRemainingMs = breakerView(candidate.Endpoint)
+		channel.OriginBreakerState, channel.OriginOpenRemainingMs = breakerView(candidate.Origin)
 		channel.ChannelBreakerState, channel.ChannelOpenRemainingMs = breakerView(channelSnapshot)
-		channel.RuntimeEndpointBaseURLRevision = candidate.Endpoint.BaseURLRevision
-		channel.RuntimeEndpointStatusRevision = candidate.Endpoint.StatusRevision
-		channel.PendingEndpointBaseURLRevision = positiveInt64Ptr(candidate.Endpoint.PendingBaseURLRevision)
-		channel.PendingEndpointStatusRevision = positiveInt64Ptr(candidate.Endpoint.PendingStatusRevision)
-		channel.EndpointBaseURLRevisionCurrent = candidate.Endpoint.BaseURLRevision == channel.EndpointBaseURLRevision
-		channel.EndpointStatusRevisionCurrent = candidate.Endpoint.StatusRevision == channel.EndpointStatusRevision
-		channel.EndpointStateGeneration = candidate.Endpoint.StateGeneration
-		channel.EndpointBaseURLFenceGeneration = candidate.Endpoint.BaseURLFenceGeneration
-		channel.EndpointStatusFenceGeneration = candidate.Endpoint.StatusFenceGeneration
+		channel.RuntimeOriginBaseURLRevision = candidate.Origin.BaseURLRevision
+		channel.RuntimeOriginStatusRevision = candidate.Origin.StatusRevision
+		channel.PendingOriginBaseURLRevision = positiveInt64Ptr(candidate.Origin.PendingBaseURLRevision)
+		channel.PendingOriginStatusRevision = positiveInt64Ptr(candidate.Origin.PendingStatusRevision)
+		channel.OriginBaseURLRevisionCurrent = candidate.Origin.BaseURLRevision == channel.OriginBaseURLRevision
+		channel.OriginStatusRevisionCurrent = candidate.Origin.StatusRevision == channel.OriginStatusRevision
+		channel.OriginStateGeneration = candidate.Origin.StateGeneration
+		channel.OriginBaseURLFenceGeneration = candidate.Origin.BaseURLFenceGeneration
+		channel.OriginStatusFenceGeneration = candidate.Origin.StatusFenceGeneration
 		channel.RuntimeChannelConfigRevision = positiveInt64Ptr(candidate.Channel.ChannelConfigRevision)
 		channel.ChannelConfigRevisionCurrent = candidate.Channel.ChannelConfigRevision == channel.ChannelConfigRevision
 		channel.RuntimeChannelAdmissionRevision = candidate.Candidate.ChannelAdmissionRevision
@@ -574,8 +574,8 @@ func databaseExcludedReason(row sqlc.RouteRuntimePoolRow, params Params) string 
 		return "channel_" + row.ChannelStatus
 	case row.ProviderStatus != "enabled":
 		return "provider_" + row.ProviderStatus
-	case row.ProviderEndpointStatus != "enabled":
-		return "provider_endpoint_" + row.ProviderEndpointStatus
+	case row.ProviderOriginStatus != "enabled":
+		return "provider_origin_" + row.ProviderOriginStatus
 	}
 	reason := routingdiagnostic.ExcludedReason(routingdiagnostic.PoolFacts{
 		RouteStatus: row.RouteStatus, ChannelStatus: row.ChannelStatus, ProviderStatus: row.ProviderStatus,
@@ -705,12 +705,12 @@ func denyRuntime(runtime *Runtime, state string, postgresAvailable, breakerAvail
 		}
 		channel.RuntimeSyncState = state
 		channel.BreakerStoreAdmission = breakerAdmissionDenied
-		channel.RuntimeEndpointBaseURLRevision = 0
-		channel.RuntimeEndpointStatusRevision = 0
-		channel.PendingEndpointBaseURLRevision = nil
-		channel.PendingEndpointStatusRevision = nil
-		channel.EndpointBaseURLRevisionCurrent = false
-		channel.EndpointStatusRevisionCurrent = false
+		channel.RuntimeOriginBaseURLRevision = 0
+		channel.RuntimeOriginStatusRevision = 0
+		channel.PendingOriginBaseURLRevision = nil
+		channel.PendingOriginStatusRevision = nil
+		channel.OriginBaseURLRevisionCurrent = false
+		channel.OriginStatusRevisionCurrent = false
 		channel.RuntimeChannelConfigRevision = nil
 		channel.ChannelConfigRevisionCurrent = false
 		channel.RuntimeChannelAdmissionRevision = 0
@@ -721,8 +721,8 @@ func denyRuntime(runtime *Runtime, state string, postgresAvailable, breakerAvail
 		channel.RPMRemaining = nil
 		channel.RPDRemaining = nil
 		channel.TPMRemaining = nil
-		channel.EndpointBreakerState = nil
-		channel.EndpointOpenRemainingMs = nil
+		channel.OriginBreakerState = nil
+		channel.OriginOpenRemainingMs = nil
 		channel.ChannelBreakerState = nil
 		channel.ChannelOpenRemainingMs = nil
 		channel.ErrorRate = nil

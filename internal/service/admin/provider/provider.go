@@ -70,13 +70,13 @@ type Provider struct {
 	UpdatedAt             time.Time
 	ArchivedAt            *time.Time
 	RuntimeSyncPending    bool
-	AffectedEndpointCount int
+	AffectedOriginCount int
 }
 
 // StatusChangeResult 是 Provider 状态写入后可安全返回给 Admin 的运行态同步摘要。
 type StatusChangeResult struct {
 	RuntimeSyncPending    bool
-	AffectedEndpointCount int
+	AffectedOriginCount int
 }
 
 // CreateInput 是创建 provider 的入参。
@@ -224,13 +224,13 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Provider, error) 
 		return Provider{}, storeFailed(err, "get provider")
 	}
 	if current.Status != status && s.fencer != nil {
-		endpoints, err := s.listEndpoints(ctx, in.ID)
+		origins, err := s.listOrigins(ctx, in.ID)
 		if err != nil {
 			return Provider{}, err
 		}
 		result, err := s.fencer.publish(ctx, providerStatusChange{
 			Current: current, NextName: name, NextStatus: status,
-			Endpoints: endpoints, MaxBatch: s.batchMax(ctx),
+			Origins: origins, MaxBatch: s.batchMax(ctx),
 		})
 		if err != nil {
 			return Provider{}, err
@@ -240,7 +240,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Provider, error) 
 			return Provider{}, err
 		}
 		updated.RuntimeSyncPending = result.RuntimeSyncPending
-		updated.AffectedEndpointCount = result.AffectedEndpointCount
+		updated.AffectedOriginCount = result.AffectedOriginCount
 		return updated, nil
 	}
 
@@ -261,8 +261,11 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Provider, error) 
 
 // Delete 物理删除 provider，用于清理录错的脏数据；slug 随之释放，可重新录入同名。
 //
-// provider 无自身配置子表，不做级联：名下仍有 channel，或已被请求/账务历史（NO ACTION 外键）
-// 引用时，DB 拒绝删除（23503），降级为 conflict，提示先删该服务商下的渠道或改用停用。
+// 单条 SQL 内级联清理 provider 自身的上游源站及其操作日志（P4 子表：终态操作日志置空 FK 保留审计、
+// 未终态以 RESTRICT 挡删，避免删除进行中的运行态操作）。但源站/provider 一旦名下仍有 channel，
+// 或被请求/账务历史（NO ACTION 外键）引用，DB 拒绝删除（23503），降级为 conflict，提示先删渠道或改用停用。
+// 删除闸门要求 provider 已归档，归档时源站已随之围栏归档；删除后源站的 Redis 运行态成为惰性孤儿
+//（键以已删源站 id 为界、不会被单调递增的新源站 id 复用），由权威库→Redis 重建模型自然容忍。
 func (s *Service) Delete(ctx context.Context, id int64) error {
 	if id <= 0 {
 		return invalidArgument("id", "provider id must be positive")
@@ -283,7 +286,7 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	affected, err := s.store.DeleteProvider(ctx, id)
 	if err != nil {
 		if isForeignKeyViolation(err) {
-			return conflict("provider still has channels or is referenced by request/billing history; delete its channels first")
+			return conflict("provider still has channels, is referenced by request/billing history, or has an in-flight runtime operation; delete its channels first or keep it archived")
 		}
 		return storeFailed(err, "delete provider")
 	}
@@ -339,13 +342,13 @@ func (s *Service) Archive(ctx context.Context, id int64, replacementChannelID *i
 			return StatusChangeResult{}, conflict("replacement channel provider must be enabled")
 		}
 		if s.fencer != nil {
-			endpoints, err := s.listEndpoints(ctx, id)
+			origins, err := s.listOrigins(ctx, id)
 			if err != nil {
 				return StatusChangeResult{}, err
 			}
 			return s.fencer.publish(ctx, providerStatusChange{
 				Current: current, NextName: current.Name, NextStatus: StatusArchived,
-				Endpoints: endpoints, MaxBatch: s.batchMax(ctx), Archive: true,
+				Origins: origins, MaxBatch: s.batchMax(ctx), Archive: true,
 				ArchiveReplacementID: replacementChannelID,
 			})
 		}
@@ -371,13 +374,13 @@ func (s *Service) Archive(ctx context.Context, id int64, replacementChannelID *i
 		))
 	}
 	if s.fencer != nil {
-		endpoints, err := s.listEndpoints(ctx, id)
+		origins, err := s.listOrigins(ctx, id)
 		if err != nil {
 			return StatusChangeResult{}, err
 		}
 		return s.fencer.publish(ctx, providerStatusChange{
 			Current: current, NextName: current.Name, NextStatus: StatusArchived,
-			Endpoints: endpoints, MaxBatch: s.batchMax(ctx), Archive: true,
+			Origins: origins, MaxBatch: s.batchMax(ctx), Archive: true,
 		})
 	}
 	affected, err := s.store.ArchiveProviderCascade(ctx, id)
@@ -406,13 +409,13 @@ func (s *Service) Restore(ctx context.Context, id int64) (StatusChangeResult, er
 		if current.Status != StatusArchived {
 			return StatusChangeResult{}, notFound("provider not found or not archived")
 		}
-		endpoints, err := s.listEndpoints(ctx, id)
+		origins, err := s.listOrigins(ctx, id)
 		if err != nil {
 			return StatusChangeResult{}, err
 		}
 		return s.fencer.publish(ctx, providerStatusChange{
 			Current: current, NextName: current.Name, NextStatus: StatusDisabled,
-			Endpoints: endpoints, MaxBatch: s.batchMax(ctx), Restore: true,
+			Origins: origins, MaxBatch: s.batchMax(ctx), Restore: true,
 		})
 	}
 	affected, err := s.store.RestoreProvider(ctx, id)
@@ -425,18 +428,18 @@ func (s *Service) Restore(ctx context.Context, id int64) (StatusChangeResult, er
 	return StatusChangeResult{}, nil
 }
 
-type providerEndpointLister interface {
-	ListProviderEndpointsByProvider(ctx context.Context, providerID int64) ([]sqlc.ProviderEndpoint, error)
+type providerOriginLister interface {
+	ListProviderOriginsByProvider(ctx context.Context, providerID int64) ([]sqlc.ProviderOrigin, error)
 }
 
-func (s *Service) listEndpoints(ctx context.Context, providerID int64) ([]sqlc.ProviderEndpoint, error) {
-	lister, ok := s.store.(providerEndpointLister)
+func (s *Service) listOrigins(ctx context.Context, providerID int64) ([]sqlc.ProviderOrigin, error) {
+	lister, ok := s.store.(providerOriginLister)
 	if !ok {
-		return nil, storeFailed(errors.New("provider endpoint lister is not configured"), "list provider endpoints")
+		return nil, storeFailed(errors.New("provider origin lister is not configured"), "list provider origins")
 	}
-	rows, err := lister.ListProviderEndpointsByProvider(ctx, providerID)
+	rows, err := lister.ListProviderOriginsByProvider(ctx, providerID)
 	if err != nil {
-		return nil, storeFailed(err, "list provider endpoints")
+		return nil, storeFailed(err, "list provider origins")
 	}
 	return rows, nil
 }

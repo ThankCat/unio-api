@@ -290,16 +290,16 @@ return {'ready', fault_token, unpack(payloads)}
 
 // luaRuntimeFaultClearCommit compare-and-deletes only the latch generation proven above. It repeats
 // marker/revision/pending checks, compares the exact critical payload/hash pairs, and validates all
-// PostgreSQL-derived Endpoint fences and Channel admission controls in the same atomic execution.
+// PostgreSQL-derived Origin fences and Channel admission controls in the same atomic execution.
 // KEYS[8] is the shared Redis instance proof written only by this successful full-reconciliation
 // commit. ARGV[9] is the captured run_id and ARGV[10] is the exact fault token.
 const luaRuntimeFaultClearCommit = luaRedisInstanceHelpers + `
-local endpoint_count = tonumber(ARGV[21])
+local origin_count = tonumber(ARGV[21])
 local channel_count = tonumber(ARGV[22])
-if endpoint_count == nil or channel_count == nil or endpoint_count < 0 or channel_count < 0 or
-    endpoint_count ~= math.floor(endpoint_count) or channel_count ~= math.floor(channel_count) or
-    #KEYS ~= 8 + endpoint_count + channel_count or
-    #ARGV ~= 22 + endpoint_count * 3 + channel_count * 3 then
+if origin_count == nil or channel_count == nil or origin_count < 0 or channel_count < 0 or
+    origin_count ~= math.floor(origin_count) or channel_count ~= math.floor(channel_count) or
+    #KEYS ~= 8 + origin_count + channel_count or
+    #ARGV ~= 22 + origin_count * 3 + channel_count * 3 then
   return redis.error_reply('invalid runtime fault clear proof shape')
 end
 local current_run_id = redis_server_identity()
@@ -339,34 +339,34 @@ for index = 3, 7 do
   end
 end
 
-for index = 1, endpoint_count do
+for index = 1, origin_count do
   local key_index = 8 + index
 	local arg_index = 23 + (index - 1) * 3
-  local endpoint = KEYS[key_index]
-  local endpoint_type = redis.call('TYPE', endpoint)
-  if type(endpoint_type) == 'table' then endpoint_type = endpoint_type['ok'] end
-  if endpoint_type ~= 'hash' then
-    return redis.error_reply('WRONGTYPE runtime endpoint control must be a hash')
+  local origin = KEYS[key_index]
+  local origin_type = redis.call('TYPE', origin)
+  if type(origin_type) == 'table' then origin_type = origin_type['ok'] end
+  if origin_type ~= 'hash' then
+    return redis.error_reply('WRONGTYPE runtime origin control must be a hash')
   end
-  if redis.call('HGET', endpoint, 'control_present') ~= '1' or
-      redis.call('HGET', endpoint, 'base_url_revision_state') ~= 'active' or
-      redis.call('HGET', endpoint, 'status_revision_state') ~= 'active' or
-      redis.call('HGET', endpoint, 'base_url_revision') ~= ARGV[arg_index] or
-      redis.call('HGET', endpoint, 'status_revision') ~= ARGV[arg_index + 1] or
-      redis.call('HGET', endpoint, 'effective_status') ~= ARGV[arg_index + 2] or
-      redis.call('HEXISTS', endpoint, 'pending_base_url_revision') == 1 or
-      redis.call('HEXISTS', endpoint, 'base_url_fence_token') == 1 or
-      redis.call('HEXISTS', endpoint, 'base_url_payload_hash') == 1 or
-      redis.call('HEXISTS', endpoint, 'pending_status_revision') == 1 or
-      redis.call('HEXISTS', endpoint, 'pending_effective_status') == 1 or
-      redis.call('HEXISTS', endpoint, 'status_fence_token') == 1 or
-      redis.call('HEXISTS', endpoint, 'status_payload_hash') == 1 then
-    return {'endpoint_control_changed', index}
+  if redis.call('HGET', origin, 'control_present') ~= '1' or
+      redis.call('HGET', origin, 'base_url_revision_state') ~= 'active' or
+      redis.call('HGET', origin, 'status_revision_state') ~= 'active' or
+      redis.call('HGET', origin, 'base_url_revision') ~= ARGV[arg_index] or
+      redis.call('HGET', origin, 'status_revision') ~= ARGV[arg_index + 1] or
+      redis.call('HGET', origin, 'effective_status') ~= ARGV[arg_index + 2] or
+      redis.call('HEXISTS', origin, 'pending_base_url_revision') == 1 or
+      redis.call('HEXISTS', origin, 'base_url_fence_token') == 1 or
+      redis.call('HEXISTS', origin, 'base_url_payload_hash') == 1 or
+      redis.call('HEXISTS', origin, 'pending_status_revision') == 1 or
+      redis.call('HEXISTS', origin, 'pending_effective_status') == 1 or
+      redis.call('HEXISTS', origin, 'status_fence_token') == 1 or
+      redis.call('HEXISTS', origin, 'status_payload_hash') == 1 then
+    return {'origin_control_changed', index}
   end
 end
 
-local channel_key_offset = 8 + endpoint_count
-local channel_arg_offset = 23 + endpoint_count * 3
+local channel_key_offset = 8 + origin_count
+local channel_arg_offset = 23 + origin_count * 3
 for index = 1, channel_count do
   local control = KEYS[channel_key_offset + index]
   local arg_index = channel_arg_offset + (index - 1) * 3

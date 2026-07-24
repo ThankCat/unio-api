@@ -15,8 +15,8 @@ func TestRouteRuntimeDTOUsesP4Contract(t *testing.T) {
 		RuntimeSyncState: "active", BreakerStoreAdmission: "normal",
 		Sources: []routeruntime.Source{{Name: "breaker_store", Available: true}},
 		Channels: []routeruntime.Channel{{
-			ChannelID: 7, ProviderEndpointID: 21, ProviderEndpointName: "primary",
-			ProviderEndpointStatus: "enabled", TTFTSampleSource: "stream_only",
+			ChannelID: 7, ProviderOriginID: 21, ProviderOriginName: "primary",
+			ProviderOriginStatus: "enabled", TTFTSampleSource: "stream_only",
 			CostRatio: float64Pointer(0.4), CostWeight: 0.5, CostFactor: 0.8,
 			RuntimeSyncState: "active", BreakerStoreAdmission: "normal",
 		}},
@@ -48,8 +48,8 @@ func TestRouteRuntimeDTOUsesP4Contract(t *testing.T) {
 		t.Fatalf("unexpected channel DTO: %#v", channels[0])
 	}
 	for _, key := range []string{
-		"provider_endpoint_id", "provider_endpoint_name", "provider_endpoint_status",
-		"endpoint_breaker_state", "channel_breaker_state", "error_samples",
+		"provider_origin_id", "provider_origin_name", "provider_origin_status",
+		"origin_breaker_state", "channel_breaker_state", "error_samples",
 		"ttft_ewma_ms", "ttft_samples", "ttft_sample_source",
 		"cost_ratio", "cost_weight", "cost_factor", "final_weight",
 		"runtime_sync_state", "breaker_store_admission",

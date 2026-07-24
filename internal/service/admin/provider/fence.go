@@ -14,17 +14,17 @@ import (
 )
 
 type providerStatusFenceOps interface {
-	PrepareEndpointStatusRevisionBatch(ctx context.Context, providerID int64, transitions []breakerstore.EndpointStatusRevisionTransition, maxBatch int, token, payload string) (breakerstore.FenceResult, error)
-	CommitEndpointStatusRevisionBatch(ctx context.Context, providerID int64, transitions []breakerstore.EndpointStatusRevisionTransition, token, payload string) (breakerstore.FenceResult, error)
-	AbortEndpointStatusRevisionBatch(ctx context.Context, providerID int64, transitions []breakerstore.EndpointStatusRevisionTransition, token, payload string) (breakerstore.FenceResult, error)
+	PrepareOriginStatusRevisionBatch(ctx context.Context, providerID int64, transitions []breakerstore.OriginStatusRevisionTransition, maxBatch int, token, payload string) (breakerstore.FenceResult, error)
+	CommitOriginStatusRevisionBatch(ctx context.Context, providerID int64, transitions []breakerstore.OriginStatusRevisionTransition, token, payload string) (breakerstore.FenceResult, error)
+	AbortOriginStatusRevisionBatch(ctx context.Context, providerID int64, transitions []breakerstore.OriginStatusRevisionTransition, token, payload string) (breakerstore.FenceResult, error)
 }
 
 type providerStatusFencePublisher interface {
-	Publish(ctx context.Context, req runtimecontrol.EndpointFenceRequest) (runtimecontrol.PublishResult, error)
-	WithEndpointLocks(ctx context.Context, providerID int64, endpointIDs []int64, fn func(context.Context, pgx.Tx) error) error
+	Publish(ctx context.Context, req runtimecontrol.OriginFenceRequest) (runtimecontrol.PublishResult, error)
+	WithOriginLocks(ctx context.Context, providerID int64, originIDs []int64, fn func(context.Context, pgx.Tx) error) error
 }
 
-// StatusFencer atomically publishes a Provider effective-status change to all affected Endpoints.
+// StatusFencer atomically publishes a Provider effective-status change to all affected Origins.
 type StatusFencer struct {
 	pub providerStatusFencePublisher
 	ops providerStatusFenceOps
@@ -41,7 +41,7 @@ type providerStatusChange struct {
 	Current              sqlc.Provider
 	NextName             string
 	NextStatus           string
-	Endpoints            []sqlc.ProviderEndpoint
+	Origins            []sqlc.ProviderOrigin
 	MaxBatch             int
 	ArchiveReplacementID *int64
 	Archive              bool
@@ -49,14 +49,14 @@ type providerStatusChange struct {
 }
 
 func (f *StatusFencer) publish(ctx context.Context, change providerStatusChange) (StatusChangeResult, error) {
-	transitions := providerEndpointTransitions(change)
-	result := StatusChangeResult{AffectedEndpointCount: len(transitions)}
-	allEndpointIDs := make([]int64, len(change.Endpoints))
-	for i, endpoint := range change.Endpoints {
-		allEndpointIDs[i] = endpoint.ID
+	transitions := providerOriginTransitions(change)
+	result := StatusChangeResult{AffectedOriginCount: len(transitions)}
+	allOriginIDs := make([]int64, len(change.Origins))
+	for i, origin := range change.Origins {
+		allOriginIDs[i] = origin.ID
 	}
 	if len(transitions) == 0 {
-		err := f.pub.WithEndpointLocks(ctx, change.Current.ID, allEndpointIDs, func(ctx context.Context, tx pgx.Tx) error {
+		err := f.pub.WithOriginLocks(ctx, change.Current.ID, allOriginIDs, func(ctx context.Context, tx pgx.Tx) error {
 			if err := validateProviderChangeLocked(ctx, tx, change, nil); err != nil {
 				return err
 			}
@@ -68,52 +68,52 @@ func (f *StatusFencer) publish(ctx context.Context, change providerStatusChange)
 		return result, nil
 	}
 	if change.MaxBatch < 1 || change.MaxBatch > 1024 || len(transitions) > change.MaxBatch {
-		return StatusChangeResult{}, conflict("provider endpoint status batch is too large")
+		return StatusChangeResult{}, conflict("provider origin status batch is too large")
 	}
 
-	routingTransitions := make([]runtimecontrol.EndpointRoutingTransition, 0, len(transitions))
-	redisTransitions := make([]breakerstore.EndpointStatusRevisionTransition, 0, len(transitions))
+	routingTransitions := make([]runtimecontrol.OriginRoutingTransition, 0, len(transitions))
+	redisTransitions := make([]breakerstore.OriginStatusRevisionTransition, 0, len(transitions))
 	for _, transition := range transitions {
-		routingTransitions = append(routingTransitions, runtimecontrol.EndpointRoutingTransition{
-			EndpointID:             transition.endpoint.ID,
-			CurrentBaseURLRevision: transition.endpoint.BaseUrlRevision,
-			NextBaseURLRevision:    transition.endpoint.BaseUrlRevision,
-			CurrentStatusRevision:  transition.endpoint.StatusRevision,
-			NextStatusRevision:     transition.endpoint.StatusRevision + 1,
+		routingTransitions = append(routingTransitions, runtimecontrol.OriginRoutingTransition{
+			OriginID:             transition.origin.ID,
+			CurrentBaseURLRevision: transition.origin.BaseUrlRevision,
+			NextBaseURLRevision:    transition.origin.BaseUrlRevision,
+			CurrentStatusRevision:  transition.origin.StatusRevision,
+			NextStatusRevision:     transition.origin.StatusRevision + 1,
 			CurrentEffectiveStatus: transition.currentEffective,
 			NextEffectiveStatus:    transition.nextEffective,
 		})
-		redisTransitions = append(redisTransitions, breakerstore.EndpointStatusRevisionTransition{
-			EndpointID:          transition.endpoint.ID,
-			CurrentStatusRev:    transition.endpoint.StatusRevision,
-			NextStatusRev:       transition.endpoint.StatusRevision + 1,
+		redisTransitions = append(redisTransitions, breakerstore.OriginStatusRevisionTransition{
+			OriginID:          transition.origin.ID,
+			CurrentStatusRev:    transition.origin.StatusRevision,
+			NextStatusRev:       transition.origin.StatusRevision + 1,
 			NextEffectiveStatus: transition.nextEffective,
 		})
 	}
-	envelope := runtimecontrol.EndpointRoutingEnvelope{
-		Kind:                  runtimecontrol.EndpointFenceKindProviderStatusBatch,
+	envelope := runtimecontrol.OriginRoutingEnvelope{
+		Kind:                  runtimecontrol.OriginFenceKindProviderStatusBatch,
 		ProviderID:            change.Current.ID,
 		CurrentProviderStatus: change.Current.Status,
 		NextProviderStatus:    change.NextStatus,
 		Transitions:           routingTransitions,
 	}
-	durable, payload, err := runtimecontrol.CanonicalEndpointRoutingOperation(envelope, "", change.MaxBatch)
+	durable, payload, err := runtimecontrol.CanonicalOriginRoutingOperation(envelope, "", change.MaxBatch)
 	if err != nil {
 		return StatusChangeResult{}, err
 	}
 	token := providerFenceToken()
 	providerID := change.Current.ID
-	published, err := f.pub.Publish(ctx, runtimecontrol.EndpointFenceRequest{
-		Kind:  runtimecontrol.EndpointFenceKindProviderStatusBatch,
+	published, err := f.pub.Publish(ctx, runtimecontrol.OriginFenceRequest{
+		Kind:  runtimecontrol.OriginFenceKindProviderStatusBatch,
 		Token: token, ProviderID: &providerID, Transitions: durable, Payload: payload, MaxBatch: change.MaxBatch,
 		Prepare: func(ctx context.Context) (breakerstore.FenceResult, error) {
-			return f.ops.PrepareEndpointStatusRevisionBatch(ctx, providerID, redisTransitions, change.MaxBatch, token, payload)
+			return f.ops.PrepareOriginStatusRevisionBatch(ctx, providerID, redisTransitions, change.MaxBatch, token, payload)
 		},
 		Commit: func(ctx context.Context) (breakerstore.FenceResult, error) {
-			return f.ops.CommitEndpointStatusRevisionBatch(ctx, providerID, redisTransitions, token, payload)
+			return f.ops.CommitOriginStatusRevisionBatch(ctx, providerID, redisTransitions, token, payload)
 		},
 		Abort: func(ctx context.Context) (breakerstore.FenceResult, error) {
-			return f.ops.AbortEndpointStatusRevisionBatch(ctx, providerID, redisTransitions, token, payload)
+			return f.ops.AbortOriginStatusRevisionBatch(ctx, providerID, redisTransitions, token, payload)
 		},
 		ValidateLocked: func(ctx context.Context, tx pgx.Tx) error {
 			return validateProviderChangeLocked(ctx, tx, change, transitions)
@@ -129,29 +129,29 @@ func (f *StatusFencer) publish(ctx context.Context, change providerStatusChange)
 	return result, nil
 }
 
-type endpointStatusChange struct {
-	endpoint         sqlc.ProviderEndpoint
+type originStatusChange struct {
+	origin         sqlc.ProviderOrigin
 	currentEffective string
 	nextEffective    string
 }
 
-func providerEndpointTransitions(change providerStatusChange) []endpointStatusChange {
-	out := make([]endpointStatusChange, 0, len(change.Endpoints))
-	for _, endpoint := range change.Endpoints {
-		currentEffective := runtimecontrol.EffectiveEndpointStatus(change.Current.Status, endpoint.Status)
-		nextEndpointStatus := endpoint.Status
-		if change.Archive && endpoint.Status != StatusArchived {
-			nextEndpointStatus = StatusArchived
+func providerOriginTransitions(change providerStatusChange) []originStatusChange {
+	out := make([]originStatusChange, 0, len(change.Origins))
+	for _, origin := range change.Origins {
+		currentEffective := runtimecontrol.EffectiveOriginStatus(change.Current.Status, origin.Status)
+		nextOriginStatus := origin.Status
+		if change.Archive && origin.Status != StatusArchived {
+			nextOriginStatus = StatusArchived
 		}
-		nextEffective := runtimecontrol.EffectiveEndpointStatus(change.NextStatus, nextEndpointStatus)
+		nextEffective := runtimecontrol.EffectiveOriginStatus(change.NextStatus, nextOriginStatus)
 		if currentEffective != nextEffective {
-			out = append(out, endpointStatusChange{endpoint: endpoint, currentEffective: currentEffective, nextEffective: nextEffective})
+			out = append(out, originStatusChange{origin: origin, currentEffective: currentEffective, nextEffective: nextEffective})
 		}
 	}
 	return out
 }
 
-func validateProviderChangeLocked(ctx context.Context, tx pgx.Tx, change providerStatusChange, expected []endpointStatusChange) error {
+func validateProviderChangeLocked(ctx context.Context, tx pgx.Tx, change providerStatusChange, expected []originStatusChange) error {
 	var name, status string
 	if err := tx.QueryRow(ctx, `SELECT name, status FROM providers WHERE id=$1`, change.Current.ID).Scan(&name, &status); err != nil {
 		return err
@@ -160,39 +160,39 @@ func validateProviderChangeLocked(ctx context.Context, tx pgx.Tx, change provide
 		return fmt.Errorf("provider changed concurrently")
 	}
 	rows, err := tx.Query(ctx, `SELECT id, provider_id, name, base_url, base_url_revision, status, status_revision,
-		archived_at, created_at, updated_at FROM provider_endpoints WHERE provider_id=$1 ORDER BY id`, change.Current.ID)
+		archived_at, created_at, updated_at FROM provider_origins WHERE provider_id=$1 ORDER BY id`, change.Current.ID)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	current := make([]sqlc.ProviderEndpoint, 0, len(change.Endpoints))
+	current := make([]sqlc.ProviderOrigin, 0, len(change.Origins))
 	for rows.Next() {
-		var endpoint sqlc.ProviderEndpoint
-		if err := rows.Scan(&endpoint.ID, &endpoint.ProviderID, &endpoint.Name, &endpoint.BaseUrl,
-			&endpoint.BaseUrlRevision, &endpoint.Status, &endpoint.StatusRevision,
-			&endpoint.ArchivedAt, &endpoint.CreatedAt, &endpoint.UpdatedAt); err != nil {
+		var origin sqlc.ProviderOrigin
+		if err := rows.Scan(&origin.ID, &origin.ProviderID, &origin.Name, &origin.BaseUrl,
+			&origin.BaseUrlRevision, &origin.Status, &origin.StatusRevision,
+			&origin.ArchivedAt, &origin.CreatedAt, &origin.UpdatedAt); err != nil {
 			return err
 		}
-		current = append(current, endpoint)
+		current = append(current, origin)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if !sameProviderEndpoints(current, change.Endpoints) {
-		return fmt.Errorf("provider endpoint set changed concurrently")
+	if !sameProviderOrigins(current, change.Origins) {
+		return fmt.Errorf("provider origin set changed concurrently")
 	}
 	if expected != nil {
 		currentChange := change
-		currentChange.Endpoints = current
-		actual := providerEndpointTransitions(currentChange)
-		if !sameEndpointStatusChanges(actual, expected) {
-			return fmt.Errorf("provider affected endpoint set changed concurrently")
+		currentChange.Origins = current
+		actual := providerOriginTransitions(currentChange)
+		if !sameOriginStatusChanges(actual, expected) {
+			return fmt.Errorf("provider affected origin set changed concurrently")
 		}
 	}
 	return nil
 }
 
-func commitProviderChange(ctx context.Context, tx pgx.Tx, change providerStatusChange, transitions []endpointStatusChange) error {
+func commitProviderChange(ctx context.Context, tx pgx.Tx, change providerStatusChange, transitions []originStatusChange) error {
 	queries := sqlc.New(tx)
 	if change.Archive {
 		var affected int64
@@ -230,29 +230,29 @@ func commitProviderChange(ctx context.Context, tx pgx.Tx, change providerStatusC
 		}
 	}
 	for _, transition := range transitions {
-		nextEndpointStatus := transition.endpoint.Status
+		nextOriginStatus := transition.origin.Status
 		if change.Archive {
-			nextEndpointStatus = StatusArchived
+			nextOriginStatus = StatusArchived
 		}
-		command, err := tx.Exec(ctx, `UPDATE provider_endpoints
+		command, err := tx.Exec(ctx, `UPDATE provider_origins
 			SET status=$1, status_revision=$2,
 			    archived_at=CASE WHEN $1::text='archived' THEN now() ELSE archived_at END,
 			    updated_at=now()
 			WHERE id=$3 AND provider_id=$4 AND base_url_revision=$5 AND status_revision=$6 AND status=$7`,
-			nextEndpointStatus, transition.endpoint.StatusRevision+1,
-			transition.endpoint.ID, change.Current.ID, transition.endpoint.BaseUrlRevision,
-			transition.endpoint.StatusRevision, transition.endpoint.Status)
+			nextOriginStatus, transition.origin.StatusRevision+1,
+			transition.origin.ID, change.Current.ID, transition.origin.BaseUrlRevision,
+			transition.origin.StatusRevision, transition.origin.Status)
 		if err != nil {
 			return err
 		}
 		if command.RowsAffected() != 1 {
-			return fmt.Errorf("provider endpoint %d changed concurrently", transition.endpoint.ID)
+			return fmt.Errorf("provider origin %d changed concurrently", transition.origin.ID)
 		}
 	}
 	return nil
 }
 
-func sameProviderEndpoints(a, b []sqlc.ProviderEndpoint) bool {
+func sameProviderOrigins(a, b []sqlc.ProviderOrigin) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -265,12 +265,12 @@ func sameProviderEndpoints(a, b []sqlc.ProviderEndpoint) bool {
 	return true
 }
 
-func sameEndpointStatusChanges(a, b []endpointStatusChange) bool {
+func sameOriginStatusChanges(a, b []originStatusChange) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if a[i].endpoint.ID != b[i].endpoint.ID || a[i].endpoint.StatusRevision != b[i].endpoint.StatusRevision ||
+		if a[i].origin.ID != b[i].origin.ID || a[i].origin.StatusRevision != b[i].origin.StatusRevision ||
 			a[i].currentEffective != b[i].currentEffective || a[i].nextEffective != b[i].nextEffective {
 			return false
 		}

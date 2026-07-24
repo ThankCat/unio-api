@@ -47,7 +47,7 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		UserID:          principal.UserID,
 		ModelID:         req.Model,
 		IngressProtocol: routing.ProtocolAnthropic,
-		Operation:       routing.OperationMessages,
+		Endpoint:       routing.EndpointMessages,
 		RouteID:         principal.RouteID,
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)

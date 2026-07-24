@@ -310,7 +310,7 @@ func TestProvidersRequireToken(t *testing.T) {
 func TestUpdateProviderReturnsRuntimeSyncSummary(t *testing.T) {
 	handler := newServicesRouter(t, &fakeProviderService{updateOut: provider.Provider{
 		ID: 7, Slug: "openai", Name: "OpenAI", Status: "disabled",
-		RuntimeSyncPending: true, AffectedEndpointCount: 2,
+		RuntimeSyncPending: true, AffectedOriginCount: 2,
 	}}, nil)
 
 	rec := doAdmin(t, handler, http.MethodPatch, "/admin/v1/providers/7", `{"name":"OpenAI","status":"disabled"}`, true)
@@ -318,7 +318,7 @@ func TestUpdateProviderReturnsRuntimeSyncSummary(t *testing.T) {
 		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`"runtime_sync_pending":true`, `"affected_endpoint_count":2`} {
+	for _, want := range []string{`"runtime_sync_pending":true`, `"affected_origin_count":2`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("response missing %s: %s", want, body)
 		}
@@ -348,7 +348,7 @@ func TestDeleteProviderConflictReturns409(t *testing.T) {
 
 func TestArchiveProviderAcceptsReplacement(t *testing.T) {
 	svc := &fakeProviderService{archiveOut: provider.StatusChangeResult{
-		RuntimeSyncPending: true, AffectedEndpointCount: 2,
+		RuntimeSyncPending: true, AffectedOriginCount: 2,
 	}}
 	handler := newServicesRouter(t, svc, nil)
 	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers/7/archive", `{"replacement_channel_id":10}`, true)
@@ -359,14 +359,14 @@ func TestArchiveProviderAcceptsReplacement(t *testing.T) {
 		t.Fatalf("replacement channel was not forwarded: %v", svc.archiveReplacement)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`"runtime_sync_pending":true`, `"affected_endpoint_count":2`} {
+	for _, want := range []string{`"runtime_sync_pending":true`, `"affected_origin_count":2`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("response missing %s: %s", want, body)
 		}
 	}
 	for _, forbidden := range []string{`"token"`, `"payload"`, `"payload_hash"`, `"base_url"`} {
 		if strings.Contains(body, forbidden) {
-			t.Fatalf("response leaked operation detail %s: %s", forbidden, body)
+			t.Fatalf("response leaked endpoint detail %s: %s", forbidden, body)
 		}
 	}
 }
@@ -385,7 +385,7 @@ func TestArchiveProviderAcceptsEmptyBody(t *testing.T) {
 
 func TestRestoreProviderReturnsCommittedRuntimeSummary(t *testing.T) {
 	handler := newServicesRouter(t, &fakeProviderService{restoreOut: provider.StatusChangeResult{
-		AffectedEndpointCount: 1,
+		AffectedOriginCount: 1,
 	}}, nil)
 
 	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers/7/restore", "", true)
@@ -393,7 +393,7 @@ func TestRestoreProviderReturnsCommittedRuntimeSummary(t *testing.T) {
 		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`"runtime_sync_pending":false`, `"affected_endpoint_count":1`} {
+	for _, want := range []string{`"runtime_sync_pending":false`, `"affected_origin_count":1`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("response missing %s: %s", want, body)
 		}
@@ -464,8 +464,8 @@ func TestRotateChannelCredentialReturnsVerificationResult(t *testing.T) {
 		CredentialSaved: true, CredentialChanged: true, SavedConfigRevision: 8, CurrentConfigRevision: 9,
 		Verification: channel.CredentialVerification{
 			State:                         channel.CredentialVerificationPassed,
-			TestedEndpointBaseURLRevision: &baseURLRevision,
-			TestedEndpointStatusRevision:  &statusRevision,
+			TestedOriginBaseURLRevision: &baseURLRevision,
+			TestedOriginStatusRevision:  &statusRevision,
 			TestedConfigRevision:          &configRevision,
 			StateChangeApplied:            true, CredentialValidAfter: true,
 		},

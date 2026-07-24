@@ -19,7 +19,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/model"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/overview"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/provider"
-	"github.com/ThankCat/unio-gateway/internal/app/adminapi/providerendpoint"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/providerorigin"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/requests"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/route"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/system"
@@ -41,8 +41,8 @@ type RouterDeps struct {
 
 	ProviderService         provider.ProviderService
 	ProviderOpsService      provider.ProviderOpsService
-	ProviderEndpointService providerendpoint.ProviderEndpointService
-	ProviderEndpointBreaker providerendpoint.BreakerRuntime
+	ProviderOriginService providerorigin.ProviderOriginService
+	ProviderOriginBreaker providerorigin.BreakerRuntime
 	ChannelService          channel.ChannelService
 	ChannelBreaker          channel.BreakerRuntime
 	ChannelTestService      channel.ChannelTestService
@@ -104,7 +104,7 @@ type RouterDeps struct {
 	// HTTPMetrics 记录 HTTP 层请求指标；nil 表示不采集。
 	HTTPMetrics httpmw.MetricsRecorder
 
-	// MetricsHandler 暴露 Prometheus /metrics；nil 表示不挂载该端点。
+	// MetricsHandler 暴露 Prometheus /metrics；nil 表示不挂载该上游源站。
 	MetricsHandler http.Handler
 }
 
@@ -146,9 +146,9 @@ func NewRouter(deps RouterDeps) http.Handler {
 			Service:    deps.ProviderService,
 			OpsService: deps.ProviderOpsService,
 		})
-		providerendpoint.Register(r, providerendpoint.Deps{
-			Service: deps.ProviderEndpointService,
-			Breaker: deps.ProviderEndpointBreaker,
+		providerorigin.Register(r, providerorigin.Deps{
+			Service: deps.ProviderOriginService,
+			Breaker: deps.ProviderOriginBreaker,
 		})
 		channel.Register(r, channel.Deps{
 			Service:               deps.ChannelService,

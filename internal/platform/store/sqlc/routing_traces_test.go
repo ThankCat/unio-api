@@ -48,7 +48,7 @@ func TestRoutingDecisionTraceQueryAndRetention(t *testing.T) {
 
 	params := sqlc.UpsertRoutingDecisionTraceParams{
 		RequestRecordID: record.ID, RouteID: identity.apiKey.RouteID, Mode: "balanced",
-		RequestedModelID: record.RequestedModelID, Protocol: record.IngressProtocol, Operation: record.Operation,
+		RequestedModelID: record.RequestedModelID, Protocol: record.IngressProtocol, Endpoint: record.Endpoint,
 		PoolSize: 2, CandidateCount: 2, Abnormal: false, AbnormalReasons: []string{},
 		CandidateScores: []byte(fmt.Sprintf(`[{"channel_id":%d,"weight":0.8}]`, channelID)),
 		SelectedOrder:   []int64{channelID}, FallbackChain: []byte(`[]`),

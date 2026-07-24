@@ -17,7 +17,7 @@ import (
 // ANT-SDK-Mock-07：一次成功的 Anthropic SDK 请求后，DB 中事实链路完整。
 //
 // 验证：
-//   - request_records 写入 succeeded 终态，且 ingress_protocol='anthropic'/operation='messages'；
+//   - request_records 写入 succeeded 终态，且 ingress_protocol='anthropic'/endpoint='messages'；
 //   - request_attempts 写入 succeeded（upstream_protocol='anthropic'），upstream_status_code=200；
 //   - usage_records 写入，与上游 usage 一致（input_tokens → uncached_input_tokens；
 //     output_tokens → output_tokens_total）；
@@ -71,18 +71,18 @@ func TestANTSDKMockSettlementWritesAuditTrail(t *testing.T) {
 		rrID         int64
 		rrStatus     string
 		rrIngress    string
-		rrOperation  string
+		rrEndpoint  string
 		rrFinalChan  *int64
 		rrModelID    string
 		rrResponseID *string
 	)
 	if err := f.Pool.QueryRow(dbCtx, `
-		SELECT id, status, ingress_protocol, operation, final_channel_id, requested_model_id, response_id
+		SELECT id, status, ingress_protocol, endpoint, final_channel_id, requested_model_id, response_id
 		FROM request_records
 		WHERE user_id = $1
 		ORDER BY id DESC
 		LIMIT 1
-	`, f.UserID).Scan(&rrID, &rrStatus, &rrIngress, &rrOperation, &rrFinalChan, &rrModelID, &rrResponseID); err != nil {
+	`, f.UserID).Scan(&rrID, &rrStatus, &rrIngress, &rrEndpoint, &rrFinalChan, &rrModelID, &rrResponseID); err != nil {
 		t.Fatalf("query request_records: %v", err)
 	}
 	if rrStatus != "succeeded" {
@@ -91,8 +91,8 @@ func TestANTSDKMockSettlementWritesAuditTrail(t *testing.T) {
 	if rrIngress != "anthropic" {
 		t.Errorf("request_records.ingress_protocol = %q, want anthropic", rrIngress)
 	}
-	if rrOperation != "messages" {
-		t.Errorf("request_records.operation = %q, want messages", rrOperation)
+	if rrEndpoint != "messages" {
+		t.Errorf("request_records.endpoint = %q, want messages", rrEndpoint)
 	}
 	if rrFinalChan == nil || *rrFinalChan != f.ChannelID {
 		t.Errorf("request_records.final_channel_id = %v, want %d", rrFinalChan, f.ChannelID)

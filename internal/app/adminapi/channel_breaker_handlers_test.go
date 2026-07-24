@@ -82,8 +82,8 @@ func newChannelBreakerRouter(t *testing.T, breaker adminapi.RouterDeps) http.Han
 
 func TestChannelBreakerRuntimeAndReset(t *testing.T) {
 	channelFacts := channel.Channel{
-		ID: 17, ProviderEndpointID: 23,
-		ProviderEndpointBaseURLRevision: 4, ProviderEndpointStatusRevision: 5,
+		ID: 17, ProviderOriginID: 23,
+		ProviderOriginBaseURLRevision: 4, ProviderOriginStatusRevision: 5,
 		ConfigRevision: 6, AdmissionLimitsRevision: 7,
 	}
 	breaker := &fakeChannelBreaker{snapshot: breakerstore.ScopeSnapshot{
@@ -100,7 +100,7 @@ func TestChannelBreakerRuntimeAndReset(t *testing.T) {
 		SampleCount:           20,
 		TTFTEWMAMs:            321.5,
 		TTFTSamples:           4,
-		ProviderEndpointID:    23,
+		ProviderOriginID:    23,
 		BaseURLRevision:       4,
 		StatusRevision:        5,
 		ChannelConfigRevision: 6,
@@ -121,13 +121,13 @@ func TestChannelBreakerRuntimeAndReset(t *testing.T) {
 	var runtimeResponse struct {
 		Data struct {
 			ID                             int64  `json:"id"`
-			ProviderEndpointID             int64  `json:"provider_endpoint_id"`
-			EndpointBaseURLRevision        int64  `json:"endpoint_base_url_revision"`
-			EndpointStatusRevision         int64  `json:"endpoint_status_revision"`
+			ProviderOriginID             int64  `json:"provider_origin_id"`
+			OriginBaseURLRevision        int64  `json:"origin_base_url_revision"`
+			OriginStatusRevision         int64  `json:"origin_status_revision"`
 			ConfigRevision                 int64  `json:"config_revision"`
 			AdmissionLimitsRevision        int64  `json:"admission_limits_revision"`
 			RuntimeSyncState               string `json:"runtime_sync_state"`
-			RuntimeProviderEndpointID      *int64 `json:"runtime_provider_endpoint_id"`
+			RuntimeProviderOriginID      *int64 `json:"runtime_provider_origin_id"`
 			RuntimeConfigRevision          *int64 `json:"runtime_config_revision"`
 			RuntimeAdmissionActiveRevision *int64 `json:"runtime_admission_active_revision"`
 			AdmissionPayloadMatches        bool   `json:"admission_payload_matches"`
@@ -153,10 +153,10 @@ func TestChannelBreakerRuntimeAndReset(t *testing.T) {
 		t.Fatalf("decode runtime response: %v", err)
 	}
 	got := runtimeResponse.Data
-	if got.ID != 17 || got.ProviderEndpointID != 23 || got.ConfigRevision != 6 || got.AdmissionLimitsRevision != 7 || got.RuntimeSyncState != "active" {
+	if got.ID != 17 || got.ProviderOriginID != 23 || got.ConfigRevision != 6 || got.AdmissionLimitsRevision != 7 || got.RuntimeSyncState != "active" {
 		t.Fatalf("unexpected runtime identity/state: %+v", got)
 	}
-	if got.RuntimeProviderEndpointID == nil || *got.RuntimeProviderEndpointID != 23 || got.RuntimeConfigRevision == nil || *got.RuntimeConfigRevision != 6 ||
+	if got.RuntimeProviderOriginID == nil || *got.RuntimeProviderOriginID != 23 || got.RuntimeConfigRevision == nil || *got.RuntimeConfigRevision != 6 ||
 		got.RuntimeAdmissionActiveRevision == nil || *got.RuntimeAdmissionActiveRevision != 7 || !got.AdmissionPayloadMatches {
 		t.Fatalf("unexpected runtime revisions: %+v", got)
 	}
@@ -255,7 +255,7 @@ func TestChannelRuntimeDoesNotExposeStaleBreakerSamples(t *testing.T) {
 	breaker := &fakeChannelBreaker{
 		snapshot: breakerstore.ScopeSnapshot{
 			Scope: breakerstore.ScopeChannel, ID: 17, Exists: true, State: breakerstore.StateOpen,
-			ProviderEndpointID: 23, BaseURLRevision: 4, StatusRevision: 5,
+			ProviderOriginID: 23, BaseURLRevision: 4, StatusRevision: 5,
 			ChannelConfigRevision: 5, TTFTSamples: 9, TTFTEWMAMs: 999,
 		},
 		control: breakerstore.ControlSnapshot{
@@ -266,8 +266,8 @@ func TestChannelRuntimeDoesNotExposeStaleBreakerSamples(t *testing.T) {
 	}
 	handler := newChannelBreakerRouter(t, adminapi.RouterDeps{
 		ChannelService: &fakeChannelService{getOut: channel.Channel{
-			ID: 17, ProviderEndpointID: 23,
-			ProviderEndpointBaseURLRevision: 4, ProviderEndpointStatusRevision: 5,
+			ID: 17, ProviderOriginID: 23,
+			ProviderOriginBaseURLRevision: 4, ProviderOriginStatusRevision: 5,
 			ConfigRevision: 6, AdmissionLimitsRevision: 7,
 		}},
 		ChannelBreaker: breaker,

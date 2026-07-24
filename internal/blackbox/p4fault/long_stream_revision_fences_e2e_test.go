@@ -18,13 +18,13 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	adminchannel "github.com/ThankCat/unio-gateway/internal/service/admin/channel"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channeltest"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/providerendpoint"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/providerorigin"
 )
 
 // TestP4LongStreamRevisionFencesE2E proves that BaseURL and credential changes
 // affect new work immediately without canceling an already-started customer
 // stream. The old stream still settles, but its frozen permit cannot mutate the
-// new Endpoint/Channel breaker or TTFT state.
+// new Origin/Channel breaker or TTFT state.
 func TestP4LongStreamRevisionFencesE2E(t *testing.T) {
 	if os.Getenv("P4_FAULT_E2E") != "1" || os.Getenv("P4_LONG_STREAM_E2E") != "1" {
 		t.Skip("set P4_FAULT_E2E=1 and P4_LONG_STREAM_E2E=1 to run the long-stream revision fence drill")
@@ -60,7 +60,7 @@ func TestP4LongStreamRevisionFencesE2E(t *testing.T) {
 
 	oldRequest := waitForRunningRevisionStream(t, pool, h.seed, 5*time.Second)
 	permitKey, oldPermit := waitForOneActivePermit(t, h, 5*time.Second)
-	if oldPermit["endpoint_base_url_revision"] != fmt.Sprint(oldRequest.endpointRevision) ||
+	if oldPermit["origin_base_url_revision"] != fmt.Sprint(oldRequest.originRevision) ||
 		oldPermit["channel_config_revision"] != fmt.Sprint(oldRequest.channelRevision) {
 		t.Fatalf("old permit did not freeze the running attempt revisions: permit=%v attempt=%+v", oldPermit, oldRequest)
 	}
@@ -72,22 +72,22 @@ func TestP4LongStreamRevisionFencesE2E(t *testing.T) {
 	newUpstream.requireAuthorization(initialAuthorization)
 	newUpstream.setMode(modeOpenAIChatStream)
 
-	endpointService := providerendpoint.NewService(sqlc.New(pool), runtimeStore).
+	originService := providerorigin.NewService(sqlc.New(pool), runtimeStore).
 		WithTransactionalDB(pool).
-		WithFencer(providerendpoint.NewEndpointFencer(
-			runtimecontrol.NewEndpointFencePublisher(pool),
+		WithFencer(providerorigin.NewOriginFencer(
+			runtimecontrol.NewOriginFencePublisher(pool),
 			runtimeStore,
 		))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	updatedEndpoint, err := endpointService.UpdateBaseURL(ctx, h.seed.endpointID, newUpstream.URL())
+	updatedOrigin, err := originService.UpdateBaseURL(ctx, h.seed.originID, newUpstream.URL())
 	cancel()
 	if err != nil {
-		t.Fatalf("update Endpoint BaseURL through production fence: %v", err)
+		t.Fatalf("update Origin BaseURL through production fence: %v", err)
 	}
-	if updatedEndpoint.BaseURL != newUpstream.URL() ||
-		updatedEndpoint.BaseURLRevision != oldRequest.endpointRevision+1 ||
-		updatedEndpoint.RuntimeSyncPending {
-		t.Fatalf("unexpected committed Endpoint fence: base_url_revision=%d pending=%t", updatedEndpoint.BaseURLRevision, updatedEndpoint.RuntimeSyncPending)
+	if updatedOrigin.BaseURL != newUpstream.URL() ||
+		updatedOrigin.BaseURLRevision != oldRequest.originRevision+1 ||
+		updatedOrigin.RuntimeSyncPending {
+		t.Fatalf("unexpected committed Origin fence: base_url_revision=%d pending=%t", updatedOrigin.BaseURLRevision, updatedOrigin.RuntimeSyncPending)
 	}
 
 	credentialGate := newUpstream.blockNextChatStream()
@@ -106,12 +106,12 @@ func TestP4LongStreamRevisionFencesE2E(t *testing.T) {
 	}
 	credentialRequest := waitForRunningRevisionStream(t, pool, h.seed, 5*time.Second)
 	if credentialRequest.requestID == oldRequest.requestID ||
-		credentialRequest.endpointRevision != updatedEndpoint.BaseURLRevision ||
+		credentialRequest.originRevision != updatedOrigin.BaseURLRevision ||
 		credentialRequest.channelRevision != oldRequest.channelRevision {
 		t.Fatalf("old-credential stream froze unexpected revisions: %+v", credentialRequest)
 	}
 	credentialPermitKey, credentialPermit := waitForActivePermitExcluding(t, h, permitKey, 5*time.Second)
-	if credentialPermit["endpoint_base_url_revision"] != fmt.Sprint(credentialRequest.endpointRevision) ||
+	if credentialPermit["origin_base_url_revision"] != fmt.Sprint(credentialRequest.originRevision) ||
 		credentialPermit["channel_config_revision"] != fmt.Sprint(credentialRequest.channelRevision) {
 		t.Fatalf("old-credential permit did not freeze the running attempt revisions: %v", credentialPermit)
 	}
@@ -172,21 +172,21 @@ func TestP4LongStreamRevisionFencesE2E(t *testing.T) {
 		t.Fatalf("new address authorization counts matched=%d rejected=%d, want 3/0", matched, rejected)
 	}
 
-	endpointBeforeOldFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeEndpoint, h.seed.endpointID)
+	originBeforeOldFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeOrigin, h.seed.originID)
 	channelBeforeOldFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeChannel, h.seed.openAIChannelID)
-	if endpointBeforeOldFinish.BaseURLRevision != updatedEndpoint.BaseURLRevision ||
-		channelBeforeOldFinish.BaseURLRevision != updatedEndpoint.BaseURLRevision ||
+	if originBeforeOldFinish.BaseURLRevision != updatedOrigin.BaseURLRevision ||
+		channelBeforeOldFinish.BaseURLRevision != updatedOrigin.BaseURLRevision ||
 		channelBeforeOldFinish.ChannelConfigRevision != rotation.CurrentConfigRevision {
 		t.Fatalf(
-			"new runtime revisions are not active: endpoint_base=%d channel_base=%d channel_config=%d",
-			endpointBeforeOldFinish.BaseURLRevision,
+			"new runtime revisions are not active: origin_base=%d channel_base=%d channel_config=%d",
+			originBeforeOldFinish.BaseURLRevision,
 			channelBeforeOldFinish.BaseURLRevision,
 			channelBeforeOldFinish.ChannelConfigRevision,
 		)
 	}
-	if endpointBeforeOldFinish.SampleCount != 1 || channelBeforeOldFinish.SampleCount != 1 ||
+	if originBeforeOldFinish.SampleCount != 1 || channelBeforeOldFinish.SampleCount != 1 ||
 		channelBeforeOldFinish.TTFTSamples != 1 {
-		t.Fatalf("new stream did not establish the expected clean runtime sample: endpoint=%+v channel=%+v", endpointBeforeOldFinish, channelBeforeOldFinish)
+		t.Fatalf("new stream did not establish the expected clean runtime sample: origin=%+v channel=%+v", originBeforeOldFinish, channelBeforeOldFinish)
 	}
 
 	gate.Release()
@@ -217,9 +217,9 @@ func TestP4LongStreamRevisionFencesE2E(t *testing.T) {
 		breakerstore.DispositionStaleRevision,
 		5*time.Second,
 	)
-	endpointAfterOldFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeEndpoint, h.seed.endpointID)
+	originAfterOldFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeOrigin, h.seed.originID)
 	channelAfterOldFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeChannel, h.seed.openAIChannelID)
-	assertBreakerSnapshotUnchanged(t, "Endpoint", endpointBeforeOldFinish, endpointAfterOldFinish)
+	assertBreakerSnapshotUnchanged(t, "Origin", originBeforeOldFinish, originAfterOldFinish)
 	assertBreakerSnapshotUnchanged(t, "Channel", channelBeforeOldFinish, channelAfterOldFinish)
 
 	credentialGate.Release()
@@ -255,17 +255,17 @@ func TestP4LongStreamRevisionFencesE2E(t *testing.T) {
 		breakerstore.DispositionStaleConfigRev,
 		5*time.Second,
 	)
-	endpointAfterCredentialFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeEndpoint, h.seed.endpointID)
+	originAfterCredentialFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeOrigin, h.seed.originID)
 	channelAfterCredentialFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeChannel, h.seed.openAIChannelID)
-	if endpointAfterCredentialFinish.State != endpointAfterOldFinish.State ||
-		endpointAfterCredentialFinish.StateGeneration != endpointAfterOldFinish.StateGeneration ||
-		endpointAfterCredentialFinish.EligibleSuccesses != endpointAfterOldFinish.EligibleSuccesses+1 ||
-		endpointAfterCredentialFinish.EligibleFailures != endpointAfterOldFinish.EligibleFailures ||
-		endpointAfterCredentialFinish.BaseURLRevision != endpointAfterOldFinish.BaseURLRevision {
+	if originAfterCredentialFinish.State != originAfterOldFinish.State ||
+		originAfterCredentialFinish.StateGeneration != originAfterOldFinish.StateGeneration ||
+		originAfterCredentialFinish.EligibleSuccesses != originAfterOldFinish.EligibleSuccesses+1 ||
+		originAfterCredentialFinish.EligibleFailures != originAfterOldFinish.EligibleFailures ||
+		originAfterCredentialFinish.BaseURLRevision != originAfterOldFinish.BaseURLRevision {
 		t.Fatalf(
-			"old-credential success did not apply only to the current Endpoint: before=%+v after=%+v",
-			endpointAfterOldFinish,
-			endpointAfterCredentialFinish,
+			"old-credential success did not apply only to the current Origin: before=%+v after=%+v",
+			originAfterOldFinish,
+			originAfterCredentialFinish,
 		)
 	}
 	assertBreakerSnapshotUnchanged(t, "Channel", channelAfterOldFinish, channelAfterCredentialFinish)
@@ -290,7 +290,7 @@ func TestP4LongStreamRevisionFencesE2E(t *testing.T) {
 type runningRevisionStream struct {
 	requestID        int64
 	attemptID        int64
-	endpointRevision int64
+	originRevision int64
 	channelRevision  int64
 }
 
@@ -307,7 +307,7 @@ func waitForRunningRevisionStream(
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		lastErr = pool.QueryRow(ctx, `
-			SELECT rr.id, ra.id, ra.provider_endpoint_base_url_revision, ra.channel_config_revision
+			SELECT rr.id, ra.id, ra.provider_origin_base_url_revision, ra.channel_config_revision
 			FROM request_records rr
 			JOIN request_attempts ra ON ra.request_record_id = rr.id
 			WHERE rr.user_id = $1
@@ -319,7 +319,7 @@ func waitForRunningRevisionStream(
 		`, seed.userID, seed.openAIChannelID).Scan(
 			&result.requestID,
 			&result.attemptID,
-			&result.endpointRevision,
+			&result.originRevision,
 			&result.channelRevision,
 		)
 		cancel()
@@ -337,7 +337,7 @@ func waitForRevisionFencedStreamFacts(
 	pool *pgxpool.Pool,
 	old runningRevisionStream,
 	seed seedFacts,
-	expectedEndpointDisposition breakerstore.Disposition,
+	expectedOriginDisposition breakerstore.Disposition,
 	expectedChannelDisposition breakerstore.Disposition,
 	timeout time.Duration,
 ) {
@@ -359,11 +359,11 @@ func waitForRevisionFencedStreamFacts(
 		if requestErr == nil && attemptsErr == nil && factsErr == nil && len(attempts) == 1 {
 			attempt := attempts[0]
 			last = fmt.Sprintf(
-				"request=%s/%s attempt=%s endpoint=%s channel=%s usage=%d debit=%d",
+				"request=%s/%s attempt=%s origin=%s channel=%s usage=%d debit=%d",
 				request.Status,
 				request.DeliveryStatus,
 				attempt.Status,
-				attempt.BreakerEndpointDisposition.String,
+				attempt.BreakerOriginDisposition.String,
 				attempt.BreakerChannelDisposition.String,
 				usageCount,
 				debitCount,
@@ -372,10 +372,10 @@ func waitForRevisionFencedStreamFacts(
 				request.ResponseStartedAt.Valid && request.ResponseCompletedAt.Valid &&
 				request.FinalChannelID.Valid && request.FinalChannelID.Int64 == seed.openAIChannelID &&
 				attempt.ID == old.attemptID && attempt.Status == "succeeded" && attempt.FinalUsageReceived &&
-				attempt.ProviderEndpointBaseUrlRevision == old.endpointRevision &&
+				attempt.ProviderOriginBaseUrlRevision == old.originRevision &&
 				attempt.ChannelConfigRevision == old.channelRevision &&
-				attempt.BreakerEndpointDisposition.Valid &&
-				attempt.BreakerEndpointDisposition.String == string(expectedEndpointDisposition) &&
+				attempt.BreakerOriginDisposition.Valid &&
+				attempt.BreakerOriginDisposition.String == string(expectedOriginDisposition) &&
 				attempt.BreakerChannelDisposition.Valid &&
 				attempt.BreakerChannelDisposition.String == string(expectedChannelDisposition) &&
 				usageCount == 1 && debitCount == 1 {
@@ -391,7 +391,7 @@ func waitForRevisionPermitFinished(
 	t *testing.T,
 	h *faultHarness,
 	permitKey string,
-	expectedEndpointDisposition breakerstore.Disposition,
+	expectedOriginDisposition breakerstore.Disposition,
 	expectedChannelDisposition breakerstore.Disposition,
 	timeout time.Duration,
 ) {
@@ -401,7 +401,7 @@ func waitForRevisionPermitFinished(
 	for time.Now().Before(deadline) {
 		last = readRedisHashForCompact(t, h, permitKey)
 		if last["status"] == "finished" &&
-			last["endpoint_disposition"] == string(expectedEndpointDisposition) &&
+			last["origin_disposition"] == string(expectedOriginDisposition) &&
 			last["channel_disposition"] == string(expectedChannelDisposition) {
 			return
 		}

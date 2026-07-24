@@ -13,7 +13,7 @@ import (
 // 上送请求体重放复用 encodeUpstreamResponsesBody（direct_response.go），上游响应原文透传复用
 // rewriteResponsesModel（仅改写 model 回显）；本文件只判定「上游是否不支持原生 compact」以决定回落 Synthetic。
 
-// isNativeCompactUnsupported 判断上游是否「确实不提供」原生 /responses/compact endpoint（404/405，无成本），
+// isNativeCompactUnsupported 判断上游是否「确实不提供」原生 /responses/compact origin（404/405，无成本），
 // 据此决定安全回落 SyntheticCompact（Q2）。
 //
 // 触发条件：adapter 收敛的 sentinel ErrCompactUnsupported（仅 404/405），或 error 链上的上游 404/405 状态。

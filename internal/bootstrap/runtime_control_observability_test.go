@@ -34,13 +34,13 @@ func TestRuntimeControlTelemetryPublishesRecoveryFacts(t *testing.T) {
 		State:           "db_committed",
 		CreatedAt:       pgtype.Timestamptz{Time: now.Add(-5 * time.Second), Valid: true},
 	}
-	envelope := runtimecontrol.EndpointRoutingEnvelope{
-		Kind:                  runtimecontrol.EndpointFenceKindBaseURL,
+	envelope := runtimecontrol.OriginRoutingEnvelope{
+		Kind:                  runtimecontrol.OriginFenceKindBaseURL,
 		ProviderID:            11,
 		CurrentProviderStatus: "enabled",
 		NextProviderStatus:    "enabled",
-		Transitions: []runtimecontrol.EndpointRoutingTransition{{
-			EndpointID:             23,
+		Transitions: []runtimecontrol.OriginRoutingTransition{{
+			OriginID:             23,
 			CurrentBaseURLRevision: 1,
 			NextBaseURLRevision:    2,
 			CurrentStatusRevision:  1,
@@ -49,8 +49,8 @@ func TestRuntimeControlTelemetryPublishesRecoveryFacts(t *testing.T) {
 			NextEffectiveStatus:    "enabled",
 		}},
 	}
-	endpointOperation := endpointOperationObservation{
-		operation: sqlc.EndpointRoutingOperation{
+	originOperation := originOperationObservation{
+		operation: sqlc.OriginRoutingOperation{
 			Kind: "base_url", State: "prepared", PayloadHash: "fedcba9876543210",
 		},
 		envelope: envelope,
@@ -58,17 +58,17 @@ func TestRuntimeControlTelemetryPublishesRecoveryFacts(t *testing.T) {
 	}
 	observation := runtimeControlReconcileObservation{
 		runtimeOperations:  []sqlc.RuntimeControlOperation{runtimeOperation},
-		endpointOperations: []endpointOperationObservation{endpointOperation},
+		originOperations: []originOperationObservation{originOperation},
 	}
 
 	telemetry.observeRuntimePending(observation.runtimeOperations)
-	telemetry.observeEndpointPending(envelope, endpointOperation.age)
+	telemetry.observeOriginPending(envelope, originOperation.age)
 	body := scrapeRuntimeControlMetrics(t, recorder)
 	for _, want := range []string{
 		`unio_gateway_runtime_control_pending{target="route_rate"} 1`,
 		`unio_gateway_runtime_control_pending_seconds{target="route_rate"} 5`,
-		`unio_gateway_endpoint_base_url_revision_fence{endpoint_id="23",state="pending"} 1`,
-		`unio_gateway_endpoint_base_url_revision_pending_seconds{endpoint_id="23"} 7`,
+		`unio_gateway_origin_base_url_revision_fence{origin_id="23",state="pending"} 1`,
+		`unio_gateway_origin_base_url_revision_pending_seconds{origin_id="23"} 7`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("pending metrics missing %q\n%s", want, body)
@@ -76,7 +76,7 @@ func TestRuntimeControlTelemetryPublishesRecoveryFacts(t *testing.T) {
 	}
 
 	telemetry.passSucceeded(observation)
-	telemetry.EndpointControlReconciled(23, 2, 1, "enabled", true)
+	telemetry.OriginControlReconciled(23, 2, 1, "enabled", true)
 	telemetry.criticalSettingReconciled(appsettings.GatewayRouteRateLimitDefaultsKey, 3, true)
 	telemetry.channelControlReconciled(42, 4, true)
 	body = scrapeRuntimeControlMetrics(t, recorder)
@@ -84,16 +84,16 @@ func TestRuntimeControlTelemetryPublishesRecoveryFacts(t *testing.T) {
 		`unio_gateway_runtime_control_pending{target="route_rate"} 0`,
 		`unio_gateway_runtime_control_recovery_total{result="committed",target="route_rate"} 1`,
 		`unio_gateway_runtime_control_recovery_total{result="restored",target="channel_admission"} 1`,
-		`unio_gateway_endpoint_base_url_revision_fence{endpoint_id="23",state="active"} 1`,
-		`unio_gateway_endpoint_base_url_revision_pending_seconds{endpoint_id="23"} 0`,
+		`unio_gateway_origin_base_url_revision_fence{origin_id="23",state="active"} 1`,
+		`unio_gateway_origin_base_url_revision_pending_seconds{origin_id="23"} 0`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("recovery metrics missing %q\n%s", want, body)
 		}
 	}
 	if logs.FilterMessage("runtime control operation reconciled").Len() != 1 ||
-		logs.FilterMessage("endpoint routing operation reconciled").Len() != 1 ||
-		logs.FilterMessage("endpoint runtime control restored").Len() != 1 {
+		logs.FilterMessage("origin routing operation reconciled").Len() != 1 ||
+		logs.FilterMessage("origin runtime control restored").Len() != 1 {
 		t.Fatalf("missing structured recovery logs: %+v", logs.All())
 	}
 }
@@ -105,15 +105,15 @@ func TestRuntimeControlTelemetryRateLimitsRepeatedFailures(t *testing.T) {
 	telemetry.now = func() time.Time { return now }
 	err := errors.New("redis unavailable")
 
-	telemetry.logFailure("endpoint_routing", err)
+	telemetry.logFailure("origin_routing", err)
 	now = now.Add(5 * time.Second)
-	telemetry.logFailure("endpoint_routing", err)
+	telemetry.logFailure("origin_routing", err)
 	if logs.Len() != 1 {
 		t.Fatalf("repeated failure should be suppressed, got %d logs", logs.Len())
 	}
 
 	now = now.Add(runtimeControlFailureLogInterval)
-	telemetry.logFailure("endpoint_routing", err)
+	telemetry.logFailure("origin_routing", err)
 	if logs.Len() != 2 {
 		t.Fatalf("failure should be emitted after sampling interval, got %d logs", logs.Len())
 	}

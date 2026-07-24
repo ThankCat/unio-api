@@ -34,19 +34,19 @@ func (s *permitGuardPanicLog) CreateAttempt(
 	}
 	return requestlog.AttemptRecord{
 		ID:                int64(s.createCalls),
-		UpstreamOperation: params.UpstreamOperation,
+		UpstreamEndpoint: params.UpstreamEndpoint,
 	}, nil
 }
 
 func TestAttemptRateLimitSkipsCandidateBeforeAttemptAndTransport(t *testing.T) {
 	tests := []struct {
 		name      string
-		operation requestlog.Operation
-		upstream  requestlog.UpstreamOperation
+		endpoint requestlog.Endpoint
+		upstream  requestlog.UpstreamEndpoint
 	}{
-		{name: "chat_completions", operation: requestlog.OperationChatCompletions, upstream: requestlog.UpstreamOperationChatCompletions},
-		{name: "responses", operation: requestlog.OperationResponses, upstream: requestlog.UpstreamOperationResponses},
-		{name: "messages", operation: requestlog.OperationMessages, upstream: requestlog.UpstreamOperationMessages},
+		{name: "chat_completions", endpoint: requestlog.EndpointChatCompletions, upstream: requestlog.UpstreamEndpointChatCompletions},
+		{name: "responses", endpoint: requestlog.EndpointResponses, upstream: requestlog.UpstreamEndpointResponses},
+		{name: "messages", endpoint: requestlog.EndpointMessages, upstream: requestlog.UpstreamEndpointMessages},
 	}
 
 	for _, tc := range tests {
@@ -59,7 +59,7 @@ func TestAttemptRateLimitSkipsCandidateBeforeAttemptAndTransport(t *testing.T) {
 				t.Run(mode, func(t *testing.T) {
 					log := &permitGuardPanicLog{attemptAuditLog: &attemptAuditLog{}}
 					runner, store, _, ctx := newPermitGuardRunner(log)
-					runner.lifecycle.operation = tc.operation
+					runner.lifecycle.endpoint = tc.endpoint
 					store.acquireResults = []breakerstore.AttemptAdmission{
 						{Mode: breakerstore.AdmissionDenied, Reason: breakerstore.ReasonRateLimited},
 						store.acquireResult,
@@ -107,14 +107,14 @@ func TestAttemptRateLimitSkipsCandidateBeforeAttemptAndTransport(t *testing.T) {
 					}
 					if !result.RoutingFallback || len(result.TransportChain) != 1 ||
 						result.TransportChain[0].ChannelID != second.Channel.ID ||
-						result.TransportChain[0].UpstreamOperation != tc.upstream {
+						result.TransportChain[0].UpstreamEndpoint != tc.upstream {
 						t.Fatalf("transport chain must exclude the denied candidate: %+v", result)
 					}
 					if len(log.created) != 1 || log.created[0].ChannelID != second.Channel.ID {
 						t.Fatalf("attempt must belong only to fallback channel %d, got %+v", second.Channel.ID, log.created)
 					}
-					if log.created[0].UpstreamOperation != tc.upstream || store.acquireInput.UpstreamOperation != breakerstore.UpstreamOperation(tc.upstream) {
-						t.Fatalf("upstream operation attempt=%q permit=%q, want %q", log.created[0].UpstreamOperation, store.acquireInput.UpstreamOperation, tc.upstream)
+					if log.created[0].UpstreamEndpoint != tc.upstream || store.acquireInput.UpstreamEndpoint != breakerstore.UpstreamEndpoint(tc.upstream) {
+						t.Fatalf("upstream endpoint attempt=%q permit=%q, want %q", log.created[0].UpstreamEndpoint, store.acquireInput.UpstreamEndpoint, tc.upstream)
 					}
 					if len(invoked) != 1 || invoked[0] != second.Channel.ID {
 						t.Fatalf("transport calls = %v, want only fallback channel %d", invoked, second.Channel.ID)
@@ -137,8 +137,8 @@ func TestAttemptTraceRecordsCompactFallbackAsTwoSameChannelTransports(t *testing
 
 	result, err := runner.RunNonStream(ctx, RunNonStreamParams{
 		Candidates: []Candidate{{Route: candidate}},
-		OperationForCandidate: func(routing.ChatRouteCandidate) requestlog.UpstreamOperation {
-			return requestlog.UpstreamOperationResponsesCompact
+		EndpointForCandidate: func(routing.ChatRouteCandidate) requestlog.UpstreamEndpoint {
+			return requestlog.UpstreamEndpointResponsesCompact
 		},
 		Invoke: func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 			adapter.MarkTransportStarted(ctx)
@@ -146,7 +146,7 @@ func TestAttemptTraceRecordsCompactFallbackAsTwoSameChannelTransports(t *testing
 		},
 		TransparentFallback: &NonStreamTransparentFallback{
 			Match:             func(routing.ChatRouteCandidate, error) bool { return true },
-			UpstreamOperation: requestlog.UpstreamOperationChatCompletions,
+			UpstreamEndpoint: requestlog.UpstreamEndpointChatCompletions,
 			Invoke: func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 				adapter.MarkTransportStarted(ctx)
 				return AttemptSuccess{}, syntheticErr
@@ -161,8 +161,8 @@ func TestAttemptTraceRecordsCompactFallbackAsTwoSameChannelTransports(t *testing
 	}
 	if result.TransportChain[0].ChannelID != candidate.Channel.ID ||
 		result.TransportChain[1].ChannelID != candidate.Channel.ID ||
-		result.TransportChain[0].UpstreamOperation != requestlog.UpstreamOperationResponsesCompact ||
-		result.TransportChain[1].UpstreamOperation != requestlog.UpstreamOperationChatCompletions {
+		result.TransportChain[0].UpstreamEndpoint != requestlog.UpstreamEndpointResponsesCompact ||
+		result.TransportChain[1].UpstreamEndpoint != requestlog.UpstreamEndpointChatCompletions {
 		t.Fatalf("compact fallback transport order is not truthful: %+v", result.TransportChain)
 	}
 }
@@ -212,8 +212,8 @@ func TestAttemptPermitGuardAbortsCompactFallbackCreateAttemptPanic(t *testing.T)
 	panicValue := capturePermitGuardPanic(func() {
 		_, _ = runner.RunNonStream(ctx, RunNonStreamParams{
 			Candidates: []Candidate{{Route: permitGuardCandidate()}},
-			OperationForCandidate: func(routing.ChatRouteCandidate) requestlog.UpstreamOperation {
-				return requestlog.UpstreamOperationResponsesCompact
+			EndpointForCandidate: func(routing.ChatRouteCandidate) requestlog.UpstreamEndpoint {
+				return requestlog.UpstreamEndpointResponsesCompact
 			},
 			Invoke: func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 				adapter.MarkTransportStarted(ctx)
@@ -221,7 +221,7 @@ func TestAttemptPermitGuardAbortsCompactFallbackCreateAttemptPanic(t *testing.T)
 			},
 			TransparentFallback: &NonStreamTransparentFallback{
 				Match:             func(routing.ChatRouteCandidate, error) bool { return true },
-				UpstreamOperation: requestlog.UpstreamOperationChatCompletions,
+				UpstreamEndpoint: requestlog.UpstreamEndpointChatCompletions,
 				Invoke: func(context.Context, routing.ChatRouteCandidate) (AttemptSuccess, error) {
 					t.Fatal("fallback transport must not start after attempt persistence panic")
 					return AttemptSuccess{}, nil
@@ -259,7 +259,7 @@ func newPermitGuardRunner(log requestlog.Service) (
 			},
 		},
 		finishResult: breakerstore.FinishResult{
-			EndpointDisposition: breakerstore.DispositionApplied,
+			OriginDisposition: breakerstore.DispositionApplied,
 			ChannelDisposition:  breakerstore.DispositionApplied,
 		},
 	}
@@ -281,7 +281,7 @@ func newPermitGuardRunner(log requestlog.Service) (
 	runner := &AttemptRunner{
 		lifecycle: &RequestLifecycle{
 			requestLog: log,
-			operation:  requestlog.OperationResponses,
+			endpoint:  requestlog.EndpointResponses,
 		},
 		retryClassifier: NeverRetryClassifier{},
 		permitManager:   manager,
@@ -297,9 +297,9 @@ func permitGuardCandidate() routing.ChatRouteCandidate {
 	return routing.ChatRouteCandidate{
 		ModelDBID:                       11,
 		ProviderID:                      12,
-		ProviderEndpointID:              13,
-		ProviderEndpointBaseURLRevision: 14,
-		ProviderEndpointStatusRevision:  15,
+		ProviderOriginID:              13,
+		ProviderOriginBaseURLRevision: 14,
+		ProviderOriginStatusRevision:  15,
 		ChannelConfigRevision:           16,
 		ChannelAdmissionLimitsRevision:  17,
 		AdapterKey:                      "permit-guard",

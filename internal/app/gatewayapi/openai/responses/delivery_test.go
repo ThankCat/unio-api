@@ -64,27 +64,27 @@ func TestResponsesHandlersFinalizeNonStreamDelivery(t *testing.T) {
 		},
 	}
 
-	for _, endpoint := range handlers {
-		endpoint := endpoint
-		t.Run(endpoint.name, func(t *testing.T) {
+	for _, origin := range handlers {
+		origin := origin
+		t.Run(origin.name, func(t *testing.T) {
 			t.Run("write success completes", func(t *testing.T) {
-				service := endpoint.service()
-				endpoint.handler(service).ServeHTTP(&responsesDeliveryWriter{}, responsesDeliveryRequest(endpoint.path))
+				service := origin.service()
+				origin.handler(service).ServeHTTP(&responsesDeliveryWriter{}, responsesDeliveryRequest(origin.path))
 				if service.deliveryCompleted != 1 || service.deliveryInterrupted != 0 {
 					t.Fatalf("completed=%d interrupted=%d, want 1/0", service.deliveryCompleted, service.deliveryInterrupted)
 				}
 			})
 
 			t.Run("write error interrupts", func(t *testing.T) {
-				service := endpoint.service()
-				endpoint.handler(service).ServeHTTP(&responsesDeliveryWriter{writeErr: errors.New("client disconnected")}, responsesDeliveryRequest(endpoint.path))
+				service := origin.service()
+				origin.handler(service).ServeHTTP(&responsesDeliveryWriter{writeErr: errors.New("client disconnected")}, responsesDeliveryRequest(origin.path))
 				if service.deliveryCompleted != 0 || service.deliveryInterrupted != 1 {
 					t.Fatalf("completed=%d interrupted=%d, want 0/1", service.deliveryCompleted, service.deliveryInterrupted)
 				}
 			})
 
 			t.Run("write panic interrupts and repanics", func(t *testing.T) {
-				service := endpoint.service()
+				service := origin.service()
 				const panicValue = "responses writer panic"
 				func() {
 					defer func() {
@@ -92,7 +92,7 @@ func TestResponsesHandlersFinalizeNonStreamDelivery(t *testing.T) {
 							t.Fatalf("recovered = %#v, want %q", recovered, panicValue)
 						}
 					}()
-					endpoint.handler(service).ServeHTTP(&responsesDeliveryWriter{panicValue: panicValue}, responsesDeliveryRequest(endpoint.path))
+					origin.handler(service).ServeHTTP(&responsesDeliveryWriter{panicValue: panicValue}, responsesDeliveryRequest(origin.path))
 				}()
 				if service.deliveryCompleted != 0 || service.deliveryInterrupted != 1 {
 					t.Fatalf("completed=%d interrupted=%d, want 0/1", service.deliveryCompleted, service.deliveryInterrupted)

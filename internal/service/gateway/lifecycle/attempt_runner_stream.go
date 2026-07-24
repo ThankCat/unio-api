@@ -246,7 +246,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		if r.permitManager != nil {
 			admission, owner, err := r.acquireAttemptWithHeadWait(ctx, AttemptPermitAcquireParams{
 				Candidate:            candidate,
-				UpstreamOperation:    l.upstreamOperation(),
+				UpstreamEndpoint:    l.upstreamEndpoint(),
 				RequestMode:          breakerstore.ModeStream,
 				EstimatedInputTokens: params.ConservativeInputTokens,
 			}, candIdx == 0, &headWaitUsed)
@@ -291,13 +291,13 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 
 		// 每个 stream candidate 也必须先创建 attempt：流式失败可能发生在首 chunk 前、首 chunk 后或
 		// 客户端取消时，提前记录 attempt 才能审计这些状态。
-		attemptRecord, err := l.CreateAttemptForOperation(
+		attemptRecord, err := l.CreateAttemptForEndpoint(
 			ctx,
 			requestRecord,
 			result.Attempts,
 			index,
 			candidate,
-			l.upstreamOperation(),
+			l.upstreamEndpoint(),
 		)
 		if err != nil {
 			if permitOwner != nil {
@@ -310,7 +310,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			l.MarkRequestFailed(ctx, requestRecord, "request_attempt_create_failed", err)
 			return result, err
 		}
-		result.recordTransportAttempt(candidate, l.upstreamOperation())
+		result.recordTransportAttempt(candidate, l.upstreamEndpoint())
 
 		// emitted 表示是否已向客户端写出过 SSE 帧。一旦写出开始就不能再 fallback，否则同一个 SSE
 		// 响应会混入不同上游内容。
@@ -555,7 +555,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 						l.RecordAttemptBreakerDisposition(
 							ctx,
 							attemptRecord,
-							string(finishResult.EndpointDisposition),
+							string(finishResult.OriginDisposition),
 							string(finishResult.ChannelDisposition),
 						)
 						r.logRouting(ctx, "stream attempt runtime feedback failed",
@@ -582,14 +582,14 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 					l.RecordAttemptBreakerDisposition(
 						ctx,
 						attemptRecord,
-						string(finishResult.EndpointDisposition),
+						string(finishResult.OriginDisposition),
 						string(finishResult.ChannelDisposition),
 					)
 				}
 			}
 		}
 
-		l.RecordAttemptRuntimeMetrics(candidate, attemptRecord.UpstreamOperation, true, timingFacts, finishOutcome, outcomeErr)
+		l.RecordAttemptRuntimeMetrics(candidate, attemptRecord.UpstreamEndpoint, true, timingFacts, finishOutcome, outcomeErr)
 		l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 		l.RecordCredentialResult(candidate, err)
 		if panicValue != nil {
@@ -810,7 +810,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 
 func streamFinishOutcome(facts *adapter.ResponseFacts, timing AttemptTimingFacts, err error) breakerstore.FinishOutcome {
 	out := breakerstore.FinishOutcome{
-		EndpointOutcome: breakerstore.OutcomeIgnored,
+		OriginOutcome: breakerstore.OutcomeIgnored,
 		ChannelOutcome:  breakerstore.OutcomeIgnored,
 		FirstTokenMs:    timing.FirstTokenMs(),
 	}
@@ -819,7 +819,7 @@ func streamFinishOutcome(facts *adapter.ResponseFacts, timing AttemptTimingFacts
 		out.ChannelTPMActual = &actual
 	}
 	if err == nil && facts != nil {
-		out.EndpointOutcome = breakerstore.OutcomeEligibleSuccess
+		out.OriginOutcome = breakerstore.OutcomeEligibleSuccess
 		out.ChannelOutcome = breakerstore.OutcomeEligibleSuccess
 		return out
 	}
@@ -831,6 +831,6 @@ func streamFinishOutcome(facts *adapter.ResponseFacts, timing AttemptTimingFacts
 	if nonStreamChannelFailureEligible(err) {
 		out.ChannelOutcome = breakerstore.OutcomeEligibleFailure
 	}
-	applyEndpointFailureAttribution(&out, timing, true, err)
+	applyOriginFailureAttribution(&out, timing, true, err)
 	return out
 }

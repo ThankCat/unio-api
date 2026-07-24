@@ -3,7 +3,7 @@
 -- 关联（均 1:1 或标量子查询，不放大行数）：usage_records（token）、cost_snapshots（平台成本 + 分项）、
 -- ledger_entries 净扣费（用户实际扣费）、api_keys→routes（线路名，当前绑定，快照见批二）、
 -- final channel 名、经过的渠道链（attempts 按序 string_agg）。
--- 列表故意不 SELECT internal_error_detail（SQL 层脱敏，详情端点按 ?include_internal 返回）。
+-- 列表故意不 SELECT internal_error_detail（SQL 层脱敏，详情上游源站按 ?include_internal 返回）。
 -- latency/ttft/tps 由 Go 侧用时间戳 + output_tokens 计算，不在此列。
 SELECT
     r.id,
@@ -12,7 +12,7 @@ SELECT
     r.api_key_id,
     r.requested_model_id,
     r.ingress_protocol,
-    r.operation,
+    r.endpoint,
     r.response_model_id,
     r.response_protocol,
     r.response_id,
@@ -136,7 +136,7 @@ WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::b
 
 -- name: GetRequestRecordByRequestID :one
 -- GetRequestRecordByRequestID 按对外 request_id 读取单条请求记录完整事实（含 internal_error_detail）。
--- 不加锁，仅供 admin 只读详情端点使用；是否回显内部详情由 service/handler 控制。
+-- 不加锁，仅供 admin 只读详情上游源站使用；是否回显内部详情由 service/handler 控制。
 SELECT
     id,
     request_id,
@@ -144,14 +144,14 @@ SELECT
     api_key_id,
     requested_model_id,
     ingress_protocol,
-    operation,
+    endpoint,
     response_model_id,
     response_protocol,
     response_id,
     stream,
     status,
     final_provider_id,
-    final_provider_endpoint_id,
+    final_provider_origin_id,
     final_channel_id,
     error_code,
     error_message,

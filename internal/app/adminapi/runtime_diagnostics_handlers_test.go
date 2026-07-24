@@ -22,13 +22,13 @@ func (s *fakeRuntimeDiagnosticsService) Get(context.Context) (runtimediagnostics
 }
 
 func TestGetRuntimeDiagnosticsReturnsRedactedMaintenanceView(t *testing.T) {
-	endpointAge := int64(17)
+	originAge := int64(17)
 	runtimeAge := int64(29)
 	service := &fakeRuntimeDiagnosticsService{result: runtimediagnostics.Diagnostics{
 		Readiness:         runtimediagnostics.Readiness{Ready: false, Reason: "marker_mismatch"},
 		RuntimeStateEpoch: runtimediagnostics.StateEpoch{State: "ready", Revision: 7, Match: false},
 		Operations: runtimediagnostics.Operations{
-			EndpointRouting: runtimediagnostics.OperationSummary{NonterminalCount: 1, OldestAgeSeconds: &endpointAge},
+			OriginRouting: runtimediagnostics.OperationSummary{NonterminalCount: 1, OldestAgeSeconds: &originAge},
 			RuntimeControl:  runtimediagnostics.OperationSummary{NonterminalCount: 2, OldestAgeSeconds: &runtimeAge},
 		},
 	}}
@@ -53,10 +53,10 @@ func TestGetRuntimeDiagnosticsReturnsRedactedMaintenanceView(t *testing.T) {
 				Match    bool   `json:"match"`
 			} `json:"runtime_state_epoch"`
 			Operations struct {
-				EndpointRouting struct {
+				OriginRouting struct {
 					NonterminalCount int64  `json:"nonterminal_count"`
 					OldestAgeSeconds *int64 `json:"oldest_age_seconds"`
-				} `json:"endpoint_routing"`
+				} `json:"origin_routing"`
 				RuntimeControl struct {
 					NonterminalCount int64  `json:"nonterminal_count"`
 					OldestAgeSeconds *int64 `json:"oldest_age_seconds"`
@@ -72,13 +72,13 @@ func TestGetRuntimeDiagnosticsReturnsRedactedMaintenanceView(t *testing.T) {
 		response.Data.RuntimeStateEpoch.Match {
 		t.Fatalf("unexpected diagnostic facts: %+v", response.Data)
 	}
-	if response.Data.Operations.EndpointRouting.NonterminalCount != 1 ||
-		response.Data.Operations.EndpointRouting.OldestAgeSeconds == nil ||
-		*response.Data.Operations.EndpointRouting.OldestAgeSeconds != endpointAge ||
+	if response.Data.Operations.OriginRouting.NonterminalCount != 1 ||
+		response.Data.Operations.OriginRouting.OldestAgeSeconds == nil ||
+		*response.Data.Operations.OriginRouting.OldestAgeSeconds != originAge ||
 		response.Data.Operations.RuntimeControl.NonterminalCount != 2 ||
 		response.Data.Operations.RuntimeControl.OldestAgeSeconds == nil ||
 		*response.Data.Operations.RuntimeControl.OldestAgeSeconds != runtimeAge {
-		t.Fatalf("unexpected operation summaries: %+v", response.Data.Operations)
+		t.Fatalf("unexpected endpoint summaries: %+v", response.Data.Operations)
 	}
 }
 

@@ -70,13 +70,13 @@ func testCircuitBreakerPayload(cfg Config) string {
 		`{"enabled":%t,"window_ms":%d,"min_requests":%d,"failure_ratio":%g,`+
 			`"consecutive_failures":%d,"consecutive_window_ms":%d,"half_open_successes":%d,`+
 			`"attempt_permit_ttl_ms":%d,"attempt_permit_renew_interval_ms":%d,"attempt_permit_terminal_ttl_ms":%d,`+
-			`"endpoint_base_url_revision_operation_ttl_ms":86400000,"endpoint_status_revision_operation_ttl_ms":86400000,`+
-			`"endpoint_status_batch_max":256,"open_durations_ms":[%s],`+
-			`"endpoint_ambiguous_distinct_channels":%d,"endpoint_ambiguous_distinct_models":%d}`,
+			`"origin_base_url_revision_operation_ttl_ms":86400000,"origin_status_revision_operation_ttl_ms":86400000,`+
+			`"origin_status_batch_max":256,"open_durations_ms":[%s],`+
+			`"origin_ambiguous_distinct_channels":%d,"origin_ambiguous_distinct_models":%d}`,
 		cfg.Enabled, cfg.WindowMs, cfg.MinRequests, cfg.FailureRatio,
 		cfg.ConsecutiveFailures, cfg.ConsecutiveWindowMs, cfg.HalfOpenSuccesses,
 		cfg.AttemptPermitTTLMs, cfg.AttemptRenewMs, cfg.AttemptTerminalTTLMs,
-		strings.Join(openDurations, ","), cfg.EndpointAmbiguousDistinctChannels, cfg.EndpointAmbiguousDistinctModels,
+		strings.Join(openDurations, ","), cfg.OriginAmbiguousDistinctChannels, cfg.OriginAmbiguousDistinctModels,
 	)
 }
 
@@ -184,13 +184,13 @@ func acquire(t *testing.T, s *Store, cfg Config, permitID string, ch, ep int64) 
 		PermitID:                permitID,
 		AdmissionFingerprint:    permitID + "-fp",
 		RequestAdmissionID:      "req-1",
-		EndpointID:              ep,
+		OriginID:              ep,
 		ChannelID:               ch,
-		EndpointBaseURLRevision: 1,
-		EndpointStatusRevision:  1,
+		OriginBaseURLRevision: 1,
+		OriginStatusRevision:  1,
 		ChannelConfigRevision:   1,
 		ModelID:                 100,
-		UpstreamOperation:       OpChatCompletions,
+		UpstreamEndpoint:       EndpointChatCompletions,
 		RequestMode:             ModeNonStream,
 	}))
 	if err != nil {
@@ -201,7 +201,7 @@ func acquire(t *testing.T, s *Store, cfg Config, permitID string, ch, ep int64) 
 
 func finish(t *testing.T, s *Store, _ Config, permit *AttemptPermit, ep, ch Outcome) FinishResult {
 	t.Helper()
-	res, err := s.Finish(context.Background(), *permit, FinishOutcome{EndpointOutcome: ep, ChannelOutcome: ch})
+	res, err := s.Finish(context.Background(), *permit, FinishOutcome{OriginOutcome: ep, ChannelOutcome: ch})
 	if err != nil {
 		t.Fatalf("finish %s: %v", permit.PermitID, err)
 	}
@@ -297,7 +297,7 @@ func TestAttemptLifecycleIntegrityFencesAreZeroWrite(t *testing.T) {
 		{
 			name: "server permit identity conflict",
 			mutate: func(ctx context.Context, s *Store, client *redis.Client, permit *AttemptPermit) error {
-				return client.HSet(ctx, s.keys.permit(permit.PermitID), "endpoint_id", permit.EndpointID+1).Err()
+				return client.HSet(ctx, s.keys.permit(permit.PermitID), "origin_id", permit.OriginID+1).Err()
 			},
 			wantCode: failure.CodeGatewayBreakerPermitConflict, wantFinish: DispositionTerminalConflict,
 		},
@@ -324,11 +324,11 @@ func TestAttemptLifecycleIntegrityFencesAreZeroWrite(t *testing.T) {
 				case "finish":
 					var result FinishResult
 					result, err = s.Finish(context.Background(), permit, FinishOutcome{
-						EndpointOutcome: OutcomeIgnored,
+						OriginOutcome: OutcomeIgnored,
 						ChannelOutcome:  OutcomeIgnored,
 					})
-					if result.EndpointDisposition != fence.wantFinish || result.ChannelDisposition != fence.wantFinish {
-						t.Fatalf("finish disposition = %s/%s, want %s", result.EndpointDisposition, result.ChannelDisposition, fence.wantFinish)
+					if result.OriginDisposition != fence.wantFinish || result.ChannelDisposition != fence.wantFinish {
+						t.Fatalf("finish disposition = %s/%s, want %s", result.OriginDisposition, result.ChannelDisposition, fence.wantFinish)
 					}
 				}
 
@@ -364,8 +364,8 @@ func TestAcquireFinishSuccessClosed(t *testing.T) {
 		t.Fatalf("want permit, got %s/%s", adm.Mode, adm.Reason)
 	}
 	res := finish(t, s, cfg, adm.Permit, OutcomeEligibleSuccess, OutcomeEligibleSuccess)
-	if res.ChannelDisposition != DispositionApplied || res.EndpointDisposition != DispositionApplied {
-		t.Fatalf("want applied/applied, got %s/%s", res.EndpointDisposition, res.ChannelDisposition)
+	if res.ChannelDisposition != DispositionApplied || res.OriginDisposition != DispositionApplied {
+		t.Fatalf("want applied/applied, got %s/%s", res.OriginDisposition, res.ChannelDisposition)
 	}
 
 	snap, err := s.Snapshot(context.Background(), ScopeChannel, 1)
@@ -533,7 +533,7 @@ func TestTTFTUpdatedOnlyByStreamPermit(t *testing.T) {
 	admNS := acquire(t, s, cfg, "ns1", 7, 70)
 	ftns := int64(500)
 	if _, err := s.Finish(context.Background(), *admNS.Permit, FinishOutcome{
-		EndpointOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess, FirstTokenMs: &ftns,
+		OriginOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess, FirstTokenMs: &ftns,
 	}); failure.CodeOf(err) != failure.CodeConfigInvalid {
 		t.Fatalf("finish non-stream with FirstToken want config_invalid, got %v", err)
 	}
@@ -547,8 +547,8 @@ func TestTTFTUpdatedOnlyByStreamPermit(t *testing.T) {
 	// 流式 permit 更新 TTFT。
 	admS, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "s1", AdmissionFingerprint: "s1-fp", RequestAdmissionID: "req",
-		EndpointID: 70, ChannelID: 7, EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
-		ChannelConfigRevision: 1, ModelID: 100, UpstreamOperation: OpChatCompletions,
+		OriginID: 70, ChannelID: 7, OriginBaseURLRevision: 1, OriginStatusRevision: 1,
+		ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions,
 		RequestMode: ModeStream,
 	}))
 	if err != nil {
@@ -556,7 +556,7 @@ func TestTTFTUpdatedOnlyByStreamPermit(t *testing.T) {
 	}
 	ft := int64(800)
 	if _, err := s.Finish(context.Background(), *admS.Permit, FinishOutcome{
-		EndpointOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess, FirstTokenMs: &ft,
+		OriginOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess, FirstTokenMs: &ft,
 	}); err != nil {
 		t.Fatalf("finish stream: %v", err)
 	}
@@ -575,8 +575,8 @@ func TestConcurrencyLimitDenies(t *testing.T) {
 	in := func(id string) AcquireAttemptInput {
 		return withAttemptControlRevisions(AcquireAttemptInput{
 			PermitID: id, AdmissionFingerprint: id + "-fp", RequestAdmissionID: "req",
-			EndpointID: 80, ChannelID: 8, EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
-			ChannelConfigRevision: 1, ModelID: 100, UpstreamOperation: OpChatCompletions,
+			OriginID: 80, ChannelID: 8, OriginBaseURLRevision: 1, OriginStatusRevision: 1,
+			ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions,
 			RequestMode: ModeNonStream,
 		})
 	}
@@ -675,8 +675,8 @@ func TestChannelModelPermissionPause(t *testing.T) {
 	acq := func(id string, model, cfgRev int64) AttemptAdmission {
 		adm, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 			PermitID: id, AdmissionFingerprint: id + "-fp", RequestAdmissionID: "req",
-			EndpointID: 130, ChannelID: 13, EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
-			ChannelConfigRevision: cfgRev, ModelID: model, UpstreamOperation: OpChatCompletions,
+			OriginID: 130, ChannelID: 13, OriginBaseURLRevision: 1, OriginStatusRevision: 1,
+			ChannelConfigRevision: cfgRev, ModelID: model, UpstreamEndpoint: EndpointChatCompletions,
 			RequestMode: ModeNonStream,
 		}))
 		if err != nil {
@@ -729,8 +729,8 @@ func TestResetClearsTTFT(t *testing.T) {
 	seedAttemptControls(t, s, cfg, 201, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
 	adm, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "reset-ttft", AdmissionFingerprint: "reset-ttft-fp", RequestAdmissionID: "req",
-		EndpointID: 2010, ChannelID: 201, EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
-		ChannelConfigRevision: 1, ModelID: 100, UpstreamOperation: OpChatCompletions,
+		OriginID: 2010, ChannelID: 201, OriginBaseURLRevision: 1, OriginStatusRevision: 1,
+		ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions,
 		RequestMode: ModeStream,
 	}))
 	if err != nil || adm.Mode != AdmissionPermit {
@@ -738,7 +738,7 @@ func TestResetClearsTTFT(t *testing.T) {
 	}
 	firstToken := int64(740)
 	if _, err := s.Finish(context.Background(), *adm.Permit, FinishOutcome{
-		EndpointOutcome: OutcomeIgnored,
+		OriginOutcome: OutcomeIgnored,
 		ChannelOutcome:  OutcomeEligibleSuccess,
 		FirstTokenMs:    &firstToken,
 	}); err != nil {
@@ -768,8 +768,8 @@ func TestResetClearsTTFT(t *testing.T) {
 	}
 }
 
-func TestParseSnapshotKeepsEndpointPendingRevisions(t *testing.T) {
-	snapshot, err := parseSnapshotRow(ScopeEndpoint, 88, []interface{}{
+func TestParseSnapshotKeepsOriginPendingRevisions(t *testing.T) {
+	snapshot, err := parseSnapshotRow(ScopeOrigin, 88, []interface{}{
 		"present", int64(1_000), int64(0), []interface{}{
 			"state", "closed",
 			"control_present", "1",
@@ -783,7 +783,7 @@ func TestParseSnapshotKeepsEndpointPendingRevisions(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("parse endpoint snapshot: %v", err)
+		t.Fatalf("parse origin snapshot: %v", err)
 	}
 	if snapshot.BaseURLRevision != 3 || snapshot.PendingBaseURLRevision != 4 ||
 		snapshot.StatusRevision != 5 || snapshot.PendingStatusRevision != 6 {
@@ -796,25 +796,25 @@ func TestSnapshotManyReadsCandidateIdentityAndPreservesOrder(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
 
-	seed := func(permitID string, endpointID, channelID, baseRev, statusRev, configRev int64, mode RequestMode, firstToken *int64) {
+	seed := func(permitID string, originID, channelID, baseRev, statusRev, configRev int64, mode RequestMode, firstToken *int64) {
 		t.Helper()
 		seedAttemptControls(t, s, cfg, channelID, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
-		created, err := s.InitEndpointControl(context.Background(), endpointID, baseRev, statusRev, "enabled")
+		created, err := s.InitOriginControl(context.Background(), originID, baseRev, statusRev, "enabled")
 		if err != nil || !created {
-			t.Fatalf("init endpoint %d: created=%v err=%v", endpointID, created, err)
+			t.Fatalf("init origin %d: created=%v err=%v", originID, created, err)
 		}
 		adm, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 			PermitID: permitID, AdmissionFingerprint: permitID + "-fp", RequestAdmissionID: "req",
-			EndpointID: endpointID, ChannelID: channelID,
-			EndpointBaseURLRevision: baseRev, EndpointStatusRevision: statusRev, ChannelConfigRevision: configRev,
-			ModelID: 100, UpstreamOperation: OpResponses, RequestMode: mode,
-			EnforceEndpointControl: true,
+			OriginID: originID, ChannelID: channelID,
+			OriginBaseURLRevision: baseRev, OriginStatusRevision: statusRev, ChannelConfigRevision: configRev,
+			ModelID: 100, UpstreamEndpoint: EndpointResponses, RequestMode: mode,
+			EnforceOriginControl: true,
 		}))
 		if err != nil || adm.Mode != AdmissionPermit {
 			t.Fatalf("acquire %s: mode=%s reason=%s err=%v", permitID, adm.Mode, adm.Reason, err)
 		}
 		if _, err := s.Finish(context.Background(), *adm.Permit, FinishOutcome{
-			EndpointOutcome: OutcomeEligibleSuccess,
+			OriginOutcome: OutcomeEligibleSuccess,
 			ChannelOutcome:  OutcomeEligibleSuccess,
 			FirstTokenMs:    firstToken,
 		}); err != nil {
@@ -835,8 +835,8 @@ func TestSnapshotManyReadsCandidateIdentityAndPreservesOrder(t *testing.T) {
 	seed("batch-b", 3020, 302, 7, 8, 9, ModeNonStream, nil)
 
 	candidates := []SnapshotCandidateInput{
-		{EndpointID: 3020, ChannelID: 302, EndpointBaseURLRevision: 7, EndpointStatusRevision: 8, ChannelConfigRevision: 9, ChannelAdmissionRevision: 1},
-		{EndpointID: 3010, ChannelID: 301, EndpointBaseURLRevision: 4, EndpointStatusRevision: 5, ChannelConfigRevision: 6, ChannelAdmissionRevision: 1},
+		{OriginID: 3020, ChannelID: 302, OriginBaseURLRevision: 7, OriginStatusRevision: 8, ChannelConfigRevision: 9, ChannelAdmissionRevision: 1},
+		{OriginID: 3010, ChannelID: 301, OriginBaseURLRevision: 4, OriginStatusRevision: 5, ChannelConfigRevision: 6, ChannelAdmissionRevision: 1},
 	}
 	result, err := s.SnapshotMany(context.Background(), SnapshotManyInput{
 		IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
@@ -855,13 +855,13 @@ func TestSnapshotManyReadsCandidateIdentityAndPreservesOrder(t *testing.T) {
 		if snapshot.Status != CandidateSnapshotCurrent {
 			t.Fatalf("candidate %d want current, got %s", candidate.ChannelID, snapshot.Status)
 		}
-		if !snapshot.Endpoint.ControlPresent || snapshot.Endpoint.BaseURLRevision != candidate.EndpointBaseURLRevision ||
-			snapshot.Endpoint.StatusRevision != candidate.EndpointStatusRevision {
-			t.Fatalf("candidate %d endpoint identity mismatch: %+v", candidate.ChannelID, snapshot.Endpoint)
+		if !snapshot.Origin.ControlPresent || snapshot.Origin.BaseURLRevision != candidate.OriginBaseURLRevision ||
+			snapshot.Origin.StatusRevision != candidate.OriginStatusRevision {
+			t.Fatalf("candidate %d origin identity mismatch: %+v", candidate.ChannelID, snapshot.Origin)
 		}
-		if snapshot.Channel.ProviderEndpointID != candidate.EndpointID ||
-			snapshot.Channel.BaseURLRevision != candidate.EndpointBaseURLRevision ||
-			snapshot.Channel.StatusRevision != candidate.EndpointStatusRevision ||
+		if snapshot.Channel.ProviderOriginID != candidate.OriginID ||
+			snapshot.Channel.BaseURLRevision != candidate.OriginBaseURLRevision ||
+			snapshot.Channel.StatusRevision != candidate.OriginStatusRevision ||
 			snapshot.Channel.ChannelConfigRevision != candidate.ChannelConfigRevision {
 			t.Fatalf("candidate %d channel binding mismatch: %+v", candidate.ChannelID, snapshot.Channel)
 		}
@@ -877,8 +877,8 @@ func TestSnapshotManyFailsWholeBatchOnWrongType(t *testing.T) {
 	cfg := testConfig()
 	seedAttemptControls(t, s, cfg, 401, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
 	ensureTestControl(t, s, s.ChannelAdmissionControl(402), `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
-	if _, err := s.InitEndpointControl(context.Background(), 4010, 1, 1, "enabled"); err != nil {
-		t.Fatalf("init endpoint: %v", err)
+	if _, err := s.InitOriginControl(context.Background(), 4010, 1, 1, "enabled"); err != nil {
+		t.Fatalf("init origin: %v", err)
 	}
 	if err := client.Set(context.Background(), s.keys.channel(402), "not-a-hash", 0).Err(); err != nil {
 		t.Fatalf("seed wrong type: %v", err)
@@ -889,8 +889,8 @@ func TestSnapshotManyFailsWholeBatchOnWrongType(t *testing.T) {
 		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1, CircuitBreakerRevision: 1, RoutingBalanceRevision: 1,
 		ModelID: 100,
 		Candidates: []SnapshotCandidateInput{
-			{EndpointID: 4010, ChannelID: 401, EndpointBaseURLRevision: 1, EndpointStatusRevision: 1, ChannelConfigRevision: 1, ChannelAdmissionRevision: 1},
-			{EndpointID: 4010, ChannelID: 402, EndpointBaseURLRevision: 1, EndpointStatusRevision: 1, ChannelConfigRevision: 1, ChannelAdmissionRevision: 1},
+			{OriginID: 4010, ChannelID: 401, OriginBaseURLRevision: 1, OriginStatusRevision: 1, ChannelConfigRevision: 1, ChannelAdmissionRevision: 1},
+			{OriginID: 4010, ChannelID: 402, OriginBaseURLRevision: 1, OriginStatusRevision: 1, ChannelConfigRevision: 1, ChannelAdmissionRevision: 1},
 		},
 	})
 	if err == nil || !errors.Is(err, ErrStoreUnavailable) {
@@ -904,16 +904,16 @@ func TestSnapshotManyFailsWholeBatchOnWrongType(t *testing.T) {
 func TestSnapshotManyReturnsAuthoritativeRoutingFacts(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
-	const channelID, endpointID, modelID = int64(451), int64(4510), int64(100)
+	const channelID, originID, modelID = int64(451), int64(4510), int64(100)
 	seedAttemptControls(t, s, cfg, channelID, `{"rpm":10,"rpd":20,"tpm":100,"concurrency":2}`)
-	if created, err := s.InitEndpointControl(context.Background(), endpointID, 3, 4, "enabled"); err != nil || !created {
-		t.Fatalf("init endpoint: created=%v err=%v", created, err)
+	if created, err := s.InitOriginControl(context.Background(), originID, 3, 4, "enabled"); err != nil || !created {
+		t.Fatalf("init origin: created=%v err=%v", created, err)
 	}
 	input := withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "snapshot-facts", AdmissionFingerprint: "snapshot-facts-fp", RequestAdmissionID: "req",
-		EndpointID: endpointID, ChannelID: channelID, EndpointBaseURLRevision: 3, EndpointStatusRevision: 4,
-		ChannelConfigRevision: 5, ModelID: modelID, UpstreamOperation: OpResponses, RequestMode: ModeStream,
-		EnforceEndpointControl: true, EstimatedInputTokens: 25,
+		OriginID: originID, ChannelID: channelID, OriginBaseURLRevision: 3, OriginStatusRevision: 4,
+		ChannelConfigRevision: 5, ModelID: modelID, UpstreamEndpoint: EndpointResponses, RequestMode: ModeStream,
+		EnforceOriginControl: true, EstimatedInputTokens: 25,
 	})
 	if admission, err := acquireAttempt(t, s, input); err != nil || admission.Mode != AdmissionPermit {
 		t.Fatalf("acquire active capacity: admission=%+v err=%v", admission, err)
@@ -930,7 +930,7 @@ func TestSnapshotManyReturnsAuthoritativeRoutingFacts(t *testing.T) {
 		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1, CircuitBreakerRevision: 1, RoutingBalanceRevision: 1,
 		ModelID: modelID,
 		Candidates: []SnapshotCandidateInput{{
-			EndpointID: endpointID, ChannelID: channelID, EndpointBaseURLRevision: 3, EndpointStatusRevision: 4,
+			OriginID: originID, ChannelID: channelID, OriginBaseURLRevision: 3, OriginStatusRevision: 4,
 			ChannelConfigRevision: 5, ChannelAdmissionRevision: 1,
 		}},
 	})
@@ -959,14 +959,14 @@ func TestSnapshotManyReturnsAuthoritativeRoutingFacts(t *testing.T) {
 func TestSnapshotManyReturnsCostWeightFromCurrentPayload(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
-	const channelID, endpointID = int64(452), int64(4520)
+	const channelID, originID = int64(452), int64(4520)
 	seedAttemptControlsWithRoutingBalance(
 		t, s, cfg, channelID,
 		`{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`,
 		testRoutingBalancePayloadWithCost,
 	)
-	if created, err := s.InitEndpointControl(context.Background(), endpointID, 1, 1, "enabled"); err != nil || !created {
-		t.Fatalf("init endpoint: created=%v err=%v", created, err)
+	if created, err := s.InitOriginControl(context.Background(), originID, 1, 1, "enabled"); err != nil || !created {
+		t.Fatalf("init origin: created=%v err=%v", created, err)
 	}
 
 	result, err := s.SnapshotMany(context.Background(), SnapshotManyInput{
@@ -974,8 +974,8 @@ func TestSnapshotManyReturnsCostWeightFromCurrentPayload(t *testing.T) {
 		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1,
 		CircuitBreakerRevision: 1, RoutingBalanceRevision: 1, ModelID: 100,
 		Candidates: []SnapshotCandidateInput{{
-			EndpointID: endpointID, ChannelID: channelID,
-			EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
+			OriginID: originID, ChannelID: channelID,
+			OriginBaseURLRevision: 1, OriginStatusRevision: 1,
 			ChannelConfigRevision: 1, ChannelAdmissionRevision: 1,
 		}},
 	})
@@ -1003,22 +1003,22 @@ func TestSnapshotManyRejectsNonExactRoutingBalanceShapes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, _, _ := newTestStore(t)
 			cfg := testConfig()
-			const channelID, endpointID = int64(453), int64(4530)
+			const channelID, originID = int64(453), int64(4530)
 			seedAttemptControlsWithRoutingBalance(
 				t, s, cfg, channelID,
 				`{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`,
 				payload,
 			)
-			if created, err := s.InitEndpointControl(context.Background(), endpointID, 1, 1, "enabled"); err != nil || !created {
-				t.Fatalf("init endpoint: created=%v err=%v", created, err)
+			if created, err := s.InitOriginControl(context.Background(), originID, 1, 1, "enabled"); err != nil || !created {
+				t.Fatalf("init origin: created=%v err=%v", created, err)
 			}
 			_, err := s.SnapshotMany(context.Background(), SnapshotManyInput{
 				IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
 				ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1,
 				CircuitBreakerRevision: 1, RoutingBalanceRevision: 1, ModelID: 100,
 				Candidates: []SnapshotCandidateInput{{
-					EndpointID: endpointID, ChannelID: channelID,
-					EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
+					OriginID: originID, ChannelID: channelID,
+					OriginBaseURLRevision: 1, OriginStatusRevision: 1,
 					ChannelConfigRevision: 1, ChannelAdmissionRevision: 1,
 				}},
 			})
@@ -1032,17 +1032,17 @@ func TestSnapshotManyRejectsNonExactRoutingBalanceShapes(t *testing.T) {
 func TestSnapshotManyTreatsExpiredClosedWindowAsNoSampleWithoutMutation(t *testing.T) {
 	s, client, _ := newTestStore(t)
 	cfg := testConfig()
-	const channelID, endpointID = int64(454), int64(4540)
+	const channelID, originID = int64(454), int64(4540)
 	seedAttemptControls(t, s, cfg, channelID, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
-	if created, err := s.InitEndpointControl(context.Background(), endpointID, 1, 1, "enabled"); err != nil || !created {
-		t.Fatalf("init endpoint: created=%v err=%v", created, err)
+	if created, err := s.InitOriginControl(context.Background(), originID, 1, 1, "enabled"); err != nil || !created {
+		t.Fatalf("init origin: created=%v err=%v", created, err)
 	}
 	in := withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "expired-window", AdmissionFingerprint: "expired-window-fp", RequestAdmissionID: "req-expired-window",
-		EndpointID: endpointID, ChannelID: channelID,
-		EndpointBaseURLRevision: 1, EndpointStatusRevision: 1, ChannelConfigRevision: 1,
-		ModelID: 100, UpstreamOperation: OpResponses, RequestMode: ModeStream,
-		EnforceEndpointControl: true,
+		OriginID: originID, ChannelID: channelID,
+		OriginBaseURLRevision: 1, OriginStatusRevision: 1, ChannelConfigRevision: 1,
+		ModelID: 100, UpstreamEndpoint: EndpointResponses, RequestMode: ModeStream,
+		EnforceOriginControl: true,
 	})
 	admission, err := acquireAttempt(t, s, in)
 	if err != nil || admission.Mode != AdmissionPermit {
@@ -1055,8 +1055,8 @@ func TestSnapshotManyTreatsExpiredClosedWindowAsNoSampleWithoutMutation(t *testi
 		t.Fatalf("redis time: %v", err)
 	}
 	expiredWindowStart := redisNow.Add(-time.Duration(cfg.WindowMs+1_000) * time.Millisecond).UnixMilli()
-	if err := client.HSet(context.Background(), s.keys.endpoint(endpointID), "window_started_at_ms", expiredWindowStart).Err(); err != nil {
-		t.Fatalf("age endpoint window: %v", err)
+	if err := client.HSet(context.Background(), s.keys.origin(originID), "window_started_at_ms", expiredWindowStart).Err(); err != nil {
+		t.Fatalf("age origin window: %v", err)
 	}
 	if err := client.HSet(context.Background(), s.keys.channel(channelID),
 		"window_started_at_ms", expiredWindowStart,
@@ -1065,9 +1065,9 @@ func TestSnapshotManyTreatsExpiredClosedWindowAsNoSampleWithoutMutation(t *testi
 	).Err(); err != nil {
 		t.Fatalf("age channel window: %v", err)
 	}
-	beforeEndpoint, err := client.HGetAll(context.Background(), s.keys.endpoint(endpointID)).Result()
+	beforeOrigin, err := client.HGetAll(context.Background(), s.keys.origin(originID)).Result()
 	if err != nil {
-		t.Fatalf("read endpoint before snapshot: %v", err)
+		t.Fatalf("read origin before snapshot: %v", err)
 	}
 	beforeChannel, err := client.HGetAll(context.Background(), s.keys.channel(channelID)).Result()
 	if err != nil {
@@ -1079,8 +1079,8 @@ func TestSnapshotManyTreatsExpiredClosedWindowAsNoSampleWithoutMutation(t *testi
 		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1,
 		CircuitBreakerRevision: 1, RoutingBalanceRevision: 1, ModelID: 100,
 		Candidates: []SnapshotCandidateInput{{
-			EndpointID: endpointID, ChannelID: channelID,
-			EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
+			OriginID: originID, ChannelID: channelID,
+			OriginBaseURLRevision: 1, OriginStatusRevision: 1,
 			ChannelConfigRevision: 1, ChannelAdmissionRevision: 1,
 		}},
 	})
@@ -1091,7 +1091,7 @@ func TestSnapshotManyTreatsExpiredClosedWindowAsNoSampleWithoutMutation(t *testi
 	if snapshot.Status != CandidateSnapshotCurrent {
 		t.Fatalf("expired closed window must stay eligible, status=%s", snapshot.Status)
 	}
-	for _, scope := range []ScopeSnapshot{snapshot.Endpoint, snapshot.Channel} {
+	for _, scope := range []ScopeSnapshot{snapshot.Origin, snapshot.Channel} {
 		if scope.SampleCount != 0 || scope.EligibleSuccesses != 0 || scope.EligibleFailures != 0 || scope.ErrorRate != 0 {
 			t.Fatalf("expired closed scope must score as no-sample: %+v", scope)
 		}
@@ -1099,11 +1099,11 @@ func TestSnapshotManyTreatsExpiredClosedWindowAsNoSampleWithoutMutation(t *testi
 	if snapshot.Channel.TTFTEWMAMs != 777 || snapshot.Channel.TTFTSamples != 5 {
 		t.Fatalf("expired breaker window must preserve TTFT: %+v", snapshot.Channel)
 	}
-	afterEndpoint, _ := client.HGetAll(context.Background(), s.keys.endpoint(endpointID)).Result()
+	afterOrigin, _ := client.HGetAll(context.Background(), s.keys.origin(originID)).Result()
 	afterChannel, _ := client.HGetAll(context.Background(), s.keys.channel(channelID)).Result()
-	if !reflect.DeepEqual(afterEndpoint, beforeEndpoint) || !reflect.DeepEqual(afterChannel, beforeChannel) {
-		t.Fatalf("SnapshotMany must not mutate expired breaker state: endpoint before=%v after=%v channel before=%v after=%v",
-			beforeEndpoint, afterEndpoint, beforeChannel, afterChannel)
+	if !reflect.DeepEqual(afterOrigin, beforeOrigin) || !reflect.DeepEqual(afterChannel, beforeChannel) {
+		t.Fatalf("SnapshotMany must not mutate expired breaker state: origin before=%v after=%v channel before=%v after=%v",
+			beforeOrigin, afterOrigin, beforeChannel, afterChannel)
 	}
 }
 
@@ -1111,7 +1111,7 @@ func TestSnapshotManyFailsClosedOnMarkerOrPendingControl(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
 	seedAttemptControls(t, s, cfg, 461, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
-	if _, err := s.InitEndpointControl(context.Background(), 4610, 1, 1, "enabled"); err != nil {
+	if _, err := s.InitOriginControl(context.Background(), 4610, 1, 1, "enabled"); err != nil {
 		t.Fatal(err)
 	}
 	input := SnapshotManyInput{
@@ -1119,7 +1119,7 @@ func TestSnapshotManyFailsClosedOnMarkerOrPendingControl(t *testing.T) {
 		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1, CircuitBreakerRevision: 1, RoutingBalanceRevision: 1,
 		ModelID: 100,
 		Candidates: []SnapshotCandidateInput{{
-			EndpointID: 4610, ChannelID: 461, EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
+			OriginID: 4610, ChannelID: 461, OriginBaseURLRevision: 1, OriginStatusRevision: 1,
 			ChannelConfigRevision: 1, ChannelAdmissionRevision: 1,
 		}},
 	}
@@ -1147,30 +1147,30 @@ func TestSnapshotManyFailsClosedOnMarkerOrPendingControl(t *testing.T) {
 	}
 }
 
-// TestAcquireRotatesChannelRevisionState 验证新 revision 原子清旧样本，旧 revision 与同 revision 换 Endpoint 被拒绝。
+// TestAcquireRotatesChannelRevisionState 验证新 revision 原子清旧样本，旧 revision 与同 revision 换 Origin 被拒绝。
 func TestAcquireRotatesChannelRevisionState(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
 	seedAttemptControls(t, s, cfg, 501, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
 	first, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "rotate-v1", AdmissionFingerprint: "rotate-v1-fp", RequestAdmissionID: "req",
-		EndpointID: 5010, ChannelID: 501, EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
-		ChannelConfigRevision: 1, ModelID: 100, UpstreamOperation: OpMessages, RequestMode: ModeStream,
+		OriginID: 5010, ChannelID: 501, OriginBaseURLRevision: 1, OriginStatusRevision: 1,
+		ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointMessages, RequestMode: ModeStream,
 	}))
 	if err != nil || first.Mode != AdmissionPermit {
 		t.Fatalf("acquire v1: mode=%s reason=%s err=%v", first.Mode, first.Reason, err)
 	}
 	ttft := int64(900)
 	if _, err := s.Finish(context.Background(), *first.Permit, FinishOutcome{
-		EndpointOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleFailure, FirstTokenMs: &ttft,
+		OriginOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleFailure, FirstTokenMs: &ttft,
 	}); err != nil {
 		t.Fatalf("finish v1: %v", err)
 	}
 
 	v2Input := withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "rotate-v2", AdmissionFingerprint: "rotate-v2-fp", RequestAdmissionID: "req",
-		EndpointID: 5010, ChannelID: 501, EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
-		ChannelConfigRevision: 2, ModelID: 100, UpstreamOperation: OpMessages, RequestMode: ModeNonStream,
+		OriginID: 5010, ChannelID: 501, OriginBaseURLRevision: 1, OriginStatusRevision: 1,
+		ChannelConfigRevision: 2, ModelID: 100, UpstreamEndpoint: EndpointMessages, RequestMode: ModeNonStream,
 	})
 	v2, err := acquireAttempt(t, s, v2Input)
 	if err != nil || v2.Mode != AdmissionPermit {
@@ -1195,12 +1195,12 @@ func TestAcquireRotatesChannelRevisionState(t *testing.T) {
 		t.Fatalf("old config want stale_config_revision, got %s/%s err=%v", adm.Mode, adm.Reason, err)
 	}
 
-	wrongEndpoint := v2Input
-	wrongEndpoint.PermitID = "rotate-wrong-endpoint"
-	wrongEndpoint.AdmissionFingerprint = "rotate-wrong-endpoint-fp"
-	wrongEndpoint.EndpointID = 5099
-	if adm, err := acquireAttempt(t, s, wrongEndpoint); err != nil || adm.Mode != AdmissionDenied || adm.Reason != ReasonStaleConfigRevision {
-		t.Fatalf("same config with different endpoint want stale_config_revision, got %s/%s err=%v", adm.Mode, adm.Reason, err)
+	wrongOrigin := v2Input
+	wrongOrigin.PermitID = "rotate-wrong-origin"
+	wrongOrigin.AdmissionFingerprint = "rotate-wrong-origin-fp"
+	wrongOrigin.OriginID = 5099
+	if adm, err := acquireAttempt(t, s, wrongOrigin); err != nil || adm.Mode != AdmissionDenied || adm.Reason != ReasonStaleConfigRevision {
+		t.Fatalf("same config with different origin want stale_config_revision, got %s/%s err=%v", adm.Mode, adm.Reason, err)
 	}
 }
 
@@ -1211,8 +1211,8 @@ func TestAcquireAndFinishRejectInvalidInputBeforeRedisWrite(t *testing.T) {
 	base := AcquireAttemptInput{
 		PermitID: "invalid-acquire", AdmissionFingerprint: "invalid-acquire-fp", RequestAdmissionID: "req",
 		IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
-		EndpointID: 6010, ChannelID: 601, EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
-		ChannelConfigRevision: 1, ModelID: 100, UpstreamOperation: OpChatCompletions,
+		OriginID: 6010, ChannelID: 601, OriginBaseURLRevision: 1, OriginStatusRevision: 1,
+		ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions,
 		RequestMode:         ModeNonStream,
 		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1,
 		CircuitBreakerRevision: 1, ChannelAdmissionRevision: 1,
@@ -1221,7 +1221,7 @@ func TestAcquireAndFinishRejectInvalidInputBeforeRedisWrite(t *testing.T) {
 		name   string
 		mutate func(*AcquireAttemptInput)
 	}{
-		{name: "operation enum", mutate: func(in *AcquireAttemptInput) { in.UpstreamOperation = UpstreamOperation("invalid") }},
+		{name: "operation enum", mutate: func(in *AcquireAttemptInput) { in.UpstreamEndpoint = UpstreamEndpoint("invalid") }},
 		{name: "request mode enum", mutate: func(in *AcquireAttemptInput) { in.RequestMode = RequestMode("invalid") }},
 		{name: "negative token estimate", mutate: func(in *AcquireAttemptInput) { in.EstimatedInputTokens = -1 }},
 		{name: "missing control revision", mutate: func(in *AcquireAttemptInput) { in.CircuitBreakerRevision = 0 }},
@@ -1255,11 +1255,11 @@ func TestAcquireAndFinishRejectInvalidInputBeforeRedisWrite(t *testing.T) {
 		name    string
 		outcome FinishOutcome
 	}{
-		{name: "outcome enum", outcome: FinishOutcome{EndpointOutcome: Outcome("invalid"), ChannelOutcome: OutcomeEligibleFailure}},
-		{name: "evidence enum", outcome: FinishOutcome{EndpointOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleFailure, EndpointEvidence: EndpointEvidenceCategory("invalid")}},
-		{name: "evidence requires channel failure", outcome: FinishOutcome{EndpointOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, EndpointEvidence: EndpointEvidenceHTTP500}},
-		{name: "negative actual tokens", outcome: FinishOutcome{EndpointOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, ChannelTPMActual: &negative}},
-		{name: "non-stream first token", outcome: FinishOutcome{EndpointOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, FirstTokenMs: &firstToken}},
+		{name: "outcome enum", outcome: FinishOutcome{OriginOutcome: Outcome("invalid"), ChannelOutcome: OutcomeEligibleFailure}},
+		{name: "evidence enum", outcome: FinishOutcome{OriginOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleFailure, OriginEvidence: OriginEvidenceCategory("invalid")}},
+		{name: "evidence requires channel failure", outcome: FinishOutcome{OriginOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, OriginEvidence: OriginEvidenceHTTP500}},
+		{name: "negative actual tokens", outcome: FinishOutcome{OriginOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, ChannelTPMActual: &negative}},
+		{name: "non-stream first token", outcome: FinishOutcome{OriginOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, FirstTokenMs: &firstToken}},
 	}
 	for _, tc := range finishCases {
 		if _, err := s.Finish(context.Background(), *adm.Permit, tc.outcome); failure.CodeOf(err) != failure.CodeConfigInvalid {
@@ -1279,31 +1279,31 @@ func TestAcquireAndFinishRejectInvalidInputBeforeRedisWrite(t *testing.T) {
 	}
 }
 
-// TestEndpointAmbiguousEvidenceRequiresDistinctChannelsAndModels 验证条件故障只有在同一类别、同一短窗内
-// 同时满足 distinct Channel 与 model 门槛后，才把当前 Finish 计入 Endpoint。
-func TestEndpointAmbiguousEvidenceRequiresDistinctChannelsAndModels(t *testing.T) {
+// TestOriginAmbiguousEvidenceRequiresDistinctChannelsAndModels 验证条件故障只有在同一类别、同一短窗内
+// 同时满足 distinct Channel 与 model 门槛后，才把当前 Finish 计入 Origin。
+func TestOriginAmbiguousEvidenceRequiresDistinctChannelsAndModels(t *testing.T) {
 	s, client, _ := newTestStore(t)
 	cfg := testConfig()
-	const endpointID int64 = 6110
+	const originID int64 = 6110
 
 	acquireEvidence := func(permitID string, channelID, modelID int64) *AttemptPermit {
 		seedAttemptControls(t, s, cfg, channelID, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
 		adm, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 			PermitID: permitID, AdmissionFingerprint: permitID + "-fp", RequestAdmissionID: "req-" + permitID,
-			EndpointID: endpointID, ChannelID: channelID,
-			EndpointBaseURLRevision: 1, EndpointStatusRevision: 1, ChannelConfigRevision: 1,
-			ModelID: modelID, UpstreamOperation: OpChatCompletions, RequestMode: ModeNonStream,
+			OriginID: originID, ChannelID: channelID,
+			OriginBaseURLRevision: 1, OriginStatusRevision: 1, ChannelConfigRevision: 1,
+			ModelID: modelID, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
 		}))
 		if err != nil || adm.Mode != AdmissionPermit || adm.Permit == nil {
 			t.Fatalf("acquire %s: mode=%s reason=%s err=%v", permitID, adm.Mode, adm.Reason, err)
 		}
 		return adm.Permit
 	}
-	finishEvidence := func(permit *AttemptPermit, category EndpointEvidenceCategory) FinishResult {
+	finishEvidence := func(permit *AttemptPermit, category OriginEvidenceCategory) FinishResult {
 		res, err := s.Finish(context.Background(), *permit, FinishOutcome{
-			EndpointOutcome:  OutcomeIgnored,
+			OriginOutcome:  OutcomeIgnored,
 			ChannelOutcome:   OutcomeEligibleFailure,
-			EndpointEvidence: category,
+			OriginEvidence: category,
 		})
 		if err != nil {
 			t.Fatalf("finish %s: %v", permit.PermitID, err)
@@ -1311,27 +1311,27 @@ func TestEndpointAmbiguousEvidenceRequiresDistinctChannelsAndModels(t *testing.T
 		return res
 	}
 
-	first := finishEvidence(acquireEvidence("evidence-1", 611, 1001), EndpointEvidenceHTTP500)
-	second := finishEvidence(acquireEvidence("evidence-2", 611, 1002), EndpointEvidenceHTTP500)
-	if first.EndpointDisposition != DispositionNotApplicable || second.EndpointDisposition != DispositionNotApplicable {
-		t.Fatalf("single distinct channel must not count endpoint: first=%s second=%s", first.EndpointDisposition, second.EndpointDisposition)
+	first := finishEvidence(acquireEvidence("evidence-1", 611, 1001), OriginEvidenceHTTP500)
+	second := finishEvidence(acquireEvidence("evidence-2", 611, 1002), OriginEvidenceHTTP500)
+	if first.OriginDisposition != DispositionNotApplicable || second.OriginDisposition != DispositionNotApplicable {
+		t.Fatalf("single distinct channel must not count origin: first=%s second=%s", first.OriginDisposition, second.OriginDisposition)
 	}
-	before, err := s.Snapshot(context.Background(), ScopeEndpoint, endpointID)
+	before, err := s.Snapshot(context.Background(), ScopeOrigin, originID)
 	if err != nil || before.EligibleFailures != 0 {
-		t.Fatalf("endpoint gained failure before both thresholds: %+v err=%v", before, err)
+		t.Fatalf("origin gained failure before both thresholds: %+v err=%v", before, err)
 	}
 
-	third := finishEvidence(acquireEvidence("evidence-3", 612, 1002), EndpointEvidenceHTTP500)
-	if third.EndpointDisposition != DispositionApplied {
-		t.Fatalf("threshold-crossing finish disposition=%s, want applied", third.EndpointDisposition)
+	third := finishEvidence(acquireEvidence("evidence-3", 612, 1002), OriginEvidenceHTTP500)
+	if third.OriginDisposition != DispositionApplied {
+		t.Fatalf("threshold-crossing finish disposition=%s, want applied", third.OriginDisposition)
 	}
-	after, err := s.Snapshot(context.Background(), ScopeEndpoint, endpointID)
+	after, err := s.Snapshot(context.Background(), ScopeOrigin, originID)
 	if err != nil || after.EligibleFailures != 1 {
-		t.Fatalf("threshold-crossing finish must add one endpoint failure: %+v err=%v", after, err)
+		t.Fatalf("threshold-crossing finish must add one origin failure: %+v err=%v", after, err)
 	}
 
-	channelEvidence := s.keys.endpointEvidenceChannels(endpointID, string(EndpointEvidenceHTTP500))
-	modelEvidence := s.keys.endpointEvidenceModels(endpointID, string(EndpointEvidenceHTTP500))
+	channelEvidence := s.keys.originEvidenceChannels(originID, string(OriginEvidenceHTTP500))
+	modelEvidence := s.keys.originEvidenceModels(originID, string(OriginEvidenceHTTP500))
 	if got := client.SCard(context.Background(), channelEvidence).Val(); got != 2 {
 		t.Fatalf("bounded distinct channel evidence=%d, want 2", got)
 	}
@@ -1339,61 +1339,61 @@ func TestEndpointAmbiguousEvidenceRequiresDistinctChannelsAndModels(t *testing.T
 		t.Fatalf("bounded distinct model evidence=%d, want 2", got)
 	}
 
-	if _, err := s.Reset(context.Background(), ScopeEndpoint, endpointID); err != nil {
-		t.Fatalf("reset endpoint: %v", err)
+	if _, err := s.Reset(context.Background(), ScopeOrigin, originID); err != nil {
+		t.Fatalf("reset origin: %v", err)
 	}
 	if got := client.Exists(context.Background(), channelEvidence, modelEvidence).Val(); got != 0 {
-		t.Fatalf("endpoint reset must clear ambiguous evidence, existing keys=%d", got)
+		t.Fatalf("origin reset must clear ambiguous evidence, existing keys=%d", got)
 	}
 }
 
-// TestEndpointAmbiguousEvidenceCategoriesDoNotMix 验证 HTTP 500 与 timeout 各自维护独立短窗。
-func TestEndpointAmbiguousEvidenceCategoriesDoNotMix(t *testing.T) {
+// TestOriginAmbiguousEvidenceCategoriesDoNotMix 验证 HTTP 500 与 timeout 各自维护独立短窗。
+func TestOriginAmbiguousEvidenceCategoriesDoNotMix(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
-	const endpointID int64 = 6210
+	const originID int64 = 6210
 
-	finishOne := func(permitID string, channelID, modelID int64, category EndpointEvidenceCategory) {
+	finishOne := func(permitID string, channelID, modelID int64, category OriginEvidenceCategory) {
 		seedAttemptControls(t, s, cfg, channelID, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
 		adm, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 			PermitID: permitID, AdmissionFingerprint: permitID + "-fp", RequestAdmissionID: "req-" + permitID,
-			EndpointID: endpointID, ChannelID: channelID,
-			EndpointBaseURLRevision: 1, EndpointStatusRevision: 1, ChannelConfigRevision: 1,
-			ModelID: modelID, UpstreamOperation: OpResponses, RequestMode: ModeStream,
+			OriginID: originID, ChannelID: channelID,
+			OriginBaseURLRevision: 1, OriginStatusRevision: 1, ChannelConfigRevision: 1,
+			ModelID: modelID, UpstreamEndpoint: EndpointResponses, RequestMode: ModeStream,
 		}))
 		if err != nil || adm.Permit == nil {
 			t.Fatalf("acquire %s: %+v err=%v", permitID, adm, err)
 		}
 		res, err := s.Finish(context.Background(), *adm.Permit, FinishOutcome{
-			EndpointOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleFailure, EndpointEvidence: category,
+			OriginOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleFailure, OriginEvidence: category,
 		})
-		if err != nil || res.EndpointDisposition != DispositionNotApplicable {
+		if err != nil || res.OriginDisposition != DispositionNotApplicable {
 			t.Fatalf("finish %s: result=%+v err=%v", permitID, res, err)
 		}
 	}
 
-	finishOne("mixed-500", 621, 2001, EndpointEvidenceHTTP500)
-	finishOne("mixed-timeout", 622, 2002, EndpointEvidenceFirstTokenTimeout)
-	snapshot, err := s.Snapshot(context.Background(), ScopeEndpoint, endpointID)
+	finishOne("mixed-500", 621, 2001, OriginEvidenceHTTP500)
+	finishOne("mixed-timeout", 622, 2002, OriginEvidenceFirstTokenTimeout)
+	snapshot, err := s.Snapshot(context.Background(), ScopeOrigin, originID)
 	if err != nil || snapshot.EligibleFailures != 0 {
 		t.Fatalf("different evidence categories must not combine: %+v err=%v", snapshot, err)
 	}
 }
 
-func TestEndpointFenceMakesExistingPermitBreakerResultStale(t *testing.T) {
+func TestOriginFenceMakesExistingPermitBreakerResultStale(t *testing.T) {
 	s, client, _ := newTestStore(t)
 	cfg := testConfig()
 	seedAttemptControls(t, s, cfg, 631, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":1}`)
-	if created, err := s.InitEndpointControl(context.Background(), 6310, 1, 1, "enabled"); err != nil || !created {
-		t.Fatalf("init endpoint control: created=%v err=%v", created, err)
+	if created, err := s.InitOriginControl(context.Background(), 6310, 1, 1, "enabled"); err != nil || !created {
+		t.Fatalf("init origin control: created=%v err=%v", created, err)
 	}
 	adm, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "status-fenced-finish", AdmissionFingerprint: "status-fenced-finish-fp",
 		RequestAdmissionID: "req-status-fenced-finish",
-		EndpointID:         6310, ChannelID: 631,
-		EndpointBaseURLRevision: 1, EndpointStatusRevision: 1, ChannelConfigRevision: 1,
-		ModelID: 3001, UpstreamOperation: OpMessages, RequestMode: ModeStream,
-		EnforceEndpointControl: true,
+		OriginID:         6310, ChannelID: 631,
+		OriginBaseURLRevision: 1, OriginStatusRevision: 1, ChannelConfigRevision: 1,
+		ModelID: 3001, UpstreamEndpoint: EndpointMessages, RequestMode: ModeStream,
+		EnforceOriginControl: true,
 	}))
 	if err != nil || adm.Permit == nil {
 		t.Fatalf("acquire permit: %+v err=%v", adm, err)
@@ -1403,8 +1403,8 @@ func TestEndpointFenceMakesExistingPermitBreakerResultStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read initial concurrency lease: %v", err)
 	}
-	payload := `{"endpoint_id":6310,"current_status_revision":1,"next_status_revision":2}`
-	if result, err := s.PrepareEndpointStatusRevision(context.Background(), 6310, 1, 2, "disabled", "status-fence", payload); err != nil || result != FenceResult("prepared") {
+	payload := `{"origin_id":6310,"current_status_revision":1,"next_status_revision":2}`
+	if result, err := s.PrepareOriginStatusRevision(context.Background(), 6310, 1, 2, "disabled", "status-fence", payload); err != nil || result != FenceResult("prepared") {
 		t.Fatalf("prepare status fence: result=%s err=%v", result, err)
 	}
 	time.Sleep(5 * time.Millisecond)
@@ -1422,48 +1422,48 @@ func TestEndpointFenceMakesExistingPermitBreakerResultStale(t *testing.T) {
 	denied, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "status-fenced-new", AdmissionFingerprint: "status-fenced-new-fp",
 		RequestAdmissionID: "req-status-fenced-new",
-		EndpointID:         6310, ChannelID: 631,
-		EndpointBaseURLRevision: 1, EndpointStatusRevision: 1, ChannelConfigRevision: 1,
-		ModelID: 3001, UpstreamOperation: OpMessages, RequestMode: ModeStream,
-		EnforceEndpointControl: true,
+		OriginID:         6310, ChannelID: 631,
+		OriginBaseURLRevision: 1, OriginStatusRevision: 1, ChannelConfigRevision: 1,
+		ModelID: 3001, UpstreamEndpoint: EndpointMessages, RequestMode: ModeStream,
+		EnforceOriginControl: true,
 	}))
 	if err != nil || denied.Mode != AdmissionDenied || denied.Reason != ReasonRuntimeSyncRequired {
 		t.Fatalf("new permit during status fence: admission=%+v err=%v", denied, err)
 	}
 	firstToken := int64(250)
 	result, err := s.Finish(context.Background(), *adm.Permit, FinishOutcome{
-		EndpointOutcome: OutcomeEligibleSuccess,
+		OriginOutcome: OutcomeEligibleSuccess,
 		ChannelOutcome:  OutcomeEligibleSuccess,
 		FirstTokenMs:    &firstToken,
 	})
 	if err != nil {
 		t.Fatalf("finish old permit: %v", err)
 	}
-	if result.EndpointDisposition != DispositionStaleStatusRev || result.ChannelDisposition != DispositionStaleStatusRev {
-		t.Fatalf("old permit dispositions=%s/%s, want stale status for both scopes", result.EndpointDisposition, result.ChannelDisposition)
+	if result.OriginDisposition != DispositionStaleStatusRev || result.ChannelDisposition != DispositionStaleStatusRev {
+		t.Fatalf("old permit dispositions=%s/%s, want stale status for both scopes", result.OriginDisposition, result.ChannelDisposition)
 	}
-	endpoint, _ := s.Snapshot(context.Background(), ScopeEndpoint, 6310)
+	origin, _ := s.Snapshot(context.Background(), ScopeOrigin, 6310)
 	channel, _ := s.Snapshot(context.Background(), ScopeChannel, 631)
-	if endpoint.SampleCount != 0 || channel.SampleCount != 0 || channel.TTFTSamples != 0 {
-		t.Fatalf("fenced finish changed current runtime: endpoint=%+v channel=%+v", endpoint, channel)
+	if origin.SampleCount != 0 || channel.SampleCount != 0 || channel.TTFTSamples != 0 {
+		t.Fatalf("fenced finish changed current runtime: origin=%+v channel=%+v", origin, channel)
 	}
 	if used := client.ZCard(context.Background(), concurrencyKey).Val(); used != 0 {
 		t.Fatalf("fenced finish leaked channel concurrency: used=%d", used)
 	}
 }
 
-func TestEndpointBaseURLCommitClearsAllAmbiguousEvidence(t *testing.T) {
+func TestOriginBaseURLCommitClearsAllAmbiguousEvidence(t *testing.T) {
 	s, client, _ := newTestStore(t)
-	const endpointID int64 = 6410
-	if created, err := s.InitEndpointControl(context.Background(), endpointID, 1, 1, "enabled"); err != nil || !created {
-		t.Fatalf("init endpoint control: created=%v err=%v", created, err)
+	const originID int64 = 6410
+	if created, err := s.InitOriginControl(context.Background(), originID, 1, 1, "enabled"); err != nil || !created {
+		t.Fatalf("init origin control: created=%v err=%v", created, err)
 	}
-	for _, category := range []EndpointEvidenceCategory{
-		EndpointEvidenceHTTP500,
-		EndpointEvidenceFirstTokenTimeout,
-		EndpointEvidenceBodyReadTimeout,
+	for _, category := range []OriginEvidenceCategory{
+		OriginEvidenceHTTP500,
+		OriginEvidenceFirstTokenTimeout,
+		OriginEvidenceBodyReadTimeout,
 	} {
-		keys := s.endpointEvidenceKeys(endpointID, category)
+		keys := s.originEvidenceKeys(originID, category)
 		if err := client.SAdd(context.Background(), keys[0], 1).Err(); err != nil {
 			t.Fatalf("seed channel evidence: %v", err)
 		}
@@ -1471,39 +1471,39 @@ func TestEndpointBaseURLCommitClearsAllAmbiguousEvidence(t *testing.T) {
 			t.Fatalf("seed model evidence: %v", err)
 		}
 	}
-	payload := `{"endpoint_id":6410,"current_base_url_revision":1,"next_base_url_revision":2}`
-	if result, err := s.PrepareEndpointBaseURLRevision(context.Background(), endpointID, 1, 2, "base-fence", payload); err != nil || result != FenceResult("prepared") {
+	payload := `{"origin_id":6410,"current_base_url_revision":1,"next_base_url_revision":2}`
+	if result, err := s.PrepareOriginBaseURLRevision(context.Background(), originID, 1, 2, "base-fence", payload); err != nil || result != FenceResult("prepared") {
 		t.Fatalf("prepare base url fence: result=%s err=%v", result, err)
 	}
-	if result, err := s.CommitEndpointBaseURLRevision(context.Background(), endpointID, "base-fence", payload); err != nil || result != FenceResult("committed") {
+	if result, err := s.CommitOriginBaseURLRevision(context.Background(), originID, "base-fence", payload); err != nil || result != FenceResult("committed") {
 		t.Fatalf("commit base url fence: result=%s err=%v", result, err)
 	}
-	if existing := client.Exists(context.Background(), s.allEndpointEvidenceKeys(endpointID)...).Val(); existing != 0 {
+	if existing := client.Exists(context.Background(), s.allOriginEvidenceKeys(originID)...).Val(); existing != 0 {
 		t.Fatalf("base url commit left %d evidence keys", existing)
 	}
 }
 
-// TestEndpointBreakerIndependent 验证 Endpoint 作用域独立于 Channel。
-func TestEndpointBreakerIndependent(t *testing.T) {
+// TestOriginBreakerIndependent 验证 Origin 作用域独立于 Channel。
+func TestOriginBreakerIndependent(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
 
-	// 对 endpoint 记 3 次可归因失败（channel ignored）→ endpoint open, channel closed。
+	// 对 origin 记 3 次可归因失败（channel ignored）→ origin open, channel closed。
 	for i := 0; i < 3; i++ {
 		adm := acquire(t, s, cfg, fmt.Sprintf("e%d", i), 11, 110)
 		finish(t, s, cfg, adm.Permit, OutcomeEligibleFailure, OutcomeIgnored)
 	}
-	epSnap, _ := s.Snapshot(context.Background(), ScopeEndpoint, 110)
+	epSnap, _ := s.Snapshot(context.Background(), ScopeOrigin, 110)
 	chSnap, _ := s.Snapshot(context.Background(), ScopeChannel, 11)
 	if epSnap.State != StateOpen {
-		t.Fatalf("endpoint want open, got %s", epSnap.State)
+		t.Fatalf("origin want open, got %s", epSnap.State)
 	}
 	if chSnap.State != StateClosed {
-		t.Fatalf("channel want closed (endpoint failures ignored for channel), got %s", chSnap.State)
+		t.Fatalf("channel want closed (origin failures ignored for channel), got %s", chSnap.State)
 	}
-	// endpoint open → 后续 Acquire denied(open)。
+	// origin open → 后续 Acquire denied(open)。
 	adm := acquire(t, s, cfg, "e-after", 11, 110)
 	if adm.Mode != AdmissionDenied || adm.Reason != ReasonOpen {
-		t.Fatalf("want denied/open due to endpoint, got %s/%s", adm.Mode, adm.Reason)
+		t.Fatalf("want denied/open due to origin, got %s/%s", adm.Mode, adm.Reason)
 	}
 }

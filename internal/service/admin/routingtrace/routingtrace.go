@@ -31,7 +31,7 @@ type Decision struct {
 	Mode                 string
 	RequestedModelID     string
 	Protocol             string
-	Operation            string
+	Endpoint            string
 	PoolSize             int32
 	CandidateCount       int32
 	StickyChannelID      *int64
@@ -97,7 +97,7 @@ func (s *Service) GetByRequestID(ctx context.Context, requestID string) (Decisio
 func fromListRow(row sqlc.ListRouteRoutingDecisionTracesRow) Decision {
 	return decisionFromFields(
 		row.ID, row.RequestRecordID, row.RequestID, row.RequestStatus, row.RouteID,
-		row.Mode, row.RequestedModelID, row.Protocol, row.Operation, row.PoolSize,
+		row.Mode, row.RequestedModelID, row.Protocol, row.Endpoint, row.PoolSize,
 		row.CandidateCount, row.StickyChannelID, row.StickyPinned, row.StickyInvalid,
 		row.AllCapacityZero, row.MarginGuardTriggered, row.Abnormal,
 		row.AbnormalReasons, row.CandidateScores, row.SelectedOrder, row.FallbackChain,
@@ -108,7 +108,7 @@ func fromListRow(row sqlc.ListRouteRoutingDecisionTracesRow) Decision {
 func fromGetRow(row sqlc.GetRoutingDecisionTraceByRequestIDRow) Decision {
 	return decisionFromFields(
 		row.ID, row.RequestRecordID, row.RequestID, row.RequestStatus, row.RouteID,
-		row.Mode, row.RequestedModelID, row.Protocol, row.Operation, row.PoolSize,
+		row.Mode, row.RequestedModelID, row.Protocol, row.Endpoint, row.PoolSize,
 		row.CandidateCount, row.StickyChannelID, row.StickyPinned, row.StickyInvalid,
 		row.AllCapacityZero, row.MarginGuardTriggered, row.Abnormal,
 		row.AbnormalReasons, row.CandidateScores, row.SelectedOrder, row.FallbackChain,
@@ -120,7 +120,7 @@ func decisionFromFields(
 	id, requestRecordID int64,
 	requestID, requestStatus string,
 	routeID int64,
-	mode, requestedModelID, protocol, operation string,
+	mode, requestedModelID, protocol, endpoint string,
 	poolSize, candidateCount int32,
 	stickyChannelID pgtype.Int8,
 	stickyPinned, stickyInvalid, allCapacityZero, marginGuardTriggered, abnormal bool,
@@ -142,7 +142,7 @@ func decisionFromFields(
 		Mode:                 mode,
 		RequestedModelID:     requestedModelID,
 		Protocol:             protocol,
-		Operation:            operation,
+		Endpoint:            endpoint,
 		PoolSize:             poolSize,
 		CandidateCount:       candidateCount,
 		StickyChannelID:      int8Ptr(stickyChannelID),
@@ -196,6 +196,6 @@ func invalidArgument(field, message string) error {
 	return failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage(message), failure.WithField("field", field))
 }
 
-func storeFailed(err error, operation string) error {
-	return failure.Wrap(failure.CodeAdminStoreFailed, err, failure.WithMessage(operation+" failed"))
+func storeFailed(err error, endpoint string) error {
+	return failure.Wrap(failure.CodeAdminStoreFailed, err, failure.WithMessage(endpoint+" failed"))
 }

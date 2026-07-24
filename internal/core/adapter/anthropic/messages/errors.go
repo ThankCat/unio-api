@@ -13,7 +13,7 @@ import (
 
 // upstreamRequestID 从上游响应头提取安全的请求标识。
 //
-// Anthropic 标准返回 request-id；DeepSeek Anthropic endpoint 黑盒未稳定返回该头，
+// Anthropic 标准返回 request-id；DeepSeek Anthropic origin 黑盒未稳定返回该头，
 // 因此回退尝试 x-request-id，缺失返回空字符串（不影响审计正确性）。
 func upstreamRequestID(header http.Header) string {
 	if id := header.Get("request-id"); id != "" {
@@ -38,7 +38,7 @@ func newUpstreamProtocolError(statusCode int, requestID string, body []byte, cau
 
 // newUpstreamStatusError 把上游非 2xx 响应转换成带稳定 category 和 metadata 的结构化错误。
 //
-// 分类仍不解析 provider 原始错误 body：DeepSeek Anthropic endpoint 的错误体为 OpenAI 风格信封，
+// 分类仍不解析 provider 原始错误 body：DeepSeek Anthropic origin 的错误体为 OpenAI 风格信封，
 // 与真实 Anthropic error shape 不同，统一以 HTTP status 为主信号分类，gatewayapi/anthropic
 // 再渲染原生 Anthropic error shape。但会把原始错误体截断快照放进 metadata.ResponseSnippet，
 // 供渠道检测排障留痕（不参与分类，也不进 gateway 请求记录）。

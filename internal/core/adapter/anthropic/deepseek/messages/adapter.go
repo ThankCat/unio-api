@@ -18,7 +18,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 )
 
-// Adapter 是 DeepSeek Anthropic endpoint 的 adapter。
+// Adapter 是 DeepSeek Anthropic origin 的 adapter。
 type Adapter struct {
 	base      *messagesadapter.Adapter
 	tokenizer Tokenizer

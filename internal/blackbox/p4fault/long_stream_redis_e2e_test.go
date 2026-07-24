@@ -264,13 +264,13 @@ func waitForLongStreamDatabaseFacts(t *testing.T, pool *pgxpool.Pool, seed seedF
 					request.Status, request.DeliveryStatus, attempt.Status, usageCount, debitCount,
 				)
 				if request.Status == "succeeded" && request.DeliveryStatus == "completed" && request.Stream &&
-					request.IngressProtocol == "openai" && request.Operation == "chat_completions" &&
+					request.IngressProtocol == "openai" && request.Endpoint == "chat_completions" &&
 					request.ResponseStartedAt.Valid && request.ResponseCompletedAt.Valid &&
 					request.FinalChannelID.Valid && request.FinalChannelID.Int64 == seed.openAIChannelID &&
-					attempt.Status == "succeeded" && attempt.UpstreamOperation == "chat_completions" &&
+					attempt.Status == "succeeded" && attempt.UpstreamEndpoint == "chat_completions" &&
 					attempt.UpstreamStartedAt.Valid && attempt.UpstreamFirstTokenAt.Valid && attempt.UpstreamCompletedAt.Valid &&
-					attempt.FinalUsageReceived && attempt.BreakerEndpointDisposition.Valid &&
-					attempt.BreakerEndpointDisposition.String == "applied" && attempt.BreakerChannelDisposition.Valid &&
+					attempt.FinalUsageReceived && attempt.BreakerOriginDisposition.Valid &&
+					attempt.BreakerOriginDisposition.String == "applied" && attempt.BreakerChannelDisposition.Valid &&
 					attempt.BreakerChannelDisposition.String == "applied" && usageCount == 1 && debitCount == 1 {
 					cancel()
 					return
@@ -286,7 +286,7 @@ func waitForLongStreamDatabaseFacts(t *testing.T, pool *pgxpool.Pool, seed seedF
 func assertLongStreamRuntimeReleased(t *testing.T, h *faultHarness, permitKey string) {
 	t.Helper()
 	permit := readRedisHashForCompact(t, h, permitKey)
-	if permit["status"] != "finished" || permit["endpoint_disposition"] != "applied" ||
+	if permit["status"] != "finished" || permit["origin_disposition"] != "applied" ||
 		permit["channel_disposition"] != "applied" {
 		t.Fatalf("long-stream permit did not finish after recovery: %v", permit)
 	}

@@ -78,13 +78,13 @@ func validateAcquireAttemptInput(in AcquireAttemptInput) error {
 	if strings.TrimSpace(in.IntegrityEpoch) == "" || in.IntegrityRevision <= 0 {
 		return configInvalid("attempt integrity epoch and revision are required")
 	}
-	if in.EndpointID <= 0 || in.ChannelID <= 0 || in.ModelID <= 0 {
-		return configInvalid("endpoint, channel, and model ids must be positive")
+	if in.OriginID <= 0 || in.ChannelID <= 0 || in.ModelID <= 0 {
+		return configInvalid("origin, channel, and model ids must be positive")
 	}
-	if in.EndpointBaseURLRevision <= 0 || in.EndpointStatusRevision <= 0 || in.ChannelConfigRevision <= 0 {
-		return configInvalid("endpoint and channel revisions must be positive")
+	if in.OriginBaseURLRevision <= 0 || in.OriginStatusRevision <= 0 || in.ChannelConfigRevision <= 0 {
+		return configInvalid("origin and channel revisions must be positive")
 	}
-	if !in.UpstreamOperation.valid() {
+	if !in.UpstreamEndpoint.valid() {
 		return configInvalid("unknown upstream operation")
 	}
 	if !in.RequestMode.valid() {
@@ -104,15 +104,15 @@ func validateFinishInput(permit AttemptPermit, outcome FinishOutcome) error {
 	if err := validateAttemptPermit(permit); err != nil {
 		return err
 	}
-	if !outcome.EndpointOutcome.valid() || !outcome.ChannelOutcome.valid() {
+	if !outcome.OriginOutcome.valid() || !outcome.ChannelOutcome.valid() {
 		return configInvalid("unknown breaker outcome")
 	}
-	if !outcome.EndpointEvidence.valid() {
-		return configInvalid("unknown endpoint evidence category")
+	if !outcome.OriginEvidence.valid() {
+		return configInvalid("unknown origin evidence category")
 	}
-	if outcome.EndpointEvidence != EndpointEvidenceNone &&
-		(outcome.EndpointOutcome != OutcomeIgnored || outcome.ChannelOutcome != OutcomeEligibleFailure) {
-		return configInvalid("endpoint evidence requires ignored endpoint and eligible channel failure outcomes")
+	if outcome.OriginEvidence != OriginEvidenceNone &&
+		(outcome.OriginOutcome != OutcomeIgnored || outcome.ChannelOutcome != OutcomeEligibleFailure) {
+		return configInvalid("origin evidence requires ignored origin and eligible channel failure outcomes")
 	}
 	if outcome.FirstTokenMs != nil {
 		if permit.RequestMode != ModeStream {
@@ -138,16 +138,16 @@ func validateAttemptPermit(permit AttemptPermit) error {
 	if strings.TrimSpace(permit.IntegrityEpoch) == "" || permit.IntegrityRevision <= 0 {
 		return configInvalid("permit integrity epoch and revision are required")
 	}
-	if permit.EndpointID <= 0 || permit.ChannelID <= 0 || permit.ModelID <= 0 {
-		return configInvalid("permit endpoint, channel, and model ids must be positive")
+	if permit.OriginID <= 0 || permit.ChannelID <= 0 || permit.ModelID <= 0 {
+		return configInvalid("permit origin, channel, and model ids must be positive")
 	}
-	if permit.EndpointBaseURLRevision <= 0 || permit.EndpointStatusRevision <= 0 || permit.ChannelConfigRevision <= 0 {
-		return configInvalid("permit endpoint and channel revisions must be positive")
+	if permit.OriginBaseURLRevision <= 0 || permit.OriginStatusRevision <= 0 || permit.ChannelConfigRevision <= 0 {
+		return configInvalid("permit origin and channel revisions must be positive")
 	}
-	if permit.EndpointStateGeneration <= 0 || permit.ChannelStateGeneration <= 0 {
+	if permit.OriginStateGeneration <= 0 || permit.ChannelStateGeneration <= 0 {
 		return configInvalid("permit state generations must be positive")
 	}
-	if !permit.UpstreamOperation.valid() {
+	if !permit.UpstreamEndpoint.valid() {
 		return configInvalid("unknown permit upstream operation")
 	}
 	if !permit.RequestMode.valid() {
@@ -157,11 +157,11 @@ func validateAttemptPermit(permit AttemptPermit) error {
 }
 
 func validateSnapshotCandidate(candidate SnapshotCandidateInput) error {
-	if candidate.EndpointID <= 0 || candidate.ChannelID <= 0 {
-		return configInvalid("snapshot endpoint and channel ids must be positive")
+	if candidate.OriginID <= 0 || candidate.ChannelID <= 0 {
+		return configInvalid("snapshot origin and channel ids must be positive")
 	}
-	if candidate.EndpointBaseURLRevision <= 0 || candidate.EndpointStatusRevision <= 0 || candidate.ChannelConfigRevision <= 0 || candidate.ChannelAdmissionRevision <= 0 {
-		return configInvalid("snapshot endpoint and channel revisions must be positive")
+	if candidate.OriginBaseURLRevision <= 0 || candidate.OriginStatusRevision <= 0 || candidate.ChannelConfigRevision <= 0 || candidate.ChannelAdmissionRevision <= 0 {
+		return configInvalid("snapshot origin and channel revisions must be positive")
 	}
 	return nil
 }

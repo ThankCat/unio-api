@@ -30,11 +30,11 @@ func assertNoRequestResources(t *testing.T, s *Store, requestID string, routeID,
 	}
 }
 
-func assertNoAttemptResources(t *testing.T, s *Store, permitID string, endpointID, channelID int64) {
+func assertNoAttemptResources(t *testing.T, s *Store, permitID string, originID, channelID int64) {
 	t.Helper()
 	patterns := []string{
 		s.keys.permit(permitID),
-		s.keys.endpoint(endpointID),
+		s.keys.origin(originID),
 		s.keys.channel(channelID) + "*",
 		s.keys.base + "admission:v1:ch-rpm:" + i(channelID) + ":*",
 		s.keys.base + "admission:v1:ch-rpd:" + i(channelID) + ":*",
@@ -51,18 +51,18 @@ func assertNoAttemptResources(t *testing.T, s *Store, permitID string, endpointI
 	}
 }
 
-func authoritativeAttemptInput(id string, endpointID, channelID int64) AcquireAttemptInput {
+func authoritativeAttemptInput(id string, originID, channelID int64) AcquireAttemptInput {
 	return withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID:                id,
 		AdmissionFingerprint:    id + "-fp",
 		RequestAdmissionID:      "request-active",
-		EndpointID:              endpointID,
+		OriginID:              originID,
 		ChannelID:               channelID,
-		EndpointBaseURLRevision: 1,
-		EndpointStatusRevision:  1,
+		OriginBaseURLRevision: 1,
+		OriginStatusRevision:  1,
 		ChannelConfigRevision:   1,
 		ModelID:                 100,
-		UpstreamOperation:       OpChatCompletions,
+		UpstreamEndpoint:       EndpointChatCompletions,
 		RequestMode:             ModeNonStream,
 		EstimatedInputTokens:    10,
 	})
@@ -280,7 +280,7 @@ func TestRequestAdmissionControlFailuresLeaveNoResources(t *testing.T) {
 func TestAttemptAndSnapshotUseChannelRateIndependentlyFromRouteRate(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	const channelID int64 = 181
-	const endpointID int64 = 1810
+	const originID int64 = 1810
 	seedAttemptControls(t, s, testConfig(), channelID, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
 
 	code, _, err := s.PrepareControl(
@@ -290,7 +290,7 @@ func TestAttemptAndSnapshotUseChannelRateIndependentlyFromRouteRate(t *testing.T
 	if err != nil || code != ControlPrepared {
 		t.Fatalf("prepare route rate: code=%s err=%v", code, err)
 	}
-	first, err := acquireAttempt(t, s, authoritativeAttemptInput("route-pending-attempt", endpointID, channelID))
+	first, err := acquireAttempt(t, s, authoritativeAttemptInput("route-pending-attempt", originID, channelID))
 	if err != nil || first.Mode != AdmissionPermit {
 		t.Fatalf("route pending must not block attempt: result=%+v err=%v", first, err)
 	}
@@ -305,7 +305,7 @@ func TestAttemptAndSnapshotUseChannelRateIndependentlyFromRouteRate(t *testing.T
 	if err != nil || code != ControlPrepared {
 		t.Fatalf("prepare channel rate: code=%s err=%v", code, err)
 	}
-	secondInput := authoritativeAttemptInput("channel-pending-attempt", endpointID, channelID)
+	secondInput := authoritativeAttemptInput("channel-pending-attempt", originID, channelID)
 	second, err := acquireAttempt(t, s, secondInput)
 	if err != nil || second.Mode != AdmissionDenied || second.Reason != ReasonRuntimeSyncPending {
 		t.Fatalf("channel pending must block attempt: result=%+v err=%v", second, err)
@@ -316,8 +316,8 @@ func TestAttemptAndSnapshotUseChannelRateIndependentlyFromRouteRate(t *testing.T
 		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1,
 		CircuitBreakerRevision: 1, RoutingBalanceRevision: 1, ModelID: 100,
 		Candidates: []SnapshotCandidateInput{{
-			EndpointID: endpointID, ChannelID: channelID,
-			EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
+			OriginID: originID, ChannelID: channelID,
+			OriginBaseURLRevision: 1, OriginStatusRevision: 1,
 			ChannelConfigRevision: 1, ChannelAdmissionRevision: 1,
 		}},
 	})
@@ -350,7 +350,7 @@ func TestAttemptReadsAuthoritativeLimitsAndFailsClosedWithoutPartialWrites(t *te
 		s, _, _ := newTestStore(t)
 		cfg := testConfig()
 		const channelID int64 = 102
-		const endpointID int64 = 1020
+		const originID int64 = 1020
 
 		seedAttemptIntegrity(t, s)
 		ensureTestControlAtRevision(t, s, s.RouteRateLimitControl(), testRouteRateRevision, `{"rpm":99,"tpm":9900,"rpd":990}`)
@@ -359,14 +359,14 @@ func TestAttemptReadsAuthoritativeLimitsAndFailsClosedWithoutPartialWrites(t *te
 		ensureTestControl(t, s, s.SettingControl("gateway.circuit_breaker"), testCircuitBreakerPayload(cfg))
 		ensureTestControl(t, s, s.SettingControl("gateway.routing_balance"), testRoutingBalancePayload)
 		ensureTestControl(t, s, s.ChannelAdmissionControl(channelID), `{"rpm":0,"rpd":null,"tpm":null,"concurrency":null}`)
-		if created, err := s.InitEndpointControl(context.Background(), endpointID, 1, 1, "enabled"); err != nil || !created {
-			t.Fatalf("init endpoint: created=%v err=%v", created, err)
+		if created, err := s.InitOriginControl(context.Background(), originID, 1, 1, "enabled"); err != nil || !created {
+			t.Fatalf("init origin: created=%v err=%v", created, err)
 		}
 
 		acquireUnlimited := func(id string) AttemptAdmission {
 			t.Helper()
-			in := authoritativeAttemptInput(id, endpointID, channelID)
-			in.EnforceEndpointControl = true
+			in := authoritativeAttemptInput(id, originID, channelID)
+			in.EnforceOriginControl = true
 			admission, err := acquireAttempt(t, s, in)
 			if err != nil || admission.Mode != AdmissionPermit {
 				t.Fatalf("acquire %s must honor explicit unlimited RPM, got %+v err=%v", id, admission, err)
@@ -381,8 +381,8 @@ func TestAttemptReadsAuthoritativeLimitsAndFailsClosedWithoutPartialWrites(t *te
 			ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1,
 			CircuitBreakerRevision: 1, RoutingBalanceRevision: 1, ModelID: 100,
 			Candidates: []SnapshotCandidateInput{{
-				EndpointID: endpointID, ChannelID: channelID,
-				EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
+				OriginID: originID, ChannelID: channelID,
+				OriginBaseURLRevision: 1, OriginStatusRevision: 1,
 				ChannelConfigRevision: 1, ChannelAdmissionRevision: 1,
 			}},
 		})
@@ -416,17 +416,17 @@ func TestAttemptReadsAuthoritativeLimitsAndFailsClosedWithoutPartialWrites(t *te
 			s, _, _ := newTestStore(t)
 			cfg := testConfig()
 			channelID := int64(200 + index)
-			endpointID := int64(2000 + index)
+			originID := int64(2000 + index)
 			seedAttemptControls(t, s, cfg, channelID, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
 			if err := s.client.HSet(context.Background(), tc.target(s, channelID), "active_payload", `{"unknown":1}`).Err(); err != nil {
 				t.Fatal(err)
 			}
-			in := authoritativeAttemptInput("malformed-attempt", endpointID, channelID)
+			in := authoritativeAttemptInput("malformed-attempt", originID, channelID)
 			result, err := acquireAttempt(t, s, in)
 			if err != nil || result.Mode != AdmissionDenied || result.Reason != ReasonRuntimeSyncRequired {
 				t.Fatalf("malformed control must fail closed, got %+v err=%v", result, err)
 			}
-			assertNoAttemptResources(t, s, in.PermitID, endpointID, channelID)
+			assertNoAttemptResources(t, s, in.PermitID, originID, channelID)
 		})
 	}
 }
@@ -445,7 +445,7 @@ func TestCommittedBreakerConfigDrivesFinish(t *testing.T) {
 			t.Fatalf("attempt %d want permit or open, got %+v", attempt, admission)
 		}
 		if _, err := s.Finish(context.Background(), *admission.Permit, FinishOutcome{
-			EndpointOutcome: OutcomeIgnored,
+			OriginOutcome: OutcomeIgnored,
 			ChannelOutcome:  OutcomeEligibleFailure,
 		}); err != nil {
 			t.Fatalf("finish attempt %d: %v", attempt, err)

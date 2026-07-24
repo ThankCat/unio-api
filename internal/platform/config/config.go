@@ -53,8 +53,8 @@ type GatewayConfig struct {
 	// HTTPAddr 来自 GATEWAY_HTTP_ADDR；gateway-server 的监听地址。
 	HTTPAddr string
 
-	// InternalToken 来自 GATEWAY_INTERNAL_TOKEN；非空时挂载 /internal/v1/* 只读运维端点。
-	// admin-server 用同一 token 拉取熔断快照；空表示关闭内部端点。
+	// InternalToken 来自 GATEWAY_INTERNAL_TOKEN；非空时挂载 /internal/v1/* 只读运维上游源站。
+	// admin-server 用同一 token 拉取熔断快照；空表示关闭内部上游源站。
 	InternalToken string
 
 	// InstanceID 来自 GATEWAY_INSTANCE_ID；写入熔断快照的 instance 字段，便于多实例区分。

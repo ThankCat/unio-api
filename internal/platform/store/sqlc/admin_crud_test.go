@@ -71,12 +71,12 @@ func TestChannelCRUDQueries(t *testing.T) {
 
 	suffix := time.Now().UnixNano()
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("admin-chan-prov-%d", suffix), "enabled")
-	endpointID := insertProviderEndpoint(t, ctx, tx, providerID, "primary-ep", fmt.Sprintf("https://api-%d.example.test", suffix), "enabled")
-	endpoint2ID := insertProviderEndpoint(t, ctx, tx, providerID, "secondary-ep", fmt.Sprintf("https://api2-%d.example.test", suffix), "enabled")
+	originID := insertProviderOrigin(t, ctx, tx, providerID, "primary-ep", fmt.Sprintf("https://api-%d.example.test", suffix), "enabled")
+	origin2ID := insertProviderOrigin(t, ctx, tx, providerID, "secondary-ep", fmt.Sprintf("https://api2-%d.example.test", suffix), "enabled")
 
 	created, err := queries.CreateChannel(ctx, sqlc.CreateChannelParams{
 		ProviderID:         providerID,
-		ProviderEndpointID: endpointID,
+		ProviderOriginID: originID,
 		Name:               "primary",
 		Protocol:           "openai",
 		AdapterKey:         "openai",
@@ -108,7 +108,7 @@ func TestChannelCRUDQueries(t *testing.T) {
 	}
 
 	updated, err := queries.UpdateChannel(ctx, sqlc.UpdateChannelParams{
-		ID: created.ID, Name: "renamed", ProviderEndpointID: endpoint2ID,
+		ID: created.ID, Name: "renamed", ProviderOriginID: origin2ID,
 		Status: "disabled", Priority: 20, TimeoutMs: pgtype.Int4{},
 	})
 	if err != nil {
@@ -181,16 +181,16 @@ func TestChannelCRUDQueries(t *testing.T) {
 }
 
 // TestChannelCredentialRotationRevisionCAS 验证 credential PUT 的保存与检测边界：
-// 真变化只推进一次版本；同值重试不推进；Endpoint 版本变化后的迟到检测只能记 stale 日志。
+// 真变化只推进一次版本；同值重试不推进；Origin 版本变化后的迟到检测只能记 stale 日志。
 func TestChannelCredentialRotationRevisionCAS(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
 	defer cleanup()
 
 	suffix := time.Now().UnixNano()
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("credential-cas-%d", suffix), "enabled")
-	endpointID := insertProviderEndpoint(t, ctx, tx, providerID, "credential-cas", fmt.Sprintf("https://credential-%d.example.test", suffix), "enabled")
+	originID := insertProviderOrigin(t, ctx, tx, providerID, "credential-cas", fmt.Sprintf("https://credential-%d.example.test", suffix), "enabled")
 	created, err := queries.CreateChannel(ctx, sqlc.CreateChannelParams{
-		ProviderID: providerID, ProviderEndpointID: endpointID, Name: "credential-cas",
+		ProviderID: providerID, ProviderOriginID: originID, Name: "credential-cas",
 		Protocol: "openai", AdapterKey: "openai", Credential: "sk-old", Status: "enabled", Priority: 1,
 	})
 	if err != nil {
@@ -218,8 +218,8 @@ func TestChannelCredentialRotationRevisionCAS(t *testing.T) {
 
 	applied, err := queries.ApplyChannelProbeResult(ctx, sqlc.ApplyChannelProbeResultParams{
 		ChannelID: created.ID, ExpectedConfigRevision: prepared.ConfigRevision,
-		ExpectedEndpointBaseUrlRevision: prepared.EndpointBaseUrlRevision,
-		ExpectedEndpointStatusRevision:  prepared.EndpointStatusRevision,
+		ExpectedOriginBaseUrlRevision: prepared.OriginBaseUrlRevision,
+		ExpectedOriginStatusRevision:  prepared.OriginStatusRevision,
 		Success:                         pgtype.Bool{Bool: true, Valid: true},
 		LastTestLatencyMs:               pgtype.Int4{Int32: 120, Valid: true},
 		NextCredentialValid:             pgtype.Bool{Bool: true, Valid: true},
@@ -241,14 +241,14 @@ func TestChannelCredentialRotationRevisionCAS(t *testing.T) {
 	if !second.CredentialChanged || second.CredentialValid {
 		t.Fatalf("second rotation must make credential unroutable before probe: %+v", second)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE provider_endpoints SET base_url_revision = base_url_revision + 1 WHERE id = $1`, endpointID); err != nil {
-		t.Fatalf("advance endpoint revision: %v", err)
+	if _, err := tx.Exec(ctx, `UPDATE provider_origins SET base_url_revision = base_url_revision + 1 WHERE id = $1`, originID); err != nil {
+		t.Fatalf("advance origin revision: %v", err)
 	}
 
 	stale, err := queries.ApplyChannelProbeResult(ctx, sqlc.ApplyChannelProbeResultParams{
 		ChannelID: created.ID, ExpectedConfigRevision: second.ConfigRevision,
-		ExpectedEndpointBaseUrlRevision: second.EndpointBaseUrlRevision,
-		ExpectedEndpointStatusRevision:  second.EndpointStatusRevision,
+		ExpectedOriginBaseUrlRevision: second.OriginBaseUrlRevision,
+		ExpectedOriginStatusRevision:  second.OriginStatusRevision,
 		Success:                         pgtype.Bool{Bool: true, Valid: true},
 		LastTestLatencyMs:               pgtype.Int4{Int32: 95, Valid: true},
 		NextCredentialValid:             pgtype.Bool{Bool: true, Valid: true},
@@ -275,7 +275,7 @@ func TestChannelCredentialRotationRevisionCAS(t *testing.T) {
 	}
 	latest := logs[0]
 	if latest.StateChangeApplied || !latest.TestedConfigRevision.Valid || latest.TestedConfigRevision.Int64 != second.ConfigRevision ||
-		!latest.TestedEndpointBaseUrlRevision.Valid || latest.TestedEndpointBaseUrlRevision.Int64 != second.EndpointBaseUrlRevision {
+		!latest.TestedOriginBaseUrlRevision.Valid || latest.TestedOriginBaseUrlRevision.Int64 != second.OriginBaseUrlRevision {
 		t.Fatalf("stale log did not preserve tested revisions: %+v", latest)
 	}
 }

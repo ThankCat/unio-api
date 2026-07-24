@@ -18,7 +18,7 @@ INSERT INTO request_records (
     api_key_id,
     requested_model_id,
     ingress_protocol,
-    operation,
+    endpoint,
     response_model_id,
     response_protocol,
     response_id,
@@ -73,14 +73,14 @@ RETURNING
     api_key_id,
     requested_model_id,
     ingress_protocol,
-    operation,
+    endpoint,
     response_model_id,
     response_protocol,
     response_id,
     stream,
     status,
     final_provider_id,
-    final_provider_endpoint_id,
+    final_provider_origin_id,
     final_channel_id,
     error_code,
     error_message,
@@ -104,7 +104,7 @@ type CreateRequestRecordParams struct {
 	ApiKeyID              int64
 	RequestedModelID      string
 	IngressProtocol       string
-	Operation             string
+	Endpoint              string
 	ResponseModelID       pgtype.Text
 	ResponseProtocol      pgtype.Text
 	ResponseID            pgtype.Text
@@ -134,7 +134,7 @@ func (q *Queries) CreateRequestRecord(ctx context.Context, arg CreateRequestReco
 		arg.ApiKeyID,
 		arg.RequestedModelID,
 		arg.IngressProtocol,
-		arg.Operation,
+		arg.Endpoint,
 		arg.ResponseModelID,
 		arg.ResponseProtocol,
 		arg.ResponseID,
@@ -163,14 +163,14 @@ func (q *Queries) CreateRequestRecord(ctx context.Context, arg CreateRequestReco
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
-		&i.Operation,
+		&i.Endpoint,
 		&i.ResponseModelID,
 		&i.ResponseProtocol,
 		&i.ResponseID,
 		&i.Stream,
 		&i.Status,
 		&i.FinalProviderID,
-		&i.FinalProviderEndpointID,
+		&i.FinalProviderOriginID,
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
@@ -198,14 +198,14 @@ SELECT
     api_key_id,
     requested_model_id,
     ingress_protocol,
-    operation,
+    endpoint,
     response_model_id,
     response_protocol,
     response_id,
     stream,
     status,
     final_provider_id,
-    final_provider_endpoint_id,
+    final_provider_origin_id,
     final_channel_id,
     error_code,
     error_message,
@@ -238,14 +238,14 @@ func (q *Queries) GetRequestRecordForUpdate(ctx context.Context, requestRecordID
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
-		&i.Operation,
+		&i.Endpoint,
 		&i.ResponseModelID,
 		&i.ResponseProtocol,
 		&i.ResponseID,
 		&i.Stream,
 		&i.Status,
 		&i.FinalProviderID,
-		&i.FinalProviderEndpointID,
+		&i.FinalProviderOriginID,
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
@@ -276,14 +276,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $5
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_endpoint_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_origin_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 FROM request_records
 WHERE request_records.id = $5
   AND request_records.status = 'canceled'
@@ -299,35 +299,35 @@ type MarkRequestCanceledParams struct {
 }
 
 type MarkRequestCanceledRow struct {
-	ID                      int64
-	RequestID               string
-	UserID                  int64
-	ApiKeyID                int64
-	RequestedModelID        string
-	IngressProtocol         string
-	Operation               string
-	ResponseModelID         pgtype.Text
-	ResponseProtocol        pgtype.Text
-	ResponseID              pgtype.Text
-	Stream                  bool
-	Status                  string
-	FinalProviderID         pgtype.Int8
-	FinalProviderEndpointID pgtype.Int8
-	FinalChannelID          pgtype.Int8
-	ErrorCode               pgtype.Text
-	ErrorMessage            pgtype.Text
-	InternalErrorDetail     pgtype.Text
-	DeliveryStatus          string
-	ResponseStartedAt       pgtype.Timestamptz
-	ResponseCompletedAt     pgtype.Timestamptz
-	StartedAt               pgtype.Timestamptz
-	CompletedAt             pgtype.Timestamptz
-	CreatedAt               pgtype.Timestamptz
-	UpdatedAt               pgtype.Timestamptz
-	RouteID                 pgtype.Int8
-	ReasoningEffort         pgtype.Text
-	ReasoningBudgetTokens   pgtype.Int4
-	ClientIp                pgtype.Text
+	ID                    int64
+	RequestID             string
+	UserID                int64
+	ApiKeyID              int64
+	RequestedModelID      string
+	IngressProtocol       string
+	Endpoint              string
+	ResponseModelID       pgtype.Text
+	ResponseProtocol      pgtype.Text
+	ResponseID            pgtype.Text
+	Stream                bool
+	Status                string
+	FinalProviderID       pgtype.Int8
+	FinalProviderOriginID pgtype.Int8
+	FinalChannelID        pgtype.Int8
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	DeliveryStatus        string
+	ResponseStartedAt     pgtype.Timestamptz
+	ResponseCompletedAt   pgtype.Timestamptz
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	RouteID               pgtype.Int8
+	ReasoningEffort       pgtype.Text
+	ReasoningBudgetTokens pgtype.Int4
+	ClientIp              pgtype.Text
 }
 
 // MarkRequestCanceled 将 running 请求原子推进到 canceled，重复 canceled 返回第一次取消事实。
@@ -348,14 +348,14 @@ func (q *Queries) MarkRequestCanceled(ctx context.Context, arg MarkRequestCancel
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
-		&i.Operation,
+		&i.Endpoint,
 		&i.ResponseModelID,
 		&i.ResponseProtocol,
 		&i.ResponseID,
 		&i.Stream,
 		&i.Status,
 		&i.FinalProviderID,
-		&i.FinalProviderEndpointID,
+		&i.FinalProviderOriginID,
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
@@ -383,14 +383,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $2
             AND request_records.delivery_status IN ('not_started', 'in_progress')
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_endpoint_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_origin_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 FROM request_records
 WHERE request_records.id = $2
   AND request_records.delivery_status = 'completed'
@@ -403,35 +403,35 @@ type MarkRequestDeliveryCompletedParams struct {
 }
 
 type MarkRequestDeliveryCompletedRow struct {
-	ID                      int64
-	RequestID               string
-	UserID                  int64
-	ApiKeyID                int64
-	RequestedModelID        string
-	IngressProtocol         string
-	Operation               string
-	ResponseModelID         pgtype.Text
-	ResponseProtocol        pgtype.Text
-	ResponseID              pgtype.Text
-	Stream                  bool
-	Status                  string
-	FinalProviderID         pgtype.Int8
-	FinalProviderEndpointID pgtype.Int8
-	FinalChannelID          pgtype.Int8
-	ErrorCode               pgtype.Text
-	ErrorMessage            pgtype.Text
-	InternalErrorDetail     pgtype.Text
-	DeliveryStatus          string
-	ResponseStartedAt       pgtype.Timestamptz
-	ResponseCompletedAt     pgtype.Timestamptz
-	StartedAt               pgtype.Timestamptz
-	CompletedAt             pgtype.Timestamptz
-	CreatedAt               pgtype.Timestamptz
-	UpdatedAt               pgtype.Timestamptz
-	RouteID                 pgtype.Int8
-	ReasoningEffort         pgtype.Text
-	ReasoningBudgetTokens   pgtype.Int4
-	ClientIp                pgtype.Text
+	ID                    int64
+	RequestID             string
+	UserID                int64
+	ApiKeyID              int64
+	RequestedModelID      string
+	IngressProtocol       string
+	Endpoint              string
+	ResponseModelID       pgtype.Text
+	ResponseProtocol      pgtype.Text
+	ResponseID            pgtype.Text
+	Stream                bool
+	Status                string
+	FinalProviderID       pgtype.Int8
+	FinalProviderOriginID pgtype.Int8
+	FinalChannelID        pgtype.Int8
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	DeliveryStatus        string
+	ResponseStartedAt     pgtype.Timestamptz
+	ResponseCompletedAt   pgtype.Timestamptz
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	RouteID               pgtype.Int8
+	ReasoningEffort       pgtype.Text
+	ReasoningBudgetTokens pgtype.Int4
+	ClientIp              pgtype.Text
 }
 
 // MarkRequestDeliveryCompleted 在响应完整交付后把交付状态推进到 completed，并同语句落地
@@ -447,14 +447,14 @@ func (q *Queries) MarkRequestDeliveryCompleted(ctx context.Context, arg MarkRequ
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
-		&i.Operation,
+		&i.Endpoint,
 		&i.ResponseModelID,
 		&i.ResponseProtocol,
 		&i.ResponseID,
 		&i.Stream,
 		&i.Status,
 		&i.FinalProviderID,
-		&i.FinalProviderEndpointID,
+		&i.FinalProviderOriginID,
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
@@ -481,14 +481,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $1
             AND request_records.delivery_status IN ('not_started', 'in_progress')
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_endpoint_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_origin_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 FROM request_records
 WHERE request_records.id = $1
   AND request_records.delivery_status = 'interrupted'
@@ -496,35 +496,35 @@ WHERE request_records.id = $1
 `
 
 type MarkRequestDeliveryInterruptedRow struct {
-	ID                      int64
-	RequestID               string
-	UserID                  int64
-	ApiKeyID                int64
-	RequestedModelID        string
-	IngressProtocol         string
-	Operation               string
-	ResponseModelID         pgtype.Text
-	ResponseProtocol        pgtype.Text
-	ResponseID              pgtype.Text
-	Stream                  bool
-	Status                  string
-	FinalProviderID         pgtype.Int8
-	FinalProviderEndpointID pgtype.Int8
-	FinalChannelID          pgtype.Int8
-	ErrorCode               pgtype.Text
-	ErrorMessage            pgtype.Text
-	InternalErrorDetail     pgtype.Text
-	DeliveryStatus          string
-	ResponseStartedAt       pgtype.Timestamptz
-	ResponseCompletedAt     pgtype.Timestamptz
-	StartedAt               pgtype.Timestamptz
-	CompletedAt             pgtype.Timestamptz
-	CreatedAt               pgtype.Timestamptz
-	UpdatedAt               pgtype.Timestamptz
-	RouteID                 pgtype.Int8
-	ReasoningEffort         pgtype.Text
-	ReasoningBudgetTokens   pgtype.Int4
-	ClientIp                pgtype.Text
+	ID                    int64
+	RequestID             string
+	UserID                int64
+	ApiKeyID              int64
+	RequestedModelID      string
+	IngressProtocol       string
+	Endpoint              string
+	ResponseModelID       pgtype.Text
+	ResponseProtocol      pgtype.Text
+	ResponseID            pgtype.Text
+	Stream                bool
+	Status                string
+	FinalProviderID       pgtype.Int8
+	FinalProviderOriginID pgtype.Int8
+	FinalChannelID        pgtype.Int8
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	DeliveryStatus        string
+	ResponseStartedAt     pgtype.Timestamptz
+	ResponseCompletedAt   pgtype.Timestamptz
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	RouteID               pgtype.Int8
+	ReasoningEffort       pgtype.Text
+	ReasoningBudgetTokens pgtype.Int4
+	ClientIp              pgtype.Text
 }
 
 // MarkRequestDeliveryInterrupted 在交付中断（客户端取消、上游中断、尾部错误）时把交付状态推进到
@@ -540,14 +540,14 @@ func (q *Queries) MarkRequestDeliveryInterrupted(ctx context.Context, requestRec
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
-		&i.Operation,
+		&i.Endpoint,
 		&i.ResponseModelID,
 		&i.ResponseProtocol,
 		&i.ResponseID,
 		&i.Stream,
 		&i.Status,
 		&i.FinalProviderID,
-		&i.FinalProviderEndpointID,
+		&i.FinalProviderOriginID,
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
@@ -578,14 +578,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $5
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_endpoint_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_origin_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 FROM request_records
 WHERE request_records.id = $5
   AND request_records.status = 'failed'
@@ -601,35 +601,35 @@ type MarkRequestFailedParams struct {
 }
 
 type MarkRequestFailedRow struct {
-	ID                      int64
-	RequestID               string
-	UserID                  int64
-	ApiKeyID                int64
-	RequestedModelID        string
-	IngressProtocol         string
-	Operation               string
-	ResponseModelID         pgtype.Text
-	ResponseProtocol        pgtype.Text
-	ResponseID              pgtype.Text
-	Stream                  bool
-	Status                  string
-	FinalProviderID         pgtype.Int8
-	FinalProviderEndpointID pgtype.Int8
-	FinalChannelID          pgtype.Int8
-	ErrorCode               pgtype.Text
-	ErrorMessage            pgtype.Text
-	InternalErrorDetail     pgtype.Text
-	DeliveryStatus          string
-	ResponseStartedAt       pgtype.Timestamptz
-	ResponseCompletedAt     pgtype.Timestamptz
-	StartedAt               pgtype.Timestamptz
-	CompletedAt             pgtype.Timestamptz
-	CreatedAt               pgtype.Timestamptz
-	UpdatedAt               pgtype.Timestamptz
-	RouteID                 pgtype.Int8
-	ReasoningEffort         pgtype.Text
-	ReasoningBudgetTokens   pgtype.Int4
-	ClientIp                pgtype.Text
+	ID                    int64
+	RequestID             string
+	UserID                int64
+	ApiKeyID              int64
+	RequestedModelID      string
+	IngressProtocol       string
+	Endpoint              string
+	ResponseModelID       pgtype.Text
+	ResponseProtocol      pgtype.Text
+	ResponseID            pgtype.Text
+	Stream                bool
+	Status                string
+	FinalProviderID       pgtype.Int8
+	FinalProviderOriginID pgtype.Int8
+	FinalChannelID        pgtype.Int8
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	DeliveryStatus        string
+	ResponseStartedAt     pgtype.Timestamptz
+	ResponseCompletedAt   pgtype.Timestamptz
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	RouteID               pgtype.Int8
+	ReasoningEffort       pgtype.Text
+	ReasoningBudgetTokens pgtype.Int4
+	ClientIp              pgtype.Text
 }
 
 // MarkRequestFailed 将 running 请求原子推进到 failed，重复 failed 返回第一次失败事实。
@@ -650,14 +650,14 @@ func (q *Queries) MarkRequestFailed(ctx context.Context, arg MarkRequestFailedPa
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
-		&i.Operation,
+		&i.Endpoint,
 		&i.ResponseModelID,
 		&i.ResponseProtocol,
 		&i.ResponseID,
 		&i.Stream,
 		&i.Status,
 		&i.FinalProviderID,
-		&i.FinalProviderEndpointID,
+		&i.FinalProviderOriginID,
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
@@ -688,14 +688,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $2
           AND request_records.status IN ('running', 'succeeded')
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_endpoint_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_origin_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 FROM request_records
 WHERE request_records.id = $2
   AND request_records.response_started_at IS NOT NULL
@@ -708,35 +708,35 @@ type MarkRequestResponseStartedParams struct {
 }
 
 type MarkRequestResponseStartedRow struct {
-	ID                      int64
-	RequestID               string
-	UserID                  int64
-	ApiKeyID                int64
-	RequestedModelID        string
-	IngressProtocol         string
-	Operation               string
-	ResponseModelID         pgtype.Text
-	ResponseProtocol        pgtype.Text
-	ResponseID              pgtype.Text
-	Stream                  bool
-	Status                  string
-	FinalProviderID         pgtype.Int8
-	FinalProviderEndpointID pgtype.Int8
-	FinalChannelID          pgtype.Int8
-	ErrorCode               pgtype.Text
-	ErrorMessage            pgtype.Text
-	InternalErrorDetail     pgtype.Text
-	DeliveryStatus          string
-	ResponseStartedAt       pgtype.Timestamptz
-	ResponseCompletedAt     pgtype.Timestamptz
-	StartedAt               pgtype.Timestamptz
-	CompletedAt             pgtype.Timestamptz
-	CreatedAt               pgtype.Timestamptz
-	UpdatedAt               pgtype.Timestamptz
-	RouteID                 pgtype.Int8
-	ReasoningEffort         pgtype.Text
-	ReasoningBudgetTokens   pgtype.Int4
-	ClientIp                pgtype.Text
+	ID                    int64
+	RequestID             string
+	UserID                int64
+	ApiKeyID              int64
+	RequestedModelID      string
+	IngressProtocol       string
+	Endpoint              string
+	ResponseModelID       pgtype.Text
+	ResponseProtocol      pgtype.Text
+	ResponseID            pgtype.Text
+	Stream                bool
+	Status                string
+	FinalProviderID       pgtype.Int8
+	FinalProviderOriginID pgtype.Int8
+	FinalChannelID        pgtype.Int8
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	DeliveryStatus        string
+	ResponseStartedAt     pgtype.Timestamptz
+	ResponseCompletedAt   pgtype.Timestamptz
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	RouteID               pgtype.Int8
+	ReasoningEffort       pgtype.Text
+	ReasoningBudgetTokens pgtype.Int4
+	ClientIp              pgtype.Text
 }
 
 // MarkRequestResponseStarted 记录首次客户可见响应时间，并把交付状态从 not_started 推进到 in_progress。
@@ -751,14 +751,14 @@ func (q *Queries) MarkRequestResponseStarted(ctx context.Context, arg MarkReques
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
-		&i.Operation,
+		&i.Endpoint,
 		&i.ResponseModelID,
 		&i.ResponseProtocol,
 		&i.ResponseID,
 		&i.Stream,
 		&i.Status,
 		&i.FinalProviderID,
-		&i.FinalProviderEndpointID,
+		&i.FinalProviderOriginID,
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
@@ -785,14 +785,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $1
             AND request_records.status = 'pending'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_endpoint_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_origin_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 FROM request_records
 WHERE request_records.id = $1
   AND request_records.status = 'running'
@@ -800,35 +800,35 @@ WHERE request_records.id = $1
 `
 
 type MarkRequestRunningRow struct {
-	ID                      int64
-	RequestID               string
-	UserID                  int64
-	ApiKeyID                int64
-	RequestedModelID        string
-	IngressProtocol         string
-	Operation               string
-	ResponseModelID         pgtype.Text
-	ResponseProtocol        pgtype.Text
-	ResponseID              pgtype.Text
-	Stream                  bool
-	Status                  string
-	FinalProviderID         pgtype.Int8
-	FinalProviderEndpointID pgtype.Int8
-	FinalChannelID          pgtype.Int8
-	ErrorCode               pgtype.Text
-	ErrorMessage            pgtype.Text
-	InternalErrorDetail     pgtype.Text
-	DeliveryStatus          string
-	ResponseStartedAt       pgtype.Timestamptz
-	ResponseCompletedAt     pgtype.Timestamptz
-	StartedAt               pgtype.Timestamptz
-	CompletedAt             pgtype.Timestamptz
-	CreatedAt               pgtype.Timestamptz
-	UpdatedAt               pgtype.Timestamptz
-	RouteID                 pgtype.Int8
-	ReasoningEffort         pgtype.Text
-	ReasoningBudgetTokens   pgtype.Int4
-	ClientIp                pgtype.Text
+	ID                    int64
+	RequestID             string
+	UserID                int64
+	ApiKeyID              int64
+	RequestedModelID      string
+	IngressProtocol       string
+	Endpoint              string
+	ResponseModelID       pgtype.Text
+	ResponseProtocol      pgtype.Text
+	ResponseID            pgtype.Text
+	Stream                bool
+	Status                string
+	FinalProviderID       pgtype.Int8
+	FinalProviderOriginID pgtype.Int8
+	FinalChannelID        pgtype.Int8
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	DeliveryStatus        string
+	ResponseStartedAt     pgtype.Timestamptz
+	ResponseCompletedAt   pgtype.Timestamptz
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	RouteID               pgtype.Int8
+	ReasoningEffort       pgtype.Text
+	ReasoningBudgetTokens pgtype.Int4
+	ClientIp              pgtype.Text
 }
 
 // MarkRequestRunning 将 pending 请求原子推进到 running，重复 running 返回原事实。
@@ -843,14 +843,14 @@ func (q *Queries) MarkRequestRunning(ctx context.Context, requestRecordID int64)
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
-		&i.Operation,
+		&i.Endpoint,
 		&i.ResponseModelID,
 		&i.ResponseProtocol,
 		&i.ResponseID,
 		&i.Stream,
 		&i.Status,
 		&i.FinalProviderID,
-		&i.FinalProviderEndpointID,
+		&i.FinalProviderOriginID,
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
@@ -879,19 +879,20 @@ WITH updated AS (
             response_id = $3,
             final_provider_id = $4,
             final_channel_id = $5,
+            final_provider_origin_id = (SELECT c.provider_origin_id FROM channels c WHERE c.id = $5),
             response_started_at = COALESCE(request_records.response_started_at, $6),
             completed_at = $7,
             updated_at = now()
         WHERE request_records.id = $8
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_endpoint_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_origin_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 FROM request_records
 WHERE request_records.id = $8
   AND request_records.status = 'succeeded'
@@ -910,35 +911,35 @@ type MarkRequestSucceededParams struct {
 }
 
 type MarkRequestSucceededRow struct {
-	ID                      int64
-	RequestID               string
-	UserID                  int64
-	ApiKeyID                int64
-	RequestedModelID        string
-	IngressProtocol         string
-	Operation               string
-	ResponseModelID         pgtype.Text
-	ResponseProtocol        pgtype.Text
-	ResponseID              pgtype.Text
-	Stream                  bool
-	Status                  string
-	FinalProviderID         pgtype.Int8
-	FinalProviderEndpointID pgtype.Int8
-	FinalChannelID          pgtype.Int8
-	ErrorCode               pgtype.Text
-	ErrorMessage            pgtype.Text
-	InternalErrorDetail     pgtype.Text
-	DeliveryStatus          string
-	ResponseStartedAt       pgtype.Timestamptz
-	ResponseCompletedAt     pgtype.Timestamptz
-	StartedAt               pgtype.Timestamptz
-	CompletedAt             pgtype.Timestamptz
-	CreatedAt               pgtype.Timestamptz
-	UpdatedAt               pgtype.Timestamptz
-	RouteID                 pgtype.Int8
-	ReasoningEffort         pgtype.Text
-	ReasoningBudgetTokens   pgtype.Int4
-	ClientIp                pgtype.Text
+	ID                    int64
+	RequestID             string
+	UserID                int64
+	ApiKeyID              int64
+	RequestedModelID      string
+	IngressProtocol       string
+	Endpoint              string
+	ResponseModelID       pgtype.Text
+	ResponseProtocol      pgtype.Text
+	ResponseID            pgtype.Text
+	Stream                bool
+	Status                string
+	FinalProviderID       pgtype.Int8
+	FinalProviderOriginID pgtype.Int8
+	FinalChannelID        pgtype.Int8
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	DeliveryStatus        string
+	ResponseStartedAt     pgtype.Timestamptz
+	ResponseCompletedAt   pgtype.Timestamptz
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	RouteID               pgtype.Int8
+	ReasoningEffort       pgtype.Text
+	ReasoningBudgetTokens pgtype.Int4
+	ClientIp              pgtype.Text
 }
 
 // MarkRequestSucceeded 将 running 请求原子推进到 succeeded，重复 succeeded 返回第一次成功事实。
@@ -964,14 +965,14 @@ func (q *Queries) MarkRequestSucceeded(ctx context.Context, arg MarkRequestSucce
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
-		&i.Operation,
+		&i.Endpoint,
 		&i.ResponseModelID,
 		&i.ResponseProtocol,
 		&i.ResponseID,
 		&i.Stream,
 		&i.Status,
 		&i.FinalProviderID,
-		&i.FinalProviderEndpointID,
+		&i.FinalProviderOriginID,
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
@@ -1000,6 +1001,7 @@ WITH updated AS (
             response_id = $3,
             final_provider_id = $4,
             final_channel_id = $5,
+            final_provider_origin_id = (SELECT c.provider_origin_id FROM channels c WHERE c.id = $5),
             error_code = $6,
             error_message = $7,
             internal_error_detail = $8,
@@ -1008,14 +1010,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $11
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_endpoint_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_origin_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 FROM request_records
 WHERE request_records.id = $11
   AND request_records.status = 'canceled'
@@ -1037,35 +1039,35 @@ type MarkSettledRequestCanceledParams struct {
 }
 
 type MarkSettledRequestCanceledRow struct {
-	ID                      int64
-	RequestID               string
-	UserID                  int64
-	ApiKeyID                int64
-	RequestedModelID        string
-	IngressProtocol         string
-	Operation               string
-	ResponseModelID         pgtype.Text
-	ResponseProtocol        pgtype.Text
-	ResponseID              pgtype.Text
-	Stream                  bool
-	Status                  string
-	FinalProviderID         pgtype.Int8
-	FinalProviderEndpointID pgtype.Int8
-	FinalChannelID          pgtype.Int8
-	ErrorCode               pgtype.Text
-	ErrorMessage            pgtype.Text
-	InternalErrorDetail     pgtype.Text
-	DeliveryStatus          string
-	ResponseStartedAt       pgtype.Timestamptz
-	ResponseCompletedAt     pgtype.Timestamptz
-	StartedAt               pgtype.Timestamptz
-	CompletedAt             pgtype.Timestamptz
-	CreatedAt               pgtype.Timestamptz
-	UpdatedAt               pgtype.Timestamptz
-	RouteID                 pgtype.Int8
-	ReasoningEffort         pgtype.Text
-	ReasoningBudgetTokens   pgtype.Int4
-	ClientIp                pgtype.Text
+	ID                    int64
+	RequestID             string
+	UserID                int64
+	ApiKeyID              int64
+	RequestedModelID      string
+	IngressProtocol       string
+	Endpoint              string
+	ResponseModelID       pgtype.Text
+	ResponseProtocol      pgtype.Text
+	ResponseID            pgtype.Text
+	Stream                bool
+	Status                string
+	FinalProviderID       pgtype.Int8
+	FinalProviderOriginID pgtype.Int8
+	FinalChannelID        pgtype.Int8
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	DeliveryStatus        string
+	ResponseStartedAt     pgtype.Timestamptz
+	ResponseCompletedAt   pgtype.Timestamptz
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	RouteID               pgtype.Int8
+	ReasoningEffort       pgtype.Text
+	ReasoningBudgetTokens pgtype.Int4
+	ClientIp              pgtype.Text
 }
 
 // MarkSettledRequestCanceled 将 running 请求推进到 canceled，但保留已结算响应事实（partial stream 客户端取消）。
@@ -1092,14 +1094,14 @@ func (q *Queries) MarkSettledRequestCanceled(ctx context.Context, arg MarkSettle
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
-		&i.Operation,
+		&i.Endpoint,
 		&i.ResponseModelID,
 		&i.ResponseProtocol,
 		&i.ResponseID,
 		&i.Stream,
 		&i.Status,
 		&i.FinalProviderID,
-		&i.FinalProviderEndpointID,
+		&i.FinalProviderOriginID,
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
@@ -1128,6 +1130,7 @@ WITH updated AS (
             response_id = $3,
             final_provider_id = $4,
             final_channel_id = $5,
+            final_provider_origin_id = (SELECT c.provider_origin_id FROM channels c WHERE c.id = $5),
             error_code = $6,
             error_message = $7,
             internal_error_detail = $8,
@@ -1136,14 +1139,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $11
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, operation, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_endpoint_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_provider_origin_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, response_started_at, response_completed_at, started_at, completed_at, created_at, updated_at, route_id, reasoning_effort, reasoning_budget_tokens, client_ip
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.operation, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_endpoint_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_provider_origin_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.response_started_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.route_id, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip
 FROM request_records
 WHERE request_records.id = $11
   AND request_records.status = 'failed'
@@ -1165,35 +1168,35 @@ type MarkSettledRequestFailedParams struct {
 }
 
 type MarkSettledRequestFailedRow struct {
-	ID                      int64
-	RequestID               string
-	UserID                  int64
-	ApiKeyID                int64
-	RequestedModelID        string
-	IngressProtocol         string
-	Operation               string
-	ResponseModelID         pgtype.Text
-	ResponseProtocol        pgtype.Text
-	ResponseID              pgtype.Text
-	Stream                  bool
-	Status                  string
-	FinalProviderID         pgtype.Int8
-	FinalProviderEndpointID pgtype.Int8
-	FinalChannelID          pgtype.Int8
-	ErrorCode               pgtype.Text
-	ErrorMessage            pgtype.Text
-	InternalErrorDetail     pgtype.Text
-	DeliveryStatus          string
-	ResponseStartedAt       pgtype.Timestamptz
-	ResponseCompletedAt     pgtype.Timestamptz
-	StartedAt               pgtype.Timestamptz
-	CompletedAt             pgtype.Timestamptz
-	CreatedAt               pgtype.Timestamptz
-	UpdatedAt               pgtype.Timestamptz
-	RouteID                 pgtype.Int8
-	ReasoningEffort         pgtype.Text
-	ReasoningBudgetTokens   pgtype.Int4
-	ClientIp                pgtype.Text
+	ID                    int64
+	RequestID             string
+	UserID                int64
+	ApiKeyID              int64
+	RequestedModelID      string
+	IngressProtocol       string
+	Endpoint              string
+	ResponseModelID       pgtype.Text
+	ResponseProtocol      pgtype.Text
+	ResponseID            pgtype.Text
+	Stream                bool
+	Status                string
+	FinalProviderID       pgtype.Int8
+	FinalProviderOriginID pgtype.Int8
+	FinalChannelID        pgtype.Int8
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	DeliveryStatus        string
+	ResponseStartedAt     pgtype.Timestamptz
+	ResponseCompletedAt   pgtype.Timestamptz
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	RouteID               pgtype.Int8
+	ReasoningEffort       pgtype.Text
+	ReasoningBudgetTokens pgtype.Int4
+	ClientIp              pgtype.Text
 }
 
 // MarkSettledRequestFailed 将 running 请求推进到 failed，但保留已结算响应事实（partial stream 上游中断）。
@@ -1219,14 +1222,14 @@ func (q *Queries) MarkSettledRequestFailed(ctx context.Context, arg MarkSettledR
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
-		&i.Operation,
+		&i.Endpoint,
 		&i.ResponseModelID,
 		&i.ResponseProtocol,
 		&i.ResponseID,
 		&i.Stream,
 		&i.Status,
 		&i.FinalProviderID,
-		&i.FinalProviderEndpointID,
+		&i.FinalProviderOriginID,
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,

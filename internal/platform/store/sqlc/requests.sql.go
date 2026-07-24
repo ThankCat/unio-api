@@ -54,14 +54,14 @@ SELECT
     api_key_id,
     requested_model_id,
     ingress_protocol,
-    operation,
+    endpoint,
     response_model_id,
     response_protocol,
     response_id,
     stream,
     status,
     final_provider_id,
-    final_provider_endpoint_id,
+    final_provider_origin_id,
     final_channel_id,
     error_code,
     error_message,
@@ -82,7 +82,7 @@ WHERE request_id = $1
 `
 
 // GetRequestRecordByRequestID 按对外 request_id 读取单条请求记录完整事实（含 internal_error_detail）。
-// 不加锁，仅供 admin 只读详情端点使用；是否回显内部详情由 service/handler 控制。
+// 不加锁，仅供 admin 只读详情上游源站使用；是否回显内部详情由 service/handler 控制。
 func (q *Queries) GetRequestRecordByRequestID(ctx context.Context, requestID string) (RequestRecord, error) {
 	row := q.db.QueryRow(ctx, getRequestRecordByRequestID, requestID)
 	var i RequestRecord
@@ -93,14 +93,14 @@ func (q *Queries) GetRequestRecordByRequestID(ctx context.Context, requestID str
 		&i.ApiKeyID,
 		&i.RequestedModelID,
 		&i.IngressProtocol,
-		&i.Operation,
+		&i.Endpoint,
 		&i.ResponseModelID,
 		&i.ResponseProtocol,
 		&i.ResponseID,
 		&i.Stream,
 		&i.Status,
 		&i.FinalProviderID,
-		&i.FinalProviderEndpointID,
+		&i.FinalProviderOriginID,
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
@@ -128,7 +128,7 @@ SELECT
     r.api_key_id,
     r.requested_model_id,
     r.ingress_protocol,
-    r.operation,
+    r.endpoint,
     r.response_model_id,
     r.response_protocol,
     r.response_id,
@@ -258,7 +258,7 @@ type ListRequestRecordsPageRow struct {
 	ApiKeyID                     int64
 	RequestedModelID             string
 	IngressProtocol              string
-	Operation                    string
+	Endpoint                     string
 	ResponseModelID              pgtype.Text
 	ResponseProtocol             pgtype.Text
 	ResponseID                   pgtype.Text
@@ -327,7 +327,7 @@ type ListRequestRecordsPageRow struct {
 // 关联（均 1:1 或标量子查询，不放大行数）：usage_records（token）、cost_snapshots（平台成本 + 分项）、
 // ledger_entries 净扣费（用户实际扣费）、api_keys→routes（线路名，当前绑定，快照见批二）、
 // final channel 名、经过的渠道链（attempts 按序 string_agg）。
-// 列表故意不 SELECT internal_error_detail（SQL 层脱敏，详情端点按 ?include_internal 返回）。
+// 列表故意不 SELECT internal_error_detail（SQL 层脱敏，详情上游源站按 ?include_internal 返回）。
 // latency/ttft/tps 由 Go 侧用时间戳 + output_tokens 计算，不在此列。
 // 线路名优先用请求级快照 route_id（Key 换绑不影响历史）；历史行 route_id 为 NULL 时回落到 Key 当前绑定。
 // 模型元信息（显示名 / owned_by）按请求模型 id 关联；请求模型不在库时为 NULL。
@@ -358,7 +358,7 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.ApiKeyID,
 			&i.RequestedModelID,
 			&i.IngressProtocol,
-			&i.Operation,
+			&i.Endpoint,
 			&i.ResponseModelID,
 			&i.ResponseProtocol,
 			&i.ResponseID,

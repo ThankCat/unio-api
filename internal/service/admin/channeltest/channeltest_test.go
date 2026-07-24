@@ -90,11 +90,11 @@ func (p *fakeProber) ProbeChannel(_ context.Context, _, _ string, _ corechannel.
 
 func rotationFixture() sqlc.PrepareChannelCredentialRotationRow {
 	return sqlc.PrepareChannelCredentialRotationRow{
-		ChannelID: 7, ProviderID: 2, ProviderEndpointID: 3,
+		ChannelID: 7, ProviderID: 2, ProviderOriginID: 3,
 		Protocol: "openai", AdapterKey: "openai", Credential: "sk-new",
 		CredentialValid: false, ConfigRevision: 8, CredentialChanged: true,
-		ProviderSlug: "openai", EndpointBaseUrl: "https://api.example.test",
-		EndpointBaseUrlRevision: 3, EndpointStatusRevision: 4,
+		ProviderSlug: "openai", OriginBaseUrl: "https://api.example.test",
+		OriginBaseUrlRevision: 3, OriginStatusRevision: 4,
 	}
 }
 
@@ -147,7 +147,7 @@ func TestRotateCredentialPassedUsesPinnedRevisions(t *testing.T) {
 	if result.Verification.State != adminchannel.CredentialVerificationPassed || result.CurrentConfigRevision != 9 || result.Verification.Result == nil {
 		t.Fatalf("unexpected passed result: %+v", result)
 	}
-	if store.applyParam.ExpectedConfigRevision != 8 || store.applyParam.ExpectedEndpointBaseUrlRevision != 3 || store.applyParam.ExpectedEndpointStatusRevision != 4 {
+	if store.applyParam.ExpectedConfigRevision != 8 || store.applyParam.ExpectedOriginBaseUrlRevision != 3 || store.applyParam.ExpectedOriginStatusRevision != 4 {
 		t.Fatalf("probe result did not use pinned revisions: %+v", store.applyParam)
 	}
 	if !store.applyParam.NextCredentialValid.Valid || !store.applyParam.NextCredentialValid.Bool {
@@ -213,10 +213,10 @@ func TestRotateCredentialFailedProbeDoesNotRestoreCredential(t *testing.T) {
 
 func permissionSnapshot(configRevision int64) sqlc.GetChannelProbeSnapshotRow {
 	return sqlc.GetChannelProbeSnapshotRow{
-		ChannelID: 7, ProviderID: 2, ProviderEndpointID: 3,
+		ChannelID: 7, ProviderID: 2, ProviderOriginID: 3,
 		Protocol: "openai", AdapterKey: "openai", Credential: "test-secret", CredentialValid: true,
-		ConfigRevision: configRevision, ProviderSlug: "openai", EndpointBaseUrl: "https://api.example.test",
-		EndpointBaseUrlRevision: 3, EndpointStatusRevision: 4,
+		ConfigRevision: configRevision, ProviderSlug: "openai", OriginBaseUrl: "https://api.example.test",
+		OriginBaseUrlRevision: 3, OriginStatusRevision: 4,
 	}
 }
 
@@ -230,7 +230,7 @@ func permissionBinding() []sqlc.ListChannelModelsByChannelRow {
 func permissionInput() PermissionRecheckInput {
 	return PermissionRecheckInput{
 		ChannelID: 7, ModelID: 77, ChannelConfigRevision: 8,
-		EndpointBaseURLRevision: 3, EndpointStatusRevision: 4,
+		OriginBaseURLRevision: 3, OriginStatusRevision: 4,
 	}
 }
 
@@ -251,8 +251,8 @@ func TestPermissionRecheckUsesExactInternalModelAndOnlyWritesAudit(t *testing.T)
 	}
 	log := store.permissionLogParam
 	if !log.Success || log.ChannelID != 7 || log.TestedModel.String != "permission-model" ||
-		log.TestedConfigRevision.Int64 != 8 || log.TestedEndpointBaseUrlRevision.Int64 != 3 ||
-		log.TestedEndpointStatusRevision.Int64 != 4 {
+		log.TestedConfigRevision.Int64 != 8 || log.TestedOriginBaseUrlRevision.Int64 != 3 ||
+		log.TestedOriginStatusRevision.Int64 != 4 {
 		t.Fatalf("permission audit mismatch: %+v", log)
 	}
 }

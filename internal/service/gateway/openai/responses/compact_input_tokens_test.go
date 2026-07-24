@@ -37,14 +37,14 @@ func TestCompactHistory_HappyPath(t *testing.T) {
 		t.Fatalf("expected one completed compact delivery, completed=%v interrupted=%v", requestLog.deliveryCompleted, requestLog.deliveryInterrupted)
 	}
 
-	// compact 是一次可计费上游调用：走完整 settlement，operation 仍为 responses。
+	// compact 是一次可计费上游调用：走完整 settlement，endpoint 仍为 responses。
 	if len(settlement.params) != 1 {
 		t.Fatalf("expected compact to settle once, got %d", len(settlement.params))
 	}
 	if settlement.params[0].ResponseStartedAt != nil {
 		t.Fatalf("non-stream compact response_started_at = %v, want nil", settlement.params[0].ResponseStartedAt)
 	}
-	if len(requestLog.createRequests) != 1 || requestLog.createRequests[0].Operation != "responses" {
+	if len(requestLog.createRequests) != 1 || requestLog.createRequests[0].Endpoint != "responses" {
 		t.Fatalf("expected one responses request record, got %+v", requestLog.createRequests)
 	}
 

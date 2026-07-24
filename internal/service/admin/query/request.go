@@ -48,7 +48,7 @@ type RequestSummary struct {
 	APIKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     string
-	Operation           string
+	Endpoint           string
 	ResponseModelID     *string
 	ResponseProtocol    *string
 	ResponseID          *string
@@ -425,7 +425,7 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 			APIKeyID:            r.ApiKeyID,
 			RequestedModelID:    r.RequestedModelID,
 			IngressProtocol:     r.IngressProtocol,
-			Operation:           r.Operation,
+			Endpoint:           r.Endpoint,
 			ResponseModelID:     textPtr(r.ResponseModelID),
 			ResponseProtocol:    textPtr(r.ResponseProtocol),
 			ResponseID:          textPtr(r.ResponseID),
@@ -532,7 +532,7 @@ func summaryFromRecord(r sqlc.RequestRecord) RequestSummary {
 		APIKeyID:            r.ApiKeyID,
 		RequestedModelID:    r.RequestedModelID,
 		IngressProtocol:     r.IngressProtocol,
-		Operation:           r.Operation,
+		Endpoint:           r.Endpoint,
 		ResponseModelID:     textPtr(r.ResponseModelID),
 		ResponseProtocol:    textPtr(r.ResponseProtocol),
 		ResponseID:          textPtr(r.ResponseID),

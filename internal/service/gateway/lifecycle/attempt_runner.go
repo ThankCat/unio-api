@@ -85,16 +85,16 @@ type ResolveAdapter func(candidate routing.ChatRouteCandidate) error
 // 供后续映射，并返回结算所需 AttemptSuccess；失败时返回稳定错误交由 runner 分类。
 type NonStreamInvoke func(ctx context.Context, candidate routing.ChatRouteCandidate) (AttemptSuccess, error)
 
-// NonStreamOperationResolver selects the concrete upstream transport for one candidate.
-// A nil resolver preserves the request lifecycle's default operation.
-type NonStreamOperationResolver func(candidate routing.ChatRouteCandidate) requestlog.UpstreamOperation
+// NonStreamEndpointResolver selects the concrete upstream transport for one candidate.
+// A nil resolver preserves the request lifecycle's default endpoint.
+type NonStreamEndpointResolver func(candidate routing.ChatRouteCandidate) requestlog.UpstreamEndpoint
 
 // NonStreamTransparentFallback describes one optional second transport on the same routing
 // candidate. It is intentionally narrow: the first attempt is already terminal before Match is
 // evaluated, and the second transport must pass a fresh permit admission and create a new attempt.
 type NonStreamTransparentFallback struct {
 	Match             func(candidate routing.ChatRouteCandidate, err error) bool
-	UpstreamOperation requestlog.UpstreamOperation
+	UpstreamEndpoint requestlog.UpstreamEndpoint
 	ResolveAdapter    ResolveAdapter
 	Invoke            NonStreamInvoke
 }
@@ -111,10 +111,10 @@ type RunNonStreamParams struct {
 	Invoke           NonStreamInvoke
 	Codes            RunNonStreamCodes
 
-	// OperationForCandidate overrides the default upstream operation for the primary transport.
+	// EndpointForCandidate overrides the default upstream endpoint for the primary transport.
 	// TransparentFallback, when matched, performs exactly one separately admitted transport on the
 	// same candidate. Compact Native 404/405 -> Synthetic is the only current consumer.
-	OperationForCandidate NonStreamOperationResolver
+	EndpointForCandidate NonStreamEndpointResolver
 	TransparentFallback   *NonStreamTransparentFallback
 
 	// EstimatedTokens 是本请求保守预估的输入 token 数，用于 TPM 限流的上游调用前预占（P2-8）。
@@ -147,14 +147,14 @@ type RunResult struct {
 // transport. Admission-denied candidates are intentionally absent from this chain.
 type TransportAttempt struct {
 	ChannelID         int64                        `json:"channel_id"`
-	UpstreamOperation requestlog.UpstreamOperation `json:"upstream_operation"`
+	UpstreamEndpoint requestlog.UpstreamEndpoint `json:"upstream_endpoint"`
 }
 
-func (r *RunResult) recordTransportAttempt(candidate routing.ChatRouteCandidate, operation requestlog.UpstreamOperation) {
+func (r *RunResult) recordTransportAttempt(candidate routing.ChatRouteCandidate, endpoint requestlog.UpstreamEndpoint) {
 	r.Attempts++
 	r.TransportChain = append(r.TransportChain, TransportAttempt{
 		ChannelID:         candidate.Channel.ID,
-		UpstreamOperation: operation,
+		UpstreamEndpoint: endpoint,
 	})
 }
 
@@ -218,9 +218,9 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 	for candIdx, prepared := range params.Candidates {
 		index := prepared.RouteIndex
 		candidate := prepared.Route
-		operation := l.upstreamOperation()
-		if params.OperationForCandidate != nil {
-			operation = params.OperationForCandidate(candidate)
+		endpoint := l.upstreamEndpoint()
+		if params.EndpointForCandidate != nil {
+			endpoint = params.EndpointForCandidate(candidate)
 		}
 
 		// adapter lookup 是本地、无副作用步骤，必须先于 Redis 候选准入。
@@ -239,7 +239,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 		if r.permitManager != nil {
 			admission, owner, err := r.acquireAttemptWithHeadWait(ctx, AttemptPermitAcquireParams{
 				Candidate:            candidate,
-				UpstreamOperation:    operation,
+				UpstreamEndpoint:    endpoint,
 				RequestMode:          breakerstore.ModeNonStream,
 				EstimatedInputTokens: params.EstimatedTokens,
 			}, candIdx == 0, &headWaitUsed)
@@ -284,13 +284,13 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 		}
 
 		// permit 成功后才创建 attempt；创建失败必须 Abort 精确归还全部候选资源。
-		attemptRecord, err := l.CreateAttemptForOperation(
+		attemptRecord, err := l.CreateAttemptForEndpoint(
 			ctx,
 			requestRecord,
 			result.Attempts,
 			index,
 			candidate,
-			operation,
+			endpoint,
 		)
 		if err != nil {
 			if permitOwner != nil {
@@ -303,7 +303,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			l.MarkRequestFailed(ctx, requestRecord, "request_attempt_create_failed", err)
 			return result, err
 		}
-		result.recordTransportAttempt(candidate, operation)
+		result.recordTransportAttempt(candidate, endpoint)
 
 		upstreamStart := time.Now()
 		success, err := r.invokeNonStreamAttempt(ctx, candidate, attemptRecord, permitOwner, params.Invoke)
@@ -321,7 +321,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 
 		// A transparent fallback is a second real transport, not an adapter-internal retry. The first
 		// permit has already reached Finish/Abort inside invokeNonStreamAttempt. Only after recording
-		// that attempt do we resolve and freshly admit the second operation.
+		// that attempt do we resolve and freshly admit the second endpoint.
 		fallback := params.TransparentFallback
 		if err != nil && fallback != nil && fallback.Match != nil && fallback.Match(candidate, err) {
 			result.RoutingFallback = true
@@ -343,7 +343,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			if r.permitManager != nil {
 				admission, owner, acquireErr := r.acquireAttemptWithHeadWait(ctx, AttemptPermitAcquireParams{
 					Candidate:            candidate,
-					UpstreamOperation:    fallback.UpstreamOperation,
+					UpstreamEndpoint:    fallback.UpstreamEndpoint,
 					RequestMode:          breakerstore.ModeNonStream,
 					EstimatedInputTokens: params.EstimatedTokens,
 				}, candIdx == 0, &headWaitUsed)
@@ -385,13 +385,13 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 				defer abortAttemptPermitOnExit(ctx, fallbackOwner)
 			}
 
-			fallbackAttempt, createErr := l.CreateAttemptForOperation(
+			fallbackAttempt, createErr := l.CreateAttemptForEndpoint(
 				ctx,
 				requestRecord,
 				result.Attempts,
 				index,
 				candidate,
-				fallback.UpstreamOperation,
+				fallback.UpstreamEndpoint,
 			)
 			if createErr != nil {
 				if fallbackOwner != nil {
@@ -404,7 +404,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 				l.MarkRequestFailed(ctx, requestRecord, "request_attempt_create_failed", createErr)
 				return result, createErr
 			}
-			result.recordTransportAttempt(candidate, fallback.UpstreamOperation)
+			result.recordTransportAttempt(candidate, fallback.UpstreamEndpoint)
 			attemptRecord = fallbackAttempt
 
 			upstreamStart = time.Now()

@@ -21,7 +21,7 @@ import (
 //
 // 全部用例依赖真实 PostgreSQL + Redis（sdkfixture.Setup 在缺 DATABASE_URL 时 t.Skip）。
 
-// doResponses 用原始 JSON body 打 gateway 的 responses endpoint，返回原始 http 响应。
+// doResponses 用原始 JSON body 打 gateway 的 responses origin，返回原始 http 响应。
 func doResponses(t *testing.T, method, url, apiKey, body string) *http.Response {
 	t.Helper()
 	var reader io.Reader
@@ -153,7 +153,7 @@ func TestResponsesMockNonStreamSucceeds(t *testing.T) {
 	}
 }
 
-// OAI-RESP-Mock-02：非流式 /v1/responses 的账务事实与 chat 等价，operation 记为 responses。
+// OAI-RESP-Mock-02：非流式 /v1/responses 的账务事实与 chat 等价，endpoint 记为 responses。
 func TestResponsesMockSettlementWritesAuditTrail(t *testing.T) {
 	mock := newMockUpstream(t, func(_ *testing.T, w http.ResponseWriter, _ *http.Request, _ []byte) {
 		writeMockChatCompletion(w, "deepseek-resp-settle", "settle ok", 100, 50)
@@ -182,16 +182,16 @@ func TestResponsesMockSettlementWritesAuditTrail(t *testing.T) {
 		rrID        int64
 		rrStatus    string
 		rrIngress   string
-		rrOperation string
+		rrEndpoint string
 		rrModelID   string
 	)
 	if err := f.Pool.QueryRow(dbCtx, `
-		SELECT id, status, ingress_protocol, operation, requested_model_id
+		SELECT id, status, ingress_protocol, endpoint, requested_model_id
 		FROM request_records
 		WHERE user_id = $1
 		ORDER BY id DESC
 		LIMIT 1
-	`, f.UserID).Scan(&rrID, &rrStatus, &rrIngress, &rrOperation, &rrModelID); err != nil {
+	`, f.UserID).Scan(&rrID, &rrStatus, &rrIngress, &rrEndpoint, &rrModelID); err != nil {
 		t.Fatalf("query request_records: %v", err)
 	}
 	if rrStatus != "succeeded" {
@@ -200,9 +200,9 @@ func TestResponsesMockSettlementWritesAuditTrail(t *testing.T) {
 	if rrIngress != "openai" {
 		t.Errorf("request_records.ingress_protocol = %q, want openai", rrIngress)
 	}
-	// 关键差异：responses ingress 的 operation 必须是 responses（migration 000009 放开的枚举）。
-	if rrOperation != "responses" {
-		t.Errorf("request_records.operation = %q, want responses", rrOperation)
+	// 关键差异：responses ingress 的 endpoint 必须是 responses（migration 000009 放开的枚举）。
+	if rrEndpoint != "responses" {
+		t.Errorf("request_records.endpoint = %q, want responses", rrEndpoint)
 	}
 	if rrModelID != f.ModelID {
 		t.Errorf("request_records.requested_model_id = %q, want %q", rrModelID, f.ModelID)
@@ -270,7 +270,7 @@ func TestResponsesBackgroundRejected(t *testing.T) {
 	}
 }
 
-// OAI-RESP-Mock-04：有状态 endpoint 统一 501 unsupported_endpoint_stateless（无服务端存储）。
+// OAI-RESP-Mock-04：有状态 origin 统一 501 unsupported_origin_stateless（无服务端存储）。
 func TestResponsesStatelessUnsupported(t *testing.T) {
 	mock := newMockUpstream(t, func(_ *testing.T, w http.ResponseWriter, _ *http.Request, _ []byte) {
 		writeMockChatCompletion(w, "should-not-be-called", "x", 1, 1)
@@ -299,12 +299,12 @@ func TestResponsesStatelessUnsupported(t *testing.T) {
 		}
 		eb := decodeResponsesError(t, resp)
 		resp.Body.Close()
-		if eb.Error.Code != "unsupported_endpoint_stateless" {
-			t.Errorf("%s %s: code = %q, want unsupported_endpoint_stateless", tc.method, tc.path, eb.Error.Code)
+		if eb.Error.Code != "unsupported_origin_stateless" {
+			t.Errorf("%s %s: code = %q, want unsupported_origin_stateless", tc.method, tc.path, eb.Error.Code)
 		}
 	}
 	if mock.calls != 0 {
-		t.Errorf("expected no upstream call for stateless endpoints, got %d", mock.calls)
+		t.Errorf("expected no upstream call for stateless origins, got %d", mock.calls)
 	}
 }
 

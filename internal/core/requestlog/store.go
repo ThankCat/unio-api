@@ -29,7 +29,7 @@ func (s *Store) CreateRequest(ctx context.Context, params CreateRequestParams) (
 		ApiKeyID:            params.APIKeyID,
 		RequestedModelID:    params.RequestedModelID,
 		IngressProtocol:     string(params.IngressProtocol),
-		Operation:           string(params.Operation),
+		Endpoint:           string(params.Endpoint),
 		ResponseModelID:     pgtype.Text{Valid: false},
 		ResponseProtocol:    pgtype.Text{Valid: false},
 		ResponseID:          pgtype.Text{Valid: false},
@@ -230,12 +230,12 @@ func (s *Store) MarkRequestCanceled(ctx context.Context, params MarkRequestCance
 
 // CreateAttempt 创建一条 running request attempt。
 func (s *Store) CreateAttempt(ctx context.Context, params CreateAttemptParams) (AttemptRecord, error) {
-	if params.ProviderEndpointID == nil || *params.ProviderEndpointID <= 0 ||
-		params.ProviderEndpointBaseURLRevision == nil || *params.ProviderEndpointBaseURLRevision <= 0 ||
-		params.ProviderEndpointStatusRevision == nil || *params.ProviderEndpointStatusRevision <= 0 ||
+	if params.ProviderOriginID == nil || *params.ProviderOriginID <= 0 ||
+		params.ProviderOriginBaseURLRevision == nil || *params.ProviderOriginBaseURLRevision <= 0 ||
+		params.ProviderOriginStatusRevision == nil || *params.ProviderOriginStatusRevision <= 0 ||
 		params.ChannelConfigRevision == nil || *params.ChannelConfigRevision <= 0 ||
 		params.RoutingCandidateIndex == nil || *params.RoutingCandidateIndex < 0 ||
-		params.UpstreamOperation == "" {
+		params.UpstreamEndpoint == "" {
 		return AttemptRecord{}, requestLogStoreFailure(
 			errors.New("request attempt routing identity is incomplete"),
 			"create request attempt",
@@ -249,12 +249,12 @@ func (s *Store) CreateAttempt(ctx context.Context, params CreateAttemptParams) (
 		AdapterKey:                      params.AdapterKey,
 		UpstreamModel:                   params.UpstreamModel,
 		UpstreamProtocol:                string(params.UpstreamProtocol),
-		ProviderEndpointID:              *params.ProviderEndpointID,
-		ProviderEndpointBaseUrlRevision: *params.ProviderEndpointBaseURLRevision,
-		ProviderEndpointStatusRevision:  *params.ProviderEndpointStatusRevision,
+		ProviderOriginID:              *params.ProviderOriginID,
+		ProviderOriginBaseUrlRevision: *params.ProviderOriginBaseURLRevision,
+		ProviderOriginStatusRevision:  *params.ProviderOriginStatusRevision,
 		ChannelConfigRevision:           *params.ChannelConfigRevision,
 		RoutingCandidateIndex:           int32(*params.RoutingCandidateIndex),
-		UpstreamOperation:               string(params.UpstreamOperation),
+		UpstreamEndpoint:               string(params.UpstreamEndpoint),
 		UpstreamResponseID:              pgtype.Text{Valid: false},
 		UpstreamResponseModel:           pgtype.Text{Valid: false},
 		UpstreamFinishReason:            pgtype.Text{Valid: false},
@@ -315,7 +315,7 @@ func (s *Store) RecordAttemptTiming(ctx context.Context, params RecordAttemptTim
 // RecordAttemptBreakerDisposition first-write-wins 地保存 BreakerStore Finish disposition。
 func (s *Store) RecordAttemptBreakerDisposition(ctx context.Context, params RecordAttemptBreakerDispositionParams) (AttemptRecord, error) {
 	row, err := s.queries.RecordRequestAttemptBreakerDisposition(ctx, sqlc.RecordRequestAttemptBreakerDispositionParams{
-		BreakerEndpointDisposition: pgtype.Text{String: params.EndpointDisposition, Valid: params.EndpointDisposition != ""},
+		BreakerOriginDisposition: pgtype.Text{String: params.OriginDisposition, Valid: params.OriginDisposition != ""},
 		BreakerChannelDisposition:  pgtype.Text{String: params.ChannelDisposition, Valid: params.ChannelDisposition != ""},
 		AttemptID:                  params.ID,
 	})
@@ -458,7 +458,7 @@ func requestRecordFromSQLC(row sqlc.RequestRecord) RequestRecord {
 		APIKeyID:            row.ApiKeyID,
 		RequestedModelID:    row.RequestedModelID,
 		IngressProtocol:     Protocol(row.IngressProtocol),
-		Operation:           Operation(row.Operation),
+		Endpoint:           Endpoint(row.Endpoint),
 		ResponseModelID:     textPtr(row.ResponseModelID),
 		ResponseProtocol:    textPtr(row.ResponseProtocol),
 		ResponseID:          textPtr(row.ResponseID),
@@ -488,12 +488,12 @@ func attemptRecordFromSQLC(row sqlc.RequestAttempt) AttemptRecord {
 		AdapterKey:                      row.AdapterKey,
 		UpstreamModel:                   row.UpstreamModel,
 		UpstreamProtocol:                Protocol(row.UpstreamProtocol),
-		ProviderEndpointID:              int64ValuePtr(row.ProviderEndpointID),
-		ProviderEndpointBaseURLRevision: int64ValuePtr(row.ProviderEndpointBaseUrlRevision),
-		ProviderEndpointStatusRevision:  int64ValuePtr(row.ProviderEndpointStatusRevision),
+		ProviderOriginID:              int64ValuePtr(row.ProviderOriginID),
+		ProviderOriginBaseURLRevision: int64ValuePtr(row.ProviderOriginBaseUrlRevision),
+		ProviderOriginStatusRevision:  int64ValuePtr(row.ProviderOriginStatusRevision),
 		ChannelConfigRevision:           int64ValuePtr(row.ChannelConfigRevision),
 		RoutingCandidateIndex:           int32ValuePtr(row.RoutingCandidateIndex),
-		UpstreamOperation:               UpstreamOperation(row.UpstreamOperation),
+		UpstreamEndpoint:               UpstreamEndpoint(row.UpstreamEndpoint),
 		UpstreamResponseID:              textPtr(row.UpstreamResponseID),
 		UpstreamResponseModel:           textPtr(row.UpstreamResponseModel),
 		UpstreamFinishReason:            textPtr(row.UpstreamFinishReason),
@@ -508,7 +508,7 @@ func attemptRecordFromSQLC(row sqlc.RequestAttempt) AttemptRecord {
 		UpstreamStartedAt:               timePtr(row.UpstreamStartedAt),
 		UpstreamFirstTokenAt:            timePtr(row.UpstreamFirstTokenAt),
 		UpstreamCompletedAt:             timePtr(row.UpstreamCompletedAt),
-		BreakerEndpointDisposition:      textPtr(row.BreakerEndpointDisposition),
+		BreakerOriginDisposition:      textPtr(row.BreakerOriginDisposition),
 		BreakerChannelDisposition:       textPtr(row.BreakerChannelDisposition),
 		FinalUsageReceived:              row.FinalUsageReceived,
 		UsageMappingVersion:             textPtr(row.UsageMappingVersion),

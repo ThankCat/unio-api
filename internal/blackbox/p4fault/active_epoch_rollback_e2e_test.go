@@ -89,15 +89,15 @@ func TestP4ActiveOwnersAOFEpochRollbackSafetyBoundaryE2E(t *testing.T) {
 		"--confirm-external-ingress-blocked",
 	}
 	assertMaintenanceState(t, runMaintenanceCommand(t, h, maintenanceBinary, beginArgs...), "awaiting_maintenance")
-	operation := readNonterminalEpochOperation(t, queries)
-	transition := decodeEpochTransition(t, operation)
+	endpoint := readNonterminalEpochEndpoint(t, queries)
+	transition := decodeEpochTransition(t, endpoint)
 	recoveringEpoch := readStateEpoch(t, queries)
 	assertRecoveringTransition(
 		t,
 		initialEpoch,
 		recoveringEpoch,
 		transition,
-		operation,
+		endpoint,
 		readStateIntegrity(t, integrityStore),
 		recoveryID,
 		runtimecontrol.StateEpochReasonRestore,
@@ -105,7 +105,7 @@ func TestP4ActiveOwnersAOFEpochRollbackSafetyBoundaryE2E(t *testing.T) {
 
 	restoreRedisAOF(t, h.infra, aofSnapshot)
 	assertSameEpochRecord(t, recoveringEpoch, readStateEpoch(t, queries), "active-owner AOF rollback")
-	assertOperationUnchanged(t, operation, readNonterminalEpochOperation(t, queries))
+	assertEndpointUnchanged(t, endpoint, readNonterminalEpochEndpoint(t, queries))
 	restoredMarker := readStateIntegrity(t, integrityStore)
 	if !restoredMarker.Ready(initialEpoch.Value.Epoch, initialEpoch.Revision) {
 		t.Fatalf("AOF rollback did not restore the old ready marker: %+v", restoredMarker)
@@ -131,7 +131,7 @@ func TestP4ActiveOwnersAOFEpochRollbackSafetyBoundaryE2E(t *testing.T) {
 		t,
 		h,
 		h.gateways[1],
-		`unio_gateway_request_admission_operation_total{operation="acquire",result="runtime_state_lost"}`,
+		`unio_gateway_request_admission_endpoint_total{endpoint="acquire",result="runtime_state_lost"}`,
 		1,
 		2*time.Second,
 	)
@@ -143,7 +143,7 @@ func TestP4ActiveOwnersAOFEpochRollbackSafetyBoundaryE2E(t *testing.T) {
 		t,
 		h,
 		h.gateways[0],
-		`unio_gateway_request_admission_operation_total{operation="renew",result="runtime_state_lost"}`,
+		`unio_gateway_request_admission_endpoint_total{endpoint="renew",result="runtime_state_lost"}`,
 		1,
 		2*time.Second,
 	)
@@ -151,7 +151,7 @@ func TestP4ActiveOwnersAOFEpochRollbackSafetyBoundaryE2E(t *testing.T) {
 		t,
 		h,
 		h.gateways[0],
-		`unio_gateway_breaker_permit_operation_total{operation="renew",result="runtime_state_lost"}`,
+		`unio_gateway_breaker_permit_endpoint_total{endpoint="renew",result="runtime_state_lost"}`,
 		1,
 		2*time.Second,
 	)
@@ -175,7 +175,7 @@ func TestP4ActiveOwnersAOFEpochRollbackSafetyBoundaryE2E(t *testing.T) {
 		t,
 		h,
 		h.gateways[0],
-		`unio_gateway_request_admission_operation_total{operation="finish",result="runtime_state_lost"}`,
+		`unio_gateway_request_admission_endpoint_total{endpoint="finish",result="runtime_state_lost"}`,
 		1,
 		2*time.Second,
 	)
@@ -183,20 +183,20 @@ func TestP4ActiveOwnersAOFEpochRollbackSafetyBoundaryE2E(t *testing.T) {
 		t,
 		h,
 		h.gateways[0],
-		`unio_gateway_breaker_permit_operation_total{operation="finish",result="runtime_state_lost"}`,
+		`unio_gateway_breaker_permit_endpoint_total{endpoint="finish",result="runtime_state_lost"}`,
 		1,
 		2*time.Second,
 	)
 	afterTerminalOwners := captureEpochRollbackOwnedState(t, h, requestKey, permitKey, requestToken, permit)
 	assertEpochRollbackOwnedStateEqual(t, restoredOwners, afterTerminalOwners, "old owner Finish rejection")
 	assertSameEpochRecord(t, recoveringEpoch, readStateEpoch(t, queries), "old owner completion")
-	assertOperationUnchanged(t, operation, readNonterminalEpochOperation(t, queries))
+	assertEndpointUnchanged(t, endpoint, readNonterminalEpochEndpoint(t, queries))
 	if marker := readStateIntegrity(t, integrityStore); !marker.Ready(initialEpoch.Value.Epoch, initialEpoch.Revision) {
 		t.Fatalf("old owner completion changed the restored marker: %+v", marker)
 	}
 
 	// The old resources remain active only inside the quarantined old epoch. The
-	// nonterminal recovery operation and external ingress fence must remain in
+	// nonterminal recovery endpoint and external ingress fence must remain in
 	// place until operators can collect truthful drain/window evidence.
 	finalRequest := readRedisHash(t, h.redis, requestKey)
 	finalPermit := readRedisHash(t, h.redis, permitKey)
@@ -273,7 +273,7 @@ func captureEpochRollbackOwnedState(
 		h.namespace + ":runtime-control:v1:state-integrity-marker",
 		requestKey,
 		permitKey,
-		h.namespace + ":breaker:v2:endpoint:" + formatID(h.seed.endpointID),
+		h.namespace + ":breaker:v2:origin:" + formatID(h.seed.originID),
 		h.namespace + ":breaker:v2:channel:" + formatID(h.seed.openAIChannelID),
 	}
 	hashes := make(map[string]map[string]string, len(hashKeys))
@@ -452,19 +452,19 @@ func waitForEpochRollbackLongStreamFacts(t *testing.T, pool *pgxpool.Pool, seed 
 					request.DeliveryStatus,
 					attemptCount,
 					attempt.Status,
-					attempt.BreakerEndpointDisposition.String,
+					attempt.BreakerOriginDisposition.String,
 					attempt.BreakerChannelDisposition.String,
 					usageCount,
 					debitCount,
 				)
 				if requestCount == 1 && request.Status == "succeeded" && request.DeliveryStatus == "completed" && request.Stream &&
-					request.IngressProtocol == "openai" && request.Operation == "chat_completions" &&
+					request.IngressProtocol == "openai" && request.Endpoint == "chat_completions" &&
 					request.ResponseStartedAt.Valid && request.ResponseCompletedAt.Valid &&
 					request.FinalChannelID.Valid && request.FinalChannelID.Int64 == seed.openAIChannelID &&
-					attemptCount == 1 && attempt.Status == "succeeded" && attempt.UpstreamOperation == "chat_completions" &&
+					attemptCount == 1 && attempt.Status == "succeeded" && attempt.UpstreamEndpoint == "chat_completions" &&
 					attempt.UpstreamStartedAt.Valid && attempt.UpstreamFirstTokenAt.Valid && attempt.UpstreamCompletedAt.Valid &&
-					attempt.FinalUsageReceived && attempt.BreakerEndpointDisposition.Valid &&
-					attempt.BreakerEndpointDisposition.String == "result_unknown" &&
+					attempt.FinalUsageReceived && attempt.BreakerOriginDisposition.Valid &&
+					attempt.BreakerOriginDisposition.String == "result_unknown" &&
 					attempt.BreakerChannelDisposition.Valid && attempt.BreakerChannelDisposition.String == "result_unknown" &&
 					usageCount == 1 && debitCount == 1 {
 					cancel()

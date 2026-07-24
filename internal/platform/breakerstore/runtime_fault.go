@@ -137,8 +137,8 @@ type RuntimeReconciliationGeneration struct {
 	redisRunID      string
 }
 
-type RuntimeEndpointControlProof struct {
-	EndpointID      int64
+type RuntimeOriginControlProof struct {
+	OriginID      int64
 	BaseURLRevision int64
 	StatusRevision  int64
 	EffectiveStatus string
@@ -154,7 +154,7 @@ type RuntimeChannelAdmissionControlProof struct {
 // reconciler. The clear commit verifies every listed Redis control atomically with the latch CAS.
 type RuntimeReconciliationProof struct {
 	Generation               RuntimeReconciliationGeneration
-	EndpointControls         []RuntimeEndpointControlProof
+	OriginControls         []RuntimeOriginControlProof
 	ChannelAdmissionControls []RuntimeChannelAdmissionControlProof
 }
 
@@ -188,7 +188,7 @@ func (s *Store) BeginRuntimeReconciliation(ctx context.Context) (generation Runt
 }
 
 // ClearRuntimeInfrastructureFaultAfterReconciliation is the only fault-latch clearing API.
-// The caller must have completed the full Endpoint, Channel admission, critical setting, and
+// The caller must have completed the full Origin, Channel admission, critical setting, and
 // durable-operation reconciliation immediately before calling it. This method then re-reads the
 // PostgreSQL-derived epoch/revisions through in, validates marker and critical control payloads,
 // and compare-and-deletes the exact shared fault generation. A concurrent fault cannot be cleared.
@@ -213,17 +213,17 @@ func (s *Store) ClearRuntimeInfrastructureFaultAfterReconciliation(
 	if reconciliation.Generation.redisRunID == "" {
 		return RuntimeReadinessResult{Reason: "control_proof_invalid"}, nil
 	}
-	seenEndpoints := make(map[int64]struct{}, len(reconciliation.EndpointControls))
-	for _, endpoint := range reconciliation.EndpointControls {
-		if endpoint.EndpointID <= 0 || endpoint.BaseURLRevision < 1 || endpoint.StatusRevision < 1 ||
-			(endpoint.EffectiveStatus != "enabled" && endpoint.EffectiveStatus != "disabled" && endpoint.EffectiveStatus != "archived") {
+	seenOrigins := make(map[int64]struct{}, len(reconciliation.OriginControls))
+	for _, origin := range reconciliation.OriginControls {
+		if origin.OriginID <= 0 || origin.BaseURLRevision < 1 || origin.StatusRevision < 1 ||
+			(origin.EffectiveStatus != "enabled" && origin.EffectiveStatus != "disabled" && origin.EffectiveStatus != "archived") {
 			return RuntimeReadinessResult{Reason: "control_proof_invalid"}, nil
 		}
-		if _, exists := seenEndpoints[endpoint.EndpointID]; exists {
+		if _, exists := seenOrigins[origin.OriginID]; exists {
 			return RuntimeReadinessResult{Reason: "control_proof_invalid"}, nil
 		}
-		seenEndpoints[endpoint.EndpointID] = struct{}{}
-		keys = append(keys, s.keys.endpoint(endpoint.EndpointID))
+		seenOrigins[origin.OriginID] = struct{}{}
+		keys = append(keys, s.keys.origin(origin.OriginID))
 	}
 	seenChannels := make(map[int64]struct{}, len(reconciliation.ChannelAdmissionControls))
 	for _, channel := range reconciliation.ChannelAdmissionControls {
@@ -266,12 +266,12 @@ func (s *Store) ClearRuntimeInfrastructureFaultAfterReconciliation(
 
 	clearArgs := append(runtimeReadinessArgs(in), reconciliation.Generation.redisRunID, proofReply[1])
 	clearArgs = append(clearArgs, proofReply[2:]...)
-	clearArgs = append(clearArgs, strconv.Itoa(len(reconciliation.EndpointControls)), strconv.Itoa(len(reconciliation.ChannelAdmissionControls)))
-	for _, endpoint := range reconciliation.EndpointControls {
+	clearArgs = append(clearArgs, strconv.Itoa(len(reconciliation.OriginControls)), strconv.Itoa(len(reconciliation.ChannelAdmissionControls)))
+	for _, origin := range reconciliation.OriginControls {
 		clearArgs = append(clearArgs,
-			strconv.FormatInt(endpoint.BaseURLRevision, 10),
-			strconv.FormatInt(endpoint.StatusRevision, 10),
-			endpoint.EffectiveStatus,
+			strconv.FormatInt(origin.BaseURLRevision, 10),
+			strconv.FormatInt(origin.StatusRevision, 10),
+			origin.EffectiveStatus,
 		)
 	}
 	for _, channel := range reconciliation.ChannelAdmissionControls {

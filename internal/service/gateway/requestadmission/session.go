@@ -721,7 +721,7 @@ func SnapshotManyIfPresent(ctx context.Context, modelID int64, candidates []brea
 }
 
 // Reserve uses the request session when this request was admitted. A missing session is a
-// runtime wiring error because generation endpoints must never fall back to the old Guard.
+// runtime wiring error because generation origins must never fall back to the old Guard.
 func Reserve(ctx context.Context, estimatedTokens int64) error {
 	s, ok := UsageSessionFromContext(ctx)
 	if !ok {

@@ -17,7 +17,7 @@ import (
 // RequestLifecycle 把双协议 service 编排骨架共享的协议无关基础设施集中到一处。
 //
 // 它持有 request log / metrics / chat authorizer 这些 lifecycle 依赖，
-// 以及单一协议特定的取值（IngressProtocol、Operation、SafeMessageMapper），统一暴露给两侧
+// 以及单一协议特定的取值（IngressProtocol、Endpoint、SafeMessageMapper），统一暴露给两侧
 // service 编排骨架使用，使 OpenAI ChatCompletions 与 Anthropic Messages 的授权、指标和
 // request record 行为收口为同一份代码。
 //
@@ -30,7 +30,7 @@ type RequestLifecycle struct {
 	credentialGate  CredentialGate
 	routingTraces   *RoutingTraceRecorder
 	ingressProtocol requestlog.Protocol
-	operation       requestlog.Operation
+	endpoint       requestlog.Endpoint
 	safeMessage     func(code string) string
 
 	// costExposures 是可选的成本敞口记录器（DESIGN-bill-on-cancel 阶段一）；nil 表示不启用。
@@ -89,15 +89,15 @@ type RequestLifecycleParams struct {
 	Authorizer      ChatAuthorizer
 	Metrics         MetricsRecorder
 	IngressProtocol requestlog.Protocol
-	Operation       requestlog.Operation
+	Endpoint       requestlog.Endpoint
 	SafeMessage     func(code string) string
 }
 
 // NewRequestLifecycle 构造一个协议无关编排基础设施 bundle。
 //
 // RequestLog 必填；Authorizer 必填；其余字段允许为 nil（Metrics、SafeMessage 缺省
-// 等价于「不采集 / 仅按协议无关兜底文案」）。IngressProtocol 与 Operation 必填，
-// 它们决定 request_records 的协议归属与 operation 列。
+// 等价于「不采集 / 仅按协议无关兜底文案」）。IngressProtocol 与 Endpoint 必填，
+// 它们决定 request_records 的协议归属与 endpoint 列。
 func NewRequestLifecycle(params RequestLifecycleParams) *RequestLifecycle {
 	if params.RequestLog == nil {
 		panic("lifecycle: request log service is required")
@@ -108,8 +108,8 @@ func NewRequestLifecycle(params RequestLifecycleParams) *RequestLifecycle {
 	if params.IngressProtocol == "" {
 		panic("lifecycle: ingress protocol is required")
 	}
-	if params.Operation == "" {
-		panic("lifecycle: operation is required")
+	if params.Endpoint == "" {
+		panic("lifecycle: endpoint is required")
 	}
 
 	return &RequestLifecycle{
@@ -117,7 +117,7 @@ func NewRequestLifecycle(params RequestLifecycleParams) *RequestLifecycle {
 		authorizer:      params.Authorizer,
 		metrics:         params.Metrics,
 		ingressProtocol: params.IngressProtocol,
-		operation:       params.Operation,
+		endpoint:       params.Endpoint,
 		safeMessage:     params.SafeMessage,
 	}
 }
@@ -131,7 +131,7 @@ func (l *RequestLifecycle) SetCredentialGate(gate CredentialGate) {
 	l.credentialGate = gate
 }
 
-// RecordCredentialResult 把一次上游尝试结果连同其冻结的 Channel/Endpoint 版本喂给凭据闸门。
+// RecordCredentialResult 把一次上游尝试结果连同其冻结的 Channel/Origin 版本喂给凭据闸门。
 // nil receiver / nil gate 等价于「未启用凭据闸门」，no-op。
 func (l *RequestLifecycle) RecordCredentialResult(candidate routing.ChatRouteCandidate, err error) {
 	if l == nil || l.credentialGate == nil {
@@ -140,8 +140,8 @@ func (l *RequestLifecycle) RecordCredentialResult(candidate routing.ChatRouteCan
 	l.credentialGate.RecordResult(CredentialRevision{
 		ChannelID:               candidate.Channel.ID,
 		ChannelConfigRevision:   candidate.ChannelConfigRevision,
-		EndpointBaseURLRevision: candidate.ProviderEndpointBaseURLRevision,
-		EndpointStatusRevision:  candidate.ProviderEndpointStatusRevision,
+		OriginBaseURLRevision: candidate.ProviderOriginBaseURLRevision,
+		OriginStatusRevision:  candidate.ProviderOriginStatusRevision,
 	}, err)
 }
 
@@ -274,7 +274,7 @@ func (l *RequestLifecycle) RecordZeroPriceServed(providerID int64, channelID int
 }
 
 // ---------------------------------------------------------------------------
-// request log：创建 / 推进 / 失败 / 取消，按构造时的 IngressProtocol + Operation 写。
+// request log：创建 / 推进 / 失败 / 取消，按构造时的 IngressProtocol + Endpoint 写。
 // ---------------------------------------------------------------------------
 
 // CreateRequest 创建用户可见请求记录，并立即推进到 running 状态。
@@ -310,7 +310,7 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 		APIKeyID:              principal.APIKeyID,
 		RequestedModelID:      requestedModelID,
 		IngressProtocol:       l.ingressProtocol,
-		Operation:             l.operation,
+		Endpoint:             l.endpoint,
 		Stream:                stream,
 		StartedAt:             time.Now(),
 		RouteID:               routeID,
@@ -333,26 +333,26 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 // CreateAttempt 创建一次上游 channel 尝试记录。
 // attempt 记录 fallback 链路中的单次 provider/channel 调用，必须先于 adapter 调用创建。
 func (l *RequestLifecycle) CreateAttempt(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate) (requestlog.AttemptRecord, error) {
-	return l.CreateAttemptForOperation(
+	return l.CreateAttemptForEndpoint(
 		ctx,
 		requestRecord,
 		attemptIndex,
 		attemptIndex,
 		candidate,
-		l.upstreamOperation(),
+		l.upstreamEndpoint(),
 	)
 }
 
-// CreateAttemptForOperation freezes routing identity separately from the real
+// CreateAttemptForEndpoint freezes routing identity separately from the real
 // transport sequence. Compact fallback can therefore create two consecutive
 // attempts while retaining the same routing candidate index.
-func (l *RequestLifecycle) CreateAttemptForOperation(
+func (l *RequestLifecycle) CreateAttemptForEndpoint(
 	ctx context.Context,
 	requestRecord requestlog.RequestRecord,
 	attemptIndex int,
 	routingCandidateIndex int,
 	candidate routing.ChatRouteCandidate,
-	operation requestlog.UpstreamOperation,
+	endpoint requestlog.UpstreamEndpoint,
 ) (requestlog.AttemptRecord, error) {
 	// 覆盖为当前尝试；失败停在某次 attempt 时访问日志即显示最后打过的渠道。
 	logfields.SetUpstreamAttempt(ctx, logfields.UpstreamAttempt{
@@ -372,34 +372,34 @@ func (l *RequestLifecycle) CreateAttemptForOperation(
 		AdapterKey:                      candidate.AdapterKey,
 		UpstreamModel:                   candidate.UpstreamModel,
 		UpstreamProtocol:                requestlog.Protocol(candidate.Protocol),
-		ProviderEndpointID:              positiveInt64Ptr(candidate.ProviderEndpointID),
-		ProviderEndpointBaseURLRevision: positiveInt64Ptr(candidate.ProviderEndpointBaseURLRevision),
-		ProviderEndpointStatusRevision:  positiveInt64Ptr(candidate.ProviderEndpointStatusRevision),
+		ProviderOriginID:              positiveInt64Ptr(candidate.ProviderOriginID),
+		ProviderOriginBaseURLRevision: positiveInt64Ptr(candidate.ProviderOriginBaseURLRevision),
+		ProviderOriginStatusRevision:  positiveInt64Ptr(candidate.ProviderOriginStatusRevision),
 		ChannelConfigRevision:           positiveInt64Ptr(candidate.ChannelConfigRevision),
 		RoutingCandidateIndex:           nonNegativeIntPtr(routingCandidateIndex),
-		UpstreamOperation:               operation,
+		UpstreamEndpoint:               endpoint,
 		StartedAt:                       time.Now(),
 	})
 }
 
-func upstreamOperationForRequest(operation requestlog.Operation) requestlog.UpstreamOperation {
-	switch operation {
-	case requestlog.OperationChatCompletions:
-		return requestlog.UpstreamOperationChatCompletions
-	case requestlog.OperationResponses:
-		return requestlog.UpstreamOperationResponses
-	case requestlog.OperationMessages:
-		return requestlog.UpstreamOperationMessages
+func upstreamEndpointForRequest(endpoint requestlog.Endpoint) requestlog.UpstreamEndpoint {
+	switch endpoint {
+	case requestlog.EndpointChatCompletions:
+		return requestlog.UpstreamEndpointChatCompletions
+	case requestlog.EndpointResponses:
+		return requestlog.UpstreamEndpointResponses
+	case requestlog.EndpointMessages:
+		return requestlog.UpstreamEndpointMessages
 	default:
 		return ""
 	}
 }
 
-func (l *RequestLifecycle) upstreamOperation() requestlog.UpstreamOperation {
+func (l *RequestLifecycle) upstreamEndpoint() requestlog.UpstreamEndpoint {
 	if l == nil {
 		return ""
 	}
-	return upstreamOperationForRequest(l.operation)
+	return upstreamEndpointForRequest(l.endpoint)
 }
 
 func positiveInt64Ptr(value int64) *int64 {
@@ -461,7 +461,7 @@ func (l *RequestLifecycle) RecordAttemptTiming(ctx context.Context, attemptRecor
 }
 
 // RecordAttemptBreakerDisposition first-write-wins 保存 Finish applied/stale 结果；审计失败不改写客户结果。
-func (l *RequestLifecycle) RecordAttemptBreakerDisposition(ctx context.Context, attemptRecord requestlog.AttemptRecord, endpoint, channel string) {
+func (l *RequestLifecycle) RecordAttemptBreakerDisposition(ctx context.Context, attemptRecord requestlog.AttemptRecord, origin, channel string) {
 	recorder, ok := l.requestLog.(attemptBreakerDispositionRecorder)
 	if !ok || attemptRecord.ID == 0 {
 		return
@@ -470,7 +470,7 @@ func (l *RequestLifecycle) RecordAttemptBreakerDisposition(ctx context.Context, 
 	defer cancel()
 	_, _ = recorder.RecordAttemptBreakerDisposition(auditCtx, requestlog.RecordAttemptBreakerDispositionParams{
 		ID:                  attemptRecord.ID,
-		EndpointDisposition: endpoint,
+		OriginDisposition: origin,
 		ChannelDisposition:  channel,
 	})
 }

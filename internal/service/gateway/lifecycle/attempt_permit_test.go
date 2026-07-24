@@ -116,16 +116,16 @@ type attemptPermitMetricsStub struct {
 	active             float64
 	ignored            map[string]int
 	channelMismatches  int
-	endpointMismatches int
+	originMismatches int
 }
 
-func (m *attemptPermitMetricsStub) IncBreakerPermitOperation(operation, result string) {
+func (m *attemptPermitMetricsStub) IncBreakerPermitOperation(endpoint, result string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.operations == nil {
 		m.operations = make(map[string]int)
 	}
-	m.operations[operation+"/"+result]++
+	m.operations[endpoint+"/"+result]++
 }
 
 func (m *attemptPermitMetricsStub) AddBreakerPermitActive(delta float64) {
@@ -149,9 +149,9 @@ func (m *attemptPermitMetricsStub) IncChannelConfigRevisionMismatch(string) {
 	m.mu.Unlock()
 }
 
-func (m *attemptPermitMetricsStub) IncEndpointStatusRevisionMismatch(string) {
+func (m *attemptPermitMetricsStub) IncOriginStatusRevisionMismatch(string) {
 	m.mu.Lock()
-	m.endpointMismatches++
+	m.originMismatches++
 	m.mu.Unlock()
 }
 
@@ -224,13 +224,13 @@ func TestAttemptPermitManagerBuildsBoundAuthoritativeInput(t *testing.T) {
 	manager.newPermitID = func() string { return "permit-1" }
 	ctx := requestadmission.ContextWithUsageSession(context.Background(), &attemptUsageSessionStub{requestID: "request-token"})
 	candidate := routing.ChatRouteCandidate{
-		ModelDBID: 11, ProviderEndpointID: 12, ProviderEndpointBaseURLRevision: 13,
-		ProviderEndpointStatusRevision: 14, ChannelConfigRevision: 15,
+		ModelDBID: 11, ProviderOriginID: 12, ProviderOriginBaseURLRevision: 13,
+		ProviderOriginStatusRevision: 14, ChannelConfigRevision: 15,
 		ChannelAdmissionLimitsRevision: 16, Channel: channel.Runtime{ID: 17},
 	}
 
 	_, owner, err := manager.Acquire(ctx, AttemptPermitAcquireParams{
-		Candidate: candidate, UpstreamOperation: requestlog.UpstreamOperationResponses,
+		Candidate: candidate, UpstreamEndpoint: requestlog.UpstreamEndpointResponses,
 		RequestMode: breakerstore.ModeNonStream, EstimatedInputTokens: 123,
 	})
 	if err != nil || owner == nil {
@@ -242,7 +242,7 @@ func TestAttemptPermitManagerBuildsBoundAuthoritativeInput(t *testing.T) {
 	got := store.acquireInput
 	if got.RequestAdmissionID != "request-token" || got.IntegrityEpoch != integrity.Epoch || got.IntegrityRevision != integrity.Revision ||
 		got.ChannelRateRevision != 8 || got.GlobalConcurrencyRevision != 4 || got.CircuitBreakerRevision != 5 ||
-		got.ChannelAdmissionRevision != 16 || got.EstimatedInputTokens != 123 || !got.EnforceEndpointControl ||
+		got.ChannelAdmissionRevision != 16 || got.EstimatedInputTokens != 123 || !got.EnforceOriginControl ||
 		got.AdmissionFingerprint == "" {
 		t.Fatalf("unexpected acquire input: %+v", got)
 	}
@@ -262,11 +262,11 @@ func TestAttemptPermitMetricsFollowPermitOwnershipAndStaleFinish(t *testing.T) {
 			Mode: breakerstore.AdmissionPermit,
 			Permit: &breakerstore.AttemptPermit{
 				PermitID: "permit-metrics", IntegrityEpoch: integrity.Epoch, IntegrityRevision: integrity.Revision,
-				EndpointID: 12, ChannelID: 17, PermitTTLMs: 30_000, RenewMs: 30_000,
+				OriginID: 12, ChannelID: 17, PermitTTLMs: 30_000, RenewMs: 30_000,
 			},
 		},
 		finishResult: breakerstore.FinishResult{
-			EndpointDisposition: breakerstore.DispositionStaleStatusRev,
+			OriginDisposition: breakerstore.DispositionStaleStatusRev,
 			ChannelDisposition:  breakerstore.DispositionStaleConfigRev,
 		},
 	}
@@ -280,18 +280,18 @@ func TestAttemptPermitMetricsFollowPermitOwnershipAndStaleFinish(t *testing.T) {
 	ctx := requestadmission.ContextWithUsageSession(context.Background(), &attemptUsageSessionStub{requestID: "request-token"})
 	_, owner, err := manager.Acquire(ctx, AttemptPermitAcquireParams{
 		Candidate: routing.ChatRouteCandidate{
-			ModelDBID: 11, ProviderEndpointID: 12, ProviderEndpointBaseURLRevision: 13,
-			ProviderEndpointStatusRevision: 14, ChannelConfigRevision: 15,
+			ModelDBID: 11, ProviderOriginID: 12, ProviderOriginBaseURLRevision: 13,
+			ProviderOriginStatusRevision: 14, ChannelConfigRevision: 15,
 			ChannelAdmissionLimitsRevision: 16, Channel: channel.Runtime{ID: 17},
 		},
-		UpstreamOperation: requestlog.UpstreamOperationResponses,
+		UpstreamEndpoint: requestlog.UpstreamEndpointResponses,
 		RequestMode:       breakerstore.ModeNonStream,
 	})
 	if err != nil || owner == nil {
 		t.Fatalf("acquire owner=%v err=%v", owner, err)
 	}
 	if _, err := owner.Finish(context.Background(), breakerstore.FinishOutcome{
-		EndpointOutcome: breakerstore.OutcomeIgnored,
+		OriginOutcome: breakerstore.OutcomeIgnored,
 		ChannelOutcome:  breakerstore.OutcomeIgnored,
 	}); err != nil {
 		t.Fatalf("finish: %v", err)
@@ -301,9 +301,9 @@ func TestAttemptPermitMetricsFollowPermitOwnershipAndStaleFinish(t *testing.T) {
 	if metrics.active != 0 || metrics.operations["acquire/permit"] != 1 || metrics.operations["finish/mixed"] != 1 {
 		t.Fatalf("active=%v operations=%v", metrics.active, metrics.operations)
 	}
-	if metrics.ignored["endpoint/stale_status_revision"] != 1 || metrics.ignored["channel/stale_config_revision"] != 1 ||
-		metrics.endpointMismatches != 1 || metrics.channelMismatches != 1 {
-		t.Fatalf("ignored=%v endpoint_mismatch=%d channel_mismatch=%d", metrics.ignored, metrics.endpointMismatches, metrics.channelMismatches)
+	if metrics.ignored["origin/stale_status_revision"] != 1 || metrics.ignored["channel/stale_config_revision"] != 1 ||
+		metrics.originMismatches != 1 || metrics.channelMismatches != 1 {
+		t.Fatalf("ignored=%v origin_mismatch=%d channel_mismatch=%d", metrics.ignored, metrics.originMismatches, metrics.channelMismatches)
 	}
 }
 
@@ -314,7 +314,7 @@ func newRuntimeFeedbackOwner(
 	permit := breakerstore.AttemptPermit{
 		PermitID: "permit-feedback", IntegrityEpoch: "epoch-ready", IntegrityRevision: 1,
 		ChannelID: 17, ModelID: 23, ChannelConfigRevision: 31,
-		EndpointBaseURLRevision: 37, EndpointStatusRevision: 41,
+		OriginBaseURLRevision: 37, OriginStatusRevision: 41,
 		PermitTTLMs: 30_000, RenewMs: 10_000,
 	}
 	return newAttemptPermitOwnerWithFeedback(
@@ -363,7 +363,7 @@ func TestAttemptPermitOwnerRecords429CooldownUsingPolicy(t *testing.T) {
 
 			_, err := owner.FinishTransport(
 				context.Background(),
-				breakerstore.FinishOutcome{EndpointOutcome: breakerstore.OutcomeIgnored, ChannelOutcome: breakerstore.OutcomeIgnored},
+				breakerstore.FinishOutcome{OriginOutcome: breakerstore.OutcomeIgnored, ChannelOutcome: breakerstore.OutcomeIgnored},
 				feedbackUpstreamError(adapter.UpstreamErrorRateLimit, 429, tc.retryAfter),
 			)
 			if err != nil {
@@ -385,7 +385,7 @@ func TestAttemptPermitOwnerRecords403PermissionWithPermitRevisions(t *testing.T)
 
 	_, err := owner.FinishTransport(
 		context.Background(),
-		breakerstore.FinishOutcome{EndpointOutcome: breakerstore.OutcomeIgnored, ChannelOutcome: breakerstore.OutcomeIgnored},
+		breakerstore.FinishOutcome{OriginOutcome: breakerstore.OutcomeIgnored, ChannelOutcome: breakerstore.OutcomeIgnored},
 		feedbackUpstreamError(adapter.UpstreamErrorPermission, 403, 0),
 	)
 	if err != nil {
@@ -415,7 +415,7 @@ func TestAttemptPermitOwnerFeedbackIsExactAndFirstTerminalWins(t *testing.T) {
 			owner := newRuntimeFeedbackOwner(store, policy)
 			_, err := owner.FinishTransport(
 				context.Background(),
-				breakerstore.FinishOutcome{EndpointOutcome: breakerstore.OutcomeIgnored, ChannelOutcome: breakerstore.OutcomeIgnored},
+				breakerstore.FinishOutcome{OriginOutcome: breakerstore.OutcomeIgnored, ChannelOutcome: breakerstore.OutcomeIgnored},
 				feedbackUpstreamError(tc.category, tc.status, time.Second),
 			)
 			if err != nil {
@@ -435,7 +435,7 @@ func TestAttemptPermitOwnerFeedbackIsExactAndFirstTerminalWins(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		if _, err := owner.FinishTransport(
 			context.Background(),
-			breakerstore.FinishOutcome{EndpointOutcome: breakerstore.OutcomeIgnored, ChannelOutcome: breakerstore.OutcomeIgnored},
+			breakerstore.FinishOutcome{OriginOutcome: breakerstore.OutcomeIgnored, ChannelOutcome: breakerstore.OutcomeIgnored},
 			rateErr,
 		); err != nil {
 			t.Fatalf("finish transport %d: %v", i, err)
@@ -493,7 +493,7 @@ func TestAttemptPermitOwnerRejectsStalePostgresEpochBeforeRedis(t *testing.T) {
 			name: "finish",
 			invoke: func(ctx context.Context, owner *AttemptPermitOwner) error {
 				_, err := owner.Finish(ctx, breakerstore.FinishOutcome{
-					EndpointOutcome: breakerstore.OutcomeIgnored,
+					OriginOutcome: breakerstore.OutcomeIgnored,
 					ChannelOutcome:  breakerstore.OutcomeIgnored,
 				})
 				return err
@@ -538,7 +538,7 @@ func TestAttemptPermitOwnerRenewsLongTransportAndStopsBeforeFinish(t *testing.T)
 	integrity := runtimefacts.Integrity{Epoch: "epoch-long-stream", Revision: 1}
 	store := &attemptPermitStoreStub{
 		finishResult: breakerstore.FinishResult{
-			EndpointDisposition: breakerstore.DispositionApplied,
+			OriginDisposition: breakerstore.DispositionApplied,
 			ChannelDisposition:  breakerstore.DispositionApplied,
 		},
 	}
@@ -571,7 +571,7 @@ func TestAttemptPermitOwnerRenewsLongTransportAndStopsBeforeFinish(t *testing.T)
 	}
 
 	if _, err := owner.Finish(context.Background(), breakerstore.FinishOutcome{
-		EndpointOutcome: breakerstore.OutcomeEligibleSuccess,
+		OriginOutcome: breakerstore.OutcomeEligibleSuccess,
 		ChannelOutcome:  breakerstore.OutcomeEligibleSuccess,
 	}); err != nil {
 		t.Fatalf("finish long transport: %v", err)
@@ -621,7 +621,7 @@ func TestInvokeNonStreamAttemptUsesTransportBoundary(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &attemptPermitStoreStub{finishResult: breakerstore.FinishResult{
-				EndpointDisposition: breakerstore.DispositionApplied,
+				OriginDisposition: breakerstore.DispositionApplied,
 				ChannelDisposition:  breakerstore.DispositionApplied,
 			}}
 			permit := breakerstore.AttemptPermit{
@@ -691,7 +691,7 @@ func TestInvokeNonStreamAttemptDoesNotFeedbackBeforeTransport(t *testing.T) {
 func TestInvokeNonStreamAttemptFailsClosedOnRuntimeFeedbackError(t *testing.T) {
 	store := &attemptPermitStoreStub{
 		finishResult: breakerstore.FinishResult{
-			EndpointDisposition: breakerstore.DispositionApplied,
+			OriginDisposition: breakerstore.DispositionApplied,
 			ChannelDisposition:  breakerstore.DispositionApplied,
 		},
 		cooldownErr: breakerstore.ErrStoreUnavailable,
@@ -718,7 +718,7 @@ func TestInvokeNonStreamAttemptFailsClosedOnRuntimeFeedbackError(t *testing.T) {
 	if store.finishCalls != 1 || store.cooldownCalls != 1 {
 		t.Fatalf("feedback failure calls finish=%d cooldown=%d, want 1/1", store.finishCalls, store.cooldownCalls)
 	}
-	if audit.disposition.EndpointDisposition != string(breakerstore.DispositionApplied) ||
+	if audit.disposition.OriginDisposition != string(breakerstore.DispositionApplied) ||
 		audit.disposition.ChannelDisposition != string(breakerstore.DispositionApplied) {
 		t.Fatalf("confirmed Finish disposition was lost: %+v", audit.disposition)
 	}
@@ -752,7 +752,7 @@ func TestInvokeNonStreamAttemptAuditsUnknownFinishResult(t *testing.T) {
 	if store.finishCalls != attemptPermitTerminalTries {
 		t.Fatalf("finish calls = %d, want %d", store.finishCalls, attemptPermitTerminalTries)
 	}
-	if audit.disposition.EndpointDisposition != string(breakerstore.DispositionResultUnknown) ||
+	if audit.disposition.OriginDisposition != string(breakerstore.DispositionResultUnknown) ||
 		audit.disposition.ChannelDisposition != string(breakerstore.DispositionResultUnknown) {
 		t.Fatalf("unexpected disposition audit: %+v", audit.disposition)
 	}
@@ -785,7 +785,7 @@ func TestInvokeNonStreamAttemptStopsFallbackWhenFailedTransportFinishIsUnknown(t
 		failure.CodeOf(err) != failure.CodeGatewayBreakerStoreUnavailable {
 		t.Fatalf("finish failure code=%q err=%v", failure.CodeOf(err), err)
 	}
-	if audit.disposition.EndpointDisposition != string(breakerstore.DispositionResultUnknown) ||
+	if audit.disposition.OriginDisposition != string(breakerstore.DispositionResultUnknown) ||
 		audit.disposition.ChannelDisposition != string(breakerstore.DispositionResultUnknown) {
 		t.Fatalf("unexpected disposition audit: %+v", audit.disposition)
 	}
@@ -825,13 +825,13 @@ func TestNonStreamFinishAttributionIsConservative(t *testing.T) {
 	tests := []struct {
 		name     string
 		err      error
-		endpoint breakerstore.Outcome
+		origin breakerstore.Outcome
 		channel  breakerstore.Outcome
-		evidence breakerstore.EndpointEvidenceCategory
+		evidence breakerstore.OriginEvidenceCategory
 	}{
-		{name: "gateway status", err: serverError, endpoint: breakerstore.OutcomeEligibleFailure, channel: breakerstore.OutcomeEligibleFailure},
-		{name: "http 500", err: http500Error, channel: breakerstore.OutcomeEligibleFailure, evidence: breakerstore.EndpointEvidenceHTTP500},
-		{name: "body timeout", err: bodyTimeout, channel: breakerstore.OutcomeEligibleFailure, evidence: breakerstore.EndpointEvidenceBodyReadTimeout},
+		{name: "gateway status", err: serverError, origin: breakerstore.OutcomeEligibleFailure, channel: breakerstore.OutcomeEligibleFailure},
+		{name: "http 500", err: http500Error, channel: breakerstore.OutcomeEligibleFailure, evidence: breakerstore.OriginEvidenceHTTP500},
+		{name: "body timeout", err: bodyTimeout, channel: breakerstore.OutcomeEligibleFailure, evidence: breakerstore.OriginEvidenceBodyReadTimeout},
 		{name: "client", err: clientError, channel: breakerstore.OutcomeIgnored},
 		{name: "protocol", err: protocolError, channel: breakerstore.OutcomeEligibleFailure},
 		{name: "canceled", err: context.Canceled, channel: breakerstore.OutcomeIgnored},
@@ -840,12 +840,12 @@ func TestNonStreamFinishAttributionIsConservative(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := nonStreamFinishOutcome(AttemptSuccess{}, AttemptTimingFacts{}, tc.err)
-			wantEndpoint := tc.endpoint
-			if wantEndpoint == "" {
-				wantEndpoint = breakerstore.OutcomeIgnored
+			wantOrigin := tc.origin
+			if wantOrigin == "" {
+				wantOrigin = breakerstore.OutcomeIgnored
 			}
-			if got.EndpointOutcome != wantEndpoint || got.ChannelOutcome != tc.channel ||
-				got.EndpointEvidence != tc.evidence || got.FirstTokenMs != nil {
+			if got.OriginOutcome != wantOrigin || got.ChannelOutcome != tc.channel ||
+				got.OriginEvidence != tc.evidence || got.FirstTokenMs != nil {
 				t.Fatalf("unexpected attribution: %+v", got)
 			}
 		})
@@ -865,17 +865,17 @@ func TestStreamFinishTimeoutEvidenceUsesFirstTokenTiming(t *testing.T) {
 	tests := []struct {
 		name     string
 		first    *time.Time
-		evidence breakerstore.EndpointEvidenceCategory
+		evidence breakerstore.OriginEvidenceCategory
 	}{
-		{name: "first token", evidence: breakerstore.EndpointEvidenceFirstTokenTimeout},
-		{name: "body", first: &firstToken, evidence: breakerstore.EndpointEvidenceBodyReadTimeout},
+		{name: "first token", evidence: breakerstore.OriginEvidenceFirstTokenTimeout},
+		{name: "body", first: &firstToken, evidence: breakerstore.OriginEvidenceBodyReadTimeout},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := streamFinishOutcome(nil, AttemptTimingFacts{
 				UpstreamStartedAt: &started, UpstreamFirstTokenAt: tc.first, UpstreamCompletedAt: &completed,
 			}, timeoutErr)
-			if got.ChannelOutcome != breakerstore.OutcomeEligibleFailure || got.EndpointOutcome != breakerstore.OutcomeIgnored || got.EndpointEvidence != tc.evidence {
+			if got.ChannelOutcome != breakerstore.OutcomeEligibleFailure || got.OriginOutcome != breakerstore.OutcomeIgnored || got.OriginEvidence != tc.evidence {
 				t.Fatalf("unexpected stream timeout attribution: %+v", got)
 			}
 		})

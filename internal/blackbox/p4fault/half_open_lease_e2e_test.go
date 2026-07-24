@@ -93,7 +93,7 @@ func TestP4HalfOpenLeaseRenewalAndGatewayTakeoverE2E(t *testing.T) {
 		t,
 		h,
 		h.gateways[0],
-		`unio_gateway_breaker_permit_operation_total{operation="renew",result="renewed"}`,
+		`unio_gateway_breaker_permit_endpoint_total{endpoint="renew",result="renewed"}`,
 		3,
 		2*time.Second,
 	)
@@ -101,7 +101,7 @@ func TestP4HalfOpenLeaseRenewalAndGatewayTakeoverE2E(t *testing.T) {
 		t,
 		h,
 		h.gateways[0],
-		`unio_gateway_request_admission_operation_total{operation="renew",result="renewed"}`,
+		`unio_gateway_request_admission_endpoint_total{endpoint="renew",result="renewed"}`,
 		3,
 		2*time.Second,
 	)
@@ -278,12 +278,12 @@ func openChannelBreaker(
 	}
 	h.upstream.setFailure(false)
 	channel := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeChannel, h.seed.openAIChannelID)
-	endpoint := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeEndpoint, h.seed.endpointID)
+	origin := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeOrigin, h.seed.originID)
 	if channel.State != breakerstore.StateOpen {
 		t.Fatalf("three attributable failures did not open Channel: %+v", channel)
 	}
-	if endpoint.State != breakerstore.StateClosed {
-		t.Fatalf("single-Channel HTTP 500 evidence unexpectedly opened Endpoint: %+v", endpoint)
+	if origin.State != breakerstore.StateClosed {
+		t.Fatalf("single-Channel HTTP 500 evidence unexpectedly opened Origin: %+v", origin)
 	}
 	return channel
 }
@@ -421,7 +421,7 @@ func assertCurrentChannelHalfOpenPermit(t *testing.T, h *faultHarness, permit ma
 	if permit["status"] != "active" ||
 		permit["channel_id"] != formatID(h.seed.openAIChannelID) ||
 		permit["channel_half_open_probe"] != "1" ||
-		permit["endpoint_half_open_probe"] != "0" ||
+		permit["origin_half_open_probe"] != "0" ||
 		redisInt64Field(t, permit, "permit_ttl_ms") != halfOpenPermitTTLMs ||
 		redisInt64Field(t, permit, "renew_ms") != halfOpenPermitRenewMs ||
 		redisInt64Field(t, permit, "terminal_ttl_ms") != halfOpenTerminalTTLMs {

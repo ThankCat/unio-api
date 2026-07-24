@@ -1,4 +1,4 @@
-package providerendpoint_test
+package providerorigin_test
 
 import (
 	"context"
@@ -14,11 +14,11 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/provider"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/providerendpoint"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/providerorigin"
 )
 
-// TestUpdateStatusFenceIntegration 端到端验证 status 围栏热更新：service → EndpointFencePublisher →
-// Redis fence commit + provider_endpoints.status/status_revision +1。
+// TestUpdateStatusFenceIntegration 端到端验证 status 围栏热更新：service → OriginFencePublisher →
+// Redis fence commit + provider_origins.status/status_revision +1。
 func TestUpdateStatusFenceIntegration(t *testing.T) {
 	dbURL := os.Getenv("DATABASE_URL")
 	addr := os.Getenv("REDIS_ADDR")
@@ -52,30 +52,30 @@ func TestUpdateStatusFenceIntegration(t *testing.T) {
 	})
 
 	suffix := time.Now().UnixNano()
-	var providerID, endpointID int64
+	var providerID, originID int64
 	if err := pool.QueryRow(ctx, `INSERT INTO providers (slug,name,status) VALUES ($1,$2,'enabled') RETURNING id`,
 		fmt.Sprintf("epstatus-prov-%d", suffix), "p").Scan(&providerID); err != nil {
 		t.Fatalf("seed provider: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO provider_endpoints (provider_id,name,base_url,status) VALUES ($1,$2,$3,'enabled') RETURNING id`,
-		providerID, "ep", fmt.Sprintf("https://epstatus-%d.example.test", suffix)).Scan(&endpointID); err != nil {
-		t.Fatalf("seed endpoint: %v", err)
+	if err := pool.QueryRow(ctx, `INSERT INTO provider_origins (provider_id,name,base_url,status) VALUES ($1,$2,$3,'enabled') RETURNING id`,
+		providerID, "ep", fmt.Sprintf("https://epstatus-%d.example.test", suffix)).Scan(&originID); err != nil {
+		t.Fatalf("seed origin: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM endpoint_routing_operations WHERE endpoint_id=$1`, endpointID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM provider_endpoints WHERE id=$1`, endpointID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM origin_routing_operations WHERE origin_id=$1`, originID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM provider_origins WHERE id=$1`, originID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM providers WHERE id=$1`, providerID)
 	})
 
 	store := breakerstore.NewStore(rc, ns)
-	if _, err := store.InitEndpointControl(ctx, endpointID, 1, 1, "enabled"); err != nil {
-		t.Fatalf("init endpoint control: %v", err)
+	if _, err := store.InitOriginControl(ctx, originID, 1, 1, "enabled"); err != nil {
+		t.Fatalf("init origin control: %v", err)
 	}
 
-	fencer := providerendpoint.NewEndpointFencer(runtimecontrol.NewEndpointFencePublisher(pool), store)
-	svc := providerendpoint.NewService(sqlc.New(pool), store).WithFencer(fencer)
+	fencer := providerorigin.NewOriginFencer(runtimecontrol.NewOriginFencePublisher(pool), store)
+	svc := providerorigin.NewService(sqlc.New(pool), store).WithFencer(fencer)
 
-	ep, err := svc.UpdateStatus(ctx, endpointID, "disabled")
+	ep, err := svc.UpdateStatus(ctx, originID, "disabled")
 	if err != nil {
 		t.Fatalf("update status: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestUpdateStatusFenceIntegration(t *testing.T) {
 	}
 
 	// 同值幂等：再置 disabled 不推进 revision。
-	ep2, err := svc.UpdateStatus(ctx, endpointID, "disabled")
+	ep2, err := svc.UpdateStatus(ctx, originID, "disabled")
 	if err != nil {
 		t.Fatalf("idempotent update: %v", err)
 	}
@@ -101,9 +101,9 @@ type failFirstCombinedCommitStore struct {
 	fail bool
 }
 
-func (s *failFirstCombinedCommitStore) CommitEndpointRoutingChange(
+func (s *failFirstCombinedCommitStore) CommitOriginRoutingChange(
 	ctx context.Context,
-	endpointID int64,
+	originID int64,
 	token string,
 	payload string,
 ) (breakerstore.FenceResult, error) {
@@ -111,26 +111,26 @@ func (s *failFirstCombinedCommitStore) CommitEndpointRoutingChange(
 		s.fail = false
 		return "", breakerstore.ErrStoreUnavailable
 	}
-	return s.Store.CommitEndpointRoutingChange(ctx, endpointID, token, payload)
+	return s.Store.CommitOriginRoutingChange(ctx, originID, token, payload)
 }
 
-func TestCombinedFenceRecoversDBCommittedOperationIntegration(t *testing.T) {
+func TestCombinedFenceRecoversDBCommittedEndpointIntegration(t *testing.T) {
 	pool, store := setupFenceIntegration(t, "combined-recovery")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	providerID, endpointIDs := seedFenceProvider(t, ctx, pool, "enabled", "enabled")
-	endpointID := endpointIDs[0]
+	providerID, originIDs := seedFenceProvider(t, ctx, pool, "enabled", "enabled")
+	originID := originIDs[0]
 	t.Cleanup(func() { cleanupFenceProvider(pool, providerID) })
-	if _, err := store.InitEndpointControl(ctx, endpointID, 1, 1, "enabled"); err != nil {
-		t.Fatalf("init endpoint control: %v", err)
+	if _, err := store.InitOriginControl(ctx, originID, 1, 1, "enabled"); err != nil {
+		t.Fatalf("init origin control: %v", err)
 	}
 
 	failing := &failFirstCombinedCommitStore{Store: store, fail: true}
-	fencer := providerendpoint.NewEndpointFencer(runtimecontrol.NewEndpointFencePublisher(pool), failing)
-	svc := providerendpoint.NewService(sqlc.New(pool), store).WithFencer(fencer).WithTransactionalDB(pool)
+	fencer := providerorigin.NewOriginFencer(runtimecontrol.NewOriginFencePublisher(pool), failing)
+	svc := providerorigin.NewService(sqlc.New(pool), store).WithFencer(fencer).WithTransactionalDB(pool)
 	nextBaseURL := fmt.Sprintf("https://combined-next-%d.example.test", time.Now().UnixNano())
-	updated, err := svc.UpdateRouting(ctx, endpointID, nextBaseURL, "disabled")
+	updated, err := svc.UpdateRouting(ctx, originID, nextBaseURL, "disabled")
 	if err != nil {
 		t.Fatalf("combined update: %v", err)
 	}
@@ -140,37 +140,37 @@ func TestCombinedFenceRecoversDBCommittedOperationIntegration(t *testing.T) {
 	}
 
 	var token, state string
-	if err := pool.QueryRow(ctx, `SELECT token, state FROM endpoint_routing_operations
-		WHERE endpoint_id=$1 ORDER BY id DESC LIMIT 1`, endpointID).Scan(&token, &state); err != nil {
-		t.Fatalf("read combined operation: %v", err)
+	if err := pool.QueryRow(ctx, `SELECT token, state FROM origin_routing_operations
+		WHERE origin_id=$1 ORDER BY id DESC LIMIT 1`, originID).Scan(&token, &state); err != nil {
+		t.Fatalf("read combined endpoint: %v", err)
 	}
 	if token == "" || state != "db_committed" {
-		t.Fatalf("operation state=%q token=%q, want db_committed", state, token)
+		t.Fatalf("endpoint state=%q token=%q, want db_committed", state, token)
 	}
-	pending, err := store.Snapshot(ctx, breakerstore.ScopeEndpoint, endpointID)
+	pending, err := store.Snapshot(ctx, breakerstore.ScopeOrigin, originID)
 	if err != nil {
-		t.Fatalf("read pending endpoint: %v", err)
+		t.Fatalf("read pending origin: %v", err)
 	}
 	if pending.PendingBaseURLRevision != 2 || pending.PendingStatusRevision != 2 {
 		t.Fatalf("combined pending fence was lost: %+v", pending)
 	}
 
-	if handled, err := runtimecontrol.NewEndpointRoutingReconciler(pool, store).Reconcile(ctx); err != nil || handled != 1 {
-		t.Fatalf("reconcile combined operation: handled=%d err=%v", handled, err)
+	if handled, err := runtimecontrol.NewOriginRoutingReconciler(pool, store).Reconcile(ctx); err != nil || handled != 1 {
+		t.Fatalf("reconcile combined endpoint: handled=%d err=%v", handled, err)
 	}
-	active, err := store.Snapshot(ctx, breakerstore.ScopeEndpoint, endpointID)
+	active, err := store.Snapshot(ctx, breakerstore.ScopeOrigin, originID)
 	if err != nil {
-		t.Fatalf("read recovered endpoint: %v", err)
+		t.Fatalf("read recovered origin: %v", err)
 	}
 	if active.BaseURLRevision != 2 || active.StatusRevision != 2 || active.EffectiveStatus != "disabled" ||
 		active.PendingBaseURLRevision != 0 || active.PendingStatusRevision != 0 {
-		t.Fatalf("combined operation was not recovered: %+v", active)
+		t.Fatalf("combined endpoint was not recovered: %+v", active)
 	}
-	if err := pool.QueryRow(ctx, `SELECT state FROM endpoint_routing_operations WHERE token=$1`, token).Scan(&state); err != nil {
-		t.Fatalf("read recovered operation: %v", err)
+	if err := pool.QueryRow(ctx, `SELECT state FROM origin_routing_operations WHERE token=$1`, token).Scan(&state); err != nil {
+		t.Fatalf("read recovered endpoint: %v", err)
 	}
 	if state != "committed" {
-		t.Fatalf("recovered operation state=%q, want committed", state)
+		t.Fatalf("recovered endpoint state=%q, want committed", state)
 	}
 }
 
@@ -179,17 +179,17 @@ func TestProviderStatusBatchFenceIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	providerID, endpointIDs := seedFenceProvider(t, ctx, pool, "enabled", "enabled", "enabled")
+	providerID, originIDs := seedFenceProvider(t, ctx, pool, "enabled", "enabled", "enabled")
 	t.Cleanup(func() { cleanupFenceProvider(pool, providerID) })
-	for _, endpointID := range endpointIDs {
-		if _, err := store.InitEndpointControl(ctx, endpointID, 1, 1, "enabled"); err != nil {
-			t.Fatalf("init endpoint %d: %v", endpointID, err)
+	for _, originID := range originIDs {
+		if _, err := store.InitOriginControl(ctx, originID, 1, 1, "enabled"); err != nil {
+			t.Fatalf("init origin %d: %v", originID, err)
 		}
 	}
 
 	queries := sqlc.New(pool)
 	svc := provider.NewService(queries).WithStatusFencer(
-		provider.NewStatusFencer(runtimecontrol.NewEndpointFencePublisher(pool), store),
+		provider.NewStatusFencer(runtimecontrol.NewOriginFencePublisher(pool), store),
 		func(context.Context) int { return 16 },
 	)
 	updated, err := svc.Update(ctx, provider.UpdateInput{ID: providerID, Name: "provider-renamed", Status: "disabled"})
@@ -199,28 +199,28 @@ func TestProviderStatusBatchFenceIntegration(t *testing.T) {
 	if updated.Status != "disabled" || updated.Name != "provider-renamed" || updated.RuntimeSyncPending {
 		t.Fatalf("unexpected provider result: %+v", updated)
 	}
-	for _, endpointID := range endpointIDs {
+	for _, originID := range originIDs {
 		var status string
 		var revision int64
-		if err := pool.QueryRow(ctx, `SELECT status, status_revision FROM provider_endpoints WHERE id=$1`, endpointID).
+		if err := pool.QueryRow(ctx, `SELECT status, status_revision FROM provider_origins WHERE id=$1`, originID).
 			Scan(&status, &revision); err != nil {
-			t.Fatalf("read endpoint %d: %v", endpointID, err)
+			t.Fatalf("read origin %d: %v", originID, err)
 		}
 		if status != "enabled" || revision != 2 {
-			t.Fatalf("endpoint %d business fact=%s/%d, want enabled/2", endpointID, status, revision)
+			t.Fatalf("origin %d business fact=%s/%d, want enabled/2", originID, status, revision)
 		}
-		snapshot, err := store.Snapshot(ctx, breakerstore.ScopeEndpoint, endpointID)
+		snapshot, err := store.Snapshot(ctx, breakerstore.ScopeOrigin, originID)
 		if err != nil {
-			t.Fatalf("snapshot endpoint %d: %v", endpointID, err)
+			t.Fatalf("snapshot origin %d: %v", originID, err)
 		}
 		if snapshot.StatusRevision != 2 || snapshot.EffectiveStatus != "disabled" || snapshot.PendingStatusRevision != 0 {
-			t.Fatalf("endpoint %d runtime was not batch committed: %+v", endpointID, snapshot)
+			t.Fatalf("origin %d runtime was not batch committed: %+v", originID, snapshot)
 		}
 	}
 	var state string
-	if err := pool.QueryRow(ctx, `SELECT state FROM endpoint_routing_operations
+	if err := pool.QueryRow(ctx, `SELECT state FROM origin_routing_operations
 		WHERE provider_id=$1 AND kind='provider_status_batch' ORDER BY id DESC LIMIT 1`, providerID).Scan(&state); err != nil {
-		t.Fatalf("read provider batch operation: %v", err)
+		t.Fatalf("read provider batch endpoint: %v", err)
 	}
 	if state != "committed" {
 		t.Fatalf("provider batch state=%q, want committed", state)
@@ -232,17 +232,17 @@ func TestProviderStatusBatchConflictHasNoPartialMutationIntegration(t *testing.T
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	providerID, endpointIDs := seedFenceProvider(t, ctx, pool, "enabled", "enabled", "enabled")
+	providerID, originIDs := seedFenceProvider(t, ctx, pool, "enabled", "enabled", "enabled")
 	t.Cleanup(func() { cleanupFenceProvider(pool, providerID) })
-	if _, err := store.InitEndpointControl(ctx, endpointIDs[0], 1, 1, "enabled"); err != nil {
+	if _, err := store.InitOriginControl(ctx, originIDs[0], 1, 1, "enabled"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.InitEndpointControl(ctx, endpointIDs[1], 1, 2, "enabled"); err != nil {
+	if _, err := store.InitOriginControl(ctx, originIDs[1], 1, 2, "enabled"); err != nil {
 		t.Fatal(err)
 	}
 
 	svc := provider.NewService(sqlc.New(pool)).WithStatusFencer(
-		provider.NewStatusFencer(runtimecontrol.NewEndpointFencePublisher(pool), store),
+		provider.NewStatusFencer(runtimecontrol.NewOriginFencePublisher(pool), store),
 		func(context.Context) int { return 16 },
 	)
 	if _, err := svc.Update(ctx, provider.UpdateInput{ID: providerID, Name: "unchanged", Status: "disabled"}); err == nil {
@@ -255,15 +255,15 @@ func TestProviderStatusBatchConflictHasNoPartialMutationIntegration(t *testing.T
 	if providerStatus != "enabled" {
 		t.Fatalf("provider partially changed to %q", providerStatus)
 	}
-	for i, endpointID := range endpointIDs {
+	for i, originID := range originIDs {
 		var revision int64
-		if err := pool.QueryRow(ctx, `SELECT status_revision FROM provider_endpoints WHERE id=$1`, endpointID).Scan(&revision); err != nil {
+		if err := pool.QueryRow(ctx, `SELECT status_revision FROM provider_origins WHERE id=$1`, originID).Scan(&revision); err != nil {
 			t.Fatal(err)
 		}
 		if revision != 1 {
-			t.Fatalf("endpoint %d database revision changed to %d", endpointID, revision)
+			t.Fatalf("origin %d database revision changed to %d", originID, revision)
 		}
-		snapshot, err := store.Snapshot(ctx, breakerstore.ScopeEndpoint, endpointID)
+		snapshot, err := store.Snapshot(ctx, breakerstore.ScopeOrigin, originID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -272,7 +272,7 @@ func TestProviderStatusBatchConflictHasNoPartialMutationIntegration(t *testing.T
 			wantRevision = 2
 		}
 		if snapshot.StatusRevision != wantRevision || snapshot.PendingStatusRevision != 0 || snapshot.StatusRevisionState != "active" {
-			t.Fatalf("endpoint %d runtime partially changed: %+v", endpointID, snapshot)
+			t.Fatalf("origin %d runtime partially changed: %+v", originID, snapshot)
 		}
 	}
 }
@@ -321,7 +321,7 @@ func seedFenceProvider(
 	ctx context.Context,
 	pool *pgxpool.Pool,
 	providerStatus string,
-	endpointStatuses ...string,
+	originStatuses ...string,
 ) (int64, []int64) {
 	t.Helper()
 	suffix := time.Now().UnixNano()
@@ -330,22 +330,22 @@ func seedFenceProvider(
 		fmt.Sprintf("fence-provider-%d", suffix), "unchanged", providerStatus).Scan(&providerID); err != nil {
 		t.Fatalf("seed provider: %v", err)
 	}
-	endpointIDs := make([]int64, 0, len(endpointStatuses))
-	for i, status := range endpointStatuses {
-		var endpointID int64
-		if err := pool.QueryRow(ctx, `INSERT INTO provider_endpoints (provider_id,name,base_url,status)
-			VALUES ($1,$2,$3,$4) RETURNING id`, providerID, fmt.Sprintf("endpoint-%d", i),
-			fmt.Sprintf("https://fence-%d-%d.example.test", suffix, i), status).Scan(&endpointID); err != nil {
-			t.Fatalf("seed endpoint %d: %v", i, err)
+	originIDs := make([]int64, 0, len(originStatuses))
+	for i, status := range originStatuses {
+		var originID int64
+		if err := pool.QueryRow(ctx, `INSERT INTO provider_origins (provider_id,name,base_url,status)
+			VALUES ($1,$2,$3,$4) RETURNING id`, providerID, fmt.Sprintf("origin-%d", i),
+			fmt.Sprintf("https://fence-%d-%d.example.test", suffix, i), status).Scan(&originID); err != nil {
+			t.Fatalf("seed origin %d: %v", i, err)
 		}
-		endpointIDs = append(endpointIDs, endpointID)
+		originIDs = append(originIDs, originID)
 	}
-	return providerID, endpointIDs
+	return providerID, originIDs
 }
 
 func cleanupFenceProvider(pool *pgxpool.Pool, providerID int64) {
 	ctx := context.Background()
-	_, _ = pool.Exec(ctx, `DELETE FROM endpoint_routing_operations WHERE provider_id=$1`, providerID)
-	_, _ = pool.Exec(ctx, `DELETE FROM provider_endpoints WHERE provider_id=$1`, providerID)
+	_, _ = pool.Exec(ctx, `DELETE FROM origin_routing_operations WHERE provider_id=$1`, providerID)
+	_, _ = pool.Exec(ctx, `DELETE FROM provider_origins WHERE provider_id=$1`, providerID)
 	_, _ = pool.Exec(ctx, `DELETE FROM providers WHERE id=$1`, providerID)
 }

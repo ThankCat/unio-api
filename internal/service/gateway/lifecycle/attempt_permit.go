@@ -70,7 +70,7 @@ type AttemptPermitMetricsRecorder interface {
 	AddBreakerPermitActive(delta float64)
 	IncBreakerIgnoredResult(scope, reason string)
 	IncChannelConfigRevisionMismatch(operation string)
-	IncEndpointStatusRevisionMismatch(operation string)
+	IncOriginStatusRevisionMismatch(operation string)
 }
 
 // AttemptPermitManager 负责 AcquireAttempt 及 permit owner 的建立；协议 runner 不直接持有 Redis token。
@@ -121,7 +121,7 @@ func (m *AttemptPermitManager) SetChannel429CooldownPolicy(defaultCooldown, cap 
 
 type AttemptPermitAcquireParams struct {
 	Candidate            routing.ChatRouteCandidate
-	UpstreamOperation    requestlog.UpstreamOperation
+	UpstreamEndpoint    requestlog.UpstreamEndpoint
 	RequestMode          breakerstore.RequestMode
 	EstimatedInputTokens int64
 }
@@ -151,19 +151,19 @@ func (m *AttemptPermitManager) Acquire(ctx context.Context, params AttemptPermit
 		PermitID:                  m.newPermitID(),
 		IntegrityEpoch:            admissionFacts.Epoch,
 		IntegrityRevision:         admissionFacts.Revision,
-		EndpointID:                params.Candidate.ProviderEndpointID,
+		OriginID:                params.Candidate.ProviderOriginID,
 		ChannelID:                 params.Candidate.Channel.ID,
-		EndpointBaseURLRevision:   params.Candidate.ProviderEndpointBaseURLRevision,
-		EndpointStatusRevision:    params.Candidate.ProviderEndpointStatusRevision,
+		OriginBaseURLRevision:   params.Candidate.ProviderOriginBaseURLRevision,
+		OriginStatusRevision:    params.Candidate.ProviderOriginStatusRevision,
 		ChannelConfigRevision:     params.Candidate.ChannelConfigRevision,
 		ModelID:                   params.Candidate.ModelDBID,
-		UpstreamOperation:         breakerOperation(params.UpstreamOperation),
+		UpstreamEndpoint:         breakerEndpoint(params.UpstreamEndpoint),
 		RequestMode:               params.RequestMode,
 		ChannelRateRevision:       admissionFacts.ChannelRateLimits,
 		GlobalConcurrencyRevision: admissionFacts.Concurrency,
 		CircuitBreakerRevision:    routingFacts.CircuitBreaker,
 		ChannelAdmissionRevision:  params.Candidate.ChannelAdmissionLimitsRevision,
-		EnforceEndpointControl:    true,
+		EnforceOriginControl:    true,
 		EstimatedInputTokens:      params.EstimatedInputTokens,
 	}
 	if err := requestadmission.BindAttemptInput(ctx, &in); err != nil {
@@ -182,7 +182,7 @@ func (m *AttemptPermitManager) Acquire(ctx context.Context, params AttemptPermit
 		m.recordPermitOperation("acquire", string(result.Reason))
 		m.recordAcquireRevisionMismatch(result.Reason)
 		m.logger.Info("attempt permit denied",
-			zap.Int64("endpoint_id", params.Candidate.ProviderEndpointID),
+			zap.Int64("origin_id", params.Candidate.ProviderOriginID),
 			zap.Int64("channel_id", params.Candidate.Channel.ID),
 			zap.String("reason", string(result.Reason)),
 		)
@@ -227,20 +227,20 @@ func (m *AttemptPermitManager) recordAcquireRevisionMismatch(reason breakerstore
 	case breakerstore.ReasonStaleConfigRevision:
 		m.metrics.IncChannelConfigRevisionMismatch("acquire")
 	case breakerstore.ReasonStaleStatusRevision:
-		m.metrics.IncEndpointStatusRevisionMismatch("acquire")
+		m.metrics.IncOriginStatusRevisionMismatch("acquire")
 	}
 }
 
-func breakerOperation(operation requestlog.UpstreamOperation) breakerstore.UpstreamOperation {
+func breakerEndpoint(operation requestlog.UpstreamEndpoint) breakerstore.UpstreamEndpoint {
 	switch operation {
-	case requestlog.UpstreamOperationChatCompletions:
-		return breakerstore.OpChatCompletions
-	case requestlog.UpstreamOperationResponses:
-		return breakerstore.OpResponses
-	case requestlog.UpstreamOperationResponsesCompact:
-		return breakerstore.OpResponsesCompact
-	case requestlog.UpstreamOperationMessages:
-		return breakerstore.OpMessages
+	case requestlog.UpstreamEndpointChatCompletions:
+		return breakerstore.EndpointChatCompletions
+	case requestlog.UpstreamEndpointResponses:
+		return breakerstore.EndpointResponses
+	case requestlog.UpstreamEndpointResponsesCompact:
+		return breakerstore.EndpointResponsesCompact
+	case requestlog.UpstreamEndpointMessages:
+		return breakerstore.EndpointMessages
 	default:
 		return ""
 	}
@@ -250,8 +250,8 @@ func attemptAdmissionFingerprint(in breakerstore.AcquireAttemptInput) string {
 	payload := fmt.Sprintf(
 		"%s|%s|%s|%d|%d|%d|%d|%d|%d|%s|%s|%d|%d|%d|%d|%d|%d",
 		in.PermitID, in.RequestAdmissionID, in.IntegrityEpoch, in.IntegrityRevision,
-		in.EndpointID, in.ChannelID, in.EndpointBaseURLRevision, in.EndpointStatusRevision,
-		in.ChannelConfigRevision, in.UpstreamOperation, in.RequestMode, in.ModelID,
+		in.OriginID, in.ChannelID, in.OriginBaseURLRevision, in.OriginStatusRevision,
+		in.ChannelConfigRevision, in.UpstreamEndpoint, in.RequestMode, in.ModelID,
 		in.ChannelRateRevision, in.GlobalConcurrencyRevision, in.CircuitBreakerRevision,
 		in.ChannelAdmissionRevision, in.EstimatedInputTokens,
 	)
@@ -454,8 +454,8 @@ func (o *AttemptPermitOwner) recordRuntimeFeedback(ctx context.Context, upstream
 			o.permit.ChannelID,
 			o.permit.ModelID,
 			o.permit.ChannelConfigRevision,
-			o.permit.EndpointBaseURLRevision,
-			o.permit.EndpointStatusRevision,
+			o.permit.OriginBaseURLRevision,
+			o.permit.OriginStatusRevision,
 		)
 		cancel()
 	default:
@@ -552,14 +552,14 @@ func (o *AttemptPermitOwner) recordFinishResult() {
 		return
 	}
 	result := "mixed"
-	if o.terminalResult.EndpointDisposition == o.terminalResult.ChannelDisposition {
-		result = string(o.terminalResult.EndpointDisposition)
-	} else if o.terminalResult.EndpointDisposition == breakerstore.DispositionApplied ||
+	if o.terminalResult.OriginDisposition == o.terminalResult.ChannelDisposition {
+		result = string(o.terminalResult.OriginDisposition)
+	} else if o.terminalResult.OriginDisposition == breakerstore.DispositionApplied ||
 		o.terminalResult.ChannelDisposition == breakerstore.DispositionApplied {
 		result = "applied"
 	}
 	o.metrics.IncBreakerPermitOperation("finish", result)
-	o.recordFinishDisposition("endpoint", o.terminalResult.EndpointDisposition)
+	o.recordFinishDisposition("origin", o.terminalResult.OriginDisposition)
 	o.recordFinishDisposition("channel", o.terminalResult.ChannelDisposition)
 }
 
@@ -572,10 +572,10 @@ func (o *AttemptPermitOwner) recordFinishDisposition(scope string, disposition b
 	case breakerstore.DispositionStaleConfigRev:
 		o.metrics.IncChannelConfigRevisionMismatch("finish")
 	case breakerstore.DispositionStaleStatusRev:
-		o.metrics.IncEndpointStatusRevisionMismatch("finish")
+		o.metrics.IncOriginStatusRevisionMismatch("finish")
 	}
 	o.logger.Warn("attempt permit result ignored",
-		zap.Int64("endpoint_id", o.permit.EndpointID),
+		zap.Int64("origin_id", o.permit.OriginID),
 		zap.Int64("channel_id", o.permit.ChannelID),
 		zap.String("scope", scope),
 		zap.String("disposition", string(disposition)),
@@ -637,11 +637,11 @@ func (o *AttemptPermitOwner) operationContext(ctx context.Context) (context.Cont
 // nonStreamFinishOutcome 使用稳定 adapter 分类生成保守 breaker attribution。
 func nonStreamFinishOutcome(success AttemptSuccess, timing AttemptTimingFacts, err error) breakerstore.FinishOutcome {
 	out := breakerstore.FinishOutcome{
-		EndpointOutcome: breakerstore.OutcomeIgnored,
+		OriginOutcome: breakerstore.OutcomeIgnored,
 		ChannelOutcome:  breakerstore.OutcomeIgnored,
 	}
 	if err == nil {
-		out.EndpointOutcome = breakerstore.OutcomeEligibleSuccess
+		out.OriginOutcome = breakerstore.OutcomeEligibleSuccess
 		out.ChannelOutcome = breakerstore.OutcomeEligibleSuccess
 		actual := billableTPMTokens(success.Facts.Usage)
 		out.ChannelTPMActual = &actual
@@ -650,13 +650,13 @@ func nonStreamFinishOutcome(success AttemptSuccess, timing AttemptTimingFacts, e
 	if nonStreamChannelFailureEligible(err) {
 		out.ChannelOutcome = breakerstore.OutcomeEligibleFailure
 	}
-	applyEndpointFailureAttribution(&out, timing, false, err)
+	applyOriginFailureAttribution(&out, timing, false, err)
 	return out
 }
 
-// applyEndpointFailureAttribution 把无需聚合的 Endpoint 故障直接归因，并把三类歧义故障交给
+// applyOriginFailureAttribution 把无需聚合的 Origin 故障直接归因，并把三类歧义故障交给
 // BreakerStore.Finish 在 Redis 内按 distinct Channel + model 证据门槛原子判定。
-func applyEndpointFailureAttribution(
+func applyOriginFailureAttribution(
 	out *breakerstore.FinishOutcome,
 	timing AttemptTimingFacts,
 	stream bool,
@@ -679,15 +679,15 @@ func applyEndpointFailureAttribution(
 	if code == failure.CodeAdapterReadStreamFailed || code == failure.CodeAdapterStreamIdleTimeout {
 		if category == adapter.UpstreamErrorTimeout || (!categoryOK && timeoutError(err)) {
 			if stream && timing.FirstTokenMs() == nil {
-				out.EndpointEvidence = breakerstore.EndpointEvidenceFirstTokenTimeout
+				out.OriginEvidence = breakerstore.OriginEvidenceFirstTokenTimeout
 			} else {
-				out.EndpointEvidence = breakerstore.EndpointEvidenceBodyReadTimeout
+				out.OriginEvidence = breakerstore.OriginEvidenceBodyReadTimeout
 			}
 			return
 		}
 		if category == adapter.UpstreamErrorServer || (!categoryOK && code == failure.CodeAdapterReadStreamFailed) {
-			// EOF、连接重置和代理截断属于 Endpoint 连接故障，不需要跨样本聚合。
-			out.EndpointOutcome = breakerstore.OutcomeEligibleFailure
+			// EOF、连接重置和代理截断属于 Origin 连接故障，不需要跨样本聚合。
+			out.OriginOutcome = breakerstore.OutcomeEligibleFailure
 		}
 		return
 	}
@@ -695,17 +695,17 @@ func applyEndpointFailureAttribution(
 	if category == adapter.UpstreamErrorServer {
 		switch statusCode {
 		case 500:
-			out.EndpointEvidence = breakerstore.EndpointEvidenceHTTP500
+			out.OriginEvidence = breakerstore.OriginEvidenceHTTP500
 		case 502, 503, 504:
-			out.EndpointOutcome = breakerstore.OutcomeEligibleFailure
+			out.OriginOutcome = breakerstore.OutcomeEligibleFailure
 		case 0:
-			out.EndpointOutcome = breakerstore.OutcomeEligibleFailure
+			out.OriginOutcome = breakerstore.OutcomeEligibleFailure
 		}
 		return
 	}
 	if category == adapter.UpstreamErrorTimeout && statusCode == 0 {
-		// 发送/握手/响应头阶段超时尚未进入 body 读取，直接归因到 Endpoint。
-		out.EndpointOutcome = breakerstore.OutcomeEligibleFailure
+		// 发送/握手/响应头阶段超时尚未进入 body 读取，直接归因到 Origin。
+		out.OriginOutcome = breakerstore.OutcomeEligibleFailure
 	}
 }
 
@@ -764,7 +764,7 @@ func (r *AttemptRunner) invokeNonStreamAttempt(
 					r.lifecycle.RecordAttemptBreakerDisposition(
 						ctx,
 						attempt,
-						string(finishResult.EndpointDisposition),
+						string(finishResult.OriginDisposition),
 						string(finishResult.ChannelDisposition),
 					)
 					r.logRouting(ctx, "attempt runtime feedback failed",
@@ -791,13 +791,13 @@ func (r *AttemptRunner) invokeNonStreamAttempt(
 				r.lifecycle.RecordAttemptBreakerDisposition(
 					ctx,
 					attempt,
-					string(finishResult.EndpointDisposition),
+					string(finishResult.OriginDisposition),
 					string(finishResult.ChannelDisposition),
 				)
 			}
 		}
 	}
-	r.lifecycle.RecordAttemptRuntimeMetrics(candidate, attempt.UpstreamOperation, false, facts, finishOutcome, outcomeErr)
+	r.lifecycle.RecordAttemptRuntimeMetrics(candidate, attempt.UpstreamEndpoint, false, facts, finishOutcome, outcomeErr)
 	if panicValue != nil {
 		panic(panicValue)
 	}

@@ -2,7 +2,7 @@
 //
 // 它与 openai 协议族（internal/core/adapter/openai）平行：维护各自的内部请求/响应 DTO、
 // usage 形状、facts 映射与 tokenizer 契约，不共享公开 DTO，也不把两套 wire framing 揉成一套。
-// 具体 provider（如 DeepSeek 的 Anthropic endpoint）在 internal/core/adapter/anthropic/<provider>
+// 具体 provider（如 DeepSeek 的 Anthropic origin）在 internal/core/adapter/anthropic/<provider>
 // 下实现差异。协议无关的 UpstreamMetadata、UpstreamError、ResponseFacts、usage.Facts 仍复用
 // adapter 根包与 usage 包。
 package messages

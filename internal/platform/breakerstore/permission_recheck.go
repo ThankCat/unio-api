@@ -21,8 +21,8 @@ type PermissionRecheckTask struct {
 	ChannelID               int64
 	ModelID                 int64
 	ChannelConfigRevision   int64
-	EndpointBaseURLRevision int64
-	EndpointStatusRevision  int64
+	OriginBaseURLRevision int64
+	OriginStatusRevision  int64
 	Attempt                 int64
 	ClaimToken              string
 }
@@ -77,8 +77,8 @@ for i = 1, #entries, 2 do
       local channel_id = redis.call('HGET', permission_key, 'channel_id') or ''
       local model_id = redis.call('HGET', permission_key, 'model_id') or ''
       local config_revision = redis.call('HGET', permission_key, 'channel_config_revision') or ''
-      local base_url_revision = redis.call('HGET', permission_key, 'endpoint_base_url_revision') or ''
-      local status_revision = redis.call('HGET', permission_key, 'endpoint_status_revision') or ''
+      local base_url_revision = redis.call('HGET', permission_key, 'origin_base_url_revision') or ''
+      local status_revision = redis.call('HGET', permission_key, 'origin_status_revision') or ''
       if tonumber(channel_id) == nil or tonumber(channel_id) <= 0 or
           tonumber(model_id) == nil or tonumber(model_id) <= 0 or
           tonumber(config_revision) == nil or tonumber(config_revision) <= 0 or
@@ -123,8 +123,8 @@ local same_claim = redis.call('HGET', permission_key, 'recheck_state') == 'check
   redis.call('HGET', permission_key, 'channel_id') == ARGV[3] and
   redis.call('HGET', permission_key, 'model_id') == ARGV[4] and
   redis.call('HGET', permission_key, 'channel_config_revision') == ARGV[5] and
-  redis.call('HGET', permission_key, 'endpoint_base_url_revision') == ARGV[6] and
-  redis.call('HGET', permission_key, 'endpoint_status_revision') == ARGV[7]
+  redis.call('HGET', permission_key, 'origin_base_url_revision') == ARGV[6] and
+  redis.call('HGET', permission_key, 'origin_status_revision') == ARGV[7]
 if not same_claim then return {'superseded'} end
 
 local now = now_ms()
@@ -205,7 +205,7 @@ func (s *Store) ClaimPermissionRecheck(ctx context.Context, workerID string, lea
 		}
 		return &PermissionRecheckTask{
 			ChannelID: values[0], ModelID: values[1], ChannelConfigRevision: values[2],
-			EndpointBaseURLRevision: values[3], EndpointStatusRevision: values[4],
+			OriginBaseURLRevision: values[3], OriginStatusRevision: values[4],
 			Attempt: values[5], ClaimToken: token,
 		}, nil
 	default:
@@ -243,8 +243,8 @@ func (s *Store) CompletePermissionRecheck(
 		[]string{permissionKey, s.keys.permissionRecheckQueue()},
 		string(outcome), task.ClaimToken,
 		strconv.FormatInt(task.ChannelID, 10), strconv.FormatInt(task.ModelID, 10),
-		strconv.FormatInt(task.ChannelConfigRevision, 10), strconv.FormatInt(task.EndpointBaseURLRevision, 10),
-		strconv.FormatInt(task.EndpointStatusRevision, 10), strconv.FormatInt(retryAfter.Milliseconds(), 10),
+		strconv.FormatInt(task.ChannelConfigRevision, 10), strconv.FormatInt(task.OriginBaseURLRevision, 10),
+		strconv.FormatInt(task.OriginStatusRevision, 10), strconv.FormatInt(retryAfter.Milliseconds(), 10),
 	).Result()
 	if err != nil {
 		return "", storeUnavailable(err, "breakerstore complete permission recheck")
@@ -266,7 +266,7 @@ func (s *Store) CompletePermissionRecheck(
 
 func validatePermissionRecheckTask(task PermissionRecheckTask) error {
 	if task.ChannelID <= 0 || task.ModelID <= 0 || task.ChannelConfigRevision <= 0 ||
-		task.EndpointBaseURLRevision <= 0 || task.EndpointStatusRevision <= 0 || task.Attempt <= 0 || task.ClaimToken == "" {
+		task.OriginBaseURLRevision <= 0 || task.OriginStatusRevision <= 0 || task.Attempt <= 0 || task.ClaimToken == "" {
 		return configInvalid("permission recheck task is invalid")
 	}
 	return nil

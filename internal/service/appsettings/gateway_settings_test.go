@@ -152,7 +152,7 @@ func TestCircuitBreakerSettingsDefaultMatchesP4Decision(t *testing.T) {
 	if got.AttemptPermitTTL != 30*time.Second || got.AttemptPermitRenewInterval != 10*time.Second || got.AttemptPermitTerminalTTL != 5*time.Minute {
 		t.Fatalf("permit defaults mismatch: %+v", got)
 	}
-	if got.EndpointStatusBatchMax != 256 || !reflect.DeepEqual(got.OpenDurations, []time.Duration{15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute}) {
+	if got.OriginStatusBatchMax != 256 || !reflect.DeepEqual(got.OpenDurations, []time.Duration{15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute}) {
 		t.Fatalf("breaker backoff defaults mismatch: %+v", got)
 	}
 }
@@ -176,10 +176,10 @@ func TestCircuitBreakerSettingsRejectsInvalid(t *testing.T) {
 		"consecutive zero":   func(s *CircuitBreakerSettings) { s.ConsecutiveFailures = 0 },
 		"renew too slow":     func(s *CircuitBreakerSettings) { s.AttemptPermitRenewInterval = 11 * time.Second },
 		"terminal too short": func(s *CircuitBreakerSettings) { s.AttemptPermitTerminalTTL = time.Second },
-		"batch too large":    func(s *CircuitBreakerSettings) { s.EndpointStatusBatchMax = 1025 },
+		"batch too large":    func(s *CircuitBreakerSettings) { s.OriginStatusBatchMax = 1025 },
 		"no open durations":  func(s *CircuitBreakerSettings) { s.OpenDurations = nil },
 		"descending backoff": func(s *CircuitBreakerSettings) { s.OpenDurations = []time.Duration{time.Minute, time.Second} },
-		"distinct too low":   func(s *CircuitBreakerSettings) { s.EndpointAmbiguousDistinctChannels = 1 },
+		"distinct too low":   func(s *CircuitBreakerSettings) { s.OriginAmbiguousDistinctChannels = 1 },
 	}
 	for name, mutate := range cases {
 		settings := DefaultCircuitBreakerSettings()

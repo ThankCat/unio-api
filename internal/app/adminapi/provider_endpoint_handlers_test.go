@@ -12,41 +12,41 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/providerendpoint"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/providerorigin"
 )
 
-type fakeProviderEndpointService struct {
-	createOut providerendpoint.ProviderEndpoint
+type fakeProviderOriginService struct {
+	createOut providerorigin.ProviderOrigin
 	createErr error
-	createIn  providerendpoint.CreateInput
-	getOut    providerendpoint.ProviderEndpoint
-	listOut   []providerendpoint.ProviderEndpoint
+	createIn  providerorigin.CreateInput
+	getOut    providerorigin.ProviderOrigin
+	listOut   []providerorigin.ProviderOrigin
 }
 
-func (s *fakeProviderEndpointService) List(context.Context, providerendpoint.ListParams) (providerendpoint.ListResult, error) {
-	return providerendpoint.ListResult{Items: s.listOut, Total: int64(len(s.listOut))}, nil
+func (s *fakeProviderOriginService) List(context.Context, providerorigin.ListParams) (providerorigin.ListResult, error) {
+	return providerorigin.ListResult{Items: s.listOut, Total: int64(len(s.listOut))}, nil
 }
-func (s *fakeProviderEndpointService) Get(context.Context, int64) (providerendpoint.ProviderEndpoint, error) {
+func (s *fakeProviderOriginService) Get(context.Context, int64) (providerorigin.ProviderOrigin, error) {
 	return s.getOut, nil
 }
-func (s *fakeProviderEndpointService) Create(_ context.Context, in providerendpoint.CreateInput) (providerendpoint.ProviderEndpoint, error) {
+func (s *fakeProviderOriginService) Create(_ context.Context, in providerorigin.CreateInput) (providerorigin.ProviderOrigin, error) {
 	s.createIn = in
 	return s.createOut, s.createErr
 }
-func (s *fakeProviderEndpointService) UpdateName(context.Context, int64, string) (providerendpoint.ProviderEndpoint, error) {
+func (s *fakeProviderOriginService) UpdateName(context.Context, int64, string) (providerorigin.ProviderOrigin, error) {
 	return s.getOut, nil
 }
-func (s *fakeProviderEndpointService) UpdateStatus(context.Context, int64, string) (providerendpoint.ProviderEndpoint, error) {
+func (s *fakeProviderOriginService) UpdateStatus(context.Context, int64, string) (providerorigin.ProviderOrigin, error) {
 	return s.getOut, nil
 }
-func (s *fakeProviderEndpointService) UpdateBaseURL(context.Context, int64, string) (providerendpoint.ProviderEndpoint, error) {
+func (s *fakeProviderOriginService) UpdateBaseURL(context.Context, int64, string) (providerorigin.ProviderOrigin, error) {
 	return s.getOut, nil
 }
-func (s *fakeProviderEndpointService) UpdateRouting(context.Context, int64, string, string) (providerendpoint.ProviderEndpoint, error) {
+func (s *fakeProviderOriginService) UpdateRouting(context.Context, int64, string, string) (providerorigin.ProviderOrigin, error) {
 	return s.getOut, nil
 }
 
-func newProviderEndpointRouter(t *testing.T, svc adminapi.RouterDeps) http.Handler {
+func newProviderOriginRouter(t *testing.T, svc adminapi.RouterDeps) http.Handler {
 	t.Helper()
 	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
 	if err != nil {
@@ -57,14 +57,14 @@ func newProviderEndpointRouter(t *testing.T, svc adminapi.RouterDeps) http.Handl
 	return adminapi.NewRouter(svc)
 }
 
-func TestCreateProviderEndpointReturns201(t *testing.T) {
-	fake := &fakeProviderEndpointService{createOut: providerendpoint.ProviderEndpoint{
+func TestCreateProviderOriginReturns201(t *testing.T) {
+	fake := &fakeProviderOriginService{createOut: providerorigin.ProviderOrigin{
 		ID: 5, ProviderID: 1, Name: "StarAPI", BaseURL: "https://open.codex521.cc",
 		BaseURLRevision: 1, Status: "enabled", StatusRevision: 1,
 	}}
-	handler := newProviderEndpointRouter(t, adminapi.RouterDeps{ProviderEndpointService: fake})
+	handler := newProviderOriginRouter(t, adminapi.RouterDeps{ProviderOriginService: fake})
 
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/provider-endpoints",
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/provider-origins",
 		`{"provider_id":1,"name":"StarAPI","base_url":"https://Open.Codex521.cc/","status":"enabled"}`, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
@@ -87,22 +87,22 @@ func TestCreateProviderEndpointReturns201(t *testing.T) {
 	}
 }
 
-func TestCreateProviderEndpointRequiresAuth(t *testing.T) {
-	handler := newProviderEndpointRouter(t, adminapi.RouterDeps{ProviderEndpointService: &fakeProviderEndpointService{}})
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/provider-endpoints", `{"provider_id":1}`, false)
+func TestCreateProviderOriginRequiresAuth(t *testing.T) {
+	handler := newProviderOriginRouter(t, adminapi.RouterDeps{ProviderOriginService: &fakeProviderOriginService{}})
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/provider-origins", `{"provider_id":1}`, false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401 without token, got %d", rec.Code)
 	}
 }
 
-type fakeEndpointBreaker struct {
+type fakeOriginBreaker struct {
 	snap        breakerstore.ScopeSnapshot
 	snapByID    map[int64]breakerstore.ScopeSnapshot
 	snapshotErr error
 	resetCall   int
 }
 
-func (f *fakeEndpointBreaker) Snapshot(_ context.Context, _ breakerstore.Scope, id int64) (breakerstore.ScopeSnapshot, error) {
+func (f *fakeOriginBreaker) Snapshot(_ context.Context, _ breakerstore.Scope, id int64) (breakerstore.ScopeSnapshot, error) {
 	if f.snapshotErr != nil {
 		return breakerstore.ScopeSnapshot{}, f.snapshotErr
 	}
@@ -111,22 +111,22 @@ func (f *fakeEndpointBreaker) Snapshot(_ context.Context, _ breakerstore.Scope, 
 	}
 	return f.snap, nil
 }
-func (f *fakeEndpointBreaker) Reset(context.Context, breakerstore.Scope, int64) (int64, error) {
+func (f *fakeOriginBreaker) Reset(context.Context, breakerstore.Scope, int64) (int64, error) {
 	f.resetCall++
 	return 2, nil
 }
 
-func TestEndpointRuntimeAndReset(t *testing.T) {
-	brk := &fakeEndpointBreaker{snap: breakerstore.ScopeSnapshot{Scope: breakerstore.ScopeEndpoint, ID: 7, Exists: true, State: breakerstore.StateOpen, OpenRemainingMs: 12000}}
-	handler := newProviderEndpointRouter(t, adminapi.RouterDeps{
-		ProviderEndpointService: &fakeProviderEndpointService{},
-		ProviderEndpointBreaker: brk,
+func TestOriginRuntimeAndReset(t *testing.T) {
+	brk := &fakeOriginBreaker{snap: breakerstore.ScopeSnapshot{Scope: breakerstore.ScopeOrigin, ID: 7, Exists: true, State: breakerstore.StateOpen, OpenRemainingMs: 12000}}
+	handler := newProviderOriginRouter(t, adminapi.RouterDeps{
+		ProviderOriginService: &fakeProviderOriginService{},
+		ProviderOriginBreaker: brk,
 	})
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/provider-endpoints/7/ops/runtime", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/provider-origins/7/ops/runtime", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("runtime want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	rec = doAdmin(t, handler, http.MethodDelete, "/admin/v1/provider-endpoints/7/ops/circuit-breaker", "", true)
+	rec = doAdmin(t, handler, http.MethodDelete, "/admin/v1/provider-origins/7/ops/circuit-breaker", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reset want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -135,39 +135,39 @@ func TestEndpointRuntimeAndReset(t *testing.T) {
 	}
 }
 
-func TestEndpointRuntimeUnavailableWhenNoBreaker(t *testing.T) {
-	handler := newProviderEndpointRouter(t, adminapi.RouterDeps{ProviderEndpointService: &fakeProviderEndpointService{}})
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/provider-endpoints/7/ops/runtime", "", true)
+func TestOriginRuntimeUnavailableWhenNoBreaker(t *testing.T) {
+	handler := newProviderOriginRouter(t, adminapi.RouterDeps{ProviderOriginService: &fakeProviderOriginService{}})
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/provider-origins/7/ops/runtime", "", true)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("want 503 when breaker unavailable, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
-func TestGetProviderEndpointReturnsData(t *testing.T) {
-	fake := &fakeProviderEndpointService{getOut: providerendpoint.ProviderEndpoint{
+func TestGetProviderOriginReturnsData(t *testing.T) {
+	fake := &fakeProviderOriginService{getOut: providerorigin.ProviderOrigin{
 		ID: 7, ProviderID: 2, Name: "EP", BaseURL: "https://x.example", Status: "enabled",
 	}}
-	handler := newProviderEndpointRouter(t, adminapi.RouterDeps{ProviderEndpointService: fake})
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/provider-endpoints/7", "", true)
+	handler := newProviderOriginRouter(t, adminapi.RouterDeps{ProviderOriginService: fake})
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/provider-origins/7", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
-func TestGetProviderEndpointClassifiesRuntimeSync(t *testing.T) {
-	endpoint := providerendpoint.ProviderEndpoint{
+func TestGetProviderOriginClassifiesRuntimeSync(t *testing.T) {
+	origin := providerorigin.ProviderOrigin{
 		ID: 7, ProviderID: 2, Name: "EP", BaseURL: "https://x.example",
 		BaseURLRevision: 3, Status: "enabled", StatusRevision: 4,
 	}
 	tests := []struct {
 		name      string
-		breaker   *fakeEndpointBreaker
+		breaker   *fakeOriginBreaker
 		wantState string
 	}{
 		{
 			name: "active",
-			breaker: &fakeEndpointBreaker{snap: breakerstore.ScopeSnapshot{
-				Scope: breakerstore.ScopeEndpoint, ID: 7, Exists: true, ControlPresent: true,
+			breaker: &fakeOriginBreaker{snap: breakerstore.ScopeSnapshot{
+				Scope: breakerstore.ScopeOrigin, ID: 7, Exists: true, ControlPresent: true,
 				BaseURLRevision: 3, StatusRevision: 4, EffectiveStatus: "enabled",
 				BaseURLRevisionState: "active", StatusRevisionState: "active",
 			}},
@@ -175,8 +175,8 @@ func TestGetProviderEndpointClassifiesRuntimeSync(t *testing.T) {
 		},
 		{
 			name: "pending",
-			breaker: &fakeEndpointBreaker{snap: breakerstore.ScopeSnapshot{
-				Scope: breakerstore.ScopeEndpoint, ID: 7, Exists: true, ControlPresent: true,
+			breaker: &fakeOriginBreaker{snap: breakerstore.ScopeSnapshot{
+				Scope: breakerstore.ScopeOrigin, ID: 7, Exists: true, ControlPresent: true,
 				BaseURLRevision: 2, PendingBaseURLRevision: 3,
 				StatusRevision: 4, EffectiveStatus: "enabled",
 				BaseURLRevisionState: "pending", StatusRevisionState: "active",
@@ -185,15 +185,15 @@ func TestGetProviderEndpointClassifiesRuntimeSync(t *testing.T) {
 		},
 		{
 			name: "required",
-			breaker: &fakeEndpointBreaker{snap: breakerstore.ScopeSnapshot{
-				Scope: breakerstore.ScopeEndpoint, ID: 7,
+			breaker: &fakeOriginBreaker{snap: breakerstore.ScopeSnapshot{
+				Scope: breakerstore.ScopeOrigin, ID: 7,
 			}},
 			wantState: "runtime_sync_required",
 		},
 		{
 			name: "stale",
-			breaker: &fakeEndpointBreaker{snap: breakerstore.ScopeSnapshot{
-				Scope: breakerstore.ScopeEndpoint, ID: 7, Exists: true, ControlPresent: true,
+			breaker: &fakeOriginBreaker{snap: breakerstore.ScopeSnapshot{
+				Scope: breakerstore.ScopeOrigin, ID: 7, Exists: true, ControlPresent: true,
 				BaseURLRevision: 2, StatusRevision: 4, EffectiveStatus: "enabled",
 				BaseURLRevisionState: "active", StatusRevisionState: "active",
 			}},
@@ -201,17 +201,17 @@ func TestGetProviderEndpointClassifiesRuntimeSync(t *testing.T) {
 		},
 		{
 			name:      "store unavailable",
-			breaker:   &fakeEndpointBreaker{snapshotErr: failure.New(failure.CodeDependencyRedisUnavailable)},
+			breaker:   &fakeOriginBreaker{snapshotErr: failure.New(failure.CodeDependencyRedisUnavailable)},
 			wantState: "store_unavailable",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			handler := newProviderEndpointRouter(t, adminapi.RouterDeps{
-				ProviderEndpointService: &fakeProviderEndpointService{getOut: endpoint},
-				ProviderEndpointBreaker: tc.breaker,
+			handler := newProviderOriginRouter(t, adminapi.RouterDeps{
+				ProviderOriginService: &fakeProviderOriginService{getOut: origin},
+				ProviderOriginBreaker: tc.breaker,
 			})
-			rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/provider-endpoints/7", "", true)
+			rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/provider-origins/7", "", true)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("business row must remain readable, got %d body=%s", rec.Code, rec.Body.String())
 			}
@@ -236,24 +236,24 @@ func TestGetProviderEndpointClassifiesRuntimeSync(t *testing.T) {
 	}
 }
 
-func TestListProviderEndpointsIncludesPerEndpointRuntimeSync(t *testing.T) {
-	service := &fakeProviderEndpointService{listOut: []providerendpoint.ProviderEndpoint{
+func TestListProviderOriginsIncludesPerOriginRuntimeSync(t *testing.T) {
+	service := &fakeProviderOriginService{listOut: []providerorigin.ProviderOrigin{
 		{ID: 7, ProviderID: 2, BaseURLRevision: 3, Status: "enabled", StatusRevision: 4},
 		{ID: 8, ProviderID: 2, BaseURLRevision: 1, Status: "disabled", StatusRevision: 2},
 	}}
-	breaker := &fakeEndpointBreaker{snapByID: map[int64]breakerstore.ScopeSnapshot{
+	breaker := &fakeOriginBreaker{snapByID: map[int64]breakerstore.ScopeSnapshot{
 		7: {
-			Scope: breakerstore.ScopeEndpoint, ID: 7, Exists: true, ControlPresent: true,
+			Scope: breakerstore.ScopeOrigin, ID: 7, Exists: true, ControlPresent: true,
 			BaseURLRevision: 3, StatusRevision: 4, EffectiveStatus: "enabled",
 			BaseURLRevisionState: "active", StatusRevisionState: "active",
 		},
-		8: {Scope: breakerstore.ScopeEndpoint, ID: 8},
+		8: {Scope: breakerstore.ScopeOrigin, ID: 8},
 	}}
-	handler := newProviderEndpointRouter(t, adminapi.RouterDeps{
-		ProviderEndpointService: service,
-		ProviderEndpointBreaker: breaker,
+	handler := newProviderOriginRouter(t, adminapi.RouterDeps{
+		ProviderOriginService: service,
+		ProviderOriginBreaker: breaker,
 	})
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/provider-endpoints", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/provider-origins", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}

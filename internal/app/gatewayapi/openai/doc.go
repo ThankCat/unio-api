@@ -7,7 +7,7 @@
 //     openai/chatcompletions  — POST /v1/chat/completions
 //     openai/models           — GET  /v1/models
 //
-//     未来如新增 /v1/responses /v1/embeddings 等 endpoint，按同样方式新增子包。
+//     未来如新增 /v1/responses /v1/embeddings 等 origin，按同样方式新增子包。
 //
 //   - 本根包仅保留协议族级共享类型（例如未来共享的 OpenAI 原生 error shape）；
 //     当前没有共享内容，故只保留本说明文件。

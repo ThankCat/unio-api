@@ -76,7 +76,7 @@ func NewChatCompletionService(
 		Authorizer:      chatAuthorizer,
 		Metrics:         metricsRecorder,
 		IngressProtocol: requestlog.ProtocolOpenAI,
-		Operation:       requestlog.OperationChatCompletions,
+		Endpoint:       requestlog.EndpointChatCompletions,
 		SafeMessage:     chatCompletionsSafeMessage,
 	})
 
@@ -94,7 +94,7 @@ func NewChatCompletionService(
 	}
 }
 
-// SetAttemptPermitManager 注入三协议共享的候选级全局准入管理器。
+// SetAttemptPermitManager 注入三上游源站共享的候选级全局准入管理器。
 func (s *ChatCompletionService) SetAttemptPermitManager(manager *lifecycle.AttemptPermitManager) {
 	s.attemptRunner.SetAttemptPermitManager(manager)
 }

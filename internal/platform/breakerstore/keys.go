@@ -23,22 +23,22 @@ func (k keyBuilder) channel(id int64) string {
 	return k.prefix + "channel:" + strconv.FormatInt(id, 10)
 }
 
-func (k keyBuilder) endpoint(id int64) string {
-	return k.prefix + "endpoint:" + strconv.FormatInt(id, 10)
+func (k keyBuilder) origin(id int64) string {
+	return k.prefix + "origin:" + strconv.FormatInt(id, 10)
 }
 
 func (k keyBuilder) permit(permitID string) string {
 	return k.prefix + "permit:" + permitID
 }
 
-// endpointEvidence 保存 Endpoint HTTP 500/timeout 跨渠道、跨模型证据的短 TTL 集合（§5.1）。
+// originEvidence 保存 Origin HTTP 500/timeout 跨渠道、跨模型证据的短 TTL 集合（§5.1）。
 // category 只能是 http_500 | first_token_timeout | body_read_timeout。
-func (k keyBuilder) endpointEvidenceChannels(id int64, category string) string {
-	return k.prefix + "endpoint-evidence:" + strconv.FormatInt(id, 10) + ":" + category + ":channels"
+func (k keyBuilder) originEvidenceChannels(id int64, category string) string {
+	return k.prefix + "origin-evidence:" + strconv.FormatInt(id, 10) + ":" + category + ":channels"
 }
 
-func (k keyBuilder) endpointEvidenceModels(id int64, category string) string {
-	return k.prefix + "endpoint-evidence:" + strconv.FormatInt(id, 10) + ":" + category + ":models"
+func (k keyBuilder) originEvidenceModels(id int64, category string) string {
+	return k.prefix + "origin-evidence:" + strconv.FormatInt(id, 10) + ":" + category + ":models"
 }
 
 // channel429Cooldown 是所有 Gateway 共享的 Channel 429 冷却 key（§2.4.1、§5.1）；

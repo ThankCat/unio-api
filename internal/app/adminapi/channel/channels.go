@@ -35,14 +35,14 @@ type channelDTO struct {
 	ID           int64  `json:"id"`
 	ProviderID   int64  `json:"provider_id"`
 	ProviderName string `json:"provider_name"`
-	// ProviderEndpointID 是 channel 绑定的 ProviderEndpoint（P4 §4.4）。
-	ProviderEndpointID     int64  `json:"provider_endpoint_id"`
-	ProviderEndpointName   string `json:"provider_endpoint_name"`
-	ProviderEndpointStatus string `json:"provider_endpoint_status"`
+	// ProviderOriginID 是 channel 绑定的 ProviderOrigin（P4 §4.4）。
+	ProviderOriginID     int64  `json:"provider_origin_id"`
+	ProviderOriginName   string `json:"provider_origin_name"`
+	ProviderOriginStatus string `json:"provider_origin_status"`
 	Name                   string `json:"name"`
 	Protocol               string `json:"protocol"`
 	AdapterKey             string `json:"adapter_key"`
-	// BaseURL 只读，来源于所绑定 Endpoint（channel 不再持有 base_url）。
+	// BaseURL 只读，来源于所绑定 Origin（channel 不再持有 base_url）。
 	BaseURL string `json:"base_url"`
 	// ConfigRevision / AdmissionLimitsRevision 只读返回（P4 §4.4）。
 	ConfigRevision          int64 `json:"config_revision"`
@@ -110,7 +110,7 @@ func validateRateLimits(rl *rateLimitsRequest) error {
 
 type createChannelRequest struct {
 	ProviderID         int64              `json:"provider_id"`
-	ProviderEndpointID int64              `json:"provider_endpoint_id"`
+	ProviderOriginID int64              `json:"provider_origin_id"`
 	Name               string             `json:"name"`
 	Protocol           string             `json:"protocol"`
 	AdapterKey         string             `json:"adapter_key"`
@@ -125,7 +125,7 @@ type createChannelRequest struct {
 
 type updateChannelRequest struct {
 	Name               string             `json:"name"`
-	ProviderEndpointID int64              `json:"provider_endpoint_id"`
+	ProviderOriginID int64              `json:"provider_origin_id"`
 	Status             string             `json:"status"`
 	Priority           int32              `json:"priority"`
 	TimeoutMs          *int32             `json:"timeout_ms"`
@@ -148,8 +148,8 @@ type rotateCredentialResultDTO struct {
 
 type credentialVerificationDTO struct {
 	State                         string                `json:"state"`
-	TestedEndpointBaseURLRevision *int64                `json:"tested_endpoint_base_url_revision"`
-	TestedEndpointStatusRevision  *int64                `json:"tested_endpoint_status_revision"`
+	TestedOriginBaseURLRevision *int64                `json:"tested_origin_base_url_revision"`
+	TestedOriginStatusRevision  *int64                `json:"tested_origin_status_revision"`
 	TestedConfigRevision          *int64                `json:"tested_config_revision"`
 	StateChangeApplied            bool                  `json:"state_change_applied"`
 	CredentialValidAfter          bool                  `json:"credential_valid_after"`
@@ -241,7 +241,7 @@ func (h *channelsHandler) create(w http.ResponseWriter, r *http.Request) {
 
 	in := channel.CreateInput{
 		ProviderID:         req.ProviderID,
-		ProviderEndpointID: req.ProviderEndpointID,
+		ProviderOriginID: req.ProviderOriginID,
 		Name:               req.Name,
 		Protocol:           req.Protocol,
 		AdapterKey:         req.AdapterKey,
@@ -289,7 +289,7 @@ func (h *channelsHandler) update(w http.ResponseWriter, r *http.Request) {
 	in := channel.UpdateInput{
 		ID:                 id,
 		Name:               req.Name,
-		ProviderEndpointID: req.ProviderEndpointID,
+		ProviderOriginID: req.ProviderOriginID,
 		Status:             req.Status,
 		Priority:           req.Priority,
 		TimeoutMs:          req.TimeoutMs,
@@ -342,8 +342,8 @@ func toRotateCredentialResultDTO(result channel.RotateCredentialResult) rotateCr
 		SavedConfigRevision: result.SavedConfigRevision, CurrentConfigRevision: result.CurrentConfigRevision,
 		Verification: credentialVerificationDTO{
 			State:                         string(result.Verification.State),
-			TestedEndpointBaseURLRevision: result.Verification.TestedEndpointBaseURLRevision,
-			TestedEndpointStatusRevision:  result.Verification.TestedEndpointStatusRevision,
+			TestedOriginBaseURLRevision: result.Verification.TestedOriginBaseURLRevision,
+			TestedOriginStatusRevision:  result.Verification.TestedOriginStatusRevision,
 			TestedConfigRevision:          result.Verification.TestedConfigRevision,
 			StateChangeApplied:            result.Verification.StateChangeApplied,
 			CredentialValidAfter:          result.Verification.CredentialValidAfter,
@@ -418,9 +418,9 @@ func toChannelDTO(c channel.Channel) channelDTO {
 		ID:                      c.ID,
 		ProviderID:              c.ProviderID,
 		ProviderName:            c.ProviderName,
-		ProviderEndpointID:      c.ProviderEndpointID,
-		ProviderEndpointName:    c.ProviderEndpointName,
-		ProviderEndpointStatus:  c.ProviderEndpointStatus,
+		ProviderOriginID:      c.ProviderOriginID,
+		ProviderOriginName:    c.ProviderOriginName,
+		ProviderOriginStatus:  c.ProviderOriginStatus,
 		ConfigRevision:          c.ConfigRevision,
 		AdmissionLimitsRevision: c.AdmissionLimitsRevision,
 		RuntimeSyncPending:      c.RuntimeSyncPending,

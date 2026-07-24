@@ -42,14 +42,14 @@ type Row struct {
 	Name         string
 	Status       string
 	CreatedAt    time.Time
-	Endpoints    []EndpointSummary
+	Origins    []OriginSummary
 	ChannelTotal int64
 	ModelsCount  int64
 	RoutesCount  int64
 }
 
-// EndpointSummary 是 Provider 主表内展示的 Endpoint 业务事实，不包含 Redis 运行态。
-type EndpointSummary struct {
+// OriginSummary 是 Provider 主表内展示的 Origin 业务事实，不包含 Redis 运行态。
+type OriginSummary struct {
 	ID      int64  `json:"id"`
 	Name    string `json:"name"`
 	BaseURL string `json:"base_url"`
@@ -155,12 +155,12 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 	}
 	out := make([]Row, 0, len(rows))
 	for _, r := range rows {
-		var endpoints []EndpointSummary
-		if err := json.Unmarshal([]byte(r.Endpoints), &endpoints); err != nil {
-			return nil, 0, opsutil.StoreFailed(err, "decode provider endpoint summaries")
+		var origins []OriginSummary
+		if err := json.Unmarshal([]byte(r.Origins), &origins); err != nil {
+			return nil, 0, opsutil.StoreFailed(err, "decode provider origin summaries")
 		}
-		if endpoints == nil {
-			endpoints = []EndpointSummary{}
+		if origins == nil {
+			origins = []OriginSummary{}
 		}
 		out = append(out, Row{
 			ID:           r.ID,
@@ -168,7 +168,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			Name:         r.Name,
 			Status:       r.Status,
 			CreatedAt:    r.CreatedAt.Time,
-			Endpoints:    endpoints,
+			Origins:    origins,
 			ChannelTotal: r.ChannelTotal,
 			ModelsCount:  r.ModelsCount,
 			RoutesCount:  r.RoutesCount,

@@ -354,7 +354,7 @@ type InputTokenCountResponse struct {
 
 // CompactHistoryResponse 是 POST /v1/responses/compact 的响应体。
 //
-// 形状由 codex-rs codex-api/src/endpoint/compact.rs 确认：{"output":[ResponseItem,...]}，
+// 形状由 codex-rs codex-api/src/origin/compact.rs 确认：{"output":[ResponseItem,...]}，
 // 非完整 response 对象、非 SSE。
 type CompactHistoryResponse struct {
 	Output []ResponseOutputItem `json:"output"`

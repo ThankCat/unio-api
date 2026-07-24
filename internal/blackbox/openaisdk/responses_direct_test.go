@@ -182,7 +182,7 @@ func TestResponsesDirectMockNonStreamSucceeds(t *testing.T) {
 	}
 }
 
-// OAI-RESP-Direct-02：直传非流式账务事实与桥接等价，operation 记为 responses，usage 由上游 responses usage 落账。
+// OAI-RESP-Direct-02：直传非流式账务事实与桥接等价，endpoint 记为 responses，usage 由上游 responses usage 落账。
 func TestResponsesDirectMockSettlementWritesAuditTrail(t *testing.T) {
 	mock := newMockResponsesUpstream(t, func(_ *testing.T, w http.ResponseWriter, _ *http.Request, _ []byte) {
 		writeMockResponsesResponse(w, "resp_up_settle", "gpt-5.5-upstream", "settled", 120, 40)
@@ -207,16 +207,16 @@ func TestResponsesDirectMockSettlementWritesAuditTrail(t *testing.T) {
 		rrID        int64
 		rrStatus    string
 		rrIngress   string
-		rrOperation string
+		rrEndpoint string
 		rrModelID   string
 	)
 	if err := f.Pool.QueryRow(dbCtx, `
-		SELECT id, status, ingress_protocol, operation, requested_model_id
+		SELECT id, status, ingress_protocol, endpoint, requested_model_id
 		FROM request_records
 		WHERE user_id = $1
 		ORDER BY id DESC
 		LIMIT 1
-	`, f.UserID).Scan(&rrID, &rrStatus, &rrIngress, &rrOperation, &rrModelID); err != nil {
+	`, f.UserID).Scan(&rrID, &rrStatus, &rrIngress, &rrEndpoint, &rrModelID); err != nil {
 		t.Fatalf("query request_records: %v", err)
 	}
 	if rrStatus != "succeeded" {
@@ -225,8 +225,8 @@ func TestResponsesDirectMockSettlementWritesAuditTrail(t *testing.T) {
 	if rrIngress != "openai" {
 		t.Errorf("request_records.ingress_protocol = %q, want openai", rrIngress)
 	}
-	if rrOperation != "responses" {
-		t.Errorf("request_records.operation = %q, want responses", rrOperation)
+	if rrEndpoint != "responses" {
+		t.Errorf("request_records.endpoint = %q, want responses", rrEndpoint)
 	}
 	if rrModelID != f.ModelID {
 		t.Errorf("request_records.requested_model_id = %q, want %q", rrModelID, f.ModelID)

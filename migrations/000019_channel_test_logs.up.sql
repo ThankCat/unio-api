@@ -29,13 +29,13 @@ CREATE TABLE public.channel_test_logs (
     message text,
     upstream_error text,
     -- [P4 §4.4] 检测冻结的三类 expected revision 与是否真的应用了状态跳变；stale 结果只留历史日志。
-    tested_endpoint_base_url_revision bigint,
-    tested_endpoint_status_revision bigint,
+    tested_origin_base_url_revision bigint,
+    tested_origin_status_revision bigint,
     tested_config_revision bigint,
     state_change_applied boolean DEFAULT false NOT NULL,
     CONSTRAINT channel_test_logs_latency_ms_check CHECK (((latency_ms IS NULL) OR (latency_ms >= 0))),
-    CONSTRAINT channel_test_logs_tested_base_url_revision_check CHECK (((tested_endpoint_base_url_revision IS NULL) OR (tested_endpoint_base_url_revision >= 1))),
-    CONSTRAINT channel_test_logs_tested_status_revision_check CHECK (((tested_endpoint_status_revision IS NULL) OR (tested_endpoint_status_revision >= 1))),
+    CONSTRAINT channel_test_logs_tested_base_url_revision_check CHECK (((tested_origin_base_url_revision IS NULL) OR (tested_origin_base_url_revision >= 1))),
+    CONSTRAINT channel_test_logs_tested_status_revision_check CHECK (((tested_origin_status_revision IS NULL) OR (tested_origin_status_revision >= 1))),
     CONSTRAINT channel_test_logs_tested_config_revision_check CHECK (((tested_config_revision IS NULL) OR (tested_config_revision >= 1))),
     CONSTRAINT channel_test_logs_source_check CHECK ((source = ANY (ARRAY['worker'::text, 'manual'::text, 'runtime_401'::text, 'credential_rotate'::text, 'permission_recheck'::text])))
 );

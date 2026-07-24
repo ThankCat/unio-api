@@ -13,7 +13,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/model"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/overview"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/provider"
-	"github.com/ThankCat/unio-gateway/internal/app/adminapi/providerendpoint"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/providerorigin"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/requests"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/route"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/system"
@@ -29,8 +29,8 @@ type adminHTTPDeps struct {
 
 	ProviderService         provider.ProviderService
 	ProviderOpsService      provider.ProviderOpsService
-	ProviderEndpointService providerendpoint.ProviderEndpointService
-	ProviderEndpointBreaker providerendpoint.BreakerRuntime
+	ProviderOriginService providerorigin.ProviderOriginService
+	ProviderOriginBreaker providerorigin.BreakerRuntime
 	ChannelService          channel.ChannelService
 	ChannelBreaker          channel.BreakerRuntime
 	ChannelTestService      channel.ChannelTestService
@@ -89,8 +89,8 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		AdminAuthenticator:      deps.Authenticator,
 		ProviderService:         deps.ProviderService,
 		ProviderOpsService:      deps.ProviderOpsService,
-		ProviderEndpointService: deps.ProviderEndpointService,
-		ProviderEndpointBreaker: deps.ProviderEndpointBreaker,
+		ProviderOriginService: deps.ProviderOriginService,
+		ProviderOriginBreaker: deps.ProviderOriginBreaker,
 		ChannelService:          deps.ChannelService,
 		ChannelBreaker:          deps.ChannelBreaker,
 		ChannelTestService:      deps.ChannelTestService,

@@ -35,12 +35,12 @@ INSERT INTO request_attempts (
     usage_mapping_version,
     started_at,
     completed_at,
-    provider_endpoint_id,
-    provider_endpoint_base_url_revision,
-    provider_endpoint_status_revision,
+    provider_origin_id,
+    provider_origin_base_url_revision,
+    provider_origin_status_revision,
     channel_config_revision,
     routing_candidate_index,
-    upstream_operation
+    upstream_endpoint
 )
 VALUES (
            $1,
@@ -100,46 +100,46 @@ RETURNING
     upstream_started_at,
     upstream_first_token_at,
     upstream_completed_at,
-    provider_endpoint_id,
-    provider_endpoint_base_url_revision,
-    provider_endpoint_status_revision,
+    provider_origin_id,
+    provider_origin_base_url_revision,
+    provider_origin_status_revision,
     channel_config_revision,
     routing_candidate_index,
-    upstream_operation,
-    breaker_endpoint_disposition,
+    upstream_endpoint,
+    breaker_origin_disposition,
     breaker_channel_disposition,
     fault_party
 `
 
 type CreateRequestAttemptParams struct {
-	RequestRecordID                 int64
-	AttemptIndex                    int32
-	ProviderID                      int64
-	ChannelID                       int64
-	AdapterKey                      string
-	UpstreamModel                   string
-	UpstreamProtocol                string
-	UpstreamResponseID              pgtype.Text
-	UpstreamResponseModel           pgtype.Text
-	UpstreamFinishReason            pgtype.Text
-	FinishClass                     pgtype.Text
-	Status                          string
-	UpstreamStatusCode              pgtype.Int4
-	UpstreamRequestID               pgtype.Text
-	ErrorCode                       pgtype.Text
-	ErrorMessage                    pgtype.Text
-	InternalErrorDetail             pgtype.Text
-	ResponseStartedAt               pgtype.Timestamptz
-	FinalUsageReceived              bool
-	UsageMappingVersion             pgtype.Text
-	StartedAt                       pgtype.Timestamptz
-	CompletedAt                     pgtype.Timestamptz
-	ProviderEndpointID              int64
-	ProviderEndpointBaseUrlRevision int64
-	ProviderEndpointStatusRevision  int64
-	ChannelConfigRevision           int64
-	RoutingCandidateIndex           int32
-	UpstreamOperation               string
+	RequestRecordID               int64
+	AttemptIndex                  int32
+	ProviderID                    int64
+	ChannelID                     int64
+	AdapterKey                    string
+	UpstreamModel                 string
+	UpstreamProtocol              string
+	UpstreamResponseID            pgtype.Text
+	UpstreamResponseModel         pgtype.Text
+	UpstreamFinishReason          pgtype.Text
+	FinishClass                   pgtype.Text
+	Status                        string
+	UpstreamStatusCode            pgtype.Int4
+	UpstreamRequestID             pgtype.Text
+	ErrorCode                     pgtype.Text
+	ErrorMessage                  pgtype.Text
+	InternalErrorDetail           pgtype.Text
+	ResponseStartedAt             pgtype.Timestamptz
+	FinalUsageReceived            bool
+	UsageMappingVersion           pgtype.Text
+	StartedAt                     pgtype.Timestamptz
+	CompletedAt                   pgtype.Timestamptz
+	ProviderOriginID              int64
+	ProviderOriginBaseUrlRevision int64
+	ProviderOriginStatusRevision  int64
+	ChannelConfigRevision         int64
+	RoutingCandidateIndex         int32
+	UpstreamEndpoint              string
 }
 
 // CreateRequestAttempt 创建一次请求下的一次上游 channel 尝试记录。
@@ -167,12 +167,12 @@ func (q *Queries) CreateRequestAttempt(ctx context.Context, arg CreateRequestAtt
 		arg.UsageMappingVersion,
 		arg.StartedAt,
 		arg.CompletedAt,
-		arg.ProviderEndpointID,
-		arg.ProviderEndpointBaseUrlRevision,
-		arg.ProviderEndpointStatusRevision,
+		arg.ProviderOriginID,
+		arg.ProviderOriginBaseUrlRevision,
+		arg.ProviderOriginStatusRevision,
 		arg.ChannelConfigRevision,
 		arg.RoutingCandidateIndex,
-		arg.UpstreamOperation,
+		arg.UpstreamEndpoint,
 	)
 	var i RequestAttempt
 	err := row.Scan(
@@ -203,13 +203,13 @@ func (q *Queries) CreateRequestAttempt(ctx context.Context, arg CreateRequestAtt
 		&i.UpstreamStartedAt,
 		&i.UpstreamFirstTokenAt,
 		&i.UpstreamCompletedAt,
-		&i.ProviderEndpointID,
-		&i.ProviderEndpointBaseUrlRevision,
-		&i.ProviderEndpointStatusRevision,
+		&i.ProviderOriginID,
+		&i.ProviderOriginBaseUrlRevision,
+		&i.ProviderOriginStatusRevision,
 		&i.ChannelConfigRevision,
 		&i.RoutingCandidateIndex,
-		&i.UpstreamOperation,
-		&i.BreakerEndpointDisposition,
+		&i.UpstreamEndpoint,
+		&i.BreakerOriginDisposition,
 		&i.BreakerChannelDisposition,
 		&i.FaultParty,
 	)
@@ -217,7 +217,7 @@ func (q *Queries) CreateRequestAttempt(ctx context.Context, arg CreateRequestAtt
 }
 
 const listRequestAttemptsByRequest = `-- name: ListRequestAttemptsByRequest :many
-SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_endpoint_id, provider_endpoint_base_url_revision, provider_endpoint_status_revision, channel_config_revision, routing_candidate_index, upstream_operation, breaker_endpoint_disposition, breaker_channel_disposition, fault_party
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_id, provider_origin_base_url_revision, provider_origin_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_origin_disposition, breaker_channel_disposition, fault_party
 FROM request_attempts
 WHERE request_record_id = $1
 ORDER BY attempt_index
@@ -261,13 +261,13 @@ func (q *Queries) ListRequestAttemptsByRequest(ctx context.Context, requestRecor
 			&i.UpstreamStartedAt,
 			&i.UpstreamFirstTokenAt,
 			&i.UpstreamCompletedAt,
-			&i.ProviderEndpointID,
-			&i.ProviderEndpointBaseUrlRevision,
-			&i.ProviderEndpointStatusRevision,
+			&i.ProviderOriginID,
+			&i.ProviderOriginBaseUrlRevision,
+			&i.ProviderOriginStatusRevision,
 			&i.ChannelConfigRevision,
 			&i.RoutingCandidateIndex,
-			&i.UpstreamOperation,
-			&i.BreakerEndpointDisposition,
+			&i.UpstreamEndpoint,
+			&i.BreakerOriginDisposition,
 			&i.BreakerChannelDisposition,
 			&i.FaultParty,
 		); err != nil {
@@ -291,14 +291,14 @@ WITH updated AS (
             completed_at = $4
         WHERE request_attempts.id = $5
             AND request_attempts.status = 'running'
-        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_endpoint_id, request_attempts.provider_endpoint_base_url_revision, request_attempts.provider_endpoint_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_operation, request_attempts.breaker_endpoint_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_origin_id, request_attempts.provider_origin_base_url_revision, request_attempts.provider_origin_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_endpoint, request_attempts.breaker_origin_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
 )
-SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_endpoint_id, provider_endpoint_base_url_revision, provider_endpoint_status_revision, channel_config_revision, routing_candidate_index, upstream_operation, breaker_endpoint_disposition, breaker_channel_disposition, fault_party
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_id, provider_origin_base_url_revision, provider_origin_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_origin_disposition, breaker_channel_disposition, fault_party
 FROM updated
 
 UNION ALL
 
-SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_endpoint_id, request_attempts.provider_endpoint_base_url_revision, request_attempts.provider_endpoint_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_operation, request_attempts.breaker_endpoint_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_origin_id, request_attempts.provider_origin_base_url_revision, request_attempts.provider_origin_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_endpoint, request_attempts.breaker_origin_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
 FROM request_attempts
 WHERE request_attempts.id = $5
   AND request_attempts.status = 'canceled'
@@ -314,42 +314,42 @@ type MarkRequestAttemptCanceledParams struct {
 }
 
 type MarkRequestAttemptCanceledRow struct {
-	ID                              int64
-	RequestRecordID                 int64
-	AttemptIndex                    int32
-	ProviderID                      int64
-	ChannelID                       int64
-	AdapterKey                      string
-	UpstreamModel                   string
-	UpstreamProtocol                string
-	UpstreamResponseID              pgtype.Text
-	UpstreamResponseModel           pgtype.Text
-	UpstreamFinishReason            pgtype.Text
-	FinishClass                     pgtype.Text
-	Status                          string
-	UpstreamStatusCode              pgtype.Int4
-	UpstreamRequestID               pgtype.Text
-	ErrorCode                       pgtype.Text
-	ErrorMessage                    pgtype.Text
-	InternalErrorDetail             pgtype.Text
-	ResponseStartedAt               pgtype.Timestamptz
-	FinalUsageReceived              bool
-	UsageMappingVersion             pgtype.Text
-	StartedAt                       pgtype.Timestamptz
-	CompletedAt                     pgtype.Timestamptz
-	CreatedAt                       pgtype.Timestamptz
-	UpstreamStartedAt               pgtype.Timestamptz
-	UpstreamFirstTokenAt            pgtype.Timestamptz
-	UpstreamCompletedAt             pgtype.Timestamptz
-	ProviderEndpointID              int64
-	ProviderEndpointBaseUrlRevision int64
-	ProviderEndpointStatusRevision  int64
-	ChannelConfigRevision           int64
-	RoutingCandidateIndex           int32
-	UpstreamOperation               string
-	BreakerEndpointDisposition      pgtype.Text
-	BreakerChannelDisposition       pgtype.Text
-	FaultParty                      pgtype.Text
+	ID                            int64
+	RequestRecordID               int64
+	AttemptIndex                  int32
+	ProviderID                    int64
+	ChannelID                     int64
+	AdapterKey                    string
+	UpstreamModel                 string
+	UpstreamProtocol              string
+	UpstreamResponseID            pgtype.Text
+	UpstreamResponseModel         pgtype.Text
+	UpstreamFinishReason          pgtype.Text
+	FinishClass                   pgtype.Text
+	Status                        string
+	UpstreamStatusCode            pgtype.Int4
+	UpstreamRequestID             pgtype.Text
+	ErrorCode                     pgtype.Text
+	ErrorMessage                  pgtype.Text
+	InternalErrorDetail           pgtype.Text
+	ResponseStartedAt             pgtype.Timestamptz
+	FinalUsageReceived            bool
+	UsageMappingVersion           pgtype.Text
+	StartedAt                     pgtype.Timestamptz
+	CompletedAt                   pgtype.Timestamptz
+	CreatedAt                     pgtype.Timestamptz
+	UpstreamStartedAt             pgtype.Timestamptz
+	UpstreamFirstTokenAt          pgtype.Timestamptz
+	UpstreamCompletedAt           pgtype.Timestamptz
+	ProviderOriginID              int64
+	ProviderOriginBaseUrlRevision int64
+	ProviderOriginStatusRevision  int64
+	ChannelConfigRevision         int64
+	RoutingCandidateIndex         int32
+	UpstreamEndpoint              string
+	BreakerOriginDisposition      pgtype.Text
+	BreakerChannelDisposition     pgtype.Text
+	FaultParty                    pgtype.Text
 }
 
 // MarkRequestAttemptCanceled 将 running attempt 原子推进到 canceled，重复 canceled 返回第一次取消事实。
@@ -391,13 +391,13 @@ func (q *Queries) MarkRequestAttemptCanceled(ctx context.Context, arg MarkReques
 		&i.UpstreamStartedAt,
 		&i.UpstreamFirstTokenAt,
 		&i.UpstreamCompletedAt,
-		&i.ProviderEndpointID,
-		&i.ProviderEndpointBaseUrlRevision,
-		&i.ProviderEndpointStatusRevision,
+		&i.ProviderOriginID,
+		&i.ProviderOriginBaseUrlRevision,
+		&i.ProviderOriginStatusRevision,
 		&i.ChannelConfigRevision,
 		&i.RoutingCandidateIndex,
-		&i.UpstreamOperation,
-		&i.BreakerEndpointDisposition,
+		&i.UpstreamEndpoint,
+		&i.BreakerOriginDisposition,
 		&i.BreakerChannelDisposition,
 		&i.FaultParty,
 	)
@@ -416,14 +416,14 @@ WITH updated AS (
             completed_at = $6
         WHERE request_attempts.id = $7
             AND request_attempts.status = 'running'
-        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_endpoint_id, request_attempts.provider_endpoint_base_url_revision, request_attempts.provider_endpoint_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_operation, request_attempts.breaker_endpoint_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_origin_id, request_attempts.provider_origin_base_url_revision, request_attempts.provider_origin_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_endpoint, request_attempts.breaker_origin_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
 )
-SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_endpoint_id, provider_endpoint_base_url_revision, provider_endpoint_status_revision, channel_config_revision, routing_candidate_index, upstream_operation, breaker_endpoint_disposition, breaker_channel_disposition, fault_party
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_id, provider_origin_base_url_revision, provider_origin_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_origin_disposition, breaker_channel_disposition, fault_party
 FROM updated
 
 UNION ALL
 
-SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_endpoint_id, request_attempts.provider_endpoint_base_url_revision, request_attempts.provider_endpoint_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_operation, request_attempts.breaker_endpoint_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_origin_id, request_attempts.provider_origin_base_url_revision, request_attempts.provider_origin_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_endpoint, request_attempts.breaker_origin_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
 FROM request_attempts
 WHERE request_attempts.id = $7
   AND request_attempts.status = 'failed'
@@ -441,42 +441,42 @@ type MarkRequestAttemptFailedParams struct {
 }
 
 type MarkRequestAttemptFailedRow struct {
-	ID                              int64
-	RequestRecordID                 int64
-	AttemptIndex                    int32
-	ProviderID                      int64
-	ChannelID                       int64
-	AdapterKey                      string
-	UpstreamModel                   string
-	UpstreamProtocol                string
-	UpstreamResponseID              pgtype.Text
-	UpstreamResponseModel           pgtype.Text
-	UpstreamFinishReason            pgtype.Text
-	FinishClass                     pgtype.Text
-	Status                          string
-	UpstreamStatusCode              pgtype.Int4
-	UpstreamRequestID               pgtype.Text
-	ErrorCode                       pgtype.Text
-	ErrorMessage                    pgtype.Text
-	InternalErrorDetail             pgtype.Text
-	ResponseStartedAt               pgtype.Timestamptz
-	FinalUsageReceived              bool
-	UsageMappingVersion             pgtype.Text
-	StartedAt                       pgtype.Timestamptz
-	CompletedAt                     pgtype.Timestamptz
-	CreatedAt                       pgtype.Timestamptz
-	UpstreamStartedAt               pgtype.Timestamptz
-	UpstreamFirstTokenAt            pgtype.Timestamptz
-	UpstreamCompletedAt             pgtype.Timestamptz
-	ProviderEndpointID              int64
-	ProviderEndpointBaseUrlRevision int64
-	ProviderEndpointStatusRevision  int64
-	ChannelConfigRevision           int64
-	RoutingCandidateIndex           int32
-	UpstreamOperation               string
-	BreakerEndpointDisposition      pgtype.Text
-	BreakerChannelDisposition       pgtype.Text
-	FaultParty                      pgtype.Text
+	ID                            int64
+	RequestRecordID               int64
+	AttemptIndex                  int32
+	ProviderID                    int64
+	ChannelID                     int64
+	AdapterKey                    string
+	UpstreamModel                 string
+	UpstreamProtocol              string
+	UpstreamResponseID            pgtype.Text
+	UpstreamResponseModel         pgtype.Text
+	UpstreamFinishReason          pgtype.Text
+	FinishClass                   pgtype.Text
+	Status                        string
+	UpstreamStatusCode            pgtype.Int4
+	UpstreamRequestID             pgtype.Text
+	ErrorCode                     pgtype.Text
+	ErrorMessage                  pgtype.Text
+	InternalErrorDetail           pgtype.Text
+	ResponseStartedAt             pgtype.Timestamptz
+	FinalUsageReceived            bool
+	UsageMappingVersion           pgtype.Text
+	StartedAt                     pgtype.Timestamptz
+	CompletedAt                   pgtype.Timestamptz
+	CreatedAt                     pgtype.Timestamptz
+	UpstreamStartedAt             pgtype.Timestamptz
+	UpstreamFirstTokenAt          pgtype.Timestamptz
+	UpstreamCompletedAt           pgtype.Timestamptz
+	ProviderOriginID              int64
+	ProviderOriginBaseUrlRevision int64
+	ProviderOriginStatusRevision  int64
+	ChannelConfigRevision         int64
+	RoutingCandidateIndex         int32
+	UpstreamEndpoint              string
+	BreakerOriginDisposition      pgtype.Text
+	BreakerChannelDisposition     pgtype.Text
+	FaultParty                    pgtype.Text
 }
 
 // MarkRequestAttemptFailed 将 running attempt 原子推进到 failed，重复 failed 返回第一次失败事实。
@@ -520,13 +520,13 @@ func (q *Queries) MarkRequestAttemptFailed(ctx context.Context, arg MarkRequestA
 		&i.UpstreamStartedAt,
 		&i.UpstreamFirstTokenAt,
 		&i.UpstreamCompletedAt,
-		&i.ProviderEndpointID,
-		&i.ProviderEndpointBaseUrlRevision,
-		&i.ProviderEndpointStatusRevision,
+		&i.ProviderOriginID,
+		&i.ProviderOriginBaseUrlRevision,
+		&i.ProviderOriginStatusRevision,
 		&i.ChannelConfigRevision,
 		&i.RoutingCandidateIndex,
-		&i.UpstreamOperation,
-		&i.BreakerEndpointDisposition,
+		&i.UpstreamEndpoint,
+		&i.BreakerOriginDisposition,
 		&i.BreakerChannelDisposition,
 		&i.FaultParty,
 	)
@@ -539,14 +539,14 @@ WITH updated AS (
         SET response_started_at = COALESCE(request_attempts.response_started_at, $1)
         WHERE request_attempts.id = $2
           AND request_attempts.status IN ('running', 'succeeded')
-        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_endpoint_id, request_attempts.provider_endpoint_base_url_revision, request_attempts.provider_endpoint_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_operation, request_attempts.breaker_endpoint_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_origin_id, request_attempts.provider_origin_base_url_revision, request_attempts.provider_origin_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_endpoint, request_attempts.breaker_origin_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
 )
-SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_endpoint_id, provider_endpoint_base_url_revision, provider_endpoint_status_revision, channel_config_revision, routing_candidate_index, upstream_operation, breaker_endpoint_disposition, breaker_channel_disposition, fault_party
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_id, provider_origin_base_url_revision, provider_origin_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_origin_disposition, breaker_channel_disposition, fault_party
 FROM updated
 
 UNION ALL
 
-SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_endpoint_id, request_attempts.provider_endpoint_base_url_revision, request_attempts.provider_endpoint_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_operation, request_attempts.breaker_endpoint_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_origin_id, request_attempts.provider_origin_base_url_revision, request_attempts.provider_origin_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_endpoint, request_attempts.breaker_origin_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
 FROM request_attempts
 WHERE request_attempts.id = $2
   AND request_attempts.response_started_at IS NOT NULL
@@ -559,42 +559,42 @@ type MarkRequestAttemptResponseStartedParams struct {
 }
 
 type MarkRequestAttemptResponseStartedRow struct {
-	ID                              int64
-	RequestRecordID                 int64
-	AttemptIndex                    int32
-	ProviderID                      int64
-	ChannelID                       int64
-	AdapterKey                      string
-	UpstreamModel                   string
-	UpstreamProtocol                string
-	UpstreamResponseID              pgtype.Text
-	UpstreamResponseModel           pgtype.Text
-	UpstreamFinishReason            pgtype.Text
-	FinishClass                     pgtype.Text
-	Status                          string
-	UpstreamStatusCode              pgtype.Int4
-	UpstreamRequestID               pgtype.Text
-	ErrorCode                       pgtype.Text
-	ErrorMessage                    pgtype.Text
-	InternalErrorDetail             pgtype.Text
-	ResponseStartedAt               pgtype.Timestamptz
-	FinalUsageReceived              bool
-	UsageMappingVersion             pgtype.Text
-	StartedAt                       pgtype.Timestamptz
-	CompletedAt                     pgtype.Timestamptz
-	CreatedAt                       pgtype.Timestamptz
-	UpstreamStartedAt               pgtype.Timestamptz
-	UpstreamFirstTokenAt            pgtype.Timestamptz
-	UpstreamCompletedAt             pgtype.Timestamptz
-	ProviderEndpointID              int64
-	ProviderEndpointBaseUrlRevision int64
-	ProviderEndpointStatusRevision  int64
-	ChannelConfigRevision           int64
-	RoutingCandidateIndex           int32
-	UpstreamOperation               string
-	BreakerEndpointDisposition      pgtype.Text
-	BreakerChannelDisposition       pgtype.Text
-	FaultParty                      pgtype.Text
+	ID                            int64
+	RequestRecordID               int64
+	AttemptIndex                  int32
+	ProviderID                    int64
+	ChannelID                     int64
+	AdapterKey                    string
+	UpstreamModel                 string
+	UpstreamProtocol              string
+	UpstreamResponseID            pgtype.Text
+	UpstreamResponseModel         pgtype.Text
+	UpstreamFinishReason          pgtype.Text
+	FinishClass                   pgtype.Text
+	Status                        string
+	UpstreamStatusCode            pgtype.Int4
+	UpstreamRequestID             pgtype.Text
+	ErrorCode                     pgtype.Text
+	ErrorMessage                  pgtype.Text
+	InternalErrorDetail           pgtype.Text
+	ResponseStartedAt             pgtype.Timestamptz
+	FinalUsageReceived            bool
+	UsageMappingVersion           pgtype.Text
+	StartedAt                     pgtype.Timestamptz
+	CompletedAt                   pgtype.Timestamptz
+	CreatedAt                     pgtype.Timestamptz
+	UpstreamStartedAt             pgtype.Timestamptz
+	UpstreamFirstTokenAt          pgtype.Timestamptz
+	UpstreamCompletedAt           pgtype.Timestamptz
+	ProviderOriginID              int64
+	ProviderOriginBaseUrlRevision int64
+	ProviderOriginStatusRevision  int64
+	ChannelConfigRevision         int64
+	RoutingCandidateIndex         int32
+	UpstreamEndpoint              string
+	BreakerOriginDisposition      pgtype.Text
+	BreakerChannelDisposition     pgtype.Text
+	FaultParty                    pgtype.Text
 }
 
 // MarkRequestAttemptResponseStarted 记录一次 attempt 的首次客户可见响应时间；重复调用保留第一次时间。
@@ -629,13 +629,13 @@ func (q *Queries) MarkRequestAttemptResponseStarted(ctx context.Context, arg Mar
 		&i.UpstreamStartedAt,
 		&i.UpstreamFirstTokenAt,
 		&i.UpstreamCompletedAt,
-		&i.ProviderEndpointID,
-		&i.ProviderEndpointBaseUrlRevision,
-		&i.ProviderEndpointStatusRevision,
+		&i.ProviderOriginID,
+		&i.ProviderOriginBaseUrlRevision,
+		&i.ProviderOriginStatusRevision,
 		&i.ChannelConfigRevision,
 		&i.RoutingCandidateIndex,
-		&i.UpstreamOperation,
-		&i.BreakerEndpointDisposition,
+		&i.UpstreamEndpoint,
+		&i.BreakerOriginDisposition,
 		&i.BreakerChannelDisposition,
 		&i.FaultParty,
 	)
@@ -658,14 +658,14 @@ WITH updated AS (
             completed_at = $10
         WHERE request_attempts.id = $11
             AND request_attempts.status = 'running'
-        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_endpoint_id, request_attempts.provider_endpoint_base_url_revision, request_attempts.provider_endpoint_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_operation, request_attempts.breaker_endpoint_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_origin_id, request_attempts.provider_origin_base_url_revision, request_attempts.provider_origin_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_endpoint, request_attempts.breaker_origin_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
 )
-SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_endpoint_id, provider_endpoint_base_url_revision, provider_endpoint_status_revision, channel_config_revision, routing_candidate_index, upstream_operation, breaker_endpoint_disposition, breaker_channel_disposition, fault_party
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_id, provider_origin_base_url_revision, provider_origin_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_origin_disposition, breaker_channel_disposition, fault_party
 FROM updated
 
 UNION ALL
 
-SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_endpoint_id, request_attempts.provider_endpoint_base_url_revision, request_attempts.provider_endpoint_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_operation, request_attempts.breaker_endpoint_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_origin_id, request_attempts.provider_origin_base_url_revision, request_attempts.provider_origin_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_endpoint, request_attempts.breaker_origin_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
 FROM request_attempts
 WHERE request_attempts.id = $11
   AND request_attempts.status = 'succeeded'
@@ -687,42 +687,42 @@ type MarkRequestAttemptSucceededParams struct {
 }
 
 type MarkRequestAttemptSucceededRow struct {
-	ID                              int64
-	RequestRecordID                 int64
-	AttemptIndex                    int32
-	ProviderID                      int64
-	ChannelID                       int64
-	AdapterKey                      string
-	UpstreamModel                   string
-	UpstreamProtocol                string
-	UpstreamResponseID              pgtype.Text
-	UpstreamResponseModel           pgtype.Text
-	UpstreamFinishReason            pgtype.Text
-	FinishClass                     pgtype.Text
-	Status                          string
-	UpstreamStatusCode              pgtype.Int4
-	UpstreamRequestID               pgtype.Text
-	ErrorCode                       pgtype.Text
-	ErrorMessage                    pgtype.Text
-	InternalErrorDetail             pgtype.Text
-	ResponseStartedAt               pgtype.Timestamptz
-	FinalUsageReceived              bool
-	UsageMappingVersion             pgtype.Text
-	StartedAt                       pgtype.Timestamptz
-	CompletedAt                     pgtype.Timestamptz
-	CreatedAt                       pgtype.Timestamptz
-	UpstreamStartedAt               pgtype.Timestamptz
-	UpstreamFirstTokenAt            pgtype.Timestamptz
-	UpstreamCompletedAt             pgtype.Timestamptz
-	ProviderEndpointID              int64
-	ProviderEndpointBaseUrlRevision int64
-	ProviderEndpointStatusRevision  int64
-	ChannelConfigRevision           int64
-	RoutingCandidateIndex           int32
-	UpstreamOperation               string
-	BreakerEndpointDisposition      pgtype.Text
-	BreakerChannelDisposition       pgtype.Text
-	FaultParty                      pgtype.Text
+	ID                            int64
+	RequestRecordID               int64
+	AttemptIndex                  int32
+	ProviderID                    int64
+	ChannelID                     int64
+	AdapterKey                    string
+	UpstreamModel                 string
+	UpstreamProtocol              string
+	UpstreamResponseID            pgtype.Text
+	UpstreamResponseModel         pgtype.Text
+	UpstreamFinishReason          pgtype.Text
+	FinishClass                   pgtype.Text
+	Status                        string
+	UpstreamStatusCode            pgtype.Int4
+	UpstreamRequestID             pgtype.Text
+	ErrorCode                     pgtype.Text
+	ErrorMessage                  pgtype.Text
+	InternalErrorDetail           pgtype.Text
+	ResponseStartedAt             pgtype.Timestamptz
+	FinalUsageReceived            bool
+	UsageMappingVersion           pgtype.Text
+	StartedAt                     pgtype.Timestamptz
+	CompletedAt                   pgtype.Timestamptz
+	CreatedAt                     pgtype.Timestamptz
+	UpstreamStartedAt             pgtype.Timestamptz
+	UpstreamFirstTokenAt          pgtype.Timestamptz
+	UpstreamCompletedAt           pgtype.Timestamptz
+	ProviderOriginID              int64
+	ProviderOriginBaseUrlRevision int64
+	ProviderOriginStatusRevision  int64
+	ChannelConfigRevision         int64
+	RoutingCandidateIndex         int32
+	UpstreamEndpoint              string
+	BreakerOriginDisposition      pgtype.Text
+	BreakerChannelDisposition     pgtype.Text
+	FaultParty                    pgtype.Text
 }
 
 // MarkRequestAttemptSucceeded 将 running attempt 原子推进到 succeeded，重复 succeeded 返回第一次成功事实。
@@ -770,13 +770,13 @@ func (q *Queries) MarkRequestAttemptSucceeded(ctx context.Context, arg MarkReque
 		&i.UpstreamStartedAt,
 		&i.UpstreamFirstTokenAt,
 		&i.UpstreamCompletedAt,
-		&i.ProviderEndpointID,
-		&i.ProviderEndpointBaseUrlRevision,
-		&i.ProviderEndpointStatusRevision,
+		&i.ProviderOriginID,
+		&i.ProviderOriginBaseUrlRevision,
+		&i.ProviderOriginStatusRevision,
 		&i.ChannelConfigRevision,
 		&i.RoutingCandidateIndex,
-		&i.UpstreamOperation,
-		&i.BreakerEndpointDisposition,
+		&i.UpstreamEndpoint,
+		&i.BreakerOriginDisposition,
 		&i.BreakerChannelDisposition,
 		&i.FaultParty,
 	)
@@ -802,14 +802,14 @@ WITH updated AS (
             completed_at = $13
         WHERE request_attempts.id = $14
             AND request_attempts.status = 'running'
-        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_endpoint_id, request_attempts.provider_endpoint_base_url_revision, request_attempts.provider_endpoint_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_operation, request_attempts.breaker_endpoint_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_origin_id, request_attempts.provider_origin_base_url_revision, request_attempts.provider_origin_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_endpoint, request_attempts.breaker_origin_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
 )
-SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_endpoint_id, provider_endpoint_base_url_revision, provider_endpoint_status_revision, channel_config_revision, routing_candidate_index, upstream_operation, breaker_endpoint_disposition, breaker_channel_disposition, fault_party
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_id, provider_origin_base_url_revision, provider_origin_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_origin_disposition, breaker_channel_disposition, fault_party
 FROM updated
 
 UNION ALL
 
-SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_endpoint_id, request_attempts.provider_endpoint_base_url_revision, request_attempts.provider_endpoint_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_operation, request_attempts.breaker_endpoint_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_origin_id, request_attempts.provider_origin_base_url_revision, request_attempts.provider_origin_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_endpoint, request_attempts.breaker_origin_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
 FROM request_attempts
 WHERE request_attempts.id = $14
   AND request_attempts.status = 'canceled'
@@ -834,42 +834,42 @@ type MarkSettledRequestAttemptCanceledParams struct {
 }
 
 type MarkSettledRequestAttemptCanceledRow struct {
-	ID                              int64
-	RequestRecordID                 int64
-	AttemptIndex                    int32
-	ProviderID                      int64
-	ChannelID                       int64
-	AdapterKey                      string
-	UpstreamModel                   string
-	UpstreamProtocol                string
-	UpstreamResponseID              pgtype.Text
-	UpstreamResponseModel           pgtype.Text
-	UpstreamFinishReason            pgtype.Text
-	FinishClass                     pgtype.Text
-	Status                          string
-	UpstreamStatusCode              pgtype.Int4
-	UpstreamRequestID               pgtype.Text
-	ErrorCode                       pgtype.Text
-	ErrorMessage                    pgtype.Text
-	InternalErrorDetail             pgtype.Text
-	ResponseStartedAt               pgtype.Timestamptz
-	FinalUsageReceived              bool
-	UsageMappingVersion             pgtype.Text
-	StartedAt                       pgtype.Timestamptz
-	CompletedAt                     pgtype.Timestamptz
-	CreatedAt                       pgtype.Timestamptz
-	UpstreamStartedAt               pgtype.Timestamptz
-	UpstreamFirstTokenAt            pgtype.Timestamptz
-	UpstreamCompletedAt             pgtype.Timestamptz
-	ProviderEndpointID              int64
-	ProviderEndpointBaseUrlRevision int64
-	ProviderEndpointStatusRevision  int64
-	ChannelConfigRevision           int64
-	RoutingCandidateIndex           int32
-	UpstreamOperation               string
-	BreakerEndpointDisposition      pgtype.Text
-	BreakerChannelDisposition       pgtype.Text
-	FaultParty                      pgtype.Text
+	ID                            int64
+	RequestRecordID               int64
+	AttemptIndex                  int32
+	ProviderID                    int64
+	ChannelID                     int64
+	AdapterKey                    string
+	UpstreamModel                 string
+	UpstreamProtocol              string
+	UpstreamResponseID            pgtype.Text
+	UpstreamResponseModel         pgtype.Text
+	UpstreamFinishReason          pgtype.Text
+	FinishClass                   pgtype.Text
+	Status                        string
+	UpstreamStatusCode            pgtype.Int4
+	UpstreamRequestID             pgtype.Text
+	ErrorCode                     pgtype.Text
+	ErrorMessage                  pgtype.Text
+	InternalErrorDetail           pgtype.Text
+	ResponseStartedAt             pgtype.Timestamptz
+	FinalUsageReceived            bool
+	UsageMappingVersion           pgtype.Text
+	StartedAt                     pgtype.Timestamptz
+	CompletedAt                   pgtype.Timestamptz
+	CreatedAt                     pgtype.Timestamptz
+	UpstreamStartedAt             pgtype.Timestamptz
+	UpstreamFirstTokenAt          pgtype.Timestamptz
+	UpstreamCompletedAt           pgtype.Timestamptz
+	ProviderOriginID              int64
+	ProviderOriginBaseUrlRevision int64
+	ProviderOriginStatusRevision  int64
+	ChannelConfigRevision         int64
+	RoutingCandidateIndex         int32
+	UpstreamEndpoint              string
+	BreakerOriginDisposition      pgtype.Text
+	BreakerChannelDisposition     pgtype.Text
+	FaultParty                    pgtype.Text
 }
 
 // MarkSettledRequestAttemptCanceled 将 running attempt 推进到 canceled，但保留已结算上游事实（partial stream 客户端取消）。
@@ -919,13 +919,13 @@ func (q *Queries) MarkSettledRequestAttemptCanceled(ctx context.Context, arg Mar
 		&i.UpstreamStartedAt,
 		&i.UpstreamFirstTokenAt,
 		&i.UpstreamCompletedAt,
-		&i.ProviderEndpointID,
-		&i.ProviderEndpointBaseUrlRevision,
-		&i.ProviderEndpointStatusRevision,
+		&i.ProviderOriginID,
+		&i.ProviderOriginBaseUrlRevision,
+		&i.ProviderOriginStatusRevision,
 		&i.ChannelConfigRevision,
 		&i.RoutingCandidateIndex,
-		&i.UpstreamOperation,
-		&i.BreakerEndpointDisposition,
+		&i.UpstreamEndpoint,
+		&i.BreakerOriginDisposition,
 		&i.BreakerChannelDisposition,
 		&i.FaultParty,
 	)
@@ -951,14 +951,14 @@ WITH updated AS (
             completed_at = $13
         WHERE request_attempts.id = $14
             AND request_attempts.status = 'running'
-        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_endpoint_id, request_attempts.provider_endpoint_base_url_revision, request_attempts.provider_endpoint_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_operation, request_attempts.breaker_endpoint_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_origin_id, request_attempts.provider_origin_base_url_revision, request_attempts.provider_origin_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_endpoint, request_attempts.breaker_origin_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
 )
-SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_endpoint_id, provider_endpoint_base_url_revision, provider_endpoint_status_revision, channel_config_revision, routing_candidate_index, upstream_operation, breaker_endpoint_disposition, breaker_channel_disposition, fault_party
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_id, provider_origin_base_url_revision, provider_origin_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_origin_disposition, breaker_channel_disposition, fault_party
 FROM updated
 
 UNION ALL
 
-SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_endpoint_id, request_attempts.provider_endpoint_base_url_revision, request_attempts.provider_endpoint_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_operation, request_attempts.breaker_endpoint_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_protocol, request_attempts.upstream_response_id, request_attempts.upstream_response_model, request_attempts.upstream_finish_reason, request_attempts.finish_class, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.response_started_at, request_attempts.final_usage_received, request_attempts.usage_mapping_version, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at, request_attempts.upstream_started_at, request_attempts.upstream_first_token_at, request_attempts.upstream_completed_at, request_attempts.provider_origin_id, request_attempts.provider_origin_base_url_revision, request_attempts.provider_origin_status_revision, request_attempts.channel_config_revision, request_attempts.routing_candidate_index, request_attempts.upstream_endpoint, request_attempts.breaker_origin_disposition, request_attempts.breaker_channel_disposition, request_attempts.fault_party
 FROM request_attempts
 WHERE request_attempts.id = $14
   AND request_attempts.status = 'failed'
@@ -983,42 +983,42 @@ type MarkSettledRequestAttemptFailedParams struct {
 }
 
 type MarkSettledRequestAttemptFailedRow struct {
-	ID                              int64
-	RequestRecordID                 int64
-	AttemptIndex                    int32
-	ProviderID                      int64
-	ChannelID                       int64
-	AdapterKey                      string
-	UpstreamModel                   string
-	UpstreamProtocol                string
-	UpstreamResponseID              pgtype.Text
-	UpstreamResponseModel           pgtype.Text
-	UpstreamFinishReason            pgtype.Text
-	FinishClass                     pgtype.Text
-	Status                          string
-	UpstreamStatusCode              pgtype.Int4
-	UpstreamRequestID               pgtype.Text
-	ErrorCode                       pgtype.Text
-	ErrorMessage                    pgtype.Text
-	InternalErrorDetail             pgtype.Text
-	ResponseStartedAt               pgtype.Timestamptz
-	FinalUsageReceived              bool
-	UsageMappingVersion             pgtype.Text
-	StartedAt                       pgtype.Timestamptz
-	CompletedAt                     pgtype.Timestamptz
-	CreatedAt                       pgtype.Timestamptz
-	UpstreamStartedAt               pgtype.Timestamptz
-	UpstreamFirstTokenAt            pgtype.Timestamptz
-	UpstreamCompletedAt             pgtype.Timestamptz
-	ProviderEndpointID              int64
-	ProviderEndpointBaseUrlRevision int64
-	ProviderEndpointStatusRevision  int64
-	ChannelConfigRevision           int64
-	RoutingCandidateIndex           int32
-	UpstreamOperation               string
-	BreakerEndpointDisposition      pgtype.Text
-	BreakerChannelDisposition       pgtype.Text
-	FaultParty                      pgtype.Text
+	ID                            int64
+	RequestRecordID               int64
+	AttemptIndex                  int32
+	ProviderID                    int64
+	ChannelID                     int64
+	AdapterKey                    string
+	UpstreamModel                 string
+	UpstreamProtocol              string
+	UpstreamResponseID            pgtype.Text
+	UpstreamResponseModel         pgtype.Text
+	UpstreamFinishReason          pgtype.Text
+	FinishClass                   pgtype.Text
+	Status                        string
+	UpstreamStatusCode            pgtype.Int4
+	UpstreamRequestID             pgtype.Text
+	ErrorCode                     pgtype.Text
+	ErrorMessage                  pgtype.Text
+	InternalErrorDetail           pgtype.Text
+	ResponseStartedAt             pgtype.Timestamptz
+	FinalUsageReceived            bool
+	UsageMappingVersion           pgtype.Text
+	StartedAt                     pgtype.Timestamptz
+	CompletedAt                   pgtype.Timestamptz
+	CreatedAt                     pgtype.Timestamptz
+	UpstreamStartedAt             pgtype.Timestamptz
+	UpstreamFirstTokenAt          pgtype.Timestamptz
+	UpstreamCompletedAt           pgtype.Timestamptz
+	ProviderOriginID              int64
+	ProviderOriginBaseUrlRevision int64
+	ProviderOriginStatusRevision  int64
+	ChannelConfigRevision         int64
+	RoutingCandidateIndex         int32
+	UpstreamEndpoint              string
+	BreakerOriginDisposition      pgtype.Text
+	BreakerChannelDisposition     pgtype.Text
+	FaultParty                    pgtype.Text
 }
 
 // MarkSettledRequestAttemptFailed 将 running attempt 推进到 failed，但保留已结算上游事实（partial stream 上游中断）。
@@ -1068,13 +1068,13 @@ func (q *Queries) MarkSettledRequestAttemptFailed(ctx context.Context, arg MarkS
 		&i.UpstreamStartedAt,
 		&i.UpstreamFirstTokenAt,
 		&i.UpstreamCompletedAt,
-		&i.ProviderEndpointID,
-		&i.ProviderEndpointBaseUrlRevision,
-		&i.ProviderEndpointStatusRevision,
+		&i.ProviderOriginID,
+		&i.ProviderOriginBaseUrlRevision,
+		&i.ProviderOriginStatusRevision,
 		&i.ChannelConfigRevision,
 		&i.RoutingCandidateIndex,
-		&i.UpstreamOperation,
-		&i.BreakerEndpointDisposition,
+		&i.UpstreamEndpoint,
+		&i.BreakerOriginDisposition,
 		&i.BreakerChannelDisposition,
 		&i.FaultParty,
 	)
@@ -1083,21 +1083,21 @@ func (q *Queries) MarkSettledRequestAttemptFailed(ctx context.Context, arg MarkS
 
 const recordRequestAttemptBreakerDisposition = `-- name: RecordRequestAttemptBreakerDisposition :one
 UPDATE request_attempts
-SET breaker_endpoint_disposition = COALESCE(request_attempts.breaker_endpoint_disposition, $1),
+SET breaker_origin_disposition = COALESCE(request_attempts.breaker_origin_disposition, $1),
     breaker_channel_disposition = COALESCE(request_attempts.breaker_channel_disposition, $2)
 WHERE request_attempts.id = $3
-RETURNING id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_endpoint_id, provider_endpoint_base_url_revision, provider_endpoint_status_revision, channel_config_revision, routing_candidate_index, upstream_operation, breaker_endpoint_disposition, breaker_channel_disposition, fault_party
+RETURNING id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_id, provider_origin_base_url_revision, provider_origin_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_origin_disposition, breaker_channel_disposition, fault_party
 `
 
 type RecordRequestAttemptBreakerDispositionParams struct {
-	BreakerEndpointDisposition pgtype.Text
-	BreakerChannelDisposition  pgtype.Text
-	AttemptID                  int64
+	BreakerOriginDisposition  pgtype.Text
+	BreakerChannelDisposition pgtype.Text
+	AttemptID                 int64
 }
 
 // RecordRequestAttemptBreakerDisposition 保留首次已确认的 Finish disposition，重复终态不得覆盖。
 func (q *Queries) RecordRequestAttemptBreakerDisposition(ctx context.Context, arg RecordRequestAttemptBreakerDispositionParams) (RequestAttempt, error) {
-	row := q.db.QueryRow(ctx, recordRequestAttemptBreakerDisposition, arg.BreakerEndpointDisposition, arg.BreakerChannelDisposition, arg.AttemptID)
+	row := q.db.QueryRow(ctx, recordRequestAttemptBreakerDisposition, arg.BreakerOriginDisposition, arg.BreakerChannelDisposition, arg.AttemptID)
 	var i RequestAttempt
 	err := row.Scan(
 		&i.ID,
@@ -1127,13 +1127,13 @@ func (q *Queries) RecordRequestAttemptBreakerDisposition(ctx context.Context, ar
 		&i.UpstreamStartedAt,
 		&i.UpstreamFirstTokenAt,
 		&i.UpstreamCompletedAt,
-		&i.ProviderEndpointID,
-		&i.ProviderEndpointBaseUrlRevision,
-		&i.ProviderEndpointStatusRevision,
+		&i.ProviderOriginID,
+		&i.ProviderOriginBaseUrlRevision,
+		&i.ProviderOriginStatusRevision,
 		&i.ChannelConfigRevision,
 		&i.RoutingCandidateIndex,
-		&i.UpstreamOperation,
-		&i.BreakerEndpointDisposition,
+		&i.UpstreamEndpoint,
+		&i.BreakerOriginDisposition,
 		&i.BreakerChannelDisposition,
 		&i.FaultParty,
 	)
@@ -1146,7 +1146,7 @@ SET upstream_started_at = COALESCE(request_attempts.upstream_started_at, $1),
     upstream_first_token_at = COALESCE(request_attempts.upstream_first_token_at, $2),
     upstream_completed_at = COALESCE(request_attempts.upstream_completed_at, $3)
 WHERE request_attempts.id = $4
-RETURNING id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_endpoint_id, provider_endpoint_base_url_revision, provider_endpoint_status_revision, channel_config_revision, routing_candidate_index, upstream_operation, breaker_endpoint_disposition, breaker_channel_disposition, fault_party
+RETURNING id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_id, provider_origin_base_url_revision, provider_origin_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_origin_disposition, breaker_channel_disposition, fault_party
 `
 
 type RecordRequestAttemptUpstreamTimingParams struct {
@@ -1193,13 +1193,13 @@ func (q *Queries) RecordRequestAttemptUpstreamTiming(ctx context.Context, arg Re
 		&i.UpstreamStartedAt,
 		&i.UpstreamFirstTokenAt,
 		&i.UpstreamCompletedAt,
-		&i.ProviderEndpointID,
-		&i.ProviderEndpointBaseUrlRevision,
-		&i.ProviderEndpointStatusRevision,
+		&i.ProviderOriginID,
+		&i.ProviderOriginBaseUrlRevision,
+		&i.ProviderOriginStatusRevision,
 		&i.ChannelConfigRevision,
 		&i.RoutingCandidateIndex,
-		&i.UpstreamOperation,
-		&i.BreakerEndpointDisposition,
+		&i.UpstreamEndpoint,
+		&i.BreakerOriginDisposition,
 		&i.BreakerChannelDisposition,
 		&i.FaultParty,
 	)

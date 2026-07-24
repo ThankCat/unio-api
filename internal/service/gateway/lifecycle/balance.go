@@ -37,13 +37,13 @@ type ChannelCapacitySnapshotReader func(context.Context, routing.ChatRouteCandid
 
 // BalanceScore 保存一次候选评分的完整组成，供调度、trace 和运行时后台共用。
 type BalanceScore struct {
-	EndpointID                              int64
-	CandidateEndpointBaseURLRevision        int64
-	RuntimeEndpointBaseURLRevision          int64
-	EndpointBaseURLRevisionCurrent          bool
-	CandidateEndpointStatusRevision         int64
-	RuntimeEndpointStatusRevision           int64
-	EndpointStatusRevisionCurrent           bool
+	OriginID                              int64
+	CandidateOriginBaseURLRevision        int64
+	RuntimeOriginBaseURLRevision          int64
+	OriginBaseURLRevisionCurrent          bool
+	CandidateOriginStatusRevision         int64
+	RuntimeOriginStatusRevision           int64
+	OriginStatusRevisionCurrent           bool
 	CandidateChannelConfigRevision          int64
 	RuntimeChannelConfigRevision            *int64
 	ChannelConfigRevisionCurrent            bool
@@ -74,7 +74,7 @@ type BalanceScore struct {
 	CapacityReadFailed                      bool
 	RuntimeControlState                     string
 	RuntimeRevisionCurrent                  bool
-	EndpointBreakerState                    string
+	OriginBreakerState                    string
 	ChannelBreakerState                     string
 	CooldownRemainingMs                     int64
 	ModelPermissionPaused                   bool

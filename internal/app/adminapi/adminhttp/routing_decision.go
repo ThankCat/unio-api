@@ -6,7 +6,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/routingtrace"
 )
 
-// RoutingDecisionDTO is shared by the route decisions list and request detail endpoint.
+// RoutingDecisionDTO is shared by the route decisions list and request detail origin.
 type RoutingDecisionDTO struct {
 	ID                   int64           `json:"id"`
 	RequestRecordID      int64           `json:"request_record_id"`
@@ -16,7 +16,7 @@ type RoutingDecisionDTO struct {
 	Mode                 string          `json:"mode"`
 	RequestedModelID     string          `json:"requested_model_id"`
 	Protocol             string          `json:"protocol"`
-	Operation            string          `json:"operation"`
+	Endpoint            string          `json:"endpoint"`
 	PoolSize             int32           `json:"pool_size"`
 	CandidateCount       int32           `json:"candidate_count"`
 	StickyChannelID      *int64          `json:"sticky_channel_id"`
@@ -40,7 +40,7 @@ func NewRoutingDecisionDTO(d routingtrace.Decision) RoutingDecisionDTO {
 	return RoutingDecisionDTO{
 		ID: d.ID, RequestRecordID: d.RequestRecordID, RequestID: d.RequestID,
 		RequestStatus: d.RequestStatus, RouteID: d.RouteID, Mode: d.Mode,
-		RequestedModelID: d.RequestedModelID, Protocol: d.Protocol, Operation: d.Operation,
+		RequestedModelID: d.RequestedModelID, Protocol: d.Protocol, Endpoint: d.Endpoint,
 		PoolSize: d.PoolSize, CandidateCount: d.CandidateCount, StickyChannelID: d.StickyChannelID,
 		StickyPinned: d.StickyPinned, StickyInvalid: d.StickyInvalid,
 		AllCapacityZero:      d.AllCapacityZero,

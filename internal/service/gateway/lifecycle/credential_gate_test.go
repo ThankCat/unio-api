@@ -29,7 +29,7 @@ func (r *recordingInvalidator) count() int {
 func credentialRevision(channelID, configRevision int64) CredentialRevision {
 	return CredentialRevision{
 		ChannelID: channelID, ChannelConfigRevision: configRevision,
-		EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
+		OriginBaseURLRevision: 1, OriginStatusRevision: 1,
 	}
 }
 

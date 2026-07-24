@@ -118,7 +118,7 @@ func TestMergeUsageWireOfficial1hTierPreserved(t *testing.T) {
 }
 
 func TestMessageUsageToUsageFactsDeepSeekShape(t *testing.T) {
-	// 模拟 DeepSeek Anthropic endpoint 的固定 usage 形状：五字段，无 TTL 拆分、无 thinking 分解。
+	// 模拟 DeepSeek Anthropic origin 的固定 usage 形状：五字段，无 TTL 拆分、无 thinking 分解。
 	u := MessageUsage{
 		InputTokens:              24,
 		CacheCreationInputTokens: intptr(0),

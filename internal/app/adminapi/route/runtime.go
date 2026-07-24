@@ -30,20 +30,20 @@ type runtimeChannelDTO struct {
 	ProviderID                      int64    `json:"provider_id"`
 	ProviderName                    string   `json:"provider_name"`
 	ProviderStatus                  string   `json:"provider_status"`
-	ProviderEndpointID              int64    `json:"provider_endpoint_id"`
-	ProviderEndpointName            string   `json:"provider_endpoint_name"`
-	ProviderEndpointStatus          string   `json:"provider_endpoint_status"`
-	EndpointBaseURLRevision         int64    `json:"endpoint_base_url_revision"`
-	EndpointStatusRevision          int64    `json:"endpoint_status_revision"`
-	RuntimeEndpointBaseURLRevision  int64    `json:"runtime_endpoint_base_url_revision"`
-	RuntimeEndpointStatusRevision   int64    `json:"runtime_endpoint_status_revision"`
-	PendingEndpointBaseURLRevision  *int64   `json:"pending_endpoint_base_url_revision"`
-	PendingEndpointStatusRevision   *int64   `json:"pending_endpoint_status_revision"`
-	EndpointBaseURLRevisionCurrent  bool     `json:"endpoint_base_url_revision_current"`
-	EndpointStatusRevisionCurrent   bool     `json:"endpoint_status_revision_current"`
-	EndpointStateGeneration         int64    `json:"endpoint_state_generation"`
-	EndpointBaseURLFenceGeneration  int64    `json:"endpoint_base_url_fence_generation"`
-	EndpointStatusFenceGeneration   int64    `json:"endpoint_status_fence_generation"`
+	ProviderOriginID              int64    `json:"provider_origin_id"`
+	ProviderOriginName            string   `json:"provider_origin_name"`
+	ProviderOriginStatus          string   `json:"provider_origin_status"`
+	OriginBaseURLRevision         int64    `json:"origin_base_url_revision"`
+	OriginStatusRevision          int64    `json:"origin_status_revision"`
+	RuntimeOriginBaseURLRevision  int64    `json:"runtime_origin_base_url_revision"`
+	RuntimeOriginStatusRevision   int64    `json:"runtime_origin_status_revision"`
+	PendingOriginBaseURLRevision  *int64   `json:"pending_origin_base_url_revision"`
+	PendingOriginStatusRevision   *int64   `json:"pending_origin_status_revision"`
+	OriginBaseURLRevisionCurrent  bool     `json:"origin_base_url_revision_current"`
+	OriginStatusRevisionCurrent   bool     `json:"origin_status_revision_current"`
+	OriginStateGeneration         int64    `json:"origin_state_generation"`
+	OriginBaseURLFenceGeneration  int64    `json:"origin_base_url_fence_generation"`
+	OriginStatusFenceGeneration   int64    `json:"origin_status_fence_generation"`
 	ChannelConfigRevision           int64    `json:"channel_config_revision"`
 	RuntimeChannelConfigRevision    *int64   `json:"runtime_channel_config_revision"`
 	ChannelConfigRevisionCurrent    bool     `json:"channel_config_revision_current"`
@@ -82,8 +82,8 @@ type runtimeChannelDTO struct {
 	Pressure                        float64  `json:"pressure"`
 	CapacityUnknown                 bool     `json:"capacity_unknown"`
 	CapacityReadFailed              bool     `json:"capacity_read_failed"`
-	EndpointBreakerState            *string  `json:"endpoint_breaker_state"`
-	EndpointOpenRemainingMs         *int64   `json:"endpoint_open_remaining_ms"`
+	OriginBreakerState            *string  `json:"origin_breaker_state"`
+	OriginOpenRemainingMs         *int64   `json:"origin_open_remaining_ms"`
 	ChannelBreakerState             *string  `json:"channel_breaker_state"`
 	ChannelOpenRemainingMs          *int64   `json:"channel_open_remaining_ms"`
 	ErrorRate                       *float64 `json:"error_rate"`
@@ -161,19 +161,19 @@ func toRouteRuntimeDTO(value routeruntime.Runtime) routeRuntimeDTO {
 		out.Channels = append(out.Channels, runtimeChannelDTO{
 			ChannelID: channel.ChannelID, ChannelName: channel.ChannelName, ChannelStatus: channel.ChannelStatus,
 			ProviderID: channel.ProviderID, ProviderName: channel.ProviderName, ProviderStatus: channel.ProviderStatus,
-			ProviderEndpointID: channel.ProviderEndpointID, ProviderEndpointName: channel.ProviderEndpointName,
-			ProviderEndpointStatus:          channel.ProviderEndpointStatus,
-			EndpointBaseURLRevision:         channel.EndpointBaseURLRevision,
-			EndpointStatusRevision:          channel.EndpointStatusRevision,
-			RuntimeEndpointBaseURLRevision:  channel.RuntimeEndpointBaseURLRevision,
-			RuntimeEndpointStatusRevision:   channel.RuntimeEndpointStatusRevision,
-			PendingEndpointBaseURLRevision:  channel.PendingEndpointBaseURLRevision,
-			PendingEndpointStatusRevision:   channel.PendingEndpointStatusRevision,
-			EndpointBaseURLRevisionCurrent:  channel.EndpointBaseURLRevisionCurrent,
-			EndpointStatusRevisionCurrent:   channel.EndpointStatusRevisionCurrent,
-			EndpointStateGeneration:         channel.EndpointStateGeneration,
-			EndpointBaseURLFenceGeneration:  channel.EndpointBaseURLFenceGeneration,
-			EndpointStatusFenceGeneration:   channel.EndpointStatusFenceGeneration,
+			ProviderOriginID: channel.ProviderOriginID, ProviderOriginName: channel.ProviderOriginName,
+			ProviderOriginStatus:          channel.ProviderOriginStatus,
+			OriginBaseURLRevision:         channel.OriginBaseURLRevision,
+			OriginStatusRevision:          channel.OriginStatusRevision,
+			RuntimeOriginBaseURLRevision:  channel.RuntimeOriginBaseURLRevision,
+			RuntimeOriginStatusRevision:   channel.RuntimeOriginStatusRevision,
+			PendingOriginBaseURLRevision:  channel.PendingOriginBaseURLRevision,
+			PendingOriginStatusRevision:   channel.PendingOriginStatusRevision,
+			OriginBaseURLRevisionCurrent:  channel.OriginBaseURLRevisionCurrent,
+			OriginStatusRevisionCurrent:   channel.OriginStatusRevisionCurrent,
+			OriginStateGeneration:         channel.OriginStateGeneration,
+			OriginBaseURLFenceGeneration:  channel.OriginBaseURLFenceGeneration,
+			OriginStatusFenceGeneration:   channel.OriginStatusFenceGeneration,
 			ChannelConfigRevision:           channel.ChannelConfigRevision,
 			RuntimeChannelConfigRevision:    channel.RuntimeChannelConfigRevision,
 			ChannelConfigRevisionCurrent:    channel.ChannelConfigRevisionCurrent,
@@ -196,7 +196,7 @@ func toRouteRuntimeDTO(value routeruntime.Runtime) routeRuntimeDTO {
 			CapacityScore: channel.CapacityScore, CostRatio: channel.CostRatio,
 			CostWeight: channel.CostWeight, CostFactor: channel.CostFactor, FinalWeight: channel.FinalWeight,
 			Pressure: channel.Pressure, CapacityUnknown: channel.CapacityUnknown, CapacityReadFailed: channel.CapacityReadFailed,
-			EndpointBreakerState: channel.EndpointBreakerState, EndpointOpenRemainingMs: channel.EndpointOpenRemainingMs,
+			OriginBreakerState: channel.OriginBreakerState, OriginOpenRemainingMs: channel.OriginOpenRemainingMs,
 			ChannelBreakerState: channel.ChannelBreakerState, ChannelOpenRemainingMs: channel.ChannelOpenRemainingMs,
 			ErrorRate: channel.ErrorRate, ErrorSamples: channel.ErrorSamples,
 			TTFTEWMAMs: channel.TTFTEWMAMs, TTFTSamples: channel.TTFTSamples, TTFTSampleSource: channel.TTFTSampleSource,

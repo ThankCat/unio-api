@@ -153,9 +153,9 @@ func TestOperationObserverCoversAttemptPermitLifecycle(t *testing.T) {
 	newInput := func(permitID, requestID string) AcquireAttemptInput {
 		return withAttemptControlRevisions(AcquireAttemptInput{
 			PermitID: permitID, AdmissionFingerprint: permitID + "-fp", RequestAdmissionID: requestID,
-			EndpointID: 601, ChannelID: 501,
-			EndpointBaseURLRevision: 1, EndpointStatusRevision: 1, ChannelConfigRevision: 1,
-			ModelID: 701, UpstreamOperation: OpChatCompletions, RequestMode: ModeNonStream,
+			OriginID: 601, ChannelID: 501,
+			OriginBaseURLRevision: 1, OriginStatusRevision: 1, ChannelConfigRevision: 1,
+			ModelID: 701, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
 		})
 	}
 
@@ -169,9 +169,9 @@ func TestOperationObserverCoversAttemptPermitLifecycle(t *testing.T) {
 		t.Fatalf("renew finish permit: %v", err)
 	}
 	if result, err := store.Finish(ctx, *finishAdmission.Permit, FinishOutcome{
-		EndpointOutcome: OutcomeEligibleSuccess,
+		OriginOutcome: OutcomeEligibleSuccess,
 		ChannelOutcome:  OutcomeEligibleSuccess,
-	}); err != nil || result.EndpointDisposition != DispositionApplied || result.ChannelDisposition != DispositionApplied {
+	}); err != nil || result.OriginDisposition != DispositionApplied || result.ChannelDisposition != DispositionApplied {
 		t.Fatalf("finish permit = %+v, err=%v", result, err)
 	}
 

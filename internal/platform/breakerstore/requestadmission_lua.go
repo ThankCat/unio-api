@@ -108,7 +108,11 @@ end
 local lease_ttl_ms = breaker.attempt_permit_ttl_ms
 local renew_ms = breaker.attempt_permit_renew_interval_ms
 local terminal_ttl_ms = breaker.attempt_permit_terminal_ttl_ms
+-- 分钟窗口桶（RPM/TPM，按分钟号分桶）：TTL 只需覆盖分钟窗口 + permit 生命周期余量即可安全计数。
 local bucket_ttl_ms = lease_ttl_ms + terminal_ttl_ms + 120000
+-- 日窗口桶（RPD，按 UTC 日号分桶）：TTL 必须覆盖整个日窗口，否则静默过期会把当日计数清零、限额失效。
+-- 与 Go 侧 dayBucket = now.Unix()/86400（86400s=一日）一致，额外叠加分钟桶余量兜底时钟偏移。
+local rpd_bucket_ttl_ms = 86400000 + bucket_ttl_ms
 
 -- Validate every resource key/value before the unified write stage. Redis Lua errors do not roll back.
 local rpm_used = read_nonnegative_counter(rpm_key)
@@ -128,7 +132,7 @@ if eff_conc > 0 and conc_used >= eff_conc then return {'limited', 'concurrency'}
 redis.call('INCR', rpm_key)
 redis.call('PEXPIRE', rpm_key, bucket_ttl_ms)
 redis.call('INCR', rpd_key)
-redis.call('PEXPIRE', rpd_key, bucket_ttl_ms)
+redis.call('PEXPIRE', rpd_key, rpd_bucket_ttl_ms)
 local lease_until = now + lease_ttl_ms
 redis.call('ZREMRANGEBYSCORE', conc_key, '-inf', now)
 redis.call('ZADD', conc_key, lease_until, rid)

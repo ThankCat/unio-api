@@ -18,7 +18,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
-// TestP4CompactNativeFallbackDeploymentE2E drives the public Compact endpoint through a real
+// TestP4CompactNativeFallbackDeploymentE2E drives the public Compact origin through a real
 // gateway-server, PostgreSQL, Redis and HTTP upstream. Native 404/405 fallback is intentionally two
 // transports under one ingress admission: each transport owns a permit and attempt, while only the
 // successful synthetic result is settled.
@@ -237,28 +237,28 @@ func assertCompactPermitChain(t *testing.T, h *faultHarness, before, after compa
 		t.Fatalf("request admission did not finish exactly once: key=%s token=%v", requestKeys[0], requestToken)
 	}
 
-	permitsByOperation := make(map[string]map[string]string, len(permitKeys))
+	permitsByEndpoint := make(map[string]map[string]string, len(permitKeys))
 	for _, key := range permitKeys {
 		permit := readRedisHashForCompact(t, h, key)
 		if permit["status"] != "finished" || permit["request_admission_id"] != requestAdmissionID {
 			t.Fatalf("permit not bound to the one finished request admission: key=%s permit=%v", key, permit)
 		}
-		operation := permit["upstream_operation"]
-		if _, duplicate := permitsByOperation[operation]; duplicate {
-			t.Fatalf("duplicate compact permit operation %q", operation)
+		endpoint := permit["upstream_endpoint"]
+		if _, duplicate := permitsByEndpoint[endpoint]; duplicate {
+			t.Fatalf("duplicate compact permit endpoint %q", endpoint)
 		}
-		permitsByOperation[operation] = permit
+		permitsByEndpoint[endpoint] = permit
 	}
 
-	native := permitsByOperation["responses_compact"]
-	synthetic := permitsByOperation["chat_completions"]
+	native := permitsByEndpoint["responses_compact"]
+	synthetic := permitsByEndpoint["chat_completions"]
 	if native == nil || synthetic == nil {
-		t.Fatalf("permit operations=%v, want responses_compact and chat_completions", permitsByOperation)
+		t.Fatalf("permit operations=%v, want responses_compact and chat_completions", permitsByEndpoint)
 	}
-	if native["endpoint_disposition"] != "not_applicable" || native["channel_disposition"] != "not_applicable" {
+	if native["origin_disposition"] != "not_applicable" || native["channel_disposition"] != "not_applicable" {
 		t.Fatalf("native unsupported permit was not breaker-ignored: %v", native)
 	}
-	if synthetic["endpoint_disposition"] != "applied" || synthetic["channel_disposition"] != "applied" {
+	if synthetic["origin_disposition"] != "applied" || synthetic["channel_disposition"] != "applied" {
 		t.Fatalf("synthetic success permit was not applied: %v", synthetic)
 	}
 	nativeTerminal := redisInt64Field(t, native, "terminal_at_ms")
@@ -291,7 +291,7 @@ func redisInt64Field(t *testing.T, value map[string]string, field string) int64 
 func assertCompactBreakerIgnoredThenSucceeded(t *testing.T, h *faultHarness) {
 	t.Helper()
 	for _, key := range []string{
-		h.namespace + ":breaker:v2:endpoint:" + formatID(h.seed.endpointID),
+		h.namespace + ":breaker:v2:origin:" + formatID(h.seed.originID),
 		h.namespace + ":breaker:v2:channel:" + formatID(h.seed.openAIChannelID),
 	} {
 		state := readRedisHashForCompact(t, h, key)
@@ -357,7 +357,7 @@ func assertCompactDatabaseFacts(
 		t.Fatalf("read compact request record: %v", err)
 	}
 	if request.Status != "succeeded" || request.DeliveryStatus != "completed" || request.Stream ||
-		request.IngressProtocol != "openai" || request.Operation != "responses" ||
+		request.IngressProtocol != "openai" || request.Endpoint != "responses" ||
 		request.UserID != seed.userID || request.RequestedModelID != seed.modelID ||
 		!request.RouteID.Valid || request.RouteID.Int64 != seed.routeID ||
 		!request.ResponseModelID.Valid || request.ResponseModelID.String != seed.modelID ||
@@ -375,21 +375,21 @@ func assertCompactDatabaseFacts(
 	}
 	native, synthetic := attempts[0], attempts[1]
 	if native.RequestRecordID != requestID || native.AttemptIndex != 0 || native.Status != "failed" ||
-		native.ChannelID != seed.openAIChannelID || native.ProviderEndpointID != seed.endpointID || native.AdapterKey != "openai" ||
-		native.UpstreamOperation != "responses_compact" ||
+		native.ChannelID != seed.openAIChannelID || native.ProviderOriginID != seed.originID || native.AdapterKey != "openai" ||
+		native.UpstreamEndpoint != "responses_compact" ||
 		!native.UpstreamStatusCode.Valid || int(native.UpstreamStatusCode.Int32) != nativeStatus ||
 		!native.UpstreamRequestID.Valid || native.UpstreamRequestID.String != "p4-fault-compact-unsupported" ||
-		!native.BreakerEndpointDisposition.Valid || native.BreakerEndpointDisposition.String != "not_applicable" ||
+		!native.BreakerOriginDisposition.Valid || native.BreakerOriginDisposition.String != "not_applicable" ||
 		!native.BreakerChannelDisposition.Valid || native.BreakerChannelDisposition.String != "not_applicable" ||
 		!native.FaultParty.Valid || native.FaultParty.String != "client" {
 		t.Fatalf("unexpected native compact attempt: %+v", native)
 	}
 	if synthetic.RequestRecordID != requestID || synthetic.AttemptIndex != 1 || synthetic.Status != "succeeded" ||
-		synthetic.ChannelID != seed.openAIChannelID || synthetic.ProviderEndpointID != seed.endpointID || synthetic.AdapterKey != "openai" ||
-		synthetic.UpstreamOperation != "chat_completions" ||
+		synthetic.ChannelID != seed.openAIChannelID || synthetic.ProviderOriginID != seed.originID || synthetic.AdapterKey != "openai" ||
+		synthetic.UpstreamEndpoint != "chat_completions" ||
 		!synthetic.UpstreamStatusCode.Valid || synthetic.UpstreamStatusCode.Int32 != http.StatusOK ||
 		!synthetic.UpstreamRequestID.Valid || synthetic.UpstreamRequestID.String != "p4-fault-chat" ||
-		!synthetic.BreakerEndpointDisposition.Valid || synthetic.BreakerEndpointDisposition.String != "applied" ||
+		!synthetic.BreakerOriginDisposition.Valid || synthetic.BreakerOriginDisposition.String != "applied" ||
 		!synthetic.BreakerChannelDisposition.Valid || synthetic.BreakerChannelDisposition.String != "applied" ||
 		!synthetic.FinalUsageReceived {
 		t.Fatalf("unexpected synthetic compact attempt: %+v", synthetic)

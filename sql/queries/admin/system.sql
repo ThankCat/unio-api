@@ -1,6 +1,6 @@
 -- name: GetSettlementRecoveryJobByID :one
 -- GetSettlementRecoveryJobByID 按主键读取单条 recovery job 完整事实（含 last_internal_error_detail）。
--- 不加锁，仅供 admin 只读详情端点使用；是否回显内部详情由 service/handler 控制（M8）。
+-- 不加锁，仅供 admin 只读详情上游源站使用；是否回显内部详情由 service/handler 控制（M8）。
 -- 关联预授权行与超额补扣流水,还原资金闭环:冻结(authorized)→ 实扣(captured+overage)→ 释放(released)。
 -- overage 是独立 debit 流水(幂等键 = capture 键 + ':overage',见 ledger/reservation.go),每请求至多一条。
 SELECT

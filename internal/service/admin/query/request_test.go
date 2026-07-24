@@ -75,7 +75,7 @@ func baseRecord() sqlc.RequestRecord {
 		ApiKeyID:            9,
 		RequestedModelID:    "gpt-5.5",
 		IngressProtocol:     "openai",
-		Operation:           "chat_completions",
+		Endpoint:           "chat_completions",
 		Stream:              false,
 		Status:              "failed",
 		InternalErrorDetail: pgtype.Text{String: "upstream 500 raw body", Valid: true},

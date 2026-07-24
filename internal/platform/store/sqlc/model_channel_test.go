@@ -92,25 +92,25 @@ func insertChannel(t *testing.T, ctx context.Context, tx pgx.Tx, providerID int6
 	return insertChannelWithBinding(t, ctx, tx, providerID, name, "openai", "openai", status, priority, timeoutMS)
 }
 
-// insertProviderEndpoint 插入测试 ProviderEndpoint（唯一 base_url），返回主键（P4 §4.2）。
-func insertProviderEndpoint(t *testing.T, ctx context.Context, tx pgx.Tx, providerID int64, name string, baseURL string, status string) int64 {
+// insertProviderOrigin 插入测试 ProviderOrigin（唯一 base_url），返回主键（P4 §4.2）。
+func insertProviderOrigin(t *testing.T, ctx context.Context, tx pgx.Tx, providerID int64, name string, baseURL string, status string) int64 {
 	t.Helper()
 
 	var id int64
 	err := tx.QueryRow(ctx, `
-		INSERT INTO provider_endpoints (provider_id, name, base_url, status)
+		INSERT INTO provider_origins (provider_id, name, base_url, status)
 		VALUES ($1, $2, $3, $4)
 		RETURNING id
 	`, providerID, name, baseURL, status).Scan(&id)
 	if err != nil {
-		t.Fatalf("insert provider endpoint %q: %v", name, err)
+		t.Fatalf("insert provider origin %q: %v", name, err)
 	}
 
 	return id
 }
 
 // insertChannelWithBinding 插入指定 protocol 与 adapter_key 的测试 channel，用于验证同协议路由过滤。
-// P4 §4.4：base_url 归属 ProviderEndpoint，本 helper 为每个 channel 自动建一个同 Provider 下的 enabled Endpoint 并绑定。
+// P4 §4.4：base_url 归属 ProviderOrigin，本 helper 为每个 channel 自动建一个同 Provider 下的 enabled Origin 并绑定。
 func insertChannelWithBinding(t *testing.T, ctx context.Context, tx pgx.Tx, providerID int64, name string, protocol string, adapterKey string, status string, priority int32, timeoutMS *int32) int64 {
 	t.Helper()
 
@@ -119,14 +119,14 @@ func insertChannelWithBinding(t *testing.T, ctx context.Context, tx pgx.Tx, prov
 		timeout = *timeoutMS
 	}
 
-	endpointID := insertProviderEndpoint(t, ctx, tx, providerID, "ep-"+name, "https://"+name+".example.test", "enabled")
+	originID := insertProviderOrigin(t, ctx, tx, providerID, "ep-"+name, "https://"+name+".example.test", "enabled")
 
 	var id int64
 	err := tx.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, provider_endpoint_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
+		INSERT INTO channels (provider_id, provider_origin_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id
-	`, providerID, endpointID, name, protocol, adapterKey, "sk-test-"+name, status, priority, timeout).Scan(&id)
+	`, providerID, originID, name, protocol, adapterKey, "sk-test-"+name, status, priority, timeout).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert channel %q: %v", name, err)
 	}
@@ -134,30 +134,30 @@ func insertChannelWithBinding(t *testing.T, ctx context.Context, tx pgx.Tx, prov
 	return id
 }
 
-// withRequestAttemptRuntimeIdentity freezes the real Endpoint and revision
+// withRequestAttemptRuntimeIdentity freezes the real Origin and revision
 // identity for request-attempt fixtures, matching the production insert contract.
 func withRequestAttemptRuntimeIdentity(t *testing.T, ctx context.Context, tx pgx.Tx, channelID int64, params sqlc.CreateRequestAttemptParams) sqlc.CreateRequestAttemptParams {
 	t.Helper()
 
 	err := tx.QueryRow(ctx, `
-		SELECT c.provider_endpoint_id,
+		SELECT c.provider_origin_id,
 		       pe.base_url_revision,
 		       pe.status_revision,
 		       c.config_revision
 		FROM channels c
-		JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
+		JOIN provider_origins pe ON pe.id = c.provider_origin_id
 		WHERE c.id = $1
 	`, channelID).Scan(
-		&params.ProviderEndpointID,
-		&params.ProviderEndpointBaseUrlRevision,
-		&params.ProviderEndpointStatusRevision,
+		&params.ProviderOriginID,
+		&params.ProviderOriginBaseUrlRevision,
+		&params.ProviderOriginStatusRevision,
 		&params.ChannelConfigRevision,
 	)
 	if err != nil {
 		t.Fatalf("load request-attempt runtime identity for channel %d: %v", channelID, err)
 	}
-	if params.UpstreamOperation == "" {
-		params.UpstreamOperation = "chat_completions"
+	if params.UpstreamEndpoint == "" {
+		params.UpstreamEndpoint = "chat_completions"
 	}
 
 	return params

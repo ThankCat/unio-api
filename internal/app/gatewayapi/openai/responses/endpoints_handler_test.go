@@ -93,7 +93,7 @@ func TestResponsesStatelessUnsupportedHandler(t *testing.T) {
 		t.Fatalf("expected 501, got %d body=%q", rec.Code, rec.Body.String())
 	}
 	_, code, _ := decodeErrorBody(t, rec)
-	if code != "unsupported_endpoint_stateless" {
+	if code != "unsupported_origin_stateless" {
 		t.Fatalf("unexpected stateless code: %q", code)
 	}
 }

@@ -83,17 +83,17 @@ type RoutingDecisionTraceInput struct {
 }
 
 type traceCandidateScore struct {
-	EndpointID                              int64    `json:"endpoint_id"`
+	OriginID                              int64    `json:"origin_id"`
 	ChannelID                               int64    `json:"channel_id"`
 	RouteIndex                              int      `json:"route_index"`
 	Eligible                                bool     `json:"eligible"`
 	ExcludedReason                          string   `json:"excluded_reason,omitempty"`
-	CandidateEndpointBaseURLRevision        int64    `json:"candidate_endpoint_base_url_revision"`
-	RuntimeEndpointBaseURLRevision          int64    `json:"runtime_endpoint_base_url_revision"`
-	EndpointBaseURLRevisionCurrent          bool     `json:"endpoint_base_url_revision_current"`
-	CandidateEndpointStatusRevision         int64    `json:"candidate_endpoint_status_revision"`
-	RuntimeEndpointStatusRevision           int64    `json:"runtime_endpoint_status_revision"`
-	EndpointStatusRevisionCurrent           bool     `json:"endpoint_status_revision_current"`
+	CandidateOriginBaseURLRevision        int64    `json:"candidate_origin_base_url_revision"`
+	RuntimeOriginBaseURLRevision          int64    `json:"runtime_origin_base_url_revision"`
+	OriginBaseURLRevisionCurrent          bool     `json:"origin_base_url_revision_current"`
+	CandidateOriginStatusRevision         int64    `json:"candidate_origin_status_revision"`
+	RuntimeOriginStatusRevision           int64    `json:"runtime_origin_status_revision"`
+	OriginStatusRevisionCurrent           bool     `json:"origin_status_revision_current"`
 	CandidateChannelConfigRevision          int64    `json:"candidate_channel_config_revision"`
 	RuntimeChannelConfigRevision            *int64   `json:"runtime_channel_config_revision"`
 	ChannelConfigRevisionCurrent            bool     `json:"channel_config_revision_current"`
@@ -106,7 +106,7 @@ type traceCandidateScore struct {
 	CircuitBreakerRevision                  int64    `json:"circuit_breaker_revision"`
 	RuntimeControlState                     string   `json:"runtime_control_state"`
 	RuntimeRevisionCurrent                  bool     `json:"runtime_revision_current"`
-	EndpointBreakerState                    string   `json:"endpoint_breaker_state,omitempty"`
+	OriginBreakerState                    string   `json:"origin_breaker_state,omitempty"`
 	ChannelBreakerState                     string   `json:"channel_breaker_state,omitempty"`
 	BreakerStoreAdmission                   string   `json:"breaker_store_admission"`
 	ConcurrencyRemaining                    *float64 `json:"concurrency_remaining"`
@@ -216,10 +216,10 @@ func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTra
 				} else if reason == "" {
 					reason = "not_in_candidate_plan"
 				}
-				if candidate.Balance.EndpointID == 0 {
-					candidate.Balance.EndpointID = row.ProviderEndpointID
-					candidate.Balance.CandidateEndpointBaseURLRevision = row.ProviderEndpointBaseUrlRevision
-					candidate.Balance.CandidateEndpointStatusRevision = row.ProviderEndpointStatusRevision
+				if candidate.Balance.OriginID == 0 {
+					candidate.Balance.OriginID = row.ProviderOriginID
+					candidate.Balance.CandidateOriginBaseURLRevision = row.ProviderOriginBaseUrlRevision
+					candidate.Balance.CandidateOriginStatusRevision = row.ProviderOriginStatusRevision
 					candidate.Balance.CandidateChannelConfigRevision = row.ChannelConfigRevision
 					candidate.Balance.CandidateChannelAdmissionLimitsRevision = row.ChannelAdmissionLimitsRevision
 				}
@@ -260,7 +260,7 @@ func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTra
 		Mode:                 in.Mode,
 		RequestedModelID:     in.Request.RequestedModelID,
 		Protocol:             string(in.Request.IngressProtocol),
-		Operation:            string(in.Request.Operation),
+		Endpoint:            string(in.Request.Endpoint),
 		PoolSize:             int32(poolSize),
 		CandidateCount:       int32(len(in.Plan.Candidates)),
 		StickyChannelID:      stickyID,
@@ -291,14 +291,14 @@ func (r *RoutingTraceRecorder) recordWriteMetric(result string) {
 
 func traceScore(candidate Candidate, channelID int64, routeIndex int, eligible bool, excludedReason string) traceCandidateScore {
 	return traceCandidateScore{
-		EndpointID: candidate.Balance.EndpointID,
+		OriginID: candidate.Balance.OriginID,
 		ChannelID:  channelID, RouteIndex: routeIndex, Eligible: eligible, ExcludedReason: excludedReason,
-		CandidateEndpointBaseURLRevision:        candidate.Balance.CandidateEndpointBaseURLRevision,
-		RuntimeEndpointBaseURLRevision:          candidate.Balance.RuntimeEndpointBaseURLRevision,
-		EndpointBaseURLRevisionCurrent:          candidate.Balance.EndpointBaseURLRevisionCurrent,
-		CandidateEndpointStatusRevision:         candidate.Balance.CandidateEndpointStatusRevision,
-		RuntimeEndpointStatusRevision:           candidate.Balance.RuntimeEndpointStatusRevision,
-		EndpointStatusRevisionCurrent:           candidate.Balance.EndpointStatusRevisionCurrent,
+		CandidateOriginBaseURLRevision:        candidate.Balance.CandidateOriginBaseURLRevision,
+		RuntimeOriginBaseURLRevision:          candidate.Balance.RuntimeOriginBaseURLRevision,
+		OriginBaseURLRevisionCurrent:          candidate.Balance.OriginBaseURLRevisionCurrent,
+		CandidateOriginStatusRevision:         candidate.Balance.CandidateOriginStatusRevision,
+		RuntimeOriginStatusRevision:           candidate.Balance.RuntimeOriginStatusRevision,
+		OriginStatusRevisionCurrent:           candidate.Balance.OriginStatusRevisionCurrent,
 		CandidateChannelConfigRevision:          candidate.Balance.CandidateChannelConfigRevision,
 		RuntimeChannelConfigRevision:            candidate.Balance.RuntimeChannelConfigRevision,
 		ChannelConfigRevisionCurrent:            candidate.Balance.ChannelConfigRevisionCurrent,
@@ -311,7 +311,7 @@ func traceScore(candidate Candidate, channelID int64, routeIndex int, eligible b
 		CircuitBreakerRevision:                  candidate.Balance.CircuitBreakerRevision,
 		RuntimeControlState:                     candidate.Balance.RuntimeControlState,
 		RuntimeRevisionCurrent:                  candidate.Balance.RuntimeRevisionCurrent,
-		EndpointBreakerState:                    candidate.Balance.EndpointBreakerState,
+		OriginBreakerState:                    candidate.Balance.OriginBreakerState,
 		ChannelBreakerState:                     candidate.Balance.ChannelBreakerState,
 		BreakerStoreAdmission:                   candidate.Balance.BreakerStoreAdmission,
 		ConcurrencyRemaining:                    candidate.Balance.ConcurrencyRemaining,

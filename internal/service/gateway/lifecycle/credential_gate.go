@@ -11,8 +11,8 @@ import (
 type CredentialRevision struct {
 	ChannelID               int64
 	ChannelConfigRevision   int64
-	EndpointBaseURLRevision int64
-	EndpointStatusRevision  int64
+	OriginBaseURLRevision int64
+	OriginStatusRevision  int64
 }
 
 // CredentialInvalidator 在渠道被判定「凭据失效」时执行持久化副作用：把 channels.credential_valid
@@ -77,7 +77,7 @@ func (g *ChannelCredentialGate) RecordResult(revision CredentialRevision, err er
 		return
 	}
 	if revision.ChannelID <= 0 || revision.ChannelConfigRevision <= 0 ||
-		revision.EndpointBaseURLRevision <= 0 || revision.EndpointStatusRevision <= 0 {
+		revision.OriginBaseURLRevision <= 0 || revision.OriginStatusRevision <= 0 {
 		return
 	}
 

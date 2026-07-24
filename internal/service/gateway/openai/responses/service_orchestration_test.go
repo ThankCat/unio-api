@@ -178,7 +178,7 @@ func (s *fakeRequestLog) CreateRequest(_ context.Context, params requestlog.Crea
 		UserID:          params.UserID,
 		APIKeyID:        params.APIKeyID,
 		IngressProtocol: params.IngressProtocol,
-		Operation:       params.Operation,
+		Endpoint:       params.Endpoint,
 		Status:          requestlog.RequestStatusPending,
 		StartedAt:       params.StartedAt,
 	}, nil
@@ -236,7 +236,7 @@ func (s *fakeRequestLog) CreateAttempt(_ context.Context, params requestlog.Crea
 		AdapterKey:            params.AdapterKey,
 		UpstreamModel:         params.UpstreamModel,
 		RoutingCandidateIndex: params.RoutingCandidateIndex,
-		UpstreamOperation:     params.UpstreamOperation,
+		UpstreamEndpoint:     params.UpstreamEndpoint,
 		Status:                requestlog.AttemptStatusRunning,
 		StartedAt:             params.StartedAt,
 	}, nil
@@ -447,12 +447,12 @@ func TestCreateResponse_HappyPath(t *testing.T) {
 		t.Fatalf("expected one completed delivery, completed=%v interrupted=%v", requestLog.deliveryCompleted, requestLog.deliveryInterrupted)
 	}
 
-	// 请求审计落 Operation=responses、IngressProtocol=openai。
+	// 请求审计落 Endpoint=responses、IngressProtocol=openai。
 	if len(requestLog.createRequests) != 1 {
 		t.Fatalf("expected 1 create request, got %d", len(requestLog.createRequests))
 	}
-	if requestLog.createRequests[0].Operation != requestlog.OperationResponses {
-		t.Fatalf("expected operation responses, got %q", requestLog.createRequests[0].Operation)
+	if requestLog.createRequests[0].Endpoint != requestlog.EndpointResponses {
+		t.Fatalf("expected endpoint responses, got %q", requestLog.createRequests[0].Endpoint)
 	}
 	if requestLog.createRequests[0].IngressProtocol != requestlog.ProtocolOpenAI {
 		t.Fatalf("expected ingress protocol openai, got %q", requestLog.createRequests[0].IngressProtocol)

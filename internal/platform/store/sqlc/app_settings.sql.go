@@ -187,7 +187,7 @@ SELECT
     )
     AND NOT EXISTS (
         SELECT 1
-        FROM endpoint_routing_operations AS operation
+        FROM origin_routing_operations AS operation
         WHERE operation.state <> ALL (ARRAY['committed'::text, 'aborted'::text])
     ) THEN TRUE ELSE FALSE END AS runtime_operations_reconciled,
     CASE WHEN
@@ -233,7 +233,7 @@ SELECT
         )
         AND NOT EXISTS (
             SELECT 1
-            FROM endpoint_routing_operations AS operation
+            FROM origin_routing_operations AS operation
             WHERE operation.state <> ALL (ARRAY['committed'::text, 'aborted'::text])
         )
     THEN TRUE ELSE FALSE END AS runtime_maintenance_smoke_allowed
@@ -264,7 +264,7 @@ type GetGatewayRuntimeReadinessSnapshotRow struct {
 }
 
 // GetGatewayRuntimeReadinessSnapshot 在同一 statement snapshot 中读取 readiness 所需的 epoch 与五个关键 control revision，
-// 并确认关键 setting、Channel admission 与 Endpoint 围栏的持久操作均已终结。
+// 并确认关键 setting、Channel admission 与 Origin 围栏的持久操作均已终结。
 // 任一必需行缺失时返回 no rows，Gateway 必须 fail-closed。
 func (q *Queries) GetGatewayRuntimeReadinessSnapshot(ctx context.Context) (GetGatewayRuntimeReadinessSnapshotRow, error) {
 	row := q.db.QueryRow(ctx, getGatewayRuntimeReadinessSnapshot)

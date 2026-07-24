@@ -1,10 +1,10 @@
 package breakerstore
 
-// Endpoint revision fences use a Redis-side operation record in addition to the Endpoint control.
+// Origin revision fences use a Redis-side operation record in addition to the Origin control.
 // The operation record makes prepare/commit/abort first-terminal-wins even after a response is lost.
 // Non-terminal records intentionally have no TTL; terminal records are retained for the caller supplied
 // bounded retention period. Every script validates all keys before entering its write phase.
-const luaEndpointFenceHelpers = `
+const luaOriginFenceHelpers = `
 local function key_type(key)
   local t = redis.call('TYPE', key)
   if type(t) == 'table' then return t.ok end
@@ -54,7 +54,7 @@ local function write_terminal_op(op, token, payload_hash, kind, provider_id, tar
   redis.call('PEXPIRE', op, ttl_ms)
 end
 
-local function reset_endpoint(ep, now)
+local function reset_origin(ep, now)
   local gen = (tonumber(redis.call('HGET', ep, 'state_generation')) or 0) + 1
   redis.call('HSET', ep,
     'state', 'closed', 'state_generation', gen, 'window_started_at_ms', now,
@@ -66,7 +66,7 @@ local function reset_endpoint(ep, now)
     'last_failure_at_ms', 'last_failure_category')
 end
 
-local function restore_endpoint(ep, base_rev, status_rev, effective_status, now)
+local function restore_origin(ep, base_rev, status_rev, effective_status, now)
   redis.call('HSET', ep,
     'control_present', '1', 'effective_status', effective_status,
     'base_url_revision', base_rev, 'status_revision', status_rev,
@@ -79,34 +79,34 @@ local function restore_endpoint(ep, base_rev, status_rev, effective_status, now)
 end
 `
 
-// KEYS[1]=endpoint. ARGV: base_url_revision, status_revision, effective_status.
-const luaInitEndpointControl = luaEndpointFenceHelpers + `
+// KEYS[1]=origin. ARGV: base_url_revision, status_revision, effective_status.
+const luaInitOriginControl = luaOriginFenceHelpers + `
 local ep = KEYS[1]
-if key_type(ep) ~= 'none' and key_type(ep) ~= 'hash' then return redis.error_reply('invalid endpoint key type') end
+if key_type(ep) ~= 'none' and key_type(ep) ~= 'hash' then return redis.error_reply('invalid origin key type') end
 if redis.call('HGET', ep, 'control_present') == '1' then return {'exists'} end
 if tonumber(ARGV[1]) == nil or tonumber(ARGV[1]) < 1 or
    tonumber(ARGV[2]) == nil or tonumber(ARGV[2]) < 1 or not valid_status(ARGV[3]) then
-  return redis.error_reply('invalid endpoint control')
+  return redis.error_reply('invalid origin control')
 end
-restore_endpoint(ep, ARGV[1], ARGV[2], ARGV[3], now_ms())
+restore_origin(ep, ARGV[1], ARGV[2], ARGV[3], now_ms())
 return {'created'}
 `
 
 // Recovery-only absent control restore. Existing controls are never overwritten.
-const luaRestoreMissingEndpointControl = luaEndpointFenceHelpers + `
+const luaRestoreMissingOriginControl = luaOriginFenceHelpers + `
 local ep = KEYS[1]
-if key_type(ep) ~= 'none' and key_type(ep) ~= 'hash' then return redis.error_reply('invalid endpoint key type') end
+if key_type(ep) ~= 'none' and key_type(ep) ~= 'hash' then return redis.error_reply('invalid origin key type') end
 if redis.call('HGET', ep, 'control_present') == '1' then return {'exists'} end
 if tonumber(ARGV[1]) == nil or tonumber(ARGV[1]) < 1 or
    tonumber(ARGV[2]) == nil or tonumber(ARGV[2]) < 1 or not valid_status(ARGV[3]) then
-  return redis.error_reply('invalid endpoint control')
+  return redis.error_reply('invalid origin control')
 end
-restore_endpoint(ep, ARGV[1], ARGV[2], ARGV[3], now_ms())
+restore_origin(ep, ARGV[1], ARGV[2], ARGV[3], now_ms())
 return {'installed'}
 `
 
-// Singular status prepare. KEYS: endpoint, op. ARGV: current, next, next_effective, token, hash.
-const luaPrepareEndpointStatus = luaEndpointFenceHelpers + `
+// Singular status prepare. KEYS: origin, op. ARGV: current, next, next_effective, token, hash.
+const luaPrepareOriginStatus = luaOriginFenceHelpers + `
 local ep, op = KEYS[1], KEYS[2]
 local current, next_rev, next_eff, token, payload_hash = ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5]
 local op_state = read_op(op, token, payload_hash, 'status', '', '1')
@@ -134,8 +134,8 @@ write_prepared_op(op, token, payload_hash, 'status', '', '1')
 return {'prepared'}
 `
 
-// Singular status commit. KEYS: endpoint, six evidence keys, op. ARGV: token, hash, terminal_ttl_ms.
-const luaCommitEndpointStatus = luaEndpointFenceHelpers + `
+// Singular status commit. KEYS: origin, six evidence keys, op. ARGV: token, hash, terminal_ttl_ms.
+const luaCommitOriginStatus = luaOriginFenceHelpers + `
 local ep, op = KEYS[1], KEYS[#KEYS]
 local token, payload_hash, ttl_ms = ARGV[1], ARGV[2], tonumber(ARGV[3])
 local op_state = read_op(op, token, payload_hash, 'status', '', '1')
@@ -151,14 +151,14 @@ local next_eff = redis.call('HGET', ep, 'pending_effective_status')
 if tonumber(next_rev) == nil or not valid_status(next_eff) then return {'conflict'} end
 redis.call('HSET', ep, 'status_revision', next_rev, 'effective_status', next_eff, 'status_revision_state', 'active')
 redis.call('HDEL', ep, 'pending_status_revision', 'pending_effective_status', 'status_fence_token', 'status_payload_hash')
-reset_endpoint(ep, now_ms())
+reset_origin(ep, now_ms())
 for i = 2, #KEYS - 1 do redis.call('DEL', KEYS[i]) end
 write_terminal_op(op, token, payload_hash, 'status', '', '1', 'committed', ttl_ms)
 return {'committed', next_rev}
 `
 
-// Singular status abort. KEYS: endpoint, six evidence keys, op. ARGV: token, hash, terminal_ttl_ms.
-const luaAbortEndpointStatus = luaEndpointFenceHelpers + `
+// Singular status abort. KEYS: origin, six evidence keys, op. ARGV: token, hash, terminal_ttl_ms.
+const luaAbortOriginStatus = luaOriginFenceHelpers + `
 local ep, op = KEYS[1], KEYS[#KEYS]
 local token, payload_hash, ttl_ms = ARGV[1], ARGV[2], tonumber(ARGV[3])
 local op_state = read_op(op, token, payload_hash, 'status', '', '1')
@@ -171,14 +171,14 @@ if redis.call('HGET', ep, 'base_url_revision_state') ~= 'active' or
    redis.call('HGET', ep, 'status_payload_hash') ~= payload_hash then return {'conflict'} end
 redis.call('HSET', ep, 'status_revision_state', 'active')
 redis.call('HDEL', ep, 'pending_status_revision', 'pending_effective_status', 'status_fence_token', 'status_payload_hash')
-reset_endpoint(ep, now_ms())
+reset_origin(ep, now_ms())
 for i = 2, #KEYS - 1 do redis.call('DEL', KEYS[i]) end
 write_terminal_op(op, token, payload_hash, 'status', '', '1', 'aborted', ttl_ms)
 return {'aborted'}
 `
 
 // Singular BaseURL scripts mirror status scripts while requiring status to stay active.
-const luaPrepareEndpointBaseURL = luaEndpointFenceHelpers + `
+const luaPrepareOriginBaseURL = luaOriginFenceHelpers + `
 local ep, op = KEYS[1], KEYS[2]
 local current, next_rev, token, payload_hash = ARGV[1], ARGV[2], ARGV[3], ARGV[4]
 local op_state = read_op(op, token, payload_hash, 'base_url', '', '1')
@@ -205,7 +205,7 @@ write_prepared_op(op, token, payload_hash, 'base_url', '', '1')
 return {'prepared'}
 `
 
-const luaCommitEndpointBaseURL = luaEndpointFenceHelpers + `
+const luaCommitOriginBaseURL = luaOriginFenceHelpers + `
 local ep, op = KEYS[1], KEYS[#KEYS]
 local token, payload_hash, ttl_ms = ARGV[1], ARGV[2], tonumber(ARGV[3])
 local op_state = read_op(op, token, payload_hash, 'base_url', '', '1')
@@ -220,13 +220,13 @@ local next_rev = redis.call('HGET', ep, 'pending_base_url_revision')
 if tonumber(next_rev) == nil then return {'conflict'} end
 redis.call('HSET', ep, 'base_url_revision', next_rev, 'base_url_revision_state', 'active')
 redis.call('HDEL', ep, 'pending_base_url_revision', 'base_url_fence_token', 'base_url_payload_hash')
-reset_endpoint(ep, now_ms())
+reset_origin(ep, now_ms())
 for i = 2, #KEYS - 1 do redis.call('DEL', KEYS[i]) end
 write_terminal_op(op, token, payload_hash, 'base_url', '', '1', 'committed', ttl_ms)
 return {'committed', next_rev}
 `
 
-const luaAbortEndpointBaseURL = luaEndpointFenceHelpers + `
+const luaAbortOriginBaseURL = luaOriginFenceHelpers + `
 local ep, op = KEYS[1], KEYS[#KEYS]
 local token, payload_hash, ttl_ms = ARGV[1], ARGV[2], tonumber(ARGV[3])
 local op_state = read_op(op, token, payload_hash, 'base_url', '', '1')
@@ -239,16 +239,16 @@ if redis.call('HGET', ep, 'status_revision_state') ~= 'active' or
    redis.call('HGET', ep, 'base_url_payload_hash') ~= payload_hash then return {'conflict'} end
 redis.call('HSET', ep, 'base_url_revision_state', 'active')
 redis.call('HDEL', ep, 'pending_base_url_revision', 'base_url_fence_token', 'base_url_payload_hash')
-reset_endpoint(ep, now_ms())
+reset_origin(ep, now_ms())
 for i = 2, #KEYS - 1 do redis.call('DEL', KEYS[i]) end
 write_terminal_op(op, token, payload_hash, 'base_url', '', '1', 'aborted', ttl_ms)
 return {'aborted'}
 `
 
 // Combined BaseURL + status prepare changes both pending fences in one write phase.
-// KEYS: endpoint, op. ARGV: current_base, next_base, current_status, next_status,
+// KEYS: origin, op. ARGV: current_base, next_base, current_status, next_status,
 // next_effective, token, payload_hash.
-const luaPrepareEndpointRoutingChange = luaEndpointFenceHelpers + `
+const luaPrepareOriginRoutingChange = luaOriginFenceHelpers + `
 local ep, op = KEYS[1], KEYS[2]
 local cb, nb, cs, ns, ne, token, payload_hash = ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6], ARGV[7]
 local op_state = read_op(op, token, payload_hash, 'base_url_status', '', '1')
@@ -285,7 +285,7 @@ write_prepared_op(op, token, payload_hash, 'base_url_status', '', '1')
 return {'prepared'}
 `
 
-const luaCommitEndpointRoutingChange = luaEndpointFenceHelpers + `
+const luaCommitOriginRoutingChange = luaOriginFenceHelpers + `
 local ep, op = KEYS[1], KEYS[#KEYS]
 local token, payload_hash, ttl_ms = ARGV[1], ARGV[2], tonumber(ARGV[3])
 local op_state = read_op(op, token, payload_hash, 'base_url_status', '', '1')
@@ -308,13 +308,13 @@ redis.call('HSET', ep,
 redis.call('HDEL', ep,
   'pending_base_url_revision', 'base_url_fence_token', 'base_url_payload_hash',
   'pending_status_revision', 'pending_effective_status', 'status_fence_token', 'status_payload_hash')
-reset_endpoint(ep, now_ms())
+reset_origin(ep, now_ms())
 for i = 2, #KEYS - 1 do redis.call('DEL', KEYS[i]) end
 write_terminal_op(op, token, payload_hash, 'base_url_status', '', '1', 'committed', ttl_ms)
 return {'committed', nb, ns}
 `
 
-const luaAbortEndpointRoutingChange = luaEndpointFenceHelpers + `
+const luaAbortOriginRoutingChange = luaOriginFenceHelpers + `
 local ep, op = KEYS[1], KEYS[#KEYS]
 local token, payload_hash, ttl_ms = ARGV[1], ARGV[2], tonumber(ARGV[3])
 local op_state = read_op(op, token, payload_hash, 'base_url_status', '', '1')
@@ -331,15 +331,15 @@ redis.call('HSET', ep, 'base_url_revision_state', 'active', 'status_revision_sta
 redis.call('HDEL', ep,
   'pending_base_url_revision', 'base_url_fence_token', 'base_url_payload_hash',
   'pending_status_revision', 'pending_effective_status', 'status_fence_token', 'status_payload_hash')
-reset_endpoint(ep, now_ms())
+reset_origin(ep, now_ms())
 for i = 2, #KEYS - 1 do redis.call('DEL', KEYS[i]) end
 write_terminal_op(op, token, payload_hash, 'base_url_status', '', '1', 'aborted', ttl_ms)
 return {'aborted'}
 `
 
-// Provider status batch prepare. KEYS[1..n]=ordered endpoints, KEYS[n+1]=op.
-// ARGV: n, max, provider_id, token, hash, then repeated endpoint_id,current,next,next_effective.
-const luaPrepareEndpointStatusBatch = luaEndpointFenceHelpers + `
+// Provider status batch prepare. KEYS[1..n]=ordered origins, KEYS[n+1]=op.
+// ARGV: n, max, provider_id, token, hash, then repeated origin_id,current,next,next_effective.
+const luaPrepareOriginStatusBatch = luaOriginFenceHelpers + `
 local n, max_n = tonumber(ARGV[1]), tonumber(ARGV[2])
 local provider_id, token, payload_hash = ARGV[3], ARGV[4], ARGV[5]
 if n == nil or max_n == nil or n < 1 or max_n < 1 or max_n > 1024 or n > max_n or #KEYS ~= n + 1 then return {'too_large'} end
@@ -350,10 +350,10 @@ if op_state == 'conflict' or op_state == 'invalid' then return {'conflict'} end
 local previous_id = 0
 for i = 1, n do
   local offset = 5 + (i - 1) * 4
-  local endpoint_id, current, next_rev, next_eff = tonumber(ARGV[offset + 1]), ARGV[offset + 2], ARGV[offset + 3], ARGV[offset + 4]
+  local origin_id, current, next_rev, next_eff = tonumber(ARGV[offset + 1]), ARGV[offset + 2], ARGV[offset + 3], ARGV[offset + 4]
   local ep = KEYS[i]
-  if endpoint_id == nil or endpoint_id <= previous_id or tonumber(next_rev) ~= tonumber(current) + 1 or not valid_status(next_eff) then return {'invalid'} end
-  previous_id = endpoint_id
+  if origin_id == nil or origin_id <= previous_id or tonumber(next_rev) ~= tonumber(current) + 1 or not valid_status(next_eff) then return {'invalid'} end
+  previous_id = origin_id
   if key_type(ep) ~= 'hash' or redis.call('HGET', ep, 'control_present') ~= '1' then return {'absent'} end
   if op_state == 'prepared' then
     if redis.call('HGET', ep, 'status_revision_state') ~= 'pending' or
@@ -382,9 +382,9 @@ write_prepared_op(op, token, payload_hash, 'provider_status_batch', provider_id,
 return {'prepared'}
 `
 
-// Batch commit/abort KEYS: n endpoints, 6*n evidence keys, op.
+// Batch commit/abort KEYS: n origins, 6*n evidence keys, op.
 // ARGV: n, provider_id, token, hash, terminal_ttl_ms.
-const luaCommitEndpointStatusBatch = luaEndpointFenceHelpers + `
+const luaCommitOriginStatusBatch = luaOriginFenceHelpers + `
 local n, provider_id, token, payload_hash, ttl_ms = tonumber(ARGV[1]), ARGV[2], ARGV[3], ARGV[4], tonumber(ARGV[5])
 if n == nil or n < 1 or #KEYS ~= n * 7 + 1 or ttl_ms == nil or ttl_ms < 1 then return {'invalid'} end
 local op = KEYS[#KEYS]
@@ -407,14 +407,14 @@ for i = 1, n do
   local next_eff = redis.call('HGET', ep, 'pending_effective_status')
   redis.call('HSET', ep, 'status_revision', next_rev, 'effective_status', next_eff, 'status_revision_state', 'active')
   redis.call('HDEL', ep, 'pending_status_revision', 'pending_effective_status', 'status_fence_token', 'status_payload_hash')
-  reset_endpoint(ep, now)
+  reset_origin(ep, now)
 end
 for i = n + 1, #KEYS - 1 do redis.call('DEL', KEYS[i]) end
 write_terminal_op(op, token, payload_hash, 'provider_status_batch', provider_id, tostring(n), 'committed', ttl_ms)
 return {'committed'}
 `
 
-const luaAbortEndpointStatusBatch = luaEndpointFenceHelpers + `
+const luaAbortOriginStatusBatch = luaOriginFenceHelpers + `
 local n, provider_id, token, payload_hash, ttl_ms = tonumber(ARGV[1]), ARGV[2], ARGV[3], ARGV[4], tonumber(ARGV[5])
 if n == nil or n < 1 or #KEYS ~= n * 7 + 1 or ttl_ms == nil or ttl_ms < 1 then return {'invalid'} end
 local op = KEYS[#KEYS]
@@ -433,7 +433,7 @@ for i = 1, n do
   local ep = KEYS[i]
   redis.call('HSET', ep, 'status_revision_state', 'active')
   redis.call('HDEL', ep, 'pending_status_revision', 'pending_effective_status', 'status_fence_token', 'status_payload_hash')
-  reset_endpoint(ep, now)
+  reset_origin(ep, now)
 end
 for i = n + 1, #KEYS - 1 do redis.call('DEL', KEYS[i]) end
 write_terminal_op(op, token, payload_hash, 'provider_status_batch', provider_id, tostring(n), 'aborted', ttl_ms)
@@ -443,11 +443,11 @@ return {'aborted'}
 // Recovery reconciles a durable PostgreSQL operation against current business facts. It can restore
 // absent controls at arbitrary revisions, finish matching pending fences, or recognize an already active
 // terminal result without advancing a generation twice.
-// KEYS: n endpoints, 6*n evidence keys, op.
+// KEYS: n origins, 6*n evidence keys, op.
 // ARGV: mode(committed|aborted), kind, n, provider_id, token, payload_hash, terminal_ttl_ms,
-// then repeated: endpoint_id,current_base,next_base,current_status,next_status,current_eff,next_eff,
+// then repeated: origin_id,current_base,next_base,current_status,next_status,current_eff,next_eff,
 // fact_base,fact_status,fact_eff.
-const luaRecoverEndpointRouting = luaEndpointFenceHelpers + `
+const luaRecoverOriginRouting = luaOriginFenceHelpers + `
 local mode, kind, n = ARGV[1], ARGV[2], tonumber(ARGV[3])
 local provider_id, token, payload_hash, ttl_ms = ARGV[4], ARGV[5], ARGV[6], tonumber(ARGV[7])
 if (mode ~= 'committed' and mode ~= 'aborted') or
@@ -462,14 +462,14 @@ local actions = {}
 local previous_id = 0
 for i = 1, n do
   local offset = 7 + (i - 1) * 10
-  local endpoint_id = tonumber(ARGV[offset + 1])
+  local origin_id = tonumber(ARGV[offset + 1])
   local cb, nb, cs, ns = ARGV[offset + 2], ARGV[offset + 3], ARGV[offset + 4], ARGV[offset + 5]
   local ce, ne = ARGV[offset + 6], ARGV[offset + 7]
   local fb, fs, fe = ARGV[offset + 8], ARGV[offset + 9], ARGV[offset + 10]
   local ep = KEYS[i]
-  if endpoint_id == nil or endpoint_id <= previous_id or tonumber(fb) == nil or tonumber(fb) < 1 or
+  if origin_id == nil or origin_id <= previous_id or tonumber(fb) == nil or tonumber(fb) < 1 or
      tonumber(fs) == nil or tonumber(fs) < 1 or not valid_status(fe) then return {'invalid'} end
-  previous_id = endpoint_id
+  previous_id = origin_id
   local typ = key_type(ep)
   if typ == 'none' then
     actions[i] = 'restore'
@@ -529,7 +529,7 @@ for i = 1, n do
   local fb, fs, fe = ARGV[offset + 8], ARGV[offset + 9], ARGV[offset + 10]
   local ep = KEYS[i]
   if actions[i] == 'restore' then
-    restore_endpoint(ep, fb, fs, fe, now)
+    restore_origin(ep, fb, fs, fe, now)
   elseif actions[i] == 'pending' then
     if kind == 'base_url' then
       redis.call('HSET', ep, 'base_url_revision', fb, 'base_url_revision_state', 'active')
@@ -545,7 +545,7 @@ for i = 1, n do
         'pending_base_url_revision', 'base_url_fence_token', 'base_url_payload_hash',
         'pending_status_revision', 'pending_effective_status', 'status_fence_token', 'status_payload_hash')
     end
-    reset_endpoint(ep, now)
+    reset_origin(ep, now)
   end
   if actions[i] ~= 'active' then
     local evidence_start = n + (i - 1) * 6 + 1

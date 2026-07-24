@@ -135,7 +135,7 @@ func TestFormatFailureAuditSnapshotIncludesOnlySanitizedFacts(t *testing.T) {
 		upstreamStatusCode:     pgtype.Int4{Int32: 429, Valid: true},
 		upstreamStartedAt:      pgtype.Timestamptz{Time: start, Valid: true},
 		upstreamCompletedAt:    pgtype.Timestamptz{Time: start.Add(1250 * time.Millisecond), Valid: true},
-		endpointDisposition:    "applied",
+		originDisposition:    "applied",
 		channelDisposition:     "applied",
 	})
 
@@ -144,7 +144,7 @@ func TestFormatFailureAuditSnapshotIncludesOnlySanitizedFacts(t *testing.T) {
 		`request_error_code="adapter_upstream_status"`,
 		"upstream_status_code=429",
 		"transport_duration_ms=1250",
-		`endpoint_disposition="applied"`,
+		`origin_disposition="applied"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("diagnostic = %q, want substring %q", got, want)

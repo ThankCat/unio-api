@@ -1,7 +1,7 @@
 -- runtime_control_operations 承载单目标可恢复发布：Channel 四维限额、四个关键 app_settings
 -- （route_rate_limit_defaults / channel_rate_limit_defaults / concurrency_defaults /
 -- circuit_breaker / routing_balance），以及维护专用
--- 完整性 epoch（gateway.runtime_state_epoch）。Endpoint/Provider 批量围栏走 endpoint_routing_operations，
+-- 完整性 epoch（gateway.runtime_state_epoch）。Origin/Provider 批量围栏走 origin_routing_operations，
 -- 二者不合表（计划 §4.5）。普通状态机：preparing -> prepared -> db_committed -> committed；
 -- 非 bootstrap epoch 在 ready 数据态后保持 db_committed -> awaiting_release，真实 Gateway smoke 通过后才 committed；
 -- 普通 control 仅业务 revision 未提交时 preparing|prepared -> aborted；runtime_state_epoch 任何阶段不允许 Abort。

@@ -33,8 +33,8 @@ func (i *credentialInvalidator) MarkChannelCredentialInvalid(revision lifecycle.
 		applied, err := i.queries.ApplyRuntime401CredentialInvalidation(ctx, sqlc.ApplyRuntime401CredentialInvalidationParams{
 			ChannelID:                       revision.ChannelID,
 			ExpectedConfigRevision:          revision.ChannelConfigRevision,
-			ExpectedEndpointBaseUrlRevision: revision.EndpointBaseURLRevision,
-			ExpectedEndpointStatusRevision:  revision.EndpointStatusRevision,
+			ExpectedOriginBaseUrlRevision: revision.OriginBaseURLRevision,
+			ExpectedOriginStatusRevision:  revision.OriginStatusRevision,
 		})
 		if err != nil {
 			i.logger.Error("mark channel credential invalid failed",

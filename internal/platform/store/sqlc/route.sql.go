@@ -860,12 +860,12 @@ SELECT
     c.concurrency_limit,
     c.config_revision AS channel_config_revision,
     c.admission_limits_revision AS channel_admission_limits_revision,
-    pe.id AS provider_endpoint_id,
-    pe.name AS provider_endpoint_name,
-    pe.status AS provider_endpoint_status,
-    pe.base_url AS provider_endpoint_base_url,
-    pe.base_url_revision AS provider_endpoint_base_url_revision,
-    pe.status_revision AS provider_endpoint_status_revision,
+    pe.id AS provider_origin_id,
+    pe.name AS provider_origin_name,
+    pe.status AS provider_origin_status,
+    pe.base_url AS provider_origin_base_url,
+    pe.base_url_revision AS provider_origin_base_url_revision,
+    pe.status_revision AS provider_origin_status_revision,
     p.id AS provider_id,
     p.name AS provider_name,
     p.status AS provider_status,
@@ -903,7 +903,7 @@ FROM routes rt
 JOIN route_channels rc ON rc.route_id = rt.id
 JOIN channels c ON c.id = rc.channel_id
 JOIN providers p ON p.id = c.provider_id
-JOIN provider_endpoints pe ON pe.id = c.provider_endpoint_id
+JOIN provider_origins pe ON pe.id = c.provider_origin_id
 LEFT JOIN models m
   ON NULLIF($1::text, '') IS NOT NULL
  AND m.model_id = $1::text
@@ -967,62 +967,62 @@ type RouteRuntimePoolParams struct {
 }
 
 type RouteRuntimePoolRow struct {
-	RouteID                         int64
-	Mode                            string
-	RouteStatus                     string
-	PriceRatio                      pgtype.Numeric
-	ChannelID                       int64
-	ChannelName                     string
-	ChannelStatus                   string
-	CredentialValid                 bool
-	HasCredential                   bool
-	HasBaseUrl                      bool
-	Protocol                        string
-	AdapterKey                      string
-	Priority                        int32
-	TpmLimit                        pgtype.Int4
-	ConcurrencyLimit                pgtype.Int4
-	ChannelConfigRevision           int64
-	ChannelAdmissionLimitsRevision  int64
-	ProviderEndpointID              int64
-	ProviderEndpointName            string
-	ProviderEndpointStatus          string
-	ProviderEndpointBaseUrl         string
-	ProviderEndpointBaseUrlRevision int64
-	ProviderEndpointStatusRevision  int64
-	ProviderID                      int64
-	ProviderName                    string
-	ProviderStatus                  string
-	ModelDbID                       int64
-	ModelExists                     bool
-	ModelStatus                     string
-	BindingStatus                   string
-	HasModelPrice                   bool
-	HasChannelCost                  bool
-	ModelPriceID                    int64
-	BaseCurrency                    string
-	BasePricingUnit                 string
-	UncachedInputPrice              pgtype.Numeric
-	CacheReadInputPrice             pgtype.Numeric
-	CacheWrite5mInputPrice          pgtype.Numeric
-	CacheWrite1hInputPrice          pgtype.Numeric
-	CacheWrite30mInputPrice         pgtype.Numeric
-	OutputPrice                     pgtype.Numeric
-	ReasoningOutputPrice            pgtype.Numeric
-	ChannelPriceID                  int64
-	CostCurrency                    string
-	CostPricingUnit                 string
-	UncachedInputCost               pgtype.Numeric
-	CacheReadInputCost              pgtype.Numeric
-	CacheWrite5mInputCost           pgtype.Numeric
-	CacheWrite1hInputCost           pgtype.Numeric
-	CacheWrite30mInputCost          pgtype.Numeric
-	OutputCost                      pgtype.Numeric
-	ReasoningOutputCost             pgtype.Numeric
-	ChannelCostMultiplierID         int64
-	CostMultiplier                  pgtype.Numeric
-	ChannelRechargeFactorID         int64
-	RechargeFactor                  pgtype.Numeric
+	RouteID                        int64
+	Mode                           string
+	RouteStatus                    string
+	PriceRatio                     pgtype.Numeric
+	ChannelID                      int64
+	ChannelName                    string
+	ChannelStatus                  string
+	CredentialValid                bool
+	HasCredential                  bool
+	HasBaseUrl                     bool
+	Protocol                       string
+	AdapterKey                     string
+	Priority                       int32
+	TpmLimit                       pgtype.Int4
+	ConcurrencyLimit               pgtype.Int4
+	ChannelConfigRevision          int64
+	ChannelAdmissionLimitsRevision int64
+	ProviderOriginID               int64
+	ProviderOriginName             string
+	ProviderOriginStatus           string
+	ProviderOriginBaseUrl          string
+	ProviderOriginBaseUrlRevision  int64
+	ProviderOriginStatusRevision   int64
+	ProviderID                     int64
+	ProviderName                   string
+	ProviderStatus                 string
+	ModelDbID                      int64
+	ModelExists                    bool
+	ModelStatus                    string
+	BindingStatus                  string
+	HasModelPrice                  bool
+	HasChannelCost                 bool
+	ModelPriceID                   int64
+	BaseCurrency                   string
+	BasePricingUnit                string
+	UncachedInputPrice             pgtype.Numeric
+	CacheReadInputPrice            pgtype.Numeric
+	CacheWrite5mInputPrice         pgtype.Numeric
+	CacheWrite1hInputPrice         pgtype.Numeric
+	CacheWrite30mInputPrice        pgtype.Numeric
+	OutputPrice                    pgtype.Numeric
+	ReasoningOutputPrice           pgtype.Numeric
+	ChannelPriceID                 int64
+	CostCurrency                   string
+	CostPricingUnit                string
+	UncachedInputCost              pgtype.Numeric
+	CacheReadInputCost             pgtype.Numeric
+	CacheWrite5mInputCost          pgtype.Numeric
+	CacheWrite1hInputCost          pgtype.Numeric
+	CacheWrite30mInputCost         pgtype.Numeric
+	OutputCost                     pgtype.Numeric
+	ReasoningOutputCost            pgtype.Numeric
+	ChannelCostMultiplierID        int64
+	CostMultiplier                 pgtype.Numeric
+	ChannelRechargeFactorID        int64
+	RechargeFactor                 pgtype.Numeric
 }
 
 // RouteRuntimePool returns every explicitly bound channel plus DB hard-filter facts.
@@ -1053,12 +1053,12 @@ func (q *Queries) RouteRuntimePool(ctx context.Context, arg RouteRuntimePoolPara
 			&i.ConcurrencyLimit,
 			&i.ChannelConfigRevision,
 			&i.ChannelAdmissionLimitsRevision,
-			&i.ProviderEndpointID,
-			&i.ProviderEndpointName,
-			&i.ProviderEndpointStatus,
-			&i.ProviderEndpointBaseUrl,
-			&i.ProviderEndpointBaseUrlRevision,
-			&i.ProviderEndpointStatusRevision,
+			&i.ProviderOriginID,
+			&i.ProviderOriginName,
+			&i.ProviderOriginStatus,
+			&i.ProviderOriginBaseUrl,
+			&i.ProviderOriginBaseUrlRevision,
+			&i.ProviderOriginStatusRevision,
 			&i.ProviderID,
 			&i.ProviderName,
 			&i.ProviderStatus,

@@ -48,7 +48,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		UserID:          principal.UserID,
 		ModelID:         req.Model,
 		IngressProtocol: routing.ProtocolOpenAI,
-		Operation:       routing.OperationChatCompletions,
+		Endpoint:       routing.EndpointChatCompletions,
 		RouteID:         principal.RouteID,
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)

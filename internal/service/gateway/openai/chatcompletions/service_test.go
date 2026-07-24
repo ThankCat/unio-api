@@ -538,9 +538,9 @@ func routeCandidate(adapterKey string, channelID int64, upstreamModel string) ro
 	return routing.ChatRouteCandidate{
 		ModelDBID:                       1000 + channelID,
 		ProviderID:                      9000 + channelID,
-		ProviderEndpointID:              8000 + channelID,
-		ProviderEndpointBaseURLRevision: 3,
-		ProviderEndpointStatusRevision:  4,
+		ProviderOriginID:              8000 + channelID,
+		ProviderOriginBaseURLRevision: 3,
+		ProviderOriginStatusRevision:  4,
 		ChannelConfigRevision:           5,
 		ChannelAdmissionLimitsRevision:  6,
 		AdapterKey:                      adapterKey,
@@ -729,19 +729,19 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 		t.Fatalf("expected attempt channel id %d, got %d", int64(123), requestLog.createAttempts[0].ChannelID)
 	}
 	attempt := requestLog.createAttempts[0]
-	if attempt.ProviderEndpointID == nil || *attempt.ProviderEndpointID != 8123 {
-		t.Fatalf("expected frozen endpoint id 8123, got %v", attempt.ProviderEndpointID)
+	if attempt.ProviderOriginID == nil || *attempt.ProviderOriginID != 8123 {
+		t.Fatalf("expected frozen origin id 8123, got %v", attempt.ProviderOriginID)
 	}
-	if attempt.ProviderEndpointBaseURLRevision == nil || *attempt.ProviderEndpointBaseURLRevision != 3 ||
-		attempt.ProviderEndpointStatusRevision == nil || *attempt.ProviderEndpointStatusRevision != 4 ||
+	if attempt.ProviderOriginBaseURLRevision == nil || *attempt.ProviderOriginBaseURLRevision != 3 ||
+		attempt.ProviderOriginStatusRevision == nil || *attempt.ProviderOriginStatusRevision != 4 ||
 		attempt.ChannelConfigRevision == nil || *attempt.ChannelConfigRevision != 5 {
 		t.Fatalf("expected frozen candidate revisions, got %+v", attempt)
 	}
 	if attempt.RoutingCandidateIndex == nil || *attempt.RoutingCandidateIndex != 0 {
 		t.Fatalf("expected routing candidate index 0, got %v", attempt.RoutingCandidateIndex)
 	}
-	if attempt.UpstreamOperation != requestlog.UpstreamOperationChatCompletions {
-		t.Fatalf("expected chat_completions upstream operation, got %q", attempt.UpstreamOperation)
+	if attempt.UpstreamEndpoint != requestlog.UpstreamEndpointChatCompletions {
+		t.Fatalf("expected chat_completions upstream endpoint, got %q", attempt.UpstreamEndpoint)
 	}
 	if len(settlement.params) != 1 {
 		t.Fatalf("expected one settlement call, got %d", len(settlement.params))
@@ -876,7 +876,7 @@ func TestRequestLogErrorFactsSeparateSafeMessageAndInternalDetail(t *testing.T) 
 		RequestLog:      requestLog,
 		Authorizer:      &fakeChatAuthorizer{},
 		IngressProtocol: requestlog.ProtocolOpenAI,
-		Operation:       requestlog.OperationChatCompletions,
+		Endpoint:       requestlog.EndpointChatCompletions,
 		SafeMessage:     chatCompletionsSafeMessage,
 	})
 
@@ -1379,14 +1379,14 @@ func TestChatCompletionServiceCreateChatCompletionReturnsReleaseErrorWhenAdapter
 	}
 }
 
-func adapterWrappedClientCancel(operation string) error {
+func adapterWrappedClientCancel(endpoint string) error {
 	return adapter.NewUpstreamError(
 		adapter.UpstreamErrorCanceled,
 		adapter.UpstreamMetadata{},
 		failure.Wrap(
 			failure.CodeAdapterSendRequestFailed,
 			context.Canceled,
-			failure.WithMessage("openai adapter "+operation),
+			failure.WithMessage("openai adapter "+endpoint),
 		),
 	)
 }

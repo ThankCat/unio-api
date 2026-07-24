@@ -237,6 +237,35 @@ func TestRequestAdmissionAcquireAndRPMLimit(t *testing.T) {
 	}
 }
 
+// TestRequestAdmissionRPDBucketTTLCoversDay 回归：RPD 日窗口桶 TTL 必须覆盖整日（> 24h），
+// 不能与 RPM 分钟桶共用约 7.5 分钟的短 TTL，否则静默过期后当日计数清零、RPD 限额失效。
+func TestRequestAdmissionRPDBucketTTLCoversDay(t *testing.T) {
+	s, rc, _ := newTestStore(t)
+	epoch, rev := seedAdmissionEnvWithControls(
+		t, s, `{"rpm":0,"tpm":0,"rpd":100}`, `{"key_limit":0,"channel_limit":0}`, testConfig(),
+	)
+	ctx := context.Background()
+	r, err := s.AcquireRequestAdmission(ctx, raInput("ra-rpd-ttl", 1, 1, epoch, rev))
+	if err != nil || r.Outcome != RequestAllowed {
+		t.Fatalf("acquire want allowed, got %s err=%v", r.Outcome, err)
+	}
+	now := time.Now()
+	rpdTTL, err := rc.PTTL(ctx, s.keys.requestRPDBucket(1, 1, dayBucket(now))).Result()
+	if err != nil {
+		t.Fatalf("rpd pttl: %v", err)
+	}
+	rpmTTL, err := rc.PTTL(ctx, s.keys.requestRPMBucket(1, 1, minuteBucket(now))).Result()
+	if err != nil {
+		t.Fatalf("rpm pttl: %v", err)
+	}
+	if rpdTTL <= 24*time.Hour {
+		t.Fatalf("RPD day bucket TTL must exceed 24h, got %s", rpdTTL)
+	}
+	if rpmTTL >= 24*time.Hour {
+		t.Fatalf("RPM minute bucket TTL should stay minute-scale (<24h), got %s", rpmTTL)
+	}
+}
+
 // TestRequestAdmissionStaleEpochFailClosed 验证 epoch 不匹配 fail-closed。
 func TestRequestAdmissionStaleEpochFailClosed(t *testing.T) {
 	s, _, _ := newTestStore(t)
@@ -360,8 +389,8 @@ func TestChannelAdmissionEnforced(t *testing.T) {
 	acq := func(id string) AttemptAdmission {
 		adm, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 			PermitID: id, AdmissionFingerprint: id + "-fp", RequestAdmissionID: "req",
-			EndpointID: 700, ChannelID: 70, EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
-			ChannelConfigRevision: 1, ModelID: 100, UpstreamOperation: OpChatCompletions, RequestMode: ModeNonStream,
+			OriginID: 700, ChannelID: 70, OriginBaseURLRevision: 1, OriginStatusRevision: 1,
+			ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
 			ChannelAdmissionRevision: 1,
 			EstimatedInputTokens:     10,
 		}))
@@ -396,7 +425,7 @@ func TestChannelAdmissionEnforced(t *testing.T) {
 
 	// Finish ca2（真实 transport）保留 RPM → 现在 used=2（ca4+ca2 保留），再 acquire 超限。
 	if _, err := s.Finish(context.Background(), *a2.Permit, FinishOutcome{
-		EndpointOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess,
+		OriginOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess,
 	}); err != nil {
 		t.Fatalf("finish ca2: %v", err)
 	}
@@ -413,8 +442,8 @@ func TestChannelAdmissionStaleRevision(t *testing.T) {
 	seedAttemptControls(t, s, cfg, 71, `{"rpm":0,"rpd":0,"tpm":0,"concurrency":0}`)
 	in := withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "cs1", AdmissionFingerprint: "cs1-fp", RequestAdmissionID: "req",
-		EndpointID: 710, ChannelID: 71, EndpointBaseURLRevision: 1, EndpointStatusRevision: 1,
-		ChannelConfigRevision: 1, ModelID: 100, UpstreamOperation: OpChatCompletions, RequestMode: ModeNonStream,
+		OriginID: 710, ChannelID: 71, OriginBaseURLRevision: 1, OriginStatusRevision: 1,
+		ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
 	})
 	in.ChannelAdmissionRevision = 2 // 期望 2，实际 active=1
 	adm, err := acquireAttempt(t, s, in)

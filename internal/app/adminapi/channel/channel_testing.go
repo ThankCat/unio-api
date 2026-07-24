@@ -83,8 +83,8 @@ type channelTestLogDTO struct {
 	CredentialValidAfter          bool    `json:"credential_valid_after"`
 	Message                       string  `json:"message"`
 	UpstreamError                 *string `json:"upstream_error"`
-	TestedEndpointBaseURLRevision *int64  `json:"tested_endpoint_base_url_revision"`
-	TestedEndpointStatusRevision  *int64  `json:"tested_endpoint_status_revision"`
+	TestedOriginBaseURLRevision *int64  `json:"tested_origin_base_url_revision"`
+	TestedOriginStatusRevision  *int64  `json:"tested_origin_status_revision"`
 	TestedConfigRevision          *int64  `json:"tested_config_revision"`
 	StateChangeApplied            bool    `json:"state_change_applied"`
 }
@@ -115,8 +115,8 @@ func (h *channelTestHandler) testLogs(w http.ResponseWriter, r *http.Request) {
 			TestedModel:                   l.TestedModel,
 			CredentialValidAfter:          l.CredentialValidAfter,
 			Message:                       l.Message,
-			TestedEndpointBaseURLRevision: l.TestedEndpointBaseURLRevision,
-			TestedEndpointStatusRevision:  l.TestedEndpointStatusRevision,
+			TestedOriginBaseURLRevision: l.TestedOriginBaseURLRevision,
+			TestedOriginStatusRevision:  l.TestedOriginStatusRevision,
 			TestedConfigRevision:          l.TestedConfigRevision,
 			StateChangeApplied:            l.StateChangeApplied,
 		}

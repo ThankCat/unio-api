@@ -42,7 +42,7 @@ type fakeProviderStore struct {
 	restoreAff              int64
 	restoreErr              error
 	restoreID               int64
-	endpoints               []sqlc.ProviderEndpoint
+	origins               []sqlc.ProviderOrigin
 }
 
 func (s *fakeProviderStore) ListProvidersPage(context.Context, sqlc.ListProvidersPageParams) ([]sqlc.Provider, error) {
@@ -96,33 +96,33 @@ func (s *fakeProviderStore) RestoreProvider(_ context.Context, id int64) (int64,
 	return s.restoreAff, s.restoreErr
 }
 
-func (s *fakeProviderStore) ListProviderEndpointsByProvider(context.Context, int64) ([]sqlc.ProviderEndpoint, error) {
-	return s.endpoints, nil
+func (s *fakeProviderStore) ListProviderOriginsByProvider(context.Context, int64) ([]sqlc.ProviderOrigin, error) {
+	return s.origins, nil
 }
 
 type fakeProviderFencePublisher struct {
 	result runtimecontrol.PublishResult
 }
 
-func (p *fakeProviderFencePublisher) Publish(context.Context, runtimecontrol.EndpointFenceRequest) (runtimecontrol.PublishResult, error) {
+func (p *fakeProviderFencePublisher) Publish(context.Context, runtimecontrol.OriginFenceRequest) (runtimecontrol.PublishResult, error) {
 	return p.result, nil
 }
 
-func (*fakeProviderFencePublisher) WithEndpointLocks(context.Context, int64, []int64, func(context.Context, pgx.Tx) error) error {
+func (*fakeProviderFencePublisher) WithOriginLocks(context.Context, int64, []int64, func(context.Context, pgx.Tx) error) error {
 	return nil
 }
 
 type fakeProviderFenceOps struct{}
 
-func (fakeProviderFenceOps) PrepareEndpointStatusRevisionBatch(context.Context, int64, []breakerstore.EndpointStatusRevisionTransition, int, string, string) (breakerstore.FenceResult, error) {
+func (fakeProviderFenceOps) PrepareOriginStatusRevisionBatch(context.Context, int64, []breakerstore.OriginStatusRevisionTransition, int, string, string) (breakerstore.FenceResult, error) {
 	return "", nil
 }
 
-func (fakeProviderFenceOps) CommitEndpointStatusRevisionBatch(context.Context, int64, []breakerstore.EndpointStatusRevisionTransition, string, string) (breakerstore.FenceResult, error) {
+func (fakeProviderFenceOps) CommitOriginStatusRevisionBatch(context.Context, int64, []breakerstore.OriginStatusRevisionTransition, string, string) (breakerstore.FenceResult, error) {
 	return "", nil
 }
 
-func (fakeProviderFenceOps) AbortEndpointStatusRevisionBatch(context.Context, int64, []breakerstore.EndpointStatusRevisionTransition, string, string) (breakerstore.FenceResult, error) {
+func (fakeProviderFenceOps) AbortOriginStatusRevisionBatch(context.Context, int64, []breakerstore.OriginStatusRevisionTransition, string, string) (breakerstore.FenceResult, error) {
 	return "", nil
 }
 
@@ -200,10 +200,10 @@ func TestUpdateNotFound(t *testing.T) {
 	}
 }
 
-func TestUpdateReturnsPendingAndCountsOnlyEffectiveEndpointTransitions(t *testing.T) {
+func TestUpdateReturnsPendingAndCountsOnlyEffectiveOriginTransitions(t *testing.T) {
 	store := &fakeProviderStore{
 		getRow: sqlc.Provider{ID: 7, Name: "OpenAI", Status: provider.StatusEnabled},
-		endpoints: []sqlc.ProviderEndpoint{
+		origins: []sqlc.ProviderOrigin{
 			{ID: 11, ProviderID: 7, Status: provider.StatusEnabled, BaseUrlRevision: 1, StatusRevision: 3},
 			{ID: 12, ProviderID: 7, Status: provider.StatusDisabled, BaseUrlRevision: 1, StatusRevision: 5},
 			{ID: 13, ProviderID: 7, Status: provider.StatusArchived, BaseUrlRevision: 1, StatusRevision: 8},
@@ -226,8 +226,8 @@ func TestUpdateReturnsPendingAndCountsOnlyEffectiveEndpointTransitions(t *testin
 	if !got.RuntimeSyncPending {
 		t.Fatal("expected runtime sync pending")
 	}
-	if got.AffectedEndpointCount != 1 {
-		t.Fatalf("expected only the enabled endpoint to transition, got %d", got.AffectedEndpointCount)
+	if got.AffectedOriginCount != 1 {
+		t.Fatalf("expected only the enabled origin to transition, got %d", got.AffectedOriginCount)
 	}
 }
 
@@ -319,7 +319,7 @@ func TestArchiveAtomicallyReplacesProviderChannels(t *testing.T) {
 	store := &fakeProviderStore{
 		getRow: sqlc.Provider{ID: 8, Status: "enabled"},
 		getChannelRow: sqlc.Channel{
-			ID: replacementID, ProviderID: 8, ProviderEndpointID: 3, Status: "enabled", CredentialValid: true,
+			ID: replacementID, ProviderID: 8, ProviderOriginID: 3, Status: "enabled", CredentialValid: true,
 			Credential: "sk-live",
 		},
 		archiveReplacementAff: 1,
@@ -331,6 +331,6 @@ func TestArchiveAtomicallyReplacesProviderChannels(t *testing.T) {
 		t.Fatalf("unexpected atomic archive params: %+v", store.archiveReplacementParam)
 	}
 	if store.archiveID != 0 {
-		t.Fatal("legacy archive mutation must not run for replacement operation")
+		t.Fatal("legacy archive mutation must not run for replacement endpoint")
 	}
 }

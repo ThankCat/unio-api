@@ -120,11 +120,11 @@ func (s *compactPermitStore) AcquireAttempt(_ context.Context, in breakerstore.A
 	permit := breakerstore.AttemptPermit{
 		PermitID: in.PermitID, RequestAdmissionID: in.RequestAdmissionID,
 		IntegrityEpoch: in.IntegrityEpoch, IntegrityRevision: in.IntegrityRevision,
-		EndpointID: in.EndpointID, ChannelID: in.ChannelID,
-		EndpointBaseURLRevision: in.EndpointBaseURLRevision,
-		EndpointStatusRevision:  in.EndpointStatusRevision,
+		OriginID: in.OriginID, ChannelID: in.ChannelID,
+		OriginBaseURLRevision: in.OriginBaseURLRevision,
+		OriginStatusRevision:  in.OriginStatusRevision,
 		ChannelConfigRevision:   in.ChannelConfigRevision,
-		ModelID:                 in.ModelID, UpstreamOperation: in.UpstreamOperation, RequestMode: in.RequestMode,
+		ModelID:                 in.ModelID, UpstreamEndpoint: in.UpstreamEndpoint, RequestMode: in.RequestMode,
 		PermitTTLMs: 30_000, RenewMs: 10_000, TerminalTTLMs: 300_000,
 	}
 	return breakerstore.AttemptAdmission{Mode: breakerstore.AdmissionPermit, Permit: &permit}, nil
@@ -138,7 +138,7 @@ func (s *compactPermitStore) Finish(_ context.Context, permit breakerstore.Attem
 	s.finishPermits = append(s.finishPermits, permit)
 	s.finishOutcomes = append(s.finishOutcomes, outcome)
 	return breakerstore.FinishResult{
-		EndpointDisposition: breakerstore.DispositionApplied,
+		OriginDisposition: breakerstore.DispositionApplied,
 		ChannelDisposition:  breakerstore.DispositionApplied,
 	}, nil
 }
@@ -359,8 +359,8 @@ func TestCompactHistory_NativeFallbackToSynthetic(t *testing.T) {
 		t.Fatalf("attempt permit acquire count = %d, want 2", len(permitStore.acquireInputs))
 	}
 	firstPermit, secondPermit := permitStore.acquireInputs[0], permitStore.acquireInputs[1]
-	if firstPermit.UpstreamOperation != breakerstore.OpResponsesCompact || secondPermit.UpstreamOperation != breakerstore.OpChatCompletions {
-		t.Fatalf("permit operations = %q/%q, want responses_compact/chat_completions", firstPermit.UpstreamOperation, secondPermit.UpstreamOperation)
+	if firstPermit.UpstreamEndpoint != breakerstore.EndpointResponsesCompact || secondPermit.UpstreamEndpoint != breakerstore.EndpointChatCompletions {
+		t.Fatalf("permit operations = %q/%q, want responses_compact/chat_completions", firstPermit.UpstreamEndpoint, secondPermit.UpstreamEndpoint)
 	}
 	if firstPermit.PermitID == secondPermit.PermitID || firstPermit.RequestAdmissionID != secondPermit.RequestAdmissionID || firstPermit.RequestAdmissionID != session.requestID {
 		t.Fatalf("permits must be unique under one request session: first=%+v second=%+v", firstPermit, secondPermit)
@@ -372,7 +372,7 @@ func TestCompactHistory_NativeFallbackToSynthetic(t *testing.T) {
 		t.Fatalf("permit finishes = %d/%d, want 2/2", len(permitStore.finishPermits), len(permitStore.finishOutcomes))
 	}
 	firstOutcome := permitStore.finishOutcomes[0]
-	if firstOutcome.EndpointOutcome != breakerstore.OutcomeIgnored || firstOutcome.ChannelOutcome != breakerstore.OutcomeIgnored || firstOutcome.ChannelTPMActual != nil {
+	if firstOutcome.OriginOutcome != breakerstore.OutcomeIgnored || firstOutcome.ChannelOutcome != breakerstore.OutcomeIgnored || firstOutcome.ChannelTPMActual != nil {
 		t.Fatalf("native 404 finish must be breaker-ignored and release TPM estimate: %+v", firstOutcome)
 	}
 	if permitStore.finishOutcomes[1].ChannelTPMActual == nil {
@@ -389,8 +389,8 @@ func TestCompactHistory_NativeFallbackToSynthetic(t *testing.T) {
 	if firstAttempt.AttemptIndex != 0 || secondAttempt.AttemptIndex != 1 ||
 		firstAttempt.RoutingCandidateIndex == nil || secondAttempt.RoutingCandidateIndex == nil ||
 		*firstAttempt.RoutingCandidateIndex != 0 || *secondAttempt.RoutingCandidateIndex != 0 ||
-		firstAttempt.UpstreamOperation != requestlog.UpstreamOperationResponsesCompact ||
-		secondAttempt.UpstreamOperation != requestlog.UpstreamOperationChatCompletions {
+		firstAttempt.UpstreamEndpoint != requestlog.UpstreamEndpointResponsesCompact ||
+		secondAttempt.UpstreamEndpoint != requestlog.UpstreamEndpointChatCompletions {
 		t.Fatalf("unexpected compact fallback attempts: first=%+v second=%+v", firstAttempt, secondAttempt)
 	}
 }
@@ -451,9 +451,9 @@ func TestCompactHistory_NativeFallbackToSyntheticLocalUpstream(t *testing.T) {
 			}
 			routeCandidate := candidate("openai", 1, "gpt-5.5-upstream")
 			routeCandidate.Protocol = string(requestlog.ProtocolOpenAI)
-			routeCandidate.ProviderEndpointID = 701
-			routeCandidate.ProviderEndpointBaseURLRevision = 3
-			routeCandidate.ProviderEndpointStatusRevision = 4
+			routeCandidate.ProviderOriginID = 701
+			routeCandidate.ProviderOriginBaseURLRevision = 3
+			routeCandidate.ProviderOriginStatusRevision = 4
 			routeCandidate.ChannelConfigRevision = 5
 			routeCandidate.Channel.BaseURL = server.URL
 			routeCandidate.Channel.APIKey = "local-test-secret"
@@ -505,7 +505,7 @@ func TestCompactHistory_NativeFallbackToSyntheticLocalUpstream(t *testing.T) {
 			}
 
 			if len(requestLog.createRequests) != 1 || requestLog.createRequests[0].Stream ||
-				requestLog.createRequests[0].Operation != requestlog.OperationResponses {
+				requestLog.createRequests[0].Endpoint != requestlog.EndpointResponses {
 				t.Fatalf("ingress audit must contain one non-stream Responses request: %+v", requestLog.createRequests)
 			}
 			if len(requestLog.createAttempts) != 2 {
@@ -514,8 +514,8 @@ func TestCompactHistory_NativeFallbackToSyntheticLocalUpstream(t *testing.T) {
 			firstAttempt, secondAttempt := requestLog.createAttempts[0], requestLog.createAttempts[1]
 			if firstAttempt.RequestRecordID != secondAttempt.RequestRecordID ||
 				firstAttempt.AttemptIndex != 0 || secondAttempt.AttemptIndex != 1 ||
-				firstAttempt.UpstreamOperation != requestlog.UpstreamOperationResponsesCompact ||
-				secondAttempt.UpstreamOperation != requestlog.UpstreamOperationChatCompletions {
+				firstAttempt.UpstreamEndpoint != requestlog.UpstreamEndpointResponsesCompact ||
+				secondAttempt.UpstreamEndpoint != requestlog.UpstreamEndpointChatCompletions {
 				t.Fatalf("unexpected two-transport attempt audit: first=%+v second=%+v", firstAttempt, secondAttempt)
 			}
 			if len(requestLog.markAttemptFailed) != 1 || requestLog.markAttemptFailed[0].ID != 1 ||
@@ -542,15 +542,15 @@ func TestCompactHistory_NativeFallbackToSyntheticLocalUpstream(t *testing.T) {
 			firstPermit, secondPermit := permitStore.acquireInputs[0], permitStore.acquireInputs[1]
 			if firstPermit.PermitID == secondPermit.PermitID ||
 				firstPermit.RequestAdmissionID != session.requestID || secondPermit.RequestAdmissionID != session.requestID ||
-				firstPermit.UpstreamOperation != breakerstore.OpResponsesCompact ||
-				secondPermit.UpstreamOperation != breakerstore.OpChatCompletions {
+				firstPermit.UpstreamEndpoint != breakerstore.EndpointResponsesCompact ||
+				secondPermit.UpstreamEndpoint != breakerstore.EndpointChatCompletions {
 				t.Fatalf("unexpected independent permits: first=%+v second=%+v", firstPermit, secondPermit)
 			}
 			if len(permitStore.finishOutcomes) != 2 ||
-				permitStore.finishOutcomes[0].EndpointOutcome != breakerstore.OutcomeIgnored ||
+				permitStore.finishOutcomes[0].OriginOutcome != breakerstore.OutcomeIgnored ||
 				permitStore.finishOutcomes[0].ChannelOutcome != breakerstore.OutcomeIgnored ||
 				permitStore.finishOutcomes[0].ChannelTPMActual != nil ||
-				permitStore.finishOutcomes[1].EndpointOutcome != breakerstore.OutcomeEligibleSuccess ||
+				permitStore.finishOutcomes[1].OriginOutcome != breakerstore.OutcomeEligibleSuccess ||
 				permitStore.finishOutcomes[1].ChannelOutcome != breakerstore.OutcomeEligibleSuccess ||
 				permitStore.finishOutcomes[1].ChannelTPMActual == nil ||
 				*permitStore.finishOutcomes[1].ChannelTPMActual != 20 {

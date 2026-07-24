@@ -26,15 +26,15 @@ var runtimeControlMetricTargets = [...]string{
 	"routing_balance",
 }
 
-type endpointOperationObservation struct {
-	operation sqlc.EndpointRoutingOperation
-	envelope  runtimecontrol.EndpointRoutingEnvelope
+type originOperationObservation struct {
+	operation sqlc.OriginRoutingOperation
+	envelope  runtimecontrol.OriginRoutingEnvelope
 	age       time.Duration
 }
 
 type runtimeControlReconcileObservation struct {
 	runtimeOperations  []sqlc.RuntimeControlOperation
-	endpointOperations []endpointOperationObservation
+	originOperations []originOperationObservation
 }
 
 type runtimeControlTelemetry struct {
@@ -121,24 +121,24 @@ func (t *runtimeControlTelemetry) capture(
 		t.observeRuntimePending(runtimeOperations)
 	}
 
-	endpointOperations, err := q.ListNonterminalEndpointRoutingOperations(ctx)
+	originOperations, err := q.ListNonterminalOriginRoutingOperations(ctx)
 	if err != nil {
-		t.logFailure("observe_endpoint_operations", err)
+		t.logFailure("observe_origin_operations", err)
 		return observation
 	}
-	for _, operation := range endpointOperations {
-		envelope, parseErr := runtimecontrol.ParseEndpointRoutingEnvelope(operation.Transitions, 1024)
+	for _, operation := range originOperations {
+		envelope, parseErr := runtimecontrol.ParseOriginRoutingEnvelope(operation.Transitions, 1024)
 		if parseErr != nil {
-			t.logFailure("observe_endpoint_operation", parseErr)
+			t.logFailure("observe_origin_operation", parseErr)
 			continue
 		}
 		age := t.age(operation.CreatedAt.Time, operation.CreatedAt.Valid)
-		observation.endpointOperations = append(observation.endpointOperations, endpointOperationObservation{
+		observation.originOperations = append(observation.originOperations, originOperationObservation{
 			operation: operation,
 			envelope:  envelope,
 			age:       age,
 		})
-		t.observeEndpointPending(envelope, age)
+		t.observeOriginPending(envelope, age)
 	}
 	return observation
 }
@@ -174,23 +174,23 @@ func (t *runtimeControlTelemetry) observeRuntimePending(operations []sqlc.Runtim
 	}
 }
 
-func (t *runtimeControlTelemetry) observeEndpointPending(
-	envelope runtimecontrol.EndpointRoutingEnvelope,
+func (t *runtimeControlTelemetry) observeOriginPending(
+	envelope runtimecontrol.OriginRoutingEnvelope,
 	age time.Duration,
 ) {
 	if t.metrics == nil {
 		return
 	}
 	for _, transition := range envelope.Transitions {
-		endpointID := strconv.FormatInt(transition.EndpointID, 10)
+		originID := strconv.FormatInt(transition.OriginID, 10)
 		switch envelope.Kind {
-		case runtimecontrol.EndpointFenceKindBaseURL:
-			t.metrics.SetEndpointBaseURLRevisionFence(endpointID, "pending", age)
-		case runtimecontrol.EndpointFenceKindStatus, runtimecontrol.EndpointFenceKindProviderStatusBatch:
-			t.metrics.SetEndpointStatusRevisionFence(endpointID, "pending", age)
-		case runtimecontrol.EndpointFenceKindBaseURLStatus:
-			t.metrics.SetEndpointBaseURLRevisionFence(endpointID, "pending", age)
-			t.metrics.SetEndpointStatusRevisionFence(endpointID, "pending", age)
+		case runtimecontrol.OriginFenceKindBaseURL:
+			t.metrics.SetOriginBaseURLRevisionFence(originID, "pending", age)
+		case runtimecontrol.OriginFenceKindStatus, runtimecontrol.OriginFenceKindProviderStatusBatch:
+			t.metrics.SetOriginStatusRevisionFence(originID, "pending", age)
+		case runtimecontrol.OriginFenceKindBaseURLStatus:
+			t.metrics.SetOriginBaseURLRevisionFence(originID, "pending", age)
+			t.metrics.SetOriginStatusRevisionFence(originID, "pending", age)
 		}
 	}
 }
@@ -246,16 +246,16 @@ func (t *runtimeControlTelemetry) passSucceeded(observation runtimeControlReconc
 			t.logger.Info("runtime control operation reconciled", fields...)
 		}
 	}
-	for _, observed := range observation.endpointOperations {
+	for _, observed := range observation.originOperations {
 		if t.logger == nil {
 			continue
 		}
-		t.logger.Info("endpoint routing operation reconciled",
+		t.logger.Info("origin routing operation reconciled",
 			zap.String("kind", observed.operation.Kind),
 			zap.String("operation_state", observed.operation.State),
 			zap.String("result", recoveredOperationResult(observed.operation.State)),
 			zap.Int64("provider_id", observed.envelope.ProviderID),
-			zap.Int("endpoint_count", len(observed.envelope.Transitions)),
+			zap.Int("origin_count", len(observed.envelope.Transitions)),
 			zap.Duration("pending_age", observed.age),
 			zap.String("payload_hash_prefix", hashPrefix(observed.operation.PayloadHash)),
 		)
@@ -266,22 +266,22 @@ func (t *runtimeControlTelemetry) passSucceeded(observation runtimeControlReconc
 	t.mu.Unlock()
 }
 
-func (t *runtimeControlTelemetry) EndpointControlReconciled(
-	endpointID, baseURLRevision, statusRevision int64,
+func (t *runtimeControlTelemetry) OriginControlReconciled(
+	originID, baseURLRevision, statusRevision int64,
 	effectiveStatus string,
 	restored bool,
 ) {
 	if t == nil {
 		return
 	}
-	id := strconv.FormatInt(endpointID, 10)
+	id := strconv.FormatInt(originID, 10)
 	if t.metrics != nil {
-		t.metrics.SetEndpointBaseURLRevisionFence(id, "active", 0)
-		t.metrics.SetEndpointStatusRevisionFence(id, "active", 0)
+		t.metrics.SetOriginBaseURLRevisionFence(id, "active", 0)
+		t.metrics.SetOriginStatusRevisionFence(id, "active", 0)
 	}
 	if restored && t.logger != nil {
-		t.logger.Info("endpoint runtime control restored",
-			zap.Int64("endpoint_id", endpointID),
+		t.logger.Info("origin runtime control restored",
+			zap.Int64("origin_id", originID),
 			zap.Int64("base_url_revision", baseURLRevision),
 			zap.Int64("status_revision", statusRevision),
 			zap.String("effective_status", effectiveStatus),

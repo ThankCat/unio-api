@@ -19,8 +19,8 @@ CREATE TABLE public.request_records (
     requested_model_id text NOT NULL,
     -- ingress_protocol: 客户调用 Unio 时使用的公开协议族。--
     ingress_protocol text NOT NULL,
-    -- operation: 客户调用的公开协议操作。--
-    operation text NOT NULL,
+    -- endpoint: 客户调用的公开协议操作。--
+    endpoint text NOT NULL,
     -- response_model_id: 最终响应使用的模型 ID。--
     response_model_id text,
     -- response_protocol: 返回给客户的协议族，未产生响应时为空。--
@@ -29,7 +29,7 @@ CREATE TABLE public.request_records (
     stream boolean NOT NULL,
     status text NOT NULL,
     final_provider_id bigint,
-    final_provider_endpoint_id bigint,
+    final_provider_origin_id bigint,
     final_channel_id bigint,
     error_code text,
     error_message text,
@@ -46,10 +46,10 @@ CREATE TABLE public.request_records (
     reasoning_budget_tokens integer,
     client_ip text,
     CONSTRAINT ck_request_records_delivery_completed_at CHECK ((((delivery_status = 'completed'::text) AND (response_completed_at IS NOT NULL)) OR ((delivery_status <> 'completed'::text) AND (response_completed_at IS NULL)))),
-    CONSTRAINT ck_request_records_protocol_operation CHECK ((((ingress_protocol = 'openai'::text) AND (operation = ANY (ARRAY['chat_completions'::text, 'responses'::text]))) OR ((ingress_protocol = 'anthropic'::text) AND (operation = 'messages'::text)))),
+    CONSTRAINT ck_request_records_protocol_endpoint CHECK ((((ingress_protocol = 'openai'::text) AND (endpoint = ANY (ARRAY['chat_completions'::text, 'responses'::text]))) OR ((ingress_protocol = 'anthropic'::text) AND (endpoint = 'messages'::text)))),
     CONSTRAINT request_records_delivery_status_check CHECK ((delivery_status = ANY (ARRAY['not_started'::text, 'in_progress'::text, 'completed'::text, 'interrupted'::text]))),
     CONSTRAINT request_records_ingress_protocol_check CHECK ((ingress_protocol = ANY (ARRAY['openai'::text, 'anthropic'::text]))),
-    CONSTRAINT request_records_operation_check CHECK ((operation = ANY (ARRAY['chat_completions'::text, 'messages'::text, 'responses'::text]))),
+    CONSTRAINT request_records_endpoint_check CHECK ((endpoint = ANY (ARRAY['chat_completions'::text, 'messages'::text, 'responses'::text]))),
     CONSTRAINT request_records_reasoning_budget_tokens_check CHECK (((reasoning_budget_tokens IS NULL) OR (reasoning_budget_tokens >= 0))),
     CONSTRAINT request_records_response_id_check CHECK (((response_id IS NULL) OR (response_id <> ''::text))),
     CONSTRAINT request_records_response_protocol_check CHECK (((response_protocol IS NULL) OR (response_protocol = ANY (ARRAY['openai'::text, 'anthropic'::text])))),
@@ -85,7 +85,7 @@ ALTER TABLE ONLY public.request_records
     ADD CONSTRAINT request_records_final_provider_id_fkey FOREIGN KEY (final_provider_id) REFERENCES public.providers(id);
 
 ALTER TABLE ONLY public.request_records
-    ADD CONSTRAINT request_records_final_provider_endpoint_id_fkey FOREIGN KEY (final_provider_endpoint_id) REFERENCES public.provider_endpoints(id);
+    ADD CONSTRAINT request_records_final_provider_origin_id_fkey FOREIGN KEY (final_provider_origin_id) REFERENCES public.provider_origins(id);
 
 ALTER TABLE ONLY public.request_records
     ADD CONSTRAINT request_records_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);

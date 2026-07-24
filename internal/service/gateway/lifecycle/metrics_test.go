@@ -19,16 +19,16 @@ type p4RoutingMetricsSpy struct {
 	channelRevisionMismatch int
 	statusRevisionMismatch  int
 	timings                 []p4TimingObservation
-	endpointFailures        []string
+	originFailures        []string
 	channelFailures         []string
 }
 
 type p4TimingObservation struct {
 	providerID string
-	endpointID string
+	originID string
 	channelID  string
 	protocol   string
-	operation  string
+	endpoint  string
 	mode       string
 	total      time.Duration
 	ttft       *time.Duration
@@ -69,17 +69,17 @@ func (s *p4RoutingMetricsSpy) IncBreakerSkip(scope, reason string) {
 func (s *p4RoutingMetricsSpy) IncChannelConfigRevisionMismatch(string) {
 	s.channelRevisionMismatch++
 }
-func (s *p4RoutingMetricsSpy) IncEndpointStatusRevisionMismatch(string) {
+func (s *p4RoutingMetricsSpy) IncOriginStatusRevisionMismatch(string) {
 	s.statusRevisionMismatch++
 }
-func (s *p4RoutingMetricsSpy) ObserveUpstreamTiming(providerID, endpointID, channelID, protocol, operation, mode string, total time.Duration, ttft *time.Duration) {
+func (s *p4RoutingMetricsSpy) ObserveUpstreamTiming(providerID, originID, channelID, protocol, endpoint, mode string, total time.Duration, ttft *time.Duration) {
 	s.timings = append(s.timings, p4TimingObservation{
-		providerID: providerID, endpointID: endpointID, channelID: channelID,
-		protocol: protocol, operation: operation, mode: mode, total: total, ttft: ttft,
+		providerID: providerID, originID: originID, channelID: channelID,
+		protocol: protocol, endpoint: endpoint, mode: mode, total: total, ttft: ttft,
 	})
 }
-func (s *p4RoutingMetricsSpy) IncEndpointFailure(endpointID, category string) {
-	s.endpointFailures = append(s.endpointFailures, endpointID+"/"+category)
+func (s *p4RoutingMetricsSpy) IncOriginFailure(originID, category string) {
+	s.originFailures = append(s.originFailures, originID+"/"+category)
 }
 func (s *p4RoutingMetricsSpy) IncChannelFailure(channelID, category string) {
 	s.channelFailures = append(s.channelFailures, channelID+"/"+category)
@@ -95,19 +95,19 @@ func TestRecordRoutingPlanPublishesP4WeightsAndBreakerFacts(t *testing.T) {
 		Plan: CandidatePlan{
 			Candidates: []Candidate{{
 				Route: routing.ChatRouteCandidate{
-					ProviderEndpointID: 23,
+					ProviderOriginID: 23,
 					Channel:            routingChannel(17),
 				},
-				Balance: BalanceScore{Weight: 0.75, EndpointBreakerState: "closed", ChannelBreakerState: "closed"},
+				Balance: BalanceScore{Weight: 0.75, OriginBreakerState: "closed", ChannelBreakerState: "closed"},
 			}},
 			Excluded: []CandidateExclusion{{
 				ChannelID: 19,
 				Reason:    "stale_config_revision",
 				Route: routing.ChatRouteCandidate{
-					ProviderEndpointID: 29,
+					ProviderOriginID: 29,
 					Channel:            routingChannel(19),
 				},
-				Balance: BalanceScore{EndpointBreakerState: "open", ChannelBreakerState: "closed"},
+				Balance: BalanceScore{OriginBreakerState: "open", ChannelBreakerState: "closed"},
 			}},
 		},
 	})
@@ -115,12 +115,12 @@ func TestRecordRoutingPlanPublishesP4WeightsAndBreakerFacts(t *testing.T) {
 	if metrics.weights["31/17"] != 0.75 || metrics.weights["31/19"] != 0 {
 		t.Fatalf("weights = %#v", metrics.weights)
 	}
-	if metrics.breakerStates["endpoint/23"] != "closed" ||
+	if metrics.breakerStates["origin/23"] != "closed" ||
 		metrics.breakerStates["channel/17"] != "closed" ||
-		metrics.breakerStates["endpoint/29"] != "open" {
+		metrics.breakerStates["origin/29"] != "open" {
 		t.Fatalf("breaker states = %#v", metrics.breakerStates)
 	}
-	if len(metrics.skips) != 1 || metrics.skips[0] != "endpoint/stale_config_revision" {
+	if len(metrics.skips) != 1 || metrics.skips[0] != "origin/stale_config_revision" {
 		t.Fatalf("skips = %#v", metrics.skips)
 	}
 	if metrics.channelRevisionMismatch != 1 || metrics.statusRevisionMismatch != 0 {
@@ -136,17 +136,17 @@ func TestRecordAttemptRuntimeMetricsSeparatesStreamTTFTAndTotalDuration(t *testi
 	completed := started.Add(2 * time.Second)
 	candidate := routing.ChatRouteCandidate{
 		ProviderID:         11,
-		ProviderEndpointID: 23,
+		ProviderOriginID: 23,
 		Protocol:           "openai",
 		Channel:            routingChannel(17),
 	}
 	lifecycle.RecordAttemptRuntimeMetrics(
 		candidate,
-		requestlog.UpstreamOperationResponses,
+		requestlog.UpstreamEndpointResponses,
 		true,
 		AttemptTimingFacts{UpstreamStartedAt: &started, UpstreamFirstTokenAt: &firstToken, UpstreamCompletedAt: &completed},
 		breakerstore.FinishOutcome{
-			EndpointEvidence: breakerstore.EndpointEvidenceHTTP500,
+			OriginEvidence: breakerstore.OriginEvidenceHTTP500,
 			ChannelOutcome:   breakerstore.OutcomeEligibleFailure,
 		},
 		adapter.NewUpstreamError(adapter.UpstreamErrorServer, adapter.UpstreamMetadata{}, nil),
@@ -155,20 +155,20 @@ func TestRecordAttemptRuntimeMetricsSeparatesStreamTTFTAndTotalDuration(t *testi
 		t.Fatalf("timings=%v", metrics.timings)
 	}
 	got := metrics.timings[0]
-	if got.providerID != "11" || got.endpointID != "23" || got.channelID != "17" ||
-		got.protocol != "openai" || got.operation != "responses" || got.mode != "stream" ||
+	if got.providerID != "11" || got.originID != "23" || got.channelID != "17" ||
+		got.protocol != "openai" || got.endpoint != "responses" || got.mode != "stream" ||
 		got.total != 2*time.Second || got.ttft == nil || *got.ttft != 250*time.Millisecond {
 		t.Fatalf("timing=%+v", got)
 	}
-	if len(metrics.endpointFailures) != 1 || metrics.endpointFailures[0] != "23/http_500" ||
+	if len(metrics.originFailures) != 1 || metrics.originFailures[0] != "23/http_500" ||
 		len(metrics.channelFailures) != 1 || metrics.channelFailures[0] != "17/server_error" {
-		t.Fatalf("endpoint=%v channel=%v", metrics.endpointFailures, metrics.channelFailures)
+		t.Fatalf("origin=%v channel=%v", metrics.originFailures, metrics.channelFailures)
 	}
 
 	metrics.timings = nil
 	lifecycle.RecordAttemptRuntimeMetrics(
 		candidate,
-		requestlog.UpstreamOperationChatCompletions,
+		requestlog.UpstreamEndpointChatCompletions,
 		false,
 		AttemptTimingFacts{UpstreamStartedAt: &started, UpstreamCompletedAt: &completed},
 		breakerstore.FinishOutcome{},

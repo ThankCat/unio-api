@@ -29,7 +29,7 @@ func TestBlackboxConfigRedisNamespace(t *testing.T) {
 	})
 }
 
-func TestFixtureCleanupAllowsReusingOneEndpointRoot(t *testing.T) {
+func TestFixtureCleanupAllowsReusingOneOriginRoot(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(upstream.Close)
 

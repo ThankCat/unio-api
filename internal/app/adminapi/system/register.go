@@ -32,7 +32,7 @@ func Register(r chi.Router, d Deps) {
 		r.Get("/system/settlement-recovery-jobs/{id}", rjh.get)
 	}
 
-	// 运行时配置（可编辑、免重启生效）：通用 List/PUT 从注册表驱动面板；beta 专用端点为便捷 typed 入口。
+	// 运行时配置（可编辑、免重启生效）：通用 List/PUT 从注册表驱动面板；beta 专用上游源站为便捷 typed 入口。
 	if d.ProviderSettingsService != nil {
 		psh := &providerSettingsHandler{service: d.ProviderSettingsService}
 		r.Get("/settings", psh.listSettings)
