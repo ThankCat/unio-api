@@ -55,8 +55,8 @@ ALTER TABLE ONLY public.models
 --
 -- 先把历史 seed/import 行的 source 收敛到新枚举，避免 CHECK 收紧时失败（开发期 models 通常为空）。
 -- [000037_add_models_capability_autocalibrate]
--- 能力自动校正（被动证据式，DESIGN-capability-autocalibration）：per-model 开关。
+-- 能力自动校正的 per-model 开关。
 -- off=不学习；suggest=只产生建议待人工采纳（默认）；auto=强证据自动补、弱证据仍只建议。
 -- [000045_drop_capability_autocalibration]
--- 移除能力自动校正与证据 v2（DEC-024 / DESIGN-capability-manual-declaration）。
+-- DEC-024 移除能力自动校正与证据 v2。
 -- 自动校正与 used_capabilities/delivery_mode 证据链全部废止；能力改为人工声明。

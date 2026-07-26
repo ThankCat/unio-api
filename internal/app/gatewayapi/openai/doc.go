@@ -1,6 +1,7 @@
 // Package openai 是 Unio Gateway 暴露给客户的 OpenAI 协议族公开 HTTP 包根目录。
 //
-// 长期约定（与 anthropic/ 对称，见 docs/architecture/PROJECT_STRUCTURE.md）：
+// 长期契约见 Unio Blueprint Gateway 文档：
+// https://github.com/unioapi/unio-blueprint/tree/main/docs/products/gateway。
 //
 //   - 每个 OpenAI operation 都在协议族下独立子包，例如：
 //

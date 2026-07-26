@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	// licenseID 与 attribution 与 docs/datasources/MODELS_DEV_LICENSE.md 对齐，随同步任务落审计。
+	// licenseID 与 attribution 与 THIRD_PARTY_NOTICES.md 对齐，随同步任务落审计。
 	licenseID   = "MIT"
 	attribution = "Model metadata sourced from models.dev (© 2025 models.dev, MIT License)."
 

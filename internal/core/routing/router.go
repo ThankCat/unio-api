@@ -132,7 +132,7 @@ type ChatRouteCandidate struct {
 	// nil=继承并发默认 channel_limit，0=显式不限，>0=具体上限。命中时该候选被跳过 fallback 到下一渠道。
 	ConcurrencyLimit *int64
 
-	// BillsOnDisconnect 标记该候选渠道的上游「断开仍计费」（DESIGN-bill-on-cancel 阶段一）：
+	// BillsOnDisconnect 标记该候选渠道的上游「断开仍计费」：
 	// true 时失败/取消路径会记平台成本敞口（channel_cost_exposures），纯观测不影响路由与客户计费。
 	BillsOnDisconnect bool
 }

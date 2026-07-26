@@ -1,4 +1,4 @@
--- Model capability sync job 记录 models.dev 能力同步任务的执行审计（worker 逻辑见阶段 12 cron，本表先承载状态）。
+-- Model capability sync job 记录 models.dev 能力同步任务的执行审计。
 CREATE SEQUENCE public.model_capability_sync_jobs_id_seq
     START WITH 1
     INCREMENT BY 1

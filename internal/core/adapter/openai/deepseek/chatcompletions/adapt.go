@@ -19,7 +19,7 @@ type legacyFunctionDef struct {
 //
 // DeepSeek 官方枚举仅 high/max（thinking 模式下生效），并自带 low/medium→high、xhigh→max 的兼容映射；
 // Codex（gpt-5 家族）还会发 minimal，不在 DeepSeek 文档枚举内。为让出站 wire 始终是 DeepSeek 文档合法值、
-// 不依赖上游隐式兼容行为，也避免 minimal 触发上游 422，这里在 adapter 出站显式归一（DEEPSEEK_OPENAI_MAPPING §2）。
+// 不依赖上游隐式兼容行为，也避免 minimal 触发上游 422，这里在 adapter 出站显式归一。
 var deepseekReasoningEfforts = map[string]string{
 	"minimal": "high",
 	"low":     "high",
@@ -39,8 +39,7 @@ func normalizeReasoningEffort(effort string) (string, bool) {
 
 // adaptMaxCompletionTokens 把 OpenAI 新版 max_completion_tokens 塌缩为 DeepSeek wire 的 max_tokens。
 //
-// DeepSeek 上游源站只认 max_tokens；客户同时传两者时优先 completion tokens（路线 C 前 base 的
-// 既有冲突规则，见 DEEPSEEK_OPENAI_MAPPING §2 / protocol-and-params §2）。这是 Adapt 不是 Drop，
+// DeepSeek 上游源站只认 max_tokens；客户同时传两者时优先 completion tokens。这是 Adapt 不是 Drop，
 // 不计入 dropped 审计。req 为值传递，改写对调用方无副作用。
 func adaptMaxCompletionTokens(req chatcompletionsadapter.ChatRequest) chatcompletionsadapter.ChatRequest {
 	if req.MaxCompletionTokens != nil {
@@ -53,8 +52,7 @@ func adaptMaxCompletionTokens(req chatcompletionsadapter.ChatRequest) chatcomple
 
 // adaptDeveloperRole 把 OpenAI developer role 塌缩为 DeepSeek 可接受的 system，保持消息相对顺序。
 //
-// developer 是官方新模型的系统级指令角色，DeepSeek 不接受；塌缩为 system 语义最接近
-// （路线 C 前 base 的既有规则，见 protocol-and-params §3）。Adapt 不计入 dropped 审计。
+// developer 是官方新模型的系统级指令角色，DeepSeek 不接受；塌缩为 system。Adapt 不计入 dropped 审计。
 // 仅在确实存在 developer 消息时复制 messages，避免修改调用方底层数组。
 func adaptDeveloperRole(messages []chatcompletionsadapter.ChatMessage) []chatcompletionsadapter.ChatMessage {
 	var cleaned []chatcompletionsadapter.ChatMessage
@@ -77,7 +75,7 @@ func adaptDeveloperRole(messages []chatcompletionsadapter.ChatMessage) []chatcom
 
 // adaptLegacyFunctions 把 deprecated functions / function_call Adapt 成现代 tools / tool_choice。
 //
-// 规则（DEEPSEEK_OPENAI_MAPPING.md §2；无法无损转换则 Drop，避免上游 400）：
+// 无法无损转换时 Drop，避免上游 400：
 //   - functions → tools（function 类型）。若请求已带 tools，无法无损合并 → Drop functions。
 //   - function_call → tool_choice。若请求已带 tool_choice，无法无损合并 → Drop function_call。
 //   - function_call 取值：字符串 none/auto 透传为同名 tool_choice；对象 {"name":X} →

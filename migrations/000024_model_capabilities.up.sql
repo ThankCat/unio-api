@@ -2,7 +2,7 @@
 CREATE TABLE public.model_capabilities (
     -- model_id: 能力所属模型 ID。--
     model_id bigint NOT NULL,
-    -- capability_key: 稳定能力标识，合法值由 app 层 capability 注册表校验（docs/protocol/CAPABILITY_KEYS.md），DB 不做枚举约束以支持只增不删。--
+    -- capability_key: 稳定能力标识，合法值由 capability_keys 外键约束，DB 不做枚举约束。--
     capability_key text NOT NULL,
     -- support_level: 该模型对该能力的支持级别。--
     support_level text NOT NULL,
@@ -36,5 +36,5 @@ ALTER TABLE ONLY public.model_capabilities
 -- 阶段 14 Q4：能力声明去 source。
 -- 同步不再写运行时能力表（改写目录），source（models_dev/manual/adapter_seed）已无意义。
 -- [000047_create_capability_keys]
--- 能力 key 字典表（DEC-024 / DESIGN-capability-manual-declaration §4）：合法能力 key 的唯一真源，
+-- 能力 key 字典表：合法能力 key 的唯一真源，
 -- 取代代码内 keys.go 常量注册表。新增能力 = 往本表插一行（带中文描述供运维区分），无需改代码。

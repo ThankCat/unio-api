@@ -1,6 +1,6 @@
 // Package query 编排 admin 管理端（M6 只读查询台）的请求 / 用量 / 账本只读读取。
 //
-// 全部只读，不改任何状态。安全红线（见 ADMIN_MODULES_DRAFT M6）：
+// 全部只读，不改任何状态。安全边界：
 //   - 列表绝不返回 internal_error_detail（list SQL 不 SELECT 该列，从存储层就脱敏）。
 //   - 详情默认也脱敏 internal_error_detail；仅当调用方显式 includeInternal=true 才回显，
 //     用于平台管理员排查（handler 由 ?include_internal=true 控制）。

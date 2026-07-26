@@ -20,8 +20,7 @@ type MessageResponse struct {
 
 // MessageUsage 是 Anthropic Messages 的 usage 结构。
 //
-// 各 cache / output / server tool 维度用指针表达"上游未提供"与"已知为 0"的区别；
-// 统一账务事实映射见 RESPONSE_FACTS.md。
+// 各 cache / output / server tool 维度用指针表达"上游未提供"与"已知为 0"的区别。
 type MessageUsage struct {
 	InputTokens              int                  `json:"input_tokens"`
 	CacheCreationInputTokens *int                 `json:"cache_creation_input_tokens,omitempty"`

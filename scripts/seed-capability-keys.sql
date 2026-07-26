@@ -1,4 +1,4 @@
--- 能力 key 字典种子（DEC-024 / DESIGN-capability-manual-declaration §4）。
+-- 能力 key 字典种子。
 -- capability_keys 是合法能力 key 的唯一真源，取代代码内 keys.go 常量注册表。
 --
 -- 这份种子从建表迁移里剥离出来，独立维护：

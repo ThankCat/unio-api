@@ -11,7 +11,7 @@ import (
 //
 // 这里只做协议族结构识别：已登记类型放行（结构由后续按需细化），未登记类型在 ingress
 // 直接 400，禁止 silent drop。provider 能力级 Reject（例如 DeepSeek 不支持多模态）由 adapter
-// 在调上游前处理，不在 ingress 拍板。集合对齐 ANTHROPIC_MESSAGES_MATRIX.md 的 content block 表。
+// 在调上游前处理，不在 ingress 拍板。
 var knownContentBlockTypes = map[string]bool{
 	"text":                                   true,
 	"image":                                  true,

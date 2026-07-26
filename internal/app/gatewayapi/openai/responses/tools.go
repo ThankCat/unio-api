@@ -3,7 +3,7 @@ package responses
 import "encoding/json"
 
 // Responses tool 类型常量。真实抓包（Codex v0.130）确认 function / namespace 为主路径，
-// custom / local_shell / 内置工具为兜底或本阶段不消费（见 RESPONSES_CHAT_BRIDGE.md §3.1）。
+// custom / local_shell / 内置工具为兜底或当前不消费。
 const (
 	toolTypeFunction  = "function"
 	toolTypeNamespace = "namespace"

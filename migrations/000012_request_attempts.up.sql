@@ -121,7 +121,7 @@ ALTER TABLE ONLY public.request_attempts
 -- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：
 -- ---------------------------------------------------------------------------
 -- [000042_add_request_attempts_used_capabilities]
--- 能力自动校正按 key 精确命中埋点（DESIGN-capability-autocalibration TASK-H）。
+-- 能力自动校正按 key 精确命中埋点。
 --
 -- request_attempts.used_capabilities：本次成功响应被 adapter 解析「真正用到」的能力 key
 -- （如响应里出现 function_call → tools.function）。它取代 finish_class 作为 tools.* 的强证据来源：
@@ -129,16 +129,16 @@ ALTER TABLE ONLY public.request_attempts
 --   - 且 OpenAI Responses 直传时 finish_class 恒为 stop（Codex 主力流量），tools.* 永远拿不到证据。
 -- 校正聚合按 key 命中归因；无埋点的旧行 / 其它 adapter 仍回退到 finish_class（粗粒度）。
 -- [000043_add_request_attempts_delivery_mode]
--- 能力证据 v2（DESIGN-capability-evidence-v2 Phase 3 / G3）。
+-- 能力证据 v2。
 --
 -- request_attempts.delivery_mode：本次尝试的分发方式（stream 流式 / batch 一次性）。
 -- 仅作 Admin 审计与 stream 的二级佐证；不作为能力自动校正的强证据来源（一级 stream 证据走
--- used_capabilities 含 'stream'，见 DESIGN §4.2 / Q1 / Q6）。NOT NULL DEFAULT 'batch' 兼容历史行。
+-- used_capabilities 含 'stream'。NOT NULL DEFAULT 'batch' 兼容历史行。
 -- [000045_drop_capability_autocalibration]
--- 移除能力自动校正与证据 v2（DEC-024 / DESIGN-capability-manual-declaration）。
+-- DEC-024 移除能力自动校正与证据 v2。
 -- 自动校正与 used_capabilities/delivery_mode 证据链全部废止；能力改为人工声明。
 -- [000046_drop_capability_gate_columns]
--- 移除能力闸门（DEC-024 / DESIGN-capability-manual-declaration）：删除 observe/enforce 审计列。
+-- DEC-024 移除能力闸门：删除 observe/enforce 审计列。
 -- 能力不再于请求热路径判定，required_capabilities 推断与 capability_check_result 审计随闸门一并删除。
 -- [000061_add_request_attempts_fault_party]
 -- 归因维度 fault_party：把每次 attempt 的失败/取消归到「上游 / 客户端 / 平台」，

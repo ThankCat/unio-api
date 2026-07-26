@@ -11,7 +11,7 @@ import (
 // 与 OpenAI 侧「未知字段全透传」对齐,符合「官方 1P = 忠实透传」立场,避免白名单滞后于官方
 // 导致已建模能力静默失效(历史上 extended-cache-ttl 被白名单漏掉、1h 缓存降级为 5m)。
 // 策略由管理端配置(见 app_settings key=anthropic.beta_policy),通过 BetaPolicyProvider 注入;
-// 未注入时回退到 DefaultBetaPolicy。详见 providers/anthropic/passthrough-audit.md。
+// 未注入时回退到 DefaultBetaPolicy。
 //
 // 代价:客户传入的无效/上游不认的 beta 会被原样转发、由上游返回 400(显式失败,可接受),
 // 而非在网关静默吞掉。

@@ -194,11 +194,11 @@ ALTER TABLE ONLY public.settlement_recovery_jobs
 -- ---------------------------------------------------------------------------
 -- [000035_repoint_snapshots_to_channel_prices]
 -- 阶段 15：把价格 / 成本快照与补偿任务的外键从退役的 prices / channel_cost_prices 改挂到 channel_prices。
--- 开发期库可重置，迁移在空快照表上执行；生产化前若有历史快照需另设数据迁移（详见 PLAN §12）。
+-- 开发期库可重置，迁移在空快照表上执行；存在历史快照时需另设数据迁移。
 --
 -- price_snapshots.price_id：模型级 prices(id) -> 渠道级 channel_prices(id)。
 -- [000042_add_request_attempts_used_capabilities]
--- 能力自动校正按 key 精确命中埋点（DESIGN-capability-autocalibration TASK-H）。
+-- 能力自动校正按 key 精确命中埋点。
 --
 -- request_attempts.used_capabilities：本次成功响应被 adapter 解析「真正用到」的能力 key
 -- （如响应里出现 function_call → tools.function）。它取代 finish_class 作为 tools.* 的强证据来源：
@@ -206,7 +206,7 @@ ALTER TABLE ONLY public.settlement_recovery_jobs
 --   - 且 OpenAI Responses 直传时 finish_class 恒为 stop（Codex 主力流量），tools.* 永远拿不到证据。
 -- 校正聚合按 key 命中归因；无埋点的旧行 / 其它 adapter 仍回退到 finish_class（粗粒度）。
 -- [000045_drop_capability_autocalibration]
--- 移除能力自动校正与证据 v2（DEC-024 / DESIGN-capability-manual-declaration）。
+-- DEC-024 移除能力自动校正与证据 v2。
 -- 自动校正与 used_capabilities/delivery_mode 证据链全部废止；能力改为人工声明。
 -- [000050_add_partial_stream_estimate_usage_source]
 -- Stream partial settlement（TASK-7.23 / DEC-025）落地后，partial 路线（B/D）合成的

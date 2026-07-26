@@ -5,7 +5,7 @@ import "encoding/json"
 // ResponsesRequest 表示 OpenAI Responses API (POST /v1/responses) 请求体。
 //
 // 本 DTO 只负责协议结构 decode 与校验；字段语义到内部 openai.ChatRequest 的映射在
-// responses_chat_map（TASK-11.05），结构性策略矩阵见 RESPONSES_CHAT_BRIDGE.md §1。
+// responses_chat_map。
 type ResponsesRequest struct {
 	// Model 是客户模型名；按方案 A（DEC-014）等于 Unio 模型目录 model_id，复用既有 routing。
 	Model string `json:"model"`
@@ -176,7 +176,7 @@ func (in ResponsesInput) MarshalJSON() ([]byte, error) {
 
 // ResponseInputItem 表示 Responses `input[]` 中的单个 item（按 type 区分的 union）。
 //
-// 只建模桥接需要消费/识别的字段；message 与 reasoning 共用 Content。详见 RESPONSES_CHAT_BRIDGE.md §2。
+// 只建模桥接需要消费/识别的字段；message 与 reasoning 共用 Content。
 type ResponseInputItem struct {
 	// Type 是 item 判别字段（message/function_call/function_call_output/reasoning/item_reference/...）。
 	// 缺省时按 OpenAI 语义视为 message。

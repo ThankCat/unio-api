@@ -18,7 +18,6 @@ import (
 //
 // gate：DEEPSEEK_BLACKBOX=1 + DEEPSEEK_API_KEY（sdkfixture.UpstreamReal 缺失即 t.Skip）。
 // 这是「Codex 把 base_url 指到 Unio 即用 DeepSeek」在 HTTP 层的硬证据；真实 Codex CLI 端到端
-// 手测步骤见 PLAN TASK-11.15。
 
 // OAI-RESP-Real-01：非流式 /v1/responses 打真实 DeepSeek，响应与账务终态正确。
 func TestResponsesRealNonStream(t *testing.T) {

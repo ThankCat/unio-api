@@ -15,7 +15,7 @@ import (
 //	data: <json，其 type 字段与 EventName 相同>\n\n
 //
 // 因此每个事件 payload 同时携带 type 字段（用于 data JSON）并实现 EventName（用于 event: 行），
-// 二者必须一致。各事件类型见 ANTHROPIC_MESSAGES_MATRIX.md 的 SSE 章节。
+// 二者必须一致。
 type StreamEvent interface {
 	EventName() string
 }

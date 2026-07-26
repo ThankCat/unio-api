@@ -113,7 +113,7 @@ ALTER TABLE ONLY public.cost_snapshots
 -- ---------------------------------------------------------------------------
 -- [000035_repoint_snapshots_to_channel_prices]
 -- 阶段 15：把价格 / 成本快照与补偿任务的外键从退役的 prices / channel_cost_prices 改挂到 channel_prices。
--- 开发期库可重置，迁移在空快照表上执行；生产化前若有历史快照需另设数据迁移（详见 PLAN §12）。
+-- 开发期库可重置，迁移在空快照表上执行；存在历史快照时需另设数据迁移。
 --
 -- price_snapshots.price_id：模型级 prices(id) -> 渠道级 channel_prices(id)。
 -- [000075_add_cache_write_30m]

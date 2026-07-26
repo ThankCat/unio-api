@@ -4,9 +4,7 @@ import "encoding/json"
 
 // Responses 流式命名事件类型常量。
 //
-// 仅枚举桥接层会发出的事件；codex-rs `process_responses_event` 实际消费的子集见
-// RESPONSES_CHAT_BRIDGE.md §6（output_item.done 为权威载体）。事件序列状态机在
-// responses_stream（TASK-11.07）。
+// 仅枚举桥接层会发出的事件；output_item.done 是权威载体。事件序列状态机在 responses_stream。
 const (
 	EventResponseCreated           = "response.created"
 	EventResponseInProgress        = "response.in_progress"

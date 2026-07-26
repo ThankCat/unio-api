@@ -1,8 +1,8 @@
 // Package capability 承载能力架构的能力标识类型、支持级别与数据访问层。
 //
 // 能力 key 是公开稳定契约。合法 key 的真源是 DB 字典表 capability_keys（DEC-024 起，取代旧
-// keys.go 常量注册表）；新增能力只需往字典表插一行（带中文描述），无需改代码。人类参考列表见
-// docs/protocol/CAPABILITY_KEYS.md。本包负责 model_capabilities / 字典 / 同步任务的读写。
+// keys.go 常量注册表）；新增能力只需往字典表插一行（带中文描述），无需改代码。能力目录契约见
+// Unio Blueprint Gateway 模型能力文档。本包负责 model_capabilities / 字典 / 同步任务的读写。
 package capability
 
 import "strings"

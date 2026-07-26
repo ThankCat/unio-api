@@ -2332,7 +2332,7 @@ type SetChannelBillingBehaviorParams struct {
 	ID                        int64
 }
 
-// SetChannelBillingBehavior 设置渠道「断开仍计费」标记（DESIGN-bill-on-cancel 阶段一）。
+// SetChannelBillingBehavior 设置渠道「断开仍计费」标记。
 // true 表示上游在连接断开后仍会完成生成并计费（sub2api 类中转）；打开后失败/取消路径会记成本敞口。
 func (q *Queries) SetChannelBillingBehavior(ctx context.Context, arg SetChannelBillingBehaviorParams) (Channel, error) {
 	row := q.db.QueryRow(ctx, setChannelBillingBehavior, arg.UpstreamBillsOnDisconnect, arg.ID)

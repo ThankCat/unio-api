@@ -53,7 +53,7 @@ type adminHTTPDeps struct {
 	RequestQueryService requests.RequestQueryService
 	LedgerQueryService  ledger.LedgerQueryService
 
-	// bill-on-cancel 渠道成本敞口只读视图（DESIGN-bill-on-cancel 阶段一）。
+	// bill-on-cancel 渠道成本敞口只读视图。
 	CostExposureQueryService ledger.CostExposureQueryService
 
 	UserService        user.UserService

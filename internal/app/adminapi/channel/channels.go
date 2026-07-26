@@ -59,7 +59,7 @@ type channelDTO struct {
 	RPDLimit *int64 `json:"rpd_limit"`
 	// ConcurrencyLimit：渠道在途并发上限（DEC-029）。null=继承并发默认 channel_limit，0=不限，>0=具体上限。
 	ConcurrencyLimit *int64 `json:"concurrency_limit"`
-	// BillsOnDisconnect：上游「断开仍计费」标记（DESIGN-bill-on-cancel 阶段一）。
+	// BillsOnDisconnect：上游「断开仍计费」标记。
 	// true 时失败/取消路径记平台成本敞口，纯观测不影响路由与客户计费。
 	BillsOnDisconnect bool    `json:"upstream_bills_on_disconnect"`
 	CreatedAt         string  `json:"created_at"`

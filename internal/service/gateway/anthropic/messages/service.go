@@ -98,7 +98,7 @@ func (s *MessagesService) SetAttemptPermitManager(manager *lifecycle.AttemptPerm
 	s.attemptRunner.SetAttemptPermitManager(manager)
 }
 
-// SetCostExposureRecorder 注入成本敞口记录器（DESIGN-bill-on-cancel 阶段一）；nil 表示不启用。
+// SetCostExposureRecorder 注入成本敞口记录器；nil 表示不启用。
 func (s *MessagesService) SetCostExposureRecorder(recorder lifecycle.CostExposureRecorder, assumedOutputFallback int64) {
 	s.lifecycle.SetCostExposureRecorder(recorder, assumedOutputFallback)
 }

@@ -12,7 +12,7 @@ import (
 // 画像与本包 dropUnsupported 同源：
 //   - unsupported：出站会被 Drop 的能力（多模态输入、custom tool、parallel_tool_calls、
 //     json_schema、service_tier、store、prompt_cache、web_search、audio 输出）。
-//   - limited：被 Adapt 的能力（reasoning.effort 归一为 high/max，见 DEEPSEEK_OPENAI_MAPPING §2）。
+//   - limited：被 Adapt 的能力（reasoning.effort 归一为 high/max）。
 //   - full：透传放行的能力（text、function tool、json_object、logprobs、流式）。
 //
 // capability_profile_test.go 以真实 dropUnsupported 行为守护本画像不漂移；新增/调整 Drop 规则

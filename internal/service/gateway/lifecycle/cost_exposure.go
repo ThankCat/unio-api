@@ -13,7 +13,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 )
 
-// 成本敞口成因（channel_cost_exposures.reason，DESIGN-bill-on-cancel 阶段一）。
+// 成本敞口成因（channel_cost_exposures.reason）。
 const (
 	// CostExposureReasonUpstreamTimeout 等首字节超时：请求已发出、上游大概率仍在生成并计费。
 	CostExposureReasonUpstreamTimeout = "upstream_timeout"
@@ -36,7 +36,7 @@ type CostExposureParams struct {
 	Currency             string
 }
 
-// CostExposureRecorder 定义把成本敞口写入存储的能力（DESIGN-bill-on-cancel 阶段一）。
+// CostExposureRecorder 定义把成本敞口写入存储的能力。
 // 实现必须是纯追加写；失败由调用方按 best-effort 处理（敞口是观测事实，不阻断请求收口）。
 type CostExposureRecorder interface {
 	RecordChannelCostExposure(ctx context.Context, params CostExposureParams) error

@@ -17,7 +17,7 @@
 -- 是 append-only 审计表，权威是冻结金额列；无 FK 让 model_prices 行可自由停用/删除而不破坏历史，
 -- 与旧 model_reference_cost_id 同为无 FK 的设计一致。故此处仅 rename 列，不新增/改动任何外键。
 --
--- 前置门禁（见 DESIGN-cost-base-from-model-price.md §7 阶段 0/1）：
+-- 前置门禁：
 --   - 无 pending 的 settlement_recovery_jobs 仍引用 model_reference_costs（replay 会失败）。
 --   - model_reference_costs 与 model_prices 金额口径已对齐（或库空/参考成本可弃）。
 

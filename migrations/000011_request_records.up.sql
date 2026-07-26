@@ -94,7 +94,7 @@ ALTER TABLE ONLY public.request_records
 -- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：
 -- ---------------------------------------------------------------------------
 -- [000046_drop_capability_gate_columns]
--- 移除能力闸门（DEC-024 / DESIGN-capability-manual-declaration）：删除 observe/enforce 审计列。
+-- DEC-024 移除能力闸门：删除 observe/enforce 审计列。
 -- 能力不再于请求热路径判定，required_capabilities 推断与 capability_check_result 审计随闸门一并删除。
 -- [000058_collapse_projects_into_users]
 -- 折叠 user → project → api_key 三级为 user → api_key 两级，彻底移除 projects 概念。
@@ -108,5 +108,5 @@ ALTER TABLE ONLY public.request_records
 -- route_id 为请求创建时 API Key 绑定线路的快照：即使之后 Key 换绑线路，历史请求仍据此显示当时线路
 --   （列表按 route_id JOIN routes 取名；历史行 NULL 时回落到 Key 当前绑定）。
 -- reasoning_effort 为跨协议归一档位（none/minimal/low/medium/high/xhigh）：OpenAI 取 reasoning_effort，
---   Anthropic 由 thinking.budget_tokens 归一（映射见 PLAN-request-records-redesign）。
+--   Anthropic 由 thinking.budget_tokens 归一。
 -- reasoning_budget_tokens 保留 Anthropic 原始预算（OpenAI 为 NULL）。client_ip 为客户端来源 IP（无地理）。

@@ -10,7 +10,7 @@ const (
 	maxUserLength = 512
 )
 
-// input item 判别类型（RESPONSES_CHAT_BRIDGE.md §2）。
+// input item 判别类型。
 const (
 	itemTypeMessage            = "message"
 	itemTypeFunctionCall       = "function_call"

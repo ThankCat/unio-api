@@ -10,7 +10,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/opsutil"
 )
 
-// CostExposureStore 定义成本敞口只读查询所需的存储能力（DESIGN-bill-on-cancel 阶段一）。
+// CostExposureStore 定义成本敞口只读查询所需的存储能力。
 type CostExposureStore interface {
 	SummarizeChannelCostExposures(ctx context.Context, arg sqlc.SummarizeChannelCostExposuresParams) ([]sqlc.SummarizeChannelCostExposuresRow, error)
 	ListChannelCostExposuresPage(ctx context.Context, arg sqlc.ListChannelCostExposuresPageParams) ([]sqlc.ListChannelCostExposuresPageRow, error)

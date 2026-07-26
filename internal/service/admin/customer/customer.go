@@ -1,6 +1,6 @@
 // Package customer 编排 admin 管理端（M7）的用户 / 项目 / API Key / 手工调额。
 //
-// 设计要点（见 ADMIN_MODULES_DRAFT M7 + DEC-017）：
+// 当前设计要点：
 //   - 项目仅作工作空间，不承载启停/预算/策略；费用上限挂在 API Key（生命周期累计封顶）。
 //   - 余额变动一律走 core/ledger（写 adjustment_* 流水 + 幂等），禁止直接改 user_balances。
 //   - API Key 明文只在创建时返回一次；列表/详情绝不回 key_hash。

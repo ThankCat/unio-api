@@ -255,7 +255,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	chatCompletionService.SetRoutingTraceRecorder(routingTraceRecorder)
 	responsesService.SetRoutingTraceRecorder(routingTraceRecorder)
 	messagesService.SetRoutingTraceRecorder(routingTraceRecorder)
-	// 成本敞口记录器（DESIGN-bill-on-cancel 阶段一）：bill-on-disconnect 渠道的失败/取消路径
+	// 成本敞口记录器：bill-on-disconnect 渠道的失败/取消路径
 	// 记平台成本敞口；假定输出兜底与 authorization 的进程级兜底同源，保证敞口与冻结上界口径一致。
 	costExposureRecorder := newCostExposureStore(queries, deps.Logger)
 	chatCompletionService.SetCostExposureRecorder(costExposureRecorder, deps.Config.Gateway.MaxOutputTokensFallback)

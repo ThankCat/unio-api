@@ -1,5 +1,5 @@
 -- name: CreateChannelCostExposure :one
--- CreateChannelCostExposure 写入一条 bill-on-disconnect 渠道的平台成本敞口（DESIGN-bill-on-cancel 阶段一）。
+-- CreateChannelCostExposure 写入一条 bill-on-disconnect 渠道的平台成本敞口。
 INSERT INTO channel_cost_exposures (
     request_record_id,
     attempt_id,

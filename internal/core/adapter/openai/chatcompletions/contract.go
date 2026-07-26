@@ -63,7 +63,7 @@ type ChatRequest struct {
 
 	// 以下为 OpenAI Chat Completions 协议族的其余顶层字段。它们都是 OpenAI 规范字段（非
 	// vendor 扩展），统一进入协议族契约；具体 provider 不支持时由该 provider adapter 出站
-	// Drop（见 DEEPSEEK_OPENAI_MAPPING.md），未来支持的 provider 可直接 Pass 进 wire。
+	// Drop。
 
 	// N 是返回候选数量。
 	N *int

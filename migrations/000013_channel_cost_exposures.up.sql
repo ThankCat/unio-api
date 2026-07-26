@@ -1,4 +1,4 @@
--- channel_cost_exposures 是 bill-on-cancel 渠道的平台成本敞口事实（DESIGN-bill-on-cancel 阶段一）。
+-- channel_cost_exposures 是 bill-on-cancel 渠道的平台成本敞口事实。
 -- 一行 = 一次「请求已发到上游、但本 attempt 不会产生真实结算成本」的失败/取消，
 -- 上游（断开不取消、照常计费）大概率仍收了钱；金额为保守上界估算（输入保守估 + 输出按上限假定）。
 -- 与 ledger/结算完全隔离：不动客户余额、不进 usage_records，纯平台侧成本观测，出错最多是估算偏差。

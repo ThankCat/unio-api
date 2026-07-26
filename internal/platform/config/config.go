@@ -16,8 +16,8 @@ import (
 //
 // 注意:线路/渠道默认限流、渠道熔断、流式 idle 超时、渠道 429 冷却、凭据 401 阈值、默认渠道超时、
 // 渠道自动巡检(开关/间隔/日志保留/探测超时)已迁移为运行时配置(app_settings,admin 后台可改、
-// 免重启生效),不再从 env 读取——见 internal/service/appsettings 与
-// docs/production/DESIGN-env-to-runtime-settings-migration.md。
+// 免重启生效),不再从 env 读取——见 internal/service/appsettings 与 Unio Blueprint Gateway
+// 运行控制文档。
 type Config struct {
 	HTTP             HTTPConfig
 	Log              LogConfig
@@ -100,7 +100,7 @@ type ConsoleConfig struct {
 }
 
 // ModelCatalogSyncConfig 保存 models.dev 模型目录同步参数；默认关闭（opt-in），
-// 启用前须确认 docs/datasources/MODELS_DEV_LICENSE.md 的 license 与 attribution。
+// license 与 attribution 见仓库根目录 THIRD_PARTY_NOTICES.md。
 type ModelCatalogSyncConfig struct {
 	// Enabled 控制 worker 是否调度 models.dev 每日同步。
 	Enabled bool

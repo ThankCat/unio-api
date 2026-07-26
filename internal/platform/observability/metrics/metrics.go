@@ -1,6 +1,6 @@
 // Package metrics 提供 Unio 的 Prometheus 指标注册、记录和 /metrics 暴露能力。
 //
-// 标签基数原则（见 AGENTS.md「Observability」与阶段 8 计划）：
+// 标签基数原则：
 //   - 只使用 admin 可控、取值有界的业务维度作为 label：
 //     method、route（chi 路由模板）、status、outcome、model、provider、channel、error_category、event、decision。
 //   - 绝不把 project_id、API key、用户 prompt、完整 URL、request_id 这类高基数或敏感值放进 label。

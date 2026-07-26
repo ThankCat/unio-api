@@ -33,7 +33,7 @@ type RequestLifecycle struct {
 	endpoint       requestlog.Endpoint
 	safeMessage     func(code string) string
 
-	// costExposures 是可选的成本敞口记录器（DESIGN-bill-on-cancel 阶段一）；nil 表示不启用。
+	// costExposures 是可选的成本敞口记录器；nil 表示不启用。
 	costExposures              CostExposureRecorder
 	costExposureOutputFallback int64
 }

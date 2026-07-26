@@ -13,7 +13,7 @@ import (
 //
 // 与 OpenAI 侧 reasoning_effort 同一业务规则（minimal/low/medium/high→high，xhigh/max→max）。
 // 各 adapter 包各自持有一份，保持适配层解耦，不跨 adapter 复用。出站显式归一，不依赖上游
-// 隐式兼容行为（见 providers/deepseek/anthropic/protocol-and-params.md 与 adaptation.md）。
+// 隐式兼容行为。
 var deepseekOutputConfigEfforts = map[string]string{
 	"minimal": "high",
 	"low":     "high",
@@ -32,7 +32,7 @@ func normalizeOutputConfigEffort(effort string) (string, bool) {
 
 // deepseekSupportedContentBlocks 是 DeepSeek Anthropic origin 支持的 content block 类型。
 //
-// 见 DEEPSEEK_ANTHROPIC_MAPPING.md §5 与 DEC-012：其余 block（image/document/redacted_thinking/
+// 其余 block（image/document/redacted_thinking/
 // MCP/container_upload 等）在出站时 Drop，不写入 upstream content。
 var deepseekSupportedContentBlocks = map[string]bool{
 	"text":                   true,
@@ -45,7 +45,7 @@ var deepseekSupportedContentBlocks = map[string]bool{
 
 // deepseekDroppedExtensions 是 DeepSeek 忽略且 Unio 不透传的顶层 extension。
 //
-// 见 providers/deepseek/anthropic/protocol-and-params.md §4/§10：container / service_tier /
+// container / service_tier /
 // inference_geo / mcp_servers 出站 Drop（不写入 upstream body）。output_config 单独处理
 // （归一 effort 为 high/max、剔除 format）。
 var deepseekDroppedExtensions = []string{"container", "inference_geo", "mcp_servers", "service_tier"}

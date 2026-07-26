@@ -3,8 +3,8 @@
 //
 // 本文件只负责请求方向翻译：把 ingress 的 Responses DTO 翻译成内部
 // chatcompletionsadapter.ChatRequest 契约，复用既有 OpenAI adapter / routing / lifecycle / settlement，
-// 不新增上游 Responses adapter。字段语义映射（Pass/Adapt/Drop/Reject）以
-// docs/chapters/phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md 为准。
+// 不新增上游 Responses adapter。字段语义映射（Pass/Adapt/Drop/Reject）见 Unio Blueprint Gateway
+// 协议兼容文档。
 //
 // 职责边界（BRIDGE §1）：桥接层只做协议结构翻译，能映射进 ChatRequest 契约的字段一律 Adapt
 // 进契约；provider（DeepSeek）能力裁剪由 adapter 出站 dropUnsupported 负责，桥接层不重复硬 Drop。

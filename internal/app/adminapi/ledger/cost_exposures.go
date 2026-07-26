@@ -10,7 +10,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
 )
 
-// CostExposureQueryService 定义 adminapi 查询渠道成本敞口所需的最小能力（DESIGN-bill-on-cancel 阶段一）。
+// CostExposureQueryService 定义 adminapi 查询渠道成本敞口所需的最小能力。
 type CostExposureQueryService interface {
 	Summarize(ctx context.Context, from, to time.Time) ([]query.CostExposureSummary, error)
 	List(ctx context.Context, params query.CostExposureListParams) ([]query.CostExposureItem, int64, error)

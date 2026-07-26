@@ -112,7 +112,7 @@ type ChatCompletionStreamOptions struct {
 	IncludeUsage *bool `json:"include_usage,omitempty"`
 
 	// IncludeObfuscation 控制是否返回 obfuscation 字段；建模以避免 ingress silent drop，
-	// provider 不支持时由 adapter 出站 Drop（见 DEEPSEEK_OPENAI_MAPPING.md §4）。
+	// provider 不支持时由 adapter 出站 Drop。
 	IncludeObfuscation *bool `json:"include_obfuscation,omitempty"`
 }
 

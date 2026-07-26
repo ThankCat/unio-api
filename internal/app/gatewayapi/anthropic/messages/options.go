@@ -6,14 +6,14 @@ import (
 	"fmt"
 )
 
-// knownThinkingTypes 是 thinking union 已登记的 type 值（见 matrix §5）。
+// knownThinkingTypes 是 thinking union 已登记的 type 值。
 var knownThinkingTypes = map[string]bool{
 	"enabled":  true,
 	"disabled": true,
 	"adaptive": true,
 }
 
-// knownToolChoiceTypes 是 tool_choice union 已登记的 type 值（见 matrix §7）。
+// knownToolChoiceTypes 是 tool_choice union 已登记的 type 值。
 var knownToolChoiceTypes = map[string]bool{
 	"auto": true,
 	"any":  true,
@@ -21,7 +21,7 @@ var knownToolChoiceTypes = map[string]bool{
 	"none": true,
 }
 
-// knownServerToolTypes 是 tools union 中已登记的内置（server）tool type（见 matrix §8）。
+// knownServerToolTypes 是 tools union 中已登记的内置（server）tool type。
 // 客户 custom tool 不带这些 type，由 name + input_schema 识别。
 var knownServerToolTypes = map[string]bool{
 	"bash_20250124":                   true,

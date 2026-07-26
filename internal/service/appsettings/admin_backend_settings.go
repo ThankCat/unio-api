@@ -9,8 +9,7 @@ import (
 )
 
 // 本文件登记 admin_backend 域(admin 进程后端 / 渠道检测 worker 消费)的运行时配置。
-// 域约定见 DESIGN-runtime-settings-batch2-domains.md §2:admin 后端每请求经 store 现读,
-// 本地 3s 缓存即可满足生效时效(admin QPS 低,不走 applier)。
+// admin 后端每请求经 store 现读,并使用本地 3s 缓存,不走 applier。
 // 渠道检测 worker 同样现读本域(可无 Redis,退化为 DB + 本地缓存)。
 
 // P4 §2.10/§8.3：admin_backend.channel_health_thresholds 主观健康分桶阈值已删除；

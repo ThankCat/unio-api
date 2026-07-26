@@ -2,8 +2,8 @@
 //
 // 它消费 models.dev 的 models.json（canonical 元数据）与 api.json（每 provider 价格基线），
 // 按合并规则维护 models 表：source=manual 行永不被覆盖、新模型默认 disabled、上游删除只标记不删除。
-// models.dev 仅作种子源，不是运行时事实源（DEC-015）；license 与 attribution 见
-// docs/datasources/MODELS_DEV_LICENSE.md。
+// models.dev 仅作种子源，不是运行时事实源；license 与 attribution 见仓库根目录
+// THIRD_PARTY_NOTICES.md。
 package modelcatalog
 
 import (

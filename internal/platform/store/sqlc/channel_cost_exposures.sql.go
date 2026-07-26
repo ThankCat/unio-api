@@ -49,7 +49,7 @@ type CreateChannelCostExposureParams struct {
 	Currency             string
 }
 
-// CreateChannelCostExposure 写入一条 bill-on-disconnect 渠道的平台成本敞口（DESIGN-bill-on-cancel 阶段一）。
+// CreateChannelCostExposure 写入一条 bill-on-disconnect 渠道的平台成本敞口。
 func (q *Queries) CreateChannelCostExposure(ctx context.Context, arg CreateChannelCostExposureParams) (ChannelCostExposure, error) {
 	row := q.db.QueryRow(ctx, createChannelCostExposure,
 		arg.RequestRecordID,

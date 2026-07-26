@@ -4,7 +4,7 @@ import "github.com/ThankCat/unio-gateway/internal/core/usage"
 
 // ToUsageFacts 把 OpenAI 语义的 ChatUsage 映射为协议无关的 usage.Facts。
 //
-// 这是 OpenAI 协议族的 usage 映射事实来源（见 RESPONSE_FACTS 第 4 节）：
+// 这是 OpenAI 协议族的 usage 映射事实来源：
 //   - 输入拆成三段：命中 cache 读（CacheRead）、写入 cache（CacheWrite30m）、余下未缓存（Uncached）；
 //   - OpenAI GPT-5.6+ 的 cache_write_tokens 是「本次处理并写入缓存」的 token，属 uncached 的子集，
 //     按未缓存输入价 1.25x 计费，故从 uncached 中扣出、单列到 30m 缓存写维度；旧模型/DeepSeek 不返回

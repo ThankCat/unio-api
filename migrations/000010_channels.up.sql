@@ -121,7 +121,7 @@ ALTER TABLE ONLY public.channels
 -- NULL 表示「继承并发默认」（gateway.concurrency_defaults.channel_limit），0 表示「显式不限」，>0 表示具体上限。
 -- 命中上限时该候选被跳过（fallback 到下一渠道），不产生上游调用，也不写 attempt 记录。
 -- [000073_add_channels_bills_on_disconnect]
--- upstream_bills_on_disconnect（DESIGN-bill-on-cancel 阶段一）：标记该渠道的上游在连接断开后
+-- upstream_bills_on_disconnect：标记该渠道的上游在连接断开后
 -- 仍会完成生成并计费（典型：sub2api 类订阅中转，断开不取消、drain 到底照扣）。
 -- 打开后，gateway 在「请求已发出但本 attempt 不会产生真实结算成本」的失败/取消路径上，
 -- 会向 channel_cost_exposures 记一条平台成本敞口（保守上界估算），供成本对账与渠道横向比较。

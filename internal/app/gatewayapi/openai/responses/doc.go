@@ -6,8 +6,8 @@
 //   - 本子包只负责 Responses 协议的 ingress DTO、decode、协议结构校验与原生错误渲染。
 //   - Responses 请求在 service 层桥接为内部 openai.ChatRequest 契约，复用既有 OpenAI
 //     adapter / routing / lifecycle / settlement，不新增上游 Responses adapter。
-//   - 字段语义映射（Pass/Adapt/Drop/Reject）以
-//     docs/chapters/phase-11-openai-responses-api/RESPONSES_CHAT_BRIDGE.md 为准。
+//   - 字段语义映射（Pass/Adapt/Drop/Reject）见 Unio Blueprint Gateway 协议兼容文档：
+//     https://github.com/unioapi/unio-blueprint/blob/main/docs/products/gateway/features/protocol-compatibility.md。
 //
 // 边界（与 chatcompletions 子包对称）：
 //

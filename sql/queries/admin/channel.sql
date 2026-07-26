@@ -558,7 +558,7 @@ WHERE id = sqlc.arg(id)
 RETURNING id, provider_id, provider_origin_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect;
 
 -- name: SetChannelBillingBehavior :one
--- SetChannelBillingBehavior 设置渠道「断开仍计费」标记（DESIGN-bill-on-cancel 阶段一）。
+-- SetChannelBillingBehavior 设置渠道「断开仍计费」标记。
 -- true 表示上游在连接断开后仍会完成生成并计费（sub2api 类中转）；打开后失败/取消路径会记成本敞口。
 UPDATE channels
 SET upstream_bills_on_disconnect = sqlc.arg(upstream_bills_on_disconnect), updated_at = now()

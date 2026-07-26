@@ -119,7 +119,7 @@ type Channel struct {
 	RPDLimit *int64
 	// ConcurrencyLimit 是渠道在途并发上限（DEC-029）：nil=继承并发默认 channel_limit，0=不限，>0=具体上限。
 	ConcurrencyLimit *int64
-	// BillsOnDisconnect 标记上游「断开仍计费」（DESIGN-bill-on-cancel 阶段一）：
+	// BillsOnDisconnect 标记上游「断开仍计费」：
 	// true 时失败/取消路径会记平台成本敞口，纯观测不影响路由与客户计费。
 	BillsOnDisconnect bool
 	CreatedAt         time.Time
@@ -205,7 +205,7 @@ type CreateInput struct {
 	TPMLimit           *int64
 	RPDLimit           *int64
 	ConcurrencyLimit   *int64
-	// BillsOnDisconnect 非 nil 时设置「断开仍计费」标记（DESIGN-bill-on-cancel 阶段一）。
+	// BillsOnDisconnect 非 nil 时设置「断开仍计费」标记。
 	BillsOnDisconnect *bool
 }
 
@@ -223,7 +223,7 @@ type UpdateInput struct {
 	TPMLimit           *int64
 	RPDLimit           *int64
 	ConcurrencyLimit   *int64
-	// BillsOnDisconnect 非 nil 时设置「断开仍计费」标记（DESIGN-bill-on-cancel 阶段一）。
+	// BillsOnDisconnect 非 nil 时设置「断开仍计费」标记。
 	BillsOnDisconnect *bool
 }
 

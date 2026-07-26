@@ -1,4 +1,4 @@
--- 能力 key 字典表（DEC-024 / DESIGN-capability-manual-declaration §4）：合法能力 key 的唯一真源，
+-- 能力 key 字典表：合法能力 key 的唯一真源，
 -- 取代代码内 keys.go 常量注册表。新增能力 = 往本表插一行（带中文描述供运维区分），无需改代码。
 CREATE TABLE public.capability_keys (
     -- key: 稳定能力标识，命名形如 <domain>.<feature>[.<sub>]，公开契约。

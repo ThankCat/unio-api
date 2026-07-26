@@ -10,7 +10,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
-// costExposureStore 把 lifecycle 的成本敞口写入落到 channel_cost_exposures（DESIGN-bill-on-cancel 阶段一）。
+// costExposureStore 把 lifecycle 的成本敞口写入 channel_cost_exposures。
 // 纯追加写；失败记 warn 日志（敞口是观测事实，不阻断请求收口）。
 type costExposureStore struct {
 	queries *sqlc.Queries

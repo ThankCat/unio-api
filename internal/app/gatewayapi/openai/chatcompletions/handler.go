@@ -205,7 +205,7 @@ func mapChatServiceError(req ChatCompletionRequest, err error, fallbackCode stri
 	}
 
 	// 上游 provider 调用失败：只消费 adapter 给出的稳定 category，不解析 provider 原始 body。
-	// HTTP status 策略与 Anthropic handler 保持一致（见 ACCEPTANCE.md 安全验收）。
+	// HTTP status 策略与 Anthropic handler 保持一致。
 	if category, ok := adapter.UpstreamCategoryOf(err); ok {
 		return mapUpstreamChatError(category)
 	}
