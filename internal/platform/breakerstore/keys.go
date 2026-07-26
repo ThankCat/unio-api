@@ -107,6 +107,23 @@ func (k keyBuilder) requestConcurrency(routeID, userID int64) string {
 	return k.base + "admission:v1:ru-conc:" + i(routeID) + ":" + i(userID)
 }
 
+// 线路级 SCAN 模式：汇总该线路所有 (route,user) 桶（admin 只读展示用，不进热路径）。
+func (k keyBuilder) requestConcurrencyRoutePattern(routeID int64) string {
+	return k.base + "admission:v1:ru-conc:" + i(routeID) + ":*"
+}
+
+func (k keyBuilder) requestRPMBucketRoutePattern(routeID, minuteBucket int64) string {
+	return k.base + "admission:v1:ru-rpm:" + i(routeID) + ":*:" + i(minuteBucket)
+}
+
+func (k keyBuilder) requestRPDBucketRoutePattern(routeID, dayBucket int64) string {
+	return k.base + "admission:v1:ru-rpd:" + i(routeID) + ":*:" + i(dayBucket)
+}
+
+func (k keyBuilder) requestTPMBucketRoutePattern(routeID, minuteBucket int64) string {
+	return k.base + "admission:v1:ru-tpm:" + i(routeID) + ":*:" + i(minuteBucket)
+}
+
 // Channel 稳定窗口桶（RPM/RPD/TPM）——不带 revision。
 func (k keyBuilder) channelRPMBucket(channelID, minuteBucket int64) string {
 	return k.base + "admission:v1:ch-rpm:" + i(channelID) + ":" + i(minuteBucket)

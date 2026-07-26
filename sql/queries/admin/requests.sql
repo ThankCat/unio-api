@@ -105,6 +105,7 @@ LEFT JOIN models m ON m.model_id = r.requested_model_id
 LEFT JOIN channels fc ON fc.id = r.final_channel_id
 WHERE (sqlc.narg('user_id')::bigint IS NULL OR r.user_id = sqlc.narg('user_id')::bigint)
   AND (sqlc.narg('api_key_id')::bigint IS NULL OR r.api_key_id = sqlc.narg('api_key_id')::bigint)
+  AND (sqlc.narg('request_id')::text IS NULL OR r.request_id = sqlc.narg('request_id')::text)
   AND (sqlc.narg('status')::text IS NULL OR r.status = sqlc.narg('status')::text)
   AND (sqlc.narg('model')::text IS NULL OR r.requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
@@ -129,6 +130,7 @@ SELECT COUNT(*) AS total
 FROM request_records
 WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::bigint)
   AND (sqlc.narg('api_key_id')::bigint IS NULL OR api_key_id = sqlc.narg('api_key_id')::bigint)
+  AND (sqlc.narg('request_id')::text IS NULL OR request_id = sqlc.narg('request_id')::text)
   AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
   AND (sqlc.narg('model')::text IS NULL OR requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)

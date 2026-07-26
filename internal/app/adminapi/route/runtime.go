@@ -105,6 +105,14 @@ type runtimeChannelDTO struct {
 	MarginStatus                    string   `json:"margin_status"`
 }
 
+type routeUsageDTO struct {
+	Concurrency int64 `json:"concurrency"`
+	RPM         int64 `json:"rpm"`
+	RPD         int64 `json:"rpd"`
+	TPM         int64 `json:"tpm"`
+	ActiveUsers int64 `json:"active_users"`
+}
+
 type routeRuntimeDTO struct {
 	RouteID               int64               `json:"route_id"`
 	Mode                  string              `json:"mode"`
@@ -119,6 +127,7 @@ type routeRuntimeDTO struct {
 	AllCapacityZero       bool                `json:"all_capacity_zero"`
 	RuntimeSyncState      string              `json:"runtime_sync_state"`
 	BreakerStoreAdmission string              `json:"breaker_store_admission"`
+	RouteUsage            *routeUsageDTO      `json:"route_usage"`
 	Sources               []runtimeSourceDTO  `json:"sources"`
 	Channels              []runtimeChannelDTO `json:"channels"`
 }
@@ -129,6 +138,19 @@ func (h *runtimeHandler) get(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
+	sort, err := adminhttp.ParseListSort(r, map[string]struct{}{
+		"order":        {},
+		"weight":       {},
+		"capacity":     {}, // 兼容：最紧余量
+		"concurrency":  {},
+		"rpm":          {},
+		"rpd":          {},
+		"tpm":          {},
+	}, "order", false)
+	if err != nil {
+		adminhttp.WriteSortError(w, err)
+		return
+	}
 	runtime, err := h.service.Get(r.Context(), routeruntime.Params{
 		RouteID: routeID, ModelID: adminhttp.QueryString(r, "model_id"), Protocol: adminhttp.QueryString(r, "protocol"),
 	})
@@ -136,6 +158,8 @@ func (h *runtimeHandler) get(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
+	field, desc := sort.SQLParams()
+	routeruntime.SortChannels(runtime.Channels, field, desc)
 	adminhttp.WriteData(w, http.StatusOK, toRouteRuntimeDTO(runtime))
 }
 
@@ -148,6 +172,15 @@ func toRouteRuntimeDTO(value routeruntime.Runtime) routeRuntimeDTO {
 		RuntimeSyncState: value.RuntimeSyncState, BreakerStoreAdmission: value.BreakerStoreAdmission,
 		Sources:  make([]runtimeSourceDTO, 0, len(value.Sources)),
 		Channels: make([]runtimeChannelDTO, 0, len(value.Channels)),
+	}
+	if value.RouteUsage != nil {
+		out.RouteUsage = &routeUsageDTO{
+			Concurrency: value.RouteUsage.Concurrency,
+			RPM:         value.RouteUsage.RPM,
+			RPD:         value.RouteUsage.RPD,
+			TPM:         value.RouteUsage.TPM,
+			ActiveUsers: value.RouteUsage.ActiveUsers,
+		}
 	}
 	for _, source := range value.Sources {
 		var observedAt *string

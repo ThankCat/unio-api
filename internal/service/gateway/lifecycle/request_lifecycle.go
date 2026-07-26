@@ -56,9 +56,14 @@ func (l *RequestLifecycle) RecordRoutingDecision(ctx context.Context, in Routing
 	}
 }
 
-// RecordRoutingFailure 100% 保存候选计划生成前的路由异常（无可用渠道、负毛利全摘除等）。
+// RecordRoutingFailure 保存「已经参与选渠」后的路由失败（如无可用渠道、负毛利全摘除）。
+// 模型不存在 / 用户无权 / 线路未配置 / 协议非法 / 存储故障等尚未进入候选选择的失败不落库——
+// 它们没有路由决策可回顾，只留在 request_records。
 func (l *RequestLifecycle) RecordRoutingFailure(ctx context.Context, request requestlog.RequestRecord, routeID *int64, err error) {
-	if l == nil || routeID == nil {
+	if l == nil || routeID == nil || err == nil {
+		return
+	}
+	if !shouldPersistRoutingFailure(err) {
 		return
 	}
 	marginGuard := false
@@ -77,6 +82,21 @@ func (l *RequestLifecycle) RecordRoutingFailure(ctx context.Context, request req
 	l.RecordRoutingDecision(ctx, RoutingDecisionTraceInput{
 		Request: request, RouteID: *routeID, ForceReasons: []string{reason}, MarginGuard: marginGuard,
 	})
+}
+
+// shouldPersistRoutingFailure 判断 Plan 失败是否已经进入过渠道候选选择。
+// 仅「模型存在且允许使用，但最终没有可用候选」这类结果值得进 routing_decision_traces。
+func shouldPersistRoutingFailure(err error) bool {
+	switch failure.CodeOf(err) {
+	case failure.CodeRoutingModelNotFound,
+		failure.CodeRoutingModelNotAvailable,
+		failure.CodeRoutingRouteNotConfigured,
+		failure.CodeRoutingProtocolInvalid,
+		failure.CodeRoutingStoreFailed:
+		return false
+	default:
+		return true
+	}
 }
 
 // RequestLifecycleParams 是构造 RequestLifecycle 所需的全部字段。

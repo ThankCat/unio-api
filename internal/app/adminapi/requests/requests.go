@@ -243,6 +243,7 @@ func (h *requestsHandler) list(w http.ResponseWriter, r *http.Request) {
 	items, total, err := h.service.List(r.Context(), query.RequestListParams{
 		UserID:    userID,
 		APIKeyID:  apiKeyID,
+		RequestID: adminhttp.QueryString(r, "request_id"),
 		Status:    adminhttp.QueryString(r, "status"),
 		Model:     adminhttp.QueryString(r, "model"),
 		From:      from,

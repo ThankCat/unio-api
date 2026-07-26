@@ -34,8 +34,6 @@ services:
 
 volumes:
   postgres_data:
-    name: postgres_data
-    external: true
+    name: unio_postgres_data
   redis_data:
-    name: redis_data
-    external: true
+    name: unio_redis_data

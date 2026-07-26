@@ -4,6 +4,8 @@ import (
 	"context"
 	"math"
 	"math/big"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,16 +54,24 @@ func (f *fakeRuntimeFacts) Routing(context.Context) (runtimefacts.RoutingRevisio
 }
 
 type fakeBreakerSnapshotter struct {
-	result breakerstore.SnapshotManyResult
-	err    error
-	input  breakerstore.SnapshotManyInput
-	calls  int
+	result      breakerstore.SnapshotManyResult
+	err         error
+	input       breakerstore.SnapshotManyInput
+	calls       int
+	routeUsage  breakerstore.RouteUsage
+	routeUsageErr error
+	routeUsageCalls int
 }
 
 func (f *fakeBreakerSnapshotter) SnapshotMany(_ context.Context, input breakerstore.SnapshotManyInput) (breakerstore.SnapshotManyResult, error) {
 	f.calls++
 	f.input = input
 	return f.result, f.err
+}
+
+func (f *fakeBreakerSnapshotter) AggregateRouteUsage(_ context.Context, _ int64) (breakerstore.RouteUsage, error) {
+	f.routeUsageCalls++
+	return f.routeUsage, f.routeUsageErr
 }
 
 func TestRuntimeUsesAuthoritativeSnapshotAndP4Score(t *testing.T) {
@@ -79,45 +89,48 @@ func TestRuntimeUsesAuthoritativeSnapshotAndP4Score(t *testing.T) {
 	}
 	store.pool[1].ProviderStatus = "disabled"
 	facts := readyRuntimeFacts()
-	breakers := &fakeBreakerSnapshotter{result: breakerstore.SnapshotManyResult{
-		RoutingBalance: breakerstore.RoutingBalanceSnapshot{
-			Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35, MinimumRoutingFactor: 0.05,
-		},
-		Candidates: []breakerstore.CandidateSnapshot{
-			{
-				Candidate: breakerstore.SnapshotCandidateInput{
-					OriginID: 21, ChannelID: 7, OriginBaseURLRevision: 11,
-					OriginStatusRevision: 12, ChannelConfigRevision: 16, ChannelAdmissionRevision: 17,
-				},
-				Status: breakerstore.CandidateSnapshotCurrent,
-				Origin: breakerstore.ScopeSnapshot{
-					Exists: true, State: breakerstore.StateClosed, SampleCount: 20,
-					BaseURLRevision: 11, StatusRevision: 12, StateGeneration: 6,
-					BaseURLFenceGeneration: 3, StatusFenceGeneration: 4,
-				},
-				Channel: breakerstore.ScopeSnapshot{
-					Exists: true, State: breakerstore.StateClosed, ErrorRate: 0.1, SampleCount: 20,
-					TTFTEWMAMs: 1000, TTFTSamples: 18, ChannelConfigRevision: 16,
-				},
-				Concurrency:         breakerstore.CapacityUsage{Used: 2, Limit: 4},
-				RPM:                 breakerstore.CapacityUsage{Used: 3, Limit: 10},
-				RPD:                 breakerstore.CapacityUsage{Used: 30, Limit: 100},
-				TPM:                 breakerstore.CapacityUsage{Used: 25, Limit: 100},
-				CooldownRemainingMs: 2500, ModelPermissionPaused: true,
-				ModelPermissionRecheckState: "queued",
+	breakers := &fakeBreakerSnapshotter{
+		routeUsage: breakerstore.RouteUsage{Concurrency: 4, RPM: 12, RPD: 40, TPM: 900, ActiveUsers: 2},
+		result: breakerstore.SnapshotManyResult{
+			RoutingBalance: breakerstore.RoutingBalanceSnapshot{
+				Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35, MinimumRoutingFactor: 0.05,
 			},
-			{
-				Status:   breakerstore.CandidateSnapshotNoSample,
-				Origin: breakerstore.ScopeSnapshot{Exists: true, State: breakerstore.StateClosed},
-				Channel: breakerstore.ScopeSnapshot{
-					Exists: true, State: breakerstore.StateOpen, OpenRemainingMs: 5000,
-					ErrorRate: 1, SampleCount: 9, TTFTEWMAMs: 9000, TTFTSamples: 9,
+			Candidates: []breakerstore.CandidateSnapshot{
+				{
+					Candidate: breakerstore.SnapshotCandidateInput{
+						OriginID: 21, ChannelID: 7, OriginBaseURLRevision: 11,
+						OriginStatusRevision: 12, ChannelConfigRevision: 16, ChannelAdmissionRevision: 17,
+					},
+					Status: breakerstore.CandidateSnapshotCurrent,
+					Origin: breakerstore.ScopeSnapshot{
+						Exists: true, State: breakerstore.StateClosed, SampleCount: 20,
+						BaseURLRevision: 11, StatusRevision: 12, StateGeneration: 6,
+						BaseURLFenceGeneration: 3, StatusFenceGeneration: 4,
+					},
+					Channel: breakerstore.ScopeSnapshot{
+						Exists: true, State: breakerstore.StateClosed, ErrorRate: 0.1, SampleCount: 20,
+						TTFTEWMAMs: 1000, TTFTSamples: 18, ChannelConfigRevision: 16,
+					},
+					Concurrency:         breakerstore.CapacityUsage{Used: 2, Limit: 4},
+					RPM:                 breakerstore.CapacityUsage{Used: 3, Limit: 10},
+					RPD:                 breakerstore.CapacityUsage{Used: 30, Limit: 100},
+					TPM:                 breakerstore.CapacityUsage{Used: 25, Limit: 100},
+					CooldownRemainingMs: 2500, ModelPermissionPaused: true,
+					ModelPermissionRecheckState: "queued",
 				},
-				Concurrency: breakerstore.CapacityUsage{Limit: 0},
-				TPM:         breakerstore.CapacityUsage{Limit: 0},
+				{
+					Status:   breakerstore.CandidateSnapshotNoSample,
+					Origin: breakerstore.ScopeSnapshot{Exists: true, State: breakerstore.StateClosed},
+					Channel: breakerstore.ScopeSnapshot{
+						Exists: true, State: breakerstore.StateOpen, OpenRemainingMs: 5000,
+						ErrorRate: 1, SampleCount: 9, TTFTEWMAMs: 9000, TTFTSamples: 9,
+					},
+					Concurrency: breakerstore.CapacityUsage{Limit: 0},
+					TPM:         breakerstore.CapacityUsage{Limit: 0},
+				},
 			},
 		},
-	}}
+	}
 	service := NewService(store, facts, breakers)
 	service.now = func() time.Time { return now }
 
@@ -127,6 +140,11 @@ func TestRuntimeUsesAuthoritativeSnapshotAndP4Score(t *testing.T) {
 	}
 	if got.Stale || got.RuntimeSyncState != runtimeSyncActive || got.BreakerStoreAdmission != breakerAdmissionNormal {
 		t.Fatalf("unexpected authority state: %+v", got)
+	}
+	if breakers.routeUsageCalls != 1 || got.RouteUsage == nil ||
+		got.RouteUsage.Concurrency != 4 || got.RouteUsage.RPM != 12 ||
+		got.RouteUsage.RPD != 40 || got.RouteUsage.TPM != 900 || got.RouteUsage.ActiveUsers != 2 {
+		t.Fatalf("unexpected route usage: calls=%d usage=%+v", breakers.routeUsageCalls, got.RouteUsage)
 	}
 	if got.PoolSize != 2 || got.CandidateCount != 1 || !got.NoRedundancy {
 		t.Fatalf("unexpected route runtime: %+v", got)
@@ -453,6 +471,9 @@ func TestRuntimeReturnsDisplayableFailClosedStates(t *testing.T) {
 				!got.Stale || got.CandidateCount != 0 {
 				t.Fatalf("unexpected fail-closed runtime: %+v", got)
 			}
+			if got.RouteUsage != nil || test.breakers.routeUsageCalls != 0 {
+				t.Fatalf("deny path must not fill route usage: usage=%+v calls=%d", got.RouteUsage, test.breakers.routeUsageCalls)
+			}
 			channel := got.Channels[0]
 			if channel.RuntimeSyncState != test.wantState || channel.BreakerStoreAdmission != breakerAdmissionDenied ||
 				channel.Eligible || channel.ErrorRate != nil || channel.TTFTEWMAMs != nil || channel.FinalWeight != 0 ||
@@ -468,6 +489,30 @@ func TestRuntimeRequiresModelForModelScopedSnapshot(t *testing.T) {
 	_, err := service.Get(context.Background(), Params{RouteID: 5})
 	if failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
 		t.Fatalf("missing model_id code=%q err=%v", failure.CodeOf(err), err)
+	}
+}
+
+func TestRuntimeKeepsRouteUsageNilWhenAggregateFails(t *testing.T) {
+	store := &fakeRuntimeStore{
+		route: sqlc.Route{ID: 3, Mode: "balanced", Status: "enabled"},
+		pool:  []sqlc.RouteRuntimePoolRow{runtimePoolRow(7, 21, 31)},
+	}
+	breakers := &fakeBreakerSnapshotter{
+		routeUsageErr: failure.New(failure.CodeDependencyRedisUnavailable),
+		result: breakerstore.SnapshotManyResult{
+			RoutingBalance: breakerstore.RoutingBalanceSnapshot{
+				Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35, MinimumRoutingFactor: 0.05,
+			},
+			Candidates: []breakerstore.CandidateSnapshot{currentCostCandidate(7, 21)},
+		},
+	}
+	service := NewService(store, readyRuntimeFacts(), breakers)
+	got, err := service.Get(context.Background(), Params{RouteID: 3, ModelID: "openai/gpt"})
+	if err != nil {
+		t.Fatalf("get runtime: %v", err)
+	}
+	if got.BreakerStoreAdmission != breakerAdmissionNormal || got.RouteUsage != nil || breakers.routeUsageCalls != 1 {
+		t.Fatalf("aggregate failure must degrade route usage only: %+v calls=%d", got, breakers.routeUsageCalls)
 	}
 }
 
@@ -511,6 +556,46 @@ func currentCostCandidate(channelID, originID int64) breakerstore.CandidateSnaps
 		Channel:     breakerstore.ScopeSnapshot{Exists: true, State: breakerstore.StateClosed, ChannelConfigRevision: 16},
 		Concurrency: breakerstore.CapacityUsage{Limit: 0},
 		TPM:         breakerstore.CapacityUsage{Limit: 0},
+	}
+}
+
+func TestSortChannels(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	base := []Channel{
+		{ChannelID: 1, Eligible: true, CurrentOrder: 2, FinalWeight: 0.3, TPMRemaining: f(0.9)},
+		{ChannelID: 2, Eligible: false, CurrentOrder: 0, FinalWeight: 0},
+		{ChannelID: 3, Eligible: true, CurrentOrder: 1, FinalWeight: 0.7, TPMRemaining: f(0.2)},
+	}
+	ids := func(chs []Channel) string {
+		parts := make([]string, len(chs))
+		for i, c := range chs {
+			parts[i] = strconv.FormatInt(c.ChannelID, 10)
+		}
+		return strings.Join(parts, ",")
+	}
+	cases := []struct {
+		name  string
+		field string
+		desc  bool
+		want  string
+	}{
+		{"order asc keeps routing order, ineligible last", "order", false, "3,1,2"},
+		{"order desc reverses eligible, ineligible last", "order", true, "1,3,2"},
+		{"weight desc ranks by final weight", "weight", true, "3,1,2"},
+		{"capacity asc ranks by tightest headroom", "capacity", false, "3,1,2"},
+		{"capacity desc ranks by tightest headroom", "capacity", true, "1,3,2"},
+		{"tpm asc ranks by tpm remaining", "tpm", false, "3,1,2"},
+		{"tpm desc ranks by tpm remaining", "tpm", true, "1,3,2"},
+		{"unknown field falls back to order", "nope", false, "3,1,2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := append([]Channel(nil), base...)
+			SortChannels(got, tc.field, tc.desc)
+			if ids(got) != tc.want {
+				t.Fatalf("SortChannels(%q, desc=%v) = %s, want %s", tc.field, tc.desc, ids(got), tc.want)
+			}
+		})
 	}
 }
 

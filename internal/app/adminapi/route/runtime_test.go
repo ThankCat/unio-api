@@ -13,6 +13,9 @@ func TestRouteRuntimeDTOUsesP4Contract(t *testing.T) {
 		RouteID: 9, Mode: "balanced", RouteStatus: "enabled", ModelID: "openai/gpt",
 		ObservedAt:       time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC),
 		RuntimeSyncState: "active", BreakerStoreAdmission: "normal",
+		RouteUsage: &routeruntime.RouteUsage{
+			Concurrency: 3, RPM: 15, RPD: 40, TPM: 1200, ActiveUsers: 2,
+		},
 		Sources: []routeruntime.Source{{Name: "breaker_store", Available: true}},
 		Channels: []routeruntime.Channel{{
 			ChannelID: 7, ProviderOriginID: 21, ProviderOriginName: "primary",
@@ -29,10 +32,19 @@ func TestRouteRuntimeDTOUsesP4Contract(t *testing.T) {
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		t.Fatalf("decode route runtime: %v", err)
 	}
-	for _, key := range []string{"runtime_sync_state", "breaker_store_admission", "sources", "channels"} {
+	for _, key := range []string{"runtime_sync_state", "breaker_store_admission", "sources", "channels", "route_usage"} {
 		if _, ok := decoded[key]; !ok {
 			t.Errorf("missing route runtime field %q: %s", key, body)
 		}
+	}
+	usage, ok := decoded["route_usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("route_usage type: %#v", decoded["route_usage"])
+	}
+	if usage["concurrency"] != float64(3) || usage["rpm"] != float64(15) ||
+		usage["rpd"] != float64(40) || usage["tpm"] != float64(1200) ||
+		usage["active_users"] != float64(2) {
+		t.Fatalf("unexpected route_usage: %#v", usage)
 	}
 	for _, key := range []string{"gateway_sources", "health_factor", "latency_ewma_ms", "instance_snapshots"} {
 		if _, ok := decoded[key]; ok {

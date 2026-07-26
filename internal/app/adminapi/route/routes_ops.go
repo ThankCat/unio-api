@@ -51,8 +51,6 @@ type routeOpsDetailDTO struct {
 	NoChannelTotal   int64   `json:"no_channel_total"`
 	LatencyP50       float64 `json:"latency_p50"`
 	LatencyP95       float64 `json:"latency_p95"`
-	Serviceable      bool    `json:"serviceable"`
-	Abnormal         bool    `json:"abnormal"`
 	RouteStatus      string  `json:"route_status"`
 }
 
@@ -182,8 +180,6 @@ func (h *routeOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		NoChannelTotal:   d.NoChannelTotal,
 		LatencyP50:       d.LatencyP50,
 		LatencyP95:       d.LatencyP95,
-		Serviceable:      d.Serviceable,
-		Abnormal:         d.Abnormal,
 		RouteStatus:      d.RouteStatus,
 	})
 }

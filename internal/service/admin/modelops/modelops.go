@@ -55,6 +55,11 @@ type Row struct {
 	BaseCacheWrite30mInputPrice *string
 	BaseOutputPrice             *string
 	BaseReasoningOutputPrice    *string
+	// 当前生效基准价的长上下文阶梯（无基准价或未启用时 Enabled=false，其余为 nil）。
+	BaseLongContextEnabled          bool
+	BaseLongContextThreshold        *int64
+	BaseLongContextInputMultiplier  *string
+	BaseLongContextOutputMultiplier *string
 }
 
 // Detail 是模型详情页概览（含请求/延迟/毛利等运维指标）。
@@ -174,6 +179,10 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			BaseCacheWrite30mInputPrice: opsutil.NumericStringPtr(r.BaseCacheWrite30mInputPrice),
 			BaseOutputPrice:             opsutil.NumericStringPtr(r.BaseOutputPrice),
 			BaseReasoningOutputPrice:    opsutil.NumericStringPtr(r.BaseReasoningOutputPrice),
+			BaseLongContextEnabled:      r.BaseLongContextEnabled,
+			BaseLongContextThreshold:    opsutil.Int8Value(r.BaseLongContextThreshold),
+			BaseLongContextInputMultiplier:  opsutil.NumericStringPtr(r.BaseLongContextInputMultiplier),
+			BaseLongContextOutputMultiplier: opsutil.NumericStringPtr(r.BaseLongContextOutputMultiplier),
 		})
 	}
 	return out, total, nil

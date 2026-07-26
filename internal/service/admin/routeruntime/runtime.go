@@ -46,6 +46,16 @@ type RuntimeFactsReader interface {
 
 type BreakerSnapshotter interface {
 	SnapshotMany(context.Context, breakerstore.SnapshotManyInput) (breakerstore.SnapshotManyResult, error)
+	AggregateRouteUsage(context.Context, int64) (breakerstore.RouteUsage, error)
+}
+
+// RouteUsage 是线路级全用户入口用量合计（只读展示；不含总上限）。
+type RouteUsage struct {
+	Concurrency int64
+	RPM         int64
+	RPD         int64
+	TPM         int64
+	ActiveUsers int64
 }
 
 type Params struct {
@@ -157,6 +167,7 @@ type Runtime struct {
 	AllCapacityZero       bool
 	RuntimeSyncState      string
 	BreakerStoreAdmission string
+	RouteUsage            *RouteUsage
 	Sources               []Source
 	Channels              []Channel
 }
@@ -243,6 +254,7 @@ func (s *Service) Get(ctx context.Context, params Params) (Runtime, error) {
 		return runtime, nil
 	}
 	if len(rows) == 0 {
+		s.fillRouteUsage(ctx, &runtime)
 		runtime.Sources = healthySources(now)
 		runtime.NoRedundancy = true
 		return runtime, nil
@@ -289,8 +301,23 @@ func (s *Service) Get(ctx context.Context, params Params) (Runtime, error) {
 
 	costFacts := resolveCostFacts(rows)
 	applySnapshot(&runtime, rows, snapshot, admissionFacts, routingFacts, costFacts)
+	s.fillRouteUsage(ctx, &runtime)
 	runtime.Sources = healthySources(now)
 	return runtime, nil
+}
+
+func (s *Service) fillRouteUsage(ctx context.Context, runtime *Runtime) {
+	usage, err := s.breakers.AggregateRouteUsage(ctx, runtime.RouteID)
+	if err != nil {
+		return
+	}
+	runtime.RouteUsage = &RouteUsage{
+		Concurrency: usage.Concurrency,
+		RPM:         usage.RPM,
+		RPD:         usage.RPD,
+		TPM:         usage.TPM,
+		ActiveUsers: usage.ActiveUsers,
+	}
 }
 
 func populateChannels(runtime *Runtime, rows []sqlc.RouteRuntimePoolRow, statsRows []sqlc.RouteRuntimeChannelStatsRow, params Params) {
@@ -756,6 +783,73 @@ func healthySources(now time.Time) []Source {
 		{Name: "breaker_store", Available: true, ObservedAt: now},
 		{Name: "attempts", Available: true, ObservedAt: now},
 	}
+}
+
+// SortChannels 就地按给定字段排序运行态渠道（Admin 只读展示用）。
+// 支持 order / weight / capacity（最紧余量）/ concurrency / rpm / rpd / tpm，未知字段按 order。
+// 不可路由渠道恒沉底、内部保持稳定池顺序，避免把「被排除」的渠道排进 ranking。
+func SortChannels(channels []Channel, field string, desc bool) {
+	rank := func(c Channel) float64 {
+		switch field {
+		case "weight":
+			return c.FinalWeight
+		case "capacity":
+			return tightestRemaining(c)
+		case "concurrency":
+			return remainingOrOne(c.ConcurrencyRemaining)
+		case "rpm":
+			return remainingOrOne(c.RPMRemaining)
+		case "rpd":
+			return remainingOrOne(c.RPDRemaining)
+		case "tpm":
+			return remainingOrOne(c.TPMRemaining)
+		default:
+			return float64(c.CurrentOrder)
+		}
+	}
+	sort.SliceStable(channels, func(i, j int) bool {
+		li, lj := channels[i], channels[j]
+		if li.Eligible != lj.Eligible {
+			return li.Eligible // 可路由的在前
+		}
+		if !li.Eligible {
+			return false // 两者都不可路由：保持稳定池顺序
+		}
+		vi, vj := rank(li), rank(lj)
+		if vi == vj {
+			return false
+		}
+		if desc {
+			return vi > vj
+		}
+		return vi < vj
+	})
+}
+
+// tightestRemaining 取四维限流里最紧的一维余量（不限=1，与前端容量条口径一致）。
+func tightestRemaining(c Channel) float64 {
+	remaining := 1.0
+	for _, v := range []*float64{
+		c.ConcurrencyRemaining, c.RPMRemaining, c.RPDRemaining, c.TPMRemaining,
+	} {
+		if r := remainingOrOne(v); r < remaining {
+			remaining = r
+		}
+	}
+	return remaining
+}
+
+func remainingOrOne(v *float64) float64 {
+	if v == nil {
+		return 1
+	}
+	if *v < 0 {
+		return 0
+	}
+	if *v > 1 {
+		return 1
+	}
+	return *v
 }
 
 func assignCurrentOrder(channels []Channel, allZero bool) {

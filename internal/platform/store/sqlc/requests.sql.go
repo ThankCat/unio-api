@@ -16,19 +16,21 @@ SELECT COUNT(*) AS total
 FROM request_records
 WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
   AND ($2::bigint IS NULL OR api_key_id = $2::bigint)
-  AND ($3::text IS NULL OR status = $3::text)
-  AND ($4::text IS NULL OR requested_model_id ILIKE '%' || $4::text || '%')
-  AND ($5::timestamptz IS NULL OR created_at >= $5::timestamptz)
-  AND ($6::timestamptz IS NULL OR created_at < $6::timestamptz)
+  AND ($3::text IS NULL OR request_id = $3::text)
+  AND ($4::text IS NULL OR status = $4::text)
+  AND ($5::text IS NULL OR requested_model_id ILIKE '%' || $5::text || '%')
+  AND ($6::timestamptz IS NULL OR created_at >= $6::timestamptz)
+  AND ($7::timestamptz IS NULL OR created_at < $7::timestamptz)
 `
 
 type CountRequestRecordsParams struct {
-	UserID   pgtype.Int8
-	ApiKeyID pgtype.Int8
-	Status   pgtype.Text
-	Model    pgtype.Text
-	FromTime pgtype.Timestamptz
-	ToTime   pgtype.Timestamptz
+	UserID    pgtype.Int8
+	ApiKeyID  pgtype.Int8
+	RequestID pgtype.Text
+	Status    pgtype.Text
+	Model     pgtype.Text
+	FromTime  pgtype.Timestamptz
+	ToTime    pgtype.Timestamptz
 }
 
 // CountRequestRecords 返回与 ListRequestRecordsPage 相同过滤条件下的总条数。
@@ -36,6 +38,7 @@ func (q *Queries) CountRequestRecords(ctx context.Context, arg CountRequestRecor
 	row := q.db.QueryRow(ctx, countRequestRecords,
 		arg.UserID,
 		arg.ApiKeyID,
+		arg.RequestID,
 		arg.Status,
 		arg.Model,
 		arg.FromTime,
@@ -219,28 +222,30 @@ LEFT JOIN models m ON m.model_id = r.requested_model_id
 LEFT JOIN channels fc ON fc.id = r.final_channel_id
 WHERE ($1::bigint IS NULL OR r.user_id = $1::bigint)
   AND ($2::bigint IS NULL OR r.api_key_id = $2::bigint)
-  AND ($3::text IS NULL OR r.status = $3::text)
-  AND ($4::text IS NULL OR r.requested_model_id ILIKE '%' || $4::text || '%')
-  AND ($5::timestamptz IS NULL OR r.created_at >= $5::timestamptz)
-  AND ($6::timestamptz IS NULL OR r.created_at < $6::timestamptz)
+  AND ($3::text IS NULL OR r.request_id = $3::text)
+  AND ($4::text IS NULL OR r.status = $4::text)
+  AND ($5::text IS NULL OR r.requested_model_id ILIKE '%' || $5::text || '%')
+  AND ($6::timestamptz IS NULL OR r.created_at >= $6::timestamptz)
+  AND ($7::timestamptz IS NULL OR r.created_at < $7::timestamptz)
 ORDER BY
-  CASE WHEN COALESCE($7::text, 'created_at') IN ('', 'created_at') AND COALESCE($8::bool, true) THEN r.created_at END DESC NULLS LAST,
-  CASE WHEN COALESCE($7::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($8::bool, true) THEN r.created_at END ASC NULLS LAST,
-  CASE WHEN $7::text = 'status' AND COALESCE($8::bool, false) THEN r.status END DESC NULLS LAST,
-  CASE WHEN $7::text = 'status' AND NOT COALESCE($8::bool, false) THEN r.status END ASC NULLS LAST,
-  CASE WHEN $7::text = 'user_id' AND COALESCE($8::bool, false) THEN r.user_id END DESC NULLS LAST,
-  CASE WHEN $7::text = 'user_id' AND NOT COALESCE($8::bool, false) THEN r.user_id END ASC NULLS LAST,
-  CASE WHEN $7::text = 'model' AND COALESCE($8::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
-  CASE WHEN $7::text = 'model' AND NOT COALESCE($8::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
-  CASE WHEN $7::text = 'stream' AND COALESCE($8::bool, false) THEN r.stream END DESC NULLS LAST,
-  CASE WHEN $7::text = 'stream' AND NOT COALESCE($8::bool, false) THEN r.stream END ASC NULLS LAST,
+  CASE WHEN COALESCE($8::text, 'created_at') IN ('', 'created_at') AND COALESCE($9::bool, true) THEN r.created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE($8::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($9::bool, true) THEN r.created_at END ASC NULLS LAST,
+  CASE WHEN $8::text = 'status' AND COALESCE($9::bool, false) THEN r.status END DESC NULLS LAST,
+  CASE WHEN $8::text = 'status' AND NOT COALESCE($9::bool, false) THEN r.status END ASC NULLS LAST,
+  CASE WHEN $8::text = 'user_id' AND COALESCE($9::bool, false) THEN r.user_id END DESC NULLS LAST,
+  CASE WHEN $8::text = 'user_id' AND NOT COALESCE($9::bool, false) THEN r.user_id END ASC NULLS LAST,
+  CASE WHEN $8::text = 'model' AND COALESCE($9::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
+  CASE WHEN $8::text = 'model' AND NOT COALESCE($9::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
+  CASE WHEN $8::text = 'stream' AND COALESCE($9::bool, false) THEN r.stream END DESC NULLS LAST,
+  CASE WHEN $8::text = 'stream' AND NOT COALESCE($9::bool, false) THEN r.stream END ASC NULLS LAST,
   r.id DESC
-LIMIT $10 OFFSET $9
+LIMIT $11 OFFSET $10
 `
 
 type ListRequestRecordsPageParams struct {
 	UserID     pgtype.Int8
 	ApiKeyID   pgtype.Int8
+	RequestID  pgtype.Text
 	Status     pgtype.Text
 	Model      pgtype.Text
 	FromTime   pgtype.Timestamptz
@@ -335,6 +340,7 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 	rows, err := q.db.Query(ctx, listRequestRecordsPage,
 		arg.UserID,
 		arg.ApiKeyID,
+		arg.RequestID,
 		arg.Status,
 		arg.Model,
 		arg.FromTime,

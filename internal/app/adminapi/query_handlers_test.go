@@ -20,9 +20,11 @@ type fakeRequestQueryService struct {
 	getErr  error
 	// gotInclude 记录最近一次 Get 的 includeInternal，用于断言开关透传。
 	gotInclude bool
+	gotList    query.RequestListParams
 }
 
-func (s *fakeRequestQueryService) List(context.Context, query.RequestListParams) ([]query.RequestListItem, int64, error) {
+func (s *fakeRequestQueryService) List(_ context.Context, params query.RequestListParams) ([]query.RequestListItem, int64, error) {
+	s.gotList = params
 	return s.listOut, int64(len(s.listOut)), nil
 }
 
@@ -78,6 +80,19 @@ func TestListRequestsOmitsInternalErrorDetail(t *testing.T) {
 	// 列表永远不暴露内部错误详情（DTO 无此字段，断言 body 不含该键）。
 	if strings.Contains(rec.Body.String(), "internal_error_detail") {
 		t.Fatalf("list response must not contain internal_error_detail: %s", rec.Body.String())
+	}
+}
+
+func TestListRequestsForwardsRequestIDFilter(t *testing.T) {
+	rqs := &fakeRequestQueryService{}
+	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests?request_id=req_abc", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if rqs.gotList.RequestID != "req_abc" {
+		t.Fatalf("request_id filter not forwarded: %+v", rqs.gotList)
 	}
 }
 

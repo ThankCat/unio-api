@@ -405,8 +405,8 @@ func GatewayChannelCooldown(ctx context.Context, store *SettingsStore) ChannelCo
 // DefaultStreamIdleTimeoutSetting 与原 GATEWAY_STREAM_IDLE_TIMEOUT env 默认一致。
 const DefaultStreamIdleTimeoutSetting = 10 * time.Minute
 
-// DefaultChannelTimeoutSetting 与原 bootstrap/routing 的 30s 硬编码一致。
-const DefaultChannelTimeoutSetting = 30 * time.Second
+// DefaultChannelTimeoutSetting 渠道未单独设置 timeout_ms 时的系统默认上游超时。
+const DefaultChannelTimeoutSetting = 200 * time.Second
 
 // DefaultCredential401Threshold 与原 GATEWAY_CHANNEL_CREDENTIAL_401_THRESHOLD env 默认一致。
 const DefaultCredential401Threshold = 3

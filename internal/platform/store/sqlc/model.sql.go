@@ -1633,14 +1633,21 @@ SELECT
     base.cache_write_1h_input_price AS base_cache_write_1h_input_price,
     base.cache_write_30m_input_price AS base_cache_write_30m_input_price,
     base.output_price AS base_output_price,
-    base.reasoning_output_price AS base_reasoning_output_price
+    base.reasoning_output_price AS base_reasoning_output_price,
+    -- 长上下文阶梯：LEFT JOIN 无基准价时 COALESCE 为 false，避免 sqlc 扫 NULL 进 bool。
+    COALESCE(base.long_context_enabled, false) AS base_long_context_enabled,
+    base.long_context_threshold AS base_long_context_threshold,
+    base.long_context_input_multiplier AS base_long_context_input_multiplier,
+    base.long_context_output_multiplier AS base_long_context_output_multiplier
 FROM models m
 LEFT JOIN LATERAL (
     -- base: 模型当前生效的基准售价（mirror FindRouteCandidates 的 base LATERAL）；LEFT 保证无基准价的模型仍出现在列表。
     SELECT mp.currency, mp.uncached_input_price, mp.cache_read_input_price,
         mp.cache_write_5m_input_price, mp.cache_write_1h_input_price,
         mp.cache_write_30m_input_price,
-        mp.output_price, mp.reasoning_output_price
+        mp.output_price, mp.reasoning_output_price,
+        mp.long_context_enabled, mp.long_context_threshold,
+        mp.long_context_input_multiplier, mp.long_context_output_multiplier
     FROM model_prices mp
     WHERE mp.model_id = m.id
       AND mp.status = 'enabled'
@@ -1729,26 +1736,30 @@ type ModelsOpsTableParams struct {
 }
 
 type ModelsOpsTableRow struct {
-	ID                          int64
-	ModelID                     string
-	DisplayName                 string
-	OwnedBy                     string
-	Status                      string
-	CreatedAt                   pgtype.Timestamptz
-	MaxOutputTokens             pgtype.Int8
-	ContextWindowTokens         pgtype.Int8
-	BindingsTotal               int64
-	BindingsAvailable           int64
-	CapabilitiesDeclaredCount   int64
-	HasPrice                    bool
-	BaseCurrency                interface{}
-	BaseUncachedInputPrice      pgtype.Numeric
-	BaseCacheReadInputPrice     pgtype.Numeric
-	BaseCacheWrite5mInputPrice  pgtype.Numeric
-	BaseCacheWrite1hInputPrice  pgtype.Numeric
-	BaseCacheWrite30mInputPrice pgtype.Numeric
-	BaseOutputPrice             pgtype.Numeric
-	BaseReasoningOutputPrice    pgtype.Numeric
+	ID                              int64
+	ModelID                         string
+	DisplayName                     string
+	OwnedBy                         string
+	Status                          string
+	CreatedAt                       pgtype.Timestamptz
+	MaxOutputTokens                 pgtype.Int8
+	ContextWindowTokens             pgtype.Int8
+	BindingsTotal                   int64
+	BindingsAvailable               int64
+	CapabilitiesDeclaredCount       int64
+	HasPrice                        bool
+	BaseCurrency                    interface{}
+	BaseUncachedInputPrice          pgtype.Numeric
+	BaseCacheReadInputPrice         pgtype.Numeric
+	BaseCacheWrite5mInputPrice      pgtype.Numeric
+	BaseCacheWrite1hInputPrice      pgtype.Numeric
+	BaseCacheWrite30mInputPrice     pgtype.Numeric
+	BaseOutputPrice                 pgtype.Numeric
+	BaseReasoningOutputPrice        pgtype.Numeric
+	BaseLongContextEnabled          bool
+	BaseLongContextThreshold        pgtype.Int8
+	BaseLongContextInputMultiplier  pgtype.Numeric
+	BaseLongContextOutputMultiplier pgtype.Numeric
 }
 
 // §3.4 模型商品控制台只读运维聚合。
@@ -1793,6 +1804,10 @@ func (q *Queries) ModelsOpsTable(ctx context.Context, arg ModelsOpsTableParams) 
 			&i.BaseCacheWrite30mInputPrice,
 			&i.BaseOutputPrice,
 			&i.BaseReasoningOutputPrice,
+			&i.BaseLongContextEnabled,
+			&i.BaseLongContextThreshold,
+			&i.BaseLongContextInputMultiplier,
+			&i.BaseLongContextOutputMultiplier,
 		); err != nil {
 			return nil, err
 		}

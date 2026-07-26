@@ -52,7 +52,7 @@ type Row struct {
 	ModelsCount  int64
 }
 
-// Detail 是详情页概览（含请求/延迟/可服务等运维指标）。
+// Detail 是详情页概览（含请求/延迟等区间运维指标；不含主观「可服务/异常」标签）。
 type Detail struct {
 	RequestTotal     int64
 	RequestSucceeded int64
@@ -62,8 +62,6 @@ type Detail struct {
 	NoChannelTotal   int64
 	LatencyP50       float64
 	LatencyP95       float64
-	Serviceable      bool
-	Abnormal         bool
 	RouteStatus      string
 }
 
@@ -132,13 +130,6 @@ type TableParams struct {
 	Offset    int32
 }
 
-func deriveServiceable(status string, requestTotal, requestSucceeded, noChannelTotal int64) (serviceable, abnormal bool) {
-	rate := opsutil.SuccessRate(requestSucceeded, requestTotal)
-	abnormal = noChannelTotal > 0 || (requestTotal >= 20 && rate < 0.9)
-	serviceable = status == "enabled" && !abnormal
-	return serviceable, abnormal
-}
-
 // Table 返回线路运维主表（分页）。
 func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error) {
 	rows, err := s.store.RoutesOpsTable(ctx, sqlc.RoutesOpsTableParams{
@@ -186,8 +177,6 @@ func (s *Service) Detail(ctx context.Context, routeID int64, from, to time.Time)
 	if err != nil {
 		return Detail{}, opsutil.StoreFailed(err, "route ops detail")
 	}
-	status := r.RouteStatus
-	serviceable, abnormal := deriveServiceable(status, r.RequestTotal, r.RequestSucceeded, r.NoChannelTotal)
 	d := Detail{
 		RequestTotal:     r.RequestTotal,
 		RequestSucceeded: r.RequestSucceeded,
@@ -196,9 +185,7 @@ func (s *Service) Detail(ctx context.Context, routeID int64, from, to time.Time)
 		NoChannelTotal:   r.NoChannelTotal,
 		LatencyP50:       r.LatencyP50,
 		LatencyP95:       r.LatencyP95,
-		Serviceable:      serviceable,
-		Abnormal:         abnormal,
-		RouteStatus:      status,
+		RouteStatus:      r.RouteStatus,
 	}
 	if r.RequestSucceeded > 0 {
 		d.FallbackRate = float64(r.FallbackTotal) / float64(r.RequestSucceeded)

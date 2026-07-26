@@ -46,6 +46,11 @@ type modelOpsRowDTO struct {
 	BaseCacheWrite30mInputPrice *string `json:"base_cache_write_30m_input_price"`
 	BaseOutputPrice             *string `json:"base_output_price"`
 	BaseReasoningOutputPrice    *string `json:"base_reasoning_output_price"`
+	// 当前生效基准价的长上下文阶梯；无基准价或未启用时 enabled=false。
+	BaseLongContextEnabled          bool    `json:"base_long_context_enabled"`
+	BaseLongContextThreshold        *int64  `json:"base_long_context_threshold"`
+	BaseLongContextInputMultiplier  *string `json:"base_long_context_input_multiplier"`
+	BaseLongContextOutputMultiplier *string `json:"base_long_context_output_multiplier"`
 }
 
 type modelOpsDetailDTO struct {
@@ -157,6 +162,10 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			BaseCacheWrite30mInputPrice: row.BaseCacheWrite30mInputPrice,
 			BaseOutputPrice:             row.BaseOutputPrice,
 			BaseReasoningOutputPrice:    row.BaseReasoningOutputPrice,
+			BaseLongContextEnabled:      row.BaseLongContextEnabled,
+			BaseLongContextThreshold:    row.BaseLongContextThreshold,
+			BaseLongContextInputMultiplier:  row.BaseLongContextInputMultiplier,
+			BaseLongContextOutputMultiplier: row.BaseLongContextOutputMultiplier,
 		})
 	}
 	adminhttp.WriteList(w, http.StatusOK, out, page, total)

@@ -50,6 +50,15 @@ func Register(r chi.Router, d Deps) {
 		r.Post("/channels/{id}/restore", ch.restore)
 		// credential PUT 原子保存并同步返回五态验证结果，不回显 credential。
 		r.Put("/channels/{id}/credential", ch.rotateCredential)
+
+		dup := &channelDuplicateHandler{
+			channels:  d.Service,
+			models:    d.ModelService,
+			prices:    d.PriceService,
+			costs:     d.CostMultiplierService,
+			recharges: d.RechargeFactorService,
+		}
+		r.Post("/channels/{id}/duplicate", dup.duplicate)
 	}
 
 	// 渠道主动检测（一键测渠道）：向真实上游发一个最小请求验证连通/凭据/模型，只报告不摘除。

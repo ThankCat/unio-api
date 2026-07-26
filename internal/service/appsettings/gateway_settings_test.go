@@ -301,7 +301,7 @@ func TestMsScalarDefaults(t *testing.T) {
 	if got := string(encodeMsSetting(DefaultStreamIdleTimeoutSetting)); got != "600000" {
 		t.Fatalf("stream idle default = %s, want 600000", got)
 	}
-	if got := string(encodeMsSetting(DefaultChannelTimeoutSetting)); got != "30000" {
-		t.Fatalf("channel timeout default = %s, want 30000", got)
+	if got := string(encodeMsSetting(DefaultChannelTimeoutSetting)); got != "200000" {
+		t.Fatalf("channel timeout default = %s, want 200000", got)
 	}
 }

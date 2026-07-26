@@ -30,6 +30,7 @@ type RequestStore interface {
 type RequestListParams struct {
 	UserID    *int64
 	APIKeyID  *int64
+	RequestID string
 	Status    string
 	Model     string
 	From      *time.Time
@@ -277,6 +278,7 @@ func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]
 	rows, err := s.store.ListRequestRecordsPage(ctx, sqlc.ListRequestRecordsPageParams{
 		UserID:     int8Narg(params.UserID),
 		ApiKeyID:   int8Narg(params.APIKeyID),
+		RequestID:  textNarg(params.RequestID),
 		Status:     textNarg(params.Status),
 		Model:      textNarg(params.Model),
 		FromTime:   tsNarg(params.From),
@@ -291,12 +293,13 @@ func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]
 	}
 
 	total, err := s.store.CountRequestRecords(ctx, sqlc.CountRequestRecordsParams{
-		UserID:   int8Narg(params.UserID),
-		ApiKeyID: int8Narg(params.APIKeyID),
-		Status:   textNarg(params.Status),
-		Model:    textNarg(params.Model),
-		FromTime: tsNarg(params.From),
-		ToTime:   tsNarg(params.To),
+		UserID:    int8Narg(params.UserID),
+		ApiKeyID:  int8Narg(params.APIKeyID),
+		RequestID: textNarg(params.RequestID),
+		Status:    textNarg(params.Status),
+		Model:     textNarg(params.Model),
+		FromTime:  tsNarg(params.From),
+		ToTime:    tsNarg(params.To),
 	})
 	if err != nil {
 		return nil, 0, storeFailed(err, "count request records")
