@@ -206,6 +206,46 @@ func TestRuntimeUsesAuthoritativeSnapshotAndP4Score(t *testing.T) {
 	}
 }
 
+func TestRuntimeTreatsMissingChannelIdentityAsCurrentNoSample(t *testing.T) {
+	store := &fakeRuntimeStore{
+		route: sqlc.Route{ID: 3, Mode: "balanced", Status: "enabled"},
+		pool:  []sqlc.RouteRuntimePoolRow{runtimePoolRow(7, 21, 31)},
+	}
+	breakers := &fakeBreakerSnapshotter{result: breakerstore.SnapshotManyResult{
+		RoutingBalance: breakerstore.RoutingBalanceSnapshot{
+			Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35, CostWeight: 0.5, MinimumRoutingFactor: 0.05,
+		},
+		Candidates: []breakerstore.CandidateSnapshot{
+			{
+				Candidate: breakerstore.SnapshotCandidateInput{
+					ProviderID: 21, ChannelID: 7, OriginRevision: 11,
+					ProviderStatusRevision: 12, ChannelConfigRevision: 16, ChannelAdmissionRevision: 17,
+				},
+				Status: breakerstore.CandidateSnapshotNoSample,
+				Provider: breakerstore.ScopeSnapshot{
+					Exists: true, State: breakerstore.StateClosed, OriginRevision: 11, StatusRevision: 12,
+				},
+				Concurrency: breakerstore.CapacityUsage{Limit: 0},
+				TPM:         breakerstore.CapacityUsage{Limit: 0},
+			},
+		},
+	}}
+	service := NewService(store, readyRuntimeFacts(), breakers)
+
+	got, err := service.Get(context.Background(), Params{RouteID: 3, ModelID: "openai/gpt", Protocol: "openai"})
+	if err != nil {
+		t.Fatalf("get runtime: %v", err)
+	}
+	channel := got.Channels[0]
+	if !channel.Eligible || !channel.ChannelConfigRevisionCurrent || channel.RuntimeChannelConfigRevision != nil {
+		t.Fatalf("missing Channel identity must be a current no-sample fact: %+v", channel)
+	}
+	if channel.ChannelBreakerState != nil || channel.ErrorRate != nil || channel.ErrorSamples != 0 ||
+		channel.TTFTEWMAMs != nil || channel.TTFTSamples != 0 {
+		t.Fatalf("missing Channel identity exposed runtime samples: %+v", channel)
+	}
+}
+
 func TestRuntimeResolvesAbsoluteAndMultiplierCosts(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	absolute := runtimePoolRow(7, 21, 31)

@@ -374,7 +374,8 @@ func applySnapshot(
 	for index, candidate := range snapshot.Candidates {
 		channel := &runtime.Channels[index]
 		channelSnapshot := candidate.Channel
-		if candidate.Status == breakerstore.CandidateSnapshotNoSample {
+		channelNoSample := candidate.Status == breakerstore.CandidateSnapshotNoSample
+		if channelNoSample {
 			// A newer PostgreSQL revision makes the old Channel hash neutral.
 			// Do not expose or score its breaker and TTFT samples.
 			channelSnapshot = breakerstore.ScopeSnapshot{}
@@ -390,8 +391,15 @@ func applySnapshot(
 		channel.ProviderStateGeneration = candidate.Provider.StateGeneration
 		channel.OriginFenceGeneration = candidate.Provider.OriginFenceGeneration
 		channel.StatusFenceGeneration = candidate.Provider.StatusFenceGeneration
-		channel.RuntimeChannelConfigRevision = positiveInt64Ptr(candidate.Channel.ChannelConfigRevision)
-		channel.ChannelConfigRevisionCurrent = candidate.Channel.ChannelConfigRevision == channel.ChannelConfigRevision
+		if channelNoSample {
+			// Channel breaker identity is created lazily by the first real Acquire.
+			// Its absence is a current no-sample fact, not a revision mismatch.
+			channel.RuntimeChannelConfigRevision = nil
+			channel.ChannelConfigRevisionCurrent = true
+		} else {
+			channel.RuntimeChannelConfigRevision = positiveInt64Ptr(candidate.Channel.ChannelConfigRevision)
+			channel.ChannelConfigRevisionCurrent = candidate.Channel.ChannelConfigRevision == channel.ChannelConfigRevision
+		}
 		channel.RuntimeChannelAdmissionRevision = candidate.Candidate.ChannelAdmissionRevision
 		channel.ChannelAdmissionRevisionCurrent = candidate.Candidate.ChannelAdmissionRevision == channel.ChannelAdmissionLimitsRevision
 		channel.RouteRateLimitsRevision = admission.RouteRateLimits
