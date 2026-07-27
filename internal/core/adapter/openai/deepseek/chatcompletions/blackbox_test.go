@@ -44,7 +44,7 @@ func newBlackboxAdapter(t *testing.T) (*Adapter, channel.Runtime) {
 
 	adapter := NewAdapter(&http.Client{Timeout: 120 * time.Second}, nil)
 	runtime := channel.Runtime{
-		BaseURL:      baseURL,
+		Origin:       baseURL,
 		APIKey:       apiKey,
 		Timeout:      120 * time.Second,
 		ProviderSlug: "deepseek",

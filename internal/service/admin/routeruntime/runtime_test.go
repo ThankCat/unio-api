@@ -54,12 +54,12 @@ func (f *fakeRuntimeFacts) Routing(context.Context) (runtimefacts.RoutingRevisio
 }
 
 type fakeBreakerSnapshotter struct {
-	result      breakerstore.SnapshotManyResult
-	err         error
-	input       breakerstore.SnapshotManyInput
-	calls       int
-	routeUsage  breakerstore.RouteUsage
-	routeUsageErr error
+	result          breakerstore.SnapshotManyResult
+	err             error
+	input           breakerstore.SnapshotManyInput
+	calls           int
+	routeUsage      breakerstore.RouteUsage
+	routeUsageErr   error
 	routeUsageCalls int
 }
 
@@ -98,14 +98,14 @@ func TestRuntimeUsesAuthoritativeSnapshotAndP4Score(t *testing.T) {
 			Candidates: []breakerstore.CandidateSnapshot{
 				{
 					Candidate: breakerstore.SnapshotCandidateInput{
-						OriginID: 21, ChannelID: 7, OriginBaseURLRevision: 11,
-						OriginStatusRevision: 12, ChannelConfigRevision: 16, ChannelAdmissionRevision: 17,
+						ProviderID: 21, ChannelID: 7, OriginRevision: 11,
+						ProviderStatusRevision: 12, ChannelConfigRevision: 16, ChannelAdmissionRevision: 17,
 					},
 					Status: breakerstore.CandidateSnapshotCurrent,
-					Origin: breakerstore.ScopeSnapshot{
+					Provider: breakerstore.ScopeSnapshot{
 						Exists: true, State: breakerstore.StateClosed, SampleCount: 20,
-						BaseURLRevision: 11, StatusRevision: 12, StateGeneration: 6,
-						BaseURLFenceGeneration: 3, StatusFenceGeneration: 4,
+						OriginRevision: 11, StatusRevision: 12, StateGeneration: 6,
+						OriginFenceGeneration: 3, StatusFenceGeneration: 4,
 					},
 					Channel: breakerstore.ScopeSnapshot{
 						Exists: true, State: breakerstore.StateClosed, ErrorRate: 0.1, SampleCount: 20,
@@ -120,7 +120,7 @@ func TestRuntimeUsesAuthoritativeSnapshotAndP4Score(t *testing.T) {
 				},
 				{
 					Status:   breakerstore.CandidateSnapshotNoSample,
-					Origin: breakerstore.ScopeSnapshot{Exists: true, State: breakerstore.StateClosed},
+					Provider: breakerstore.ScopeSnapshot{Exists: true, State: breakerstore.StateClosed},
 					Channel: breakerstore.ScopeSnapshot{
 						Exists: true, State: breakerstore.StateOpen, OpenRemainingMs: 5000,
 						ErrorRate: 1, SampleCount: 9, TTFTEWMAMs: 9000, TTFTSamples: 9,
@@ -154,7 +154,7 @@ func TestRuntimeUsesAuthoritativeSnapshotAndP4Score(t *testing.T) {
 		breakers.input.CircuitBreakerRevision != 4 || breakers.input.RoutingBalanceRevision != 5 {
 		t.Fatalf("unexpected SnapshotMany input: %+v", breakers.input)
 	}
-	if len(breakers.input.Candidates) != 2 || breakers.input.Candidates[0].OriginID != 21 ||
+	if len(breakers.input.Candidates) != 2 || breakers.input.Candidates[0].ProviderID != 21 ||
 		breakers.input.Candidates[0].ChannelAdmissionRevision != 17 {
 		t.Fatalf("candidate revisions not forwarded: %+v", breakers.input.Candidates)
 	}
@@ -171,7 +171,7 @@ func TestRuntimeUsesAuthoritativeSnapshotAndP4Score(t *testing.T) {
 		primary.ModelPermissionRecheckState != "queued" {
 		t.Fatalf("cooldown, permission, or rate facts missing: %+v", primary)
 	}
-	if !primary.OriginBaseURLRevisionCurrent || !primary.OriginStatusRevisionCurrent ||
+	if !primary.OriginRevisionCurrent || !primary.ProviderStatusRevisionCurrent ||
 		!primary.ChannelConfigRevisionCurrent || !primary.ChannelAdmissionRevisionCurrent ||
 		!primary.RuntimeRevisionCurrent || primary.RuntimeControlState != runtimeSyncActive ||
 		primary.RouteRateLimitsRevision != 2 || primary.ChannelRateLimitsRevision != 7 ||
@@ -190,7 +190,7 @@ func TestRuntimeUsesAuthoritativeSnapshotAndP4Score(t *testing.T) {
 		primary.TTFTSampleSource != "stream_only" {
 		t.Fatalf("unexpected P4 samples: %+v", primary)
 	}
-	if primary.OriginBreakerState == nil || *primary.OriginBreakerState != "closed" ||
+	if primary.ProviderBreakerState == nil || *primary.ProviderBreakerState != "closed" ||
 		primary.ChannelBreakerState == nil || *primary.ChannelBreakerState != "closed" {
 		t.Fatalf("unexpected breaker state: %+v", primary)
 	}
@@ -368,7 +368,7 @@ func TestRuntimeMapsBreakerCooldownAndPermissionGates(t *testing.T) {
 		store.pool = append(store.pool, runtimePoolRow(int64(index+1), int64(index+11), 31))
 		result.Candidates[index] = breakerstore.CandidateSnapshot{
 			Status: status,
-			Origin: breakerstore.ScopeSnapshot{
+			Provider: breakerstore.ScopeSnapshot{
 				Exists: true, State: breakerstore.StateClosed, SampleCount: 2,
 			},
 			Channel:     breakerstore.ScopeSnapshot{Exists: true, State: breakerstore.StateClosed, SampleCount: 2},
@@ -376,8 +376,8 @@ func TestRuntimeMapsBreakerCooldownAndPermissionGates(t *testing.T) {
 			TPM:         breakerstore.CapacityUsage{Limit: 100},
 		}
 	}
-	result.Candidates[0].Origin.State = breakerstore.StateOpen
-	result.Candidates[0].Origin.OpenRemainingMs = 5000
+	result.Candidates[0].Provider.State = breakerstore.StateOpen
+	result.Candidates[0].Provider.OpenRemainingMs = 5000
 	result.Candidates[1].Channel.State = breakerstore.StateHalfOpen
 	result.Candidates[1].Channel.HalfOpenBusy = true
 	result.Candidates[4].Channel.State = breakerstore.StateOpen
@@ -397,8 +397,8 @@ func TestRuntimeMapsBreakerCooldownAndPermissionGates(t *testing.T) {
 	if got.CandidateCount != 1 || !got.Channels[4].Eligible || got.Channels[4].FinalWeight != 0 {
 		t.Fatalf("half-open probe must remain eligible outside normal weighting: %+v", got)
 	}
-	if got.Channels[0].OriginBreakerState == nil || *got.Channels[0].OriginBreakerState != "open" ||
-		got.Channels[0].OriginOpenRemainingMs == nil || *got.Channels[0].OriginOpenRemainingMs != 5000 {
+	if got.Channels[0].ProviderBreakerState == nil || *got.Channels[0].ProviderBreakerState != "open" ||
+		got.Channels[0].ProviderOpenRemainingMs == nil || *got.Channels[0].ProviderOpenRemainingMs != 5000 {
 		t.Fatalf("open origin view is incomplete: %+v", got.Channels[0])
 	}
 	if got.Channels[4].ChannelBreakerState == nil || *got.Channels[4].ChannelBreakerState != "half_open" {
@@ -532,12 +532,11 @@ func runtimePoolRow(channelID, originID, modelID int64) sqlc.RouteRuntimePoolRow
 	return sqlc.RouteRuntimePoolRow{
 		RouteID: 3, Mode: "balanced", RouteStatus: "enabled",
 		ChannelID: channelID, ChannelName: "channel", ChannelStatus: "enabled",
-		CredentialValid: true, HasCredential: true, HasBaseUrl: true,
+		CredentialValid: true, HasCredential: true, HasOrigin: true,
 		Protocol: "openai", AdapterKey: "openai", Priority: int32(channelID),
 		ChannelConfigRevision: 16, ChannelAdmissionLimitsRevision: 17,
-		ProviderOriginID: originID, ProviderOriginName: "origin", ProviderOriginStatus: "enabled",
-		ProviderOriginBaseUrlRevision: 11, ProviderOriginStatusRevision: 12,
-		ProviderID: 1, ProviderName: "provider", ProviderStatus: "enabled",
+		ProviderOriginRevision: 11, ProviderStatusRevision: 12,
+		ProviderID: originID, ProviderName: "provider", ProviderStatus: "enabled",
 		ModelDbID: modelID, ModelExists: true, ModelStatus: "enabled", BindingStatus: "enabled",
 		HasModelPrice: true, HasChannelCost: true,
 	}
@@ -546,12 +545,12 @@ func runtimePoolRow(channelID, originID, modelID int64) sqlc.RouteRuntimePoolRow
 func currentCostCandidate(channelID, originID int64) breakerstore.CandidateSnapshot {
 	return breakerstore.CandidateSnapshot{
 		Candidate: breakerstore.SnapshotCandidateInput{
-			OriginID: originID, ChannelID: channelID, OriginBaseURLRevision: 11,
-			OriginStatusRevision: 12, ChannelConfigRevision: 16, ChannelAdmissionRevision: 17,
+			ProviderID: originID, ChannelID: channelID, OriginRevision: 11,
+			ProviderStatusRevision: 12, ChannelConfigRevision: 16, ChannelAdmissionRevision: 17,
 		},
 		Status: breakerstore.CandidateSnapshotCurrent,
-		Origin: breakerstore.ScopeSnapshot{
-			Exists: true, State: breakerstore.StateClosed, BaseURLRevision: 11, StatusRevision: 12,
+		Provider: breakerstore.ScopeSnapshot{
+			Exists: true, State: breakerstore.StateClosed, OriginRevision: 11, StatusRevision: 12,
 		},
 		Channel:     breakerstore.ScopeSnapshot{Exists: true, State: breakerstore.StateClosed, ChannelConfigRevision: 16},
 		Concurrency: breakerstore.CapacityUsage{Limit: 0},

@@ -45,18 +45,15 @@ func TestReconcileAllRuntimeControlsRestoresStableEndpointAndChannel(t *testing.
 	suffix := time.Now().UnixNano()
 	namespace := fmt.Sprintf("unio-runtime-recovery-test:%d", suffix)
 	controls := breakerstore.NewStore(rc, namespace)
-	var providerID, originID, channelID int64
+	var providerID, channelID int64
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
 		if channelID != 0 {
 			_, _ = pool.Exec(cleanupCtx, `DELETE FROM runtime_control_operations WHERE channel_id=$1`, channelID)
 			_, _ = pool.Exec(cleanupCtx, `DELETE FROM channels WHERE id=$1`, channelID)
 		}
-		if originID != 0 {
-			_, _ = pool.Exec(cleanupCtx, `DELETE FROM origin_routing_operations WHERE origin_id=$1`, originID)
-			_, _ = pool.Exec(cleanupCtx, `DELETE FROM provider_origins WHERE id=$1`, originID)
-		}
 		if providerID != 0 {
+			_, _ = pool.Exec(cleanupCtx, `DELETE FROM provider_routing_operations WHERE provider_id=$1`, providerID)
 			_, _ = pool.Exec(cleanupCtx, `DELETE FROM providers WHERE id=$1`, providerID)
 		}
 		iter := rc.Scan(cleanupCtx, 0, namespace+":*", 0).Iterator()
@@ -67,20 +64,15 @@ func TestReconcileAllRuntimeControlsRestoresStableEndpointAndChannel(t *testing.
 		pool.Close()
 	})
 
-	if err := pool.QueryRow(ctx, `INSERT INTO providers (slug, name, status)
-		VALUES ($1, 'runtime recovery', 'enabled') RETURNING id`,
-		fmt.Sprintf("runtime-recovery-%d", suffix)).Scan(&providerID); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO providers (slug, name, origin, status)
+		VALUES ($1, 'runtime recovery', $2, 'enabled') RETURNING id`,
+		fmt.Sprintf("runtime-recovery-%d", suffix), fmt.Sprintf("https://runtime-recovery-%d.example.test", suffix)).Scan(&providerID); err != nil {
 		t.Fatalf("seed provider: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO provider_origins (provider_id, name, base_url, status)
-		VALUES ($1, 'primary', $2, 'enabled') RETURNING id`, providerID,
-		fmt.Sprintf("https://runtime-recovery-%d.example.test", suffix)).Scan(&originID); err != nil {
-		t.Fatalf("seed origin: %v", err)
-	}
 	if err := pool.QueryRow(ctx, `INSERT INTO channels (
-		provider_id, provider_origin_id, name, protocol, adapter_key, credential, status, priority
-	) VALUES ($1, $2, 'primary', 'openai', 'openai', 'sk-runtime-recovery', 'enabled', 1)
-	RETURNING id`, providerID, originID).Scan(&channelID); err != nil {
+		provider_id, name, protocol, adapter_key, credential, status, priority
+	) VALUES ($1, 'primary', 'openai', 'openai', 'sk-runtime-recovery', 'enabled', 1)
+	RETURNING id`, providerID).Scan(&channelID); err != nil {
 		t.Fatalf("seed channel: %v", err)
 	}
 
@@ -96,13 +88,13 @@ func TestReconcileAllRuntimeControlsRestoresStableEndpointAndChannel(t *testing.
 		t.Fatalf("reconcile runtime controls: %v", err)
 	}
 
-	origin, err := controls.Snapshot(ctx, breakerstore.ScopeOrigin, originID)
+	origin, err := controls.Snapshot(ctx, breakerstore.ScopeProvider, providerID)
 	if err != nil {
-		t.Fatalf("read restored origin control: %v", err)
+		t.Fatalf("read restored provider control: %v", err)
 	}
-	if !origin.Exists || !origin.ControlPresent || origin.BaseURLRevision != 1 ||
+	if !origin.Exists || !origin.ControlPresent || origin.OriginRevision != 1 ||
 		origin.StatusRevision != 1 || origin.EffectiveStatus != "enabled" {
-		t.Fatalf("unexpected restored origin control: %+v", origin)
+		t.Fatalf("unexpected restored provider control: %+v", origin)
 	}
 	channel, err := controls.ReadControl(ctx, controls.ChannelAdmissionControl(channelID), 1)
 	if err != nil {
@@ -127,8 +119,8 @@ func TestReconcileAllRuntimeControlsRestoresStableEndpointAndChannel(t *testing.
 	}
 	metricsBody := scrapeRuntimeControlMetrics(t, recorder)
 	for _, want := range []string{
-		fmt.Sprintf(`unio_gateway_origin_base_url_revision_fence{origin_id="%d",state="active"} 1`, originID),
-		fmt.Sprintf(`unio_gateway_origin_status_revision_fence{origin_id="%d",state="active"} 1`, originID),
+		fmt.Sprintf(`unio_gateway_origin_revision_fence{provider_id="%d",state="active"} 1`, providerID),
+		fmt.Sprintf(`unio_gateway_provider_status_revision_fence{provider_id="%d",state="active"} 1`, providerID),
 		`unio_gateway_runtime_control_recovery_total{result="restored",target="channel_admission"}`,
 		`unio_gateway_runtime_control_recovery_total{result="restored",target="route_rate"} 1`,
 		`unio_gateway_runtime_control_recovery_total{result="restored",target="channel_rate"} 1`,

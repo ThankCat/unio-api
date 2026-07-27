@@ -16,7 +16,6 @@ import (
 //
 // 协议层（OpenAI/Anthropic）的 estimateMaxCompletionTokens 在客户未显式给出输出上限时使用它，
 // 因此放在协议无关的共享 lifecycle 包并导出。
-//
 const DefaultAuthorizationMaxCompletionTokens int64 = 4096
 
 // ChatAuthorizer 定义 chat 请求调用上游前冻结余额、失败后释放冻结余额的能力。

@@ -187,7 +187,7 @@ SELECT
     )
     AND NOT EXISTS (
         SELECT 1
-        FROM origin_routing_operations AS operation
+        FROM provider_routing_operations AS operation
         WHERE operation.state <> ALL (ARRAY['committed'::text, 'aborted'::text])
     ) THEN TRUE ELSE FALSE END AS runtime_operations_reconciled,
     CASE WHEN
@@ -233,7 +233,7 @@ SELECT
         )
         AND NOT EXISTS (
             SELECT 1
-            FROM origin_routing_operations AS operation
+            FROM provider_routing_operations AS operation
             WHERE operation.state <> ALL (ARRAY['committed'::text, 'aborted'::text])
         )
     THEN TRUE ELSE FALSE END AS runtime_maintenance_smoke_allowed

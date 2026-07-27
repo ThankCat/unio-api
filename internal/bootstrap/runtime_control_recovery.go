@@ -18,7 +18,7 @@ import (
 const runtimeControlReconcileInterval = 5 * time.Second
 
 // reconcileAllRuntimeControls performs one fail-closed reconciliation pass for both durable control
-// families. Origin routing operations are resolved before stable controls are restored.
+// families. Provider routing operations are resolved before stable controls are restored.
 func reconcileAllRuntimeControls(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -27,12 +27,12 @@ func reconcileAllRuntimeControls(
 	telemetry *runtimeControlTelemetry,
 ) error {
 	observation := telemetry.capture(ctx, pool)
-	originReconciler := runtimecontrol.NewOriginRoutingReconciler(pool, controls)
+	providerReconciler := runtimecontrol.NewProviderRoutingReconciler(pool, controls)
 	if telemetry != nil {
-		originReconciler.WithObserver(telemetry)
+		providerReconciler.WithObserver(telemetry)
 	}
-	if _, err := originReconciler.Reconcile(ctx); err != nil {
-		telemetry.passFailed("origin_routing", err, observation)
+	if _, err := providerReconciler.Reconcile(ctx); err != nil {
+		telemetry.passFailed("provider_routing", err, observation)
 		return err
 	}
 	if err := reconcileRuntimeControls(ctx, pool, settings, controls); err != nil {
@@ -99,7 +99,7 @@ func runRuntimeControlReconciler(
 }
 
 // captureRuntimeReconciliationProof reads the complete PostgreSQL authority set after a successful
-// pass. The clear Lua atomically compares every listed Origin and Channel control with Redis.
+// pass. The clear Lua atomically compares every listed Provider and Channel control with Redis.
 func captureRuntimeReconciliationProof(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -107,28 +107,24 @@ func captureRuntimeReconciliationProof(
 ) (breakerstore.RuntimeReconciliationProof, error) {
 	proof := breakerstore.RuntimeReconciliationProof{Generation: generation}
 	rows, err := pool.Query(ctx, `
-		SELECT p.status, pe.id, pe.base_url_revision, pe.status_revision, pe.status
-		FROM providers p
-		JOIN provider_origins pe ON pe.provider_id = p.id
-		ORDER BY p.id, pe.id`)
+		SELECT id, origin_revision, status_revision, status
+		FROM providers
+		ORDER BY id`)
 	if err != nil {
 		return breakerstore.RuntimeReconciliationProof{}, err
 	}
 	for rows.Next() {
-		var providerStatus, originStatus string
-		var origin breakerstore.RuntimeOriginControlProof
+		var provider breakerstore.RuntimeOriginControlProof
 		if err := rows.Scan(
-			&providerStatus,
-			&origin.OriginID,
-			&origin.BaseURLRevision,
-			&origin.StatusRevision,
-			&originStatus,
+			&provider.ProviderID,
+			&provider.OriginRevision,
+			&provider.StatusRevision,
+			&provider.EffectiveStatus,
 		); err != nil {
 			rows.Close()
 			return breakerstore.RuntimeReconciliationProof{}, err
 		}
-		origin.EffectiveStatus = runtimecontrol.EffectiveOriginStatus(providerStatus, originStatus)
-		proof.OriginControls = append(proof.OriginControls, origin)
+		proof.OriginControls = append(proof.OriginControls, provider)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()

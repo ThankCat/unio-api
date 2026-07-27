@@ -6,6 +6,7 @@ import "github.com/go-chi/chi/v5"
 type Deps struct {
 	Service    ProviderService
 	OpsService ProviderOpsService
+	Breaker    BreakerRuntime
 }
 
 // Register 注册服务商模块路由（CRUD + §3.2 服务商聚合视图）。
@@ -25,10 +26,16 @@ func Register(r chi.Router, d Deps) {
 
 	if d.Service != nil {
 		ph := &providersHandler{service: d.Service}
+		rh := &runtimeHandler{service: d.Service, breaker: d.Breaker}
 		r.Get("/providers", ph.list)
 		r.Post("/providers", ph.create)
+		r.Get("/providers/{id}/ops/runtime", rh.runtime)
+		r.Delete("/providers/{id}/ops/circuit-breaker", rh.reset)
 		r.Post("/providers/{id}/archive", ph.archive)
 		r.Post("/providers/{id}/restore", ph.restore)
+		r.Post("/providers/{id}/status", ph.updateStatus)
+		r.Patch("/providers/{id}/origin", ph.updateOrigin)
+		r.Get("/providers/{id}", ph.get)
 		r.Patch("/providers/{id}", ph.update)
 		// DELETE 物理删除录错的脏数据：名下有渠道或已被请求/账务引用时返回 409，提示改用停用。
 		r.Delete("/providers/{id}", ph.delete)

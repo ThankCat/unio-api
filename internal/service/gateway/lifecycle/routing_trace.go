@@ -83,17 +83,17 @@ type RoutingDecisionTraceInput struct {
 }
 
 type traceCandidateScore struct {
-	OriginID                              int64    `json:"origin_id"`
+	ProviderID                              int64    `json:"provider_id"`
 	ChannelID                               int64    `json:"channel_id"`
 	RouteIndex                              int      `json:"route_index"`
 	Eligible                                bool     `json:"eligible"`
 	ExcludedReason                          string   `json:"excluded_reason,omitempty"`
-	CandidateOriginBaseURLRevision        int64    `json:"candidate_origin_base_url_revision"`
-	RuntimeOriginBaseURLRevision          int64    `json:"runtime_origin_base_url_revision"`
-	OriginBaseURLRevisionCurrent          bool     `json:"origin_base_url_revision_current"`
-	CandidateOriginStatusRevision         int64    `json:"candidate_origin_status_revision"`
-	RuntimeOriginStatusRevision           int64    `json:"runtime_origin_status_revision"`
-	OriginStatusRevisionCurrent           bool     `json:"origin_status_revision_current"`
+	CandidateOriginRevision                 int64    `json:"candidate_origin_revision"`
+	RuntimeOriginRevision                   int64    `json:"runtime_origin_revision"`
+	OriginRevisionCurrent                   bool     `json:"origin_revision_current"`
+	CandidateProviderStatusRevision         int64    `json:"candidate_provider_status_revision"`
+	RuntimeProviderStatusRevision           int64    `json:"runtime_provider_status_revision"`
+	ProviderStatusRevisionCurrent           bool     `json:"provider_status_revision_current"`
 	CandidateChannelConfigRevision          int64    `json:"candidate_channel_config_revision"`
 	RuntimeChannelConfigRevision            *int64   `json:"runtime_channel_config_revision"`
 	ChannelConfigRevisionCurrent            bool     `json:"channel_config_revision_current"`
@@ -106,7 +106,7 @@ type traceCandidateScore struct {
 	CircuitBreakerRevision                  int64    `json:"circuit_breaker_revision"`
 	RuntimeControlState                     string   `json:"runtime_control_state"`
 	RuntimeRevisionCurrent                  bool     `json:"runtime_revision_current"`
-	OriginBreakerState                    string   `json:"origin_breaker_state,omitempty"`
+	ProviderBreakerState                    string   `json:"provider_breaker_state,omitempty"`
 	ChannelBreakerState                     string   `json:"channel_breaker_state,omitempty"`
 	BreakerStoreAdmission                   string   `json:"breaker_store_admission"`
 	ConcurrencyRemaining                    *float64 `json:"concurrency_remaining"`
@@ -216,10 +216,10 @@ func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTra
 				} else if reason == "" {
 					reason = "not_in_candidate_plan"
 				}
-				if candidate.Balance.OriginID == 0 {
-					candidate.Balance.OriginID = row.ProviderOriginID
-					candidate.Balance.CandidateOriginBaseURLRevision = row.ProviderOriginBaseUrlRevision
-					candidate.Balance.CandidateOriginStatusRevision = row.ProviderOriginStatusRevision
+				if candidate.Balance.ProviderID == 0 {
+					candidate.Balance.ProviderID = row.ProviderID
+					candidate.Balance.CandidateOriginRevision = row.ProviderOriginRevision
+					candidate.Balance.CandidateProviderStatusRevision = row.ProviderStatusRevision
 					candidate.Balance.CandidateChannelConfigRevision = row.ChannelConfigRevision
 					candidate.Balance.CandidateChannelAdmissionLimitsRevision = row.ChannelAdmissionLimitsRevision
 				}
@@ -260,7 +260,7 @@ func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTra
 		Mode:                 in.Mode,
 		RequestedModelID:     in.Request.RequestedModelID,
 		Protocol:             string(in.Request.IngressProtocol),
-		Endpoint:            string(in.Request.Endpoint),
+		Endpoint:             string(in.Request.Endpoint),
 		PoolSize:             int32(poolSize),
 		CandidateCount:       int32(len(in.Plan.Candidates)),
 		StickyChannelID:      stickyID,
@@ -291,14 +291,14 @@ func (r *RoutingTraceRecorder) recordWriteMetric(result string) {
 
 func traceScore(candidate Candidate, channelID int64, routeIndex int, eligible bool, excludedReason string) traceCandidateScore {
 	return traceCandidateScore{
-		OriginID: candidate.Balance.OriginID,
+		ProviderID: candidate.Balance.ProviderID,
 		ChannelID:  channelID, RouteIndex: routeIndex, Eligible: eligible, ExcludedReason: excludedReason,
-		CandidateOriginBaseURLRevision:        candidate.Balance.CandidateOriginBaseURLRevision,
-		RuntimeOriginBaseURLRevision:          candidate.Balance.RuntimeOriginBaseURLRevision,
-		OriginBaseURLRevisionCurrent:          candidate.Balance.OriginBaseURLRevisionCurrent,
-		CandidateOriginStatusRevision:         candidate.Balance.CandidateOriginStatusRevision,
-		RuntimeOriginStatusRevision:           candidate.Balance.RuntimeOriginStatusRevision,
-		OriginStatusRevisionCurrent:           candidate.Balance.OriginStatusRevisionCurrent,
+		CandidateOriginRevision:                 candidate.Balance.CandidateOriginRevision,
+		RuntimeOriginRevision:                   candidate.Balance.RuntimeOriginRevision,
+		OriginRevisionCurrent:                   candidate.Balance.OriginRevisionCurrent,
+		CandidateProviderStatusRevision:         candidate.Balance.CandidateProviderStatusRevision,
+		RuntimeProviderStatusRevision:           candidate.Balance.RuntimeProviderStatusRevision,
+		ProviderStatusRevisionCurrent:           candidate.Balance.ProviderStatusRevisionCurrent,
 		CandidateChannelConfigRevision:          candidate.Balance.CandidateChannelConfigRevision,
 		RuntimeChannelConfigRevision:            candidate.Balance.RuntimeChannelConfigRevision,
 		ChannelConfigRevisionCurrent:            candidate.Balance.ChannelConfigRevisionCurrent,
@@ -311,7 +311,7 @@ func traceScore(candidate Candidate, channelID int64, routeIndex int, eligible b
 		CircuitBreakerRevision:                  candidate.Balance.CircuitBreakerRevision,
 		RuntimeControlState:                     candidate.Balance.RuntimeControlState,
 		RuntimeRevisionCurrent:                  candidate.Balance.RuntimeRevisionCurrent,
-		OriginBreakerState:                    candidate.Balance.OriginBreakerState,
+		ProviderBreakerState:                    candidate.Balance.ProviderBreakerState,
 		ChannelBreakerState:                     candidate.Balance.ChannelBreakerState,
 		BreakerStoreAdmission:                   candidate.Balance.BreakerStoreAdmission,
 		ConcurrencyRemaining:                    candidate.Balance.ConcurrencyRemaining,
@@ -334,7 +334,7 @@ func traceScore(candidate Candidate, channelID int64, routeIndex int, eligible b
 func poolFactsFromRow(row sqlc.RouteRuntimePoolRow) routingdiagnostic.PoolFacts {
 	return routingdiagnostic.PoolFacts{
 		RouteStatus: row.RouteStatus, ChannelStatus: row.ChannelStatus, ProviderStatus: row.ProviderStatus,
-		CredentialValid: row.CredentialValid, HasCredential: row.HasCredential, HasBaseURL: row.HasBaseUrl,
+		CredentialValid: row.CredentialValid, HasCredential: row.HasCredential, HasBaseURL: row.HasOrigin,
 		Protocol: row.Protocol, ModelExists: row.ModelExists, ModelStatus: row.ModelStatus,
 		BindingStatus: row.BindingStatus, HasModelPrice: row.HasModelPrice, HasChannelCost: row.HasChannelCost,
 	}

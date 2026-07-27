@@ -269,8 +269,8 @@ func waitForLongStreamDatabaseFacts(t *testing.T, pool *pgxpool.Pool, seed seedF
 					request.FinalChannelID.Valid && request.FinalChannelID.Int64 == seed.openAIChannelID &&
 					attempt.Status == "succeeded" && attempt.UpstreamEndpoint == "chat_completions" &&
 					attempt.UpstreamStartedAt.Valid && attempt.UpstreamFirstTokenAt.Valid && attempt.UpstreamCompletedAt.Valid &&
-					attempt.FinalUsageReceived && attempt.BreakerOriginDisposition.Valid &&
-					attempt.BreakerOriginDisposition.String == "applied" && attempt.BreakerChannelDisposition.Valid &&
+					attempt.FinalUsageReceived && attempt.BreakerProviderDisposition.Valid &&
+					attempt.BreakerProviderDisposition.String == "applied" && attempt.BreakerChannelDisposition.Valid &&
 					attempt.BreakerChannelDisposition.String == "applied" && usageCount == 1 && debitCount == 1 {
 					cancel()
 					return

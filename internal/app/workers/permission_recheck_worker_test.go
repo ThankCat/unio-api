@@ -56,7 +56,7 @@ func (r *fakePermissionRechecker) RecheckPermission(_ context.Context, in channe
 func permissionTaskFixture() *breakerstore.PermissionRecheckTask {
 	return &breakerstore.PermissionRecheckTask{
 		ChannelID: 9, ModelID: 99, ChannelConfigRevision: 5,
-		OriginBaseURLRevision: 3, OriginStatusRevision: 4,
+		OriginRevision: 3, ProviderStatusRevision: 4,
 		Attempt: 2, ClaimToken: "claim-token",
 	}
 }
@@ -98,8 +98,8 @@ func TestPermissionRecheckWorkerMapsProbeOutcomes(t *testing.T) {
 				t.Fatalf("terminal outcome must not back off, got %s", store.retryAfter)
 			}
 			if rechecker.input.ChannelID != 9 || rechecker.input.ModelID != 99 ||
-				rechecker.input.ChannelConfigRevision != 5 || rechecker.input.OriginBaseURLRevision != 3 ||
-				rechecker.input.OriginStatusRevision != 4 {
+				rechecker.input.ChannelConfigRevision != 5 || rechecker.input.OriginRevision != 3 ||
+				rechecker.input.ProviderStatusRevision != 4 {
 				t.Fatalf("worker did not preserve task identity: %+v", rechecker.input)
 			}
 		})

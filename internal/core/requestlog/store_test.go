@@ -113,42 +113,32 @@ func createIdentity(t *testing.T, ctx context.Context, queries *sqlc.Queries) te
 }
 
 // createProviderChannel 创建 requestlog store 测试所需的 provider 和 channel。
-func createProviderChannel(t *testing.T, ctx context.Context, tx pgx.Tx) (int64, int64, int64) {
+func createProviderChannel(t *testing.T, ctx context.Context, tx pgx.Tx) (int64, int64) {
 	t.Helper()
 
 	suffix := time.Now().UnixNano()
 
 	var providerID int64
 	err := tx.QueryRow(ctx, `
-		INSERT INTO providers (slug, name, status)
-		VALUES ($1, $2, $3)
+		INSERT INTO providers (slug, name, origin, status)
+		VALUES ($1, $2, $3, $4)
 		RETURNING id
-	`, fmt.Sprintf("requestlog-provider-%d", suffix), "Requestlog Provider", "enabled").Scan(&providerID)
+	`, fmt.Sprintf("requestlog-provider-%d", suffix), "Requestlog Provider", fmt.Sprintf("https://api-%d.example.test", suffix), "enabled").Scan(&providerID)
 	if err != nil {
 		t.Fatalf("insert provider: %v", err)
 	}
 
-	var originID int64
-	err = tx.QueryRow(ctx, `
-		INSERT INTO provider_origins (provider_id, name, base_url, status)
-		VALUES ($1, $2, $3, 'enabled')
-		RETURNING id
-	`, providerID, fmt.Sprintf("requestlog-ep-%d", suffix), fmt.Sprintf("https://api-%d.example.test", suffix)).Scan(&originID)
-	if err != nil {
-		t.Fatalf("insert provider origin: %v", err)
-	}
-
 	var channelID int64
 	err = tx.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, provider_origin_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
-		VALUES ($1, $2, $3, 'openai', 'openai', $4, $5, $6, $7)
+		INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
+		VALUES ($1, $2, 'openai', 'openai', $3, $4, $5, $6)
 		RETURNING id
-	`, providerID, originID, fmt.Sprintf("requestlog-channel-%d", suffix), "sk-requestlog-test", "enabled", 10, nil).Scan(&channelID)
+	`, providerID, fmt.Sprintf("requestlog-channel-%d", suffix), "sk-requestlog-test", "enabled", 10, nil).Scan(&channelID)
 	if err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
 
-	return providerID, originID, channelID
+	return providerID, channelID
 }
 
 func TestStoreRequestLifecycleMapsNullableFields(t *testing.T) {
@@ -156,7 +146,7 @@ func TestStoreRequestLifecycleMapsNullableFields(t *testing.T) {
 	defer cleanup()
 
 	identity := createIdentity(t, ctx, queries)
-	providerID, originID, channelID := createProviderChannel(t, ctx, tx)
+	providerID, channelID := createProviderChannel(t, ctx, tx)
 	store := NewStore(queries)
 	startedAt := time.Now()
 
@@ -166,7 +156,7 @@ func TestStoreRequestLifecycleMapsNullableFields(t *testing.T) {
 		APIKeyID:         identity.apiKeyID,
 		RequestedModelID: "deepseek-v4-pro",
 		IngressProtocol:  ProtocolOpenAI,
-		Endpoint:        EndpointChatCompletions,
+		Endpoint:         EndpointChatCompletions,
 		Stream:           false,
 		StartedAt:        startedAt,
 	})
@@ -231,14 +221,14 @@ func TestStoreRequestLifecycleMapsNullableFields(t *testing.T) {
 	if succeeded.FinalChannelID == nil || *succeeded.FinalChannelID != channelID {
 		t.Fatalf("expected final channel id %d, got %v", channelID, succeeded.FinalChannelID)
 	}
-	// final_provider_origin_id 应在结算时由 final channel 派生写入（fault domain 归因），
+	// final_provider_id 应在结算时由 final channel 派生写入（fault domain 归因），
 	// 与 final_provider_id/final_channel_id 一致，不再长期保持 NULL。
 	var finalOriginID *int64
-	if err := tx.QueryRow(ctx, `SELECT final_provider_origin_id FROM request_records WHERE id = $1`, record.ID).Scan(&finalOriginID); err != nil {
-		t.Fatalf("query final_provider_origin_id: %v", err)
+	if err := tx.QueryRow(ctx, `SELECT final_provider_id FROM request_records WHERE id = $1`, record.ID).Scan(&finalOriginID); err != nil {
+		t.Fatalf("query final_provider_id: %v", err)
 	}
-	if finalOriginID == nil || *finalOriginID != originID {
-		t.Fatalf("expected final_provider_origin_id %d derived from final channel, got %v", originID, finalOriginID)
+	if finalOriginID == nil || *finalOriginID != providerID {
+		t.Fatalf("expected final_provider_id %d derived from final channel, got %v", providerID, finalOriginID)
 	}
 	if succeeded.CompletedAt == nil {
 		t.Fatal("expected completed_at to be set")
@@ -260,7 +250,7 @@ func TestStoreNonStreamDeliveryTerminalTransitions(t *testing.T) {
 	defer cleanup()
 
 	identity := createIdentity(t, ctx, queries)
-	providerID, _, channelID := createProviderChannel(t, ctx, tx)
+	providerID, channelID := createProviderChannel(t, ctx, tx)
 	store := NewStore(queries)
 
 	createSettledRequest := func(t *testing.T, suffix string) RequestRecord {
@@ -272,7 +262,7 @@ func TestStoreNonStreamDeliveryTerminalTransitions(t *testing.T) {
 			APIKeyID:         identity.apiKeyID,
 			RequestedModelID: "deepseek-v4-pro",
 			IngressProtocol:  ProtocolOpenAI,
-			Endpoint:        EndpointChatCompletions,
+			Endpoint:         EndpointChatCompletions,
 			Stream:           false,
 			StartedAt:        startedAt,
 		})
@@ -353,7 +343,7 @@ func TestStoreRequestFailedPersistsSafeAndInternalError(t *testing.T) {
 		APIKeyID:         identity.apiKeyID,
 		RequestedModelID: "deepseek-v4-pro",
 		IngressProtocol:  ProtocolOpenAI,
-		Endpoint:        EndpointChatCompletions,
+		Endpoint:         EndpointChatCompletions,
 		Stream:           false,
 		StartedAt:        time.Now(),
 	})
@@ -387,7 +377,7 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 	defer cleanup()
 
 	identity := createIdentity(t, ctx, queries)
-	providerID, originID, channelID := createProviderChannel(t, ctx, tx)
+	providerID, channelID := createProviderChannel(t, ctx, tx)
 	store := NewStore(queries)
 
 	record, err := store.CreateRequest(ctx, CreateRequestParams{
@@ -396,7 +386,7 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 		APIKeyID:         identity.apiKeyID,
 		RequestedModelID: "deepseek-v4-pro",
 		IngressProtocol:  ProtocolOpenAI,
-		Endpoint:        EndpointChatCompletions,
+		Endpoint:         EndpointChatCompletions,
 		Stream:           true,
 		StartedAt:        time.Now(),
 	})
@@ -405,20 +395,19 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 	}
 
 	attempt, err := store.CreateAttempt(ctx, CreateAttemptParams{
-		RequestRecordID:                 record.ID,
-		AttemptIndex:                    0,
-		ProviderID:                      providerID,
-		ChannelID:                       channelID,
-		AdapterKey:                      "openai",
-		UpstreamModel:                   "deepseek-v4-pro",
-		UpstreamProtocol:                ProtocolOpenAI,
-		ProviderOriginID:              int64ValuePtr(originID),
-		ProviderOriginBaseURLRevision: int64ValuePtr(1),
-		ProviderOriginStatusRevision:  int64ValuePtr(1),
-		ChannelConfigRevision:           int64ValuePtr(1),
-		RoutingCandidateIndex:           intValuePtr(0),
-		UpstreamEndpoint:               UpstreamEndpointChatCompletions,
-		StartedAt:                       time.Now(),
+		RequestRecordID:        record.ID,
+		AttemptIndex:           0,
+		ProviderID:             providerID,
+		ChannelID:              channelID,
+		AdapterKey:             "openai",
+		UpstreamModel:          "deepseek-v4-pro",
+		UpstreamProtocol:       ProtocolOpenAI,
+		OriginRevision:         int64ValuePtr(1),
+		ProviderStatusRevision: int64ValuePtr(1),
+		ChannelConfigRevision:  int64ValuePtr(1),
+		RoutingCandidateIndex:  intValuePtr(0),
+		UpstreamEndpoint:       UpstreamEndpointChatCompletions,
+		StartedAt:              time.Now(),
 	})
 	if err != nil {
 		t.Fatalf("create attempt: %v", err)
@@ -484,20 +473,19 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 	// succeeded 是终态，不能再转 failed（GAP-7-003 状态机守卫）。
 	// 失败字段映射在一个独立的 running attempt 上验证。
 	failingAttempt, err := store.CreateAttempt(ctx, CreateAttemptParams{
-		RequestRecordID:                 record.ID,
-		AttemptIndex:                    1,
-		ProviderID:                      providerID,
-		ChannelID:                       channelID,
-		AdapterKey:                      "openai",
-		UpstreamModel:                   "deepseek-v4-pro",
-		UpstreamProtocol:                ProtocolOpenAI,
-		ProviderOriginID:              int64ValuePtr(originID),
-		ProviderOriginBaseURLRevision: int64ValuePtr(1),
-		ProviderOriginStatusRevision:  int64ValuePtr(1),
-		ChannelConfigRevision:           int64ValuePtr(1),
-		RoutingCandidateIndex:           intValuePtr(1),
-		UpstreamEndpoint:               UpstreamEndpointChatCompletions,
-		StartedAt:                       time.Now(),
+		RequestRecordID:        record.ID,
+		AttemptIndex:           1,
+		ProviderID:             providerID,
+		ChannelID:              channelID,
+		AdapterKey:             "openai",
+		UpstreamModel:          "deepseek-v4-pro",
+		UpstreamProtocol:       ProtocolOpenAI,
+		OriginRevision:         int64ValuePtr(1),
+		ProviderStatusRevision: int64ValuePtr(1),
+		ChannelConfigRevision:  int64ValuePtr(1),
+		RoutingCandidateIndex:  intValuePtr(1),
+		UpstreamEndpoint:       UpstreamEndpointChatCompletions,
+		StartedAt:              time.Now(),
 	})
 	if err != nil {
 		t.Fatalf("create failing attempt: %v", err)

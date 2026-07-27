@@ -202,9 +202,8 @@ func TestDeleteProviderBlockedByChannel(t *testing.T) {
 	}
 }
 
-// insertOriginRoutingOp 插入一条源站运行态操作日志（origin_routing_operations），供级联删除测试。
-// 终态（committed/aborted）需带 completed_at；未终态置空。originID 传 nil 表示批量操作（origin_id NULL）。
-func insertOriginRoutingOp(t *testing.T, ctx context.Context, tx pgx.Tx, providerID int64, originID *int64, kind, state, token string) int64 {
+// insertProviderRoutingOp 插入一条 Provider 运行态操作日志，供硬删护栏测试。
+func insertProviderRoutingOp(t *testing.T, ctx context.Context, tx pgx.Tx, providerID int64, kind, state, token string) int64 {
 	t.Helper()
 	var completedAt any
 	if state == "committed" || state == "aborted" {
@@ -212,47 +211,37 @@ func insertOriginRoutingOp(t *testing.T, ctx context.Context, tx pgx.Tx, provide
 	}
 	var id int64
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO origin_routing_operations
-			(token, kind, provider_id, origin_id, transitions, payload_hash, state, completed_at)
-		VALUES ($1, $2, $3, $4, '{}'::jsonb, 'testhash', $5, $6)
+		INSERT INTO provider_routing_operations
+			(token, kind, provider_id, transitions, payload_hash, state, completed_at)
+		VALUES ($1, $2, $3, '{}'::jsonb, 'testhash', $4, $5)
 		RETURNING id
-	`, token, kind, providerID, originID, state, completedAt).Scan(&id); err != nil {
-		t.Fatalf("insert origin routing op: %v", err)
+	`, token, kind, providerID, state, completedAt).Scan(&id); err != nil {
+		t.Fatalf("insert provider routing op: %v", err)
 	}
 	return id
 }
 
-// TestDeleteProviderCascadesOrigins 验证 P4 后：provider 名下有上游源站（及终态操作日志）但无渠道/请求账务
-// 历史时，硬删在单条语句内级联清理源站；终态 origin_routing_operations 置空 FK 保留审计摘要（不删行）。
-func TestDeleteProviderCascadesOrigins(t *testing.T) {
+// TestDeleteProviderRemovesTerminalOperations 验证无渠道/请求账务历史时，硬删会同步清理终态操作日志。
+func TestDeleteProviderRemovesTerminalOperations(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
 	defer cleanup()
 
 	// sqlc 层 DeleteProvider 不校验状态（archived 闸门在 service 层），故沿用兄弟用例的 enabled。
 	suffix := time.Now().UnixNano()
-	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("del-origin-provider-%d", suffix), "enabled")
-	originID := insertProviderOrigin(t, ctx, tx, providerID, "primary",
-		fmt.Sprintf("https://del-origin-%d.test", suffix), "enabled")
-	opID := insertOriginRoutingOp(t, ctx, tx, providerID, &originID, "origin_create", "committed",
-		fmt.Sprintf("del-origin-tok-%d", suffix))
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("del-provider-%d", suffix), "enabled")
+	opID := insertProviderRoutingOp(t, ctx, tx, providerID, "origin", "committed",
+		fmt.Sprintf("del-provider-tok-%d", suffix))
 
 	affected, err := queries.DeleteProvider(ctx, providerID)
 	if err != nil {
-		t.Fatalf("delete provider with clean origin: %v", err)
+		t.Fatalf("delete provider with terminal operation: %v", err)
 	}
 	if affected != 1 {
 		t.Fatalf("expected 1 provider deleted, got %d", affected)
 	}
 
-	if left := countRows(t, ctx, tx, `SELECT count(*) FROM provider_origins WHERE provider_id=$1`, providerID); left != 0 {
-		t.Fatalf("expected origins cascaded, %d left", left)
-	}
-	if kept := countRows(t, ctx, tx, `SELECT count(*) FROM origin_routing_operations WHERE id=$1`, opID); kept != 1 {
-		t.Fatalf("terminal op-log must be preserved as audit, got %d rows", kept)
-	}
-	if nulled := countRows(t, ctx, tx,
-		`SELECT count(*) FROM origin_routing_operations WHERE id=$1 AND provider_id IS NULL AND origin_id IS NULL`, opID); nulled != 1 {
-		t.Fatalf("terminal op-log FKs must be nulled to release RESTRICT while keeping the row")
+	if left := countRows(t, ctx, tx, `SELECT count(*) FROM provider_routing_operations WHERE id=$1`, opID); left != 0 {
+		t.Fatalf("terminal operation must be removed, got %d rows", left)
 	}
 }
 
@@ -264,12 +253,10 @@ func TestDeleteProviderBlockedByInFlightOriginOp(t *testing.T) {
 
 	suffix := time.Now().UnixNano()
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("del-inflight-provider-%d", suffix), "enabled")
-	originID := insertProviderOrigin(t, ctx, tx, providerID, "primary",
-		fmt.Sprintf("https://del-inflight-%d.test", suffix), "enabled")
-	insertOriginRoutingOp(t, ctx, tx, providerID, &originID, "base_url", "prepared",
+	insertProviderRoutingOp(t, ctx, tx, providerID, "origin", "prepared",
 		fmt.Sprintf("del-inflight-tok-%d", suffix))
 
 	if _, err := queries.DeleteProvider(ctx, providerID); !isForeignKeyViolation(err) {
-		t.Fatalf("expected 23503 blocking delete with in-flight origin op, got %v", err)
+		t.Fatalf("expected 23503 blocking delete with in-flight provider op, got %v", err)
 	}
 }

@@ -75,7 +75,7 @@ func NewMessagesService(
 		Authorizer:      chatAuthorizer,
 		Metrics:         metricsRecorder,
 		IngressProtocol: requestlog.ProtocolAnthropic,
-		Endpoint:       requestlog.EndpointMessages,
+		Endpoint:        requestlog.EndpointMessages,
 		SafeMessage:     messagesSafeMessage,
 	})
 

@@ -9,10 +9,10 @@ import (
 // CredentialRevision pins one upstream result to the exact routing/credential generation used by
 // the real transport. A late 401 may invalidate only while all three revisions are still current.
 type CredentialRevision struct {
-	ChannelID               int64
-	ChannelConfigRevision   int64
-	OriginBaseURLRevision int64
-	OriginStatusRevision  int64
+	ChannelID              int64
+	ChannelConfigRevision  int64
+	OriginRevision         int64
+	ProviderStatusRevision int64
 }
 
 // CredentialInvalidator 在渠道被判定「凭据失效」时执行持久化副作用：把 channels.credential_valid
@@ -77,7 +77,7 @@ func (g *ChannelCredentialGate) RecordResult(revision CredentialRevision, err er
 		return
 	}
 	if revision.ChannelID <= 0 || revision.ChannelConfigRevision <= 0 ||
-		revision.OriginBaseURLRevision <= 0 || revision.OriginStatusRevision <= 0 {
+		revision.OriginRevision <= 0 || revision.ProviderStatusRevision <= 0 {
 		return
 	}
 

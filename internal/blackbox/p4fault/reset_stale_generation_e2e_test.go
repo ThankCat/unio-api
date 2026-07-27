@@ -54,15 +54,15 @@ func TestP4ResetStaleGenerationLongStreamE2E(t *testing.T) {
 	oldPermitKey, oldPermit := waitForOneActivePermit(t, h, 5*time.Second)
 	oldRequestKey, _ := waitForActiveRequestToken(t, h, oldPermit["request_admission_id"], 5*time.Second)
 	oldReservationID := waitForAuthorizedResetReservation(t, pool, oldRequest.requestID, 5*time.Second)
-	originBeforeReset := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeOrigin, h.seed.originID)
+	providerBeforeReset := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeProvider, h.seed.providerID)
 	channelBeforeReset := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeChannel, h.seed.openAIChannelID)
-	if oldPermit["origin_state_generation"] != fmt.Sprint(originBeforeReset.StateGeneration) ||
+	if oldPermit["provider_state_generation"] != fmt.Sprint(providerBeforeReset.StateGeneration) ||
 		oldPermit["channel_state_generation"] != fmt.Sprint(channelBeforeReset.StateGeneration) {
-		t.Fatalf("old permit did not freeze the pre-Reset generations: permit=%v origin=%+v channel=%+v", oldPermit, originBeforeReset, channelBeforeReset)
+		t.Fatalf("old permit did not freeze the pre-Reset generations: permit=%v provider=%+v channel=%+v", oldPermit, providerBeforeReset, channelBeforeReset)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	originGeneration, err := runtimeStore.Reset(ctx, breakerstore.ScopeOrigin, h.seed.originID)
+	providerGeneration, err := runtimeStore.Reset(ctx, breakerstore.ScopeProvider, h.seed.providerID)
 	cancel()
 	if err != nil {
 		t.Fatalf("Reset Origin through production BreakerStore: %v", err)
@@ -73,13 +73,13 @@ func TestP4ResetStaleGenerationLongStreamE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reset Channel through production BreakerStore: %v", err)
 	}
-	if originGeneration != originBeforeReset.StateGeneration+1 ||
+	if providerGeneration != providerBeforeReset.StateGeneration+1 ||
 		channelGeneration != channelBeforeReset.StateGeneration+1 {
 		t.Fatalf(
 			"Reset generations origin=%d channel=%d want=%d/%d",
-			originGeneration,
+			providerGeneration,
 			channelGeneration,
-			originBeforeReset.StateGeneration+1,
+			providerBeforeReset.StateGeneration+1,
 			channelBeforeReset.StateGeneration+1,
 		)
 	}
@@ -113,14 +113,14 @@ func TestP4ResetStaleGenerationLongStreamE2E(t *testing.T) {
 		t.Fatalf("second recovery permit did not belong to the current half-open generation: half_open=%+v permit=%v", halfOpen, secondPermit)
 	}
 
-	originBeforeOldFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeOrigin, h.seed.originID)
+	providerBeforeOldFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeProvider, h.seed.providerID)
 	channelBeforeOldFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeChannel, h.seed.openAIChannelID)
-	if originBeforeOldFinish.State != breakerstore.StateClosed ||
-		originBeforeOldFinish.StateGeneration != originGeneration ||
+	if providerBeforeOldFinish.State != breakerstore.StateClosed ||
+		providerBeforeOldFinish.StateGeneration != providerGeneration ||
 		channelBeforeOldFinish.State != breakerstore.StateClosed || channelBeforeOldFinish.HalfOpenBusy ||
 		channelBeforeOldFinish.StateGeneration != halfOpen.StateGeneration+1 ||
 		channelBeforeOldFinish.TTFTSamples != 2 {
-		t.Fatalf("two current-generation permits did not close the Reset breaker: origin=%+v channel=%+v", originBeforeOldFinish, channelBeforeOldFinish)
+		t.Fatalf("two current-generation permits did not close the Reset breaker: provider=%+v channel=%+v", providerBeforeOldFinish, channelBeforeOldFinish)
 	}
 
 	gate.Release()
@@ -147,9 +147,9 @@ func TestP4ResetStaleGenerationLongStreamE2E(t *testing.T) {
 		breakerstore.DispositionStaleGeneration,
 		2*time.Second,
 	)
-	originAfterOldFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeOrigin, h.seed.originID)
+	providerAfterOldFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeProvider, h.seed.providerID)
 	channelAfterOldFinish := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeChannel, h.seed.openAIChannelID)
-	assertExactBreakerSnapshotUnchanged(t, "Origin", originBeforeOldFinish, originAfterOldFinish)
+	assertExactBreakerSnapshotUnchanged(t, "Provider", providerBeforeOldFinish, providerAfterOldFinish)
 	assertExactBreakerSnapshotUnchanged(t, "Channel", channelBeforeOldFinish, channelAfterOldFinish)
 	waitForResetPartialFacts(t, pool, oldRequest, h.seed, oldReservationID, initialBalance, 8*time.Second)
 	assertNoLongStreamLeases(t, h)
@@ -293,7 +293,7 @@ func waitForResetPartialFacts(
 				attempt.UpstreamCompletedAt.Valid,
 				attempt.UpstreamFinishReason.String,
 				attempt.FinalUsageReceived,
-				attempt.BreakerOriginDisposition.String,
+				attempt.BreakerProviderDisposition.String,
 				attempt.BreakerChannelDisposition.String,
 				usage.UsageSource,
 				usage.OutputTokensTotal,
@@ -312,8 +312,8 @@ func waitForResetPartialFacts(
 				attempt.UpstreamStartedAt.Valid && attempt.UpstreamFirstTokenAt.Valid && attempt.UpstreamCompletedAt.Valid &&
 				attempt.UpstreamFinishReason.Valid && attempt.UpstreamFinishReason.String == lifecycle.PartialReasonInterrupted &&
 				!attempt.FinalUsageReceived && attempt.ErrorCode.Valid && attempt.ErrorCode.String == string(failure.CodeAdapterReadStreamFailed) &&
-				attempt.BreakerOriginDisposition.Valid &&
-				attempt.BreakerOriginDisposition.String == string(breakerstore.DispositionStaleGeneration) &&
+				attempt.BreakerProviderDisposition.Valid &&
+				attempt.BreakerProviderDisposition.String == string(breakerstore.DispositionStaleGeneration) &&
 				attempt.BreakerChannelDisposition.Valid &&
 				attempt.BreakerChannelDisposition.String == string(breakerstore.DispositionStaleGeneration) &&
 				usage.UsageSource == "partial_stream_estimate" && usage.OutputTokensTotal > 0 &&

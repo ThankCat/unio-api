@@ -285,7 +285,7 @@ func routeCandidate(adapterKey string, channelID int64, upstreamModel string) ro
 		AdapterKey: adapterKey,
 		Channel: channel.Runtime{
 			ID:      channelID,
-			BaseURL: "https://example.test",
+			Origin:  "https://example.test",
 			APIKey:  "test-secret",
 			Timeout: 30 * time.Second,
 		},

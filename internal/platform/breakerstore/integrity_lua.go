@@ -346,17 +346,17 @@ for index = 1, origin_count do
   local origin_type = redis.call('TYPE', origin)
   if type(origin_type) == 'table' then origin_type = origin_type['ok'] end
   if origin_type ~= 'hash' then
-    return redis.error_reply('WRONGTYPE runtime origin control must be a hash')
+    return redis.error_reply('WRONGTYPE runtime provider control must be a hash')
   end
   if redis.call('HGET', origin, 'control_present') ~= '1' or
-      redis.call('HGET', origin, 'base_url_revision_state') ~= 'active' or
+      redis.call('HGET', origin, 'origin_revision_state') ~= 'active' or
       redis.call('HGET', origin, 'status_revision_state') ~= 'active' or
-      redis.call('HGET', origin, 'base_url_revision') ~= ARGV[arg_index] or
+      redis.call('HGET', origin, 'origin_revision') ~= ARGV[arg_index] or
       redis.call('HGET', origin, 'status_revision') ~= ARGV[arg_index + 1] or
       redis.call('HGET', origin, 'effective_status') ~= ARGV[arg_index + 2] or
-      redis.call('HEXISTS', origin, 'pending_base_url_revision') == 1 or
-      redis.call('HEXISTS', origin, 'base_url_fence_token') == 1 or
-      redis.call('HEXISTS', origin, 'base_url_payload_hash') == 1 or
+      redis.call('HEXISTS', origin, 'pending_origin_revision') == 1 or
+      redis.call('HEXISTS', origin, 'origin_fence_token') == 1 or
+      redis.call('HEXISTS', origin, 'origin_payload_hash') == 1 or
       redis.call('HEXISTS', origin, 'pending_status_revision') == 1 or
       redis.call('HEXISTS', origin, 'pending_effective_status') == 1 or
       redis.call('HEXISTS', origin, 'status_fence_token') == 1 or

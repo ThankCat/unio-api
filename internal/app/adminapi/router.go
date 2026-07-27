@@ -19,7 +19,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/model"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/overview"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/provider"
-	"github.com/ThankCat/unio-gateway/internal/app/adminapi/providerorigin"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/requests"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/route"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/system"
@@ -39,17 +38,16 @@ type RouterDeps struct {
 	Logger             *zap.Logger
 	AdminAuthenticator middleware.AdminAuthenticator
 
-	ProviderService         provider.ProviderService
-	ProviderOpsService      provider.ProviderOpsService
-	ProviderOriginService providerorigin.ProviderOriginService
-	ProviderOriginBreaker providerorigin.BreakerRuntime
-	ChannelService          channel.ChannelService
-	ChannelBreaker          channel.BreakerRuntime
-	ChannelTestService      channel.ChannelTestService
-	ChannelOpsService       channel.ChannelOpsService
-	ModelService            model.ModelService
-	ModelOpsService         model.ModelOpsService
-	ChannelModelService     channel.ChannelModelService
+	ProviderService     provider.ProviderService
+	ProviderOpsService  provider.ProviderOpsService
+	ProviderBreaker     provider.BreakerRuntime
+	ChannelService      channel.ChannelService
+	ChannelBreaker      channel.BreakerRuntime
+	ChannelTestService  channel.ChannelTestService
+	ChannelOpsService   channel.ChannelOpsService
+	ModelService        model.ModelService
+	ModelOpsService     model.ModelOpsService
+	ChannelModelService channel.ChannelModelService
 
 	// 渠道-模型成本价（绝对覆盖）+ 线路（渠道商品）。
 	ChannelPriceService channel.ChannelPriceService
@@ -145,10 +143,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 		provider.Register(r, provider.Deps{
 			Service:    deps.ProviderService,
 			OpsService: deps.ProviderOpsService,
-		})
-		providerorigin.Register(r, providerorigin.Deps{
-			Service: deps.ProviderOriginService,
-			Breaker: deps.ProviderOriginBreaker,
+			Breaker:    deps.ProviderBreaker,
 		})
 		channel.Register(r, channel.Deps{
 			Service:               deps.ChannelService,

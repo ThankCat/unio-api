@@ -51,22 +51,21 @@ func strictUnmarshal(raw []byte, v any) error {
 // CircuitBreakerSettings 是 P4 Origin/Channel 全局熔断与 permit 生命周期配置。
 // OpenDuration 仅供 Phase E 删除前的旧进程内 breaker 兼容使用，JSON 不再包含该字段。
 type CircuitBreakerSettings struct {
-	Enabled                             bool
-	Window                              time.Duration
-	MinRequests                         int
-	FailureRatio                        float64
-	ConsecutiveFailures                 int
-	ConsecutiveWindow                   time.Duration
-	HalfOpenSuccesses                   int
-	AttemptPermitTTL                    time.Duration
-	AttemptPermitRenewInterval          time.Duration
-	AttemptPermitTerminalTTL            time.Duration
-	OriginBaseURLRevisionOperationTTL time.Duration
-	OriginStatusRevisionOperationTTL  time.Duration
-	OriginStatusBatchMax              int
-	OpenDurations                       []time.Duration
-	OriginAmbiguousDistinctChannels   int
-	OriginAmbiguousDistinctModels     int
+	Enabled                           bool
+	Window                            time.Duration
+	MinRequests                       int
+	FailureRatio                      float64
+	ConsecutiveFailures               int
+	ConsecutiveWindow                 time.Duration
+	HalfOpenSuccesses                 int
+	AttemptPermitTTL                  time.Duration
+	AttemptPermitRenewInterval        time.Duration
+	AttemptPermitTerminalTTL          time.Duration
+	OriginRevisionOperationTTL        time.Duration
+	StatusRevisionOperationTTL        time.Duration
+	OpenDurations                     []time.Duration
+	ProviderAmbiguousDistinctChannels int
+	ProviderAmbiguousDistinctModels   int
 
 	OpenDuration time.Duration
 }
@@ -74,43 +73,41 @@ type CircuitBreakerSettings struct {
 // DefaultCircuitBreakerSettings 返回 P4 §4.8 的已决议默认值。
 func DefaultCircuitBreakerSettings() CircuitBreakerSettings {
 	return CircuitBreakerSettings{
-		Enabled:                             true,
-		Window:                              30 * time.Second,
-		MinRequests:                         20,
-		FailureRatio:                        0.5,
-		ConsecutiveFailures:                 3,
-		ConsecutiveWindow:                   10 * time.Second,
-		HalfOpenSuccesses:                   2,
-		AttemptPermitTTL:                    30 * time.Second,
-		AttemptPermitRenewInterval:          10 * time.Second,
-		AttemptPermitTerminalTTL:            5 * time.Minute,
-		OriginBaseURLRevisionOperationTTL: 24 * time.Hour,
-		OriginStatusRevisionOperationTTL:  24 * time.Hour,
-		OriginStatusBatchMax:              256,
-		OpenDurations:                       []time.Duration{15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute},
-		OriginAmbiguousDistinctChannels:   2,
-		OriginAmbiguousDistinctModels:     2,
-		OpenDuration:                        15 * time.Second,
+		Enabled:                           true,
+		Window:                            30 * time.Second,
+		MinRequests:                       20,
+		FailureRatio:                      0.5,
+		ConsecutiveFailures:               3,
+		ConsecutiveWindow:                 10 * time.Second,
+		HalfOpenSuccesses:                 2,
+		AttemptPermitTTL:                  30 * time.Second,
+		AttemptPermitRenewInterval:        10 * time.Second,
+		AttemptPermitTerminalTTL:          5 * time.Minute,
+		OriginRevisionOperationTTL:        24 * time.Hour,
+		StatusRevisionOperationTTL:        24 * time.Hour,
+		OpenDurations:                     []time.Duration{15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute},
+		ProviderAmbiguousDistinctChannels: 2,
+		ProviderAmbiguousDistinctModels:   2,
+		OpenDuration:                      15 * time.Second,
 	}
 }
 
 type circuitBreakerDoc struct {
-	Enabled                               bool    `json:"enabled"`
-	WindowMs                              int64   `json:"window_ms"`
-	MinRequests                           int     `json:"min_requests"`
-	FailureRatio                          float64 `json:"failure_ratio"`
-	ConsecutiveFailures                   int     `json:"consecutive_failures"`
-	ConsecutiveWindowMs                   int64   `json:"consecutive_window_ms"`
-	HalfOpenSuccesses                     int     `json:"half_open_successes"`
-	AttemptPermitTTLMs                    int64   `json:"attempt_permit_ttl_ms"`
-	AttemptPermitRenewIntervalMs          int64   `json:"attempt_permit_renew_interval_ms"`
-	AttemptPermitTerminalTTLMs            int64   `json:"attempt_permit_terminal_ttl_ms"`
-	OriginBaseURLRevisionOperationTTLMs int64   `json:"origin_base_url_revision_operation_ttl_ms"`
-	OriginStatusRevisionOperationTTLMs  int64   `json:"origin_status_revision_operation_ttl_ms"`
-	OriginStatusBatchMax                int     `json:"origin_status_batch_max"`
-	OpenDurationsMs                       []int64 `json:"open_durations_ms"`
-	OriginAmbiguousDistinctChannels     int     `json:"origin_ambiguous_distinct_channels"`
-	OriginAmbiguousDistinctModels       int     `json:"origin_ambiguous_distinct_models"`
+	Enabled                           bool    `json:"enabled"`
+	WindowMs                          int64   `json:"window_ms"`
+	MinRequests                       int     `json:"min_requests"`
+	FailureRatio                      float64 `json:"failure_ratio"`
+	ConsecutiveFailures               int     `json:"consecutive_failures"`
+	ConsecutiveWindowMs               int64   `json:"consecutive_window_ms"`
+	HalfOpenSuccesses                 int     `json:"half_open_successes"`
+	AttemptPermitTTLMs                int64   `json:"attempt_permit_ttl_ms"`
+	AttemptPermitRenewIntervalMs      int64   `json:"attempt_permit_renew_interval_ms"`
+	AttemptPermitTerminalTTLMs        int64   `json:"attempt_permit_terminal_ttl_ms"`
+	OriginRevisionOperationTTLMs      int64   `json:"origin_revision_operation_ttl_ms"`
+	StatusRevisionOperationTTLMs      int64   `json:"status_revision_operation_ttl_ms"`
+	OpenDurationsMs                   []int64 `json:"open_durations_ms"`
+	ProviderAmbiguousDistinctChannels int     `json:"provider_ambiguous_distinct_channels"`
+	ProviderAmbiguousDistinctModels   int     `json:"provider_ambiguous_distinct_models"`
 }
 
 func encodeCircuitBreakerSettings(s CircuitBreakerSettings) json.RawMessage {
@@ -119,22 +116,21 @@ func encodeCircuitBreakerSettings(s CircuitBreakerSettings) json.RawMessage {
 		openDurations = append(openDurations, durationToMs(d))
 	}
 	raw, err := json.Marshal(circuitBreakerDoc{
-		Enabled:                               s.Enabled,
-		WindowMs:                              durationToMs(s.Window),
-		MinRequests:                           s.MinRequests,
-		FailureRatio:                          s.FailureRatio,
-		ConsecutiveFailures:                   s.ConsecutiveFailures,
-		ConsecutiveWindowMs:                   durationToMs(s.ConsecutiveWindow),
-		HalfOpenSuccesses:                     s.HalfOpenSuccesses,
-		AttemptPermitTTLMs:                    durationToMs(s.AttemptPermitTTL),
-		AttemptPermitRenewIntervalMs:          durationToMs(s.AttemptPermitRenewInterval),
-		AttemptPermitTerminalTTLMs:            durationToMs(s.AttemptPermitTerminalTTL),
-		OriginBaseURLRevisionOperationTTLMs: durationToMs(s.OriginBaseURLRevisionOperationTTL),
-		OriginStatusRevisionOperationTTLMs:  durationToMs(s.OriginStatusRevisionOperationTTL),
-		OriginStatusBatchMax:                s.OriginStatusBatchMax,
-		OpenDurationsMs:                       openDurations,
-		OriginAmbiguousDistinctChannels:     s.OriginAmbiguousDistinctChannels,
-		OriginAmbiguousDistinctModels:       s.OriginAmbiguousDistinctModels,
+		Enabled:                           s.Enabled,
+		WindowMs:                          durationToMs(s.Window),
+		MinRequests:                       s.MinRequests,
+		FailureRatio:                      s.FailureRatio,
+		ConsecutiveFailures:               s.ConsecutiveFailures,
+		ConsecutiveWindowMs:               durationToMs(s.ConsecutiveWindow),
+		HalfOpenSuccesses:                 s.HalfOpenSuccesses,
+		AttemptPermitTTLMs:                durationToMs(s.AttemptPermitTTL),
+		AttemptPermitRenewIntervalMs:      durationToMs(s.AttemptPermitRenewInterval),
+		AttemptPermitTerminalTTLMs:        durationToMs(s.AttemptPermitTerminalTTL),
+		OriginRevisionOperationTTLMs:      durationToMs(s.OriginRevisionOperationTTL),
+		StatusRevisionOperationTTLMs:      durationToMs(s.StatusRevisionOperationTTL),
+		OpenDurationsMs:                   openDurations,
+		ProviderAmbiguousDistinctChannels: s.ProviderAmbiguousDistinctChannels,
+		ProviderAmbiguousDistinctModels:   s.ProviderAmbiguousDistinctModels,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("appsettings: encode circuit breaker settings: %v", err))
@@ -149,21 +145,20 @@ func DecodeCircuitBreakerSettings(raw []byte) (CircuitBreakerSettings, error) {
 		return CircuitBreakerSettings{}, err
 	}
 	s := CircuitBreakerSettings{
-		Enabled:                             doc.Enabled,
-		Window:                              msToDuration(doc.WindowMs),
-		MinRequests:                         doc.MinRequests,
-		FailureRatio:                        doc.FailureRatio,
-		ConsecutiveFailures:                 doc.ConsecutiveFailures,
-		ConsecutiveWindow:                   msToDuration(doc.ConsecutiveWindowMs),
-		HalfOpenSuccesses:                   doc.HalfOpenSuccesses,
-		AttemptPermitTTL:                    msToDuration(doc.AttemptPermitTTLMs),
-		AttemptPermitRenewInterval:          msToDuration(doc.AttemptPermitRenewIntervalMs),
-		AttemptPermitTerminalTTL:            msToDuration(doc.AttemptPermitTerminalTTLMs),
-		OriginBaseURLRevisionOperationTTL: msToDuration(doc.OriginBaseURLRevisionOperationTTLMs),
-		OriginStatusRevisionOperationTTL:  msToDuration(doc.OriginStatusRevisionOperationTTLMs),
-		OriginStatusBatchMax:              doc.OriginStatusBatchMax,
-		OriginAmbiguousDistinctChannels:   doc.OriginAmbiguousDistinctChannels,
-		OriginAmbiguousDistinctModels:     doc.OriginAmbiguousDistinctModels,
+		Enabled:                           doc.Enabled,
+		Window:                            msToDuration(doc.WindowMs),
+		MinRequests:                       doc.MinRequests,
+		FailureRatio:                      doc.FailureRatio,
+		ConsecutiveFailures:               doc.ConsecutiveFailures,
+		ConsecutiveWindow:                 msToDuration(doc.ConsecutiveWindowMs),
+		HalfOpenSuccesses:                 doc.HalfOpenSuccesses,
+		AttemptPermitTTL:                  msToDuration(doc.AttemptPermitTTLMs),
+		AttemptPermitRenewInterval:        msToDuration(doc.AttemptPermitRenewIntervalMs),
+		AttemptPermitTerminalTTL:          msToDuration(doc.AttemptPermitTerminalTTLMs),
+		OriginRevisionOperationTTL:        msToDuration(doc.OriginRevisionOperationTTLMs),
+		StatusRevisionOperationTTL:        msToDuration(doc.StatusRevisionOperationTTLMs),
+		ProviderAmbiguousDistinctChannels: doc.ProviderAmbiguousDistinctChannels,
+		ProviderAmbiguousDistinctModels:   doc.ProviderAmbiguousDistinctModels,
 	}
 	if doc.WindowMs <= 0 {
 		return CircuitBreakerSettings{}, errors.New("window_ms must be > 0")
@@ -186,11 +181,8 @@ func DecodeCircuitBreakerSettings(raw []byte) (CircuitBreakerSettings, error) {
 	if doc.AttemptPermitRenewIntervalMs*3 > doc.AttemptPermitTTLMs {
 		return CircuitBreakerSettings{}, errors.New("attempt_permit_renew_interval_ms * 3 must be <= attempt_permit_ttl_ms")
 	}
-	if doc.OriginBaseURLRevisionOperationTTLMs <= 0 || doc.OriginStatusRevisionOperationTTLMs <= 0 {
+	if doc.OriginRevisionOperationTTLMs <= 0 || doc.StatusRevisionOperationTTLMs <= 0 {
 		return CircuitBreakerSettings{}, errors.New("origin revision operation ttl must be > 0")
-	}
-	if s.OriginStatusBatchMax < 1 || s.OriginStatusBatchMax > 1024 {
-		return CircuitBreakerSettings{}, errors.New("origin_status_batch_max must be within [1, 1024]")
 	}
 	if len(doc.OpenDurationsMs) == 0 {
 		return CircuitBreakerSettings{}, errors.New("open_durations_ms must not be empty")
@@ -201,8 +193,8 @@ func DecodeCircuitBreakerSettings(raw []byte) (CircuitBreakerSettings, error) {
 		}
 		s.OpenDurations = append(s.OpenDurations, msToDuration(ms))
 	}
-	if s.OriginAmbiguousDistinctChannels < 2 || s.OriginAmbiguousDistinctModels < 2 {
-		return CircuitBreakerSettings{}, errors.New("origin ambiguous distinct thresholds must be >= 2")
+	if s.ProviderAmbiguousDistinctChannels < 2 || s.ProviderAmbiguousDistinctModels < 2 {
+		return CircuitBreakerSettings{}, errors.New("provider ambiguous distinct thresholds must be >= 2")
 	}
 	s.OpenDuration = s.OpenDurations[0]
 	return s, nil

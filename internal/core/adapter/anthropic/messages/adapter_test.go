@@ -44,7 +44,7 @@ func TestAdapterStreamMessagesWithholdsMessageStopAndReturnsFacts(t *testing.T) 
 	outcome, err := NewAdapter(server.Client()).StreamMessages(
 		context.Background(),
 		channel.Runtime{
-			BaseURL: server.URL,
+			Origin:  server.URL,
 			APIKey:  "test-secret",
 			Timeout: 30 * time.Second,
 		},
@@ -116,7 +116,7 @@ func TestAdapterStreamMessagesReturnsFactsWithTailErrorBeforeMessageStop(t *test
 
 	outcome, err := NewAdapter(server.Client()).StreamMessages(
 		context.Background(),
-		channel.Runtime{BaseURL: server.URL, APIKey: "test-secret"},
+		channel.Runtime{Origin: server.URL, APIKey: "test-secret"},
 		MessageRequest{
 			Model:     "deepseek-v4-flash",
 			MaxTokens: intPtr(16),

@@ -59,7 +59,7 @@ func newOpenAIAdapterRegistry(client *http.Client) AdapterRegistry {
 
 func deepseekRouteCandidate(server *mockUpstream, channelID int64) routing.ChatRouteCandidate {
 	candidate := routeCandidate("openai", channelID, "deepseek-v4-pro")
-	candidate.Channel.BaseURL = server.server.URL
+	candidate.Channel.Origin = server.server.URL
 	candidate.Channel.ProviderSlug = "deepseek"
 	return candidate
 }
@@ -695,8 +695,8 @@ func TestDeepSeekRouteCandidateSetsProviderSlug(t *testing.T) {
 	if candidate.Channel.ProviderSlug != "deepseek" {
 		t.Fatalf("got provider slug %q, want deepseek", candidate.Channel.ProviderSlug)
 	}
-	if candidate.Channel.BaseURL != upstream.server.URL {
-		t.Fatalf("unexpected base url %q", candidate.Channel.BaseURL)
+	if candidate.Channel.Origin != upstream.server.URL {
+		t.Fatalf("unexpected base url %q", candidate.Channel.Origin)
 	}
 	_ = channel.Runtime{ProviderSlug: candidate.Channel.ProviderSlug}
 }

@@ -53,7 +53,6 @@ type CapabilityKey struct {
 type Channel struct {
 	ID                        int64
 	ProviderID                int64
-	ProviderOriginID          int64
 	Name                      string
 	Protocol                  string
 	AdapterKey                string
@@ -147,22 +146,22 @@ type ChannelRechargeFactor struct {
 }
 
 type ChannelTestLog struct {
-	ID                          int64
-	ChannelID                   int64
-	CreatedAt                   pgtype.Timestamptz
-	Source                      string
-	Success                     bool
-	ErrorCode                   pgtype.Text
-	HttpStatus                  pgtype.Int4
-	LatencyMs                   pgtype.Int4
-	TestedModel                 pgtype.Text
-	CredentialValidAfter        bool
-	Message                     pgtype.Text
-	UpstreamError               pgtype.Text
-	TestedOriginBaseUrlRevision pgtype.Int8
-	TestedOriginStatusRevision  pgtype.Int8
-	TestedConfigRevision        pgtype.Int8
-	StateChangeApplied          bool
+	ID                   int64
+	ChannelID            int64
+	CreatedAt            pgtype.Timestamptz
+	Source               string
+	Success              bool
+	ErrorCode            pgtype.Text
+	HttpStatus           pgtype.Int4
+	LatencyMs            pgtype.Int4
+	TestedModel          pgtype.Text
+	CredentialValidAfter bool
+	Message              pgtype.Text
+	UpstreamError        pgtype.Text
+	TestedOriginRevision pgtype.Int8
+	TestedStatusRevision pgtype.Int8
+	TestedConfigRevision pgtype.Int8
+	StateChangeApplied   bool
 }
 
 type CostSnapshot struct {
@@ -342,20 +341,6 @@ type ModelPrice struct {
 	LongContextOutputMultiplier pgtype.Numeric
 }
 
-type OriginRoutingOperation struct {
-	ID          int64
-	Token       string
-	Kind        string
-	ProviderID  pgtype.Int8
-	OriginID    pgtype.Int8
-	Transitions []byte
-	PayloadHash string
-	State       string
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
-	CompletedAt pgtype.Timestamptz
-}
-
 type PriceSnapshot struct {
 	ID                      int64
 	RequestRecordID         int64
@@ -376,65 +361,67 @@ type PriceSnapshot struct {
 }
 
 type Provider struct {
-	ID         int64
-	Slug       string
-	Name       string
-	Status     string
-	CreatedAt  pgtype.Timestamptz
-	UpdatedAt  pgtype.Timestamptz
-	ArchivedAt pgtype.Timestamptz
+	ID             int64
+	Slug           string
+	Name           string
+	Origin         string
+	OriginRevision int64
+	Status         string
+	StatusRevision int64
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	ArchivedAt     pgtype.Timestamptz
 }
 
-type ProviderOrigin struct {
-	ID              int64
-	ProviderID      int64
-	Name            string
-	BaseUrl         string
-	BaseUrlRevision int64
-	Status          string
-	StatusRevision  int64
-	ArchivedAt      pgtype.Timestamptz
-	CreatedAt       pgtype.Timestamptz
-	UpdatedAt       pgtype.Timestamptz
+type ProviderRoutingOperation struct {
+	ID          int64
+	Token       string
+	Kind        string
+	ProviderID  int64
+	Transitions []byte
+	PayloadHash string
+	State       string
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	CompletedAt pgtype.Timestamptz
 }
 
 type RequestAttempt struct {
-	ID                            int64
-	RequestRecordID               int64
-	AttemptIndex                  int32
-	ProviderID                    int64
-	ChannelID                     int64
-	AdapterKey                    string
-	UpstreamModel                 string
-	UpstreamProtocol              string
-	UpstreamResponseID            pgtype.Text
-	UpstreamResponseModel         pgtype.Text
-	UpstreamFinishReason          pgtype.Text
-	FinishClass                   pgtype.Text
-	Status                        string
-	UpstreamStatusCode            pgtype.Int4
-	UpstreamRequestID             pgtype.Text
-	ErrorCode                     pgtype.Text
-	ErrorMessage                  pgtype.Text
-	InternalErrorDetail           pgtype.Text
-	ResponseStartedAt             pgtype.Timestamptz
-	FinalUsageReceived            bool
-	UsageMappingVersion           pgtype.Text
-	StartedAt                     pgtype.Timestamptz
-	CompletedAt                   pgtype.Timestamptz
-	CreatedAt                     pgtype.Timestamptz
-	UpstreamStartedAt             pgtype.Timestamptz
-	UpstreamFirstTokenAt          pgtype.Timestamptz
-	UpstreamCompletedAt           pgtype.Timestamptz
-	ProviderOriginID              int64
-	ProviderOriginBaseUrlRevision int64
-	ProviderOriginStatusRevision  int64
-	ChannelConfigRevision         int64
-	RoutingCandidateIndex         int32
-	UpstreamEndpoint              string
-	BreakerOriginDisposition      pgtype.Text
-	BreakerChannelDisposition     pgtype.Text
-	FaultParty                    pgtype.Text
+	ID                         int64
+	RequestRecordID            int64
+	AttemptIndex               int32
+	ProviderID                 int64
+	ChannelID                  int64
+	AdapterKey                 string
+	UpstreamModel              string
+	UpstreamProtocol           string
+	UpstreamResponseID         pgtype.Text
+	UpstreamResponseModel      pgtype.Text
+	UpstreamFinishReason       pgtype.Text
+	FinishClass                pgtype.Text
+	Status                     string
+	UpstreamStatusCode         pgtype.Int4
+	UpstreamRequestID          pgtype.Text
+	ErrorCode                  pgtype.Text
+	ErrorMessage               pgtype.Text
+	InternalErrorDetail        pgtype.Text
+	ResponseStartedAt          pgtype.Timestamptz
+	FinalUsageReceived         bool
+	UsageMappingVersion        pgtype.Text
+	StartedAt                  pgtype.Timestamptz
+	CompletedAt                pgtype.Timestamptz
+	CreatedAt                  pgtype.Timestamptz
+	UpstreamStartedAt          pgtype.Timestamptz
+	UpstreamFirstTokenAt       pgtype.Timestamptz
+	UpstreamCompletedAt        pgtype.Timestamptz
+	ProviderOriginRevision     int64
+	ProviderStatusRevision     int64
+	ChannelConfigRevision      int64
+	RoutingCandidateIndex      int32
+	UpstreamEndpoint           string
+	BreakerProviderDisposition pgtype.Text
+	BreakerChannelDisposition  pgtype.Text
+	FaultParty                 pgtype.Text
 }
 
 type RequestRecord struct {
@@ -451,7 +438,6 @@ type RequestRecord struct {
 	Stream                bool
 	Status                string
 	FinalProviderID       pgtype.Int8
-	FinalProviderOriginID pgtype.Int8
 	FinalChannelID        pgtype.Int8
 	ErrorCode             pgtype.Text
 	ErrorMessage          pgtype.Text

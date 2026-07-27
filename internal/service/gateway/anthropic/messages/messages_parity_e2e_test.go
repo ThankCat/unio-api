@@ -63,7 +63,7 @@ func newRealMessagesRegistry(client *http.Client) *fakeMessagesRegistry {
 // mockMessagesCandidate 把 routing 候选指向 mock 上游，并标注 deepseek provider slug。
 func mockMessagesCandidate(server *httptest.Server) routing.ChatRouteCandidate {
 	candidate := routeCandidate("deepseek", 123, "deepseek-v4-flash")
-	candidate.Channel.BaseURL = server.URL
+	candidate.Channel.Origin = server.URL
 	candidate.Channel.ProviderSlug = "deepseek"
 	return candidate
 }

@@ -53,8 +53,8 @@ func TestAdapterMarksTransportStartedImmediatelyBeforeHTTPDo(t *testing.T) {
 			name: "non-stream",
 			invoke: func(ctx context.Context, a *Adapter) error {
 				_, err := a.Messages(ctx, channel.Runtime{
-					BaseURL: "https://example.test",
-					APIKey:  "test-secret",
+					Origin: "https://example.test",
+					APIKey: "test-secret",
 				}, request)
 				return err
 			},
@@ -63,8 +63,8 @@ func TestAdapterMarksTransportStartedImmediatelyBeforeHTTPDo(t *testing.T) {
 			name: "stream",
 			invoke: func(ctx context.Context, a *Adapter) error {
 				_, err := a.StreamMessages(ctx, channel.Runtime{
-					BaseURL: "https://example.test",
-					APIKey:  "test-secret",
+					Origin: "https://example.test",
+					APIKey: "test-secret",
 				}, request, func(MessageStreamEvent) error { return nil })
 				return err
 			},

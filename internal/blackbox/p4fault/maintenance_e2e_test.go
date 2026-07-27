@@ -31,9 +31,9 @@ type maintenanceLossMode string
 
 const (
 	maintenanceMarkerEndpointLoss maintenanceLossMode = "marker_endpoint_loss"
-	maintenanceFullRedisLoss       maintenanceLossMode = "full_redis_loss"
-	maintenanceAOFRestoreLoss      maintenanceLossMode = "aof_restore_loss"
-	maintenanceRDBRestoreLoss      maintenanceLossMode = "rdb_restore_loss"
+	maintenanceFullRedisLoss      maintenanceLossMode = "full_redis_loss"
+	maintenanceAOFRestoreLoss     maintenanceLossMode = "aof_restore_loss"
+	maintenanceRDBRestoreLoss     maintenanceLossMode = "rdb_restore_loss"
 )
 
 // TestP4FullStateLossMaintenanceE2E is an opt-in acceptance drill for the complete
@@ -757,7 +757,7 @@ func waitForRecoveredRuntimeControls(t *testing.T, h *faultHarness, timeout time
 		h.namespace + ":runtime-control:v1:setting:gateway.routing_balance",
 		h.namespace + ":admission:v1:channel:" + formatID(h.seed.openAIChannelID),
 		h.namespace + ":admission:v1:channel:" + formatID(h.seed.anthropicChannelID),
-		h.namespace + ":breaker:v2:origin:" + formatID(h.seed.originID),
+		h.namespace + ":breaker:v2:provider:" + formatID(h.seed.providerID),
 	}
 	deadline := time.Now().Add(timeout)
 	var existing int64

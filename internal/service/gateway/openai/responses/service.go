@@ -103,7 +103,7 @@ func NewResponsesService(
 		Authorizer:      chatAuthorizer,
 		Metrics:         metricsRecorder,
 		IngressProtocol: requestlog.ProtocolOpenAI,
-		Endpoint:       requestlog.EndpointResponses,
+		Endpoint:        requestlog.EndpointResponses,
 		SafeMessage:     responsesSafeMessage,
 	})
 

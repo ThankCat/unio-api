@@ -31,7 +31,7 @@ type Decision struct {
 	Mode                 string
 	RequestedModelID     string
 	Protocol             string
-	Endpoint            string
+	Endpoint             string
 	PoolSize             int32
 	CandidateCount       int32
 	StickyChannelID      *int64
@@ -142,7 +142,7 @@ func decisionFromFields(
 		Mode:                 mode,
 		RequestedModelID:     requestedModelID,
 		Protocol:             protocol,
-		Endpoint:            endpoint,
+		Endpoint:             endpoint,
 		PoolSize:             poolSize,
 		CandidateCount:       candidateCount,
 		StickyChannelID:      int8Ptr(stickyChannelID),

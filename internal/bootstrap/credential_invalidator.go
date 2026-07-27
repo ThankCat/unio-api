@@ -31,10 +31,10 @@ func (i *credentialInvalidator) MarkChannelCredentialInvalid(revision lifecycle.
 		defer cancel()
 
 		applied, err := i.queries.ApplyRuntime401CredentialInvalidation(ctx, sqlc.ApplyRuntime401CredentialInvalidationParams{
-			ChannelID:                       revision.ChannelID,
-			ExpectedConfigRevision:          revision.ChannelConfigRevision,
-			ExpectedOriginBaseUrlRevision: revision.OriginBaseURLRevision,
-			ExpectedOriginStatusRevision:  revision.OriginStatusRevision,
+			ChannelID:              revision.ChannelID,
+			ExpectedConfigRevision: revision.ChannelConfigRevision,
+			ExpectedOriginRevision: revision.OriginRevision,
+			ExpectedStatusRevision: revision.ProviderStatusRevision,
 		})
 		if err != nil {
 			i.logger.Error("mark channel credential invalid failed",

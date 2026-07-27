@@ -76,7 +76,7 @@ func NewChatCompletionService(
 		Authorizer:      chatAuthorizer,
 		Metrics:         metricsRecorder,
 		IngressProtocol: requestlog.ProtocolOpenAI,
-		Endpoint:       requestlog.EndpointChatCompletions,
+		Endpoint:        requestlog.EndpointChatCompletions,
 		SafeMessage:     chatCompletionsSafeMessage,
 	})
 

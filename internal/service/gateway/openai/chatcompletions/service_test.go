@@ -536,17 +536,16 @@ func routePlan(candidates ...routing.ChatRouteCandidate) routing.ChatRoutePlan {
 // routeCandidate 创建测试用 route candidate。
 func routeCandidate(adapterKey string, channelID int64, upstreamModel string) routing.ChatRouteCandidate {
 	return routing.ChatRouteCandidate{
-		ModelDBID:                       1000 + channelID,
-		ProviderID:                      9000 + channelID,
-		ProviderOriginID:              8000 + channelID,
-		ProviderOriginBaseURLRevision: 3,
-		ProviderOriginStatusRevision:  4,
-		ChannelConfigRevision:           5,
-		ChannelAdmissionLimitsRevision:  6,
-		AdapterKey:                      adapterKey,
+		ModelDBID:                      1000 + channelID,
+		ProviderID:                     8000 + channelID,
+		OriginRevision:                 3,
+		ProviderStatusRevision:         4,
+		ChannelConfigRevision:          5,
+		ChannelAdmissionLimitsRevision: 6,
+		AdapterKey:                     adapterKey,
 		Channel: channel.Runtime{
 			ID:      channelID,
-			BaseURL: "https://example.test",
+			Origin:  "https://example.test",
 			APIKey:  "test-secret",
 			Timeout: 30 * time.Second,
 		},
@@ -722,18 +721,15 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	if len(requestLog.createAttempts) != 1 {
 		t.Fatalf("expected one request attempt, got %d", len(requestLog.createAttempts))
 	}
-	if requestLog.createAttempts[0].ProviderID != 9123 {
-		t.Fatalf("expected provider id %d, got %d", int64(9123), requestLog.createAttempts[0].ProviderID)
+	if requestLog.createAttempts[0].ProviderID != 8123 {
+		t.Fatalf("expected provider id %d, got %d", int64(8123), requestLog.createAttempts[0].ProviderID)
 	}
 	if requestLog.createAttempts[0].ChannelID != 123 {
 		t.Fatalf("expected attempt channel id %d, got %d", int64(123), requestLog.createAttempts[0].ChannelID)
 	}
 	attempt := requestLog.createAttempts[0]
-	if attempt.ProviderOriginID == nil || *attempt.ProviderOriginID != 8123 {
-		t.Fatalf("expected frozen origin id 8123, got %v", attempt.ProviderOriginID)
-	}
-	if attempt.ProviderOriginBaseURLRevision == nil || *attempt.ProviderOriginBaseURLRevision != 3 ||
-		attempt.ProviderOriginStatusRevision == nil || *attempt.ProviderOriginStatusRevision != 4 ||
+	if attempt.OriginRevision == nil || *attempt.OriginRevision != 3 ||
+		attempt.ProviderStatusRevision == nil || *attempt.ProviderStatusRevision != 4 ||
 		attempt.ChannelConfigRevision == nil || *attempt.ChannelConfigRevision != 5 {
 		t.Fatalf("expected frozen candidate revisions, got %+v", attempt)
 	}
@@ -776,8 +772,8 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	if settlementParams.ModelDBID != 1123 {
 		t.Fatalf("expected model db id %d, got %d", int64(1123), settlementParams.ModelDBID)
 	}
-	if settlementParams.FinalProviderID != 9123 {
-		t.Fatalf("expected final provider id %d, got %d", int64(9123), settlementParams.FinalProviderID)
+	if settlementParams.FinalProviderID != 8123 {
+		t.Fatalf("expected final provider id %d, got %d", int64(8123), settlementParams.FinalProviderID)
 	}
 	if settlementParams.FinalChannelID != 123 {
 		t.Fatalf("expected final channel id %d, got %d", int64(123), settlementParams.FinalChannelID)
@@ -876,7 +872,7 @@ func TestRequestLogErrorFactsSeparateSafeMessageAndInternalDetail(t *testing.T) 
 		RequestLog:      requestLog,
 		Authorizer:      &fakeChatAuthorizer{},
 		IngressProtocol: requestlog.ProtocolOpenAI,
-		Endpoint:       requestlog.EndpointChatCompletions,
+		Endpoint:        requestlog.EndpointChatCompletions,
 		SafeMessage:     chatCompletionsSafeMessage,
 	})
 

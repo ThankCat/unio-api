@@ -28,7 +28,7 @@ func TestGetRuntimeDiagnosticsReturnsRedactedMaintenanceView(t *testing.T) {
 		Readiness:         runtimediagnostics.Readiness{Ready: false, Reason: "marker_mismatch"},
 		RuntimeStateEpoch: runtimediagnostics.StateEpoch{State: "ready", Revision: 7, Match: false},
 		Operations: runtimediagnostics.Operations{
-			OriginRouting: runtimediagnostics.OperationSummary{NonterminalCount: 1, OldestAgeSeconds: &originAge},
+			ProviderRouting: runtimediagnostics.OperationSummary{NonterminalCount: 1, OldestAgeSeconds: &originAge},
 			RuntimeControl:  runtimediagnostics.OperationSummary{NonterminalCount: 2, OldestAgeSeconds: &runtimeAge},
 		},
 	}}
@@ -53,10 +53,10 @@ func TestGetRuntimeDiagnosticsReturnsRedactedMaintenanceView(t *testing.T) {
 				Match    bool   `json:"match"`
 			} `json:"runtime_state_epoch"`
 			Operations struct {
-				OriginRouting struct {
+				ProviderRouting struct {
 					NonterminalCount int64  `json:"nonterminal_count"`
 					OldestAgeSeconds *int64 `json:"oldest_age_seconds"`
-				} `json:"origin_routing"`
+				} `json:"provider_routing"`
 				RuntimeControl struct {
 					NonterminalCount int64  `json:"nonterminal_count"`
 					OldestAgeSeconds *int64 `json:"oldest_age_seconds"`
@@ -72,9 +72,9 @@ func TestGetRuntimeDiagnosticsReturnsRedactedMaintenanceView(t *testing.T) {
 		response.Data.RuntimeStateEpoch.Match {
 		t.Fatalf("unexpected diagnostic facts: %+v", response.Data)
 	}
-	if response.Data.Operations.OriginRouting.NonterminalCount != 1 ||
-		response.Data.Operations.OriginRouting.OldestAgeSeconds == nil ||
-		*response.Data.Operations.OriginRouting.OldestAgeSeconds != originAge ||
+	if response.Data.Operations.ProviderRouting.NonterminalCount != 1 ||
+		response.Data.Operations.ProviderRouting.OldestAgeSeconds == nil ||
+		*response.Data.Operations.ProviderRouting.OldestAgeSeconds != originAge ||
 		response.Data.Operations.RuntimeControl.NonterminalCount != 2 ||
 		response.Data.Operations.RuntimeControl.OldestAgeSeconds == nil ||
 		*response.Data.Operations.RuntimeControl.OldestAgeSeconds != runtimeAge {

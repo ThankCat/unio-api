@@ -203,9 +203,9 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 	runtimeInputs := make([]breakerstore.SnapshotCandidateInput, 0, len(filtered))
 	for _, candidate := range filtered {
 		runtimeInputs = append(runtimeInputs, breakerstore.SnapshotCandidateInput{
-			OriginID: candidate.ProviderOriginID, ChannelID: candidate.Channel.ID,
-			OriginBaseURLRevision:  candidate.ProviderOriginBaseURLRevision,
-			OriginStatusRevision:   candidate.ProviderOriginStatusRevision,
+			ProviderID: candidate.ProviderID, ChannelID: candidate.Channel.ID,
+			OriginRevision:           candidate.OriginRevision,
+			ProviderStatusRevision:   candidate.ProviderStatusRevision,
 			ChannelConfigRevision:    candidate.ChannelConfigRevision,
 			ChannelAdmissionRevision: candidate.ChannelAdmissionLimitsRevision,
 		})
@@ -439,13 +439,13 @@ func enrichBalanceScore(
 	if snapshot.Status == breakerstore.CandidateSnapshotNoSample {
 		channel = breakerstore.ScopeSnapshot{}
 	}
-	score.OriginID = candidate.ProviderOriginID
-	score.CandidateOriginBaseURLRevision = candidate.ProviderOriginBaseURLRevision
-	score.RuntimeOriginBaseURLRevision = snapshot.Origin.BaseURLRevision
-	score.OriginBaseURLRevisionCurrent = snapshot.Origin.BaseURLRevision == candidate.ProviderOriginBaseURLRevision
-	score.CandidateOriginStatusRevision = candidate.ProviderOriginStatusRevision
-	score.RuntimeOriginStatusRevision = snapshot.Origin.StatusRevision
-	score.OriginStatusRevisionCurrent = snapshot.Origin.StatusRevision == candidate.ProviderOriginStatusRevision
+	score.ProviderID = candidate.ProviderID
+	score.CandidateOriginRevision = candidate.OriginRevision
+	score.RuntimeOriginRevision = snapshot.Provider.OriginRevision
+	score.OriginRevisionCurrent = snapshot.Provider.OriginRevision == candidate.OriginRevision
+	score.CandidateProviderStatusRevision = candidate.ProviderStatusRevision
+	score.RuntimeProviderStatusRevision = snapshot.Provider.StatusRevision
+	score.ProviderStatusRevisionCurrent = snapshot.Provider.StatusRevision == candidate.ProviderStatusRevision
 	score.CandidateChannelConfigRevision = candidate.ChannelConfigRevision
 	score.RuntimeChannelConfigRevision = positiveRevisionPtr(channel.ChannelConfigRevision)
 	score.ChannelConfigRevisionCurrent = channel.ChannelConfigRevision == candidate.ChannelConfigRevision
@@ -457,7 +457,7 @@ func enrichBalanceScore(
 	score.GlobalConcurrencyRevision = result.GlobalConcurrencyRevision
 	score.CircuitBreakerRevision = result.CircuitBreakerRevision
 	score.ErrorSamples = channel.SampleCount
-	score.OriginBreakerState = traceBreakerState(snapshot.Origin)
+	score.ProviderBreakerState = traceBreakerState(snapshot.Provider)
 	score.ChannelBreakerState = traceBreakerState(channel)
 	score.CooldownRemainingMs = snapshot.CooldownRemainingMs
 	score.ModelPermissionPaused = snapshot.ModelPermissionPaused

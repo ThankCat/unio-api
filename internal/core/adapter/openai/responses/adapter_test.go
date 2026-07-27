@@ -20,7 +20,7 @@ import (
 func testChannel(baseURL string) channel.Runtime {
 	return channel.Runtime{
 		ID:      123,
-		BaseURL: baseURL,
+		Origin:  baseURL,
 		APIKey:  "test-secret",
 		Timeout: 30 * time.Second,
 	}

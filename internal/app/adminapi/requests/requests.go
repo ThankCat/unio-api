@@ -26,7 +26,7 @@ type requestSummaryDTO struct {
 	APIKeyID            int64   `json:"api_key_id"`
 	RequestedModelID    string  `json:"requested_model_id"`
 	IngressProtocol     string  `json:"ingress_protocol"`
-	Endpoint           string  `json:"endpoint"`
+	Endpoint            string  `json:"endpoint"`
 	ResponseModelID     *string `json:"response_model_id"`
 	ResponseProtocol    *string `json:"response_protocol"`
 	ResponseID          *string `json:"response_id"`
@@ -286,7 +286,7 @@ func toRequestSummaryDTO(s query.RequestSummary) requestSummaryDTO {
 		APIKeyID:            s.APIKeyID,
 		RequestedModelID:    s.RequestedModelID,
 		IngressProtocol:     s.IngressProtocol,
-		Endpoint:           s.Endpoint,
+		Endpoint:            s.Endpoint,
 		ResponseModelID:     s.ResponseModelID,
 		ResponseProtocol:    s.ResponseProtocol,
 		ResponseID:          s.ResponseID,

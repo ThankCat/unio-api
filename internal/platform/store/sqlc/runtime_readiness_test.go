@@ -30,14 +30,11 @@ func TestGatewayRuntimeReadinessSnapshotBlocksAllPendingRoutingControls(t *testi
 
 	suffix := time.Now().UnixNano()
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("readiness-%d", suffix), "enabled")
-	originID := insertProviderOrigin(
-		t, ctx, tx, providerID, "readiness", fmt.Sprintf("https://readiness-%d.example.test", suffix), "enabled",
-	)
 	var channelID int64
 	if err := tx.QueryRow(ctx, `INSERT INTO channels (
-		provider_id, provider_origin_id, name, protocol, adapter_key, credential, status, priority
-	) VALUES ($1, $2, 'readiness', 'openai', 'openai', 'sk-readiness', 'enabled', 1)
-	RETURNING id`, providerID, originID).Scan(&channelID); err != nil {
+		provider_id, name, protocol, adapter_key, credential, status, priority
+	) VALUES ($1, 'readiness', 'openai', 'openai', 'sk-readiness', 'enabled', 1)
+	RETURNING id`, providerID).Scan(&channelID); err != nil {
 		t.Fatalf("seed channel: %v", err)
 	}
 
@@ -62,14 +59,14 @@ func TestGatewayRuntimeReadinessSnapshotBlocksAllPendingRoutingControls(t *testi
 		t.Fatalf("finish channel endpoint: %v", err)
 	}
 
-	originToken := fmt.Sprintf("readiness-origin-%d", suffix)
-	if _, err := tx.Exec(ctx, `INSERT INTO origin_routing_operations (
-		token, kind, provider_id, origin_id, transitions, payload_hash, state
-	) VALUES ($1, 'status', $2, $3, '{}'::jsonb, 'pending-origin', 'preparing')`,
-		originToken, providerID, originID); err != nil {
-		t.Fatalf("seed pending origin endpoint: %v", err)
+	providerToken := fmt.Sprintf("readiness-provider-%d", suffix)
+	if _, err := tx.Exec(ctx, `INSERT INTO provider_routing_operations (
+		token, kind, provider_id, transitions, payload_hash, state
+	) VALUES ($1, 'status', $2, '{}'::jsonb, 'pending-provider', 'preparing')`,
+		providerToken, providerID); err != nil {
+		t.Fatalf("seed pending provider endpoint: %v", err)
 	}
-	assertRuntimeOperationsPending(t, queries, "origin routing")
+	assertRuntimeOperationsPending(t, queries, "provider routing")
 }
 
 func assertRuntimeOperationsPending(t *testing.T, queries *sqlc.Queries, label string) {

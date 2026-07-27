@@ -138,8 +138,8 @@ type RuntimeReconciliationGeneration struct {
 }
 
 type RuntimeOriginControlProof struct {
-	OriginID      int64
-	BaseURLRevision int64
+	ProviderID      int64
+	OriginRevision  int64
 	StatusRevision  int64
 	EffectiveStatus string
 }
@@ -154,7 +154,7 @@ type RuntimeChannelAdmissionControlProof struct {
 // reconciler. The clear commit verifies every listed Redis control atomically with the latch CAS.
 type RuntimeReconciliationProof struct {
 	Generation               RuntimeReconciliationGeneration
-	OriginControls         []RuntimeOriginControlProof
+	OriginControls           []RuntimeOriginControlProof
 	ChannelAdmissionControls []RuntimeChannelAdmissionControlProof
 }
 
@@ -215,15 +215,15 @@ func (s *Store) ClearRuntimeInfrastructureFaultAfterReconciliation(
 	}
 	seenOrigins := make(map[int64]struct{}, len(reconciliation.OriginControls))
 	for _, origin := range reconciliation.OriginControls {
-		if origin.OriginID <= 0 || origin.BaseURLRevision < 1 || origin.StatusRevision < 1 ||
+		if origin.ProviderID <= 0 || origin.OriginRevision < 1 || origin.StatusRevision < 1 ||
 			(origin.EffectiveStatus != "enabled" && origin.EffectiveStatus != "disabled" && origin.EffectiveStatus != "archived") {
 			return RuntimeReadinessResult{Reason: "control_proof_invalid"}, nil
 		}
-		if _, exists := seenOrigins[origin.OriginID]; exists {
+		if _, exists := seenOrigins[origin.ProviderID]; exists {
 			return RuntimeReadinessResult{Reason: "control_proof_invalid"}, nil
 		}
-		seenOrigins[origin.OriginID] = struct{}{}
-		keys = append(keys, s.keys.origin(origin.OriginID))
+		seenOrigins[origin.ProviderID] = struct{}{}
+		keys = append(keys, s.keys.provider(origin.ProviderID))
 	}
 	seenChannels := make(map[int64]struct{}, len(reconciliation.ChannelAdmissionControls))
 	for _, channel := range reconciliation.ChannelAdmissionControls {
@@ -269,7 +269,7 @@ func (s *Store) ClearRuntimeInfrastructureFaultAfterReconciliation(
 	clearArgs = append(clearArgs, strconv.Itoa(len(reconciliation.OriginControls)), strconv.Itoa(len(reconciliation.ChannelAdmissionControls)))
 	for _, origin := range reconciliation.OriginControls {
 		clearArgs = append(clearArgs,
-			strconv.FormatInt(origin.BaseURLRevision, 10),
+			strconv.FormatInt(origin.OriginRevision, 10),
 			strconv.FormatInt(origin.StatusRevision, 10),
 			origin.EffectiveStatus,
 		)

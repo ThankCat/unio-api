@@ -11,99 +11,117 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const archiveProviderCascade = `-- name: ArchiveProviderCascade :execrows
-WITH archived_channels AS (
-    UPDATE channels
-    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text,
-        config_revision = config_revision + 1, updated_at = now()
-    WHERE provider_id = $1 AND status <> 'archived'
-    RETURNING id
-),
-cleared_pools AS (
-    DELETE FROM route_channels WHERE channel_id IN (SELECT id FROM archived_channels)
-)
+const archiveProvider = `-- name: ArchiveProvider :execrows
 UPDATE providers
-SET status = 'archived', archived_at = now()
-WHERE providers.id = $1 AND providers.status <> 'archived'
+SET status = 'archived', status_revision = status_revision + 1,
+    origin = origin || '__archived_' || id::text,
+    archived_at = now(), updated_at = now()
+WHERE providers.id = $1
+  AND providers.status <> 'archived'
+  AND NOT EXISTS (SELECT 1 FROM channels c WHERE c.provider_id = providers.id AND c.status <> 'archived')
+  AND NOT EXISTS (
+      SELECT 1 FROM provider_routing_operations operation
+      WHERE operation.provider_id = providers.id AND operation.state NOT IN ('committed', 'aborted')
+  )
 `
 
-// ArchiveProviderCascade 归档 provider：单事务内把名下未归档渠道一并归档（释放渠道名：追加
-// __archived_<id> 后缀）、从所有线路候选池移除这些渠道（route_channels 纯配置、无账务外键，可安全删），
-// 再把 provider 置 archived。slug 与 provider.name 不变（服务商标识稳定，归档大概率不再复用同 slug）。
-// 返回 providers 受影响行数（0 = provider 不存在或已归档）。恢复不向下级联，需逐个恢复渠道。
-func (q *Queries) ArchiveProviderCascade(ctx context.Context, id int64) (int64, error) {
-	result, err := q.db.Exec(ctx, archiveProviderCascade, id)
+// ArchiveProvider 只在无未归档 Channel、无非终态围栏操作时归档，并释放 origin 唯一槽位。
+func (q *Queries) ArchiveProvider(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, archiveProvider, id)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
 }
 
-const archiveProviderWithReplacement = `-- name: ArchiveProviderWithReplacement :one
-WITH replacement AS (
-    SELECT c.id
-    FROM channels c
-    JOIN providers p ON p.id = c.provider_id
-    JOIN provider_origins pe ON pe.id = c.provider_origin_id
-    WHERE c.id = $1
-      AND c.provider_id <> $2
-      AND c.status = 'enabled'
-      AND c.credential_valid
-      AND c.credential <> ''
-      AND pe.base_url <> ''
-      AND pe.status = 'enabled'
-      AND p.status = 'enabled'
-),
-affected_routes AS (
-    SELECT DISTINCT rc.route_id
-    FROM route_channels rc
-    JOIN channels c ON c.id = rc.channel_id
-    WHERE c.provider_id = $2
-),
-added AS (
-    INSERT INTO route_channels (route_id, channel_id)
-    SELECT ar.route_id, replacement.id
-    FROM affected_routes ar CROSS JOIN replacement
-    ON CONFLICT (route_id, channel_id) DO NOTHING
-    RETURNING route_id
-),
-archived_channels AS (
-    UPDATE channels
-    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text,
-        config_revision = config_revision + 1, updated_at = now()
-    WHERE provider_id = $2
-      AND status <> 'archived'
-      AND EXISTS (SELECT 1 FROM replacement)
-      AND (SELECT COUNT(*) FROM added) >= 0
-    RETURNING channels.id
-),
-cleared_pools AS (
-    DELETE FROM route_channels WHERE channel_id IN (SELECT id FROM archived_channels)
-    RETURNING route_id
-),
-archived_provider AS (
-    UPDATE providers
-    SET status = 'archived', archived_at = now()
-    WHERE providers.id = $2
-      AND providers.status <> 'archived'
-      AND EXISTS (SELECT 1 FROM replacement)
-      AND (SELECT COUNT(*) FROM cleared_pools) >= 0
-    RETURNING providers.id
-)
-SELECT COUNT(*)::bigint FROM archived_provider
+const commitProviderOriginAtRevision = `-- name: CommitProviderOriginAtRevision :one
+UPDATE providers
+SET origin = $1, origin_revision = origin_revision + 1, updated_at = now()
+WHERE id = $2
+  AND origin_revision = $3
+  AND origin IS DISTINCT FROM $1
+RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at
 `
 
-type ArchiveProviderWithReplacementParams struct {
-	ReplacementChannelID int64
-	ID                   int64
+type CommitProviderOriginAtRevisionParams struct {
+	Origin                 string
+	ID                     int64
+	ExpectedOriginRevision int64
 }
 
-// Atomically add one external healthy replacement to affected routes, archive all target channels, then archive provider.
-func (q *Queries) ArchiveProviderWithReplacement(ctx context.Context, arg ArchiveProviderWithReplacementParams) (int64, error) {
-	row := q.db.QueryRow(ctx, archiveProviderWithReplacement, arg.ReplacementChannelID, arg.ID)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
+func (q *Queries) CommitProviderOriginAtRevision(ctx context.Context, arg CommitProviderOriginAtRevisionParams) (Provider, error) {
+	row := q.db.QueryRow(ctx, commitProviderOriginAtRevision, arg.Origin, arg.ID, arg.ExpectedOriginRevision)
+	var i Provider
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Name,
+		&i.Origin,
+		&i.OriginRevision,
+		&i.Status,
+		&i.StatusRevision,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ArchivedAt,
+	)
+	return i, err
+}
+
+const commitProviderStatusAtRevision = `-- name: CommitProviderStatusAtRevision :one
+UPDATE providers
+SET status = $1, status_revision = status_revision + 1,
+    archived_at = CASE WHEN $1::text = 'archived' THEN now() ELSE NULL END,
+    updated_at = now()
+WHERE id = $2
+  AND status_revision = $3
+  AND status IS DISTINCT FROM $1
+RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at
+`
+
+type CommitProviderStatusAtRevisionParams struct {
+	Status                 string
+	ID                     int64
+	ExpectedStatusRevision int64
+}
+
+func (q *Queries) CommitProviderStatusAtRevision(ctx context.Context, arg CommitProviderStatusAtRevisionParams) (Provider, error) {
+	row := q.db.QueryRow(ctx, commitProviderStatusAtRevision, arg.Status, arg.ID, arg.ExpectedStatusRevision)
+	var i Provider
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Name,
+		&i.Origin,
+		&i.OriginRevision,
+		&i.Status,
+		&i.StatusRevision,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ArchivedAt,
+	)
+	return i, err
+}
+
+const countEnabledChannelsByProvider = `-- name: CountEnabledChannelsByProvider :one
+SELECT COUNT(*) FROM channels WHERE provider_id = $1 AND status = 'enabled'
+`
+
+func (q *Queries) CountEnabledChannelsByProvider(ctx context.Context, providerID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countEnabledChannelsByProvider, providerID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNonArchivedChannelsByProvider = `-- name: CountNonArchivedChannelsByProvider :one
+SELECT COUNT(*) FROM channels WHERE provider_id = $1 AND status <> 'archived'
+`
+
+func (q *Queries) CountNonArchivedChannelsByProvider(ctx context.Context, providerID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countNonArchivedChannelsByProvider, providerID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const countProviders = `-- name: CountProviders :one
@@ -131,26 +149,35 @@ func (q *Queries) CountProviders(ctx context.Context, arg CountProvidersParams) 
 }
 
 const createProvider = `-- name: CreateProvider :one
-INSERT INTO providers (slug, name, status)
-VALUES ($1, $2, $3)
-RETURNING id, slug, name, status, created_at, updated_at, archived_at
+INSERT INTO providers (slug, name, origin, status)
+VALUES ($1, $2, $3, $4)
+RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at
 `
 
 type CreateProviderParams struct {
 	Slug   string
 	Name   string
+	Origin string
 	Status string
 }
 
 // CreateProvider 创建 provider；slug 全局唯一由 DB 唯一约束保证。
 func (q *Queries) CreateProvider(ctx context.Context, arg CreateProviderParams) (Provider, error) {
-	row := q.db.QueryRow(ctx, createProvider, arg.Slug, arg.Name, arg.Status)
+	row := q.db.QueryRow(ctx, createProvider,
+		arg.Slug,
+		arg.Name,
+		arg.Origin,
+		arg.Status,
+	)
 	var i Provider
 	err := row.Scan(
 		&i.ID,
 		&i.Slug,
 		&i.Name,
+		&i.Origin,
+		&i.OriginRevision,
 		&i.Status,
+		&i.StatusRevision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ArchivedAt,
@@ -159,28 +186,17 @@ func (q *Queries) CreateProvider(ctx context.Context, arg CreateProviderParams) 
 }
 
 const deleteProvider = `-- name: DeleteProvider :execrows
-WITH released_origin_ops AS (
-    UPDATE origin_routing_operations
-    SET provider_id = NULL, origin_id = NULL, updated_at = now()
+WITH deleted_terminal_ops AS (
+    DELETE FROM provider_routing_operations
     WHERE provider_id = $1
       AND state IN ('committed', 'aborted')
-),
-deleted_origins AS (
-    DELETE FROM provider_origins WHERE provider_origins.provider_id = $1
 )
 DELETE FROM providers WHERE providers.id = $1
 `
 
 // DeleteProvider 物理删除 provider，用于清理录错且从未使用的脏数据。
-// provider 自身子表只有「上游源站」provider_origins（P4 引入）：本语句在单条数据修改型 CTE 内
-// 连带清理源站及其操作日志——
-//  1. 终态（committed/aborted）origin_routing_operations 置空 provider_id/origin_id（保留 transitions
-//     审计摘要，释放其对 providers/provider_origins 的 RESTRICT 外键），符合 000009 迁移「永久删除前
-//     置空但保留摘要」的既定设计；未终态（preparing/prepared/db_committed）操作仍以 RESTRICT 挡删，
-//     避免删除进行中的运行态操作。
-//  2. 删除该 provider 名下所有源站。
-//
-// 源站/provider 本身不做请求/账务级联：一旦名下仍有 channel，或 provider/其源站被请求/账务历史
+// 终态 provider_routing_operations 随 Provider 清理；非终态操作通过 RESTRICT 阻止删除。
+// Provider 本身不做请求/账务级联：一旦名下仍有 channel，或 provider 被请求/账务历史
 // （request_records/request_attempts/cost_snapshots/channel_cost_exposures/settlement_recovery_jobs
 // 等 NO ACTION 外键）引用，整条语句报 23503 全部回滚，上层降级为 conflict，提示先删渠道或改用停用。
 // 数据修改型 CTE 保证三段各执行一次、外键在语句末统一校验，故清子表 + 删主体在单语句内原子完成。
@@ -193,7 +209,7 @@ func (q *Queries) DeleteProvider(ctx context.Context, id int64) (int64, error) {
 }
 
 const getProvider = `-- name: GetProvider :one
-SELECT id, slug, name, status, created_at, updated_at, archived_at
+SELECT id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at
 FROM providers
 WHERE id = $1
 LIMIT 1
@@ -207,7 +223,10 @@ func (q *Queries) GetProvider(ctx context.Context, id int64) (Provider, error) {
 		&i.ID,
 		&i.Slug,
 		&i.Name,
+		&i.Origin,
+		&i.OriginRevision,
 		&i.Status,
+		&i.StatusRevision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ArchivedAt,
@@ -215,50 +234,8 @@ func (q *Queries) GetProvider(ctx context.Context, id int64) (Provider, error) {
 	return i, err
 }
 
-const listEnabledRoutesEmptiedByProvider = `-- name: ListEnabledRoutesEmptiedByProvider :many
-SELECT DISTINCT rt.id, rt.name
-FROM routes rt
-JOIN route_channels target ON target.route_id = rt.id
-JOIN channels target_channel ON target_channel.id = target.channel_id AND target_channel.provider_id = $1
-WHERE rt.status = 'enabled'
-  AND NOT EXISTS (
-      SELECT 1
-      FROM route_channels other
-      JOIN channels other_channel ON other_channel.id = other.channel_id
-      WHERE other.route_id = rt.id
-        AND other_channel.provider_id <> $1
-  )
-ORDER BY rt.id
-`
-
-type ListEnabledRoutesEmptiedByProviderRow struct {
-	ID   int64
-	Name string
-}
-
-// 归档目标 provider 全部渠道后将失去最后一个显式池成员的启用线路。
-func (q *Queries) ListEnabledRoutesEmptiedByProvider(ctx context.Context, providerID int64) ([]ListEnabledRoutesEmptiedByProviderRow, error) {
-	rows, err := q.db.Query(ctx, listEnabledRoutesEmptiedByProvider, providerID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListEnabledRoutesEmptiedByProviderRow
-	for rows.Next() {
-		var i ListEnabledRoutesEmptiedByProviderRow
-		if err := rows.Scan(&i.ID, &i.Name); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listProviders = `-- name: ListProviders :many
-SELECT id, slug, name, status, created_at, updated_at, archived_at
+SELECT id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at
 FROM providers
 ORDER BY id
 `
@@ -277,7 +254,10 @@ func (q *Queries) ListProviders(ctx context.Context) ([]Provider, error) {
 			&i.ID,
 			&i.Slug,
 			&i.Name,
+			&i.Origin,
+			&i.OriginRevision,
 			&i.Status,
+			&i.StatusRevision,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ArchivedAt,
@@ -293,7 +273,7 @@ func (q *Queries) ListProviders(ctx context.Context) ([]Provider, error) {
 }
 
 const listProvidersPage = `-- name: ListProvidersPage :many
-SELECT id, slug, name, status, created_at, updated_at, archived_at
+SELECT id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at
 FROM providers
 WHERE ($1::text IS NULL OR status = $1::text)
   AND (
@@ -331,7 +311,10 @@ func (q *Queries) ListProvidersPage(ctx context.Context, arg ListProvidersPagePa
 			&i.ID,
 			&i.Slug,
 			&i.Name,
+			&i.Origin,
+			&i.OriginRevision,
 			&i.Status,
+			&i.StatusRevision,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ArchivedAt,
@@ -384,7 +367,7 @@ const providerOpsChannels = `-- name: ProviderOpsChannels :many
 SELECT
     c.id,
     c.name,
-    pe.base_url,
+    p.origin,
     c.status,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
@@ -404,13 +387,13 @@ SELECT
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99
 FROM channels c
-JOIN provider_origins pe ON pe.id = c.provider_origin_id
+JOIN providers p ON p.id = c.provider_id
 LEFT JOIN request_attempts a
     ON a.channel_id = c.id
     AND ($1::timestamptz IS NULL OR a.created_at >= $1::timestamptz)
     AND ($2::timestamptz IS NULL OR a.created_at < $2::timestamptz)
 WHERE c.provider_id = $3
-GROUP BY c.id, c.name, pe.base_url, c.status
+GROUP BY c.id, c.name, p.origin, c.status
 ORDER BY attempt_total DESC, c.id
 `
 
@@ -423,7 +406,7 @@ type ProviderOpsChannelsParams struct {
 type ProviderOpsChannelsRow struct {
 	ID               int64
 	Name             string
-	BaseUrl          string
+	Origin           string
 	Status           string
 	AttemptTotal     int64
 	AttemptSucceeded int64
@@ -448,7 +431,7 @@ func (q *Queries) ProviderOpsChannels(ctx context.Context, arg ProviderOpsChanne
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
-			&i.BaseUrl,
+			&i.Origin,
 			&i.Status,
 			&i.AttemptTotal,
 			&i.AttemptSucceeded,
@@ -505,7 +488,7 @@ tps AS (
       AND ($3::timestamptz IS NULL OR a.created_at < $3::timestamptz)
 ),
 attempts AS (
-    SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_id, provider_origin_base_url_revision, provider_origin_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_origin_disposition, breaker_channel_disposition, fault_party
+    SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_revision, provider_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_provider_disposition, breaker_channel_disposition, fault_party
     FROM request_attempts a
     WHERE a.provider_id = $1
       AND ($2::timestamptz IS NULL OR a.created_at >= $2::timestamptz)
@@ -825,20 +808,10 @@ SELECT
     p.slug,
     p.name,
     p.status,
+    p.origin,
+    p.origin_revision,
+    p.status_revision,
     p.created_at,
-    COALESCE((
-        SELECT jsonb_agg(
-            jsonb_build_object(
-                'id', pe.id,
-                'name', pe.name,
-                'base_url', pe.base_url,
-                'status', pe.status
-            )
-            ORDER BY pe.id
-        )
-        FROM provider_origins pe
-        WHERE pe.provider_id = p.id
-    ), '[]'::jsonb)::text AS origins,
     (SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id) AS channel_total,
     (
         SELECT COUNT(DISTINCT cm.model_id)
@@ -909,15 +882,17 @@ type ProvidersOpsTableParams struct {
 }
 
 type ProvidersOpsTableRow struct {
-	ID           int64
-	Slug         string
-	Name         string
-	Status       string
-	CreatedAt    pgtype.Timestamptz
-	Origins      string
-	ChannelTotal int64
-	ModelsCount  int64
-	RoutesCount  int64
+	ID             int64
+	Slug           string
+	Name           string
+	Status         string
+	Origin         string
+	OriginRevision int64
+	StatusRevision int64
+	CreatedAt      pgtype.Timestamptz
+	ChannelTotal   int64
+	ModelsCount    int64
+	RoutesCount    int64
 }
 
 // §3.2 服务商聚合视图只读运维聚合。轻聚合：无 12 卡，表 + 4 Tab 抽屉。
@@ -945,8 +920,10 @@ func (q *Queries) ProvidersOpsTable(ctx context.Context, arg ProvidersOpsTablePa
 			&i.Slug,
 			&i.Name,
 			&i.Status,
+			&i.Origin,
+			&i.OriginRevision,
+			&i.StatusRevision,
 			&i.CreatedAt,
-			&i.Origins,
 			&i.ChannelTotal,
 			&i.ModelsCount,
 			&i.RoutesCount,
@@ -982,8 +959,12 @@ func (q *Queries) ProvidersOpsTableCount(ctx context.Context, arg ProvidersOpsTa
 
 const restoreProvider = `-- name: RestoreProvider :execrows
 UPDATE providers
-SET status = 'disabled', archived_at = NULL
-WHERE id = $1 AND status = 'archived'
+SET status = 'disabled', status_revision = status_revision + 1,
+    origin = regexp_replace(origin, '__archived_' || id::text || '$', ''),
+    archived_at = NULL, updated_at = now()
+WHERE id = $1
+  AND status = 'archived'
+  AND origin LIKE '%__archived_' || id::text
 `
 
 // RestoreProvider 取消归档 provider：archived → disabled（archived_at 清空）。不向下级联恢复渠道。
@@ -997,26 +978,28 @@ func (q *Queries) RestoreProvider(ctx context.Context, id int64) (int64, error) 
 
 const updateProvider = `-- name: UpdateProvider :one
 UPDATE providers
-SET name = $1, status = $2, updated_at = now()
-WHERE id = $3
-RETURNING id, slug, name, status, created_at, updated_at, archived_at
+SET name = $1, updated_at = now()
+WHERE id = $2
+RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at
 `
 
 type UpdateProviderParams struct {
-	Name   string
-	Status string
-	ID     int64
+	Name string
+	ID   int64
 }
 
-// UpdateProvider 更新 provider 的展示名与启停状态；slug 作为稳定业务标识不可变。
+// UpdateProvider 更新 provider 的展示名；slug、origin 与 status 使用各自专用入口。
 func (q *Queries) UpdateProvider(ctx context.Context, arg UpdateProviderParams) (Provider, error) {
-	row := q.db.QueryRow(ctx, updateProvider, arg.Name, arg.Status, arg.ID)
+	row := q.db.QueryRow(ctx, updateProvider, arg.Name, arg.ID)
 	var i Provider
 	err := row.Scan(
 		&i.ID,
 		&i.Slug,
 		&i.Name,
+		&i.Origin,
+		&i.OriginRevision,
 		&i.Status,
+		&i.StatusRevision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ArchivedAt,

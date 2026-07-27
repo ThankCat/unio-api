@@ -93,10 +93,10 @@ type NonStreamEndpointResolver func(candidate routing.ChatRouteCandidate) reques
 // candidate. It is intentionally narrow: the first attempt is already terminal before Match is
 // evaluated, and the second transport must pass a fresh permit admission and create a new attempt.
 type NonStreamTransparentFallback struct {
-	Match             func(candidate routing.ChatRouteCandidate, err error) bool
+	Match            func(candidate routing.ChatRouteCandidate, err error) bool
 	UpstreamEndpoint requestlog.UpstreamEndpoint
-	ResolveAdapter    ResolveAdapter
-	Invoke            NonStreamInvoke
+	ResolveAdapter   ResolveAdapter
+	Invoke           NonStreamInvoke
 }
 
 // RunNonStreamParams 是驱动一次非流式候选 fallback 循环所需的协议无关参数。
@@ -115,7 +115,7 @@ type RunNonStreamParams struct {
 	// TransparentFallback, when matched, performs exactly one separately admitted transport on the
 	// same candidate. Compact Native 404/405 -> Synthetic is the only current consumer.
 	EndpointForCandidate NonStreamEndpointResolver
-	TransparentFallback   *NonStreamTransparentFallback
+	TransparentFallback  *NonStreamTransparentFallback
 
 	// EstimatedTokens 是本请求保守预估的输入 token 数，用于 TPM 限流的上游调用前预占（P2-8）。
 	// 结算后由 runner 按真实 billable token 回填差额。0 表示不参与 TPM 预占（仍走 RPM/RPD）。
@@ -146,14 +146,14 @@ type RunResult struct {
 // TransportAttempt is one persisted attempt that proceeds to a real upstream
 // transport. Admission-denied candidates are intentionally absent from this chain.
 type TransportAttempt struct {
-	ChannelID         int64                        `json:"channel_id"`
+	ChannelID        int64                       `json:"channel_id"`
 	UpstreamEndpoint requestlog.UpstreamEndpoint `json:"upstream_endpoint"`
 }
 
 func (r *RunResult) recordTransportAttempt(candidate routing.ChatRouteCandidate, endpoint requestlog.UpstreamEndpoint) {
 	r.Attempts++
 	r.TransportChain = append(r.TransportChain, TransportAttempt{
-		ChannelID:         candidate.Channel.ID,
+		ChannelID:        candidate.Channel.ID,
 		UpstreamEndpoint: endpoint,
 	})
 }
@@ -239,7 +239,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 		if r.permitManager != nil {
 			admission, owner, err := r.acquireAttemptWithHeadWait(ctx, AttemptPermitAcquireParams{
 				Candidate:            candidate,
-				UpstreamEndpoint:    endpoint,
+				UpstreamEndpoint:     endpoint,
 				RequestMode:          breakerstore.ModeNonStream,
 				EstimatedInputTokens: params.EstimatedTokens,
 			}, candIdx == 0, &headWaitUsed)
@@ -343,7 +343,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			if r.permitManager != nil {
 				admission, owner, acquireErr := r.acquireAttemptWithHeadWait(ctx, AttemptPermitAcquireParams{
 					Candidate:            candidate,
-					UpstreamEndpoint:    fallback.UpstreamEndpoint,
+					UpstreamEndpoint:     fallback.UpstreamEndpoint,
 					RequestMode:          breakerstore.ModeNonStream,
 					EstimatedInputTokens: params.EstimatedTokens,
 				}, candIdx == 0, &headWaitUsed)

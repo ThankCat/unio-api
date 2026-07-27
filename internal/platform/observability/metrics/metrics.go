@@ -133,37 +133,37 @@ type Metrics struct {
 	routingMarginGuard           *prometheus.CounterVec
 	routingTraceWrite            *prometheus.CounterVec
 
-	breakerState                          *prometheus.GaugeVec
-	breakerTransitionTotal                *prometheus.CounterVec
-	breakerSkipTotal                      *prometheus.CounterVec
-	breakerStoreOperationTotal            *prometheus.CounterVec
-	breakerStoreLatencySeconds            *prometheus.HistogramVec
-	breakerStoreUnavailable               prometheus.Gauge
-	breakerStoreReady                     prometheus.Gauge
-	runtimeStateIntegrity                 *prometheus.GaugeVec
-	runtimeStateLossRecoveryTotal         *prometheus.CounterVec
-	requestAdmissionOperationTotal        *prometheus.CounterVec
-	requestAdmissionActive                prometheus.Gauge
-	breakerPermitOperationTotal           *prometheus.CounterVec
-	breakerPermitActive                   prometheus.Gauge
-	breakerIgnoredResultTotal             *prometheus.CounterVec
-	channelConfigRevisionMismatchTotal    *prometheus.CounterVec
-	channelCredentialVerificationTotal    *prometheus.CounterVec
-	originBaseURLRevisionFence          *prometheus.GaugeVec
-	originBaseURLRevisionPendingSeconds *prometheus.GaugeVec
-	originStatusRevisionFence           *prometheus.GaugeVec
-	originStatusRevisionPendingSeconds  *prometheus.GaugeVec
-	originStatusRevisionMismatchTotal   *prometheus.CounterVec
-	runtimeControlOperationTotal          *prometheus.CounterVec
-	runtimeControlPending                 *prometheus.GaugeVec
-	runtimeControlPendingSeconds          *prometheus.GaugeVec
-	runtimeControlRevisionMismatchTotal   *prometheus.CounterVec
-	runtimeControlRecoveryTotal           *prometheus.CounterVec
-	originFailureTotal                  *prometheus.CounterVec
-	channelFailureTotal                   *prometheus.CounterVec
-	upstreamTTFTSeconds                   *prometheus.HistogramVec
-	upstreamTotalDurationSeconds          *prometheus.HistogramVec
-	balancedFinalWeight                   *prometheus.GaugeVec
+	breakerState                         *prometheus.GaugeVec
+	breakerTransitionTotal               *prometheus.CounterVec
+	breakerSkipTotal                     *prometheus.CounterVec
+	breakerStoreOperationTotal           *prometheus.CounterVec
+	breakerStoreLatencySeconds           *prometheus.HistogramVec
+	breakerStoreUnavailable              prometheus.Gauge
+	breakerStoreReady                    prometheus.Gauge
+	runtimeStateIntegrity                *prometheus.GaugeVec
+	runtimeStateLossRecoveryTotal        *prometheus.CounterVec
+	requestAdmissionOperationTotal       *prometheus.CounterVec
+	requestAdmissionActive               prometheus.Gauge
+	breakerPermitOperationTotal          *prometheus.CounterVec
+	breakerPermitActive                  prometheus.Gauge
+	breakerIgnoredResultTotal            *prometheus.CounterVec
+	channelConfigRevisionMismatchTotal   *prometheus.CounterVec
+	channelCredentialVerificationTotal   *prometheus.CounterVec
+	providerOriginRevisionFence          *prometheus.GaugeVec
+	providerOriginRevisionPendingSeconds *prometheus.GaugeVec
+	providerStatusRevisionFence          *prometheus.GaugeVec
+	providerStatusRevisionPendingSeconds *prometheus.GaugeVec
+	providerStatusRevisionMismatchTotal  *prometheus.CounterVec
+	runtimeControlOperationTotal         *prometheus.CounterVec
+	runtimeControlPending                *prometheus.GaugeVec
+	runtimeControlPendingSeconds         *prometheus.GaugeVec
+	runtimeControlRevisionMismatchTotal  *prometheus.CounterVec
+	runtimeControlRecoveryTotal          *prometheus.CounterVec
+	providerFailureTotal                 *prometheus.CounterVec
+	channelFailureTotal                  *prometheus.CounterVec
+	upstreamTTFTSeconds                  *prometheus.HistogramVec
+	upstreamTotalDurationSeconds         *prometheus.HistogramVec
+	balancedFinalWeight                  *prometheus.GaugeVec
 }
 
 // New 创建并注册 Unio 全部指标。
@@ -376,25 +376,25 @@ func New() *Metrics {
 			Name: "unio_gateway_channel_credential_rotation_verification_total",
 			Help: "Credential rotation verification outcomes.",
 		}, []string{"state"}),
-		originBaseURLRevisionFence: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "unio_gateway_origin_base_url_revision_fence",
-			Help: "Origin BaseURL revision fence state.",
-		}, []string{"origin_id", "state"}),
-		originBaseURLRevisionPendingSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "unio_gateway_origin_base_url_revision_pending_seconds",
-			Help: "Seconds the Origin BaseURL revision fence has remained pending.",
-		}, []string{"origin_id"}),
-		originStatusRevisionFence: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "unio_gateway_origin_status_revision_fence",
-			Help: "Origin status revision fence state.",
-		}, []string{"origin_id", "state"}),
-		originStatusRevisionPendingSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "unio_gateway_origin_status_revision_pending_seconds",
-			Help: "Seconds the Origin status revision fence has remained pending.",
-		}, []string{"origin_id"}),
-		originStatusRevisionMismatchTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "unio_gateway_origin_status_revision_mismatch_total",
-			Help: "Origin status revision mismatches by bounded operation.",
+		providerOriginRevisionFence: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "unio_gateway_origin_revision_fence",
+			Help: "Provider origin revision fence state.",
+		}, []string{"provider_id", "state"}),
+		providerOriginRevisionPendingSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "unio_gateway_origin_revision_pending_seconds",
+			Help: "Seconds the Provider origin revision fence has remained pending.",
+		}, []string{"provider_id"}),
+		providerStatusRevisionFence: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "unio_gateway_provider_status_revision_fence",
+			Help: "Provider status revision fence state.",
+		}, []string{"provider_id", "state"}),
+		providerStatusRevisionPendingSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "unio_gateway_provider_status_revision_pending_seconds",
+			Help: "Seconds the Provider status revision fence has remained pending.",
+		}, []string{"provider_id"}),
+		providerStatusRevisionMismatchTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_provider_status_revision_mismatch_total",
+			Help: "Provider status revision mismatches by bounded operation.",
 		}, []string{"operation"}),
 		runtimeControlOperationTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "unio_gateway_runtime_control_operation_total",
@@ -416,10 +416,10 @@ func New() *Metrics {
 			Name: "unio_gateway_runtime_control_recovery_total",
 			Help: "Runtime-control reconciliation outcomes by fixed target.",
 		}, []string{"target", "result"}),
-		originFailureTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "unio_gateway_origin_failure_total",
-			Help: "Origin-attributed failures by business ID and bounded category.",
-		}, []string{"origin_id", "category"}),
+		providerFailureTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_provider_failure_total",
+			Help: "Provider-attributed failures by business ID and bounded category.",
+		}, []string{"provider_id", "category"}),
 		channelFailureTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "unio_gateway_channel_failure_total",
 			Help: "Channel-attributed failures by business ID and bounded category.",
@@ -428,12 +428,12 @@ func New() *Metrics {
 			Name:    "unio_gateway_upstream_ttft_seconds",
 			Help:    "Upstream first-token latency. Only valid streaming samples are observed.",
 			Buckets: upstreamLatencyBuckets,
-		}, []string{"provider_id", "origin_id", "channel_id", "protocol", "endpoint", "sample_source"}),
+		}, []string{"provider_id", "channel_id", "protocol", "endpoint", "sample_source"}),
 		upstreamTotalDurationSeconds: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "unio_gateway_upstream_total_duration_seconds",
 			Help:    "Full upstream transport duration for streaming and non-streaming attempts.",
 			Buckets: upstreamLatencyBuckets,
-		}, []string{"provider_id", "origin_id", "channel_id", "protocol", "endpoint", "mode"}),
+		}, []string{"provider_id", "channel_id", "protocol", "endpoint", "mode"}),
 		balancedFinalWeight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "unio_gateway_balanced_final_weight",
 			Help: "Latest balanced-routing final weight by route and channel business ID.",
@@ -486,17 +486,17 @@ func New() *Metrics {
 		m.breakerIgnoredResultTotal,
 		m.channelConfigRevisionMismatchTotal,
 		m.channelCredentialVerificationTotal,
-		m.originBaseURLRevisionFence,
-		m.originBaseURLRevisionPendingSeconds,
-		m.originStatusRevisionFence,
-		m.originStatusRevisionPendingSeconds,
-		m.originStatusRevisionMismatchTotal,
+		m.providerOriginRevisionFence,
+		m.providerOriginRevisionPendingSeconds,
+		m.providerStatusRevisionFence,
+		m.providerStatusRevisionPendingSeconds,
+		m.providerStatusRevisionMismatchTotal,
 		m.runtimeControlOperationTotal,
 		m.runtimeControlPending,
 		m.runtimeControlPendingSeconds,
 		m.runtimeControlRevisionMismatchTotal,
 		m.runtimeControlRecoveryTotal,
-		m.originFailureTotal,
+		m.providerFailureTotal,
 		m.channelFailureTotal,
 		m.upstreamTTFTSeconds,
 		m.upstreamTotalDurationSeconds,
@@ -667,7 +667,7 @@ func (m *Metrics) IncRoutingTraceWrite(result string) {
 	m.routingTraceWrite.WithLabelValues(result).Inc()
 }
 
-// SetBreakerState exposes one-hot state for a channel or Origin breaker.
+// SetBreakerState exposes one-hot state for a Provider or Channel breaker.
 func (m *Metrics) SetBreakerState(scope, id, state string) {
 	for _, candidate := range []string{"closed", "open", "half_open"} {
 		value := 0.0
@@ -738,18 +738,18 @@ func (m *Metrics) IncChannelCredentialRotationVerification(state string) {
 	m.channelCredentialVerificationTotal.WithLabelValues(state).Inc()
 }
 
-func (m *Metrics) SetOriginBaseURLRevisionFence(originID, state string, pending time.Duration) {
-	setFenceState(m.originBaseURLRevisionFence, originID, state)
-	m.originBaseURLRevisionPendingSeconds.WithLabelValues(originID).Set(nonNegativeSeconds(pending))
+func (m *Metrics) SetOriginRevisionFence(providerID, state string, pending time.Duration) {
+	setFenceState(m.providerOriginRevisionFence, providerID, state)
+	m.providerOriginRevisionPendingSeconds.WithLabelValues(providerID).Set(nonNegativeSeconds(pending))
 }
 
-func (m *Metrics) SetOriginStatusRevisionFence(originID, state string, pending time.Duration) {
-	setFenceState(m.originStatusRevisionFence, originID, state)
-	m.originStatusRevisionPendingSeconds.WithLabelValues(originID).Set(nonNegativeSeconds(pending))
+func (m *Metrics) SetProviderStatusRevisionFence(providerID, state string, pending time.Duration) {
+	setFenceState(m.providerStatusRevisionFence, providerID, state)
+	m.providerStatusRevisionPendingSeconds.WithLabelValues(providerID).Set(nonNegativeSeconds(pending))
 }
 
-func (m *Metrics) IncOriginStatusRevisionMismatch(operation string) {
-	m.originStatusRevisionMismatchTotal.WithLabelValues(operation).Inc()
+func (m *Metrics) IncProviderStatusRevisionMismatch(operation string) {
+	m.providerStatusRevisionMismatchTotal.WithLabelValues(operation).Inc()
 }
 
 func (m *Metrics) IncRuntimeControlOperation(target, operation, result string) {
@@ -772,8 +772,8 @@ func (m *Metrics) IncRuntimeControlRecovery(target, result string) {
 	m.runtimeControlRecoveryTotal.WithLabelValues(target, result).Inc()
 }
 
-func (m *Metrics) IncOriginFailure(originID, category string) {
-	m.originFailureTotal.WithLabelValues(originID, category).Inc()
+func (m *Metrics) IncProviderFailure(originID, category string) {
+	m.providerFailureTotal.WithLabelValues(originID, category).Inc()
 }
 
 func (m *Metrics) IncChannelFailure(channelID, category string) {
@@ -783,16 +783,16 @@ func (m *Metrics) IncChannelFailure(channelID, category string) {
 // ObserveUpstreamTiming records total duration for every real transport and TTFT only for a
 // valid stream-only FirstToken sample. A nil TTFT therefore emits no TTFT observation.
 func (m *Metrics) ObserveUpstreamTiming(
-	providerID, originID, channelID, protocol, endpoint, mode string,
+	providerID, channelID, protocol, endpoint, mode string,
 	total time.Duration,
 	ttft *time.Duration,
 ) {
 	m.upstreamTotalDurationSeconds.WithLabelValues(
-		providerID, originID, channelID, protocol, endpoint, mode,
+		providerID, channelID, protocol, endpoint, mode,
 	).Observe(nonNegativeSeconds(total))
 	if ttft != nil && *ttft >= 0 {
 		m.upstreamTTFTSeconds.WithLabelValues(
-			providerID, originID, channelID, protocol, endpoint, "stream_only",
+			providerID, channelID, protocol, endpoint, "stream_only",
 		).Observe(ttft.Seconds())
 	}
 }
@@ -804,13 +804,13 @@ func (m *Metrics) SetBalancedFinalWeight(routeID, channelID string, weight float
 	m.balancedFinalWeight.WithLabelValues(routeID, channelID).Set(weight)
 }
 
-func setFenceState(gauge *prometheus.GaugeVec, originID, state string) {
+func setFenceState(gauge *prometheus.GaugeVec, providerID, state string) {
 	for _, candidate := range []string{"active", "pending"} {
 		value := 0.0
 		if candidate == state {
 			value = 1
 		}
-		gauge.WithLabelValues(originID, candidate).Set(value)
+		gauge.WithLabelValues(providerID, candidate).Set(value)
 	}
 }
 

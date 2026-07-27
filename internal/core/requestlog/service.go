@@ -72,7 +72,7 @@ type CreateRequestParams struct {
 	APIKeyID         int64
 	RequestedModelID string
 	IngressProtocol  Protocol
-	Endpoint        Endpoint
+	Endpoint         Endpoint
 	Stream           bool
 	StartedAt        time.Time
 	// 批二富化（均可空）：线路快照 / 归一推理强度 + 原始预算 / 客户端 IP。
@@ -90,7 +90,7 @@ type RequestRecord struct {
 	APIKeyID            int64
 	RequestedModelID    string
 	IngressProtocol     Protocol
-	Endpoint           Endpoint
+	Endpoint            Endpoint
 	ResponseModelID     *string
 	ResponseProtocol    *string
 	ResponseID          *string
@@ -164,58 +164,56 @@ type MarkRequestCanceledParams struct {
 
 // CreateAttemptParams 表示创建 request attempt 所需的上游尝试事实。
 type CreateAttemptParams struct {
-	RequestRecordID                 int64
-	AttemptIndex                    int
-	ProviderID                      int64
-	ChannelID                       int64
-	AdapterKey                      string
-	UpstreamModel                   string
-	UpstreamProtocol                Protocol
-	ProviderOriginID              *int64
-	ProviderOriginBaseURLRevision *int64
-	ProviderOriginStatusRevision  *int64
-	ChannelConfigRevision           *int64
-	RoutingCandidateIndex           *int
-	UpstreamEndpoint               UpstreamEndpoint
-	StartedAt                       time.Time
+	RequestRecordID        int64
+	AttemptIndex           int
+	ProviderID             int64
+	ChannelID              int64
+	AdapterKey             string
+	UpstreamModel          string
+	UpstreamProtocol       Protocol
+	OriginRevision         *int64
+	ProviderStatusRevision *int64
+	ChannelConfigRevision  *int64
+	RoutingCandidateIndex  *int
+	UpstreamEndpoint       UpstreamEndpoint
+	StartedAt              time.Time
 }
 
 // AttemptRecord 表示一次上游 channel 尝试记录。
 type AttemptRecord struct {
-	ID                              int64
-	RequestRecordID                 int64
-	AttemptIndex                    int
-	ProviderID                      int64
-	ChannelID                       int64
-	AdapterKey                      string
-	UpstreamModel                   string
-	UpstreamProtocol                Protocol
-	ProviderOriginID              *int64
-	ProviderOriginBaseURLRevision *int64
-	ProviderOriginStatusRevision  *int64
-	ChannelConfigRevision           *int64
-	RoutingCandidateIndex           *int
-	UpstreamEndpoint               UpstreamEndpoint
-	UpstreamResponseID              *string
-	UpstreamResponseModel           *string
-	UpstreamFinishReason            *string
-	FinishClass                     *string
-	Status                          AttemptStatus
-	UpstreamStatusCode              *int
-	UpstreamRequestID               *string
-	ErrorCode                       *string
-	ErrorMessage                    *string
-	InternalErrorDetail             *string
-	ResponseStartedAt               *time.Time
-	UpstreamStartedAt               *time.Time
-	UpstreamFirstTokenAt            *time.Time
-	UpstreamCompletedAt             *time.Time
-	BreakerOriginDisposition      *string
-	BreakerChannelDisposition       *string
-	FinalUsageReceived              bool
-	UsageMappingVersion             *string
-	StartedAt                       time.Time
-	CompletedAt                     *time.Time
+	ID                         int64
+	RequestRecordID            int64
+	AttemptIndex               int
+	ProviderID                 int64
+	ChannelID                  int64
+	AdapterKey                 string
+	UpstreamModel              string
+	UpstreamProtocol           Protocol
+	OriginRevision             *int64
+	ProviderStatusRevision     *int64
+	ChannelConfigRevision      *int64
+	RoutingCandidateIndex      *int
+	UpstreamEndpoint           UpstreamEndpoint
+	UpstreamResponseID         *string
+	UpstreamResponseModel      *string
+	UpstreamFinishReason       *string
+	FinishClass                *string
+	Status                     AttemptStatus
+	UpstreamStatusCode         *int
+	UpstreamRequestID          *string
+	ErrorCode                  *string
+	ErrorMessage               *string
+	InternalErrorDetail        *string
+	ResponseStartedAt          *time.Time
+	UpstreamStartedAt          *time.Time
+	UpstreamFirstTokenAt       *time.Time
+	UpstreamCompletedAt        *time.Time
+	BreakerProviderDisposition *string
+	BreakerChannelDisposition  *string
+	FinalUsageReceived         bool
+	UsageMappingVersion        *string
+	StartedAt                  time.Time
+	CompletedAt                *time.Time
 }
 
 // MarkAttemptSucceededParams 表示标记上游尝试成功所需的最终事实。
@@ -269,7 +267,7 @@ type RecordAttemptTimingParams struct {
 // RecordAttemptBreakerDispositionParams first-write-wins 地保存 AttemptPermit Finish 的双作用域结果。
 type RecordAttemptBreakerDispositionParams struct {
 	ID                  int64
-	OriginDisposition string
+	ProviderDisposition string
 	ChannelDisposition  string
 }
 

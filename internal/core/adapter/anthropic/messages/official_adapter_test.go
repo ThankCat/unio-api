@@ -34,7 +34,7 @@ func TestOfficialAdapterForwardsBetaHeadersPassthrough(t *testing.T) {
 	official := NewOfficialAdapter(server.Client(), nil)
 	maxTokens := 16
 	_, err := official.Messages(context.Background(), channel.Runtime{
-		BaseURL: server.URL,
+		Origin:  server.URL,
 		APIKey:  "test-key",
 		Timeout: 5 * time.Second,
 	}, MessageRequest{
@@ -80,7 +80,7 @@ func TestOfficialAdapterForwardsExtendedCacheTTLBeta(t *testing.T) {
 	official := NewOfficialAdapter(server.Client(), nil)
 	maxTokens := 16
 	_, err := official.Messages(context.Background(), channel.Runtime{
-		BaseURL: server.URL,
+		Origin:  server.URL,
 		APIKey:  "test-key",
 		Timeout: 5 * time.Second,
 	}, MessageRequest{
@@ -122,7 +122,7 @@ func TestOfficialAdapterBlocksBetaWithBillingGap(t *testing.T) {
 	official := NewOfficialAdapter(server.Client(), nil)
 	maxTokens := 16
 	_, err := official.Messages(context.Background(), channel.Runtime{
-		BaseURL: server.URL,
+		Origin:  server.URL,
 		APIKey:  "test-key",
 		Timeout: 5 * time.Second,
 	}, MessageRequest{

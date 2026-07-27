@@ -27,22 +27,17 @@ type providerOpsHandler struct {
 }
 
 type providerOpsRowDTO struct {
-	ID           int64                    `json:"id"`
-	Slug         string                   `json:"slug"`
-	Name         string                   `json:"name"`
-	Status       string                   `json:"status"`
-	CreatedAt    string                   `json:"created_at"`
-	Origins    []providerOpsOriginDTO `json:"origins"`
-	ChannelTotal int64                    `json:"channel_total"`
-	ModelsCount  int64                    `json:"models_count"`
-	RoutesCount  int64                    `json:"routes_count"`
-}
-
-type providerOpsOriginDTO struct {
-	ID      int64  `json:"id"`
-	Name    string `json:"name"`
-	BaseURL string `json:"base_url"`
-	Status  string `json:"status"`
+	ID             int64  `json:"id"`
+	Slug           string `json:"slug"`
+	Name           string `json:"name"`
+	Origin         string `json:"origin"`
+	OriginRevision int64  `json:"origin_revision"`
+	Status         string `json:"status"`
+	StatusRevision int64  `json:"status_revision"`
+	CreatedAt      string `json:"created_at"`
+	ChannelTotal   int64  `json:"channel_total"`
+	ModelsCount    int64  `json:"models_count"`
+	RoutesCount    int64  `json:"routes_count"`
 }
 
 type providerOpsDetailDTO struct {
@@ -81,7 +76,7 @@ type providerOpsRouteCatalogDTO struct {
 type providerOpsChannelDTO struct {
 	ID               int64                     `json:"id"`
 	Name             string                    `json:"name"`
-	BaseURL          string                    `json:"base_url"`
+	Origin           string                    `json:"origin"`
 	Status           string                    `json:"status"`
 	AttemptTotal     int64                     `json:"attempt_total"`
 	AttemptSucceeded int64                     `json:"attempt_succeeded"`
@@ -140,25 +135,11 @@ func (h *providerOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 }
 
 func providerOpsRowDTOFrom(row providerops.Row) providerOpsRowDTO {
-	origins := make([]providerOpsOriginDTO, 0, len(row.Origins))
-	for _, origin := range row.Origins {
-		origins = append(origins, providerOpsOriginDTO{
-			ID:      origin.ID,
-			Name:    origin.Name,
-			BaseURL: origin.BaseURL,
-			Status:  origin.Status,
-		})
-	}
 	return providerOpsRowDTO{
-		ID:           row.ID,
-		Slug:         row.Slug,
-		Name:         row.Name,
-		Status:       row.Status,
-		CreatedAt:    adminhttp.RFC3339(row.CreatedAt),
-		Origins:    origins,
-		ChannelTotal: row.ChannelTotal,
-		ModelsCount:  row.ModelsCount,
-		RoutesCount:  row.RoutesCount,
+		ID: row.ID, Slug: row.Slug, Name: row.Name, Origin: row.Origin,
+		OriginRevision: row.OriginRevision, Status: row.Status, StatusRevision: row.StatusRevision,
+		CreatedAt: adminhttp.RFC3339(row.CreatedAt), ChannelTotal: row.ChannelTotal,
+		ModelsCount: row.ModelsCount, RoutesCount: row.RoutesCount,
 	}
 }
 
@@ -269,7 +250,7 @@ func (h *providerOpsHandler) channels(w http.ResponseWriter, r *http.Request) {
 		out = append(out, providerOpsChannelDTO{
 			ID:               c.ID,
 			Name:             c.Name,
-			BaseURL:          c.BaseURL,
+			Origin:           c.Origin,
 			Status:           c.Status,
 			AttemptTotal:     c.AttemptTotal,
 			AttemptSucceeded: c.AttemptSucceeded,

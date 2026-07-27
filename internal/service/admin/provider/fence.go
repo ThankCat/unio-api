@@ -13,275 +13,163 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
-type providerStatusFenceOps interface {
-	PrepareOriginStatusRevisionBatch(ctx context.Context, providerID int64, transitions []breakerstore.OriginStatusRevisionTransition, maxBatch int, token, payload string) (breakerstore.FenceResult, error)
-	CommitOriginStatusRevisionBatch(ctx context.Context, providerID int64, transitions []breakerstore.OriginStatusRevisionTransition, token, payload string) (breakerstore.FenceResult, error)
-	AbortOriginStatusRevisionBatch(ctx context.Context, providerID int64, transitions []breakerstore.OriginStatusRevisionTransition, token, payload string) (breakerstore.FenceResult, error)
+type fencePublisher interface {
+	Publish(context.Context, runtimecontrol.ProviderFenceRequest) (runtimecontrol.PublishResult, error)
 }
 
-type providerStatusFencePublisher interface {
-	Publish(ctx context.Context, req runtimecontrol.OriginFenceRequest) (runtimecontrol.PublishResult, error)
-	WithOriginLocks(ctx context.Context, providerID int64, originIDs []int64, fn func(context.Context, pgx.Tx) error) error
+type fenceControl interface {
+	PrepareOriginRevision(context.Context, int64, int64, int64, string, string) (breakerstore.FenceResult, error)
+	CommitOriginRevision(context.Context, int64, string, string) (breakerstore.FenceResult, error)
+	AbortOriginRevision(context.Context, int64, string, string) (breakerstore.FenceResult, error)
+	PrepareProviderStatusRevision(context.Context, int64, int64, int64, string, string, string) (breakerstore.FenceResult, error)
+	CommitProviderStatusRevision(context.Context, int64, string, string) (breakerstore.FenceResult, error)
+	AbortProviderStatusRevision(context.Context, int64, string, string) (breakerstore.FenceResult, error)
 }
 
-// StatusFencer atomically publishes a Provider effective-status change to all affected Origins.
-type StatusFencer struct {
-	pub providerStatusFencePublisher
-	ops providerStatusFenceOps
+type Fencer struct {
+	publisher fencePublisher
+	control   fenceControl
 }
 
-func NewStatusFencer(pub providerStatusFencePublisher, ops providerStatusFenceOps) *StatusFencer {
-	if pub == nil || ops == nil {
-		panic("provider: status fencer requires publisher and store")
-	}
-	return &StatusFencer{pub: pub, ops: ops}
+func NewFencer(publisher fencePublisher, control fenceControl) *Fencer {
+	return &Fencer{publisher: publisher, control: control}
 }
 
-type providerStatusChange struct {
-	Current              sqlc.Provider
-	NextName             string
-	NextStatus           string
-	Origins            []sqlc.ProviderOrigin
-	MaxBatch             int
-	ArchiveReplacementID *int64
-	Archive              bool
-	Restore              bool
-}
-
-func (f *StatusFencer) publish(ctx context.Context, change providerStatusChange) (StatusChangeResult, error) {
-	transitions := providerOriginTransitions(change)
-	result := StatusChangeResult{AffectedOriginCount: len(transitions)}
-	allOriginIDs := make([]int64, len(change.Origins))
-	for i, origin := range change.Origins {
-		allOriginIDs[i] = origin.ID
+func (f *Fencer) UpdateOrigin(ctx context.Context, current sqlc.Provider, origin string, confirmed bool) (sqlc.Provider, bool, error) {
+	envelope := runtimecontrol.ProviderRoutingEnvelope{
+		Kind: runtimecontrol.ProviderFenceKindOrigin, ProviderID: current.ID,
+		CurrentOriginRevision: current.OriginRevision, NextOriginRevision: current.OriginRevision + 1,
+		CurrentStatusRevision: current.StatusRevision, NextStatusRevision: current.StatusRevision,
+		CurrentStatus: current.Status, NextStatus: current.Status, NextOrigin: origin,
 	}
-	if len(transitions) == 0 {
-		err := f.pub.WithOriginLocks(ctx, change.Current.ID, allOriginIDs, func(ctx context.Context, tx pgx.Tx) error {
-			if err := validateProviderChangeLocked(ctx, tx, change, nil); err != nil {
-				return err
-			}
-			return commitProviderChange(ctx, tx, change, nil)
-		})
-		if err != nil {
-			return StatusChangeResult{}, err
-		}
-		return result, nil
-	}
-	if change.MaxBatch < 1 || change.MaxBatch > 1024 || len(transitions) > change.MaxBatch {
-		return StatusChangeResult{}, conflict("provider origin status batch is too large")
-	}
-
-	routingTransitions := make([]runtimecontrol.OriginRoutingTransition, 0, len(transitions))
-	redisTransitions := make([]breakerstore.OriginStatusRevisionTransition, 0, len(transitions))
-	for _, transition := range transitions {
-		routingTransitions = append(routingTransitions, runtimecontrol.OriginRoutingTransition{
-			OriginID:             transition.origin.ID,
-			CurrentBaseURLRevision: transition.origin.BaseUrlRevision,
-			NextBaseURLRevision:    transition.origin.BaseUrlRevision,
-			CurrentStatusRevision:  transition.origin.StatusRevision,
-			NextStatusRevision:     transition.origin.StatusRevision + 1,
-			CurrentEffectiveStatus: transition.currentEffective,
-			NextEffectiveStatus:    transition.nextEffective,
-		})
-		redisTransitions = append(redisTransitions, breakerstore.OriginStatusRevisionTransition{
-			OriginID:          transition.origin.ID,
-			CurrentStatusRev:    transition.origin.StatusRevision,
-			NextStatusRev:       transition.origin.StatusRevision + 1,
-			NextEffectiveStatus: transition.nextEffective,
-		})
-	}
-	envelope := runtimecontrol.OriginRoutingEnvelope{
-		Kind:                  runtimecontrol.OriginFenceKindProviderStatusBatch,
-		ProviderID:            change.Current.ID,
-		CurrentProviderStatus: change.Current.Status,
-		NextProviderStatus:    change.NextStatus,
-		Transitions:           routingTransitions,
-	}
-	durable, payload, err := runtimecontrol.CanonicalOriginRoutingOperation(envelope, "", change.MaxBatch)
+	_, payload, err := runtimecontrol.CanonicalProviderRoutingOperation(envelope)
 	if err != nil {
-		return StatusChangeResult{}, err
+		return sqlc.Provider{}, false, err
 	}
-	token := providerFenceToken()
-	providerID := change.Current.ID
-	published, err := f.pub.Publish(ctx, runtimecontrol.OriginFenceRequest{
-		Kind:  runtimecontrol.OriginFenceKindProviderStatusBatch,
-		Token: token, ProviderID: &providerID, Transitions: durable, Payload: payload, MaxBatch: change.MaxBatch,
+	token, err := randomToken()
+	if err != nil {
+		return sqlc.Provider{}, false, err
+	}
+	result, err := f.publisher.Publish(ctx, runtimecontrol.ProviderFenceRequest{
+		Envelope: envelope, Token: token, Payload: payload,
 		Prepare: func(ctx context.Context) (breakerstore.FenceResult, error) {
-			return f.ops.PrepareOriginStatusRevisionBatch(ctx, providerID, redisTransitions, change.MaxBatch, token, payload)
+			return f.control.PrepareOriginRevision(ctx, current.ID, current.OriginRevision, current.OriginRevision+1, token, payload)
 		},
 		Commit: func(ctx context.Context) (breakerstore.FenceResult, error) {
-			return f.ops.CommitOriginStatusRevisionBatch(ctx, providerID, redisTransitions, token, payload)
+			return f.control.CommitOriginRevision(ctx, current.ID, token, payload)
 		},
 		Abort: func(ctx context.Context) (breakerstore.FenceResult, error) {
-			return f.ops.AbortOriginStatusRevisionBatch(ctx, providerID, redisTransitions, token, payload)
+			return f.control.AbortOriginRevision(ctx, current.ID, token, payload)
 		},
 		ValidateLocked: func(ctx context.Context, tx pgx.Tx) error {
-			return validateProviderChangeLocked(ctx, tx, change, transitions)
+			var revision int64
+			var status string
+			if err := tx.QueryRow(ctx, `SELECT origin_revision, status FROM providers WHERE id=$1`, current.ID).Scan(&revision, &status); err != nil {
+				return err
+			}
+			if revision != current.OriginRevision || status == StatusArchived {
+				return conflict("provider origin revision is stale")
+			}
+			if !confirmed {
+				var enabled int64
+				if err := tx.QueryRow(ctx, `SELECT count(*) FROM channels WHERE provider_id=$1 AND status='enabled'`, current.ID).Scan(&enabled); err != nil {
+					return err
+				}
+				if enabled > 0 {
+					return conflict("changing provider origin with enabled channels requires confirmation")
+				}
+			}
+			return nil
 		},
 		BusinessCommit: func(ctx context.Context, tx pgx.Tx) error {
-			return commitProviderChange(ctx, tx, change, transitions)
+			command, err := tx.Exec(ctx, `UPDATE providers SET origin=$1, origin_revision=origin_revision+1, updated_at=now() WHERE id=$2 AND origin_revision=$3`, origin, current.ID, current.OriginRevision)
+			if err != nil {
+				return err
+			}
+			if command.RowsAffected() != 1 {
+				return conflict("provider origin revision is stale")
+			}
+			return nil
 		},
 	})
 	if err != nil {
-		return StatusChangeResult{}, err
+		return sqlc.Provider{}, false, err
 	}
-	result.RuntimeSyncPending = published.State == runtimecontrol.PublishRuntimeSyncPending
-	return result, nil
+	updated := current
+	updated.Origin = origin
+	updated.OriginRevision++
+	return updated, result.State == runtimecontrol.PublishRuntimeSyncPending, nil
 }
 
-type originStatusChange struct {
-	origin         sqlc.ProviderOrigin
-	currentEffective string
-	nextEffective    string
-}
-
-func providerOriginTransitions(change providerStatusChange) []originStatusChange {
-	out := make([]originStatusChange, 0, len(change.Origins))
-	for _, origin := range change.Origins {
-		currentEffective := runtimecontrol.EffectiveOriginStatus(change.Current.Status, origin.Status)
-		nextOriginStatus := origin.Status
-		if change.Archive && origin.Status != StatusArchived {
-			nextOriginStatus = StatusArchived
-		}
-		nextEffective := runtimecontrol.EffectiveOriginStatus(change.NextStatus, nextOriginStatus)
-		if currentEffective != nextEffective {
-			out = append(out, originStatusChange{origin: origin, currentEffective: currentEffective, nextEffective: nextEffective})
-		}
+func (f *Fencer) UpdateStatus(ctx context.Context, current sqlc.Provider, status string) (sqlc.Provider, bool, error) {
+	envelope := runtimecontrol.ProviderRoutingEnvelope{
+		Kind: runtimecontrol.ProviderFenceKindStatus, ProviderID: current.ID,
+		CurrentOriginRevision: current.OriginRevision, NextOriginRevision: current.OriginRevision,
+		CurrentStatusRevision: current.StatusRevision, NextStatusRevision: current.StatusRevision + 1,
+		CurrentStatus: current.Status, NextStatus: status,
 	}
-	return out
-}
-
-func validateProviderChangeLocked(ctx context.Context, tx pgx.Tx, change providerStatusChange, expected []originStatusChange) error {
-	var name, status string
-	if err := tx.QueryRow(ctx, `SELECT name, status FROM providers WHERE id=$1`, change.Current.ID).Scan(&name, &status); err != nil {
-		return err
-	}
-	if name != change.Current.Name || status != change.Current.Status {
-		return fmt.Errorf("provider changed concurrently")
-	}
-	rows, err := tx.Query(ctx, `SELECT id, provider_id, name, base_url, base_url_revision, status, status_revision,
-		archived_at, created_at, updated_at FROM provider_origins WHERE provider_id=$1 ORDER BY id`, change.Current.ID)
+	_, payload, err := runtimecontrol.CanonicalProviderRoutingOperation(envelope)
 	if err != nil {
-		return err
+		return sqlc.Provider{}, false, err
 	}
-	defer rows.Close()
-	current := make([]sqlc.ProviderOrigin, 0, len(change.Origins))
-	for rows.Next() {
-		var origin sqlc.ProviderOrigin
-		if err := rows.Scan(&origin.ID, &origin.ProviderID, &origin.Name, &origin.BaseUrl,
-			&origin.BaseUrlRevision, &origin.Status, &origin.StatusRevision,
-			&origin.ArchivedAt, &origin.CreatedAt, &origin.UpdatedAt); err != nil {
-			return err
-		}
-		current = append(current, origin)
+	token, err := randomToken()
+	if err != nil {
+		return sqlc.Provider{}, false, err
 	}
-	if err := rows.Err(); err != nil {
-		return err
+	result, err := f.publisher.Publish(ctx, runtimecontrol.ProviderFenceRequest{
+		Envelope: envelope, Token: token, Payload: payload,
+		Prepare: func(ctx context.Context) (breakerstore.FenceResult, error) {
+			return f.control.PrepareProviderStatusRevision(ctx, current.ID, current.StatusRevision, current.StatusRevision+1, status, token, payload)
+		},
+		Commit: func(ctx context.Context) (breakerstore.FenceResult, error) {
+			return f.control.CommitProviderStatusRevision(ctx, current.ID, token, payload)
+		},
+		Abort: func(ctx context.Context) (breakerstore.FenceResult, error) {
+			return f.control.AbortProviderStatusRevision(ctx, current.ID, token, payload)
+		},
+		ValidateLocked: func(ctx context.Context, tx pgx.Tx) error {
+			var revision int64
+			if err := tx.QueryRow(ctx, `SELECT status_revision FROM providers WHERE id=$1`, current.ID).Scan(&revision); err != nil {
+				return err
+			}
+			if revision != current.StatusRevision {
+				return conflict("provider status revision is stale")
+			}
+			if status == StatusDisabled {
+				var enabled int64
+				if err := tx.QueryRow(ctx, `SELECT count(*) FROM channels WHERE provider_id=$1 AND status='enabled'`, current.ID).Scan(&enabled); err != nil {
+					return err
+				}
+				if enabled > 0 {
+					return conflict("disable enabled channels before disabling provider")
+				}
+			}
+			return nil
+		},
+		BusinessCommit: func(ctx context.Context, tx pgx.Tx) error {
+			command, err := tx.Exec(ctx, `UPDATE providers SET status=$1, status_revision=status_revision+1, updated_at=now() WHERE id=$2 AND status_revision=$3 AND status<>'archived'`, status, current.ID, current.StatusRevision)
+			if err != nil {
+				return err
+			}
+			if command.RowsAffected() != 1 {
+				return conflict("provider status revision is stale")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return sqlc.Provider{}, false, err
 	}
-	if !sameProviderOrigins(current, change.Origins) {
-		return fmt.Errorf("provider origin set changed concurrently")
-	}
-	if expected != nil {
-		currentChange := change
-		currentChange.Origins = current
-		actual := providerOriginTransitions(currentChange)
-		if !sameOriginStatusChanges(actual, expected) {
-			return fmt.Errorf("provider affected origin set changed concurrently")
-		}
-	}
-	return nil
+	updated := current
+	updated.Status = status
+	updated.StatusRevision++
+	return updated, result.State == runtimecontrol.PublishRuntimeSyncPending, nil
 }
 
-func commitProviderChange(ctx context.Context, tx pgx.Tx, change providerStatusChange, transitions []originStatusChange) error {
-	queries := sqlc.New(tx)
-	if change.Archive {
-		var affected int64
-		var err error
-		if change.ArchiveReplacementID != nil {
-			affected, err = queries.ArchiveProviderWithReplacement(ctx, sqlc.ArchiveProviderWithReplacementParams{
-				ID: change.Current.ID, ReplacementChannelID: *change.ArchiveReplacementID,
-			})
-		} else {
-			affected, err = queries.ArchiveProviderCascade(ctx, change.Current.ID)
-		}
-		if err != nil {
-			return err
-		}
-		if affected != 1 {
-			return fmt.Errorf("provider archive changed concurrently")
-		}
-	} else if change.Restore {
-		affected, err := queries.RestoreProvider(ctx, change.Current.ID)
-		if err != nil {
-			return err
-		}
-		if affected != 1 {
-			return fmt.Errorf("provider restore changed concurrently")
-		}
-	} else {
-		command, err := tx.Exec(ctx, `UPDATE providers SET name=$1, status=$2, updated_at=now()
-			WHERE id=$3 AND name=$4 AND status=$5`, change.NextName, change.NextStatus,
-			change.Current.ID, change.Current.Name, change.Current.Status)
-		if err != nil {
-			return err
-		}
-		if command.RowsAffected() != 1 {
-			return fmt.Errorf("provider update changed concurrently")
-		}
+func randomToken() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("generate provider routing token: %w", err)
 	}
-	for _, transition := range transitions {
-		nextOriginStatus := transition.origin.Status
-		if change.Archive {
-			nextOriginStatus = StatusArchived
-		}
-		command, err := tx.Exec(ctx, `UPDATE provider_origins
-			SET status=$1, status_revision=$2,
-			    archived_at=CASE WHEN $1::text='archived' THEN now() ELSE archived_at END,
-			    updated_at=now()
-			WHERE id=$3 AND provider_id=$4 AND base_url_revision=$5 AND status_revision=$6 AND status=$7`,
-			nextOriginStatus, transition.origin.StatusRevision+1,
-			transition.origin.ID, change.Current.ID, transition.origin.BaseUrlRevision,
-			transition.origin.StatusRevision, transition.origin.Status)
-		if err != nil {
-			return err
-		}
-		if command.RowsAffected() != 1 {
-			return fmt.Errorf("provider origin %d changed concurrently", transition.origin.ID)
-		}
-	}
-	return nil
-}
-
-func sameProviderOrigins(a, b []sqlc.ProviderOrigin) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i].ID != b[i].ID || a[i].ProviderID != b[i].ProviderID || a[i].BaseUrl != b[i].BaseUrl ||
-			a[i].BaseUrlRevision != b[i].BaseUrlRevision || a[i].Status != b[i].Status || a[i].StatusRevision != b[i].StatusRevision {
-			return false
-		}
-	}
-	return true
-}
-
-func sameOriginStatusChanges(a, b []originStatusChange) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i].origin.ID != b[i].origin.ID || a[i].origin.StatusRevision != b[i].origin.StatusRevision ||
-			a[i].currentEffective != b[i].currentEffective || a[i].nextEffective != b[i].nextEffective {
-			return false
-		}
-	}
-	return true
-}
-
-func providerFenceToken() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic("provider: secure token generation failed")
-	}
-	return "provider-status-" + hex.EncodeToString(b)
+	return hex.EncodeToString(bytes), nil
 }

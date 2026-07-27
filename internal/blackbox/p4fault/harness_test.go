@@ -520,7 +520,7 @@ type seedFacts struct {
 	modelID            string
 	userID             int64
 	routeID            int64
-	originID         int64
+	providerID         int64
 	openAIChannelID    int64
 	anthropicChannelID int64
 }
@@ -581,19 +581,11 @@ func migrateAndSeed(t *testing.T, root, databaseURL, upstreamURL string, options
 
 	var providerID int64
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO providers (slug, name, status)
-		VALUES ('p4-fault-provider', 'P4 Fault Provider', 'enabled')
+		INSERT INTO providers (slug, name, origin, status)
+		VALUES ('p4-fault-provider', 'P4 Fault Provider', $1, 'enabled')
 		RETURNING id
-	`).Scan(&providerID); err != nil {
+	`, upstreamURL).Scan(&providerID); err != nil {
 		t.Fatalf("seed provider: %v", err)
-	}
-	var originID int64
-	if err := pool.QueryRow(ctx, `
-		INSERT INTO provider_origins (provider_id, name, base_url, status)
-		VALUES ($1, 'P4 Fault Origin', $2, 'enabled')
-		RETURNING id
-	`, providerID, upstreamURL).Scan(&originID); err != nil {
-		t.Fatalf("seed provider origin: %v", err)
 	}
 
 	const modelID = "p4-fault-model"
@@ -614,12 +606,12 @@ func migrateAndSeed(t *testing.T, root, databaseURL, upstreamURL string, options
 		var channelID int64
 		if err := pool.QueryRow(ctx, `
 			INSERT INTO channels (
-				provider_id, provider_origin_id, name, protocol, adapter_key,
+				provider_id, name, protocol, adapter_key,
 				credential, status, priority, timeout_ms
 			)
-			VALUES ($1, $2, $3, $4, $5, 'p4-fault-upstream-key', 'enabled', $6, 5000)
+			VALUES ($1, $2, $3, $4, 'p4-fault-upstream-key', 'enabled', $5, 5000)
 			RETURNING id
-		`, providerID, originID, "P4 Fault "+protocol, protocol, adapterKey, priority).Scan(&channelID); err != nil {
+		`, providerID, "P4 Fault "+protocol, protocol, adapterKey, priority).Scan(&channelID); err != nil {
 			t.Fatalf("seed %s channel: %v", protocol, err)
 		}
 		if _, err := pool.Exec(ctx, `
@@ -664,7 +656,7 @@ func migrateAndSeed(t *testing.T, root, databaseURL, upstreamURL string, options
 	}
 
 	return seedFacts{
-		apiKey: generatedKey.Plaintext, modelID: modelID, userID: user.ID, routeID: route.ID, originID: originID,
+		apiKey: generatedKey.Plaintext, modelID: modelID, userID: user.ID, routeID: route.ID, providerID: providerID,
 		openAIChannelID: openAIChannelID, anthropicChannelID: anthropicChannelID,
 	}
 }
@@ -957,6 +949,15 @@ func (h *faultHarness) redisDelete(t *testing.T, key string) {
 	defer cancel()
 	if err := h.redis.Del(ctx, key).Err(); err != nil {
 		t.Fatalf("delete isolated redis key: %v", err)
+	}
+}
+
+func (h *faultHarness) redisSetString(t *testing.T, key, value string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := h.redis.Set(ctx, key, value, 0).Err(); err != nil {
+		t.Fatalf("set isolated redis string: %v", err)
 	}
 }
 

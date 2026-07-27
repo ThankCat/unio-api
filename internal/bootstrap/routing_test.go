@@ -67,7 +67,7 @@ func TestNewChatRouterUsesPlaintextCredential(t *testing.T) {
 				ProviderID:    11,
 				AdapterKey:    "openai",
 				ChannelID:     13,
-				BaseUrl:       "https://api.openai.example/v1",
+				Origin:        "https://api.openai.example/v1",
 				Credential:    "sk-upstream-test",
 				TimeoutMs:     pgtype.Int4{Int32: 15000, Valid: true},
 				UpstreamModel: "gpt-4.1",

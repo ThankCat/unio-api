@@ -29,10 +29,9 @@ SELECT
     c.protocol AS protocol,
     c.id AS channel_id,
     c.name AS channel_name,
-    pe.id AS provider_origin_id,
-    pe.base_url,
-    pe.base_url_revision AS provider_origin_base_url_revision,
-    pe.status_revision AS provider_origin_status_revision,
+    p.origin,
+    p.origin_revision AS provider_origin_revision,
+    p.status_revision AS provider_status_revision,
     c.config_revision AS channel_config_revision,
     c.admission_limits_revision AS channel_admission_limits_revision,
     c.credential,
@@ -78,7 +77,6 @@ FROM channel_models cm
 JOIN models m ON m.id = cm.model_id
 JOIN channels c ON c.id = cm.channel_id
 JOIN providers p ON p.id = c.provider_id
-JOIN provider_origins pe ON pe.id = c.provider_origin_id AND pe.provider_id = c.provider_id
 JOIN user_scope us ON us.user_id > 0
 JOIN LATERAL (
     -- base: 模型当前生效的基准价（DEC-026/DEC-031，售价与成本的唯一基数）。
@@ -144,7 +142,6 @@ WHERE m.model_id = sqlc.arg(requested_model_id)
   AND c.status = 'enabled'
   AND c.credential_valid
   AND p.status = 'enabled'
-  AND pe.status = 'enabled'
   -- 已定价（DEC-031）：base 基准价 INNER JOIN 已保证存在；成本可解析 = 绝对覆盖存在 OR 价格倍率存在。
   AND (cost.id IS NOT NULL OR mult.id IS NOT NULL)
   AND EXISTS (

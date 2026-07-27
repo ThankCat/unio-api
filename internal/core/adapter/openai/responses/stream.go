@@ -49,7 +49,7 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 			failure.WithMessage("openai responses adapter stream emit is nil"),
 		)
 	}
-	if ch.BaseURL == "" {
+	if ch.Origin == "" {
 		return adapter.StreamOutcome{}, failure.New(
 			failure.CodeAdapterChannelInvalid,
 			failure.WithMessage("openai responses adapter channel base url is empty"),

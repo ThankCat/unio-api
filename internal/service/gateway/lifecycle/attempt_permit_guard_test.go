@@ -33,16 +33,16 @@ func (s *permitGuardPanicLog) CreateAttempt(
 		panic(permitGuardPanicValue)
 	}
 	return requestlog.AttemptRecord{
-		ID:                int64(s.createCalls),
+		ID:               int64(s.createCalls),
 		UpstreamEndpoint: params.UpstreamEndpoint,
 	}, nil
 }
 
 func TestAttemptRateLimitSkipsCandidateBeforeAttemptAndTransport(t *testing.T) {
 	tests := []struct {
-		name      string
+		name     string
 		endpoint requestlog.Endpoint
-		upstream  requestlog.UpstreamEndpoint
+		upstream requestlog.UpstreamEndpoint
 	}{
 		{name: "chat_completions", endpoint: requestlog.EndpointChatCompletions, upstream: requestlog.UpstreamEndpointChatCompletions},
 		{name: "responses", endpoint: requestlog.EndpointResponses, upstream: requestlog.UpstreamEndpointResponses},
@@ -145,7 +145,7 @@ func TestAttemptTraceRecordsCompactFallbackAsTwoSameChannelTransports(t *testing
 			return AttemptSuccess{}, nativeErr
 		},
 		TransparentFallback: &NonStreamTransparentFallback{
-			Match:             func(routing.ChatRouteCandidate, error) bool { return true },
+			Match:            func(routing.ChatRouteCandidate, error) bool { return true },
 			UpstreamEndpoint: requestlog.UpstreamEndpointChatCompletions,
 			Invoke: func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 				adapter.MarkTransportStarted(ctx)
@@ -220,7 +220,7 @@ func TestAttemptPermitGuardAbortsCompactFallbackCreateAttemptPanic(t *testing.T)
 				return AttemptSuccess{}, unsupportedErr
 			},
 			TransparentFallback: &NonStreamTransparentFallback{
-				Match:             func(routing.ChatRouteCandidate, error) bool { return true },
+				Match:            func(routing.ChatRouteCandidate, error) bool { return true },
 				UpstreamEndpoint: requestlog.UpstreamEndpointChatCompletions,
 				Invoke: func(context.Context, routing.ChatRouteCandidate) (AttemptSuccess, error) {
 					t.Fatal("fallback transport must not start after attempt persistence panic")
@@ -259,7 +259,7 @@ func newPermitGuardRunner(log requestlog.Service) (
 			},
 		},
 		finishResult: breakerstore.FinishResult{
-			OriginDisposition: breakerstore.DispositionApplied,
+			ProviderDisposition: breakerstore.DispositionApplied,
 			ChannelDisposition:  breakerstore.DispositionApplied,
 		},
 	}
@@ -281,7 +281,7 @@ func newPermitGuardRunner(log requestlog.Service) (
 	runner := &AttemptRunner{
 		lifecycle: &RequestLifecycle{
 			requestLog: log,
-			endpoint:  requestlog.EndpointResponses,
+			endpoint:   requestlog.EndpointResponses,
 		},
 		retryClassifier: NeverRetryClassifier{},
 		permitManager:   manager,
@@ -295,16 +295,15 @@ func newPermitGuardRunner(log requestlog.Service) (
 
 func permitGuardCandidate() routing.ChatRouteCandidate {
 	return routing.ChatRouteCandidate{
-		ModelDBID:                       11,
-		ProviderID:                      12,
-		ProviderOriginID:              13,
-		ProviderOriginBaseURLRevision: 14,
-		ProviderOriginStatusRevision:  15,
-		ChannelConfigRevision:           16,
-		ChannelAdmissionLimitsRevision:  17,
-		AdapterKey:                      "permit-guard",
-		Protocol:                        routing.ProtocolOpenAI,
-		UpstreamModel:                   "permit-guard-model",
+		ModelDBID:                      11,
+		ProviderID:                     12,
+		OriginRevision:                 14,
+		ProviderStatusRevision:         15,
+		ChannelConfigRevision:          16,
+		ChannelAdmissionLimitsRevision: 17,
+		AdapterKey:                     "permit-guard",
+		Protocol:                       routing.ProtocolOpenAI,
+		UpstreamModel:                  "permit-guard-model",
 		Channel: channel.Runtime{
 			ID:           18,
 			Name:         "Permit Guard",

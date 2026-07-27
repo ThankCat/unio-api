@@ -34,7 +34,7 @@ type stateEpochDTO struct {
 }
 
 type operationFamiliesDTO struct {
-	OriginRouting operationSummaryDTO `json:"origin_routing"`
+	ProviderRouting operationSummaryDTO `json:"provider_routing"`
 	RuntimeControl  operationSummaryDTO `json:"runtime_control"`
 }
 
@@ -63,7 +63,7 @@ func toRuntimeDiagnosticsDTO(diagnostics runtimediagnostics.Diagnostics) runtime
 			Match:    diagnostics.RuntimeStateEpoch.Match,
 		},
 		Operations: operationFamiliesDTO{
-			OriginRouting: toOperationSummaryDTO(diagnostics.Operations.OriginRouting),
+			ProviderRouting: toOperationSummaryDTO(diagnostics.Operations.ProviderRouting),
 			RuntimeControl:  toOperationSummaryDTO(diagnostics.Operations.RuntimeControl),
 		},
 	}

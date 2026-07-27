@@ -2,7 +2,6 @@ package channel
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,7 +22,7 @@ type ChannelService interface {
 	Update(ctx context.Context, in channel.UpdateInput) (channel.Channel, error)
 	RotateCredential(ctx context.Context, in channel.RotateCredentialInput) (channel.RotateCredentialResult, error)
 	Delete(ctx context.Context, id int64) error
-	Archive(ctx context.Context, id int64, replacementChannelID *int64) error
+	Archive(ctx context.Context, id int64) error
 	Restore(ctx context.Context, id int64) error
 	// AdapterKeyOptions 列出可选 adapter_key 枚举，供前端下拉而非手填。
 	AdapterKeyOptions() []channel.AdapterKeyOption
@@ -35,15 +34,10 @@ type channelDTO struct {
 	ID           int64  `json:"id"`
 	ProviderID   int64  `json:"provider_id"`
 	ProviderName string `json:"provider_name"`
-	// ProviderOriginID 是 channel 绑定的 ProviderOrigin（P4 §4.4）。
-	ProviderOriginID     int64  `json:"provider_origin_id"`
-	ProviderOriginName   string `json:"provider_origin_name"`
-	ProviderOriginStatus string `json:"provider_origin_status"`
-	Name                   string `json:"name"`
-	Protocol               string `json:"protocol"`
-	AdapterKey             string `json:"adapter_key"`
-	// BaseURL 只读，来源于所绑定 Origin（channel 不再持有 base_url）。
-	BaseURL string `json:"base_url"`
+	Name         string `json:"name"`
+	Protocol     string `json:"protocol"`
+	AdapterKey   string `json:"adapter_key"`
+	Origin       string `json:"origin"`
 	// ConfigRevision / AdmissionLimitsRevision 只读返回（P4 §4.4）。
 	ConfigRevision          int64 `json:"config_revision"`
 	AdmissionLimitsRevision int64 `json:"admission_limits_revision"`
@@ -109,27 +103,26 @@ func validateRateLimits(rl *rateLimitsRequest) error {
 }
 
 type createChannelRequest struct {
-	ProviderID         int64              `json:"provider_id"`
-	ProviderOriginID int64              `json:"provider_origin_id"`
-	Name               string             `json:"name"`
-	Protocol           string             `json:"protocol"`
-	AdapterKey         string             `json:"adapter_key"`
-	Credential         string             `json:"credential"`
-	Status             string             `json:"status"`
-	Priority           int32              `json:"priority"`
-	TimeoutMs          *int32             `json:"timeout_ms"`
-	RateLimits         *rateLimitsRequest `json:"rate_limits"` // 可选渠道级限流；不传表示全继承渠道默认限流
+	ProviderID int64              `json:"provider_id"`
+	Name       string             `json:"name"`
+	Protocol   string             `json:"protocol"`
+	AdapterKey string             `json:"adapter_key"`
+	Credential string             `json:"credential"`
+	Status     string             `json:"status"`
+	Priority   int32              `json:"priority"`
+	TimeoutMs  *int32             `json:"timeout_ms"`
+	RateLimits *rateLimitsRequest `json:"rate_limits"` // 可选渠道级限流；不传表示全继承渠道默认限流
 	// BillsOnDisconnect 可选：上游「断开仍计费」标记；缺省=false（正常上游）。
 	BillsOnDisconnect *bool `json:"upstream_bills_on_disconnect"`
 }
 
 type updateChannelRequest struct {
-	Name               string             `json:"name"`
-	ProviderOriginID int64              `json:"provider_origin_id"`
-	Status             string             `json:"status"`
-	Priority           int32              `json:"priority"`
-	TimeoutMs          *int32             `json:"timeout_ms"`
-	RateLimits         *rateLimitsRequest `json:"rate_limits"` // 对象缺省=不变，存在即原子替换三维限流
+	Name       string             `json:"name"`
+	ProviderID int64              `json:"provider_id"`
+	Status     string             `json:"status"`
+	Priority   int32              `json:"priority"`
+	TimeoutMs  *int32             `json:"timeout_ms"`
+	RateLimits *rateLimitsRequest `json:"rate_limits"` // 对象缺省=不变，存在即原子替换三维限流
 	// BillsOnDisconnect 可选：上游「断开仍计费」标记；缺省=不变。
 	BillsOnDisconnect *bool `json:"upstream_bills_on_disconnect"`
 }
@@ -147,13 +140,13 @@ type rotateCredentialResultDTO struct {
 }
 
 type credentialVerificationDTO struct {
-	State                         string                `json:"state"`
-	TestedOriginBaseURLRevision *int64                `json:"tested_origin_base_url_revision"`
-	TestedOriginStatusRevision  *int64                `json:"tested_origin_status_revision"`
-	TestedConfigRevision          *int64                `json:"tested_config_revision"`
-	StateChangeApplied            bool                  `json:"state_change_applied"`
-	CredentialValidAfter          bool                  `json:"credential_valid_after"`
-	Result                        *channelTestResultDTO `json:"result"`
+	State                        string                `json:"state"`
+	TestedOriginRevision         *int64                `json:"tested_origin_revision"`
+	TestedProviderStatusRevision *int64                `json:"tested_status_revision"`
+	TestedConfigRevision         *int64                `json:"tested_config_revision"`
+	StateChangeApplied           bool                  `json:"state_change_applied"`
+	CredentialValidAfter         bool                  `json:"credential_valid_after"`
+	Result                       *channelTestResultDTO `json:"result"`
 }
 
 type channelsHandler struct {
@@ -240,15 +233,14 @@ func (h *channelsHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	in := channel.CreateInput{
-		ProviderID:         req.ProviderID,
-		ProviderOriginID: req.ProviderOriginID,
-		Name:               req.Name,
-		Protocol:           req.Protocol,
-		AdapterKey:         req.AdapterKey,
-		Credential:         req.Credential,
-		Status:             req.Status,
-		Priority:           req.Priority,
-		TimeoutMs:          req.TimeoutMs,
+		ProviderID: req.ProviderID,
+		Name:       req.Name,
+		Protocol:   req.Protocol,
+		AdapterKey: req.AdapterKey,
+		Credential: req.Credential,
+		Status:     req.Status,
+		Priority:   req.Priority,
+		TimeoutMs:  req.TimeoutMs,
 	}
 	if req.RateLimits != nil {
 		in.RateLimitsProvided = true
@@ -287,12 +279,12 @@ func (h *channelsHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	in := channel.UpdateInput{
-		ID:                 id,
-		Name:               req.Name,
-		ProviderOriginID: req.ProviderOriginID,
-		Status:             req.Status,
-		Priority:           req.Priority,
-		TimeoutMs:          req.TimeoutMs,
+		ID:         id,
+		Name:       req.Name,
+		ProviderID: req.ProviderID,
+		Status:     req.Status,
+		Priority:   req.Priority,
+		TimeoutMs:  req.TimeoutMs,
 	}
 	if req.RateLimits != nil {
 		in.RateLimitsProvided = true
@@ -341,12 +333,12 @@ func toRotateCredentialResultDTO(result channel.RotateCredentialResult) rotateCr
 		CredentialSaved: result.CredentialSaved, CredentialChanged: result.CredentialChanged,
 		SavedConfigRevision: result.SavedConfigRevision, CurrentConfigRevision: result.CurrentConfigRevision,
 		Verification: credentialVerificationDTO{
-			State:                         string(result.Verification.State),
-			TestedOriginBaseURLRevision: result.Verification.TestedOriginBaseURLRevision,
-			TestedOriginStatusRevision:  result.Verification.TestedOriginStatusRevision,
-			TestedConfigRevision:          result.Verification.TestedConfigRevision,
-			StateChangeApplied:            result.Verification.StateChangeApplied,
-			CredentialValidAfter:          result.Verification.CredentialValidAfter,
+			State:                        string(result.Verification.State),
+			TestedOriginRevision:         result.Verification.TestedOriginRevision,
+			TestedProviderStatusRevision: result.Verification.TestedProviderStatusRevision,
+			TestedConfigRevision:         result.Verification.TestedConfigRevision,
+			StateChangeApplied:           result.Verification.StateChangeApplied,
+			CredentialValidAfter:         result.Verification.CredentialValidAfter,
 		},
 	}
 	if probe := result.Verification.Result; probe != nil {
@@ -386,14 +378,7 @@ func (h *channelsHandler) archive(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	var req struct {
-		ReplacementChannelID *int64 `json:"replacement_channel_id"`
-	}
-	if err := httpx.DecodeJSON(w, r, &req); err != nil && !errors.Is(err, httpx.ErrEmptyJSONBody) {
-		adminhttp.WriteServiceError(w, err)
-		return
-	}
-	if err := h.service.Archive(r.Context(), id, req.ReplacementChannelID); err != nil {
+	if err := h.service.Archive(r.Context(), id); err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
@@ -418,16 +403,13 @@ func toChannelDTO(c channel.Channel) channelDTO {
 		ID:                      c.ID,
 		ProviderID:              c.ProviderID,
 		ProviderName:            c.ProviderName,
-		ProviderOriginID:      c.ProviderOriginID,
-		ProviderOriginName:    c.ProviderOriginName,
-		ProviderOriginStatus:  c.ProviderOriginStatus,
 		ConfigRevision:          c.ConfigRevision,
 		AdmissionLimitsRevision: c.AdmissionLimitsRevision,
 		RuntimeSyncPending:      c.RuntimeSyncPending,
 		Name:                    c.Name,
 		Protocol:                c.Protocol,
 		AdapterKey:              c.AdapterKey,
-		BaseURL:                 c.BaseURL,
+		Origin:                  c.Origin,
 		Credential:              c.Credential,
 		Status:                  c.Status,
 		Priority:                c.Priority,

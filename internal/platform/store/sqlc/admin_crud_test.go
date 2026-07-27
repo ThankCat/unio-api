@@ -21,7 +21,7 @@ func TestProviderCRUDQueries(t *testing.T) {
 	slug := fmt.Sprintf("admin-prov-%d", suffix)
 
 	created, err := queries.CreateProvider(ctx, sqlc.CreateProviderParams{
-		Slug: slug, Name: "Admin Provider", Status: "enabled",
+		Slug: slug, Name: "Admin Provider", Origin: fmt.Sprintf("https://admin-provider-%d.example.test", suffix), Status: "enabled",
 	})
 	if err != nil {
 		t.Fatalf("create provider: %v", err)
@@ -39,12 +39,12 @@ func TestProviderCRUDQueries(t *testing.T) {
 	}
 
 	updated, err := queries.UpdateProvider(ctx, sqlc.UpdateProviderParams{
-		ID: created.ID, Name: "Renamed", Status: "disabled",
+		ID: created.ID, Name: "Renamed",
 	})
 	if err != nil {
 		t.Fatalf("update provider: %v", err)
 	}
-	if updated.Name != "Renamed" || updated.Status != "disabled" || updated.Slug != slug {
+	if updated.Name != "Renamed" || updated.Status != "enabled" || updated.Slug != slug {
 		t.Fatalf("unexpected updated provider: %+v", updated)
 	}
 
@@ -71,19 +71,15 @@ func TestChannelCRUDQueries(t *testing.T) {
 
 	suffix := time.Now().UnixNano()
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("admin-chan-prov-%d", suffix), "enabled")
-	originID := insertProviderOrigin(t, ctx, tx, providerID, "primary-ep", fmt.Sprintf("https://api-%d.example.test", suffix), "enabled")
-	origin2ID := insertProviderOrigin(t, ctx, tx, providerID, "secondary-ep", fmt.Sprintf("https://api2-%d.example.test", suffix), "enabled")
-
 	created, err := queries.CreateChannel(ctx, sqlc.CreateChannelParams{
-		ProviderID:         providerID,
-		ProviderOriginID: originID,
-		Name:               "primary",
-		Protocol:           "openai",
-		AdapterKey:         "openai",
-		Credential:         "sk-admin-create",
-		Status:             "enabled",
-		Priority:           10,
-		TimeoutMs:          pgtype.Int4{Int32: 15000, Valid: true},
+		ProviderID: providerID,
+		Name:       "primary",
+		Protocol:   "openai",
+		AdapterKey: "openai",
+		Credential: "sk-admin-create",
+		Status:     "enabled",
+		Priority:   10,
+		TimeoutMs:  pgtype.Int4{Int32: 15000, Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("create channel: %v", err)
@@ -108,7 +104,7 @@ func TestChannelCRUDQueries(t *testing.T) {
 	}
 
 	updated, err := queries.UpdateChannel(ctx, sqlc.UpdateChannelParams{
-		ID: created.ID, Name: "renamed", ProviderOriginID: origin2ID,
+		ID: created.ID, Name: "renamed",
 		Status: "disabled", Priority: 20, TimeoutMs: pgtype.Int4{},
 	})
 	if err != nil {
@@ -188,9 +184,8 @@ func TestChannelCredentialRotationRevisionCAS(t *testing.T) {
 
 	suffix := time.Now().UnixNano()
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("credential-cas-%d", suffix), "enabled")
-	originID := insertProviderOrigin(t, ctx, tx, providerID, "credential-cas", fmt.Sprintf("https://credential-%d.example.test", suffix), "enabled")
 	created, err := queries.CreateChannel(ctx, sqlc.CreateChannelParams{
-		ProviderID: providerID, ProviderOriginID: originID, Name: "credential-cas",
+		ProviderID: providerID, Name: "credential-cas",
 		Protocol: "openai", AdapterKey: "openai", Credential: "sk-old", Status: "enabled", Priority: 1,
 	})
 	if err != nil {
@@ -218,12 +213,12 @@ func TestChannelCredentialRotationRevisionCAS(t *testing.T) {
 
 	applied, err := queries.ApplyChannelProbeResult(ctx, sqlc.ApplyChannelProbeResultParams{
 		ChannelID: created.ID, ExpectedConfigRevision: prepared.ConfigRevision,
-		ExpectedOriginBaseUrlRevision: prepared.OriginBaseUrlRevision,
-		ExpectedOriginStatusRevision:  prepared.OriginStatusRevision,
-		Success:                         pgtype.Bool{Bool: true, Valid: true},
-		LastTestLatencyMs:               pgtype.Int4{Int32: 120, Valid: true},
-		NextCredentialValid:             pgtype.Bool{Bool: true, Valid: true},
-		Source:                          "credential_rotate", TestedModel: pgtype.Text{String: "gpt-test", Valid: true},
+		ExpectedOriginRevision: prepared.OriginRevision,
+		ExpectedStatusRevision: prepared.StatusRevision,
+		Success:                pgtype.Bool{Bool: true, Valid: true},
+		LastTestLatencyMs:      pgtype.Int4{Int32: 120, Valid: true},
+		NextCredentialValid:    pgtype.Bool{Bool: true, Valid: true},
+		Source:                 "credential_rotate", TestedModel: pgtype.Text{String: "gpt-test", Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("apply current probe result: %v", err)
@@ -241,18 +236,18 @@ func TestChannelCredentialRotationRevisionCAS(t *testing.T) {
 	if !second.CredentialChanged || second.CredentialValid {
 		t.Fatalf("second rotation must make credential unroutable before probe: %+v", second)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE provider_origins SET base_url_revision = base_url_revision + 1 WHERE id = $1`, originID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE providers SET origin_revision = origin_revision + 1 WHERE id = $1`, providerID); err != nil {
 		t.Fatalf("advance origin revision: %v", err)
 	}
 
 	stale, err := queries.ApplyChannelProbeResult(ctx, sqlc.ApplyChannelProbeResultParams{
 		ChannelID: created.ID, ExpectedConfigRevision: second.ConfigRevision,
-		ExpectedOriginBaseUrlRevision: second.OriginBaseUrlRevision,
-		ExpectedOriginStatusRevision:  second.OriginStatusRevision,
-		Success:                         pgtype.Bool{Bool: true, Valid: true},
-		LastTestLatencyMs:               pgtype.Int4{Int32: 95, Valid: true},
-		NextCredentialValid:             pgtype.Bool{Bool: true, Valid: true},
-		Source:                          "credential_rotate", TestedModel: pgtype.Text{String: "gpt-test", Valid: true},
+		ExpectedOriginRevision: second.OriginRevision,
+		ExpectedStatusRevision: second.StatusRevision,
+		Success:                pgtype.Bool{Bool: true, Valid: true},
+		LastTestLatencyMs:      pgtype.Int4{Int32: 95, Valid: true},
+		NextCredentialValid:    pgtype.Bool{Bool: true, Valid: true},
+		Source:                 "credential_rotate", TestedModel: pgtype.Text{String: "gpt-test", Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("apply stale probe result: %v", err)
@@ -275,7 +270,7 @@ func TestChannelCredentialRotationRevisionCAS(t *testing.T) {
 	}
 	latest := logs[0]
 	if latest.StateChangeApplied || !latest.TestedConfigRevision.Valid || latest.TestedConfigRevision.Int64 != second.ConfigRevision ||
-		!latest.TestedOriginBaseUrlRevision.Valid || latest.TestedOriginBaseUrlRevision.Int64 != second.OriginBaseUrlRevision {
+		!latest.TestedOriginRevision.Valid || latest.TestedOriginRevision.Int64 != second.OriginRevision {
 		t.Fatalf("stale log did not preserve tested revisions: %+v", latest)
 	}
 }

@@ -14,16 +14,16 @@ func TestRuntimeInfrastructureFaultLatchIsSharedAndRequiresExplicitCASClear(t *t
 	storeB := NewStore(client, namespace)
 	ctx := context.Background()
 	channelID := int64(7202)
-	originID := int64(7201)
+	providerID := int64(7201)
 	seedAttemptControls(t, storeA, testConfig(), channelID,
 		`{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
 
 	// A request-time WRONGTYPE is a confirmed Store failure. SnapshotMany is before authorization
 	// and transport, so this request cannot reach an upstream.
-	if err := client.Set(ctx, storeA.keys.origin(originID), "wrong-type", 0).Err(); err != nil {
+	if err := client.Set(ctx, storeA.keys.provider(providerID), "wrong-type", 0).Err(); err != nil {
 		t.Fatal(err)
 	}
-	_, err := storeA.SnapshotMany(ctx, testRuntimeSnapshotInput(originID, channelID))
+	_, err := storeA.SnapshotMany(ctx, testRuntimeSnapshotInput(providerID, channelID))
 	if err == nil || !errors.Is(err, ErrStoreUnavailable) {
 		t.Fatalf("snapshot error=%v", err)
 	}
@@ -58,8 +58,8 @@ func TestRuntimeInfrastructureFaultLatchIsSharedAndRequiresExplicitCASClear(t *t
 
 	attempt := withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "blocked-permit", AdmissionFingerprint: "blocked-permit-fingerprint",
-		RequestAdmissionID: "unused-request", OriginID: originID, ChannelID: channelID,
-		OriginBaseURLRevision: 1, OriginStatusRevision: 1, ChannelConfigRevision: 1,
+		RequestAdmissionID: "unused-request", ProviderID: providerID, ChannelID: channelID,
+		OriginRevision: 1, ProviderStatusRevision: 1, ChannelConfigRevision: 1,
 		ModelID: 99, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
 	})
 	attemptResult, err := storeB.AcquireAttempt(ctx, attempt)
@@ -78,24 +78,24 @@ func TestRuntimeInfrastructureFaultLatchIsSharedAndRequiresExplicitCASClear(t *t
 	if err := client.Set(ctx, storeA.keys.runtimeInfrastructureFault(), "other-gateway:new-fault", 0).Err(); err != nil {
 		t.Fatal(err)
 	}
-	oldProof := testRuntimeReconciliationProof(oldGeneration, originID, channelID)
+	oldProof := testRuntimeReconciliationProof(oldGeneration, providerID, channelID)
 	clearResult, err := storeA.ClearRuntimeInfrastructureFaultAfterReconciliation(ctx, readinessInput, oldProof)
 	if err != nil || clearResult.Ready || clearResult.Reason != RuntimeReadinessReasonStoreFaultLatched {
 		t.Fatalf("stale clear result=%+v err=%v", clearResult, err)
 	}
 
 	// Simulate the next full reconciliation repairing the corrupted Origin before explicit clear.
-	if err := client.Del(ctx, storeA.keys.origin(originID)).Err(); err != nil {
+	if err := client.Del(ctx, storeA.keys.provider(providerID)).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := storeA.RestoreMissingOriginControl(ctx, originID, 1, 1, "enabled"); err != nil {
+	if _, err := storeA.RestoreMissingProviderControl(ctx, providerID, 1, 1, "enabled"); err != nil {
 		t.Fatal(err)
 	}
 	cleanGeneration, err := storeA.BeginRuntimeReconciliation(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleanProof := testRuntimeReconciliationProof(cleanGeneration, originID, channelID)
+	cleanProof := testRuntimeReconciliationProof(cleanGeneration, providerID, channelID)
 	clearResult, err = storeA.ClearRuntimeInfrastructureFaultAfterReconciliation(ctx, readinessInput, cleanProof)
 	if err != nil || !clearResult.Ready {
 		t.Fatalf("clean clear result=%+v err=%v", clearResult, err)
@@ -111,11 +111,11 @@ func TestRuntimeInfrastructureFaultLatchIsSharedAndRequiresExplicitCASClear(t *t
 	}
 }
 
-func testRuntimeReconciliationProof(generation RuntimeReconciliationGeneration, originID, channelID int64) RuntimeReconciliationProof {
+func testRuntimeReconciliationProof(generation RuntimeReconciliationGeneration, providerID, channelID int64) RuntimeReconciliationProof {
 	return RuntimeReconciliationProof{
 		Generation: generation,
 		OriginControls: []RuntimeOriginControlProof{{
-			OriginID: originID, BaseURLRevision: 1, StatusRevision: 1, EffectiveStatus: "enabled",
+			ProviderID: providerID, OriginRevision: 1, StatusRevision: 1, EffectiveStatus: "enabled",
 		}},
 		ChannelAdmissionControls: []RuntimeChannelAdmissionControlProof{{
 			ChannelID: channelID, Revision: 1,
@@ -154,13 +154,13 @@ func TestMalformedSharedFaultLatchFailsClosedAndCannotBeClearedByProbe(t *testin
 func TestRedisInstanceProofMismatchBlocksEveryNewAdmissionBeforeResourceWrite(t *testing.T) {
 	store, client, namespace := newTestStore(t)
 	ctx := context.Background()
-	const originID int64 = 7401
+	const providerID int64 = 7401
 	const channelID int64 = 7402
 	const routeID int64 = 7403
 	const userID int64 = 7404
 	seedAttemptControls(t, store, testConfig(), channelID,
 		`{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
-	if _, err := store.InitOriginControl(ctx, originID, 1, 1, "enabled"); err != nil {
+	if _, err := store.InitProviderControl(ctx, providerID, 1, 1, "enabled"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -195,7 +195,7 @@ func TestRedisInstanceProofMismatchBlocksEveryNewAdmissionBeforeResourceWrite(t 
 		t.Fatal(err)
 	}
 	other := NewStore(client, namespace)
-	if _, err := other.SnapshotMany(ctx, testRuntimeSnapshotInput(originID, channelID)); failure.CodeOf(err) != failure.CodeGatewayBreakerStoreUnavailable {
+	if _, err := other.SnapshotMany(ctx, testRuntimeSnapshotInput(providerID, channelID)); failure.CodeOf(err) != failure.CodeGatewayBreakerStoreUnavailable {
 		t.Fatalf("snapshot mismatch error=%v code=%q", err, failure.CodeOf(err))
 	}
 	if got := client.Type(ctx, store.keys.runtimeInfrastructureFault()).Val(); got != "string" {
@@ -208,8 +208,8 @@ func TestRedisInstanceProofMismatchBlocksEveryNewAdmissionBeforeResourceWrite(t 
 	attemptStore := NewStore(client, namespace)
 	attempt := withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "instance-changed-permit", AdmissionFingerprint: "instance-changed-permit-fp",
-		RequestAdmissionID: "instance-changed-reserved", OriginID: originID, ChannelID: channelID,
-		OriginBaseURLRevision: 1, OriginStatusRevision: 1, ChannelConfigRevision: 1,
+		RequestAdmissionID: "instance-changed-reserved", ProviderID: providerID, ChannelID: channelID,
+		OriginRevision: 1, ProviderStatusRevision: 1, ChannelConfigRevision: 1,
 		ModelID: 99, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
 	})
 	seedReservedRequestAdmission(t, attemptStore, attempt)
@@ -240,11 +240,11 @@ func TestRedisInstanceProofMismatchBlocksEveryNewAdmissionBeforeResourceWrite(t 
 func TestRuntimeFaultClearKeepsSharedLatchWhenLocalGenerationChanges(t *testing.T) {
 	store, client, _ := newTestStore(t)
 	ctx := context.Background()
-	const originID int64 = 7501
+	const providerID int64 = 7501
 	const channelID int64 = 7502
 	seedAttemptControls(t, store, testConfig(), channelID,
 		`{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
-	if _, err := store.InitOriginControl(ctx, originID, 1, 1, "enabled"); err != nil {
+	if _, err := store.InitProviderControl(ctx, providerID, 1, 1, "enabled"); err != nil {
 		t.Fatal(err)
 	}
 	store.latchRuntimeInfrastructureFault(ctx)
@@ -252,7 +252,7 @@ func TestRuntimeFaultClearKeepsSharedLatchWhenLocalGenerationChanges(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof := testRuntimeReconciliationProof(generation, originID, channelID)
+	proof := testRuntimeReconciliationProof(generation, providerID, channelID)
 
 	// Simulate a request-time fault confirmed after the full reconciliation began. The clear must
 	// never make the shared namespace visible as ready, even briefly, for this stale local proof.
@@ -269,11 +269,11 @@ func TestRuntimeFaultClearKeepsSharedLatchWhenLocalGenerationChanges(t *testing.
 func TestRuntimeFaultClearRequiresEveryOriginAndChannelControlProof(t *testing.T) {
 	store, client, _ := newTestStore(t)
 	ctx := context.Background()
-	const originID int64 = 7601
+	const providerID int64 = 7601
 	const channelID int64 = 7602
 	seedAttemptControls(t, store, testConfig(), channelID,
 		`{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
-	if _, err := store.InitOriginControl(ctx, originID, 1, 1, "enabled"); err != nil {
+	if _, err := store.InitProviderControl(ctx, providerID, 1, 1, "enabled"); err != nil {
 		t.Fatal(err)
 	}
 	store.latchRuntimeInfrastructureFault(ctx)
@@ -281,9 +281,9 @@ func TestRuntimeFaultClearRequiresEveryOriginAndChannelControlProof(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof := testRuntimeReconciliationProof(generation, originID, channelID)
+	proof := testRuntimeReconciliationProof(generation, providerID, channelID)
 
-	if err := client.Set(ctx, store.keys.origin(originID), "wrong-type", 0).Err(); err != nil {
+	if err := client.Set(ctx, store.keys.provider(providerID), "wrong-type", 0).Err(); err != nil {
 		t.Fatal(err)
 	}
 	result, err := store.ClearRuntimeInfrastructureFaultAfterReconciliation(ctx, testRuntimeReadinessInput(), proof)
@@ -293,10 +293,10 @@ func TestRuntimeFaultClearRequiresEveryOriginAndChannelControlProof(t *testing.T
 	if got := client.Type(ctx, store.keys.runtimeInfrastructureFault()).Val(); got != "string" {
 		t.Fatalf("origin proof failure removed shared latch, type=%q", got)
 	}
-	if err := client.Del(ctx, store.keys.origin(originID)).Err(); err != nil {
+	if err := client.Del(ctx, store.keys.provider(providerID)).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.RestoreMissingOriginControl(ctx, originID, 1, 1, "enabled"); err != nil {
+	if _, err := store.RestoreMissingProviderControl(ctx, providerID, 1, 1, "enabled"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -304,7 +304,7 @@ func TestRuntimeFaultClearRequiresEveryOriginAndChannelControlProof(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof = testRuntimeReconciliationProof(generation, originID, channelID)
+	proof = testRuntimeReconciliationProof(generation, providerID, channelID)
 	if err := client.Set(ctx, store.keys.admissionChannel(channelID), "wrong-type", 0).Err(); err != nil {
 		t.Fatal(err)
 	}
@@ -386,14 +386,14 @@ func testRuntimeReadinessInput() RuntimeReadinessInput {
 	}
 }
 
-func testRuntimeSnapshotInput(originID, channelID int64) SnapshotManyInput {
+func testRuntimeSnapshotInput(providerID, channelID int64) SnapshotManyInput {
 	return SnapshotManyInput{
 		IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
 		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1,
 		CircuitBreakerRevision: 1, RoutingBalanceRevision: 1, ModelID: 99,
 		Candidates: []SnapshotCandidateInput{{
-			OriginID: originID, ChannelID: channelID,
-			OriginBaseURLRevision: 1, OriginStatusRevision: 1,
+			ProviderID: providerID, ChannelID: channelID,
+			OriginRevision: 1, ProviderStatusRevision: 1,
 			ChannelConfigRevision: 1, ChannelAdmissionRevision: 1,
 		}},
 	}

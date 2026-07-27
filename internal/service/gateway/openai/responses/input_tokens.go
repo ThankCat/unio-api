@@ -36,7 +36,7 @@ func (s *ResponsesService) CountInputTokens(ctx context.Context, req gatewayapi.
 		UserID:          principal.UserID,
 		ModelID:         req.Model,
 		IngressProtocol: routing.ProtocolOpenAI,
-		Endpoint:       routing.EndpointResponses,
+		Endpoint:        routing.EndpointResponses,
 		RouteID:         principal.RouteID,
 	})
 	if err != nil {

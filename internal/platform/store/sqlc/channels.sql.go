@@ -15,11 +15,11 @@ const applyRuntime401CredentialInvalidation = `-- name: ApplyRuntime401Credentia
 WITH matching AS MATERIALIZED (
     SELECT c.id, c.credential_valid, c.config_revision
     FROM channels c
-    JOIN provider_origins pe ON pe.id = c.provider_origin_id
+    JOIN providers p ON p.id = c.provider_id
     WHERE c.id = $1
       AND c.config_revision = $2
-      AND pe.base_url_revision = $3
-      AND pe.status_revision = $4
+      AND p.origin_revision = $3
+      AND p.status_revision = $4
     FOR UPDATE OF c
 ), applied AS (
     UPDATE channels c
@@ -42,7 +42,7 @@ WITH matching AS MATERIALIZED (
 ), logged AS (
     INSERT INTO channel_test_logs (
         channel_id, source, success, error_code, credential_valid_after, message,
-        tested_origin_base_url_revision, tested_origin_status_revision,
+        tested_origin_revision, tested_status_revision,
         tested_config_revision, state_change_applied
     )
     SELECT
@@ -60,10 +60,10 @@ JOIN logged ON logged.channel_id = current_state.id
 `
 
 type ApplyRuntime401CredentialInvalidationParams struct {
-	ChannelID                     int64
-	ExpectedConfigRevision        int64
-	ExpectedOriginBaseUrlRevision int64
-	ExpectedOriginStatusRevision  int64
+	ChannelID              int64
+	ExpectedConfigRevision int64
+	ExpectedOriginRevision int64
+	ExpectedStatusRevision int64
 }
 
 type ApplyRuntime401CredentialInvalidationRow struct {
@@ -73,14 +73,14 @@ type ApplyRuntime401CredentialInvalidationRow struct {
 }
 
 // ApplyRuntime401CredentialInvalidation 将达到阈值的运行时 401 按当次 Channel config 与 Origin
-// BaseURL/status 三类 expected revision 做原子 CAS。只有三类 revision 仍匹配且 credential_valid=true
+// Provider origin/status 与 Channel config 三类 expected revision 做原子 CAS。只有三类 revision 仍匹配且 credential_valid=true
 // 时才翻 false 并推进 config_revision；迟到结果只写 state_change_applied=false 的审计行。
 func (q *Queries) ApplyRuntime401CredentialInvalidation(ctx context.Context, arg ApplyRuntime401CredentialInvalidationParams) (ApplyRuntime401CredentialInvalidationRow, error) {
 	row := q.db.QueryRow(ctx, applyRuntime401CredentialInvalidation,
 		arg.ChannelID,
 		arg.ExpectedConfigRevision,
-		arg.ExpectedOriginBaseUrlRevision,
-		arg.ExpectedOriginStatusRevision,
+		arg.ExpectedOriginRevision,
+		arg.ExpectedStatusRevision,
 	)
 	var i ApplyRuntime401CredentialInvalidationRow
 	err := row.Scan(&i.StateChangeApplied, &i.CredentialValidAfter, &i.CurrentConfigRevision)
@@ -88,42 +88,41 @@ func (q *Queries) ApplyRuntime401CredentialInvalidation(ctx context.Context, arg
 }
 
 const listChannelsForCredentialTest = `-- name: ListChannelsForCredentialTest :many
-SELECT c.id, c.provider_id, c.provider_origin_id, c.name, c.protocol, c.adapter_key, pe.base_url, c.credential, c.status, c.priority, c.timeout_ms, c.created_at, c.updated_at, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid, c.archived_at, c.concurrency_limit, c.upstream_bills_on_disconnect, c.config_revision, c.admission_limits_revision, pe.base_url_revision AS provider_origin_base_url_revision, pe.status_revision AS provider_origin_status_revision
+SELECT c.id, c.provider_id, c.name, c.protocol, c.adapter_key, p.origin, c.credential, c.status, c.priority, c.timeout_ms, c.created_at, c.updated_at, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid, c.archived_at, c.concurrency_limit, c.upstream_bills_on_disconnect, c.config_revision, c.admission_limits_revision, p.origin_revision AS provider_origin_revision, p.status_revision AS provider_status_revision
 FROM channels c
-JOIN provider_origins pe ON pe.id = c.provider_origin_id
-WHERE c.status = 'enabled'
+JOIN providers p ON p.id = c.provider_id
+WHERE c.status = 'enabled' AND p.status = 'enabled'
 ORDER BY c.credential_valid ASC, c.priority, c.id
 `
 
 type ListChannelsForCredentialTestRow struct {
-	ID                            int64
-	ProviderID                    int64
-	ProviderOriginID              int64
-	Name                          string
-	Protocol                      string
-	AdapterKey                    string
-	BaseUrl                       string
-	Credential                    string
-	Status                        string
-	Priority                      int32
-	TimeoutMs                     pgtype.Int4
-	CreatedAt                     pgtype.Timestamptz
-	UpdatedAt                     pgtype.Timestamptz
-	RpmLimit                      pgtype.Int4
-	TpmLimit                      pgtype.Int4
-	RpdLimit                      pgtype.Int4
-	LastTestedAt                  pgtype.Timestamptz
-	LastTestOk                    pgtype.Bool
-	LastTestLatencyMs             pgtype.Int4
-	LastTestError                 pgtype.Text
-	CredentialValid               bool
-	ArchivedAt                    pgtype.Timestamptz
-	ConcurrencyLimit              pgtype.Int4
-	UpstreamBillsOnDisconnect     bool
-	ConfigRevision                int64
-	AdmissionLimitsRevision       int64
-	ProviderOriginBaseUrlRevision int64
-	ProviderOriginStatusRevision  int64
+	ID                        int64
+	ProviderID                int64
+	Name                      string
+	Protocol                  string
+	AdapterKey                string
+	Origin                    string
+	Credential                string
+	Status                    string
+	Priority                  int32
+	TimeoutMs                 pgtype.Int4
+	CreatedAt                 pgtype.Timestamptz
+	UpdatedAt                 pgtype.Timestamptz
+	RpmLimit                  pgtype.Int4
+	TpmLimit                  pgtype.Int4
+	RpdLimit                  pgtype.Int4
+	LastTestedAt              pgtype.Timestamptz
+	LastTestOk                pgtype.Bool
+	LastTestLatencyMs         pgtype.Int4
+	LastTestError             pgtype.Text
+	CredentialValid           bool
+	ArchivedAt                pgtype.Timestamptz
+	ConcurrencyLimit          pgtype.Int4
+	UpstreamBillsOnDisconnect bool
+	ConfigRevision            int64
+	AdmissionLimitsRevision   int64
+	ProviderOriginRevision    int64
+	ProviderStatusRevision    int64
 }
 
 // ListChannelsForCredentialTest 供渠道自动检测 worker 巡检：所有启用渠道（含 credential_valid=false 以便恢复），
@@ -140,11 +139,10 @@ func (q *Queries) ListChannelsForCredentialTest(ctx context.Context) ([]ListChan
 		if err := rows.Scan(
 			&i.ID,
 			&i.ProviderID,
-			&i.ProviderOriginID,
 			&i.Name,
 			&i.Protocol,
 			&i.AdapterKey,
-			&i.BaseUrl,
+			&i.Origin,
 			&i.Credential,
 			&i.Status,
 			&i.Priority,
@@ -164,8 +162,8 @@ func (q *Queries) ListChannelsForCredentialTest(ctx context.Context) ([]ListChan
 			&i.UpstreamBillsOnDisconnect,
 			&i.ConfigRevision,
 			&i.AdmissionLimitsRevision,
-			&i.ProviderOriginBaseUrlRevision,
-			&i.ProviderOriginStatusRevision,
+			&i.ProviderOriginRevision,
+			&i.ProviderStatusRevision,
 		); err != nil {
 			return nil, err
 		}

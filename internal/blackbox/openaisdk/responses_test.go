@@ -179,11 +179,11 @@ func TestResponsesMockSettlementWritesAuditTrail(t *testing.T) {
 	defer dbCancel()
 
 	var (
-		rrID        int64
-		rrStatus    string
-		rrIngress   string
+		rrID       int64
+		rrStatus   string
+		rrIngress  string
 		rrEndpoint string
-		rrModelID   string
+		rrModelID  string
 	)
 	if err := f.Pool.QueryRow(dbCtx, `
 		SELECT id, status, ingress_protocol, endpoint, requested_model_id

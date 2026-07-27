@@ -9,7 +9,6 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 	apichannel "github.com/ThankCat/unio-gateway/internal/app/adminapi/channel"
-	apiproviderorigin "github.com/ThankCat/unio-gateway/internal/app/adminapi/providerorigin"
 	anthropicdeepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/deepseek/messages"
 	openaideepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/deepseek/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
@@ -38,7 +37,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelops"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelprice"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/provider"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/providerorigin"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/providerops"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
 	adminroute "github.com/ThankCat/unio-gateway/internal/service/admin/route"
@@ -132,11 +130,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 	providerService := provider.NewService(queries)
 	providerOpsService := providerops.NewService(queries)
-	// P4 §8.1：ProviderOrigin CRUD。create 需初始化可恢复的 Redis Origin control（§4.2.18）；
-	// Redis 缺失时 control 为 nil，create 跳过初始化（Origin 在 control 恢复前不可被准入，fail-closed）。
-	var originControl providerorigin.ControlInitializer
-	var originFencer *providerorigin.OriginFencer
-	var originBreakerRuntime apiproviderorigin.BreakerRuntime
+	var providerBreakerRuntime *breakerstore.Store
 	var channelBreakerRuntime apichannel.BreakerRuntime
 	var settingsRuntimePublisher appsettings.RuntimeControlPublisher
 	var settingsRuntimeStore appsettings.RuntimeControlStore
@@ -157,14 +151,9 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 			runtimeReconcilerCancel = cancel
 			go runRuntimeControlReconciler(reconcileCtx, pool, settingsStore, breakerStore, runtimeTelemetry)
 		}
-		originControl = breakerStore
-		originBreakerRuntime = breakerStore
+		providerBreakerRuntime = breakerStore
 		channelBreakerRuntime = breakerStore
-		// status/base_url 热更新走可恢复围栏（origin_routing_operations + Redis fence）；需要 DB pool。
 		if pool, ok := deps.DB.(*pgxpool.Pool); ok {
-			originFencer = providerorigin.NewOriginFencer(
-				runtimecontrol.NewOriginFencePublisher(pool), breakerStore,
-			)
 			publisher := runtimecontrol.NewPublisher(pool, breakerStore)
 			settingsRuntimePublisher = publisher
 			settingsRuntimeStore = breakerStore
@@ -172,20 +161,11 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 			channelRuntimeStore = breakerStore
 		}
 	}
-	providerOriginService := providerorigin.NewService(queries, originControl)
-	if pool, ok := deps.DB.(*pgxpool.Pool); ok {
-		providerOriginService.WithTransactionalDB(pool)
-	}
-	if originFencer != nil {
-		providerOriginService = providerOriginService.WithFencer(originFencer)
-		if pool, ok := deps.DB.(*pgxpool.Pool); ok && sharedBreakerStore != nil {
-			providerService.WithStatusFencer(
-				provider.NewStatusFencer(runtimecontrol.NewOriginFencePublisher(pool), sharedBreakerStore),
-				func(ctx context.Context) int {
-					return appsettings.GatewayCircuitBreaker(ctx, settingsStore).OriginStatusBatchMax
-				},
-			)
-		}
+	if pool, ok := deps.DB.(*pgxpool.Pool); ok && sharedBreakerStore != nil {
+		providerService.WithRuntimeControl(
+			provider.NewFencer(runtimecontrol.NewProviderFencePublisher(pool), sharedBreakerStore),
+			sharedBreakerStore,
+		)
 	}
 	channelService := channel.NewService(queries, adapterRegistry)
 	if channelRuntimePublisher != nil && channelRuntimeStore != nil {
@@ -258,21 +238,20 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	}
 
 	handler := NewAdminHTTPHandler(adminHTTPDeps{
-		Logger:                  deps.Logger,
-		Authenticator:           authenticator,
-		ProviderService:         providerService,
-		ProviderOpsService:      providerOpsService,
-		ProviderOriginService: providerOriginService,
-		ProviderOriginBreaker: originBreakerRuntime,
-		ChannelService:          channelService,
-		ChannelBreaker:          channelBreakerRuntime,
-		ChannelTestService:      channelTestService,
-		ChannelOpsService:       channelOpsService,
-		ModelService:            modelService,
-		ModelOpsService:         modelOpsService,
-		ChannelModelService:     channelModelService,
-		ChannelPriceService:     channelPriceService,
-		ModelPriceService:       modelPriceService,
+		Logger:              deps.Logger,
+		Authenticator:       authenticator,
+		ProviderService:     providerService,
+		ProviderOpsService:  providerOpsService,
+		ProviderBreaker:     providerBreakerRuntime,
+		ChannelService:      channelService,
+		ChannelBreaker:      channelBreakerRuntime,
+		ChannelTestService:  channelTestService,
+		ChannelOpsService:   channelOpsService,
+		ModelService:        modelService,
+		ModelOpsService:     modelOpsService,
+		ChannelModelService: channelModelService,
+		ChannelPriceService: channelPriceService,
+		ModelPriceService:   modelPriceService,
 
 		ChannelCostMultiplierService: channelCostMultiplierService,
 		ChannelRechargeFactorService: channelRechargeFactorService,

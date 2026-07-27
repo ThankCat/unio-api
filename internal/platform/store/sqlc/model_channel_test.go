@@ -74,8 +74,8 @@ func insertProvider(t *testing.T, ctx context.Context, tx pgx.Tx, slug string, s
 
 	var id int64
 	err := tx.QueryRow(ctx, `
-		INSERT INTO providers (slug, name, status)
-		VALUES ($1, $2, $3)
+		INSERT INTO providers (slug, name, origin, status)
+		VALUES ($1, $2, 'https://' || $1 || '.example.test', $3)
 		RETURNING id
 	`, slug, slug, status).Scan(&id)
 	if err != nil {
@@ -92,25 +92,7 @@ func insertChannel(t *testing.T, ctx context.Context, tx pgx.Tx, providerID int6
 	return insertChannelWithBinding(t, ctx, tx, providerID, name, "openai", "openai", status, priority, timeoutMS)
 }
 
-// insertProviderOrigin 插入测试 ProviderOrigin（唯一 base_url），返回主键（P4 §4.2）。
-func insertProviderOrigin(t *testing.T, ctx context.Context, tx pgx.Tx, providerID int64, name string, baseURL string, status string) int64 {
-	t.Helper()
-
-	var id int64
-	err := tx.QueryRow(ctx, `
-		INSERT INTO provider_origins (provider_id, name, base_url, status)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id
-	`, providerID, name, baseURL, status).Scan(&id)
-	if err != nil {
-		t.Fatalf("insert provider origin %q: %v", name, err)
-	}
-
-	return id
-}
-
 // insertChannelWithBinding 插入指定 protocol 与 adapter_key 的测试 channel，用于验证同协议路由过滤。
-// P4 §4.4：base_url 归属 ProviderOrigin，本 helper 为每个 channel 自动建一个同 Provider 下的 enabled Origin 并绑定。
 func insertChannelWithBinding(t *testing.T, ctx context.Context, tx pgx.Tx, providerID int64, name string, protocol string, adapterKey string, status string, priority int32, timeoutMS *int32) int64 {
 	t.Helper()
 
@@ -119,14 +101,12 @@ func insertChannelWithBinding(t *testing.T, ctx context.Context, tx pgx.Tx, prov
 		timeout = *timeoutMS
 	}
 
-	originID := insertProviderOrigin(t, ctx, tx, providerID, "ep-"+name, "https://"+name+".example.test", "enabled")
-
 	var id int64
 	err := tx.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, provider_origin_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id
-	`, providerID, originID, name, protocol, adapterKey, "sk-test-"+name, status, priority, timeout).Scan(&id)
+	`, providerID, name, protocol, adapterKey, "sk-test-"+name, status, priority, timeout).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert channel %q: %v", name, err)
 	}
@@ -140,17 +120,17 @@ func withRequestAttemptRuntimeIdentity(t *testing.T, ctx context.Context, tx pgx
 	t.Helper()
 
 	err := tx.QueryRow(ctx, `
-		SELECT c.provider_origin_id,
-		       pe.base_url_revision,
-		       pe.status_revision,
+		SELECT c.provider_id,
+		       p.origin_revision,
+		       p.status_revision,
 		       c.config_revision
 		FROM channels c
-		JOIN provider_origins pe ON pe.id = c.provider_origin_id
+		JOIN providers p ON p.id = c.provider_id
 		WHERE c.id = $1
 	`, channelID).Scan(
-		&params.ProviderOriginID,
-		&params.ProviderOriginBaseUrlRevision,
-		&params.ProviderOriginStatusRevision,
+		&params.ProviderID,
+		&params.ProviderOriginRevision,
+		&params.ProviderStatusRevision,
 		&params.ChannelConfigRevision,
 	)
 	if err != nil {

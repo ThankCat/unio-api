@@ -338,7 +338,7 @@ SELECT
     c.status AS channel_status,
     c.credential_valid,
     (c.credential <> '')::boolean AS has_credential,
-    (pe.base_url <> '')::boolean AS has_base_url,
+    (p.origin <> '')::boolean AS has_origin,
     c.protocol,
     c.adapter_key,
     c.priority,
@@ -346,12 +346,9 @@ SELECT
     c.concurrency_limit,
     c.config_revision AS channel_config_revision,
     c.admission_limits_revision AS channel_admission_limits_revision,
-    pe.id AS provider_origin_id,
-    pe.name AS provider_origin_name,
-    pe.status AS provider_origin_status,
-    pe.base_url AS provider_origin_base_url,
-    pe.base_url_revision AS provider_origin_base_url_revision,
-    pe.status_revision AS provider_origin_status_revision,
+    p.origin,
+    p.origin_revision AS provider_origin_revision,
+    p.status_revision AS provider_status_revision,
     p.id AS provider_id,
     p.name AS provider_name,
     p.status AS provider_status,
@@ -389,7 +386,6 @@ FROM routes rt
 JOIN route_channels rc ON rc.route_id = rt.id
 JOIN channels c ON c.id = rc.channel_id
 JOIN providers p ON p.id = c.provider_id
-JOIN provider_origins pe ON pe.id = c.provider_origin_id
 LEFT JOIN models m
   ON NULLIF(sqlc.arg(model_id)::text, '') IS NOT NULL
  AND m.model_id = sqlc.arg(model_id)::text

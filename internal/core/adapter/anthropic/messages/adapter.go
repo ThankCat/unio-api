@@ -39,7 +39,7 @@ func NewAdapter(client *http.Client) *Adapter {
 
 // Messages 调用上游非流式 /v1/messages，并转换为协议族内部响应与 facts。
 func (a *Adapter) Messages(ctx context.Context, ch channel.Runtime, req MessageRequest) (*MessageResponse, error) {
-	if ch.BaseURL == "" {
+	if ch.Origin == "" {
 		return nil, failure.New(
 			failure.CodeAdapterChannelInvalid,
 			failure.WithMessage("anthropic adapter channel base url is empty"),
@@ -138,7 +138,7 @@ func (a *Adapter) StreamMessages(ctx context.Context, ch channel.Runtime, req Me
 			failure.WithMessage("anthropic adapter stream emit is nil"),
 		)
 	}
-	if ch.BaseURL == "" {
+	if ch.Origin == "" {
 		return adapter.StreamOutcome{}, failure.New(
 			failure.CodeAdapterChannelInvalid,
 			failure.WithMessage("anthropic adapter channel base url is empty"),
@@ -230,7 +230,7 @@ func (a *Adapter) StreamMessages(ctx context.Context, ch channel.Runtime, req Me
 
 // do 构造并发送上游 HTTP 请求。
 func (a *Adapter) do(ctx context.Context, ch channel.Runtime, req MessageRequest, stream bool) (*http.Response, error) {
-	url, err := adapter.BuildUpstreamURL(ch.BaseURL, adapter.OperationPathMessages)
+	url, err := adapter.BuildUpstreamURL(ch.Origin, adapter.OperationPathMessages)
 	if err != nil {
 		return nil, err
 	}

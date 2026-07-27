@@ -83,9 +83,9 @@ func (w *PermissionRecheckWorker) RunOnce(ctx context.Context) (bool, error) {
 
 	result, recheckErr := w.rechecker.RecheckPermission(ctx, channeltest.PermissionRecheckInput{
 		ChannelID: task.ChannelID, ModelID: task.ModelID,
-		ChannelConfigRevision:   task.ChannelConfigRevision,
-		OriginBaseURLRevision: task.OriginBaseURLRevision,
-		OriginStatusRevision:  task.OriginStatusRevision,
+		ChannelConfigRevision:  task.ChannelConfigRevision,
+		OriginRevision:         task.OriginRevision,
+		ProviderStatusRevision: task.ProviderStatusRevision,
 	})
 	outcome := breakerstore.PermissionRecheckFailed
 	retryAfter := w.backoff(task.Attempt)
@@ -112,8 +112,8 @@ func (w *PermissionRecheckWorker) RunOnce(ctx context.Context) (bool, error) {
 		zap.Int64("channel_id", task.ChannelID),
 		zap.Int64("model_id", task.ModelID),
 		zap.Int64("config_revision", task.ChannelConfigRevision),
-		zap.Int64("origin_base_url_revision", task.OriginBaseURLRevision),
-		zap.Int64("origin_status_revision", task.OriginStatusRevision),
+		zap.Int64("origin_revision", task.OriginRevision),
+		zap.Int64("provider_status_revision", task.ProviderStatusRevision),
 		zap.Int64("recheck_attempt", task.Attempt),
 		zap.String("outcome", string(outcome)),
 		zap.String("disposition", string(disposition)),

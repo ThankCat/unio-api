@@ -104,10 +104,10 @@ func TestChatCompletionServiceRecordsSuccessMetrics(t *testing.T) {
 	if len(recorder.upstream) != 1 || !recorder.upstream[0].success {
 		t.Fatalf("expected one successful upstream metric, got %#v", recorder.upstream)
 	}
-	if recorder.upstream[0].provider != "9123" || recorder.upstream[0].channel != "123" {
+	if recorder.upstream[0].provider != "8123" || recorder.upstream[0].channel != "123" {
 		t.Fatalf("unexpected upstream labels: %#v", recorder.upstream[0])
 	}
-	if len(recorder.routing) != 1 || recorder.routing[0] != (routingMetric{provider: "9123", channel: "123", model: "openai/gpt-4.1"}) {
+	if len(recorder.routing) != 1 || recorder.routing[0] != (routingMetric{provider: "8123", channel: "123", model: "openai/gpt-4.1"}) {
 		t.Fatalf("expected one routing selected metric, got %#v", recorder.routing)
 	}
 	if len(recorder.settlements) != 1 || recorder.settlements[0] != metrics.SettlementOutcomeSuccess {

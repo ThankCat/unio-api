@@ -42,7 +42,7 @@ func TestAdapterUpstreamWireCollapsesOfficialFields(t *testing.T) {
 	maxTokens := 10
 	maxCompletionTokens := 20
 	_, err := adapter.ChatCompletions(context.Background(), channel.Runtime{
-		BaseURL: server.URL,
+		Origin:  server.URL,
 		APIKey:  "test-key",
 		Timeout: 5 * time.Second,
 	}, chatcompletionsadapter.ChatRequest{

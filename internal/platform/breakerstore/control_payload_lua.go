@@ -123,12 +123,11 @@ local function parse_circuit_breaker_payload(payload)
     attempt_permit_ttl_ms=true,
     attempt_permit_renew_interval_ms=true,
     attempt_permit_terminal_ttl_ms=true,
-    origin_base_url_revision_operation_ttl_ms=true,
-    origin_status_revision_operation_ttl_ms=true,
-    origin_status_batch_max=true,
+    origin_revision_operation_ttl_ms=true,
+    status_revision_operation_ttl_ms=true,
     open_durations_ms=true,
-    origin_ambiguous_distinct_channels=true,
-    origin_ambiguous_distinct_models=true
+    provider_ambiguous_distinct_channels=true,
+    provider_ambiguous_distinct_models=true
   })
   if value == nil or type(value.enabled) ~= 'boolean' then return nil end
 
@@ -143,26 +142,23 @@ local function parse_circuit_breaker_payload(payload)
   value.attempt_permit_ttl_ms = positive_integer(value.attempt_permit_ttl_ms)
   value.attempt_permit_renew_interval_ms = positive_integer(value.attempt_permit_renew_interval_ms)
   value.attempt_permit_terminal_ttl_ms = positive_integer(value.attempt_permit_terminal_ttl_ms)
-  value.origin_base_url_revision_operation_ttl_ms = positive_integer(value.origin_base_url_revision_operation_ttl_ms)
-  value.origin_status_revision_operation_ttl_ms = positive_integer(value.origin_status_revision_operation_ttl_ms)
-  value.origin_status_batch_max = positive_integer(value.origin_status_batch_max)
-  value.origin_ambiguous_distinct_channels = positive_integer(value.origin_ambiguous_distinct_channels)
-  value.origin_ambiguous_distinct_models = positive_integer(value.origin_ambiguous_distinct_models)
+  value.origin_revision_operation_ttl_ms = positive_integer(value.origin_revision_operation_ttl_ms)
+  value.status_revision_operation_ttl_ms = positive_integer(value.status_revision_operation_ttl_ms)
+  value.provider_ambiguous_distinct_channels = positive_integer(value.provider_ambiguous_distinct_channels)
+  value.provider_ambiguous_distinct_models = positive_integer(value.provider_ambiguous_distinct_models)
   value.open_durations_ms = positive_nondecreasing_integer_array(value.open_durations_ms)
 
   if value.window_ms == nil or value.consecutive_failures == nil or value.consecutive_window_ms == nil or
       value.attempt_permit_ttl_ms == nil or value.attempt_permit_renew_interval_ms == nil or
-      value.attempt_permit_terminal_ttl_ms == nil or value.origin_base_url_revision_operation_ttl_ms == nil or
-      value.origin_status_revision_operation_ttl_ms == nil or value.origin_status_batch_max == nil or
-      value.open_durations_ms == nil or value.origin_ambiguous_distinct_channels == nil or
-      value.origin_ambiguous_distinct_models == nil then
+      value.attempt_permit_terminal_ttl_ms == nil or value.origin_revision_operation_ttl_ms == nil or
+      value.status_revision_operation_ttl_ms == nil or value.open_durations_ms == nil or
+      value.provider_ambiguous_distinct_channels == nil or value.provider_ambiguous_distinct_models == nil then
     return nil
   end
   if value.attempt_permit_renew_interval_ms * 3 > value.attempt_permit_ttl_ms then return nil end
   if value.attempt_permit_terminal_ttl_ms < value.attempt_permit_ttl_ms then return nil end
   if value.attempt_permit_ttl_ms > MAX_EXACT_INTEGER - value.attempt_permit_terminal_ttl_ms - 120000 then return nil end
-  if value.origin_status_batch_max > 1024 then return nil end
-  if value.origin_ambiguous_distinct_channels < 2 or value.origin_ambiguous_distinct_models < 2 then return nil end
+  if value.provider_ambiguous_distinct_channels < 2 or value.provider_ambiguous_distinct_models < 2 then return nil end
   return value
 end
 

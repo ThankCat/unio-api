@@ -16,7 +16,7 @@ import (
 // RequestFactsExpectation 是真实上游 smoke 共用的最小请求、TTFT、usage 与落账断言。
 type RequestFactsExpectation struct {
 	IngressProtocol string
-	Endpoint       string
+	Endpoint        string
 	Stream          bool
 }
 
@@ -134,7 +134,7 @@ type latestRequestFacts struct {
 	requestID             int64
 	requestStatus         string
 	ingressProtocol       string
-	endpoint             string
+	endpoint              string
 	stream                bool
 	finalChannelID        pgtype.Int8
 	attemptStatus         string
@@ -152,7 +152,7 @@ type latestRequestFacts struct {
 	costSnapshotCount     int64
 	traceRouteID          int64
 	traceProtocol         string
-	traceEndpoint        string
+	traceEndpoint         string
 	traceCandidateCount   int32
 	traceSelectedOrder    []int64
 	traceAlgorithmVersion string

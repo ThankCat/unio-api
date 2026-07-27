@@ -83,7 +83,7 @@ func TestNewAdapterRegistryDoesNotReplayPOSTOnRedirect(t *testing.T) {
 			}
 			_, err = chat.ChatCompletions(
 				context.Background(),
-				channel.Runtime{BaseURL: server.URL, APIKey: "test-key"},
+				channel.Runtime{Origin: server.URL, APIKey: "test-key"},
 				chatcompletions.ChatRequest{Model: "test-model"},
 			)
 			if err == nil {

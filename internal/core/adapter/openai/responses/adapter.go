@@ -43,7 +43,7 @@ var (
 
 // CreateResponse 调用上游 POST /responses（非流式），透传响应原文并解析账务事实。
 func (a *Adapter) CreateResponse(ctx context.Context, ch channel.Runtime, req Request) (*Response, error) {
-	if ch.BaseURL == "" {
+	if ch.Origin == "" {
 		return nil, failure.New(
 			failure.CodeAdapterChannelInvalid,
 			failure.WithMessage("openai responses adapter channel base url is empty"),
@@ -141,7 +141,7 @@ func (a *Adapter) newUpstreamRequest(ctx context.Context, ch channel.Runtime, re
 		)
 	}
 
-	url, err := adapter.BuildUpstreamURL(ch.BaseURL, adapter.OperationPathResponses)
+	url, err := adapter.BuildUpstreamURL(ch.Origin, adapter.OperationPathResponses)
 	if err != nil {
 		return nil, err
 	}

@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
@@ -41,7 +40,6 @@ const (
 // Store 定义 channel 管理所需的存储能力。
 type Store interface {
 	GetProvider(ctx context.Context, id int64) (sqlc.Provider, error)
-	GetProviderOrigin(ctx context.Context, id int64) (sqlc.ProviderOrigin, error)
 	ListChannelsPage(ctx context.Context, arg sqlc.ListChannelsPageParams) ([]sqlc.ListChannelsPageRow, error)
 	CountChannels(ctx context.Context, arg sqlc.CountChannelsParams) (int64, error)
 	GetChannel(ctx context.Context, id int64) (sqlc.Channel, error)
@@ -49,9 +47,8 @@ type Store interface {
 	UpdateChannel(ctx context.Context, arg sqlc.UpdateChannelParams) (sqlc.Channel, error)
 	SetChannelBillingBehavior(ctx context.Context, arg sqlc.SetChannelBillingBehaviorParams) (sqlc.Channel, error)
 	DeleteChannelCascade(ctx context.Context, id int64) (int64, error)
-	ArchiveChannelCascade(ctx context.Context, id int64) (int64, error)
-	ArchiveChannelWithReplacement(ctx context.Context, arg sqlc.ArchiveChannelWithReplacementParams) (int64, error)
-	ListEnabledRoutesEmptiedByChannel(ctx context.Context, channelID int64) ([]sqlc.ListEnabledRoutesEmptiedByChannelRow, error)
+	ArchiveChannel(ctx context.Context, id int64) (int64, error)
+	ListRoutesReferencingChannel(ctx context.Context, channelID int64) ([]sqlc.ListRoutesReferencingChannelRow, error)
 	RestoreChannel(ctx context.Context, id int64) (int64, error)
 }
 
@@ -90,16 +87,11 @@ type AdapterKeyOption struct {
 //
 // ProviderName 由 enrichProviderName 在单条读取/写入后补全；列表场景由 JOIN 直接带出。
 type Channel struct {
-	ID           int64
-	ProviderID   int64
-	ProviderName string
-	// ProviderOriginID 是 channel 绑定的 ProviderOrigin（唯一 API Root/公共故障域）。
-	ProviderOriginID int64
-	// ProviderOriginName / ProviderOriginStatus / BaseURL 为只读展示，来源于所绑定 Origin。
-	ProviderOriginName            string
-	ProviderOriginStatus          string
-	ProviderOriginBaseURLRevision int64
-	ProviderOriginStatusRevision  int64
+	ID                     int64
+	ProviderID             int64
+	ProviderName           string
+	OriginRevision         int64
+	ProviderStatusRevision int64
 	// ConfigRevision / AdmissionLimitsRevision 为只读返回（P4 §4.4）。
 	ConfigRevision          int64
 	AdmissionLimitsRevision int64
@@ -108,7 +100,7 @@ type Channel struct {
 	Name               string
 	Protocol           string
 	AdapterKey         string
-	BaseURL            string
+	Origin             string
 	Credential         string
 	Status             string
 	Priority           int32
@@ -189,15 +181,14 @@ type ListResult struct {
 //
 // AdapterKey 可选：留空时默认为 Protocol 同名的忠实透传 adapter（见 Create 注释）。
 type CreateInput struct {
-	ProviderID         int64
-	ProviderOriginID int64
-	Name               string
-	Protocol           string
-	AdapterKey         string
-	Credential         string
-	Status             string
-	Priority           int32
-	TimeoutMs          *int32
+	ProviderID int64
+	Name       string
+	Protocol   string
+	AdapterKey string
+	Credential string
+	Status     string
+	Priority   int32
+	TimeoutMs  *int32
 	// RateLimitsProvided=true 时按 RPM/TPM/RPD/并发设置渠道级限流；rate 的 nil 继承渠道默认限流，
 	// concurrency 的 nil 继承并发默认 channel_limit，0=不限，>0=具体上限。
 	RateLimitsProvided bool
@@ -211,12 +202,12 @@ type CreateInput struct {
 
 // UpdateInput 是更新 channel 的入参；protocol、adapter_key 与凭据不在此修改。
 type UpdateInput struct {
-	ID                 int64
-	Name               string
-	ProviderOriginID int64
-	Status             string
-	Priority           int32
-	TimeoutMs          *int32
+	ID         int64
+	Name       string
+	ProviderID int64
+	Status     string
+	Priority   int32
+	TimeoutMs  *int32
 	// RateLimitsProvided=true 时按 RPM/TPM/RPD/并发 原子设置渠道级限流。
 	RateLimitsProvided bool
 	RPMLimit           *int64
@@ -256,13 +247,13 @@ type CredentialProbeResult struct {
 }
 
 type CredentialVerification struct {
-	State                         CredentialVerificationState
-	TestedOriginBaseURLRevision *int64
-	TestedOriginStatusRevision  *int64
-	TestedConfigRevision          *int64
-	StateChangeApplied            bool
-	CredentialValidAfter          bool
-	Result                        *CredentialProbeResult
+	State                        CredentialVerificationState
+	TestedOriginRevision         *int64
+	TestedProviderStatusRevision *int64
+	TestedConfigRevision         *int64
+	StateChangeApplied           bool
+	CredentialValidAfter         bool
+	Result                       *CredentialProbeResult
 }
 
 // RotateCredentialResult 明确区分「凭据已保存」与「即时检测是否通过」。
@@ -400,9 +391,6 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	if in.ProviderID <= 0 {
 		return Channel{}, invalidArgument("provider_id", "provider_id must be positive")
 	}
-	if in.ProviderOriginID <= 0 {
-		return Channel{}, invalidArgument("provider_origin_id", "provider_origin_id must be positive")
-	}
 	if name == "" {
 		return Channel{}, invalidArgument("name", "name is required")
 	}
@@ -453,16 +441,19 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		)
 	}
 
-	if _, err := s.store.GetProvider(ctx, in.ProviderID); err != nil {
+	provider, err := s.store.GetProvider(ctx, in.ProviderID)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Channel{}, invalidArgument("provider_id", "provider not found")
 		}
 		return Channel{}, storeFailed(err, "load provider for channel")
 	}
 
-	// P4 §4.4：Channel 必须绑定同一 Provider 下的 Origin（复合外键在 DB 兜底，这里给出可读错误）。
-	if _, err := s.resolveOriginForProvider(ctx, in.ProviderOriginID, in.ProviderID); err != nil {
-		return Channel{}, err
+	if provider.Status == StatusArchived {
+		return Channel{}, conflict("archived provider cannot be configured")
+	}
+	if status == StatusEnabled && provider.Status != StatusEnabled {
+		return Channel{}, conflict("enabled channel requires an enabled provider")
 	}
 
 	billsOnDisconnect := false
@@ -471,7 +462,6 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	}
 	row, err := s.store.CreateChannel(ctx, sqlc.CreateChannelParams{
 		ProviderID:                in.ProviderID,
-		ProviderOriginID:        in.ProviderOriginID,
 		Name:                      name,
 		Protocol:                  protocol,
 		AdapterKey:                adapterKey,
@@ -511,8 +501,8 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	if name == "" {
 		return Channel{}, invalidArgument("name", "name is required")
 	}
-	if in.ProviderOriginID <= 0 {
-		return Channel{}, invalidArgument("provider_origin_id", "provider_origin_id must be positive")
+	if in.ProviderID <= 0 {
+		return Channel{}, invalidArgument("provider_id", "provider_id must be positive")
 	}
 	if err := validateStatus(status); err != nil {
 		return Channel{}, err
@@ -524,7 +514,6 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 		return Channel{}, err
 	}
 
-	// P4 §4.4：换绑 Origin 必须仍属于该 channel 的 Provider。
 	cur, err := s.store.GetChannel(ctx, in.ID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -532,8 +521,18 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 		}
 		return Channel{}, storeFailed(err, "get channel for update")
 	}
-	if _, err := s.resolveOriginForProvider(ctx, in.ProviderOriginID, cur.ProviderID); err != nil {
-		return Channel{}, err
+	if in.ProviderID != 0 && in.ProviderID != cur.ProviderID {
+		return Channel{}, invalidArgument("provider_id", "channel provider cannot be changed")
+	}
+	provider, err := s.store.GetProvider(ctx, cur.ProviderID)
+	if err != nil {
+		return Channel{}, storeFailed(err, "load provider for channel")
+	}
+	if provider.Status == StatusArchived {
+		return Channel{}, conflict("archived provider cannot be configured")
+	}
+	if status == StatusEnabled && provider.Status != StatusEnabled {
+		return Channel{}, conflict("enabled channel requires an enabled provider")
 	}
 	if in.RateLimitsProvided {
 		desiredLimits := AdmissionLimits{
@@ -553,12 +552,11 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	}
 
 	row, err := s.store.UpdateChannel(ctx, sqlc.UpdateChannelParams{
-		ID:                 in.ID,
-		Name:               name,
-		ProviderOriginID: in.ProviderOriginID,
-		Status:             status,
-		Priority:           in.Priority,
-		TimeoutMs:          timeoutParam(in.TimeoutMs),
+		ID:        in.ID,
+		Name:      name,
+		Status:    status,
+		Priority:  in.Priority,
+		TimeoutMs: timeoutParam(in.TimeoutMs),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -629,12 +627,11 @@ func (s *Service) updateWithPublishedAdmissionLimits(
 		BusinessCommit: func(ctx context.Context, tx pgx.Tx) error {
 			qtx := sqlc.New(tx)
 			row, updateErr := qtx.UpdateChannel(ctx, sqlc.UpdateChannelParams{
-				ID:                 in.ID,
-				Name:               strings.TrimSpace(in.Name),
-				ProviderOriginID: in.ProviderOriginID,
-				Status:             strings.TrimSpace(in.Status),
-				Priority:           in.Priority,
-				TimeoutMs:          timeoutParam(in.TimeoutMs),
+				ID:        in.ID,
+				Name:      strings.TrimSpace(in.Name),
+				Status:    strings.TrimSpace(in.Status),
+				Priority:  in.Priority,
+				TimeoutMs: timeoutParam(in.TimeoutMs),
 			})
 			if updateErr != nil {
 				return channelUpdateError(updateErr)
@@ -779,55 +776,22 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-// Archive 归档渠道：从所有线路候选池移除、置 archived、释放渠道名（追加 __archived_<id> 后缀）。
-// 幂等：已归档返回 not_found（0 行）。
-func (s *Service) Archive(ctx context.Context, id int64, replacementChannelID *int64) error {
+// Archive 只归档已显式移出所有 Route 池的渠道，不静默拆线或替换。
+func (s *Service) Archive(ctx context.Context, id int64) error {
 	if id <= 0 {
 		return invalidArgument("id", "channel id must be positive")
 	}
-	if replacementChannelID != nil {
-		if *replacementChannelID <= 0 || *replacementChannelID == id {
-			return invalidArgument("replacement_channel_id", "replacement channel must be a different positive channel id")
-		}
-		replacement, err := s.store.GetChannel(ctx, *replacementChannelID)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return invalidArgument("replacement_channel_id", "replacement channel not found")
-			}
-			return storeFailed(err, "get replacement channel")
-		}
-		if replacement.Status != StatusEnabled || !replacement.CredentialValid || replacement.Credential == "" {
-			return conflict("replacement channel must be enabled, credential-valid, and fully configured")
-		}
-		provider, err := s.store.GetProvider(ctx, replacement.ProviderID)
-		if err != nil {
-			return storeFailed(err, "get replacement channel provider")
-		}
-		if provider.Status != StatusEnabled {
-			return conflict("replacement channel provider must be enabled")
-		}
-		affected, err := s.store.ArchiveChannelWithReplacement(ctx, sqlc.ArchiveChannelWithReplacementParams{
-			ID: id, ReplacementChannelID: *replacementChannelID,
-		})
-		if err != nil {
-			return storeFailed(err, "replace and archive channel")
-		}
-		if affected == 0 {
-			return conflict("channel archive could not commit because the target or replacement changed")
-		}
-		return nil
-	}
-	affectedRoutes, err := s.store.ListEnabledRoutesEmptiedByChannel(ctx, id)
+	affectedRoutes, err := s.store.ListRoutesReferencingChannel(ctx, id)
 	if err != nil {
 		return storeFailed(err, "check channel archive route impact")
 	}
 	if len(affectedRoutes) > 0 {
 		return conflict(fmt.Sprintf(
-			"archiving channel would empty enabled route %q (%d); replace the channel or disable the route first",
+			"remove channel from route %q (%d) before archiving it",
 			affectedRoutes[0].Name, affectedRoutes[0].ID,
 		))
 	}
-	affected, err := s.store.ArchiveChannelCascade(ctx, id)
+	affected, err := s.store.ArchiveChannel(ctx, id)
 	if err != nil {
 		return storeFailed(err, "archive channel")
 	}
@@ -875,7 +839,6 @@ func toChannel(c sqlc.Channel) Channel {
 	return Channel{
 		ID:                      c.ID,
 		ProviderID:              c.ProviderID,
-		ProviderOriginID:      c.ProviderOriginID,
 		ConfigRevision:          c.ConfigRevision,
 		AdmissionLimitsRevision: c.AdmissionLimitsRevision,
 		Name:                    c.Name,
@@ -901,21 +864,6 @@ func toChannel(c sqlc.Channel) Channel {
 	}
 }
 
-// resolveOriginForProvider 校验 Origin 存在且归属指定 Provider（复合外键的可读前置校验）。
-func (s *Service) resolveOriginForProvider(ctx context.Context, originID, providerID int64) (sqlc.ProviderOrigin, error) {
-	ep, err := s.store.GetProviderOrigin(ctx, originID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return sqlc.ProviderOrigin{}, invalidArgument("provider_origin_id", "provider origin not found")
-		}
-		return sqlc.ProviderOrigin{}, storeFailed(err, "load provider origin for channel")
-	}
-	if ep.ProviderID != providerID {
-		return sqlc.ProviderOrigin{}, invalidArgument("provider_origin_id", "provider origin does not belong to the channel provider")
-	}
-	return ep, nil
-}
-
 func (s *Service) enrichProviderName(ctx context.Context, ch Channel) (Channel, error) {
 	if ch.ProviderID > 0 {
 		provider, err := s.store.GetProvider(ctx, ch.ProviderID)
@@ -925,21 +873,9 @@ func (s *Service) enrichProviderName(ctx context.Context, ch Channel) (Channel, 
 			}
 		} else {
 			ch.ProviderName = provider.Name
-		}
-	}
-	// 单条读取时从所绑定 Origin 只读带出 base_url/name/status（列表由 JOIN 直接带出）。
-	if ch.ProviderOriginID > 0 && ch.BaseURL == "" {
-		ep, err := s.store.GetProviderOrigin(ctx, ch.ProviderOriginID)
-		if err != nil {
-			if !errors.Is(err, pgx.ErrNoRows) {
-				return Channel{}, storeFailed(err, "load provider origin for channel")
-			}
-		} else {
-			ch.BaseURL = ep.BaseUrl
-			ch.ProviderOriginName = ep.Name
-			ch.ProviderOriginStatus = ep.Status
-			ch.ProviderOriginBaseURLRevision = ep.BaseUrlRevision
-			ch.ProviderOriginStatusRevision = ep.StatusRevision
+			ch.Origin = provider.Origin
+			ch.OriginRevision = provider.OriginRevision
+			ch.ProviderStatusRevision = provider.StatusRevision
 		}
 	}
 	return ch, nil
@@ -951,15 +887,12 @@ func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 		ID:                      c.ID,
 		ProviderID:              c.ProviderID,
 		ProviderName:            c.ProviderName,
-		ProviderOriginID:      c.ProviderOriginID,
-		ProviderOriginName:    c.ProviderOriginName,
-		ProviderOriginStatus:  c.ProviderOriginStatus,
 		ConfigRevision:          c.ConfigRevision,
 		AdmissionLimitsRevision: c.AdmissionLimitsRevision,
 		Name:                    c.Name,
 		Protocol:                c.Protocol,
 		AdapterKey:              c.AdapterKey,
-		BaseURL:                 c.BaseUrl,
+		Origin:                  c.Origin,
 		Credential:              c.Credential,
 		Status:                  c.Status,
 		Priority:                c.Priority,
@@ -1055,17 +988,6 @@ func validateStatus(status string) error {
 	default:
 		return invalidArgument("status", fmt.Sprintf("status must be %q or %q", StatusEnabled, StatusDisabled))
 	}
-}
-
-func validateBaseURL(raw string) error {
-	if raw == "" {
-		return invalidArgument("base_url", "base_url is required")
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return invalidArgument("base_url", "base_url must be a valid http(s) URL")
-	}
-	return nil
 }
 
 func validateTimeout(ms *int32) error {

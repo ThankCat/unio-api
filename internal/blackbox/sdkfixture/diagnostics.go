@@ -29,7 +29,7 @@ type failureAuditSnapshot struct {
 	upstreamStartedAt    pgtype.Timestamptz
 	upstreamFirstTokenAt pgtype.Timestamptz
 	upstreamCompletedAt  pgtype.Timestamptz
-	originDisposition  string
+	originDisposition    string
 	channelDisposition   string
 }
 
@@ -70,7 +70,7 @@ func (f *Fixture) loadFailureAuditSnapshot(ctx context.Context) (failureAuditSna
 			ra.upstream_started_at,
 			ra.upstream_first_token_at,
 			ra.upstream_completed_at,
-			COALESCE(ra.breaker_origin_disposition, ''),
+			COALESCE(ra.breaker_provider_disposition, ''),
 			COALESCE(ra.breaker_channel_disposition, '')
 		FROM request_records rr
 		LEFT JOIN LATERAL (

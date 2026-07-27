@@ -44,8 +44,8 @@ func TestAdapterMarksTransportStartedImmediatelyBeforeHTTPDo(t *testing.T) {
 			name: "non-stream",
 			invoke: func(ctx context.Context, a *Adapter) error {
 				_, err := a.ChatCompletions(ctx, channel.Runtime{
-					BaseURL: "https://example.test",
-					APIKey:  "test-secret",
+					Origin: "https://example.test",
+					APIKey: "test-secret",
 				}, ChatRequest{Model: "gpt-test"})
 				return err
 			},
@@ -54,8 +54,8 @@ func TestAdapterMarksTransportStartedImmediatelyBeforeHTTPDo(t *testing.T) {
 			name: "stream",
 			invoke: func(ctx context.Context, a *Adapter) error {
 				_, err := a.StreamChatCompletions(ctx, channel.Runtime{
-					BaseURL: "https://example.test",
-					APIKey:  "test-secret",
+					Origin: "https://example.test",
+					APIKey: "test-secret",
 				}, ChatRequest{Model: "gpt-test"}, func(ChatStreamChunk) error { return nil })
 				return err
 			},

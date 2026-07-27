@@ -44,9 +44,9 @@ func TestP4FaultE2E(t *testing.T) {
 				h.redisDelete(t, key)
 				h.assertReadiness(t, gateway, http.StatusServiceUnavailable)
 			}
-			assertSixModesRejectedWithoutUpstream(t, h, func(t *testing.T) {
-				h.redisDelete(t, key)
-			})
+			h.redisSetString(t, key, "p4-fault-invalid-control")
+			assertSixModesRejectedWithoutUpstream(t, h, nil)
+			h.redisDelete(t, key)
 			for _, gateway := range h.gateways {
 				h.waitReadiness(t, gateway, http.StatusOK, 8*time.Second)
 			}

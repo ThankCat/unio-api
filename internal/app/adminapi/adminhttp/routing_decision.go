@@ -16,7 +16,7 @@ type RoutingDecisionDTO struct {
 	Mode                 string          `json:"mode"`
 	RequestedModelID     string          `json:"requested_model_id"`
 	Protocol             string          `json:"protocol"`
-	Endpoint            string          `json:"endpoint"`
+	Endpoint             string          `json:"endpoint"`
 	PoolSize             int32           `json:"pool_size"`
 	CandidateCount       int32           `json:"candidate_count"`
 	StickyChannelID      *int64          `json:"sticky_channel_id"`

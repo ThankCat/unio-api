@@ -13,13 +13,23 @@ CREATE TABLE public.providers (
     slug text NOT NULL,
     -- name: provider 展示名称。--
     name text NOT NULL,
+    -- origin: 规范化后的唯一上游 API Root。--
+    origin text NOT NULL,
+    -- origin_revision: origin 真变化时单调递增。--
+    origin_revision bigint DEFAULT 1 NOT NULL,
     -- status: provider 启停状态。--
     status text NOT NULL,
+    -- status_revision: status 真变化时单调递增。--
+    status_revision bigint DEFAULT 1 NOT NULL,
     -- created_at: 记录创建时间。--
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     -- updated_at: 记录更新时间。--
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     archived_at timestamp with time zone,
+    CONSTRAINT providers_origin_check CHECK ((origin <> ''::text)),
+    CONSTRAINT providers_origin_scheme_check CHECK ((origin ~* '^https?://'::text)),
+    CONSTRAINT providers_origin_revision_check CHECK ((origin_revision >= 1)),
+    CONSTRAINT providers_status_revision_check CHECK ((status_revision >= 1)),
     CONSTRAINT ck_providers_archived_at CHECK (((status = 'archived'::text) = (archived_at IS NOT NULL))),
     CONSTRAINT providers_status_check CHECK ((status = ANY (ARRAY['enabled'::text, 'disabled'::text, 'archived'::text])))
 );
@@ -33,6 +43,9 @@ ALTER TABLE ONLY public.providers
 
 ALTER TABLE ONLY public.providers
     ADD CONSTRAINT providers_slug_key UNIQUE (slug);
+
+ALTER TABLE ONLY public.providers
+    ADD CONSTRAINT providers_origin_key UNIQUE (origin);
 
 -- ---------------------------------------------------------------------------
 -- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：

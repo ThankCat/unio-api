@@ -170,13 +170,13 @@ func TestRoutingTraceIncludesFullPoolExclusionReasons(t *testing.T) {
 		{
 			RouteID: 3, Mode: "balanced", RouteStatus: "enabled", ChannelID: 7,
 			ChannelStatus: "enabled", ProviderStatus: "enabled", CredentialValid: true,
-			HasCredential: true, HasBaseUrl: true, Protocol: "openai", ModelExists: true,
+			HasCredential: true, HasOrigin: true, Protocol: "openai", ModelExists: true,
 			ModelStatus: "enabled", BindingStatus: "enabled", HasModelPrice: true, HasChannelCost: true,
 		},
 		{
 			RouteID: 3, Mode: "balanced", RouteStatus: "enabled", ChannelID: 8,
 			ChannelStatus: "enabled", ProviderStatus: "enabled", CredentialValid: true,
-			HasCredential: true, HasBaseUrl: true, Protocol: "openai", ModelExists: true,
+			HasCredential: true, HasOrigin: true, Protocol: "openai", ModelExists: true,
 			ModelStatus: "enabled", BindingStatus: "enabled", HasModelPrice: true, HasChannelCost: true,
 		},
 	}}
@@ -187,16 +187,16 @@ func TestRoutingTraceIncludesFullPoolExclusionReasons(t *testing.T) {
 	}
 	plan := CandidatePlan{
 		Candidates: []Candidate{{Route: candidateRoute(7, "openai"), Balance: BalanceScore{
-			OriginID: 21, CandidateOriginBaseURLRevision: 3, RuntimeOriginBaseURLRevision: 3,
-			OriginBaseURLRevisionCurrent: true, CandidateOriginStatusRevision: 4,
-			RuntimeOriginStatusRevision: 4, OriginStatusRevisionCurrent: true,
+			ProviderID: 21, CandidateOriginRevision: 3, RuntimeOriginRevision: 3,
+			OriginRevisionCurrent: true, CandidateProviderStatusRevision: 4,
+			RuntimeProviderStatusRevision: 4, ProviderStatusRevisionCurrent: true,
 			CandidateChannelConfigRevision: 7, RuntimeChannelConfigRevision: &runtimeConfigRevision,
 			ChannelConfigRevisionCurrent: true, CandidateChannelAdmissionLimitsRevision: 5,
 			RuntimeChannelAdmissionLimitsRevision: 5, ChannelAdmissionLimitsRevisionCurrent: true,
 			RouteRateLimitsRevision: 3, ChannelRateLimitsRevision: 7,
 			GlobalConcurrencyRevision: 2, CircuitBreakerRevision: 6,
 			RoutingBalanceRevision: 4, RuntimeControlState: "active", RuntimeRevisionCurrent: true,
-			OriginBreakerState: "closed", ChannelBreakerState: "closed", BreakerStoreAdmission: "normal",
+			ProviderBreakerState: "closed", ChannelBreakerState: "closed", BreakerStoreAdmission: "normal",
 			CapacityScore: 0.5, ErrorRate: 0.1, ErrorSamples: 20, TTFTEWMAMs: 820,
 			TTFTSamples: 18, TTFTSampleSource: "stream_only", RoutingFactor: 0.8,
 			CostRatio: 0.4, CostWeight: 0.5, CostFactor: 0.8, Weight: 0.32,
@@ -216,7 +216,7 @@ func TestRoutingTraceIncludesFullPoolExclusionReasons(t *testing.T) {
 	if len(scores) != 2 || !scores[0].Eligible || scores[1].Eligible || scores[1].ExcludedReason != "capability_unsupported" {
 		t.Fatalf("unexpected full-pool diagnostics: %+v", scores)
 	}
-	if scores[0].OriginID != 21 || !scores[0].OriginStatusRevisionCurrent ||
+	if scores[0].ProviderID != 21 || !scores[0].ProviderStatusRevisionCurrent ||
 		scores[0].RuntimeChannelConfigRevision == nil || *scores[0].RuntimeChannelConfigRevision != 7 ||
 		scores[0].RouteRateLimitsRevision != 3 || scores[0].ChannelRateLimitsRevision != 7 ||
 		scores[0].CircuitBreakerRevision != 6 ||

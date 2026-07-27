@@ -47,7 +47,7 @@ var (
 
 // ChatCompletions 调用上游 /chat/completions，并转换为统一 adapter 响应。
 func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest) (*ChatResponse, error) {
-	if ch.BaseURL == "" {
+	if ch.Origin == "" {
 		return nil, failure.New(
 			failure.CodeAdapterChannelInvalid,
 			failure.WithMessage("openai adapter channel base url is empty"),
@@ -60,7 +60,7 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 		defer cancel()
 	}
 
-	url, err := adapter.BuildUpstreamURL(ch.BaseURL, adapter.OperationPathChatCompletions)
+	url, err := adapter.BuildUpstreamURL(ch.Origin, adapter.OperationPathChatCompletions)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +197,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 		)
 	}
 
-	if ch.BaseURL == "" {
+	if ch.Origin == "" {
 		return adapter.StreamOutcome{}, failure.New(
 			failure.CodeAdapterChannelInvalid,
 			failure.WithMessage("openai adapter channel base url is empty"),
@@ -209,7 +209,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	streamCtx, headersReceived, resetIdle, cancel := adapter.StreamTimeoutContext(ctx, ch.Timeout, adapter.StreamIdleTimeout())
 	defer cancel()
 
-	url, err := adapter.BuildUpstreamURL(ch.BaseURL, adapter.OperationPathChatCompletions)
+	url, err := adapter.BuildUpstreamURL(ch.Origin, adapter.OperationPathChatCompletions)
 	if err != nil {
 		return adapter.StreamOutcome{}, err
 	}

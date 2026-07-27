@@ -1,12 +1,12 @@
 -- name: ListProviders :many
 -- ListProviders 列出全部 provider，按 id 升序，供 admin 管理台展示。
-SELECT id, slug, name, status, created_at, updated_at, archived_at
+SELECT id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at
 FROM providers
 ORDER BY id;
 
 -- name: ListProvidersPage :many
 -- ListProvidersPage 按状态/关键字过滤后分页列出 provider；status、q 为 NULL 时不过滤。
-SELECT id, slug, name, status, created_at, updated_at, archived_at
+SELECT id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at
 FROM providers
 WHERE (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
   AND (
@@ -30,142 +30,85 @@ WHERE (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
 
 -- name: GetProvider :one
 -- GetProvider 按 id 读取单个 provider。
-SELECT id, slug, name, status, created_at, updated_at, archived_at
+SELECT id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at
 FROM providers
 WHERE id = $1
 LIMIT 1;
 
 -- name: CreateProvider :one
 -- CreateProvider 创建 provider；slug 全局唯一由 DB 唯一约束保证。
-INSERT INTO providers (slug, name, status)
-VALUES (sqlc.arg(slug), sqlc.arg(name), sqlc.arg(status))
-RETURNING id, slug, name, status, created_at, updated_at, archived_at;
+INSERT INTO providers (slug, name, origin, status)
+VALUES (sqlc.arg(slug), sqlc.arg(name), sqlc.arg(origin), sqlc.arg(status))
+RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at;
 
 -- name: UpdateProvider :one
--- UpdateProvider 更新 provider 的展示名与启停状态；slug 作为稳定业务标识不可变。
+-- UpdateProvider 更新 provider 的展示名；slug、origin 与 status 使用各自专用入口。
 UPDATE providers
-SET name = sqlc.arg(name), status = sqlc.arg(status), updated_at = now()
+SET name = sqlc.arg(name), updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, slug, name, status, created_at, updated_at, archived_at;
+RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at;
 
 -- name: DeleteProvider :execrows
 -- DeleteProvider 物理删除 provider，用于清理录错且从未使用的脏数据。
--- provider 自身子表只有「上游源站」provider_origins（P4 引入）：本语句在单条数据修改型 CTE 内
--- 连带清理源站及其操作日志——
---   1) 终态（committed/aborted）origin_routing_operations 置空 provider_id/origin_id（保留 transitions
---      审计摘要，释放其对 providers/provider_origins 的 RESTRICT 外键），符合 000009 迁移「永久删除前
---      置空但保留摘要」的既定设计；未终态（preparing/prepared/db_committed）操作仍以 RESTRICT 挡删，
---      避免删除进行中的运行态操作。
---   2) 删除该 provider 名下所有源站。
--- 源站/provider 本身不做请求/账务级联：一旦名下仍有 channel，或 provider/其源站被请求/账务历史
+-- 终态 provider_routing_operations 随 Provider 清理；非终态操作通过 RESTRICT 阻止删除。
+-- Provider 本身不做请求/账务级联：一旦名下仍有 channel，或 provider 被请求/账务历史
 --（request_records/request_attempts/cost_snapshots/channel_cost_exposures/settlement_recovery_jobs
 -- 等 NO ACTION 外键）引用，整条语句报 23503 全部回滚，上层降级为 conflict，提示先删渠道或改用停用。
 -- 数据修改型 CTE 保证三段各执行一次、外键在语句末统一校验，故清子表 + 删主体在单语句内原子完成。
-WITH released_origin_ops AS (
-    UPDATE origin_routing_operations
-    SET provider_id = NULL, origin_id = NULL, updated_at = now()
+WITH deleted_terminal_ops AS (
+    DELETE FROM provider_routing_operations
     WHERE provider_id = sqlc.arg(id)
       AND state IN ('committed', 'aborted')
-),
-deleted_origins AS (
-    DELETE FROM provider_origins WHERE provider_origins.provider_id = sqlc.arg(id)
 )
 DELETE FROM providers WHERE providers.id = sqlc.arg(id);
 
--- name: ArchiveProviderCascade :execrows
--- ArchiveProviderCascade 归档 provider：单事务内把名下未归档渠道一并归档（释放渠道名：追加
--- __archived_<id> 后缀）、从所有线路候选池移除这些渠道（route_channels 纯配置、无账务外键，可安全删），
--- 再把 provider 置 archived。slug 与 provider.name 不变（服务商标识稳定，归档大概率不再复用同 slug）。
--- 返回 providers 受影响行数（0 = provider 不存在或已归档）。恢复不向下级联，需逐个恢复渠道。
-WITH archived_channels AS (
-    UPDATE channels
-    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text,
-        config_revision = config_revision + 1, updated_at = now()
-    WHERE provider_id = sqlc.arg(id) AND status <> 'archived'
-    RETURNING id
-),
-cleared_pools AS (
-    DELETE FROM route_channels WHERE channel_id IN (SELECT id FROM archived_channels)
-)
+-- name: ArchiveProvider :execrows
+-- ArchiveProvider 只在无未归档 Channel、无非终态围栏操作时归档，并释放 origin 唯一槽位。
 UPDATE providers
-SET status = 'archived', archived_at = now()
-WHERE providers.id = sqlc.arg(id) AND providers.status <> 'archived';
-
--- name: ArchiveProviderWithReplacement :one
--- Atomically add one external healthy replacement to affected routes, archive all target channels, then archive provider.
-WITH replacement AS (
-    SELECT c.id
-    FROM channels c
-    JOIN providers p ON p.id = c.provider_id
-    JOIN provider_origins pe ON pe.id = c.provider_origin_id
-    WHERE c.id = sqlc.arg(replacement_channel_id)
-      AND c.provider_id <> sqlc.arg(id)
-      AND c.status = 'enabled'
-      AND c.credential_valid
-      AND c.credential <> ''
-      AND pe.base_url <> ''
-      AND pe.status = 'enabled'
-      AND p.status = 'enabled'
-),
-affected_routes AS (
-    SELECT DISTINCT rc.route_id
-    FROM route_channels rc
-    JOIN channels c ON c.id = rc.channel_id
-    WHERE c.provider_id = sqlc.arg(id)
-),
-added AS (
-    INSERT INTO route_channels (route_id, channel_id)
-    SELECT ar.route_id, replacement.id
-    FROM affected_routes ar CROSS JOIN replacement
-    ON CONFLICT (route_id, channel_id) DO NOTHING
-    RETURNING route_id
-),
-archived_channels AS (
-    UPDATE channels
-    SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text,
-        config_revision = config_revision + 1, updated_at = now()
-    WHERE provider_id = sqlc.arg(id)
-      AND status <> 'archived'
-      AND EXISTS (SELECT 1 FROM replacement)
-      AND (SELECT COUNT(*) FROM added) >= 0
-    RETURNING channels.id
-),
-cleared_pools AS (
-    DELETE FROM route_channels WHERE channel_id IN (SELECT id FROM archived_channels)
-    RETURNING route_id
-),
-archived_provider AS (
-    UPDATE providers
-    SET status = 'archived', archived_at = now()
-    WHERE providers.id = sqlc.arg(id)
-      AND providers.status <> 'archived'
-      AND EXISTS (SELECT 1 FROM replacement)
-      AND (SELECT COUNT(*) FROM cleared_pools) >= 0
-    RETURNING providers.id
-)
-SELECT COUNT(*)::bigint FROM archived_provider;
-
--- name: ListEnabledRoutesEmptiedByProvider :many
--- 归档目标 provider 全部渠道后将失去最后一个显式池成员的启用线路。
-SELECT DISTINCT rt.id, rt.name
-FROM routes rt
-JOIN route_channels target ON target.route_id = rt.id
-JOIN channels target_channel ON target_channel.id = target.channel_id AND target_channel.provider_id = sqlc.arg(provider_id)
-WHERE rt.status = 'enabled'
+SET status = 'archived', status_revision = status_revision + 1,
+    origin = origin || '__archived_' || id::text,
+    archived_at = now(), updated_at = now()
+WHERE providers.id = sqlc.arg(id)
+  AND providers.status <> 'archived'
+  AND NOT EXISTS (SELECT 1 FROM channels c WHERE c.provider_id = providers.id AND c.status <> 'archived')
   AND NOT EXISTS (
-      SELECT 1
-      FROM route_channels other
-      JOIN channels other_channel ON other_channel.id = other.channel_id
-      WHERE other.route_id = rt.id
-        AND other_channel.provider_id <> sqlc.arg(provider_id)
-  )
-ORDER BY rt.id;
+      SELECT 1 FROM provider_routing_operations operation
+      WHERE operation.provider_id = providers.id AND operation.state NOT IN ('committed', 'aborted')
+  );
 
 -- name: RestoreProvider :execrows
 -- RestoreProvider 取消归档 provider：archived → disabled（archived_at 清空）。不向下级联恢复渠道。
 UPDATE providers
-SET status = 'disabled', archived_at = NULL
-WHERE id = sqlc.arg(id) AND status = 'archived';
+SET status = 'disabled', status_revision = status_revision + 1,
+    origin = regexp_replace(origin, '__archived_' || id::text || '$', ''),
+    archived_at = NULL, updated_at = now()
+WHERE id = sqlc.arg(id)
+  AND status = 'archived'
+  AND origin LIKE '%__archived_' || id::text;
+
+-- name: CountNonArchivedChannelsByProvider :one
+SELECT COUNT(*) FROM channels WHERE provider_id = sqlc.arg(provider_id) AND status <> 'archived';
+
+-- name: CountEnabledChannelsByProvider :one
+SELECT COUNT(*) FROM channels WHERE provider_id = sqlc.arg(provider_id) AND status = 'enabled';
+
+-- name: CommitProviderOriginAtRevision :one
+UPDATE providers
+SET origin = sqlc.arg(origin), origin_revision = origin_revision + 1, updated_at = now()
+WHERE id = sqlc.arg(id)
+  AND origin_revision = sqlc.arg(expected_origin_revision)
+  AND origin IS DISTINCT FROM sqlc.arg(origin)
+RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at;
+
+-- name: CommitProviderStatusAtRevision :one
+UPDATE providers
+SET status = sqlc.arg(status), status_revision = status_revision + 1,
+    archived_at = CASE WHEN sqlc.arg(status)::text = 'archived' THEN now() ELSE NULL END,
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+  AND status_revision = sqlc.arg(expected_status_revision)
+  AND status IS DISTINCT FROM sqlc.arg(status)
+RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at;
 
 -- §3.2 服务商聚合视图只读运维聚合。轻聚合：无 12 卡，表 + 4 Tab 抽屉。
 -- provider 维度天然由 request_attempts.provider_id 归因（每次尝试记录 provider）。
@@ -178,20 +121,10 @@ SELECT
     p.slug,
     p.name,
     p.status,
+    p.origin,
+    p.origin_revision,
+    p.status_revision,
     p.created_at,
-    COALESCE((
-        SELECT jsonb_agg(
-            jsonb_build_object(
-                'id', pe.id,
-                'name', pe.name,
-                'base_url', pe.base_url,
-                'status', pe.status
-            )
-            ORDER BY pe.id
-        )
-        FROM provider_origins pe
-        WHERE pe.provider_id = p.id
-    ), '[]'::jsonb)::text AS origins,
     (SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id) AS channel_total,
     (
         SELECT COUNT(DISTINCT cm.model_id)
@@ -359,7 +292,7 @@ LIMIT 500;
 SELECT
     c.id,
     c.name,
-    pe.base_url,
+    p.origin,
     c.status,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
@@ -379,13 +312,13 @@ SELECT
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99
 FROM channels c
-JOIN provider_origins pe ON pe.id = c.provider_origin_id
+JOIN providers p ON p.id = c.provider_id
 LEFT JOIN request_attempts a
     ON a.channel_id = c.id
     AND (sqlc.narg('from_time')::timestamptz IS NULL OR a.created_at >= sqlc.narg('from_time')::timestamptz)
     AND (sqlc.narg('to_time')::timestamptz IS NULL OR a.created_at < sqlc.narg('to_time')::timestamptz)
 WHERE c.provider_id = sqlc.arg('provider_id')
-GROUP BY c.id, c.name, pe.base_url, c.status
+GROUP BY c.id, c.name, p.origin, c.status
 ORDER BY attempt_total DESC, c.id;
 
 -- name: ProviderOpsPerformanceTimeseries :many

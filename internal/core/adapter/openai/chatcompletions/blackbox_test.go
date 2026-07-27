@@ -44,7 +44,7 @@ func newOfficialBlackboxAdapter(t *testing.T) (*Adapter, channel.Runtime, string
 
 	adapter := NewAdapter(&http.Client{Timeout: 120 * time.Second})
 	runtime := channel.Runtime{
-		BaseURL:      baseURL,
+		Origin:       baseURL,
 		APIKey:       apiKey,
 		Timeout:      120 * time.Second,
 		ProviderSlug: "openai",

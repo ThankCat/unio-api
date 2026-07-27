@@ -39,8 +39,8 @@ func TestAdapterMarksTransportStartedImmediatelyBeforeHTTPDo(t *testing.T) {
 			name: "create response",
 			invoke: func(ctx context.Context, a *Adapter) error {
 				_, err := a.CreateResponse(ctx, channel.Runtime{
-					BaseURL: "https://example.test",
-					APIKey:  "test-secret",
+					Origin: "https://example.test",
+					APIKey: "test-secret",
 				}, Request{Body: json.RawMessage(`{"model":"gpt-test","stream":false}`)})
 				return err
 			},
@@ -49,8 +49,8 @@ func TestAdapterMarksTransportStartedImmediatelyBeforeHTTPDo(t *testing.T) {
 			name: "stream response",
 			invoke: func(ctx context.Context, a *Adapter) error {
 				_, err := a.StreamResponse(ctx, channel.Runtime{
-					BaseURL: "https://example.test",
-					APIKey:  "test-secret",
+					Origin: "https://example.test",
+					APIKey: "test-secret",
 				}, Request{Body: json.RawMessage(`{"model":"gpt-test","stream":true}`)}, func(StreamChunk) error { return nil })
 				return err
 			},
@@ -59,8 +59,8 @@ func TestAdapterMarksTransportStartedImmediatelyBeforeHTTPDo(t *testing.T) {
 			name: "compact response",
 			invoke: func(ctx context.Context, a *Adapter) error {
 				_, err := a.CompactResponse(ctx, channel.Runtime{
-					BaseURL: "https://example.test",
-					APIKey:  "test-secret",
+					Origin: "https://example.test",
+					APIKey: "test-secret",
 				}, Request{Body: json.RawMessage(`{"model":"gpt-test"}`)})
 				return err
 			},

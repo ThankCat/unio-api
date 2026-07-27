@@ -278,12 +278,12 @@ func openChannelBreaker(
 	}
 	h.upstream.setFailure(false)
 	channel := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeChannel, h.seed.openAIChannelID)
-	origin := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeOrigin, h.seed.originID)
+	provider := mustScopeSnapshot(t, runtimeStore, breakerstore.ScopeProvider, h.seed.providerID)
 	if channel.State != breakerstore.StateOpen {
 		t.Fatalf("three attributable failures did not open Channel: %+v", channel)
 	}
-	if origin.State != breakerstore.StateClosed {
-		t.Fatalf("single-Channel HTTP 500 evidence unexpectedly opened Origin: %+v", origin)
+	if provider.State != breakerstore.StateClosed {
+		t.Fatalf("single-Channel HTTP 500 evidence unexpectedly opened Provider: %+v", provider)
 	}
 	return channel
 }
@@ -421,7 +421,7 @@ func assertCurrentChannelHalfOpenPermit(t *testing.T, h *faultHarness, permit ma
 	if permit["status"] != "active" ||
 		permit["channel_id"] != formatID(h.seed.openAIChannelID) ||
 		permit["channel_half_open_probe"] != "1" ||
-		permit["origin_half_open_probe"] != "0" ||
+		permit["provider_half_open_probe"] != "0" ||
 		redisInt64Field(t, permit, "permit_ttl_ms") != halfOpenPermitTTLMs ||
 		redisInt64Field(t, permit, "renew_ms") != halfOpenPermitRenewMs ||
 		redisInt64Field(t, permit, "terminal_ttl_ms") != halfOpenTerminalTTLMs {

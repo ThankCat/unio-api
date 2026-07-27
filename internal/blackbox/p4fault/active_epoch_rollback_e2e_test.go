@@ -273,7 +273,7 @@ func captureEpochRollbackOwnedState(
 		h.namespace + ":runtime-control:v1:state-integrity-marker",
 		requestKey,
 		permitKey,
-		h.namespace + ":breaker:v2:origin:" + formatID(h.seed.originID),
+		h.namespace + ":breaker:v2:provider:" + formatID(h.seed.providerID),
 		h.namespace + ":breaker:v2:channel:" + formatID(h.seed.openAIChannelID),
 	}
 	hashes := make(map[string]map[string]string, len(hashKeys))
@@ -452,7 +452,7 @@ func waitForEpochRollbackLongStreamFacts(t *testing.T, pool *pgxpool.Pool, seed 
 					request.DeliveryStatus,
 					attemptCount,
 					attempt.Status,
-					attempt.BreakerOriginDisposition.String,
+					attempt.BreakerProviderDisposition.String,
 					attempt.BreakerChannelDisposition.String,
 					usageCount,
 					debitCount,
@@ -463,8 +463,8 @@ func waitForEpochRollbackLongStreamFacts(t *testing.T, pool *pgxpool.Pool, seed 
 					request.FinalChannelID.Valid && request.FinalChannelID.Int64 == seed.openAIChannelID &&
 					attemptCount == 1 && attempt.Status == "succeeded" && attempt.UpstreamEndpoint == "chat_completions" &&
 					attempt.UpstreamStartedAt.Valid && attempt.UpstreamFirstTokenAt.Valid && attempt.UpstreamCompletedAt.Valid &&
-					attempt.FinalUsageReceived && attempt.BreakerOriginDisposition.Valid &&
-					attempt.BreakerOriginDisposition.String == "result_unknown" &&
+					attempt.FinalUsageReceived && attempt.BreakerProviderDisposition.Valid &&
+					attempt.BreakerProviderDisposition.String == "result_unknown" &&
 					attempt.BreakerChannelDisposition.Valid && attempt.BreakerChannelDisposition.String == "result_unknown" &&
 					usageCount == 1 && debitCount == 1 {
 					cancel()

@@ -120,11 +120,11 @@ func (s *compactPermitStore) AcquireAttempt(_ context.Context, in breakerstore.A
 	permit := breakerstore.AttemptPermit{
 		PermitID: in.PermitID, RequestAdmissionID: in.RequestAdmissionID,
 		IntegrityEpoch: in.IntegrityEpoch, IntegrityRevision: in.IntegrityRevision,
-		OriginID: in.OriginID, ChannelID: in.ChannelID,
-		OriginBaseURLRevision: in.OriginBaseURLRevision,
-		OriginStatusRevision:  in.OriginStatusRevision,
-		ChannelConfigRevision:   in.ChannelConfigRevision,
-		ModelID:                 in.ModelID, UpstreamEndpoint: in.UpstreamEndpoint, RequestMode: in.RequestMode,
+		ProviderID: in.ProviderID, ChannelID: in.ChannelID,
+		OriginRevision:         in.OriginRevision,
+		ProviderStatusRevision: in.ProviderStatusRevision,
+		ChannelConfigRevision:  in.ChannelConfigRevision,
+		ModelID:                in.ModelID, UpstreamEndpoint: in.UpstreamEndpoint, RequestMode: in.RequestMode,
 		PermitTTLMs: 30_000, RenewMs: 10_000, TerminalTTLMs: 300_000,
 	}
 	return breakerstore.AttemptAdmission{Mode: breakerstore.AdmissionPermit, Permit: &permit}, nil
@@ -138,7 +138,7 @@ func (s *compactPermitStore) Finish(_ context.Context, permit breakerstore.Attem
 	s.finishPermits = append(s.finishPermits, permit)
 	s.finishOutcomes = append(s.finishOutcomes, outcome)
 	return breakerstore.FinishResult{
-		OriginDisposition: breakerstore.DispositionApplied,
+		ProviderDisposition: breakerstore.DispositionApplied,
 		ChannelDisposition:  breakerstore.DispositionApplied,
 	}, nil
 }
@@ -372,7 +372,7 @@ func TestCompactHistory_NativeFallbackToSynthetic(t *testing.T) {
 		t.Fatalf("permit finishes = %d/%d, want 2/2", len(permitStore.finishPermits), len(permitStore.finishOutcomes))
 	}
 	firstOutcome := permitStore.finishOutcomes[0]
-	if firstOutcome.OriginOutcome != breakerstore.OutcomeIgnored || firstOutcome.ChannelOutcome != breakerstore.OutcomeIgnored || firstOutcome.ChannelTPMActual != nil {
+	if firstOutcome.ProviderOutcome != breakerstore.OutcomeIgnored || firstOutcome.ChannelOutcome != breakerstore.OutcomeIgnored || firstOutcome.ChannelTPMActual != nil {
 		t.Fatalf("native 404 finish must be breaker-ignored and release TPM estimate: %+v", firstOutcome)
 	}
 	if permitStore.finishOutcomes[1].ChannelTPMActual == nil {
@@ -451,11 +451,11 @@ func TestCompactHistory_NativeFallbackToSyntheticLocalUpstream(t *testing.T) {
 			}
 			routeCandidate := candidate("openai", 1, "gpt-5.5-upstream")
 			routeCandidate.Protocol = string(requestlog.ProtocolOpenAI)
-			routeCandidate.ProviderOriginID = 701
-			routeCandidate.ProviderOriginBaseURLRevision = 3
-			routeCandidate.ProviderOriginStatusRevision = 4
+			routeCandidate.ProviderID = 701
+			routeCandidate.OriginRevision = 3
+			routeCandidate.ProviderStatusRevision = 4
 			routeCandidate.ChannelConfigRevision = 5
-			routeCandidate.Channel.BaseURL = server.URL
+			routeCandidate.Channel.Origin = server.URL
 			routeCandidate.Channel.APIKey = "local-test-secret"
 			router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{routeCandidate}}}
 			requestLog := newFakeRequestLog()
@@ -547,10 +547,10 @@ func TestCompactHistory_NativeFallbackToSyntheticLocalUpstream(t *testing.T) {
 				t.Fatalf("unexpected independent permits: first=%+v second=%+v", firstPermit, secondPermit)
 			}
 			if len(permitStore.finishOutcomes) != 2 ||
-				permitStore.finishOutcomes[0].OriginOutcome != breakerstore.OutcomeIgnored ||
+				permitStore.finishOutcomes[0].ProviderOutcome != breakerstore.OutcomeIgnored ||
 				permitStore.finishOutcomes[0].ChannelOutcome != breakerstore.OutcomeIgnored ||
 				permitStore.finishOutcomes[0].ChannelTPMActual != nil ||
-				permitStore.finishOutcomes[1].OriginOutcome != breakerstore.OutcomeEligibleSuccess ||
+				permitStore.finishOutcomes[1].ProviderOutcome != breakerstore.OutcomeEligibleSuccess ||
 				permitStore.finishOutcomes[1].ChannelOutcome != breakerstore.OutcomeEligibleSuccess ||
 				permitStore.finishOutcomes[1].ChannelTPMActual == nil ||
 				*permitStore.finishOutcomes[1].ChannelTPMActual != 20 {
@@ -563,8 +563,8 @@ func TestCompactHistory_NativeFallbackToSyntheticLocalUpstream(t *testing.T) {
 				t.Fatalf("ingress metrics = %+v, want one success", metricsRecorder.requests)
 			}
 			if len(metricsRecorder.upstreams) != 2 ||
-				metricsRecorder.upstreams[0] != (compactUpstreamMetric{provider: "9001", channel: "1", success: false, errorCategory: string(adapter.UpstreamErrorBadRequest)}) ||
-				metricsRecorder.upstreams[1] != (compactUpstreamMetric{provider: "9001", channel: "1", success: true}) {
+				metricsRecorder.upstreams[0] != (compactUpstreamMetric{provider: "701", channel: "1", success: false, errorCategory: string(adapter.UpstreamErrorBadRequest)}) ||
+				metricsRecorder.upstreams[1] != (compactUpstreamMetric{provider: "701", channel: "1", success: true}) {
 				t.Fatalf("Channel upstream metrics = %+v, want ignored native failure plus synthetic success", metricsRecorder.upstreams)
 			}
 			if metricsRecorder.routing != 1 || len(metricsRecorder.settlements) != 1 ||

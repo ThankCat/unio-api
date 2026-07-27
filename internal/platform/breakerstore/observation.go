@@ -142,10 +142,10 @@ func attemptAdmissionOperationResult(admission AttemptAdmission) string {
 }
 
 func finishAttemptOperationResult(result FinishResult) string {
-	if result.OriginDisposition == DispositionResultUnknown || result.ChannelDisposition == DispositionResultUnknown {
+	if result.ProviderDisposition == DispositionResultUnknown || result.ChannelDisposition == DispositionResultUnknown {
 		return string(DispositionResultUnknown)
 	}
-	if result.OriginDisposition == DispositionApplied || result.ChannelDisposition == DispositionApplied {
+	if result.ProviderDisposition == DispositionApplied || result.ChannelDisposition == DispositionApplied {
 		return operationResultApplied
 	}
 	return operationResultIgnored

@@ -389,7 +389,7 @@ func TestChannelAdmissionEnforced(t *testing.T) {
 	acq := func(id string) AttemptAdmission {
 		adm, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 			PermitID: id, AdmissionFingerprint: id + "-fp", RequestAdmissionID: "req",
-			OriginID: 700, ChannelID: 70, OriginBaseURLRevision: 1, OriginStatusRevision: 1,
+			ProviderID: 700, ChannelID: 70, OriginRevision: 1, ProviderStatusRevision: 1,
 			ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
 			ChannelAdmissionRevision: 1,
 			EstimatedInputTokens:     10,
@@ -425,7 +425,7 @@ func TestChannelAdmissionEnforced(t *testing.T) {
 
 	// Finish ca2（真实 transport）保留 RPM → 现在 used=2（ca4+ca2 保留），再 acquire 超限。
 	if _, err := s.Finish(context.Background(), *a2.Permit, FinishOutcome{
-		OriginOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess,
+		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess,
 	}); err != nil {
 		t.Fatalf("finish ca2: %v", err)
 	}
@@ -442,7 +442,7 @@ func TestChannelAdmissionStaleRevision(t *testing.T) {
 	seedAttemptControls(t, s, cfg, 71, `{"rpm":0,"rpd":0,"tpm":0,"concurrency":0}`)
 	in := withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "cs1", AdmissionFingerprint: "cs1-fp", RequestAdmissionID: "req",
-		OriginID: 710, ChannelID: 71, OriginBaseURLRevision: 1, OriginStatusRevision: 1,
+		ProviderID: 710, ChannelID: 71, OriginRevision: 1, ProviderStatusRevision: 1,
 		ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
 	})
 	in.ChannelAdmissionRevision = 2 // 期望 2，实际 active=1

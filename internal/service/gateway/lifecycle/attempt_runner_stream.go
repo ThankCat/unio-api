@@ -246,7 +246,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		if r.permitManager != nil {
 			admission, owner, err := r.acquireAttemptWithHeadWait(ctx, AttemptPermitAcquireParams{
 				Candidate:            candidate,
-				UpstreamEndpoint:    l.upstreamEndpoint(),
+				UpstreamEndpoint:     l.upstreamEndpoint(),
 				RequestMode:          breakerstore.ModeStream,
 				EstimatedInputTokens: params.ConservativeInputTokens,
 			}, candIdx == 0, &headWaitUsed)
@@ -555,7 +555,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 						l.RecordAttemptBreakerDisposition(
 							ctx,
 							attemptRecord,
-							string(finishResult.OriginDisposition),
+							string(finishResult.ProviderDisposition),
 							string(finishResult.ChannelDisposition),
 						)
 						r.logRouting(ctx, "stream attempt runtime feedback failed",
@@ -582,7 +582,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 					l.RecordAttemptBreakerDisposition(
 						ctx,
 						attemptRecord,
-						string(finishResult.OriginDisposition),
+						string(finishResult.ProviderDisposition),
 						string(finishResult.ChannelDisposition),
 					)
 				}
@@ -810,7 +810,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 
 func streamFinishOutcome(facts *adapter.ResponseFacts, timing AttemptTimingFacts, err error) breakerstore.FinishOutcome {
 	out := breakerstore.FinishOutcome{
-		OriginOutcome: breakerstore.OutcomeIgnored,
+		ProviderOutcome: breakerstore.OutcomeIgnored,
 		ChannelOutcome:  breakerstore.OutcomeIgnored,
 		FirstTokenMs:    timing.FirstTokenMs(),
 	}
@@ -819,7 +819,7 @@ func streamFinishOutcome(facts *adapter.ResponseFacts, timing AttemptTimingFacts
 		out.ChannelTPMActual = &actual
 	}
 	if err == nil && facts != nil {
-		out.OriginOutcome = breakerstore.OutcomeEligibleSuccess
+		out.ProviderOutcome = breakerstore.OutcomeEligibleSuccess
 		out.ChannelOutcome = breakerstore.OutcomeEligibleSuccess
 		return out
 	}
@@ -831,6 +831,6 @@ func streamFinishOutcome(facts *adapter.ResponseFacts, timing AttemptTimingFacts
 	if nonStreamChannelFailureEligible(err) {
 		out.ChannelOutcome = breakerstore.OutcomeEligibleFailure
 	}
-	applyOriginFailureAttribution(&out, timing, true, err)
+	applyProviderFailureAttribution(&out, timing, true, err)
 	return out
 }

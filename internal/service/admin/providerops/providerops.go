@@ -4,7 +4,6 @@ package providerops
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
@@ -37,23 +36,17 @@ func NewService(store Store) *Service {
 
 // Row 是服务商运维主表行（静态元数据；指标在详情页聚合）。
 type Row struct {
-	ID           int64
-	Slug         string
-	Name         string
-	Status       string
-	CreatedAt    time.Time
-	Origins    []OriginSummary
-	ChannelTotal int64
-	ModelsCount  int64
-	RoutesCount  int64
-}
-
-// OriginSummary 是 Provider 主表内展示的 Origin 业务事实，不包含 Redis 运行态。
-type OriginSummary struct {
-	ID      int64  `json:"id"`
-	Name    string `json:"name"`
-	BaseURL string `json:"base_url"`
-	Status  string `json:"status"`
+	ID             int64
+	Slug           string
+	Name           string
+	Status         string
+	Origin         string
+	OriginRevision int64
+	StatusRevision int64
+	CreatedAt      time.Time
+	ChannelTotal   int64
+	ModelsCount    int64
+	RoutesCount    int64
 }
 
 // Detail 是详情页概览（含 attempt/延迟/Token/利润/TPS 等运维指标）。
@@ -97,7 +90,7 @@ type RouteCatalogRow struct {
 type ChannelRow struct {
 	ID               int64
 	Name             string
-	BaseURL          string
+	Origin           string
 	Status           string
 	AttemptTotal     int64
 	AttemptSucceeded int64
@@ -155,23 +148,18 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 	}
 	out := make([]Row, 0, len(rows))
 	for _, r := range rows {
-		var origins []OriginSummary
-		if err := json.Unmarshal([]byte(r.Origins), &origins); err != nil {
-			return nil, 0, opsutil.StoreFailed(err, "decode provider origin summaries")
-		}
-		if origins == nil {
-			origins = []OriginSummary{}
-		}
 		out = append(out, Row{
-			ID:           r.ID,
-			Slug:         r.Slug,
-			Name:         r.Name,
-			Status:       r.Status,
-			CreatedAt:    r.CreatedAt.Time,
-			Origins:    origins,
-			ChannelTotal: r.ChannelTotal,
-			ModelsCount:  r.ModelsCount,
-			RoutesCount:  r.RoutesCount,
+			ID:             r.ID,
+			Slug:           r.Slug,
+			Name:           r.Name,
+			Status:         r.Status,
+			Origin:         r.Origin,
+			OriginRevision: r.OriginRevision,
+			StatusRevision: r.StatusRevision,
+			CreatedAt:      r.CreatedAt.Time,
+			ChannelTotal:   r.ChannelTotal,
+			ModelsCount:    r.ModelsCount,
+			RoutesCount:    r.RoutesCount,
 		})
 	}
 	return out, total, nil
@@ -254,7 +242,7 @@ func (s *Service) Channels(ctx context.Context, providerID int64, from, to time.
 		out = append(out, ChannelRow{
 			ID:               r.ID,
 			Name:             r.Name,
-			BaseURL:          r.BaseUrl,
+			Origin:           r.Origin,
 			Status:           r.Status,
 			AttemptTotal:     r.AttemptTotal,
 			AttemptSucceeded: r.AttemptSucceeded,

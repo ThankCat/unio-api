@@ -55,7 +55,7 @@ func TestStarAPIOpenAIChatNonStream(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Endpoint:       "chat_completions",
+		Endpoint:        "chat_completions",
 		Stream:          false,
 	})
 }
@@ -103,7 +103,7 @@ func TestStarAPIOpenAIChatStream(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Endpoint:       "chat_completions",
+		Endpoint:        "chat_completions",
 		Stream:          true,
 	})
 }
@@ -127,7 +127,7 @@ func TestStarAPIOpenAIResponsesNonStream(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Endpoint:       "responses",
+		Endpoint:        "responses",
 		Stream:          false,
 	})
 }
@@ -167,7 +167,7 @@ func TestStarAPIOpenAIResponsesStream(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Endpoint:       "responses",
+		Endpoint:        "responses",
 		Stream:          true,
 	})
 }
@@ -184,7 +184,7 @@ func TestStarAPIOpenAIResponsesCompactNative(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Endpoint:       "responses",
+		Endpoint:        "responses",
 		Stream:          false,
 	})
 	assertLatestCompactAttempts(t, f, []compactAttemptWant{
@@ -204,7 +204,7 @@ func TestStarAPIOpenAIResponsesCompactSyntheticDirect(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Endpoint:       "responses",
+		Endpoint:        "responses",
 		Stream:          false,
 	})
 	assertLatestCompactAttempts(t, f, []compactAttemptWant{
@@ -236,7 +236,7 @@ func TestStarAPIOpenAIResponsesCompactProxyFallback(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Endpoint:       "responses",
+		Endpoint:        "responses",
 		Stream:          false,
 	})
 	assertLatestCompactAttempts(t, f, []compactAttemptWant{
@@ -270,7 +270,7 @@ func TestStarAPIAnthropicMessagesNonStream(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "anthropic",
-		Endpoint:       "messages",
+		Endpoint:        "messages",
 		Stream:          false,
 	})
 }
@@ -316,7 +316,7 @@ func TestStarAPIAnthropicMessagesStream(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "anthropic",
-		Endpoint:       "messages",
+		Endpoint:        "messages",
 		Stream:          true,
 	})
 }
@@ -496,7 +496,7 @@ func assertCompactOutput(t *testing.T, body []byte) {
 }
 
 type compactAttemptWant struct {
-	endpoint  string
+	endpoint   string
 	status     string
 	statusCode int32
 }
@@ -537,7 +537,7 @@ func assertLatestCompactAttempts(t *testing.T, f *sdkfixture.Fixture, want []com
 		index             int32
 		status            string
 		statusCode        pgtype.Int4
-		endpoint         string
+		endpoint          string
 		responseStartedAt pgtype.Timestamptz
 		firstTokenAt      pgtype.Timestamptz
 	}
@@ -546,7 +546,7 @@ func assertLatestCompactAttempts(t *testing.T, f *sdkfixture.Fixture, want []com
 			index             int32
 			status            string
 			statusCode        pgtype.Int4
-			endpoint         string
+			endpoint          string
 			responseStartedAt pgtype.Timestamptz
 			firstTokenAt      pgtype.Timestamptz
 		}

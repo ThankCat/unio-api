@@ -15,19 +15,19 @@ import (
 )
 
 type storeStub struct {
-	epoch              sqlc.GetAppSettingRecordRow
-	epochErr           error
-	originOperations []sqlc.OriginRoutingOperation
-	originErr        error
-	runtimeOperations  []sqlc.RuntimeControlOperation
-	runtimeErr         error
+	epoch             sqlc.GetAppSettingRecordRow
+	epochErr          error
+	originOperations  []sqlc.ProviderRoutingOperation
+	originErr         error
+	runtimeOperations []sqlc.RuntimeControlOperation
+	runtimeErr        error
 }
 
 func (s *storeStub) GetAppSettingRecord(context.Context, string) (sqlc.GetAppSettingRecordRow, error) {
 	return s.epoch, s.epochErr
 }
 
-func (s *storeStub) ListNonterminalOriginRoutingOperations(context.Context) ([]sqlc.OriginRoutingOperation, error) {
+func (s *storeStub) ListNonterminalProviderRoutingOperations(context.Context) ([]sqlc.ProviderRoutingOperation, error) {
 	return s.originOperations, s.originErr
 }
 
@@ -56,7 +56,7 @@ func TestServiceReturnsRedactedRuntimeDiagnostics(t *testing.T) {
 	epochValue := readyEpochValue(t, now.Add(-time.Hour))
 	store := &storeStub{
 		epoch: sqlc.GetAppSettingRecordRow{Value: epochValue, Revision: 7},
-		originOperations: []sqlc.OriginRoutingOperation{
+		originOperations: []sqlc.ProviderRoutingOperation{
 			{CreatedAt: pgtype.Timestamptz{Time: now.Add(-20 * time.Second), Valid: true}},
 		},
 		runtimeOperations: []sqlc.RuntimeControlOperation{
@@ -78,10 +78,10 @@ func TestServiceReturnsRedactedRuntimeDiagnostics(t *testing.T) {
 	if got.RuntimeStateEpoch.State != "ready" || got.RuntimeStateEpoch.Revision != 7 || !got.RuntimeStateEpoch.Match {
 		t.Fatalf("unexpected redacted epoch: %+v", got.RuntimeStateEpoch)
 	}
-	if got.Operations.OriginRouting.NonterminalCount != 1 ||
-		got.Operations.OriginRouting.OldestAgeSeconds == nil ||
-		*got.Operations.OriginRouting.OldestAgeSeconds != 20 {
-		t.Fatalf("unexpected origin operations: %+v", got.Operations.OriginRouting)
+	if got.Operations.ProviderRouting.NonterminalCount != 1 ||
+		got.Operations.ProviderRouting.OldestAgeSeconds == nil ||
+		*got.Operations.ProviderRouting.OldestAgeSeconds != 20 {
+		t.Fatalf("unexpected provider operations: %+v", got.Operations.ProviderRouting)
 	}
 	if got.Operations.RuntimeControl.NonterminalCount != 2 ||
 		got.Operations.RuntimeControl.OldestAgeSeconds == nil ||
@@ -110,7 +110,7 @@ func TestServiceReportsEpochMismatchWithoutExposingIdentity(t *testing.T) {
 	if got.RuntimeStateEpoch.Match || got.Readiness.Reason != "marker_mismatch" {
 		t.Fatalf("unexpected mismatch result: %+v", got)
 	}
-	if got.Operations.OriginRouting.OldestAgeSeconds != nil || got.Operations.RuntimeControl.OldestAgeSeconds != nil {
+	if got.Operations.ProviderRouting.OldestAgeSeconds != nil || got.Operations.RuntimeControl.OldestAgeSeconds != nil {
 		t.Fatalf("empty operation sets must not report an age: %+v", got.Operations)
 	}
 }

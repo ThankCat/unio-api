@@ -31,7 +31,7 @@ type channelOpsRowDTO struct {
 	CreatedAt               string                    `json:"created_at"`
 	Protocol                string                    `json:"protocol"`
 	AdapterKey              string                    `json:"adapter_key"`
-	BaseURL                 string                    `json:"base_url"`
+	Origin                  string                    `json:"origin"`
 	Priority                int32                     `json:"priority"`
 	TimeoutMs               *int32                    `json:"timeout_ms"`
 	ProviderName            string                    `json:"provider_name"`
@@ -156,7 +156,7 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:               adminhttp.RFC3339(row.CreatedAt),
 			Protocol:                row.Protocol,
 			AdapterKey:              row.AdapterKey,
-			BaseURL:                 row.BaseURL,
+			Origin:                  row.Origin,
 			Priority:                row.Priority,
 			TimeoutMs:               row.TimeoutMs,
 			ProviderName:            row.ProviderName,

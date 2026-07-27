@@ -34,41 +34,32 @@ func TestRuntimeControlTelemetryPublishesRecoveryFacts(t *testing.T) {
 		State:           "db_committed",
 		CreatedAt:       pgtype.Timestamptz{Time: now.Add(-5 * time.Second), Valid: true},
 	}
-	envelope := runtimecontrol.OriginRoutingEnvelope{
-		Kind:                  runtimecontrol.OriginFenceKindBaseURL,
-		ProviderID:            11,
-		CurrentProviderStatus: "enabled",
-		NextProviderStatus:    "enabled",
-		Transitions: []runtimecontrol.OriginRoutingTransition{{
-			OriginID:             23,
-			CurrentBaseURLRevision: 1,
-			NextBaseURLRevision:    2,
-			CurrentStatusRevision:  1,
-			NextStatusRevision:     1,
-			CurrentEffectiveStatus: "enabled",
-			NextEffectiveStatus:    "enabled",
-		}},
+	envelope := runtimecontrol.ProviderRoutingEnvelope{
+		Kind: runtimecontrol.ProviderFenceKindOrigin, ProviderID: 23,
+		CurrentOriginRevision: 1, NextOriginRevision: 2,
+		CurrentStatusRevision: 1, NextStatusRevision: 1,
+		CurrentStatus: "enabled", NextStatus: "enabled", NextOrigin: "https://next.example.com",
 	}
-	originOperation := originOperationObservation{
-		operation: sqlc.OriginRoutingOperation{
-			Kind: "base_url", State: "prepared", PayloadHash: "fedcba9876543210",
+	providerOperation := providerOperationObservation{
+		operation: sqlc.ProviderRoutingOperation{
+			Kind: "origin", State: "prepared", PayloadHash: "fedcba9876543210",
 		},
 		envelope: envelope,
 		age:      7 * time.Second,
 	}
 	observation := runtimeControlReconcileObservation{
 		runtimeOperations:  []sqlc.RuntimeControlOperation{runtimeOperation},
-		originOperations: []originOperationObservation{originOperation},
+		providerOperations: []providerOperationObservation{providerOperation},
 	}
 
 	telemetry.observeRuntimePending(observation.runtimeOperations)
-	telemetry.observeOriginPending(envelope, originOperation.age)
+	telemetry.observeProviderPending(envelope, providerOperation.age)
 	body := scrapeRuntimeControlMetrics(t, recorder)
 	for _, want := range []string{
 		`unio_gateway_runtime_control_pending{target="route_rate"} 1`,
 		`unio_gateway_runtime_control_pending_seconds{target="route_rate"} 5`,
-		`unio_gateway_origin_base_url_revision_fence{origin_id="23",state="pending"} 1`,
-		`unio_gateway_origin_base_url_revision_pending_seconds{origin_id="23"} 7`,
+		`unio_gateway_origin_revision_fence{provider_id="23",state="pending"} 1`,
+		`unio_gateway_origin_revision_pending_seconds{provider_id="23"} 7`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("pending metrics missing %q\n%s", want, body)
@@ -76,7 +67,7 @@ func TestRuntimeControlTelemetryPublishesRecoveryFacts(t *testing.T) {
 	}
 
 	telemetry.passSucceeded(observation)
-	telemetry.OriginControlReconciled(23, 2, 1, "enabled", true)
+	telemetry.ProviderControlReconciled(23, 2, 1, "enabled", true)
 	telemetry.criticalSettingReconciled(appsettings.GatewayRouteRateLimitDefaultsKey, 3, true)
 	telemetry.channelControlReconciled(42, 4, true)
 	body = scrapeRuntimeControlMetrics(t, recorder)
@@ -84,16 +75,16 @@ func TestRuntimeControlTelemetryPublishesRecoveryFacts(t *testing.T) {
 		`unio_gateway_runtime_control_pending{target="route_rate"} 0`,
 		`unio_gateway_runtime_control_recovery_total{result="committed",target="route_rate"} 1`,
 		`unio_gateway_runtime_control_recovery_total{result="restored",target="channel_admission"} 1`,
-		`unio_gateway_origin_base_url_revision_fence{origin_id="23",state="active"} 1`,
-		`unio_gateway_origin_base_url_revision_pending_seconds{origin_id="23"} 0`,
+		`unio_gateway_origin_revision_fence{provider_id="23",state="active"} 1`,
+		`unio_gateway_origin_revision_pending_seconds{provider_id="23"} 0`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("recovery metrics missing %q\n%s", want, body)
 		}
 	}
 	if logs.FilterMessage("runtime control operation reconciled").Len() != 1 ||
-		logs.FilterMessage("origin routing operation reconciled").Len() != 1 ||
-		logs.FilterMessage("origin runtime control restored").Len() != 1 {
+		logs.FilterMessage("provider routing operation reconciled").Len() != 1 ||
+		logs.FilterMessage("provider runtime control restored").Len() != 1 {
 		t.Fatalf("missing structured recovery logs: %+v", logs.All())
 	}
 }

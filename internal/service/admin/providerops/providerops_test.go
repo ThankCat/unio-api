@@ -16,58 +16,33 @@ type providerOpsTableStore struct {
 	total int64
 }
 
-func (s *providerOpsTableStore) ProvidersOpsTable(context.Context, sqlc.ProvidersOpsTableParams) ([]sqlc.ProvidersOpsTableRow, error) {
-	return s.rows, nil
+func (store *providerOpsTableStore) ProvidersOpsTable(context.Context, sqlc.ProvidersOpsTableParams) ([]sqlc.ProvidersOpsTableRow, error) {
+	return store.rows, nil
 }
 
-func (s *providerOpsTableStore) ProvidersOpsTableCount(context.Context, sqlc.ProvidersOpsTableCountParams) (int64, error) {
-	return s.total, nil
+func (store *providerOpsTableStore) ProvidersOpsTableCount(context.Context, sqlc.ProvidersOpsTableCountParams) (int64, error) {
+	return store.total, nil
 }
 
-func TestTableDecodesOriginSummaries(t *testing.T) {
+func TestTableReturnsProviderOriginFact(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	store := &providerOpsTableStore{
-		total: 2,
-		rows: []sqlc.ProvidersOpsTableRow{
-			{
-				ID: 1, Slug: "starapi", Name: "StarAPI", Status: "enabled",
-				CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
-				Origins: `[{"id":11,"name":"primary","base_url":"https://api.example.com/v1","status":"enabled"},{"id":12,"name":"backup","base_url":"https://backup.example.com/v1","status":"disabled"}]`,
-			},
-			{
-				ID: 2, Slug: "empty", Name: "Empty", Status: "enabled",
-				CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
-				Origins: "[]",
-			},
-		},
+		total: 1,
+		rows: []sqlc.ProvidersOpsTableRow{{
+			ID: 1, Slug: "starapi", Name: "StarAPI", Status: "enabled",
+			Origin: "https://api.example.com/v1", OriginRevision: 3, StatusRevision: 4,
+			CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+		}},
 	}
 
 	rows, total, err := NewService(store).Table(context.Background(), TableParams{Limit: 20})
 	if err != nil {
 		t.Fatalf("Table returned error: %v", err)
 	}
-	if total != 2 || len(rows) != 2 {
+	if total != 1 || len(rows) != 1 {
 		t.Fatalf("unexpected page: total=%d rows=%d", total, len(rows))
 	}
-	if got := rows[0].Origins; len(got) != 2 || got[0].ID != 11 || got[0].BaseURL != "https://api.example.com/v1" || got[1].Status != "disabled" {
-		t.Fatalf("unexpected origin summaries: %+v", got)
-	}
-	if rows[1].Origins == nil || len(rows[1].Origins) != 0 {
-		t.Fatalf("empty provider origins must be a non-nil empty slice: %#v", rows[1].Origins)
-	}
-}
-
-func TestTableRejectsInvalidOriginSummaryJSON(t *testing.T) {
-	store := &providerOpsTableStore{
-		total: 1,
-		rows:  []sqlc.ProvidersOpsTableRow{{ID: 1, Origins: "not-json"}},
-	}
-
-	rows, total, err := NewService(store).Table(context.Background(), TableParams{Limit: 20})
-	if err == nil {
-		t.Fatal("expected invalid origin JSON to fail")
-	}
-	if rows != nil || total != 0 {
-		t.Fatalf("failed table decode must not return partial data: rows=%v total=%d", rows, total)
+	if rows[0].Origin != "https://api.example.com/v1" || rows[0].OriginRevision != 3 || rows[0].StatusRevision != 4 {
+		t.Fatalf("unexpected provider origin fact: %+v", rows[0])
 	}
 }

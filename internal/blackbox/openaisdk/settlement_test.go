@@ -66,7 +66,7 @@ func TestOAISDKMockSettlementWritesAuditTrail(t *testing.T) {
 		rrID         int64
 		rrStatus     string
 		rrIngress    string
-		rrEndpoint  string
+		rrEndpoint   string
 		rrFinalChan  *int64
 		rrModelID    string
 		rrResponseID *string

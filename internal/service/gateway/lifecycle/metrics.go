@@ -48,12 +48,12 @@ type breakerRoutingMetricsRecorder interface {
 	SetBreakerState(scope, id, state string)
 	IncBreakerSkip(scope, reason string)
 	IncChannelConfigRevisionMismatch(operation string)
-	IncOriginStatusRevisionMismatch(operation string)
+	IncProviderStatusRevisionMismatch(operation string)
 }
 
 type attemptRuntimeMetricsRecorder interface {
-	ObserveUpstreamTiming(providerID, originID, channelID, protocol, operation, mode string, total time.Duration, ttft *time.Duration)
-	IncOriginFailure(originID, category string)
+	ObserveUpstreamTiming(providerID, channelID, protocol, operation, mode string, total time.Duration, ttft *time.Duration)
+	IncProviderFailure(providerID, category string)
 	IncChannelFailure(channelID, category string)
 }
 
@@ -93,7 +93,6 @@ func (l *RequestLifecycle) RecordAttemptRuntimeMetrics(
 	}
 	m.ObserveUpstreamTiming(
 		MetricsID(candidate.ProviderID),
-		MetricsID(candidate.ProviderOriginID),
 		MetricsID(candidate.Channel.ID),
 		candidate.Protocol,
 		string(operation),
@@ -103,10 +102,10 @@ func (l *RequestLifecycle) RecordAttemptRuntimeMetrics(
 	)
 
 	category := attemptFailureMetricCategory(err)
-	if outcome.OriginEvidence != breakerstore.OriginEvidenceNone {
-		m.IncOriginFailure(MetricsID(candidate.ProviderOriginID), string(outcome.OriginEvidence))
-	} else if outcome.OriginOutcome == breakerstore.OutcomeEligibleFailure {
-		m.IncOriginFailure(MetricsID(candidate.ProviderOriginID), category)
+	if outcome.ProviderEvidence != breakerstore.ProviderEvidenceNone {
+		m.IncProviderFailure(MetricsID(candidate.ProviderID), string(outcome.ProviderEvidence))
+	} else if outcome.ProviderOutcome == breakerstore.OutcomeEligibleFailure {
+		m.IncProviderFailure(MetricsID(candidate.ProviderID), category)
 	}
 	if outcome.ChannelOutcome == breakerstore.OutcomeEligibleFailure {
 		m.IncChannelFailure(MetricsID(candidate.Channel.ID), category)
@@ -162,19 +161,19 @@ func (l *RequestLifecycle) recordBreakerRoutingFacts(plan CandidatePlan) {
 		case "stale_config_revision":
 			m.IncChannelConfigRevisionMismatch("snapshot")
 		case "stale_status_revision":
-			m.IncOriginStatusRevisionMismatch("snapshot")
+			m.IncProviderStatusRevisionMismatch("snapshot")
 		}
 		scope := "channel"
-		if excluded.Balance.OriginBreakerState == "open" || excluded.Balance.OriginBreakerState == "half_open" {
-			scope = "origin"
+		if excluded.Balance.ProviderBreakerState == "open" || excluded.Balance.ProviderBreakerState == "half_open" {
+			scope = "provider"
 		}
 		m.IncBreakerSkip(scope, excluded.Reason)
 	}
 }
 
 func recordBreakerStates(m breakerRoutingMetricsRecorder, candidate routing.ChatRouteCandidate, score BalanceScore) {
-	if score.OriginBreakerState != "" && candidate.ProviderOriginID > 0 {
-		m.SetBreakerState("origin", MetricsID(candidate.ProviderOriginID), score.OriginBreakerState)
+	if score.ProviderBreakerState != "" && candidate.ProviderID > 0 {
+		m.SetBreakerState("provider", MetricsID(candidate.ProviderID), score.ProviderBreakerState)
 	}
 	if score.ChannelBreakerState != "" && candidate.Channel.ID > 0 {
 		m.SetBreakerState("channel", MetricsID(candidate.Channel.ID), score.ChannelBreakerState)

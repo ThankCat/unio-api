@@ -135,7 +135,7 @@ func TestFormatFailureAuditSnapshotIncludesOnlySanitizedFacts(t *testing.T) {
 		upstreamStatusCode:     pgtype.Int4{Int32: 429, Valid: true},
 		upstreamStartedAt:      pgtype.Timestamptz{Time: start, Valid: true},
 		upstreamCompletedAt:    pgtype.Timestamptz{Time: start.Add(1250 * time.Millisecond), Valid: true},
-		originDisposition:    "applied",
+		originDisposition:      "applied",
 		channelDisposition:     "applied",
 	})
 

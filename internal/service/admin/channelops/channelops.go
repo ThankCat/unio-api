@@ -45,7 +45,7 @@ type Row struct {
 	CreatedAt        time.Time
 	Protocol         string
 	AdapterKey       string
-	BaseURL          string
+	Origin           string
 	Priority         int32
 	TimeoutMs        *int32
 	ProviderName     string
@@ -174,7 +174,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			CreatedAt:        r.CreatedAt.Time,
 			Protocol:         r.Protocol,
 			AdapterKey:       r.AdapterKey,
-			BaseURL:          r.BaseUrl,
+			Origin:           r.Origin,
 			Priority:         r.Priority,
 			TimeoutMs:        int4Value(r.TimeoutMs),
 			ProviderName:     r.ProviderName,

@@ -1,12 +1,12 @@
 // Package breakerstore 实现 P4 Redis 全局熔断（ROUTING_P4_GLOBAL_BREAKER_PROVIDER_PLAN §2.3-§2.6、§5）。
 //
-// 它把 Channel 与 Origin 熔断事实统一到 Redis：进程内不再保留熔断状态，多 Gateway 共享同一事实。
+// 它把 Provider 与 Channel 熔断事实统一到 Redis：进程内不再保留熔断状态，多 Gateway 共享同一事实。
 // 状态迁移由 Redis Lua 原子执行，使用 Redis TIME，不信任 Gateway 本机时钟；先校验后写、全有或
 // 全无、first-terminal-wins。Redis/BreakerStore 基础设施故障统一 fail-closed（P4-D08）。
 //
-// 本包当前实现 P4 熔断的核心状态机与 AttemptPermit 生命周期（Channel/Origin 双触发熔断、
+// 本包当前实现 P4 熔断的核心状态机与 AttemptPermit 生命周期（Provider/Channel 双触发熔断、
 // half-open 双探测恢复、退避、仅流式 TTFT EWMA、Channel 在途并发租约）。入口 request-admission、
-// admission-control 四维限额、Origin BaseURL/status 围栏、runtime-control 发布与完整性 epoch
+// admission-control 四维限额、Provider origin/status 围栏、runtime-control 发布与完整性 epoch
 // 恢复属于同一 BreakerStore 契约的其余能力族，按计划 §5.3 分阶段接入。
 package breakerstore
 
@@ -15,12 +15,12 @@ import (
 	"time"
 )
 
-// Scope 是熔断作用域：Channel 或 Origin。二者共用同一状态机框架（§2.5）。
+// Scope 是熔断作用域：Provider 或 Channel。二者共用同一状态机框架（§2.5）。
 type Scope string
 
 const (
-	ScopeChannel Scope = "channel"
-	ScopeOrigin  Scope = "origin"
+	ScopeChannel  Scope = "channel"
+	ScopeProvider Scope = "provider"
 )
 
 // BreakerState 是熔断状态机对外暴露的稳定字符串。
@@ -87,23 +87,23 @@ func (o Outcome) valid() bool {
 	}
 }
 
-// OriginEvidenceCategory 是需要跨 Channel、跨模型短窗证据后才可扩大到 Origin 的错误分类。
+// ProviderEvidenceCategory 是需要跨 Channel、跨模型短窗证据后才可扩大到 Provider 的错误分类。
 // 空值表示本次 Finish 没有条件归因证据；不同分类使用彼此隔离的 Redis 集合，不能拼样本。
-type OriginEvidenceCategory string
+type ProviderEvidenceCategory string
 
 const (
-	OriginEvidenceNone              OriginEvidenceCategory = ""
-	OriginEvidenceHTTP500           OriginEvidenceCategory = "http_500"
-	OriginEvidenceFirstTokenTimeout OriginEvidenceCategory = "first_token_timeout"
-	OriginEvidenceBodyReadTimeout   OriginEvidenceCategory = "body_read_timeout"
+	ProviderEvidenceNone              ProviderEvidenceCategory = ""
+	ProviderEvidenceHTTP500           ProviderEvidenceCategory = "http_500"
+	ProviderEvidenceFirstTokenTimeout ProviderEvidenceCategory = "first_token_timeout"
+	ProviderEvidenceBodyReadTimeout   ProviderEvidenceCategory = "body_read_timeout"
 )
 
-func (c OriginEvidenceCategory) valid() bool {
+func (c ProviderEvidenceCategory) valid() bool {
 	switch c {
-	case OriginEvidenceNone,
-		OriginEvidenceHTTP500,
-		OriginEvidenceFirstTokenTimeout,
-		OriginEvidenceBodyReadTimeout:
+	case ProviderEvidenceNone,
+		ProviderEvidenceHTTP500,
+		ProviderEvidenceFirstTokenTimeout,
+		ProviderEvidenceBodyReadTimeout:
 		return true
 	default:
 		return false
@@ -173,8 +173,8 @@ type Config struct {
 	AttemptTerminalTTLMs int64
 	OpenDurationsMs      []int64
 
-	OriginAmbiguousDistinctChannels int
-	OriginAmbiguousDistinctModels   int
+	ProviderAmbiguousDistinctChannels int
+	ProviderAmbiguousDistinctModels   int
 }
 
 // DefaultConfig 返回 §4.8 的目标默认配置。
@@ -191,8 +191,8 @@ func DefaultConfig() Config {
 		AttemptRenewMs:                    10000,
 		AttemptTerminalTTLMs:              300000,
 		OpenDurationsMs:                   []int64{15000, 30000, 60000, 120000, 300000},
-		OriginAmbiguousDistinctChannels: 2,
-		OriginAmbiguousDistinctModels:   2,
+		ProviderAmbiguousDistinctChannels: 2,
+		ProviderAmbiguousDistinctModels:   2,
 	}
 }
 
@@ -206,20 +206,20 @@ type AttemptPermit struct {
 	IntegrityEpoch     string
 	IntegrityRevision  int64
 
-	OriginID int64
+	ProviderID int64
 	ChannelID  int64
 
-	OriginBaseURLRevision int64
-	OriginStatusRevision  int64
-	ChannelConfigRevision   int64
+	OriginRevision         int64
+	ProviderStatusRevision int64
+	ChannelConfigRevision  int64
 
-	ModelID           int64
+	ModelID          int64
 	UpstreamEndpoint UpstreamEndpoint
-	RequestMode       RequestMode
+	RequestMode      RequestMode
 
-	OriginStateGeneration int64
+	ProviderStateGeneration int64
 	ChannelStateGeneration  int64
-	OriginHalfOpenProbe   bool
+	ProviderHalfOpenProbe   bool
 	ChannelHalfOpenProbe    bool
 
 	PermitTTLMs   int64
@@ -237,15 +237,15 @@ type AttemptAdmission struct {
 	Reason DeniedReason
 }
 
-// FinishOutcome 是 Finish 提交的真实结果：分别对 Origin / Channel 给出 attribution，
+// FinishOutcome 是 Finish 提交的真实结果：分别对 Provider / Channel 给出 attribution，
 // 以及可选的流式 FirstToken 样本（仅 stream permit 且样本有效时更新 TTFT EWMA）。
 type FinishOutcome struct {
-	OriginOutcome Outcome
+	ProviderOutcome Outcome
 	ChannelOutcome  Outcome
 
-	// OriginEvidence 表示本次 Channel failure 需要满足短窗 distinct Channel + model 门槛后，
-	// 才能在同一个 Redis Finish 中原子升级为 Origin eligible_failure。
-	OriginEvidence OriginEvidenceCategory
+	// ProviderEvidence 表示本次 Channel failure 需要满足短窗 distinct Channel + model 门槛后，
+	// 才能在同一个 Redis Finish 中原子升级为 Provider eligible_failure。
+	ProviderEvidence ProviderEvidenceCategory
 
 	// FirstTokenMs 仅在 stream permit 且观测到有效 FirstToken 时为非 nil；非流式必须为 nil。
 	FirstTokenMs *int64
@@ -257,7 +257,7 @@ type FinishOutcome struct {
 
 // FinishResult 汇报两个作用域各自的 applied/stale disposition（写入 request_attempts）。
 type FinishResult struct {
-	OriginDisposition Disposition
+	ProviderDisposition Disposition
 	ChannelDisposition  Disposition
 }
 
@@ -279,30 +279,30 @@ type ScopeSnapshot struct {
 	TTFTSamples              int64   // Channel only
 	LastTransitionAtMs       int64
 	LastFailureCategory      string
-	ControlPresent           bool   // Origin only
-	EffectiveStatus          string // Origin only
-	BaseURLRevision          int64  // Origin current / Channel bound Origin revision
-	StatusRevision           int64  // Origin current / Channel bound Origin revision
-	PendingBaseURLRevision   int64  // Origin only: pending BaseURL revision, 0 when absent
-	PendingStatusRevision    int64  // Origin only: pending effective-status revision, 0 when absent
-	BaseURLRevisionState     string // Origin only: active|pending
-	StatusRevisionState      string // Origin only: active|pending
+	ControlPresent           bool   // Provider only
+	EffectiveStatus          string // Provider only
+	OriginRevision           int64  // Provider current / Channel bound Provider origin revision
+	StatusRevision           int64  // Provider current / Channel bound Provider status revision
+	PendingOriginRevision    int64  // Provider only: pending origin revision, 0 when absent
+	PendingStatusRevision    int64  // Provider only: pending status revision, 0 when absent
+	OriginRevisionState      string // Provider only: active|pending
+	StatusRevisionState      string // Provider only: active|pending
 	StateGeneration          int64
-	BaseURLFenceGeneration   int64 // Origin only
-	StatusFenceGeneration    int64 // Origin only
-	ProviderOriginID       int64 // Channel only
+	OriginFenceGeneration    int64 // Provider only
+	StatusFenceGeneration    int64 // Provider only
+	ProviderID               int64 // Channel only
 	ChannelConfigRevision    int64 // Channel only
 	HalfOpenBusy             bool
 	HalfOpenLeaseRemainingMs int64
 }
 
 // SnapshotCandidateInput 是批量路由快照所需的稳定候选身份。
-// SnapshotMany 用它判断 Channel state 是否仍属于同一 Origin 与配置代际。
+// SnapshotMany 用它判断 Channel state 是否仍属于同一 Provider 与配置代际。
 type SnapshotCandidateInput struct {
-	OriginID               int64
+	ProviderID               int64
 	ChannelID                int64
-	OriginBaseURLRevision  int64
-	OriginStatusRevision   int64
+	OriginRevision           int64
+	ProviderStatusRevision   int64
 	ChannelConfigRevision    int64
 	ChannelAdmissionRevision int64
 }
@@ -336,7 +336,7 @@ const (
 	CandidateSnapshotHalfOpenBusy          CandidateSnapshotStatus = "half_open_busy"
 	CandidateSnapshotRateLimited           CandidateSnapshotStatus = "rate_limited"
 	CandidateSnapshotModelPermissionPaused CandidateSnapshotStatus = "model_permission_paused"
-	CandidateSnapshotOriginDisabled      CandidateSnapshotStatus = "origin_disabled"
+	CandidateSnapshotProviderDisabled      CandidateSnapshotStatus = "provider_disabled"
 )
 
 // CapacityUsage 是 Redis stable resource 的同一时点只读事实。Limit=0 表示不限。
@@ -354,11 +354,11 @@ type RoutingBalanceSnapshot struct {
 	MinimumRoutingFactor float64
 }
 
-// CandidateSnapshot 是同一 Redis Lua 时点读取的 Origin/Channel 运行态，保持输入顺序。
+// CandidateSnapshot 是同一 Redis Lua 时点读取的 Provider/Channel 运行态，保持输入顺序。
 type CandidateSnapshot struct {
 	Candidate                   SnapshotCandidateInput
 	Status                      CandidateSnapshotStatus
-	Origin                      ScopeSnapshot
+	Provider                    ScopeSnapshot
 	Channel                     ScopeSnapshot
 	Concurrency                 CapacityUsage
 	RPM                         CapacityUsage
@@ -402,7 +402,7 @@ func (c Config) valid() bool {
 			return false
 		}
 	}
-	if c.OriginAmbiguousDistinctChannels < 2 || c.OriginAmbiguousDistinctModels < 2 {
+	if c.ProviderAmbiguousDistinctChannels < 2 || c.ProviderAmbiguousDistinctModels < 2 {
 		return false
 	}
 	return true

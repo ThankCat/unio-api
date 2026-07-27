@@ -30,7 +30,7 @@ type RequestLifecycle struct {
 	credentialGate  CredentialGate
 	routingTraces   *RoutingTraceRecorder
 	ingressProtocol requestlog.Protocol
-	endpoint       requestlog.Endpoint
+	endpoint        requestlog.Endpoint
 	safeMessage     func(code string) string
 
 	// costExposures 是可选的成本敞口记录器；nil 表示不启用。
@@ -109,7 +109,7 @@ type RequestLifecycleParams struct {
 	Authorizer      ChatAuthorizer
 	Metrics         MetricsRecorder
 	IngressProtocol requestlog.Protocol
-	Endpoint       requestlog.Endpoint
+	Endpoint        requestlog.Endpoint
 	SafeMessage     func(code string) string
 }
 
@@ -137,7 +137,7 @@ func NewRequestLifecycle(params RequestLifecycleParams) *RequestLifecycle {
 		authorizer:      params.Authorizer,
 		metrics:         params.Metrics,
 		ingressProtocol: params.IngressProtocol,
-		endpoint:       params.Endpoint,
+		endpoint:        params.Endpoint,
 		safeMessage:     params.SafeMessage,
 	}
 }
@@ -158,10 +158,10 @@ func (l *RequestLifecycle) RecordCredentialResult(candidate routing.ChatRouteCan
 		return
 	}
 	l.credentialGate.RecordResult(CredentialRevision{
-		ChannelID:               candidate.Channel.ID,
-		ChannelConfigRevision:   candidate.ChannelConfigRevision,
-		OriginBaseURLRevision: candidate.ProviderOriginBaseURLRevision,
-		OriginStatusRevision:  candidate.ProviderOriginStatusRevision,
+		ChannelID:              candidate.Channel.ID,
+		ChannelConfigRevision:  candidate.ChannelConfigRevision,
+		OriginRevision:         candidate.OriginRevision,
+		ProviderStatusRevision: candidate.ProviderStatusRevision,
 	}, err)
 }
 
@@ -330,7 +330,7 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 		APIKeyID:              principal.APIKeyID,
 		RequestedModelID:      requestedModelID,
 		IngressProtocol:       l.ingressProtocol,
-		Endpoint:             l.endpoint,
+		Endpoint:              l.endpoint,
 		Stream:                stream,
 		StartedAt:             time.Now(),
 		RouteID:               routeID,
@@ -385,20 +385,19 @@ func (l *RequestLifecycle) CreateAttemptForEndpoint(
 	})
 
 	return l.requestLog.CreateAttempt(ctx, requestlog.CreateAttemptParams{
-		RequestRecordID:                 requestRecord.ID,
-		AttemptIndex:                    attemptIndex,
-		ProviderID:                      candidate.ProviderID,
-		ChannelID:                       candidate.Channel.ID,
-		AdapterKey:                      candidate.AdapterKey,
-		UpstreamModel:                   candidate.UpstreamModel,
-		UpstreamProtocol:                requestlog.Protocol(candidate.Protocol),
-		ProviderOriginID:              positiveInt64Ptr(candidate.ProviderOriginID),
-		ProviderOriginBaseURLRevision: positiveInt64Ptr(candidate.ProviderOriginBaseURLRevision),
-		ProviderOriginStatusRevision:  positiveInt64Ptr(candidate.ProviderOriginStatusRevision),
-		ChannelConfigRevision:           positiveInt64Ptr(candidate.ChannelConfigRevision),
-		RoutingCandidateIndex:           nonNegativeIntPtr(routingCandidateIndex),
-		UpstreamEndpoint:               endpoint,
-		StartedAt:                       time.Now(),
+		RequestRecordID:        requestRecord.ID,
+		AttemptIndex:           attemptIndex,
+		ProviderID:             candidate.ProviderID,
+		ChannelID:              candidate.Channel.ID,
+		AdapterKey:             candidate.AdapterKey,
+		UpstreamModel:          candidate.UpstreamModel,
+		UpstreamProtocol:       requestlog.Protocol(candidate.Protocol),
+		OriginRevision:         positiveInt64Ptr(candidate.OriginRevision),
+		ProviderStatusRevision: positiveInt64Ptr(candidate.ProviderStatusRevision),
+		ChannelConfigRevision:  positiveInt64Ptr(candidate.ChannelConfigRevision),
+		RoutingCandidateIndex:  nonNegativeIntPtr(routingCandidateIndex),
+		UpstreamEndpoint:       endpoint,
+		StartedAt:              time.Now(),
 	})
 }
 
@@ -481,7 +480,7 @@ func (l *RequestLifecycle) RecordAttemptTiming(ctx context.Context, attemptRecor
 }
 
 // RecordAttemptBreakerDisposition first-write-wins 保存 Finish applied/stale 结果；审计失败不改写客户结果。
-func (l *RequestLifecycle) RecordAttemptBreakerDisposition(ctx context.Context, attemptRecord requestlog.AttemptRecord, origin, channel string) {
+func (l *RequestLifecycle) RecordAttemptBreakerDisposition(ctx context.Context, attemptRecord requestlog.AttemptRecord, provider, channel string) {
 	recorder, ok := l.requestLog.(attemptBreakerDispositionRecorder)
 	if !ok || attemptRecord.ID == 0 {
 		return
@@ -490,7 +489,7 @@ func (l *RequestLifecycle) RecordAttemptBreakerDisposition(ctx context.Context, 
 	defer cancel()
 	_, _ = recorder.RecordAttemptBreakerDisposition(auditCtx, requestlog.RecordAttemptBreakerDispositionParams{
 		ID:                  attemptRecord.ID,
-		OriginDisposition: origin,
+		ProviderDisposition: provider,
 		ChannelDisposition:  channel,
 	})
 }

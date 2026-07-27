@@ -74,17 +74,16 @@ type ChatRouteRequest struct {
 type ChatRouteCandidate struct {
 	ModelDBID  int64
 	ProviderID int64
-	// Origin identity and revisions are immutable facts of this candidate.
+	// Provider identity and revisions are immutable facts of this candidate.
 	// Admission and audit code must not infer them later from mutable rows.
-	ProviderOriginID              int64
-	ProviderOriginBaseURLRevision int64
-	ProviderOriginStatusRevision  int64
-	ChannelConfigRevision           int64
-	ChannelAdmissionLimitsRevision  int64
-	AdapterKey                      string
-	Protocol                        string
-	Channel                         channel.Runtime
-	UpstreamModel                   string
+	OriginRevision                 int64
+	ProviderStatusRevision         int64
+	ChannelConfigRevision          int64
+	ChannelAdmissionLimitsRevision int64
+	AdapterKey                     string
+	Protocol                       string
+	Channel                        channel.Runtime
+	UpstreamModel                  string
 
 	// RouteName 是本次请求绑定线路的名称（routes.name），供 access log 的 router 字段使用。
 	RouteName string
@@ -505,26 +504,25 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 	}
 
 	return ChatRouteCandidate{
-		ModelDBID:                       row.ModelDbID,
-		ProviderID:                      row.ProviderID,
-		ProviderOriginID:              row.ProviderOriginID,
-		ProviderOriginBaseURLRevision: row.ProviderOriginBaseUrlRevision,
-		ProviderOriginStatusRevision:  row.ProviderOriginStatusRevision,
-		ChannelConfigRevision:           row.ChannelConfigRevision,
-		ChannelAdmissionLimitsRevision:  row.ChannelAdmissionLimitsRevision,
-		AdapterKey:                      row.AdapterKey,
-		Protocol:                        row.Protocol,
-		MaxOutputTokens:                 maxOutputTokens,
-		RPMLimit:                        int4LimitPtr(row.ChannelRpmLimit),
-		TPMLimit:                        int4LimitPtr(row.ChannelTpmLimit),
-		RPDLimit:                        int4LimitPtr(row.ChannelRpdLimit),
-		ConcurrencyLimit:                int4LimitPtr(row.ChannelConcurrencyLimit),
-		BillsOnDisconnect:               row.ChannelBillsOnDisconnect,
-		RouteName:                       route.Name,
+		ModelDBID:                      row.ModelDbID,
+		ProviderID:                     row.ProviderID,
+		OriginRevision:                 row.ProviderOriginRevision,
+		ProviderStatusRevision:         row.ProviderStatusRevision,
+		ChannelConfigRevision:          row.ChannelConfigRevision,
+		ChannelAdmissionLimitsRevision: row.ChannelAdmissionLimitsRevision,
+		AdapterKey:                     row.AdapterKey,
+		Protocol:                       row.Protocol,
+		MaxOutputTokens:                maxOutputTokens,
+		RPMLimit:                       int4LimitPtr(row.ChannelRpmLimit),
+		TPMLimit:                       int4LimitPtr(row.ChannelTpmLimit),
+		RPDLimit:                       int4LimitPtr(row.ChannelRpdLimit),
+		ConcurrencyLimit:               int4LimitPtr(row.ChannelConcurrencyLimit),
+		BillsOnDisconnect:              row.ChannelBillsOnDisconnect,
+		RouteName:                      route.Name,
 		Channel: channel.Runtime{
 			ID:           row.ChannelID,
 			Name:         row.ChannelName,
-			BaseURL:      row.BaseUrl,
+			Origin:       row.Origin,
 			APIKey:       apiKey,
 			Timeout:      timeout,
 			ProviderSlug: row.ProviderSlug,

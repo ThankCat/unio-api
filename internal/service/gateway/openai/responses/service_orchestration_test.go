@@ -178,7 +178,7 @@ func (s *fakeRequestLog) CreateRequest(_ context.Context, params requestlog.Crea
 		UserID:          params.UserID,
 		APIKeyID:        params.APIKeyID,
 		IngressProtocol: params.IngressProtocol,
-		Endpoint:       params.Endpoint,
+		Endpoint:        params.Endpoint,
 		Status:          requestlog.RequestStatusPending,
 		StartedAt:       params.StartedAt,
 	}, nil
@@ -236,7 +236,7 @@ func (s *fakeRequestLog) CreateAttempt(_ context.Context, params requestlog.Crea
 		AdapterKey:            params.AdapterKey,
 		UpstreamModel:         params.UpstreamModel,
 		RoutingCandidateIndex: params.RoutingCandidateIndex,
-		UpstreamEndpoint:     params.UpstreamEndpoint,
+		UpstreamEndpoint:      params.UpstreamEndpoint,
 		Status:                requestlog.AttemptStatusRunning,
 		StartedAt:             params.StartedAt,
 	}, nil
@@ -309,7 +309,7 @@ func candidate(adapterKey string, channelID int64, upstreamModel string) routing
 		AdapterKey: adapterKey,
 		Channel: channel.Runtime{
 			ID:      channelID,
-			BaseURL: "https://example.test",
+			Origin:  "https://example.test",
 			APIKey:  "secret",
 			Timeout: 30 * time.Second,
 		},

@@ -1,6 +1,6 @@
 // Package channeltest 编排 admin 管理端的「渠道检测 / 一键测渠道」（阶段一）。
 //
-// 检测 = 用渠道自己的 base_url + 凭据，挑一个该渠道绑定的模型，向真实上游发一个最小 "hi" 请求，
+// 检测 = 用 Provider origin + 渠道凭据，挑一个该渠道绑定的模型，向真实上游发一个最小 "hi" 请求，
 // 验证「连得上 + 凭据有效 + 模型可用」；成功记录延迟，失败把上游错误翻译成可读原因（凭据无效 /
 // 模型不可用 / 超时 / 连不上 / 限流 …）。它复用与网关完全一致的 adapter/HTTP 链路，故结果=真实行为。
 //
@@ -94,11 +94,11 @@ type TestResult struct {
 // PermissionRecheckInput 固化 403 发生时的内部绑定身份与三类 revision。
 // ModelID 是数据库内部 models.id；Redis/worker 不传递模型字符串、credential、URL 或请求正文。
 type PermissionRecheckInput struct {
-	ChannelID               int64
-	ModelID                 int64
-	ChannelConfigRevision   int64
-	OriginBaseURLRevision int64
-	OriginStatusRevision  int64
+	ChannelID              int64
+	ModelID                int64
+	ChannelConfigRevision  int64
+	OriginRevision         int64
+	ProviderStatusRevision int64
 }
 
 // PermissionRecheckResult 是一次只针对指定绑定的真实探测结果。
@@ -138,16 +138,16 @@ func (s *Service) SetMetrics(recorder CredentialRotationMetrics) {
 }
 
 type probeSnapshot struct {
-	ChannelID               int64
-	Protocol                string
-	AdapterKey              string
-	Credential              string
-	CredentialValid         bool
-	ConfigRevision          int64
-	ProviderSlug            string
-	OriginBaseURL         string
-	OriginBaseURLRevision int64
-	OriginStatusRevision  int64
+	ChannelID              int64
+	Protocol               string
+	AdapterKey             string
+	Credential             string
+	CredentialValid        bool
+	ConfigRevision         int64
+	ProviderSlug           string
+	Origin                 string
+	OriginRevision         int64
+	ProviderStatusRevision int64
 }
 
 // Test 对指定渠道执行一次主动检测。读取、探测与结果回写均冻结三类 revision；迟到结果只写历史日志。
@@ -182,7 +182,7 @@ func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 // 都不会翻整个 Channel 的 credential_valid 或覆盖 last_test_*。调用方随后按 Stale/Success CAS 收口 Redis。
 func (s *Service) RecheckPermission(ctx context.Context, in PermissionRecheckInput) (PermissionRecheckResult, error) {
 	if in.ChannelID <= 0 || in.ModelID <= 0 || in.ChannelConfigRevision <= 0 ||
-		in.OriginBaseURLRevision <= 0 || in.OriginStatusRevision <= 0 {
+		in.OriginRevision <= 0 || in.ProviderStatusRevision <= 0 {
 		return PermissionRecheckResult{}, invalidArgument("permission_recheck", "permission recheck identity is invalid")
 	}
 
@@ -300,8 +300,8 @@ func probeSnapshotFromRow(row sqlc.GetChannelProbeSnapshotRow) probeSnapshot {
 	return probeSnapshot{
 		ChannelID: row.ChannelID, Protocol: row.Protocol, AdapterKey: row.AdapterKey,
 		Credential: row.Credential, CredentialValid: row.CredentialValid, ConfigRevision: row.ConfigRevision,
-		ProviderSlug: row.ProviderSlug, OriginBaseURL: row.OriginBaseUrl,
-		OriginBaseURLRevision: row.OriginBaseUrlRevision, OriginStatusRevision: row.OriginStatusRevision,
+		ProviderSlug: row.ProviderSlug, Origin: row.Origin,
+		OriginRevision: row.OriginRevision, ProviderStatusRevision: row.StatusRevision,
 	}
 }
 
@@ -309,8 +309,8 @@ func probeSnapshotFromRotation(row sqlc.PrepareChannelCredentialRotationRow) pro
 	return probeSnapshot{
 		ChannelID: row.ChannelID, Protocol: row.Protocol, AdapterKey: row.AdapterKey,
 		Credential: row.Credential, CredentialValid: row.CredentialValid, ConfigRevision: row.ConfigRevision,
-		ProviderSlug: row.ProviderSlug, OriginBaseURL: row.OriginBaseUrl,
-		OriginBaseURLRevision: row.OriginBaseUrlRevision, OriginStatusRevision: row.OriginStatusRevision,
+		ProviderSlug: row.ProviderSlug, Origin: row.Origin,
+		OriginRevision: row.OriginRevision, ProviderStatusRevision: row.StatusRevision,
 	}
 }
 
@@ -330,7 +330,7 @@ func (s *Service) executeProbe(ctx context.Context, snapshot probeSnapshot, mode
 func (s *Service) executeProbeCandidates(ctx context.Context, snapshot probeSnapshot, candidates []string) TestResult {
 	probeTimeout := appsettings.AdminBackendChannelTestProbeTimeout(ctx, s.settings)
 	runtime := corechannel.Runtime{
-		ID: snapshot.ChannelID, BaseURL: snapshot.OriginBaseURL,
+		ID: snapshot.ChannelID, Origin: snapshot.Origin,
 		APIKey: strings.TrimSpace(snapshot.Credential), Timeout: probeTimeout, ProviderSlug: snapshot.ProviderSlug,
 	}
 	var result TestResult
@@ -386,8 +386,8 @@ func (s *Service) permissionRecheckSnapshot(
 		}
 	}
 	stale := snapshot.ConfigRevision != in.ChannelConfigRevision ||
-		snapshot.OriginBaseURLRevision != in.OriginBaseURLRevision ||
-		snapshot.OriginStatusRevision != in.OriginStatusRevision ||
+		snapshot.OriginRevision != in.OriginRevision ||
+		snapshot.ProviderStatusRevision != in.ProviderStatusRevision ||
 		!found || binding.Status != channelModelStatusEnabled
 	return snapshot, binding, stale, nil
 }
@@ -406,10 +406,10 @@ func (s *Service) insertPermissionRecheckAudit(
 		ChannelID: in.ChannelID, Success: probe.Success,
 		ErrorCode: optText(probe.ErrorCode), HttpStatus: optInt4(int32(probe.HTTPStatus)),
 		LatencyMs: optInt4(clampInt32(probe.LatencyMs)), TestedModel: optText(probe.TestedModel),
-		Message:                       optText(message),
-		TestedOriginBaseUrlRevision: pgtype.Int8{Int64: in.OriginBaseURLRevision, Valid: true},
-		TestedOriginStatusRevision:  pgtype.Int8{Int64: in.OriginStatusRevision, Valid: true},
-		TestedConfigRevision:          pgtype.Int8{Int64: in.ChannelConfigRevision, Valid: true},
+		Message:              optText(message),
+		TestedOriginRevision: pgtype.Int8{Int64: in.OriginRevision, Valid: true},
+		TestedStatusRevision: pgtype.Int8{Int64: in.ProviderStatusRevision, Valid: true},
+		TestedConfigRevision: pgtype.Int8{Int64: in.ChannelConfigRevision, Valid: true},
 	})
 	if err != nil {
 		return storeFailed(err, "insert permission recheck audit")
@@ -449,19 +449,19 @@ func (s *Service) applyProbeResult(ctx context.Context, snapshot probeSnapshot, 
 	}
 	return s.store.ApplyChannelProbeResult(ctx, sqlc.ApplyChannelProbeResultParams{
 		ChannelID: snapshot.ChannelID, ExpectedConfigRevision: snapshot.ConfigRevision,
-		ExpectedOriginBaseUrlRevision: snapshot.OriginBaseURLRevision,
-		ExpectedOriginStatusRevision:  snapshot.OriginStatusRevision,
-		Success:                         pgtype.Bool{Bool: result.Success, Valid: true},
-		LastTestLatencyMs:               pgtype.Int4{Int32: clampInt32(result.LatencyMs), Valid: true},
-		LastTestError:                   testErrorParam(result), NextCredentialValid: nextCredentialValid,
+		ExpectedOriginRevision: snapshot.OriginRevision,
+		ExpectedStatusRevision: snapshot.ProviderStatusRevision,
+		Success:                pgtype.Bool{Bool: result.Success, Valid: true},
+		LastTestLatencyMs:      pgtype.Int4{Int32: clampInt32(result.LatencyMs), Valid: true},
+		LastTestError:          testErrorParam(result), NextCredentialValid: nextCredentialValid,
 		Source: source, ErrorCode: optText(result.ErrorCode), HttpStatus: optInt4(int32(result.HTTPStatus)),
 		TestedModel: optText(result.TestedModel), UpstreamError: optText(result.UpstreamError),
 	})
 }
 
 func setTestedRevisions(verification *adminchannel.CredentialVerification, snapshot probeSnapshot) {
-	verification.TestedOriginBaseURLRevision = int64Ptr(snapshot.OriginBaseURLRevision)
-	verification.TestedOriginStatusRevision = int64Ptr(snapshot.OriginStatusRevision)
+	verification.TestedOriginRevision = int64Ptr(snapshot.OriginRevision)
+	verification.TestedProviderStatusRevision = int64Ptr(snapshot.ProviderStatusRevision)
 	verification.TestedConfigRevision = int64Ptr(snapshot.ConfigRevision)
 }
 
@@ -508,21 +508,21 @@ func optInt4(v int32) pgtype.Int4 {
 
 // LogEntry 是一条渠道检测/凭据事件日志（详情页「检测日志」区块展示）。
 type LogEntry struct {
-	ID                            int64
-	CreatedAt                     time.Time
-	Source                        string
-	Success                       bool
-	ErrorCode                     string
-	HTTPStatus                    int
-	LatencyMs                     int64
-	TestedModel                   string
-	CredentialValidAfter          bool
-	Message                       string
-	UpstreamError                 string
-	TestedOriginBaseURLRevision *int64
-	TestedOriginStatusRevision  *int64
-	TestedConfigRevision          *int64
-	StateChangeApplied            bool
+	ID                           int64
+	CreatedAt                    time.Time
+	Source                       string
+	Success                      bool
+	ErrorCode                    string
+	HTTPStatus                   int
+	LatencyMs                    int64
+	TestedModel                  string
+	CredentialValidAfter         bool
+	Message                      string
+	UpstreamError                string
+	TestedOriginRevision         *int64
+	TestedProviderStatusRevision *int64
+	TestedConfigRevision         *int64
+	StateChangeApplied           bool
 }
 
 // ListLogs 分页返回某渠道的检测日志（倒序）。返回本页 + 总数。
@@ -552,10 +552,10 @@ func (s *Service) ListLogs(ctx context.Context, channelID int64, limit, offset i
 			ErrorCode: r.ErrorCode.String, HTTPStatus: int(r.HttpStatus.Int32), LatencyMs: int64(r.LatencyMs.Int32),
 			TestedModel: r.TestedModel.String, CredentialValidAfter: r.CredentialValidAfter,
 			Message: r.Message.String, UpstreamError: r.UpstreamError.String,
-			TestedOriginBaseURLRevision: nullableInt64(r.TestedOriginBaseUrlRevision),
-			TestedOriginStatusRevision:  nullableInt64(r.TestedOriginStatusRevision),
-			TestedConfigRevision:          nullableInt64(r.TestedConfigRevision),
-			StateChangeApplied:            r.StateChangeApplied,
+			TestedOriginRevision:         nullableInt64(r.TestedOriginRevision),
+			TestedProviderStatusRevision: nullableInt64(r.TestedStatusRevision),
+			TestedConfigRevision:         nullableInt64(r.TestedConfigRevision),
+			StateChangeApplied:           r.StateChangeApplied,
 		})
 	}
 	return out, total, nil

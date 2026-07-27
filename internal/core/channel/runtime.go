@@ -6,7 +6,7 @@ import "time"
 type Runtime struct {
 	ID      int64
 	Name    string
-	BaseURL string
+	Origin  string
 	APIKey  string
 	Timeout time.Duration
 

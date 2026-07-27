@@ -153,7 +153,6 @@ SELECT
     stream,
     status,
     final_provider_id,
-    final_provider_origin_id,
     final_channel_id,
     error_code,
     error_message,

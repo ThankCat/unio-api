@@ -282,7 +282,7 @@ func TestSessionSnapshotInjectsFrozenAdmissionAndFreshRoutingRevisions(t *testin
 	}
 	ctx := ContextWithUsageSession(context.Background(), result.Session.Usage())
 	candidates := []breakerstore.SnapshotCandidateInput{{
-		OriginID: 30, ChannelID: 40, OriginBaseURLRevision: 2, OriginStatusRevision: 3,
+		ProviderID: 30, ChannelID: 40, OriginRevision: 2, ProviderStatusRevision: 3,
 		ChannelConfigRevision: 4, ChannelAdmissionRevision: 5,
 	}}
 	snapshot, present, err := SnapshotManyIfPresent(ctx, 50, candidates)

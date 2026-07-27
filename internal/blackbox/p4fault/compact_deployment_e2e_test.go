@@ -291,7 +291,7 @@ func redisInt64Field(t *testing.T, value map[string]string, field string) int64 
 func assertCompactBreakerIgnoredThenSucceeded(t *testing.T, h *faultHarness) {
 	t.Helper()
 	for _, key := range []string{
-		h.namespace + ":breaker:v2:origin:" + formatID(h.seed.originID),
+		h.namespace + ":breaker:v2:provider:" + formatID(h.seed.providerID),
 		h.namespace + ":breaker:v2:channel:" + formatID(h.seed.openAIChannelID),
 	} {
 		state := readRedisHashForCompact(t, h, key)
@@ -375,21 +375,21 @@ func assertCompactDatabaseFacts(
 	}
 	native, synthetic := attempts[0], attempts[1]
 	if native.RequestRecordID != requestID || native.AttemptIndex != 0 || native.Status != "failed" ||
-		native.ChannelID != seed.openAIChannelID || native.ProviderOriginID != seed.originID || native.AdapterKey != "openai" ||
+		native.ChannelID != seed.openAIChannelID || native.ProviderID != seed.providerID || native.AdapterKey != "openai" ||
 		native.UpstreamEndpoint != "responses_compact" ||
 		!native.UpstreamStatusCode.Valid || int(native.UpstreamStatusCode.Int32) != nativeStatus ||
 		!native.UpstreamRequestID.Valid || native.UpstreamRequestID.String != "p4-fault-compact-unsupported" ||
-		!native.BreakerOriginDisposition.Valid || native.BreakerOriginDisposition.String != "not_applicable" ||
+		!native.BreakerProviderDisposition.Valid || native.BreakerProviderDisposition.String != "not_applicable" ||
 		!native.BreakerChannelDisposition.Valid || native.BreakerChannelDisposition.String != "not_applicable" ||
 		!native.FaultParty.Valid || native.FaultParty.String != "client" {
 		t.Fatalf("unexpected native compact attempt: %+v", native)
 	}
 	if synthetic.RequestRecordID != requestID || synthetic.AttemptIndex != 1 || synthetic.Status != "succeeded" ||
-		synthetic.ChannelID != seed.openAIChannelID || synthetic.ProviderOriginID != seed.originID || synthetic.AdapterKey != "openai" ||
+		synthetic.ChannelID != seed.openAIChannelID || synthetic.ProviderID != seed.providerID || synthetic.AdapterKey != "openai" ||
 		synthetic.UpstreamEndpoint != "chat_completions" ||
 		!synthetic.UpstreamStatusCode.Valid || synthetic.UpstreamStatusCode.Int32 != http.StatusOK ||
 		!synthetic.UpstreamRequestID.Valid || synthetic.UpstreamRequestID.String != "p4-fault-chat" ||
-		!synthetic.BreakerOriginDisposition.Valid || synthetic.BreakerOriginDisposition.String != "applied" ||
+		!synthetic.BreakerProviderDisposition.Valid || synthetic.BreakerProviderDisposition.String != "applied" ||
 		!synthetic.BreakerChannelDisposition.Valid || synthetic.BreakerChannelDisposition.String != "applied" ||
 		!synthetic.FinalUsageReceived {
 		t.Fatalf("unexpected synthetic compact attempt: %+v", synthetic)

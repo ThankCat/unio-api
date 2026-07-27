@@ -57,7 +57,7 @@ type nonStreamStrategy struct {
 	// endpointForCandidate and transparentFallback are used by Compact to represent Native
 	// 404/405 -> Synthetic as two separately admitted transports. Other Responses paths leave both nil.
 	endpointForCandidate lifecycle.NonStreamEndpointResolver
-	transparentFallback   *lifecycle.NonStreamTransparentFallback
+	transparentFallback  *lifecycle.NonStreamTransparentFallback
 
 	// upstreamCostWithoutUsage 可选：命中时 runner 释放冻结并记 risk_exposure（不重试/不普通释放），
 	// 用于「上游可能已计费但无可靠 usage」（compact 2xx 缺 usage，P0-3）。nil 表示沿用普通失败语义。
@@ -186,7 +186,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		UserID:          principal.UserID,
 		ModelID:         req.Model,
 		IngressProtocol: routing.ProtocolOpenAI,
-		Endpoint:       routing.EndpointResponses,
+		Endpoint:        routing.EndpointResponses,
 		RouteID:         principal.RouteID,
 	})
 	lifecycle.EndGatewaySpan(planSpan, err)
@@ -248,7 +248,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		Sticky:                   stickySession,
 		ResolveAdapter:           strat.resolve,
 		Invoke:                   strat.invoke,
-		EndpointForCandidate:    strat.endpointForCandidate,
+		EndpointForCandidate:     strat.endpointForCandidate,
 		TransparentFallback:      strat.transparentFallback,
 		Codes:                    strat.codes,
 		UpstreamCostWithoutUsage: strat.upstreamCostWithoutUsage,

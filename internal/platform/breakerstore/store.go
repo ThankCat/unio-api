@@ -72,9 +72,9 @@ type Store struct {
 	epPrepareStatus  *redis.Script
 	epCommitStatus   *redis.Script
 	epAbortStatus    *redis.Script
-	epPrepareBaseURL *redis.Script
-	epCommitBaseURL  *redis.Script
-	epAbortBaseURL   *redis.Script
+	epPrepareOrigin  *redis.Script
+	epCommitOrigin   *redis.Script
+	epAbortOrigin    *redis.Script
 }
 
 // NewStore 创建 BreakerStore。keyNamespace 为空回退 "unio"。
@@ -129,14 +129,14 @@ func NewStore(client redis.Cmdable, keyNamespace string, observers ...OperationO
 		faultBegin:     redis.NewScript(luaBeginRuntimeReconciliation),
 		serverIdentity: redis.NewScript(luaRedisServerIdentity),
 
-		epInitControl:    redis.NewScript(luaInitOriginControl),
-		epRestoreControl: redis.NewScript(luaRestoreMissingOriginControl),
+		epInitControl:    redis.NewScript(luaInitProviderControl),
+		epRestoreControl: redis.NewScript(luaRestoreMissingProviderControl),
 		epPrepareStatus:  redis.NewScript(luaPrepareOriginStatus),
 		epCommitStatus:   redis.NewScript(luaCommitOriginStatus),
 		epAbortStatus:    redis.NewScript(luaAbortOriginStatus),
-		epPrepareBaseURL: redis.NewScript(luaPrepareOriginBaseURL),
-		epCommitBaseURL:  redis.NewScript(luaCommitOriginBaseURL),
-		epAbortBaseURL:   redis.NewScript(luaAbortOriginBaseURL),
+		epPrepareOrigin:  redis.NewScript(luaPrepareOrigin),
+		epCommitOrigin:   redis.NewScript(luaCommitOrigin),
+		epAbortOrigin:    redis.NewScript(luaAbortOrigin),
 	}
 }
 
@@ -213,25 +213,25 @@ type AcquireAttemptInput struct {
 	IntegrityEpoch       string
 	IntegrityRevision    int64
 
-	OriginID int64
+	ProviderID int64
 	ChannelID  int64
 
-	OriginBaseURLRevision int64
-	OriginStatusRevision  int64
-	ChannelConfigRevision   int64
+	OriginRevision         int64
+	ProviderStatusRevision int64
+	ChannelConfigRevision  int64
 
-	ModelID           int64
+	ModelID          int64
 	UpstreamEndpoint UpstreamEndpoint
-	RequestMode       RequestMode
+	RequestMode      RequestMode
 
 	ChannelRateRevision       int64
 	GlobalConcurrencyRevision int64
 	CircuitBreakerRevision    int64
 	ChannelAdmissionRevision  int64
 
-	// EnforceOriginControl=true 时，校验 Origin control 存在、effective_status=enabled、无 pending、
-	// 且 permit 冻结的 base_url/status revision 与当前一致（§5.3.2 围栏准入分界）。
-	EnforceOriginControl bool
+	// EnforceProviderControl=true 时，校验 Provider control 存在、effective_status=enabled、无 pending、
+	// 且 permit 冻结的 origin/status revision 与当前一致（§5.3.2 围栏准入分界）。
+	EnforceProviderControl bool
 
 	EstimatedInputTokens int64
 }
@@ -251,7 +251,7 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 	now := time.Now()
 	concKey := s.keys.channel(in.ChannelID) + ":conc"
 	keys := []string{
-		s.keys.origin(in.OriginID),
+		s.keys.provider(in.ProviderID),
 		s.keys.channel(in.ChannelID),
 		concKey,
 		s.keys.permit(in.PermitID),
@@ -270,17 +270,17 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 		s.keys.runtimeReconciliationProof(),
 	}
 	enforceOrigin := 0
-	if in.EnforceOriginControl {
+	if in.EnforceProviderControl {
 		enforceOrigin = 1
 	}
 	argv := []interface{}{
 		in.PermitID,
 		in.AdmissionFingerprint,
 		in.RequestAdmissionID,
-		strconv.FormatInt(in.OriginID, 10),
+		strconv.FormatInt(in.ProviderID, 10),
 		strconv.FormatInt(in.ChannelID, 10),
-		strconv.FormatInt(in.OriginBaseURLRevision, 10),
-		strconv.FormatInt(in.OriginStatusRevision, 10),
+		strconv.FormatInt(in.OriginRevision, 10),
+		strconv.FormatInt(in.ProviderStatusRevision, 10),
 		strconv.FormatInt(in.ChannelConfigRevision, 10),
 		strconv.FormatInt(in.ModelID, 10),
 		string(in.UpstreamEndpoint),
@@ -345,24 +345,24 @@ func (s *Store) permitFromAcquire(in AcquireAttemptInput, arr []interface{}) *At
 		return toI64(v) == 1
 	}
 	p := &AttemptPermit{
-		PermitID:                in.PermitID,
-		RequestAdmissionID:      in.RequestAdmissionID,
-		IntegrityEpoch:          in.IntegrityEpoch,
-		IntegrityRevision:       in.IntegrityRevision,
-		OriginID:              in.OriginID,
-		ChannelID:               in.ChannelID,
-		OriginBaseURLRevision: in.OriginBaseURLRevision,
-		OriginStatusRevision:  in.OriginStatusRevision,
-		ChannelConfigRevision:   in.ChannelConfigRevision,
-		ModelID:                 in.ModelID,
+		PermitID:               in.PermitID,
+		RequestAdmissionID:     in.RequestAdmissionID,
+		IntegrityEpoch:         in.IntegrityEpoch,
+		IntegrityRevision:      in.IntegrityRevision,
+		ProviderID:             in.ProviderID,
+		ChannelID:              in.ChannelID,
+		OriginRevision:         in.OriginRevision,
+		ProviderStatusRevision: in.ProviderStatusRevision,
+		ChannelConfigRevision:  in.ChannelConfigRevision,
+		ModelID:                in.ModelID,
 		UpstreamEndpoint:       in.UpstreamEndpoint,
-		RequestMode:             in.RequestMode,
+		RequestMode:            in.RequestMode,
 	}
 	// arr = {code, ep_gen, ch_gen, ep_probe, ch_probe, lease_until, acquired_at, permit_ttl, renew, terminal_ttl}
 	if len(arr) >= 7 {
-		p.OriginStateGeneration = toI64(arr[1])
+		p.ProviderStateGeneration = toI64(arr[1])
 		p.ChannelStateGeneration = toI64(arr[2])
-		p.OriginHalfOpenProbe = toBool(arr[3])
+		p.ProviderHalfOpenProbe = toBool(arr[3])
 		p.ChannelHalfOpenProbe = toBool(arr[4])
 		p.LeaseUntilMs = toI64(arr[5])
 		p.AcquiredAtMs = toI64(arr[6])
@@ -379,27 +379,27 @@ func (s *Store) attemptLifecycleKeys(permit AttemptPermit) []string {
 	return []string{
 		s.keys.stateIntegrityMarker(),
 		s.keys.permit(permit.PermitID),
-		s.keys.origin(permit.OriginID),
+		s.keys.provider(permit.ProviderID),
 		s.keys.channel(permit.ChannelID),
 		s.keys.channel(permit.ChannelID) + ":conc",
 	}
 }
 
-func (s *Store) originEvidenceKeys(originID int64, category OriginEvidenceCategory) []string {
+func (s *Store) providerEvidenceKeys(providerID int64, category ProviderEvidenceCategory) []string {
 	return []string{
-		s.keys.originEvidenceChannels(originID, string(category)),
-		s.keys.originEvidenceModels(originID, string(category)),
+		s.keys.providerEvidenceChannels(providerID, string(category)),
+		s.keys.providerEvidenceModels(providerID, string(category)),
 	}
 }
 
-func (s *Store) allOriginEvidenceKeys(originID int64) []string {
+func (s *Store) allProviderEvidenceKeys(providerID int64) []string {
 	keys := make([]string, 0, 6)
-	for _, category := range []OriginEvidenceCategory{
-		OriginEvidenceHTTP500,
-		OriginEvidenceFirstTokenTimeout,
-		OriginEvidenceBodyReadTimeout,
+	for _, category := range []ProviderEvidenceCategory{
+		ProviderEvidenceHTTP500,
+		ProviderEvidenceFirstTokenTimeout,
+		ProviderEvidenceBodyReadTimeout,
 	} {
-		keys = append(keys, s.originEvidenceKeys(originID, category)...)
+		keys = append(keys, s.providerEvidenceKeys(providerID, category)...)
 	}
 	return keys
 }
@@ -416,17 +416,17 @@ func attemptLifecycleArgs(permit AttemptPermit) []interface{} {
 		permit.IntegrityEpoch,
 		strconv.FormatInt(permit.IntegrityRevision, 10),
 		permit.RequestAdmissionID,
-		strconv.FormatInt(permit.OriginID, 10),
+		strconv.FormatInt(permit.ProviderID, 10),
 		strconv.FormatInt(permit.ChannelID, 10),
-		strconv.FormatInt(permit.OriginBaseURLRevision, 10),
-		strconv.FormatInt(permit.OriginStatusRevision, 10),
+		strconv.FormatInt(permit.OriginRevision, 10),
+		strconv.FormatInt(permit.ProviderStatusRevision, 10),
 		strconv.FormatInt(permit.ChannelConfigRevision, 10),
 		strconv.FormatInt(permit.ModelID, 10),
 		string(permit.UpstreamEndpoint),
 		string(permit.RequestMode),
-		strconv.FormatInt(permit.OriginStateGeneration, 10),
+		strconv.FormatInt(permit.ProviderStateGeneration, 10),
 		strconv.FormatInt(permit.ChannelStateGeneration, 10),
-		boolArg(permit.OriginHalfOpenProbe),
+		boolArg(permit.ProviderHalfOpenProbe),
 		boolArg(permit.ChannelHalfOpenProbe),
 	}
 }
@@ -451,13 +451,13 @@ func (s *Store) Finish(ctx context.Context, permit AttemptPermit, outcome Finish
 		s.keys.runtimeControlSetting("gateway.circuit_breaker"),
 		s.keys.runtimeControlSetting("gateway.routing_balance"),
 	)
-	keys = append(keys, s.originEvidenceKeys(permit.OriginID, outcome.OriginEvidence)...)
+	keys = append(keys, s.providerEvidenceKeys(permit.ProviderID, outcome.ProviderEvidence)...)
 	argv := append(attemptLifecycleArgs(permit),
-		string(outcome.OriginOutcome),
+		string(outcome.ProviderOutcome),
 		string(outcome.ChannelOutcome),
 		firstToken,
 		tpmActual,
-		string(outcome.OriginEvidence),
+		string(outcome.ProviderEvidence),
 	)
 
 	res, err := s.finish.Run(ctx, s.client, keys, argv...).Result()
@@ -470,7 +470,7 @@ func (s *Store) Finish(ctx context.Context, permit AttemptPermit, outcome Finish
 	}
 	epDisp, _ := arr[0].(string)
 	chDisp, _ := arr[1].(string)
-	return FinishResult{OriginDisposition: Disposition(epDisp), ChannelDisposition: Disposition(chDisp)}, nil
+	return FinishResult{ProviderDisposition: Disposition(epDisp), ChannelDisposition: Disposition(chDisp)}, nil
 }
 
 // Abort 用于已获准但未进入真实 transport 的路径：释放资源，不计 breaker 结果。
@@ -657,8 +657,8 @@ func (s *Store) Reset(ctx context.Context, scope Scope, id int64) (generation in
 	switch scope {
 	case ScopeChannel:
 		keys = []string{s.keys.channel(id)}
-	case ScopeOrigin:
-		keys = append([]string{s.keys.origin(id)}, s.allOriginEvidenceKeys(id)...)
+	case ScopeProvider:
+		keys = append([]string{s.keys.provider(id)}, s.allProviderEvidenceKeys(id)...)
 	default:
 		return 0, failure.New(failure.CodeConfigInvalid, failure.WithMessage("unknown breaker scope"))
 	}
@@ -692,8 +692,8 @@ func (s *Store) Snapshot(ctx context.Context, scope Scope, id int64) (snapshot S
 	switch scope {
 	case ScopeChannel:
 		key = s.keys.channel(id)
-	case ScopeOrigin:
-		key = s.keys.origin(id)
+	case ScopeProvider:
+		key = s.keys.provider(id)
 	default:
 		return ScopeSnapshot{}, failure.New(failure.CodeConfigInvalid, failure.WithMessage("unknown breaker scope"))
 	}
@@ -748,7 +748,7 @@ func (s *Store) SnapshotMany(ctx context.Context, in SnapshotManyInput) (result 
 			return SnapshotManyResult{}, err
 		}
 		keys = append(keys,
-			s.keys.origin(candidate.OriginID),
+			s.keys.provider(candidate.ProviderID),
 			s.keys.channel(candidate.ChannelID),
 			s.keys.channel(candidate.ChannelID)+":conc",
 			s.keys.channel429Cooldown(candidate.ChannelID),
@@ -756,10 +756,10 @@ func (s *Store) SnapshotMany(ctx context.Context, in SnapshotManyInput) (result 
 			s.keys.admissionChannel(candidate.ChannelID),
 		)
 		argv = append(argv,
-			strconv.FormatInt(candidate.OriginID, 10),
+			strconv.FormatInt(candidate.ProviderID, 10),
 			strconv.FormatInt(candidate.ChannelID, 10),
-			strconv.FormatInt(candidate.OriginBaseURLRevision, 10),
-			strconv.FormatInt(candidate.OriginStatusRevision, 10),
+			strconv.FormatInt(candidate.OriginRevision, 10),
+			strconv.FormatInt(candidate.ProviderStatusRevision, 10),
 			strconv.FormatInt(candidate.ChannelConfigRevision, 10),
 			strconv.FormatInt(candidate.ChannelAdmissionRevision, 10),
 			s.keys.channelRPMBucketPrefix(candidate.ChannelID),

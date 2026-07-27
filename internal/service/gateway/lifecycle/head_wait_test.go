@@ -99,12 +99,12 @@ func TestAcquireAttemptHeadWaitRetriesCapacityWithFreshPermit(t *testing.T) {
 	used := false
 	admission, owner, err := runner.acquireAttemptWithHeadWait(ctx, AttemptPermitAcquireParams{
 		Candidate: routing.ChatRouteCandidate{
-			ModelDBID: 11, ProviderOriginID: 12, ProviderOriginBaseURLRevision: 13,
-			ProviderOriginStatusRevision: 14, ChannelConfigRevision: 15,
+			ModelDBID: 11, ProviderID: 12, OriginRevision: 13,
+			ProviderStatusRevision: 14, ChannelConfigRevision: 15,
 			ChannelAdmissionLimitsRevision: 16, Channel: channel.Runtime{ID: 17},
 		},
 		UpstreamEndpoint: requestlog.UpstreamEndpointChatCompletions,
-		RequestMode:       breakerstore.ModeNonStream,
+		RequestMode:      breakerstore.ModeNonStream,
 	}, true, &used)
 	if err != nil || admission.Mode != breakerstore.AdmissionPermit || owner == nil {
 		t.Fatalf("admission=%+v owner=%v err=%v", admission, owner, err)

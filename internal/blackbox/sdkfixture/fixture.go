@@ -57,7 +57,7 @@ const (
 	// 任一缺失即 t.Skip，与 adapter 层 DS-OAI / DS-ANT 黑盒约定一致。
 	UpstreamReal UpstreamMode = iota
 
-	// UpstreamMock 把 ProviderOrigin base_url 指向调用方传入的 httptest mock server，
+	// UpstreamMock 把 Provider origin 指向调用方传入的 httptest mock server，
 	// 用于错误映射、fallback、Drop 字段、边界等不依赖真实上游的用例。
 	UpstreamMock
 )
@@ -85,7 +85,7 @@ type SetupOptions struct {
 	// API key 与 protocol-specific root；非空时按描述解析任意兼容上游。
 	RealUpstreamEnv *RealUpstreamEnv
 
-	// UpstreamBaseURL 当 Mode=UpstreamMock 时必填，使用 ProviderOrigin root，
+	// UpstreamBaseURL 当 Mode=UpstreamMock 时必填，使用 Provider origin，
 	// 例如 mockServer.URL；adapter 会追加完整的 /v1/... endpoint path。
 	UpstreamBaseURL string
 	// UpstreamAPIKey 当 Mode=UpstreamMock 时可选；为空时默认 "sk-test-mock"。
@@ -149,6 +149,7 @@ type Fixture struct {
 	suffix                  int64
 	fallbackChannelIDs      []int64
 	fallbackChannelPriceIDs []int64
+	fallbackProviderIDs     []int64
 }
 
 // Setup 装一个 unio gateway 黑盒 fixture。
@@ -374,7 +375,7 @@ func requireAPIRoot(t *testing.T, envName string, raw string) string {
 //
 //   - 同 model_id；
 //   - 更高 priority 数字（routing 按 priority asc，数字越小优先级越高，所以 fallback 数字应大于主 channel 的 10）；
-//   - 独立的 base_url（通常指向另一个 mock upstream）；
+//   - 独立 Provider 与 origin（通常指向另一个 mock upstream）；
 //   - 自动 insert 同形状的 channel_cost_prices：生产中 admin 配置时 channel+model 启用前
 //     必须配 cost_price，否则一旦命中 settle 时 FindActiveChannelCostPrice 会失败，
 //     走 RecoverableChatSettlementExecutor 的 recovery 路径，请求终态被推迟到 worker。
@@ -385,22 +386,21 @@ func requireAPIRoot(t *testing.T, envName string, raw string) string {
 func (f *Fixture) AddFallbackChannel(t *testing.T, baseURL string, priority int32) int64 {
 	t.Helper()
 
-	// P4 §4.4：base_url 归属 ProviderOrigin；fallback 建一个同 Provider 下的 enabled Origin。
-	var fallbackOriginID int64
+	var fallbackProviderID int64
 	if err := f.Pool.QueryRow(f.ctx, `
-		INSERT INTO provider_origins (provider_id, name, base_url, status)
+		INSERT INTO providers (slug, name, origin, status)
 		VALUES ($1, $2, $3, 'enabled')
 		RETURNING id
-	`, f.ProviderID, fmt.Sprintf("blackbox-fallback-ep-%d", f.suffix), baseURL).Scan(&fallbackOriginID); err != nil {
-		t.Fatalf("insert fallback provider origin: %v", err)
+	`, fmt.Sprintf("blackbox-fallback-%d", f.suffix), fmt.Sprintf("blackbox fallback %d", f.suffix), baseURL).Scan(&fallbackProviderID); err != nil {
+		t.Fatalf("insert fallback provider: %v", err)
 	}
 
 	var fallbackID int64
 	if err := f.Pool.QueryRow(f.ctx, `
-		INSERT INTO channels (provider_id, provider_origin_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
-		VALUES ($1, $2, $3, (SELECT protocol FROM channels WHERE id = $4), (SELECT adapter_key FROM channels WHERE id = $4), $5, 'enabled', $6, 60000)
+		INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
+		VALUES ($1, $2, (SELECT protocol FROM channels WHERE id = $3), (SELECT adapter_key FROM channels WHERE id = $3), $4, 'enabled', $5, 60000)
 		RETURNING id
-	`, f.ProviderID, fallbackOriginID, fmt.Sprintf("blackbox-fallback-%d", f.suffix), f.ChannelID, "sk-fallback-test", priority).Scan(&fallbackID); err != nil {
+	`, fallbackProviderID, fmt.Sprintf("blackbox-fallback-channel-%d", f.suffix), f.ChannelID, "sk-fallback-test", priority).Scan(&fallbackID); err != nil {
 		t.Fatalf("insert fallback channel: %v", err)
 	}
 
@@ -437,11 +437,11 @@ func (f *Fixture) AddFallbackChannel(t *testing.T, baseURL string, priority int3
 	}
 	f.fallbackChannelPriceIDs = append(f.fallbackChannelPriceIDs, fallbackCostPrice.ID)
 
-	// 生产 Admin 创建 Origin/Channel 时会同步初始化 Redis control。fixture 在 Gateway 启动后
+	// 生产 Admin 创建 Provider/Channel 时会同步初始化 Redis control。fixture 在 Gateway 启动后
 	// 直接写 DB，也必须完成同一动作；否则 P4 fail-closed 会把刚加入的 fallback 排除到下一次
 	// 后台 reconciler 扫描之后，测试无法验证即时 fallback。
-	if _, err := f.breakerStore.InitOriginControl(f.ctx, fallbackOriginID, 1, 1, "enabled"); err != nil {
-		t.Fatalf("initialize fallback origin runtime control: %v", err)
+	if _, err := f.breakerStore.InitProviderControl(f.ctx, fallbackProviderID, 1, 1, "enabled"); err != nil {
+		t.Fatalf("initialize fallback provider runtime control: %v", err)
 	}
 	fallbackChannel, err := f.Queries.GetChannel(f.ctx, fallbackID)
 	if err != nil {
@@ -467,6 +467,7 @@ func (f *Fixture) AddFallbackChannel(t *testing.T, baseURL string, priority int3
 	}
 
 	f.fallbackChannelIDs = append(f.fallbackChannelIDs, fallbackID)
+	f.fallbackProviderIDs = append(f.fallbackProviderIDs, fallbackProviderID)
 	return fallbackID
 }
 
@@ -514,6 +515,10 @@ func (f *Fixture) teardown(t *testing.T) {
 		deleteRows("fallback runtime-control operations", `DELETE FROM runtime_control_operations WHERE channel_id = $1`, fbID)
 		deleteRows("fallback channel", `DELETE FROM channels WHERE id = $1`, fbID)
 	}
+	for _, fallbackProviderID := range f.fallbackProviderIDs {
+		deleteRows("fallback provider routing operations", `DELETE FROM provider_routing_operations WHERE provider_id = $1`, fallbackProviderID)
+		deleteRows("fallback provider", `DELETE FROM providers WHERE id = $1`, fallbackProviderID)
+	}
 	if f.ChannelID != 0 && f.ModelDBID != 0 {
 		deleteRows("channel model", `DELETE FROM channel_models WHERE channel_id = $1 AND model_id = $2`, f.ChannelID, f.ModelDBID)
 	}
@@ -522,9 +527,7 @@ func (f *Fixture) teardown(t *testing.T) {
 		deleteRows("channel", `DELETE FROM channels WHERE id = $1`, f.ChannelID)
 	}
 	if f.ProviderID != 0 {
-		// P4 §4.2：channels 已删，先删该 Provider 下的 ProviderOrigin 再删 Provider（外键反序）。
-		deleteRows("origin routing operations", `DELETE FROM origin_routing_operations WHERE provider_id = $1`, f.ProviderID)
-		deleteRows("provider origins", `DELETE FROM provider_origins WHERE provider_id = $1`, f.ProviderID)
+		deleteRows("provider routing operations", `DELETE FROM provider_routing_operations WHERE provider_id = $1`, f.ProviderID)
 		deleteRows("provider", `DELETE FROM providers WHERE id = $1`, f.ProviderID)
 	}
 	if f.ModelDBID != 0 {
@@ -597,30 +600,20 @@ func (f *Fixture) seed(t *testing.T, opts SetupOptions, upstreamBaseURL string, 
 	providerSlug := fmt.Sprintf("blackbox-provider-%d", suffix)
 	var providerID int64
 	if err := f.Pool.QueryRow(f.ctx, `
-		INSERT INTO providers (slug, name, status)
-		VALUES ($1, $2, 'enabled')
+		INSERT INTO providers (slug, name, origin, status)
+		VALUES ($1, $2, $3, 'enabled')
 		RETURNING id
-	`, providerSlug, providerSlug).Scan(&providerID); err != nil {
+	`, providerSlug, providerSlug, upstreamBaseURL).Scan(&providerID); err != nil {
 		t.Fatalf("insert provider: %v", err)
 	}
 	f.ProviderID = providerID
 
-	// P4 §4.4：base_url 归属 ProviderOrigin；主 channel 建一个同 Provider 下的 enabled Origin。
-	var originID int64
-	if err := f.Pool.QueryRow(f.ctx, `
-		INSERT INTO provider_origins (provider_id, name, base_url, status)
-		VALUES ($1, $2, $3, 'enabled')
-		RETURNING id
-	`, providerID, fmt.Sprintf("blackbox-ep-%d", suffix), upstreamBaseURL).Scan(&originID); err != nil {
-		t.Fatalf("insert provider origin: %v", err)
-	}
-
 	var channelID int64
 	if err := f.Pool.QueryRow(f.ctx, `
-		INSERT INTO channels (provider_id, provider_origin_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
-		VALUES ($1, $2, $3, $4, $5, $6, 'enabled', 10, $7)
+		INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
+		VALUES ($1, $2, $3, $4, $5, 'enabled', 10, $6)
 		RETURNING id
-	`, providerID, originID, fmt.Sprintf("blackbox-channel-%d", suffix), opts.Protocol, opts.AdapterKey, upstreamAPIKey, opts.ChannelTimeoutMS).Scan(&channelID); err != nil {
+	`, providerID, fmt.Sprintf("blackbox-channel-%d", suffix), opts.Protocol, opts.AdapterKey, upstreamAPIKey, opts.ChannelTimeoutMS).Scan(&channelID); err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
 	f.ChannelID = channelID
@@ -737,7 +730,7 @@ func (f *Fixture) seedRuntimeSettings(t *testing.T, cfg config.Config) {
 	values := map[string]string{
 		appsettings.GatewayRouteRateLimitDefaultsKey:   `{"rpm":10000,"tpm":0,"rpd":0}`,
 		appsettings.GatewayChannelRateLimitDefaultsKey: `{"rpm":10000,"tpm":0,"rpd":0}`,
-		appsettings.GatewayCircuitBreakerKey:           `{"enabled":false,"window_ms":30000,"min_requests":20,"failure_ratio":0.5,"consecutive_failures":3,"consecutive_window_ms":10000,"half_open_successes":2,"attempt_permit_ttl_ms":30000,"attempt_permit_renew_interval_ms":10000,"attempt_permit_terminal_ttl_ms":300000,"origin_base_url_revision_endpoint_ttl_ms":86400000,"origin_status_revision_endpoint_ttl_ms":86400000,"origin_status_batch_max":256,"open_durations_ms":[15000,30000,60000,120000,300000],"origin_ambiguous_distinct_channels":2,"origin_ambiguous_distinct_models":2}`,
+		appsettings.GatewayCircuitBreakerKey:           `{"enabled":false,"window_ms":30000,"min_requests":20,"failure_ratio":0.5,"consecutive_failures":3,"consecutive_window_ms":10000,"half_open_successes":2,"attempt_permit_ttl_ms":30000,"attempt_permit_renew_interval_ms":10000,"attempt_permit_terminal_ttl_ms":300000,"origin_revision_operation_ttl_ms":86400000,"status_revision_operation_ttl_ms":86400000,"open_durations_ms":[15000,30000,60000,120000,300000],"provider_ambiguous_distinct_channels":2,"provider_ambiguous_distinct_models":2}`,
 		appsettings.GatewayChannelCooldownKey:          `{"cooldown_ms":0,"cap_ms":0}`,
 		appsettings.GatewayRoutingTraceKey:             `{"sample_rate":1,"retention_days":7,"cleanup_batch_size":500,"cleanup_interval_ms":3600000}`,
 	}

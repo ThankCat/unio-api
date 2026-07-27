@@ -23,9 +23,8 @@ INSERT INTO request_attempts (
     usage_mapping_version,
     started_at,
     completed_at,
-    provider_origin_id,
-    provider_origin_base_url_revision,
-    provider_origin_status_revision,
+    provider_origin_revision,
+    provider_status_revision,
     channel_config_revision,
     routing_candidate_index,
     upstream_endpoint
@@ -53,9 +52,8 @@ VALUES (
            sqlc.arg(usage_mapping_version),
            sqlc.arg(started_at),
            sqlc.arg(completed_at),
-           sqlc.arg(provider_origin_id),
-           sqlc.arg(provider_origin_base_url_revision),
-           sqlc.arg(provider_origin_status_revision),
+           sqlc.arg(provider_origin_revision),
+           sqlc.arg(provider_status_revision),
            sqlc.arg(channel_config_revision),
            sqlc.arg(routing_candidate_index),
            sqlc.arg(upstream_endpoint)
@@ -88,13 +86,12 @@ RETURNING
     upstream_started_at,
     upstream_first_token_at,
     upstream_completed_at,
-    provider_origin_id,
-    provider_origin_base_url_revision,
-    provider_origin_status_revision,
+    provider_origin_revision,
+    provider_status_revision,
     channel_config_revision,
     routing_candidate_index,
     upstream_endpoint,
-    breaker_origin_disposition,
+    breaker_provider_disposition,
     breaker_channel_disposition,
     fault_party;
 
@@ -130,7 +127,7 @@ RETURNING *;
 -- name: RecordRequestAttemptBreakerDisposition :one
 -- RecordRequestAttemptBreakerDisposition 保留首次已确认的 Finish disposition，重复终态不得覆盖。
 UPDATE request_attempts
-SET breaker_origin_disposition = COALESCE(request_attempts.breaker_origin_disposition, sqlc.narg(breaker_origin_disposition)),
+SET breaker_provider_disposition = COALESCE(request_attempts.breaker_provider_disposition, sqlc.narg(breaker_provider_disposition)),
     breaker_channel_disposition = COALESCE(request_attempts.breaker_channel_disposition, sqlc.narg(breaker_channel_disposition))
 WHERE request_attempts.id = sqlc.arg(attempt_id)
 RETURNING *;

@@ -26,17 +26,20 @@ import (
 )
 
 type fakeProviderService struct {
-	listOut            []provider.Provider
-	getOut             provider.Provider
-	getErr             error
-	createOut          provider.Provider
-	createErr          error
-	updateOut          provider.Provider
-	updateErr          error
-	deleteErr          error
-	archiveReplacement *int64
-	archiveOut         provider.StatusChangeResult
-	restoreOut         provider.StatusChangeResult
+	listOut         []provider.Provider
+	getOut          provider.Provider
+	getErr          error
+	createOut       provider.Provider
+	createErr       error
+	updateOut       provider.Provider
+	updateErr       error
+	updateOriginOut provider.Provider
+	updateOriginErr error
+	updateStatusOut provider.Provider
+	updateStatusErr error
+	deleteErr       error
+	archiveOut      provider.StatusChangeResult
+	restoreOut      provider.StatusChangeResult
 }
 
 func (s *fakeProviderService) List(context.Context, provider.ListParams) (provider.ListResult, error) {
@@ -51,11 +54,16 @@ func (s *fakeProviderService) Create(context.Context, provider.CreateInput) (pro
 func (s *fakeProviderService) Update(context.Context, provider.UpdateInput) (provider.Provider, error) {
 	return s.updateOut, s.updateErr
 }
+func (s *fakeProviderService) UpdateOrigin(context.Context, provider.UpdateOriginInput) (provider.Provider, error) {
+	return s.updateOriginOut, s.updateOriginErr
+}
+func (s *fakeProviderService) UpdateStatus(context.Context, provider.UpdateStatusInput) (provider.Provider, error) {
+	return s.updateStatusOut, s.updateStatusErr
+}
 func (s *fakeProviderService) Delete(context.Context, int64) error {
 	return s.deleteErr
 }
-func (s *fakeProviderService) Archive(_ context.Context, _ int64, replacement *int64) (provider.StatusChangeResult, error) {
-	s.archiveReplacement = replacement
+func (s *fakeProviderService) Archive(context.Context, int64) (provider.StatusChangeResult, error) {
 	return s.archiveOut, nil
 }
 func (s *fakeProviderService) Restore(context.Context, int64) (provider.StatusChangeResult, error) {
@@ -63,15 +71,14 @@ func (s *fakeProviderService) Restore(context.Context, int64) (provider.StatusCh
 }
 
 type fakeChannelService struct {
-	getOut             channel.Channel
-	getErr             error
-	createOut          channel.Channel
-	createErr          error
-	rotateOut          channel.RotateCredentialResult
-	rotateErr          error
-	deleteErr          error
-	adapterKeyOptions  []channel.AdapterKeyOption
-	archiveReplacement *int64
+	getOut            channel.Channel
+	getErr            error
+	createOut         channel.Channel
+	createErr         error
+	rotateOut         channel.RotateCredentialResult
+	rotateErr         error
+	deleteErr         error
+	adapterKeyOptions []channel.AdapterKeyOption
 }
 
 func (s *fakeChannelService) List(context.Context, channel.ListParams) (channel.ListResult, error) {
@@ -92,10 +99,7 @@ func (s *fakeChannelService) RotateCredential(context.Context, channel.RotateCre
 func (s *fakeChannelService) Delete(context.Context, int64) error {
 	return s.deleteErr
 }
-func (s *fakeChannelService) Archive(_ context.Context, _ int64, replacement *int64) error {
-	s.archiveReplacement = replacement
-	return nil
-}
+func (s *fakeChannelService) Archive(context.Context, int64) error { return nil }
 func (s *fakeChannelService) Restore(context.Context, int64) error { return nil }
 func (s *fakeChannelService) AdapterKeyOptions() []channel.AdapterKeyOption {
 	return s.adapterKeyOptions
@@ -290,9 +294,12 @@ func doAdmin(t *testing.T, handler http.Handler, method, path, body string, with
 }
 
 func TestCreateProviderReturns201(t *testing.T) {
-	handler := newServicesRouter(t, &fakeProviderService{createOut: provider.Provider{ID: 1, Slug: "openai", Name: "OpenAI", Status: "enabled"}}, nil)
+	handler := newServicesRouter(t, &fakeProviderService{createOut: provider.Provider{
+		ID: 1, Slug: "openai", Name: "OpenAI", Origin: "https://api.openai.com", OriginRevision: 1,
+		Status: "enabled", StatusRevision: 1,
+	}}, nil)
 
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers", `{"slug":"openai","name":"OpenAI","status":"enabled"}`, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers", `{"slug":"openai","name":"OpenAI","origin":"https://api.openai.com","status":"enabled"}`, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
 	}
@@ -307,18 +314,18 @@ func TestProvidersRequireToken(t *testing.T) {
 	}
 }
 
-func TestUpdateProviderReturnsRuntimeSyncSummary(t *testing.T) {
+func TestUpdateProviderReturnsProvider(t *testing.T) {
 	handler := newServicesRouter(t, &fakeProviderService{updateOut: provider.Provider{
-		ID: 7, Slug: "openai", Name: "OpenAI", Status: "disabled",
-		RuntimeSyncPending: true, AffectedOriginCount: 2,
+		ID: 7, Slug: "openai", Name: "OpenAI", Origin: "https://api.openai.com", OriginRevision: 2,
+		Status: "disabled", StatusRevision: 3,
 	}}, nil)
 
-	rec := doAdmin(t, handler, http.MethodPatch, "/admin/v1/providers/7", `{"name":"OpenAI","status":"disabled"}`, true)
+	rec := doAdmin(t, handler, http.MethodPatch, "/admin/v1/providers/7", `{"name":"OpenAI"}`, true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`"runtime_sync_pending":true`, `"affected_origin_count":2`} {
+	for _, want := range []string{`"origin":"https://api.openai.com"`, `"origin_revision":2`, `"status_revision":3`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("response missing %s: %s", want, body)
 		}
@@ -346,20 +353,17 @@ func TestDeleteProviderConflictReturns409(t *testing.T) {
 	}
 }
 
-func TestArchiveProviderAcceptsReplacement(t *testing.T) {
+func TestArchiveProviderReturnsRuntimeSummary(t *testing.T) {
 	svc := &fakeProviderService{archiveOut: provider.StatusChangeResult{
-		RuntimeSyncPending: true, AffectedOriginCount: 2,
+		RuntimeSyncPending: true,
 	}}
 	handler := newServicesRouter(t, svc, nil)
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers/7/archive", `{"replacement_channel_id":10}`, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers/7/archive", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
-	if svc.archiveReplacement == nil || *svc.archiveReplacement != 10 {
-		t.Fatalf("replacement channel was not forwarded: %v", svc.archiveReplacement)
-	}
 	body := rec.Body.String()
-	for _, want := range []string{`"runtime_sync_pending":true`, `"affected_origin_count":2`} {
+	for _, want := range []string{`"runtime_sync_pending":true`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("response missing %s: %s", want, body)
 		}
@@ -371,64 +375,27 @@ func TestArchiveProviderAcceptsReplacement(t *testing.T) {
 	}
 }
 
-func TestArchiveProviderAcceptsEmptyBody(t *testing.T) {
-	svc := &fakeProviderService{}
-	handler := newServicesRouter(t, svc, nil)
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers/7/archive", "", true)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
-	}
-	if svc.archiveReplacement != nil {
-		t.Fatalf("unexpected replacement channel: %v", svc.archiveReplacement)
-	}
-}
-
 func TestRestoreProviderReturnsCommittedRuntimeSummary(t *testing.T) {
-	handler := newServicesRouter(t, &fakeProviderService{restoreOut: provider.StatusChangeResult{
-		AffectedOriginCount: 1,
-	}}, nil)
+	handler := newServicesRouter(t, &fakeProviderService{restoreOut: provider.StatusChangeResult{}}, nil)
 
 	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers/7/restore", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`"runtime_sync_pending":false`, `"affected_origin_count":1`} {
+	for _, want := range []string{`"runtime_sync_pending":false`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("response missing %s: %s", want, body)
 		}
 	}
 }
 
-func TestArchiveChannelAcceptsReplacement(t *testing.T) {
-	svc := &fakeChannelService{}
-	handler := newServicesRouter(t, nil, svc)
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/9/archive", `{"replacement_channel_id":10}`, true)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d (%s)", rec.Code, rec.Body.String())
-	}
-	if svc.archiveReplacement == nil || *svc.archiveReplacement != 10 {
-		t.Fatalf("replacement channel was not forwarded: %v", svc.archiveReplacement)
-	}
-}
-
-func TestArchiveChannelRejectsMalformedJSON(t *testing.T) {
-	handler := newServicesRouter(t, nil, &fakeChannelService{})
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/9/archive", `{`, true)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d (%s)", rec.Code, rec.Body.String())
-	}
-}
-
-func TestArchiveChannelAcceptsEmptyBody(t *testing.T) {
+func TestArchiveChannelReturns204(t *testing.T) {
 	svc := &fakeChannelService{}
 	handler := newServicesRouter(t, nil, svc)
 	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/9/archive", "", true)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d (%s)", rec.Code, rec.Body.String())
-	}
-	if svc.archiveReplacement != nil {
-		t.Fatalf("unexpected replacement channel: %v", svc.archiveReplacement)
 	}
 }
 
@@ -463,11 +430,11 @@ func TestRotateChannelCredentialReturnsVerificationResult(t *testing.T) {
 	handler := newServicesRouter(t, nil, &fakeChannelService{rotateOut: channel.RotateCredentialResult{
 		CredentialSaved: true, CredentialChanged: true, SavedConfigRevision: 8, CurrentConfigRevision: 9,
 		Verification: channel.CredentialVerification{
-			State:                         channel.CredentialVerificationPassed,
-			TestedOriginBaseURLRevision: &baseURLRevision,
-			TestedOriginStatusRevision:  &statusRevision,
-			TestedConfigRevision:          &configRevision,
-			StateChangeApplied:            true, CredentialValidAfter: true,
+			State:                        channel.CredentialVerificationPassed,
+			TestedOriginRevision:         &baseURLRevision,
+			TestedProviderStatusRevision: &statusRevision,
+			TestedConfigRevision:         &configRevision,
+			StateChangeApplied:           true, CredentialValidAfter: true,
 		},
 	}})
 

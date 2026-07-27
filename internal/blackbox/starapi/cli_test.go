@@ -65,7 +65,7 @@ func TestStarAPICodexCLI(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "openai",
-		Endpoint:       "responses",
+		Endpoint:        "responses",
 		Stream:          true,
 	})
 }
@@ -105,7 +105,7 @@ func TestStarAPIClaudeCLI(t *testing.T) {
 
 	f.AssertLatestRequestFacts(t, sdkfixture.RequestFactsExpectation{
 		IngressProtocol: "anthropic",
-		Endpoint:       "messages",
+		Endpoint:        "messages",
 		Stream:          true,
 	})
 }

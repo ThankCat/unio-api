@@ -109,26 +109,25 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
-				RequestedModelID:                "openai/gpt-4.1",
-				ProviderID:                      11,
-				ProviderOriginID:              21,
-				ProviderOriginBaseUrlRevision: 3,
-				ProviderOriginStatusRevision:  4,
-				ChannelConfigRevision:           5,
-				ChannelAdmissionLimitsRevision:  6,
-				AdapterKey:                      "openai",
-				ChannelID:                       123,
-				BaseUrl:                         "https://api.openai.example/v1",
-				Credential:                      "secret://openai/main",
-				TimeoutMs:                       pgtype.Int4{Int32: 15000, Valid: true},
-				UpstreamModel:                   "gpt-4.1",
+				RequestedModelID:               "openai/gpt-4.1",
+				ProviderID:                     11,
+				ProviderOriginRevision:         3,
+				ProviderStatusRevision:         4,
+				ChannelConfigRevision:          5,
+				ChannelAdmissionLimitsRevision: 6,
+				AdapterKey:                     "openai",
+				ChannelID:                      123,
+				Origin:                         "https://api.openai.example/v1",
+				Credential:                     "secret://openai/main",
+				TimeoutMs:                      pgtype.Int4{Int32: 15000, Valid: true},
+				UpstreamModel:                  "gpt-4.1",
 			},
 			{
 				RequestedModelID: "openai/gpt-4.1",
 				ProviderID:       11,
 				AdapterKey:       "openai",
 				ChannelID:        456,
-				BaseUrl:          "https://backup.openai.example/v1",
+				Origin:           "https://backup.openai.example/v1",
 				Credential:       "secret://openai/backup",
 				TimeoutMs:        pgtype.Int4{Int32: 30000, Valid: true},
 				UpstreamModel:    "gpt-4.1",
@@ -168,7 +167,7 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	if first.ProviderID != 11 {
 		t.Fatalf("expected provider id %d, got %d", int64(11), first.ProviderID)
 	}
-	if first.ProviderOriginID != 21 || first.ProviderOriginBaseURLRevision != 3 || first.ProviderOriginStatusRevision != 4 {
+	if first.ProviderID != 11 || first.OriginRevision != 3 || first.ProviderStatusRevision != 4 {
 		t.Fatalf("origin snapshot was not preserved: %+v", first)
 	}
 	if first.ChannelConfigRevision != 5 || first.ChannelAdmissionLimitsRevision != 6 {
@@ -183,8 +182,8 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	if first.Channel.ID != 123 {
 		t.Fatalf("expected channel id %d, got %d", int64(123), first.Channel.ID)
 	}
-	if first.Channel.BaseURL != "https://api.openai.example/v1" {
-		t.Fatalf("expected base url %q, got %q", "https://api.openai.example/v1", first.Channel.BaseURL)
+	if first.Channel.Origin != "https://api.openai.example/v1" {
+		t.Fatalf("expected base url %q, got %q", "https://api.openai.example/v1", first.Channel.Origin)
 	}
 	// 渠道凭据明文存储：候选直接取用 channels.credential 明文，无解密环节。
 	if first.Channel.APIKey != "secret://openai/main" {
@@ -213,7 +212,7 @@ func TestRouterPlanChatFreezesProviderCostToSaleRatio(t *testing.T) {
 		AdapterKey:       "openai",
 		Protocol:         ProtocolOpenAI,
 		ChannelID:        123,
-		BaseUrl:          "https://api.openai.example/v1",
+		Origin:           "https://api.openai.example/v1",
 		Credential:       "secret://openai/main",
 		UpstreamModel:    "gpt-4.1",
 		ChannelPriceID:   99,
@@ -253,7 +252,7 @@ func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 			{
 				AdapterKey:    "openai",
 				ChannelID:     123,
-				BaseUrl:       "https://api.openai.example/v1",
+				Origin:        "https://api.openai.example/v1",
 				Credential:    "secret://openai/main",
 				TimeoutMs:     pgtype.Int4{Valid: false},
 				UpstreamModel: "gpt-4.1",
@@ -283,7 +282,7 @@ func TestRouterSetDefaultTimeoutTakesEffect(t *testing.T) {
 			{
 				AdapterKey:    "openai",
 				ChannelID:     123,
-				BaseUrl:       "https://api.openai.example/v1",
+				Origin:        "https://api.openai.example/v1",
 				Credential:    "secret://openai/main",
 				TimeoutMs:     pgtype.Int4{Valid: false},
 				UpstreamModel: "gpt-4.1",
@@ -406,7 +405,7 @@ func TestRouterPlanChatAllCandidatesMissingCredentialReturnsNoAvailable(t *testi
 			{
 				AdapterKey:    "openai",
 				ChannelID:     123,
-				BaseUrl:       "https://api.openai.example/v1",
+				Origin:        "https://api.openai.example/v1",
 				Credential:    "",
 				TimeoutMs:     pgtype.Int4{Int32: 15000, Valid: true},
 				UpstreamModel: "gpt-4.1",
@@ -434,7 +433,7 @@ func TestRouterPlanChatSkipsBadCandidateKeepsGood(t *testing.T) {
 			{
 				AdapterKey:    "openai",
 				ChannelID:     111,
-				BaseUrl:       "https://bad.openai.example/v1",
+				Origin:        "https://bad.openai.example/v1",
 				Credential:    "", // 坏候选：缺凭据，应被跳过
 				TimeoutMs:     pgtype.Int4{Int32: 15000, Valid: true},
 				UpstreamModel: "gpt-4.1",
@@ -442,7 +441,7 @@ func TestRouterPlanChatSkipsBadCandidateKeepsGood(t *testing.T) {
 			{
 				AdapterKey:    "openai",
 				ChannelID:     222,
-				BaseUrl:       "https://good.openai.example/v1",
+				Origin:        "https://good.openai.example/v1",
 				Credential:    "secret://openai/good",
 				TimeoutMs:     pgtype.Int4{Int32: 30000, Valid: true},
 				UpstreamModel: "gpt-4.1",

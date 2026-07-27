@@ -32,7 +32,7 @@ var _ ResponsesCompactAdapter = (*Adapter)(nil)
 // 与 CreateResponse 同口径透传：请求体直传上游、响应体原文返回；区别在于把「上游无原生 compact」
 // （404/405）与「响应不含可计费 usage / 无法解析」收敛成 ErrCompactUnsupported，供 service 回落 Synthetic。
 func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req Request) (*Response, error) {
-	if ch.BaseURL == "" {
+	if ch.Origin == "" {
 		return nil, failure.New(
 			failure.CodeAdapterChannelInvalid,
 			failure.WithMessage("openai responses adapter channel base url is empty"),
@@ -51,7 +51,7 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 		defer cancel()
 	}
 
-	url, err := adapter.BuildUpstreamURL(ch.BaseURL, adapter.OperationPathResponsesCompact)
+	url, err := adapter.BuildUpstreamURL(ch.Origin, adapter.OperationPathResponsesCompact)
 	if err != nil {
 		return nil, err
 	}
