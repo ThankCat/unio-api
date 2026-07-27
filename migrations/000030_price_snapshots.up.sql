@@ -29,6 +29,8 @@ CREATE TABLE public.price_snapshots (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     price_ratio numeric(20,10),
     cache_write_30m_input_price numeric(20,10),
+    -- long_context_applied: 本单是否按长上下文阶梯计价（对账用）。--
+    long_context_applied boolean NOT NULL DEFAULT false,
     CONSTRAINT price_snapshots_cache_read_input_price_check CHECK (((cache_read_input_price IS NULL) OR (cache_read_input_price >= (0)::numeric))),
     CONSTRAINT price_snapshots_cache_write_1h_input_price_check CHECK (((cache_write_1h_input_price IS NULL) OR (cache_write_1h_input_price >= (0)::numeric))),
     CONSTRAINT price_snapshots_cache_write_30m_input_price_check CHECK (((cache_write_30m_input_price IS NULL) OR (cache_write_30m_input_price >= (0)::numeric))),
@@ -83,3 +85,5 @@ ALTER TABLE ONLY public.price_snapshots
 -- 恒为 0，历史复算结果不变（故 formula_version 不升级）。
 --
 -- 1) model_prices：基准售价新增 30m 缓存写单价（可空，缺省计费时回退 uncached）。
+-- [long_context / squash]
+-- long_context_applied 直接建表，记录本单是否触发长上下文阶梯。

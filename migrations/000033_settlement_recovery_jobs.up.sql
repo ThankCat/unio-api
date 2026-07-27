@@ -85,7 +85,8 @@ CREATE TABLE public.settlement_recovery_jobs (
     usage_cache_write_30m_input_tokens bigint NOT NULL,
     usage_cache_write_30m_input_tokens_state text NOT NULL,
     cache_write_30m_input_price numeric(20,10),
-    model_reference_cost_id bigint,
+    -- cost_base_model_price_id: 倍率路径成本基数 pin（model_prices.id）；无 FK（DEC-031）。--
+    cost_base_model_price_id bigint,
     channel_cost_multiplier_id bigint,
     channel_recharge_factor_id bigint,
     CONSTRAINT ck_settlement_recovery_jobs_attempt_count CHECK ((attempt_count <= max_attempts)),
@@ -245,3 +246,5 @@ ALTER TABLE ONLY public.settlement_recovery_jobs
 -- 只存 pin id（不存倍率标量）：这些行金额/倍率不可改，replay 时按 id 重取即得同值，标量存了也是冗余。
 --
 -- 放开 price_id NOT NULL：倍率路径无 channel_prices 行可指，写 NULL（FK 对 NULL 自动豁免）。
+-- [DEC-031 / squash]
+-- 成本基数 pin 直接建为 cost_base_model_price_id（无 FK）；不再创建/退役 model_reference_costs。

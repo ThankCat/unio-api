@@ -1,7 +1,7 @@
 -- Model price 是某个 Unio 模型的「基准客户售价」（DEC-026 倍率定价）。
 -- 客户最终售价 = 本表基准售价 × routes.price_ratio（线路倍率）；售价不再挂渠道，渠道只记成本。
 -- 结算审计：price snapshot 记录命中的 model_prices.id + 当时线路倍率，历史账单可按原事实复算。
--- btree_gist 让 exclusion constraint 可同时比较等值列与时间范围重叠（000031 已建，幂等保证）。
+-- btree_gist 让 exclusion constraint 可同时比较等值列与时间范围重叠（000001 已建，幂等保证）。
 CREATE SEQUENCE public.model_prices_id_seq
     START WITH 1
     INCREMENT BY 1
@@ -32,7 +32,23 @@ CREATE TABLE public.model_prices (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     cache_write_30m_input_price numeric(20,10),
+    -- 长上下文阶梯：输入合计超过 threshold 时整单按 input/output multiplier 计价（对齐 GPT-5.4+）。--
+    long_context_enabled boolean NOT NULL DEFAULT false,
+    long_context_threshold bigint,
+    long_context_input_multiplier numeric(20,10),
+    long_context_output_multiplier numeric(20,10),
     CONSTRAINT ck_model_prices_window CHECK (((effective_to IS NULL) OR (effective_to > effective_from))),
+    CONSTRAINT ck_model_prices_long_context CHECK (
+        (NOT long_context_enabled)
+        OR (
+            long_context_threshold IS NOT NULL
+            AND long_context_threshold > 0
+            AND long_context_input_multiplier IS NOT NULL
+            AND long_context_input_multiplier > (0)::numeric
+            AND long_context_output_multiplier IS NOT NULL
+            AND long_context_output_multiplier > (0)::numeric
+        )
+    ),
     CONSTRAINT model_prices_cache_read_input_price_check CHECK (((cache_read_input_price IS NULL) OR (cache_read_input_price >= (0)::numeric))),
     CONSTRAINT model_prices_cache_write_1h_input_price_check CHECK (((cache_write_1h_input_price IS NULL) OR (cache_write_1h_input_price >= (0)::numeric))),
     CONSTRAINT model_prices_cache_write_30m_input_price_check CHECK (((cache_write_30m_input_price IS NULL) OR (cache_write_30m_input_price >= (0)::numeric))),
@@ -75,3 +91,6 @@ ALTER TABLE ONLY public.model_prices
 -- 恒为 0，历史复算结果不变（故 formula_version 不升级）。
 --
 -- 1) model_prices：基准售价新增 30m 缓存写单价（可空，缺省计费时回退 uncached）。
+-- [long_context / squash]
+-- 长上下文阶梯列与 ck_model_prices_long_context 直接建表（启用时 threshold/multipliers 必填）。
+-- DEC-031：model_prices 同时作为售价与成本基数（真实成本 = 本表 × 渠道倍率/充值倍率或 channel_prices 覆盖）。

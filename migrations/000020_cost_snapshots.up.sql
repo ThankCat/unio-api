@@ -44,11 +44,14 @@ CREATE TABLE public.cost_snapshots (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     cache_write_30m_input_cost numeric(20,10),
     cache_write_30m_input_cost_amount numeric(20,10) NOT NULL,
-    model_reference_cost_id bigint,
+    -- cost_base_model_price_id: 结算成本基数 pin（model_prices.id）；无 FK，便于基准价行停用/删除（DEC-031）。--
+    cost_base_model_price_id bigint,
     channel_cost_multiplier_id bigint,
     cost_multiplier numeric(20,10),
     channel_recharge_factor_id bigint,
     recharge_factor numeric(20,10),
+    -- long_context_applied: 本单是否按长上下文阶梯计价（对账用，DEC 长上下文）。--
+    long_context_applied boolean NOT NULL DEFAULT false,
     CONSTRAINT ck_cost_snapshots_total_amount CHECK ((total_cost_amount = ((((((uncached_input_cost_amount + cache_read_input_cost_amount) + cache_write_5m_input_cost_amount) + cache_write_1h_input_cost_amount) + cache_write_30m_input_cost_amount) + output_cost_amount) + reasoning_output_cost_amount))),
     CONSTRAINT cost_snapshots_cache_read_input_cost_amount_check CHECK ((cache_read_input_cost_amount >= (0)::numeric)),
     CONSTRAINT cost_snapshots_cache_read_input_cost_check CHECK (((cache_read_input_cost IS NULL) OR (cache_read_input_cost >= (0)::numeric))),
@@ -133,3 +136,7 @@ ALTER TABLE ONLY public.cost_snapshots
 -- 此时新增来源列为 NULL。故 cost_price_id 放开 NOT NULL：倍率路径写 NULL（MATCH SIMPLE 下复合 FK 自动豁免）。
 --
 -- 1) 放开 cost_price_id NOT NULL（倍率路径无 channel_prices 行可指）。复合 FK 保留不变。
+-- [DEC-031 / squash]
+-- 成本基数 pin 直接建为 cost_base_model_price_id（无 FK）；不再创建/退役 model_reference_costs。
+-- [long_context / squash]
+-- long_context_applied 直接建表；长上下文阶梯见 model_prices。

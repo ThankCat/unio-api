@@ -47,7 +47,7 @@ P4_FAULT_E2E=1 env -u LOG_FORMAT go test -count=1 -v ./internal/blackbox/p4fault
 
 - `migrations/` 平铺保存每张表的 `.up.sql` 和 `.down.sql`。
 - 当前服务启动路径只连接数据库，不执行 migration runner；启动前由外部迁移工具准备 Schema。
-- `sqlc.yaml` 从 `migrations/*.up.sql` 读取 Schema，从 `sql/queries/shared`、`api`、`admin` 和 `worker`
+- `sqlc.yaml` 从 `migrations/*.up.sql` 读取 Schema，从 `sql/queries/shared`、`gateway`、`admin` 和 `worker`
   读取查询。
 - `internal/platform/store/sqlc` 是生成目录，修改 Schema 或查询后运行 `sqlc generate`。
 
