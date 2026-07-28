@@ -47,6 +47,7 @@ type channelOpsRowDTO struct {
 	RpmLimit                *int32                    `json:"rpm_limit"`
 	TpmLimit                *int32                    `json:"tpm_limit"`
 	RpdLimit                *int32                    `json:"rpd_limit"`
+	ConcurrencyLimit        *int32                    `json:"concurrency_limit"`
 	LastTestedAt            *string                   `json:"last_tested_at"`
 	LastTestOK              *bool                     `json:"last_test_ok"`
 	LastTestLatencyMs       *int32                    `json:"last_test_latency_ms"`
@@ -172,6 +173,7 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			RpmLimit:                row.RpmLimit,
 			TpmLimit:                row.TpmLimit,
 			RpdLimit:                row.RpdLimit,
+			ConcurrencyLimit:        row.ConcurrencyLimit,
 			LastTestedAt:            adminhttp.RFC3339Ptr(row.LastTestedAt),
 			LastTestOK:              row.LastTestOK,
 			LastTestLatencyMs:       row.LastTestLatencyMs,

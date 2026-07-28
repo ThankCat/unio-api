@@ -58,11 +58,12 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 	// 会话粘性（大 uncache 缺口 P0）：x-claude-code-session-id 头优先、metadata.user_id 回退；
 	// 粘住渠道已被硬摘除（不在池/熔断）时清绑定重选（R5）。
 	stickySession := s.sticky.Resolve(ctx, lifecycle.StickyResolveParams{
-		Protocol:           routing.ProtocolAnthropic,
-		RouteID:            principal.RouteID,
-		APIKeyID:           principal.APIKeyID,
-		SessionKey:         sessionhint.AnthropicSessionKey(ctx, req.Metadata),
-		RouteStickyEnabled: plan.RouteStickyEnabled,
+		Protocol:   routing.ProtocolAnthropic,
+		RouteID:    principal.RouteID,
+		APIKeyID:   principal.APIKeyID,
+		SessionKey: sessionhint.AnthropicSessionKey(ctx, req.Metadata),
+		Candidates: plan.Candidates,
+		Mode:       plan.RouteMode,
 	})
 
 	candidatePlan, err := s.prepareMessageCandidates(ctx, req, plan.Candidates, plan.RouteMode, false, stickySession.BoundChannelID())

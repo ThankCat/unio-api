@@ -17,7 +17,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
-const routingTraceAlgorithmVersion = "balanced_v3_cost"
+const routingTraceAlgorithmVersion = "objective_v1"
 
 // RoutingTraceStore 是 trace recorder 唯一需要的持久化能力。
 type RoutingTraceStore interface {
@@ -112,6 +112,15 @@ type traceCandidateScore struct {
 	ConcurrencyRemaining                    *float64 `json:"concurrency_remaining"`
 	TPMRemaining                            *float64 `json:"tpm_remaining"`
 	CapacityScore                           float64  `json:"capacity_score"`
+	AlgorithmVersion                        string   `json:"algorithm_version"`
+	EconomicScore                           float64  `json:"economic_score"`
+	HealthScore                             float64  `json:"health_score"`
+	PriorityScore                           float64  `json:"priority_score"`
+	FinalScore                              float64  `json:"final_score"`
+	EconomicWeightPct                       int      `json:"economic_weight_pct"`
+	HealthWeightPct                         int      `json:"health_weight_pct"`
+	CapacityWeightPct                       int      `json:"capacity_weight_pct"`
+	PriorityWeightPct                       int      `json:"priority_weight_pct"`
 	ErrorRate                               float64  `json:"error_rate"`
 	ErrorSamples                            int64    `json:"error_samples"`
 	TTFTEWMAMs                              float64  `json:"ttft_ewma_ms"`
@@ -317,6 +326,11 @@ func traceScore(candidate Candidate, channelID int64, routeIndex int, eligible b
 		ConcurrencyRemaining:                    candidate.Balance.ConcurrencyRemaining,
 		TPMRemaining:                            candidate.Balance.TPMRemaining,
 		CapacityScore:                           candidate.Balance.CapacityScore, ErrorRate: candidate.Balance.ErrorRate,
+		AlgorithmVersion: candidate.Balance.AlgorithmVersion,
+		EconomicScore:    candidate.Balance.EconomicScore, HealthScore: candidate.Balance.HealthScore,
+		PriorityScore: candidate.Balance.PriorityScore, FinalScore: candidate.Balance.FinalScore,
+		EconomicWeightPct: candidate.Balance.EconomicWeightPct, HealthWeightPct: candidate.Balance.HealthWeightPct,
+		CapacityWeightPct: candidate.Balance.CapacityWeightPct, PriorityWeightPct: candidate.Balance.PriorityWeightPct,
 		ErrorSamples: candidate.Balance.ErrorSamples,
 		TTFTEWMAMs:   candidate.Balance.TTFTEWMAMs, TTFTSamples: candidate.Balance.TTFTSamples,
 		TTFTSampleSource: candidate.Balance.TTFTSampleSource, LatencyPenalty: candidate.Balance.LatencyPenalty,

@@ -127,6 +127,10 @@ func TestAuthenticateAPIKeySpendLimitReached(t *testing.T) {
 
 func TestAuthenticateAPIKeyValid(t *testing.T) {
 	key := validAPIKey()
+	key.RouteRpmLimit = pgtype.Int4{Int32: 10, Valid: true}
+	key.RouteTpmLimit = pgtype.Int4{Int32: 1000, Valid: true}
+	key.RouteRpdLimit = pgtype.Int4{Int32: 100, Valid: true}
+	key.RouteConcurrencyLimit = pgtype.Int4{Int32: 4, Valid: true}
 	authenticator := NewAPIKeyAuthenticator(&fakeAPIKeyStore{
 		key: key,
 	})
@@ -143,6 +147,12 @@ func TestAuthenticateAPIKeyValid(t *testing.T) {
 	}
 	if principal.KeyPrefix != key.KeyPrefix {
 		t.Fatalf("expected key prefix %q, got %q", key.KeyPrefix, principal.KeyPrefix)
+	}
+	if principal.RPMLimit == nil || *principal.RPMLimit != 10 ||
+		principal.TPMLimit == nil || *principal.TPMLimit != 1000 ||
+		principal.RPDLimit == nil || *principal.RPDLimit != 100 ||
+		principal.ConcurrencyLimit == nil || *principal.ConcurrencyLimit != 4 {
+		t.Fatalf("unexpected route limit snapshot: %+v", principal)
 	}
 }
 

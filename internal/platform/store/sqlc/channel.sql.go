@@ -574,6 +574,7 @@ SELECT
     c.rpm_limit,
     c.tpm_limit,
     c.rpd_limit,
+    c.concurrency_limit,
     c.created_at,
     c.last_tested_at,
     c.last_test_ok,
@@ -647,7 +648,7 @@ LEFT JOIN request_attempts a
 WHERE ($3::text IS NULL OR c.status = $3::text)
   AND ($4::bigint IS NULL OR c.provider_id = $4::bigint)
   AND ($5::text IS NULL OR c.name ILIKE '%' || $5::text || '%')
-GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, pr.origin, c.priority, c.timeout_ms, c.credential, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.created_at, c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name
+GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, pr.origin, c.priority, c.timeout_ms, c.credential, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.concurrency_limit, c.created_at, c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name
 ORDER BY
   CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END DESC NULLS LAST,
   CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END ASC NULLS LAST,
@@ -696,6 +697,7 @@ type ChannelsOpsTableRow struct {
 	RpmLimit                pgtype.Int4
 	TpmLimit                pgtype.Int4
 	RpdLimit                pgtype.Int4
+	ConcurrencyLimit        pgtype.Int4
 	CreatedAt               pgtype.Timestamptz
 	LastTestedAt            pgtype.Timestamptz
 	LastTestOk              pgtype.Bool
@@ -757,6 +759,7 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 			&i.RpmLimit,
 			&i.TpmLimit,
 			&i.RpdLimit,
+			&i.ConcurrencyLimit,
 			&i.CreatedAt,
 			&i.LastTestedAt,
 			&i.LastTestOk,
@@ -826,7 +829,7 @@ WHERE id = $6
   AND ROW(rpm_limit, tpm_limit, rpd_limit, concurrency_limit) IS DISTINCT FROM ROW(
       $1, $2, $3, $4
   )
-RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms
 `
 
 type CommitChannelAdmissionLimitsAtRevisionParams struct {
@@ -878,6 +881,8 @@ func (q *Queries) CommitChannelAdmissionLimitsAtRevision(ctx context.Context, ar
 		&i.ArchivedAt,
 		&i.ConcurrencyLimit,
 		&i.UpstreamBillsOnDisconnect,
+		&i.StickyEnabled,
+		&i.StickyTtlMs,
 	)
 	return i, err
 }
@@ -926,15 +931,16 @@ func (q *Queries) CountChannels(ctx context.Context, arg CountChannelsParams) (i
 const createChannel = `-- name: CreateChannel :one
 INSERT INTO channels (
     provider_id, name, protocol, adapter_key, credential, status, priority, timeout_ms,
-    rpm_limit, tpm_limit, rpd_limit, concurrency_limit, upstream_bills_on_disconnect
+    rpm_limit, tpm_limit, rpd_limit, concurrency_limit, upstream_bills_on_disconnect,
+    sticky_enabled, sticky_ttl_ms
 )
 VALUES (
     $1, $2, $3, $4,
     $5, $6, $7, $8,
     $9, $10, $11, $12,
-    $13
+    $13, $14, $15
 )
-RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms
 `
 
 type CreateChannelParams struct {
@@ -951,6 +957,8 @@ type CreateChannelParams struct {
 	RpdLimit                  pgtype.Int4
 	ConcurrencyLimit          pgtype.Int4
 	UpstreamBillsOnDisconnect bool
+	StickyEnabled             pgtype.Bool
+	StickyTtlMs               pgtype.Int8
 }
 
 // CreateChannel 创建 channel；credential 为明文上游凭据，protocol+adapter_key 复合键须先在 adapter registry 校验存在。
@@ -970,6 +978,8 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		arg.RpdLimit,
 		arg.ConcurrencyLimit,
 		arg.UpstreamBillsOnDisconnect,
+		arg.StickyEnabled,
+		arg.StickyTtlMs,
 	)
 	var i Channel
 	err := row.Scan(
@@ -997,6 +1007,8 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		&i.ArchivedAt,
 		&i.ConcurrencyLimit,
 		&i.UpstreamBillsOnDisconnect,
+		&i.StickyEnabled,
+		&i.StickyTtlMs,
 	)
 	return i, err
 }
@@ -1300,7 +1312,7 @@ func (q *Queries) DeleteChannelModel(ctx context.Context, arg DeleteChannelModel
 }
 
 const getChannel = `-- name: GetChannel :one
-SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms
 FROM channels
 WHERE id = $1
 LIMIT 1
@@ -1335,6 +1347,8 @@ func (q *Queries) GetChannel(ctx context.Context, id int64) (Channel, error) {
 		&i.ArchivedAt,
 		&i.ConcurrencyLimit,
 		&i.UpstreamBillsOnDisconnect,
+		&i.StickyEnabled,
+		&i.StickyTtlMs,
 	)
 	return i, err
 }
@@ -1735,7 +1749,7 @@ func (q *Queries) ListChannelTestLogsByChannel(ctx context.Context, arg ListChan
 }
 
 const listChannelsByProvider = `-- name: ListChannelsByProvider :many
-SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms
 FROM channels
 WHERE provider_id = $1
 ORDER BY priority, id
@@ -1776,6 +1790,8 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 			&i.ArchivedAt,
 			&i.ConcurrencyLimit,
 			&i.UpstreamBillsOnDisconnect,
+			&i.StickyEnabled,
+			&i.StickyTtlMs,
 		); err != nil {
 			return nil, err
 		}
@@ -1788,7 +1804,7 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 }
 
 const listChannelsForRuntimeControlRestore = `-- name: ListChannelsForRuntimeControlRestore :many
-SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms
 FROM channels
 ORDER BY id
 `
@@ -1828,6 +1844,8 @@ func (q *Queries) ListChannelsForRuntimeControlRestore(ctx context.Context) ([]C
 			&i.ArchivedAt,
 			&i.ConcurrencyLimit,
 			&i.UpstreamBillsOnDisconnect,
+			&i.StickyEnabled,
+			&i.StickyTtlMs,
 		); err != nil {
 			return nil, err
 		}
@@ -1844,6 +1862,7 @@ SELECT
     c.id, c.provider_id, c.name, c.protocol, c.adapter_key, p.origin,
     c.credential, c.status, c.priority, c.timeout_ms, c.created_at, c.updated_at,
     c.rpm_limit, c.tpm_limit, c.rpd_limit, c.concurrency_limit, c.upstream_bills_on_disconnect,
+    c.sticky_enabled, c.sticky_ttl_ms,
     c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
     c.config_revision, c.admission_limits_revision,
     p.name AS provider_name, p.status AS provider_status
@@ -1886,6 +1905,8 @@ type ListChannelsPageRow struct {
 	RpdLimit                  pgtype.Int4
 	ConcurrencyLimit          pgtype.Int4
 	UpstreamBillsOnDisconnect bool
+	StickyEnabled             pgtype.Bool
+	StickyTtlMs               pgtype.Int8
 	LastTestedAt              pgtype.Timestamptz
 	LastTestOk                pgtype.Bool
 	LastTestLatencyMs         pgtype.Int4
@@ -1931,6 +1952,8 @@ func (q *Queries) ListChannelsPage(ctx context.Context, arg ListChannelsPagePara
 			&i.RpdLimit,
 			&i.ConcurrencyLimit,
 			&i.UpstreamBillsOnDisconnect,
+			&i.StickyEnabled,
+			&i.StickyTtlMs,
 			&i.LastTestedAt,
 			&i.LastTestOk,
 			&i.LastTestLatencyMs,
@@ -2238,7 +2261,7 @@ const setChannelBillingBehavior = `-- name: SetChannelBillingBehavior :one
 UPDATE channels
 SET upstream_bills_on_disconnect = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms
 `
 
 type SetChannelBillingBehaviorParams struct {
@@ -2276,6 +2299,8 @@ func (q *Queries) SetChannelBillingBehavior(ctx context.Context, arg SetChannelB
 		&i.ArchivedAt,
 		&i.ConcurrencyLimit,
 		&i.UpstreamBillsOnDisconnect,
+		&i.StickyEnabled,
+		&i.StickyTtlMs,
 	)
 	return i, err
 }
@@ -2334,23 +2359,29 @@ SET name = $1,
     status = $2,
     priority = $3,
     timeout_ms = $4,
+    sticky_enabled = $5,
+    sticky_ttl_ms = $6,
     config_revision = config_revision + (
         CASE WHEN (
             status IS DISTINCT FROM $2
             OR timeout_ms IS DISTINCT FROM $4
+            OR sticky_enabled IS DISTINCT FROM $5
+            OR sticky_ttl_ms IS DISTINCT FROM $6
         ) THEN 1 ELSE 0 END
     ),
     updated_at = now()
-WHERE id = $5
-RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect
+WHERE id = $7
+RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms
 `
 
 type UpdateChannelParams struct {
-	Name      string
-	Status    string
-	Priority  int32
-	TimeoutMs pgtype.Int4
-	ID        int64
+	Name          string
+	Status        string
+	Priority      int32
+	TimeoutMs     pgtype.Int4
+	StickyEnabled pgtype.Bool
+	StickyTtlMs   pgtype.Int8
+	ID            int64
 }
 
 // UpdateChannel 更新 channel 的展示名、绑定 Origin、启停状态、优先级与超时；protocol、adapter_key 与凭据不在此更新。
@@ -2361,6 +2392,8 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		arg.Status,
 		arg.Priority,
 		arg.TimeoutMs,
+		arg.StickyEnabled,
+		arg.StickyTtlMs,
 		arg.ID,
 	)
 	var i Channel
@@ -2389,6 +2422,8 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		&i.ArchivedAt,
 		&i.ConcurrencyLimit,
 		&i.UpstreamBillsOnDisconnect,
+		&i.StickyEnabled,
+		&i.StickyTtlMs,
 	)
 	return i, err
 }

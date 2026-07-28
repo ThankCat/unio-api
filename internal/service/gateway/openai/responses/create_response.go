@@ -199,11 +199,12 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	// 会话粘性（大 uncache 缺口 P0）：提取会话键并 lookup 既有绑定，置顶绑定渠道；
 	// 粘住渠道已被硬摘除（不在池/熔断）时清绑定重选（R5）。
 	stickySession := s.sticky.Resolve(ctx, lifecycle.StickyResolveParams{
-		Protocol:           routing.ProtocolOpenAI,
-		RouteID:            principal.RouteID,
-		APIKeyID:           principal.APIKeyID,
-		SessionKey:         sessionhint.OpenAISessionKey(ctx, req.PromptCacheKey),
-		RouteStickyEnabled: plan.RouteStickyEnabled,
+		Protocol:   routing.ProtocolOpenAI,
+		RouteID:    principal.RouteID,
+		APIKeyID:   principal.APIKeyID,
+		SessionKey: sessionhint.OpenAISessionKey(ctx, req.PromptCacheKey),
+		Candidates: plan.Candidates,
+		Mode:       plan.RouteMode,
 	})
 
 	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, plan.RouteMode, false, strat.allowDirect, stickySession.BoundChannelID())

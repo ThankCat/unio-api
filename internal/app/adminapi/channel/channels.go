@@ -43,10 +43,12 @@ type channelDTO struct {
 	AdmissionLimitsRevision int64 `json:"admission_limits_revision"`
 	RuntimeSyncPending      bool  `json:"runtime_sync_pending"`
 	// Credential 是明文上游 API key（产品决策：明文存储，管理端可查看/复制/编辑）。
-	Credential string `json:"credential"`
-	Status     string `json:"status"`
-	Priority   int32  `json:"priority"`
-	TimeoutMs  *int32 `json:"timeout_ms"`
+	Credential    string `json:"credential"`
+	Status        string `json:"status"`
+	Priority      int32  `json:"priority"`
+	TimeoutMs     *int32 `json:"timeout_ms"`
+	StickyEnabled *bool  `json:"sticky_enabled"`
+	StickyTTLms   *int64 `json:"sticky_ttl_ms"`
 	// RPMLimit/TPMLimit/RPDLimit：渠道级限流上限（P2-8）。null=继承渠道默认限流，0=不限，>0=具体上限。
 	RPMLimit *int64 `json:"rpm_limit"`
 	TPMLimit *int64 `json:"tpm_limit"`
@@ -103,26 +105,30 @@ func validateRateLimits(rl *rateLimitsRequest) error {
 }
 
 type createChannelRequest struct {
-	ProviderID int64              `json:"provider_id"`
-	Name       string             `json:"name"`
-	Protocol   string             `json:"protocol"`
-	AdapterKey string             `json:"adapter_key"`
-	Credential string             `json:"credential"`
-	Status     string             `json:"status"`
-	Priority   int32              `json:"priority"`
-	TimeoutMs  *int32             `json:"timeout_ms"`
-	RateLimits *rateLimitsRequest `json:"rate_limits"` // 可选渠道级限流；不传表示全继承渠道默认限流
+	ProviderID    int64              `json:"provider_id"`
+	Name          string             `json:"name"`
+	Protocol      string             `json:"protocol"`
+	AdapterKey    string             `json:"adapter_key"`
+	Credential    string             `json:"credential"`
+	Status        string             `json:"status"`
+	Priority      int32              `json:"priority"`
+	TimeoutMs     *int32             `json:"timeout_ms"`
+	StickyEnabled *bool              `json:"sticky_enabled"`
+	StickyTTLms   *int64             `json:"sticky_ttl_ms"`
+	RateLimits    *rateLimitsRequest `json:"rate_limits"` // 可选渠道级限流；不传表示全继承渠道默认限流
 	// BillsOnDisconnect 可选：上游「断开仍计费」标记；缺省=false（正常上游）。
 	BillsOnDisconnect *bool `json:"upstream_bills_on_disconnect"`
 }
 
 type updateChannelRequest struct {
-	Name       string             `json:"name"`
-	ProviderID int64              `json:"provider_id"`
-	Status     string             `json:"status"`
-	Priority   int32              `json:"priority"`
-	TimeoutMs  *int32             `json:"timeout_ms"`
-	RateLimits *rateLimitsRequest `json:"rate_limits"` // 对象缺省=不变，存在即原子替换三维限流
+	Name          string             `json:"name"`
+	ProviderID    int64              `json:"provider_id"`
+	Status        string             `json:"status"`
+	Priority      int32              `json:"priority"`
+	TimeoutMs     *int32             `json:"timeout_ms"`
+	StickyEnabled *bool              `json:"sticky_enabled"`
+	StickyTTLms   *int64             `json:"sticky_ttl_ms"`
+	RateLimits    *rateLimitsRequest `json:"rate_limits"` // 对象缺省=不变，存在即原子替换三维限流
 	// BillsOnDisconnect 可选：上游「断开仍计费」标记；缺省=不变。
 	BillsOnDisconnect *bool `json:"upstream_bills_on_disconnect"`
 }
@@ -233,14 +239,16 @@ func (h *channelsHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	in := channel.CreateInput{
-		ProviderID: req.ProviderID,
-		Name:       req.Name,
-		Protocol:   req.Protocol,
-		AdapterKey: req.AdapterKey,
-		Credential: req.Credential,
-		Status:     req.Status,
-		Priority:   req.Priority,
-		TimeoutMs:  req.TimeoutMs,
+		ProviderID:    req.ProviderID,
+		Name:          req.Name,
+		Protocol:      req.Protocol,
+		AdapterKey:    req.AdapterKey,
+		Credential:    req.Credential,
+		Status:        req.Status,
+		Priority:      req.Priority,
+		TimeoutMs:     req.TimeoutMs,
+		StickyEnabled: req.StickyEnabled,
+		StickyTTLms:   req.StickyTTLms,
 	}
 	if req.RateLimits != nil {
 		in.RateLimitsProvided = true
@@ -279,12 +287,14 @@ func (h *channelsHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	in := channel.UpdateInput{
-		ID:         id,
-		Name:       req.Name,
-		ProviderID: req.ProviderID,
-		Status:     req.Status,
-		Priority:   req.Priority,
-		TimeoutMs:  req.TimeoutMs,
+		ID:            id,
+		Name:          req.Name,
+		ProviderID:    req.ProviderID,
+		Status:        req.Status,
+		Priority:      req.Priority,
+		TimeoutMs:     req.TimeoutMs,
+		StickyEnabled: req.StickyEnabled,
+		StickyTTLms:   req.StickyTTLms,
 	}
 	if req.RateLimits != nil {
 		in.RateLimitsProvided = true
@@ -414,6 +424,8 @@ func toChannelDTO(c channel.Channel) channelDTO {
 		Status:                  c.Status,
 		Priority:                c.Priority,
 		TimeoutMs:               c.TimeoutMs,
+		StickyEnabled:           c.StickyEnabled,
+		StickyTTLms:             c.StickyTTLms,
 		RPMLimit:                c.RPMLimit,
 		TPMLimit:                c.TPMLimit,
 		RPDLimit:                c.RPDLimit,

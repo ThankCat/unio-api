@@ -1,5 +1,8 @@
 .env
 .venv/
+
+# 本地测试库初始化配置（含真实 credential），不入库；示例见 scripts/test/test_db/config.local.example.json
+scripts/test/test_db/config.local.json
 .venv-*/
 .idea/
 .vscode/

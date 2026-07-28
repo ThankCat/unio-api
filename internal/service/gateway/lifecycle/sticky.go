@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"go.uber.org/zap"
 )
 
@@ -27,10 +28,14 @@ import (
 // StickyStore 定义 sticky 核心依赖的绑定存取能力（Redis 实现在 platform/stickysession）。
 // 实现必须 fail-open：Lookup 失败返回 ok=false，Bind/Rebind/Clear 失败静默（只记日志，R7）。
 type StickyStore interface {
-	Lookup(ctx context.Context, key string) (channelID int64, ok bool)
+	Lookup(ctx context.Context, key string) (channelID int64, boundAt time.Time, ok bool)
 	Bind(ctx context.Context, key string, channelID int64, ttl time.Duration)
 	Rebind(ctx context.Context, key string, channelID int64, ttl time.Duration)
 	Clear(ctx context.Context, key string)
+}
+
+type stickyTTLRefresher interface {
+	Refresh(ctx context.Context, key string, ttl time.Duration)
 }
 
 // StickyEventRecorder 记录会话粘性路由事件（hit/miss/bind/rebind/clear/pinned_* /pin_lost）。
@@ -54,14 +59,14 @@ type StickyRouter struct {
 	jitterNanos    atomic.Int64
 }
 
-// NewStickyRouter 创建 sticky 核心，初始配置取 appsettings 默认（enabled=true、TTL 60min、
+// NewStickyRouter 创建 sticky 核心，初始配置取 appsettings 默认（enabled=true、TTL 30min、
 // 队首短等 500ms+100ms 抖动），随后由 settings applier 以真实系统设置覆盖。
 func NewStickyRouter(store StickyStore) *StickyRouter {
 	if store == nil {
 		panic("lifecycle: sticky router requires sticky store")
 	}
 	r := &StickyRouter{store: store}
-	r.SetConfig(true, time.Hour, 500*time.Millisecond, 100*time.Millisecond)
+	r.SetConfig(true, 30*time.Minute, 500*time.Millisecond, 100*time.Millisecond)
 	return r
 }
 
@@ -76,7 +81,7 @@ func (r *StickyRouter) SetMetrics(m StickyEventRecorder) {
 // SetConfig 原子替换全局默认开关、绑定 TTL 与队首短等（settings applier 热更新入口）。
 func (r *StickyRouter) SetConfig(enabledDefault bool, ttl, wait, jitter time.Duration) {
 	if ttl <= 0 {
-		ttl = time.Hour
+		ttl = 30 * time.Minute
 	}
 	if wait < 0 {
 		wait = 0
@@ -128,8 +133,10 @@ type StickyResolveParams struct {
 	APIKeyID int64
 	// SessionKey 是协议提取器产出的原始会话键；空串表示本请求无会话信号，不粘（决议 7）。
 	SessionKey string
-	// RouteStickyEnabled 是线路行 sticky_enabled 覆盖：nil=继承全局默认（决议 1/F）。
-	RouteStickyEnabled *bool
+	// Candidates are the hard-filtered channel facts. Sticky policy is resolved from the bound Channel,
+	// never from Route. Fixed routes skip Sticky because they already have one channel.
+	Candidates []routing.ChatRouteCandidate
+	Mode       string
 }
 
 // Resolve 解析一次请求的粘性上下文：判定开关、构造 Redis 键并 lookup 既有绑定。
@@ -138,11 +145,7 @@ func (r *StickyRouter) Resolve(ctx context.Context, params StickyResolveParams) 
 	if r == nil {
 		return nil
 	}
-	enabled := r.enabledDefault.Load()
-	if params.RouteStickyEnabled != nil {
-		enabled = *params.RouteStickyEnabled
-	}
-	if !enabled || params.SessionKey == "" || params.RouteID == nil || params.Protocol == "" {
+	if params.SessionKey == "" || params.RouteID == nil || params.Protocol == "" || params.Mode == "fixed" {
 		return &StickySession{}
 	}
 
@@ -150,9 +153,23 @@ func (r *StickyRouter) Resolve(ctx context.Context, params StickyResolveParams) 
 		router: r,
 		key:    stickyRedisKey(params.Protocol, *params.RouteID, params.APIKeyID, params.SessionKey),
 	}
-	session.boundChannelID, _ = r.store.Lookup(ctx, session.key)
+	session.boundChannelID, session.boundAt, _ = r.store.Lookup(ctx, session.key)
 	session.resolvedChannelID = session.boundChannelID
 	if session.boundChannelID != 0 {
+		if candidate, ok := findStickyCandidate(params.Candidates, session.boundChannelID); ok {
+			enabled, ttl := r.policy(candidate)
+			age := time.Since(session.boundAt)
+			if !enabled || ttl <= 0 || age >= ttl {
+				session.ClearBinding(ctx)
+				return session
+			}
+			if refresher, ok := r.store.(stickyTTLRefresher); ok {
+				remaining := ttl - age
+				if remaining > 0 {
+					refresher.Refresh(ctx, session.key, remaining)
+				}
+			}
+		}
 		r.inc("hit")
 		r.logSticky(ctx, "sticky hit",
 			zap.Int64("sticky_channel_id", session.boundChannelID),
@@ -167,12 +184,32 @@ func (r *StickyRouter) Resolve(ctx context.Context, params StickyResolveParams) 
 	return session
 }
 
+func findStickyCandidate(candidates []routing.ChatRouteCandidate, channelID int64) (routing.ChatRouteCandidate, bool) {
+	for _, candidate := range candidates {
+		if candidate.Channel.ID == channelID {
+			return candidate, true
+		}
+	}
+	return routing.ChatRouteCandidate{}, false
+}
+
+func (r *StickyRouter) policy(candidate routing.ChatRouteCandidate) (bool, time.Duration) {
+	if candidate.StickyEnabled != nil {
+		if !*candidate.StickyEnabled || candidate.StickyTTL == nil || *candidate.StickyTTL <= 0 {
+			return false, 0
+		}
+		return true, *candidate.StickyTTL
+	}
+	return r.enabledDefault.Load(), r.ttl()
+}
+
 // StickySession 是一次请求的粘性上下文（Resolve 产物）。
 // 零值/nil 均表示「本请求不粘」，所有方法 nil-safe，调用方无需判空。
 type StickySession struct {
 	router         *StickyRouter
 	key            string
 	boundChannelID int64
+	boundAt        time.Time
 	// resolvedChannelID stays immutable so clearing or rebinding cannot erase trace facts.
 	resolvedChannelID int64
 }
@@ -196,6 +233,12 @@ func (s *StickySession) ResolvedChannelID() int64 {
 		return 0
 	}
 	return s.resolvedChannelID
+}
+
+// IsPinnedCandidate reports whether this request still owns a valid binding for channelID.
+// AttemptRunner combines it with the head position so ordinary score-selected candidates never wait.
+func (s *StickySession) IsPinnedCandidate(channelID int64) bool {
+	return s != nil && s.boundChannelID > 0 && s.boundChannelID == channelID
 }
 
 // ApplyPlanOutcome 消费 PrepareCandidates 置顶结果：记录 pinned_* / pin_lost 指标，
@@ -228,18 +271,26 @@ func (s *StickySession) ApplyPlanOutcome(ctx context.Context, plan CandidatePlan
 //   - 无既有绑定 → SETNX 写入（首轮并发竞态只有第一个成功者生效）；
 //   - 有绑定且胜出渠道不同（failover 成功）→ 覆盖改绑；
 //   - 胜出渠道与绑定一致 → 不动（绝对 TTL 不刷新，R2：到期自然回落 mode 排序回迁便宜渠道）。
-func (s *StickySession) BindSuccess(ctx context.Context, channelID int64) {
-	if !s.Enabled() || channelID <= 0 {
+func (s *StickySession) BindSuccess(ctx context.Context, candidate routing.ChatRouteCandidate) {
+	if !s.Enabled() || candidate.Channel.ID <= 0 {
 		return
 	}
+	enabled, ttl := s.router.policy(candidate)
+	if !enabled {
+		// A successful Sticky-disabled channel must remove any old binding and must not bind the new one.
+		s.ClearBinding(ctx)
+		return
+	}
+	channelID := candidate.Channel.ID
 	switch {
 	case s.boundChannelID == 0:
-		s.router.store.Bind(ctx, s.key, channelID, s.router.ttl())
+		s.router.store.Bind(ctx, s.key, channelID, ttl)
 		s.router.inc("bind")
 		s.boundChannelID = channelID
+		s.boundAt = time.Now()
 	case s.boundChannelID != channelID:
 		from := s.boundChannelID
-		s.router.store.Rebind(ctx, s.key, channelID, s.router.ttl())
+		s.router.store.Rebind(ctx, s.key, channelID, ttl)
 		s.router.inc("rebind")
 		s.router.logSticky(ctx, "sticky failover rebind",
 			zap.Int64("from_channel_id", from),
@@ -247,6 +298,7 @@ func (s *StickySession) BindSuccess(ctx context.Context, channelID int64) {
 			zap.String("sticky_key", s.key),
 		)
 		s.boundChannelID = channelID
+		s.boundAt = time.Now()
 	}
 }
 

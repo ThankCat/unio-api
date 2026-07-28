@@ -64,7 +64,10 @@ func (a *acquirerStub) Acquire(_ context.Context, identity requestadmission.Iden
 
 func TestRequestAdmissionCurrentRouteMatrix(t *testing.T) {
 	routeID := int64(9)
-	principal := &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 8, RouteID: &routeID}
+	concurrencyLimit := int64(4)
+	principal := &auth.APIKeyPrincipal{
+		APIKeyID: 1, UserID: 8, RouteID: &routeID, ConcurrencyLimit: &concurrencyLimit,
+	}
 	tests := []struct {
 		method   string
 		path     string
@@ -111,6 +114,9 @@ func TestRequestAdmissionCurrentRouteMatrix(t *testing.T) {
 			}
 			if acquirer.calls != 1 || acquirer.identity.Scope != tt.method+" "+tt.scope || acquirer.identity.RouteID != 9 || acquirer.identity.UserID != 8 {
 				t.Fatalf("acquire calls=%d identity=%+v", acquirer.calls, acquirer.identity)
+			}
+			if acquirer.identity.ConcurrencyLimitOverride == nil || *acquirer.identity.ConcurrencyLimitOverride != 4 {
+				t.Fatalf("concurrency override=%v", acquirer.identity.ConcurrencyLimitOverride)
 			}
 			if session.finalizeCalls != 1 {
 				t.Fatalf("finish calls=%d", session.finalizeCalls)

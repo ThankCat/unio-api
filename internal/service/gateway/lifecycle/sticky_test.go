@@ -6,26 +6,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 )
 
 // fakeStickyStore 记录 sticky 存取调用，供绑定语义断言。
 type fakeStickyStore struct {
 	bindings map[string]int64
+	boundAt  map[string]time.Time
 
 	bindCalls   []string
 	rebindCalls []string
 	clearCalls  []string
+	refreshTTL  []time.Duration
 	lastTTL     time.Duration
 }
 
 func newFakeStickyStore() *fakeStickyStore {
-	return &fakeStickyStore{bindings: map[string]int64{}}
+	return &fakeStickyStore{bindings: map[string]int64{}, boundAt: map[string]time.Time{}}
 }
 
-func (s *fakeStickyStore) Lookup(_ context.Context, key string) (int64, bool) {
+func (s *fakeStickyStore) Lookup(_ context.Context, key string) (int64, time.Time, bool) {
 	id, ok := s.bindings[key]
-	return id, ok
+	return id, s.boundAt[key], ok
 }
 
 func (s *fakeStickyStore) Bind(_ context.Context, key string, channelID int64, ttl time.Duration) {
@@ -34,6 +37,7 @@ func (s *fakeStickyStore) Bind(_ context.Context, key string, channelID int64, t
 	// SETNX 语义：已有绑定不覆盖。
 	if _, exists := s.bindings[key]; !exists {
 		s.bindings[key] = channelID
+		s.boundAt[key] = time.Now()
 	}
 }
 
@@ -41,11 +45,17 @@ func (s *fakeStickyStore) Rebind(_ context.Context, key string, channelID int64,
 	s.rebindCalls = append(s.rebindCalls, key)
 	s.lastTTL = ttl
 	s.bindings[key] = channelID
+	s.boundAt[key] = time.Now()
 }
 
 func (s *fakeStickyStore) Clear(_ context.Context, key string) {
 	s.clearCalls = append(s.clearCalls, key)
 	delete(s.bindings, key)
+	delete(s.boundAt, key)
+}
+
+func (s *fakeStickyStore) Refresh(_ context.Context, _ string, ttl time.Duration) {
+	s.refreshTTL = append(s.refreshTTL, ttl)
 }
 
 func stickyResolveParams(sessionKey string) StickyResolveParams {
@@ -55,6 +65,19 @@ func stickyResolveParams(sessionKey string) StickyResolveParams {
 		RouteID:    &routeID,
 		APIKeyID:   42,
 		SessionKey: sessionKey,
+		Mode:       "balanced",
+		Candidates: []routing.ChatRouteCandidate{
+			stickyCandidate(1, nil, nil), stickyCandidate(7, nil, nil),
+			stickyCandidate(101, nil, nil), stickyCandidate(202, nil, nil),
+		},
+	}
+}
+
+func stickyCandidate(channelID int64, enabled *bool, ttl *time.Duration) routing.ChatRouteCandidate {
+	return routing.ChatRouteCandidate{
+		Channel:       channel.Runtime{ID: channelID},
+		StickyEnabled: enabled,
+		StickyTTL:     ttl,
 	}
 }
 
@@ -72,7 +95,7 @@ func TestStickyResolveMissThenBindSuccess(t *testing.T) {
 		t.Fatalf("expected miss, got bound channel %d", session.BoundChannelID())
 	}
 
-	session.BindSuccess(context.Background(), 101)
+	session.BindSuccess(context.Background(), stickyCandidate(101, nil, nil))
 	if len(store.bindCalls) != 1 || len(store.rebindCalls) != 0 {
 		t.Fatalf("expected exactly one Bind and no Rebind, got bind=%d rebind=%d", len(store.bindCalls), len(store.rebindCalls))
 	}
@@ -88,7 +111,7 @@ func TestStickyResolveMissThenBindSuccess(t *testing.T) {
 	if second.ResolvedChannelID() != 101 {
 		t.Fatalf("expected resolved channel 101, got %d", second.ResolvedChannelID())
 	}
-	second.BindSuccess(context.Background(), 101)
+	second.BindSuccess(context.Background(), stickyCandidate(101, nil, nil))
 	if len(store.bindCalls) != 1 || len(store.rebindCalls) != 0 {
 		t.Fatalf("same-channel success must not touch binding, got bind=%d rebind=%d", len(store.bindCalls), len(store.rebindCalls))
 	}
@@ -100,14 +123,14 @@ func TestStickyRebindAfterFailover(t *testing.T) {
 	router := NewStickyRouter(store)
 
 	session := router.Resolve(context.Background(), stickyResolveParams("sess-abc"))
-	session.BindSuccess(context.Background(), 101)
+	session.BindSuccess(context.Background(), stickyCandidate(101, nil, nil))
 
 	second := router.Resolve(context.Background(), stickyResolveParams("sess-abc"))
-	second.BindSuccess(context.Background(), 202)
+	second.BindSuccess(context.Background(), stickyCandidate(202, nil, nil))
 	if len(store.rebindCalls) != 1 {
 		t.Fatalf("expected one Rebind after failover, got %d", len(store.rebindCalls))
 	}
-	if got, _ := store.Lookup(context.Background(), second.key); got != 202 {
+	if got, _, _ := store.Lookup(context.Background(), second.key); got != 202 {
 		t.Fatalf("expected rebind to 202, got %d", got)
 	}
 }
@@ -118,7 +141,7 @@ func TestStickyClearSemantics(t *testing.T) {
 	router := NewStickyRouter(store)
 
 	session := router.Resolve(context.Background(), stickyResolveParams("sess-abc"))
-	session.BindSuccess(context.Background(), 101)
+	session.BindSuccess(context.Background(), stickyCandidate(101, nil, nil))
 
 	second := router.Resolve(context.Background(), stickyResolveParams("sess-abc"))
 	// 非绑定渠道被熔断跳过：不清。
@@ -144,32 +167,39 @@ func TestStickyClearSemantics(t *testing.T) {
 	}
 }
 
-// TestStickyDisabledPaths 验证各类不粘场景：全局默认关、线路覆盖关、无会话键、nil router/session。
+// TestStickyDisabledPaths 验证 Channel 三态、fixed、无会话键与 nil router/session。
 func TestStickyDisabledPaths(t *testing.T) {
 	store := newFakeStickyStore()
 	router := NewStickyRouter(store)
 
-	// 全局默认关。
+	// 全局默认关：请求仍保留 sticky 上下文，以便显式开启的 Channel 成功后建绑；继承渠道不建绑。
 	router.SetConfig(false, time.Hour, 0, 0)
-	if s := router.Resolve(context.Background(), stickyResolveParams("k")); s.Enabled() {
-		t.Fatal("expected disabled when global default off")
+	session := router.Resolve(context.Background(), stickyResolveParams("k"))
+	session.BindSuccess(context.Background(), stickyCandidate(1, nil, nil))
+	if len(store.bindCalls) != 0 {
+		t.Fatal("inherited channel must not bind when global default is off")
 	}
 
-	// 线路覆盖开（压过全局关）。
+	// Channel 显式开启压过全局默认关。
 	enabled := true
-	params := stickyResolveParams("k")
-	params.RouteStickyEnabled = &enabled
-	if s := router.Resolve(context.Background(), params); !s.Enabled() {
-		t.Fatal("expected route override to enable sticky")
+	ttl := 10 * time.Minute
+	session.BindSuccess(context.Background(), stickyCandidate(1, &enabled, &ttl))
+	if len(store.bindCalls) != 1 || store.lastTTL != ttl {
+		t.Fatal("explicit channel policy must bind with channel TTL")
 	}
 
-	// 线路覆盖关（压过全局开）。
+	// Channel 显式关闭会清旧绑定。
 	router.SetConfig(true, time.Hour, 500*time.Millisecond, 100*time.Millisecond)
 	disabled := false
-	params = stickyResolveParams("k")
-	params.RouteStickyEnabled = &disabled
+	session.BindSuccess(context.Background(), stickyCandidate(1, &disabled, nil))
+	if session.BoundChannelID() != 0 || len(store.clearCalls) != 1 {
+		t.Fatal("disabled channel must clear the old binding")
+	}
+
+	params := stickyResolveParams("fixed")
+	params.Mode = "fixed"
 	if s := router.Resolve(context.Background(), params); s.Enabled() {
-		t.Fatal("expected route override to disable sticky")
+		t.Fatal("fixed routes must skip sticky")
 	}
 
 	// 无会话键。
@@ -179,13 +209,55 @@ func TestStickyDisabledPaths(t *testing.T) {
 
 	// nil router / nil session：全部方法安全 no-op。
 	var nilRouter *StickyRouter
-	session := nilRouter.Resolve(context.Background(), stickyResolveParams("k"))
+	session = nilRouter.Resolve(context.Background(), stickyResolveParams("k"))
 	if session.Enabled() || session.BoundChannelID() != 0 {
 		t.Fatal("nil router must resolve to disabled session")
 	}
-	session.BindSuccess(context.Background(), 1)
+	session.BindSuccess(context.Background(), stickyCandidate(1, nil, nil))
 	session.ClearBinding(context.Background())
 	session.ClearIfBound(context.Background(), 1)
+}
+
+func TestStickyResolveAppliesChannelPolicyAndTTLChanges(t *testing.T) {
+	store := newFakeStickyStore()
+	router := NewStickyRouter(store)
+	router.SetConfig(true, 30*time.Minute, 0, 0)
+
+	params := stickyResolveParams("ttl-edit")
+	session := router.Resolve(context.Background(), params)
+	session.BindSuccess(context.Background(), stickyCandidate(7, nil, nil))
+	store.boundAt[session.key] = time.Now().Add(-20 * time.Minute)
+
+	resolved := router.Resolve(context.Background(), params)
+	if resolved.BoundChannelID() != 7 || len(store.refreshTTL) != 1 {
+		t.Fatalf("inherited policy must retain and refresh the physical expiry: session=%+v refresh=%v", resolved, store.refreshTTL)
+	}
+	if remaining := store.refreshTTL[0]; remaining < 9*time.Minute || remaining > 10*time.Minute {
+		t.Fatalf("expected approximately 10m remaining, got %v", remaining)
+	}
+
+	shortTTL := 10 * time.Minute
+	enabled := true
+	params.Candidates[1] = stickyCandidate(7, &enabled, &shortTTL)
+	expired := router.Resolve(context.Background(), params)
+	if expired.BoundChannelID() != 0 || len(store.clearCalls) != 1 {
+		t.Fatalf("shortened Channel TTL must expire the old binding lazily: bound=%d clears=%d", expired.BoundChannelID(), len(store.clearCalls))
+	}
+}
+
+func TestStickyResolveClearsBindingWhenChannelDisablesSticky(t *testing.T) {
+	store := newFakeStickyStore()
+	router := NewStickyRouter(store)
+	params := stickyResolveParams("disabled-edit")
+	session := router.Resolve(context.Background(), params)
+	session.BindSuccess(context.Background(), stickyCandidate(7, nil, nil))
+
+	disabled := false
+	params.Candidates[1] = stickyCandidate(7, &disabled, nil)
+	resolved := router.Resolve(context.Background(), params)
+	if resolved.BoundChannelID() != 0 || resolved.ResolvedChannelID() != 7 || len(store.clearCalls) != 1 {
+		t.Fatalf("disabled Channel must lazily clear its old binding while preserving trace facts: %+v", resolved)
+	}
 }
 
 // TestStickyRedisKeyShape 验证键格式与会话键哈希（R6）：客户端可控原始键不直接入 Redis 键。

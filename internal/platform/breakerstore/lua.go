@@ -1145,7 +1145,8 @@ local control_proofs = {
   {redis.call('HGET', balance_ctl, 'active_payload'), redis.call('HGET', balance_ctl, 'active_payload_hash')}
 }
 return {'ok', now, tonumber(ARGV[8]), balance.ttft_target_ms, tostring(balance.ttft_weight),
-  tostring(balance.minimum_routing_factor), tostring(balance.cost_weight), breaker_enabled, rows, control_proofs}
+  balance.economic_weight_pct, balance.health_weight_pct, balance.capacity_weight_pct,
+  balance.priority_weight_pct, breaker_enabled, rows, control_proofs}
 `
 
 // luaSetCooldown 登记/延长 Channel 429 冷却（所有 Gateway 共享）。取现有与新 until 的较大值（不缩短），

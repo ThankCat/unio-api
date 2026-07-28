@@ -74,7 +74,7 @@ func (f *fakeBreakerSnapshotter) AggregateRouteUsage(_ context.Context, _ int64)
 	return f.routeUsage, f.routeUsageErr
 }
 
-func TestRuntimeUsesAuthoritativeSnapshotAndP4Score(t *testing.T) {
+func TestRuntimeUsesAuthoritativeSnapshotAndObjectiveScore(t *testing.T) {
 	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	store := &fakeRuntimeStore{
 		route: sqlc.Route{ID: 3, Mode: "balanced", Status: "enabled"},
@@ -93,7 +93,8 @@ func TestRuntimeUsesAuthoritativeSnapshotAndP4Score(t *testing.T) {
 		routeUsage: breakerstore.RouteUsage{Concurrency: 4, RPM: 12, RPD: 40, TPM: 900, ActiveUsers: 2},
 		result: breakerstore.SnapshotManyResult{
 			RoutingBalance: breakerstore.RoutingBalanceSnapshot{
-				Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35, MinimumRoutingFactor: 0.05,
+				Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35,
+				EconomicWeightPct: 45, HealthWeightPct: 25, CapacityWeightPct: 20, PriorityWeightPct: 10,
 			},
 			Candidates: []breakerstore.CandidateSnapshot{
 				{
@@ -179,11 +180,16 @@ func TestRuntimeUsesAuthoritativeSnapshotAndP4Score(t *testing.T) {
 		primary.CircuitBreakerRevision != 4 || primary.RoutingBalanceRevision != 5 {
 		t.Fatalf("revision facts missing or stale: %+v", primary)
 	}
-	if math.Abs(primary.CapacityScore-0.5) > 1e-9 || math.Abs(primary.FinalWeight-0.3975) > 1e-9 {
+	if primary.AlgorithmVersion != "objective_v1" ||
+		math.Abs(primary.CapacityScore-50) > 1e-9 || math.Abs(primary.HealthScore-79.5) > 1e-9 ||
+		math.Abs(primary.EconomicScore-100) > 1e-9 || math.Abs(primary.PriorityScore-90) > 1e-9 ||
+		math.Abs(primary.FinalScore-83.875) > 1e-9 || math.Abs(primary.FinalWeight-83.875) > 1e-9 ||
+		primary.EconomicWeightPct != 45 || primary.HealthWeightPct != 25 ||
+		primary.CapacityWeightPct != 20 || primary.PriorityWeightPct != 10 {
 		t.Fatalf("runtime score drifted from scheduler: %+v", primary)
 	}
-	if primary.CostRatio != nil || primary.CostWeight != 0 || primary.CostFactor != 1 {
-		t.Fatalf("unresolved cost must remain neutral: %+v", primary)
+	if primary.CostRatio != nil || primary.CostWeight != 0.45 || primary.CostFactor != 1 {
+		t.Fatalf("legacy compatibility fields do not match objective score: %+v", primary)
 	}
 	if primary.ErrorRate == nil || *primary.ErrorRate != 0.1 || primary.ErrorSamples != 20 ||
 		primary.TTFTEWMAMs == nil || *primary.TTFTEWMAMs != 1000 || primary.TTFTSamples != 18 ||
@@ -261,13 +267,15 @@ func TestRuntimeResolvesAbsoluteAndMultiplierCosts(t *testing.T) {
 	multiplier.CostMultiplier = testNumeric(1, 0)
 	multiplier.ChannelRechargeFactorID = 13
 	multiplier.RechargeFactor = testNumeric(5, -1)
+	multiplier.Priority = 20
 	store := &fakeRuntimeStore{
 		route: sqlc.Route{ID: 3, Mode: "balanced", Status: "enabled", PriceRatio: testNumeric(2, 0)},
 		pool:  []sqlc.RouteRuntimePoolRow{absolute, multiplier},
 	}
 	result := breakerstore.SnapshotManyResult{
 		RoutingBalance: breakerstore.RoutingBalanceSnapshot{
-			Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35, CostWeight: 0.5, MinimumRoutingFactor: 0.05,
+			Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35,
+			EconomicWeightPct: 45, HealthWeightPct: 25, CapacityWeightPct: 20, PriorityWeightPct: 10,
 		},
 		Candidates: []breakerstore.CandidateSnapshot{
 			currentCostCandidate(7, 21),
@@ -286,14 +294,17 @@ func TestRuntimeResolvesAbsoluteAndMultiplierCosts(t *testing.T) {
 	}
 	for _, channel := range got.Channels {
 		if channel.CostRatio == nil || math.Abs(*channel.CostRatio-0.25) > 1e-9 ||
-			channel.CostWeight != 0.5 || math.Abs(channel.CostFactor-0.875) > 1e-9 ||
-			math.Abs(channel.FinalWeight-0.875) > 1e-9 || channel.MarginStatus != "safe" {
+			channel.CostWeight != 0.45 || math.Abs(channel.CostFactor-0.75) > 1e-9 ||
+			channel.AlgorithmVersion != "objective_v1" || channel.MarginStatus != "safe" {
 			t.Errorf("channel %d cost score mismatch: %+v", channel.ChannelID, channel)
 		}
 	}
+	if math.Abs(got.Channels[0].FinalScore-87.75) > 1e-9 || math.Abs(got.Channels[1].FinalScore-86.75) > 1e-9 {
+		t.Fatalf("objective score must include Priority: %+v", got.Channels)
+	}
 }
 
-func TestRuntimeFixedModeReportsCostWithoutChangingWeight(t *testing.T) {
+func TestRuntimeFixedModeReportsObjectiveScoreWithoutChangingOrder(t *testing.T) {
 	row := runtimePoolRow(7, 21, 31)
 	row.Mode = "fixed"
 	setRuntimePriceBase(&row)
@@ -308,7 +319,8 @@ func TestRuntimeFixedModeReportsCostWithoutChangingWeight(t *testing.T) {
 	}
 	result := breakerstore.SnapshotManyResult{
 		RoutingBalance: breakerstore.RoutingBalanceSnapshot{
-			Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35, CostWeight: 0.5, MinimumRoutingFactor: 0.05,
+			Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35,
+			EconomicWeightPct: 45, HealthWeightPct: 25, CapacityWeightPct: 20, PriorityWeightPct: 10,
 		},
 		Candidates: []breakerstore.CandidateSnapshot{currentCostCandidate(7, 21)},
 	}
@@ -320,8 +332,9 @@ func TestRuntimeFixedModeReportsCostWithoutChangingWeight(t *testing.T) {
 	}
 	channel := got.Channels[0]
 	if channel.CostRatio == nil || math.Abs(*channel.CostRatio-0.25) > 1e-9 ||
-		channel.CostWeight != 0.5 || channel.CostFactor != 1 || channel.FinalWeight != 1 {
-		t.Fatalf("fixed route must keep cost factor neutral: %+v", channel)
+		channel.AlgorithmVersion != "objective_v1" || math.Abs(channel.FinalScore-87.75) > 1e-9 ||
+		math.Abs(channel.FinalWeight-87.75) > 1e-9 {
+		t.Fatalf("fixed route must expose objective score without reordering: %+v", channel)
 	}
 }
 
@@ -573,7 +586,7 @@ func runtimePoolRow(channelID, originID, modelID int64) sqlc.RouteRuntimePoolRow
 		RouteID: 3, Mode: "balanced", RouteStatus: "enabled",
 		ChannelID: channelID, ChannelName: "channel", ChannelStatus: "enabled",
 		CredentialValid: true, HasCredential: true, HasOrigin: true,
-		Protocol: "openai", AdapterKey: "openai", Priority: int32(channelID),
+		Protocol: "openai", AdapterKey: "openai", Priority: 10,
 		ChannelConfigRevision: 16, ChannelAdmissionLimitsRevision: 17,
 		ProviderOriginRevision: 11, ProviderStatusRevision: 12,
 		ProviderID: originID, ProviderName: "provider", ProviderStatus: "enabled",

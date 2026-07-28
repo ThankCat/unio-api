@@ -154,6 +154,36 @@ func TestControlRestoreMissing(t *testing.T) {
 	}
 }
 
+func TestControlReconcileReplacesDriftAndPending(t *testing.T) {
+	s, _, _ := newTestStore(t)
+	ctx := context.Background()
+	target := s.ChannelAdmissionControl(4343)
+	oldPayload := `{"rpm":10,"rpd":null,"tpm":null,"concurrency":null}`
+	pendingPayload := `{"rpm":20,"rpd":null,"tpm":null,"concurrency":null}`
+	authoritativePayload := `{"rpm":5,"rpd":100,"tpm":1000,"concurrency":2}`
+
+	if _, err := s.RestoreMissingControl(ctx, target, 7, oldPayload); err != nil {
+		t.Fatalf("restore drift fixture: %v", err)
+	}
+	if code, _, err := s.PrepareControl(ctx, target, "stale-pending", 7, 8, pendingPayload); err != nil || code != ControlPrepared {
+		t.Fatalf("prepare stale pending fixture: code=%s err=%v", code, err)
+	}
+
+	changed, err := s.ReconcileControl(ctx, target, 3, authoritativePayload)
+	if err != nil || !changed {
+		t.Fatalf("reconcile authoritative control: changed=%v err=%v", changed, err)
+	}
+	snapshot, err := s.ReadControl(ctx, target, 3)
+	if err != nil || snapshot.SyncState != "active" || snapshot.ActiveRevision != 3 ||
+		snapshot.ActivePayload != authoritativePayload || snapshot.PendingRevision != 0 || snapshot.PendingPayload != "" {
+		t.Fatalf("unexpected reconciled control: %+v err=%v", snapshot, err)
+	}
+	changed, err = s.ReconcileControl(ctx, target, 3, authoritativePayload)
+	if err != nil || changed {
+		t.Fatalf("idempotent reconcile changed control: changed=%v err=%v", changed, err)
+	}
+}
+
 // TestStateIntegrityBootstrapAndRotate 验证完整性 marker bootstrap 与 epoch 轮换。
 func TestStateIntegrityBootstrapAndRotate(t *testing.T) {
 	s, _, _ := newTestStore(t)

@@ -43,29 +43,34 @@ func TestGatewaySettingsRegistered(t *testing.T) {
 
 func TestRoutingBalanceSettingsRoundTrip(t *testing.T) {
 	want := RoutingBalanceSettings{
-		TTFTTarget:           2500 * time.Millisecond,
-		TTFTWeight:           0.4,
-		CostWeight:           0.6,
-		MinimumRoutingFactor: 0.08,
-		TTFTEWMAAlpha:        0.25,
-		Enabled:              true,
-		WeightByRemaining:    true,
+		EconomicWeightPct: 40,
+		HealthWeightPct:   30,
+		CapacityWeightPct: 20,
+		PriorityWeightPct: 10,
+		TTFTTarget:        2500 * time.Millisecond,
+		TTFTWeight:        0.4,
+		TTFTEWMAAlpha:     0.25,
+		Enabled:           true,
+		WeightByRemaining: true,
 	}
 	got, err := DecodeRoutingBalanceSettings(encodeRoutingBalanceSettings(want))
 	if err != nil || got != want {
 		t.Fatalf("round trip got %+v err=%v, want %+v", got, err, want)
 	}
 	invalid := []string{
-		`{"ttft_target_ms":0,"ttft_weight":0.35,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
-		`{"ttft_target_ms":2000,"ttft_weight":1.1,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
+		`{"economic_weight_pct":35,"health_weight_pct":25,"capacity_weight_pct":20,"priority_weight_pct":10,"ttft_target_ms":2000,"ttft_weight":0.35,"ttft_ewma_alpha":0.2}`,
+		`{"economic_weight_pct":-5,"health_weight_pct":50,"capacity_weight_pct":30,"priority_weight_pct":25,"ttft_target_ms":2000,"ttft_weight":0.35,"ttft_ewma_alpha":0.2}`,
+		`{"economic_weight_pct":45,"health_weight_pct":25,"capacity_weight_pct":20,"priority_weight_pct":10,"ttft_target_ms":0,"ttft_weight":0.35,"ttft_ewma_alpha":0.2}`,
+		`{"economic_weight_pct":45,"health_weight_pct":25,"capacity_weight_pct":20,"priority_weight_pct":10,"ttft_target_ms":2000,"ttft_weight":1.1,"ttft_ewma_alpha":0.2}`,
+		`{"economic_weight_pct":45,"health_weight_pct":25,"capacity_weight_pct":20,"priority_weight_pct":10,"ttft_target_ms":2000,"ttft_weight":0.35,"ttft_ewma_alpha":0}`,
+		`{"economic_weight_pct":45,"health_weight_pct":25,"capacity_weight_pct":20,"priority_weight_pct":10,"ttft_target_ms":2000,"ttft_weight":0.35,"ttft_ewma_alpha":0.2,"cost_weight":0.5}`,
+		`{"economic_weight_pct":45,"health_weight_pct":25,"capacity_weight_pct":20,"priority_weight_pct":10,"ttft_target_ms":2000,"ttft_weight":0.35,"ttft_ewma_alpha":0.2,"bogus":1}`,
+		`{"ttft_target_ms":2000,"ttft_weight":0.35,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2,"bogus":1}`,
 		`{"ttft_target_ms":2000,"ttft_weight":0.35,"minimum_routing_factor":0,"ttft_ewma_alpha":0.2}`,
-		`{"ttft_target_ms":2000,"ttft_weight":0.35,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0}`,
 		`{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":-0.1,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
 		`{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":1.1,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
 		`{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":null,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
 		`{"ttft_target_ms":2000,"cost_weight":0.5,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
-		`{"enabled":true,"weight_by_remaining":true}`,
-		`{"ttft_target_ms":2000,"ttft_weight":0.35,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2,"bogus":1}`,
 	}
 	for _, raw := range invalid {
 		if _, err := DecodeRoutingBalanceSettings([]byte(raw)); err == nil {
@@ -74,25 +79,28 @@ func TestRoutingBalanceSettingsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestRoutingBalanceCostWeightDefaultsAndLegacyCompatibility(t *testing.T) {
+func TestRoutingBalanceObjectiveDefaultsAndLegacyCompatibility(t *testing.T) {
 	defaults := DefaultRoutingBalanceSettings()
-	if defaults.CostWeight != 0.5 {
-		t.Fatalf("fresh default cost weight = %v, want 0.5", defaults.CostWeight)
+	if defaults.EconomicWeightPct != 45 || defaults.HealthWeightPct != 25 ||
+		defaults.CapacityWeightPct != 20 || defaults.PriorityWeightPct != 10 {
+		t.Fatalf("unexpected objective defaults: %+v", defaults)
 	}
-	if raw := string(encodeRoutingBalanceSettings(defaults)); !strings.Contains(raw, `"cost_weight":0.5`) {
-		t.Fatalf("new encoder must include cost_weight: %s", raw)
+	if raw := string(encodeRoutingBalanceSettings(defaults)); !strings.Contains(raw, `"economic_weight_pct":45`) ||
+		strings.Contains(raw, `"cost_weight"`) || strings.Contains(raw, `"minimum_routing_factor"`) {
+		t.Fatalf("canonical encoder must only emit objective weights: %s", raw)
 	}
 
-	legacy := []byte(`{"ttft_target_ms":2000,"ttft_weight":0.35,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`)
+	legacy := []byte(`{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":0.9,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`)
 	decoded, err := DecodeRoutingBalanceSettings(legacy)
 	if err != nil {
 		t.Fatalf("decode legacy routing balance: %v", err)
 	}
-	if decoded.CostWeight != 0 {
-		t.Fatalf("legacy payload cost weight = %v, want revision-stable 0", decoded.CostWeight)
+	if decoded.EconomicWeightPct != 45 || decoded.HealthWeightPct != 25 ||
+		decoded.CapacityWeightPct != 20 || decoded.PriorityWeightPct != 10 {
+		t.Fatalf("legacy payload must map to objective defaults: %+v", decoded)
 	}
-	if raw := string(encodeRoutingBalanceSettings(decoded)); !strings.Contains(raw, `"cost_weight":0`) {
-		t.Fatalf("canonical legacy payload must explicitly encode cost_weight=0: %s", raw)
+	if raw := string(encodeRoutingBalanceSettings(decoded)); !strings.Contains(raw, `"economic_weight_pct":45`) || strings.Contains(raw, `"cost_weight"`) {
+		t.Fatalf("legacy payload must re-encode as objective_v1 canonical JSON: %s", raw)
 	}
 }
 

@@ -3,7 +3,6 @@ package lifecycle
 import (
 	"context"
 	"errors"
-	"math/rand/v2"
 
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
@@ -143,14 +142,18 @@ func (p CandidatePlan) CandidateMaxOutputTokens() int64 {
 // 复用该类型，避免协议 service 各自实现不同的 fallback 风险边界。
 type Executor struct {
 	registry CandidateCapabilityRegistry
-	random   func() float64
 }
 
 // BalanceConfig 是 Redis committed routing-balance control 的评分参数。
 type BalanceConfig struct {
-	Revision             int64
-	TTFTTargetMs         int64
-	TTFTWeight           float64
+	Revision          int64
+	TTFTTargetMs      int64
+	TTFTWeight        float64
+	EconomicWeightPct int
+	HealthWeightPct   int
+	CapacityWeightPct int
+	PriorityWeightPct int
+	// Deprecated compatibility fields; objective_v1 ignores them.
 	CostWeight           float64
 	MinimumRoutingFactor float64
 }
@@ -161,15 +164,7 @@ func NewExecutor(registry CandidateCapabilityRegistry) *Executor {
 		panic("lifecycle: adapter capability registry is required")
 	}
 
-	return &Executor{registry: registry, random: rand.Float64}
-}
-
-// SetRandomSource 替换 balanced 随机源。生产默认使用 math/rand/v2，测试传固定 seed。
-func (e *Executor) SetRandomSource(random func() float64) {
-	if e == nil || random == nil {
-		return
-	}
-	e.random = random
+	return &Executor{registry: registry}
 }
 
 // PrepareCandidates 按 capability、熔断可用性和候选级保守估算生成 fallback plan。
@@ -243,7 +238,7 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 				runtimeCapacity[candidate.Channel.ID] = ChannelCapacity{
 					Concurrency: CapacitySignal{Used: snapshot.Concurrency.Used, Limit: snapshot.Concurrency.Limit, Known: true},
 					TPM:         CapacitySignal{Used: snapshot.TPM.Used, Limit: snapshot.TPM.Limit, Known: true},
-					ErrorRate:   errorRate, TTFTEWMAMs: ttftEWMA,
+					ErrorRate:   errorRate, ErrorSamples: snapshot.Channel.SampleCount, TTFTEWMAMs: ttftEWMA,
 					TTFTSamples:  ttftSamples,
 					HalfOpen:     snapshot.Status == breakerstore.CandidateSnapshotHalfOpen,
 					RuntimeKnown: true,
@@ -283,11 +278,13 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 	var capacityReader ChannelCapacitySnapshotReader
 	if runtimePresent {
 		selectedConfig = BalanceConfig{
-			Revision:             runtimeResult.RoutingBalance.Revision,
-			TTFTTargetMs:         runtimeResult.RoutingBalance.TTFTTargetMs,
-			TTFTWeight:           runtimeResult.RoutingBalance.TTFTWeight,
-			CostWeight:           runtimeResult.RoutingBalance.CostWeight,
-			MinimumRoutingFactor: runtimeResult.RoutingBalance.MinimumRoutingFactor,
+			Revision:          runtimeResult.RoutingBalance.Revision,
+			TTFTTargetMs:      runtimeResult.RoutingBalance.TTFTTargetMs,
+			TTFTWeight:        runtimeResult.RoutingBalance.TTFTWeight,
+			EconomicWeightPct: runtimeResult.RoutingBalance.EconomicWeightPct,
+			HealthWeightPct:   runtimeResult.RoutingBalance.HealthWeightPct,
+			CapacityWeightPct: runtimeResult.RoutingBalance.CapacityWeightPct,
+			PriorityWeightPct: runtimeResult.RoutingBalance.PriorityWeightPct,
 		}
 		capacityReader = func(_ context.Context, candidate routing.ChatRouteCandidate) (ChannelCapacity, error) {
 			return runtimeCapacity[candidate.Channel.ID], nil
@@ -298,7 +295,7 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 		orderingMode = ""
 	}
 	ordered, scores, allZero := orderBalancedCandidates(
-		ctx, available, orderingMode, capacityReader, e.random, selectedConfig,
+		ctx, available, orderingMode, capacityReader, selectedConfig,
 	)
 	if runtimePresent {
 		for _, candidate := range available {
@@ -308,20 +305,13 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 		for index := range excluded {
 			snapshot, ok := runtimeSnapshots[excluded[index].ChannelID]
 			if !ok {
-				score := recordNeutralCostFactor(BalanceScore{}, excluded[index].Route.CostRatio, selectedConfig)
-				if params.Mode == "balanced" {
-					score = ApplyCostFactor(score, excluded[index].Route.CostRatio, selectedConfig)
-				}
+				score := ApplyObjectiveFactors(BalanceScore{}, excluded[index].Route.CostRatio, excluded[index].Route.Priority, selectedConfig)
 				score.Weight = 0
 				excluded[index].Balance = score
 				continue
 			}
 			score := scoreCapacity(channelCapacityFromRuntimeSnapshot(snapshot), selectedConfig)
-			if params.Mode == "balanced" {
-				score = ApplyCostFactor(score, excluded[index].Route.CostRatio, selectedConfig)
-			} else {
-				score = recordNeutralCostFactor(score, excluded[index].Route.CostRatio, selectedConfig)
-			}
+			score = ApplyObjectiveFactors(score, excluded[index].Route.CostRatio, excluded[index].Route.Priority, selectedConfig)
 			score.Weight = 0
 			excluded[index].Balance = enrichBalanceScore(score, excluded[index].Route, snapshot, runtimeResult)
 		}
@@ -422,6 +412,7 @@ func channelCapacityFromRuntimeSnapshot(snapshot breakerstore.CandidateSnapshot)
 		Concurrency:  CapacitySignal{Used: snapshot.Concurrency.Used, Limit: snapshot.Concurrency.Limit, Known: true},
 		TPM:          CapacitySignal{Used: snapshot.TPM.Used, Limit: snapshot.TPM.Limit, Known: true},
 		ErrorRate:    channel.ErrorRate,
+		ErrorSamples: channel.SampleCount,
 		TTFTEWMAMs:   channel.TTFTEWMAMs,
 		TTFTSamples:  channel.TTFTSamples,
 		HalfOpen:     snapshot.Status == breakerstore.CandidateSnapshotHalfOpen,

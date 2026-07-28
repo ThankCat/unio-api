@@ -76,8 +76,8 @@ func TestRoutingTraceRecorderSamplesNormalAndAlwaysWritesFallback(t *testing.T) 
 	if !got.Abnormal || len(got.AbnormalReasons) != 1 || got.AbnormalReasons[0] != "fallback" {
 		t.Fatalf("unexpected fallback trace: %+v", got)
 	}
-	if got.AlgorithmVersion != "balanced_v3_cost" {
-		t.Fatalf("algorithm version = %q, want balanced_v3_cost", got.AlgorithmVersion)
+	if got.AlgorithmVersion != "objective_v1" {
+		t.Fatalf("algorithm version = %q, want objective_v1", got.AlgorithmVersion)
 	}
 	var chain []TransportAttempt
 	if err := json.Unmarshal(got.FallbackChain, &chain); err != nil {

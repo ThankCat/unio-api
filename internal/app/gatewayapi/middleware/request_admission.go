@@ -60,12 +60,13 @@ func RequestAdmission(acquirer RequestAdmissionAcquirer, opts RequestAdmissionOp
 			}
 
 			result, err := acquirer.Acquire(r.Context(), requestadmission.Identity{
-				RouteID:          *principal.RouteID,
-				UserID:           principal.UserID,
-				Scope:            r.Method + " " + opts.Scope,
-				RPMLimitOverride: principal.RPMLimit,
-				TPMLimitOverride: principal.TPMLimit,
-				RPDLimitOverride: principal.RPDLimit,
+				RouteID:                  *principal.RouteID,
+				UserID:                   principal.UserID,
+				Scope:                    r.Method + " " + opts.Scope,
+				RPMLimitOverride:         principal.RPMLimit,
+				TPMLimitOverride:         principal.TPMLimit,
+				RPDLimitOverride:         principal.RPDLimit,
+				ConcurrencyLimitOverride: principal.ConcurrencyLimit,
 			})
 			if err != nil {
 				logRequestAdmissionFailure(opts.Logger, "acquire", err)

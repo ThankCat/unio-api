@@ -120,6 +120,15 @@ type Channel struct {
 	TPMLimit                        int64
 	TPMRemaining                    *float64
 	CapacityScore                   float64
+	AlgorithmVersion                string
+	EconomicScore                   float64
+	HealthScore                     float64
+	PriorityScore                   float64
+	FinalScore                      float64
+	EconomicWeightPct               int
+	HealthWeightPct                 int
+	CapacityWeightPct               int
+	PriorityWeightPct               int
 	CostRatio                       *float64
 	CostWeight                      float64
 	CostFactor                      float64
@@ -364,11 +373,13 @@ func applySnapshot(
 	costFacts map[int64]channelCostFacts,
 ) {
 	config := lifecycle.BalanceConfig{
-		Revision:             snapshot.RoutingBalance.Revision,
-		TTFTTargetMs:         snapshot.RoutingBalance.TTFTTargetMs,
-		TTFTWeight:           snapshot.RoutingBalance.TTFTWeight,
-		CostWeight:           snapshot.RoutingBalance.CostWeight,
-		MinimumRoutingFactor: snapshot.RoutingBalance.MinimumRoutingFactor,
+		Revision:          snapshot.RoutingBalance.Revision,
+		TTFTTargetMs:      snapshot.RoutingBalance.TTFTTargetMs,
+		TTFTWeight:        snapshot.RoutingBalance.TTFTWeight,
+		EconomicWeightPct: snapshot.RoutingBalance.EconomicWeightPct,
+		HealthWeightPct:   snapshot.RoutingBalance.HealthWeightPct,
+		CapacityWeightPct: snapshot.RoutingBalance.CapacityWeightPct,
+		PriorityWeightPct: snapshot.RoutingBalance.PriorityWeightPct,
 	}
 	allZero := len(rows) > 0
 	for index, candidate := range snapshot.Candidates {
@@ -407,8 +418,6 @@ func applySnapshot(
 		channel.GlobalConcurrencyRevision = admission.Concurrency
 		channel.CircuitBreakerRevision = routing.CircuitBreaker
 		channel.RoutingBalanceRevision = snapshot.RoutingBalance.Revision
-		channel.CostWeight = snapshot.RoutingBalance.CostWeight
-		channel.CostFactor = 1
 		channel.RuntimeControlState = runtimeSyncActive
 		channel.RuntimeRevisionCurrent = true
 		channel.ConcurrencyUsed, channel.ConcurrencyLimit = candidate.Concurrency.Used, candidate.Concurrency.Limit
@@ -434,16 +443,17 @@ func applySnapshot(
 		score := lifecycle.ScoreBalanceCandidateWithConfig(lifecycle.ChannelCapacity{
 			Concurrency: lifecycle.CapacitySignal{Used: candidate.Concurrency.Used, Limit: candidate.Concurrency.Limit, Known: true},
 			TPM:         lifecycle.CapacitySignal{Used: candidate.TPM.Used, Limit: candidate.TPM.Limit, Known: true},
-			ErrorRate:   channelSnapshot.ErrorRate, TTFTEWMAMs: channelSnapshot.TTFTEWMAMs,
+			ErrorRate:   channelSnapshot.ErrorRate, ErrorSamples: channelSnapshot.SampleCount, TTFTEWMAMs: channelSnapshot.TTFTEWMAMs,
 			TTFTSamples:  channelSnapshot.TTFTSamples,
 			HalfOpen:     candidate.Status == breakerstore.CandidateSnapshotHalfOpen,
 			RuntimeKnown: true,
 		}, config)
+		costRatio := 0.0
 		if facts, ok := costFacts[channel.ChannelID]; ok {
 			channel.MarginStatus = facts.marginStatus
 			channel.CostRatio = facts.ratio
-			if runtime.Mode == "balanced" && facts.ratio != nil {
-				score = lifecycle.ApplyCostFactor(score, *facts.ratio, config)
+			if facts.ratio != nil {
+				costRatio = *facts.ratio
 			}
 			if facts.pricingInvalid && channel.Eligible {
 				channel.Eligible = false
@@ -453,8 +463,15 @@ func applySnapshot(
 				channel.ExcludedReason = "negative_margin"
 			}
 		}
+		score = lifecycle.ApplyObjectiveFactors(score, costRatio, channel.Priority, config)
 		channel.ConcurrencyRemaining, channel.TPMRemaining = score.ConcurrencyRemaining, score.TPMRemaining
 		channel.CapacityScore, channel.CostFactor, channel.FinalWeight = score.CapacityScore, score.CostFactor, score.Weight
+		channel.AlgorithmVersion = score.AlgorithmVersion
+		channel.EconomicScore, channel.HealthScore = score.EconomicScore, score.HealthScore
+		channel.PriorityScore, channel.FinalScore = score.PriorityScore, score.FinalScore
+		channel.EconomicWeightPct, channel.HealthWeightPct = score.EconomicWeightPct, score.HealthWeightPct
+		channel.CapacityWeightPct, channel.PriorityWeightPct = score.CapacityWeightPct, score.PriorityWeightPct
+		channel.CostWeight = score.CostWeight
 		channel.Pressure, channel.CapacityUnknown = score.Pressure, score.CapacityUnknown
 
 		if channel.Eligible {
@@ -854,6 +871,7 @@ func remainingOrOne(v *float64) float64 {
 }
 
 func assignCurrentOrder(channels []Channel, allZero bool) {
+	_ = allZero
 	indexes := make([]int, 0, len(channels))
 	for index := range channels {
 		if channels[index].Eligible {
@@ -862,10 +880,13 @@ func assignCurrentOrder(channels []Channel, allZero bool) {
 	}
 	sort.SliceStable(indexes, func(i, j int) bool {
 		left, right := channels[indexes[i]], channels[indexes[j]]
-		if allZero {
-			return left.Pressure < right.Pressure
+		if left.FinalWeight != right.FinalWeight {
+			return left.FinalWeight > right.FinalWeight
 		}
-		return left.FinalWeight > right.FinalWeight
+		if left.Priority != right.Priority {
+			return left.Priority < right.Priority
+		}
+		return left.ChannelID < right.ChannelID
 	})
 	for order, index := range indexes {
 		channels[index].CurrentOrder = order + 1

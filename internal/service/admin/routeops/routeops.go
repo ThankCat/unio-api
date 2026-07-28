@@ -37,19 +37,20 @@ func NewService(store Store) *Service {
 
 // Row 是线路运维主表行（静态配置；请求指标在详情页聚合）。
 type Row struct {
-	ID           int64
-	Name         string
-	Mode         string
-	Status       string
-	Description  string
-	PriceRatio   string
-	RpmLimit     *int32
-	TpmLimit     *int32
-	RpdLimit     *int32
-	CreatedAt    time.Time
-	BoundKeys    int64
-	PoolChannels int64
-	ModelsCount  int64
+	ID               int64
+	Name             string
+	Mode             string
+	Status           string
+	Description      string
+	PriceRatio       string
+	RpmLimit         *int32
+	TpmLimit         *int32
+	RpdLimit         *int32
+	ConcurrencyLimit *int32
+	CreatedAt        time.Time
+	BoundKeys        int64
+	PoolChannels     int64
+	ModelsCount      int64
 }
 
 // Detail 是详情页概览（含请求/延迟等区间运维指标；不含主观「可服务/异常」标签）。
@@ -153,19 +154,20 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 	out := make([]Row, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, Row{
-			ID:           r.ID,
-			Name:         r.Name,
-			Mode:         r.Mode,
-			Status:       r.Status,
-			Description:  opsutil.TextValue(r.Description),
-			PriceRatio:   opsutil.NumericString(r.PriceRatio),
-			RpmLimit:     opsutil.Int4Value(r.RpmLimit),
-			TpmLimit:     opsutil.Int4Value(r.TpmLimit),
-			RpdLimit:     opsutil.Int4Value(r.RpdLimit),
-			CreatedAt:    r.CreatedAt.Time,
-			BoundKeys:    r.BoundKeys,
-			PoolChannels: r.PoolChannels,
-			ModelsCount:  r.ModelsCount,
+			ID:               r.ID,
+			Name:             r.Name,
+			Mode:             r.Mode,
+			Status:           r.Status,
+			Description:      opsutil.TextValue(r.Description),
+			PriceRatio:       opsutil.NumericString(r.PriceRatio),
+			RpmLimit:         opsutil.Int4Value(r.RpmLimit),
+			TpmLimit:         opsutil.Int4Value(r.TpmLimit),
+			RpdLimit:         opsutil.Int4Value(r.RpdLimit),
+			ConcurrencyLimit: opsutil.Int4Value(r.ConcurrencyLimit),
+			CreatedAt:        r.CreatedAt.Time,
+			BoundKeys:        r.BoundKeys,
+			PoolChannels:     r.PoolChannels,
+			ModelsCount:      r.ModelsCount,
 		})
 	}
 	return out, total, nil

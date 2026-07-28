@@ -176,7 +176,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 			return nil, err
 		}
 		if err := reconcileAllRuntimeControls(
-			ctx, pool, settingsStore, sharedBreakerStore, runtimeTelemetry,
+			ctx, pool, settingsStore, sharedBreakerStore, runtimeTelemetry, runtimeControlStartupAuthority,
 		); err != nil {
 			return nil, err
 		}

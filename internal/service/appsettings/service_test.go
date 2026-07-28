@@ -64,6 +64,10 @@ func (s *fakeRuntimeControlStore) RestoreMissingControl(_ context.Context, _ bre
 	return true, nil
 }
 
+func (s *fakeRuntimeControlStore) ReconcileControl(ctx context.Context, target breakerstore.ControlTarget, revision int64, payload string) (bool, error) {
+	return s.RestoreMissingControl(ctx, target, revision, payload)
+}
+
 func TestCriticalSettingUsesDurablePublisher(t *testing.T) {
 	q := newFakeQueries()
 	q.data[GatewayRouteRateLimitDefaultsKey] = encodeRateLimitDefaultsSettings(DefaultRateLimitDefaultsSettings())
@@ -138,10 +142,12 @@ func TestCriticalSettingSameSemanticValueDoesNotAdvanceRevision(t *testing.T) {
 	service := NewServiceWithRuntimeControl(store, publisher, runtimeStore)
 
 	result, err := service.SetRawWithResult(context.Background(), GatewayRoutingBalanceKey, json.RawMessage(`{
+		"priority_weight_pct": 10,
 		"ttft_ewma_alpha": 0.2,
-		"minimum_routing_factor": 0.05,
-		"cost_weight": 0.5,
+		"capacity_weight_pct": 20,
 		"ttft_weight": 0.35,
+		"health_weight_pct": 25,
+		"economic_weight_pct": 45,
 		"ttft_target_ms": 2000
 	}`))
 	if err != nil {

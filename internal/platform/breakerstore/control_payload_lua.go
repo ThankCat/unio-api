@@ -164,32 +164,58 @@ end
 
 local function parse_routing_balance_payload(payload)
   local value = exact_object(payload, {
+    economic_weight_pct=true,
+    health_weight_pct=true,
+    capacity_weight_pct=true,
+    priority_weight_pct=true,
     ttft_target_ms=true,
     ttft_weight=true,
-    cost_weight=true,
-    minimum_routing_factor=true,
     ttft_ewma_alpha=true
   })
   if value == nil then
-    value = exact_object(payload, {
+    local legacy = exact_object(payload, {
+      ttft_target_ms=true,
+      ttft_weight=true,
+      cost_weight=true,
+      minimum_routing_factor=true,
+      ttft_ewma_alpha=true
+    })
+    if legacy == nil then
+      legacy = exact_object(payload, {
       ttft_target_ms=true,
       ttft_weight=true,
       minimum_routing_factor=true,
       ttft_ewma_alpha=true
     })
-    if value == nil then return nil end
-    -- Legacy four-field payloads remain revision-stable and cost-neutral during upgrade.
-    value.cost_weight = 0
+      if legacy == nil then return nil end
+      legacy.cost_weight = 0
+    end
+    if type(legacy.cost_weight) ~= 'number' or legacy.cost_weight ~= legacy.cost_weight or
+        legacy.cost_weight < 0 or legacy.cost_weight > 1 then return nil end
+    if type(legacy.minimum_routing_factor) ~= 'number' or
+        legacy.minimum_routing_factor ~= legacy.minimum_routing_factor or
+        legacy.minimum_routing_factor <= 0 or legacy.minimum_routing_factor > 1 then return nil end
+    value = legacy
+    value.economic_weight_pct = 45
+    value.health_weight_pct = 25
+    value.capacity_weight_pct = 20
+    value.priority_weight_pct = 10
   end
   value.ttft_target_ms = positive_integer(value.ttft_target_ms)
   if value.ttft_target_ms == nil then return nil end
   if type(value.ttft_weight) ~= 'number' or value.ttft_weight ~= value.ttft_weight or
       value.ttft_weight < 0 or value.ttft_weight > 1 then return nil end
-  if type(value.cost_weight) ~= 'number' or value.cost_weight ~= value.cost_weight or
-      value.cost_weight < 0 or value.cost_weight > 1 then return nil end
-  if type(value.minimum_routing_factor) ~= 'number' or
-      value.minimum_routing_factor ~= value.minimum_routing_factor or
-      value.minimum_routing_factor <= 0 or value.minimum_routing_factor > 1 then return nil end
+  value.economic_weight_pct = nonnegative_integer(value.economic_weight_pct)
+  value.health_weight_pct = nonnegative_integer(value.health_weight_pct)
+  value.capacity_weight_pct = nonnegative_integer(value.capacity_weight_pct)
+  value.priority_weight_pct = nonnegative_integer(value.priority_weight_pct)
+  if value.economic_weight_pct == nil or value.economic_weight_pct > 100 or
+      value.health_weight_pct == nil or value.health_weight_pct > 100 or
+      value.capacity_weight_pct == nil or value.capacity_weight_pct > 100 or
+      value.priority_weight_pct == nil or value.priority_weight_pct > 100 or
+      value.economic_weight_pct + value.health_weight_pct + value.capacity_weight_pct + value.priority_weight_pct ~= 100 then
+    return nil
+  end
   if type(value.ttft_ewma_alpha) ~= 'number' or
       value.ttft_ewma_alpha ~= value.ttft_ewma_alpha or
       value.ttft_ewma_alpha <= 0 or value.ttft_ewma_alpha > 1 then return nil end

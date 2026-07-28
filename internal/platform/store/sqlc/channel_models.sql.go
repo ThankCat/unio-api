@@ -46,6 +46,8 @@ SELECT
     c.rpd_limit AS channel_rpd_limit,
     c.concurrency_limit AS channel_concurrency_limit,
     c.upstream_bills_on_disconnect AS channel_bills_on_disconnect,
+    c.sticky_enabled AS channel_sticky_enabled,
+    c.sticky_ttl_ms AS channel_sticky_ttl_ms,
     cm.upstream_model,
     base.id AS model_price_id,
     base.currency AS base_currency,
@@ -207,6 +209,8 @@ type FindRouteCandidatesRow struct {
 	ChannelRpdLimit                 pgtype.Int4
 	ChannelConcurrencyLimit         pgtype.Int4
 	ChannelBillsOnDisconnect        bool
+	ChannelStickyEnabled            pgtype.Bool
+	ChannelStickyTtlMs              pgtype.Int8
 	UpstreamModel                   string
 	ModelPriceID                    int64
 	BaseCurrency                    string
@@ -286,6 +290,8 @@ func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidat
 			&i.ChannelRpdLimit,
 			&i.ChannelConcurrencyLimit,
 			&i.ChannelBillsOnDisconnect,
+			&i.ChannelStickyEnabled,
+			&i.ChannelStickyTtlMs,
 			&i.UpstreamModel,
 			&i.ModelPriceID,
 			&i.BaseCurrency,

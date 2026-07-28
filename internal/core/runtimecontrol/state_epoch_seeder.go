@@ -23,6 +23,7 @@ type StateEpochDB interface {
 
 type StateEpochStore interface {
 	StateIntegrity(ctx context.Context) (breakerstore.StateIntegritySnapshot, error)
+	ReconcileReadyStateEpoch(ctx context.Context, epoch string, revision int64) (bool, error)
 	RecoverRuntimeStateEpochFence(ctx context.Context, in breakerstore.StateEpochFenceInput) (breakerstore.StateEpochPrepareResult, error)
 	CommitRuntimeStateEpoch(ctx context.Context, in breakerstore.StateEpochFenceInput) (bool, error)
 }
@@ -120,6 +121,9 @@ func (c *StateEpochCoordinator) Ensure(ctx context.Context) (StateEpochEnsureRes
 		if errors.Is(err, pgx.ErrNoRows) {
 			if record.Value.State != StateEpochReady {
 				return StateEpochEnsureResult{}, epochConflict("recovering epoch has no durable operation")
+			}
+			if _, reconcileErr := c.store.ReconcileReadyStateEpoch(ctx, record.Value.Epoch, record.Revision); reconcileErr != nil {
+				return StateEpochEnsureResult{}, reconcileErr
 			}
 			marker, markerErr := c.store.StateIntegrity(ctx)
 			if markerErr != nil {

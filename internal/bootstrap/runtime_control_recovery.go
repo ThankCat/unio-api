@@ -17,6 +17,13 @@ import (
 
 const runtimeControlReconcileInterval = 5 * time.Second
 
+type runtimeControlReconcileMode bool
+
+const (
+	runtimeControlStrictMode       runtimeControlReconcileMode = false
+	runtimeControlStartupAuthority runtimeControlReconcileMode = true
+)
+
 // reconcileAllRuntimeControls performs one fail-closed reconciliation pass for both durable control
 // families. Provider routing operations are resolved before stable controls are restored.
 func reconcileAllRuntimeControls(
@@ -25,9 +32,13 @@ func reconcileAllRuntimeControls(
 	settings *appsettings.SettingsStore,
 	controls *breakerstore.Store,
 	telemetry *runtimeControlTelemetry,
+	mode runtimeControlReconcileMode,
 ) error {
 	observation := telemetry.capture(ctx, pool)
 	providerReconciler := runtimecontrol.NewProviderRoutingReconciler(pool, controls)
+	if mode == runtimeControlStartupAuthority {
+		providerReconciler.WithAuthoritativeStableRestore()
+	}
 	if telemetry != nil {
 		providerReconciler.WithObserver(telemetry)
 	}
@@ -39,13 +50,21 @@ func reconcileAllRuntimeControls(
 		telemetry.passFailed("runtime_operations", err, observation)
 		return err
 	}
-	if err := appsettings.RestoreCriticalRuntimeControlsObserved(
-		ctx, settings, controls, telemetry.criticalSettingReconciled,
-	); err != nil {
-		telemetry.passFailed("critical_settings", err, observation)
-		return err
+	var criticalErr error
+	if mode == runtimeControlStartupAuthority {
+		criticalErr = appsettings.ReconcileCriticalRuntimeControlsObserved(
+			ctx, settings, controls, telemetry.criticalSettingReconciled,
+		)
+	} else {
+		criticalErr = appsettings.RestoreCriticalRuntimeControlsObserved(
+			ctx, settings, controls, telemetry.criticalSettingReconciled,
+		)
 	}
-	if err := restoreChannelAdmissionControls(ctx, pool, controls, telemetry); err != nil {
+	if criticalErr != nil {
+		telemetry.passFailed("critical_settings", criticalErr, observation)
+		return criticalErr
+	}
+	if err := restoreChannelAdmissionControls(ctx, pool, controls, telemetry, mode); err != nil {
 		telemetry.passFailed("channel_admission", err, observation)
 		return err
 	}
@@ -79,7 +98,7 @@ func runRuntimeControlReconciler(
 					continue
 				}
 			}
-			if err := reconcileAllRuntimeControls(ctx, pool, settings, controls, telemetry); err != nil {
+			if err := reconcileAllRuntimeControls(ctx, pool, settings, controls, telemetry, runtimeControlStrictMode); err != nil {
 				continue
 			}
 			if len(afterSuccess) == 0 {
@@ -242,6 +261,7 @@ func restoreChannelAdmissionControls(
 	pool *pgxpool.Pool,
 	controls *breakerstore.Store,
 	telemetry *runtimeControlTelemetry,
+	mode runtimeControlReconcileMode,
 ) error {
 	rows, err := sqlc.New(pool).ListChannelsForRuntimeControlRestore(ctx)
 	if err != nil {
@@ -253,7 +273,12 @@ func restoreChannelAdmissionControls(
 			return err
 		}
 		target := controls.ChannelAdmissionControl(row.ID)
-		restored, err := controls.RestoreMissingControl(ctx, target, row.AdmissionLimitsRevision, payload)
+		var restored bool
+		if mode == runtimeControlStartupAuthority {
+			restored, err = controls.ReconcileControl(ctx, target, row.AdmissionLimitsRevision, payload)
+		} else {
+			restored, err = controls.RestoreMissingControl(ctx, target, row.AdmissionLimitsRevision, payload)
+		}
 		if err != nil {
 			return err
 		}

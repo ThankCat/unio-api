@@ -105,6 +105,8 @@ type Channel struct {
 	Status             string
 	Priority           int32
 	TimeoutMs          *int32
+	StickyEnabled      *bool
+	StickyTTLms        *int64
 	// RPMLimit/TPMLimit/RPDLimit 是渠道级限流上限（P2-8）：nil=继承渠道默认限流，0=不限，>0=具体上限。
 	RPMLimit *int64
 	TPMLimit *int64
@@ -181,14 +183,16 @@ type ListResult struct {
 //
 // AdapterKey 可选：留空时默认为 Protocol 同名的忠实透传 adapter（见 Create 注释）。
 type CreateInput struct {
-	ProviderID int64
-	Name       string
-	Protocol   string
-	AdapterKey string
-	Credential string
-	Status     string
-	Priority   int32
-	TimeoutMs  *int32
+	ProviderID    int64
+	Name          string
+	Protocol      string
+	AdapterKey    string
+	Credential    string
+	Status        string
+	Priority      int32
+	TimeoutMs     *int32
+	StickyEnabled *bool
+	StickyTTLms   *int64
 	// RateLimitsProvided=true 时按 RPM/TPM/RPD/并发设置渠道级限流；rate 的 nil 继承渠道默认限流，
 	// concurrency 的 nil 继承并发默认 channel_limit，0=不限，>0=具体上限。
 	RateLimitsProvided bool
@@ -202,12 +206,14 @@ type CreateInput struct {
 
 // UpdateInput 是更新 channel 的入参；protocol、adapter_key 与凭据不在此修改。
 type UpdateInput struct {
-	ID         int64
-	Name       string
-	ProviderID int64
-	Status     string
-	Priority   int32
-	TimeoutMs  *int32
+	ID            int64
+	Name          string
+	ProviderID    int64
+	Status        string
+	Priority      int32
+	TimeoutMs     *int32
+	StickyEnabled *bool
+	StickyTTLms   *int64
 	// RateLimitsProvided=true 时按 RPM/TPM/RPD/并发 原子设置渠道级限流。
 	RateLimitsProvided bool
 	RPMLimit           *int64
@@ -406,10 +412,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	if err := validateStatus(status); err != nil {
 		return Channel{}, err
 	}
-	if in.Priority < 0 {
-		return Channel{}, invalidArgument("priority", "priority must be >= 0")
+	if err := validatePriority(in.Priority); err != nil {
+		return Channel{}, err
 	}
 	if err := validateTimeout(in.TimeoutMs); err != nil {
+		return Channel{}, err
+	}
+	if err := validateStickyPolicy(in.StickyEnabled, in.StickyTTLms); err != nil {
 		return Channel{}, err
 	}
 	if in.RateLimitsProvided {
@@ -474,6 +483,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		RpdLimit:                  rateLimitParam(limits.RPD),
 		ConcurrencyLimit:          rateLimitParam(limits.Concurrency),
 		UpstreamBillsOnDisconnect: billsOnDisconnect,
+		StickyEnabled:             boolParam(in.StickyEnabled),
+		StickyTtlMs:               nullableInt8Param(in.StickyTTLms),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -507,10 +518,13 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	if err := validateStatus(status); err != nil {
 		return Channel{}, err
 	}
-	if in.Priority < 0 {
-		return Channel{}, invalidArgument("priority", "priority must be >= 0")
+	if err := validatePriority(in.Priority); err != nil {
+		return Channel{}, err
 	}
 	if err := validateTimeout(in.TimeoutMs); err != nil {
+		return Channel{}, err
+	}
+	if err := validateStickyPolicy(in.StickyEnabled, in.StickyTTLms); err != nil {
 		return Channel{}, err
 	}
 
@@ -552,11 +566,13 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	}
 
 	row, err := s.store.UpdateChannel(ctx, sqlc.UpdateChannelParams{
-		ID:        in.ID,
-		Name:      name,
-		Status:    status,
-		Priority:  in.Priority,
-		TimeoutMs: timeoutParam(in.TimeoutMs),
+		ID:            in.ID,
+		Name:          name,
+		Status:        status,
+		Priority:      in.Priority,
+		TimeoutMs:     timeoutParam(in.TimeoutMs),
+		StickyEnabled: boolParam(in.StickyEnabled),
+		StickyTtlMs:   nullableInt8Param(in.StickyTTLms),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -627,11 +643,13 @@ func (s *Service) updateWithPublishedAdmissionLimits(
 		BusinessCommit: func(ctx context.Context, tx pgx.Tx) error {
 			qtx := sqlc.New(tx)
 			row, updateErr := qtx.UpdateChannel(ctx, sqlc.UpdateChannelParams{
-				ID:        in.ID,
-				Name:      strings.TrimSpace(in.Name),
-				Status:    strings.TrimSpace(in.Status),
-				Priority:  in.Priority,
-				TimeoutMs: timeoutParam(in.TimeoutMs),
+				ID:            in.ID,
+				Name:          strings.TrimSpace(in.Name),
+				Status:        strings.TrimSpace(in.Status),
+				Priority:      in.Priority,
+				TimeoutMs:     timeoutParam(in.TimeoutMs),
+				StickyEnabled: boolParam(in.StickyEnabled),
+				StickyTtlMs:   nullableInt8Param(in.StickyTTLms),
 			})
 			if updateErr != nil {
 				return channelUpdateError(updateErr)
@@ -853,6 +871,8 @@ func toChannel(c sqlc.Channel) Channel {
 		RPDLimit:                rateLimitResult(c.RpdLimit),
 		ConcurrencyLimit:        rateLimitResult(c.ConcurrencyLimit),
 		BillsOnDisconnect:       c.UpstreamBillsOnDisconnect,
+		StickyEnabled:           boolResult(c.StickyEnabled),
+		StickyTTLms:             int8Result(c.StickyTtlMs),
 		CreatedAt:               c.CreatedAt.Time,
 		UpdatedAt:               c.UpdatedAt.Time,
 		ArchivedAt:              timestampResult(c.ArchivedAt),
@@ -902,6 +922,8 @@ func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 		RPDLimit:                rateLimitResult(c.RpdLimit),
 		ConcurrencyLimit:        rateLimitResult(c.ConcurrencyLimit),
 		BillsOnDisconnect:       c.UpstreamBillsOnDisconnect,
+		StickyEnabled:           boolResult(c.StickyEnabled),
+		StickyTTLms:             int8Result(c.StickyTtlMs),
 		CreatedAt:               c.CreatedAt.Time,
 		UpdatedAt:               c.UpdatedAt.Time,
 
@@ -954,6 +976,54 @@ func validateChannelRateLimits(rpm, tpm, rpd, concurrency *int64) error {
 		}
 	}
 	return nil
+}
+
+func validatePriority(priority int32) error {
+	if priority < 0 || priority > 100 || priority%10 != 0 {
+		return invalidArgument("priority", "priority must be one of 0, 10, ..., 100")
+	}
+	return nil
+}
+
+func validateStickyPolicy(enabled *bool, ttlMs *int64) error {
+	if enabled == nil {
+		if ttlMs != nil {
+			return invalidArgument("sticky_ttl_ms", "sticky_ttl_ms must be null when sticky_enabled inherits the system default")
+		}
+		return nil
+	}
+	if !*enabled {
+		if ttlMs != nil {
+			return invalidArgument("sticky_ttl_ms", "sticky_ttl_ms must be null when sticky is disabled")
+		}
+		return nil
+	}
+	if ttlMs == nil || *ttlMs <= 0 {
+		return invalidArgument("sticky_ttl_ms", "sticky_ttl_ms must be > 0 when sticky is enabled")
+	}
+	return nil
+}
+
+func boolParam(value *bool) pgtype.Bool {
+	if value == nil {
+		return pgtype.Bool{}
+	}
+	return pgtype.Bool{Bool: *value, Valid: true}
+}
+
+func nullableInt8Param(value *int64) pgtype.Int8 {
+	if value == nil {
+		return pgtype.Int8{}
+	}
+	return pgtype.Int8{Int64: *value, Valid: true}
+}
+
+func int8Result(value pgtype.Int8) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	out := value.Int64
+	return &out
 }
 
 // textParam 把空串转成 NULL（不过滤），非空转成有值 pgtype.Text。

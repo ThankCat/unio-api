@@ -17,7 +17,6 @@ func TestExecutorPrepareCandidatesWithoutRuntimeUsesNeutralSQLOrder(t *testing.T
 	executor := NewExecutor(candidateCapabilityRegistry{
 		allowed: map[int64]bool{1: true, 2: true, 3: true},
 	})
-	executor.SetRandomSource(func() float64 { return 0.5 })
 
 	plan, err := executor.PrepareCandidates(context.Background(), PrepareCandidatesParams{
 		Protocol: "openai",
@@ -51,7 +50,7 @@ func TestExecutorPrepareCandidatesWithoutRuntimeUsesNeutralSQLOrder(t *testing.T
 		}
 	}
 	for _, candidate := range plan.Candidates {
-		if candidate.Balance.Weight != 1 || !candidate.Balance.CapacityUnknown {
+		if candidate.Balance.Weight != 100 || candidate.Balance.AlgorithmVersion != "objective_v1" || !candidate.Balance.CapacityUnknown {
 			t.Fatalf("expected neutral unknown runtime score, got %+v", candidate.Balance)
 		}
 	}
@@ -70,10 +69,10 @@ func TestBalancedCostFactorPrefersCheaperCandidateAtEqualHealth(t *testing.T) {
 	}
 	out, scores, _ := orderBalancedCandidates(
 		context.Background(), []routing.ChatRouteCandidate{expensive, cheap}, "balanced",
-		capacity, func() float64 { return 0.5 },
-		BalanceConfig{CostWeight: 0.5, MinimumRoutingFactor: 0.05},
+		capacity,
+		BalanceConfig{},
 	)
-	if math.Abs(scores[1].CostFactor-0.5) > 1e-12 || math.Abs(scores[2].CostFactor-0.9) > 1e-12 {
+	if math.Abs(scores[1].EconomicScore-0) > 1e-12 || math.Abs(scores[2].EconomicScore-80) > 1e-12 {
 		t.Fatalf("unexpected cost factors: expensive=%+v cheap=%+v", scores[1], scores[2])
 	}
 	if scores[2].Weight <= scores[1].Weight || out[0].Channel.ID != cheap.Channel.ID {
@@ -81,7 +80,7 @@ func TestBalancedCostFactorPrefersCheaperCandidateAtEqualHealth(t *testing.T) {
 	}
 }
 
-func TestBalancedHealthStillDominatesCost(t *testing.T) {
+func TestBalancedConfiguredEconomicsCanDominateHealth(t *testing.T) {
 	cheapUnhealthy := candidateRoute(1, "openai")
 	cheapUnhealthy.CostRatio = 0
 	expensiveHealthy := candidateRoute(2, "openai")
@@ -95,20 +94,20 @@ func TestBalancedHealthStillDominatesCost(t *testing.T) {
 				errorRate = 0.8
 			}
 			return ChannelCapacity{
-				Concurrency: CapacitySignal{Limit: 0, Known: true},
-				TPM:         CapacitySignal{Limit: 0, Known: true},
-				ErrorRate:   errorRate,
+				Concurrency:  CapacitySignal{Limit: 0, Known: true},
+				TPM:          CapacitySignal{Limit: 0, Known: true},
+				ErrorRate:    errorRate,
+				ErrorSamples: 10,
 			}, nil
 		},
-		func() float64 { return 0.6 },
-		BalanceConfig{CostWeight: 0.5, MinimumRoutingFactor: 0.05},
+		BalanceConfig{},
 	)
-	if scores[1].Weight >= scores[2].Weight || out[0].Channel.ID != expensiveHealthy.Channel.ID {
-		t.Fatalf("cost must not mask unhealthy runtime signals: order=%v scores=%+v", []int64{out[0].Channel.ID, out[1].Channel.ID}, scores)
+	if scores[1].Weight <= scores[2].Weight || out[0].Channel.ID != cheapUnhealthy.Channel.ID {
+		t.Fatalf("45%% economic weight should win this configured tradeoff: order=%v scores=%+v", []int64{out[0].Channel.ID, out[1].Channel.ID}, scores)
 	}
 }
 
-func TestBalancedCostWeightZeroPreservesLegacyWeightAndOrder(t *testing.T) {
+func TestBalancedZeroEconomicWeightUsesOtherDimensions(t *testing.T) {
 	first := candidateRoute(1, "openai")
 	first.CostRatio = 1
 	second := candidateRoute(2, "openai")
@@ -123,15 +122,15 @@ func TestBalancedCostWeightZeroPreservesLegacyWeightAndOrder(t *testing.T) {
 
 	out, scores, _ := orderBalancedCandidates(
 		context.Background(), []routing.ChatRouteCandidate{first, second}, "balanced",
-		capacity, func() float64 { return 0.2 },
-		BalanceConfig{TTFTTargetMs: 2000, TTFTWeight: 0.35, CostWeight: 0, MinimumRoutingFactor: 0.05},
+		capacity,
+		BalanceConfig{TTFTTargetMs: 2000, TTFTWeight: 0.35, EconomicWeightPct: 0, HealthWeightPct: 50, CapacityWeightPct: 40, PriorityWeightPct: 10},
 	)
 	if out[0].Channel.ID != first.Channel.ID || out[1].Channel.ID != second.Channel.ID {
-		t.Fatalf("CostWeight=0 changed legacy order: %v", []int64{out[0].Channel.ID, out[1].Channel.ID})
+		t.Fatalf("equal non-economic scores must use channel ID order: %v", []int64{out[0].Channel.ID, out[1].Channel.ID})
 	}
 	for _, channelID := range []int64{first.Channel.ID, second.Channel.ID} {
-		if math.Abs(scores[channelID].Weight-0.495) > 1e-12 || scores[channelID].CostFactor != 1 {
-			t.Fatalf("CostWeight=0 changed legacy score for channel %d: %+v", channelID, scores[channelID])
+		if math.Abs(scores[channelID].Weight-73) > 1e-12 {
+			t.Fatalf("unexpected zero-economic score for channel %d: %+v", channelID, scores[channelID])
 		}
 	}
 }
@@ -143,13 +142,13 @@ func TestFixedModeRecordsNeutralCostWithoutChangingOrder(t *testing.T) {
 	second.CostRatio = 0
 	out, scores, _ := orderBalancedCandidates(
 		context.Background(), []routing.ChatRouteCandidate{first, second}, "fixed", nil,
-		func() float64 { return 0.99 }, BalanceConfig{CostWeight: 1},
+		BalanceConfig{},
 	)
 	if out[0].Channel.ID != first.Channel.ID || out[1].Channel.ID != second.Channel.ID {
 		t.Fatalf("fixed order changed: %v", []int64{out[0].Channel.ID, out[1].Channel.ID})
 	}
-	if scores[first.Channel.ID].CostFactor != 1 || scores[first.Channel.ID].CostRatio != 1 || scores[first.Channel.ID].CostWeight != 1 {
-		t.Fatalf("fixed score must record neutral cost facts: %+v", scores[first.Channel.ID])
+	if scores[first.Channel.ID].EconomicScore != 0 || scores[first.Channel.ID].FinalScore != 55 {
+		t.Fatalf("fixed mode must preserve order while exposing objective facts: %+v", scores[first.Channel.ID])
 	}
 }
 
@@ -160,7 +159,7 @@ func TestCostAwareOrderStillAllowsStickyPostOrderPin(t *testing.T) {
 	cheap.CostRatio = 0
 	ordered, scores, _ := orderBalancedCandidates(
 		context.Background(), []routing.ChatRouteCandidate{expensive, cheap}, "balanced", nil,
-		func() float64 { return 0.5 }, BalanceConfig{CostWeight: 0.5},
+		BalanceConfig{},
 	)
 	if ordered[0].Channel.ID != cheap.Channel.ID {
 		t.Fatalf("test setup expected cheap candidate first, got %d", ordered[0].Channel.ID)
@@ -182,30 +181,17 @@ func TestBalancedAllUnknownKeepsCostFactor(t *testing.T) {
 	cheap.CostRatio = 0
 	_, scores, _ := orderBalancedCandidates(
 		context.Background(), []routing.ChatRouteCandidate{expensive, cheap}, "balanced", nil,
-		func() float64 { return 0 }, BalanceConfig{CostWeight: 0.5},
+		BalanceConfig{},
 	)
-	if scores[expensive.Channel.ID].Weight != 0.5 || scores[cheap.Channel.ID].Weight != 1 {
+	if scores[expensive.Channel.ID].Weight != 55 || scores[cheap.Channel.ID].Weight != 100 {
 		t.Fatalf("all-unknown neutral capacity overwrote cost factors: %+v", scores)
 	}
 }
 
-func TestApplyCostFactorClampsRatioAndFallsBackOnInvalidWeight(t *testing.T) {
-	clamped := ApplyCostFactor(
-		BalanceScore{Weight: 0.8}, 2,
-		BalanceConfig{CostWeight: 1, MinimumRoutingFactor: 0.05},
-	)
-	if clamped.CostRatio != 2 || clamped.CostFactor != 0.05 || math.Abs(clamped.Weight-0.04) > 1e-12 {
-		t.Fatalf("unexpected clamped cost score: %+v", clamped)
-	}
-
-	for _, invalidWeight := range []float64{math.NaN(), -0.1, 1.1} {
-		score := ApplyCostFactor(
-			BalanceScore{Weight: 0.8}, 1,
-			BalanceConfig{CostWeight: invalidWeight, MinimumRoutingFactor: 0.05},
-		)
-		if score.CostWeight != 0 || score.CostFactor != 1 || score.Weight != 0.8 {
-			t.Fatalf("invalid cost weight %v must preserve legacy behavior: %+v", invalidWeight, score)
-		}
+func TestApplyObjectiveFactorsClampsCostRatio(t *testing.T) {
+	clamped := ApplyObjectiveFactors(BalanceScore{CapacityScore: 100, HealthScore: 100}, 2, 0, BalanceConfig{})
+	if clamped.CostRatio != 2 || clamped.EconomicScore != 0 || math.Abs(clamped.FinalScore-55) > 1e-12 {
+		t.Fatalf("unexpected clamped objective score: %+v", clamped)
 	}
 }
 
@@ -218,12 +204,12 @@ func TestBalancedScoreUsesCapacityErrorRateAndStreamTTFT(t *testing.T) {
 		TTFTSamples:  8,
 		RuntimeKnown: true,
 	}, BalanceConfig{
-		Revision: 9, TTFTTargetMs: 2000, TTFTWeight: 0.35, MinimumRoutingFactor: 0.05,
+		Revision: 9, TTFTTargetMs: 2000, TTFTWeight: 0.35,
 	})
-	// capacity=min(0.8,0.75)=0.75; latency=0.5; factor=0.8*(1-0.35*0.5)=0.66.
-	if math.Abs(score.CapacityScore-0.75) > 1e-9 || math.Abs(score.ErrorRate-0.2) > 1e-9 ||
+	// capacity=min(0.8,0.75)=75; latency=0.5; health=0.8*(1-0.35*0.5)*100=66.
+	if math.Abs(score.CapacityScore-75) > 1e-9 || math.Abs(score.ErrorRate-0.2) > 1e-9 ||
 		math.Abs(score.LatencyPenalty-0.5) > 1e-9 || math.Abs(score.RoutingFactor-0.66) > 1e-9 ||
-		math.Abs(score.Weight-0.495) > 1e-9 || score.RoutingBalanceRevision != 9 ||
+		math.Abs(score.HealthScore-66) > 1e-9 || score.Weight != 0 || score.RoutingBalanceRevision != 9 ||
 		score.TTFTSampleSource != "stream_only" {
 		t.Fatalf("unexpected three-factor score: %+v", score)
 	}
@@ -231,13 +217,13 @@ func TestBalancedScoreUsesCapacityErrorRateAndStreamTTFT(t *testing.T) {
 	noTTFT := ScoreBalanceCandidateWithConfig(ChannelCapacity{
 		Concurrency: CapacitySignal{Limit: 0, Known: true}, TPM: CapacitySignal{Limit: 0, Known: true},
 		RuntimeKnown: true,
-	}, BalanceConfig{TTFTTargetMs: 2000, TTFTWeight: 0.35, MinimumRoutingFactor: 0.05})
-	if noTTFT.LatencyPenalty != 0 || noTTFT.Weight != 1 || noTTFT.CostFactor != 1 {
+	}, BalanceConfig{TTFTTargetMs: 2000, TTFTWeight: 0.35})
+	if noTTFT.LatencyPenalty != 0 || noTTFT.HealthScore != 100 || noTTFT.CapacityScore != 100 {
 		t.Fatalf("no stream samples must keep latency neutral: %+v", noTTFT)
 	}
 }
 
-func TestBalancedHalfOpenDoesNotEnterWeightedRandom(t *testing.T) {
+func TestBalancedHalfOpenStaysBehindObjectiveCandidates(t *testing.T) {
 	in := []routing.ChatRouteCandidate{candidateRoute(1, "openai"), candidateRoute(2, "openai"), candidateRoute(3, "openai")}
 	out, scores, _ := orderBalancedCandidates(context.Background(), in, "balanced",
 		func(_ context.Context, candidate routing.ChatRouteCandidate) (ChannelCapacity, error) {
@@ -245,26 +231,75 @@ func TestBalancedHalfOpenDoesNotEnterWeightedRandom(t *testing.T) {
 				Concurrency: CapacitySignal{Limit: 0, Known: true}, TPM: CapacitySignal{Limit: 0, Known: true},
 				HalfOpen: candidate.Channel.ID == 1, RuntimeKnown: true,
 			}, nil
-		}, func() float64 { return 0 }, BalanceConfig{
-			TTFTTargetMs: 2000, TTFTWeight: 0.35, MinimumRoutingFactor: 0.05,
+		}, BalanceConfig{
+			TTFTTargetMs: 2000, TTFTWeight: 0.35,
 		})
 	if len(out) != 3 || out[2].Channel.ID != 1 || scores[1].Weight != 0 || scores[1].RoutingFactor != 0 {
-		t.Fatalf("half-open candidate must be outside weighted random: order=%v score=%+v",
+		t.Fatalf("half-open candidate must stay behind objective candidates: order=%v score=%+v",
 			[]int64{out[0].Channel.ID, out[1].Channel.ID, out[2].Channel.ID}, scores[1])
 	}
 }
 
-func TestBalancedAllZeroChoosesLeastPressureThenKeepsFallback(t *testing.T) {
+func TestBalancedAllZeroStillUsesDeterministicScoreTieBreak(t *testing.T) {
 	in := []routing.ChatRouteCandidate{candidateRoute(1, "openai"), candidateRoute(2, "openai")}
 	out, _, allZero := orderBalancedCandidates(context.Background(), in, "balanced", func(_ context.Context, c routing.ChatRouteCandidate) (ChannelCapacity, error) {
 		if c.Channel.ID == 1 {
 			return ChannelCapacity{Concurrency: CapacitySignal{Used: 10, Limit: 10, Known: true}, TPM: CapacitySignal{Used: 90, Limit: 100, Known: true}}, nil
 		}
 		return ChannelCapacity{Concurrency: CapacitySignal{Used: 10, Limit: 10, Known: true}, TPM: CapacitySignal{Used: 20, Limit: 100, Known: true}}, nil
-	}, func() float64 { return 0 }, BalanceConfig{})
-	if !allZero || len(out) != 2 || out[0].Channel.ID != 2 {
-		t.Fatalf("expected least-pressure channel 2 first with full fallback, allZero=%v order=%v", allZero, []int64{out[0].Channel.ID, out[1].Channel.ID})
+	}, BalanceConfig{})
+	if !allZero || len(out) != 2 || out[0].Channel.ID != 1 {
+		t.Fatalf("expected deterministic channel-ID tie break with full fallback, allZero=%v order=%v", allZero, []int64{out[0].Channel.ID, out[1].Channel.ID})
 	}
+}
+
+func TestBalancedOrderUsesDescendingObjectiveScore(t *testing.T) {
+	in := []routing.ChatRouteCandidate{candidateRoute(3, "openai"), candidateRoute(1, "openai"), candidateRoute(2, "openai")}
+	capacity := func(_ context.Context, candidate routing.ChatRouteCandidate) (ChannelCapacity, error) {
+		return ChannelCapacity{
+			Concurrency:  CapacitySignal{Used: candidate.Channel.ID, Limit: 10, Known: true},
+			TPM:          CapacitySignal{Limit: 0, Known: true},
+			RuntimeKnown: true,
+		}, nil
+	}
+	ordered, _, _ := orderBalancedCandidates(context.Background(), in, "balanced", capacity, BalanceConfig{})
+	want := []int64{1, 2, 3}
+	for index, channelID := range want {
+		if ordered[index].Channel.ID != channelID {
+			t.Fatalf("unexpected objective order: got=%v want=%v", candidateIDs(ordered), want)
+		}
+	}
+}
+
+func TestBalancedTieBreakUsesPriorityThenChannelID(t *testing.T) {
+	highPriorityLargeID := candidateRoute(9, "openai")
+	highPriorityLargeID.Priority = 10
+	lowPrioritySmallID := candidateRoute(1, "openai")
+	lowPrioritySmallID.Priority = 20
+	highPrioritySmallID := candidateRoute(2, "openai")
+	highPrioritySmallID.Priority = 10
+
+	out, _, _ := orderBalancedCandidates(
+		context.Background(),
+		[]routing.ChatRouteCandidate{highPriorityLargeID, lowPrioritySmallID, highPrioritySmallID},
+		"balanced",
+		nil,
+		BalanceConfig{EconomicWeightPct: 45, HealthWeightPct: 25, CapacityWeightPct: 30},
+	)
+	want := []int64{2, 9, 1}
+	for index, channelID := range want {
+		if out[index].Channel.ID != channelID {
+			t.Fatalf("unexpected deterministic tie break: got=%v want=%v", candidateIDs(out), want)
+		}
+	}
+}
+
+func candidateIDs(candidates []routing.ChatRouteCandidate) []int64 {
+	ids := make([]int64, len(candidates))
+	for index, candidate := range candidates {
+		ids[index] = candidate.Channel.ID
+	}
+	return ids
 }
 
 type candidateCapabilityRegistry struct {

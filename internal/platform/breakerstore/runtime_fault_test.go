@@ -377,6 +377,67 @@ func TestRuntimeFaultClearCommitValidatesAllFiveCriticalControlProofs(t *testing
 	}
 }
 
+func TestReconcileProviderControlPreservesBreakerState(t *testing.T) {
+	store, client, _ := newTestStore(t)
+	ctx := context.Background()
+	providerID := int64(9091)
+	key := store.keys.provider(providerID)
+	if err := client.HSet(ctx, key,
+		"control_present", "1",
+		"origin_revision", "8",
+		"status_revision", "9",
+		"effective_status", "disabled",
+		"origin_revision_state", "pending",
+		"status_revision_state", "pending",
+		"pending_origin_revision", "9",
+		"origin_fence_token", "old-origin",
+		"origin_payload_hash", HashPayload("old-origin"),
+		"pending_status_revision", "10",
+		"pending_effective_status", "archived",
+		"status_fence_token", "old-status",
+		"status_payload_hash", HashPayload("old-status"),
+		"origin_fence_generation", "4",
+		"status_fence_generation", "5",
+		"state", "open",
+		"state_generation", "7",
+		"eligible_failures", "6",
+		"open_level", "2",
+	).Err(); err != nil {
+		t.Fatalf("seed provider drift: %v", err)
+	}
+
+	changed, err := store.ReconcileProviderControl(ctx, providerID, 2, 3, "enabled")
+	if err != nil || !changed {
+		t.Fatalf("reconcile provider control: changed=%v err=%v", changed, err)
+	}
+	fields, err := client.HMGet(ctx, key,
+		"origin_revision", "status_revision", "effective_status",
+		"origin_revision_state", "status_revision_state",
+		"pending_origin_revision", "pending_status_revision",
+		"origin_fence_generation", "status_fence_generation",
+		"state", "state_generation", "eligible_failures", "open_level",
+	).Result()
+	if err != nil {
+		t.Fatalf("read reconciled provider: %v", err)
+	}
+	want := []interface{}{"2", "3", "enabled", "active", "active", nil, nil, "5", "6", "open", "7", "6", "2"}
+	for index := range want {
+		if fields[index] != want[index] {
+			t.Fatalf("provider field %d = %#v, want %#v (all=%#v)", index, fields[index], want[index], fields)
+		}
+	}
+	if err := client.Set(ctx, key, "wrong-type", 0).Err(); err != nil {
+		t.Fatalf("seed wrong-type provider control: %v", err)
+	}
+	changed, err = store.ReconcileProviderControl(ctx, providerID, 2, 3, "enabled")
+	if err != nil || !changed {
+		t.Fatalf("reconcile wrong-type provider control: changed=%v err=%v", changed, err)
+	}
+	if typ := client.Type(ctx, key).Val(); typ != "hash" {
+		t.Fatalf("wrong-type provider control was not rebuilt: type=%q", typ)
+	}
+}
+
 func testRuntimeReadinessInput() RuntimeReadinessInput {
 	return RuntimeReadinessInput{
 		Epoch: testAttemptIntegrityEpoch, EpochRevision: testAttemptIntegrityRevision,

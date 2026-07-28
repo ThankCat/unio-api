@@ -14,6 +14,7 @@ import (
 
 type ProviderRoutingRecoveryAPI interface {
 	RestoreMissingProviderControl(context.Context, int64, int64, int64, string) (bool, error)
+	ReconcileProviderControl(context.Context, int64, int64, int64, string) (bool, error)
 	PrepareOriginRevision(context.Context, int64, int64, int64, string, string) (breakerstore.FenceResult, error)
 	CommitOriginRevision(context.Context, int64, string, string) (breakerstore.FenceResult, error)
 	AbortOriginRevision(context.Context, int64, string, string) (breakerstore.FenceResult, error)
@@ -28,9 +29,10 @@ type ProviderReconcileObserver interface {
 }
 
 type ProviderRoutingReconciler struct {
-	pool     *pgxpool.Pool
-	control  ProviderRoutingRecoveryAPI
-	observer ProviderReconcileObserver
+	pool                       *pgxpool.Pool
+	control                    ProviderRoutingRecoveryAPI
+	observer                   ProviderReconcileObserver
+	authoritativeStableRestore bool
 }
 
 func NewProviderRoutingReconciler(pool *pgxpool.Pool, control ProviderRoutingRecoveryAPI) *ProviderRoutingReconciler {
@@ -42,6 +44,13 @@ func NewProviderRoutingReconciler(pool *pgxpool.Pool, control ProviderRoutingRec
 
 func (reconciler *ProviderRoutingReconciler) WithObserver(observer ProviderReconcileObserver) *ProviderRoutingReconciler {
 	reconciler.observer = observer
+	return reconciler
+}
+
+// WithAuthoritativeStableRestore enables startup-only PostgreSQL-authoritative repair after all
+// durable Provider operations have been reconciled. Periodic reconciliation must not enable it.
+func (reconciler *ProviderRoutingReconciler) WithAuthoritativeStableRestore() *ProviderRoutingReconciler {
+	reconciler.authoritativeStableRestore = true
 	return reconciler
 }
 
@@ -130,7 +139,12 @@ func (reconciler *ProviderRoutingReconciler) restoreStableControls(ctx context.C
 		if err := rows.Scan(&providerID, &originRevision, &statusRevision, &status); err != nil {
 			return err
 		}
-		restored, err := reconciler.control.RestoreMissingProviderControl(ctx, providerID, originRevision, statusRevision, status)
+		var restored bool
+		if reconciler.authoritativeStableRestore {
+			restored, err = reconciler.control.ReconcileProviderControl(ctx, providerID, originRevision, statusRevision, status)
+		} else {
+			restored, err = reconciler.control.RestoreMissingProviderControl(ctx, providerID, originRevision, statusRevision, status)
+		}
 		if err != nil {
 			return err
 		}

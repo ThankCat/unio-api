@@ -143,6 +143,35 @@ func TestAcquireAttemptHeadWaitDoesNotRetryBreakerDenial(t *testing.T) {
 	}
 }
 
+func TestAllowStickyHeadWaitOnlyForPinnedFirstCandidate(t *testing.T) {
+	store := newFakeStickyStore()
+	router := NewStickyRouter(store)
+	session := router.Resolve(context.Background(), stickyResolveParams("permit-wait"))
+	session.BindSuccess(context.Background(), stickyCandidate(7, nil, nil))
+	pinned := router.Resolve(context.Background(), stickyResolveParams("permit-wait"))
+
+	tests := []struct {
+		name      string
+		sticky    *StickySession
+		index     int
+		channelID int64
+		want      bool
+	}{
+		{name: "pinned first candidate", sticky: pinned, index: 0, channelID: 7, want: true},
+		{name: "ordinary scored first candidate", sticky: &StickySession{}, index: 0, channelID: 7},
+		{name: "different first candidate", sticky: pinned, index: 0, channelID: 8},
+		{name: "pinned fallback candidate", sticky: pinned, index: 1, channelID: 7},
+		{name: "nil sticky", index: 0, channelID: 7},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := allowStickyHeadWait(test.sticky, test.index, test.channelID); got != test.want {
+				t.Fatalf("allowStickyHeadWait()=%v want=%v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestSampleHeadWaitIncludesJitterBound(t *testing.T) {
 	store := newFakeStickyStore()
 	router := NewStickyRouter(store)
@@ -165,7 +194,7 @@ func TestApplyPlanOutcomeClearsOnPinLost(t *testing.T) {
 	store := newFakeStickyStore()
 	router := NewStickyRouter(store)
 	session := router.Resolve(context.Background(), stickyResolveParams("sess"))
-	session.BindSuccess(context.Background(), 7)
+	session.BindSuccess(context.Background(), stickyCandidate(7, nil, nil))
 
 	second := router.Resolve(context.Background(), stickyResolveParams("sess"))
 	if second.BoundChannelID() != 7 {

@@ -1,0 +1,1396 @@
+{
+  "test_user": {
+    "email": "dev@unio.local",
+    "display_name": "Dev User",
+    "password_hash": "seed-placeholder-not-a-real-hash",
+    "credit_usd": "100"
+  },
+  "providers": [
+    {
+      "slug": "starapi",
+      "name": "Star API",
+      "origin": "https://open.codex521.cc",
+      "status": "enabled"
+    },
+    {
+      "slug": "zzapi",
+      "name": "ZZ API",
+      "origin": "https://zz1cc.cc.cd",
+      "status": "enabled"
+    }
+  ],
+  "channels": [
+    {
+      "key": "starapi_openai_0.10",
+      "provider": "starapi",
+      "name": "starapi_openai_0.10",
+      "protocol": "openai",
+      "adapter_key": "openai",
+      "credential": "sk-343e…REPLACE_ME",
+      "status": "enabled",
+      "priority": 0,
+      "timeout_ms": 200000,
+      "rpm_limit": 500,
+      "tpm_limit": 350000,
+      "rpd_limit": 20000,
+      "concurrency_limit": 50,
+      "sticky_enabled": null,
+      "sticky_ttl_ms": null,
+      "upstream_bills_on_disconnect": false,
+      "cost_multiplier": "0.1000000000",
+      "recharge_factor": "1.0000000000"
+    },
+    {
+      "key": "starapi_openai_0.16",
+      "provider": "starapi",
+      "name": "starapi_openai_0.16",
+      "protocol": "openai",
+      "adapter_key": "openai",
+      "credential": "sk-3326…REPLACE_ME",
+      "status": "enabled",
+      "priority": 0,
+      "timeout_ms": 200000,
+      "rpm_limit": 500,
+      "tpm_limit": 350000,
+      "rpd_limit": 20000,
+      "concurrency_limit": 20,
+      "sticky_enabled": null,
+      "sticky_ttl_ms": null,
+      "upstream_bills_on_disconnect": false,
+      "cost_multiplier": "0.1600000000",
+      "recharge_factor": "1.0000000000"
+    },
+    {
+      "key": "zzapi_openai_0.08",
+      "provider": "zzapi",
+      "name": "zzapi_openai_0.08",
+      "protocol": "openai",
+      "adapter_key": "openai",
+      "credential": "sk-frh8…REPLACE_ME",
+      "status": "enabled",
+      "priority": 0,
+      "timeout_ms": 200000,
+      "rpm_limit": 640,
+      "tpm_limit": 258000,
+      "rpd_limit": 13000,
+      "concurrency_limit": 20,
+      "sticky_enabled": null,
+      "sticky_ttl_ms": null,
+      "upstream_bills_on_disconnect": false,
+      "cost_multiplier": "0.0800000000",
+      "recharge_factor": "1.0000000000"
+    },
+    {
+      "key": "zzapi_openai_0.196",
+      "provider": "zzapi",
+      "name": "zzapi_openai_0.196",
+      "protocol": "openai",
+      "adapter_key": "openai",
+      "credential": "sk-z7vK…REPLACE_ME",
+      "status": "enabled",
+      "priority": 0,
+      "timeout_ms": 200000,
+      "rpm_limit": 960,
+      "tpm_limit": 386000,
+      "rpd_limit": 19000,
+      "concurrency_limit": 20,
+      "sticky_enabled": null,
+      "sticky_ttl_ms": null,
+      "upstream_bills_on_disconnect": false,
+      "cost_multiplier": "0.1960000000",
+      "recharge_factor": "1.0000000000"
+    }
+  ],
+  "models": [
+    {
+      "model_id": "gpt-5.4",
+      "display_name": "GPT-5.4",
+      "owned_by": "openai",
+      "status": "enabled",
+      "context_window_tokens": 1050000,
+      "max_output_tokens": 128000,
+      "input_price_usd_per_million_tokens": "2.5000000000",
+      "cache_read_price_usd_per_million_tokens": "0.2500000000",
+      "output_price_usd_per_million_tokens": "15.0000000000",
+      "long_context_enabled": true,
+      "long_context_threshold": 272000,
+      "long_context_input_multiplier": "2.0000000000",
+      "long_context_output_multiplier": "1.5000000000",
+      "release_date": "2026-03-05",
+      "source": "catalog"
+    },
+    {
+      "model_id": "gpt-5.4-mini",
+      "display_name": "GPT-5.4 mini",
+      "owned_by": "openai",
+      "status": "enabled",
+      "context_window_tokens": 400000,
+      "max_output_tokens": 128000,
+      "input_price_usd_per_million_tokens": "0.7500000000",
+      "cache_read_price_usd_per_million_tokens": "0.0750000000",
+      "output_price_usd_per_million_tokens": "4.5000000000",
+      "long_context_enabled": false,
+      "release_date": "2026-03-17",
+      "source": "catalog"
+    },
+    {
+      "model_id": "gpt-5.5",
+      "display_name": "GPT-5.5",
+      "owned_by": "openai",
+      "status": "enabled",
+      "context_window_tokens": 1050000,
+      "max_output_tokens": 128000,
+      "input_price_usd_per_million_tokens": "5.0000000000",
+      "cache_read_price_usd_per_million_tokens": "0.5000000000",
+      "output_price_usd_per_million_tokens": "30.0000000000",
+      "long_context_enabled": true,
+      "long_context_threshold": 272000,
+      "long_context_input_multiplier": "2.0000000000",
+      "long_context_output_multiplier": "1.5000000000",
+      "release_date": "2026-04-23",
+      "source": "catalog"
+    },
+    {
+      "model_id": "gpt-5.6-sol",
+      "display_name": "GPT-5.6 Sol",
+      "owned_by": "openai",
+      "status": "enabled",
+      "context_window_tokens": 1050000,
+      "max_output_tokens": 128000,
+      "input_price_usd_per_million_tokens": "5.0000000000",
+      "cache_read_price_usd_per_million_tokens": "0.5000000000",
+      "cache_write_30m_price_usd_per_million_tokens": "6.2500000000",
+      "output_price_usd_per_million_tokens": "30.0000000000",
+      "long_context_enabled": true,
+      "long_context_threshold": 272000,
+      "long_context_input_multiplier": "2.0000000000",
+      "long_context_output_multiplier": "1.5000000000",
+      "release_date": "2026-07-09",
+      "source": "catalog"
+    },
+    {
+      "model_id": "gpt-5.6-luna",
+      "display_name": "GPT-5.6 Luna",
+      "owned_by": "openai",
+      "status": "enabled",
+      "context_window_tokens": 1050000,
+      "max_output_tokens": 128000,
+      "input_price_usd_per_million_tokens": "1.0000000000",
+      "cache_read_price_usd_per_million_tokens": "0.1000000000",
+      "cache_write_30m_price_usd_per_million_tokens": "1.2500000000",
+      "output_price_usd_per_million_tokens": "6.0000000000",
+      "long_context_enabled": true,
+      "long_context_threshold": 272000,
+      "long_context_input_multiplier": "2.0000000000",
+      "long_context_output_multiplier": "1.5000000000",
+      "release_date": "2026-07-09",
+      "source": "catalog"
+    },
+    {
+      "model_id": "gpt-5.6-terra",
+      "display_name": "GPT-5.6 Terra",
+      "owned_by": "openai",
+      "status": "enabled",
+      "context_window_tokens": 1050000,
+      "max_output_tokens": 128000,
+      "input_price_usd_per_million_tokens": "2.5000000000",
+      "cache_read_price_usd_per_million_tokens": "0.2500000000",
+      "cache_write_30m_price_usd_per_million_tokens": "3.1250000000",
+      "output_price_usd_per_million_tokens": "15.0000000000",
+      "long_context_enabled": true,
+      "long_context_threshold": 272000,
+      "long_context_input_multiplier": "2.0000000000",
+      "long_context_output_multiplier": "1.5000000000",
+      "release_date": "2026-07-09",
+      "source": "catalog"
+    }
+  ],
+  "model_capabilities": [
+    {
+      "model": "gpt-5.4",
+      "capability_key": "file.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "image.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "logprobs",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "prompt_cache",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "reasoning.effort",
+      "support_level": "limited",
+      "limits": {
+        "max_effort": "xhigh"
+      }
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "reasoning.summary",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "response_format.json_object",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "response_format.json_schema",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "responses.compact.native",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "responses.encrypted_content",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "server_state.background",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "server_state.store",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "service_tier",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "stream",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "stream.tools",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "stream.usage",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "text.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "text.output",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "tools.builtin.code_interpreter",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "tools.builtin.computer_use",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "tools.builtin.file_search",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "tools.builtin.image_generation",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "tools.builtin.mcp",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "tools.builtin.web_search",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "tools.choice_required",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "tools.custom",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "tools.function",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4",
+      "capability_key": "tools.parallel",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "file.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "image.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "logprobs",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "prompt_cache",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "reasoning.effort",
+      "support_level": "limited",
+      "limits": {
+        "max_effort": "xhigh"
+      }
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "reasoning.summary",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "response_format.json_object",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "response_format.json_schema",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "responses.compact.native",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "responses.encrypted_content",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "server_state.background",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "server_state.store",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "service_tier",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "stream",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "stream.tools",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "stream.usage",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "text.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "text.output",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "tools.builtin.code_interpreter",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "tools.builtin.computer_use",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "tools.builtin.file_search",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "tools.builtin.image_generation",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "tools.builtin.mcp",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "tools.builtin.web_search",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "tools.choice_required",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "tools.custom",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "tools.function",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "capability_key": "tools.parallel",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "file.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "image.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "logprobs",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "prompt_cache",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "reasoning.effort",
+      "support_level": "limited",
+      "limits": {
+        "max_effort": "xhigh"
+      }
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "reasoning.summary",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "response_format.json_object",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "response_format.json_schema",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "responses.compact.native",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "responses.encrypted_content",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "server_state.background",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "server_state.store",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "service_tier",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "stream",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "stream.tools",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "stream.usage",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "text.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "text.output",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "tools.builtin.code_interpreter",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "tools.builtin.computer_use",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "tools.builtin.file_search",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "tools.builtin.image_generation",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "tools.builtin.mcp",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "tools.builtin.web_search",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "tools.choice_required",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "tools.custom",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "tools.function",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.5",
+      "capability_key": "tools.parallel",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "file.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "image.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "logprobs",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "prompt_cache",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "reasoning.effort",
+      "support_level": "limited",
+      "limits": {
+        "max_effort": "max"
+      }
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "reasoning.summary",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "response_format.json_object",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "response_format.json_schema",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "responses.compact.native",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "responses.encrypted_content",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "server_state.background",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "server_state.store",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "service_tier",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "stream",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "stream.tools",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "stream.usage",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "text.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "text.output",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "tools.builtin.code_interpreter",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "tools.builtin.computer_use",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "tools.builtin.file_search",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "tools.builtin.image_generation",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "tools.builtin.mcp",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "tools.builtin.web_search",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "tools.choice_required",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "tools.custom",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "tools.function",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "capability_key": "tools.parallel",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "file.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "image.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "logprobs",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "prompt_cache",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "reasoning.effort",
+      "support_level": "limited",
+      "limits": {
+        "max_effort": "max"
+      }
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "reasoning.summary",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "response_format.json_object",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "response_format.json_schema",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "responses.compact.native",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "responses.encrypted_content",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "server_state.background",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "server_state.store",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "service_tier",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "stream",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "stream.tools",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "stream.usage",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "text.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "text.output",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "tools.builtin.code_interpreter",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "tools.builtin.computer_use",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "tools.builtin.file_search",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "tools.builtin.image_generation",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "tools.builtin.mcp",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "tools.builtin.web_search",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "tools.choice_required",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "tools.custom",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "tools.function",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "capability_key": "tools.parallel",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "file.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "image.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "logprobs",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "prompt_cache",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "reasoning.effort",
+      "support_level": "limited",
+      "limits": {
+        "max_effort": "max"
+      }
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "reasoning.summary",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "response_format.json_object",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "response_format.json_schema",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "responses.compact.native",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "responses.encrypted_content",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "server_state.background",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "server_state.store",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "service_tier",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "stream",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "stream.tools",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "stream.usage",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "text.input",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "text.output",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "tools.builtin.code_interpreter",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "tools.builtin.computer_use",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "tools.builtin.file_search",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "tools.builtin.image_generation",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "tools.builtin.mcp",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "tools.builtin.web_search",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "tools.choice_required",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "tools.custom",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "tools.function",
+      "support_level": "full",
+      "limits": null
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "capability_key": "tools.parallel",
+      "support_level": "full",
+      "limits": null
+    }
+  ],
+  "channel_models": [
+    {
+      "channel": "starapi_openai_0.10",
+      "model": "gpt-5.4",
+      "upstream_model": "gpt-5.4",
+      "status": "enabled"
+    },
+    {
+      "channel": "starapi_openai_0.10",
+      "model": "gpt-5.4-mini",
+      "upstream_model": "gpt-5.4-mini",
+      "status": "enabled"
+    },
+    {
+      "channel": "starapi_openai_0.10",
+      "model": "gpt-5.5",
+      "upstream_model": "gpt-5.5",
+      "status": "enabled"
+    },
+    {
+      "channel": "starapi_openai_0.10",
+      "model": "gpt-5.6-sol",
+      "upstream_model": "gpt-5.6-sol",
+      "status": "enabled"
+    },
+    {
+      "channel": "starapi_openai_0.10",
+      "model": "gpt-5.6-luna",
+      "upstream_model": "gpt-5.6-luna",
+      "status": "enabled"
+    },
+    {
+      "channel": "starapi_openai_0.10",
+      "model": "gpt-5.6-terra",
+      "upstream_model": "gpt-5.6-terra",
+      "status": "enabled"
+    },
+    {
+      "channel": "starapi_openai_0.16",
+      "model": "gpt-5.4",
+      "upstream_model": "gpt-5.4",
+      "status": "enabled"
+    },
+    {
+      "channel": "starapi_openai_0.16",
+      "model": "gpt-5.4-mini",
+      "upstream_model": "gpt-5.4-mini",
+      "status": "enabled"
+    },
+    {
+      "channel": "starapi_openai_0.16",
+      "model": "gpt-5.5",
+      "upstream_model": "gpt-5.5",
+      "status": "enabled"
+    },
+    {
+      "channel": "starapi_openai_0.16",
+      "model": "gpt-5.6-sol",
+      "upstream_model": "gpt-5.6-sol",
+      "status": "enabled"
+    },
+    {
+      "channel": "starapi_openai_0.16",
+      "model": "gpt-5.6-luna",
+      "upstream_model": "gpt-5.6-luna",
+      "status": "enabled"
+    },
+    {
+      "channel": "starapi_openai_0.16",
+      "model": "gpt-5.6-terra",
+      "upstream_model": "gpt-5.6-terra",
+      "status": "enabled"
+    },
+    {
+      "channel": "zzapi_openai_0.08",
+      "model": "gpt-5.4",
+      "upstream_model": "gpt-5.4",
+      "status": "enabled"
+    },
+    {
+      "channel": "zzapi_openai_0.08",
+      "model": "gpt-5.4-mini",
+      "upstream_model": "gpt-5.4-mini",
+      "status": "enabled"
+    },
+    {
+      "channel": "zzapi_openai_0.08",
+      "model": "gpt-5.5",
+      "upstream_model": "gpt-5.5",
+      "status": "enabled"
+    },
+    {
+      "channel": "zzapi_openai_0.08",
+      "model": "gpt-5.6-sol",
+      "upstream_model": "gpt-5.6-sol",
+      "status": "enabled"
+    },
+    {
+      "channel": "zzapi_openai_0.08",
+      "model": "gpt-5.6-luna",
+      "upstream_model": "gpt-5.6-luna",
+      "status": "enabled"
+    },
+    {
+      "channel": "zzapi_openai_0.08",
+      "model": "gpt-5.6-terra",
+      "upstream_model": "gpt-5.6-terra",
+      "status": "enabled"
+    },
+    {
+      "channel": "zzapi_openai_0.196",
+      "model": "gpt-5.4",
+      "upstream_model": "gpt-5.4",
+      "status": "enabled"
+    },
+    {
+      "channel": "zzapi_openai_0.196",
+      "model": "gpt-5.4-mini",
+      "upstream_model": "gpt-5.4-mini",
+      "status": "enabled"
+    },
+    {
+      "channel": "zzapi_openai_0.196",
+      "model": "gpt-5.5",
+      "upstream_model": "gpt-5.5",
+      "status": "enabled"
+    },
+    {
+      "channel": "zzapi_openai_0.196",
+      "model": "gpt-5.6-sol",
+      "upstream_model": "gpt-5.6-sol",
+      "status": "enabled"
+    },
+    {
+      "channel": "zzapi_openai_0.196",
+      "model": "gpt-5.6-luna",
+      "upstream_model": "gpt-5.6-luna",
+      "status": "enabled"
+    },
+    {
+      "channel": "zzapi_openai_0.196",
+      "model": "gpt-5.6-terra",
+      "upstream_model": "gpt-5.6-terra",
+      "status": "enabled"
+    }
+  ],
+  "routes": [
+    {
+      "name": "VIP-Codex",
+      "mode": "balanced",
+      "status": "enabled",
+      "description": "",
+      "price_ratio": "0.2500000000",
+      "rpm_limit": 500,
+      "tpm_limit": 380000,
+      "rpd_limit": 20000,
+      "concurrency_limit": 20,
+      "channels": [
+        "starapi_openai_0.10",
+        "starapi_openai_0.16",
+        "zzapi_openai_0.08",
+        "zzapi_openai_0.196"
+      ]
+    }
+  ],
+  "_comment": "复制为 config.local.json 并填入真实 credential。config.local.json 已 gitignore，勿提交。init 只能在 Gateway、Admin、Worker 停止时执行。"
+}

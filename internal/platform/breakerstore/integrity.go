@@ -149,6 +149,32 @@ func (s *Store) CommitRuntimeStateEpoch(ctx context.Context, in StateEpochFenceI
 	return code == "committed", nil
 }
 
+// ReconcileReadyStateEpoch 仅供停机重启的启动 coordinator 使用。调用方必须先证明
+// PostgreSQL epoch 已 ready 且没有未完成 epoch operation。
+func (s *Store) ReconcileReadyStateEpoch(ctx context.Context, epoch string, revision int64) (bool, error) {
+	if epoch == "" || revision < 1 {
+		return false, configInvalid("ready state epoch and revision are required")
+	}
+	res, err := s.epochReconcile.Run(ctx, s.client, []string{s.keys.stateIntegrityMarker()},
+		epoch, strconv.FormatInt(revision, 10), StateIntegrityReadyMarkerHash(epoch, revision)).Result()
+	if err != nil {
+		return false, storeUnavailable(err, "breakerstore reconcile ready state epoch")
+	}
+	arr, ok := res.([]interface{})
+	if !ok || len(arr) == 0 {
+		return false, storeUnavailable(errors.New("unexpected epoch reconcile reply"), "breakerstore reconcile ready state epoch")
+	}
+	code, _ := arr[0].(string)
+	switch code {
+	case "unchanged":
+		return false, nil
+	case "reconciled":
+		return true, nil
+	default:
+		return false, storeUnavailable(errors.New("unexpected epoch reconcile code"), "breakerstore reconcile ready state epoch")
+	}
+}
+
 // PrepareStateEpoch 保留为测试/受信任工具的简化入口；生产 coordinator 必须使用
 // 带 durable token/expected hash 的 RecoverRuntimeStateEpochFence。
 func (s *Store) PrepareStateEpoch(ctx context.Context, oldEpoch string, oldRevision int64, newEpoch string, newRevision int64, transitionHash string) (string, error) {

@@ -249,7 +249,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				UpstreamEndpoint:     l.upstreamEndpoint(),
 				RequestMode:          breakerstore.ModeStream,
 				EstimatedInputTokens: params.ConservativeInputTokens,
-			}, candIdx == 0, &headWaitUsed)
+			}, allowStickyHeadWait(params.Sticky, candIdx, candidate.Channel.ID), &headWaitUsed)
 			if err != nil {
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
@@ -449,7 +449,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 			// 仅路线 D（上游完整服务、仅缺 usage）视为成功 attempt 参与 sticky 绑定；
 			// 取消/中断不绑（渠道未完整交付，不据此改写粘性事实）。
 			if outcome == metrics.ChatOutcomeSuccess {
-				params.Sticky.BindSuccess(ctx, candidate.Channel.ID)
+				params.Sticky.BindSuccess(ctx, candidate)
 			}
 
 			result.Outcome = outcome
@@ -763,7 +763,7 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		l.MarkDeliveryCompleted(ctx, requestRecord)
 
 		// attempt 成功：sticky bind/改绑（决议 2）。
-		params.Sticky.BindSuccess(ctx, candidate.Channel.ID)
+		params.Sticky.BindSuccess(ctx, candidate)
 
 		// 零价渠道误配监控（P2-4）：售价快照全部非正即客户侧 $0 收入，记指标供运维定位误配渠道。
 		if candidate.SalePrice.IsEffectivelyFree() {

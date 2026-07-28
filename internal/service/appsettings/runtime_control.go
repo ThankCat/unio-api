@@ -16,6 +16,7 @@ type RuntimeControlRestorer interface {
 	GlobalConcurrencyControl() breakerstore.ControlTarget
 	SettingControl(settingKey string) breakerstore.ControlTarget
 	RestoreMissingControl(ctx context.Context, target breakerstore.ControlTarget, revision int64, payload string) (bool, error)
+	ReconcileControl(ctx context.Context, target breakerstore.ControlTarget, revision int64, payload string) (bool, error)
 	ReadControl(ctx context.Context, target breakerstore.ControlTarget, expectedRevision int64) (breakerstore.ControlSnapshot, error)
 }
 
@@ -45,6 +46,27 @@ func RestoreCriticalRuntimeControlsObserved(
 	controls RuntimeControlRestorer,
 	observe RuntimeControlRestoreObserver,
 ) error {
+	return restoreCriticalRuntimeControlsObserved(ctx, settings, controls, observe, false)
+}
+
+// ReconcileCriticalRuntimeControlsObserved is the startup-only PostgreSQL-authoritative variant.
+// Callers must reconcile durable operations first; periodic reconciliation must use Restore instead.
+func ReconcileCriticalRuntimeControlsObserved(
+	ctx context.Context,
+	settings *SettingsStore,
+	controls RuntimeControlRestorer,
+	observe RuntimeControlRestoreObserver,
+) error {
+	return restoreCriticalRuntimeControlsObserved(ctx, settings, controls, observe, true)
+}
+
+func restoreCriticalRuntimeControlsObserved(
+	ctx context.Context,
+	settings *SettingsStore,
+	controls RuntimeControlRestorer,
+	observe RuntimeControlRestoreObserver,
+	authoritative bool,
+) error {
 	if settings == nil || controls == nil {
 		return failure.New(failure.CodeGatewayBreakerStoreUnavailable, failure.WithMessage("appsettings: runtime control restorer unavailable"))
 	}
@@ -58,7 +80,12 @@ func RestoreCriticalRuntimeControlsObserved(
 			return failure.Wrap(failure.CodeConfigInvalid, err, failure.WithMessage("appsettings: invalid runtime control setting"))
 		}
 		target := runtimeControlTarget(controls, key)
-		restored, err := controls.RestoreMissingControl(ctx, target, record.Revision, string(payload))
+		var restored bool
+		if authoritative {
+			restored, err = controls.ReconcileControl(ctx, target, record.Revision, string(payload))
+		} else {
+			restored, err = controls.RestoreMissingControl(ctx, target, record.Revision, string(payload))
+		}
 		if err != nil {
 			return err
 		}

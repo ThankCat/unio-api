@@ -242,7 +242,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 				UpstreamEndpoint:     endpoint,
 				RequestMode:          breakerstore.ModeNonStream,
 				EstimatedInputTokens: params.EstimatedTokens,
-			}, candIdx == 0, &headWaitUsed)
+			}, allowStickyHeadWait(params.Sticky, candIdx, candidate.Channel.ID), &headWaitUsed)
 			if err != nil {
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
@@ -346,7 +346,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 					UpstreamEndpoint:     fallback.UpstreamEndpoint,
 					RequestMode:          breakerstore.ModeNonStream,
 					EstimatedInputTokens: params.EstimatedTokens,
-				}, candIdx == 0, &headWaitUsed)
+				}, allowStickyHeadWait(params.Sticky, candIdx, candidate.Channel.ID), &headWaitUsed)
 				if acquireErr != nil {
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
@@ -528,7 +528,7 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 		}
 
 		// attempt 成功：sticky bind/改绑（决议 2）。跳过/失败候选不会走到这里，天然不覆盖绑定。
-		params.Sticky.BindSuccess(ctx, candidate.Channel.ID)
+		params.Sticky.BindSuccess(ctx, candidate)
 
 		result.Outcome = metrics.ChatOutcomeSuccess
 		result.Delivery = l.NewNonStreamDeliveryFinalizer(ctx, requestRecord)

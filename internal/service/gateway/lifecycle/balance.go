@@ -9,9 +9,8 @@ import (
 )
 
 const (
-	defaultTTFTTargetMs         = int64(2000)
-	defaultTTFTWeight           = 0.35
-	defaultMinimumRoutingFactor = 0.05
+	defaultTTFTTargetMs = int64(2000)
+	defaultTTFTWeight   = 0.35
 )
 
 // CapacitySignal 是一个 channel-global 容量维度的只读事实。Limit<=0 表示显式不限。
@@ -26,6 +25,7 @@ type ChannelCapacity struct {
 	Concurrency  CapacitySignal
 	TPM          CapacitySignal
 	ErrorRate    float64
+	ErrorSamples int64
 	TTFTEWMAMs   float64
 	TTFTSamples  int64
 	HalfOpen     bool
@@ -37,6 +37,7 @@ type ChannelCapacitySnapshotReader func(context.Context, routing.ChatRouteCandid
 
 // BalanceScore 保存一次候选评分的完整组成，供调度、trace 和运行时后台共用。
 type BalanceScore struct {
+	AlgorithmVersion                        string
 	ProviderID                              int64
 	CandidateOriginRevision                 int64
 	RuntimeOriginRevision                   int64
@@ -57,6 +58,15 @@ type BalanceScore struct {
 	ConcurrencyRemaining                    *float64
 	TPMRemaining                            *float64
 	CapacityScore                           float64
+	HealthScore                             float64
+	EconomicScore                           float64
+	PriorityScore                           float64
+	FinalScore                              float64
+	EconomicWeightPct                       int
+	HealthWeightPct                         int
+	CapacityWeightPct                       int
+	PriorityWeightPct                       int
+	Priority                                int32
 	ErrorRate                               float64
 	ErrorSamples                            int64
 	TTFTEWMAMs                              float64
@@ -80,6 +90,7 @@ type BalanceScore struct {
 	ModelPermissionPaused                   bool
 	ModelPermissionRecheckState             string
 	BreakerStoreAdmission                   string
+	HalfOpen                                bool
 }
 
 type scoredCandidate struct {
@@ -92,7 +103,6 @@ func orderBalancedCandidates(
 	in []routing.ChatRouteCandidate,
 	mode string,
 	capacity ChannelCapacitySnapshotReader,
-	random func() float64,
 	config BalanceConfig,
 ) ([]routing.ChatRouteCandidate, map[int64]BalanceScore, bool) {
 	entries := make([]scoredCandidate, 0, len(in))
@@ -107,13 +117,12 @@ func orderBalancedCandidates(
 				}
 			}
 			score := scoreCapacity(snapshot, config)
-			score = recordNeutralCostFactor(score, candidate.CostRatio, config)
+			score = ApplyObjectiveFactors(score, candidate.CostRatio, candidate.Priority, config)
 			scores[candidate.Channel.ID] = score
 		}
 		return out, scores, false
 	}
 
-	allUnknown := true
 	allZero := len(in) > 0
 	for _, candidate := range in {
 		snapshot := ChannelCapacity{}
@@ -127,44 +136,34 @@ func orderBalancedCandidates(
 			}
 		}
 		score := scoreCapacity(snapshot, config)
-		score = ApplyCostFactor(score, candidate.CostRatio, config)
+		score = ApplyObjectiveFactors(score, candidate.CostRatio, candidate.Priority, config)
 		score.CapacityReadFailed = readFailed
-		if !score.CapacityUnknown {
-			allUnknown = false
-		}
 		if score.CapacityScore > 0 {
 			allZero = false
 		}
 		entries = append(entries, scoredCandidate{route: candidate, score: score})
 	}
 
-	// 所有容量维度均未知时让容量和健康度退化为中性值，仍保留已冻结的成本因子。
-	if allUnknown {
-		allZero = false
-		for i := range entries {
-			entries[i].score.CapacityScore = 1
-			entries[i].score.RoutingFactor = 1
-			entries[i].score.Weight = entries[i].score.CostFactor
-		}
-	}
-
 	closed := make([]scoredCandidate, 0, len(entries))
 	halfOpen := make([]scoredCandidate, 0)
 	for _, entry := range entries {
-		if entry.score.Weight == 0 && entry.score.RoutingFactor == 0 {
+		if entry.score.HalfOpen {
 			halfOpen = append(halfOpen, entry)
 			continue
 		}
 		closed = append(closed, entry)
 	}
 
-	if allZero && len(closed) > 0 {
-		// 所有候选容量为零时，最低压力候选排首进入现有队首短等；其余仍保留在线路内 fallback。
-		sort.SliceStable(closed, func(i, j int) bool { return closed[i].score.Pressure < closed[j].score.Pressure })
-	} else {
-		closed = weightedWithoutReplacement(closed, random)
-	}
-	// half-open 只保序进入独立 probe fallback，不参与普通 weighted random。
+	sort.SliceStable(closed, func(i, j int) bool {
+		if closed[i].score.FinalScore != closed[j].score.FinalScore {
+			return closed[i].score.FinalScore > closed[j].score.FinalScore
+		}
+		if closed[i].route.Priority != closed[j].route.Priority {
+			return closed[i].route.Priority < closed[j].route.Priority
+		}
+		return closed[i].route.Channel.ID < closed[j].route.Channel.ID
+	})
+	// half-open stays behind ordinary candidates and preserves the SQL Priority/ID order for probes.
 	entries = append(closed, halfOpen...)
 
 	out := make([]routing.ChatRouteCandidate, 0, len(entries))
@@ -196,28 +195,32 @@ func scoreCapacity(snapshot ChannelCapacity, config BalanceConfig) BalanceScore 
 		latencyPenalty = snapshot.TTFTEWMAMs / (snapshot.TTFTEWMAMs + float64(config.TTFTTargetMs))
 		latencyPenalty = clamp01(latencyPenalty)
 	}
-	routingFactor := math.Max(config.MinimumRoutingFactor,
-		(1-errorRate)*(1-config.TTFTWeight*latencyPenalty))
-	weight := capacity * routingFactor
+	health := (1 - errorRate) * (1 - config.TTFTWeight*latencyPenalty)
+	if snapshot.ErrorSamples == 0 && snapshot.TTFTSamples == 0 {
+		health = 1
+	}
 	if snapshot.HalfOpen {
-		routingFactor = 0
-		weight = 0
+		health = 0
 	}
 	return BalanceScore{
+		AlgorithmVersion:       "objective_v1",
 		ConcurrencyRemaining:   concurrencyRemaining,
 		TPMRemaining:           tpmRemaining,
-		CapacityScore:          capacity,
+		CapacityScore:          capacity * 100,
+		HealthScore:            health * 100,
 		ErrorRate:              errorRate,
+		ErrorSamples:           snapshot.ErrorSamples,
 		TTFTEWMAMs:             snapshot.TTFTEWMAMs,
 		TTFTSamples:            snapshot.TTFTSamples,
 		TTFTSampleSource:       "stream_only",
 		LatencyPenalty:         latencyPenalty,
-		RoutingFactor:          routingFactor,
+		RoutingFactor:          health,
 		CostFactor:             1,
 		RoutingBalanceRevision: config.Revision,
-		Weight:                 weight,
+		Weight:                 0,
 		Pressure:               combinedPressure(concurrencyRemaining != nil, concurrencyPressure, tpmRemaining != nil, tpmPressure),
 		CapacityUnknown:        concurrencyRemaining == nil && tpmRemaining == nil,
+		HalfOpen:               snapshot.HalfOpen,
 	}
 }
 
@@ -227,27 +230,38 @@ func ScoreBalanceCandidateWithConfig(snapshot ChannelCapacity, config BalanceCon
 	return scoreCapacity(snapshot, config)
 }
 
-// ApplyCostFactor adds the cost-aware routing factor to an existing capacity and
-// health score. Gateway and Admin share this helper so displayed and executed weights
-// use exactly the same formula.
-func ApplyCostFactor(score BalanceScore, costRatio float64, config BalanceConfig) BalanceScore {
+// ApplyObjectiveFactors completes the shared objective score for Gateway and Admin.
+func ApplyObjectiveFactors(score BalanceScore, costRatio float64, priority int32, config BalanceConfig) BalanceScore {
 	config = normalizedBalanceConfig(config)
 	score.CostRatio = costRatio
-	score.CostWeight = config.CostWeight
-	score.CostFactor = math.Max(
-		config.MinimumRoutingFactor,
-		1-config.CostWeight*clamp01(costRatio),
-	)
-	score.Weight *= score.CostFactor
+	score.EconomicScore = (1 - clamp01(costRatio)) * 100
+	score.Priority = priority
+	score.PriorityScore = clamp01(float64(100-priority)/100) * 100
+	score.EconomicWeightPct = config.EconomicWeightPct
+	score.HealthWeightPct = config.HealthWeightPct
+	score.CapacityWeightPct = config.CapacityWeightPct
+	score.PriorityWeightPct = config.PriorityWeightPct
+	score.FinalScore = (score.EconomicScore*float64(config.EconomicWeightPct) +
+		score.HealthScore*float64(config.HealthWeightPct) +
+		score.CapacityScore*float64(config.CapacityWeightPct) +
+		score.PriorityScore*float64(config.PriorityWeightPct)) / 100
+	if score.HalfOpen {
+		score.FinalScore = 0
+	}
+	// Legacy fields remain populated for old Admin clients while algorithm_version selects new semantics.
+	score.CostWeight = float64(config.EconomicWeightPct) / 100
+	score.CostFactor = score.EconomicScore / 100
+	score.Weight = score.FinalScore
 	return score
 }
 
+// ApplyCostFactor is retained as a source-compatible wrapper for older internal tests.
+func ApplyCostFactor(score BalanceScore, costRatio float64, config BalanceConfig) BalanceScore {
+	return ApplyObjectiveFactors(score, costRatio, 0, config)
+}
+
 func recordNeutralCostFactor(score BalanceScore, costRatio float64, config BalanceConfig) BalanceScore {
-	config = normalizedBalanceConfig(config)
-	score.CostRatio = costRatio
-	score.CostWeight = config.CostWeight
-	score.CostFactor = 1
-	return score
+	return ApplyObjectiveFactors(score, costRatio, 0, config)
 }
 
 func normalizedBalanceConfig(config BalanceConfig) BalanceConfig {
@@ -257,11 +271,12 @@ func normalizedBalanceConfig(config BalanceConfig) BalanceConfig {
 	if config.TTFTWeight < 0 || config.TTFTWeight > 1 {
 		config.TTFTWeight = defaultTTFTWeight
 	}
-	if config.MinimumRoutingFactor <= 0 || config.MinimumRoutingFactor > 1 {
-		config.MinimumRoutingFactor = defaultMinimumRoutingFactor
-	}
-	if math.IsNaN(config.CostWeight) || config.CostWeight < 0 || config.CostWeight > 1 {
-		config.CostWeight = 0
+	if config.EconomicWeightPct < 0 || config.HealthWeightPct < 0 || config.CapacityWeightPct < 0 || config.PriorityWeightPct < 0 ||
+		config.EconomicWeightPct+config.HealthWeightPct+config.CapacityWeightPct+config.PriorityWeightPct != 100 {
+		config.EconomicWeightPct = 45
+		config.HealthWeightPct = 25
+		config.CapacityWeightPct = 20
+		config.PriorityWeightPct = 10
 	}
 	return config
 }
@@ -293,58 +308,12 @@ func remainingRatio(signal CapacitySignal) (*float64, float64) {
 	return &remaining, pressure
 }
 
-func weightedWithoutReplacement(in []scoredCandidate, random func() float64) []scoredCandidate {
-	if random == nil {
-		random = func() float64 { return 0.5 }
-	}
-	positive := make([]scoredCandidate, 0, len(in))
-	zero := make([]scoredCandidate, 0, len(in))
-	for _, entry := range in {
-		if entry.score.Weight > 0 {
-			positive = append(positive, entry)
-		} else {
-			zero = append(zero, entry)
-		}
-	}
-
-	out := make([]scoredCandidate, 0, len(in))
-	for len(positive) > 0 {
-		total := 0.0
-		for _, entry := range positive {
-			total += entry.score.Weight
-		}
-		draw := clampRandom(random()) * total
-		selected := len(positive) - 1
-		cumulative := 0.0
-		for i, entry := range positive {
-			cumulative += entry.score.Weight
-			if draw < cumulative {
-				selected = i
-				break
-			}
-		}
-		out = append(out, positive[selected])
-		positive = append(positive[:selected], positive[selected+1:]...)
-	}
-	return append(out, zero...)
-}
-
 func clamp01(value float64) float64 {
 	if math.IsNaN(value) || value < 0 {
 		return 0
 	}
 	if value > 1 {
 		return 1
-	}
-	return value
-}
-
-func clampRandom(value float64) float64 {
-	if math.IsNaN(value) || value < 0 {
-		return 0
-	}
-	if value >= 1 {
-		return math.Nextafter(1, 0)
 	}
 	return value
 }

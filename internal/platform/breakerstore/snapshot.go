@@ -261,23 +261,28 @@ func parseSnapshotManyReply(in SnapshotManyInput, reply []interface{}) (Snapshot
 	if !ok || ttftWeight < 0 || ttftWeight > 1 {
 		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot TTFT weight is invalid"), "breakerstore snapshot many")
 	}
-	minimumFactor, ok := redisFloat64(reply[5])
-	if !ok || minimumFactor <= 0 || minimumFactor > 1 {
-		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot minimum routing factor is invalid"), "breakerstore snapshot many")
+	weights := make([]int, 4)
+	weightSum := 0
+	for index := range weights {
+		value, valid := redisInt64(reply[5+index])
+		if !valid || value < 0 || value > 100 {
+			return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot objective routing weight is invalid"), "breakerstore snapshot many")
+		}
+		weights[index] = int(value)
+		weightSum += int(value)
 	}
-	costWeight, ok := redisFloat64(reply[6])
-	if !ok || costWeight < 0 || costWeight > 1 {
-		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot cost weight is invalid"), "breakerstore snapshot many")
+	if weightSum != 100 {
+		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot objective routing weights do not sum to 100"), "breakerstore snapshot many")
 	}
-	breakerEnabled, ok := redisInt64(reply[7])
+	breakerEnabled, ok := redisInt64(reply[9])
 	if !ok || (breakerEnabled != 0 && breakerEnabled != 1) {
 		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot breaker enabled flag is invalid"), "breakerstore snapshot many")
 	}
-	rows, ok := reply[8].([]interface{})
+	rows, ok := reply[10].([]interface{})
 	if !ok || len(rows) != len(in.Candidates) {
 		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot candidate rows are invalid"), "breakerstore snapshot many")
 	}
-	controlProofs, ok := reply[9].([]interface{})
+	controlProofs, ok := reply[11].([]interface{})
 	if !ok || len(controlProofs) != 4 {
 		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot control proofs are invalid"), "breakerstore snapshot many")
 	}
@@ -295,7 +300,8 @@ func parseSnapshotManyReply(in SnapshotManyInput, reply []interface{}) (Snapshot
 		CircuitBreakerRevision:    in.CircuitBreakerRevision,
 		RoutingBalance: RoutingBalanceSnapshot{
 			Revision: revision, TTFTTargetMs: targetMs, TTFTWeight: ttftWeight,
-			CostWeight: costWeight, MinimumRoutingFactor: minimumFactor,
+			EconomicWeightPct: weights[0], HealthWeightPct: weights[1],
+			CapacityWeightPct: weights[2], PriorityWeightPct: weights[3],
 		},
 	}
 	for index, raw := range rows {

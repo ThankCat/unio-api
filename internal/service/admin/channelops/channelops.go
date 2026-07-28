@@ -59,9 +59,11 @@ type Row struct {
 	BoundRoutes      int64
 	RecentErrorCode  string
 	// 渠道级限流上限（P2-8）：nil=继承渠道默认限流，0=不限，>0=具体上限。
-	RpmLimit          *int32
-	TpmLimit          *int32
-	RpdLimit          *int32
+	RpmLimit *int32
+	TpmLimit *int32
+	RpdLimit *int32
+	// 渠道在途并发上限（DEC-029）：nil=继承并发默认 channel_limit，0=不限，>0=具体上限。
+	ConcurrencyLimit  *int32
 	LastTestedAt      *time.Time
 	LastTestOK        *bool
 	LastTestLatencyMs *int32
@@ -192,6 +194,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			RpmLimit:                int4Value(r.RpmLimit),
 			TpmLimit:                int4Value(r.TpmLimit),
 			RpdLimit:                int4Value(r.RpdLimit),
+			ConcurrencyLimit:        int4Value(r.ConcurrencyLimit),
 			LastTestedAt:            timeValue(r.LastTestedAt),
 			LastTestOK:              boolValue(r.LastTestOk),
 			LastTestLatencyMs:       int4Value(r.LastTestLatencyMs),

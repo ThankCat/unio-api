@@ -72,6 +72,15 @@ type runtimeChannelDTO struct {
 	TPMLimit                        int64    `json:"tpm_limit"`
 	TPMRemaining                    *float64 `json:"tpm_remaining"`
 	CapacityScore                   float64  `json:"capacity_score"`
+	AlgorithmVersion                string   `json:"algorithm_version"`
+	EconomicScore                   float64  `json:"economic_score"`
+	HealthScore                     float64  `json:"health_score"`
+	PriorityScore                   float64  `json:"priority_score"`
+	FinalScore                      float64  `json:"final_score"`
+	EconomicWeightPct               int      `json:"economic_weight_pct"`
+	HealthWeightPct                 int      `json:"health_weight_pct"`
+	CapacityWeightPct               int      `json:"capacity_weight_pct"`
+	PriorityWeightPct               int      `json:"priority_weight_pct"`
 	CostRatio                       *float64 `json:"cost_ratio"`
 	CostWeight                      float64  `json:"cost_weight"`
 	CostFactor                      float64  `json:"cost_factor"`
@@ -222,6 +231,11 @@ func toRouteRuntimeDTO(value routeruntime.Runtime) routeRuntimeDTO {
 			RPDUsed: channel.RPDUsed, RPDLimit: channel.RPDLimit, RPDRemaining: channel.RPDRemaining,
 			TPMUsed: channel.TPMUsed, TPMLimit: channel.TPMLimit, TPMRemaining: channel.TPMRemaining,
 			CapacityScore: channel.CapacityScore, CostRatio: channel.CostRatio,
+			AlgorithmVersion: channel.AlgorithmVersion,
+			EconomicScore:    channel.EconomicScore, HealthScore: channel.HealthScore,
+			PriorityScore: channel.PriorityScore, FinalScore: channel.FinalScore,
+			EconomicWeightPct: channel.EconomicWeightPct, HealthWeightPct: channel.HealthWeightPct,
+			CapacityWeightPct: channel.CapacityWeightPct, PriorityWeightPct: channel.PriorityWeightPct,
 			CostWeight: channel.CostWeight, CostFactor: channel.CostFactor, FinalWeight: channel.FinalWeight,
 			Pressure: channel.Pressure, CapacityUnknown: channel.CapacityUnknown, CapacityReadFailed: channel.CapacityReadFailed,
 			ProviderBreakerState: channel.ProviderBreakerState, ProviderOpenRemainingMs: channel.ProviderOpenRemainingMs,

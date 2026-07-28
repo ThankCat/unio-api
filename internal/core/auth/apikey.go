@@ -36,12 +36,13 @@ type APIKeyPrincipal struct {
 	// RouteID 是 Key 绑定的线路 ID（线路必填，恒有值）；运行时据此解析线路，无默认回落。
 	RouteID *int64
 
-	// RPMLimit/TPMLimit/RPDLimit 是限流上限，取自 Key 绑定的线路（DEC-027：限流归线路，
+	// RPMLimit/TPMLimit/RPDLimit/ConcurrencyLimit 是限流上限，取自 Key 绑定的线路，
 	// 按 (线路,用户) 计数）：nil 表示「继承线路默认限流」，0 表示「显式不限」，>0 表示具体上限
 	// （每分钟请求/每分钟 token/每日请求）。api_keys 自身的旧限流列已废弃、不再参与认证。
-	RPMLimit *int64
-	TPMLimit *int64
-	RPDLimit *int64
+	RPMLimit         *int64
+	TPMLimit         *int64
+	RPDLimit         *int64
+	ConcurrencyLimit *int64
 }
 
 // APIKeyStore 定义 API Key 认证所需的存储查询和更新能力。
@@ -145,13 +146,14 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 	// 限流上限取自绑定线路（DEC-027），计数在下游按 (线路,用户) 复合主体执行。
 	routeID := key.RouteID
 	return &APIKeyPrincipal{
-		APIKeyID:  key.ID,
-		UserID:    key.UserID,
-		KeyPrefix: key.KeyPrefix,
-		RouteID:   &routeID,
-		RPMLimit:  int4Ptr(key.RouteRpmLimit),
-		TPMLimit:  int4Ptr(key.RouteTpmLimit),
-		RPDLimit:  int4Ptr(key.RouteRpdLimit),
+		APIKeyID:         key.ID,
+		UserID:           key.UserID,
+		KeyPrefix:        key.KeyPrefix,
+		RouteID:          &routeID,
+		RPMLimit:         int4Ptr(key.RouteRpmLimit),
+		TPMLimit:         int4Ptr(key.RouteTpmLimit),
+		RPDLimit:         int4Ptr(key.RouteRpdLimit),
+		ConcurrencyLimit: int4Ptr(key.RouteConcurrencyLimit),
 	}, nil
 }
 

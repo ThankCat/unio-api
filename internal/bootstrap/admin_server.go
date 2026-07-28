@@ -143,7 +143,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		sharedBreakerStore = breakerStore
 		if pool, ok := deps.DB.(*pgxpool.Pool); ok {
 			if err := reconcileAllRuntimeControls(
-				ctx, pool, settingsStore, breakerStore, runtimeTelemetry,
+				ctx, pool, settingsStore, breakerStore, runtimeTelemetry, runtimeControlStartupAuthority,
 			); err != nil {
 				return nil, err
 			}

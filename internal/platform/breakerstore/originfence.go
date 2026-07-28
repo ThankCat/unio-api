@@ -39,6 +39,28 @@ func (s *Store) RestoreMissingProviderControl(ctx context.Context, providerID, b
 	return code == FenceResult("installed"), nil
 }
 
+// ReconcileProviderControl 仅供停机重启的启动协调使用。它以 PostgreSQL 当前事实
+// 校正同一 Provider hash 的路由控制字段并清除 pending，同时保留熔断窗口和状态。
+func (s *Store) ReconcileProviderControl(ctx context.Context, providerID, baseURLRevision, statusRevision int64, effectiveStatus string) (bool, error) {
+	res, err := s.epReconcile.Run(ctx, s.client, []string{s.keys.provider(providerID)},
+		strconv.FormatInt(baseURLRevision, 10), strconv.FormatInt(statusRevision, 10), effectiveStatus).Result()
+	if err != nil {
+		return false, storeUnavailable(err, "breakerstore reconcile provider control")
+	}
+	code, err := fenceCode(res)
+	if err != nil {
+		return false, storeUnavailable(err, "breakerstore reconcile provider control")
+	}
+	switch code {
+	case FenceResult("unchanged"):
+		return false, nil
+	case FenceResult("reconciled"):
+		return true, nil
+	default:
+		return false, storeUnavailable(errors.New("unexpected provider reconcile code"), "breakerstore reconcile provider control")
+	}
+}
+
 // FenceResult is the stable result returned by origin prepare/commit/abort scripts.
 type FenceResult string
 

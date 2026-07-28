@@ -49,6 +49,7 @@ type Store struct {
 	controlAbort            *redis.Script
 	controlRead             *redis.Script
 	controlRestore          *redis.Script
+	controlReconcile        *redis.Script
 	controlRecoverCommitted *redis.Script
 	controlRecoverAborted   *redis.Script
 
@@ -60,6 +61,7 @@ type Store struct {
 	epochRead      *redis.Script
 	epochPrepare   *redis.Script
 	epochCommit    *redis.Script
+	epochReconcile *redis.Script
 	runtimeReady   *redis.Script
 	faultProof     *redis.Script
 	faultClear     *redis.Script
@@ -69,6 +71,7 @@ type Store struct {
 
 	epInitControl    *redis.Script
 	epRestoreControl *redis.Script
+	epReconcile      *redis.Script
 	epPrepareStatus  *redis.Script
 	epCommitStatus   *redis.Script
 	epAbortStatus    *redis.Script
@@ -111,6 +114,7 @@ func NewStore(client redis.Cmdable, keyNamespace string, observers ...OperationO
 		controlAbort:            redis.NewScript(luaControlAbort),
 		controlRead:             redis.NewScript(luaControlRead),
 		controlRestore:          redis.NewScript(luaControlRestoreMissing),
+		controlReconcile:        redis.NewScript(luaControlReconcile),
 		controlRecoverCommitted: redis.NewScript(luaControlRecoverCommitted),
 		controlRecoverAborted:   redis.NewScript(luaControlRecoverAborted),
 
@@ -122,6 +126,7 @@ func NewStore(client redis.Cmdable, keyNamespace string, observers ...OperationO
 		epochRead:      redis.NewScript(luaStateIntegrityRead),
 		epochPrepare:   redis.NewScript(luaEpochPrepare),
 		epochCommit:    redis.NewScript(luaEpochCommit),
+		epochReconcile: redis.NewScript(luaEpochReconcileReady),
 		runtimeReady:   redis.NewScript(luaRuntimeReadiness),
 		faultProof:     redis.NewScript(luaRuntimeFaultClearProof),
 		faultClear:     redis.NewScript(luaRuntimeFaultClearCommit),
@@ -131,6 +136,7 @@ func NewStore(client redis.Cmdable, keyNamespace string, observers ...OperationO
 
 		epInitControl:    redis.NewScript(luaInitProviderControl),
 		epRestoreControl: redis.NewScript(luaRestoreMissingProviderControl),
+		epReconcile:      redis.NewScript(luaReconcileProviderControl),
 		epPrepareStatus:  redis.NewScript(luaPrepareOriginStatus),
 		epCommitStatus:   redis.NewScript(luaCommitOriginStatus),
 		epAbortStatus:    redis.NewScript(luaAbortOriginStatus),
@@ -785,7 +791,7 @@ func (s *Store) SnapshotMany(ctx context.Context, in SnapshotManyInput) (result 
 		}
 		return SnapshotManyResult{}, snapshotManyRejected(reason)
 	}
-	if code != "ok" || len(reply) != 10 {
+	if code != "ok" || len(reply) != 12 {
 		return SnapshotManyResult{}, storeUnavailable(errors.New("unknown snapshot many reply"), "breakerstore snapshot many")
 	}
 	return parseSnapshotManyReply(in, reply)

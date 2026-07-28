@@ -84,7 +84,7 @@ func TestReconcileAllRuntimeControlsRestoresStableEndpointAndChannel(t *testing.
 	if err := settings.SeedDefaults(ctx); err != nil {
 		t.Fatalf("seed runtime settings: %v", err)
 	}
-	if err := reconcileAllRuntimeControls(ctx, pool, settings, controls, telemetry); err != nil {
+	if err := reconcileAllRuntimeControls(ctx, pool, settings, controls, telemetry, runtimeControlStartupAuthority); err != nil {
 		t.Fatalf("reconcile runtime controls: %v", err)
 	}
 
@@ -130,7 +130,39 @@ func TestReconcileAllRuntimeControlsRestoresStableEndpointAndChannel(t *testing.
 		}
 	}
 
-	if err := reconcileAllRuntimeControls(ctx, pool, settings, controls, telemetry); err != nil {
+	channelTarget := controls.ChannelAdmissionControl(channelID)
+	staleChannelPayload := `{"rpm":99,"rpd":99,"tpm":99,"concurrency":99}`
+	if _, err := controls.ReconcileControl(ctx, channelTarget, 9, staleChannelPayload); err != nil {
+		t.Fatalf("seed stale channel control: %v", err)
+	}
+	if code, _, err := controls.PrepareControl(ctx, channelTarget, "stale-channel-pending", 9, 10, staleChannelPayload); err != nil || code != breakerstore.ControlPrepared {
+		t.Fatalf("seed stale channel pending: code=%s err=%v", code, err)
+	}
+	globalTarget := controls.GlobalConcurrencyControl()
+	if _, err := controls.ReconcileControl(ctx, globalTarget, 9, `{"key_limit":9,"channel_limit":9}`); err != nil {
+		t.Fatalf("seed stale global control: %v", err)
+	}
+	if err := reconcileAllRuntimeControls(ctx, pool, settings, controls, telemetry, runtimeControlStrictMode); err == nil {
+		t.Fatal("strict periodic reconciliation overwrote startup-only drift")
+	}
+	stale, err := controls.ReadControl(ctx, channelTarget, 1)
+	if err != nil || stale.ActiveRevision != 9 || stale.PendingRevision != 10 {
+		t.Fatalf("strict reconciliation changed stale channel: %+v err=%v", stale, err)
+	}
+	if err := reconcileAllRuntimeControls(ctx, pool, settings, controls, telemetry, runtimeControlStartupAuthority); err != nil {
+		t.Fatalf("startup authoritative reconciliation: %v", err)
+	}
+	repaired, err := controls.ReadControl(ctx, channelTarget, 1)
+	if err != nil || repaired.SyncState != "active" || repaired.ActiveRevision != 1 || repaired.PendingRevision != 0 ||
+		repaired.ActivePayload != `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}` {
+		t.Fatalf("unexpected repaired channel control: %+v err=%v", repaired, err)
+	}
+	global, err := controls.ReadControl(ctx, globalTarget, 1)
+	if err != nil || global.SyncState != "active" || global.ActiveRevision != 1 || global.ActivePayload != `{"key_limit":0,"channel_limit":0}` {
+		t.Fatalf("unexpected repaired global control: %+v err=%v", global, err)
+	}
+
+	if err := reconcileAllRuntimeControls(ctx, pool, settings, controls, telemetry, runtimeControlStrictMode); err != nil {
 		t.Fatalf("idempotent reconcile runtime controls: %v", err)
 	}
 }

@@ -75,6 +75,10 @@ type Channel struct {
 	ArchivedAt                pgtype.Timestamptz
 	ConcurrencyLimit          pgtype.Int4
 	UpstreamBillsOnDisconnect bool
+	// NULL=inherit gateway.routing_sticky; true=enabled with channel TTL; false=disabled
+	StickyEnabled pgtype.Bool
+	// Channel sticky TTL in milliseconds; required only when sticky_enabled=true
+	StickyTtlMs pgtype.Int8
 }
 
 type ChannelCostExposure struct {
@@ -456,19 +460,21 @@ type RequestRecord struct {
 }
 
 type Route struct {
-	ID            int64
-	Name          string
-	Mode          string
-	Status        string
-	Description   pgtype.Text
-	CreatedAt     pgtype.Timestamptz
-	UpdatedAt     pgtype.Timestamptz
-	PriceRatio    pgtype.Numeric
-	RpmLimit      pgtype.Int4
-	TpmLimit      pgtype.Int4
-	RpdLimit      pgtype.Int4
-	ArchivedAt    pgtype.Timestamptz
-	StickyEnabled pgtype.Bool
+	ID          int64
+	Name        string
+	Mode        string
+	Status      string
+	Description pgtype.Text
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	PriceRatio  pgtype.Numeric
+	RpmLimit    pgtype.Int4
+	TpmLimit    pgtype.Int4
+	RpdLimit    pgtype.Int4
+	ArchivedAt  pgtype.Timestamptz
+	// Deprecated compatibility column; Sticky policy is owned by channels
+	StickyEnabled    pgtype.Bool
+	ConcurrencyLimit pgtype.Int4
 }
 
 type RouteChannel struct {

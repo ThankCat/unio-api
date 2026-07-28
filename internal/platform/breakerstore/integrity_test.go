@@ -90,6 +90,34 @@ func TestRuntimeStateEpochFenceFiveBranches(t *testing.T) {
 	}
 }
 
+func TestReconcileReadyStateEpochReplacesConflictingMarker(t *testing.T) {
+	store, client, namespace := newTestStore(t)
+	ctx := context.Background()
+	if ok, err := store.BootstrapStateEpoch(ctx, "old-epoch", 9, HashPayload("old-transition")); err != nil || !ok {
+		t.Fatalf("bootstrap conflicting marker: ok=%v err=%v", ok, err)
+	}
+	requestKey := namespace + ":admission:v1:request:preserved"
+	if err := client.HSet(ctx, requestKey, "state", "active").Err(); err != nil {
+		t.Fatalf("seed unrelated request token: %v", err)
+	}
+
+	changed, err := store.ReconcileReadyStateEpoch(ctx, "db-epoch", 3)
+	if err != nil || !changed {
+		t.Fatalf("reconcile ready marker: changed=%v err=%v", changed, err)
+	}
+	marker, err := store.StateIntegrity(ctx)
+	if err != nil || !marker.Ready("db-epoch", 3) || marker.OperationToken != "" || marker.NewEpoch != "" {
+		t.Fatalf("unexpected reconciled marker: %+v err=%v", marker, err)
+	}
+	if exists, err := client.Exists(ctx, requestKey).Result(); err != nil || exists != 1 {
+		t.Fatalf("epoch reconcile touched unrelated runtime key: exists=%d err=%v", exists, err)
+	}
+	changed, err = store.ReconcileReadyStateEpoch(ctx, "db-epoch", 3)
+	if err != nil || changed {
+		t.Fatalf("idempotent epoch reconcile changed marker: changed=%v err=%v", changed, err)
+	}
+}
+
 type readinessControlFixture struct {
 	name        string
 	target      func(*Store) ControlTarget

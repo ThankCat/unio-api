@@ -198,6 +198,29 @@ func (s *Store) RestoreMissingControl(ctx context.Context, target ControlTarget,
 	return false, storeUnavailable(errors.New("unexpected restore reply"), "breakerstore restore control")
 }
 
+// ReconcileControl 仅供停机重启的启动协调使用。它把单个稳定 control 原子替换为
+// PostgreSQL 当前 revision/payload，并清除该 control 上的遗留 pending 字段。
+func (s *Store) ReconcileControl(ctx context.Context, target ControlTarget, revision int64, payload string) (bool, error) {
+	res, err := s.controlReconcile.Run(ctx, s.client, []string{target.controlKey},
+		strconv.FormatInt(revision, 10), HashPayload(payload), payload).Result()
+	if err != nil {
+		return false, storeUnavailable(err, "breakerstore reconcile control")
+	}
+	arr, ok := res.([]interface{})
+	if !ok || len(arr) == 0 {
+		return false, storeUnavailable(errors.New("unexpected reconcile reply"), "breakerstore reconcile control")
+	}
+	code, _ := arr[0].(string)
+	switch code {
+	case "unchanged":
+		return false, nil
+	case "reconciled":
+		return true, nil
+	default:
+		return false, storeUnavailable(errors.New("unexpected reconcile code"), "breakerstore reconcile control")
+	}
+}
+
 // RecoverCommittedControl 依据 PostgreSQL db_committed 事实，把缺失或停在 current 的 Redis control
 // 原子恢复为 next committed。已有冲突 revision/pending 时拒绝覆盖。
 func (s *Store) RecoverCommittedControl(ctx context.Context, target ControlTarget, token string, currentRevision, nextRevision int64, payload string) (int64, error) {

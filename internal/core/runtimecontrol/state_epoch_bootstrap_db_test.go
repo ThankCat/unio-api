@@ -130,6 +130,25 @@ func TestStateEpochCoordinatorBootstrapsThroughDurableOperation(t *testing.T) {
 	if err != nil || again.Created || again.State != runtimecontrol.StateEpochEnsureReady || again.Record.Value.Epoch != epoch.Epoch {
 		t.Fatalf("idempotent ensure changed epoch: result=%+v err=%v", again, err)
 	}
+	markerKey := namespace + ":runtime-control:v1:state-integrity-marker"
+	requestKey := namespace + ":admission:v1:request:preserved-after-marker-loss"
+	if err := client.HSet(ctx, requestKey, "state", "active").Err(); err != nil {
+		t.Fatalf("seed unrelated runtime key: %v", err)
+	}
+	if err := client.Del(ctx, markerKey).Err(); err != nil {
+		t.Fatalf("delete ready marker fixture: %v", err)
+	}
+	rebuilt, err := runtimecontrol.EnsureStateEpochSeed(ctx, coordinator)
+	if err != nil || rebuilt.State != runtimecontrol.StateEpochEnsureReady || rebuilt.Record.Value.Epoch != epoch.Epoch {
+		t.Fatalf("rebuild deleted ready marker: result=%+v err=%v", rebuilt, err)
+	}
+	rebuiltMarker, err := store.StateIntegrity(ctx)
+	if err != nil || !rebuiltMarker.Ready(epoch.Epoch, row.Revision) {
+		t.Fatalf("unexpected rebuilt marker: %+v err=%v", rebuiltMarker, err)
+	}
+	if exists, err := client.Exists(ctx, requestKey).Result(); err != nil || exists != 1 {
+		t.Fatalf("marker rebuild touched unrelated runtime key: exists=%d err=%v", exists, err)
+	}
 	var operationCount int
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM runtime_control_operations WHERE setting_key = 'gateway.runtime_state_epoch'`).Scan(&operationCount); err != nil {
 		t.Fatalf("count epoch operations: %v", err)

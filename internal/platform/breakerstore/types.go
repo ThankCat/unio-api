@@ -347,9 +347,14 @@ type CapacityUsage struct {
 
 // RoutingBalanceSnapshot 是本次 SnapshotMany 的 active routing-balance 线性化点。
 type RoutingBalanceSnapshot struct {
-	Revision             int64
-	TTFTTargetMs         int64
-	TTFTWeight           float64
+	Revision          int64
+	TTFTTargetMs      int64
+	TTFTWeight        float64
+	EconomicWeightPct int
+	HealthWeightPct   int
+	CapacityWeightPct int
+	PriorityWeightPct int
+	// Deprecated compatibility fields for in-process callers; objective routing ignores them.
 	CostWeight           float64
 	MinimumRoutingFactor float64
 }

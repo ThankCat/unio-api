@@ -26,10 +26,9 @@ DELETE FROM route_channels WHERE route_id = sqlc.arg(route_id);
 
 -- name: CreateRoute :one
 -- CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
--- rpm/tpm/rpd_limit 是线路级限流上限（DEC-027：NULL=继承线路默认限流，0=不限，>0=上限）；
--- sticky_enabled 是会话粘性开关（NULL=继承系统设置默认）；
+-- rpm/tpm/rpd/concurrency_limit 是线路级限流上限（按线路+用户计数；NULL=继承默认，0=不限，>0=上限）；
 -- balanced/fixed 的渠道数量约束由 service 层校验。
-INSERT INTO routes (name, mode, status, description, price_ratio, rpm_limit, tpm_limit, rpd_limit, sticky_enabled)
+INSERT INTO routes (name, mode, status, description, price_ratio, rpm_limit, tpm_limit, rpd_limit, concurrency_limit)
 VALUES (
     sqlc.arg(name),
     sqlc.arg(mode),
@@ -39,7 +38,7 @@ VALUES (
     sqlc.narg(rpm_limit),
     sqlc.narg(tpm_limit),
     sqlc.narg(rpd_limit),
-    sqlc.narg(sticky_enabled)
+    sqlc.narg(concurrency_limit)
 )
 RETURNING *;
 
@@ -48,7 +47,7 @@ RETURNING *;
 SELECT * FROM routes ORDER BY id ASC;
 
 -- name: UpdateRoute :one
--- UpdateRoute 更新线路的名称/策略/启停/简介/售价倍率/线路级限流上限/会话粘性开关。
+-- UpdateRoute 更新线路的名称/策略/启停/简介/售价倍率/线路级限流上限。
 UPDATE routes
 SET name = sqlc.arg(name),
     mode = sqlc.arg(mode),
@@ -58,7 +57,7 @@ SET name = sqlc.arg(name),
     rpm_limit = sqlc.narg(rpm_limit),
     tpm_limit = sqlc.narg(tpm_limit),
     rpd_limit = sqlc.narg(rpd_limit),
-    sticky_enabled = sqlc.narg(sticky_enabled),
+    concurrency_limit = sqlc.narg(concurrency_limit),
     updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;
@@ -122,6 +121,7 @@ SELECT
     rt.rpm_limit,
     rt.tpm_limit,
     rt.rpd_limit,
+    rt.concurrency_limit,
     rt.created_at,
     (SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id) AS bound_keys,
     (SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id) AS pool_channels,

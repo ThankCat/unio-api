@@ -207,6 +207,39 @@ if op_ttl_ms > 0 then redis.call('PEXPIRE', op, op_ttl_ms) end
 return {'committed'}
 `
 
+// luaEpochReconcileReady 仅供停机重启的启动 coordinator 使用。当 PostgreSQL 当前 epoch
+// 已是 ready 且没有未完成 epoch operation 时，按 DB 身份原子重建 marker。它不触碰任何
+// admission bucket、lease、permit、sticky、breaker 或其它 runtime key。
+// KEYS[1]=marker。ARGV: epoch, revision, ready_hash。返回 unchanged|reconciled。
+const luaEpochReconcileReady = `
+local function now_ms()
+  local t = redis.call('TIME')
+  return tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+end
+local marker = KEYS[1]
+local revision = tonumber(ARGV[2])
+if ARGV[1] == '' or revision == nil or revision < 1 or ARGV[3] == '' then
+  return redis.error_reply('invalid ready epoch')
+end
+local typ = redis.call('TYPE', marker)
+if type(typ) == 'table' then typ = typ['ok'] end
+if typ == 'hash'
+    and redis.call('HGET', marker, 'state') == 'ready'
+    and redis.call('HGET', marker, 'epoch') == ARGV[1]
+    and redis.call('HGET', marker, 'revision') == ARGV[2]
+    and redis.call('HGET', marker, 'marker_hash') == ARGV[3] then
+  return {'unchanged'}
+end
+redis.call('DEL', marker)
+redis.call('HSET', marker,
+  'state', 'ready',
+  'epoch', ARGV[1],
+  'revision', ARGV[2],
+  'marker_hash', ARGV[3],
+  'activated_at_ms', now_ms())
+return {'reconciled'}
+`
+
 // luaRuntimeReadiness 原子核对共享 infrastructure-fault latch、ready marker 和五个关键
 // control。返回 active payload/hash 供 Go 侧继续校验 SHA-256，因 Redis Lua 不提供 SHA-256。
 // KEYS[1..6]=marker + five critical controls, KEYS[7]=persistent fault latch,

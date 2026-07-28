@@ -93,7 +93,7 @@ func (q *Queries) CountRouteChannels(ctx context.Context, routeID int64) (int64,
 }
 
 const createRoute = `-- name: CreateRoute :one
-INSERT INTO routes (name, mode, status, description, price_ratio, rpm_limit, tpm_limit, rpd_limit, sticky_enabled)
+INSERT INTO routes (name, mode, status, description, price_ratio, rpm_limit, tpm_limit, rpd_limit, concurrency_limit)
 VALUES (
     $1,
     $2,
@@ -105,24 +105,23 @@ VALUES (
     $8,
     $9
 )
-RETURNING id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled
+RETURNING id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled, concurrency_limit
 `
 
 type CreateRouteParams struct {
-	Name          string
-	Mode          string
-	Status        string
-	Description   pgtype.Text
-	PriceRatio    pgtype.Numeric
-	RpmLimit      pgtype.Int4
-	TpmLimit      pgtype.Int4
-	RpdLimit      pgtype.Int4
-	StickyEnabled pgtype.Bool
+	Name             string
+	Mode             string
+	Status           string
+	Description      pgtype.Text
+	PriceRatio       pgtype.Numeric
+	RpmLimit         pgtype.Int4
+	TpmLimit         pgtype.Int4
+	RpdLimit         pgtype.Int4
+	ConcurrencyLimit pgtype.Int4
 }
 
 // CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
-// rpm/tpm/rpd_limit 是线路级限流上限（DEC-027：NULL=继承线路默认限流，0=不限，>0=上限）；
-// sticky_enabled 是会话粘性开关（NULL=继承系统设置默认）；
+// rpm/tpm/rpd/concurrency_limit 是线路级限流上限（按线路+用户计数；NULL=继承默认，0=不限，>0=上限）；
 // balanced/fixed 的渠道数量约束由 service 层校验。
 func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route, error) {
 	row := q.db.QueryRow(ctx, createRoute,
@@ -134,7 +133,7 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		arg.RpmLimit,
 		arg.TpmLimit,
 		arg.RpdLimit,
-		arg.StickyEnabled,
+		arg.ConcurrencyLimit,
 	)
 	var i Route
 	err := row.Scan(
@@ -151,6 +150,7 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		&i.RpdLimit,
 		&i.ArchivedAt,
 		&i.StickyEnabled,
+		&i.ConcurrencyLimit,
 	)
 	return i, err
 }
@@ -262,7 +262,7 @@ func (q *Queries) ListRouteChannelsDetailed(ctx context.Context, routeID int64) 
 }
 
 const listRoutes = `-- name: ListRoutes :many
-SELECT id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled FROM routes ORDER BY id ASC
+SELECT id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled, concurrency_limit FROM routes ORDER BY id ASC
 `
 
 // ListRoutes 列出全部线路，供 admin 管理台展示。
@@ -289,6 +289,7 @@ func (q *Queries) ListRoutes(ctx context.Context) ([]Route, error) {
 			&i.RpdLimit,
 			&i.ArchivedAt,
 			&i.StickyEnabled,
+			&i.ConcurrencyLimit,
 		); err != nil {
 			return nil, err
 		}
@@ -1105,6 +1106,7 @@ SELECT
     rt.rpm_limit,
     rt.tpm_limit,
     rt.rpd_limit,
+    rt.concurrency_limit,
     rt.created_at,
     (SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id) AS bound_keys,
     (SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id) AS pool_channels,
@@ -1227,19 +1229,20 @@ type RoutesOpsTableParams struct {
 }
 
 type RoutesOpsTableRow struct {
-	ID           int64
-	Name         string
-	Mode         string
-	Status       string
-	Description  pgtype.Text
-	PriceRatio   pgtype.Numeric
-	RpmLimit     pgtype.Int4
-	TpmLimit     pgtype.Int4
-	RpdLimit     pgtype.Int4
-	CreatedAt    pgtype.Timestamptz
-	BoundKeys    int64
-	PoolChannels int64
-	ModelsCount  int64
+	ID               int64
+	Name             string
+	Mode             string
+	Status           string
+	Description      pgtype.Text
+	PriceRatio       pgtype.Numeric
+	RpmLimit         pgtype.Int4
+	TpmLimit         pgtype.Int4
+	RpdLimit         pgtype.Int4
+	ConcurrencyLimit pgtype.Int4
+	CreatedAt        pgtype.Timestamptz
+	BoundKeys        int64
+	PoolChannels     int64
+	ModelsCount      int64
 }
 
 // §3.5 线路路由作战台只读运维聚合。
@@ -1272,6 +1275,7 @@ func (q *Queries) RoutesOpsTable(ctx context.Context, arg RoutesOpsTableParams) 
 			&i.RpmLimit,
 			&i.TpmLimit,
 			&i.RpdLimit,
+			&i.ConcurrencyLimit,
 			&i.CreatedAt,
 			&i.BoundKeys,
 			&i.PoolChannels,
@@ -1316,26 +1320,26 @@ SET name = $1,
     rpm_limit = $6,
     tpm_limit = $7,
     rpd_limit = $8,
-    sticky_enabled = $9,
+    concurrency_limit = $9,
     updated_at = now()
 WHERE id = $10
-RETURNING id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled
+RETURNING id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled, concurrency_limit
 `
 
 type UpdateRouteParams struct {
-	Name          string
-	Mode          string
-	Status        string
-	Description   pgtype.Text
-	PriceRatio    pgtype.Numeric
-	RpmLimit      pgtype.Int4
-	TpmLimit      pgtype.Int4
-	RpdLimit      pgtype.Int4
-	StickyEnabled pgtype.Bool
-	ID            int64
+	Name             string
+	Mode             string
+	Status           string
+	Description      pgtype.Text
+	PriceRatio       pgtype.Numeric
+	RpmLimit         pgtype.Int4
+	TpmLimit         pgtype.Int4
+	RpdLimit         pgtype.Int4
+	ConcurrencyLimit pgtype.Int4
+	ID               int64
 }
 
-// UpdateRoute 更新线路的名称/策略/启停/简介/售价倍率/线路级限流上限/会话粘性开关。
+// UpdateRoute 更新线路的名称/策略/启停/简介/售价倍率/线路级限流上限。
 func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route, error) {
 	row := q.db.QueryRow(ctx, updateRoute,
 		arg.Name,
@@ -1346,7 +1350,7 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route
 		arg.RpmLimit,
 		arg.TpmLimit,
 		arg.RpdLimit,
-		arg.StickyEnabled,
+		arg.ConcurrencyLimit,
 		arg.ID,
 	)
 	var i Route
@@ -1364,6 +1368,7 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route
 		&i.RpdLimit,
 		&i.ArchivedAt,
 		&i.StickyEnabled,
+		&i.ConcurrencyLimit,
 	)
 	return i, err
 }

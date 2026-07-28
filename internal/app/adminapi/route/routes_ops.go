@@ -27,19 +27,20 @@ type routeOpsHandler struct {
 }
 
 type routeOpsRowDTO struct {
-	ID           int64  `json:"id"`
-	Name         string `json:"name"`
-	Mode         string `json:"mode"`
-	Status       string `json:"status"`
-	Description  string `json:"description"`
-	PriceRatio   string `json:"price_ratio"`
-	RpmLimit     *int32 `json:"rpm_limit"`
-	TpmLimit     *int32 `json:"tpm_limit"`
-	RpdLimit     *int32 `json:"rpd_limit"`
-	CreatedAt    string `json:"created_at"`
-	BoundKeys    int64  `json:"bound_keys"`
-	PoolChannels int64  `json:"pool_channels"`
-	ModelsCount  int64  `json:"models_count"`
+	ID               int64  `json:"id"`
+	Name             string `json:"name"`
+	Mode             string `json:"mode"`
+	Status           string `json:"status"`
+	Description      string `json:"description"`
+	PriceRatio       string `json:"price_ratio"`
+	RpmLimit         *int32 `json:"rpm_limit"`
+	TpmLimit         *int32 `json:"tpm_limit"`
+	RpdLimit         *int32 `json:"rpd_limit"`
+	ConcurrencyLimit *int32 `json:"concurrency_limit"`
+	CreatedAt        string `json:"created_at"`
+	BoundKeys        int64  `json:"bound_keys"`
+	PoolChannels     int64  `json:"pool_channels"`
+	ModelsCount      int64  `json:"models_count"`
 }
 
 type routeOpsDetailDTO struct {
@@ -137,19 +138,20 @@ func (h *routeOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 	out := make([]routeOpsRowDTO, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, routeOpsRowDTO{
-			ID:           row.ID,
-			Name:         row.Name,
-			Mode:         row.Mode,
-			Status:       row.Status,
-			Description:  row.Description,
-			PriceRatio:   row.PriceRatio,
-			RpmLimit:     row.RpmLimit,
-			TpmLimit:     row.TpmLimit,
-			RpdLimit:     row.RpdLimit,
-			CreatedAt:    adminhttp.RFC3339(row.CreatedAt),
-			BoundKeys:    row.BoundKeys,
-			PoolChannels: row.PoolChannels,
-			ModelsCount:  row.ModelsCount,
+			ID:               row.ID,
+			Name:             row.Name,
+			Mode:             row.Mode,
+			Status:           row.Status,
+			Description:      row.Description,
+			PriceRatio:       row.PriceRatio,
+			RpmLimit:         row.RpmLimit,
+			TpmLimit:         row.TpmLimit,
+			RpdLimit:         row.RpdLimit,
+			ConcurrencyLimit: row.ConcurrencyLimit,
+			CreatedAt:        adminhttp.RFC3339(row.CreatedAt),
+			BoundKeys:        row.BoundKeys,
+			PoolChannels:     row.PoolChannels,
+			ModelsCount:      row.ModelsCount,
 		})
 	}
 	adminhttp.WriteList(w, http.StatusOK, out, page, total)

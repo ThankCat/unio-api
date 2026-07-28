@@ -567,14 +567,18 @@ func GatewayConcurrencyDefaults(ctx context.Context, store *SettingsStore) Concu
 
 // ---- balanced 容量调度 ----
 
-// RoutingBalanceSettings 是 balanced 的容量、错误率与 stream-only TTFT 组合权重配置。
-// Enabled/WeightByRemaining 仅供 Phase E 删除前的旧评分器兼容，JSON 不再包含这两个字段。
+// RoutingBalanceSettings is the objective balanced-routing configuration.
 type RoutingBalanceSettings struct {
-	TTFTTarget           time.Duration
-	TTFTWeight           float64
+	EconomicWeightPct int
+	HealthWeightPct   int
+	CapacityWeightPct int
+	PriorityWeightPct int
+	TTFTTarget        time.Duration
+	TTFTWeight        float64
+	TTFTEWMAAlpha     float64
+	// Deprecated compatibility fields; canonical JSON never emits them.
 	CostWeight           float64
 	MinimumRoutingFactor float64
-	TTFTEWMAAlpha        float64
 
 	Enabled           bool
 	WeightByRemaining bool
@@ -582,31 +586,39 @@ type RoutingBalanceSettings struct {
 
 func DefaultRoutingBalanceSettings() RoutingBalanceSettings {
 	return RoutingBalanceSettings{
+		EconomicWeightPct:    45,
+		HealthWeightPct:      25,
+		CapacityWeightPct:    20,
+		PriorityWeightPct:    10,
 		TTFTTarget:           2 * time.Second,
 		TTFTWeight:           0.35,
+		TTFTEWMAAlpha:        0.2,
 		CostWeight:           0.5,
 		MinimumRoutingFactor: 0.05,
-		TTFTEWMAAlpha:        0.2,
 		Enabled:              true,
 		WeightByRemaining:    true,
 	}
 }
 
 type routingBalanceDoc struct {
-	TTFTTargetMs         int64   `json:"ttft_target_ms"`
-	TTFTWeight           float64 `json:"ttft_weight"`
-	CostWeight           float64 `json:"cost_weight"`
-	MinimumRoutingFactor float64 `json:"minimum_routing_factor"`
-	TTFTEWMAAlpha        float64 `json:"ttft_ewma_alpha"`
+	EconomicWeightPct int     `json:"economic_weight_pct"`
+	HealthWeightPct   int     `json:"health_weight_pct"`
+	CapacityWeightPct int     `json:"capacity_weight_pct"`
+	PriorityWeightPct int     `json:"priority_weight_pct"`
+	TTFTTargetMs      int64   `json:"ttft_target_ms"`
+	TTFTWeight        float64 `json:"ttft_weight"`
+	TTFTEWMAAlpha     float64 `json:"ttft_ewma_alpha"`
 }
 
 func encodeRoutingBalanceSettings(s RoutingBalanceSettings) json.RawMessage {
 	raw, err := json.Marshal(routingBalanceDoc{
-		TTFTTargetMs:         durationToMs(s.TTFTTarget),
-		TTFTWeight:           s.TTFTWeight,
-		CostWeight:           s.CostWeight,
-		MinimumRoutingFactor: s.MinimumRoutingFactor,
-		TTFTEWMAAlpha:        s.TTFTEWMAAlpha,
+		EconomicWeightPct: s.EconomicWeightPct,
+		HealthWeightPct:   s.HealthWeightPct,
+		CapacityWeightPct: s.CapacityWeightPct,
+		PriorityWeightPct: s.PriorityWeightPct,
+		TTFTTargetMs:      durationToMs(s.TTFTTarget),
+		TTFTWeight:        s.TTFTWeight,
+		TTFTEWMAAlpha:     s.TTFTEWMAAlpha,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("appsettings: encode routing balance: %v", err))
@@ -615,51 +627,86 @@ func encodeRoutingBalanceSettings(s RoutingBalanceSettings) json.RawMessage {
 }
 
 func DecodeRoutingBalanceSettings(raw []byte) (RoutingBalanceSettings, error) {
-	var doc routingBalanceDoc
-	if err := strictUnmarshal(raw, &doc); err != nil {
-		return RoutingBalanceSettings{}, err
-	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return RoutingBalanceSettings{}, err
 	}
-	for _, name := range []string{"ttft_target_ms", "ttft_weight", "minimum_routing_factor", "ttft_ewma_alpha"} {
-		value, ok := fields[name]
-		if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-			return RoutingBalanceSettings{}, fmt.Errorf("%s is required", name)
+	legacy := len(fields) == 4 || len(fields) == 5
+	if legacy {
+		allowed := map[string]bool{"ttft_target_ms": true, "ttft_weight": true, "minimum_routing_factor": true, "ttft_ewma_alpha": true, "cost_weight": true}
+		for key := range fields {
+			if !allowed[key] {
+				return RoutingBalanceSettings{}, fmt.Errorf("unknown field %q", key)
+			}
+		}
+		for _, key := range []string{"ttft_target_ms", "ttft_weight", "minimum_routing_factor", "ttft_ewma_alpha"} {
+			if value, ok := fields[key]; !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				return RoutingBalanceSettings{}, fmt.Errorf("%s is required", key)
+			}
+		}
+		if value, ok := fields["cost_weight"]; ok && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return RoutingBalanceSettings{}, errors.New("cost_weight must not be null")
+		}
+		var legacyDoc struct {
+			TTFTTargetMs         int64   `json:"ttft_target_ms"`
+			TTFTWeight           float64 `json:"ttft_weight"`
+			CostWeight           float64 `json:"cost_weight"`
+			MinimumRoutingFactor float64 `json:"minimum_routing_factor"`
+			TTFTEWMAAlpha        float64 `json:"ttft_ewma_alpha"`
+		}
+		if err := json.Unmarshal(raw, &legacyDoc); err != nil {
+			return RoutingBalanceSettings{}, err
+		}
+		if legacyDoc.MinimumRoutingFactor <= 0 || legacyDoc.MinimumRoutingFactor > 1 || legacyDoc.CostWeight < 0 || legacyDoc.CostWeight > 1 {
+			return RoutingBalanceSettings{}, errors.New("legacy routing balance weights are invalid")
+		}
+		defaults := DefaultRoutingBalanceSettings()
+		defaults.TTFTTarget = msToDuration(legacyDoc.TTFTTargetMs)
+		defaults.TTFTWeight = legacyDoc.TTFTWeight
+		defaults.TTFTEWMAAlpha = legacyDoc.TTFTEWMAAlpha
+		defaults.CostWeight = legacyDoc.CostWeight
+		defaults.MinimumRoutingFactor = legacyDoc.MinimumRoutingFactor
+		return validateRoutingBalanceSettings(defaults)
+	}
+
+	var doc routingBalanceDoc
+	if err := strictUnmarshal(raw, &doc); err != nil {
+		return RoutingBalanceSettings{}, err
+	}
+	settings := RoutingBalanceSettings{
+		EconomicWeightPct: doc.EconomicWeightPct,
+		HealthWeightPct:   doc.HealthWeightPct,
+		CapacityWeightPct: doc.CapacityWeightPct,
+		PriorityWeightPct: doc.PriorityWeightPct,
+		TTFTTarget:        msToDuration(doc.TTFTTargetMs),
+		TTFTWeight:        doc.TTFTWeight,
+		TTFTEWMAAlpha:     doc.TTFTEWMAAlpha,
+		Enabled:           true,
+		WeightByRemaining: true,
+	}
+	return validateRoutingBalanceSettings(settings)
+}
+
+func validateRoutingBalanceSettings(settings RoutingBalanceSettings) (RoutingBalanceSettings, error) {
+	weights := []int{settings.EconomicWeightPct, settings.HealthWeightPct, settings.CapacityWeightPct, settings.PriorityWeightPct}
+	for _, weight := range weights {
+		if weight < 0 || weight > 100 {
+			return RoutingBalanceSettings{}, errors.New("routing balance weights must be within [0, 100]")
 		}
 	}
-	_, hasCostWeight := fields["cost_weight"]
-	if len(fields) != 4 && !(len(fields) == 5 && hasCostWeight) {
-		return RoutingBalanceSettings{}, errors.New("routing balance payload must use the legacy four-field or current five-field shape")
+	if settings.EconomicWeightPct+settings.HealthWeightPct+settings.CapacityWeightPct+settings.PriorityWeightPct != 100 {
+		return RoutingBalanceSettings{}, errors.New("routing balance weights must sum to 100")
 	}
-	if hasCostWeight && bytes.Equal(bytes.TrimSpace(fields["cost_weight"]), []byte("null")) {
-		return RoutingBalanceSettings{}, errors.New("cost_weight must be within [0, 1]")
-	}
-	if doc.TTFTTargetMs <= 0 {
+	if settings.TTFTTarget <= 0 {
 		return RoutingBalanceSettings{}, errors.New("ttft_target_ms must be > 0")
 	}
-	if doc.TTFTWeight < 0 || doc.TTFTWeight > 1 {
+	if settings.TTFTWeight < 0 || settings.TTFTWeight > 1 {
 		return RoutingBalanceSettings{}, errors.New("ttft_weight must be within [0, 1]")
 	}
-	if doc.CostWeight < 0 || doc.CostWeight > 1 {
-		return RoutingBalanceSettings{}, errors.New("cost_weight must be within [0, 1]")
-	}
-	if doc.MinimumRoutingFactor <= 0 || doc.MinimumRoutingFactor > 1 {
-		return RoutingBalanceSettings{}, errors.New("minimum_routing_factor must be within (0, 1]")
-	}
-	if doc.TTFTEWMAAlpha <= 0 || doc.TTFTEWMAAlpha > 1 {
+	if settings.TTFTEWMAAlpha <= 0 || settings.TTFTEWMAAlpha > 1 {
 		return RoutingBalanceSettings{}, errors.New("ttft_ewma_alpha must be within (0, 1]")
 	}
-	return RoutingBalanceSettings{
-		TTFTTarget:           msToDuration(doc.TTFTTargetMs),
-		TTFTWeight:           doc.TTFTWeight,
-		CostWeight:           doc.CostWeight,
-		MinimumRoutingFactor: doc.MinimumRoutingFactor,
-		TTFTEWMAAlpha:        doc.TTFTEWMAAlpha,
-		Enabled:              true,
-		WeightByRemaining:    true,
-	}, nil
+	return settings, nil
 }
 
 func routingBalanceDefinition() Definition {
@@ -667,8 +714,8 @@ func routingBalanceDefinition() Definition {
 		Key:      GatewayRoutingBalanceKey,
 		Category: "gateway",
 		Label:    "线路负载均衡",
-		Description: "balanced 在线路显式渠道池内组合容量、成本、客观错误率与 stream-only TTFT EWMA。" +
-			"流式和非流式调度共用流式 TTFT 样本；无样本时延迟项保持中性。",
+		Description: "balanced 在线路显式渠道池内按经济、健康、容量与 Priority 客观分确定性排序。" +
+			"四项百分比权重之和必须为 100；无健康样本时健康分为 100。",
 		HotReload: true,
 		Default:   encodeRoutingBalanceSettings(DefaultRoutingBalanceSettings()),
 		Validate: func(raw json.RawMessage) error {
@@ -689,7 +736,7 @@ func GatewayRoutingBalance(ctx context.Context, store *SettingsStore) RoutingBal
 // ---- 会话粘性路由全局默认（大 uncache 缺口 P0） ----
 
 // RoutingStickySettings 是跨协议会话 sticky 的全局默认配置。
-// 线路行 sticky_enabled 可覆盖 EnabledDefault（NULL=继承此默认）；TTL 为绝对过期（bind/改绑时设置，
+// 渠道行 sticky_enabled 可覆盖 EnabledDefault（NULL=继承此默认）；TTL 为绝对过期（bind/改绑时设置，
 // 命中不刷新，R2），与上游 prompt cache TTL 解耦。TPMWait/TPMWaitJitter 供 P1 队首短等消费。
 type RoutingStickySettings struct {
 	EnabledDefault bool
@@ -698,11 +745,11 @@ type RoutingStickySettings struct {
 	TPMWaitJitter  time.Duration
 }
 
-// DefaultRoutingStickySettings 默认开启 sticky：TTL 60min、队首短等 500ms + 100ms 抖动。
+// DefaultRoutingStickySettings 默认开启 sticky：TTL 30min、队首短等 500ms + 100ms 抖动。
 func DefaultRoutingStickySettings() RoutingStickySettings {
 	return RoutingStickySettings{
 		EnabledDefault: true,
-		TTL:            time.Hour,
+		TTL:            30 * time.Minute,
 		TPMWait:        500 * time.Millisecond,
 		TPMWaitJitter:  100 * time.Millisecond,
 	}
@@ -755,7 +802,7 @@ func routingStickyDefinition() Definition {
 		Category: "gateway",
 		Label:    "会话粘性路由(sticky)",
 		Description: "同会话请求钉住上次成功渠道以保上游 prompt cache（OpenAI prompt_cache_key / " +
-			"Claude Code 会话头）。enabled_default 是线路未单独配置时的默认开关；ttl_ms 是绑定绝对过期" +
+			"Claude Code 会话头）。enabled_default 是渠道未单独配置时的默认开关；ttl_ms 是绑定绝对过期" +
 			"（命中不刷新，到期回落线路策略排序）；tpm_wait_ms/抖动是队首 TPM/并发满时的短等（0=不等）。",
 		HotReload: true,
 		Default:   encodeRoutingStickySettings(DefaultRoutingStickySettings()),

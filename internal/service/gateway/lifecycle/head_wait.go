@@ -42,6 +42,10 @@ func (r *AttemptRunner) acquireAttemptWithHeadWait(
 	return r.permitManager.Acquire(ctx, params)
 }
 
+func allowStickyHeadWait(sticky *StickySession, candidateIndex int, channelID int64) bool {
+	return candidateIndex == 0 && sticky.IsPinnedCandidate(channelID)
+}
+
 func isCapacityDenial(reason breakerstore.DeniedReason) bool {
 	return reason == breakerstore.ReasonConcurrencyLimited || reason == breakerstore.ReasonRateLimited
 }

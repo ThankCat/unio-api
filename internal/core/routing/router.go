@@ -120,6 +120,11 @@ type ChatRouteCandidate struct {
 	// CostRatio 是七个归一化计价分项中最大的 provider 成本/客户售价比率。
 	// routing 在负毛利校验后冻结该值，balanced 调度只消费该不可变事实。
 	CostRatio float64
+	// Priority 以 0 为最高优先级，参与客观评分且只允许 0,10,...,100。
+	Priority int32
+	// StickyEnabled 为渠道级覆盖：nil 继承全局，true 使用 StickyTTL，false 禁用。
+	StickyEnabled *bool
+	StickyTTL     *time.Duration
 
 	// RPMLimit/TPMLimit/RPDLimit 是该候选命中渠道的渠道级限流上限（P2-8）：
 	// nil 表示「继承渠道默认限流」，0 表示「显式不限」，>0 表示具体上限。调用上游前在 attempt runner 生效。
@@ -144,10 +149,6 @@ type ChatRoutePlan struct {
 
 	// RouteMode 是本次请求解析出的线路策略（balanced/fixed），供 lifecycle 候选排序消费。
 	RouteMode string
-
-	// RouteStickyEnabled 是线路行 sticky_enabled（会话粘性路由开关，大 uncache 缺口 P0）：
-	// nil=继承系统设置 gateway.routing_sticky.enabled_default，true/false=线路显式覆盖。
-	RouteStickyEnabled *bool
 }
 
 // Store 定义 routing 查询候选渠道所需的最小数据库能力。
@@ -159,14 +160,12 @@ type Store interface {
 	CountRouteChannels(ctx context.Context, routeID int64) (int64, error)
 }
 
-// resolvedRoute 是线路解析后的最小事实（策略 + 价格倍率 + 会话粘性开关）。
+// resolvedRoute 是线路解析后的最小事实（策略 + 价格倍率）。
 type resolvedRoute struct {
 	ID         int64
 	Name       string
 	Mode       string
 	PriceRatio pgtype.Numeric
-	// StickyEnabled：nil=继承全局默认，非 nil=线路显式覆盖（大 uncache 缺口 P0）。
-	StickyEnabled *bool
 }
 
 // Router 负责根据 project 和 requested model 选择可用 channel。
@@ -293,11 +292,10 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 	}
 
 	plan := ChatRoutePlan{
-		RequestedModel:     req.ModelID,
-		Candidates:         candidates,
-		PoolSize:           int(poolSize),
-		RouteMode:          route.Mode,
-		RouteStickyEnabled: route.StickyEnabled,
+		RequestedModel: req.ModelID,
+		Candidates:     candidates,
+		PoolSize:       int(poolSize),
+		RouteMode:      route.Mode,
 	}
 
 	return plan, nil
@@ -340,12 +338,7 @@ func (r *Router) loadEnabledRoute(ctx context.Context, id *int64) (resolvedRoute
 	if row.Status != "enabled" {
 		return resolvedRoute{}, false
 	}
-	resolved := resolvedRoute{ID: row.ID, Name: row.Name, Mode: row.Mode, PriceRatio: row.PriceRatio}
-	if row.StickyEnabled.Valid {
-		enabled := row.StickyEnabled.Bool
-		resolved.StickyEnabled = &enabled
-	}
-	return resolved, true
+	return resolvedRoute{ID: row.ID, Name: row.Name, Mode: row.Mode, PriceRatio: row.PriceRatio}, true
 }
 
 func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest, route resolvedRoute) ([]sqlc.FindRouteCandidatesRow, error) {
@@ -423,6 +416,22 @@ func int4LimitPtr(v pgtype.Int4) *int64 {
 		return nil
 	}
 	out := int64(v.Int32)
+	return &out
+}
+
+func optionalBool(v pgtype.Bool) *bool {
+	if !v.Valid {
+		return nil
+	}
+	out := v.Bool
+	return &out
+}
+
+func optionalDurationMs(v pgtype.Int8) *time.Duration {
+	if !v.Valid {
+		return nil
+	}
+	out := time.Duration(v.Int64) * time.Millisecond
 	return &out
 }
 
@@ -518,6 +527,9 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		RPDLimit:                       int4LimitPtr(row.ChannelRpdLimit),
 		ConcurrencyLimit:               int4LimitPtr(row.ChannelConcurrencyLimit),
 		BillsOnDisconnect:              row.ChannelBillsOnDisconnect,
+		Priority:                       row.Priority,
+		StickyEnabled:                  optionalBool(row.ChannelStickyEnabled),
+		StickyTTL:                      optionalDurationMs(row.ChannelStickyTtlMs),
 		RouteName:                      route.Name,
 		Channel: channel.Runtime{
 			ID:           row.ChannelID,

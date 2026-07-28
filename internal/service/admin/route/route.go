@@ -57,19 +57,17 @@ type Route struct {
 	Status string
 	// PriceRatio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；十进制字符串承载，避免精度丢失。
 	PriceRatio string
-	// RPMLimit/TPMLimit/RPDLimit 是线路级限流上限（DEC-027：按 (线路,用户) 计数）：
+	// RPMLimit/TPMLimit/RPDLimit/ConcurrencyLimit 是线路级限流上限（按 (线路,用户) 计数）：
 	// nil=继承线路默认限流，0=显式不限，>0=具体上限。
-	RPMLimit *int64
-	TPMLimit *int64
-	RPDLimit *int64
-	// StickyEnabled 是会话粘性路由开关（大 uncache 缺口 P0）：nil=继承系统设置
-	// gateway.routing_sticky.enabled_default，true/false=线路显式覆盖。
-	StickyEnabled *bool
-	Description   *string
-	Channels      []RouteChannel
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	ArchivedAt    *time.Time
+	RPMLimit         *int64
+	TPMLimit         *int64
+	RPDLimit         *int64
+	ConcurrencyLimit *int64
+	Description      *string
+	Channels         []RouteChannel
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	ArchivedAt       *time.Time
 }
 
 // EmptyRouteWarning 是归档导致「候选池空但仍有绑定 key」的断供预警项。
@@ -88,36 +86,34 @@ type RouteChannel struct {
 }
 
 // CreateInput 创建线路入参。PriceRatio 为客户售价倍率（十进制字符串，空=默认 1.0）。
-// RPM/TPM/RPDLimit 为线路级限流上限（nil=继承线路默认限流，0=不限，>0=上限）。
+// RPM/TPM/RPD/ConcurrencyLimit 为线路级限流上限（nil=继承默认，0=不限，>0=上限）。
 type CreateInput struct {
-	Name       string
-	Mode       string
-	Status     string
-	PriceRatio string
-	RPMLimit   *int64
-	TPMLimit   *int64
-	RPDLimit   *int64
-	// StickyEnabled 会话粘性开关：nil=继承系统设置默认。
-	StickyEnabled *bool
-	Description   *string
-	ChannelIDs    []int64
+	Name             string
+	Mode             string
+	Status           string
+	PriceRatio       string
+	RPMLimit         *int64
+	TPMLimit         *int64
+	RPDLimit         *int64
+	ConcurrencyLimit *int64
+	Description      *string
+	ChannelIDs       []int64
 }
 
 // UpdateInput 更新线路入参（含渠道池整体替换）。PriceRatio 为客户售价倍率（十进制字符串，空=默认 1.0）。
-// RPM/TPM/RPDLimit 为线路级限流上限（nil=继承线路默认限流，0=不限，>0=上限）。
+// RPM/TPM/RPD/ConcurrencyLimit 为线路级限流上限（nil=继承默认，0=不限，>0=上限）。
 type UpdateInput struct {
-	ID         int64
-	Name       string
-	Mode       string
-	Status     string
-	PriceRatio string
-	RPMLimit   *int64
-	TPMLimit   *int64
-	RPDLimit   *int64
-	// StickyEnabled 会话粘性开关：nil=继承系统设置默认。
-	StickyEnabled *bool
-	Description   *string
-	ChannelIDs    []int64
+	ID               int64
+	Name             string
+	Mode             string
+	Status           string
+	PriceRatio       string
+	RPMLimit         *int64
+	TPMLimit         *int64
+	RPDLimit         *int64
+	ConcurrencyLimit *int64
+	Description      *string
+	ChannelIDs       []int64
 }
 
 // List 列出全部线路及各自渠道池。
@@ -170,7 +166,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 	if err != nil {
 		return Route{}, err
 	}
-	if err := validateRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit); err != nil {
+	if err := validateRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit, in.ConcurrencyLimit); err != nil {
 		return Route{}, err
 	}
 
@@ -182,15 +178,15 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 	q := s.queries.WithTx(tx)
 
 	row, err := q.CreateRoute(ctx, sqlc.CreateRouteParams{
-		Name:          name,
-		Mode:          in.Mode,
-		Status:        in.Status,
-		PriceRatio:    priceRatio,
-		RpmLimit:      int4Narg(in.RPMLimit),
-		TpmLimit:      int4Narg(in.TPMLimit),
-		RpdLimit:      int4Narg(in.RPDLimit),
-		StickyEnabled: boolNarg(in.StickyEnabled),
-		Description:   textParam(in.Description),
+		Name:             name,
+		Mode:             in.Mode,
+		Status:           in.Status,
+		PriceRatio:       priceRatio,
+		RpmLimit:         int4Narg(in.RPMLimit),
+		TpmLimit:         int4Narg(in.TPMLimit),
+		RpdLimit:         int4Narg(in.RPDLimit),
+		ConcurrencyLimit: int4Narg(in.ConcurrencyLimit),
+		Description:      textParam(in.Description),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -223,7 +219,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 	if err != nil {
 		return Route{}, err
 	}
-	if err := validateRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit); err != nil {
+	if err := validateRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit, in.ConcurrencyLimit); err != nil {
 		return Route{}, err
 	}
 
@@ -242,16 +238,16 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 	q := s.queries.WithTx(tx)
 
 	if _, err := q.UpdateRoute(ctx, sqlc.UpdateRouteParams{
-		ID:            in.ID,
-		Name:          name,
-		Mode:          in.Mode,
-		Status:        in.Status,
-		PriceRatio:    priceRatio,
-		RpmLimit:      int4Narg(in.RPMLimit),
-		TpmLimit:      int4Narg(in.TPMLimit),
-		RpdLimit:      int4Narg(in.RPDLimit),
-		StickyEnabled: boolNarg(in.StickyEnabled),
-		Description:   textParam(in.Description),
+		ID:               in.ID,
+		Name:             name,
+		Mode:             in.Mode,
+		Status:           in.Status,
+		PriceRatio:       priceRatio,
+		RpmLimit:         int4Narg(in.RPMLimit),
+		TpmLimit:         int4Narg(in.TPMLimit),
+		RpdLimit:         int4Narg(in.RPDLimit),
+		ConcurrencyLimit: int4Narg(in.ConcurrencyLimit),
+		Description:      textParam(in.Description),
 	}); err != nil {
 		if isUniqueViolation(err) {
 			return Route{}, conflict("route name already exists")
@@ -507,16 +503,17 @@ func validatePoolCount(mode string, channelIDs []int64) error {
 
 func toRoute(r sqlc.Route) Route {
 	out := Route{
-		ID:         r.ID,
-		Name:       r.Name,
-		Mode:       r.Mode,
-		Status:     r.Status,
-		PriceRatio: numericString(r.PriceRatio),
-		RPMLimit:   int4ToPtr(r.RpmLimit),
-		TPMLimit:   int4ToPtr(r.TpmLimit),
-		RPDLimit:   int4ToPtr(r.RpdLimit),
-		CreatedAt:  r.CreatedAt.Time,
-		UpdatedAt:  r.UpdatedAt.Time,
+		ID:               r.ID,
+		Name:             r.Name,
+		Mode:             r.Mode,
+		Status:           r.Status,
+		PriceRatio:       numericString(r.PriceRatio),
+		RPMLimit:         int4ToPtr(r.RpmLimit),
+		TPMLimit:         int4ToPtr(r.TpmLimit),
+		RPDLimit:         int4ToPtr(r.RpdLimit),
+		ConcurrencyLimit: int4ToPtr(r.ConcurrencyLimit),
+		CreatedAt:        r.CreatedAt.Time,
+		UpdatedAt:        r.UpdatedAt.Time,
 	}
 	if r.Description.Valid {
 		desc := r.Description.String
@@ -526,23 +523,11 @@ func toRoute(r sqlc.Route) Route {
 		t := r.ArchivedAt.Time
 		out.ArchivedAt = &t
 	}
-	if r.StickyEnabled.Valid {
-		v := r.StickyEnabled.Bool
-		out.StickyEnabled = &v
-	}
 	return out
 }
 
-// boolNarg 把 *bool 转成可空 pgtype.Bool（nil=NULL 继承系统设置默认）。
-func boolNarg(v *bool) pgtype.Bool {
-	if v == nil {
-		return pgtype.Bool{Valid: false}
-	}
-	return pgtype.Bool{Bool: *v, Valid: true}
-}
-
-// validateRateLimits 校验线路级限流三维：nil（继承默认）放行；否则须为 ≥0 整数。
-func validateRateLimits(rpm, tpm, rpd *int64) error {
+// validateRateLimits 校验线路级限流四维：nil（继承默认）放行；否则须为 >=0 整数。
+func validateRateLimits(rpm, tpm, rpd, concurrency *int64) error {
 	for _, p := range []struct {
 		field string
 		val   *int64
@@ -550,6 +535,7 @@ func validateRateLimits(rpm, tpm, rpd *int64) error {
 		{"rpm_limit", rpm},
 		{"tpm_limit", tpm},
 		{"rpd_limit", rpd},
+		{"concurrency_limit", concurrency},
 	} {
 		if p.val != nil && *p.val < 0 {
 			return invalidArgument(p.field, "must be zero or a positive integer (0=unlimited, empty=inherit default)")
