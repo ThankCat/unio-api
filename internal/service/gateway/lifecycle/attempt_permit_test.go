@@ -643,6 +643,7 @@ func TestInvokeNonStreamAttemptUsesTransportBoundary(t *testing.T) {
 				func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 					if tc.start {
 						adapter.MarkTransportStarted(ctx)
+						adapter.MarkRequestWritten(ctx, nil)
 					}
 					return AttemptSuccess{}, invokeErr
 				},
@@ -709,6 +710,7 @@ func TestInvokeNonStreamAttemptFailsClosedOnRuntimeFeedbackError(t *testing.T) {
 		owner,
 		func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 			adapter.MarkTransportStarted(ctx)
+			adapter.MarkRequestWritten(ctx, nil)
 			return AttemptSuccess{}, feedbackUpstreamError(adapter.UpstreamErrorRateLimit, 429, time.Second)
 		},
 	)
@@ -743,6 +745,7 @@ func TestInvokeNonStreamAttemptAuditsUnknownFinishResult(t *testing.T) {
 		owner,
 		func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 			adapter.MarkTransportStarted(ctx)
+			adapter.MarkRequestWritten(ctx, nil)
 			return AttemptSuccess{}, nil
 		},
 	)
@@ -778,6 +781,7 @@ func TestInvokeNonStreamAttemptStopsFallbackWhenFailedTransportFinishIsUnknown(t
 		owner,
 		func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 			adapter.MarkTransportStarted(ctx)
+			adapter.MarkRequestWritten(ctx, nil)
 			return AttemptSuccess{}, upstreamErr
 		},
 	)

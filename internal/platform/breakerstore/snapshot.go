@@ -291,6 +291,19 @@ func parseSnapshotManyReply(in SnapshotManyInput, reply []interface{}) (Snapshot
 			return SnapshotManyResult{}, snapshotManyRejected(string(ReasonRuntimeSyncRequired))
 		}
 	}
+	costWeight, minimumRoutingFactor := float64(0), float64(0.05)
+	if len(reply) >= 14 {
+		if value, valid := redisFloat64(reply[12]); valid {
+			costWeight = value
+		} else {
+			return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot legacy cost weight is invalid"), "breakerstore snapshot many")
+		}
+		if value, valid := redisFloat64(reply[13]); valid && value > 0 && value <= 1 {
+			minimumRoutingFactor = value
+		} else {
+			return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot legacy minimum routing factor is invalid"), "breakerstore snapshot many")
+		}
+	}
 
 	result := SnapshotManyResult{
 		Candidates:                make([]CandidateSnapshot, 0, len(rows)),
@@ -302,6 +315,7 @@ func parseSnapshotManyReply(in SnapshotManyInput, reply []interface{}) (Snapshot
 			Revision: revision, TTFTTargetMs: targetMs, TTFTWeight: ttftWeight,
 			EconomicWeightPct: weights[0], HealthWeightPct: weights[1],
 			CapacityWeightPct: weights[2], PriorityWeightPct: weights[3],
+			CostWeight: costWeight, MinimumRoutingFactor: minimumRoutingFactor,
 		},
 	}
 	for index, raw := range rows {

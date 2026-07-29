@@ -78,7 +78,8 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
 		})
 	}
-	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
+	if err := requestadmission.ReserveBudgetIfPresent(ctx, candidatePlan.ConservativeInputTokens,
+		candidatePlan.RequestTPMBudget()-candidatePlan.ConservativeInputTokens, candidatePlan.RequestTPMBudget()); err != nil {
 		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return nil, err
 	}
@@ -109,6 +110,7 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 		RequestedModelID: req.Model,
 		ResponseProtocol: requestlog.ProtocolAnthropic,
 		EstimatedTokens:  candidatePlan.ConservativeInputTokens,
+		RequestTPMBudget: candidatePlan.RequestTPMBudget(),
 		Sticky:           stickySession,
 		Codes: lifecycle.RunNonStreamCodes{
 			AuthorizationReleaseFailedCode:       "messages_authorization_release_failed",
@@ -129,7 +131,8 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 		},
 		Invoke: func(ctx context.Context, candidate routing.ChatRouteCandidate) (lifecycle.AttemptSuccess, error) {
 			adapterCtx, adapterSpan := lifecycle.StartGatewaySpan(ctx, "adapter.messages", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
-			resp, err := messagesAdapter.Messages(adapterCtx, candidate.Channel, mapGatewayRequestToAdapter(req, candidate.UpstreamModel))
+			resp, err := messagesAdapter.Messages(adapterCtx, candidate.Channel,
+				mapGatewayRequestToAdapterWithOutputBudget(req, candidate.UpstreamModel, candidatePlan.OutputBudgetFor(candidate.Channel.ID)))
 			lifecycle.EndGatewaySpan(adapterSpan, err)
 			if err != nil {
 				return lifecycle.AttemptSuccess{}, err

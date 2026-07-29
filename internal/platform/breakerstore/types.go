@@ -206,8 +206,10 @@ type AttemptPermit struct {
 	IntegrityEpoch     string
 	IntegrityRevision  int64
 
-	ProviderID int64
-	ChannelID  int64
+	ProviderID            int64
+	ChannelID             int64
+	RouteID               int64
+	RouteChannelRPDBucket string
 
 	OriginRevision         int64
 	ProviderStatusRevision int64
@@ -243,6 +245,10 @@ type FinishOutcome struct {
 	ProviderOutcome Outcome
 	ChannelOutcome  Outcome
 
+	// ChannelInteractionEvidence 由生命周期层在确认请求已写出、收到响应头或产生有效首字后设置。
+	// 没有该事实时不能把 Finish 当作真实上游 attempt 写入 Route-Channel RPD 归因桶。
+	ChannelInteractionEvidence bool
+
 	// ProviderEvidence 表示本次 Channel failure 需要满足短窗 distinct Channel + model 门槛后，
 	// 才能在同一个 Redis Finish 中原子升级为 Provider eligible_failure。
 	ProviderEvidence ProviderEvidenceCategory
@@ -250,9 +256,13 @@ type FinishOutcome struct {
 	// FirstTokenMs 仅在 stream permit 且观测到有效 FirstToken 时为非 nil；非流式必须为 nil。
 	FirstTokenMs *int64
 
-	// ChannelTPMActual 为权威 usage 的真实 Channel TPM（cache-aware actual）；非 nil 时按 actual-estimate
-	// 对账原始桶，nil 时释放 TPM 预占（§2.12.8）。仅在启用 admission control 的 permit 生效。
+	// ChannelTPMActual 为权威 usage 的真实 Channel TPM（cache-aware actual）；非 nil 时按 actual-reserved
+	// 对账原始桶，nil 时按输入保底或本地输出计量收口。仅在启用 admission control 的 permit 生效。
 	ChannelTPMActual *int64
+	// ChannelTPMOutputTokens is a locally measured output count used when upstream usage is absent.
+	ChannelTPMOutputTokens *int64
+	// ChannelTPMUsageSource is authoritative|local|input_estimate; empty infers the legacy path.
+	ChannelTPMUsageSource string
 }
 
 // FinishResult 汇报两个作用域各自的 applied/stale disposition（写入 request_attempts）。

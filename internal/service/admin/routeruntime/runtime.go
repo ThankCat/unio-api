@@ -49,6 +49,10 @@ type BreakerSnapshotter interface {
 	AggregateRouteUsage(context.Context, int64) (breakerstore.RouteUsage, error)
 }
 
+type RouteChannelRPDReader interface {
+	RouteChannelRPDUsage(context.Context, int64, int64) (int64, error)
+}
+
 // RouteUsage 是线路级全用户入口用量合计（只读展示；不含总上限）。
 type RouteUsage struct {
 	Concurrency int64
@@ -116,6 +120,9 @@ type Channel struct {
 	RPDUsed                         int64
 	RPDLimit                        int64
 	RPDRemaining                    *float64
+	GlobalRPDUsed                   int64
+	GlobalRPDLimit                  int64
+	GlobalRPDRemaining              *float64
 	TPMUsed                         int64
 	TPMLimit                        int64
 	TPMRemaining                    *float64
@@ -307,9 +314,31 @@ func (s *Service) Get(ctx context.Context, params Params) (Runtime, error) {
 
 	costFacts := resolveCostFacts(rows)
 	applySnapshot(&runtime, rows, snapshot, admissionFacts, routingFacts, costFacts)
+	s.fillRouteChannelRPD(ctx, &runtime)
 	s.fillRouteUsage(ctx, &runtime)
 	runtime.Sources = healthySources(now)
 	return runtime, nil
+}
+
+func (s *Service) fillRouteChannelRPD(ctx context.Context, runtime *Runtime) {
+	reader, ok := s.breakers.(RouteChannelRPDReader)
+	if !ok {
+		return
+	}
+	for index := range runtime.Channels {
+		channel := &runtime.Channels[index]
+		channel.GlobalRPDUsed = channel.RPDUsed
+		channel.GlobalRPDLimit = channel.RPDLimit
+		channel.GlobalRPDRemaining = channel.RPDRemaining
+		used, err := reader.RouteChannelRPDUsage(ctx, runtime.RouteID, channel.ChannelID)
+		if err != nil {
+			channel.CapacityReadFailed = true
+			continue
+		}
+		channel.RPDUsed = used
+		channel.RPDLimit = 0
+		channel.RPDRemaining = nil
+	}
 }
 
 func (s *Service) fillRouteUsage(ctx context.Context, runtime *Runtime) {
@@ -818,7 +847,7 @@ func SortChannels(channels []Channel, field string, desc bool) {
 		case "rpm":
 			return remainingOrOne(c.RPMRemaining)
 		case "rpd":
-			return remainingOrOne(c.RPDRemaining)
+			return remainingOrOne(channelGlobalRPDRemaining(c))
 		case "tpm":
 			return remainingOrOne(c.TPMRemaining)
 		default:
@@ -848,13 +877,20 @@ func SortChannels(channels []Channel, field string, desc bool) {
 func tightestRemaining(c Channel) float64 {
 	remaining := 1.0
 	for _, v := range []*float64{
-		c.ConcurrencyRemaining, c.RPMRemaining, c.RPDRemaining, c.TPMRemaining,
+		c.ConcurrencyRemaining, c.RPMRemaining, channelGlobalRPDRemaining(c), c.TPMRemaining,
 	} {
 		if r := remainingOrOne(v); r < remaining {
 			remaining = r
 		}
 	}
 	return remaining
+}
+
+func channelGlobalRPDRemaining(c Channel) *float64 {
+	if c.GlobalRPDRemaining != nil {
+		return c.GlobalRPDRemaining
+	}
+	return c.RPDRemaining
 }
 
 func remainingOrOne(v *float64) float64 {

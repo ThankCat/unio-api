@@ -230,6 +230,7 @@ func (a *Adapter) StreamMessages(ctx context.Context, ch channel.Runtime, req Me
 
 // do 构造并发送上游 HTTP 请求。
 func (a *Adapter) do(ctx context.Context, ch channel.Runtime, req MessageRequest, stream bool) (*http.Response, error) {
+	ctx = adapter.WithAttemptTransportTrace(ctx)
 	url, err := adapter.BuildUpstreamURL(ch.Origin, adapter.OperationPathMessages)
 	if err != nil {
 		return nil, err
@@ -264,6 +265,9 @@ func (a *Adapter) do(ctx context.Context, ch channel.Runtime, req MessageRequest
 
 	adapter.MarkTransportStarted(ctx)
 	httpResp, err := a.client.Do(request)
+	if httpResp != nil {
+		adapter.MarkResponseHeadersReceived(ctx)
+	}
 	if err != nil {
 		op := "send messages request"
 		if stream {

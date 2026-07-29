@@ -80,7 +80,8 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
 		})
 	}
-	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
+	if err := requestadmission.ReserveBudgetIfPresent(ctx, candidatePlan.ConservativeInputTokens,
+		candidatePlan.RequestTPMBudget()-candidatePlan.ConservativeInputTokens, candidatePlan.RequestTPMBudget()); err != nil {
 		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
 	}
@@ -108,6 +109,7 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		RequestedModelID:        req.Model,
 		ResponseProtocol:        requestlog.ProtocolAnthropic,
 		ConservativeInputTokens: candidatePlan.ConservativeInputTokens,
+		ConservativeTPMBudget:   candidatePlan.RequestTPMBudget(),
 		CountOutputTokens:       anthropicPartialOutputTokenCounter,
 		Sticky:                  stickySession,
 		Codes: lifecycle.RunStreamCodes{
@@ -131,7 +133,8 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		},
 		Stream: func(ctx context.Context, candidate routing.ChatRouteCandidate, onChunk func(messagesadapter.MessageStreamEvent) error) (*adapter.ResponseFacts, error) {
 			streamCtx, streamSpan := lifecycle.StartGatewaySpan(ctx, "adapter.stream_messages", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
-			streamOutcome, streamErr := streamAdapter.StreamMessages(streamCtx, candidate.Channel, mapGatewayRequestToAdapter(req, candidate.UpstreamModel), onChunk)
+			streamOutcome, streamErr := streamAdapter.StreamMessages(streamCtx, candidate.Channel,
+				mapGatewayRequestToAdapterWithOutputBudget(req, candidate.UpstreamModel, candidatePlan.OutputBudgetFor(candidate.Channel.ID)), onChunk)
 			lifecycle.EndGatewaySpan(streamSpan, streamErr)
 			return streamOutcome.Facts, streamErr
 		},

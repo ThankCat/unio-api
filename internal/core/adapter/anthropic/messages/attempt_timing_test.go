@@ -28,6 +28,10 @@ func (p *messagesTransportStartProbe) TransportStarted() {
 	p.starts.Add(1)
 }
 
+func (p *messagesTransportStartProbe) RequestWritten(error) {}
+
+func (p *messagesTransportStartProbe) ResponseHeadersReceived() {}
+
 func (p *messagesTransportStartProbe) FirstTokenEligible() {
 	p.firstToken.Add(1)
 }

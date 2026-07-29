@@ -175,11 +175,13 @@ if redis.call('EXISTS', KEYS[4]) == 1 then return {'store_unavailable'} end
 local instance_matches = redis_instance_proof_matches(KEYS[5])
 if instance_matches == nil then return redis.error_reply('invalid Redis instance reconciliation proof') end
 if not instance_matches then return {'redis_instance_changed'} end
-local estimate = tonumber(ARGV[1])
-local route_id = ARGV[2]
-local user_id = ARGV[3]
-local expected_epoch = ARGV[4]
-local expected_epoch_rev = ARGV[5]
+local input_estimate = tonumber(ARGV[1]) or 0
+local output_budget = tonumber(ARGV[2]) or 0
+local reserved_total = tonumber(ARGV[3]) or 0
+local route_id = ARGV[4]
+local user_id = ARGV[5]
+local expected_epoch = ARGV[6]
+local expected_epoch_rev = ARGV[7]
 
 if key_type(marker) ~= 'hash' then return {'runtime_state_lost'} end
 if redis.call('HGET', marker, 'state') ~= 'ready' then return {'runtime_state_lost'} end
@@ -201,8 +203,10 @@ end
 
 local state = redis.call('HGET', token_key, 'reserve_state')
 if state == 'reserved' or state == 'limited' then
-  local prev = tonumber(redis.call('HGET', token_key, 'reserve_estimated_input_tokens')) or -1
-  if prev ~= estimate then return {'conflict'} end
+  local prev_input = tonumber(redis.call('HGET', token_key, 'reserve_input_estimate')) or -1
+  local prev_output = tonumber(redis.call('HGET', token_key, 'reserve_output_budget')) or 0
+  local prev_total = tonumber(redis.call('HGET', token_key, 'reserved_tpm_amount')) or -1
+  if prev_input ~= input_estimate or prev_output ~= output_budget or prev_total ~= reserved_total then return {'conflict'} end
   return {state}
 end
 
@@ -222,14 +226,16 @@ if tpm_type == 'string' then
   if raw == false or string.match(raw, '^%d+$') == nil then return redis.error_reply('malformed request TPM bucket') end
   used = tonumber(raw)
 end
-if eff_tpm > 0 and used + estimate > eff_tpm then
-  redis.call('HSET', token_key, 'reserve_state', 'limited', 'reserve_estimated_input_tokens', estimate, 'reserve_result', 'limited')
+if eff_tpm > 0 and used + reserved_total > eff_tpm then
+  redis.call('HSET', token_key, 'reserve_state', 'limited', 'reserve_input_estimate', input_estimate,
+    'reserve_output_budget', output_budget, 'reserve_estimated_input_tokens', input_estimate, 'reserve_result', 'limited')
   return {'limited'}
 end
-redis.call('INCRBY', tpm_key, estimate)
+redis.call('INCRBY', tpm_key, reserved_total)
 redis.call('PEXPIRE', tpm_key, bucket_ttl_ms)
-redis.call('HSET', token_key, 'reserve_state', 'reserved', 'reserve_estimated_input_tokens', estimate,
-  'reserve_result', 'reserved', 'reserved_tpm_bucket', tpm_key, 'reserved_tpm_amount', estimate)
+redis.call('HSET', token_key, 'reserve_state', 'reserved', 'reserve_input_estimate', input_estimate,
+  'reserve_output_budget', output_budget, 'reserve_estimated_input_tokens', input_estimate,
+  'reserve_result', 'reserved', 'reserved_tpm_bucket', tpm_key, 'reserved_tpm_amount', reserved_total)
 return {'reserved'}
 `
 
@@ -305,8 +311,8 @@ return {'renewed', new_lease}
 // luaFinishRequestAdmission 唯一终态：释放 route-user concurrency，保留已接收请求的 RPM/RPD，
 // 按可空权威 usage 对账/释放 TPM（§2.14.12）。first-terminal-wins。预占桶从 token 记录读取。
 // KEYS[1]=marker KEYS[2]=request_token KEYS[3]=conc_zset
-// ARGV: request_admission_id, route_id, user_id, authoritative_tpm(空表示无权威 usage → 释放预占),
-// expected_epoch, expected_epoch_revision
+// ARGV: request_admission_id, route_id, user_id, quota_tpm(空表示没有可计量 transport),
+// usage_source, expected_epoch, expected_epoch_revision
 // 返回 {'finished'} | {'unknown_request_admission'} | {'terminal'}（重复终态返回首次）。
 const luaFinishRequestAdmission = `
 local function now_ms()
@@ -325,8 +331,9 @@ local rid = ARGV[1]
 local route_id = ARGV[2]
 local user_id = ARGV[3]
 local authoritative = ARGV[4]
-local expected_epoch = ARGV[5]
-local expected_epoch_rev = ARGV[6]
+local usage_source = ARGV[5]
+local expected_epoch = ARGV[6]
+local expected_epoch_rev = ARGV[7]
 local now = now_ms()
 
 if key_type(marker) ~= 'hash' then return {'runtime_state_lost'} end
@@ -358,15 +365,18 @@ if terminal_ttl == nil or terminal_ttl <= 0 then return {'runtime_sync_required'
 -- 释放 route-user 并发（RPM/RPD 作为已接收请求保留，不回退）。
 if key_type(conc_key) == 'zset' then redis.call('ZREM', conc_key, rid) end
 
--- TPM 对账：有权威 usage 则按 (actual - estimate) 调整仍存在的原始桶；无权威 usage 则释放预占。
+-- TPM 对账：有权威 usage 则按 (actual - reserved) 调整；无权威 usage 至少保留输入估算，
+-- 因为请求可能已经到达上游但没有返回 usage。
 local reserve_state = redis.call('HGET', token_key, 'reserve_state')
 if reserve_state == 'reserved' then
   local tpm_bucket = redis.call('HGET', token_key, 'reserved_tpm_bucket')
   local reserved = tonumber(redis.call('HGET', token_key, 'reserved_tpm_amount')) or 0
   if tpm_bucket ~= false and tpm_bucket ~= '' then
     if authoritative == '' then
-      if redis.call('EXISTS', tpm_bucket) == 1 and reserved > 0 then
-        redis.call('DECRBY', tpm_bucket, reserved)
+      local input_estimate = tonumber(redis.call('HGET', token_key, 'reserve_input_estimate')) or 0
+      local release = reserved - input_estimate
+      if redis.call('EXISTS', tpm_bucket) == 1 and release > 0 then
+        redis.call('DECRBY', tpm_bucket, release)
       end
     else
       local actual = tonumber(authoritative) or 0
@@ -379,6 +389,10 @@ if reserve_state == 'reserved' then
 end
 
 redis.call('HSET', token_key, 'status', 'finished', 'terminal_at_ms', now, 'terminal_result', 'finished')
+if authoritative ~= '' then
+  redis.call('HSET', token_key, 'quota_tpm_actual', authoritative,
+    'quota_tpm_usage_source', usage_source ~= '' and usage_source or 'legacy')
+end
 redis.call('PEXPIRE', token_key, terminal_ttl)
 return {'finished'}
 `

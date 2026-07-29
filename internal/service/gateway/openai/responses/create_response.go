@@ -64,7 +64,8 @@ type nonStreamStrategy struct {
 	upstreamCostWithoutUsage func(err error) bool
 
 	// codes 可选：覆盖 runner 审计 code/reason（如 compact 专用 risk_exposure 文案）。零值用通用默认。
-	codes lifecycle.RunNonStreamCodes
+	codes           lifecycle.RunNonStreamCodes
+	outputBudgetFor func(routing.ChatRouteCandidate) int64
 }
 
 // multiAgentBridgeUnsupported 构造「multi-agent 无法桥接到 Chat Completions」的请求不支持错误（映射 400）。
@@ -115,7 +116,8 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 		},
 		invoke: func(ctx context.Context, candidate routing.ChatRouteCandidate) (lifecycle.AttemptSuccess, error) {
 			if allowDirect && s.registry.HasResponses(candidate.AdapterKey) {
-				body, err := encodeUpstreamResponsesBody(req, candidate.UpstreamModel, false)
+				budget := responseCandidateOutputBudget(req, candidate)
+				body, err := encodeUpstreamResponsesBody(req, candidate.UpstreamModel, false, budget)
 				if err != nil {
 					return lifecycle.AttemptSuccess{}, err
 				}
@@ -133,7 +135,8 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 			if req.MultiAgentEnabled() {
 				return lifecycle.AttemptSuccess{}, multiAgentBridgeUnsupported()
 			}
-			chatReq, _ := mapResponsesRequestToChat(req, candidate.UpstreamModel)
+			budget := responseCandidateOutputBudget(req, candidate)
+			chatReq, _ := mapResponsesRequestToChatWithOutputBudget(req, candidate.UpstreamModel, budget)
 			adapterCtx, adapterSpan := lifecycle.StartGatewaySpan(ctx, "adapter.chat_completions", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 			resp, err := chatAdapter.ChatCompletions(adapterCtx, candidate.Channel, chatReq)
 			lifecycle.EndGatewaySpan(adapterSpan, err)
@@ -146,6 +149,16 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 		},
 	})
 	return result, delivery, err
+}
+
+func responseCandidateOutputBudget(req gatewayapi.ResponsesRequest, candidate routing.ChatRouteCandidate) int64 {
+	if requested := estimateMaxCompletionTokens(req); requested > 0 {
+		return requested
+	}
+	if candidate.MaxOutputTokens > 0 {
+		return candidate.MaxOutputTokens
+	}
+	return lifecycle.DefaultAuthorizationMaxCompletionTokens
 }
 
 // runNonStream 执行 authorization 之后由共享 AttemptRunner 驱动的非流式 Responses 候选 fallback 计费循环。
@@ -212,6 +225,9 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return nil, err
 	}
+	strat.outputBudgetFor = func(candidate routing.ChatRouteCandidate) int64 {
+		return candidatePlan.OutputBudgetFor(candidate.Channel.ID)
+	}
 	stickySession.ApplyPlanOutcome(ctx, candidatePlan)
 	if principal.RouteID != nil {
 		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
@@ -219,7 +235,8 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
 		})
 	}
-	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
+	if err := requestadmission.ReserveBudgetIfPresent(ctx, candidatePlan.ConservativeInputTokens,
+		candidatePlan.RequestTPMBudget()-candidatePlan.ConservativeInputTokens, candidatePlan.RequestTPMBudget()); err != nil {
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return nil, err
 	}
@@ -246,6 +263,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		RequestedModelID:         req.Model,
 		ResponseProtocol:         requestlog.ProtocolOpenAI,
 		EstimatedTokens:          candidatePlan.ConservativeInputTokens,
+		RequestTPMBudget:         candidatePlan.RequestTPMBudget(),
 		Sticky:                   stickySession,
 		ResolveAdapter:           strat.resolve,
 		Invoke:                   strat.invoke,

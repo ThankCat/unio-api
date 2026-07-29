@@ -39,6 +39,7 @@ func (a *fakeCompactAdapter) CompactResponse(ctx context.Context, _ channel.Runt
 	a.called++
 	a.gotBody = req.Body
 	adapter.MarkTransportStarted(ctx)
+	adapter.MarkRequestWritten(ctx, nil)
 	if a.err != nil {
 		return nil, a.err
 	}

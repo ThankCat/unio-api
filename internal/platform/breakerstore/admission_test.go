@@ -296,6 +296,40 @@ func TestRequestAdmissionRPDBucketTTLCoversDay(t *testing.T) {
 	}
 }
 
+// TestChannelAdmissionRPDBucketTTLCoversDay 回归：Channel RPD 也是日窗口桶，不能复用
+// AttemptPermit 派生的分钟级 TTL；否则当天限额会在 permit 结束后几分钟内重新从零开始。
+func TestChannelAdmissionRPDBucketTTLCoversDay(t *testing.T) {
+	s, rc, _ := newTestStore(t)
+	const channelID, providerID = int64(72), int64(720)
+	seedAttemptControls(t, s, testConfig(), channelID, `{"rpm":100,"rpd":100,"tpm":0,"concurrency":0}`)
+	input := withAttemptControlRevisions(AcquireAttemptInput{
+		PermitID: "channel-rpd-ttl", AdmissionFingerprint: "channel-rpd-ttl-fp", RequestAdmissionID: "channel-rpd-ttl-request",
+		ProviderID: providerID, ChannelID: channelID, OriginRevision: 1, ProviderStatusRevision: 1,
+		ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
+	})
+	admission, err := acquireAttempt(t, s, input)
+	if err != nil || admission.Mode != AdmissionPermit {
+		t.Fatalf("acquire want permit, got %+v err=%v", admission, err)
+	}
+
+	ctx := context.Background()
+	now := time.Now()
+	rpdTTL, err := rc.PTTL(ctx, s.keys.channelRPDBucket(channelID, dayBucket(now))).Result()
+	if err != nil {
+		t.Fatalf("channel rpd pttl: %v", err)
+	}
+	rpmTTL, err := rc.PTTL(ctx, s.keys.channelRPMBucket(channelID, minuteBucket(now))).Result()
+	if err != nil {
+		t.Fatalf("channel rpm pttl: %v", err)
+	}
+	if rpdTTL <= 24*time.Hour {
+		t.Fatalf("Channel RPD day bucket TTL must exceed 24h, got %s", rpdTTL)
+	}
+	if rpmTTL >= 24*time.Hour {
+		t.Fatalf("Channel RPM minute bucket TTL should stay minute-scale (<24h), got %s", rpmTTL)
+	}
+}
+
 // TestRequestAdmissionStaleEpochFailClosed 验证 epoch 不匹配 fail-closed。
 func TestRequestAdmissionStaleEpochFailClosed(t *testing.T) {
 	s, _, _ := newTestStore(t)
@@ -517,6 +551,30 @@ func TestReserveRequestTokensIdempotent(t *testing.T) {
 	if res, _ := s.ReserveRequestTokens(context.Background(), "rt2", 4, 4, 1000,
 		epoch, rev); res != ReserveLimited {
 		t.Fatalf("over-tpm reserve want limited, got %s", res)
+	}
+}
+
+func TestFinishRequestAdmissionQuotaSourceDistinguishesNoTransport(t *testing.T) {
+	s, _, _ := newTestStore(t)
+	epoch, rev := seedAdmissionEnvWithControls(
+		t, s, `{"rpm":0,"tpm":100,"rpd":0}`, `{"key_limit":0,"channel_limit":0}`, testConfig(),
+	)
+	const routeID, userID = int64(14), int64(15)
+	if result, err := s.AcquireRequestAdmission(context.Background(), raInput("quota-no-transport", routeID, userID, epoch, rev)); err != nil || result.Outcome != RequestAllowed {
+		t.Fatalf("acquire: result=%+v err=%v", result, err)
+	}
+	if result, err := s.ReserveRequestTokensBudget(context.Background(), "quota-no-transport", routeID, userID, 10, 30, 40, epoch, rev); err != nil || result != ReserveReserved {
+		t.Fatalf("reserve budget: result=%s err=%v", result, err)
+	}
+	tpmKey := s.keys.requestTPMBucket(routeID, userID, minuteBucket(time.Now()))
+	if used := s.client.Get(context.Background(), tpmKey).Val(); used != "40" {
+		t.Fatalf("reserved TPM=%q, want 40", used)
+	}
+	if result, err := s.FinishRequestAdmissionWithUsage(context.Background(), "quota-no-transport", routeID, userID, 0, "no_transport", epoch, rev); err != nil || result != RequestLifecycleFinished {
+		t.Fatalf("finish no transport: result=%s err=%v", result, err)
+	}
+	if used := s.client.Get(context.Background(), tpmKey).Val(); used != "0" {
+		t.Fatalf("no-transport TPM=%q, want 0", used)
 	}
 }
 

@@ -108,6 +108,7 @@ func (a *fakeChatAdapter) ChatCompletions(ctx context.Context, _ channel.Runtime
 	a.called++
 	a.req = req
 	adapter.MarkTransportStarted(ctx)
+	adapter.MarkRequestWritten(ctx, nil)
 	return a.resp, a.err
 }
 

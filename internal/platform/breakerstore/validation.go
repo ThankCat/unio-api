@@ -65,6 +65,19 @@ func validateReserveRequestTokensInput(requestAdmissionID string, routeID, userI
 	return nil
 }
 
+func validateReserveRequestTokensBudgetInput(requestAdmissionID string, routeID, userID, inputEstimate, outputBudget, reservedTotal int64) error {
+	if err := validateReserveRequestTokensInput(requestAdmissionID, routeID, userID, inputEstimate); err != nil {
+		return err
+	}
+	if outputBudget < 0 || reservedTotal < 0 {
+		return configInvalid("request token budget must not be negative")
+	}
+	if reservedTotal < inputEstimate || reservedTotal < inputEstimate+outputBudget {
+		return configInvalid("request reserved token budget must cover input and output budgets")
+	}
+	return nil
+}
+
 func validateAcquireAttemptInput(in AcquireAttemptInput) error {
 	if strings.TrimSpace(in.PermitID) == "" {
 		return configInvalid("attempt permit id is required")
@@ -97,6 +110,12 @@ func validateAcquireAttemptInput(in AcquireAttemptInput) error {
 	if in.EstimatedInputTokens < 0 {
 		return configInvalid("attempt token estimate must not be negative")
 	}
+	if in.OutputBudgetTokens < 0 || in.ReservedTPMTokens < 0 {
+		return configInvalid("attempt token budget must not be negative")
+	}
+	if in.ReservedTPMTokens > 0 && in.ReservedTPMTokens < in.EstimatedInputTokens {
+		return configInvalid("attempt reserved token budget must cover input estimate")
+	}
 	return nil
 }
 
@@ -124,6 +143,13 @@ func validateFinishInput(permit AttemptPermit, outcome FinishOutcome) error {
 	}
 	if outcome.ChannelTPMActual != nil && *outcome.ChannelTPMActual < 0 {
 		return configInvalid("actual channel token usage must not be negative")
+	}
+	if outcome.ChannelTPMOutputTokens != nil && *outcome.ChannelTPMOutputTokens < 0 {
+		return configInvalid("locally measured output tokens must not be negative")
+	}
+	if outcome.ChannelTPMUsageSource != "" && outcome.ChannelTPMUsageSource != "authoritative" &&
+		outcome.ChannelTPMUsageSource != "local" && outcome.ChannelTPMUsageSource != "input_estimate" {
+		return configInvalid("unknown channel token usage source")
 	}
 	return nil
 }

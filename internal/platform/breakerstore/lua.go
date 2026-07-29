@@ -40,6 +40,7 @@ local integrity_marker = KEYS[14]
 local request_admission_key = KEYS[15]
 local fault_latch = KEYS[16]
 local instance_proof = KEYS[17]
+local route_channel_rpd_key = KEYS[18]
 
 local permit_id = ARGV[1]
 local fingerprint = ARGV[2]
@@ -56,11 +57,13 @@ local expected_ch_admission_rev = tonumber(ARGV[12])
 local expected_channel_rate_rev = tonumber(ARGV[13])
 local expected_global_conc_rev = tonumber(ARGV[14])
 local expected_breaker_rev = tonumber(ARGV[15])
-local estimate = tonumber(ARGV[16])
-local expected_integrity_epoch = ARGV[17]
-local expected_integrity_revision = ARGV[18]
+local input_estimate = tonumber(ARGV[16]) or 0
+local output_budget = tonumber(ARGV[17]) or 0
+local reserved_total = tonumber(ARGV[18]) or 0
+local expected_integrity_epoch = ARGV[19]
+local expected_integrity_revision = ARGV[20]
 -- Provider control 围栏校验开关（enforce=1 时要求 control 存在、effective_status=enabled、无 pending、revision 匹配，§5.3.2）。
-local enforce_origin_control = tonumber(ARGV[19])
+local enforce_origin_control = tonumber(ARGV[21])
 
 if redis.call('EXISTS', fault_latch) == 1 then
   return {'denied', 'breaker_store_unavailable'}
@@ -90,7 +93,9 @@ if redis.call('HGET', request_admission_key, 'runtime_integrity_epoch') ~= expec
   return {'denied', 'stale_integrity_epoch'}
 end
 if redis.call('HGET', request_admission_key, 'reserve_state') ~= 'reserved' or
-    tonumber(redis.call('HGET', request_admission_key, 'reserve_estimated_input_tokens')) ~= estimate then
+    reserved_total < input_estimate or
+    (tonumber(redis.call('HGET', request_admission_key, 'reserved_tpm_amount')) or
+      tonumber(redis.call('HGET', request_admission_key, 'reserve_estimated_input_tokens')) or 0) < reserved_total then
   return {'denied', 'unknown_request_admission'}
 end
 
@@ -113,7 +118,8 @@ if redis.call('EXISTS', permit_key) == 1 then
     redis.call('HGET', permit_key, 'acquired_at_ms'),
     redis.call('HGET', permit_key, 'permit_ttl_ms'),
     redis.call('HGET', permit_key, 'renew_ms'),
-    redis.call('HGET', permit_key, 'terminal_ttl_ms')}
+    redis.call('HGET', permit_key, 'terminal_ttl_ms'),
+    redis.call('HGET', permit_key, 'route_channel_rpd_bucket')}
 end
 
 -- New permits require all four candidate controls to be active, revision-current, and strictly decodable.
@@ -146,6 +152,9 @@ local permit_ttl_ms = breaker.attempt_permit_ttl_ms
 local renew_ms = breaker.attempt_permit_renew_interval_ms
 local terminal_ttl_ms = breaker.attempt_permit_terminal_ttl_ms
 local bucket_ttl_ms = permit_ttl_ms + terminal_ttl_ms + 120000
+-- RPD 按 UTC 日号分桶，必须至少存活完整 24 小时并覆盖 permit 终态缓冲。
+-- 不能与 RPM/TPM 共用分钟级 bucket_ttl_ms，否则同一日内会静默清零并重新放行。
+local rpd_bucket_ttl_ms = 86400000 + bucket_ttl_ms
 
 -- gate 返回 allow, probe(0/1), reason；probe=1 表示本次占用了该作用域的 half-open 租约。
 local function gate(state_key, rotate_before_gate)
@@ -265,13 +274,13 @@ if conc_used == nil or rpm_used == nil or rpd_used == nil or tpm_used == nil the
   return {'denied', 'runtime_sync_required'}
 end
 if rpm_used >= MAX_EXACT_INTEGER or rpd_used >= MAX_EXACT_INTEGER or
-    tpm_used > MAX_EXACT_INTEGER - estimate then
+    tpm_used > MAX_EXACT_INTEGER - reserved_total then
   return {'denied', 'runtime_sync_required'}
 end
 if eff_ch_conc > 0 and conc_used >= eff_ch_conc then return {'denied', 'concurrency_limited'} end
 if eff_ch_rpm > 0 and rpm_used + 1 > eff_ch_rpm then return {'denied', 'rate_limited'} end
 if eff_ch_rpd > 0 and rpd_used + 1 > eff_ch_rpd then return {'denied', 'rate_limited'} end
-if eff_ch_tpm > 0 and tpm_used + estimate > eff_ch_tpm then return {'denied', 'rate_limited'} end
+if eff_ch_tpm > 0 and tpm_used + reserved_total > eff_ch_tpm then return {'denied', 'rate_limited'} end
 
 -- 统一写阶段：全部条件通过，创建 permit、占 half-open/并发租约。
 local lease_until = now + permit_ttl_ms
@@ -279,9 +288,9 @@ local lease_until = now + permit_ttl_ms
 redis.call('INCR', ch_rpm_key)
 redis.call('PEXPIRE', ch_rpm_key, bucket_ttl_ms)
 redis.call('INCR', ch_rpd_key)
-redis.call('PEXPIRE', ch_rpd_key, bucket_ttl_ms)
-if estimate > 0 then
-  redis.call('INCRBY', ch_tpm_key, estimate)
+redis.call('PEXPIRE', ch_rpd_key, rpd_bucket_ttl_ms)
+if reserved_total > 0 then
+  redis.call('INCRBY', ch_tpm_key, reserved_total)
   redis.call('PEXPIRE', ch_tpm_key, bucket_ttl_ms)
 end
 redis.call('ZREMRANGEBYSCORE', conc_key, '-inf', now)
@@ -347,6 +356,7 @@ redis.call('HSET', permit_key,
   'runtime_integrity_revision', expected_integrity_revision,
   'provider_id', provider_id,
   'channel_id', channel_id,
+	'route_id', redis.call('HGET', request_admission_key, 'route_id') or '0',
   'origin_revision', origin_revision,
   'status_revision', status_revision,
   'origin_control_enforced', enforce_origin_control,
@@ -369,7 +379,11 @@ redis.call('HSET', permit_key,
   'ch_rpm_bucket', ch_rpm_key,
   'ch_rpd_bucket', ch_rpd_key,
   'ch_tpm_bucket', ch_tpm_key,
-  'tpm_estimate', estimate,
+  'tpm_input_estimate', input_estimate,
+  'tpm_output_budget', output_budget,
+  'tpm_reserved_total', reserved_total,
+  'tpm_estimate', reserved_total,
+  'route_channel_rpd_bucket', route_channel_rpd_key,
   'permit_ttl_ms', permit_ttl_ms,
   'renew_ms', renew_ms,
   'terminal_ttl_ms', terminal_ttl_ms,
@@ -378,7 +392,7 @@ redis.call('HSET', permit_key,
 redis.call('PEXPIRE', permit_key, lease_until - now + terminal_ttl_ms)
 
 return {'permit', ep_gen, ch_gen, ep_probe, ch_probe, lease_until, now,
-  permit_ttl_ms, renew_ms, terminal_ttl_ms}
+  permit_ttl_ms, renew_ms, terminal_ttl_ms, route_channel_rpd_key}
 `
 
 // luaAttemptPermitLifecycleGuard 在 Renew/Finish/Abort 的任何写入前校验调用方 expected epoch、
@@ -436,6 +450,7 @@ local function validate_attempt_permit_lifecycle()
     {'channel_state_generation', 14},
     {'provider_half_open_probe', 15},
     {'channel_half_open_probe', 16},
+    {'route_id', 17},
     {'concurrency_channel_id', 6}
   }
   for _, identity in ipairs(identities) do
@@ -476,9 +491,17 @@ if redis.call('HGET', permit_key, 'admission_enforced') ~= '1' then
     if type(bucket_key) ~= 'string' or bucket_key == '' then return 'runtime_sync_required' end
     local bucket_type = attempt_key_type(bucket_key)
     if bucket_type ~= 'none' and bucket_type ~= 'string' then return 'runtime_sync_required' end
+    -- Channel RPD 是 permit 冻结的当日容量事实。它在 active permit 生命周期中丢失时，
+    -- 继续 Finish/Abort/Renew 会静默重置日限额，因此必须 fail closed。
+    if field == 'ch_rpd_bucket' and bucket_type == 'none' then return 'runtime_sync_required' end
   end
-  local estimate = redis.call('HGET', permit_key, 'tpm_estimate')
-  if type(estimate) ~= 'string' or string.match(estimate, '^%d+$') == nil then
+  local input_estimate = redis.call('HGET', permit_key, 'tpm_input_estimate')
+  local output_budget = redis.call('HGET', permit_key, 'tpm_output_budget')
+  local reserved_total = redis.call('HGET', permit_key, 'tpm_reserved_total')
+  if type(input_estimate) ~= 'string' or string.match(input_estimate, '^%d+$') == nil or
+      type(output_budget) ~= 'string' or string.match(output_budget, '^%d+$') == nil or
+      type(reserved_total) ~= 'string' or string.match(reserved_total, '^%d+$') == nil or
+      tonumber(reserved_total) < tonumber(input_estimate) then
     return 'runtime_sync_required'
   end
   return nil
@@ -488,11 +511,13 @@ end
 // luaFinish 实现 Finish：first-terminal-wins；校验 permit；释放并发/half-open；按每作用域 outcome 推进
 // 双触发状态机；stream permit 且有有效 FirstToken 时更新 TTFT EWMA。
 //
-// KEYS[1..5] 与 guard 相同，KEYS[6]=gateway.circuit_breaker runtime control,
-// KEYS[7]=gateway.routing_balance runtime control，KEYS[8..9]=本次类别的 Origin distinct
-// Channel/model 证据集合。ARGV[1..16] 与 guard 相同，ARGV[17]=origin outcome,
-// [18]=channel outcome, [19]=first_token_ms(空串表示无样本), [20]=actual TPM(空串表示无权威 usage),
-// [21]=origin evidence category(空串表示无条件证据)。breaker 与 TTFT alpha 只读 Redis committed active control。
+// KEYS[1..5] 与 guard 相同，KEYS[6]=冻结的 route-channel RPD 归因桶，
+// KEYS[7]=gateway.circuit_breaker runtime control，KEYS[8]=gateway.routing_balance runtime control，
+// KEYS[9..10]=本次类别的 Origin distinct
+// Channel/model 证据集合。ARGV[1..17] 与 guard 相同，ARGV[18]=origin outcome,
+// [19]=channel outcome, [20]=first_token_ms(空串表示无样本), [21]=actual TPM(空串表示无权威 usage),
+// [22]=origin evidence category(空串表示无条件证据), [23]=usage source, [24]=local output,
+// [25]=channel interaction evidence。breaker 与 TTFT alpha 只读 Redis committed active control。
 // 返回 {origin_disposition, channel_disposition}。
 const luaFinish = luaAuthoritativeControlHelpers + luaAttemptPermitLifecycleGuard + `
 local function now_ms()
@@ -511,17 +536,21 @@ local permit_key = KEYS[2]
 local origin_key = KEYS[3]
 local channel_key = KEYS[4]
 local conc_key = KEYS[5]
-local breaker_ctl = KEYS[6]
-local routing_balance_ctl = KEYS[7]
-local evidence_channels_key = KEYS[8]
-local evidence_models_key = KEYS[9]
+local route_channel_rpd_key = KEYS[6]
+local breaker_ctl = KEYS[7]
+local routing_balance_ctl = KEYS[8]
+local evidence_channels_key = KEYS[9]
+local evidence_models_key = KEYS[10]
 
 local permit_id = ARGV[1]
-local ep_outcome = ARGV[17]
-local ch_outcome = ARGV[18]
-local first_token_ms = ARGV[19]
-local tpm_actual = ARGV[20] -- '' 表示无权威 usage
-local origin_evidence = ARGV[21]
+local ep_outcome = ARGV[18]
+local ch_outcome = ARGV[19]
+local first_token_ms = ARGV[20]
+local tpm_actual = ARGV[21] -- '' 表示无权威 usage；此时至少保留输入估算
+local origin_evidence = ARGV[22]
+local tpm_usage_source = ARGV[23]
+local tpm_local_output = ARGV[24]
+local interaction_evidence = ARGV[25]
 
 local now = now_ms()
 
@@ -533,6 +562,19 @@ end
 if redis.call('HGET', permit_key, 'status') ~= 'active' then
   return {redis.call('HGET', permit_key, 'origin_disposition') or 'terminal_conflict',
           redis.call('HGET', permit_key, 'channel_disposition') or 'terminal_conflict'}
+end
+
+-- 归因桶只记录已经进入真实上游交互的 attempt。它不参与 Channel 全局 RPD 限制，
+-- 但必须和 permit 冻结的 route/channel/day key 一起原子写入，避免 fallback 漏记。
+if route_channel_rpd_key ~= '' and interaction_evidence == 'true' then
+  local attribution_type = attempt_key_type(route_channel_rpd_key)
+  if attribution_type ~= 'none' and attribution_type ~= 'string' then
+    return {'runtime_sync_required', 'runtime_sync_required'}
+  end
+  redis.call('INCR', route_channel_rpd_key)
+  if redis.call('PTTL', route_channel_rpd_key) < 0 then
+    redis.call('PEXPIRE', route_channel_rpd_key, 86400000 + 420000)
+  end
 end
 
 local breaker = read_committed_control(breaker_ctl, parse_circuit_breaker_payload)
@@ -568,17 +610,25 @@ if conc_key ~= '' then
   redis.call('ZREM', conc_key, permit_id)
 end
 
--- Channel RPM/RPD 作为真实上游调用保留（不回退）；Channel TPM 按权威 usage 对账、无权威则释放预占（§2.12.8）。
+-- Channel RPM/RPD 作为有交互证据的上游 attempt 保留；Channel TPM 按权威 usage、本地输出或输入保底收口。
 if redis.call('HGET', permit_key, 'admission_enforced') == '1' then
   local tpm_bucket = redis.call('HGET', permit_key, 'ch_tpm_bucket')
-  local estimate = tonumber(redis.call('HGET', permit_key, 'tpm_estimate')) or 0
-  if tpm_bucket ~= false and tpm_bucket ~= '' and estimate > 0 then
+  local input_estimate = tonumber(redis.call('HGET', permit_key, 'tpm_input_estimate')) or 0
+  local reserved_total = tonumber(redis.call('HGET', permit_key, 'tpm_reserved_total')) or 0
+  if tpm_bucket ~= false and tpm_bucket ~= '' and reserved_total > 0 then
     if tpm_actual == '' then
-      if redis.call('EXISTS', tpm_bucket) == 1 then redis.call('DECRBY', tpm_bucket, estimate) end
+      local target = input_estimate
+      if tpm_local_output ~= '' then
+        target = input_estimate + (tonumber(tpm_local_output) or 0)
+      end
+      local release = reserved_total - target
+      if redis.call('EXISTS', tpm_bucket) == 1 and release > 0 then redis.call('DECRBY', tpm_bucket, release) end
+      redis.call('HSET', permit_key, 'tpm_usage_source', tpm_usage_source ~= '' and tpm_usage_source or 'input_estimate')
     else
       local actual = tonumber(tpm_actual) or 0
-      local delta = actual - estimate
+      local delta = actual - reserved_total
       if redis.call('EXISTS', tpm_bucket) == 1 and delta ~= 0 then redis.call('INCRBY', tpm_bucket, delta) end
+      redis.call('HSET', permit_key, 'tpm_actual', actual, 'tpm_usage_source', 'authoritative')
     end
   end
 end
@@ -851,10 +901,10 @@ if redis.call('HGET', permit_key, 'admission_enforced') == '1' then
   local rpm_bucket = redis.call('HGET', permit_key, 'ch_rpm_bucket')
   local rpd_bucket = redis.call('HGET', permit_key, 'ch_rpd_bucket')
   local tpm_bucket = redis.call('HGET', permit_key, 'ch_tpm_bucket')
-  local estimate = tonumber(redis.call('HGET', permit_key, 'tpm_estimate')) or 0
+  local reserved_total = tonumber(redis.call('HGET', permit_key, 'tpm_reserved_total')) or 0
   if rpm_bucket ~= false and rpm_bucket ~= '' and redis.call('EXISTS', rpm_bucket) == 1 then redis.call('DECR', rpm_bucket) end
   if rpd_bucket ~= false and rpd_bucket ~= '' and redis.call('EXISTS', rpd_bucket) == 1 then redis.call('DECR', rpd_bucket) end
-  if tpm_bucket ~= false and tpm_bucket ~= '' and estimate > 0 and redis.call('EXISTS', tpm_bucket) == 1 then redis.call('DECRBY', tpm_bucket, estimate) end
+  if tpm_bucket ~= false and tpm_bucket ~= '' and reserved_total > 0 and redis.call('EXISTS', tpm_bucket) == 1 then redis.call('DECRBY', tpm_bucket, reserved_total) end
 end
 
 -- 释放本 permit 仍持有的 half-open 租约（不释放后来 permit 的租约）。
@@ -1146,7 +1196,8 @@ local control_proofs = {
 }
 return {'ok', now, tonumber(ARGV[8]), balance.ttft_target_ms, tostring(balance.ttft_weight),
   balance.economic_weight_pct, balance.health_weight_pct, balance.capacity_weight_pct,
-  balance.priority_weight_pct, breaker_enabled, rows, control_proofs}
+  balance.priority_weight_pct, breaker_enabled, rows, control_proofs,
+  tostring(balance.cost_weight), tostring(balance.minimum_routing_factor)}
 `
 
 // luaSetCooldown 登记/延长 Channel 429 冷却（所有 Gateway 共享）。取现有与新 until 的较大值（不缩短），

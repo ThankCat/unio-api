@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
 // StreamUpstream 执行一次 timed 上游流式调用。
@@ -57,6 +58,9 @@ type RunStreamParams struct {
 
 	// ConservativeInputTokens 是预授权阶段的保守输入估算，供 partial settlement 复用为 input 事实。
 	ConservativeInputTokens int64
+
+	// ConservativeTPMBudget 是 Route 请求级完整 TPM 预算；候选自身预算优先。
+	ConservativeTPMBudget int64
 	// CountOutputTokens 按 upstream model 估算一段可见输出文本的 token 数，供 partial settlement 计 output。
 	// 为 nil 时 partial 的 output 记 0（偏保守）。
 	CountOutputTokens func(model string, text string) int64
@@ -113,6 +117,9 @@ type RunStreamParamsGeneric[C any] struct {
 
 	// ConservativeInputTokens 是预授权阶段的保守输入估算，供 partial settlement 复用为 input 事实。
 	ConservativeInputTokens int64
+
+	// ConservativeTPMBudget 是 Route 请求级完整 TPM 预算；候选自身预算优先。
+	ConservativeTPMBudget int64
 	// CountOutputTokens 按 upstream model 估算一段可见输出文本的 token 数，供 partial settlement 计 output。
 	// 为 nil 时 partial 的 output 记 0（偏保守）。
 	CountOutputTokens func(model string, text string) int64
@@ -176,6 +183,7 @@ func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (
 		Finish:                  params.Finish,
 		ChunkMeta:               chatStreamChunkMeta,
 		ConservativeInputTokens: params.ConservativeInputTokens,
+		ConservativeTPMBudget:   params.ConservativeTPMBudget,
 		CountOutputTokens:       params.CountOutputTokens,
 		Codes:                   params.Codes,
 		Sticky:                  params.Sticky,
@@ -229,6 +237,17 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 	for candIdx, prepared := range params.Candidates {
 		index := prepared.RouteIndex
 		candidate := prepared.Route
+		candidateInputTokens := prepared.TokenBudget.InputEstimate
+		if candidateInputTokens <= 0 {
+			candidateInputTokens = params.ConservativeInputTokens
+		}
+		candidateTPMBudget := prepared.TokenBudget.ReservedTotal
+		if candidateTPMBudget <= 0 {
+			candidateTPMBudget = params.ConservativeTPMBudget
+		}
+		if candidateTPMBudget <= 0 {
+			candidateTPMBudget = candidateInputTokens
+		}
 
 		// Adapter lookup is local and side-effect free, so do it before acquiring candidate resources.
 		if params.ResolveAdapter != nil {
@@ -248,7 +267,8 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 				Candidate:            candidate,
 				UpstreamEndpoint:     l.upstreamEndpoint(),
 				RequestMode:          breakerstore.ModeStream,
-				EstimatedInputTokens: params.ConservativeInputTokens,
+				EstimatedInputTokens: candidateInputTokens,
+				RequestTPMBudget:     candidateTPMBudget,
 			}, allowStickyHeadWait(params.Sticky, candIdx, candidate.Channel.ID), &headWaitUsed)
 			if err != nil {
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
@@ -530,14 +550,24 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		adapter.MarkTransportCompleted(attemptCtx)
 		timingFacts := timingObserver.Snapshot()
 		l.RecordAttemptTiming(ctx, attemptRecord, timingFacts)
+		if timingFacts.HasChannelUsageEvidence() {
+			requestadmission.PublishInputFallback(ctx, candidateInputTokens)
+		}
 		outcomeErr := err
 		if panicValue != nil {
 			outcomeErr = errAttemptInvokePanic
 		}
 		finishOutcome := streamFinishOutcome(streamFacts, timingFacts, outcomeErr)
+		finishOutcome.ChannelInteractionEvidence = timingFacts.HasChannelUsageEvidence()
+		if finishOutcome.ChannelTPMActual == nil && partialOutputTokens > 0 {
+			localOutput := partialOutputTokens
+			finishOutcome.ChannelTPMOutputTokens = &localOutput
+			finishOutcome.ChannelTPMUsageSource = "local"
+			requestadmission.PublishLocalUsage(ctx, params.ConservativeInputTokens+partialOutputTokens)
+		}
 
 		if permitOwner != nil {
-			if timingFacts.UpstreamStartedAt == nil {
+			if !timingFacts.HasChannelUsageEvidence() {
 				if abortErr := permitOwner.Abort(ctx); abortErr != nil {
 					r.logRouting(ctx, "stream attempt permit abort result unknown",
 						zap.Int64("channel_id", candidate.Channel.ID),
@@ -817,6 +847,7 @@ func streamFinishOutcome(facts *adapter.ResponseFacts, timing AttemptTimingFacts
 	if facts != nil && !facts.UsageSource.IsPartialEstimate() {
 		actual := billableTPMTokens(facts.Usage)
 		out.ChannelTPMActual = &actual
+		out.ChannelTPMUsageSource = "authoritative"
 	}
 	if err == nil && facts != nil {
 		out.ProviderOutcome = breakerstore.OutcomeEligibleSuccess

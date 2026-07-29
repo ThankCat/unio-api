@@ -2,9 +2,36 @@ package breakerstore
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
+
+// RouteChannelRPDUsage reads the frozen UTC-day attempt attribution for one route/channel.
+// A missing bucket is zero for this observational view; the global Channel RPD bucket remains
+// the hard capacity fact and is handled by AttemptPermit lifecycle guards.
+func (s *Store) RouteChannelRPDUsage(ctx context.Context, routeID, channelID int64) (int64, error) {
+	if routeID <= 0 || channelID <= 0 {
+		return 0, configInvalid("route and channel ids must be positive")
+	}
+	if s.localRuntimeInfrastructureFault(ctx) {
+		return 0, storeUnavailable(ErrStoreUnavailable, "breakerstore route-channel rpd unavailable")
+	}
+	value, err := s.client.Get(ctx, s.keys.routeChannelRPDBucket(routeID, channelID, dayBucket(time.Now()))).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return 0, nil
+		}
+		return 0, storeUnavailable(err, "breakerstore read route-channel rpd")
+	}
+	used, parseErr := strconv.ParseInt(value, 10, 64)
+	if parseErr != nil || used < 0 {
+		return 0, storeUnavailable(errors.New("malformed route-channel rpd bucket"), "breakerstore read route-channel rpd")
+	}
+	return used, nil
+}
 
 // RouteUsage 是一条线路上所有 (route,user) 入口桶的只读合计（admin 展示用）。
 // 不含线路总上限：准入仍按 (route,user) 分桶执行。

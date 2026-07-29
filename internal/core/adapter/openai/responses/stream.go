@@ -61,6 +61,7 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 	streamCtx, headersReceived, resetIdle, cancel := adapter.StreamTimeoutContext(ctx, ch.Timeout, adapter.StreamIdleTimeout())
 	defer cancel()
 
+	streamCtx = adapter.WithAttemptTransportTrace(streamCtx)
 	httpReq, err := a.newUpstreamRequest(streamCtx, ch, req, true)
 	if err != nil {
 		return adapter.StreamOutcome{}, err
@@ -70,6 +71,9 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 	upstreamResp, err := a.client.Do(httpReq)
 	ctxCause := context.Cause(streamCtx)
 	headersReceived()
+	if upstreamResp != nil {
+		adapter.MarkResponseHeadersReceived(streamCtx)
+	}
 	if err != nil {
 		return adapter.StreamOutcome{}, newUpstreamSendErrorWithContextCause(err, ctxCause, "send stream responses request")
 	}

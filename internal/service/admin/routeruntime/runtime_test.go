@@ -614,9 +614,9 @@ func currentCostCandidate(channelID, originID int64) breakerstore.CandidateSnaps
 func TestSortChannels(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
 	base := []Channel{
-		{ChannelID: 1, Eligible: true, CurrentOrder: 2, FinalWeight: 0.3, TPMRemaining: f(0.9)},
+		{ChannelID: 1, Eligible: true, CurrentOrder: 2, FinalWeight: 0.3, RPDRemaining: nil, GlobalRPDRemaining: f(0.8), TPMRemaining: f(0.9)},
 		{ChannelID: 2, Eligible: false, CurrentOrder: 0, FinalWeight: 0},
-		{ChannelID: 3, Eligible: true, CurrentOrder: 1, FinalWeight: 0.7, TPMRemaining: f(0.2)},
+		{ChannelID: 3, Eligible: true, CurrentOrder: 1, FinalWeight: 0.7, RPDRemaining: nil, GlobalRPDRemaining: f(0.1), TPMRemaining: f(0.2)},
 	}
 	ids := func(chs []Channel) string {
 		parts := make([]string, len(chs))
@@ -638,6 +638,8 @@ func TestSortChannels(t *testing.T) {
 		{"capacity desc ranks by tightest headroom", "capacity", true, "1,3,2"},
 		{"tpm asc ranks by tpm remaining", "tpm", false, "3,1,2"},
 		{"tpm desc ranks by tpm remaining", "tpm", true, "1,3,2"},
+		{"rpd asc ranks by global rpd remaining", "rpd", false, "3,1,2"},
+		{"rpd desc ranks by global rpd remaining", "rpd", true, "1,3,2"},
 		{"unknown field falls back to order", "nope", false, "3,1,2"},
 	}
 	for _, tc := range cases {

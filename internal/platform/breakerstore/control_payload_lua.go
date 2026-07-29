@@ -216,6 +216,13 @@ local function parse_routing_balance_payload(payload)
       value.economic_weight_pct + value.health_weight_pct + value.capacity_weight_pct + value.priority_weight_pct ~= 100 then
     return nil
   end
+  -- Keep deprecated in-process fields available to older snapshot consumers while objective_v1
+  -- uses the four explicit percentages as its routing authority.
+  if value.cost_weight == nil then value.cost_weight = 0 end
+  if value.minimum_routing_factor == nil then value.minimum_routing_factor = 0.05 end
+  if type(value.cost_weight) ~= 'number' or value.cost_weight < 0 or value.cost_weight > 1 or
+      type(value.minimum_routing_factor) ~= 'number' or value.minimum_routing_factor <= 0 or
+      value.minimum_routing_factor > 1 then return nil end
   if type(value.ttft_ewma_alpha) ~= 'number' or
       value.ttft_ewma_alpha ~= value.ttft_ewma_alpha or
       value.ttft_ewma_alpha <= 0 or value.ttft_ewma_alpha > 1 then return nil end

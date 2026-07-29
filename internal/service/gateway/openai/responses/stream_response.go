@@ -109,7 +109,8 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
 		})
 	}
-	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
+	if err := requestadmission.ReserveBudgetIfPresent(ctx, candidatePlan.ConservativeInputTokens,
+		candidatePlan.RequestTPMBudget()-candidatePlan.ConservativeInputTokens, candidatePlan.RequestTPMBudget()); err != nil {
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
 	}
@@ -159,6 +160,7 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		RequestedModelID:        req.Model,
 		ResponseProtocol:        requestlog.ProtocolOpenAI,
 		ConservativeInputTokens: candidatePlan.ConservativeInputTokens,
+		ConservativeTPMBudget:   candidatePlan.RequestTPMBudget(),
 		CountOutputTokens:       partialOutputTokenCounter,
 		Sticky:                  stickySession,
 		ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
@@ -185,7 +187,7 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		},
 		Stream: func(ctx context.Context, candidate routing.ChatRouteCandidate, onChunk func(responsesStreamCarrier) error) (*adapter.ResponseFacts, error) {
 			if s.registry.HasStreamResponses(candidate.AdapterKey) {
-				body, bodyErr := encodeUpstreamResponsesBody(req, candidate.UpstreamModel, true)
+				body, bodyErr := encodeUpstreamResponsesBody(req, candidate.UpstreamModel, true, candidatePlan.OutputBudgetFor(candidate.Channel.ID))
 				if bodyErr != nil {
 					return nil, bodyErr
 				}
@@ -202,7 +204,7 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 			if req.MultiAgentEnabled() {
 				return nil, multiAgentBridgeUnsupported()
 			}
-			chatReq, _ := mapResponsesRequestToChat(req, candidate.UpstreamModel)
+			chatReq, _ := mapResponsesRequestToChatWithOutputBudget(req, candidate.UpstreamModel, candidatePlan.OutputBudgetFor(candidate.Channel.ID))
 			streamCtx, streamSpan := lifecycle.StartGatewaySpan(ctx, "adapter.stream_chat_completions", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 			streamOutcome, streamErr := streamAdapter.StreamChatCompletions(streamCtx, candidate.Channel, chatReq, func(chunk chatcompletionsadapter.ChatStreamChunk) error {
 				delta := chunk

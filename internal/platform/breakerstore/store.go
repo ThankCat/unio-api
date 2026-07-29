@@ -221,6 +221,7 @@ type AcquireAttemptInput struct {
 
 	ProviderID int64
 	ChannelID  int64
+	RouteID    int64
 
 	OriginRevision         int64
 	ProviderStatusRevision int64
@@ -240,6 +241,8 @@ type AcquireAttemptInput struct {
 	EnforceProviderControl bool
 
 	EstimatedInputTokens int64
+	OutputBudgetTokens   int64
+	ReservedTPMTokens    int64
 }
 
 // AcquireAttempt 一次 Redis Lua 原子取得 Origin/Channel breaker 门禁、half-open 租约、Channel 并发租约
@@ -248,6 +251,12 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 	done := s.beginOperation(ctx, operationAcquireAttempt)
 	defer func() { done(attemptAdmissionOperationResult(admission), err) }()
 
+	if in.ReservedTPMTokens <= 0 && in.EstimatedInputTokens > 0 {
+		in.ReservedTPMTokens = in.EstimatedInputTokens
+	}
+	if in.OutputBudgetTokens < 0 {
+		return AttemptAdmission{}, configInvalid("attempt output token budget must not be negative")
+	}
 	if err := validateAcquireAttemptInput(in); err != nil {
 		return AttemptAdmission{}, err
 	}
@@ -275,6 +284,11 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 		s.keys.runtimeInfrastructureFault(),
 		s.keys.runtimeReconciliationProof(),
 	}
+	if in.RouteID > 0 {
+		keys = append(keys, s.keys.routeChannelRPDBucket(in.RouteID, in.ChannelID, dayBucket(now)))
+	} else {
+		keys = append(keys, "")
+	}
 	enforceOrigin := 0
 	if in.EnforceProviderControl {
 		enforceOrigin = 1
@@ -296,6 +310,8 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 		strconv.FormatInt(in.GlobalConcurrencyRevision, 10),
 		strconv.FormatInt(in.CircuitBreakerRevision, 10),
 		strconv.FormatInt(in.EstimatedInputTokens, 10),
+		strconv.FormatInt(in.OutputBudgetTokens, 10),
+		strconv.FormatInt(in.ReservedTPMTokens, 10),
 		in.IntegrityEpoch,
 		strconv.FormatInt(in.IntegrityRevision, 10),
 		enforceOrigin,
@@ -357,6 +373,7 @@ func (s *Store) permitFromAcquire(in AcquireAttemptInput, arr []interface{}) *At
 		IntegrityRevision:      in.IntegrityRevision,
 		ProviderID:             in.ProviderID,
 		ChannelID:              in.ChannelID,
+		RouteID:                in.RouteID,
 		OriginRevision:         in.OriginRevision,
 		ProviderStatusRevision: in.ProviderStatusRevision,
 		ChannelConfigRevision:  in.ChannelConfigRevision,
@@ -364,7 +381,7 @@ func (s *Store) permitFromAcquire(in AcquireAttemptInput, arr []interface{}) *At
 		UpstreamEndpoint:       in.UpstreamEndpoint,
 		RequestMode:            in.RequestMode,
 	}
-	// arr = {code, ep_gen, ch_gen, ep_probe, ch_probe, lease_until, acquired_at, permit_ttl, renew, terminal_ttl}
+	// arr = {code, ep_gen, ch_gen, ep_probe, ch_probe, lease_until, acquired_at, permit_ttl, renew, terminal_ttl, route_channel_rpd_key}
 	if len(arr) >= 7 {
 		p.ProviderStateGeneration = toI64(arr[1])
 		p.ChannelStateGeneration = toI64(arr[2])
@@ -378,6 +395,9 @@ func (s *Store) permitFromAcquire(in AcquireAttemptInput, arr []interface{}) *At
 		p.RenewMs = toI64(arr[8])
 		p.TerminalTTLMs = toI64(arr[9])
 	}
+	if len(arr) >= 11 {
+		p.RouteChannelRPDBucket, _ = arr[10].(string)
+	}
 	return p
 }
 
@@ -388,6 +408,7 @@ func (s *Store) attemptLifecycleKeys(permit AttemptPermit) []string {
 		s.keys.provider(permit.ProviderID),
 		s.keys.channel(permit.ChannelID),
 		s.keys.channel(permit.ChannelID) + ":conc",
+		permit.RouteChannelRPDBucket,
 	}
 }
 
@@ -434,6 +455,7 @@ func attemptLifecycleArgs(permit AttemptPermit) []interface{} {
 		strconv.FormatInt(permit.ChannelStateGeneration, 10),
 		boolArg(permit.ProviderHalfOpenProbe),
 		boolArg(permit.ChannelHalfOpenProbe),
+		strconv.FormatInt(permit.RouteID, 10),
 	}
 }
 
@@ -453,6 +475,11 @@ func (s *Store) Finish(ctx context.Context, permit AttemptPermit, outcome Finish
 	if outcome.ChannelTPMActual != nil {
 		tpmActual = strconv.FormatInt(*outcome.ChannelTPMActual, 10)
 	}
+	tpmOutput := ""
+	if outcome.ChannelTPMOutputTokens != nil {
+		tpmOutput = strconv.FormatInt(*outcome.ChannelTPMOutputTokens, 10)
+	}
+	tpmSource := outcome.ChannelTPMUsageSource
 	keys := append(s.attemptLifecycleKeys(permit),
 		s.keys.runtimeControlSetting("gateway.circuit_breaker"),
 		s.keys.runtimeControlSetting("gateway.routing_balance"),
@@ -464,6 +491,9 @@ func (s *Store) Finish(ctx context.Context, permit AttemptPermit, outcome Finish
 		firstToken,
 		tpmActual,
 		string(outcome.ProviderEvidence),
+		tpmSource,
+		tpmOutput,
+		strconv.FormatBool(outcome.ChannelInteractionEvidence),
 	)
 
 	res, err := s.finish.Run(ctx, s.client, keys, argv...).Result()
@@ -791,7 +821,7 @@ func (s *Store) SnapshotMany(ctx context.Context, in SnapshotManyInput) (result 
 		}
 		return SnapshotManyResult{}, snapshotManyRejected(reason)
 	}
-	if code != "ok" || len(reply) != 12 {
+	if code != "ok" || (len(reply) != 12 && len(reply) != 14) {
 		return SnapshotManyResult{}, storeUnavailable(errors.New("unknown snapshot many reply"), "breakerstore snapshot many")
 	}
 	return parseSnapshotManyReply(in, reply)

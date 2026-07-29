@@ -27,6 +27,7 @@ func (s *ChatCompletionService) prepareChatCandidates(ctx context.Context, req g
 		Candidates:          candidates,
 		Capabilities:        capabilities,
 		EstimateInputTokens: s.chatInputTokenEstimator(req),
+		RequestedOutputTokens: estimateMaxCompletionTokens(req),
 		Mode:                mode,
 		StickyChannelID:     stickyChannelID,
 	})

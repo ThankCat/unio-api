@@ -22,6 +22,13 @@ var (
 // 查找对应 tokenizer，并使用 candidate.UpstreamModel 构造协议族自己的 tokenizer 请求。
 type CandidateInputTokenEstimator func(ctx context.Context, candidate routing.ChatRouteCandidate) (int64, error)
 
+// CandidateTokenBudget 是一次候选上游调用在 TPM 限流中冻结的完整预算。
+type CandidateTokenBudget struct {
+	InputEstimate int64
+	OutputBudget  int64
+	ReservedTotal int64
+}
+
 // CandidateAvailability 判断某个候选当前是否可进入 fallback plan。
 //
 // 它用于过滤已经熔断且仍在冷却中的 channel。实现必须是只读检查，不能提前占用 half-open
@@ -52,6 +59,9 @@ type PrepareCandidatesParams struct {
 	// EstimateInputTokens 对每个可用 fallback candidate 做 provider-specific 保守估算。
 	EstimateInputTokens CandidateInputTokenEstimator
 
+	// RequestedOutputTokens 是客户显式给出的输出上限；0 表示使用候选模型上限或共享兜底。
+	RequestedOutputTokens int64
+
 	// Mode 是线路策略（balanced/fixed）；fixed 保持唯一候选，balanced 按容量和健康度排序。
 	// 排序叠加在能力过滤/熔断可用性之前，故最终 fallback 顺序即策略顺序。
 	Mode string
@@ -71,6 +81,9 @@ type Candidate struct {
 	// Route 是 routing 返回的 channel 运行时参数与 provider/model 事实。
 	Route routing.ChatRouteCandidate
 
+	// TokenBudget 是该候选自己的输入、输出和完整 TPM 预算。
+	TokenBudget CandidateTokenBudget
+
 	// Balance 是 balanced 调度使用的容量、健康与权重事实，供日志、trace 和 Admin 复用。
 	Balance BalanceScore
 }
@@ -82,6 +95,9 @@ type CandidatePlan struct {
 
 	// ConservativeInputTokens 是所有可用 fallback candidates 输入估算的最大值。
 	ConservativeInputTokens int64
+
+	// ConservativeTPMTokens 是所有可用候选完整预算的最大值，供 Route TPM 只预占一次。
+	ConservativeTPMTokens int64
 
 	// StickyPinned 报告 StickyChannelID 是否真的被置顶到 fallback 首位。
 	// false 且请求带绑定时说明粘住渠道已被硬摘除，调用方应清除 sticky 绑定（R5）。
@@ -96,6 +112,14 @@ type CandidatePlan struct {
 
 	// Excluded records capability and breaker/cooldown hard filters from the SQL candidate plan.
 	Excluded []CandidateExclusion
+}
+
+// RequestTPMBudget 返回新协议的完整预算；保留旧测试调用方只填写输入估算时的兼容兜底。
+func (p CandidatePlan) RequestTPMBudget() int64 {
+	if p.ConservativeTPMTokens > 0 {
+		return p.ConservativeTPMTokens
+	}
+	return p.ConservativeInputTokens
 }
 
 type CandidateExclusion struct {
@@ -134,6 +158,17 @@ func (p CandidatePlan) CandidateMaxOutputTokens() int64 {
 		}
 	}
 	return maxOut
+}
+
+// OutputBudgetFor returns the exact output cap frozen for a candidate. It is used by protocol
+// mappers so the wire-level upstream cap and TPM reservation share one parsed value.
+func (p CandidatePlan) OutputBudgetFor(channelID int64) int64 {
+	for _, candidate := range p.Candidates {
+		if candidate.Route.Channel.ID == channelID {
+			return candidate.TokenBudget.OutputBudget
+		}
+	}
+	return 0
 }
 
 // Executor 放置 OpenAI 与 Anthropic 共享的 gateway 生命周期执行能力。
@@ -334,13 +369,36 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 			)
 		}
 
+		outputBudget := params.RequestedOutputTokens
+		if outputBudget <= 0 {
+			outputBudget = candidate.MaxOutputTokens
+		}
+		if outputBudget <= 0 {
+			outputBudget = DefaultAuthorizationMaxCompletionTokens
+		}
+		reservedTotal := inputTokens + outputBudget
+		if reservedTotal < inputTokens {
+			return CandidatePlan{}, candidateEstimateFailure(
+				ErrCandidateInputTokenEstimateInvalid,
+				"candidate token budget overflow",
+			)
+		}
+
 		plan.Candidates = append(plan.Candidates, Candidate{
 			RouteIndex: routeIndexes[candidate.Channel.ID],
 			Route:      candidate,
-			Balance:    scores[candidate.Channel.ID],
+			TokenBudget: CandidateTokenBudget{
+				InputEstimate: inputTokens,
+				OutputBudget:  outputBudget,
+				ReservedTotal: reservedTotal,
+			},
+			Balance: scores[candidate.Channel.ID],
 		})
 		if inputTokens > plan.ConservativeInputTokens {
 			plan.ConservativeInputTokens = inputTokens
+		}
+		if reservedTotal > plan.ConservativeTPMTokens {
+			plan.ConservativeTPMTokens = reservedTotal
 		}
 	}
 

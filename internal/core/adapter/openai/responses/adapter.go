@@ -56,6 +56,7 @@ func (a *Adapter) CreateResponse(ctx context.Context, ch channel.Runtime, req Re
 		defer cancel()
 	}
 
+	ctx = adapter.WithAttemptTransportTrace(ctx)
 	httpReq, err := a.newUpstreamRequest(ctx, ch, req, false)
 	if err != nil {
 		return nil, err
@@ -63,6 +64,9 @@ func (a *Adapter) CreateResponse(ctx context.Context, ch channel.Runtime, req Re
 
 	adapter.MarkTransportStarted(ctx)
 	upstreamResp, err := a.client.Do(httpReq)
+	if upstreamResp != nil {
+		adapter.MarkResponseHeadersReceived(ctx)
+	}
 	if err != nil {
 		return nil, newUpstreamSendError(err, "send responses request")
 	}

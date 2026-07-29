@@ -118,8 +118,11 @@ type RunNonStreamParams struct {
 	TransparentFallback  *NonStreamTransparentFallback
 
 	// EstimatedTokens 是本请求保守预估的输入 token 数，用于 TPM 限流的上游调用前预占（P2-8）。
-	// 结算后由 runner 按真实 billable token 回填差额。0 表示不参与 TPM 预占（仍走 RPM/RPD）。
+	// 结算后由 runner 按真实 billable token 回填差额。它保留为旧调用方的输入估算兜底。
 	EstimatedTokens int64
+
+	// RequestTPMBudget 是 Route 请求级完整 TPM 预算；候选自身预算优先于此值。
+	RequestTPMBudget int64
 
 	// UpstreamCostWithoutUsage 在 Invoke 返回的错误代表「上游可能已产生成本但拿不到可靠 usage」时返回 true。
 	// 命中时 runner 既不重试（避免再调上游叠加成本）也不普通释放，而是释放冻结并记 risk_exposure（账务异常），
@@ -218,6 +221,17 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 	for candIdx, prepared := range params.Candidates {
 		index := prepared.RouteIndex
 		candidate := prepared.Route
+		candidateInputTokens := prepared.TokenBudget.InputEstimate
+		if candidateInputTokens <= 0 {
+			candidateInputTokens = params.EstimatedTokens
+		}
+		candidateTPMBudget := prepared.TokenBudget.ReservedTotal
+		if candidateTPMBudget <= 0 {
+			candidateTPMBudget = params.RequestTPMBudget
+		}
+		if candidateTPMBudget <= 0 {
+			candidateTPMBudget = candidateInputTokens
+		}
 		endpoint := l.upstreamEndpoint()
 		if params.EndpointForCandidate != nil {
 			endpoint = params.EndpointForCandidate(candidate)
@@ -241,7 +255,8 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 				Candidate:            candidate,
 				UpstreamEndpoint:     endpoint,
 				RequestMode:          breakerstore.ModeNonStream,
-				EstimatedInputTokens: params.EstimatedTokens,
+				EstimatedInputTokens: candidateInputTokens,
+				RequestTPMBudget:     candidateTPMBudget,
 			}, allowStickyHeadWait(params.Sticky, candIdx, candidate.Channel.ID), &headWaitUsed)
 			if err != nil {
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
@@ -345,7 +360,8 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 					Candidate:            candidate,
 					UpstreamEndpoint:     fallback.UpstreamEndpoint,
 					RequestMode:          breakerstore.ModeNonStream,
-					EstimatedInputTokens: params.EstimatedTokens,
+					EstimatedInputTokens: candidateInputTokens,
+					RequestTPMBudget:     candidateTPMBudget,
 				}, allowStickyHeadWait(params.Sticky, candIdx, candidate.Channel.ID), &headWaitUsed)
 				if acquireErr != nil {
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {

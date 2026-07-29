@@ -27,6 +27,7 @@ func (s *MessagesService) prepareMessageCandidates(ctx context.Context, req gate
 		Candidates:          candidates,
 		Capabilities:        capabilities,
 		EstimateInputTokens: s.messagesInputTokenEstimator(req),
+		RequestedOutputTokens: estimateMaxOutputTokens(req),
 		Mode:                mode,
 		StickyChannelID:     stickyChannelID,
 	})

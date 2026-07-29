@@ -22,6 +22,17 @@ import (
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 )
 
+func responsesMaxOutputTokens(value *gatewayapi.ResponsesInt, fallback int64) *int {
+	if value != nil {
+		return responsesIntPtr(value)
+	}
+	if fallback <= 0 {
+		return nil
+	}
+	n := int(fallback)
+	return &n
+}
+
 // requestTranslation 记录 Responses→Chat 翻译的副作用，供 service 层写入请求审计。
 //
 // DroppedFields 只收录“契约无承载、本阶段桥接层 Drop”的 Responses 专属字段名；
@@ -51,6 +62,10 @@ const namespaceToolSeparator = "__"
 //
 // upstreamModel 是 routing 解析出的上游模型名（方案 A，DEC-014）；客户模型名只用于 routing。
 func mapResponsesRequestToChat(req gatewayapi.ResponsesRequest, upstreamModel string) (chatcompletionsadapter.ChatRequest, requestTranslation) {
+	return mapResponsesRequestToChatWithOutputBudget(req, upstreamModel, 0)
+}
+
+func mapResponsesRequestToChatWithOutputBudget(req gatewayapi.ResponsesRequest, upstreamModel string, outputBudget int64) (chatcompletionsadapter.ChatRequest, requestTranslation) {
 	var tr requestTranslation
 
 	chat := chatcompletionsadapter.ChatRequest{
@@ -58,7 +73,7 @@ func mapResponsesRequestToChat(req gatewayapi.ResponsesRequest, upstreamModel st
 		Messages:             buildChatMessages(req),
 		Temperature:          req.Temperature,
 		TopP:                 req.TopP,
-		MaxCompletionTokens:  responsesIntPtr(req.MaxOutputTokens),
+		MaxCompletionTokens:  responsesMaxOutputTokens(req.MaxOutputTokens, outputBudget),
 		User:                 req.User,
 		ParallelToolCalls:    req.ParallelToolCalls,
 		Metadata:             cloneRawMessage(req.Metadata),

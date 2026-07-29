@@ -68,6 +68,9 @@ type runtimeChannelDTO struct {
 	RPDUsed                         int64    `json:"rpd_used"`
 	RPDLimit                        int64    `json:"rpd_limit"`
 	RPDRemaining                    *float64 `json:"rpd_remaining"`
+	GlobalRPDUsed                   int64    `json:"global_rpd_used"`
+	GlobalRPDLimit                  int64    `json:"global_rpd_limit"`
+	GlobalRPDRemaining              *float64 `json:"global_rpd_remaining"`
 	TPMUsed                         int64    `json:"tpm_used"`
 	TPMLimit                        int64    `json:"tpm_limit"`
 	TPMRemaining                    *float64 `json:"tpm_remaining"`
@@ -229,6 +232,7 @@ func toRouteRuntimeDTO(value routeruntime.Runtime) routeRuntimeDTO {
 			ConcurrencyUsed: channel.ConcurrencyUsed, ConcurrencyLimit: channel.ConcurrencyLimit, ConcurrencyRemaining: channel.ConcurrencyRemaining,
 			RPMUsed: channel.RPMUsed, RPMLimit: channel.RPMLimit, RPMRemaining: channel.RPMRemaining,
 			RPDUsed: channel.RPDUsed, RPDLimit: channel.RPDLimit, RPDRemaining: channel.RPDRemaining,
+			GlobalRPDUsed: channel.GlobalRPDUsed, GlobalRPDLimit: channel.GlobalRPDLimit, GlobalRPDRemaining: channel.GlobalRPDRemaining,
 			TPMUsed: channel.TPMUsed, TPMLimit: channel.TPMLimit, TPMRemaining: channel.TPMRemaining,
 			CapacityScore: channel.CapacityScore, CostRatio: channel.CostRatio,
 			AlgorithmVersion: channel.AlgorithmVersion,

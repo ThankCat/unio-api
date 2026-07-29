@@ -142,6 +142,7 @@ func TestAttemptTraceRecordsCompactFallbackAsTwoSameChannelTransports(t *testing
 		},
 		Invoke: func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 			adapter.MarkTransportStarted(ctx)
+			adapter.MarkRequestWritten(ctx, nil)
 			return AttemptSuccess{}, nativeErr
 		},
 		TransparentFallback: &NonStreamTransparentFallback{
@@ -149,6 +150,7 @@ func TestAttemptTraceRecordsCompactFallbackAsTwoSameChannelTransports(t *testing
 			UpstreamEndpoint: requestlog.UpstreamEndpointChatCompletions,
 			Invoke: func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 				adapter.MarkTransportStarted(ctx)
+				adapter.MarkRequestWritten(ctx, nil)
 				return AttemptSuccess{}, syntheticErr
 			},
 		},
@@ -217,6 +219,7 @@ func TestAttemptPermitGuardAbortsCompactFallbackCreateAttemptPanic(t *testing.T)
 			},
 			Invoke: func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 				adapter.MarkTransportStarted(ctx)
+				adapter.MarkRequestWritten(ctx, nil)
 				return AttemptSuccess{}, unsupportedErr
 			},
 			TransparentFallback: &NonStreamTransparentFallback{

@@ -55,6 +55,7 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 	if err != nil {
 		return nil, err
 	}
+	ctx = adapter.WithAttemptTransportTrace(ctx)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(req.Body))
 	if err != nil {
 		return nil, failure.Wrap(
@@ -68,6 +69,9 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 
 	adapter.MarkTransportStarted(ctx)
 	upstreamResp, err := a.client.Do(httpReq)
+	if upstreamResp != nil {
+		adapter.MarkResponseHeadersReceived(ctx)
+	}
 	if err != nil {
 		return nil, newUpstreamSendError(err, "send responses compact request")
 	}

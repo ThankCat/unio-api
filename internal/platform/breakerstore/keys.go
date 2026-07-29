@@ -141,6 +141,12 @@ func (k keyBuilder) channelRPDBucketPrefix(channelID int64) string {
 	return k.base + "admission:v1:ch-rpd:" + i(channelID) + ":"
 }
 
+// routeChannelRPDBucket records attempt attribution for one route/channel UTC day.
+// It is observational and does not replace the global Channel RPD capacity bucket.
+func (k keyBuilder) routeChannelRPDBucket(routeID, channelID, dayBucket int64) string {
+	return k.base + "admission:v1:route-ch-rpd:" + i(routeID) + ":" + i(channelID) + ":" + i(dayBucket)
+}
+
 func (k keyBuilder) channelTPMBucket(channelID, minuteBucket int64) string {
 	return k.base + "admission:v1:ch-tpm:" + i(channelID) + ":" + i(minuteBucket)
 }

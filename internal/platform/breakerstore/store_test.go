@@ -156,6 +156,7 @@ func seedReservedRequestAdmission(t *testing.T, s *Store, in AcquireAttemptInput
 		"runtime_integrity_revision", in.IntegrityRevision,
 		"reserve_state", "reserved",
 		"reserve_estimated_input_tokens", in.EstimatedInputTokens,
+		"route_id", in.RouteID,
 	).Err(); err != nil {
 		t.Fatalf("seed reserved request admission: %v", err)
 	}
@@ -300,6 +301,14 @@ func TestAttemptLifecycleIntegrityFencesAreZeroWrite(t *testing.T) {
 				return client.HSet(ctx, s.keys.permit(permit.PermitID), "provider_id", permit.ProviderID+1).Err()
 			},
 			wantCode: failure.CodeGatewayBreakerPermitConflict, wantFinish: DispositionTerminalConflict,
+		},
+		{
+			name: "channel rpd bucket missing",
+			mutate: func(ctx context.Context, s *Store, client *redis.Client, permit *AttemptPermit) error {
+				return client.Del(ctx, s.keys.channelRPDBucket(permit.ChannelID, dayBucket(time.Now()))).Err()
+			},
+			wantError: ErrRuntimeSyncRequired, wantCode: failure.CodeGatewayRuntimeSyncRequired,
+			wantFinish: DispositionRuntimeSyncReq,
 		},
 	}
 	operations := []string{"renew", "finish", "abort"}
@@ -521,6 +530,58 @@ func TestFinishIdempotentFirstTerminalWins(t *testing.T) {
 	snap, _ := s.Snapshot(context.Background(), ScopeChannel, 6)
 	if snap.EligibleSuccesses != 1 {
 		t.Fatalf("duplicate finish must not double count: %+v", snap)
+	}
+}
+
+func TestRouteChannelRPDAttributionRequiresInteractionEvidence(t *testing.T) {
+	s, _, _ := newTestStore(t)
+	cfg := testConfig()
+	const routeID, channelID, providerID = int64(41), int64(42), int64(420)
+	seedAttemptControls(t, s, cfg, channelID, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+
+	acquireForRoute := func(permitID string) *AttemptPermit {
+		t.Helper()
+		admission, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
+			PermitID: permitID, AdmissionFingerprint: permitID + "-fp", RequestAdmissionID: "req-" + permitID,
+			RouteID: routeID, ProviderID: providerID, ChannelID: channelID,
+			OriginRevision: 1, ProviderStatusRevision: 1, ChannelConfigRevision: 1,
+			ModelID: 100, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
+			EstimatedInputTokens: 10,
+		}))
+		if err != nil || admission.Mode != AdmissionPermit || admission.Permit == nil {
+			t.Fatalf("acquire route attribution permit: admission=%+v err=%v", admission, err)
+		}
+		return admission.Permit
+	}
+
+	withEvidence := acquireForRoute("route-rpd-evidence")
+	if _, err := s.Finish(context.Background(), *withEvidence, FinishOutcome{
+		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess,
+		ChannelInteractionEvidence: true,
+	}); err != nil {
+		t.Fatalf("finish route attribution permit: %v", err)
+	}
+	if _, err := s.Finish(context.Background(), *withEvidence, FinishOutcome{
+		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess,
+		ChannelInteractionEvidence: true,
+	}); err != nil {
+		t.Fatalf("repeat finish route attribution permit: %v", err)
+	}
+
+	withoutEvidence := acquireForRoute("route-rpd-no-evidence")
+	if _, err := s.Finish(context.Background(), *withoutEvidence, FinishOutcome{
+		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored,
+	}); err != nil {
+		t.Fatalf("finish without interaction evidence: %v", err)
+	}
+	aborted := acquireForRoute("route-rpd-abort")
+	if err := s.Abort(context.Background(), *aborted); err != nil {
+		t.Fatalf("abort route attribution permit: %v", err)
+	}
+
+	used, err := s.RouteChannelRPDUsage(context.Background(), routeID, channelID)
+	if err != nil || used != 1 {
+		t.Fatalf("route-channel RPD attribution = %d, want 1, err=%v", used, err)
 	}
 }
 

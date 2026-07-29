@@ -3,6 +3,8 @@ package lifecycle
 import (
 	"sync"
 	"time"
+
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 )
 
 // AttemptTimingFacts 是一次真实 upstream transport 的协议无关时间事实。
@@ -10,6 +12,16 @@ type AttemptTimingFacts struct {
 	UpstreamStartedAt    *time.Time
 	UpstreamFirstTokenAt *time.Time
 	UpstreamCompletedAt  *time.Time
+	RequestWriteState    adapter.RequestWriteState
+	ResponseHeadersSeen  bool
+}
+
+// HasChannelUsageEvidence reports whether the attempt may have consumed upstream capacity.
+func (f AttemptTimingFacts) HasChannelUsageEvidence() bool {
+	return f.RequestWriteState == adapter.RequestWriteCompleted ||
+		f.RequestWriteState == adapter.RequestWriteUncertain ||
+		f.ResponseHeadersSeen ||
+		f.UpstreamFirstTokenAt != nil
 }
 
 // FirstTokenMs 只在流式 attempt 已观测到有效 FirstToken 时返回样本。
@@ -56,6 +68,40 @@ func (o *AttemptTimingObserver) TransportStarted() {
 	}
 	now := o.now()
 	o.facts.UpstreamStartedAt = &now
+	o.facts.RequestWriteState = adapter.RequestWriteNotStarted
+}
+
+// RequestWritten receives net/http's WroteRequest result. Any write error is uncertain because
+// part of the request may already have reached the peer.
+func (o *AttemptTimingObserver) RequestWritten(err error) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.facts.UpstreamStartedAt == nil || o.facts.RequestWriteState == adapter.RequestWriteCompleted {
+		return
+	}
+	if err == nil {
+		o.facts.RequestWriteState = adapter.RequestWriteCompleted
+		return
+	}
+	o.facts.RequestWriteState = adapter.RequestWriteUncertain
+}
+
+func (o *AttemptTimingObserver) ResponseHeadersReceived() {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.facts.UpstreamStartedAt == nil {
+		return
+	}
+	o.facts.ResponseHeadersSeen = true
+	if o.facts.RequestWriteState == adapter.RequestWriteNotStarted {
+		o.facts.RequestWriteState = adapter.RequestWriteUncertain
+	}
 }
 
 // FirstTokenEligible 只由协议层已标记 FirstTokenEligible 的流事件调用。
@@ -105,6 +151,8 @@ func cloneAttemptTimingFacts(in AttemptTimingFacts) AttemptTimingFacts {
 		UpstreamStartedAt:    cloneTime(in.UpstreamStartedAt),
 		UpstreamFirstTokenAt: cloneTime(in.UpstreamFirstTokenAt),
 		UpstreamCompletedAt:  cloneTime(in.UpstreamCompletedAt),
+		RequestWriteState:    in.RequestWriteState,
+		ResponseHeadersSeen:  in.ResponseHeadersSeen,
 	}
 }
 

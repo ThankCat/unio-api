@@ -1,11 +1,25 @@
 package adapter
 
-import "context"
+import (
+	"context"
+	"net/http/httptrace"
+)
+
+// RequestWriteState 表示 Go HTTP 客户端对请求写出结果的观测。
+type RequestWriteState string
+
+const (
+	RequestWriteNotStarted RequestWriteState = "not_started"
+	RequestWriteCompleted  RequestWriteState = "completed"
+	RequestWriteUncertain  RequestWriteState = "uncertain"
+)
 
 // AttemptTimingObserver receives protocol-independent transport timing events.
 // Implementations must be concurrency-safe and first-write-wins.
 type AttemptTimingObserver interface {
 	TransportStarted()
+	RequestWritten(error)
+	ResponseHeadersReceived()
 	FirstTokenEligible()
 	TransportCompleted()
 }
@@ -28,6 +42,38 @@ func WithAttemptTimingObserver(ctx context.Context, observer AttemptTimingObserv
 func MarkTransportStarted(ctx context.Context) {
 	if observer := attemptTimingObserverFromContext(ctx); observer != nil {
 		observer.TransportStarted()
+	}
+}
+
+// MarkRequestWritten is primarily useful for custom transports and deterministic tests.
+// Production HTTP adapters receive the same fact from httptrace automatically.
+func MarkRequestWritten(ctx context.Context, err error) {
+	if observer := attemptTimingObserverFromContext(ctx); observer != nil {
+		observer.RequestWritten(err)
+	}
+}
+
+// WithAttemptTransportTrace records whether net/http completed writing the request.
+// It observes lifecycle events only and never reads or stores the request body.
+func WithAttemptTransportTrace(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	observer := attemptTimingObserverFromContext(ctx)
+	if observer == nil {
+		return ctx
+	}
+	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			observer.RequestWritten(info.Err)
+		},
+	})
+}
+
+// MarkResponseHeadersReceived records that http.Client.Do returned an HTTP response.
+func MarkResponseHeadersReceived(ctx context.Context) {
+	if observer := attemptTimingObserverFromContext(ctx); observer != nil {
+		observer.ResponseHeadersReceived()
 	}
 }
 

@@ -133,7 +133,7 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 				result = compactResult{native: resp}
 				return lifecycle.AttemptSuccess{ResponseID: resp.ResponseID, Facts: resp.Facts}, nil
 			}
-			return s.invokeSyntheticCompact(ctx, candidate, req, chatAdapter, &result)
+			return s.invokeSyntheticCompact(ctx, candidate, req, chatAdapter, &result, responseCandidateOutputBudget(req, candidate))
 		},
 		transparentFallback: &lifecycle.NonStreamTransparentFallback{
 			Match: func(candidate routing.ChatRouteCandidate, err error) bool {
@@ -162,7 +162,7 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 				return nil
 			},
 			Invoke: func(ctx context.Context, candidate routing.ChatRouteCandidate) (lifecycle.AttemptSuccess, error) {
-				return s.invokeSyntheticCompact(ctx, candidate, req, chatAdapter, &result)
+				return s.invokeSyntheticCompact(ctx, candidate, req, chatAdapter, &result, responseCandidateOutputBudget(req, candidate))
 			},
 		},
 	})

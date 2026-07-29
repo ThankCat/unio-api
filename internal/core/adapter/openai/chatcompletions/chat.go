@@ -74,6 +74,7 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 		)
 	}
 
+	ctx = adapter.WithAttemptTransportTrace(ctx)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, buf)
 	if err != nil {
 		return nil, failure.Wrap(
@@ -87,6 +88,9 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 
 	adapter.MarkTransportStarted(ctx)
 	upstreamResp, err := a.client.Do(request)
+	if upstreamResp != nil {
+		adapter.MarkResponseHeadersReceived(ctx)
+	}
 	if err != nil {
 		return nil, newUpstreamSendError(err, "send chat completion request")
 	}
@@ -223,6 +227,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 		)
 	}
 
+	streamCtx = adapter.WithAttemptTransportTrace(streamCtx)
 	request, err := http.NewRequestWithContext(streamCtx, http.MethodPost, url, buf)
 	if err != nil {
 		return adapter.StreamOutcome{}, failure.Wrap(
@@ -239,6 +244,9 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	upstreamResp, err := a.client.Do(request)
 	ctxCause := context.Cause(streamCtx)
 	headersReceived()
+	if upstreamResp != nil {
+		adapter.MarkResponseHeadersReceived(streamCtx)
+	}
 	if err != nil {
 		return adapter.StreamOutcome{}, newUpstreamSendErrorWithContextCause(err, ctxCause, "send stream chat completion request")
 	}
