@@ -433,7 +433,7 @@ func (o *AttemptPermitOwner) recordRuntimeFeedback(ctx context.Context, upstream
 
 	var feedbackErr error
 	switch {
-	case category == adapter.UpstreamErrorRateLimit && metadata.StatusCode == 429:
+	case category == adapter.UpstreamErrorRateLimit && (metadata.StatusCode == 429 || metadata.StatusCode == 200):
 		cooldown := metadata.RetryAfter
 		if o.runtimeFeedbackPolicy != nil {
 			cooldown = o.runtimeFeedbackPolicy.Resolve(metadata.RetryAfter)

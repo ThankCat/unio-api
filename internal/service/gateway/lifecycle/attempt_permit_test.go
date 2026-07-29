@@ -379,6 +379,30 @@ func TestAttemptPermitOwnerRecords429CooldownUsingPolicy(t *testing.T) {
 	}
 }
 
+func TestAttemptPermitOwnerRecordsInlineRateLimitCooldownWithoutBreakerFailure(t *testing.T) {
+	store := &attemptPermitStoreStub{}
+	policy := &channel429CooldownPolicy{}
+	policy.Set(5*time.Second, time.Minute)
+	owner := newRuntimeFeedbackOwner(store, policy)
+	upstreamErr := feedbackUpstreamError(adapter.UpstreamErrorRateLimit, 200, 0)
+	outcome := streamFinishOutcome(nil, AttemptTimingFacts{}, upstreamErr)
+	if outcome.ProviderOutcome != breakerstore.OutcomeIgnored || outcome.ChannelOutcome != breakerstore.OutcomeIgnored {
+		t.Fatalf("inline rate limit must not count as breaker failure: %+v", outcome)
+	}
+
+	_, err := owner.FinishTransport(
+		context.Background(),
+		outcome,
+		upstreamErr,
+	)
+	if err != nil {
+		t.Fatalf("finish transport: %v", err)
+	}
+	if store.cooldownCalls != 1 || store.cooldownChannelID != 17 || store.cooldownDurationMs != 5_000 || store.cooldownSourceMs != 0 {
+		t.Fatalf("inline rate limit was not recorded as channel cooldown: %+v", store)
+	}
+}
+
 func TestAttemptPermitOwnerRecords403PermissionWithPermitRevisions(t *testing.T) {
 	store := &attemptPermitStoreStub{}
 	owner := newRuntimeFeedbackOwner(store, &channel429CooldownPolicy{})

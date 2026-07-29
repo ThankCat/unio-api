@@ -255,7 +255,7 @@ func New() *Metrics {
 
 		stickyEventsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "unio_gateway_sticky_events_total",
-			Help: "会话粘性路由事件计数（大 uncache 缺口 P0）：hit/miss（绑定查询）、bind/rebind/clear（绑定写入）、" +
+			Help: "会话粘性路由事件计数（大 uncache 缺口 P0）：hit/miss（绑定查询）、bind/rebind/refresh/clear（绑定写入）、" +
 				"pinned_preferred/pinned_non_preferred（置顶渠道是否恰为策略首选——non_preferred 占比即 sticky 成本漂移，R2）、" +
 				"pin_lost（绑定渠道被硬摘除，清绑定重选）。",
 		}, []string{"event"}),
@@ -607,7 +607,7 @@ func (m *Metrics) IncCapabilityMissing(protocol string, capability string, scope
 }
 
 // IncStickyEvent 记录一次会话粘性路由事件（大 uncache 缺口 P0）。
-// event 为有界稳定取值：hit/miss/bind/rebind/clear/pinned_preferred/pinned_non_preferred/pin_lost。
+// event 为有界稳定取值：hit/miss/bind/rebind/refresh/clear/pinned_preferred/pinned_non_preferred/pin_lost。
 func (m *Metrics) IncStickyEvent(event string) {
 	m.stickyEventsTotal.WithLabelValues(event).Inc()
 }

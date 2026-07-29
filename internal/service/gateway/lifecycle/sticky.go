@@ -26,19 +26,16 @@ import (
 // StickyRouter 同时承载队首短等全局配置（tpm_wait_ms，P1），供 AttemptRunner 热读。
 
 // StickyStore 定义 sticky 核心依赖的绑定存取能力（Redis 实现在 platform/stickysession）。
-// 实现必须 fail-open：Lookup 失败返回 ok=false，Bind/Rebind/Clear 失败静默（只记日志，R7）。
+// 实现必须 fail-open：Lookup 失败返回 ok=false，写/删失败静默（只记日志，R7）。
 type StickyStore interface {
-	Lookup(ctx context.Context, key string) (channelID int64, boundAt time.Time, ok bool)
+	Lookup(ctx context.Context, key string) (channelID int64, lastSuccessAt time.Time, ok bool)
 	Bind(ctx context.Context, key string, channelID int64, ttl time.Duration)
 	Rebind(ctx context.Context, key string, channelID int64, ttl time.Duration)
+	RefreshIfBound(ctx context.Context, key string, channelID int64, ttl time.Duration)
 	Clear(ctx context.Context, key string)
 }
 
-type stickyTTLRefresher interface {
-	Refresh(ctx context.Context, key string, ttl time.Duration)
-}
-
-// StickyEventRecorder 记录会话粘性路由事件（hit/miss/bind/rebind/clear/pinned_* /pin_lost）。
+// StickyEventRecorder 记录会话粘性路由事件（hit/miss/bind/rebind/refresh/clear/pinned_* /pin_lost）。
 // nil 表示不采集；实现由 platform/observability/metrics 提供。
 type StickyEventRecorder interface {
 	IncStickyEvent(event string)
@@ -153,21 +150,15 @@ func (r *StickyRouter) Resolve(ctx context.Context, params StickyResolveParams) 
 		router: r,
 		key:    stickyRedisKey(params.Protocol, *params.RouteID, params.APIKeyID, params.SessionKey),
 	}
-	session.boundChannelID, session.boundAt, _ = r.store.Lookup(ctx, session.key)
+	session.boundChannelID, session.lastSuccessAt, _ = r.store.Lookup(ctx, session.key)
 	session.resolvedChannelID = session.boundChannelID
 	if session.boundChannelID != 0 {
 		if candidate, ok := findStickyCandidate(params.Candidates, session.boundChannelID); ok {
 			enabled, ttl := r.policy(candidate)
-			age := time.Since(session.boundAt)
+			age := time.Since(session.lastSuccessAt)
 			if !enabled || ttl <= 0 || age >= ttl {
 				session.ClearBinding(ctx)
 				return session
-			}
-			if refresher, ok := r.store.(stickyTTLRefresher); ok {
-				remaining := ttl - age
-				if remaining > 0 {
-					refresher.Refresh(ctx, session.key, remaining)
-				}
 			}
 		}
 		r.inc("hit")
@@ -209,7 +200,7 @@ type StickySession struct {
 	router         *StickyRouter
 	key            string
 	boundChannelID int64
-	boundAt        time.Time
+	lastSuccessAt  time.Time
 	// resolvedChannelID stays immutable so clearing or rebinding cannot erase trace facts.
 	resolvedChannelID int64
 }
@@ -267,10 +258,12 @@ func (s *StickySession) ApplyPlanOutcome(ctx context.Context, plan CandidatePlan
 	}
 }
 
-// BindSuccess 在 attempt 成功后登记绑定（决议 2/3 + R8）：
+// BindSuccess 在 attempt 成功后登记或续期绑定（决议 2/3 + R8）：
 //   - 无既有绑定 → SETNX 写入（首轮并发竞态只有第一个成功者生效）；
 //   - 有绑定且胜出渠道不同（failover 成功）→ 覆盖改绑；
-//   - 胜出渠道与绑定一致 → 不动（绝对 TTL 不刷新，R2：到期自然回落 mode 排序回迁便宜渠道）。
+//   - 胜出渠道与绑定一致 → 仅当前 Redis 绑定仍为该渠道时滑动续完整 TTL。
+//
+// 读取命中与失败请求均不续期；活跃且持续成功的会话保持在同一上游缓存域，空闲满 TTL 后自然过期。
 func (s *StickySession) BindSuccess(ctx context.Context, candidate routing.ChatRouteCandidate) {
 	if !s.Enabled() || candidate.Channel.ID <= 0 {
 		return
@@ -287,7 +280,7 @@ func (s *StickySession) BindSuccess(ctx context.Context, candidate routing.ChatR
 		s.router.store.Bind(ctx, s.key, channelID, ttl)
 		s.router.inc("bind")
 		s.boundChannelID = channelID
-		s.boundAt = time.Now()
+		s.lastSuccessAt = time.Now()
 	case s.boundChannelID != channelID:
 		from := s.boundChannelID
 		s.router.store.Rebind(ctx, s.key, channelID, ttl)
@@ -298,7 +291,11 @@ func (s *StickySession) BindSuccess(ctx context.Context, candidate routing.ChatR
 			zap.String("sticky_key", s.key),
 		)
 		s.boundChannelID = channelID
-		s.boundAt = time.Now()
+		s.lastSuccessAt = time.Now()
+	default:
+		s.router.store.RefreshIfBound(ctx, s.key, channelID, ttl)
+		s.router.inc("refresh")
+		s.lastSuccessAt = time.Now()
 	}
 }
 

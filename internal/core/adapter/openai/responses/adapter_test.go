@@ -498,9 +498,42 @@ func TestStreamResponseFailedEventReturnsError(t *testing.T) {
 	if failure.CodeOf(err) != failure.CodeAdapterUpstreamStatus {
 		t.Fatalf("code = %q, want %q", failure.CodeOf(err), failure.CodeAdapterUpstreamStatus)
 	}
+	if category, ok := adapter.UpstreamCategoryOf(err); !ok || category != adapter.UpstreamErrorServer {
+		t.Fatalf("category = %q ok=%v, want server_error", category, ok)
+	}
 	// 错误事件原文先透传给客户（Codex 据此映射 ApiError）。
 	if len(got) != 1 || got[0].EventType != "response.failed" {
 		t.Fatalf("got %+v, want failed event forwarded once", got)
+	}
+}
+
+func TestStreamResponseFailedRateLimitIsChannelRateLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Request-Id", "upstream-inline-rate-limit")
+		w.Header().Set("Retry-After", "7")
+		_, _ = io.WriteString(w, "event: response.failed\n"+`data: {"type":"response.failed","response":{"id":"resp_rl","status":"failed","error":{"code":"rate_limit_exceeded","message":"usage limit reached"}}}`+"\n\n")
+	}))
+	defer server.Close()
+
+	_, err := NewAdapter(server.Client()).StreamResponse(
+		context.Background(),
+		testChannel(server.URL),
+		Request{Body: json.RawMessage(`{"model":"gpt-5.6","stream":true}`)},
+		func(StreamChunk) error { return nil },
+	)
+	if err == nil {
+		t.Fatal("expected inline rate limit error")
+	}
+	if category, ok := adapter.UpstreamCategoryOf(err); !ok || category != adapter.UpstreamErrorRateLimit {
+		t.Fatalf("category = %q ok=%v, want rate_limit", category, ok)
+	}
+	meta, ok := adapter.UpstreamMetadataOf(err)
+	if !ok || meta.StatusCode != http.StatusOK || meta.RequestID != "upstream-inline-rate-limit" || meta.RetryAfter != 7*time.Second {
+		t.Fatalf("metadata = %+v ok=%v, want real HTTP 200 metadata", meta, ok)
+	}
+	if code := failure.CodeOf(err); code != failure.CodeAdapterUpstreamStatus {
+		t.Fatalf("failure code = %q, want upstream status rather than gateway rate limit", code)
 	}
 }
 

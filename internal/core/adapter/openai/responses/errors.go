@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
@@ -79,13 +80,22 @@ func newUpstreamStreamError(meta adapter.UpstreamMetadata, code, message string)
 		detail = fmt.Sprintf("%s: %s", code, message)
 	}
 	return adapter.NewUpstreamError(
-		adapter.UpstreamErrorServer,
+		upstreamCategoryForStreamError(code),
 		meta,
 		failure.New(
 			failure.CodeAdapterUpstreamStatus,
 			failure.WithMessage(fmt.Sprintf("openai responses adapter upstream stream failed (%s)", detail)),
 		),
 	)
+}
+
+func upstreamCategoryForStreamError(code string) adapter.UpstreamErrorCategory {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "rate_limit", "rate_limit_error", "rate_limit_exceeded":
+		return adapter.UpstreamErrorRateLimit
+	default:
+		return adapter.UpstreamErrorServer
+	}
 }
 
 // newUpstreamStreamReadError 把「读流阶段失败」转换成带上游分类的结构化错误。

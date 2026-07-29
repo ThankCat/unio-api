@@ -15,11 +15,17 @@ type fakeStickyStore struct {
 	bindings map[string]int64
 	boundAt  map[string]time.Time
 
-	bindCalls   []string
-	rebindCalls []string
-	clearCalls  []string
-	refreshTTL  []time.Duration
-	lastTTL     time.Duration
+	bindCalls    []string
+	rebindCalls  []string
+	clearCalls   []string
+	refreshCalls []stickyRefreshCall
+	lastTTL      time.Duration
+}
+
+type stickyRefreshCall struct {
+	key       string
+	channelID int64
+	ttl       time.Duration
 }
 
 func newFakeStickyStore() *fakeStickyStore {
@@ -54,8 +60,12 @@ func (s *fakeStickyStore) Clear(_ context.Context, key string) {
 	delete(s.boundAt, key)
 }
 
-func (s *fakeStickyStore) Refresh(_ context.Context, _ string, ttl time.Duration) {
-	s.refreshTTL = append(s.refreshTTL, ttl)
+func (s *fakeStickyStore) RefreshIfBound(_ context.Context, key string, channelID int64, ttl time.Duration) {
+	s.refreshCalls = append(s.refreshCalls, stickyRefreshCall{key: key, channelID: channelID, ttl: ttl})
+	if s.bindings[key] != channelID {
+		return
+	}
+	s.boundAt[key] = time.Now()
 }
 
 func stickyResolveParams(sessionKey string) StickyResolveParams {
@@ -103,7 +113,7 @@ func TestStickyResolveMissThenBindSuccess(t *testing.T) {
 		t.Fatalf("expected TTL 30m, got %v", store.lastTTL)
 	}
 
-	// 二轮：lookup 命中同渠道 → 成功后不刷新（绝对 TTL，R2）。
+	// 二轮：lookup 命中本身不续期；同渠道成功后滑动续完整 TTL。
 	second := router.Resolve(context.Background(), stickyResolveParams("sess-abc"))
 	if second.BoundChannelID() != 101 {
 		t.Fatalf("expected bound channel 101, got %d", second.BoundChannelID())
@@ -111,9 +121,15 @@ func TestStickyResolveMissThenBindSuccess(t *testing.T) {
 	if second.ResolvedChannelID() != 101 {
 		t.Fatalf("expected resolved channel 101, got %d", second.ResolvedChannelID())
 	}
+	if len(store.refreshCalls) != 0 {
+		t.Fatalf("lookup must not refresh sticky TTL: success=%v", store.refreshCalls)
+	}
 	second.BindSuccess(context.Background(), stickyCandidate(101, nil, nil))
 	if len(store.bindCalls) != 1 || len(store.rebindCalls) != 0 {
-		t.Fatalf("same-channel success must not touch binding, got bind=%d rebind=%d", len(store.bindCalls), len(store.rebindCalls))
+		t.Fatalf("same-channel success must not bind/rebind, got bind=%d rebind=%d", len(store.bindCalls), len(store.rebindCalls))
+	}
+	if len(store.refreshCalls) != 1 || store.refreshCalls[0].channelID != 101 || store.refreshCalls[0].ttl != 30*time.Minute {
+		t.Fatalf("same-channel success must refresh full TTL, got %+v", store.refreshCalls)
 	}
 }
 
@@ -229,15 +245,17 @@ func TestStickyResolveAppliesChannelPolicyAndTTLChanges(t *testing.T) {
 	store.boundAt[session.key] = time.Now().Add(-20 * time.Minute)
 
 	resolved := router.Resolve(context.Background(), params)
-	if resolved.BoundChannelID() != 7 || len(store.refreshTTL) != 1 {
-		t.Fatalf("inherited policy must retain and refresh the physical expiry: session=%+v refresh=%v", resolved, store.refreshTTL)
+	if resolved.BoundChannelID() != 7 || len(store.refreshCalls) != 0 {
+		t.Fatalf("inherited policy must retain without lookup refresh: session=%+v refresh=%v", resolved, store.refreshCalls)
 	}
-	if remaining := store.refreshTTL[0]; remaining < 9*time.Minute || remaining > 10*time.Minute {
-		t.Fatalf("expected approximately 10m remaining, got %v", remaining)
+	resolved.BindSuccess(context.Background(), stickyCandidate(7, nil, nil))
+	if len(store.refreshCalls) != 1 || store.refreshCalls[0].ttl != 30*time.Minute {
+		t.Fatalf("successful inherited channel must refresh full TTL, got %+v", store.refreshCalls)
 	}
 
 	shortTTL := 10 * time.Minute
 	enabled := true
+	store.boundAt[session.key] = time.Now().Add(-20 * time.Minute)
 	params.Candidates[1] = stickyCandidate(7, &enabled, &shortTTL)
 	expired := router.Resolve(context.Background(), params)
 	if expired.BoundChannelID() != 0 || len(store.clearCalls) != 1 {

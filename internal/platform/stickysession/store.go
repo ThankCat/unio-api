@@ -22,16 +22,45 @@ type stickyBindingV2 struct {
 	BoundAtMs int64 `json:"bound_at_ms"`
 }
 
+type stickyBindingV3 struct {
+	Version         int   `json:"v"`
+	ChannelID       int64 `json:"channel_id"`
+	LastSuccessAtMs int64 `json:"last_success_at_ms"`
+}
+
 // opTimeout 是单次 sticky Redis 操作的独立短超时：sticky 在候选准备热路径上，
 // Redis 抖动时宁可放弃粘性也不能拖慢请求（R7）。
 const opTimeout = 200 * time.Millisecond
 
-const upgradeLegacyBindingLua = `
+const upgradeBindingLua = `
 local current = redis.call("GET", KEYS[1])
 if current ~= ARGV[1] then
   return 0
 end
 redis.call("SET", KEYS[1], ARGV[2], "XX", "KEEPTTL")
+return 1
+`
+
+const refreshIfBoundLua = `
+local raw = redis.call("GET", KEYS[1])
+if not raw then
+  return 0
+end
+
+local channel_id = tonumber(raw)
+if not channel_id then
+  local ok, decoded = pcall(cjson.decode, raw)
+  if not ok or type(decoded) ~= "table" then
+    return 0
+  end
+  channel_id = tonumber(decoded.channel_id)
+end
+
+if channel_id ~= tonumber(ARGV[1]) then
+  return 0
+end
+
+redis.call("SET", KEYS[1], ARGV[2], "XX", "PX", ARGV[3])
 return 1
 `
 
@@ -58,7 +87,7 @@ func NewStore(client redis.Cmdable, keyNamespace string, logger *zap.Logger) *St
 	return &Store{client: client, logger: logger, keyPrefix: keyNamespace + ":"}
 }
 
-// Lookup 读取 v2 绑定；旧整数值会在访问时惰性升级为 v2，并保留原 Redis TTL。
+// Lookup 读取 v3 绑定；v2/旧整数值会在访问时惰性升级为 v3，并保留原 Redis TTL。
 // miss、值损坏或 Redis 故障统一返回 ok=false（fail-open）。
 func (s *Store) Lookup(ctx context.Context, key string) (int64, time.Time, bool) {
 	opCtx, cancel := context.WithTimeout(ctx, opTimeout)
@@ -72,28 +101,40 @@ func (s *Store) Lookup(ctx context.Context, key string) (int64, time.Time, bool)
 		return 0, time.Time{}, false
 	}
 	now := time.Now()
+	var current stickyBindingV3
+	if err := json.Unmarshal([]byte(raw), &current); err == nil && current.Version == 3 && current.ChannelID > 0 && current.LastSuccessAtMs > 0 {
+		return current.ChannelID, time.UnixMilli(current.LastSuccessAtMs), true
+	}
+
 	var binding stickyBindingV2
 	if err := json.Unmarshal([]byte(raw), &binding); err == nil && binding.Version == 2 && binding.ChannelID > 0 && binding.BoundAtMs > 0 {
-		return binding.ChannelID, time.UnixMilli(binding.BoundAtMs), true
+		lastSuccessAt := time.UnixMilli(binding.BoundAtMs)
+		s.upgradeBinding(opCtx, key, raw, binding.ChannelID, lastSuccessAt)
+		return binding.ChannelID, lastSuccessAt, true
 	}
 	channelID, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || channelID <= 0 {
 		s.logger.Warn("sticky binding value corrupted, treating as miss", zap.String("key", key), zap.String("value", raw))
 		return 0, time.Time{}, false
 	}
-	upgraded, marshalErr := json.Marshal(stickyBindingV2{Version: 2, ChannelID: channelID, BoundAtMs: now.UnixMilli()})
-	if marshalErr == nil {
-		// Compare-and-set prevents a stale lookup from overwriting a concurrent failover rebind.
-		// KEEPTTL avoids globally purging or extending legacy bindings during rollout.
-		if err := s.client.Eval(opCtx, upgradeLegacyBindingLua, []string{s.keyPrefix + key}, raw, string(upgraded)).Err(); err != nil {
-			s.logger.Warn("sticky legacy upgrade failed", zap.String("key", key), zap.Error(err))
-		}
-	}
+	s.upgradeBinding(opCtx, key, raw, channelID, now)
 	return channelID, now, true
 }
 
+func (s *Store) upgradeBinding(ctx context.Context, key, raw string, channelID int64, lastSuccessAt time.Time) {
+	upgraded, err := encodeBinding(channelID, lastSuccessAt)
+	if err != nil {
+		return
+	}
+	// Compare-and-set prevents a stale lookup from overwriting a concurrent failover rebind.
+	// KEEPTTL avoids extending old bindings merely because the new process read them.
+	if err := s.client.Eval(ctx, upgradeBindingLua, []string{s.keyPrefix + key}, raw, upgraded).Err(); err != nil {
+		s.logger.Warn("sticky binding upgrade failed", zap.String("key", key), zap.Error(err))
+	}
+}
+
 // Bind 在「无既有绑定」时写入绑定（SETNX 语义，R8）：同会话首轮并发请求各自成功时，
-// 只有第一个写入生效，避免互相覆盖来回翻。TTL 为绝对过期，命中不刷新（R2）。
+// 只有第一个写入生效，避免互相覆盖来回翻。TTL 从本次成功开始计算。
 func (s *Store) Bind(ctx context.Context, key string, channelID int64, ttl time.Duration) {
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opTimeout)
 	defer cancel()
@@ -123,21 +164,33 @@ func (s *Store) Rebind(ctx context.Context, key string, channelID int64, ttl tim
 	}
 }
 
-// Refresh adjusts the physical expiry while keeping bound_at_ms immutable. This makes TTL edits
-// effective on the next request without refreshing sticky age or requiring a Redis purge.
-func (s *Store) Refresh(ctx context.Context, key string, ttl time.Duration) {
+// RefreshIfBound 在同渠道成功后滑动续期。Lua 同时比较当前 channel_id，避免旧并发请求在
+// failover 已改绑后续活或覆盖新渠道。返回值不参与请求主链路，Redis 故障仍 fail-open。
+func (s *Store) RefreshIfBound(ctx context.Context, key string, channelID int64, ttl time.Duration) {
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opTimeout)
 	defer cancel()
-	if ttl <= 0 {
+	if channelID <= 0 || ttl <= 0 {
 		return
 	}
-	if err := s.client.Expire(opCtx, s.keyPrefix+key, ttl).Err(); err != nil {
-		s.logger.Warn("sticky expiry refresh failed", zap.String("key", key), zap.Error(err))
+	value, err := encodeBinding(channelID, time.Now())
+	if err != nil {
+		s.logger.Warn("sticky refresh encode failed", zap.String("key", key), zap.Error(err))
+		return
+	}
+	if err := s.client.Eval(
+		opCtx,
+		refreshIfBoundLua,
+		[]string{s.keyPrefix + key},
+		channelID,
+		value,
+		ttl.Milliseconds(),
+	).Err(); err != nil {
+		s.logger.Warn("sticky success refresh failed", zap.String("key", key), zap.Int64("channel_id", channelID), zap.Error(err))
 	}
 }
 
 func encodeBinding(channelID int64, boundAt time.Time) (string, error) {
-	raw, err := json.Marshal(stickyBindingV2{Version: 2, ChannelID: channelID, BoundAtMs: boundAt.UnixMilli()})
+	raw, err := json.Marshal(stickyBindingV3{Version: 3, ChannelID: channelID, LastSuccessAtMs: boundAt.UnixMilli()})
 	return string(raw), err
 }
 

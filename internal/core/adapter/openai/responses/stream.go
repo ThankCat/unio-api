@@ -86,6 +86,7 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 	meta := adapter.UpstreamMetadata{
 		StatusCode: upstreamResp.StatusCode,
 		RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
+		RetryAfter: adapter.ParseRetryAfterHeader(upstreamResp.Header),
 	}
 
 	var (
