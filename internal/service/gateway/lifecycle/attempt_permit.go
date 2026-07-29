@@ -120,11 +120,10 @@ func (m *AttemptPermitManager) SetChannel429CooldownPolicy(defaultCooldown, cap 
 }
 
 type AttemptPermitAcquireParams struct {
-	Candidate            routing.ChatRouteCandidate
-	UpstreamEndpoint     requestlog.UpstreamEndpoint
-	RequestMode          breakerstore.RequestMode
-	EstimatedInputTokens int64
-	RequestTPMBudget     int64
+	Candidate        routing.ChatRouteCandidate
+	UpstreamEndpoint requestlog.UpstreamEndpoint
+	RequestMode      breakerstore.RequestMode
+	InputEstimate    int64
 }
 
 // Acquire 独立强读 admission+routing revision，并要求二者属于同一 ready integrity epoch。
@@ -148,10 +147,6 @@ func (m *AttemptPermitManager) Acquire(ctx context.Context, params AttemptPermit
 		return breakerstore.AttemptAdmission{}, nil, err
 	}
 
-	outputBudget := params.RequestTPMBudget - params.EstimatedInputTokens
-	if outputBudget < 0 {
-		outputBudget = 0
-	}
 	in := breakerstore.AcquireAttemptInput{
 		PermitID:                  m.newPermitID(),
 		IntegrityEpoch:            admissionFacts.Epoch,
@@ -169,9 +164,7 @@ func (m *AttemptPermitManager) Acquire(ctx context.Context, params AttemptPermit
 		CircuitBreakerRevision:    routingFacts.CircuitBreaker,
 		ChannelAdmissionRevision:  params.Candidate.ChannelAdmissionLimitsRevision,
 		EnforceProviderControl:    true,
-		EstimatedInputTokens:      params.EstimatedInputTokens,
-		OutputBudgetTokens:        outputBudget,
-		ReservedTPMTokens:         params.RequestTPMBudget,
+		InputEstimate:             params.InputEstimate,
 	}
 	if err := requestadmission.BindAttemptInput(ctx, &in); err != nil {
 		m.recordPermitOperation("acquire", permitErrorResult(err))
@@ -255,12 +248,12 @@ func breakerEndpoint(operation requestlog.UpstreamEndpoint) breakerstore.Upstrea
 
 func attemptAdmissionFingerprint(in breakerstore.AcquireAttemptInput) string {
 	payload := fmt.Sprintf(
-		"%s|%s|%s|%d|%d|%d|%d|%d|%d|%d|%s|%s|%d|%d|%d|%d|%d|%d|%d|%d",
+		"%s|%s|%s|%d|%d|%d|%d|%d|%d|%d|%s|%s|%d|%d|%d|%d|%d|%d",
 		in.PermitID, in.RequestAdmissionID, in.IntegrityEpoch, in.IntegrityRevision,
 		in.ProviderID, in.ChannelID, in.RouteID, in.OriginRevision, in.ProviderStatusRevision,
 		in.ChannelConfigRevision, in.UpstreamEndpoint, in.RequestMode, in.ModelID,
 		in.ChannelRateRevision, in.GlobalConcurrencyRevision, in.CircuitBreakerRevision,
-		in.ChannelAdmissionRevision, in.EstimatedInputTokens, in.OutputBudgetTokens, in.ReservedTPMTokens,
+		in.ChannelAdmissionRevision, in.InputEstimate,
 	)
 	sum := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("%x", sum[:])
@@ -650,9 +643,9 @@ func nonStreamFinishOutcome(success AttemptSuccess, timing AttemptTimingFacts, e
 	if err == nil {
 		out.ProviderOutcome = breakerstore.OutcomeEligibleSuccess
 		out.ChannelOutcome = breakerstore.OutcomeEligibleSuccess
-		actual := billableTPMTokens(success.Facts.Usage)
-		out.ChannelTPMActual = &actual
-		out.ChannelTPMUsageSource = "authoritative"
+		if actual, reliable := actualTotalTokens(success.Facts.Usage); reliable {
+			out.ActualTotalTokens = &actual
+		}
 		return out
 	}
 	if nonStreamChannelFailureEligible(err) {
@@ -748,14 +741,16 @@ func (r *AttemptRunner) invokeNonStreamAttempt(
 	facts := observer.Snapshot()
 	r.lifecycle.RecordAttemptTiming(ctx, attempt, facts)
 	if facts.HasChannelUsageEvidence() {
-		requestadmission.PublishInputFallback(ctx, 0)
+		requestadmission.MarkUpstreamReached(ctx)
 	}
 	outcomeErr := err
 	if panicValue != nil {
 		outcomeErr = errAttemptInvokePanic
 	}
 	finishOutcome := nonStreamFinishOutcome(success, facts, outcomeErr)
-	finishOutcome.ChannelInteractionEvidence = facts.HasChannelUsageEvidence()
+	finishOutcome.RequestWriteState = breakerstore.RequestWriteState(facts.RequestWriteState)
+	finishOutcome.ResponseHeadersReceived = facts.ResponseHeadersSeen
+	finishOutcome.FirstTokenEligible = facts.UpstreamFirstTokenAt != nil
 
 	if owner != nil {
 		if !facts.HasChannelUsageEvidence() {

@@ -502,7 +502,7 @@ func readActiveOwnerLeaseSnapshot(
 		snapshot.permit["request_admission_id"] != requestID {
 		t.Fatalf("attempt permit is not the expected active owner: %v", snapshot.permit)
 	}
-	if snapshot.request["status"] != "active" || snapshot.request["reserve_state"] != "reserved" {
+	if snapshot.request["status"] != "active" || snapshot.request["tpm_state"] != "held" {
 		t.Fatalf("request token is not active and reserved: %v", snapshot.request)
 	}
 	if snapshot.channelScore != snapshot.permitLease || snapshot.routeScore != snapshot.requestLease {

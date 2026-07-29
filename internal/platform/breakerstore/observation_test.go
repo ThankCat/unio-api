@@ -133,7 +133,7 @@ func TestOperationObserverCoversRequestAdmissionLifecycle(t *testing.T) {
 	if result, err := store.RenewRequestAdmission(ctx, in.RequestAdmissionID, in.RouteID, in.UserID, epoch, revision); err != nil || result != RequestLifecycleRenewed {
 		t.Fatalf("renew request = %s, err=%v", result, err)
 	}
-	if result, err := store.FinishRequestAdmission(ctx, in.RequestAdmissionID, in.RouteID, in.UserID, 7, epoch, revision); err != nil || result != RequestLifecycleFinished {
+	if result, err := store.FinishRequestAdmission(ctx, in.RequestAdmissionID, in.RouteID, in.UserID, 7, "actual", epoch, revision); err != nil || result != RequestLifecycleFinished {
 		t.Fatalf("finish request = %s, err=%v", result, err)
 	}
 
@@ -169,8 +169,9 @@ func TestOperationObserverCoversAttemptPermitLifecycle(t *testing.T) {
 		t.Fatalf("renew finish permit: %v", err)
 	}
 	if result, err := store.Finish(ctx, *finishAdmission.Permit, FinishOutcome{
-		ProviderOutcome: OutcomeEligibleSuccess,
-		ChannelOutcome:  OutcomeEligibleSuccess,
+		ProviderOutcome:   OutcomeEligibleSuccess,
+		ChannelOutcome:    OutcomeEligibleSuccess,
+		RequestWriteState: RequestWriteCompleted,
 	}); err != nil || result.ProviderDisposition != DispositionApplied || result.ChannelDisposition != DispositionApplied {
 		t.Fatalf("finish permit = %+v, err=%v", result, err)
 	}

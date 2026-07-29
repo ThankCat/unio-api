@@ -12,20 +12,11 @@ func routeIDOf(p *auth.APIKeyPrincipal) *int64 {
 	return p.RouteID
 }
 
-// billableTPMTokens uses the same cache-aware token accounting for request admission,
-// attempt permits and settlement publication. Cache reads do not consume upstream TPM.
-func billableTPMTokens(f usage.Facts) int64 {
-	total := int64(0)
-	for _, c := range []usage.TokenCount{
-		f.UncachedInputTokens,
-		f.CacheWrite5mInputTokens,
-		f.CacheWrite1hInputTokens,
-		f.CacheWrite30mInputTokens,
-		f.OutputTokensTotal,
-	} {
-		if v, ok := c.BillableValue(); ok && v > 0 {
-			total += v
-		}
+// actualTotalTokens returns cache-inclusive reliable usage used only to settle Redis TPM.
+// Billing continues to price every category independently from the same Facts value.
+func actualTotalTokens(f usage.Facts) (int64, bool) {
+	if !f.Valid() {
+		return 0, false
 	}
-	return total
+	return f.ActualTotalTokens()
 }

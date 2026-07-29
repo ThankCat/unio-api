@@ -1,10 +1,5 @@
-package breakerstore
+---@diagnostic disable: unused-function, unused-local
 
-// luaAuthoritativeControlHelpers is prepended to admission/acquire/finish scripts. Runtime-control
-// payloads are execution authority, so Lua must decode the committed payload itself instead of
-// trusting caller-supplied effective values. Every parser is exact: missing/unknown fields, wrong
-// JSON types, fractional/negative limits, and invalid breaker invariants are rejected.
-const luaAuthoritativeControlHelpers = `
 local MAX_EXACT_INTEGER = 9007199254740991
 
 local function redis_key_type(key)
@@ -27,9 +22,7 @@ local function exact_object(payload, allowed)
 end
 
 local function nonnegative_integer(value)
-  if type(value) ~= 'number' or value < 0 or value > MAX_EXACT_INTEGER or value ~= math.floor(value) then
-    return nil
-  end
+  if type(value) ~= 'number' or value < 0 or value > MAX_EXACT_INTEGER or value ~= math.floor(value) then return nil end
   return value
 end
 
@@ -59,7 +52,7 @@ local function valid_payload_hash(value)
 end
 
 local function parse_rate_limit_defaults_payload(payload)
-  local value = exact_object(payload, {rpm=true, tpm=true, rpd=true})
+  local value = exact_object(payload, { rpm = true, tpm = true, rpd = true })
   if value == nil then return nil end
   value.rpm = nonnegative_integer(value.rpm)
   value.tpm = nonnegative_integer(value.tpm)
@@ -69,7 +62,7 @@ local function parse_rate_limit_defaults_payload(payload)
 end
 
 local function parse_global_concurrency_payload(payload)
-  local value = exact_object(payload, {key_limit=true, channel_limit=true})
+  local value = exact_object(payload, { key_limit = true, channel_limit = true })
   if value == nil then return nil end
   value.key_limit = nonnegative_integer(value.key_limit)
   value.channel_limit = nonnegative_integer(value.channel_limit)
@@ -83,7 +76,7 @@ local function nullable_nonnegative_integer(value)
 end
 
 local function parse_channel_admission_payload(payload)
-  local value = exact_object(payload, {rpm=true, rpd=true, tpm=true, concurrency=true})
+  local value = exact_object(payload, { rpm = true, rpd = true, tpm = true, concurrency = true })
   if value == nil then return nil end
   value.rpm = nullable_nonnegative_integer(value.rpm)
   value.rpd = nullable_nonnegative_integer(value.rpd)
@@ -113,21 +106,21 @@ end
 
 local function parse_circuit_breaker_payload(payload)
   local value = exact_object(payload, {
-    enabled=true,
-    window_ms=true,
-    min_requests=true,
-    failure_ratio=true,
-    consecutive_failures=true,
-    consecutive_window_ms=true,
-    half_open_successes=true,
-    attempt_permit_ttl_ms=true,
-    attempt_permit_renew_interval_ms=true,
-    attempt_permit_terminal_ttl_ms=true,
-    origin_revision_operation_ttl_ms=true,
-    status_revision_operation_ttl_ms=true,
-    open_durations_ms=true,
-    provider_ambiguous_distinct_channels=true,
-    provider_ambiguous_distinct_models=true
+    enabled = true,
+    window_ms = true,
+    min_requests = true,
+    failure_ratio = true,
+    consecutive_failures = true,
+    consecutive_window_ms = true,
+    half_open_successes = true,
+    attempt_permit_ttl_ms = true,
+    attempt_permit_renew_interval_ms = true,
+    attempt_permit_terminal_ttl_ms = true,
+    origin_revision_operation_ttl_ms = true,
+    status_revision_operation_ttl_ms = true,
+    open_durations_ms = true,
+    provider_ambiguous_distinct_channels = true,
+    provider_ambiguous_distinct_models = true,
   })
   if value == nil or type(value.enabled) ~= 'boolean' then return nil end
 
@@ -148,11 +141,19 @@ local function parse_circuit_breaker_payload(payload)
   value.provider_ambiguous_distinct_models = positive_integer(value.provider_ambiguous_distinct_models)
   value.open_durations_ms = positive_nondecreasing_integer_array(value.open_durations_ms)
 
-  if value.window_ms == nil or value.consecutive_failures == nil or value.consecutive_window_ms == nil or
-      value.attempt_permit_ttl_ms == nil or value.attempt_permit_renew_interval_ms == nil or
-      value.attempt_permit_terminal_ttl_ms == nil or value.origin_revision_operation_ttl_ms == nil or
-      value.status_revision_operation_ttl_ms == nil or value.open_durations_ms == nil or
-      value.provider_ambiguous_distinct_channels == nil or value.provider_ambiguous_distinct_models == nil then
+  if
+    value.window_ms == nil
+    or value.consecutive_failures == nil
+    or value.consecutive_window_ms == nil
+    or value.attempt_permit_ttl_ms == nil
+    or value.attempt_permit_renew_interval_ms == nil
+    or value.attempt_permit_terminal_ttl_ms == nil
+    or value.origin_revision_operation_ttl_ms == nil
+    or value.status_revision_operation_ttl_ms == nil
+    or value.open_durations_ms == nil
+    or value.provider_ambiguous_distinct_channels == nil
+    or value.provider_ambiguous_distinct_models == nil
+  then
     return nil
   end
   if value.attempt_permit_renew_interval_ms * 3 > value.attempt_permit_ttl_ms then return nil end
@@ -164,37 +165,48 @@ end
 
 local function parse_routing_balance_payload(payload)
   local value = exact_object(payload, {
-    economic_weight_pct=true,
-    health_weight_pct=true,
-    capacity_weight_pct=true,
-    priority_weight_pct=true,
-    ttft_target_ms=true,
-    ttft_weight=true,
-    ttft_ewma_alpha=true
+    economic_weight_pct = true,
+    health_weight_pct = true,
+    capacity_weight_pct = true,
+    priority_weight_pct = true,
+    ttft_target_ms = true,
+    ttft_weight = true,
+    ttft_ewma_alpha = true,
   })
   if value == nil then
     local legacy = exact_object(payload, {
-      ttft_target_ms=true,
-      ttft_weight=true,
-      cost_weight=true,
-      minimum_routing_factor=true,
-      ttft_ewma_alpha=true
+      ttft_target_ms = true,
+      ttft_weight = true,
+      cost_weight = true,
+      minimum_routing_factor = true,
+      ttft_ewma_alpha = true,
     })
     if legacy == nil then
       legacy = exact_object(payload, {
-      ttft_target_ms=true,
-      ttft_weight=true,
-      minimum_routing_factor=true,
-      ttft_ewma_alpha=true
-    })
+        ttft_target_ms = true,
+        ttft_weight = true,
+        minimum_routing_factor = true,
+        ttft_ewma_alpha = true,
+      })
       if legacy == nil then return nil end
       legacy.cost_weight = 0
     end
-    if type(legacy.cost_weight) ~= 'number' or legacy.cost_weight ~= legacy.cost_weight or
-        legacy.cost_weight < 0 or legacy.cost_weight > 1 then return nil end
-    if type(legacy.minimum_routing_factor) ~= 'number' or
-        legacy.minimum_routing_factor ~= legacy.minimum_routing_factor or
-        legacy.minimum_routing_factor <= 0 or legacy.minimum_routing_factor > 1 then return nil end
+    if
+      type(legacy.cost_weight) ~= 'number'
+      or legacy.cost_weight ~= legacy.cost_weight
+      or legacy.cost_weight < 0
+      or legacy.cost_weight > 1
+    then
+      return nil
+    end
+    if
+      type(legacy.minimum_routing_factor) ~= 'number'
+      or legacy.minimum_routing_factor ~= legacy.minimum_routing_factor
+      or legacy.minimum_routing_factor <= 0
+      or legacy.minimum_routing_factor > 1
+    then
+      return nil
+    end
     value = legacy
     value.economic_weight_pct = 45
     value.health_weight_pct = 25
@@ -203,29 +215,54 @@ local function parse_routing_balance_payload(payload)
   end
   value.ttft_target_ms = positive_integer(value.ttft_target_ms)
   if value.ttft_target_ms == nil then return nil end
-  if type(value.ttft_weight) ~= 'number' or value.ttft_weight ~= value.ttft_weight or
-      value.ttft_weight < 0 or value.ttft_weight > 1 then return nil end
+  if
+    type(value.ttft_weight) ~= 'number'
+    or value.ttft_weight ~= value.ttft_weight
+    or value.ttft_weight < 0
+    or value.ttft_weight > 1
+  then
+    return nil
+  end
   value.economic_weight_pct = nonnegative_integer(value.economic_weight_pct)
   value.health_weight_pct = nonnegative_integer(value.health_weight_pct)
   value.capacity_weight_pct = nonnegative_integer(value.capacity_weight_pct)
   value.priority_weight_pct = nonnegative_integer(value.priority_weight_pct)
-  if value.economic_weight_pct == nil or value.economic_weight_pct > 100 or
-      value.health_weight_pct == nil or value.health_weight_pct > 100 or
-      value.capacity_weight_pct == nil or value.capacity_weight_pct > 100 or
-      value.priority_weight_pct == nil or value.priority_weight_pct > 100 or
-      value.economic_weight_pct + value.health_weight_pct + value.capacity_weight_pct + value.priority_weight_pct ~= 100 then
+  if
+    value.economic_weight_pct == nil
+    or value.economic_weight_pct > 100
+    or value.health_weight_pct == nil
+    or value.health_weight_pct > 100
+    or value.capacity_weight_pct == nil
+    or value.capacity_weight_pct > 100
+    or value.priority_weight_pct == nil
+    or value.priority_weight_pct > 100
+    or value.economic_weight_pct + value.health_weight_pct + value.capacity_weight_pct + value.priority_weight_pct
+      ~= 100
+  then
     return nil
   end
   -- Keep deprecated in-process fields available to older snapshot consumers while objective_v1
   -- uses the four explicit percentages as its routing authority.
   if value.cost_weight == nil then value.cost_weight = 0 end
   if value.minimum_routing_factor == nil then value.minimum_routing_factor = 0.05 end
-  if type(value.cost_weight) ~= 'number' or value.cost_weight < 0 or value.cost_weight > 1 or
-      type(value.minimum_routing_factor) ~= 'number' or value.minimum_routing_factor <= 0 or
-      value.minimum_routing_factor > 1 then return nil end
-  if type(value.ttft_ewma_alpha) ~= 'number' or
-      value.ttft_ewma_alpha ~= value.ttft_ewma_alpha or
-      value.ttft_ewma_alpha <= 0 or value.ttft_ewma_alpha > 1 then return nil end
+  if
+    type(value.cost_weight) ~= 'number'
+    or value.cost_weight < 0
+    or value.cost_weight > 1
+    or type(value.minimum_routing_factor) ~= 'number'
+    or value.minimum_routing_factor <= 0
+    or value.minimum_routing_factor > 1
+  then
+    return nil
+  end
+  if
+    type(value.ttft_ewma_alpha) ~= 'number'
+    or value.ttft_ewma_alpha ~= value.ttft_ewma_alpha
+    or value.ttft_ewma_alpha <= 0
+    or value.ttft_ewma_alpha > 1
+  then
+    return nil
+  end
   return value
 end
 
@@ -292,4 +329,3 @@ local function active_zset_count(key, now)
   if kind ~= 'zset' then return nil end
   return tonumber(redis.call('ZCOUNT', key, '(' .. now, '+inf'))
 end
-`

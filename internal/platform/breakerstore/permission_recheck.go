@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -47,110 +46,6 @@ const (
 	PermissionRecheckSuperseded  PermissionRecheckDisposition = "superseded"
 )
 
-var permissionRecheckClaimScript = redis.NewScript(`
-local function now_ms()
-  local t = redis.call('TIME')
-  return tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
-end
-
-local queue_key = KEYS[1]
-local now = now_ms()
-local lease_ms = tonumber(ARGV[1])
-local worker_id = ARGV[2]
-local claim_token = ARGV[3]
--- 每次最多清理/检查 32 个队首项，保证单次 Lua 工作量有硬上限。
-local entries = redis.call('ZRANGE', queue_key, 0, 31, 'WITHSCORES')
-if #entries == 0 then return {'idle'} end
-
-for i = 1, #entries, 2 do
-  local permission_key = entries[i]
-  local due_at = tonumber(entries[i + 1]) or 0
-  if due_at > now then return {'idle'} end
-
-  if redis.call('EXISTS', permission_key) == 0 then
-    redis.call('ZREM', queue_key, permission_key)
-  else
-    local state = redis.call('HGET', permission_key, 'recheck_state') or ''
-    if state == 'cleared' or state == 'stale' then
-      redis.call('ZREM', queue_key, permission_key)
-    else
-      local channel_id = redis.call('HGET', permission_key, 'channel_id') or ''
-      local model_id = redis.call('HGET', permission_key, 'model_id') or ''
-      local config_revision = redis.call('HGET', permission_key, 'channel_config_revision') or ''
-      local origin_revision = redis.call('HGET', permission_key, 'origin_revision') or ''
-      local status_revision = redis.call('HGET', permission_key, 'status_revision') or ''
-      if tonumber(channel_id) == nil or tonumber(channel_id) <= 0 or
-          tonumber(model_id) == nil or tonumber(model_id) <= 0 or
-          tonumber(config_revision) == nil or tonumber(config_revision) <= 0 or
-          tonumber(origin_revision) == nil or tonumber(origin_revision) <= 0 or
-          tonumber(status_revision) == nil or tonumber(status_revision) <= 0 then
-        redis.call('HSET', permission_key, 'recheck_state', 'invalid')
-        redis.call('ZREM', queue_key, permission_key)
-        return {'invalid'}
-      end
-
-      local attempt = redis.call('HINCRBY', permission_key, 'recheck_attempts', 1)
-      local claim_until = now + lease_ms
-      redis.call('HSET', permission_key,
-        'recheck_state', 'checking',
-        'claim_token', claim_token,
-        'claimed_by', worker_id,
-        'claim_until_ms', claim_until)
-      -- 租约到期后该唯一 member 自动重新变为可领取，worker 崩溃不会丢任务。
-      redis.call('ZADD', queue_key, claim_until, permission_key)
-      return {'claimed', channel_id, model_id, config_revision, origin_revision, status_revision, attempt, claim_token}
-    end
-  end
-end
-return {'idle'}
-`)
-
-var permissionRecheckCompleteScript = redis.NewScript(`
-local function now_ms()
-  local t = redis.call('TIME')
-  return tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
-end
-
-local permission_key = KEYS[1]
-local queue_key = KEYS[2]
-if redis.call('EXISTS', permission_key) == 0 then
-  redis.call('ZREM', queue_key, permission_key)
-  return {'absent'}
-end
-
-local same_claim = redis.call('HGET', permission_key, 'recheck_state') == 'checking' and
-  redis.call('HGET', permission_key, 'claim_token') == ARGV[2] and
-  redis.call('HGET', permission_key, 'channel_id') == ARGV[3] and
-  redis.call('HGET', permission_key, 'model_id') == ARGV[4] and
-  redis.call('HGET', permission_key, 'channel_config_revision') == ARGV[5] and
-  redis.call('HGET', permission_key, 'origin_revision') == ARGV[6] and
-  redis.call('HGET', permission_key, 'status_revision') == ARGV[7]
-if not same_claim then return {'superseded'} end
-
-local now = now_ms()
-local outcome = ARGV[1]
-redis.call('HSET', permission_key, 'last_rechecked_at_ms', now)
-redis.call('HDEL', permission_key, 'claim_token', 'claimed_by', 'claim_until_ms')
-
-if outcome == 'succeeded' then
-  redis.call('HSET', permission_key, 'recheck_state', 'cleared')
-  redis.call('ZREM', queue_key, permission_key)
-  return {'cleared'}
-end
-if outcome == 'stale' then
-  redis.call('HSET', permission_key, 'recheck_state', 'stale')
-  redis.call('ZREM', queue_key, permission_key)
-  return {'stale'}
-end
-if outcome == 'failed' then
-  local retry_after_ms = tonumber(ARGV[8])
-  redis.call('HSET', permission_key, 'recheck_state', 'retry_wait')
-  redis.call('ZADD', queue_key, now + retry_after_ms, permission_key)
-  return {'rescheduled'}
-end
-return redis.error_reply('invalid permission recheck outcome')
-`)
-
 // ClaimPermissionRecheck 原子领取一个已到期任务。队列 member 唯一且领取即改写为租约到期时间，
 // 因此多个 worker-server 不会在租约内重复探测；worker 崩溃后任务可再次领取。
 func (s *Store) ClaimPermissionRecheck(ctx context.Context, workerID string, lease time.Duration) (task *PermissionRecheckTask, err error) {
@@ -170,7 +65,7 @@ func (s *Store) ClaimPermissionRecheck(ctx context.Context, workerID string, lea
 		return nil, configInvalid("permission recheck lease is invalid")
 	}
 	claimToken := uuid.NewString()
-	res, err := permissionRecheckClaimScript.Run(ctx, s.client,
+	res, err := s.permissionRecheckClaim.Run(ctx, s.client,
 		[]string{s.keys.permissionRecheckQueue()},
 		strconv.FormatInt(lease.Milliseconds(), 10), workerID, claimToken,
 	).Result()
@@ -239,7 +134,7 @@ func (s *Store) CompletePermissionRecheck(
 	}
 
 	permissionKey := s.keys.channelModelPermission(task.ChannelID, task.ModelID)
-	res, err := permissionRecheckCompleteScript.Run(ctx, s.client,
+	res, err := s.permissionRecheckComplete.Run(ctx, s.client,
 		[]string{permissionKey, s.keys.permissionRecheckQueue()},
 		string(outcome), task.ClaimToken,
 		strconv.FormatInt(task.ChannelID, 10), strconv.FormatInt(task.ModelID, 10),

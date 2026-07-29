@@ -121,9 +121,6 @@ type RunNonStreamParams struct {
 	// 结算后由 runner 按真实 billable token 回填差额。它保留为旧调用方的输入估算兜底。
 	EstimatedTokens int64
 
-	// RequestTPMBudget 是 Route 请求级完整 TPM 预算；候选自身预算优先于此值。
-	RequestTPMBudget int64
-
 	// UpstreamCostWithoutUsage 在 Invoke 返回的错误代表「上游可能已产生成本但拿不到可靠 usage」时返回 true。
 	// 命中时 runner 既不重试（避免再调上游叠加成本）也不普通释放，而是释放冻结并记 risk_exposure（账务异常），
 	// 杜绝静默白嫖（典型：原生 responses compact 2xx 缺 usage，P0-3）。nil 表示不启用该分类。
@@ -221,16 +218,9 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 	for candIdx, prepared := range params.Candidates {
 		index := prepared.RouteIndex
 		candidate := prepared.Route
-		candidateInputTokens := prepared.TokenBudget.InputEstimate
+		candidateInputTokens := prepared.InputEstimate
 		if candidateInputTokens <= 0 {
 			candidateInputTokens = params.EstimatedTokens
-		}
-		candidateTPMBudget := prepared.TokenBudget.ReservedTotal
-		if candidateTPMBudget <= 0 {
-			candidateTPMBudget = params.RequestTPMBudget
-		}
-		if candidateTPMBudget <= 0 {
-			candidateTPMBudget = candidateInputTokens
 		}
 		endpoint := l.upstreamEndpoint()
 		if params.EndpointForCandidate != nil {
@@ -252,11 +242,10 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 		var permitOwner *AttemptPermitOwner
 		if r.permitManager != nil {
 			admission, owner, err := r.acquireAttemptWithHeadWait(ctx, AttemptPermitAcquireParams{
-				Candidate:            candidate,
-				UpstreamEndpoint:     endpoint,
-				RequestMode:          breakerstore.ModeNonStream,
-				EstimatedInputTokens: candidateInputTokens,
-				RequestTPMBudget:     candidateTPMBudget,
+				Candidate:        candidate,
+				UpstreamEndpoint: endpoint,
+				RequestMode:      breakerstore.ModeNonStream,
+				InputEstimate:    candidateInputTokens,
 			}, allowStickyHeadWait(params.Sticky, candIdx, candidate.Channel.ID), &headWaitUsed)
 			if err != nil {
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
@@ -357,11 +346,10 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 			var fallbackOwner *AttemptPermitOwner
 			if r.permitManager != nil {
 				admission, owner, acquireErr := r.acquireAttemptWithHeadWait(ctx, AttemptPermitAcquireParams{
-					Candidate:            candidate,
-					UpstreamEndpoint:     fallback.UpstreamEndpoint,
-					RequestMode:          breakerstore.ModeNonStream,
-					EstimatedInputTokens: candidateInputTokens,
-					RequestTPMBudget:     candidateTPMBudget,
+					Candidate:        candidate,
+					UpstreamEndpoint: fallback.UpstreamEndpoint,
+					RequestMode:      breakerstore.ModeNonStream,
+					InputEstimate:    candidateInputTokens,
 				}, allowStickyHeadWait(params.Sticky, candIdx, candidate.Channel.ID), &headWaitUsed)
 				if acquireErr != nil {
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {

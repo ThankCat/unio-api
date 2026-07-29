@@ -179,6 +179,7 @@ type attemptUsageSessionStub struct {
 
 func (s *attemptUsageSessionStub) Reserve(context.Context, int64) error { return nil }
 func (s *attemptUsageSessionStub) PublishAuthoritativeUsage(int64) bool { return true }
+func (s *attemptUsageSessionStub) MarkUpstreamReached() bool            { return true }
 func (s *attemptUsageSessionStub) BindAttempt(in *breakerstore.AcquireAttemptInput) error {
 	in.RequestAdmissionID = s.requestID
 	return nil
@@ -231,7 +232,7 @@ func TestAttemptPermitManagerBuildsBoundAuthoritativeInput(t *testing.T) {
 
 	_, owner, err := manager.Acquire(ctx, AttemptPermitAcquireParams{
 		Candidate: candidate, UpstreamEndpoint: requestlog.UpstreamEndpointResponses,
-		RequestMode: breakerstore.ModeNonStream, EstimatedInputTokens: 123,
+		RequestMode: breakerstore.ModeNonStream, InputEstimate: 123,
 	})
 	if err != nil || owner == nil {
 		t.Fatalf("acquire owner=%v err=%v", owner, err)
@@ -242,13 +243,13 @@ func TestAttemptPermitManagerBuildsBoundAuthoritativeInput(t *testing.T) {
 	got := store.acquireInput
 	if got.RequestAdmissionID != "request-token" || got.IntegrityEpoch != integrity.Epoch || got.IntegrityRevision != integrity.Revision ||
 		got.ChannelRateRevision != 8 || got.GlobalConcurrencyRevision != 4 || got.CircuitBreakerRevision != 5 ||
-		got.ChannelAdmissionRevision != 16 || got.EstimatedInputTokens != 123 || !got.EnforceProviderControl ||
+		got.ChannelAdmissionRevision != 16 || got.InputEstimate != 123 || !got.EnforceProviderControl ||
 		got.AdmissionFingerprint == "" {
 		t.Fatalf("unexpected acquire input: %+v", got)
 	}
 
 	changed := got
-	changed.EstimatedInputTokens++
+	changed.InputEstimate++
 	if attemptAdmissionFingerprint(got) == attemptAdmissionFingerprint(changed) {
 		t.Fatal("estimated tokens must participate in the attempt fingerprint")
 	}
@@ -913,13 +914,18 @@ func TestStreamFinishTimeoutEvidenceUsesFirstTokenTiming(t *testing.T) {
 func TestStreamFinishUsesAuthoritativeTPMWhenTailFails(t *testing.T) {
 	facts := &adapter.ResponseFacts{
 		Usage: usage.Facts{
-			UncachedInputTokens: usage.KnownTokens(11),
-			OutputTokensTotal:   usage.KnownTokens(7),
+			UncachedInputTokens:      usage.KnownTokens(11),
+			CacheReadInputTokens:     usage.KnownTokens(5),
+			CacheWrite5mInputTokens:  usage.NotApplicableTokens(),
+			CacheWrite30mInputTokens: usage.NotApplicableTokens(),
+			CacheWrite1hInputTokens:  usage.NotApplicableTokens(),
+			OutputTokensTotal:        usage.KnownTokens(7),
+			ReasoningOutputTokens:    usage.NotApplicableTokens(),
 		},
 		UsageSource: usage.SourceUpstreamStream,
 	}
 	got := streamFinishOutcome(facts, AttemptTimingFacts{}, errors.New("stream tail failed"))
-	if got.ChannelTPMActual == nil || *got.ChannelTPMActual != 18 {
+	if got.ActualTotalTokens == nil || *got.ActualTotalTokens != 23 {
 		t.Fatalf("authoritative TPM was not reconciled: %+v", got)
 	}
 	if got.ChannelOutcome != breakerstore.OutcomeIgnored {

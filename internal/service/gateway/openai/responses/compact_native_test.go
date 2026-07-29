@@ -180,9 +180,10 @@ func (s *compactUsageSession) Reserve(_ context.Context, tokens int64) error {
 }
 
 func (*compactUsageSession) PublishAuthoritativeUsage(int64) bool { return true }
+func (*compactUsageSession) MarkUpstreamReached() bool            { return true }
 
 func (s *compactUsageSession) BindAttempt(in *breakerstore.AcquireAttemptInput) error {
-	if in.EstimatedInputTokens != s.reserved {
+	if in.InputEstimate != s.reserved {
 		return errors.New("attempt estimate differs from request reservation")
 	}
 	in.RequestAdmissionID = s.requestID
@@ -366,17 +367,17 @@ func TestCompactHistory_NativeFallbackToSynthetic(t *testing.T) {
 	if firstPermit.PermitID == secondPermit.PermitID || firstPermit.RequestAdmissionID != secondPermit.RequestAdmissionID || firstPermit.RequestAdmissionID != session.requestID {
 		t.Fatalf("permits must be unique under one request session: first=%+v second=%+v", firstPermit, secondPermit)
 	}
-	if firstPermit.EstimatedInputTokens != 16 || secondPermit.EstimatedInputTokens != 16 {
-		t.Fatalf("permit estimates = %d/%d, want shared conservative estimate 16", firstPermit.EstimatedInputTokens, secondPermit.EstimatedInputTokens)
+	if firstPermit.InputEstimate != 16 || secondPermit.InputEstimate != 16 {
+		t.Fatalf("permit estimates = %d/%d, want shared conservative estimate 16", firstPermit.InputEstimate, secondPermit.InputEstimate)
 	}
 	if len(permitStore.finishPermits) != 2 || len(permitStore.finishOutcomes) != 2 {
 		t.Fatalf("permit finishes = %d/%d, want 2/2", len(permitStore.finishPermits), len(permitStore.finishOutcomes))
 	}
 	firstOutcome := permitStore.finishOutcomes[0]
-	if firstOutcome.ProviderOutcome != breakerstore.OutcomeIgnored || firstOutcome.ChannelOutcome != breakerstore.OutcomeIgnored || firstOutcome.ChannelTPMActual != nil {
+	if firstOutcome.ProviderOutcome != breakerstore.OutcomeIgnored || firstOutcome.ChannelOutcome != breakerstore.OutcomeIgnored || firstOutcome.ActualTotalTokens != nil {
 		t.Fatalf("native 404 finish must be breaker-ignored and release TPM estimate: %+v", firstOutcome)
 	}
-	if permitStore.finishOutcomes[1].ChannelTPMActual == nil {
+	if permitStore.finishOutcomes[1].ActualTotalTokens == nil {
 		t.Fatalf("synthetic success must finish with authoritative TPM actual: %+v", permitStore.finishOutcomes[1])
 	}
 	if len(requestLog.createAttempts) != 2 {
@@ -550,11 +551,11 @@ func TestCompactHistory_NativeFallbackToSyntheticLocalUpstream(t *testing.T) {
 			if len(permitStore.finishOutcomes) != 2 ||
 				permitStore.finishOutcomes[0].ProviderOutcome != breakerstore.OutcomeIgnored ||
 				permitStore.finishOutcomes[0].ChannelOutcome != breakerstore.OutcomeIgnored ||
-				permitStore.finishOutcomes[0].ChannelTPMActual != nil ||
+				permitStore.finishOutcomes[0].ActualTotalTokens != nil ||
 				permitStore.finishOutcomes[1].ProviderOutcome != breakerstore.OutcomeEligibleSuccess ||
 				permitStore.finishOutcomes[1].ChannelOutcome != breakerstore.OutcomeEligibleSuccess ||
-				permitStore.finishOutcomes[1].ChannelTPMActual == nil ||
-				*permitStore.finishOutcomes[1].ChannelTPMActual != 20 {
+				permitStore.finishOutcomes[1].ActualTotalTokens == nil ||
+				*permitStore.finishOutcomes[1].ActualTotalTokens != 20 {
 				t.Fatalf("breaker attribution = %+v", permitStore.finishOutcomes)
 			}
 

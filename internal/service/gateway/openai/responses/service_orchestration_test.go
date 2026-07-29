@@ -14,6 +14,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	coreusage "github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
@@ -336,6 +337,16 @@ func okChatResponse() *chatcompletionsadapter.ChatResponse {
 			Finish:              adapter.FinishFacts{Class: adapter.FinishStop, RawReason: "stop"},
 			UsageMappingVersion: "chatcompletionsadapter.v1",
 			Metadata:            meta,
+			Usage: coreusage.Facts{
+				UncachedInputTokens:      coreusage.KnownTokens(12),
+				CacheReadInputTokens:     coreusage.KnownTokens(0),
+				CacheWrite5mInputTokens:  coreusage.NotApplicableTokens(),
+				CacheWrite30mInputTokens: coreusage.NotApplicableTokens(),
+				CacheWrite1hInputTokens:  coreusage.NotApplicableTokens(),
+				OutputTokensTotal:        coreusage.KnownTokens(8),
+				ReasoningOutputTokens:    coreusage.NotApplicableTokens(),
+			},
+			UsageSource: coreusage.SourceUpstreamResponse,
 		},
 	}
 }

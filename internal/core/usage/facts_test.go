@@ -49,6 +49,33 @@ func TestTokenCountIsKnown(t *testing.T) {
 	}
 }
 
+func TestActualTotalTokensRequiresCompleteLuaExactUsage(t *testing.T) {
+	complete := Facts{
+		UncachedInputTokens:      KnownTokens(11),
+		CacheReadInputTokens:     KnownTokens(12),
+		CacheWrite5mInputTokens:  KnownTokens(13),
+		CacheWrite30mInputTokens: KnownTokens(14),
+		CacheWrite1hInputTokens:  KnownTokens(15),
+		OutputTokensTotal:        KnownTokens(16),
+		ReasoningOutputTokens:    KnownTokens(7),
+	}
+	if got, reliable := complete.ActualTotalTokens(); !reliable || got != 81 {
+		t.Fatalf("ActualTotalTokens() = (%d, %v), want (81, true)", got, reliable)
+	}
+
+	unknown := complete
+	unknown.CacheReadInputTokens = UnknownTokens()
+	if got, reliable := unknown.ActualTotalTokens(); reliable || got != 0 {
+		t.Fatalf("unknown ActualTotalTokens() = (%d, %v), want (0, false)", got, reliable)
+	}
+
+	overflow := complete
+	overflow.UncachedInputTokens = KnownTokens(maxLuaExactInteger)
+	if got, reliable := overflow.ActualTotalTokens(); reliable || got != 0 {
+		t.Fatalf("Lua-inexact ActualTotalTokens() = (%d, %v), want (0, false)", got, reliable)
+	}
+}
+
 func TestSourceValid(t *testing.T) {
 	if !SourceUpstreamResponse.Valid() || !SourceUpstreamStream.Valid() {
 		t.Fatal("expected registered sources to be valid")

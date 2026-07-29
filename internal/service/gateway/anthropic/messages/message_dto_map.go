@@ -19,14 +19,6 @@ func mapGatewayMessagesToAdapter(messages []gatewayapi.Message) []messagesadapte
 }
 
 func mapGatewayRequestToAdapter(req gatewayapi.MessageRequest, upstreamModel string) messagesadapter.MessageRequest {
-	return mapGatewayRequestToAdapterWithOutputBudget(req, upstreamModel, 0)
-}
-
-func mapGatewayRequestToAdapterWithOutputBudget(req gatewayapi.MessageRequest, upstreamModel string, outputBudget int64) messagesadapter.MessageRequest {
-	if req.MaxTokens == nil && outputBudget > 0 {
-		value := int(outputBudget)
-		req.MaxTokens = &value
-	}
 	extensions := make(map[string]json.RawMessage, len(req.Extensions))
 	for k, v := range req.Extensions {
 		extensions[k] = append(json.RawMessage(nil), v...)

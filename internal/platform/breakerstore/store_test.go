@@ -154,8 +154,8 @@ func seedReservedRequestAdmission(t *testing.T, s *Store, in AcquireAttemptInput
 		"status", "active",
 		"runtime_integrity_epoch", in.IntegrityEpoch,
 		"runtime_integrity_revision", in.IntegrityRevision,
-		"reserve_state", "reserved",
-		"reserve_estimated_input_tokens", in.EstimatedInputTokens,
+		"tpm_state", "held",
+		"tpm_input_estimate", in.InputEstimate,
 		"route_id", in.RouteID,
 	).Err(); err != nil {
 		t.Fatalf("seed reserved request admission: %v", err)
@@ -202,7 +202,9 @@ func acquire(t *testing.T, s *Store, cfg Config, permitID string, ch, ep int64) 
 
 func finish(t *testing.T, s *Store, _ Config, permit *AttemptPermit, ep, ch Outcome) FinishResult {
 	t.Helper()
-	res, err := s.Finish(context.Background(), *permit, FinishOutcome{ProviderOutcome: ep, ChannelOutcome: ch})
+	res, err := s.Finish(context.Background(), *permit, FinishOutcome{
+		ProviderOutcome: ep, ChannelOutcome: ch, RequestWriteState: RequestWriteCompleted,
+	})
 	if err != nil {
 		t.Fatalf("finish %s: %v", permit.PermitID, err)
 	}
@@ -333,8 +335,9 @@ func TestAttemptLifecycleIntegrityFencesAreZeroWrite(t *testing.T) {
 				case "finish":
 					var result FinishResult
 					result, err = s.Finish(context.Background(), permit, FinishOutcome{
-						ProviderOutcome: OutcomeIgnored,
-						ChannelOutcome:  OutcomeIgnored,
+						ProviderOutcome:   OutcomeIgnored,
+						ChannelOutcome:    OutcomeIgnored,
+						RequestWriteState: RequestWriteCompleted,
 					})
 					if result.ProviderDisposition != fence.wantFinish || result.ChannelDisposition != fence.wantFinish {
 						t.Fatalf("finish disposition = %s/%s, want %s", result.ProviderDisposition, result.ChannelDisposition, fence.wantFinish)
@@ -546,7 +549,7 @@ func TestRouteChannelRPDAttributionRequiresInteractionEvidence(t *testing.T) {
 			RouteID: routeID, ProviderID: providerID, ChannelID: channelID,
 			OriginRevision: 1, ProviderStatusRevision: 1, ChannelConfigRevision: 1,
 			ModelID: 100, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
-			EstimatedInputTokens: 10,
+			InputEstimate: 10,
 		}))
 		if err != nil || admission.Mode != AdmissionPermit || admission.Permit == nil {
 			t.Fatalf("acquire route attribution permit: admission=%+v err=%v", admission, err)
@@ -557,22 +560,20 @@ func TestRouteChannelRPDAttributionRequiresInteractionEvidence(t *testing.T) {
 	withEvidence := acquireForRoute("route-rpd-evidence")
 	if _, err := s.Finish(context.Background(), *withEvidence, FinishOutcome{
 		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess,
-		ChannelInteractionEvidence: true,
+		RequestWriteState: RequestWriteCompleted,
 	}); err != nil {
 		t.Fatalf("finish route attribution permit: %v", err)
 	}
 	if _, err := s.Finish(context.Background(), *withEvidence, FinishOutcome{
 		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess,
-		ChannelInteractionEvidence: true,
+		RequestWriteState: RequestWriteCompleted,
 	}); err != nil {
 		t.Fatalf("repeat finish route attribution permit: %v", err)
 	}
 
 	withoutEvidence := acquireForRoute("route-rpd-no-evidence")
-	if _, err := s.Finish(context.Background(), *withoutEvidence, FinishOutcome{
-		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored,
-	}); err != nil {
-		t.Fatalf("finish without interaction evidence: %v", err)
+	if err := s.Abort(context.Background(), *withoutEvidence); err != nil {
+		t.Fatalf("abort without interaction evidence: %v", err)
 	}
 	aborted := acquireForRoute("route-rpd-abort")
 	if err := s.Abort(context.Background(), *aborted); err != nil {
@@ -618,6 +619,7 @@ func TestTTFTUpdatedOnlyByStreamPermit(t *testing.T) {
 	ft := int64(800)
 	if _, err := s.Finish(context.Background(), *admS.Permit, FinishOutcome{
 		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess, FirstTokenMs: &ft,
+		RequestWriteState: RequestWriteCompleted, FirstTokenEligible: true,
 	}); err != nil {
 		t.Fatalf("finish stream: %v", err)
 	}
@@ -799,9 +801,11 @@ func TestResetClearsTTFT(t *testing.T) {
 	}
 	firstToken := int64(740)
 	if _, err := s.Finish(context.Background(), *adm.Permit, FinishOutcome{
-		ProviderOutcome: OutcomeIgnored,
-		ChannelOutcome:  OutcomeEligibleSuccess,
-		FirstTokenMs:    &firstToken,
+		ProviderOutcome:    OutcomeIgnored,
+		ChannelOutcome:     OutcomeEligibleSuccess,
+		FirstTokenMs:       &firstToken,
+		RequestWriteState:  RequestWriteCompleted,
+		FirstTokenEligible: true,
 	}); err != nil {
 		t.Fatalf("finish stream: %v", err)
 	}
@@ -875,9 +879,11 @@ func TestSnapshotManyReadsCandidateIdentityAndPreservesOrder(t *testing.T) {
 			t.Fatalf("acquire %s: mode=%s reason=%s err=%v", permitID, adm.Mode, adm.Reason, err)
 		}
 		if _, err := s.Finish(context.Background(), *adm.Permit, FinishOutcome{
-			ProviderOutcome: OutcomeEligibleSuccess,
-			ChannelOutcome:  OutcomeEligibleSuccess,
-			FirstTokenMs:    firstToken,
+			ProviderOutcome:    OutcomeEligibleSuccess,
+			ChannelOutcome:     OutcomeEligibleSuccess,
+			FirstTokenMs:       firstToken,
+			RequestWriteState:  RequestWriteCompleted,
+			FirstTokenEligible: firstToken != nil,
 		}); err != nil {
 			t.Fatalf("finish %s: %v", permitID, err)
 		}
@@ -974,7 +980,7 @@ func TestSnapshotManyReturnsAuthoritativeRoutingFacts(t *testing.T) {
 		PermitID: "snapshot-facts", AdmissionFingerprint: "snapshot-facts-fp", RequestAdmissionID: "req",
 		ProviderID: providerID, ChannelID: channelID, OriginRevision: 3, ProviderStatusRevision: 4,
 		ChannelConfigRevision: 5, ModelID: modelID, UpstreamEndpoint: EndpointResponses, RequestMode: ModeStream,
-		EnforceProviderControl: true, EstimatedInputTokens: 25,
+		EnforceProviderControl: true, InputEstimate: 25,
 	})
 	if admission, err := acquireAttempt(t, s, input); err != nil || admission.Mode != AdmissionPermit {
 		t.Fatalf("acquire active capacity: admission=%+v err=%v", admission, err)
@@ -1224,6 +1230,7 @@ func TestAcquireRotatesChannelRevisionState(t *testing.T) {
 	ttft := int64(900)
 	if _, err := s.Finish(context.Background(), *first.Permit, FinishOutcome{
 		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleFailure, FirstTokenMs: &ttft,
+		RequestWriteState: RequestWriteCompleted, FirstTokenEligible: true,
 	}); err != nil {
 		t.Fatalf("finish v1: %v", err)
 	}
@@ -1284,7 +1291,7 @@ func TestAcquireAndFinishRejectInvalidInputBeforeRedisWrite(t *testing.T) {
 	}{
 		{name: "operation enum", mutate: func(in *AcquireAttemptInput) { in.UpstreamEndpoint = UpstreamEndpoint("invalid") }},
 		{name: "request mode enum", mutate: func(in *AcquireAttemptInput) { in.RequestMode = RequestMode("invalid") }},
-		{name: "negative token estimate", mutate: func(in *AcquireAttemptInput) { in.EstimatedInputTokens = -1 }},
+		{name: "negative token estimate", mutate: func(in *AcquireAttemptInput) { in.InputEstimate = -1 }},
 		{name: "missing control revision", mutate: func(in *AcquireAttemptInput) { in.CircuitBreakerRevision = 0 }},
 	}
 	for _, tc := range invalidAcquireCases {
@@ -1319,7 +1326,7 @@ func TestAcquireAndFinishRejectInvalidInputBeforeRedisWrite(t *testing.T) {
 		{name: "outcome enum", outcome: FinishOutcome{ProviderOutcome: Outcome("invalid"), ChannelOutcome: OutcomeEligibleFailure}},
 		{name: "evidence enum", outcome: FinishOutcome{ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleFailure, ProviderEvidence: ProviderEvidenceCategory("invalid")}},
 		{name: "evidence requires channel failure", outcome: FinishOutcome{ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, ProviderEvidence: ProviderEvidenceHTTP500}},
-		{name: "negative actual tokens", outcome: FinishOutcome{ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, ChannelTPMActual: &negative}},
+		{name: "negative actual tokens", outcome: FinishOutcome{ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, ActualTotalTokens: &negative}},
 		{name: "non-stream first token", outcome: FinishOutcome{ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, FirstTokenMs: &firstToken}},
 	}
 	for _, tc := range finishCases {
@@ -1362,9 +1369,10 @@ func TestProviderAmbiguousEvidenceRequiresDistinctChannelsAndModels(t *testing.T
 	}
 	finishEvidence := func(permit *AttemptPermit, category ProviderEvidenceCategory) FinishResult {
 		res, err := s.Finish(context.Background(), *permit, FinishOutcome{
-			ProviderOutcome:  OutcomeIgnored,
-			ChannelOutcome:   OutcomeEligibleFailure,
-			ProviderEvidence: category,
+			ProviderOutcome:   OutcomeIgnored,
+			ChannelOutcome:    OutcomeEligibleFailure,
+			ProviderEvidence:  category,
+			RequestWriteState: RequestWriteCompleted,
 		})
 		if err != nil {
 			t.Fatalf("finish %s: %v", permit.PermitID, err)
@@ -1427,6 +1435,7 @@ func TestProviderAmbiguousEvidenceCategoriesDoNotMix(t *testing.T) {
 		}
 		res, err := s.Finish(context.Background(), *adm.Permit, FinishOutcome{
 			ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleFailure, ProviderEvidence: category,
+			RequestWriteState: RequestWriteCompleted,
 		})
 		if err != nil || res.ProviderDisposition != DispositionNotApplicable {
 			t.Fatalf("finish %s: result=%+v err=%v", permitID, res, err)
@@ -1493,9 +1502,11 @@ func TestOriginFenceMakesExistingPermitBreakerResultStale(t *testing.T) {
 	}
 	firstToken := int64(250)
 	result, err := s.Finish(context.Background(), *adm.Permit, FinishOutcome{
-		ProviderOutcome: OutcomeEligibleSuccess,
-		ChannelOutcome:  OutcomeEligibleSuccess,
-		FirstTokenMs:    &firstToken,
+		ProviderOutcome:    OutcomeEligibleSuccess,
+		ChannelOutcome:     OutcomeEligibleSuccess,
+		FirstTokenMs:       &firstToken,
+		RequestWriteState:  RequestWriteCompleted,
+		FirstTokenEligible: true,
 	})
 	if err != nil {
 		t.Fatalf("finish old permit: %v", err)

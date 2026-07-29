@@ -45,6 +45,7 @@ type usageSessionStub struct{}
 
 func (*usageSessionStub) Reserve(context.Context, int64) error { return nil }
 func (*usageSessionStub) PublishAuthoritativeUsage(int64) bool { return true }
+func (*usageSessionStub) MarkUpstreamReached() bool            { return true }
 
 type acquirerStub struct {
 	mu       sync.Mutex

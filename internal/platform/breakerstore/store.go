@@ -32,17 +32,19 @@ type Store struct {
 	observer OperationObserver
 	fault    runtimeFaultLatchState
 
-	gate            *redis.Script
-	finish          *redis.Script
-	abort           *redis.Script
-	renew           *redis.Script
-	reset           *redis.Script
-	snapshot        *redis.Script
-	snapshotMany    *redis.Script
-	setCooldown     *redis.Script
-	cooldownRemain  *redis.Script
-	pausePermission *redis.Script
-	clearPermission *redis.Script
+	gate                      *redis.Script
+	finish                    *redis.Script
+	abort                     *redis.Script
+	renew                     *redis.Script
+	reset                     *redis.Script
+	snapshot                  *redis.Script
+	snapshotMany              *redis.Script
+	setCooldown               *redis.Script
+	cooldownRemain            *redis.Script
+	pausePermission           *redis.Script
+	clearPermission           *redis.Script
+	permissionRecheckClaim    *redis.Script
+	permissionRecheckComplete *redis.Script
 
 	controlPrepare          *redis.Script
 	controlCommit           *redis.Script
@@ -93,56 +95,58 @@ func NewStore(client redis.Cmdable, keyNamespace string, observers ...OperationO
 		observer = observers[0]
 	}
 	return &Store{
-		client:          client,
-		keys:            newKeyBuilder(keyNamespace),
-		observer:        observer,
-		fault:           newRuntimeFaultLatchState(),
-		gate:            redis.NewScript(luaGateAndAcquire),
-		finish:          redis.NewScript(luaFinish),
-		abort:           redis.NewScript(luaAbort),
-		renew:           redis.NewScript(luaRenew),
-		reset:           redis.NewScript(luaReset),
-		snapshot:        redis.NewScript(luaSnapshot),
-		snapshotMany:    redis.NewScript(luaSnapshotMany),
-		setCooldown:     redis.NewScript(luaSetCooldown),
-		cooldownRemain:  redis.NewScript(luaCooldownRemaining),
-		pausePermission: redis.NewScript(luaPausePermission),
-		clearPermission: redis.NewScript(luaClearPermission),
+		client:                    client,
+		keys:                      newKeyBuilder(keyNamespace),
+		observer:                  observer,
+		fault:                     newRuntimeFaultLatchState(),
+		gate:                      redis.NewScript(luaScript("attempt.acquire")),
+		finish:                    redis.NewScript(luaScript("attempt.finish")),
+		abort:                     redis.NewScript(luaScript("attempt.abort")),
+		renew:                     redis.NewScript(luaScript("attempt.renew")),
+		reset:                     redis.NewScript(luaScript("attempt.reset")),
+		snapshot:                  redis.NewScript(luaScript("attempt.snapshot")),
+		snapshotMany:              redis.NewScript(luaScript("attempt.snapshot_many")),
+		setCooldown:               redis.NewScript(luaScript("attempt.set_cooldown")),
+		cooldownRemain:            redis.NewScript(luaScript("attempt.cooldown_remaining")),
+		pausePermission:           redis.NewScript(luaScript("attempt.pause_permission")),
+		clearPermission:           redis.NewScript(luaScript("attempt.clear_permission")),
+		permissionRecheckClaim:    redis.NewScript(luaScript("permission.recheck_claim")),
+		permissionRecheckComplete: redis.NewScript(luaScript("permission.recheck_complete")),
 
-		controlPrepare:          redis.NewScript(luaControlPrepare),
-		controlCommit:           redis.NewScript(luaControlCommit),
-		controlAbort:            redis.NewScript(luaControlAbort),
-		controlRead:             redis.NewScript(luaControlRead),
-		controlRestore:          redis.NewScript(luaControlRestoreMissing),
-		controlReconcile:        redis.NewScript(luaControlReconcile),
-		controlRecoverCommitted: redis.NewScript(luaControlRecoverCommitted),
-		controlRecoverAborted:   redis.NewScript(luaControlRecoverAborted),
+		controlPrepare:          redis.NewScript(luaScript("runtime.control_prepare")),
+		controlCommit:           redis.NewScript(luaScript("runtime.control_commit")),
+		controlAbort:            redis.NewScript(luaScript("runtime.control_abort")),
+		controlRead:             redis.NewScript(luaScript("runtime.control_read")),
+		controlRestore:          redis.NewScript(luaScript("runtime.control_restore")),
+		controlReconcile:        redis.NewScript(luaScript("runtime.control_reconcile")),
+		controlRecoverCommitted: redis.NewScript(luaScript("runtime.control_recover_committed")),
+		controlRecoverAborted:   redis.NewScript(luaScript("runtime.control_recover_aborted")),
 
-		acquireRequest: redis.NewScript(luaAcquireRequestAdmission),
-		reserveRequest: redis.NewScript(luaReserveRequestTokens),
-		renewRequest:   redis.NewScript(luaRenewRequestAdmission),
-		finishRequest:  redis.NewScript(luaFinishRequestAdmission),
+		acquireRequest: redis.NewScript(luaScript("request.acquire")),
+		reserveRequest: redis.NewScript(luaScript("request.reserve_tpm")),
+		renewRequest:   redis.NewScript(luaScript("request.renew")),
+		finishRequest:  redis.NewScript(luaScript("request.finish")),
 
-		epochRead:      redis.NewScript(luaStateIntegrityRead),
-		epochPrepare:   redis.NewScript(luaEpochPrepare),
-		epochCommit:    redis.NewScript(luaEpochCommit),
-		epochReconcile: redis.NewScript(luaEpochReconcileReady),
-		runtimeReady:   redis.NewScript(luaRuntimeReadiness),
-		faultProof:     redis.NewScript(luaRuntimeFaultClearProof),
-		faultClear:     redis.NewScript(luaRuntimeFaultClearCommit),
-		faultDelete:    redis.NewScript(luaRuntimeFaultLatchDelete),
-		faultBegin:     redis.NewScript(luaBeginRuntimeReconciliation),
-		serverIdentity: redis.NewScript(luaRedisServerIdentity),
+		epochRead:      redis.NewScript(luaScript("integrity.read")),
+		epochPrepare:   redis.NewScript(luaScript("integrity.prepare")),
+		epochCommit:    redis.NewScript(luaScript("integrity.commit")),
+		epochReconcile: redis.NewScript(luaScript("integrity.reconcile")),
+		runtimeReady:   redis.NewScript(luaScript("integrity.runtime_ready")),
+		faultProof:     redis.NewScript(luaScript("integrity.fault_proof")),
+		faultClear:     redis.NewScript(luaScript("integrity.fault_clear")),
+		faultDelete:    redis.NewScript(luaScript("integrity.fault_delete")),
+		faultBegin:     redis.NewScript(luaScript("integrity.reconciliation_begin")),
+		serverIdentity: redis.NewScript(luaScript("integrity.server_identity")),
 
-		epInitControl:    redis.NewScript(luaInitProviderControl),
-		epRestoreControl: redis.NewScript(luaRestoreMissingProviderControl),
-		epReconcile:      redis.NewScript(luaReconcileProviderControl),
-		epPrepareStatus:  redis.NewScript(luaPrepareOriginStatus),
-		epCommitStatus:   redis.NewScript(luaCommitOriginStatus),
-		epAbortStatus:    redis.NewScript(luaAbortOriginStatus),
-		epPrepareOrigin:  redis.NewScript(luaPrepareOrigin),
-		epCommitOrigin:   redis.NewScript(luaCommitOrigin),
-		epAbortOrigin:    redis.NewScript(luaAbortOrigin),
+		epInitControl:    redis.NewScript(luaScript("origin.init")),
+		epRestoreControl: redis.NewScript(luaScript("origin.restore")),
+		epReconcile:      redis.NewScript(luaScript("origin.reconcile")),
+		epPrepareStatus:  redis.NewScript(luaScript("origin.prepare_status")),
+		epCommitStatus:   redis.NewScript(luaScript("origin.commit_status")),
+		epAbortStatus:    redis.NewScript(luaScript("origin.abort_status")),
+		epPrepareOrigin:  redis.NewScript(luaScript("origin.prepare")),
+		epCommitOrigin:   redis.NewScript(luaScript("origin.commit")),
+		epAbortOrigin:    redis.NewScript(luaScript("origin.abort")),
 	}
 }
 
@@ -240,9 +244,7 @@ type AcquireAttemptInput struct {
 	// 且 permit 冻结的 origin/status revision 与当前一致（§5.3.2 围栏准入分界）。
 	EnforceProviderControl bool
 
-	EstimatedInputTokens int64
-	OutputBudgetTokens   int64
-	ReservedTPMTokens    int64
+	InputEstimate int64
 }
 
 // AcquireAttempt 一次 Redis Lua 原子取得 Origin/Channel breaker 门禁、half-open 租约、Channel 并发租约
@@ -251,12 +253,6 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 	done := s.beginOperation(ctx, operationAcquireAttempt)
 	defer func() { done(attemptAdmissionOperationResult(admission), err) }()
 
-	if in.ReservedTPMTokens <= 0 && in.EstimatedInputTokens > 0 {
-		in.ReservedTPMTokens = in.EstimatedInputTokens
-	}
-	if in.OutputBudgetTokens < 0 {
-		return AttemptAdmission{}, configInvalid("attempt output token budget must not be negative")
-	}
 	if err := validateAcquireAttemptInput(in); err != nil {
 		return AttemptAdmission{}, err
 	}
@@ -309,9 +305,7 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 		strconv.FormatInt(in.ChannelRateRevision, 10),
 		strconv.FormatInt(in.GlobalConcurrencyRevision, 10),
 		strconv.FormatInt(in.CircuitBreakerRevision, 10),
-		strconv.FormatInt(in.EstimatedInputTokens, 10),
-		strconv.FormatInt(in.OutputBudgetTokens, 10),
-		strconv.FormatInt(in.ReservedTPMTokens, 10),
+		strconv.FormatInt(in.InputEstimate, 10),
 		in.IntegrityEpoch,
 		strconv.FormatInt(in.IntegrityRevision, 10),
 		enforceOrigin,
@@ -472,14 +466,9 @@ func (s *Store) Finish(ctx context.Context, permit AttemptPermit, outcome Finish
 		firstToken = strconv.FormatInt(*outcome.FirstTokenMs, 10)
 	}
 	tpmActual := ""
-	if outcome.ChannelTPMActual != nil {
-		tpmActual = strconv.FormatInt(*outcome.ChannelTPMActual, 10)
+	if outcome.ActualTotalTokens != nil {
+		tpmActual = strconv.FormatInt(*outcome.ActualTotalTokens, 10)
 	}
-	tpmOutput := ""
-	if outcome.ChannelTPMOutputTokens != nil {
-		tpmOutput = strconv.FormatInt(*outcome.ChannelTPMOutputTokens, 10)
-	}
-	tpmSource := outcome.ChannelTPMUsageSource
 	keys := append(s.attemptLifecycleKeys(permit),
 		s.keys.runtimeControlSetting("gateway.circuit_breaker"),
 		s.keys.runtimeControlSetting("gateway.routing_balance"),
@@ -491,9 +480,9 @@ func (s *Store) Finish(ctx context.Context, permit AttemptPermit, outcome Finish
 		firstToken,
 		tpmActual,
 		string(outcome.ProviderEvidence),
-		tpmSource,
-		tpmOutput,
-		strconv.FormatBool(outcome.ChannelInteractionEvidence),
+		string(outcome.RequestWriteState),
+		strconv.FormatBool(outcome.ResponseHeadersReceived),
+		strconv.FormatBool(outcome.FirstTokenEligible),
 	)
 
 	res, err := s.finish.Run(ctx, s.client, keys, argv...).Result()

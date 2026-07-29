@@ -314,6 +314,18 @@ func TestMapTopLevelFieldsAndDrops(t *testing.T) {
 	}
 }
 
+func TestMapOutputLimitPresenceToChat(t *testing.T) {
+	omitted, _ := mapBody(t, `{"model":"m","input":"x"}`)
+	if omitted.MaxCompletionTokens != nil {
+		t.Fatalf("omitted max_output_tokens was injected as %v", *omitted.MaxCompletionTokens)
+	}
+
+	explicit, _ := mapBody(t, `{"model":"m","input":"x","max_output_tokens":4097}`)
+	if explicit.MaxCompletionTokens == nil || *explicit.MaxCompletionTokens != 4097 {
+		t.Fatalf("explicit max_output_tokens was not preserved: %v", explicit.MaxCompletionTokens)
+	}
+}
+
 // TestMapReasoningBeforeFunctionCallBackfillsContent 验证回传的 reasoning(content.reasoning_text)
 // 在随后的 assistant 工具调用消息上回灌为 reasoning_content（U1）。
 func TestMapReasoningBeforeFunctionCallBackfillsContent(t *testing.T) {

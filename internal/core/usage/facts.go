@@ -5,6 +5,8 @@
 // 在同一次响应解析中把自己的 wire usage 映射成 Facts。
 package usage
 
+const maxLuaExactInteger int64 = 9007199254740991
+
 // CountState 表示某个 token 维度的可信状态，用于区分“已知值（含已知为 0）”、
 // “该协议不适用”和“上游未提供 / 解析不可靠”。
 //
@@ -131,6 +133,31 @@ type Facts struct {
 
 	// ServerToolUsage 是受控的附加计量事实集合，未登记 Kind 不得入账。
 	ServerToolUsage []MeteredItem
+}
+
+// ActualTotalTokens returns the reliable total token usage used to settle soft TPM buckets.
+// Input categories are mutually exclusive, and OutputTokensTotal already includes reasoning.
+func (f Facts) ActualTotalTokens() (int64, bool) {
+	if !f.Valid() {
+		return 0, false
+	}
+	counts := []TokenCount{
+		f.UncachedInputTokens,
+		f.CacheReadInputTokens,
+		f.CacheWrite5mInputTokens,
+		f.CacheWrite30mInputTokens,
+		f.CacheWrite1hInputTokens,
+		f.OutputTokensTotal,
+	}
+	total := int64(0)
+	for _, count := range counts {
+		value, ok := count.BillableValue()
+		if !ok || value < 0 || total > maxLuaExactInteger-value {
+			return 0, false
+		}
+		total += value
+	}
+	return total, true
 }
 
 // Valid 判断 usage facts 是否满足持久化和计费前置约束。

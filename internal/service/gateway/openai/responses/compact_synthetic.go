@@ -32,7 +32,6 @@ func (s *ResponsesService) invokeSyntheticCompact(
 	req gatewayapi.ResponsesRequest,
 	chatAdapter chatcompletionsadapter.ChatAdapter,
 	result *compactResult,
-	outputBudget int64,
 ) (lifecycle.AttemptSuccess, error) {
 	if chatAdapter == nil {
 		return lifecycle.AttemptSuccess{}, failure.New(
@@ -41,7 +40,7 @@ func (s *ResponsesService) invokeSyntheticCompact(
 		)
 	}
 
-	chatReq, _ := mapResponsesRequestToChatWithOutputBudget(req, candidate.UpstreamModel, outputBudget)
+	chatReq, _ := mapResponsesRequestToChat(req, candidate.UpstreamModel)
 	adapterCtx, adapterSpan := lifecycle.StartGatewaySpan(ctx, "adapter.chat_completions", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 	resp, err := chatAdapter.ChatCompletions(adapterCtx, candidate.Channel, chatReq)
 	lifecycle.EndGatewaySpan(adapterSpan, err)

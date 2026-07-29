@@ -61,6 +61,36 @@ func directRequest() gatewayapi.ResponsesRequest {
 	}
 }
 
+func TestEncodeUpstreamResponsesBodyPreservesOutputLimitPresence(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      string
+		wantValue string
+	}{
+		{name: "omitted", body: `{"model":"gpt-5.5","input":"hello"}`},
+		{name: "explicit", body: `{"model":"gpt-5.5","input":"hello","max_output_tokens":4097}`, wantValue: "4097"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := decodeRequest(t, tc.body)
+			encoded, err := encodeUpstreamResponsesBody(req, "gpt-5.5-upstream", false)
+			if err != nil {
+				t.Fatalf("encode upstream Responses/Compact body: %v", err)
+			}
+			var wire map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &wire); err != nil {
+				t.Fatalf("decode upstream Responses/Compact body: %v", err)
+			}
+			value, present := wire["max_output_tokens"]
+			if tc.wantValue == "" && present {
+				t.Fatalf("omitted max_output_tokens was injected as %s", value)
+			}
+			if tc.wantValue != "" && (!present || string(value) != tc.wantValue) {
+				t.Fatalf("explicit max_output_tokens=%s, want %s", value, tc.wantValue)
+			}
+		})
+	}
+}
+
 // TestCreateResponse_DirectPassthrough 验证：候选 adapter 注册了 responses 直传能力时，
 // 走直传分支——上送上游请求体的 model 改写为 upstream model、stream=false；上游响应体原文透传，
 // 仅顶层 model 回显改写为客户请求名；settlement 落直传产出的 ResponseFacts。

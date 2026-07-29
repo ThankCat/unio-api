@@ -30,6 +30,7 @@ type storeStub struct {
 	finishErrs     []error
 	finishCalls    int
 	finishActual   int64
+	finishReason   string
 	finishEpoch    string
 	finishRevision int64
 	snapshotInput  breakerstore.SnapshotManyInput
@@ -63,11 +64,12 @@ func (s *storeStub) RenewRequestAdmission(_ context.Context, _ string, _, _ int6
 	return outcome, s.renewErr
 }
 
-func (s *storeStub) FinishRequestAdmission(_ context.Context, _ string, _, _ int64, actual int64, epoch string, revision int64) (breakerstore.RequestAdmissionLifecycleOutcome, error) {
+func (s *storeStub) FinishRequestAdmission(_ context.Context, _ string, _, _ int64, actual int64, reason, epoch string, revision int64) (breakerstore.RequestAdmissionLifecycleOutcome, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.finishCalls++
 	s.finishActual = actual
+	s.finishReason = reason
 	s.finishEpoch = epoch
 	s.finishRevision = revision
 	outcome := s.finishOutcome
@@ -205,9 +207,12 @@ func TestSessionOwnsRenewReserveBindAndUniqueFinish(t *testing.T) {
 		t.Fatalf("reserve: %v", err)
 	}
 	ctx := ContextWithUsageSession(context.Background(), usage)
-	attempt := breakerstore.AcquireAttemptInput{EstimatedInputTokens: 123}
+	attempt := breakerstore.AcquireAttemptInput{InputEstimate: 123}
 	if err := BindAttemptInput(ctx, &attempt); err != nil || attempt.RequestAdmissionID != "request-admission-1" {
 		t.Fatalf("bind attempt id=%q err=%v", attempt.RequestAdmissionID, err)
+	}
+	if usage.PublishAuthoritativeUsage(maxLuaExactInteger + 1) {
+		t.Fatal("Lua-inexact authoritative usage must be rejected")
 	}
 	if !usage.PublishAuthoritativeUsage(77) || usage.PublishAuthoritativeUsage(88) {
 		t.Fatal("authoritative usage must be first-write-wins")

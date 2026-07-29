@@ -75,14 +75,6 @@ func mapGatewayResponseFormatToAdapter(format *gatewayapi.ChatCompletionResponse
 }
 
 func mapGatewayRequestToAdapter(req gatewayapi.ChatCompletionRequest, upstreamModel string) chatcompletionsadapter.ChatRequest {
-	return mapGatewayRequestToAdapterWithOutputBudget(req, upstreamModel, 0)
-}
-
-func mapGatewayRequestToAdapterWithOutputBudget(req gatewayapi.ChatCompletionRequest, upstreamModel string, outputBudget int64) chatcompletionsadapter.ChatRequest {
-	if req.MaxCompletionTokens == nil && req.MaxTokens == nil && outputBudget > 0 {
-		value := int(outputBudget)
-		req.MaxCompletionTokens = &value
-	}
 	extensions := make(map[string]json.RawMessage, len(req.Extensions))
 	for k, v := range req.Extensions {
 		extensions[k] = append(json.RawMessage(nil), v...)

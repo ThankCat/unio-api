@@ -438,6 +438,7 @@ type candidateSnapshotSession struct {
 
 func (*candidateSnapshotSession) Reserve(context.Context, int64) error { return nil }
 func (*candidateSnapshotSession) PublishAuthoritativeUsage(int64) bool { return true }
+func (*candidateSnapshotSession) MarkUpstreamReached() bool            { return true }
 func (s *candidateSnapshotSession) SnapshotMany(context.Context, int64, []breakerstore.SnapshotCandidateInput) (breakerstore.SnapshotManyResult, error) {
 	return s.result, nil
 }

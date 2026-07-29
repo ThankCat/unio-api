@@ -23,8 +23,11 @@ SHELL := /bin/bash
 export PATH := $(shell go env GOPATH)/bin:$(PATH)
 
 ENV_FILE := .env
+LUA_DIR := internal/platform/breakerstore/lua
+LUACHECK_VERSION := 1.2.0
+STYLUA_VERSION := 2.5.2
 
-.PHONY: help dev dev-gateway dev-admin dev-worker infra infra-down infra-logs build tidy clean check-env check-air
+.PHONY: help dev dev-gateway dev-admin dev-worker infra infra-down infra-logs build tidy clean check-env check-air check-lua check-lua-tools
 
 help: ## 显示可用命令
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-13s\033[0m %s\n", $$1, $$2}'
@@ -40,6 +43,28 @@ check-air:
 		echo "未找到 air：请先安装 go install github.com/air-verse/air@latest"; \
 		exit 1; \
 	fi
+
+check-lua-tools:
+	@if ! command -v luacheck >/dev/null 2>&1; then \
+		echo "未找到 luacheck $(LUACHECK_VERSION)"; \
+		exit 1; \
+	fi
+	@if [ "$$(luacheck --version | awk 'NR == 1 { print $$2 }')" != "$(LUACHECK_VERSION)" ]; then \
+		echo "luacheck 必须使用 $(LUACHECK_VERSION)"; \
+		exit 1; \
+	fi
+	@if ! command -v stylua >/dev/null 2>&1; then \
+		echo "未找到 StyLua $(STYLUA_VERSION)"; \
+		exit 1; \
+	fi
+	@if [ "$$(stylua --version | awk '{ print $$2 }')" != "$(STYLUA_VERSION)" ]; then \
+		echo "StyLua 必须使用 $(STYLUA_VERSION)"; \
+		exit 1; \
+	fi
+
+check-lua: check-lua-tools ## 检查外置 Redis Lua 的静态错误与格式
+	UNIO_LUA_STATIC_CHECK=1 go test ./internal/platform/breakerstore -run '^TestAssembledLuaScriptsPassLuacheck$$' -count=1
+	stylua --check $(LUA_DIR)
 
 infra: ## 启动本地 postgres + redis（等待 healthy）
 	docker compose up -d --wait

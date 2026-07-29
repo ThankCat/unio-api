@@ -359,7 +359,7 @@ func TestRequestAdmissionConcurrencyAndFinish(t *testing.T) {
 		t.Fatalf("rc2 want limited/concurrency, got %s/%s", r2.Outcome, r2.LimitedDimension)
 	}
 	// Finish rc1 释放并发。
-	if outcome, err := s.FinishRequestAdmission(context.Background(), "rc1", 3, 3, -1, epoch, rev); err != nil || outcome != RequestLifecycleFinished {
+	if outcome, err := s.FinishRequestAdmission(context.Background(), "rc1", 3, 3, -1, "empty", epoch, rev); err != nil || outcome != RequestLifecycleFinished {
 		t.Fatalf("finish rc1: outcome=%s err=%v", outcome, err)
 	}
 	r3, _ := s.AcquireRequestAdmission(context.Background(), raInput("rc3", 3, 3, epoch, rev))
@@ -389,7 +389,7 @@ func TestRequestAdmissionLifecycleEpochMismatchLeavesResourcesUntouched(t *testi
 
 	tokenKey := s.keys.admissionRequest(requestID)
 	concKey := s.keys.requestConcurrency(routeID, userID)
-	tpmKey, err := s.client.HGet(context.Background(), tokenKey, "reserved_tpm_bucket").Result()
+	tpmKey, err := s.client.HGet(context.Background(), tokenKey, "tpm_bucket").Result()
 	if err != nil {
 		t.Fatalf("read reserved TPM bucket: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestRequestAdmissionLifecycleEpochMismatchLeavesResourcesUntouched(t *testi
 		t.Fatalf("stale renew: outcome=%s err=%v", outcome, renewErr)
 	}
 	if outcome, finishErr := s.FinishRequestAdmission(
-		context.Background(), requestID, routeID, userID, 7, "wrong-epoch", revision,
+		context.Background(), requestID, routeID, userID, 7, "actual", "wrong-epoch", revision,
 	); finishErr != nil || outcome != RequestLifecycleStaleEpoch {
 		t.Fatalf("stale finish: outcome=%s err=%v", outcome, finishErr)
 	}
@@ -426,7 +426,7 @@ func TestRequestAdmissionLifecycleEpochMismatchLeavesResourcesUntouched(t *testi
 		t.Fatalf("corrupt token epoch: %v", err)
 	}
 	if outcome, finishErr := s.FinishRequestAdmission(
-		context.Background(), requestID, routeID, userID, 7, epoch, revision,
+		context.Background(), requestID, routeID, userID, 7, "actual", epoch, revision,
 	); finishErr != nil || outcome != RequestLifecycleStaleEpoch {
 		t.Fatalf("token epoch mismatch finish: outcome=%s err=%v", outcome, finishErr)
 	}
@@ -436,7 +436,7 @@ func TestRequestAdmissionLifecycleEpochMismatchLeavesResourcesUntouched(t *testi
 		t.Fatalf("restore token epoch: %v", err)
 	}
 	if outcome, finishErr := s.FinishRequestAdmission(
-		context.Background(), requestID, routeID, userID, 7, epoch, revision,
+		context.Background(), requestID, routeID, userID, 7, "actual", epoch, revision,
 	); finishErr != nil || outcome != RequestLifecycleFinished {
 		t.Fatalf("valid finish: outcome=%s err=%v", outcome, finishErr)
 	}
@@ -456,7 +456,7 @@ func TestChannelAdmissionEnforced(t *testing.T) {
 			ProviderID: 700, ChannelID: 70, OriginRevision: 1, ProviderStatusRevision: 1,
 			ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
 			ChannelAdmissionRevision: 1,
-			EstimatedInputTokens:     10,
+			InputEstimate:            10,
 		}))
 		if err != nil {
 			t.Fatalf("acquire %s: %v", id, err)
@@ -490,6 +490,7 @@ func TestChannelAdmissionEnforced(t *testing.T) {
 	// Finish ca2（真实 transport）保留 RPM → 现在 used=2（ca4+ca2 保留），再 acquire 超限。
 	if _, err := s.Finish(context.Background(), *a2.Permit, FinishOutcome{
 		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess,
+		RequestWriteState: RequestWriteCompleted,
 	}); err != nil {
 		t.Fatalf("finish ca2: %v", err)
 	}
@@ -563,14 +564,14 @@ func TestFinishRequestAdmissionQuotaSourceDistinguishesNoTransport(t *testing.T)
 	if result, err := s.AcquireRequestAdmission(context.Background(), raInput("quota-no-transport", routeID, userID, epoch, rev)); err != nil || result.Outcome != RequestAllowed {
 		t.Fatalf("acquire: result=%+v err=%v", result, err)
 	}
-	if result, err := s.ReserveRequestTokensBudget(context.Background(), "quota-no-transport", routeID, userID, 10, 30, 40, epoch, rev); err != nil || result != ReserveReserved {
-		t.Fatalf("reserve budget: result=%s err=%v", result, err)
+	if result, err := s.ReserveRequestTokens(context.Background(), "quota-no-transport", routeID, userID, 10, epoch, rev); err != nil || result != ReserveReserved {
+		t.Fatalf("reserve input: result=%s err=%v", result, err)
 	}
 	tpmKey := s.keys.requestTPMBucket(routeID, userID, minuteBucket(time.Now()))
-	if used := s.client.Get(context.Background(), tpmKey).Val(); used != "40" {
-		t.Fatalf("reserved TPM=%q, want 40", used)
+	if used := s.client.Get(context.Background(), tpmKey).Val(); used != "10" {
+		t.Fatalf("reserved TPM=%q, want 10", used)
 	}
-	if result, err := s.FinishRequestAdmissionWithUsage(context.Background(), "quota-no-transport", routeID, userID, 0, "no_transport", epoch, rev); err != nil || result != RequestLifecycleFinished {
+	if result, err := s.FinishRequestAdmission(context.Background(), "quota-no-transport", routeID, userID, -1, "not_reached", epoch, rev); err != nil || result != RequestLifecycleFinished {
 		t.Fatalf("finish no transport: result=%s err=%v", result, err)
 	}
 	if used := s.client.Get(context.Background(), tpmKey).Val(); used != "0" {
@@ -598,8 +599,8 @@ func TestReserveRequestTokensEpochFenceLeavesTPMUnchanged(t *testing.T) {
 	if exists, _ := s.client.Exists(context.Background(), tpmKey).Result(); exists != 0 {
 		t.Fatal("marker mismatch must not create a TPM bucket")
 	}
-	if state, _ := s.client.HGet(context.Background(), tokenKey, "reserve_state").Result(); state != "none" {
-		t.Fatalf("marker mismatch mutated reserve state to %q", state)
+	if state, _ := s.client.HGet(context.Background(), tokenKey, "tpm_state").Result(); state != "none" {
+		t.Fatalf("marker mismatch mutated TPM state to %q", state)
 	}
 
 	if err := s.client.HSet(context.Background(), tokenKey, "runtime_integrity_epoch", "token-wrong-epoch").Err(); err != nil {

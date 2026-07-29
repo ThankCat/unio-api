@@ -154,27 +154,10 @@ func (s *Store) ReserveRequestTokens(
 	integrityEpoch string,
 	integrityRevision int64,
 ) (result ReserveResult, err error) {
-	return s.ReserveRequestTokensBudget(ctx, requestAdmissionID, routeID, userID,
-		estimatedTokens, 0, estimatedTokens, integrityEpoch, integrityRevision)
-}
-
-// ReserveRequestTokensBudget reserves the route TPM upper bound while recording its input and
-// output components separately. The old method above remains a narrow input-only wrapper for
-// maintenance callers and tests.
-func (s *Store) ReserveRequestTokensBudget(
-	ctx context.Context,
-	requestAdmissionID string,
-	routeID, userID, inputEstimate, outputBudget, reservedTotal int64,
-	integrityEpoch string,
-	integrityRevision int64,
-) (result ReserveResult, err error) {
 	done := s.beginOperation(ctx, operationReserveRequest)
 	defer func() { done(string(result), err) }()
 
-	if reservedTotal <= 0 && inputEstimate > 0 {
-		reservedTotal = inputEstimate + outputBudget
-	}
-	if err := validateReserveRequestTokensBudgetInput(requestAdmissionID, routeID, userID, inputEstimate, outputBudget, reservedTotal); err != nil {
+	if err := validateReserveRequestTokensInput(requestAdmissionID, routeID, userID, estimatedTokens); err != nil {
 		return "", err
 	}
 	if err := validateRequestLifecycleInput(requestAdmissionID, routeID, userID, integrityEpoch, integrityRevision); err != nil {
@@ -192,7 +175,7 @@ func (s *Store) ReserveRequestTokensBudget(
 		s.keys.runtimeReconciliationProof(),
 	}
 	res, err := s.reserveRequest.Run(ctx, s.client, keys,
-		strconv.FormatInt(inputEstimate, 10), strconv.FormatInt(outputBudget, 10), strconv.FormatInt(reservedTotal, 10),
+		strconv.FormatInt(estimatedTokens, 10),
 		strconv.FormatInt(routeID, 10), strconv.FormatInt(userID, 10),
 		integrityEpoch, strconv.FormatInt(integrityRevision, 10)).Result()
 	if err != nil {
@@ -258,39 +241,17 @@ func (s *Store) RenewRequestAdmission(
 	return parseRequestLifecycleReply(res, "breakerstore renew request admission")
 }
 
-// FinishRequestAdmission 唯一终态：释放并发、保留 RPM/RPD、按可空 usage 对账/释放 TPM。
-// authoritativeTPM<0 表示调用方没有提交 quota usage；详细调用可区分 upstream/local/input fallback。
+// FinishRequestAdmission 唯一终态：释放并发、保留 RPM/RPD，并按可靠 actual 或交互事实收口 TPM。
+// actualTotal<0 表示没有可靠 usage；terminalReason 必须明确说明释放、保留或没有 TPM 占用。
 // expected epoch 必须来自本次调用前的
 // PostgreSQL 强一致读取；marker/token epoch mismatch 时 Lua 保证零写入。
 func (s *Store) FinishRequestAdmission(
 	ctx context.Context,
 	requestAdmissionID string,
 	routeID, userID int64,
-	authoritativeTPM int64,
+	actualTotal int64,
+	terminalReason string,
 	integrityEpoch string,
-	integrityRevision int64,
-) (outcome RequestAdmissionLifecycleOutcome, err error) {
-	return s.finishRequestAdmission(ctx, requestAdmissionID, routeID, userID, authoritativeTPM, "", integrityEpoch, integrityRevision)
-}
-
-// FinishRequestAdmissionWithUsage closes the request token and records the quota usage source
-// separately from billing's authoritative usage. Source is no_transport|upstream|gateway_local|input_fallback.
-func (s *Store) FinishRequestAdmissionWithUsage(
-	ctx context.Context,
-	requestAdmissionID string,
-	routeID, userID, actualTPM int64,
-	usageSource string,
-	integrityEpoch string,
-	integrityRevision int64,
-) (outcome RequestAdmissionLifecycleOutcome, err error) {
-	return s.finishRequestAdmission(ctx, requestAdmissionID, routeID, userID, actualTPM, usageSource, integrityEpoch, integrityRevision)
-}
-
-func (s *Store) finishRequestAdmission(
-	ctx context.Context,
-	requestAdmissionID string,
-	routeID, userID, actualTPM int64,
-	usageSource, integrityEpoch string,
 	integrityRevision int64,
 ) (outcome RequestAdmissionLifecycleOutcome, err error) {
 	done := s.beginOperation(ctx, operationFinishRequest)
@@ -299,12 +260,12 @@ func (s *Store) finishRequestAdmission(
 	if err := validateRequestLifecycleInput(requestAdmissionID, routeID, userID, integrityEpoch, integrityRevision); err != nil {
 		return "", err
 	}
-	if usageSource != "" && usageSource != "no_transport" && usageSource != "upstream" && usageSource != "gateway_local" && usageSource != "input_fallback" {
-		return "", configInvalid("unknown request quota usage source")
+	if !validRequestTPMTerminalReason(terminalReason, actualTotal) {
+		return "", configInvalid("invalid request TPM terminal reason")
 	}
-	authoritative := ""
-	if actualTPM >= 0 {
-		authoritative = strconv.FormatInt(actualTPM, 10)
+	actual := ""
+	if actualTotal >= 0 {
+		actual = strconv.FormatInt(actualTotal, 10)
 	}
 	keys := []string{
 		s.keys.stateIntegrityMarker(),
@@ -315,8 +276,8 @@ func (s *Store) finishRequestAdmission(
 		requestAdmissionID,
 		strconv.FormatInt(routeID, 10),
 		strconv.FormatInt(userID, 10),
-		authoritative,
-		usageSource,
+		actual,
+		terminalReason,
 		integrityEpoch,
 		strconv.FormatInt(integrityRevision, 10),
 	).Result()

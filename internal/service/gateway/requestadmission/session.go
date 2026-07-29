@@ -23,6 +23,7 @@ const (
 	defaultRenewInterval    = 10 * time.Second
 	minimumRenewInterval    = 10 * time.Millisecond
 	requestTerminalTries    = 2
+	maxLuaExactInteger      = int64(9007199254740991)
 )
 
 var (
@@ -36,16 +37,8 @@ type Store interface {
 	AcquireRequestAdmission(context.Context, breakerstore.RequestAdmissionInput) (breakerstore.RequestAdmissionResult, error)
 	ReserveRequestTokens(context.Context, string, int64, int64, int64, string, int64) (breakerstore.ReserveResult, error)
 	RenewRequestAdmission(context.Context, string, int64, int64, string, int64) (breakerstore.RequestAdmissionLifecycleOutcome, error)
-	FinishRequestAdmission(context.Context, string, int64, int64, int64, string, int64) (breakerstore.RequestAdmissionLifecycleOutcome, error)
+	FinishRequestAdmission(context.Context, string, int64, int64, int64, string, string, int64) (breakerstore.RequestAdmissionLifecycleOutcome, error)
 	SnapshotMany(context.Context, breakerstore.SnapshotManyInput) (breakerstore.SnapshotManyResult, error)
-}
-
-type usageLifecycleStore interface {
-	FinishRequestAdmissionWithUsage(context.Context, string, int64, int64, int64, string, string, int64) (breakerstore.RequestAdmissionLifecycleOutcome, error)
-}
-
-type budgetStore interface {
-	ReserveRequestTokensBudget(context.Context, string, int64, int64, int64, int64, int64, string, int64) (breakerstore.ReserveResult, error)
 }
 
 // RuntimeFactsReader strongly reads the PostgreSQL revisions expected by a new admission.
@@ -67,6 +60,7 @@ type MetricsRecorder interface {
 type UsageSession interface {
 	Reserve(context.Context, int64) error
 	PublishAuthoritativeUsage(int64) bool
+	MarkUpstreamReached() bool
 }
 
 // AttemptTokenSession lets the future lifecycle permit manager bind the opaque request token
@@ -272,14 +266,11 @@ type session struct {
 	reserveMu       sync.Mutex
 	reserveObserved bool
 	reserveEstimate int64
-	reserveOutput   int64
-	reserveTotal    int64
 	reserveErr      error
 
 	usageMu          sync.Mutex
 	authoritativeTPM *int64
-	quotaTPM         *int64
-	quotaSource      string
+	upstreamReached  bool
 	finalized        bool
 
 	finalizeOnce sync.Once
@@ -298,8 +289,7 @@ func (s *session) BindAttempt(input *breakerstore.AcquireAttemptInput) error {
 	}
 	s.reserveMu.Lock()
 	defer s.reserveMu.Unlock()
-	if !s.reserveObserved || s.reserveErr != nil || input.EstimatedInputTokens > s.reserveEstimate ||
-		(input.ReservedTPMTokens > 0 && input.ReservedTPMTokens > s.reserveTotal) {
+	if !s.reserveObserved || s.reserveErr != nil || input.InputEstimate > s.reserveEstimate {
 		return reserveConflictError()
 	}
 	s.usageMu.Lock()
@@ -358,14 +348,10 @@ func (s *session) SnapshotMany(ctx context.Context, modelID int64, candidates []
 // Reserve performs the request-level TPM reservation once. The first observed result is
 // retained locally as well as by Redis so a service cannot reinterpret limited as allowed.
 func (s *session) Reserve(ctx context.Context, estimatedTokens int64) error {
-	return s.ReserveBudget(ctx, estimatedTokens, 0, estimatedTokens)
-}
-
-func (s *session) ReserveBudget(ctx context.Context, inputEstimate, outputBudget, reservedTotal int64) error {
 	s.reserveMu.Lock()
 	defer s.reserveMu.Unlock()
 
-	if inputEstimate < 0 || outputBudget < 0 || reservedTotal < inputEstimate+outputBudget {
+	if estimatedTokens < 0 {
 		return failure.Wrap(
 			failure.CodeGatewayRuntimeSyncRequired,
 			ErrReserveConflict,
@@ -373,7 +359,7 @@ func (s *session) ReserveBudget(ctx context.Context, inputEstimate, outputBudget
 		)
 	}
 	if s.reserveObserved {
-		if s.reserveEstimate != inputEstimate || s.reserveOutput != outputBudget || s.reserveTotal != reservedTotal {
+		if s.reserveEstimate != estimatedTokens {
 			return reserveConflictError()
 		}
 		return s.reserveErr
@@ -383,20 +369,14 @@ func (s *session) ReserveBudget(ctx context.Context, inputEstimate, outputBudget
 	if err != nil {
 		s.recordOperation("reserve", admissionErrorResult(err))
 		s.reserveObserved = true
-		s.reserveEstimate, s.reserveOutput, s.reserveTotal = inputEstimate, outputBudget, reservedTotal
+		s.reserveEstimate = estimatedTokens
 		s.reserveErr = err
 		return err
 	}
-	var result breakerstore.ReserveResult
-	if detailed, ok := s.store.(budgetStore); ok {
-		result, err = detailed.ReserveRequestTokensBudget(ctx, s.requestID, s.routeID, s.userID,
-			inputEstimate, outputBudget, reservedTotal, integrity.Epoch, integrity.Revision)
-	} else {
-		result, err = s.store.ReserveRequestTokens(ctx, s.requestID, s.routeID, s.userID,
-			reservedTotal, integrity.Epoch, integrity.Revision)
-	}
+	result, err := s.store.ReserveRequestTokens(ctx, s.requestID, s.routeID, s.userID,
+		estimatedTokens, integrity.Epoch, integrity.Revision)
 	s.reserveObserved = true
-	s.reserveEstimate, s.reserveOutput, s.reserveTotal = inputEstimate, outputBudget, reservedTotal
+	s.reserveEstimate = estimatedTokens
 	if err != nil {
 		s.recordOperation("reserve", admissionErrorResult(err))
 		s.reserveErr = err
@@ -447,7 +427,7 @@ func (s *session) ReserveBudget(ctx context.Context, inputEstimate, outputBudget
 	s.logger.Warn("request admission reserve rejected",
 		zap.Int64("route_id", s.routeID),
 		zap.Int64("user_id", s.userID),
-		zap.Int64("estimated_tokens", inputEstimate),
+		zap.Int64("estimated_tokens", estimatedTokens),
 		zap.String("outcome", string(result)),
 	)
 	return s.reserveErr
@@ -456,7 +436,7 @@ func (s *session) ReserveBudget(ctx context.Context, inputEstimate, outputBudget
 // PublishAuthoritativeUsage records the first non-negative, non-partial cache-aware TPM
 // value published after durable settlement. Later publications cannot replace it.
 func (s *session) PublishAuthoritativeUsage(actualTPM int64) bool {
-	if actualTPM < 0 {
+	if actualTPM < 0 || actualTPM > maxLuaExactInteger {
 		return false
 	}
 	s.usageMu.Lock()
@@ -466,55 +446,21 @@ func (s *session) PublishAuthoritativeUsage(actualTPM int64) bool {
 	}
 	actual := actualTPM
 	s.authoritativeTPM = &actual
-	s.quotaTPM = &actual
-	s.quotaSource = "upstream"
 	return true
 }
 
-// PublishInputFallback records that a real upstream interaction occurred without reliable usage.
-// A zero input uses the request's frozen conservative input estimate. An upstream publication may
-// later replace this provisional value, but a weaker source never replaces an authoritative value.
-func (s *session) PublishInputFallback(inputTPM int64) bool {
+// MarkUpstreamReached records that at least one attempt may have consumed upstream quota.
+// It controls retain-versus-release only; it never guesses output usage.
+func (s *session) MarkUpstreamReached() bool {
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
 	if s.finalized {
 		return false
 	}
-	if inputTPM <= 0 {
-		inputTPM = s.reserveEstimate
-	}
-	if inputTPM < 0 {
+	if s.upstreamReached {
 		return false
 	}
-	if s.quotaSource == "upstream" || s.quotaSource == "gateway_local" {
-		return false
-	}
-	if s.quotaTPM != nil && inputTPM <= *s.quotaTPM {
-		return false
-	}
-	actual := inputTPM
-	s.quotaTPM = &actual
-	s.quotaSource = "input_fallback"
-	return true
-}
-
-// PublishLocalUsage records a Gateway-local token measurement between input fallback and upstream
-// authority. It is intentionally provisional for billing, but is valid for Route TPM accounting.
-func (s *session) PublishLocalUsage(actualTPM int64) bool {
-	if actualTPM < 0 {
-		return false
-	}
-	s.usageMu.Lock()
-	defer s.usageMu.Unlock()
-	if s.finalized || s.quotaSource == "upstream" {
-		return false
-	}
-	if s.quotaSource == "gateway_local" && s.quotaTPM != nil && actualTPM <= *s.quotaTPM {
-		return false
-	}
-	actual := actualTPM
-	s.quotaTPM = &actual
-	s.quotaSource = "gateway_local"
+	s.upstreamReached = true
 	return true
 }
 
@@ -527,18 +473,18 @@ func (s *session) Finalize(ctx context.Context) error {
 			defer s.metrics.AddRequestAdmissionActive(-1)
 		}
 
-		quotaTPM := int64(-1)
-		quotaSource := ""
+		actualTotal := int64(-1)
+		terminalReason := "empty"
 		s.usageMu.Lock()
 		s.finalized = true
-		if s.quotaTPM != nil {
-			quotaTPM = *s.quotaTPM
-			quotaSource = s.quotaSource
+		if s.authoritativeTPM != nil {
+			actualTotal = *s.authoritativeTPM
+			terminalReason = "actual"
 		} else if s.reserveObserved && s.reserveErr == nil {
-			// Reserve succeeded but no attempt produced interaction evidence: release the
-			// entire Route TPM reservation instead of retaining the input estimate.
-			quotaTPM = 0
-			quotaSource = "no_transport"
+			terminalReason = "not_reached"
+			if s.upstreamReached {
+				terminalReason = "reached_without_usage"
+			}
 		}
 		s.usageMu.Unlock()
 
@@ -548,17 +494,10 @@ func (s *session) Finalize(ctx context.Context) error {
 		for attempt := 0; attempt < requestTerminalTries; attempt++ {
 			integrity, err := s.facts.Integrity(ctx)
 			if err == nil {
-				if detailed, ok := s.store.(usageLifecycleStore); ok {
-					outcome, err = detailed.FinishRequestAdmissionWithUsage(
-						ctx, s.requestID, s.routeID, s.userID, quotaTPM, quotaSource,
-						integrity.Epoch, integrity.Revision,
-					)
-				} else {
-					outcome, err = s.store.FinishRequestAdmission(
-						ctx, s.requestID, s.routeID, s.userID, quotaTPM,
-						integrity.Epoch, integrity.Revision,
-					)
-				}
+				outcome, err = s.store.FinishRequestAdmission(
+					ctx, s.requestID, s.routeID, s.userID, actualTotal, terminalReason,
+					integrity.Epoch, integrity.Revision,
+				)
 				if err != nil && retryableLifecycleError(err) {
 					storeResultUnknown = true
 				}
@@ -825,21 +764,6 @@ func ReserveIfPresent(ctx context.Context, estimatedTokens int64) error {
 	return s.Reserve(ctx, estimatedTokens)
 }
 
-// ReserveBudgetIfPresent reserves the complete Route TPM budget while preserving the input
-// estimate used by partial settlement. Non-HTTP maintenance callers remain neutral.
-func ReserveBudgetIfPresent(ctx context.Context, inputEstimate, outputBudget, reservedTotal int64) error {
-	s, ok := UsageSessionFromContext(ctx)
-	if !ok {
-		return nil
-	}
-	if detailed, ok := s.(interface {
-		ReserveBudget(context.Context, int64, int64, int64) error
-	}); ok {
-		return detailed.ReserveBudget(ctx, inputEstimate, outputBudget, reservedTotal)
-	}
-	return s.Reserve(ctx, reservedTotal)
-}
-
 // PublishAuthoritativeUsage publishes settlement usage when a session exists. Recovery
 // workers legitimately run without the original HTTP request session and are a no-op here.
 func PublishAuthoritativeUsage(ctx context.Context, actualTPM int64) bool {
@@ -850,27 +774,11 @@ func PublishAuthoritativeUsage(ctx context.Context, actualTPM int64) bool {
 	return s.PublishAuthoritativeUsage(actualTPM)
 }
 
-// PublishInputFallback marks a request as having reached a real upstream transport without
-// reliable usage. It is a no-op for contexts without an HTTP-owned admission session.
-func PublishInputFallback(ctx context.Context, inputTPM int64) bool {
+// MarkUpstreamReached marks that at least one attempt cannot be proven untransmitted.
+func MarkUpstreamReached(ctx context.Context) bool {
 	s, ok := UsageSessionFromContext(ctx)
 	if !ok {
 		return false
 	}
-	if publisher, ok := s.(interface{ PublishInputFallback(int64) bool }); ok {
-		return publisher.PublishInputFallback(inputTPM)
-	}
-	return false
-}
-
-// PublishLocalUsage records a Gateway-local token measurement for Route TPM accounting.
-func PublishLocalUsage(ctx context.Context, actualTPM int64) bool {
-	s, ok := UsageSessionFromContext(ctx)
-	if !ok {
-		return false
-	}
-	if publisher, ok := s.(interface{ PublishLocalUsage(int64) bool }); ok {
-		return publisher.PublishLocalUsage(actualTPM)
-	}
-	return false
+	return s.MarkUpstreamReached()
 }

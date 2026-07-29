@@ -59,8 +59,6 @@ type RunStreamParams struct {
 	// ConservativeInputTokens 是预授权阶段的保守输入估算，供 partial settlement 复用为 input 事实。
 	ConservativeInputTokens int64
 
-	// ConservativeTPMBudget 是 Route 请求级完整 TPM 预算；候选自身预算优先。
-	ConservativeTPMBudget int64
 	// CountOutputTokens 按 upstream model 估算一段可见输出文本的 token 数，供 partial settlement 计 output。
 	// 为 nil 时 partial 的 output 记 0（偏保守）。
 	CountOutputTokens func(model string, text string) int64
@@ -118,8 +116,6 @@ type RunStreamParamsGeneric[C any] struct {
 	// ConservativeInputTokens 是预授权阶段的保守输入估算，供 partial settlement 复用为 input 事实。
 	ConservativeInputTokens int64
 
-	// ConservativeTPMBudget 是 Route 请求级完整 TPM 预算；候选自身预算优先。
-	ConservativeTPMBudget int64
 	// CountOutputTokens 按 upstream model 估算一段可见输出文本的 token 数，供 partial settlement 计 output。
 	// 为 nil 时 partial 的 output 记 0（偏保守）。
 	CountOutputTokens func(model string, text string) int64
@@ -183,7 +179,6 @@ func (r *AttemptRunner) RunStream(ctx context.Context, params RunStreamParams) (
 		Finish:                  params.Finish,
 		ChunkMeta:               chatStreamChunkMeta,
 		ConservativeInputTokens: params.ConservativeInputTokens,
-		ConservativeTPMBudget:   params.ConservativeTPMBudget,
 		CountOutputTokens:       params.CountOutputTokens,
 		Codes:                   params.Codes,
 		Sticky:                  params.Sticky,
@@ -237,16 +232,9 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 	for candIdx, prepared := range params.Candidates {
 		index := prepared.RouteIndex
 		candidate := prepared.Route
-		candidateInputTokens := prepared.TokenBudget.InputEstimate
+		candidateInputTokens := prepared.InputEstimate
 		if candidateInputTokens <= 0 {
 			candidateInputTokens = params.ConservativeInputTokens
-		}
-		candidateTPMBudget := prepared.TokenBudget.ReservedTotal
-		if candidateTPMBudget <= 0 {
-			candidateTPMBudget = params.ConservativeTPMBudget
-		}
-		if candidateTPMBudget <= 0 {
-			candidateTPMBudget = candidateInputTokens
 		}
 
 		// Adapter lookup is local and side-effect free, so do it before acquiring candidate resources.
@@ -264,11 +252,10 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		var permitOwner *AttemptPermitOwner
 		if r.permitManager != nil {
 			admission, owner, err := r.acquireAttemptWithHeadWait(ctx, AttemptPermitAcquireParams{
-				Candidate:            candidate,
-				UpstreamEndpoint:     l.upstreamEndpoint(),
-				RequestMode:          breakerstore.ModeStream,
-				EstimatedInputTokens: candidateInputTokens,
-				RequestTPMBudget:     candidateTPMBudget,
+				Candidate:        candidate,
+				UpstreamEndpoint: l.upstreamEndpoint(),
+				RequestMode:      breakerstore.ModeStream,
+				InputEstimate:    candidateInputTokens,
 			}, allowStickyHeadWait(params.Sticky, candIdx, candidate.Channel.ID), &headWaitUsed)
 			if err != nil {
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
@@ -551,20 +538,16 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 		timingFacts := timingObserver.Snapshot()
 		l.RecordAttemptTiming(ctx, attemptRecord, timingFacts)
 		if timingFacts.HasChannelUsageEvidence() {
-			requestadmission.PublishInputFallback(ctx, candidateInputTokens)
+			requestadmission.MarkUpstreamReached(ctx)
 		}
 		outcomeErr := err
 		if panicValue != nil {
 			outcomeErr = errAttemptInvokePanic
 		}
 		finishOutcome := streamFinishOutcome(streamFacts, timingFacts, outcomeErr)
-		finishOutcome.ChannelInteractionEvidence = timingFacts.HasChannelUsageEvidence()
-		if finishOutcome.ChannelTPMActual == nil && partialOutputTokens > 0 {
-			localOutput := partialOutputTokens
-			finishOutcome.ChannelTPMOutputTokens = &localOutput
-			finishOutcome.ChannelTPMUsageSource = "local"
-			requestadmission.PublishLocalUsage(ctx, params.ConservativeInputTokens+partialOutputTokens)
-		}
+		finishOutcome.RequestWriteState = breakerstore.RequestWriteState(timingFacts.RequestWriteState)
+		finishOutcome.ResponseHeadersReceived = timingFacts.ResponseHeadersSeen
+		finishOutcome.FirstTokenEligible = timingFacts.UpstreamFirstTokenAt != nil
 
 		if permitOwner != nil {
 			if !timingFacts.HasChannelUsageEvidence() {
@@ -845,9 +828,9 @@ func streamFinishOutcome(facts *adapter.ResponseFacts, timing AttemptTimingFacts
 		FirstTokenMs:    timing.FirstTokenMs(),
 	}
 	if facts != nil && !facts.UsageSource.IsPartialEstimate() {
-		actual := billableTPMTokens(facts.Usage)
-		out.ChannelTPMActual = &actual
-		out.ChannelTPMUsageSource = "authoritative"
+		if actual, reliable := actualTotalTokens(facts.Usage); reliable {
+			out.ActualTotalTokens = &actual
+		}
 	}
 	if err == nil && facts != nil {
 		out.ProviderOutcome = breakerstore.OutcomeEligibleSuccess

@@ -64,7 +64,7 @@ func authoritativeAttemptInput(id string, providerID, channelID int64) AcquireAt
 		ModelID:                100,
 		UpstreamEndpoint:       EndpointChatCompletions,
 		RequestMode:            ModeNonStream,
-		EstimatedInputTokens:   10,
+		InputEstimate:          10,
 	})
 }
 
@@ -445,8 +445,9 @@ func TestCommittedBreakerConfigDrivesFinish(t *testing.T) {
 			t.Fatalf("attempt %d want permit or open, got %+v", attempt, admission)
 		}
 		if _, err := s.Finish(context.Background(), *admission.Permit, FinishOutcome{
-			ProviderOutcome: OutcomeIgnored,
-			ChannelOutcome:  OutcomeEligibleFailure,
+			ProviderOutcome:   OutcomeIgnored,
+			ChannelOutcome:    OutcomeEligibleFailure,
+			RequestWriteState: RequestWriteCompleted,
 		}); err != nil {
 			t.Fatalf("finish attempt %d: %v", attempt, err)
 		}

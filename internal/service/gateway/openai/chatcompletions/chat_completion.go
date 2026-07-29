@@ -81,8 +81,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
 		})
 	}
-	if err := requestadmission.ReserveBudgetIfPresent(ctx, candidatePlan.ConservativeInputTokens,
-		candidatePlan.RequestTPMBudget()-candidatePlan.ConservativeInputTokens, candidatePlan.RequestTPMBudget()); err != nil {
+	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
 		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return nil, err
 	}
@@ -117,7 +116,6 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		RequestedModelID: req.Model,
 		ResponseProtocol: requestlog.ProtocolOpenAI,
 		EstimatedTokens:  candidatePlan.ConservativeInputTokens,
-		RequestTPMBudget: candidatePlan.RequestTPMBudget(),
 		Sticky:           stickySession,
 		ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
 			adapter, ok := s.registry.Chat(candidate.AdapterKey)
@@ -133,7 +131,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		Invoke: func(ctx context.Context, candidate routing.ChatRouteCandidate) (lifecycle.AttemptSuccess, error) {
 			adapterCtx, adapterSpan := lifecycle.StartGatewaySpan(ctx, "adapter.chat_completions", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 			resp, err := chatAdapter.ChatCompletions(adapterCtx, candidate.Channel,
-				mapGatewayRequestToAdapterWithOutputBudget(req, candidate.UpstreamModel, candidatePlan.OutputBudgetFor(candidate.Channel.ID)))
+				mapGatewayRequestToAdapter(req, candidate.UpstreamModel))
 			lifecycle.EndGatewaySpan(adapterSpan, err)
 			if err != nil {
 				return lifecycle.AttemptSuccess{}, err

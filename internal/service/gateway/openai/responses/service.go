@@ -194,7 +194,6 @@ func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req g
 		Candidates:          candidates,
 		Capabilities:        capabilities,
 		EstimateInputTokens: s.responsesInputTokenEstimator(req, allowDirect),
-		RequestedOutputTokens: estimateMaxCompletionTokens(req),
 		Mode:                mode,
 		StickyChannelID:     stickyChannelID,
 	})

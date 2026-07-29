@@ -18,7 +18,7 @@ import (
 // 仅改写 model（→ candidate upstream model）与 stream（→ 本次调用方式）。
 //
 // 无原始请求体时（如单测直接构造 ResponsesRequest）回退到 typed 重编码 + 合并 Extensions。
-func encodeUpstreamResponsesBody(req gatewayapi.ResponsesRequest, upstreamModel string, stream bool, outputBudget ...int64) (json.RawMessage, error) {
+func encodeUpstreamResponsesBody(req gatewayapi.ResponsesRequest, upstreamModel string, stream bool) (json.RawMessage, error) {
 	base := req.RawBody()
 	if len(base) == 0 {
 		encoded, err := json.Marshal(req)
@@ -62,14 +62,6 @@ func encodeUpstreamResponsesBody(req gatewayapi.ResponsesRequest, upstreamModel 
 		return nil, failure.Wrap(failure.CodeAdapterEncodeRequestFailed, err, failure.WithMessage("encode upstream stream flag"))
 	}
 	obj["stream"] = streamBytes
-	if req.MaxOutputTokens == nil && len(outputBudget) > 0 && outputBudget[0] > 0 {
-		maxOutputBytes, marshalErr := json.Marshal(outputBudget[0])
-		if marshalErr != nil {
-			return nil, failure.Wrap(failure.CodeAdapterEncodeRequestFailed, marshalErr, failure.WithMessage("encode upstream output token budget"))
-		}
-		obj["max_output_tokens"] = maxOutputBytes
-	}
-
 	body, err := json.Marshal(obj)
 	if err != nil {
 		return nil, failure.Wrap(

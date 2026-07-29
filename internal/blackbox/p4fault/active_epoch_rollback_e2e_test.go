@@ -228,7 +228,7 @@ func waitForActiveRequestToken(
 		cancel()
 		if err == nil && len(keys) == 1 {
 			token := readRedisHash(t, h.redis, keys[0])
-			if token["status"] == "active" && token["reserve_state"] == "reserved" &&
+			if token["status"] == "active" && token["tpm_state"] == "held" &&
 				strings.TrimPrefix(keys[0], h.namespace+":admission:v1:request:") == requestAdmissionID {
 				return keys[0], token
 			}
@@ -284,7 +284,7 @@ func captureEpochRollbackOwnedState(
 	counterFields := []string{
 		requestToken["rpm_bucket"],
 		requestToken["rpd_bucket"],
-		requestToken["reserved_tpm_bucket"],
+		requestToken["tpm_bucket"],
 		permit["ch_rpm_bucket"],
 		permit["ch_rpd_bucket"],
 		permit["ch_tpm_bucket"],

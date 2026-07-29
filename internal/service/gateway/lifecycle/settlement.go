@@ -855,7 +855,9 @@ func publishRequestAdmissionUsage(ctx context.Context, facts adapter.ResponseFac
 	if facts.UsageSource.IsPartialEstimate() {
 		return
 	}
-	requestadmission.PublishAuthoritativeUsage(ctx, billableTPMTokens(facts.Usage))
+	if actual, reliable := actualTotalTokens(facts.Usage); reliable {
+		requestadmission.PublishAuthoritativeUsage(ctx, actual)
+	}
 }
 
 // FinalizeDeadChatSettlement 收口一条「补偿任务已 dead、但请求仍停留在 running」的资金/状态残留。
