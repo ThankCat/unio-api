@@ -275,12 +275,16 @@ type StickyAudit struct {
 
 // ApplyPlanOutcome 消费 PrepareCandidates 置顶结果：记录 pinned_* / pin_lost 指标。
 //
-// 置顶失败（绑定渠道已不在候选池）本身就是「永久失去候选资格」，按 §10.7 清绑定。
+// 绑定渠道因 cooldown 未进入候选计划时只临时绕行并保留绑定；其他置顶失败仍按永久失格清绑定。
 func (s *StickySession) ApplyPlanOutcome(ctx context.Context, plan CandidatePlan) {
 	if !s.Enabled() || s.bound.ChannelID == 0 {
 		return
 	}
 	if !plan.StickyPinned {
+		if reason, temporary := plan.stickyTemporaryBypassReason(s.bound.ChannelID); temporary {
+			s.PreserveOnTemporaryBypass(ctx, s.bound.ChannelID, reason)
+			return
+		}
 		s.router.inc("pin_lost")
 		s.router.logSticky(ctx, "sticky pin_lost",
 			zap.Int64("sticky_channel_id", s.bound.ChannelID),

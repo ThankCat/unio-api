@@ -10,8 +10,10 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/stickysession"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
 // fakeStickyStore 是 §10.4 三个 CAS 写操作的内存实现，语义与 Redis 版严格一致：
@@ -559,7 +561,60 @@ func TestPrepareCandidatesStickyPinOverridesMode(t *testing.T) {
 	}
 }
 
-// TestApplyPlanOutcomeClearsWhenPinLost 冻结「绑定渠道已不在候选池」= 永久失格 → 清绑定。
+func TestStickyCooldownExclusionPreservesBindingAcrossBypassSuccess(t *testing.T) {
+	store := newFakeStickyStore()
+	router := NewStickyRouter(store)
+	first := router.Resolve(context.Background(), stickyResolveParams("sess-cooldown"))
+	first.BindSuccess(context.Background(), stickyCandidate(101, nil, nil))
+
+	second := router.Resolve(context.Background(), stickyResolveParams("sess-cooldown"))
+	executor := NewExecutor(candidateCapabilityRegistry{allowed: map[int64]bool{101: true, 202: true}})
+	ctx := requestadmission.ContextWithUsageSession(context.Background(), &candidateSnapshotSession{
+		result: breakerstore.SnapshotManyResult{Candidates: []breakerstore.CandidateSnapshot{
+			{Status: breakerstore.CandidateSnapshotRateLimited, CooldownRemainingMs: 4_296},
+			{Status: breakerstore.CandidateSnapshotCurrent},
+		}},
+	})
+	plan, err := executor.PrepareCandidates(ctx, PrepareCandidatesParams{
+		Protocol: routing.ProtocolOpenAI,
+		Candidates: []routing.ChatRouteCandidate{
+			candidateRoute(101, "bound"),
+			candidateRoute(202, "bypass"),
+		},
+		EstimateInputTokens: func(context.Context, routing.ChatRouteCandidate) (int64, error) {
+			return 1, nil
+		},
+		StickyChannelID: second.BoundChannelID(),
+	})
+	if err != nil {
+		t.Fatalf("PrepareCandidates returned error: %v", err)
+	}
+	if plan.StickyPinned || len(plan.Candidates) != 1 || plan.Candidates[0].Route.Channel.ID != 202 {
+		t.Fatalf("cooldown plan must bypass bound channel 101: %+v", plan)
+	}
+
+	second.ApplyPlanOutcome(ctx, plan)
+	if len(store.clearCalls) != 0 || second.BoundChannelID() != 101 {
+		t.Fatalf("cooldown must preserve the original binding: clears=%+v bound=%d",
+			store.clearCalls, second.BoundChannelID())
+	}
+	if audit := second.Audit(); audit.Action != StickyActionPreserveOnTemporaryBypass ||
+		audit.Reason != "cooldown" || audit.BeforeChannelID != 101 || audit.AfterChannelID != 101 {
+		t.Fatalf("unexpected cooldown audit: %+v", audit)
+	}
+
+	second.BindSuccess(ctx, plan.Candidates[0].Route)
+	if len(store.bindCalls) != 1 || len(store.refreshCalls) != 0 || second.BoundChannelID() != 101 {
+		t.Fatalf("bypass success must not rebind or refresh: binds=%+v refreshes=%+v bound=%d",
+			store.bindCalls, store.refreshCalls, second.BoundChannelID())
+	}
+	if audit := second.Audit(); audit.Action != StickyActionPreserveOnTemporaryBypass ||
+		audit.Reason != "temporary_bypass_success_on_other_channel" || audit.AfterChannelID != 101 {
+		t.Fatalf("unexpected bypass success audit: %+v", audit)
+	}
+}
+
+// TestApplyPlanOutcomeClearsWhenPinLost 冻结绑定渠道因非临时原因失格时清绑定。
 func TestApplyPlanOutcomeClearsWhenPinLost(t *testing.T) {
 	store := newFakeStickyStore()
 	router := NewStickyRouter(store)
@@ -567,7 +622,13 @@ func TestApplyPlanOutcomeClearsWhenPinLost(t *testing.T) {
 	session.BindSuccess(context.Background(), stickyCandidate(101, nil, nil))
 
 	second := router.Resolve(context.Background(), stickyResolveParams("sess-abc"))
-	second.ApplyPlanOutcome(context.Background(), CandidatePlan{StickyPinned: false})
+	second.ApplyPlanOutcome(context.Background(), CandidatePlan{
+		StickyPinned: false,
+		Excluded: []CandidateExclusion{{
+			ChannelID: 101,
+			Reason:    string(breakerstore.CandidateSnapshotOpen),
+		}},
+	})
 	if len(store.clearCalls) != 1 || second.BoundChannelID() != 0 {
 		t.Fatalf("pin_lost must clear the binding: clears=%+v bound=%d",
 			store.clearCalls, second.BoundChannelID())

@@ -210,12 +210,19 @@ func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTra
 	if in.FallbackOccurred {
 		reasons = append(reasons, "fallback")
 	}
-	stickyInvalid := in.StickyChannelID != 0 && !in.Plan.StickyPinned
+	stickyTemporaryBypass := false
+	if in.StickyChannelID != 0 && !in.Plan.StickyPinned {
+		_, stickyTemporaryBypass = in.Plan.stickyTemporaryBypassReason(in.StickyChannelID)
+	}
+	stickyInvalid := in.StickyChannelID != 0 && !in.Plan.StickyPinned && !stickyTemporaryBypass
 	if in.Plan.AllCapacityZero {
 		reasons = append(reasons, "all_capacity_zero")
 	}
 	if stickyInvalid {
 		reasons = append(reasons, "sticky_invalid")
+	}
+	if stickyTemporaryBypass {
+		reasons = append(reasons, "sticky_cooldown_bypass")
 	}
 	if in.MarginGuard {
 		reasons = append(reasons, "negative_margin")

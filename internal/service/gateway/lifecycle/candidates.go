@@ -58,8 +58,8 @@ type PrepareCandidatesParams struct {
 
 	// StickyChannelID 是会话粘性命中的既有绑定渠道 ID（0=无绑定/未启用）。非 0 时该渠道候选被
 	// 置顶，绝对优先于 Mode 排序与失败软冷却 demote（R5）；其余候选仍按策略序作 fallback。
-	// 该渠道已被硬摘除（不在候选池 / 能力不符 / 熔断 open）时置顶落空，由 CandidatePlan.StickyPinned
-	// 报告，调用方据此清除绑定重选。
+	// 该渠道未进入可尝试候选时置顶落空，由 CandidatePlan.StickyPinned 报告。调用方必须结合 Excluded
+	// 区分 cooldown 临时绕行与永久失格，不能仅凭 StickyPinned=false 清除绑定。
 	StickyChannelID int64
 }
 
@@ -87,7 +87,7 @@ type CandidatePlan struct {
 	ConservativeInputTokens int64
 
 	// StickyPinned 报告 StickyChannelID 是否真的被置顶到 fallback 首位。
-	// false 且请求带绑定时说明粘住渠道已被硬摘除，调用方应清除 sticky 绑定（R5）。
+	// false 且请求带绑定时说明粘住渠道未进入可尝试候选；具体是临时绕行还是永久失格由 Excluded 解释。
 	StickyPinned bool
 
 	// StickyPinnedNonPreferred 报告置顶发生了实际重排（sticky 渠道并非策略排序首选）。
@@ -394,12 +394,28 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 	}
 
 	// 会话粘性置顶：sticky 绑定渠道移到 fallback 首位，绝对优先于评分排序。
-	// 渠道已被硬摘除时置顶落空（StickyPinned=false），由调用方清除绑定；其余候选顺序不受影响。
+	// 渠道未进入可尝试候选时置顶落空（StickyPinned=false），调用方结合 Excluded 决定保留或清除绑定；
+	// 其余候选顺序不受影响。
 	if params.StickyChannelID != 0 {
 		plan.Candidates, plan.StickyPinned, plan.StickyPinnedNonPreferred = pinStickyCandidate(plan.Candidates, params.StickyChannelID)
 	}
 
 	return plan, nil
+}
+
+// stickyTemporaryBypassReason 判断绑定渠道是否只因临时运行态被候选准备阶段排除。
+// 当前只有 Channel 级 429 cooldown 属于这种情况；它不代表绑定失效。
+func (p CandidatePlan) stickyTemporaryBypassReason(channelID int64) (string, bool) {
+	for _, excluded := range p.Excluded {
+		if excluded.ChannelID != channelID {
+			continue
+		}
+		if excluded.Reason == string(breakerstore.CandidateSnapshotRateLimited) {
+			return string(breakerstore.ReasonCooldown), true
+		}
+		return "", false
+	}
+	return "", false
 }
 
 func noAvailableCandidateError() error {

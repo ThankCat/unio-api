@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
+	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"go.uber.org/zap"
 )
@@ -156,6 +157,43 @@ func TestRoutingTraceNormalUsesEmptyReasonsAndStructuredPayload(t *testing.T) {
 	}
 	if payload.AbnormalReasons == nil || len(payload.AbnormalReasons) != 0 {
 		t.Fatalf("normal reasons must be a non-nil empty array, got %#v", payload.AbnormalReasons)
+	}
+}
+
+func TestRoutingTraceDistinguishesCooldownBypassFromInvalidSticky(t *testing.T) {
+	tests := []struct {
+		name       string
+		exclusion  breakerstore.CandidateSnapshotStatus
+		wantReason string
+	}{
+		{name: "cooldown is a temporary bypass", exclusion: breakerstore.CandidateSnapshotRateLimited, wantReason: "sticky_cooldown_bypass"},
+		{name: "breaker open invalidates sticky", exclusion: breakerstore.CandidateSnapshotOpen, wantReason: "sticky_invalid"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeRoutingTraceStore{}
+			recorder := NewRoutingTraceRecorder(store, zap.NewNop())
+			recorder.Record(context.Background(), RoutingDecisionTraceInput{
+				Request: requestlog.RequestRecord{
+					ID: 5, RequestID: "req-sticky-exclusion", RequestedModelID: "openai/gpt",
+					IngressProtocol: requestlog.ProtocolOpenAI, Endpoint: requestlog.EndpointResponses,
+				},
+				RouteID: 3, Mode: "balanced", StickyChannelID: 7,
+				Plan: CandidatePlan{
+					Candidates: []Candidate{{Route: candidateRoute(8, "openai")}},
+					Excluded:   []CandidateExclusion{{ChannelID: 7, Reason: string(tc.exclusion)}},
+				},
+			})
+
+			var payload tracePayload
+			if err := json.Unmarshal(store.writes[0].TracePayload, &payload); err != nil {
+				t.Fatalf("decode trace payload: %v", err)
+			}
+			if len(payload.AbnormalReasons) != 1 || payload.AbnormalReasons[0] != tc.wantReason {
+				t.Fatalf("abnormal reasons = %#v, want %q", payload.AbnormalReasons, tc.wantReason)
+			}
+		})
 	}
 }
 
