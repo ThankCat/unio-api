@@ -26,6 +26,11 @@ type channel429CooldownPolicyTarget interface {
 	SetChannel429CooldownPolicy(defaultCooldown, cap time.Duration)
 }
 
+// capacityWaitTarget 是全池并发短等预算的消费方（每个协议 service 的 AttemptRunner，§9.4）。
+type capacityWaitTarget interface {
+	SetCapacityWaitTimeout(d time.Duration)
+}
+
 // settingsApplier 把运行时配置的最新值周期性推给 gateway 各热路径消费方。
 //
 // 这里只处理非准入类本机配置。circuit breaker、rate/concurrency defaults 与 routing balance
@@ -37,8 +42,8 @@ type settingsApplier struct {
 	gate         *lifecycle.ChannelCredentialGate
 	router       *routing.Router
 	sticky       *lifecycle.StickyRouter
-	routingTrace *lifecycle.RoutingTraceRecorder
 	channel429   channel429CooldownPolicyTarget
+	capacityWait []capacityWaitTarget
 }
 
 // run 周期性拉取并推送,直到 ctx 取消(随 app shutdown 退出)。
@@ -84,31 +89,41 @@ func (a *settingsApplier) applyOnce(ctx context.Context) {
 		}
 	}
 
-	if traceSettings, err := appsettings.DecodeRoutingTraceSettings(a.store.Raw(ctx, appsettings.GatewayRoutingTraceKey)); err == nil {
-		if a.routingTrace != nil {
-			a.routingTrace.SetSampleRate(traceSettings.SampleRate)
-		}
-	} else {
-		a.warnDecode(ctx, appsettings.GatewayRoutingTraceKey, err)
-	}
-
 	if n, err := appsettings.DecodePositiveIntSetting(a.store.Raw(ctx, appsettings.GatewayCredential401ThresholdKey)); err == nil {
 		a.gate.SetThreshold(n)
 	} else {
 		a.warnDecode(ctx, appsettings.GatewayCredential401ThresholdKey, err)
 	}
 
-	if d, err := appsettings.DecodePositiveMsSetting(a.store.Raw(ctx, appsettings.GatewayDefaultChannelTimeoutKey)); err == nil {
-		a.router.SetDefaultTimeout(d)
+	if d, err := appsettings.DecodePositiveMsSetting(a.store.Raw(ctx, appsettings.GatewayDefaultResponseTimeoutKey)); err == nil {
+		a.router.SetDefaultResponseTimeout(d)
 	} else {
-		a.warnDecode(ctx, appsettings.GatewayDefaultChannelTimeoutKey, err)
+		a.warnDecode(ctx, appsettings.GatewayDefaultResponseTimeoutKey, err)
+	}
+
+	if d, err := appsettings.DecodePositiveMsSetting(a.store.Raw(ctx, appsettings.GatewayDefaultFirstTokenTimeoutKey)); err == nil {
+		a.router.SetDefaultFirstTokenTimeout(d)
+	} else {
+		a.warnDecode(ctx, appsettings.GatewayDefaultFirstTokenTimeoutKey, err)
 	}
 
 	if a.sticky != nil {
 		if st, err := appsettings.DecodeRoutingStickySettings(a.store.Raw(ctx, appsettings.GatewayRoutingStickyKey)); err == nil {
-			a.sticky.SetConfig(st.EnabledDefault, st.TTL, st.TPMWait, st.TPMWaitJitter)
+			a.sticky.SetConfig(st.EnabledDefault, st.TTL)
 		} else {
 			a.warnDecode(ctx, appsettings.GatewayRoutingStickyKey, err)
+		}
+	}
+
+	if len(a.capacityWait) > 0 {
+		if d, err := appsettings.DecodeNonNegativeMsSetting(
+			a.store.Raw(ctx, appsettings.GatewayCapacityWaitTimeoutKey),
+		); err == nil {
+			for _, target := range a.capacityWait {
+				target.SetCapacityWaitTimeout(d)
+			}
+		} else {
+			a.warnDecode(ctx, appsettings.GatewayCapacityWaitTimeoutKey, err)
 		}
 	}
 }

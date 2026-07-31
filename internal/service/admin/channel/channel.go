@@ -52,14 +52,14 @@ type Store interface {
 	RestoreChannel(ctx context.Context, id int64) (int64, error)
 }
 
-// RuntimeControlPublisher 是 Channel 四维限额的 durable publisher。
+// RuntimeControlPublisher 是 Channel 并发容量的 durable publisher。
 type RuntimeControlPublisher interface {
 	Publish(ctx context.Context, req runtimecontrol.PublishRequest) (runtimecontrol.PublishResult, error)
 }
 
-// AdmissionControlStore 提供 Channel admission control 的定位、初始化与只读核对能力。
-type AdmissionControlStore interface {
-	ChannelAdmissionControl(channelID int64) breakerstore.ControlTarget
+// CapacityControlStore 提供 Channel capacity control 的定位、初始化与只读核对能力。
+type CapacityControlStore interface {
+	ChannelCapacityControl(channelID int64) breakerstore.ControlTarget
 	RestoreMissingControl(ctx context.Context, target breakerstore.ControlTarget, revision int64, payload string) (bool, error)
 	ReadControl(ctx context.Context, target breakerstore.ControlTarget, expectedRevision int64) (breakerstore.ControlSnapshot, error)
 }
@@ -92,25 +92,22 @@ type Channel struct {
 	ProviderName           string
 	OriginRevision         int64
 	ProviderStatusRevision int64
-	// ConfigRevision / AdmissionLimitsRevision 为只读返回（P4 §4.4）。
-	ConfigRevision          int64
-	AdmissionLimitsRevision int64
+	// ConfigRevision / CapacityRevision 为只读返回。
+	ConfigRevision   int64
+	CapacityRevision int64
 	// RuntimeSyncPending 表示 PostgreSQL 已保存，但 revision 对应的 Redis control 尚未确认 active。
-	RuntimeSyncPending bool
-	Name               string
-	Protocol           string
-	AdapterKey         string
-	Origin             string
-	Credential         string
-	Status             string
-	Priority           int32
-	TimeoutMs          *int32
-	StickyEnabled      *bool
-	StickyTTLms        *int64
-	// RPMLimit/TPMLimit/RPDLimit 是渠道级限流上限（P2-8）：nil=继承渠道默认限流，0=不限，>0=具体上限。
-	RPMLimit *int64
-	TPMLimit *int64
-	RPDLimit *int64
+	RuntimeSyncPending  bool
+	Name                string
+	Protocol            string
+	AdapterKey          string
+	Origin              string
+	Credential          string
+	Status              string
+	Priority            int32
+	ResponseTimeoutMs   *int32
+	FirstTokenTimeoutMs *int32
+	StickyEnabled       *bool
+	StickyTTLms         *int64
 	// ConcurrencyLimit 是渠道在途并发上限（DEC-029）：nil=继承并发默认 channel_limit，0=不限，>0=具体上限。
 	ConcurrencyLimit *int64
 	// BillsOnDisconnect 标记上游「断开仍计费」：
@@ -127,41 +124,33 @@ type Channel struct {
 	LastTestError     *string
 }
 
-// AdmissionLimits 是 Channel 四维限额的完整覆盖值。三维 rate 的 nil=继承渠道默认限流，
-// concurrency 的 nil=继承并发默认 channel_limit；0=不限，正数=明确上限。
-type AdmissionLimits struct {
-	RPM         *int64
-	RPD         *int64
-	TPM         *int64
+// ChannelCapacity 是 Channel 并发容量的完整覆盖值。
+// nil=继承全局 channel_limit；0=不限；正数=明确上限。
+type ChannelCapacity struct {
 	Concurrency *int64
 }
 
-type admissionLimitsPayload struct {
-	RPM         *int64 `json:"rpm"`
-	RPD         *int64 `json:"rpd"`
-	TPM         *int64 `json:"tpm"`
+type channelCapacityPayload struct {
 	Concurrency *int64 `json:"concurrency"`
 }
 
-// CanonicalAdmissionLimitsPayload 返回 Redis admission control 使用的规范化完整 JSON。
+// CanonicalCapacityPayload 返回 Redis capacity control 使用的规范化完整 JSON。
 // 字段固定存在，因此 nil 会稳定编码为 null（继承），不会与 0（不限）混淆。
-func CanonicalAdmissionLimitsPayload(limits AdmissionLimits) (string, error) {
-	if err := validateChannelRateLimits(limits.RPM, limits.TPM, limits.RPD, limits.Concurrency); err != nil {
+func CanonicalCapacityPayload(capacity ChannelCapacity) (string, error) {
+	if err := validateChannelCapacity(capacity.Concurrency); err != nil {
 		return "", err
 	}
-	raw, err := json.Marshal(admissionLimitsPayload{
-		RPM: limits.RPM, RPD: limits.RPD, TPM: limits.TPM, Concurrency: limits.Concurrency,
-	})
+	raw, err := json.Marshal(channelCapacityPayload{Concurrency: capacity.Concurrency})
 	if err != nil {
 		return "", err
 	}
 	return string(raw), nil
 }
 
-// CanonicalAdmissionLimitsPayloadFromChannel 从 PostgreSQL Channel 事实还原同一规范 payload，
+// CanonicalCapacityPayloadFromChannel 从 PostgreSQL Channel 事实还原同一规范 payload，
 // 供启动恢复和 runtime-control reconciler 共用，避免各处猜测 JSON schema。
-func CanonicalAdmissionLimitsPayloadFromChannel(row sqlc.Channel) (string, error) {
-	return CanonicalAdmissionLimitsPayload(admissionLimitsFromChannel(row))
+func CanonicalCapacityPayloadFromChannel(row sqlc.Channel) (string, error) {
+	return CanonicalCapacityPayload(channelCapacityFromChannel(row))
 }
 
 // ListParams 是分页/过滤列出 channel 的入参；ProviderID<=0、Status/Query 为空表示不过滤。
@@ -183,43 +172,36 @@ type ListResult struct {
 //
 // AdapterKey 可选：留空时默认为 Protocol 同名的忠实透传 adapter（见 Create 注释）。
 type CreateInput struct {
-	ProviderID    int64
-	Name          string
-	Protocol      string
-	AdapterKey    string
-	Credential    string
-	Status        string
-	Priority      int32
-	TimeoutMs     *int32
-	StickyEnabled *bool
-	StickyTTLms   *int64
-	// RateLimitsProvided=true 时按 RPM/TPM/RPD/并发设置渠道级限流；rate 的 nil 继承渠道默认限流，
-	// concurrency 的 nil 继承并发默认 channel_limit，0=不限，>0=具体上限。
-	RateLimitsProvided bool
-	RPMLimit           *int64
-	TPMLimit           *int64
-	RPDLimit           *int64
-	ConcurrencyLimit   *int64
+	ProviderID          int64
+	Name                string
+	Protocol            string
+	AdapterKey          string
+	Credential          string
+	Status              string
+	Priority            int32
+	ResponseTimeoutMs   *int32
+	FirstTokenTimeoutMs *int32
+	StickyEnabled       *bool
+	StickyTTLms         *int64
+	ConcurrencyLimit    *int64
 	// BillsOnDisconnect 非 nil 时设置「断开仍计费」标记。
 	BillsOnDisconnect *bool
 }
 
 // UpdateInput 是更新 channel 的入参；protocol、adapter_key 与凭据不在此修改。
 type UpdateInput struct {
-	ID            int64
-	Name          string
-	ProviderID    int64
-	Status        string
-	Priority      int32
-	TimeoutMs     *int32
-	StickyEnabled *bool
-	StickyTTLms   *int64
-	// RateLimitsProvided=true 时按 RPM/TPM/RPD/并发 原子设置渠道级限流。
-	RateLimitsProvided bool
-	RPMLimit           *int64
-	TPMLimit           *int64
-	RPDLimit           *int64
-	ConcurrencyLimit   *int64
+	ID                  int64
+	Name                string
+	ProviderID          int64
+	Status              string
+	Priority            int32
+	ResponseTimeoutMs   *int32
+	FirstTokenTimeoutMs *int32
+	StickyEnabled       *bool
+	StickyTTLms         *int64
+	// CapacityProvided 区分「字段缺省=保持不变」与「显式 null=继承全局默认」。
+	CapacityProvided bool
+	ConcurrencyLimit *int64
 	// BillsOnDisconnect 非 nil 时设置「断开仍计费」标记。
 	BillsOnDisconnect *bool
 }
@@ -282,7 +264,7 @@ type Service struct {
 	registry          AdapterRegistry
 	credentialRotator CredentialRotator
 	runtimePublisher  RuntimeControlPublisher
-	runtimeStore      AdmissionControlStore
+	runtimeStore      CapacityControlStore
 }
 
 // NewService 创建 channel 管理服务。
@@ -290,9 +272,9 @@ func NewService(store Store, registry AdapterRegistry) *Service {
 	return &Service{store: store, registry: registry}
 }
 
-// WithRuntimeControl 注入 Channel 四维限额的 durable publisher 与 Redis control store。
+// WithRuntimeControl 注入 Channel 并发容量的 durable publisher 与 Redis control store。
 // 生产 bootstrap 必须注入；缺失时限额真变化会 fail-closed，创建结果会标记 runtime_sync_pending。
-func (s *Service) WithRuntimeControl(publisher RuntimeControlPublisher, runtimeStore AdmissionControlStore) *Service {
+func (s *Service) WithRuntimeControl(publisher RuntimeControlPublisher, runtimeStore CapacityControlStore) *Service {
 	if s != nil {
 		s.runtimePublisher = publisher
 		s.runtimeStore = runtimeStore
@@ -353,11 +335,9 @@ func (s *Service) List(ctx context.Context, params ListParams) (ListResult, erro
 	items := make([]Channel, 0, len(rows))
 	for _, row := range rows {
 		item := toChannelRow(row)
-		payload, payloadErr := CanonicalAdmissionLimitsPayload(AdmissionLimits{
-			RPM: item.RPMLimit, RPD: item.RPDLimit, TPM: item.TPMLimit, Concurrency: item.ConcurrencyLimit,
-		})
-		item.RuntimeSyncPending = payloadErr != nil || !s.admissionControlIsActive(
-			ctx, item.ID, item.AdmissionLimitsRevision, payload,
+		payload, payloadErr := CanonicalCapacityPayload(ChannelCapacity{Concurrency: item.ConcurrencyLimit})
+		item.RuntimeSyncPending = payloadErr != nil || !s.capacityControlIsActive(
+			ctx, item.ID, item.CapacityRevision, payload,
 		)
 		items = append(items, item)
 	}
@@ -380,9 +360,9 @@ func (s *Service) Get(ctx context.Context, id int64) (Channel, error) {
 	}
 
 	ch := toChannel(row)
-	payload, payloadErr := CanonicalAdmissionLimitsPayloadFromChannel(row)
-	ch.RuntimeSyncPending = payloadErr != nil || !s.admissionControlIsActive(
-		ctx, row.ID, row.AdmissionLimitsRevision, payload,
+	payload, payloadErr := CanonicalCapacityPayloadFromChannel(row)
+	ch.RuntimeSyncPending = payloadErr != nil || !s.capacityControlIsActive(
+		ctx, row.ID, row.CapacityRevision, payload,
 	)
 	return s.enrichProviderName(ctx, ch)
 }
@@ -415,24 +395,17 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	if err := validatePriority(in.Priority); err != nil {
 		return Channel{}, err
 	}
-	if err := validateTimeout(in.TimeoutMs); err != nil {
+	if err := validateTimeout("response_timeout_ms", in.ResponseTimeoutMs); err != nil {
+		return Channel{}, err
+	}
+	if err := validateTimeout("first_token_timeout_ms", in.FirstTokenTimeoutMs); err != nil {
 		return Channel{}, err
 	}
 	if err := validateStickyPolicy(in.StickyEnabled, in.StickyTTLms); err != nil {
 		return Channel{}, err
 	}
-	if in.RateLimitsProvided {
-		if err := validateChannelRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit, in.ConcurrencyLimit); err != nil {
-			return Channel{}, err
-		}
-	}
-	limits := AdmissionLimits{}
-	if in.RateLimitsProvided {
-		limits = AdmissionLimits{
-			RPM: in.RPMLimit, RPD: in.RPDLimit, TPM: in.TPMLimit, Concurrency: in.ConcurrencyLimit,
-		}
-	}
-	admissionPayload, err := CanonicalAdmissionLimitsPayload(limits)
+	capacity := ChannelCapacity{Concurrency: in.ConcurrencyLimit}
+	capacityPayload, err := CanonicalCapacityPayload(capacity)
 	if err != nil {
 		return Channel{}, err
 	}
@@ -477,11 +450,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		Credential:                strings.TrimSpace(in.Credential),
 		Status:                    status,
 		Priority:                  in.Priority,
-		TimeoutMs:                 timeoutParam(in.TimeoutMs),
-		RpmLimit:                  rateLimitParam(limits.RPM),
-		TpmLimit:                  rateLimitParam(limits.TPM),
-		RpdLimit:                  rateLimitParam(limits.RPD),
-		ConcurrencyLimit:          rateLimitParam(limits.Concurrency),
+		ResponseTimeoutMs:         timeoutParam(in.ResponseTimeoutMs),
+		FirstTokenTimeoutMs:       timeoutParam(in.FirstTokenTimeoutMs),
+		ConcurrencyLimit:          rateLimitParam(capacity.Concurrency),
 		UpstreamBillsOnDisconnect: billsOnDisconnect,
 		StickyEnabled:             boolParam(in.StickyEnabled),
 		StickyTtlMs:               nullableInt8Param(in.StickyTTLms),
@@ -497,7 +468,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	}
 
 	ch := toChannel(row)
-	ch.RuntimeSyncPending = !s.initializeAdmissionControl(ctx, row, admissionPayload)
+	ch.RuntimeSyncPending = !s.initializeCapacityControl(ctx, row, capacityPayload)
 	return s.enrichProviderName(ctx, ch)
 }
 
@@ -521,7 +492,10 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	if err := validatePriority(in.Priority); err != nil {
 		return Channel{}, err
 	}
-	if err := validateTimeout(in.TimeoutMs); err != nil {
+	if err := validateTimeout("response_timeout_ms", in.ResponseTimeoutMs); err != nil {
+		return Channel{}, err
+	}
+	if err := validateTimeout("first_token_timeout_ms", in.FirstTokenTimeoutMs); err != nil {
 		return Channel{}, err
 	}
 	if err := validateStickyPolicy(in.StickyEnabled, in.StickyTTLms); err != nil {
@@ -548,31 +522,30 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	if status == StatusEnabled && provider.Status != StatusEnabled {
 		return Channel{}, conflict("enabled channel requires an enabled provider")
 	}
-	if in.RateLimitsProvided {
-		desiredLimits := AdmissionLimits{
-			RPM: in.RPMLimit, RPD: in.RPDLimit, TPM: in.TPMLimit, Concurrency: in.ConcurrencyLimit,
-		}
-		desiredPayload, payloadErr := CanonicalAdmissionLimitsPayload(desiredLimits)
+	if in.CapacityProvided {
+		desiredCapacity := ChannelCapacity{Concurrency: in.ConcurrencyLimit}
+		desiredPayload, payloadErr := CanonicalCapacityPayload(desiredCapacity)
 		if payloadErr != nil {
 			return Channel{}, payloadErr
 		}
-		currentPayload, payloadErr := CanonicalAdmissionLimitsPayloadFromChannel(cur)
+		currentPayload, payloadErr := CanonicalCapacityPayloadFromChannel(cur)
 		if payloadErr != nil {
-			return Channel{}, storeFailed(payloadErr, "encode current channel admission limits")
+			return Channel{}, storeFailed(payloadErr, "encode current channel capacity")
 		}
 		if currentPayload != desiredPayload {
-			return s.updateWithPublishedAdmissionLimits(ctx, in, cur, desiredLimits, desiredPayload)
+			return s.updateWithPublishedCapacity(ctx, in, cur, desiredCapacity, desiredPayload)
 		}
 	}
 
 	row, err := s.store.UpdateChannel(ctx, sqlc.UpdateChannelParams{
-		ID:            in.ID,
-		Name:          name,
-		Status:        status,
-		Priority:      in.Priority,
-		TimeoutMs:     timeoutParam(in.TimeoutMs),
-		StickyEnabled: boolParam(in.StickyEnabled),
-		StickyTtlMs:   nullableInt8Param(in.StickyTTLms),
+		ID:                  in.ID,
+		Name:                name,
+		Status:              status,
+		Priority:            in.Priority,
+		ResponseTimeoutMs:   timeoutParam(in.ResponseTimeoutMs),
+		FirstTokenTimeoutMs: timeoutParam(in.FirstTokenTimeoutMs),
+		StickyEnabled:       boolParam(in.StickyEnabled),
+		StickyTtlMs:         nullableInt8Param(in.StickyTTLms),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -599,75 +572,73 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	}
 
 	ch := toChannel(row)
-	if payload, payloadErr := CanonicalAdmissionLimitsPayloadFromChannel(row); payloadErr == nil {
-		ch.RuntimeSyncPending = !s.admissionControlIsActive(ctx, row.ID, row.AdmissionLimitsRevision, payload)
+	if payload, payloadErr := CanonicalCapacityPayloadFromChannel(row); payloadErr == nil {
+		ch.RuntimeSyncPending = !s.capacityControlIsActive(ctx, row.ID, row.CapacityRevision, payload)
 	} else {
 		ch.RuntimeSyncPending = true
 	}
 	return s.enrichProviderName(ctx, ch)
 }
 
-func (s *Service) updateWithPublishedAdmissionLimits(
+func (s *Service) updateWithPublishedCapacity(
 	ctx context.Context,
 	in UpdateInput,
 	current sqlc.Channel,
-	limits AdmissionLimits,
+	capacity ChannelCapacity,
 	payload string,
 ) (Channel, error) {
 	if s.runtimePublisher == nil || s.runtimeStore == nil {
 		return Channel{}, failure.New(
 			failure.CodeGatewayBreakerStoreUnavailable,
-			failure.WithMessage("channel: admission runtime-control publisher unavailable"),
+			failure.WithMessage("channel: capacity runtime-control publisher unavailable"),
 		)
 	}
-	token, err := newAdmissionControlToken()
+	token, err := newCapacityControlToken()
 	if err != nil {
 		return Channel{}, failure.Wrap(
 			failure.CodeConfigInvalid,
 			err,
-			failure.WithMessage("channel: generate admission runtime-control token"),
+			failure.WithMessage("channel: generate capacity runtime-control token"),
 		)
 	}
 
-	nextRevision := current.AdmissionLimitsRevision + 1
+	nextRevision := current.CapacityRevision + 1
 	channelID := current.ID
 	var committedRow sqlc.Channel
 	publishResult, err := s.runtimePublisher.Publish(ctx, runtimecontrol.PublishRequest{
-		Kind:            runtimecontrol.KindChannelAdmissionLimits,
-		Target:          s.runtimeStore.ChannelAdmissionControl(channelID),
+		Kind:            runtimecontrol.KindChannelCapacity,
+		Target:          s.runtimeStore.ChannelCapacityControl(channelID),
 		Token:           token,
 		Payload:         payload,
-		CurrentRevision: current.AdmissionLimitsRevision,
+		CurrentRevision: current.CapacityRevision,
 		NextRevision:    nextRevision,
 		ChannelID:       &channelID,
 		BusinessCommit: func(ctx context.Context, tx pgx.Tx) error {
 			qtx := sqlc.New(tx)
 			row, updateErr := qtx.UpdateChannel(ctx, sqlc.UpdateChannelParams{
-				ID:            in.ID,
-				Name:          strings.TrimSpace(in.Name),
-				Status:        strings.TrimSpace(in.Status),
-				Priority:      in.Priority,
-				TimeoutMs:     timeoutParam(in.TimeoutMs),
-				StickyEnabled: boolParam(in.StickyEnabled),
-				StickyTtlMs:   nullableInt8Param(in.StickyTTLms),
+				ID:                  in.ID,
+				Name:                strings.TrimSpace(in.Name),
+				Status:              strings.TrimSpace(in.Status),
+				Priority:            in.Priority,
+				ResponseTimeoutMs:   timeoutParam(in.ResponseTimeoutMs),
+				FirstTokenTimeoutMs: timeoutParam(in.FirstTokenTimeoutMs),
+				StickyEnabled:       boolParam(in.StickyEnabled),
+				StickyTtlMs:         nullableInt8Param(in.StickyTTLms),
 			})
 			if updateErr != nil {
 				return channelUpdateError(updateErr)
 			}
-			row, updateErr = qtx.CommitChannelAdmissionLimitsAtRevision(ctx, sqlc.CommitChannelAdmissionLimitsAtRevisionParams{
-				RpmLimit:         rateLimitParam(limits.RPM),
-				TpmLimit:         rateLimitParam(limits.TPM),
-				RpdLimit:         rateLimitParam(limits.RPD),
-				ConcurrencyLimit: rateLimitParam(limits.Concurrency),
+			row, updateErr = qtx.CommitChannelCapacityAtRevision(ctx, sqlc.CommitChannelCapacityAtRevisionParams{
+				ConcurrencyLimit: rateLimitParam(capacity.Concurrency),
 				NextRevision:     nextRevision,
 				ID:               channelID,
-				CurrentRevision:  current.AdmissionLimitsRevision,
+				CurrentRevision:  current.CapacityRevision,
 			})
 			if updateErr != nil {
 				if errors.Is(updateErr, pgx.ErrNoRows) {
-					return conflict("channel admission limits changed during publish; retry with current state")
+					return conflict("channel capacity changed during publish; retry with current state")
 				}
-				return storeFailed(updateErr, "commit channel admission limits")
+				return storeFailed(updateErr, "commit channel capacity")
 			}
 			if in.BillsOnDisconnect != nil {
 				row, updateErr = qtx.SetChannelBillingBehavior(ctx, sqlc.SetChannelBillingBehaviorParams{
@@ -687,7 +658,7 @@ func (s *Service) updateWithPublishedAdmissionLimits(
 	if publishResult.State != runtimecontrol.PublishCommitted && publishResult.State != runtimecontrol.PublishRuntimeSyncPending {
 		return Channel{}, failure.New(
 			failure.CodeConfigInvalid,
-			failure.WithMessage("channel: admission runtime-control publish did not commit business state"),
+			failure.WithMessage("channel: capacity runtime-control publish did not commit business state"),
 		)
 	}
 
@@ -696,9 +667,9 @@ func (s *Service) updateWithPublishedAdmissionLimits(
 		row, err = s.store.GetChannel(ctx, channelID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return Channel{}, notFound("channel not found after admission limits publish")
+				return Channel{}, notFound("channel not found after capacity publish")
 			}
-			return Channel{}, storeFailed(err, "get channel after admission limits publish")
+			return Channel{}, storeFailed(err, "get channel after capacity publish")
 		}
 	}
 	ch := toChannel(row)
@@ -716,24 +687,24 @@ func channelUpdateError(err error) error {
 	return storeFailed(err, "update channel")
 }
 
-func (s *Service) initializeAdmissionControl(ctx context.Context, row sqlc.Channel, payload string) bool {
-	if s.runtimeStore == nil || row.AdmissionLimitsRevision <= 0 {
+func (s *Service) initializeCapacityControl(ctx context.Context, row sqlc.Channel, payload string) bool {
+	if s.runtimeStore == nil || row.CapacityRevision <= 0 {
 		return false
 	}
-	target := s.runtimeStore.ChannelAdmissionControl(row.ID)
-	if _, err := s.runtimeStore.RestoreMissingControl(ctx, target, row.AdmissionLimitsRevision, payload); err != nil {
+	target := s.runtimeStore.ChannelCapacityControl(row.ID)
+	if _, err := s.runtimeStore.RestoreMissingControl(ctx, target, row.CapacityRevision, payload); err != nil {
 		return false
 	}
-	return s.admissionControlIsActive(ctx, row.ID, row.AdmissionLimitsRevision, payload)
+	return s.capacityControlIsActive(ctx, row.ID, row.CapacityRevision, payload)
 }
 
-func (s *Service) admissionControlIsActive(ctx context.Context, channelID, revision int64, payload string) bool {
+func (s *Service) capacityControlIsActive(ctx context.Context, channelID, revision int64, payload string) bool {
 	if s.runtimeStore == nil {
 		return false
 	}
 	snapshot, err := s.runtimeStore.ReadControl(
 		ctx,
-		s.runtimeStore.ChannelAdmissionControl(channelID),
+		s.runtimeStore.ChannelCapacityControl(channelID),
 		revision,
 	)
 	return err == nil &&
@@ -855,27 +826,25 @@ func (s *Service) Restore(ctx context.Context, id int64) error {
 
 func toChannel(c sqlc.Channel) Channel {
 	return Channel{
-		ID:                      c.ID,
-		ProviderID:              c.ProviderID,
-		ConfigRevision:          c.ConfigRevision,
-		AdmissionLimitsRevision: c.AdmissionLimitsRevision,
-		Name:                    c.Name,
-		Protocol:                c.Protocol,
-		AdapterKey:              c.AdapterKey,
-		Credential:              c.Credential,
-		Status:                  c.Status,
-		Priority:                c.Priority,
-		TimeoutMs:               timeoutResult(c.TimeoutMs),
-		RPMLimit:                rateLimitResult(c.RpmLimit),
-		TPMLimit:                rateLimitResult(c.TpmLimit),
-		RPDLimit:                rateLimitResult(c.RpdLimit),
-		ConcurrencyLimit:        rateLimitResult(c.ConcurrencyLimit),
-		BillsOnDisconnect:       c.UpstreamBillsOnDisconnect,
-		StickyEnabled:           boolResult(c.StickyEnabled),
-		StickyTTLms:             int8Result(c.StickyTtlMs),
-		CreatedAt:               c.CreatedAt.Time,
-		UpdatedAt:               c.UpdatedAt.Time,
-		ArchivedAt:              timestampResult(c.ArchivedAt),
+		ID:                  c.ID,
+		ProviderID:          c.ProviderID,
+		ConfigRevision:      c.ConfigRevision,
+		CapacityRevision:    c.CapacityRevision,
+		Name:                c.Name,
+		Protocol:            c.Protocol,
+		AdapterKey:          c.AdapterKey,
+		Credential:          c.Credential,
+		Status:              c.Status,
+		Priority:            c.Priority,
+		ResponseTimeoutMs:   timeoutResult(c.ResponseTimeoutMs),
+		FirstTokenTimeoutMs: timeoutResult(c.FirstTokenTimeoutMs),
+		ConcurrencyLimit:    rateLimitResult(c.ConcurrencyLimit),
+		BillsOnDisconnect:   c.UpstreamBillsOnDisconnect,
+		StickyEnabled:       boolResult(c.StickyEnabled),
+		StickyTTLms:         int8Result(c.StickyTtlMs),
+		CreatedAt:           c.CreatedAt.Time,
+		UpdatedAt:           c.UpdatedAt.Time,
+		ArchivedAt:          timestampResult(c.ArchivedAt),
 
 		LastTestedAt:      timestampResult(c.LastTestedAt),
 		LastTestOK:        boolResult(c.LastTestOk),
@@ -904,28 +873,26 @@ func (s *Service) enrichProviderName(ctx context.Context, ch Channel) (Channel, 
 // toChannelRow 映射分页列表行，额外带出 JOIN 出的 provider 名称。
 func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 	return Channel{
-		ID:                      c.ID,
-		ProviderID:              c.ProviderID,
-		ProviderName:            c.ProviderName,
-		ConfigRevision:          c.ConfigRevision,
-		AdmissionLimitsRevision: c.AdmissionLimitsRevision,
-		Name:                    c.Name,
-		Protocol:                c.Protocol,
-		AdapterKey:              c.AdapterKey,
-		Origin:                  c.Origin,
-		Credential:              c.Credential,
-		Status:                  c.Status,
-		Priority:                c.Priority,
-		TimeoutMs:               timeoutResult(c.TimeoutMs),
-		RPMLimit:                rateLimitResult(c.RpmLimit),
-		TPMLimit:                rateLimitResult(c.TpmLimit),
-		RPDLimit:                rateLimitResult(c.RpdLimit),
-		ConcurrencyLimit:        rateLimitResult(c.ConcurrencyLimit),
-		BillsOnDisconnect:       c.UpstreamBillsOnDisconnect,
-		StickyEnabled:           boolResult(c.StickyEnabled),
-		StickyTTLms:             int8Result(c.StickyTtlMs),
-		CreatedAt:               c.CreatedAt.Time,
-		UpdatedAt:               c.UpdatedAt.Time,
+		ID:                  c.ID,
+		ProviderID:          c.ProviderID,
+		ProviderName:        c.ProviderName,
+		ConfigRevision:      c.ConfigRevision,
+		CapacityRevision:    c.CapacityRevision,
+		Name:                c.Name,
+		Protocol:            c.Protocol,
+		AdapterKey:          c.AdapterKey,
+		Origin:              c.Origin,
+		Credential:          c.Credential,
+		Status:              c.Status,
+		Priority:            c.Priority,
+		ResponseTimeoutMs:   timeoutResult(c.ResponseTimeoutMs),
+		FirstTokenTimeoutMs: timeoutResult(c.FirstTokenTimeoutMs),
+		ConcurrencyLimit:    rateLimitResult(c.ConcurrencyLimit),
+		BillsOnDisconnect:   c.UpstreamBillsOnDisconnect,
+		StickyEnabled:       boolResult(c.StickyEnabled),
+		StickyTTLms:         int8Result(c.StickyTtlMs),
+		CreatedAt:           c.CreatedAt.Time,
+		UpdatedAt:           c.UpdatedAt.Time,
 
 		LastTestedAt:      timestampResult(c.LastTestedAt),
 		LastTestOK:        boolResult(c.LastTestOk),
@@ -951,16 +918,11 @@ func rateLimitResult(v pgtype.Int4) *int64 {
 	return &out
 }
 
-func admissionLimitsFromChannel(row sqlc.Channel) AdmissionLimits {
-	return AdmissionLimits{
-		RPM:         rateLimitResult(row.RpmLimit),
-		RPD:         rateLimitResult(row.RpdLimit),
-		TPM:         rateLimitResult(row.TpmLimit),
-		Concurrency: rateLimitResult(row.ConcurrencyLimit),
-	}
+func channelCapacityFromChannel(row sqlc.Channel) ChannelCapacity {
+	return ChannelCapacity{Concurrency: rateLimitResult(row.ConcurrencyLimit)}
 }
 
-func newAdmissionControlToken() (string, error) {
+func newCapacityControlToken() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", err
@@ -968,12 +930,10 @@ func newAdmissionControlToken() (string, error) {
 	return "rctl_channel_" + hex.EncodeToString(raw[:]), nil
 }
 
-// validateChannelRateLimits 校验渠道级限流非负（限流上限不能为负数）。
-func validateChannelRateLimits(rpm, tpm, rpd, concurrency *int64) error {
-	for field, v := range map[string]*int64{"rpm_limit": rpm, "tpm_limit": tpm, "rpd_limit": rpd, "concurrency_limit": concurrency} {
-		if v != nil && *v < 0 {
-			return invalidArgument(field, "rate limit must be a non-negative integer (0 means unlimited)")
-		}
+// validateChannelCapacity 校验渠道并发容量非负。
+func validateChannelCapacity(concurrency *int64) error {
+	if concurrency != nil && *concurrency < 0 {
+		return invalidArgument("concurrency_limit", "concurrency limit must be a non-negative integer (0 means unlimited)")
 	}
 	return nil
 }
@@ -1060,9 +1020,9 @@ func validateStatus(status string) error {
 	}
 }
 
-func validateTimeout(ms *int32) error {
+func validateTimeout(field string, ms *int32) error {
 	if ms != nil && *ms <= 0 {
-		return invalidArgument("timeout_ms", "timeout_ms must be > 0 when set")
+		return invalidArgument(field, field+" must be > 0 when set")
 	}
 	return nil
 }

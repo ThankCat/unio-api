@@ -15,7 +15,7 @@ import (
 
 // 成本敞口成因（channel_cost_exposures.reason）。
 const (
-	// CostExposureReasonUpstreamTimeout 等首字节超时：请求已发出、上游大概率仍在生成并计费。
+	// CostExposureReasonUpstreamTimeout 上游首字超时：请求已发出、上游大概率仍在生成并计费。
 	CostExposureReasonUpstreamTimeout = "upstream_timeout"
 	// CostExposureReasonUpstreamError 上游 5xx / 传输层失败：中转边缘报错，后端可能已生成并计费。
 	CostExposureReasonUpstreamError = "upstream_error"

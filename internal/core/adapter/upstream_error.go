@@ -63,6 +63,15 @@ type UpstreamMetadata struct {
 	// 0 表示上游未提供或无法解析；>0 时 gateway 据此对该渠道做限时 cooldown（跳过 fallback）。
 	RetryAfter time.Duration
 
+	// ErrorCode / ErrorMessage 是上游错误的结构化标识，**必须在写入时就已脱敏**，
+	// 因此可以安全渲染进面向客户的错误响应。
+	//
+	// 存在它们是因为「按分类映射」会把上游的具体原因压成一句通用话：客户只看到
+	// "The upstream provider rejected the request."，既无法自助排查，也让 SDK 拿不到
+	// 上游原本的 error.code。调用方渲染时只读这两个字段，绝不解析 ResponseSnippet 或错误文本。
+	ErrorCode    string
+	ErrorMessage string
+
 	// ResponseSnippet 是上游响应体的截断原文快照。
 	// 用途：渠道检测把上游完整错误/异常响应记进 channel_test_logs 便于排障——adapter 仍只按 HTTP status
 	// 分类（不解析此原文），gateway retry/fallback 也不依赖它；gateway 请求记录不消费此字段。

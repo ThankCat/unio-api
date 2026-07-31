@@ -101,7 +101,7 @@ func (*compactMetricsRecorder) IncPartialSettlement(string)                     
 func (*compactMetricsRecorder) IncRetryableFallback(string)                     {}
 func (*compactMetricsRecorder) IncZeroPriceServed(string, string, string)       {}
 func (*compactMetricsRecorder) IncRoutingSkip(string)                           {}
-func (*compactMetricsRecorder) ObserveRoutingHeadWait(time.Duration)            {}
+func (*compactMetricsRecorder) ObserveRoutingCapacityWait(time.Duration)        {}
 
 func (s *compactPermitStore) AcquireAttempt(_ context.Context, in breakerstore.AcquireAttemptInput) (breakerstore.AttemptAdmission, error) {
 	s.mu.Lock()
@@ -160,7 +160,7 @@ func (compactRuntimeFacts) Integrity(context.Context) (runtimefacts.Integrity, e
 func (compactRuntimeFacts) Admission(context.Context) (runtimefacts.AdmissionRevisions, error) {
 	integrity := runtimefacts.Integrity{Epoch: "epoch-compact", Revision: 7}
 	return runtimefacts.AdmissionRevisions{
-		Integrity: integrity, RouteRateLimits: 8, ChannelRateLimits: 12, Concurrency: 9,
+		Integrity: integrity, RouteRateLimits: 8, Concurrency: 9,
 	}, nil
 }
 
@@ -599,7 +599,7 @@ func TestCompactHistory_NativeFallbackDeniedSkipsSecondTransportAndContinuesCand
 	requestLog := newFakeRequestLog()
 	permitStore := &compactPermitStore{steps: []compactPermitStep{
 		{},
-		{admission: breakerstore.AttemptAdmission{Mode: breakerstore.AdmissionDenied, Reason: breakerstore.ReasonRateLimited}},
+		{admission: breakerstore.AttemptAdmission{Mode: breakerstore.AdmissionDenied, Reason: breakerstore.ReasonCooldown}},
 		{},
 	}}
 	svc := newServiceForTest(router, registry, &fakeSettlement{}, &fakeAuthorizer{}, requestLog)

@@ -50,9 +50,11 @@ func (a *Adapter) CreateResponse(ctx context.Context, ch channel.Runtime, req Re
 		)
 	}
 
-	if ch.Timeout > 0 {
+	// 非流式：response_timeout_ms 覆盖连接、响应头、完整响应体与 adapter 解析（§11.1）。
+	// 首字预算不参与非流式。
+	if ch.ResponseTimeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, ch.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, ch.ResponseTimeout)
 		defer cancel()
 	}
 
@@ -78,10 +80,8 @@ func (a *Adapter) CreateResponse(ctx context.Context, ch channel.Runtime, req Re
 
 	raw, exceeded, err := adapter.ReadUpstreamBodyLimited(upstreamResp.Body)
 	if err != nil {
-		return nil, failure.Wrap(
-			failure.CodeAdapterReadStreamFailed,
-			err,
-			failure.WithMessage("openai responses adapter read response body"),
+		return nil, newUpstreamBodyReadError(
+			err, context.Cause(ctx), "openai responses adapter read response body",
 		)
 	}
 	if exceeded {

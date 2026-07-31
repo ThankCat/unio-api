@@ -37,13 +37,11 @@ SELECT
     p.origin_revision AS provider_origin_revision,
     p.status_revision AS provider_status_revision,
     c.config_revision AS channel_config_revision,
-    c.admission_limits_revision AS channel_admission_limits_revision,
+    c.capacity_revision AS channel_capacity_revision,
     c.credential,
-    c.timeout_ms,
+    c.response_timeout_ms,
+    c.first_token_timeout_ms,
     c.priority,
-    c.rpm_limit AS channel_rpm_limit,
-    c.tpm_limit AS channel_tpm_limit,
-    c.rpd_limit AS channel_rpd_limit,
     c.concurrency_limit AS channel_concurrency_limit,
     c.upstream_bills_on_disconnect AS channel_bills_on_disconnect,
     c.sticky_enabled AS channel_sticky_enabled,
@@ -200,13 +198,11 @@ type FindRouteCandidatesRow struct {
 	ProviderOriginRevision          int64
 	ProviderStatusRevision          int64
 	ChannelConfigRevision           int64
-	ChannelAdmissionLimitsRevision  int64
+	ChannelCapacityRevision         int64
 	Credential                      string
-	TimeoutMs                       pgtype.Int4
+	ResponseTimeoutMs               pgtype.Int4
+	FirstTokenTimeoutMs             pgtype.Int4
 	Priority                        int32
-	ChannelRpmLimit                 pgtype.Int4
-	ChannelTpmLimit                 pgtype.Int4
-	ChannelRpdLimit                 pgtype.Int4
 	ChannelConcurrencyLimit         pgtype.Int4
 	ChannelBillsOnDisconnect        bool
 	ChannelStickyEnabled            pgtype.Bool
@@ -281,13 +277,11 @@ func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidat
 			&i.ProviderOriginRevision,
 			&i.ProviderStatusRevision,
 			&i.ChannelConfigRevision,
-			&i.ChannelAdmissionLimitsRevision,
+			&i.ChannelCapacityRevision,
 			&i.Credential,
-			&i.TimeoutMs,
+			&i.ResponseTimeoutMs,
+			&i.FirstTokenTimeoutMs,
 			&i.Priority,
-			&i.ChannelRpmLimit,
-			&i.ChannelTpmLimit,
-			&i.ChannelRpdLimit,
 			&i.ChannelConcurrencyLimit,
 			&i.ChannelBillsOnDisconnect,
 			&i.ChannelStickyEnabled,

@@ -93,7 +93,7 @@ func TestP4HalfOpenLeaseRenewalAndGatewayTakeoverE2E(t *testing.T) {
 		t,
 		h,
 		h.gateways[0],
-		`unio_gateway_breaker_permit_endpoint_total{endpoint="renew",result="renewed"}`,
+		`unio_gateway_breaker_permit_operation_total{operation="renew",result="renewed"}`,
 		3,
 		2*time.Second,
 	)
@@ -101,7 +101,7 @@ func TestP4HalfOpenLeaseRenewalAndGatewayTakeoverE2E(t *testing.T) {
 		t,
 		h,
 		h.gateways[0],
-		`unio_gateway_request_admission_endpoint_total{endpoint="renew",result="renewed"}`,
+		`unio_gateway_request_admission_operation_total{operation="renew",result="renewed"}`,
 		3,
 		2*time.Second,
 	)

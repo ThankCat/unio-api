@@ -159,10 +159,9 @@ func (m *AttemptPermitManager) Acquire(ctx context.Context, params AttemptPermit
 		ModelID:                   params.Candidate.ModelDBID,
 		UpstreamEndpoint:          breakerEndpoint(params.UpstreamEndpoint),
 		RequestMode:               params.RequestMode,
-		ChannelRateRevision:       admissionFacts.ChannelRateLimits,
 		GlobalConcurrencyRevision: admissionFacts.Concurrency,
 		CircuitBreakerRevision:    routingFacts.CircuitBreaker,
-		ChannelAdmissionRevision:  params.Candidate.ChannelAdmissionLimitsRevision,
+		ChannelCapacityRevision:   params.Candidate.ChannelCapacityRevision,
 		EnforceProviderControl:    true,
 		InputEstimate:             params.InputEstimate,
 	}
@@ -248,12 +247,12 @@ func breakerEndpoint(operation requestlog.UpstreamEndpoint) breakerstore.Upstrea
 
 func attemptAdmissionFingerprint(in breakerstore.AcquireAttemptInput) string {
 	payload := fmt.Sprintf(
-		"%s|%s|%s|%d|%d|%d|%d|%d|%d|%d|%s|%s|%d|%d|%d|%d|%d|%d",
+		"%s|%s|%s|%d|%d|%d|%d|%d|%d|%d|%s|%s|%d|%d|%d|%d|%d",
 		in.PermitID, in.RequestAdmissionID, in.IntegrityEpoch, in.IntegrityRevision,
 		in.ProviderID, in.ChannelID, in.RouteID, in.OriginRevision, in.ProviderStatusRevision,
 		in.ChannelConfigRevision, in.UpstreamEndpoint, in.RequestMode, in.ModelID,
-		in.ChannelRateRevision, in.GlobalConcurrencyRevision, in.CircuitBreakerRevision,
-		in.ChannelAdmissionRevision, in.InputEstimate,
+		in.GlobalConcurrencyRevision, in.CircuitBreakerRevision,
+		in.ChannelCapacityRevision, in.InputEstimate,
 	)
 	sum := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("%x", sum[:])
@@ -740,6 +739,8 @@ func (r *AttemptRunner) invokeNonStreamAttempt(
 	adapter.MarkTransportCompleted(attemptCtx)
 	facts := observer.Snapshot()
 	r.lifecycle.RecordAttemptTiming(ctx, attempt, facts)
+	// 非流式超时只可能卡在响应头或响应体（§11.1/§11.4）；非超时失败是 no-op。
+	r.lifecycle.RecordAttemptTimeoutPhase(ctx, attempt, facts, false, err)
 	if facts.HasChannelUsageEvidence() {
 		requestadmission.MarkUpstreamReached(ctx)
 	}
@@ -805,6 +806,7 @@ func (r *AttemptRunner) invokeNonStreamAttempt(
 		}
 	}
 	r.lifecycle.RecordAttemptRuntimeMetrics(candidate, attempt.UpstreamEndpoint, false, facts, finishOutcome, outcomeErr)
+	r.lifecycle.RecordAttemptSample(ctx, candidate, attempt, false, facts, finishOutcome, outcomeErr)
 	if panicValue != nil {
 		panic(panicValue)
 	}
@@ -844,39 +846,66 @@ func protocolFailureCode(code failure.Code) bool {
 	}
 }
 
+// attemptDenialSummary 汇总一轮全池 acquire 扫描的拒绝原因。它决定两件事：
+//   - 是否满足 §9.3 进入全池短等的唯一条件（存在候选且全部只因并发满被拒）；
+//   - 最终对客户返回 503 容量耗尽还是 429 冷却（§9.5/§6.3），二者绝不互相伪装。
 type attemptDenialSummary struct {
-	seen            bool
-	capacityOnly    bool
-	rateLimited     bool
-	concurrencyOnly bool
+	seen                   bool
+	concurrencyFull        int
+	cooldown               int
+	other                  int
+	minCooldownRemainingMs int64
 }
 
-func (s *attemptDenialSummary) Record(reason breakerstore.DeniedReason) {
+func (s *attemptDenialSummary) Record(admission breakerstore.AttemptAdmission) {
 	s.seen = true
-	switch reason {
-	case breakerstore.ReasonRateLimited:
-		s.rateLimited = true
-	case breakerstore.ReasonConcurrencyLimited:
-		s.concurrencyOnly = true
+	switch admission.Reason {
+	case breakerstore.ReasonConcurrencyFull:
+		s.concurrencyFull++
+	case breakerstore.ReasonCooldown:
+		s.cooldown++
+		if remaining := admission.CooldownRemainingMs; remaining > 0 &&
+			(s.minCooldownRemainingMs == 0 || remaining < s.minCooldownRemainingMs) {
+			s.minCooldownRemainingMs = remaining
+		}
 	default:
-		s.capacityOnly = false
+		s.other++
 	}
 }
 
+// Reset 在全池短等之后清空上一轮扫描结果，使重扫按新的运行态重新分类。
+func (s *attemptDenialSummary) Reset() {
+	*s = attemptDenialSummary{}
+}
+
+// AllConcurrencyFull 是 §9.3 允许进入全池短等的唯一条件：至少一个候选，且全部只因并发满被拒。
+// 熔断、权限、配置不同步、Redis 不可用和 429 冷却都不得伪装成并发等待。
+func (s attemptDenialSummary) AllConcurrencyFull() bool {
+	return s.seen && s.concurrencyFull > 0 && s.cooldown == 0 && s.other == 0
+}
+
+// AllCooldown 表示全池均处于上游真实 429 冷却：直接返回 429，不进入等待（§6.3）。
+func (s attemptDenialSummary) AllCooldown() bool {
+	return s.seen && s.cooldown > 0 && s.concurrencyFull == 0 && s.other == 0
+}
+
 func (s attemptDenialSummary) FinalError() error {
-	if s.capacityOnly {
-		if s.rateLimited {
-			return failure.New(
-				failure.CodeGatewayChannelRateLimited,
-				failure.WithMessage("all candidate channels are rate limited"),
-			)
+	switch {
+	case s.AllConcurrencyFull():
+		// 容量耗尽走 503 + Retry-After: 1（§9.5），与上游 429 严格区分。
+		return failure.New(
+			failure.CodeRoutingChannelCapacityExhausted,
+			failure.WithMessage("all candidate channels are at concurrency limit"),
+			failure.WithField("retry_after_ms", int64(1000)),
+		)
+	case s.AllCooldown():
+		options := []failure.Option{
+			failure.WithMessage("all candidate channels are in upstream rate-limit cooldown"),
 		}
-		if s.concurrencyOnly {
-			return failure.New(
-				failure.CodeGatewayChannelConcurrencyLimited,
-				failure.WithMessage("all candidate channels are at concurrency limit"),
-			)
+		if s.minCooldownRemainingMs > 0 {
+			options = append(options, failure.WithField("retry_after_ms", s.minCooldownRemainingMs))
 		}
+		return failure.New(failure.CodeGatewayChannelRateLimited, options...)
 	}
 	return failure.Wrap(
 		failure.CodeRoutingNoAvailableChannel,
@@ -889,9 +918,9 @@ func attemptDeniedSkipReason(reason breakerstore.DeniedReason) string {
 	switch reason {
 	case breakerstore.ReasonOpen, breakerstore.ReasonHalfOpenBusy:
 		return "breaker"
-	case breakerstore.ReasonRateLimited:
-		return "channel_rate_limit"
-	case breakerstore.ReasonConcurrencyLimited:
+	case breakerstore.ReasonCooldown:
+		return "channel_cooldown"
+	case breakerstore.ReasonConcurrencyFull:
 		return "channel_concurrency"
 	case breakerstore.ReasonModelPermissionPaused:
 		return "model_permission"

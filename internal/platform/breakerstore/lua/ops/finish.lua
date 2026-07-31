@@ -15,19 +15,17 @@ local channel_key = KEYS[4]
 local conc_key = KEYS[5]
 local route_channel_rpd_key = KEYS[6]
 local breaker_ctl = KEYS[7]
-local routing_balance_ctl = KEYS[8]
-local evidence_channels_key = KEYS[9]
-local evidence_models_key = KEYS[10]
+local evidence_channels_key = KEYS[8]
+local evidence_models_key = KEYS[9]
 
 local permit_id = ARGV[1]
 local ep_outcome = ARGV[18]
 local ch_outcome = ARGV[19]
-local first_token_ms = ARGV[20]
-local tpm_actual = ARGV[21] -- '' 表示无权威 usage；此时至少保留输入估算
-local origin_evidence = ARGV[22]
-local request_write_state = ARGV[23]
-local response_headers_received = ARGV[24]
-local first_token_eligible = ARGV[25]
+local tpm_actual = ARGV[20] -- '' 表示无权威 usage；此时至少保留输入估算
+local origin_evidence = ARGV[21]
+local request_write_state = ARGV[22]
+local response_headers_received = ARGV[23]
+local first_token_eligible = ARGV[24]
 local interaction_evidence = request_write_state == 'completed'
   or request_write_state == 'uncertain'
   or response_headers_received == 'true'
@@ -47,21 +45,12 @@ if redis.call('HGET', permit_key, 'status') ~= 'active' then
   }
 end
 
--- Validate settlement arithmetic before attribution, concurrency, TPM, or breaker mutation.
+-- Channel TPM 已不再是准入门槛（§1.2/§8），无需结算算术校验；仍在 permit 上记录终态口径。
 if tpm_actual ~= '' then
   if string.match(tpm_actual, '^%d+$') == nil then return { 'runtime_sync_required', 'runtime_sync_required' } end
   local actual = tonumber(tpm_actual)
-  local input_estimate = tonumber(redis.call('HGET', permit_key, 'tpm_input_estimate'))
-  local tpm_bucket = redis.call('HGET', permit_key, 'ch_tpm_bucket')
-  if actual == nil or actual > MAX_EXACT_INTEGER or actual ~= math.floor(actual) or input_estimate == nil then
+  if actual == nil or actual > MAX_EXACT_INTEGER or actual ~= math.floor(actual) then
     return { 'runtime_sync_required', 'runtime_sync_required' }
-  end
-  local delta = actual - input_estimate
-  if delta > 0 and redis.call('EXISTS', tpm_bucket) == 1 then
-    local used = tonumber(redis.call('GET', tpm_bucket))
-    if used == nil or used > MAX_EXACT_INTEGER - delta then
-      return { 'runtime_sync_required', 'runtime_sync_required' }
-    end
   end
 end
 
@@ -80,13 +69,6 @@ end
 
 local breaker = read_committed_control(breaker_ctl, parse_circuit_breaker_payload)
 local breaker_config_valid = breaker ~= nil
-local routing_balance = nil
-if first_token_ms ~= '' then
-  routing_balance = read_committed_control(routing_balance_ctl, parse_routing_balance_payload)
-end
-local routing_balance_valid = first_token_ms == '' or routing_balance ~= nil
-local ttft_alpha = 0
-if routing_balance ~= nil then ttft_alpha = routing_balance.ttft_ewma_alpha end
 local breaker_enabled = 0
 local window_ms = 1
 local min_requests = 2
@@ -109,26 +91,12 @@ end
 -- 资源收口：释放并发租约（first-terminal-wins，始终执行）。
 if conc_key ~= '' then redis.call('ZREM', conc_key, permit_id) end
 
--- Channel RPM/RPD 作为有交互证据的上游 attempt 保留；Channel TPM 只按可靠 actual 或输入保留收口。
+-- Channel TPM 不再占用限额，只在 permit 上冻结终态口径供审计（settled=有可靠 actual；retained=仅输入估算）。
 if redis.call('HGET', permit_key, 'admission_enforced') == '1' then
-  local tpm_bucket = redis.call('HGET', permit_key, 'ch_tpm_bucket')
-  local input_estimate = tonumber(redis.call('HGET', permit_key, 'tpm_input_estimate')) or 0
-  if tpm_bucket ~= false and tpm_bucket ~= '' then
-    if tpm_actual == '' then
-      redis.call('HSET', permit_key, 'tpm_state', 'retained')
-    else
-      local actual = tonumber(tpm_actual) or 0
-      local delta = actual - input_estimate
-      if redis.call('EXISTS', tpm_bucket) == 1 and delta > 0 then
-        redis.call('INCRBY', tpm_bucket, delta)
-      elseif redis.call('EXISTS', tpm_bucket) == 1 and delta < 0 then
-        local used = tonumber(redis.call('GET', tpm_bucket)) or 0
-        local next_value = used + delta
-        if next_value < 0 then next_value = 0 end
-        redis.call('SET', tpm_bucket, next_value, 'KEEPTTL')
-      end
-      redis.call('HSET', permit_key, 'tpm_actual_total', actual, 'tpm_state', 'settled')
-    end
+  if tpm_actual == '' then
+    redis.call('HSET', permit_key, 'tpm_state', 'retained')
+  else
+    redis.call('HSET', permit_key, 'tpm_actual_total', tonumber(tpm_actual) or 0, 'tpm_state', 'settled')
   end
 end
 
@@ -251,7 +219,6 @@ local function apply_scope(state_key, outcome, permit_gen_field, permit_probe_fi
   local probe = redis.call('HGET', permit_key, permit_probe_field)
 
   if not breaker_config_valid then return 'runtime_sync_required' end
-  if is_channel == 1 and not routing_balance_valid then return 'runtime_sync_required' end
   if breaker_enabled == 0 then return 'not_applicable' end
   if redis.call('EXISTS', state_key) == 0 then return 'stale_generation' end
   local cur_gen = tonumber(redis.call('HGET', state_key, 'state_generation')) or 0
@@ -320,18 +287,7 @@ local function apply_scope(state_key, outcome, permit_gen_field, permit_probe_fi
         -- ignored：中性释放 lease，不计成功/失败。
         redis.call('HDEL', state_key, 'half_open_permit_id', 'half_open_lease_until_ms')
       end
-      -- TTFT 仅 channel 更新。
-      if is_channel == 1 and first_token_ms ~= '' then
-        local sample = tonumber(first_token_ms)
-        local samples = tonumber(redis.call('HGET', state_key, 'ttft_samples')) or 0
-        if samples == 0 then
-          redis.call('HSET', state_key, 'ttft_ewma_ms', sample, 'ttft_samples', 1)
-        else
-          local old = tonumber(redis.call('HGET', state_key, 'ttft_ewma_ms')) or sample
-          local ewma = ttft_alpha * sample + (1 - ttft_alpha) * old
-          redis.call('HSET', state_key, 'ttft_ewma_ms', ewma, 'ttft_samples', samples + 1)
-        end
-      end
+      -- TTFT 不再写入 breaker 状态：评分样本由独立的 30 分钟分钟桶承担（§12），与熔断解耦。
       return 'applied'
     else
       -- 探测租约已被新一轮夺走或过期：本结果中性 no-op。
@@ -398,18 +354,7 @@ local function apply_scope(state_key, outcome, permit_gen_field, permit_probe_fi
     return 'not_applicable'
   end
 
-  -- TTFT 仅 channel。
-  if is_channel == 1 and first_token_ms ~= '' then
-    local sample = tonumber(first_token_ms)
-    local samples = tonumber(redis.call('HGET', state_key, 'ttft_samples')) or 0
-    if samples == 0 then
-      redis.call('HSET', state_key, 'ttft_ewma_ms', sample, 'ttft_samples', 1)
-    else
-      local old = tonumber(redis.call('HGET', state_key, 'ttft_ewma_ms')) or sample
-      local ewma = ttft_alpha * sample + (1 - ttft_alpha) * old
-      redis.call('HSET', state_key, 'ttft_ewma_ms', ewma, 'ttft_samples', samples + 1)
-    end
-  end
+  -- TTFT 不再写入 breaker 状态：评分样本由独立的 30 分钟分钟桶承担（§12），与熔断解耦。
   return 'applied'
 end
 

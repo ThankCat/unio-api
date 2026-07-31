@@ -213,13 +213,12 @@ func (s *Store) BootstrapStateEpoch(ctx context.Context, epoch string, revision 
 }
 
 type RuntimeReadinessInput struct {
-	Epoch                    string
-	EpochRevision            int64
-	RouteRateLimitRevision   int64
-	ChannelRateLimitRevision int64
-	ConcurrencyRevision      int64
-	CircuitBreakerRevision   int64
-	RoutingBalanceRevision   int64
+	Epoch                  string
+	EpochRevision          int64
+	RouteRateLimitRevision int64
+	ConcurrencyRevision    int64
+	CircuitBreakerRevision int64
+	RoutingBalanceRevision int64
 }
 
 type RuntimeReadinessResult struct {
@@ -227,7 +226,7 @@ type RuntimeReadinessResult struct {
 	Reason string
 }
 
-// CheckRuntimeReadiness 原子校验 marker 与五个关键 control 可用，并校验 control
+// CheckRuntimeReadiness 原子校验 marker 与四个关键 control 可用，并校验 control
 // payload 与其 SHA-256 一致。Redis 连接/脚本错误以基础设施错误返回。
 func (s *Store) CheckRuntimeReadiness(ctx context.Context, in RuntimeReadinessInput) (result RuntimeReadinessResult, err error) {
 	done := s.beginOperation(ctx, operationRuntimeReadiness)
@@ -245,7 +244,6 @@ func (s *Store) CheckRuntimeReadiness(ctx context.Context, in RuntimeReadinessIn
 	res, err := s.runtimeReady.Run(ctx, s.client, []string{
 		s.keys.stateIntegrityMarker(),
 		s.keys.admissionRouteRate(),
-		s.keys.admissionChannelRate(),
 		s.keys.admissionGlobalConcurrency(),
 		s.keys.runtimeControlSetting("gateway.circuit_breaker"),
 		s.keys.runtimeControlSetting("gateway.routing_balance"),
@@ -267,7 +265,7 @@ func (s *Store) CheckRuntimeReadiness(ctx context.Context, in RuntimeReadinessIn
 	if code != "ready" {
 		return RuntimeReadinessResult{Reason: code}, nil
 	}
-	if len(arr) != 11 {
+	if len(arr) != 9 {
 		return RuntimeReadinessResult{}, storeUnavailable(errors.New("incomplete readiness payload reply"), "breakerstore runtime readiness")
 	}
 	if !validRuntimeControlProofs(arr[1:]) {
@@ -281,7 +279,6 @@ func runtimeReadinessArgs(in RuntimeReadinessInput) []interface{} {
 		in.Epoch,
 		strconv.FormatInt(in.EpochRevision, 10),
 		strconv.FormatInt(in.RouteRateLimitRevision, 10),
-		strconv.FormatInt(in.ChannelRateLimitRevision, 10),
 		strconv.FormatInt(in.ConcurrencyRevision, 10),
 		strconv.FormatInt(in.CircuitBreakerRevision, 10),
 		strconv.FormatInt(in.RoutingBalanceRevision, 10),
@@ -290,7 +287,7 @@ func runtimeReadinessArgs(in RuntimeReadinessInput) []interface{} {
 }
 
 func validRuntimeControlProofs(values []interface{}) bool {
-	if len(values) != 10 {
+	if len(values) != 8 {
 		return false
 	}
 	for index := 0; index < len(values); index += 2 {

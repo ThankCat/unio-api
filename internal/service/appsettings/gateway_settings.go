@@ -13,21 +13,22 @@ import (
 // routing balance 由 Redis committed runtime control 驱动；其余配置继续通过 settings applier
 // 热更新。429 cooldown 是 Redis 全局事实，不属于已删除的 timeout/5xx 进程内失败软冷却。
 //
-// 单位约定(用户决策):时长一律 int 毫秒,字段/key 带 _ms 后缀(对齐 channels.timeout_ms 惯例),
+// 单位约定(用户决策):时长一律 int 毫秒,字段/key 带 _ms 后缀,
 // 不用 "10m" 之类的 duration 字符串;比例用 (0,1] 浮点;计数用普通整数。
 
 // gateway 配置在 app_settings 中的 key。
 const (
 	GatewayCircuitBreakerKey           = "gateway.circuit_breaker"
 	GatewayRouteRateLimitDefaultsKey   = "gateway.route_rate_limit_defaults"
-	GatewayChannelRateLimitDefaultsKey = "gateway.channel_rate_limit_defaults"
 	GatewayStreamIdleTimeoutKey        = "gateway.stream_idle_timeout_ms"
 	GatewayChannelCooldownKey          = "gateway.channel_ratelimit_cooldown"
 	GatewayCredential401ThresholdKey   = "gateway.credential_401_threshold"
-	GatewayDefaultChannelTimeoutKey    = "gateway.default_channel_timeout_ms"
+	GatewayDefaultResponseTimeoutKey   = "gateway.default_response_timeout_ms"
+	GatewayDefaultFirstTokenTimeoutKey = "gateway.default_first_token_timeout_ms"
 	GatewayConcurrencyDefaultsKey      = "gateway.concurrency_defaults"
 	GatewayRoutingStickyKey            = "gateway.routing_sticky"
 	GatewayRoutingBalanceKey           = "gateway.routing_balance"
+	GatewayCapacityWaitTimeoutKey      = "gateway.capacity_wait_timeout_ms"
 )
 
 func msToDuration(ms int64) time.Duration {
@@ -284,34 +285,9 @@ func routeRateLimitDefaultsDefinition() Definition {
 	}
 }
 
-func channelRateLimitDefaultsDefinition() Definition {
-	return Definition{
-		Key:      GatewayChannelRateLimitDefaultsKey,
-		Category: "gateway",
-		Label:    "渠道默认限流(RPM/TPM/RPD)",
-		Description: "渠道未单独配置时生效的默认上限，0=该维度不限。" +
-			"渠道限流只影响候选渠道准入，命中后跳过该渠道并继续 fallback；Redis 故障固定拒绝准入。",
-		HotReload: true,
-		Default:   encodeRateLimitDefaultsSettings(DefaultRateLimitDefaultsSettings()),
-		Validate: func(raw json.RawMessage) error {
-			_, err := DecodeRateLimitDefaultsSettings(raw)
-			return err
-		},
-	}
-}
-
 // GatewayRouteRateLimitDefaults 读取当前生效的线路默认限流(解码失败回默认)。
 func GatewayRouteRateLimitDefaults(ctx context.Context, store *SettingsStore) RateLimitDefaultsSettings {
 	s, err := DecodeRateLimitDefaultsSettings(store.Raw(ctx, GatewayRouteRateLimitDefaultsKey))
-	if err != nil {
-		return DefaultRateLimitDefaultsSettings()
-	}
-	return s
-}
-
-// GatewayChannelRateLimitDefaults 读取当前生效的渠道默认限流(解码失败回默认)。
-func GatewayChannelRateLimitDefaults(ctx context.Context, store *SettingsStore) RateLimitDefaultsSettings {
-	s, err := DecodeRateLimitDefaultsSettings(store.Raw(ctx, GatewayChannelRateLimitDefaultsKey))
 	if err != nil {
 		return DefaultRateLimitDefaultsSettings()
 	}
@@ -397,8 +373,13 @@ func GatewayChannelCooldown(ctx context.Context, store *SettingsStore) ChannelCo
 // DefaultStreamIdleTimeoutSetting 与原 GATEWAY_STREAM_IDLE_TIMEOUT env 默认一致。
 const DefaultStreamIdleTimeoutSetting = 10 * time.Minute
 
-// DefaultChannelTimeoutSetting 渠道未单独设置 timeout_ms 时的系统默认上游超时。
-const DefaultChannelTimeoutSetting = 200 * time.Second
+// DefaultResponseTimeoutSetting 渠道未单独设置 response_timeout_ms 时的系统默认上游响应超时（§11.3）。
+const DefaultResponseTimeoutSetting = 200 * time.Second
+
+// DefaultFirstTokenTimeoutSetting 渠道未单独设置 first_token_timeout_ms 时的系统默认首字超时（§11.3）。
+// 这是本次改造唯一新增的保护；现有 200s 完整响应与 10min 流式 idle 默认值保持不变，
+// 避免迁移时意外缩短合法长请求。
+const DefaultFirstTokenTimeoutSetting = 60 * time.Second
 
 // DefaultCredential401Threshold 与原 GATEWAY_CHANNEL_CREDENTIAL_401_THRESHOLD env 默认一致。
 const DefaultCredential401Threshold = 3
@@ -419,6 +400,18 @@ func DecodePositiveMsSetting(raw []byte) (time.Duration, error) {
 	return msToDuration(ms), nil
 }
 
+// DecodeNonNegativeMsSetting 解码 int 毫秒标量值,允许 0(表示关闭该等待/超时),拒绝负值。
+func DecodeNonNegativeMsSetting(raw []byte) (time.Duration, error) {
+	var ms int64
+	if err := json.Unmarshal(raw, &ms); err != nil {
+		return 0, fmt.Errorf("value must be an integer of milliseconds: %w", err)
+	}
+	if ms < 0 {
+		return 0, errors.New("milliseconds must not be negative")
+	}
+	return msToDuration(ms), nil
+}
+
 // DecodePositiveIntSetting 解码整数值,要求 > 0。
 func DecodePositiveIntSetting(raw []byte) (int, error) {
 	var n int
@@ -429,13 +422,6 @@ func DecodePositiveIntSetting(raw []byte) (int, error) {
 		return 0, errors.New("value must be > 0")
 	}
 	return n, nil
-}
-
-func encodeBoolSetting(v bool) json.RawMessage {
-	if v {
-		return json.RawMessage("true")
-	}
-	return json.RawMessage("false")
 }
 
 // DecodeBoolSetting 解码 JSON 布尔标量。
@@ -567,58 +553,64 @@ func GatewayConcurrencyDefaults(ctx context.Context, store *SettingsStore) Concu
 
 // ---- balanced 容量调度 ----
 
-// RoutingBalanceSettings is the objective balanced-routing configuration.
+// RoutingBalanceSettings 是 objective_v1 五项评分配置（§7/§14.6）：
+// 成本 / 渠道并发容量 / TTFT / 错误率 / Priority 五项百分比权重之和必须为 100。
+// TTFT 与错误率各自使用滚动窗口 + 线性惩罚参数；无样本时对应指标分为 100。
 type RoutingBalanceSettings struct {
-	EconomicWeightPct int
-	HealthWeightPct   int
-	CapacityWeightPct int
-	PriorityWeightPct int
-	TTFTTarget        time.Duration
-	TTFTWeight        float64
-	TTFTEWMAAlpha     float64
-	// Deprecated compatibility fields; canonical JSON never emits them.
-	CostWeight           float64
-	MinimumRoutingFactor float64
+	CostWeightPct        int
+	ConcurrencyWeightPct int
+	TTFTWeightPct        int
+	ErrorRateWeightPct   int
+	PriorityWeightPct    int
 
-	Enabled           bool
-	WeightByRemaining bool
+	TTFTWindow               time.Duration
+	TTFTPenaltyUnit          time.Duration
+	TTFTPenaltyPointsPerUnit float64
+
+	ErrorWindow                  time.Duration
+	ErrorPenaltyPointsPerPercent float64
 }
 
 func DefaultRoutingBalanceSettings() RoutingBalanceSettings {
 	return RoutingBalanceSettings{
-		EconomicWeightPct:    45,
-		HealthWeightPct:      25,
-		CapacityWeightPct:    20,
-		PriorityWeightPct:    10,
-		TTFTTarget:           2 * time.Second,
-		TTFTWeight:           0.35,
-		TTFTEWMAAlpha:        0.2,
-		CostWeight:           0.5,
-		MinimumRoutingFactor: 0.05,
-		Enabled:              true,
-		WeightByRemaining:    true,
+		CostWeightPct:                25,
+		ConcurrencyWeightPct:         20,
+		TTFTWeightPct:                25,
+		ErrorRateWeightPct:           20,
+		PriorityWeightPct:            10,
+		TTFTWindow:                   30 * time.Minute,
+		TTFTPenaltyUnit:              time.Second,
+		TTFTPenaltyPointsPerUnit:     2.5,
+		ErrorWindow:                  30 * time.Minute,
+		ErrorPenaltyPointsPerPercent: 2.5,
 	}
 }
 
 type routingBalanceDoc struct {
-	EconomicWeightPct int     `json:"economic_weight_pct"`
-	HealthWeightPct   int     `json:"health_weight_pct"`
-	CapacityWeightPct int     `json:"capacity_weight_pct"`
-	PriorityWeightPct int     `json:"priority_weight_pct"`
-	TTFTTargetMs      int64   `json:"ttft_target_ms"`
-	TTFTWeight        float64 `json:"ttft_weight"`
-	TTFTEWMAAlpha     float64 `json:"ttft_ewma_alpha"`
+	CostWeightPct                int     `json:"cost_weight_pct"`
+	ConcurrencyWeightPct         int     `json:"concurrency_weight_pct"`
+	TTFTWeightPct                int     `json:"ttft_weight_pct"`
+	ErrorRateWeightPct           int     `json:"error_rate_weight_pct"`
+	PriorityWeightPct            int     `json:"priority_weight_pct"`
+	TTFTWindowMs                 int64   `json:"ttft_window_ms"`
+	TTFTPenaltyUnitMs            int64   `json:"ttft_penalty_unit_ms"`
+	TTFTPenaltyPointsPerUnit     float64 `json:"ttft_penalty_points_per_unit"`
+	ErrorWindowMs                int64   `json:"error_window_ms"`
+	ErrorPenaltyPointsPerPercent float64 `json:"error_penalty_points_per_percent"`
 }
 
 func encodeRoutingBalanceSettings(s RoutingBalanceSettings) json.RawMessage {
 	raw, err := json.Marshal(routingBalanceDoc{
-		EconomicWeightPct: s.EconomicWeightPct,
-		HealthWeightPct:   s.HealthWeightPct,
-		CapacityWeightPct: s.CapacityWeightPct,
-		PriorityWeightPct: s.PriorityWeightPct,
-		TTFTTargetMs:      durationToMs(s.TTFTTarget),
-		TTFTWeight:        s.TTFTWeight,
-		TTFTEWMAAlpha:     s.TTFTEWMAAlpha,
+		CostWeightPct:                s.CostWeightPct,
+		ConcurrencyWeightPct:         s.ConcurrencyWeightPct,
+		TTFTWeightPct:                s.TTFTWeightPct,
+		ErrorRateWeightPct:           s.ErrorRateWeightPct,
+		PriorityWeightPct:            s.PriorityWeightPct,
+		TTFTWindowMs:                 durationToMs(s.TTFTWindow),
+		TTFTPenaltyUnitMs:            durationToMs(s.TTFTPenaltyUnit),
+		TTFTPenaltyPointsPerUnit:     s.TTFTPenaltyPointsPerUnit,
+		ErrorWindowMs:                durationToMs(s.ErrorWindow),
+		ErrorPenaltyPointsPerPercent: s.ErrorPenaltyPointsPerPercent,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("appsettings: encode routing balance: %v", err))
@@ -627,84 +619,57 @@ func encodeRoutingBalanceSettings(s RoutingBalanceSettings) json.RawMessage {
 }
 
 func DecodeRoutingBalanceSettings(raw []byte) (RoutingBalanceSettings, error) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil {
-		return RoutingBalanceSettings{}, err
-	}
-	legacy := len(fields) == 4 || len(fields) == 5
-	if legacy {
-		allowed := map[string]bool{"ttft_target_ms": true, "ttft_weight": true, "minimum_routing_factor": true, "ttft_ewma_alpha": true, "cost_weight": true}
-		for key := range fields {
-			if !allowed[key] {
-				return RoutingBalanceSettings{}, fmt.Errorf("unknown field %q", key)
-			}
-		}
-		for _, key := range []string{"ttft_target_ms", "ttft_weight", "minimum_routing_factor", "ttft_ewma_alpha"} {
-			if value, ok := fields[key]; !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-				return RoutingBalanceSettings{}, fmt.Errorf("%s is required", key)
-			}
-		}
-		if value, ok := fields["cost_weight"]; ok && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-			return RoutingBalanceSettings{}, errors.New("cost_weight must not be null")
-		}
-		var legacyDoc struct {
-			TTFTTargetMs         int64   `json:"ttft_target_ms"`
-			TTFTWeight           float64 `json:"ttft_weight"`
-			CostWeight           float64 `json:"cost_weight"`
-			MinimumRoutingFactor float64 `json:"minimum_routing_factor"`
-			TTFTEWMAAlpha        float64 `json:"ttft_ewma_alpha"`
-		}
-		if err := json.Unmarshal(raw, &legacyDoc); err != nil {
-			return RoutingBalanceSettings{}, err
-		}
-		if legacyDoc.MinimumRoutingFactor <= 0 || legacyDoc.MinimumRoutingFactor > 1 || legacyDoc.CostWeight < 0 || legacyDoc.CostWeight > 1 {
-			return RoutingBalanceSettings{}, errors.New("legacy routing balance weights are invalid")
-		}
-		defaults := DefaultRoutingBalanceSettings()
-		defaults.TTFTTarget = msToDuration(legacyDoc.TTFTTargetMs)
-		defaults.TTFTWeight = legacyDoc.TTFTWeight
-		defaults.TTFTEWMAAlpha = legacyDoc.TTFTEWMAAlpha
-		defaults.CostWeight = legacyDoc.CostWeight
-		defaults.MinimumRoutingFactor = legacyDoc.MinimumRoutingFactor
-		return validateRoutingBalanceSettings(defaults)
-	}
-
 	var doc routingBalanceDoc
 	if err := strictUnmarshal(raw, &doc); err != nil {
 		return RoutingBalanceSettings{}, err
 	}
 	settings := RoutingBalanceSettings{
-		EconomicWeightPct: doc.EconomicWeightPct,
-		HealthWeightPct:   doc.HealthWeightPct,
-		CapacityWeightPct: doc.CapacityWeightPct,
-		PriorityWeightPct: doc.PriorityWeightPct,
-		TTFTTarget:        msToDuration(doc.TTFTTargetMs),
-		TTFTWeight:        doc.TTFTWeight,
-		TTFTEWMAAlpha:     doc.TTFTEWMAAlpha,
-		Enabled:           true,
-		WeightByRemaining: true,
+		CostWeightPct:                doc.CostWeightPct,
+		ConcurrencyWeightPct:         doc.ConcurrencyWeightPct,
+		TTFTWeightPct:                doc.TTFTWeightPct,
+		ErrorRateWeightPct:           doc.ErrorRateWeightPct,
+		PriorityWeightPct:            doc.PriorityWeightPct,
+		TTFTWindow:                   msToDuration(doc.TTFTWindowMs),
+		TTFTPenaltyUnit:              msToDuration(doc.TTFTPenaltyUnitMs),
+		TTFTPenaltyPointsPerUnit:     doc.TTFTPenaltyPointsPerUnit,
+		ErrorWindow:                  msToDuration(doc.ErrorWindowMs),
+		ErrorPenaltyPointsPerPercent: doc.ErrorPenaltyPointsPerPercent,
 	}
 	return validateRoutingBalanceSettings(settings)
 }
 
 func validateRoutingBalanceSettings(settings RoutingBalanceSettings) (RoutingBalanceSettings, error) {
-	weights := []int{settings.EconomicWeightPct, settings.HealthWeightPct, settings.CapacityWeightPct, settings.PriorityWeightPct}
+	weights := []int{
+		settings.CostWeightPct,
+		settings.ConcurrencyWeightPct,
+		settings.TTFTWeightPct,
+		settings.ErrorRateWeightPct,
+		settings.PriorityWeightPct,
+	}
+	sum := 0
 	for _, weight := range weights {
 		if weight < 0 || weight > 100 {
 			return RoutingBalanceSettings{}, errors.New("routing balance weights must be within [0, 100]")
 		}
+		sum += weight
 	}
-	if settings.EconomicWeightPct+settings.HealthWeightPct+settings.CapacityWeightPct+settings.PriorityWeightPct != 100 {
+	if sum != 100 {
 		return RoutingBalanceSettings{}, errors.New("routing balance weights must sum to 100")
 	}
-	if settings.TTFTTarget <= 0 {
-		return RoutingBalanceSettings{}, errors.New("ttft_target_ms must be > 0")
+	if settings.TTFTWindow <= 0 {
+		return RoutingBalanceSettings{}, errors.New("ttft_window_ms must be > 0")
 	}
-	if settings.TTFTWeight < 0 || settings.TTFTWeight > 1 {
-		return RoutingBalanceSettings{}, errors.New("ttft_weight must be within [0, 1]")
+	if settings.TTFTPenaltyUnit <= 0 {
+		return RoutingBalanceSettings{}, errors.New("ttft_penalty_unit_ms must be > 0")
 	}
-	if settings.TTFTEWMAAlpha <= 0 || settings.TTFTEWMAAlpha > 1 {
-		return RoutingBalanceSettings{}, errors.New("ttft_ewma_alpha must be within (0, 1]")
+	if settings.TTFTPenaltyPointsPerUnit <= 0 || settings.TTFTPenaltyPointsPerUnit > 100 {
+		return RoutingBalanceSettings{}, errors.New("ttft_penalty_points_per_unit must be within (0, 100]")
+	}
+	if settings.ErrorWindow <= 0 {
+		return RoutingBalanceSettings{}, errors.New("error_window_ms must be > 0")
+	}
+	if settings.ErrorPenaltyPointsPerPercent <= 0 || settings.ErrorPenaltyPointsPerPercent > 100 {
+		return RoutingBalanceSettings{}, errors.New("error_penalty_points_per_percent must be within (0, 100]")
 	}
 	return settings, nil
 }
@@ -714,8 +679,8 @@ func routingBalanceDefinition() Definition {
 		Key:      GatewayRoutingBalanceKey,
 		Category: "gateway",
 		Label:    "线路负载均衡",
-		Description: "balanced 在线路显式渠道池内按经济、健康、容量与 Priority 客观分确定性排序。" +
-			"四项百分比权重之和必须为 100；无健康样本时健康分为 100。",
+		Description: "balanced 在线路显式渠道池内按成本、渠道并发容量、TTFT、错误率与 Priority 五项客观分确定性排序。" +
+			"五项百分比权重之和必须为 100；TTFT 与错误率无样本时对应指标分为 100。",
 		HotReload: true,
 		Default:   encodeRoutingBalanceSettings(DefaultRoutingBalanceSettings()),
 		Validate: func(raw json.RawMessage) error {
@@ -737,37 +702,30 @@ func GatewayRoutingBalance(ctx context.Context, store *SettingsStore) RoutingBal
 
 // RoutingStickySettings 是跨协议会话 sticky 的全局默认配置。
 // 渠道行 sticky_enabled 可覆盖 EnabledDefault（NULL=继承此默认）；TTL 为绝对过期（bind/改绑时设置，
-// 命中不刷新，R2），与上游 prompt cache TTL 解耦。TPMWait/TPMWaitJitter 供 P1 队首短等消费。
+// 命中不刷新，R2），与上游 prompt cache TTL 解耦。容量等待不属于 sticky，见
+// GatewayCapacityWaitTimeoutKey（§9.4 全池共享短等）。
 type RoutingStickySettings struct {
 	EnabledDefault bool
 	TTL            time.Duration
-	TPMWait        time.Duration
-	TPMWaitJitter  time.Duration
 }
 
-// DefaultRoutingStickySettings 默认开启 sticky：TTL 30min、队首短等 500ms + 100ms 抖动。
+// DefaultRoutingStickySettings 默认开启 sticky：TTL 30min。
 func DefaultRoutingStickySettings() RoutingStickySettings {
 	return RoutingStickySettings{
 		EnabledDefault: true,
 		TTL:            30 * time.Minute,
-		TPMWait:        500 * time.Millisecond,
-		TPMWaitJitter:  100 * time.Millisecond,
 	}
 }
 
 type routingStickyDoc struct {
-	EnabledDefault  bool  `json:"enabled_default"`
-	TTLMs           int64 `json:"ttl_ms"`
-	TPMWaitMs       int64 `json:"tpm_wait_ms"`
-	TPMWaitJitterMs int64 `json:"tpm_wait_jitter_ms"`
+	EnabledDefault bool  `json:"enabled_default"`
+	TTLMs          int64 `json:"ttl_ms"`
 }
 
 func encodeRoutingStickySettings(s RoutingStickySettings) json.RawMessage {
 	raw, err := json.Marshal(routingStickyDoc{
-		EnabledDefault:  s.EnabledDefault,
-		TTLMs:           durationToMs(s.TTL),
-		TPMWaitMs:       durationToMs(s.TPMWait),
-		TPMWaitJitterMs: durationToMs(s.TPMWaitJitter),
+		EnabledDefault: s.EnabledDefault,
+		TTLMs:          durationToMs(s.TTL),
 	})
 	if err != nil {
 		panic(fmt.Sprintf("appsettings: encode routing sticky settings: %v", err))
@@ -775,8 +733,7 @@ func encodeRoutingStickySettings(s RoutingStickySettings) json.RawMessage {
 	return raw
 }
 
-// DecodeRoutingStickySettings 解码并校验会话粘性配置（时长为 int 毫秒；拒绝未知字段）。
-// ttl_ms 必须 > 0；tpm_wait_ms / tpm_wait_jitter_ms 允许 0（0=关闭短等/无抖动）。
+// DecodeRoutingStickySettings 解码并校验会话粘性配置（时长为 int 毫秒；拒绝未知字段）。ttl_ms 必须 > 0。
 func DecodeRoutingStickySettings(raw []byte) (RoutingStickySettings, error) {
 	var doc routingStickyDoc
 	if err := strictUnmarshal(raw, &doc); err != nil {
@@ -785,14 +742,9 @@ func DecodeRoutingStickySettings(raw []byte) (RoutingStickySettings, error) {
 	if doc.TTLMs <= 0 {
 		return RoutingStickySettings{}, errors.New("ttl_ms must be > 0")
 	}
-	if doc.TPMWaitMs < 0 || doc.TPMWaitJitterMs < 0 {
-		return RoutingStickySettings{}, errors.New("tpm_wait_ms/tpm_wait_jitter_ms must not be negative")
-	}
 	return RoutingStickySettings{
 		EnabledDefault: doc.EnabledDefault,
 		TTL:            msToDuration(doc.TTLMs),
-		TPMWait:        msToDuration(doc.TPMWaitMs),
-		TPMWaitJitter:  msToDuration(doc.TPMWaitJitterMs),
 	}, nil
 }
 
@@ -803,7 +755,7 @@ func routingStickyDefinition() Definition {
 		Label:    "会话粘性路由(sticky)",
 		Description: "同会话请求钉住上次成功渠道以保上游 prompt cache（OpenAI prompt_cache_key / " +
 			"Claude Code 会话头）。enabled_default 是渠道未单独配置时的默认开关；ttl_ms 是绑定绝对过期" +
-			"（命中不刷新，到期回落线路策略排序）；tpm_wait_ms/抖动是队首 TPM/并发满时的短等（0=不等）。",
+			"（仅原绑定完整成功时滑动续期，到期回落线路策略排序）。",
 		HotReload: true,
 		Default:   encodeRoutingStickySettings(DefaultRoutingStickySettings()),
 		Validate: func(raw json.RawMessage) error {
@@ -822,16 +774,46 @@ func GatewayRoutingSticky(ctx context.Context, store *SettingsStore) RoutingStic
 	return s
 }
 
-func defaultChannelTimeoutDefinition() Definition {
+// DefaultCapacityWaitTimeoutSetting 是全池并发短等的默认预算（§9.4/D9）。
+const DefaultCapacityWaitTimeoutSetting = time.Second
+
+func capacityWaitTimeoutDefinition() Definition {
 	return Definition{
-		Key:      GatewayDefaultChannelTimeoutKey,
+		Key:      GatewayCapacityWaitTimeoutKey,
 		Category: "gateway",
-		Label:    "默认渠道超时",
-		Description: "用户请求经网关调用上游时,渠道未配置 timeout_ms 的兜底超时。单位毫秒。" +
-			"渠道行上的 timeout_ms 优先于此默认值。" +
+		Label:    "全池并发短等预算",
+		Description: "候选池内所有渠道同时并发满时,整个请求最多共享等待多久再重扫一次(单位毫秒)。" +
+			"等待是全池共享且每请求仅一次,不随渠道数量线性增长;等待期间不占用任何渠道并发。" +
+			"仅并发满触发;熔断、权限、上游 429 冷却一律不等待,直接换渠道或返回。",
+		HotReload: true,
+		Default:   encodeMsSetting(DefaultCapacityWaitTimeoutSetting),
+		Validate: func(raw json.RawMessage) error {
+			_, err := DecodeNonNegativeMsSetting(raw)
+			return err
+		},
+	}
+}
+
+// GatewayCapacityWaitTimeout 读取当前生效的全池短等预算(解码失败回默认)。0 表示关闭短等。
+func GatewayCapacityWaitTimeout(ctx context.Context, store *SettingsStore) time.Duration {
+	d, err := DecodeNonNegativeMsSetting(store.Raw(ctx, GatewayCapacityWaitTimeoutKey))
+	if err != nil {
+		return DefaultCapacityWaitTimeoutSetting
+	}
+	return d
+}
+
+func defaultResponseTimeoutDefinition() Definition {
+	return Definition{
+		Key:      GatewayDefaultResponseTimeoutKey,
+		Category: "gateway",
+		Label:    "默认响应超时",
+		Description: "渠道未配置 response_timeout_ms 时的兜底超时(单位毫秒)。" +
+			"非流式覆盖连接、响应头、完整响应体与解析;流式只覆盖「拿到上游响应头」。" +
+			"渠道行上的正数 response_timeout_ms 优先;0 或负数不表示无限,一律按继承处理。" +
 			"不影响「渠道巡检」探测超时(admin_backend.channel_test.probe_timeout_ms)——检测专用、独立配置。",
 		HotReload: true,
-		Default:   encodeMsSetting(DefaultChannelTimeoutSetting),
+		Default:   encodeMsSetting(DefaultResponseTimeoutSetting),
 		Validate: func(raw json.RawMessage) error {
 			_, err := DecodePositiveMsSetting(raw)
 			return err
@@ -839,11 +821,37 @@ func defaultChannelTimeoutDefinition() Definition {
 	}
 }
 
-// GatewayDefaultChannelTimeout 读取当前生效的默认渠道超时(解码失败回默认)。
-func GatewayDefaultChannelTimeout(ctx context.Context, store *SettingsStore) time.Duration {
-	d, err := DecodePositiveMsSetting(store.Raw(ctx, GatewayDefaultChannelTimeoutKey))
+// GatewayDefaultResponseTimeout 读取当前生效的默认响应超时(解码失败回默认)。
+func GatewayDefaultResponseTimeout(ctx context.Context, store *SettingsStore) time.Duration {
+	d, err := DecodePositiveMsSetting(store.Raw(ctx, GatewayDefaultResponseTimeoutKey))
 	if err != nil {
-		return DefaultChannelTimeoutSetting
+		return DefaultResponseTimeoutSetting
+	}
+	return d
+}
+
+func defaultFirstTokenTimeoutDefinition() Definition {
+	return Definition{
+		Key:      GatewayDefaultFirstTokenTimeoutKey,
+		Category: "gateway",
+		Label:    "默认首字超时",
+		Description: "流式请求从发起上游调用到「首个有效生成 Token」的最大等待(单位毫秒)。" +
+			"它与响应超时同一起点,不是拿到响应头之后再重新计时;HTTP 响应头、SSE 空行、注释和" +
+			"纯心跳都不停止首字计时。渠道行上的正数 first_token_timeout_ms 优先;非流式不使用本项。",
+		HotReload: true,
+		Default:   encodeMsSetting(DefaultFirstTokenTimeoutSetting),
+		Validate: func(raw json.RawMessage) error {
+			_, err := DecodePositiveMsSetting(raw)
+			return err
+		},
+	}
+}
+
+// GatewayDefaultFirstTokenTimeout 读取当前生效的默认首字超时(解码失败回默认)。
+func GatewayDefaultFirstTokenTimeout(ctx context.Context, store *SettingsStore) time.Duration {
+	d, err := DecodePositiveMsSetting(store.Raw(ctx, GatewayDefaultFirstTokenTimeoutKey))
+	if err != nil {
+		return DefaultFirstTokenTimeoutSetting
 	}
 	return d
 }

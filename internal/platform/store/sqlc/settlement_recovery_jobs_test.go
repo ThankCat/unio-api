@@ -55,7 +55,7 @@ func createSettlementRecoveryFixture(t *testing.T, ctx context.Context, tx pgx.T
 		ErrorCode:             pgtype.Text{Valid: false},
 		ErrorMessage:          pgtype.Text{Valid: false},
 		InternalErrorDetail:   pgtype.Text{Valid: false},
-		ResponseStartedAt:     pgtype.Timestamptz{Valid: false},
+		GatewayFirstTokenAt:   pgtype.Timestamptz{Valid: false},
 		FinalUsageReceived:    false,
 		UsageMappingVersion:   pgtype.Text{Valid: false},
 		StartedAt:             timestamptz(time.Now().UTC()),

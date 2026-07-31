@@ -160,9 +160,9 @@ func TestOAISDKMockUpstreamTimeoutMapsTo504(t *testing.T) {
 	t.Cleanup(mock.Close)
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
-		Mode:             sdkfixture.UpstreamMock,
-		UpstreamBaseURL:  mock.URL,
-		ChannelTimeoutMS: 500, // 500ms 强制 channel 超时
+		Mode:                     sdkfixture.UpstreamMock,
+		UpstreamBaseURL:          mock.URL,
+		ChannelResponseTimeoutMS: 500, // 500ms 强制 channel 响应超时
 	})
 
 	client := openai.NewClient(

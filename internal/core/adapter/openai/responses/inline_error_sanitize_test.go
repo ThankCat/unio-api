@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 )
 
 func TestSanitizeInlineErrorMessage(t *testing.T) {
@@ -79,5 +81,33 @@ func TestSanitizedResponsesErrorEventStripsURL(t *testing.T) {
 	}
 	if strings.Contains(env.Message, "https://") {
 		t.Fatalf("url leaked: %q", env.Message)
+	}
+}
+
+// TestUpstreamStreamErrorMetadataIsSanitizedAtConstruction 冻结：结构化上游标识在构造处就已脱敏。
+// 它会被渲染进面向客户的错误响应，所以 base_url 之类的基础设施细节必须在这一层就消失，
+// 而不是依赖每个渲染方各自记得脱敏。
+func TestUpstreamStreamErrorMetadataIsSanitizedAtConstruction(t *testing.T) {
+	err := newUpstreamStreamError(
+		adapter.UpstreamMetadata{StatusCode: 500},
+		"server_error",
+		"upstream https://internal.provider.example/v1/responses failed\n\nretry later",
+	)
+
+	meta, ok := adapter.UpstreamMetadataOf(err)
+	if !ok {
+		t.Fatal("upstream metadata must be attached")
+	}
+	if meta.ErrorCode != "server_error" {
+		t.Fatalf("ErrorCode = %q", meta.ErrorCode)
+	}
+	if strings.Contains(meta.ErrorMessage, "internal.provider.example") {
+		t.Fatalf("upstream base_url leaked into the client-facing identity: %q", meta.ErrorMessage)
+	}
+	if strings.Contains(meta.ErrorMessage, "\n") {
+		t.Fatalf("newlines must be collapsed: %q", meta.ErrorMessage)
+	}
+	if !strings.Contains(meta.ErrorMessage, "[redacted]") {
+		t.Fatalf("expected the URL to be redacted, got %q", meta.ErrorMessage)
 	}
 }

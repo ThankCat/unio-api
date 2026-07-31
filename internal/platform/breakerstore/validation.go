@@ -101,7 +101,7 @@ func validateAcquireAttemptInput(in AcquireAttemptInput) error {
 	if !in.RequestMode.valid() {
 		return configInvalid("unknown request mode")
 	}
-	if in.ChannelAdmissionRevision <= 0 || in.ChannelRateRevision <= 0 ||
+	if in.ChannelCapacityRevision <= 0 ||
 		in.GlobalConcurrencyRevision <= 0 || in.CircuitBreakerRevision <= 0 {
 		return configInvalid("attempt control revisions must be positive")
 	}
@@ -124,14 +124,6 @@ func validateFinishInput(permit AttemptPermit, outcome FinishOutcome) error {
 	if outcome.ProviderEvidence != ProviderEvidenceNone &&
 		(outcome.ProviderOutcome != OutcomeIgnored || outcome.ChannelOutcome != OutcomeEligibleFailure) {
 		return configInvalid("origin evidence requires ignored origin and eligible channel failure outcomes")
-	}
-	if outcome.FirstTokenMs != nil {
-		if permit.RequestMode != ModeStream {
-			return configInvalid("non-stream attempts cannot report first-token latency")
-		}
-		if *outcome.FirstTokenMs < 0 {
-			return configInvalid("first-token latency must not be negative")
-		}
 	}
 	if !outcome.RequestWriteState.valid() {
 		return configInvalid("unknown request write state")
@@ -177,7 +169,7 @@ func validateSnapshotCandidate(candidate SnapshotCandidateInput) error {
 	if candidate.ProviderID <= 0 || candidate.ChannelID <= 0 {
 		return configInvalid("snapshot provider and channel ids must be positive")
 	}
-	if candidate.OriginRevision <= 0 || candidate.ProviderStatusRevision <= 0 || candidate.ChannelConfigRevision <= 0 || candidate.ChannelAdmissionRevision <= 0 {
+	if candidate.OriginRevision <= 0 || candidate.ProviderStatusRevision <= 0 || candidate.ChannelConfigRevision <= 0 || candidate.ChannelCapacityRevision <= 0 {
 		return configInvalid("snapshot provider and channel revisions must be positive")
 	}
 	return nil
@@ -187,7 +179,7 @@ func validateSnapshotManyInput(in SnapshotManyInput) error {
 	if strings.TrimSpace(in.IntegrityEpoch) == "" || in.IntegrityRevision <= 0 {
 		return configInvalid("snapshot integrity epoch and revision are required")
 	}
-	if in.ChannelRateRevision <= 0 || in.GlobalConcurrencyRevision <= 0 ||
+	if in.GlobalConcurrencyRevision <= 0 ||
 		in.CircuitBreakerRevision <= 0 || in.RoutingBalanceRevision <= 0 {
 		return configInvalid("snapshot control revisions must be positive")
 	}

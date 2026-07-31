@@ -3,6 +3,7 @@ package responses
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
@@ -208,6 +209,34 @@ type fakeStreamResponsesAdapter struct {
 	err     error
 }
 
+type fakeBridgeStreamChatAdapter struct {
+	called int
+	chunks []chatcompletionsadapter.ChatStreamChunk
+	facts  *adapter.ResponseFacts
+	err    error
+}
+
+func (a *fakeBridgeStreamChatAdapter) StreamChatCompletions(
+	ctx context.Context,
+	_ channel.Runtime,
+	_ chatcompletionsadapter.ChatRequest,
+	emit func(chatcompletionsadapter.ChatStreamChunk) error,
+) (adapter.StreamOutcome, error) {
+	a.called++
+	adapter.MarkTransportStarted(ctx)
+	adapter.MarkRequestWritten(ctx, nil)
+	adapter.MarkResponseHeadersReceived(ctx)
+	for _, chunk := range a.chunks {
+		if chatcompletionsadapter.FirstTokenPayload(chunk) != "" {
+			adapter.MarkFirstTokenEligible(ctx)
+		}
+		if err := emit(chunk); err != nil {
+			return adapter.StreamOutcome{Facts: a.facts}, err
+		}
+	}
+	return adapter.StreamOutcome{Facts: a.facts}, a.err
+}
+
 func (a *fakeStreamResponsesAdapter) StreamResponse(_ context.Context, _ channel.Runtime, req responsesadapter.Request, emit func(responsesadapter.StreamChunk) error) (adapter.StreamOutcome, error) {
 	a.called++
 	a.gotBody = req.Body
@@ -220,8 +249,8 @@ func (a *fakeStreamResponsesAdapter) StreamResponse(_ context.Context, _ channel
 }
 
 // TestStreamResponse_DirectPassthrough 是直传流式端到端回归：经真实 RunStreamGeneric 资金关键循环，
-// 上游 SSE 命名事件原文透传给客户（仅 response.model 回显改写为客户请求名），response.completed 不被
-// 二次补发，settlement 落直传 facts。
+// 上游 SSE 命名事件原文透传给客户（仅 response.model 回显改写为客户请求名），response.completed 在
+// settlement 后原样交付且不重复，settlement 落直传 facts。
 func TestStreamResponse_DirectPassthrough(t *testing.T) {
 	u := adapter.ChatUsage{PromptTokens: 11, CompletionTokens: 5, TotalTokens: 16}
 	directStream := &fakeStreamResponsesAdapter{
@@ -257,8 +286,12 @@ func TestStreamResponse_DirectPassthrough(t *testing.T) {
 	svc := newServiceForTest(router, registry, settlement, authorizer, requestLog)
 
 	var events []gatewayapi.ResponsesStreamEvent
+	terminalAfterSettlement := false
 	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(ev gatewayapi.ResponsesStreamEvent) error {
 		events = append(events, ev)
+		if ev.Type == "response.completed" {
+			terminalAfterSettlement = len(settlement.params) == 1
+		}
 		return nil
 	})
 	if err != nil {
@@ -287,6 +320,9 @@ func TestStreamResponse_DirectPassthrough(t *testing.T) {
 	}
 	if events[0].Type != "response.created" || events[2].Type != "response.completed" {
 		t.Fatalf("event sequence = %v, want created..completed", eventTypes(events))
+	}
+	if !terminalAfterSettlement {
+		t.Fatal("response.completed must be delivered after durable settlement")
 	}
 
 	// response.model 回显改写为客户请求名（gpt-5.5），其余字段原样保留。
@@ -324,6 +360,12 @@ func TestStreamResponse_DirectPartialSettlementCountsVisibleText(t *testing.T) {
 		chunks: []responsesadapter.StreamChunk{
 			{EventType: "response.created", Data: json.RawMessage(`{"type":"response.created","response":{"id":"resp_1","model":"gpt-5.5-up","status":"in_progress"}}`)},
 			{EventType: "response.output_text.delta", Data: json.RawMessage(`{"type":"response.output_text.delta","delta":"partial visible answer"}`)},
+			{
+				EventType:    "response.completed",
+				Data:         json.RawMessage(`{"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.5-up","status":"completed"}}`),
+				ResponseID:   "resp_1",
+				FinishReason: "completed",
+			},
 		},
 	}
 	registry := &fakeRegistry{
@@ -336,7 +378,13 @@ func TestStreamResponse_DirectPartialSettlementCountsVisibleText(t *testing.T) {
 
 	svc := newServiceForTest(router, registry, settlement, authorizer, requestLog)
 
-	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(gatewayapi.ResponsesStreamEvent) error {
+	var events []gatewayapi.ResponsesStreamEvent
+	terminalAfterSettlement := false
+	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(ev gatewayapi.ResponsesStreamEvent) error {
+		events = append(events, ev)
+		if ev.Type == "response.completed" {
+			terminalAfterSettlement = len(settlement.params) == 1
+		}
 		return nil
 	})
 	if err != nil {
@@ -354,5 +402,260 @@ func TestStreamResponse_DirectPartialSettlementCountsVisibleText(t *testing.T) {
 	}
 	if !facts.Usage.OutputTokensTotal.IsKnown() || facts.Usage.OutputTokensTotal.Value <= 0 {
 		t.Fatalf("expected estimated output tokens > 0, got %#v", facts.Usage.OutputTokensTotal)
+	}
+	if got := eventTypes(events); len(got) != 3 || got[0] != "response.created" || got[2] != "response.completed" {
+		t.Fatalf("event sequence = %v, want created, delta, completed", got)
+	}
+	if !terminalAfterSettlement {
+		t.Fatal("usage-missing response.completed must be delivered after partial settlement")
+	}
+}
+
+func TestStreamResponse_DirectZeroOutputSettlesWithoutGatewayFirstToken(t *testing.T) {
+	finalUsage := adapter.ChatUsage{PromptTokens: 2, CompletionTokens: 0, TotalTokens: 2}
+	directStream := &fakeStreamResponsesAdapter{
+		chunks: []responsesadapter.StreamChunk{
+			{EventType: "response.created", Data: json.RawMessage(`{"type":"response.created","response":{"id":"resp_zero","model":"gpt-5.5-up","status":"in_progress"}}`)},
+			{
+				EventType:    "response.completed",
+				Data:         json.RawMessage(`{"type":"response.completed","response":{"id":"resp_zero","model":"gpt-5.5-up","status":"completed","usage":{"input_tokens":2,"output_tokens":0,"total_tokens":2}}}`),
+				ResponseID:   "resp_zero",
+				FinishReason: "completed",
+				Usage:        &finalUsage,
+			},
+		},
+		facts: &adapter.ResponseFacts{
+			UpstreamProtocol:    "openai",
+			UpstreamResponseID:  "resp_zero",
+			UpstreamModel:       "gpt-5.5-up",
+			Finish:              adapter.FinishFacts{Class: adapter.FinishStop, RawReason: "completed"},
+			Usage:               finalUsage.ToUsageFacts(),
+			UsageSource:         usage.SourceUpstreamStream,
+			UsageMappingVersion: "responses.v1",
+		},
+	}
+	registry := &fakeRegistry{
+		streamResponsesAdapters: map[string]responsesadapter.StreamResponsesAdapter{"openai": directStream},
+	}
+	settlement := &fakeSettlement{}
+	svc := newServiceForTest(
+		&fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("openai", 1, "gpt-5.5-up")}}},
+		registry,
+		settlement,
+		&fakeAuthorizer{},
+		newFakeRequestLog(),
+	)
+
+	var events []gatewayapi.ResponsesStreamEvent
+	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(ev gatewayapi.ResponsesStreamEvent) error {
+		events = append(events, ev)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected zero-output stream error: %v", err)
+	}
+	if len(settlement.params) != 1 {
+		t.Fatalf("settlement calls = %d, want 1", len(settlement.params))
+	}
+	if settlement.params[0].GatewayFirstTokenAt != nil {
+		t.Fatalf("zero-output GatewayFirstTokenAt = %v, want nil", settlement.params[0].GatewayFirstTokenAt)
+	}
+	if got := eventTypes(events); len(got) != 2 || got[0] != "response.created" || got[1] != "response.completed" {
+		t.Fatalf("zero-output events = %v, want created, completed", got)
+	}
+}
+
+func TestStreamResponse_PreludeLimitFallsBackWithoutLeakingFirstCandidate(t *testing.T) {
+	prelude := make([]responsesadapter.StreamChunk, 65)
+	for i := range prelude {
+		prelude[i] = responsesadapter.StreamChunk{
+			EventType: "response.created",
+			Data:      json.RawMessage(`{"type":"response.created","response":{"id":"resp_first","status":"in_progress"}}`),
+		}
+	}
+	first := &fakeStreamResponsesAdapter{chunks: prelude}
+	usageFacts := adapter.ChatUsage{PromptTokens: 2, CompletionTokens: 1, TotalTokens: 3}
+	second := &fakeStreamResponsesAdapter{
+		chunks: []responsesadapter.StreamChunk{
+			{EventType: "response.created", Data: json.RawMessage(`{"type":"response.created","response":{"id":"resp_second","status":"in_progress"}}`)},
+			{EventType: "response.output_text.delta", Data: json.RawMessage(`{"type":"response.output_text.delta","delta":"ok"}`)},
+			{EventType: "response.completed", Data: json.RawMessage(`{"type":"response.completed","response":{"id":"resp_second","status":"completed"}}`), ResponseID: "resp_second", FinishReason: "completed", Usage: &usageFacts},
+		},
+		facts: &adapter.ResponseFacts{
+			UpstreamProtocol:    "openai",
+			UpstreamResponseID:  "resp_second",
+			UpstreamModel:       "gpt-second",
+			Finish:              adapter.FinishFacts{Class: adapter.FinishStop, RawReason: "completed"},
+			Usage:               usageFacts.ToUsageFacts(),
+			UsageSource:         usage.SourceUpstreamStream,
+			UsageMappingVersion: "responses.v1",
+		},
+	}
+	registry := &fakeRegistry{streamResponsesAdapters: map[string]responsesadapter.StreamResponsesAdapter{
+		"first": first, "second": second,
+	}}
+	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{
+		candidate("first", 1, "gpt-first"),
+		candidate("second", 2, "gpt-second"),
+	}}}
+	settlement := &fakeSettlement{}
+	svc := NewResponsesService(
+		router, registry, passthroughPreparer{}, lifecycle.ProviderErrorClassifier{},
+		newFakeRequestLog(), settlement, &fakeAuthorizer{}, nil, nil,
+	)
+
+	var events []gatewayapi.ResponsesStreamEvent
+	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(event gatewayapi.ResponsesStreamEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("prelude fallback: %v", err)
+	}
+	if first.called != 1 || second.called != 1 {
+		t.Fatalf("adapter calls first=%d second=%d, want 1/1", first.called, second.called)
+	}
+	if len(events) != 3 || events[0].Type != "response.created" || events[1].Type != "response.output_text.delta" {
+		t.Fatalf("client events leaked first candidate: %v", eventTypes(events))
+	}
+	created, err := json.Marshal(events[0])
+	if err != nil {
+		t.Fatalf("marshal created: %v", err)
+	}
+	var createdEnvelope struct {
+		Response struct {
+			ID string `json:"id"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(created, &createdEnvelope); err != nil || createdEnvelope.Response.ID != "resp_second" {
+		t.Fatalf("unexpected created event after fallback: body=%s err=%v", created, err)
+	}
+	if len(settlement.params) != 1 || settlement.params[0].Facts.UpstreamResponseID != "resp_second" {
+		t.Fatalf("settlement did not use fallback candidate: %+v", settlement.params)
+	}
+}
+
+func TestStreamResponse_BridgeRefusalIsDeliveredBeforePartialSettlementTerminal(t *testing.T) {
+	bridge := &fakeBridgeStreamChatAdapter{
+		chunks: []chatcompletionsadapter.ChatStreamChunk{{
+			ID: "chatcmpl_refusal", Model: "deepseek-v4", Refusal: strptr("refused"),
+		}},
+	}
+	registry := &fakeRegistry{
+		streamAdapters: map[string]chatcompletionsadapter.StreamChatAdapter{"deepseek": bridge},
+		tokenizers:     map[string]chatcompletionsadapter.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
+	}
+	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{
+		candidate("deepseek", 1, "deepseek-v4"),
+	}}}
+	settlement := &fakeSettlement{}
+	svc := newServiceForTest(router, registry, settlement, &fakeAuthorizer{}, newFakeRequestLog())
+
+	var events []gatewayapi.ResponsesStreamEvent
+	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(event gatewayapi.ResponsesStreamEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("stream refusal: %v", err)
+	}
+	if bridge.called != 1 || len(settlement.params) != 1 {
+		t.Fatalf("bridge calls=%d settlements=%d, want 1/1", bridge.called, len(settlement.params))
+	}
+	refusalIndex, completedIndex := -1, -1
+	for i, event := range events {
+		switch event.Type {
+		case gatewayapi.EventRefusalDelta:
+			if event.Delta != "refused" {
+				t.Fatalf("refusal delta = %q, want refused", event.Delta)
+			}
+			refusalIndex = i
+		case gatewayapi.EventResponseCompleted:
+			completedIndex = i
+		}
+	}
+	if refusalIndex < 0 || completedIndex < 0 || refusalIndex >= completedIndex {
+		t.Fatalf("bridge refusal/terminal sequence = %v", eventTypes(events))
+	}
+	facts := settlement.params[0].Facts
+	if facts.UsageSource != usage.SourcePartialStreamEstimate ||
+		!facts.Usage.OutputTokensTotal.IsKnown() || facts.Usage.OutputTokensTotal.Value <= 0 {
+		t.Fatalf("partial refusal settlement facts = %#v", facts)
+	}
+}
+
+type alwaysRetryClassifier struct{}
+
+func (alwaysRetryClassifier) IsRetryable(error) bool { return true }
+
+func TestStreamResponse_BridgeTokenWriteFailureDoesNotFallbackOrCharge(t *testing.T) {
+	first := &fakeBridgeStreamChatAdapter{
+		chunks: []chatcompletionsadapter.ChatStreamChunk{{
+			ID: "chatcmpl_first", Model: "deepseek-v4", Content: "hello",
+		}},
+	}
+	second := &fakeBridgeStreamChatAdapter{
+		chunks: []chatcompletionsadapter.ChatStreamChunk{{
+			ID: "chatcmpl_second", Model: "deepseek-v4-backup", Content: "backup",
+		}},
+	}
+	registry := &fakeRegistry{
+		streamAdapters: map[string]chatcompletionsadapter.StreamChatAdapter{
+			"first": first, "second": second,
+		},
+		tokenizers: map[string]chatcompletionsadapter.ChatInputTokenizer{
+			"first": fakeTokenizer{}, "second": fakeTokenizer{},
+		},
+	}
+	requestLog := newFakeRequestLog()
+	settlement := &fakeSettlement{}
+	authorizer := &fakeAuthorizer{}
+	svc := NewResponsesService(
+		&fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{
+			candidate("first", 1, "deepseek-v4"),
+			candidate("second", 2, "deepseek-v4-backup"),
+		}}},
+		registry,
+		passthroughPreparer{},
+		alwaysRetryClassifier{},
+		requestLog,
+		settlement,
+		authorizer,
+		nil,
+		nil,
+	)
+
+	writeErr := errors.New("client rejected first token frame")
+	var delivered []string
+	tokenWriteAttempted := false
+	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(event gatewayapi.ResponsesStreamEvent) error {
+		if event.Type == gatewayapi.EventOutputTextDelta {
+			tokenWriteAttempted = true
+			return writeErr
+		}
+		delivered = append(delivered, event.Type)
+		return nil
+	})
+
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("stream error = %v, want client write error", err)
+	}
+	if !tokenWriteAttempted || len(delivered) == 0 || delivered[0] != gatewayapi.EventResponseCreated {
+		t.Fatalf("successful prelude=%v token_write_attempted=%v", delivered, tokenWriteAttempted)
+	}
+	if first.called != 1 || second.called != 0 {
+		t.Fatalf("adapter calls first=%d second=%d, want 1/0 after customer frame delivery", first.called, second.called)
+	}
+	if len(settlement.params) != 0 {
+		t.Fatalf("settlement calls = %d, want 0 before a Token is delivered", len(settlement.params))
+	}
+	if authorizer.releaseCount != 1 {
+		t.Fatalf("authorization releases = %d, want 1", authorizer.releaseCount)
+	}
+	if got := requestLog.gatewayFirstTokens.Load(); got != 0 {
+		t.Fatalf("Gateway first-token writes = %d, want 0", got)
+	}
+	if len(requestLog.deliveryInterrupted) != 1 {
+		t.Fatalf("delivery interrupted writes = %v, want one", requestLog.deliveryInterrupted)
 	}
 }

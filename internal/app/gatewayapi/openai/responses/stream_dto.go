@@ -18,6 +18,8 @@ const (
 	EventReasoningTextDone         = "response.reasoning_text.done"
 	EventReasoningSummaryTextDelta = "response.reasoning_summary_text.delta"
 	EventReasoningSummaryTextDone  = "response.reasoning_summary_text.done"
+	EventRefusalDelta              = "response.refusal.delta"
+	EventRefusalDone               = "response.refusal.done"
 	EventFunctionCallArgsDelta     = "response.function_call_arguments.delta"
 	EventFunctionCallArgsDone      = "response.function_call_arguments.done"
 	EventResponseCompleted         = "response.completed"
@@ -44,6 +46,8 @@ type ResponsesStreamEvent struct {
 	// 内容增量 / 终值：output_text / reasoning_text / function_call_arguments 事件使用。
 	Delta string `json:"delta,omitempty"`
 	Text  string `json:"text,omitempty"`
+	// Refusal 是 response.refusal.done 的最终拒绝文本。
+	Refusal string `json:"refusal,omitempty"`
 
 	// Part：content_part.added|done 事件携带的 part 形状。
 	Part *ResponseOutputContent `json:"part,omitempty"`

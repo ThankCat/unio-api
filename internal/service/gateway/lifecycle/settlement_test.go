@@ -454,7 +454,7 @@ func insertChatSettlementChannel(t *testing.T, ctx context.Context, pool *pgxpoo
 
 	var id int64
 	err := pool.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
+			INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, response_timeout_ms)
 		VALUES ($1, $2, 'openai', 'openai', $3, $4, $5, $6)
 		RETURNING id
 	`, providerID, fmt.Sprintf("chat-settlement-channel-%d", suffix), "sk-chat-settlement-test", "enabled", 10, 30000).Scan(&id)

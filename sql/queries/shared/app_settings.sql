@@ -20,31 +20,27 @@ WHERE key = $1
 FOR UPDATE;
 
 -- name: GetGatewayAdmissionControlRevisions :one
--- GetGatewayAdmissionControlRevisions 在同一 PostgreSQL statement snapshot 中读取完整性 epoch、线路限流、渠道限流与全局并发 revision；任一必需行缺失时返回 no rows。
+-- GetGatewayAdmissionControlRevisions 在同一 PostgreSQL statement snapshot 中读取完整性 epoch、线路入口限流与全局并发 revision；任一必需行缺失时返回 no rows。
 SELECT
     epoch.value AS runtime_state_epoch_value,
     epoch.revision AS runtime_state_epoch_revision,
     route_rate_limit.revision AS route_rate_limit_defaults_revision,
-    channel_rate_limit.revision AS channel_rate_limit_defaults_revision,
     concurrency.revision AS concurrency_defaults_revision
 FROM app_settings AS epoch
 JOIN app_settings AS route_rate_limit
   ON route_rate_limit.key = 'gateway.route_rate_limit_defaults'
-JOIN app_settings AS channel_rate_limit
-  ON channel_rate_limit.key = 'gateway.channel_rate_limit_defaults'
 JOIN app_settings AS concurrency
   ON concurrency.key = 'gateway.concurrency_defaults'
 WHERE epoch.key = 'gateway.runtime_state_epoch';
 
 -- name: GetGatewayRuntimeReadinessSnapshot :one
--- GetGatewayRuntimeReadinessSnapshot 在同一 statement snapshot 中读取 readiness 所需的 epoch 与五个关键 control revision，
--- 并确认关键 setting、Channel admission 与 Origin 围栏的持久操作均已终结。
+-- GetGatewayRuntimeReadinessSnapshot 在同一 statement snapshot 中读取 readiness 所需的 epoch 与四个关键 control revision，
+-- 并确认关键 setting、Channel capacity 与 Origin 围栏的持久操作均已终结。
 -- 任一必需行缺失时返回 no rows，Gateway 必须 fail-closed。
 SELECT
     epoch.value AS runtime_state_epoch_value,
     epoch.revision AS runtime_state_epoch_revision,
     route_rate_limit.revision AS route_rate_limit_defaults_revision,
-    channel_rate_limit.revision AS channel_rate_limit_defaults_revision,
     concurrency.revision AS concurrency_defaults_revision,
     circuit_breaker.revision AS circuit_breaker_revision,
     routing_balance.revision AS routing_balance_revision,
@@ -54,12 +50,11 @@ SELECT
         WHERE operation.state <> ALL (ARRAY['committed'::text, 'aborted'::text])
           AND (
               operation.kind = 'runtime_state_epoch'
-              OR operation.kind = 'channel_admission_limits'
+              OR operation.kind = 'channel_capacity'
               OR (
                   operation.kind = 'app_setting'
                   AND operation.setting_key = ANY (ARRAY[
                       'gateway.route_rate_limit_defaults'::text,
-                      'gateway.channel_rate_limit_defaults'::text,
                       'gateway.concurrency_defaults'::text,
                       'gateway.circuit_breaker'::text,
                       'gateway.routing_balance'::text
@@ -91,12 +86,11 @@ SELECT
             WHERE operation.state <> ALL (ARRAY['committed'::text, 'aborted'::text])
               AND (
                   operation.kind = 'runtime_state_epoch'
-                  OR operation.kind = 'channel_admission_limits'
+                  OR operation.kind = 'channel_capacity'
                   OR (
                       operation.kind = 'app_setting'
                       AND operation.setting_key = ANY (ARRAY[
                           'gateway.route_rate_limit_defaults'::text,
-                          'gateway.channel_rate_limit_defaults'::text,
                           'gateway.concurrency_defaults'::text,
                           'gateway.circuit_breaker'::text,
                           'gateway.routing_balance'::text
@@ -122,8 +116,6 @@ SELECT
 FROM app_settings AS epoch
 JOIN app_settings AS route_rate_limit
   ON route_rate_limit.key = 'gateway.route_rate_limit_defaults'
-JOIN app_settings AS channel_rate_limit
-  ON channel_rate_limit.key = 'gateway.channel_rate_limit_defaults'
 JOIN app_settings AS concurrency
   ON concurrency.key = 'gateway.concurrency_defaults'
 JOIN app_settings AS circuit_breaker

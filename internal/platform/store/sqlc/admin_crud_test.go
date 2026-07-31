@@ -72,19 +72,22 @@ func TestChannelCRUDQueries(t *testing.T) {
 	suffix := time.Now().UnixNano()
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("admin-chan-prov-%d", suffix), "enabled")
 	created, err := queries.CreateChannel(ctx, sqlc.CreateChannelParams{
-		ProviderID: providerID,
-		Name:       "primary",
-		Protocol:   "openai",
-		AdapterKey: "openai",
-		Credential: "sk-admin-create",
-		Status:     "enabled",
-		Priority:   10,
-		TimeoutMs:  pgtype.Int4{Int32: 15000, Valid: true},
+		ProviderID:          providerID,
+		Name:                "primary",
+		Protocol:            "openai",
+		AdapterKey:          "openai",
+		Credential:          "sk-admin-create",
+		Status:              "enabled",
+		Priority:            10,
+		ResponseTimeoutMs:   pgtype.Int4{Int32: 15000, Valid: true},
+		FirstTokenTimeoutMs: pgtype.Int4{Int32: 60000, Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("create channel: %v", err)
 	}
-	if created.ID == 0 || created.ProviderID != providerID || !created.TimeoutMs.Valid || created.TimeoutMs.Int32 != 15000 {
+	if created.ID == 0 || created.ProviderID != providerID ||
+		!created.ResponseTimeoutMs.Valid || created.ResponseTimeoutMs.Int32 != 15000 ||
+		!created.FirstTokenTimeoutMs.Valid || created.FirstTokenTimeoutMs.Int32 != 60000 {
 		t.Fatalf("unexpected created channel: %+v", created)
 	}
 	// 渠道凭据明文存储（产品决策）：可回读。
@@ -105,12 +108,14 @@ func TestChannelCRUDQueries(t *testing.T) {
 
 	updated, err := queries.UpdateChannel(ctx, sqlc.UpdateChannelParams{
 		ID: created.ID, Name: "renamed",
-		Status: "disabled", Priority: 20, TimeoutMs: pgtype.Int4{},
+		Status: "disabled", Priority: 20,
+		ResponseTimeoutMs: pgtype.Int4{}, FirstTokenTimeoutMs: pgtype.Int4{},
 	})
 	if err != nil {
 		t.Fatalf("update channel: %v", err)
 	}
-	if updated.Name != "renamed" || updated.Status != "disabled" || updated.Priority != 20 || updated.TimeoutMs.Valid {
+	if updated.Name != "renamed" || updated.Status != "disabled" || updated.Priority != 20 ||
+		updated.ResponseTimeoutMs.Valid || updated.FirstTokenTimeoutMs.Valid {
 		t.Fatalf("unexpected updated channel: %+v", updated)
 	}
 	// protocol / adapter_key 不可在 UpdateChannel 修改，应保持原值。
@@ -118,33 +123,26 @@ func TestChannelCRUDQueries(t *testing.T) {
 		t.Fatalf("update must not change protocol/adapter_key: %+v", updated)
 	}
 
-	limited, err := queries.CommitChannelAdmissionLimitsAtRevision(ctx, sqlc.CommitChannelAdmissionLimitsAtRevisionParams{
-		RpmLimit:         pgtype.Int4{Int32: 30, Valid: true},
-		TpmLimit:         pgtype.Int4{},
-		RpdLimit:         pgtype.Int4{Int32: 0, Valid: true},
+	limited, err := queries.CommitChannelCapacityAtRevision(ctx, sqlc.CommitChannelCapacityAtRevisionParams{
 		ConcurrencyLimit: pgtype.Int4{Int32: 2, Valid: true},
-		NextRevision:     updated.AdmissionLimitsRevision + 1,
+		NextRevision:     updated.CapacityRevision + 1,
 		ID:               updated.ID,
-		CurrentRevision:  updated.AdmissionLimitsRevision,
+		CurrentRevision:  updated.CapacityRevision,
 	})
 	if err != nil {
-		t.Fatalf("commit channel admission limits: %v", err)
+		t.Fatalf("commit channel capacity: %v", err)
 	}
-	if limited.AdmissionLimitsRevision != updated.AdmissionLimitsRevision+1 || limited.RpmLimit.Int32 != 30 ||
-		!limited.RpdLimit.Valid || limited.RpdLimit.Int32 != 0 || limited.TpmLimit.Valid || limited.ConcurrencyLimit.Int32 != 2 {
-		t.Fatalf("unexpected committed admission limits: %+v", limited)
+	if limited.CapacityRevision != updated.CapacityRevision+1 || limited.ConcurrencyLimit.Int32 != 2 {
+		t.Fatalf("unexpected committed channel capacity: %+v", limited)
 	}
-	_, err = queries.CommitChannelAdmissionLimitsAtRevision(ctx, sqlc.CommitChannelAdmissionLimitsAtRevisionParams{
-		RpmLimit:         limited.RpmLimit,
-		TpmLimit:         limited.TpmLimit,
-		RpdLimit:         limited.RpdLimit,
+	_, err = queries.CommitChannelCapacityAtRevision(ctx, sqlc.CommitChannelCapacityAtRevisionParams{
 		ConcurrencyLimit: limited.ConcurrencyLimit,
-		NextRevision:     limited.AdmissionLimitsRevision + 1,
+		NextRevision:     limited.CapacityRevision + 1,
 		ID:               limited.ID,
-		CurrentRevision:  limited.AdmissionLimitsRevision,
+		CurrentRevision:  limited.CapacityRevision,
 	})
 	if !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("semantic no-op must not increment admission revision, got %v", err)
+		t.Fatalf("semantic no-op must not increment capacity revision, got %v", err)
 	}
 
 	affected, err := queries.UpdateChannelCredential(ctx, sqlc.UpdateChannelCredentialParams{
@@ -186,7 +184,7 @@ func TestChannelCredentialRotationRevisionCAS(t *testing.T) {
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("credential-cas-%d", suffix), "enabled")
 	created, err := queries.CreateChannel(ctx, sqlc.CreateChannelParams{
 		ProviderID: providerID, Name: "credential-cas",
-		Protocol: "openai", AdapterKey: "openai", Credential: "sk-old", Status: "enabled", Priority: 1,
+		Protocol: "openai", AdapterKey: "openai", Credential: "sk-old", Status: "enabled", Priority: 10,
 	})
 	if err != nil {
 		t.Fatalf("create channel: %v", err)

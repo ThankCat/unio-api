@@ -17,7 +17,13 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
-const defaultChannelTimeout = 30 * time.Second
+// defaultResponseTimeoutFallback / defaultFirstTokenTimeoutFallback 是 settings 尚未推送时的内置兜底。
+// 它们只在装配阶段短暂生效；真实默认来自 gateway.default_response_timeout_ms /
+// gateway.default_first_token_timeout_ms（§11.3）。
+const (
+	defaultResponseTimeoutFallback   = 200 * time.Second
+	defaultFirstTokenTimeoutFallback = 60 * time.Second
+)
 
 const (
 	// ProtocolOpenAI 是 OpenAI Chat Completions ingress 协议族标识。
@@ -76,14 +82,14 @@ type ChatRouteCandidate struct {
 	ProviderID int64
 	// Provider identity and revisions are immutable facts of this candidate.
 	// Admission and audit code must not infer them later from mutable rows.
-	OriginRevision                 int64
-	ProviderStatusRevision         int64
-	ChannelConfigRevision          int64
-	ChannelAdmissionLimitsRevision int64
-	AdapterKey                     string
-	Protocol                       string
-	Channel                        channel.Runtime
-	UpstreamModel                  string
+	OriginRevision          int64
+	ProviderStatusRevision  int64
+	ChannelConfigRevision   int64
+	ChannelCapacityRevision int64
+	AdapterKey              string
+	Protocol                string
+	Channel                 channel.Runtime
+	UpstreamModel           string
 
 	// RouteName 是本次请求绑定线路的名称（routes.name），供 access log 的 router 字段使用。
 	RouteName string
@@ -126,12 +132,6 @@ type ChatRouteCandidate struct {
 	StickyEnabled *bool
 	StickyTTL     *time.Duration
 
-	// RPMLimit/TPMLimit/RPDLimit 是该候选命中渠道的渠道级限流上限（P2-8）：
-	// nil 表示「继承渠道默认限流」，0 表示「显式不限」，>0 表示具体上限。调用上游前在 attempt runner 生效。
-	RPMLimit *int64
-	TPMLimit *int64
-	RPDLimit *int64
-
 	// ConcurrencyLimit 是该候选命中渠道的在途并发上限（DEC-029）：
 	// nil=继承并发默认 channel_limit，0=显式不限，>0=具体上限。命中时该候选被跳过 fallback 到下一渠道。
 	ConcurrencyLimit *int64
@@ -146,6 +146,10 @@ type ChatRoutePlan struct {
 	RequestedModel string
 	Candidates     []ChatRouteCandidate
 	PoolSize       int
+
+	// ModelDBID 是 RequestedModel 解析出的模型主键。Sticky key 需要它以避免同一会话
+	// 跨模型共享绑定（§10.1）；候选行天然共享同一个模型，所以这是计划级事实。
+	ModelDBID int64
 
 	// RouteMode 是本次请求解析出的线路策略（balanced/fixed），供 lifecycle 候选排序消费。
 	RouteMode string
@@ -170,12 +174,12 @@ type resolvedRoute struct {
 
 // Router 负责根据 project 和 requested model 选择可用 channel。
 //
-// defaultTimeout 可运行时热改（SetDefaultTimeout），用 atomic 存储（纳秒）：
-// 路由热路径每次候选构造都会读取，无锁竞争。
+// 两个全局默认超时可运行时热改，用 atomic 存储（纳秒）：路由热路径每次候选构造都会读取，无锁竞争。
 type Router struct {
-	store               Store
-	defaultTimeoutNanos atomic.Int64
-	logger              *zap.Logger
+	store                         Store
+	defaultResponseTimeoutNanos   atomic.Int64
+	defaultFirstTokenTimeoutNanos atomic.Int64
+	logger                        *zap.Logger
 }
 
 // Option 调整 Router 的可选依赖（如日志）。
@@ -191,30 +195,42 @@ func WithLogger(logger *zap.Logger) Option {
 }
 
 // NewRouter 创建 routing router。
-func NewRouter(store Store, defaultTimeout time.Duration, opts ...Option) *Router {
+func NewRouter(store Store, defaultResponseTimeout time.Duration, opts ...Option) *Router {
 	r := &Router{
 		store:  store,
 		logger: zap.NewNop(),
 	}
-	r.SetDefaultTimeout(defaultTimeout)
+	r.SetDefaultResponseTimeout(defaultResponseTimeout)
+	r.SetDefaultFirstTokenTimeout(defaultFirstTokenTimeoutFallback)
 	for _, opt := range opts {
 		opt(r)
 	}
 	return r
 }
 
-// SetDefaultTimeout 原子替换默认渠道超时（运行时热改入口）；<=0 兜底为内置 30s。
-// 仅影响之后的候选构造；渠道行上的 timeout_ms 始终优先。
-func (r *Router) SetDefaultTimeout(d time.Duration) {
+// SetDefaultResponseTimeout 原子替换全局默认响应超时（运行时热改入口）；<=0 兜底为内置默认。
+// 仅影响之后的候选构造；渠道行上的正数 response_timeout_ms 始终优先。
+func (r *Router) SetDefaultResponseTimeout(d time.Duration) {
 	if d <= 0 {
-		d = defaultChannelTimeout
+		d = defaultResponseTimeoutFallback
 	}
-	r.defaultTimeoutNanos.Store(int64(d))
+	r.defaultResponseTimeoutNanos.Store(int64(d))
 }
 
-// defaultTimeout 返回当前生效的默认渠道超时。
-func (r *Router) defaultTimeout() time.Duration {
-	return time.Duration(r.defaultTimeoutNanos.Load())
+// SetDefaultFirstTokenTimeout 原子替换全局默认首字超时；<=0 兜底为内置默认。
+func (r *Router) SetDefaultFirstTokenTimeout(d time.Duration) {
+	if d <= 0 {
+		d = defaultFirstTokenTimeoutFallback
+	}
+	r.defaultFirstTokenTimeoutNanos.Store(int64(d))
+}
+
+func (r *Router) defaultResponseTimeout() time.Duration {
+	return time.Duration(r.defaultResponseTimeoutNanos.Load())
+}
+
+func (r *Router) defaultFirstTokenTimeout() time.Duration {
+	return time.Duration(r.defaultFirstTokenTimeoutNanos.Load())
 }
 
 // PlanChat 为 chat completion 请求生成有序候选计划。
@@ -295,6 +311,7 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 		RequestedModel: req.ModelID,
 		Candidates:     candidates,
 		PoolSize:       int(poolSize),
+		ModelDBID:      candidates[0].ModelDBID,
 		RouteMode:      route.Mode,
 	}
 
@@ -469,9 +486,15 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		)
 	}
 
-	timeout := r.defaultTimeout()
-	if row.TimeoutMs.Valid {
-		timeout = time.Duration(row.TimeoutMs.Int32) * time.Millisecond
+	// 超时只读新列（§11.3/§11.5）：NULL 继承全局默认，正数覆盖；0/负数不表示「无限」，
+	// 因此非正值一律按继承处理，绝不关闭保护。
+	responseTimeout := r.defaultResponseTimeout()
+	if row.ResponseTimeoutMs.Valid && row.ResponseTimeoutMs.Int32 > 0 {
+		responseTimeout = time.Duration(row.ResponseTimeoutMs.Int32) * time.Millisecond
+	}
+	firstTokenTimeout := r.defaultFirstTokenTimeout()
+	if row.FirstTokenTimeoutMs.Valid && row.FirstTokenTimeoutMs.Int32 > 0 {
+		firstTokenTimeout = time.Duration(row.FirstTokenTimeoutMs.Int32) * time.Millisecond
 	}
 
 	maxOutputTokens := int64(0)
@@ -513,31 +536,29 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 	}
 
 	return ChatRouteCandidate{
-		ModelDBID:                      row.ModelDbID,
-		ProviderID:                     row.ProviderID,
-		OriginRevision:                 row.ProviderOriginRevision,
-		ProviderStatusRevision:         row.ProviderStatusRevision,
-		ChannelConfigRevision:          row.ChannelConfigRevision,
-		ChannelAdmissionLimitsRevision: row.ChannelAdmissionLimitsRevision,
-		AdapterKey:                     row.AdapterKey,
-		Protocol:                       row.Protocol,
-		MaxOutputTokens:                maxOutputTokens,
-		RPMLimit:                       int4LimitPtr(row.ChannelRpmLimit),
-		TPMLimit:                       int4LimitPtr(row.ChannelTpmLimit),
-		RPDLimit:                       int4LimitPtr(row.ChannelRpdLimit),
-		ConcurrencyLimit:               int4LimitPtr(row.ChannelConcurrencyLimit),
-		BillsOnDisconnect:              row.ChannelBillsOnDisconnect,
-		Priority:                       row.Priority,
-		StickyEnabled:                  optionalBool(row.ChannelStickyEnabled),
-		StickyTTL:                      optionalDurationMs(row.ChannelStickyTtlMs),
-		RouteName:                      route.Name,
+		ModelDBID:               row.ModelDbID,
+		ProviderID:              row.ProviderID,
+		OriginRevision:          row.ProviderOriginRevision,
+		ProviderStatusRevision:  row.ProviderStatusRevision,
+		ChannelConfigRevision:   row.ChannelConfigRevision,
+		ChannelCapacityRevision: row.ChannelCapacityRevision,
+		AdapterKey:              row.AdapterKey,
+		Protocol:                row.Protocol,
+		MaxOutputTokens:         maxOutputTokens,
+		ConcurrencyLimit:        int4LimitPtr(row.ChannelConcurrencyLimit),
+		BillsOnDisconnect:       row.ChannelBillsOnDisconnect,
+		Priority:                row.Priority,
+		StickyEnabled:           optionalBool(row.ChannelStickyEnabled),
+		StickyTTL:               optionalDurationMs(row.ChannelStickyTtlMs),
+		RouteName:               route.Name,
 		Channel: channel.Runtime{
-			ID:           row.ChannelID,
-			Name:         row.ChannelName,
-			Origin:       row.Origin,
-			APIKey:       apiKey,
-			Timeout:      timeout,
-			ProviderSlug: row.ProviderSlug,
+			ID:                row.ChannelID,
+			Name:              row.ChannelName,
+			Origin:            row.Origin,
+			APIKey:            apiKey,
+			ResponseTimeout:   responseTimeout,
+			FirstTokenTimeout: firstTokenTimeout,
+			ProviderSlug:      row.ProviderSlug,
 		},
 		UpstreamModel:           row.UpstreamModel,
 		ModelPriceID:            row.ModelPriceID,

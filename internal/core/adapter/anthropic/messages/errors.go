@@ -84,9 +84,9 @@ func newUpstreamSendErrorWithContextCause(cause error, ctxCause error, operation
 // newUpstreamStreamReadError 把「读流阶段失败」转换成带上游分类的结构化错误。
 //
 // 关键点（P1-7 / P1-8）：读流失败必须携带稳定上游分类，否则 retry 分类器拿不到 category 会一律判为不可
-// 重试——而流式 fallback 只在「首字节前失败(尚未向客户写出任何 SSE 帧)」时才会发生，此时换同模型 channel
+// 重试——而流式 fallback 只在「客户帧写出前失败」时才会发生，此时换同模型 channel
 // 完全安全。分类规则与 chat adapter 同口径：idle→timeout、取消→canceled、deadline/网络 timeout→timeout、
-// 其余传输层失败（连接重置、EOF、proxy 截断、malformed stream 等）→server_error（允许首字节前 fallback）。
+// 其余传输层失败（连接重置、EOF、proxy 截断、malformed stream 等）→server_error（允许客户帧写出前 fallback）。
 // cause 始终保留 CodeAdapterReadStreamFailed（或 idle 专用码），审计 error_code 不变。
 func newUpstreamStreamReadError(readErr error, ctxCause error, operation string) error {
 	if errors.Is(ctxCause, adapter.ErrStreamIdleTimeout) {
@@ -97,6 +97,17 @@ func newUpstreamStreamReadError(readErr error, ctxCause error, operation string)
 				failure.CodeAdapterStreamIdleTimeout,
 				adapter.ErrStreamIdleTimeout,
 				failure.WithMessage(fmt.Sprintf("%s: upstream stream idle timeout", operation)),
+			),
+		)
+	}
+	if errors.Is(ctxCause, adapter.ErrFirstTokenTimeout) {
+		return adapter.NewUpstreamError(
+			adapter.UpstreamErrorTimeout,
+			adapter.UpstreamMetadata{},
+			failure.Wrap(
+				failure.CodeAdapterReadStreamFailed,
+				adapter.ErrFirstTokenTimeout,
+				failure.WithMessage(fmt.Sprintf("%s: upstream first token timeout", operation)),
 			),
 		)
 	}
@@ -111,9 +122,25 @@ func newUpstreamStreamReadError(readErr error, ctxCause error, operation string)
 	)
 }
 
+func newUpstreamBodyReadError(readErr error, ctxCause error, operation string) error {
+	cause := readErr
+	if errors.Is(ctxCause, context.DeadlineExceeded) {
+		cause = ctxCause
+	}
+	return adapter.NewUpstreamError(
+		classifyStreamReadCategory(readErr, ctxCause),
+		adapter.UpstreamMetadata{},
+		failure.Wrap(
+			failure.CodeAdapterReadStreamFailed,
+			cause,
+			failure.WithMessage(operation),
+		),
+	)
+}
+
 // newUpstreamStreamIncompleteError 表示流在出现可靠终态（message_stop）前就正常结束（无读错误）。
 //
-// 通常是上游/中转截断尾包。归为 server_error 让「首字节前」可 fallback；已写出内容后由 lifecycle partial
+// 通常是上游/中转截断尾包。归为 server_error 让「客户帧写出前」可 fallback；已写出内容后由 lifecycle partial
 // settlement 兜底，不会触达 fallback。cause 保留 CodeAdapterReadStreamFailed。
 func newUpstreamStreamIncompleteError(operation string) error {
 	return adapter.NewUpstreamError(

@@ -105,7 +105,7 @@ func (o *AttemptTimingObserver) ResponseHeadersReceived() {
 }
 
 // FirstTokenEligible 只由协议层已标记 FirstTokenEligible 的流事件调用。
-// 它与 SuppressEmit 、客户 SSE write-ack 及 delivery response_started_at 相互独立。
+// 它与 SuppressEmit 、客户 SSE write-ack 及 delivery gateway_first_token_at 相互独立。
 func (o *AttemptTimingObserver) FirstTokenEligible() {
 	if o == nil {
 		return

@@ -669,7 +669,7 @@ SELECT
     COALESCE(SUM(u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens), 0)::bigint AS cache_write_tokens,
     COALESCE(SUM(
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-             THEN EXTRACT(EPOCH FROM (r.completed_at - COALESCE(r.response_started_at, r.started_at))) END
+             THEN EXTRACT(EPOCH FROM (r.completed_at - COALESCE(r.gateway_first_token_at, r.started_at))) END
     ), 0)::float8 AS generation_seconds,
     COALESCE((
         SELECT SUM(le.amount)

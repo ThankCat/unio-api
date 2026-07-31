@@ -51,22 +51,24 @@ type CapabilityKey struct {
 }
 
 type Channel struct {
-	ID                        int64
-	ProviderID                int64
-	Name                      string
-	Protocol                  string
-	AdapterKey                string
-	Credential                string
-	ConfigRevision            int64
-	AdmissionLimitsRevision   int64
-	Status                    string
-	Priority                  int32
-	TimeoutMs                 pgtype.Int4
+	ID               int64
+	ProviderID       int64
+	Name             string
+	Protocol         string
+	AdapterKey       string
+	Credential       string
+	ConfigRevision   int64
+	CapacityRevision int64
+	Status           string
+	Priority         int32
+	// NULL=inherit gateway.routing_sticky; true=enabled with channel TTL; false=disabled
+	StickyEnabled pgtype.Bool
+	// Channel sticky TTL in milliseconds; required only when sticky_enabled=true
+	StickyTtlMs               pgtype.Int8
+	ResponseTimeoutMs         pgtype.Int4
+	FirstTokenTimeoutMs       pgtype.Int4
 	CreatedAt                 pgtype.Timestamptz
 	UpdatedAt                 pgtype.Timestamptz
-	RpmLimit                  pgtype.Int4
-	TpmLimit                  pgtype.Int4
-	RpdLimit                  pgtype.Int4
 	LastTestedAt              pgtype.Timestamptz
 	LastTestOk                pgtype.Bool
 	LastTestLatencyMs         pgtype.Int4
@@ -75,10 +77,6 @@ type Channel struct {
 	ArchivedAt                pgtype.Timestamptz
 	ConcurrencyLimit          pgtype.Int4
 	UpstreamBillsOnDisconnect bool
-	// NULL=inherit gateway.routing_sticky; true=enabled with channel TTL; false=disabled
-	StickyEnabled pgtype.Bool
-	// Channel sticky TTL in milliseconds; required only when sticky_enabled=true
-	StickyTtlMs pgtype.Int8
 }
 
 type ChannelCostExposure struct {
@@ -409,7 +407,8 @@ type RequestAttempt struct {
 	ErrorCode                  pgtype.Text
 	ErrorMessage               pgtype.Text
 	InternalErrorDetail        pgtype.Text
-	ResponseStartedAt          pgtype.Timestamptz
+	UpstreamTimeoutPhase       pgtype.Text
+	GatewayFirstTokenAt        pgtype.Timestamptz
 	FinalUsageReceived         bool
 	UsageMappingVersion        pgtype.Text
 	StartedAt                  pgtype.Timestamptz
@@ -425,6 +424,9 @@ type RequestAttempt struct {
 	UpstreamEndpoint           string
 	BreakerProviderDisposition pgtype.Text
 	BreakerChannelDisposition  pgtype.Text
+	TtftScoringSample          bool
+	ErrorScoringSample         bool
+	ErrorScoringFailure        bool
 	FaultParty                 pgtype.Text
 }
 
@@ -447,7 +449,7 @@ type RequestRecord struct {
 	ErrorMessage          pgtype.Text
 	InternalErrorDetail   pgtype.Text
 	DeliveryStatus        string
-	ResponseStartedAt     pgtype.Timestamptz
+	GatewayFirstTokenAt   pgtype.Timestamptz
 	ResponseCompletedAt   pgtype.Timestamptz
 	StartedAt             pgtype.Timestamptz
 	CompletedAt           pgtype.Timestamptz
@@ -460,21 +462,21 @@ type RequestRecord struct {
 }
 
 type Route struct {
-	ID          int64
-	Name        string
-	Mode        string
-	Status      string
-	Description pgtype.Text
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
-	PriceRatio  pgtype.Numeric
-	RpmLimit    pgtype.Int4
-	TpmLimit    pgtype.Int4
-	RpdLimit    pgtype.Int4
-	ArchivedAt  pgtype.Timestamptz
-	// Deprecated compatibility column; Sticky policy is owned by channels
-	StickyEnabled    pgtype.Bool
+	ID               int64
+	Name             string
+	Mode             string
+	Status           string
+	Description      pgtype.Text
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+	PriceRatio       pgtype.Numeric
+	RpmLimit         pgtype.Int4
+	TpmLimit         pgtype.Int4
+	RpdLimit         pgtype.Int4
 	ConcurrencyLimit pgtype.Int4
+	ArchivedAt       pgtype.Timestamptz
+	// Deprecated compatibility column; Sticky policy is owned by channels
+	StickyEnabled pgtype.Bool
 }
 
 type RouteChannel struct {
@@ -483,29 +485,43 @@ type RouteChannel struct {
 }
 
 type RoutingDecisionTrace struct {
-	ID                   int64
-	RequestRecordID      int64
-	RouteID              int64
-	Mode                 string
-	RequestedModelID     string
-	Protocol             string
-	Endpoint             string
-	PoolSize             int32
-	CandidateCount       int32
-	StickyChannelID      pgtype.Int8
-	StickyPinned         bool
-	StickyInvalid        bool
-	AllCapacityZero      bool
-	MarginGuardTriggered bool
-	Abnormal             bool
-	AbnormalReasons      []string
-	CandidateScores      []byte
-	SelectedOrder        []int64
-	FallbackChain        []byte
-	AlgorithmVersion     string
-	Sampled              bool
-	CreatedAt            pgtype.Timestamptz
-	UpdatedAt            pgtype.Timestamptz
+	ID               int64
+	RequestRecordID  int64
+	RouteID          int64
+	Mode             string
+	RequestedModelID string
+	Protocol         string
+	Endpoint         string
+	PoolSize         int32
+	AlgorithmVersion string
+	// partial=已开始规划；complete=已收口；legacy_sampled=改造前的旧采样行（非完整 trace）。
+	TraceStatus   string
+	SchemaVersion int32
+	EligibleCount int32
+	// 按 objective_v1 总分与稳定 tie-break 排出的基准 channel_id 顺序。
+	BaselineOrder []int64
+	// Sticky 置顶或临时绕行后，本请求真实使用的候选扫描顺序。
+	ActualScanOrder []int64
+	// 本请求真实发起过上游调用的 channel_id 顺序，用于证明单请求不重复尝试同一渠道。
+	AttemptedChannelIds   []int64
+	SelectedChannelID     pgtype.Int8
+	FallbackCount         int32
+	FinalResult           pgtype.Text
+	StickyKeyPresent      bool
+	StickyBeforeChannelID pgtype.Int8
+	StickyBeforeVersion   pgtype.Int8
+	// 本请求对 Sticky 绑定采取的稳定动作。
+	StickyAction         pgtype.Text
+	StickyReason         pgtype.Text
+	StickyAfterChannelID pgtype.Int8
+	StickyAfterVersion   pgtype.Int8
+	CapacityWaitMs       pgtype.Int4
+	// 全池并发满后的有界短等结果。
+	CapacityWaitResult pgtype.Text
+	// 完整结构化路由过程，禁止只存人读拼接文本。
+	TracePayload []byte
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
 
 type RuntimeControlOperation struct {

@@ -31,8 +31,8 @@ type ControlAPI interface {
 
 // Kind 是发布目标类别，与 runtime_control_operations.kind 一致（epoch 由专用维护 use-case 处理，不走本 Publisher）。
 const (
-	KindChannelAdmissionLimits = "channel_admission_limits"
-	KindAppSetting             = "app_setting"
+	KindChannelCapacity = "channel_capacity"
+	KindAppSetting      = "app_setting"
 )
 
 // PublishState 是一次发布的最终应用态。
@@ -62,7 +62,7 @@ type PublishRequest struct {
 	SettingKey *string
 
 	// BusinessCommit 在同一 PostgreSQL 业务事务中提交业务行（app_settings 值/revision、
-	// channels admission_limits_revision 等）。它与 operation→db_committed 一起原子提交。
+	// channels capacity_revision 等）。它与 operation→db_committed 一起原子提交。
 	BusinessCommit func(ctx context.Context, tx pgx.Tx) error
 }
 
@@ -88,7 +88,7 @@ func NewPublisher(pool *pgxpool.Pool, control ControlAPI) *Publisher {
 
 // Publish 执行一次完整的可恢复控制发布。
 func (p *Publisher) Publish(ctx context.Context, req PublishRequest) (PublishResult, error) {
-	if req.Kind != KindChannelAdmissionLimits && req.Kind != KindAppSetting {
+	if req.Kind != KindChannelCapacity && req.Kind != KindAppSetting {
 		return PublishResult{}, failure.New(failure.CodeConfigInvalid, failure.WithMessage("runtimecontrol: unsupported publish kind"))
 	}
 	if req.Token == "" || req.BusinessCommit == nil {

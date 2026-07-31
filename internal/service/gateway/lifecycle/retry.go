@@ -1,6 +1,10 @@
 package lifecycle
 
-import "github.com/ThankCat/unio-gateway/internal/core/adapter"
+import (
+	"errors"
+
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+)
 
 // RetryClassifier 定义 gateway 判断一次上游错误是否允许尝试下一个同模型 channel 的能力。
 //
@@ -36,6 +40,9 @@ type ProviderErrorClassifier struct{}
 //   - canceled：客户端主动取消，不是上游故障，不重试。
 //   - unknown 或链上没有 *adapter.UpstreamError：缺乏可靠依据，保守地不重试。
 func (ProviderErrorClassifier) IsRetryable(err error) bool {
+	if errors.Is(err, errStreamPreludeBufferExceeded) {
+		return true
+	}
 	category, ok := adapter.UpstreamCategoryOf(err)
 	if !ok {
 		return false

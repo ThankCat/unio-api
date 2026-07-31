@@ -2,6 +2,7 @@ package chatcompletions
 
 import (
 	"context"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -110,10 +111,13 @@ func (s *ChatCompletionService) SetCredentialGate(gate lifecycle.CredentialGate)
 }
 
 // SetStickyRouter 注入会话粘性路由核心（大 uncache 缺口 P0）；nil 表示不启用 sticky。
-// 同时把同一 StickyRouter 作为队首短等配置源交给 AttemptRunner（P1，与系统设置热更新同源）。
 func (s *ChatCompletionService) SetStickyRouter(sticky *lifecycle.StickyRouter) {
 	s.sticky = sticky
-	s.attemptRunner.SetHeadWaitSource(sticky)
+}
+
+// SetCapacityWaitTimeout 注入全池短等预算（gateway.capacity_wait_timeout_ms，§9.4）；<=0 关闭短等。
+func (s *ChatCompletionService) SetCapacityWaitTimeout(d time.Duration) {
+	s.attemptRunner.SetCapacityWaitTimeout(d)
 }
 
 // SetRoutingLogger 注入 sticky/skip/wait/failover 结构化日志；nil 表示不打日志。
@@ -123,6 +127,11 @@ func (s *ChatCompletionService) SetRoutingLogger(logger *zap.Logger) {
 
 func (s *ChatCompletionService) SetRoutingTraceRecorder(recorder *lifecycle.RoutingTraceRecorder) {
 	s.lifecycle.SetRoutingTraceRecorder(recorder)
+}
+
+// SetChannelSampleRecorder 注入 30 分钟评分样本/观测记录器（§12）；nil 表示不启用。
+func (s *ChatCompletionService) SetChannelSampleRecorder(recorder lifecycle.ChannelSampleRecorder) {
+	s.lifecycle.SetChannelSampleRecorder(recorder)
 }
 
 // chatCompletionsSafeMessage 把 chat-completion 编排专用 ad-hoc string code 映射成可展示文案；

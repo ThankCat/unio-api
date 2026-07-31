@@ -96,6 +96,30 @@ func TestListRequestsForwardsRequestIDFilter(t *testing.T) {
 	}
 }
 
+func TestListRequestsForwardsRoutingSampleFilters(t *testing.T) {
+	rqs := &fakeRequestQueryService{}
+	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests?route_id=7&channel_id=4&attempt_id=19&scoring_sample=any", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	got := rqs.gotList
+	if got.RouteID == nil || *got.RouteID != 7 || got.ChannelID == nil || *got.ChannelID != 4 ||
+		got.AttemptID == nil || *got.AttemptID != 19 || got.ScoringSample != "any" {
+		t.Fatalf("routing sample filters not forwarded: %+v", got)
+	}
+}
+
+func TestListRequestsRejectsInvalidScoringSample(t *testing.T) {
+	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: &fakeRequestQueryService{}})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests?scoring_sample=unknown", "", true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+}
+
 func TestGetRequestDefaultHidesInternalDetail(t *testing.T) {
 	rqs := &fakeRequestQueryService{getOut: query.RequestDetail{RequestSummary: query.RequestSummary{ID: 1, RequestID: "req_1", Status: "failed"}}}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
@@ -156,6 +180,39 @@ func TestGetRequestReturnsUpstreamAttemptTimings(t *testing.T) {
 		*response.Data.Attempts[0].UpstreamTotalMs != totalMs || response.Data.Attempts[0].UpstreamTTFTMs == nil ||
 		*response.Data.Attempts[0].UpstreamTTFTMs != ttftMs {
 		t.Fatalf("unexpected upstream timing response: %+v", response.Data.Attempts)
+	}
+}
+
+func TestGetRequestReturnsAuthoritativeRequestTimings(t *testing.T) {
+	latencyMs := int64(2250)
+	gatewayTTFTMs := int64(1957)
+	tps := 54.6
+	rqs := &fakeRequestQueryService{getOut: query.RequestDetail{
+		RequestSummary: query.RequestSummary{ID: 1, RequestID: "req_1", Stream: true, Status: "succeeded"},
+		LatencyMs:      &latencyMs,
+		GatewayTTFTMs:  &gatewayTTFTMs,
+		TPS:            &tps,
+	}}
+	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
+
+	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests/req_1", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data struct {
+			LatencyMs     *int64   `json:"latency_ms"`
+			GatewayTTFTMs *int64   `json:"gateway_ttft_ms"`
+			TPS           *float64 `json:"tps"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Data.LatencyMs == nil || *response.Data.LatencyMs != latencyMs ||
+		response.Data.GatewayTTFTMs == nil || *response.Data.GatewayTTFTMs != gatewayTTFTMs ||
+		response.Data.TPS == nil || *response.Data.TPS != tps {
+		t.Fatalf("unexpected request timing response: %+v", response.Data)
 	}
 }
 

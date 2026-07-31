@@ -185,13 +185,13 @@ const (
 	// CodeRateLimitExceeded 表示 API Key 级 RPM/TPM/RPD 限流命中，请求被拒（映射 HTTP 429）。
 	CodeRateLimitExceeded Code = "rate_limit_exceeded"
 
-	// CodeGatewayChannelRateLimited 表示渠道级 RPM/TPM/RPD 限流命中：单候选层面用于跳过该候选 fallback；
-	// 全部候选都被限流时作为整体失败码上抛（映射 HTTP 429）。
+	// CodeGatewayChannelRateLimited 表示上游真实 429 冷却命中：单候选层面用于跳过该候选 fallback；
+	// 全部候选都在冷却窗口内时作为整体失败码上抛（映射 HTTP 429，附最短剩余冷却作为 Retry-After）。
 	CodeGatewayChannelRateLimited Code = "channel_rate_limited"
 
-	// CodeGatewayChannelConcurrencyLimited 表示渠道在途并发上限命中（DEC-029）：单候选层面用于跳过该候选
-	// fallback；全部候选都被并发限制时作为整体失败码上抛（映射 HTTP 429）。
-	CodeGatewayChannelConcurrencyLimited Code = "channel_concurrency_limited"
+	// CodeRoutingChannelCapacityExhausted 表示候选池内所有渠道并发满，且一次全池有界短等后仍然满
+	// （§9.5）。它是容量问题而非限流：映射 HTTP 503 与 Retry-After: 1，绝不与上游 429 混淆。
+	CodeRoutingChannelCapacityExhausted Code = "routing_channel_capacity_exhausted"
 )
 
 const (

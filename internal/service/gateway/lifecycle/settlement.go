@@ -84,7 +84,7 @@ type ChatSettlementParams struct {
 	ResponseProtocol    requestlog.Protocol
 	ResponseID          string
 	ResponseModelID     string
-	ResponseStartedAt   *time.Time
+	GatewayFirstTokenAt *time.Time
 	RequestFinalStatus  requestlog.RequestStatus
 	AttemptFinalStatus  requestlog.AttemptStatus
 	ErrorCode           string
@@ -557,7 +557,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		FinishClass:           string(facts.Finish.Class),
 		UpstreamStatusCode:    facts.Metadata.StatusCode,
 		UpstreamRequestID:     UpstreamRequestIDPtr(facts.Metadata.RequestID),
-		ResponseStartedAt:     params.ResponseStartedAt,
+		GatewayFirstTokenAt:   params.GatewayFirstTokenAt,
 		// partial settlement 合成的估算事实不是上游真实 usage：标 final_usage_received=false 作为审计信号。
 		FinalUsageReceived:  !facts.UsageSource.IsPartialEstimate(),
 		UsageMappingVersion: facts.UsageMappingVersion,
@@ -802,14 +802,14 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	}
 
 	requestSuccessParams := requestlog.MarkRequestSucceededParams{
-		ID:                params.RequestRecord.ID,
-		ResponseModelID:   params.ResponseModelID,
-		ResponseProtocol:  params.ResponseProtocol,
-		ResponseID:        params.ResponseID,
-		FinalProviderID:   params.FinalProviderID,
-		FinalChannelID:    params.FinalChannelID,
-		ResponseStartedAt: params.ResponseStartedAt,
-		CompletedAt:       now,
+		ID:                  params.RequestRecord.ID,
+		ResponseModelID:     params.ResponseModelID,
+		ResponseProtocol:    params.ResponseProtocol,
+		ResponseID:          params.ResponseID,
+		FinalProviderID:     params.FinalProviderID,
+		FinalChannelID:      params.FinalChannelID,
+		GatewayFirstTokenAt: params.GatewayFirstTokenAt,
+		CompletedAt:         now,
 	}
 	switch requestFinalStatus {
 	case requestlog.RequestStatusSucceeded:

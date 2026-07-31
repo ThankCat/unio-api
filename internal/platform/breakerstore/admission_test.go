@@ -111,9 +111,9 @@ func TestControlRecoveryFromMissingOp(t *testing.T) {
 func TestControlRecoveryRestoresMissingControl(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	ctx := context.Background()
-	target := s.ChannelAdmissionControl(8181)
-	oldPayload := `{"rpm":10,"tpm":null,"rpd":null,"concurrency":null}`
-	newPayload := `{"rpm":20,"tpm":null,"rpd":null,"concurrency":null}`
+	target := s.ChannelCapacityControl(8181)
+	oldPayload := `{"concurrency":10}`
+	newPayload := `{"concurrency":20}`
 
 	if err := s.RecoverAbortedControl(ctx, target, "missing-abort", 7, 8, HashPayload(newPayload), oldPayload); err != nil {
 		t.Fatalf("recover missing abort: %v", err)
@@ -138,8 +138,8 @@ func TestControlRecoveryRestoresMissingControl(t *testing.T) {
 // TestControlRestoreMissing 验证 recovery-only restore 只在缺失时安装、已存在不覆盖。
 func TestControlRestoreMissing(t *testing.T) {
 	s, _, _ := newTestStore(t)
-	target := s.ChannelAdmissionControl(4242)
-	installed, err := s.RestoreMissingControl(context.Background(), target, 7, `{"rpm":10}`)
+	target := s.ChannelCapacityControl(4242)
+	installed, err := s.RestoreMissingControl(context.Background(), target, 7, `{"concurrency":10}`)
 	if err != nil || !installed {
 		t.Fatalf("restore missing want installed, got %v err=%v", installed, err)
 	}
@@ -148,7 +148,7 @@ func TestControlRestoreMissing(t *testing.T) {
 		t.Fatalf("restore want active rev=7, got %+v", snap)
 	}
 	// 已存在不覆盖。
-	installed, _ = s.RestoreMissingControl(context.Background(), target, 9, `{"rpm":99}`)
+	installed, _ = s.RestoreMissingControl(context.Background(), target, 9, `{"concurrency":99}`)
 	if installed {
 		t.Fatalf("restore must not overwrite existing control")
 	}
@@ -157,10 +157,10 @@ func TestControlRestoreMissing(t *testing.T) {
 func TestControlReconcileReplacesDriftAndPending(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	ctx := context.Background()
-	target := s.ChannelAdmissionControl(4343)
-	oldPayload := `{"rpm":10,"rpd":null,"tpm":null,"concurrency":null}`
-	pendingPayload := `{"rpm":20,"rpd":null,"tpm":null,"concurrency":null}`
-	authoritativePayload := `{"rpm":5,"rpd":100,"tpm":1000,"concurrency":2}`
+	target := s.ChannelCapacityControl(4343)
+	oldPayload := `{"concurrency":10}`
+	pendingPayload := `{"concurrency":20}`
+	authoritativePayload := `{"concurrency":2}`
 
 	if _, err := s.RestoreMissingControl(ctx, target, 7, oldPayload); err != nil {
 		t.Fatalf("restore drift fixture: %v", err)
@@ -229,7 +229,6 @@ func seedAdmissionEnvWithControls(t *testing.T, s *Store, ratePayload, concurren
 		t.Fatalf("bootstrap epoch: %v", err)
 	}
 	seedControl(t, s, s.RouteRateLimitControl(), "seed-route-rate", ratePayload)
-	ensureTestControlAtRevision(t, s, s.ChannelRateLimitControl(), testChannelRateRevision, `{"rpm":701,"tpm":702,"rpd":703}`)
 	seedControl(t, s, s.GlobalConcurrencyControl(), "seed-conc", concurrencyPayload)
 	seedControl(t, s, s.SettingControl("gateway.circuit_breaker"), "seed-breaker", testCircuitBreakerPayload(cfg))
 	return "epoch-ra", 1
@@ -293,40 +292,6 @@ func TestRequestAdmissionRPDBucketTTLCoversDay(t *testing.T) {
 	}
 	if rpmTTL >= 24*time.Hour {
 		t.Fatalf("RPM minute bucket TTL should stay minute-scale (<24h), got %s", rpmTTL)
-	}
-}
-
-// TestChannelAdmissionRPDBucketTTLCoversDay 回归：Channel RPD 也是日窗口桶，不能复用
-// AttemptPermit 派生的分钟级 TTL；否则当天限额会在 permit 结束后几分钟内重新从零开始。
-func TestChannelAdmissionRPDBucketTTLCoversDay(t *testing.T) {
-	s, rc, _ := newTestStore(t)
-	const channelID, providerID = int64(72), int64(720)
-	seedAttemptControls(t, s, testConfig(), channelID, `{"rpm":100,"rpd":100,"tpm":0,"concurrency":0}`)
-	input := withAttemptControlRevisions(AcquireAttemptInput{
-		PermitID: "channel-rpd-ttl", AdmissionFingerprint: "channel-rpd-ttl-fp", RequestAdmissionID: "channel-rpd-ttl-request",
-		ProviderID: providerID, ChannelID: channelID, OriginRevision: 1, ProviderStatusRevision: 1,
-		ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
-	})
-	admission, err := acquireAttempt(t, s, input)
-	if err != nil || admission.Mode != AdmissionPermit {
-		t.Fatalf("acquire want permit, got %+v err=%v", admission, err)
-	}
-
-	ctx := context.Background()
-	now := time.Now()
-	rpdTTL, err := rc.PTTL(ctx, s.keys.channelRPDBucket(channelID, dayBucket(now))).Result()
-	if err != nil {
-		t.Fatalf("channel rpd pttl: %v", err)
-	}
-	rpmTTL, err := rc.PTTL(ctx, s.keys.channelRPMBucket(channelID, minuteBucket(now))).Result()
-	if err != nil {
-		t.Fatalf("channel rpm pttl: %v", err)
-	}
-	if rpdTTL <= 24*time.Hour {
-		t.Fatalf("Channel RPD day bucket TTL must exceed 24h, got %s", rpdTTL)
-	}
-	if rpmTTL >= 24*time.Hour {
-		t.Fatalf("Channel RPM minute bucket TTL should stay minute-scale (<24h), got %s", rpmTTL)
 	}
 }
 
@@ -442,21 +407,20 @@ func TestRequestAdmissionLifecycleEpochMismatchLeavesResourcesUntouched(t *testi
 	}
 }
 
-// TestChannelAdmissionEnforced 验证 AcquireAttempt 接入 Channel 四维限额：
-// RPM 超限拒绝零 permit；Abort 归还 RPM；Finish 保留 RPM。
-func TestChannelAdmissionEnforced(t *testing.T) {
+// TestChannelAdmissionEnforcesOnlyConcurrency 冻结 §1.2/§8：Channel 级准入只有并发这一硬门槛。
+// 并发满返回 concurrency_full，Abort/Finish 归还并发后可再入。
+func TestChannelAdmissionEnforcesOnlyConcurrency(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
-	// 建立 channel admission control（revision=1）。
-	seedAttemptControls(t, s, cfg, 70, `{"rpm":2,"rpd":0,"tpm":0,"concurrency":0}`)
+	seedAttemptControls(t, s, cfg, 70, `{"concurrency":2}`)
 
 	acq := func(id string) AttemptAdmission {
 		adm, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 			PermitID: id, AdmissionFingerprint: id + "-fp", RequestAdmissionID: "req",
 			ProviderID: 700, ChannelID: 70, OriginRevision: 1, ProviderStatusRevision: 1,
 			ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
-			ChannelAdmissionRevision: 1,
-			InputEstimate:            10,
+			ChannelCapacityRevision: 1,
+			InputEstimate:           10,
 		}))
 		if err != nil {
 			t.Fatalf("acquire %s: %v", id, err)
@@ -465,52 +429,47 @@ func TestChannelAdmissionEnforced(t *testing.T) {
 	}
 
 	a1 := acq("ca1")
-	if a1.Mode != AdmissionPermit {
-		t.Fatalf("ca1 want permit, got %s/%s", a1.Mode, a1.Reason)
-	}
 	a2 := acq("ca2")
-	if a2.Mode != AdmissionPermit {
-		t.Fatalf("ca2 want permit, got %s/%s", a2.Mode, a2.Reason)
+	if a1.Mode != AdmissionPermit || a2.Mode != AdmissionPermit {
+		t.Fatalf("first two acquires want permit, got %s/%s and %s/%s", a1.Mode, a1.Reason, a2.Mode, a2.Reason)
 	}
-	// 第三次 RPM 超限。
+	// 第三次并发满（而不是 RPM 超限）。
 	a3 := acq("ca3")
-	if a3.Mode != AdmissionDenied || a3.Reason != ReasonRateLimited {
-		t.Fatalf("ca3 want denied/rate_limited, got %s/%s", a3.Mode, a3.Reason)
+	if a3.Mode != AdmissionDenied || a3.Reason != ReasonConcurrencyFull {
+		t.Fatalf("ca3 want denied/concurrency_full, got %s/%s", a3.Mode, a3.Reason)
 	}
 
-	// Abort ca1 归还 RPM → 再 acquire 可入（used 回到 1，limit 2）。
+	// Abort 归还并发租约 → 可再入。
 	if err := s.Abort(context.Background(), *a1.Permit); err != nil {
 		t.Fatalf("abort ca1: %v", err)
 	}
-	a4 := acq("ca4")
-	if a4.Mode != AdmissionPermit {
+	if a4 := acq("ca4"); a4.Mode != AdmissionPermit {
 		t.Fatalf("ca4 after abort want permit, got %s/%s", a4.Mode, a4.Reason)
 	}
 
-	// Finish ca2（真实 transport）保留 RPM → 现在 used=2（ca4+ca2 保留），再 acquire 超限。
+	// Finish 同样归还并发租约（与 RPM 保留语义不同：RPM 已不存在）。
 	if _, err := s.Finish(context.Background(), *a2.Permit, FinishOutcome{
 		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess,
 		RequestWriteState: RequestWriteCompleted,
 	}); err != nil {
 		t.Fatalf("finish ca2: %v", err)
 	}
-	a5 := acq("ca5")
-	if a5.Mode != AdmissionDenied || a5.Reason != ReasonRateLimited {
-		t.Fatalf("ca5 want denied/rate_limited (RPM retained after finish), got %s/%s", a5.Mode, a5.Reason)
+	if a5 := acq("ca5"); a5.Mode != AdmissionPermit {
+		t.Fatalf("ca5 after finish released concurrency want permit, got %s/%s", a5.Mode, a5.Reason)
 	}
 }
 
-// TestChannelAdmissionStaleRevision 验证 admission control revision 落后时 fail-closed。
-func TestChannelAdmissionStaleRevision(t *testing.T) {
+// TestChannelCapacityStaleRevision 验证 capacity control revision 落后时 fail-closed。
+func TestChannelCapacityStaleRevision(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
-	seedAttemptControls(t, s, cfg, 71, `{"rpm":0,"rpd":0,"tpm":0,"concurrency":0}`)
+	seedAttemptControls(t, s, cfg, 71, `{"concurrency":0}`)
 	in := withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "cs1", AdmissionFingerprint: "cs1-fp", RequestAdmissionID: "req",
 		ProviderID: 710, ChannelID: 71, OriginRevision: 1, ProviderStatusRevision: 1,
 		ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
 	})
-	in.ChannelAdmissionRevision = 2 // 期望 2，实际 active=1
+	in.ChannelCapacityRevision = 2 // 期望 2，实际 active=1
 	adm, err := acquireAttempt(t, s, in)
 	if err != nil {
 		t.Fatalf("acquire: %v", err)

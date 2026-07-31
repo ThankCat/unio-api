@@ -8,18 +8,36 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/routeruntime"
 )
 
-func TestRouteRuntimeDTOUsesP4Contract(t *testing.T) {
+func TestRouteRuntimeDTOUsesPartitionedObjectiveContract(t *testing.T) {
+	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	value := routeruntime.Runtime{
-		RouteID: 9, Mode: "balanced", RouteStatus: "enabled", ModelID: "openai/gpt",
-		ObservedAt:       time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC),
-		RuntimeSyncState: "active", BreakerStoreAdmission: "normal",
-		RouteUsage: &routeruntime.RouteUsage{
-			Concurrency: 3, RPM: 15, RPD: 40, TPM: 1200, ActiveUsers: 2,
+		RouteID: 9, Mode: "balanced", RouteStatus: "enabled", ModelID: "openai/gpt", Protocol: "openai",
+		ObservedAt: now, RuntimeSyncState: "active", BreakerStoreAdmission: "normal",
+		RouteUsage: &routeruntime.RouteUsage{Concurrency: 3, RPM: 15, RPD: 40, TPM: 1200, ActiveUsers: 2},
+		Sources:    []routeruntime.Source{{Name: "breaker_store", Available: true, ObservedAt: now}},
+		ScoreConfig: routeruntime.ScoreConfig{
+			AlgorithmVersion: "objective_v1", Revision: 7,
+			CostWeightPct: 25, ConcurrencyWeightPct: 20, TTFTWeightPct: 25,
+			ErrorRateWeightPct: 20, PriorityWeightPct: 10,
+			TTFTPenaltyUnitMs: 1000, TTFTPenaltyPointsPerUnit: 2.5, ErrorPenaltyPointsPerPercent: 2.5,
 		},
-		Sources: []routeruntime.Source{{Name: "breaker_store", Available: true}},
+		SampleWindow: routeruntime.SampleWindow{
+			TTFTWindowMs: 1_800_000, ErrorWindowMs: 1_800_000,
+			StartedAt: now.Add(-30 * time.Minute), EndedAt: now, Available: true,
+		},
 		Channels: []routeruntime.Channel{{
-			CostRatio: float64Pointer(0.4), CostWeight: 0.5, CostFactor: 0.8,
-			RuntimeSyncState: "active", BreakerStoreAdmission: "normal",
+			ChannelID: 3, ChannelName: "primary", ChannelStatus: "enabled",
+			ProviderID: 4, ProviderName: "provider", ProviderStatus: "enabled",
+			Eligible: true, RuntimeRevisionCurrent: true, RuntimeSyncState: "active", BreakerStoreAdmission: "normal",
+			ConcurrencyUsed: 2, ConcurrencyLimit: 10, ConcurrencyRemaining: float64Pointer(0.8),
+			RPMUsed: 12, GlobalRPDUsed: 80, TPMUsed: 900, TokenCoveredCount: 10, TokenCoveragePct: 83.33,
+			AlgorithmVersion: "objective_v1", CostRatio: float64Pointer(0.4), Priority: 10,
+			CostScore: 60, ConcurrencyScore: 80, TTFTScore: 97.5, ErrorScore: 100, PriorityScore: 90,
+			CostWeightPct: 25, ConcurrencyWeightPct: 20, TTFTWeightPct: 25,
+			ErrorRateWeightPct: 20, PriorityWeightPct: 10, FinalScore: 87.375,
+			AvgTTFTMs: float64Pointer(1000), TTFTSampleCount: 12,
+			ErrorRatePct: float64Pointer(0), ErrorSampleCount: 30,
+			CurrentOrder: 1, MarginStatus: "safe",
 		}},
 	}
 	body, err := json.Marshal(toRouteRuntimeDTO(value))
@@ -30,48 +48,30 @@ func TestRouteRuntimeDTOUsesP4Contract(t *testing.T) {
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		t.Fatalf("decode route runtime: %v", err)
 	}
-	for _, key := range []string{"runtime_sync_state", "breaker_store_admission", "sources", "channels", "route_usage"} {
+	for _, key := range []string{"source_status", "route_summary", "filters", "channels", "score_config", "sample_window"} {
 		if _, ok := decoded[key]; !ok {
-			t.Errorf("missing route runtime field %q: %s", key, body)
+			t.Errorf("missing route runtime partition %q: %s", key, body)
 		}
 	}
-	usage, ok := decoded["route_usage"].(map[string]any)
-	if !ok {
-		t.Fatalf("route_usage type: %#v", decoded["route_usage"])
-	}
-	if usage["concurrency"] != float64(3) || usage["rpm"] != float64(15) ||
-		usage["rpd"] != float64(40) || usage["tpm"] != float64(1200) ||
-		usage["active_users"] != float64(2) {
-		t.Fatalf("unexpected route_usage: %#v", usage)
-	}
-	for _, key := range []string{"gateway_sources", "health_factor", "latency_ewma_ms", "instance_snapshots"} {
-		if _, ok := decoded[key]; ok {
-			t.Errorf("legacy route runtime field %q is still present: %s", key, body)
+	for _, legacy := range []string{"runtime_sync_state", "route_usage", "rpm_limit", "candidate_scores"} {
+		if _, ok := decoded[legacy]; ok {
+			t.Errorf("legacy flat runtime field %q is still present: %s", legacy, body)
 		}
 	}
-	channels, ok := decoded["channels"].([]any)
-	if !ok || len(channels) != 1 {
-		t.Fatalf("unexpected channels: %#v", decoded["channels"])
-	}
-	channel, ok := channels[0].(map[string]any)
-	if !ok {
-		t.Fatalf("unexpected channel DTO: %#v", channels[0])
-	}
-	for _, key := range []string{
-		"provider_id", "provider_name", "provider_status",
-		"provider_breaker_state", "channel_breaker_state", "error_samples",
-		"ttft_ewma_ms", "ttft_samples", "ttft_sample_source",
-		"cost_ratio", "cost_weight", "cost_factor", "final_weight",
-		"runtime_sync_state", "breaker_store_admission",
-	} {
+	channels := decoded["channels"].([]any)
+	channel := channels[0].(map[string]any)
+	for _, key := range []string{"eligibility", "runtime", "concurrency", "quality", "traffic", "score", "distribution", "internal_diagnostics"} {
 		if _, ok := channel[key]; !ok {
-			t.Errorf("missing P4 channel field %q: %s", key, body)
+			t.Errorf("missing structured channel section %q: %s", key, body)
 		}
 	}
-	for _, key := range []string{"health_factor", "breaker_state", "latency_ewma_ms", "instance_snapshots"} {
-		if _, ok := channel[key]; ok {
-			t.Errorf("legacy channel field %q is still present: %s", key, body)
-		}
+	traffic := channel["traffic"].(map[string]any)
+	if traffic["rpm"] != float64(12) || traffic["rpd"] != float64(80) || traffic["tpm"] != float64(900) {
+		t.Fatalf("traffic must expose observations, got %#v", traffic)
+	}
+	score := channel["score"].(map[string]any)
+	if score["total"] != 87.375 {
+		t.Fatalf("unexpected total score: %#v", score)
 	}
 }
 

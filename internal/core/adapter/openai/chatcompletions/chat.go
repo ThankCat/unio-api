@@ -54,9 +54,11 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 		)
 	}
 
-	if ch.Timeout > 0 {
+	// 非流式：response_timeout_ms 覆盖连接、响应头、完整响应体与 adapter 解析（§11.1）。
+	// 首字预算不参与非流式。
+	if ch.ResponseTimeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, ch.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, ch.ResponseTimeout)
 		defer cancel()
 	}
 
@@ -102,10 +104,8 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 
 	body, exceeded, err := adapter.ReadUpstreamBodyLimited(upstreamResp.Body)
 	if err != nil {
-		return nil, failure.Wrap(
-			failure.CodeAdapterReadStreamFailed,
-			err,
-			failure.WithMessage("openai adapter read chat completion response body"),
+		return nil, newUpstreamBodyReadError(
+			err, context.Cause(ctx), "openai adapter read chat completion response body",
 		)
 	}
 	if exceeded {
@@ -208,10 +208,14 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 		)
 	}
 
-	// 渠道 timeout 只约束「上游开始响应(拿到响应头)」,不约束流本体:长补全会合法地流式数分钟,
-	// 绝不能被渠道 timeout 当绝对截止时间罩住整段读流而掐断。流总时长由客户端断开(父 ctx)兜底。
-	streamCtx, headersReceived, resetIdle, cancel := adapter.StreamTimeoutContext(ctx, ch.Timeout, adapter.StreamIdleTimeout())
-	defer cancel()
+	// 响应头预算只约束「上游开始响应」，不约束流本体：长补全会合法地流式数分钟。
+	// 首字预算与它同起点（§11.2），首个有效生成 Token 之后才交给 idle 看门狗。
+	streamCtx, timeouts := adapter.StreamTimeoutContext(ctx, adapter.StreamTimeoutConfig{
+		ResponseHeader: ch.ResponseTimeout,
+		FirstToken:     ch.FirstTokenTimeout,
+		Idle:           adapter.StreamIdleTimeout(),
+	})
+	defer timeouts.Cancel()
 
 	url, err := adapter.BuildUpstreamURL(ch.Origin, adapter.OperationPathChatCompletions)
 	if err != nil {
@@ -243,7 +247,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	adapter.MarkTransportStarted(streamCtx)
 	upstreamResp, err := a.client.Do(request)
 	ctxCause := context.Cause(streamCtx)
-	headersReceived()
+	timeouts.HeadersReceived()
 	if upstreamResp != nil {
 		adapter.MarkResponseHeadersReceived(streamCtx)
 	}
@@ -269,7 +273,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	streamReader := adaptersse.NewReader(upstreamResp.Body, adaptersse.Config{
 		MaxLineBytes:  maxOpenAIStreamEventBytes,
 		MaxEventBytes: maxOpenAIStreamEventBytes,
-		OnActivity:    resetIdle,
+		OnActivity:    timeouts.ResetIdle,
 	})
 
 	for streamReader.Next() {
@@ -294,6 +298,10 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 		}
 
 		for _, chunk := range chunks {
+			if FirstTokenPayload(chunk) != "" {
+				timeouts.FirstToken()
+				adapter.MarkFirstTokenEligible(streamCtx)
+			}
 			if chunk.ID != "" {
 				responseID = chunk.ID
 			}

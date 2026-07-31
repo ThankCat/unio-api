@@ -84,13 +84,19 @@ const (
 	testAttemptIntegrityEpoch    = "test-attempt-epoch"
 	testAttemptIntegrityRevision = int64(1)
 	testRouteRateRevision        = int64(1)
-	testChannelRateRevision      = int64(2)
 )
 
 const (
-	// testRoutingBalancePayload intentionally keeps the pre-cost four-field shape to exercise upgrade compatibility.
-	testRoutingBalancePayload         = `{"ttft_target_ms":2000,"ttft_weight":0.35,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`
-	testRoutingBalancePayloadWithCost = `{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":0.6,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`
+	// testRoutingBalancePayload 是 objective_v1 五项评分的 canonical 控制载荷（§7/§14.6 默认值）。
+	testRoutingBalancePayload = `{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,` +
+		`"error_rate_weight_pct":20,"priority_weight_pct":10,"ttft_window_ms":1800000,` +
+		`"ttft_penalty_unit_ms":1000,"ttft_penalty_points_per_unit":2.5,"error_window_ms":1800000,` +
+		`"error_penalty_points_per_percent":2.5}`
+	// testRoutingBalancePayloadCustom 使用非默认权重与惩罚参数，验证载荷被原样透出而非硬编码。
+	testRoutingBalancePayloadCustom = `{"cost_weight_pct":40,"concurrency_weight_pct":10,"ttft_weight_pct":20,` +
+		`"error_rate_weight_pct":20,"priority_weight_pct":10,"ttft_window_ms":900000,` +
+		`"ttft_penalty_unit_ms":500,"ttft_penalty_points_per_unit":1.5,"error_window_ms":600000,` +
+		`"error_penalty_points_per_percent":4}`
 )
 
 func ensureTestControl(t *testing.T, s *Store, target ControlTarget, payload string) {
@@ -123,11 +129,10 @@ func seedAttemptControlsWithRoutingBalance(
 	t.Helper()
 	seedAttemptIntegrity(t, s)
 	ensureTestControlAtRevision(t, s, s.RouteRateLimitControl(), testRouteRateRevision, `{"rpm":97,"tpm":9700,"rpd":970}`)
-	ensureTestControlAtRevision(t, s, s.ChannelRateLimitControl(), testChannelRateRevision, `{"rpm":0,"tpm":0,"rpd":0}`)
 	ensureTestControl(t, s, s.GlobalConcurrencyControl(), `{"key_limit":0,"channel_limit":0}`)
 	ensureTestControl(t, s, s.SettingControl("gateway.circuit_breaker"), testCircuitBreakerPayload(cfg))
 	ensureTestControl(t, s, s.SettingControl("gateway.routing_balance"), routingBalancePayload)
-	ensureTestControl(t, s, s.ChannelAdmissionControl(channelID), channelPayload)
+	ensureTestControl(t, s, s.ChannelCapacityControl(channelID), channelPayload)
 }
 
 func seedAttemptIntegrity(t *testing.T, s *Store) {
@@ -171,16 +176,15 @@ func acquireAttempt(t *testing.T, s *Store, in AcquireAttemptInput) (AttemptAdmi
 func withAttemptControlRevisions(in AcquireAttemptInput) AcquireAttemptInput {
 	in.IntegrityEpoch = testAttemptIntegrityEpoch
 	in.IntegrityRevision = testAttemptIntegrityRevision
-	in.ChannelRateRevision = testChannelRateRevision
 	in.GlobalConcurrencyRevision = 1
 	in.CircuitBreakerRevision = 1
-	in.ChannelAdmissionRevision = 1
+	in.ChannelCapacityRevision = 1
 	return in
 }
 
 func acquire(t *testing.T, s *Store, cfg Config, permitID string, ch, ep int64) AttemptAdmission {
 	t.Helper()
-	seedAttemptControls(t, s, cfg, ch, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+	seedAttemptControls(t, s, cfg, ch, `{"concurrency":null}`)
 	adm, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID:               permitID,
 		AdmissionFingerprint:   permitID + "-fp",
@@ -195,7 +199,7 @@ func acquire(t *testing.T, s *Store, cfg Config, permitID string, ch, ep int64) 
 		RequestMode:            ModeNonStream,
 	}))
 	if err != nil {
-		t.Fatalf("acquire %s: %v", permitID, err)
+		t.Fatalf("acquire %s: %v (cause: %v)", permitID, err, errors.Unwrap(err))
 	}
 	return adm
 }
@@ -305,9 +309,9 @@ func TestAttemptLifecycleIntegrityFencesAreZeroWrite(t *testing.T) {
 			wantCode: failure.CodeGatewayBreakerPermitConflict, wantFinish: DispositionTerminalConflict,
 		},
 		{
-			name: "channel rpd bucket missing",
+			name: "server permit tpm state tampered",
 			mutate: func(ctx context.Context, s *Store, client *redis.Client, permit *AttemptPermit) error {
-				return client.Del(ctx, s.keys.channelRPDBucket(permit.ChannelID, dayBucket(time.Now()))).Err()
+				return client.HSet(ctx, s.keys.permit(permit.PermitID), "tpm_state", "settled").Err()
 			},
 			wantError: ErrRuntimeSyncRequired, wantCode: failure.CodeGatewayRuntimeSyncRequired,
 			wantFinish: DispositionRuntimeSyncReq,
@@ -540,7 +544,7 @@ func TestRouteChannelRPDAttributionRequiresInteractionEvidence(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
 	const routeID, channelID, providerID = int64(41), int64(42), int64(420)
-	seedAttemptControls(t, s, cfg, channelID, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+	seedAttemptControls(t, s, cfg, channelID, `{"concurrency":null}`)
 
 	acquireForRoute := func(permitID string) *AttemptPermit {
 		t.Helper()
@@ -586,28 +590,14 @@ func TestRouteChannelRPDAttributionRequiresInteractionEvidence(t *testing.T) {
 	}
 }
 
-// TestTTFTUpdatedOnlyByStreamPermit 验证 TTFT EWMA 只由流式有效 FirstToken 样本更新。
-func TestTTFTUpdatedOnlyByStreamPermit(t *testing.T) {
-	s, _, _ := newTestStore(t)
+// TestFinishDoesNotWriteTTFTIntoBreakerState 冻结 §12：TTFT 样本只进 30 分钟分钟桶，
+// 不再写入 breaker 状态（EWMA 已删除），Finish 仍正常收口资源与 breaker 计数。
+func TestFinishDoesNotWriteTTFTIntoBreakerState(t *testing.T) {
+	s, client, _ := newTestStore(t)
 	cfg := testConfig()
+	seedAttemptControls(t, s, cfg, 7, `{"concurrency":null}`)
 
-	// 非流式 permit 不允许携带 FirstToken，且校验失败不能终结 permit 或更新 TTFT。
-	admNS := acquire(t, s, cfg, "ns1", 7, 70)
-	ftns := int64(500)
-	if _, err := s.Finish(context.Background(), *admNS.Permit, FinishOutcome{
-		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess, FirstTokenMs: &ftns,
-	}); failure.CodeOf(err) != failure.CodeConfigInvalid {
-		t.Fatalf("finish non-stream with FirstToken want config_invalid, got %v", err)
-	}
-	if snap, _ := s.Snapshot(context.Background(), ScopeChannel, 7); snap.TTFTSamples != 0 {
-		t.Fatalf("non-stream must not update TTFT, got samples=%d", snap.TTFTSamples)
-	}
-	if err := s.Abort(context.Background(), *admNS.Permit); err != nil {
-		t.Fatalf("abort non-stream permit after validation failure: %v", err)
-	}
-
-	// 流式 permit 更新 TTFT。
-	admS, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
+	adm, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "s1", AdmissionFingerprint: "s1-fp", RequestAdmissionID: "req",
 		ProviderID: 70, ChannelID: 7, OriginRevision: 1, ProviderStatusRevision: 1,
 		ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions,
@@ -616,16 +606,29 @@ func TestTTFTUpdatedOnlyByStreamPermit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire stream: %v", err)
 	}
-	ft := int64(800)
-	if _, err := s.Finish(context.Background(), *admS.Permit, FinishOutcome{
-		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess, FirstTokenMs: &ft,
+	if _, err := s.Finish(context.Background(), *adm.Permit, FinishOutcome{
+		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess,
 		RequestWriteState: RequestWriteCompleted, FirstTokenEligible: true,
 	}); err != nil {
 		t.Fatalf("finish stream: %v", err)
 	}
-	snap, _ := s.Snapshot(context.Background(), ScopeChannel, 7)
-	if snap.TTFTSamples != 1 || snap.TTFTEWMAMs != 800 {
-		t.Fatalf("stream must set TTFT ewma=800 samples=1, got ewma=%v samples=%d", snap.TTFTEWMAMs, snap.TTFTSamples)
+	snap, err := s.Snapshot(context.Background(), ScopeChannel, 7)
+	if err != nil {
+		t.Fatalf("snapshot channel: %v", err)
+	}
+	if snap.EligibleSuccesses != 1 {
+		t.Fatalf("breaker success counting must still work: %+v", snap)
+	}
+	// breaker hash 内不得再出现任何 TTFT 字段。
+	fields, err := client.HGetAll(context.Background(), s.keys.channel(7)).Result()
+	if err != nil {
+		t.Fatalf("read channel breaker hash: %v", err)
+	}
+	if _, ok := fields["ttft_ewma_ms"]; ok {
+		t.Fatalf("breaker state must not carry ttft_ewma_ms: %v", fields)
+	}
+	if _, ok := fields["ttft_samples"]; ok {
+		t.Fatalf("breaker state must not carry ttft_samples: %v", fields)
 	}
 }
 
@@ -633,7 +636,7 @@ func TestTTFTUpdatedOnlyByStreamPermit(t *testing.T) {
 func TestConcurrencyLimitDenies(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
-	seedAttemptControls(t, s, cfg, 8, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":1}`)
+	seedAttemptControls(t, s, cfg, 8, `{"concurrency":1}`)
 
 	in := func(id string) AcquireAttemptInput {
 		return withAttemptControlRevisions(AcquireAttemptInput{
@@ -651,8 +654,8 @@ func TestConcurrencyLimitDenies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("c2 err: %v", err)
 	}
-	if a2.Mode != AdmissionDenied || a2.Reason != ReasonConcurrencyLimited {
-		t.Fatalf("c2: want denied/concurrency_limited, got %s/%s", a2.Mode, a2.Reason)
+	if a2.Mode != AdmissionDenied || a2.Reason != ReasonConcurrencyFull {
+		t.Fatalf("c2: want denied/concurrency_full, got %s/%s", a2.Mode, a2.Reason)
 	}
 	// 释放 c1 后 c2 可入。
 	if err := s.Abort(context.Background(), *a1.Permit); err != nil {
@@ -707,8 +710,12 @@ func TestChannel429CooldownDeniesAcquire(t *testing.T) {
 	}
 
 	adm := acquire(t, s, cfg, "cd1", 12, 120)
-	if adm.Mode != AdmissionDenied || adm.Reason != ReasonRateLimited {
-		t.Fatalf("want denied/rate_limited during cooldown, got %s/%s", adm.Mode, adm.Reason)
+	// 429 冷却拒绝必须报 cooldown（与并发满严格区分），并携带准确剩余毫秒供 Retry-After（§9.5）。
+	if adm.Mode != AdmissionDenied || adm.Reason != ReasonCooldown {
+		t.Fatalf("want denied/cooldown during cooldown, got %s/%s", adm.Mode, adm.Reason)
+	}
+	if adm.CooldownRemainingMs <= 0 {
+		t.Fatalf("cooldown denial must report remaining ms, got %d", adm.CooldownRemainingMs)
 	}
 	// 冷却拒绝不产生 breaker 样本。
 	if snap, _ := s.Snapshot(context.Background(), ScopeChannel, 12); snap.SampleCount != 0 {
@@ -728,7 +735,7 @@ func TestChannel429CooldownDeniesAcquire(t *testing.T) {
 func TestChannelModelPermissionPause(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
-	seedAttemptControls(t, s, cfg, 13, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+	seedAttemptControls(t, s, cfg, 13, `{"concurrency":null}`)
 
 	// 暂停 (channel=13, model=130) at config_rev=1, base_url_rev=1, status_rev=1。
 	if err := s.PauseChannelModelPermission(context.Background(), 13, 130, 1, 1, 1); err != nil {
@@ -789,7 +796,7 @@ func TestChannelModelPermissionPause(t *testing.T) {
 func TestResetClearsTTFT(t *testing.T) {
 	s, client, _ := newTestStore(t)
 	cfg := testConfig()
-	seedAttemptControls(t, s, cfg, 201, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+	seedAttemptControls(t, s, cfg, 201, `{"concurrency":null}`)
 	adm, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "reset-ttft", AdmissionFingerprint: "reset-ttft-fp", RequestAdmissionID: "req",
 		ProviderID: 2010, ChannelID: 201, OriginRevision: 1, ProviderStatusRevision: 1,
@@ -799,19 +806,17 @@ func TestResetClearsTTFT(t *testing.T) {
 	if err != nil || adm.Mode != AdmissionPermit {
 		t.Fatalf("acquire stream: mode=%s reason=%s err=%v", adm.Mode, adm.Reason, err)
 	}
-	firstToken := int64(740)
 	if _, err := s.Finish(context.Background(), *adm.Permit, FinishOutcome{
 		ProviderOutcome:    OutcomeIgnored,
 		ChannelOutcome:     OutcomeEligibleSuccess,
-		FirstTokenMs:       &firstToken,
 		RequestWriteState:  RequestWriteCompleted,
 		FirstTokenEligible: true,
 	}); err != nil {
 		t.Fatalf("finish stream: %v", err)
 	}
 	before, err := s.Snapshot(context.Background(), ScopeChannel, 201)
-	if err != nil || before.TTFTSamples != 1 || before.TTFTEWMAMs != 740 {
-		t.Fatalf("precondition TTFT sample missing: %+v err=%v", before, err)
+	if err != nil || before.EligibleSuccesses != 1 {
+		t.Fatalf("precondition breaker sample missing: %+v err=%v", before, err)
 	}
 
 	if _, err := s.Reset(context.Background(), ScopeChannel, 201); err != nil {
@@ -821,8 +826,8 @@ func TestResetClearsTTFT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshot after reset: %v", err)
 	}
-	if after.State != StateClosed || after.SampleCount != 0 || after.TTFTSamples != 0 || after.TTFTEWMAMs != 0 {
-		t.Fatalf("reset must restore closed/no-sample including TTFT: %+v", after)
+	if after.State != StateClosed || after.SampleCount != 0 {
+		t.Fatalf("reset must restore closed/no-sample: %+v", after)
 	}
 	fields, err := client.HMGet(context.Background(), s.keys.channel(201), "ttft_ewma_ms", "ttft_samples").Result()
 	if err != nil {
@@ -861,9 +866,9 @@ func TestSnapshotManyReadsCandidateIdentityAndPreservesOrder(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
 
-	seed := func(permitID string, providerID, channelID, baseRev, statusRev, configRev int64, mode RequestMode, firstToken *int64) {
+	seed := func(permitID string, providerID, channelID, baseRev, statusRev, configRev int64, mode RequestMode, streamFirstToken bool) {
 		t.Helper()
-		seedAttemptControls(t, s, cfg, channelID, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+		seedAttemptControls(t, s, cfg, channelID, `{"concurrency":null}`)
 		created, err := s.InitProviderControl(context.Background(), providerID, baseRev, statusRev, "enabled")
 		if err != nil || !created {
 			t.Fatalf("init origin %d: created=%v err=%v", providerID, created, err)
@@ -881,33 +886,23 @@ func TestSnapshotManyReadsCandidateIdentityAndPreservesOrder(t *testing.T) {
 		if _, err := s.Finish(context.Background(), *adm.Permit, FinishOutcome{
 			ProviderOutcome:    OutcomeEligibleSuccess,
 			ChannelOutcome:     OutcomeEligibleSuccess,
-			FirstTokenMs:       firstToken,
 			RequestWriteState:  RequestWriteCompleted,
-			FirstTokenEligible: firstToken != nil,
+			FirstTokenEligible: streamFirstToken,
 		}); err != nil {
 			t.Fatalf("finish %s: %v", permitID, err)
 		}
-		// SnapshotMany 的 TTFT 读取与 Finish 状态机分别验证；这里直接固化已完成的流式样本，
-		// 避免该批量只读测试耦合 permit terminal 参数演进。
-		if firstToken != nil {
-			if err := s.client.HSet(context.Background(), s.keys.channel(channelID),
-				"ttft_ewma_ms", *firstToken, "ttft_samples", 1).Err(); err != nil {
-				t.Fatalf("seed stream TTFT: %v", err)
-			}
-		}
 	}
 
-	firstToken := int64(620)
-	seed("batch-a", 3010, 301, 4, 5, 6, ModeStream, &firstToken)
-	seed("batch-b", 3020, 302, 7, 8, 9, ModeNonStream, nil)
+	seed("batch-a", 3010, 301, 4, 5, 6, ModeStream, true)
+	seed("batch-b", 3020, 302, 7, 8, 9, ModeNonStream, false)
 
 	candidates := []SnapshotCandidateInput{
-		{ProviderID: 3020, ChannelID: 302, OriginRevision: 7, ProviderStatusRevision: 8, ChannelConfigRevision: 9, ChannelAdmissionRevision: 1},
-		{ProviderID: 3010, ChannelID: 301, OriginRevision: 4, ProviderStatusRevision: 5, ChannelConfigRevision: 6, ChannelAdmissionRevision: 1},
+		{ProviderID: 3020, ChannelID: 302, OriginRevision: 7, ProviderStatusRevision: 8, ChannelConfigRevision: 9, ChannelCapacityRevision: 1},
+		{ProviderID: 3010, ChannelID: 301, OriginRevision: 4, ProviderStatusRevision: 5, ChannelConfigRevision: 6, ChannelCapacityRevision: 1},
 	}
 	result, err := s.SnapshotMany(context.Background(), SnapshotManyInput{
 		IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
-		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1, CircuitBreakerRevision: 1, RoutingBalanceRevision: 1,
+		GlobalConcurrencyRevision: 1, CircuitBreakerRevision: 1, RoutingBalanceRevision: 1,
 		ModelID: 100, Candidates: candidates,
 	})
 	if err != nil {
@@ -933,17 +928,14 @@ func TestSnapshotManyReadsCandidateIdentityAndPreservesOrder(t *testing.T) {
 			t.Fatalf("candidate %d channel binding mismatch: %+v", candidate.ChannelID, snapshot.Channel)
 		}
 	}
-	if snapshots[1].Channel.TTFTSamples != 1 || snapshots[1].Channel.TTFTEWMAMs != 620 {
-		t.Fatalf("stream TTFT missing from batch snapshot: %+v", snapshots[1].Channel)
-	}
 }
 
 // TestSnapshotManyFailsWholeBatchOnWrongType 验证任一畸形 key 都让整批作为基础设施错误失败。
 func TestSnapshotManyFailsWholeBatchOnWrongType(t *testing.T) {
 	s, client, _ := newTestStore(t)
 	cfg := testConfig()
-	seedAttemptControls(t, s, cfg, 401, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
-	ensureTestControl(t, s, s.ChannelAdmissionControl(402), `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+	seedAttemptControls(t, s, cfg, 401, `{"concurrency":null}`)
+	ensureTestControl(t, s, s.ChannelCapacityControl(402), `{"concurrency":null}`)
 	if _, err := s.InitProviderControl(context.Background(), 4010, 1, 1, "enabled"); err != nil {
 		t.Fatalf("init origin: %v", err)
 	}
@@ -953,11 +945,11 @@ func TestSnapshotManyFailsWholeBatchOnWrongType(t *testing.T) {
 
 	got, err := s.SnapshotMany(context.Background(), SnapshotManyInput{
 		IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
-		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1, CircuitBreakerRevision: 1, RoutingBalanceRevision: 1,
+		GlobalConcurrencyRevision: 1, CircuitBreakerRevision: 1, RoutingBalanceRevision: 1,
 		ModelID: 100,
 		Candidates: []SnapshotCandidateInput{
-			{ProviderID: 4010, ChannelID: 401, OriginRevision: 1, ProviderStatusRevision: 1, ChannelConfigRevision: 1, ChannelAdmissionRevision: 1},
-			{ProviderID: 4010, ChannelID: 402, OriginRevision: 1, ProviderStatusRevision: 1, ChannelConfigRevision: 1, ChannelAdmissionRevision: 1},
+			{ProviderID: 4010, ChannelID: 401, OriginRevision: 1, ProviderStatusRevision: 1, ChannelConfigRevision: 1, ChannelCapacityRevision: 1},
+			{ProviderID: 4010, ChannelID: 402, OriginRevision: 1, ProviderStatusRevision: 1, ChannelConfigRevision: 1, ChannelCapacityRevision: 1},
 		},
 	})
 	if err == nil || !errors.Is(err, ErrStoreUnavailable) {
@@ -972,7 +964,7 @@ func TestSnapshotManyReturnsAuthoritativeRoutingFacts(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
 	const channelID, providerID, modelID = int64(451), int64(4510), int64(100)
-	seedAttemptControls(t, s, cfg, channelID, `{"rpm":10,"rpd":20,"tpm":100,"concurrency":2}`)
+	seedAttemptControls(t, s, cfg, channelID, `{"concurrency":2}`)
 	if created, err := s.InitProviderControl(context.Background(), providerID, 3, 4, "enabled"); err != nil || !created {
 		t.Fatalf("init origin: created=%v err=%v", created, err)
 	}
@@ -994,19 +986,25 @@ func TestSnapshotManyReturnsAuthoritativeRoutingFacts(t *testing.T) {
 
 	result, err := s.SnapshotMany(context.Background(), SnapshotManyInput{
 		IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
-		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1, CircuitBreakerRevision: 1, RoutingBalanceRevision: 1,
+		GlobalConcurrencyRevision: 1, CircuitBreakerRevision: 1, RoutingBalanceRevision: 1,
 		ModelID: modelID,
 		Candidates: []SnapshotCandidateInput{{
 			ProviderID: providerID, ChannelID: channelID, OriginRevision: 3, ProviderStatusRevision: 4,
-			ChannelConfigRevision: 5, ChannelAdmissionRevision: 1,
+			ChannelConfigRevision: 5, ChannelCapacityRevision: 1,
 		}},
 	})
 	if err != nil {
 		t.Fatalf("snapshot many: %v", err)
 	}
-	if result.RoutingBalance.Revision != 1 || result.RoutingBalance.TTFTTargetMs != 2000 ||
-		result.RoutingBalance.TTFTWeight != 0.35 || result.RoutingBalance.CostWeight != 0 ||
-		result.RoutingBalance.MinimumRoutingFactor != 0.05 {
+	// objective_v1 五项权重 + TTFT/错误率窗口惩罚参数必须原样透出（§7/§14.6）。
+	if result.RoutingBalance.Revision != 1 ||
+		result.RoutingBalance.CostWeightPct != 25 || result.RoutingBalance.ConcurrencyWeightPct != 20 ||
+		result.RoutingBalance.TTFTWeightPct != 25 || result.RoutingBalance.ErrorRateWeightPct != 20 ||
+		result.RoutingBalance.PriorityWeightPct != 10 ||
+		result.RoutingBalance.TTFTWindowMs != 1_800_000 || result.RoutingBalance.TTFTPenaltyUnitMs != 1000 ||
+		result.RoutingBalance.TTFTPenaltyPointsPerUnit != 2.5 ||
+		result.RoutingBalance.ErrorWindowMs != 1_800_000 ||
+		result.RoutingBalance.ErrorPenaltyPointsPerPercent != 2.5 {
 		t.Fatalf("routing balance payload mismatch: %+v", result.RoutingBalance)
 	}
 	snapshot := result.Candidates[0]
@@ -1014,23 +1012,20 @@ func TestSnapshotManyReturnsAuthoritativeRoutingFacts(t *testing.T) {
 		!snapshot.ModelPermissionPaused || snapshot.ModelPermissionRecheckState != "queued" {
 		t.Fatalf("cooldown/permission facts mismatch: %+v", snapshot)
 	}
-	if snapshot.Concurrency.Used != 1 || snapshot.Concurrency.Limit != 2 ||
-		snapshot.RPM.Used != 1 || snapshot.RPM.Limit != 10 ||
-		snapshot.RPD.Used != 1 || snapshot.RPD.Limit != 20 ||
-		snapshot.TPM.Used != 25 || snapshot.TPM.Limit != 100 {
-		t.Fatalf("capacity facts mismatch: concurrency=%+v rpm=%+v rpd=%+v tpm=%+v",
-			snapshot.Concurrency, snapshot.RPM, snapshot.RPD, snapshot.TPM)
+	// 并发是唯一被准入占用的渠道级资源；RPM/RPD/TPM 观测走独立的 30 分钟样本桶。
+	if snapshot.Concurrency.Used != 1 || snapshot.Concurrency.Limit != 2 {
+		t.Fatalf("concurrency facts mismatch: %+v", snapshot.Concurrency)
 	}
 }
 
-func TestSnapshotManyReturnsCostWeightFromCurrentPayload(t *testing.T) {
+func TestSnapshotManyReturnsRoutingBalanceFromCurrentPayload(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
 	const channelID, providerID = int64(452), int64(4520)
 	seedAttemptControlsWithRoutingBalance(
 		t, s, cfg, channelID,
-		`{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`,
-		testRoutingBalancePayloadWithCost,
+		`{"concurrency":null}`,
+		testRoutingBalancePayloadCustom,
 	)
 	if created, err := s.InitProviderControl(context.Background(), providerID, 1, 1, "enabled"); err != nil || !created {
 		t.Fatalf("init origin: created=%v err=%v", created, err)
@@ -1038,33 +1033,70 @@ func TestSnapshotManyReturnsCostWeightFromCurrentPayload(t *testing.T) {
 
 	result, err := s.SnapshotMany(context.Background(), SnapshotManyInput{
 		IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
-		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1,
-		CircuitBreakerRevision: 1, RoutingBalanceRevision: 1, ModelID: 100,
+		GlobalConcurrencyRevision: 1,
+		CircuitBreakerRevision:    1, RoutingBalanceRevision: 1, ModelID: 100,
 		Candidates: []SnapshotCandidateInput{{
 			ProviderID: providerID, ChannelID: channelID,
 			OriginRevision: 1, ProviderStatusRevision: 1,
-			ChannelConfigRevision: 1, ChannelAdmissionRevision: 1,
+			ChannelConfigRevision: 1, ChannelCapacityRevision: 1,
 		}},
 	})
 	if err != nil {
 		t.Fatalf("snapshot current routing balance payload: %v", err)
 	}
-	if result.RoutingBalance.CostWeight != 0.6 {
-		t.Fatalf("snapshot cost weight = %v, want 0.6", result.RoutingBalance.CostWeight)
+	if result.RoutingBalance.CostWeightPct != 40 || result.RoutingBalance.ConcurrencyWeightPct != 10 ||
+		result.RoutingBalance.TTFTWeightPct != 20 || result.RoutingBalance.ErrorRateWeightPct != 20 ||
+		result.RoutingBalance.PriorityWeightPct != 10 ||
+		result.RoutingBalance.TTFTWindowMs != 900_000 || result.RoutingBalance.TTFTPenaltyUnitMs != 500 ||
+		result.RoutingBalance.TTFTPenaltyPointsPerUnit != 1.5 ||
+		result.RoutingBalance.ErrorWindowMs != 600_000 ||
+		result.RoutingBalance.ErrorPenaltyPointsPerPercent != 4 {
+		t.Fatalf("snapshot must transport the committed routing balance verbatim: %+v", result.RoutingBalance)
 	}
 }
 
 func TestSnapshotManyRejectsNonExactRoutingBalanceShapes(t *testing.T) {
+	// 单一 canonical：缺字段、未知字段、权重和≠100、非正窗口/惩罚参数以及任何旧 schema 都必须 fail-closed。
 	cases := map[string]string{
-		"missing legacy field": `{"ttft_target_ms":2000,"cost_weight":0.5,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
-		"unknown field":        `{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":0.5,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2,"bogus":1}`,
-		"null cost":            `{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":null,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
-		"negative cost":        `{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":-0.1,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
-		"cost above one":       `{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":1.1,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
-		"NaN ttft weight":      `{"ttft_target_ms":2000,"ttft_weight":NaN,"cost_weight":0.5,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
-		"NaN cost weight":      `{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":NaN,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
-		"NaN minimum factor":   `{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":0.5,"minimum_routing_factor":NaN,"ttft_ewma_alpha":0.2}`,
-		"NaN EWMA alpha":       `{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":0.5,"minimum_routing_factor":0.05,"ttft_ewma_alpha":NaN}`,
+		"missing field": `{"concurrency_weight_pct":20,"ttft_weight_pct":25,"error_rate_weight_pct":20,` +
+			`"priority_weight_pct":10,"ttft_window_ms":1800000,"ttft_penalty_unit_ms":1000,` +
+			`"ttft_penalty_points_per_unit":2.5,"error_window_ms":1800000,"error_penalty_points_per_percent":2.5}`,
+		"unknown field": `{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,` +
+			`"error_rate_weight_pct":20,"priority_weight_pct":10,"ttft_window_ms":1800000,` +
+			`"ttft_penalty_unit_ms":1000,"ttft_penalty_points_per_unit":2.5,"error_window_ms":1800000,` +
+			`"error_penalty_points_per_percent":2.5,"bogus":1}`,
+		"weights do not sum to 100": `{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,` +
+			`"error_rate_weight_pct":20,"priority_weight_pct":5,"ttft_window_ms":1800000,` +
+			`"ttft_penalty_unit_ms":1000,"ttft_penalty_points_per_unit":2.5,"error_window_ms":1800000,` +
+			`"error_penalty_points_per_percent":2.5}`,
+		"negative weight": `{"cost_weight_pct":-5,"concurrency_weight_pct":25,"ttft_weight_pct":25,` +
+			`"error_rate_weight_pct":30,"priority_weight_pct":25,"ttft_window_ms":1800000,` +
+			`"ttft_penalty_unit_ms":1000,"ttft_penalty_points_per_unit":2.5,"error_window_ms":1800000,` +
+			`"error_penalty_points_per_percent":2.5}`,
+		"zero ttft window": `{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,` +
+			`"error_rate_weight_pct":20,"priority_weight_pct":10,"ttft_window_ms":0,` +
+			`"ttft_penalty_unit_ms":1000,"ttft_penalty_points_per_unit":2.5,"error_window_ms":1800000,` +
+			`"error_penalty_points_per_percent":2.5}`,
+		"zero penalty unit": `{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,` +
+			`"error_rate_weight_pct":20,"priority_weight_pct":10,"ttft_window_ms":1800000,` +
+			`"ttft_penalty_unit_ms":0,"ttft_penalty_points_per_unit":2.5,"error_window_ms":1800000,` +
+			`"error_penalty_points_per_percent":2.5}`,
+		"zero ttft penalty points": `{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,` +
+			`"error_rate_weight_pct":20,"priority_weight_pct":10,"ttft_window_ms":1800000,` +
+			`"ttft_penalty_unit_ms":1000,"ttft_penalty_points_per_unit":0,"error_window_ms":1800000,` +
+			`"error_penalty_points_per_percent":2.5}`,
+		"NaN ttft penalty points": `{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,` +
+			`"error_rate_weight_pct":20,"priority_weight_pct":10,"ttft_window_ms":1800000,` +
+			`"ttft_penalty_unit_ms":1000,"ttft_penalty_points_per_unit":NaN,"error_window_ms":1800000,` +
+			`"error_penalty_points_per_percent":2.5}`,
+		"NaN error penalty points": `{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,` +
+			`"error_rate_weight_pct":20,"priority_weight_pct":10,"ttft_window_ms":1800000,` +
+			`"ttft_penalty_unit_ms":1000,"ttft_penalty_points_per_unit":2.5,"error_window_ms":1800000,` +
+			`"error_penalty_points_per_percent":NaN}`,
+		"legacy objective schema": `{"economic_weight_pct":45,"health_weight_pct":25,"capacity_weight_pct":20,` +
+			`"priority_weight_pct":10,"ttft_target_ms":2000,"ttft_weight":0.35,"ttft_ewma_alpha":0.2}`,
+		"legacy cost schema": `{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":0.5,` +
+			`"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
 	}
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1073,7 +1105,7 @@ func TestSnapshotManyRejectsNonExactRoutingBalanceShapes(t *testing.T) {
 			const channelID, providerID = int64(453), int64(4530)
 			seedAttemptControlsWithRoutingBalance(
 				t, s, cfg, channelID,
-				`{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`,
+				`{"concurrency":null}`,
 				payload,
 			)
 			if created, err := s.InitProviderControl(context.Background(), providerID, 1, 1, "enabled"); err != nil || !created {
@@ -1081,12 +1113,12 @@ func TestSnapshotManyRejectsNonExactRoutingBalanceShapes(t *testing.T) {
 			}
 			_, err := s.SnapshotMany(context.Background(), SnapshotManyInput{
 				IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
-				ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1,
-				CircuitBreakerRevision: 1, RoutingBalanceRevision: 1, ModelID: 100,
+				GlobalConcurrencyRevision: 1,
+				CircuitBreakerRevision:    1, RoutingBalanceRevision: 1, ModelID: 100,
 				Candidates: []SnapshotCandidateInput{{
 					ProviderID: providerID, ChannelID: channelID,
 					OriginRevision: 1, ProviderStatusRevision: 1,
-					ChannelConfigRevision: 1, ChannelAdmissionRevision: 1,
+					ChannelConfigRevision: 1, ChannelCapacityRevision: 1,
 				}},
 			})
 			if failure.CodeOf(err) != failure.CodeGatewayRuntimeSyncRequired {
@@ -1100,7 +1132,7 @@ func TestSnapshotManyTreatsExpiredClosedWindowAsNoSampleWithoutMutation(t *testi
 	s, client, _ := newTestStore(t)
 	cfg := testConfig()
 	const channelID, providerID = int64(454), int64(4540)
-	seedAttemptControls(t, s, cfg, channelID, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+	seedAttemptControls(t, s, cfg, channelID, `{"concurrency":null}`)
 	if created, err := s.InitProviderControl(context.Background(), providerID, 1, 1, "enabled"); err != nil || !created {
 		t.Fatalf("init origin: created=%v err=%v", created, err)
 	}
@@ -1143,12 +1175,12 @@ func TestSnapshotManyTreatsExpiredClosedWindowAsNoSampleWithoutMutation(t *testi
 
 	result, err := s.SnapshotMany(context.Background(), SnapshotManyInput{
 		IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
-		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1,
-		CircuitBreakerRevision: 1, RoutingBalanceRevision: 1, ModelID: 100,
+		GlobalConcurrencyRevision: 1,
+		CircuitBreakerRevision:    1, RoutingBalanceRevision: 1, ModelID: 100,
 		Candidates: []SnapshotCandidateInput{{
 			ProviderID: providerID, ChannelID: channelID,
 			OriginRevision: 1, ProviderStatusRevision: 1,
-			ChannelConfigRevision: 1, ChannelAdmissionRevision: 1,
+			ChannelConfigRevision: 1, ChannelCapacityRevision: 1,
 		}},
 	})
 	if err != nil {
@@ -1163,9 +1195,6 @@ func TestSnapshotManyTreatsExpiredClosedWindowAsNoSampleWithoutMutation(t *testi
 			t.Fatalf("expired closed scope must score as no-sample: %+v", scope)
 		}
 	}
-	if snapshot.Channel.TTFTEWMAMs != 777 || snapshot.Channel.TTFTSamples != 5 {
-		t.Fatalf("expired breaker window must preserve TTFT: %+v", snapshot.Channel)
-	}
 	afterOrigin, _ := client.HGetAll(context.Background(), s.keys.provider(providerID)).Result()
 	afterChannel, _ := client.HGetAll(context.Background(), s.keys.channel(channelID)).Result()
 	if !reflect.DeepEqual(afterOrigin, beforeOrigin) || !reflect.DeepEqual(afterChannel, beforeChannel) {
@@ -1177,17 +1206,17 @@ func TestSnapshotManyTreatsExpiredClosedWindowAsNoSampleWithoutMutation(t *testi
 func TestSnapshotManyFailsClosedOnMarkerOrPendingControl(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
-	seedAttemptControls(t, s, cfg, 461, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+	seedAttemptControls(t, s, cfg, 461, `{"concurrency":null}`)
 	if _, err := s.InitProviderControl(context.Background(), 4610, 1, 1, "enabled"); err != nil {
 		t.Fatal(err)
 	}
 	input := SnapshotManyInput{
 		IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
-		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1, CircuitBreakerRevision: 1, RoutingBalanceRevision: 1,
+		GlobalConcurrencyRevision: 1, CircuitBreakerRevision: 1, RoutingBalanceRevision: 1,
 		ModelID: 100,
 		Candidates: []SnapshotCandidateInput{{
 			ProviderID: 4610, ChannelID: 461, OriginRevision: 1, ProviderStatusRevision: 1,
-			ChannelConfigRevision: 1, ChannelAdmissionRevision: 1,
+			ChannelConfigRevision: 1, ChannelCapacityRevision: 1,
 		}},
 	}
 	staleEpoch := input
@@ -1218,7 +1247,7 @@ func TestSnapshotManyFailsClosedOnMarkerOrPendingControl(t *testing.T) {
 func TestAcquireRotatesChannelRevisionState(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	cfg := testConfig()
-	seedAttemptControls(t, s, cfg, 501, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+	seedAttemptControls(t, s, cfg, 501, `{"concurrency":null}`)
 	first, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: "rotate-v1", AdmissionFingerprint: "rotate-v1-fp", RequestAdmissionID: "req",
 		ProviderID: 5010, ChannelID: 501, OriginRevision: 1, ProviderStatusRevision: 1,
@@ -1227,9 +1256,8 @@ func TestAcquireRotatesChannelRevisionState(t *testing.T) {
 	if err != nil || first.Mode != AdmissionPermit {
 		t.Fatalf("acquire v1: mode=%s reason=%s err=%v", first.Mode, first.Reason, err)
 	}
-	ttft := int64(900)
 	if _, err := s.Finish(context.Background(), *first.Permit, FinishOutcome{
-		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleFailure, FirstTokenMs: &ttft,
+		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleFailure,
 		RequestWriteState: RequestWriteCompleted, FirstTokenEligible: true,
 	}); err != nil {
 		t.Fatalf("finish v1: %v", err)
@@ -1248,7 +1276,7 @@ func TestAcquireRotatesChannelRevisionState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshot v2: %v", err)
 	}
-	if snapshot.ChannelConfigRevision != 2 || snapshot.SampleCount != 0 || snapshot.TTFTSamples != 0 {
+	if snapshot.ChannelConfigRevision != 2 || snapshot.SampleCount != 0 {
 		t.Fatalf("v2 must rotate to closed/no-sample: %+v", snapshot)
 	}
 	if err := s.Abort(context.Background(), *v2.Permit); err != nil {
@@ -1281,9 +1309,9 @@ func TestAcquireAndFinishRejectInvalidInputBeforeRedisWrite(t *testing.T) {
 		IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
 		ProviderID: 6010, ChannelID: 601, OriginRevision: 1, ProviderStatusRevision: 1,
 		ChannelConfigRevision: 1, ModelID: 100, UpstreamEndpoint: EndpointChatCompletions,
-		RequestMode:         ModeNonStream,
-		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1,
-		CircuitBreakerRevision: 1, ChannelAdmissionRevision: 1,
+		RequestMode:               ModeNonStream,
+		GlobalConcurrencyRevision: 1,
+		CircuitBreakerRevision:    1, ChannelCapacityRevision: 1,
 	}
 	invalidAcquireCases := []struct {
 		name   string
@@ -1312,13 +1340,12 @@ func TestAcquireAndFinishRejectInvalidInputBeforeRedisWrite(t *testing.T) {
 	valid := base
 	valid.PermitID = "valid-before-invalid-finish"
 	valid.AdmissionFingerprint = "valid-before-invalid-finish-fp"
-	seedAttemptControls(t, s, cfg, 601, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+	seedAttemptControls(t, s, cfg, 601, `{"concurrency":null}`)
 	adm, err := acquireAttempt(t, s, valid)
 	if err != nil || adm.Mode != AdmissionPermit {
 		t.Fatalf("valid acquire: mode=%s reason=%s err=%v", adm.Mode, adm.Reason, err)
 	}
 	negative := int64(-1)
-	firstToken := int64(10)
 	finishCases := []struct {
 		name    string
 		outcome FinishOutcome
@@ -1327,7 +1354,6 @@ func TestAcquireAndFinishRejectInvalidInputBeforeRedisWrite(t *testing.T) {
 		{name: "evidence enum", outcome: FinishOutcome{ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleFailure, ProviderEvidence: ProviderEvidenceCategory("invalid")}},
 		{name: "evidence requires channel failure", outcome: FinishOutcome{ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, ProviderEvidence: ProviderEvidenceHTTP500}},
 		{name: "negative actual tokens", outcome: FinishOutcome{ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, ActualTotalTokens: &negative}},
-		{name: "non-stream first token", outcome: FinishOutcome{ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, FirstTokenMs: &firstToken}},
 	}
 	for _, tc := range finishCases {
 		if _, err := s.Finish(context.Background(), *adm.Permit, tc.outcome); failure.CodeOf(err) != failure.CodeConfigInvalid {
@@ -1355,7 +1381,7 @@ func TestProviderAmbiguousEvidenceRequiresDistinctChannelsAndModels(t *testing.T
 	const providerID int64 = 6110
 
 	acquireEvidence := func(permitID string, channelID, modelID int64) *AttemptPermit {
-		seedAttemptControls(t, s, cfg, channelID, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+		seedAttemptControls(t, s, cfg, channelID, `{"concurrency":null}`)
 		adm, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 			PermitID: permitID, AdmissionFingerprint: permitID + "-fp", RequestAdmissionID: "req-" + permitID,
 			ProviderID: providerID, ChannelID: channelID,
@@ -1423,7 +1449,7 @@ func TestProviderAmbiguousEvidenceCategoriesDoNotMix(t *testing.T) {
 	const providerID int64 = 6210
 
 	finishOne := func(permitID string, channelID, modelID int64, category ProviderEvidenceCategory) {
-		seedAttemptControls(t, s, cfg, channelID, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+		seedAttemptControls(t, s, cfg, channelID, `{"concurrency":null}`)
 		adm, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 			PermitID: permitID, AdmissionFingerprint: permitID + "-fp", RequestAdmissionID: "req-" + permitID,
 			ProviderID: providerID, ChannelID: channelID,
@@ -1453,7 +1479,7 @@ func TestProviderAmbiguousEvidenceCategoriesDoNotMix(t *testing.T) {
 func TestOriginFenceMakesExistingPermitBreakerResultStale(t *testing.T) {
 	s, client, _ := newTestStore(t)
 	cfg := testConfig()
-	seedAttemptControls(t, s, cfg, 631, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":1}`)
+	seedAttemptControls(t, s, cfg, 631, `{"concurrency":1}`)
 	if created, err := s.InitProviderControl(context.Background(), 6310, 1, 1, "enabled"); err != nil || !created {
 		t.Fatalf("init origin control: created=%v err=%v", created, err)
 	}
@@ -1500,11 +1526,9 @@ func TestOriginFenceMakesExistingPermitBreakerResultStale(t *testing.T) {
 	if err != nil || denied.Mode != AdmissionDenied || denied.Reason != ReasonRuntimeSyncRequired {
 		t.Fatalf("new permit during status fence: admission=%+v err=%v", denied, err)
 	}
-	firstToken := int64(250)
 	result, err := s.Finish(context.Background(), *adm.Permit, FinishOutcome{
 		ProviderOutcome:    OutcomeEligibleSuccess,
 		ChannelOutcome:     OutcomeEligibleSuccess,
-		FirstTokenMs:       &firstToken,
 		RequestWriteState:  RequestWriteCompleted,
 		FirstTokenEligible: true,
 	})
@@ -1516,7 +1540,7 @@ func TestOriginFenceMakesExistingPermitBreakerResultStale(t *testing.T) {
 	}
 	origin, _ := s.Snapshot(context.Background(), ScopeProvider, 6310)
 	channel, _ := s.Snapshot(context.Background(), ScopeChannel, 631)
-	if origin.SampleCount != 0 || channel.SampleCount != 0 || channel.TTFTSamples != 0 {
+	if origin.SampleCount != 0 || channel.SampleCount != 0 {
 		t.Fatalf("fenced finish changed current runtime: origin=%+v channel=%+v", origin, channel)
 	}
 	if used := client.ZCard(context.Background(), concurrencyKey).Val(); used != 0 {

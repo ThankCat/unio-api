@@ -41,8 +41,8 @@ func TestCompactHistory_HappyPath(t *testing.T) {
 	if len(settlement.params) != 1 {
 		t.Fatalf("expected compact to settle once, got %d", len(settlement.params))
 	}
-	if settlement.params[0].ResponseStartedAt != nil {
-		t.Fatalf("non-stream compact response_started_at = %v, want nil", settlement.params[0].ResponseStartedAt)
+	if settlement.params[0].GatewayFirstTokenAt != nil {
+		t.Fatalf("non-stream compact gateway_first_token_at = %v, want nil", settlement.params[0].GatewayFirstTokenAt)
 	}
 	if len(requestLog.createRequests) != 1 || requestLog.createRequests[0].Endpoint != "responses" {
 		t.Fatalf("expected one responses request record, got %+v", requestLog.createRequests)

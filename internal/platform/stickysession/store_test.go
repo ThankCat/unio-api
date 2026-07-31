@@ -18,138 +18,197 @@ func newTestStore(t *testing.T) (*Store, *redis.Client, *miniredis.Miniredis) {
 	return NewStore(client, "sticky-test", nil), client, server
 }
 
-func TestStoreBindLookupAndRebindV3(t *testing.T) {
+func TestBindIfAbsentWritesCanonicalValueAndTTL(t *testing.T) {
 	store, client, server := newTestStore(t)
 	ctx := context.Background()
-	store.Bind(ctx, "session", 7, 30*time.Minute)
 
-	channelID, lastSuccessAt, ok := store.Lookup(ctx, "session")
-	if !ok || channelID != 7 || lastSuccessAt.IsZero() {
-		t.Fatalf("unexpected v3 lookup: channel=%d last_success_at=%v ok=%v", channelID, lastSuccessAt, ok)
+	bound, result := store.BindIfAbsent(ctx, "session", 7, 30*time.Minute)
+	if !result.Applied || result.Conflict || result.StoreUnavailable {
+		t.Fatalf("first bind must apply: %+v", result)
 	}
+	if bound.ChannelID != 7 || bound.BindingVersion <= 0 || bound.LastSuccessAt.IsZero() {
+		t.Fatalf("bind must return the full CAS identity: %+v", bound)
+	}
+
 	raw, err := client.Get(ctx, "sticky-test:session").Result()
 	if err != nil {
 		t.Fatalf("read raw binding: %v", err)
 	}
-	var binding stickyBindingV3
-	if err := json.Unmarshal([]byte(raw), &binding); err != nil || binding.Version != 3 || binding.ChannelID != 7 {
-		t.Fatalf("unexpected v3 payload %q: binding=%+v err=%v", raw, binding, err)
+	var stored binding
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		t.Fatalf("decode stored binding %q: %v", raw, err)
+	}
+	if stored.Version != bindingSchemaVersion || stored.ChannelID != 7 ||
+		stored.BindingVersion != bound.BindingVersion || stored.LastSuccessAtMs <= 0 {
+		t.Fatalf("stored value is not the canonical schema: %+v", stored)
 	}
 	if ttl := server.TTL("sticky-test:session"); ttl != 30*time.Minute {
 		t.Fatalf("bind TTL=%v want=30m", ttl)
 	}
 
-	store.Bind(ctx, "session", 8, time.Hour)
-	if got, _, _ := store.Lookup(ctx, "session"); got != 7 {
-		t.Fatalf("SETNX bind overwrote existing channel: %d", got)
-	}
-	store.Rebind(ctx, "session", 8, time.Hour)
-	if got, _, _ := store.Lookup(ctx, "session"); got != 8 {
-		t.Fatalf("rebind channel=%d want=8", got)
-	}
-	if ttl := server.TTL("sticky-test:session"); ttl != time.Hour {
-		t.Fatalf("rebind TTL=%v want=1h", ttl)
+	lookup := store.Lookup(ctx, "session")
+	if !lookup.Found || lookup.Binding.ChannelID != 7 ||
+		lookup.Binding.BindingVersion != bound.BindingVersion {
+		t.Fatalf("lookup must round-trip the CAS identity: %+v", lookup)
 	}
 }
 
-func TestStoreLegacyLookupUpgradesWithoutChangingTTL(t *testing.T) {
-	store, client, server := newTestStore(t)
-	ctx := context.Background()
-	key := "sticky-test:legacy"
-	server.Set(key, "7")
-	server.SetTTL(key, 12*time.Minute)
-
-	channelID, boundAt, ok := store.Lookup(ctx, "legacy")
-	if !ok || channelID != 7 || boundAt.IsZero() {
-		t.Fatalf("legacy lookup failed: channel=%d bound_at=%v ok=%v", channelID, boundAt, ok)
-	}
-	raw, err := client.Get(ctx, key).Result()
-	if err != nil {
-		t.Fatalf("read upgraded binding: %v", err)
-	}
-	var binding stickyBindingV3
-	if err := json.Unmarshal([]byte(raw), &binding); err != nil || binding.Version != 3 || binding.ChannelID != 7 {
-		t.Fatalf("legacy value was not upgraded: raw=%q binding=%+v err=%v", raw, binding, err)
-	}
-	if ttl := server.TTL(key); ttl != 12*time.Minute {
-		t.Fatalf("legacy upgrade changed TTL: %v", ttl)
-	}
-}
-
-func TestStoreV2LookupUpgradesWithoutChangingTTL(t *testing.T) {
-	store, client, server := newTestStore(t)
-	ctx := context.Background()
-	key := "sticky-test:v2"
-	boundAt := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
-	raw, err := json.Marshal(stickyBindingV2{Version: 2, ChannelID: 9, BoundAtMs: boundAt.UnixMilli()})
-	if err != nil {
-		t.Fatalf("encode v2 binding: %v", err)
-	}
-	server.Set(key, string(raw))
-	server.SetTTL(key, 7*time.Minute)
-
-	channelID, lastSuccessAt, ok := store.Lookup(ctx, "v2")
-	if !ok || channelID != 9 || !lastSuccessAt.Equal(boundAt) {
-		t.Fatalf("v2 lookup failed: channel=%d last_success=%v ok=%v", channelID, lastSuccessAt, ok)
-	}
-	upgraded, err := client.Get(ctx, key).Result()
-	if err != nil {
-		t.Fatalf("read upgraded v3 binding: %v", err)
-	}
-	var binding stickyBindingV3
-	if err := json.Unmarshal([]byte(upgraded), &binding); err != nil || binding.Version != 3 || binding.ChannelID != 9 || binding.LastSuccessAtMs != boundAt.UnixMilli() {
-		t.Fatalf("v2 value was not upgraded: raw=%q binding=%+v err=%v", upgraded, binding, err)
-	}
-	if ttl := server.TTL(key); ttl != 7*time.Minute {
-		t.Fatalf("v2 upgrade changed TTL: %v", ttl)
-	}
-}
-
-func TestStoreLookupTreatsCorruptionAsMiss(t *testing.T) {
+// TestBindIfAbsentLosesToExistingBinding 冻结 §10.5：首轮并发只有第一个 CAS 成功者建绑。
+func TestBindIfAbsentLosesToExistingBinding(t *testing.T) {
 	store, _, server := newTestStore(t)
-	server.Set("sticky-test:broken", `{"v":2,"channel_id":0,"bound_at_ms":1}`)
-	if channelID, boundAt, ok := store.Lookup(context.Background(), "broken"); ok || channelID != 0 || !boundAt.IsZero() {
-		t.Fatalf("corrupt binding must be a miss: channel=%d bound_at=%v ok=%v", channelID, boundAt, ok)
+	ctx := context.Background()
+
+	first, _ := store.BindIfAbsent(ctx, "session", 7, 30*time.Minute)
+	_, second := store.BindIfAbsent(ctx, "session", 8, time.Hour)
+	if second.Applied || !second.Conflict {
+		t.Fatalf("second concurrent bind must report CAS conflict: %+v", second)
+	}
+	lookup := store.Lookup(ctx, "session")
+	if lookup.Binding.ChannelID != 7 || lookup.Binding.BindingVersion != first.BindingVersion {
+		t.Fatalf("losing bind overwrote the winner: %+v", lookup)
+	}
+	if ttl := server.TTL("sticky-test:session"); ttl != 30*time.Minute {
+		t.Fatalf("losing bind changed TTL: %v", ttl)
 	}
 }
 
-func TestStoreRefreshIfBoundSlidesSuccessTimeAndTTL(t *testing.T) {
+func TestRefreshIfCurrentSlidesTTLAndKeepsVersion(t *testing.T) {
 	store, client, server := newTestStore(t)
 	ctx := context.Background()
-	oldSuccess := time.Now().Add(-20 * time.Minute).Truncate(time.Millisecond)
-	raw, err := encodeBinding(7, oldSuccess)
+
+	bound, _ := store.BindIfAbsent(ctx, "session", 7, 5*time.Minute)
+	// 把 last_success 往前挪，才能观察续期确实推进了时间。
+	older := binding{
+		Version: bindingSchemaVersion, ChannelID: 7, BindingVersion: bound.BindingVersion,
+		LastSuccessAtMs: time.Now().Add(-20 * time.Minute).UnixMilli(),
+	}
+	raw, err := json.Marshal(older)
 	if err != nil {
-		t.Fatalf("encode old binding: %v", err)
+		t.Fatalf("encode older binding: %v", err)
 	}
 	if err := client.Set(ctx, "sticky-test:session", raw, 5*time.Minute).Err(); err != nil {
-		t.Fatalf("seed old binding: %v", err)
+		t.Fatalf("seed older binding: %v", err)
 	}
 
-	store.RefreshIfBound(ctx, "session", 7, 30*time.Minute)
-	_, after, ok := store.Lookup(ctx, "session")
-	if !ok || !after.After(oldSuccess) {
-		t.Fatalf("refresh must advance last success: old=%v after=%v ok=%v", oldSuccess, after, ok)
+	next, result := store.RefreshIfCurrent(ctx, "session", 7, bound.BindingVersion, 30*time.Minute)
+	if !result.Applied {
+		t.Fatalf("refresh with matching identity must apply: %+v", result)
+	}
+	if next.BindingVersion != bound.BindingVersion {
+		t.Fatalf("refresh must keep the same binding_version: got %d want %d",
+			next.BindingVersion, bound.BindingVersion)
+	}
+	lookup := store.Lookup(ctx, "session")
+	if !lookup.Found || lookup.Binding.LastSuccessAt.Before(time.Now().Add(-time.Minute)) {
+		t.Fatalf("refresh must advance last success: %+v", lookup)
 	}
 	if ttl := server.TTL("sticky-test:session"); ttl != 30*time.Minute {
 		t.Fatalf("refresh TTL=%v want=30m", ttl)
 	}
 }
 
-func TestStoreRefreshIfBoundDoesNotReviveStaleChannel(t *testing.T) {
+// TestRefreshIfCurrentRejectsStaleIdentity 冻结 CAS 必须同时比较 channel_id 与 binding_version：
+// 一个慢请求带着旧 version 回来，不得续活/覆盖新绑定，即使 channel_id 恰好相同。
+func TestRefreshIfCurrentRejectsStaleIdentity(t *testing.T) {
 	store, _, server := newTestStore(t)
 	ctx := context.Background()
-	store.Bind(ctx, "session", 8, 10*time.Minute)
-	_, before, ok := store.Lookup(ctx, "session")
-	if !ok {
-		t.Fatal("expected current binding")
+
+	stale, _ := store.BindIfAbsent(ctx, "session", 7, 10*time.Minute)
+	if applied := store.ClearIfCurrent(ctx, "session", 7, stale.BindingVersion); !applied.Applied {
+		t.Fatalf("precondition clear failed: %+v", applied)
+	}
+	// 同一个 channel 被重新绑定 → 新的 binding_version。
+	fresh, _ := store.BindIfAbsent(ctx, "session", 7, 10*time.Minute)
+	if fresh.BindingVersion == stale.BindingVersion {
+		t.Fatal("rebinding the same channel must produce a new binding_version")
 	}
 
-	store.RefreshIfBound(ctx, "session", 7, 30*time.Minute)
-	channelID, after, ok := store.Lookup(ctx, "session")
-	if !ok || channelID != 8 || !after.Equal(before) {
-		t.Fatalf("stale refresh changed binding: channel=%d before=%v after=%v ok=%v", channelID, before, after, ok)
+	_, result := store.RefreshIfCurrent(ctx, "session", 7, stale.BindingVersion, time.Hour)
+	if result.Applied || !result.Conflict {
+		t.Fatalf("stale binding_version must lose the CAS even on the same channel: %+v", result)
 	}
 	if ttl := server.TTL("sticky-test:session"); ttl != 10*time.Minute {
-		t.Fatalf("stale refresh TTL=%v want=10m", ttl)
+		t.Fatalf("stale refresh changed TTL: %v", ttl)
+	}
+
+	_, wrongChannel := store.RefreshIfCurrent(ctx, "session", 8, fresh.BindingVersion, time.Hour)
+	if wrongChannel.Applied || !wrongChannel.Conflict {
+		t.Fatalf("mismatched channel must lose the CAS: %+v", wrongChannel)
+	}
+}
+
+func TestClearIfCurrentOnlyRemovesTheMatchingBinding(t *testing.T) {
+	store, _, _ := newTestStore(t)
+	ctx := context.Background()
+
+	bound, _ := store.BindIfAbsent(ctx, "session", 7, 30*time.Minute)
+
+	if result := store.ClearIfCurrent(ctx, "session", 8, bound.BindingVersion); result.Applied || !result.Conflict {
+		t.Fatalf("clearing a different channel must be a CAS conflict: %+v", result)
+	}
+	if result := store.ClearIfCurrent(ctx, "session", 7, bound.BindingVersion+1); result.Applied || !result.Conflict {
+		t.Fatalf("clearing a different version must be a CAS conflict: %+v", result)
+	}
+	if lookup := store.Lookup(ctx, "session"); !lookup.Found {
+		t.Fatal("failed CAS clears must not delete the binding")
+	}
+
+	if result := store.ClearIfCurrent(ctx, "session", 7, bound.BindingVersion); !result.Applied {
+		t.Fatalf("matching clear must apply: %+v", result)
+	}
+	if lookup := store.Lookup(ctx, "session"); lookup.Found {
+		t.Fatalf("binding must be gone after a matching clear: %+v", lookup)
+	}
+}
+
+func TestClearIfCurrentOnMissingBindingIsConflictNotError(t *testing.T) {
+	store, _, _ := newTestStore(t)
+	result := store.ClearIfCurrent(context.Background(), "absent", 7, 1)
+	if result.Applied || result.StoreUnavailable || !result.Conflict {
+		t.Fatalf("clearing an absent binding must be a benign conflict: %+v", result)
+	}
+}
+
+func TestLookupTreatsNonCanonicalValueAsMiss(t *testing.T) {
+	store, _, server := newTestStore(t)
+	ctx := context.Background()
+	for name, value := range map[string]string{
+		"legacy integer":  "7",
+		"legacy v2":       `{"v":2,"channel_id":7,"bound_at_ms":1}`,
+		"legacy v3":       `{"v":3,"channel_id":7,"last_success_at_ms":1}`,
+		"missing version": `{"channel_id":7,"binding_version":1,"last_success_at_ms":1}`,
+		"zero channel":    `{"v":1,"channel_id":0,"binding_version":1,"last_success_at_ms":1}`,
+		"zero binding":    `{"v":1,"channel_id":7,"binding_version":0,"last_success_at_ms":1}`,
+		"not json":        `not-json`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server.Set("sticky-test:broken", value)
+			if lookup := store.Lookup(ctx, "broken"); lookup.Found || lookup.StoreUnavailable {
+				t.Fatalf("non-canonical value must be a plain miss: %+v", lookup)
+			}
+		})
+	}
+}
+
+// TestStoreFailuresAreReportedButNeverFatal 冻结 §10.11 fail-open：
+// Redis 故障必须被报告为 store_unavailable，而不是伪装成 miss 或冲突。
+func TestStoreFailuresAreReportedButNeverFatal(t *testing.T) {
+	store, client, server := newTestStore(t)
+	ctx := context.Background()
+	bound, _ := store.BindIfAbsent(ctx, "session", 7, 30*time.Minute)
+	server.Close()
+	_ = client
+
+	if lookup := store.Lookup(ctx, "session"); lookup.Found || !lookup.StoreUnavailable {
+		t.Fatalf("lookup on a dead store must report store_unavailable: %+v", lookup)
+	}
+	if _, result := store.BindIfAbsent(ctx, "session", 8, time.Minute); !result.StoreUnavailable {
+		t.Fatalf("bind on a dead store must report store_unavailable: %+v", result)
+	}
+	if _, result := store.RefreshIfCurrent(ctx, "session", 7, bound.BindingVersion, time.Minute); !result.StoreUnavailable {
+		t.Fatalf("refresh on a dead store must report store_unavailable: %+v", result)
+	}
+	if result := store.ClearIfCurrent(ctx, "session", 7, bound.BindingVersion); !result.StoreUnavailable {
+		t.Fatalf("clear on a dead store must report store_unavailable: %+v", result)
 	}
 }

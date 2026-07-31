@@ -24,7 +24,6 @@ type RuntimeControlPublisher interface {
 // RuntimeControlStore 提供 setting control 的定位和只读同步状态。
 type RuntimeControlStore interface {
 	RouteRateLimitControl() breakerstore.ControlTarget
-	ChannelRateLimitControl() breakerstore.ControlTarget
 	GlobalConcurrencyControl() breakerstore.ControlTarget
 	SettingControl(settingKey string) breakerstore.ControlTarget
 	ReadControl(ctx context.Context, target breakerstore.ControlTarget, expectedRevision int64) (breakerstore.ControlSnapshot, error)
@@ -117,7 +116,7 @@ type SettingWriteResult struct {
 	PendingRevision int64  `json:"pending_revision"`
 }
 
-// SetRawWithResult 校验并写入设置。五个关键 setting 强制走 durable publisher，普通 PUT 无法绕过。
+// SetRawWithResult 校验并写入设置。四个关键 setting 强制走 durable publisher，普通 PUT 无法绕过。
 func (s *Service) SetRawWithResult(ctx context.Context, key string, value json.RawMessage) (SettingWriteResult, error) {
 	def, ok := s.store.registry.Get(key)
 	if !ok {
@@ -208,7 +207,7 @@ func (s *Service) SetRawWithResult(ctx context.Context, key string, value json.R
 
 func isRuntimeControlSetting(key string) bool {
 	switch key {
-	case GatewayRouteRateLimitDefaultsKey, GatewayChannelRateLimitDefaultsKey,
+	case GatewayRouteRateLimitDefaultsKey,
 		GatewayConcurrencyDefaultsKey, GatewayCircuitBreakerKey, GatewayRoutingBalanceKey:
 		return true
 	default:
@@ -218,7 +217,7 @@ func isRuntimeControlSetting(key string) bool {
 
 func canonicalRuntimeSetting(key string, raw json.RawMessage) (json.RawMessage, error) {
 	switch key {
-	case GatewayRouteRateLimitDefaultsKey, GatewayChannelRateLimitDefaultsKey:
+	case GatewayRouteRateLimitDefaultsKey:
 		settings, err := DecodeRateLimitDefaultsSettings(raw)
 		if err != nil {
 			return nil, err
@@ -309,8 +308,6 @@ func runtimeControlTarget(store RuntimeControlStore, key string) breakerstore.Co
 	switch key {
 	case GatewayRouteRateLimitDefaultsKey:
 		return store.RouteRateLimitControl()
-	case GatewayChannelRateLimitDefaultsKey:
-		return store.ChannelRateLimitControl()
 	case GatewayConcurrencyDefaultsKey:
 		return store.GlobalConcurrencyControl()
 	default:

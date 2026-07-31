@@ -13,6 +13,7 @@ ignore = {
   "211/active_zset_count",
   "211/now_ms",
   "211/parse_channel_admission_payload",
+  "211/parse_channel_capacity_payload",
   "211/parse_global_concurrency_payload",
   "211/parse_rate_limit_defaults_payload",
   "211/parse_routing_balance_payload",

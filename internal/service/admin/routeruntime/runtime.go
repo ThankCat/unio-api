@@ -47,6 +47,8 @@ type RuntimeFactsReader interface {
 type BreakerSnapshotter interface {
 	SnapshotMany(context.Context, breakerstore.SnapshotManyInput) (breakerstore.SnapshotManyResult, error)
 	AggregateRouteUsage(context.Context, int64) (breakerstore.RouteUsage, error)
+	// AggregateChannelSamples 提供 30 分钟评分样本聚合（§12），与 Gateway 选路同源。
+	AggregateChannelSamples(context.Context, []int64) (map[int64]breakerstore.ChannelSampleWindow, error)
 }
 
 type RouteChannelRPDReader interface {
@@ -76,94 +78,93 @@ type Source struct {
 }
 
 type Channel struct {
-	ChannelID                       int64
-	ChannelName                     string
-	ChannelStatus                   string
-	ProviderID                      int64
-	ProviderName                    string
-	ProviderStatus                  string
-	OriginRevision                  int64
-	ProviderStatusRevision          int64
-	RuntimeOriginRevision           int64
-	RuntimeProviderStatusRevision   int64
-	PendingOriginRevision           *int64
-	PendingProviderStatusRevision   *int64
-	OriginRevisionCurrent           bool
-	ProviderStatusRevisionCurrent   bool
-	ProviderStateGeneration         int64
-	OriginFenceGeneration           int64
-	StatusFenceGeneration           int64
-	ChannelConfigRevision           int64
-	RuntimeChannelConfigRevision    *int64
-	ChannelConfigRevisionCurrent    bool
-	ChannelAdmissionLimitsRevision  int64
-	RuntimeChannelAdmissionRevision int64
-	ChannelAdmissionRevisionCurrent bool
-	RouteRateLimitsRevision         int64
-	ChannelRateLimitsRevision       int64
-	GlobalConcurrencyRevision       int64
-	CircuitBreakerRevision          int64
-	RoutingBalanceRevision          int64
-	RuntimeControlState             string
-	RuntimeRevisionCurrent          bool
-	Protocol                        string
-	AdapterKey                      string
-	Priority                        int32
-	Eligible                        bool
-	ExcludedReason                  string
-	ConcurrencyUsed                 int64
-	ConcurrencyLimit                int64
-	ConcurrencyRemaining            *float64
-	RPMUsed                         int64
-	RPMLimit                        int64
-	RPMRemaining                    *float64
-	RPDUsed                         int64
-	RPDLimit                        int64
-	RPDRemaining                    *float64
-	GlobalRPDUsed                   int64
-	GlobalRPDLimit                  int64
-	GlobalRPDRemaining              *float64
-	TPMUsed                         int64
-	TPMLimit                        int64
-	TPMRemaining                    *float64
-	CapacityScore                   float64
-	AlgorithmVersion                string
-	EconomicScore                   float64
-	HealthScore                     float64
-	PriorityScore                   float64
-	FinalScore                      float64
-	EconomicWeightPct               int
-	HealthWeightPct                 int
-	CapacityWeightPct               int
-	PriorityWeightPct               int
-	CostRatio                       *float64
-	CostWeight                      float64
-	CostFactor                      float64
-	FinalWeight                     float64
-	Pressure                        float64
-	CapacityUnknown                 bool
-	CapacityReadFailed              bool
-	ProviderBreakerState            *string
-	ProviderOpenRemainingMs         *int64
-	ChannelBreakerState             *string
-	ChannelOpenRemainingMs          *int64
-	ErrorRate                       *float64
-	ErrorSamples                    int64
-	TTFTEWMAMs                      *float64
-	TTFTSamples                     int64
-	TTFTSampleSource                string
-	CooldownRemainingMs             int64
-	ModelPermissionPaused           bool
-	ModelPermissionRecheckState     string
-	RuntimeSyncState                string
-	BreakerStoreAdmission           string
-	CurrentOrder                    int
-	Selected1m                      int64
-	Selected5m                      int64
-	SelectedShare1m                 float64
-	SelectedShare5m                 float64
-	Fallback1m                      int64
-	MarginStatus                    string
+	ChannelID                      int64
+	ChannelName                    string
+	ChannelStatus                  string
+	ProviderID                     int64
+	ProviderName                   string
+	ProviderStatus                 string
+	OriginRevision                 int64
+	ProviderStatusRevision         int64
+	RuntimeOriginRevision          int64
+	RuntimeProviderStatusRevision  int64
+	PendingOriginRevision          *int64
+	PendingProviderStatusRevision  *int64
+	OriginRevisionCurrent          bool
+	ProviderStatusRevisionCurrent  bool
+	ProviderStateGeneration        int64
+	OriginFenceGeneration          int64
+	StatusFenceGeneration          int64
+	ChannelConfigRevision          int64
+	RuntimeChannelConfigRevision   *int64
+	ChannelConfigRevisionCurrent   bool
+	ChannelCapacityRevision        int64
+	RuntimeChannelCapacityRevision int64
+	ChannelCapacityRevisionCurrent bool
+	RouteRateLimitsRevision        int64
+	GlobalConcurrencyRevision      int64
+	CircuitBreakerRevision         int64
+	RoutingBalanceRevision         int64
+	RuntimeControlState            string
+	RuntimeRevisionCurrent         bool
+	Protocol                       string
+	AdapterKey                     string
+	Priority                       int32
+	Eligible                       bool
+	ExcludedReason                 string
+	ConcurrencyUsed                int64
+	ConcurrencyLimit               int64
+	ConcurrencyRemaining           *float64
+	RPMUsed                        int64
+	RPMLimit                       int64
+	RPMRemaining                   *float64
+	RPDUsed                        int64
+	RPDLimit                       int64
+	RPDRemaining                   *float64
+	GlobalRPDUsed                  int64
+	GlobalRPDLimit                 int64
+	GlobalRPDRemaining             *float64
+	TPMUsed                        int64
+	TPMLimit                       int64
+	TPMRemaining                   *float64
+	TokenCoveredCount              int64
+	TokenCoveragePct               float64
+	AlgorithmVersion               string
+	CostScore                      float64
+	ConcurrencyScore               float64
+	TTFTScore                      float64
+	ErrorScore                     float64
+	PriorityScore                  float64
+	FinalScore                     float64
+	CostWeightPct                  int
+	ConcurrencyWeightPct           int
+	TTFTWeightPct                  int
+	ErrorRateWeightPct             int
+	PriorityWeightPct              int
+	CostRatio                      *float64
+	CapacityUnknown                bool
+	CapacityReadFailed             bool
+	ProviderBreakerState           *string
+	ProviderOpenRemainingMs        *int64
+	ChannelBreakerState            *string
+	ChannelOpenRemainingMs         *int64
+	// 30 分钟评分样本观测（§12）：无样本时指针为 nil，对应指标分按 100 计。
+	AvgTTFTMs                   *float64
+	TTFTSampleCount             int64
+	ErrorRatePct                *float64
+	ErrorSampleCount            int64
+	CooldownRemainingMs         int64
+	ModelPermissionPaused       bool
+	ModelPermissionRecheckState string
+	RuntimeSyncState            string
+	BreakerStoreAdmission       string
+	CurrentOrder                int
+	Selected1m                  int64
+	Selected5m                  int64
+	SelectedShare1m             float64
+	SelectedShare5m             float64
+	Fallback1m                  int64
+	MarginStatus                string
 }
 
 type Runtime struct {
@@ -183,6 +184,29 @@ type Runtime struct {
 	RouteUsage            *RouteUsage
 	Sources               []Source
 	Channels              []Channel
+	ScoreConfig           ScoreConfig
+	SampleWindow          SampleWindow
+}
+
+type ScoreConfig struct {
+	AlgorithmVersion             string
+	Revision                     int64
+	CostWeightPct                int
+	ConcurrencyWeightPct         int
+	TTFTWeightPct                int
+	ErrorRateWeightPct           int
+	PriorityWeightPct            int
+	TTFTPenaltyUnitMs            int64
+	TTFTPenaltyPointsPerUnit     float64
+	ErrorPenaltyPointsPerPercent float64
+}
+
+type SampleWindow struct {
+	TTFTWindowMs  int64
+	ErrorWindowMs int64
+	StartedAt     time.Time
+	EndedAt       time.Time
+	Available     bool
 }
 
 type Service struct {
@@ -280,7 +304,6 @@ func (s *Service) Get(ctx context.Context, params Params) (Runtime, error) {
 	input := breakerstore.SnapshotManyInput{
 		IntegrityEpoch:            admissionFacts.Epoch,
 		IntegrityRevision:         admissionFacts.Revision,
-		ChannelRateRevision:       admissionFacts.ChannelRateLimits,
 		GlobalConcurrencyRevision: admissionFacts.Concurrency,
 		CircuitBreakerRevision:    routingFacts.CircuitBreaker,
 		RoutingBalanceRevision:    routingFacts.RoutingBalance,
@@ -293,12 +316,12 @@ func (s *Service) Get(ctx context.Context, params Params) (Runtime, error) {
 			return runtime, nil
 		}
 		input.Candidates = append(input.Candidates, breakerstore.SnapshotCandidateInput{
-			ProviderID:               row.ProviderID,
-			ChannelID:                row.ChannelID,
-			OriginRevision:           row.ProviderOriginRevision,
-			ProviderStatusRevision:   row.ProviderStatusRevision,
-			ChannelConfigRevision:    row.ChannelConfigRevision,
-			ChannelAdmissionRevision: row.ChannelAdmissionLimitsRevision,
+			ProviderID:              row.ProviderID,
+			ChannelID:               row.ChannelID,
+			OriginRevision:          row.ProviderOriginRevision,
+			ProviderStatusRevision:  row.ProviderStatusRevision,
+			ChannelConfigRevision:   row.ChannelConfigRevision,
+			ChannelCapacityRevision: row.ChannelCapacityRevision,
 		})
 	}
 	snapshot, err := s.breakers.SnapshotMany(ctx, input)
@@ -313,7 +336,38 @@ func (s *Service) Get(ctx context.Context, params Params) (Runtime, error) {
 	}
 
 	costFacts := resolveCostFacts(rows)
-	applySnapshot(&runtime, rows, snapshot, admissionFacts, routingFacts, costFacts)
+	// 30 分钟评分样本（§12）：与选路同源；读失败按无样本处理，不影响运行态展示。
+	sampleChannelIDs := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		sampleChannelIDs = append(sampleChannelIDs, row.ChannelID)
+	}
+	sampleWindows, sampleErr := s.breakers.AggregateChannelSamples(ctx, sampleChannelIDs)
+	if sampleErr != nil {
+		sampleWindows = nil
+	}
+	applySnapshot(&runtime, rows, snapshot, admissionFacts, routingFacts, costFacts, sampleWindows)
+	runtime.ScoreConfig = ScoreConfig{
+		AlgorithmVersion:             lifecycle.ObjectiveAlgorithmVersion,
+		Revision:                     snapshot.RoutingBalance.Revision,
+		CostWeightPct:                snapshot.RoutingBalance.CostWeightPct,
+		ConcurrencyWeightPct:         snapshot.RoutingBalance.ConcurrencyWeightPct,
+		TTFTWeightPct:                snapshot.RoutingBalance.TTFTWeightPct,
+		ErrorRateWeightPct:           snapshot.RoutingBalance.ErrorRateWeightPct,
+		PriorityWeightPct:            snapshot.RoutingBalance.PriorityWeightPct,
+		TTFTPenaltyUnitMs:            snapshot.RoutingBalance.TTFTPenaltyUnitMs,
+		TTFTPenaltyPointsPerUnit:     snapshot.RoutingBalance.TTFTPenaltyPointsPerUnit,
+		ErrorPenaltyPointsPerPercent: snapshot.RoutingBalance.ErrorPenaltyPointsPerPercent,
+	}
+	windowMs := snapshot.RoutingBalance.TTFTWindowMs
+	if snapshot.RoutingBalance.ErrorWindowMs > windowMs {
+		windowMs = snapshot.RoutingBalance.ErrorWindowMs
+	}
+	runtime.SampleWindow = SampleWindow{
+		TTFTWindowMs:  snapshot.RoutingBalance.TTFTWindowMs,
+		ErrorWindowMs: snapshot.RoutingBalance.ErrorWindowMs,
+		StartedAt:     now.Add(-time.Duration(windowMs) * time.Millisecond), EndedAt: now,
+		Available: sampleErr == nil,
+	}
 	s.fillRouteChannelRPD(ctx, &runtime)
 	s.fillRouteUsage(ctx, &runtime)
 	runtime.Sources = healthySources(now)
@@ -369,16 +423,14 @@ func populateChannels(runtime *Runtime, rows []sqlc.RouteRuntimePoolRow, statsRo
 		channel := Channel{
 			ChannelID: row.ChannelID, ChannelName: row.ChannelName, ChannelStatus: row.ChannelStatus,
 			ProviderID: row.ProviderID, ProviderName: row.ProviderName, ProviderStatus: row.ProviderStatus,
-			OriginRevision:                 row.ProviderOriginRevision,
-			ProviderStatusRevision:         row.ProviderStatusRevision,
-			ChannelConfigRevision:          row.ChannelConfigRevision,
-			ChannelAdmissionLimitsRevision: row.ChannelAdmissionLimitsRevision,
-			Protocol:                       row.Protocol, AdapterKey: row.AdapterKey, Priority: row.Priority,
+			OriginRevision:          row.ProviderOriginRevision,
+			ProviderStatusRevision:  row.ProviderStatusRevision,
+			ChannelConfigRevision:   row.ChannelConfigRevision,
+			ChannelCapacityRevision: row.ChannelCapacityRevision,
+			Protocol:                row.Protocol, AdapterKey: row.AdapterKey, Priority: row.Priority,
 			Eligible: reason == "", ExcludedReason: reason, MarginStatus: "not_evaluated",
 			RuntimeSyncState: runtimeSyncActive, BreakerStoreAdmission: breakerAdmissionNormal,
-			TTFTSampleSource: "stream_only",
-			CostFactor:       1,
-			Selected1m:       stat.Selected1m, Selected5m: stat.Selected5m, Fallback1m: stat.Fallback1m,
+			Selected1m: stat.Selected1m, Selected5m: stat.Selected5m, Fallback1m: stat.Fallback1m,
 		}
 		if reason == "" {
 			channel.MarginStatus = "safe"
@@ -400,15 +452,18 @@ func applySnapshot(
 	admission runtimefacts.AdmissionRevisions,
 	routing runtimefacts.RoutingRevisions,
 	costFacts map[int64]channelCostFacts,
+	sampleWindows map[int64]breakerstore.ChannelSampleWindow,
 ) {
 	config := lifecycle.BalanceConfig{
-		Revision:          snapshot.RoutingBalance.Revision,
-		TTFTTargetMs:      snapshot.RoutingBalance.TTFTTargetMs,
-		TTFTWeight:        snapshot.RoutingBalance.TTFTWeight,
-		EconomicWeightPct: snapshot.RoutingBalance.EconomicWeightPct,
-		HealthWeightPct:   snapshot.RoutingBalance.HealthWeightPct,
-		CapacityWeightPct: snapshot.RoutingBalance.CapacityWeightPct,
-		PriorityWeightPct: snapshot.RoutingBalance.PriorityWeightPct,
+		Revision:                     snapshot.RoutingBalance.Revision,
+		CostWeightPct:                snapshot.RoutingBalance.CostWeightPct,
+		ConcurrencyWeightPct:         snapshot.RoutingBalance.ConcurrencyWeightPct,
+		TTFTWeightPct:                snapshot.RoutingBalance.TTFTWeightPct,
+		ErrorRateWeightPct:           snapshot.RoutingBalance.ErrorRateWeightPct,
+		PriorityWeightPct:            snapshot.RoutingBalance.PriorityWeightPct,
+		TTFTPenaltyUnitMs:            snapshot.RoutingBalance.TTFTPenaltyUnitMs,
+		TTFTPenaltyPointsPerUnit:     snapshot.RoutingBalance.TTFTPenaltyPointsPerUnit,
+		ErrorPenaltyPointsPerPercent: snapshot.RoutingBalance.ErrorPenaltyPointsPerPercent,
 	}
 	allZero := len(rows) > 0
 	for index, candidate := range snapshot.Candidates {
@@ -440,43 +495,34 @@ func applySnapshot(
 			channel.RuntimeChannelConfigRevision = positiveInt64Ptr(candidate.Channel.ChannelConfigRevision)
 			channel.ChannelConfigRevisionCurrent = candidate.Channel.ChannelConfigRevision == channel.ChannelConfigRevision
 		}
-		channel.RuntimeChannelAdmissionRevision = candidate.Candidate.ChannelAdmissionRevision
-		channel.ChannelAdmissionRevisionCurrent = candidate.Candidate.ChannelAdmissionRevision == channel.ChannelAdmissionLimitsRevision
+		channel.RuntimeChannelCapacityRevision = candidate.Candidate.ChannelCapacityRevision
+		channel.ChannelCapacityRevisionCurrent = candidate.Candidate.ChannelCapacityRevision == channel.ChannelCapacityRevision
 		channel.RouteRateLimitsRevision = admission.RouteRateLimits
-		channel.ChannelRateLimitsRevision = admission.ChannelRateLimits
 		channel.GlobalConcurrencyRevision = admission.Concurrency
 		channel.CircuitBreakerRevision = routing.CircuitBreaker
 		channel.RoutingBalanceRevision = snapshot.RoutingBalance.Revision
 		channel.RuntimeControlState = runtimeSyncActive
 		channel.RuntimeRevisionCurrent = true
 		channel.ConcurrencyUsed, channel.ConcurrencyLimit = candidate.Concurrency.Used, candidate.Concurrency.Limit
-		channel.RPMUsed, channel.RPMLimit = candidate.RPM.Used, candidate.RPM.Limit
-		channel.RPDUsed, channel.RPDLimit = candidate.RPD.Used, candidate.RPD.Limit
-		channel.TPMUsed, channel.TPMLimit = candidate.TPM.Used, candidate.TPM.Limit
-		channel.RPMRemaining = capacityRemaining(candidate.RPM)
-		channel.RPDRemaining = capacityRemaining(candidate.RPD)
 		channel.CooldownRemainingMs = candidate.CooldownRemainingMs
 		channel.ModelPermissionPaused = candidate.ModelPermissionPaused
 		channel.ModelPermissionRecheckState = candidate.ModelPermissionRecheckState
-		channel.ErrorSamples = channelSnapshot.SampleCount
-		if channelSnapshot.SampleCount > 0 {
-			errorRate := channelSnapshot.ErrorRate
-			channel.ErrorRate = &errorRate
+		// TTFT 与错误率来自 30 分钟分钟桶聚合（§12），与 breaker 自身计数解耦。
+		window := sampleWindows[channel.ChannelID]
+		channel.RPMUsed, channel.RPDUsed, channel.GlobalRPDUsed, channel.TPMUsed = window.RPM, window.RPD, window.RPD, window.TPM
+		channel.TokenCoveredCount = window.TokenCoveredCount
+		if window.RPM > 0 {
+			channel.TokenCoveragePct = float64(window.TokenCoveredCount) / float64(window.RPM) * 100
 		}
-		channel.TTFTSamples = channelSnapshot.TTFTSamples
-		if channelSnapshot.TTFTSamples > 0 {
-			ttft := channelSnapshot.TTFTEWMAMs
-			channel.TTFTEWMAMs = &ttft
+		scoreInputs := lifecycle.ChannelScoreInputs{
+			Concurrency:       lifecycle.CapacitySignal{Used: candidate.Concurrency.Used, Limit: candidate.Concurrency.Limit, Known: true},
+			TTFTSumMs:         window.TTFTSumMs,
+			TTFTCount:         window.TTFTCount,
+			ErrorAttemptCount: window.ErrorAttemptCount,
+			ErrorCount:        window.ErrorCount,
+			HalfOpen:          candidate.Status == breakerstore.CandidateSnapshotHalfOpen,
+			RuntimeKnown:      true,
 		}
-
-		score := lifecycle.ScoreBalanceCandidateWithConfig(lifecycle.ChannelCapacity{
-			Concurrency: lifecycle.CapacitySignal{Used: candidate.Concurrency.Used, Limit: candidate.Concurrency.Limit, Known: true},
-			TPM:         lifecycle.CapacitySignal{Used: candidate.TPM.Used, Limit: candidate.TPM.Limit, Known: true},
-			ErrorRate:   channelSnapshot.ErrorRate, ErrorSamples: channelSnapshot.SampleCount, TTFTEWMAMs: channelSnapshot.TTFTEWMAMs,
-			TTFTSamples:  channelSnapshot.TTFTSamples,
-			HalfOpen:     candidate.Status == breakerstore.CandidateSnapshotHalfOpen,
-			RuntimeKnown: true,
-		}, config)
 		costRatio := 0.0
 		if facts, ok := costFacts[channel.ChannelID]; ok {
 			channel.MarginStatus = facts.marginStatus
@@ -492,29 +538,38 @@ func applySnapshot(
 				channel.ExcludedReason = "negative_margin"
 			}
 		}
-		score = lifecycle.ApplyObjectiveFactors(score, costRatio, channel.Priority, config)
-		channel.ConcurrencyRemaining, channel.TPMRemaining = score.ConcurrencyRemaining, score.TPMRemaining
-		channel.CapacityScore, channel.CostFactor, channel.FinalWeight = score.CapacityScore, score.CostFactor, score.Weight
+		score := lifecycle.ScoreChannel(scoreInputs, costRatio, channel.Priority, config)
+		channel.ConcurrencyRemaining = score.ConcurrencyRemaining
 		channel.AlgorithmVersion = score.AlgorithmVersion
-		channel.EconomicScore, channel.HealthScore = score.EconomicScore, score.HealthScore
+		channel.CostScore, channel.ConcurrencyScore = score.CostScore, score.ConcurrencyScore
+		channel.TTFTScore, channel.ErrorScore = score.TTFTScore, score.ErrorScore
 		channel.PriorityScore, channel.FinalScore = score.PriorityScore, score.FinalScore
-		channel.EconomicWeightPct, channel.HealthWeightPct = score.EconomicWeightPct, score.HealthWeightPct
-		channel.CapacityWeightPct, channel.PriorityWeightPct = score.CapacityWeightPct, score.PriorityWeightPct
-		channel.CostWeight = score.CostWeight
-		channel.Pressure, channel.CapacityUnknown = score.Pressure, score.CapacityUnknown
+		channel.CostWeightPct, channel.ConcurrencyWeightPct = score.CostWeightPct, score.ConcurrencyWeightPct
+		channel.TTFTWeightPct, channel.ErrorRateWeightPct = score.TTFTWeightPct, score.ErrorRateWeightPct
+		channel.PriorityWeightPct = score.PriorityWeightPct
+		channel.CapacityUnknown = score.CapacityUnknown
+		channel.TTFTSampleCount, channel.ErrorSampleCount = score.TTFTSampleCount, score.ErrorSampleCount
+		if score.TTFTSampleCount > 0 {
+			avg := score.AvgTTFTMs
+			channel.AvgTTFTMs = &avg
+		}
+		if score.ErrorSampleCount > 0 {
+			rate := score.ErrorRatePct
+			channel.ErrorRatePct = &rate
+		}
 
 		if channel.Eligible {
 			if reason := runtimeExcludedReason(candidate.Status); reason != "" {
 				channel.Eligible = false
 				channel.ExcludedReason = reason
-				channel.FinalWeight = 0
+				channel.FinalScore = 0
 			}
 		} else {
-			channel.FinalWeight = 0
+			channel.FinalScore = 0
 		}
 		if channel.Eligible {
 			runtime.CandidateCount++
-			if channel.CapacityScore > 0 {
+			if channel.ConcurrencyScore > 0 {
 				allZero = false
 			}
 		}
@@ -699,22 +754,6 @@ func positiveInt64Ptr(value int64) *int64 {
 	return &v
 }
 
-func capacityRemaining(usage breakerstore.CapacityUsage) *float64 {
-	if usage.Limit <= 0 {
-		remaining := 1.0
-		return &remaining
-	}
-	used := usage.Used
-	if used < 0 {
-		used = 0
-	}
-	if used > usage.Limit {
-		used = usage.Limit
-	}
-	remaining := 1 - float64(used)/float64(usage.Limit)
-	return &remaining
-}
-
 func runtimeStateFromFactsError(err error) (string, bool) {
 	switch failure.CodeOf(err) {
 	case failure.CodeGatewayRuntimeStateLost:
@@ -787,8 +826,8 @@ func denyRuntime(runtime *Runtime, state string, postgresAvailable, breakerAvail
 		channel.ProviderStatusRevisionCurrent = false
 		channel.RuntimeChannelConfigRevision = nil
 		channel.ChannelConfigRevisionCurrent = false
-		channel.RuntimeChannelAdmissionRevision = 0
-		channel.ChannelAdmissionRevisionCurrent = false
+		channel.RuntimeChannelCapacityRevision = 0
+		channel.ChannelCapacityRevisionCurrent = false
 		channel.RuntimeControlState = state
 		channel.RuntimeRevisionCurrent = false
 		channel.ConcurrencyRemaining = nil
@@ -799,19 +838,20 @@ func denyRuntime(runtime *Runtime, state string, postgresAvailable, breakerAvail
 		channel.ProviderOpenRemainingMs = nil
 		channel.ChannelBreakerState = nil
 		channel.ChannelOpenRemainingMs = nil
-		channel.ErrorRate = nil
-		channel.TTFTEWMAMs = nil
-		channel.ErrorSamples = 0
-		channel.TTFTSamples = 0
+		channel.AvgTTFTMs = nil
+		channel.ErrorRatePct = nil
+		channel.TTFTSampleCount = 0
+		channel.ErrorSampleCount = 0
 		channel.CooldownRemainingMs = 0
 		channel.ModelPermissionPaused = false
 		channel.ModelPermissionRecheckState = "unavailable"
-		channel.CapacityScore = 0
+		channel.CostScore = 0
+		channel.ConcurrencyScore = 0
+		channel.TTFTScore = 0
+		channel.ErrorScore = 0
+		channel.PriorityScore = 0
+		channel.FinalScore = 0
 		channel.CostRatio = nil
-		channel.CostWeight = 0
-		channel.CostFactor = 1
-		channel.FinalWeight = 0
-		channel.Pressure = 0
 		channel.CapacityUnknown = true
 		channel.CapacityReadFailed = true
 		channel.CurrentOrder = 0
@@ -838,8 +878,8 @@ func healthySources(now time.Time) []Source {
 func SortChannels(channels []Channel, field string, desc bool) {
 	rank := func(c Channel) float64 {
 		switch field {
-		case "weight":
-			return c.FinalWeight
+		case "weight", "score":
+			return c.FinalScore
 		case "capacity":
 			return tightestRemaining(c)
 		case "concurrency":
@@ -916,8 +956,8 @@ func assignCurrentOrder(channels []Channel, allZero bool) {
 	}
 	sort.SliceStable(indexes, func(i, j int) bool {
 		left, right := channels[indexes[i]], channels[indexes[j]]
-		if left.FinalWeight != right.FinalWeight {
-			return left.FinalWeight > right.FinalWeight
+		if left.FinalScore != right.FinalScore {
+			return left.FinalScore > right.FinalScore
 		}
 		if left.Priority != right.Priority {
 			return left.Priority < right.Priority

@@ -148,7 +148,7 @@ func TestOperationObserverCoversAttemptPermitLifecycle(t *testing.T) {
 	store := newObservedTestStore(t, observer)
 	ctx := context.Background()
 	cfg := testConfig()
-	seedAttemptControls(t, store, cfg, 501, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+	seedAttemptControls(t, store, cfg, 501, `{"concurrency":null}`)
 
 	newInput := func(permitID, requestID string) AcquireAttemptInput {
 		return withAttemptControlRevisions(AcquireAttemptInput{

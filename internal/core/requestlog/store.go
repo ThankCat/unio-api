@@ -41,7 +41,7 @@ func (s *Store) CreateRequest(ctx context.Context, params CreateRequestParams) (
 		ErrorMessage:        pgtype.Text{Valid: false},
 		InternalErrorDetail: pgtype.Text{Valid: false},
 		DeliveryStatus:      string(DeliveryStatusNotStarted),
-		ResponseStartedAt:   pgtype.Timestamptz{Valid: false},
+		GatewayFirstTokenAt: pgtype.Timestamptz{Valid: false},
 		ResponseCompletedAt: pgtype.Timestamptz{Valid: false},
 		StartedAt:           timestamptz(params.StartedAt),
 		CompletedAt:         pgtype.Timestamptz{Valid: false},
@@ -72,11 +72,23 @@ func (s *Store) MarkRequestRunning(ctx context.Context, id int64) (RequestRecord
 	return requestRecordFromSQLC(sqlc.RequestRecord(row)), nil
 }
 
-// MarkRequestResponseStarted 记录 request 的首次客户可见响应时间。
-func (s *Store) MarkRequestResponseStarted(ctx context.Context, params MarkResponseStartedParams) (RequestRecord, error) {
-	row, err := s.queries.MarkRequestResponseStarted(ctx, sqlc.MarkRequestResponseStartedParams{
-		RequestRecordID:   params.ID,
-		ResponseStartedAt: timestamptz(params.ResponseStartedAt),
+// MarkRequestDeliveryStarted 在首次客户帧成功写出后推进 delivery 状态，不写 Gateway 首字时间。
+func (s *Store) MarkRequestDeliveryStarted(ctx context.Context, id int64) (RequestRecord, error) {
+	row, err := s.queries.MarkRequestDeliveryStarted(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RequestRecord{}, requestLogStateTransitionFailure("mark request delivery started")
+		}
+		return RequestRecord{}, requestLogStoreFailure(err, "mark request delivery started")
+	}
+	return requestRecordFromSQLC(sqlc.RequestRecord(row)), nil
+}
+
+// MarkRequestGatewayFirstToken 记录 request 的首次有效生成 Token 客户交付时间。
+func (s *Store) MarkRequestGatewayFirstToken(ctx context.Context, params MarkGatewayFirstTokenParams) (RequestRecord, error) {
+	row, err := s.queries.MarkRequestGatewayFirstToken(ctx, sqlc.MarkRequestGatewayFirstTokenParams{
+		RequestRecordID:     params.ID,
+		GatewayFirstTokenAt: timestamptz(params.GatewayFirstTokenAt),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -121,14 +133,14 @@ func (s *Store) MarkRequestDeliveryInterrupted(ctx context.Context, id int64) (R
 // MarkRequestSucceeded 将 request record 标记为 succeeded。
 func (s *Store) MarkRequestSucceeded(ctx context.Context, params MarkRequestSucceededParams) (RequestRecord, error) {
 	row, err := s.queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
-		ResponseModelID:   pgtype.Text{String: params.ResponseModelID, Valid: true},
-		ResponseProtocol:  pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
-		ResponseID:        pgtype.Text{String: params.ResponseID, Valid: true},
-		FinalProviderID:   pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
-		FinalChannelID:    pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
-		ResponseStartedAt: optionalTimestamptz(params.ResponseStartedAt),
-		CompletedAt:       timestamptz(params.CompletedAt),
-		RequestRecordID:   params.ID,
+		ResponseModelID:     pgtype.Text{String: params.ResponseModelID, Valid: true},
+		ResponseProtocol:    pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
+		ResponseID:          pgtype.Text{String: params.ResponseID, Valid: true},
+		FinalProviderID:     pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
+		FinalChannelID:      pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
+		GatewayFirstTokenAt: optionalTimestamptz(params.GatewayFirstTokenAt),
+		CompletedAt:         timestamptz(params.CompletedAt),
+		RequestRecordID:     params.ID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -151,7 +163,7 @@ func (s *Store) MarkSettledRequestCanceled(ctx context.Context, params MarkSettl
 		ErrorCode:           pgtype.Text{String: params.ErrorCode, Valid: true},
 		ErrorMessage:        pgtype.Text{String: params.ErrorMessage, Valid: true},
 		InternalErrorDetail: nullableText(params.InternalErrorDetail),
-		ResponseStartedAt:   optionalTimestamptz(params.ResponseStartedAt),
+		GatewayFirstTokenAt: optionalTimestamptz(params.GatewayFirstTokenAt),
 		CompletedAt:         timestamptz(params.CompletedAt),
 		RequestRecordID:     params.ID,
 	})
@@ -176,7 +188,7 @@ func (s *Store) MarkSettledRequestFailed(ctx context.Context, params MarkSettled
 		ErrorCode:           pgtype.Text{String: params.ErrorCode, Valid: true},
 		ErrorMessage:        pgtype.Text{String: params.ErrorMessage, Valid: true},
 		InternalErrorDetail: nullableText(params.InternalErrorDetail),
-		ResponseStartedAt:   optionalTimestamptz(params.ResponseStartedAt),
+		GatewayFirstTokenAt: optionalTimestamptz(params.GatewayFirstTokenAt),
 		CompletedAt:         timestamptz(params.CompletedAt),
 		RequestRecordID:     params.ID,
 	})
@@ -263,7 +275,7 @@ func (s *Store) CreateAttempt(ctx context.Context, params CreateAttemptParams) (
 		ErrorCode:              pgtype.Text{Valid: false},
 		ErrorMessage:           pgtype.Text{Valid: false},
 		InternalErrorDetail:    pgtype.Text{Valid: false},
-		ResponseStartedAt:      pgtype.Timestamptz{Valid: false},
+		GatewayFirstTokenAt:    pgtype.Timestamptz{Valid: false},
 		FinalUsageReceived:     false,
 		UsageMappingVersion:    pgtype.Text{Valid: false},
 		StartedAt:              timestamptz(params.StartedAt),
@@ -276,17 +288,17 @@ func (s *Store) CreateAttempt(ctx context.Context, params CreateAttemptParams) (
 	return attemptRecordFromSQLC(row), nil
 }
 
-// MarkAttemptResponseStarted 记录 attempt 的首次客户可见响应时间。
-func (s *Store) MarkAttemptResponseStarted(ctx context.Context, params MarkAttemptResponseStartedParams) (AttemptRecord, error) {
-	row, err := s.queries.MarkRequestAttemptResponseStarted(ctx, sqlc.MarkRequestAttemptResponseStartedParams{
-		AttemptID:         params.ID,
-		ResponseStartedAt: timestamptz(params.ResponseStartedAt),
+// MarkAttemptGatewayFirstToken 记录 attempt 的首次客户可见响应时间。
+func (s *Store) MarkAttemptGatewayFirstToken(ctx context.Context, params MarkAttemptGatewayFirstTokenParams) (AttemptRecord, error) {
+	row, err := s.queries.MarkRequestAttemptGatewayFirstToken(ctx, sqlc.MarkRequestAttemptGatewayFirstTokenParams{
+		AttemptID:           params.ID,
+		GatewayFirstTokenAt: timestamptz(params.GatewayFirstTokenAt),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return AttemptRecord{}, requestLogStateTransitionFailure("mark request attempt response started")
+			return AttemptRecord{}, requestLogStateTransitionFailure("mark request attempt gateway first token")
 		}
-		return AttemptRecord{}, requestLogStoreFailure(err, "mark request attempt response started")
+		return AttemptRecord{}, requestLogStoreFailure(err, "mark request attempt gateway first token")
 	}
 
 	return attemptRecordFromSQLC(sqlc.RequestAttempt(row)), nil
@@ -298,6 +310,7 @@ func (s *Store) RecordAttemptTiming(ctx context.Context, params RecordAttemptTim
 		UpstreamStartedAt:    optionalTimestamptz(params.UpstreamStartedAt),
 		UpstreamFirstTokenAt: optionalTimestamptz(params.UpstreamFirstTokenAt),
 		UpstreamCompletedAt:  optionalTimestamptz(params.UpstreamCompletedAt),
+		UpstreamTimeoutPhase: optionalNonEmptyText(params.UpstreamTimeoutPhase),
 		AttemptID:            params.ID,
 	})
 	if err != nil {
@@ -308,6 +321,20 @@ func (s *Store) RecordAttemptTiming(ctx context.Context, params RecordAttemptTim
 	}
 
 	return attemptRecordFromSQLC(sqlc.RequestAttempt(row)), nil
+}
+
+// RecordAttemptScoringSample persists the exact scorer membership for Admin sample queries.
+func (s *Store) RecordAttemptScoringSample(ctx context.Context, params RecordAttemptScoringSampleParams) error {
+	err := s.queries.RecordRequestAttemptScoringSample(ctx, sqlc.RecordRequestAttemptScoringSampleParams{
+		TtftScoringSample:   params.TTFTScoringSample,
+		ErrorScoringSample:  params.ErrorScoringSample,
+		ErrorScoringFailure: params.ErrorScoringFailure,
+		AttemptID:           params.ID,
+	})
+	if err != nil {
+		return requestLogStoreFailure(err, "record request attempt scoring sample")
+	}
+	return nil
 }
 
 // RecordAttemptBreakerDisposition first-write-wins 地保存 BreakerStore Finish disposition。
@@ -335,7 +362,7 @@ func (s *Store) MarkAttemptSucceeded(ctx context.Context, params MarkAttemptSucc
 		FinishClass:           pgtype.Text{String: params.FinishClass, Valid: true},
 		UpstreamStatusCode:    pgtype.Int4{Int32: int32(params.UpstreamStatusCode), Valid: true},
 		UpstreamRequestID:     optionalText(params.UpstreamRequestID),
-		ResponseStartedAt:     optionalTimestamptz(params.ResponseStartedAt),
+		GatewayFirstTokenAt:   optionalTimestamptz(params.GatewayFirstTokenAt),
 		FinalUsageReceived:    params.FinalUsageReceived,
 		UsageMappingVersion:   pgtype.Text{String: params.UsageMappingVersion, Valid: true},
 		CompletedAt:           timestamptz(params.CompletedAt),
@@ -363,7 +390,7 @@ func (s *Store) MarkSettledAttemptCanceled(ctx context.Context, params MarkSettl
 		ErrorCode:             pgtype.Text{String: params.ErrorCode, Valid: true},
 		ErrorMessage:          pgtype.Text{String: params.ErrorMessage, Valid: true},
 		InternalErrorDetail:   nullableText(params.InternalErrorDetail),
-		ResponseStartedAt:     optionalTimestamptz(params.ResponseStartedAt),
+		GatewayFirstTokenAt:   optionalTimestamptz(params.GatewayFirstTokenAt),
 		FinalUsageReceived:    params.FinalUsageReceived,
 		UsageMappingVersion:   pgtype.Text{String: params.UsageMappingVersion, Valid: true},
 		CompletedAt:           timestamptz(params.CompletedAt),
@@ -391,7 +418,7 @@ func (s *Store) MarkSettledAttemptFailed(ctx context.Context, params MarkSettled
 		ErrorCode:             pgtype.Text{String: params.ErrorCode, Valid: true},
 		ErrorMessage:          pgtype.Text{String: params.ErrorMessage, Valid: true},
 		InternalErrorDetail:   nullableText(params.InternalErrorDetail),
-		ResponseStartedAt:     optionalTimestamptz(params.ResponseStartedAt),
+		GatewayFirstTokenAt:   optionalTimestamptz(params.GatewayFirstTokenAt),
 		FinalUsageReceived:    params.FinalUsageReceived,
 		UsageMappingVersion:   pgtype.Text{String: params.UsageMappingVersion, Valid: true},
 		CompletedAt:           timestamptz(params.CompletedAt),
@@ -468,7 +495,7 @@ func requestRecordFromSQLC(row sqlc.RequestRecord) RequestRecord {
 		ErrorMessage:        textPtr(row.ErrorMessage),
 		InternalErrorDetail: textPtr(row.InternalErrorDetail),
 		DeliveryStatus:      DeliveryStatus(row.DeliveryStatus),
-		ResponseStartedAt:   timePtr(row.ResponseStartedAt),
+		GatewayFirstTokenAt: timePtr(row.GatewayFirstTokenAt),
 		ResponseCompletedAt: timePtr(row.ResponseCompletedAt),
 		StartedAt:           row.StartedAt.Time,
 		CompletedAt:         timePtr(row.CompletedAt),
@@ -501,7 +528,7 @@ func attemptRecordFromSQLC(row sqlc.RequestAttempt) AttemptRecord {
 		ErrorCode:                  textPtr(row.ErrorCode),
 		ErrorMessage:               textPtr(row.ErrorMessage),
 		InternalErrorDetail:        textPtr(row.InternalErrorDetail),
-		ResponseStartedAt:          timePtr(row.ResponseStartedAt),
+		GatewayFirstTokenAt:        timePtr(row.GatewayFirstTokenAt),
 		UpstreamStartedAt:          timePtr(row.UpstreamStartedAt),
 		UpstreamFirstTokenAt:       timePtr(row.UpstreamFirstTokenAt),
 		UpstreamCompletedAt:        timePtr(row.UpstreamCompletedAt),
@@ -558,6 +585,14 @@ func optionalTimestamptz(t *time.Time) pgtype.Timestamptz {
 }
 
 // optionalText 把可选字符串转换为 pgtype.Text，避免把未知字段写成空字符串。
+// optionalNonEmptyText 把空字符串归一为 SQL NULL：空阶段表示「本次不是超时失败」，不是一个取值。
+func optionalNonEmptyText(value string) pgtype.Text {
+	if value == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: value, Valid: true}
+}
+
 func optionalText(s *string) pgtype.Text {
 	if s == nil {
 		return pgtype.Text{Valid: false}

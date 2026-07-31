@@ -134,11 +134,6 @@ func readinessControlFixtures() []readinessControlFixture {
 			setExpected: func(input *RuntimeReadinessInput, revision int64) { input.RouteRateLimitRevision = revision },
 		},
 		{
-			name: "channel rate", target: func(store *Store) ControlTarget { return store.ChannelRateLimitControl() },
-			revision: 3, payload: `{"rpm":23,"tpm":2300,"rpd":233}`,
-			setExpected: func(input *RuntimeReadinessInput, revision int64) { input.ChannelRateLimitRevision = revision },
-		},
-		{
 			name: "global concurrency", target: func(store *Store) ControlTarget { return store.GlobalConcurrencyControl() },
 			revision: 4, payload: `{"key_limit":31,"channel_limit":37}`,
 			setExpected: func(input *RuntimeReadinessInput, revision int64) { input.ConcurrencyRevision = revision },
@@ -171,12 +166,9 @@ func seedRuntimeReadinessFixture(t *testing.T) (*Store, RuntimeReadinessInput) {
 	return store, input
 }
 
-func TestRuntimeReadinessChecksMarkerAndFiveCriticalControls(t *testing.T) {
-	t.Run("all controls ready with distinct rate revisions", func(t *testing.T) {
+func TestRuntimeReadinessChecksMarkerAndFourCriticalControls(t *testing.T) {
+	t.Run("all controls ready", func(t *testing.T) {
 		store, input := seedRuntimeReadinessFixture(t)
-		if input.RouteRateLimitRevision == input.ChannelRateLimitRevision {
-			t.Fatalf("route and channel rate revisions must differ: %+v", input)
-		}
 		result, err := store.CheckRuntimeReadiness(context.Background(), input)
 		if err != nil || !result.Ready {
 			t.Fatalf("runtime should be ready: result=%+v err=%v", result, err)

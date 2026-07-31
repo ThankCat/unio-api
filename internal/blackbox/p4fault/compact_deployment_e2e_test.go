@@ -132,18 +132,37 @@ func readCompactRuntimeSnapshot(t *testing.T, h *faultHarness) compactRuntimeSna
 	t.Helper()
 	requestPrefix := h.namespace + ":admission:v1:ru-"
 	requestSuffix := formatID(h.seed.routeID) + ":" + formatID(h.seed.userID) + ":"
-	channelSuffix := formatID(h.seed.openAIChannelID) + ":"
+	channelSamplePrefix := h.namespace + ":sample:v1:ch:" + formatID(h.seed.openAIChannelID)
 	return compactRuntimeSnapshot{
 		requestRPM: redisCounterPrefix(t, h, requestPrefix+"rpm:"+requestSuffix),
 		requestRPD: redisCounterPrefix(t, h, requestPrefix+"rpd:"+requestSuffix),
 		requestTPM: redisCounterPrefix(t, h, requestPrefix+"tpm:"+requestSuffix),
-		channelRPM: redisCounterPrefix(t, h, h.namespace+":admission:v1:ch-rpm:"+channelSuffix),
-		channelRPD: redisCounterPrefix(t, h, h.namespace+":admission:v1:ch-rpd:"+channelSuffix),
-		channelTPM: redisCounterPrefix(t, h, h.namespace+":admission:v1:ch-tpm:"+channelSuffix),
+		channelRPM: redisHashCounterPrefix(t, h, channelSamplePrefix+":min:", "observed_request_count"),
+		channelRPD: redisCounterPrefix(t, h, channelSamplePrefix+":day:"),
+		channelTPM: redisHashCounterPrefix(t, h, channelSamplePrefix+":min:", "observed_token_count"),
 
 		requestTokens: redisKeySet(t, h, h.namespace+":admission:v1:request:*"),
 		permits:       redisKeySet(t, h, h.namespace+":breaker:v2:permit:*"),
 	}
+}
+
+func redisHashCounterPrefix(t *testing.T, h *faultHarness, prefix, field string) int64 {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	keys, err := h.redis.Keys(ctx, prefix+"*").Result()
+	if err != nil {
+		t.Fatalf("list Redis sample buckets for %s: %v", prefix, err)
+	}
+	var total int64
+	for _, key := range keys {
+		value, err := h.redis.HGet(ctx, key, field).Int64()
+		if err != nil {
+			t.Fatalf("read Redis sample field %s from %s: %v", field, key, err)
+		}
+		total += value
+	}
+	return total
 }
 
 func redisCounterPrefix(t *testing.T, h *faultHarness, prefix string) int64 {
@@ -202,14 +221,14 @@ func assertCompactAdmissionDeltas(t *testing.T, before, after compactRuntimeSnap
 	}
 	if after.channelRPM-before.channelRPM != 2 || after.channelRPD-before.channelRPD != 2 {
 		t.Fatalf(
-			"channel RPM/RPD delta=%d/%d, want 2/2",
+			"observed channel RPM/RPD delta=%d/%d, want 2/2",
 			after.channelRPM-before.channelRPM,
 			after.channelRPD-before.channelRPD,
 		)
 	}
 	if after.requestTPM-before.requestTPM != 3 || after.channelTPM-before.channelTPM != 3 {
 		t.Fatalf(
-			"settled request/channel TPM delta=%d/%d, want authoritative 3/3",
+			"settled request TPM / observed channel TPM delta=%d/%d, want 3/3",
 			after.requestTPM-before.requestTPM,
 			after.channelTPM-before.channelTPM,
 		)

@@ -33,12 +33,16 @@ type fakeRequestStore struct {
 
 	listRows []sqlc.ListRequestRecordsPageRow
 	total    int64
+	listGot  sqlc.ListRequestRecordsPageParams
+	countGot sqlc.CountRequestRecordsParams
 }
 
-func (f *fakeRequestStore) ListRequestRecordsPage(context.Context, sqlc.ListRequestRecordsPageParams) ([]sqlc.ListRequestRecordsPageRow, error) {
+func (f *fakeRequestStore) ListRequestRecordsPage(_ context.Context, params sqlc.ListRequestRecordsPageParams) ([]sqlc.ListRequestRecordsPageRow, error) {
+	f.listGot = params
 	return f.listRows, nil
 }
-func (f *fakeRequestStore) CountRequestRecords(context.Context, sqlc.CountRequestRecordsParams) (int64, error) {
+func (f *fakeRequestStore) CountRequestRecords(_ context.Context, params sqlc.CountRequestRecordsParams) (int64, error) {
+	f.countGot = params
 	return f.total, nil
 }
 func (f *fakeRequestStore) GetRequestRecordByRequestID(context.Context, string) (sqlc.RequestRecord, error) {
@@ -150,6 +154,24 @@ func TestRequestServiceGetIncludeInternal(t *testing.T) {
 	}
 }
 
+func TestRequestServiceGetMapsAttemptTimeoutAndScoringFacts(t *testing.T) {
+	store := newFakeStoreWithDetail()
+	store.attempts[0].UpstreamTimeoutPhase = pgtype.Text{String: "first_token", Valid: true}
+	store.attempts[0].TtftScoringSample = false
+	store.attempts[0].ErrorScoringSample = true
+	store.attempts[0].ErrorScoringFailure = true
+
+	detail, err := query.NewRequestService(store).Get(context.Background(), "req_1", false)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	attempt := detail.Attempts[0]
+	if attempt.UpstreamTimeoutPhase == nil || *attempt.UpstreamTimeoutPhase != "first_token" ||
+		attempt.TTFTScoringSample || !attempt.ErrorScoringSample || !attempt.ErrorScoringFailure {
+		t.Fatalf("attempt timeout/scoring facts = %+v", attempt)
+	}
+}
+
 func TestRequestServiceGetDerivesUpstreamTimingByRequestMode(t *testing.T) {
 	upstreamStarted := time.Date(2026, 6, 1, 0, 0, 1, 0, time.UTC)
 	upstreamFirstToken := upstreamStarted.Add(250 * time.Millisecond)
@@ -234,20 +256,99 @@ func TestRequestServiceListMapsTotal(t *testing.T) {
 	}
 }
 
-func TestRequestServiceListIgnoresLegacyNonStreamResponseStartedAt(t *testing.T) {
+func TestRequestServiceListForwardsRoutingSampleFilters(t *testing.T) {
+	store := &fakeRequestStore{}
+	routeID := int64(7)
+	channelID := int64(4)
+	attemptID := int64(19)
+
+	_, _, err := query.NewRequestService(store).List(context.Background(), query.RequestListParams{
+		RouteID:       &routeID,
+		ChannelID:     &channelID,
+		AttemptID:     &attemptID,
+		ScoringSample: "any",
+		Limit:         10,
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for name, got := range map[string]sqlc.ListRequestRecordsPageParams{"list": store.listGot} {
+		if !got.RouteID.Valid || got.RouteID.Int64 != routeID || !got.ChannelID.Valid || got.ChannelID.Int64 != channelID ||
+			!got.AttemptID.Valid || got.AttemptID.Int64 != attemptID || !got.ScoringSample.Valid || got.ScoringSample.String != "any" {
+			t.Fatalf("%s filters = %+v", name, got)
+		}
+	}
+	gotCount := store.countGot
+	if !gotCount.RouteID.Valid || gotCount.RouteID.Int64 != routeID || !gotCount.ChannelID.Valid || gotCount.ChannelID.Int64 != channelID ||
+		!gotCount.AttemptID.Valid || gotCount.AttemptID.Int64 != attemptID || !gotCount.ScoringSample.Valid || gotCount.ScoringSample.String != "any" {
+		t.Fatalf("count filters = %+v", gotCount)
+	}
+}
+
+func TestRequestServiceGetDerivesAuthoritativeRequestTiming(t *testing.T) {
+	store := newFakeStoreWithDetail()
+	started := time.Date(2026, 7, 31, 11, 56, 8, 638604000, time.UTC)
+	firstToken := started.Add(1957*time.Millisecond + 73*time.Microsecond)
+	completed := started.Add(2250*time.Millisecond + 220*time.Microsecond)
+	store.record.Stream = true
+	store.record.Status = "succeeded"
+	store.record.StartedAt = pgtype.Timestamptz{Time: started, Valid: true}
+	store.record.GatewayFirstTokenAt = pgtype.Timestamptz{Time: firstToken, Valid: true}
+	store.record.CompletedAt = pgtype.Timestamptz{Time: completed, Valid: true}
+	store.usage = sqlc.UsageRecord{OutputTokensTotal: 16}
+	store.usageErr = nil
+
+	detail, err := query.NewRequestService(store).Get(context.Background(), "req_1", false)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if detail.LatencyMs == nil || *detail.LatencyMs != 2250 || detail.GatewayTTFTMs == nil || *detail.GatewayTTFTMs != 1957 {
+		t.Fatalf("request timing = latency %v, gateway ttft %v", detail.LatencyMs, detail.GatewayTTFTMs)
+	}
+	if detail.TPS == nil || *detail.TPS <= 0 {
+		t.Fatalf("request TPS = %v, want positive", detail.TPS)
+	}
+}
+
+func TestRequestServiceListMapsRoutingSampleLocation(t *testing.T) {
+	store := &fakeRequestStore{
+		listRows: []sqlc.ListRequestRecordsPageRow{{
+			ID:                  1,
+			RequestID:           "req_sample",
+			Status:              "failed",
+			RouteID:             pgtype.Int8{Int64: 7, Valid: true},
+			ScoringAttemptID:    19,
+			ScoringDimensions:   []string{"ttft", "error"},
+			ScoringErrorFailure: true,
+		}},
+		total: 1,
+	}
+
+	items, _, err := query.NewRequestService(store).List(context.Background(), query.RequestListParams{Limit: 1})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	item := items[0]
+	if item.RouteID == nil || *item.RouteID != 7 || item.ScoringAttemptID == nil || *item.ScoringAttemptID != 19 ||
+		len(item.ScoringDimensions) != 2 || !item.ScoringErrorFailure {
+		t.Fatalf("routing sample location = %+v", item)
+	}
+}
+
+func TestRequestServiceListIgnoresLegacyNonStreamGatewayFirstTokenAt(t *testing.T) {
 	started := time.Date(2026, 7, 22, 1, 0, 0, 0, time.UTC)
 	responseStarted := started.Add(250 * time.Millisecond)
 	completed := started.Add(2 * time.Second)
 	store := &fakeRequestStore{
 		listRows: []sqlc.ListRequestRecordsPageRow{{
-			ID:                1,
-			RequestID:         "req_legacy_non_stream",
-			Stream:            false,
-			Status:            "succeeded",
-			StartedAt:         pgtype.Timestamptz{Time: started, Valid: true},
-			ResponseStartedAt: pgtype.Timestamptz{Time: responseStarted, Valid: true},
-			CompletedAt:       pgtype.Timestamptz{Time: completed, Valid: true},
-			OutputTokensTotal: 100,
+			ID:                  1,
+			RequestID:           "req_legacy_non_stream",
+			Stream:              false,
+			Status:              "succeeded",
+			StartedAt:           pgtype.Timestamptz{Time: started, Valid: true},
+			GatewayFirstTokenAt: pgtype.Timestamptz{Time: responseStarted, Valid: true},
+			CompletedAt:         pgtype.Timestamptz{Time: completed, Valid: true},
+			OutputTokensTotal:   100,
 		}},
 		total: 1,
 	}
@@ -262,7 +363,7 @@ func TestRequestServiceListIgnoresLegacyNonStreamResponseStartedAt(t *testing.T)
 	if items[0].LatencyMs == nil || *items[0].LatencyMs != 2000 {
 		t.Fatalf("latency = %v, want 2000", items[0].LatencyMs)
 	}
-	if items[0].TtftMs != nil || items[0].TPS != nil {
-		t.Fatalf("legacy non-stream timing leaked TTFT/TPS: ttft=%v tps=%v", items[0].TtftMs, items[0].TPS)
+	if items[0].GatewayTTFTMs != nil || items[0].TPS != nil {
+		t.Fatalf("legacy non-stream timing leaked Gateway TTFT/TPS: ttft=%v tps=%v", items[0].GatewayTTFTMs, items[0].TPS)
 	}
 }

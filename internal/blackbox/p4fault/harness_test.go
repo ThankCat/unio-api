@@ -33,6 +33,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/apikey"
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 )
 
 const (
@@ -86,20 +87,51 @@ type atomicUpstream struct {
 	activeMode    atomic.Int32
 	fail          atomic.Bool
 	compactStatus atomic.Int32
+	rateLimited   atomic.Bool
+	timingMode    atomic.Int32
+	timingDelayMs atomic.Int64
 	totalCalls    atomic.Int64
 	chatCalls     atomic.Int64
 	compactCalls  atomic.Int64
 	messagesCalls atomic.Int64
 	modeCalls     [modeCount]atomic.Int64
 
-	streamGateMu       sync.Mutex
-	nextChatStreamGate *chatStreamGate
+	streamGateMu          sync.Mutex
+	nextChatStreamGate    *chatStreamGate
+	nonStreamGateMu       sync.Mutex
+	nextChatNonStreamGate *requestGate
 
 	authorizationMu       sync.RWMutex
 	authorizationRequired bool
 	authorizationHash     [sha256.Size]byte
 	authorizationMatched  atomic.Int64
 	authorizationRejected atomic.Int64
+}
+
+type upstreamTimingMode int32
+
+const (
+	upstreamTimingNormal upstreamTimingMode = iota
+	upstreamTimingResponseHeader
+	upstreamTimingResponseBody
+	upstreamTimingFirstToken
+	upstreamTimingStreamIdle
+)
+
+type requestGate struct {
+	started     chan struct{}
+	release     chan struct{}
+	releaseOnce sync.Once
+}
+
+func newRequestGate() *requestGate {
+	return &requestGate{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (g *requestGate) Release() {
+	if g != nil {
+		g.releaseOnce.Do(func() { close(g.release) })
+	}
 }
 
 type chatStreamGate struct {
@@ -149,6 +181,15 @@ func (u *atomicUpstream) setFailure(enabled bool) {
 	u.fail.Store(enabled)
 }
 
+func (u *atomicUpstream) setRateLimited(enabled bool) {
+	u.rateLimited.Store(enabled)
+}
+
+func (u *atomicUpstream) setTiming(mode upstreamTimingMode, delay time.Duration) {
+	u.timingMode.Store(int32(mode))
+	u.timingDelayMs.Store(delay.Milliseconds())
+}
+
 func (u *atomicUpstream) setCompactStatus(status int) {
 	u.compactStatus.Store(int32(status))
 }
@@ -191,6 +232,25 @@ func (u *atomicUpstream) blockNextChatStream() *chatStreamGate {
 		panic("chat stream gate is already armed")
 	}
 	u.nextChatStreamGate = gate
+	return gate
+}
+
+func (u *atomicUpstream) blockNextChatNonStream() *requestGate {
+	gate := newRequestGate()
+	u.nonStreamGateMu.Lock()
+	defer u.nonStreamGateMu.Unlock()
+	if u.nextChatNonStreamGate != nil {
+		panic("chat non-stream gate is already armed")
+	}
+	u.nextChatNonStreamGate = gate
+	return gate
+}
+
+func (u *atomicUpstream) takeChatNonStreamGate() *requestGate {
+	u.nonStreamGateMu.Lock()
+	defer u.nonStreamGateMu.Unlock()
+	gate := u.nextChatNonStreamGate
+	u.nextChatNonStreamGate = nil
 	return gate
 }
 
@@ -243,6 +303,12 @@ func (u *atomicUpstream) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"error":{"type":"server_error","code":"server_error","message":"injected upstream failure"}}`)
 		return
 	}
+	if u.rateLimited.Load() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"injected upstream rate limit"}}`)
+		return
+	}
 
 	var payload struct {
 		Stream bool `json:"stream"`
@@ -255,8 +321,21 @@ func (u *atomicUpstream) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/v1/chat/completions":
 		u.chatCalls.Add(1)
+		timingMode := upstreamTimingMode(u.timingMode.Load())
+		timingDelay := time.Duration(u.timingDelayMs.Load()) * time.Millisecond
+		if timingMode == upstreamTimingResponseHeader && timingDelay > 0 {
+			time.Sleep(timingDelay)
+		}
 		if payload.Stream {
-			writeChatStream(w, u.takeChatStreamGate())
+			writeChatStreamWithTiming(w, u.takeChatStreamGate(), timingMode, timingDelay)
+			return
+		}
+		if gate := u.takeChatNonStreamGate(); gate != nil {
+			close(gate.started)
+			<-gate.release
+		}
+		if timingMode == upstreamTimingResponseBody && timingDelay > 0 {
+			writeChatResponseSlowBody(w, timingDelay)
 			return
 		}
 		writeChatResponse(w)
@@ -293,7 +372,11 @@ type upstreamCounts struct {
 func writeChatResponse(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Request-ID", "p4-fault-chat")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(chatResponsePayload())
+}
+
+func chatResponsePayload() map[string]any {
+	return map[string]any{
 		"id":      "chatcmpl-p4-fault",
 		"object":  "chat.completion",
 		"created": time.Now().Unix(),
@@ -311,14 +394,38 @@ func writeChatResponse(w http.ResponseWriter) {
 			"completion_tokens": 1,
 			"total_tokens":      3,
 		},
-	})
+	}
+}
+
+func writeChatResponseSlowBody(w http.ResponseWriter, delay time.Duration) {
+	raw, _ := json.Marshal(chatResponsePayload())
+	mid := len(raw) / 2
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Request-ID", "p4-fault-chat-slow-body")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw[:mid])
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	time.Sleep(delay)
+	_, _ = w.Write(raw[mid:])
 }
 
 func writeChatStream(w http.ResponseWriter, gate *chatStreamGate) {
+	writeChatStreamWithTiming(w, gate, upstreamTimingNormal, 0)
+}
+
+func writeChatStreamWithTiming(w http.ResponseWriter, gate *chatStreamGate, timingMode upstreamTimingMode, delay time.Duration) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Request-ID", "p4-fault-chat-stream")
 	flusher, _ := w.(http.Flusher)
+	if flusher != nil {
+		flusher.Flush()
+	}
+	if timingMode == upstreamTimingFirstToken && delay > 0 {
+		time.Sleep(delay)
+	}
 	writeSSEData(w, flusher, map[string]any{
 		"id": "chatcmpl-p4-fault-stream", "object": "chat.completion.chunk",
 		"created": time.Now().Unix(), "model": "p4-fault-model",
@@ -330,6 +437,9 @@ func writeChatStream(w http.ResponseWriter, gate *chatStreamGate) {
 		if gate.failTail.Load() {
 			panic(http.ErrAbortHandler)
 		}
+	}
+	if timingMode == upstreamTimingStreamIdle && delay > 0 {
+		time.Sleep(delay)
 	}
 	writeSSEData(w, flusher, map[string]any{
 		"id": "chatcmpl-p4-fault-stream", "object": "chat.completion.chunk",
@@ -526,7 +636,14 @@ type seedFacts struct {
 }
 
 type faultHarnessOptions struct {
-	openAIAdapterKey string
+	openAIAdapterKey          string
+	openAIConcurrencyLimit    *int64
+	openAIResponseTimeoutMS   int32
+	openAIFirstTokenTimeoutMS *int32
+	capacityWaitTimeoutMS     *int64
+	channelCooldownMS         *int64
+	streamIdleTimeoutMS       *int64
+	disableCircuitBreaker     bool
 }
 
 func migrateAndSeed(t *testing.T, root, databaseURL, upstreamURL string, options faultHarnessOptions) seedFacts {
@@ -602,16 +719,27 @@ func migrateAndSeed(t *testing.T, root, databaseURL, upstreamURL string, options
 	if openAIAdapterKey == "" {
 		openAIAdapterKey = "deepseek"
 	}
-	seedChannel := func(protocol, adapterKey string, priority int32) int64 {
+	seedChannel := func(
+		protocol, adapterKey string,
+		priority int32,
+		responseTimeoutMS int32,
+		firstTokenTimeoutMS *int32,
+		concurrencyLimit *int64,
+	) int64 {
+		if responseTimeoutMS <= 0 {
+			responseTimeoutMS = 5000
+		}
 		var channelID int64
 		if err := pool.QueryRow(ctx, `
-			INSERT INTO channels (
-				provider_id, name, protocol, adapter_key,
-				credential, status, priority, timeout_ms
-			)
-			VALUES ($1, $2, $3, $4, 'p4-fault-upstream-key', 'enabled', $5, 5000)
-			RETURNING id
-		`, providerID, "P4 Fault "+protocol, protocol, adapterKey, priority).Scan(&channelID); err != nil {
+					INSERT INTO channels (
+						provider_id, name, protocol, adapter_key,
+						credential, status, priority, response_timeout_ms,
+						first_token_timeout_ms, concurrency_limit
+					)
+				VALUES ($1, $2, $3, $4, 'p4-fault-upstream-key', 'enabled', $5, $6, $7, $8)
+				RETURNING id
+			`, providerID, "P4 Fault "+protocol, protocol, adapterKey, priority,
+			responseTimeoutMS, firstTokenTimeoutMS, concurrencyLimit).Scan(&channelID); err != nil {
 			t.Fatalf("seed %s channel: %v", protocol, err)
 		}
 		if _, err := pool.Exec(ctx, `
@@ -634,8 +762,11 @@ func migrateAndSeed(t *testing.T, root, databaseURL, upstreamURL string, options
 		}
 		return channelID
 	}
-	openAIChannelID := seedChannel("openai", openAIAdapterKey, 10)
-	anthropicChannelID := seedChannel("anthropic", "deepseek", 20)
+	openAIChannelID := seedChannel(
+		"openai", openAIAdapterKey, 10,
+		options.openAIResponseTimeoutMS, options.openAIFirstTokenTimeoutMS, options.openAIConcurrencyLimit,
+	)
+	anthropicChannelID := seedChannel("anthropic", "deepseek", 20, 5000, nil, nil)
 
 	if _, err := queries.CreateModelPrice(ctx, sqlc.CreateModelPriceParams{
 		ModelID: modelDBID, Currency: "USD", PricingUnit: billing.PricingUnitPer1MTokens,
@@ -653,6 +784,33 @@ func migrateAndSeed(t *testing.T, root, databaseURL, upstreamURL string, options
 		Amount: numericMinor(10 * 1_0000000000), UserID: user.ID, Currency: "USD",
 	}); err != nil {
 		t.Fatalf("seed user balance: %v", err)
+	}
+
+	seedSetting := func(key, raw string) {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO app_settings (key, value, description)
+			VALUES ($1, $2::jsonb, 'P4 routing E2E override')
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+		`, key, raw); err != nil {
+			t.Fatalf("seed app setting %s: %v", key, err)
+		}
+	}
+	if options.capacityWaitTimeoutMS != nil {
+		seedSetting(appsettings.GatewayCapacityWaitTimeoutKey, strconv.FormatInt(*options.capacityWaitTimeoutMS, 10))
+	}
+	if options.channelCooldownMS != nil {
+		seedSetting(appsettings.GatewayChannelCooldownKey, fmt.Sprintf(
+			`{"cooldown_ms":%d,"cap_ms":%d}`,
+			*options.channelCooldownMS,
+			*options.channelCooldownMS,
+		))
+	}
+	if options.streamIdleTimeoutMS != nil {
+		seedSetting(appsettings.GatewayStreamIdleTimeoutKey, strconv.FormatInt(*options.streamIdleTimeoutMS, 10))
+	}
+	if options.disableCircuitBreaker {
+		seedSetting(appsettings.GatewayCircuitBreakerKey,
+			`{"enabled":false,"window_ms":30000,"min_requests":20,"failure_ratio":0.5,"consecutive_failures":3,"consecutive_window_ms":10000,"half_open_successes":2,"attempt_permit_ttl_ms":30000,"attempt_permit_renew_interval_ms":10000,"attempt_permit_terminal_ttl_ms":300000,"origin_revision_operation_ttl_ms":86400000,"status_revision_operation_ttl_ms":86400000,"open_durations_ms":[15000,30000,60000,120000,300000],"provider_ambiguous_distinct_channels":2,"provider_ambiguous_distinct_models":2}`)
 	}
 
 	return seedFacts{

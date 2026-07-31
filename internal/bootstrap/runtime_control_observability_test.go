@@ -74,7 +74,7 @@ func TestRuntimeControlTelemetryPublishesRecoveryFacts(t *testing.T) {
 	for _, want := range []string{
 		`unio_gateway_runtime_control_pending{target="route_rate"} 0`,
 		`unio_gateway_runtime_control_recovery_total{result="committed",target="route_rate"} 1`,
-		`unio_gateway_runtime_control_recovery_total{result="restored",target="channel_admission"} 1`,
+		`unio_gateway_runtime_control_recovery_total{result="restored",target="channel_capacity"} 1`,
 		`unio_gateway_origin_revision_fence{provider_id="23",state="active"} 1`,
 		`unio_gateway_origin_revision_pending_seconds{provider_id="23"} 0`,
 	} {

@@ -16,7 +16,7 @@ func TestRuntimeInfrastructureFaultLatchIsSharedAndRequiresExplicitCASClear(t *t
 	channelID := int64(7202)
 	providerID := int64(7201)
 	seedAttemptControls(t, storeA, testConfig(), channelID,
-		`{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+		`{"concurrency":null}`)
 
 	// A request-time WRONGTYPE is a confirmed Store failure. SnapshotMany is before authorization
 	// and transport, so this request cannot reach an upstream.
@@ -117,9 +117,9 @@ func testRuntimeReconciliationProof(generation RuntimeReconciliationGeneration, 
 		OriginControls: []RuntimeOriginControlProof{{
 			ProviderID: providerID, OriginRevision: 1, StatusRevision: 1, EffectiveStatus: "enabled",
 		}},
-		ChannelAdmissionControls: []RuntimeChannelAdmissionControlProof{{
+		ChannelCapacityControls: []RuntimeChannelCapacityControlProof{{
 			ChannelID: channelID, Revision: 1,
-			Payload: `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`,
+			Payload: `{"concurrency":null}`,
 		}},
 	}
 }
@@ -128,7 +128,7 @@ func TestMalformedSharedFaultLatchFailsClosedAndCannotBeClearedByProbe(t *testin
 	store, client, _ := newTestStore(t)
 	ctx := context.Background()
 	seedAttemptControls(t, store, testConfig(), 7302,
-		`{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+		`{"concurrency":null}`)
 	if err := client.HSet(ctx, store.keys.runtimeInfrastructureFault(), "malformed", "1").Err(); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestRedisInstanceProofMismatchBlocksEveryNewAdmissionBeforeResourceWrite(t 
 	const routeID int64 = 7403
 	const userID int64 = 7404
 	seedAttemptControls(t, store, testConfig(), channelID,
-		`{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+		`{"concurrency":null}`)
 	if _, err := store.InitProviderControl(ctx, providerID, 1, 1, "enabled"); err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestRuntimeFaultClearKeepsSharedLatchWhenLocalGenerationChanges(t *testing.
 	const providerID int64 = 7501
 	const channelID int64 = 7502
 	seedAttemptControls(t, store, testConfig(), channelID,
-		`{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+		`{"concurrency":null}`)
 	if _, err := store.InitProviderControl(ctx, providerID, 1, 1, "enabled"); err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestRuntimeFaultClearRequiresEveryOriginAndChannelControlProof(t *testing.T
 	const providerID int64 = 7601
 	const channelID int64 = 7602
 	seedAttemptControls(t, store, testConfig(), channelID,
-		`{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+		`{"concurrency":null}`)
 	if _, err := store.InitProviderControl(ctx, providerID, 1, 1, "enabled"); err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestRuntimeFaultClearRequiresEveryOriginAndChannelControlProof(t *testing.T
 		t.Fatal(err)
 	}
 	proof = testRuntimeReconciliationProof(generation, providerID, channelID)
-	if err := client.Set(ctx, store.keys.admissionChannel(channelID), "wrong-type", 0).Err(); err != nil {
+	if err := client.Set(ctx, store.keys.channelCapacity(channelID), "wrong-type", 0).Err(); err != nil {
 		t.Fatal(err)
 	}
 	result, err = store.ClearRuntimeInfrastructureFaultAfterReconciliation(ctx, testRuntimeReadinessInput(), proof)
@@ -317,7 +317,7 @@ func TestRuntimeFaultClearRequiresEveryOriginAndChannelControlProof(t *testing.T
 	}
 }
 
-func TestRuntimeFaultClearCommitValidatesAllFiveCriticalControlProofs(t *testing.T) {
+func TestRuntimeFaultClearCommitValidatesAllFourCriticalControlProofs(t *testing.T) {
 	controls := readinessControlFixtures()
 	for index, control := range controls {
 		t.Run(control.name, func(t *testing.T) {
@@ -333,21 +333,20 @@ func TestRuntimeFaultClearCommitValidatesAllFiveCriticalControlProofs(t *testing
 				store.keys.runtimeInfrastructureFault(),
 				store.keys.stateIntegrityMarker(),
 				store.keys.admissionRouteRate(),
-				store.keys.admissionChannelRate(),
 				store.keys.admissionGlobalConcurrency(),
 				store.keys.runtimeControlSetting("gateway.circuit_breaker"),
 				store.keys.runtimeControlSetting("gateway.routing_balance"),
 				store.keys.runtimeReconciliationProof(),
 			}
 			proofArgs := append(runtimeReadinessArgs(input), generation.redisRunID)
-			proofRaw, err := store.faultProof.Run(ctx, store.client, keys[:7], proofArgs...).Result()
+			proofRaw, err := store.faultProof.Run(ctx, store.client, keys[:6], proofArgs...).Result()
 			if err != nil {
 				t.Fatalf("fault proof: %v", err)
 			}
 			proofReply, ok := proofRaw.([]interface{})
-			if !ok || len(proofReply) != 12 || proofReply[0] != "ready" ||
+			if !ok || len(proofReply) != 10 || proofReply[0] != "ready" ||
 				proofReply[1] != generation.sharedToken || !validRuntimeControlProofs(proofReply[2:]) {
-				t.Fatalf("unexpected five-control proof: %#v", proofRaw)
+				t.Fatalf("unexpected four-control proof: %#v", proofRaw)
 			}
 
 			mutatedPayload := `{"mutated":true}`
@@ -441,7 +440,7 @@ func TestReconcileProviderControlPreservesBreakerState(t *testing.T) {
 func testRuntimeReadinessInput() RuntimeReadinessInput {
 	return RuntimeReadinessInput{
 		Epoch: testAttemptIntegrityEpoch, EpochRevision: testAttemptIntegrityRevision,
-		RouteRateLimitRevision: testRouteRateRevision, ChannelRateLimitRevision: testChannelRateRevision,
+		RouteRateLimitRevision: testRouteRateRevision,
 		ConcurrencyRevision:    1,
 		CircuitBreakerRevision: 1, RoutingBalanceRevision: 1,
 	}
@@ -450,12 +449,12 @@ func testRuntimeReadinessInput() RuntimeReadinessInput {
 func testRuntimeSnapshotInput(providerID, channelID int64) SnapshotManyInput {
 	return SnapshotManyInput{
 		IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
-		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1,
-		CircuitBreakerRevision: 1, RoutingBalanceRevision: 1, ModelID: 99,
+		GlobalConcurrencyRevision: 1,
+		CircuitBreakerRevision:    1, RoutingBalanceRevision: 1, ModelID: 99,
 		Candidates: []SnapshotCandidateInput{{
 			ProviderID: providerID, ChannelID: channelID,
 			OriginRevision: 1, ProviderStatusRevision: 1,
-			ChannelConfigRevision: 1, ChannelAdmissionRevision: 1,
+			ChannelConfigRevision: 1, ChannelCapacityRevision: 1,
 		}},
 	}
 }

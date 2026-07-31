@@ -751,12 +751,11 @@ func waitForRecoveredRuntimeControls(t *testing.T, h *faultHarness, timeout time
 	t.Helper()
 	keys := []string{
 		h.namespace + ":admission:v1:route-rate-limits",
-		h.namespace + ":admission:v1:channel-rate-limits",
 		h.namespace + ":admission:v1:global-concurrency",
 		h.namespace + ":runtime-control:v1:setting:gateway.circuit_breaker",
 		h.namespace + ":runtime-control:v1:setting:gateway.routing_balance",
-		h.namespace + ":admission:v1:channel:" + formatID(h.seed.openAIChannelID),
-		h.namespace + ":admission:v1:channel:" + formatID(h.seed.anthropicChannelID),
+		h.namespace + ":capacity:v1:channel:" + formatID(h.seed.openAIChannelID),
+		h.namespace + ":capacity:v1:channel:" + formatID(h.seed.anthropicChannelID),
 		h.namespace + ":breaker:v2:provider:" + formatID(h.seed.providerID),
 	}
 	deadline := time.Now().Add(timeout)
@@ -818,13 +817,12 @@ func waitForMaintenanceSmokeAdmission(
 		t.Fatalf("durable maintenance endpoint does not allow smoke: %+v", snapshot)
 	}
 	readinessInput := breakerstore.RuntimeReadinessInput{
-		Epoch:                    epoch.Epoch,
-		EpochRevision:            snapshot.RuntimeStateEpochRevision,
-		RouteRateLimitRevision:   snapshot.RouteRateLimitDefaultsRevision,
-		ChannelRateLimitRevision: snapshot.ChannelRateLimitDefaultsRevision,
-		ConcurrencyRevision:      snapshot.ConcurrencyDefaultsRevision,
-		CircuitBreakerRevision:   snapshot.CircuitBreakerRevision,
-		RoutingBalanceRevision:   snapshot.RoutingBalanceRevision,
+		Epoch:                  epoch.Epoch,
+		EpochRevision:          snapshot.RuntimeStateEpochRevision,
+		RouteRateLimitRevision: snapshot.RouteRateLimitDefaultsRevision,
+		ConcurrencyRevision:    snapshot.ConcurrencyDefaultsRevision,
+		CircuitBreakerRevision: snapshot.CircuitBreakerRevision,
+		RoutingBalanceRevision: snapshot.RoutingBalanceRevision,
 	}
 
 	deadline := time.Now().Add(timeout)

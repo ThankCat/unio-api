@@ -102,7 +102,7 @@ type RequestRecord struct {
 	ErrorMessage        *string
 	InternalErrorDetail *string
 	DeliveryStatus      DeliveryStatus
-	ResponseStartedAt   *time.Time
+	GatewayFirstTokenAt *time.Time
 	ResponseCompletedAt *time.Time
 	StartedAt           time.Time
 	CompletedAt         *time.Time
@@ -112,14 +112,14 @@ type RequestRecord struct {
 // response_completed_at 不在此处写入：它归属交付状态机（delivery_status='completed' 时落地），
 // 结算阶段交付尚未完成，强写会违反 ck_request_records_delivery_completed_at。
 type MarkRequestSucceededParams struct {
-	ID                int64
-	ResponseModelID   string
-	ResponseProtocol  Protocol
-	ResponseID        string
-	FinalProviderID   int64
-	FinalChannelID    int64
-	ResponseStartedAt *time.Time
-	CompletedAt       time.Time
+	ID                  int64
+	ResponseModelID     string
+	ResponseProtocol    Protocol
+	ResponseID          string
+	FinalProviderID     int64
+	FinalChannelID      int64
+	GatewayFirstTokenAt *time.Time
+	CompletedAt         time.Time
 }
 
 // MarkSettledRequestCanceledParams 表示已结算但客户取消的请求终态事实。
@@ -138,10 +138,10 @@ type MarkSettledRequestFailedParams struct {
 	InternalErrorDetail string
 }
 
-// MarkResponseStartedParams 表示记录首次客户可见响应时间所需的事实。
-type MarkResponseStartedParams struct {
-	ID                int64
-	ResponseStartedAt time.Time
+// MarkGatewayFirstTokenParams 表示记录首次客户可见响应时间所需的事实。
+type MarkGatewayFirstTokenParams struct {
+	ID                  int64
+	GatewayFirstTokenAt time.Time
 }
 
 // MarkRequestFailedParams 表示标记请求失败所需的错误事实。
@@ -204,7 +204,7 @@ type AttemptRecord struct {
 	ErrorCode                  *string
 	ErrorMessage               *string
 	InternalErrorDetail        *string
-	ResponseStartedAt          *time.Time
+	GatewayFirstTokenAt        *time.Time
 	UpstreamStartedAt          *time.Time
 	UpstreamFirstTokenAt       *time.Time
 	UpstreamCompletedAt        *time.Time
@@ -225,7 +225,7 @@ type MarkAttemptSucceededParams struct {
 	FinishClass           string
 	UpstreamStatusCode    int
 	UpstreamRequestID     *string
-	ResponseStartedAt     *time.Time
+	GatewayFirstTokenAt   *time.Time
 	// FinalUsageReceived 标记本次成功是否基于上游真实 final usage。
 	// full bill 传 true；partial settlement（合成估算事实）传 false，作为渠道未回 usage 的审计信号。
 	FinalUsageReceived  bool
@@ -249,10 +249,10 @@ type MarkSettledAttemptFailedParams struct {
 	InternalErrorDetail string
 }
 
-// MarkAttemptResponseStartedParams 表示记录一次 attempt 首次客户可见响应时间所需的事实。
-type MarkAttemptResponseStartedParams struct {
-	ID                int64
-	ResponseStartedAt time.Time
+// MarkAttemptGatewayFirstTokenParams 表示记录一次 attempt 首次客户可见响应时间所需的事实。
+type MarkAttemptGatewayFirstTokenParams struct {
+	ID                  int64
+	GatewayFirstTokenAt time.Time
 }
 
 // RecordAttemptTimingParams carries first-write-wins upstream transport facts.
@@ -262,6 +262,8 @@ type RecordAttemptTimingParams struct {
 	UpstreamStartedAt    *time.Time
 	UpstreamFirstTokenAt *time.Time
 	UpstreamCompletedAt  *time.Time
+	// UpstreamTimeoutPhase 只在超时失败时非空（§11.4）：response_header|first_token|stream_idle|response_body。
+	UpstreamTimeoutPhase string
 }
 
 // RecordAttemptBreakerDispositionParams first-write-wins 地保存 AttemptPermit Finish 的双作用域结果。
@@ -269,6 +271,14 @@ type RecordAttemptBreakerDispositionParams struct {
 	ID                  int64
 	ProviderDisposition string
 	ChannelDisposition  string
+}
+
+// RecordAttemptScoringSampleParams persists the exact sample membership sent to the Redis scorer.
+type RecordAttemptScoringSampleParams struct {
+	ID                  int64
+	TTFTScoringSample   bool
+	ErrorScoringSample  bool
+	ErrorScoringFailure bool
 }
 
 // MarkAttemptFailedParams 表示标记上游尝试失败所需的错误事实。
@@ -296,7 +306,8 @@ type MarkAttemptCanceledParams struct {
 type Service interface {
 	CreateRequest(ctx context.Context, params CreateRequestParams) (RequestRecord, error)
 	MarkRequestRunning(ctx context.Context, id int64) (RequestRecord, error)
-	MarkRequestResponseStarted(ctx context.Context, params MarkResponseStartedParams) (RequestRecord, error)
+	MarkRequestDeliveryStarted(ctx context.Context, id int64) (RequestRecord, error)
+	MarkRequestGatewayFirstToken(ctx context.Context, params MarkGatewayFirstTokenParams) (RequestRecord, error)
 	MarkRequestDeliveryCompleted(ctx context.Context, id int64, completedAt time.Time) (RequestRecord, error)
 	MarkRequestDeliveryInterrupted(ctx context.Context, id int64) (RequestRecord, error)
 	MarkRequestSucceeded(ctx context.Context, params MarkRequestSucceededParams) (RequestRecord, error)
@@ -306,7 +317,7 @@ type Service interface {
 	MarkRequestCanceled(ctx context.Context, params MarkRequestCanceledParams) (RequestRecord, error)
 
 	CreateAttempt(ctx context.Context, params CreateAttemptParams) (AttemptRecord, error)
-	MarkAttemptResponseStarted(ctx context.Context, params MarkAttemptResponseStartedParams) (AttemptRecord, error)
+	MarkAttemptGatewayFirstToken(ctx context.Context, params MarkAttemptGatewayFirstTokenParams) (AttemptRecord, error)
 	MarkAttemptSucceeded(ctx context.Context, params MarkAttemptSucceededParams) (AttemptRecord, error)
 	MarkSettledAttemptFailed(ctx context.Context, params MarkSettledAttemptFailedParams) (AttemptRecord, error)
 	MarkSettledAttemptCanceled(ctx context.Context, params MarkSettledAttemptCanceledParams) (AttemptRecord, error)

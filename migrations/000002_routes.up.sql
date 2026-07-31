@@ -26,11 +26,12 @@ CREATE TABLE public.routes (
     rpm_limit integer,
     tpm_limit integer,
     rpd_limit integer,
+    concurrency_limit integer,
     archived_at timestamp with time zone,
-    -- sticky_enabled: 会话粘性路由开关（大 uncache 缺口 P0）。NULL=继承系统设置
-    -- gateway.routing_sticky.enabled_default；true/false=线路显式覆盖。--
+    -- sticky_enabled: 已废弃的兼容列；Sticky 策略归渠道所有。--
     sticky_enabled boolean,
     CONSTRAINT ck_routes_archived_at CHECK (((status = 'archived'::text) = (archived_at IS NOT NULL))),
+    CONSTRAINT routes_concurrency_limit_check CHECK (((concurrency_limit IS NULL) OR (concurrency_limit >= 0))),
     CONSTRAINT routes_mode_check CHECK ((mode = ANY (ARRAY['balanced'::text, 'fixed'::text]))),
     CONSTRAINT routes_name_check CHECK ((name <> ''::text)),
     CONSTRAINT routes_price_ratio_check CHECK ((price_ratio >= (0)::numeric)),
@@ -49,6 +50,9 @@ ALTER TABLE ONLY public.routes
 
 ALTER TABLE ONLY public.routes
     ADD CONSTRAINT routes_pkey PRIMARY KEY (id);
+
+COMMENT ON COLUMN public.routes.sticky_enabled IS
+    'Deprecated compatibility column; Sticky policy is owned by channels';
 
 -- ---------------------------------------------------------------------------
 -- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：

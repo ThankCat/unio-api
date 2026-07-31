@@ -33,16 +33,16 @@ func partialOutputTokenCounter(model string, text string) int64 {
 //
 // 按候选 adapter 能力分流（统一 chunk 载体 responsesStreamCarrier，混合候选池共享一条 AttemptRunner
 // 流式 fallback 循环）：
-//   - 直传候选：直连上游 /responses，上游 SSE 命名事件原文透传（仅改写 model 回显），response.completed
-//     由上游下发，不再补发；
+//   - 直传候选：直连上游 /responses，上游 SSE 命名事件原文透传（仅改写 model 回显），成功终态暂存到
+//     durable settlement 完成后再原样写出；
 //   - 桥接候选（chat-only 第三方）：沿用 DEC-014，chat SSE delta 经 streamEncoder 翻译成 Responses 事件，
 //     收尾 response.completed 由 streamEncoder 在结算后补发。
 //
 // 资金关键流式链路（emitted 后禁止 fallback、final usage 缺失处理、tail-error 仍尽力结算、settlement、
 // 终态写入）全部由 RunStreamGeneric 承担，与 chatcompletions 共用同一份实现。
 //
-// streamEncoder 在整个请求生命周期只构造一次：RunStream 仅在「首帧前」允许同模型 fallback，而 encoder
-// 只在首个桥接内容 chunk 后才推进状态，fallback 时仍是初始态，可安全复用；直传候选不触碰 encoder。
+// 每个桥接 attempt 都构造独立 streamEncoder，确保首字前 fallback 不会继承上一候选的协议状态；
+// 直传候选不触碰 encoder。
 func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.ResponsesRequest, emit func(gatewayapi.ResponsesStreamEvent) error) error {
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
@@ -92,6 +92,7 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		Protocol:   routing.ProtocolOpenAI,
 		RouteID:    principal.RouteID,
 		APIKeyID:   principal.APIKeyID,
+		ModelID:    plan.ModelDBID,
 		SessionKey: sessionhint.OpenAISessionKey(ctx, req.PromptCacheKey),
 		Candidates: plan.Candidates,
 		Mode:       plan.RouteMode,
@@ -99,6 +100,13 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 
 	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, plan.RouteMode, true, true, stickySession.BoundChannelID())
 	if err != nil {
+		if principal.RouteID != nil {
+			s.lifecycle.RecordRoutingDecisionFailure(ctx, lifecycle.RoutingDecisionTraceInput{
+				Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
+				PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+				Sticky: stickySession.Audit(),
+			}, err)
+		}
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
 	}
@@ -107,9 +115,17 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
 			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+			Sticky: stickySession.Audit(), Status: lifecycle.TraceStatusPartial,
 		})
 	}
 	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
+		if principal.RouteID != nil {
+			s.lifecycle.CompleteRoutingTrace(ctx, lifecycle.RoutingDecisionTraceInput{
+				Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
+				PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+				Sticky: stickySession.Audit(),
+			}, lifecycle.RunResult{}, err)
+		}
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
 	}
@@ -124,6 +140,13 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),
 	})
 	if err != nil {
+		if principal.RouteID != nil {
+			s.lifecycle.CompleteRoutingTrace(ctx, lifecycle.RoutingDecisionTraceInput{
+				Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
+				PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+				Sticky: stickySession.Audit(),
+			}, lifecycle.RunResult{}, err)
+		}
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, "chat_authorization_failed", err)
 		return err
 	}
@@ -131,25 +154,28 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 	var (
 		streamAdapter       chatcompletionsadapter.StreamChatAdapter
 		directStreamAdapter responsesadapter.StreamResponsesAdapter
-		// usedDirect 记录成功路径是否走了直传：直传的 response.completed 已原文透传，收尾不再补发。
-		usedDirect bool
+		encoder             *streamEncoder
+		directSelected      bool
+		directTerminal      *responsesadapter.StreamChunk
 	)
-	var activeWriteAck lifecycle.StreamWriteAck
-	acknowledgedEmit := func(event gatewayapi.ResponsesStreamEvent) error {
+	var activeWriteAcks lifecycle.StreamWriteAcks
+	acknowledgedBridgeEmit := func(event gatewayapi.ResponsesStreamEvent) error {
 		if err := emit(event); err != nil {
 			return err
 		}
-		if activeWriteAck != nil {
-			activeWriteAck()
+		if activeWriteAcks.Frame != nil {
+			activeWriteAcks.Frame()
+		}
+		if activeWriteAcks.FirstToken != nil && bridgeResponsesEventHasFirstToken(event) {
+			activeWriteAcks.FirstToken()
 		}
 		return nil
 	}
-	withWriteAck := func(ack lifecycle.StreamWriteAck, write func() error) error {
-		activeWriteAck = ack
-		defer func() { activeWriteAck = nil }()
+	withWriteAcks := func(acks lifecycle.StreamWriteAcks, write func() error) error {
+		activeWriteAcks = acks
+		defer func() { activeWriteAcks = lifecycle.StreamWriteAcks{} }()
 		return write()
 	}
-	encoder := newStreamEncoder(req, newResponsesID("resp"), time.Now().Unix(), acknowledgedEmit)
 
 	runResult, err := lifecycle.RunStreamGeneric(ctx, s.attemptRunner, lifecycle.RunStreamParamsGeneric[responsesStreamCarrier]{
 		RequestRecord:           requestRecord,
@@ -162,6 +188,11 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		CountOutputTokens:       partialOutputTokenCounter,
 		Sticky:                  stickySession,
 		ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
+			streamAdapter = nil
+			directStreamAdapter = nil
+			encoder = nil
+			directSelected = false
+			directTerminal = nil
 			if s.registry.HasStreamResponses(candidate.AdapterKey) {
 				adapter, ok := s.registry.StreamResponses(candidate.AdapterKey)
 				if !ok {
@@ -171,6 +202,7 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 					)
 				}
 				directStreamAdapter = adapter
+				directSelected = true
 				return nil
 			}
 			adapter, ok := s.registry.StreamChat(candidate.AdapterKey)
@@ -181,6 +213,7 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 				)
 			}
 			streamAdapter = adapter
+			encoder = newStreamEncoder(req, newResponsesID("resp"), time.Now().Unix(), acknowledgedBridgeEmit)
 			return nil
 		},
 		Stream: func(ctx context.Context, candidate routing.ChatRouteCandidate, onChunk func(responsesStreamCarrier) error) (*adapter.ResponseFacts, error) {
@@ -191,6 +224,11 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 				}
 				streamCtx, streamSpan := lifecycle.StartGatewaySpan(ctx, "adapter.stream_responses", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 				streamOutcome, streamErr := directStreamAdapter.StreamResponse(streamCtx, candidate.Channel, responsesadapter.Request{Body: body, BetaHeader: req.OpenAIBeta}, func(chunk responsesadapter.StreamChunk) error {
+					if isDirectResponsesSuccessTerminal(chunk.EventType) {
+						terminal := chunk
+						terminal.Data = append([]byte(nil), chunk.Data...)
+						directTerminal = &terminal
+					}
 					event := chunk
 					return onChunk(responsesStreamCarrier{direct: &event})
 				})
@@ -211,34 +249,82 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 			lifecycle.EndGatewaySpan(streamSpan, streamErr)
 			return streamOutcome.Facts, streamErr
 		},
-		EmitChunk: func(carrier responsesStreamCarrier, ack lifecycle.StreamWriteAck) error {
-			return withWriteAck(ack, func() error {
-				if carrier.direct != nil {
-					usedDirect = true
-					return emitDirectStreamEvent(acknowledgedEmit, req.Model, *carrier.direct)
+		EmitChunk: func(carrier responsesStreamCarrier, acks lifecycle.StreamWriteAcks) error {
+			if carrier.direct != nil {
+				if err := emitDirectStreamEvent(emit, req.Model, *carrier.direct); err != nil {
+					return err
 				}
+				acks.Frame()
+				if responsesadapter.FirstTokenPayload(*carrier.direct) != "" {
+					acks.FirstToken()
+				}
+				return nil
+			}
+			return withWriteAcks(acks, func() error {
 				return encoder.Handle(*carrier.chat)
 			})
 		},
-		Finish: func(_ string, finalUsage adapter.ChatUsage, finishReason string, ack lifecycle.StreamWriteAck) error {
-			return withWriteAck(ack, func() error {
-				if usedDirect {
-					// 直传：response.completed 已在流中由上游原文透传，无需补发收尾帧。
+		Finish: func(_ string, finalUsage *adapter.ChatUsage, finishReason string, acks lifecycle.StreamWriteAcks) error {
+			return withWriteAcks(acks, func() error {
+				if directSelected {
+					if directTerminal == nil {
+						return failure.New(
+							failure.CodeAdapterInvalidResponse,
+							failure.WithMessage("upstream responses stream terminal event is missing"),
+						)
+					}
+					if err := emitDirectStreamEvent(emit, req.Model, *directTerminal); err != nil {
+						return err
+					}
+					if acks.Frame != nil {
+						acks.Frame()
+					}
 					return nil
 				}
-				usage := finalUsage
-				return encoder.Complete(finishReason, &usage)
+				return encoder.Complete(finishReason, finalUsage)
 			})
 		},
 		ChunkMeta: responsesStreamCarrierMeta,
+		ChunkSize: responsesStreamCarrierSize,
 	})
-	if runResult.RoutingFallback && principal.RouteID != nil {
-		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
+	// 每个请求在生命周期结束时都要把 partial trace 收口为 complete（§13.1），
+	// 不只在发生 fallback 时——普通成功请求同样需要能解释「为什么选了这条渠道」。
+	if principal.RouteID != nil {
+		s.lifecycle.CompleteRoutingTrace(ctx, lifecycle.RoutingDecisionTraceInput{
 			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
-			FallbackOccurred: true, FallbackChain: runResult.TransportChain,
-		})
+			Sticky: stickySession.Audit(),
+		}, runResult, err)
 	}
 	outcome = runResult.Outcome
 	return err
+}
+
+func bridgeResponsesEventHasFirstToken(event gatewayapi.ResponsesStreamEvent) bool {
+	switch event.Type {
+	case gatewayapi.EventOutputTextDelta,
+		gatewayapi.EventReasoningTextDelta,
+		gatewayapi.EventReasoningSummaryTextDelta,
+		gatewayapi.EventRefusalDelta,
+		gatewayapi.EventFunctionCallArgsDelta:
+		return event.Delta != ""
+	case gatewayapi.EventOutputItemAdded:
+		return event.Item != nil && event.Item.Type == "function_call" &&
+			(event.Item.Name != "" || event.Item.Arguments != "")
+	default:
+		return false
+	}
+}
+
+func responsesStreamCarrierSize(carrier responsesStreamCarrier) int {
+	if carrier.direct != nil {
+		return 128 + len(carrier.direct.EventType) + len(carrier.direct.Data) +
+			len(responsesadapter.FirstTokenPayload(*carrier.direct))
+	}
+	if carrier.chat != nil {
+		return 128 + len(carrier.chat.ID) + len(carrier.chat.Model) + len(carrier.chat.Content) +
+			len(carrier.chat.ToolCalls) + len(carrier.chat.FunctionCall) +
+			len(chatcompletionsadapter.FirstTokenPayload(*carrier.chat))
+	}
+	return 1
 }

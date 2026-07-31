@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
@@ -166,5 +167,49 @@ func TestResponsesHandler_InsufficientQuota(t *testing.T) {
 	errType, code, _ := decodeErrorBody(t, rec)
 	if errType != "insufficient_quota" || code != "insufficient_quota" {
 		t.Fatalf("unexpected quota error: type=%q code=%q", errType, code)
+	}
+}
+
+// TestUpstreamErrorResponseKeepsSanitizedUpstreamIdentity 冻结：流式首字前失败时内联 response.failed
+// 事件会被丢弃（首字前不向客户暴露失败渠道事件），因此上游真实 code/message 必须由最终错误响应带出，
+// 否则客户只能看到一句通用文案、SDK 也拿不到上游原本的 error.code。
+//
+// HTTP 状态与 error type 仍由分类决定：客户端据此判断能否重试，不能被上游 code 影响。
+func TestUpstreamErrorResponseKeepsSanitizedUpstreamIdentity(t *testing.T) {
+	err := adapter.NewUpstreamError(
+		adapter.UpstreamErrorBadRequest,
+		adapter.UpstreamMetadata{
+			StatusCode:   http.StatusBadRequest,
+			ErrorCode:    "context_length_exceeded",
+			ErrorMessage: "This model's maximum context length is 128000 tokens.",
+		},
+		failure.New(failure.CodeAdapterUpstreamStatus),
+	)
+
+	got := mapResponsesServiceError(ResponsesRequest{Model: "gpt-5"}, err, "fallback_code", "fallback message")
+
+	if got.status != http.StatusBadRequest || got.errorType != "invalid_request_error" {
+		t.Fatalf("status/type must stay category-driven: status=%d type=%q", got.status, got.errorType)
+	}
+	if got.code != "context_length_exceeded" {
+		t.Fatalf("code = %q, want the upstream code so SDKs can branch on it", got.code)
+	}
+	if got.message != "This model's maximum context length is 128000 tokens." {
+		t.Fatalf("message = %q, want the upstream reason", got.message)
+	}
+}
+
+// TestUpstreamErrorResponseFallsBackWhenUpstreamIdentityAbsent 保证没有上游标识时仍是通用脱敏文案。
+func TestUpstreamErrorResponseFallsBackWhenUpstreamIdentityAbsent(t *testing.T) {
+	err := adapter.NewUpstreamError(
+		adapter.UpstreamErrorBadRequest,
+		adapter.UpstreamMetadata{StatusCode: http.StatusBadRequest},
+		failure.New(failure.CodeAdapterUpstreamStatus),
+	)
+
+	got := mapResponsesServiceError(ResponsesRequest{Model: "gpt-5"}, err, "fallback_code", "fallback message")
+
+	if got.code != "invalid_request" || got.message != "The upstream provider rejected the request." {
+		t.Fatalf("expected the generic sanitized fallback, got code=%q message=%q", got.code, got.message)
 	}
 }

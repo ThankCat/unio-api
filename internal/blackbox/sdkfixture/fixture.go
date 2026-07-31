@@ -108,9 +108,9 @@ type SetupOptions struct {
 	// 注意：用 NUMERIC(20,10) 存，避免 float。
 	InitialBalanceUSD int64
 
-	// ChannelTimeoutMS 是 channels.timeout_ms（adapter 调上游的单次超时）。默认 60_000。
+	// ChannelResponseTimeoutMS 是 channels.response_timeout_ms。默认 60_000。
 	// 超时映射用例可以设小一些（如 500ms）来快速触发。
-	ChannelTimeoutMS int32
+	ChannelResponseTimeoutMS int32
 }
 
 // Fixture 是一个跑着的 unio gateway HTTP server 黑盒 fixture。
@@ -211,8 +211,8 @@ func Setup(t *testing.T, opts SetupOptions) *Fixture {
 	if opts.InitialBalanceUSD == 0 {
 		opts.InitialBalanceUSD = 10
 	}
-	if opts.ChannelTimeoutMS == 0 {
-		opts.ChannelTimeoutMS = 60000
+	if opts.ChannelResponseTimeoutMS == 0 {
+		opts.ChannelResponseTimeoutMS = 60000
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -397,7 +397,7 @@ func (f *Fixture) AddFallbackChannel(t *testing.T, baseURL string, priority int3
 
 	var fallbackID int64
 	if err := f.Pool.QueryRow(f.ctx, `
-		INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
+			INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, response_timeout_ms)
 		VALUES ($1, $2, (SELECT protocol FROM channels WHERE id = $3), (SELECT adapter_key FROM channels WHERE id = $3), $4, 'enabled', $5, 60000)
 		RETURNING id
 	`, fallbackProviderID, fmt.Sprintf("blackbox-fallback-channel-%d", f.suffix), f.ChannelID, "sk-fallback-test", priority).Scan(&fallbackID); err != nil {
@@ -447,23 +447,23 @@ func (f *Fixture) AddFallbackChannel(t *testing.T, baseURL string, priority int3
 	if err != nil {
 		t.Fatalf("read fallback channel for runtime control: %v", err)
 	}
-	payload, err := adminchannel.CanonicalAdmissionLimitsPayloadFromChannel(fallbackChannel)
+	payload, err := adminchannel.CanonicalCapacityPayloadFromChannel(fallbackChannel)
 	if err != nil {
-		t.Fatalf("encode fallback channel admission control: %v", err)
+		t.Fatalf("encode fallback channel capacity control: %v", err)
 	}
-	target := f.breakerStore.ChannelAdmissionControl(fallbackID)
+	target := f.breakerStore.ChannelCapacityControl(fallbackID)
 	if _, err := f.breakerStore.RestoreMissingControl(
-		f.ctx, target, fallbackChannel.AdmissionLimitsRevision, payload,
+		f.ctx, target, fallbackChannel.CapacityRevision, payload,
 	); err != nil {
-		t.Fatalf("initialize fallback channel admission control: %v", err)
+		t.Fatalf("initialize fallback channel capacity control: %v", err)
 	}
-	control, err := f.breakerStore.ReadControl(f.ctx, target, fallbackChannel.AdmissionLimitsRevision)
+	control, err := f.breakerStore.ReadControl(f.ctx, target, fallbackChannel.CapacityRevision)
 	if err != nil {
-		t.Fatalf("verify fallback channel admission control: %v", err)
+		t.Fatalf("verify fallback channel capacity control: %v", err)
 	}
 	if control.SyncState != "active" || control.PendingRevision != 0 ||
-		control.ActiveRevision != fallbackChannel.AdmissionLimitsRevision || control.ActivePayload != payload {
-		t.Fatalf("fallback channel admission control is not active: %+v", control)
+		control.ActiveRevision != fallbackChannel.CapacityRevision || control.ActivePayload != payload {
+		t.Fatalf("fallback channel capacity control is not active: %+v", control)
 	}
 
 	f.fallbackChannelIDs = append(f.fallbackChannelIDs, fallbackID)
@@ -610,10 +610,10 @@ func (f *Fixture) seed(t *testing.T, opts SetupOptions, upstreamBaseURL string, 
 
 	var channelID int64
 	if err := f.Pool.QueryRow(f.ctx, `
-		INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
+		INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, response_timeout_ms)
 		VALUES ($1, $2, $3, $4, $5, 'enabled', 10, $6)
 		RETURNING id
-	`, providerID, fmt.Sprintf("blackbox-channel-%d", suffix), opts.Protocol, opts.AdapterKey, upstreamAPIKey, opts.ChannelTimeoutMS).Scan(&channelID); err != nil {
+	`, providerID, fmt.Sprintf("blackbox-channel-%d", suffix), opts.Protocol, opts.AdapterKey, upstreamAPIKey, opts.ChannelResponseTimeoutMS).Scan(&channelID); err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
 	f.ChannelID = channelID
@@ -728,11 +728,9 @@ func (f *Fixture) seedRuntimeSettings(t *testing.T, cfg config.Config) {
 	t.Helper()
 
 	values := map[string]string{
-		appsettings.GatewayRouteRateLimitDefaultsKey:   `{"rpm":10000,"tpm":0,"rpd":0}`,
-		appsettings.GatewayChannelRateLimitDefaultsKey: `{"rpm":10000,"tpm":0,"rpd":0}`,
-		appsettings.GatewayCircuitBreakerKey:           `{"enabled":false,"window_ms":30000,"min_requests":20,"failure_ratio":0.5,"consecutive_failures":3,"consecutive_window_ms":10000,"half_open_successes":2,"attempt_permit_ttl_ms":30000,"attempt_permit_renew_interval_ms":10000,"attempt_permit_terminal_ttl_ms":300000,"origin_revision_operation_ttl_ms":86400000,"status_revision_operation_ttl_ms":86400000,"open_durations_ms":[15000,30000,60000,120000,300000],"provider_ambiguous_distinct_channels":2,"provider_ambiguous_distinct_models":2}`,
-		appsettings.GatewayChannelCooldownKey:          `{"cooldown_ms":0,"cap_ms":0}`,
-		appsettings.GatewayRoutingTraceKey:             `{"sample_rate":1,"retention_days":7,"cleanup_batch_size":500,"cleanup_interval_ms":3600000}`,
+		appsettings.GatewayRouteRateLimitDefaultsKey: `{"rpm":10000,"tpm":0,"rpd":0}`,
+		appsettings.GatewayCircuitBreakerKey:         `{"enabled":false,"window_ms":30000,"min_requests":20,"failure_ratio":0.5,"consecutive_failures":3,"consecutive_window_ms":10000,"half_open_successes":2,"attempt_permit_ttl_ms":30000,"attempt_permit_renew_interval_ms":10000,"attempt_permit_terminal_ttl_ms":300000,"origin_revision_operation_ttl_ms":86400000,"status_revision_operation_ttl_ms":86400000,"open_durations_ms":[15000,30000,60000,120000,300000],"provider_ambiguous_distinct_channels":2,"provider_ambiguous_distinct_models":2}`,
+		appsettings.GatewayChannelCooldownKey:        `{"cooldown_ms":0,"cap_ms":0}`,
 	}
 	registry := appsettings.DefaultRegistry()
 	for key, value := range values {

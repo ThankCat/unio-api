@@ -3,7 +3,7 @@ package lifecycle
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
@@ -22,6 +22,7 @@ func (s *fakeDiagnosticRoutingTraceStore) RouteRuntimePool(context.Context, sqlc
 
 type fakeRoutingTraceStore struct {
 	writes []sqlc.UpsertRoutingDecisionTraceParams
+	err    error
 }
 
 type fakeRoutingTraceMetrics struct {
@@ -34,55 +35,61 @@ func (m *fakeRoutingTraceMetrics) IncRoutingTraceWrite(result string) {
 
 func (s *fakeRoutingTraceStore) UpsertRoutingDecisionTrace(_ context.Context, in sqlc.UpsertRoutingDecisionTraceParams) error {
 	s.writes = append(s.writes, in)
-	return nil
+	return s.err
 }
 
-func TestRoutingTraceRecorderSamplesNormalAndAlwaysWritesFallback(t *testing.T) {
+func TestRoutingTraceRecorderWritesEveryRequestAndCompletesTrace(t *testing.T) {
 	store := &fakeRoutingTraceStore{}
 	recorder := NewRoutingTraceRecorder(store, zap.NewNop())
 	traceMetrics := &fakeRoutingTraceMetrics{}
 	recorder.SetMetrics(traceMetrics)
-	recorder.SetSampleRate(0)
 	request := requestlog.RequestRecord{
-		ID: 1, RequestID: "req-unsampled", RequestedModelID: "openai/gpt",
+		ID: 1, RequestID: "req-complete-trace", RequestedModelID: "openai/gpt",
 		IngressProtocol: requestlog.ProtocolOpenAI, Endpoint: requestlog.EndpointChatCompletions,
 	}
-	plan := CandidatePlan{Candidates: []Candidate{{Route: candidateRoute(7, "openai"), Balance: BalanceScore{CapacityScore: 0.5, RoutingFactor: 0.8, Weight: 0.4}}}}
+	plan := CandidatePlan{Candidates: []Candidate{{Route: candidateRoute(7, "openai"), Balance: BalanceScore{ConcurrencyScore: 50, FinalScore: 90}}}}
 
 	recorder.Record(context.Background(), RoutingDecisionTraceInput{Request: request, RouteID: 3, Mode: "balanced", PoolSize: 1, Plan: plan})
-	if len(store.writes) != 0 {
-		t.Fatal("unsampled normal decision must not be stored")
+	if len(store.writes) != 1 {
+		t.Fatalf("every planned request must create a trace, writes=%d", len(store.writes))
 	}
-	if len(traceMetrics.results) != 1 || traceMetrics.results[0] != "sampled_out" {
-		t.Fatalf("unexpected sampled-out metrics: %+v", traceMetrics.results)
+	if store.writes[0].TraceStatus != string(TraceStatusPartial) {
+		t.Fatalf("initial trace must be partial: %+v", store.writes[0])
 	}
 
 	plan.Candidates = append(plan.Candidates, Candidate{Route: candidateRoute(8, "openai")})
 	recorder.Record(context.Background(), RoutingDecisionTraceInput{
 		Request: request, RouteID: 3, Mode: "balanced", PoolSize: 2, Plan: plan,
+		Status: TraceStatusComplete, SelectedChannelID: 7, FinalResult: "success",
+		ActualScanOrder: []int64{7}, AttemptedChannelIDs: []int64{7},
 		FallbackOccurred: true,
 		FallbackChain: []TransportAttempt{
 			{ChannelID: 7, UpstreamEndpoint: requestlog.UpstreamEndpointResponsesCompact},
 			{ChannelID: 7, UpstreamEndpoint: requestlog.UpstreamEndpointChatCompletions},
 		},
 	})
-	if len(store.writes) != 1 {
-		t.Fatalf("fallback must be stored regardless of sample rate, writes=%d", len(store.writes))
+	if len(store.writes) != 2 {
+		t.Fatalf("completion must upsert the same request trace, writes=%d", len(store.writes))
 	}
-	if len(traceMetrics.results) != 2 || traceMetrics.results[1] != "success" {
+	if len(traceMetrics.results) != 2 || traceMetrics.results[0] != "success" || traceMetrics.results[1] != "success" {
 		t.Fatalf("unexpected trace write metrics: %+v", traceMetrics.results)
 	}
-	got := store.writes[0]
-	if !got.Abnormal || len(got.AbnormalReasons) != 1 || got.AbnormalReasons[0] != "fallback" {
-		t.Fatalf("unexpected fallback trace: %+v", got)
+	got := store.writes[1]
+	if got.TraceStatus != string(TraceStatusComplete) || got.FinalResult.String != "success" ||
+		!got.SelectedChannelID.Valid || got.SelectedChannelID.Int64 != 7 {
+		t.Fatalf("completion facts missing from trace: %+v", got)
 	}
 	if got.AlgorithmVersion != "objective_v1" {
 		t.Fatalf("algorithm version = %q, want objective_v1", got.AlgorithmVersion)
 	}
-	var chain []TransportAttempt
-	if err := json.Unmarshal(got.FallbackChain, &chain); err != nil {
-		t.Fatalf("decode fallback chain: %v", err)
+	var payload tracePayload
+	if err := json.Unmarshal(got.TracePayload, &payload); err != nil {
+		t.Fatalf("decode trace payload: %v", err)
 	}
+	if len(payload.AbnormalReasons) != 1 || payload.AbnormalReasons[0] != "fallback" {
+		t.Fatalf("unexpected fallback trace: %+v", payload)
+	}
+	chain := payload.Attempts
 	if len(chain) != 2 || chain[0].ChannelID != 7 || chain[1].ChannelID != 7 ||
 		chain[0].UpstreamEndpoint != requestlog.UpstreamEndpointResponsesCompact ||
 		chain[1].UpstreamEndpoint != requestlog.UpstreamEndpointChatCompletions {
@@ -93,7 +100,6 @@ func TestRoutingTraceRecorderSamplesNormalAndAlwaysWritesFallback(t *testing.T) 
 func TestRoutingTraceFallbackChainUsesActualTransportAfterAdmissionSkip(t *testing.T) {
 	store := &fakeRoutingTraceStore{}
 	recorder := NewRoutingTraceRecorder(store, zap.NewNop())
-	recorder.SetSampleRate(0)
 	plan := CandidatePlan{Candidates: []Candidate{
 		{Route: candidateRoute(7, "openai")},
 		{Route: candidateRoute(8, "openai")},
@@ -112,40 +118,22 @@ func TestRoutingTraceFallbackChainUsesActualTransportAfterAdmissionSkip(t *testi
 	if len(store.writes) != 1 {
 		t.Fatalf("admission fallback must be stored, writes=%d", len(store.writes))
 	}
-	var chain []TransportAttempt
-	if err := json.Unmarshal(store.writes[0].FallbackChain, &chain); err != nil {
-		t.Fatalf("decode fallback chain: %v", err)
+	var payload tracePayload
+	if err := json.Unmarshal(store.writes[0].TracePayload, &payload); err != nil {
+		t.Fatalf("decode trace payload: %v", err)
 	}
+	chain := payload.Attempts
 	if len(chain) != 1 || chain[0].ChannelID != 8 || chain[0].UpstreamEndpoint != requestlog.UpstreamEndpointResponses {
 		t.Fatalf("fallback chain must contain only the real transport attempt: %+v", chain)
 	}
 }
 
-func TestRoutingTraceStableSampling(t *testing.T) {
-	var sampledID, skippedID string
-	for i := 0; i < 10000 && (sampledID == "" || skippedID == ""); i++ {
-		id := fmt.Sprintf("req-%d", i)
-		if routingTraceSampled(id, 500) {
-			sampledID = id
-		} else {
-			skippedID = id
-		}
-	}
-	if sampledID == "" || skippedID == "" {
-		t.Fatal("expected both sampled and skipped stable hash buckets")
-	}
-	if !routingTraceSampled(sampledID, 500) || routingTraceSampled(skippedID, 500) {
-		t.Fatal("sampling decision must be stable for the same request id")
-	}
-}
-
-func TestRoutingTraceSampledNormalUsesEmptyReasons(t *testing.T) {
+func TestRoutingTraceNormalUsesEmptyReasonsAndStructuredPayload(t *testing.T) {
 	store := &fakeRoutingTraceStore{}
 	recorder := NewRoutingTraceRecorder(store, zap.NewNop())
-	recorder.SetSampleRate(1)
 	recorder.Record(context.Background(), RoutingDecisionTraceInput{
 		Request: requestlog.RequestRecord{
-			ID: 2, RequestID: "req-sampled-normal", RequestedModelID: "openai/gpt",
+			ID: 2, RequestID: "req-normal", RequestedModelID: "openai/gpt",
 			IngressProtocol: requestlog.ProtocolOpenAI, Endpoint: requestlog.EndpointResponses,
 		},
 		RouteID: 3, Mode: "balanced", PoolSize: 1,
@@ -153,14 +141,44 @@ func TestRoutingTraceSampledNormalUsesEmptyReasons(t *testing.T) {
 	})
 
 	if len(store.writes) != 1 {
-		t.Fatalf("expected sampled normal decision to be stored, writes=%d", len(store.writes))
+		t.Fatalf("expected normal decision to be stored, writes=%d", len(store.writes))
 	}
 	got := store.writes[0]
-	if got.Abnormal || !got.Sampled {
-		t.Fatalf("unexpected sampled normal flags: abnormal=%v sampled=%v", got.Abnormal, got.Sampled)
+	if got.SchemaVersion != routingTraceSchemaVersion {
+		t.Fatalf("unexpected normal trace schema=%d", got.SchemaVersion)
 	}
-	if got.AbnormalReasons == nil || len(got.AbnormalReasons) != 0 {
-		t.Fatalf("normal reasons must be a non-nil empty array, got %#v", got.AbnormalReasons)
+	var payload tracePayload
+	if err := json.Unmarshal(got.TracePayload, &payload); err != nil {
+		t.Fatalf("decode structured trace payload: %v", err)
+	}
+	if payload.SchemaVersion != routingTraceSchemaVersion || payload.AlgorithmVersion != routingTraceAlgorithmVersion || len(payload.Candidates) != 1 {
+		t.Fatalf("structured trace payload is incomplete: %+v", payload)
+	}
+	if payload.AbnormalReasons == nil || len(payload.AbnormalReasons) != 0 {
+		t.Fatalf("normal reasons must be a non-nil empty array, got %#v", payload.AbnormalReasons)
+	}
+}
+
+func TestRoutingTraceWriteFailureOnlyRecordsFailureMetric(t *testing.T) {
+	store := &fakeRoutingTraceStore{err: errors.New("database unavailable")}
+	recorder := NewRoutingTraceRecorder(store, zap.NewNop())
+	traceMetrics := &fakeRoutingTraceMetrics{}
+	recorder.SetMetrics(traceMetrics)
+
+	recorder.Record(context.Background(), RoutingDecisionTraceInput{
+		Request: requestlog.RequestRecord{
+			ID: 4, RequestID: "req-trace-write-failure", RequestedModelID: "openai/gpt",
+			IngressProtocol: requestlog.ProtocolOpenAI, Endpoint: requestlog.EndpointResponses,
+		},
+		RouteID: 3,
+		Plan:    CandidatePlan{Candidates: []Candidate{{Route: candidateRoute(7, "openai")}}},
+	})
+
+	if len(store.writes) != 1 {
+		t.Fatalf("expected one attempted write, got %d", len(store.writes))
+	}
+	if len(traceMetrics.results) != 1 || traceMetrics.results[0] != "failed" {
+		t.Fatalf("trace persistence failure must be observable: %+v", traceMetrics.results)
 	}
 }
 
@@ -191,15 +209,18 @@ func TestRoutingTraceIncludesFullPoolExclusionReasons(t *testing.T) {
 			OriginRevisionCurrent: true, CandidateProviderStatusRevision: 4,
 			RuntimeProviderStatusRevision: 4, ProviderStatusRevisionCurrent: true,
 			CandidateChannelConfigRevision: 7, RuntimeChannelConfigRevision: &runtimeConfigRevision,
-			ChannelConfigRevisionCurrent: true, CandidateChannelAdmissionLimitsRevision: 5,
-			RuntimeChannelAdmissionLimitsRevision: 5, ChannelAdmissionLimitsRevisionCurrent: true,
-			RouteRateLimitsRevision: 3, ChannelRateLimitsRevision: 7,
+			ChannelConfigRevisionCurrent: true, CandidateChannelCapacityRevision: 5,
+			RuntimeChannelCapacityRevision: 5, ChannelCapacityRevisionCurrent: true,
+			RouteRateLimitsRevision:   3,
 			GlobalConcurrencyRevision: 2, CircuitBreakerRevision: 6,
 			RoutingBalanceRevision: 4, RuntimeControlState: "active", RuntimeRevisionCurrent: true,
 			ProviderBreakerState: "closed", ChannelBreakerState: "closed", BreakerStoreAdmission: "normal",
-			CapacityScore: 0.5, ErrorRate: 0.1, ErrorSamples: 20, TTFTEWMAMs: 820,
-			TTFTSamples: 18, TTFTSampleSource: "stream_only", RoutingFactor: 0.8,
-			CostRatio: 0.4, CostWeight: 0.5, CostFactor: 0.8, Weight: 0.32,
+			CostScore: 60, ConcurrencyScore: 50, TTFTScore: 97.95, ErrorScore: 75, PriorityScore: 90,
+			CostWeightPct: 25, ConcurrencyWeightPct: 20, TTFTWeightPct: 25,
+			ErrorRateWeightPct: 20, PriorityWeightPct: 10,
+			CostRatio: 0.4, Priority: 10,
+			AvgTTFTMs: 820, TTFTSampleCount: 18, ErrorRatePct: 10, ErrorSampleCount: 20,
+			FinalScore: 74.4875,
 		}}},
 		Excluded: []CandidateExclusion{{ChannelID: 8, RouteIndex: 1, Reason: "capability_unsupported"}},
 	}
@@ -209,20 +230,104 @@ func TestRoutingTraceIncludesFullPoolExclusionReasons(t *testing.T) {
 	if len(store.writes) != 1 || store.writes[0].PoolSize != 2 {
 		t.Fatalf("expected one full-pool trace: %+v", store.writes)
 	}
-	var scores []traceCandidateScore
-	if err := json.Unmarshal(store.writes[0].CandidateScores, &scores); err != nil {
-		t.Fatalf("decode candidate scores: %v", err)
+	var payload tracePayload
+	if err := json.Unmarshal(store.writes[0].TracePayload, &payload); err != nil {
+		t.Fatalf("decode trace payload: %v", err)
 	}
+	scores := payload.Candidates
 	if len(scores) != 2 || !scores[0].Eligible || scores[1].Eligible || scores[1].ExcludedReason != "capability_unsupported" {
 		t.Fatalf("unexpected full-pool diagnostics: %+v", scores)
 	}
 	if scores[0].ProviderID != 21 || !scores[0].ProviderStatusRevisionCurrent ||
 		scores[0].RuntimeChannelConfigRevision == nil || *scores[0].RuntimeChannelConfigRevision != 7 ||
-		scores[0].RouteRateLimitsRevision != 3 || scores[0].ChannelRateLimitsRevision != 7 ||
+		scores[0].RouteRateLimitsRevision != 3 ||
 		scores[0].CircuitBreakerRevision != 6 ||
-		scores[0].ErrorSamples != 20 || scores[0].TTFTSamples != 18 ||
-		scores[0].CostRatio != 0.4 || scores[0].CostWeight != 0.5 || scores[0].CostFactor != 0.8 ||
-		scores[0].BreakerStoreAdmission != "normal" {
+		scores[0].ErrorSampleCount != 20 || scores[0].TTFTSampleCount != 18 ||
+		scores[0].CostRatio != 0.4 || scores[0].BreakerStoreAdmission != "normal" {
 		t.Fatalf("P4 runtime facts missing from trace: %+v", scores[0])
 	}
+	// 五项评分与权重必须完整进入 trace（§7.8 展示要求）。
+	if scores[0].CostScore != 60 || scores[0].ConcurrencyScore != 50 || scores[0].ErrorScore != 75 ||
+		scores[0].PriorityScore != 90 || scores[0].AvgTTFTMs != 820 || scores[0].ErrorRatePct != 10 ||
+		scores[0].CostWeightPct != 25 || scores[0].ConcurrencyWeightPct != 20 ||
+		scores[0].TTFTWeightPct != 25 || scores[0].ErrorRateWeightPct != 20 || scores[0].PriorityWeightPct != 10 {
+		t.Fatalf("five-metric scoring facts missing from trace: %+v", scores[0])
+	}
+}
+
+// TestRoutingTraceWritesStickyAudit 冻结 §10.12：sticky 审计字段必须原样进入 trace，
+// 且 Unbound 写成 SQL NULL 而不是 0（0 会被误读成「绑定到 channel 0」）。
+func TestRoutingTraceWritesStickyAudit(t *testing.T) {
+	request := requestlog.RequestRecord{
+		ID: 21, RequestID: "req-sticky-audit", RequestedModelID: "openai/gpt",
+		IngressProtocol: requestlog.ProtocolOpenAI, Endpoint: requestlog.EndpointChatCompletions,
+	}
+
+	t.Run("clear then bind records both endpoints", func(t *testing.T) {
+		store := &fakeRoutingTraceStore{}
+		recorder := NewRoutingTraceRecorder(store, zap.NewNop())
+		recorder.Record(context.Background(), RoutingDecisionTraceInput{
+			Request: request, RouteID: 3, Mode: "balanced",
+			Plan:            CandidatePlan{Candidates: []Candidate{{Route: candidateRoute(9, "openai")}}},
+			StickyChannelID: 7,
+			Sticky: StickyAudit{
+				KeyPresent: true, BeforeChannelID: 7, BeforeVersion: 111,
+				Action: StickyActionBindIfAbsent, Reason: "complete_success",
+				AfterChannelID: 9, AfterVersion: 222,
+			},
+		})
+		if len(store.writes) != 1 {
+			t.Fatalf("expected one trace write, got %d", len(store.writes))
+		}
+		got := store.writes[0]
+		if !got.StickyKeyPresent ||
+			!got.StickyBeforeChannelID.Valid || got.StickyBeforeChannelID.Int64 != 7 ||
+			!got.StickyBeforeVersion.Valid || got.StickyBeforeVersion.Int64 != 111 ||
+			!got.StickyAction.Valid || got.StickyAction.String != string(StickyActionBindIfAbsent) ||
+			!got.StickyReason.Valid || got.StickyReason.String != "complete_success" ||
+			!got.StickyAfterChannelID.Valid || got.StickyAfterChannelID.Int64 != 9 ||
+			!got.StickyAfterVersion.Valid || got.StickyAfterVersion.Int64 != 222 {
+			t.Fatalf("sticky audit did not reach the trace: %+v", got)
+		}
+	})
+
+	t.Run("unbound endpoints stay NULL", func(t *testing.T) {
+		store := &fakeRoutingTraceStore{}
+		recorder := NewRoutingTraceRecorder(store, zap.NewNop())
+		recorder.Record(context.Background(), RoutingDecisionTraceInput{
+			Request: request, RouteID: 3, Mode: "balanced",
+			Plan: CandidatePlan{Candidates: []Candidate{{Route: candidateRoute(9, "openai")}}},
+			Sticky: StickyAudit{
+				KeyPresent: true, Action: StickyActionMiss,
+			},
+		})
+		got := store.writes[0]
+		if got.StickyBeforeChannelID.Valid || got.StickyBeforeVersion.Valid ||
+			got.StickyAfterChannelID.Valid || got.StickyAfterVersion.Valid {
+			t.Fatalf("unbound endpoints must be NULL, not 0: %+v", got)
+		}
+		if got.StickyReason.Valid {
+			t.Fatalf("empty reason must be NULL: %+v", got.StickyReason)
+		}
+		if !got.StickyAction.Valid || got.StickyAction.String != string(StickyActionMiss) {
+			t.Fatalf("miss action must be recorded: %+v", got.StickyAction)
+		}
+	})
+
+	t.Run("sticky disabled request", func(t *testing.T) {
+		store := &fakeRoutingTraceStore{}
+		recorder := NewRoutingTraceRecorder(store, zap.NewNop())
+		recorder.Record(context.Background(), RoutingDecisionTraceInput{
+			Request: request, RouteID: 3, Mode: "fixed",
+			Plan:   CandidatePlan{Candidates: []Candidate{{Route: candidateRoute(9, "openai")}}},
+			Sticky: StickyAudit{Action: StickyActionDisabled},
+		})
+		got := store.writes[0]
+		if got.StickyKeyPresent {
+			t.Fatalf("disabled sticky must not claim a key: %+v", got)
+		}
+		if !got.StickyAction.Valid || got.StickyAction.String != string(StickyActionDisabled) {
+			t.Fatalf("disabled action must be recorded: %+v", got.StickyAction)
+		}
+	})
 }

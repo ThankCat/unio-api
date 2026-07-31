@@ -131,7 +131,7 @@ func TestP4ActiveOwnersAOFEpochRollbackSafetyBoundaryE2E(t *testing.T) {
 		t,
 		h,
 		h.gateways[1],
-		`unio_gateway_request_admission_endpoint_total{endpoint="acquire",result="runtime_state_lost"}`,
+		`unio_gateway_request_admission_operation_total{operation="acquire",result="runtime_state_lost"}`,
 		1,
 		2*time.Second,
 	)
@@ -143,7 +143,7 @@ func TestP4ActiveOwnersAOFEpochRollbackSafetyBoundaryE2E(t *testing.T) {
 		t,
 		h,
 		h.gateways[0],
-		`unio_gateway_request_admission_endpoint_total{endpoint="renew",result="runtime_state_lost"}`,
+		`unio_gateway_request_admission_operation_total{operation="renew",result="runtime_state_lost"}`,
 		1,
 		2*time.Second,
 	)
@@ -151,7 +151,7 @@ func TestP4ActiveOwnersAOFEpochRollbackSafetyBoundaryE2E(t *testing.T) {
 		t,
 		h,
 		h.gateways[0],
-		`unio_gateway_breaker_permit_endpoint_total{endpoint="renew",result="runtime_state_lost"}`,
+		`unio_gateway_breaker_permit_operation_total{operation="renew",result="runtime_state_lost"}`,
 		1,
 		2*time.Second,
 	)
@@ -175,7 +175,7 @@ func TestP4ActiveOwnersAOFEpochRollbackSafetyBoundaryE2E(t *testing.T) {
 		t,
 		h,
 		h.gateways[0],
-		`unio_gateway_request_admission_endpoint_total{endpoint="finish",result="runtime_state_lost"}`,
+		`unio_gateway_request_admission_operation_total{operation="finish",result="runtime_state_lost"}`,
 		1,
 		2*time.Second,
 	)
@@ -183,7 +183,7 @@ func TestP4ActiveOwnersAOFEpochRollbackSafetyBoundaryE2E(t *testing.T) {
 		t,
 		h,
 		h.gateways[0],
-		`unio_gateway_breaker_permit_endpoint_total{endpoint="finish",result="runtime_state_lost"}`,
+		`unio_gateway_breaker_permit_operation_total{operation="finish",result="runtime_state_lost"}`,
 		1,
 		2*time.Second,
 	)
@@ -285,9 +285,6 @@ func captureEpochRollbackOwnedState(
 		requestToken["rpm_bucket"],
 		requestToken["rpd_bucket"],
 		requestToken["tpm_bucket"],
-		permit["ch_rpm_bucket"],
-		permit["ch_rpd_bucket"],
-		permit["ch_tpm_bucket"],
 	}
 	counters := make(map[string]string, len(counterFields))
 	for _, key := range counterFields {
@@ -459,7 +456,7 @@ func waitForEpochRollbackLongStreamFacts(t *testing.T, pool *pgxpool.Pool, seed 
 				)
 				if requestCount == 1 && request.Status == "succeeded" && request.DeliveryStatus == "completed" && request.Stream &&
 					request.IngressProtocol == "openai" && request.Endpoint == "chat_completions" &&
-					request.ResponseStartedAt.Valid && request.ResponseCompletedAt.Valid &&
+					request.GatewayFirstTokenAt.Valid && request.ResponseCompletedAt.Valid &&
 					request.FinalChannelID.Valid && request.FinalChannelID.Int64 == seed.openAIChannelID &&
 					attemptCount == 1 && attempt.Status == "succeeded" && attempt.UpstreamEndpoint == "chat_completions" &&
 					attempt.UpstreamStartedAt.Valid && attempt.UpstreamFirstTokenAt.Valid && attempt.UpstreamCompletedAt.Valid &&

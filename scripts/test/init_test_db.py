@@ -130,9 +130,24 @@ def validate_optional_nonnegative_int(value: Any, path: str) -> None:
         config_error(path, "必须 >= 0")
 
 
+def validate_optional_positive_int(value: Any, path: str) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int):
+        config_error(path, "必须是正整数或 null")
+    if value <= 0:
+        config_error(path, "必须 > 0")
+
+
 def validate_topology_config(cfg: dict[str, Any]) -> None:
     for index, channel in enumerate(cfg.get("channels") or []):
         path = f"channels[{index}]"
+        for retired_key in ("timeout_ms", "rpm_limit", "rpd_limit", "tpm_limit"):
+            if retired_key in channel:
+                config_error(
+                    f"{path}.{retired_key}",
+                    "Channel 旧字段已删除，请使用 response_timeout_ms / first_token_timeout_ms / concurrency_limit",
+                )
         priority = channel.get("priority", 0)
         if isinstance(priority, bool) or not isinstance(priority, int):
             config_error(f"{path}.priority", "必须是整数")
@@ -142,6 +157,12 @@ def validate_topology_config(cfg: dict[str, Any]) -> None:
 
         validate_optional_nonnegative_int(
             channel.get("concurrency_limit"), f"{path}.concurrency_limit"
+        )
+        validate_optional_positive_int(
+            channel.get("response_timeout_ms"), f"{path}.response_timeout_ms"
+        )
+        validate_optional_positive_int(
+            channel.get("first_token_timeout_ms"), f"{path}.first_token_timeout_ms"
         )
 
         sticky_configured = (
@@ -412,7 +433,7 @@ WHERE m.model_id = {sql_quote(model_key)}
             f"""
 INSERT INTO channels (
     provider_id, name, protocol, adapter_key, credential, status, priority,
-    timeout_ms, rpm_limit, tpm_limit, rpd_limit, concurrency_limit,
+	response_timeout_ms, first_token_timeout_ms, concurrency_limit,
     upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms
 )
 SELECT
@@ -423,10 +444,8 @@ SELECT
     {sql_quote(cred)},
     {sql_quote(c.get('status', 'enabled'))},
     {sql_quote(int(c.get('priority', 0)))},
-    {sql_quote(c.get('timeout_ms'))},
-    {sql_quote(c.get('rpm_limit'))},
-    {sql_quote(c.get('tpm_limit'))},
-    {sql_quote(c.get('rpd_limit'))},
+	{sql_quote(c.get('response_timeout_ms'))},
+	{sql_quote(c.get('first_token_timeout_ms'))},
     {sql_quote(c.get('concurrency_limit'))},
     {sql_quote(bool(c.get('upstream_bills_on_disconnect', False)))},
     {sticky_enabled_sql},
@@ -439,30 +458,26 @@ ON CONFLICT (provider_id, name) DO UPDATE SET
     credential = EXCLUDED.credential,
     status = EXCLUDED.status,
     priority = EXCLUDED.priority,
-    timeout_ms = EXCLUDED.timeout_ms,
-    rpm_limit = EXCLUDED.rpm_limit,
-    tpm_limit = EXCLUDED.tpm_limit,
-    rpd_limit = EXCLUDED.rpd_limit,
+	response_timeout_ms = EXCLUDED.response_timeout_ms,
+	first_token_timeout_ms = EXCLUDED.first_token_timeout_ms,
     concurrency_limit = EXCLUDED.concurrency_limit,
     upstream_bills_on_disconnect = EXCLUDED.upstream_bills_on_disconnect,
     sticky_enabled = {sticky_enabled_update},
     sticky_ttl_ms = {sticky_ttl_update},
     config_revision = channels.config_revision + CASE WHEN ROW(
         channels.protocol, channels.adapter_key, channels.credential,
-        channels.status, channels.timeout_ms,
+		channels.status, channels.priority,
+		channels.response_timeout_ms, channels.first_token_timeout_ms,
         channels.sticky_enabled, channels.sticky_ttl_ms
     ) IS DISTINCT FROM ROW(
         EXCLUDED.protocol, EXCLUDED.adapter_key, EXCLUDED.credential,
-        EXCLUDED.status, EXCLUDED.timeout_ms,
+		EXCLUDED.status, EXCLUDED.priority,
+		EXCLUDED.response_timeout_ms, EXCLUDED.first_token_timeout_ms,
         {sticky_enabled_update}, {sticky_ttl_update}
     ) THEN 1 ELSE 0 END,
-    admission_limits_revision = channels.admission_limits_revision + CASE WHEN ROW(
-        channels.rpm_limit, channels.tpm_limit, channels.rpd_limit,
-        channels.concurrency_limit
-    ) IS DISTINCT FROM ROW(
-        EXCLUDED.rpm_limit, EXCLUDED.tpm_limit, EXCLUDED.rpd_limit,
-        EXCLUDED.concurrency_limit
-    ) THEN 1 ELSE 0 END,
+	capacity_revision = channels.capacity_revision + CASE WHEN
+		channels.concurrency_limit IS DISTINCT FROM EXCLUDED.concurrency_limit
+	THEN 1 ELSE 0 END,
     updated_at = now();
 """.strip()
         )
@@ -628,10 +643,8 @@ SELECT json_build_object(
           'credential', c.credential,
           'status', c.status,
           'priority', c.priority,
-          'timeout_ms', c.timeout_ms,
-          'rpm_limit', c.rpm_limit,
-          'tpm_limit', c.tpm_limit,
-          'rpd_limit', c.rpd_limit,
+		  'response_timeout_ms', c.response_timeout_ms,
+		  'first_token_timeout_ms', c.first_token_timeout_ms,
           'concurrency_limit', c.concurrency_limit,
           'sticky_enabled', c.sticky_enabled,
           'sticky_ttl_ms', c.sticky_ttl_ms,

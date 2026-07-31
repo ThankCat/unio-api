@@ -93,12 +93,6 @@ func applySnapshotFields(snap *ScopeSnapshot, fields []interface{}, nowMs int64)
 	if snap.ConsecutiveFailures, err = optionalInt64(m, "consecutive_eligible_failures"); err != nil {
 		return err
 	}
-	if snap.TTFTEWMAMs, err = optionalFloat64(m, "ttft_ewma_ms"); err != nil {
-		return err
-	}
-	if snap.TTFTSamples, err = optionalInt64(m, "ttft_samples"); err != nil {
-		return err
-	}
 	if snap.LastTransitionAtMs, err = optionalInt64(m, "last_transition_at_ms"); err != nil {
 		return err
 	}
@@ -190,11 +184,6 @@ func applySnapshotFields(snap *ScopeSnapshot, fields []interface{}, nowMs int64)
 			return errors.New("snapshot provider control is incomplete")
 		}
 	}
-	_, hasTTFT := m["ttft_ewma_ms"]
-	_, hasTTFTSamples := m["ttft_samples"]
-	if hasTTFT != hasTTFTSamples || (snap.TTFTSamples > 0 && !hasTTFT) {
-		return errors.New("snapshot TTFT fields are inconsistent")
-	}
 	return nil
 }
 
@@ -253,18 +242,11 @@ func parseSnapshotManyReply(in SnapshotManyInput, reply []interface{}) (Snapshot
 	if !ok || revision != in.RoutingBalanceRevision {
 		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot routing balance revision is invalid"), "breakerstore snapshot many")
 	}
-	targetMs, ok := redisInt64(reply[3])
-	if !ok || targetMs <= 0 {
-		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot TTFT target is invalid"), "breakerstore snapshot many")
-	}
-	ttftWeight, ok := redisFloat64(reply[4])
-	if !ok || ttftWeight < 0 || ttftWeight > 1 {
-		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot TTFT weight is invalid"), "breakerstore snapshot many")
-	}
-	weights := make([]int, 4)
+	// objective_v1 五项权重（成本 / 并发 / TTFT / 错误率 / Priority），之和必须为 100。
+	weights := make([]int, 5)
 	weightSum := 0
 	for index := range weights {
-		value, valid := redisInt64(reply[5+index])
+		value, valid := redisInt64(reply[3+index])
 		if !valid || value < 0 || value > 100 {
 			return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot objective routing weight is invalid"), "breakerstore snapshot many")
 		}
@@ -274,16 +256,36 @@ func parseSnapshotManyReply(in SnapshotManyInput, reply []interface{}) (Snapshot
 	if weightSum != 100 {
 		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot objective routing weights do not sum to 100"), "breakerstore snapshot many")
 	}
-	breakerEnabled, ok := redisInt64(reply[9])
+	ttftWindowMs, ok := redisInt64(reply[8])
+	if !ok || ttftWindowMs <= 0 {
+		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot TTFT window is invalid"), "breakerstore snapshot many")
+	}
+	ttftPenaltyUnitMs, ok := redisInt64(reply[9])
+	if !ok || ttftPenaltyUnitMs <= 0 {
+		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot TTFT penalty unit is invalid"), "breakerstore snapshot many")
+	}
+	ttftPenaltyPoints, ok := redisFloat64(reply[10])
+	if !ok || ttftPenaltyPoints <= 0 || ttftPenaltyPoints > 100 {
+		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot TTFT penalty points are invalid"), "breakerstore snapshot many")
+	}
+	errorWindowMs, ok := redisInt64(reply[11])
+	if !ok || errorWindowMs <= 0 {
+		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot error window is invalid"), "breakerstore snapshot many")
+	}
+	errorPenaltyPoints, ok := redisFloat64(reply[12])
+	if !ok || errorPenaltyPoints <= 0 || errorPenaltyPoints > 100 {
+		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot error penalty points are invalid"), "breakerstore snapshot many")
+	}
+	breakerEnabled, ok := redisInt64(reply[13])
 	if !ok || (breakerEnabled != 0 && breakerEnabled != 1) {
 		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot breaker enabled flag is invalid"), "breakerstore snapshot many")
 	}
-	rows, ok := reply[10].([]interface{})
+	rows, ok := reply[14].([]interface{})
 	if !ok || len(rows) != len(in.Candidates) {
 		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot candidate rows are invalid"), "breakerstore snapshot many")
 	}
-	controlProofs, ok := reply[11].([]interface{})
-	if !ok || len(controlProofs) != 4 {
+	controlProofs, ok := reply[15].([]interface{})
+	if !ok || len(controlProofs) != 3 {
 		return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot control proofs are invalid"), "breakerstore snapshot many")
 	}
 	for _, proof := range controlProofs {
@@ -291,40 +293,33 @@ func parseSnapshotManyReply(in SnapshotManyInput, reply []interface{}) (Snapshot
 			return SnapshotManyResult{}, snapshotManyRejected(string(ReasonRuntimeSyncRequired))
 		}
 	}
-	costWeight, minimumRoutingFactor := float64(0), float64(0.05)
-	if len(reply) >= 14 {
-		if value, valid := redisFloat64(reply[12]); valid {
-			costWeight = value
-		} else {
-			return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot legacy cost weight is invalid"), "breakerstore snapshot many")
-		}
-		if value, valid := redisFloat64(reply[13]); valid && value > 0 && value <= 1 {
-			minimumRoutingFactor = value
-		} else {
-			return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot legacy minimum routing factor is invalid"), "breakerstore snapshot many")
-		}
-	}
 
 	result := SnapshotManyResult{
 		Candidates:                make([]CandidateSnapshot, 0, len(rows)),
 		IntegrityRevision:         in.IntegrityRevision,
-		ChannelRateRevision:       in.ChannelRateRevision,
 		GlobalConcurrencyRevision: in.GlobalConcurrencyRevision,
 		CircuitBreakerRevision:    in.CircuitBreakerRevision,
 		RoutingBalance: RoutingBalanceSnapshot{
-			Revision: revision, TTFTTargetMs: targetMs, TTFTWeight: ttftWeight,
-			EconomicWeightPct: weights[0], HealthWeightPct: weights[1],
-			CapacityWeightPct: weights[2], PriorityWeightPct: weights[3],
-			CostWeight: costWeight, MinimumRoutingFactor: minimumRoutingFactor,
+			Revision:                     revision,
+			CostWeightPct:                weights[0],
+			ConcurrencyWeightPct:         weights[1],
+			TTFTWeightPct:                weights[2],
+			ErrorRateWeightPct:           weights[3],
+			PriorityWeightPct:            weights[4],
+			TTFTWindowMs:                 ttftWindowMs,
+			TTFTPenaltyUnitMs:            ttftPenaltyUnitMs,
+			TTFTPenaltyPointsPerUnit:     ttftPenaltyPoints,
+			ErrorWindowMs:                errorWindowMs,
+			ErrorPenaltyPointsPerPercent: errorPenaltyPoints,
 		},
 	}
 	for index, raw := range rows {
 		row, ok := raw.([]interface{})
-		if !ok || len(row) != 15 {
+		if !ok || len(row) != 9 {
 			return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot candidate row shape is invalid"), "breakerstore snapshot many")
 		}
-		values := make([]int64, 10)
-		for i, source := range []int{0, 1, 3, 4, 5, 6, 7, 8, 9, 10} {
+		values := make([]int64, 4)
+		for i, source := range []int{0, 1, 3, 4} {
 			values[i], ok = redisInt64(row[source])
 			if !ok || values[i] < 0 {
 				return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot capacity fact is invalid"), "breakerstore snapshot many")
@@ -337,15 +332,15 @@ func parseSnapshotManyReply(in SnapshotManyInput, reply []interface{}) (Snapshot
 		if !ok || permissionState == "" {
 			return SnapshotManyResult{}, storeUnavailable(errors.New("snapshot permission state is invalid"), "breakerstore snapshot many")
 		}
-		if !validSnapshotControlProof([]interface{}{row[13], row[14]}) {
+		if !validSnapshotControlProof([]interface{}{row[7], row[8]}) {
 			return SnapshotManyResult{}, snapshotManyRejected(string(ReasonRuntimeSyncRequired))
 		}
 		candidate := in.Candidates[index]
-		origin, err := parseSnapshotRow(ScopeProvider, candidate.ProviderID, row[11])
+		origin, err := parseSnapshotRow(ScopeProvider, candidate.ProviderID, row[5])
 		if err != nil {
 			return SnapshotManyResult{}, storeUnavailable(err, "breakerstore snapshot many origin row")
 		}
-		channel, err := parseSnapshotRow(ScopeChannel, candidate.ChannelID, row[12])
+		channel, err := parseSnapshotRow(ScopeChannel, candidate.ChannelID, row[6])
 		if err != nil {
 			return SnapshotManyResult{}, storeUnavailable(err, "breakerstore snapshot many channel row")
 		}
@@ -359,9 +354,6 @@ func parseSnapshotManyReply(in SnapshotManyInput, reply []interface{}) (Snapshot
 		result.Candidates = append(result.Candidates, CandidateSnapshot{
 			Candidate: candidate, Status: status, Provider: origin, Channel: channel,
 			Concurrency:         CapacityUsage{Used: values[2], Limit: values[3]},
-			RPM:                 CapacityUsage{Used: values[4], Limit: values[5]},
-			RPD:                 CapacityUsage{Used: values[6], Limit: values[7]},
-			TPM:                 CapacityUsage{Used: values[8], Limit: values[9]},
 			CooldownRemainingMs: values[0], ModelPermissionPaused: values[1] == 1,
 			ModelPermissionRecheckState: permissionState,
 		})
@@ -467,18 +459,6 @@ func optionalInt64(fields map[string]string, name string) (int64, error) {
 	}
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || parsed < 0 {
-		return 0, fmt.Errorf("snapshot field %q is invalid", name)
-	}
-	return parsed, nil
-}
-
-func optionalFloat64(fields map[string]string, name string) (float64, error) {
-	value, ok := fields[name]
-	if !ok || value == "" {
-		return 0, nil
-	}
-	parsed, err := strconv.ParseFloat(value, 64)
-	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) || parsed < 0 {
 		return 0, fmt.Errorf("snapshot field %q is invalid", name)
 	}
 	return parsed, nil

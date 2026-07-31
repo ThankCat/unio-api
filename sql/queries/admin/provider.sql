@@ -215,7 +215,7 @@ tps AS (
         SUM(u.output_tokens_total)::float8 / NULLIF(SUM(
             CASE
                 WHEN a.completed_at IS NOT NULL
-                THEN EXTRACT(EPOCH FROM (a.completed_at - COALESCE(a.response_started_at, a.started_at)))
+                THEN EXTRACT(EPOCH FROM (a.completed_at - COALESCE(a.gateway_first_token_at, a.started_at)))
             END
         ), 0),
         0

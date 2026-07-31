@@ -137,7 +137,7 @@ type rangeWindowDTO struct {
 	To   string `json:"to"`
 }
 
-type ttftStatsDTO struct {
+type gatewayTtftStatsDTO struct {
 	Avg      float64 `json:"avg"`
 	P50      float64 `json:"p50"`
 	P90      float64 `json:"p90"`
@@ -202,7 +202,7 @@ type radarDTO struct {
 	Range             rangeWindowDTO            `json:"range"`
 	Requests          radarRequestsDTO          `json:"requests"`
 	Latency           adminhttp.LatencyStatsDTO `json:"latency"`
-	Ttft              ttftStatsDTO              `json:"ttft"`
+	GatewayTtft       gatewayTtftStatsDTO       `json:"gateway_ttft"`
 	TPS               float64                   `json:"tps"`
 	Tokens            dashboardTokensDTO        `json:"tokens"`
 	Cache             cacheStatsDTO             `json:"cache"`
@@ -258,10 +258,10 @@ type topErrorsDTO struct {
 }
 
 type performancePointDTO struct {
-	Bucket     string  `json:"bucket"`
-	LatencyP95 float64 `json:"latency_p95"`
-	TtftP95    float64 `json:"ttft_p95"`
-	TPS        float64 `json:"tps"`
+	Bucket         string  `json:"bucket"`
+	LatencyP95     float64 `json:"latency_p95"`
+	GatewayTtftP95 float64 `json:"gateway_ttft_p95"`
+	TPS            float64 `json:"tps"`
 }
 
 type performanceSeriesDTO struct {
@@ -374,10 +374,10 @@ func (h *dashboardHandler) performanceTimeseries(w http.ResponseWriter, r *http.
 	out := make([]performancePointDTO, 0, len(points))
 	for _, p := range points {
 		out = append(out, performancePointDTO{
-			Bucket:     adminhttp.RFC3339(p.Bucket),
-			LatencyP95: p.LatencyP95,
-			TtftP95:    p.TtftP95,
-			TPS:        p.TPS,
+			Bucket:         adminhttp.RFC3339(p.Bucket),
+			LatencyP95:     p.LatencyP95,
+			GatewayTtftP95: p.GatewayTtftP95,
+			TPS:            p.TPS,
 		})
 	}
 	adminhttp.WriteData(w, http.StatusOK, performanceSeriesDTO{Interval: interval, From: adminhttp.RFC3339(from), To: adminhttp.RFC3339(to), Points: out})
@@ -404,15 +404,15 @@ func toRadarDTO(r dashboard.RadarReport) radarDTO {
 			Sample:   r.Latency.Sample,
 			Coverage: r.Latency.Coverage,
 		},
-		Ttft: ttftStatsDTO{
-			Avg:      r.Ttft.Avg,
-			P50:      r.Ttft.P50,
-			P90:      r.Ttft.P90,
-			P95:      r.Ttft.P95,
-			P99:      r.Ttft.P99,
-			Sample:   r.Ttft.Sample,
-			Coverage: r.Ttft.Coverage,
-			HasData:  r.Ttft.HasData,
+		GatewayTtft: gatewayTtftStatsDTO{
+			Avg:      r.GatewayTtft.Avg,
+			P50:      r.GatewayTtft.P50,
+			P90:      r.GatewayTtft.P90,
+			P95:      r.GatewayTtft.P95,
+			P99:      r.GatewayTtft.P99,
+			Sample:   r.GatewayTtft.Sample,
+			Coverage: r.GatewayTtft.Coverage,
+			HasData:  r.GatewayTtft.HasData,
 		},
 		TPS:    r.TPS,
 		Tokens: dashboardTokensDTO{Input: r.Tokens.Input, Output: r.Tokens.Output, Total: r.Tokens.Total},

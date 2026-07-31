@@ -12,7 +12,6 @@ import (
 // RuntimeControlRestorer 是 Admin/Worker 启动恢复关键 setting control 所需的最小能力。
 type RuntimeControlRestorer interface {
 	RouteRateLimitControl() breakerstore.ControlTarget
-	ChannelRateLimitControl() breakerstore.ControlTarget
 	GlobalConcurrencyControl() breakerstore.ControlTarget
 	SettingControl(settingKey string) breakerstore.ControlTarget
 	RestoreMissingControl(ctx context.Context, target breakerstore.ControlTarget, revision int64, payload string) (bool, error)
@@ -22,7 +21,6 @@ type RuntimeControlRestorer interface {
 
 var runtimeControlSettingKeys = [...]string{
 	GatewayRouteRateLimitDefaultsKey,
-	GatewayChannelRateLimitDefaultsKey,
 	GatewayConcurrencyDefaultsKey,
 	GatewayCircuitBreakerKey,
 	GatewayRoutingBalanceKey,
@@ -109,7 +107,7 @@ func restoreCriticalRuntimeControlsObserved(
 	return nil
 }
 
-// CanonicalRuntimeSettingPayload 严格解码并规范化五个 P4 关键 setting，供 durable reconciler
+// CanonicalRuntimeSettingPayload 严格解码并规范化四个关键 setting，供 durable reconciler
 // 按 PostgreSQL 当前事实重建 Redis control。其它 key 一律拒绝。
 func CanonicalRuntimeSettingPayload(key string, raw json.RawMessage) (json.RawMessage, error) {
 	return canonicalRuntimeSetting(key, raw)

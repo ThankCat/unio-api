@@ -18,9 +18,8 @@ import (
 const runtimeControlFailureLogInterval = 30 * time.Second
 
 var runtimeControlMetricTargets = [...]string{
-	"channel_admission",
+	"channel_capacity",
 	"route_rate",
-	"channel_rate",
 	"global_concurrency",
 	"circuit_breaker",
 	"routing_balance",
@@ -311,14 +310,14 @@ func (t *runtimeControlTelemetry) channelControlReconciled(channelID, revision i
 		return
 	}
 	if t.metrics != nil {
-		t.metrics.SetRuntimeControlPending("channel_admission", false, 0)
+		t.metrics.SetRuntimeControlPending("channel_capacity", false, 0)
 		if restored {
-			t.metrics.IncRuntimeControlOperation("channel_admission", "reconcile", "restored")
-			t.metrics.IncRuntimeControlRecovery("channel_admission", "restored")
+			t.metrics.IncRuntimeControlOperation("channel_capacity", "reconcile", "restored")
+			t.metrics.IncRuntimeControlRecovery("channel_capacity", "restored")
 		}
 	}
 	if restored && t.logger != nil {
-		t.logger.Info("channel admission control restored",
+		t.logger.Info("channel capacity control restored",
 			zap.Int64("channel_id", channelID),
 			zap.Int64("revision", revision),
 		)
@@ -364,8 +363,8 @@ func (t *runtimeControlTelemetry) age(createdAt time.Time, valid bool) time.Dura
 
 func runtimeControlMetricTarget(operation sqlc.RuntimeControlOperation) string {
 	switch operation.Kind {
-	case runtimecontrol.KindChannelAdmissionLimits:
-		return "channel_admission"
+	case runtimecontrol.KindChannelCapacity:
+		return "channel_capacity"
 	case runtimecontrol.KindAppSetting:
 		if operation.SettingKey.Valid {
 			return runtimeControlMetricTargetForSetting(operation.SettingKey.String)
@@ -378,8 +377,6 @@ func runtimeControlMetricTargetForSetting(settingKey string) string {
 	switch settingKey {
 	case appsettings.GatewayRouteRateLimitDefaultsKey:
 		return "route_rate"
-	case appsettings.GatewayChannelRateLimitDefaultsKey:
-		return "channel_rate"
 	case appsettings.GatewayConcurrencyDefaultsKey:
 		return "global_concurrency"
 	case appsettings.GatewayCircuitBreakerKey:

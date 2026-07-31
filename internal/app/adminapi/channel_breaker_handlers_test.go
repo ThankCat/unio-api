@@ -56,12 +56,10 @@ func (f *fakeChannelBreaker) Reset(_ context.Context, scope breakerstore.Scope, 
 	f.snapshot.ConsecutiveFailures = 0
 	f.snapshot.ErrorRate = 0
 	f.snapshot.SampleCount = 0
-	f.snapshot.TTFTEWMAMs = 0
-	f.snapshot.TTFTSamples = 0
 	return 9, nil
 }
 
-func (f *fakeChannelBreaker) ChannelAdmissionControl(int64) breakerstore.ControlTarget {
+func (f *fakeChannelBreaker) ChannelCapacityControl(int64) breakerstore.ControlTarget {
 	return breakerstore.ControlTarget{}
 }
 
@@ -84,7 +82,7 @@ func TestChannelBreakerRuntimeAndReset(t *testing.T) {
 	channelFacts := channel.Channel{
 		ID: 17, ProviderID: 23,
 		OriginRevision: 4, ProviderStatusRevision: 5,
-		ConfigRevision: 6, AdmissionLimitsRevision: 7,
+		ConfigRevision: 6, CapacityRevision: 7,
 	}
 	breaker := &fakeChannelBreaker{snapshot: breakerstore.ScopeSnapshot{
 		Scope:                 breakerstore.ScopeChannel,
@@ -98,15 +96,13 @@ func TestChannelBreakerRuntimeAndReset(t *testing.T) {
 		ConsecutiveFailures:   3,
 		ErrorRate:             0.6,
 		SampleCount:           20,
-		TTFTEWMAMs:            321.5,
-		TTFTSamples:           4,
 		ProviderID:            23,
 		OriginRevision:        4,
 		StatusRevision:        5,
 		ChannelConfigRevision: 6,
 	}, control: breakerstore.ControlSnapshot{
 		ActiveRevision: 7,
-		ActivePayload:  `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`,
+		ActivePayload:  `{"concurrency":null}`,
 		SyncState:      "active",
 	}}
 	handler := newChannelBreakerRouter(t, adminapi.RouterDeps{
@@ -120,18 +116,18 @@ func TestChannelBreakerRuntimeAndReset(t *testing.T) {
 	}
 	var runtimeResponse struct {
 		Data struct {
-			ID                             int64  `json:"id"`
-			ProviderID                     int64  `json:"provider_id"`
-			OriginRevision                 int64  `json:"origin_revision"`
-			ProviderStatusRevision         int64  `json:"provider_status_revision"`
-			ConfigRevision                 int64  `json:"config_revision"`
-			AdmissionLimitsRevision        int64  `json:"admission_limits_revision"`
-			RuntimeSyncState               string `json:"runtime_sync_state"`
-			RuntimeProviderID              *int64 `json:"runtime_provider_id"`
-			RuntimeConfigRevision          *int64 `json:"runtime_config_revision"`
-			RuntimeAdmissionActiveRevision *int64 `json:"runtime_admission_active_revision"`
-			AdmissionPayloadMatches        bool   `json:"admission_payload_matches"`
-			Breaker                        *struct {
+			ID                            int64  `json:"id"`
+			ProviderID                    int64  `json:"provider_id"`
+			OriginRevision                int64  `json:"origin_revision"`
+			ProviderStatusRevision        int64  `json:"provider_status_revision"`
+			ConfigRevision                int64  `json:"config_revision"`
+			CapacityRevision              int64  `json:"capacity_revision"`
+			RuntimeSyncState              string `json:"runtime_sync_state"`
+			RuntimeProviderID             *int64 `json:"runtime_provider_id"`
+			RuntimeConfigRevision         *int64 `json:"runtime_config_revision"`
+			RuntimeCapacityActiveRevision *int64 `json:"runtime_capacity_active_revision"`
+			CapacityPayloadMatches        bool   `json:"capacity_payload_matches"`
+			Breaker                       *struct {
 				Scope               string  `json:"scope"`
 				ID                  int64   `json:"id"`
 				Exists              bool    `json:"exists"`
@@ -153,11 +149,11 @@ func TestChannelBreakerRuntimeAndReset(t *testing.T) {
 		t.Fatalf("decode runtime response: %v", err)
 	}
 	got := runtimeResponse.Data
-	if got.ID != 17 || got.ProviderID != 23 || got.ConfigRevision != 6 || got.AdmissionLimitsRevision != 7 || got.RuntimeSyncState != "active" {
+	if got.ID != 17 || got.ProviderID != 23 || got.ConfigRevision != 6 || got.CapacityRevision != 7 || got.RuntimeSyncState != "active" {
 		t.Fatalf("unexpected runtime identity/state: %+v", got)
 	}
 	if got.RuntimeProviderID == nil || *got.RuntimeProviderID != 23 || got.RuntimeConfigRevision == nil || *got.RuntimeConfigRevision != 6 ||
-		got.RuntimeAdmissionActiveRevision == nil || *got.RuntimeAdmissionActiveRevision != 7 || !got.AdmissionPayloadMatches {
+		got.RuntimeCapacityActiveRevision == nil || *got.RuntimeCapacityActiveRevision != 7 || !got.CapacityPayloadMatches {
 		t.Fatalf("unexpected runtime revisions: %+v", got)
 	}
 	if got.Breaker == nil || got.Breaker.Scope != "channel" || got.Breaker.ID != 17 || !got.Breaker.Exists || got.Breaker.State != "open" {
@@ -166,7 +162,8 @@ func TestChannelBreakerRuntimeAndReset(t *testing.T) {
 	if got.Breaker.OpenRemainingMs != 12_000 || got.Breaker.OpenLevel != 2 || got.Breaker.EligibleSuccesses != 8 || got.Breaker.EligibleFailures != 12 || got.Breaker.ConsecutiveFailures != 3 {
 		t.Fatalf("unexpected runtime breaker counters: %+v", got)
 	}
-	if got.Breaker.ErrorRate != 0.6 || got.Breaker.SampleCount != 20 || got.Breaker.TTFTEWMAMs != 321.5 || got.Breaker.TTFTSamples != 4 || got.Breaker.TTFTSampleSource != "stream_only" {
+	// TTFT 已从 breaker 快照移除：评分样本由 30 分钟分钟桶承担（§12），breaker 只保留成功/失败计数。
+	if got.Breaker.ErrorRate != 0.6 || got.Breaker.SampleCount != 20 {
 		t.Fatalf("unexpected runtime samples: %+v", got)
 	}
 	if breaker.snapshotCalls != 1 || breaker.snapshotScope != breakerstore.ScopeChannel || breaker.snapshotID != 17 {
@@ -187,11 +184,8 @@ func TestChannelBreakerRuntimeAndReset(t *testing.T) {
 		Data struct {
 			RuntimeSyncState string `json:"runtime_sync_state"`
 			Breaker          *struct {
-				State            string  `json:"state"`
-				SampleCount      int64   `json:"sample_count"`
-				TTFTEWMAMs       float64 `json:"ttft_ewma_ms"`
-				TTFTSamples      int64   `json:"ttft_samples"`
-				TTFTSampleSource string  `json:"ttft_sample_source"`
+				State       string `json:"state"`
+				SampleCount int64  `json:"sample_count"`
 			} `json:"breaker"`
 		} `json:"data"`
 	}
@@ -199,9 +193,7 @@ func TestChannelBreakerRuntimeAndReset(t *testing.T) {
 		t.Fatalf("decode reset response: %v", err)
 	}
 	if resetResponse.Data.RuntimeSyncState != "active" || resetResponse.Data.Breaker == nil ||
-		resetResponse.Data.Breaker.State != "closed" || resetResponse.Data.Breaker.SampleCount != 0 ||
-		resetResponse.Data.Breaker.TTFTEWMAMs != 0 || resetResponse.Data.Breaker.TTFTSamples != 0 ||
-		resetResponse.Data.Breaker.TTFTSampleSource != "stream_only" {
+		resetResponse.Data.Breaker.State != "closed" || resetResponse.Data.Breaker.SampleCount != 0 {
 		t.Fatalf("reset must return closed/no-sample state: %+v", resetResponse.Data)
 	}
 }
@@ -256,11 +248,11 @@ func TestChannelRuntimeDoesNotExposeStaleBreakerSamples(t *testing.T) {
 		snapshot: breakerstore.ScopeSnapshot{
 			Scope: breakerstore.ScopeChannel, ID: 17, Exists: true, State: breakerstore.StateOpen,
 			ProviderID: 23, OriginRevision: 4, StatusRevision: 5,
-			ChannelConfigRevision: 5, TTFTSamples: 9, TTFTEWMAMs: 999,
+			ChannelConfigRevision: 5, SampleCount: 9, ErrorRate: 0.5,
 		},
 		control: breakerstore.ControlSnapshot{
 			ActiveRevision: 7,
-			ActivePayload:  `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`,
+			ActivePayload:  `{"concurrency":null}`,
 			SyncState:      "active",
 		},
 	}
@@ -268,7 +260,7 @@ func TestChannelRuntimeDoesNotExposeStaleBreakerSamples(t *testing.T) {
 		ChannelService: &fakeChannelService{getOut: channel.Channel{
 			ID: 17, ProviderID: 23,
 			OriginRevision: 4, ProviderStatusRevision: 5,
-			ConfigRevision: 6, AdmissionLimitsRevision: 7,
+			ConfigRevision: 6, CapacityRevision: 7,
 		}},
 		ChannelBreaker: breaker,
 	})
@@ -299,12 +291,12 @@ func TestChannelRuntimeTreatsMissingStateAsNoSample(t *testing.T) {
 		snapshot: breakerstore.ScopeSnapshot{Scope: breakerstore.ScopeChannel, ID: 17},
 		control: breakerstore.ControlSnapshot{
 			ActiveRevision: 7,
-			ActivePayload:  `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`,
+			ActivePayload:  `{"concurrency":null}`,
 			SyncState:      "active",
 		},
 	}
 	handler := newChannelBreakerRouter(t, adminapi.RouterDeps{
-		ChannelService: &fakeChannelService{getOut: channel.Channel{ID: 17, AdmissionLimitsRevision: 7}},
+		ChannelService: &fakeChannelService{getOut: channel.Channel{ID: 17, CapacityRevision: 7}},
 		ChannelBreaker: breaker,
 	})
 	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/channels/17/ops/runtime", "", true)

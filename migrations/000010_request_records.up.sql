@@ -34,7 +34,7 @@ CREATE TABLE public.request_records (
     error_message text,
     internal_error_detail text,
     delivery_status text DEFAULT 'not_started'::text NOT NULL,
-    response_started_at timestamp with time zone,
+    gateway_first_token_at timestamp with time zone,
     response_completed_at timestamp with time zone,
     started_at timestamp with time zone NOT NULL,
     completed_at timestamp with time zone,

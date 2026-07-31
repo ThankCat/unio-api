@@ -28,7 +28,7 @@ redis.call(
   now
 )
 redis.call('HDEL', state_key, 'half_open_permit_id', 'half_open_lease_until_ms', 'open_until_ms')
-redis.call('HDEL', state_key, 'last_failure_at_ms', 'last_failure_category', 'ttft_ewma_ms', 'ttft_samples')
+redis.call('HDEL', state_key, 'last_failure_at_ms', 'last_failure_category')
 for i = 2, #KEYS do
   redis.call('DEL', KEYS[i])
 end

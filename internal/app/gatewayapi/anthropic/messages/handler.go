@@ -206,9 +206,12 @@ func mapMessageServiceError(req MessageRequest, err error) (status int, errorTyp
 		// 402：与限流 429 / rate_limit_error 区分，避免客户端把余额不足当成限速重试。
 		// Anthropic 无官方 billing type，用 invalid_request_error + 余额文案。
 		return http.StatusPaymentRequired, "invalid_request_error", "Your credit balance is too low to access the API. Please go to Plans & Billing to upgrade or purchase credits."
-	case failure.CodeOf(err) == failure.CodeRateLimitExceeded, failure.CodeOf(err) == failure.CodeGatewayChannelRateLimited, failure.CodeOf(err) == failure.CodeGatewayChannelConcurrencyLimited:
-		// Key 级 TPM 或渠道级 RPM/TPM/RPD 限流命中（P2-8）：统一 429，不泄露具体维度阈值。
+	case failure.CodeOf(err) == failure.CodeRateLimitExceeded, failure.CodeOf(err) == failure.CodeGatewayChannelRateLimited:
+		// Key 级 TPM 或上游真实 429 冷却命中：统一 429，不泄露具体维度阈值。
 		return http.StatusTooManyRequests, "rate_limit_error", "You have exceeded the rate limit. Please slow down and retry later."
+	case failure.CodeOf(err) == failure.CodeRoutingChannelCapacityExhausted:
+		// 全池并发满且短等后仍满：容量问题走 503（§9.5），不能伪装成上游限流。
+		return http.StatusServiceUnavailable, "api_error", "All upstream channels are at capacity. Please retry shortly."
 	case isMessageRequestAdmissionUnavailable(err):
 		return http.StatusServiceUnavailable, "api_error", "The service is temporarily unavailable."
 	case failure.CodeOf(err) == failure.CodeAdapterRequestUnsupported:

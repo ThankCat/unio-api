@@ -4,8 +4,6 @@ import (
 	"context"
 	"strconv"
 	"testing"
-
-	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 func limitOverride(value int64) *int64 { return &value }
@@ -277,138 +275,13 @@ func TestRequestAdmissionControlFailuresLeaveNoResources(t *testing.T) {
 	}
 }
 
-func TestAttemptAndSnapshotUseChannelRateIndependentlyFromRouteRate(t *testing.T) {
-	s, _, _ := newTestStore(t)
-	const channelID int64 = 181
-	const providerID int64 = 1810
-	seedAttemptControls(t, s, testConfig(), channelID, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
-
-	code, _, err := s.PrepareControl(
-		context.Background(), s.RouteRateLimitControl(), "route-rate-pending-during-attempt",
-		testRouteRateRevision, testRouteRateRevision+1, `{"rpm":1,"tpm":10,"rpd":10}`,
-	)
-	if err != nil || code != ControlPrepared {
-		t.Fatalf("prepare route rate: code=%s err=%v", code, err)
-	}
-	first, err := acquireAttempt(t, s, authoritativeAttemptInput("route-pending-attempt", providerID, channelID))
-	if err != nil || first.Mode != AdmissionPermit {
-		t.Fatalf("route pending must not block attempt: result=%+v err=%v", first, err)
-	}
-	if err := s.Abort(context.Background(), *first.Permit); err != nil {
-		t.Fatalf("abort route-pending attempt: %v", err)
-	}
-
-	code, _, err = s.PrepareControl(
-		context.Background(), s.ChannelRateLimitControl(), "channel-rate-pending-during-attempt",
-		testChannelRateRevision, testChannelRateRevision+1, `{"rpm":3,"tpm":30,"rpd":30}`,
-	)
-	if err != nil || code != ControlPrepared {
-		t.Fatalf("prepare channel rate: code=%s err=%v", code, err)
-	}
-	secondInput := authoritativeAttemptInput("channel-pending-attempt", providerID, channelID)
-	second, err := acquireAttempt(t, s, secondInput)
-	if err != nil || second.Mode != AdmissionDenied || second.Reason != ReasonRuntimeSyncPending {
-		t.Fatalf("channel pending must block attempt: result=%+v err=%v", second, err)
-	}
-
-	_, err = s.SnapshotMany(context.Background(), SnapshotManyInput{
-		IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
-		ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1,
-		CircuitBreakerRevision: 1, RoutingBalanceRevision: 1, ModelID: 100,
-		Candidates: []SnapshotCandidateInput{{
-			ProviderID: providerID, ChannelID: channelID,
-			OriginRevision: 1, ProviderStatusRevision: 1,
-			ChannelConfigRevision: 1, ChannelAdmissionRevision: 1,
-		}},
-	})
-	if failure.CodeOf(err) != failure.CodeGatewayRuntimeSyncRequired {
-		t.Fatalf("channel pending must block snapshot: code=%q err=%v", failure.CodeOf(err), err)
-	}
-}
-
 func TestAttemptReadsAuthoritativeLimitsAndFailsClosedWithoutPartialWrites(t *testing.T) {
-	t.Run("channel default RPM cannot be bypassed by route defaults", func(t *testing.T) {
-		s, _, _ := newTestStore(t)
-		cfg := testConfig()
-		seedAttemptIntegrity(t, s)
-		ensureTestControlAtRevision(t, s, s.RouteRateLimitControl(), testRouteRateRevision, `{"rpm":99,"tpm":9900,"rpd":990}`)
-		ensureTestControlAtRevision(t, s, s.ChannelRateLimitControl(), testChannelRateRevision, `{"rpm":1,"tpm":0,"rpd":0}`)
-		ensureTestControl(t, s, s.GlobalConcurrencyControl(), `{"key_limit":0,"channel_limit":0}`)
-		ensureTestControl(t, s, s.SettingControl("gateway.circuit_breaker"), testCircuitBreakerPayload(cfg))
-		ensureTestControl(t, s, s.ChannelAdmissionControl(101), `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
-		first, err := acquireAttempt(t, s, authoritativeAttemptInput("channel-default-rpm-1", 1010, 101))
-		if err != nil || first.Mode != AdmissionPermit {
-			t.Fatalf("first acquire want permit, got %+v err=%v", first, err)
-		}
-		second, err := acquireAttempt(t, s, authoritativeAttemptInput("channel-default-rpm-2", 1010, 101))
-		if err != nil || second.Mode != AdmissionDenied || second.Reason != ReasonRateLimited {
-			t.Fatalf("second acquire must enforce Redis channel-default RPM, got %+v err=%v", second, err)
-		}
-	})
-
-	t.Run("explicit channel RPM zero overrides nonzero channel default", func(t *testing.T) {
-		s, _, _ := newTestStore(t)
-		cfg := testConfig()
-		const channelID int64 = 102
-		const providerID int64 = 1020
-
-		seedAttemptIntegrity(t, s)
-		ensureTestControlAtRevision(t, s, s.RouteRateLimitControl(), testRouteRateRevision, `{"rpm":99,"tpm":9900,"rpd":990}`)
-		ensureTestControlAtRevision(t, s, s.ChannelRateLimitControl(), testChannelRateRevision, `{"rpm":1,"tpm":0,"rpd":0}`)
-		ensureTestControl(t, s, s.GlobalConcurrencyControl(), `{"key_limit":0,"channel_limit":0}`)
-		ensureTestControl(t, s, s.SettingControl("gateway.circuit_breaker"), testCircuitBreakerPayload(cfg))
-		ensureTestControl(t, s, s.SettingControl("gateway.routing_balance"), testRoutingBalancePayload)
-		ensureTestControl(t, s, s.ChannelAdmissionControl(channelID), `{"rpm":0,"rpd":null,"tpm":null,"concurrency":null}`)
-		if created, err := s.InitProviderControl(context.Background(), providerID, 1, 1, "enabled"); err != nil || !created {
-			t.Fatalf("init origin: created=%v err=%v", created, err)
-		}
-
-		acquireUnlimited := func(id string) AttemptAdmission {
-			t.Helper()
-			in := authoritativeAttemptInput(id, providerID, channelID)
-			in.EnforceProviderControl = true
-			admission, err := acquireAttempt(t, s, in)
-			if err != nil || admission.Mode != AdmissionPermit {
-				t.Fatalf("acquire %s must honor explicit unlimited RPM, got %+v err=%v", id, admission, err)
-			}
-			return admission
-		}
-
-		first := acquireUnlimited("channel-explicit-unlimited-rpm-1")
-		second := acquireUnlimited("channel-explicit-unlimited-rpm-2")
-		snapshot, err := s.SnapshotMany(context.Background(), SnapshotManyInput{
-			IntegrityEpoch: testAttemptIntegrityEpoch, IntegrityRevision: testAttemptIntegrityRevision,
-			ChannelRateRevision: testChannelRateRevision, GlobalConcurrencyRevision: 1,
-			CircuitBreakerRevision: 1, RoutingBalanceRevision: 1, ModelID: 100,
-			Candidates: []SnapshotCandidateInput{{
-				ProviderID: providerID, ChannelID: channelID,
-				OriginRevision: 1, ProviderStatusRevision: 1,
-				ChannelConfigRevision: 1, ChannelAdmissionRevision: 1,
-			}},
-		})
-		if err != nil {
-			t.Fatalf("snapshot explicit unlimited channel: %v", err)
-		}
-		got := snapshot.Candidates[0]
-		if got.Status != CandidateSnapshotCurrent || got.RPM.Used != 2 || got.RPM.Limit != 0 {
-			t.Fatalf("snapshot must expose explicit unlimited RPM with two active permits, got status=%s rpm=%+v", got.Status, got.RPM)
-		}
-
-		if err := s.Abort(context.Background(), *first.Permit); err != nil {
-			t.Fatalf("abort first permit: %v", err)
-		}
-		if err := s.Abort(context.Background(), *second.Permit); err != nil {
-			t.Fatalf("abort second permit: %v", err)
-		}
-	})
-
 	malformedTargets := []struct {
 		name   string
 		target func(*Store, int64) string
 	}{
-		{name: "channel rate", target: func(s *Store, _ int64) string { return s.keys.admissionChannelRate() }},
 		{name: "global concurrency", target: func(s *Store, _ int64) string { return s.keys.admissionGlobalConcurrency() }},
-		{name: "channel admission", target: func(s *Store, channelID int64) string { return s.keys.admissionChannel(channelID) }},
+		{name: "channel capacity", target: func(s *Store, channelID int64) string { return s.keys.channelCapacity(channelID) }},
 		{name: "circuit breaker", target: func(s *Store, _ int64) string { return s.keys.runtimeControlSetting("gateway.circuit_breaker") }},
 	}
 	for index, tc := range malformedTargets {
@@ -417,7 +290,7 @@ func TestAttemptReadsAuthoritativeLimitsAndFailsClosedWithoutPartialWrites(t *te
 			cfg := testConfig()
 			channelID := int64(200 + index)
 			providerID := int64(2000 + index)
-			seedAttemptControls(t, s, cfg, channelID, `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}`)
+			seedAttemptControls(t, s, cfg, channelID, `{"concurrency":null}`)
 			if err := s.client.HSet(context.Background(), tc.target(s, channelID), "active_payload", `{"unknown":1}`).Err(); err != nil {
 				t.Fatal(err)
 			}

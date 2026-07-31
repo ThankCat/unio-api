@@ -1,5 +1,5 @@
--- runtime_control_operations 承载单目标可恢复发布：Channel 四维限额、四个关键 app_settings
--- （route_rate_limit_defaults / channel_rate_limit_defaults / concurrency_defaults /
+-- runtime_control_operations 承载单目标可恢复发布：Channel 并发容量、四个关键 app_settings
+-- （route_rate_limit_defaults / concurrency_defaults /
 -- circuit_breaker / routing_balance），以及维护专用
 -- 完整性 epoch（gateway.runtime_state_epoch）。Origin/Provider 批量围栏走 provider_routing_operations，
 -- 二者不合表（计划 §4.5）。普通状态机：preparing -> prepared -> db_committed -> committed；
@@ -215,11 +215,11 @@ CREATE TABLE public.runtime_control_operations (
     id bigint NOT NULL,
     -- token: 全局唯一安全随机操作令牌。--
     token text NOT NULL,
-    -- kind: 操作类型（channel_admission_limits | app_setting | runtime_state_epoch）。--
+    -- kind: 操作类型（channel_capacity | app_setting | runtime_state_epoch）。--
     kind text NOT NULL,
-    -- channel_id: channel_admission_limits 专用目标；其余 kind 为 NULL。--
+    -- channel_id: channel_capacity 专用目标；其余 kind 为 NULL。--
     channel_id bigint,
-    -- setting_key: app_setting/runtime_state_epoch 目标 key；channel_admission_limits 为 NULL。--
+    -- setting_key: app_setting/runtime_state_epoch 目标 key；channel_capacity 为 NULL。--
     setting_key text,
     -- current_revision: 当前业务 revision（普通发布 >=0，epoch 用作 epoch revision，bootstrap 为 0）。--
     current_revision bigint NOT NULL,
@@ -245,13 +245,13 @@ CREATE TABLE public.runtime_control_operations (
     completed_at timestamp with time zone,
     CONSTRAINT runtime_control_operations_token_check CHECK ((token <> ''::text)),
     CONSTRAINT runtime_control_operations_payload_hash_check CHECK ((payload_hash <> ''::text)),
-    CONSTRAINT runtime_control_operations_kind_check CHECK ((kind = ANY (ARRAY['channel_admission_limits'::text, 'app_setting'::text, 'runtime_state_epoch'::text]))),
+    CONSTRAINT runtime_control_operations_kind_check CHECK ((kind = ANY (ARRAY['channel_capacity'::text, 'app_setting'::text, 'runtime_state_epoch'::text]))),
     CONSTRAINT runtime_control_operations_state_check CHECK ((state = ANY (ARRAY['preparing'::text, 'prepared'::text, 'db_committed'::text, 'awaiting_release'::text, 'committed'::text, 'aborted'::text]))),
     CONSTRAINT runtime_control_operations_revision_check CHECK (((current_revision >= 0) AND (next_revision = current_revision + 1))),
     CONSTRAINT ck_runtime_control_operations_completed_at CHECK (((state = ANY (ARRAY['committed'::text, 'aborted'::text])) = (completed_at IS NOT NULL))),
     CONSTRAINT ck_runtime_control_operations_target CHECK ((
-        ((kind = 'channel_admission_limits'::text) AND (channel_id IS NOT NULL) AND (setting_key IS NULL))
-        OR ((kind = 'app_setting'::text) AND (channel_id IS NULL) AND (setting_key = ANY (ARRAY['gateway.route_rate_limit_defaults'::text, 'gateway.channel_rate_limit_defaults'::text, 'gateway.concurrency_defaults'::text, 'gateway.circuit_breaker'::text, 'gateway.routing_balance'::text])))
+        ((kind = 'channel_capacity'::text) AND (channel_id IS NOT NULL) AND (setting_key IS NULL))
+        OR ((kind = 'app_setting'::text) AND (channel_id IS NULL) AND (setting_key = ANY (ARRAY['gateway.route_rate_limit_defaults'::text, 'gateway.concurrency_defaults'::text, 'gateway.circuit_breaker'::text, 'gateway.routing_balance'::text])))
         OR ((kind = 'runtime_state_epoch'::text) AND (channel_id IS NULL) AND (setting_key = 'gateway.runtime_state_epoch'::text))
     )),
     CONSTRAINT ck_runtime_control_operations_epoch_cols CHECK ((

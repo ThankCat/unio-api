@@ -18,7 +18,7 @@ INSERT INTO request_attempts (
     error_code,
     error_message,
     internal_error_detail,
-    response_started_at,
+    gateway_first_token_at,
     final_usage_received,
     usage_mapping_version,
     started_at,
@@ -47,7 +47,7 @@ VALUES (
            sqlc.arg(error_code),
            sqlc.arg(error_message),
            sqlc.arg(internal_error_detail),
-           sqlc.arg(response_started_at),
+           sqlc.arg(gateway_first_token_at),
            sqlc.arg(final_usage_received),
            sqlc.arg(usage_mapping_version),
            sqlc.arg(started_at),
@@ -77,7 +77,8 @@ RETURNING
     error_code,
     error_message,
     internal_error_detail,
-    response_started_at,
+    upstream_timeout_phase,
+    gateway_first_token_at,
     final_usage_received,
     usage_mapping_version,
     started_at,
@@ -93,15 +94,18 @@ RETURNING
     upstream_endpoint,
     breaker_provider_disposition,
     breaker_channel_disposition,
+    ttft_scoring_sample,
+    error_scoring_sample,
+    error_scoring_failure,
     fault_party;
 
--- name: MarkRequestAttemptResponseStarted :one
--- MarkRequestAttemptResponseStarted 记录一次 attempt 的首次客户可见响应时间；重复调用保留第一次时间。
+-- name: MarkRequestAttemptGatewayFirstToken :one
+-- MarkRequestAttemptGatewayFirstToken 记录一次 attempt 的首次有效生成 Token 客户交付时间；重复调用保留第一次时间。
 WITH updated AS (
     UPDATE request_attempts
-        SET response_started_at = COALESCE(request_attempts.response_started_at, sqlc.arg(response_started_at))
+        SET gateway_first_token_at = COALESCE(request_attempts.gateway_first_token_at, sqlc.arg(gateway_first_token_at))
         WHERE request_attempts.id = sqlc.arg(attempt_id)
-          AND request_attempts.status IN ('running', 'succeeded')
+          AND request_attempts.gateway_first_token_at IS NULL
         RETURNING request_attempts.*
 )
 SELECT *
@@ -112,15 +116,17 @@ UNION ALL
 SELECT request_attempts.*
 FROM request_attempts
 WHERE request_attempts.id = sqlc.arg(attempt_id)
-  AND request_attempts.response_started_at IS NOT NULL
+  AND request_attempts.gateway_first_token_at IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM updated);
 
 -- name: RecordRequestAttemptUpstreamTiming :one
--- RecordRequestAttemptUpstreamTiming first-write-wins 地保存真实 transport/FirstToken/completion 边界。
+-- RecordRequestAttemptUpstreamTiming first-write-wins 地保存真实 transport/FirstToken/completion 边界，
+-- 以及超时失败时的稳定超时阶段（§11.4：response_header|first_token|stream_idle|response_body）。
 UPDATE request_attempts
 SET upstream_started_at = COALESCE(request_attempts.upstream_started_at, sqlc.narg(upstream_started_at)),
     upstream_first_token_at = COALESCE(request_attempts.upstream_first_token_at, sqlc.narg(upstream_first_token_at)),
-    upstream_completed_at = COALESCE(request_attempts.upstream_completed_at, sqlc.narg(upstream_completed_at))
+    upstream_completed_at = COALESCE(request_attempts.upstream_completed_at, sqlc.narg(upstream_completed_at)),
+    upstream_timeout_phase = COALESCE(request_attempts.upstream_timeout_phase, sqlc.narg(upstream_timeout_phase))
 WHERE request_attempts.id = sqlc.arg(attempt_id)
 RETURNING *;
 
@@ -131,6 +137,15 @@ SET breaker_provider_disposition = COALESCE(request_attempts.breaker_provider_di
     breaker_channel_disposition = COALESCE(request_attempts.breaker_channel_disposition, sqlc.narg(breaker_channel_disposition))
 WHERE request_attempts.id = sqlc.arg(attempt_id)
 RETURNING *;
+
+-- name: RecordRequestAttemptScoringSample :exec
+-- Persist the exact P2 sample classification for Admin audit. OR keeps retries idempotent and
+-- prevents a duplicate terminal callback from erasing an already recorded sample fact.
+UPDATE request_attempts
+SET ttft_scoring_sample = request_attempts.ttft_scoring_sample OR sqlc.arg(ttft_scoring_sample),
+    error_scoring_sample = request_attempts.error_scoring_sample OR sqlc.arg(error_scoring_sample),
+    error_scoring_failure = request_attempts.error_scoring_failure OR sqlc.arg(error_scoring_failure)
+WHERE request_attempts.id = sqlc.arg(attempt_id);
 
 -- name: MarkRequestAttemptSucceeded :one
 -- MarkRequestAttemptSucceeded 将 running attempt 原子推进到 succeeded，重复 succeeded 返回第一次成功事实。
@@ -144,7 +159,7 @@ WITH updated AS (
             finish_class = sqlc.arg(finish_class),
             upstream_status_code = sqlc.arg(upstream_status_code),
             upstream_request_id = sqlc.arg(upstream_request_id),
-            response_started_at = COALESCE(request_attempts.response_started_at, sqlc.narg(response_started_at)),
+            gateway_first_token_at = COALESCE(request_attempts.gateway_first_token_at, sqlc.narg(gateway_first_token_at)),
             final_usage_received = sqlc.arg(final_usage_received),
             usage_mapping_version = sqlc.arg(usage_mapping_version),
             completed_at = sqlc.arg(completed_at)
@@ -204,7 +219,7 @@ WITH updated AS (
             error_code = sqlc.arg(error_code),
             error_message = sqlc.arg(error_message),
             internal_error_detail = sqlc.arg(internal_error_detail),
-            response_started_at = COALESCE(request_attempts.response_started_at, sqlc.narg(response_started_at)),
+            gateway_first_token_at = COALESCE(request_attempts.gateway_first_token_at, sqlc.narg(gateway_first_token_at)),
             final_usage_received = sqlc.arg(final_usage_received),
             usage_mapping_version = sqlc.arg(usage_mapping_version),
             completed_at = sqlc.arg(completed_at)
@@ -262,7 +277,7 @@ WITH updated AS (
             error_code = sqlc.arg(error_code),
             error_message = sqlc.arg(error_message),
             internal_error_detail = sqlc.arg(internal_error_detail),
-            response_started_at = COALESCE(request_attempts.response_started_at, sqlc.narg(response_started_at)),
+            gateway_first_token_at = COALESCE(request_attempts.gateway_first_token_at, sqlc.narg(gateway_first_token_at)),
             final_usage_received = sqlc.arg(final_usage_received),
             usage_mapping_version = sqlc.arg(usage_mapping_version),
             completed_at = sqlc.arg(completed_at)

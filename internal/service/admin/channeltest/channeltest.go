@@ -5,7 +5,7 @@
 // 模型不可用 / 超时 / 连不上 / 限流 …）。它复用与网关完全一致的 adapter/HTTP 链路，故结果=真实行为。
 //
 // 探测超时取自运行时配置 admin_backend.channel_test，与用户请求的
-// channels.timeout_ms / gateway.default_channel_timeout_ms 完全正交——检测专用、互不影响。
+// channels.response_timeout_ms / gateway.default_response_timeout_ms 完全正交——检测专用、互不影响。
 //
 // 阶段一只报告不摘除：检测结果只落「最近一次检测」四列，绝不改渠道启停状态；与被动熔断/cooldown 正交。
 package channeltest
@@ -331,7 +331,9 @@ func (s *Service) executeProbeCandidates(ctx context.Context, snapshot probeSnap
 	probeTimeout := appsettings.AdminBackendChannelTestProbeTimeout(ctx, s.settings)
 	runtime := corechannel.Runtime{
 		ID: snapshot.ChannelID, Origin: snapshot.Origin,
-		APIKey: strings.TrimSpace(snapshot.Credential), Timeout: probeTimeout, ProviderSlug: snapshot.ProviderSlug,
+		APIKey: strings.TrimSpace(snapshot.Credential), ProviderSlug: snapshot.ProviderSlug,
+		// 渠道巡检是非流式探测，只需要响应超时；探测超时独立于业务默认值。
+		ResponseTimeout: probeTimeout,
 	}
 	var result TestResult
 	for i, upstreamModel := range candidates {

@@ -33,7 +33,8 @@ type channelOpsRowDTO struct {
 	AdapterKey              string                    `json:"adapter_key"`
 	Origin                  string                    `json:"origin"`
 	Priority                int32                     `json:"priority"`
-	TimeoutMs               *int32                    `json:"timeout_ms"`
+	ResponseTimeoutMs       *int32                    `json:"response_timeout_ms"`
+	FirstTokenTimeoutMs     *int32                    `json:"first_token_timeout_ms"`
 	ProviderName            string                    `json:"provider_name"`
 	Credential              string                    `json:"credential"`
 	AttemptTotal            int64                     `json:"attempt_total"`
@@ -44,9 +45,6 @@ type channelOpsRowDTO struct {
 	BoundModels             int64                     `json:"bound_models"`
 	BoundRoutes             int64                     `json:"bound_routes"`
 	RecentErrorCode         string                    `json:"recent_error_code"`
-	RpmLimit                *int32                    `json:"rpm_limit"`
-	TpmLimit                *int32                    `json:"tpm_limit"`
-	RpdLimit                *int32                    `json:"rpd_limit"`
 	ConcurrencyLimit        *int32                    `json:"concurrency_limit"`
 	LastTestedAt            *string                   `json:"last_tested_at"`
 	LastTestOK              *bool                     `json:"last_test_ok"`
@@ -159,7 +157,8 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			AdapterKey:              row.AdapterKey,
 			Origin:                  row.Origin,
 			Priority:                row.Priority,
-			TimeoutMs:               row.TimeoutMs,
+			ResponseTimeoutMs:       row.ResponseTimeoutMs,
+			FirstTokenTimeoutMs:     row.FirstTokenTimeoutMs,
 			ProviderName:            row.ProviderName,
 			Credential:              row.Credential,
 			AttemptTotal:            row.AttemptTotal,
@@ -170,9 +169,6 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			BoundModels:             row.BoundModels,
 			BoundRoutes:             row.BoundRoutes,
 			RecentErrorCode:         row.RecentErrorCode,
-			RpmLimit:                row.RpmLimit,
-			TpmLimit:                row.TpmLimit,
-			RpdLimit:                row.RpdLimit,
 			ConcurrencyLimit:        row.ConcurrencyLimit,
 			LastTestedAt:            adminhttp.RFC3339Ptr(row.LastTestedAt),
 			LastTestOK:              row.LastTestOK,

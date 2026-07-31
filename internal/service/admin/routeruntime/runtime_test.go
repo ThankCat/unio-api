@@ -61,6 +61,9 @@ type fakeBreakerSnapshotter struct {
 	routeUsage      breakerstore.RouteUsage
 	routeUsageErr   error
 	routeUsageCalls int
+	sampleWindows   map[int64]breakerstore.ChannelSampleWindow
+	sampleErr       error
+	sampleCalls     int
 }
 
 func (f *fakeBreakerSnapshotter) SnapshotMany(_ context.Context, input breakerstore.SnapshotManyInput) (breakerstore.SnapshotManyResult, error) {
@@ -72,6 +75,22 @@ func (f *fakeBreakerSnapshotter) SnapshotMany(_ context.Context, input breakerst
 func (f *fakeBreakerSnapshotter) AggregateRouteUsage(_ context.Context, _ int64) (breakerstore.RouteUsage, error) {
 	f.routeUsageCalls++
 	return f.routeUsage, f.routeUsageErr
+}
+
+func (f *fakeBreakerSnapshotter) AggregateChannelSamples(_ context.Context, _ []int64) (map[int64]breakerstore.ChannelSampleWindow, error) {
+	f.sampleCalls++
+	return f.sampleWindows, f.sampleErr
+}
+
+// objectiveRoutingBalance 返回 objective_v1 五项评分的 canonical 配置快照（§7/§14.6 默认值）。
+func objectiveRoutingBalance(revision int64) breakerstore.RoutingBalanceSnapshot {
+	return breakerstore.RoutingBalanceSnapshot{
+		Revision:      revision,
+		CostWeightPct: 25, ConcurrencyWeightPct: 20, TTFTWeightPct: 25,
+		ErrorRateWeightPct: 20, PriorityWeightPct: 10,
+		TTFTWindowMs: 1_800_000, TTFTPenaltyUnitMs: 1000, TTFTPenaltyPointsPerUnit: 2.5,
+		ErrorWindowMs: 1_800_000, ErrorPenaltyPointsPerPercent: 2.5,
+	}
 }
 
 func TestRuntimeUsesAuthoritativeSnapshotAndObjectiveScore(t *testing.T) {
@@ -91,16 +110,17 @@ func TestRuntimeUsesAuthoritativeSnapshotAndObjectiveScore(t *testing.T) {
 	facts := readyRuntimeFacts()
 	breakers := &fakeBreakerSnapshotter{
 		routeUsage: breakerstore.RouteUsage{Concurrency: 4, RPM: 12, RPD: 40, TPM: 900, ActiveUsers: 2},
+		// 30 分钟样本：平均 TTFT 1000ms、错误率 10%（§12 分钟桶聚合）。
+		sampleWindows: map[int64]breakerstore.ChannelSampleWindow{
+			7: {TTFTSumMs: 18_000, TTFTCount: 18, ErrorAttemptCount: 20, ErrorCount: 2, RPM: 3, RPD: 30, TPM: 25, TokenCoveredCount: 2},
+		},
 		result: breakerstore.SnapshotManyResult{
-			RoutingBalance: breakerstore.RoutingBalanceSnapshot{
-				Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35,
-				EconomicWeightPct: 45, HealthWeightPct: 25, CapacityWeightPct: 20, PriorityWeightPct: 10,
-			},
+			RoutingBalance: objectiveRoutingBalance(5),
 			Candidates: []breakerstore.CandidateSnapshot{
 				{
 					Candidate: breakerstore.SnapshotCandidateInput{
 						ProviderID: 21, ChannelID: 7, OriginRevision: 11,
-						ProviderStatusRevision: 12, ChannelConfigRevision: 16, ChannelAdmissionRevision: 17,
+						ProviderStatusRevision: 12, ChannelConfigRevision: 16, ChannelCapacityRevision: 17,
 					},
 					Status: breakerstore.CandidateSnapshotCurrent,
 					Provider: breakerstore.ScopeSnapshot{
@@ -110,12 +130,9 @@ func TestRuntimeUsesAuthoritativeSnapshotAndObjectiveScore(t *testing.T) {
 					},
 					Channel: breakerstore.ScopeSnapshot{
 						Exists: true, State: breakerstore.StateClosed, ErrorRate: 0.1, SampleCount: 20,
-						TTFTEWMAMs: 1000, TTFTSamples: 18, ChannelConfigRevision: 16,
+						ChannelConfigRevision: 16,
 					},
 					Concurrency:         breakerstore.CapacityUsage{Used: 2, Limit: 4},
-					RPM:                 breakerstore.CapacityUsage{Used: 3, Limit: 10},
-					RPD:                 breakerstore.CapacityUsage{Used: 30, Limit: 100},
-					TPM:                 breakerstore.CapacityUsage{Used: 25, Limit: 100},
 					CooldownRemainingMs: 2500, ModelPermissionPaused: true,
 					ModelPermissionRecheckState: "queued",
 				},
@@ -124,10 +141,9 @@ func TestRuntimeUsesAuthoritativeSnapshotAndObjectiveScore(t *testing.T) {
 					Provider: breakerstore.ScopeSnapshot{Exists: true, State: breakerstore.StateClosed},
 					Channel: breakerstore.ScopeSnapshot{
 						Exists: true, State: breakerstore.StateOpen, OpenRemainingMs: 5000,
-						ErrorRate: 1, SampleCount: 9, TTFTEWMAMs: 9000, TTFTSamples: 9,
+						ErrorRate: 1, SampleCount: 9,
 					},
 					Concurrency: breakerstore.CapacityUsage{Limit: 0},
-					TPM:         breakerstore.CapacityUsage{Limit: 0},
 				},
 			},
 		},
@@ -151,60 +167,65 @@ func TestRuntimeUsesAuthoritativeSnapshotAndObjectiveScore(t *testing.T) {
 		t.Fatalf("unexpected route runtime: %+v", got)
 	}
 	if breakers.calls != 1 || breakers.input.ModelID != 31 || breakers.input.IntegrityEpoch != "epoch-a" ||
-		breakers.input.ChannelRateRevision != 7 || breakers.input.GlobalConcurrencyRevision != 3 ||
+		breakers.input.GlobalConcurrencyRevision != 3 ||
 		breakers.input.CircuitBreakerRevision != 4 || breakers.input.RoutingBalanceRevision != 5 {
 		t.Fatalf("unexpected SnapshotMany input: %+v", breakers.input)
 	}
 	if len(breakers.input.Candidates) != 2 || breakers.input.Candidates[0].ProviderID != 21 ||
-		breakers.input.Candidates[0].ChannelAdmissionRevision != 17 {
+		breakers.input.Candidates[0].ChannelCapacityRevision != 17 {
 		t.Fatalf("candidate revisions not forwarded: %+v", breakers.input.Candidates)
 	}
 
 	primary := got.Channels[0]
 	if !primary.Eligible || primary.ConcurrencyUsed != 2 || primary.ConcurrencyLimit != 4 ||
-		primary.RPMUsed != 3 || primary.RPMLimit != 10 || primary.RPDUsed != 30 || primary.RPDLimit != 100 ||
-		primary.TPMUsed != 25 || primary.TPMLimit != 100 {
-		t.Fatalf("unexpected primary capacity: %+v", primary)
+		primary.RPMUsed != 3 || primary.RPDUsed != 30 || primary.GlobalRPDUsed != 30 || primary.TPMUsed != 25 ||
+		primary.TokenCoveredCount != 2 || math.Abs(primary.TokenCoveragePct-66.66666666666667) > 1e-9 {
+		t.Fatalf("unexpected concurrency or observed traffic: %+v", primary)
 	}
-	if primary.RPMRemaining == nil || *primary.RPMRemaining != 0.7 ||
-		primary.RPDRemaining == nil || *primary.RPDRemaining != 0.7 ||
+	if primary.RPMRemaining != nil || primary.RPDRemaining != nil || primary.TPMRemaining != nil ||
 		primary.CooldownRemainingMs != 2500 || !primary.ModelPermissionPaused ||
 		primary.ModelPermissionRecheckState != "queued" {
-		t.Fatalf("cooldown, permission, or rate facts missing: %+v", primary)
+		t.Fatalf("cooldown, permission, or observation semantics missing: %+v", primary)
+	}
+	if got.ScoreConfig.AlgorithmVersion != "objective_v1" || got.ScoreConfig.Revision != 5 ||
+		got.SampleWindow.TTFTWindowMs != 1_800_000 || !got.SampleWindow.Available {
+		t.Fatalf("runtime config/sample window missing: config=%+v window=%+v", got.ScoreConfig, got.SampleWindow)
 	}
 	if !primary.OriginRevisionCurrent || !primary.ProviderStatusRevisionCurrent ||
-		!primary.ChannelConfigRevisionCurrent || !primary.ChannelAdmissionRevisionCurrent ||
+		!primary.ChannelConfigRevisionCurrent || !primary.ChannelCapacityRevisionCurrent ||
 		!primary.RuntimeRevisionCurrent || primary.RuntimeControlState != runtimeSyncActive ||
-		primary.RouteRateLimitsRevision != 2 || primary.ChannelRateLimitsRevision != 7 ||
+		primary.RouteRateLimitsRevision != 2 ||
 		primary.GlobalConcurrencyRevision != 3 ||
 		primary.CircuitBreakerRevision != 4 || primary.RoutingBalanceRevision != 5 {
 		t.Fatalf("revision facts missing or stale: %+v", primary)
 	}
+	// objective_v1 五项评分：成本100×25% + 并发50×20% + TTFT97.5×25% + 错误率75×20% + 优先级90×10% = 83.375。
 	if primary.AlgorithmVersion != "objective_v1" ||
-		math.Abs(primary.CapacityScore-50) > 1e-9 || math.Abs(primary.HealthScore-79.5) > 1e-9 ||
-		math.Abs(primary.EconomicScore-100) > 1e-9 || math.Abs(primary.PriorityScore-90) > 1e-9 ||
-		math.Abs(primary.FinalScore-83.875) > 1e-9 || math.Abs(primary.FinalWeight-83.875) > 1e-9 ||
-		primary.EconomicWeightPct != 45 || primary.HealthWeightPct != 25 ||
-		primary.CapacityWeightPct != 20 || primary.PriorityWeightPct != 10 {
+		math.Abs(primary.CostScore-100) > 1e-9 || math.Abs(primary.ConcurrencyScore-50) > 1e-9 ||
+		math.Abs(primary.TTFTScore-97.5) > 1e-9 || math.Abs(primary.ErrorScore-75) > 1e-9 ||
+		math.Abs(primary.PriorityScore-90) > 1e-9 || math.Abs(primary.FinalScore-83.375) > 1e-9 ||
+		primary.CostWeightPct != 25 || primary.ConcurrencyWeightPct != 20 ||
+		primary.TTFTWeightPct != 25 || primary.ErrorRateWeightPct != 20 || primary.PriorityWeightPct != 10 {
 		t.Fatalf("runtime score drifted from scheduler: %+v", primary)
 	}
-	if primary.CostRatio != nil || primary.CostWeight != 0.45 || primary.CostFactor != 1 {
-		t.Fatalf("legacy compatibility fields do not match objective score: %+v", primary)
+	// TTFT / 错误率必须来自 30 分钟分钟桶聚合（§12），而不是 breaker 样本。
+	if breakers.sampleCalls != 1 {
+		t.Fatalf("runtime must read the 30-minute sample aggregate once, calls=%d", breakers.sampleCalls)
 	}
-	if primary.ErrorRate == nil || *primary.ErrorRate != 0.1 || primary.ErrorSamples != 20 ||
-		primary.TTFTEWMAMs == nil || *primary.TTFTEWMAMs != 1000 || primary.TTFTSamples != 18 ||
-		primary.TTFTSampleSource != "stream_only" {
-		t.Fatalf("unexpected P4 samples: %+v", primary)
+	if primary.AvgTTFTMs == nil || *primary.AvgTTFTMs != 1000 || primary.TTFTSampleCount != 18 ||
+		primary.ErrorRatePct == nil || *primary.ErrorRatePct != 10 || primary.ErrorSampleCount != 20 {
+		t.Fatalf("unexpected 30-minute sample facts: %+v", primary)
 	}
 	if primary.ProviderBreakerState == nil || *primary.ProviderBreakerState != "closed" ||
 		primary.ChannelBreakerState == nil || *primary.ChannelBreakerState != "closed" {
 		t.Fatalf("unexpected breaker state: %+v", primary)
 	}
-	if got.Channels[1].ExcludedReason != "provider_disabled" || got.Channels[1].FinalWeight != 0 {
+	if got.Channels[1].ExcludedReason != "provider_disabled" || got.Channels[1].FinalScore != 0 {
 		t.Fatalf("unexpected hard filter: %+v", got.Channels[1])
 	}
-	if got.Channels[1].ChannelBreakerState != nil || got.Channels[1].ErrorRate != nil || got.Channels[1].ErrorSamples != 0 ||
-		got.Channels[1].TTFTEWMAMs != nil || got.Channels[1].TTFTSamples != 0 {
+	if got.Channels[1].ChannelBreakerState != nil || got.Channels[1].AvgTTFTMs != nil ||
+		got.Channels[1].ErrorRatePct != nil || got.Channels[1].TTFTSampleCount != 0 ||
+		got.Channels[1].ErrorSampleCount != 0 {
 		t.Fatalf("no-sample status leaked stale Channel facts: %+v", got.Channels[1])
 	}
 	if len(got.Sources) != 3 || got.Sources[1].Name != "breaker_store" || !got.Sources[1].Available {
@@ -218,21 +239,18 @@ func TestRuntimeTreatsMissingChannelIdentityAsCurrentNoSample(t *testing.T) {
 		pool:  []sqlc.RouteRuntimePoolRow{runtimePoolRow(7, 21, 31)},
 	}
 	breakers := &fakeBreakerSnapshotter{result: breakerstore.SnapshotManyResult{
-		RoutingBalance: breakerstore.RoutingBalanceSnapshot{
-			Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35, CostWeight: 0.5, MinimumRoutingFactor: 0.05,
-		},
+		RoutingBalance: objectiveRoutingBalance(5),
 		Candidates: []breakerstore.CandidateSnapshot{
 			{
 				Candidate: breakerstore.SnapshotCandidateInput{
 					ProviderID: 21, ChannelID: 7, OriginRevision: 11,
-					ProviderStatusRevision: 12, ChannelConfigRevision: 16, ChannelAdmissionRevision: 17,
+					ProviderStatusRevision: 12, ChannelConfigRevision: 16, ChannelCapacityRevision: 17,
 				},
 				Status: breakerstore.CandidateSnapshotNoSample,
 				Provider: breakerstore.ScopeSnapshot{
 					Exists: true, State: breakerstore.StateClosed, OriginRevision: 11, StatusRevision: 12,
 				},
 				Concurrency: breakerstore.CapacityUsage{Limit: 0},
-				TPM:         breakerstore.CapacityUsage{Limit: 0},
 			},
 		},
 	}}
@@ -246,8 +264,8 @@ func TestRuntimeTreatsMissingChannelIdentityAsCurrentNoSample(t *testing.T) {
 	if !channel.Eligible || !channel.ChannelConfigRevisionCurrent || channel.RuntimeChannelConfigRevision != nil {
 		t.Fatalf("missing Channel identity must be a current no-sample fact: %+v", channel)
 	}
-	if channel.ChannelBreakerState != nil || channel.ErrorRate != nil || channel.ErrorSamples != 0 ||
-		channel.TTFTEWMAMs != nil || channel.TTFTSamples != 0 {
+	if channel.ChannelBreakerState != nil || channel.AvgTTFTMs != nil || channel.ErrorRatePct != nil ||
+		channel.TTFTSampleCount != 0 || channel.ErrorSampleCount != 0 {
 		t.Fatalf("missing Channel identity exposed runtime samples: %+v", channel)
 	}
 }
@@ -273,10 +291,7 @@ func TestRuntimeResolvesAbsoluteAndMultiplierCosts(t *testing.T) {
 		pool:  []sqlc.RouteRuntimePoolRow{absolute, multiplier},
 	}
 	result := breakerstore.SnapshotManyResult{
-		RoutingBalance: breakerstore.RoutingBalanceSnapshot{
-			Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35,
-			EconomicWeightPct: 45, HealthWeightPct: 25, CapacityWeightPct: 20, PriorityWeightPct: 10,
-		},
+		RoutingBalance: objectiveRoutingBalance(5),
 		Candidates: []breakerstore.CandidateSnapshot{
 			currentCostCandidate(7, 21),
 			currentCostCandidate(8, 22),
@@ -294,12 +309,13 @@ func TestRuntimeResolvesAbsoluteAndMultiplierCosts(t *testing.T) {
 	}
 	for _, channel := range got.Channels {
 		if channel.CostRatio == nil || math.Abs(*channel.CostRatio-0.25) > 1e-9 ||
-			channel.CostWeight != 0.45 || math.Abs(channel.CostFactor-0.75) > 1e-9 ||
+			math.Abs(channel.CostScore-75) > 1e-9 ||
 			channel.AlgorithmVersion != "objective_v1" || channel.MarginStatus != "safe" {
 			t.Errorf("channel %d cost score mismatch: %+v", channel.ChannelID, channel)
 		}
 	}
-	if math.Abs(got.Channels[0].FinalScore-87.75) > 1e-9 || math.Abs(got.Channels[1].FinalScore-86.75) > 1e-9 {
+	// 成本75×25% + 并发100×20% + TTFT100×25% + 错误率100×20% + 优先级(90/80)×10%。
+	if math.Abs(got.Channels[0].FinalScore-92.75) > 1e-9 || math.Abs(got.Channels[1].FinalScore-91.75) > 1e-9 {
 		t.Fatalf("objective score must include Priority: %+v", got.Channels)
 	}
 }
@@ -318,11 +334,8 @@ func TestRuntimeFixedModeReportsObjectiveScoreWithoutChangingOrder(t *testing.T)
 		pool:  []sqlc.RouteRuntimePoolRow{row},
 	}
 	result := breakerstore.SnapshotManyResult{
-		RoutingBalance: breakerstore.RoutingBalanceSnapshot{
-			Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35,
-			EconomicWeightPct: 45, HealthWeightPct: 25, CapacityWeightPct: 20, PriorityWeightPct: 10,
-		},
-		Candidates: []breakerstore.CandidateSnapshot{currentCostCandidate(7, 21)},
+		RoutingBalance: objectiveRoutingBalance(5),
+		Candidates:     []breakerstore.CandidateSnapshot{currentCostCandidate(7, 21)},
 	}
 	service := NewService(store, readyRuntimeFacts(), &fakeBreakerSnapshotter{result: result})
 
@@ -332,8 +345,7 @@ func TestRuntimeFixedModeReportsObjectiveScoreWithoutChangingOrder(t *testing.T)
 	}
 	channel := got.Channels[0]
 	if channel.CostRatio == nil || math.Abs(*channel.CostRatio-0.25) > 1e-9 ||
-		channel.AlgorithmVersion != "objective_v1" || math.Abs(channel.FinalScore-87.75) > 1e-9 ||
-		math.Abs(channel.FinalWeight-87.75) > 1e-9 {
+		channel.AlgorithmVersion != "objective_v1" || math.Abs(channel.FinalScore-92.75) > 1e-9 {
 		t.Fatalf("fixed route must expose objective score without reordering: %+v", channel)
 	}
 }
@@ -379,10 +391,8 @@ func TestRuntimeRejectsInvalidPricingLikeGateway(t *testing.T) {
 				pool:  []sqlc.RouteRuntimePoolRow{row},
 			}
 			breakers := &fakeBreakerSnapshotter{result: breakerstore.SnapshotManyResult{
-				RoutingBalance: breakerstore.RoutingBalanceSnapshot{
-					Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35, CostWeight: 0.5, MinimumRoutingFactor: 0.05,
-				},
-				Candidates: []breakerstore.CandidateSnapshot{currentCostCandidate(7, 21)},
+				RoutingBalance: objectiveRoutingBalance(5),
+				Candidates:     []breakerstore.CandidateSnapshot{currentCostCandidate(7, 21)},
 			}}
 			service := NewService(store, readyRuntimeFacts(), breakers)
 
@@ -392,7 +402,7 @@ func TestRuntimeRejectsInvalidPricingLikeGateway(t *testing.T) {
 			}
 			channel := got.Channels[0]
 			if channel.Eligible || channel.ExcludedReason != "pricing_invalid" ||
-				channel.MarginStatus != "pricing_invalid" || channel.CostRatio != nil || channel.FinalWeight != 0 {
+				channel.MarginStatus != "pricing_invalid" || channel.CostRatio != nil || channel.FinalScore != 0 {
 				t.Fatalf("invalid pricing must match Gateway exclusion: %+v", channel)
 			}
 			if got.CandidateCount != 0 {
@@ -412,10 +422,8 @@ func TestRuntimeMapsBreakerCooldownAndPermissionGates(t *testing.T) {
 		breakerstore.CandidateSnapshotHalfOpen,
 	}
 	result := breakerstore.SnapshotManyResult{
-		RoutingBalance: breakerstore.RoutingBalanceSnapshot{
-			Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35, MinimumRoutingFactor: 0.05,
-		},
-		Candidates: make([]breakerstore.CandidateSnapshot, len(statuses)),
+		RoutingBalance: objectiveRoutingBalance(5),
+		Candidates:     make([]breakerstore.CandidateSnapshot, len(statuses)),
 	}
 	for index, status := range statuses {
 		store.pool = append(store.pool, runtimePoolRow(int64(index+1), int64(index+11), 31))
@@ -426,7 +434,6 @@ func TestRuntimeMapsBreakerCooldownAndPermissionGates(t *testing.T) {
 			},
 			Channel:     breakerstore.ScopeSnapshot{Exists: true, State: breakerstore.StateClosed, SampleCount: 2},
 			Concurrency: breakerstore.CapacityUsage{Limit: 10},
-			TPM:         breakerstore.CapacityUsage{Limit: 100},
 		}
 	}
 	result.Candidates[0].Provider.State = breakerstore.StateOpen
@@ -447,7 +454,7 @@ func TestRuntimeMapsBreakerCooldownAndPermissionGates(t *testing.T) {
 			t.Errorf("channel %d reason=%q want=%q", index, got.Channels[index].ExcludedReason, want)
 		}
 	}
-	if got.CandidateCount != 1 || !got.Channels[4].Eligible || got.Channels[4].FinalWeight != 0 {
+	if got.CandidateCount != 1 || !got.Channels[4].Eligible || got.Channels[4].FinalScore != 0 {
 		t.Fatalf("half-open probe must remain eligible outside normal weighting: %+v", got)
 	}
 	if got.Channels[0].ProviderBreakerState == nil || *got.Channels[0].ProviderBreakerState != "open" ||
@@ -529,7 +536,7 @@ func TestRuntimeReturnsDisplayableFailClosedStates(t *testing.T) {
 			}
 			channel := got.Channels[0]
 			if channel.RuntimeSyncState != test.wantState || channel.BreakerStoreAdmission != breakerAdmissionDenied ||
-				channel.Eligible || channel.ErrorRate != nil || channel.TTFTEWMAMs != nil || channel.FinalWeight != 0 ||
+				channel.Eligible || channel.ErrorRatePct != nil || channel.AvgTTFTMs != nil || channel.FinalScore != 0 ||
 				!channel.CapacityReadFailed {
 				t.Fatalf("old runtime facts leaked after denial: %+v", channel)
 			}
@@ -553,10 +560,8 @@ func TestRuntimeKeepsRouteUsageNilWhenAggregateFails(t *testing.T) {
 	breakers := &fakeBreakerSnapshotter{
 		routeUsageErr: failure.New(failure.CodeDependencyRedisUnavailable),
 		result: breakerstore.SnapshotManyResult{
-			RoutingBalance: breakerstore.RoutingBalanceSnapshot{
-				Revision: 5, TTFTTargetMs: 2000, TTFTWeight: 0.35, MinimumRoutingFactor: 0.05,
-			},
-			Candidates: []breakerstore.CandidateSnapshot{currentCostCandidate(7, 21)},
+			RoutingBalance: objectiveRoutingBalance(5),
+			Candidates:     []breakerstore.CandidateSnapshot{currentCostCandidate(7, 21)},
 		},
 	}
 	service := NewService(store, readyRuntimeFacts(), breakers)
@@ -573,7 +578,7 @@ func readyRuntimeFacts() *fakeRuntimeFacts {
 	integrity := runtimefacts.Integrity{Epoch: "epoch-a", Revision: 1}
 	return &fakeRuntimeFacts{
 		admission: runtimefacts.AdmissionRevisions{
-			Integrity: integrity, RouteRateLimits: 2, ChannelRateLimits: 7, Concurrency: 3,
+			Integrity: integrity, RouteRateLimits: 2, Concurrency: 3,
 		},
 		routing: runtimefacts.RoutingRevisions{
 			Integrity: integrity, CircuitBreaker: 4, RoutingBalance: 5,
@@ -587,7 +592,7 @@ func runtimePoolRow(channelID, originID, modelID int64) sqlc.RouteRuntimePoolRow
 		ChannelID: channelID, ChannelName: "channel", ChannelStatus: "enabled",
 		CredentialValid: true, HasCredential: true, HasOrigin: true,
 		Protocol: "openai", AdapterKey: "openai", Priority: 10,
-		ChannelConfigRevision: 16, ChannelAdmissionLimitsRevision: 17,
+		ChannelConfigRevision: 16, ChannelCapacityRevision: 17,
 		ProviderOriginRevision: 11, ProviderStatusRevision: 12,
 		ProviderID: originID, ProviderName: "provider", ProviderStatus: "enabled",
 		ModelDbID: modelID, ModelExists: true, ModelStatus: "enabled", BindingStatus: "enabled",
@@ -599,7 +604,7 @@ func currentCostCandidate(channelID, originID int64) breakerstore.CandidateSnaps
 	return breakerstore.CandidateSnapshot{
 		Candidate: breakerstore.SnapshotCandidateInput{
 			ProviderID: originID, ChannelID: channelID, OriginRevision: 11,
-			ProviderStatusRevision: 12, ChannelConfigRevision: 16, ChannelAdmissionRevision: 17,
+			ProviderStatusRevision: 12, ChannelConfigRevision: 16, ChannelCapacityRevision: 17,
 		},
 		Status: breakerstore.CandidateSnapshotCurrent,
 		Provider: breakerstore.ScopeSnapshot{
@@ -607,16 +612,15 @@ func currentCostCandidate(channelID, originID int64) breakerstore.CandidateSnaps
 		},
 		Channel:     breakerstore.ScopeSnapshot{Exists: true, State: breakerstore.StateClosed, ChannelConfigRevision: 16},
 		Concurrency: breakerstore.CapacityUsage{Limit: 0},
-		TPM:         breakerstore.CapacityUsage{Limit: 0},
 	}
 }
 
 func TestSortChannels(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
 	base := []Channel{
-		{ChannelID: 1, Eligible: true, CurrentOrder: 2, FinalWeight: 0.3, RPDRemaining: nil, GlobalRPDRemaining: f(0.8), TPMRemaining: f(0.9)},
-		{ChannelID: 2, Eligible: false, CurrentOrder: 0, FinalWeight: 0},
-		{ChannelID: 3, Eligible: true, CurrentOrder: 1, FinalWeight: 0.7, RPDRemaining: nil, GlobalRPDRemaining: f(0.1), TPMRemaining: f(0.2)},
+		{ChannelID: 1, Eligible: true, CurrentOrder: 2, FinalScore: 30, RPDRemaining: nil, GlobalRPDRemaining: f(0.8), TPMRemaining: f(0.9)},
+		{ChannelID: 2, Eligible: false, CurrentOrder: 0, FinalScore: 0},
+		{ChannelID: 3, Eligible: true, CurrentOrder: 1, FinalScore: 70, RPDRemaining: nil, GlobalRPDRemaining: f(0.1), TPMRemaining: f(0.2)},
 	}
 	ids := func(chs []Channel) string {
 		parts := make([]string, len(chs))

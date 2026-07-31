@@ -19,10 +19,10 @@ import (
 
 func testChannel(baseURL string) channel.Runtime {
 	return channel.Runtime{
-		ID:      123,
-		Origin:  baseURL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		ID:              123,
+		Origin:          baseURL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}
 }
 
@@ -446,9 +446,9 @@ func TestStreamResponseIncompleteMapsToLength(t *testing.T) {
 	}
 }
 
-// TestStreamResponseDoneSentinelTerminates 验证流尾追加的 chat 风格 [DONE] 哨兵被截留为内部成功终态，
-// 不透传给客户。
-func TestStreamResponseDoneSentinelTerminates(t *testing.T) {
+// TestStreamResponseDoneSentinelDoesNotReplaceResponsesTerminal 验证 chat 风格 [DONE] 只会被截留，
+// 不能替代 Responses 的正式终态。
+func TestStreamResponseDoneSentinelDoesNotReplaceResponsesTerminal(t *testing.T) {
 	events := []string{
 		"event: response.output_text.delta\n" + `data: {"type":"response.output_text.delta","delta":"hi"}` + "\n\n",
 		"data: [DONE]\n\n",
@@ -466,11 +466,38 @@ func TestStreamResponseDoneSentinelTerminates(t *testing.T) {
 		got = append(got, c)
 		return nil
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected missing Responses terminal error")
+	}
+	if failure.CodeOf(err) != failure.CodeAdapterReadStreamFailed {
+		t.Fatalf("failure code = %q, want %q", failure.CodeOf(err), failure.CodeAdapterReadStreamFailed)
 	}
 	if len(got) != 1 {
 		t.Fatalf("got %d chunks, want 1 ([DONE] must not be forwarded)", len(got))
+	}
+}
+
+func TestStreamResponseRejectsMalformedSuccessTerminal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.completed\n" + `data: {"type":"response.completed"` + "\n\n"))
+	}))
+	defer server.Close()
+
+	_, err := NewAdapter(server.Client()).StreamResponse(
+		context.Background(),
+		testChannel(server.URL),
+		Request{Body: json.RawMessage(`{"model":"gpt-5.5","stream":true}`)},
+		func(StreamChunk) error { return nil },
+	)
+	if err == nil {
+		t.Fatal("expected malformed terminal error")
+	}
+	if failure.CodeOf(err) != failure.CodeAdapterReadStreamFailed {
+		t.Fatalf("failure code = %q, want %q", failure.CodeOf(err), failure.CodeAdapterReadStreamFailed)
+	}
+	if category, ok := adapter.UpstreamCategoryOf(err); !ok || category != adapter.UpstreamErrorServer {
+		t.Fatalf("upstream category = %q ok=%v, want server_error", category, ok)
 	}
 }
 
@@ -578,7 +605,7 @@ func TestStreamResponseChannelTimeoutDoesNotCutLongStream(t *testing.T) {
 	defer server.Close()
 
 	ch := testChannel(server.URL)
-	ch.Timeout = channelTimeout
+	ch.ResponseTimeout = channelTimeout
 
 	got := make([]StreamChunk, 0)
 	outcome, err := NewAdapter(server.Client()).StreamResponse(context.Background(), ch, Request{Body: json.RawMessage(`{"model":"gpt-5.5","stream":true}`)}, func(c StreamChunk) error {
@@ -605,7 +632,7 @@ func TestStreamResponseHeaderTimeoutClassifiesAsTimeout(t *testing.T) {
 	defer server.Close()
 
 	ch := testChannel(server.URL)
-	ch.Timeout = channelTimeout
+	ch.ResponseTimeout = channelTimeout
 
 	_, err := NewAdapter(server.Client()).StreamResponse(context.Background(), ch, Request{Body: json.RawMessage(`{"model":"gpt-5.5","stream":true}`)}, func(StreamChunk) error {
 		t.Fatal("unexpected stream chunk")
@@ -633,7 +660,7 @@ func TestStreamResponseHeaderTimeoutClassifiesTransportCanceledAsTimeout(t *test
 		return nil, req.Context().Err()
 	})}
 	ch := testChannel("https://example.test")
-	ch.Timeout = channelTimeout
+	ch.ResponseTimeout = channelTimeout
 
 	_, err := NewAdapter(client).StreamResponse(context.Background(), ch, Request{Body: json.RawMessage(`{"model":"gpt-5.5","stream":true}`)}, func(StreamChunk) error {
 		t.Fatal("unexpected stream chunk")

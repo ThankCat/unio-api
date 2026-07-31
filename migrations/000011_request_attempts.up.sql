@@ -37,13 +37,15 @@ CREATE TABLE public.request_attempts (
     error_code text,
     error_message text,
     internal_error_detail text,
-    response_started_at timestamp with time zone,
+    -- 稳定上游超时阶段；仅超时失败时填写。--
+    upstream_timeout_phase text,
+    gateway_first_token_at timestamp with time zone,
     final_usage_received boolean DEFAULT false NOT NULL,
     usage_mapping_version text,
     started_at timestamp with time zone NOT NULL,
     completed_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    -- [P4 §4.7] 上游调用边界时间事实（真实 transport 口径，与客户首帧 response_started_at 分离）。
+    -- [P4 §4.7] 上游调用边界时间事实（真实 transport 口径，与客户首帧 gateway_first_token_at 分离）。
     upstream_started_at timestamp with time zone,
     upstream_first_token_at timestamp with time zone,
     upstream_completed_at timestamp with time zone,
@@ -56,6 +58,10 @@ CREATE TABLE public.request_attempts (
     -- [P4 §4.7] Finish 终态收口时写入的 breaker applied/stale disposition。
     breaker_provider_disposition text,
     breaker_channel_disposition text,
+    -- 记录该 attempt 是否进入路由评分的 30 分钟样本窗口。--
+    ttft_scoring_sample boolean DEFAULT false NOT NULL,
+    error_scoring_sample boolean DEFAULT false NOT NULL,
+    error_scoring_failure boolean DEFAULT false NOT NULL,
     fault_party text GENERATED ALWAYS AS (
 CASE
     WHEN (status = 'canceled'::text) THEN 'client'::text
@@ -72,6 +78,8 @@ END) STORED,
     CONSTRAINT request_attempts_upstream_response_id_check CHECK (((upstream_response_id IS NULL) OR (upstream_response_id <> ''::text))),
     CONSTRAINT request_attempts_upstream_status_code_check CHECK (((upstream_status_code IS NULL) OR ((upstream_status_code >= 100) AND (upstream_status_code <= 599)))),
     CONSTRAINT request_attempts_usage_mapping_version_check CHECK (((usage_mapping_version IS NULL) OR (usage_mapping_version <> ''::text))),
+    CONSTRAINT request_attempts_upstream_timeout_phase_check CHECK (((upstream_timeout_phase IS NULL) OR (upstream_timeout_phase = ANY (ARRAY['response_header'::text, 'first_token'::text, 'stream_idle'::text, 'response_body'::text])))),
+    CONSTRAINT request_attempts_error_sample_failure_check CHECK ((NOT error_scoring_failure OR error_scoring_sample)),
     -- [P4 §4.7] 上游时间事实拆开约束：first/completed 非空则 start 非空且有序；first、completed 均非空才要求 first<=completed。
     CONSTRAINT ck_request_attempts_upstream_first_after_start CHECK (((upstream_first_token_at IS NULL) OR ((upstream_started_at IS NOT NULL) AND (upstream_started_at <= upstream_first_token_at)))),
     CONSTRAINT ck_request_attempts_upstream_completed_after_start CHECK (((upstream_completed_at IS NULL) OR ((upstream_started_at IS NOT NULL) AND (upstream_started_at <= upstream_completed_at)))),
@@ -101,6 +109,8 @@ ALTER TABLE ONLY public.request_attempts
 CREATE INDEX idx_request_attempts_channel_created_at ON public.request_attempts USING btree (channel_id, created_at DESC);
 
 CREATE INDEX idx_request_attempts_channel_fault ON public.request_attempts USING btree (channel_id, fault_party) WHERE (status = 'failed'::text);
+
+CREATE INDEX idx_request_attempts_scoring_samples ON public.request_attempts USING btree (channel_id, created_at DESC, id DESC) WHERE (ttft_scoring_sample OR error_scoring_sample);
 
 ALTER TABLE ONLY public.request_attempts
     ADD CONSTRAINT request_attempts_channel_id_fkey FOREIGN KEY (channel_id) REFERENCES public.channels(id);

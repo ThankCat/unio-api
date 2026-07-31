@@ -97,6 +97,10 @@ type CandidatePlan struct {
 	// AllCapacityZero 表示所有候选容量分均为 0。
 	AllCapacityZero bool
 
+	// BaselineOrder 是 Sticky 置顶之前、纯按五项总分排序的基准顺序（channel_id 列表）。
+	// trace 同时保留基准顺序与实际扫描顺序，才能解释「Sticky 把谁提到了前面」（§13.3）。
+	BaselineOrder []int64
+
 	// Excluded records capability and breaker/cooldown hard filters from the SQL candidate plan.
 	Excluded []CandidateExclusion
 }
@@ -147,18 +151,19 @@ type Executor struct {
 	registry CandidateCapabilityRegistry
 }
 
-// BalanceConfig 是 Redis committed routing-balance control 的评分参数。
+// BalanceConfig 是 Redis committed routing-balance control 的五项评分参数（objective_v1，§7/§14.6）。
 type BalanceConfig struct {
-	Revision          int64
-	TTFTTargetMs      int64
-	TTFTWeight        float64
-	EconomicWeightPct int
-	HealthWeightPct   int
-	CapacityWeightPct int
-	PriorityWeightPct int
-	// Deprecated compatibility fields; objective_v1 ignores them.
-	CostWeight           float64
-	MinimumRoutingFactor float64
+	Revision             int64
+	CostWeightPct        int
+	ConcurrencyWeightPct int
+	TTFTWeightPct        int
+	ErrorRateWeightPct   int
+	PriorityWeightPct    int
+
+	TTFTPenaltyUnitMs        int64
+	TTFTPenaltyPointsPerUnit float64
+
+	ErrorPenaltyPointsPerPercent float64
 }
 
 // NewExecutor 创建共享 lifecycle executor。
@@ -195,17 +200,17 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 		}
 	}
 	if len(filtered) == 0 {
-		return CandidatePlan{}, noAvailableCandidateError()
+		return CandidatePlan{Excluded: excluded}, noAvailableCandidateError()
 	}
 	routeIndexes := candidateRouteIndexes(params.Candidates)
 	runtimeInputs := make([]breakerstore.SnapshotCandidateInput, 0, len(filtered))
 	for _, candidate := range filtered {
 		runtimeInputs = append(runtimeInputs, breakerstore.SnapshotCandidateInput{
 			ProviderID: candidate.ProviderID, ChannelID: candidate.Channel.ID,
-			OriginRevision:           candidate.OriginRevision,
-			ProviderStatusRevision:   candidate.ProviderStatusRevision,
-			ChannelConfigRevision:    candidate.ChannelConfigRevision,
-			ChannelAdmissionRevision: candidate.ChannelAdmissionLimitsRevision,
+			OriginRevision:          candidate.OriginRevision,
+			ProviderStatusRevision:  candidate.ProviderStatusRevision,
+			ChannelConfigRevision:   candidate.ChannelConfigRevision,
+			ChannelCapacityRevision: candidate.ChannelCapacityRevision,
 		})
 	}
 	runtimeResult, runtimePresent, err := requestadmission.SnapshotManyIfPresent(ctx, filtered[0].ModelDBID, runtimeInputs)
@@ -213,7 +218,7 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 		return CandidatePlan{}, err
 	}
 	available := make([]routing.ChatRouteCandidate, 0, len(filtered))
-	runtimeCapacity := make(map[int64]ChannelCapacity, len(filtered))
+	runtimeInputsByChannel := make(map[int64]ChannelScoreInputs, len(filtered))
 	runtimeSnapshots := make(map[int64]breakerstore.CandidateSnapshot, len(filtered))
 	capabilityExclusions := len(excluded)
 	rateLimitedSnapshots := 0
@@ -232,17 +237,9 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 			case breakerstore.CandidateSnapshotCurrent, breakerstore.CandidateSnapshotNoSample,
 				breakerstore.CandidateSnapshotHalfOpen:
 				available = append(available, candidate)
-				errorRate := snapshot.Channel.ErrorRate
-				ttftEWMA := snapshot.Channel.TTFTEWMAMs
-				ttftSamples := snapshot.Channel.TTFTSamples
-				if snapshot.Status == breakerstore.CandidateSnapshotNoSample {
-					errorRate, ttftEWMA, ttftSamples = 0, 0, 0
-				}
-				runtimeCapacity[candidate.Channel.ID] = ChannelCapacity{
-					Concurrency: CapacitySignal{Used: snapshot.Concurrency.Used, Limit: snapshot.Concurrency.Limit, Known: true},
-					TPM:         CapacitySignal{Used: snapshot.TPM.Used, Limit: snapshot.TPM.Limit, Known: true},
-					ErrorRate:   errorRate, ErrorSamples: snapshot.Channel.SampleCount, TTFTEWMAMs: ttftEWMA,
-					TTFTSamples:  ttftSamples,
+				// 并发是 Redis 原子快照事实；TTFT/错误率稍后由 30 分钟样本聚合填入（§12）。
+				runtimeInputsByChannel[candidate.Channel.ID] = ChannelScoreInputs{
+					Concurrency:  CapacitySignal{Used: snapshot.Concurrency.Used, Limit: snapshot.Concurrency.Limit, Known: true},
 					HalfOpen:     snapshot.Status == breakerstore.CandidateSnapshotHalfOpen,
 					RuntimeKnown: true,
 				}
@@ -266,31 +263,58 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 		// with neutral scores instead of consulting retired in-process breaker/health hooks.
 		available = append(available, filtered...)
 	}
+	var unavailableErr error
 	if len(available) == 0 {
 		if runtimePresent && capabilityExclusions == 0 && rateLimitedSnapshots == len(filtered) {
-			return CandidatePlan{}, failure.New(
+			unavailableErr = failure.New(
 				failure.CodeGatewayChannelRateLimited,
 				failure.WithMessage("all candidate channels are in upstream rate-limit cooldown"),
 				failure.WithField("retry_after_ms", minCooldownRemainingMs),
 			)
+		} else {
+			unavailableErr = noAvailableCandidateError()
 		}
-		return CandidatePlan{}, noAvailableCandidateError()
 	}
 	selectedConfig := BalanceConfig{}
 	orderingMode := params.Mode
-	var capacityReader ChannelCapacitySnapshotReader
+	var scoreReader ChannelScoreSnapshotReader
+	var sampleWindows map[int64]breakerstore.ChannelSampleWindow
 	if runtimePresent {
 		selectedConfig = BalanceConfig{
-			Revision:          runtimeResult.RoutingBalance.Revision,
-			TTFTTargetMs:      runtimeResult.RoutingBalance.TTFTTargetMs,
-			TTFTWeight:        runtimeResult.RoutingBalance.TTFTWeight,
-			EconomicWeightPct: runtimeResult.RoutingBalance.EconomicWeightPct,
-			HealthWeightPct:   runtimeResult.RoutingBalance.HealthWeightPct,
-			CapacityWeightPct: runtimeResult.RoutingBalance.CapacityWeightPct,
-			PriorityWeightPct: runtimeResult.RoutingBalance.PriorityWeightPct,
+			Revision:                     runtimeResult.RoutingBalance.Revision,
+			CostWeightPct:                runtimeResult.RoutingBalance.CostWeightPct,
+			ConcurrencyWeightPct:         runtimeResult.RoutingBalance.ConcurrencyWeightPct,
+			TTFTWeightPct:                runtimeResult.RoutingBalance.TTFTWeightPct,
+			ErrorRateWeightPct:           runtimeResult.RoutingBalance.ErrorRateWeightPct,
+			PriorityWeightPct:            runtimeResult.RoutingBalance.PriorityWeightPct,
+			TTFTPenaltyUnitMs:            runtimeResult.RoutingBalance.TTFTPenaltyUnitMs,
+			TTFTPenaltyPointsPerUnit:     runtimeResult.RoutingBalance.TTFTPenaltyPointsPerUnit,
+			ErrorPenaltyPointsPerPercent: runtimeResult.RoutingBalance.ErrorPenaltyPointsPerPercent,
 		}
-		capacityReader = func(_ context.Context, candidate routing.ChatRouteCandidate) (ChannelCapacity, error) {
-			return runtimeCapacity[candidate.Channel.ID], nil
+		// 30 分钟评分样本（§12）：TTFT 与错误率的唯一来源；缺失即“无样本得满分”。
+		scoredChannelIDs := make([]int64, 0, len(runtimeInputsByChannel))
+		for channelID := range runtimeInputsByChannel {
+			scoredChannelIDs = append(scoredChannelIDs, channelID)
+		}
+		for channelID := range runtimeSnapshots {
+			if _, scored := runtimeInputsByChannel[channelID]; !scored {
+				scoredChannelIDs = append(scoredChannelIDs, channelID)
+			}
+		}
+		sampleWindows = requestadmission.AggregateChannelSamplesIfPresent(ctx, scoredChannelIDs)
+		for channelID, window := range sampleWindows {
+			inputs, ok := runtimeInputsByChannel[channelID]
+			if !ok {
+				continue
+			}
+			inputs.TTFTSumMs = window.TTFTSumMs
+			inputs.TTFTCount = window.TTFTCount
+			inputs.ErrorAttemptCount = window.ErrorAttemptCount
+			inputs.ErrorCount = window.ErrorCount
+			runtimeInputsByChannel[channelID] = inputs
+		}
+		scoreReader = func(_ context.Context, candidate routing.ChatRouteCandidate) (ChannelScoreInputs, error) {
+			return runtimeInputsByChannel[candidate.Channel.ID], nil
 		}
 	} else {
 		// A missing request session has no authoritative facts to justify weighted routing.
@@ -298,24 +322,31 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 		orderingMode = ""
 	}
 	ordered, scores, allZero := orderBalancedCandidates(
-		ctx, available, orderingMode, capacityReader, selectedConfig,
+		ctx, available, orderingMode, scoreReader, selectedConfig,
 	)
 	if runtimePresent {
 		for _, candidate := range available {
 			score := scores[candidate.Channel.ID]
 			scores[candidate.Channel.ID] = enrichBalanceScore(score, candidate, runtimeSnapshots[candidate.Channel.ID], runtimeResult)
 		}
+		// 被排除的候选也要展示完整评分事实（Admin 候选表显示整个基础池，§15.2），但顺序为空、总分不参与排序。
 		for index := range excluded {
 			snapshot, ok := runtimeSnapshots[excluded[index].ChannelID]
 			if !ok {
-				score := ApplyObjectiveFactors(BalanceScore{}, excluded[index].Route.CostRatio, excluded[index].Route.Priority, selectedConfig)
-				score.Weight = 0
-				excluded[index].Balance = score
+				excluded[index].Balance = ScoreChannel(
+					ChannelScoreInputs{},
+					excluded[index].Route.CostRatio,
+					excluded[index].Route.Priority,
+					selectedConfig,
+				)
 				continue
 			}
-			score := scoreCapacity(channelCapacityFromRuntimeSnapshot(snapshot), selectedConfig)
-			score = ApplyObjectiveFactors(score, excluded[index].Route.CostRatio, excluded[index].Route.Priority, selectedConfig)
-			score.Weight = 0
+			score := ScoreChannel(
+				channelScoreInputsFromRuntimeSnapshot(snapshot, sampleWindows[excluded[index].ChannelID]),
+				excluded[index].Route.CostRatio,
+				excluded[index].Route.Priority,
+				selectedConfig,
+			)
 			excluded[index].Balance = enrichBalanceScore(score, excluded[index].Route, snapshot, runtimeResult)
 		}
 	}
@@ -349,12 +380,21 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 	}
 
 	if len(plan.Candidates) == 0 {
-		return CandidatePlan{}, noAvailableCandidateError()
+		if unavailableErr == nil {
+			unavailableErr = noAvailableCandidateError()
+		}
+		return plan, unavailableErr
 	}
 
-	// 会话粘性置顶（大 uncache 缺口 P0）：sticky 绑定渠道移到 fallback 首位，绝对优先于
-	// mode 排序（R5）。渠道已被硬摘除时置顶落空
-	// （StickyPinned=false），由调用方清除绑定；其余候选顺序不受影响。
+	// 基准顺序必须在 Sticky 置顶之前冻结：trace 要能同时展示「评分本来的顺序」
+	// 和「Sticky 把谁提到了前面」（§13.3）。
+	plan.BaselineOrder = make([]int64, 0, len(plan.Candidates))
+	for _, candidate := range plan.Candidates {
+		plan.BaselineOrder = append(plan.BaselineOrder, candidate.Route.Channel.ID)
+	}
+
+	// 会话粘性置顶：sticky 绑定渠道移到 fallback 首位，绝对优先于评分排序。
+	// 渠道已被硬摘除时置顶落空（StickyPinned=false），由调用方清除绑定；其余候选顺序不受影响。
 	if params.StickyChannelID != 0 {
 		plan.Candidates, plan.StickyPinned, plan.StickyPinnedNonPreferred = pinStickyCandidate(plan.Candidates, params.StickyChannelID)
 	}
@@ -407,20 +447,19 @@ func candidateEstimateFailure(cause error, message string) error {
 	)
 }
 
-func channelCapacityFromRuntimeSnapshot(snapshot breakerstore.CandidateSnapshot) ChannelCapacity {
-	channel := snapshot.Channel
-	if snapshot.Status == breakerstore.CandidateSnapshotNoSample {
-		channel = breakerstore.ScopeSnapshot{}
-	}
-	return ChannelCapacity{
-		Concurrency:  CapacitySignal{Used: snapshot.Concurrency.Used, Limit: snapshot.Concurrency.Limit, Known: true},
-		TPM:          CapacitySignal{Used: snapshot.TPM.Used, Limit: snapshot.TPM.Limit, Known: true},
-		ErrorRate:    channel.ErrorRate,
-		ErrorSamples: channel.SampleCount,
-		TTFTEWMAMs:   channel.TTFTEWMAMs,
-		TTFTSamples:  channel.TTFTSamples,
-		HalfOpen:     snapshot.Status == breakerstore.CandidateSnapshotHalfOpen,
-		RuntimeKnown: true,
+// channelScoreInputsFromRuntimeSnapshot 组合 Redis 并发快照与 30 分钟样本聚合（§7/§12）。
+func channelScoreInputsFromRuntimeSnapshot(
+	snapshot breakerstore.CandidateSnapshot,
+	window breakerstore.ChannelSampleWindow,
+) ChannelScoreInputs {
+	return ChannelScoreInputs{
+		Concurrency:       CapacitySignal{Used: snapshot.Concurrency.Used, Limit: snapshot.Concurrency.Limit, Known: true},
+		TTFTSumMs:         window.TTFTSumMs,
+		TTFTCount:         window.TTFTCount,
+		ErrorAttemptCount: window.ErrorAttemptCount,
+		ErrorCount:        window.ErrorCount,
+		HalfOpen:          snapshot.Status == breakerstore.CandidateSnapshotHalfOpen,
+		RuntimeKnown:      true,
 	}
 }
 
@@ -444,14 +483,12 @@ func enrichBalanceScore(
 	score.CandidateChannelConfigRevision = candidate.ChannelConfigRevision
 	score.RuntimeChannelConfigRevision = positiveRevisionPtr(channel.ChannelConfigRevision)
 	score.ChannelConfigRevisionCurrent = channel.ChannelConfigRevision == candidate.ChannelConfigRevision
-	score.CandidateChannelAdmissionLimitsRevision = candidate.ChannelAdmissionLimitsRevision
-	score.RuntimeChannelAdmissionLimitsRevision = snapshot.Candidate.ChannelAdmissionRevision
-	score.ChannelAdmissionLimitsRevisionCurrent = snapshot.Candidate.ChannelAdmissionRevision == candidate.ChannelAdmissionLimitsRevision
+	score.CandidateChannelCapacityRevision = candidate.ChannelCapacityRevision
+	score.RuntimeChannelCapacityRevision = snapshot.Candidate.ChannelCapacityRevision
+	score.ChannelCapacityRevisionCurrent = snapshot.Candidate.ChannelCapacityRevision == candidate.ChannelCapacityRevision
 	score.RouteRateLimitsRevision = result.RouteRateRevision
-	score.ChannelRateLimitsRevision = result.ChannelRateRevision
 	score.GlobalConcurrencyRevision = result.GlobalConcurrencyRevision
 	score.CircuitBreakerRevision = result.CircuitBreakerRevision
-	score.ErrorSamples = channel.SampleCount
 	score.ProviderBreakerState = traceBreakerState(snapshot.Provider)
 	score.ChannelBreakerState = traceBreakerState(channel)
 	score.CooldownRemainingMs = snapshot.CooldownRemainingMs

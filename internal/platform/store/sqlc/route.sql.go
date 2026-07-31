@@ -105,7 +105,7 @@ VALUES (
     $8,
     $9
 )
-RETURNING id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled, concurrency_limit
+RETURNING id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, concurrency_limit, archived_at, sticky_enabled
 `
 
 type CreateRouteParams struct {
@@ -148,9 +148,9 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		&i.RpmLimit,
 		&i.TpmLimit,
 		&i.RpdLimit,
+		&i.ConcurrencyLimit,
 		&i.ArchivedAt,
 		&i.StickyEnabled,
-		&i.ConcurrencyLimit,
 	)
 	return i, err
 }
@@ -262,7 +262,7 @@ func (q *Queries) ListRouteChannelsDetailed(ctx context.Context, routeID int64) 
 }
 
 const listRoutes = `-- name: ListRoutes :many
-SELECT id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled, concurrency_limit FROM routes ORDER BY id ASC
+SELECT id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, concurrency_limit, archived_at, sticky_enabled FROM routes ORDER BY id ASC
 `
 
 // ListRoutes 列出全部线路，供 admin 管理台展示。
@@ -287,9 +287,9 @@ func (q *Queries) ListRoutes(ctx context.Context) ([]Route, error) {
 			&i.RpmLimit,
 			&i.TpmLimit,
 			&i.RpdLimit,
+			&i.ConcurrencyLimit,
 			&i.ArchivedAt,
 			&i.StickyEnabled,
-			&i.ConcurrencyLimit,
 		); err != nil {
 			return nil, err
 		}
@@ -857,10 +857,9 @@ SELECT
     c.protocol,
     c.adapter_key,
     c.priority,
-    c.tpm_limit,
     c.concurrency_limit,
     c.config_revision AS channel_config_revision,
-    c.admission_limits_revision AS channel_admission_limits_revision,
+    c.capacity_revision AS channel_capacity_revision,
     p.origin,
     p.origin_revision AS provider_origin_revision,
     p.status_revision AS provider_status_revision,
@@ -964,59 +963,58 @@ type RouteRuntimePoolParams struct {
 }
 
 type RouteRuntimePoolRow struct {
-	RouteID                        int64
-	Mode                           string
-	RouteStatus                    string
-	PriceRatio                     pgtype.Numeric
-	ChannelID                      int64
-	ChannelName                    string
-	ChannelStatus                  string
-	CredentialValid                bool
-	HasCredential                  bool
-	HasOrigin                      bool
-	Protocol                       string
-	AdapterKey                     string
-	Priority                       int32
-	TpmLimit                       pgtype.Int4
-	ConcurrencyLimit               pgtype.Int4
-	ChannelConfigRevision          int64
-	ChannelAdmissionLimitsRevision int64
-	Origin                         string
-	ProviderOriginRevision         int64
-	ProviderStatusRevision         int64
-	ProviderID                     int64
-	ProviderName                   string
-	ProviderStatus                 string
-	ModelDbID                      int64
-	ModelExists                    bool
-	ModelStatus                    string
-	BindingStatus                  string
-	HasModelPrice                  bool
-	HasChannelCost                 bool
-	ModelPriceID                   int64
-	BaseCurrency                   string
-	BasePricingUnit                string
-	UncachedInputPrice             pgtype.Numeric
-	CacheReadInputPrice            pgtype.Numeric
-	CacheWrite5mInputPrice         pgtype.Numeric
-	CacheWrite1hInputPrice         pgtype.Numeric
-	CacheWrite30mInputPrice        pgtype.Numeric
-	OutputPrice                    pgtype.Numeric
-	ReasoningOutputPrice           pgtype.Numeric
-	ChannelPriceID                 int64
-	CostCurrency                   string
-	CostPricingUnit                string
-	UncachedInputCost              pgtype.Numeric
-	CacheReadInputCost             pgtype.Numeric
-	CacheWrite5mInputCost          pgtype.Numeric
-	CacheWrite1hInputCost          pgtype.Numeric
-	CacheWrite30mInputCost         pgtype.Numeric
-	OutputCost                     pgtype.Numeric
-	ReasoningOutputCost            pgtype.Numeric
-	ChannelCostMultiplierID        int64
-	CostMultiplier                 pgtype.Numeric
-	ChannelRechargeFactorID        int64
-	RechargeFactor                 pgtype.Numeric
+	RouteID                 int64
+	Mode                    string
+	RouteStatus             string
+	PriceRatio              pgtype.Numeric
+	ChannelID               int64
+	ChannelName             string
+	ChannelStatus           string
+	CredentialValid         bool
+	HasCredential           bool
+	HasOrigin               bool
+	Protocol                string
+	AdapterKey              string
+	Priority                int32
+	ConcurrencyLimit        pgtype.Int4
+	ChannelConfigRevision   int64
+	ChannelCapacityRevision int64
+	Origin                  string
+	ProviderOriginRevision  int64
+	ProviderStatusRevision  int64
+	ProviderID              int64
+	ProviderName            string
+	ProviderStatus          string
+	ModelDbID               int64
+	ModelExists             bool
+	ModelStatus             string
+	BindingStatus           string
+	HasModelPrice           bool
+	HasChannelCost          bool
+	ModelPriceID            int64
+	BaseCurrency            string
+	BasePricingUnit         string
+	UncachedInputPrice      pgtype.Numeric
+	CacheReadInputPrice     pgtype.Numeric
+	CacheWrite5mInputPrice  pgtype.Numeric
+	CacheWrite1hInputPrice  pgtype.Numeric
+	CacheWrite30mInputPrice pgtype.Numeric
+	OutputPrice             pgtype.Numeric
+	ReasoningOutputPrice    pgtype.Numeric
+	ChannelPriceID          int64
+	CostCurrency            string
+	CostPricingUnit         string
+	UncachedInputCost       pgtype.Numeric
+	CacheReadInputCost      pgtype.Numeric
+	CacheWrite5mInputCost   pgtype.Numeric
+	CacheWrite1hInputCost   pgtype.Numeric
+	CacheWrite30mInputCost  pgtype.Numeric
+	OutputCost              pgtype.Numeric
+	ReasoningOutputCost     pgtype.Numeric
+	ChannelCostMultiplierID int64
+	CostMultiplier          pgtype.Numeric
+	ChannelRechargeFactorID int64
+	RechargeFactor          pgtype.Numeric
 }
 
 // RouteRuntimePool returns every explicitly bound channel plus DB hard-filter facts.
@@ -1043,10 +1041,9 @@ func (q *Queries) RouteRuntimePool(ctx context.Context, arg RouteRuntimePoolPara
 			&i.Protocol,
 			&i.AdapterKey,
 			&i.Priority,
-			&i.TpmLimit,
 			&i.ConcurrencyLimit,
 			&i.ChannelConfigRevision,
-			&i.ChannelAdmissionLimitsRevision,
+			&i.ChannelCapacityRevision,
 			&i.Origin,
 			&i.ProviderOriginRevision,
 			&i.ProviderStatusRevision,
@@ -1323,7 +1320,7 @@ SET name = $1,
     concurrency_limit = $9,
     updated_at = now()
 WHERE id = $10
-RETURNING id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, archived_at, sticky_enabled, concurrency_limit
+RETURNING id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, concurrency_limit, archived_at, sticky_enabled
 `
 
 type UpdateRouteParams struct {
@@ -1366,9 +1363,9 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route
 		&i.RpmLimit,
 		&i.TpmLimit,
 		&i.RpdLimit,
+		&i.ConcurrencyLimit,
 		&i.ArchivedAt,
 		&i.StickyEnabled,
-		&i.ConcurrencyLimit,
 	)
 	return i, err
 }

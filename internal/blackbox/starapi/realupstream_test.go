@@ -509,7 +509,7 @@ func assertLatestCompactAttempts(t *testing.T, f *sdkfixture.Fixture, want []com
 	var requestID int64
 	var requestStarted pgtype.Timestamptz
 	if err := f.Pool.QueryRow(ctx, `
-		SELECT id, response_started_at
+		SELECT id, gateway_first_token_at
 		FROM request_records
 		WHERE user_id = $1
 		ORDER BY id DESC
@@ -518,12 +518,12 @@ func assertLatestCompactAttempts(t *testing.T, f *sdkfixture.Fixture, want []com
 		t.Fatalf("load latest compact request: %v", err)
 	}
 	if requestStarted.Valid {
-		t.Fatal("non-stream compact request response_started_at must be NULL")
+		t.Fatal("non-stream compact request gateway_first_token_at must be NULL")
 	}
 
 	rows, err := f.Pool.Query(ctx, `
 		SELECT attempt_index, status, upstream_status_code, upstream_endpoint,
-		       response_started_at, upstream_first_token_at
+		       gateway_first_token_at, upstream_first_token_at
 		FROM request_attempts
 		WHERE request_record_id = $1
 		ORDER BY attempt_index ASC
@@ -534,25 +534,25 @@ func assertLatestCompactAttempts(t *testing.T, f *sdkfixture.Fixture, want []com
 	defer rows.Close()
 
 	var got []struct {
-		index             int32
-		status            string
-		statusCode        pgtype.Int4
-		endpoint          string
-		responseStartedAt pgtype.Timestamptz
-		firstTokenAt      pgtype.Timestamptz
+		index               int32
+		status              string
+		statusCode          pgtype.Int4
+		endpoint            string
+		gatewayFirstTokenAt pgtype.Timestamptz
+		firstTokenAt        pgtype.Timestamptz
 	}
 	for rows.Next() {
 		var item struct {
-			index             int32
-			status            string
-			statusCode        pgtype.Int4
-			endpoint          string
-			responseStartedAt pgtype.Timestamptz
-			firstTokenAt      pgtype.Timestamptz
+			index               int32
+			status              string
+			statusCode          pgtype.Int4
+			endpoint            string
+			gatewayFirstTokenAt pgtype.Timestamptz
+			firstTokenAt        pgtype.Timestamptz
 		}
 		if err := rows.Scan(
 			&item.index, &item.status, &item.statusCode, &item.endpoint,
-			&item.responseStartedAt, &item.firstTokenAt,
+			&item.gatewayFirstTokenAt, &item.firstTokenAt,
 		); err != nil {
 			t.Fatalf("scan compact attempt: %v", err)
 		}
@@ -575,7 +575,7 @@ func assertLatestCompactAttempts(t *testing.T, f *sdkfixture.Fixture, want []com
 		if !got[i].statusCode.Valid || got[i].statusCode.Int32 != want[i].statusCode {
 			t.Errorf("compact attempt[%d] status_code=%v want %d", i, got[i].statusCode, want[i].statusCode)
 		}
-		if got[i].responseStartedAt.Valid || got[i].firstTokenAt.Valid {
+		if got[i].gatewayFirstTokenAt.Valid || got[i].firstTokenAt.Valid {
 			t.Errorf("compact attempt[%d] non-stream timing must not have response_started/first_token", i)
 		}
 	}

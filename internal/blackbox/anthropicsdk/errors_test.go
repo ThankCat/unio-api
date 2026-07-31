@@ -81,7 +81,7 @@ func TestANTSDKMockUpstream500MapsToClient502APIError(t *testing.T) {
 
 // ANT-SDK-Mock-06e：上游超时 → 客户看到 504 + type=api_error。
 //
-// 通过 ChannelTimeoutMS 把 channel 出站超时设为 100ms，上游 mock 阻塞 1s，
+// 通过 ChannelResponseTimeoutMS 把 channel 响应超时设为 100ms，上游 mock 阻塞 1s，
 // 触发 adapter 上下文超时 → lifecycle 映射到 UpstreamErrorCategoryTimeout
 // → gatewayapi/anthropic 渲染 504 + api_error。
 func TestANTSDKMockUpstreamTimeoutMapsToClient504(t *testing.T) {
@@ -95,11 +95,11 @@ func TestANTSDKMockUpstreamTimeoutMapsToClient504(t *testing.T) {
 	t.Cleanup(mock.Close)
 
 	f := sdkfixture.Setup(t, sdkfixture.SetupOptions{
-		Mode:             sdkfixture.UpstreamMock,
-		Protocol:         "anthropic",
-		AdapterKey:       "deepseek",
-		UpstreamBaseURL:  mock.URL,
-		ChannelTimeoutMS: 100,
+		Mode:                     sdkfixture.UpstreamMock,
+		Protocol:                 "anthropic",
+		AdapterKey:               "deepseek",
+		UpstreamBaseURL:          mock.URL,
+		ChannelResponseTimeoutMS: 100,
 	})
 
 	client := anthropic.NewClient(

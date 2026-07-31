@@ -33,7 +33,7 @@ func TestGatewayRuntimeReadinessSnapshotBlocksAllPendingRoutingControls(t *testi
 	var channelID int64
 	if err := tx.QueryRow(ctx, `INSERT INTO channels (
 		provider_id, name, protocol, adapter_key, credential, status, priority
-	) VALUES ($1, 'readiness', 'openai', 'openai', 'sk-readiness', 'enabled', 1)
+	) VALUES ($1, 'readiness', 'openai', 'openai', 'sk-readiness', 'enabled', 10)
 	RETURNING id`, providerID).Scan(&channelID); err != nil {
 		t.Fatalf("seed channel: %v", err)
 	}
@@ -49,11 +49,11 @@ func TestGatewayRuntimeReadinessSnapshotBlocksAllPendingRoutingControls(t *testi
 	channelToken := fmt.Sprintf("readiness-channel-%d", suffix)
 	if _, err := tx.Exec(ctx, `INSERT INTO runtime_control_operations (
 		token, kind, channel_id, current_revision, next_revision, payload_hash, state
-	) VALUES ($1, 'channel_admission_limits', $2, 1, 2, 'pending-channel', 'preparing')`,
+		) VALUES ($1, 'channel_capacity', $2, 1, 2, 'pending-channel', 'preparing')`,
 		channelToken, channelID); err != nil {
 		t.Fatalf("seed pending channel endpoint: %v", err)
 	}
-	assertRuntimeOperationsPending(t, queries, "channel admission")
+	assertRuntimeOperationsPending(t, queries, "channel capacity")
 	if _, err := tx.Exec(ctx, `UPDATE runtime_control_operations
 		SET state='aborted', completed_at=now() WHERE token=$1`, channelToken); err != nil {
 		t.Fatalf("finish channel endpoint: %v", err)

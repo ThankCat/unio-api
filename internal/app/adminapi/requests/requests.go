@@ -6,6 +6,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/ledger"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 
 	"github.com/go-chi/chi/v5"
 
@@ -37,7 +38,7 @@ type requestSummaryDTO struct {
 	ErrorCode           *string `json:"error_code"`
 	ErrorMessage        *string `json:"error_message"`
 	DeliveryStatus      string  `json:"delivery_status"`
-	ResponseStartedAt   *string `json:"response_started_at"`
+	GatewayFirstTokenAt *string `json:"gateway_first_token_at"`
 	ResponseCompletedAt *string `json:"response_completed_at"`
 	StartedAt           string  `json:"started_at"`
 	CompletedAt         *string `json:"completed_at"`
@@ -90,18 +91,32 @@ type requestListItemDTO struct {
 	ApiKeyPrefix          *string  `json:"api_key_prefix"`
 	ApiKeyPlaintext       *string  `json:"api_key_plaintext"`
 	RouteName             *string  `json:"route_name"`
+	RouteID               *int64   `json:"route_id"`
 	RoutePriceRatio       *string  `json:"route_price_ratio"`
 	RouteMode             *string  `json:"route_mode"`
 	FinalChannelName      *string  `json:"final_channel_name"`
 	ChannelChain          string   `json:"channel_chain"`
+	ScoringAttemptID      *int64   `json:"scoring_attempt_id"`
+	ScoringDimensions     []string `json:"scoring_dimensions"`
+	ScoringErrorFailure   bool     `json:"scoring_error_failure"`
 	ModelDisplayName      *string  `json:"model_display_name"`
 	ModelOwnedBy          *string  `json:"model_owned_by"`
 	ReasoningEffort       *string  `json:"reasoning_effort"`
 	ReasoningBudgetTokens *int32   `json:"reasoning_budget_tokens"`
 	ClientIP              *string  `json:"client_ip"`
 	LatencyMs             *int64   `json:"latency_ms"`
-	TtftMs                *int64   `json:"ttft_ms"`
+	GatewayTTFTMs         *int64   `json:"gateway_ttft_ms"`
 	Tps                   *float64 `json:"tps"`
+	// Sticky 摘要：无 routing_decision_traces 时 sticky_key_present 为 null。
+	StickyKeyPresent         *bool   `json:"sticky_key_present"`
+	StickyAction             *string `json:"sticky_action"`
+	StickyReason             *string `json:"sticky_reason"`
+	StickyBeforeChannelID    *int64  `json:"sticky_before_channel_id"`
+	StickyAfterChannelID     *int64  `json:"sticky_after_channel_id"`
+	StickyPinned             *bool   `json:"sticky_pinned"`
+	StickyPinnedNonPreferred *bool   `json:"sticky_pinned_non_preferred"`
+	StickyBeforeChannelName  *string `json:"sticky_before_channel_name"`
+	StickyAfterChannelName   *string `json:"sticky_after_channel_name"`
 }
 
 // costSnapshotDTO 是平台成本快照（单价 per_1m_tokens + 金额，USD 字符串）。
@@ -157,9 +172,13 @@ type attemptDTO struct {
 	ErrorCode             *string `json:"error_code"`
 	ErrorMessage          *string `json:"error_message"`
 	InternalErrorDetail   *string `json:"internal_error_detail,omitempty"`
-	ResponseStartedAt     *string `json:"response_started_at"`
+	GatewayFirstTokenAt   *string `json:"gateway_first_token_at"`
+	UpstreamTimeoutPhase  *string `json:"upstream_timeout_phase"`
 	UpstreamTotalMs       *int64  `json:"upstream_total_ms"`
 	UpstreamTTFTMs        *int64  `json:"upstream_ttft_ms"`
+	TTFTScoringSample     bool    `json:"ttft_scoring_sample"`
+	ErrorScoringSample    bool    `json:"error_scoring_sample"`
+	ErrorScoringFailure   bool    `json:"error_scoring_failure"`
 	FinalUsageReceived    bool    `json:"final_usage_received"`
 	StartedAt             string  `json:"started_at"`
 	CompletedAt           *string `json:"completed_at"`
@@ -186,6 +205,9 @@ type usageDTO struct {
 type requestDetailDTO struct {
 	requestSummaryDTO
 	InternalErrorDetail   *string                     `json:"internal_error_detail,omitempty"`
+	LatencyMs             *int64                      `json:"latency_ms"`
+	GatewayTTFTMs         *int64                      `json:"gateway_ttft_ms"`
+	Tps                   *float64                    `json:"tps"`
 	RouteID               *int64                      `json:"route_id"`
 	ReasoningEffort       *string                     `json:"reasoning_effort"`
 	ReasoningBudgetTokens *int32                      `json:"reasoning_budget_tokens"`
@@ -215,6 +237,32 @@ func (h *requestsHandler) list(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
+	routeID, err := adminhttp.OptionalInt64Query(r, "route_id")
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	channelID, err := adminhttp.OptionalInt64Query(r, "channel_id")
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	attemptID, err := adminhttp.OptionalInt64Query(r, "attempt_id")
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	scoringSample := adminhttp.QueryString(r, "scoring_sample")
+	switch scoringSample {
+	case "", "ttft", "error", "any":
+	default:
+		adminhttp.WriteServiceError(w, failure.New(
+			failure.CodeAdminInvalidArgument,
+			failure.WithMessage("scoring_sample must be one of ttft, error, any"),
+			failure.WithField("field", "scoring_sample"),
+		))
+		return
+	}
 	from, err := adminhttp.OptionalTimeQuery(r, "from")
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -241,17 +289,21 @@ func (h *requestsHandler) list(w http.ResponseWriter, r *http.Request) {
 	page := adminhttp.ParsePage(r)
 	field, desc := sort.SQLParams()
 	items, total, err := h.service.List(r.Context(), query.RequestListParams{
-		UserID:    userID,
-		APIKeyID:  apiKeyID,
-		RequestID: adminhttp.QueryString(r, "request_id"),
-		Status:    adminhttp.QueryString(r, "status"),
-		Model:     adminhttp.QueryString(r, "model"),
-		From:      from,
-		To:        to,
-		SortField: field,
-		SortDesc:  desc,
-		Limit:     page.Limit(),
-		Offset:    page.Offset(),
+		UserID:        userID,
+		APIKeyID:      apiKeyID,
+		RequestID:     adminhttp.QueryString(r, "request_id"),
+		Status:        adminhttp.QueryString(r, "status"),
+		Model:         adminhttp.QueryString(r, "model"),
+		RouteID:       routeID,
+		ChannelID:     channelID,
+		AttemptID:     attemptID,
+		ScoringSample: scoringSample,
+		From:          from,
+		To:            to,
+		SortField:     field,
+		SortDesc:      desc,
+		Limit:         page.Limit(),
+		Offset:        page.Offset(),
 	})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -297,7 +349,7 @@ func toRequestSummaryDTO(s query.RequestSummary) requestSummaryDTO {
 		ErrorCode:           s.ErrorCode,
 		ErrorMessage:        s.ErrorMessage,
 		DeliveryStatus:      s.DeliveryStatus,
-		ResponseStartedAt:   adminhttp.RFC3339Ptr(s.ResponseStartedAt),
+		GatewayFirstTokenAt: adminhttp.RFC3339Ptr(s.GatewayFirstTokenAt),
 		ResponseCompletedAt: adminhttp.RFC3339Ptr(s.ResponseCompletedAt),
 		StartedAt:           adminhttp.RFC3339(s.StartedAt),
 		CompletedAt:         adminhttp.RFC3339Ptr(s.CompletedAt),
@@ -350,18 +402,32 @@ func toRequestListItemDTO(item query.RequestListItem) requestListItemDTO {
 		ApiKeyPlaintext: item.APIKeyPlaintext,
 
 		RouteName:             item.RouteName,
+		RouteID:               item.RouteID,
 		RoutePriceRatio:       item.RoutePriceRatio,
 		RouteMode:             item.RouteMode,
 		FinalChannelName:      item.FinalChannelName,
 		ChannelChain:          item.ChannelChain,
+		ScoringAttemptID:      item.ScoringAttemptID,
+		ScoringDimensions:     item.ScoringDimensions,
+		ScoringErrorFailure:   item.ScoringErrorFailure,
 		ModelDisplayName:      item.ModelDisplayName,
 		ModelOwnedBy:          item.ModelOwnedBy,
 		ReasoningEffort:       item.ReasoningEffort,
 		ReasoningBudgetTokens: item.ReasoningBudgetTokens,
 		ClientIP:              item.ClientIP,
 		LatencyMs:             item.LatencyMs,
-		TtftMs:                item.TtftMs,
+		GatewayTTFTMs:         item.GatewayTTFTMs,
 		Tps:                   item.TPS,
+
+		StickyKeyPresent:         item.StickyKeyPresent,
+		StickyAction:             item.StickyAction,
+		StickyReason:             item.StickyReason,
+		StickyBeforeChannelID:    item.StickyBeforeChannelID,
+		StickyAfterChannelID:     item.StickyAfterChannelID,
+		StickyPinned:             item.StickyPinned,
+		StickyPinnedNonPreferred: item.StickyPinnedNonPreferred,
+		StickyBeforeChannelName:  item.StickyBeforeChannelName,
+		StickyAfterChannelName:   item.StickyAfterChannelName,
 	}
 }
 
@@ -403,6 +469,9 @@ func toRequestDetailDTO(d query.RequestDetail) requestDetailDTO {
 	dto := requestDetailDTO{
 		requestSummaryDTO:     toRequestSummaryDTO(d.RequestSummary),
 		InternalErrorDetail:   d.InternalErrorDetail,
+		LatencyMs:             d.LatencyMs,
+		GatewayTTFTMs:         d.GatewayTTFTMs,
+		Tps:                   d.TPS,
 		RouteID:               d.RouteID,
 		ReasoningEffort:       d.ReasoningEffort,
 		ReasoningBudgetTokens: d.ReasoningBudgetTokens,
@@ -457,9 +526,13 @@ func toAttemptDTO(a query.Attempt) attemptDTO {
 		ErrorCode:             a.ErrorCode,
 		ErrorMessage:          a.ErrorMessage,
 		InternalErrorDetail:   a.InternalErrorDetail,
-		ResponseStartedAt:     adminhttp.RFC3339Ptr(a.ResponseStartedAt),
+		GatewayFirstTokenAt:   adminhttp.RFC3339Ptr(a.GatewayFirstTokenAt),
+		UpstreamTimeoutPhase:  a.UpstreamTimeoutPhase,
 		UpstreamTotalMs:       a.UpstreamTotalMs,
 		UpstreamTTFTMs:        a.UpstreamTTFTMs,
+		TTFTScoringSample:     a.TTFTScoringSample,
+		ErrorScoringSample:    a.ErrorScoringSample,
+		ErrorScoringFailure:   a.ErrorScoringFailure,
 		FinalUsageReceived:    a.FinalUsageReceived,
 		StartedAt:             adminhttp.RFC3339(a.StartedAt),
 		CompletedAt:           adminhttp.RFC3339Ptr(a.CompletedAt),

@@ -43,7 +43,7 @@ func (s *p4RoutingMetricsSpy) IncPartialSettlement(string)                      
 func (s *p4RoutingMetricsSpy) IncRetryableFallback(string)                          {}
 func (s *p4RoutingMetricsSpy) IncZeroPriceServed(string, string, string)            {}
 func (s *p4RoutingMetricsSpy) IncRoutingSkip(string)                                {}
-func (s *p4RoutingMetricsSpy) ObserveRoutingHeadWait(time.Duration)                 {}
+func (s *p4RoutingMetricsSpy) ObserveRoutingCapacityWait(time.Duration)             {}
 
 func (s *p4RoutingMetricsSpy) ObserveRoutingBalance(string, string, int, int, float64) {}
 func (s *p4RoutingMetricsSpy) IncRoutingBalanceSelected(string, string)                {}
@@ -97,7 +97,7 @@ func TestRecordRoutingPlanPublishesP4WeightsAndBreakerFacts(t *testing.T) {
 					ProviderID: 23,
 					Channel:    routingChannel(17),
 				},
-				Balance: BalanceScore{Weight: 0.75, ProviderBreakerState: "closed", ChannelBreakerState: "closed"},
+				Balance: BalanceScore{FinalScore: 0.75, ProviderBreakerState: "closed", ChannelBreakerState: "closed"},
 			}},
 			Excluded: []CandidateExclusion{{
 				ChannelID: 19,

@@ -165,7 +165,7 @@ func TestRequestTPMLimitedPreservesIngressRPMAndRPD(t *testing.T) {
 func acquireAttemptTPMContract(
 	t *testing.T,
 	permitID string,
-	inputEstimate, tpmLimit int64,
+	inputEstimate int64,
 ) (*Store, *redis.Client, *AttemptPermit, map[string]string) {
 	t.Helper()
 	s, client, _ := newTestStore(t)
@@ -175,7 +175,7 @@ func acquireAttemptTPMContract(
 		s,
 		testConfig(),
 		channelID,
-		fmt.Sprintf(`{"rpm":100,"rpd":100,"tpm":%d,"concurrency":10}`, tpmLimit),
+		`{"concurrency":10}`,
 	)
 	admission, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
 		PermitID: permitID, AdmissionFingerprint: permitID + "-fp", RequestAdmissionID: "request-" + permitID,
@@ -195,172 +195,69 @@ func acquireAttemptTPMContract(
 	return s, client, admission.Permit, fields
 }
 
-func TestAttemptTPMSettlesReliableActualAgainstInput(t *testing.T) {
+// TestAttemptTerminalFreezesTPMStateWithoutChannelBuckets 冻结 §1.2/§8：Channel TPM 不再是准入门槛，
+// Finish 不再占用/结算任何 Channel TPM 桶，只在 permit 上记录终态口径供审计。
+func TestAttemptTerminalFreezesTPMStateWithoutChannelBuckets(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		actual int64
+		name      string
+		actual    *int64
+		wantState string
 	}{
-		{name: "smaller", actual: 40},
-		{name: "equal", actual: 100},
-		{name: "larger", actual: 160},
+		{name: "reliable usage settles", actual: int64Pointer(160), wantState: "settled"},
+		{name: "no reliable usage retains", actual: nil, wantState: "retained"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, client, permit, fields := acquireAttemptTPMContract(t, "attempt-settle-"+tc.name, 100, 1000)
-			actual := tc.actual
-			first, err := s.Finish(context.Background(), *permit, FinishOutcome{
-				ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored,
-				RequestWriteState: RequestWriteCompleted, ActualTotalTokens: &actual,
-			})
-			if err != nil {
-				t.Fatalf("attempt finish actual=%d: result=%+v err=%v", actual, first, err)
-			}
-			bucketKey := fields["ch_tpm_bucket"]
-			if used := client.Get(context.Background(), bucketKey).Val(); used != fmt.Sprint(actual) {
-				t.Fatalf("attempt TPM after actual=%d is %q", actual, used)
-			}
-			terminal := client.HMGet(context.Background(), s.keys.permit(permit.PermitID), "tpm_state", "tpm_actual_total").Val()
-			if fmt.Sprint(terminal[0]) != "settled" || fmt.Sprint(terminal[1]) != fmt.Sprint(actual) {
-				t.Fatalf("attempt terminal TPM fields=%v", terminal)
-			}
-
-			otherActual := actual + 1
-			second, err := s.Finish(context.Background(), *permit, FinishOutcome{
-				ProviderOutcome: OutcomeEligibleFailure, ChannelOutcome: OutcomeEligibleFailure,
-				RequestWriteState: RequestWriteCompleted, ActualTotalTokens: &otherActual,
-			})
-			if err != nil || second != first {
-				t.Fatalf("repeated attempt finish: first=%+v second=%+v err=%v", first, second, err)
-			}
-			if used := client.Get(context.Background(), bucketKey).Val(); used != fmt.Sprint(actual) {
-				t.Fatalf("repeated attempt finish changed TPM to %q", used)
-			}
-		})
-	}
-}
-
-func TestAttemptTPMRetainsInputWithoutReliableUsage(t *testing.T) {
-	for _, tc := range []struct {
-		name            string
-		writeState      RequestWriteState
-		responseHeaders bool
-		channelOutcome  Outcome
-	}{
-		{name: "uncertain transport", writeState: RequestWriteUncertain, channelOutcome: OutcomeIgnored},
-		{name: "http 4xx", writeState: RequestWriteNotStarted, responseHeaders: true, channelOutcome: OutcomeIgnored},
-		{name: "http 5xx", writeState: RequestWriteCompleted, responseHeaders: true, channelOutcome: OutcomeEligibleFailure},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s, client, permit, fields := acquireAttemptTPMContract(t, "attempt-retain-"+tc.name, 100, 1000)
-			_, err := s.Finish(context.Background(), *permit, FinishOutcome{
-				ProviderOutcome: OutcomeIgnored, ChannelOutcome: tc.channelOutcome,
-				RequestWriteState: tc.writeState, ResponseHeadersReceived: tc.responseHeaders,
-			})
-			if err != nil {
-				t.Fatalf("attempt finish without usage: %v", err)
-			}
-			if used := client.Get(context.Background(), fields["ch_tpm_bucket"]).Val(); used != "100" {
-				t.Fatalf("retained attempt TPM=%q, want 100", used)
-			}
-			if state := client.HGet(context.Background(), s.keys.permit(permit.PermitID), "tpm_state").Val(); state != "retained" {
-				t.Fatalf("retained attempt TPM state=%q", state)
-			}
-		})
-	}
-}
-
-func TestAttemptAbortReleasesWithFloorAndIsFirstTerminal(t *testing.T) {
-	s, client, permit, fields := acquireAttemptTPMContract(t, "attempt-abort-floor", 100, 1000)
-	for field, value := range map[string]int64{
-		"ch_rpm_bucket": 0,
-		"ch_rpd_bucket": 0,
-		"ch_tpm_bucket": 20,
-	} {
-		if err := client.Set(context.Background(), fields[field], value, 0).Err(); err != nil {
-			t.Fatalf("seed %s: %v", field, err)
-		}
-	}
-	if err := s.Abort(context.Background(), *permit); err != nil {
-		t.Fatalf("attempt abort: %v", err)
-	}
-	for _, field := range []string{"ch_rpm_bucket", "ch_rpd_bucket", "ch_tpm_bucket"} {
-		if used := client.Get(context.Background(), fields[field]).Val(); used != "0" {
-			t.Fatalf("aborted %s=%q, want floor 0", field, used)
-		}
-	}
-	if state := client.HGet(context.Background(), s.keys.permit(permit.PermitID), "tpm_state").Val(); state != "released" {
-		t.Fatalf("aborted attempt TPM state=%q", state)
-	}
-	if err := s.Abort(context.Background(), *permit); err != nil {
-		t.Fatalf("repeated attempt abort: %v", err)
-	}
-	if _, err := s.Finish(context.Background(), *permit, FinishOutcome{
-		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, RequestWriteState: RequestWriteCompleted,
-	}); err != nil {
-		t.Fatalf("finish after abort should be an idempotent terminal result: %v", err)
-	}
-	if used := client.Get(context.Background(), fields["ch_tpm_bucket"]).Val(); used != "0" {
-		t.Fatalf("terminal retries changed released TPM to %q", used)
-	}
-}
-
-func TestAttemptTerminalDoesNotRecreateExpiredMinuteBuckets(t *testing.T) {
-	for _, terminal := range []string{"finish", "abort"} {
-		t.Run(terminal, func(t *testing.T) {
-			s, client, permit, fields := acquireAttemptTPMContract(t, "attempt-expired-"+terminal, 100, 1000)
-			if err := client.Del(context.Background(), fields["ch_rpm_bucket"], fields["ch_tpm_bucket"]).Err(); err != nil {
-				t.Fatal(err)
-			}
-			if terminal == "finish" {
-				actual := int64(160)
-				if _, err := s.Finish(context.Background(), *permit, FinishOutcome{
-					ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored,
-					RequestWriteState: RequestWriteCompleted, ActualTotalTokens: &actual,
-				}); err != nil {
-					t.Fatalf("finish with expired minute buckets: %v", err)
+			s, client, permit, fields := acquireAttemptTPMContract(t, "attempt-terminal-"+tc.name, 100)
+			// permit 不再冻结任何 Channel 三维桶 key。
+			for _, field := range []string{"ch_rpm_bucket", "ch_rpd_bucket", "ch_tpm_bucket", "rpd_day_bucket"} {
+				if value, ok := fields[field]; ok && value != "" {
+					t.Fatalf("permit must not carry channel %s anymore, got %q", field, value)
 				}
-			} else if err := s.Abort(context.Background(), *permit); err != nil {
-				t.Fatalf("abort with expired minute buckets: %v", err)
 			}
-			if existing := client.Exists(context.Background(), fields["ch_rpm_bucket"], fields["ch_tpm_bucket"]).Val(); existing != 0 {
-				t.Fatalf("%s recreated %d expired minute buckets", terminal, existing)
+			if _, err := s.Finish(context.Background(), *permit, FinishOutcome{
+				ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored,
+				RequestWriteState: RequestWriteCompleted, ActualTotalTokens: tc.actual,
+			}); err != nil {
+				t.Fatalf("attempt finish: %v", err)
+			}
+			if state := client.HGet(context.Background(), s.keys.permit(permit.PermitID), "tpm_state").Val(); state != tc.wantState {
+				t.Fatalf("terminal tpm_state=%q want %q", state, tc.wantState)
 			}
 		})
 	}
 }
 
-func TestAttemptTPMLimitDenialHasNoPartialResourceWrites(t *testing.T) {
+// TestAttemptConcurrencyDenialHasNoPartialResourceWrites 验证唯一的渠道级硬门槛（并发满）
+// 返回 concurrency_full 且不留下任何部分写入。
+func TestAttemptConcurrencyDenialHasNoPartialResourceWrites(t *testing.T) {
 	s, client, _ := newTestStore(t)
-	const channelID = int64(931)
-	seedAttemptControls(t, s, testConfig(), channelID, `{"rpm":100,"rpd":100,"tpm":50,"concurrency":10}`)
-	in := withAttemptControlRevisions(AcquireAttemptInput{
-		PermitID: "attempt-tpm-denied", AdmissionFingerprint: "attempt-tpm-denied-fp",
-		RequestAdmissionID: "request-attempt-tpm-denied", RouteID: 932,
-		ProviderID: 933, ChannelID: channelID, OriginRevision: 1, ProviderStatusRevision: 1,
-		ChannelConfigRevision: 1, ModelID: 934, UpstreamEndpoint: EndpointChatCompletions,
-		RequestMode: ModeNonStream, InputEstimate: 100,
-	})
-	admission, err := acquireAttempt(t, s, in)
-	if err != nil || admission.Mode != AdmissionDenied || admission.Reason != ReasonRateLimited {
-		t.Fatalf("attempt TPM denial: admission=%+v err=%v", admission, err)
+	const channelID, providerID = int64(941), int64(943)
+	seedAttemptControls(t, s, testConfig(), channelID, `{"concurrency":1}`)
+	newInput := func(permitID string) AcquireAttemptInput {
+		return withAttemptControlRevisions(AcquireAttemptInput{
+			PermitID: permitID, AdmissionFingerprint: permitID + "-fp",
+			RequestAdmissionID: "request-conc-full", RouteID: 942,
+			ProviderID: providerID, ChannelID: channelID, OriginRevision: 1, ProviderStatusRevision: 1,
+			ChannelConfigRevision: 1, ModelID: 944, UpstreamEndpoint: EndpointChatCompletions,
+			RequestMode: ModeNonStream, InputEstimate: 100,
+		})
 	}
-	for _, pattern := range []string{
-		s.keys.channelRPMBucketPrefix(channelID) + "*",
-		s.keys.channelRPDBucketPrefix(channelID) + "*",
-		s.keys.channelTPMBucketPrefix(channelID) + "*",
-	} {
-		if keys := client.Keys(context.Background(), pattern).Val(); len(keys) != 0 {
-			t.Fatalf("attempt denial partially wrote resource keys %v", keys)
-		}
+	held, err := acquireAttempt(t, s, newInput("conc-held"))
+	if err != nil || held.Mode != AdmissionPermit {
+		t.Fatalf("first acquire: admission=%+v err=%v", held, err)
 	}
-	if exists := client.Exists(
-		context.Background(),
-		s.keys.permit(in.PermitID),
-		s.keys.channel(channelID),
-		s.keys.channel(channelID)+":conc",
-	).Val(); exists != 0 {
-		t.Fatalf("attempt denial partially wrote %d permit/state/concurrency keys", exists)
+
+	denied := newInput("conc-denied")
+	admission, err := acquireAttempt(t, s, denied)
+	if err != nil || admission.Mode != AdmissionDenied || admission.Reason != ReasonConcurrencyFull {
+		t.Fatalf("concurrency denial: admission=%+v err=%v", admission, err)
+	}
+	if exists := client.Exists(context.Background(), s.keys.permit(denied.PermitID)).Val(); exists != 0 {
+		t.Fatalf("concurrency denial wrote a permit key")
 	}
 }
+
+func int64Pointer(v int64) *int64 { return &v }
 
 func TestTPMInputsRejectLuaInexactValuesBeforeRedis(t *testing.T) {
 	s := &Store{}

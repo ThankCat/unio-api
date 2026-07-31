@@ -56,10 +56,15 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 		)
 	}
 
-	// 渠道 timeout 只约束「上游开始响应(拿到响应头)」,不约束流本体:Responses 流在长任务
-	// (图像生成等)期间会先回 200 再静默数分钟才吐事件,绝不能被渠道 timeout 当绝对截止时间掐断。
-	streamCtx, headersReceived, resetIdle, cancel := adapter.StreamTimeoutContext(ctx, ch.Timeout, adapter.StreamIdleTimeout())
-	defer cancel()
+	// 响应头预算只约束「上游开始响应」，不约束流本体：Responses 流在长任务（图像生成等）
+	// 期间会先回 200 再静默数分钟才吐事件。首字预算与响应头同起点（§11.2），
+	// 首个有效生成 Token 之后才交给 idle 看门狗——否则「秒回 200 然后静默」会绕过首字保护。
+	streamCtx, timeouts := adapter.StreamTimeoutContext(ctx, adapter.StreamTimeoutConfig{
+		ResponseHeader: ch.ResponseTimeout,
+		FirstToken:     ch.FirstTokenTimeout,
+		Idle:           adapter.StreamIdleTimeout(),
+	})
+	defer timeouts.Cancel()
 
 	streamCtx = adapter.WithAttemptTransportTrace(streamCtx)
 	httpReq, err := a.newUpstreamRequest(streamCtx, ch, req, true)
@@ -70,7 +75,7 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 	adapter.MarkTransportStarted(streamCtx)
 	upstreamResp, err := a.client.Do(httpReq)
 	ctxCause := context.Cause(streamCtx)
-	headersReceived()
+	timeouts.HeadersReceived()
 	if upstreamResp != nil {
 		adapter.MarkResponseHeadersReceived(streamCtx)
 	}
@@ -99,7 +104,7 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 	reader := adaptersse.NewReader(upstreamResp.Body, adaptersse.Config{
 		MaxLineBytes:  maxResponsesStreamEventBytes,
 		MaxEventBytes: maxResponsesStreamEventBytes,
-		OnActivity:    resetIdle,
+		OnActivity:    timeouts.ResetIdle,
 	})
 
 	buildOutcome := func() adapter.StreamOutcome {
@@ -114,12 +119,14 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 		ev := reader.Event()
 		data := sanitizeEventData(bytes.TrimSpace(ev.Data))
 
-		// 个别中转会在 Responses 流尾追加 chat 风格 [DONE] 哨兵：截留为内部成功终态，不透传给客户。
+		// 个别中转会在 Responses 流尾追加 chat 风格 [DONE] 哨兵。它只表示字节流结束，不能替代
+		// response.completed/incomplete：后者才携带可靠状态和 usage。截留哨兵后仍由下方终态检查
+		// 把缺少正式终态的流判为 incomplete。
 		if bytes.Equal(data, []byte("[DONE]")) {
-			terminalSeen = true
 			break
 		}
 		if len(data) == 0 {
+			// 空行只是 SSE 分隔，不能停止首字计时（§11.2）。
 			continue
 		}
 
@@ -129,6 +136,10 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 		}
 
 		chunk := StreamChunk{EventType: eventType, Data: data}
+		if FirstTokenPayload(chunk) != "" {
+			timeouts.FirstToken()
+			adapter.MarkFirstTokenEligible(streamCtx)
+		}
 
 		var streamErr error
 		switch eventType {
@@ -139,23 +150,27 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 				}
 			}
 		case eventResponseCompleted, eventResponseIncomplete:
-			if env := decodeEnvelope(data); env != nil && env.Response != nil {
-				resp := *env.Response
-				terminalResp = &resp
-				if resp.ID != "" {
-					responseID = resp.ID
-				}
-				if u, ok := chatUsageFromWire(resp.Usage); ok {
-					finalUsage = &u
-					chunk.Usage = &u
-				}
-				chunk.ResponseID = responseID
-				incompleteReason := ""
-				if resp.IncompleteDetails != nil {
-					incompleteReason = resp.IncompleteDetails.Reason
-				}
-				chunk.FinishReason = responsesRawFinish(resp.Status, incompleteReason)
+			env := decodeEnvelope(data)
+			if env == nil || env.Response == nil {
+				streamErr = newUpstreamStreamIncompleteError("openai responses adapter terminal event is malformed")
+				terminalSeen = true
+				break
 			}
+			resp := *env.Response
+			terminalResp = &resp
+			if resp.ID != "" {
+				responseID = resp.ID
+			}
+			if u, ok := chatUsageFromWire(resp.Usage); ok {
+				finalUsage = &u
+				chunk.Usage = &u
+			}
+			chunk.ResponseID = responseID
+			incompleteReason := ""
+			if resp.IncompleteDetails != nil {
+				incompleteReason = resp.IncompleteDetails.Reason
+			}
+			chunk.FinishReason = responsesRawFinish(resp.Status, incompleteReason)
 			terminalSeen = true
 		case eventResponseFailed:
 			env := decodeEnvelope(data)

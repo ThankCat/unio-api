@@ -143,7 +143,7 @@ func TestSeedDefaultsFillsMissingKeepsExisting(t *testing.T) {
 	q := newFakeQueries()
 	// 预置一个「运维已改过」的值(非默认,42s=42000ms)。
 	custom := []byte(`42000`)
-	q.data[GatewayDefaultChannelTimeoutKey] = custom
+	q.data[GatewayDefaultResponseTimeoutKey] = custom
 
 	store := newTestStore(q)
 	if err := store.SeedDefaults(context.Background()); err != nil {
@@ -157,7 +157,7 @@ func TestSeedDefaultsFillsMissingKeepsExisting(t *testing.T) {
 			t.Errorf("key %q not seeded", def.Key)
 			continue
 		}
-		if def.Key == GatewayDefaultChannelTimeoutKey {
+		if def.Key == GatewayDefaultResponseTimeoutKey {
 			if string(v) != string(custom) {
 				t.Errorf("existing row overwritten: got %s, want %s", v, custom)
 			}
@@ -172,7 +172,7 @@ func TestSeedDefaultsFillsMissingKeepsExisting(t *testing.T) {
 	if err := store.SeedDefaults(context.Background()); err != nil {
 		t.Fatalf("second seed: %v", err)
 	}
-	if string(q.data[GatewayDefaultChannelTimeoutKey]) != string(custom) {
+	if string(q.data[GatewayDefaultResponseTimeoutKey]) != string(custom) {
 		t.Fatal("idempotent seed must not overwrite")
 	}
 }

@@ -70,16 +70,16 @@ func (k keyBuilder) admissionRouteRate() string {
 	return k.base + "admission:v1:route-rate-limits"
 }
 
-func (k keyBuilder) admissionChannelRate() string {
-	return k.base + "admission:v1:channel-rate-limits"
-}
-
 func (k keyBuilder) admissionGlobalConcurrency() string {
 	return k.base + "admission:v1:global-concurrency"
 }
 
-func (k keyBuilder) admissionChannel(channelID int64) string {
-	return k.base + "admission:v1:channel:" + strconv.FormatInt(channelID, 10)
+func (k keyBuilder) channelCapacity(channelID int64) string {
+	return k.base + "capacity:v1:channel:" + strconv.FormatInt(channelID, 10)
+}
+
+func (k keyBuilder) capacityOp(token string) string {
+	return k.base + "capacity:v1:op:" + token
 }
 
 func (k keyBuilder) admissionRequest(requestAdmissionID string) string {
@@ -124,35 +124,28 @@ func (k keyBuilder) requestTPMBucketRoutePattern(routeID, minuteBucket int64) st
 	return k.base + "admission:v1:ru-tpm:" + i(routeID) + ":*:" + i(minuteBucket)
 }
 
-// Channel 稳定窗口桶（RPM/RPD/TPM）——不带 revision。
-func (k keyBuilder) channelRPMBucket(channelID, minuteBucket int64) string {
-	return k.base + "admission:v1:ch-rpm:" + i(channelID) + ":" + i(minuteBucket)
-}
-
-func (k keyBuilder) channelRPMBucketPrefix(channelID int64) string {
-	return k.base + "admission:v1:ch-rpm:" + i(channelID) + ":"
-}
-
-func (k keyBuilder) channelRPDBucket(channelID, dayBucket int64) string {
-	return k.base + "admission:v1:ch-rpd:" + i(channelID) + ":" + i(dayBucket)
-}
-
-func (k keyBuilder) channelRPDBucketPrefix(channelID int64) string {
-	return k.base + "admission:v1:ch-rpd:" + i(channelID) + ":"
-}
-
 // routeChannelRPDBucket records attempt attribution for one route/channel UTC day.
 // It is observational and does not replace the global Channel RPD capacity bucket.
 func (k keyBuilder) routeChannelRPDBucket(routeID, channelID, dayBucket int64) string {
 	return k.base + "admission:v1:route-ch-rpd:" + i(routeID) + ":" + i(channelID) + ":" + i(dayBucket)
 }
 
-func (k keyBuilder) channelTPMBucket(channelID, minuteBucket int64) string {
-	return k.base + "admission:v1:ch-tpm:" + i(channelID) + ":" + i(minuteBucket)
+// ---- 评分样本 / 观测（§12，独立于 admission 硬门槛）----
+
+// sampleMinuteBucket 是评分样本 30 分钟窗口的分钟聚合桶（hash）。
+// 与 admission 的 ch-rpm/ch-tpm 桶分离：观测不受限额影响，limit=0 也照常产生样本。
+func (k keyBuilder) sampleMinuteBucket(channelID, minute int64) string {
+	return k.base + "sample:v1:ch:" + i(channelID) + ":min:" + i(minute)
 }
 
-func (k keyBuilder) channelTPMBucketPrefix(channelID int64) string {
-	return k.base + "admission:v1:ch-tpm:" + i(channelID) + ":"
+// sampleDayBucket 记录 UTC 日内真正发起上游调用的 attempt 数（RPD 观测，D13）。
+func (k keyBuilder) sampleDayBucket(channelID, day int64) string {
+	return k.base + "sample:v1:ch:" + i(channelID) + ":day:" + i(day)
+}
+
+// sampleWriteMarker 保证同一 attempt 的样本只写一次（幂等，§12.5）。
+func (k keyBuilder) sampleWriteMarker(attemptID int64) string {
+	return k.base + "sample:v1:written:" + i(attemptID)
 }
 
 // ---- runtime-control（circuit_breaker / routing_balance）与完整性 marker（§5.1）----

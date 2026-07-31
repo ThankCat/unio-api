@@ -75,14 +75,11 @@ local function nullable_nonnegative_integer(value)
   return nonnegative_integer(value)
 end
 
-local function parse_channel_admission_payload(payload)
-  local value = exact_object(payload, { rpm = true, rpd = true, tpm = true, concurrency = true })
+local function parse_channel_capacity_payload(payload)
+  local value = exact_object(payload, { concurrency = true })
   if value == nil then return nil end
-  value.rpm = nullable_nonnegative_integer(value.rpm)
-  value.rpd = nullable_nonnegative_integer(value.rpd)
-  value.tpm = nullable_nonnegative_integer(value.tpm)
   value.concurrency = nullable_nonnegative_integer(value.concurrency)
-  if value.rpm == nil or value.rpd == nil or value.tpm == nil or value.concurrency == nil then return nil end
+  if value.concurrency == nil then return nil end
   return value
 end
 
@@ -163,103 +160,65 @@ local function parse_circuit_breaker_payload(payload)
   return value
 end
 
+-- parse_routing_balance_payload 校验 objective_v1 五项评分配置（§7/§14.6）：
+-- 成本 / 渠道并发容量 / TTFT / 错误率 / Priority 五项百分比权重之和必须为 100；
+-- TTFT 与错误率使用各自的滚动窗口与线性惩罚参数。无兼容分支：只接受该 canonical 结构。
 local function parse_routing_balance_payload(payload)
   local value = exact_object(payload, {
-    economic_weight_pct = true,
-    health_weight_pct = true,
-    capacity_weight_pct = true,
+    cost_weight_pct = true,
+    concurrency_weight_pct = true,
+    ttft_weight_pct = true,
+    error_rate_weight_pct = true,
     priority_weight_pct = true,
-    ttft_target_ms = true,
-    ttft_weight = true,
-    ttft_ewma_alpha = true,
+    ttft_window_ms = true,
+    ttft_penalty_unit_ms = true,
+    ttft_penalty_points_per_unit = true,
+    error_window_ms = true,
+    error_penalty_points_per_percent = true,
   })
-  if value == nil then
-    local legacy = exact_object(payload, {
-      ttft_target_ms = true,
-      ttft_weight = true,
-      cost_weight = true,
-      minimum_routing_factor = true,
-      ttft_ewma_alpha = true,
-    })
-    if legacy == nil then
-      legacy = exact_object(payload, {
-        ttft_target_ms = true,
-        ttft_weight = true,
-        minimum_routing_factor = true,
-        ttft_ewma_alpha = true,
-      })
-      if legacy == nil then return nil end
-      legacy.cost_weight = 0
-    end
-    if
-      type(legacy.cost_weight) ~= 'number'
-      or legacy.cost_weight ~= legacy.cost_weight
-      or legacy.cost_weight < 0
-      or legacy.cost_weight > 1
-    then
-      return nil
-    end
-    if
-      type(legacy.minimum_routing_factor) ~= 'number'
-      or legacy.minimum_routing_factor ~= legacy.minimum_routing_factor
-      or legacy.minimum_routing_factor <= 0
-      or legacy.minimum_routing_factor > 1
-    then
-      return nil
-    end
-    value = legacy
-    value.economic_weight_pct = 45
-    value.health_weight_pct = 25
-    value.capacity_weight_pct = 20
-    value.priority_weight_pct = 10
-  end
-  value.ttft_target_ms = positive_integer(value.ttft_target_ms)
-  if value.ttft_target_ms == nil then return nil end
-  if
-    type(value.ttft_weight) ~= 'number'
-    or value.ttft_weight ~= value.ttft_weight
-    or value.ttft_weight < 0
-    or value.ttft_weight > 1
-  then
-    return nil
-  end
-  value.economic_weight_pct = nonnegative_integer(value.economic_weight_pct)
-  value.health_weight_pct = nonnegative_integer(value.health_weight_pct)
-  value.capacity_weight_pct = nonnegative_integer(value.capacity_weight_pct)
+  if value == nil then return nil end
+
+  value.cost_weight_pct = nonnegative_integer(value.cost_weight_pct)
+  value.concurrency_weight_pct = nonnegative_integer(value.concurrency_weight_pct)
+  value.ttft_weight_pct = nonnegative_integer(value.ttft_weight_pct)
+  value.error_rate_weight_pct = nonnegative_integer(value.error_rate_weight_pct)
   value.priority_weight_pct = nonnegative_integer(value.priority_weight_pct)
   if
-    value.economic_weight_pct == nil
-    or value.economic_weight_pct > 100
-    or value.health_weight_pct == nil
-    or value.health_weight_pct > 100
-    or value.capacity_weight_pct == nil
-    or value.capacity_weight_pct > 100
+    value.cost_weight_pct == nil
+    or value.cost_weight_pct > 100
+    or value.concurrency_weight_pct == nil
+    or value.concurrency_weight_pct > 100
+    or value.ttft_weight_pct == nil
+    or value.ttft_weight_pct > 100
+    or value.error_rate_weight_pct == nil
+    or value.error_rate_weight_pct > 100
     or value.priority_weight_pct == nil
     or value.priority_weight_pct > 100
-    or value.economic_weight_pct + value.health_weight_pct + value.capacity_weight_pct + value.priority_weight_pct
+    or value.cost_weight_pct
+        + value.concurrency_weight_pct
+        + value.ttft_weight_pct
+        + value.error_rate_weight_pct
+        + value.priority_weight_pct
       ~= 100
   then
     return nil
   end
-  -- Keep deprecated in-process fields available to older snapshot consumers while objective_v1
-  -- uses the four explicit percentages as its routing authority.
-  if value.cost_weight == nil then value.cost_weight = 0 end
-  if value.minimum_routing_factor == nil then value.minimum_routing_factor = 0.05 end
-  if
-    type(value.cost_weight) ~= 'number'
-    or value.cost_weight < 0
-    or value.cost_weight > 1
-    or type(value.minimum_routing_factor) ~= 'number'
-    or value.minimum_routing_factor <= 0
-    or value.minimum_routing_factor > 1
-  then
+
+  value.ttft_window_ms = positive_integer(value.ttft_window_ms)
+  value.ttft_penalty_unit_ms = positive_integer(value.ttft_penalty_unit_ms)
+  value.error_window_ms = positive_integer(value.error_window_ms)
+  if value.ttft_window_ms == nil or value.ttft_penalty_unit_ms == nil or value.error_window_ms == nil then
     return nil
   end
   if
-    type(value.ttft_ewma_alpha) ~= 'number'
-    or value.ttft_ewma_alpha ~= value.ttft_ewma_alpha
-    or value.ttft_ewma_alpha <= 0
-    or value.ttft_ewma_alpha > 1
+    type(value.ttft_penalty_points_per_unit) ~= 'number'
+    or value.ttft_penalty_points_per_unit ~= value.ttft_penalty_points_per_unit
+    or value.ttft_penalty_points_per_unit <= 0
+    or value.ttft_penalty_points_per_unit > 100
+    or type(value.error_penalty_points_per_percent) ~= 'number'
+    or value.error_penalty_points_per_percent ~= value.error_penalty_points_per_percent
+    or value.error_penalty_points_per_percent <= 0
+    or value.error_penalty_points_per_percent > 100
   then
     return nil
   end

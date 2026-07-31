@@ -28,6 +28,7 @@ type RequestLifecycle struct {
 	authorizer      ChatAuthorizer
 	metrics         MetricsRecorder
 	credentialGate  CredentialGate
+	sampleRecorder  ChannelSampleRecorder
 	routingTraces   *RoutingTraceRecorder
 	ingressProtocol requestlog.Protocol
 	endpoint        requestlog.Endpoint
@@ -56,6 +57,17 @@ func (l *RequestLifecycle) RecordRoutingDecision(ctx context.Context, in Routing
 	}
 }
 
+// RecordRoutingDecisionFailure records a terminal routing decision that failed before the attempt runner started.
+// The plan may contain only excluded candidates; retaining it is what makes all-cooldown and all-breaker failures explainable.
+func (l *RequestLifecycle) RecordRoutingDecisionFailure(ctx context.Context, in RoutingDecisionTraceInput, err error) {
+	if l == nil {
+		return
+	}
+	in.Status = TraceStatusComplete
+	in.FinalResult = finalResultOf(false, err)
+	l.RecordRoutingDecision(ctx, in)
+}
+
 // RecordRoutingFailure 保存「已经参与选渠」后的路由失败（如无可用渠道、负毛利全摘除）。
 // 模型不存在 / 用户无权 / 线路未配置 / 协议非法 / 存储故障等尚未进入候选选择的失败不落库——
 // 它们没有路由决策可回顾，只留在 request_records。
@@ -79,9 +91,9 @@ func (l *RequestLifecycle) RecordRoutingFailure(ctx context.Context, request req
 	if marginGuard {
 		l.recordMarginGuard("runtime_rejected")
 	}
-	l.RecordRoutingDecision(ctx, RoutingDecisionTraceInput{
+	l.RecordRoutingDecisionFailure(ctx, RoutingDecisionTraceInput{
 		Request: request, RouteID: *routeID, ForceReasons: []string{reason}, MarginGuard: marginGuard,
-	})
+	}, err)
 }
 
 // shouldPersistRoutingFailure 判断 Plan 失败是否已经进入过渠道候选选择。
@@ -435,21 +447,28 @@ func nonNegativeIntPtr(value int) *int {
 	return &value
 }
 
-// MarkResponseStarted 尽力记录首个客户可见响应时间。
+// MarkDeliveryStarted 尽力推进 request delivery 状态。该动作不代表已经交付有效生成 Token。
+func (l *RequestLifecycle) MarkDeliveryStarted(ctx context.Context, requestRecord requestlog.RequestRecord) {
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	_, _ = l.requestLog.MarkRequestDeliveryStarted(auditCtx, requestRecord.ID)
+}
+
+// MarkGatewayFirstToken 尽力记录首个有效生成 Token 的客户交付时间。
 //
 // 该写入只服务观测指标，不能影响主响应链路：流式请求已经开始向客户发数据时，写审计字段失败
 // 不应中断 SSE。
-func (l *RequestLifecycle) MarkResponseStarted(ctx context.Context, requestRecord requestlog.RequestRecord, attemptRecord requestlog.AttemptRecord, responseStartedAt time.Time) {
+func (l *RequestLifecycle) MarkGatewayFirstToken(ctx context.Context, requestRecord requestlog.RequestRecord, attemptRecord requestlog.AttemptRecord, gatewayFirstTokenAt time.Time) {
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
 
-	_, _ = l.requestLog.MarkRequestResponseStarted(auditCtx, requestlog.MarkResponseStartedParams{
-		ID:                requestRecord.ID,
-		ResponseStartedAt: responseStartedAt,
+	_, _ = l.requestLog.MarkRequestGatewayFirstToken(auditCtx, requestlog.MarkGatewayFirstTokenParams{
+		ID:                  requestRecord.ID,
+		GatewayFirstTokenAt: gatewayFirstTokenAt,
 	})
-	_, _ = l.requestLog.MarkAttemptResponseStarted(auditCtx, requestlog.MarkAttemptResponseStartedParams{
-		ID:                attemptRecord.ID,
-		ResponseStartedAt: responseStartedAt,
+	_, _ = l.requestLog.MarkAttemptGatewayFirstToken(auditCtx, requestlog.MarkAttemptGatewayFirstTokenParams{
+		ID:                  attemptRecord.ID,
+		GatewayFirstTokenAt: gatewayFirstTokenAt,
 	})
 }
 
@@ -464,6 +483,31 @@ type attemptBreakerDispositionRecorder interface {
 // RecordAttemptTiming first-write-wins 地保存 upstream transport 时间事实。
 // 该写入脱离客户取消；流式 FirstToken 到达和 adapter 返回各调用一次。
 func (l *RequestLifecycle) RecordAttemptTiming(ctx context.Context, attemptRecord requestlog.AttemptRecord, facts AttemptTimingFacts) {
+	l.recordAttemptTimingWithPhase(ctx, attemptRecord, facts, "")
+}
+
+// RecordAttemptTimeoutPhase 在 attempt 因超时失败时补记稳定超时阶段（§11.4）。
+// 非超时失败传入空阶段即 no-op；first-write-wins 保证首次已确认的阶段不被覆盖。
+func (l *RequestLifecycle) RecordAttemptTimeoutPhase(
+	ctx context.Context,
+	attemptRecord requestlog.AttemptRecord,
+	facts AttemptTimingFacts,
+	stream bool,
+	err error,
+) {
+	phase := TimeoutPhaseOf(err, stream, facts)
+	if phase == "" {
+		return
+	}
+	l.recordAttemptTimingWithPhase(ctx, attemptRecord, facts, string(phase))
+}
+
+func (l *RequestLifecycle) recordAttemptTimingWithPhase(
+	ctx context.Context,
+	attemptRecord requestlog.AttemptRecord,
+	facts AttemptTimingFacts,
+	phase string,
+) {
 	recorder, ok := l.requestLog.(attemptTimingRecorder)
 	if !ok || attemptRecord.ID == 0 {
 		return
@@ -476,6 +520,7 @@ func (l *RequestLifecycle) RecordAttemptTiming(ctx context.Context, attemptRecor
 		UpstreamStartedAt:    facts.UpstreamStartedAt,
 		UpstreamFirstTokenAt: facts.UpstreamFirstTokenAt,
 		UpstreamCompletedAt:  facts.UpstreamCompletedAt,
+		UpstreamTimeoutPhase: phase,
 	})
 }
 

@@ -1,13 +1,12 @@
 local count = tonumber(ARGV[1])
-if count == nil or count < 1 or count ~= math.floor(count) or #KEYS ~= 7 + count * 6 or #ARGV ~= 8 + count * 9 then
+if count == nil or count < 1 or count ~= math.floor(count) or #KEYS ~= 6 + count * 6 or #ARGV ~= 7 + count * 6 then
   return redis.error_reply('invalid snapshot batch shape')
 end
 
 local marker = KEYS[1]
-local channel_rate_ctl = KEYS[2]
-local global_conc_ctl = KEYS[3]
-local breaker_ctl = KEYS[4]
-local balance_ctl = KEYS[5]
+local global_conc_ctl = KEYS[2]
+local breaker_ctl = KEYS[3]
+local balance_ctl = KEYS[4]
 local expected_epoch = ARGV[3]
 local expected_epoch_revision = ARGV[4]
 
@@ -33,27 +32,20 @@ local function require_control(key, expected, parser, stale_reason)
   return nil, state
 end
 
-local channel_rate, reason =
-  require_control(channel_rate_ctl, tonumber(ARGV[5]), parse_rate_limit_defaults_payload, 'stale_admission_revision')
-if channel_rate == nil then return { 'error', reason } end
-local global_conc
-global_conc, reason =
-  require_control(global_conc_ctl, tonumber(ARGV[6]), parse_global_concurrency_payload, 'stale_admission_revision')
+local global_conc, reason =
+  require_control(global_conc_ctl, tonumber(ARGV[5]), parse_global_concurrency_payload, 'stale_admission_revision')
 if global_conc == nil then return { 'error', reason } end
 local breaker
 breaker, reason =
-  require_control(breaker_ctl, tonumber(ARGV[7]), parse_circuit_breaker_payload, 'stale_setting_revision')
+  require_control(breaker_ctl, tonumber(ARGV[6]), parse_circuit_breaker_payload, 'stale_setting_revision')
 if breaker == nil then return { 'error', reason } end
 local balance
 balance, reason =
-  require_control(balance_ctl, tonumber(ARGV[8]), parse_routing_balance_payload, 'stale_setting_revision')
+  require_control(balance_ctl, tonumber(ARGV[7]), parse_routing_balance_payload, 'stale_setting_revision')
 if balance == nil then return { 'error', reason } end
 
 local t = redis.call('TIME')
 local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
-local minute_bucket = math.floor(now / 60000)
-local day_bucket = math.floor(now / 86400000)
-
 local function read_snapshot(state_key)
   if redis.call('EXISTS', state_key) == 0 then return { 'absent', now } end
   local fields = redis.call('HGETALL', state_key)
@@ -74,8 +66,8 @@ end
 
 local rows = {}
 for candidate = 1, count do
-  local key_offset = 5 + (candidate - 1) * 6
-  local arg_offset = 8 + (candidate - 1) * 9
+  local key_offset = 4 + (candidate - 1) * 6
+  local arg_offset = 7 + (candidate - 1) * 6
   local origin_key = KEYS[key_offset + 1]
   local channel_key = KEYS[key_offset + 2]
   local concurrency_key = KEYS[key_offset + 3]
@@ -86,30 +78,21 @@ for candidate = 1, count do
   local expected_status_revision = ARGV[arg_offset + 4]
   local expected_config_revision = ARGV[arg_offset + 5]
   local expected_channel_revision = tonumber(ARGV[arg_offset + 6])
-  local rpm_key = ARGV[arg_offset + 7] .. minute_bucket
-  local rpd_key = ARGV[arg_offset + 8] .. day_bucket
-  local tpm_key = ARGV[arg_offset + 9] .. minute_bucket
-
   local origin_type = redis_key_type(origin_key)
   local channel_type = redis_key_type(channel_key)
   if (origin_type ~= 'none' and origin_type ~= 'hash') or (channel_type ~= 'none' and channel_type ~= 'hash') then
     return redis.error_reply('WRONGTYPE snapshot state key must be a hash')
   end
 
-  local channel_limits
-  channel_limits, reason =
-    require_control(channel_ctl, expected_channel_revision, parse_channel_admission_payload, 'stale_admission_revision')
-  if channel_limits == nil then return { 'error', reason } end
-  local effective_concurrency = resolve_channel_limit(channel_limits.concurrency, global_conc.channel_limit)
-  local effective_rpm = resolve_channel_limit(channel_limits.rpm, channel_rate.rpm)
-  local effective_rpd = resolve_channel_limit(channel_limits.rpd, channel_rate.rpd)
-  local effective_tpm = resolve_channel_limit(channel_limits.tpm, channel_rate.tpm)
+  local channel_capacity
+  -- parse_channel_capacity_payload comes from helpers/authoritative_control.lua at assemble time.
+  ---@diagnostic disable-next-line: undefined-global
+  channel_capacity, reason = require_control(channel_ctl, expected_channel_revision, parse_channel_capacity_payload, 'stale_admission_revision')
+  if channel_capacity == nil then return { 'error', reason } end
+  local effective_concurrency = resolve_channel_limit(channel_capacity.concurrency, global_conc.channel_limit)
 
   local concurrency_used = active_zset_count(concurrency_key, now)
-  local rpm_used = read_nonnegative_counter(rpm_key)
-  local rpd_used = read_nonnegative_counter(rpd_key)
-  local tpm_used = read_nonnegative_counter(tpm_key)
-  if concurrency_used == nil or rpm_used == nil or rpd_used == nil or tpm_used == nil then
+  if concurrency_used == nil then
     return { 'error', 'runtime_sync_required' }
   end
 
@@ -145,12 +128,6 @@ for candidate = 1, count do
     permission_state,
     concurrency_used,
     effective_concurrency,
-    rpm_used,
-    effective_rpm,
-    rpd_used,
-    effective_rpd,
-    tpm_used,
-    effective_tpm,
     read_snapshot(origin_key),
     read_snapshot(channel_key),
     redis.call('HGET', channel_ctl, 'active_payload'),
@@ -161,10 +138,6 @@ end
 local breaker_enabled = 0
 if breaker.enabled then breaker_enabled = 1 end
 local control_proofs = {
-  {
-    redis.call('HGET', channel_rate_ctl, 'active_payload'),
-    redis.call('HGET', channel_rate_ctl, 'active_payload_hash'),
-  },
   { redis.call('HGET', global_conc_ctl, 'active_payload'), redis.call('HGET', global_conc_ctl, 'active_payload_hash') },
   { redis.call('HGET', breaker_ctl, 'active_payload'), redis.call('HGET', breaker_ctl, 'active_payload_hash') },
   { redis.call('HGET', balance_ctl, 'active_payload'), redis.call('HGET', balance_ctl, 'active_payload_hash') },
@@ -172,16 +145,18 @@ local control_proofs = {
 return {
   'ok',
   now,
-  tonumber(ARGV[8]),
-  balance.ttft_target_ms,
-  tostring(balance.ttft_weight),
-  balance.economic_weight_pct,
-  balance.health_weight_pct,
-  balance.capacity_weight_pct,
+  tonumber(ARGV[7]),
+  balance.cost_weight_pct,
+  balance.concurrency_weight_pct,
+  balance.ttft_weight_pct,
+  balance.error_rate_weight_pct,
   balance.priority_weight_pct,
+  balance.ttft_window_ms,
+  balance.ttft_penalty_unit_ms,
+  tostring(balance.ttft_penalty_points_per_unit),
+  balance.error_window_ms,
+  tostring(balance.error_penalty_points_per_percent),
   breaker_enabled,
   rows,
   control_proofs,
-  tostring(balance.cost_weight),
-  tostring(balance.minimum_routing_factor),
 }

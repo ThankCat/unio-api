@@ -113,7 +113,7 @@ tps_agg AS (
             SUM(u.output_tokens_total)::float8 / NULLIF(SUM(
                 CASE
                     WHEN a.completed_at IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (a.completed_at - COALESCE(a.response_started_at, a.started_at)))
+                    THEN EXTRACT(EPOCH FROM (a.completed_at - COALESCE(a.gateway_first_token_at, a.started_at)))
                 END
             ), 0),
             0
@@ -358,7 +358,7 @@ tps_agg AS (
             SUM(u.output_tokens_total)::float8 / NULLIF(SUM(
                 CASE
                     WHEN a.completed_at IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (a.completed_at - COALESCE(a.response_started_at, a.started_at)))
+                    THEN EXTRACT(EPOCH FROM (a.completed_at - COALESCE(a.gateway_first_token_at, a.started_at)))
                 END
             ), 0),
             0
@@ -753,16 +753,16 @@ SELECT
         END), 0)::float8 AS latency_p95,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE
-            WHEN r.stream = TRUE AND r.response_started_at IS NOT NULL
-            THEN (EXTRACT(EPOCH FROM (r.response_started_at - r.started_at)) * 1000)::float8
-        END), 0)::float8 AS ttft_p95,
+            WHEN r.stream = TRUE AND r.gateway_first_token_at IS NOT NULL
+            THEN (EXTRACT(EPOCH FROM (r.gateway_first_token_at - r.started_at)) * 1000)::float8
+        END), 0)::float8 AS gateway_ttft_p95,
     COALESCE(SUM(u.output_tokens_total) FILTER (WHERE r.status = 'succeeded'), 0)::bigint AS output_tokens,
     COALESCE(SUM(
         CASE
             WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
             THEN EXTRACT(EPOCH FROM (
                 r.completed_at - COALESCE(
-                    CASE WHEN r.stream = TRUE THEN r.response_started_at END,
+                    CASE WHEN r.stream = TRUE THEN r.gateway_first_token_at END,
                     r.started_at
                 )
             ))
@@ -785,12 +785,12 @@ type DashboardPerformanceTimeseriesParams struct {
 type DashboardPerformanceTimeseriesRow struct {
 	Bucket            pgtype.Timestamptz
 	LatencyP95        float64
-	TtftP95           float64
+	GatewayTtftP95    float64
 	OutputTokens      int64
 	GenerationSeconds float64
 }
 
-// DashboardPerformanceTimeseries 按时间桶聚合 P95 延迟 / P95 TTFT / TPS（性能趋势图）。
+// DashboardPerformanceTimeseries 按时间桶聚合 P95 延迟 / P95 Gateway TTFT / TPS（性能趋势图）。
 // request_records 与 usage_records 为 1:1（usage.request_record_id UNIQUE），JOIN 不放大行数。
 func (q *Queries) DashboardPerformanceTimeseries(ctx context.Context, arg DashboardPerformanceTimeseriesParams) ([]DashboardPerformanceTimeseriesRow, error) {
 	rows, err := q.db.Query(ctx, dashboardPerformanceTimeseries, arg.Unit, arg.FromTime, arg.ToTime)
@@ -804,7 +804,7 @@ func (q *Queries) DashboardPerformanceTimeseries(ctx context.Context, arg Dashbo
 		if err := rows.Scan(
 			&i.Bucket,
 			&i.LatencyP95,
-			&i.TtftP95,
+			&i.GatewayTtftP95,
 			&i.OutputTokens,
 			&i.GenerationSeconds,
 		); err != nil {
@@ -908,12 +908,12 @@ SELECT
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY lat_ms), 0)::float8 AS latency_p95,
     COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY lat_ms), 0)::float8 AS latency_p99,
     COUNT(lat_ms) AS latency_sample,
-    COALESCE(AVG(ttft_ms), 0)::float8 AS ttft_avg,
-    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p50,
-    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p90,
-    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p95,
-    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p99,
-    COUNT(ttft_ms) AS ttft_sample
+    COALESCE(AVG(gateway_ttft_ms), 0)::float8 AS gateway_ttft_avg,
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY gateway_ttft_ms), 0)::float8 AS gateway_ttft_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY gateway_ttft_ms), 0)::float8 AS gateway_ttft_p90,
+    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY gateway_ttft_ms), 0)::float8 AS gateway_ttft_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY gateway_ttft_ms), 0)::float8 AS gateway_ttft_p99,
+    COUNT(gateway_ttft_ms) AS gateway_ttft_sample
 FROM (
     SELECT
         status,
@@ -923,9 +923,9 @@ FROM (
             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8
         END AS lat_ms,
         CASE
-            WHEN stream = TRUE AND response_started_at IS NOT NULL
-            THEN (EXTRACT(EPOCH FROM (response_started_at - started_at)) * 1000)::float8
-        END AS ttft_ms
+            WHEN stream = TRUE AND gateway_first_token_at IS NOT NULL
+            THEN (EXTRACT(EPOCH FROM (gateway_first_token_at - started_at)) * 1000)::float8
+        END AS gateway_ttft_ms
     FROM request_records
     WHERE ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
       AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
@@ -938,24 +938,24 @@ type DashboardRadarRequestPerfParams struct {
 }
 
 type DashboardRadarRequestPerfRow struct {
-	TerminalTotal  int64
-	SucceededTotal int64
-	FailedTotal    int64
-	CanceledTotal  int64
-	PendingTotal   int64
-	TimeoutTotal   int64
-	LatencyAvg     float64
-	LatencyP50     float64
-	LatencyP90     float64
-	LatencyP95     float64
-	LatencyP99     float64
-	LatencySample  int64
-	TtftAvg        float64
-	TtftP50        float64
-	TtftP90        float64
-	TtftP95        float64
-	TtftP99        float64
-	TtftSample     int64
+	TerminalTotal     int64
+	SucceededTotal    int64
+	FailedTotal       int64
+	CanceledTotal     int64
+	PendingTotal      int64
+	TimeoutTotal      int64
+	LatencyAvg        float64
+	LatencyP50        float64
+	LatencyP90        float64
+	LatencyP95        float64
+	LatencyP99        float64
+	LatencySample     int64
+	GatewayTtftAvg    float64
+	GatewayTtftP50    float64
+	GatewayTtftP90    float64
+	GatewayTtftP95    float64
+	GatewayTtftP99    float64
+	GatewayTtftSample int64
 }
 
 // M9+ 概览运营雷达（§3.1 重构）只读聚合。全部纯只读、不引入新业务事实。
@@ -963,10 +963,10 @@ type DashboardRadarRequestPerfRow struct {
 // 时间区间 [from, to)（左闭右开）；可空 from_time/to_time（narg，NULL = 不过滤）。
 // 性能/延迟以 request_records 时间戳推导（无预存延迟列）：
 //
-//	延迟 = completed_at - started_at；TTFT 仅对 stream=true 使用 response_started_at - started_at（毫秒）。
+//	延迟 = completed_at - started_at；Gateway TTFT 仅对 stream=true 使用 gateway_first_token_at - started_at（毫秒）。
 //
 // percentile_cont 自动忽略 ORDER BY 中的 NULL 行，故用 CASE 把非目标行置 NULL。
-// DashboardRadarRequestPerf 在区间内一次性返回请求终态计数 + 超时数 + 延迟/TTFT 分位数（request 粒度）。
+// DashboardRadarRequestPerf 在区间内一次性返回请求终态计数 + 超时数 + 延迟/Gateway TTFT 分位数（request 粒度）。
 func (q *Queries) DashboardRadarRequestPerf(ctx context.Context, arg DashboardRadarRequestPerfParams) (DashboardRadarRequestPerfRow, error) {
 	row := q.db.QueryRow(ctx, dashboardRadarRequestPerf, arg.FromTime, arg.ToTime)
 	var i DashboardRadarRequestPerfRow
@@ -983,12 +983,12 @@ func (q *Queries) DashboardRadarRequestPerf(ctx context.Context, arg DashboardRa
 		&i.LatencyP95,
 		&i.LatencyP99,
 		&i.LatencySample,
-		&i.TtftAvg,
-		&i.TtftP50,
-		&i.TtftP90,
-		&i.TtftP95,
-		&i.TtftP99,
-		&i.TtftSample,
+		&i.GatewayTtftAvg,
+		&i.GatewayTtftP50,
+		&i.GatewayTtftP90,
+		&i.GatewayTtftP95,
+		&i.GatewayTtftP99,
+		&i.GatewayTtftSample,
 	)
 	return i, err
 }
@@ -1022,7 +1022,7 @@ SELECT
             WHEN r.completed_at IS NOT NULL
             THEN EXTRACT(EPOCH FROM (
                 r.completed_at - COALESCE(
-                    CASE WHEN r.stream = TRUE THEN r.response_started_at END,
+                    CASE WHEN r.stream = TRUE THEN r.gateway_first_token_at END,
                     r.started_at
                 )
             ))
@@ -1046,7 +1046,7 @@ type DashboardRadarThroughputRow struct {
 }
 
 // DashboardRadarThroughput 汇总成功请求的输出 token 与生成耗时（秒），service 据此算 TPS。
-// 流式生成耗时优先用 completed_at - response_started_at；非流式和缺 TTFT 时使用 started_at。
+// 流式生成耗时优先用 completed_at - gateway_first_token_at；非流式和缺 TTFT 时使用 started_at。
 func (q *Queries) DashboardRadarThroughput(ctx context.Context, arg DashboardRadarThroughputParams) (DashboardRadarThroughputRow, error) {
 	row := q.db.QueryRow(ctx, dashboardRadarThroughput, arg.FromTime, arg.ToTime)
 	var i DashboardRadarThroughputRow

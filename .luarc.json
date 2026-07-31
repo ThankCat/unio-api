@@ -13,6 +13,7 @@
     "parse_rate_limit_defaults_payload",
     "parse_global_concurrency_payload",
     "parse_channel_admission_payload",
+    "parse_channel_capacity_payload",
     "parse_circuit_breaker_payload",
     "parse_routing_balance_payload",
     "read_new_admission_control",

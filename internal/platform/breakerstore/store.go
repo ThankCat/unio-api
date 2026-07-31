@@ -41,6 +41,7 @@ type Store struct {
 	snapshotMany              *redis.Script
 	setCooldown               *redis.Script
 	cooldownRemain            *redis.Script
+	recordSample              *redis.Script
 	pausePermission           *redis.Script
 	clearPermission           *redis.Script
 	permissionRecheckClaim    *redis.Script
@@ -108,6 +109,7 @@ func NewStore(client redis.Cmdable, keyNamespace string, observers ...OperationO
 		snapshotMany:              redis.NewScript(luaScript("attempt.snapshot_many")),
 		setCooldown:               redis.NewScript(luaScript("attempt.set_cooldown")),
 		cooldownRemain:            redis.NewScript(luaScript("attempt.cooldown_remaining")),
+		recordSample:              redis.NewScript(luaScript("attempt.record_sample")),
 		pausePermission:           redis.NewScript(luaScript("attempt.pause_permission")),
 		clearPermission:           redis.NewScript(luaScript("attempt.clear_permission")),
 		permissionRecheckClaim:    redis.NewScript(luaScript("permission.recheck_claim")),
@@ -235,10 +237,9 @@ type AcquireAttemptInput struct {
 	UpstreamEndpoint UpstreamEndpoint
 	RequestMode      RequestMode
 
-	ChannelRateRevision       int64
 	GlobalConcurrencyRevision int64
 	CircuitBreakerRevision    int64
-	ChannelAdmissionRevision  int64
+	ChannelCapacityRevision   int64
 
 	// EnforceProviderControl=true 时，校验 Provider control 存在、effective_status=enabled、无 pending、
 	// 且 permit 冻结的 origin/status revision 与当前一致（§5.3.2 围栏准入分界）。
@@ -268,11 +269,7 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 		s.keys.permit(in.PermitID),
 		s.keys.channel429Cooldown(in.ChannelID),
 		s.keys.channelModelPermission(in.ChannelID, in.ModelID),
-		s.keys.admissionChannel(in.ChannelID),
-		s.keys.channelRPMBucket(in.ChannelID, minuteBucket(now)),
-		s.keys.channelRPDBucket(in.ChannelID, dayBucket(now)),
-		s.keys.channelTPMBucket(in.ChannelID, minuteBucket(now)),
-		s.keys.admissionChannelRate(),
+		s.keys.channelCapacity(in.ChannelID),
 		s.keys.admissionGlobalConcurrency(),
 		s.keys.runtimeControlSetting("gateway.circuit_breaker"),
 		s.keys.stateIntegrityMarker(),
@@ -301,8 +298,7 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 		strconv.FormatInt(in.ModelID, 10),
 		string(in.UpstreamEndpoint),
 		string(in.RequestMode),
-		strconv.FormatInt(in.ChannelAdmissionRevision, 10),
-		strconv.FormatInt(in.ChannelRateRevision, 10),
+		strconv.FormatInt(in.ChannelCapacityRevision, 10),
 		strconv.FormatInt(in.GlobalConcurrencyRevision, 10),
 		strconv.FormatInt(in.CircuitBreakerRevision, 10),
 		strconv.FormatInt(in.InputEstimate, 10),
@@ -335,7 +331,14 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 			s.ensureRuntimeInfrastructureFault(ctx)
 			reason = ReasonBreakerStoreUnavailable
 		}
-		return AttemptAdmission{Mode: AdmissionDenied, Reason: reason}, nil
+		denied := AttemptAdmission{Mode: AdmissionDenied, Reason: reason}
+		// cooldown 拒绝额外携带剩余毫秒，供全池均冷却时返回准确 Retry-After（§9.5）。
+		if reason == ReasonCooldown && len(arr) > 2 {
+			if remaining, ok := redisInt64(arr[2]); ok && remaining > 0 {
+				denied.CooldownRemainingMs = remaining
+			}
+		}
+		return denied, nil
 	case "conflict":
 		return AttemptAdmission{}, failure.New(failure.CodeGatewayBreakerPermitConflict, failure.WithMessage("attempt permit fingerprint conflict"))
 	case "permit", "idempotent":
@@ -461,23 +464,19 @@ func (s *Store) Finish(ctx context.Context, permit AttemptPermit, outcome Finish
 	if err := validateFinishInput(permit, outcome); err != nil {
 		return FinishResult{}, err
 	}
-	firstToken := ""
-	if permit.RequestMode == ModeStream && outcome.FirstTokenMs != nil {
-		firstToken = strconv.FormatInt(*outcome.FirstTokenMs, 10)
-	}
 	tpmActual := ""
 	if outcome.ActualTotalTokens != nil {
 		tpmActual = strconv.FormatInt(*outcome.ActualTotalTokens, 10)
 	}
+	// Finish 只收口资源与 breaker 状态机。TTFT 样本走独立的 30 分钟分钟桶（§12），
+	// 因此不再需要 routing-balance 控制，也不再向 breaker 状态写 TTFT。
 	keys := append(s.attemptLifecycleKeys(permit),
 		s.keys.runtimeControlSetting("gateway.circuit_breaker"),
-		s.keys.runtimeControlSetting("gateway.routing_balance"),
 	)
 	keys = append(keys, s.providerEvidenceKeys(permit.ProviderID, outcome.ProviderEvidence)...)
 	argv := append(attemptLifecycleArgs(permit),
 		string(outcome.ProviderOutcome),
 		string(outcome.ChannelOutcome),
-		firstToken,
 		tpmActual,
 		string(outcome.ProviderEvidence),
 		string(outcome.RequestWriteState),
@@ -753,7 +752,6 @@ func (s *Store) SnapshotMany(ctx context.Context, in SnapshotManyInput) (result 
 	}
 	keys := []string{
 		s.keys.stateIntegrityMarker(),
-		s.keys.admissionChannelRate(),
 		s.keys.admissionGlobalConcurrency(),
 		s.keys.runtimeControlSetting("gateway.circuit_breaker"),
 		s.keys.runtimeControlSetting("gateway.routing_balance"),
@@ -763,7 +761,6 @@ func (s *Store) SnapshotMany(ctx context.Context, in SnapshotManyInput) (result 
 		strconv.FormatInt(in.ModelID, 10),
 		in.IntegrityEpoch,
 		strconv.FormatInt(in.IntegrityRevision, 10),
-		strconv.FormatInt(in.ChannelRateRevision, 10),
 		strconv.FormatInt(in.GlobalConcurrencyRevision, 10),
 		strconv.FormatInt(in.CircuitBreakerRevision, 10),
 		strconv.FormatInt(in.RoutingBalanceRevision, 10),
@@ -778,7 +775,7 @@ func (s *Store) SnapshotMany(ctx context.Context, in SnapshotManyInput) (result 
 			s.keys.channel(candidate.ChannelID)+":conc",
 			s.keys.channel429Cooldown(candidate.ChannelID),
 			s.keys.channelModelPermission(candidate.ChannelID, in.ModelID),
-			s.keys.admissionChannel(candidate.ChannelID),
+			s.keys.channelCapacity(candidate.ChannelID),
 		)
 		argv = append(argv,
 			strconv.FormatInt(candidate.ProviderID, 10),
@@ -786,10 +783,7 @@ func (s *Store) SnapshotMany(ctx context.Context, in SnapshotManyInput) (result 
 			strconv.FormatInt(candidate.OriginRevision, 10),
 			strconv.FormatInt(candidate.ProviderStatusRevision, 10),
 			strconv.FormatInt(candidate.ChannelConfigRevision, 10),
-			strconv.FormatInt(candidate.ChannelAdmissionRevision, 10),
-			s.keys.channelRPMBucketPrefix(candidate.ChannelID),
-			s.keys.channelRPDBucketPrefix(candidate.ChannelID),
-			s.keys.channelTPMBucketPrefix(candidate.ChannelID),
+			strconv.FormatInt(candidate.ChannelCapacityRevision, 10),
 		)
 	}
 	keys = append(keys, s.keys.runtimeInfrastructureFault(), s.keys.runtimeReconciliationProof())
@@ -810,7 +804,9 @@ func (s *Store) SnapshotMany(ctx context.Context, in SnapshotManyInput) (result 
 		}
 		return SnapshotManyResult{}, snapshotManyRejected(reason)
 	}
-	if code != "ok" || (len(reply) != 12 && len(reply) != 14) {
+	// objective_v1 单一 canonical 回复形状：ok, now, revision, 五项权重, TTFT 窗口/单位/扣分,
+	// 错误率窗口/扣分, breaker_enabled, rows, control_proofs。
+	if code != "ok" || len(reply) != 16 {
 		return SnapshotManyResult{}, storeUnavailable(errors.New("unknown snapshot many reply"), "breakerstore snapshot many")
 	}
 	return parseSnapshotManyReply(in, reply)

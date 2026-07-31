@@ -83,6 +83,30 @@ func timePtr(v pgtype.Timestamptz) *time.Time {
 	return &out
 }
 
+// boolPtr 把可空 pgtype.Bool 转成 *bool：NULL → nil。
+func boolPtr(v pgtype.Bool) *bool {
+	if !v.Valid {
+		return nil
+	}
+	out := v.Bool
+	return &out
+}
+
+// stickyFlagPtr 把列表 SQL 里用 text 编码的 sticky 布尔（” / 'true' / 'false'）转成 *bool。
+// 空串表示无 routing_decision_traces，对应列表「—」。
+func stickyFlagPtr(v string) *bool {
+	switch v {
+	case "true":
+		t := true
+		return &t
+	case "false":
+		f := false
+		return &f
+	default:
+		return nil
+	}
+}
+
 // numericString 把 NUMERIC 精确格式化为十进制字符串（不用 float）；NULL/NaN/Inf → "0"。
 func numericString(n pgtype.Numeric) string {
 	if s := numericPtr(n); s != nil {

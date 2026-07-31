@@ -13,26 +13,8 @@ local lifecycle_guard = validate_attempt_permit_lifecycle()
 if lifecycle_guard ~= nil then return { lifecycle_guard } end
 if redis.call('HGET', permit_key, 'status') ~= 'active' then return { 'terminal_conflict' } end
 
+-- Channel 并发是唯一需要归还的渠道级资源；RPM/RPD/TPM 已不再占用（§1.2/§8），无需精确归还。
 if conc_key ~= '' then redis.call('ZREM', conc_key, permit_id) end
-
--- pre-transport 精确归还 Channel RPM/RPD/TPM 预占（仅原始桶仍存在时）。
-local function decrement_with_floor(bucket_key, amount)
-  if bucket_key == false or bucket_key == '' or amount <= 0 or redis.call('EXISTS', bucket_key) == 0 then return end
-  local used = tonumber(redis.call('GET', bucket_key)) or 0
-  local next_value = used - amount
-  if next_value < 0 then next_value = 0 end
-  redis.call('SET', bucket_key, next_value, 'KEEPTTL')
-end
-
-if redis.call('HGET', permit_key, 'admission_enforced') == '1' then
-  local rpm_bucket = redis.call('HGET', permit_key, 'ch_rpm_bucket')
-  local rpd_bucket = redis.call('HGET', permit_key, 'ch_rpd_bucket')
-  local tpm_bucket = redis.call('HGET', permit_key, 'ch_tpm_bucket')
-  local input_estimate = tonumber(redis.call('HGET', permit_key, 'tpm_input_estimate')) or 0
-  decrement_with_floor(rpm_bucket, 1)
-  decrement_with_floor(rpd_bucket, 1)
-  decrement_with_floor(tpm_bucket, input_estimate)
-end
 
 -- 释放本 permit 仍持有的 half-open 租约（不释放后来 permit 的租约）。
 local function release_probe(state_key, probe_field)

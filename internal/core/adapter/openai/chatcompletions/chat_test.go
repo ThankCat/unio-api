@@ -122,10 +122,10 @@ func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 
 	selectedChannel := channel.Runtime{
-		ID:      123,
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		ID:              123,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}
 
 	got, err := openAIAdapter.ChatCompletions(context.Background(), selectedChannel, adapterChatRequestWithParams())
@@ -228,9 +228,9 @@ func TestAdapterChatCompletionsPreservesResponseFields(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 
 	got, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model:    "gpt-4.1",
 		Messages: []ChatMessage{{Role: "user", Content: jsonContent("hello")}},
@@ -307,9 +307,9 @@ func TestAdapterChatCompletionsReturnsErrorForMissingUsage(t *testing.T) {
 			openAIAdapter := newTestAdapter(server.Client())
 
 			_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
-				Origin:  server.URL,
-				APIKey:  "test-secret",
-				Timeout: 30 * time.Second,
+				Origin:          server.URL,
+				APIKey:          "test-secret",
+				ResponseTimeout: 30 * time.Second,
 			}, ChatRequest{
 				Model: "gpt-4.1",
 				Messages: []ChatMessage{
@@ -336,9 +336,9 @@ func TestAdapterChatCompletionsReturnsErrorForUpstreamStatus(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []ChatMessage{
@@ -374,9 +374,9 @@ func TestAdapterChatCompletionsRejectsOversizedResponseBody(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model:    "gpt-4.1",
 		Messages: []ChatMessage{{Role: "user", Content: jsonContent("hello")}},
@@ -391,7 +391,7 @@ func TestAdapterChatCompletionsRejectsOversizedResponseBody(t *testing.T) {
 
 func TestAdapterStreamChatCompletionsTransportFailureIsRetryableServerError(t *testing.T) {
 	// 200 + 半个 SSE 帧后直接结束（无终止空行）：reader 读到 EOF-with-data 报 malformed stream。
-	// 这类「首字节前」传输层失败必须携带 server_error 上游分类，让 lifecycle 可 fallback 到其他 channel。
+	// 这类「客户帧写出前」传输层失败必须携带 server_error 上游分类，让 lifecycle 可 fallback 到其他 channel。
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -401,7 +401,7 @@ func TestAdapterStreamChatCompletionsTransportFailureIsRetryableServerError(t *t
 
 	_, err := newTestAdapter(server.Client()).StreamChatCompletions(
 		context.Background(),
-		channel.Runtime{Origin: server.URL, APIKey: "test-secret", Timeout: 30 * time.Second},
+		channel.Runtime{Origin: server.URL, APIKey: "test-secret", ResponseTimeout: 30 * time.Second},
 		adapterChatRequestWithParams(),
 		func(ChatStreamChunk) error { return nil },
 	)
@@ -421,7 +421,7 @@ func TestAdapterStreamChatCompletionsTransportFailureIsRetryableServerError(t *t
 }
 
 func TestAdapterStreamChatCompletionsIncompleteStreamIsRetryableServerError(t *testing.T) {
-	// 完整帧但缺尾部 [DONE]：上游/中转截断尾包。归为 server_error，允许首字节前 fallback。
+	// 完整帧但缺尾部 [DONE]：上游/中转截断尾包。归为 server_error，允许客户帧写出前 fallback。
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(`data: {"id":"chatcmpl_x","model":"gpt-4.1","choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}` + "\n\n"))
@@ -430,7 +430,7 @@ func TestAdapterStreamChatCompletionsIncompleteStreamIsRetryableServerError(t *t
 
 	_, err := newTestAdapter(server.Client()).StreamChatCompletions(
 		context.Background(),
-		channel.Runtime{Origin: server.URL, APIKey: "test-secret", Timeout: 30 * time.Second},
+		channel.Runtime{Origin: server.URL, APIKey: "test-secret", ResponseTimeout: 30 * time.Second},
 		adapterChatRequestWithParams(),
 		func(ChatStreamChunk) error { return nil },
 	)
@@ -472,9 +472,9 @@ func TestAdapterStreamChatCompletionsIdleTimeout(t *testing.T) {
 	_, err := openAIAdapter.StreamChatCompletions(
 		context.Background(),
 		channel.Runtime{
-			Origin:  server.URL,
-			APIKey:  "test-secret",
-			Timeout: 5 * time.Second,
+			Origin:          server.URL,
+			APIKey:          "test-secret",
+			ResponseTimeout: 5 * time.Second,
 		},
 		adapterChatRequestWithParams(),
 		func(ChatStreamChunk) error { return nil },
@@ -499,9 +499,9 @@ func TestAdapterChatCompletionsUsesChannelTimeout(t *testing.T) {
 	_, err := openAIAdapter.ChatCompletions(
 		context.Background(),
 		channel.Runtime{
-			Origin:  server.URL,
-			APIKey:  "test-secret",
-			Timeout: 50 * time.Millisecond,
+			Origin:          server.URL,
+			APIKey:          "test-secret",
+			ResponseTimeout: 50 * time.Millisecond,
 		},
 		ChatRequest{Model: "gpt-4.1",
 			Messages: []ChatMessage{
@@ -642,10 +642,10 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 
 	openAIAdapter := newTestAdapter(server.Client())
 	selectedChannel := channel.Runtime{
-		ID:      123,
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		ID:              123,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}
 
 	got := make([]ChatStreamChunk, 0)
@@ -784,9 +784,9 @@ func TestAdapterStreamChatCompletionsParsesMultilineSSEEvent(t *testing.T) {
 
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []ChatMessage{
@@ -832,9 +832,9 @@ func TestAdapterStreamChatCompletionsParsesOpenAIRawSSEFixture(t *testing.T) {
 
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []ChatMessage{
@@ -902,9 +902,9 @@ func TestAdapterStreamChatCompletionsPreservesChunkFields(t *testing.T) {
 
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model:    "gpt-4.1",
 		Messages: []ChatMessage{{Role: "user", Content: jsonContent("hi")}},
@@ -963,10 +963,10 @@ func TestAdapterStreamChatCompletionsParsesDeepSeekUsageTail(t *testing.T) {
 
 	got := make([]ChatStreamChunk, 0)
 	outcome, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		ProviderSlug: "deepseek",
-		Origin:       server.URL,
-		APIKey:       "test-secret",
-		Timeout:      30 * time.Second,
+		ProviderSlug:    "deepseek",
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "deepseek-v4-pro",
 		Messages: []ChatMessage{
@@ -1024,10 +1024,10 @@ func TestAdapterStreamChatCompletionsForwardsDeepSeekReasoningContent(t *testing
 
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		ProviderSlug: "deepseek",
-		Origin:       server.URL,
-		APIKey:       "test-secret",
-		Timeout:      30 * time.Second,
+		ProviderSlug:    "deepseek",
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "deepseek-v4-pro",
 		Messages: []ChatMessage{
@@ -1072,10 +1072,10 @@ func TestAdapterStreamChatCompletionsDoesNotForwardReasoningWithoutDeepSeekNorma
 
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		ProviderSlug: "openai",
-		Origin:       server.URL,
-		APIKey:       "test-secret",
-		Timeout:      30 * time.Second,
+		ProviderSlug:    "openai",
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []ChatMessage{
@@ -1127,9 +1127,9 @@ func TestAdapterStreamChatCompletionsParsesLargeSSEEvent(t *testing.T) {
 
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []ChatMessage{
@@ -1160,9 +1160,9 @@ func TestAdapterStreamChatCompletionsReturnsErrorForUpstreamStatus(t *testing.T)
 	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []ChatMessage{
@@ -1193,9 +1193,9 @@ func TestAdapterStreamChatCompletionsReturnsErrorForBadSSEJSON(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []ChatMessage{
@@ -1254,9 +1254,9 @@ func TestAdapterStreamChatCompletionsStopsWhenEmitReturnsError(t *testing.T) {
 
 	emitCalls := 0
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []ChatMessage{
@@ -1330,9 +1330,9 @@ func TestAdapterStreamChatCompletionsStopsAtDone(t *testing.T) {
 
 	got := make([]ChatStreamChunk, 0)
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []ChatMessage{
@@ -1373,9 +1373,9 @@ func TestAdapterStreamChatCompletionsReturnsFactsWithTailErrorBeforeDone(t *test
 	outcome, err := newTestAdapter(server.Client()).StreamChatCompletions(
 		context.Background(),
 		channel.Runtime{
-			Origin:  server.URL,
-			APIKey:  "test-secret",
-			Timeout: 30 * time.Second,
+			Origin:          server.URL,
+			APIKey:          "test-secret",
+			ResponseTimeout: 30 * time.Second,
 		},
 		ChatRequest{
 			Model:    "gpt-4.1",

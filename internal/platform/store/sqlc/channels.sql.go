@@ -88,7 +88,14 @@ func (q *Queries) ApplyRuntime401CredentialInvalidation(ctx context.Context, arg
 }
 
 const listChannelsForCredentialTest = `-- name: ListChannelsForCredentialTest :many
-SELECT c.id, c.provider_id, c.name, c.protocol, c.adapter_key, p.origin, c.credential, c.status, c.priority, c.timeout_ms, c.created_at, c.updated_at, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid, c.archived_at, c.concurrency_limit, c.upstream_bills_on_disconnect, c.config_revision, c.admission_limits_revision, p.origin_revision AS provider_origin_revision, p.status_revision AS provider_status_revision
+SELECT c.id, c.provider_id, c.name, c.protocol, c.adapter_key, p.origin, c.credential,
+       c.status, c.priority, c.created_at, c.updated_at, c.last_tested_at,
+       c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
+       c.archived_at, c.concurrency_limit, c.upstream_bills_on_disconnect,
+       c.response_timeout_ms, c.first_token_timeout_ms,
+       c.config_revision, c.capacity_revision,
+       p.origin_revision AS provider_origin_revision,
+       p.status_revision AS provider_status_revision
 FROM channels c
 JOIN providers p ON p.id = c.provider_id
 WHERE c.status = 'enabled' AND p.status = 'enabled'
@@ -105,12 +112,8 @@ type ListChannelsForCredentialTestRow struct {
 	Credential                string
 	Status                    string
 	Priority                  int32
-	TimeoutMs                 pgtype.Int4
 	CreatedAt                 pgtype.Timestamptz
 	UpdatedAt                 pgtype.Timestamptz
-	RpmLimit                  pgtype.Int4
-	TpmLimit                  pgtype.Int4
-	RpdLimit                  pgtype.Int4
 	LastTestedAt              pgtype.Timestamptz
 	LastTestOk                pgtype.Bool
 	LastTestLatencyMs         pgtype.Int4
@@ -119,8 +122,10 @@ type ListChannelsForCredentialTestRow struct {
 	ArchivedAt                pgtype.Timestamptz
 	ConcurrencyLimit          pgtype.Int4
 	UpstreamBillsOnDisconnect bool
+	ResponseTimeoutMs         pgtype.Int4
+	FirstTokenTimeoutMs       pgtype.Int4
 	ConfigRevision            int64
-	AdmissionLimitsRevision   int64
+	CapacityRevision          int64
 	ProviderOriginRevision    int64
 	ProviderStatusRevision    int64
 }
@@ -146,12 +151,8 @@ func (q *Queries) ListChannelsForCredentialTest(ctx context.Context) ([]ListChan
 			&i.Credential,
 			&i.Status,
 			&i.Priority,
-			&i.TimeoutMs,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.RpmLimit,
-			&i.TpmLimit,
-			&i.RpdLimit,
 			&i.LastTestedAt,
 			&i.LastTestOk,
 			&i.LastTestLatencyMs,
@@ -160,8 +161,10 @@ func (q *Queries) ListChannelsForCredentialTest(ctx context.Context) ([]ListChan
 			&i.ArchivedAt,
 			&i.ConcurrencyLimit,
 			&i.UpstreamBillsOnDisconnect,
+			&i.ResponseTimeoutMs,
+			&i.FirstTokenTimeoutMs,
 			&i.ConfigRevision,
-			&i.AdmissionLimitsRevision,
+			&i.CapacityRevision,
 			&i.ProviderOriginRevision,
 			&i.ProviderStatusRevision,
 		); err != nil {

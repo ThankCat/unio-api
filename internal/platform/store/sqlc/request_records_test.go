@@ -95,7 +95,7 @@ func createRequestRecordForTest(t *testing.T, ctx context.Context, queries *sqlc
 		ErrorMessage:        pgtype.Text{Valid: false},
 		InternalErrorDetail: pgtype.Text{Valid: false},
 		DeliveryStatus:      "not_started",
-		ResponseStartedAt:   pgtype.Timestamptz{Valid: false},
+		GatewayFirstTokenAt: pgtype.Timestamptz{Valid: false},
 		ResponseCompletedAt: pgtype.Timestamptz{Valid: false},
 		StartedAt:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		CompletedAt:         pgtype.Timestamptz{Valid: false},
@@ -138,17 +138,17 @@ func TestRequestRecordLifecycle(t *testing.T) {
 		t.Fatalf("expected running status, got %q", running.Status)
 	}
 
-	responseStartedAt := time.Now()
-	completedAt := responseStartedAt.Add(250 * time.Millisecond)
+	gatewayFirstTokenAt := time.Now()
+	completedAt := gatewayFirstTokenAt.Add(250 * time.Millisecond)
 	succeeded, err := queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
-		ResponseModelID:   pgtype.Text{String: "deepseek-v4-pro", Valid: true},
-		ResponseProtocol:  pgtype.Text{String: "openai", Valid: true},
-		ResponseID:        pgtype.Text{String: "chatcmpl-request-record", Valid: true},
-		FinalProviderID:   pgtype.Int8{Int64: providerID, Valid: true},
-		FinalChannelID:    pgtype.Int8{Int64: channelID, Valid: true},
-		ResponseStartedAt: pgtype.Timestamptz{Time: responseStartedAt, Valid: true},
-		CompletedAt:       pgtype.Timestamptz{Time: completedAt, Valid: true},
-		RequestRecordID:   record.ID,
+		ResponseModelID:     pgtype.Text{String: "deepseek-v4-pro", Valid: true},
+		ResponseProtocol:    pgtype.Text{String: "openai", Valid: true},
+		ResponseID:          pgtype.Text{String: "chatcmpl-request-record", Valid: true},
+		FinalProviderID:     pgtype.Int8{Int64: providerID, Valid: true},
+		FinalChannelID:      pgtype.Int8{Int64: channelID, Valid: true},
+		GatewayFirstTokenAt: pgtype.Timestamptz{Time: gatewayFirstTokenAt, Valid: true},
+		CompletedAt:         pgtype.Timestamptz{Time: completedAt, Valid: true},
+		RequestRecordID:     record.ID,
 	})
 	if err != nil {
 		t.Fatalf("mark request succeeded: %v", err)
@@ -159,8 +159,8 @@ func TestRequestRecordLifecycle(t *testing.T) {
 	if !succeeded.CompletedAt.Valid {
 		t.Fatal("expected succeeded request completed_at to be set")
 	}
-	if !succeeded.ResponseStartedAt.Valid {
-		t.Fatal("expected succeeded request response_started_at to be set")
+	if !succeeded.GatewayFirstTokenAt.Valid {
+		t.Fatal("expected succeeded request gateway_first_token_at to be set")
 	}
 	// response_completed_at 由交付状态机负责（delivery_status='completed' 时），结算不写，应保持 NULL。
 	if succeeded.ResponseCompletedAt.Valid {
@@ -215,30 +215,30 @@ func TestRequestRecordStateMachineKeepsTerminalFacts(t *testing.T) {
 		t.Fatalf("mark request running: %v", err)
 	}
 
-	firstResponseStartedAt := time.Now()
+	firstGatewayFirstTokenAt := time.Now()
 	firstSucceeded, err := queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
-		ResponseModelID:   pgtype.Text{String: "deepseek-v4-pro", Valid: true},
-		ResponseProtocol:  pgtype.Text{String: "openai", Valid: true},
-		ResponseID:        pgtype.Text{String: "chatcmpl-request-state", Valid: true},
-		FinalProviderID:   pgtype.Int8{Int64: providerID, Valid: true},
-		FinalChannelID:    pgtype.Int8{Int64: channelID, Valid: true},
-		ResponseStartedAt: pgtype.Timestamptz{Time: firstResponseStartedAt, Valid: true},
-		CompletedAt:       pgtype.Timestamptz{Time: firstResponseStartedAt.Add(100 * time.Millisecond), Valid: true},
-		RequestRecordID:   record.ID,
+		ResponseModelID:     pgtype.Text{String: "deepseek-v4-pro", Valid: true},
+		ResponseProtocol:    pgtype.Text{String: "openai", Valid: true},
+		ResponseID:          pgtype.Text{String: "chatcmpl-request-state", Valid: true},
+		FinalProviderID:     pgtype.Int8{Int64: providerID, Valid: true},
+		FinalChannelID:      pgtype.Int8{Int64: channelID, Valid: true},
+		GatewayFirstTokenAt: pgtype.Timestamptz{Time: firstGatewayFirstTokenAt, Valid: true},
+		CompletedAt:         pgtype.Timestamptz{Time: firstGatewayFirstTokenAt.Add(100 * time.Millisecond), Valid: true},
+		RequestRecordID:     record.ID,
 	})
 	if err != nil {
 		t.Fatalf("mark request succeeded: %v", err)
 	}
 
 	repeatedSucceeded, err := queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
-		ResponseModelID:   pgtype.Text{String: "should-not-overwrite", Valid: true},
-		ResponseProtocol:  pgtype.Text{String: "anthropic", Valid: true},
-		ResponseID:        pgtype.Text{String: "should-not-overwrite", Valid: true},
-		FinalProviderID:   pgtype.Int8{Int64: otherProviderID, Valid: true},
-		FinalChannelID:    pgtype.Int8{Int64: otherChannelID, Valid: true},
-		ResponseStartedAt: pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
-		CompletedAt:       pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
-		RequestRecordID:   record.ID,
+		ResponseModelID:     pgtype.Text{String: "should-not-overwrite", Valid: true},
+		ResponseProtocol:    pgtype.Text{String: "anthropic", Valid: true},
+		ResponseID:          pgtype.Text{String: "should-not-overwrite", Valid: true},
+		FinalProviderID:     pgtype.Int8{Int64: otherProviderID, Valid: true},
+		FinalChannelID:      pgtype.Int8{Int64: otherChannelID, Valid: true},
+		GatewayFirstTokenAt: pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+		CompletedAt:         pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+		RequestRecordID:     record.ID,
 	})
 	if err != nil {
 		t.Fatalf("repeat mark request succeeded: %v", err)
@@ -249,8 +249,8 @@ func TestRequestRecordStateMachineKeepsTerminalFacts(t *testing.T) {
 	if repeatedSucceeded.FinalProviderID.Int64 != providerID || repeatedSucceeded.FinalChannelID.Int64 != channelID {
 		t.Fatalf("expected repeated succeeded to keep provider/channel %d/%d, got %d/%d", providerID, channelID, repeatedSucceeded.FinalProviderID.Int64, repeatedSucceeded.FinalChannelID.Int64)
 	}
-	if !repeatedSucceeded.ResponseStartedAt.Valid || !repeatedSucceeded.ResponseStartedAt.Time.Equal(firstSucceeded.ResponseStartedAt.Time) {
-		t.Fatalf("expected repeated succeeded to keep response_started_at %v, got %v", firstSucceeded.ResponseStartedAt.Time, repeatedSucceeded.ResponseStartedAt.Time)
+	if !repeatedSucceeded.GatewayFirstTokenAt.Valid || !repeatedSucceeded.GatewayFirstTokenAt.Time.Equal(firstSucceeded.GatewayFirstTokenAt.Time) {
+		t.Fatalf("expected repeated succeeded to keep gateway_first_token_at %v, got %v", firstSucceeded.GatewayFirstTokenAt.Time, repeatedSucceeded.GatewayFirstTokenAt.Time)
 	}
 
 	_, err = queries.MarkRequestFailed(ctx, sqlc.MarkRequestFailedParams{
@@ -293,44 +293,44 @@ func TestRequestRecordResponseStartedCanBeRecordedBeforeTerminal(t *testing.T) {
 	}
 
 	firstStartedAt := time.Now()
-	started, err := queries.MarkRequestResponseStarted(ctx, sqlc.MarkRequestResponseStartedParams{
-		RequestRecordID:   record.ID,
-		ResponseStartedAt: pgtype.Timestamptz{Time: firstStartedAt, Valid: true},
+	started, err := queries.MarkRequestGatewayFirstToken(ctx, sqlc.MarkRequestGatewayFirstTokenParams{
+		RequestRecordID:     record.ID,
+		GatewayFirstTokenAt: pgtype.Timestamptz{Time: firstStartedAt, Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("mark request response started: %v", err)
 	}
-	if !started.ResponseStartedAt.Valid {
-		t.Fatal("expected response_started_at to be set")
+	if !started.GatewayFirstTokenAt.Valid {
+		t.Fatal("expected gateway_first_token_at to be set")
 	}
 
-	repeatedStarted, err := queries.MarkRequestResponseStarted(ctx, sqlc.MarkRequestResponseStartedParams{
-		RequestRecordID:   record.ID,
-		ResponseStartedAt: pgtype.Timestamptz{Time: firstStartedAt.Add(time.Hour), Valid: true},
+	repeatedStarted, err := queries.MarkRequestGatewayFirstToken(ctx, sqlc.MarkRequestGatewayFirstTokenParams{
+		RequestRecordID:     record.ID,
+		GatewayFirstTokenAt: pgtype.Timestamptz{Time: firstStartedAt.Add(time.Hour), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("repeat mark request response started: %v", err)
 	}
-	if !repeatedStarted.ResponseStartedAt.Time.Equal(started.ResponseStartedAt.Time) {
-		t.Fatalf("expected repeated start to keep %v, got %v", started.ResponseStartedAt.Time, repeatedStarted.ResponseStartedAt.Time)
+	if !repeatedStarted.GatewayFirstTokenAt.Time.Equal(started.GatewayFirstTokenAt.Time) {
+		t.Fatalf("expected repeated start to keep %v, got %v", started.GatewayFirstTokenAt.Time, repeatedStarted.GatewayFirstTokenAt.Time)
 	}
 
 	completedAt := firstStartedAt.Add(250 * time.Millisecond)
 	succeeded, err := queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
-		ResponseModelID:   pgtype.Text{String: "deepseek-v4-pro", Valid: true},
-		ResponseProtocol:  pgtype.Text{String: "openai", Valid: true},
-		ResponseID:        pgtype.Text{String: "chatcmpl-request-start", Valid: true},
-		FinalProviderID:   pgtype.Int8{Int64: providerID, Valid: true},
-		FinalChannelID:    pgtype.Int8{Int64: channelID, Valid: true},
-		ResponseStartedAt: pgtype.Timestamptz{Time: firstStartedAt.Add(time.Hour), Valid: true},
-		CompletedAt:       pgtype.Timestamptz{Time: completedAt, Valid: true},
-		RequestRecordID:   record.ID,
+		ResponseModelID:     pgtype.Text{String: "deepseek-v4-pro", Valid: true},
+		ResponseProtocol:    pgtype.Text{String: "openai", Valid: true},
+		ResponseID:          pgtype.Text{String: "chatcmpl-request-start", Valid: true},
+		FinalProviderID:     pgtype.Int8{Int64: providerID, Valid: true},
+		FinalChannelID:      pgtype.Int8{Int64: channelID, Valid: true},
+		GatewayFirstTokenAt: pgtype.Timestamptz{Time: firstStartedAt.Add(time.Hour), Valid: true},
+		CompletedAt:         pgtype.Timestamptz{Time: completedAt, Valid: true},
+		RequestRecordID:     record.ID,
 	})
 	if err != nil {
 		t.Fatalf("mark request succeeded: %v", err)
 	}
-	if !succeeded.ResponseStartedAt.Time.Equal(started.ResponseStartedAt.Time) {
-		t.Fatalf("expected succeeded to keep early response_started_at %v, got %v", started.ResponseStartedAt.Time, succeeded.ResponseStartedAt.Time)
+	if !succeeded.GatewayFirstTokenAt.Time.Equal(started.GatewayFirstTokenAt.Time) {
+		t.Fatalf("expected succeeded to keep early gateway_first_token_at %v, got %v", started.GatewayFirstTokenAt.Time, succeeded.GatewayFirstTokenAt.Time)
 	}
 }
 
@@ -360,7 +360,7 @@ func TestRequestRecordRejectsDuplicateRequestID(t *testing.T) {
 		ErrorCode:           pgtype.Text{Valid: false},
 		ErrorMessage:        pgtype.Text{Valid: false},
 		DeliveryStatus:      "not_started",
-		ResponseStartedAt:   pgtype.Timestamptz{Valid: false},
+		GatewayFirstTokenAt: pgtype.Timestamptz{Valid: false},
 		ResponseCompletedAt: pgtype.Timestamptz{Valid: false},
 		StartedAt:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		CompletedAt:         pgtype.Timestamptz{Valid: false},
@@ -541,7 +541,7 @@ func TestRequestAttemptStateMachineKeepsTerminalFacts(t *testing.T) {
 		FinishClass:           pgtype.Text{String: "stop", Valid: true},
 		UpstreamStatusCode:    pgtype.Int4{Int32: 200, Valid: true},
 		UpstreamRequestID:     pgtype.Text{String: "upstream-request-id", Valid: true},
-		ResponseStartedAt:     pgtype.Timestamptz{Time: attemptStartedAt, Valid: true},
+		GatewayFirstTokenAt:   pgtype.Timestamptz{Time: attemptStartedAt, Valid: true},
 		UsageMappingVersion:   pgtype.Text{String: "openai_chat_usage_v1", Valid: true},
 		CompletedAt:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		AttemptID:             attempt.ID,
@@ -549,8 +549,8 @@ func TestRequestAttemptStateMachineKeepsTerminalFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mark attempt succeeded: %v", err)
 	}
-	if !firstSucceeded.ResponseStartedAt.Valid {
-		t.Fatal("expected first succeeded attempt response_started_at to be set")
+	if !firstSucceeded.GatewayFirstTokenAt.Valid {
+		t.Fatal("expected first succeeded attempt gateway_first_token_at to be set")
 	}
 
 	repeatedSucceeded, err := queries.MarkRequestAttemptSucceeded(ctx, sqlc.MarkRequestAttemptSucceededParams{
@@ -560,7 +560,7 @@ func TestRequestAttemptStateMachineKeepsTerminalFacts(t *testing.T) {
 		FinishClass:           pgtype.Text{String: "other", Valid: true},
 		UpstreamStatusCode:    pgtype.Int4{Int32: 201, Valid: true},
 		UpstreamRequestID:     pgtype.Text{String: "should-not-overwrite", Valid: true},
-		ResponseStartedAt:     pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+		GatewayFirstTokenAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
 		UsageMappingVersion:   pgtype.Text{String: "should-not-overwrite", Valid: true},
 		CompletedAt:           pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
 		AttemptID:             attempt.ID,
@@ -577,8 +577,8 @@ func TestRequestAttemptStateMachineKeepsTerminalFacts(t *testing.T) {
 	if repeatedSucceeded.UpstreamRequestID.String != "upstream-request-id" {
 		t.Fatalf("expected repeated succeeded to keep upstream request id, got %q", repeatedSucceeded.UpstreamRequestID.String)
 	}
-	if !repeatedSucceeded.ResponseStartedAt.Valid || !repeatedSucceeded.ResponseStartedAt.Time.Equal(firstSucceeded.ResponseStartedAt.Time) {
-		t.Fatalf("expected repeated succeeded to keep response_started_at %v, got %v", firstSucceeded.ResponseStartedAt.Time, repeatedSucceeded.ResponseStartedAt.Time)
+	if !repeatedSucceeded.GatewayFirstTokenAt.Valid || !repeatedSucceeded.GatewayFirstTokenAt.Time.Equal(firstSucceeded.GatewayFirstTokenAt.Time) {
+		t.Fatalf("expected repeated succeeded to keep gateway_first_token_at %v, got %v", firstSucceeded.GatewayFirstTokenAt.Time, repeatedSucceeded.GatewayFirstTokenAt.Time)
 	}
 
 	_, err = queries.MarkRequestAttemptFailed(ctx, sqlc.MarkRequestAttemptFailedParams{
@@ -636,26 +636,26 @@ func TestRequestAttemptResponseStartedCanBeRecordedBeforeTerminal(t *testing.T) 
 	}
 
 	firstStartedAt := time.Now()
-	started, err := queries.MarkRequestAttemptResponseStarted(ctx, sqlc.MarkRequestAttemptResponseStartedParams{
-		AttemptID:         attempt.ID,
-		ResponseStartedAt: pgtype.Timestamptz{Time: firstStartedAt, Valid: true},
+	started, err := queries.MarkRequestAttemptGatewayFirstToken(ctx, sqlc.MarkRequestAttemptGatewayFirstTokenParams{
+		AttemptID:           attempt.ID,
+		GatewayFirstTokenAt: pgtype.Timestamptz{Time: firstStartedAt, Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("mark attempt response started: %v", err)
 	}
-	if !started.ResponseStartedAt.Valid {
-		t.Fatal("expected attempt response_started_at to be set")
+	if !started.GatewayFirstTokenAt.Valid {
+		t.Fatal("expected attempt gateway_first_token_at to be set")
 	}
 
-	repeatedStarted, err := queries.MarkRequestAttemptResponseStarted(ctx, sqlc.MarkRequestAttemptResponseStartedParams{
-		AttemptID:         attempt.ID,
-		ResponseStartedAt: pgtype.Timestamptz{Time: firstStartedAt.Add(time.Hour), Valid: true},
+	repeatedStarted, err := queries.MarkRequestAttemptGatewayFirstToken(ctx, sqlc.MarkRequestAttemptGatewayFirstTokenParams{
+		AttemptID:           attempt.ID,
+		GatewayFirstTokenAt: pgtype.Timestamptz{Time: firstStartedAt.Add(time.Hour), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("repeat mark attempt response started: %v", err)
 	}
-	if !repeatedStarted.ResponseStartedAt.Time.Equal(started.ResponseStartedAt.Time) {
-		t.Fatalf("expected repeated start to keep %v, got %v", started.ResponseStartedAt.Time, repeatedStarted.ResponseStartedAt.Time)
+	if !repeatedStarted.GatewayFirstTokenAt.Time.Equal(started.GatewayFirstTokenAt.Time) {
+		t.Fatalf("expected repeated start to keep %v, got %v", started.GatewayFirstTokenAt.Time, repeatedStarted.GatewayFirstTokenAt.Time)
 	}
 
 	succeeded, err := queries.MarkRequestAttemptSucceeded(ctx, sqlc.MarkRequestAttemptSucceededParams{
@@ -665,7 +665,7 @@ func TestRequestAttemptResponseStartedCanBeRecordedBeforeTerminal(t *testing.T) 
 		FinishClass:           pgtype.Text{String: "stop", Valid: true},
 		UpstreamStatusCode:    pgtype.Int4{Int32: 200, Valid: true},
 		UpstreamRequestID:     pgtype.Text{String: "upstream-request-id", Valid: true},
-		ResponseStartedAt:     pgtype.Timestamptz{Time: firstStartedAt.Add(time.Hour), Valid: true},
+		GatewayFirstTokenAt:   pgtype.Timestamptz{Time: firstStartedAt.Add(time.Hour), Valid: true},
 		UsageMappingVersion:   pgtype.Text{String: "openai_chat_usage_v1", Valid: true},
 		CompletedAt:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		AttemptID:             attempt.ID,
@@ -673,7 +673,7 @@ func TestRequestAttemptResponseStartedCanBeRecordedBeforeTerminal(t *testing.T) 
 	if err != nil {
 		t.Fatalf("mark attempt succeeded: %v", err)
 	}
-	if !succeeded.ResponseStartedAt.Time.Equal(started.ResponseStartedAt.Time) {
-		t.Fatalf("expected succeeded to keep early response_started_at %v, got %v", started.ResponseStartedAt.Time, succeeded.ResponseStartedAt.Time)
+	if !succeeded.GatewayFirstTokenAt.Time.Equal(started.GatewayFirstTokenAt.Time) {
+		t.Fatalf("expected succeeded to keep early gateway_first_token_at %v, got %v", started.GatewayFirstTokenAt.Time, succeeded.GatewayFirstTokenAt.Time)
 	}
 }

@@ -37,8 +37,8 @@ func TestP4FaultE2E(t *testing.T) {
 		}
 	})
 
-	mustRun(t, "each_rate_control_loss_is_shared_and_auto_repaired", func(t *testing.T) {
-		for _, suffix := range []string{"route-rate-limits", "channel-rate-limits"} {
+	mustRun(t, "route_rate_control_loss_is_shared_and_auto_repaired", func(t *testing.T) {
+		for _, suffix := range []string{"route-rate-limits"} {
 			key := h.namespace + ":admission:v1:" + suffix
 			for _, gateway := range h.gateways {
 				h.redisDelete(t, key)

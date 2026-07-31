@@ -55,15 +55,22 @@ func TestAttemptTimingObserverContextDispatchesAllEvents(t *testing.T) {
 }
 
 func TestAttemptTimingObserverContextNilInputsAreSafe(t *testing.T) {
-	ctx := WithAttemptTimingObserver(nil, nil)
+	// Use an explicitly typed nil instead of the bare nil identifier so the
+	// contract (Mark* / WithAttemptTimingObserver tolerate a missing parent) is
+	// still covered without tripping SA1012's "do not pass nil Context" lint.
+	var missing context.Context
+	ctx := WithAttemptTimingObserver(missing, nil)
 	if ctx == nil {
 		t.Fatal("nil inputs must still return a usable context")
 	}
+	if got := attemptTimingObserverFromContext(missing); got != nil {
+		t.Fatalf("nil context must yield no observer, got %#v", got)
+	}
 
-	MarkTransportStarted(nil)
-	MarkResponseHeadersReceived(nil)
-	MarkFirstTokenEligible(nil)
-	MarkTransportCompleted(nil)
+	MarkTransportStarted(missing)
+	MarkResponseHeadersReceived(missing)
+	MarkFirstTokenEligible(missing)
+	MarkTransportCompleted(missing)
 }
 
 func TestAttemptTransportTraceReportsUncertainWrite(t *testing.T) {

@@ -24,10 +24,10 @@ type LatencyStats struct {
 	Coverage float64
 }
 
-// TtftStats 是首 token 时间画像（毫秒）。
-// Sample = 区间内测到首 token（response_started_at 非空）的请求数；
+// GatewayTtftStats 是 Gateway 首字时间画像（毫秒）。
+// Sample = 区间内测到 Gateway 首字（gateway_first_token_at 非空）的请求数；
 // Coverage = Sample / 区间总请求，反映平均/分位的代表性。
-type TtftStats struct {
+type GatewayTtftStats struct {
 	Avg      float64
 	P50      float64
 	P90      float64
@@ -87,9 +87,9 @@ type RadarReport struct {
 	Timeout  int64
 
 	// 性能
-	Latency LatencyStats
-	Ttft    TtftStats
-	TPS     float64
+	Latency     LatencyStats
+	GatewayTtft GatewayTtftStats
+	TPS         float64
 
 	// token / 缓存
 	Tokens TokenStats
@@ -156,10 +156,10 @@ type ErrorGroup struct {
 
 // PerformancePoint 是性能时序桶点。
 type PerformancePoint struct {
-	Bucket     time.Time
-	LatencyP95 float64
-	TtftP95    float64
-	TPS        float64
+	Bucket         time.Time
+	LatencyP95     float64
+	GatewayTtftP95 float64
+	TPS            float64
 }
 
 // Radar 聚合概览雷达：cards + 行动项 + 异常渠道 Top。
@@ -226,17 +226,17 @@ func (s *Service) Radar(ctx context.Context, from, to time.Time) (RadarReport, e
 	if perf.SucceededTotal > 0 {
 		report.Latency.Coverage = float64(perf.LatencySample) / float64(perf.SucceededTotal)
 	}
-	report.Ttft = TtftStats{
-		Avg:     perf.TtftAvg,
-		P50:     perf.TtftP50,
-		P90:     perf.TtftP90,
-		P95:     perf.TtftP95,
-		P99:     perf.TtftP99,
-		Sample:  perf.TtftSample,
-		HasData: perf.TtftSample > 0,
+	report.GatewayTtft = GatewayTtftStats{
+		Avg:     perf.GatewayTtftAvg,
+		P50:     perf.GatewayTtftP50,
+		P90:     perf.GatewayTtftP90,
+		P95:     perf.GatewayTtftP95,
+		P99:     perf.GatewayTtftP99,
+		Sample:  perf.GatewayTtftSample,
+		HasData: perf.GatewayTtftSample > 0,
 	}
 	if report.Requests.Total > 0 {
-		report.Ttft.Coverage = float64(perf.TtftSample) / float64(report.Requests.Total)
+		report.GatewayTtft.Coverage = float64(perf.GatewayTtftSample) / float64(report.Requests.Total)
 	}
 
 	if tp.GenerationSeconds > 0 {
@@ -427,7 +427,7 @@ func (s *Service) TopErrors(ctx context.Context, from, to time.Time) ([]ErrorGro
 	return out, nil
 }
 
-// PerformanceTimeseries 返回性能趋势（P95 延迟 / P95 TTFT / TPS）。
+// PerformanceTimeseries 返回性能趋势（P95 延迟 / P95 Gateway TTFT / TPS）。
 func (s *Service) PerformanceTimeseries(ctx context.Context, interval string, from, to time.Time) ([]PerformancePoint, error) {
 	if !validInterval(interval) {
 		return nil, invalidArgument("interval", "interval must be one of minute|hour|day")
@@ -438,7 +438,7 @@ func (s *Service) PerformanceTimeseries(ctx context.Context, interval string, fr
 	}
 	out := make([]PerformancePoint, 0, len(rows))
 	for _, r := range rows {
-		p := PerformancePoint{Bucket: r.Bucket.Time, LatencyP95: r.LatencyP95, TtftP95: r.TtftP95}
+		p := PerformancePoint{Bucket: r.Bucket.Time, LatencyP95: r.LatencyP95, GatewayTtftP95: r.GatewayTtftP95}
 		if r.GenerationSeconds > 0 {
 			p.TPS = float64(r.OutputTokens) / r.GenerationSeconds
 		}

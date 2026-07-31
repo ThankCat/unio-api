@@ -475,7 +475,7 @@ tps AS (
         SUM(u.output_tokens_total)::float8 / NULLIF(SUM(
             CASE
                 WHEN a.completed_at IS NOT NULL
-                THEN EXTRACT(EPOCH FROM (a.completed_at - COALESCE(a.response_started_at, a.started_at)))
+                THEN EXTRACT(EPOCH FROM (a.completed_at - COALESCE(a.gateway_first_token_at, a.started_at)))
             END
         ), 0),
         0
@@ -488,7 +488,7 @@ tps AS (
       AND ($3::timestamptz IS NULL OR a.created_at < $3::timestamptz)
 ),
 attempts AS (
-    SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, response_started_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_revision, provider_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_provider_disposition, breaker_channel_disposition, fault_party
+    SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, upstream_timeout_phase, gateway_first_token_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_revision, provider_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_provider_disposition, breaker_channel_disposition, ttft_scoring_sample, error_scoring_sample, error_scoring_failure, fault_party
     FROM request_attempts a
     WHERE a.provider_id = $1
       AND ($2::timestamptz IS NULL OR a.created_at >= $2::timestamptz)

@@ -41,7 +41,8 @@ P4_FAULT_E2E=1 env -u LOG_FORMAT go test -count=1 -v ./internal/blackbox/p4fault
 长流程用例还要求对应的第二层开关：`P4_FULL_STATE_LOSS_E2E`、`P4_LONG_STREAM_E2E`、
 `P4_PREPARE_CRASH_E2E`、`P4_AOF_RESTORE_E2E`、`P4_RDB_RESTORE_E2E`、
 `P4_ACTIVE_EPOCH_ROLLBACK_E2E`、`P4_HALF_OPEN_LEASE_E2E` 或
-`P4_RESET_STALE_GENERATION_E2E`。Redis Cluster 演练由 `P4_CLUSTER_E2E=1` 单独启用。
+`P4_RESET_STALE_GENERATION_E2E`。五因子评分、Sticky、fallback、并发短等、429 冷却、四类超时和完整
+路由 Trace 由 `P4_ROUTING_E2E=1` 启用。Redis Cluster 演练由 `P4_CLUSTER_E2E=1` 单独启用。
 
 ## 数据库与 sqlc
 

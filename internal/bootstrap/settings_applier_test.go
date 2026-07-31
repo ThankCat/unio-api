@@ -68,7 +68,7 @@ func TestSettingsApplierAppliesLocalSettings(t *testing.T) {
 
 	store.set(appsettings.GatewayStreamIdleTimeoutKey, `900000`)
 	store.set(appsettings.GatewayCredential401ThresholdKey, `7`)
-	store.set(appsettings.GatewayDefaultChannelTimeoutKey, `42000`)
+	store.set(appsettings.GatewayDefaultResponseTimeoutKey, `42000`)
 	store.set(appsettings.GatewayChannelCooldownKey, `{"cooldown_ms":5000,"cap_ms":300000}`)
 
 	a.applyOnce(context.Background())
@@ -94,7 +94,6 @@ func TestSettingsApplierDoesNotReadRuntimeControlSettings(t *testing.T) {
 	for _, key := range []string{
 		appsettings.GatewayCircuitBreakerKey,
 		appsettings.GatewayRouteRateLimitDefaultsKey,
-		appsettings.GatewayChannelRateLimitDefaultsKey,
 		appsettings.GatewayConcurrencyDefaultsKey,
 		appsettings.GatewayRoutingBalanceKey,
 	} {

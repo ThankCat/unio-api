@@ -46,9 +46,11 @@ func (a *Adapter) Messages(ctx context.Context, ch channel.Runtime, req MessageR
 		)
 	}
 
-	if ch.Timeout > 0 {
+	// 非流式：response_timeout_ms 覆盖连接、响应头、完整响应体与 adapter 解析（§11.1）。
+	// 首字预算不参与非流式。
+	if ch.ResponseTimeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, ch.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, ch.ResponseTimeout)
 		defer cancel()
 	}
 
@@ -65,10 +67,8 @@ func (a *Adapter) Messages(ctx context.Context, ch channel.Runtime, req MessageR
 
 	body, exceeded, err := adapter.ReadUpstreamBodyLimited(httpResp.Body)
 	if err != nil {
-		return nil, failure.Wrap(
-			failure.CodeAdapterReadStreamFailed,
-			err,
-			failure.WithMessage("anthropic adapter read messages response body"),
+		return nil, newUpstreamBodyReadError(
+			err, context.Cause(ctx), "anthropic adapter read messages response body",
 		)
 	}
 	if exceeded {
@@ -145,14 +145,18 @@ func (a *Adapter) StreamMessages(ctx context.Context, ch channel.Runtime, req Me
 		)
 	}
 
-	// 渠道 timeout 只约束「上游开始响应(拿到响应头)」,不约束流本体:长补全会合法地流式数分钟,
-	// 绝不能被渠道 timeout 当绝对截止时间罩住整段读流而掐断。流总时长由客户端断开(父 ctx)兜底。
-	streamCtx, headersReceived, resetIdle, cancel := adapter.StreamTimeoutContext(ctx, ch.Timeout, adapter.StreamIdleTimeout())
-	defer cancel()
+	// 响应头预算只约束「上游开始响应」，不约束流本体：长补全会合法地流式数分钟。
+	// 首字预算与响应头同起点（§11.2）；首个有效生成 Token 之后才交给 idle 看门狗。
+	streamCtx, timeouts := adapter.StreamTimeoutContext(ctx, adapter.StreamTimeoutConfig{
+		ResponseHeader: ch.ResponseTimeout,
+		FirstToken:     ch.FirstTokenTimeout,
+		Idle:           adapter.StreamIdleTimeout(),
+	})
+	defer timeouts.Cancel()
 
 	req.Stream = true
 	httpResp, err := a.do(streamCtx, ch, req, true)
-	headersReceived()
+	timeouts.HeadersReceived()
 	if err != nil {
 		return adapter.StreamOutcome{}, err
 	}
@@ -172,7 +176,7 @@ func (a *Adapter) StreamMessages(ctx context.Context, ch channel.Runtime, req Me
 	reader := adaptersse.NewReader(httpResp.Body, adaptersse.Config{
 		MaxLineBytes:  maxAnthropicStreamEventBytes,
 		MaxEventBytes: maxAnthropicStreamEventBytes,
-		OnActivity:    resetIdle,
+		OnActivity:    timeouts.ResetIdle,
 	})
 
 	for reader.Next() {
@@ -195,6 +199,10 @@ func (a *Adapter) StreamMessages(ctx context.Context, ch channel.Runtime, req Me
 		chunk := MessageStreamEvent{
 			Type: eventType,
 			Data: cloneRaw(ev.Data),
+		}
+		if FirstTokenPayload(chunk) != "" {
+			timeouts.FirstToken()
+			adapter.MarkFirstTokenEligible(streamCtx)
 		}
 
 		// message_delta 携带终态 usage 与 stop_reason，作为流式结算事实来源。

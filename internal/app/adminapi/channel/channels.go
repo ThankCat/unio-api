@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -31,28 +32,24 @@ type ChannelService interface {
 // channelDTO 是 channel 的 admin API 响应体；含明文上游凭据（产品决策：渠道凭据明文，管理端可查看/复制）。
 // ProviderName 仅分页列表场景有值；单条读取/写入返回为空。
 type channelDTO struct {
-	ID           int64  `json:"id"`
-	ProviderID   int64  `json:"provider_id"`
-	ProviderName string `json:"provider_name"`
-	Name         string `json:"name"`
-	Protocol     string `json:"protocol"`
-	AdapterKey   string `json:"adapter_key"`
-	Origin       string `json:"origin"`
-	// ConfigRevision / AdmissionLimitsRevision 只读返回（P4 §4.4）。
-	ConfigRevision          int64 `json:"config_revision"`
-	AdmissionLimitsRevision int64 `json:"admission_limits_revision"`
-	RuntimeSyncPending      bool  `json:"runtime_sync_pending"`
+	ID                 int64  `json:"id"`
+	ProviderID         int64  `json:"provider_id"`
+	ProviderName       string `json:"provider_name"`
+	Name               string `json:"name"`
+	Protocol           string `json:"protocol"`
+	AdapterKey         string `json:"adapter_key"`
+	Origin             string `json:"origin"`
+	ConfigRevision     int64  `json:"config_revision"`
+	CapacityRevision   int64  `json:"capacity_revision"`
+	RuntimeSyncPending bool   `json:"runtime_sync_pending"`
 	// Credential 是明文上游 API key（产品决策：明文存储，管理端可查看/复制/编辑）。
-	Credential    string `json:"credential"`
-	Status        string `json:"status"`
-	Priority      int32  `json:"priority"`
-	TimeoutMs     *int32 `json:"timeout_ms"`
-	StickyEnabled *bool  `json:"sticky_enabled"`
-	StickyTTLms   *int64 `json:"sticky_ttl_ms"`
-	// RPMLimit/TPMLimit/RPDLimit：渠道级限流上限（P2-8）。null=继承渠道默认限流，0=不限，>0=具体上限。
-	RPMLimit *int64 `json:"rpm_limit"`
-	TPMLimit *int64 `json:"tpm_limit"`
-	RPDLimit *int64 `json:"rpd_limit"`
+	Credential          string `json:"credential"`
+	Status              string `json:"status"`
+	Priority            int32  `json:"priority"`
+	ResponseTimeoutMs   *int32 `json:"response_timeout_ms"`
+	FirstTokenTimeoutMs *int32 `json:"first_token_timeout_ms"`
+	StickyEnabled       *bool  `json:"sticky_enabled"`
+	StickyTTLms         *int64 `json:"sticky_ttl_ms"`
 	// ConcurrencyLimit：渠道在途并发上限（DEC-029）。null=继承并发默认 channel_limit，0=不限，>0=具体上限。
 	ConcurrencyLimit *int64 `json:"concurrency_limit"`
 	// BillsOnDisconnect：上游「断开仍计费」标记。
@@ -76,59 +73,64 @@ type adapterKeyOptionDTO struct {
 	IsDefault  bool   `json:"is_default"`
 }
 
-// rateLimitsRequest 是渠道级限流的可选嵌套对象（P2-8，渠道层保护上游）。
-// 整个对象缺省=不变；存在即原子替换三维：rate 字段 null/缺省=继承渠道默认限流(NULL)，数字（含 0）=显式设定（0=不限）。
-// 注：Key/线路侧限流已归线路（DEC-027），此类型仅服务于渠道级限流。
-type rateLimitsRequest struct {
-	RPM *int64 `json:"rpm"`
-	TPM *int64 `json:"tpm"`
-	RPD *int64 `json:"rpd"`
-	// Concurrency 是渠道在途并发上限（DEC-029）：null=继承并发默认 channel_limit，0=不限。
-	Concurrency *int64 `json:"concurrency"`
+// optionalInt64 区分 PUT 中字段缺省与显式 null。
+type optionalInt64 struct {
+	Set   bool
+	Value *int64
 }
 
-// validateRateLimits 校验限流值非负（限流上限不能为负数）。
-func validateRateLimits(rl *rateLimitsRequest) error {
-	if rl == nil {
+func (f *optionalInt64) UnmarshalJSON(raw []byte) error {
+	f.Set = true
+	if string(raw) == "null" {
+		f.Value = nil
 		return nil
 	}
-	for field, v := range map[string]*int64{"rpm": rl.RPM, "tpm": rl.TPM, "rpd": rl.RPD, "concurrency": rl.Concurrency} {
-		if v != nil && *v < 0 {
-			return failure.New(
-				failure.CodeAdminInvalidArgument,
-				failure.WithMessage("rate limit must be a non-negative integer (0 means unlimited)"),
-				failure.WithField("field", "rate_limits."+field),
-			)
-		}
+	var value int64
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return err
+	}
+	f.Value = &value
+	return nil
+}
+
+func validateConcurrencyLimit(value *int64) error {
+	if value != nil && *value < 0 {
+		return failure.New(
+			failure.CodeAdminInvalidArgument,
+			failure.WithMessage("concurrency limit must be a non-negative integer (0 means unlimited)"),
+			failure.WithField("field", "concurrency_limit"),
+		)
 	}
 	return nil
 }
 
 type createChannelRequest struct {
-	ProviderID    int64              `json:"provider_id"`
-	Name          string             `json:"name"`
-	Protocol      string             `json:"protocol"`
-	AdapterKey    string             `json:"adapter_key"`
-	Credential    string             `json:"credential"`
-	Status        string             `json:"status"`
-	Priority      int32              `json:"priority"`
-	TimeoutMs     *int32             `json:"timeout_ms"`
-	StickyEnabled *bool              `json:"sticky_enabled"`
-	StickyTTLms   *int64             `json:"sticky_ttl_ms"`
-	RateLimits    *rateLimitsRequest `json:"rate_limits"` // 可选渠道级限流；不传表示全继承渠道默认限流
+	ProviderID          int64         `json:"provider_id"`
+	Name                string        `json:"name"`
+	Protocol            string        `json:"protocol"`
+	AdapterKey          string        `json:"adapter_key"`
+	Credential          string        `json:"credential"`
+	Status              string        `json:"status"`
+	Priority            int32         `json:"priority"`
+	ResponseTimeoutMs   *int32        `json:"response_timeout_ms"`
+	FirstTokenTimeoutMs *int32        `json:"first_token_timeout_ms"`
+	StickyEnabled       *bool         `json:"sticky_enabled"`
+	StickyTTLms         *int64        `json:"sticky_ttl_ms"`
+	ConcurrencyLimit    optionalInt64 `json:"concurrency_limit"`
 	// BillsOnDisconnect 可选：上游「断开仍计费」标记；缺省=false（正常上游）。
 	BillsOnDisconnect *bool `json:"upstream_bills_on_disconnect"`
 }
 
 type updateChannelRequest struct {
-	Name          string             `json:"name"`
-	ProviderID    int64              `json:"provider_id"`
-	Status        string             `json:"status"`
-	Priority      int32              `json:"priority"`
-	TimeoutMs     *int32             `json:"timeout_ms"`
-	StickyEnabled *bool              `json:"sticky_enabled"`
-	StickyTTLms   *int64             `json:"sticky_ttl_ms"`
-	RateLimits    *rateLimitsRequest `json:"rate_limits"` // 对象缺省=不变，存在即原子替换三维限流
+	Name                string        `json:"name"`
+	ProviderID          int64         `json:"provider_id"`
+	Status              string        `json:"status"`
+	Priority            int32         `json:"priority"`
+	ResponseTimeoutMs   *int32        `json:"response_timeout_ms"`
+	FirstTokenTimeoutMs *int32        `json:"first_token_timeout_ms"`
+	StickyEnabled       *bool         `json:"sticky_enabled"`
+	StickyTTLms         *int64        `json:"sticky_ttl_ms"`
+	ConcurrencyLimit    optionalInt64 `json:"concurrency_limit"`
 	// BillsOnDisconnect 可选：上游「断开仍计费」标记；缺省=不变。
 	BillsOnDisconnect *bool `json:"upstream_bills_on_disconnect"`
 }
@@ -233,29 +235,24 @@ func (h *channelsHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validateRateLimits(req.RateLimits); err != nil {
+	if err := validateConcurrencyLimit(req.ConcurrencyLimit.Value); err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
 
 	in := channel.CreateInput{
-		ProviderID:    req.ProviderID,
-		Name:          req.Name,
-		Protocol:      req.Protocol,
-		AdapterKey:    req.AdapterKey,
-		Credential:    req.Credential,
-		Status:        req.Status,
-		Priority:      req.Priority,
-		TimeoutMs:     req.TimeoutMs,
-		StickyEnabled: req.StickyEnabled,
-		StickyTTLms:   req.StickyTTLms,
-	}
-	if req.RateLimits != nil {
-		in.RateLimitsProvided = true
-		in.RPMLimit = req.RateLimits.RPM
-		in.TPMLimit = req.RateLimits.TPM
-		in.RPDLimit = req.RateLimits.RPD
-		in.ConcurrencyLimit = req.RateLimits.Concurrency
+		ProviderID:          req.ProviderID,
+		Name:                req.Name,
+		Protocol:            req.Protocol,
+		AdapterKey:          req.AdapterKey,
+		Credential:          req.Credential,
+		Status:              req.Status,
+		Priority:            req.Priority,
+		ResponseTimeoutMs:   req.ResponseTimeoutMs,
+		FirstTokenTimeoutMs: req.FirstTokenTimeoutMs,
+		StickyEnabled:       req.StickyEnabled,
+		StickyTTLms:         req.StickyTTLms,
+		ConcurrencyLimit:    req.ConcurrencyLimit.Value,
 	}
 	in.BillsOnDisconnect = req.BillsOnDisconnect
 
@@ -281,27 +278,23 @@ func (h *channelsHandler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validateRateLimits(req.RateLimits); err != nil {
+	if err := validateConcurrencyLimit(req.ConcurrencyLimit.Value); err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
 
 	in := channel.UpdateInput{
-		ID:            id,
-		Name:          req.Name,
-		ProviderID:    req.ProviderID,
-		Status:        req.Status,
-		Priority:      req.Priority,
-		TimeoutMs:     req.TimeoutMs,
-		StickyEnabled: req.StickyEnabled,
-		StickyTTLms:   req.StickyTTLms,
-	}
-	if req.RateLimits != nil {
-		in.RateLimitsProvided = true
-		in.RPMLimit = req.RateLimits.RPM
-		in.TPMLimit = req.RateLimits.TPM
-		in.RPDLimit = req.RateLimits.RPD
-		in.ConcurrencyLimit = req.RateLimits.Concurrency
+		ID:                  id,
+		Name:                req.Name,
+		ProviderID:          req.ProviderID,
+		Status:              req.Status,
+		Priority:            req.Priority,
+		ResponseTimeoutMs:   req.ResponseTimeoutMs,
+		FirstTokenTimeoutMs: req.FirstTokenTimeoutMs,
+		StickyEnabled:       req.StickyEnabled,
+		StickyTTLms:         req.StickyTTLms,
+		CapacityProvided:    req.ConcurrencyLimit.Set,
+		ConcurrencyLimit:    req.ConcurrencyLimit.Value,
 	}
 	in.BillsOnDisconnect = req.BillsOnDisconnect
 
@@ -410,30 +403,28 @@ func (h *channelsHandler) restore(w http.ResponseWriter, r *http.Request) {
 
 func toChannelDTO(c channel.Channel) channelDTO {
 	return channelDTO{
-		ID:                      c.ID,
-		ProviderID:              c.ProviderID,
-		ProviderName:            c.ProviderName,
-		ConfigRevision:          c.ConfigRevision,
-		AdmissionLimitsRevision: c.AdmissionLimitsRevision,
-		RuntimeSyncPending:      c.RuntimeSyncPending,
-		Name:                    c.Name,
-		Protocol:                c.Protocol,
-		AdapterKey:              c.AdapterKey,
-		Origin:                  c.Origin,
-		Credential:              c.Credential,
-		Status:                  c.Status,
-		Priority:                c.Priority,
-		TimeoutMs:               c.TimeoutMs,
-		StickyEnabled:           c.StickyEnabled,
-		StickyTTLms:             c.StickyTTLms,
-		RPMLimit:                c.RPMLimit,
-		TPMLimit:                c.TPMLimit,
-		RPDLimit:                c.RPDLimit,
-		ConcurrencyLimit:        c.ConcurrencyLimit,
-		BillsOnDisconnect:       c.BillsOnDisconnect,
-		CreatedAt:               c.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:               c.UpdatedAt.UTC().Format(time.RFC3339),
-		ArchivedAt:              formatOptionalTime(c.ArchivedAt),
+		ID:                  c.ID,
+		ProviderID:          c.ProviderID,
+		ProviderName:        c.ProviderName,
+		ConfigRevision:      c.ConfigRevision,
+		CapacityRevision:    c.CapacityRevision,
+		RuntimeSyncPending:  c.RuntimeSyncPending,
+		Name:                c.Name,
+		Protocol:            c.Protocol,
+		AdapterKey:          c.AdapterKey,
+		Origin:              c.Origin,
+		Credential:          c.Credential,
+		Status:              c.Status,
+		Priority:            c.Priority,
+		ResponseTimeoutMs:   c.ResponseTimeoutMs,
+		FirstTokenTimeoutMs: c.FirstTokenTimeoutMs,
+		StickyEnabled:       c.StickyEnabled,
+		StickyTTLms:         c.StickyTTLms,
+		ConcurrencyLimit:    c.ConcurrencyLimit,
+		BillsOnDisconnect:   c.BillsOnDisconnect,
+		CreatedAt:           c.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:           c.UpdatedAt.UTC().Format(time.RFC3339),
+		ArchivedAt:          formatOptionalTime(c.ArchivedAt),
 
 		LastTestedAt:      formatOptionalTime(c.LastTestedAt),
 		LastTestOK:        c.LastTestOK,

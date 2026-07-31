@@ -265,7 +265,7 @@ func waitForLongStreamDatabaseFacts(t *testing.T, pool *pgxpool.Pool, seed seedF
 				)
 				if request.Status == "succeeded" && request.DeliveryStatus == "completed" && request.Stream &&
 					request.IngressProtocol == "openai" && request.Endpoint == "chat_completions" &&
-					request.ResponseStartedAt.Valid && request.ResponseCompletedAt.Valid &&
+					request.GatewayFirstTokenAt.Valid && request.ResponseCompletedAt.Valid &&
 					request.FinalChannelID.Valid && request.FinalChannelID.Int64 == seed.openAIChannelID &&
 					attempt.Status == "succeeded" && attempt.UpstreamEndpoint == "chat_completions" &&
 					attempt.UpstreamStartedAt.Valid && attempt.UpstreamFirstTokenAt.Valid && attempt.UpstreamCompletedAt.Valid &&

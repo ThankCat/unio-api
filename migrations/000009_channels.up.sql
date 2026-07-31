@@ -19,23 +19,26 @@ CREATE TABLE public.channels (
     adapter_key text NOT NULL,
     -- credential: 上游 API key，明文存储，便于管理端查看/复制/编辑（产品决策：渠道凭据不加密）。--
     credential text NOT NULL,
-    -- config_revision: PostgreSQL 权威单调配置版本；protocol/adapter_key/credential/credential_valid/timeout_ms/status 真变化时同事务 +1。--
+    -- config_revision: PostgreSQL 权威单调配置版本；协议、凭据、超时、状态等配置真变化时同事务 +1。--
     config_revision bigint DEFAULT 1 NOT NULL,
-    -- admission_limits_revision: 四维限额（rpm/tpm/rpd/concurrency）有效值真变化时 +1，不复用 config_revision。--
-    admission_limits_revision bigint DEFAULT 1 NOT NULL,
+    -- capacity_revision: 渠道并发容量真变化时 +1，不复用 config_revision。--
+    capacity_revision bigint DEFAULT 1 NOT NULL,
     -- status: channel 启停状态。--
     status text NOT NULL,
     -- priority: routing 选择 channel 时的优先级，数值越小越靠前。--
     priority integer NOT NULL,
-    -- timeout_ms: 该 channel 的上游请求超时时间，空值表示使用默认值。--
-    timeout_ms integer,
+    -- sticky_enabled: NULL 继承全局设置；true 使用渠道 TTL；false 禁用。--
+    sticky_enabled boolean,
+    -- sticky_ttl_ms: 渠道 Sticky TTL，仅 sticky_enabled=true 时必填。--
+    sticky_ttl_ms bigint,
+    -- response_timeout_ms: NULL 继承全局默认；非流式限制完整响应，流式限制收到上游响应头。--
+    response_timeout_ms integer,
+    -- first_token_timeout_ms: NULL 继承全局默认；限制流式首个有效生成 Token。--
+    first_token_timeout_ms integer,
     -- created_at: 记录创建时间。--
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     -- updated_at: 记录更新时间。--
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    rpm_limit integer,
-    tpm_limit integer,
-    rpd_limit integer,
     last_tested_at timestamp with time zone,
     last_test_ok boolean,
     last_test_latency_ms integer,
@@ -46,16 +49,15 @@ CREATE TABLE public.channels (
     upstream_bills_on_disconnect boolean DEFAULT false NOT NULL,
     CONSTRAINT channels_concurrency_limit_check CHECK (((concurrency_limit IS NULL) OR (concurrency_limit >= 0))),
     CONSTRAINT channels_config_revision_check CHECK ((config_revision >= 1)),
-    CONSTRAINT channels_admission_limits_revision_check CHECK ((admission_limits_revision >= 1)),
+    CONSTRAINT channels_capacity_revision_check CHECK ((capacity_revision >= 1)),
     CONSTRAINT channels_credential_check CHECK ((credential <> ''::text)),
     CONSTRAINT channels_last_test_latency_ms_check CHECK (((last_test_latency_ms IS NULL) OR (last_test_latency_ms >= 0))),
-    CONSTRAINT channels_priority_check CHECK ((priority >= 0)),
+    CONSTRAINT channels_priority_check CHECK (((priority >= 0) AND (priority <= 100) AND ((priority % 10) = 0))),
     CONSTRAINT channels_protocol_check CHECK ((protocol = ANY (ARRAY['openai'::text, 'anthropic'::text]))),
-    CONSTRAINT channels_rpd_limit_check CHECK (((rpd_limit IS NULL) OR (rpd_limit >= 0))),
-    CONSTRAINT channels_rpm_limit_check CHECK (((rpm_limit IS NULL) OR (rpm_limit >= 0))),
+    CONSTRAINT channels_response_timeout_ms_check CHECK (((response_timeout_ms IS NULL) OR (response_timeout_ms > 0))),
+    CONSTRAINT channels_first_token_timeout_ms_check CHECK (((first_token_timeout_ms IS NULL) OR (first_token_timeout_ms > 0))),
+    CONSTRAINT channels_sticky_policy_check CHECK (((sticky_enabled IS NULL) AND (sticky_ttl_ms IS NULL)) OR ((sticky_enabled = false) AND (sticky_ttl_ms IS NULL)) OR ((sticky_enabled = true) AND (sticky_ttl_ms > 0))),
     CONSTRAINT channels_status_check CHECK ((status = ANY (ARRAY['enabled'::text, 'disabled'::text, 'archived'::text]))),
-    CONSTRAINT channels_timeout_ms_check CHECK (((timeout_ms IS NULL) OR (timeout_ms > 0))),
-    CONSTRAINT channels_tpm_limit_check CHECK (((tpm_limit IS NULL) OR (tpm_limit >= 0))),
     CONSTRAINT ck_channels_archived_at CHECK (((status = 'archived'::text) = (archived_at IS NOT NULL)))
 );
 
@@ -72,6 +74,11 @@ ALTER TABLE ONLY public.channels
 ALTER TABLE ONLY public.channels
     ADD CONSTRAINT uq_channels_id_provider UNIQUE (id, provider_id);
 
+COMMENT ON COLUMN public.channels.sticky_enabled IS
+    'NULL=inherit gateway.routing_sticky; true=enabled with channel TTL; false=disabled';
+COMMENT ON COLUMN public.channels.sticky_ttl_ms IS
+    'Channel sticky TTL in milliseconds; required only when sticky_enabled=true';
+
 CREATE INDEX idx_channels_credential_invalid ON public.channels USING btree (id) WHERE (credential_valid = false);
 
 CREATE INDEX idx_channels_priority ON public.channels USING btree (priority, id);
@@ -86,10 +93,6 @@ ALTER TABLE ONLY public.channels
 -- ---------------------------------------------------------------------------
 -- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：
 -- ---------------------------------------------------------------------------
--- [000053_add_channels_rate_limits]
--- 为 channel 增加渠道级限流上限（P2-8）：RPM 每分钟请求数、TPM 每分钟 token 数、RPD 每日请求数。
--- 三列均可空：NULL 表示「继承渠道默认限流」，0 表示「显式不限」，>0 表示具体上限。
--- 渠道级限流在每次调用上游前生效，命中即跳过该候选 fallback 到下一渠道，不直接整盘失败。
 -- [000060_add_channels_test_result]
 -- 为 channel 增加「最近一次主动检测结果」四列（渠道检测 / 一键测渠道，阶段一）。
 -- 主动检测 = 用 Provider origin + 渠道凭据，挑一个绑定模型发一个最小 "hi" 请求，
@@ -108,8 +111,6 @@ ALTER TABLE ONLY public.channels
 -- providers
 -- [000072_add_channels_concurrency_limit]
 -- 渠道在途并发上限（DEC-029）：同一渠道「同时进行中」的上游调用数上限（in-flight，含整段流式传输）。
--- 与 RPM（每分钟请求数）正交：并发上限专门防「慢上游 + 客户端重试风暴」把长耗时请求堆在同一渠道上，
--- 每个在途请求都可能被上游计费（如 sub2api 断开仍扣费），RPM 无法限制这种堆积。
 -- NULL 表示「继承并发默认」（gateway.concurrency_defaults.channel_limit），0 表示「显式不限」，>0 表示具体上限。
 -- 命中上限时该候选被跳过（fallback 到下一渠道），不产生上游调用，也不写 attempt 记录。
 -- [000073_add_channels_bills_on_disconnect]
@@ -120,5 +121,5 @@ ALTER TABLE ONLY public.channels
 -- 不影响路由与客户计费，纯平台侧观测。
 -- [P4 ROUTING_P4_GLOBAL_BREAKER_PROVIDER_PLAN §4.4]
 -- 单故障域改造：地址、公共故障域与双 revision 唯一归属 Provider；
--- 新增单调 config_revision（配置/凭据状态真变化 +1）与独立 admission_limits_revision（四维限额真变化 +1）。
+-- 新增单调 config_revision（配置/凭据状态真变化 +1）与独立 capacity_revision（并发容量真变化 +1）。
 -- Migration renumbered after merging Provider Origin into Provider.

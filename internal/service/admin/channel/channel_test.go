@@ -6,13 +6,13 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channel"
 )
 
-func TestCanonicalAdmissionLimitsPayloadKeepsNullAndZeroDistinct(t *testing.T) {
+func TestCanonicalCapacityPayloadKeepsNullAndZeroDistinct(t *testing.T) {
 	zero := int64(0)
-	inherited, err := channel.CanonicalAdmissionLimitsPayload(channel.AdmissionLimits{})
+	inherited, err := channel.CanonicalCapacityPayload(channel.ChannelCapacity{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	unlimited, err := channel.CanonicalAdmissionLimitsPayload(channel.AdmissionLimits{RPM: &zero})
+	unlimited, err := channel.CanonicalCapacityPayload(channel.ChannelCapacity{Concurrency: &zero})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,9 +21,9 @@ func TestCanonicalAdmissionLimitsPayloadKeepsNullAndZeroDistinct(t *testing.T) {
 	}
 }
 
-func TestCanonicalAdmissionLimitsPayloadRejectsNegative(t *testing.T) {
+func TestCanonicalCapacityPayloadRejectsNegative(t *testing.T) {
 	negative := int64(-1)
-	if _, err := channel.CanonicalAdmissionLimitsPayload(channel.AdmissionLimits{Concurrency: &negative}); err == nil {
+	if _, err := channel.CanonicalCapacityPayload(channel.ChannelCapacity{Concurrency: &negative}); err == nil {
 		t.Fatal("negative concurrency unexpectedly accepted")
 	}
 }

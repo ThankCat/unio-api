@@ -1,5 +1,5 @@
-if redis.call('EXISTS', KEYS[7]) == 1 then return { 'breaker_store_unavailable' } end
-local instance_matches = redis_instance_proof_matches(KEYS[8])
+if redis.call('EXISTS', KEYS[6]) == 1 then return { 'breaker_store_unavailable' } end
+local instance_matches = redis_instance_proof_matches(KEYS[7])
 if instance_matches == nil then return redis.error_reply('invalid Redis instance reconciliation proof') end
 if not instance_matches then return { 'redis_instance_changed' } end
 local marker = KEYS[1]
@@ -8,13 +8,13 @@ if redis.call('HGET', marker, 'state') ~= 'ready' then return { 'marker_not_read
 if
   redis.call('HGET', marker, 'epoch') ~= ARGV[1]
   or redis.call('HGET', marker, 'revision') ~= ARGV[2]
-  or redis.call('HGET', marker, 'marker_hash') ~= ARGV[8]
+  or redis.call('HGET', marker, 'marker_hash') ~= ARGV[7]
 then
   return { 'marker_mismatch' }
 end
 
 local payloads = {}
-for index = 2, 6 do
+for index = 2, 5 do
   local control = KEYS[index]
   local expected_revision = ARGV[index + 1]
   if redis.call('EXISTS', control) == 0 then return { 'control_absent', index - 1 } end

@@ -1,14 +1,18 @@
-// Package stickysession 提供会话粘性路由绑定的 Redis 存取层（大 uncache 缺口 P0）。
+// Package stickysession 提供会话粘性路由绑定的 Redis 存取层。
 //
 // 语义边界：sticky 绑定是「路由优化提示」而非正确性事实——Redis 不作为金额/余额事实来源，
-// 丢失绑定的最坏后果只是上游 prompt cache 冷一次。因此所有操作 fail-open（R7）：
-// 读失败当 miss、写/删失败只记日志，绝不把 Redis 故障传导到请求主链路。
+// 丢失绑定的最坏后果只是上游 prompt cache 冷一次。因此所有操作 fail-open（§10.11）：
+// 读失败当 miss、写/删失败只报告结果，绝不把 Redis 故障传导到请求主链路。
+//
+// 写操作只有三种，全部是 CAS（§10.4）：BindIfAbsent / RefreshIfCurrent / ClearIfCurrent。
+// 不提供直接 Rebind(A, B)：改绑必须表达为「先清 A，再以 Unbound 状态绑 B」，
+// 这样审计能分别解释「因何清 A」与「因何建 B」（§10.9）。
 package stickysession
 
 import (
 	"context"
 	"encoding/json"
-	"strconv"
+	"math/rand/v2"
 	"strings"
 	"time"
 
@@ -16,60 +20,75 @@ import (
 	"go.uber.org/zap"
 )
 
-type stickyBindingV2 struct {
-	Version   int   `json:"v"`
-	ChannelID int64 `json:"channel_id"`
-	BoundAtMs int64 `json:"bound_at_ms"`
-}
-
-type stickyBindingV3 struct {
+// binding 是 sticky value 的唯一 schema（§10.2）。
+//
+// BindingVersion 是 CAS 身份计数而非兼容版本号：每次新建绑定都会得到一个新的 version，
+// 因此 CAS 必须同时比较 channel_id 和 binding_version，只比 channel_id 会让
+// 「A 被清除后又被另一个请求重新绑定到 A」被误判为同一个绑定。
+type binding struct {
 	Version         int   `json:"v"`
 	ChannelID       int64 `json:"channel_id"`
+	BindingVersion  int64 `json:"binding_version"`
 	LastSuccessAtMs int64 `json:"last_success_at_ms"`
 }
 
+// bindingSchemaVersion 标记单一 canonical value schema。
+const bindingSchemaVersion = 1
+
 // opTimeout 是单次 sticky Redis 操作的独立短超时：sticky 在候选准备热路径上，
-// Redis 抖动时宁可放弃粘性也不能拖慢请求（R7）。
+// Redis 抖动时宁可放弃粘性也不能拖慢请求（§10.11）。
 const opTimeout = 200 * time.Millisecond
 
-const upgradeBindingLua = `
-local current = redis.call("GET", KEYS[1])
-if current ~= ARGV[1] then
-  return 0
-end
-redis.call("SET", KEYS[1], ARGV[2], "XX", "KEEPTTL")
-return 1
-`
-
-const refreshIfBoundLua = `
+// refreshIfCurrentLua 仅在 (channel_id, binding_version) 完全匹配时滑动续期。
+// 任何不匹配都返回 0（cas_conflict），绝不覆盖别的请求建立的新绑定。
+const refreshIfCurrentLua = `
 local raw = redis.call("GET", KEYS[1])
 if not raw then
   return 0
 end
-
-local channel_id = tonumber(raw)
-if not channel_id then
-  local ok, decoded = pcall(cjson.decode, raw)
-  if not ok or type(decoded) ~= "table" then
-    return 0
-  end
-  channel_id = tonumber(decoded.channel_id)
-end
-
-if channel_id ~= tonumber(ARGV[1]) then
+local ok, decoded = pcall(cjson.decode, raw)
+if not ok or type(decoded) ~= "table" then
   return 0
 end
+if tonumber(decoded.channel_id) ~= tonumber(ARGV[1]) then
+  return 0
+end
+if tonumber(decoded.binding_version) ~= tonumber(ARGV[2]) then
+  return 0
+end
+redis.call("SET", KEYS[1], ARGV[3], "XX", "PX", ARGV[4])
+return 1
+`
 
-redis.call("SET", KEYS[1], ARGV[2], "XX", "PX", ARGV[3])
+// clearIfCurrentLua 仅在 (channel_id, binding_version) 完全匹配时删除绑定。
+// CAS 失败说明绑定已被其他请求改变，本请求不得删除新绑定（§10.9）。
+const clearIfCurrentLua = `
+local raw = redis.call("GET", KEYS[1])
+if not raw then
+  return 0
+end
+local ok, decoded = pcall(cjson.decode, raw)
+if not ok or type(decoded) ~= "table" then
+  redis.call("DEL", KEYS[1])
+  return 1
+end
+if tonumber(decoded.channel_id) ~= tonumber(ARGV[1]) then
+  return 0
+end
+if tonumber(decoded.binding_version) ~= tonumber(ARGV[2]) then
+  return 0
+end
+redis.call("DEL", KEYS[1])
 return 1
 `
 
 // Store 是 sticky 绑定的 Redis 实现（实现 lifecycle.StickyStore）。
 // 键统一加进程 Redis namespace 前缀（与 ratelimit sliding window 同约定）。
 type Store struct {
-	client    redis.Cmdable
-	logger    *zap.Logger
-	keyPrefix string
+	client     redis.Cmdable
+	logger     *zap.Logger
+	keyPrefix  string
+	newVersion func() int64
 }
 
 // NewStore 创建 sticky 绑定存取层。keyNamespace 为空时回退 "unio"；logger 为 nil 时退化为 Nop。
@@ -84,122 +103,171 @@ func NewStore(client redis.Cmdable, keyNamespace string, logger *zap.Logger) *St
 	if keyNamespace == "" {
 		keyNamespace = "unio"
 	}
-	return &Store{client: client, logger: logger, keyPrefix: keyNamespace + ":"}
+	return &Store{
+		client:     client,
+		logger:     logger,
+		keyPrefix:  keyNamespace + ":",
+		newVersion: newBindingVersion,
+	}
 }
 
-// Lookup 读取 v3 绑定；v2/旧整数值会在访问时惰性升级为 v3，并保留原 Redis TTL。
-// miss、值损坏或 Redis 故障统一返回 ok=false（fail-open）。
-func (s *Store) Lookup(ctx context.Context, key string) (int64, time.Time, bool) {
+// maxLuaExactBindingVersion 把 binding_version 限制在 2^52 以内。
+// CAS 比较发生在 Lua 里，而 Lua number 是 double：超过 2^53 的整数会静默丢精度，
+// 导致两个不同的 version 被判为相等，CAS 形同虚设。
+const maxLuaExactBindingVersion = 1 << 52
+
+// newBindingVersion 生成一个新的绑定身份。它只需在同一个 key 上可区分（不要求单调或全局唯一），
+// 因此用 Lua 可精确表示范围内的随机数即可。
+func newBindingVersion() int64 {
+	return rand.Int64N(maxLuaExactBindingVersion) + 1
+}
+
+// Binding 是一次 Lookup 的完整绑定事实（CAS 需要 version，审计需要 last success 时间）。
+type Binding struct {
+	ChannelID      int64
+	BindingVersion int64
+	LastSuccessAt  time.Time
+}
+
+// LookupResult 区分三种读结果：命中、未命中、存储不可用。
+// 未命中与不可用都不阻断路由，但审计口径不同（§10.11/§10.12）。
+type LookupResult struct {
+	Binding          Binding
+	Found            bool
+	StoreUnavailable bool
+}
+
+// Lookup 读取当前绑定。miss、值损坏返回 Found=false；Redis 故障额外标记 StoreUnavailable。
+func (s *Store) Lookup(ctx context.Context, key string) LookupResult {
 	opCtx, cancel := context.WithTimeout(ctx, opTimeout)
 	defer cancel()
 
 	raw, err := s.client.Get(opCtx, s.keyPrefix+key).Result()
 	if err != nil {
-		if err != redis.Nil {
-			s.logger.Warn("sticky lookup failed, treating as miss", zap.String("key", key), zap.Error(err))
+		if err == redis.Nil {
+			return LookupResult{}
 		}
-		return 0, time.Time{}, false
+		s.logger.Warn("sticky lookup failed, treating as miss", zap.String("key", key), zap.Error(err))
+		return LookupResult{StoreUnavailable: true}
 	}
-	now := time.Now()
-	var current stickyBindingV3
-	if err := json.Unmarshal([]byte(raw), &current); err == nil && current.Version == 3 && current.ChannelID > 0 && current.LastSuccessAtMs > 0 {
-		return current.ChannelID, time.UnixMilli(current.LastSuccessAtMs), true
+	var current binding
+	if err := json.Unmarshal([]byte(raw), &current); err != nil ||
+		current.Version != bindingSchemaVersion ||
+		current.ChannelID <= 0 || current.BindingVersion <= 0 {
+		// 损坏值当 miss：不读也不写，让它随 TTL 自然消失或被下一次 BindIfAbsent 覆盖。
+		s.logger.Warn("sticky binding value is not the canonical schema, treating as miss",
+			zap.String("key", key))
+		return LookupResult{}
 	}
-
-	var binding stickyBindingV2
-	if err := json.Unmarshal([]byte(raw), &binding); err == nil && binding.Version == 2 && binding.ChannelID > 0 && binding.BoundAtMs > 0 {
-		lastSuccessAt := time.UnixMilli(binding.BoundAtMs)
-		s.upgradeBinding(opCtx, key, raw, binding.ChannelID, lastSuccessAt)
-		return binding.ChannelID, lastSuccessAt, true
-	}
-	channelID, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || channelID <= 0 {
-		s.logger.Warn("sticky binding value corrupted, treating as miss", zap.String("key", key), zap.String("value", raw))
-		return 0, time.Time{}, false
-	}
-	s.upgradeBinding(opCtx, key, raw, channelID, now)
-	return channelID, now, true
-}
-
-func (s *Store) upgradeBinding(ctx context.Context, key, raw string, channelID int64, lastSuccessAt time.Time) {
-	upgraded, err := encodeBinding(channelID, lastSuccessAt)
-	if err != nil {
-		return
-	}
-	// Compare-and-set prevents a stale lookup from overwriting a concurrent failover rebind.
-	// KEEPTTL avoids extending old bindings merely because the new process read them.
-	if err := s.client.Eval(ctx, upgradeBindingLua, []string{s.keyPrefix + key}, raw, upgraded).Err(); err != nil {
-		s.logger.Warn("sticky binding upgrade failed", zap.String("key", key), zap.Error(err))
+	return LookupResult{
+		Found: true,
+		Binding: Binding{
+			ChannelID:      current.ChannelID,
+			BindingVersion: current.BindingVersion,
+			LastSuccessAt:  time.UnixMilli(current.LastSuccessAtMs),
+		},
 	}
 }
 
-// Bind 在「无既有绑定」时写入绑定（SETNX 语义，R8）：同会话首轮并发请求各自成功时，
-// 只有第一个写入生效，避免互相覆盖来回翻。TTL 从本次成功开始计算。
-func (s *Store) Bind(ctx context.Context, key string, channelID int64, ttl time.Duration) {
+// CASResult 是一次 sticky 写操作的结果。三种互斥情况：成功、CAS 冲突、存储不可用。
+type CASResult struct {
+	Applied          bool
+	Conflict         bool
+	StoreUnavailable bool
+}
+
+// BindIfAbsent 仅在当前无绑定时写入新绑定（§10.5）。同会话首轮并发请求各自成功时，
+// 只有第一个 CAS 成功者建立绑定，其他请求得到 Conflict 且不得覆盖。
+func (s *Store) BindIfAbsent(ctx context.Context, key string, channelID int64, ttl time.Duration) (Binding, CASResult) {
+	if channelID <= 0 || ttl <= 0 {
+		return Binding{}, CASResult{}
+	}
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opTimeout)
 	defer cancel()
 
-	value, err := encodeBinding(channelID, time.Now())
+	next := Binding{
+		ChannelID:      channelID,
+		BindingVersion: s.newVersion(),
+		LastSuccessAt:  time.Now(),
+	}
+	value, err := encodeBinding(next)
 	if err != nil {
 		s.logger.Warn("sticky bind encode failed", zap.String("key", key), zap.Error(err))
-		return
+		return Binding{}, CASResult{StoreUnavailable: true}
 	}
-	if err := s.client.SetNX(opCtx, s.keyPrefix+key, value, ttl).Err(); err != nil {
-		s.logger.Warn("sticky bind failed", zap.String("key", key), zap.Int64("channel_id", channelID), zap.Error(err))
-	}
-}
-
-// Rebind 覆盖写绑定（failover 成功后改绑，决议 2/3）。TTL 重置为完整时长。
-func (s *Store) Rebind(ctx context.Context, key string, channelID int64, ttl time.Duration) {
-	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opTimeout)
-	defer cancel()
-
-	value, err := encodeBinding(channelID, time.Now())
+	applied, err := s.client.SetNX(opCtx, s.keyPrefix+key, value, ttl).Result()
 	if err != nil {
-		s.logger.Warn("sticky rebind encode failed", zap.String("key", key), zap.Error(err))
-		return
+		s.logger.Warn("sticky bind_if_absent failed",
+			zap.String("key", key), zap.Int64("channel_id", channelID), zap.Error(err))
+		return Binding{}, CASResult{StoreUnavailable: true}
 	}
-	if err := s.client.Set(opCtx, s.keyPrefix+key, value, ttl).Err(); err != nil {
-		s.logger.Warn("sticky rebind failed", zap.String("key", key), zap.Int64("channel_id", channelID), zap.Error(err))
+	if !applied {
+		return Binding{}, CASResult{Conflict: true}
 	}
+	return next, CASResult{Applied: true}
 }
 
-// RefreshIfBound 在同渠道成功后滑动续期。Lua 同时比较当前 channel_id，避免旧并发请求在
-// failover 已改绑后续活或覆盖新渠道。返回值不参与请求主链路，Redis 故障仍 fail-open。
-func (s *Store) RefreshIfBound(ctx context.Context, key string, channelID int64, ttl time.Duration) {
+// RefreshIfCurrent 仅在绑定仍是 (channelID, bindingVersion) 时滑动续期完整 TTL（§10.5）。
+// 续期保留同一 binding_version：这是同一个绑定的延寿，不是新绑定。
+func (s *Store) RefreshIfCurrent(
+	ctx context.Context, key string, channelID, bindingVersion int64, ttl time.Duration,
+) (Binding, CASResult) {
+	if channelID <= 0 || bindingVersion <= 0 || ttl <= 0 {
+		return Binding{}, CASResult{}
+	}
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opTimeout)
 	defer cancel()
-	if channelID <= 0 || ttl <= 0 {
-		return
-	}
-	value, err := encodeBinding(channelID, time.Now())
+
+	next := Binding{ChannelID: channelID, BindingVersion: bindingVersion, LastSuccessAt: time.Now()}
+	value, err := encodeBinding(next)
 	if err != nil {
 		s.logger.Warn("sticky refresh encode failed", zap.String("key", key), zap.Error(err))
-		return
+		return Binding{}, CASResult{StoreUnavailable: true}
 	}
-	if err := s.client.Eval(
-		opCtx,
-		refreshIfBoundLua,
-		[]string{s.keyPrefix + key},
-		channelID,
-		value,
-		ttl.Milliseconds(),
-	).Err(); err != nil {
-		s.logger.Warn("sticky success refresh failed", zap.String("key", key), zap.Int64("channel_id", channelID), zap.Error(err))
+	applied, err := s.client.Eval(
+		opCtx, refreshIfCurrentLua, []string{s.keyPrefix + key},
+		channelID, bindingVersion, value, ttl.Milliseconds(),
+	).Int64()
+	if err != nil {
+		s.logger.Warn("sticky refresh_if_current failed",
+			zap.String("key", key), zap.Int64("channel_id", channelID), zap.Error(err))
+		return Binding{}, CASResult{StoreUnavailable: true}
 	}
+	if applied != 1 {
+		return Binding{}, CASResult{Conflict: true}
+	}
+	return next, CASResult{Applied: true}
 }
 
-func encodeBinding(channelID int64, boundAt time.Time) (string, error) {
-	raw, err := json.Marshal(stickyBindingV3{Version: 3, ChannelID: channelID, LastSuccessAtMs: boundAt.UnixMilli()})
-	return string(raw), err
-}
-
-// Clear 删除绑定（粘住渠道被硬摘除：disabled / credential invalid / breaker open）。
-func (s *Store) Clear(ctx context.Context, key string) {
+// ClearIfCurrent 仅在绑定仍是 (channelID, bindingVersion) 时删除（§10.7）。
+// CAS 失败说明绑定已被其他请求改变，本请求不得删除新绑定。
+func (s *Store) ClearIfCurrent(ctx context.Context, key string, channelID, bindingVersion int64) CASResult {
+	if channelID <= 0 || bindingVersion <= 0 {
+		return CASResult{}
+	}
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opTimeout)
 	defer cancel()
 
-	if err := s.client.Del(opCtx, s.keyPrefix+key).Err(); err != nil {
-		s.logger.Warn("sticky clear failed", zap.String("key", key), zap.Error(err))
+	applied, err := s.client.Eval(
+		opCtx, clearIfCurrentLua, []string{s.keyPrefix + key}, channelID, bindingVersion,
+	).Int64()
+	if err != nil {
+		s.logger.Warn("sticky clear_if_current failed",
+			zap.String("key", key), zap.Int64("channel_id", channelID), zap.Error(err))
+		return CASResult{StoreUnavailable: true}
 	}
+	if applied != 1 {
+		return CASResult{Conflict: true}
+	}
+	return CASResult{Applied: true}
+}
+
+func encodeBinding(b Binding) (string, error) {
+	raw, err := json.Marshal(binding{
+		Version:         bindingSchemaVersion,
+		ChannelID:       b.ChannelID,
+		BindingVersion:  b.BindingVersion,
+		LastSuccessAtMs: b.LastSuccessAt.UnixMilli(),
+	})
+	return string(raw), err
 }

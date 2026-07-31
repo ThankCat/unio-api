@@ -120,8 +120,8 @@ type Metrics struct {
 
 	stickyEventsTotal *prometheus.CounterVec
 
-	routingSkipTotal       *prometheus.CounterVec
-	routingHeadWaitSeconds prometheus.Histogram
+	routingSkipTotal           *prometheus.CounterVec
+	routingCapacityWaitSeconds prometheus.Histogram
 
 	routingBalanceTotal          *prometheus.CounterVec
 	routingBalanceCandidateCount *prometheus.HistogramVec
@@ -132,6 +132,8 @@ type Metrics struct {
 	routingCapacityRead          *prometheus.CounterVec
 	routingMarginGuard           *prometheus.CounterVec
 	routingTraceWrite            *prometheus.CounterVec
+	routingTracePersistFailure   prometheus.Counter
+	routingSampleAggFailure      prometheus.Counter
 
 	breakerState                         *prometheus.GaugeVec
 	breakerTransitionTotal               *prometheus.CounterVec
@@ -265,9 +267,9 @@ func New() *Metrics {
 			Help: "候选在写 attempt 前被跳过的次数（大 uncache 缺口可观测）：reason=breaker/concurrency/ratelimit/ratelimit_store。",
 		}, []string{"reason"}),
 
-		routingHeadWaitSeconds: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name:    "unio_gateway_routing_head_wait_seconds",
-			Help:    "队首候选 TPM/并发短等实际等待时长（秒，P1）。仅在 waited_ms>0 时观测。",
+		routingCapacityWaitSeconds: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "unio_gateway_routing_capacity_wait_seconds",
+			Help:    "全池并发满时整个请求共享的一次有界短等实际时长（秒，§9.4）。仅在 waited_ms>0 时观测。",
 			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 0.75, 1, 2},
 		}),
 
@@ -308,8 +310,18 @@ func New() *Metrics {
 		}, []string{"result"}),
 		routingTraceWrite: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "unio_gateway_routing_trace_write_total",
-			Help: "Routing decision trace persistence outcomes.",
+			Help: "Routing decision trace persistence outcomes by result (success|failed).",
 		}, []string{"result"}),
+		routingTracePersistFailure: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "unio_gateway_routing_trace_persist_failure_total",
+			// trace 写失败不改变客户请求结果，但必须能独立告警（§13.1）：
+			// 用专用 counter 而不是让运维去 by(result) 拆总量。
+			Help: "Routing decision trace writes that failed; requests still succeed but routing becomes unexplainable.",
+		}),
+		routingSampleAggFailure: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "unio_gateway_routing_sample_aggregation_failure_total",
+			Help: "30-minute scoring sample aggregation write failures (observation is best-effort).",
+		}),
 
 		breakerState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "unio_gateway_breaker_state",
@@ -460,7 +472,7 @@ func New() *Metrics {
 		m.capabilityMissingTotal,
 		m.stickyEventsTotal,
 		m.routingSkipTotal,
-		m.routingHeadWaitSeconds,
+		m.routingCapacityWaitSeconds,
 		m.routingBalanceTotal,
 		m.routingBalanceCandidateCount,
 		m.routingBalancePoolSize,
@@ -470,6 +482,8 @@ func New() *Metrics {
 		m.routingCapacityRead,
 		m.routingMarginGuard,
 		m.routingTraceWrite,
+		m.routingTracePersistFailure,
+		m.routingSampleAggFailure,
 		m.breakerState,
 		m.breakerTransitionTotal,
 		m.breakerSkipTotal,
@@ -621,12 +635,12 @@ func (m *Metrics) IncRoutingSkip(reason string) {
 	m.routingSkipTotal.WithLabelValues(reason).Inc()
 }
 
-// ObserveRoutingHeadWait 记录一次队首短等的实际等待时长。
-func (m *Metrics) ObserveRoutingHeadWait(duration time.Duration) {
+// ObserveRoutingCapacityWait 记录一次全池并发短等的实际等待时长（§9.4）。
+func (m *Metrics) ObserveRoutingCapacityWait(duration time.Duration) {
 	if duration <= 0 {
 		return
 	}
-	m.routingHeadWaitSeconds.Observe(duration.Seconds())
+	m.routingCapacityWaitSeconds.Observe(duration.Seconds())
 }
 
 func (m *Metrics) ObserveRoutingBalance(mode, result string, poolSize, candidateCount int, loadSkew float64) {
@@ -665,6 +679,14 @@ func (m *Metrics) IncRoutingMarginGuard(result string) {
 
 func (m *Metrics) IncRoutingTraceWrite(result string) {
 	m.routingTraceWrite.WithLabelValues(result).Inc()
+	if result == "failed" {
+		m.routingTracePersistFailure.Inc()
+	}
+}
+
+// IncRoutingSampleAggregationFailure 记录一次 30 分钟评分样本聚合写失败（观测 best-effort，§12.5/§18）。
+func (m *Metrics) IncRoutingSampleAggregationFailure() {
+	m.routingSampleAggFailure.Inc()
 }
 
 // SetBreakerState exposes one-hot state for a Provider or Channel breaker.

@@ -118,7 +118,7 @@ func rewriteResponsesModel(data json.RawMessage, clientModel string) json.RawMes
 // responsesStreamCarrier 是流式分流的统一 chunk 载体：桥接候选产出 chat chunk，直传候选产出 responses 事件。
 //
 // 让 chat 桥接与 responses 直传两类候选共享同一条 AttemptRunner 流式 fallback 循环（同一资金关键链路、
-// 同一 authorization/attempt 计账），混合候选池也能在「首字节前」互相 fallback。恰好设置其一。
+// 同一 authorization/attempt 计账），混合候选池也能在「客户帧写出前」互相 fallback。恰好设置其一。
 type responsesStreamCarrier struct {
 	chat   *chatcompletionsadapter.ChatStreamChunk
 	direct *responsesadapter.StreamChunk
@@ -126,26 +126,32 @@ type responsesStreamCarrier struct {
 
 // responsesStreamCarrierMeta 把统一载体归一为协议无关的流式元信息。
 //
-// 直传 chunk 全程对客户可见（SuppressEmit=false）；桥接沿用 chat 语义（usage 控制 chunk 抑制 emit）。
+// 直传普通 chunk 对客户可见；成功终态由 lifecycle 抑制到 settlement 后再交付。桥接沿用 chat 语义
+// （usage 控制 chunk 抑制 emit）。
 func responsesStreamCarrierMeta(c responsesStreamCarrier) lifecycle.StreamChunkMeta {
 	if c.direct != nil {
+		// 首字判定与可见文本同源（见 adapter 侧 FirstTokenPayload 的说明）。
+		firstTokenPayload := responsesadapter.FirstTokenPayload(*c.direct)
 		return lifecycle.StreamChunkMeta{
-			ID:                 c.direct.ResponseID,
-			FinishReason:       c.direct.FinishReason,
-			Usage:              c.direct.Usage,
-			SuppressEmit:       false,
-			FirstTokenEligible: directResponsesFirstTokenEligible(c.direct.EventType),
-			VisibleText:        directResponsesVisibleText(*c.direct),
+			ID:           c.direct.ResponseID,
+			FinishReason: c.direct.FinishReason,
+			Usage:        c.direct.Usage,
+			// 成功终态必须等 durable settlement 收口后再交付。service 在 adapter 回调中保存原始
+			// terminal，并由 Finish 原样写出；失败终态仍走普通 emit/error 路径。
+			SuppressEmit:       isDirectResponsesSuccessTerminal(c.direct.EventType),
+			FirstTokenEligible: firstTokenPayload != "",
+			VisibleText:        firstTokenPayload,
 		}
 	}
 
 	chunk := c.chat
+	firstTokenPayload := chatcompletionsadapter.FirstTokenPayload(*chunk)
 	meta := lifecycle.StreamChunkMeta{
 		ID:                 chunk.ID,
 		Usage:              chunk.Usage,
 		SuppressEmit:       chunk.Usage != nil,
-		FirstTokenEligible: chatBridgeFirstTokenEligible(*chunk),
-		VisibleText:        chunk.Content,
+		FirstTokenEligible: firstTokenPayload != "",
+		VisibleText:        firstTokenPayload,
 	}
 	if chunk.FinishReason != nil {
 		meta.FinishReason = *chunk.FinishReason
@@ -153,49 +159,8 @@ func responsesStreamCarrierMeta(c responsesStreamCarrier) lifecycle.StreamChunkM
 	return meta
 }
 
-func directResponsesFirstTokenEligible(eventType string) bool {
-	switch eventType {
-	case gatewayapi.EventResponseCreated,
-		gatewayapi.EventOutputTextDelta,
-		gatewayapi.EventReasoningTextDelta,
-		gatewayapi.EventReasoningSummaryTextDelta,
-		gatewayapi.EventFunctionCallArgsDelta:
-		return true
-	default:
-		return false
-	}
-}
-
-func chatBridgeFirstTokenEligible(chunk chatcompletionsadapter.ChatStreamChunk) bool {
-	return chunk.Role != "" ||
-		chunk.Content != "" ||
-		(chunk.ReasoningContent != nil && *chunk.ReasoningContent != "") ||
-		len(chunk.ToolCalls) > 0 ||
-		(chunk.Refusal != nil && *chunk.Refusal != "") ||
-		len(chunk.FunctionCall) > 0
-}
-
-// directResponsesVisibleText extracts customer-visible text deltas from raw Responses stream events.
-//
-// It is used only for partial stream settlement when final usage is missing; full billing still consumes
-// adapter facts from the terminal event.
-func directResponsesVisibleText(chunk responsesadapter.StreamChunk) string {
-	switch chunk.EventType {
-	case gatewayapi.EventOutputTextDelta,
-		gatewayapi.EventReasoningTextDelta,
-		gatewayapi.EventReasoningSummaryTextDelta,
-		gatewayapi.EventFunctionCallArgsDelta:
-	default:
-		return ""
-	}
-
-	var payload struct {
-		Delta string `json:"delta"`
-	}
-	if err := json.Unmarshal(chunk.Data, &payload); err != nil {
-		return ""
-	}
-	return payload.Delta
+func isDirectResponsesSuccessTerminal(eventType string) bool {
+	return eventType == "response.completed" || eventType == "response.incomplete"
 }
 
 // emitDirectStreamEvent 把上游 responses 事件（改写 model 回显后）原文透传给客户 SSE。

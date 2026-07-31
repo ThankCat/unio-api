@@ -184,8 +184,12 @@ func (s *captureAttemptFailedLog) MarkRequestRunning(context.Context, int64) (re
 	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkRequestRunning")
 }
 
-func (s *captureAttemptFailedLog) MarkRequestResponseStarted(context.Context, requestlog.MarkResponseStartedParams) (requestlog.RequestRecord, error) {
-	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkRequestResponseStarted")
+func (s *captureAttemptFailedLog) MarkRequestDeliveryStarted(context.Context, int64) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkRequestDeliveryStarted")
+}
+
+func (s *captureAttemptFailedLog) MarkRequestGatewayFirstToken(context.Context, requestlog.MarkGatewayFirstTokenParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkRequestGatewayFirstToken")
 }
 
 func (s *captureAttemptFailedLog) MarkRequestDeliveryCompleted(context.Context, int64, time.Time) (requestlog.RequestRecord, error) {
@@ -220,8 +224,8 @@ func (s *captureAttemptFailedLog) CreateAttempt(context.Context, requestlog.Crea
 	return requestlog.AttemptRecord{}, fmt.Errorf("unexpected CreateAttempt")
 }
 
-func (s *captureAttemptFailedLog) MarkAttemptResponseStarted(context.Context, requestlog.MarkAttemptResponseStartedParams) (requestlog.AttemptRecord, error) {
-	return requestlog.AttemptRecord{}, fmt.Errorf("unexpected MarkAttemptResponseStarted")
+func (s *captureAttemptFailedLog) MarkAttemptGatewayFirstToken(context.Context, requestlog.MarkAttemptGatewayFirstTokenParams) (requestlog.AttemptRecord, error) {
+	return requestlog.AttemptRecord{}, fmt.Errorf("unexpected MarkAttemptGatewayFirstToken")
 }
 
 func (s *captureAttemptFailedLog) MarkAttemptSucceeded(context.Context, requestlog.MarkAttemptSucceededParams) (requestlog.AttemptRecord, error) {

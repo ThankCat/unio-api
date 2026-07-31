@@ -21,8 +21,8 @@ type RequestFactsExpectation struct {
 }
 
 // AssertLatestRequestFacts 等待同步 settlement 及尽力写入的 timing audit 收口，然后验证
-// 当前 fixture 最新请求的基础事实。TTFT 只认 request_attempts.upstream_first_token_at：
-// 非流式必须为 NULL，流式必须有协议定义的 FirstToken 时间。
+// 当前 fixture 最新请求的基础事实：request 使用已交付 Token 的 Gateway TTFT，attempt 使用
+// 已解析 Token 的上游 TTFT；非流式两者都必须为 NULL。
 func (f *Fixture) AssertLatestRequestFacts(t *testing.T, want RequestFactsExpectation) {
 	t.Helper()
 
@@ -265,11 +265,11 @@ func (f *Fixture) assertAdminRequestFacts(t *testing.T, ctx context.Context, fac
 		if item.LatencyMs == nil || *item.LatencyMs < 0 {
 			t.Error("Admin request total latency is missing")
 		}
-		if stream && item.TtftMs == nil {
-			t.Error("Admin stream request TTFT is missing")
+		if stream && item.GatewayTTFTMs == nil {
+			t.Error("Admin stream request Gateway TTFT is missing")
 		}
-		if !stream && item.TtftMs != nil {
-			t.Errorf("Admin non-stream request TTFT = %d, want nil", *item.TtftMs)
+		if !stream && item.GatewayTTFTMs != nil {
+			t.Errorf("Admin non-stream request Gateway TTFT = %d, want nil", *item.GatewayTTFTMs)
 		}
 		if item.UncachedInputTokens+item.CacheReadInputTokens+item.CacheWrite5mInputTokens+
 			item.CacheWrite30mInputTokens+item.CacheWrite1hInputTokens <= 0 || item.OutputTokens <= 0 {

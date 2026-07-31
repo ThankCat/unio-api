@@ -43,6 +43,7 @@ func MarkTransportStarted(ctx context.Context) {
 	if observer := attemptTimingObserverFromContext(ctx); observer != nil {
 		observer.TransportStarted()
 	}
+	startStreamTimeout(ctx)
 }
 
 // MarkRequestWritten is primarily useful for custom transports and deterministic tests.

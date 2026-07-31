@@ -29,7 +29,6 @@ import (
 )
 
 type RoutingTraceService interface {
-	route.RoutingTraceService
 	requests.RoutingTraceService
 }
 
@@ -162,10 +161,9 @@ func NewRouter(deps RouterDeps) http.Handler {
 			CatalogService: deps.CatalogService,
 		})
 		route.Register(r, route.Deps{
-			Service:             deps.RouteService,
-			OpsService:          deps.RouteOpsService,
-			RoutingTraceService: deps.RoutingTraceService,
-			RuntimeService:      deps.RouteRuntimeService,
+			Service:        deps.RouteService,
+			OpsService:     deps.RouteOpsService,
+			RuntimeService: deps.RouteRuntimeService,
 		})
 		capability.Register(r, capability.Deps{
 			Service:     deps.CapabilityService,

@@ -20,7 +20,7 @@ CREATE TABLE public.channel_cost_exposures (
     channel_id bigint NOT NULL,
     -- provider_id: 渠道所属 provider（冗余便于聚合）。--
     provider_id bigint NOT NULL,
-    -- reason: 敞口成因。upstream_timeout=等首字节超时；upstream_error=上游 5xx/传输层失败；
+    -- reason: 敞口成因。upstream_timeout=上游首字超时；upstream_error=上游 5xx/传输层失败；
     -- client_canceled=客户端在上游生成期间断开。--
     reason text NOT NULL,
     -- estimated_input_tokens: 输入 token 保守估算（复用预授权阶段 ConservativeInputTokens）。--

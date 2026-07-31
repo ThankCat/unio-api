@@ -61,7 +61,7 @@ func (f *Fixture) loadFailureAuditSnapshot(ctx context.Context) (failureAuditSna
 			rr.status,
 			COALESCE(rr.error_code, ''),
 			rr.delivery_status,
-			rr.response_started_at IS NOT NULL,
+			rr.gateway_first_token_at IS NOT NULL,
 			ra.id,
 			COALESCE(ra.status, ''),
 			COALESCE(ra.error_code, ''),

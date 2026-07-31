@@ -10,11 +10,6 @@
 // 恢复属于同一 BreakerStore 契约的其余能力族，按计划 §5.3 分阶段接入。
 package breakerstore
 
-import (
-	"math"
-	"time"
-)
-
 // Scope 是熔断作用域：Provider 或 Channel。二者共用同一状态机框架（§2.5）。
 type Scope string
 
@@ -141,10 +136,12 @@ const (
 type DeniedReason string
 
 const (
-	ReasonOpen                    DeniedReason = "open"
-	ReasonHalfOpenBusy            DeniedReason = "half_open_busy"
-	ReasonConcurrencyLimited      DeniedReason = "concurrency_limited"
-	ReasonRateLimited             DeniedReason = "rate_limited"
+	ReasonOpen         DeniedReason = "open"
+	ReasonHalfOpenBusy DeniedReason = "half_open_busy"
+	// ReasonConcurrencyFull 是唯一允许进入全池短等的拒绝原因（§9.3）。
+	ReasonConcurrencyFull DeniedReason = "concurrency_full"
+	// ReasonCooldown 表示渠道处于上游真实 429 冷却；绝不允许伪装成并发满进入等待（§6.3/§9.3）。
+	ReasonCooldown                DeniedReason = "cooldown"
 	ReasonModelPermissionPaused   DeniedReason = "model_permission_paused"
 	ReasonStaleRevision           DeniedReason = "stale_revision"
 	ReasonStaleStatusRevision     DeniedReason = "stale_status_revision"
@@ -237,10 +234,11 @@ type AttemptAdmission struct {
 	Mode   AdmissionMode
 	Permit *AttemptPermit
 	Reason DeniedReason
+	// CooldownRemainingMs 仅在 Reason=cooldown 时为正，供全池均冷却时给出准确 Retry-After（§9.5）。
+	CooldownRemainingMs int64
 }
 
-// FinishOutcome 是 Finish 提交的真实结果：分别对 Provider / Channel 给出 attribution，
-// 以及可选的流式 FirstToken 样本（仅 stream permit 且样本有效时更新 TTFT EWMA）。
+// FinishOutcome 是 Finish 提交的真实结果：分别对 Provider / Channel 给出 attribution。
 type FinishOutcome struct {
 	ProviderOutcome Outcome
 	ChannelOutcome  Outcome
@@ -252,9 +250,6 @@ type FinishOutcome struct {
 	// ProviderEvidence 表示本次 Channel failure 需要满足短窗 distinct Channel + model 门槛后，
 	// 才能在同一个 Redis Finish 中原子升级为 Provider eligible_failure。
 	ProviderEvidence ProviderEvidenceCategory
-
-	// FirstTokenMs 仅在 stream permit 且观测到有效 FirstToken 时为非 nil；非流式必须为 nil。
-	FirstTokenMs *int64
 
 	// ActualTotalTokens 是完整、可靠且包含 cache read/write 的实际总量；nil 时保留输入估算。
 	ActualTotalTokens *int64
@@ -292,8 +287,6 @@ type ScopeSnapshot struct {
 	ConsecutiveFailures      int64
 	ErrorRate                float64
 	SampleCount              int64
-	TTFTEWMAMs               float64 // Channel only
-	TTFTSamples              int64   // Channel only
 	LastTransitionAtMs       int64
 	LastFailureCategory      string
 	ControlPresent           bool   // Provider only
@@ -316,12 +309,12 @@ type ScopeSnapshot struct {
 // SnapshotCandidateInput 是批量路由快照所需的稳定候选身份。
 // SnapshotMany 用它判断 Channel state 是否仍属于同一 Provider 与配置代际。
 type SnapshotCandidateInput struct {
-	ProviderID               int64
-	ChannelID                int64
-	OriginRevision           int64
-	ProviderStatusRevision   int64
-	ChannelConfigRevision    int64
-	ChannelAdmissionRevision int64
+	ProviderID              int64
+	ChannelID               int64
+	OriginRevision          int64
+	ProviderStatusRevision  int64
+	ChannelConfigRevision   int64
+	ChannelCapacityRevision int64
 }
 
 // SnapshotManyInput 固化一次客户请求在 PostgreSQL 强一致读取到的完整运行态版本。
@@ -329,7 +322,6 @@ type SnapshotCandidateInput struct {
 type SnapshotManyInput struct {
 	IntegrityEpoch            string
 	IntegrityRevision         int64
-	ChannelRateRevision       int64
 	GlobalConcurrencyRevision int64
 	CircuitBreakerRevision    int64
 	RoutingBalanceRevision    int64
@@ -362,18 +354,20 @@ type CapacityUsage struct {
 	Limit int64
 }
 
-// RoutingBalanceSnapshot 是本次 SnapshotMany 的 active routing-balance 线性化点。
+// RoutingBalanceSnapshot 是本次 SnapshotMany 的 active routing-balance 线性化点（objective_v1 五项评分，§7）。
 type RoutingBalanceSnapshot struct {
-	Revision          int64
-	TTFTTargetMs      int64
-	TTFTWeight        float64
-	EconomicWeightPct int
-	HealthWeightPct   int
-	CapacityWeightPct int
-	PriorityWeightPct int
-	// Deprecated compatibility fields for in-process callers; objective routing ignores them.
-	CostWeight           float64
-	MinimumRoutingFactor float64
+	Revision             int64
+	CostWeightPct        int
+	ConcurrencyWeightPct int
+	TTFTWeightPct        int
+	ErrorRateWeightPct   int
+	PriorityWeightPct    int
+	// TTFT / 错误率各自的滚动窗口与线性惩罚参数（§7.4/§7.5）。
+	TTFTWindowMs                 int64
+	TTFTPenaltyUnitMs            int64
+	TTFTPenaltyPointsPerUnit     float64
+	ErrorWindowMs                int64
+	ErrorPenaltyPointsPerPercent float64
 }
 
 // CandidateSnapshot 是同一 Redis Lua 时点读取的 Provider/Channel 运行态，保持输入顺序。
@@ -383,9 +377,6 @@ type CandidateSnapshot struct {
 	Provider                    ScopeSnapshot
 	Channel                     ScopeSnapshot
 	Concurrency                 CapacityUsage
-	RPM                         CapacityUsage
-	RPD                         CapacityUsage
-	TPM                         CapacityUsage
 	CooldownRemainingMs         int64
 	ModelPermissionPaused       bool
 	ModelPermissionRecheckState string
@@ -396,41 +387,7 @@ type SnapshotManyResult struct {
 	Candidates                []CandidateSnapshot
 	IntegrityRevision         int64
 	RouteRateRevision         int64
-	ChannelRateRevision       int64
 	GlobalConcurrencyRevision int64
 	CircuitBreakerRevision    int64
 	RoutingBalance            RoutingBalanceSnapshot
-}
-
-// valid 校验 breaker 配置，确保任何非法数值都在调用 Redis 前失败。
-func (c Config) valid() bool {
-	if c.WindowMs <= 0 || c.MinRequests < 2 || math.IsNaN(c.FailureRatio) || math.IsInf(c.FailureRatio, 0) || c.FailureRatio <= 0 || c.FailureRatio > 1 {
-		return false
-	}
-	if c.ConsecutiveFailures < 1 || c.ConsecutiveWindowMs <= 0 || c.HalfOpenSuccesses < 2 {
-		return false
-	}
-	if c.AttemptPermitTTLMs <= 0 || c.AttemptRenewMs <= 0 || c.AttemptTerminalTTLMs < c.AttemptPermitTTLMs {
-		return false
-	}
-	if c.AttemptRenewMs > c.AttemptPermitTTLMs/3 {
-		return false
-	}
-	if len(c.OpenDurationsMs) == 0 {
-		return false
-	}
-	for i, duration := range c.OpenDurationsMs {
-		if duration <= 0 || (i > 0 && duration < c.OpenDurationsMs[i-1]) {
-			return false
-		}
-	}
-	if c.ProviderAmbiguousDistinctChannels < 2 || c.ProviderAmbiguousDistinctModels < 2 {
-		return false
-	}
-	return true
-}
-
-// renewInterval 返回续租间隔（供调用方的 renewer 使用）。
-func (p AttemptPermit) renewInterval() time.Duration {
-	return time.Duration(p.RenewMs) * time.Millisecond
 }

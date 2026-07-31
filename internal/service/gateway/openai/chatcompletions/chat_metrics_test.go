@@ -74,7 +74,7 @@ func (r *fakeMetricsRecorder) IncZeroPriceServed(provider string, channel string
 
 func (r *fakeMetricsRecorder) IncRoutingSkip(string) {}
 
-func (r *fakeMetricsRecorder) ObserveRoutingHeadWait(time.Duration) {}
+func (r *fakeMetricsRecorder) ObserveRoutingCapacityWait(time.Duration) {}
 
 func TestChatCompletionServiceRecordsSuccessMetrics(t *testing.T) {
 	recorder := &fakeMetricsRecorder{}

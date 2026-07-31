@@ -2,6 +2,7 @@ package responses
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
@@ -279,6 +280,22 @@ func TestStreamEncoder_StartedReflectsFirstEmit(t *testing.T) {
 	}
 }
 
+func TestStreamEncoderFailedCreatedWriteDoesNotCommitStartedState(t *testing.T) {
+	writeErr := errors.New("write response.created")
+	enc := newStreamEncoder(
+		gatewayapi.ResponsesRequest{Model: "m"},
+		"resp_1",
+		0,
+		func(gatewayapi.ResponsesStreamEvent) error { return writeErr },
+	)
+	if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{Content: "x"}); !errors.Is(err, writeErr) {
+		t.Fatalf("handle error = %v, want %v", err, writeErr)
+	}
+	if enc.Started() {
+		t.Fatal("failed response.created write must not commit encoder started state")
+	}
+}
+
 // TestStreamEncoder_RefusalSurfacedInMessageItem 验证上游 refusal 增量被累积进 message item，
 // 并随 output_item.done / response.completed 以 refusal content part 下发（与非流式映射一致，不丢内容过滤信息）。
 func TestStreamEncoder_RefusalAfterText(t *testing.T) {
@@ -341,6 +358,21 @@ func TestStreamEncoder_RefusalOnly(t *testing.T) {
 	}
 	if len(messageDone.Content) != 1 || messageDone.Content[0].Type != "refusal" || messageDone.Content[0].Refusal != "refused" {
 		t.Fatalf("refusal-only content wrong: %+v", messageDone.Content)
+	}
+	refusalDeltaIndex, itemDoneIndex := -1, -1
+	for i, event := range events {
+		switch event.Type {
+		case gatewayapi.EventRefusalDelta:
+			if event.Delta != "refused" {
+				t.Fatalf("refusal delta = %q, want refused", event.Delta)
+			}
+			refusalDeltaIndex = i
+		case gatewayapi.EventOutputItemDone:
+			itemDoneIndex = i
+		}
+	}
+	if refusalDeltaIndex < 0 || itemDoneIndex < 0 || refusalDeltaIndex >= itemDoneIndex {
+		t.Fatalf("refusal must be delivered before terminal item: %v", eventTypes(events))
 	}
 }
 

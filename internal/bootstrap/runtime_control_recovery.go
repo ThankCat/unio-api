@@ -64,8 +64,8 @@ func reconcileAllRuntimeControls(
 		telemetry.passFailed("critical_settings", criticalErr, observation)
 		return criticalErr
 	}
-	if err := restoreChannelAdmissionControls(ctx, pool, controls, telemetry, mode); err != nil {
-		telemetry.passFailed("channel_admission", err, observation)
+	if err := restoreChannelCapacityControls(ctx, pool, controls, telemetry, mode); err != nil {
+		telemetry.passFailed("channel_capacity", err, observation)
 		return err
 	}
 	telemetry.passSucceeded(observation)
@@ -155,16 +155,16 @@ func captureRuntimeReconciliationProof(
 	if err != nil {
 		return breakerstore.RuntimeReconciliationProof{}, err
 	}
-	proof.ChannelAdmissionControls = make([]breakerstore.RuntimeChannelAdmissionControlProof, 0, len(channels))
+	proof.ChannelCapacityControls = make([]breakerstore.RuntimeChannelCapacityControlProof, 0, len(channels))
 	for _, row := range channels {
-		payload, err := adminchannel.CanonicalAdmissionLimitsPayloadFromChannel(row)
+		payload, err := adminchannel.CanonicalCapacityPayloadFromChannel(row)
 		if err != nil {
 			return breakerstore.RuntimeReconciliationProof{}, err
 		}
-		proof.ChannelAdmissionControls = append(proof.ChannelAdmissionControls,
-			breakerstore.RuntimeChannelAdmissionControlProof{
+		proof.ChannelCapacityControls = append(proof.ChannelCapacityControls,
+			breakerstore.RuntimeChannelCapacityControlProof{
 				ChannelID: row.ID,
-				Revision:  row.AdmissionLimitsRevision,
+				Revision:  row.CapacityRevision,
 				Payload:   payload,
 			},
 		)
@@ -173,7 +173,7 @@ func captureRuntimeReconciliationProof(
 }
 
 // reconcileRuntimeControls 在 RestoreMissing/严格核对前，先按 PostgreSQL durable operation
-// 收口五个关键 setting 与 Channel admission limits 的所有普通非终态发布。
+// 收口四个关键 setting 与 Channel capacity 的所有普通非终态发布。
 // epoch 由专用 coordinator 处理，不进入这里。
 func reconcileRuntimeControls(
 	ctx context.Context,
@@ -190,8 +190,6 @@ func reconcileRuntimeControls(
 			switch op.SettingKey.String {
 			case appsettings.GatewayRouteRateLimitDefaultsKey:
 				return controls.RouteRateLimitControl(), true
-			case appsettings.GatewayChannelRateLimitDefaultsKey:
-				return controls.ChannelRateLimitControl(), true
 			case appsettings.GatewayConcurrencyDefaultsKey:
 				return controls.GlobalConcurrencyControl(), true
 			case appsettings.GatewayCircuitBreakerKey, appsettings.GatewayRoutingBalanceKey:
@@ -199,11 +197,11 @@ func reconcileRuntimeControls(
 			default:
 				return breakerstore.ControlTarget{}, false
 			}
-		case runtimecontrol.KindChannelAdmissionLimits:
+		case runtimecontrol.KindChannelCapacity:
 			if !op.ChannelID.Valid || op.ChannelID.Int64 <= 0 {
 				return breakerstore.ControlTarget{}, false
 			}
-			return controls.ChannelAdmissionControl(op.ChannelID.Int64), true
+			return controls.ChannelCapacityControl(op.ChannelID.Int64), true
 		default:
 			return breakerstore.ControlTarget{}, false
 		}
@@ -232,7 +230,7 @@ func reconcileRuntimeControls(
 			}
 			payload, err := appsettings.CanonicalRuntimeSettingPayload(op.SettingKey.String, record.Value)
 			return string(payload), err == nil, err
-		case runtimecontrol.KindChannelAdmissionLimits:
+		case runtimecontrol.KindChannelCapacity:
 			if !op.ChannelID.Valid || op.ChannelID.Int64 <= 0 {
 				return "", false, nil
 			}
@@ -240,13 +238,13 @@ func reconcileRuntimeControls(
 			if err != nil {
 				return "", false, err
 			}
-			if row.AdmissionLimitsRevision != expectedRevision {
+			if row.CapacityRevision != expectedRevision {
 				return "", false, fmt.Errorf(
-					"runtimecontrol: channel %d admission revision=%d, operation %s expects %d",
-					row.ID, row.AdmissionLimitsRevision, op.Token, expectedRevision,
+					"runtimecontrol: channel %d capacity revision=%d, operation %s expects %d",
+					row.ID, row.CapacityRevision, op.Token, expectedRevision,
 				)
 			}
-			payload, err := adminchannel.CanonicalAdmissionLimitsPayloadFromChannel(row)
+			payload, err := adminchannel.CanonicalCapacityPayloadFromChannel(row)
 			return payload, err == nil, err
 		default:
 			return "", false, nil
@@ -255,8 +253,8 @@ func reconcileRuntimeControls(
 	return err
 }
 
-// restoreChannelAdmissionControls 只补齐缺失 control，并严格拒绝 stale/ahead/pending/payload mismatch。
-func restoreChannelAdmissionControls(
+// restoreChannelCapacityControls 只补齐缺失 control，并严格拒绝 stale/ahead/pending/payload mismatch。
+func restoreChannelCapacityControls(
 	ctx context.Context,
 	pool *pgxpool.Pool,
 	controls *breakerstore.Store,
@@ -268,30 +266,30 @@ func restoreChannelAdmissionControls(
 		return err
 	}
 	for _, row := range rows {
-		payload, err := adminchannel.CanonicalAdmissionLimitsPayloadFromChannel(row)
+		payload, err := adminchannel.CanonicalCapacityPayloadFromChannel(row)
 		if err != nil {
 			return err
 		}
-		target := controls.ChannelAdmissionControl(row.ID)
+		target := controls.ChannelCapacityControl(row.ID)
 		var restored bool
 		if mode == runtimeControlStartupAuthority {
-			restored, err = controls.ReconcileControl(ctx, target, row.AdmissionLimitsRevision, payload)
+			restored, err = controls.ReconcileControl(ctx, target, row.CapacityRevision, payload)
 		} else {
-			restored, err = controls.RestoreMissingControl(ctx, target, row.AdmissionLimitsRevision, payload)
+			restored, err = controls.RestoreMissingControl(ctx, target, row.CapacityRevision, payload)
 		}
 		if err != nil {
 			return err
 		}
-		snapshot, err := controls.ReadControl(ctx, target, row.AdmissionLimitsRevision)
+		snapshot, err := controls.ReadControl(ctx, target, row.CapacityRevision)
 		if err != nil {
 			return err
 		}
 		if snapshot.SyncState != "active" || snapshot.PendingRevision != 0 ||
-			snapshot.ActiveRevision != row.AdmissionLimitsRevision ||
+			snapshot.ActiveRevision != row.CapacityRevision ||
 			!bytes.Equal([]byte(snapshot.ActivePayload), []byte(payload)) {
-			return fmt.Errorf("runtimecontrol: channel %d admission control requires reconciliation", row.ID)
+			return fmt.Errorf("runtimecontrol: channel %d capacity control requires reconciliation", row.ID)
 		}
-		telemetry.channelControlReconciled(row.ID, row.AdmissionLimitsRevision, restored)
+		telemetry.channelControlReconciled(row.ID, row.CapacityRevision, restored)
 	}
 	return nil
 }

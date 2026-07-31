@@ -11,44 +11,41 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countRouteRoutingDecisionTraces = `-- name: CountRouteRoutingDecisionTraces :one
-SELECT COUNT(*) FROM routing_decision_traces WHERE route_id = $1
-`
-
-func (q *Queries) CountRouteRoutingDecisionTraces(ctx context.Context, routeID int64) (int64, error) {
-	row := q.db.QueryRow(ctx, countRouteRoutingDecisionTraces, routeID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
-const deleteExpiredRoutingDecisionTraces = `-- name: DeleteExpiredRoutingDecisionTraces :execrows
-DELETE FROM routing_decision_traces target
-WHERE target.created_at < $1
-  AND target.id IN (
-      SELECT expired.id FROM routing_decision_traces expired
-      WHERE expired.created_at < $1
-      ORDER BY expired.created_at
-      LIMIT $2
-      FOR UPDATE SKIP LOCKED
-  )
-`
-
-type DeleteExpiredRoutingDecisionTracesParams struct {
-	Cutoff     pgtype.Timestamptz
-	BatchLimit int32
-}
-
-func (q *Queries) DeleteExpiredRoutingDecisionTraces(ctx context.Context, arg DeleteExpiredRoutingDecisionTracesParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteExpiredRoutingDecisionTraces, arg.Cutoff, arg.BatchLimit)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const getRoutingDecisionTraceByRequestID = `-- name: GetRoutingDecisionTraceByRequestID :one
-SELECT t.id, t.request_record_id, t.route_id, t.mode, t.requested_model_id, t.protocol, t.endpoint, t.pool_size, t.candidate_count, t.sticky_channel_id, t.sticky_pinned, t.sticky_invalid, t.all_capacity_zero, t.margin_guard_triggered, t.abnormal, t.abnormal_reasons, t.candidate_scores, t.selected_order, t.fallback_chain, t.algorithm_version, t.sampled, t.created_at, t.updated_at, r.request_id, r.status AS request_status, r.final_channel_id
+SELECT
+    t.id,
+    t.request_record_id,
+    t.route_id,
+    t.mode,
+    t.requested_model_id,
+    t.protocol,
+    t.endpoint,
+    t.trace_status,
+    t.schema_version,
+    t.algorithm_version,
+    t.pool_size,
+    t.eligible_count,
+    t.baseline_order,
+    t.actual_scan_order,
+    t.attempted_channel_ids,
+    t.selected_channel_id,
+    t.fallback_count,
+    t.final_result,
+    t.sticky_key_present,
+    t.sticky_before_channel_id,
+    t.sticky_before_version,
+    t.sticky_action,
+    t.sticky_reason,
+    t.sticky_after_channel_id,
+    t.sticky_after_version,
+    t.capacity_wait_ms,
+    t.capacity_wait_result,
+    t.trace_payload,
+    t.created_at,
+    t.updated_at,
+    r.request_id,
+    r.status AS request_status,
+    r.final_channel_id
 FROM routing_decision_traces t
 JOIN request_records r ON r.id = t.request_record_id
 WHERE r.request_id = $1
@@ -56,32 +53,39 @@ LIMIT 1
 `
 
 type GetRoutingDecisionTraceByRequestIDRow struct {
-	ID                   int64
-	RequestRecordID      int64
-	RouteID              int64
-	Mode                 string
-	RequestedModelID     string
-	Protocol             string
-	Endpoint             string
-	PoolSize             int32
-	CandidateCount       int32
-	StickyChannelID      pgtype.Int8
-	StickyPinned         bool
-	StickyInvalid        bool
-	AllCapacityZero      bool
-	MarginGuardTriggered bool
-	Abnormal             bool
-	AbnormalReasons      []string
-	CandidateScores      []byte
-	SelectedOrder        []int64
-	FallbackChain        []byte
-	AlgorithmVersion     string
-	Sampled              bool
-	CreatedAt            pgtype.Timestamptz
-	UpdatedAt            pgtype.Timestamptz
-	RequestID            string
-	RequestStatus        string
-	FinalChannelID       pgtype.Int8
+	ID                    int64
+	RequestRecordID       int64
+	RouteID               int64
+	Mode                  string
+	RequestedModelID      string
+	Protocol              string
+	Endpoint              string
+	TraceStatus           string
+	SchemaVersion         int32
+	AlgorithmVersion      string
+	PoolSize              int32
+	EligibleCount         int32
+	BaselineOrder         []int64
+	ActualScanOrder       []int64
+	AttemptedChannelIds   []int64
+	SelectedChannelID     pgtype.Int8
+	FallbackCount         int32
+	FinalResult           pgtype.Text
+	StickyKeyPresent      bool
+	StickyBeforeChannelID pgtype.Int8
+	StickyBeforeVersion   pgtype.Int8
+	StickyAction          pgtype.Text
+	StickyReason          pgtype.Text
+	StickyAfterChannelID  pgtype.Int8
+	StickyAfterVersion    pgtype.Int8
+	CapacityWaitMs        pgtype.Int4
+	CapacityWaitResult    pgtype.Text
+	TracePayload          []byte
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	RequestID             string
+	RequestStatus         string
+	FinalChannelID        pgtype.Int8
 }
 
 func (q *Queries) GetRoutingDecisionTraceByRequestID(ctx context.Context, requestID string) (GetRoutingDecisionTraceByRequestIDRow, error) {
@@ -95,20 +99,27 @@ func (q *Queries) GetRoutingDecisionTraceByRequestID(ctx context.Context, reques
 		&i.RequestedModelID,
 		&i.Protocol,
 		&i.Endpoint,
-		&i.PoolSize,
-		&i.CandidateCount,
-		&i.StickyChannelID,
-		&i.StickyPinned,
-		&i.StickyInvalid,
-		&i.AllCapacityZero,
-		&i.MarginGuardTriggered,
-		&i.Abnormal,
-		&i.AbnormalReasons,
-		&i.CandidateScores,
-		&i.SelectedOrder,
-		&i.FallbackChain,
+		&i.TraceStatus,
+		&i.SchemaVersion,
 		&i.AlgorithmVersion,
-		&i.Sampled,
+		&i.PoolSize,
+		&i.EligibleCount,
+		&i.BaselineOrder,
+		&i.ActualScanOrder,
+		&i.AttemptedChannelIds,
+		&i.SelectedChannelID,
+		&i.FallbackCount,
+		&i.FinalResult,
+		&i.StickyKeyPresent,
+		&i.StickyBeforeChannelID,
+		&i.StickyBeforeVersion,
+		&i.StickyAction,
+		&i.StickyReason,
+		&i.StickyAfterChannelID,
+		&i.StickyAfterVersion,
+		&i.CapacityWaitMs,
+		&i.CapacityWaitResult,
+		&i.TracePayload,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RequestID,
@@ -118,153 +129,88 @@ func (q *Queries) GetRoutingDecisionTraceByRequestID(ctx context.Context, reques
 	return i, err
 }
 
-const listRouteRoutingDecisionTraces = `-- name: ListRouteRoutingDecisionTraces :many
-SELECT t.id, t.request_record_id, t.route_id, t.mode, t.requested_model_id, t.protocol, t.endpoint, t.pool_size, t.candidate_count, t.sticky_channel_id, t.sticky_pinned, t.sticky_invalid, t.all_capacity_zero, t.margin_guard_triggered, t.abnormal, t.abnormal_reasons, t.candidate_scores, t.selected_order, t.fallback_chain, t.algorithm_version, t.sampled, t.created_at, t.updated_at, r.request_id, r.status AS request_status, r.final_channel_id
-FROM routing_decision_traces t
-JOIN request_records r ON r.id = t.request_record_id
-WHERE t.route_id = $1
-ORDER BY t.created_at DESC
-LIMIT $3 OFFSET $2
-`
-
-type ListRouteRoutingDecisionTracesParams struct {
-	RouteID    int64
-	PageOffset int32
-	PageLimit  int32
-}
-
-type ListRouteRoutingDecisionTracesRow struct {
-	ID                   int64
-	RequestRecordID      int64
-	RouteID              int64
-	Mode                 string
-	RequestedModelID     string
-	Protocol             string
-	Endpoint             string
-	PoolSize             int32
-	CandidateCount       int32
-	StickyChannelID      pgtype.Int8
-	StickyPinned         bool
-	StickyInvalid        bool
-	AllCapacityZero      bool
-	MarginGuardTriggered bool
-	Abnormal             bool
-	AbnormalReasons      []string
-	CandidateScores      []byte
-	SelectedOrder        []int64
-	FallbackChain        []byte
-	AlgorithmVersion     string
-	Sampled              bool
-	CreatedAt            pgtype.Timestamptz
-	UpdatedAt            pgtype.Timestamptz
-	RequestID            string
-	RequestStatus        string
-	FinalChannelID       pgtype.Int8
-}
-
-func (q *Queries) ListRouteRoutingDecisionTraces(ctx context.Context, arg ListRouteRoutingDecisionTracesParams) ([]ListRouteRoutingDecisionTracesRow, error) {
-	rows, err := q.db.Query(ctx, listRouteRoutingDecisionTraces, arg.RouteID, arg.PageOffset, arg.PageLimit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListRouteRoutingDecisionTracesRow
-	for rows.Next() {
-		var i ListRouteRoutingDecisionTracesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.RequestRecordID,
-			&i.RouteID,
-			&i.Mode,
-			&i.RequestedModelID,
-			&i.Protocol,
-			&i.Endpoint,
-			&i.PoolSize,
-			&i.CandidateCount,
-			&i.StickyChannelID,
-			&i.StickyPinned,
-			&i.StickyInvalid,
-			&i.AllCapacityZero,
-			&i.MarginGuardTriggered,
-			&i.Abnormal,
-			&i.AbnormalReasons,
-			&i.CandidateScores,
-			&i.SelectedOrder,
-			&i.FallbackChain,
-			&i.AlgorithmVersion,
-			&i.Sampled,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.RequestID,
-			&i.RequestStatus,
-			&i.FinalChannelID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const upsertRoutingDecisionTrace = `-- name: UpsertRoutingDecisionTrace :exec
 INSERT INTO routing_decision_traces (
     request_record_id, route_id, mode, requested_model_id, protocol, endpoint,
-    pool_size, candidate_count, sticky_channel_id, sticky_pinned, sticky_invalid,
-    all_capacity_zero, margin_guard_triggered, abnormal,
-    abnormal_reasons, candidate_scores, selected_order, fallback_chain,
-    algorithm_version, sampled
+    pool_size, algorithm_version,
+    sticky_key_present, sticky_before_channel_id, sticky_before_version,
+    sticky_action, sticky_reason, sticky_after_channel_id, sticky_after_version,
+    trace_status, schema_version, eligible_count, baseline_order, actual_scan_order,
+    attempted_channel_ids, selected_channel_id, fallback_count, final_result,
+    capacity_wait_ms, capacity_wait_result, trace_payload
 ) VALUES (
     $1, $2, $3,
     $4, $5, $6,
-    $7, $8, $9,
-    $10, $11, $12,
-    $13, $14,
-    $15, $16, $17,
-    $18, $19, $20
+    $7, $8,
+    $9, $10,
+    $11, $12, $13,
+    $14, $15,
+    $16, $17, $18,
+    $19, $20, $21,
+    $22, $23, $24,
+    $25, $26, $27
 )
 ON CONFLICT (request_record_id) DO UPDATE SET
     pool_size = EXCLUDED.pool_size,
-    candidate_count = EXCLUDED.candidate_count,
-    sticky_channel_id = EXCLUDED.sticky_channel_id,
-    sticky_pinned = EXCLUDED.sticky_pinned,
-    sticky_invalid = EXCLUDED.sticky_invalid,
-    all_capacity_zero = EXCLUDED.all_capacity_zero,
-    margin_guard_triggered = EXCLUDED.margin_guard_triggered,
-    abnormal = routing_decision_traces.abnormal OR EXCLUDED.abnormal,
-    abnormal_reasons = ARRAY(SELECT DISTINCT unnest(routing_decision_traces.abnormal_reasons || EXCLUDED.abnormal_reasons)),
-    candidate_scores = EXCLUDED.candidate_scores,
-    selected_order = EXCLUDED.selected_order,
-    fallback_chain = EXCLUDED.fallback_chain,
-    sampled = routing_decision_traces.sampled OR EXCLUDED.sampled,
+    sticky_key_present = EXCLUDED.sticky_key_present,
+    sticky_before_channel_id = EXCLUDED.sticky_before_channel_id,
+    sticky_before_version = EXCLUDED.sticky_before_version,
+    sticky_action = EXCLUDED.sticky_action,
+    sticky_reason = EXCLUDED.sticky_reason,
+    sticky_after_channel_id = EXCLUDED.sticky_after_channel_id,
+    sticky_after_version = EXCLUDED.sticky_after_version,
+    -- complete 是终态：一旦收口就不再被 partial 覆盖回去。
+    trace_status = CASE
+        WHEN routing_decision_traces.trace_status = 'complete' THEN 'complete'
+        ELSE EXCLUDED.trace_status
+    END,
+    schema_version = GREATEST(routing_decision_traces.schema_version, EXCLUDED.schema_version),
+    eligible_count = EXCLUDED.eligible_count,
+    baseline_order = EXCLUDED.baseline_order,
+    actual_scan_order = EXCLUDED.actual_scan_order,
+    attempted_channel_ids = EXCLUDED.attempted_channel_ids,
+    selected_channel_id = COALESCE(EXCLUDED.selected_channel_id, routing_decision_traces.selected_channel_id),
+    fallback_count = EXCLUDED.fallback_count,
+    final_result = COALESCE(EXCLUDED.final_result, routing_decision_traces.final_result),
+    capacity_wait_ms = COALESCE(EXCLUDED.capacity_wait_ms, routing_decision_traces.capacity_wait_ms),
+    capacity_wait_result = COALESCE(EXCLUDED.capacity_wait_result, routing_decision_traces.capacity_wait_result),
+    trace_payload = EXCLUDED.trace_payload,
     updated_at = now()
 `
 
 type UpsertRoutingDecisionTraceParams struct {
-	RequestRecordID      int64
-	RouteID              int64
-	Mode                 string
-	RequestedModelID     string
-	Protocol             string
-	Endpoint             string
-	PoolSize             int32
-	CandidateCount       int32
-	StickyChannelID      pgtype.Int8
-	StickyPinned         bool
-	StickyInvalid        bool
-	AllCapacityZero      bool
-	MarginGuardTriggered bool
-	Abnormal             bool
-	AbnormalReasons      []string
-	CandidateScores      []byte
-	SelectedOrder        []int64
-	FallbackChain        []byte
-	AlgorithmVersion     string
-	Sampled              bool
+	RequestRecordID       int64
+	RouteID               int64
+	Mode                  string
+	RequestedModelID      string
+	Protocol              string
+	Endpoint              string
+	PoolSize              int32
+	AlgorithmVersion      string
+	StickyKeyPresent      bool
+	StickyBeforeChannelID pgtype.Int8
+	StickyBeforeVersion   pgtype.Int8
+	StickyAction          pgtype.Text
+	StickyReason          pgtype.Text
+	StickyAfterChannelID  pgtype.Int8
+	StickyAfterVersion    pgtype.Int8
+	TraceStatus           string
+	SchemaVersion         int32
+	EligibleCount         int32
+	BaselineOrder         []int64
+	ActualScanOrder       []int64
+	AttemptedChannelIds   []int64
+	SelectedChannelID     pgtype.Int8
+	FallbackCount         int32
+	FinalResult           pgtype.Text
+	CapacityWaitMs        pgtype.Int4
+	CapacityWaitResult    pgtype.Text
+	TracePayload          []byte
 }
 
+// 每个进入路由规划的请求恰好一条 trace：规划开始写 partial，生命周期结束幂等升级为 complete（§13.1）。
+// partial 不得覆盖已有的 complete：进程异常留下的 partial 是有意义的「尚未收口」，
+// 但一条已经收口的 trace 不能被后续 partial 写回退。
 func (q *Queries) UpsertRoutingDecisionTrace(ctx context.Context, arg UpsertRoutingDecisionTraceParams) error {
 	_, err := q.db.Exec(ctx, upsertRoutingDecisionTrace,
 		arg.RequestRecordID,
@@ -274,19 +220,26 @@ func (q *Queries) UpsertRoutingDecisionTrace(ctx context.Context, arg UpsertRout
 		arg.Protocol,
 		arg.Endpoint,
 		arg.PoolSize,
-		arg.CandidateCount,
-		arg.StickyChannelID,
-		arg.StickyPinned,
-		arg.StickyInvalid,
-		arg.AllCapacityZero,
-		arg.MarginGuardTriggered,
-		arg.Abnormal,
-		arg.AbnormalReasons,
-		arg.CandidateScores,
-		arg.SelectedOrder,
-		arg.FallbackChain,
 		arg.AlgorithmVersion,
-		arg.Sampled,
+		arg.StickyKeyPresent,
+		arg.StickyBeforeChannelID,
+		arg.StickyBeforeVersion,
+		arg.StickyAction,
+		arg.StickyReason,
+		arg.StickyAfterChannelID,
+		arg.StickyAfterVersion,
+		arg.TraceStatus,
+		arg.SchemaVersion,
+		arg.EligibleCount,
+		arg.BaselineOrder,
+		arg.ActualScanOrder,
+		arg.AttemptedChannelIds,
+		arg.SelectedChannelID,
+		arg.FallbackCount,
+		arg.FinalResult,
+		arg.CapacityWaitMs,
+		arg.CapacityWaitResult,
+		arg.TracePayload,
 	)
 	return err
 }

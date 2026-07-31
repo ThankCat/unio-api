@@ -14,7 +14,7 @@ import (
 type BreakerRuntime interface {
 	Snapshot(ctx context.Context, scope breakerstore.Scope, id int64) (breakerstore.ScopeSnapshot, error)
 	Reset(ctx context.Context, scope breakerstore.Scope, id int64) (int64, error)
-	ChannelAdmissionControl(channelID int64) breakerstore.ControlTarget
+	ChannelCapacityControl(channelID int64) breakerstore.ControlTarget
 	ReadControl(ctx context.Context, target breakerstore.ControlTarget, expectedRevision int64) (breakerstore.ControlSnapshot, error)
 }
 
@@ -34,27 +34,24 @@ type channelBreakerSnapshotDTO struct {
 	ConsecutiveFailures int64   `json:"consecutive_failures"`
 	ErrorRate           float64 `json:"error_rate"`
 	SampleCount         int64   `json:"sample_count"`
-	TTFTEWMAMs          float64 `json:"ttft_ewma_ms"`
-	TTFTSamples         int64   `json:"ttft_samples"`
-	TTFTSampleSource    string  `json:"ttft_sample_source"`
 }
 
 type channelRuntimeDTO struct {
-	ID                              int64                      `json:"id"`
-	ProviderID                      int64                      `json:"provider_id"`
-	OriginRevision                  int64                      `json:"origin_revision"`
-	ProviderStatusRevision          int64                      `json:"provider_status_revision"`
-	ConfigRevision                  int64                      `json:"config_revision"`
-	AdmissionLimitsRevision         int64                      `json:"admission_limits_revision"`
-	RuntimeSyncState                string                     `json:"runtime_sync_state"`
-	RuntimeProviderID               *int64                     `json:"runtime_provider_id"`
-	RuntimeOriginRevision           *int64                     `json:"runtime_origin_revision"`
-	RuntimeProviderStatusRevision   *int64                     `json:"runtime_provider_status_revision"`
-	RuntimeConfigRevision           *int64                     `json:"runtime_config_revision"`
-	RuntimeAdmissionActiveRevision  *int64                     `json:"runtime_admission_active_revision"`
-	RuntimeAdmissionPendingRevision *int64                     `json:"runtime_admission_pending_revision"`
-	AdmissionPayloadMatches         bool                       `json:"admission_payload_matches"`
-	Breaker                         *channelBreakerSnapshotDTO `json:"breaker"`
+	ID                             int64                      `json:"id"`
+	ProviderID                     int64                      `json:"provider_id"`
+	OriginRevision                 int64                      `json:"origin_revision"`
+	ProviderStatusRevision         int64                      `json:"provider_status_revision"`
+	ConfigRevision                 int64                      `json:"config_revision"`
+	CapacityRevision               int64                      `json:"capacity_revision"`
+	RuntimeSyncState               string                     `json:"runtime_sync_state"`
+	RuntimeProviderID              *int64                     `json:"runtime_provider_id"`
+	RuntimeOriginRevision          *int64                     `json:"runtime_origin_revision"`
+	RuntimeProviderStatusRevision  *int64                     `json:"runtime_provider_status_revision"`
+	RuntimeConfigRevision          *int64                     `json:"runtime_config_revision"`
+	RuntimeCapacityActiveRevision  *int64                     `json:"runtime_capacity_active_revision"`
+	RuntimeCapacityPendingRevision *int64                     `json:"runtime_capacity_pending_revision"`
+	CapacityPayloadMatches         bool                       `json:"capacity_payload_matches"`
+	Breaker                        *channelBreakerSnapshotDTO `json:"breaker"`
 }
 
 func toChannelBreakerDTO(s breakerstore.ScopeSnapshot) channelBreakerSnapshotDTO {
@@ -63,7 +60,6 @@ func toChannelBreakerDTO(s breakerstore.ScopeSnapshot) channelBreakerSnapshotDTO
 		OpenRemainingMs: s.OpenRemainingMs, OpenLevel: s.OpenLevel,
 		EligibleSuccesses: s.EligibleSuccesses, EligibleFailures: s.EligibleFailures,
 		ConsecutiveFailures: s.ConsecutiveFailures, ErrorRate: s.ErrorRate, SampleCount: s.SampleCount,
-		TTFTEWMAMs: s.TTFTEWMAMs, TTFTSamples: s.TTFTSamples, TTFTSampleSource: "stream_only",
 	}
 }
 
@@ -124,33 +120,31 @@ func (h *channelBreakerHandler) loadRuntime(ctx context.Context, id int64) (chan
 	if err != nil {
 		return channelRuntimeDTO{}, err
 	}
-	control, err := h.breaker.ReadControl(ctx, h.breaker.ChannelAdmissionControl(id), ch.AdmissionLimitsRevision)
+	control, err := h.breaker.ReadControl(ctx, h.breaker.ChannelCapacityControl(id), ch.CapacityRevision)
 	if err != nil {
 		return channelRuntimeDTO{}, err
 	}
-	payload, err := adminchannel.CanonicalAdmissionLimitsPayload(adminchannel.AdmissionLimits{
-		RPM: ch.RPMLimit, RPD: ch.RPDLimit, TPM: ch.TPMLimit, Concurrency: ch.ConcurrencyLimit,
-	})
+	payload, err := adminchannel.CanonicalCapacityPayload(adminchannel.ChannelCapacity{Concurrency: ch.ConcurrencyLimit})
 	if err != nil {
 		return channelRuntimeDTO{}, err
 	}
 
 	dto := channelRuntimeDTO{
-		ID:                              ch.ID,
-		ProviderID:                      ch.ProviderID,
-		OriginRevision:                  ch.OriginRevision,
-		ProviderStatusRevision:          ch.ProviderStatusRevision,
-		ConfigRevision:                  ch.ConfigRevision,
-		AdmissionLimitsRevision:         ch.AdmissionLimitsRevision,
-		RuntimeProviderID:               positiveRuntimeInt64(snapshot.ProviderID),
-		RuntimeOriginRevision:           positiveRuntimeInt64(snapshot.OriginRevision),
-		RuntimeProviderStatusRevision:   positiveRuntimeInt64(snapshot.StatusRevision),
-		RuntimeConfigRevision:           positiveRuntimeInt64(snapshot.ChannelConfigRevision),
-		RuntimeAdmissionActiveRevision:  positiveRuntimeInt64(control.ActiveRevision),
-		RuntimeAdmissionPendingRevision: positiveRuntimeInt64(control.PendingRevision),
-		AdmissionPayloadMatches:         control.ActivePayload == payload,
+		ID:                             ch.ID,
+		ProviderID:                     ch.ProviderID,
+		OriginRevision:                 ch.OriginRevision,
+		ProviderStatusRevision:         ch.ProviderStatusRevision,
+		ConfigRevision:                 ch.ConfigRevision,
+		CapacityRevision:               ch.CapacityRevision,
+		RuntimeProviderID:              positiveRuntimeInt64(snapshot.ProviderID),
+		RuntimeOriginRevision:          positiveRuntimeInt64(snapshot.OriginRevision),
+		RuntimeProviderStatusRevision:  positiveRuntimeInt64(snapshot.StatusRevision),
+		RuntimeConfigRevision:          positiveRuntimeInt64(snapshot.ChannelConfigRevision),
+		RuntimeCapacityActiveRevision:  positiveRuntimeInt64(control.ActiveRevision),
+		RuntimeCapacityPendingRevision: positiveRuntimeInt64(control.PendingRevision),
+		CapacityPayloadMatches:         control.ActivePayload == payload,
 	}
-	dto.RuntimeSyncState = classifyChannelRuntimeSync(ch, snapshot, control, dto.AdmissionPayloadMatches)
+	dto.RuntimeSyncState = classifyChannelRuntimeSync(ch, snapshot, control, dto.CapacityPayloadMatches)
 	if dto.RuntimeSyncState == "active" {
 		breakerDTO := toChannelBreakerDTO(snapshot)
 		dto.Breaker = &breakerDTO

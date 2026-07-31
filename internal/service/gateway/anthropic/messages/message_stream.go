@@ -63,6 +63,7 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		Protocol:   routing.ProtocolAnthropic,
 		RouteID:    principal.RouteID,
 		APIKeyID:   principal.APIKeyID,
+		ModelID:    plan.ModelDBID,
 		SessionKey: sessionhint.AnthropicSessionKey(ctx, req.Metadata),
 		Candidates: plan.Candidates,
 		Mode:       plan.RouteMode,
@@ -70,6 +71,13 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 
 	candidatePlan, err := s.prepareMessageCandidates(ctx, req, plan.Candidates, plan.RouteMode, true, stickySession.BoundChannelID())
 	if err != nil {
+		if principal.RouteID != nil {
+			s.lifecycle.RecordRoutingDecisionFailure(ctx, lifecycle.RoutingDecisionTraceInput{
+				Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
+				PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+				Sticky: stickySession.Audit(),
+			}, err)
+		}
 		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
 	}
@@ -78,9 +86,17 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
 			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+			Sticky: stickySession.Audit(), Status: lifecycle.TraceStatusPartial,
 		})
 	}
 	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
+		if principal.RouteID != nil {
+			s.lifecycle.CompleteRoutingTrace(ctx, lifecycle.RoutingDecisionTraceInput{
+				Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
+				PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+				Sticky: stickySession.Audit(),
+			}, lifecycle.RunResult{}, err)
+		}
 		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
 	}
@@ -95,6 +111,13 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),
 	})
 	if err != nil {
+		if principal.RouteID != nil {
+			s.lifecycle.CompleteRoutingTrace(ctx, lifecycle.RoutingDecisionTraceInput{
+				Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
+				PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+				Sticky: stickySession.Audit(),
+			}, lifecycle.RunResult{}, err)
+		}
 		s.markRequestRecordFailed(ctx, requestRecord, "messages_authorization_failed", err)
 		return err
 	}
@@ -136,17 +159,20 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 			lifecycle.EndGatewaySpan(streamSpan, streamErr)
 			return streamOutcome.Facts, streamErr
 		},
-		EmitChunk: func(ev messagesadapter.MessageStreamEvent, ack lifecycle.StreamWriteAck) error {
+		EmitChunk: func(ev messagesadapter.MessageStreamEvent, acks lifecycle.StreamWriteAcks) error {
 			if err := emit(gatewayapi.StreamFrame{
 				EventType: ev.Type,
 				Data:      patchStreamEventCatalogModel(req.Model, ev),
 			}); err != nil {
 				return err
 			}
-			ack()
+			acks.Frame()
+			if messagesadapter.FirstTokenPayload(ev) != "" {
+				acks.FirstToken()
+			}
 			return nil
 		},
-		Finish: func(_ string, _ adapter.ChatUsage, _ string, ack lifecycle.StreamWriteAck) error {
+		Finish: func(_ string, _ *adapter.ChatUsage, _ string, acks lifecycle.StreamWriteAcks) error {
 			stopPayload, marshalErr := json.Marshal(gatewayapi.StreamMessageStop{Type: "message_stop"})
 			if marshalErr != nil {
 				return marshalErr
@@ -154,20 +180,27 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 			if err := emit(gatewayapi.StreamFrame{EventType: "message_stop", Data: stopPayload}); err != nil {
 				return err
 			}
-			ack()
+			acks.Frame()
 			return nil
 		},
 		ChunkMeta: messagesStreamChunkMeta,
+		ChunkSize: messagesStreamChunkSize,
 	})
-	if runResult.RoutingFallback && principal.RouteID != nil {
-		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
+	// 每个请求在生命周期结束时都要把 partial trace 收口为 complete（§13.1），
+	// 不只在发生 fallback 时——普通成功请求同样需要能解释「为什么选了这条渠道」。
+	if principal.RouteID != nil {
+		s.lifecycle.CompleteRoutingTrace(ctx, lifecycle.RoutingDecisionTraceInput{
 			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
-			FallbackOccurred: true, FallbackChain: runResult.TransportChain,
-		})
+			Sticky: stickySession.Audit(),
+		}, runResult, err)
 	}
 	outcome = runResult.Outcome
 	return err
+}
+
+func messagesStreamChunkSize(ev messagesadapter.MessageStreamEvent) int {
+	return 128 + len(ev.Type) + len(ev.Data) + len(messagesadapter.FirstTokenPayload(ev))
 }
 
 func anthropicPartialOutputTokenCounter(_ string, text string) int64 {
@@ -175,9 +208,11 @@ func anthropicPartialOutputTokenCounter(_ string, text string) int64 {
 }
 
 func messagesStreamChunkMeta(ev messagesadapter.MessageStreamEvent) lifecycle.StreamChunkMeta {
+	// 首字判定与可见文本同源（见 adapter 侧 FirstTokenPayload 的说明）。
+	firstTokenPayload := messagesadapter.FirstTokenPayload(ev)
 	meta := lifecycle.StreamChunkMeta{
-		FirstTokenEligible: ev.Type == "message_start" || ev.Type == "content_block_delta",
-		VisibleText:        parseStreamTextDelta(ev),
+		FirstTokenEligible: firstTokenPayload != "",
+		VisibleText:        firstTokenPayload,
 	}
 	if ev.Type == "message_start" {
 		meta.ID = parseStreamMessageID(ev.Data)
@@ -203,25 +238,4 @@ func parseStreamMessageID(data json.RawMessage) string {
 		return ""
 	}
 	return payload.Message.ID
-}
-
-// parseStreamTextDelta 从 Anthropic content_block_delta 事件提取可见文本增量（text_delta），
-// 供 partial settlement 估算 output token；非文本增量返回空。
-func parseStreamTextDelta(ev messagesadapter.MessageStreamEvent) string {
-	if ev.Type != "content_block_delta" {
-		return ""
-	}
-	var payload struct {
-		Delta struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"delta"`
-	}
-	if err := json.Unmarshal(ev.Data, &payload); err != nil {
-		return ""
-	}
-	if payload.Delta.Type != "text_delta" {
-		return ""
-	}
-	return payload.Delta.Text
 }

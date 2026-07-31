@@ -16,39 +16,48 @@ import (
 
 // Store is the database surface needed by Service.
 type Store interface {
-	ListRouteRoutingDecisionTraces(context.Context, sqlc.ListRouteRoutingDecisionTracesParams) ([]sqlc.ListRouteRoutingDecisionTracesRow, error)
-	CountRouteRoutingDecisionTraces(context.Context, int64) (int64, error)
 	GetRoutingDecisionTraceByRequestID(context.Context, string) (sqlc.GetRoutingDecisionTraceByRequestIDRow, error)
 }
 
 // Decision is the admin-safe representation of one persisted routing decision.
 type Decision struct {
-	ID                   int64
-	RequestRecordID      int64
-	RequestID            string
-	RequestStatus        string
-	RouteID              int64
-	Mode                 string
-	RequestedModelID     string
-	Protocol             string
-	Endpoint             string
-	PoolSize             int32
-	CandidateCount       int32
-	StickyChannelID      *int64
-	StickyPinned         bool
-	StickyInvalid        bool
-	AllCapacityZero      bool
-	MarginGuardTriggered bool
-	Abnormal             bool
-	AbnormalReasons      []string
-	CandidateScores      json.RawMessage
-	SelectedOrder        []int64
-	FallbackChain        json.RawMessage
-	FinalChannelID       *int64
-	AlgorithmVersion     string
-	Sampled              bool
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+	ID               int64
+	RequestRecordID  int64
+	RequestID        string
+	RequestStatus    string
+	RouteID          int64
+	Mode             string
+	RequestedModelID string
+	Protocol         string
+	Endpoint         string
+	TraceStatus      string
+	SchemaVersion    int32
+	AlgorithmVersion string
+	Summary          Summary
+	Process          json.RawMessage
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+type Summary struct {
+	PoolSize            int32
+	EligibleCount       int32
+	BaselineOrder       []int64
+	ActualScanOrder     []int64
+	AttemptedChannelIDs []int64
+	SelectedChannelID   *int64
+	FinalChannelID      *int64
+	FallbackCount       int32
+	FinalResult         *string
+	StickyKeyPresent    bool
+	StickyBeforeChannel *int64
+	StickyBeforeVersion *int64
+	StickyAction        *string
+	StickyReason        *string
+	StickyAfterChannel  *int64
+	StickyAfterVersion  *int64
+	CapacityWaitMs      *int32
+	CapacityWaitResult  *string
 }
 
 type Service struct {
@@ -57,27 +66,6 @@ type Service struct {
 
 func NewService(store Store) *Service {
 	return &Service{store: store}
-}
-
-func (s *Service) ListByRoute(ctx context.Context, routeID int64, limit, offset int32) ([]Decision, int64, error) {
-	if routeID <= 0 {
-		return nil, 0, invalidArgument("route_id", "route_id must be a positive integer")
-	}
-	rows, err := s.store.ListRouteRoutingDecisionTraces(ctx, sqlc.ListRouteRoutingDecisionTracesParams{
-		RouteID: routeID, PageLimit: limit, PageOffset: offset,
-	})
-	if err != nil {
-		return nil, 0, storeFailed(err, "list routing decision traces")
-	}
-	total, err := s.store.CountRouteRoutingDecisionTraces(ctx, routeID)
-	if err != nil {
-		return nil, 0, storeFailed(err, "count routing decision traces")
-	}
-	out := make([]Decision, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, fromListRow(row))
-	}
-	return out, total, nil
 }
 
 func (s *Service) GetByRequestID(ctx context.Context, requestID string) (Decision, error) {
@@ -94,78 +82,32 @@ func (s *Service) GetByRequestID(ctx context.Context, requestID string) (Decisio
 	return fromGetRow(row), nil
 }
 
-func fromListRow(row sqlc.ListRouteRoutingDecisionTracesRow) Decision {
-	return decisionFromFields(
-		row.ID, row.RequestRecordID, row.RequestID, row.RequestStatus, row.RouteID,
-		row.Mode, row.RequestedModelID, row.Protocol, row.Endpoint, row.PoolSize,
-		row.CandidateCount, row.StickyChannelID, row.StickyPinned, row.StickyInvalid,
-		row.AllCapacityZero, row.MarginGuardTriggered, row.Abnormal,
-		row.AbnormalReasons, row.CandidateScores, row.SelectedOrder, row.FallbackChain,
-		row.FinalChannelID, row.AlgorithmVersion, row.Sampled, row.CreatedAt, row.UpdatedAt,
-	)
-}
-
 func fromGetRow(row sqlc.GetRoutingDecisionTraceByRequestIDRow) Decision {
-	return decisionFromFields(
-		row.ID, row.RequestRecordID, row.RequestID, row.RequestStatus, row.RouteID,
-		row.Mode, row.RequestedModelID, row.Protocol, row.Endpoint, row.PoolSize,
-		row.CandidateCount, row.StickyChannelID, row.StickyPinned, row.StickyInvalid,
-		row.AllCapacityZero, row.MarginGuardTriggered, row.Abnormal,
-		row.AbnormalReasons, row.CandidateScores, row.SelectedOrder, row.FallbackChain,
-		row.FinalChannelID, row.AlgorithmVersion, row.Sampled, row.CreatedAt, row.UpdatedAt,
-	)
-}
-
-func decisionFromFields(
-	id, requestRecordID int64,
-	requestID, requestStatus string,
-	routeID int64,
-	mode, requestedModelID, protocol, endpoint string,
-	poolSize, candidateCount int32,
-	stickyChannelID pgtype.Int8,
-	stickyPinned, stickyInvalid, allCapacityZero, marginGuardTriggered, abnormal bool,
-	abnormalReasons []string,
-	candidateScores []byte,
-	selectedOrder []int64,
-	fallbackChain []byte,
-	finalChannelID pgtype.Int8,
-	algorithmVersion string,
-	sampled bool,
-	createdAt, updatedAt pgtype.Timestamptz,
-) Decision {
 	return Decision{
-		ID:                   id,
-		RequestRecordID:      requestRecordID,
-		RequestID:            requestID,
-		RequestStatus:        requestStatus,
-		RouteID:              routeID,
-		Mode:                 mode,
-		RequestedModelID:     requestedModelID,
-		Protocol:             protocol,
-		Endpoint:             endpoint,
-		PoolSize:             poolSize,
-		CandidateCount:       candidateCount,
-		StickyChannelID:      int8Ptr(stickyChannelID),
-		StickyPinned:         stickyPinned,
-		StickyInvalid:        stickyInvalid,
-		AllCapacityZero:      allCapacityZero,
-		MarginGuardTriggered: marginGuardTriggered,
-		Abnormal:             abnormal,
-		AbnormalReasons:      nonNilStrings(abnormalReasons),
-		CandidateScores:      rawJSON(candidateScores),
-		SelectedOrder:        nonNilInt64s(selectedOrder),
-		FallbackChain:        rawJSON(fallbackChain),
-		FinalChannelID:       int8Ptr(finalChannelID),
-		AlgorithmVersion:     algorithmVersion,
-		Sampled:              sampled,
-		CreatedAt:            createdAt.Time,
-		UpdatedAt:            updatedAt.Time,
+		ID: row.ID, RequestRecordID: row.RequestRecordID, RequestID: row.RequestID,
+		RequestStatus: row.RequestStatus, RouteID: row.RouteID, Mode: row.Mode,
+		RequestedModelID: row.RequestedModelID, Protocol: row.Protocol, Endpoint: row.Endpoint,
+		TraceStatus: row.TraceStatus, SchemaVersion: row.SchemaVersion,
+		AlgorithmVersion: row.AlgorithmVersion, Process: rawJSONObject(row.TracePayload),
+		Summary: Summary{
+			PoolSize: row.PoolSize, EligibleCount: row.EligibleCount,
+			BaselineOrder: nonNilInt64s(row.BaselineOrder), ActualScanOrder: nonNilInt64s(row.ActualScanOrder),
+			AttemptedChannelIDs: nonNilInt64s(row.AttemptedChannelIds),
+			SelectedChannelID:   int8Ptr(row.SelectedChannelID), FinalChannelID: int8Ptr(row.FinalChannelID),
+			FallbackCount: row.FallbackCount, FinalResult: textPtr(row.FinalResult),
+			StickyKeyPresent: row.StickyKeyPresent, StickyBeforeChannel: int8Ptr(row.StickyBeforeChannelID),
+			StickyBeforeVersion: int8Ptr(row.StickyBeforeVersion), StickyAction: textPtr(row.StickyAction),
+			StickyReason: textPtr(row.StickyReason), StickyAfterChannel: int8Ptr(row.StickyAfterChannelID),
+			StickyAfterVersion: int8Ptr(row.StickyAfterVersion), CapacityWaitMs: int4Ptr(row.CapacityWaitMs),
+			CapacityWaitResult: textPtr(row.CapacityWaitResult),
+		},
+		CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
 }
 
-func rawJSON(value []byte) json.RawMessage {
-	if !json.Valid(value) {
-		return json.RawMessage("[]")
+func rawJSONObject(value []byte) json.RawMessage {
+	if !json.Valid(value) || len(value) == 0 || value[0] != '{' {
+		return json.RawMessage("{}")
 	}
 	return json.RawMessage(value)
 }
@@ -178,11 +120,20 @@ func int8Ptr(value pgtype.Int8) *int64 {
 	return &v
 }
 
-func nonNilStrings(values []string) []string {
-	if values == nil {
-		return []string{}
+func int4Ptr(value pgtype.Int4) *int32 {
+	if !value.Valid {
+		return nil
 	}
-	return values
+	v := value.Int32
+	return &v
+}
+
+func textPtr(value pgtype.Text) *string {
+	if !value.Valid {
+		return nil
+	}
+	v := value.String
+	return &v
 }
 
 func nonNilInt64s(values []int64) []int64 {

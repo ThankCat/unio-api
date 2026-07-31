@@ -144,7 +144,7 @@ type RuntimeOriginControlProof struct {
 	EffectiveStatus string
 }
 
-type RuntimeChannelAdmissionControlProof struct {
+type RuntimeChannelCapacityControlProof struct {
 	ChannelID int64
 	Revision  int64
 	Payload   string
@@ -153,9 +153,9 @@ type RuntimeChannelAdmissionControlProof struct {
 // RuntimeReconciliationProof is the complete PostgreSQL-derived control set validated by the
 // reconciler. The clear commit verifies every listed Redis control atomically with the latch CAS.
 type RuntimeReconciliationProof struct {
-	Generation               RuntimeReconciliationGeneration
-	OriginControls           []RuntimeOriginControlProof
-	ChannelAdmissionControls []RuntimeChannelAdmissionControlProof
+	Generation              RuntimeReconciliationGeneration
+	OriginControls          []RuntimeOriginControlProof
+	ChannelCapacityControls []RuntimeChannelCapacityControlProof
 }
 
 // BeginRuntimeReconciliation must be called immediately before the full reconciliation pass whose
@@ -188,7 +188,7 @@ func (s *Store) BeginRuntimeReconciliation(ctx context.Context) (generation Runt
 }
 
 // ClearRuntimeInfrastructureFaultAfterReconciliation is the only fault-latch clearing API.
-// The caller must have completed the full Origin, Channel admission, critical setting, and
+// The caller must have completed the full Origin, Channel capacity, critical setting, and
 // durable-operation reconciliation immediately before calling it. This method then re-reads the
 // PostgreSQL-derived epoch/revisions through in, validates marker and critical control payloads,
 // and compare-and-deletes the exact shared fault generation. A concurrent fault cannot be cleared.
@@ -204,7 +204,6 @@ func (s *Store) ClearRuntimeInfrastructureFaultAfterReconciliation(
 		s.keys.runtimeInfrastructureFault(),
 		s.keys.stateIntegrityMarker(),
 		s.keys.admissionRouteRate(),
-		s.keys.admissionChannelRate(),
 		s.keys.admissionGlobalConcurrency(),
 		s.keys.runtimeControlSetting("gateway.circuit_breaker"),
 		s.keys.runtimeControlSetting("gateway.routing_balance"),
@@ -225,8 +224,8 @@ func (s *Store) ClearRuntimeInfrastructureFaultAfterReconciliation(
 		seenOrigins[origin.ProviderID] = struct{}{}
 		keys = append(keys, s.keys.provider(origin.ProviderID))
 	}
-	seenChannels := make(map[int64]struct{}, len(reconciliation.ChannelAdmissionControls))
-	for _, channel := range reconciliation.ChannelAdmissionControls {
+	seenChannels := make(map[int64]struct{}, len(reconciliation.ChannelCapacityControls))
+	for _, channel := range reconciliation.ChannelCapacityControls {
 		if channel.ChannelID <= 0 || channel.Revision < 1 || channel.Payload == "" {
 			return RuntimeReadinessResult{Reason: "control_proof_invalid"}, nil
 		}
@@ -234,10 +233,10 @@ func (s *Store) ClearRuntimeInfrastructureFaultAfterReconciliation(
 			return RuntimeReadinessResult{Reason: "control_proof_invalid"}, nil
 		}
 		seenChannels[channel.ChannelID] = struct{}{}
-		keys = append(keys, s.keys.admissionChannel(channel.ChannelID))
+		keys = append(keys, s.keys.channelCapacity(channel.ChannelID))
 	}
 	argv := append(runtimeReadinessArgs(in), reconciliation.Generation.redisRunID)
-	proofRaw, err := s.faultProof.Run(ctx, s.client, keys[:7], argv...).Result()
+	proofRaw, err := s.faultProof.Run(ctx, s.client, keys[:6], argv...).Result()
 	if err != nil {
 		return RuntimeReadinessResult{}, storeUnavailable(err, "breakerstore runtime fault clear proof")
 	}
@@ -253,7 +252,7 @@ func (s *Store) ClearRuntimeInfrastructureFaultAfterReconciliation(
 		}
 		return RuntimeReadinessResult{Reason: code}, nil
 	}
-	if len(proofReply) != 12 {
+	if len(proofReply) != 10 {
 		return RuntimeReadinessResult{}, storeUnavailable(errors.New("incomplete runtime fault proof reply"), "breakerstore runtime fault clear proof")
 	}
 	sharedToken, _ := proofReply[1].(string)
@@ -266,7 +265,7 @@ func (s *Store) ClearRuntimeInfrastructureFaultAfterReconciliation(
 
 	clearArgs := append(runtimeReadinessArgs(in), reconciliation.Generation.redisRunID, proofReply[1])
 	clearArgs = append(clearArgs, proofReply[2:]...)
-	clearArgs = append(clearArgs, strconv.Itoa(len(reconciliation.OriginControls)), strconv.Itoa(len(reconciliation.ChannelAdmissionControls)))
+	clearArgs = append(clearArgs, strconv.Itoa(len(reconciliation.OriginControls)), strconv.Itoa(len(reconciliation.ChannelCapacityControls)))
 	for _, origin := range reconciliation.OriginControls {
 		clearArgs = append(clearArgs,
 			strconv.FormatInt(origin.OriginRevision, 10),
@@ -274,7 +273,7 @@ func (s *Store) ClearRuntimeInfrastructureFaultAfterReconciliation(
 			origin.EffectiveStatus,
 		)
 	}
-	for _, channel := range reconciliation.ChannelAdmissionControls {
+	for _, channel := range reconciliation.ChannelCapacityControls {
 		clearArgs = append(clearArgs,
 			strconv.FormatInt(channel.Revision, 10),
 			channel.Payload,
@@ -290,13 +289,15 @@ func (s *Store) ClearRuntimeInfrastructureFaultAfterReconciliation(
 		return RuntimeReadinessResult{}, storeUnavailable(errors.New("unexpected runtime fault clear reply"), "breakerstore runtime fault clear commit")
 	}
 	clearCode, _ := clearReply[0].(string)
-	if clearCode != "verified" && clearCode != "already_clear" {
-		if clearCode == "fault_changed" {
-			clearCode = RuntimeReadinessReasonStoreFaultLatched
-		} else if clearCode == runtimeRedisInstanceChanged {
-			s.ensureRuntimeInfrastructureFault(ctx)
-			clearCode = RuntimeReadinessReasonStoreFaultLatched
-		}
+	switch clearCode {
+	case "verified", "already_clear":
+		// continue to delete the local infrastructure fault marker
+	case "fault_changed":
+		return RuntimeReadinessResult{Reason: RuntimeReadinessReasonStoreFaultLatched}, nil
+	case runtimeRedisInstanceChanged:
+		s.ensureRuntimeInfrastructureFault(ctx)
+		return RuntimeReadinessResult{Reason: RuntimeReadinessReasonStoreFaultLatched}, nil
+	default:
 		return RuntimeReadinessResult{Reason: clearCode}, nil
 	}
 	deleteCode, deleteErr := s.deleteRuntimeInfrastructureFaultIfLocalGeneration(

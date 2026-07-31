@@ -185,8 +185,7 @@ func TestP4LongStreamRevisionFencesE2E(t *testing.T) {
 			channelBeforeOldFinish.ChannelConfigRevision,
 		)
 	}
-	if providerBeforeOldFinish.SampleCount != 1 || channelBeforeOldFinish.SampleCount != 1 ||
-		channelBeforeOldFinish.TTFTSamples != 1 {
+	if providerBeforeOldFinish.SampleCount != 1 || channelBeforeOldFinish.SampleCount != 1 {
 		t.Fatalf("new stream did not establish the expected clean runtime sample: provider=%+v channel=%+v", providerBeforeOldFinish, channelBeforeOldFinish)
 	}
 
@@ -370,7 +369,7 @@ func waitForRevisionFencedStreamFacts(
 				debitCount,
 			)
 			if request.Status == "succeeded" && request.DeliveryStatus == "completed" && request.Stream &&
-				request.ResponseStartedAt.Valid && request.ResponseCompletedAt.Valid &&
+				request.GatewayFirstTokenAt.Valid && request.ResponseCompletedAt.Valid &&
 				request.FinalChannelID.Valid && request.FinalChannelID.Int64 == seed.openAIChannelID &&
 				attempt.ID == old.attemptID && attempt.Status == "succeeded" && attempt.FinalUsageReceived &&
 				attempt.ProviderOriginRevision == old.originRevision &&
@@ -468,7 +467,6 @@ func assertBreakerSnapshotUnchanged(
 		after.EligibleSuccesses != before.EligibleSuccesses ||
 		after.EligibleFailures != before.EligibleFailures ||
 		after.ConsecutiveFailures != before.ConsecutiveFailures ||
-		after.TTFTEWMAMs != before.TTFTEWMAMs || after.TTFTSamples != before.TTFTSamples ||
 		after.OriginRevision != before.OriginRevision || after.StatusRevision != before.StatusRevision ||
 		after.ChannelConfigRevision != before.ChannelConfigRevision {
 		t.Fatalf("old Finish changed current %s runtime: before=%+v after=%+v", name, before, after)

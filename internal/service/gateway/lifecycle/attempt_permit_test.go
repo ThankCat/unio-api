@@ -190,7 +190,7 @@ func TestAttemptPermitManagerRequiresOneIntegrityEpoch(t *testing.T) {
 	store := &attemptPermitStoreStub{}
 	manager := NewAttemptPermitManager(store, attemptRuntimeFactsStub{
 		admission: runtimefacts.AdmissionRevisions{
-			Integrity: integrity, RouteRateLimits: 3, ChannelRateLimits: 8, Concurrency: 4,
+			Integrity: integrity, RouteRateLimits: 3, Concurrency: 4,
 		},
 		routing: runtimefacts.RoutingRevisions{
 			Integrity:      runtimefacts.Integrity{Epoch: "epoch-b", Revision: 8},
@@ -218,7 +218,7 @@ func TestAttemptPermitManagerBuildsBoundAuthoritativeInput(t *testing.T) {
 	}}
 	manager := NewAttemptPermitManager(store, attemptRuntimeFactsStub{
 		admission: runtimefacts.AdmissionRevisions{
-			Integrity: integrity, RouteRateLimits: 3, ChannelRateLimits: 8, Concurrency: 4,
+			Integrity: integrity, RouteRateLimits: 3, Concurrency: 4,
 		},
 		routing: runtimefacts.RoutingRevisions{Integrity: integrity, CircuitBreaker: 5, RoutingBalance: 6},
 	}, AttemptPermitManagerOptions{})
@@ -227,7 +227,7 @@ func TestAttemptPermitManagerBuildsBoundAuthoritativeInput(t *testing.T) {
 	candidate := routing.ChatRouteCandidate{
 		ModelDBID: 11, ProviderID: 12, OriginRevision: 13,
 		ProviderStatusRevision: 14, ChannelConfigRevision: 15,
-		ChannelAdmissionLimitsRevision: 16, Channel: channel.Runtime{ID: 17},
+		ChannelCapacityRevision: 16, Channel: channel.Runtime{ID: 17},
 	}
 
 	_, owner, err := manager.Acquire(ctx, AttemptPermitAcquireParams{
@@ -242,8 +242,8 @@ func TestAttemptPermitManagerBuildsBoundAuthoritativeInput(t *testing.T) {
 	}
 	got := store.acquireInput
 	if got.RequestAdmissionID != "request-token" || got.IntegrityEpoch != integrity.Epoch || got.IntegrityRevision != integrity.Revision ||
-		got.ChannelRateRevision != 8 || got.GlobalConcurrencyRevision != 4 || got.CircuitBreakerRevision != 5 ||
-		got.ChannelAdmissionRevision != 16 || got.InputEstimate != 123 || !got.EnforceProviderControl ||
+		got.GlobalConcurrencyRevision != 4 || got.CircuitBreakerRevision != 5 ||
+		got.ChannelCapacityRevision != 16 || got.InputEstimate != 123 || !got.EnforceProviderControl ||
 		got.AdmissionFingerprint == "" {
 		t.Fatalf("unexpected acquire input: %+v", got)
 	}
@@ -273,7 +273,7 @@ func TestAttemptPermitMetricsFollowPermitOwnershipAndStaleFinish(t *testing.T) {
 	}
 	manager := NewAttemptPermitManager(store, attemptRuntimeFactsStub{
 		admission: runtimefacts.AdmissionRevisions{
-			Integrity: integrity, RouteRateLimits: 3, ChannelRateLimits: 8, Concurrency: 4,
+			Integrity: integrity, RouteRateLimits: 3, Concurrency: 4,
 		},
 		routing: runtimefacts.RoutingRevisions{Integrity: integrity, CircuitBreaker: 5, RoutingBalance: 6},
 	}, AttemptPermitManagerOptions{Metrics: metrics})
@@ -283,7 +283,7 @@ func TestAttemptPermitMetricsFollowPermitOwnershipAndStaleFinish(t *testing.T) {
 		Candidate: routing.ChatRouteCandidate{
 			ModelDBID: 11, ProviderID: 12, OriginRevision: 13,
 			ProviderStatusRevision: 14, ChannelConfigRevision: 15,
-			ChannelAdmissionLimitsRevision: 16, Channel: channel.Runtime{ID: 17},
+			ChannelCapacityRevision: 16, Channel: channel.Runtime{ID: 17},
 		},
 		UpstreamEndpoint: requestlog.UpstreamEndpointResponses,
 		RequestMode:      breakerstore.ModeNonStream,
@@ -874,7 +874,7 @@ func TestNonStreamFinishAttributionIsConservative(t *testing.T) {
 				wantOrigin = breakerstore.OutcomeIgnored
 			}
 			if got.ProviderOutcome != wantOrigin || got.ChannelOutcome != tc.channel ||
-				got.ProviderEvidence != tc.evidence || got.FirstTokenMs != nil {
+				got.ProviderEvidence != tc.evidence {
 				t.Fatalf("unexpected attribution: %+v", got)
 			}
 		})

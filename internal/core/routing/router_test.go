@@ -109,28 +109,28 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
-				RequestedModelID:               "openai/gpt-4.1",
-				ProviderID:                     11,
-				ProviderOriginRevision:         3,
-				ProviderStatusRevision:         4,
-				ChannelConfigRevision:          5,
-				ChannelAdmissionLimitsRevision: 6,
-				AdapterKey:                     "openai",
-				ChannelID:                      123,
-				Origin:                         "https://api.openai.example/v1",
-				Credential:                     "secret://openai/main",
-				TimeoutMs:                      pgtype.Int4{Int32: 15000, Valid: true},
-				UpstreamModel:                  "gpt-4.1",
+				RequestedModelID:        "openai/gpt-4.1",
+				ProviderID:              11,
+				ProviderOriginRevision:  3,
+				ProviderStatusRevision:  4,
+				ChannelConfigRevision:   5,
+				ChannelCapacityRevision: 6,
+				AdapterKey:              "openai",
+				ChannelID:               123,
+				Origin:                  "https://api.openai.example/v1",
+				Credential:              "secret://openai/main",
+				ResponseTimeoutMs:       pgtype.Int4{Int32: 15000, Valid: true},
+				UpstreamModel:           "gpt-4.1",
 			},
 			{
-				RequestedModelID: "openai/gpt-4.1",
-				ProviderID:       11,
-				AdapterKey:       "openai",
-				ChannelID:        456,
-				Origin:           "https://backup.openai.example/v1",
-				Credential:       "secret://openai/backup",
-				TimeoutMs:        pgtype.Int4{Int32: 30000, Valid: true},
-				UpstreamModel:    "gpt-4.1",
+				RequestedModelID:  "openai/gpt-4.1",
+				ProviderID:        11,
+				AdapterKey:        "openai",
+				ChannelID:         456,
+				Origin:            "https://backup.openai.example/v1",
+				Credential:        "secret://openai/backup",
+				ResponseTimeoutMs: pgtype.Int4{Int32: 30000, Valid: true},
+				UpstreamModel:     "gpt-4.1",
 			},
 		},
 	}
@@ -170,7 +170,7 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	if first.ProviderID != 11 || first.OriginRevision != 3 || first.ProviderStatusRevision != 4 {
 		t.Fatalf("origin snapshot was not preserved: %+v", first)
 	}
-	if first.ChannelConfigRevision != 5 || first.ChannelAdmissionLimitsRevision != 6 {
+	if first.ChannelConfigRevision != 5 || first.ChannelCapacityRevision != 6 {
 		t.Fatalf("channel revisions were not preserved: %+v", first)
 	}
 	if first.AdapterKey != "openai" {
@@ -189,8 +189,8 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	if first.Channel.APIKey != "secret://openai/main" {
 		t.Fatalf("expected plaintext credential as API key, got %q", first.Channel.APIKey)
 	}
-	if first.Channel.Timeout != 15*time.Second {
-		t.Fatalf("expected timeout %v, got %v", 15*time.Second, first.Channel.Timeout)
+	if first.Channel.ResponseTimeout != 15*time.Second {
+		t.Fatalf("expected response timeout %v, got %v", 15*time.Second, first.Channel.ResponseTimeout)
 	}
 
 	second := got.Candidates[1]
@@ -200,8 +200,8 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	if second.Channel.APIKey != "secret://openai/backup" {
 		t.Fatalf("expected second plaintext credential, got %q", second.Channel.APIKey)
 	}
-	if second.Channel.Timeout != 30*time.Second {
-		t.Fatalf("expected second timeout %v, got %v", 30*time.Second, second.Channel.Timeout)
+	if second.Channel.ResponseTimeout != 30*time.Second {
+		t.Fatalf("expected second timeout %v, got %v", 30*time.Second, second.Channel.ResponseTimeout)
 	}
 }
 
@@ -250,12 +250,12 @@ func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
-				AdapterKey:    "openai",
-				ChannelID:     123,
-				Origin:        "https://api.openai.example/v1",
-				Credential:    "secret://openai/main",
-				TimeoutMs:     pgtype.Int4{Valid: false},
-				UpstreamModel: "gpt-4.1",
+				AdapterKey:        "openai",
+				ChannelID:         123,
+				Origin:            "https://api.openai.example/v1",
+				Credential:        "secret://openai/main",
+				ResponseTimeoutMs: pgtype.Int4{Valid: false},
+				UpstreamModel:     "gpt-4.1",
 			},
 		},
 	}
@@ -271,8 +271,8 @@ func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 		t.Fatalf("PlanChat returned error: %v", err)
 	}
 
-	if got.Candidates[0].Channel.Timeout != defaultChannelTimeout {
-		t.Fatalf("expected fallback default timeout %v, got %v", defaultChannelTimeout, got.Candidates[0].Channel.Timeout)
+	if got.Candidates[0].Channel.ResponseTimeout != defaultResponseTimeoutFallback {
+		t.Fatalf("expected fallback default timeout %v, got %v", defaultResponseTimeoutFallback, got.Candidates[0].Channel.ResponseTimeout)
 	}
 }
 
@@ -280,12 +280,12 @@ func TestRouterSetDefaultTimeoutTakesEffect(t *testing.T) {
 	newRows := func() []sqlc.FindRouteCandidatesRow {
 		return []sqlc.FindRouteCandidatesRow{
 			{
-				AdapterKey:    "openai",
-				ChannelID:     123,
-				Origin:        "https://api.openai.example/v1",
-				Credential:    "secret://openai/main",
-				TimeoutMs:     pgtype.Int4{Valid: false},
-				UpstreamModel: "gpt-4.1",
+				AdapterKey:        "openai",
+				ChannelID:         123,
+				Origin:            "https://api.openai.example/v1",
+				Credential:        "secret://openai/main",
+				ResponseTimeoutMs: pgtype.Int4{Valid: false},
+				UpstreamModel:     "gpt-4.1",
 			},
 		}
 	}
@@ -299,23 +299,23 @@ func TestRouterSetDefaultTimeoutTakesEffect(t *testing.T) {
 	}
 
 	// 热改默认超时:之后的候选构造用新值。
-	router.SetDefaultTimeout(45 * time.Second)
+	router.SetDefaultResponseTimeout(45 * time.Second)
 	got, err := router.PlanChat(context.Background(), req)
 	if err != nil {
 		t.Fatalf("PlanChat returned error: %v", err)
 	}
-	if got.Candidates[0].Channel.Timeout != 45*time.Second {
-		t.Fatalf("expected hot-reloaded timeout 45s, got %v", got.Candidates[0].Channel.Timeout)
+	if got.Candidates[0].Channel.ResponseTimeout != 45*time.Second {
+		t.Fatalf("expected hot-reloaded timeout 45s, got %v", got.Candidates[0].Channel.ResponseTimeout)
 	}
 
 	// <=0 兜底为内置 30s。
-	router.SetDefaultTimeout(0)
+	router.SetDefaultResponseTimeout(0)
 	got, err = router.PlanChat(context.Background(), req)
 	if err != nil {
 		t.Fatalf("PlanChat returned error: %v", err)
 	}
-	if got.Candidates[0].Channel.Timeout != defaultChannelTimeout {
-		t.Fatalf("expected fallback timeout %v, got %v", defaultChannelTimeout, got.Candidates[0].Channel.Timeout)
+	if got.Candidates[0].Channel.ResponseTimeout != defaultResponseTimeoutFallback {
+		t.Fatalf("expected fallback timeout %v, got %v", defaultResponseTimeoutFallback, got.Candidates[0].Channel.ResponseTimeout)
 	}
 }
 
@@ -403,12 +403,12 @@ func TestRouterPlanChatAllCandidatesMissingCredentialReturnsNoAvailable(t *testi
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
-				AdapterKey:    "openai",
-				ChannelID:     123,
-				Origin:        "https://api.openai.example/v1",
-				Credential:    "",
-				TimeoutMs:     pgtype.Int4{Int32: 15000, Valid: true},
-				UpstreamModel: "gpt-4.1",
+				AdapterKey:        "openai",
+				ChannelID:         123,
+				Origin:            "https://api.openai.example/v1",
+				Credential:        "",
+				ResponseTimeoutMs: pgtype.Int4{Int32: 15000, Valid: true},
+				UpstreamModel:     "gpt-4.1",
 			},
 		},
 	}
@@ -431,20 +431,20 @@ func TestRouterPlanChatSkipsBadCandidateKeepsGood(t *testing.T) {
 	store := &fakeStore{
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
-				AdapterKey:    "openai",
-				ChannelID:     111,
-				Origin:        "https://bad.openai.example/v1",
-				Credential:    "", // 坏候选：缺凭据，应被跳过
-				TimeoutMs:     pgtype.Int4{Int32: 15000, Valid: true},
-				UpstreamModel: "gpt-4.1",
+				AdapterKey:        "openai",
+				ChannelID:         111,
+				Origin:            "https://bad.openai.example/v1",
+				Credential:        "", // 坏候选：缺凭据，应被跳过
+				ResponseTimeoutMs: pgtype.Int4{Int32: 15000, Valid: true},
+				UpstreamModel:     "gpt-4.1",
 			},
 			{
-				AdapterKey:    "openai",
-				ChannelID:     222,
-				Origin:        "https://good.openai.example/v1",
-				Credential:    "secret://openai/good",
-				TimeoutMs:     pgtype.Int4{Int32: 30000, Valid: true},
-				UpstreamModel: "gpt-4.1",
+				AdapterKey:        "openai",
+				ChannelID:         222,
+				Origin:            "https://good.openai.example/v1",
+				Credential:        "secret://openai/good",
+				ResponseTimeoutMs: pgtype.Int4{Int32: 30000, Valid: true},
+				UpstreamModel:     "gpt-4.1",
 			},
 		},
 	}

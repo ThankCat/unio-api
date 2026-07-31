@@ -117,8 +117,8 @@ func TestRadarAggregates(t *testing.T) {
 			// terminal_total 口径为 succeeded+failed（不含 canceled）；total = terminal + canceled + pending。
 			TerminalTotal: 100, SucceededTotal: 96, FailedTotal: 4, CanceledTotal: 1, PendingTotal: 4,
 			TimeoutTotal: 2, LatencyAvg: 800, LatencyP50: 700, LatencyP90: 1500, LatencyP95: 1800, LatencyP99: 2500,
-			LatencySample: 96,
-			TtftAvg:       1200, TtftP50: 900, TtftP90: 1500, TtftP95: 1600, TtftP99: 2200, TtftSample: 84,
+			LatencySample:  96,
+			GatewayTtftAvg: 1200, GatewayTtftP50: 900, GatewayTtftP90: 1500, GatewayTtftP95: 1600, GatewayTtftP99: 2200, GatewayTtftSample: 84,
 		},
 		throughput:  sqlc.DashboardRadarThroughputRow{OutputTokens: 5000, GenerationSeconds: 100},
 		radarTokens: sqlc.DashboardRadarTokensRow{UncachedInput: 600, CacheReadInput: 300, CacheWriteInput: 100, OutputTokens: 5000},
@@ -156,14 +156,14 @@ func TestRadarAggregates(t *testing.T) {
 	if out.Latency.Coverage != 1 { // 96/96 succeeded
 		t.Fatalf("latency coverage = %v, want 1", out.Latency.Coverage)
 	}
-	if !out.Ttft.HasData || out.Ttft.Sample != 84 {
-		t.Fatalf("ttft sample = %d hasData=%v, want 84/true", out.Ttft.Sample, out.Ttft.HasData)
+	if !out.GatewayTtft.HasData || out.GatewayTtft.Sample != 84 {
+		t.Fatalf("gateway ttft sample = %d hasData=%v, want 84/true", out.GatewayTtft.Sample, out.GatewayTtft.HasData)
 	}
-	if out.Ttft.P99 != 2200 {
-		t.Fatalf("ttft p99 = %v, want 2200", out.Ttft.P99)
+	if out.GatewayTtft.P99 != 2200 {
+		t.Fatalf("gateway ttft p99 = %v, want 2200", out.GatewayTtft.P99)
 	}
-	if out.Ttft.Coverage < 0.79 || out.Ttft.Coverage > 0.81 { // 84/105
-		t.Fatalf("ttft coverage = %v, want ~0.8", out.Ttft.Coverage)
+	if out.GatewayTtft.Coverage < 0.79 || out.GatewayTtft.Coverage > 0.81 { // 84/105
+		t.Fatalf("gateway ttft coverage = %v, want ~0.8", out.GatewayTtft.Coverage)
 	}
 	if out.MarginUSD != "12" { // 20 - 8
 		t.Fatalf("margin = %q, want 12", out.MarginUSD)

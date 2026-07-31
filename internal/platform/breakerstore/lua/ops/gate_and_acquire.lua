@@ -9,18 +9,14 @@ local conc_key = KEYS[3]
 local permit_key = KEYS[4]
 local cooldown_key = KEYS[5]
 local permission_key = KEYS[6]
-local ch_admission_ctl = KEYS[7]
-local ch_rpm_key = KEYS[8]
-local ch_rpd_key = KEYS[9]
-local ch_tpm_key = KEYS[10]
-local channel_rate_ctl = KEYS[11]
-local global_conc_ctl = KEYS[12]
-local breaker_ctl = KEYS[13]
-local integrity_marker = KEYS[14]
-local request_admission_key = KEYS[15]
-local fault_latch = KEYS[16]
-local instance_proof = KEYS[17]
-local route_channel_rpd_key = KEYS[18]
+local channel_capacity_ctl = KEYS[7]
+local global_conc_ctl = KEYS[8]
+local breaker_ctl = KEYS[9]
+local integrity_marker = KEYS[10]
+local request_admission_key = KEYS[11]
+local fault_latch = KEYS[12]
+local instance_proof = KEYS[13]
+local route_channel_rpd_key = KEYS[14]
 
 local permit_id = ARGV[1]
 local fingerprint = ARGV[2]
@@ -33,15 +29,14 @@ local channel_config_rev = ARGV[8]
 local model_id = ARGV[9]
 local upstream_endpoint = ARGV[10]
 local request_mode = ARGV[11]
-local expected_ch_admission_rev = tonumber(ARGV[12])
-local expected_channel_rate_rev = tonumber(ARGV[13])
-local expected_global_conc_rev = tonumber(ARGV[14])
-local expected_breaker_rev = tonumber(ARGV[15])
-local input_estimate = tonumber(ARGV[16]) or 0
-local expected_integrity_epoch = ARGV[17]
-local expected_integrity_revision = ARGV[18]
+local expected_channel_capacity_rev = tonumber(ARGV[12])
+local expected_global_conc_rev = tonumber(ARGV[13])
+local expected_breaker_rev = tonumber(ARGV[14])
+local input_estimate = tonumber(ARGV[15]) or 0
+local expected_integrity_epoch = ARGV[16]
+local expected_integrity_revision = ARGV[17]
 -- Provider control 围栏校验开关（enforce=1 时要求 control 存在、effective_status=enabled、无 pending、revision 匹配，§5.3.2）。
-local enforce_origin_control = tonumber(ARGV[19])
+local enforce_origin_control = tonumber(ARGV[18])
 
 if redis.call('EXISTS', fault_latch) == 1 then return { 'denied', 'breaker_store_unavailable' } end
 local instance_matches = redis_instance_proof_matches(instance_proof)
@@ -100,36 +95,29 @@ if redis.call('EXISTS', permit_key) == 1 then
   }
 end
 
--- New permits require all four candidate controls to be active, revision-current, and strictly decodable.
-local channel_rate, channel_rate_state =
-  read_new_admission_control(channel_rate_ctl, expected_channel_rate_rev, parse_rate_limit_defaults_payload)
-if channel_rate == nil then return { 'denied', channel_rate_state } end
+-- 新 permit 要求三个候选级 control 均 active、revision 一致且严格可解码。
+-- Channel RPM/RPD/TPM 已不再是准入门槛（§1.2/§8）：并发是唯一的渠道级硬门槛，
+-- 因此不再读取 channel-rate control，也不再占用/结算这三个计数。
 local global_concurrency, global_concurrency_state =
   read_new_admission_control(global_conc_ctl, expected_global_conc_rev, parse_global_concurrency_payload)
 if global_concurrency == nil then return { 'denied', global_concurrency_state } end
-local channel_limits, channel_limits_state =
-  read_new_admission_control(ch_admission_ctl, expected_ch_admission_rev, parse_channel_admission_payload)
-if channel_limits == nil then
-  if channel_limits_state == 'stale_setting_revision' then return { 'denied', 'stale_config_revision' } end
-  return { 'denied', channel_limits_state }
+-- parse_channel_capacity_payload comes from helpers/authoritative_control.lua at assemble time.
+---@diagnostic disable-next-line: undefined-global
+local channel_capacity, channel_capacity_state = read_new_admission_control(channel_capacity_ctl, expected_channel_capacity_rev, parse_channel_capacity_payload)
+if channel_capacity == nil then
+  if channel_capacity_state == 'stale_setting_revision' then return { 'denied', 'stale_config_revision' } end
+  return { 'denied', channel_capacity_state }
 end
 local breaker, breaker_state =
   read_new_admission_control(breaker_ctl, expected_breaker_rev, parse_circuit_breaker_payload)
 if breaker == nil then return { 'denied', breaker_state } end
 
-local eff_ch_rpm = resolve_channel_limit(channel_limits.rpm, channel_rate.rpm)
-local eff_ch_rpd = resolve_channel_limit(channel_limits.rpd, channel_rate.rpd)
-local eff_ch_tpm = resolve_channel_limit(channel_limits.tpm, channel_rate.tpm)
-local eff_ch_conc = resolve_channel_limit(channel_limits.concurrency, global_concurrency.channel_limit)
+local eff_ch_conc = resolve_channel_limit(channel_capacity.concurrency, global_concurrency.channel_limit)
 local breaker_enabled = 0
 if breaker.enabled then breaker_enabled = 1 end
 local permit_ttl_ms = breaker.attempt_permit_ttl_ms
 local renew_ms = breaker.attempt_permit_renew_interval_ms
 local terminal_ttl_ms = breaker.attempt_permit_terminal_ttl_ms
-local bucket_ttl_ms = permit_ttl_ms + terminal_ttl_ms + 120000
--- RPD 按 UTC 日号分桶，必须至少存活完整 24 小时并覆盖 permit 终态缓冲。
--- 不能与 RPM/TPM 共用分钟级 bucket_ttl_ms，否则同一日内会静默清零并重新放行。
-local rpd_bucket_ttl_ms = 86400000 + bucket_ttl_ms
 
 -- gate 返回 allow, probe(0/1), reason；probe=1 表示本次占用了该作用域的 half-open 租约。
 local function gate(state_key, rotate_before_gate)
@@ -153,10 +141,12 @@ local function gate(state_key, rotate_before_gate)
   return true, 0, ''
 end
 
--- 429 冷却优先于 breaker：冷却未到期直接 rate_limited（不增加任何 breaker eligible 计数，§2.4.1）。
+-- 429 冷却优先于 breaker：冷却未到期直接 cooldown（不增加任何 breaker eligible 计数，§2.4.1）。
+-- cooldown 与 concurrency_full 严格区分：只有并发满才允许进入全池短等（§9.3）。
+-- 同时返回剩余毫秒，供全池均冷却时给出准确 Retry-After（§9.5）。
 if cooldown_key ~= '' and redis.call('EXISTS', cooldown_key) == 1 then
   local until_ms = tonumber(redis.call('HGET', cooldown_key, 'until_ms')) or 0
-  if now < until_ms then return { 'denied', 'rate_limited' } end
+  if now < until_ms then return { 'denied', 'cooldown', until_ms - now } end
 end
 
 -- (channel_id, model_id) 403 权限暂停：仅当暂停记录的三类 revision 与本次候选完全一致且未复检通过时硬拒绝（§2.4.2）。
@@ -241,34 +231,15 @@ if not ep_allow then return { 'denied', ep_reason } end
 local ch_allow, ch_probe, ch_reason = gate(channel_key, channel_rotate)
 if not ch_allow then return { 'denied', ch_reason } end
 
--- Validate all stable resource keys and evaluate limits without mutation. This prevents Redis script
--- errors or a later limit denial from leaving zero-valued keys/TTLs or partially acquired resources.
+-- 先只读校验并发这一唯一渠道级硬门槛，再进入统一写阶段，避免部分占用。
+-- 并发满返回 concurrency_full（可进入全池短等）；429 冷却返回 cooldown（不进入等待，§9.3）。
 local conc_used = active_zset_count(conc_key, now)
-local rpm_used = read_nonnegative_counter(ch_rpm_key)
-local rpd_used = read_nonnegative_counter(ch_rpd_key)
-local tpm_used = read_nonnegative_counter(ch_tpm_key)
-if conc_used == nil or rpm_used == nil or rpd_used == nil or tpm_used == nil then
-  return { 'denied', 'runtime_sync_required' }
-end
-if rpm_used >= MAX_EXACT_INTEGER or rpd_used >= MAX_EXACT_INTEGER or tpm_used > MAX_EXACT_INTEGER - input_estimate then
-  return { 'denied', 'runtime_sync_required' }
-end
-if eff_ch_conc > 0 and conc_used >= eff_ch_conc then return { 'denied', 'concurrency_limited' } end
-if eff_ch_rpm > 0 and rpm_used + 1 > eff_ch_rpm then return { 'denied', 'rate_limited' } end
-if eff_ch_rpd > 0 and rpd_used + 1 > eff_ch_rpd then return { 'denied', 'rate_limited' } end
-if eff_ch_tpm > 0 and tpm_used + input_estimate > eff_ch_tpm then return { 'denied', 'rate_limited' } end
+if conc_used == nil then return { 'denied', 'runtime_sync_required' } end
+if eff_ch_conc > 0 and conc_used >= eff_ch_conc then return { 'denied', 'concurrency_full' } end
 
 -- 统一写阶段：全部条件通过，创建 permit、占 half-open/并发租约。
 local lease_until = now + permit_ttl_ms
 
-redis.call('INCR', ch_rpm_key)
-redis.call('PEXPIRE', ch_rpm_key, bucket_ttl_ms)
-redis.call('INCR', ch_rpd_key)
-redis.call('PEXPIRE', ch_rpd_key, rpd_bucket_ttl_ms)
-if input_estimate > 0 then
-  redis.call('INCRBY', ch_tpm_key, input_estimate)
-  redis.call('PEXPIRE', ch_tpm_key, bucket_ttl_ms)
-end
 redis.call('ZREMRANGEBYSCORE', conc_key, '-inf', now)
 
 local function ensure_origin_state(state_key)
@@ -339,9 +310,7 @@ if channel_rotate == 1 then
     'half_open_lease_until_ms',
     'open_until_ms',
     'last_failure_at_ms',
-    'last_failure_category',
-    'ttft_ewma_ms',
-    'ttft_samples'
+    'last_failure_category'
   )
 end
 
@@ -430,20 +399,12 @@ redis.call(
   channel_id,
   'admission_enforced',
   '1',
-  'channel_admission_revision',
-  expected_ch_admission_rev,
-  'channel_rate_limits_revision',
-  expected_channel_rate_rev,
+  'channel_capacity_revision',
+  expected_channel_capacity_rev,
   'global_concurrency_revision',
   expected_global_conc_rev,
   'circuit_breaker_revision',
   expected_breaker_rev,
-  'ch_rpm_bucket',
-  ch_rpm_key,
-  'ch_rpd_bucket',
-  ch_rpd_key,
-  'ch_tpm_bucket',
-  ch_tpm_key,
   'tpm_input_estimate',
   input_estimate,
   'tpm_state',
@@ -454,8 +415,6 @@ redis.call(
   'false',
   'first_token_eligible',
   'false',
-  'rpd_day_bucket',
-  ch_rpd_key,
   'route_channel_rpd_bucket',
   route_channel_rpd_key,
   'permit_ttl_ms',

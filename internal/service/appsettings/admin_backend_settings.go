@@ -34,7 +34,7 @@ const DefaultChannelTestLogRetentionSetting = 200
 // ---- 渠道检测 / 自动巡检(聚合) ----
 
 // ChannelTestSettings 是渠道手动检测与自动巡检 worker 的聚合配置。
-// ProbeTimeout 与 gateway.default_channel_timeout_ms / channels.timeout_ms(用户请求上游超时)完全正交。
+// ProbeTimeout 与 gateway.default_response_timeout_ms / channels.response_timeout_ms 完全正交。
 type ChannelTestSettings struct {
 	Enabled                bool
 	Interval               time.Duration
@@ -102,7 +102,7 @@ func channelTestDefinition() Definition {
 		Label:    "渠道巡检",
 		Description: "渠道凭据检测与自动巡检的聚合配置:开关、巡检间隔、探测超时、每渠道日志保留条数。" +
 			"开启后周期性对所有启用渠道发合成探测,据此翻 credential_valid(失效自动摘除、通过自动恢复)。" +
-			"探测超时仅用于手动检测与自动巡检,与「默认渠道超时」/ 渠道行 timeout_ms(用户请求上游超时)无关。" +
+			"探测超时仅用于手动检测与自动巡检,与默认响应超时 / 渠道 response_timeout_ms 无关。" +
 			"时长单位毫秒。保存后 admin 与 worker 约 3 秒内生效。",
 		HotReload: true,
 		Default:   encodeChannelTestSettings(DefaultChannelTestSettings()),

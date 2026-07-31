@@ -78,7 +78,7 @@ func (c *Checker) Check(ctx context.Context) (bool, string) {
 }
 
 // ClearStoreFaultAfterReconciliation is called only by the background reconciler after it has
-// strictly reconciled every Origin fence, Channel admission control, critical setting, and
+// strictly reconciled every Origin fence, Channel capacity control, critical setting, and
 // durable operation. A regular /readyz probe never invokes this mutation.
 func (c *Checker) ClearStoreFaultAfterReconciliation(
 	ctx context.Context,
@@ -125,8 +125,7 @@ func (c *Checker) expectedRuntime(
 	if err != nil || epoch.State != runtimecontrol.StateEpochReady || row.RuntimeStateEpochRevision < 1 {
 		return breakerstore.RuntimeReadinessInput{}, "epoch_not_ready", "lost", false, false
 	}
-	if row.RouteRateLimitDefaultsRevision < 1 || row.ChannelRateLimitDefaultsRevision < 1 ||
-		row.ConcurrencyDefaultsRevision < 1 ||
+	if row.RouteRateLimitDefaultsRevision < 1 || row.ConcurrencyDefaultsRevision < 1 ||
 		row.CircuitBreakerRevision < 1 || row.RoutingBalanceRevision < 1 {
 		return breakerstore.RuntimeReadinessInput{}, "control_revision_invalid", "ready", false, false
 	}
@@ -135,13 +134,12 @@ func (c *Checker) expectedRuntime(
 		return breakerstore.RuntimeReadinessInput{}, "runtime_operation_pending", "ready", false, false
 	}
 	return breakerstore.RuntimeReadinessInput{
-		Epoch:                    epoch.Epoch,
-		EpochRevision:            row.RuntimeStateEpochRevision,
-		RouteRateLimitRevision:   row.RouteRateLimitDefaultsRevision,
-		ChannelRateLimitRevision: row.ChannelRateLimitDefaultsRevision,
-		ConcurrencyRevision:      row.ConcurrencyDefaultsRevision,
-		CircuitBreakerRevision:   row.CircuitBreakerRevision,
-		RoutingBalanceRevision:   row.RoutingBalanceRevision,
+		Epoch:                  epoch.Epoch,
+		EpochRevision:          row.RuntimeStateEpochRevision,
+		RouteRateLimitRevision: row.RouteRateLimitDefaultsRevision,
+		ConcurrencyRevision:    row.ConcurrencyDefaultsRevision,
+		CircuitBreakerRevision: row.CircuitBreakerRevision,
+		RoutingBalanceRevision: row.RoutingBalanceRevision,
 	}, "", "", maintenanceSmoke, true
 }
 

@@ -71,7 +71,7 @@ func TestReconcileAllRuntimeControlsRestoresStableEndpointAndChannel(t *testing.
 	}
 	if err := pool.QueryRow(ctx, `INSERT INTO channels (
 		provider_id, name, protocol, adapter_key, credential, status, priority
-	) VALUES ($1, 'primary', 'openai', 'openai', 'sk-runtime-recovery', 'enabled', 1)
+	) VALUES ($1, 'primary', 'openai', 'openai', 'sk-runtime-recovery', 'enabled', 10)
 	RETURNING id`, providerID).Scan(&channelID); err != nil {
 		t.Fatalf("seed channel: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestReconcileAllRuntimeControlsRestoresStableEndpointAndChannel(t *testing.
 		origin.StatusRevision != 1 || origin.EffectiveStatus != "enabled" {
 		t.Fatalf("unexpected restored provider control: %+v", origin)
 	}
-	channel, err := controls.ReadControl(ctx, controls.ChannelAdmissionControl(channelID), 1)
+	channel, err := controls.ReadControl(ctx, controls.ChannelCapacityControl(channelID), 1)
 	if err != nil {
 		t.Fatalf("read restored channel control: %v", err)
 	}
@@ -110,28 +110,20 @@ func TestReconcileAllRuntimeControlsRestoresStableEndpointAndChannel(t *testing.
 	if routeRate.SyncState != "active" || routeRate.ActiveRevision != 1 || routeRate.PendingRevision != 0 {
 		t.Fatalf("unexpected restored route rate control: %+v", routeRate)
 	}
-	channelRate, err := controls.ReadControl(ctx, controls.ChannelRateLimitControl(), 1)
-	if err != nil {
-		t.Fatalf("read restored channel rate control: %v", err)
-	}
-	if channelRate.SyncState != "active" || channelRate.ActiveRevision != 1 || channelRate.PendingRevision != 0 {
-		t.Fatalf("unexpected restored channel rate control: %+v", channelRate)
-	}
 	metricsBody := scrapeRuntimeControlMetrics(t, recorder)
 	for _, want := range []string{
 		fmt.Sprintf(`unio_gateway_origin_revision_fence{provider_id="%d",state="active"} 1`, providerID),
 		fmt.Sprintf(`unio_gateway_provider_status_revision_fence{provider_id="%d",state="active"} 1`, providerID),
-		`unio_gateway_runtime_control_recovery_total{result="restored",target="channel_admission"}`,
+		`unio_gateway_runtime_control_recovery_total{result="restored",target="channel_capacity"}`,
 		`unio_gateway_runtime_control_recovery_total{result="restored",target="route_rate"} 1`,
-		`unio_gateway_runtime_control_recovery_total{result="restored",target="channel_rate"} 1`,
 	} {
 		if !strings.Contains(metricsBody, want) {
 			t.Fatalf("recovery metrics missing %q\n%s", want, metricsBody)
 		}
 	}
 
-	channelTarget := controls.ChannelAdmissionControl(channelID)
-	staleChannelPayload := `{"rpm":99,"rpd":99,"tpm":99,"concurrency":99}`
+	channelTarget := controls.ChannelCapacityControl(channelID)
+	staleChannelPayload := `{"concurrency":99}`
 	if _, err := controls.ReconcileControl(ctx, channelTarget, 9, staleChannelPayload); err != nil {
 		t.Fatalf("seed stale channel control: %v", err)
 	}
@@ -154,7 +146,7 @@ func TestReconcileAllRuntimeControlsRestoresStableEndpointAndChannel(t *testing.
 	}
 	repaired, err := controls.ReadControl(ctx, channelTarget, 1)
 	if err != nil || repaired.SyncState != "active" || repaired.ActiveRevision != 1 || repaired.PendingRevision != 0 ||
-		repaired.ActivePayload != `{"rpm":null,"rpd":null,"tpm":null,"concurrency":null}` {
+		repaired.ActivePayload != `{"concurrency":null}` {
 		t.Fatalf("unexpected repaired channel control: %+v err=%v", repaired, err)
 	}
 	global, err := controls.ReadControl(ctx, globalTarget, 1)

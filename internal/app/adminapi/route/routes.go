@@ -91,10 +91,6 @@ type updateRouteRequest struct {
 	ChannelIDs       []int64 `json:"channel_ids"`
 }
 
-type setRouteChannelsRequest struct {
-	ChannelIDs []int64 `json:"channel_ids"`
-}
-
 type routesHandler struct {
 	service RouteService
 }

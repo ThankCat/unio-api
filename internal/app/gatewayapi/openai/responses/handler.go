@@ -154,13 +154,22 @@ func mapResponsesServiceError(req ResponsesRequest, err error, fallbackCode stri
 			errorType: "insufficient_quota",
 			param:     nil,
 		}
-	case failure.CodeOf(err) == failure.CodeRateLimitExceeded, failure.CodeOf(err) == failure.CodeGatewayChannelRateLimited, failure.CodeOf(err) == failure.CodeGatewayChannelConcurrencyLimited:
-		// Key 级 TPM 或渠道级 RPM/TPM/RPD 限流命中（P2-8）：统一 429，不泄露具体维度阈值。
+	case failure.CodeOf(err) == failure.CodeRateLimitExceeded, failure.CodeOf(err) == failure.CodeGatewayChannelRateLimited:
+		// Key 级 TPM 或上游真实 429 冷却命中：统一 429，不泄露具体维度阈值。
 		return responsesServiceErrorResponse{
 			status:    http.StatusTooManyRequests,
 			code:      "rate_limit_exceeded",
 			message:   "You have exceeded the rate limit. Please slow down and retry later.",
 			errorType: "rate_limit_error",
+			param:     nil,
+		}
+	case failure.CodeOf(err) == failure.CodeRoutingChannelCapacityExhausted:
+		// 全池并发满且短等后仍满：容量问题走 503（§9.5），不能伪装成上游限流。
+		return responsesServiceErrorResponse{
+			status:    http.StatusServiceUnavailable,
+			code:      "service_unavailable",
+			message:   "All upstream channels are at capacity. Please retry shortly.",
+			errorType: "api_error",
 			param:     nil,
 		}
 	case isResponsesRequestAdmissionUnavailable(err):
@@ -203,7 +212,7 @@ func mapResponsesServiceError(req ResponsesRequest, err error, fallbackCode stri
 	}
 
 	if category, ok := adapter.UpstreamCategoryOf(err); ok {
-		return mapUpstreamResponsesError(category)
+		return mapUpstreamResponsesError(category, err)
 	}
 
 	return responsesServiceErrorResponse{
@@ -230,7 +239,24 @@ func isResponsesRequestAdmissionUnavailable(err error) bool {
 }
 
 // mapUpstreamResponsesError 把上游错误分类映射成 Responses 协议错误响应（BRIDGE §7）。
-func mapUpstreamResponsesError(category adapter.UpstreamErrorCategory) responsesServiceErrorResponse {
+//
+// HTTP 状态与 error type 始终由分类决定（客户端据此判断可否重试），但 code/message 优先使用上游
+// 已脱敏的结构化标识：流式首字前失败时内联事件会被丢弃，若这里也退回通用文案，上游的真实原因
+// 就彻底丢失了。
+func mapUpstreamResponsesError(category adapter.UpstreamErrorCategory, err error) responsesServiceErrorResponse {
+	resp := mapUpstreamResponsesCategory(category)
+	if meta, ok := adapter.UpstreamMetadataOf(err); ok {
+		if meta.ErrorCode != "" {
+			resp.code = meta.ErrorCode
+		}
+		if meta.ErrorMessage != "" {
+			resp.message = meta.ErrorMessage
+		}
+	}
+	return resp
+}
+
+func mapUpstreamResponsesCategory(category adapter.UpstreamErrorCategory) responsesServiceErrorResponse {
 	switch category {
 	case adapter.UpstreamErrorRateLimit:
 		return responsesServiceErrorResponse{

@@ -81,30 +81,8 @@ local function validate_attempt_permit_lifecycle()
   end
 
   if redis.call('HGET', permit_key, 'admission_enforced') ~= '1' then return 'runtime_sync_required' end
-  local bucket_fields = { 'ch_rpm_bucket', 'ch_rpd_bucket', 'ch_tpm_bucket' }
-  for _, field in ipairs(bucket_fields) do
-    local bucket_key = redis.call('HGET', permit_key, field)
-    if type(bucket_key) ~= 'string' or bucket_key == '' then return 'runtime_sync_required' end
-    local bucket_type = attempt_key_type(bucket_key)
-    if bucket_type ~= 'none' and bucket_type ~= 'string' then return 'runtime_sync_required' end
-    -- Channel RPD 是 permit 冻结的当日容量事实。它在 active permit 生命周期中丢失时，
-    -- 继续 Finish/Abort/Renew 会静默重置日限额，因此必须 fail closed。
-    if field == 'ch_rpd_bucket' and bucket_type == 'none' then return 'runtime_sync_required' end
-    if bucket_type == 'string' then
-      local raw = redis.call('GET', bucket_key)
-      local value = tonumber(raw)
-      if
-        raw == false
-        or string.match(raw, '^%d+$') == nil
-        or value == nil
-        or value < 0
-        or value > 9007199254740991
-        or value ~= math.floor(value)
-      then
-        return 'runtime_sync_required'
-      end
-    end
-  end
+  -- Channel RPM/RPD/TPM 桶已不再被 permit 冻结（§1.2/§8：并发是唯一渠道级硬门槛），
+  -- 因此没有三维容量事实需要在终态前校验。
   local input_estimate = redis.call('HGET', permit_key, 'tpm_input_estimate')
   local tpm_state = redis.call('HGET', permit_key, 'tpm_state')
   if type(input_estimate) ~= 'string' or string.match(input_estimate, '^%d+$') == nil or tpm_state ~= 'held' then

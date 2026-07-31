@@ -61,7 +61,7 @@ func TestAttemptRateLimitSkipsCandidateBeforeAttemptAndTransport(t *testing.T) {
 					runner, store, _, ctx := newPermitGuardRunner(log)
 					runner.lifecycle.endpoint = tc.endpoint
 					store.acquireResults = []breakerstore.AttemptAdmission{
-						{Mode: breakerstore.AdmissionDenied, Reason: breakerstore.ReasonRateLimited},
+						{Mode: breakerstore.AdmissionDenied, Reason: breakerstore.ReasonCooldown},
 						store.acquireResult,
 					}
 
@@ -270,10 +270,9 @@ func newPermitGuardRunner(log requestlog.Service) (
 	manager := NewAttemptPermitManager(store, attemptRuntimeFactsStub{
 		integrity: integrity,
 		admission: runtimefacts.AdmissionRevisions{
-			Integrity:         integrity,
-			RouteRateLimits:   1,
-			ChannelRateLimits: 2,
-			Concurrency:       1,
+			Integrity:       integrity,
+			RouteRateLimits: 1,
+			Concurrency:     1,
 		},
 		routing: runtimefacts.RoutingRevisions{
 			Integrity:      integrity,
@@ -298,15 +297,15 @@ func newPermitGuardRunner(log requestlog.Service) (
 
 func permitGuardCandidate() routing.ChatRouteCandidate {
 	return routing.ChatRouteCandidate{
-		ModelDBID:                      11,
-		ProviderID:                     12,
-		OriginRevision:                 14,
-		ProviderStatusRevision:         15,
-		ChannelConfigRevision:          16,
-		ChannelAdmissionLimitsRevision: 17,
-		AdapterKey:                     "permit-guard",
-		Protocol:                       routing.ProtocolOpenAI,
-		UpstreamModel:                  "permit-guard-model",
+		ModelDBID:               11,
+		ProviderID:              12,
+		OriginRevision:          14,
+		ProviderStatusRevision:  15,
+		ChannelConfigRevision:   16,
+		ChannelCapacityRevision: 17,
+		AdapterKey:              "permit-guard",
+		Protocol:                routing.ProtocolOpenAI,
+		UpstreamModel:           "permit-guard-model",
 		Channel: channel.Runtime{
 			ID:           18,
 			Name:         "Permit Guard",

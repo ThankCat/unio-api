@@ -16,23 +16,18 @@ type ControlTarget struct {
 	controlKey string
 }
 
-// RouteRateLimitControl / ChannelRateLimitControl / GlobalConcurrencyControl /
-// ChannelAdmissionControl / SettingControl
+// RouteRateLimitControl / GlobalConcurrencyControl / ChannelCapacityControl / SettingControl
 // 构造各类控制目标。
 func (s *Store) RouteRateLimitControl() ControlTarget {
 	return ControlTarget{controlKey: s.keys.admissionRouteRate()}
-}
-
-func (s *Store) ChannelRateLimitControl() ControlTarget {
-	return ControlTarget{controlKey: s.keys.admissionChannelRate()}
 }
 
 func (s *Store) GlobalConcurrencyControl() ControlTarget {
 	return ControlTarget{controlKey: s.keys.admissionGlobalConcurrency()}
 }
 
-func (s *Store) ChannelAdmissionControl(channelID int64) ControlTarget {
-	return ControlTarget{controlKey: s.keys.admissionChannel(channelID)}
+func (s *Store) ChannelCapacityControl(channelID int64) ControlTarget {
+	return ControlTarget{controlKey: s.keys.channelCapacity(channelID)}
 }
 
 // SettingControl 用于 gateway.circuit_breaker / gateway.routing_balance。
@@ -45,6 +40,9 @@ func (s *Store) opKeyFor(target ControlTarget, token string) string {
 	// admission 控制使用 admission:v1:op；setting 控制使用 runtime-control:v1:op。
 	if isAdmissionControl(target.controlKey) {
 		return s.keys.admissionOp(token)
+	}
+	if containsSeg(target.controlKey, ":capacity:v1:") {
+		return s.keys.capacityOp(token)
 	}
 	return s.keys.runtimeControlOp(token)
 }

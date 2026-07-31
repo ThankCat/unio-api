@@ -96,11 +96,11 @@ ORDER BY bucket, currency;
 -- 约定同 dashboard.sql：金额走 NUMERIC（service 格式化为十进制字符串，绝不经 float）；
 -- 时间区间 [from, to)（左闭右开）；可空 from_time/to_time（narg，NULL = 不过滤）。
 -- 性能/延迟以 request_records 时间戳推导（无预存延迟列）：
---   延迟 = completed_at - started_at；TTFT 仅对 stream=true 使用 response_started_at - started_at（毫秒）。
+--   延迟 = completed_at - started_at；Gateway TTFT 仅对 stream=true 使用 gateway_first_token_at - started_at（毫秒）。
 -- percentile_cont 自动忽略 ORDER BY 中的 NULL 行，故用 CASE 把非目标行置 NULL。
 
 -- name: DashboardRadarRequestPerf :one
--- DashboardRadarRequestPerf 在区间内一次性返回请求终态计数 + 超时数 + 延迟/TTFT 分位数（request 粒度）。
+-- DashboardRadarRequestPerf 在区间内一次性返回请求终态计数 + 超时数 + 延迟/Gateway TTFT 分位数（request 粒度）。
 SELECT
     COUNT(*) FILTER (WHERE status IN ('succeeded', 'failed')) AS terminal_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS succeeded_total,
@@ -114,12 +114,12 @@ SELECT
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY lat_ms), 0)::float8 AS latency_p95,
     COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY lat_ms), 0)::float8 AS latency_p99,
     COUNT(lat_ms) AS latency_sample,
-    COALESCE(AVG(ttft_ms), 0)::float8 AS ttft_avg,
-    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p50,
-    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p90,
-    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p95,
-    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY ttft_ms), 0)::float8 AS ttft_p99,
-    COUNT(ttft_ms) AS ttft_sample
+    COALESCE(AVG(gateway_ttft_ms), 0)::float8 AS gateway_ttft_avg,
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY gateway_ttft_ms), 0)::float8 AS gateway_ttft_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY gateway_ttft_ms), 0)::float8 AS gateway_ttft_p90,
+    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY gateway_ttft_ms), 0)::float8 AS gateway_ttft_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY gateway_ttft_ms), 0)::float8 AS gateway_ttft_p99,
+    COUNT(gateway_ttft_ms) AS gateway_ttft_sample
 FROM (
     SELECT
         status,
@@ -129,9 +129,9 @@ FROM (
             THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8
         END AS lat_ms,
         CASE
-            WHEN stream = TRUE AND response_started_at IS NOT NULL
-            THEN (EXTRACT(EPOCH FROM (response_started_at - started_at)) * 1000)::float8
-        END AS ttft_ms
+            WHEN stream = TRUE AND gateway_first_token_at IS NOT NULL
+            THEN (EXTRACT(EPOCH FROM (gateway_first_token_at - started_at)) * 1000)::float8
+        END AS gateway_ttft_ms
     FROM request_records
     WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
@@ -139,7 +139,7 @@ FROM (
 
 -- name: DashboardRadarThroughput :one
 -- DashboardRadarThroughput 汇总成功请求的输出 token 与生成耗时（秒），service 据此算 TPS。
--- 流式生成耗时优先用 completed_at - response_started_at；非流式和缺 TTFT 时使用 started_at。
+-- 流式生成耗时优先用 completed_at - gateway_first_token_at；非流式和缺 TTFT 时使用 started_at。
 SELECT
     COALESCE(SUM(u.output_tokens_total), 0)::bigint AS output_tokens,
     COALESCE(SUM(
@@ -147,7 +147,7 @@ SELECT
             WHEN r.completed_at IS NOT NULL
             THEN EXTRACT(EPOCH FROM (
                 r.completed_at - COALESCE(
-                    CASE WHEN r.stream = TRUE THEN r.response_started_at END,
+                    CASE WHEN r.stream = TRUE THEN r.gateway_first_token_at END,
                     r.started_at
                 )
             ))
@@ -351,7 +351,7 @@ tps_agg AS (
             SUM(u.output_tokens_total)::float8 / NULLIF(SUM(
                 CASE
                     WHEN a.completed_at IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (a.completed_at - COALESCE(a.response_started_at, a.started_at)))
+                    THEN EXTRACT(EPOCH FROM (a.completed_at - COALESCE(a.gateway_first_token_at, a.started_at)))
                 END
             ), 0),
             0
@@ -445,7 +445,7 @@ tps_agg AS (
             SUM(u.output_tokens_total)::float8 / NULLIF(SUM(
                 CASE
                     WHEN a.completed_at IS NOT NULL
-                    THEN EXTRACT(EPOCH FROM (a.completed_at - COALESCE(a.response_started_at, a.started_at)))
+                    THEN EXTRACT(EPOCH FROM (a.completed_at - COALESCE(a.gateway_first_token_at, a.started_at)))
                 END
             ), 0),
             0
@@ -563,7 +563,7 @@ ORDER BY terminal_total DESC
 LIMIT 20;
 
 -- name: DashboardPerformanceTimeseries :many
--- DashboardPerformanceTimeseries 按时间桶聚合 P95 延迟 / P95 TTFT / TPS（性能趋势图）。
+-- DashboardPerformanceTimeseries 按时间桶聚合 P95 延迟 / P95 Gateway TTFT / TPS（性能趋势图）。
 -- request_records 与 usage_records 为 1:1（usage.request_record_id UNIQUE），JOIN 不放大行数。
 SELECT
     date_trunc(sqlc.arg('unit')::text, r.created_at)::timestamptz AS bucket,
@@ -574,16 +574,16 @@ SELECT
         END), 0)::float8 AS latency_p95,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE
-            WHEN r.stream = TRUE AND r.response_started_at IS NOT NULL
-            THEN (EXTRACT(EPOCH FROM (r.response_started_at - r.started_at)) * 1000)::float8
-        END), 0)::float8 AS ttft_p95,
+            WHEN r.stream = TRUE AND r.gateway_first_token_at IS NOT NULL
+            THEN (EXTRACT(EPOCH FROM (r.gateway_first_token_at - r.started_at)) * 1000)::float8
+        END), 0)::float8 AS gateway_ttft_p95,
     COALESCE(SUM(u.output_tokens_total) FILTER (WHERE r.status = 'succeeded'), 0)::bigint AS output_tokens,
     COALESCE(SUM(
         CASE
             WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
             THEN EXTRACT(EPOCH FROM (
                 r.completed_at - COALESCE(
-                    CASE WHEN r.stream = TRUE THEN r.response_started_at END,
+                    CASE WHEN r.stream = TRUE THEN r.gateway_first_token_at END,
                     r.started_at
                 )
             ))

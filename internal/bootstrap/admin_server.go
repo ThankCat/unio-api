@@ -135,7 +135,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	var settingsRuntimePublisher appsettings.RuntimeControlPublisher
 	var settingsRuntimeStore appsettings.RuntimeControlStore
 	var channelRuntimePublisher channel.RuntimeControlPublisher
-	var channelRuntimeStore channel.AdmissionControlStore
+	var channelRuntimeStore channel.CapacityControlStore
 	var sharedBreakerStore *breakerstore.Store
 	var runtimeReconcilerCancel context.CancelFunc
 	if deps.Redis != nil {

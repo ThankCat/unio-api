@@ -31,9 +31,8 @@ type Integrity struct {
 
 type AdmissionRevisions struct {
 	Integrity
-	RouteRateLimits   int64
-	ChannelRateLimits int64
-	Concurrency       int64
+	RouteRateLimits int64
+	Concurrency     int64
 }
 
 type RoutingRevisions struct {
@@ -66,7 +65,7 @@ func (r *Reader) Integrity(ctx context.Context) (Integrity, error) {
 	return readyIntegrity(row.Value, row.Revision)
 }
 
-// Admission 在一条 SQL 中取得 epoch、线路/渠道默认限流与全局并发 revision。
+// Admission 在一条 SQL 中取得 epoch、线路入口限流与全局并发 revision。
 func (r *Reader) Admission(ctx context.Context) (AdmissionRevisions, error) {
 	row, err := r.queries.GetGatewayAdmissionControlRevisions(ctx)
 	if err != nil {
@@ -78,16 +77,14 @@ func (r *Reader) Admission(ctx context.Context) (AdmissionRevisions, error) {
 	}
 	if err := validRevisions(
 		row.RouteRateLimitDefaultsRevision,
-		row.ChannelRateLimitDefaultsRevision,
 		row.ConcurrencyDefaultsRevision,
 	); err != nil {
 		return AdmissionRevisions{}, runtimeSyncError("admission control revision is invalid", err)
 	}
 	return AdmissionRevisions{
-		Integrity:         integrity,
-		RouteRateLimits:   row.RouteRateLimitDefaultsRevision,
-		ChannelRateLimits: row.ChannelRateLimitDefaultsRevision,
-		Concurrency:       row.ConcurrencyDefaultsRevision,
+		Integrity:       integrity,
+		RouteRateLimits: row.RouteRateLimitDefaultsRevision,
+		Concurrency:     row.ConcurrencyDefaultsRevision,
 	}, nil
 }
 

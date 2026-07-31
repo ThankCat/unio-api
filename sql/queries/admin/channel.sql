@@ -260,14 +260,14 @@ WHERE channel_id = sqlc.arg(channel_id);
 
 -- name: ListChannelsByProvider :many
 -- ListChannelsByProvider 列出指定 provider 下的 channel，按 priority、id 升序。
-SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms
+SELECT *
 FROM channels
 WHERE provider_id = $1
 ORDER BY priority, id;
 
 -- name: ListChannelsForRuntimeControlRestore :many
--- ListChannelsForRuntimeControlRestore 返回启动期恢复 Channel admission control 所需的 PostgreSQL 权威事实。
-SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms
+-- ListChannelsForRuntimeControlRestore 返回启动期恢复 Channel capacity control 所需的 PostgreSQL 权威事实。
+SELECT *
 FROM channels
 ORDER BY id;
 
@@ -275,11 +275,12 @@ ORDER BY id;
 -- ListChannelsPage 按 provider/状态/关键字过滤后分页列出 channel，连带 provider 名称；过滤项为 NULL 时不过滤。
 SELECT
     c.id, c.provider_id, c.name, c.protocol, c.adapter_key, p.origin,
-    c.credential, c.status, c.priority, c.timeout_ms, c.created_at, c.updated_at,
-    c.rpm_limit, c.tpm_limit, c.rpd_limit, c.concurrency_limit, c.upstream_bills_on_disconnect,
+    c.credential, c.status, c.priority, c.created_at, c.updated_at,
+    c.concurrency_limit, c.upstream_bills_on_disconnect,
+    c.response_timeout_ms, c.first_token_timeout_ms,
     c.sticky_enabled, c.sticky_ttl_ms,
     c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
-    c.config_revision, c.admission_limits_revision,
+    c.config_revision, c.capacity_revision,
     p.name AS provider_name, p.status AS provider_status
 FROM channels c
 JOIN providers p ON p.id = c.provider_id
@@ -308,7 +309,7 @@ WHERE (sqlc.narg('provider_id')::bigint IS NULL OR c.provider_id = sqlc.narg('pr
 
 -- name: GetChannel :one
 -- GetChannel 按 id 读取单个 channel。
-SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms
+SELECT *
 FROM channels
 WHERE id = $1
 LIMIT 1;
@@ -500,19 +501,19 @@ JOIN logged ON logged.channel_id = current_state.id;
 
 -- name: CreateChannel :one
 -- CreateChannel 创建 channel；credential 为明文上游凭据，protocol+adapter_key 复合键须先在 adapter registry 校验存在。
--- 四维限额随业务行一次写入，初始 admission_limits_revision 固定使用表默认值 1；随后同步安装 revision=1 Redis control。
+-- 并发容量随业务行一次写入，初始 capacity_revision 固定使用表默认值 1；随后同步安装 revision=1 Redis control。
 INSERT INTO channels (
-    provider_id, name, protocol, adapter_key, credential, status, priority, timeout_ms,
-    rpm_limit, tpm_limit, rpd_limit, concurrency_limit, upstream_bills_on_disconnect,
-    sticky_enabled, sticky_ttl_ms
+    provider_id, name, protocol, adapter_key, credential, status, priority,
+    response_timeout_ms, first_token_timeout_ms, concurrency_limit,
+    upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms
 )
 VALUES (
     sqlc.arg(provider_id), sqlc.arg(name), sqlc.arg(protocol), sqlc.arg(adapter_key),
-    sqlc.arg(credential), sqlc.arg(status), sqlc.arg(priority), sqlc.arg(timeout_ms),
-    sqlc.narg(rpm_limit), sqlc.narg(tpm_limit), sqlc.narg(rpd_limit), sqlc.narg(concurrency_limit),
+    sqlc.arg(credential), sqlc.arg(status), sqlc.arg(priority),
+    sqlc.narg(response_timeout_ms), sqlc.narg(first_token_timeout_ms), sqlc.narg(concurrency_limit),
     sqlc.arg(upstream_bills_on_disconnect), sqlc.narg(sticky_enabled), sqlc.narg(sticky_ttl_ms)
 )
-RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms;
+RETURNING *;
 
 -- name: UpdateChannel :one
 -- UpdateChannel 更新 channel 的展示名、绑定 Origin、启停状态、优先级与超时；protocol、adapter_key 与凭据不在此更新。
@@ -521,39 +522,36 @@ UPDATE channels
 SET name = sqlc.arg(name),
     status = sqlc.arg(status),
     priority = sqlc.arg(priority),
-    timeout_ms = sqlc.arg(timeout_ms),
+    response_timeout_ms = sqlc.narg(response_timeout_ms),
+    first_token_timeout_ms = sqlc.narg(first_token_timeout_ms),
     sticky_enabled = sqlc.narg(sticky_enabled),
     sticky_ttl_ms = sqlc.narg(sticky_ttl_ms),
     config_revision = config_revision + (
         CASE WHEN (
             status IS DISTINCT FROM sqlc.arg(status)
-            OR timeout_ms IS DISTINCT FROM sqlc.arg(timeout_ms)
+            OR response_timeout_ms IS DISTINCT FROM sqlc.narg(response_timeout_ms)
+            OR first_token_timeout_ms IS DISTINCT FROM sqlc.narg(first_token_timeout_ms)
             OR sticky_enabled IS DISTINCT FROM sqlc.narg(sticky_enabled)
             OR sticky_ttl_ms IS DISTINCT FROM sqlc.narg(sticky_ttl_ms)
         ) THEN 1 ELSE 0 END
     ),
     updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms;
+RETURNING *;
 
--- name: CommitChannelAdmissionLimitsAtRevision :one
--- CommitChannelAdmissionLimitsAtRevision 只供 runtimecontrol.Publisher 的 BusinessCommit 事务调用：
--- 在 expected revision 仍匹配且四维语义真变化时一次写值并推进 admission_limits_revision。
+-- name: CommitChannelCapacityAtRevision :one
+-- CommitChannelCapacityAtRevision 只供 runtimecontrol.Publisher 的 BusinessCommit 事务调用：
+-- 在 expected revision 仍匹配且并发容量真变化时一次写值并推进 capacity_revision。
 -- 普通 Channel 更新不得调用无 revision 的直接覆盖查询。
 UPDATE channels
-SET rpm_limit = sqlc.narg(rpm_limit),
-    tpm_limit = sqlc.narg(tpm_limit),
-    rpd_limit = sqlc.narg(rpd_limit),
-    concurrency_limit = sqlc.narg(concurrency_limit),
-    admission_limits_revision = sqlc.arg(next_revision),
+SET concurrency_limit = sqlc.narg(concurrency_limit),
+    capacity_revision = sqlc.arg(next_revision),
     updated_at = now()
 WHERE id = sqlc.arg(id)
-  AND admission_limits_revision = sqlc.arg(current_revision)
+  AND capacity_revision = sqlc.arg(current_revision)
   AND sqlc.arg(next_revision) = sqlc.arg(current_revision) + 1
-  AND ROW(rpm_limit, tpm_limit, rpd_limit, concurrency_limit) IS DISTINCT FROM ROW(
-      sqlc.narg(rpm_limit), sqlc.narg(tpm_limit), sqlc.narg(rpd_limit), sqlc.narg(concurrency_limit)
-  )
-RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms;
+  AND concurrency_limit IS DISTINCT FROM sqlc.narg(concurrency_limit)
+RETURNING *;
 
 -- name: SetChannelBillingBehavior :one
 -- SetChannelBillingBehavior 设置渠道「断开仍计费」标记。
@@ -561,7 +559,7 @@ RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revis
 UPDATE channels
 SET upstream_bills_on_disconnect = sqlc.arg(upstream_bills_on_disconnect), updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, admission_limits_revision, status, priority, timeout_ms, created_at, updated_at, rpm_limit, tpm_limit, rpd_limit, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms;
+RETURNING *;
 
 -- name: SetChannelTestResult :execrows
 -- SetChannelTestResult 写入渠道「最近一次主动检测结果」（渠道检测，阶段一）。
@@ -650,11 +648,9 @@ SELECT
     c.adapter_key,
     pr.origin,
     c.priority,
-    c.timeout_ms,
+    c.response_timeout_ms,
+    c.first_token_timeout_ms,
     c.credential,
-    c.rpm_limit,
-    c.tpm_limit,
-    c.rpd_limit,
     c.concurrency_limit,
     c.created_at,
     c.last_tested_at,
@@ -729,7 +725,10 @@ LEFT JOIN request_attempts a
 WHERE (sqlc.narg('status')::text IS NULL OR c.status = sqlc.narg('status')::text)
   AND (sqlc.narg('provider_id')::bigint IS NULL OR c.provider_id = sqlc.narg('provider_id')::bigint)
   AND (sqlc.narg('search')::text IS NULL OR c.name ILIKE '%' || sqlc.narg('search')::text || '%')
-GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, pr.origin, c.priority, c.timeout_ms, c.credential, c.rpm_limit, c.tpm_limit, c.rpd_limit, c.concurrency_limit, c.created_at, c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name
+GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, pr.origin, c.priority,
+         c.response_timeout_ms, c.first_token_timeout_ms, c.credential,
+         c.concurrency_limit, c.created_at, c.last_tested_at, c.last_test_ok,
+         c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name
 ORDER BY
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END DESC NULLS LAST,
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END ASC NULLS LAST,

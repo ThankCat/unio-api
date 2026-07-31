@@ -55,18 +55,17 @@ func TestReaderIntegrityReturnsReadyEpochWithoutOtherControls(t *testing.T) {
 func TestReaderAdmissionReturnsReadySnapshot(t *testing.T) {
 	epoch := readyEpochJSON(t)
 	reader := runtimefacts.NewReader(queryStub{admission: sqlc.GetGatewayAdmissionControlRevisionsRow{
-		RuntimeStateEpochValue:           epoch,
-		RuntimeStateEpochRevision:        7,
-		RouteRateLimitDefaultsRevision:   3,
-		ChannelRateLimitDefaultsRevision: 8,
-		ConcurrencyDefaultsRevision:      4,
+		RuntimeStateEpochValue:         epoch,
+		RuntimeStateEpochRevision:      7,
+		RouteRateLimitDefaultsRevision: 3,
+		ConcurrencyDefaultsRevision:    4,
 	}})
 
 	got, err := reader.Admission(context.Background())
 	if err != nil {
 		t.Fatalf("read admission: %v", err)
 	}
-	if got.Revision != 7 || got.RouteRateLimits != 3 || got.ChannelRateLimits != 8 || got.Concurrency != 4 {
+	if got.Revision != 7 || got.RouteRateLimits != 3 || got.Concurrency != 4 {
 		t.Fatalf("unexpected admission revisions: %+v", got)
 	}
 }
@@ -99,20 +98,19 @@ func TestReaderFailsClosedForMissingOrInvalidFacts(t *testing.T) {
 	})
 
 	for _, tc := range []struct {
-		name            string
-		routeRevision   int64
-		channelRevision int64
+		name                string
+		routeRevision       int64
+		concurrencyRevision int64
 	}{
-		{name: "invalid route rate revision", routeRevision: 0, channelRevision: 2},
-		{name: "invalid channel rate revision", routeRevision: 1, channelRevision: 0},
+		{name: "invalid route rate revision", routeRevision: 0, concurrencyRevision: 2},
+		{name: "invalid concurrency revision", routeRevision: 1, concurrencyRevision: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reader := runtimefacts.NewReader(queryStub{admission: sqlc.GetGatewayAdmissionControlRevisionsRow{
-				RuntimeStateEpochValue:           readyEpochJSON(t),
-				RuntimeStateEpochRevision:        1,
-				RouteRateLimitDefaultsRevision:   tc.routeRevision,
-				ChannelRateLimitDefaultsRevision: tc.channelRevision,
-				ConcurrencyDefaultsRevision:      1,
+				RuntimeStateEpochValue:         readyEpochJSON(t),
+				RuntimeStateEpochRevision:      1,
+				RouteRateLimitDefaultsRevision: tc.routeRevision,
+				ConcurrencyDefaultsRevision:    tc.concurrencyRevision,
 			}})
 			_, err := reader.Admission(context.Background())
 			if failure.CodeOf(err) != failure.CodeGatewayRuntimeSyncRequired {

@@ -130,7 +130,7 @@ func createProviderChannel(t *testing.T, ctx context.Context, tx pgx.Tx) (int64,
 
 	var channelID int64
 	err = tx.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
+			INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, response_timeout_ms)
 		VALUES ($1, $2, 'openai', 'openai', $3, $4, $5, $6)
 		RETURNING id
 	`, providerID, fmt.Sprintf("requestlog-channel-%d", suffix), "sk-requestlog-test", "enabled", 10, nil).Scan(&channelID)
@@ -182,28 +182,28 @@ func TestStoreRequestLifecycleMapsNullableFields(t *testing.T) {
 		t.Fatalf("expected running status, got %q", running.Status)
 	}
 
-	responseStartedAt := time.Now()
-	started, err := store.MarkRequestResponseStarted(ctx, MarkResponseStartedParams{
-		ID:                record.ID,
-		ResponseStartedAt: responseStartedAt,
+	gatewayFirstTokenAt := time.Now()
+	started, err := store.MarkRequestGatewayFirstToken(ctx, MarkGatewayFirstTokenParams{
+		ID:                  record.ID,
+		GatewayFirstTokenAt: gatewayFirstTokenAt,
 	})
 	if err != nil {
 		t.Fatalf("mark request response started: %v", err)
 	}
-	if started.ResponseStartedAt == nil {
-		t.Fatal("expected response_started_at to be set before terminal")
+	if started.GatewayFirstTokenAt == nil {
+		t.Fatal("expected gateway_first_token_at to be set before terminal")
 	}
 
-	completedAt := responseStartedAt.Add(250 * time.Millisecond)
+	completedAt := gatewayFirstTokenAt.Add(250 * time.Millisecond)
 	succeeded, err := store.MarkRequestSucceeded(ctx, MarkRequestSucceededParams{
-		ID:                record.ID,
-		ResponseModelID:   "deepseek-v4-pro",
-		ResponseProtocol:  ProtocolOpenAI,
-		ResponseID:        "chatcmpl-requestlog",
-		FinalProviderID:   providerID,
-		FinalChannelID:    channelID,
-		ResponseStartedAt: &responseStartedAt,
-		CompletedAt:       completedAt,
+		ID:                  record.ID,
+		ResponseModelID:     "deepseek-v4-pro",
+		ResponseProtocol:    ProtocolOpenAI,
+		ResponseID:          "chatcmpl-requestlog",
+		FinalProviderID:     providerID,
+		FinalChannelID:      channelID,
+		GatewayFirstTokenAt: &gatewayFirstTokenAt,
+		CompletedAt:         completedAt,
 	})
 	if err != nil {
 		t.Fatalf("mark request succeeded: %v", err)
@@ -233,11 +233,11 @@ func TestStoreRequestLifecycleMapsNullableFields(t *testing.T) {
 	if succeeded.CompletedAt == nil {
 		t.Fatal("expected completed_at to be set")
 	}
-	if succeeded.ResponseStartedAt == nil {
-		t.Fatal("expected response_started_at to be set")
+	if succeeded.GatewayFirstTokenAt == nil {
+		t.Fatal("expected gateway_first_token_at to be set")
 	}
-	if !succeeded.ResponseStartedAt.Equal(*started.ResponseStartedAt) {
-		t.Fatalf("expected succeeded to keep early response_started_at %v, got %v", *started.ResponseStartedAt, *succeeded.ResponseStartedAt)
+	if !succeeded.GatewayFirstTokenAt.Equal(*started.GatewayFirstTokenAt) {
+		t.Fatalf("expected succeeded to keep early gateway_first_token_at %v, got %v", *started.GatewayFirstTokenAt, *succeeded.GatewayFirstTokenAt)
 	}
 	// response_completed_at 由交付状态机负责（delivery_status='completed' 时），结算不写，应保持 NULL。
 	if succeeded.ResponseCompletedAt != nil {
@@ -273,14 +273,14 @@ func TestStoreNonStreamDeliveryTerminalTransitions(t *testing.T) {
 			t.Fatalf("mark request running: %v", err)
 		}
 		settled, err := store.MarkRequestSucceeded(ctx, MarkRequestSucceededParams{
-			ID:                record.ID,
-			ResponseModelID:   "deepseek-v4-pro",
-			ResponseProtocol:  ProtocolOpenAI,
-			ResponseID:        "chatcmpl-delivery-" + suffix,
-			FinalProviderID:   providerID,
-			FinalChannelID:    channelID,
-			ResponseStartedAt: nil,
-			CompletedAt:       time.Now(),
+			ID:                  record.ID,
+			ResponseModelID:     "deepseek-v4-pro",
+			ResponseProtocol:    ProtocolOpenAI,
+			ResponseID:          "chatcmpl-delivery-" + suffix,
+			FinalProviderID:     providerID,
+			FinalChannelID:      channelID,
+			GatewayFirstTokenAt: nil,
+			CompletedAt:         time.Now(),
 		})
 		if err != nil {
 			t.Fatalf("mark request succeeded: %v", err)
@@ -288,8 +288,8 @@ func TestStoreNonStreamDeliveryTerminalTransitions(t *testing.T) {
 		if settled.Status != RequestStatusSucceeded || settled.DeliveryStatus != DeliveryStatusNotStarted {
 			t.Fatalf("settled status=%q delivery=%q, want succeeded/not_started", settled.Status, settled.DeliveryStatus)
 		}
-		if settled.ResponseStartedAt != nil || settled.ResponseCompletedAt != nil {
-			t.Fatalf("non-stream settlement must keep response timestamps nil, started=%v completed=%v", settled.ResponseStartedAt, settled.ResponseCompletedAt)
+		if settled.GatewayFirstTokenAt != nil || settled.ResponseCompletedAt != nil {
+			t.Fatalf("non-stream settlement must keep response timestamps nil, started=%v completed=%v", settled.GatewayFirstTokenAt, settled.ResponseCompletedAt)
 		}
 		return settled
 	}
@@ -304,8 +304,8 @@ func TestStoreNonStreamDeliveryTerminalTransitions(t *testing.T) {
 		if completed.DeliveryStatus != DeliveryStatusCompleted || completed.ResponseCompletedAt == nil {
 			t.Fatalf("delivery=%q response_completed_at=%v, want completed/non-nil", completed.DeliveryStatus, completed.ResponseCompletedAt)
 		}
-		if completed.ResponseStartedAt != nil {
-			t.Fatalf("non-stream response_started_at = %v, want nil", completed.ResponseStartedAt)
+		if completed.GatewayFirstTokenAt != nil {
+			t.Fatalf("non-stream gateway_first_token_at = %v, want nil", completed.GatewayFirstTokenAt)
 		}
 		if _, err := store.MarkRequestDeliveryInterrupted(ctx, settled.ID); err == nil {
 			t.Fatal("expected interrupted transition to lose after completed")
@@ -321,8 +321,8 @@ func TestStoreNonStreamDeliveryTerminalTransitions(t *testing.T) {
 		if interrupted.DeliveryStatus != DeliveryStatusInterrupted {
 			t.Fatalf("delivery=%q, want interrupted", interrupted.DeliveryStatus)
 		}
-		if interrupted.ResponseStartedAt != nil || interrupted.ResponseCompletedAt != nil {
-			t.Fatalf("interrupted non-stream timestamps must stay nil, started=%v completed=%v", interrupted.ResponseStartedAt, interrupted.ResponseCompletedAt)
+		if interrupted.GatewayFirstTokenAt != nil || interrupted.ResponseCompletedAt != nil {
+			t.Fatalf("interrupted non-stream timestamps must stay nil, started=%v completed=%v", interrupted.GatewayFirstTokenAt, interrupted.ResponseCompletedAt)
 		}
 		if _, err := store.MarkRequestDeliveryCompleted(ctx, settled.ID, time.Now()); err == nil {
 			t.Fatal("expected completed transition to lose after interrupted")
@@ -421,15 +421,15 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 	}
 
 	attemptStartedAt := time.Now()
-	started, err := store.MarkAttemptResponseStarted(ctx, MarkAttemptResponseStartedParams{
-		ID:                attempt.ID,
-		ResponseStartedAt: attemptStartedAt,
+	started, err := store.MarkAttemptGatewayFirstToken(ctx, MarkAttemptGatewayFirstTokenParams{
+		ID:                  attempt.ID,
+		GatewayFirstTokenAt: attemptStartedAt,
 	})
 	if err != nil {
 		t.Fatalf("mark attempt response started: %v", err)
 	}
-	if started.ResponseStartedAt == nil {
-		t.Fatal("expected attempt response_started_at to be set before terminal")
+	if started.GatewayFirstTokenAt == nil {
+		t.Fatal("expected attempt gateway_first_token_at to be set before terminal")
 	}
 
 	succeeded, err := store.MarkAttemptSucceeded(ctx, MarkAttemptSucceededParams{
@@ -440,7 +440,7 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 		FinishClass:           "stop",
 		UpstreamStatusCode:    200,
 		UpstreamRequestID:     stringValuePtr("upstream-request-id"),
-		ResponseStartedAt:     &attemptStartedAt,
+		GatewayFirstTokenAt:   &attemptStartedAt,
 		UsageMappingVersion:   "openai_chat_usage_v1",
 		CompletedAt:           time.Now(),
 	})
@@ -463,11 +463,11 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 	if succeeded.CompletedAt == nil {
 		t.Fatal("expected completed_at to be set")
 	}
-	if succeeded.ResponseStartedAt == nil {
-		t.Fatal("expected response_started_at to be set")
+	if succeeded.GatewayFirstTokenAt == nil {
+		t.Fatal("expected gateway_first_token_at to be set")
 	}
-	if !succeeded.ResponseStartedAt.Equal(*started.ResponseStartedAt) {
-		t.Fatalf("expected succeeded to keep early response_started_at %v, got %v", *started.ResponseStartedAt, *succeeded.ResponseStartedAt)
+	if !succeeded.GatewayFirstTokenAt.Equal(*started.GatewayFirstTokenAt) {
+		t.Fatalf("expected succeeded to keep early gateway_first_token_at %v, got %v", *started.GatewayFirstTokenAt, *succeeded.GatewayFirstTokenAt)
 	}
 
 	// succeeded 是终态，不能再转 failed（GAP-7-003 状态机守卫）。

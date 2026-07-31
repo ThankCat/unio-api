@@ -39,6 +39,7 @@ type Store interface {
 	RenewRequestAdmission(context.Context, string, int64, int64, string, int64) (breakerstore.RequestAdmissionLifecycleOutcome, error)
 	FinishRequestAdmission(context.Context, string, int64, int64, int64, string, string, int64) (breakerstore.RequestAdmissionLifecycleOutcome, error)
 	SnapshotMany(context.Context, breakerstore.SnapshotManyInput) (breakerstore.SnapshotManyResult, error)
+	AggregateChannelSamples(context.Context, []int64) (map[int64]breakerstore.ChannelSampleWindow, error)
 }
 
 // RuntimeFactsReader strongly reads the PostgreSQL revisions expected by a new admission.
@@ -71,8 +72,10 @@ type AttemptTokenSession interface {
 
 // CandidateSnapshotSession owns the frozen admission revisions and injects fresh routing revisions
 // without exposing the request-admission ID to protocol or lifecycle callers.
+// AggregateChannelSamples 提供 30 分钟评分样本聚合（§12）：观测口径，与 admission 硬门槛解耦。
 type CandidateSnapshotSession interface {
 	SnapshotMany(context.Context, int64, []breakerstore.SnapshotCandidateInput) (breakerstore.SnapshotManyResult, error)
+	AggregateChannelSamples(context.Context, []int64) (map[int64]breakerstore.ChannelSampleWindow, error)
 }
 
 // AcquiredSession is retained only by the HTTP route wrapper.
@@ -331,7 +334,6 @@ func (s *session) SnapshotMany(ctx context.Context, modelID int64, candidates []
 	result, err := s.store.SnapshotMany(ctx, breakerstore.SnapshotManyInput{
 		IntegrityEpoch:            s.integrity.Epoch,
 		IntegrityRevision:         s.integrity.Revision,
-		ChannelRateRevision:       admission.ChannelRateLimits,
 		GlobalConcurrencyRevision: admission.Concurrency,
 		CircuitBreakerRevision:    routing.CircuitBreaker,
 		RoutingBalanceRevision:    routing.RoutingBalance,
@@ -343,6 +345,12 @@ func (s *session) SnapshotMany(ctx context.Context, modelID int64, candidates []
 	}
 	result.RouteRateRevision = s.routeRateRevision
 	return result, nil
+}
+
+// AggregateChannelSamples 读取候选渠道最近 30 分钟评分样本聚合（§12）。
+// 观测与 admission 解耦：不校验 integrity epoch，也不因读失败阻断选路。
+func (s *session) AggregateChannelSamples(ctx context.Context, channelIDs []int64) (map[int64]breakerstore.ChannelSampleWindow, error) {
+	return s.store.AggregateChannelSamples(ctx, channelIDs)
 }
 
 // Reserve performs the request-level TPM reservation once. The first observed result is
@@ -672,9 +680,10 @@ func reserveConflictError() error {
 
 func requestLifecycleError(operation string, outcome breakerstore.RequestAdmissionLifecycleOutcome) error {
 	code := failure.CodeGatewayRuntimeSyncRequired
-	if outcome == breakerstore.RequestLifecycleRuntimeStateLost {
+	switch outcome {
+	case breakerstore.RequestLifecycleRuntimeStateLost:
 		code = failure.CodeGatewayRuntimeStateLost
-	} else if outcome == breakerstore.RequestLifecycleConflict {
+	case breakerstore.RequestLifecycleConflict:
 		code = failure.CodeGatewayBreakerPermitConflict
 	}
 	return failure.Wrap(
@@ -738,6 +747,20 @@ func SnapshotManyIfPresent(ctx context.Context, modelID int64, candidates []brea
 	}
 	result, err := bundle.snapshot.SnapshotMany(ctx, modelID, candidates)
 	return result, true, err
+}
+
+// AggregateChannelSamplesIfPresent 读取候选渠道最近 30 分钟评分样本聚合（§12）。
+// 观测是 best-effort：读失败或无 session 时返回空聚合，评分按“无样本得满分”处理，不阻断选路。
+func AggregateChannelSamplesIfPresent(ctx context.Context, channelIDs []int64) map[int64]breakerstore.ChannelSampleWindow {
+	bundle, ok := ctx.Value(usageSessionContextKey{}).(contextSessions)
+	if !ok || bundle.snapshot == nil || len(channelIDs) == 0 {
+		return nil
+	}
+	windows, err := bundle.snapshot.AggregateChannelSamples(ctx, channelIDs)
+	if err != nil {
+		return nil
+	}
+	return windows
 }
 
 // Reserve uses the request session when this request was admitted. A missing session is a

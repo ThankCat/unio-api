@@ -39,29 +39,27 @@ func NewService(store Store) *Service {
 
 // Row 是渠道运维主表行。
 type Row struct {
-	ID               int64
-	Name             string
-	Status           string
-	CreatedAt        time.Time
-	Protocol         string
-	AdapterKey       string
-	Origin           string
-	Priority         int32
-	TimeoutMs        *int32
-	ProviderName     string
-	Credential       string
-	AttemptTotal     int64
-	AttemptSucceeded int64
-	SuccessRate      float64
-	TimeoutTotal     int64
-	Latency          opsutil.LatencyStats
-	BoundModels      int64
-	BoundRoutes      int64
-	RecentErrorCode  string
+	ID                  int64
+	Name                string
+	Status              string
+	CreatedAt           time.Time
+	Protocol            string
+	AdapterKey          string
+	Origin              string
+	Priority            int32
+	ResponseTimeoutMs   *int32
+	FirstTokenTimeoutMs *int32
+	ProviderName        string
+	Credential          string
+	AttemptTotal        int64
+	AttemptSucceeded    int64
+	SuccessRate         float64
+	TimeoutTotal        int64
+	Latency             opsutil.LatencyStats
+	BoundModels         int64
+	BoundRoutes         int64
+	RecentErrorCode     string
 	// 渠道级限流上限（P2-8）：nil=继承渠道默认限流，0=不限，>0=具体上限。
-	RpmLimit *int32
-	TpmLimit *int32
-	RpdLimit *int32
 	// 渠道在途并发上限（DEC-029）：nil=继承并发默认 channel_limit，0=不限，>0=具体上限。
 	ConcurrencyLimit  *int32
 	LastTestedAt      *time.Time
@@ -170,20 +168,21 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 	out := make([]Row, 0, len(rows))
 	for _, r := range rows {
 		row := Row{
-			ID:               r.ID,
-			Name:             r.Name,
-			Status:           r.Status,
-			CreatedAt:        r.CreatedAt.Time,
-			Protocol:         r.Protocol,
-			AdapterKey:       r.AdapterKey,
-			Origin:           r.Origin,
-			Priority:         r.Priority,
-			TimeoutMs:        int4Value(r.TimeoutMs),
-			ProviderName:     r.ProviderName,
-			Credential:       r.Credential,
-			AttemptTotal:     r.AttemptTotal,
-			AttemptSucceeded: r.AttemptSucceeded,
-			TimeoutTotal:     r.TimeoutTotal,
+			ID:                  r.ID,
+			Name:                r.Name,
+			Status:              r.Status,
+			CreatedAt:           r.CreatedAt.Time,
+			Protocol:            r.Protocol,
+			AdapterKey:          r.AdapterKey,
+			Origin:              r.Origin,
+			Priority:            r.Priority,
+			ResponseTimeoutMs:   int4Value(r.ResponseTimeoutMs),
+			FirstTokenTimeoutMs: int4Value(r.FirstTokenTimeoutMs),
+			ProviderName:        r.ProviderName,
+			Credential:          r.Credential,
+			AttemptTotal:        r.AttemptTotal,
+			AttemptSucceeded:    r.AttemptSucceeded,
+			TimeoutTotal:        r.TimeoutTotal,
 			Latency: opsutil.AttemptLatency(
 				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 				r.LatencySample, r.AttemptSucceeded,
@@ -191,9 +190,6 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			BoundModels:             r.BoundModels,
 			BoundRoutes:             r.BoundRoutes,
 			RecentErrorCode:         textValue(r.RecentErrorCode),
-			RpmLimit:                int4Value(r.RpmLimit),
-			TpmLimit:                int4Value(r.TpmLimit),
-			RpdLimit:                int4Value(r.RpdLimit),
 			ConcurrencyLimit:        int4Value(r.ConcurrencyLimit),
 			LastTestedAt:            timeValue(r.LastTestedAt),
 			LastTestOK:              boolValue(r.LastTestOk),

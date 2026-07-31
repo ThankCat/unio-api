@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	coreusage "github.com/ThankCat/unio-gateway/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
@@ -76,8 +77,12 @@ func (a *fakeMessagesAdapter) Messages(ctx context.Context, ch channel.Runtime, 
 func (a *fakeMessagesAdapter) StreamMessages(ctx context.Context, ch channel.Runtime, req messagesadapter.MessageRequest, emit func(messagesadapter.MessageStreamEvent) error) (adapter.StreamOutcome, error) {
 	a.streamCalled++
 	a.streamReq = req
+	adapter.MarkTransportStarted(ctx)
 
 	for _, ev := range a.streamEvents {
+		if messagesadapter.FirstTokenPayload(ev) != "" {
+			adapter.MarkFirstTokenEligible(ctx)
+		}
 		if err := emit(ev); err != nil {
 			return adapter.StreamOutcome{}, err
 		}
@@ -101,6 +106,7 @@ type fakeMessagesRequestLog struct {
 	createRequests        []requestlog.CreateRequestParams
 	markRequestFailedArgs []requestlog.MarkRequestFailedParams
 	markRequestCanceled   []requestlog.MarkRequestCanceledParams
+	deliveryStarted       []int64
 	deliveryCompleted     []int64
 	deliveryInterrupted   []int64
 	createAttempts        []requestlog.CreateAttemptParams
@@ -127,8 +133,14 @@ func (s *fakeMessagesRequestLog) MarkRequestRunning(ctx context.Context, id int6
 	return requestlog.RequestRecord{ID: id, Status: requestlog.RequestStatusRunning}, nil
 }
 
-func (s *fakeMessagesRequestLog) MarkRequestResponseStarted(ctx context.Context, params requestlog.MarkResponseStartedParams) (requestlog.RequestRecord, error) {
-	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusRunning, ResponseStartedAt: &params.ResponseStartedAt}, nil
+// MarkRequestDeliveryStarted 只推进 delivery 状态；Gateway 首字是独立事实，由 MarkRequestGatewayFirstToken 记录。
+func (s *fakeMessagesRequestLog) MarkRequestDeliveryStarted(_ context.Context, id int64) (requestlog.RequestRecord, error) {
+	s.deliveryStarted = append(s.deliveryStarted, id)
+	return requestlog.RequestRecord{ID: id, DeliveryStatus: requestlog.DeliveryStatusInProgress}, nil
+}
+
+func (s *fakeMessagesRequestLog) MarkRequestGatewayFirstToken(ctx context.Context, params requestlog.MarkGatewayFirstTokenParams) (requestlog.RequestRecord, error) {
+	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusRunning, GatewayFirstTokenAt: &params.GatewayFirstTokenAt}, nil
 }
 
 func (s *fakeMessagesRequestLog) MarkRequestDeliveryCompleted(_ context.Context, id int64, completedAt time.Time) (requestlog.RequestRecord, error) {
@@ -182,8 +194,8 @@ func (s *fakeMessagesRequestLog) MarkSettledAttemptCanceled(ctx context.Context,
 	return requestlog.AttemptRecord{ID: params.ID, Status: requestlog.AttemptStatusCanceled}, nil
 }
 
-func (s *fakeMessagesRequestLog) MarkAttemptResponseStarted(ctx context.Context, params requestlog.MarkAttemptResponseStartedParams) (requestlog.AttemptRecord, error) {
-	return requestlog.AttemptRecord{ID: params.ID, Status: requestlog.AttemptStatusRunning, ResponseStartedAt: &params.ResponseStartedAt}, nil
+func (s *fakeMessagesRequestLog) MarkAttemptGatewayFirstToken(ctx context.Context, params requestlog.MarkAttemptGatewayFirstTokenParams) (requestlog.AttemptRecord, error) {
+	return requestlog.AttemptRecord{ID: params.ID, Status: requestlog.AttemptStatusRunning, GatewayFirstTokenAt: &params.GatewayFirstTokenAt}, nil
 }
 
 func (s *fakeMessagesRequestLog) MarkAttemptFailed(ctx context.Context, params requestlog.MarkAttemptFailedParams) (requestlog.AttemptRecord, error) {
@@ -284,10 +296,10 @@ func routeCandidate(adapterKey string, channelID int64, upstreamModel string) ro
 		ProviderID: 9000 + channelID,
 		AdapterKey: adapterKey,
 		Channel: channel.Runtime{
-			ID:      channelID,
-			Origin:  "https://example.test",
-			APIKey:  "test-secret",
-			Timeout: 30 * time.Second,
+			ID:              channelID,
+			Origin:          "https://example.test",
+			APIKey:          "test-secret",
+			ResponseTimeout: 30 * time.Second,
 		},
 		UpstreamModel: upstreamModel,
 	}
@@ -375,8 +387,8 @@ func TestCreateMessageReturnsResponseAndSettlesWithAnthropicFacts(t *testing.T) 
 		t.Fatalf("expected one settlement attempt, got %d", len(settlement.params))
 	}
 	settled := settlement.params[0]
-	if settled.ResponseStartedAt != nil {
-		t.Fatalf("non-stream response_started_at = %v, want nil", settled.ResponseStartedAt)
+	if settled.GatewayFirstTokenAt != nil {
+		t.Fatalf("non-stream gateway_first_token_at = %v, want nil", settled.GatewayFirstTokenAt)
 	}
 	if settled.ResponseProtocol != requestlog.ProtocolAnthropic {
 		t.Fatalf("expected anthropic settlement protocol, got %q", settled.ResponseProtocol)
@@ -544,12 +556,12 @@ func TestStreamMessageEmitsNativeEventsAndStopThenSettles(t *testing.T) {
 	}
 }
 
-func TestStreamMessagePartialSettlesWhenFinalUsageMissingAfterEmit(t *testing.T) {
+func TestStreamMessageReleasesWhenFinalUsageMissingAfterPreludeOnly(t *testing.T) {
 	adapterFake := &fakeMessagesAdapter{
 		streamEvents: []messagesadapter.MessageStreamEvent{
 			{Type: "message_start", Data: json.RawMessage(`{"type":"message_start","message":{"id":"x","model":"deepseek-v4-flash"}}`)},
 		},
-		// 无 final usage：streamOutcome 为空。
+		// 无 final usage：streamOutcome 为空。仅前导帧不算权威首字。
 	}
 	registry := &fakeMessagesRegistry{
 		streamMessages: map[string]messagesadapter.StreamMessagesAdapter{"deepseek": adapterFake},
@@ -567,12 +579,59 @@ func TestStreamMessagePartialSettlesWhenFinalUsageMissingAfterEmit(t *testing.T)
 	err := service.StreamMessage(contextWithPrincipal(42), messageRequest(), func(frame gatewayapi.StreamFrame) error {
 		return nil
 	})
-	// 路线 D：已 emit（message_start）后上游正常结束但缺 final usage → partial settlement，不报错、不写 risk_exposure。
+	// 仅前导帧 + 缺 usage：释放预扣、返回 usage-missing，不进入 partial settlement。
+	if err == nil {
+		t.Fatal("expected usage-missing error when final usage missing after prelude-only stream")
+	}
+	if failure.CodeOf(err) != failure.CodeGatewayStreamUsageMissing {
+		t.Fatalf("expected %q, got %q (%v)", failure.CodeGatewayStreamUsageMissing, failure.CodeOf(err), err)
+	}
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected no partial settlement for prelude-only usage-missing, got %d calls", len(settlement.params))
+	}
+	if len(authorizer.releaseParams) != 1 {
+		t.Fatalf("expected authorization released once, got %d", len(authorizer.releaseParams))
+	}
+	if len(authorizer.releaseBillingExceptionParams) != 0 {
+		t.Fatalf("expected no risk_exposure for prelude-only usage-missing, got %d", len(authorizer.releaseBillingExceptionParams))
+	}
+}
+
+func TestStreamMessagePartialSettlesWhenFinalUsageMissingAfterEmit(t *testing.T) {
+	adapterFake := &fakeMessagesAdapter{
+		streamEvents: []messagesadapter.MessageStreamEvent{
+			{Type: "message_start", Data: json.RawMessage(`{"type":"message_start","message":{"id":"x","model":"deepseek-v4-flash"}}`)},
+			{
+				Type: "content_block_delta",
+				Data: json.RawMessage(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`),
+			},
+		},
+		// 无 final usage：streamOutcome 为空。
+	}
+	registry := &fakeMessagesRegistry{
+		streamMessages: map[string]messagesadapter.StreamMessagesAdapter{"deepseek": adapterFake},
+		tokenizers:     map[string]messagesadapter.MessagesInputTokenizer{"deepseek": adapterFake},
+	}
+	settlement := &fakeMessagesSettlement{}
+	authorizer := &fakeMessagesAuthorizer{}
+	service := newMessagesServiceForTest(
+		&fakeMessagesRouter{plan: routePlan(routeCandidate("deepseek", 123, "deepseek-v4-flash"))},
+		registry,
+		settlement,
+		authorizer,
+	)
+
+	var frames []gatewayapi.StreamFrame
+	err := service.StreamMessage(contextWithPrincipal(42), messageRequest(), func(frame gatewayapi.StreamFrame) error {
+		frames = append(frames, frame)
+		return nil
+	})
+	// 路线 D：权威首字已交付后上游正常结束但缺 final usage → partial settlement，不报错、不写 risk_exposure。
 	if err != nil {
 		t.Fatalf("expected partial settlement (no error) when final usage missing after emit, got %v", err)
 	}
 	if len(settlement.params) != 1 {
-		t.Fatalf("expected partial settlement to run once, got %d", len(settlement.params))
+		t.Fatalf("expected partial settlement to run once, got %d calls", len(settlement.params))
 	}
 	if settlement.params[0].Facts.UsageSource != coreusage.SourcePartialStreamEstimate {
 		t.Fatalf("expected partial_stream_estimate usage source, got %q", settlement.params[0].Facts.UsageSource)
@@ -582,5 +641,8 @@ func TestStreamMessagePartialSettlesWhenFinalUsageMissingAfterEmit(t *testing.T)
 	}
 	if len(authorizer.releaseBillingExceptionParams) != 0 {
 		t.Fatalf("expected no risk_exposure for partial settlement, got %d", len(authorizer.releaseBillingExceptionParams))
+	}
+	if len(frames) == 0 || frames[len(frames)-1].EventType != "message_stop" {
+		t.Fatalf("partial success must end with message_stop, frames=%#v", frames)
 	}
 }

@@ -36,6 +36,10 @@ type storeStub struct {
 	snapshotInput  breakerstore.SnapshotManyInput
 	snapshotResult breakerstore.SnapshotManyResult
 	snapshotErr    error
+
+	sampleChannelIDs []int64
+	sampleWindows    map[int64]breakerstore.ChannelSampleWindow
+	sampleErr        error
 }
 
 func (s *storeStub) AcquireRequestAdmission(_ context.Context, input breakerstore.RequestAdmissionInput) (breakerstore.RequestAdmissionResult, error) {
@@ -89,6 +93,13 @@ func (s *storeStub) SnapshotMany(_ context.Context, input breakerstore.SnapshotM
 	defer s.mu.Unlock()
 	s.snapshotInput = input
 	return s.snapshotResult, s.snapshotErr
+}
+
+func (s *storeStub) AggregateChannelSamples(_ context.Context, channelIDs []int64) (map[int64]breakerstore.ChannelSampleWindow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sampleChannelIDs = channelIDs
+	return s.sampleWindows, s.sampleErr
 }
 
 type factsStub struct {
@@ -167,7 +178,7 @@ func readyFacts() *factsStub {
 	return &factsStub{
 		integrity: integrity,
 		admission: runtimefacts.AdmissionRevisions{
-			Integrity: integrity, RouteRateLimits: 3, ChannelRateLimits: 8, Concurrency: 4,
+			Integrity: integrity, RouteRateLimits: 3, Concurrency: 4,
 		},
 		routing: runtimefacts.RoutingRevisions{Integrity: integrity, CircuitBreaker: 5, RoutingBalance: 6},
 	}
@@ -275,8 +286,7 @@ func TestSessionSnapshotInjectsFrozenAdmissionAndFreshRoutingRevisions(t *testin
 			Outcome: breakerstore.RequestAllowed, LeaseUntilMs: time.Now().Add(time.Minute).UnixMilli(),
 		},
 		snapshotResult: breakerstore.SnapshotManyResult{
-			ChannelRateRevision: 8,
-			RoutingBalance:      breakerstore.RoutingBalanceSnapshot{Revision: 6},
+			RoutingBalance: breakerstore.RoutingBalanceSnapshot{Revision: 6},
 		},
 	}
 	facts := readyFacts()
@@ -288,7 +298,7 @@ func TestSessionSnapshotInjectsFrozenAdmissionAndFreshRoutingRevisions(t *testin
 	ctx := ContextWithUsageSession(context.Background(), result.Session.Usage())
 	candidates := []breakerstore.SnapshotCandidateInput{{
 		ProviderID: 30, ChannelID: 40, OriginRevision: 2, ProviderStatusRevision: 3,
-		ChannelConfigRevision: 4, ChannelAdmissionRevision: 5,
+		ChannelConfigRevision: 4, ChannelCapacityRevision: 5,
 	}}
 	snapshot, present, err := SnapshotManyIfPresent(ctx, 50, candidates)
 	if err != nil || !present || snapshot.RoutingBalance.Revision != 6 {
@@ -298,13 +308,13 @@ func TestSessionSnapshotInjectsFrozenAdmissionAndFreshRoutingRevisions(t *testin
 	input := store.snapshotInput
 	store.mu.Unlock()
 	if input.IntegrityEpoch != facts.admission.Epoch || input.IntegrityRevision != facts.admission.Revision ||
-		input.ChannelRateRevision != 8 || input.GlobalConcurrencyRevision != 4 ||
+		input.GlobalConcurrencyRevision != 4 ||
 		input.CircuitBreakerRevision != 5 || input.RoutingBalanceRevision != 6 || input.ModelID != 50 ||
 		len(input.Candidates) != 1 || input.Candidates[0].ChannelID != 40 {
 		t.Fatalf("snapshot revisions were not injected correctly: %+v", input)
 	}
-	if snapshot.RouteRateRevision != 3 || snapshot.ChannelRateRevision != 8 {
-		t.Fatalf("snapshot did not preserve split rate revisions: %+v", snapshot)
+	if snapshot.RouteRateRevision != 3 {
+		t.Fatalf("snapshot did not preserve route rate revision: %+v", snapshot)
 	}
 	if err := result.Session.Finalize(context.Background()); err != nil {
 		t.Fatal(err)

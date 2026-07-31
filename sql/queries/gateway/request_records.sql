@@ -18,7 +18,7 @@ INSERT INTO request_records (
     error_message,
     internal_error_detail,
     delivery_status,
-    response_started_at,
+    gateway_first_token_at,
     response_completed_at,
     started_at,
     completed_at,
@@ -45,7 +45,7 @@ VALUES (
            sqlc.arg(error_message),
            sqlc.arg(internal_error_detail),
            sqlc.arg(delivery_status),
-           sqlc.arg(response_started_at),
+           sqlc.arg(gateway_first_token_at),
            sqlc.arg(response_completed_at),
            sqlc.arg(started_at),
            sqlc.arg(completed_at),
@@ -73,7 +73,7 @@ RETURNING
     error_message,
     internal_error_detail,
     delivery_status,
-    response_started_at,
+    gateway_first_token_at,
     response_completed_at,
     started_at,
     completed_at,
@@ -106,7 +106,7 @@ SELECT
     error_message,
     internal_error_detail,
     delivery_status,
-    response_started_at,
+    gateway_first_token_at,
     response_completed_at,
     started_at,
     completed_at,
@@ -142,19 +142,18 @@ WHERE request_records.id = sqlc.arg(request_record_id)
   AND request_records.status = 'running'
   AND NOT EXISTS (SELECT 1 FROM updated);
 
--- name: MarkRequestResponseStarted :one
--- MarkRequestResponseStarted 记录首次客户可见响应时间，并把交付状态从 not_started 推进到 in_progress。
--- 重复调用保留第一次时间，且不回退已更靠后的交付状态。首字节时 delivery 与 response_started_at 同写。
+-- name: MarkRequestDeliveryStarted :one
+-- MarkRequestDeliveryStarted 在首次客户帧成功写出后推进 delivery 状态，不写 Gateway 首字时间。
 WITH updated AS (
     UPDATE request_records
-        SET response_started_at = COALESCE(request_records.response_started_at, sqlc.arg(response_started_at)),
-            delivery_status = CASE
+        SET delivery_status = CASE
                 WHEN request_records.delivery_status = 'not_started' THEN 'in_progress'
                 ELSE request_records.delivery_status
             END,
             updated_at = now()
         WHERE request_records.id = sqlc.arg(request_record_id)
           AND request_records.status IN ('running', 'succeeded')
+          AND request_records.delivery_status = 'not_started'
         RETURNING request_records.*
 )
 SELECT *
@@ -165,7 +164,28 @@ UNION ALL
 SELECT request_records.*
 FROM request_records
 WHERE request_records.id = sqlc.arg(request_record_id)
-  AND request_records.response_started_at IS NOT NULL
+  AND request_records.delivery_status <> 'not_started'
+  AND NOT EXISTS (SELECT 1 FROM updated);
+
+-- name: MarkRequestGatewayFirstToken :one
+-- MarkRequestGatewayFirstToken 记录首次有效生成 Token 客户交付时间；不改变 delivery 状态。
+WITH updated AS (
+    UPDATE request_records
+        SET gateway_first_token_at = COALESCE(request_records.gateway_first_token_at, sqlc.arg(gateway_first_token_at)),
+            updated_at = now()
+        WHERE request_records.id = sqlc.arg(request_record_id)
+          AND request_records.gateway_first_token_at IS NULL
+        RETURNING request_records.*
+)
+SELECT *
+FROM updated
+
+UNION ALL
+
+SELECT request_records.*
+FROM request_records
+WHERE request_records.id = sqlc.arg(request_record_id)
+  AND request_records.gateway_first_token_at IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM updated);
 
 -- name: MarkRequestDeliveryCompleted :one
@@ -228,7 +248,7 @@ WITH updated AS (
             response_id = sqlc.arg(response_id),
             final_provider_id = sqlc.arg(final_provider_id),
             final_channel_id = sqlc.arg(final_channel_id),
-            response_started_at = COALESCE(request_records.response_started_at, sqlc.narg(response_started_at)),
+            gateway_first_token_at = COALESCE(request_records.gateway_first_token_at, sqlc.narg(gateway_first_token_at)),
             completed_at = sqlc.arg(completed_at),
             updated_at = now()
         WHERE request_records.id = sqlc.arg(request_record_id)
@@ -285,7 +305,7 @@ WITH updated AS (
             error_code = sqlc.arg(error_code),
             error_message = sqlc.arg(error_message),
             internal_error_detail = sqlc.arg(internal_error_detail),
-            response_started_at = COALESCE(request_records.response_started_at, sqlc.narg(response_started_at)),
+            gateway_first_token_at = COALESCE(request_records.gateway_first_token_at, sqlc.narg(gateway_first_token_at)),
             completed_at = sqlc.arg(completed_at),
             updated_at = now()
         WHERE request_records.id = sqlc.arg(request_record_id)
@@ -343,7 +363,7 @@ WITH updated AS (
             error_code = sqlc.arg(error_code),
             error_message = sqlc.arg(error_message),
             internal_error_detail = sqlc.arg(internal_error_detail),
-            response_started_at = COALESCE(request_records.response_started_at, sqlc.narg(response_started_at)),
+            gateway_first_token_at = COALESCE(request_records.gateway_first_token_at, sqlc.narg(gateway_first_token_at)),
             completed_at = sqlc.arg(completed_at),
             updated_at = now()
         WHERE request_records.id = sqlc.arg(request_record_id)

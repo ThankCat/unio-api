@@ -42,9 +42,9 @@ func TestAdapterUpstreamWireCollapsesOfficialFields(t *testing.T) {
 	maxTokens := 10
 	maxCompletionTokens := 20
 	_, err := adapter.ChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-key",
-		Timeout: 5 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-key",
+		ResponseTimeout: 5 * time.Second,
 	}, chatcompletionsadapter.ChatRequest{
 		Model: "deepseek-v4-flash",
 		Messages: []chatcompletionsadapter.ChatMessage{

@@ -118,8 +118,7 @@ func TestP4ResetStaleGenerationLongStreamE2E(t *testing.T) {
 	if providerBeforeOldFinish.State != breakerstore.StateClosed ||
 		providerBeforeOldFinish.StateGeneration != providerGeneration ||
 		channelBeforeOldFinish.State != breakerstore.StateClosed || channelBeforeOldFinish.HalfOpenBusy ||
-		channelBeforeOldFinish.StateGeneration != halfOpen.StateGeneration+1 ||
-		channelBeforeOldFinish.TTFTSamples != 2 {
+		channelBeforeOldFinish.StateGeneration != halfOpen.StateGeneration+1 {
 		t.Fatalf("two current-generation permits did not close the Reset breaker: provider=%+v channel=%+v", providerBeforeOldFinish, channelBeforeOldFinish)
 	}
 
@@ -282,12 +281,12 @@ func waitForResetPartialFacts(
 				request.Status,
 				request.DeliveryStatus,
 				request.ErrorCode.String,
-				request.ResponseStartedAt.Valid,
+				request.GatewayFirstTokenAt.Valid,
 				request.ResponseCompletedAt.Valid,
 				request.CompletedAt.Valid,
 				attempt.Status,
 				attempt.ErrorCode.String,
-				attempt.ResponseStartedAt.Valid,
+				attempt.GatewayFirstTokenAt.Valid,
 				attempt.UpstreamStartedAt.Valid,
 				attempt.UpstreamFirstTokenAt.Valid,
 				attempt.UpstreamCompletedAt.Valid,
@@ -305,7 +304,7 @@ func waitForResetPartialFacts(
 				balanceClosed,
 			)
 			if request.Status == "failed" && request.DeliveryStatus == "interrupted" && request.Stream &&
-				request.ResponseStartedAt.Valid && !request.ResponseCompletedAt.Valid && request.CompletedAt.Valid &&
+				request.GatewayFirstTokenAt.Valid && !request.ResponseCompletedAt.Valid && request.CompletedAt.Valid &&
 				request.FinalChannelID.Valid && request.FinalChannelID.Int64 == seed.openAIChannelID &&
 				request.ErrorCode.Valid && request.ErrorCode.String == string(failure.CodeAdapterReadStreamFailed) &&
 				attempt.ID == old.attemptID && attempt.Status == "failed" && attempt.CompletedAt.Valid &&

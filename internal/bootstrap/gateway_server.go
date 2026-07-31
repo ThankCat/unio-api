@@ -164,7 +164,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	_ = settingsStore.SeedDefaults(ctx)
 	var runtimeControlPool *pgxpool.Pool
 	if sharedBreakerStore != nil {
-		// Origin 围栏、普通 runtime control、四个关键 setting 与全部 Channel admission
+		// Origin 围栏、普通 runtime control、四个关键 setting 与全部 Channel capacity
 		// 必须按顺序先收口，Gateway-only 部署也不能依赖 Admin 进程恢复运行态。
 		// marker/epoch 不匹配时即使 control 已重建，/readyz 仍会保持 fail-closed。
 		pool, ok := deps.DB.(*pgxpool.Pool)
@@ -203,7 +203,9 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	// settingsApplier 周期推送热更新。breaker、admission 与 balanced 参数只读 Redis committed control。
 	adapter.SetStreamIdleTimeout(appsettings.GatewayStreamIdleTimeout(ctx, settingsStore))
 
-	chatRouter := NewChatRouter(queries, appsettings.GatewayDefaultChannelTimeout(ctx, settingsStore), deps.Logger)
+	chatRouter := NewChatRouter(queries, appsettings.GatewayDefaultResponseTimeout(ctx, settingsStore), deps.Logger)
+	// 首字保护是独立预算（§11.3）：与响应超时同起点，但由自己的全局默认与渠道列决定。
+	chatRouter.SetDefaultFirstTokenTimeout(appsettings.GatewayDefaultFirstTokenTimeout(ctx, settingsStore))
 
 	adapterRegistry, err := NewAdapterRegistry(http.DefaultClient, deps.Logger)
 	if err != nil {
@@ -251,10 +253,13 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	messagesService.SetAttemptPermitManager(attemptPermitManager)
 	routingTraceRecorder := lifecycle.NewRoutingTraceRecorder(queries, deps.Logger)
 	routingTraceRecorder.SetMetrics(metricsRecorder)
-	routingTraceRecorder.SetSampleRate(appsettings.GatewayRoutingTrace(ctx, settingsStore).SampleRate)
 	chatCompletionService.SetRoutingTraceRecorder(routingTraceRecorder)
 	responsesService.SetRoutingTraceRecorder(routingTraceRecorder)
 	messagesService.SetRoutingTraceRecorder(routingTraceRecorder)
+	// 30 分钟评分样本 / RPM/RPD/TPM 观测记录器（§12）：与 admission 解耦的 best-effort 写入，共用 breaker store。
+	chatCompletionService.SetChannelSampleRecorder(breakerStore)
+	responsesService.SetChannelSampleRecorder(breakerStore)
+	messagesService.SetChannelSampleRecorder(breakerStore)
 	// 成本敞口记录器：bill-on-disconnect 渠道的失败/取消路径
 	// 记平台成本敞口；假定输出兜底与 authorization 的进程级兜底同源，保证敞口与冻结上界口径一致。
 	costExposureRecorder := newCostExposureStore(queries, deps.Logger)
@@ -279,7 +284,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	if deps.Redis != nil {
 		stickySettings := appsettings.GatewayRoutingSticky(ctx, settingsStore)
 		stickyRouter = lifecycle.NewStickyRouter(stickysession.NewStore(deps.Redis, deps.Config.Redis.KeyNamespace, deps.Logger))
-		stickyRouter.SetConfig(stickySettings.EnabledDefault, stickySettings.TTL, stickySettings.TPMWait, stickySettings.TPMWaitJitter)
+		stickyRouter.SetConfig(stickySettings.EnabledDefault, stickySettings.TTL)
 		stickyRouter.SetMetrics(metricsRecorder)
 		stickyRouter.SetLogger(deps.Logger)
 		chatCompletionService.SetStickyRouter(stickyRouter)
@@ -294,14 +299,21 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	// Redis committed runtime control 驱动，不得再由本机 settings cache 覆盖。
 	// 配置 applier 与 runtime-control reconciler 共用独立 background context
 	// （传入的 ctx 是启动期短时 ctx），随 app.Shutdown 一起停止。
+	// 全池并发短等预算按协议 service 分别推送：每个 service 持有自己的 AttemptRunner（§9.4）。
+	capacityWaitTimeout := appsettings.GatewayCapacityWaitTimeout(ctx, settingsStore)
+	capacityWaitTargets := []capacityWaitTarget{chatCompletionService, responsesService, messagesService}
+	for _, target := range capacityWaitTargets {
+		target.SetCapacityWaitTimeout(capacityWaitTimeout)
+	}
+
 	applier := &settingsApplier{
 		store:        settingsStore,
 		logger:       deps.Logger,
 		gate:         credentialGate,
 		router:       chatRouter,
 		sticky:       stickyRouter,
-		routingTrace: routingTraceRecorder,
 		channel429:   attemptPermitManager,
+		capacityWait: capacityWaitTargets,
 	}
 	applierCtx, stopApplier := context.WithCancel(context.Background())
 	go applier.run(applierCtx, settingsApplyInterval)

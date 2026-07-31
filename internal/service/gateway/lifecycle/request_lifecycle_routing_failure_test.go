@@ -65,4 +65,8 @@ func TestRecordRoutingFailureSkipsPreSelectionErrors(t *testing.T) {
 	if len(store.writes) != 1 {
 		t.Fatalf("no_available_channel must write a routing decision trace, got %d", len(store.writes))
 	}
+	if store.writes[0].TraceStatus != string(TraceStatusComplete) ||
+		store.writes[0].FinalResult.String != FinalResultNoAvailableChannel {
+		t.Fatalf("known routing failure must be terminal: %#v", store.writes[0])
+	}
 }

@@ -2,9 +2,11 @@
 -- ListRequestRecordsPage 供 admin 请求记录列表（富化版）按过滤条件分页倒序列出。
 -- 关联（均 1:1 或标量子查询，不放大行数）：usage_records（token）、cost_snapshots（平台成本 + 分项）、
 -- ledger_entries 净扣费（用户实际扣费）、api_keys→routes（线路名，当前绑定，快照见批二）、
--- final channel 名、经过的渠道链（attempts 按序 string_agg）。
+-- final channel 名、经过的渠道链（attempts 按序 string_agg）、routing_decision_traces（sticky 摘要）。
 -- 列表故意不 SELECT internal_error_detail（SQL 层脱敏，详情上游源站按 ?include_internal 返回）。
 -- latency/ttft/tps 由 Go 侧用时间戳 + output_tokens 计算，不在此列。
+-- 线路名优先用请求级快照 route_id（Key 换绑不影响历史）；历史行 route_id 为 NULL 时回落到 Key 当前绑定。
+-- 模型元信息（显示名 / owned_by）按请求模型 id 关联；请求模型不在库时为 NULL。
 SELECT
     r.id,
     r.request_id,
@@ -23,7 +25,7 @@ SELECT
     r.error_code,
     r.error_message,
     r.delivery_status,
-    r.response_started_at,
+    r.gateway_first_token_at,
     r.response_completed_at,
     r.started_at,
     r.completed_at,
@@ -92,22 +94,79 @@ SELECT
         FROM request_attempts a
         JOIN channels ch ON ch.id = a.channel_id
         WHERE a.request_record_id = r.id
-    ), '')::text AS channel_chain
+    ), '')::text AS channel_chain,
+    r.route_id,
+    COALESCE(scoring_attempt.id, 0)::bigint AS scoring_attempt_id,
+    COALESCE(scoring_attempt.dimensions, ARRAY[]::text[])::text[] AS scoring_dimensions,
+    COALESCE(scoring_attempt.error_scoring_failure, false)::boolean AS scoring_error_failure,
+    -- Sticky 摘要：无 routing_decision_traces 时整组为 NULL（列表显示「—」）。
+    -- pinned / pinned_non_preferred 用 text 编码，避免 sqlc 对 JSON 布尔产出 interface{}。
+    rdt.sticky_key_present,
+    rdt.sticky_action,
+    rdt.sticky_reason,
+    rdt.sticky_before_channel_id,
+    rdt.sticky_after_channel_id,
+    CASE
+        WHEN rdt.id IS NULL THEN ''
+        WHEN (rdt.trace_payload->'sticky'->>'pinned') = 'true' THEN 'true'
+        ELSE 'false'
+    END AS sticky_pinned,
+    CASE
+        WHEN rdt.id IS NULL THEN ''
+        WHEN (rdt.trace_payload->'sticky'->>'pinned_non_preferred') = 'true' THEN 'true'
+        ELSE 'false'
+    END AS sticky_pinned_non_preferred,
+    sbc.name AS sticky_before_channel_name,
+    sac.name AS sticky_after_channel_name
 FROM request_records r
 LEFT JOIN usage_records ur ON ur.request_record_id = r.id
 LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
 LEFT JOIN price_snapshots ps ON ps.request_record_id = r.id
 LEFT JOIN api_keys ak ON ak.id = r.api_key_id
--- 线路名优先用请求级快照 route_id（Key 换绑不影响历史）；历史行 route_id 为 NULL 时回落到 Key 当前绑定。
 LEFT JOIN routes rt ON rt.id = COALESCE(r.route_id, ak.route_id)
--- 模型元信息（显示名 / owned_by）按请求模型 id 关联；请求模型不在库时为 NULL。
 LEFT JOIN models m ON m.model_id = r.requested_model_id
 LEFT JOIN channels fc ON fc.id = r.final_channel_id
+LEFT JOIN routing_decision_traces rdt ON rdt.request_record_id = r.id
+LEFT JOIN channels sbc ON sbc.id = rdt.sticky_before_channel_id
+LEFT JOIN channels sac ON sac.id = rdt.sticky_after_channel_id
+LEFT JOIN LATERAL (
+    SELECT
+        a.id,
+        ARRAY_REMOVE(ARRAY[
+            CASE WHEN a.ttft_scoring_sample THEN 'ttft'::text END,
+            CASE WHEN a.error_scoring_sample THEN 'error'::text END
+        ], NULL)::text[] AS dimensions,
+        a.error_scoring_failure
+    FROM request_attempts a
+    WHERE a.request_record_id = r.id
+      AND (sqlc.narg('channel_id')::bigint IS NULL OR a.channel_id = sqlc.narg('channel_id')::bigint)
+      AND (sqlc.narg('attempt_id')::bigint IS NULL OR a.id = sqlc.narg('attempt_id')::bigint)
+      AND (
+          sqlc.narg('scoring_sample')::text IS NULL
+          OR (sqlc.narg('scoring_sample')::text = 'ttft' AND a.ttft_scoring_sample)
+          OR (sqlc.narg('scoring_sample')::text = 'error' AND a.error_scoring_sample)
+          OR (sqlc.narg('scoring_sample')::text = 'any' AND (a.ttft_scoring_sample OR a.error_scoring_sample))
+      )
+      AND (
+          sqlc.narg('channel_id')::bigint IS NOT NULL
+          OR sqlc.narg('attempt_id')::bigint IS NOT NULL
+          OR sqlc.narg('scoring_sample')::text IS NOT NULL
+          OR a.ttft_scoring_sample
+          OR a.error_scoring_sample
+      )
+    ORDER BY a.attempt_index, a.id
+    LIMIT 1
+) scoring_attempt ON true
 WHERE (sqlc.narg('user_id')::bigint IS NULL OR r.user_id = sqlc.narg('user_id')::bigint)
   AND (sqlc.narg('api_key_id')::bigint IS NULL OR r.api_key_id = sqlc.narg('api_key_id')::bigint)
   AND (sqlc.narg('request_id')::text IS NULL OR r.request_id = sqlc.narg('request_id')::text)
   AND (sqlc.narg('status')::text IS NULL OR r.status = sqlc.narg('status')::text)
   AND (sqlc.narg('model')::text IS NULL OR r.requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
+  AND (sqlc.narg('route_id')::bigint IS NULL OR r.route_id = sqlc.narg('route_id')::bigint)
+  AND (
+      (sqlc.narg('channel_id')::bigint IS NULL AND sqlc.narg('attempt_id')::bigint IS NULL AND sqlc.narg('scoring_sample')::text IS NULL)
+      OR scoring_attempt.id IS NOT NULL
+  )
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 ORDER BY
@@ -133,6 +192,23 @@ WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::b
   AND (sqlc.narg('request_id')::text IS NULL OR request_id = sqlc.narg('request_id')::text)
   AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
   AND (sqlc.narg('model')::text IS NULL OR requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
+  AND (sqlc.narg('route_id')::bigint IS NULL OR route_id = sqlc.narg('route_id')::bigint)
+  AND (
+      (sqlc.narg('channel_id')::bigint IS NULL AND sqlc.narg('attempt_id')::bigint IS NULL AND sqlc.narg('scoring_sample')::text IS NULL)
+      OR EXISTS (
+          SELECT 1
+          FROM request_attempts a
+          WHERE a.request_record_id = request_records.id
+            AND (sqlc.narg('channel_id')::bigint IS NULL OR a.channel_id = sqlc.narg('channel_id')::bigint)
+            AND (sqlc.narg('attempt_id')::bigint IS NULL OR a.id = sqlc.narg('attempt_id')::bigint)
+            AND (
+                sqlc.narg('scoring_sample')::text IS NULL
+                OR (sqlc.narg('scoring_sample')::text = 'ttft' AND a.ttft_scoring_sample)
+                OR (sqlc.narg('scoring_sample')::text = 'error' AND a.error_scoring_sample)
+                OR (sqlc.narg('scoring_sample')::text = 'any' AND (a.ttft_scoring_sample OR a.error_scoring_sample))
+            )
+      )
+  )
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz);
 
@@ -158,7 +234,7 @@ SELECT
     error_message,
     internal_error_detail,
     delivery_status,
-    response_started_at,
+    gateway_first_token_at,
     response_completed_at,
     started_at,
     completed_at,

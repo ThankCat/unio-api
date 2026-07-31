@@ -13,11 +13,13 @@ func TestGatewaySettingsRegistered(t *testing.T) {
 	keys := []string{
 		GatewayCircuitBreakerKey,
 		GatewayRouteRateLimitDefaultsKey,
-		GatewayChannelRateLimitDefaultsKey,
 		GatewayStreamIdleTimeoutKey,
 		GatewayChannelCooldownKey,
 		GatewayCredential401ThresholdKey,
-		GatewayDefaultChannelTimeoutKey,
+		GatewayDefaultResponseTimeoutKey,
+		GatewayDefaultFirstTokenTimeoutKey,
+		GatewayCapacityWaitTimeoutKey,
+		GatewayRoutingStickyKey,
 		GatewayConcurrencyDefaultsKey,
 		GatewayRoutingBalanceKey,
 	}
@@ -43,34 +45,39 @@ func TestGatewaySettingsRegistered(t *testing.T) {
 
 func TestRoutingBalanceSettingsRoundTrip(t *testing.T) {
 	want := RoutingBalanceSettings{
-		EconomicWeightPct: 40,
-		HealthWeightPct:   30,
-		CapacityWeightPct: 20,
-		PriorityWeightPct: 10,
-		TTFTTarget:        2500 * time.Millisecond,
-		TTFTWeight:        0.4,
-		TTFTEWMAAlpha:     0.25,
-		Enabled:           true,
-		WeightByRemaining: true,
+		CostWeightPct:                30,
+		ConcurrencyWeightPct:         20,
+		TTFTWeightPct:                20,
+		ErrorRateWeightPct:           20,
+		PriorityWeightPct:            10,
+		TTFTWindow:                   20 * time.Minute,
+		TTFTPenaltyUnit:              500 * time.Millisecond,
+		TTFTPenaltyPointsPerUnit:     1.5,
+		ErrorWindow:                  20 * time.Minute,
+		ErrorPenaltyPointsPerPercent: 3,
 	}
 	got, err := DecodeRoutingBalanceSettings(encodeRoutingBalanceSettings(want))
 	if err != nil || got != want {
 		t.Fatalf("round trip got %+v err=%v, want %+v", got, err, want)
 	}
+
+	const validBody = `"ttft_window_ms":1800000,"ttft_penalty_unit_ms":1000,"ttft_penalty_points_per_unit":2.5,"error_window_ms":1800000,"error_penalty_points_per_percent":2.5`
 	invalid := []string{
-		`{"economic_weight_pct":35,"health_weight_pct":25,"capacity_weight_pct":20,"priority_weight_pct":10,"ttft_target_ms":2000,"ttft_weight":0.35,"ttft_ewma_alpha":0.2}`,
-		`{"economic_weight_pct":-5,"health_weight_pct":50,"capacity_weight_pct":30,"priority_weight_pct":25,"ttft_target_ms":2000,"ttft_weight":0.35,"ttft_ewma_alpha":0.2}`,
-		`{"economic_weight_pct":45,"health_weight_pct":25,"capacity_weight_pct":20,"priority_weight_pct":10,"ttft_target_ms":0,"ttft_weight":0.35,"ttft_ewma_alpha":0.2}`,
-		`{"economic_weight_pct":45,"health_weight_pct":25,"capacity_weight_pct":20,"priority_weight_pct":10,"ttft_target_ms":2000,"ttft_weight":1.1,"ttft_ewma_alpha":0.2}`,
-		`{"economic_weight_pct":45,"health_weight_pct":25,"capacity_weight_pct":20,"priority_weight_pct":10,"ttft_target_ms":2000,"ttft_weight":0.35,"ttft_ewma_alpha":0}`,
-		`{"economic_weight_pct":45,"health_weight_pct":25,"capacity_weight_pct":20,"priority_weight_pct":10,"ttft_target_ms":2000,"ttft_weight":0.35,"ttft_ewma_alpha":0.2,"cost_weight":0.5}`,
-		`{"economic_weight_pct":45,"health_weight_pct":25,"capacity_weight_pct":20,"priority_weight_pct":10,"ttft_target_ms":2000,"ttft_weight":0.35,"ttft_ewma_alpha":0.2,"bogus":1}`,
-		`{"ttft_target_ms":2000,"ttft_weight":0.35,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2,"bogus":1}`,
-		`{"ttft_target_ms":2000,"ttft_weight":0.35,"minimum_routing_factor":0,"ttft_ewma_alpha":0.2}`,
-		`{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":-0.1,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
-		`{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":1.1,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
-		`{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":null,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
-		`{"ttft_target_ms":2000,"cost_weight":0.5,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
+		// 权重之和不为 100。
+		`{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,"error_rate_weight_pct":20,"priority_weight_pct":5,` + validBody + `}`,
+		// 负权重。
+		`{"cost_weight_pct":-5,"concurrency_weight_pct":25,"ttft_weight_pct":25,"error_rate_weight_pct":30,"priority_weight_pct":25,` + validBody + `}`,
+		// 窗口/惩罚单位必须为正。
+		`{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,"error_rate_weight_pct":20,"priority_weight_pct":10,"ttft_window_ms":0,"ttft_penalty_unit_ms":1000,"ttft_penalty_points_per_unit":2.5,"error_window_ms":1800000,"error_penalty_points_per_percent":2.5}`,
+		`{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,"error_rate_weight_pct":20,"priority_weight_pct":10,"ttft_window_ms":1800000,"ttft_penalty_unit_ms":0,"ttft_penalty_points_per_unit":2.5,"error_window_ms":1800000,"error_penalty_points_per_percent":2.5}`,
+		`{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,"error_rate_weight_pct":20,"priority_weight_pct":10,"ttft_window_ms":1800000,"ttft_penalty_unit_ms":1000,"ttft_penalty_points_per_unit":0,"error_window_ms":1800000,"error_penalty_points_per_percent":2.5}`,
+		`{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,"error_rate_weight_pct":20,"priority_weight_pct":10,"ttft_window_ms":1800000,"ttft_penalty_unit_ms":1000,"ttft_penalty_points_per_unit":2.5,"error_window_ms":0,"error_penalty_points_per_percent":2.5}`,
+		`{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,"error_rate_weight_pct":20,"priority_weight_pct":10,"ttft_window_ms":1800000,"ttft_penalty_unit_ms":1000,"ttft_penalty_points_per_unit":2.5,"error_window_ms":1800000,"error_penalty_points_per_percent":0}`,
+		// 未知字段一律拒绝（无兼容分支）。
+		`{"cost_weight_pct":25,"concurrency_weight_pct":20,"ttft_weight_pct":25,"error_rate_weight_pct":20,"priority_weight_pct":10,` + validBody + `,"bogus":1}`,
+		// 旧 objective/legacy 结构必须被拒绝。
+		`{"economic_weight_pct":45,"health_weight_pct":25,"capacity_weight_pct":20,"priority_weight_pct":10,"ttft_target_ms":2000,"ttft_weight":0.35,"ttft_ewma_alpha":0.2}`,
+		`{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":0.9,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`,
 	}
 	for _, raw := range invalid {
 		if _, err := DecodeRoutingBalanceSettings([]byte(raw)); err == nil {
@@ -79,34 +86,42 @@ func TestRoutingBalanceSettingsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestRoutingBalanceObjectiveDefaultsAndLegacyCompatibility(t *testing.T) {
+// TestRoutingBalanceObjectiveDefaults 冻结 §14.6 五项默认权重与惩罚参数，并确认 canonical JSON 只发新字段。
+func TestRoutingBalanceObjectiveDefaults(t *testing.T) {
 	defaults := DefaultRoutingBalanceSettings()
-	if defaults.EconomicWeightPct != 45 || defaults.HealthWeightPct != 25 ||
-		defaults.CapacityWeightPct != 20 || defaults.PriorityWeightPct != 10 {
+	if defaults.CostWeightPct != 25 || defaults.ConcurrencyWeightPct != 20 ||
+		defaults.TTFTWeightPct != 25 || defaults.ErrorRateWeightPct != 20 || defaults.PriorityWeightPct != 10 {
 		t.Fatalf("unexpected objective defaults: %+v", defaults)
 	}
-	if raw := string(encodeRoutingBalanceSettings(defaults)); !strings.Contains(raw, `"economic_weight_pct":45`) ||
-		strings.Contains(raw, `"cost_weight"`) || strings.Contains(raw, `"minimum_routing_factor"`) {
-		t.Fatalf("canonical encoder must only emit objective weights: %s", raw)
+	if defaults.TTFTWindow != 30*time.Minute || defaults.ErrorWindow != 30*time.Minute {
+		t.Fatalf("unexpected sample windows: %+v", defaults)
 	}
-
-	legacy := []byte(`{"ttft_target_ms":2000,"ttft_weight":0.35,"cost_weight":0.9,"minimum_routing_factor":0.05,"ttft_ewma_alpha":0.2}`)
-	decoded, err := DecodeRoutingBalanceSettings(legacy)
-	if err != nil {
-		t.Fatalf("decode legacy routing balance: %v", err)
+	if defaults.TTFTPenaltyUnit != time.Second || defaults.TTFTPenaltyPointsPerUnit != 2.5 ||
+		defaults.ErrorPenaltyPointsPerPercent != 2.5 {
+		t.Fatalf("unexpected penalty defaults: %+v", defaults)
 	}
-	if decoded.EconomicWeightPct != 45 || decoded.HealthWeightPct != 25 ||
-		decoded.CapacityWeightPct != 20 || decoded.PriorityWeightPct != 10 {
-		t.Fatalf("legacy payload must map to objective defaults: %+v", decoded)
+	raw := string(encodeRoutingBalanceSettings(defaults))
+	for _, want := range []string{
+		`"cost_weight_pct":25`, `"concurrency_weight_pct":20`, `"ttft_weight_pct":25`,
+		`"error_rate_weight_pct":20`, `"priority_weight_pct":10`,
+		`"ttft_window_ms":1800000`, `"error_window_ms":1800000`,
+	} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("canonical routing balance JSON missing %s: %s", want, raw)
+		}
 	}
-	if raw := string(encodeRoutingBalanceSettings(decoded)); !strings.Contains(raw, `"economic_weight_pct":45`) || strings.Contains(raw, `"cost_weight"`) {
-		t.Fatalf("legacy payload must re-encode as objective_v1 canonical JSON: %s", raw)
+	// 旧字段一律不得出现（单一 canonical，无兼容）。
+	for _, forbidden := range []string{"economic_weight_pct", "health_weight_pct", "capacity_weight_pct",
+		"ttft_target_ms", "ttft_ewma_alpha", "cost_weight\"", "minimum_routing_factor"} {
+		if strings.Contains(raw, forbidden) {
+			t.Fatalf("canonical routing balance JSON must not emit %s: %s", forbidden, raw)
+		}
 	}
 }
 
 // TestDurationKeysCarryMsSuffix 时长类标量 key 必须带 _ms 后缀,与值单位(毫秒)自证一致。
 func TestDurationKeysCarryMsSuffix(t *testing.T) {
-	for _, key := range []string{GatewayStreamIdleTimeoutKey, GatewayDefaultChannelTimeoutKey} {
+	for _, key := range []string{GatewayStreamIdleTimeoutKey, GatewayDefaultResponseTimeoutKey} {
 		if !strings.HasSuffix(key, "_ms") {
 			t.Errorf("duration key %q must end with _ms", key)
 		}
@@ -308,7 +323,64 @@ func TestMsScalarDefaults(t *testing.T) {
 	if got := string(encodeMsSetting(DefaultStreamIdleTimeoutSetting)); got != "600000" {
 		t.Fatalf("stream idle default = %s, want 600000", got)
 	}
-	if got := string(encodeMsSetting(DefaultChannelTimeoutSetting)); got != "200000" {
+	if got := string(encodeMsSetting(DefaultResponseTimeoutSetting)); got != "200000" {
 		t.Fatalf("channel timeout default = %s, want 200000", got)
+	}
+}
+
+// TestTimeoutAndCapacityWaitDefaultsAreFrozen 冻结 §11.3/§9.4 的最终默认值。
+// 本次改造只新增 60s 首字保护；200s 响应默认与 10min 流式 idle 默认必须保持不变，
+// 否则迁移会意外缩短合法长请求。
+func TestTimeoutAndCapacityWaitDefaultsAreFrozen(t *testing.T) {
+	reg := DefaultRegistry()
+	for key, want := range map[string]string{
+		GatewayDefaultResponseTimeoutKey:   "200000",
+		GatewayDefaultFirstTokenTimeoutKey: "60000",
+		GatewayStreamIdleTimeoutKey:        "600000",
+		GatewayCapacityWaitTimeoutKey:      "1000",
+	} {
+		def, ok := reg.Get(key)
+		if !ok {
+			t.Fatalf("key %q is not registered", key)
+		}
+		if got := string(def.Default); got != want {
+			t.Errorf("default for %q = %s, want %s", key, got, want)
+		}
+		if !def.HotReload {
+			t.Errorf("key %q must be hot reloadable", key)
+		}
+	}
+}
+
+// TestCapacityWaitAcceptsZeroButRejectsNegative 验证 0 是「关闭短等」的合法配置，负数不是。
+func TestCapacityWaitAcceptsZeroButRejectsNegative(t *testing.T) {
+	def, ok := DefaultRegistry().Get(GatewayCapacityWaitTimeoutKey)
+	if !ok {
+		t.Fatal("capacity wait key is not registered")
+	}
+	if err := def.Validate([]byte(`0`)); err != nil {
+		t.Fatalf("0 must be accepted to disable the wait: %v", err)
+	}
+	if err := def.Validate([]byte(`-1`)); err == nil {
+		t.Fatal("negative capacity wait must be rejected")
+	}
+}
+
+// TestTimeoutDefaultsRejectNonPositive 冻结 §11.3：0/负数不表示「无限」，必须被拒绝。
+func TestTimeoutDefaultsRejectNonPositive(t *testing.T) {
+	for _, key := range []string{
+		GatewayDefaultResponseTimeoutKey,
+		GatewayDefaultFirstTokenTimeoutKey,
+		GatewayStreamIdleTimeoutKey,
+	} {
+		def, ok := DefaultRegistry().Get(key)
+		if !ok {
+			t.Fatalf("key %q is not registered", key)
+		}
+		for _, raw := range []string{`0`, `-1`} {
+			if err := def.Validate([]byte(raw)); err == nil {
+				t.Errorf("key %q accepted %s; 0/negative must never disable the protection", key, raw)
+			}
+		}
 	}
 }

@@ -1,7 +1,6 @@
 package lifecycle
 
 import (
-	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -99,31 +98,52 @@ func TestAttemptTimingObserverConcurrentCallsPreserveInvariants(t *testing.T) {
 	}
 }
 
-func TestChatChunkFirstTokenEligibleUsesProtocolOutputMetadata(t *testing.T) {
+// TestChatStreamChunkMetaWiresFirstTokenPayload 验证 meta 映射把 adapter 的权威判定同时接到
+// FirstTokenEligible 和 VisibleText 上：两者同源，才不会出现「算了首字但 partial settlement
+// 不计这段文本」的错位。完整协议矩阵由 adapter 包的 TestFirstTokenPayloadMatrix 覆盖。
+func TestChatStreamChunkMetaWiresFirstTokenPayload(t *testing.T) {
 	reasoning := "thinking"
-	refusal := "cannot comply"
 	finish := "stop"
 	tests := []struct {
-		name  string
-		chunk chatcompletionsadapter.ChatStreamChunk
-		want  bool
+		name            string
+		chunk           chatcompletionsadapter.ChatStreamChunk
+		wantEligible    bool
+		wantVisibleText string
 	}{
-		{name: "assistant role", chunk: chatcompletionsadapter.ChatStreamChunk{Role: "assistant"}, want: true},
-		{name: "content delta", chunk: chatcompletionsadapter.ChatStreamChunk{Content: "hello"}, want: true},
-		{name: "reasoning delta", chunk: chatcompletionsadapter.ChatStreamChunk{ReasoningContent: &reasoning}, want: true},
-		{name: "tool call delta", chunk: chatcompletionsadapter.ChatStreamChunk{ToolCalls: json.RawMessage(`[{"index":0}]`)}, want: true},
-		{name: "refusal delta", chunk: chatcompletionsadapter.ChatStreamChunk{Refusal: &refusal}, want: true},
-		{name: "function call delta", chunk: chatcompletionsadapter.ChatStreamChunk{FunctionCall: json.RawMessage(`{"name":"lookup"}`)}, want: true},
-		{name: "empty chunk", chunk: chatcompletionsadapter.ChatStreamChunk{}, want: false},
-		{name: "finish only", chunk: chatcompletionsadapter.ChatStreamChunk{FinishReason: &finish}, want: false},
-		{name: "usage only", chunk: chatcompletionsadapter.ChatStreamChunk{Usage: &adapter.ChatUsage{TotalTokens: 1}}, want: false},
+		{
+			name:            "content delta carries both facts",
+			chunk:           chatcompletionsadapter.ChatStreamChunk{Content: "hello"},
+			wantEligible:    true,
+			wantVisibleText: "hello",
+		},
+		{
+			name:            "reasoning delta counts as generated output",
+			chunk:           chatcompletionsadapter.ChatStreamChunk{ReasoningContent: &reasoning},
+			wantEligible:    true,
+			wantVisibleText: "thinking",
+		},
+		{
+			name:  "role-only is a prelude frame",
+			chunk: chatcompletionsadapter.ChatStreamChunk{Role: "assistant"},
+		},
+		{
+			name:  "finish-only is not a first token",
+			chunk: chatcompletionsadapter.ChatStreamChunk{FinishReason: &finish},
+		},
+		{
+			name:  "usage-only is not a first token",
+			chunk: chatcompletionsadapter.ChatStreamChunk{Usage: &adapter.ChatUsage{TotalTokens: 1}},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			meta := chatStreamChunkMeta(tt.chunk)
-			if meta.FirstTokenEligible != tt.want {
-				t.Fatalf("FirstTokenEligible = %v, want %v", meta.FirstTokenEligible, tt.want)
+			if meta.FirstTokenEligible != tt.wantEligible {
+				t.Fatalf("FirstTokenEligible = %v, want %v", meta.FirstTokenEligible, tt.wantEligible)
+			}
+			if meta.VisibleText != tt.wantVisibleText {
+				t.Fatalf("VisibleText = %q, want %q", meta.VisibleText, tt.wantVisibleText)
 			}
 		})
 	}

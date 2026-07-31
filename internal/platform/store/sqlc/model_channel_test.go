@@ -103,7 +103,7 @@ func insertChannelWithBinding(t *testing.T, ctx context.Context, tx pgx.Tx, prov
 
 	var id int64
 	err := tx.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, timeout_ms)
+		INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, response_timeout_ms)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id
 	`, providerID, name, protocol, adapterKey, "sk-test-"+name, status, priority, timeout).Scan(&id)
@@ -347,13 +347,13 @@ func TestListAvailableModelsForProjectFiltersDisabledRelations(t *testing.T) {
 	disabledMappingModelID := insertModel(t, ctx, tx, disabledMappingModel, "openai", "enabled")
 	insertChannelModel(t, ctx, tx, enabledChannelID, disabledMappingModelID, "catalog-disabled-mapping", "disabled")
 
-	disabledChannelID := insertChannel(t, ctx, tx, enabledProviderID, fmt.Sprintf("catalog-disabled-channel-%d", suffix), "disabled", 1, &timeoutMS)
+	disabledChannelID := insertChannel(t, ctx, tx, enabledProviderID, fmt.Sprintf("catalog-disabled-channel-%d", suffix), "disabled", 10, &timeoutMS)
 	disabledChannelModel := fmt.Sprintf("openai/catalog-disabled-channel-%d", suffix)
 	disabledChannelModelID := insertModel(t, ctx, tx, disabledChannelModel, "openai", "enabled")
 	insertChannelModel(t, ctx, tx, disabledChannelID, disabledChannelModelID, "catalog-disabled-channel", "enabled")
 
 	disabledProviderID := insertProvider(t, ctx, tx, fmt.Sprintf("catalog-disabled-provider-%d", suffix), "disabled")
-	disabledProviderChannelID := insertChannel(t, ctx, tx, disabledProviderID, fmt.Sprintf("catalog-disabled-provider-channel-%d", suffix), "enabled", 1, &timeoutMS)
+	disabledProviderChannelID := insertChannel(t, ctx, tx, disabledProviderID, fmt.Sprintf("catalog-disabled-provider-channel-%d", suffix), "enabled", 10, &timeoutMS)
 	disabledProviderModel := fmt.Sprintf("openai/catalog-disabled-provider-%d", suffix)
 	disabledProviderModelID := insertModel(t, ctx, tx, disabledProviderModel, "openai", "enabled")
 	insertChannelModel(t, ctx, tx, disabledProviderChannelID, disabledProviderModelID, "catalog-disabled-provider", "enabled")
@@ -483,8 +483,8 @@ func TestFindRouteCandidatesOrdersAndFilters(t *testing.T) {
 	if first.Credential == "" {
 		t.Fatal("expected plaintext credential on route candidate")
 	}
-	if !first.TimeoutMs.Valid || first.TimeoutMs.Int32 != timeoutMS {
-		t.Fatalf("expected timeout_ms %d, got valid=%v value=%d", timeoutMS, first.TimeoutMs.Valid, first.TimeoutMs.Int32)
+	if !first.ResponseTimeoutMs.Valid || first.ResponseTimeoutMs.Int32 != timeoutMS {
+		t.Fatalf("expected response_timeout_ms %d, got valid=%v value=%d", timeoutMS, first.ResponseTimeoutMs.Valid, first.ResponseTimeoutMs.Int32)
 	}
 
 	disabledModel := fmt.Sprintf("openai/routing-disabled-model-%d", suffix)
@@ -516,7 +516,7 @@ func TestRoutePoolExcludesUnboundChannelAndModel(t *testing.T) {
 	timeoutMS := int32(15000)
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("route-boundary-%d", suffix), "enabled")
 	boundChannelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("route-bound-%d", suffix), "enabled", 20, &timeoutMS)
-	unboundChannelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("route-unbound-%d", suffix), "enabled", 1, &timeoutMS)
+	unboundChannelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("route-unbound-%d", suffix), "enabled", 10, &timeoutMS)
 
 	sharedModel := fmt.Sprintf("openai/route-shared-%d", suffix)
 	sharedModelID := insertModel(t, ctx, tx, sharedModel, "openai", "enabled")

@@ -42,9 +42,9 @@ func TestAdapterChatCompletionsClassifiesUpstreamStatus(t *testing.T) {
 			openAIAdapter := newTestAdapter(server.Client())
 
 			_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
-				Origin:  server.URL,
-				APIKey:  "test-secret",
-				Timeout: 30 * time.Second,
+				Origin:          server.URL,
+				APIKey:          "test-secret",
+				ResponseTimeout: 30 * time.Second,
 			}, ChatRequest{
 				Model: "gpt-4.1",
 				Messages: []ChatMessage{
@@ -95,9 +95,9 @@ func TestAdapterChatCompletionsClassifiesTimeoutAsUpstreamCategory(t *testing.T)
 	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 50 * time.Millisecond,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 50 * time.Millisecond,
 	}, ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []ChatMessage{
@@ -151,9 +151,9 @@ func TestAdapterChatCompletionsClassifiesCanceledAsUpstreamCategory(t *testing.T
 	}()
 
 	_, err := openAIAdapter.ChatCompletions(ctx, channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []ChatMessage{
@@ -197,9 +197,9 @@ func TestAdapterChatCompletionsPopulatesSuccessMetadata(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 
 	got, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []ChatMessage{
@@ -240,9 +240,9 @@ func TestAdapterStreamChatCompletionsPopulatesUsageChunkMetadata(t *testing.T) {
 
 	var usageChunk *ChatStreamChunk
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []ChatMessage{
@@ -284,9 +284,9 @@ func TestAdapterStreamChatCompletionsClassifiesUpstreamStatus(t *testing.T) {
 	openAIAdapter := newTestAdapter(server.Client())
 
 	_, err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-secret",
-		Timeout: 30 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-secret",
+		ResponseTimeout: 30 * time.Second,
 	}, ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []ChatMessage{

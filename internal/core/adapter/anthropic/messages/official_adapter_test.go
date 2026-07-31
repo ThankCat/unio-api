@@ -34,9 +34,9 @@ func TestOfficialAdapterForwardsBetaHeadersPassthrough(t *testing.T) {
 	official := NewOfficialAdapter(server.Client(), nil)
 	maxTokens := 16
 	_, err := official.Messages(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-key",
-		Timeout: 5 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-key",
+		ResponseTimeout: 5 * time.Second,
 	}, MessageRequest{
 		Model: "claude-sonnet-4-20250514",
 		Messages: []Message{
@@ -80,9 +80,9 @@ func TestOfficialAdapterForwardsExtendedCacheTTLBeta(t *testing.T) {
 	official := NewOfficialAdapter(server.Client(), nil)
 	maxTokens := 16
 	_, err := official.Messages(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-key",
-		Timeout: 5 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-key",
+		ResponseTimeout: 5 * time.Second,
 	}, MessageRequest{
 		Model: "claude-sonnet-4-20250514",
 		Messages: []Message{
@@ -122,9 +122,9 @@ func TestOfficialAdapterBlocksBetaWithBillingGap(t *testing.T) {
 	official := NewOfficialAdapter(server.Client(), nil)
 	maxTokens := 16
 	_, err := official.Messages(context.Background(), channel.Runtime{
-		Origin:  server.URL,
-		APIKey:  "test-key",
-		Timeout: 5 * time.Second,
+		Origin:          server.URL,
+		APIKey:          "test-key",
+		ResponseTimeout: 5 * time.Second,
 	}, MessageRequest{
 		Model: "claude-sonnet-4-20250514",
 		Messages: []Message{

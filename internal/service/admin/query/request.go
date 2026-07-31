@@ -28,17 +28,21 @@ type RequestStore interface {
 
 // RequestListParams 是分页/过滤/排序列出请求记录的入参；指针/空串/nil 表示该维度不过滤。
 type RequestListParams struct {
-	UserID    *int64
-	APIKeyID  *int64
-	RequestID string
-	Status    string
-	Model     string
-	From      *time.Time
-	To        *time.Time
-	SortField string
-	SortDesc  bool
-	Limit     int32
-	Offset    int32
+	UserID        *int64
+	APIKeyID      *int64
+	RequestID     string
+	Status        string
+	Model         string
+	RouteID       *int64
+	ChannelID     *int64
+	AttemptID     *int64
+	ScoringSample string
+	From          *time.Time
+	To            *time.Time
+	SortField     string
+	SortDesc      bool
+	Limit         int32
+	Offset        int32
 }
 
 // RequestSummary 是请求列表项（不含 internal_error_detail）。
@@ -60,7 +64,7 @@ type RequestSummary struct {
 	ErrorCode           *string
 	ErrorMessage        *string
 	DeliveryStatus      string
-	ResponseStartedAt   *time.Time
+	GatewayFirstTokenAt *time.Time
 	ResponseCompletedAt *time.Time
 	StartedAt           time.Time
 	CompletedAt         *time.Time
@@ -122,11 +126,15 @@ type RequestListItem struct {
 	APIKeyPlaintext *string
 
 	// 线路（请求级快照 route_id → routes.name；历史行回落当前 Key 绑定）/ 倍率 / 策略 / 最终命中渠道 / 经过的渠道链。
-	RouteName        *string
-	RoutePriceRatio  *string
-	RouteMode        *string
-	FinalChannelName *string
-	ChannelChain     string
+	RouteName           *string
+	RouteID             *int64
+	RoutePriceRatio     *string
+	RouteMode           *string
+	FinalChannelName    *string
+	ChannelChain        string
+	ScoringAttemptID    *int64
+	ScoringDimensions   []string
+	ScoringErrorFailure bool
 
 	// 模型元信息（按请求模型 id 关联）。
 	ModelDisplayName *string
@@ -138,9 +146,20 @@ type RequestListItem struct {
 	ClientIP              *string
 
 	// 时延（由时间戳 + output tokens 计算；缺时间戳时为 nil）。
-	LatencyMs *int64   // 总耗时（completed - started）
-	TtftMs    *int64   // 首字（response_started - started）
-	TPS       *float64 // 输出速率（output / (completed - response_started)）
+	LatencyMs     *int64   // 总耗时（completed - started）
+	GatewayTTFTMs *int64   // Gateway 首字（gateway_first_token_at - started_at）
+	TPS           *float64 // 输出速率（output / (completed - gateway_first_token_at)）
+
+	// Sticky 摘要（无 routing_decision_traces 时 sticky_key_present 为 nil，列表显示「—」）。
+	StickyKeyPresent         *bool
+	StickyAction             *string
+	StickyReason             *string
+	StickyBeforeChannelID    *int64
+	StickyAfterChannelID     *int64
+	StickyPinned             *bool
+	StickyPinnedNonPreferred *bool
+	StickyBeforeChannelName  *string
+	StickyAfterChannelName   *string
 }
 
 // Attempt 是一次上游 channel 尝试事实；InternalErrorDetail 仅在 includeInternal 时填充。
@@ -158,21 +177,25 @@ type Attempt struct {
 	FinishClass           *string
 	Status                string
 	// FaultParty 归因：upstream / client / platform（由 DB 生成列派生；succeeded/running 为 nil）。
-	FaultParty          *string
-	UpstreamStatusCode  *int32
-	UpstreamRequestID   *string
-	ErrorCode           *string
-	ErrorMessage        *string
-	InternalErrorDetail *string
-	ResponseStartedAt   *time.Time
+	FaultParty           *string
+	UpstreamStatusCode   *int32
+	UpstreamRequestID    *string
+	ErrorCode            *string
+	ErrorMessage         *string
+	InternalErrorDetail  *string
+	GatewayFirstTokenAt  *time.Time
+	UpstreamTimeoutPhase *string
 	// UpstreamTotalMs 只由 upstream_completed_at - upstream_started_at 派生。
 	UpstreamTotalMs *int64
 	// UpstreamTTFTMs 只对流式请求由 upstream_first_token_at - upstream_started_at 派生。
-	UpstreamTTFTMs     *int64
-	FinalUsageReceived bool
-	StartedAt          time.Time
-	CompletedAt        *time.Time
-	CreatedAt          time.Time
+	UpstreamTTFTMs      *int64
+	TTFTScoringSample   bool
+	ErrorScoringSample  bool
+	ErrorScoringFailure bool
+	FinalUsageReceived  bool
+	StartedAt           time.Time
+	CompletedAt         *time.Time
+	CreatedAt           time.Time
 }
 
 // RequestDetail 是请求详情聚合：请求事实 + 上游尝试链 + usage + 账本流水 + 计费异常。
@@ -180,6 +203,9 @@ type Attempt struct {
 type RequestDetail struct {
 	RequestSummary
 	InternalErrorDetail *string
+	LatencyMs           *int64
+	GatewayTTFTMs       *int64
+	TPS                 *float64
 	// 批二富化：线路快照 id / 归一推理强度 + 原始预算 / 客户端 IP。
 	RouteID               *int64
 	ReasoningEffort       *string
@@ -276,30 +302,38 @@ func NewRequestService(store RequestStore) *RequestService {
 // List 按 params 过滤分页倒序列出请求记录（富化项），并返回过滤后的总数。
 func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]RequestListItem, int64, error) {
 	rows, err := s.store.ListRequestRecordsPage(ctx, sqlc.ListRequestRecordsPageParams{
-		UserID:     int8Narg(params.UserID),
-		ApiKeyID:   int8Narg(params.APIKeyID),
-		RequestID:  textNarg(params.RequestID),
-		Status:     textNarg(params.Status),
-		Model:      textNarg(params.Model),
-		FromTime:   tsNarg(params.From),
-		ToTime:     tsNarg(params.To),
-		SortField:  textNarg(params.SortField),
-		SortDesc:   boolNarg(params.SortDesc),
-		PageLimit:  params.Limit,
-		PageOffset: params.Offset,
+		UserID:        int8Narg(params.UserID),
+		ApiKeyID:      int8Narg(params.APIKeyID),
+		RequestID:     textNarg(params.RequestID),
+		Status:        textNarg(params.Status),
+		Model:         textNarg(params.Model),
+		RouteID:       int8Narg(params.RouteID),
+		ChannelID:     int8Narg(params.ChannelID),
+		AttemptID:     int8Narg(params.AttemptID),
+		ScoringSample: textNarg(params.ScoringSample),
+		FromTime:      tsNarg(params.From),
+		ToTime:        tsNarg(params.To),
+		SortField:     textNarg(params.SortField),
+		SortDesc:      boolNarg(params.SortDesc),
+		PageLimit:     params.Limit,
+		PageOffset:    params.Offset,
 	})
 	if err != nil {
 		return nil, 0, storeFailed(err, "list request records")
 	}
 
 	total, err := s.store.CountRequestRecords(ctx, sqlc.CountRequestRecordsParams{
-		UserID:    int8Narg(params.UserID),
-		ApiKeyID:  int8Narg(params.APIKeyID),
-		RequestID: textNarg(params.RequestID),
-		Status:    textNarg(params.Status),
-		Model:     textNarg(params.Model),
-		FromTime:  tsNarg(params.From),
-		ToTime:    tsNarg(params.To),
+		UserID:        int8Narg(params.UserID),
+		ApiKeyID:      int8Narg(params.APIKeyID),
+		RequestID:     textNarg(params.RequestID),
+		Status:        textNarg(params.Status),
+		Model:         textNarg(params.Model),
+		RouteID:       int8Narg(params.RouteID),
+		ChannelID:     int8Narg(params.ChannelID),
+		AttemptID:     int8Narg(params.AttemptID),
+		ScoringSample: textNarg(params.ScoringSample),
+		FromTime:      tsNarg(params.From),
+		ToTime:        tsNarg(params.To),
 	})
 	if err != nil {
 		return nil, 0, storeFailed(err, "count request records")
@@ -357,6 +391,17 @@ func (s *RequestService) Get(ctx context.Context, requestID string, includeInter
 	default:
 		return RequestDetail{}, storeFailed(err, "get usage record")
 	}
+	outputTokens := int64(0)
+	if detail.Usage != nil {
+		outputTokens = detail.Usage.OutputTokensTotal
+	}
+	detail.LatencyMs, detail.GatewayTTFTMs, detail.TPS = deriveRequestTiming(
+		record.Stream,
+		record.StartedAt.Time,
+		timePtr(record.CompletedAt),
+		timePtr(record.GatewayFirstTokenAt),
+		outputTokens,
+	)
 
 	// 费用明细快照（成本/售价）：缺快照（如失败请求）属正常，置 nil。
 	costRow, err := s.store.GetCostSnapshotByRequest(ctx, record.ID)
@@ -439,7 +484,7 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 			ErrorCode:           textPtr(r.ErrorCode),
 			ErrorMessage:        textPtr(r.ErrorMessage),
 			DeliveryStatus:      r.DeliveryStatus,
-			ResponseStartedAt:   timePtr(r.ResponseStartedAt),
+			GatewayFirstTokenAt: timePtr(r.GatewayFirstTokenAt),
 			ResponseCompletedAt: timePtr(r.ResponseCompletedAt),
 			StartedAt:           r.StartedAt.Time,
 			CompletedAt:         timePtr(r.CompletedAt),
@@ -487,11 +532,14 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 		APIKeyPrefix:    textPtr(r.ApiKeyPrefix),
 		APIKeyPlaintext: textPtr(r.ApiKeyPlaintext),
 
-		RouteName:        textPtr(r.RouteName),
-		RoutePriceRatio:  opsutil.NumericStringPtr(r.RoutePriceRatio),
-		RouteMode:        textPtr(r.RouteMode),
-		FinalChannelName: textPtr(r.FinalChannelName),
-		ChannelChain:     r.ChannelChain,
+		RouteName:           textPtr(r.RouteName),
+		RouteID:             int8Ptr(r.RouteID),
+		RoutePriceRatio:     opsutil.NumericStringPtr(r.RoutePriceRatio),
+		RouteMode:           textPtr(r.RouteMode),
+		FinalChannelName:    textPtr(r.FinalChannelName),
+		ChannelChain:        r.ChannelChain,
+		ScoringDimensions:   r.ScoringDimensions,
+		ScoringErrorFailure: r.ScoringErrorFailure,
 
 		ModelDisplayName: textPtr(r.ModelDisplayName),
 		ModelOwnedBy:     textPtr(r.ModelOwnedBy),
@@ -499,32 +547,62 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 		ReasoningEffort:       textPtr(r.ReasoningEffort),
 		ReasoningBudgetTokens: int4Ptr(r.ReasoningBudgetTokens),
 		ClientIP:              textPtr(r.ClientIp),
+
+		StickyKeyPresent:         boolPtr(r.StickyKeyPresent),
+		StickyAction:             textPtr(r.StickyAction),
+		StickyReason:             textPtr(r.StickyReason),
+		StickyBeforeChannelID:    int8Ptr(r.StickyBeforeChannelID),
+		StickyAfterChannelID:     int8Ptr(r.StickyAfterChannelID),
+		StickyPinned:             stickyFlagPtr(r.StickyPinned),
+		StickyPinnedNonPreferred: stickyFlagPtr(r.StickyPinnedNonPreferred),
+		StickyBeforeChannelName:  textPtr(r.StickyBeforeChannelName),
+		StickyAfterChannelName:   textPtr(r.StickyAfterChannelName),
 	}
 
 	// 时延计算：均由已返回的时间戳派生。started_at 恒有值。
-	started := r.StartedAt.Time
-	if r.CompletedAt.Valid {
-		ms := r.CompletedAt.Time.Sub(started).Milliseconds()
-		if ms >= 0 {
-			item.LatencyMs = &ms
-		}
+	if r.ScoringAttemptID > 0 {
+		scoringAttemptID := r.ScoringAttemptID
+		item.ScoringAttemptID = &scoringAttemptID
 	}
-	if r.Stream && r.ResponseStartedAt.Valid {
-		ttft := r.ResponseStartedAt.Time.Sub(started).Milliseconds()
-		if ttft >= 0 {
-			item.TtftMs = &ttft
-		}
-	}
-	// TPS = 输出 token / 生成时长（completed - response_started）。
-	if r.Stream && r.CompletedAt.Valid && r.ResponseStartedAt.Valid && r.OutputTokensTotal > 0 {
-		genSec := r.CompletedAt.Time.Sub(r.ResponseStartedAt.Time).Seconds()
-		if genSec > 0 {
-			tps := float64(r.OutputTokensTotal) / genSec
-			item.TPS = &tps
-		}
-	}
+	item.LatencyMs, item.GatewayTTFTMs, item.TPS = deriveRequestTiming(
+		r.Stream,
+		r.StartedAt.Time,
+		timePtr(r.CompletedAt),
+		timePtr(r.GatewayFirstTokenAt),
+		r.OutputTokensTotal,
+	)
 
 	return item
+}
+
+func deriveRequestTiming(
+	stream bool,
+	started time.Time,
+	completed *time.Time,
+	gatewayFirstToken *time.Time,
+	outputTokens int64,
+) (latencyMs *int64, gatewayTTFTMs *int64, tps *float64) {
+	if completed != nil {
+		ms := completed.Sub(started).Milliseconds()
+		if ms >= 0 {
+			latencyMs = &ms
+		}
+	}
+	if !stream || gatewayFirstToken == nil {
+		return latencyMs, nil, nil
+	}
+	ttft := gatewayFirstToken.Sub(started).Milliseconds()
+	if ttft >= 0 {
+		gatewayTTFTMs = &ttft
+	}
+	if completed != nil && outputTokens > 0 {
+		genSec := completed.Sub(*gatewayFirstToken).Seconds()
+		if genSec > 0 {
+			value := float64(outputTokens) / genSec
+			tps = &value
+		}
+	}
+	return latencyMs, gatewayTTFTMs, tps
 }
 
 func summaryFromRecord(r sqlc.RequestRecord) RequestSummary {
@@ -546,7 +624,7 @@ func summaryFromRecord(r sqlc.RequestRecord) RequestSummary {
 		ErrorCode:           textPtr(r.ErrorCode),
 		ErrorMessage:        textPtr(r.ErrorMessage),
 		DeliveryStatus:      r.DeliveryStatus,
-		ResponseStartedAt:   timePtr(r.ResponseStartedAt),
+		GatewayFirstTokenAt: timePtr(r.GatewayFirstTokenAt),
 		ResponseCompletedAt: timePtr(r.ResponseCompletedAt),
 		StartedAt:           r.StartedAt.Time,
 		CompletedAt:         timePtr(r.CompletedAt),
@@ -574,7 +652,11 @@ func toAttempt(a sqlc.RequestAttempt, includeInternal, stream bool) Attempt {
 		UpstreamRequestID:     textPtr(a.UpstreamRequestID),
 		ErrorCode:             textPtr(a.ErrorCode),
 		ErrorMessage:          textPtr(a.ErrorMessage),
-		ResponseStartedAt:     timePtr(a.ResponseStartedAt),
+		GatewayFirstTokenAt:   timePtr(a.GatewayFirstTokenAt),
+		UpstreamTimeoutPhase:  textPtr(a.UpstreamTimeoutPhase),
+		TTFTScoringSample:     a.TtftScoringSample,
+		ErrorScoringSample:    a.ErrorScoringSample,
+		ErrorScoringFailure:   a.ErrorScoringFailure,
 		FinalUsageReceived:    a.FinalUsageReceived,
 		StartedAt:             a.StartedAt.Time,
 		CompletedAt:           timePtr(a.CompletedAt),

@@ -27,8 +27,8 @@ type MetricsRecorder interface {
 	IncZeroPriceServed(provider string, channel string, model string)
 	// IncRoutingSkip 记录候选在写 attempt 前被跳过（breaker/concurrency/ratelimit；大 uncache 缺口可观测）。
 	IncRoutingSkip(reason string)
-	// ObserveRoutingHeadWait 记录队首 TPM/并发短等实际等待时长（P1）。
-	ObserveRoutingHeadWait(duration time.Duration)
+	// ObserveRoutingCapacityWait 记录全池并发短等实际等待时长（§9.4）。
+	ObserveRoutingCapacityWait(duration time.Duration)
 }
 
 type routingBalanceMetricsRecorder interface {
@@ -139,7 +139,7 @@ func (l *RequestLifecycle) recordRoutingPlan(in RoutingDecisionTraceInput) {
 			readResult = "unknown"
 		}
 		m.IncRoutingCapacityRead(readResult)
-		m.SetBalancedFinalWeight(MetricsID(in.RouteID), MetricsID(candidate.Route.Channel.ID), candidate.Balance.Weight)
+		m.SetBalancedFinalWeight(MetricsID(in.RouteID), MetricsID(candidate.Route.Channel.ID), candidate.Balance.FinalScore)
 	}
 	for _, excluded := range in.Plan.Excluded {
 		m.SetBalancedFinalWeight(MetricsID(in.RouteID), MetricsID(excluded.ChannelID), 0)
@@ -186,14 +186,14 @@ func routingLoadSkew(candidates []Candidate) float64 {
 	}
 	total := 0.0
 	for _, candidate := range candidates {
-		total += candidate.Balance.Weight
+		total += candidate.Balance.FinalScore
 	}
 	if total <= 0 {
 		return 0
 	}
 	minShare, maxShare := 1.0, 0.0
 	for _, candidate := range candidates {
-		share := candidate.Balance.Weight / total
+		share := candidate.Balance.FinalScore / total
 		if share < minShare {
 			minShare = share
 		}

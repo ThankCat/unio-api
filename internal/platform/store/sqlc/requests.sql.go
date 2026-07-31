@@ -19,18 +19,39 @@ WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
   AND ($3::text IS NULL OR request_id = $3::text)
   AND ($4::text IS NULL OR status = $4::text)
   AND ($5::text IS NULL OR requested_model_id ILIKE '%' || $5::text || '%')
-  AND ($6::timestamptz IS NULL OR created_at >= $6::timestamptz)
-  AND ($7::timestamptz IS NULL OR created_at < $7::timestamptz)
+  AND ($6::bigint IS NULL OR route_id = $6::bigint)
+  AND (
+      ($7::bigint IS NULL AND $8::bigint IS NULL AND $9::text IS NULL)
+      OR EXISTS (
+          SELECT 1
+          FROM request_attempts a
+          WHERE a.request_record_id = request_records.id
+            AND ($7::bigint IS NULL OR a.channel_id = $7::bigint)
+            AND ($8::bigint IS NULL OR a.id = $8::bigint)
+            AND (
+                $9::text IS NULL
+                OR ($9::text = 'ttft' AND a.ttft_scoring_sample)
+                OR ($9::text = 'error' AND a.error_scoring_sample)
+                OR ($9::text = 'any' AND (a.ttft_scoring_sample OR a.error_scoring_sample))
+            )
+      )
+  )
+  AND ($10::timestamptz IS NULL OR created_at >= $10::timestamptz)
+  AND ($11::timestamptz IS NULL OR created_at < $11::timestamptz)
 `
 
 type CountRequestRecordsParams struct {
-	UserID    pgtype.Int8
-	ApiKeyID  pgtype.Int8
-	RequestID pgtype.Text
-	Status    pgtype.Text
-	Model     pgtype.Text
-	FromTime  pgtype.Timestamptz
-	ToTime    pgtype.Timestamptz
+	UserID        pgtype.Int8
+	ApiKeyID      pgtype.Int8
+	RequestID     pgtype.Text
+	Status        pgtype.Text
+	Model         pgtype.Text
+	RouteID       pgtype.Int8
+	ChannelID     pgtype.Int8
+	AttemptID     pgtype.Int8
+	ScoringSample pgtype.Text
+	FromTime      pgtype.Timestamptz
+	ToTime        pgtype.Timestamptz
 }
 
 // CountRequestRecords 返回与 ListRequestRecordsPage 相同过滤条件下的总条数。
@@ -41,6 +62,10 @@ func (q *Queries) CountRequestRecords(ctx context.Context, arg CountRequestRecor
 		arg.RequestID,
 		arg.Status,
 		arg.Model,
+		arg.RouteID,
+		arg.ChannelID,
+		arg.AttemptID,
+		arg.ScoringSample,
 		arg.FromTime,
 		arg.ToTime,
 	)
@@ -69,7 +94,7 @@ SELECT
     error_message,
     internal_error_detail,
     delivery_status,
-    response_started_at,
+    gateway_first_token_at,
     response_completed_at,
     started_at,
     completed_at,
@@ -107,7 +132,7 @@ func (q *Queries) GetRequestRecordByRequestID(ctx context.Context, requestID str
 		&i.ErrorMessage,
 		&i.InternalErrorDetail,
 		&i.DeliveryStatus,
-		&i.ResponseStartedAt,
+		&i.GatewayFirstTokenAt,
 		&i.ResponseCompletedAt,
 		&i.StartedAt,
 		&i.CompletedAt,
@@ -140,7 +165,7 @@ SELECT
     r.error_code,
     r.error_message,
     r.delivery_status,
-    r.response_started_at,
+    r.gateway_first_token_at,
     r.response_completed_at,
     r.started_at,
     r.completed_at,
@@ -209,7 +234,30 @@ SELECT
         FROM request_attempts a
         JOIN channels ch ON ch.id = a.channel_id
         WHERE a.request_record_id = r.id
-    ), '')::text AS channel_chain
+    ), '')::text AS channel_chain,
+    r.route_id,
+    COALESCE(scoring_attempt.id, 0)::bigint AS scoring_attempt_id,
+    COALESCE(scoring_attempt.dimensions, ARRAY[]::text[])::text[] AS scoring_dimensions,
+    COALESCE(scoring_attempt.error_scoring_failure, false)::boolean AS scoring_error_failure,
+    -- Sticky 摘要：无 routing_decision_traces 时整组为 NULL（列表显示「—」）。
+    -- pinned / pinned_non_preferred 用 text 编码，避免 sqlc 对 JSON 布尔产出 interface{}。
+    rdt.sticky_key_present,
+    rdt.sticky_action,
+    rdt.sticky_reason,
+    rdt.sticky_before_channel_id,
+    rdt.sticky_after_channel_id,
+    CASE
+        WHEN rdt.id IS NULL THEN ''
+        WHEN (rdt.trace_payload->'sticky'->>'pinned') = 'true' THEN 'true'
+        ELSE 'false'
+    END AS sticky_pinned,
+    CASE
+        WHEN rdt.id IS NULL THEN ''
+        WHEN (rdt.trace_payload->'sticky'->>'pinned_non_preferred') = 'true' THEN 'true'
+        ELSE 'false'
+    END AS sticky_pinned_non_preferred,
+    sbc.name AS sticky_before_channel_name,
+    sac.name AS sticky_after_channel_name
 FROM request_records r
 LEFT JOIN usage_records ur ON ur.request_record_id = r.id
 LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
@@ -218,40 +266,80 @@ LEFT JOIN api_keys ak ON ak.id = r.api_key_id
 LEFT JOIN routes rt ON rt.id = COALESCE(r.route_id, ak.route_id)
 LEFT JOIN models m ON m.model_id = r.requested_model_id
 LEFT JOIN channels fc ON fc.id = r.final_channel_id
-WHERE ($1::bigint IS NULL OR r.user_id = $1::bigint)
-  AND ($2::bigint IS NULL OR r.api_key_id = $2::bigint)
-  AND ($3::text IS NULL OR r.request_id = $3::text)
-  AND ($4::text IS NULL OR r.status = $4::text)
-  AND ($5::text IS NULL OR r.requested_model_id ILIKE '%' || $5::text || '%')
-  AND ($6::timestamptz IS NULL OR r.created_at >= $6::timestamptz)
-  AND ($7::timestamptz IS NULL OR r.created_at < $7::timestamptz)
+LEFT JOIN routing_decision_traces rdt ON rdt.request_record_id = r.id
+LEFT JOIN channels sbc ON sbc.id = rdt.sticky_before_channel_id
+LEFT JOIN channels sac ON sac.id = rdt.sticky_after_channel_id
+LEFT JOIN LATERAL (
+    SELECT
+        a.id,
+        ARRAY_REMOVE(ARRAY[
+            CASE WHEN a.ttft_scoring_sample THEN 'ttft'::text END,
+            CASE WHEN a.error_scoring_sample THEN 'error'::text END
+        ], NULL)::text[] AS dimensions,
+        a.error_scoring_failure
+    FROM request_attempts a
+    WHERE a.request_record_id = r.id
+      AND ($1::bigint IS NULL OR a.channel_id = $1::bigint)
+      AND ($2::bigint IS NULL OR a.id = $2::bigint)
+      AND (
+          $3::text IS NULL
+          OR ($3::text = 'ttft' AND a.ttft_scoring_sample)
+          OR ($3::text = 'error' AND a.error_scoring_sample)
+          OR ($3::text = 'any' AND (a.ttft_scoring_sample OR a.error_scoring_sample))
+      )
+      AND (
+          $1::bigint IS NOT NULL
+          OR $2::bigint IS NOT NULL
+          OR $3::text IS NOT NULL
+          OR a.ttft_scoring_sample
+          OR a.error_scoring_sample
+      )
+    ORDER BY a.attempt_index, a.id
+    LIMIT 1
+) scoring_attempt ON true
+WHERE ($4::bigint IS NULL OR r.user_id = $4::bigint)
+  AND ($5::bigint IS NULL OR r.api_key_id = $5::bigint)
+  AND ($6::text IS NULL OR r.request_id = $6::text)
+  AND ($7::text IS NULL OR r.status = $7::text)
+  AND ($8::text IS NULL OR r.requested_model_id ILIKE '%' || $8::text || '%')
+  AND ($9::bigint IS NULL OR r.route_id = $9::bigint)
+  AND (
+      ($1::bigint IS NULL AND $2::bigint IS NULL AND $3::text IS NULL)
+      OR scoring_attempt.id IS NOT NULL
+  )
+  AND ($10::timestamptz IS NULL OR r.created_at >= $10::timestamptz)
+  AND ($11::timestamptz IS NULL OR r.created_at < $11::timestamptz)
 ORDER BY
-  CASE WHEN COALESCE($8::text, 'created_at') IN ('', 'created_at') AND COALESCE($9::bool, true) THEN r.created_at END DESC NULLS LAST,
-  CASE WHEN COALESCE($8::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($9::bool, true) THEN r.created_at END ASC NULLS LAST,
-  CASE WHEN $8::text = 'status' AND COALESCE($9::bool, false) THEN r.status END DESC NULLS LAST,
-  CASE WHEN $8::text = 'status' AND NOT COALESCE($9::bool, false) THEN r.status END ASC NULLS LAST,
-  CASE WHEN $8::text = 'user_id' AND COALESCE($9::bool, false) THEN r.user_id END DESC NULLS LAST,
-  CASE WHEN $8::text = 'user_id' AND NOT COALESCE($9::bool, false) THEN r.user_id END ASC NULLS LAST,
-  CASE WHEN $8::text = 'model' AND COALESCE($9::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
-  CASE WHEN $8::text = 'model' AND NOT COALESCE($9::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
-  CASE WHEN $8::text = 'stream' AND COALESCE($9::bool, false) THEN r.stream END DESC NULLS LAST,
-  CASE WHEN $8::text = 'stream' AND NOT COALESCE($9::bool, false) THEN r.stream END ASC NULLS LAST,
+  CASE WHEN COALESCE($12::text, 'created_at') IN ('', 'created_at') AND COALESCE($13::bool, true) THEN r.created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE($12::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($13::bool, true) THEN r.created_at END ASC NULLS LAST,
+  CASE WHEN $12::text = 'status' AND COALESCE($13::bool, false) THEN r.status END DESC NULLS LAST,
+  CASE WHEN $12::text = 'status' AND NOT COALESCE($13::bool, false) THEN r.status END ASC NULLS LAST,
+  CASE WHEN $12::text = 'user_id' AND COALESCE($13::bool, false) THEN r.user_id END DESC NULLS LAST,
+  CASE WHEN $12::text = 'user_id' AND NOT COALESCE($13::bool, false) THEN r.user_id END ASC NULLS LAST,
+  CASE WHEN $12::text = 'model' AND COALESCE($13::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
+  CASE WHEN $12::text = 'model' AND NOT COALESCE($13::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
+  CASE WHEN $12::text = 'stream' AND COALESCE($13::bool, false) THEN r.stream END DESC NULLS LAST,
+  CASE WHEN $12::text = 'stream' AND NOT COALESCE($13::bool, false) THEN r.stream END ASC NULLS LAST,
   r.id DESC
-LIMIT $11 OFFSET $10
+LIMIT $15 OFFSET $14
 `
 
 type ListRequestRecordsPageParams struct {
-	UserID     pgtype.Int8
-	ApiKeyID   pgtype.Int8
-	RequestID  pgtype.Text
-	Status     pgtype.Text
-	Model      pgtype.Text
-	FromTime   pgtype.Timestamptz
-	ToTime     pgtype.Timestamptz
-	SortField  pgtype.Text
-	SortDesc   pgtype.Bool
-	PageOffset int32
-	PageLimit  int32
+	ChannelID     pgtype.Int8
+	AttemptID     pgtype.Int8
+	ScoringSample pgtype.Text
+	UserID        pgtype.Int8
+	ApiKeyID      pgtype.Int8
+	RequestID     pgtype.Text
+	Status        pgtype.Text
+	Model         pgtype.Text
+	RouteID       pgtype.Int8
+	FromTime      pgtype.Timestamptz
+	ToTime        pgtype.Timestamptz
+	SortField     pgtype.Text
+	SortDesc      pgtype.Bool
+	PageOffset    int32
+	PageLimit     int32
 }
 
 type ListRequestRecordsPageRow struct {
@@ -272,7 +360,7 @@ type ListRequestRecordsPageRow struct {
 	ErrorCode                    pgtype.Text
 	ErrorMessage                 pgtype.Text
 	DeliveryStatus               string
-	ResponseStartedAt            pgtype.Timestamptz
+	GatewayFirstTokenAt          pgtype.Timestamptz
 	ResponseCompletedAt          pgtype.Timestamptz
 	StartedAt                    pgtype.Timestamptz
 	CompletedAt                  pgtype.Timestamptz
@@ -324,23 +412,40 @@ type ListRequestRecordsPageRow struct {
 	ModelOwnedBy                 pgtype.Text
 	FinalChannelName             pgtype.Text
 	ChannelChain                 string
+	RouteID                      pgtype.Int8
+	ScoringAttemptID             int64
+	ScoringDimensions            []string
+	ScoringErrorFailure          bool
+	StickyKeyPresent             pgtype.Bool
+	StickyAction                 pgtype.Text
+	StickyReason                 pgtype.Text
+	StickyBeforeChannelID        pgtype.Int8
+	StickyAfterChannelID         pgtype.Int8
+	StickyPinned                 string
+	StickyPinnedNonPreferred     string
+	StickyBeforeChannelName      pgtype.Text
+	StickyAfterChannelName       pgtype.Text
 }
 
 // ListRequestRecordsPage 供 admin 请求记录列表（富化版）按过滤条件分页倒序列出。
 // 关联（均 1:1 或标量子查询，不放大行数）：usage_records（token）、cost_snapshots（平台成本 + 分项）、
 // ledger_entries 净扣费（用户实际扣费）、api_keys→routes（线路名，当前绑定，快照见批二）、
-// final channel 名、经过的渠道链（attempts 按序 string_agg）。
+// final channel 名、经过的渠道链（attempts 按序 string_agg）、routing_decision_traces（sticky 摘要）。
 // 列表故意不 SELECT internal_error_detail（SQL 层脱敏，详情上游源站按 ?include_internal 返回）。
 // latency/ttft/tps 由 Go 侧用时间戳 + output_tokens 计算，不在此列。
 // 线路名优先用请求级快照 route_id（Key 换绑不影响历史）；历史行 route_id 为 NULL 时回落到 Key 当前绑定。
 // 模型元信息（显示名 / owned_by）按请求模型 id 关联；请求模型不在库时为 NULL。
 func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRecordsPageParams) ([]ListRequestRecordsPageRow, error) {
 	rows, err := q.db.Query(ctx, listRequestRecordsPage,
+		arg.ChannelID,
+		arg.AttemptID,
+		arg.ScoringSample,
 		arg.UserID,
 		arg.ApiKeyID,
 		arg.RequestID,
 		arg.Status,
 		arg.Model,
+		arg.RouteID,
 		arg.FromTime,
 		arg.ToTime,
 		arg.SortField,
@@ -373,7 +478,7 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.ErrorCode,
 			&i.ErrorMessage,
 			&i.DeliveryStatus,
-			&i.ResponseStartedAt,
+			&i.GatewayFirstTokenAt,
 			&i.ResponseCompletedAt,
 			&i.StartedAt,
 			&i.CompletedAt,
@@ -425,6 +530,19 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.ModelOwnedBy,
 			&i.FinalChannelName,
 			&i.ChannelChain,
+			&i.RouteID,
+			&i.ScoringAttemptID,
+			&i.ScoringDimensions,
+			&i.ScoringErrorFailure,
+			&i.StickyKeyPresent,
+			&i.StickyAction,
+			&i.StickyReason,
+			&i.StickyBeforeChannelID,
+			&i.StickyAfterChannelID,
+			&i.StickyPinned,
+			&i.StickyPinnedNonPreferred,
+			&i.StickyBeforeChannelName,
+			&i.StickyAfterChannelName,
 		); err != nil {
 			return nil, err
 		}

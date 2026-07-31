@@ -15,7 +15,7 @@ func TestRoutingMarginGuardAcceptsSafeConfiguration(t *testing.T) {
 
 	suffix := time.Now().UnixNano()
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("margin-safe-%d", suffix), "enabled")
-	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("margin-safe-channel-%d", suffix), "enabled", 1, nil)
+	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("margin-safe-channel-%d", suffix), "enabled", 10, nil)
 	modelID := insertModel(t, ctx, tx, fmt.Sprintf("openai/margin-safe-%d", suffix), "openai", "enabled")
 	insertChannelModel(t, ctx, tx, channelID, modelID, "margin-safe", "enabled")
 	now := time.Now().UTC()
@@ -34,7 +34,7 @@ func TestRoutingMarginGuardRejectsNegativeComponent(t *testing.T) {
 
 	suffix := time.Now().UnixNano()
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("margin-negative-%d", suffix), "enabled")
-	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("margin-negative-channel-%d", suffix), "enabled", 1, nil)
+	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("margin-negative-channel-%d", suffix), "enabled", 10, nil)
 	modelID := insertModel(t, ctx, tx, fmt.Sprintf("openai/margin-negative-%d", suffix), "openai", "enabled")
 	insertChannelModel(t, ctx, tx, channelID, modelID, "margin-negative", "enabled")
 	now := time.Now().UTC()

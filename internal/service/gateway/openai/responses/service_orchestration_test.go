@@ -3,6 +3,7 @@ package responses
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -154,11 +155,13 @@ type fakeRequestLog struct {
 	createAttempts      []requestlog.CreateAttemptParams
 	markFailed          []requestlog.MarkRequestFailedParams
 	markAttemptFailed   []requestlog.MarkAttemptFailedParams
+	deliveryStarted     []int64
 	deliveryCompleted   []int64
 	deliveryInterrupted []int64
 	capabilityResults   []string
 	nextRequestID       int64
 	nextAttemptID       int64
+	gatewayFirstTokens  atomic.Int64
 }
 
 func (s *fakeRequestLog) SetCapabilityCheckResult(_ context.Context, _ int64, result string) error {
@@ -190,8 +193,15 @@ func (s *fakeRequestLog) MarkRequestRunning(_ context.Context, id int64) (reques
 	return requestlog.RequestRecord{ID: id, Status: requestlog.RequestStatusRunning}, nil
 }
 
-func (s *fakeRequestLog) MarkRequestResponseStarted(_ context.Context, params requestlog.MarkResponseStartedParams) (requestlog.RequestRecord, error) {
-	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusRunning, ResponseStartedAt: &params.ResponseStartedAt}, nil
+// MarkRequestDeliveryStarted 只推进 delivery 状态；Gateway 首字是独立事实。
+func (s *fakeRequestLog) MarkRequestDeliveryStarted(_ context.Context, id int64) (requestlog.RequestRecord, error) {
+	s.deliveryStarted = append(s.deliveryStarted, id)
+	return requestlog.RequestRecord{ID: id, DeliveryStatus: requestlog.DeliveryStatusInProgress}, nil
+}
+
+func (s *fakeRequestLog) MarkRequestGatewayFirstToken(_ context.Context, params requestlog.MarkGatewayFirstTokenParams) (requestlog.RequestRecord, error) {
+	s.gatewayFirstTokens.Add(1)
+	return requestlog.RequestRecord{ID: params.ID, Status: requestlog.RequestStatusRunning, GatewayFirstTokenAt: &params.GatewayFirstTokenAt}, nil
 }
 
 func (s *fakeRequestLog) MarkRequestDeliveryCompleted(_ context.Context, id int64, completedAt time.Time) (requestlog.RequestRecord, error) {
@@ -248,8 +258,9 @@ func (s *fakeRequestLog) MarkAttemptSucceeded(_ context.Context, params requestl
 	return requestlog.AttemptRecord{ID: params.ID, Status: requestlog.AttemptStatusSucceeded}, nil
 }
 
-func (s *fakeRequestLog) MarkAttemptResponseStarted(_ context.Context, params requestlog.MarkAttemptResponseStartedParams) (requestlog.AttemptRecord, error) {
-	return requestlog.AttemptRecord{ID: params.ID, Status: requestlog.AttemptStatusRunning, ResponseStartedAt: &params.ResponseStartedAt}, nil
+func (s *fakeRequestLog) MarkAttemptGatewayFirstToken(_ context.Context, params requestlog.MarkAttemptGatewayFirstTokenParams) (requestlog.AttemptRecord, error) {
+	s.gatewayFirstTokens.Add(1)
+	return requestlog.AttemptRecord{ID: params.ID, Status: requestlog.AttemptStatusRunning, GatewayFirstTokenAt: &params.GatewayFirstTokenAt}, nil
 }
 
 func (s *fakeRequestLog) MarkAttemptFailed(_ context.Context, params requestlog.MarkAttemptFailedParams) (requestlog.AttemptRecord, error) {
@@ -310,10 +321,10 @@ func candidate(adapterKey string, channelID int64, upstreamModel string) routing
 		ProviderID: 9000 + channelID,
 		AdapterKey: adapterKey,
 		Channel: channel.Runtime{
-			ID:      channelID,
-			Origin:  "https://example.test",
-			APIKey:  "secret",
-			Timeout: 30 * time.Second,
+			ID:              channelID,
+			Origin:          "https://example.test",
+			APIKey:          "secret",
+			ResponseTimeout: 30 * time.Second,
 		},
 		UpstreamModel: upstreamModel,
 	}
@@ -488,8 +499,8 @@ func TestCreateResponse_HappyPath(t *testing.T) {
 	if settlement.params[0].ResponseModelID != "unio-deepseek" {
 		t.Fatalf("expected settlement response model unio-deepseek, got %q", settlement.params[0].ResponseModelID)
 	}
-	if settlement.params[0].ResponseStartedAt != nil {
-		t.Fatalf("non-stream response_started_at = %v, want nil", settlement.params[0].ResponseStartedAt)
+	if settlement.params[0].GatewayFirstTokenAt != nil {
+		t.Fatalf("non-stream gateway_first_token_at = %v, want nil", settlement.params[0].GatewayFirstTokenAt)
 	}
 
 	// 响应翻译回 Responses 形状。
