@@ -49,6 +49,26 @@ type attemptPermitStoreStub struct {
 	permissionErr       error
 }
 
+func TestBreakerFaultParty(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome breakerstore.FinishOutcome
+		want    string
+	}{
+		{name: "provider", outcome: breakerstore.FinishOutcome{ProviderOutcome: breakerstore.OutcomeEligibleFailure, ChannelOutcome: breakerstore.OutcomeEligibleFailure}, want: "provider"},
+		{name: "channel", outcome: breakerstore.FinishOutcome{ProviderOutcome: breakerstore.OutcomeIgnored, ChannelOutcome: breakerstore.OutcomeEligibleFailure}, want: "channel"},
+		{name: "success", outcome: breakerstore.FinishOutcome{ProviderOutcome: breakerstore.OutcomeEligibleSuccess, ChannelOutcome: breakerstore.OutcomeEligibleSuccess}, want: "none"},
+		{name: "ignored", outcome: breakerstore.FinishOutcome{ProviderOutcome: breakerstore.OutcomeIgnored, ChannelOutcome: breakerstore.OutcomeIgnored}, want: "not_attributed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := breakerFaultParty(test.outcome); got != test.want {
+				t.Fatalf("breakerFaultParty() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func (s *attemptPermitStoreStub) AcquireAttempt(_ context.Context, in breakerstore.AcquireAttemptInput) (breakerstore.AttemptAdmission, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -660,8 +680,9 @@ func TestInvokeNonStreamAttemptUsesTransportBoundary(t *testing.T) {
 			runner := &AttemptRunner{lifecycle: &RequestLifecycle{requestLog: audit}}
 			invokeErr := errors.New("invoke failed")
 
-			_, gotErr := runner.invokeNonStreamAttempt(
+			_, _, gotErr := runner.invokeNonStreamAttempt(
 				context.Background(),
+				requestlog.RequestRecord{},
 				routing.ChatRouteCandidate{Channel: channel.Runtime{ID: 17}},
 				requestlog.AttemptRecord{ID: 42},
 				owner,
@@ -697,8 +718,9 @@ func TestInvokeNonStreamAttemptDoesNotFeedbackBeforeTransport(t *testing.T) {
 	runner := &AttemptRunner{lifecycle: &RequestLifecycle{requestLog: &attemptAuditLog{}}}
 	rateErr := feedbackUpstreamError(adapter.UpstreamErrorRateLimit, 429, time.Second)
 
-	_, err := runner.invokeNonStreamAttempt(
+	_, _, err := runner.invokeNonStreamAttempt(
 		context.Background(),
+		requestlog.RequestRecord{},
 		routing.ChatRouteCandidate{Channel: channel.Runtime{ID: 17}},
 		requestlog.AttemptRecord{ID: 42},
 		owner,
@@ -728,8 +750,9 @@ func TestInvokeNonStreamAttemptFailsClosedOnRuntimeFeedbackError(t *testing.T) {
 	audit := &attemptAuditLog{}
 	runner := &AttemptRunner{lifecycle: &RequestLifecycle{requestLog: audit}}
 
-	_, err := runner.invokeNonStreamAttempt(
+	_, _, err := runner.invokeNonStreamAttempt(
 		context.Background(),
+		requestlog.RequestRecord{},
 		routing.ChatRouteCandidate{Channel: channel.Runtime{ID: 17}},
 		requestlog.AttemptRecord{ID: 42},
 		owner,
@@ -763,8 +786,9 @@ func TestInvokeNonStreamAttemptAuditsUnknownFinishResult(t *testing.T) {
 	audit := &attemptAuditLog{}
 	runner := &AttemptRunner{lifecycle: &RequestLifecycle{requestLog: audit}}
 
-	_, err := runner.invokeNonStreamAttempt(
+	_, _, err := runner.invokeNonStreamAttempt(
 		context.Background(),
+		requestlog.RequestRecord{},
 		routing.ChatRouteCandidate{Channel: channel.Runtime{ID: 17}},
 		requestlog.AttemptRecord{ID: 42},
 		owner,
@@ -799,8 +823,9 @@ func TestInvokeNonStreamAttemptStopsFallbackWhenFailedTransportFinishIsUnknown(t
 	runner := &AttemptRunner{lifecycle: &RequestLifecycle{requestLog: audit}}
 	upstreamErr := feedbackUpstreamError(adapter.UpstreamErrorServer, 503, 0)
 
-	_, err := runner.invokeNonStreamAttempt(
+	_, _, err := runner.invokeNonStreamAttempt(
 		context.Background(),
+		requestlog.RequestRecord{},
 		routing.ChatRouteCandidate{Channel: channel.Runtime{ID: 17}},
 		requestlog.AttemptRecord{ID: 42},
 		owner,

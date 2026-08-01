@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"testing"
 
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
@@ -225,7 +226,7 @@ func (a *fakeBridgeStreamChatAdapter) StreamChatCompletions(
 	a.called++
 	adapter.MarkTransportStarted(ctx)
 	adapter.MarkRequestWritten(ctx, nil)
-	adapter.MarkResponseHeadersReceived(ctx)
+	adapter.MarkResponseHeadersReceived(ctx, adapter.UpstreamMetadata{StatusCode: http.StatusOK})
 	for _, chunk := range a.chunks {
 		if chatcompletionsadapter.FirstTokenPayload(chunk) != "" {
 			adapter.MarkFirstTokenEligible(ctx)

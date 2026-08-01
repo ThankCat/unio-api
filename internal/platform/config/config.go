@@ -21,6 +21,7 @@ import (
 type Config struct {
 	HTTP             HTTPConfig
 	Log              LogConfig
+	GatewayLog       GatewayLogConfig
 	DB               DBConfig
 	Redis            RedisConfig
 	Worker           WorkerConfig
@@ -91,6 +92,8 @@ type AdminConfig struct {
 	GatewayInternalURLs []string
 	// GatewayInternalToken 来自 GATEWAY_INTERNAL_TOKEN（与 gateway 共用）；空则不拉取熔断快照。
 	GatewayInternalToken string
+	// LokiURL 来自 LOKI_URL；只供 admin-server 服务端查询，不暴露给浏览器。
+	LokiURL string
 }
 
 // ConsoleConfig 保存 console-server 进程级配置。
@@ -147,6 +150,23 @@ const (
 type LogConfig struct {
 	Level  zapcore.Level
 	Format string // console | json
+}
+
+const (
+	GatewayEnvironmentDevelopment = "development"
+	GatewayEnvironmentTest        = "test"
+	GatewayEnvironmentProduction  = "production"
+)
+
+// GatewayLogConfig 只控制 gateway-server。文件日志固定为 JSONL；控制台仅供本地开发。
+type GatewayLogConfig struct {
+	Environment    string
+	BaselineLevel  zapcore.Level
+	ConsoleEnabled bool
+	FilePath       string
+	MaxSizeMB      int
+	MaxBackups     int
+	MaxAgeDays     int
 }
 
 // DBConfig 保存 PostgreSQL 连接配置。
@@ -253,6 +273,56 @@ func Load() (Config, error) {
 	logFormat, err := parseLogFormat(getEnv("LOG_FORMAT", LogFormatConsole))
 	if err != nil {
 		return Config{}, err
+	}
+
+	gatewayEnvironment, err := parseGatewayEnvironment(getEnv("GATEWAY_ENV", GatewayEnvironmentProduction))
+	if err != nil {
+		return Config{}, err
+	}
+	gatewayLogLevel, err := parseGatewayLogLevel(getEnv("GATEWAY_LOG_LEVEL", "info"))
+	if err != nil {
+		return Config{}, err
+	}
+	gatewayConsoleEnabled, err := getEnvBool(
+		"GATEWAY_CONSOLE_ENABLED",
+		gatewayEnvironment == GatewayEnvironmentDevelopment,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	if gatewayEnvironment == GatewayEnvironmentProduction && gatewayLogLevel == zapcore.DebugLevel {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("GATEWAY_LOG_LEVEL=debug is forbidden when GATEWAY_ENV=production"),
+		)
+	}
+	if gatewayEnvironment == GatewayEnvironmentProduction && gatewayConsoleEnabled {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("GATEWAY_CONSOLE_ENABLED=true is forbidden when GATEWAY_ENV=production"),
+		)
+	}
+	gatewayLogMaxSizeDefault := 100
+	if gatewayEnvironment == GatewayEnvironmentDevelopment {
+		gatewayLogMaxSizeDefault = 25
+	}
+	gatewayLogMaxSizeMB, err := getEnvInt("GATEWAY_LOG_MAX_SIZE_MB", gatewayLogMaxSizeDefault)
+	if err != nil {
+		return Config{}, err
+	}
+	gatewayLogMaxBackups, err := getEnvInt("GATEWAY_LOG_MAX_BACKUPS", 20)
+	if err != nil {
+		return Config{}, err
+	}
+	gatewayLogMaxAgeDays, err := getEnvInt("GATEWAY_LOG_MAX_AGE_DAYS", 14)
+	if err != nil {
+		return Config{}, err
+	}
+	if gatewayLogMaxSizeMB <= 0 || gatewayLogMaxBackups <= 0 || gatewayLogMaxAgeDays <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("gateway log rotation limits must be positive integers"),
+		)
 	}
 
 	httpReadTimeout, err := getEnvDuration("HTTP_READ_TIMEOUT", 10*time.Second)
@@ -495,6 +565,15 @@ func Load() (Config, error) {
 			Level:  logLevel,
 			Format: logFormat,
 		},
+		GatewayLog: GatewayLogConfig{
+			Environment:    gatewayEnvironment,
+			BaselineLevel:  gatewayLogLevel,
+			ConsoleEnabled: gatewayConsoleEnabled,
+			FilePath:       getEnv("GATEWAY_LOG_FILE_PATH", "logs/gateway.jsonl"),
+			MaxSizeMB:      gatewayLogMaxSizeMB,
+			MaxBackups:     gatewayLogMaxBackups,
+			MaxAgeDays:     gatewayLogMaxAgeDays,
+		},
 		DB: DBConfig{
 			URL:               getEnv("DATABASE_URL", ""),
 			MaxConns:          postgresMaxConns,
@@ -555,6 +634,7 @@ func Load() (Config, error) {
 			APIToken:             getEnv("ADMIN_API_TOKEN", ""),
 			GatewayInternalURLs:  resolveGatewayInternalURLs(),
 			GatewayInternalToken: getEnv("GATEWAY_INTERNAL_TOKEN", ""),
+			LokiURL:              getEnv("LOKI_URL", "http://127.0.0.1:3100"),
 		},
 		Console: ConsoleConfig{
 			HTTPAddr: getEnv("CONSOLE_HTTP_ADDR", ":8522"),
@@ -713,6 +793,32 @@ func parseLogLevel(value string) (zapcore.Level, error) {
 		return zapcore.InfoLevel, failure.New(
 			failure.CodeConfigUnsupported,
 			failure.WithMessage(fmt.Sprintf("parse LOG_LEVEL: unsupported level %q", value)),
+		)
+	}
+}
+
+func parseGatewayEnvironment(value string) (string, error) {
+	switch strings.ToLower(value) {
+	case GatewayEnvironmentDevelopment, GatewayEnvironmentTest, GatewayEnvironmentProduction:
+		return strings.ToLower(value), nil
+	default:
+		return "", failure.New(
+			failure.CodeConfigUnsupported,
+			failure.WithMessage(fmt.Sprintf("parse GATEWAY_ENV: unsupported environment %q", value)),
+		)
+	}
+}
+
+func parseGatewayLogLevel(value string) (zapcore.Level, error) {
+	switch strings.ToLower(value) {
+	case "", "info":
+		return zapcore.InfoLevel, nil
+	case "debug":
+		return zapcore.DebugLevel, nil
+	default:
+		return zapcore.InfoLevel, failure.New(
+			failure.CodeConfigUnsupported,
+			failure.WithMessage(fmt.Sprintf("parse GATEWAY_LOG_LEVEL: unsupported level %q", value)),
 		)
 	}
 }

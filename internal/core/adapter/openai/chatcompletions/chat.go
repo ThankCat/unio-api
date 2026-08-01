@@ -91,7 +91,10 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 	adapter.MarkTransportStarted(ctx)
 	upstreamResp, err := a.client.Do(request)
 	if upstreamResp != nil {
-		adapter.MarkResponseHeadersReceived(ctx)
+		adapter.MarkResponseHeadersReceived(ctx, adapter.UpstreamMetadata{
+			StatusCode: upstreamResp.StatusCode,
+			RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
+		})
 	}
 	if err != nil {
 		return nil, newUpstreamSendError(err, "send chat completion request")
@@ -249,7 +252,10 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	ctxCause := context.Cause(streamCtx)
 	timeouts.HeadersReceived()
 	if upstreamResp != nil {
-		adapter.MarkResponseHeadersReceived(streamCtx)
+		adapter.MarkResponseHeadersReceived(streamCtx, adapter.UpstreamMetadata{
+			StatusCode: upstreamResp.StatusCode,
+			RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
+		})
 	}
 	if err != nil {
 		return adapter.StreamOutcome{}, newUpstreamSendErrorWithContextCause(err, ctxCause, "send stream chat completion request")

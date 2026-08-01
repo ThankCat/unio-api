@@ -34,16 +34,30 @@ func ClientSessionID(ctx context.Context) string {
 // （入 Redis 键前还会定长哈希，这里只挡明显滥用）。
 const maxSessionKeyLength = 512
 
+// Hint 是经过校验的 Sticky 会话信号及其稳定来源；日志只记录 Source 和 Key 的不可逆哈希。
+type Hint struct {
+	Key    string
+	Source string
+}
+
 // OpenAISessionKey 按 OpenAI 族提取顺序产出 sticky 会话键（决议 6）：
 // body prompt_cache_key 优先（实测 Codex 必带、= session id、跨轮稳定），
 // 缺失回退 ingress 捕获的 session-id 头；两者皆缺返回空串（本请求不粘）。
 func OpenAISessionKey(ctx context.Context, promptCacheKey *string) string {
+	return OpenAISessionHint(ctx, promptCacheKey).Key
+}
+
+// OpenAISessionHint 返回会话键和最终采用的来源。
+func OpenAISessionHint(ctx context.Context, promptCacheKey *string) Hint {
 	if promptCacheKey != nil {
 		if key := normalizeSessionKey(*promptCacheKey); key != "" {
-			return key
+			return Hint{Key: key, Source: "prompt_cache_key"}
 		}
 	}
-	return normalizeSessionKey(ClientSessionID(ctx))
+	if key := normalizeSessionKey(ClientSessionID(ctx)); key != "" {
+		return Hint{Key: key, Source: "session_id_header"}
+	}
+	return Hint{}
 }
 
 // AnthropicSessionKey 按 Anthropic 族提取顺序产出 sticky 会话键（决议 5）：
@@ -51,10 +65,18 @@ func OpenAISessionKey(ctx context.Context, promptCacheKey *string) string {
 // 缺失回退 body metadata.user_id 内嵌的 "_session_<id>" 后缀。严格解析：任一环节失败
 // 即返回空串不粘（R9，不猜第三方格式）。
 func AnthropicSessionKey(ctx context.Context, metadata json.RawMessage) string {
+	return AnthropicSessionHint(ctx, metadata).Key
+}
+
+// AnthropicSessionHint 返回会话键和最终采用的来源。
+func AnthropicSessionHint(ctx context.Context, metadata json.RawMessage) Hint {
 	if key := normalizeSessionKey(ClientSessionID(ctx)); key != "" {
-		return key
+		return Hint{Key: key, Source: "claude_session_id_header"}
 	}
-	return sessionKeyFromAnthropicMetadata(metadata)
+	if key := sessionKeyFromAnthropicMetadata(metadata); key != "" {
+		return Hint{Key: key, Source: "metadata_user_id"}
+	}
+	return Hint{}
 }
 
 // sessionKeyFromAnthropicMetadata 从 Anthropic metadata.user_id 提取会话段。

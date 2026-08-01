@@ -8,6 +8,8 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 )
 
 // OfficialAdapter 是 Anthropic 官方一方(1P) Messages adapter。
@@ -34,13 +36,13 @@ func NewOfficialAdapter(client *http.Client, logger *zap.Logger) *OfficialAdapte
 
 // Messages 应用 beta 转发策略（透传 + 小黑名单）后调用 base。
 func (a *OfficialAdapter) Messages(ctx context.Context, ch channel.Runtime, req MessageRequest) (*MessageResponse, error) {
-	req = a.applyBetaPolicy(ctx, req)
+	req = a.applyBetaPolicy(ctx, ch, req)
 	return a.base.Messages(ctx, ch, req)
 }
 
 // StreamMessages 应用 beta 转发策略（透传 + 小黑名单）后调用 base。
 func (a *OfficialAdapter) StreamMessages(ctx context.Context, ch channel.Runtime, req MessageRequest, emit func(MessageStreamEvent) error) (adapter.StreamOutcome, error) {
-	req = a.applyBetaPolicy(ctx, req)
+	req = a.applyBetaPolicy(ctx, ch, req)
 	return a.base.StreamMessages(ctx, ch, req, emit)
 }
 
@@ -49,7 +51,7 @@ func (a *OfficialAdapter) CountMessagesInputTokens(req MessagesInputTokenizeRequ
 	return a.base.CountMessagesInputTokens(req)
 }
 
-func (a *OfficialAdapter) applyBetaPolicy(ctx context.Context, req MessageRequest) MessageRequest {
+func (a *OfficialAdapter) applyBetaPolicy(ctx context.Context, ch channel.Runtime, req MessageRequest) MessageRequest {
 	if len(req.AnthropicBeta) == 0 {
 		return req
 	}
@@ -57,12 +59,17 @@ func (a *OfficialAdapter) applyBetaPolicy(ctx context.Context, req MessageReques
 	policy := activeBetaPolicy(ctx)
 
 	if blocked := blockedBetas(req.AnthropicBeta, policy); len(blocked) > 0 {
-		a.logger.Debug("anthropic official adapter blocked beta headers per policy",
-			zap.String("protocol", "anthropic"),
+		fields := logfields.ContextZapFields(ctx)
+		fields = append(fields,
+			zap.Int64("channel_id", ch.ID),
+			zap.String("channel_name", ch.Name),
+			zap.String("provider_slug", ch.ProviderSlug),
+			zap.String("ingress_protocol", "anthropic"),
 			zap.String("adapter_key", "anthropic"),
 			zap.String("beta_mode", string(policy.Mode)),
-			zap.Any("blocked_beta_headers", blocked),
+			zap.Strings("blocked_beta_headers", blocked),
 		)
+		logging.Debug(a.logger, "upstream", "adapter", "upstream beta headers blocked", fields...)
 	}
 
 	req.AnthropicBeta = forwardableBetas(req.AnthropicBeta, policy)

@@ -18,6 +18,8 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 )
 
 // Adapter 是 DeepSeek OpenAI origin 的 adapter。
@@ -43,7 +45,7 @@ func NewAdapter(client *http.Client, logger *zap.Logger) *Adapter {
 // ChatCompletions 在调用上游前 Drop DeepSeek 无法转换的字段，其余复用通用 OpenAI 实现。
 func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req chatcompletionsadapter.ChatRequest) (*chatcompletionsadapter.ChatResponse, error) {
 	cleaned, dropped := dropUnsupported(req)
-	a.logDropped(ctx, dropped)
+	a.logDropped(ctx, ch, dropped)
 
 	return a.base.ChatCompletions(ctx, ch, cleaned)
 }
@@ -51,7 +53,7 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req c
 // StreamChatCompletions 在调用上游前 Drop DeepSeek 无法转换的字段，其余复用通用 OpenAI 实现。
 func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req chatcompletionsadapter.ChatRequest, emit func(chatcompletionsadapter.ChatStreamChunk) error) (adapter.StreamOutcome, error) {
 	cleaned, dropped := dropUnsupported(req)
-	a.logDropped(ctx, dropped)
+	a.logDropped(ctx, ch, dropped)
 
 	return a.base.StreamChatCompletions(ctx, ch, cleaned, emit)
 }
@@ -61,16 +63,21 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 // 按 DEC-012，Drop provider 无法转换的合法字段是既定正常行为（Codex 常带 parallel_tool_calls /
 // prompt_cache_key / store 等），不是异常，故用 DEBUG 而非 WARN，避免正常流量刷屏；只记录字段名，
 // 不记录字段值，避免把客户内容写入日志；空列表不产生日志。
-func (a *Adapter) logDropped(ctx context.Context, dropped []string) {
+func (a *Adapter) logDropped(ctx context.Context, ch channel.Runtime, dropped []string) {
 	if len(dropped) == 0 {
 		return
 	}
 
-	a.logger.Debug("deepseek openai adapter dropped unsupported request fields",
-		zap.String("protocol", "openai"),
+	fields := logfields.ContextZapFields(ctx)
+	fields = append(fields,
+		zap.Int64("channel_id", ch.ID),
+		zap.String("channel_name", ch.Name),
+		zap.String("provider_slug", ch.ProviderSlug),
+		zap.String("ingress_protocol", "openai"),
 		zap.String("adapter_key", "deepseek"),
-		zap.Any("dropped_request_fields", dropped),
+		zap.Strings("dropped_request_fields", dropped),
 	)
+	logging.Debug(a.logger, "upstream", "adapter", "upstream request fields dropped", fields...)
 }
 
 var (

@@ -6,6 +6,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
@@ -37,16 +38,25 @@ func (i *credentialInvalidator) MarkChannelCredentialInvalid(revision lifecycle.
 			ExpectedStatusRevision: revision.ProviderStatusRevision,
 		})
 		if err != nil {
-			i.logger.Error("mark channel credential invalid failed",
-				zap.Int64("channel_id", revision.ChannelID), zap.Error(err))
+			logging.Error(i.logger, "runtime", "credential", "channel credential invalidation failed",
+				zap.Int64("channel_id", revision.ChannelID),
+				zap.Int64("config_revision", revision.ChannelConfigRevision),
+				zap.String("reason", "consecutive_401"),
+				zap.String("error_code", "channel_credential_invalidation_failed"),
+				zap.String("error_category", "persistence"),
+				zap.String("error_message", err.Error()),
+			)
 			return
 		}
 		if !applied.StateChangeApplied {
 			return
 		}
 
-		i.logger.Warn("channel credential marked invalid (consecutive 401)",
+		logging.Warn(i.logger, "runtime", "credential", "channel credential marked invalid",
 			zap.Int64("channel_id", revision.ChannelID),
-			zap.Int64("config_revision", applied.CurrentConfigRevision))
+			zap.Int64("config_revision", applied.CurrentConfigRevision),
+			zap.String("reason", "consecutive_401"),
+			zap.Int("threshold", revision.Threshold),
+		)
 	}()
 }

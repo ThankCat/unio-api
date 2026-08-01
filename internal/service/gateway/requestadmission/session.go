@@ -15,6 +15,8 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/runtimefacts"
 )
 
@@ -201,13 +203,17 @@ func (m *Manager) Acquire(ctx context.Context, identity Identity) (AcquireResult
 		SyncTarget:       result.SyncTarget,
 	}
 	if result.Outcome != breakerstore.RequestAllowed {
-		m.logger.Warn("request admission rejected",
+		fields := []zap.Field{
 			zap.Int64("route_id", identity.RouteID),
 			zap.Int64("user_id", identity.UserID),
 			zap.String("outcome", string(result.Outcome)),
 			zap.String("limited_dimension", result.LimitedDimension),
 			zap.String("sync_target", result.SyncTarget),
-		)
+		}
+		if requestFields, ok := logfields.FromContext(ctx); ok {
+			fields = append(requestFields.ZapFields(), fields...)
+		}
+		logging.Warn(m.logger, "admission", "request", "request admission rejected", fields...)
 		return out, nil
 	}
 
@@ -234,10 +240,22 @@ func (m *Manager) Acquire(ctx context.Context, identity Identity) (AcquireResult
 		stop:                       make(chan struct{}),
 		renewerDone:                make(chan struct{}),
 	}
+	if requestFields, ok := logfields.FromContext(ctx); ok {
+		s.logFields = requestFields
+	}
 	if m.metrics != nil {
 		m.metrics.AddRequestAdmissionActive(1)
 	}
 	s.startRenewer()
+	logging.Debug(m.logger, "admission", "request", "request admission acquired",
+		s.logData(
+			zap.Int64("route_id", identity.RouteID), zap.Int64("user_id", identity.UserID),
+			zap.String("scope", identity.Scope), zap.Int64("lease_until", result.LeaseUntilMs),
+			zap.Int64("renew_interval_ms", interval.Milliseconds()),
+			zap.Int64("rate_revision", admission.RouteRateLimits),
+			zap.Int64("concurrency_revision", admission.Concurrency),
+		)...,
+	)
 	out.Session = s
 	return out, nil
 }
@@ -252,6 +270,7 @@ type session struct {
 	store                      Store
 	facts                      RuntimeFactsReader
 	logger                     *zap.Logger
+	logFields                  *logfields.Fields
 	metrics                    MetricsRecorder
 	requestID                  string
 	routeID                    int64
@@ -394,6 +413,9 @@ func (s *session) Reserve(ctx context.Context, estimatedTokens int64) error {
 
 	switch result {
 	case breakerstore.ReserveReserved:
+		logging.Debug(s.logger, "admission", "token_reservation", "request token reservation completed",
+			s.logData(zap.Int64("estimated_tokens", estimatedTokens), zap.String("outcome", "reserved"))...,
+		)
 		return nil
 	case breakerstore.ReserveLimited:
 		s.reserveErr = failure.New(
@@ -432,11 +454,12 @@ func (s *session) Reserve(ctx context.Context, estimatedTokens int64) error {
 			failure.WithMessage("request admission reserve returned an invalid outcome"),
 		)
 	}
-	s.logger.Warn("request admission reserve rejected",
-		zap.Int64("route_id", s.routeID),
-		zap.Int64("user_id", s.userID),
-		zap.Int64("estimated_tokens", estimatedTokens),
-		zap.String("outcome", string(result)),
+	logging.Warn(s.logger, "admission", "token_reservation", "request token reservation rejected",
+		s.logData(
+			zap.Int64("route_id", s.routeID), zap.Int64("user_id", s.userID),
+			zap.Int64("estimated_tokens", estimatedTokens), zap.String("outcome", string(result)),
+			zap.String("limited_dimension", "tpm"),
+		)...,
 	)
 	return s.reserveErr
 }
@@ -531,12 +554,17 @@ func (s *session) Finalize(ctx context.Context) error {
 		s.recordOperation("finish", string(outcome))
 		if outcome != breakerstore.RequestLifecycleFinished && outcome != breakerstore.RequestLifecycleTerminal {
 			s.finalizeErr = requestLifecycleError("finish", outcome)
-			s.logger.Warn("request admission finish rejected",
-				zap.Int64("route_id", s.routeID),
-				zap.Int64("user_id", s.userID),
-				zap.String("outcome", string(outcome)),
+			logging.Error(s.logger, "admission", "request", "request admission finalize rejected",
+				s.logData(
+					zap.Int64("route_id", s.routeID), zap.Int64("user_id", s.userID),
+					zap.String("outcome", string(outcome)), zap.String("terminal_reason", terminalReason),
+				)...,
 			)
+			return
 		}
+		logging.Debug(s.logger, "admission", "request", "request admission finalized",
+			s.logData(zap.String("outcome", string(outcome)), zap.String("terminal_reason", terminalReason), zap.Int64("actual_total_tokens", actualTotal))...,
+		)
 	})
 	return s.finalizeErr
 }
@@ -579,11 +607,18 @@ func (s *session) startRenewer() {
 				s.recordOperation("renew", result)
 				if err != nil {
 					fields := failure.LogFields(err)
-					s.logger.Warn("request admission renew failed", fields...)
+					logging.Warn(s.logger, "admission", "request", "request admission renew failed", s.logData(fields...)...)
 				}
 			}
 		}
 	}()
+}
+
+func (s *session) logData(fields ...zap.Field) []zap.Field {
+	if s != nil && s.logFields != nil {
+		return append(s.logFields.ZapFields(), fields...)
+	}
+	return fields
 }
 
 func (s *session) recordOperation(operation, result string) {

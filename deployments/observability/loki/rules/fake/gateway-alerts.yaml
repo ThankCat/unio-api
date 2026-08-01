@@ -1,0 +1,39 @@
+groups:
+  - name: gateway-log-alerts
+    interval: 1m
+    rules:
+      - alert: GatewayErrorSpike
+        expr: sum(count_over_time({server="gateway", level="error"}[5m])) > 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Gateway ERROR logs exceeded 10 in five minutes
+      - alert: GatewayWarningSpike
+        expr: sum(count_over_time({server="gateway", level="warning"}[5m])) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Gateway WARNING logs exceeded 50 in five minutes
+      - alert: GatewayHTTP5xxSpike
+        expr: sum(count_over_time({server="gateway", type="http", event="request"} | json message="message", status_code="data.status_code" | message="request completed" | status_code >= 500 | __error__="" [5m])) > 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Gateway returned more than five HTTP 5xx responses in five minutes
+      - alert: GatewayUpstreamFirstTokenTimeout
+        expr: sum(count_over_time({server="gateway", type="upstream", event="attempt"} | json error_phase="data.error_phase" | error_phase="first_token" [5m])) > 3
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Upstream first-token timeouts exceeded three in five minutes
+      - alert: GatewaySettlementFailure
+        expr: sum(count_over_time({server="gateway", type="billing", event="settlement", level="error"} | json message="message" | message="billing settlement failed" [5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: Gateway billing settlement failed

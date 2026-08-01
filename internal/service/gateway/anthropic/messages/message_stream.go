@@ -59,12 +59,14 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 
 	// 会话粘性（大 uncache 缺口 P0）：x-claude-code-session-id 头优先、metadata.user_id 回退；
 	// 粘住渠道已被硬摘除（不在池/熔断）时清绑定重选（R5）。
+	stickyHint := sessionhint.AnthropicSessionHint(ctx, req.Metadata)
 	stickySession := s.sticky.Resolve(ctx, lifecycle.StickyResolveParams{
 		Protocol:   routing.ProtocolAnthropic,
 		RouteID:    principal.RouteID,
 		APIKeyID:   principal.APIKeyID,
 		ModelID:    plan.ModelDBID,
-		SessionKey: sessionhint.AnthropicSessionKey(ctx, req.Metadata),
+		SessionKey: stickyHint.Key,
+		Source:     stickyHint.Source,
 		Candidates: plan.Candidates,
 		Mode:       plan.RouteMode,
 	})
@@ -101,7 +103,7 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 		return err
 	}
 
-	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
+	authorization, err := s.lifecycle.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
 		Principal:                principal,
 		CandidatePrices:          candidatePlan.CandidateSalePrices(),
@@ -213,6 +215,9 @@ func messagesStreamChunkMeta(ev messagesadapter.MessageStreamEvent) lifecycle.St
 	meta := lifecycle.StreamChunkMeta{
 		FirstTokenEligible: firstTokenPayload != "",
 		VisibleText:        firstTokenPayload,
+		ProtocolEventType:  ev.Type,
+		TokenKind:          messagesTokenKind(ev),
+		Classification:     messagesEventClassification(ev, firstTokenPayload),
 	}
 	if ev.Type == "message_start" {
 		meta.ID = parseStreamMessageID(ev.Data)
@@ -226,6 +231,68 @@ func messagesStreamChunkMeta(ev messagesadapter.MessageStreamEvent) lifecycle.St
 		}
 	}
 	return meta
+}
+
+func messagesTokenKind(ev messagesadapter.MessageStreamEvent) string {
+	if messagesadapter.FirstTokenPayload(ev) == "" {
+		return ""
+	}
+	if ev.Type == "content_block_start" {
+		var payload struct {
+			ContentBlock struct {
+				Type string `json:"type"`
+			} `json:"content_block"`
+		}
+		if json.Unmarshal(ev.Data, &payload) == nil {
+			switch payload.ContentBlock.Type {
+			case "thinking":
+				return "reasoning"
+			case "tool_use", "server_tool_use":
+				return "tool_call"
+			default:
+				return "text"
+			}
+		}
+	}
+	if ev.Type == "content_block_delta" {
+		var payload struct {
+			Delta struct {
+				Type string `json:"type"`
+			} `json:"delta"`
+		}
+		if json.Unmarshal(ev.Data, &payload) == nil {
+			switch payload.Delta.Type {
+			case "thinking_delta":
+				return "reasoning"
+			case "input_json_delta":
+				return "tool_call"
+			default:
+				return "text"
+			}
+		}
+	}
+	return "generated_output"
+}
+
+func messagesEventClassification(ev messagesadapter.MessageStreamEvent, firstTokenPayload string) string {
+	if firstTokenPayload != "" {
+		return "effective_token"
+	}
+	switch ev.Type {
+	case "message_start":
+		return "lifecycle"
+	case "ping":
+		return "heartbeat"
+	case "message_delta":
+		if ev.Usage != nil {
+			return "usage"
+		}
+		return "terminal"
+	case "content_block_stop", "message_stop", "error":
+		return "terminal"
+	default:
+		return "empty_generation"
+	}
 }
 
 func parseStreamMessageID(data json.RawMessage) string {

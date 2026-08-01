@@ -141,6 +141,9 @@ func responsesStreamCarrierMeta(c responsesStreamCarrier) lifecycle.StreamChunkM
 			SuppressEmit:       isDirectResponsesSuccessTerminal(c.direct.EventType),
 			FirstTokenEligible: firstTokenPayload != "",
 			VisibleText:        firstTokenPayload,
+			ProtocolEventType:  c.direct.EventType,
+			TokenKind:          responsesTokenKind(c.direct.EventType),
+			Classification:     responsesEventClassification(c.direct.EventType, firstTokenPayload),
 		}
 	}
 
@@ -152,11 +155,77 @@ func responsesStreamCarrierMeta(c responsesStreamCarrier) lifecycle.StreamChunkM
 		SuppressEmit:       chunk.Usage != nil,
 		FirstTokenEligible: firstTokenPayload != "",
 		VisibleText:        firstTokenPayload,
+		ProtocolEventType:  "chat.completion.chunk",
+		TokenKind:          bridgeChatTokenKind(*chunk),
+		Classification:     bridgeChatClassification(*chunk, firstTokenPayload),
 	}
 	if chunk.FinishReason != nil {
 		meta.FinishReason = *chunk.FinishReason
 	}
 	return meta
+}
+
+func responsesTokenKind(eventType string) string {
+	switch eventType {
+	case "response.output_text.delta":
+		return "text"
+	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
+		return "reasoning"
+	case "response.refusal.delta":
+		return "refusal"
+	case "response.function_call_arguments.delta", "response.output_item.added":
+		return "tool_call"
+	default:
+		return ""
+	}
+}
+
+func responsesEventClassification(eventType string, firstTokenPayload string) string {
+	if firstTokenPayload != "" {
+		return "effective_token"
+	}
+	switch eventType {
+	case "response.created", "response.queued", "response.in_progress":
+		return "lifecycle"
+	case "response.completed", "response.incomplete", "response.failed", "response.error":
+		return "terminal"
+	case "ping", "heartbeat":
+		return "heartbeat"
+	default:
+		return "empty_generation"
+	}
+}
+
+func bridgeChatTokenKind(chunk chatcompletionsadapter.ChatStreamChunk) string {
+	switch {
+	case chunk.Content != "":
+		return "text"
+	case chunk.ReasoningContent != nil && *chunk.ReasoningContent != "":
+		return "reasoning"
+	case chunk.Refusal != nil && *chunk.Refusal != "":
+		return "refusal"
+	case len(chunk.ToolCalls) > 0:
+		return "tool_call"
+	case len(chunk.FunctionCall) > 0:
+		return "function_call"
+	default:
+		return ""
+	}
+}
+
+func bridgeChatClassification(chunk chatcompletionsadapter.ChatStreamChunk, firstTokenPayload string) string {
+	switch {
+	case firstTokenPayload != "":
+		return "effective_token"
+	case chunk.Usage != nil:
+		return "usage"
+	case chunk.FinishReason != nil:
+		return "terminal"
+	case chunk.Role != "":
+		return "role_only"
+	default:
+		return "empty_generation"
+	}
 }
 
 func isDirectResponsesSuccessTerminal(eventType string) bool {

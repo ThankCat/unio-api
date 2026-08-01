@@ -18,6 +18,9 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
+
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 )
 
 // binding 是 sticky value 的唯一 schema（§10.2）。
@@ -147,7 +150,9 @@ func (s *Store) Lookup(ctx context.Context, key string) LookupResult {
 		if err == redis.Nil {
 			return LookupResult{}
 		}
-		s.logger.Warn("sticky lookup failed, treating as miss", zap.String("key", key), zap.Error(err))
+		logging.Warn(s.logger, "routing", "sticky", "sticky operation failed",
+			stickyLogFields(ctx, stickyKeyLogFields(key, zap.String("operation", "lookup"), zap.String("error_message", err.Error()))...)...,
+		)
 		return LookupResult{StoreUnavailable: true}
 	}
 	var current binding
@@ -155,8 +160,9 @@ func (s *Store) Lookup(ctx context.Context, key string) LookupResult {
 		current.Version != bindingSchemaVersion ||
 		current.ChannelID <= 0 || current.BindingVersion <= 0 {
 		// 损坏值当 miss：不读也不写，让它随 TTL 自然消失或被下一次 BindIfAbsent 覆盖。
-		s.logger.Warn("sticky binding value is not the canonical schema, treating as miss",
-			zap.String("key", key))
+		logging.Warn(s.logger, "routing", "sticky", "sticky binding invalid",
+			stickyLogFields(ctx, stickyKeyLogFields(key, zap.String("reason", "invalid_schema"))...)...,
+		)
 		return LookupResult{}
 	}
 	return LookupResult{
@@ -192,13 +198,16 @@ func (s *Store) BindIfAbsent(ctx context.Context, key string, channelID int64, t
 	}
 	value, err := encodeBinding(next)
 	if err != nil {
-		s.logger.Warn("sticky bind encode failed", zap.String("key", key), zap.Error(err))
+		logging.Warn(s.logger, "routing", "sticky", "sticky operation failed",
+			stickyLogFields(ctx, stickyKeyLogFields(key, zap.String("operation", "encode_bind"), zap.String("error_message", err.Error()))...)...,
+		)
 		return Binding{}, CASResult{StoreUnavailable: true}
 	}
 	applied, err := s.client.SetNX(opCtx, s.keyPrefix+key, value, ttl).Result()
 	if err != nil {
-		s.logger.Warn("sticky bind_if_absent failed",
-			zap.String("key", key), zap.Int64("channel_id", channelID), zap.Error(err))
+		logging.Warn(s.logger, "routing", "sticky", "sticky operation failed",
+			stickyLogFields(ctx, stickyKeyLogFields(key, zap.String("operation", "bind"), zap.Int64("channel_id", channelID), zap.String("error_message", err.Error()))...)...,
+		)
 		return Binding{}, CASResult{StoreUnavailable: true}
 	}
 	if !applied {
@@ -221,7 +230,9 @@ func (s *Store) RefreshIfCurrent(
 	next := Binding{ChannelID: channelID, BindingVersion: bindingVersion, LastSuccessAt: time.Now()}
 	value, err := encodeBinding(next)
 	if err != nil {
-		s.logger.Warn("sticky refresh encode failed", zap.String("key", key), zap.Error(err))
+		logging.Warn(s.logger, "routing", "sticky", "sticky operation failed",
+			stickyLogFields(ctx, stickyKeyLogFields(key, zap.String("operation", "encode_refresh"), zap.String("error_message", err.Error()))...)...,
+		)
 		return Binding{}, CASResult{StoreUnavailable: true}
 	}
 	applied, err := s.client.Eval(
@@ -229,8 +240,9 @@ func (s *Store) RefreshIfCurrent(
 		channelID, bindingVersion, value, ttl.Milliseconds(),
 	).Int64()
 	if err != nil {
-		s.logger.Warn("sticky refresh_if_current failed",
-			zap.String("key", key), zap.Int64("channel_id", channelID), zap.Error(err))
+		logging.Warn(s.logger, "routing", "sticky", "sticky operation failed",
+			stickyLogFields(ctx, stickyKeyLogFields(key, zap.String("operation", "refresh"), zap.Int64("channel_id", channelID), zap.String("error_message", err.Error()))...)...,
+		)
 		return Binding{}, CASResult{StoreUnavailable: true}
 	}
 	if applied != 1 {
@@ -252,14 +264,31 @@ func (s *Store) ClearIfCurrent(ctx context.Context, key string, channelID, bindi
 		opCtx, clearIfCurrentLua, []string{s.keyPrefix + key}, channelID, bindingVersion,
 	).Int64()
 	if err != nil {
-		s.logger.Warn("sticky clear_if_current failed",
-			zap.String("key", key), zap.Int64("channel_id", channelID), zap.Error(err))
+		logging.Warn(s.logger, "routing", "sticky", "sticky operation failed",
+			stickyLogFields(ctx, stickyKeyLogFields(key, zap.String("operation", "clear"), zap.Int64("channel_id", channelID), zap.String("error_message", err.Error()))...)...,
+		)
 		return CASResult{StoreUnavailable: true}
 	}
 	if applied != 1 {
 		return CASResult{Conflict: true}
 	}
 	return CASResult{Applied: true}
+}
+
+func stickyLogFields(ctx context.Context, fields ...zap.Field) []zap.Field {
+	if requestFields, ok := logfields.FromContext(ctx); ok {
+		return append(requestFields.ZapFields(), fields...)
+	}
+	return fields
+}
+
+func stickyKeyLogFields(key string, fields ...zap.Field) []zap.Field {
+	out := make([]zap.Field, 0, len(fields)+2)
+	out = append(out, zap.String("sticky_redis_key", key))
+	if index := strings.LastIndexByte(key, ':'); index >= 0 && index+1 < len(key) {
+		out = append(out, zap.String("sticky_session_hash", key[index+1:]))
+	}
+	return append(out, fields...)
 }
 
 func encodeBinding(b Binding) (string, error) {

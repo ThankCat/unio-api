@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -82,9 +83,8 @@ func TestRuntimeControlTelemetryPublishesRecoveryFacts(t *testing.T) {
 			t.Fatalf("recovery metrics missing %q\n%s", want, body)
 		}
 	}
-	if logs.FilterMessage("runtime control operation reconciled").Len() != 1 ||
-		logs.FilterMessage("provider routing operation reconciled").Len() != 1 ||
-		logs.FilterMessage("provider runtime control restored").Len() != 1 {
+	if logs.FilterMessage("runtime control reconciled").Len() != 2 ||
+		logs.FilterMessage("runtime control restored").Len() != 3 {
 		t.Fatalf("missing structured recovery logs: %+v", logs.All())
 	}
 }
@@ -110,6 +110,17 @@ func TestRuntimeControlTelemetryRateLimitsRepeatedFailures(t *testing.T) {
 	}
 	if got := logs.All()[1].ContextMap()["suppressed_failures"]; got != int64(1) {
 		t.Fatalf("suppressed_failures=%v, want 1", got)
+	}
+}
+
+func TestRuntimeControlTelemetryIgnoresShutdownCancellation(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	telemetry := newRuntimeControlTelemetry(nil, zap.New(core))
+
+	telemetry.logFailure("observe_runtime_operations", context.Canceled)
+
+	if logs.Len() != 0 {
+		t.Fatalf("shutdown cancellation must not emit an error log: %+v", logs.All())
 	}
 }
 

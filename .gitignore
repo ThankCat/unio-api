@@ -10,6 +10,7 @@ scripts/test/test_db/config.local.json
 # air 热加载构建产物与构建日志
 tmp/
 build-errors*.log
+logs/
 
 # go build ./cmd/<x> 在仓库根产生的可执行产物
 /e2e-realtest

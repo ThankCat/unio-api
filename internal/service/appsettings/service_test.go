@@ -143,6 +143,35 @@ func TestCriticalSettingChangedWithoutPublisherFailsClosed(t *testing.T) {
 	}
 }
 
+func TestDedicatedControlSettingIsHiddenAndRejectsGenericWrite(t *testing.T) {
+	q := newFakeQueries()
+	definition, ok := DefaultRegistry().Get(GatewayLoggingDebugSessionKey)
+	if !ok {
+		t.Fatal("gateway logging control definition is missing")
+	}
+	q.data[GatewayLoggingDebugSessionKey] = append([]byte(nil), definition.Default...)
+	service := NewService(newTestStore(q))
+
+	for _, item := range service.List(context.Background()) {
+		if item.Key == GatewayLoggingDebugSessionKey {
+			t.Fatal("dedicated gateway logging control leaked into generic settings list")
+		}
+	}
+
+	before := append([]byte(nil), q.data[GatewayLoggingDebugSessionKey]...)
+	_, err := service.SetRawWithResult(
+		context.Background(),
+		GatewayLoggingDebugSessionKey,
+		json.RawMessage(`{"session_id":"bypass","started_at":"2026-08-01T00:00:00Z","expires_at":"2026-08-01T01:00:00Z","reason":"bypass","enabled_by_user_id":0,"revision":2}`),
+	)
+	if err == nil {
+		t.Fatal("generic write unexpectedly accepted dedicated gateway logging control")
+	}
+	if string(q.data[GatewayLoggingDebugSessionKey]) != string(before) {
+		t.Fatal("rejected generic write changed the stored gateway logging control")
+	}
+}
+
 func TestRestoreCriticalRuntimeControlsInstallsAllValidatedSettings(t *testing.T) {
 	q := newFakeQueries()
 	q.data[GatewayRouteRateLimitDefaultsKey] = encodeRateLimitDefaultsSettings(DefaultRateLimitDefaultsSettings())

@@ -95,6 +95,29 @@ func TestFirstTokenTimeoutFiresAfterFastHeaders(t *testing.T) {
 	}
 }
 
+// TestFirstTokenTimeoutFiresBeforeSlowerResponseHeaderTimeout freezes the case where the
+// first-token budget is intentionally tighter than the response-header budget. The resulting
+// cancellation must retain the first-token cause even though no response headers arrived.
+func TestFirstTokenTimeoutFiresBeforeSlowerResponseHeaderTimeout(t *testing.T) {
+	ctx, h := startedStreamTimeoutContext(context.Background(), StreamTimeoutConfig{
+		ResponseHeader: 5 * time.Second,
+		FirstToken:     20 * time.Millisecond,
+	})
+	defer h.Cancel()
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("first token timeout did not fire before response headers")
+	}
+	if !errors.Is(context.Cause(ctx), ErrFirstTokenTimeout) {
+		t.Fatalf("expected cause ErrFirstTokenTimeout, got %v", context.Cause(ctx))
+	}
+	if got := h.State.TimeoutPhase(); got != TimeoutPhaseFirstToken {
+		t.Fatalf("timeout phase = %q, want %q", got, TimeoutPhaseFirstToken)
+	}
+}
+
 // TestBothStreamTimersShareTheSameStart 冻结 §11.2：首字预算不是「响应头之后再给一份」。
 // 响应头几乎立刻到达时，首字截止时间仍然是「发起调用 + FirstToken」。
 func TestBothStreamTimersShareTheSameStart(t *testing.T) {

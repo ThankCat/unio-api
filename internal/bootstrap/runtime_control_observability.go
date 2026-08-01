@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/runtimecontrol"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
@@ -77,17 +79,16 @@ func observeRuntimeStateEpochEnsure(
 		return
 	}
 	fields := []zap.Field{
-		zap.String("ensure_state", string(result.State)),
-		zap.String("epoch_state", string(result.Record.Value.State)),
-		zap.String("reason", string(result.Record.Value.Reason)),
+		zap.String("epoch", result.Record.Value.Epoch),
 		zap.Int64("revision", result.Record.Revision),
 		zap.Bool("created", result.Created),
 		zap.String("runtime_state_integrity", integrity),
 	}
 	if integrity == "ready" {
-		logger.Info("runtime state epoch ensured", fields...)
+		logging.Info(logger, "runtime", "state", "runtime state epoch ensured", fields...)
 	} else {
-		logger.Warn("runtime state epoch not ready", fields...)
+		fields = append(fields, zap.String("reason", string(result.Record.Value.Reason)))
+		logging.Warn(logger, "runtime", "state", "runtime state epoch not ready", fields...)
 	}
 }
 
@@ -228,29 +229,28 @@ func (t *runtimeControlTelemetry) passSucceeded(observation runtimeControlReconc
 		if t.logger != nil {
 			fields := []zap.Field{
 				zap.String("target", target),
+				zap.String("kind", operation.Kind),
 				zap.String("operation_state", operation.State),
 				zap.String("result", result),
-				zap.Int64("current_revision", operation.CurrentRevision),
-				zap.Int64("next_revision", operation.NextRevision),
-				zap.String("payload_hash_prefix", hashPrefix(operation.PayloadHash)),
+				zap.Int64("revision", operation.NextRevision),
 			}
 			if operation.ChannelID.Valid {
 				fields = append(fields, zap.Int64("channel_id", operation.ChannelID.Int64))
 			}
-			t.logger.Info("runtime control operation reconciled", fields...)
+			logging.Info(t.logger, "runtime", "state", "runtime control reconciled", fields...)
 		}
 	}
 	for _, observed := range observation.providerOperations {
 		if t.logger == nil {
 			continue
 		}
-		t.logger.Info("provider routing operation reconciled",
+		logging.Info(t.logger, "runtime", "state", "runtime control reconciled",
+			zap.String("target", "provider"),
 			zap.String("kind", observed.operation.Kind),
 			zap.String("operation_state", observed.operation.State),
 			zap.String("result", recoveredOperationResult(observed.operation.State)),
 			zap.Int64("provider_id", observed.envelope.ProviderID),
-			zap.Duration("pending_age", observed.age),
-			zap.String("payload_hash_prefix", hashPrefix(observed.operation.PayloadHash)),
+			zap.Int64("revision", providerOperationRevision(observed.envelope)),
 		)
 	}
 	t.mu.Lock()
@@ -273,7 +273,8 @@ func (t *runtimeControlTelemetry) ProviderControlReconciled(
 		t.metrics.SetProviderStatusRevisionFence(id, "active", 0)
 	}
 	if restored && t.logger != nil {
-		t.logger.Info("provider runtime control restored",
+		logging.Info(t.logger, "runtime", "state", "runtime control restored",
+			zap.String("target", "provider"),
 			zap.Int64("provider_id", providerID),
 			zap.Int64("origin_revision", originRevision),
 			zap.Int64("status_revision", statusRevision),
@@ -298,8 +299,9 @@ func (t *runtimeControlTelemetry) criticalSettingReconciled(settingKey string, r
 		}
 	}
 	if restored && t.logger != nil {
-		t.logger.Info("critical runtime control restored",
-			zap.String("target", target),
+		logging.Info(t.logger, "runtime", "state", "runtime control restored",
+			zap.String("target", "critical_control"),
+			zap.String("control", target),
 			zap.Int64("revision", revision),
 		)
 	}
@@ -317,7 +319,8 @@ func (t *runtimeControlTelemetry) channelControlReconciled(channelID, revision i
 		}
 	}
 	if restored && t.logger != nil {
-		t.logger.Info("channel capacity control restored",
+		logging.Info(t.logger, "runtime", "state", "runtime control restored",
+			zap.String("target", "channel_capacity"),
 			zap.Int64("channel_id", channelID),
 			zap.Int64("revision", revision),
 		)
@@ -325,7 +328,7 @@ func (t *runtimeControlTelemetry) channelControlReconciled(channelID, revision i
 }
 
 func (t *runtimeControlTelemetry) logFailure(phase string, err error) {
-	if t == nil || t.logger == nil || err == nil {
+	if t == nil || t.logger == nil || err == nil || errors.Is(err, context.Canceled) {
 		return
 	}
 	now := t.now()
@@ -343,10 +346,12 @@ func (t *runtimeControlTelemetry) logFailure(phase string, err error) {
 	t.suppressedFailures = 0
 	t.mu.Unlock()
 
-	t.logger.Error("runtime control reconciliation failed",
+	logging.Error(t.logger, "runtime", "state", "runtime control reconciliation failed",
 		zap.String("phase", phase),
 		zap.Int("suppressed_failures", suppressed),
-		zap.Error(err),
+		zap.String("error_code", "runtime_control_reconciliation_failed"),
+		zap.String("error_category", "runtime_state"),
+		zap.String("error_message", err.Error()),
 	)
 }
 
@@ -395,9 +400,9 @@ func recoveredOperationResult(state string) string {
 	return "aborted"
 }
 
-func hashPrefix(hash string) string {
-	if len(hash) <= 12 {
-		return hash
+func providerOperationRevision(envelope runtimecontrol.ProviderRoutingEnvelope) int64 {
+	if envelope.Kind == runtimecontrol.ProviderFenceKindOrigin {
+		return envelope.NextOriginRevision
 	}
-	return hash[:12]
+	return envelope.NextStatusRevision
 }

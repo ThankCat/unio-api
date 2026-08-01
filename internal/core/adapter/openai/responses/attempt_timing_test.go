@@ -24,7 +24,7 @@ func (p *responsesTransportStartProbe) TransportStarted() {
 
 func (p *responsesTransportStartProbe) RequestWritten(error) {}
 
-func (p *responsesTransportStartProbe) ResponseHeadersReceived() {}
+func (p *responsesTransportStartProbe) ResponseHeadersReceived(adapter.UpstreamMetadata) {}
 
 func (p *responsesTransportStartProbe) FirstTokenEligible() {
 	p.firstToken.Add(1)

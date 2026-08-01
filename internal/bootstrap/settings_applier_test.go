@@ -11,6 +11,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
@@ -26,6 +27,20 @@ type fakeChannel429PolicyTarget struct {
 	defaultCooldown time.Duration
 	cap             time.Duration
 	calls           int
+}
+
+type fakeGatewayLoggingTarget struct {
+	applied []logging.DebugSession
+	cleared []int64
+}
+
+func (f *fakeGatewayLoggingTarget) ApplyDebugSession(session logging.DebugSession, _ time.Time) error {
+	f.applied = append(f.applied, session)
+	return nil
+}
+
+func (f *fakeGatewayLoggingTarget) ClearDebugSession(revision int64, _ int64) {
+	f.cleared = append(f.cleared, revision)
 }
 
 func (f *fakeChannel429PolicyTarget) SetChannel429CooldownPolicy(defaultCooldown, cap time.Duration) {
@@ -143,5 +158,26 @@ func TestSettingsApplierRunStopsOnContextCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("applier did not stop after context cancel")
+	}
+}
+
+func TestSettingsApplierAppliesAndClearsDebugSession(t *testing.T) {
+	a, store, _ := newApplierFixture()
+	target := &fakeGatewayLoggingTarget{}
+	a.logging = target
+	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	expiresAt := time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339Nano)
+	store.set(appsettings.GatewayLoggingDebugSessionKey,
+		`{"session_id":"dbg-1","started_at":"`+startedAt+`","expires_at":"`+expiresAt+`","reason":"investigate ttft","enabled_by_user_id":7,"revision":9}`)
+	a.applyOnce(context.Background())
+	if len(target.applied) != 1 || target.applied[0].SessionID != "dbg-1" || target.applied[0].Revision != 9 {
+		t.Fatalf("applied = %+v", target.applied)
+	}
+
+	store.set(appsettings.GatewayLoggingDebugSessionKey,
+		`{"session_id":"","expires_at":"1970-01-01T00:00:00Z","reason":"disabled","enabled_by_user_id":0,"revision":10}`)
+	a.applyOnce(context.Background())
+	if len(target.cleared) != 1 || target.cleared[0] != 10 {
+		t.Fatalf("cleared = %+v", target.cleared)
 	}
 }

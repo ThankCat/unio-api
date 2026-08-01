@@ -20,12 +20,13 @@ func fieldMap(fields []zap.Field) map[string]any {
 func TestFieldsZapFieldsOmitUnset(t *testing.T) {
 	ctx, fields := NewContext(context.Background(), "corr-1")
 
-	if got := fieldMap(fields.ZapFields()); len(got) != 1 || got["correlation_id"] != "corr-1" {
-		t.Fatalf("expected only correlation_id, got %#v", got)
+	if got := fieldMap(fields.ZapFields()); len(got) != 1 || got["trace_id"] != "corr-1" {
+		t.Fatalf("expected only trace_id, got %#v", got)
 	}
 
 	SetIdentity(ctx, 7, 100)
 	SetRequestID(ctx, "req_abc")
+	SetAttemptID(ctx, 88)
 	SetModel(ctx, "openai/gpt-4.1")
 	SetRouteID(ctx, 2)
 	SetUpstreamAttempt(ctx, UpstreamAttempt{
@@ -39,18 +40,19 @@ func TestFieldsZapFieldsOmitUnset(t *testing.T) {
 
 	got := fieldMap(fields.ZapFields())
 	cases := map[string]any{
-		"correlation_id": "corr-1",
-		"request_id":     "req_abc",
-		"user_id":        int64(7),
-		"api_key_id":     int64(100),
-		"model":          "openai/gpt-4.1",
-		"model_id":       int64(99),
-		"route_id":       int64(2),
-		"router":         "default-route",
-		"provider_id":    int64(9123),
-		"provider":       "openai",
-		"channel_id":     int64(123),
-		"channel":        "main",
+		"trace_id":      "corr-1",
+		"request_id":    "req_abc",
+		"attempt_id":    int64(88),
+		"user_id":       int64(7),
+		"api_key_id":    int64(100),
+		"model":         "openai/gpt-4.1",
+		"model_id":      int64(99),
+		"route_id":      int64(2),
+		"route_name":    "default-route",
+		"provider_id":   int64(9123),
+		"provider_slug": "openai",
+		"channel_id":    int64(123),
+		"channel_name":  "main",
 	}
 	for key, want := range cases {
 		if got[key] != want {
@@ -65,6 +67,7 @@ func TestContextHelpersNoopWithoutHolder(t *testing.T) {
 
 	SetIdentity(ctx, 1, 3)
 	SetRequestID(ctx, "req")
+	SetAttemptID(ctx, 1)
 	SetModel(ctx, "m")
 	SetRouteID(ctx, 1)
 	SetUpstreamAttempt(ctx, UpstreamAttempt{Provider: "p", Channel: "c"})
@@ -79,6 +82,7 @@ func TestNilFieldsSettersSafe(t *testing.T) {
 	var f *Fields
 	f.SetIdentity(1, 3)
 	f.SetRequestID("x")
+	f.SetAttemptID(1)
 	f.SetModel("m")
 	f.SetModelID(1)
 	f.SetRouteID(1)

@@ -60,14 +60,13 @@ func newUpstreamStatusError(resp *http.Response, operation string) error {
 	)
 }
 
-// newUpstreamSendErrorWithContextCause is used by stream calls whose request
-// context may be canceled by HeaderTimeoutContext before response headers
-// arrive. Some transports surface that as plain "context canceled"; the
-// context cause keeps the server-side header timeout distinguishable from a
-// real client cancel.
+// newUpstreamSendErrorWithContextCause preserves server-side timeout causes when
+// the transport only surfaces "context canceled" before response headers arrive.
+// This keeps response-header and first-token timeouts distinguishable from a real
+// client cancel.
 func newUpstreamSendErrorWithContextCause(cause error, ctxCause error, operation string) error {
 	classifyCause := cause
-	if errors.Is(ctxCause, context.DeadlineExceeded) {
+	if errors.Is(ctxCause, context.DeadlineExceeded) || errors.Is(ctxCause, adapter.ErrFirstTokenTimeout) {
 		classifyCause = ctxCause
 	}
 	return adapter.NewUpstreamError(
@@ -194,7 +193,7 @@ func upstreamCategoryForSendError(cause error) adapter.UpstreamErrorCategory {
 	switch {
 	case errors.Is(cause, context.Canceled):
 		return adapter.UpstreamErrorCanceled
-	case errors.Is(cause, context.DeadlineExceeded):
+	case errors.Is(cause, context.DeadlineExceeded), errors.Is(cause, adapter.ErrFirstTokenTimeout):
 		return adapter.UpstreamErrorTimeout
 	default:
 		var netErr net.Error

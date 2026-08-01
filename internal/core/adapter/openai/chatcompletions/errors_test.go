@@ -2,6 +2,7 @@ package chatcompletions
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,28 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
+
+func TestStreamSendFirstTokenTimeoutBeforeHeadersPreservesTimeoutCause(t *testing.T) {
+	err := newUpstreamSendErrorWithContextCause(
+		context.Canceled,
+		adapter.ErrFirstTokenTimeout,
+		"send stream chat completion request",
+	)
+
+	category, ok := adapter.UpstreamCategoryOf(err)
+	if !ok || category != adapter.UpstreamErrorTimeout {
+		t.Fatalf("category = %q ok=%v, want timeout", category, ok)
+	}
+	if !errors.Is(err, adapter.ErrFirstTokenTimeout) {
+		t.Fatalf("expected first-token timeout in error chain, got %v", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("server first-token timeout must not look like client cancel: %v", err)
+	}
+	if failure.CodeOf(err) != failure.CodeAdapterSendRequestFailed {
+		t.Fatalf("failure code = %q, want %q", failure.CodeOf(err), failure.CodeAdapterSendRequestFailed)
+	}
+}
 
 // TestAdapterChatCompletionsClassifiesUpstreamStatus 验证上游不同状态码被映射成稳定上游分类，
 // 并携带真实 status code 和 x-request-id，同时保持 failure.CodeOf 不变。

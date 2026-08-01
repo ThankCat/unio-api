@@ -64,6 +64,8 @@ func TestNewHTTPHandlerBuildsHealthRoute(t *testing.T) {
 		fakeHTTPMessagesService{},
 		nil,
 		nil,
+		"",
+		nil,
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)

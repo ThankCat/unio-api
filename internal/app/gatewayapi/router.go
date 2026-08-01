@@ -2,7 +2,9 @@ package gatewayapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
@@ -14,10 +16,15 @@ import (
 	gatewayresponses "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpmw"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 )
 
 type ReadinessProbe interface {
 	Check(ctx context.Context) (ready bool, reason string)
+}
+
+type LoggingStatusProvider interface {
+	Status() logging.GatewayStatus
 }
 
 // RouterDeps 保存构建 HTTP router 所需的外部依赖。
@@ -30,6 +37,8 @@ type RouterDeps struct {
 	ModelCatalogService   gatewaymodels.ModelCatalogService
 	RequestAdmission      middleware.RequestAdmissionAcquirer
 	Readiness             ReadinessProbe
+	InternalToken         string
+	LoggingStatus         LoggingStatusProvider
 
 	// HTTPMetrics 记录 HTTP 层请求指标；nil 表示不采集。
 	HTTPMetrics httpmw.MetricsRecorder
@@ -46,8 +55,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 	r.Use(httpmw.ClientIP)
 	r.Use(httpmw.Tracing)
 	r.Use(httpmw.Metrics(deps.HTTPMetrics))
-	r.Use(httpmw.Logger(deps.Logger))
-	r.Use(httpmw.Recoverer(deps.Logger))
+	r.Use(httpmw.GatewayLogger(deps.Logger))
+	r.Use(httpmw.GatewayRecoverer(deps.Logger))
 
 	// 版本前缀兼容：折叠多余的 /v1、补齐缺失的 /v1。置于日志/指标之后，故访问日志仍记录
 	// 客户端真实发来的路径（便于定位 base_url 配错），而路由按规范化后的单个 /v1 前缀匹配。
@@ -92,9 +101,19 @@ func NewRouter(deps RouterDeps) http.Handler {
 		}
 		_ = httpx.WriteJSON(w, status, body)
 	})
+	if deps.InternalToken != "" && deps.LoggingStatus != nil {
+		r.Get("/internal/v1/logging/status", func(w http.ResponseWriter, r *http.Request) {
+			provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if len(provided) != len(deps.InternalToken) || subtle.ConstantTimeCompare([]byte(provided), []byte(deps.InternalToken)) != 1 {
+				_ = httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "invalid internal token")
+				return
+			}
+			_ = httpx.WriteJSON(w, http.StatusOK, deps.LoggingStatus.Status())
+		})
+	}
 
 	r.Route("/v1", func(r chi.Router) {
-		r.Use(middleware.APIKeyAuth(deps.APIKeyAuthenticator))
+		r.Use(middleware.APIKeyAuth(deps.APIKeyAuthenticator, deps.Logger))
 		// nil admission 只用于直接构造 Router 的单元测试，middleware 会原样返回 handler。
 		// 生产 Gateway 必须注入 Manager，禁止回退到旧的本机限流或并发门禁。
 		admitted := func(scope string, protocol middleware.RequestAdmissionProtocol, handler http.Handler) http.Handler {

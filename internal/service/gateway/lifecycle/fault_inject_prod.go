@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"go.uber.org/zap"
+
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 )
 
 // 本文件是「生产构建」下的故障注入开关（P2-6）。
@@ -29,9 +31,9 @@ func WarnIfSettlementFaultInjectionConfigured(logger *zap.Logger) {
 		return
 	}
 	if v := os.Getenv("BILLING_E2E_INJECT_SETTLEMENT_FAIL"); v != "" {
-		logger.Warn(
-			"BILLING_E2E_INJECT_SETTLEMENT_FAIL is set but ignored in this build; fault injection requires -tags billing_e2e",
-			zap.String("value", v),
+		logging.Warn(logger, "system", "service", "settlement fault injection configuration ignored",
+			zap.String("environment_key", "BILLING_E2E_INJECT_SETTLEMENT_FAIL"),
+			zap.Bool("configured", true),
 		)
 	}
 }

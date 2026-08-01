@@ -7,11 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-gateway/internal/platform/stickysession"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
@@ -123,6 +126,31 @@ func stickyResolveParams(sessionKey string) StickyResolveParams {
 			stickyCandidate(101, nil, nil), stickyCandidate(202, nil, nil),
 		},
 	}
+}
+
+func TestStickyActionPropagatesToRequestSummary(t *testing.T) {
+	ctx, fields := logfields.NewContext(context.Background(), "trace-sticky")
+	router := NewStickyRouter(newFakeStickyStore())
+	params := stickyResolveParams("session-action")
+	params.Source = "prompt_cache_key"
+
+	session := router.Resolve(ctx, params)
+	if got := stringField(fields.ZapFields(), "sticky_action"); got != string(StickyActionMiss) {
+		t.Fatalf("sticky action after lookup = %q", got)
+	}
+	session.BindSuccess(ctx, stickyCandidate(101, nil, nil))
+	if got := stringField(fields.ZapFields(), "sticky_action"); got != string(StickyActionBindIfAbsent) {
+		t.Fatalf("sticky action after bind = %q", got)
+	}
+}
+
+func stringField(fields []zap.Field, key string) string {
+	for _, field := range fields {
+		if field.Key == key {
+			return field.String
+		}
+	}
+	return ""
 }
 
 func stickyCandidate(channelID int64, enabled *bool, ttl *time.Duration) routing.ChatRouteCandidate {

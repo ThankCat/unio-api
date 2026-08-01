@@ -681,6 +681,35 @@ func TestStreamResponseHeaderTimeoutClassifiesTransportCanceledAsTimeout(t *test
 	}
 }
 
+func TestStreamResponseFirstTokenTimeoutBeforeHeadersClassifiesTransportCanceledAsTimeout(t *testing.T) {
+	const firstTokenTimeout = time.Millisecond
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})}
+	ch := testChannel("https://example.test")
+	ch.ResponseTimeout = time.Second
+	ch.FirstTokenTimeout = firstTokenTimeout
+
+	_, err := NewAdapter(client).StreamResponse(context.Background(), ch, Request{Body: json.RawMessage(`{"model":"gpt-5.5","stream":true}`)}, func(StreamChunk) error {
+		t.Fatal("unexpected stream chunk")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected first-token timeout error")
+	}
+	category, ok := adapter.UpstreamCategoryOf(err)
+	if !ok || category != adapter.UpstreamErrorTimeout {
+		t.Fatalf("category = %q ok=%v, want timeout", category, ok)
+	}
+	if !errors.Is(err, adapter.ErrFirstTokenTimeout) {
+		t.Fatalf("expected first-token timeout in error chain, got %v", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("server first-token timeout must not look like client cancel: %v", err)
+	}
+}
+
 // TestStreamResponseRecoversMalformedMultiDataFrame 复现某些中转的畸形多行 data 帧:真正的终态事件
 // 前多塞一行残片 `data: {"type"`。SSE 合并后整体非法 JSON,旧逻辑会 adapter_read/emit 失败、丢计费。
 // 修复后必须 sanitize 出真事件,流正常收口且 usage/facts 完整。

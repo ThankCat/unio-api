@@ -12,6 +12,8 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
@@ -69,7 +71,7 @@ func RequestAdmission(acquirer RequestAdmissionAcquirer, opts RequestAdmissionOp
 				ConcurrencyLimitOverride: principal.ConcurrencyLimit,
 			})
 			if err != nil {
-				logRequestAdmissionFailure(opts.Logger, "acquire", err)
+				logRequestAdmissionFailure(r.Context(), opts.Logger, "acquire", err)
 				writeRequestAdmissionUnavailable(w, r, opts.Protocol)
 				return
 			}
@@ -91,7 +93,7 @@ func RequestAdmission(acquirer RequestAdmissionAcquirer, opts RequestAdmissionOp
 				finishCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), opts.FinishTimeout)
 				defer cancel()
 				if err := result.Session.Finalize(finishCtx); err != nil {
-					logRequestAdmissionFailure(opts.Logger, "finish", err)
+					logRequestAdmissionFailure(r.Context(), opts.Logger, "finalize", err)
 				}
 			}()
 
@@ -139,8 +141,11 @@ func writeRequestAdmissionUnavailable(w http.ResponseWriter, r *http.Request, pr
 	)
 }
 
-func logRequestAdmissionFailure(logger *zap.Logger, operation string, err error) {
+func logRequestAdmissionFailure(ctx context.Context, logger *zap.Logger, operation string, err error) {
 	fields := []zap.Field{zap.String("operation", operation)}
 	fields = append(fields, failure.LogFields(err)...)
-	logger.Warn("request admission operation failed", fields...)
+	if requestFields, ok := logfields.FromContext(ctx); ok {
+		fields = append(requestFields.ZapFields(), fields...)
+	}
+	logging.Error(logger, "admission", "request", "request admission operation failed", fields...)
 }

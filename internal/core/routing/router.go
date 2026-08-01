@@ -14,6 +14,8 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
@@ -287,7 +289,10 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 				zap.String("adapter_key", row.AdapterKey),
 				zap.String("upstream_model", row.UpstreamModel),
 			}, failure.LogFields(err)...)
-			r.logger.Warn("routing: skip unusable candidate", fields...)
+			if requestFields, ok := logfields.FromContext(ctx); ok {
+				fields = append(requestFields.ZapFields(), fields...)
+			}
+			logging.Warn(r.logger, "routing", "candidate", "routing candidate excluded", fields...)
 			continue
 		}
 		candidates = append(candidates, candidate)

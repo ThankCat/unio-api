@@ -5,9 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 )
 
@@ -17,11 +21,27 @@ type APIKeyAuthenticator interface {
 }
 
 // APIKeyAuth 校验 Bearer API Key，并把认证身份写入请求 context。
-func APIKeyAuth(authenticator APIKeyAuthenticator) func(http.Handler) http.Handler {
+func APIKeyAuth(authenticator APIKeyAuthenticator, loggers ...*zap.Logger) func(http.Handler) http.Handler {
+	var logger *zap.Logger
+	if len(loggers) > 0 {
+		logger = loggers[0]
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			startedAt := time.Now()
+			authScheme := "bearer"
+			if strings.TrimSpace(r.Header.Get("x-api-key")) != "" {
+				authScheme = "x-api-key"
+			}
 			token := apiKeyToken(r)
 			if token == "" {
+				logfields.SetCompletion(r.Context(), "warning", "unauthorized")
+				logging.Warn(logger, "http", "authentication", "authentication failed",
+					zap.String("trace_id", httpx.RequestID(r.Context())),
+					zap.String("method", r.Method), zap.String("path", r.URL.Path),
+					zap.String("auth_scheme", authScheme), zap.String("reason", "missing"),
+					zap.String("error_code", "unauthorized"),
+				)
 				_ = httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing api key")
 				return
 			}
@@ -46,6 +66,22 @@ func APIKeyAuth(authenticator APIKeyAuthenticator) func(http.Handler) http.Handl
 					code = "spend_limit_reached"
 					message = "api key spend limit reached"
 				}
+				reason := "invalid"
+				switch {
+				case errors.Is(err, auth.ErrAPIKeyDisabled), errors.Is(err, auth.ErrAPIKeyRevoked):
+					reason = "disabled"
+				case errors.Is(err, auth.ErrAPIKeyExpired):
+					reason = "expired"
+				case errors.Is(err, auth.ErrAPIKeySpendLimitReached):
+					reason = "spend_limit_reached"
+				}
+				logging.Warn(logger, "http", "authentication", "authentication failed",
+					zap.String("trace_id", httpx.RequestID(r.Context())),
+					zap.String("method", r.Method), zap.String("path", r.URL.Path),
+					zap.String("auth_scheme", authScheme), zap.String("reason", reason),
+					zap.String("error_code", code),
+				)
+				logfields.SetCompletion(r.Context(), "warning", code)
 
 				_ = httpx.WriteError(w, status, code, message)
 				return
@@ -53,6 +89,13 @@ func APIKeyAuth(authenticator APIKeyAuthenticator) func(http.Handler) http.Handl
 
 			ctx := auth.ContextWithAPIKeyPrincipal(r.Context(), principal)
 			logfields.SetIdentity(ctx, principal.UserID, principal.APIKeyID)
+			logging.Debug(logger, "http", "authentication", "authentication completed",
+				zap.String("trace_id", httpx.RequestID(ctx)),
+				zap.Int64("api_key_id", principal.APIKeyID),
+				zap.Int64("user_id", principal.UserID),
+				zap.String("auth_scheme", authScheme),
+				zap.Int64("duration_ms", time.Since(startedAt).Milliseconds()),
+			)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

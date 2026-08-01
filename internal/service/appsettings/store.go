@@ -12,6 +12,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
@@ -39,8 +40,17 @@ type SettingsStore struct {
 	registry *Registry
 	logger   *zap.Logger
 
+	gatewayEventLogging bool
+
 	mu    sync.Mutex
 	local map[string]localEntry
+}
+
+// EnableGatewayEventLogging 让该实例按 Gateway 权威日志信封输出。该开关必须在实例开始服务前设置。
+func (s *SettingsStore) EnableGatewayEventLogging() {
+	if s != nil {
+		s.gatewayEventLogging = true
+	}
 }
 
 type localEntry struct {
@@ -75,7 +85,7 @@ func (s *SettingsStore) redisKey(key string) string {
 func (s *SettingsStore) Raw(ctx context.Context, key string) json.RawMessage {
 	def, ok := s.registry.Get(key)
 	if !ok {
-		s.logger.Warn("appsettings: unknown key requested", zap.String("key", key))
+		s.warn("unknown setting requested", zap.String("key", key))
 		return nil
 	}
 
@@ -117,8 +127,14 @@ func (s *SettingsStore) readRedis(ctx context.Context, key string) (json.RawMess
 	raw, err := s.redis.Get(ctx, s.redisKey(key)).Bytes()
 	if err != nil {
 		if !errors.Is(err, redis.Nil) {
-			s.logger.Warn("appsettings: redis get failed, falling back to db",
-				zap.String("key", key), zap.String("error", err.Error()))
+			s.warn("setting read degraded",
+				zap.String("key", key),
+				zap.String("source", "redis"),
+				zap.String("fallback", "postgres"),
+				zap.String("error_code", "setting_redis_read_failed"),
+				zap.String("error_category", "dependency"),
+				zap.String("error_message", err.Error()),
+			)
 		}
 		return nil, false
 	}
@@ -130,8 +146,13 @@ func (s *SettingsStore) writeRedis(ctx context.Context, key string, v json.RawMe
 		return
 	}
 	if err := s.redis.Set(ctx, s.redisKey(key), []byte(v), 0).Err(); err != nil {
-		s.logger.Warn("appsettings: redis set failed (non-fatal)",
-			zap.String("key", key), zap.String("error", err.Error()))
+		s.warn("setting cache write failed",
+			zap.String("key", key),
+			zap.String("target", "redis"),
+			zap.String("error_code", "setting_cache_write_failed"),
+			zap.String("error_category", "dependency"),
+			zap.String("error_message", err.Error()),
+		)
 	}
 }
 
@@ -139,8 +160,14 @@ func (s *SettingsStore) readDBOrDefault(ctx context.Context, key string, def Def
 	raw, err := s.queries.GetAppSetting(ctx, key)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
-			s.logger.Warn("appsettings: db read failed, using default",
-				zap.String("key", key), zap.String("error", err.Error()))
+			s.warn("setting read degraded",
+				zap.String("key", key),
+				zap.String("source", "postgres"),
+				zap.String("fallback", "default"),
+				zap.String("error_code", "setting_postgres_read_failed"),
+				zap.String("error_category", "dependency"),
+				zap.String("error_message", err.Error()),
+			)
 		}
 		return def.Default
 	}
@@ -163,8 +190,12 @@ func (s *SettingsStore) SeedDefaults(ctx context.Context) error {
 			Description: def.Description,
 		})
 		if err != nil {
-			s.logger.Warn("appsettings: seed default failed (non-fatal)",
-				zap.String("key", def.Key), zap.String("error", err.Error()))
+			s.warn("setting default seed failed",
+				zap.String("key", def.Key),
+				zap.String("error_code", "setting_default_seed_failed"),
+				zap.String("error_category", "persistence"),
+				zap.String("error_message", err.Error()),
+			)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -196,13 +227,58 @@ func (s *SettingsStore) Set(ctx context.Context, key string, value json.RawMessa
 		return err
 	}
 
-	// 变更留痕(用户决策:不建审计表,info 日志即可)。
-	s.logger.Info("appsettings: setting updated",
-		zap.String("key", key), zap.String("value", string(value)))
+	// 变更留痕只记录类型和 revision，不把可能敏感的完整 setting value 复制进日志。
+	fields := []zap.Field{
+		zap.String("key", key),
+		zap.String("value_type", jsonValueType(value)),
+	}
+	if record, recordErr := s.queries.GetAppSettingRecord(ctx, key); recordErr == nil {
+		fields = append(fields, zap.Int64("revision", record.Revision))
+	}
+	s.info("setting updated", fields...)
 
 	s.writeRedis(ctx, key, value)
 	s.writeLocal(key, value)
 	return nil
+}
+
+func (s *SettingsStore) warn(message string, fields ...zap.Field) {
+	if s.gatewayEventLogging {
+		logging.Warn(s.logger, "system", "settings", message, fields...)
+		return
+	}
+	s.logger.Warn(message, fields...)
+}
+
+func (s *SettingsStore) info(message string, fields ...zap.Field) {
+	if s.gatewayEventLogging {
+		logging.Info(s.logger, "system", "settings", message, fields...)
+		return
+	}
+	s.logger.Info(message, fields...)
+}
+
+func jsonValueType(raw json.RawMessage) string {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "invalid"
+	}
+	switch value.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "boolean"
+	case float64:
+		return "number"
+	case string:
+		return "string"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	default:
+		return "unknown"
+	}
 }
 
 // SettingRecord 是 app_settings 的 PostgreSQL 管理事实；关键 P4 设置不得从普通 Redis cache 推断 revision。
@@ -211,6 +287,7 @@ type SettingRecord struct {
 	Value       json.RawMessage
 	Description string
 	Revision    int64
+	UpdatedAt   time.Time
 }
 
 // Record 强一致读取 PostgreSQL 设置行及 revision。
@@ -224,6 +301,7 @@ func (s *SettingsStore) Record(ctx context.Context, key string) (SettingRecord, 
 		Value:       json.RawMessage(row.Value),
 		Description: row.Description,
 		Revision:    row.Revision,
+		UpdatedAt:   row.UpdatedAt.Time,
 	}, nil
 }
 

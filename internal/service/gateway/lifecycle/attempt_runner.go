@@ -250,6 +250,8 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 	// 全池短等（§9.3/§9.4）：第一轮扫描完整候选池；只有「没有取得任何 permit 且全部只因并发满」
 	// 才允许等待一次，然后只做一次完整重扫。attemptedChannels 从状态机上禁止 A -> B -> A（§3.5）。
 	capacityWaitUsed := false
+	capacityWaitLogged := false
+	var capacityWaitDuration time.Duration
 	attemptedChannels := make(map[int64]bool, len(params.Candidates))
 	permitAcquired := false
 
@@ -336,6 +338,10 @@ scan:
 				permitAcquired = true
 				if capacityWaitUsed && pass > 0 {
 					result.CapacityWaitResult = string(capacityWaitAcquired)
+					if !capacityWaitLogged {
+						l.LogCapacityWaitCompleted(ctx, requestRecord, capacityWaitDuration, capacityWaitAcquired)
+						capacityWaitLogged = true
+					}
 				}
 				result.recordScan(pass, candidate.Channel.ID, true, "")
 				// Arm the terminal fallback before attempt persistence or any other fallible work.
@@ -368,13 +374,19 @@ scan:
 			attemptedChannels[candidate.Channel.ID] = true
 
 			upstreamStart := time.Now()
-			success, err := r.invokeNonStreamAttempt(ctx, candidate, attemptRecord, permitOwner, params.Invoke)
+			success, timingFacts, err := r.invokeNonStreamAttempt(ctx, requestRecord, candidate, attemptRecord, permitOwner, params.Invoke)
 			l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 			l.RecordCredentialResult(candidate, err)
+			fallback := params.TransparentFallback
+			var responseFacts *adapter.ResponseFacts
+			if err == nil {
+				responseFacts = &success.Facts
+			}
 			// Sticky：先按 §10.7/§10.8 处置绑定，再走 fallback。清绑定必须发生在尝试 B 之前，
 			// 这样 B 成功后是以 Unbound 状态 BindIfAbsent，而不是隐式 Rebind(A, B)（§10.9）。
 			applyStickyAttemptFailure(ctx, params.Sticky, candidate.Channel.ID, err)
 			if errors.Is(err, ErrAttemptRuntimeFeedback) || errors.Is(err, errAttemptPermitFinish) {
+				l.LogUpstreamAttemptResult(ctx, requestRecord, attemptRecord, candidate, false, timingFacts, responseFacts, AttemptStreamStats{}, err, false, false)
 				l.MarkAttemptFailed(ctx, attemptRecord, FailureCodeOrFallback(err, string(failure.CodeGatewayBreakerStoreUnavailable)), err)
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
@@ -387,9 +399,13 @@ scan:
 			// A transparent fallback is a second real transport, not an adapter-internal retry. The first
 			// permit has already reached Finish/Abort inside invokeNonStreamAttempt. Only after recording
 			// that attempt do we resolve and freshly admit the second endpoint.
-			fallback := params.TransparentFallback
 			if err != nil && fallback != nil && fallback.Match != nil && fallback.Match(candidate, err) {
+				l.LogUpstreamAttemptResult(ctx, requestRecord, attemptRecord, candidate, false, timingFacts, nil, AttemptStreamStats{}, err, true, false)
 				result.RoutingFallback = true
+				l.LogRoutingFallback(
+					ctx, requestRecord, attemptRecord, candidate,
+					FailureCodeOrFallback(err, "transparent_fallback"), true, false, true, fallback.UpstreamEndpoint,
+				)
 				l.MarkAttemptFailed(ctx, attemptRecord, "adapter_error", err)
 				l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.EstimatedTokens, err)
 
@@ -478,10 +494,15 @@ scan:
 				attemptRecord = fallbackAttempt
 
 				upstreamStart = time.Now()
-				success, err = r.invokeNonStreamAttempt(ctx, candidate, attemptRecord, fallbackOwner, fallback.Invoke)
+				success, timingFacts, err = r.invokeNonStreamAttempt(ctx, requestRecord, candidate, attemptRecord, fallbackOwner, fallback.Invoke)
 				l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 				l.RecordCredentialResult(candidate, err)
+				responseFacts = nil
+				if err == nil {
+					responseFacts = &success.Facts
+				}
 				if errors.Is(err, ErrAttemptRuntimeFeedback) || errors.Is(err, errAttemptPermitFinish) {
+					l.LogUpstreamAttemptResult(ctx, requestRecord, attemptRecord, candidate, false, timingFacts, responseFacts, AttemptStreamStats{}, err, false, false)
 					l.MarkAttemptFailed(ctx, attemptRecord, FailureCodeOrFallback(err, string(failure.CodeGatewayBreakerStoreUnavailable)), err)
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
@@ -494,6 +515,7 @@ scan:
 			if err != nil {
 				// 客户端取消不是上游失败，也不触发 fallback；此时还没进入 settlement，不写账务。
 				if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+					l.LogUpstreamAttemptResult(ctx, requestRecord, attemptRecord, candidate, false, timingFacts, nil, AttemptStreamStats{}, err, false, false)
 					// bill-on-disconnect 渠道：请求已发出、上游照常生成并计费，记平台成本敞口（阶段一）。
 					l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.EstimatedTokens, err)
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
@@ -514,6 +536,8 @@ scan:
 				// 而是释放冻结并记 risk_exposure，保留「平台可能承担成本」的审计事实，杜绝静默白嫖。
 				// 该分支优先于 retry 分类——再尝试只会在另一渠道叠加成本。
 				if params.UpstreamCostWithoutUsage != nil && params.UpstreamCostWithoutUsage(err) {
+					l.LogUpstreamResponseMissingBillableUsage(ctx, requestRecord, attemptRecord, candidate, timingFacts)
+					l.LogUpstreamAttemptResult(ctx, requestRecord, attemptRecord, candidate, false, timingFacts, nil, AttemptStreamStats{}, err, false, false)
 					if releaseErr := l.ReleaseAuthorizationForBillingException(
 						ctx,
 						authorization,
@@ -527,7 +551,9 @@ scan:
 					return result, err
 				}
 
-				if !r.retryClassifier.IsRetryable(err) {
+				retryable := r.retryClassifier.IsRetryable(err)
+				l.LogUpstreamAttemptResult(ctx, requestRecord, attemptRecord, candidate, false, timingFacts, nil, AttemptStreamStats{}, err, retryable, false)
+				if !retryable {
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 						return result, releaseErr
@@ -541,10 +567,16 @@ scan:
 					result.RoutingFallback = true
 					category, _ := adapter.UpstreamCategoryOf(err)
 					l.RecordBalanceFallback(routeIDOf(params.Principal), "upstream_"+string(category))
+					l.LogRoutingFallback(
+						ctx, requestRecord, attemptRecord, candidate,
+						FailureCodeOrFallback(err, "upstream_retryable"), true, false, false, "",
+					)
 				}
 				lastErr = err
 				continue
 			}
+
+			l.LogUpstreamAttemptResult(ctx, requestRecord, attemptRecord, candidate, false, timingFacts, responseFacts, AttemptStreamStats{}, nil, false, false)
 
 			l.RecordRoutingSelected(candidate.ProviderID, candidate.Channel.ID, params.RequestedModelID)
 			l.RecordBalanceSelected(routeIDOf(params.Principal), candidate.Channel.ID)
@@ -574,6 +606,7 @@ scan:
 			})
 			EndSettlementSpan(settleSpan, settleErr)
 			l.RecordSettlement(SettlementOutcomeFromErr(settleErr))
+			l.LogSettlementResult(ctx, requestRecord, attemptRecord, candidate, authorization, success.Facts, false, settleErr)
 			if settleErr != nil && !IsChatSettlementRecoveryScheduled(settleErr) {
 				// 上游已成功（成本已产生），但 settlement 永久失败且没有 recovery job 接管（典型为 recovery
 				// job 创建失败，此时内层 settlement 尚未 capture，reservation 仍停留在 authorized）。必须释放
@@ -615,18 +648,22 @@ scan:
 			case denials.AllConcurrencyFull():
 				result.CapacityWaitResult = string(capacityWaitCapacityExhausted)
 			}
+			if !capacityWaitLogged {
+				l.LogCapacityWaitCompleted(ctx, requestRecord, capacityWaitDuration, capacityWaitOutcome(result.CapacityWaitResult))
+				capacityWaitLogged = true
+			}
 		}
 		if permitAcquired || capacityWaitUsed || pass > 0 || !denials.AllConcurrencyFull() {
 			break scan
 		}
+		l.LogCapacityWaitStarted(ctx, requestRecord, len(params.Candidates), r.capacityWait.Timeout())
 		waited, outcome := r.waitForChannelCapacity(ctx)
 		capacityWaitUsed = true
+		capacityWaitDuration = waited
 		result.recordCapacityWait(waited, outcome)
-		r.logRouting(ctx, "routing capacity wait",
-			zap.Int64("waited_ms", waited.Milliseconds()),
-			zap.String("capacity_wait_resume_reason", string(outcome)),
-		)
 		if outcome == capacityWaitCanceled || outcome == capacityWaitNotWaited {
+			l.LogCapacityWaitCompleted(ctx, requestRecord, waited, outcome)
+			capacityWaitLogged = true
 			break scan
 		}
 		// 等待后按当前运行态重新分类：重扫可能取得 permit，也可能变成全池 429。
@@ -634,6 +671,7 @@ scan:
 	}
 
 	if lastErr != nil {
+		l.LogRoutingFallbackExhausted(ctx, requestRecord, result.Attempts, lastAttemptedChannelID(result), FailureCodeOrFallback(lastErr, "upstream_retryable"), lastErr)
 		if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 			l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 			return result, releaseErr
@@ -664,6 +702,13 @@ scan:
 	)
 	l.MarkRequestFailed(ctx, requestRecord, RoutingFailureCode(err), err)
 	return result, err
+}
+
+func lastAttemptedChannelID(result RunResult) int64 {
+	if len(result.TransportChain) == 0 {
+		return 0
+	}
+	return result.TransportChain[len(result.TransportChain)-1].ChannelID
 }
 
 // recordCapacityWait 冻结一次全池短等的 trace 事实（§13.2）。

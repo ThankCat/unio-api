@@ -16,6 +16,8 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
@@ -156,10 +158,13 @@ func (h *messagesHandler) auditIgnoredBetaHeaders(r *http.Request) {
 		return
 	}
 
-	h.logger.Debug(
-		"anthropic-beta ignored (no-op for current provider)",
-		zap.Any("dropped_beta_headers", tokens),
+	fields := logfields.ContextZapFields(r.Context())
+	fields = append(fields,
+		zap.String("ingress_protocol", "anthropic"),
+		zap.Strings("ignored_beta_headers", tokens),
+		zap.String("reason", "noop_for_provider"),
 	)
+	logging.Debug(h.logger, "upstream", "adapter", "ingress beta headers ignored", fields...)
 }
 
 func writeMessageValidationError(w http.ResponseWriter, verr *messageValidationError) {

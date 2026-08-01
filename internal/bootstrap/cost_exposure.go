@@ -2,10 +2,6 @@ package bootstrap
 
 import (
 	"context"
-
-	"go.uber.org/zap"
-
-	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
@@ -14,11 +10,10 @@ import (
 // 纯追加写；失败记 warn 日志（敞口是观测事实，不阻断请求收口）。
 type costExposureStore struct {
 	queries *sqlc.Queries
-	logger  *zap.Logger
 }
 
-func newCostExposureStore(queries *sqlc.Queries, logger *zap.Logger) *costExposureStore {
-	return &costExposureStore{queries: queries, logger: logger}
+func newCostExposureStore(queries *sqlc.Queries) *costExposureStore {
+	return &costExposureStore{queries: queries}
 }
 
 // RecordChannelCostExposure 实现 lifecycle.CostExposureRecorder。
@@ -34,14 +29,5 @@ func (s *costExposureStore) RecordChannelCostExposure(ctx context.Context, param
 		EstimatedCostAmount:  params.EstimatedCostAmount,
 		Currency:             params.Currency,
 	})
-	if err != nil && s.logger != nil {
-		fields := []zap.Field{
-			zap.Int64("request_record_id", params.RequestRecordID),
-			zap.Int64("channel_id", params.ChannelID),
-			zap.String("reason", params.Reason),
-		}
-		fields = append(fields, failure.LogFields(err)...)
-		s.logger.Warn("record channel cost exposure failed", fields...)
-	}
 	return err
 }

@@ -32,6 +32,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/customer"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/customerops"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/dashboard"
+	admingatewaylogging "github.com/ThankCat/unio-gateway/internal/service/admin/gatewaylogging"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/model"
 	modelcatalogadmin "github.com/ThankCat/unio-gateway/internal/service/admin/modelcatalog"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelops"
@@ -236,6 +237,13 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 			settingsStore, settingsRuntimePublisher, settingsRuntimeStore,
 		)
 	}
+	gatewayLoggingService := admingatewaylogging.NewService(
+		providerSettingsService,
+		http.DefaultClient,
+		deps.Config.Admin.GatewayInternalURLs,
+		deps.Config.Admin.GatewayInternalToken,
+		deps.Config.Admin.LokiURL,
+	)
 
 	handler := NewAdminHTTPHandler(adminHTTPDeps{
 		Logger:              deps.Logger,
@@ -279,6 +287,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 		RecoveryJobQueryService:   recoveryJobQueryService,
 		RuntimeDiagnosticsService: runtimeDiagnosticsService,
+		GatewayLoggingService:     gatewayLoggingService,
 		ProviderSettingsService:   providerSettingsService,
 
 		GatewayConfig: deps.Config.Gateway,

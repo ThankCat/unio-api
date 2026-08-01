@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"errors"
+	"net/http"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 )
@@ -35,7 +36,8 @@ type ProviderErrorClassifier struct{}
 //   - auth（401）：本渠道凭据失效。因 (provider, key) 联合唯一 → 同线路其它候选必然是「另一把 key /
 //     另一个上游账号」，fallback 过去大概率成功；且失效渠道由凭据闸门（credential_valid）持久摘除，
 //     不会反复盲目重试同一把死 key，故允许 fallback（DEC 2026-07 凭据闸门）。
-//   - permission（403）：多为账号级/模型级授权问题，换渠道多半同样被拒，不重试（仍由熔断做瞬时摘除）。
+//   - permission（明确 HTTP 403）：当前 Channel-Model 权限失效；暂停精确组合后切换候选。
+//     缺少 403 metadata 的 permission 错误保持不可重试，避免对歧义或内联错误盲目重放。
 //   - bad_request：请求本身非法，换 channel 内容不变也不会成功，不重试。
 //   - canceled：客户端主动取消，不是上游故障，不重试。
 //   - unknown 或链上没有 *adapter.UpstreamError：缺乏可靠依据，保守地不重试。
@@ -54,6 +56,9 @@ func (ProviderErrorClassifier) IsRetryable(err error) bool {
 		adapter.UpstreamErrorServer,
 		adapter.UpstreamErrorAuth:
 		return true
+	case adapter.UpstreamErrorPermission:
+		metadata, metadataOK := adapter.UpstreamMetadataOf(err)
+		return metadataOK && metadata.StatusCode == http.StatusForbidden
 	default:
 		return false
 	}

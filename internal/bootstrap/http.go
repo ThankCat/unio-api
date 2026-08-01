@@ -11,6 +11,7 @@ import (
 	gatewayresponses "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
@@ -26,6 +27,8 @@ func NewHTTPHandler(
 	messagesService gatewayanthropic.MessagesService,
 	metricsRecorder *metrics.Metrics,
 	readiness gatewayapi.ReadinessProbe,
+	internalToken string,
+	loggingStatus *logging.GatewayRuntime,
 ) http.Handler {
 	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
 	modelCatalogService := modelcatalog.NewService(queries)
@@ -35,6 +38,8 @@ func NewHTTPHandler(
 		APIKeyAuthenticator: apiKeyAuthenticator,
 		RequestAdmission:    requestAdmission,
 		Readiness:           readiness,
+		InternalToken:       internalToken,
+		LoggingStatus:       loggingStatus,
 
 		ChatCompletionService: chatCompletionService,
 		ResponsesService:      responsesService,

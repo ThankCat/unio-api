@@ -65,7 +65,7 @@ func Logger(logger *zap.Logger) func(http.Handler) http.Handler {
 			if lf, ok := logfields.FromContext(r.Context()); ok {
 				fields = lf.ZapFields()
 			} else {
-				fields = []zap.Field{zap.String("correlation_id", httpx.RequestID(r.Context()))}
+				fields = []zap.Field{zap.String("trace_id", httpx.RequestID(r.Context()))}
 			}
 
 			if recorder.status >= http.StatusInternalServerError {

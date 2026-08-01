@@ -46,7 +46,8 @@ type UpstreamTimeoutPhase string
 const (
 	// TimeoutPhaseResponseHeader 上游未在 response_timeout_ms 内返回 HTTP 响应头。
 	TimeoutPhaseResponseHeader UpstreamTimeoutPhase = "response_header"
-	// TimeoutPhaseFirstToken 流式：响应头已到，但未在 first_token_timeout_ms 内产生首个有效生成 Token。
+	// TimeoutPhaseFirstToken 流式：未在 first_token_timeout_ms 内产生首个有效生成 Token。
+	// 首字预算从 transport start 起算，因此它可能在响应头到达前先于更宽松的响应头预算触发。
 	TimeoutPhaseFirstToken UpstreamTimeoutPhase = "first_token"
 	// TimeoutPhaseStreamIdle 流式：首个有效生成 Token 之后连接静默超过 stream_idle_timeout_ms。
 	TimeoutPhaseStreamIdle UpstreamTimeoutPhase = "stream_idle"
@@ -60,7 +61,8 @@ const (
 // 在途的 body 读取随之失败。stream adapter 据此把读流错误归类为「上游超时」而非通用读失败。
 var ErrStreamIdleTimeout = errors.New("adapter: upstream stream idle timeout")
 
-// ErrFirstTokenTimeout 表示流式上游已返回响应头，但未在首字预算内产生任何有效生成 Token。
+// ErrFirstTokenTimeout 表示流式上游未在首字预算内产生任何有效生成 Token。
+// 首字预算从 transport start 起算，因此该错误也可能在响应头到达前触发。
 //
 // 它与 idle 超时是不同的故障：idle 说明「曾经推进过、后来卡住」，首字超时说明「从未真正开始」。
 // 两者在 Sticky 清绑、错误率样本和 Admin 展示上都必须可区分。

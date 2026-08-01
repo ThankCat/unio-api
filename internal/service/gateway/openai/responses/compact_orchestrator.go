@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"go.uber.org/zap"
-
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
@@ -119,15 +117,8 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 				resp, err := compactAdapter.CompactResponse(adapterCtx, candidate.Channel, responsesadapter.Request{Body: body})
 				lifecycle.EndGatewaySpan(adapterSpan, err)
 				if err != nil {
-					// 原生 2xx 但缺 usage（上游很可能已计费）：绝不回落白嫖。上抛交由 AttemptRunner 释放冻结 +
-					// 记 risk_exposure（UpstreamCostWithoutUsage 分类命中），并向客户返回上游错误（P0-3）。
-					if isNativeCompactMissingUsage(err) {
-						s.logger.Warn("native compact returned 2xx without billable usage; recording risk exposure instead of synthetic freeloading",
-							zap.String("adapter_key", candidate.AdapterKey),
-							zap.Int64("channel_id", candidate.Channel.ID),
-							zap.String("upstream_model", candidate.UpstreamModel),
-						)
-					}
+					// 原生 2xx 但缺 usage（上游很可能已计费）：绝不回落白嫖。上抛交由 AttemptRunner 释放冻结、
+					// 记录结构化 missing-usage/cost-exposure 事实，并向客户返回上游错误（P0-3）。
 					return lifecycle.AttemptSuccess{}, err
 				}
 				result = compactResult{native: resp}
@@ -140,13 +131,6 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 				matched := s.compactNativeFallback &&
 					s.registry.HasResponsesCompact(candidate.AdapterKey) &&
 					isNativeCompactUnsupported(err)
-				if matched {
-					s.logger.Warn("native compact unsupported; falling back to a separately admitted synthetic compaction",
-						zap.String("adapter_key", candidate.AdapterKey),
-						zap.Int64("channel_id", candidate.Channel.ID),
-						zap.String("upstream_model", candidate.UpstreamModel),
-					)
-				}
 				return matched
 			},
 			UpstreamEndpoint: requestlog.UpstreamEndpointChatCompletions,

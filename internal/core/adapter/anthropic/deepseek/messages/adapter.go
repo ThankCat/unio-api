@@ -16,6 +16,8 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 )
 
 // Adapter 是 DeepSeek Anthropic origin 的 adapter。
@@ -42,7 +44,7 @@ func NewAdapter(client *http.Client, logger *zap.Logger) *Adapter {
 // Messages 在调用上游前 Drop DeepSeek 无法转换的字段，其余复用通用 Anthropic 实现。
 func (a *Adapter) Messages(ctx context.Context, ch channel.Runtime, req messagesadapter.MessageRequest) (*messagesadapter.MessageResponse, error) {
 	cleaned, dropped := dropUnsupported(req)
-	a.logDropped(ctx, dropped)
+	a.logDropped(ctx, ch, dropped)
 
 	return a.base.Messages(ctx, ch, cleaned)
 }
@@ -50,7 +52,7 @@ func (a *Adapter) Messages(ctx context.Context, ch channel.Runtime, req messages
 // StreamMessages 在调用上游前 Drop DeepSeek 无法转换的字段，其余复用通用 Anthropic 实现。
 func (a *Adapter) StreamMessages(ctx context.Context, ch channel.Runtime, req messagesadapter.MessageRequest, emit func(messagesadapter.MessageStreamEvent) error) (adapter.StreamOutcome, error) {
 	cleaned, dropped := dropUnsupported(req)
-	a.logDropped(ctx, dropped)
+	a.logDropped(ctx, ch, dropped)
 
 	return a.base.StreamMessages(ctx, ch, cleaned, emit)
 }
@@ -63,16 +65,21 @@ func (a *Adapter) CountMessagesInputTokens(req messagesadapter.MessagesInputToke
 // logDropped 记录本次请求被 Drop 的字段名。
 //
 // 只记录字段名，不记录字段值，避免把客户内容写入日志；空列表不产生日志。
-func (a *Adapter) logDropped(ctx context.Context, dropped []string) {
+func (a *Adapter) logDropped(ctx context.Context, ch channel.Runtime, dropped []string) {
 	if len(dropped) == 0 {
 		return
 	}
 
-	a.logger.Warn("deepseek anthropic adapter dropped unsupported request fields",
-		zap.String("protocol", "anthropic"),
+	fields := logfields.ContextZapFields(ctx)
+	fields = append(fields,
+		zap.Int64("channel_id", ch.ID),
+		zap.String("channel_name", ch.Name),
+		zap.String("provider_slug", ch.ProviderSlug),
+		zap.String("ingress_protocol", "anthropic"),
 		zap.String("adapter_key", "deepseek"),
-		zap.Any("dropped_request_fields", dropped),
+		zap.Strings("dropped_request_fields", dropped),
 	)
+	logging.Debug(a.logger, "upstream", "adapter", "upstream request fields dropped", fields...)
 }
 
 var (

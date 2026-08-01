@@ -31,8 +31,10 @@ type ctxKey struct{}
 type Fields struct {
 	mu sync.Mutex
 
-	correlationID string
+	traceID       string
 	requestID     string
+	attemptID     int64
+	hasAttemptID  bool
 	userID        int64
 	apiKeyID      int64
 	model         string
@@ -47,11 +49,36 @@ type Fields struct {
 	channelID     int64
 	hasChannelID  bool
 	channel       string
+
+	upstreamTTFTMs        int64
+	hasUpstreamTTFT       bool
+	gatewayTTFTMs         int64
+	hasGatewayTTFT        bool
+	attemptCount          int
+	hasAttemptCount       bool
+	fallbackCount         int
+	hasFallbackCount      bool
+	capacityWaitMs        int64
+	hasCapacityWait       bool
+	stickyAction          string
+	deliveryStatus        string
+	settlementStatus      string
+	inputTokens           int64
+	cacheReadInputTokens  int64
+	cacheWriteInputTokens int64
+	outputTokens          int64
+	reasoningTokens       int64
+	totalTokens           int64
+	hasUsage              bool
+	chargedAmount         string
+	currency              string
+	errorCode             string
+	completionLevel       string
 }
 
-// NewContext 在 ctx 中安装一个携带 correlationID 的 Fields，并返回该 Fields 指针。
-func NewContext(ctx context.Context, correlationID string) (context.Context, *Fields) {
-	f := &Fields{correlationID: correlationID}
+// NewContext 在 ctx 中安装一个携带 traceID 的 Fields，并返回该 Fields 指针。
+func NewContext(ctx context.Context, traceID string) (context.Context, *Fields) {
+	f := &Fields{traceID: traceID}
 	return context.WithValue(ctx, ctxKey{}, f), f
 }
 
@@ -59,6 +86,14 @@ func NewContext(ctx context.Context, correlationID string) (context.Context, *Fi
 func FromContext(ctx context.Context) (*Fields, bool) {
 	f, ok := ctx.Value(ctxKey{}).(*Fields)
 	return f, ok
+}
+
+// ContextZapFields 返回当前请求已传播的结构化字段；不存在时返回 nil。
+func ContextZapFields(ctx context.Context) []zap.Field {
+	if fields, ok := FromContext(ctx); ok {
+		return fields.ZapFields()
+	}
+	return nil
 }
 
 // SetIdentity 记录认证身份字段。
@@ -82,6 +117,154 @@ func (f *Fields) SetRequestID(requestID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requestID = requestID
+}
+
+func (f *Fields) SetAttemptID(attemptID int64) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.attemptID = attemptID
+	f.hasAttemptID = attemptID != 0
+}
+
+func (f *Fields) SetUpstreamTTFT(value int64) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.upstreamTTFTMs = value
+	f.hasUpstreamTTFT = true
+}
+
+func (f *Fields) SetGatewayTTFT(value int64) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gatewayTTFTMs = value
+	f.hasGatewayTTFT = true
+}
+
+func (f *Fields) SetAttemptCount(value int) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.attemptCount = value
+	f.hasAttemptCount = true
+}
+
+func (f *Fields) IncrementFallbackCount() {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fallbackCount++
+	f.hasFallbackCount = true
+}
+
+func (f *Fields) SetFallbackCount(value int) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fallbackCount = value
+	f.hasFallbackCount = true
+}
+
+func (f *Fields) SetCapacityWait(value int64) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.capacityWaitMs = value
+	f.hasCapacityWait = true
+}
+
+func (f *Fields) SetStickyAction(value string) {
+	if f == nil || value == "" {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stickyAction = value
+}
+
+func (f *Fields) SetDeliveryStatus(value string) {
+	if f == nil || value == "" {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deliveryStatus = value
+}
+
+func (f *Fields) SetSettlementStatus(value string) {
+	if f == nil || value == "" {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.settlementStatus = value
+}
+
+type UsageSummary struct {
+	InputTokens           int64
+	CacheReadInputTokens  int64
+	CacheWriteInputTokens int64
+	OutputTokens          int64
+	ReasoningTokens       int64
+	TotalTokens           int64
+	ChargedAmount         string
+	Currency              string
+}
+
+func (f *Fields) SetUsageSummary(summary UsageSummary) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inputTokens = summary.InputTokens
+	f.cacheReadInputTokens = summary.CacheReadInputTokens
+	f.cacheWriteInputTokens = summary.CacheWriteInputTokens
+	f.outputTokens = summary.OutputTokens
+	f.reasoningTokens = summary.ReasoningTokens
+	f.totalTokens = summary.TotalTokens
+	f.chargedAmount = summary.ChargedAmount
+	f.currency = summary.Currency
+	f.hasUsage = true
+}
+
+func (f *Fields) SetCompletion(level string, errorCode string) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if level != "" {
+		f.completionLevel = level
+	}
+	if errorCode != "" {
+		f.errorCode = errorCode
+	}
+}
+
+func (f *Fields) CompletionLevel() string {
+	if f == nil {
+		return ""
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.completionLevel
 }
 
 // SetModel 记录请求目标模型（API 模型字符串）。
@@ -173,11 +356,14 @@ func (f *Fields) ZapFields() []zap.Field {
 	defer f.mu.Unlock()
 
 	fields := make([]zap.Field, 0, 16)
-	if f.correlationID != "" {
-		fields = append(fields, zap.String("correlation_id", f.correlationID))
+	if f.traceID != "" {
+		fields = append(fields, zap.String("trace_id", f.traceID))
 	}
 	if f.requestID != "" {
 		fields = append(fields, zap.String("request_id", f.requestID))
+	}
+	if f.hasAttemptID {
+		fields = append(fields, zap.Int64("attempt_id", f.attemptID))
 	}
 	if f.userID != 0 {
 		fields = append(fields, zap.Int64("user_id", f.userID))
@@ -195,19 +381,62 @@ func (f *Fields) ZapFields() []zap.Field {
 		fields = append(fields, zap.Int64("route_id", f.routeID))
 	}
 	if f.router != "" {
-		fields = append(fields, zap.String("router", f.router))
+		fields = append(fields, zap.String("route_name", f.router))
 	}
 	if f.hasProviderID {
 		fields = append(fields, zap.Int64("provider_id", f.providerID))
 	}
 	if f.provider != "" {
-		fields = append(fields, zap.String("provider", f.provider))
+		fields = append(fields, zap.String("provider_slug", f.provider))
 	}
 	if f.hasChannelID {
 		fields = append(fields, zap.Int64("channel_id", f.channelID))
 	}
 	if f.channel != "" {
-		fields = append(fields, zap.String("channel", f.channel))
+		fields = append(fields, zap.String("channel_name", f.channel))
+	}
+	if f.hasUpstreamTTFT {
+		fields = append(fields, zap.Int64("upstream_ttft_ms", f.upstreamTTFTMs))
+	}
+	if f.hasGatewayTTFT {
+		fields = append(fields, zap.Int64("gateway_ttft_ms", f.gatewayTTFTMs))
+	}
+	if f.hasAttemptCount {
+		fields = append(fields, zap.Int("attempt_count", f.attemptCount))
+	}
+	if f.hasFallbackCount {
+		fields = append(fields, zap.Int("fallback_count", f.fallbackCount))
+	}
+	if f.hasCapacityWait {
+		fields = append(fields, zap.Int64("capacity_wait_ms", f.capacityWaitMs))
+	}
+	if f.stickyAction != "" {
+		fields = append(fields, zap.String("sticky_action", f.stickyAction))
+	}
+	if f.deliveryStatus != "" {
+		fields = append(fields, zap.String("delivery_status", f.deliveryStatus))
+	}
+	if f.settlementStatus != "" {
+		fields = append(fields, zap.String("settlement_status", f.settlementStatus))
+	}
+	if f.hasUsage {
+		fields = append(fields,
+			zap.Int64("input_tokens", f.inputTokens),
+			zap.Int64("cache_read_input_tokens", f.cacheReadInputTokens),
+			zap.Int64("cache_write_input_tokens", f.cacheWriteInputTokens),
+			zap.Int64("output_tokens", f.outputTokens),
+			zap.Int64("reasoning_tokens", f.reasoningTokens),
+			zap.Int64("total_tokens", f.totalTokens),
+		)
+		if f.chargedAmount != "" {
+			fields = append(fields, zap.String("charged_amount", f.chargedAmount))
+		}
+		if f.currency != "" {
+			fields = append(fields, zap.String("currency", f.currency))
+		}
+	}
+	if f.errorCode != "" {
+		fields = append(fields, zap.String("error_code", f.errorCode))
 	}
 
 	return fields
@@ -224,6 +453,78 @@ func SetIdentity(ctx context.Context, userID int64, apiKeyID int64) {
 func SetRequestID(ctx context.Context, requestID string) {
 	if f, ok := FromContext(ctx); ok {
 		f.SetRequestID(requestID)
+	}
+}
+
+func SetAttemptID(ctx context.Context, attemptID int64) {
+	if f, ok := FromContext(ctx); ok {
+		f.SetAttemptID(attemptID)
+	}
+}
+
+func SetUpstreamTTFT(ctx context.Context, value int64) {
+	if f, ok := FromContext(ctx); ok {
+		f.SetUpstreamTTFT(value)
+	}
+}
+
+func SetGatewayTTFT(ctx context.Context, value int64) {
+	if f, ok := FromContext(ctx); ok {
+		f.SetGatewayTTFT(value)
+	}
+}
+
+func SetAttemptCount(ctx context.Context, value int) {
+	if f, ok := FromContext(ctx); ok {
+		f.SetAttemptCount(value)
+	}
+}
+
+func IncrementFallbackCount(ctx context.Context) {
+	if f, ok := FromContext(ctx); ok {
+		f.IncrementFallbackCount()
+	}
+}
+
+func SetFallbackCount(ctx context.Context, value int) {
+	if f, ok := FromContext(ctx); ok {
+		f.SetFallbackCount(value)
+	}
+}
+
+func SetCapacityWait(ctx context.Context, value int64) {
+	if f, ok := FromContext(ctx); ok {
+		f.SetCapacityWait(value)
+	}
+}
+
+func SetStickyAction(ctx context.Context, value string) {
+	if f, ok := FromContext(ctx); ok {
+		f.SetStickyAction(value)
+	}
+}
+
+func SetDeliveryStatus(ctx context.Context, value string) {
+	if f, ok := FromContext(ctx); ok {
+		f.SetDeliveryStatus(value)
+	}
+}
+
+func SetSettlementStatus(ctx context.Context, value string) {
+	if f, ok := FromContext(ctx); ok {
+		f.SetSettlementStatus(value)
+	}
+}
+
+func SetUsageSummary(ctx context.Context, summary UsageSummary) {
+	if f, ok := FromContext(ctx); ok {
+		f.SetUsageSummary(summary)
+	}
+}
+
+func SetCompletion(ctx context.Context, level string, errorCode string) {
+	if f, ok := FromContext(ctx); ok {
+		f.SetCompletion(level, errorCode)
 	}
 }
 

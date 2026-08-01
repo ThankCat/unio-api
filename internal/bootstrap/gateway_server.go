@@ -17,6 +17,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/tracing"
 	"github.com/ThankCat/unio-gateway/internal/platform/stickysession"
@@ -37,10 +38,11 @@ type GatewayServerAppDB interface {
 
 // GatewayServerAppDeps 表示构建 gateway server app 需要的进程级依赖。
 type GatewayServerAppDeps struct {
-	Logger *zap.Logger
-	Config config.Config
-	DB     GatewayServerAppDB
-	Redis  redis.Cmdable
+	Logger  *zap.Logger
+	Logging *logging.GatewayRuntime
+	Config  config.Config
+	DB      GatewayServerAppDB
+	Redis   redis.Cmdable
 }
 
 // GatewayServerApp 表示当前 gateway-server 进程已经装配完成的 HTTP 应用。
@@ -115,16 +117,24 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	sharedBreakerStore = breakerStore
 	if err := breakerStore.VerifySingleNodeDeployment(ctx); err != nil {
 		metricsRecorder.SetBreakerStoreHealth(false, true)
-		if deps.Logger != nil {
-			deps.Logger.Error("breaker store deployment verification failed", zap.Error(err))
-		}
+		logging.Error(deps.Logger, "system", "dependency", "dependency verification failed",
+			zap.String("dependency", "breaker_store"),
+			zap.String("operation", "deployment_check"),
+			zap.String("error_code", "breaker_store_deployment_verification_failed"),
+			zap.String("error_category", "dependency"),
+			zap.String("error_message", err.Error()),
+		)
 		return nil, err
 	}
 	if err := breakerStore.Ping(ctx); err != nil {
 		metricsRecorder.SetBreakerStoreHealth(false, true)
-		if deps.Logger != nil {
-			deps.Logger.Error("breaker store startup ping failed", zap.Error(err))
-		}
+		logging.Error(deps.Logger, "system", "dependency", "dependency verification failed",
+			zap.String("dependency", "breaker_store"),
+			zap.String("operation", "startup_ping"),
+			zap.String("error_code", "breaker_store_startup_ping_failed"),
+			zap.String("error_category", "dependency"),
+			zap.String("error_message", err.Error()),
+		)
 		return nil, err
 	}
 	epochResult, err := runtimecontrol.EnsureStateEpochSeed(
@@ -134,9 +144,12 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	if err != nil {
 		metricsRecorder.SetBreakerStoreHealth(false, true)
 		metricsRecorder.SetRuntimeStateIntegrity("lost")
-		if deps.Logger != nil {
-			deps.Logger.Error("runtime state epoch ensure failed", zap.Error(err))
-		}
+		logging.Error(deps.Logger, "runtime", "state", "runtime state epoch ensure failed",
+			zap.String("phase", "startup_seed"),
+			zap.String("error_code", "runtime_state_epoch_ensure_failed"),
+			zap.String("error_category", "runtime_state"),
+			zap.String("error_message", err.Error()),
+		)
 		return nil, err
 	}
 	observeRuntimeStateEpochEnsure(metricsRecorder, deps.Logger, epochResult)
@@ -159,6 +172,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	settingsStore := appsettings.NewSettingsStore(
 		queries, deps.Redis, deps.Config.Redis.KeyNamespace, appsettings.DefaultRegistry(), deps.Logger,
 	)
+	settingsStore.EnableGatewayEventLogging()
 	// 启动 seed（DEC §11.2）：把注册表默认值写入 DB 缺行（DO NOTHING,绝不覆盖已改值）。
 	// 失败不阻断启动——读侧本就有注册表默认兜底。
 	_ = settingsStore.SeedDefaults(ctx)
@@ -251,6 +265,9 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	chatCompletionService.SetAttemptPermitManager(attemptPermitManager)
 	responsesService.SetAttemptPermitManager(attemptPermitManager)
 	messagesService.SetAttemptPermitManager(attemptPermitManager)
+	chatCompletionService.SetRoutingLogger(deps.Logger)
+	responsesService.SetRoutingLogger(deps.Logger)
+	messagesService.SetRoutingLogger(deps.Logger)
 	routingTraceRecorder := lifecycle.NewRoutingTraceRecorder(queries, deps.Logger)
 	routingTraceRecorder.SetMetrics(metricsRecorder)
 	chatCompletionService.SetRoutingTraceRecorder(routingTraceRecorder)
@@ -262,7 +279,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	messagesService.SetChannelSampleRecorder(breakerStore)
 	// 成本敞口记录器：bill-on-disconnect 渠道的失败/取消路径
 	// 记平台成本敞口；假定输出兜底与 authorization 的进程级兜底同源，保证敞口与冻结上界口径一致。
-	costExposureRecorder := newCostExposureStore(queries, deps.Logger)
+	costExposureRecorder := newCostExposureStore(queries)
 	chatCompletionService.SetCostExposureRecorder(costExposureRecorder, deps.Config.Gateway.MaxOutputTokensFallback)
 	responsesService.SetCostExposureRecorder(costExposureRecorder, deps.Config.Gateway.MaxOutputTokensFallback)
 	messagesService.SetCostExposureRecorder(costExposureRecorder, deps.Config.Gateway.MaxOutputTokensFallback)
@@ -290,9 +307,6 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		chatCompletionService.SetStickyRouter(stickyRouter)
 		responsesService.SetStickyRouter(stickyRouter)
 		messagesService.SetStickyRouter(stickyRouter)
-		chatCompletionService.SetRoutingLogger(deps.Logger)
-		responsesService.SetRoutingLogger(deps.Logger)
-		messagesService.SetRoutingLogger(deps.Logger)
 	}
 
 	// 配置 applier：周期性推送非准入类本机配置。breaker、限额和 balanced 参数由
@@ -314,8 +328,10 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		sticky:       stickyRouter,
 		channel429:   attemptPermitManager,
 		capacityWait: capacityWaitTargets,
+		logging:      deps.Logging,
 	}
 	applierCtx, stopApplier := context.WithCancel(context.Background())
+	applier.safeApply(applierCtx)
 	go applier.run(applierCtx, settingsApplyInterval)
 	if runtimeControlPool != nil {
 		go runRuntimeControlReconciler(
@@ -339,6 +355,8 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		messagesService,
 		metricsRecorder,
 		readinessProbe,
+		deps.Config.Gateway.InternalToken,
+		deps.Logging,
 	)
 
 	return &GatewayServerApp{

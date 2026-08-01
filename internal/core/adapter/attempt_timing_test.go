@@ -24,7 +24,7 @@ func (o *recordingAttemptTimingObserver) RequestWritten(err error) {
 	o.events = append(o.events, "write_uncertain")
 }
 
-func (o *recordingAttemptTimingObserver) ResponseHeadersReceived() {
+func (o *recordingAttemptTimingObserver) ResponseHeadersReceived(UpstreamMetadata) {
 	o.events = append(o.events, "headers")
 }
 
@@ -44,7 +44,7 @@ func TestAttemptTimingObserverContextDispatchesAllEvents(t *testing.T) {
 	traceCtx := WithAttemptTransportTrace(ctx)
 	trace := httptrace.ContextClientTrace(traceCtx)
 	trace.WroteRequest(httptrace.WroteRequestInfo{})
-	MarkResponseHeadersReceived(traceCtx)
+	MarkResponseHeadersReceived(traceCtx, UpstreamMetadata{StatusCode: 200, RequestID: "upstream-1"})
 	MarkFirstTokenEligible(ctx)
 	MarkTransportCompleted(ctx)
 
@@ -68,7 +68,7 @@ func TestAttemptTimingObserverContextNilInputsAreSafe(t *testing.T) {
 	}
 
 	MarkTransportStarted(missing)
-	MarkResponseHeadersReceived(missing)
+	MarkResponseHeadersReceived(missing, UpstreamMetadata{})
 	MarkFirstTokenEligible(missing)
 	MarkTransportCompleted(missing)
 }

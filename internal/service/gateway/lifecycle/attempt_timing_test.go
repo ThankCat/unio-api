@@ -45,6 +45,24 @@ func TestAttemptTimingObserverNonStreamNeverRecordsFirstToken(t *testing.T) {
 	assertTimeEqual(t, facts.UpstreamCompletedAt, start.Add(time.Second))
 }
 
+func TestAttemptTimingObserverRecordsResponseHeaderFactsFirstWriteWins(t *testing.T) {
+	start := time.Date(2026, time.July, 22, 2, 30, 0, 0, time.UTC)
+	observer := newAttemptTimingObserver(false, sequenceClock(start, start.Add(275*time.Millisecond), start.Add(time.Second)))
+
+	observer.TransportStarted()
+	observer.ResponseHeadersReceived(adapter.UpstreamMetadata{StatusCode: 201, RequestID: "upstream-1"})
+	observer.ResponseHeadersReceived(adapter.UpstreamMetadata{StatusCode: 500, RequestID: "ignored"})
+
+	facts := observer.Snapshot()
+	assertTimeEqual(t, facts.UpstreamResponseHeadersAt, start.Add(275*time.Millisecond))
+	if got := facts.ResponseHeaderMs(); got == nil || *got != 275 {
+		t.Fatalf("response header ms = %v, want 275", got)
+	}
+	if facts.UpstreamStatusCode != 201 || facts.UpstreamRequestID != "upstream-1" {
+		t.Fatalf("response metadata = %+v", facts)
+	}
+}
+
 func TestAttemptTimingObserverPreTransportFailureStaysEmpty(t *testing.T) {
 	observer := newAttemptTimingObserver(true, sequenceClock(time.Now()))
 	observer.FirstTokenEligible()

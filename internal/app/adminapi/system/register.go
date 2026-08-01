@@ -11,6 +11,7 @@ type Deps struct {
 	RecoveryJobService        RecoveryJobQueryService
 	ProviderSettingsService   ProviderSettingsService
 	RuntimeDiagnosticsService RuntimeDiagnosticsService
+	GatewayLoggingService     GatewayLoggingService
 
 	// 进程级 env 生效阈值（脱敏）快照，恒有效，故 /system/config 无条件注册。
 	GatewayConfig config.GatewayConfig
@@ -23,6 +24,13 @@ func Register(r chi.Router, d Deps) {
 	if d.RuntimeDiagnosticsService != nil {
 		h := &runtimeDiagnosticsHandler{service: d.RuntimeDiagnosticsService}
 		r.Get("/system/runtime-diagnostics", h.get)
+	}
+	if d.GatewayLoggingService != nil {
+		h := &gatewayLoggingHandler{service: d.GatewayLoggingService}
+		r.Get("/system/gateway-logging", h.get)
+		r.Get("/system/gateway-logs", h.listLogs)
+		r.Put("/system/gateway-logging/debug-session", h.start)
+		r.Delete("/system/gateway-logging/debug-session", h.stop)
 	}
 
 	// M8 系统/任务/健康：结算补偿任务只读视图（列表脱敏内部详情，详情按 ?include_internal 回显）。

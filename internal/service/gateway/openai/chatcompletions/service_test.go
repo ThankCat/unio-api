@@ -3,6 +3,7 @@ package chatcompletions
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -1227,6 +1228,54 @@ func TestChatCompletionServiceCreateChatCompletionFallsBackOnRetryableAdapterErr
 	}
 	if len(requestLog.markRequestFailedArgs) != 0 {
 		t.Fatalf("expected request not to fail, got %#v", requestLog.markRequestFailedArgs)
+	}
+}
+
+func TestChatCompletionServiceCreateChatCompletionFallsBackOnExplicitPermission403(t *testing.T) {
+	permissionErr := adapter.NewUpstreamError(
+		adapter.UpstreamErrorPermission,
+		adapter.UpstreamMetadata{StatusCode: http.StatusForbidden},
+		failure.New(failure.CodeAdapterUpstreamStatus),
+	)
+	firstAdapter := &fakeChatAdapter{chatErr: permissionErr}
+	secondAdapter := &fakeChatAdapter{chatResp: chatResponse("fallback response")}
+	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
+	authorizer := &fakeChatAuthorizer{
+		authorization: lifecycle.ChatAuthorization{ReservationID: 7803},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
+		&fakeChatRouter{plan: routePlan(
+			routeCandidate("openai-primary", 101, "gpt-4.1"),
+			routeCandidate("openai-secondary", 102, "gpt-4.1"),
+		)},
+		&fakeAdapterRegistry{
+			chatAdapters: map[string]chatcompletionsadapter.ChatAdapter{
+				"openai-primary":   firstAdapter,
+				"openai-secondary": secondAdapter,
+			},
+		},
+		lifecycle.ProviderErrorClassifier{},
+		requestLog,
+		settlement,
+		authorizer,
+	)
+
+	result, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
+	if err != nil {
+		t.Fatalf("CreateChatCompletion returned err: %v", err)
+	}
+	if firstAdapter.chatCalled != 1 || secondAdapter.chatCalled != 1 {
+		t.Fatalf("expected permission fallback to call both candidates once, got first=%d second=%d", firstAdapter.chatCalled, secondAdapter.chatCalled)
+	}
+	if result.Response.Choices[0].Message.ContentString() != "fallback response" {
+		t.Fatalf("expected fallback response, got %q", result.Response.Choices[0].Message.Content)
+	}
+	if len(requestLog.createAttempts) != 2 || len(requestLog.markAttemptFailedArgs) != 1 {
+		t.Fatalf("expected two attempts and one failed attempt, got attempts=%d failures=%d", len(requestLog.createAttempts), len(requestLog.markAttemptFailedArgs))
+	}
+	if len(settlement.params) != 1 || len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected successful fallback settlement without release, got settlements=%d releases=%d", len(settlement.params), len(authorizer.releaseParams))
 	}
 }
 

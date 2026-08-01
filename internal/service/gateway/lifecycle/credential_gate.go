@@ -13,6 +13,7 @@ type CredentialRevision struct {
 	ChannelConfigRevision  int64
 	OriginRevision         int64
 	ProviderStatusRevision int64
+	Threshold              int
 }
 
 // CredentialInvalidator 在渠道被判定「凭据失效」时执行持久化副作用：把 channels.credential_valid
@@ -97,13 +98,15 @@ func (g *ChannelCredentialGate) RecordResult(revision CredentialRevision, err er
 
 	g.mu.Lock()
 	g.count[revision]++
-	reached := g.count[revision] >= g.threshold
+	threshold := g.threshold
+	reached := g.count[revision] >= threshold
 	if reached {
 		delete(g.count, revision)
 	}
 	g.mu.Unlock()
 
 	if reached && g.invalidator != nil {
+		revision.Threshold = threshold
 		g.invalidator.MarkChannelCredentialInvalid(revision)
 	}
 }

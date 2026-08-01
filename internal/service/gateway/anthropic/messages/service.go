@@ -121,6 +121,7 @@ func (s *MessagesService) SetCapacityWaitTimeout(d time.Duration) {
 
 // SetRoutingLogger 注入 sticky/skip/wait/failover 结构化日志；nil 表示不打日志。
 func (s *MessagesService) SetRoutingLogger(logger *zap.Logger) {
+	s.lifecycle.SetLogger(logger)
 	s.attemptRunner.SetLogger(logger)
 }
 

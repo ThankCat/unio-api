@@ -2,7 +2,11 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
@@ -10,6 +14,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 )
@@ -33,10 +38,17 @@ type RequestLifecycle struct {
 	ingressProtocol requestlog.Protocol
 	endpoint        requestlog.Endpoint
 	safeMessage     func(code string) string
+	logger          *zap.Logger
 
 	// costExposures 是可选的成本敞口记录器；nil 表示不启用。
 	costExposures              CostExposureRecorder
 	costExposureOutputFallback int64
+}
+
+func (l *RequestLifecycle) SetLogger(logger *zap.Logger) {
+	if l != nil {
+		l.logger = logger
+	}
 }
 
 // SetRoutingTraceRecorder 注入请求级路由决策持久化器。
@@ -181,6 +193,33 @@ func (l *RequestLifecycle) RecordCredentialResult(candidate routing.ChatRouteCan
 // authorization release：脱离客户端取消 context，给冻结余额释放留补偿窗口。
 // ---------------------------------------------------------------------------
 
+// AuthorizeChat executes request-level balance authorization and emits the stable billing event.
+func (l *RequestLifecycle) AuthorizeChat(ctx context.Context, params ChatAuthorizeParams) (ChatAuthorization, error) {
+	authorization, err := l.authorizer.AuthorizeChat(ctx, params)
+	fields := l.requestLogContext(ctx, params.RequestRecord)
+	fields = append(fields,
+		zap.Int64("estimated_input_tokens", params.InputTokens),
+		zap.Int64("max_output_tokens", params.MaxCompletionTokens),
+	)
+	if err != nil {
+		fields = append(fields, l.safeErrorLogFields(err, string(failure.CodeGatewayChatAuthorizationFailed), false, AttemptTimingFacts{})...)
+		switch failure.CodeOf(err) {
+		case failure.CodeLedgerInsufficientBalance, failure.CodeBillingInvalidPrice:
+			logging.Warn(l.logger, "billing", "authorization", "billing authorization rejected", fields...)
+		default:
+			logging.Error(l.logger, "billing", "authorization", "billing authorization failed", fields...)
+		}
+		return ChatAuthorization{}, err
+	}
+	fields = append(fields,
+		zap.Int64("reservation_id", authorization.ReservationID),
+		zap.String("currency", authorization.Currency),
+		zap.String("authorized_amount", numericLogString(authorization.AuthorizedAmount)),
+	)
+	logging.Debug(l.logger, "billing", "authorization", "billing authorization completed", nonEmptyLogFields(fields)...)
+	return authorization, nil
+}
+
 // ReleaseAuthorization 脱离客户端取消上下文释放冻结余额。
 // 用于请求未进入成功扣费语义、且不存在已产生上游成本风险的边界。
 func (l *RequestLifecycle) ReleaseAuthorization(ctx context.Context, authorization ChatAuthorization) error {
@@ -191,10 +230,24 @@ func (l *RequestLifecycle) ReleaseAuthorization(ctx context.Context, authorizati
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 
-	return l.authorizer.ReleaseChat(releaseCtx, ChatReleaseAuthorizationParams{
+	err := l.authorizer.ReleaseChat(releaseCtx, ChatReleaseAuthorizationParams{
 		RequestRecordID: authorization.RequestRecordID,
 		ReservationID:   authorization.ReservationID,
 	})
+	fields := l.requestLogContext(ctx, requestlog.RequestRecord{})
+	fields = append(fields,
+		zap.Int64("reservation_id", authorization.ReservationID),
+		zap.String("currency", authorization.Currency),
+		zap.String("authorized_amount", numericLogString(authorization.AuthorizedAmount)),
+		zap.String("reason", "request_not_billable"),
+	)
+	if err != nil {
+		fields = append(fields, l.safeErrorLogFields(err, "billing_authorization_release_failed", false, AttemptTimingFacts{})...)
+		logging.Error(l.logger, "billing", "authorization", "billing authorization release failed", nonEmptyLogFields(fields)...)
+		return err
+	}
+	logging.Debug(l.logger, "billing", "authorization", "billing authorization released", nonEmptyLogFields(fields)...)
+	return nil
 }
 
 // ReleaseAuthorizationForBillingException 脱离客户端取消上下文释放冻结余额并记录账务异常事实。
@@ -207,12 +260,27 @@ func (l *RequestLifecycle) ReleaseAuthorizationForBillingException(ctx context.C
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 
-	return l.authorizer.ReleaseChatForBillingException(releaseCtx, ChatReleaseBillingExceptionParams{
+	err := l.authorizer.ReleaseChatForBillingException(releaseCtx, ChatReleaseBillingExceptionParams{
 		RequestRecordID: authorization.RequestRecordID,
 		ReservationID:   authorization.ReservationID,
 		ReasonCode:      reasonCode,
 		Reason:          reason,
 	})
+	fields := l.requestLogContext(ctx, requestlog.RequestRecord{})
+	fields = append(fields,
+		zap.Int64("reservation_id", authorization.ReservationID),
+		zap.String("currency", authorization.Currency),
+		zap.String("authorized_amount", numericLogString(authorization.AuthorizedAmount)),
+		zap.String("reason_code", reasonCode),
+		zap.String("reason", reason),
+	)
+	if err != nil {
+		fields = append(fields, l.safeErrorLogFields(err, "billing_exception_record_failed", false, AttemptTimingFacts{})...)
+		logging.Error(l.logger, "billing", "authorization", "billing authorization release failed", nonEmptyLogFields(fields)...)
+		return err
+	}
+	logging.Error(l.logger, "billing", "settlement", "billing exception recorded", nonEmptyLogFields(fields)...)
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +379,7 @@ func (l *RequestLifecycle) RecordZeroPriceServed(providerID int64, channelID int
 
 // CreateRequest 创建用户可见请求记录，并立即推进到 running 状态。
 // request_records.request_id 由服务端生成，用作数据库唯一事实 ID；
-// HTTP X-Request-ID 只作为日志 correlation id，不能直接复用为账务请求 ID。
+// HTTP X-Request-ID 只作为日志 trace_id，不能直接复用为账务 request_id。
 // reasoning 为归一后的推理强度（协议编排从请求 DTO 提取）；线路快照取自 principal.RouteID，
 // 客户端 IP 取自 ctx（gateway ClientIP 中间件写入）。
 func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.APIKeyPrincipal, requestedModelID string, stream bool, reasoning ReasoningInfo) (requestlog.RequestRecord, error) {
@@ -320,9 +388,13 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 		return requestlog.RequestRecord{}, err
 	}
 
-	// 访问日志：request 创建时即可确定的维度先写入；provider/channel 等 CreateAttempt。
-	logfields.SetRequestID(ctx, requestID)
+	// 访问日志：入口即可确定的维度先写入；request_id 只能在持久记录
+	// 创建成功后发布，provider/channel 等则在 CreateAttempt 后发布。
 	logfields.SetModel(ctx, requestedModelID)
+	logfields.SetAttemptCount(ctx, 0)
+	logfields.SetFallbackCount(ctx, 0)
+	logfields.SetDeliveryStatus(ctx, string(requestlog.DeliveryStatusNotStarted))
+	logfields.SetSettlementStatus(ctx, "not_started")
 
 	var routeID *int64
 	if principal != nil {
@@ -353,6 +425,21 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 	if err != nil {
 		return requestlog.RequestRecord{}, err
 	}
+	logfields.SetRequestID(ctx, record.RequestID)
+	fields := []zap.Field{
+		zap.String("trace_id", httpx.RequestID(ctx)),
+		zap.String("request_id", record.RequestID),
+		zap.Int64("user_id", record.UserID),
+		zap.Int64("api_key_id", record.APIKeyID),
+		zap.String("model", record.RequestedModelID),
+		zap.String("protocol", string(l.ingressProtocol)),
+		zap.String("endpoint", string(l.endpoint)),
+		zap.Bool("stream", stream),
+	}
+	if routeID != nil {
+		fields = append(fields, zap.Int64("route_id", *routeID))
+	}
+	logging.Debug(l.logger, "http", "request", "request record created", fields...)
 
 	record, err = l.requestLog.MarkRequestRunning(ctx, record.ID)
 	if err != nil {
@@ -396,7 +483,7 @@ func (l *RequestLifecycle) CreateAttemptForEndpoint(
 		Channel:    candidate.Channel.Name,
 	})
 
-	return l.requestLog.CreateAttempt(ctx, requestlog.CreateAttemptParams{
+	attempt, err := l.requestLog.CreateAttempt(ctx, requestlog.CreateAttemptParams{
 		RequestRecordID:        requestRecord.ID,
 		AttemptIndex:           attemptIndex,
 		ProviderID:             candidate.ProviderID,
@@ -411,6 +498,26 @@ func (l *RequestLifecycle) CreateAttemptForEndpoint(
 		UpstreamEndpoint:       endpoint,
 		StartedAt:              time.Now(),
 	})
+	if err != nil {
+		return requestlog.AttemptRecord{}, err
+	}
+	logfields.SetAttemptID(ctx, attempt.ID)
+	logfields.SetAttemptCount(ctx, attemptIndex+1)
+	logging.Debug(l.logger, "routing", "candidate", "routing candidate selected",
+		zap.String("trace_id", httpx.RequestID(ctx)),
+		zap.String("request_id", requestRecord.RequestID),
+		zap.Int64("attempt_id", attempt.ID),
+		zap.Int("attempt_index", attemptIndex),
+		zap.Int("route_index", routingCandidateIndex),
+		zap.Int64("provider_id", candidate.ProviderID),
+		zap.String("provider_slug", candidate.Channel.ProviderSlug),
+		zap.Int64("channel_id", candidate.Channel.ID),
+		zap.String("channel_name", candidate.Channel.Name),
+		zap.String("upstream_model", candidate.UpstreamModel),
+		zap.String("adapter_key", candidate.AdapterKey),
+		zap.String("endpoint", string(endpoint)),
+	)
+	return attempt, nil
 }
 
 func upstreamEndpointForRequest(endpoint requestlog.Endpoint) requestlog.UpstreamEndpoint {
@@ -449,6 +556,12 @@ func nonNegativeIntPtr(value int) *int {
 
 // MarkDeliveryStarted 尽力推进 request delivery 状态。该动作不代表已经交付有效生成 Token。
 func (l *RequestLifecycle) MarkDeliveryStarted(ctx context.Context, requestRecord requestlog.RequestRecord) {
+	logfields.SetDeliveryStatus(ctx, string(requestlog.DeliveryStatusInProgress))
+	logging.Debug(l.logger, "http", "delivery", "response delivery started",
+		append(l.requestLogContext(ctx, requestRecord),
+			zap.String("delivery_status", string(requestlog.DeliveryStatusInProgress)),
+		)...,
+	)
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
 	_, _ = l.requestLog.MarkRequestDeliveryStarted(auditCtx, requestRecord.ID)
@@ -458,7 +571,16 @@ func (l *RequestLifecycle) MarkDeliveryStarted(ctx context.Context, requestRecor
 //
 // 该写入只服务观测指标，不能影响主响应链路：流式请求已经开始向客户发数据时，写审计字段失败
 // 不应中断 SSE。
-func (l *RequestLifecycle) MarkGatewayFirstToken(ctx context.Context, requestRecord requestlog.RequestRecord, attemptRecord requestlog.AttemptRecord, gatewayFirstTokenAt time.Time) {
+func (l *RequestLifecycle) MarkGatewayFirstToken(ctx context.Context, requestRecord requestlog.RequestRecord, attemptRecord requestlog.AttemptRecord, gatewayFirstTokenAt time.Time, tokenKind string) {
+	gatewayTTFT := nonNegativeDuration(requestRecord.StartedAt, gatewayFirstTokenAt).Milliseconds()
+	logfields.SetGatewayTTFT(ctx, gatewayTTFT)
+	fields := l.requestLogContext(ctx, requestRecord)
+	fields = append(fields,
+		zap.Int64("attempt_id", attemptRecord.ID),
+		zap.Int64("gateway_ttft_ms", gatewayTTFT),
+		zap.String("token_kind", tokenKind),
+	)
+	logging.Debug(l.logger, "http", "delivery", "first token delivered", nonEmptyLogFields(fields)...)
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
 
@@ -542,6 +664,12 @@ func (l *RequestLifecycle) RecordAttemptBreakerDisposition(ctx context.Context, 
 // MarkDeliveryCompleted 尽力把请求交付状态推进到 completed（响应已完整交给客户写出路径）。
 // 最佳努力审计：脱离请求 ctx 取消，写失败不影响已成功的主链路与账务。
 func (l *RequestLifecycle) MarkDeliveryCompleted(ctx context.Context, requestRecord requestlog.RequestRecord) {
+	logfields.SetDeliveryStatus(ctx, string(requestlog.DeliveryStatusCompleted))
+	logging.Debug(l.logger, "http", "delivery", "response delivery completed",
+		append(l.requestLogContext(ctx, requestRecord),
+			zap.String("delivery_status", string(requestlog.DeliveryStatusCompleted)),
+		)...,
+	)
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
 
@@ -550,17 +678,51 @@ func (l *RequestLifecycle) MarkDeliveryCompleted(ctx context.Context, requestRec
 
 // MarkDeliveryInterrupted 尽力把请求交付状态推进到 interrupted（客户端取消、上游中断或尾部错误，
 // 客户未拿到完整响应）。最佳努力审计，写失败不影响主链路与账务。
-func (l *RequestLifecycle) MarkDeliveryInterrupted(ctx context.Context, requestRecord requestlog.RequestRecord) {
+func (l *RequestLifecycle) MarkDeliveryInterrupted(
+	ctx context.Context,
+	requestRecord requestlog.RequestRecord,
+	deliveredFirstToken bool,
+	err error,
+) {
+	logfields.SetDeliveryStatus(ctx, string(requestlog.DeliveryStatusInterrupted))
+	fields := append(l.requestLogContext(ctx, requestRecord),
+		zap.String("delivery_status", string(requestlog.DeliveryStatusInterrupted)),
+		zap.String("reason", deliveryInterruptionReason(ctx, err)),
+		zap.Bool("delivered_first_token", deliveredFirstToken),
+	)
+	if err != nil {
+		fields = append(fields, l.safeErrorLogFields(err, "delivery_interrupted", requestRecord.Stream, AttemptTimingFacts{})...)
+	}
+	logging.Warn(l.logger, "http", "delivery", "response delivery interrupted",
+		dedupeLogFields(fields)...,
+	)
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
 
 	_, _ = l.requestLog.MarkRequestDeliveryInterrupted(auditCtx, requestRecord.ID)
 }
 
+func deliveryInterruptionReason(ctx context.Context, err error) string {
+	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+		return "client_canceled"
+	}
+	switch failure.CodeOf(err) {
+	case failure.CodeHTTPResponseWriteFailed, failure.CodeAdapterEmitFailed:
+		return "write_failed"
+	default:
+		return "upstream_interrupted"
+	}
+}
+
 // MarkRequestFailed 把 request record 标记为失败。
 // 失败状态写入是审计动作，调用方仍然返回原始业务错误，避免状态写入细节覆盖根因。
 func (l *RequestLifecycle) MarkRequestFailed(ctx context.Context, requestRecord requestlog.RequestRecord, fallbackCode string, err error) {
 	errorCode, safeMessage, internalDetail := l.requestLogErrorFacts(fallbackCode, err)
+	level := "warning"
+	if errorsAreGatewayInternal(err) || strings.Contains(errorCode, "persistence") || strings.Contains(errorCode, "settlement") {
+		level = "error"
+	}
+	logfields.SetCompletion(ctx, level, errorCode)
 
 	_, _ = l.requestLog.MarkRequestFailed(ctx, requestlog.MarkRequestFailedParams{
 		ID:                  requestRecord.ID,
@@ -603,6 +765,7 @@ func (l *RequestLifecycle) MarkAttemptFailed(ctx context.Context, attempt reques
 // 给审计写入一个很短的补偿窗口，避免 canceled 状态写不进去。
 func (l *RequestLifecycle) MarkRequestCanceled(ctx context.Context, requestRecord requestlog.RequestRecord, attemptRecord requestlog.AttemptRecord, err error) {
 	errorCode, safeMessage, internalDetail := l.requestLogCancelFacts(err)
+	logfields.SetCompletion(ctx, "info", errorCode)
 
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()

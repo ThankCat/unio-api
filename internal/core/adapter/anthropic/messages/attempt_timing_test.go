@@ -30,7 +30,7 @@ func (p *messagesTransportStartProbe) TransportStarted() {
 
 func (p *messagesTransportStartProbe) RequestWritten(error) {}
 
-func (p *messagesTransportStartProbe) ResponseHeadersReceived() {}
+func (p *messagesTransportStartProbe) ResponseHeadersReceived(adapter.UpstreamMetadata) {}
 
 func (p *messagesTransportStartProbe) FirstTokenEligible() {
 	p.firstToken.Add(1)

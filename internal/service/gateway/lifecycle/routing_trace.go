@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -14,6 +13,8 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routingdiagnostic"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
@@ -202,6 +203,14 @@ type traceCandidateScore struct {
 }
 
 func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTraceInput) {
+	r.record(ctx, in, true)
+}
+
+func (r *RoutingTraceRecorder) complete(ctx context.Context, in RoutingDecisionTraceInput) {
+	r.record(ctx, in, false)
+}
+
+func (r *RoutingTraceRecorder) record(ctx context.Context, in RoutingDecisionTraceInput, logPlan bool) {
 	if r == nil || r.store == nil || in.RouteID <= 0 || in.Request.ID <= 0 {
 		return
 	}
@@ -231,20 +240,6 @@ func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTra
 	for _, candidate := range in.Plan.Candidates {
 		decisionOrder = append(decisionOrder, candidate.Route.Channel.ID)
 	}
-	selectedChannelID := int64(0)
-	if len(decisionOrder) > 0 {
-		selectedChannelID = decisionOrder[0]
-	}
-	r.logger.Info("routing decision",
-		zap.String("request_id", in.Request.RequestID),
-		zap.Int64("route_id", in.RouteID),
-		zap.String("mode", in.Mode),
-		zap.Int64("channel_id", selectedChannelID),
-		zap.Int("pool_size", in.PoolSize),
-		zap.Int("candidate_count", len(in.Plan.Candidates)),
-		zap.Int64s("selected_order", decisionOrder),
-		zap.String("fallback_reason", strings.Join(reasons, ",")),
-	)
 	planCandidates := make(map[int64]Candidate, len(in.Plan.Candidates))
 	planExcluded := make(map[int64]CandidateExclusion, len(in.Plan.Excluded))
 	for _, candidate := range in.Plan.Candidates {
@@ -261,7 +256,11 @@ func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTra
 			AtTime: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
 		})
 		if poolErr != nil {
-			r.logger.Warn("read routing trace pool diagnostics", zap.Int64("route_id", in.RouteID), zap.Error(poolErr))
+			fields := []zap.Field{zap.String("request_id", in.Request.RequestID), zap.Int64("route_id", in.RouteID), zap.String("error_message", poolErr.Error())}
+			if requestFields, ok := logfields.FromContext(ctx); ok {
+				fields = append(requestFields.ZapFields(), fields...)
+			}
+			logging.Warn(r.logger, "routing", "trace", "routing trace diagnostics read failed", fields...)
 		} else {
 			poolSize = len(poolRows)
 			if in.Mode == "" && len(poolRows) > 0 {
@@ -339,9 +338,49 @@ func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTra
 		AbnormalReasons: reasons,
 		FinalResult:     in.FinalResult,
 	}
+	planFields := []zap.Field{
+		zap.String("request_id", in.Request.RequestID),
+		zap.Int64("route_id", in.RouteID),
+		zap.String("mode", in.Mode),
+		zap.Int("pool_size", poolSize),
+		zap.Int("eligible_count", eligibleCount),
+		zap.Int("excluded_count", len(scores)-eligibleCount),
+		zap.Int64s("candidate_order", decisionOrder),
+		zap.Int64("sticky_channel_id", in.StickyChannelID),
+		zap.String("algorithm_version", routingTraceAlgorithmVersion),
+		zap.Any("candidates", scores),
+		zap.Any("score_config", payload.ScoreConfig),
+		zap.Strings("abnormal_reasons", reasons),
+	}
+	if requestFields, ok := logfields.FromContext(ctx); ok {
+		planFields = append(requestFields.ZapFields(), planFields...)
+	}
+	if logPlan {
+		logging.Debug(r.logger, "routing", "decision", "routing plan created", planFields...)
+	}
+	if status == TraceStatusComplete {
+		completedFields := []zap.Field{
+			zap.String("request_id", in.Request.RequestID),
+			zap.Int64("route_id", in.RouteID),
+			zap.Int64("selected_channel_id", in.SelectedChannelID),
+			zap.Int("attempt_count", len(in.FallbackChain)),
+			zap.Int("fallback_count", in.FallbackCount),
+			zap.String("final_result", in.FinalResult),
+		}
+		if in.CapacityWaitMs != nil {
+			completedFields = append(completedFields, zap.Int64("capacity_waited_ms", *in.CapacityWaitMs))
+		}
+		if requestFields, ok := logfields.FromContext(ctx); ok {
+			completedFields = append(requestFields.ZapFields(), completedFields...)
+		}
+		logging.Debug(r.logger, "routing", "decision", "routing completed", completedFields...)
+	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
-		r.logger.Error("marshal routing trace payload", zap.Error(err))
+		logging.Error(r.logger, "routing", "trace", "routing trace serialization failed",
+			zap.String("request_id", in.Request.RequestID), zap.String("trace_status", string(status)),
+			zap.Int("schema_version", routingTraceSchemaVersion), zap.String("error_message", err.Error()),
+		)
 		r.recordWriteMetric("failed")
 		return
 	}
@@ -376,10 +415,12 @@ func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTra
 		TracePayload:          payloadJSON,
 	}); err != nil {
 		r.recordWriteMetric("failed")
-		r.logger.Error("write routing decision trace",
+		logging.Error(r.logger, "routing", "trace", "routing trace write failed",
+			zap.String("request_id", in.Request.RequestID),
 			zap.Int64("request_record_id", in.Request.ID),
 			zap.String("trace_status", string(status)),
-			zap.Error(err),
+			zap.Int("schema_version", routingTraceSchemaVersion),
+			zap.String("error_message", err.Error()),
 		)
 		return
 	}
@@ -590,5 +631,5 @@ func (l *RequestLifecycle) CompleteRoutingTrace(
 	if succeeded && len(result.TransportChain) > 0 {
 		in.SelectedChannelID = result.TransportChain[len(result.TransportChain)-1].ChannelID
 	}
-	l.routingTraces.Record(context.WithoutCancel(ctx), in)
+	l.routingTraces.complete(context.WithoutCancel(ctx), in)
 }

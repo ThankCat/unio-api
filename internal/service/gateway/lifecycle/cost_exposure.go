@@ -5,12 +5,14 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 )
 
 // 成本敞口成因（channel_cost_exposures.reason）。
@@ -129,7 +131,7 @@ func (l *RequestLifecycle) RecordCostExposure(
 		return
 	}
 
-	_ = l.costExposures.RecordChannelCostExposure(context.WithoutCancel(ctx), CostExposureParams{
+	params := CostExposureParams{
 		RequestRecordID:      requestRecord.ID,
 		AttemptID:            attempt.ID,
 		ChannelID:            candidate.Channel.ID,
@@ -139,5 +141,19 @@ func (l *RequestLifecycle) RecordCostExposure(
 		AssumedOutputTokens:  assumedOutput,
 		EstimatedCostAmount:  cost.TotalCostAmount,
 		Currency:             cost.Currency,
-	})
+	}
+	fields := l.completeAttemptLogContext(ctx, requestRecord, attempt, candidate, requestRecord.Stream)
+	fields = append(fields,
+		zap.String("reason", reason),
+		zap.Int64("estimated_input_tokens", estimatedInputTokens),
+		zap.Int64("assumed_output_tokens", assumedOutput),
+		zap.String("estimated_cost_amount", numericLogString(cost.TotalCostAmount)),
+		zap.String("currency", cost.Currency),
+	)
+	if recordErr := l.costExposures.RecordChannelCostExposure(context.WithoutCancel(ctx), params); recordErr != nil {
+		fields = append(fields, l.safeErrorLogFields(recordErr, "channel_cost_exposure_record_failed", requestRecord.Stream, AttemptTimingFacts{})...)
+		logging.Error(l.logger, "billing", "cost_exposure", "channel cost exposure record failed", nonEmptyLogFields(fields)...)
+		return
+	}
+	logging.Warn(l.logger, "billing", "cost_exposure", "channel cost exposure recorded", nonEmptyLogFields(fields)...)
 }

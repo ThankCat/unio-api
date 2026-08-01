@@ -16,6 +16,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
@@ -234,6 +235,41 @@ func TestRouterLegacyCircuitBreakerOriginIsGone(t *testing.T) {
 	}
 	if code := decodeRouterError(t, rec); code != "not_found" {
 		t.Fatalf("legacy circuit-breaker origin error = %q, want not_found", code)
+	}
+}
+
+type loggingStatusStub struct{ status logging.GatewayStatus }
+
+func (s loggingStatusStub) Status() logging.GatewayStatus { return s.status }
+
+func TestRouterLoggingStatusRequiresInternalToken(t *testing.T) {
+	handler := NewRouter(RouterDeps{
+		Logger:        zap.NewNop(),
+		InternalToken: "internal-secret",
+		LoggingStatus: loggingStatusStub{status: logging.GatewayStatus{
+			InstanceID: "gw-1", Environment: "production", BaselineLevel: "info", EffectiveLevel: "debug", DebugSessionID: "dbg-1", AppliedRevision: 9,
+		}},
+	})
+
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/internal/v1/logging/status", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorized.Code)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/logging/status", nil)
+	req.Header.Set("Authorization", "Bearer internal-secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	var got logging.GatewayStatus
+	if err := json.NewDecoder(response.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.InstanceID != "gw-1" || got.EffectiveLevel != "debug" || got.AppliedRevision != 9 {
+		t.Fatalf("status body = %+v", got)
 	}
 }
 

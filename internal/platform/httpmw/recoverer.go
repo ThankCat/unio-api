@@ -23,7 +23,7 @@ func Recoverer(logger *zap.Logger) func(http.Handler) http.Handler {
 					zap.Any("error", err),
 					zap.String("method", r.Method),
 					zap.String("path", r.URL.Path),
-					zap.String("request_id", httpx.RequestID(r.Context())),
+					zap.String("trace_id", httpx.RequestID(r.Context())),
 				)
 
 				_ = httpx.WriteError(

@@ -274,7 +274,10 @@ func (a *Adapter) do(ctx context.Context, ch channel.Runtime, req MessageRequest
 	adapter.MarkTransportStarted(ctx)
 	httpResp, err := a.client.Do(request)
 	if httpResp != nil {
-		adapter.MarkResponseHeadersReceived(ctx)
+		adapter.MarkResponseHeadersReceived(ctx, adapter.UpstreamMetadata{
+			StatusCode: httpResp.StatusCode,
+			RequestID:  upstreamRequestID(httpResp.Header),
+		})
 	}
 	if err != nil {
 		op := "send messages request"

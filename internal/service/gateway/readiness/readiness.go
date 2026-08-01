@@ -8,6 +8,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/core/runtimecontrol"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
+	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"go.uber.org/zap"
 )
@@ -165,9 +166,9 @@ func (c *Checker) finish(ready bool, reason string, unavailable bool, integrity 
 			zap.String("runtime_state_integrity", integrity),
 		}
 		if ready {
-			c.logger.Info("gateway readiness changed", fields...)
+			logging.Info(c.logger, "system", "readiness", "readiness changed", fields...)
 		} else {
-			c.logger.Warn("gateway readiness changed", fields...)
+			logging.Warn(c.logger, "system", "readiness", "readiness changed", fields...)
 		}
 	}
 	return ready, reason

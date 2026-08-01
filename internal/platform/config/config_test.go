@@ -139,6 +139,101 @@ func TestLoadLogFormatJSON(t *testing.T) {
 	}
 }
 
+func TestLoadGatewayLogDevelopmentDefaults(t *testing.T) {
+	clearInfrastructureEnv(t)
+	t.Setenv("GATEWAY_ENV", GatewayEnvironmentDevelopment)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.GatewayLog.Environment != GatewayEnvironmentDevelopment {
+		t.Fatalf("environment = %q", cfg.GatewayLog.Environment)
+	}
+	if cfg.GatewayLog.BaselineLevel != zapcore.InfoLevel {
+		t.Fatalf("baseline = %v", cfg.GatewayLog.BaselineLevel)
+	}
+	if !cfg.GatewayLog.ConsoleEnabled {
+		t.Fatal("development console should default to enabled")
+	}
+	if cfg.GatewayLog.MaxSizeMB != 25 || cfg.GatewayLog.MaxBackups != 20 || cfg.GatewayLog.MaxAgeDays != 14 {
+		t.Fatalf("rotation = %+v", cfg.GatewayLog)
+	}
+}
+
+func TestLoadGatewayLogProductionDefaults(t *testing.T) {
+	clearInfrastructureEnv(t)
+	t.Setenv("GATEWAY_ENV", GatewayEnvironmentProduction)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.GatewayLog.BaselineLevel != zapcore.InfoLevel || cfg.GatewayLog.ConsoleEnabled {
+		t.Fatalf("production logging baseline = %+v", cfg.GatewayLog)
+	}
+	if cfg.GatewayLog.MaxSizeMB != 100 || cfg.GatewayLog.MaxBackups != 20 || cfg.GatewayLog.MaxAgeDays != 14 {
+		t.Fatalf("production rotation = %+v", cfg.GatewayLog)
+	}
+}
+
+func TestLoadGatewayLogExplicitDevelopmentDebug(t *testing.T) {
+	clearInfrastructureEnv(t)
+	t.Setenv("GATEWAY_ENV", GatewayEnvironmentDevelopment)
+	t.Setenv("GATEWAY_LOG_LEVEL", "debug")
+	t.Setenv("GATEWAY_CONSOLE_ENABLED", "true")
+	t.Setenv("GATEWAY_LOG_FILE_PATH", "tmp/gateway.jsonl")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.GatewayLog.BaselineLevel != zapcore.DebugLevel || cfg.GatewayLog.FilePath != "tmp/gateway.jsonl" {
+		t.Fatalf("gateway logging = %+v", cfg.GatewayLog)
+	}
+}
+
+func TestLoadGatewayLogRejectsUnsafeProductionModes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "debug", key: "GATEWAY_LOG_LEVEL", value: "debug"},
+		{name: "console", key: "GATEWAY_CONSOLE_ENABLED", value: "true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearInfrastructureEnv(t)
+			t.Setenv("GATEWAY_ENV", GatewayEnvironmentProduction)
+			t.Setenv(tc.key, tc.value)
+			_, err := Load()
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			assertConfigFailure(t, err, failure.CodeConfigInvalid)
+		})
+	}
+}
+
+func TestLoadGatewayLogRejectsInvalidValues(t *testing.T) {
+	for _, tc := range []struct {
+		key   string
+		value string
+	}{
+		{key: "GATEWAY_ENV", value: "staging"},
+		{key: "GATEWAY_LOG_LEVEL", value: "warning"},
+		{key: "GATEWAY_LOG_MAX_SIZE_MB", value: "0"},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			clearInfrastructureEnv(t)
+			t.Setenv(tc.key, tc.value)
+			if _, err := Load(); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
 func TestLoadInvalidLogLevel(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "trace")
 
@@ -465,6 +560,13 @@ func clearInfrastructureEnv(t *testing.T) {
 		"HTTP_MAX_JSON_BODY_MB",
 		"LOG_LEVEL",
 		"LOG_FORMAT",
+		"GATEWAY_ENV",
+		"GATEWAY_LOG_LEVEL",
+		"GATEWAY_CONSOLE_ENABLED",
+		"GATEWAY_LOG_FILE_PATH",
+		"GATEWAY_LOG_MAX_SIZE_MB",
+		"GATEWAY_LOG_MAX_BACKUPS",
+		"GATEWAY_LOG_MAX_AGE_DAYS",
 		"DATABASE_URL",
 		"POSTGRES_MAX_CONNS",
 		"POSTGRES_MIN_CONNS",

@@ -2,27 +2,31 @@ package lifecycle
 
 import (
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
-// TestProviderErrorClassifierIsRetryable 验证 retry 决策只对瞬时上游故障放行。
+// TestProviderErrorClassifierIsRetryable 验证 retry 决策只对可安全切换候选的上游故障放行。
 func TestProviderErrorClassifierIsRetryable(t *testing.T) {
 	tests := []struct {
 		name     string
 		category adapter.UpstreamErrorCategory
+		status   int
 		want     bool
 	}{
-		{"rate_limit retryable", adapter.UpstreamErrorRateLimit, true},
-		{"timeout retryable", adapter.UpstreamErrorTimeout, true},
-		{"server_error retryable", adapter.UpstreamErrorServer, true},
-		{"auth retryable (fallback to another key)", adapter.UpstreamErrorAuth, true},
-		{"permission not retryable", adapter.UpstreamErrorPermission, false},
-		{"bad_request not retryable", adapter.UpstreamErrorBadRequest, false},
-		{"canceled not retryable", adapter.UpstreamErrorCanceled, false},
-		{"unknown not retryable", adapter.UpstreamErrorUnknown, false},
+		{"rate_limit retryable", adapter.UpstreamErrorRateLimit, 0, true},
+		{"timeout retryable", adapter.UpstreamErrorTimeout, 0, true},
+		{"server_error retryable", adapter.UpstreamErrorServer, 0, true},
+		{"auth retryable (fallback to another key)", adapter.UpstreamErrorAuth, 0, true},
+		{"explicit permission 403 retryable", adapter.UpstreamErrorPermission, http.StatusForbidden, true},
+		{"permission without status not retryable", adapter.UpstreamErrorPermission, 0, false},
+		{"permission with non-403 status not retryable", adapter.UpstreamErrorPermission, 200, false},
+		{"bad_request not retryable", adapter.UpstreamErrorBadRequest, 0, false},
+		{"canceled not retryable", adapter.UpstreamErrorCanceled, 0, false},
+		{"unknown not retryable", adapter.UpstreamErrorUnknown, 0, false},
 	}
 
 	classifier := ProviderErrorClassifier{}
@@ -31,7 +35,7 @@ func TestProviderErrorClassifierIsRetryable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := adapter.NewUpstreamError(
 				tc.category,
-				adapter.UpstreamMetadata{},
+				adapter.UpstreamMetadata{StatusCode: tc.status},
 				failure.New(failure.CodeAdapterUpstreamStatus),
 			)
 

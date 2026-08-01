@@ -17,6 +17,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
@@ -847,8 +848,29 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		)
 	}
 	publishRequestAdmissionUsage(ctx, params.Facts)
+	publishSettlementLogSummary(ctx, params.Facts, charge.Amount, charge.Currency)
 
 	return nil
+}
+
+func publishSettlementLogSummary(ctx context.Context, facts adapter.ResponseFacts, chargedAmount pgtype.Numeric, currency string) {
+	usageFacts := facts.Usage
+	inputTokens := knownTokenValue(usageFacts.UncachedInputTokens) + knownTokenValue(usageFacts.CacheReadInputTokens) +
+		knownTokenValue(usageFacts.CacheWrite5mInputTokens) + knownTokenValue(usageFacts.CacheWrite1hInputTokens) +
+		knownTokenValue(usageFacts.CacheWrite30mInputTokens)
+	cacheWriteTokens := knownTokenValue(usageFacts.CacheWrite5mInputTokens) + knownTokenValue(usageFacts.CacheWrite1hInputTokens) +
+		knownTokenValue(usageFacts.CacheWrite30mInputTokens)
+	totalTokens, _ := usageFacts.ActualTotalTokens()
+	logfields.SetUsageSummary(ctx, logfields.UsageSummary{
+		InputTokens:           inputTokens,
+		CacheReadInputTokens:  knownTokenValue(usageFacts.CacheReadInputTokens),
+		CacheWriteInputTokens: cacheWriteTokens,
+		OutputTokens:          knownTokenValue(usageFacts.OutputTokensTotal),
+		ReasoningTokens:       knownTokenValue(usageFacts.ReasoningOutputTokens),
+		TotalTokens:           totalTokens,
+		ChargedAmount:         numericLogString(chargedAmount),
+		Currency:              currency,
+	})
 }
 
 func publishRequestAdmissionUsage(ctx context.Context, facts adapter.ResponseFacts) {

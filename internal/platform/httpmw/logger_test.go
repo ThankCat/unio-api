@@ -30,7 +30,7 @@ func testJSONLogger(buf *bytes.Buffer) *zap.Logger {
 	return zap.New(core)
 }
 
-// TestLoggerEmitsUnifiedFields 验证访问日志包含 correlation_id 和下游填充的统一字段。
+// TestLoggerEmitsUnifiedFields 验证访问日志包含 trace_id 和下游填充的统一字段。
 func TestLoggerEmitsUnifiedFields(t *testing.T) {
 	buf := &bytes.Buffer{}
 	logger := testJSONLogger(buf)
@@ -77,18 +77,18 @@ func TestLoggerEmitsUnifiedFields(t *testing.T) {
 	}
 
 	cases := map[string]any{
-		"correlation_id": "corr-fixed",
-		"request_id":     "req_abc",
-		"user_id":        float64(7),
-		"api_key_id":     float64(100),
-		"model":          "openai/gpt-4.1",
-		"model_id":       float64(99),
-		"route_id":       float64(2),
-		"router":         "default-route",
-		"provider_id":    float64(9123),
-		"provider":       "openai",
-		"channel_id":     float64(123),
-		"channel":        "main",
+		"trace_id":      "corr-fixed",
+		"request_id":    "req_abc",
+		"user_id":       float64(7),
+		"api_key_id":    float64(100),
+		"model":         "openai/gpt-4.1",
+		"model_id":      float64(99),
+		"route_id":      float64(2),
+		"route_name":    "default-route",
+		"provider_id":   float64(9123),
+		"provider_slug": "openai",
+		"channel_id":    float64(123),
+		"channel_name":  "main",
 	}
 	for key, want := range cases {
 		if entry[key] != want {

@@ -69,6 +69,7 @@ type adminHTTPDeps struct {
 
 	RecoveryJobQueryService   system.RecoveryJobQueryService
 	RuntimeDiagnosticsService system.RuntimeDiagnosticsService
+	GatewayLoggingService     system.GatewayLoggingService
 
 	ProviderSettingsService system.ProviderSettingsService
 
@@ -124,6 +125,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 
 		RecoveryJobQueryService:   deps.RecoveryJobQueryService,
 		RuntimeDiagnosticsService: deps.RuntimeDiagnosticsService,
+		GatewayLoggingService:     deps.GatewayLoggingService,
 		ProviderSettingsService:   deps.ProviderSettingsService,
 
 		GatewayConfig: deps.GatewayConfig,

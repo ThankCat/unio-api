@@ -8,10 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 )
 
 func TestRoutingFailureCodeClassifiesRoutingErrors(t *testing.T) {
@@ -172,8 +176,74 @@ func TestBaseSafeRequestLogErrorMessageFallsBackByCategory(t *testing.T) {
 	}
 }
 
+func TestSafeUpstreamOriginDropsCredentialsPathAndQuery(t *testing.T) {
+	got := safeUpstreamOrigin("https://user:secret@api.example.com/tenant/private-key?v=1#fragment")
+	if got != "https://api.example.com" {
+		t.Fatalf("safe upstream origin = %q", got)
+	}
+	if got := safeUpstreamOrigin("not-a-url"); got != "invalid" {
+		t.Fatalf("invalid upstream origin = %q", got)
+	}
+}
+
+func TestCreateRequestPublishesRequestIDOnlyAfterPersistence(t *testing.T) {
+	principal := &auth.APIKeyPrincipal{APIKeyID: 11, UserID: 22}
+
+	t.Run("insert failure", func(t *testing.T) {
+		ctx, fields := logfields.NewContext(context.Background(), "trace-insert-failed")
+		lifecycle := &RequestLifecycle{requestLog: &requestCreateBoundaryStore{failCreate: true}}
+		_, err := lifecycle.CreateRequest(ctx, principal, "gpt-test", true, ReasoningInfo{})
+		if err == nil {
+			t.Fatal("expected request persistence failure")
+		}
+		if hasZapField(fields.ZapFields(), "request_id") {
+			t.Fatal("request_id must not be published before request_records insertion succeeds")
+		}
+	})
+
+	t.Run("insert succeeded", func(t *testing.T) {
+		ctx, fields := logfields.NewContext(context.Background(), "trace-inserted")
+		lifecycle := &RequestLifecycle{requestLog: &requestCreateBoundaryStore{}}
+		_, err := lifecycle.CreateRequest(ctx, principal, "gpt-test", true, ReasoningInfo{})
+		if err == nil {
+			t.Fatal("expected running-state transition failure")
+		}
+		if !hasZapField(fields.ZapFields(), "request_id") {
+			t.Fatal("request_id must be published after request_records insertion succeeds")
+		}
+	})
+}
+
+func hasZapField(fields []zap.Field, key string) bool {
+	for _, field := range fields {
+		if field.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
 type captureAttemptFailedLog struct {
 	params requestlog.MarkAttemptFailedParams
+}
+
+type requestCreateBoundaryStore struct {
+	captureAttemptFailedLog
+	failCreate bool
+}
+
+func (s *requestCreateBoundaryStore) CreateRequest(_ context.Context, params requestlog.CreateRequestParams) (requestlog.RequestRecord, error) {
+	if s.failCreate {
+		return requestlog.RequestRecord{}, errors.New("insert request record")
+	}
+	return requestlog.RequestRecord{
+		ID:               99,
+		RequestID:        params.RequestID,
+		UserID:           params.UserID,
+		APIKeyID:         params.APIKeyID,
+		RequestedModelID: params.RequestedModelID,
+		Stream:           params.Stream,
+	}, nil
 }
 
 func (s *captureAttemptFailedLog) CreateRequest(context.Context, requestlog.CreateRequestParams) (requestlog.RequestRecord, error) {
@@ -218,6 +288,20 @@ func (s *captureAttemptFailedLog) MarkRequestFailed(context.Context, requestlog.
 
 func (s *captureAttemptFailedLog) MarkRequestCanceled(context.Context, requestlog.MarkRequestCanceledParams) (requestlog.RequestRecord, error) {
 	return requestlog.RequestRecord{}, fmt.Errorf("unexpected MarkRequestCanceled")
+}
+
+func TestDeliveryInterruptionReason(t *testing.T) {
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := deliveryInterruptionReason(canceledCtx, nil); got != "client_canceled" {
+		t.Fatalf("canceled reason = %q", got)
+	}
+	if got := deliveryInterruptionReason(context.Background(), failure.New(failure.CodeHTTPResponseWriteFailed)); got != "write_failed" {
+		t.Fatalf("write reason = %q", got)
+	}
+	if got := deliveryInterruptionReason(context.Background(), failure.New(failure.CodeAdapterReadStreamFailed)); got != "upstream_interrupted" {
+		t.Fatalf("upstream reason = %q", got)
+	}
 }
 
 func (s *captureAttemptFailedLog) CreateAttempt(context.Context, requestlog.CreateAttemptParams) (requestlog.AttemptRecord, error) {

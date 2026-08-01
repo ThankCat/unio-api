@@ -9,11 +9,14 @@ import (
 
 // AttemptTimingFacts 是一次真实 upstream transport 的协议无关时间事实。
 type AttemptTimingFacts struct {
-	UpstreamStartedAt    *time.Time
-	UpstreamFirstTokenAt *time.Time
-	UpstreamCompletedAt  *time.Time
-	RequestWriteState    adapter.RequestWriteState
-	ResponseHeadersSeen  bool
+	UpstreamStartedAt         *time.Time
+	UpstreamResponseHeadersAt *time.Time
+	UpstreamFirstTokenAt      *time.Time
+	UpstreamCompletedAt       *time.Time
+	RequestWriteState         adapter.RequestWriteState
+	ResponseHeadersSeen       bool
+	UpstreamStatusCode        int
+	UpstreamRequestID         string
 }
 
 // HasChannelUsageEvidence reports whether the attempt may have consumed upstream capacity.
@@ -36,6 +39,25 @@ func (f AttemptTimingFacts) FirstTokenMs() *int64 {
 	return &value
 }
 
+// ResponseHeaderMs returns the elapsed transport time to the first received response headers.
+func (f AttemptTimingFacts) ResponseHeaderMs() *int64 {
+	if f.UpstreamStartedAt == nil || f.UpstreamResponseHeadersAt == nil {
+		return nil
+	}
+	value := f.UpstreamResponseHeadersAt.Sub(*f.UpstreamStartedAt).Milliseconds()
+	if value < 0 {
+		value = 0
+	}
+	return &value
+}
+
+// AttemptTimingHooks expose the two transport boundaries that need immediate DEBUG logs.
+// Hooks run outside the observer mutex and must never mutate request behavior.
+type AttemptTimingHooks struct {
+	TransportStarted        func(AttemptTimingFacts)
+	ResponseHeadersReceived func(AttemptTimingFacts)
+}
+
 // AttemptTimingObserver 用 first-write-wins 记录 transport start / stream FirstToken / completion。
 // 非流式 observer 永远不产生 FirstToken 事实。
 type AttemptTimingObserver struct {
@@ -43,6 +65,7 @@ type AttemptTimingObserver struct {
 	stream bool
 	now    func() time.Time
 	facts  AttemptTimingFacts
+	hooks  AttemptTimingHooks
 }
 
 func NewAttemptTimingObserver(stream bool) *AttemptTimingObserver {
@@ -50,10 +73,14 @@ func NewAttemptTimingObserver(stream bool) *AttemptTimingObserver {
 }
 
 func newAttemptTimingObserver(stream bool, now func() time.Time) *AttemptTimingObserver {
+	return newAttemptTimingObserverWithHooks(stream, now, AttemptTimingHooks{})
+}
+
+func newAttemptTimingObserverWithHooks(stream bool, now func() time.Time, hooks AttemptTimingHooks) *AttemptTimingObserver {
 	if now == nil {
 		now = time.Now
 	}
-	return &AttemptTimingObserver{stream: stream, now: now}
+	return &AttemptTimingObserver{stream: stream, now: now, hooks: hooks}
 }
 
 // TransportStarted 由 adapter 在紧邻 http.Client.Do 前调用。
@@ -62,13 +89,18 @@ func (o *AttemptTimingObserver) TransportStarted() {
 		return
 	}
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	if o.facts.UpstreamStartedAt != nil {
+		o.mu.Unlock()
 		return
 	}
 	now := o.now()
 	o.facts.UpstreamStartedAt = &now
 	o.facts.RequestWriteState = adapter.RequestWriteNotStarted
+	facts := cloneAttemptTimingFacts(o.facts)
+	o.mu.Unlock()
+	if o.hooks.TransportStarted != nil {
+		o.hooks.TransportStarted(facts)
+	}
 }
 
 // RequestWritten receives net/http's WroteRequest result. Any write error is uncertain because
@@ -89,18 +121,27 @@ func (o *AttemptTimingObserver) RequestWritten(err error) {
 	o.facts.RequestWriteState = adapter.RequestWriteUncertain
 }
 
-func (o *AttemptTimingObserver) ResponseHeadersReceived() {
+func (o *AttemptTimingObserver) ResponseHeadersReceived(metadata adapter.UpstreamMetadata) {
 	if o == nil {
 		return
 	}
 	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.facts.UpstreamStartedAt == nil {
+	if o.facts.UpstreamStartedAt == nil || o.facts.UpstreamResponseHeadersAt != nil {
+		o.mu.Unlock()
 		return
 	}
+	now := notBefore(o.now(), *o.facts.UpstreamStartedAt)
+	o.facts.UpstreamResponseHeadersAt = &now
 	o.facts.ResponseHeadersSeen = true
+	o.facts.UpstreamStatusCode = metadata.StatusCode
+	o.facts.UpstreamRequestID = metadata.RequestID
 	if o.facts.RequestWriteState == adapter.RequestWriteNotStarted {
 		o.facts.RequestWriteState = adapter.RequestWriteUncertain
+	}
+	facts := cloneAttemptTimingFacts(o.facts)
+	o.mu.Unlock()
+	if o.hooks.ResponseHeadersReceived != nil {
+		o.hooks.ResponseHeadersReceived(facts)
 	}
 }
 
@@ -148,11 +189,14 @@ func (o *AttemptTimingObserver) Snapshot() AttemptTimingFacts {
 
 func cloneAttemptTimingFacts(in AttemptTimingFacts) AttemptTimingFacts {
 	return AttemptTimingFacts{
-		UpstreamStartedAt:    cloneTime(in.UpstreamStartedAt),
-		UpstreamFirstTokenAt: cloneTime(in.UpstreamFirstTokenAt),
-		UpstreamCompletedAt:  cloneTime(in.UpstreamCompletedAt),
-		RequestWriteState:    in.RequestWriteState,
-		ResponseHeadersSeen:  in.ResponseHeadersSeen,
+		UpstreamStartedAt:         cloneTime(in.UpstreamStartedAt),
+		UpstreamResponseHeadersAt: cloneTime(in.UpstreamResponseHeadersAt),
+		UpstreamFirstTokenAt:      cloneTime(in.UpstreamFirstTokenAt),
+		UpstreamCompletedAt:       cloneTime(in.UpstreamCompletedAt),
+		RequestWriteState:         in.RequestWriteState,
+		ResponseHeadersSeen:       in.ResponseHeadersSeen,
+		UpstreamStatusCode:        in.UpstreamStatusCode,
+		UpstreamRequestID:         in.UpstreamRequestID,
 	}
 }
 

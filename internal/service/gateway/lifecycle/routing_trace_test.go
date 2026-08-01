@@ -10,6 +10,8 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type fakeDiagnosticRoutingTraceStore struct {
@@ -95,6 +97,33 @@ func TestRoutingTraceRecorderWritesEveryRequestAndCompletesTrace(t *testing.T) {
 		chain[0].UpstreamEndpoint != requestlog.UpstreamEndpointResponsesCompact ||
 		chain[1].UpstreamEndpoint != requestlog.UpstreamEndpointChatCompletions {
 		t.Fatalf("same-channel transport attempts lost from trace: %+v", chain)
+	}
+}
+
+func TestRoutingTraceLogsPlanAndCompletionOnce(t *testing.T) {
+	core, observed := observer.New(zapcore.DebugLevel)
+	recorder := NewRoutingTraceRecorder(&fakeRoutingTraceStore{}, zap.New(core))
+	request := requestlog.RequestRecord{ID: 1, RequestID: "req-log-once", RequestedModelID: "openai/gpt"}
+	in := RoutingDecisionTraceInput{
+		Request: request,
+		RouteID: 3,
+		Mode:    "balanced",
+		Plan: CandidatePlan{Candidates: []Candidate{
+			{Route: candidateRoute(7, "openai")},
+		}},
+	}
+	recorder.Record(context.Background(), in)
+	in.Status = TraceStatusComplete
+	in.SelectedChannelID = 7
+	in.FinalResult = FinalResultSuccess
+	in.FallbackChain = []TransportAttempt{{ChannelID: 7}}
+	recorder.complete(context.Background(), in)
+
+	if got := observed.FilterMessage("routing plan created").Len(); got != 1 {
+		t.Fatalf("routing plan log count = %d", got)
+	}
+	if got := observed.FilterMessage("routing completed").Len(); got != 1 {
+		t.Fatalf("routing completion log count = %d", got)
 	}
 }
 

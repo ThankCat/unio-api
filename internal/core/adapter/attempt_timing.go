@@ -19,7 +19,7 @@ const (
 type AttemptTimingObserver interface {
 	TransportStarted()
 	RequestWritten(error)
-	ResponseHeadersReceived()
+	ResponseHeadersReceived(UpstreamMetadata)
 	FirstTokenEligible()
 	TransportCompleted()
 }
@@ -72,9 +72,10 @@ func WithAttemptTransportTrace(ctx context.Context) context.Context {
 }
 
 // MarkResponseHeadersReceived records that http.Client.Do returned an HTTP response.
-func MarkResponseHeadersReceived(ctx context.Context) {
+// Callers pass only already-sanitized response metadata; response bodies and headers are never retained.
+func MarkResponseHeadersReceived(ctx context.Context, metadata UpstreamMetadata) {
 	if observer := attemptTimingObserverFromContext(ctx); observer != nil {
-		observer.ResponseHeadersReceived()
+		observer.ResponseHeadersReceived(metadata)
 	}
 }
 

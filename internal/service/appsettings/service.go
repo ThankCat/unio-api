@@ -68,6 +68,9 @@ func (s *Service) List(ctx context.Context) []SettingItem {
 	defs := s.store.registry.List()
 	out := make([]SettingItem, 0, len(defs))
 	for _, d := range defs {
+		if d.DedicatedControl {
+			continue
+		}
 		item := SettingItem{
 			Key:         d.Key,
 			Category:    d.Category,
@@ -121,6 +124,9 @@ func (s *Service) SetRawWithResult(ctx context.Context, key string, value json.R
 	def, ok := s.store.registry.Get(key)
 	if !ok {
 		return SettingWriteResult{}, errors.New("appsettings: unknown key " + key)
+	}
+	if def.DedicatedControl {
+		return SettingWriteResult{}, errors.New("appsettings: setting " + key + " requires its dedicated control API")
 	}
 	if def.Validate != nil {
 		if err := def.Validate(value); err != nil {

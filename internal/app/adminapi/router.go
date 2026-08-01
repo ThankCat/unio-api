@@ -89,6 +89,7 @@ type RouterDeps struct {
 	// M8 系统/任务/健康（横切）：结算补偿任务只读视图
 	RecoveryJobQueryService   system.RecoveryJobQueryService
 	RuntimeDiagnosticsService system.RuntimeDiagnosticsService
+	GatewayLoggingService     system.GatewayLoggingService
 
 	// Provider 全局设置（可编辑）：起步 Anthropic beta 转发策略（app_settings）。
 	ProviderSettingsService system.ProviderSettingsService
@@ -188,6 +189,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 			RecoveryJobService:        deps.RecoveryJobQueryService,
 			ProviderSettingsService:   deps.ProviderSettingsService,
 			RuntimeDiagnosticsService: deps.RuntimeDiagnosticsService,
+			GatewayLoggingService:     deps.GatewayLoggingService,
 			GatewayConfig:             deps.GatewayConfig,
 			WorkerConfig:              deps.WorkerConfig,
 			HTTPConfig:                deps.HTTPConfig,

@@ -60,12 +60,14 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 
 	// 会话粘性（大 uncache 缺口 P0）：提取会话键并 lookup 既有绑定，置顶绑定渠道；
 	// 粘住渠道已被硬摘除（不在池/熔断）时清绑定重选（R5）。
+	stickyHint := sessionhint.OpenAISessionHint(ctx, req.PromptCacheKey)
 	stickySession := s.sticky.Resolve(ctx, lifecycle.StickyResolveParams{
 		Protocol:   routing.ProtocolOpenAI,
 		RouteID:    principal.RouteID,
 		APIKeyID:   principal.APIKeyID,
 		ModelID:    plan.ModelDBID,
-		SessionKey: sessionhint.OpenAISessionKey(ctx, req.PromptCacheKey),
+		SessionKey: stickyHint.Key,
+		Source:     stickyHint.Source,
 		Candidates: plan.Candidates,
 		Mode:       plan.RouteMode,
 	})
@@ -102,7 +104,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		return nil, err
 	}
 
-	authorization, err := s.chatAuthorizer.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
+	authorization, err := s.lifecycle.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
 		Principal:                principal,
 		CandidatePrices:          candidatePlan.CandidateSalePrices(),

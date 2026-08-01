@@ -25,6 +25,8 @@ type Definition struct {
 	Description string
 	// HotReload 表示是否免重启生效(true=消费进程读时现取;false=仅展示,改后需重启)。
 	HotReload bool
+	// DedicatedControl 表示该设置只能通过专用控制面读取和修改，不出现在通用设置接口中。
+	DedicatedControl bool
 	// Default 是 DB 无记录时的默认值(规范 JSON)。
 	Default json.RawMessage
 	// Validate 在写入前校验值合法性;nil 表示不校验。
@@ -84,6 +86,7 @@ func DefaultRegistry() *Registry {
 		routingBalanceDefinition(),
 		routingStickyDefinition(),
 		capacityWaitTimeoutDefinition(),
+		gatewayLoggingDebugSessionDefinition(),
 		channelTestDefinition(),
 		dashboardThresholdsDefinition(),
 	)

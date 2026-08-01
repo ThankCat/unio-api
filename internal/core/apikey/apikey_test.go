@@ -17,8 +17,8 @@ func TestGenerate(t *testing.T) {
 		t.Fatal("expected plaintext, prefix, and hash to be non-empty")
 	}
 
-	if !strings.HasPrefix(key.Plaintext, "unio_sk_") {
-		t.Fatal("expected plaintext to start with unio_sk_")
+	if !strings.HasPrefix(key.Plaintext, "sk-ant-api03-unio_") {
+		t.Fatal("expected plaintext to start with sk-ant-api03-unio_")
 	}
 
 	if len(key.Prefix) >= len(key.Plaintext) {
@@ -40,9 +40,9 @@ func TestGeneratePlaintextIsBase62(t *testing.T) {
 		t.Fatalf("generate api key: %v", err)
 	}
 
-	random := strings.TrimPrefix(key.Plaintext, "unio_sk_")
+	random := strings.TrimPrefix(key.Plaintext, "sk-ant-api03-unio_")
 	if random == key.Plaintext {
-		t.Fatal("expected plaintext to start with unio_sk_")
+		t.Fatal("expected plaintext to start with sk-ant-api03-unio_")
 	}
 
 	for _, c := range random {

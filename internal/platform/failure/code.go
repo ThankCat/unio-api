@@ -127,6 +127,9 @@ const (
 
 	// CodeDependencyRedisUnavailable 表示 Redis 无法连接或 ping 不通。
 	CodeDependencyRedisUnavailable Code = "dependency_redis_unavailable"
+
+	// CodeDependencyLokiUnavailable 表示 Admin 无法查询内部 Loki 日志存储。
+	CodeDependencyLokiUnavailable Code = "dependency_loki_unavailable"
 )
 
 const (

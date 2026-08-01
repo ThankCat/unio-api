@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-gateway/internal/platform/stickysession"
 	"go.uber.org/zap"
 )
@@ -133,6 +134,8 @@ type StickyResolveParams struct {
 	ModelID int64
 	// SessionKey 是协议提取器产出的原始会话键；空串表示本请求无会话信号，不粘。
 	SessionKey string
+	// Source 是协议提取器最终采用的稳定来源，不包含客户会话键原值。
+	Source string
 	// Candidates are the hard-filtered channel facts. Sticky policy is resolved from the bound Channel,
 	// never from Route. Fixed routes skip Sticky because they already have one channel.
 	Candidates []routing.ChatRouteCandidate
@@ -147,25 +150,28 @@ func (r *StickyRouter) Resolve(ctx context.Context, params StickyResolveParams) 
 	}
 	if params.SessionKey == "" || params.RouteID == nil || params.Protocol == "" ||
 		params.ModelID <= 0 || params.Mode == "fixed" {
-		return &StickySession{action: StickyActionDisabled}
+		session := &StickySession{}
+		session.setAction(ctx, StickyActionDisabled, "")
+		return session
 	}
 
+	sessionHash := hashStickySessionKey(params.SessionKey)
 	session := &StickySession{
-		router: r,
-		key: stickyRedisKey(
-			params.Protocol, *params.RouteID, params.APIKeyID, params.ModelID, params.SessionKey,
-		),
+		router:      r,
+		key:         stickyRedisKeyFromHash(params.Protocol, *params.RouteID, params.APIKeyID, params.ModelID, sessionHash),
+		sessionHash: sessionHash,
+		source:      params.Source,
 	}
 	result := r.store.Lookup(ctx, session.key)
 	if result.StoreUnavailable {
-		session.action = StickyActionStoreUnavailable
+		session.setAction(ctx, StickyActionStoreUnavailable, "")
 		r.inc(string(StickyActionStoreUnavailable))
 		return session
 	}
 	if !result.Found {
-		session.action = StickyActionMiss
+		session.setAction(ctx, StickyActionMiss, "")
 		r.inc(string(StickyActionMiss))
-		r.logSticky(ctx, "sticky miss", zap.String("sticky_key", session.key))
+		r.logSticky(ctx, "sticky miss", session.logFields()...)
 		return session
 	}
 
@@ -178,11 +184,13 @@ func (r *StickyRouter) Resolve(ctx context.Context, params StickyResolveParams) 
 			return session
 		}
 	}
-	session.action = StickyActionHit
+	session.setAction(ctx, StickyActionHit, "")
 	r.inc(string(StickyActionHit))
 	r.logSticky(ctx, "sticky hit",
-		zap.Int64("sticky_channel_id", result.Binding.ChannelID),
-		zap.String("sticky_key", session.key),
+		session.logFields(
+			zap.Int64("sticky_channel_id", result.Binding.ChannelID),
+			zap.Int64("binding_version", result.Binding.BindingVersion),
+		)...,
 	)
 	return session
 }
@@ -209,8 +217,10 @@ func (r *StickyRouter) policy(candidate routing.ChatRouteCandidate) (bool, time.
 // StickySession 是一次请求的粘性上下文（Resolve 产物）。
 // 零值/nil 均表示「本请求不粘」，所有方法 nil-safe，调用方无需判空。
 type StickySession struct {
-	router *StickyRouter
-	key    string
+	router      *StickyRouter
+	key         string
+	sessionHash string
+	source      string
 
 	// bound 是当前有效绑定（CAS 身份）；ChannelID==0 表示 Unbound。
 	bound stickysession.Binding
@@ -219,6 +229,28 @@ type StickySession struct {
 
 	action StickyAction
 	reason string
+}
+
+func (s *StickySession) setAction(ctx context.Context, action StickyAction, reason string) {
+	if s == nil {
+		return
+	}
+	s.action = action
+	s.reason = reason
+	logfields.SetStickyAction(ctx, string(action))
+}
+
+func (s *StickySession) logFields(fields ...zap.Field) []zap.Field {
+	if s == nil {
+		return fields
+	}
+	out := make([]zap.Field, 0, len(fields)+3)
+	out = append(out,
+		zap.String("sticky_source", s.source),
+		zap.String("sticky_session_hash", s.sessionHash),
+		zap.String("sticky_redis_key", s.key),
+	)
+	return append(out, fields...)
 }
 
 // Enabled 报告本请求是否启用 sticky（有会话键且线路/全局开关打开）。
@@ -286,19 +318,18 @@ func (s *StickySession) ApplyPlanOutcome(ctx context.Context, plan CandidatePlan
 			return
 		}
 		s.router.inc("pin_lost")
-		s.router.logSticky(ctx, "sticky pin_lost",
+		s.router.logSticky(ctx, "sticky pin_lost", s.logFields(
 			zap.Int64("sticky_channel_id", s.bound.ChannelID),
-			zap.String("sticky_key", s.key),
-		)
+			zap.String("reason", "bound_channel_not_eligible"),
+		)...)
 		s.clearIfCurrent(ctx, "bound_channel_not_eligible")
 		return
 	}
 	if plan.StickyPinnedNonPreferred {
 		s.router.inc("pinned_non_preferred")
-		s.router.logSticky(ctx, "sticky pinned_non_preferred",
+		s.router.logSticky(ctx, "sticky pinned_non_preferred", s.logFields(
 			zap.Int64("sticky_channel_id", s.bound.ChannelID),
-			zap.String("sticky_key", s.key),
-		)
+		)...)
 	} else {
 		s.router.inc("pinned_preferred")
 	}
@@ -327,44 +358,59 @@ func (s *StickySession) BindSuccess(ctx context.Context, candidate routing.ChatR
 	switch {
 	case s.bound.ChannelID == 0:
 		next, result := s.router.store.BindIfAbsent(ctx, s.key, channelID, ttl)
-		s.applyWriteResult(result, StickyActionBindIfAbsent, "complete_success", next)
+		s.applyWriteResult(ctx, result, StickyActionBindIfAbsent, "complete_success", next, ttl)
 	case s.bound.ChannelID == channelID:
 		next, result := s.router.store.RefreshIfCurrent(
 			ctx, s.key, channelID, s.bound.BindingVersion, ttl,
 		)
-		s.applyWriteResult(result, StickyActionRefreshIfCurrent, "complete_success", next)
+		s.applyWriteResult(ctx, result, StickyActionRefreshIfCurrent, "complete_success", next, ttl)
 	default:
 		// 绕到了别的渠道并成功：保留原绑定，两边 TTL 都不刷新（§10.6）。
-		s.action = StickyActionPreserveOnTemporaryBypass
-		s.reason = "temporary_bypass_success_on_other_channel"
+		s.setAction(ctx, StickyActionPreserveOnTemporaryBypass, "temporary_bypass_success_on_other_channel")
 		s.router.inc(string(StickyActionPreserveOnTemporaryBypass))
-		s.router.logSticky(ctx, "sticky preserve_on_temporary_bypass",
+		s.router.logSticky(ctx, "sticky preserve_on_temporary_bypass", s.logFields(
 			zap.Int64("sticky_channel_id", s.bound.ChannelID),
 			zap.Int64("succeeded_channel_id", channelID),
-			zap.String("sticky_key", s.key),
-		)
+			zap.String("reason", "temporary_bypass_success_on_other_channel"),
+		)...)
 	}
 }
 
 // applyWriteResult 把一次 CAS 结果落成审计动作。CAS 冲突与存储故障都不改变本地 bound 状态：
 // 前者说明别的请求已经赢了，后者是 fail-open。
 func (s *StickySession) applyWriteResult(
-	result stickysession.CASResult, action StickyAction, reason string, next stickysession.Binding,
+	ctx context.Context,
+	result stickysession.CASResult,
+	action StickyAction,
+	reason string,
+	next stickysession.Binding,
+	ttl time.Duration,
 ) {
+	operation := "bind"
+	message := "sticky binding created"
+	if action == StickyActionRefreshIfCurrent {
+		operation = "refresh"
+		message = "sticky binding refreshed"
+	}
+	fields := s.logFields(
+		zap.String("operation", operation),
+		zap.Int64("channel_id", next.ChannelID),
+		zap.Int64("binding_version", next.BindingVersion),
+		zap.Int64("ttl_ms", ttl.Milliseconds()),
+	)
 	switch {
 	case result.StoreUnavailable:
-		s.action = StickyActionStoreUnavailable
-		s.reason = reason
+		s.setAction(ctx, StickyActionStoreUnavailable, reason)
 		s.router.inc(string(StickyActionStoreUnavailable))
 	case result.Conflict:
-		s.action = StickyActionCASConflict
-		s.reason = reason
+		s.setAction(ctx, StickyActionCASConflict, reason)
 		s.router.inc(string(StickyActionCASConflict))
+		s.router.logSticky(ctx, "sticky operation conflicted", fields...)
 	case result.Applied:
 		s.bound = next
-		s.action = action
-		s.reason = reason
+		s.setAction(ctx, action, reason)
 		s.router.inc(string(action))
+		s.router.logSticky(ctx, message, fields...)
 	}
 }
 
@@ -382,24 +428,25 @@ func (s *StickySession) clearIfCurrent(ctx context.Context, reason string) {
 	result := s.router.store.ClearIfCurrent(ctx, s.key, channelID, version)
 	switch {
 	case result.StoreUnavailable:
-		s.action = StickyActionStoreUnavailable
-		s.reason = reason
+		s.setAction(ctx, StickyActionStoreUnavailable, reason)
 		s.router.inc(string(StickyActionStoreUnavailable))
 	case result.Conflict:
 		// 绑定已被其他请求改变：不删除新绑定，也不把本地状态当成 Unbound 去建绑。
-		s.action = StickyActionCASConflict
-		s.reason = reason
+		s.setAction(ctx, StickyActionCASConflict, reason)
 		s.router.inc(string(StickyActionCASConflict))
+		s.router.logSticky(ctx, "sticky operation conflicted", s.logFields(
+			zap.String("operation", "clear"),
+			zap.Int64("channel_id", channelID), zap.Int64("binding_version", version),
+		)...)
 	case result.Applied:
 		s.bound = stickysession.Binding{}
-		s.action = StickyActionClearIfCurrent
-		s.reason = reason
+		s.setAction(ctx, StickyActionClearIfCurrent, reason)
 		s.router.inc(string(StickyActionClearIfCurrent))
-		s.router.logSticky(ctx, "sticky clear_if_current",
+		s.router.logSticky(ctx, "sticky clear_if_current", s.logFields(
 			zap.Int64("sticky_channel_id", channelID),
-			zap.String("sticky_reason", reason),
-			zap.String("sticky_key", s.key),
-		)
+			zap.Int64("binding_version", version),
+			zap.String("reason", reason),
+		)...)
 	}
 }
 
@@ -417,23 +464,25 @@ func (s *StickySession) PreserveOnTemporaryBypass(ctx context.Context, channelID
 	if !s.Enabled() || s.bound.ChannelID == 0 || s.bound.ChannelID != channelID {
 		return
 	}
-	s.action = StickyActionPreserveOnTemporaryBypass
-	s.reason = reason
+	s.setAction(ctx, StickyActionPreserveOnTemporaryBypass, reason)
 	s.router.inc(string(StickyActionPreserveOnTemporaryBypass))
-	s.router.logSticky(ctx, "sticky preserve_on_temporary_bypass",
+	s.router.logSticky(ctx, "sticky preserve_on_temporary_bypass", s.logFields(
 		zap.Int64("sticky_channel_id", channelID),
-		zap.String("sticky_reason", reason),
-		zap.String("sticky_key", s.key),
-	)
+		zap.String("reason", reason),
+	)...)
 }
 
 // stickyRedisKey 构造绑定键：sticky:{protocol}:{route_id}:{api_key_id}:{model_id}:{session_hash}。
 // sessionKey 是客户端可控任意串，入键前定长哈希：防长度/基数膨胀与键注入，也避免把原始会话
 // 标识写进 Redis key 或日志；原值仍原样转发上游。
 func stickyRedisKey(protocol string, routeID, apiKeyID, modelID int64, sessionKey string) string {
+	return stickyRedisKeyFromHash(protocol, routeID, apiKeyID, modelID, hashStickySessionKey(sessionKey))
+}
+
+func stickyRedisKeyFromHash(protocol string, routeID, apiKeyID, modelID int64, sessionHash string) string {
 	return fmt.Sprintf(
 		"sticky:%s:%d:%d:%d:%s",
-		protocol, routeID, apiKeyID, modelID, hashStickySessionKey(sessionKey),
+		protocol, routeID, apiKeyID, modelID, sessionHash,
 	)
 }
 

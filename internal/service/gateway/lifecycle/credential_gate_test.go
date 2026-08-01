@@ -118,6 +118,7 @@ func TestCredentialGateKeepsRevisionsIsolated(t *testing.T) {
 	inv.mu.Lock()
 	got := inv.revisions[0]
 	inv.mu.Unlock()
+	newRevision.Threshold = 2
 	if got != newRevision {
 		t.Fatalf("invalidated revision=%+v, want %+v", got, newRevision)
 	}

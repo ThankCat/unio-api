@@ -66,6 +66,21 @@ func MustNewConsole() *zap.Logger {
 	return logger
 }
 
+// MustNewEmergency 构造只写 stderr 的早期 logger。Gateway 在配置或文件 sink 初始化失败时使用，
+// 避免生产环境把普通启动日志写到 stdout。
+func MustNewEmergency() *zap.Logger {
+	zcfg := zap.NewDevelopmentConfig()
+	applyConsoleEncoderTweaks(&zcfg.EncoderConfig)
+	zcfg.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+	zcfg.OutputPaths = []string{"stderr"}
+	zcfg.ErrorOutputPaths = []string{"stderr"}
+	logger, err := zcfg.Build()
+	if err != nil {
+		return zap.NewNop()
+	}
+	return logger
+}
+
 func applyConsoleEncoderTweaks(enc *zapcore.EncoderConfig) {
 	// v1.28 Development 默认是 CapitalLevelEncoder（无色）；本地显式开彩色级别。
 	enc.EncodeLevel = zapcore.CapitalColorLevelEncoder

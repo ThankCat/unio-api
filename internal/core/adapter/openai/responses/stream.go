@@ -77,7 +77,10 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 	ctxCause := context.Cause(streamCtx)
 	timeouts.HeadersReceived()
 	if upstreamResp != nil {
-		adapter.MarkResponseHeadersReceived(streamCtx)
+		adapter.MarkResponseHeadersReceived(streamCtx, adapter.UpstreamMetadata{
+			StatusCode: upstreamResp.StatusCode,
+			RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
+		})
 	}
 	if err != nil {
 		return adapter.StreamOutcome{}, newUpstreamSendErrorWithContextCause(err, ctxCause, "send stream responses request")

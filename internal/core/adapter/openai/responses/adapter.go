@@ -67,7 +67,10 @@ func (a *Adapter) CreateResponse(ctx context.Context, ch channel.Runtime, req Re
 	adapter.MarkTransportStarted(ctx)
 	upstreamResp, err := a.client.Do(httpReq)
 	if upstreamResp != nil {
-		adapter.MarkResponseHeadersReceived(ctx)
+		adapter.MarkResponseHeadersReceived(ctx, adapter.UpstreamMetadata{
+			StatusCode: upstreamResp.StatusCode,
+			RequestID:  upstreamResp.Header.Get(upstreamRequestIDHeader),
+		})
 	}
 	if err != nil {
 		return nil, newUpstreamSendError(err, "send responses request")

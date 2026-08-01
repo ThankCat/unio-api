@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // DeliveryFinalizer binds an HTTP delivery terminal state to one internal request.
@@ -83,8 +84,11 @@ func (l *RequestLifecycle) NewNonStreamDeliveryFinalizer(ctx context.Context, re
 	if l == nil || l.requestLog == nil || requestRecord.ID == 0 {
 		panic("lifecycle: non-stream delivery requires a persisted request")
 	}
+	l.MarkDeliveryStarted(ctx, requestRecord)
 	return NewDeliveryFinalizer(
 		func() { l.MarkDeliveryCompleted(ctx, requestRecord) },
-		func() { l.MarkDeliveryInterrupted(ctx, requestRecord) },
+		func() {
+			l.MarkDeliveryInterrupted(ctx, requestRecord, false, failure.New(failure.CodeHTTPResponseWriteFailed))
+		},
 	)
 }

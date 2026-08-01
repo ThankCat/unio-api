@@ -36,6 +36,17 @@ func TestOpenAISessionKeyPrecedence(t *testing.T) {
 	}
 }
 
+func TestOpenAISessionHintReportsSelectedSource(t *testing.T) {
+	ctx := WithClientSessionID(context.Background(), "header-session")
+	bodyKey := "body-cache-key"
+	if got := OpenAISessionHint(ctx, &bodyKey); got != (Hint{Key: bodyKey, Source: "prompt_cache_key"}) {
+		t.Fatalf("unexpected body hint: %+v", got)
+	}
+	if got := OpenAISessionHint(ctx, nil); got != (Hint{Key: "header-session", Source: "session_id_header"}) {
+		t.Fatalf("unexpected header hint: %+v", got)
+	}
+}
+
 // TestAnthropicSessionKeyPrecedence 验证 Anthropic 提取顺序：会话头优先，metadata.user_id 严格回退（R9）。
 func TestAnthropicSessionKeyPrecedence(t *testing.T) {
 	meta := json.RawMessage(`{"user_id":"user_abc123_account_11111111-2222-3333-4444-555555555555_session_d81712fa-1111-2222-3333-44445555bca9"}`)
@@ -47,6 +58,17 @@ func TestAnthropicSessionKeyPrecedence(t *testing.T) {
 
 	if got := AnthropicSessionKey(context.Background(), meta); got != "d81712fa-1111-2222-3333-44445555bca9" {
 		t.Fatalf("expected metadata session suffix, got %q", got)
+	}
+}
+
+func TestAnthropicSessionHintReportsSelectedSource(t *testing.T) {
+	meta := json.RawMessage(`{"user_id":"user_abc_session_d81712fa-1111-2222-3333-44445555bca9"}`)
+	ctx := WithClientSessionID(context.Background(), "d81712fa-head")
+	if got := AnthropicSessionHint(ctx, meta); got != (Hint{Key: "d81712fa-head", Source: "claude_session_id_header"}) {
+		t.Fatalf("unexpected header hint: %+v", got)
+	}
+	if got := AnthropicSessionHint(context.Background(), meta); got != (Hint{Key: "d81712fa-1111-2222-3333-44445555bca9", Source: "metadata_user_id"}) {
+		t.Fatalf("unexpected metadata hint: %+v", got)
 	}
 }
 
