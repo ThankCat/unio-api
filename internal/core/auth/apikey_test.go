@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ThankCat/unio-gateway/internal/core/apikey"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -13,15 +14,19 @@ import (
 
 // fakeAPIKeyStore 是认证测试使用的存储替身，用来避免连接真实数据库。
 type fakeAPIKeyStore struct {
-	key        sqlc.GetAPIKeyByHashRow
-	err        error
-	updatedArg sqlc.UpdateAPIKeyLastUsedAtParams
-	updated    bool
-	updateErr  error
+	key          sqlc.GetAPIKeyByHashRow
+	err          error
+	expectedHash string
+	updatedArg   sqlc.UpdateAPIKeyLastUsedAtParams
+	updated      bool
+	updateErr    error
 }
 
 // GetAPIKeyByHash 返回测试预设的 API Key 记录或错误。
 func (s *fakeAPIKeyStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (sqlc.GetAPIKeyByHashRow, error) {
+	if s.expectedHash != "" && keyHash != s.expectedHash {
+		return sqlc.GetAPIKeyByHashRow{}, pgx.ErrNoRows
+	}
 	return s.key, s.err
 }
 
@@ -153,6 +158,28 @@ func TestAuthenticateAPIKeyValid(t *testing.T) {
 		principal.RPDLimit == nil || *principal.RPDLimit != 100 ||
 		principal.ConcurrencyLimit == nil || *principal.ConcurrencyLimit != 4 {
 		t.Fatalf("unexpected route limit snapshot: %+v", principal)
+	}
+}
+
+func TestAuthenticateAPIKeyAcceptsIssuedPrefixes(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		plaintext string
+	}{
+		{name: "unio", plaintext: "unio_sk_existing"},
+		{name: "anthropic-compatible", plaintext: "sk-ant-api03-unio_existing"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeAPIKeyStore{
+				key:          validAPIKey(),
+				expectedHash: apikey.Hash(tt.plaintext),
+			}
+			authenticator := NewAPIKeyAuthenticator(store)
+
+			if _, err := authenticator.AuthenticateAPIKey(context.Background(), tt.plaintext); err != nil {
+				t.Fatalf("authenticate issued api key: %v", err)
+			}
+		})
 	}
 }
 

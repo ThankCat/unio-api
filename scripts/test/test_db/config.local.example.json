@@ -13,9 +13,9 @@
       "status": "enabled"
     },
     {
-      "slug": "zzapi",
-      "name": "ZZ API",
-      "origin": "https://zz1cc.cc.cd",
+      "slug": "aihub",
+      "name": "AI Hub",
+      "origin": "https://aihub.top",
       "status": "enabled"
     }
   ],
@@ -46,7 +46,7 @@
       "adapter_key": "openai",
       "credential": "sk-3326…REPLACE_ME",
       "status": "enabled",
-      "priority": 0,
+      "priority": 100,
       "response_timeout_ms": 200000,
       "first_token_timeout_ms": null,
       "concurrency_limit": 20,
@@ -57,39 +57,21 @@
       "recharge_factor": "1.0000000000"
     },
     {
-      "key": "zzapi_openai_0.08",
-      "provider": "zzapi",
-      "name": "zzapi_openai_0.08",
+      "key": "aihub_openai_0.07",
+      "provider": "aihub",
+      "name": "aihub_openai_0.07",
       "protocol": "openai",
       "adapter_key": "openai",
-      "credential": "sk-frh8…REPLACE_ME",
-      "status": "disabled",
-      "priority": 100,
-      "response_timeout_ms": 60000,
-      "first_token_timeout_ms": null,
-      "concurrency_limit": 20,
-      "sticky_enabled": null,
-      "sticky_ttl_ms": null,
-      "upstream_bills_on_disconnect": false,
-      "cost_multiplier": "0.0800000000",
-      "recharge_factor": "1.0000000000"
-    },
-    {
-      "key": "zzapi_openai_0.196",
-      "provider": "zzapi",
-      "name": "zzapi_openai_0.196",
-      "protocol": "openai",
-      "adapter_key": "openai",
-      "credential": "sk-z7vK…REPLACE_ME",
+      "credential": "sk-7632…REPLACE_ME",
       "status": "enabled",
       "priority": 0,
       "response_timeout_ms": 200000,
       "first_token_timeout_ms": null,
-      "concurrency_limit": 20,
+      "concurrency_limit": 50,
       "sticky_enabled": null,
       "sticky_ttl_ms": null,
       "upstream_bills_on_disconnect": false,
-      "cost_multiplier": "0.1960000000",
+      "cost_multiplier": "0.0700000000",
       "recharge_factor": "1.0000000000"
     }
   ],
@@ -1317,73 +1299,109 @@
       "status": "enabled"
     },
     {
-      "channel": "zzapi_openai_0.08",
+      "channel": "zzapi_openai_0.08__archived_3__archived_3",
       "model": "gpt-5.4",
       "upstream_model": "gpt-5.4",
       "status": "enabled"
     },
     {
-      "channel": "zzapi_openai_0.08",
+      "channel": "zzapi_openai_0.08__archived_3__archived_3",
       "model": "gpt-5.4-mini",
       "upstream_model": "gpt-5.4-mini",
       "status": "enabled"
     },
     {
-      "channel": "zzapi_openai_0.08",
+      "channel": "zzapi_openai_0.08__archived_3__archived_3",
       "model": "gpt-5.5",
       "upstream_model": "gpt-5.5",
       "status": "enabled"
     },
     {
-      "channel": "zzapi_openai_0.08",
+      "channel": "zzapi_openai_0.08__archived_3__archived_3",
       "model": "gpt-5.6-sol",
       "upstream_model": "gpt-5.6-sol",
       "status": "enabled"
     },
     {
-      "channel": "zzapi_openai_0.08",
+      "channel": "zzapi_openai_0.08__archived_3__archived_3",
       "model": "gpt-5.6-luna",
       "upstream_model": "gpt-5.6-luna",
       "status": "enabled"
     },
     {
-      "channel": "zzapi_openai_0.08",
+      "channel": "zzapi_openai_0.08__archived_3__archived_3",
       "model": "gpt-5.6-terra",
       "upstream_model": "gpt-5.6-terra",
       "status": "enabled"
     },
     {
-      "channel": "zzapi_openai_0.196",
+      "channel": "zzapi_openai_0.196__archived_4__archived_4",
       "model": "gpt-5.4",
       "upstream_model": "gpt-5.4",
       "status": "enabled"
     },
     {
-      "channel": "zzapi_openai_0.196",
+      "channel": "zzapi_openai_0.196__archived_4__archived_4",
       "model": "gpt-5.4-mini",
       "upstream_model": "gpt-5.4-mini",
       "status": "enabled"
     },
     {
-      "channel": "zzapi_openai_0.196",
+      "channel": "zzapi_openai_0.196__archived_4__archived_4",
       "model": "gpt-5.5",
       "upstream_model": "gpt-5.5",
       "status": "enabled"
     },
     {
-      "channel": "zzapi_openai_0.196",
+      "channel": "zzapi_openai_0.196__archived_4__archived_4",
       "model": "gpt-5.6-sol",
       "upstream_model": "gpt-5.6-sol",
       "status": "enabled"
     },
     {
-      "channel": "zzapi_openai_0.196",
+      "channel": "zzapi_openai_0.196__archived_4__archived_4",
       "model": "gpt-5.6-luna",
       "upstream_model": "gpt-5.6-luna",
       "status": "enabled"
     },
     {
-      "channel": "zzapi_openai_0.196",
+      "channel": "zzapi_openai_0.196__archived_4__archived_4",
+      "model": "gpt-5.6-terra",
+      "upstream_model": "gpt-5.6-terra",
+      "status": "enabled"
+    },
+    {
+      "channel": "aihub_openai_0.07",
+      "model": "gpt-5.4",
+      "upstream_model": "gpt-5.4",
+      "status": "enabled"
+    },
+    {
+      "channel": "aihub_openai_0.07",
+      "model": "gpt-5.4-mini",
+      "upstream_model": "gpt-5.4-mini",
+      "status": "enabled"
+    },
+    {
+      "channel": "aihub_openai_0.07",
+      "model": "gpt-5.5",
+      "upstream_model": "gpt-5.5",
+      "status": "enabled"
+    },
+    {
+      "channel": "aihub_openai_0.07",
+      "model": "gpt-5.6-sol",
+      "upstream_model": "gpt-5.6-sol",
+      "status": "enabled"
+    },
+    {
+      "channel": "aihub_openai_0.07",
+      "model": "gpt-5.6-luna",
+      "upstream_model": "gpt-5.6-luna",
+      "status": "enabled"
+    },
+    {
+      "channel": "aihub_openai_0.07",
       "model": "gpt-5.6-terra",
       "upstream_model": "gpt-5.6-terra",
       "status": "enabled"
@@ -1399,12 +1417,11 @@
       "rpm_limit": 500,
       "tpm_limit": 0,
       "rpd_limit": 20000,
-      "concurrency_limit": 10,
+      "concurrency_limit": 20,
       "channels": [
         "starapi_openai_0.10",
         "starapi_openai_0.16",
-        "zzapi_openai_0.08",
-        "zzapi_openai_0.196"
+        "aihub_openai_0.07"
       ]
     }
   ],

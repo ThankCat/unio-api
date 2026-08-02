@@ -8,10 +8,7 @@ import (
 )
 
 const (
-	// Claude Code validates ANTHROPIC_API_KEY before sending a request and only
-	// accepts Anthropic-compatible prefixes. Keep an explicit Unio marker while
-	// generating keys that work unchanged in both Claude Code and OpenAI clients.
-	keyPrefix       = "sk-ant-api03-unio_"
+	keyPrefix       = "unio_sk_"
 	prefixRandomLen = 8
 	// randomLen 是明文 key 随机部分的字符数；43 个 base62 字符约等于 256 bit 熵。
 	randomLen = 43
@@ -23,11 +20,11 @@ const (
 // Plaintext 只在创建时返回给用户，不能保存到数据库或写入日志。
 type Key struct {
 	// Plaintext 是完整明文 key，只能在创建时展示一次。
-	// 示例格式：sk-ant-api03-unio_<random>
+	// 示例格式：unio_sk_<random>
 	Plaintext string
 
 	// Prefix 是可安全展示的短前缀，用于识别 key。
-	// 示例格式：sk-ant-api03-unio_<前 8 位 random>
+	// 示例格式：unio_sk_<前 8 位 random>
 	Prefix string
 
 	// Hash 是明文 key 的哈希值，用于数据库存储和认证匹配。
