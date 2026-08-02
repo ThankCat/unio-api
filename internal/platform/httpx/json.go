@@ -19,7 +19,7 @@ const (
 
 // maxJSONBodyBytes 是运行期可配置的 JSON body 上限（字节）；0 表示回退 DefaultMaxJSONBodyBytes。
 //
-// 由进程启动期 SetMaxJSONBodyBytes 设置一次（gateway / admin server bootstrap 读 HTTP_MAX_JSON_BODY_MB）。
+// 由进程启动期 SetMaxJSONBodyBytes 设置一次，gateway / admin server 分别读取自己的 ingress 上限。
 // 用 atomic 仅为读写竞态安全；预期 serve 前设置、serve 中只读。
 var maxJSONBodyBytes atomic.Int64
 

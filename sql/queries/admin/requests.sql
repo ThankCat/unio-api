@@ -7,7 +7,53 @@
 -- latency/ttft/tps 由 Go 侧用时间戳 + output_tokens 计算，不在此列。
 -- 线路名优先用请求级快照 route_id（Key 换绑不影响历史）；历史行 route_id 为 NULL 时回落到 Key 当前绑定。
 -- 模型元信息（显示名 / owned_by）按请求模型 id 关联；请求模型不在库时为 NULL。
+-- 先在 request_records 上完成过滤、精确计数与分页，再只对当前页执行富字段 JOIN/子查询；
+-- 避免 COUNT(*) OVER() 迫使数据库为全部匹配请求构造完整富化结果。
+WITH filtered_page AS (
+    SELECT
+        r.id,
+        COUNT(*) OVER()::bigint AS total_count
+    FROM request_records r
+    WHERE (sqlc.narg('user_id')::bigint IS NULL OR r.user_id = sqlc.narg('user_id')::bigint)
+      AND (sqlc.narg('api_key_id')::bigint IS NULL OR r.api_key_id = sqlc.narg('api_key_id')::bigint)
+      AND (sqlc.narg('request_id')::text IS NULL OR r.request_id = sqlc.narg('request_id')::text)
+      AND (sqlc.narg('status')::text IS NULL OR r.status = sqlc.narg('status')::text)
+      AND (sqlc.narg('model')::text IS NULL OR r.requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
+      AND (sqlc.narg('route_id')::bigint IS NULL OR r.route_id = sqlc.narg('route_id')::bigint)
+      AND (
+          (sqlc.narg('channel_id')::bigint IS NULL AND sqlc.narg('attempt_id')::bigint IS NULL AND sqlc.narg('scoring_sample')::text IS NULL)
+          OR EXISTS (
+              SELECT 1
+              FROM request_attempts a
+              WHERE a.request_record_id = r.id
+                AND (sqlc.narg('channel_id')::bigint IS NULL OR a.channel_id = sqlc.narg('channel_id')::bigint)
+                AND (sqlc.narg('attempt_id')::bigint IS NULL OR a.id = sqlc.narg('attempt_id')::bigint)
+                AND (
+                    sqlc.narg('scoring_sample')::text IS NULL
+                    OR (sqlc.narg('scoring_sample')::text = 'ttft' AND a.ttft_scoring_sample)
+                    OR (sqlc.narg('scoring_sample')::text = 'error' AND a.error_scoring_sample)
+                    OR (sqlc.narg('scoring_sample')::text = 'any' AND (a.ttft_scoring_sample OR a.error_scoring_sample))
+                )
+          )
+      )
+      AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
+      AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
+    ORDER BY
+      CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN r.created_at END DESC NULLS LAST,
+      CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN r.created_at END ASC NULLS LAST,
+      CASE WHEN sqlc.narg('sort_field')::text = 'status' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN r.status END DESC NULLS LAST,
+      CASE WHEN sqlc.narg('sort_field')::text = 'status' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN r.status END ASC NULLS LAST,
+      CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN r.user_id END DESC NULLS LAST,
+      CASE WHEN sqlc.narg('sort_field')::text = 'user_id' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN r.user_id END ASC NULLS LAST,
+      CASE WHEN sqlc.narg('sort_field')::text = 'model' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
+      CASE WHEN sqlc.narg('sort_field')::text = 'model' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
+      CASE WHEN sqlc.narg('sort_field')::text = 'stream' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN r.stream END DESC NULLS LAST,
+      CASE WHEN sqlc.narg('sort_field')::text = 'stream' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN r.stream END ASC NULLS LAST,
+      r.id DESC
+    LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset')
+)
 SELECT
+    fp.total_count,
     r.id,
     r.request_id,
     r.user_id,
@@ -118,7 +164,8 @@ SELECT
     END AS sticky_pinned_non_preferred,
     sbc.name AS sticky_before_channel_name,
     sac.name AS sticky_after_channel_name
-FROM request_records r
+FROM filtered_page fp
+JOIN request_records r ON r.id = fp.id
 LEFT JOIN usage_records ur ON ur.request_record_id = r.id
 LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
 LEFT JOIN price_snapshots ps ON ps.request_record_id = r.id
@@ -157,18 +204,6 @@ LEFT JOIN LATERAL (
     ORDER BY a.attempt_index, a.id
     LIMIT 1
 ) scoring_attempt ON true
-WHERE (sqlc.narg('user_id')::bigint IS NULL OR r.user_id = sqlc.narg('user_id')::bigint)
-  AND (sqlc.narg('api_key_id')::bigint IS NULL OR r.api_key_id = sqlc.narg('api_key_id')::bigint)
-  AND (sqlc.narg('request_id')::text IS NULL OR r.request_id = sqlc.narg('request_id')::text)
-  AND (sqlc.narg('status')::text IS NULL OR r.status = sqlc.narg('status')::text)
-  AND (sqlc.narg('model')::text IS NULL OR r.requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
-  AND (sqlc.narg('route_id')::bigint IS NULL OR r.route_id = sqlc.narg('route_id')::bigint)
-  AND (
-      (sqlc.narg('channel_id')::bigint IS NULL AND sqlc.narg('attempt_id')::bigint IS NULL AND sqlc.narg('scoring_sample')::text IS NULL)
-      OR scoring_attempt.id IS NOT NULL
-  )
-  AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
-  AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 ORDER BY
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN r.created_at END DESC NULLS LAST,
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN r.created_at END ASC NULLS LAST,
@@ -180,8 +215,7 @@ ORDER BY
   CASE WHEN sqlc.narg('sort_field')::text = 'model' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'stream' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN r.stream END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'stream' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN r.stream END ASC NULLS LAST,
-  r.id DESC
-LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
+  r.id DESC;
 
 -- name: CountRequestRecords :one
 -- CountRequestRecords 返回与 ListRequestRecordsPage 相同过滤条件下的总条数。

@@ -134,10 +134,10 @@ type HTTPConfig struct {
 	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
 
-	// MaxJSONBodyBytes 是单个 JSON 请求体的最大字节数（由 HTTP_MAX_JSON_BODY_MB 按 MB 换算）。
-	// 这是防 OOM / zip bomb 的网关安全配置，与业务计费无关；超限返回 413。前置代理
-	// （Nginx client_max_body_size）须 ≥ 此值，否则请求仍会在代理层被 413 拒绝。
-	MaxJSONBodyBytes int64
+	// GatewayMaxJSONBodyBytes / AdminMaxJSONBodyBytes 分别限制两个 ingress 的单个 JSON 请求体。
+	// 这是防 OOM 的资源边界，与业务计费无关；超限返回 413。前置代理的 body 上限应与之匹配。
+	GatewayMaxJSONBodyBytes int64
+	AdminMaxJSONBodyBytes   int64
 }
 
 // 日志输出格式（LOG_FORMAT）。
@@ -345,10 +345,36 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	// 默认 128MB：对齐 new-api 的统一上限方向，覆盖 Codex 长会话 + tool 大 payload；按需在 env 调小。
-	httpMaxJSONBodyMB, err := getEnvInt("HTTP_MAX_JSON_BODY_MB", 128)
+	// 旧 HTTP_MAX_JSON_BODY_MB 继续作为两个服务的兼容回退；独立配置优先。
+	gatewayMaxJSONBodyDefaultMB := 32
+	adminMaxJSONBodyDefaultMB := 4
+	if os.Getenv("HTTP_MAX_JSON_BODY_MB") != "" {
+		legacyMaxJSONBodyMB, err := getEnvInt("HTTP_MAX_JSON_BODY_MB", 0)
+		if err != nil {
+			return Config{}, err
+		}
+		if !validJSONBodyLimitMB(legacyMaxJSONBodyMB) {
+			return Config{}, failure.New(
+				failure.CodeConfigInvalid,
+				failure.WithMessage("HTTP_MAX_JSON_BODY_MB must be between 1 and 256"),
+			)
+		}
+		gatewayMaxJSONBodyDefaultMB = legacyMaxJSONBodyMB
+		adminMaxJSONBodyDefaultMB = legacyMaxJSONBodyMB
+	}
+	gatewayMaxJSONBodyMB, err := getEnvInt("GATEWAY_MAX_JSON_BODY_MB", gatewayMaxJSONBodyDefaultMB)
 	if err != nil {
 		return Config{}, err
+	}
+	adminMaxJSONBodyMB, err := getEnvInt("ADMIN_MAX_JSON_BODY_MB", adminMaxJSONBodyDefaultMB)
+	if err != nil {
+		return Config{}, err
+	}
+	if !validJSONBodyLimitMB(gatewayMaxJSONBodyMB) || !validJSONBodyLimitMB(adminMaxJSONBodyMB) {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("gateway and admin JSON body limits must be between 1 and 256"),
+		)
 	}
 
 	postgresMaxConns, err := getEnvInt32("POSTGRES_MAX_CONNS", 10)
@@ -555,11 +581,12 @@ func Load() (Config, error) {
 
 	return Config{
 		HTTP: HTTPConfig{
-			ReadTimeout:      httpReadTimeout,
-			WriteTimeout:     httpWriteTimeout,
-			IdleTimeout:      httpIdleTimeout,
-			ShutdownTimeout:  httpShutdownTimeout,
-			MaxJSONBodyBytes: int64(httpMaxJSONBodyMB) << 20,
+			ReadTimeout:             httpReadTimeout,
+			WriteTimeout:            httpWriteTimeout,
+			IdleTimeout:             httpIdleTimeout,
+			ShutdownTimeout:         httpShutdownTimeout,
+			GatewayMaxJSONBodyBytes: int64(gatewayMaxJSONBodyMB) << 20,
+			AdminMaxJSONBodyBytes:   int64(adminMaxJSONBodyMB) << 20,
 		},
 		Log: LogConfig{
 			Level:  logLevel,
@@ -646,6 +673,10 @@ func Load() (Config, error) {
 			FetchMaxBytes:     int64(tokenEstimateFetchMaxMB) << 20,
 		},
 	}, nil
+}
+
+func validJSONBodyLimitMB(value int) bool {
+	return value > 0 && value <= 256
 }
 
 // getEnv 读取字符串环境变量；未设置时返回 fallback。

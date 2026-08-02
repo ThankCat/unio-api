@@ -44,6 +44,11 @@ type channelTestHandler struct {
 }
 
 func (h *channelTestHandler) test(w http.ResponseWriter, r *http.Request) {
+	// 手动探测有独立的运行时 probe timeout，避免 server 级短 WriteTimeout 在探测完成前切断连接。
+	if err := httpx.ClearResponseWriteDeadline(w); err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
 	id, err := adminhttp.PathID(r)
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)

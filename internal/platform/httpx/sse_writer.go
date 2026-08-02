@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
@@ -15,6 +16,8 @@ import (
 type SSEWriterConfig struct {
 	// MaxEventBytes 限制单个 event data 的最大字节数，与 sse.Reader 对称，0 表示不限制
 	MaxEventBytes int
+	// WriteTimeout 是每个 event 写出前刷新的滑动 deadline；0 使用进程级默认。
+	WriteTimeout time.Duration
 }
 
 // SSEEvent 是 HTTP 层写出的一个 SSE event；形状与 sse.Event 对称但独立，避免 platform 依赖 core。
@@ -144,6 +147,14 @@ func (s *SSEWriter) guard() error {
 			err,
 			failure.WithMessage("client disconnected"))
 
+		return s.err
+	}
+	if err := RefreshResponseWriteDeadline(s.w, s.cfg.WriteTimeout); err != nil {
+		s.err = failure.Wrap(
+			failure.CodeHTTPResponseWriteFailed,
+			err,
+			failure.WithMessage("set sse write deadline"),
+		)
 		return s.err
 	}
 

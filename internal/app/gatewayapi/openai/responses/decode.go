@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"strconv"
+
+	"github.com/buger/jsonparser"
 )
 
 // knownResponsesFields 是当前 ResponsesRequest 已建模的顶层 JSON 字段。
@@ -40,11 +42,6 @@ var knownResponsesFields = map[string]struct{}{
 // 未显式建模的合法顶层字段（如 Codex 专属 client_metadata）保留进 Extensions，
 // 由 translation 决定 Drop/Reject，而不是在此返回 400。
 func (req *ResponsesRequest) UnmarshalJSON(data []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-
 	// alias 技巧：避免 UnmarshalJSON 递归调用自身。
 	type responsesRequestAlias ResponsesRequest
 	aux := responsesRequestAlias{}
@@ -53,15 +50,32 @@ func (req *ResponsesRequest) UnmarshalJSON(data []byte) error {
 	}
 
 	*req = ResponsesRequest(aux)
-	req.Extensions = make(map[string]json.RawMessage, len(raw))
 	// 保留原始请求体：上游 responses 直传据此零损耗重放（仅 service 改写 model/stream）。
 	req.raw = append(json.RawMessage(nil), data...)
+	req.Extensions = make(map[string]json.RawMessage)
 
-	for key, value := range raw {
-		if _, known := knownResponsesFields[key]; known {
-			continue
+	trimmed := bytes.TrimSpace(req.raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil
+	}
+	if err := jsonparser.ObjectEach(req.raw, func(key, value []byte, valueType jsonparser.ValueType, _ int) error {
+		name := string(key)
+		if _, known := knownResponsesFields[name]; known {
+			return nil
 		}
-		req.Extensions[key] = value
+		// jsonparser 的非字符串 value 直接引用 req.raw；字符串不含外围引号，补回引号即可形成 RawMessage。
+		if valueType == jsonparser.String {
+			quoted := make([]byte, 0, len(value)+2)
+			quoted = append(quoted, '"')
+			quoted = append(quoted, value...)
+			quoted = append(quoted, '"')
+			req.Extensions[name] = quoted
+		} else {
+			req.Extensions[name] = json.RawMessage(value)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	return nil

@@ -1,10 +1,19 @@
 package lifecycle
 
 import (
+	"container/list"
 	"sync"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 )
+
+const maxTrackedCredentialChannels = 4096
+
+type credentialGateState struct {
+	revision CredentialRevision
+	count    int
+	element  *list.Element
+}
 
 // CredentialRevision pins one upstream result to the exact routing/credential generation used by
 // the real transport. A late 401 may invalidate only while all three revisions are still current.
@@ -43,7 +52,8 @@ type ChannelCredentialGate struct {
 
 	mu        sync.Mutex
 	threshold int
-	count     map[CredentialRevision]int
+	count     map[int64]*credentialGateState
+	order     *list.List
 }
 
 // NewChannelCredentialGate 创建凭据闸门。threshold<=0 兜底为 3（连续 3 次 401 翻失效）。
@@ -54,7 +64,8 @@ func NewChannelCredentialGate(threshold int, invalidator CredentialInvalidator) 
 	return &ChannelCredentialGate{
 		threshold:   threshold,
 		invalidator: invalidator,
-		count:       make(map[CredentialRevision]int),
+		count:       make(map[int64]*credentialGateState),
+		order:       list.New(),
 	}
 }
 
@@ -81,11 +92,18 @@ func (g *ChannelCredentialGate) RecordResult(revision CredentialRevision, err er
 		revision.OriginRevision <= 0 || revision.ProviderStatusRevision <= 0 {
 		return
 	}
+	revision.Threshold = 0
+
+	g.mu.Lock()
+	state, accepted := g.acceptRevisionLocked(revision)
+	if !accepted {
+		g.mu.Unlock()
+		return
+	}
 
 	if err == nil {
 		// 成功打断连续 401，清零（C-2）。
-		g.mu.Lock()
-		delete(g.count, revision)
+		state.count = 0
 		g.mu.Unlock()
 		return
 	}
@@ -93,15 +111,15 @@ func (g *ChannelCredentialGate) RecordResult(revision CredentialRevision, err er
 	category, ok := adapter.UpstreamCategoryOf(err)
 	if !ok || category != adapter.UpstreamErrorAuth {
 		// 非 401 失败（超时/5xx/429/bad_request/取消/未分类）：不 +1 也不清零（C-2）。
+		g.mu.Unlock()
 		return
 	}
 
-	g.mu.Lock()
-	g.count[revision]++
+	state.count++
 	threshold := g.threshold
-	reached := g.count[revision] >= threshold
+	reached := state.count >= threshold
 	if reached {
-		delete(g.count, revision)
+		state.count = 0
 	}
 	g.mu.Unlock()
 
@@ -109,4 +127,36 @@ func (g *ChannelCredentialGate) RecordResult(revision CredentialRevision, err er
 		revision.Threshold = threshold
 		g.invalidator.MarkChannelCredentialInvalid(revision)
 	}
+}
+
+func (g *ChannelCredentialGate) acceptRevisionLocked(revision CredentialRevision) (*credentialGateState, bool) {
+	if current := g.count[revision.ChannelID]; current != nil {
+		if credentialRevisionOlder(revision, current.revision) {
+			return nil, false
+		}
+		if revision != current.revision {
+			current.revision = revision
+			current.count = 0
+		}
+		g.order.MoveToBack(current.element)
+		return current, true
+	}
+
+	if len(g.count) >= maxTrackedCredentialChannels {
+		oldest := g.order.Front()
+		if oldest != nil {
+			delete(g.count, oldest.Value.(int64))
+			g.order.Remove(oldest)
+		}
+	}
+	element := g.order.PushBack(revision.ChannelID)
+	state := &credentialGateState{revision: revision, element: element}
+	g.count[revision.ChannelID] = state
+	return state, true
+}
+
+func credentialRevisionOlder(candidate, current CredentialRevision) bool {
+	return candidate.ChannelConfigRevision < current.ChannelConfigRevision ||
+		candidate.OriginRevision < current.OriginRevision ||
+		candidate.ProviderStatusRevision < current.ProviderStatusRevision
 }

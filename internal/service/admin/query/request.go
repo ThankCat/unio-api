@@ -301,7 +301,7 @@ func NewRequestService(store RequestStore) *RequestService {
 
 // List 按 params 过滤分页倒序列出请求记录（富化项），并返回过滤后的总数。
 func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]RequestListItem, int64, error) {
-	rows, err := s.store.ListRequestRecordsPage(ctx, sqlc.ListRequestRecordsPageParams{
+	listParams := sqlc.ListRequestRecordsPageParams{
 		UserID:        int8Narg(params.UserID),
 		ApiKeyID:      int8Narg(params.APIKeyID),
 		RequestID:     textNarg(params.RequestID),
@@ -317,26 +317,32 @@ func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]
 		SortDesc:      boolNarg(params.SortDesc),
 		PageLimit:     params.Limit,
 		PageOffset:    params.Offset,
-	})
+	}
+	rows, err := s.store.ListRequestRecordsPage(ctx, listParams)
 	if err != nil {
 		return nil, 0, storeFailed(err, "list request records")
 	}
 
-	total, err := s.store.CountRequestRecords(ctx, sqlc.CountRequestRecordsParams{
-		UserID:        int8Narg(params.UserID),
-		ApiKeyID:      int8Narg(params.APIKeyID),
-		RequestID:     textNarg(params.RequestID),
-		Status:        textNarg(params.Status),
-		Model:         textNarg(params.Model),
-		RouteID:       int8Narg(params.RouteID),
-		ChannelID:     int8Narg(params.ChannelID),
-		AttemptID:     int8Narg(params.AttemptID),
-		ScoringSample: textNarg(params.ScoringSample),
-		FromTime:      tsNarg(params.From),
-		ToTime:        tsNarg(params.To),
-	})
-	if err != nil {
-		return nil, 0, storeFailed(err, "count request records")
+	total := int64(0)
+	if len(rows) > 0 {
+		total = rows[0].TotalCount
+	} else if params.Offset > 0 {
+		total, err = s.store.CountRequestRecords(ctx, sqlc.CountRequestRecordsParams{
+			UserID:        listParams.UserID,
+			ApiKeyID:      listParams.ApiKeyID,
+			RequestID:     listParams.RequestID,
+			Status:        listParams.Status,
+			Model:         listParams.Model,
+			RouteID:       listParams.RouteID,
+			ChannelID:     listParams.ChannelID,
+			AttemptID:     listParams.AttemptID,
+			ScoringSample: listParams.ScoringSample,
+			FromTime:      listParams.FromTime,
+			ToTime:        listParams.ToTime,
+		})
+		if err != nil {
+			return nil, 0, storeFailed(err, "count request records")
+		}
 	}
 
 	items := make([]RequestListItem, 0, len(rows))

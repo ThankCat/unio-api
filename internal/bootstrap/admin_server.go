@@ -104,8 +104,9 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		return nil, err
 	}
 
-	// JSON 请求体上限为进程级 ingress 安全配置；admin 表面与 gateway 共用同一全局限制（启动期设置一次）。
-	httpx.SetMaxJSONBodyBytes(deps.Config.HTTP.MaxJSONBodyBytes)
+	// Admin DTO 不承载模型上下文，使用独立且更小的进程级 ingress 上限。
+	httpx.SetMaxJSONBodyBytes(deps.Config.HTTP.AdminMaxJSONBodyBytes)
+	httpx.SetResponseWriteTimeout(deps.Config.HTTP.WriteTimeout)
 
 	authenticator, err := adminauth.NewStaticTokenAuthenticator(deps.Config.Admin.APIToken)
 	if err != nil {

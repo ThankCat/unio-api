@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -11,23 +12,45 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
+const maxConcurrentCredentialInvalidations = 32
+
+type credentialInvalidationStore interface {
+	ApplyRuntime401CredentialInvalidation(
+		context.Context,
+		sqlc.ApplyRuntime401CredentialInvalidationParams,
+	) (sqlc.ApplyRuntime401CredentialInvalidationRow, error)
+}
+
 // credentialInvalidator 是 lifecycle.CredentialInvalidator 的生产实现（阶段二凭据闸门）。
 //
 // 当某渠道连续 401 达阈值时被调用：异步 best-effort 把 channels.credential_valid 翻为 false，
 // 并在「真跳变」（受影响行数=1）时补写一条 source=runtime_401 的事件日志。
 // 全程用独立 background context + 超时，不受在途请求 ctx 取消影响，也不阻塞请求热路径。
 type credentialInvalidator struct {
-	queries *sqlc.Queries
+	queries credentialInvalidationStore
 	logger  *zap.Logger
+
+	mu       sync.Mutex
+	slots    chan struct{}
+	inflight map[int64]struct{}
 }
 
-func newCredentialInvalidator(queries *sqlc.Queries, logger *zap.Logger) *credentialInvalidator {
-	return &credentialInvalidator{queries: queries, logger: logger}
+func newCredentialInvalidator(queries credentialInvalidationStore, logger *zap.Logger) *credentialInvalidator {
+	return &credentialInvalidator{
+		queries:  queries,
+		logger:   logger,
+		slots:    make(chan struct{}, maxConcurrentCredentialInvalidations),
+		inflight: make(map[int64]struct{}, maxConcurrentCredentialInvalidations),
+	}
 }
 
 // MarkChannelCredentialInvalid 实现 lifecycle.CredentialInvalidator。
 func (i *credentialInvalidator) MarkChannelCredentialInvalid(revision lifecycle.CredentialRevision) {
+	if i == nil || i.queries == nil || !i.tryStart(revision.ChannelID) {
+		return
+	}
 	go func() {
+		defer i.finish(revision.ChannelID)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -59,4 +82,29 @@ func (i *credentialInvalidator) MarkChannelCredentialInvalid(revision lifecycle.
 			zap.Int("threshold", revision.Threshold),
 		)
 	}()
+}
+
+func (i *credentialInvalidator) tryStart(channelID int64) bool {
+	if channelID <= 0 {
+		return false
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if _, exists := i.inflight[channelID]; exists {
+		return false
+	}
+	select {
+	case i.slots <- struct{}{}:
+		i.inflight[channelID] = struct{}{}
+		return true
+	default:
+		return false
+	}
+}
+
+func (i *credentialInvalidator) finish(channelID int64) {
+	i.mu.Lock()
+	delete(i.inflight, channelID)
+	i.mu.Unlock()
+	<-i.slots
 }

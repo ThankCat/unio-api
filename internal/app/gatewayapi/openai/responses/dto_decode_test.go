@@ -131,6 +131,20 @@ func TestResponsesRequestUnmarshalPreservesClientMetadataExtension(t *testing.T)
 	}
 }
 
+func TestResponsesRequestUnmarshalPreservesStringExtensionAsRawJSON(t *testing.T) {
+	var req ResponsesRequest
+	if err := json.Unmarshal([]byte(`{"model":"m","input":"hi","custom_string":"line\nvalue"}`), &req); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	var got string
+	if err := json.Unmarshal(req.Extension("custom_string"), &got); err != nil {
+		t.Fatalf("decode string extension: %v (raw %q)", err, req.Extension("custom_string"))
+	}
+	if got != "line\nvalue" {
+		t.Fatalf("string extension = %q, want line newline value", got)
+	}
+}
+
 // TestResponsesRequestUnmarshalTextAndReasoning 验证 text / reasoning 对象解码进 typed 字段。
 func TestResponsesRequestUnmarshalTextAndReasoning(t *testing.T) {
 	raw := `{

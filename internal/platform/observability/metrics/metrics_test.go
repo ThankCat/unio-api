@@ -3,7 +3,9 @@ package metrics
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -169,5 +171,39 @@ func TestP4MetricsExposeBoundedRuntimeFacts(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("metrics output missing series:\n%s", want)
 		}
+	}
+}
+
+func TestBusinessMetricSeriesOverflowIsBounded(t *testing.T) {
+	m := New()
+	m.providerChannelSeries = newMetricSeriesLimiter(1)
+
+	m.ObserveUpstream("provider-1", "channel-1", true, "", time.Millisecond)
+	m.ObserveUpstream("provider-2", "channel-2", true, "", time.Millisecond)
+	body := scrape(t, m)
+	if !strings.Contains(body, `provider="provider-1"`) {
+		t.Fatal("first admitted business series is missing")
+	}
+	if strings.Contains(body, `provider="provider-2"`) {
+		t.Fatal("business series beyond the limit retained its unbounded label")
+	}
+	if !strings.Contains(body, `provider="__overflow__"`) || !strings.Contains(body, `channel="__overflow__"`) {
+		t.Fatal("business series beyond the limit was not aggregated into overflow")
+	}
+}
+
+func TestMetricSeriesLimiterStaysBoundedConcurrently(t *testing.T) {
+	limiter := newMetricSeriesLimiter(8)
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			limiter.admit(strconv.Itoa(i), "", "")
+		}(i)
+	}
+	wg.Wait()
+	if len(limiter.seen) != 8 {
+		t.Fatalf("admitted metric series = %d, want 8", len(limiter.seen))
 	}
 }

@@ -1,13 +1,16 @@
 package responses
 
 import (
+	"bytes"
 	"encoding/json"
+	"sort"
 
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/buger/jsonparser"
 )
 
 // direct_response.go 承载「上游 responses 直传」分流的 service 侧粘合：把 ingress ResponsesRequest
@@ -20,20 +23,28 @@ import (
 // 无原始请求体时（如单测直接构造 ResponsesRequest）回退到 typed 重编码 + 合并 Extensions。
 func encodeUpstreamResponsesBody(req gatewayapi.ResponsesRequest, upstreamModel string, stream bool) (json.RawMessage, error) {
 	base := req.RawBody()
-	if len(base) == 0 {
-		encoded, err := json.Marshal(req)
+	if len(base) > 0 {
+		body, err := rewriteUpstreamResponsesRequest(base, upstreamModel, stream)
 		if err != nil {
 			return nil, failure.Wrap(
 				failure.CodeAdapterEncodeRequestFailed,
 				err,
-				failure.WithMessage("encode upstream responses request body"),
+				failure.WithMessage("rewrite upstream responses request body"),
 			)
 		}
-		base = encoded
+		return body, nil
 	}
 
+	encoded, err := json.Marshal(req)
+	if err != nil {
+		return nil, failure.Wrap(
+			failure.CodeAdapterEncodeRequestFailed,
+			err,
+			failure.WithMessage("encode upstream responses request body"),
+		)
+	}
 	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(base, &obj); err != nil {
+	if err := json.Unmarshal(encoded, &obj); err != nil {
 		return nil, failure.Wrap(
 			failure.CodeAdapterEncodeRequestFailed,
 			err,
@@ -73,46 +84,151 @@ func encodeUpstreamResponsesBody(req gatewayapi.ResponsesRequest, upstreamModel 
 	return body, nil
 }
 
+type jsonReplacement struct {
+	start int
+	end   int
+	value []byte
+}
+
+func rewriteUpstreamResponsesRequest(base json.RawMessage, upstreamModel string, stream bool) (json.RawMessage, error) {
+	modelBytes, err := json.Marshal(upstreamModel)
+	if err != nil {
+		return nil, err
+	}
+	streamBytes := []byte("false")
+	if stream {
+		streamBytes = []byte("true")
+	}
+
+	var modelReplacement, streamReplacement *jsonReplacement
+	err = jsonparser.ObjectEach(base, func(key, value []byte, valueType jsonparser.ValueType, end int) error {
+		name := string(key)
+		if name != "model" && name != "stream" {
+			return nil
+		}
+		start := end - len(value)
+		if valueType == jsonparser.String {
+			start -= 2
+		}
+		replacement := &jsonReplacement{start: start, end: end}
+		if name == "model" {
+			replacement.value = modelBytes
+			modelReplacement = replacement
+		} else {
+			replacement.value = streamBytes
+			streamReplacement = replacement
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	replacements := make([]jsonReplacement, 0, 3)
+	if modelReplacement != nil {
+		replacements = append(replacements, *modelReplacement)
+	}
+	if streamReplacement != nil {
+		replacements = append(replacements, *streamReplacement)
+	}
+	if modelReplacement == nil || streamReplacement == nil {
+		closeOffset := len(bytes.TrimRight(base, " \t\r\n")) - 1
+		if closeOffset < 0 || base[closeOffset] != '}' {
+			return nil, jsonparser.MalformedObjectError
+		}
+		openOffset := bytes.IndexByte(base, '{')
+		prefix := []byte(",")
+		if openOffset >= 0 && len(bytes.TrimSpace(base[openOffset+1:closeOffset])) == 0 {
+			prefix = nil
+		}
+		insert := append([]byte(nil), prefix...)
+		if modelReplacement == nil {
+			insert = append(insert, `"model":`...)
+			insert = append(insert, modelBytes...)
+		}
+		if streamReplacement == nil {
+			if modelReplacement == nil {
+				insert = append(insert, ',')
+			}
+			insert = append(insert, `"stream":`...)
+			insert = append(insert, streamBytes...)
+		}
+		replacements = append(replacements, jsonReplacement{start: closeOffset, end: closeOffset, value: insert})
+	}
+
+	return applyJSONReplacements(base, replacements), nil
+}
+
+func applyJSONReplacements(base json.RawMessage, replacements []jsonReplacement) json.RawMessage {
+	sort.Slice(replacements, func(i, j int) bool { return replacements[i].start < replacements[j].start })
+	extra := 0
+	for _, replacement := range replacements {
+		extra += len(replacement.value) - (replacement.end - replacement.start)
+	}
+	body := make([]byte, 0, len(base)+extra)
+	cursor := 0
+	for _, replacement := range replacements {
+		body = append(body, base[cursor:replacement.start]...)
+		body = append(body, replacement.value...)
+		cursor = replacement.end
+	}
+	body = append(body, base[cursor:]...)
+	return body
+}
+
 // rewriteResponsesModel 在上游响应/事件原文中把 model 回显改写为客户请求的模型名。
 //
 // 直传保真：只动 model 字段（顶层 model 与嵌套 response.model），不重排/丢弃其它字段；解析失败或无
 // model 字段时原样返回（best-effort，绝不阻断流）。
 func rewriteResponsesModel(data json.RawMessage, clientModel string) json.RawMessage {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(data, &obj); err != nil {
-		return data
-	}
-
 	modelBytes, err := json.Marshal(clientModel)
 	if err != nil {
 		return data
 	}
 
-	changed := false
-	if _, ok := obj["model"]; ok {
-		obj["model"] = modelBytes
-		changed = true
-	}
-	if respRaw, ok := obj["response"]; ok {
-		var resp map[string]json.RawMessage
-		if json.Unmarshal(respRaw, &resp) == nil {
-			if _, ok := resp["model"]; ok {
-				resp["model"] = modelBytes
-				if encoded, err := json.Marshal(resp); err == nil {
-					obj["response"] = encoded
-					changed = true
-				}
+	replacements := make([]jsonReplacement, 0, 2)
+	err = jsonparser.ObjectEach(data, func(key, value []byte, valueType jsonparser.ValueType, end int) error {
+		switch string(key) {
+		case "model":
+			replacements = append(replacements, jsonValueReplacement(value, valueType, end, 0, modelBytes))
+		case "response":
+			if valueType != jsonparser.Object {
+				return nil
 			}
+			responseStart := end - len(value)
+			return jsonparser.ObjectEach(value, func(nestedKey, nestedValue []byte, nestedType jsonparser.ValueType, nestedEnd int) error {
+				if string(nestedKey) == "model" {
+					replacements = append(replacements, jsonValueReplacement(
+						nestedValue, nestedType, nestedEnd, responseStart, modelBytes,
+					))
+				}
+				return nil
+			})
 		}
-	}
-
-	if !changed {
+		return nil
+	})
+	if err != nil || len(replacements) == 0 {
 		return data
 	}
-	if encoded, err := json.Marshal(obj); err == nil {
-		return encoded
+	return applyJSONReplacements(data, replacements)
+}
+
+func jsonValueReplacement(
+	value []byte,
+	valueType jsonparser.ValueType,
+	end int,
+	baseOffset int,
+	replacement []byte,
+) jsonReplacement {
+	start := baseOffset + end - len(value)
+	if valueType == jsonparser.String {
+		start -= 2
 	}
-	return data
+	return jsonReplacement{
+		start: start,
+		end:   baseOffset + end,
+		value: replacement,
+	}
 }
 
 // responsesStreamCarrier 是流式分流的统一 chunk 载体：桥接候选产出 chat chunk，直传候选产出 responses 事件。

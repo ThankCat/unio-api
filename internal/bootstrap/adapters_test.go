@@ -57,6 +57,35 @@ func TestNewAdapterRegistryRegistersDeepSeekDualProtocolCapabilities(t *testing.
 	}
 }
 
+func TestUpstreamHTTPClientUsesDedicatedBoundedTransport(t *testing.T) {
+	first := upstreamHTTPClient(nil)
+	second := upstreamHTTPClient(http.DefaultClient)
+	firstTransport, ok := first.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("first transport type = %T, want *http.Transport", first.Transport)
+	}
+	secondTransport, ok := second.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("second transport type = %T, want *http.Transport", second.Transport)
+	}
+	if firstTransport == http.DefaultTransport || secondTransport == http.DefaultTransport || firstTransport == secondTransport {
+		t.Fatal("upstream clients must not share the process-global or each other's transport")
+	}
+	if firstTransport.MaxIdleConns != upstreamMaxIdleConns ||
+		firstTransport.MaxIdleConnsPerHost != upstreamMaxIdleConnsPerHost ||
+		firstTransport.MaxConnsPerHost != upstreamMaxConnsPerHost || !firstTransport.ForceAttemptHTTP2 {
+		t.Fatalf("unexpected upstream transport limits: %+v", firstTransport)
+	}
+}
+
+func TestUpstreamHTTPClientPreservesCustomTransport(t *testing.T) {
+	custom := &http.Transport{MaxConnsPerHost: 1}
+	client := upstreamHTTPClient(&http.Client{Transport: custom})
+	if client.Transport != custom {
+		t.Fatal("custom transport was replaced")
+	}
+}
+
 func TestNewAdapterRegistryDoesNotReplayPOSTOnRedirect(t *testing.T) {
 	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
 		t.Run(http.StatusText(status), func(t *testing.T) {

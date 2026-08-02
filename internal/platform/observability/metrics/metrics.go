@@ -10,6 +10,7 @@ package metrics
 import (
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -82,7 +83,39 @@ const (
 const (
 	// upstreamErrorCategoryNone 是上游调用成功时 error_category label 的占位值，避免 label 缺失。
 	upstreamErrorCategoryNone = "none"
+	metricSeriesOverflow      = "__overflow__"
+	maxBusinessMetricSeries   = 1024
 )
+
+type metricSeriesKey struct {
+	first  string
+	second string
+	third  string
+}
+
+type metricSeriesLimiter struct {
+	mu   sync.Mutex
+	max  int
+	seen map[metricSeriesKey]struct{}
+}
+
+func newMetricSeriesLimiter(max int) *metricSeriesLimiter {
+	return &metricSeriesLimiter{max: max, seen: make(map[metricSeriesKey]struct{}, max)}
+}
+
+func (l *metricSeriesLimiter) admit(first, second, third string) bool {
+	key := metricSeriesKey{first: first, second: second, third: third}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, exists := l.seen[key]; exists {
+		return true
+	}
+	if len(l.seen) >= l.max {
+		return false
+	}
+	l.seen[key] = struct{}{}
+	return true
+}
 
 // apiLatencyBuckets 覆盖普通 HTTP API 的延迟分布。
 var apiLatencyBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
@@ -95,6 +128,14 @@ var upstreamLatencyBuckets = []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 
 // 使用专用 registry 而非全局 default，保证测试隔离，并精确控制 /metrics 暴露内容。
 type Metrics struct {
 	registry *prometheus.Registry
+
+	providerChannelModelSeries *metricSeriesLimiter
+	providerChannelSeries      *metricSeriesLimiter
+	providerSeries             *metricSeriesLimiter
+	channelSeries              *metricSeriesLimiter
+	routeChannelSeries         *metricSeriesLimiter
+	routeSeries                *metricSeriesLimiter
+	breakerSeries              *metricSeriesLimiter
 
 	httpRequestsTotal   *prometheus.CounterVec
 	httpRequestDuration *prometheus.HistogramVec
@@ -176,7 +217,14 @@ func New() *Metrics {
 	registry := prometheus.NewRegistry()
 
 	m := &Metrics{
-		registry: registry,
+		registry:                   registry,
+		providerChannelModelSeries: newMetricSeriesLimiter(maxBusinessMetricSeries),
+		providerChannelSeries:      newMetricSeriesLimiter(maxBusinessMetricSeries),
+		providerSeries:             newMetricSeriesLimiter(maxBusinessMetricSeries),
+		channelSeries:              newMetricSeriesLimiter(maxBusinessMetricSeries),
+		routeChannelSeries:         newMetricSeriesLimiter(maxBusinessMetricSeries),
+		routeSeries:                newMetricSeriesLimiter(maxBusinessMetricSeries),
+		breakerSeries:              newMetricSeriesLimiter(maxBusinessMetricSeries),
 
 		httpRequestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "unio_http_requests_total",
@@ -545,12 +593,14 @@ func (m *Metrics) IncChatRequest(stream bool, outcome ChatOutcome) {
 
 // IncRoutingSelected 记录 gateway 实际选中的 provider/channel/model。
 func (m *Metrics) IncRoutingSelected(provider string, channel string, model string) {
+	provider, channel, model = boundedMetricTriple(m.providerChannelModelSeries, provider, channel, model)
 	m.routingSelected.WithLabelValues(provider, channel, model).Inc()
 }
 
 // ObserveUpstream 记录一次上游 adapter 调用的结果、错误分类和耗时。
 // errorCategory 为空表示调用成功，会记录为 "none"。
 func (m *Metrics) ObserveUpstream(provider string, channel string, success bool, errorCategory string, duration time.Duration) {
+	provider, channel = boundedMetricPair(m.providerChannelSeries, provider, channel)
 	outcome := "error"
 	category := errorCategory
 	if success {
@@ -598,6 +648,7 @@ func (m *Metrics) IncRetryableFallback(errorCategory string) {
 
 // IncZeroPriceServed 记录一次以零售价成功结算的请求（P2-4 零价渠道误配）。
 func (m *Metrics) IncZeroPriceServed(provider string, channel string, model string) {
+	provider, channel, model = boundedMetricTriple(m.providerChannelModelSeries, provider, channel, model)
 	m.zeroPriceServedTotal.WithLabelValues(provider, channel, model).Inc()
 }
 
@@ -659,10 +710,12 @@ func (m *Metrics) ObserveRoutingBalance(mode, result string, poolSize, candidate
 }
 
 func (m *Metrics) IncRoutingBalanceSelected(route, channel string) {
+	route, channel = boundedMetricPair(m.routeChannelSeries, route, channel)
 	m.routingBalanceSelected.WithLabelValues(route, channel).Inc()
 }
 
 func (m *Metrics) IncRoutingBalanceFallback(route, reason string) {
+	route = boundedMetricID(m.routeSeries, route)
 	if reason == "" {
 		reason = "unknown"
 	}
@@ -691,6 +744,9 @@ func (m *Metrics) IncRoutingSampleAggregationFailure() {
 
 // SetBreakerState exposes one-hot state for a Provider or Channel breaker.
 func (m *Metrics) SetBreakerState(scope, id, state string) {
+	if !m.breakerSeries.admit(scope, id, "") {
+		id = metricSeriesOverflow
+	}
 	for _, candidate := range []string{"closed", "open", "half_open"} {
 		value := 0.0
 		if candidate == state {
@@ -761,11 +817,13 @@ func (m *Metrics) IncChannelCredentialRotationVerification(state string) {
 }
 
 func (m *Metrics) SetOriginRevisionFence(providerID, state string, pending time.Duration) {
+	providerID = boundedMetricID(m.providerSeries, providerID)
 	setFenceState(m.providerOriginRevisionFence, providerID, state)
 	m.providerOriginRevisionPendingSeconds.WithLabelValues(providerID).Set(nonNegativeSeconds(pending))
 }
 
 func (m *Metrics) SetProviderStatusRevisionFence(providerID, state string, pending time.Duration) {
+	providerID = boundedMetricID(m.providerSeries, providerID)
 	setFenceState(m.providerStatusRevisionFence, providerID, state)
 	m.providerStatusRevisionPendingSeconds.WithLabelValues(providerID).Set(nonNegativeSeconds(pending))
 }
@@ -795,10 +853,12 @@ func (m *Metrics) IncRuntimeControlRecovery(target, result string) {
 }
 
 func (m *Metrics) IncProviderFailure(originID, category string) {
+	originID = boundedMetricID(m.providerSeries, originID)
 	m.providerFailureTotal.WithLabelValues(originID, category).Inc()
 }
 
 func (m *Metrics) IncChannelFailure(channelID, category string) {
+	channelID = boundedMetricID(m.channelSeries, channelID)
 	m.channelFailureTotal.WithLabelValues(channelID, category).Inc()
 }
 
@@ -809,6 +869,7 @@ func (m *Metrics) ObserveUpstreamTiming(
 	total time.Duration,
 	ttft *time.Duration,
 ) {
+	providerID, channelID = boundedMetricPair(m.providerChannelSeries, providerID, channelID)
 	m.upstreamTotalDurationSeconds.WithLabelValues(
 		providerID, channelID, protocol, endpoint, mode,
 	).Observe(nonNegativeSeconds(total))
@@ -820,10 +881,32 @@ func (m *Metrics) ObserveUpstreamTiming(
 }
 
 func (m *Metrics) SetBalancedFinalWeight(routeID, channelID string, weight float64) {
+	routeID, channelID = boundedMetricPair(m.routeChannelSeries, routeID, channelID)
 	if weight < 0 {
 		weight = 0
 	}
 	m.balancedFinalWeight.WithLabelValues(routeID, channelID).Set(weight)
+}
+
+func boundedMetricID(limiter *metricSeriesLimiter, id string) string {
+	if limiter.admit(id, "", "") {
+		return id
+	}
+	return metricSeriesOverflow
+}
+
+func boundedMetricPair(limiter *metricSeriesLimiter, first, second string) (string, string) {
+	if limiter.admit(first, second, "") {
+		return first, second
+	}
+	return metricSeriesOverflow, metricSeriesOverflow
+}
+
+func boundedMetricTriple(limiter *metricSeriesLimiter, first, second, third string) (string, string, string) {
+	if limiter.admit(first, second, third) {
+		return first, second, third
+	}
+	return metricSeriesOverflow, metricSeriesOverflow, metricSeriesOverflow
 }
 
 func setFenceState(gauge *prometheus.GaugeVec, providerID, state string) {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
@@ -49,6 +50,27 @@ func (f *failingFlushWriter) Write(b []byte) (int, error) {
 func (f *failingFlushWriter) WriteHeader(statusCode int) {}
 
 func (f *failingFlushWriter) Flush() {}
+
+type deadlineWriter struct {
+	header        http.Header
+	deadlines     []time.Time
+	deadlineError error
+}
+
+func (w *deadlineWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+
+func (*deadlineWriter) WriteHeader(int)             {}
+func (*deadlineWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (*deadlineWriter) Flush()                      {}
+func (w *deadlineWriter) SetWriteDeadline(deadline time.Time) error {
+	w.deadlines = append(w.deadlines, deadline)
+	return w.deadlineError
+}
 
 func strPtr(v string) *string { return &v }
 
@@ -241,5 +263,35 @@ func TestSSEWriterStickyErrorAfterWriteFailure(t *testing.T) {
 
 	if writer.writeCount != writesAfterFirst {
 		t.Fatalf("second write should short-circuit: write count went %d -> %d", writesAfterFirst, writer.writeCount)
+	}
+}
+
+func TestSSEWriterRefreshesSlidingWriteDeadline(t *testing.T) {
+	writer := &deadlineWriter{}
+	sw, err := NewSSEWriter(context.Background(), writer, SSEWriterConfig{WriteTimeout: time.Second})
+	if err != nil {
+		t.Fatalf("new sse writer: %v", err)
+	}
+	if err := sw.WriteData([]byte("first")); err != nil {
+		t.Fatalf("write first event: %v", err)
+	}
+	time.Sleep(time.Millisecond)
+	if err := sw.WriteData([]byte("second")); err != nil {
+		t.Fatalf("write second event: %v", err)
+	}
+	if len(writer.deadlines) != 2 || !writer.deadlines[1].After(writer.deadlines[0]) {
+		t.Fatalf("write deadlines = %v, want two advancing deadlines", writer.deadlines)
+	}
+}
+
+func TestSSEWriterDeadlineFailureIsSticky(t *testing.T) {
+	writer := &deadlineWriter{deadlineError: errors.New("deadline failed")}
+	sw, err := NewSSEWriter(context.Background(), writer, SSEWriterConfig{})
+	if err != nil {
+		t.Fatalf("new sse writer: %v", err)
+	}
+	writeErr := sw.WriteData([]byte("event"))
+	if failure.CodeOf(writeErr) != failure.CodeHTTPResponseWriteFailed || sw.Err() == nil {
+		t.Fatalf("deadline error = %v, sticky = %v", writeErr, sw.Err())
 	}
 }

@@ -18,6 +18,9 @@ type statusRecorder struct {
 	wroteHeader bool
 }
 
+// Unwrap 让 http.ResponseController 能穿过指标/日志 recorder 设置连接级 deadline。
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
 // WriteHeader 记录第一次写出的 HTTP 状态码，并保持 net/http 的首次写入语义。
 func (r *statusRecorder) WriteHeader(status int) {
 	if r.wroteHeader {

@@ -147,7 +147,51 @@ func (q *Queries) GetRequestRecordByRequestID(ctx context.Context, requestID str
 }
 
 const listRequestRecordsPage = `-- name: ListRequestRecordsPage :many
+WITH filtered_page AS (
+    SELECT
+        r.id,
+        COUNT(*) OVER()::bigint AS total_count
+    FROM request_records r
+    WHERE ($6::bigint IS NULL OR r.user_id = $6::bigint)
+      AND ($7::bigint IS NULL OR r.api_key_id = $7::bigint)
+      AND ($8::text IS NULL OR r.request_id = $8::text)
+      AND ($9::text IS NULL OR r.status = $9::text)
+      AND ($10::text IS NULL OR r.requested_model_id ILIKE '%' || $10::text || '%')
+      AND ($11::bigint IS NULL OR r.route_id = $11::bigint)
+      AND (
+          ($1::bigint IS NULL AND $2::bigint IS NULL AND $3::text IS NULL)
+          OR EXISTS (
+              SELECT 1
+              FROM request_attempts a
+              WHERE a.request_record_id = r.id
+                AND ($1::bigint IS NULL OR a.channel_id = $1::bigint)
+                AND ($2::bigint IS NULL OR a.id = $2::bigint)
+                AND (
+                    $3::text IS NULL
+                    OR ($3::text = 'ttft' AND a.ttft_scoring_sample)
+                    OR ($3::text = 'error' AND a.error_scoring_sample)
+                    OR ($3::text = 'any' AND (a.ttft_scoring_sample OR a.error_scoring_sample))
+                )
+          )
+      )
+      AND ($12::timestamptz IS NULL OR r.created_at >= $12::timestamptz)
+      AND ($13::timestamptz IS NULL OR r.created_at < $13::timestamptz)
+    ORDER BY
+      CASE WHEN COALESCE($4::text, 'created_at') IN ('', 'created_at') AND COALESCE($5::bool, true) THEN r.created_at END DESC NULLS LAST,
+      CASE WHEN COALESCE($4::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($5::bool, true) THEN r.created_at END ASC NULLS LAST,
+      CASE WHEN $4::text = 'status' AND COALESCE($5::bool, false) THEN r.status END DESC NULLS LAST,
+      CASE WHEN $4::text = 'status' AND NOT COALESCE($5::bool, false) THEN r.status END ASC NULLS LAST,
+      CASE WHEN $4::text = 'user_id' AND COALESCE($5::bool, false) THEN r.user_id END DESC NULLS LAST,
+      CASE WHEN $4::text = 'user_id' AND NOT COALESCE($5::bool, false) THEN r.user_id END ASC NULLS LAST,
+      CASE WHEN $4::text = 'model' AND COALESCE($5::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
+      CASE WHEN $4::text = 'model' AND NOT COALESCE($5::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
+      CASE WHEN $4::text = 'stream' AND COALESCE($5::bool, false) THEN r.stream END DESC NULLS LAST,
+      CASE WHEN $4::text = 'stream' AND NOT COALESCE($5::bool, false) THEN r.stream END ASC NULLS LAST,
+      r.id DESC
+    LIMIT $15 OFFSET $14
+)
 SELECT
+    fp.total_count,
     r.id,
     r.request_id,
     r.user_id,
@@ -258,7 +302,8 @@ SELECT
     END AS sticky_pinned_non_preferred,
     sbc.name AS sticky_before_channel_name,
     sac.name AS sticky_after_channel_name
-FROM request_records r
+FROM filtered_page fp
+JOIN request_records r ON r.id = fp.id
 LEFT JOIN usage_records ur ON ur.request_record_id = r.id
 LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
 LEFT JOIN price_snapshots ps ON ps.request_record_id = r.id
@@ -297,37 +342,26 @@ LEFT JOIN LATERAL (
     ORDER BY a.attempt_index, a.id
     LIMIT 1
 ) scoring_attempt ON true
-WHERE ($4::bigint IS NULL OR r.user_id = $4::bigint)
-  AND ($5::bigint IS NULL OR r.api_key_id = $5::bigint)
-  AND ($6::text IS NULL OR r.request_id = $6::text)
-  AND ($7::text IS NULL OR r.status = $7::text)
-  AND ($8::text IS NULL OR r.requested_model_id ILIKE '%' || $8::text || '%')
-  AND ($9::bigint IS NULL OR r.route_id = $9::bigint)
-  AND (
-      ($1::bigint IS NULL AND $2::bigint IS NULL AND $3::text IS NULL)
-      OR scoring_attempt.id IS NOT NULL
-  )
-  AND ($10::timestamptz IS NULL OR r.created_at >= $10::timestamptz)
-  AND ($11::timestamptz IS NULL OR r.created_at < $11::timestamptz)
 ORDER BY
-  CASE WHEN COALESCE($12::text, 'created_at') IN ('', 'created_at') AND COALESCE($13::bool, true) THEN r.created_at END DESC NULLS LAST,
-  CASE WHEN COALESCE($12::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($13::bool, true) THEN r.created_at END ASC NULLS LAST,
-  CASE WHEN $12::text = 'status' AND COALESCE($13::bool, false) THEN r.status END DESC NULLS LAST,
-  CASE WHEN $12::text = 'status' AND NOT COALESCE($13::bool, false) THEN r.status END ASC NULLS LAST,
-  CASE WHEN $12::text = 'user_id' AND COALESCE($13::bool, false) THEN r.user_id END DESC NULLS LAST,
-  CASE WHEN $12::text = 'user_id' AND NOT COALESCE($13::bool, false) THEN r.user_id END ASC NULLS LAST,
-  CASE WHEN $12::text = 'model' AND COALESCE($13::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
-  CASE WHEN $12::text = 'model' AND NOT COALESCE($13::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
-  CASE WHEN $12::text = 'stream' AND COALESCE($13::bool, false) THEN r.stream END DESC NULLS LAST,
-  CASE WHEN $12::text = 'stream' AND NOT COALESCE($13::bool, false) THEN r.stream END ASC NULLS LAST,
+  CASE WHEN COALESCE($4::text, 'created_at') IN ('', 'created_at') AND COALESCE($5::bool, true) THEN r.created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE($4::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($5::bool, true) THEN r.created_at END ASC NULLS LAST,
+  CASE WHEN $4::text = 'status' AND COALESCE($5::bool, false) THEN r.status END DESC NULLS LAST,
+  CASE WHEN $4::text = 'status' AND NOT COALESCE($5::bool, false) THEN r.status END ASC NULLS LAST,
+  CASE WHEN $4::text = 'user_id' AND COALESCE($5::bool, false) THEN r.user_id END DESC NULLS LAST,
+  CASE WHEN $4::text = 'user_id' AND NOT COALESCE($5::bool, false) THEN r.user_id END ASC NULLS LAST,
+  CASE WHEN $4::text = 'model' AND COALESCE($5::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
+  CASE WHEN $4::text = 'model' AND NOT COALESCE($5::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
+  CASE WHEN $4::text = 'stream' AND COALESCE($5::bool, false) THEN r.stream END DESC NULLS LAST,
+  CASE WHEN $4::text = 'stream' AND NOT COALESCE($5::bool, false) THEN r.stream END ASC NULLS LAST,
   r.id DESC
-LIMIT $15 OFFSET $14
 `
 
 type ListRequestRecordsPageParams struct {
 	ChannelID     pgtype.Int8
 	AttemptID     pgtype.Int8
 	ScoringSample pgtype.Text
+	SortField     pgtype.Text
+	SortDesc      pgtype.Bool
 	UserID        pgtype.Int8
 	ApiKeyID      pgtype.Int8
 	RequestID     pgtype.Text
@@ -336,13 +370,12 @@ type ListRequestRecordsPageParams struct {
 	RouteID       pgtype.Int8
 	FromTime      pgtype.Timestamptz
 	ToTime        pgtype.Timestamptz
-	SortField     pgtype.Text
-	SortDesc      pgtype.Bool
 	PageOffset    int32
 	PageLimit     int32
 }
 
 type ListRequestRecordsPageRow struct {
+	TotalCount                   int64
 	ID                           int64
 	RequestID                    string
 	UserID                       int64
@@ -435,11 +468,15 @@ type ListRequestRecordsPageRow struct {
 // latency/ttft/tps 由 Go 侧用时间戳 + output_tokens 计算，不在此列。
 // 线路名优先用请求级快照 route_id（Key 换绑不影响历史）；历史行 route_id 为 NULL 时回落到 Key 当前绑定。
 // 模型元信息（显示名 / owned_by）按请求模型 id 关联；请求模型不在库时为 NULL。
+// 先在 request_records 上完成过滤、精确计数与分页，再只对当前页执行富字段 JOIN/子查询；
+// 避免 COUNT(*) OVER() 迫使数据库为全部匹配请求构造完整富化结果。
 func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRecordsPageParams) ([]ListRequestRecordsPageRow, error) {
 	rows, err := q.db.Query(ctx, listRequestRecordsPage,
 		arg.ChannelID,
 		arg.AttemptID,
 		arg.ScoringSample,
+		arg.SortField,
+		arg.SortDesc,
 		arg.UserID,
 		arg.ApiKeyID,
 		arg.RequestID,
@@ -448,8 +485,6 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 		arg.RouteID,
 		arg.FromTime,
 		arg.ToTime,
-		arg.SortField,
-		arg.SortDesc,
 		arg.PageOffset,
 		arg.PageLimit,
 	)
@@ -461,6 +496,7 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 	for rows.Next() {
 		var i ListRequestRecordsPageRow
 		if err := rows.Scan(
+			&i.TotalCount,
 			&i.ID,
 			&i.RequestID,
 			&i.UserID,

@@ -123,3 +123,34 @@ func TestCredentialGateKeepsRevisionsIsolated(t *testing.T) {
 		t.Fatalf("invalidated revision=%+v, want %+v", got, newRevision)
 	}
 }
+
+func TestCredentialGateEvictsOlderRevisionState(t *testing.T) {
+	inv := &recordingInvalidator{}
+	g := NewChannelCredentialGate(2, inv)
+	oldRevision := credentialRevision(7, 3)
+	newRevision := credentialRevision(7, 4)
+
+	g.RecordResult(oldRevision, authErr())
+	g.RecordResult(newRevision, authErr())
+	g.RecordResult(oldRevision, authErr())
+	if inv.count() != 0 {
+		t.Fatal("late result from an older revision contributed to the current counter")
+	}
+	g.RecordResult(newRevision, authErr())
+	if inv.count() != 1 {
+		t.Fatalf("current revision did not trip independently, got %d invalidations", inv.count())
+	}
+	if len(g.count) != 1 {
+		t.Fatalf("tracked revision states = %d, want 1", len(g.count))
+	}
+}
+
+func TestCredentialGateBoundsTrackedChannels(t *testing.T) {
+	g := NewChannelCredentialGate(3, nil)
+	for channelID := int64(1); channelID <= maxTrackedCredentialChannels+100; channelID++ {
+		g.RecordResult(credentialRevision(channelID, 1), authErr())
+	}
+	if len(g.count) != maxTrackedCredentialChannels || g.order.Len() != maxTrackedCredentialChannels {
+		t.Fatalf("tracked channels = map %d, order %d, want %d", len(g.count), g.order.Len(), maxTrackedCredentialChannels)
+	}
+}

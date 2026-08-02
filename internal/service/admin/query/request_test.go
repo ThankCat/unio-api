@@ -35,6 +35,7 @@ type fakeRequestStore struct {
 	total    int64
 	listGot  sqlc.ListRequestRecordsPageParams
 	countGot sqlc.CountRequestRecordsParams
+	counted  bool
 }
 
 func (f *fakeRequestStore) ListRequestRecordsPage(_ context.Context, params sqlc.ListRequestRecordsPageParams) ([]sqlc.ListRequestRecordsPageRow, error) {
@@ -42,6 +43,7 @@ func (f *fakeRequestStore) ListRequestRecordsPage(_ context.Context, params sqlc
 	return f.listRows, nil
 }
 func (f *fakeRequestStore) CountRequestRecords(_ context.Context, params sqlc.CountRequestRecordsParams) (int64, error) {
+	f.counted = true
 	f.countGot = params
 	return f.total, nil
 }
@@ -237,10 +239,9 @@ func TestRequestServiceGetEmptyIDInvalid(t *testing.T) {
 func TestRequestServiceListMapsTotal(t *testing.T) {
 	store := &fakeRequestStore{
 		listRows: []sqlc.ListRequestRecordsPageRow{
-			{ID: 1, RequestID: "req_1", Status: "succeeded"},
-			{ID: 2, RequestID: "req_2", Status: "failed"},
+			{TotalCount: 42, ID: 1, RequestID: "req_1", Status: "succeeded"},
+			{TotalCount: 42, ID: 2, RequestID: "req_2", Status: "failed"},
 		},
-		total: 42,
 	}
 	svc := query.NewRequestService(store)
 
@@ -253,6 +254,9 @@ func TestRequestServiceListMapsTotal(t *testing.T) {
 	}
 	if len(items) != 2 || items[0].RequestID != "req_1" {
 		t.Fatalf("unexpected items: %+v", items)
+	}
+	if store.counted {
+		t.Fatal("CountRequestRecords should not run for a non-empty page")
 	}
 }
 
@@ -278,10 +282,38 @@ func TestRequestServiceListForwardsRoutingSampleFilters(t *testing.T) {
 			t.Fatalf("%s filters = %+v", name, got)
 		}
 	}
-	gotCount := store.countGot
-	if !gotCount.RouteID.Valid || gotCount.RouteID.Int64 != routeID || !gotCount.ChannelID.Valid || gotCount.ChannelID.Int64 != channelID ||
-		!gotCount.AttemptID.Valid || gotCount.AttemptID.Int64 != attemptID || !gotCount.ScoringSample.Valid || gotCount.ScoringSample.String != "any" {
-		t.Fatalf("count filters = %+v", gotCount)
+	if store.counted {
+		t.Fatal("CountRequestRecords should not run for an empty first page")
+	}
+}
+
+func TestRequestServiceListCountsOnlyEmptyPageBeyondFirst(t *testing.T) {
+	store := &fakeRequestStore{total: 42}
+	routeID := int64(7)
+	channelID := int64(4)
+	attemptID := int64(19)
+
+	items, total, err := query.NewRequestService(store).List(context.Background(), query.RequestListParams{
+		RouteID:       &routeID,
+		ChannelID:     &channelID,
+		AttemptID:     &attemptID,
+		ScoringSample: "any",
+		Limit:         10,
+		Offset:        20,
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) != 0 || total != 42 {
+		t.Fatalf("items = %d, total = %d, want 0 and 42", len(items), total)
+	}
+	if !store.counted {
+		t.Fatal("CountRequestRecords was not called for an empty page beyond the first")
+	}
+	got := store.countGot
+	if !got.RouteID.Valid || got.RouteID.Int64 != routeID || !got.ChannelID.Valid || got.ChannelID.Int64 != channelID ||
+		!got.AttemptID.Valid || got.AttemptID.Int64 != attemptID || !got.ScoringSample.Valid || got.ScoringSample.String != "any" {
+		t.Fatalf("count filters = %+v", got)
 	}
 }
 

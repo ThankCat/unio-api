@@ -36,6 +36,13 @@ type ErrorBody struct {
 
 // WriteJSON 将 v 以 JSON 格式写入响应，并设置 HTTP 状态码。
 func WriteJSON(w http.ResponseWriter, status int, v any) error {
+	if err := RefreshResponseWriteDeadline(w, 0); err != nil {
+		return failure.Wrap(
+			failure.CodeHTTPResponseWriteFailed,
+			err,
+			failure.WithMessage("set json response write deadline"),
+		)
+	}
 	w.Header().Set("Content-Type", ContentTypeJSON)
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {

@@ -15,6 +15,12 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
+const (
+	upstreamMaxIdleConns        = 256
+	upstreamMaxIdleConnsPerHost = 32
+	upstreamMaxConnsPerHost     = 64
+)
+
 // NewAdapterRegistry 创建当前 server 进程支持的双协议 adapter registry。
 //
 // 当前进程支持：
@@ -92,6 +98,14 @@ func upstreamHTTPClient(base *http.Client) *http.Client {
 		base = http.DefaultClient
 	}
 	client := *base
+	if base.Transport == nil || base.Transport == http.DefaultTransport {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.MaxIdleConns = upstreamMaxIdleConns
+		transport.MaxIdleConnsPerHost = upstreamMaxIdleConnsPerHost
+		transport.MaxConnsPerHost = upstreamMaxConnsPerHost
+		transport.ForceAttemptHTTP2 = true
+		client.Transport = transport
+	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}

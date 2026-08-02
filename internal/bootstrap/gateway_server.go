@@ -87,7 +87,8 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	lifecycle.WarnIfSettlementFaultInjectionConfigured(deps.Logger)
 
 	// JSON 请求体上限为进程级网关 ingress 安全配置（防 OOM / zip bomb）；启动期设置一次，全 DecodeJSON 生效。
-	httpx.SetMaxJSONBodyBytes(deps.Config.HTTP.MaxJSONBodyBytes)
+	httpx.SetMaxJSONBodyBytes(deps.Config.HTTP.GatewayMaxJSONBodyBytes)
+	httpx.SetResponseWriteTimeout(deps.Config.HTTP.WriteTimeout)
 
 	// 非流式上游响应体上限为进程级 egress 安全配置（防 OOM）；启动期设置一次，全 adapter 非流式读 body 生效。
 	adapter.SetMaxUpstreamResponseBytes(deps.Config.Gateway.MaxUpstreamResponseBytes)

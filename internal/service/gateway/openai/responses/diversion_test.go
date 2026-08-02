@@ -1,6 +1,7 @@
 package responses
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -90,6 +91,51 @@ func TestEncodeUpstreamResponsesBodyPreservesOutputLimitPresence(t *testing.T) {
 				t.Fatalf("explicit max_output_tokens=%s, want %s", value, tc.wantValue)
 			}
 		})
+	}
+}
+
+func TestEncodeUpstreamResponsesBodyRewritesOnlyModelAndStream(t *testing.T) {
+	req := decodeRequest(t, "{\n  \"model\": \"client-model\",\n  \"input\": [{\"type\":\"message\",\"content\":\"hello\"}],\n  \"temperature\": 1.2300,\n  \"custom\": {\"keep\":true}\n}\n")
+	body, err := encodeUpstreamResponsesBody(req, "upstream-model", true)
+	if err != nil {
+		t.Fatalf("encode upstream body: %v", err)
+	}
+	if !bytes.Contains(body, []byte(`"temperature": 1.2300`)) || !bytes.Contains(body, []byte(`"custom": {"keep":true}`)) {
+		t.Fatalf("untouched fields were re-encoded: %s", body)
+	}
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("decode rewritten body: %v", err)
+	}
+	if string(wire["model"]) != `"upstream-model"` || string(wire["stream"]) != "true" {
+		t.Fatalf("rewritten model/stream = %s/%s", wire["model"], wire["stream"])
+	}
+}
+
+func TestRewriteResponsesModelPreservesUntouchedResponseBytes(t *testing.T) {
+	raw := json.RawMessage("{\n  \"model\": \"upstream\",\n  \"temperature\": 1.2300,\n  \"response\": {\"model\":\"nested-upstream\",\"value\":2.3400},\n  \"custom\": {\"keep\":true}\n}\n")
+	body := rewriteResponsesModel(raw, "client-model")
+
+	for _, unchanged := range [][]byte{
+		[]byte(`"temperature": 1.2300`),
+		[]byte(`"value":2.3400`),
+		[]byte(`"custom": {"keep":true}`),
+	} {
+		if !bytes.Contains(body, unchanged) {
+			t.Fatalf("untouched response bytes %q were re-encoded: %s", unchanged, body)
+		}
+	}
+	var wire struct {
+		Model    string `json:"model"`
+		Response struct {
+			Model string `json:"model"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("decode rewritten response: %v", err)
+	}
+	if wire.Model != "client-model" || wire.Response.Model != "client-model" {
+		t.Fatalf("rewritten models = %q/%q", wire.Model, wire.Response.Model)
 	}
 }
 

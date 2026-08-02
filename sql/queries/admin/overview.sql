@@ -251,10 +251,7 @@ WITH per_request AS (
             CASE WHEN cs.currency = 'USD' THEN cs.total_cost_amount END,
             0
         )::numeric AS cost_usd,
-        COALESCE(
-            CASE WHEN le.entry_type = 'debit' AND le.currency = 'USD' THEN le.amount END,
-            0
-        )::numeric AS revenue_usd,
+        ledger.revenue_usd,
         CASE
             WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8
@@ -264,7 +261,14 @@ WITH per_request AS (
     LEFT JOIN routes rt ON rt.id = ak.route_id
     LEFT JOIN usage_records ur ON ur.request_record_id = r.id
     LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
-    LEFT JOIN ledger_entries le ON le.request_record_id = r.id
+    LEFT JOIN LATERAL (
+        SELECT COALESCE(
+            SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'),
+            0
+        )::numeric AS revenue_usd
+        FROM ledger_entries le
+        WHERE le.request_record_id = r.id
+    ) ledger ON true
     WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 )
@@ -333,12 +337,19 @@ money_agg AS (
             + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens
             + u.output_tokens_total
         ), 0)::bigint AS tokens_total,
-        COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
+        COALESCE(SUM(ledger.revenue_usd), 0)::numeric AS revenue_usd,
         COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd
     FROM request_records r
     LEFT JOIN usage_records u ON u.request_record_id = r.id
     LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
-    LEFT JOIN ledger_entries le ON le.request_record_id = r.id
+    LEFT JOIN LATERAL (
+        SELECT COALESCE(
+            SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'),
+            0
+        )::numeric AS revenue_usd
+        FROM ledger_entries le
+        WHERE le.request_record_id = r.id
+    ) ledger ON true
     WHERE r.final_provider_id IS NOT NULL
       AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
@@ -427,12 +438,19 @@ money_agg AS (
             + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens
             + u.output_tokens_total
         ), 0)::bigint AS tokens_total,
-        COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
+        COALESCE(SUM(ledger.revenue_usd), 0)::numeric AS revenue_usd,
         COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd
     FROM request_records r
     LEFT JOIN usage_records u ON u.request_record_id = r.id
     LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
-    LEFT JOIN ledger_entries le ON le.request_record_id = r.id
+    LEFT JOIN LATERAL (
+        SELECT COALESCE(
+            SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'),
+            0
+        )::numeric AS revenue_usd
+        FROM ledger_entries le
+        WHERE le.request_record_id = r.id
+    ) ledger ON true
     WHERE r.final_channel_id IS NOT NULL
       AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
@@ -545,7 +563,7 @@ SELECT
         + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens
         + u.output_tokens_total
     ), 0)::bigint AS tokens_total,
-    COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
+    COALESCE(SUM(ledger.revenue_usd), 0)::numeric AS revenue_usd,
     COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE
@@ -555,7 +573,14 @@ SELECT
 FROM request_records r
 LEFT JOIN usage_records u ON u.request_record_id = r.id
 LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
-LEFT JOIN ledger_entries le ON le.request_record_id = r.id
+LEFT JOIN LATERAL (
+    SELECT COALESCE(
+        SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'),
+        0
+    )::numeric AS revenue_usd
+    FROM ledger_entries le
+    WHERE le.request_record_id = r.id
+) ledger ON true
 WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 GROUP BY r.requested_model_id
