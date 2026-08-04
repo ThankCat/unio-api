@@ -54,6 +54,8 @@ ALTER TABLE ONLY public.ledger_billing_exceptions
 ALTER TABLE ONLY public.ledger_billing_exceptions
     ADD CONSTRAINT ledger_billing_exceptions_reservation_id_key UNIQUE (reservation_id);
 
+CREATE INDEX idx_ledger_billing_exceptions_created_at_id ON public.ledger_billing_exceptions USING btree (created_at DESC, id DESC);
+
 CREATE INDEX idx_ledger_billing_exceptions_user_created_at ON public.ledger_billing_exceptions USING btree (user_id, created_at DESC, id DESC);
 
 ALTER TABLE ONLY public.ledger_billing_exceptions
@@ -64,4 +66,10 @@ ALTER TABLE ONLY public.ledger_billing_exceptions
 
 ALTER TABLE ONLY public.ledger_billing_exceptions
     ADD CONSTRAINT ledger_billing_exceptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
+
+-- ---------------------------------------------------------------------------
+-- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：
+-- ---------------------------------------------------------------------------
+-- [000040_admin_query_indexes]
+-- Admin 列表查询补 (created_at DESC, id DESC) 排序索引，已直接建入本表。
 -- Migration renumbered after merging Provider Origin into Provider.

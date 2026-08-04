@@ -88,6 +88,8 @@ ALTER TABLE ONLY public.cost_snapshots
 
 CREATE INDEX idx_cost_snapshots_channel_created_at ON public.cost_snapshots USING btree (channel_id, created_at DESC, id DESC);
 
+CREATE INDEX idx_cost_snapshots_created_at_id ON public.cost_snapshots USING btree (created_at DESC, id DESC);
+
 CREATE INDEX idx_cost_snapshots_provider_created_at ON public.cost_snapshots USING btree (provider_id, created_at DESC, id DESC);
 
 ALTER TABLE ONLY public.cost_snapshots
@@ -114,6 +116,8 @@ ALTER TABLE ONLY public.cost_snapshots
 -- ---------------------------------------------------------------------------
 -- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：
 -- ---------------------------------------------------------------------------
+-- [000040_admin_query_indexes]
+-- Admin 列表查询补 (created_at DESC, id DESC) 排序索引，已直接建入本表。
 -- [000035_repoint_snapshots_to_channel_prices]
 -- 阶段 15：把价格 / 成本快照与补偿任务的外键从退役的 prices / channel_cost_prices 改挂到 channel_prices。
 -- 开发期库可重置，迁移在空快照表上执行；存在历史快照时需另设数据迁移。

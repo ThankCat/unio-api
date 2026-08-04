@@ -1,6 +1,0 @@
-DROP INDEX public.idx_ledger_billing_exceptions_created_at_id;
-DROP INDEX public.idx_ledger_entries_type_created_at_id;
-DROP INDEX public.idx_cost_snapshots_created_at_id;
-DROP INDEX public.idx_usage_records_created_at_id;
-DROP INDEX public.idx_request_attempts_created_at_id;
-DROP INDEX public.idx_request_records_created_at_id;

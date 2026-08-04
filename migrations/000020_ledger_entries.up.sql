@@ -47,6 +47,8 @@ ALTER TABLE ONLY public.ledger_entries
 
 CREATE INDEX idx_ledger_entries_request_record_id ON public.ledger_entries USING btree (request_record_id) WHERE (request_record_id IS NOT NULL);
 
+CREATE INDEX idx_ledger_entries_type_created_at_id ON public.ledger_entries USING btree (entry_type, created_at DESC, id DESC);
+
 CREATE INDEX idx_ledger_entries_user_created_at ON public.ledger_entries USING btree (user_id, created_at DESC, id DESC);
 
 ALTER TABLE ONLY public.ledger_entries
@@ -54,4 +56,10 @@ ALTER TABLE ONLY public.ledger_entries
 
 ALTER TABLE ONLY public.ledger_entries
     ADD CONSTRAINT ledger_entries_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
+
+-- ---------------------------------------------------------------------------
+-- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：
+-- ---------------------------------------------------------------------------
+-- [000040_admin_query_indexes]
+-- Admin 列表查询补 (entry_type, created_at DESC, id DESC) 排序索引，已直接建入本表。
 -- Migration renumbered after merging Provider Origin into Provider.
