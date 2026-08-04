@@ -34,7 +34,7 @@ help: ## 显示可用命令
 
 check-env:
 	@if [ ! -f "$(ENV_FILE)" ]; then \
-		echo "缺少 $(ENV_FILE)：先执行 cp .env.example .env 并填好 ADMIN_API_TOKEN"; \
+		echo "缺少 $(ENV_FILE)：先执行 cp .env.example .env 并填好 ADMIN_PASSWORD"; \
 		exit 1; \
 	fi
 

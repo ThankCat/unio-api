@@ -83,9 +83,13 @@ type GatewayConfig struct {
 type AdminConfig struct {
 	// HTTPAddr 来自 ADMIN_HTTP_ADDR；admin-server 的监听地址。
 	HTTPAddr string
-	// APIToken 来自 ADMIN_API_TOKEN；单管理员极简版的静态访问 token。
+	// Username 来自 ADMIN_USERNAME；登录校验的固定用户名，默认 admin。
+	Username string
+	// Password 来自 ADMIN_PASSWORD；登录校验的固定口令，绝不写入源码或日志。
 	// 空值表示未配置，运行 admin-server 时启动期失败。
-	APIToken string
+	Password string
+	// SessionTTL 来自 ADMIN_SESSION_TTL；登录会话在 Redis 中的有效期，默认 12h。
+	SessionTTL time.Duration
 
 	// GatewayInternalURLs 来自 GATEWAY_INTERNAL_URLS（逗号分隔）；admin 拉取熔断快照的 gateway 基址列表。
 	// 空且 InternalToken 非空时，若 GATEWAY_HTTP_ADDR 形如 ":port" 则默认 http://127.0.0.1:port。
@@ -517,6 +521,17 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	adminSessionTTL, err := getEnvDuration("ADMIN_SESSION_TTL", 12*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	if adminSessionTTL <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("ADMIN_SESSION_TTL must be greater than zero"),
+		)
+	}
+
 	partialAssumedCacheReadRatio, err := getEnvFloat("PARTIAL_ASSUMED_CACHE_READ_RATIO", 0.6)
 	if err != nil {
 		return Config{}, err
@@ -658,7 +673,9 @@ func Load() (Config, error) {
 		},
 		Admin: AdminConfig{
 			HTTPAddr:             getEnv("ADMIN_HTTP_ADDR", ":8521"),
-			APIToken:             getEnv("ADMIN_API_TOKEN", ""),
+			Username:             getEnv("ADMIN_USERNAME", "admin"),
+			Password:             getEnv("ADMIN_PASSWORD", ""),
+			SessionTTL:           adminSessionTTL,
 			GatewayInternalURLs:  resolveGatewayInternalURLs(),
 			GatewayInternalToken: getEnv("GATEWAY_INTERNAL_TOKEN", ""),
 			LokiURL:              getEnv("LOKI_URL", "http://127.0.0.1:3100"),

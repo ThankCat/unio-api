@@ -57,7 +57,7 @@ func main() {
 	defer redisClient.Close()
 	logger.Info("redis connected", zap.String("addr", cfg.Redis.Addr), zap.Int("db", cfg.Redis.DB))
 
-	// APP：装配时校验 ADMIN_API_TOKEN 与 CREDENTIAL_MASTER_KEY，缺失/非法在此启动期失败。
+	// APP：装配时校验 ADMIN_USERNAME / ADMIN_PASSWORD，缺失/非法在此启动期失败。
 	app, err := bootstrap.NewAdminServerApp(startupCtx, bootstrap.AdminServerAppDeps{
 		Logger: logger,
 		Config: cfg,

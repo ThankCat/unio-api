@@ -37,6 +37,11 @@ type RouterDeps struct {
 	Logger             *zap.Logger
 	AdminAuthenticator middleware.AdminAuthenticator
 
+	// CredentialAuthenticator 校验登录口令，Sessions 签发与吊销会话 token。
+	CredentialAuthenticator CredentialAuthenticator
+	Sessions                SessionIssuer
+	SessionTTLSeconds       int64
+
 	ProviderService     provider.ProviderService
 	ProviderOpsService  provider.ProviderOpsService
 	ProviderBreaker     provider.BreakerRuntime
@@ -133,66 +138,77 @@ func NewRouter(deps RouterDeps) http.Handler {
 	})
 
 	r.Route("/admin/v1", func(r chi.Router) {
-		r.Use(middleware.AdminAuth(deps.AdminAuthenticator))
+		// login 是 admin 表面唯一不需要 token 的端点：没有它就无法取得 token。
+		// 单独分组挂载，确保 AdminAuth 只作用于其余全部端点。
+		r.Group(func(r chi.Router) {
+			r.Post("/login", handleLogin(deps.CredentialAuthenticator, deps.Sessions, deps.SessionTTLSeconds))
+		})
 
-		// ping 是受保护探针：用于校验 admin token 是否有效（认证后回 200）。
-		r.Get("/ping", handlePing)
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.AdminAuth(deps.AdminAuthenticator))
 
-		// 各业务模块自注册路由（chi 按静态优先于通配匹配，模块注册顺序不影响正确性）。
-		overview.Register(r, overview.Deps{Service: deps.DashboardService})
-		provider.Register(r, provider.Deps{
-			Service:    deps.ProviderService,
-			OpsService: deps.ProviderOpsService,
-			Breaker:    deps.ProviderBreaker,
-		})
-		channel.Register(r, channel.Deps{
-			Service:               deps.ChannelService,
-			OpsService:            deps.ChannelOpsService,
-			TestService:           deps.ChannelTestService,
-			ModelService:          deps.ChannelModelService,
-			PriceService:          deps.ChannelPriceService,
-			CostMultiplierService: deps.ChannelCostMultiplierService,
-			RechargeFactorService: deps.ChannelRechargeFactorService,
-			Breaker:               deps.ChannelBreaker,
-		})
-		model.Register(r, model.Deps{
-			Service:        deps.ModelService,
-			OpsService:     deps.ModelOpsService,
-			PriceService:   deps.ModelPriceService,
-			CatalogService: deps.CatalogService,
-		})
-		route.Register(r, route.Deps{
-			Service:        deps.RouteService,
-			OpsService:     deps.RouteOpsService,
-			RuntimeService: deps.RouteRuntimeService,
-		})
-		capability.Register(r, capability.Deps{
-			Service:     deps.CapabilityService,
-			SyncService: deps.CapabilitySyncService,
-			SeedService: deps.CapabilitySeedService,
-		})
-		user.Register(r, user.Deps{
-			Service:           deps.UserService,
-			APIKeyService:     deps.APIKeyService,
-			AdjustmentService: deps.AdjustmentService,
-			OpsService:        deps.CustomerOpsService,
-		})
-		requests.Register(r, requests.Deps{
-			Service:             deps.RequestQueryService,
-			RoutingTraceService: deps.RoutingTraceService,
-		})
-		ledger.Register(r, ledger.Deps{
-			Service:             deps.LedgerQueryService,
-			CostExposureService: deps.CostExposureQueryService,
-		})
-		system.Register(r, system.Deps{
-			RecoveryJobService:        deps.RecoveryJobQueryService,
-			ProviderSettingsService:   deps.ProviderSettingsService,
-			RuntimeDiagnosticsService: deps.RuntimeDiagnosticsService,
-			GatewayLoggingService:     deps.GatewayLoggingService,
-			GatewayConfig:             deps.GatewayConfig,
-			WorkerConfig:              deps.WorkerConfig,
-			HTTPConfig:                deps.HTTPConfig,
+			// ping 是受保护探针：用于校验会话 token 是否仍然有效（认证后回 200）。
+			r.Get("/ping", handlePing)
+
+			// logout 吊销当前会话；挂在受保护分组内，因此到达时 token 必然有效。
+			r.Post("/logout", handleLogout(deps.Sessions))
+
+			// 各业务模块自注册路由（chi 按静态优先于通配匹配，模块注册顺序不影响正确性）。
+			overview.Register(r, overview.Deps{Service: deps.DashboardService})
+			provider.Register(r, provider.Deps{
+				Service:    deps.ProviderService,
+				OpsService: deps.ProviderOpsService,
+				Breaker:    deps.ProviderBreaker,
+			})
+			channel.Register(r, channel.Deps{
+				Service:               deps.ChannelService,
+				OpsService:            deps.ChannelOpsService,
+				TestService:           deps.ChannelTestService,
+				ModelService:          deps.ChannelModelService,
+				PriceService:          deps.ChannelPriceService,
+				CostMultiplierService: deps.ChannelCostMultiplierService,
+				RechargeFactorService: deps.ChannelRechargeFactorService,
+				Breaker:               deps.ChannelBreaker,
+			})
+			model.Register(r, model.Deps{
+				Service:        deps.ModelService,
+				OpsService:     deps.ModelOpsService,
+				PriceService:   deps.ModelPriceService,
+				CatalogService: deps.CatalogService,
+			})
+			route.Register(r, route.Deps{
+				Service:        deps.RouteService,
+				OpsService:     deps.RouteOpsService,
+				RuntimeService: deps.RouteRuntimeService,
+			})
+			capability.Register(r, capability.Deps{
+				Service:     deps.CapabilityService,
+				SyncService: deps.CapabilitySyncService,
+				SeedService: deps.CapabilitySeedService,
+			})
+			user.Register(r, user.Deps{
+				Service:           deps.UserService,
+				APIKeyService:     deps.APIKeyService,
+				AdjustmentService: deps.AdjustmentService,
+				OpsService:        deps.CustomerOpsService,
+			})
+			requests.Register(r, requests.Deps{
+				Service:             deps.RequestQueryService,
+				RoutingTraceService: deps.RoutingTraceService,
+			})
+			ledger.Register(r, ledger.Deps{
+				Service:             deps.LedgerQueryService,
+				CostExposureService: deps.CostExposureQueryService,
+			})
+			system.Register(r, system.Deps{
+				RecoveryJobService:        deps.RecoveryJobQueryService,
+				ProviderSettingsService:   deps.ProviderSettingsService,
+				RuntimeDiagnosticsService: deps.RuntimeDiagnosticsService,
+				GatewayLoggingService:     deps.GatewayLoggingService,
+				GatewayConfig:             deps.GatewayConfig,
+				WorkerConfig:              deps.WorkerConfig,
+				HTTPConfig:                deps.HTTPConfig,
+			})
 		})
 	})
 

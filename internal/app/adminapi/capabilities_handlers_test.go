@@ -8,7 +8,6 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/capability"
-	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
 	corecap "github.com/ThankCat/unio-gateway/internal/core/capability"
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
 	capsvc "github.com/ThankCat/unio-gateway/internal/service/admin/capability"
@@ -71,7 +70,7 @@ func newCapabilityRouter(
 ) http.Handler {
 	t.Helper()
 
-	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
+	authenticator, err := newTestAdminAuthenticator()
 	if err != nil {
 		t.Fatalf("new authenticator: %v", err)
 	}

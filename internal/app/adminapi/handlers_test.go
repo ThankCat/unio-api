@@ -15,7 +15,6 @@ import (
 	amodel "github.com/ThankCat/unio-gateway/internal/app/adminapi/model"
 	aprovider "github.com/ThankCat/unio-gateway/internal/app/adminapi/provider"
 	aroute "github.com/ThankCat/unio-gateway/internal/app/adminapi/route"
-	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channel"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelmodel"
@@ -157,7 +156,7 @@ func (s *fakeChannelModelService) Delete(context.Context, int64, int64) error {
 func newChannelModelRouter(t *testing.T, cms achannel.ChannelModelService) http.Handler {
 	t.Helper()
 
-	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
+	authenticator, err := newTestAdminAuthenticator()
 	if err != nil {
 		t.Fatalf("new authenticator: %v", err)
 	}
@@ -190,7 +189,7 @@ func (s *fakeChannelPriceService) Update(context.Context, channelprice.UpdateInp
 func newChannelPriceRouter(t *testing.T, cps achannel.ChannelPriceService) http.Handler {
 	t.Helper()
 
-	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
+	authenticator, err := newTestAdminAuthenticator()
 	if err != nil {
 		t.Fatalf("new authenticator: %v", err)
 	}
@@ -231,7 +230,7 @@ func (s *fakeRouteService) SetChannels(context.Context, int64, []int64) (route.R
 func newRouteRouter(t *testing.T, rs aroute.RouteService) http.Handler {
 	t.Helper()
 
-	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
+	authenticator, err := newTestAdminAuthenticator()
 	if err != nil {
 		t.Fatalf("new authenticator: %v", err)
 	}
@@ -246,7 +245,7 @@ func newRouteRouter(t *testing.T, rs aroute.RouteService) http.Handler {
 func newModelRouter(t *testing.T, ms amodel.ModelService) http.Handler {
 	t.Helper()
 
-	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
+	authenticator, err := newTestAdminAuthenticator()
 	if err != nil {
 		t.Fatalf("new authenticator: %v", err)
 	}
@@ -261,7 +260,7 @@ func newModelRouter(t *testing.T, ms amodel.ModelService) http.Handler {
 func newServicesRouter(t *testing.T, ps aprovider.ProviderService, cs achannel.ChannelService) http.Handler {
 	t.Helper()
 
-	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
+	authenticator, err := newTestAdminAuthenticator()
 	if err != nil {
 		t.Fatalf("new authenticator: %v", err)
 	}

@@ -9,7 +9,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi"
-	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channel"
@@ -69,7 +68,7 @@ func (f *fakeChannelBreaker) ReadControl(context.Context, breakerstore.ControlTa
 
 func newChannelBreakerRouter(t *testing.T, breaker adminapi.RouterDeps) http.Handler {
 	t.Helper()
-	authenticator, err := adminauth.NewStaticTokenAuthenticator(testAdminToken)
+	authenticator, err := newTestAdminAuthenticator()
 	if err != nil {
 		t.Fatalf("new authenticator: %v", err)
 	}

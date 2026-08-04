@@ -420,6 +420,17 @@ const (
 
 	// CodeAdminAuthInvalidToken 表示 admin 认证 token 与配置不匹配。
 	CodeAdminAuthInvalidToken Code = "adminauth_invalid_token"
+
+	// CodeAdminAuthInvalidCredentials 表示 admin 登录的用户名或口令不匹配。
+	// 不区分「用户名错」与「口令错」，避免向调用方泄露哪一项有效。
+	CodeAdminAuthInvalidCredentials Code = "adminauth_invalid_credentials"
+
+	// CodeAdminAuthSessionExpired 表示会话 token 不存在或已过期，需要重新登录。
+	CodeAdminAuthSessionExpired Code = "adminauth_session_expired"
+
+	// CodeAdminSessionStoreFailed 表示会话存储（Redis）读写失败。
+	// 与 session_expired 严格区分：依赖故障不能被渲染成「登录已过期」。
+	CodeAdminSessionStoreFailed Code = "adminauth_session_store_failed"
 )
 
 const (

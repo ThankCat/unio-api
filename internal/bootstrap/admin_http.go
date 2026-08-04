@@ -26,6 +26,11 @@ type adminHTTPDeps struct {
 	Logger        *zap.Logger
 	Authenticator middleware.AdminAuthenticator
 
+	// CredentialAuthenticator 校验登录口令，Sessions 签发与吊销会话 token。
+	CredentialAuthenticator adminapi.CredentialAuthenticator
+	Sessions                adminapi.SessionIssuer
+	SessionTTLSeconds       int64
+
 	ProviderService     provider.ProviderService
 	ProviderOpsService  provider.ProviderOpsService
 	ProviderBreaker     provider.BreakerRuntime
@@ -84,8 +89,12 @@ type adminHTTPDeps struct {
 // NewAdminHTTPHandler 创建 admin-server 进程使用的 HTTP handler。
 func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 	routerDeps := adminapi.RouterDeps{
-		Logger:              deps.Logger,
-		AdminAuthenticator:  deps.Authenticator,
+		Logger:                  deps.Logger,
+		AdminAuthenticator:      deps.Authenticator,
+		CredentialAuthenticator: deps.CredentialAuthenticator,
+		Sessions:                deps.Sessions,
+		SessionTTLSeconds:       deps.SessionTTLSeconds,
+
 		ProviderService:     deps.ProviderService,
 		ProviderOpsService:  deps.ProviderOpsService,
 		ProviderBreaker:     deps.ProviderBreaker,

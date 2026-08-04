@@ -13,7 +13,7 @@ import (
 //
 // 设计意图（上线前全量修复 P0 前端）：凡运行期不可改的 env 阈值/兜底都要在前端「网关配置(只读)」面板可见，
 // 杜绝后台静默。此处只回显非敏感运维阈值（兜底 token、补偿、HTTP 超时），绝不回显任何
-// 凭据/密钥/DSN（DATABASE_URL、REDIS_PASSWORD、CREDENTIAL_MASTER_KEY、ADMIN_API_TOKEN 等）。
+// 凭据/密钥/DSN（DATABASE_URL、REDIS_PASSWORD、CREDENTIAL_MASTER_KEY、ADMIN_PASSWORD 等）。
 //
 // 线路/渠道默认限流、渠道熔断、流式 idle 超时、渠道 429 冷却、凭据 401 阈值、默认渠道超时已迁移为
 // 运行时配置（app_settings），从本只读面板移除，改在「运行时配置」可编辑面板管理（/settings）。

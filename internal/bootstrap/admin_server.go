@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/capability"
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/core/runtimecontrol"
+	"github.com/ThankCat/unio-gateway/internal/platform/adminsession"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
@@ -90,7 +91,7 @@ func (a *AdminServerApp) Shutdown(ctx context.Context) error {
 
 // NewAdminServerApp 装配当前 admin-server 进程的业务应用。
 //
-// 启动期校验：ADMIN_API_TOKEN 不能为空（缺失即失败，避免 admin 表面带病启动）。
+// 启动期校验：ADMIN_PASSWORD 不能为空（缺失即失败，避免以空口令开放登录入口）。
 // 渠道上游凭据已改为明文存储（产品决策），admin 不再需要 master key / cipher。
 func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServerApp, error) {
 	tracerProvider, err := tracing.Setup(ctx, tracing.Options{
@@ -108,7 +109,19 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	httpx.SetMaxJSONBodyBytes(deps.Config.HTTP.AdminMaxJSONBodyBytes)
 	httpx.SetResponseWriteTimeout(deps.Config.HTTP.WriteTimeout)
 
-	authenticator, err := adminauth.NewStaticTokenAuthenticator(deps.Config.Admin.APIToken)
+	// 会话存储：登录后签发的随机 token 存于 Redis，可吊销、到期自动失效。
+	sessions := adminsession.NewStore(deps.Redis, deps.Config.Redis.KeyNamespace, deps.Config.Admin.SessionTTL)
+
+	authenticator, err := adminauth.NewSessionAuthenticator(sessions)
+	if err != nil {
+		return nil, err
+	}
+
+	// 登录入口的用户名口令认证器；任一项未配置即启动失败，不以空口令对外开放登录。
+	credentialAuthenticator, err := adminauth.NewStaticCredentialAuthenticator(
+		deps.Config.Admin.Username,
+		deps.Config.Admin.Password,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -247,8 +260,12 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	)
 
 	handler := NewAdminHTTPHandler(adminHTTPDeps{
-		Logger:              deps.Logger,
-		Authenticator:       authenticator,
+		Logger:                  deps.Logger,
+		Authenticator:           authenticator,
+		CredentialAuthenticator: credentialAuthenticator,
+		Sessions:                sessions,
+		SessionTTLSeconds:       int64(deps.Config.Admin.SessionTTL.Seconds()),
+
 		ProviderService:     providerService,
 		ProviderOpsService:  providerOpsService,
 		ProviderBreaker:     providerBreakerRuntime,
