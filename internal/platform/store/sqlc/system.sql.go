@@ -42,7 +42,7 @@ func (q *Queries) CountSettlementRecoveryJobs(ctx context.Context, arg CountSett
 
 const getSettlementRecoveryJobByID = `-- name: GetSettlementRecoveryJobByID :one
 SELECT
-    j.id, j.user_id, j.request_record_id, j.attempt_id, j.reservation_id, j.response_protocol, j.response_id, j.response_model_id, j.model_id, j.provider_id, j.channel_id, j.upstream_protocol, j.upstream_response_id, j.upstream_model, j.finish_class, j.upstream_finish_reason, j.upstream_status_code, j.upstream_request_id, j.usage_uncached_input_tokens, j.usage_uncached_input_tokens_state, j.usage_cache_read_input_tokens, j.usage_cache_read_input_tokens_state, j.usage_cache_write_5m_input_tokens, j.usage_cache_write_5m_input_tokens_state, j.usage_cache_write_1h_input_tokens, j.usage_cache_write_1h_input_tokens_state, j.usage_output_tokens_total, j.usage_output_tokens_total_state, j.usage_reasoning_output_tokens, j.usage_reasoning_output_tokens_state, j.usage_server_web_search_requests, j.usage_server_web_fetch_requests, j.usage_source, j.usage_mapping_version, j.price_id, j.currency, j.pricing_unit, j.uncached_input_price, j.cache_read_input_price, j.cache_write_5m_input_price, j.cache_write_1h_input_price, j.output_price, j.reasoning_output_price, j.formula_version, j.estimated_amount, j.authorized_amount, j.status, j.attempt_count, j.max_attempts, j.next_run_at, j.locked_by, j.locked_until, j.last_error_code, j.last_error_message, j.last_internal_error_detail, j.last_attempted_at, j.completed_at, j.created_at, j.updated_at, j.price_ratio, j.usage_cache_write_30m_input_tokens, j.usage_cache_write_30m_input_tokens_state, j.cache_write_30m_input_price, j.cost_base_model_price_id, j.channel_cost_multiplier_id, j.channel_recharge_factor_id,
+    j.id, j.user_id, j.request_record_id, j.attempt_id, j.reservation_id, j.response_protocol, j.response_id, j.response_model_id, j.model_id, j.provider_id, j.channel_id, j.upstream_protocol, j.upstream_response_id, j.upstream_model, j.finish_class, j.upstream_finish_reason, j.upstream_status_code, j.upstream_request_id, j.usage_uncached_input_tokens, j.usage_uncached_input_tokens_state, j.usage_cache_read_input_tokens, j.usage_cache_read_input_tokens_state, j.usage_cache_write_5m_input_tokens, j.usage_cache_write_5m_input_tokens_state, j.usage_cache_write_1h_input_tokens, j.usage_cache_write_1h_input_tokens_state, j.usage_output_tokens_total, j.usage_output_tokens_total_state, j.usage_reasoning_output_tokens, j.usage_reasoning_output_tokens_state, j.usage_server_web_search_requests, j.usage_server_web_fetch_requests, j.usage_source, j.usage_mapping_version, j.price_id, j.currency, j.pricing_unit, j.uncached_input_price, j.cache_read_input_price, j.cache_write_5m_input_price, j.cache_write_1h_input_price, j.output_price, j.reasoning_output_price, j.formula_version, j.estimated_amount, j.authorized_amount, j.status, j.attempt_count, j.max_attempts, j.next_run_at, j.locked_by, j.locked_until, j.last_error_code, j.last_error_message, j.last_internal_error_detail, j.last_attempted_at, j.completed_at, j.created_at, j.updated_at, j.price_ratio, j.usage_cache_write_30m_input_tokens, j.usage_cache_write_30m_input_tokens_state, j.cache_write_30m_input_price, j.cost_base_model_price_id, j.channel_cost_multiplier_id, j.channel_recharge_factor_id, j.request_final_status, j.attempt_final_status, j.settlement_error_code, j.settlement_error_message, j.settlement_internal_error_detail, j.long_context_enabled, j.long_context_threshold, j.long_context_input_multiplier, j.long_context_output_multiplier,
     rr.request_id AS request_public_id,
     res.status AS reservation_status,
     res.captured_amount AS reservation_captured_amount,
@@ -125,6 +125,15 @@ type GetSettlementRecoveryJobByIDRow struct {
 	CostBaseModelPriceID               pgtype.Int8
 	ChannelCostMultiplierID            pgtype.Int8
 	ChannelRechargeFactorID            pgtype.Int8
+	RequestFinalStatus                 string
+	AttemptFinalStatus                 string
+	SettlementErrorCode                string
+	SettlementErrorMessage             string
+	SettlementInternalErrorDetail      string
+	LongContextEnabled                 bool
+	LongContextThreshold               pgtype.Int8
+	LongContextInputMultiplier         pgtype.Numeric
+	LongContextOutputMultiplier        pgtype.Numeric
 	RequestPublicID                    pgtype.Text
 	ReservationStatus                  pgtype.Text
 	ReservationCapturedAmount          pgtype.Numeric
@@ -206,6 +215,15 @@ func (q *Queries) GetSettlementRecoveryJobByID(ctx context.Context, id int64) (G
 		&i.CostBaseModelPriceID,
 		&i.ChannelCostMultiplierID,
 		&i.ChannelRechargeFactorID,
+		&i.RequestFinalStatus,
+		&i.AttemptFinalStatus,
+		&i.SettlementErrorCode,
+		&i.SettlementErrorMessage,
+		&i.SettlementInternalErrorDetail,
+		&i.LongContextEnabled,
+		&i.LongContextThreshold,
+		&i.LongContextInputMultiplier,
+		&i.LongContextOutputMultiplier,
 		&i.RequestPublicID,
 		&i.ReservationStatus,
 		&i.ReservationCapturedAmount,

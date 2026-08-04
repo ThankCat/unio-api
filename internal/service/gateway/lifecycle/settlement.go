@@ -355,10 +355,50 @@ func oneNumeric() pgtype.Numeric {
 	return pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true}
 }
 
+func chatSettlementFinalStatuses(params ChatSettlementParams) (requestlog.RequestStatus, requestlog.AttemptStatus) {
+	requestStatus := params.RequestFinalStatus
+	if requestStatus == "" {
+		requestStatus = requestlog.RequestStatusSucceeded
+	}
+	attemptStatus := params.AttemptFinalStatus
+	if attemptStatus == "" {
+		attemptStatus = requestlog.AttemptStatusSucceeded
+	}
+	return requestStatus, attemptStatus
+}
+
 // ValidateChatSettlementFacts 校验 adapter 交给 settlement 的不可变事实。
 // recovery job 创建与正式 settlement 共用；导出供 chatcompletions recovery 在 Step 3 迁移前调用。
 func ValidateChatSettlementFacts(params ChatSettlementParams) error {
 	facts := params.Facts
+	requestFinalStatus, attemptFinalStatus := chatSettlementFinalStatuses(params)
+	if !validSettlementRequestFinalStatus(requestFinalStatus) || !validSettlementAttemptFinalStatus(attemptFinalStatus) {
+		return failure.New(
+			failure.CodeGatewayChatSettlementFailed,
+			failure.WithMessage("chat settlement target status is invalid"),
+			failure.WithField("request_final_status", string(requestFinalStatus)),
+			failure.WithField("attempt_final_status", string(attemptFinalStatus)),
+		)
+	}
+	hasErrorTarget := requestFinalStatus != requestlog.RequestStatusSucceeded || attemptFinalStatus != requestlog.AttemptStatusSucceeded
+	if hasErrorTarget && (params.ErrorCode == "" || params.ErrorMessage == "") {
+		return failure.New(
+			failure.CodeGatewayChatSettlementFailed,
+			failure.WithMessage("chat settlement error facts are incomplete"),
+		)
+	}
+	if !hasErrorTarget && (params.ErrorCode != "" || params.ErrorMessage != "" || params.InternalErrorDetail != "") {
+		return failure.New(
+			failure.CodeGatewayChatSettlementFailed,
+			failure.WithMessage("successful chat settlement contains error facts"),
+		)
+	}
+	if params.LongContextPolicy.Enabled && !params.LongContextPolicy.Active() {
+		return failure.New(
+			failure.CodeGatewayChatSettlementFailed,
+			failure.WithMessage("chat settlement long-context policy is incomplete"),
+		)
+	}
 	if !facts.UsageSource.Valid() {
 		return failure.New(
 			failure.CodeGatewayChatSettlementFailed,
@@ -390,6 +430,24 @@ func ValidateChatSettlementFacts(params ChatSettlementParams) error {
 	}
 
 	return nil
+}
+
+func validSettlementRequestFinalStatus(status requestlog.RequestStatus) bool {
+	switch status {
+	case requestlog.RequestStatusSucceeded, requestlog.RequestStatusFailed, requestlog.RequestStatusCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+func validSettlementAttemptFinalStatus(status requestlog.AttemptStatus) bool {
+	switch status {
+	case requestlog.AttemptStatusSucceeded, requestlog.AttemptStatusFailed, requestlog.AttemptStatusCanceled:
+		return true
+	default:
+		return false
+	}
 }
 
 func validSettlementFinishClass(class adapter.FinishClass) bool {
@@ -507,15 +565,16 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	if err := ValidateChatSettlementFacts(params); err != nil {
 		return err
 	}
+	requestFinalStatus, attemptFinalStatus := chatSettlementFinalStatuses(params)
 
 	switch requestlog.RequestStatus(lockedRequest.Status) {
 	case requestlog.RequestStatusRunning:
 		// running 是唯一允许首次执行 settlement 的状态。
 
-	case requestlog.RequestStatusSucceeded:
-		// 已成功的 request 不能再次写 usage/snapshot/ledger。
+	case requestFinalStatus:
+		// 已按目标状态收口的 request 不能再次写 usage/snapshot/ledger。
 		// 只有既有结算事实和本次重放参数完全一致，才视为幂等成功。
-		if err := s.ensureIdempotentSuccessfulChat(ctx, txQueries, lockedRequest, params); err != nil {
+		if err := s.ensureIdempotentChatSettlement(ctx, txQueries, lockedRequest, params); err != nil {
 			return err
 		}
 
@@ -539,14 +598,6 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 
 	txRequestLog := requestlog.NewStore(txQueries)
 	facts := params.Facts
-	requestFinalStatus := params.RequestFinalStatus
-	if requestFinalStatus == "" {
-		requestFinalStatus = requestlog.RequestStatusSucceeded
-	}
-	attemptFinalStatus := params.AttemptFinalStatus
-	if attemptFinalStatus == "" {
-		attemptFinalStatus = requestlog.AttemptStatusSucceeded
-	}
 
 	// 从 adapter response metadata 写入真实 upstream status code 和 request id，
 	// 用于渠道审计和 observability，而不是固定写 200/NULL。
@@ -775,7 +826,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		}
 
 		// M7 费用上限计数器：按本次实扣金额累加该 Key 累计花费，同事务提交保证与扣费一致；
-		// 只在首次结算（running→succeeded）执行，幂等重放走上面的 succeeded 分支不会重复累加。
+		// 只在首次结算（running→目标终态）执行，幂等重放走上面的终态分支不会重复累加。
 		if err := txQueries.AddAPIKeySpentTotal(ctx, sqlc.AddAPIKeySpentTotalParams{
 			Amount: reservation.CapturedAmount,
 			ID:     params.RequestRecord.APIKeyID,
@@ -1196,8 +1247,8 @@ func (s *ChatSettlementService) FinalizeStrandedReservation(ctx context.Context,
 	return nil
 }
 
-// ensureIdempotentSuccessfulChat 校验重复 settlement 是否等价于第一次成功结算。
-func (s *ChatSettlementService) ensureIdempotentSuccessfulChat(ctx context.Context, queries *sqlc.Queries, request sqlc.RequestRecord, params ChatSettlementParams) error {
+// ensureIdempotentChatSettlement 校验重复 settlement 是否等价于第一次终态结算。
+func (s *ChatSettlementService) ensureIdempotentChatSettlement(ctx context.Context, queries *sqlc.Queries, request sqlc.RequestRecord, params ChatSettlementParams) error {
 	if err := ensureSettlementRequestMatches(request, params); err != nil {
 		return err
 	}
@@ -1317,12 +1368,21 @@ func (s *ChatSettlementService) ensureIdempotentSuccessfulChat(ctx context.Conte
 	return ensureSettlementCapturedReservationMatches(ctx, queries, reservation, charge.Amount)
 }
 
-// ensureSettlementRequestMatches 校验成功 request 终态是否属于本次 settlement 参数。
+// ensureSettlementRequestMatches 校验 request 终态是否属于本次 settlement 参数。
 func ensureSettlementRequestMatches(request sqlc.RequestRecord, params ChatSettlementParams) error {
+	requestFinalStatus, _ := chatSettlementFinalStatuses(params)
 	if request.ID != params.RequestRecord.ID ||
 		request.UserID != params.RequestRecord.UserID ||
 		request.ApiKeyID != params.RequestRecord.APIKeyID {
 		return ChatSettlementIdempotencyConflict("request identity mismatch")
+	}
+	if request.Status != string(requestFinalStatus) {
+		return ChatSettlementIdempotencyConflict("request status mismatch")
+	}
+	if !settlementTextMatches(request.ErrorCode, params.ErrorCode) ||
+		!settlementTextMatches(request.ErrorMessage, params.ErrorMessage) ||
+		!settlementTextMatches(request.InternalErrorDetail, params.InternalErrorDetail) {
+		return ChatSettlementIdempotencyConflict("request error facts mismatch")
 	}
 	if !requiredTextMatches(request.ResponseModelID, params.ResponseModelID) {
 		return ChatSettlementIdempotencyConflict("response model mismatch")
@@ -1575,8 +1635,16 @@ func requiredInt8Matches(value pgtype.Int8, want int64) bool {
 	return value.Valid && value.Int64 == want
 }
 
-// ensureSettlementAttemptMatches 校验已成功 attempt 是否和本次 settlement 参数一致。
+func settlementTextMatches(value pgtype.Text, want string) bool {
+	if want == "" {
+		return !value.Valid || value.String == ""
+	}
+	return value.Valid && value.String == want
+}
+
+// ensureSettlementAttemptMatches 校验已收口 attempt 是否和本次 settlement 参数一致。
 func ensureSettlementAttemptMatches(ctx context.Context, queries *sqlc.Queries, params ChatSettlementParams) error {
+	_, attemptFinalStatus := chatSettlementFinalStatuses(params)
 	attempts, err := queries.ListRequestAttemptsByRequest(ctx, params.RequestRecord.ID)
 	if err != nil {
 		return failure.Wrap(
@@ -1596,8 +1664,13 @@ func ensureSettlementAttemptMatches(ctx context.Context, queries *sqlc.Queries, 
 			attempt.ChannelID != params.FinalChannelID {
 			return ChatSettlementIdempotencyConflict("attempt route mismatch")
 		}
-		if attempt.Status != string(requestlog.AttemptStatusSucceeded) {
+		if attempt.Status != string(attemptFinalStatus) {
 			return ChatSettlementIdempotencyConflict("attempt status mismatch")
+		}
+		if !settlementTextMatches(attempt.ErrorCode, params.ErrorCode) ||
+			!settlementTextMatches(attempt.ErrorMessage, params.ErrorMessage) ||
+			!settlementTextMatches(attempt.InternalErrorDetail, params.InternalErrorDetail) {
+			return ChatSettlementIdempotencyConflict("attempt error facts mismatch")
 		}
 		if attempt.AdapterKey != params.AttemptRecord.AdapterKey ||
 			attempt.UpstreamModel != params.AttemptRecord.UpstreamModel ||
@@ -1620,7 +1693,7 @@ func ensureSettlementAttemptMatches(ctx context.Context, queries *sqlc.Queries, 
 		if !optionalTextMatches(attempt.UpstreamRequestID, UpstreamRequestIDPtr(params.Facts.Metadata.RequestID)) {
 			return ChatSettlementIdempotencyConflict("attempt upstream request id mismatch")
 		}
-		if !attempt.FinalUsageReceived ||
+		if attempt.FinalUsageReceived != !params.Facts.UsageSource.IsPartialEstimate() ||
 			!requiredTextMatches(attempt.UsageMappingVersion, params.Facts.UsageMappingVersion) {
 			return ChatSettlementIdempotencyConflict("attempt usage mapping mismatch")
 		}

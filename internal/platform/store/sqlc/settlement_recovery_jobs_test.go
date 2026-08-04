@@ -102,6 +102,8 @@ func settlementRecoveryJobParams(f settlementRecoveryFixture, nextRunAt time.Tim
 		ResponseProtocol:                   "openai",
 		ResponseID:                         "chatcmpl-recovery-1",
 		ResponseModelID:                    "openai/gpt-4.1",
+		RequestFinalStatus:                 "succeeded",
+		AttemptFinalStatus:                 "succeeded",
 		ModelID:                            f.modelID,
 		ProviderID:                         f.providerID,
 		ChannelID:                          f.channelID,
@@ -133,18 +135,22 @@ func settlementRecoveryJobParams(f settlementRecoveryFixture, nextRunAt time.Tim
 		PricingUnit:                        f.channelPrice.PricingUnit,
 		// DEC-026：恢复任务存的是客户售价快照（model_prices×线路倍率）；本 sqlc 持久化测试只验证存取往返，
 		// 渠道已无售价列，这里用渠道成本列作占位值喂入即可（不参与业务断言）。
-		UncachedInputPrice:      f.channelPrice.UncachedInputCost,
-		CacheReadInputPrice:     f.channelPrice.CacheReadInputCost,
-		CacheWrite5mInputPrice:  f.channelPrice.CacheWrite5mInputCost,
-		CacheWrite1hInputPrice:  f.channelPrice.CacheWrite1hInputCost,
-		CacheWrite30mInputPrice: f.channelPrice.CacheWrite30mInputCost,
-		OutputPrice:             f.channelPrice.OutputCost,
-		ReasoningOutputPrice:    f.channelPrice.ReasoningOutputCost,
-		FormulaVersion:          billing.FormulaVersionV1,
-		EstimatedAmount:         f.reservation.EstimatedAmount,
-		AuthorizedAmount:        f.reservation.AuthorizedAmount,
-		MaxAttempts:             20,
-		NextRunAt:               timestamptz(nextRunAt),
+		UncachedInputPrice:          f.channelPrice.UncachedInputCost,
+		CacheReadInputPrice:         f.channelPrice.CacheReadInputCost,
+		CacheWrite5mInputPrice:      f.channelPrice.CacheWrite5mInputCost,
+		CacheWrite1hInputPrice:      f.channelPrice.CacheWrite1hInputCost,
+		CacheWrite30mInputPrice:     f.channelPrice.CacheWrite30mInputCost,
+		OutputPrice:                 f.channelPrice.OutputCost,
+		ReasoningOutputPrice:        f.channelPrice.ReasoningOutputCost,
+		FormulaVersion:              billing.FormulaVersionV1,
+		LongContextEnabled:          true,
+		LongContextThreshold:        pgtype.Int8{Int64: 100, Valid: true},
+		LongContextInputMultiplier:  numeric(2),
+		LongContextOutputMultiplier: numeric(3),
+		EstimatedAmount:             f.reservation.EstimatedAmount,
+		AuthorizedAmount:            f.reservation.AuthorizedAmount,
+		MaxAttempts:                 20,
+		NextRunAt:                   timestamptz(nextRunAt),
 	}
 }
 
@@ -162,6 +168,10 @@ func TestSettlementRecoveryJobCreateClaimRetryAndSucceed(t *testing.T) {
 	if created.Status != "pending" || created.AttemptCount != 0 {
 		t.Fatalf("expected pending attempt_count=0, got status=%q attempt_count=%d", created.Status, created.AttemptCount)
 	}
+	if created.RequestFinalStatus != "succeeded" || created.AttemptFinalStatus != "succeeded" ||
+		!created.LongContextEnabled || !created.LongContextThreshold.Valid || created.LongContextThreshold.Int64 != 100 {
+		t.Fatalf("recovery final status or long-context facts did not round trip: %+v", created)
+	}
 
 	duplicated, err := queries.CreateSettlementRecoveryJob(ctx, params)
 	if err != nil {
@@ -176,6 +186,13 @@ func TestSettlementRecoveryJobCreateClaimRetryAndSucceed(t *testing.T) {
 	_, err = queries.CreateSettlementRecoveryJob(ctx, conflicting)
 	if !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("expected conflicting recovery facts to return no rows, got %v", err)
+	}
+
+	conflicting = params
+	conflicting.LongContextThreshold = pgtype.Int8{Int64: 101, Valid: true}
+	_, err = queries.CreateSettlementRecoveryJob(ctx, conflicting)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected conflicting long-context facts to return no rows, got %v", err)
 	}
 
 	claimed, err := queries.ClaimNextSettlementRecoveryJob(ctx, sqlc.ClaimNextSettlementRecoveryJobParams{

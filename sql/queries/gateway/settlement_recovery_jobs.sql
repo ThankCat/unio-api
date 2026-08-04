@@ -17,6 +17,11 @@ INSERT INTO settlement_recovery_jobs (
     response_protocol,
     response_id,
     response_model_id,
+    request_final_status,
+    attempt_final_status,
+    settlement_error_code,
+    settlement_error_message,
+    settlement_internal_error_detail,
     model_id,
     provider_id,
     channel_id,
@@ -60,6 +65,10 @@ INSERT INTO settlement_recovery_jobs (
     reasoning_output_price,
     formula_version,
     price_ratio,
+    long_context_enabled,
+    long_context_threshold,
+    long_context_input_multiplier,
+    long_context_output_multiplier,
     estimated_amount,
     authorized_amount,
     max_attempts,
@@ -74,6 +83,11 @@ SELECT
            sqlc.arg(response_protocol),
            sqlc.arg(response_id),
            sqlc.arg(response_model_id),
+           sqlc.arg(request_final_status),
+           sqlc.arg(attempt_final_status),
+           sqlc.arg(settlement_error_code),
+           sqlc.arg(settlement_error_message),
+           sqlc.arg(settlement_internal_error_detail),
            sqlc.arg(model_id),
            sqlc.arg(provider_id),
            sqlc.arg(channel_id),
@@ -117,6 +131,10 @@ SELECT
            sqlc.arg(reasoning_output_price),
            sqlc.arg(formula_version),
            sqlc.arg(price_ratio),
+           sqlc.arg(long_context_enabled),
+           sqlc.narg(long_context_threshold),
+           sqlc.narg(long_context_input_multiplier),
+           sqlc.narg(long_context_output_multiplier),
            sqlc.arg(estimated_amount),
            sqlc.arg(authorized_amount),
            sqlc.arg(max_attempts),
@@ -131,6 +149,11 @@ WHERE settlement_recovery_jobs.user_id = EXCLUDED.user_id
   AND settlement_recovery_jobs.response_protocol = EXCLUDED.response_protocol
   AND settlement_recovery_jobs.response_id = EXCLUDED.response_id
   AND settlement_recovery_jobs.response_model_id = EXCLUDED.response_model_id
+  AND settlement_recovery_jobs.request_final_status = EXCLUDED.request_final_status
+  AND settlement_recovery_jobs.attempt_final_status = EXCLUDED.attempt_final_status
+  AND settlement_recovery_jobs.settlement_error_code = EXCLUDED.settlement_error_code
+  AND settlement_recovery_jobs.settlement_error_message = EXCLUDED.settlement_error_message
+  AND settlement_recovery_jobs.settlement_internal_error_detail = EXCLUDED.settlement_internal_error_detail
   AND settlement_recovery_jobs.model_id = EXCLUDED.model_id
   AND settlement_recovery_jobs.provider_id = EXCLUDED.provider_id
   AND settlement_recovery_jobs.channel_id = EXCLUDED.channel_id
@@ -174,6 +197,10 @@ WHERE settlement_recovery_jobs.user_id = EXCLUDED.user_id
   AND settlement_recovery_jobs.reasoning_output_price IS NOT DISTINCT FROM EXCLUDED.reasoning_output_price
   AND settlement_recovery_jobs.formula_version = EXCLUDED.formula_version
   AND settlement_recovery_jobs.price_ratio IS NOT DISTINCT FROM EXCLUDED.price_ratio
+  AND settlement_recovery_jobs.long_context_enabled = EXCLUDED.long_context_enabled
+  AND settlement_recovery_jobs.long_context_threshold IS NOT DISTINCT FROM EXCLUDED.long_context_threshold
+  AND settlement_recovery_jobs.long_context_input_multiplier IS NOT DISTINCT FROM EXCLUDED.long_context_input_multiplier
+  AND settlement_recovery_jobs.long_context_output_multiplier IS NOT DISTINCT FROM EXCLUDED.long_context_output_multiplier
   AND settlement_recovery_jobs.estimated_amount = EXCLUDED.estimated_amount
   AND settlement_recovery_jobs.authorized_amount = EXCLUDED.authorized_amount
 RETURNING *;

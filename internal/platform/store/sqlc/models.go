@@ -616,6 +616,15 @@ type SettlementRecoveryJob struct {
 	CostBaseModelPriceID               pgtype.Int8
 	ChannelCostMultiplierID            pgtype.Int8
 	ChannelRechargeFactorID            pgtype.Int8
+	RequestFinalStatus                 string
+	AttemptFinalStatus                 string
+	SettlementErrorCode                string
+	SettlementErrorMessage             string
+	SettlementInternalErrorDetail      string
+	LongContextEnabled                 bool
+	LongContextThreshold               pgtype.Int8
+	LongContextInputMultiplier         pgtype.Numeric
+	LongContextOutputMultiplier        pgtype.Numeric
 }
 
 type UsageLineItem struct {

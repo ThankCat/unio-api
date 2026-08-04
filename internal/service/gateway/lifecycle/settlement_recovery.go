@@ -127,6 +127,7 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 	// P1-3 + DEC-027：补偿任务持久化成本来源 pin（覆盖 price_id 或 倍率三来源 id）+ 售价向量。
 	// worker 重放 settlement 时按这些不可改行确定性复算成本/售价，避免改价/改倍率竞态导致重放漂移。
 	facts := params.Facts
+	requestFinalStatus, attemptFinalStatus := chatSettlementFinalStatuses(params)
 	serverWebSearchRequests, serverWebFetchRequests := settlementRecoveryServerToolQuantities(facts.Usage.ServerToolUsage)
 	job, err := s.queries.CreateSettlementRecoveryJob(ctx, sqlc.CreateSettlementRecoveryJobParams{
 		UserID:                             params.RequestRecord.UserID,
@@ -136,6 +137,11 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 		ResponseProtocol:                   string(params.ResponseProtocol),
 		ResponseID:                         params.ResponseID,
 		ResponseModelID:                    params.ResponseModelID,
+		RequestFinalStatus:                 string(requestFinalStatus),
+		AttemptFinalStatus:                 string(attemptFinalStatus),
+		SettlementErrorCode:                params.ErrorCode,
+		SettlementErrorMessage:             params.ErrorMessage,
+		SettlementInternalErrorDetail:      params.InternalErrorDetail,
 		ModelID:                            params.ModelDBID,
 		ProviderID:                         params.FinalProviderID,
 		ChannelID:                          params.FinalChannelID,
@@ -179,6 +185,10 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 		ReasoningOutputPrice:               params.SalePrice.ReasoningOutputPrice,
 		FormulaVersion:                     billing.FormulaVersionV1,
 		PriceRatio:                         params.PriceRatio,
+		LongContextEnabled:                 params.LongContextPolicy.Enabled,
+		LongContextThreshold:               settlementRecoveryLongContextThreshold(params.LongContextPolicy),
+		LongContextInputMultiplier:         params.LongContextPolicy.InputMultiplier,
+		LongContextOutputMultiplier:        params.LongContextPolicy.OutputMultiplier,
 		EstimatedAmount:                    params.Authorization.EstimatedAmount,
 		AuthorizedAmount:                   params.Authorization.AuthorizedAmount,
 		MaxAttempts:                        s.maxAttempts,
@@ -200,6 +210,13 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 	}
 
 	return job, nil
+}
+
+func settlementRecoveryLongContextThreshold(policy billing.LongContextPolicy) pgtype.Int8 {
+	if policy.Threshold <= 0 {
+		return pgtype.Int8{Valid: false}
+	}
+	return pgtype.Int8{Int64: policy.Threshold, Valid: true}
 }
 
 func settlementRecoveryServerToolQuantities(items []usage.MeteredItem) (webSearchRequests int64, webFetchRequests int64) {
@@ -297,13 +314,6 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 	requestRecord := chatSettlementRecoveryRequestRecordFromSQLC(requestRow)
 	attemptRecord := chatSettlementRecoveryAttemptRecordFromSQLC(attemptRow)
 
-	// 长上下文策略绑在 model_prices 窗口上且创建后不可改金额/倍率；倍率路径 CostBaseModelPriceID 即该行。
-	// 覆盖路径下该 pin 为 0，重放时策略为空（不放大）——与「无基准价 pin 可回溯」一致。
-	longContextPolicy, err := s.longContextPolicyFromRecoveryJob(ctx, job)
-	if err != nil {
-		return ChatSettlementParams{}, err
-	}
-
 	return ChatSettlementParams{
 		RequestRecord: requestRecord,
 		AttemptRecord: attemptRecord,
@@ -322,6 +332,11 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 		ResponseID:          job.ResponseID,
 		ResponseModelID:     job.ResponseModelID,
 		GatewayFirstTokenAt: attemptRecord.GatewayFirstTokenAt,
+		RequestFinalStatus:  requestlog.RequestStatus(job.RequestFinalStatus),
+		AttemptFinalStatus:  requestlog.AttemptStatus(job.AttemptFinalStatus),
+		ErrorCode:           job.SettlementErrorCode,
+		ErrorMessage:        job.SettlementErrorMessage,
+		InternalErrorDetail: job.SettlementInternalErrorDetail,
 		ModelDBID:           job.ModelID,
 		FinalProviderID:     job.ProviderID,
 		FinalChannelID:      job.ChannelID,
@@ -343,37 +358,14 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 			ReasoningOutputPrice:    job.ReasoningOutputPrice,
 			FormulaVersion:          job.FormulaVersion,
 		},
-		PriceRatio:        job.PriceRatio,
-		LongContextPolicy: longContextPolicy,
-		Facts:             chatSettlementRecoveryFactsFromJob(job),
-	}, nil
-}
-
-func (s *ChatSettlementRecoveryService) longContextPolicyFromRecoveryJob(ctx context.Context, job sqlc.SettlementRecoveryJob) (billing.LongContextPolicy, error) {
-	modelPriceID := int8OrZero(job.CostBaseModelPriceID)
-	if modelPriceID <= 0 {
-		return billing.LongContextPolicy{}, nil
-	}
-	row, err := s.queries.GetModelPrice(ctx, modelPriceID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return billing.LongContextPolicy{}, nil
-		}
-		return billing.LongContextPolicy{}, failure.Wrap(
-			failure.CodeGatewayChatSettlementFailed,
-			err,
-			failure.WithMessage("load model price for long-context policy recovery"),
-		)
-	}
-	threshold := int64(0)
-	if row.LongContextThreshold.Valid {
-		threshold = row.LongContextThreshold.Int64
-	}
-	return billing.LongContextPolicy{
-		Enabled:          row.LongContextEnabled,
-		Threshold:        threshold,
-		InputMultiplier:  row.LongContextInputMultiplier,
-		OutputMultiplier: row.LongContextOutputMultiplier,
+		PriceRatio: job.PriceRatio,
+		LongContextPolicy: billing.LongContextPolicy{
+			Enabled:          job.LongContextEnabled,
+			Threshold:        int8OrZero(job.LongContextThreshold),
+			InputMultiplier:  job.LongContextInputMultiplier,
+			OutputMultiplier: job.LongContextOutputMultiplier,
+		},
+		Facts: chatSettlementRecoveryFactsFromJob(job),
 	}, nil
 }
 
