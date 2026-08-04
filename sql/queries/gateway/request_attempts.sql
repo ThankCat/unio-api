@@ -99,6 +99,15 @@ RETURNING
     error_scoring_failure,
     fault_party;
 
+-- name: HasRunningRequestAttempt :one
+-- HasRunningRequestAttempt 判断请求是否仍有活跃 attempt；孤儿清扫在 request 行锁内使用该事实保护合法长流。
+SELECT EXISTS (
+    SELECT 1
+    FROM request_attempts
+    WHERE request_record_id = sqlc.arg(request_record_id)
+      AND status = 'running'
+)::boolean;
+
 -- name: MarkRequestAttemptGatewayFirstToken :one
 -- MarkRequestAttemptGatewayFirstToken 记录一次 attempt 的首次有效生成 Token 客户交付时间；重复调用保留第一次时间。
 WITH updated AS (

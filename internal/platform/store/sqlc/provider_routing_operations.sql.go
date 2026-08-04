@@ -28,7 +28,7 @@ type CreateProviderRoutingOperationParams struct {
 	PayloadHash string
 }
 
-// provider_routing_operations 的可恢复围栏状态机查询（P4 §4.3）。
+// provider_routing_operations 的可恢复围栏状态机查询。
 // 状态机：preparing -> prepared -> db_committed -> committed；仅 preparing|prepared -> aborted。
 // 以 preparing 开一条 Provider 围栏操作（Redis Prepare 前）。
 func (q *Queries) CreateProviderRoutingOperation(ctx context.Context, arg CreateProviderRoutingOperationParams) (ProviderRoutingOperation, error) {

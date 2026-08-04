@@ -311,7 +311,7 @@ func TestRoutingTraceIncludesFullPoolExclusionReasons(t *testing.T) {
 		scores[0].CircuitBreakerRevision != 6 ||
 		scores[0].ErrorSampleCount != 20 || scores[0].TTFTSampleCount != 18 ||
 		scores[0].CostRatio != 0.4 || scores[0].BreakerStoreAdmission != "normal" {
-		t.Fatalf("P4 runtime facts missing from trace: %+v", scores[0])
+		t.Fatalf("runtime facts missing from trace: %+v", scores[0])
 	}
 	// 五项评分与权重必须完整进入 trace（§7.8 展示要求）。
 	if scores[0].CostScore != 60 || scores[0].ConcurrencyScore != 50 || scores[0].ErrorScore != 75 ||

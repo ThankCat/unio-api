@@ -1,6 +1,7 @@
 -- name: ListOrphanAuthorizedReservations :many
 -- ListOrphanAuthorizedReservations 扫描「孤儿」预授权：进程崩溃后请求永久停留 running、冻结余额永不释放。
--- 仅命中 status='authorized' 且超过阈值、且其请求仍 running、且没有任何 settlement 补偿任务的预授权，
+-- 仅命中 status='authorized' 且超过阈值、请求仍 running、没有 running attempt、且没有任何 settlement
+-- 补偿任务的预授权。running attempt 可能是仍在正常输出的长流，不能仅按 reservation 年龄判为孤儿。
 -- 与 settlement_recovery worker 严格互补（有补偿任务的预授权由该 worker 负责 capture/finalize，绝不在此释放，
 -- 避免上游已成功却被误释放导致白嫖）。走部分索引 idx_ledger_reservations_authorized_created_at。
 SELECT
@@ -25,6 +26,11 @@ JOIN request_records r ON r.id = lr.request_record_id
 WHERE lr.status = 'authorized'
   AND lr.created_at < sqlc.arg(created_before)
   AND r.status = 'running'
+  AND NOT EXISTS (
+        SELECT 1 FROM request_attempts a
+        WHERE a.request_record_id = lr.request_record_id
+          AND a.status = 'running'
+    )
   AND NOT EXISTS (
         SELECT 1 FROM settlement_recovery_jobs j
         WHERE j.request_record_id = lr.request_record_id

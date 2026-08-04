@@ -12,7 +12,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
-// P4 §2.10/§8.3：主观「健康分桶」(healthy/degraded/unhealthy) 已删除；运营只看客观事实
+// 主观「健康分桶」(healthy/degraded/unhealthy) 已删除；运营只看客观事实
 // （成功率、失败次数、流式 TTFT、总耗时、熔断状态、容量、权重）。此处不再提供 HealthBucket。
 
 // TsNarg 把可选时间过滤值转成 pgtype.Timestamptz：零值表示不过滤（SQL NULL）。

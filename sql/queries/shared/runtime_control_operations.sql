@@ -1,4 +1,4 @@
--- runtime_control_operations 的可恢复发布状态机查询（P4 §4.5、§5.3.16）。
+-- runtime_control_operations 的可恢复发布状态机查询。
 -- Admin 与 Worker 共用同一套生成的 sqlc 查询，不各写一套状态机。
 -- 普通状态机：preparing -> prepared -> db_committed -> committed；普通 control 允许 preparing|prepared -> aborted；
 -- 非 bootstrap epoch 使用 db_committed -> awaiting_release -> committed，任何阶段不允许 Abort。

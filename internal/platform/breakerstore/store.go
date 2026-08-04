@@ -12,7 +12,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
-// ErrStoreUnavailable 表示 Redis/BreakerStore 基础设施故障；调用方必须 fail-closed（P4-D08）：
+// ErrStoreUnavailable 表示 Redis/BreakerStore 基础设施故障；调用方必须 fail-closed：
 // 终止整次 fallback、不调用上游、返回安全 503。
 var ErrStoreUnavailable = errors.New("breakerstore: infrastructure unavailable")
 
@@ -25,7 +25,7 @@ var (
 	ErrRuntimeSyncRequired = errors.New("breakerstore: runtime synchronization required")
 )
 
-// Store 是 P4 Redis 全局熔断的运行时实现。协议无关：三个生成执行面共用。
+// Store 是 Redis 全局熔断的运行时实现。协议无关：三个生成执行面共用。
 type Store struct {
 	client   redis.Cmdable
 	keys     keyBuilder
@@ -152,7 +152,7 @@ func NewStore(client redis.Cmdable, keyNamespace string, observers ...OperationO
 	}
 }
 
-// VerifySingleNodeDeployment 校验当前 Redis 不是 Cluster（P4-D19：只支持单 Redis / 主从 / Sentinel）。
+// VerifySingleNodeDeployment 校验当前 Redis 不是 Cluster（只支持单 Redis / 主从 / Sentinel）。
 // 多 key 原子 Lua 不能拆步降级；检测到 Cluster 时拒绝就绪。启动时调用；失败即 readiness=false。
 func (s *Store) VerifySingleNodeDeployment(ctx context.Context) (err error) {
 	done := s.beginOperation(ctx, operationVerifyDeployment)
@@ -165,7 +165,7 @@ func (s *Store) VerifySingleNodeDeployment(ctx context.Context) (err error) {
 	if containsSeg(info, "cluster_enabled:1") {
 		return failure.New(
 			failure.CodeConfigUnsupported,
-			failure.WithMessage("P4 does not support Redis Cluster; use single Redis, primary/replica or Sentinel (P4-D19)"),
+			failure.WithMessage("Redis Cluster is not supported; use single Redis, primary/replica or Sentinel"),
 		)
 	}
 	identity, err := s.readRedisServerIdentity(ctx)
@@ -177,7 +177,7 @@ func (s *Store) VerifySingleNodeDeployment(ctx context.Context) (err error) {
 	if parseErr != nil || major < 7 {
 		return failure.New(
 			failure.CodeConfigUnsupported,
-			failure.WithMessage("P4 requires Redis 7 or newer for atomic server identity admission checks"),
+			failure.WithMessage("Redis 7 or newer is required for atomic server identity admission checks"),
 		)
 	}
 	return nil

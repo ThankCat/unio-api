@@ -37,6 +37,9 @@ func createSettlementRecoveryFixture(t *testing.T, ctx context.Context, tx pgx.T
 	channelPrice := createChannelPriceForTest(t, ctx, queries, channelID, modelID, time.Now().UTC())
 
 	request := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("settlement-recovery-request-%d", suffix))
+	if _, err := queries.MarkRequestRunning(ctx, request.ID); err != nil {
+		t.Fatalf("mark settlement recovery request running: %v", err)
+	}
 	attempt, err := queries.CreateRequestAttempt(ctx, withRequestAttemptRuntimeIdentity(t, ctx, tx, channelID, sqlc.CreateRequestAttemptParams{
 		RequestRecordID:       request.ID,
 		AttemptIndex:          0,
@@ -242,11 +245,6 @@ func TestGetDeadSettlementRecoveryJobWithRunningRequest(t *testing.T) {
 	defer cleanup()
 
 	fixture := createSettlementRecoveryFixture(t, ctx, tx, queries)
-
-	// 收口查询只命中 r.status='running' 的请求；fixture 默认 pending，先推进到 running。
-	if _, err := queries.MarkRequestRunning(ctx, fixture.request.ID); err != nil {
-		t.Fatalf("mark request running: %v", err)
-	}
 
 	created, err := queries.CreateSettlementRecoveryJob(ctx, settlementRecoveryJobParams(fixture, time.Now().Add(-time.Second)))
 	if err != nil {

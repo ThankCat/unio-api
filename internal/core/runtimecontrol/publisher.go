@@ -1,4 +1,4 @@
-// Package runtimecontrol 是 P4 可恢复发布的应用层编排（§4.5、§5.3.16）：把 PostgreSQL
+// Package runtimecontrol 是可恢复运行控制发布的应用层编排：把 PostgreSQL
 // runtime_control_operations 状态机（preparing→prepared→db_committed→committed）与 Redis BreakerStore
 // 的 Prepare/Commit/Abort 串成一次原子可恢复的控制发布。Admin 与 Worker 共用同一 Publisher/Reconciler。
 //

@@ -7,7 +7,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
-// P4 §4.6：ProviderOrigin BaseURL 是 adapter root，不包含由标准 adapter 固定追加的 operation 路径。
+// ProviderOrigin BaseURL 是 adapter root，不包含由标准 adapter 固定追加的 operation 路径。
 // 统一用结构化 URL API 拼接，不再散落 strings.TrimRight(base, "/") + path。
 //
 // 标准 operation 路径：

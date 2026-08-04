@@ -281,7 +281,7 @@ func jsonValueType(raw json.RawMessage) string {
 	}
 }
 
-// SettingRecord 是 app_settings 的 PostgreSQL 管理事实；关键 P4 设置不得从普通 Redis cache 推断 revision。
+// SettingRecord 是 app_settings 的 PostgreSQL 管理事实；关键运行时设置不得从普通 Redis cache 推断 revision。
 type SettingRecord struct {
 	Key         string
 	Value       json.RawMessage
@@ -306,7 +306,7 @@ func (s *SettingsStore) Record(ctx context.Context, key string) (SettingRecord, 
 }
 
 // PublishCache 在 durable control 已确认 committed 后刷新普通 settings 镜像与本地缓存。
-// 该缓存只服务旧的普通设置读取面，不是五个 P4 关键设置的执行权威。
+// 该缓存只服务旧的普通设置读取面，不是五个关键运行时设置的执行权威。
 func (s *SettingsStore) PublishCache(ctx context.Context, key string, value json.RawMessage) {
 	s.writeRedis(ctx, key, value)
 	s.writeLocal(key, value)

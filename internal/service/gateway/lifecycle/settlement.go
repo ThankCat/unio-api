@@ -994,11 +994,12 @@ func (s *ChatSettlementService) releaseDeadSettlementReservation(ctx context.Con
 // FinalizeOrphanReservation 收口一条「进程崩溃遗留的孤儿预授权」：请求永久停留 running、冻结余额永不释放。
 //
 // 这类残留发生在 gateway 在 PreAuthorize 之后、settlement/补偿任务建立之前崩溃：既没有正常结算路径，
-// 也没有 settlement_recovery_job 兜底（调用方查询已用 NOT EXISTS 排除有补偿任务者，与该 worker 严格互补）。
+// 也没有 settlement_recovery_job 兜底（扫描查询和本事务都会排除有补偿任务或 running attempt 的请求）。
 // 本方法在单事务内：
 //  1. 锁请求记录，仅当其仍为 running 才继续（幂等闸门：已被其他路径收口则直接返回）；
-//  2. 释放冻结余额（用户不扣费），并记一条 risk_exposure 异常作为「可能已产生上游成本」的上界敞口，便于观测追查；
-//  3. 把请求原子推进到 failed。
+//  2. 重新确认没有 recovery job 和 running attempt；
+//  3. 释放冻结余额（用户不扣费），并记一条 risk_exposure 异常作为「可能已产生上游成本」的上界敞口；
+//  4. 把请求原子推进到 failed。
 //
 // 以「请求仍为 running」为闸门，崩溃后下个 tick 安全重放；多 worker 并发由请求记录行锁串行化。
 func (s *ChatSettlementService) FinalizeOrphanReservation(ctx context.Context, reservation sqlc.LedgerReservation) error {
@@ -1027,6 +1028,32 @@ func (s *ChatSettlementService) FinalizeOrphanReservation(ctx context.Context, r
 
 	// 幂等闸门：只有仍停留在 running 的请求才需要收口；其余终态说明已被其他路径处理。
 	if requestlog.RequestStatus(lockedRequest.Status) != requestlog.RequestStatusRunning {
+		return nil
+	}
+
+	// 扫描候选到事务收口之间可能已经建立 recovery job。创建任务也先锁同一条 request，因而这里在锁内
+	// 重查后，不会出现“检查无任务后释放，任务再迟到插入”的窗口。
+	if _, err := txQueries.GetSettlementRecoveryJobByRequest(ctx, reservation.RequestRecordID); err == nil {
+		return nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return failure.Wrap(
+			failure.CodeGatewayRequestOrphanReclaimed,
+			err,
+			failure.WithMessage("recheck settlement recovery job for orphan reservation finalize"),
+		)
+	}
+
+	// running attempt 可能是已经持续超过清扫阈值的正常长流。缺少跨进程可靠的死亡证明时宁可保留冻结，
+	// 也不能按 reservation 年龄释放客户仍在使用的请求。
+	hasRunningAttempt, err := txQueries.HasRunningRequestAttempt(ctx, reservation.RequestRecordID)
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayRequestOrphanReclaimed,
+			err,
+			failure.WithMessage("recheck running attempt for orphan reservation finalize"),
+		)
+	}
+	if hasRunningAttempt {
 		return nil
 	}
 

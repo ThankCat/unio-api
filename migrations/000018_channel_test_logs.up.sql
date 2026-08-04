@@ -28,7 +28,7 @@ CREATE TABLE public.channel_test_logs (
     credential_valid_after boolean NOT NULL,
     message text,
     upstream_error text,
-    -- [P4 §4.4] 检测冻结的三类 expected revision 与是否真的应用了状态跳变；stale 结果只留历史日志。
+    -- 检测冻结的三类 expected revision 与是否真的应用了状态跳变；stale 结果只留历史日志。
     tested_origin_revision bigint,
     tested_status_revision bigint,
     tested_config_revision bigint,

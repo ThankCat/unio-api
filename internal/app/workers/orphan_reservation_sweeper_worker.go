@@ -27,10 +27,10 @@ type OrphanReservationFinalizer interface {
 }
 
 // OrphanReservationSweeperWorker 周期扫描并收口进程崩溃遗留的「孤儿」预授权（status=authorized、请求永久 running、
-// 无 settlement 补偿任务）：释放冻结余额、记 risk_exposure 上界敞口、把请求推进到 failed。
+// 无 running attempt、无 settlement 补偿任务）：释放冻结余额、记 risk_exposure 上界敞口、把请求推进到 failed。
 //
-// 与 settlement_recovery worker 严格互补：扫描查询用 NOT EXISTS 排除有补偿任务的预授权，绝不在此释放
-// 「上游可能已成功、等待 capture」的冻结，避免误释放导致白嫖。
+// 与 settlement_recovery worker 严格互补：扫描查询排除 running attempt 和有补偿任务的预授权，单条收口
+// 在 request 行锁内再次确认两项事实，绝不释放仍在正常长流或「上游可能已成功、等待 capture」的冻结。
 type OrphanReservationSweeperWorker struct {
 	store        OrphanReservationStore
 	finalizer    OrphanReservationFinalizer

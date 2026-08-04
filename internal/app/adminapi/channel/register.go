@@ -13,7 +13,7 @@ type Deps struct {
 	PriceService          ChannelPriceService
 	CostMultiplierService ChannelCostMultiplierService
 	RechargeFactorService ChannelRechargeFactorService
-	// Breaker 可选：P4 Redis 全局 breaker 只读运行态与复位（§8.4/§8.5）；nil 时 ops/runtime 与复位返回 503。
+	// Breaker 可选：Redis 全局 breaker 只读运行态与复位；nil 时 ops/runtime 与复位返回 503。
 	Breaker BreakerRuntime
 }
 
@@ -30,7 +30,7 @@ func Register(r chi.Router, d Deps) {
 		r.Get("/channels/{id}/ops/routes", coh.routes)
 	}
 
-	// P4 §8.5：Channel breaker 只读运行态 + 显式复位（Redis 全局 breaker）。静态 /ops 段置于 /{id} 之前。
+	// Channel breaker 只读运行态 + 显式复位（Redis 全局 breaker）。静态 /ops 段置于 /{id} 之前。
 	{
 		cbh := &channelBreakerHandler{service: d.Service, breaker: d.Breaker}
 		r.Get("/channels/{id}/ops/runtime", cbh.runtime)

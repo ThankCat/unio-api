@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// 本文件登记 gateway 热路径运行时配置。P4 的 breaker、rate/concurrency defaults 与
+// 本文件登记 gateway 热路径运行时配置。breaker、rate/concurrency defaults 与
 // routing balance 由 Redis committed runtime control 驱动；其余配置继续通过 settings applier
 // 热更新。429 cooldown 是 Redis 全局事实，不属于已删除的 timeout/5xx 进程内失败软冷却。
 //
@@ -49,7 +49,7 @@ func strictUnmarshal(raw []byte, v any) error {
 
 // ---- 熔断器 ----
 
-// CircuitBreakerSettings 是 P4 Origin/Channel 全局熔断与 permit 生命周期配置。
+// CircuitBreakerSettings 是 Provider/Channel 全局熔断与 permit 生命周期配置。
 // OpenDuration 仅供 Phase E 删除前的旧进程内 breaker 兼容使用，JSON 不再包含该字段。
 type CircuitBreakerSettings struct {
 	Enabled                           bool
@@ -71,7 +71,7 @@ type CircuitBreakerSettings struct {
 	OpenDuration time.Duration
 }
 
-// DefaultCircuitBreakerSettings 返回 P4 §4.8 的已决议默认值。
+// DefaultCircuitBreakerSettings 返回全局熔断与 permit 生命周期的默认值。
 func DefaultCircuitBreakerSettings() CircuitBreakerSettings {
 	return CircuitBreakerSettings{
 		Enabled:                           true,

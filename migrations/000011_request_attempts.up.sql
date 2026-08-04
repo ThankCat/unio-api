@@ -45,17 +45,17 @@ CREATE TABLE public.request_attempts (
     started_at timestamp with time zone NOT NULL,
     completed_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    -- [P4 §4.7] 上游调用边界时间事实（真实 transport 口径，与客户首帧 gateway_first_token_at 分离）。
+    -- 上游调用边界时间事实（真实 transport 口径，与客户首帧 gateway_first_token_at 分离）。
     upstream_started_at timestamp with time zone,
     upstream_first_token_at timestamp with time zone,
     upstream_completed_at timestamp with time zone,
-    -- [P4 §4.7] attempt 创建时冻结的不可变身份/版本快照；真实 attempt 必须完整记录。
+    -- attempt 创建时冻结的不可变身份/版本快照；真实 attempt 必须完整记录。
     provider_origin_revision bigint NOT NULL,
     provider_status_revision bigint NOT NULL,
     channel_config_revision bigint NOT NULL,
     routing_candidate_index integer NOT NULL,
     upstream_endpoint text NOT NULL,
-    -- [P4 §4.7] Finish 终态收口时写入的 breaker applied/stale disposition。
+    -- Finish 终态收口时写入的 breaker applied/stale disposition。
     breaker_provider_disposition text,
     breaker_channel_disposition text,
     -- 记录该 attempt 是否进入路由评分的 30 分钟样本窗口。--
@@ -80,7 +80,7 @@ END) STORED,
     CONSTRAINT request_attempts_usage_mapping_version_check CHECK (((usage_mapping_version IS NULL) OR (usage_mapping_version <> ''::text))),
     CONSTRAINT request_attempts_upstream_timeout_phase_check CHECK (((upstream_timeout_phase IS NULL) OR (upstream_timeout_phase = ANY (ARRAY['response_header'::text, 'first_token'::text, 'stream_idle'::text, 'response_body'::text])))),
     CONSTRAINT request_attempts_error_sample_failure_check CHECK ((NOT error_scoring_failure OR error_scoring_sample)),
-    -- [P4 §4.7] 上游时间事实拆开约束：first/completed 非空则 start 非空且有序；first、completed 均非空才要求 first<=completed。
+    -- 上游时间事实拆开约束：first/completed 非空则 start 非空且有序；first、completed 均非空才要求 first<=completed。
     CONSTRAINT ck_request_attempts_upstream_first_after_start CHECK (((upstream_first_token_at IS NULL) OR ((upstream_started_at IS NOT NULL) AND (upstream_started_at <= upstream_first_token_at)))),
     CONSTRAINT ck_request_attempts_upstream_completed_after_start CHECK (((upstream_completed_at IS NULL) OR ((upstream_started_at IS NOT NULL) AND (upstream_started_at <= upstream_completed_at)))),
     CONSTRAINT ck_request_attempts_upstream_first_before_completed CHECK (((upstream_first_token_at IS NULL) OR (upstream_completed_at IS NULL) OR (upstream_first_token_at <= upstream_completed_at))),

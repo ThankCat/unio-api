@@ -164,7 +164,7 @@ func TestCircuitBreakerSettingsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestCircuitBreakerSettingsDefaultMatchesP4Decision(t *testing.T) {
+func TestCircuitBreakerSettingsDefaultMatchesRuntimeContract(t *testing.T) {
 	got := DefaultCircuitBreakerSettings()
 	if !got.Enabled || got.Window != 30*time.Second || got.MinRequests != 20 || got.FailureRatio != 0.5 {
 		t.Fatalf("breaker defaults mismatch: %+v", got)

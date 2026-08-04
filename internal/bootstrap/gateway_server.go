@@ -108,7 +108,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	metricsRecorder := metrics.New()
 	runtimeTelemetry := newRuntimeControlTelemetry(metricsRecorder, deps.Logger)
 
-	// P4-D19 / §5.5：Redis 全局 breaker 是上游准入的必需基础设施；启动期校验部署形态与可达性。
+	// Redis 全局 breaker 是上游准入的必需基础设施；启动期校验部署形态与可达性。
 	// 检测到 Redis Cluster 时拒绝启动（多 key 原子 Lua 不能拆步降级）；Redis 不可达时启动失败（fail-closed）。
 	var requestAdmissionManager *requestadmission.Manager
 	var attemptPermitManager *lifecycle.AttemptPermitManager

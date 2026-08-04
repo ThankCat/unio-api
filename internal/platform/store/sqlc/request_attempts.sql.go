@@ -218,6 +218,23 @@ func (q *Queries) CreateRequestAttempt(ctx context.Context, arg CreateRequestAtt
 	return i, err
 }
 
+const hasRunningRequestAttempt = `-- name: HasRunningRequestAttempt :one
+SELECT EXISTS (
+    SELECT 1
+    FROM request_attempts
+    WHERE request_record_id = $1
+      AND status = 'running'
+)::boolean
+`
+
+// HasRunningRequestAttempt 判断请求是否仍有活跃 attempt；孤儿清扫在 request 行锁内使用该事实保护合法长流。
+func (q *Queries) HasRunningRequestAttempt(ctx context.Context, requestRecordID int64) (bool, error) {
+	row := q.db.QueryRow(ctx, hasRunningRequestAttempt, requestRecordID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const listRequestAttemptsByRequest = `-- name: ListRequestAttemptsByRequest :many
 SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_protocol, upstream_response_id, upstream_response_model, upstream_finish_reason, finish_class, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, upstream_timeout_phase, gateway_first_token_at, final_usage_received, usage_mapping_version, started_at, completed_at, created_at, upstream_started_at, upstream_first_token_at, upstream_completed_at, provider_origin_revision, provider_status_revision, channel_config_revision, routing_candidate_index, upstream_endpoint, breaker_provider_disposition, breaker_channel_disposition, ttft_scoring_sample, error_scoring_sample, error_scoring_failure, fault_party
 FROM request_attempts

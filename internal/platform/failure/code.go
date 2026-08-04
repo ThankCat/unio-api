@@ -357,10 +357,10 @@ const (
 	// CodeGatewayRequestStrandedReclaimed 表示请求已进入终态但冻结仍停留在 authorized 的搁浅预授权被清扫 worker 释放。
 	CodeGatewayRequestStrandedReclaimed Code = "gateway_request_stranded_reclaimed"
 
-	// CodeGatewayBreakerPermitConflict 表示 AttemptPermit 幂等键冲突（同 permit_id 不同准入指纹，P4 §5.3）。
+	// CodeGatewayBreakerPermitConflict 表示 AttemptPermit 幂等键冲突（同 permit_id 不同准入指纹）。
 	CodeGatewayBreakerPermitConflict Code = "gateway_breaker_permit_conflict"
 
-	// CodeGatewayBreakerStoreUnavailable 表示 Redis/BreakerStore 基础设施故障，按 P4-D08 fail-closed。
+	// CodeGatewayBreakerStoreUnavailable 表示 Redis/BreakerStore 基础设施故障，按 fail-closed 处理。
 	CodeGatewayBreakerStoreUnavailable Code = "gateway_breaker_store_unavailable"
 
 	// CodeGatewayRuntimeSyncRequired 表示 PostgreSQL 运行态必需事实缺失或非法，需要先完成 control 对账。

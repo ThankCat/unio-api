@@ -41,7 +41,7 @@ type GetAppSettingRecordRow struct {
 	Revision    int64
 }
 
-// GetAppSettingRecord 读取设置业务行及其单调 revision，供 P4 runtime-control 发布和同步状态比较。
+// GetAppSettingRecord 读取设置业务行及其单调 revision，供 runtime-control 发布和同步状态比较。
 func (q *Queries) GetAppSettingRecord(ctx context.Context, key string) (GetAppSettingRecordRow, error) {
 	row := q.db.QueryRow(ctx, getAppSettingRecord, key)
 	var i GetAppSettingRecordRow

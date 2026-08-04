@@ -1,4 +1,4 @@
-// Package runtimefacts 从 PostgreSQL 强一致读取 Gateway 新准入所需的 P4 运行态版本事实。
+// Package runtimefacts 从 PostgreSQL 强一致读取 Gateway 新准入所需的运行态版本事实。
 package runtimefacts
 
 import (

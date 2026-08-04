@@ -156,6 +156,7 @@ func (d *chatSettlementDBDeps) cleanup() {
 	ctx := context.Background()
 
 	if d.requestRecord.ID != 0 {
+		_, _ = d.pool.Exec(ctx, `DELETE FROM settlement_recovery_jobs WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_billing_exceptions WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_reservations WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_entries WHERE request_record_id = $1`, d.requestRecord.ID)

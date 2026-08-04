@@ -12,7 +12,7 @@ import (
 // admin 后端每请求经 store 现读,并使用本地 3s 缓存,不走 applier。
 // 渠道检测 worker 同样现读本域(可无 Redis,退化为 DB + 本地缓存)。
 
-// P4 §2.10/§8.3：admin_backend.channel_health_thresholds 主观健康分桶阈值已删除；
+// admin_backend.channel_health_thresholds 主观健康分桶阈值已删除；
 // 运营只看客观事实（成功率、失败次数、流式 TTFT、总耗时、熔断、容量、权重），不再按阈值分桶。
 
 // AdminBackendChannelTestKey 是渠道检测/自动巡检的聚合配置(开关、间隔、探测超时、日志保留)。

@@ -7,7 +7,7 @@ FROM app_settings
 WHERE key = $1;
 
 -- name: GetAppSettingRecord :one
--- GetAppSettingRecord 读取设置业务行及其单调 revision，供 P4 runtime-control 发布和同步状态比较。
+-- GetAppSettingRecord 读取设置业务行及其单调 revision，供 runtime-control 发布和同步状态比较。
 SELECT key, value, description, updated_at, revision
 FROM app_settings
 WHERE key = $1;

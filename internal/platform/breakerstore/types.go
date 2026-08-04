@@ -1,13 +1,13 @@
-// Package breakerstore 实现 P4 Redis 全局熔断（ROUTING_P4_GLOBAL_BREAKER_PROVIDER_PLAN §2.3-§2.6、§5）。
+// Package breakerstore 实现 Redis 全局熔断与原子准入控制。
 //
 // 它把 Provider 与 Channel 熔断事实统一到 Redis：进程内不再保留熔断状态，多 Gateway 共享同一事实。
 // 状态迁移由 Redis Lua 原子执行，使用 Redis TIME，不信任 Gateway 本机时钟；先校验后写、全有或
-// 全无、first-terminal-wins。Redis/BreakerStore 基础设施故障统一 fail-closed（P4-D08）。
+// 全无、first-terminal-wins。Redis/BreakerStore 基础设施故障统一 fail-closed。
 //
-// 本包当前实现 P4 熔断的核心状态机与 AttemptPermit 生命周期（Provider/Channel 双触发熔断、
+// 本包实现熔断核心状态机与 AttemptPermit 生命周期（Provider/Channel 双触发熔断、
 // half-open 双探测恢复、退避、仅流式 TTFT EWMA、Channel 在途并发租约）。入口 request-admission、
 // admission-control 四维限额、Provider origin/status 围栏、runtime-control 发布与完整性 epoch
-// 恢复属于同一 BreakerStore 契约的其余能力族，按计划 §5.3 分阶段接入。
+// 恢复属于同一 BreakerStore 契约的其余能力族。
 package breakerstore
 
 // Scope 是熔断作用域：Provider 或 Channel。二者共用同一状态机框架（§2.5）。
@@ -155,7 +155,7 @@ const (
 	ReasonBreakerStoreUnavailable DeniedReason = "breaker_store_unavailable"
 )
 
-// Config 是 P4 gateway.circuit_breaker 的运行参数（§4.8 目标形状）。
+// Config 是 gateway.circuit_breaker 的运行参数。
 type Config struct {
 	Enabled bool
 

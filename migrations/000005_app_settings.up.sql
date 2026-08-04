@@ -10,7 +10,7 @@ CREATE TABLE public.app_settings (
     -- updated_at: 最近一次写入时间。--
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     description text DEFAULT ''::text NOT NULL,
-    -- [P4 §4.8] 每行单调 revision：仅在该设置语义值真变化时递增；关键设置经 runtime_control_operations 发布。--
+    -- 每行单调 revision：仅在该设置语义值真变化时递增；关键设置经 runtime_control_operations 发布。--
     revision bigint DEFAULT 1 NOT NULL,
     CONSTRAINT app_settings_key_check CHECK ((key <> ''::text)),
     CONSTRAINT app_settings_revision_check CHECK ((revision >= 1))

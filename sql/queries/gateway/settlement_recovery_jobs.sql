@@ -1,5 +1,14 @@
 -- name: CreateSettlementRecoveryJob :one
 -- CreateSettlementRecoveryJob 创建或读取一次请求的 settlement recovery job。
+-- 先锁定仍为 running 的 request，使创建任务与孤儿清扫 finalizer 共享同一行锁；若清扫已先收口请求，
+-- 本语句等待后重新判断 status 并返回 no rows，不允许在余额释放后补插 recovery job。
+WITH locked_request AS (
+    SELECT id
+    FROM request_records
+    WHERE id = sqlc.arg(request_record_id)
+      AND status = 'running'
+    FOR UPDATE
+)
 INSERT INTO settlement_recovery_jobs (
     user_id,
     request_record_id,
@@ -57,7 +66,7 @@ INSERT INTO settlement_recovery_jobs (
     status,
     next_run_at
 )
-VALUES (
+SELECT
            sqlc.arg(user_id),
            sqlc.arg(request_record_id),
            sqlc.arg(attempt_id),
@@ -113,7 +122,7 @@ VALUES (
            sqlc.arg(max_attempts),
            'pending',
            sqlc.arg(next_run_at)
-       )
+FROM locked_request
 ON CONFLICT (request_record_id) DO UPDATE
 SET updated_at = settlement_recovery_jobs.updated_at
 WHERE settlement_recovery_jobs.user_id = EXCLUDED.user_id

@@ -119,7 +119,7 @@ ALTER TABLE ONLY public.channels
 -- 打开后，gateway 在「请求已发出但本 attempt 不会产生真实结算成本」的失败/取消路径上，
 -- 会向 channel_cost_exposures 记一条平台成本敞口（保守上界估算），供成本对账与渠道横向比较。
 -- 不影响路由与客户计费，纯平台侧观测。
--- [P4 ROUTING_P4_GLOBAL_BREAKER_PROVIDER_PLAN §4.4]
+-- Provider 与 Channel 运行态围栏：
 -- 单故障域改造：地址、公共故障域与双 revision 唯一归属 Provider；
 -- 新增单调 config_revision（配置/凭据状态真变化 +1）与独立 capacity_revision（并发容量真变化 +1）。
 -- Migration renumbered after merging Provider Origin into Provider.

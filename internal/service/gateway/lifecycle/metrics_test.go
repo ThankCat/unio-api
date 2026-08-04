@@ -12,18 +12,18 @@ import (
 	observabilitymetrics "github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 )
 
-type p4RoutingMetricsSpy struct {
+type routingMetricsSpy struct {
 	weights                 map[string]float64
 	breakerStates           map[string]string
 	skips                   []string
 	channelRevisionMismatch int
 	statusRevisionMismatch  int
-	timings                 []p4TimingObservation
+	timings                 []timingObservation
 	providerFailures        []string
 	channelFailures         []string
 }
 
-type p4TimingObservation struct {
+type timingObservation struct {
 	providerID string
 	channelID  string
 	protocol   string
@@ -33,59 +33,59 @@ type p4TimingObservation struct {
 	ttft       *time.Duration
 }
 
-func (s *p4RoutingMetricsSpy) IncChatRequest(bool, observabilitymetrics.ChatOutcome) {}
-func (s *p4RoutingMetricsSpy) IncRoutingSelected(string, string, string)             {}
-func (s *p4RoutingMetricsSpy) ObserveUpstream(string, string, bool, string, time.Duration) {
+func (s *routingMetricsSpy) IncChatRequest(bool, observabilitymetrics.ChatOutcome) {}
+func (s *routingMetricsSpy) IncRoutingSelected(string, string, string)             {}
+func (s *routingMetricsSpy) ObserveUpstream(string, string, bool, string, time.Duration) {
 }
-func (s *p4RoutingMetricsSpy) IncSettlement(observabilitymetrics.SettlementOutcome) {}
-func (s *p4RoutingMetricsSpy) IncStreamEvent(observabilitymetrics.StreamEvent)      {}
-func (s *p4RoutingMetricsSpy) IncPartialSettlement(string)                          {}
-func (s *p4RoutingMetricsSpy) IncRetryableFallback(string)                          {}
-func (s *p4RoutingMetricsSpy) IncZeroPriceServed(string, string, string)            {}
-func (s *p4RoutingMetricsSpy) IncRoutingSkip(string)                                {}
-func (s *p4RoutingMetricsSpy) ObserveRoutingCapacityWait(time.Duration)             {}
+func (s *routingMetricsSpy) IncSettlement(observabilitymetrics.SettlementOutcome) {}
+func (s *routingMetricsSpy) IncStreamEvent(observabilitymetrics.StreamEvent)      {}
+func (s *routingMetricsSpy) IncPartialSettlement(string)                          {}
+func (s *routingMetricsSpy) IncRetryableFallback(string)                          {}
+func (s *routingMetricsSpy) IncZeroPriceServed(string, string, string)            {}
+func (s *routingMetricsSpy) IncRoutingSkip(string)                                {}
+func (s *routingMetricsSpy) ObserveRoutingCapacityWait(time.Duration)             {}
 
-func (s *p4RoutingMetricsSpy) ObserveRoutingBalance(string, string, int, int, float64) {}
-func (s *p4RoutingMetricsSpy) IncRoutingBalanceSelected(string, string)                {}
-func (s *p4RoutingMetricsSpy) IncRoutingBalanceFallback(string, string)                {}
-func (s *p4RoutingMetricsSpy) IncRoutingCapacityRead(string)                           {}
-func (s *p4RoutingMetricsSpy) IncRoutingMarginGuard(string)                            {}
-func (s *p4RoutingMetricsSpy) SetBalancedFinalWeight(route, channel string, weight float64) {
+func (s *routingMetricsSpy) ObserveRoutingBalance(string, string, int, int, float64) {}
+func (s *routingMetricsSpy) IncRoutingBalanceSelected(string, string)                {}
+func (s *routingMetricsSpy) IncRoutingBalanceFallback(string, string)                {}
+func (s *routingMetricsSpy) IncRoutingCapacityRead(string)                           {}
+func (s *routingMetricsSpy) IncRoutingMarginGuard(string)                            {}
+func (s *routingMetricsSpy) SetBalancedFinalWeight(route, channel string, weight float64) {
 	if s.weights == nil {
 		s.weights = map[string]float64{}
 	}
 	s.weights[route+"/"+channel] = weight
 }
-func (s *p4RoutingMetricsSpy) SetBreakerState(scope, id, state string) {
+func (s *routingMetricsSpy) SetBreakerState(scope, id, state string) {
 	if s.breakerStates == nil {
 		s.breakerStates = map[string]string{}
 	}
 	s.breakerStates[scope+"/"+id] = state
 }
-func (s *p4RoutingMetricsSpy) IncBreakerSkip(scope, reason string) {
+func (s *routingMetricsSpy) IncBreakerSkip(scope, reason string) {
 	s.skips = append(s.skips, scope+"/"+reason)
 }
-func (s *p4RoutingMetricsSpy) IncChannelConfigRevisionMismatch(string) {
+func (s *routingMetricsSpy) IncChannelConfigRevisionMismatch(string) {
 	s.channelRevisionMismatch++
 }
-func (s *p4RoutingMetricsSpy) IncProviderStatusRevisionMismatch(string) {
+func (s *routingMetricsSpy) IncProviderStatusRevisionMismatch(string) {
 	s.statusRevisionMismatch++
 }
-func (s *p4RoutingMetricsSpy) ObserveUpstreamTiming(providerID, channelID, protocol, endpoint, mode string, total time.Duration, ttft *time.Duration) {
-	s.timings = append(s.timings, p4TimingObservation{
+func (s *routingMetricsSpy) ObserveUpstreamTiming(providerID, channelID, protocol, endpoint, mode string, total time.Duration, ttft *time.Duration) {
+	s.timings = append(s.timings, timingObservation{
 		providerID: providerID, channelID: channelID,
 		protocol: protocol, endpoint: endpoint, mode: mode, total: total, ttft: ttft,
 	})
 }
-func (s *p4RoutingMetricsSpy) IncProviderFailure(originID, category string) {
+func (s *routingMetricsSpy) IncProviderFailure(originID, category string) {
 	s.providerFailures = append(s.providerFailures, originID+"/"+category)
 }
-func (s *p4RoutingMetricsSpy) IncChannelFailure(channelID, category string) {
+func (s *routingMetricsSpy) IncChannelFailure(channelID, category string) {
 	s.channelFailures = append(s.channelFailures, channelID+"/"+category)
 }
 
-func TestRecordRoutingPlanPublishesP4WeightsAndBreakerFacts(t *testing.T) {
-	metrics := &p4RoutingMetricsSpy{}
+func TestRecordRoutingPlanPublishesWeightsAndBreakerFacts(t *testing.T) {
+	metrics := &routingMetricsSpy{}
 	lifecycle := &RequestLifecycle{metrics: metrics}
 	lifecycle.recordRoutingPlan(RoutingDecisionTraceInput{
 		RouteID:  31,
@@ -128,7 +128,7 @@ func TestRecordRoutingPlanPublishesP4WeightsAndBreakerFacts(t *testing.T) {
 }
 
 func TestRecordAttemptRuntimeMetricsSeparatesStreamTTFTAndTotalDuration(t *testing.T) {
-	metrics := &p4RoutingMetricsSpy{}
+	metrics := &routingMetricsSpy{}
 	lifecycle := &RequestLifecycle{metrics: metrics}
 	started := time.Unix(100, 0)
 	firstToken := started.Add(250 * time.Millisecond)

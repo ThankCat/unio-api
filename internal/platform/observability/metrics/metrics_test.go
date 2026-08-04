@@ -102,7 +102,7 @@ func TestObserveUpstreamSuccessForcesNoneCategory(t *testing.T) {
 	}
 }
 
-func TestP4MetricsExposeBoundedRuntimeFacts(t *testing.T) {
+func TestMetricsExposeBoundedRuntimeFacts(t *testing.T) {
 	m := New()
 	ttft := 250 * time.Millisecond
 

@@ -1,4 +1,4 @@
--- provider_routing_operations 的可恢复围栏状态机查询（P4 §4.3）。
+-- provider_routing_operations 的可恢复围栏状态机查询。
 -- 状态机：preparing -> prepared -> db_committed -> committed；仅 preparing|prepared -> aborted。
 
 -- name: CreateProviderRoutingOperation :one

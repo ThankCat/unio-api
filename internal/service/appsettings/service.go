@@ -16,7 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// RuntimeControlPublisher 是五个 P4 关键 setting 的 durable publisher。
+// RuntimeControlPublisher 是五个关键运行时 setting 的 durable publisher。
 type RuntimeControlPublisher interface {
 	Publish(ctx context.Context, req runtimecontrol.PublishRequest) (runtimecontrol.PublishResult, error)
 }
@@ -41,7 +41,7 @@ func NewService(store *SettingsStore) *Service {
 	return &Service{store: store}
 }
 
-// NewServiceWithRuntimeControl 创建带 P4 durable runtime-control 发布能力的管理服务。
+// NewServiceWithRuntimeControl 创建带 durable runtime-control 发布能力的管理服务。
 func NewServiceWithRuntimeControl(store *SettingsStore, publisher RuntimeControlPublisher, runtimeStore RuntimeControlStore) *Service {
 	return &Service{store: store, runtimePublisher: publisher, runtimeStore: runtimeStore}
 }
