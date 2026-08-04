@@ -3,18 +3,12 @@ package runtimecontrol
 import (
 	"context"
 	"fmt"
-	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
-
-func pgTimestamptz(t time.Time) pgtype.Timestamptz {
-	return pgtype.Timestamptz{Time: t, Valid: true}
-}
 
 // TargetResolver 依据 durable operation 行还原对应的 Redis ControlTarget（reconciler 用）。
 type TargetResolver func(op sqlc.RuntimeControlOperation) (breakerstore.ControlTarget, bool)
@@ -35,10 +29,9 @@ type ReconcileControlAPI interface {
 //
 // 它不重建 marker，也不恢复 readiness；只把「响应丢失」的普通 control 发布收口到 PostgreSQL 权威事实。
 type Reconciler struct {
-	pool     *pgxpool.Pool
-	control  ReconcileControlAPI
-	resolve  TargetResolver
-	retainMs int64
+	pool    *pgxpool.Pool
+	control ReconcileControlAPI
+	resolve TargetResolver
 }
 
 // NewReconciler 创建 reconciler。resolve 把 op 行映射到 ControlTarget。
@@ -46,7 +39,7 @@ func NewReconciler(pool *pgxpool.Pool, control ReconcileControlAPI, resolve Targ
 	if pool == nil || control == nil || resolve == nil {
 		panic("runtimecontrol: reconciler requires pool, control and resolver")
 	}
-	return &Reconciler{pool: pool, control: control, resolve: resolve, retainMs: 24 * 60 * 60 * 1000}
+	return &Reconciler{pool: pool, control: control, resolve: resolve}
 }
 
 // PayloadResolver 依据 PostgreSQL 当前业务行还原 active payload 正文。
@@ -144,11 +137,4 @@ func markOperationTerminal(ctx context.Context, q *sqlc.Queries, op sqlc.Runtime
 		return nil // 另一 reconciler 已完成同一终态。
 	}
 	return fmt.Errorf("runtimecontrol: operation %s did not transition to %s", op.Token, state)
-}
-
-// CleanupTerminal 删除早于保留期（默认 24h）的终态操作。
-func (r *Reconciler) CleanupTerminal(ctx context.Context, now time.Time) (int64, error) {
-	q := sqlc.New(r.pool)
-	cutoff := now.Add(-time.Duration(r.retainMs) * time.Millisecond)
-	return q.DeleteTerminalRuntimeControlOperationsBefore(ctx, pgTimestamptz(cutoff))
 }

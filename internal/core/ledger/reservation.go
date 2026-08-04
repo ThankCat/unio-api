@@ -502,7 +502,7 @@ func (s *Service) resolveReservationCreateConflict(ctx context.Context, tx pgx.T
 	}
 
 	// 第二优先级查 request_record_id：同一个 request 被不同幂等键重复预授权，应视为业务幂等冲突。
-	existing, err = s.queries.GetLedgerReservationByRequestRecordID(ctx, requestRecordID)
+	_, err = s.queries.GetLedgerReservationByRequestRecordID(ctx, requestRecordID)
 	if err == nil {
 		return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 	}

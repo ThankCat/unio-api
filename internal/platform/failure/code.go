@@ -33,9 +33,6 @@ const (
 	// CategoryRouting 表示模型路由错误。
 	CategoryRouting Category = "routing"
 
-	// CategoryCredential 表示凭据解析错误。
-	CategoryCredential Category = "credential"
-
 	// CategoryModelCatalog 表示模型目录查询错误。
 	CategoryModelCatalog Category = "modelcatalog"
 
@@ -224,26 +221,6 @@ const (
 )
 
 const (
-	// CodeCredentialRefMissing 表示 credential_ref 为空。
-	CodeCredentialRefMissing Code = "credential_ref_missing"
-
-	// CodeCredentialNotFound 表示 credential_ref 找不到对应凭据。
-	CodeCredentialNotFound Code = "credential_not_found"
-
-	// CodeCredentialMasterKeyInvalid 表示 CREDENTIAL_MASTER_KEY 格式或长度非法。
-	CodeCredentialMasterKeyInvalid Code = "credential_master_key_invalid"
-
-	// CodeCredentialEncryptFailed 表示上游凭据加密失败。
-	CodeCredentialEncryptFailed Code = "credential_encrypt_failed"
-
-	// CodeCredentialDecryptFailed 表示上游凭据解密失败（含密文被篡改）。
-	CodeCredentialDecryptFailed Code = "credential_decrypt_failed"
-
-	// CodeCredentialCiphertextInvalid 表示入库密文长度或格式非法。
-	CodeCredentialCiphertextInvalid Code = "credential_ciphertext_invalid"
-)
-
-const (
 	// CodeModelCatalogStoreFailed 表示模型目录查询存储失败。
 	CodeModelCatalogStoreFailed Code = "modelcatalog_store_failed"
 )
@@ -376,6 +353,9 @@ const (
 
 	// CodeGatewayRequestOrphanReclaimed 表示进程崩溃遗留的孤儿请求被清扫 worker 释放冻结并收口为 failed。
 	CodeGatewayRequestOrphanReclaimed Code = "gateway_request_orphan_reclaimed"
+
+	// CodeGatewayRequestStrandedReclaimed 表示请求已进入终态但冻结仍停留在 authorized 的搁浅预授权被清扫 worker 释放。
+	CodeGatewayRequestStrandedReclaimed Code = "gateway_request_stranded_reclaimed"
 
 	// CodeGatewayBreakerPermitConflict 表示 AttemptPermit 幂等键冲突（同 permit_id 不同准入指纹，P4 §5.3）。
 	CodeGatewayBreakerPermitConflict Code = "gateway_breaker_permit_conflict"

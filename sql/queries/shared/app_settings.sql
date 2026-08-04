@@ -150,12 +150,6 @@ VALUES (
 )
 ON CONFLICT (key) DO NOTHING;
 
--- name: ListAppSettings :many
--- ListAppSettings 列出全部已持久化设置(供 admin 面板对照展示)。
-SELECT key, value, description, updated_at
-FROM app_settings
-ORDER BY key;
-
 -- name: UpsertAppSetting :exec
 -- UpsertAppSetting 写入普通设置；只有 JSONB 语义值真变化时递增 revision，重复写同值不推进。
 INSERT INTO app_settings (key, value, description, updated_at)

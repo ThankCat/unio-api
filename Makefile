@@ -2,7 +2,7 @@
 #
 # 解决三件事：
 #   1. 自动从 .env 注入环境变量（config.Load 只读 os.Getenv，不再手动 export）。
-#   2. 端口由 .env 的 GATEWAY_HTTP_ADDR / ADMIN_HTTP_ADDR / CONSOLE_HTTP_ADDR 各自决定，互不冲突。
+#   2. 端口由 .env 的 GATEWAY_HTTP_ADDR / ADMIN_HTTP_ADDR 各自决定，互不冲突。
 #   3. 用 air 做热加载（改 .go 自动重新 build + 重启）。
 #
 # 常用：

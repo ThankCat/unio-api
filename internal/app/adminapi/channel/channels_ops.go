@@ -122,6 +122,8 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 		"latency":          {},
 		"timeout":          {},
 		"bound_models":     {},
+		"bound_routes":     {},
+		"priority":         {},
 		"status":           {},
 		"credential_valid": {},
 		"created_at":       {},

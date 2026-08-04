@@ -199,6 +199,10 @@ ORDER BY
   CASE WHEN $1::text = 'status' AND NOT COALESCE($2::bool, false) THEN status END ASC NULLS LAST,
   CASE WHEN $1::text = 'source' AND COALESCE($2::bool, false) THEN source END DESC NULLS LAST,
   CASE WHEN $1::text = 'source' AND NOT COALESCE($2::bool, false) THEN source END ASC NULLS LAST,
+  CASE WHEN $1::text = 'id' AND COALESCE($2::bool, false) THEN id END DESC NULLS LAST,
+  CASE WHEN $1::text = 'id' AND NOT COALESCE($2::bool, false) THEN id END ASC NULLS LAST,
+  CASE WHEN $1::text = 'finished_at' AND COALESCE($2::bool, false) THEN finished_at END DESC NULLS LAST,
+  CASE WHEN $1::text = 'finished_at' AND NOT COALESCE($2::bool, false) THEN finished_at END ASC NULLS LAST,
   id DESC
 LIMIT $4 OFFSET $3
 `

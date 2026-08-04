@@ -561,29 +561,11 @@ SET upstream_bills_on_disconnect = sqlc.arg(upstream_bills_on_disconnect), updat
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
--- name: SetChannelTestResult :execrows
--- SetChannelTestResult 写入渠道「最近一次主动检测结果」（渠道检测，阶段一）。
--- last_tested_at 用 DB now() 保证服务器时钟；latency 恒有值（连接失败也测到耗时）；
--- error 成功时为 NULL、失败时为可读原因。不改 updated_at（检测是运营遥测，非配置变更），
--- 也不改 status（阶段一只报告不摘除）。返回受影响行数用于判定渠道是否存在。
-UPDATE channels
-SET last_tested_at = now(),
-    last_test_ok = sqlc.arg(last_test_ok),
-    last_test_latency_ms = sqlc.arg(last_test_latency_ms),
-    last_test_error = sqlc.narg(last_test_error)
-WHERE id = sqlc.arg(id);
-
 -- name: UpdateChannelCredential :execrows
 -- UpdateChannelCredential 更新 channel 的明文上游凭据；返回受影响行数用于判定 channel 是否存在。
 UPDATE channels
 SET credential = sqlc.arg(credential), updated_at = now()
 WHERE id = sqlc.arg(id);
-
--- name: SetChannelCredentialValid :execrows
--- SetChannelCredentialValid 将渠道恢复为「凭据有效」。幂等：仅在 false→true 跳变时写入并返回受影响行数=1。
-UPDATE channels
-SET credential_valid = TRUE
-WHERE id = sqlc.arg(id) AND credential_valid = FALSE;
 
 -- name: ArchiveChannel :execrows
 -- ArchiveChannel 归档单个渠道；调用方必须先确认不存在任何 route_channels 引用。
@@ -748,6 +730,10 @@ ORDER BY
   CASE WHEN sqlc.narg('sort_field')::text = 'timeout' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'bound_models' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'bound_models' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'bound_routes' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT COUNT(*) FROM route_channels rc WHERE rc.channel_id = c.id) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'bound_routes' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT COUNT(*) FROM route_channels rc WHERE rc.channel_id = c.id) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'priority' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.priority END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'priority' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.priority END ASC NULLS LAST,
   c.id
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 

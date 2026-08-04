@@ -1144,6 +1144,10 @@ ORDER BY
   CASE WHEN COALESCE($3::text, 'name') IN ('', 'name') AND NOT COALESCE($4::bool, false) THEN rt.name END ASC NULLS LAST,
   CASE WHEN $3::text = 'created_at' AND COALESCE($4::bool, false) THEN rt.created_at END DESC NULLS LAST,
   CASE WHEN $3::text = 'created_at' AND NOT COALESCE($4::bool, false) THEN rt.created_at END ASC NULLS LAST,
+  CASE WHEN $3::text = 'status' AND COALESCE($4::bool, false) THEN rt.status END DESC NULLS LAST,
+  CASE WHEN $3::text = 'status' AND NOT COALESCE($4::bool, false) THEN rt.status END ASC NULLS LAST,
+  CASE WHEN $3::text = 'mode' AND COALESCE($4::bool, false) THEN rt.mode END DESC NULLS LAST,
+  CASE WHEN $3::text = 'mode' AND NOT COALESCE($4::bool, false) THEN rt.mode END ASC NULLS LAST,
   CASE WHEN $3::text = 'bindings' AND COALESCE($4::bool, false) THEN (
         SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id
     ) END DESC NULLS LAST,

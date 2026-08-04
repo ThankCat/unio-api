@@ -1035,32 +1035,34 @@ func (s *ChatSettlementService) FinalizeOrphanReservation(ctx context.Context, r
 		RequestRecordID: reservation.RequestRecordID,
 		ReservationID:   &reservationID,
 	})
-	if err != nil {
-		// 已被释放/不存在则视作已收口，幂等返回；其余（如已 captured 冲突）上抛由 worker 重试或告警。
-		if failure.CodeOf(err) == failure.CodeLedgerReservationNotFound {
-			return nil
+	switch {
+	case err == nil:
+		_, err = txQueries.CreateLedgerRiskExposureException(ctx, sqlc.CreateLedgerRiskExposureExceptionParams{
+			UserID:          released.UserID,
+			RequestRecordID: released.RequestRecordID,
+			ReservationID:   released.ID,
+			PlatformAmount:  released.AuthorizedAmount,
+			Currency:        released.Currency,
+			ReasonCode:      "orphan_reservation_swept",
+			Reason:          "process crash left an authorized reservation with a stuck running request; frozen balance released and request finalized as failed",
+		})
+		if err != nil {
+			return failure.Wrap(
+				failure.CodeGatewayRequestOrphanReclaimed,
+				err,
+				failure.WithMessage("record risk exposure for orphan reservation finalize"),
+			)
 		}
+	case failure.CodeOf(err) == failure.CodeLedgerReservationNotFound:
+		// reservation 已消失：没有冻结可释放，也无法记 risk exposure（外键指向 reservation 行）。
+		// 但请求仍停留在 running，必须继续收口——提前返回会让 worker 视为处理成功不再重扫，
+		// 而扫描查询以 reservation 为起点，请求将永久卡在 running 且无人再看见它。
+	default:
+		// 其余（如已 captured 冲突）上抛由 worker 记日志；下一轮扫描按 reservation 现状自然不再命中。
 		return failure.Wrap(
 			failure.CodeGatewayRequestOrphanReclaimed,
 			err,
 			failure.WithMessage("release orphan reservation"),
-		)
-	}
-
-	_, err = txQueries.CreateLedgerRiskExposureException(ctx, sqlc.CreateLedgerRiskExposureExceptionParams{
-		UserID:          released.UserID,
-		RequestRecordID: released.RequestRecordID,
-		ReservationID:   released.ID,
-		PlatformAmount:  released.AuthorizedAmount,
-		Currency:        released.Currency,
-		ReasonCode:      "orphan_reservation_swept",
-		Reason:          "process crash left an authorized reservation with a stuck running request; frozen balance released and request finalized as failed",
-	})
-	if err != nil {
-		return failure.Wrap(
-			failure.CodeGatewayRequestOrphanReclaimed,
-			err,
-			failure.WithMessage("record risk exposure for orphan reservation finalize"),
 		)
 	}
 
@@ -1085,6 +1087,82 @@ func (s *ChatSettlementService) FinalizeOrphanReservation(ctx context.Context, r
 			failure.CodeGatewayRequestOrphanReclaimed,
 			err,
 			failure.WithMessage("commit orphan reservation finalize transaction"),
+		)
+	}
+
+	return nil
+}
+
+// FinalizeStrandedReservation 回收一条「搁浅」预授权：请求已进入 failed/canceled 终态，冻结余额却仍停留在
+// authorized。成因是网关失败路径「先 release 再写终态」两步非原子——release 自身失败（5s 超时、reservation
+// 行锁竞争、瞬时抖动）而随后的审计写入成功。这类残留落在孤儿清扫（只捞仍 running 的请求）与 settlement
+// recovery 之间，既无自动回收路径也无 TTL。
+//
+// 自动释放的安全性依据：全部释放路径都是「release 在前、终态写在后」或与终态写同事务，因此 authorized
+// 配终态请求不存在合法瞬时态，命中即为已确定失败的 release。
+//
+// 与 FinalizeOrphanReservation 的两处刻意差异：
+//  1. 不写 risk exposure。走到这条路径的 release 都发生在「上游未产生可计费成功」的边界，冻结金额不代表
+//     平台已承担成本；上游确实可能有成本的边界走 ReleaseAuthorizationForBillingException，那条路径在
+//     release 成功时已自行记账。
+//  2. 不调 MarkRequestFailed。请求已是终态；且其 SQL 回退分支只匹配 status='failed'，对 canceled 请求会
+//     返回 ErrNoRows 使事务回滚，worker 将陷入无限重试。
+//
+// 以「请求为终态且冻结仍 authorized」为幂等闸门，崩溃后下个 tick 安全重放；多 worker 并发由请求记录行锁串行化。
+func (s *ChatSettlementService) FinalizeStrandedReservation(ctx context.Context, reservation sqlc.LedgerReservation) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayRequestStrandedReclaimed,
+			err,
+			failure.WithMessage("begin stranded reservation finalize transaction"),
+		)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	txQueries := s.queries.WithTx(tx)
+
+	lockedRequest, err := txQueries.GetRequestRecordForUpdate(ctx, reservation.RequestRecordID)
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayRequestStrandedReclaimed,
+			err,
+			failure.WithMessage("lock request record for stranded reservation finalize"),
+		)
+	}
+
+	// 幂等闸门：只回收已进入 failed/canceled 的请求。running 归孤儿清扫；succeeded 配 authorized 是另一类
+	// 更严重的异常（capture 未发生却已告知客户成功），自动释放会抹掉现场，留给不变量巡检暴露。
+	switch requestlog.RequestStatus(lockedRequest.Status) {
+	case requestlog.RequestStatusFailed, requestlog.RequestStatusCanceled:
+	default:
+		return nil
+	}
+
+	reservationID := reservation.ID
+	if _, err := s.ledgerCapturer.ReleaseWithQueries(ctx, txQueries, ledger.ReleaseParams{
+		RequestRecordID: reservation.RequestRecordID,
+		ReservationID:   &reservationID,
+	}); err != nil {
+		// 已释放/不存在视作已回收，幂等返回；其余（如已 captured 冲突）上抛由 worker 记日志，
+		// 下一轮扫描按 reservation 现状自然不再命中，不会形成重试风暴。
+		if failure.CodeOf(err) == failure.CodeLedgerReservationNotFound {
+			return nil
+		}
+		return failure.Wrap(
+			failure.CodeGatewayRequestStrandedReclaimed,
+			err,
+			failure.WithMessage("release stranded reservation"),
+		)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayRequestStrandedReclaimed,
+			err,
+			failure.WithMessage("commit stranded reservation finalize transaction"),
 		)
 	}
 

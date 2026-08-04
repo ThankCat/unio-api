@@ -26,23 +26,8 @@
 | `sqlc generate` | 按 `sqlc.yaml` 重新生成 `internal/platform/store/sqlc`。 |
 
 依赖 PostgreSQL 或 Redis 的测试从 `DATABASE_URL`、`REDIS_ADDR` 读取连接信息；未提供所需变量的用例会
-跳过。真实上游和故障演练测试还需要各自的显式开关。执行这些测试时使用隔离的测试资源，不使用本地
+跳过。直连真实上游的用例还需要各自的显式开关。执行这些测试时使用隔离的测试资源，不使用本地
 业务数据。
-
-## 隔离故障演练
-
-`internal/blackbox/p4fault` 只操作测试自身创建的随机 PostgreSQL/Redis 容器、数据库、namespace、volume、
-Gateway 进程和 mock upstream。测试不读取开发者 `.env`，并在 cleanup 中删除这些资源。基础演练命令为：
-
-```bash
-P4_FAULT_E2E=1 env -u LOG_FORMAT go test -count=1 -v ./internal/blackbox/p4fault
-```
-
-长流程用例还要求对应的第二层开关：`P4_FULL_STATE_LOSS_E2E`、`P4_LONG_STREAM_E2E`、
-`P4_PREPARE_CRASH_E2E`、`P4_AOF_RESTORE_E2E`、`P4_RDB_RESTORE_E2E`、
-`P4_ACTIVE_EPOCH_ROLLBACK_E2E`、`P4_HALF_OPEN_LEASE_E2E` 或
-`P4_RESET_STALE_GENERATION_E2E`。五因子评分、Sticky、fallback、并发短等、429 冷却、四类超时和完整
-路由 Trace 由 `P4_ROUTING_E2E=1` 启用。Redis Cluster 演练由 `P4_CLUSTER_E2E=1` 单独启用。
 
 ## 数据库与 sqlc
 

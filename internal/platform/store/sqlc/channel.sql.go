@@ -669,6 +669,10 @@ ORDER BY
   CASE WHEN $6::text = 'timeout' AND NOT COALESCE($7::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) END ASC NULLS LAST,
   CASE WHEN $6::text = 'bound_models' AND COALESCE($7::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END DESC NULLS LAST,
   CASE WHEN $6::text = 'bound_models' AND NOT COALESCE($7::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END ASC NULLS LAST,
+  CASE WHEN $6::text = 'bound_routes' AND COALESCE($7::bool, false) THEN (SELECT COUNT(*) FROM route_channels rc WHERE rc.channel_id = c.id) END DESC NULLS LAST,
+  CASE WHEN $6::text = 'bound_routes' AND NOT COALESCE($7::bool, false) THEN (SELECT COUNT(*) FROM route_channels rc WHERE rc.channel_id = c.id) END ASC NULLS LAST,
+  CASE WHEN $6::text = 'priority' AND COALESCE($7::bool, false) THEN c.priority END DESC NULLS LAST,
+  CASE WHEN $6::text = 'priority' AND NOT COALESCE($7::bool, false) THEN c.priority END ASC NULLS LAST,
   c.id
 LIMIT $9 OFFSET $8
 `
@@ -2270,54 +2274,6 @@ func (q *Queries) SetChannelBillingBehavior(ctx context.Context, arg SetChannelB
 		&i.UpstreamBillsOnDisconnect,
 	)
 	return i, err
-}
-
-const setChannelCredentialValid = `-- name: SetChannelCredentialValid :execrows
-UPDATE channels
-SET credential_valid = TRUE
-WHERE id = $1 AND credential_valid = FALSE
-`
-
-// SetChannelCredentialValid 将渠道恢复为「凭据有效」。幂等：仅在 false→true 跳变时写入并返回受影响行数=1。
-func (q *Queries) SetChannelCredentialValid(ctx context.Context, id int64) (int64, error) {
-	result, err := q.db.Exec(ctx, setChannelCredentialValid, id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const setChannelTestResult = `-- name: SetChannelTestResult :execrows
-UPDATE channels
-SET last_tested_at = now(),
-    last_test_ok = $1,
-    last_test_latency_ms = $2,
-    last_test_error = $3
-WHERE id = $4
-`
-
-type SetChannelTestResultParams struct {
-	LastTestOk        pgtype.Bool
-	LastTestLatencyMs pgtype.Int4
-	LastTestError     pgtype.Text
-	ID                int64
-}
-
-// SetChannelTestResult 写入渠道「最近一次主动检测结果」（渠道检测，阶段一）。
-// last_tested_at 用 DB now() 保证服务器时钟；latency 恒有值（连接失败也测到耗时）；
-// error 成功时为 NULL、失败时为可读原因。不改 updated_at（检测是运营遥测，非配置变更），
-// 也不改 status（阶段一只报告不摘除）。返回受影响行数用于判定渠道是否存在。
-func (q *Queries) SetChannelTestResult(ctx context.Context, arg SetChannelTestResultParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setChannelTestResult,
-		arg.LastTestOk,
-		arg.LastTestLatencyMs,
-		arg.LastTestError,
-		arg.ID,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const updateChannel = `-- name: UpdateChannel :one

@@ -74,7 +74,17 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 		deps.Config.Worker.OrphanReservationSweepBatchSize,
 	)
 
-	units := []workers.Unit{settlementRecoveryWorker, orphanReservationSweeperWorker}
+	// 搁浅预授权清扫 worker：兜底「请求已终态 + 冻结仍 authorized」，即 release 失败而审计写入成功留下的
+	// 残留。与孤儿清扫按请求状态互斥，共用同一组年龄阈值与批量配置。
+	strandedReservationSweeperWorker := workers.NewStrandedReservationSweeperWorker(
+		queries,
+		chatSettlementService,
+		deps.Logger,
+		deps.Config.Worker.OrphanReservationSweepAgeThreshold,
+		deps.Config.Worker.OrphanReservationSweepBatchSize,
+	)
+
+	units := []workers.Unit{settlementRecoveryWorker, orphanReservationSweeperWorker, strandedReservationSweeperWorker}
 
 	if deps.Config.ModelCatalogSync.Enabled {
 		syncer, store := buildModelCatalogSync(deps.Config.ModelCatalogSync, queries)

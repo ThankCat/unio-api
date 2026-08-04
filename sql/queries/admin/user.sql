@@ -79,13 +79,6 @@ SET expires_at = sqlc.narg(expires_at), updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at;
 
--- name: SetAPIKeyRateLimits :one
--- SetAPIKeyRateLimits 设置/清除 API Key 的令牌级限流上限（P2-8）；各列 NULL=继承全局默认，0=不限，>0=具体上限。
-UPDATE api_keys
-SET rpm_limit = sqlc.narg(rpm_limit), tpm_limit = sqlc.narg(tpm_limit), rpd_limit = sqlc.narg(rpd_limit), updated_at = now()
-WHERE id = sqlc.arg(id)
-RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at;
-
 -- §3.7 客户中心（用户/API Key）只读运维聚合。金额仅 USD。
 -- 用户余额来自 user_balances（USD）；消费来自 ledger_entries(debit, USD)；
 -- 请求来自 request_records 按 user/api_key 归因。Key 状态由时间戳派生。

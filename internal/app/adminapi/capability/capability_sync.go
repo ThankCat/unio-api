@@ -54,9 +54,11 @@ type capabilitySyncHandler struct {
 func (h *capabilitySyncHandler) listJobs(w http.ResponseWriter, r *http.Request) {
 	page := adminhttp.ParsePage(r)
 	sort, err := adminhttp.ParseListSort(r, map[string]struct{}{
-		"created_at": {},
-		"status":     {},
-		"source":     {},
+		"created_at":  {},
+		"status":      {},
+		"source":      {},
+		"id":          {},
+		"finished_at": {},
 	}, "created_at", true)
 	if err != nil {
 		adminhttp.WriteSortError(w, err)

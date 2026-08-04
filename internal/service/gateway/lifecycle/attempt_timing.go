@@ -68,10 +68,6 @@ type AttemptTimingObserver struct {
 	hooks  AttemptTimingHooks
 }
 
-func NewAttemptTimingObserver(stream bool) *AttemptTimingObserver {
-	return newAttemptTimingObserver(stream, time.Now)
-}
-
 func newAttemptTimingObserver(stream bool, now func() time.Time) *AttemptTimingObserver {
 	return newAttemptTimingObserverWithHooks(stream, now, AttemptTimingHooks{})
 }

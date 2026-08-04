@@ -92,24 +92,6 @@ SELECT COUNT(*) FROM channels WHERE provider_id = sqlc.arg(provider_id) AND stat
 -- name: CountEnabledChannelsByProvider :one
 SELECT COUNT(*) FROM channels WHERE provider_id = sqlc.arg(provider_id) AND status = 'enabled';
 
--- name: CommitProviderOriginAtRevision :one
-UPDATE providers
-SET origin = sqlc.arg(origin), origin_revision = origin_revision + 1, updated_at = now()
-WHERE id = sqlc.arg(id)
-  AND origin_revision = sqlc.arg(expected_origin_revision)
-  AND origin IS DISTINCT FROM sqlc.arg(origin)
-RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at;
-
--- name: CommitProviderStatusAtRevision :one
-UPDATE providers
-SET status = sqlc.arg(status), status_revision = status_revision + 1,
-    archived_at = CASE WHEN sqlc.arg(status)::text = 'archived' THEN now() ELSE NULL END,
-    updated_at = now()
-WHERE id = sqlc.arg(id)
-  AND status_revision = sqlc.arg(expected_status_revision)
-  AND status IS DISTINCT FROM sqlc.arg(status)
-RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at;
-
 -- §3.2 服务商聚合视图只读运维聚合。轻聚合：无 12 卡，表 + 4 Tab 抽屉。
 -- provider 维度天然由 request_attempts.provider_id 归因（每次尝试记录 provider）。
 -- 区间 [from,to) 半开；attempt 粒度性能/成功率；延迟由 completed_at-started_at 推导（毫秒）。

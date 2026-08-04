@@ -185,10 +185,3 @@ SELECT id, token, kind, channel_id, setting_key, current_revision, next_revision
 FROM runtime_control_operations
 WHERE state <> ALL (ARRAY['committed'::text, 'aborted'::text])
 ORDER BY created_at, id;
-
--- name: DeleteTerminalRuntimeControlOperationsBefore :execrows
--- 有界清理终态操作（committed|aborted）且早于保留期（>=24h 由调用方传入 cutoff）。
-DELETE FROM runtime_control_operations
-WHERE state = ANY (ARRAY['committed'::text, 'aborted'::text])
-  AND completed_at IS NOT NULL
-  AND completed_at < sqlc.arg(cutoff);

@@ -7,8 +7,6 @@ package sqlc
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createProviderRoutingOperation = `-- name: CreateProviderRoutingOperation :one
@@ -55,21 +53,6 @@ func (q *Queries) CreateProviderRoutingOperation(ctx context.Context, arg Create
 		&i.CompletedAt,
 	)
 	return i, err
-}
-
-const deleteTerminalProviderRoutingOperationsBefore = `-- name: DeleteTerminalProviderRoutingOperationsBefore :execrows
-DELETE FROM provider_routing_operations
-WHERE state = ANY (ARRAY['committed'::text, 'aborted'::text])
-  AND completed_at IS NOT NULL
-  AND completed_at < $1
-`
-
-func (q *Queries) DeleteTerminalProviderRoutingOperationsBefore(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteTerminalProviderRoutingOperationsBefore, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const getProviderRoutingOperationByToken = `-- name: GetProviderRoutingOperationByToken :one

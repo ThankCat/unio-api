@@ -561,13 +561,6 @@ func int4OrNull(v *int32) pgtype.Int4 {
 	return pgtype.Int4{Int32: *v, Valid: true}
 }
 
-func textValue(v pgtype.Text) string {
-	if !v.Valid {
-		return ""
-	}
-	return v.String
-}
-
 func textOrNull(v *string) pgtype.Text {
 	if v == nil || *v == "" {
 		return pgtype.Text{Valid: false}

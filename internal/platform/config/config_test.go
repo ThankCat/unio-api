@@ -291,9 +291,6 @@ func TestLoadInfrastructureDefaults(t *testing.T) {
 	if cfg.Admin.HTTPAddr != ":8521" {
 		t.Fatalf("expected admin http addr %q, got %q", ":8521", cfg.Admin.HTTPAddr)
 	}
-	if cfg.Console.HTTPAddr != ":8522" {
-		t.Fatalf("expected console http addr %q, got %q", ":8522", cfg.Console.HTTPAddr)
-	}
 	if cfg.DB.MaxConns != 10 {
 		t.Fatalf("expected postgres max conns %d, got %d", 10, cfg.DB.MaxConns)
 	}
@@ -364,7 +361,6 @@ func TestLoadInfrastructureOverrides(t *testing.T) {
 
 	t.Setenv("GATEWAY_HTTP_ADDR", ":9520")
 	t.Setenv("ADMIN_HTTP_ADDR", ":9521")
-	t.Setenv("CONSOLE_HTTP_ADDR", ":9522")
 	t.Setenv("HTTP_READ_TIMEOUT", "3s")
 	t.Setenv("HTTP_WRITE_TIMEOUT", "4s")
 	t.Setenv("HTTP_IDLE_TIMEOUT", "5s")
@@ -422,9 +418,6 @@ func TestLoadInfrastructureOverrides(t *testing.T) {
 	}
 	if cfg.Admin.HTTPAddr != ":9521" {
 		t.Fatalf("expected admin http addr %q, got %q", ":9521", cfg.Admin.HTTPAddr)
-	}
-	if cfg.Console.HTTPAddr != ":9522" {
-		t.Fatalf("expected console http addr %q, got %q", ":9522", cfg.Console.HTTPAddr)
 	}
 	if cfg.DB.MaxConns != 20 {
 		t.Fatalf("expected postgres max conns %d, got %d", 20, cfg.DB.MaxConns)
@@ -587,7 +580,6 @@ func clearInfrastructureEnv(t *testing.T) {
 	for _, key := range []string{
 		"GATEWAY_HTTP_ADDR",
 		"ADMIN_HTTP_ADDR",
-		"CONSOLE_HTTP_ADDR",
 		"HTTP_READ_TIMEOUT",
 		"HTTP_WRITE_TIMEOUT",
 		"HTTP_IDLE_TIMEOUT",

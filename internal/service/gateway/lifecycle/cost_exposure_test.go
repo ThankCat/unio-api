@@ -15,8 +15,7 @@ import (
 )
 
 type fakeCostExposureRecorder struct {
-	calls  []CostExposureParams
-	failed bool
+	calls []CostExposureParams
 }
 
 func (f *fakeCostExposureRecorder) RecordChannelCostExposure(_ context.Context, params CostExposureParams) error {

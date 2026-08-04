@@ -38,59 +38,8 @@ func (q *Queries) DeleteChannelTestLogsBeyondPerChannel(ctx context.Context, arg
 	return result.RowsAffected(), nil
 }
 
-const insertChannelTestLog = `-- name: InsertChannelTestLog :exec
-
-INSERT INTO channel_test_logs (
-    channel_id, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error,
-    tested_origin_revision, tested_status_revision, tested_config_revision, state_change_applied
-) VALUES (
-    $1, $2, $3, $4,
-    $5, $6, $7, $8, $9, $10,
-    $11, $12, $13, $14
-)
-`
-
-type InsertChannelTestLogParams struct {
-	ChannelID            int64
-	Source               string
-	Success              bool
-	ErrorCode            pgtype.Text
-	HttpStatus           pgtype.Int4
-	LatencyMs            pgtype.Int4
-	TestedModel          pgtype.Text
-	CredentialValidAfter bool
-	Message              pgtype.Text
-	UpstreamError        pgtype.Text
-	TestedOriginRevision pgtype.Int8
-	TestedStatusRevision pgtype.Int8
-	TestedConfigRevision pgtype.Int8
-	StateChangeApplied   bool
-}
-
-// channel_test_logs：渠道凭据有效性事件历史（worker 巡检 / 手动检测 / 运行时 401 翻失效）。
-// channels 只存当前布尔 credential_valid；本表存 when/why 与检测明细，供详情页回放。
-// InsertChannelTestLog 追加一条检测/凭据事件日志。写入口径由调用方按 R1(b) 决定（失败/跳变才写、手动总写）。
-func (q *Queries) InsertChannelTestLog(ctx context.Context, arg InsertChannelTestLogParams) error {
-	_, err := q.db.Exec(ctx, insertChannelTestLog,
-		arg.ChannelID,
-		arg.Source,
-		arg.Success,
-		arg.ErrorCode,
-		arg.HttpStatus,
-		arg.LatencyMs,
-		arg.TestedModel,
-		arg.CredentialValidAfter,
-		arg.Message,
-		arg.UpstreamError,
-		arg.TestedOriginRevision,
-		arg.TestedStatusRevision,
-		arg.TestedConfigRevision,
-		arg.StateChangeApplied,
-	)
-	return err
-}
-
 const insertPermissionRecheckLog = `-- name: InsertPermissionRecheckLog :execrows
+
 INSERT INTO channel_test_logs (
     channel_id, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error,
     tested_origin_revision, tested_status_revision, tested_config_revision, state_change_applied
@@ -117,6 +66,8 @@ type InsertPermissionRecheckLogParams struct {
 	ChannelID            int64
 }
 
+// channel_test_logs：渠道凭据有效性事件历史（worker 巡检 / 手动检测 / 运行时 401 翻失效）。
+// channels 只存当前布尔 credential_valid；本表存 when/why 与检测明细，供详情页回放。
 // 403 Channel-Model 自动复检只写审计，不覆盖 channels.last_test_* 或 credential_valid。
 // credential_valid_after 在 INSERT 时直接读取数据库当前事实，调用方不能猜测；upstream_error 固定 NULL，
 // 禁止把 credential、响应 body 或其它上游敏感内容写入复检日志。

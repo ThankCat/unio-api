@@ -53,6 +53,10 @@ ORDER BY
   CASE WHEN sqlc.narg('sort_field')::text = 'status' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN status END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'source' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN source END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'source' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN source END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'id' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN id END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'id' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN id END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'finished_at' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN finished_at END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'finished_at' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN finished_at END ASC NULLS LAST,
   id DESC
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 

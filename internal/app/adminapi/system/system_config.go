@@ -84,7 +84,8 @@ func (h *systemConfigHandler) get(w http.ResponseWriter, _ *http.Request) {
 				},
 			},
 			{
-				Title: "孤儿预授权清扫 worker",
+				// 孤儿清扫（请求仍 running）与搁浅清扫（请求已终态）共用这组阈值与批量。
+				Title: "预授权清扫 worker（孤儿 / 搁浅）",
 				Entries: []systemConfigEntryDTO{
 					{Label: "判定年龄阈值", Value: h.worker.OrphanReservationSweepAgeThreshold.String(), Env: "WORKER_ORPHAN_RESERVATION_SWEEP_AGE_THRESHOLD"},
 					{Label: "单轮扫描批量", Value: strconv.FormatInt(int64(h.worker.OrphanReservationSweepBatchSize), 10), Env: "WORKER_ORPHAN_RESERVATION_SWEEP_BATCH_SIZE"},

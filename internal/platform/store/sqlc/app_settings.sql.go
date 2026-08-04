@@ -271,45 +271,6 @@ func (q *Queries) GetGatewayRuntimeReadinessSnapshot(ctx context.Context) (GetGa
 	return i, err
 }
 
-const listAppSettings = `-- name: ListAppSettings :many
-SELECT key, value, description, updated_at
-FROM app_settings
-ORDER BY key
-`
-
-type ListAppSettingsRow struct {
-	Key         string
-	Value       []byte
-	Description string
-	UpdatedAt   pgtype.Timestamptz
-}
-
-// ListAppSettings 列出全部已持久化设置(供 admin 面板对照展示)。
-func (q *Queries) ListAppSettings(ctx context.Context) ([]ListAppSettingsRow, error) {
-	rows, err := q.db.Query(ctx, listAppSettings)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListAppSettingsRow
-	for rows.Next() {
-		var i ListAppSettingsRow
-		if err := rows.Scan(
-			&i.Key,
-			&i.Value,
-			&i.Description,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const seedAppSetting = `-- name: SeedAppSetting :exec
 INSERT INTO app_settings (key, value, description, updated_at)
 VALUES ($1, $2, $3, now())

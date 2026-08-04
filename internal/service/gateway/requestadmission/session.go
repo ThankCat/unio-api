@@ -798,20 +798,6 @@ func AggregateChannelSamplesIfPresent(ctx context.Context, channelIDs []int64) m
 	return windows
 }
 
-// Reserve uses the request session when this request was admitted. A missing session is a
-// runtime wiring error because generation origins must never fall back to the old Guard.
-func Reserve(ctx context.Context, estimatedTokens int64) error {
-	s, ok := UsageSessionFromContext(ctx)
-	if !ok {
-		return failure.Wrap(
-			failure.CodeGatewayRuntimeSyncRequired,
-			ErrUnknownAdmission,
-			failure.WithMessage("request admission session is missing"),
-		)
-	}
-	return s.Reserve(ctx, estimatedTokens)
-}
-
 // ReserveIfPresent keeps direct service unit tests and non-HTTP maintenance callers neutral;
 // every production generation route installs the session before reaching the service.
 func ReserveIfPresent(ctx context.Context, estimatedTokens int64) error {

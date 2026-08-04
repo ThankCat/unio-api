@@ -218,15 +218,6 @@ func circuitBreakerDefinition() Definition {
 	}
 }
 
-// GatewayCircuitBreaker 读取当前生效的熔断器配置(经 store 多层读取,解码失败回默认)。
-func GatewayCircuitBreaker(ctx context.Context, store *SettingsStore) CircuitBreakerSettings {
-	s, err := DecodeCircuitBreakerSettings(store.Raw(ctx, GatewayCircuitBreakerKey))
-	if err != nil {
-		return DefaultCircuitBreakerSettings()
-	}
-	return s
-}
-
 // ---- 线路/渠道限流默认 ----
 
 // RateLimitDefaultsSettings 是线路或渠道使用的 RPM/TPM/RPD 默认。
@@ -283,15 +274,6 @@ func routeRateLimitDefaultsDefinition() Definition {
 			return err
 		},
 	}
-}
-
-// GatewayRouteRateLimitDefaults 读取当前生效的线路默认限流(解码失败回默认)。
-func GatewayRouteRateLimitDefaults(ctx context.Context, store *SettingsStore) RateLimitDefaultsSettings {
-	s, err := DecodeRateLimitDefaultsSettings(store.Raw(ctx, GatewayRouteRateLimitDefaultsKey))
-	if err != nil {
-		return DefaultRateLimitDefaultsSettings()
-	}
-	return s
 }
 
 // ---- 渠道 429 冷却 ----
@@ -424,15 +406,6 @@ func DecodePositiveIntSetting(raw []byte) (int, error) {
 	return n, nil
 }
 
-// DecodeBoolSetting 解码 JSON 布尔标量。
-func DecodeBoolSetting(raw []byte) (bool, error) {
-	var v bool
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return false, fmt.Errorf("value must be a boolean: %w", err)
-	}
-	return v, nil
-}
-
 func streamIdleTimeoutDefinition() Definition {
 	return Definition{
 		Key:      GatewayStreamIdleTimeoutKey,
@@ -540,15 +513,6 @@ func concurrencyDefaultsDefinition() Definition {
 			return err
 		},
 	}
-}
-
-// GatewayConcurrencyDefaults 读取当前生效的在途并发全局默认（解码失败回默认）。
-func GatewayConcurrencyDefaults(ctx context.Context, store *SettingsStore) ConcurrencyDefaultsSettings {
-	s, err := DecodeConcurrencyDefaultsSettings(store.Raw(ctx, GatewayConcurrencyDefaultsKey))
-	if err != nil {
-		return DefaultConcurrencyDefaultsSettings()
-	}
-	return s
 }
 
 // ---- balanced 容量调度 ----
@@ -688,14 +652,6 @@ func routingBalanceDefinition() Definition {
 			return err
 		},
 	}
-}
-
-func GatewayRoutingBalance(ctx context.Context, store *SettingsStore) RoutingBalanceSettings {
-	s, err := DecodeRoutingBalanceSettings(store.Raw(ctx, GatewayRoutingBalanceKey))
-	if err != nil {
-		return DefaultRoutingBalanceSettings()
-	}
-	return s
 }
 
 // ---- 会话粘性路由全局默认（大 uncache 缺口 P0） ----

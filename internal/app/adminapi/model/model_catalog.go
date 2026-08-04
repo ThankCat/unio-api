@@ -60,11 +60,6 @@ type adoptFromCatalogRequest struct {
 	Capabilities []catalogCapabilityHintDTO `json:"capabilities"`
 }
 
-type catalogReminderRequest struct {
-	Action      string  `json:"action"`
-	SnoozeUntil *string `json:"snooze_until"`
-}
-
 type catalogHandler struct {
 	catalog CatalogService
 	models  ModelService

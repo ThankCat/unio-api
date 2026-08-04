@@ -130,8 +130,6 @@ type fakeAPIKeyStore struct {
 	createErr     error
 	spendLimitArg sqlc.SetAPIKeySpendLimitParams
 	spendLimitSet bool
-	rateLimitsArg sqlc.SetAPIKeyRateLimitsParams
-	rateLimitsSet bool
 	deleteRows    int64
 	deleteErr     error
 }
@@ -183,17 +181,6 @@ func (f *fakeAPIKeyStore) SetAPIKeyName(_ context.Context, arg sqlc.SetAPIKeyNam
 
 func (f *fakeAPIKeyStore) SetAPIKeyExpiresAt(_ context.Context, arg sqlc.SetAPIKeyExpiresAtParams) (sqlc.SetAPIKeyExpiresAtRow, error) {
 	return sqlc.SetAPIKeyExpiresAtRow{ID: arg.ID, ExpiresAt: arg.ExpiresAt}, nil
-}
-
-func (f *fakeAPIKeyStore) SetAPIKeyRateLimits(_ context.Context, arg sqlc.SetAPIKeyRateLimitsParams) (sqlc.SetAPIKeyRateLimitsRow, error) {
-	f.rateLimitsSet = true
-	f.rateLimitsArg = arg
-	return sqlc.SetAPIKeyRateLimitsRow{
-		ID:       arg.ID,
-		RpmLimit: arg.RpmLimit,
-		TpmLimit: arg.TpmLimit,
-		RpdLimit: arg.RpdLimit,
-	}, nil
 }
 
 func TestAPIKeyServiceCreateReturnsPlaintextAndSetsSpendLimit(t *testing.T) {

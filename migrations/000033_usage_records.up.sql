@@ -60,16 +60,12 @@ ALTER TABLE ONLY public.usage_records
 ALTER TABLE ONLY public.usage_records
     ADD CONSTRAINT usage_records_request_record_id_key UNIQUE (request_record_id);
 
-CREATE INDEX idx_usage_records_created_at_id ON public.usage_records USING btree (created_at DESC, id DESC);
-
 ALTER TABLE ONLY public.usage_records
     ADD CONSTRAINT usage_records_request_record_id_fkey FOREIGN KEY (request_record_id) REFERENCES public.request_records(id);
 
 -- ---------------------------------------------------------------------------
 -- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：
 -- ---------------------------------------------------------------------------
--- [000040_admin_query_indexes]
--- Admin 列表查询补 (created_at DESC, id DESC) 排序索引，已直接建入本表。
 -- [000050_add_partial_stream_estimate_usage_source]
 -- Stream partial settlement（TASK-7.23 / DEC-025）落地后，partial 路线（B/D）合成的
 -- usage facts 以 usage_source='partial_stream_estimate' 写入 usage_records，并在触发 settlement

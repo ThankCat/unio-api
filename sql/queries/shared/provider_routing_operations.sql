@@ -42,9 +42,3 @@ SELECT id, token, kind, provider_id, transitions, payload_hash, state, created_a
 FROM provider_routing_operations
 WHERE state <> ALL (ARRAY['committed'::text, 'aborted'::text])
 ORDER BY created_at, id;
-
--- name: DeleteTerminalProviderRoutingOperationsBefore :execrows
-DELETE FROM provider_routing_operations
-WHERE state = ANY (ARRAY['committed'::text, 'aborted'::text])
-  AND completed_at IS NOT NULL
-  AND completed_at < sqlc.arg(cutoff);

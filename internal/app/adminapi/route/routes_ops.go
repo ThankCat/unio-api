@@ -113,6 +113,8 @@ func (h *routeOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 	page := adminhttp.ParsePage(r)
 	sort, err := adminhttp.ParseListSort(r, map[string]struct{}{
 		"name":          {},
+		"status":        {},
+		"mode":          {},
 		"created_at":    {},
 		"bindings":      {},
 		"pool_channels": {},

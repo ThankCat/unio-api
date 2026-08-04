@@ -162,6 +162,10 @@ ORDER BY
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'name') IN ('', 'name') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.name END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.created_at END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.created_at END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.status END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.status END ASC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'mode' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.mode END DESC NULLS LAST,
+  CASE WHEN sqlc.narg('sort_field')::text = 'mode' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN rt.mode END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'bindings' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (
         SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id
     ) END DESC NULLS LAST,

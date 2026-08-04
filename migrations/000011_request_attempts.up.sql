@@ -110,8 +110,6 @@ CREATE INDEX idx_request_attempts_channel_created_at ON public.request_attempts 
 
 CREATE INDEX idx_request_attempts_channel_fault ON public.request_attempts USING btree (channel_id, fault_party) WHERE (status = 'failed'::text);
 
-CREATE INDEX idx_request_attempts_created_at_id ON public.request_attempts USING btree (created_at DESC, id DESC);
-
 CREATE INDEX idx_request_attempts_scoring_samples ON public.request_attempts USING btree (channel_id, created_at DESC, id DESC) WHERE (ttft_scoring_sample OR error_scoring_sample);
 
 ALTER TABLE ONLY public.request_attempts
@@ -126,8 +124,6 @@ ALTER TABLE ONLY public.request_attempts
 -- ---------------------------------------------------------------------------
 -- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：
 -- ---------------------------------------------------------------------------
--- [000040_admin_query_indexes]
--- Admin 列表查询补 (created_at DESC, id DESC) 排序索引，已直接建入本表。
 -- [000042_add_request_attempts_used_capabilities]
 -- 能力自动校正按 key 精确命中埋点。
 --

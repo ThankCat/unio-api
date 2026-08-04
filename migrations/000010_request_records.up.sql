@@ -70,8 +70,6 @@ ALTER TABLE ONLY public.request_records
 
 CREATE INDEX idx_request_records_api_key_created_at ON public.request_records USING btree (api_key_id, created_at DESC);
 
-CREATE INDEX idx_request_records_created_at_id ON public.request_records USING btree (created_at DESC, id DESC);
-
 CREATE INDEX idx_request_records_status_created_at ON public.request_records USING btree (status, created_at DESC);
 
 CREATE INDEX idx_request_records_user_created_at ON public.request_records USING btree (user_id, created_at DESC);
@@ -91,8 +89,6 @@ ALTER TABLE ONLY public.request_records
 -- ---------------------------------------------------------------------------
 -- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：
 -- ---------------------------------------------------------------------------
--- [000040_admin_query_indexes]
--- Admin 列表查询补 (created_at DESC, id DESC) 排序索引，已直接建入本表。
 -- [000046_drop_capability_gate_columns]
 -- DEC-024 移除能力闸门：删除 observe/enforce 审计列。
 -- 能力不再于请求热路径判定，required_capabilities 推断与 capability_check_result 审计随闸门一并删除。

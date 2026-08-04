@@ -615,7 +615,7 @@ func (s *Service) updateWithPublishedCapacity(
 		ChannelID:       &channelID,
 		BusinessCommit: func(ctx context.Context, tx pgx.Tx) error {
 			qtx := sqlc.New(tx)
-			row, updateErr := qtx.UpdateChannel(ctx, sqlc.UpdateChannelParams{
+			if _, updateErr := qtx.UpdateChannel(ctx, sqlc.UpdateChannelParams{
 				ID:                  in.ID,
 				Name:                strings.TrimSpace(in.Name),
 				Status:              strings.TrimSpace(in.Status),
@@ -624,11 +624,10 @@ func (s *Service) updateWithPublishedCapacity(
 				FirstTokenTimeoutMs: timeoutParam(in.FirstTokenTimeoutMs),
 				StickyEnabled:       boolParam(in.StickyEnabled),
 				StickyTtlMs:         nullableInt8Param(in.StickyTTLms),
-			})
-			if updateErr != nil {
+			}); updateErr != nil {
 				return channelUpdateError(updateErr)
 			}
-			row, updateErr = qtx.CommitChannelCapacityAtRevision(ctx, sqlc.CommitChannelCapacityAtRevisionParams{
+			row, updateErr := qtx.CommitChannelCapacityAtRevision(ctx, sqlc.CommitChannelCapacityAtRevisionParams{
 				ConcurrencyLimit: rateLimitParam(capacity.Concurrency),
 				NextRevision:     nextRevision,
 				ID:               channelID,

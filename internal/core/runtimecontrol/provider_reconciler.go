@@ -3,9 +3,7 @@ package runtimecontrol
 import (
 	"context"
 	"fmt"
-	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
@@ -162,9 +160,4 @@ func (reconciler *ProviderRoutingReconciler) restoreStableControls(ctx context.C
 		}
 	}
 	return rows.Err()
-}
-
-func (reconciler *ProviderRoutingReconciler) CleanupTerminal(ctx context.Context, now time.Time) (int64, error) {
-	cutoff := pgtype.Timestamptz{Time: now.Add(-24 * time.Hour), Valid: true}
-	return sqlc.New(reconciler.pool).DeleteTerminalProviderRoutingOperationsBefore(ctx, cutoff)
 }

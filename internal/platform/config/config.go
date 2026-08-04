@@ -29,7 +29,6 @@ type Config struct {
 	ModelCatalogSync ModelCatalogSyncConfig
 	Gateway          GatewayConfig
 	Admin            AdminConfig
-	Console          ConsoleConfig
 	TokenEstimate    TokenEstimateConfig
 }
 
@@ -100,12 +99,6 @@ type AdminConfig struct {
 	LokiURL string
 }
 
-// ConsoleConfig 保存 console-server 进程级配置。
-type ConsoleConfig struct {
-	// HTTPAddr 来自 CONSOLE_HTTP_ADDR；console-server 的监听地址。
-	HTTPAddr string
-}
-
 // ModelCatalogSyncConfig 保存 models.dev 模型目录同步参数；默认关闭（opt-in），
 // license 与 attribution 见仓库根目录 THIRD_PARTY_NOTICES.md。
 type ModelCatalogSyncConfig struct {
@@ -131,7 +124,7 @@ type TracingConfig struct {
 }
 
 // HTTPConfig 保存所有 HTTP server 共享的超时配置；监听地址按服务独立配置，
-// 见 GatewayConfig / AdminConfig / ConsoleConfig 的 HTTPAddr。
+// 见 GatewayConfig / AdminConfig 的 HTTPAddr。
 type HTTPConfig struct {
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
@@ -679,9 +672,6 @@ func Load() (Config, error) {
 			GatewayInternalURLs:  resolveGatewayInternalURLs(),
 			GatewayInternalToken: getEnv("GATEWAY_INTERNAL_TOKEN", ""),
 			LokiURL:              getEnv("LOKI_URL", "http://127.0.0.1:3100"),
-		},
-		Console: ConsoleConfig{
-			HTTPAddr: getEnv("CONSOLE_HTTP_ADDR", ":8522"),
 		},
 		TokenEstimate: TokenEstimateConfig{
 			CountMedia:        tokenEstimateCountMedia,

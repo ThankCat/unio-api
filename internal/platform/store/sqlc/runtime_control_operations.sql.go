@@ -245,22 +245,6 @@ func (q *Queries) CreateRuntimeControlOperation(ctx context.Context, arg CreateR
 	return i, err
 }
 
-const deleteTerminalRuntimeControlOperationsBefore = `-- name: DeleteTerminalRuntimeControlOperationsBefore :execrows
-DELETE FROM runtime_control_operations
-WHERE state = ANY (ARRAY['committed'::text, 'aborted'::text])
-  AND completed_at IS NOT NULL
-  AND completed_at < $1
-`
-
-// 有界清理终态操作（committed|aborted）且早于保留期（>=24h 由调用方传入 cutoff）。
-func (q *Queries) DeleteTerminalRuntimeControlOperationsBefore(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteTerminalRuntimeControlOperationsBefore, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const getLatestCommittedRuntimeStateEpochOperation = `-- name: GetLatestCommittedRuntimeStateEpochOperation :one
 SELECT id, token, kind, channel_id, setting_key, current_revision, next_revision, payload_hash,
     epoch_transition, expected_marker_hash, recovery_evidence, release_evidence, state, created_at, updated_at, completed_at

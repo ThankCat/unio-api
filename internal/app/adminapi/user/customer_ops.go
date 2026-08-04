@@ -52,15 +52,6 @@ type userOpsDetailDTO struct {
 	ConsumptionUSD string  `json:"consumption_usd"`
 }
 
-type customerKeyDTO struct {
-	ID         int64   `json:"id"`
-	Name       string  `json:"name"`
-	Status     string  `json:"status"`
-	SpendLimit *string `json:"spend_limit"`
-	SpentTotal string  `json:"spent_total"`
-	LastUsedAt *string `json:"last_used_at"`
-}
-
 type apiKeysOpsSummaryDTO struct {
 	KeyTotal    int64 `json:"key_total"`
 	KeyEnabled  int64 `json:"key_enabled"`
