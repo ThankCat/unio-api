@@ -72,13 +72,59 @@ const (
 
 // Category 从错误码前缀推导错误分类，例如 config_invalid => config。
 func (c Code) Category() Category {
+	switch c {
+	case CodeRateLimitExceeded, CodeGatewayChannelRateLimited:
+		return CategoryRateLimit
+	}
+
 	raw := string(c)
 	index := strings.IndexByte(raw, '_')
 	if index <= 0 {
 		return CategoryUnknown
 	}
 
-	return Category(raw[:index])
+	switch Category(raw[:index]) {
+	case CategoryConfig:
+		return CategoryConfig
+	case CategoryHTTP:
+		return CategoryHTTP
+	case CategoryDependency:
+		return CategoryDependency
+	case CategoryAuth:
+		return CategoryAuth
+	case CategoryAPIKey:
+		return CategoryAPIKey
+	case CategoryRateLimit:
+		return CategoryRateLimit
+	case CategoryRouting:
+		return CategoryRouting
+	case CategoryModelCatalog:
+		return CategoryModelCatalog
+	case CategoryCapability:
+		return CategoryCapability
+	case CategoryAdapter:
+		return CategoryAdapter
+	case CategorySSE:
+		return CategorySSE
+	case CategoryBilling:
+		return CategoryBilling
+	case CategoryLedger:
+		return CategoryLedger
+	case CategoryGateway:
+		return CategoryGateway
+	case CategoryRequestLog:
+		return CategoryRequestLog
+	case CategoryBootstrap:
+		return CategoryBootstrap
+	case CategoryObservability:
+		return CategoryObservability
+	case CategoryAdminAuth:
+		return CategoryAdminAuth
+	case CategoryAdmin:
+		return CategoryAdmin
+	default:
+		return CategoryUnknown
+	}
 }
 
 const (

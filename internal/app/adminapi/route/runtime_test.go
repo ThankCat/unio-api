@@ -28,6 +28,9 @@ func TestRouteRuntimeDTOUsesPartitionedObjectiveContract(t *testing.T) {
 		Channels: []routeruntime.Channel{{
 			ChannelID: 3, ChannelName: "primary", ChannelStatus: "enabled",
 			ProviderID: 4, ProviderName: "provider", ProviderStatus: "enabled",
+			Pricing: routeruntime.ChannelPricing{
+				Source: "multiplier", CostMultiplier: stringPointer("0.8"), RechargeFactor: stringPointer("0.9"),
+			},
 			Eligible: true, RuntimeRevisionCurrent: true, RuntimeSyncState: "active", BreakerStoreAdmission: "normal",
 			ConcurrencyUsed: 2, ConcurrencyLimit: 10, ConcurrencyRemaining: float64Pointer(0.8),
 			RPMUsed: 12, GlobalRPDUsed: 80, ObservedTPM: 900, TokenCoveredCount: 10, TokenCoveragePct: 83.33,
@@ -60,7 +63,7 @@ func TestRouteRuntimeDTOUsesPartitionedObjectiveContract(t *testing.T) {
 	}
 	channels := decoded["channels"].([]any)
 	channel := channels[0].(map[string]any)
-	for _, key := range []string{"eligibility", "runtime", "concurrency", "quality", "traffic", "score", "distribution", "internal_diagnostics"} {
+	for _, key := range []string{"pricing", "eligibility", "runtime", "concurrency", "quality", "traffic", "score", "distribution", "internal_diagnostics"} {
 		if _, ok := channel[key]; !ok {
 			t.Errorf("missing structured channel section %q: %s", key, body)
 		}
@@ -73,6 +76,23 @@ func TestRouteRuntimeDTOUsesPartitionedObjectiveContract(t *testing.T) {
 	if score["total"] != 87.375 {
 		t.Fatalf("unexpected total score: %#v", score)
 	}
+	pricing := channel["pricing"].(map[string]any)
+	if pricing["source"] != "multiplier" || pricing["cost_multiplier"] != "0.8" || pricing["recharge_factor"] != "0.9" {
+		t.Fatalf("unexpected pricing facts: %#v", pricing)
+	}
+}
+
+func TestEligibilityOmitsMarginWhenPricingWasNotEvaluated(t *testing.T) {
+	dto := eligibilityOf("enabled", routeruntime.Channel{
+		ProviderStatus: "enabled", ChannelStatus: "enabled", MarginStatus: "not_evaluated",
+		ExcludedReason: "channel_cost_missing", RuntimeRevisionCurrent: true,
+	})
+	for _, item := range dto.Checks {
+		if item.Key == "margin" {
+			t.Fatalf("margin check must be omitted when not evaluated: %#v", dto.Checks)
+		}
+	}
 }
 
 func float64Pointer(value float64) *float64 { return &value }
+func stringPointer(value string) *string    { return &value }

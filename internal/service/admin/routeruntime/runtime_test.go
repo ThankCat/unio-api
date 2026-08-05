@@ -332,6 +332,15 @@ func TestRuntimeResolvesAbsoluteAndMultiplierCosts(t *testing.T) {
 			t.Errorf("channel %d cost score mismatch: %+v", channel.ChannelID, channel)
 		}
 	}
+	if got.Channels[0].Pricing.Source != pricingSourceAbsolute ||
+		got.Channels[0].Pricing.CostMultiplier != nil || got.Channels[0].Pricing.RechargeFactor != nil {
+		t.Fatalf("absolute pricing facts mismatch: %+v", got.Channels[0].Pricing)
+	}
+	if got.Channels[1].Pricing.Source != pricingSourceMultiplier ||
+		got.Channels[1].Pricing.CostMultiplier == nil || *got.Channels[1].Pricing.CostMultiplier != "1" ||
+		got.Channels[1].Pricing.RechargeFactor == nil || *got.Channels[1].Pricing.RechargeFactor != "0.5" {
+		t.Fatalf("multiplier pricing facts mismatch: %+v", got.Channels[1].Pricing)
+	}
 	// 成本75×25% + 并发100×20% + TTFT100×25% + 错误率100×20% + 优先级(90/80)×10%。
 	if math.Abs(got.Channels[0].FinalScore-92.75) > 1e-9 || math.Abs(got.Channels[1].FinalScore-91.75) > 1e-9 {
 		t.Fatalf("objective score must include Priority: %+v", got.Channels)

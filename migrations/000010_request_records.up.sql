@@ -72,6 +72,8 @@ CREATE INDEX idx_request_records_api_key_created_at ON public.request_records US
 
 CREATE INDEX idx_request_records_created_at_id ON public.request_records USING btree (created_at DESC, id DESC);
 
+CREATE INDEX idx_request_records_route_created_at ON public.request_records USING btree (route_id, created_at DESC);
+
 CREATE INDEX idx_request_records_status_created_at ON public.request_records USING btree (status, created_at DESC);
 
 CREATE INDEX idx_request_records_user_created_at ON public.request_records USING btree (user_id, created_at DESC);

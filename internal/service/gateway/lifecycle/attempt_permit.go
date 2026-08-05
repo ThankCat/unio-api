@@ -218,7 +218,8 @@ func (m *AttemptPermitManager) Acquire(ctx context.Context, params AttemptPermit
 	if m.metrics != nil {
 		m.metrics.AddBreakerPermitActive(1)
 	}
-	logging.Debug(m.logger, "admission", "permit", "attempt permit acquired",
+	logging.Debug(
+		m.logger, "admission", "permit", "attempt permit acquired",
 		owner.logData(
 			zap.Int64("provider_id", params.Candidate.ProviderID),
 			zap.Int64("channel_id", params.Candidate.Channel.ID),
@@ -408,14 +409,16 @@ func (o *AttemptPermitOwner) finish(
 			return
 		}
 		o.recordFinishResult()
-		logging.Debug(o.logger, "admission", "permit", "attempt permit finalized",
+		logging.Debug(
+			o.logger, "admission", "permit", "attempt permit finalized",
 			o.logData(
 				zap.String("operation", "finish"),
 				zap.String("provider_disposition", string(o.terminalResult.ProviderDisposition)),
 				zap.String("channel_disposition", string(o.terminalResult.ChannelDisposition)),
 			)...,
 		)
-		logging.Debug(o.logger, "runtime", "breaker", "breaker result recorded",
+		logging.Debug(
+			o.logger, "runtime", "breaker", "breaker result recorded",
 			o.logData(
 				zap.Int64("provider_id", o.permit.ProviderID),
 				zap.Int64("channel_id", o.permit.ChannelID),
@@ -503,14 +506,16 @@ func (o *AttemptPermitOwner) recordRuntimeFeedback(ctx context.Context, upstream
 		)
 		cancel()
 		if feedbackErr == nil {
-			logging.Warn(o.logger, "runtime", "cooldown", "channel cooldown applied",
+			logging.Warn(
+				o.logger, "runtime", "cooldown", "channel cooldown applied",
 				o.logData(
 					zap.Int64("provider_id", o.permit.ProviderID), zap.Int64("channel_id", o.permit.ChannelID),
 					zap.Int64("duration_ms", durationMs), zap.Int64("source_retry_after_ms", sourceRetryAfterMs),
 				)...,
 			)
 		} else {
-			logging.Error(o.logger, "runtime", "cooldown", "channel cooldown update failed",
+			logging.Error(
+				o.logger, "runtime", "cooldown", "channel cooldown update failed",
 				o.logData(
 					zap.Int64("provider_id", o.permit.ProviderID), zap.Int64("channel_id", o.permit.ChannelID),
 					zap.Int64("duration_ms", durationMs), zap.Int64("source_retry_after_ms", sourceRetryAfterMs),
@@ -530,7 +535,8 @@ func (o *AttemptPermitOwner) recordRuntimeFeedback(ctx context.Context, upstream
 		)
 		cancel()
 		if feedbackErr == nil {
-			logging.Warn(o.logger, "runtime", "permission", "channel model permission paused",
+			logging.Warn(
+				o.logger, "runtime", "permission", "channel model permission paused",
 				o.logData(
 					zap.Int64("provider_id", o.permit.ProviderID), zap.Int64("channel_id", o.permit.ChannelID),
 					zap.Int64("model_id", o.permit.ModelID), zap.Int("status_code", 403),
@@ -540,7 +546,8 @@ func (o *AttemptPermitOwner) recordRuntimeFeedback(ctx context.Context, upstream
 				)...,
 			)
 		} else {
-			logging.Error(o.logger, "runtime", "permission", "channel model permission pause failed",
+			logging.Error(
+				o.logger, "runtime", "permission", "channel model permission pause failed",
 				o.logData(
 					zap.Int64("provider_id", o.permit.ProviderID), zap.Int64("channel_id", o.permit.ChannelID),
 					zap.Int64("model_id", o.permit.ModelID), zap.Int("status_code", 403),
@@ -591,7 +598,8 @@ func (o *AttemptPermitOwner) Abort(ctx context.Context) error {
 		}
 		o.recordPermitOperation("abort", result)
 		if o.terminalErr == nil {
-			logging.Debug(o.logger, "admission", "permit", "attempt permit finalized",
+			logging.Debug(
+				o.logger, "admission", "permit", "attempt permit finalized",
 				o.logData(zap.String("operation", "abort"))...,
 			)
 		}
@@ -633,7 +641,8 @@ func (o *AttemptPermitOwner) renewLoop() {
 			}
 			o.recordPermitOperation("renew", result)
 			if err != nil {
-				logging.Warn(o.logger, "admission", "permit", "attempt permit renew failed",
+				logging.Warn(
+					o.logger, "admission", "permit", "attempt permit renew failed",
 					o.logData(zap.String("permit_id_hash", permitIDHash(o.permit.PermitID)), zap.String("error_message", normalizeAttemptStoreError(err).Error()))...,
 				)
 			}
@@ -674,7 +683,8 @@ func (o *AttemptPermitOwner) recordFinishDisposition(scope string, disposition b
 	case breakerstore.DispositionStaleStatusRev:
 		o.metrics.IncProviderStatusRevisionMismatch("finish")
 	}
-	logging.Warn(o.logger, "admission", "permit", "attempt permit result ignored",
+	logging.Warn(
+		o.logger, "admission", "permit", "attempt permit result ignored",
 		o.logData(
 			zap.Int64("provider_id", o.permit.ProviderID),
 			zap.Int64("channel_id", o.permit.ChannelID),
@@ -762,7 +772,7 @@ func (o *AttemptPermitOwner) operationContext(ctx context.Context) (context.Cont
 }
 
 // nonStreamFinishOutcome 使用稳定 adapter 分类生成保守 breaker attribution。
-func nonStreamFinishOutcome(success AttemptSuccess, timing AttemptTimingFacts, err error) breakerstore.FinishOutcome {
+func nonStreamFinishOutcome(_ AttemptSuccess, timing AttemptTimingFacts, err error) breakerstore.FinishOutcome {
 	out := breakerstore.FinishOutcome{
 		ProviderOutcome: breakerstore.OutcomeIgnored,
 		ChannelOutcome:  breakerstore.OutcomeIgnored,
@@ -902,7 +912,8 @@ func (r *AttemptRunner) invokeNonStreamAttempt(
 	if owner != nil {
 		if !facts.HasChannelUsageEvidence() {
 			if abortErr := owner.Abort(ctx); abortErr != nil {
-				r.logRouting(ctx, "attempt permit abort result unknown",
+				r.logRouting(
+					ctx, "attempt permit abort result unknown",
 					zap.Int64("channel_id", candidate.Channel.ID),
 					zap.String("mode", "non_stream"),
 					zap.String("error_code", "attempt_permit_abort_result_unknown"),
@@ -924,7 +935,8 @@ func (r *AttemptRunner) invokeNonStreamAttempt(
 						string(finishResult.ProviderDisposition),
 						string(finishResult.ChannelDisposition),
 					)
-					r.logRouting(ctx, "attempt runtime feedback failed",
+					r.logRouting(
+						ctx, "attempt runtime feedback failed",
 						zap.Int64("channel_id", candidate.Channel.ID),
 						zap.Error(finishErr),
 					)
@@ -936,7 +948,8 @@ func (r *AttemptRunner) invokeNonStreamAttempt(
 						string(breakerstore.DispositionResultUnknown),
 						string(breakerstore.DispositionResultUnknown),
 					)
-					r.logRouting(ctx, "attempt permit finish result unknown",
+					r.logRouting(
+						ctx, "attempt permit finish result unknown",
 						zap.Int64("channel_id", candidate.Channel.ID),
 						zap.String("mode", "non_stream"),
 						zap.String("error_code", "attempt_permit_finish_result_unknown"),

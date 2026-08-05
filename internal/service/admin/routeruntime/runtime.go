@@ -17,6 +17,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/opsutil"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/runtimefacts"
 )
@@ -31,6 +32,10 @@ const (
 
 	breakerAdmissionNormal = "normal"
 	breakerAdmissionDenied = "denied"
+
+	pricingSourceAbsolute     = "absolute"
+	pricingSourceMultiplier   = "multiplier"
+	pricingSourceUnconfigured = "unconfigured"
 )
 
 type Store interface {
@@ -81,6 +86,13 @@ type Source struct {
 	Stale      bool
 }
 
+// ChannelPricing 是当前筛选模型实际采用的 Provider 成本来源。
+type ChannelPricing struct {
+	Source         string
+	CostMultiplier *string
+	RechargeFactor *string
+}
+
 type Channel struct {
 	ChannelID                      int64
 	ChannelName                    string
@@ -114,6 +126,7 @@ type Channel struct {
 	Protocol                       string
 	AdapterKey                     string
 	Priority                       int32
+	Pricing                        ChannelPricing
 	Eligible                       bool
 	ExcludedReason                 string
 	ConcurrencyUsed                int64
@@ -479,6 +492,7 @@ func populateChannels(runtime *Runtime, rows []sqlc.RouteRuntimePoolRow, statsRo
 			ChannelConfigRevision:   row.ChannelConfigRevision,
 			ChannelCapacityRevision: row.ChannelCapacityRevision,
 			Protocol:                row.Protocol, AdapterKey: row.AdapterKey, Priority: row.Priority,
+			Pricing:  channelPricingFromRow(row),
 			Eligible: reason == "", ExcludedReason: reason, MarginStatus: "not_evaluated",
 			RuntimeSyncState: runtimeSyncActive, BreakerStoreAdmission: breakerAdmissionNormal,
 			Selected1m: stat.Selected1m, Selected5m: stat.Selected5m, Fallback1m: stat.Fallback1m,
@@ -493,6 +507,21 @@ func populateChannels(runtime *Runtime, rows []sqlc.RouteRuntimePoolRow, statsRo
 			channel.SelectedShare5m = float64(stat.Selected5m) / float64(totalSelected5m)
 		}
 		runtime.Channels[index] = channel
+	}
+}
+
+func channelPricingFromRow(row sqlc.RouteRuntimePoolRow) ChannelPricing {
+	switch {
+	case row.ChannelPriceID > 0:
+		return ChannelPricing{Source: pricingSourceAbsolute}
+	case row.ChannelCostMultiplierID > 0:
+		return ChannelPricing{
+			Source:         pricingSourceMultiplier,
+			CostMultiplier: opsutil.NumericStringPtr(row.CostMultiplier),
+			RechargeFactor: opsutil.NumericStringPtr(row.RechargeFactor),
+		}
+	default:
+		return ChannelPricing{Source: pricingSourceUnconfigured}
 	}
 }
 

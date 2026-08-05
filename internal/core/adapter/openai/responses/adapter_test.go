@@ -230,6 +230,9 @@ func TestCreateResponseUpstreamNon2xxReturnsStatusError(t *testing.T) {
 	if !ok || meta.StatusCode != http.StatusTooManyRequests || meta.RequestID != "req-429" {
 		t.Fatalf("meta = %+v ok=%v, want 429/req-429", meta, ok)
 	}
+	if meta.ResponseSnippet != "rate limited" {
+		t.Fatalf("response snippet = %q, want upstream error body", meta.ResponseSnippet)
+	}
 }
 
 func TestCreateResponseEmptyBodyReturnsEncodeError(t *testing.T) {
@@ -845,6 +848,10 @@ func TestStreamResponseUpstreamStatusReturnsError(t *testing.T) {
 	}
 	if failure.CodeOf(err) != failure.CodeAdapterUpstreamStatus {
 		t.Fatalf("code = %q, want %q", failure.CodeOf(err), failure.CodeAdapterUpstreamStatus)
+	}
+	meta, ok := adapter.UpstreamMetadataOf(err)
+	if !ok || meta.ResponseSnippet != "bad gateway" {
+		t.Fatalf("meta = %+v ok=%v, want upstream error body", meta, ok)
 	}
 }
 

@@ -71,6 +71,7 @@ CASE
     WHEN (upstream_status_code BETWEEN 400 AND 499 AND upstream_status_code NOT IN (401, 403, 408, 429)) THEN 'client'::text
     ELSE 'upstream'::text
 END) STORED,
+    permit_id text,
     CONSTRAINT request_attempts_attempt_index_check CHECK ((attempt_index >= 0)),
     CONSTRAINT request_attempts_finish_class_check CHECK (((finish_class IS NULL) OR (finish_class = ANY (ARRAY['stop'::text, 'length'::text, 'tool_use'::text, 'content_filter'::text, 'refusal'::text, 'pause'::text, 'other'::text])))),
     CONSTRAINT request_attempts_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text, 'canceled'::text]))),
@@ -80,6 +81,7 @@ END) STORED,
     CONSTRAINT request_attempts_usage_mapping_version_check CHECK (((usage_mapping_version IS NULL) OR (usage_mapping_version <> ''::text))),
     CONSTRAINT request_attempts_upstream_timeout_phase_check CHECK (((upstream_timeout_phase IS NULL) OR (upstream_timeout_phase = ANY (ARRAY['response_header'::text, 'first_token'::text, 'stream_idle'::text, 'response_body'::text])))),
     CONSTRAINT request_attempts_error_sample_failure_check CHECK ((NOT error_scoring_failure OR error_scoring_sample)),
+    CONSTRAINT request_attempts_permit_id_check CHECK (((permit_id IS NULL) OR (btrim(permit_id) <> ''::text))),
     -- 上游时间事实拆开约束：first/completed 非空则 start 非空且有序；first、completed 均非空才要求 first<=completed。
     CONSTRAINT ck_request_attempts_upstream_first_after_start CHECK (((upstream_first_token_at IS NULL) OR ((upstream_started_at IS NOT NULL) AND (upstream_started_at <= upstream_first_token_at)))),
     CONSTRAINT ck_request_attempts_upstream_completed_after_start CHECK (((upstream_completed_at IS NULL) OR ((upstream_started_at IS NOT NULL) AND (upstream_started_at <= upstream_completed_at)))),
@@ -112,7 +114,11 @@ CREATE INDEX idx_request_attempts_channel_fault ON public.request_attempts USING
 
 CREATE INDEX idx_request_attempts_created_at_id ON public.request_attempts USING btree (created_at DESC, id DESC);
 
+CREATE INDEX idx_request_attempts_provider_created_at ON public.request_attempts USING btree (provider_id, created_at DESC);
+
 CREATE INDEX idx_request_attempts_scoring_samples ON public.request_attempts USING btree (channel_id, created_at DESC, id DESC) WHERE (ttft_scoring_sample OR error_scoring_sample);
+
+CREATE UNIQUE INDEX uq_request_attempts_permit_id ON public.request_attempts USING btree (permit_id) WHERE (permit_id IS NOT NULL);
 
 ALTER TABLE ONLY public.request_attempts
     ADD CONSTRAINT request_attempts_channel_id_fkey FOREIGN KEY (channel_id) REFERENCES public.channels(id);

@@ -656,8 +656,8 @@ func routingBalanceDefinition() Definition {
 // ---- 会话粘性路由全局默认（大 uncache 缺口 P0） ----
 
 // RoutingStickySettings 是跨协议会话 sticky 的全局默认配置。
-// 渠道行 sticky_enabled 可覆盖 EnabledDefault（NULL=继承此默认）；TTL 为绝对过期（bind/改绑时设置，
-// 命中不刷新，R2），与上游 prompt cache TTL 解耦。容量等待不属于 sticky，见
+// 渠道行 sticky_enabled 可覆盖 EnabledDefault（NULL=继承此默认）；读取命中本身不续期，只有原绑定
+// 渠道完整成功后才按 CAS 把 TTL 滑动续期为完整时长。它与上游 prompt cache TTL 解耦。容量等待不属于 sticky，见
 // GatewayCapacityWaitTimeoutKey（§9.4 全池共享短等）。
 type RoutingStickySettings struct {
 	EnabledDefault bool
@@ -709,8 +709,8 @@ func routingStickyDefinition() Definition {
 		Category: "gateway",
 		Label:    "会话粘性路由(sticky)",
 		Description: "同会话请求钉住上次成功渠道以保上游 prompt cache（OpenAI prompt_cache_key / " +
-			"Claude Code 会话头）。enabled_default 是渠道未单独配置时的默认开关；ttl_ms 是绑定绝对过期" +
-			"（仅原绑定完整成功时滑动续期，到期回落线路策略排序）。",
+			"Claude Code 会话头）。enabled_default 是渠道未单独配置时的默认开关；读取命中本身不续期，" +
+			"只有原绑定渠道完整成功后把 ttl_ms 重新延长；到期后回落线路策略排序。",
 		HotReload: true,
 		Default:   encodeRoutingStickySettings(DefaultRoutingStickySettings()),
 		Validate: func(raw json.RawMessage) error {

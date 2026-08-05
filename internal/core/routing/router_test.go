@@ -10,6 +10,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -30,6 +31,8 @@ type fakeStore struct {
 	userCanUse        bool
 	userCanUseErr     error
 	routeMode         string
+	routeStatus       string
+	routeErr          error
 	routeChannelCount int64
 }
 
@@ -75,11 +78,18 @@ func (s *fakeStore) UserCanUseModel(ctx context.Context, arg sqlc.UserCanUseMode
 
 // GetRouteByID 返回测试线路；调用方传入 RouteID 触发解析（线路必填）。
 func (s *fakeStore) GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error) {
+	if s.routeErr != nil {
+		return sqlc.Route{}, s.routeErr
+	}
 	mode := s.routeMode
 	if mode == "" {
 		mode = "balanced"
 	}
-	return sqlc.Route{ID: id, Name: "test", Mode: mode, Status: "enabled", PriceRatio: testPriceRatio()}, nil
+	status := s.routeStatus
+	if status == "" {
+		status = "enabled"
+	}
+	return sqlc.Route{ID: id, Name: "test", Mode: mode, Status: status, PriceRatio: testPriceRatio()}, nil
 }
 
 func (s *fakeStore) CountRouteChannels(context.Context, int64) (int64, error) {
@@ -484,6 +494,44 @@ func TestRouterPlanChatReturnsRouteNotConfigured(t *testing.T) {
 	}
 	if store.params != (sqlc.FindRouteCandidatesParams{}) {
 		t.Fatalf("expected store query to be skipped, got %#v", store.params)
+	}
+}
+
+func TestRouterPlanChatReturnsRouteNotConfiguredForMissingOrDisabledRoute(t *testing.T) {
+	tests := []struct {
+		name  string
+		store *fakeStore
+	}{
+		{name: "missing", store: &fakeStore{routeErr: pgx.ErrNoRows}},
+		{name: "disabled", store: &fakeStore{routeStatus: "disabled"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := NewRouter(tt.store, 30*time.Second)
+			_, err := router.PlanChat(context.Background(), ChatRouteRequest{
+				UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI, RouteID: testRouteID(),
+			})
+			if failure.CodeOf(err) != failure.CodeRoutingRouteNotConfigured {
+				t.Fatalf("code = %q, want %q", failure.CodeOf(err), failure.CodeRoutingRouteNotConfigured)
+			}
+		})
+	}
+}
+
+func TestRouterPlanChatReturnsStoreFailureWhenRouteLookupFails(t *testing.T) {
+	storeErr := errors.New("database unavailable")
+	store := &fakeStore{routeErr: storeErr}
+	router := NewRouter(store, 30*time.Second)
+
+	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI, RouteID: testRouteID(),
+	})
+	if failure.CodeOf(err) != failure.CodeRoutingStoreFailed {
+		t.Fatalf("code = %q, want %q", failure.CodeOf(err), failure.CodeRoutingStoreFailed)
+	}
+	if !errors.Is(err, storeErr) {
+		t.Fatalf("expected store error to be preserved, got %v", err)
 	}
 }
 

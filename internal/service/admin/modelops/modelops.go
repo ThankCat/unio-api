@@ -215,13 +215,18 @@ func (s *Service) Detail(ctx context.Context, modelID int64, from, to time.Time)
 		BindingsAvailable: r.BindingsAvailable,
 		ModelStatus:       r.ModelStatus,
 	}
-	if r.InputTokens > 0 {
-		d.CacheReadRate = float64(r.CacheReadTokens+r.CacheWriteTokens) / float64(r.InputTokens)
-	}
+	d.CacheReadRate = cacheReadRate(r.CacheReadTokens, r.InputTokens)
 	if r.GenerationSeconds > 0 {
 		d.TPS = float64(r.OutputTokens) / r.GenerationSeconds
 	}
 	return d, nil
+}
+
+func cacheReadRate(cacheReadTokens, inputTokens int64) float64 {
+	if inputTokens <= 0 {
+		return 0
+	}
+	return float64(cacheReadTokens) / float64(inputTokens)
 }
 
 // Channels 返回单模型承载渠道（绑定）+ attempt 指标。

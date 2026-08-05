@@ -452,7 +452,8 @@ WITH attributed AS (
         (SELECT COUNT(*) FROM request_attempts a WHERE a.request_record_id = r.id) AS attempt_count
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    WHERE COALESCE(r.route_id, ak.route_id) = $1::bigint
+    WHERE (r.route_id = $1::bigint
+           OR (r.route_id IS NULL AND ak.route_id = $1::bigint))
       AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
       AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 )
@@ -508,7 +509,8 @@ WITH attributed AS (
     SELECT r.requested_model_id, r.status
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    WHERE COALESCE(r.route_id, ak.route_id) = $1::bigint
+    WHERE (r.route_id = $1::bigint
+           OR (r.route_id IS NULL AND ak.route_id = $1::bigint))
       AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
       AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 )
@@ -560,7 +562,8 @@ WITH attributed AS (
     SELECT r.created_at, r.status, r.started_at, r.completed_at
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    WHERE COALESCE(r.route_id, ak.route_id) = $2::bigint
+    WHERE (r.route_id = $2::bigint
+           OR (r.route_id IS NULL AND ak.route_id = $2::bigint))
       AND ($3::timestamptz IS NULL OR r.created_at >= $3::timestamptz)
       AND ($4::timestamptz IS NULL OR r.created_at < $4::timestamptz)
 )
@@ -691,7 +694,8 @@ SELECT
     CASE WHEN r.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END AS latency_ms
 FROM request_records r
 JOIN api_keys ak ON ak.id = r.api_key_id
-WHERE COALESCE(r.route_id, ak.route_id) = $1::bigint
+WHERE (r.route_id = $1::bigint
+       OR (r.route_id IS NULL AND ak.route_id = $1::bigint))
   AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
   AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 ORDER BY r.created_at DESC
@@ -753,7 +757,8 @@ const routeOpsRequestsCount = `-- name: RouteOpsRequestsCount :one
 SELECT COUNT(*) AS total
 FROM request_records r
 JOIN api_keys ak ON ak.id = r.api_key_id
-WHERE COALESCE(r.route_id, ak.route_id) = $1::bigint
+WHERE (r.route_id = $1::bigint
+       OR (r.route_id IS NULL AND ak.route_id = $1::bigint))
   AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
   AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 `

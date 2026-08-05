@@ -62,9 +62,12 @@ func TestCodeCategory(t *testing.T) {
 	}{
 		{name: "config", code: CodeConfigInvalid, want: CategoryConfig},
 		{name: "http", code: CodeHTTPInvalidJSONBody, want: CategoryHTTP},
+		{name: "api key rate limit", code: CodeRateLimitExceeded, want: CategoryRateLimit},
+		{name: "channel rate limit", code: CodeGatewayChannelRateLimited, want: CategoryRateLimit},
 		{name: "empty", code: "", want: CategoryUnknown},
 		{name: "no separator", code: Code("invalid"), want: CategoryUnknown},
 		{name: "bad prefix", code: Code("_invalid"), want: CategoryUnknown},
+		{name: "undefined prefix", code: Code("invented_failure"), want: CategoryUnknown},
 	}
 
 	for _, tt := range tests {

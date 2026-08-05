@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 
@@ -336,7 +337,11 @@ func IsSupportedProtocol(protocol string) bool {
 // resolveRoute 把 Key 绑定解析成本次请求的有效线路（候选池 + 策略）。
 // 线路必填、无默认回落：Key 绑定线路缺失或已停用即拒绝请求。
 func (r *Router) resolveRoute(ctx context.Context, req ChatRouteRequest) (resolvedRoute, error) {
-	if route, ok := r.loadEnabledRoute(ctx, req.RouteID); ok {
+	route, ok, err := r.loadEnabledRoute(ctx, req.RouteID)
+	if err != nil {
+		return resolvedRoute{}, err
+	}
+	if ok {
 		return route, nil
 	}
 
@@ -347,20 +352,26 @@ func (r *Router) resolveRoute(ctx context.Context, req ChatRouteRequest) (resolv
 	)
 }
 
-// loadEnabledRoute 读取指定线路；不存在或已停用返回 ok=false（上层据此拒绝请求）。
-func (r *Router) loadEnabledRoute(ctx context.Context, id *int64) (resolvedRoute, bool) {
+// loadEnabledRoute 读取指定线路；不存在或已停用返回 ok=false，其他存储错误显式上抛。
+func (r *Router) loadEnabledRoute(ctx context.Context, id *int64) (resolvedRoute, bool, error) {
 	if id == nil {
-		return resolvedRoute{}, false
+		return resolvedRoute{}, false, nil
 	}
 	row, err := r.store.GetRouteByID(ctx, *id)
 	if err != nil {
-		// 不存在（理论上被 FK 阻止）或读失败都保守回落，不阻断请求。
-		return resolvedRoute{}, false
+		if errors.Is(err, pgx.ErrNoRows) {
+			return resolvedRoute{}, false, nil
+		}
+		return resolvedRoute{}, false, failure.Wrap(
+			failure.CodeRoutingStoreFailed,
+			err,
+			failure.WithMessage("get route by id"),
+		)
 	}
 	if row.Status != "enabled" {
-		return resolvedRoute{}, false
+		return resolvedRoute{}, false, nil
 	}
-	return resolvedRoute{ID: row.ID, Name: row.Name, Mode: row.Mode, PriceRatio: row.PriceRatio}, true
+	return resolvedRoute{ID: row.ID, Name: row.Name, Mode: row.Mode, PriceRatio: row.PriceRatio}, true, nil
 }
 
 func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest, route resolvedRoute) ([]sqlc.FindRouteCandidatesRow, error) {

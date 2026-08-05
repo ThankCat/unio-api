@@ -251,7 +251,8 @@ WITH attributed AS (
         (SELECT COUNT(*) FROM request_attempts a WHERE a.request_record_id = r.id) AS attempt_count
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    WHERE COALESCE(r.route_id, ak.route_id) = sqlc.arg('route_id')::bigint
+    WHERE (r.route_id = sqlc.arg('route_id')::bigint
+           OR (r.route_id IS NULL AND ak.route_id = sqlc.arg('route_id')::bigint))
       AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 )
@@ -482,7 +483,8 @@ WITH attributed AS (
     SELECT r.created_at, r.status, r.started_at, r.completed_at
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    WHERE COALESCE(r.route_id, ak.route_id) = sqlc.arg('route_id')::bigint
+    WHERE (r.route_id = sqlc.arg('route_id')::bigint
+           OR (r.route_id IS NULL AND ak.route_id = sqlc.arg('route_id')::bigint))
       AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 )
@@ -503,7 +505,8 @@ WITH attributed AS (
     SELECT r.requested_model_id, r.status
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    WHERE COALESCE(r.route_id, ak.route_id) = sqlc.arg('route_id')::bigint
+    WHERE (r.route_id = sqlc.arg('route_id')::bigint
+           OR (r.route_id IS NULL AND ak.route_id = sqlc.arg('route_id')::bigint))
       AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 )
@@ -527,7 +530,8 @@ SELECT
     CASE WHEN r.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END AS latency_ms
 FROM request_records r
 JOIN api_keys ak ON ak.id = r.api_key_id
-WHERE COALESCE(r.route_id, ak.route_id) = sqlc.arg('route_id')::bigint
+WHERE (r.route_id = sqlc.arg('route_id')::bigint
+       OR (r.route_id IS NULL AND ak.route_id = sqlc.arg('route_id')::bigint))
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 ORDER BY r.created_at DESC
@@ -537,6 +541,7 @@ LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 SELECT COUNT(*) AS total
 FROM request_records r
 JOIN api_keys ak ON ak.id = r.api_key_id
-WHERE COALESCE(r.route_id, ak.route_id) = sqlc.arg('route_id')::bigint
+WHERE (r.route_id = sqlc.arg('route_id')::bigint
+       OR (r.route_id IS NULL AND ak.route_id = sqlc.arg('route_id')::bigint))
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz);

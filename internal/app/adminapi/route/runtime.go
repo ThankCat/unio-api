@@ -83,6 +83,12 @@ type providerSummaryDTO struct {
 	Status string `json:"status"`
 }
 
+type pricingDTO struct {
+	Source         string  `json:"source"`
+	CostMultiplier *string `json:"cost_multiplier"`
+	RechargeFactor *string `json:"recharge_factor"`
+}
+
 type eligibilityCheckDTO struct {
 	Key    string `json:"key"`
 	Status string `json:"status"`
@@ -186,6 +192,7 @@ type runtimeChannelDTO struct {
 	AdapterKey    string                `json:"adapter_key"`
 	Priority      int32                 `json:"priority"`
 	Order         int                   `json:"order"`
+	Pricing       pricingDTO            `json:"pricing"`
 	Eligibility   eligibilityDTO        `json:"eligibility"`
 	Runtime       runtimeStateDTO       `json:"runtime"`
 	Concurrency   concurrencyDTO        `json:"concurrency"`
@@ -289,6 +296,10 @@ func toRuntimeChannelDTO(routeStatus string, channel routeruntime.Channel) runti
 		ChannelID: channel.ChannelID, ChannelName: channel.ChannelName, ChannelStatus: channel.ChannelStatus,
 		Provider: providerSummaryDTO{ID: channel.ProviderID, Name: channel.ProviderName, Status: channel.ProviderStatus},
 		Protocol: channel.Protocol, AdapterKey: channel.AdapterKey, Priority: channel.Priority, Order: channel.CurrentOrder,
+		Pricing: pricingDTO{
+			Source: channel.Pricing.Source, CostMultiplier: channel.Pricing.CostMultiplier,
+			RechargeFactor: channel.Pricing.RechargeFactor,
+		},
 		Eligibility: eligibility,
 		Runtime: runtimeStateDTO{
 			State: channel.RuntimeSyncState, ConfigSynchronized: channel.RuntimeRevisionCurrent,
@@ -350,19 +361,24 @@ func eligibilityOf(routeStatus string, channel routeruntime.Channel) eligibility
 	if channel.ExcludedReason != "" {
 		reasons = append(reasons, channel.ExcludedReason)
 	}
+	checks := []eligibilityCheckDTO{
+		check("route", routeStatus == "enabled", "route_"+routeStatus),
+		check("provider", channel.ProviderStatus == "enabled", "provider_"+channel.ProviderStatus),
+		check("channel", channel.ChannelStatus == "enabled", "channel_"+channel.ChannelStatus),
+	}
+	if channel.MarginStatus != "not_evaluated" {
+		checks = append(checks, check("margin", channel.MarginStatus == "safe", channel.MarginStatus))
+	}
+	checks = append(checks,
+		check("provider_breaker", !breakerUnavailable(channel.ProviderBreakerState), "provider_breaker_open"),
+		check("channel_breaker", !breakerUnavailable(channel.ChannelBreakerState), "channel_breaker_open"),
+		check("cooldown", channel.CooldownRemainingMs <= 0, "cooldown"),
+		check("model_permission", !channel.ModelPermissionPaused, "model_permission_paused"),
+		check("runtime", channel.RuntimeRevisionCurrent, channel.RuntimeSyncState),
+	)
 	return eligibilityDTO{
 		Status: status, PrimaryReason: channel.ExcludedReason, Reasons: reasons,
-		Checks: []eligibilityCheckDTO{
-			check("route", routeStatus == "enabled", "route_"+routeStatus),
-			check("provider", channel.ProviderStatus == "enabled", "provider_"+channel.ProviderStatus),
-			check("channel", channel.ChannelStatus == "enabled", "channel_"+channel.ChannelStatus),
-			check("margin", channel.MarginStatus == "safe", channel.MarginStatus),
-			check("provider_breaker", !breakerUnavailable(channel.ProviderBreakerState), "provider_breaker_open"),
-			check("channel_breaker", !breakerUnavailable(channel.ChannelBreakerState), "channel_breaker_open"),
-			check("cooldown", channel.CooldownRemainingMs <= 0, "cooldown"),
-			check("model_permission", !channel.ModelPermissionPaused, "model_permission_paused"),
-			check("runtime", channel.RuntimeRevisionCurrent, channel.RuntimeSyncState),
-		},
+		Checks: checks,
 	}
 }
 
