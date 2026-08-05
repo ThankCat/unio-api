@@ -99,10 +99,6 @@ func (k keyBuilder) requestRPDBucket(routeID, userID, dayBucket int64) string {
 	return k.base + "admission:v1:ru-rpd:" + i(routeID) + ":" + i(userID) + ":" + i(dayBucket)
 }
 
-func (k keyBuilder) requestTPMBucket(routeID, userID, minuteBucket int64) string {
-	return k.base + "admission:v1:ru-tpm:" + i(routeID) + ":" + i(userID) + ":" + i(minuteBucket)
-}
-
 func (k keyBuilder) requestConcurrency(routeID, userID int64) string {
 	return k.base + "admission:v1:ru-conc:" + i(routeID) + ":" + i(userID)
 }
@@ -120,10 +116,6 @@ func (k keyBuilder) requestRPDBucketRoutePattern(routeID, dayBucket int64) strin
 	return k.base + "admission:v1:ru-rpd:" + i(routeID) + ":*:" + i(dayBucket)
 }
 
-func (k keyBuilder) requestTPMBucketRoutePattern(routeID, minuteBucket int64) string {
-	return k.base + "admission:v1:ru-tpm:" + i(routeID) + ":*:" + i(minuteBucket)
-}
-
 // routeChannelRPDBucket records attempt attribution for one route/channel UTC day.
 // It is observational and does not replace the global Channel RPD capacity bucket.
 func (k keyBuilder) routeChannelRPDBucket(routeID, channelID, dayBucket int64) string {
@@ -133,7 +125,7 @@ func (k keyBuilder) routeChannelRPDBucket(routeID, channelID, dayBucket int64) s
 // ---- 评分样本 / 观测（§12，独立于 admission 硬门槛）----
 
 // sampleMinuteBucket 是评分样本 30 分钟窗口的分钟聚合桶（hash）。
-// 与 admission 的 ch-rpm/ch-tpm 桶分离：观测不受限额影响，limit=0 也照常产生样本。
+// 与 admission 桶分离：观测不受限额影响，limit=0 也照常产生样本。
 func (k keyBuilder) sampleMinuteBucket(channelID, minute int64) string {
 	return k.base + "sample:v1:ch:" + i(channelID) + ":min:" + i(minute)
 }
@@ -146,6 +138,29 @@ func (k keyBuilder) sampleDayBucket(channelID, day int64) string {
 // sampleWriteMarker 保证同一 attempt 的样本只写一次（幂等，§12.5）。
 func (k keyBuilder) sampleWriteMarker(attemptID int64) string {
 	return k.base + "sample:v1:written:" + i(attemptID)
+}
+
+// ---- TPM 观测（§8，best-effort，永远不参与准入）----
+
+// obsTPMRoute / obsTPMChannel 是自然 UTC 分钟的 TPM 观测桶（hash）。
+// 与任何 admission 限流桶彻底分离：观测只描述已经发生的事实，不冻结额度、不做门槛判断。
+func (k keyBuilder) obsTPMRoute(routeID, minute int64) string {
+	return k.base + "obs:tpm:v1:route:" + i(routeID) + ":min:" + i(minute)
+}
+
+func (k keyBuilder) obsTPMChannel(channelID, minute int64) string {
+	return k.base + "obs:tpm:v1:channel:" + i(channelID) + ":min:" + i(minute)
+}
+
+// obsTPMFlushMarker 保证同一 flush 批次重试不重复累加（§8.3）。
+func (k keyBuilder) obsTPMFlushMarker(operationID string) string {
+	return k.base + "obs:tpm:v1:flush:" + operationID
+}
+
+// obsTPMCorrectionMarker 保证同一 request/attempt 的最终修正只应用一次（§8.4）。
+// 必须存在 Redis：recovery worker 在另一个进程重放时要命中同一个 marker。
+func (k keyBuilder) obsTPMCorrectionMarker(scope string) string {
+	return k.base + "obs:tpm:v1:corrected:" + scope
 }
 
 // ---- runtime-control（circuit_breaker / routing_balance）与完整性 marker（§5.1）----

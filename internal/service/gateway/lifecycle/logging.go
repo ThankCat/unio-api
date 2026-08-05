@@ -92,6 +92,7 @@ func (l *RequestLifecycle) attemptTimingHooks(
 	attempt requestlog.AttemptRecord,
 	candidate routing.ChatRouteCandidate,
 	stream bool,
+	tpmScope TPMAttemptScope,
 ) AttemptTimingHooks {
 	return AttemptTimingHooks{
 		TransportStarted: func(facts AttemptTimingFacts) {
@@ -104,6 +105,12 @@ func (l *RequestLifecycle) attemptTimingHooks(
 			logging.Debug(l.logger, "upstream", "attempt", "upstream attempt started", fields...)
 		},
 		ResponseHeadersReceived: func(facts AttemptTimingFacts) {
+			// 响应头到达证明请求体已经完整写给上游，输入 token 已经被上游消耗。
+			// 在这里记而不是等 attempt 终态，是为了让超长流的输入观测落在真实的 transport 开始分钟，
+			// 而不是几十分钟后才补记、撞上回溯窗口。
+			if facts.UpstreamStartedAt != nil {
+				l.ObserveAttemptInput(tpmScope, *facts.UpstreamStartedAt)
+			}
 			fields := l.completeAttemptLogContext(ctx, request, attempt, candidate, stream)
 			if facts.UpstreamStatusCode != 0 {
 				fields = append(fields, zap.Int("status_code", facts.UpstreamStatusCode))

@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
@@ -156,26 +157,24 @@ func (s *ChatAuthorizationService) AuthorizeChat(ctx context.Context, params Cha
 	}
 
 	// 保守上界：在候选池里取「按本次 token 估算」最贵的一条售价做冻结。
-	// 命中任一候选只会 <= 该额度，避免 fallback 到更贵渠道时预冻结不足。
-	// 预估输入已超长上下文阈值时，先按策略放大售价再估算（与结算同阈值，避免长上下文请求预冻结不足）。
+	// 启用长上下文阶梯时，同时估算普通价和阶梯价并取较高值，避免本地输入估算未过门槛、
+	// 上游真实 usage 过门槛后才发现冻结金额不足。最终是否应用阶梯价仍由结算按真实 usage 决定。
 	var worst billing.CustomerCharge
 	found := false
 	for _, price := range params.CandidatePrices {
-		priced, _, err := billing.ApplyLongContextToCustomerPrice(
-			price,
-			params.LongContextPolicy,
-			params.InputTokens,
-		)
+		prices, err := authorizationPriceScenarios(price, params.LongContextPolicy)
 		if err != nil {
 			return ChatAuthorization{}, err
 		}
-		charge, err := s.billing.EstimateAuthorizationAmount(estimate, priced)
-		if err != nil {
-			return ChatAuthorization{}, err
-		}
-		if !found || chatSettlementNumericGreaterThan(charge.Amount, worst.Amount) {
-			worst = charge
-			found = true
+		for _, priced := range prices {
+			charge, err := s.billing.EstimateAuthorizationAmount(estimate, priced)
+			if err != nil {
+				return ChatAuthorization{}, err
+			}
+			if !found || chatSettlementNumericGreaterThan(charge.Amount, worst.Amount) {
+				worst = charge
+				found = true
+			}
 		}
 	}
 
@@ -199,6 +198,21 @@ func (s *ChatAuthorizationService) AuthorizeChat(ctx context.Context, params Cha
 		AuthorizedAmount: reservation.AuthorizedAmount,
 		Currency:         reservation.Currency,
 	}, nil
+}
+
+// authorizationPriceScenarios 返回授权必须覆盖的普通价和长上下文价。
+// 这里用 Threshold+1 只触发价格向量缩放；金额中的 token 数仍使用调用方的保守输入估算。
+func authorizationPriceScenarios(price billing.CustomerPriceSnapshot, policy billing.LongContextPolicy) ([]billing.CustomerPriceSnapshot, error) {
+	prices := []billing.CustomerPriceSnapshot{price}
+	if !policy.Active() || policy.Threshold == math.MaxInt64 {
+		return prices, nil
+	}
+
+	longContextPrice, _, err := billing.ApplyLongContextToCustomerPrice(price, policy, policy.Threshold+1)
+	if err != nil {
+		return nil, err
+	}
+	return append(prices, longContextPrice), nil
 }
 
 // ReleaseChat 释放未进入成功结算语义的冻结余额。

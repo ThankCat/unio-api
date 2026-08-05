@@ -1,7 +1,16 @@
 -- name: CreateRequestAttempt :one
 -- CreateRequestAttempt 创建一次请求下的一次上游 channel 尝试记录。
+-- request_guard 与孤儿收口对 request_records 的 FOR UPDATE 互斥，避免已判定死亡后又迟到插入 attempt。
+WITH request_guard AS (
+    SELECT request_records.id AS guarded_request_record_id
+    FROM request_records
+    WHERE request_records.id = sqlc.arg(request_record_id)
+      AND request_records.status = 'running'
+    FOR KEY SHARE
+)
 INSERT INTO request_attempts (
     request_record_id,
+    permit_id,
     attempt_index,
     provider_id,
     channel_id,
@@ -29,8 +38,8 @@ INSERT INTO request_attempts (
     routing_candidate_index,
     upstream_endpoint
 )
-VALUES (
-           sqlc.arg(request_record_id),
+SELECT request_guard.guarded_request_record_id,
+           sqlc.arg(permit_id),
            sqlc.arg(attempt_index),
            sqlc.arg(provider_id),
            sqlc.arg(channel_id),
@@ -57,47 +66,8 @@ VALUES (
            sqlc.arg(channel_config_revision),
            sqlc.arg(routing_candidate_index),
            sqlc.arg(upstream_endpoint)
-       )
-RETURNING
-    id,
-    request_record_id,
-    attempt_index,
-    provider_id,
-    channel_id,
-    adapter_key,
-    upstream_model,
-    upstream_protocol,
-    upstream_response_id,
-    upstream_response_model,
-    upstream_finish_reason,
-    finish_class,
-    status,
-    upstream_status_code,
-    upstream_request_id,
-    error_code,
-    error_message,
-    internal_error_detail,
-    upstream_timeout_phase,
-    gateway_first_token_at,
-    final_usage_received,
-    usage_mapping_version,
-    started_at,
-    completed_at,
-    created_at,
-    upstream_started_at,
-    upstream_first_token_at,
-    upstream_completed_at,
-    provider_origin_revision,
-    provider_status_revision,
-    channel_config_revision,
-    routing_candidate_index,
-    upstream_endpoint,
-    breaker_provider_disposition,
-    breaker_channel_disposition,
-    ttft_scoring_sample,
-    error_scoring_sample,
-    error_scoring_failure,
-    fault_party;
+FROM request_guard
+RETURNING request_attempts.*;
 
 -- name: HasRunningRequestAttempt :one
 -- HasRunningRequestAttempt 判断请求是否仍有活跃 attempt；孤儿清扫在 request 行锁内使用该事实保护合法长流。

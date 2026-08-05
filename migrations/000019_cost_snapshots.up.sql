@@ -88,6 +88,8 @@ ALTER TABLE ONLY public.cost_snapshots
 
 CREATE INDEX idx_cost_snapshots_channel_created_at ON public.cost_snapshots USING btree (channel_id, created_at DESC, id DESC);
 
+CREATE INDEX idx_cost_snapshots_created_at_id ON public.cost_snapshots USING btree (created_at DESC, id DESC);
+
 CREATE INDEX idx_cost_snapshots_provider_created_at ON public.cost_snapshots USING btree (provider_id, created_at DESC, id DESC);
 
 ALTER TABLE ONLY public.cost_snapshots

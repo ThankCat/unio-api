@@ -288,9 +288,9 @@ func newPermitGuardRunner(log requestlog.Service) (
 		retryClassifier: NeverRetryClassifier{},
 		permitManager:   manager,
 	}
-	ctx := requestadmission.ContextWithUsageSession(
+	ctx := requestadmission.ContextWithRequestSession(
 		context.Background(),
-		&attemptUsageSessionStub{requestID: "request-admission-permit-guard"},
+		&attemptRequestSessionStub{requestID: "request-admission-permit-guard"},
 	)
 	return runner, store, permitMetrics, ctx
 }

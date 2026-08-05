@@ -11,9 +11,8 @@
 -- ARGV[5] = error_eligible（'1' 计入错误率分母）
 -- ARGV[6] = is_error（'1' 计入错误率分子；要求 error_eligible=1）
 -- ARGV[7] = observed_request（'1' 真实发起上游调用，计入 RPM/RPD）
--- ARGV[8] = token_count（'' 表示无可靠 usage）
--- ARGV[9] = token_covered（'1' 表示有可靠 usage）
 -- 返回 1=已写入；0=幂等跳过。
+-- token 观测不在这里：TPM 由独立的 obs:tpm 分钟桶按真实 chunk 时间记录（§8）。
 if redis.call('SET', KEYS[1], '1', 'NX', 'PX', tonumber(ARGV[1])) == false then
   return 0
 end
@@ -43,17 +42,6 @@ if ARGV[7] == '1' then
   touched = true
   redis.call('INCR', KEYS[3])
   redis.call('PEXPIRE', KEYS[3], tonumber(ARGV[3]))
-end
-
-if ARGV[8] ~= '' then
-  local tokens = tonumber(ARGV[8])
-  if tokens ~= nil and tokens > 0 then
-    redis.call('HINCRBY', mkey, 'observed_token_count', tokens)
-    if ARGV[9] == '1' then
-      redis.call('HINCRBY', mkey, 'observed_token_covered_attempt_count', 1)
-    end
-    touched = true
-  end
 end
 
 if touched then

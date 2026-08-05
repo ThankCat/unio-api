@@ -110,6 +110,8 @@ CREATE INDEX idx_request_attempts_channel_created_at ON public.request_attempts 
 
 CREATE INDEX idx_request_attempts_channel_fault ON public.request_attempts USING btree (channel_id, fault_party) WHERE (status = 'failed'::text);
 
+CREATE INDEX idx_request_attempts_created_at_id ON public.request_attempts USING btree (created_at DESC, id DESC);
+
 CREATE INDEX idx_request_attempts_scoring_samples ON public.request_attempts USING btree (channel_id, created_at DESC, id DESC) WHERE (ttft_scoring_sample OR error_scoring_sample);
 
 ALTER TABLE ONLY public.request_attempts

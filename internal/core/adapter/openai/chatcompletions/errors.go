@@ -15,6 +15,10 @@ import (
 // 用于渠道审计和 observability，不包含敏感信息。
 const upstreamRequestIDHeader = "X-Request-Id"
 
+// ErrChatUnreliableUsage 表示非流式 Chat Completions 已返回 2xx，但没有提供完整、可信的 usage。
+// 调用方据此停止 fallback、释放冻结并记录平台可能已经产生的上游成本。
+var ErrChatUnreliableUsage = errors.New("openai chat completion response missing reliable usage")
+
 // newUpstreamProtocolError 把「已拿到 2xx 响应但 body 无法按协议解析」收成结构化错误。
 // Category=unknown（网关侧不重试）；ResponseSnippet 带上响应原文供渠道检测展示。
 func newUpstreamProtocolError(statusCode int, requestID string, body []byte, cause error) error {

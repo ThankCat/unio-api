@@ -31,9 +31,9 @@ type routeDTO struct {
 	Status string `json:"status"`
 	// PriceRatio 客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率），十进制字符串。
 	PriceRatio string `json:"price_ratio"`
-	// RPM/TPM/RPD/ConcurrencyLimit 线路级限流上限（按 (线路,用户) 计数）；null=继承默认，0=不限，>0=上限。
+	// RPM/RPD/ConcurrencyLimit 线路级限流上限（按 (线路,用户) 计数）；null=继承默认，0=不限，>0=上限。
+	// 没有 TPM：Unio 不限制 token 吞吐，只做观测。
 	RPMLimit         *int64            `json:"rpm_limit"`
-	TPMLimit         *int64            `json:"tpm_limit"`
 	RPDLimit         *int64            `json:"rpd_limit"`
 	ConcurrencyLimit *int64            `json:"concurrency_limit"`
 	Description      *string           `json:"description"`
@@ -71,7 +71,6 @@ type createRouteRequest struct {
 	Status           string  `json:"status"`
 	PriceRatio       string  `json:"price_ratio"` // 客户售价倍率（十进制字符串，空=默认 1.0）
 	RPMLimit         *int64  `json:"rpm_limit"`   // 线路级限流（null=继承默认，0=不限，>0=上限）
-	TPMLimit         *int64  `json:"tpm_limit"`
 	RPDLimit         *int64  `json:"rpd_limit"`
 	ConcurrencyLimit *int64  `json:"concurrency_limit"`
 	Description      *string `json:"description"`
@@ -84,7 +83,6 @@ type updateRouteRequest struct {
 	Status           string  `json:"status"`
 	PriceRatio       string  `json:"price_ratio"` // 客户售价倍率（十进制字符串，空=默认 1.0）
 	RPMLimit         *int64  `json:"rpm_limit"`   // 线路级限流（null=继承默认，0=不限，>0=上限）
-	TPMLimit         *int64  `json:"tpm_limit"`
 	RPDLimit         *int64  `json:"rpd_limit"`
 	ConcurrencyLimit *int64  `json:"concurrency_limit"`
 	Description      *string `json:"description"`
@@ -134,7 +132,6 @@ func (h *routesHandler) create(w http.ResponseWriter, r *http.Request) {
 		Status:           req.Status,
 		PriceRatio:       req.PriceRatio,
 		RPMLimit:         req.RPMLimit,
-		TPMLimit:         req.TPMLimit,
 		RPDLimit:         req.RPDLimit,
 		ConcurrencyLimit: req.ConcurrencyLimit,
 		Description:      req.Description,
@@ -165,7 +162,6 @@ func (h *routesHandler) update(w http.ResponseWriter, r *http.Request) {
 		Status:           req.Status,
 		PriceRatio:       req.PriceRatio,
 		RPMLimit:         req.RPMLimit,
-		TPMLimit:         req.TPMLimit,
 		RPDLimit:         req.RPDLimit,
 		ConcurrencyLimit: req.ConcurrencyLimit,
 		Description:      req.Description,
@@ -246,7 +242,6 @@ func toRouteDTO(rt route.Route) routeDTO {
 		Status:           rt.Status,
 		PriceRatio:       rt.PriceRatio,
 		RPMLimit:         rt.RPMLimit,
-		TPMLimit:         rt.TPMLimit,
 		RPDLimit:         rt.RPDLimit,
 		ConcurrencyLimit: rt.ConcurrencyLimit,
 		Description:      rt.Description,

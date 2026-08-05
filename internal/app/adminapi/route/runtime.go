@@ -126,6 +126,8 @@ type qualityDTO struct {
 	ErrorRate qualityMetricDTO `json:"error_rate"`
 }
 
+// trafficDTO 是渠道的当前分钟观测。TPM 只是观测值：没有上限，也没有剩余量。
+// token_coverage_pct 是这一分钟拿到可靠 usage 的 attempt 占比。
 type trafficDTO struct {
 	RPM               int64   `json:"rpm"`
 	RPD               int64   `json:"rpd"`
@@ -259,7 +261,7 @@ func toRouteRuntimeDTO(value routeruntime.Runtime) routeRuntimeDTO {
 	if value.RouteUsage != nil {
 		out.RouteSummary.Usage = &routeUsageDTO{
 			Concurrency: value.RouteUsage.Concurrency, RPM: value.RouteUsage.RPM, RPD: value.RouteUsage.RPD,
-			TPM: value.RouteUsage.TPM, ActiveUsers: value.RouteUsage.ActiveUsers,
+			TPM: value.RouteUsage.ObservedTPM, ActiveUsers: value.RouteUsage.ActiveUsers,
 		}
 	}
 	for _, source := range value.Sources {
@@ -309,7 +311,7 @@ func toRuntimeChannelDTO(routeStatus string, channel routeruntime.Channel) runti
 			},
 		},
 		Traffic: trafficDTO{
-			RPM: channel.RPMUsed, RPD: channel.GlobalRPDUsed, TPM: channel.TPMUsed,
+			RPM: channel.RPMUsed, RPD: channel.GlobalRPDUsed, TPM: channel.ObservedTPM,
 			TokenCoveredCount: channel.TokenCoveredCount, TokenCoveragePct: channel.TokenCoveragePct,
 		},
 		Score: scoreDTO{

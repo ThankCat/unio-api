@@ -2,6 +2,7 @@ package messages
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic/messages"
@@ -13,7 +14,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
-	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
 // CreateMessage 编排非流式 Anthropic Messages 请求，并返回公开 DTO 与内部交付 finalizer。
@@ -89,17 +89,6 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 			Sticky: stickySession.Audit(), Status: lifecycle.TraceStatusPartial,
 		})
 	}
-	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
-		if principal.RouteID != nil {
-			s.lifecycle.CompleteRoutingTrace(ctx, lifecycle.RoutingDecisionTraceInput{
-				Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
-				PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
-				Sticky: stickySession.Audit(),
-			}, lifecycle.RunResult{}, err)
-		}
-		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
-		return nil, err
-	}
 
 	authorization, err := s.lifecycle.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
@@ -134,12 +123,18 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 		RequestedModelID: req.Model,
 		ResponseProtocol: requestlog.ProtocolAnthropic,
 		EstimatedTokens:  candidatePlan.ConservativeInputTokens,
-		Sticky:           stickySession,
+		UpstreamCostWithoutUsage: func(err error) bool {
+			return errors.Is(err, messagesadapter.ErrMessagesMissingUsage)
+		},
+		Sticky: stickySession,
 		Codes: lifecycle.RunNonStreamCodes{
 			AuthorizationReleaseFailedCode:       "messages_authorization_release_failed",
 			SettlementFailedCode:                 "messages_settlement_failed",
 			SettlementBillingExceptionReasonCode: "messages_settlement_failed_after_upstream_success",
 			SettlementBillingExceptionReason:     "messages settlement permanently failed after upstream success without recovery job",
+			UpstreamCostWithoutUsageCode:         "messages_cost_without_usage",
+			UpstreamCostWithoutUsageReasonCode:   "messages_missing_usage",
+			UpstreamCostWithoutUsageReason:       "anthropic messages returned 2xx without required usage; upstream cost may have been incurred",
 		},
 		ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
 			adapter, ok := s.registry.Messages(candidate.AdapterKey)

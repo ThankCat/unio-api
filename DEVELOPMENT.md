@@ -2,7 +2,7 @@
 
 ## 环境
 
-- Go 版本由 `go.mod` 固定为 `1.25.5`。
+- `go.mod` 声明项目使用 Go `1.26.5`。
 - 本地 PostgreSQL 与 Redis 可由 Docker Compose 启动。
 - 热加载命令需要 `air`：`go install github.com/air-verse/air@latest`。
 - 重新生成数据库访问代码时使用 sqlc；当前生成文件标记的版本为 `1.31.1`。

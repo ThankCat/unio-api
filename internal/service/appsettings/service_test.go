@@ -72,7 +72,7 @@ func TestCriticalSettingUsesDurablePublisher(t *testing.T) {
 	runtimeStore := &fakeRuntimeControlStore{}
 	service := NewServiceWithRuntimeControl(store, publisher, runtimeStore)
 
-	result, err := service.SetRawWithResult(context.Background(), GatewayRouteRateLimitDefaultsKey, json.RawMessage(`{"rpd":5,"rpm":120,"tpm":9000}`))
+	result, err := service.SetRawWithResult(context.Background(), GatewayRouteRateLimitDefaultsKey, json.RawMessage(`{"rpd":5,"rpm":120}`))
 	if err != nil {
 		t.Fatalf("set critical setting: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestCriticalSettingUsesDurablePublisher(t *testing.T) {
 		runtimeStore.routeTargetCalls != 1 {
 		t.Fatalf("route setting used wrong runtime control: request=%+v store=%+v", req, runtimeStore)
 	}
-	if req.Payload != `{"rpm":120,"tpm":9000,"rpd":5}` {
+	if req.Payload != `{"rpm":120,"rpd":5}` {
 		t.Fatalf("payload must be canonical and omit failure_policy: %s", req.Payload)
 	}
 }
@@ -190,7 +190,7 @@ func TestRestoreCriticalRuntimeControlsInstallsAllValidatedSettings(t *testing.T
 
 func TestRestoreCriticalRuntimeControlsRejectsLegacyShape(t *testing.T) {
 	q := newFakeQueries()
-	q.data[GatewayRouteRateLimitDefaultsKey] = []byte(`{"rpm":60,"tpm":0,"rpd":0,"failure_policy":"fail_open"}`)
+	q.data[GatewayRouteRateLimitDefaultsKey] = []byte(`{"rpm":60,"rpd":0,"failure_policy":"fail_open"}`)
 	q.data[GatewayConcurrencyDefaultsKey] = encodeConcurrencyDefaultsSettings(DefaultConcurrencyDefaultsSettings())
 	q.data[GatewayCircuitBreakerKey] = encodeCircuitBreakerSettings(DefaultCircuitBreakerSettings())
 	q.data[GatewayRoutingBalanceKey] = encodeRoutingBalanceSettings(DefaultRoutingBalanceSettings())

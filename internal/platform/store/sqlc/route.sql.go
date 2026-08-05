@@ -93,7 +93,7 @@ func (q *Queries) CountRouteChannels(ctx context.Context, routeID int64) (int64,
 }
 
 const createRoute = `-- name: CreateRoute :one
-INSERT INTO routes (name, mode, status, description, price_ratio, rpm_limit, tpm_limit, rpd_limit, concurrency_limit)
+INSERT INTO routes (name, mode, status, description, price_ratio, rpm_limit, rpd_limit, concurrency_limit)
 VALUES (
     $1,
     $2,
@@ -102,10 +102,9 @@ VALUES (
     $5,
     $6,
     $7,
-    $8,
-    $9
+    $8
 )
-RETURNING id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, concurrency_limit, archived_at, sticky_enabled
+RETURNING id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, rpd_limit, concurrency_limit, archived_at, sticky_enabled
 `
 
 type CreateRouteParams struct {
@@ -115,13 +114,12 @@ type CreateRouteParams struct {
 	Description      pgtype.Text
 	PriceRatio       pgtype.Numeric
 	RpmLimit         pgtype.Int4
-	TpmLimit         pgtype.Int4
 	RpdLimit         pgtype.Int4
 	ConcurrencyLimit pgtype.Int4
 }
 
 // CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
-// rpm/tpm/rpd/concurrency_limit 是线路级限流上限（按线路+用户计数；NULL=继承默认，0=不限，>0=上限）；
+// rpm/rpd/concurrency_limit 是线路级限流上限（按线路+用户计数；NULL=继承默认，0=不限，>0=上限）；
 // balanced/fixed 的渠道数量约束由 service 层校验。
 func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route, error) {
 	row := q.db.QueryRow(ctx, createRoute,
@@ -131,7 +129,6 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		arg.Description,
 		arg.PriceRatio,
 		arg.RpmLimit,
-		arg.TpmLimit,
 		arg.RpdLimit,
 		arg.ConcurrencyLimit,
 	)
@@ -146,7 +143,6 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		&i.UpdatedAt,
 		&i.PriceRatio,
 		&i.RpmLimit,
-		&i.TpmLimit,
 		&i.RpdLimit,
 		&i.ConcurrencyLimit,
 		&i.ArchivedAt,
@@ -262,7 +258,7 @@ func (q *Queries) ListRouteChannelsDetailed(ctx context.Context, routeID int64) 
 }
 
 const listRoutes = `-- name: ListRoutes :many
-SELECT id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, concurrency_limit, archived_at, sticky_enabled FROM routes ORDER BY id ASC
+SELECT id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, rpd_limit, concurrency_limit, archived_at, sticky_enabled FROM routes ORDER BY id ASC
 `
 
 // ListRoutes 列出全部线路，供 admin 管理台展示。
@@ -285,7 +281,6 @@ func (q *Queries) ListRoutes(ctx context.Context) ([]Route, error) {
 			&i.UpdatedAt,
 			&i.PriceRatio,
 			&i.RpmLimit,
-			&i.TpmLimit,
 			&i.RpdLimit,
 			&i.ConcurrencyLimit,
 			&i.ArchivedAt,
@@ -457,7 +452,7 @@ WITH attributed AS (
         (SELECT COUNT(*) FROM request_attempts a WHERE a.request_record_id = r.id) AS attempt_count
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    WHERE ak.route_id = $1
+    WHERE COALESCE(r.route_id, ak.route_id) = $1::bigint
       AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
       AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 )
@@ -513,7 +508,7 @@ WITH attributed AS (
     SELECT r.requested_model_id, r.status
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    WHERE ak.route_id = $1
+    WHERE COALESCE(r.route_id, ak.route_id) = $1::bigint
       AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
       AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 )
@@ -565,7 +560,7 @@ WITH attributed AS (
     SELECT r.created_at, r.status, r.started_at, r.completed_at
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    WHERE ak.route_id = $2
+    WHERE COALESCE(r.route_id, ak.route_id) = $2::bigint
       AND ($3::timestamptz IS NULL OR r.created_at >= $3::timestamptz)
       AND ($4::timestamptz IS NULL OR r.created_at < $4::timestamptz)
 )
@@ -696,7 +691,7 @@ SELECT
     CASE WHEN r.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END AS latency_ms
 FROM request_records r
 JOIN api_keys ak ON ak.id = r.api_key_id
-WHERE ak.route_id = $1
+WHERE COALESCE(r.route_id, ak.route_id) = $1::bigint
   AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
   AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 ORDER BY r.created_at DESC
@@ -758,7 +753,7 @@ const routeOpsRequestsCount = `-- name: RouteOpsRequestsCount :one
 SELECT COUNT(*) AS total
 FROM request_records r
 JOIN api_keys ak ON ak.id = r.api_key_id
-WHERE ak.route_id = $1
+WHERE COALESCE(r.route_id, ak.route_id) = $1::bigint
   AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
   AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 `
@@ -1101,7 +1096,6 @@ SELECT
     rt.description,
     rt.price_ratio,
     rt.rpm_limit,
-    rt.tpm_limit,
     rt.rpd_limit,
     rt.concurrency_limit,
     rt.created_at,
@@ -1237,7 +1231,6 @@ type RoutesOpsTableRow struct {
 	Description      pgtype.Text
 	PriceRatio       pgtype.Numeric
 	RpmLimit         pgtype.Int4
-	TpmLimit         pgtype.Int4
 	RpdLimit         pgtype.Int4
 	ConcurrencyLimit pgtype.Int4
 	CreatedAt        pgtype.Timestamptz
@@ -1247,7 +1240,7 @@ type RoutesOpsTableRow struct {
 }
 
 // §3.5 线路路由作战台只读运维聚合。
-// 归因（线路必填 §3.1）：每条请求归属其 API Key 绑定的 api_keys.route_id（线路必填，无默认回落）。
+// 归因：每条请求使用创建时保存的 request_records.route_id；旧请求没有快照时回退 API Key 当前绑定。
 // request 粒度。fallback：同 request 有 >1 次 attempt 且最终成功；no_channel：error_code 命中无可用渠道码。
 // RoutesOpsTable 线路运维主表（分页）：静态配置 + 绑定/池/可达模型数；请求指标在详情页聚合。
 func (q *Queries) RoutesOpsTable(ctx context.Context, arg RoutesOpsTableParams) ([]RoutesOpsTableRow, error) {
@@ -1274,7 +1267,6 @@ func (q *Queries) RoutesOpsTable(ctx context.Context, arg RoutesOpsTableParams) 
 			&i.Description,
 			&i.PriceRatio,
 			&i.RpmLimit,
-			&i.TpmLimit,
 			&i.RpdLimit,
 			&i.ConcurrencyLimit,
 			&i.CreatedAt,
@@ -1319,12 +1311,11 @@ SET name = $1,
     description = $4,
     price_ratio = $5,
     rpm_limit = $6,
-    tpm_limit = $7,
-    rpd_limit = $8,
-    concurrency_limit = $9,
+    rpd_limit = $7,
+    concurrency_limit = $8,
     updated_at = now()
-WHERE id = $10
-RETURNING id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, concurrency_limit, archived_at, sticky_enabled
+WHERE id = $9
+RETURNING id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, rpd_limit, concurrency_limit, archived_at, sticky_enabled
 `
 
 type UpdateRouteParams struct {
@@ -1334,7 +1325,6 @@ type UpdateRouteParams struct {
 	Description      pgtype.Text
 	PriceRatio       pgtype.Numeric
 	RpmLimit         pgtype.Int4
-	TpmLimit         pgtype.Int4
 	RpdLimit         pgtype.Int4
 	ConcurrencyLimit pgtype.Int4
 	ID               int64
@@ -1349,7 +1339,6 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route
 		arg.Description,
 		arg.PriceRatio,
 		arg.RpmLimit,
-		arg.TpmLimit,
 		arg.RpdLimit,
 		arg.ConcurrencyLimit,
 		arg.ID,
@@ -1365,7 +1354,6 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route
 		&i.UpdatedAt,
 		&i.PriceRatio,
 		&i.RpmLimit,
-		&i.TpmLimit,
 		&i.RpdLimit,
 		&i.ConcurrencyLimit,
 		&i.ArchivedAt,

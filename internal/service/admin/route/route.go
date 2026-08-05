@@ -57,10 +57,9 @@ type Route struct {
 	Status string
 	// PriceRatio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；十进制字符串承载，避免精度丢失。
 	PriceRatio string
-	// RPMLimit/TPMLimit/RPDLimit/ConcurrencyLimit 是线路级限流上限（按 (线路,用户) 计数）：
+	// RPMLimit/RPDLimit/ConcurrencyLimit 是线路级限流上限（按 (线路,用户) 计数）：
 	// nil=继承线路默认限流，0=显式不限，>0=具体上限。
 	RPMLimit         *int64
-	TPMLimit         *int64
 	RPDLimit         *int64
 	ConcurrencyLimit *int64
 	Description      *string
@@ -93,7 +92,6 @@ type CreateInput struct {
 	Status           string
 	PriceRatio       string
 	RPMLimit         *int64
-	TPMLimit         *int64
 	RPDLimit         *int64
 	ConcurrencyLimit *int64
 	Description      *string
@@ -109,7 +107,6 @@ type UpdateInput struct {
 	Status           string
 	PriceRatio       string
 	RPMLimit         *int64
-	TPMLimit         *int64
 	RPDLimit         *int64
 	ConcurrencyLimit *int64
 	Description      *string
@@ -166,7 +163,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 	if err != nil {
 		return Route{}, err
 	}
-	if err := validateRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit, in.ConcurrencyLimit); err != nil {
+	if err := validateRateLimits(in.RPMLimit, in.RPDLimit, in.ConcurrencyLimit); err != nil {
 		return Route{}, err
 	}
 
@@ -183,7 +180,6 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 		Status:           in.Status,
 		PriceRatio:       priceRatio,
 		RpmLimit:         int4Narg(in.RPMLimit),
-		TpmLimit:         int4Narg(in.TPMLimit),
 		RpdLimit:         int4Narg(in.RPDLimit),
 		ConcurrencyLimit: int4Narg(in.ConcurrencyLimit),
 		Description:      textParam(in.Description),
@@ -219,7 +215,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 	if err != nil {
 		return Route{}, err
 	}
-	if err := validateRateLimits(in.RPMLimit, in.TPMLimit, in.RPDLimit, in.ConcurrencyLimit); err != nil {
+	if err := validateRateLimits(in.RPMLimit, in.RPDLimit, in.ConcurrencyLimit); err != nil {
 		return Route{}, err
 	}
 
@@ -244,7 +240,6 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 		Status:           in.Status,
 		PriceRatio:       priceRatio,
 		RpmLimit:         int4Narg(in.RPMLimit),
-		TpmLimit:         int4Narg(in.TPMLimit),
 		RpdLimit:         int4Narg(in.RPDLimit),
 		ConcurrencyLimit: int4Narg(in.ConcurrencyLimit),
 		Description:      textParam(in.Description),
@@ -509,7 +504,6 @@ func toRoute(r sqlc.Route) Route {
 		Status:           r.Status,
 		PriceRatio:       numericString(r.PriceRatio),
 		RPMLimit:         int4ToPtr(r.RpmLimit),
-		TPMLimit:         int4ToPtr(r.TpmLimit),
 		RPDLimit:         int4ToPtr(r.RpdLimit),
 		ConcurrencyLimit: int4ToPtr(r.ConcurrencyLimit),
 		CreatedAt:        r.CreatedAt.Time,
@@ -527,13 +521,12 @@ func toRoute(r sqlc.Route) Route {
 }
 
 // validateRateLimits 校验线路级限流四维：nil（继承默认）放行；否则须为 >=0 整数。
-func validateRateLimits(rpm, tpm, rpd, concurrency *int64) error {
+func validateRateLimits(rpm, rpd, concurrency *int64) error {
 	for _, p := range []struct {
 		field string
 		val   *int64
 	}{
 		{"rpm_limit", rpm},
-		{"tpm_limit", tpm},
 		{"rpd_limit", rpd},
 		{"concurrency_limit", concurrency},
 	} {

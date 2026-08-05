@@ -117,7 +117,7 @@ type RunNonStreamParams struct {
 	EndpointForCandidate NonStreamEndpointResolver
 	TransparentFallback  *NonStreamTransparentFallback
 
-	// EstimatedTokens 是本请求保守预估的输入 token 数，用于 TPM 限流的上游调用前预占（P2-8）。
+	// EstimatedTokens 是本请求保守预估的输入 token 数（全体候选取最大值），用作候选自身估算缺失时的兜底。
 	// 结算后由 runner 按真实 billable token 回填差额。它保留为旧调用方的输入估算兜底。
 	EstimatedTokens int64
 
@@ -357,6 +357,7 @@ scan:
 				index,
 				candidate,
 				endpoint,
+				permitOwner.PermitID(),
 			)
 			if err != nil {
 				if permitOwner != nil {
@@ -374,7 +375,7 @@ scan:
 			attemptedChannels[candidate.Channel.ID] = true
 
 			upstreamStart := time.Now()
-			success, timingFacts, err := r.invokeNonStreamAttempt(ctx, requestRecord, candidate, attemptRecord, permitOwner, params.Invoke)
+			success, timingFacts, err := r.invokeNonStreamAttempt(ctx, requestRecord, candidate, attemptRecord, permitOwner, candidateInputTokens, params.Invoke)
 			l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 			l.RecordCredentialResult(candidate, err)
 			fallback := params.TransparentFallback
@@ -478,6 +479,7 @@ scan:
 					index,
 					candidate,
 					fallback.UpstreamEndpoint,
+					fallbackOwner.PermitID(),
 				)
 				if createErr != nil {
 					if fallbackOwner != nil {
@@ -494,7 +496,7 @@ scan:
 				attemptRecord = fallbackAttempt
 
 				upstreamStart = time.Now()
-				success, timingFacts, err = r.invokeNonStreamAttempt(ctx, requestRecord, candidate, attemptRecord, fallbackOwner, fallback.Invoke)
+				success, timingFacts, err = r.invokeNonStreamAttempt(ctx, requestRecord, candidate, attemptRecord, fallbackOwner, candidateInputTokens, fallback.Invoke)
 				l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 				l.RecordCredentialResult(candidate, err)
 				responseFacts = nil

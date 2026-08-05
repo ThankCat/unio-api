@@ -13,6 +13,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/tpmobserver"
 )
 
 // ChatRouter 定义 gateway 为 Responses 请求生成有序 route plan 所需的 routing 能力。
@@ -155,9 +156,14 @@ func (s *ResponsesService) SetRoutingTraceRecorder(recorder *lifecycle.RoutingTr
 	s.lifecycle.SetRoutingTraceRecorder(recorder)
 }
 
-// SetChannelSampleRecorder 注入 30 分钟评分样本/观测记录器（§12）；nil 表示不启用。
+// SetChannelSampleRecorder 注入 30 分钟评分样本记录器（§12）；nil 表示不启用。
 func (s *ResponsesService) SetChannelSampleRecorder(recorder lifecycle.ChannelSampleRecorder) {
 	s.lifecycle.SetChannelSampleRecorder(recorder)
+}
+
+// SetTPMObserver 注入分钟级 TPM 观测器（§8）；nil 表示不启用观测。
+func (s *ResponsesService) SetTPMObserver(observer *tpmobserver.Observer) {
+	s.lifecycle.SetTPMObserver(observer)
 }
 
 // responsesSafeMessage 把 Responses 编排专用 ad-hoc string code 映射成可展示文案；

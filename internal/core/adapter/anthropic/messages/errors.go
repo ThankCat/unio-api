@@ -11,6 +11,10 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
+// ErrMessagesMissingUsage 表示 Anthropic Messages 非流式上游返回 2xx，
+// 但没有提供结算所需的 input_tokens 或 output_tokens。
+var ErrMessagesMissingUsage = errors.New("anthropic messages response missing required usage")
+
 // upstreamRequestID 从上游响应头提取安全的请求标识。
 //
 // Anthropic 标准返回 request-id；DeepSeek Anthropic origin 黑盒未稳定返回该头，

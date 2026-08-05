@@ -126,19 +126,14 @@ func TestOperationObserverCoversRequestAdmissionLifecycle(t *testing.T) {
 	if result, err := store.AcquireRequestAdmission(ctx, in); err != nil || result.Outcome != RequestAllowed {
 		t.Fatalf("acquire request = %+v, err=%v", result, err)
 	}
-	if result, err := store.ReserveRequestTokens(ctx, in.RequestAdmissionID, in.RouteID, in.UserID, 7,
-		in.IntegrityEpoch, in.IntegrityRevision); err != nil || result != ReserveReserved {
-		t.Fatalf("reserve request = %s, err=%v", result, err)
-	}
 	if result, err := store.RenewRequestAdmission(ctx, in.RequestAdmissionID, in.RouteID, in.UserID, epoch, revision); err != nil || result != RequestLifecycleRenewed {
 		t.Fatalf("renew request = %s, err=%v", result, err)
 	}
-	if result, err := store.FinishRequestAdmission(ctx, in.RequestAdmissionID, in.RouteID, in.UserID, 7, "actual", epoch, revision); err != nil || result != RequestLifecycleFinished {
+	if result, err := store.FinishRequestAdmission(ctx, in.RequestAdmissionID, in.RouteID, in.UserID, epoch, revision); err != nil || result != RequestLifecycleFinished {
 		t.Fatalf("finish request = %s, err=%v", result, err)
 	}
 
 	observer.require(t, operationAcquireRequest, string(RequestAllowed))
-	observer.require(t, operationReserveRequest, string(ReserveReserved))
 	observer.require(t, operationRenewRequest, string(RequestLifecycleRenewed))
 	observer.require(t, operationFinishRequest, string(RequestLifecycleFinished))
 }
@@ -160,7 +155,7 @@ func TestOperationObserverCoversAttemptPermitLifecycle(t *testing.T) {
 	}
 
 	finishInput := newInput("observed-finish", "observed-request-finish")
-	seedReservedRequestAdmission(t, store, finishInput)
+	seedActiveRequestAdmission(t, store, finishInput)
 	finishAdmission, err := store.AcquireAttempt(ctx, finishInput)
 	if err != nil || finishAdmission.Mode != AdmissionPermit || finishAdmission.Permit == nil {
 		t.Fatalf("acquire finish permit = %+v, err=%v", finishAdmission, err)
@@ -177,7 +172,7 @@ func TestOperationObserverCoversAttemptPermitLifecycle(t *testing.T) {
 	}
 
 	abortInput := newInput("observed-abort", "observed-request-abort")
-	seedReservedRequestAdmission(t, store, abortInput)
+	seedActiveRequestAdmission(t, store, abortInput)
 	abortAdmission, err := store.AcquireAttempt(ctx, abortInput)
 	if err != nil || abortAdmission.Mode != AdmissionPermit || abortAdmission.Permit == nil {
 		t.Fatalf("acquire abort permit = %+v, err=%v", abortAdmission, err)

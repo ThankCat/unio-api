@@ -26,9 +26,9 @@ DELETE FROM route_channels WHERE route_id = sqlc.arg(route_id);
 
 -- name: CreateRoute :one
 -- CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
--- rpm/tpm/rpd/concurrency_limit 是线路级限流上限（按线路+用户计数；NULL=继承默认，0=不限，>0=上限）；
+-- rpm/rpd/concurrency_limit 是线路级限流上限（按线路+用户计数；NULL=继承默认，0=不限，>0=上限）；
 -- balanced/fixed 的渠道数量约束由 service 层校验。
-INSERT INTO routes (name, mode, status, description, price_ratio, rpm_limit, tpm_limit, rpd_limit, concurrency_limit)
+INSERT INTO routes (name, mode, status, description, price_ratio, rpm_limit, rpd_limit, concurrency_limit)
 VALUES (
     sqlc.arg(name),
     sqlc.arg(mode),
@@ -36,7 +36,6 @@ VALUES (
     sqlc.narg(description),
     sqlc.arg(price_ratio),
     sqlc.narg(rpm_limit),
-    sqlc.narg(tpm_limit),
     sqlc.narg(rpd_limit),
     sqlc.narg(concurrency_limit)
 )
@@ -55,7 +54,6 @@ SET name = sqlc.arg(name),
     description = sqlc.narg(description),
     price_ratio = sqlc.arg(price_ratio),
     rpm_limit = sqlc.narg(rpm_limit),
-    tpm_limit = sqlc.narg(tpm_limit),
     rpd_limit = sqlc.narg(rpd_limit),
     concurrency_limit = sqlc.narg(concurrency_limit),
     updated_at = now()
@@ -106,7 +104,7 @@ WHERE rt.status <> 'archived'
 ORDER BY rt.id;
 
 -- §3.5 线路路由作战台只读运维聚合。
--- 归因（线路必填 §3.1）：每条请求归属其 API Key 绑定的 api_keys.route_id（线路必填，无默认回落）。
+-- 归因：每条请求使用创建时保存的 request_records.route_id；旧请求没有快照时回退 API Key 当前绑定。
 -- request 粒度。fallback：同 request 有 >1 次 attempt 且最终成功；no_channel：error_code 命中无可用渠道码。
 
 -- name: RoutesOpsTable :many
@@ -119,7 +117,6 @@ SELECT
     rt.description,
     rt.price_ratio,
     rt.rpm_limit,
-    rt.tpm_limit,
     rt.rpd_limit,
     rt.concurrency_limit,
     rt.created_at,
@@ -254,7 +251,7 @@ WITH attributed AS (
         (SELECT COUNT(*) FROM request_attempts a WHERE a.request_record_id = r.id) AS attempt_count
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    WHERE ak.route_id = sqlc.arg('route_id')
+    WHERE COALESCE(r.route_id, ak.route_id) = sqlc.arg('route_id')::bigint
       AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 )
@@ -485,7 +482,7 @@ WITH attributed AS (
     SELECT r.created_at, r.status, r.started_at, r.completed_at
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    WHERE ak.route_id = sqlc.arg('route_id')
+    WHERE COALESCE(r.route_id, ak.route_id) = sqlc.arg('route_id')::bigint
       AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 )
@@ -506,7 +503,7 @@ WITH attributed AS (
     SELECT r.requested_model_id, r.status
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    WHERE ak.route_id = sqlc.arg('route_id')
+    WHERE COALESCE(r.route_id, ak.route_id) = sqlc.arg('route_id')::bigint
       AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 )
@@ -530,7 +527,7 @@ SELECT
     CASE WHEN r.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END AS latency_ms
 FROM request_records r
 JOIN api_keys ak ON ak.id = r.api_key_id
-WHERE ak.route_id = sqlc.arg('route_id')
+WHERE COALESCE(r.route_id, ak.route_id) = sqlc.arg('route_id')::bigint
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 ORDER BY r.created_at DESC
@@ -540,6 +537,6 @@ LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 SELECT COUNT(*) AS total
 FROM request_records r
 JOIN api_keys ak ON ak.id = r.api_key_id
-WHERE ak.route_id = sqlc.arg('route_id')
+WHERE COALESCE(r.route_id, ak.route_id) = sqlc.arg('route_id')::bigint
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz);

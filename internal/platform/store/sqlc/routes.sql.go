@@ -10,7 +10,7 @@ import (
 )
 
 const getRouteByID = `-- name: GetRouteByID :one
-SELECT id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, tpm_limit, rpd_limit, concurrency_limit, archived_at, sticky_enabled FROM routes WHERE id = $1 LIMIT 1
+SELECT id, name, mode, status, description, created_at, updated_at, price_ratio, rpm_limit, rpd_limit, concurrency_limit, archived_at, sticky_enabled FROM routes WHERE id = $1 LIMIT 1
 `
 
 // GetRouteByID 按主键读取单条线路。
@@ -27,7 +27,6 @@ func (q *Queries) GetRouteByID(ctx context.Context, id int64) (Route, error) {
 		&i.UpdatedAt,
 		&i.PriceRatio,
 		&i.RpmLimit,
-		&i.TpmLimit,
 		&i.RpdLimit,
 		&i.ConcurrencyLimit,
 		&i.ArchivedAt,

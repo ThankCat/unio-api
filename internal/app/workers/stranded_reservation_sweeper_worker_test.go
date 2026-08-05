@@ -134,7 +134,7 @@ func TestStrandedReservationSweeperListErrorSurfaces(t *testing.T) {
 
 func TestStrandedReservationSweeperNameIsDistinctFromOrphanSweeper(t *testing.T) {
 	stranded := NewStrandedReservationSweeperWorker(&fakeStrandedReservationStore{}, &fakeStrandedReservationFinalizer{}, discardLogger(), 0, 0)
-	orphan := NewOrphanReservationSweeperWorker(&fakeOrphanReservationStore{}, &fakeOrphanReservationFinalizer{}, discardLogger(), 0, 0)
+	orphan := NewOrphanReservationSweeperWorker(&fakeOrphanReservationStore{}, &fakeOrphanReservationFinalizer{}, &fakeOrphanAttemptPermitReader{}, discardLogger(), 0, 0)
 
 	// 两个 worker 在同一 runner 内并列注册，名称必须可区分，否则日志与告警无法归因。
 	if stranded.Name() == orphan.Name() {

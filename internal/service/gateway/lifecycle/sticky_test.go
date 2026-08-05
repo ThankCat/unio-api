@@ -597,7 +597,7 @@ func TestStickyCooldownExclusionPreservesBindingAcrossBypassSuccess(t *testing.T
 
 	second := router.Resolve(context.Background(), stickyResolveParams("sess-cooldown"))
 	executor := NewExecutor(candidateCapabilityRegistry{allowed: map[int64]bool{101: true, 202: true}})
-	ctx := requestadmission.ContextWithUsageSession(context.Background(), &candidateSnapshotSession{
+	ctx := requestadmission.ContextWithRequestSession(context.Background(), &candidateSnapshotSession{
 		result: breakerstore.SnapshotManyResult{Candidates: []breakerstore.CandidateSnapshot{
 			{Status: breakerstore.CandidateSnapshotRateLimited, CooldownRemainingMs: 4_296},
 			{Status: breakerstore.CandidateSnapshotCurrent},

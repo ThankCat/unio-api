@@ -33,11 +33,7 @@ type APIKey struct {
 	SpendLimit   *string // nil 表示不限额
 	SpentTotal   string
 	RouteID      *int64 // Key 绑定的线路 ID（线路必填，恒有值）
-	// RPMLimit/TPMLimit/RPDLimit 是本把 Key 的令牌级限流上限（P2-8）：
-	// nil 表示继承全局默认，0 表示显式不限，>0 表示具体上限。
-	RPMLimit   *int64
-	TPMLimit   *int64
-	RPDLimit   *int64
+	// 这里没有 Key 级限流：DEC-027 之后限流全部归线路，按 (线路, 用户) 计数。
 	LastUsedAt *time.Time
 	ExpiresAt  *time.Time
 	DisabledAt *time.Time
@@ -132,7 +128,7 @@ func (s *APIKeyService) List(ctx context.Context, params APIKeyListParams) ([]AP
 
 	keys := make([]APIKey, 0, len(rows))
 	for _, row := range rows {
-		keys = append(keys, s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt))
+		keys = append(keys, s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.CreatedAt, row.UpdatedAt))
 	}
 
 	return keys, total, nil
@@ -147,7 +143,7 @@ func (s *APIKeyService) Get(ctx context.Context, id int64) (APIKey, error) {
 		}
 		return APIKey{}, storeFailed(err, "get api key")
 	}
-	return s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt), nil
+	return s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.CreatedAt, row.UpdatedAt), nil
 }
 
 // Create 在用户下创建 API Key，并返回只展示一次的明文。
@@ -197,7 +193,7 @@ func (s *APIKeyService) Create(ctx context.Context, params APIKeyCreateParams) (
 		return CreatedAPIKey{}, storeFailed(err, "create api key")
 	}
 
-	view := s.buildAPIKey(created.ID, created.UserID, created.Name, created.KeyPrefix, created.KeyPlaintext, created.LastUsedAt, created.ExpiresAt, created.DisabledAt, created.RevokedAt, created.SpendLimit, created.SpentTotal, created.RouteID, created.RpmLimit, created.TpmLimit, created.RpdLimit, created.CreatedAt, created.UpdatedAt)
+	view := s.buildAPIKey(created.ID, created.UserID, created.Name, created.KeyPrefix, created.KeyPlaintext, created.LastUsedAt, created.ExpiresAt, created.DisabledAt, created.RevokedAt, created.SpendLimit, created.SpentTotal, created.RouteID, created.CreatedAt, created.UpdatedAt)
 
 	// 上限作为独立 UPDATE：CreateAPIKey 不接收 spend_limit，创建后按需补设。
 	if spendLimit.Valid {
@@ -208,7 +204,7 @@ func (s *APIKeyService) Create(ctx context.Context, params APIKeyCreateParams) (
 		if err != nil {
 			return CreatedAPIKey{}, storeFailed(err, "set api key spend limit")
 		}
-		view = s.buildAPIKey(updated.ID, updated.UserID, updated.Name, updated.KeyPrefix, updated.KeyPlaintext, updated.LastUsedAt, updated.ExpiresAt, updated.DisabledAt, updated.RevokedAt, updated.SpendLimit, updated.SpentTotal, updated.RouteID, updated.RpmLimit, updated.TpmLimit, updated.RpdLimit, updated.CreatedAt, updated.UpdatedAt)
+		view = s.buildAPIKey(updated.ID, updated.UserID, updated.Name, updated.KeyPrefix, updated.KeyPlaintext, updated.LastUsedAt, updated.ExpiresAt, updated.DisabledAt, updated.RevokedAt, updated.SpendLimit, updated.SpentTotal, updated.RouteID, updated.CreatedAt, updated.UpdatedAt)
 	}
 
 	return CreatedAPIKey{APIKey: view, Plaintext: generated.Plaintext}, nil
@@ -247,7 +243,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdat
 		if err != nil {
 			return APIKey{}, storeFailed(err, "set api key disabled")
 		}
-		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.CreatedAt, row.UpdatedAt)
 		applied = true
 	}
 
@@ -263,7 +259,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdat
 		if err != nil {
 			return APIKey{}, storeFailed(err, "set api key spend limit")
 		}
-		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.CreatedAt, row.UpdatedAt)
 		applied = true
 	}
 
@@ -279,7 +275,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdat
 		if err != nil {
 			return APIKey{}, storeFailed(err, "set api key route")
 		}
-		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.CreatedAt, row.UpdatedAt)
 		applied = true
 	}
 
@@ -295,7 +291,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdat
 		if err != nil {
 			return APIKey{}, storeFailed(err, "set api key name")
 		}
-		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.CreatedAt, row.UpdatedAt)
 		applied = true
 	}
 
@@ -311,7 +307,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdat
 		if err != nil {
 			return APIKey{}, storeFailed(err, "set api key expires at")
 		}
-		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt)
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.CreatedAt, row.UpdatedAt)
 		applied = true
 	}
 
@@ -331,7 +327,7 @@ func (s *APIKeyService) Revoke(ctx context.Context, id int64) (APIKey, error) {
 		}
 		return APIKey{}, storeFailed(err, "revoke api key")
 	}
-	return s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.RpmLimit, row.TpmLimit, row.RpdLimit, row.CreatedAt, row.UpdatedAt), nil
+	return s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.RouteID, row.CreatedAt, row.UpdatedAt), nil
 }
 
 // Delete 物理删除 API Key，用于清理误建/未使用的 Key（与 channel/model/provider/route 的删除语义对齐）。
@@ -364,7 +360,6 @@ func (s *APIKeyService) buildAPIKey(
 	lastUsedAt, expiresAt, disabledAt, revokedAt pgtype.Timestamptz,
 	spendLimit, spentTotal pgtype.Numeric,
 	routeID int64,
-	rpmLimit, tpmLimit, rpdLimit pgtype.Int4,
 	createdAt, updatedAt pgtype.Timestamptz,
 ) APIKey {
 	// route_id 在 DB 层 NOT NULL（线路必填），恒有值；取地址以 *int64 对外表达。
@@ -379,9 +374,6 @@ func (s *APIKeyService) buildAPIKey(
 		SpendLimit:   numericPtr(spendLimit),
 		SpentTotal:   numericString(spentTotal),
 		RouteID:      &boundRouteID,
-		RPMLimit:     int4ToPtr(rpmLimit),
-		TPMLimit:     int4ToPtr(tpmLimit),
-		RPDLimit:     int4ToPtr(rpdLimit),
 		LastUsedAt:   timePtr(lastUsedAt),
 		ExpiresAt:    timePtr(expiresAt),
 		DisabledAt:   timePtr(disabledAt),

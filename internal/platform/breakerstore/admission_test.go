@@ -217,7 +217,7 @@ func TestStateIntegrityBootstrapAndRotate(t *testing.T) {
 func seedAdmissionEnv(t *testing.T, s *Store) (epoch string, epochRev int64) {
 	return seedAdmissionEnvWithControls(
 		t, s,
-		`{"rpm":0,"tpm":0,"rpd":0}`,
+		`{"rpm":0,"rpd":0}`,
 		`{"key_limit":0,"channel_limit":0}`,
 		testConfig(),
 	)
@@ -246,7 +246,7 @@ func raInput(id string, route, user int64, epoch string, epochRev int64) Request
 func TestRequestAdmissionAcquireAndRPMLimit(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	epoch, rev := seedAdmissionEnvWithControls(
-		t, s, `{"rpm":2,"tpm":0,"rpd":0}`, `{"key_limit":0,"channel_limit":0}`, testConfig(),
+		t, s, `{"rpm":2,"rpd":0}`, `{"key_limit":0,"channel_limit":0}`, testConfig(),
 	)
 
 	// Redis active route-default RPM=2，前两次 allowed，第三次 limited(rpm)。
@@ -271,7 +271,7 @@ func TestRequestAdmissionAcquireAndRPMLimit(t *testing.T) {
 func TestRequestAdmissionRPDBucketTTLCoversDay(t *testing.T) {
 	s, rc, _ := newTestStore(t)
 	epoch, rev := seedAdmissionEnvWithControls(
-		t, s, `{"rpm":0,"tpm":0,"rpd":100}`, `{"key_limit":0,"channel_limit":0}`, testConfig(),
+		t, s, `{"rpm":0,"rpd":100}`, `{"key_limit":0,"channel_limit":0}`, testConfig(),
 	)
 	ctx := context.Background()
 	r, err := s.AcquireRequestAdmission(ctx, raInput("ra-rpd-ttl", 1, 1, epoch, rev))
@@ -312,7 +312,7 @@ func TestRequestAdmissionStaleEpochFailClosed(t *testing.T) {
 func TestRequestAdmissionConcurrencyAndFinish(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	epoch, rev := seedAdmissionEnvWithControls(
-		t, s, `{"rpm":0,"tpm":0,"rpd":0}`, `{"key_limit":1,"channel_limit":0}`, testConfig(),
+		t, s, `{"rpm":0,"rpd":0}`, `{"key_limit":1,"channel_limit":0}`, testConfig(),
 	)
 
 	r1, err := s.AcquireRequestAdmission(context.Background(), raInput("rc1", 3, 3, epoch, rev))
@@ -324,7 +324,7 @@ func TestRequestAdmissionConcurrencyAndFinish(t *testing.T) {
 		t.Fatalf("rc2 want limited/concurrency, got %s/%s", r2.Outcome, r2.LimitedDimension)
 	}
 	// Finish rc1 释放并发。
-	if outcome, err := s.FinishRequestAdmission(context.Background(), "rc1", 3, 3, -1, "empty", epoch, rev); err != nil || outcome != RequestLifecycleFinished {
+	if outcome, err := s.FinishRequestAdmission(context.Background(), "rc1", 3, 3, epoch, rev); err != nil || outcome != RequestLifecycleFinished {
 		t.Fatalf("finish rc1: outcome=%s err=%v", outcome, err)
 	}
 	r3, _ := s.AcquireRequestAdmission(context.Background(), raInput("rc3", 3, 3, epoch, rev))
@@ -336,7 +336,7 @@ func TestRequestAdmissionConcurrencyAndFinish(t *testing.T) {
 func TestRequestAdmissionLifecycleEpochMismatchLeavesResourcesUntouched(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	epoch, revision := seedAdmissionEnvWithControls(
-		t, s, `{"rpm":0,"tpm":100,"rpd":0}`, `{"key_limit":0,"channel_limit":0}`, testConfig(),
+		t, s, `{"rpm":0,"rpd":0}`, `{"key_limit":0,"channel_limit":0}`, testConfig(),
 	)
 	const requestID = "request-epoch-fence"
 	const routeID int64 = 88
@@ -347,20 +347,10 @@ func TestRequestAdmissionLifecycleEpochMismatchLeavesResourcesUntouched(t *testi
 	); err != nil || result.Outcome != RequestAllowed {
 		t.Fatalf("acquire request token: result=%+v err=%v", result, err)
 	}
-	if result, err := s.ReserveRequestTokens(context.Background(), requestID, routeID, userID, 10,
-		epoch, revision); err != nil || result != ReserveReserved {
-		t.Fatalf("reserve request tokens: result=%s err=%v", result, err)
-	}
-
 	tokenKey := s.keys.admissionRequest(requestID)
 	concKey := s.keys.requestConcurrency(routeID, userID)
-	tpmKey, err := s.client.HGet(context.Background(), tokenKey, "tpm_bucket").Result()
-	if err != nil {
-		t.Fatalf("read reserved TPM bucket: %v", err)
-	}
 	leaseBefore, _ := s.client.HGet(context.Background(), tokenKey, "lease_until_ms").Result()
 	concBefore, _ := s.client.ZScore(context.Background(), concKey, requestID).Result()
-	tpmBefore, _ := s.client.Get(context.Background(), tpmKey).Result()
 
 	if outcome, renewErr := s.RenewRequestAdmission(
 		context.Background(), requestID, routeID, userID, "wrong-epoch", revision,
@@ -368,7 +358,7 @@ func TestRequestAdmissionLifecycleEpochMismatchLeavesResourcesUntouched(t *testi
 		t.Fatalf("stale renew: outcome=%s err=%v", outcome, renewErr)
 	}
 	if outcome, finishErr := s.FinishRequestAdmission(
-		context.Background(), requestID, routeID, userID, 7, "actual", "wrong-epoch", revision,
+		context.Background(), requestID, routeID, userID, "wrong-epoch", revision,
 	); finishErr != nil || outcome != RequestLifecycleStaleEpoch {
 		t.Fatalf("stale finish: outcome=%s err=%v", outcome, finishErr)
 	}
@@ -378,10 +368,9 @@ func TestRequestAdmissionLifecycleEpochMismatchLeavesResourcesUntouched(t *testi
 		leaseAfter, _ := s.client.HGet(context.Background(), tokenKey, "lease_until_ms").Result()
 		status, _ := s.client.HGet(context.Background(), tokenKey, "status").Result()
 		concAfter, _ := s.client.ZScore(context.Background(), concKey, requestID).Result()
-		tpmAfter, _ := s.client.Get(context.Background(), tpmKey).Result()
-		if leaseAfter != leaseBefore || status != "active" || concAfter != concBefore || tpmAfter != tpmBefore {
-			t.Fatalf("epoch rejection mutated resources: lease=%s/%s status=%s conc=%v/%v tpm=%s/%s",
-				leaseBefore, leaseAfter, status, concBefore, concAfter, tpmBefore, tpmAfter)
+		if leaseAfter != leaseBefore || status != "active" || concAfter != concBefore {
+			t.Fatalf("epoch rejection mutated resources: lease=%s/%s status=%s conc=%v/%v",
+				leaseBefore, leaseAfter, status, concBefore, concAfter)
 		}
 	}
 	assertUnchanged()
@@ -391,7 +380,7 @@ func TestRequestAdmissionLifecycleEpochMismatchLeavesResourcesUntouched(t *testi
 		t.Fatalf("corrupt token epoch: %v", err)
 	}
 	if outcome, finishErr := s.FinishRequestAdmission(
-		context.Background(), requestID, routeID, userID, 7, "actual", epoch, revision,
+		context.Background(), requestID, routeID, userID, epoch, revision,
 	); finishErr != nil || outcome != RequestLifecycleStaleEpoch {
 		t.Fatalf("token epoch mismatch finish: outcome=%s err=%v", outcome, finishErr)
 	}
@@ -401,7 +390,7 @@ func TestRequestAdmissionLifecycleEpochMismatchLeavesResourcesUntouched(t *testi
 		t.Fatalf("restore token epoch: %v", err)
 	}
 	if outcome, finishErr := s.FinishRequestAdmission(
-		context.Background(), requestID, routeID, userID, 7, "actual", epoch, revision,
+		context.Background(), requestID, routeID, userID, epoch, revision,
 	); finishErr != nil || outcome != RequestLifecycleFinished {
 		t.Fatalf("valid finish: outcome=%s err=%v", outcome, finishErr)
 	}
@@ -476,99 +465,5 @@ func TestChannelCapacityStaleRevision(t *testing.T) {
 	}
 	if adm.Mode != AdmissionDenied || adm.Reason != ReasonStaleConfigRevision {
 		t.Fatalf("want denied/stale_config_revision, got %s/%s", adm.Mode, adm.Reason)
-	}
-}
-
-// TestReserveRequestTokensIdempotent 验证 TPM 预占幂等与超限。
-func TestReserveRequestTokensIdempotent(t *testing.T) {
-	s, _, _ := newTestStore(t)
-	epoch, rev := seedAdmissionEnvWithControls(
-		t, s, `{"rpm":0,"tpm":100,"rpd":0}`, `{"key_limit":0,"channel_limit":0}`, testConfig(),
-	)
-
-	if r, err := s.AcquireRequestAdmission(context.Background(), raInput("rt1", 4, 4, epoch, rev)); err != nil || r.Outcome != RequestAllowed {
-		t.Fatalf("acquire rt1: %s err=%v", r.Outcome, err)
-	}
-	// Redis active route-default TPM=100，estimate=40 → reserved；同 estimate 重试幂等 reserved。
-	if res, err := s.ReserveRequestTokens(context.Background(), "rt1", 4, 4, 40,
-		epoch, rev); err != nil || res != ReserveReserved {
-		t.Fatalf("reserve want reserved, got %s err=%v", res, err)
-	}
-	if res, _ := s.ReserveRequestTokens(context.Background(), "rt1", 4, 4, 40,
-		epoch, rev); res != ReserveReserved {
-		t.Fatalf("idempotent reserve want reserved, got %s", res)
-	}
-	// 异 estimate → conflict。
-	if res, _ := s.ReserveRequestTokens(context.Background(), "rt1", 4, 4, 41,
-		epoch, rev); res != ReserveConflict {
-		t.Fatalf("different estimate want conflict, got %s", res)
-	}
-
-	// 另一请求 estimate 超 TPM → limited。
-	if r, _ := s.AcquireRequestAdmission(context.Background(), raInput("rt2", 4, 4, epoch, rev)); r.Outcome != RequestAllowed {
-		t.Fatalf("acquire rt2: %s", r.Outcome)
-	}
-	if res, _ := s.ReserveRequestTokens(context.Background(), "rt2", 4, 4, 1000,
-		epoch, rev); res != ReserveLimited {
-		t.Fatalf("over-tpm reserve want limited, got %s", res)
-	}
-}
-
-func TestFinishRequestAdmissionQuotaSourceDistinguishesNoTransport(t *testing.T) {
-	s, _, _ := newTestStore(t)
-	epoch, rev := seedAdmissionEnvWithControls(
-		t, s, `{"rpm":0,"tpm":100,"rpd":0}`, `{"key_limit":0,"channel_limit":0}`, testConfig(),
-	)
-	const routeID, userID = int64(14), int64(15)
-	if result, err := s.AcquireRequestAdmission(context.Background(), raInput("quota-no-transport", routeID, userID, epoch, rev)); err != nil || result.Outcome != RequestAllowed {
-		t.Fatalf("acquire: result=%+v err=%v", result, err)
-	}
-	if result, err := s.ReserveRequestTokens(context.Background(), "quota-no-transport", routeID, userID, 10, epoch, rev); err != nil || result != ReserveReserved {
-		t.Fatalf("reserve input: result=%s err=%v", result, err)
-	}
-	tpmKey := s.keys.requestTPMBucket(routeID, userID, minuteBucket(time.Now()))
-	if used := s.client.Get(context.Background(), tpmKey).Val(); used != "10" {
-		t.Fatalf("reserved TPM=%q, want 10", used)
-	}
-	if result, err := s.FinishRequestAdmission(context.Background(), "quota-no-transport", routeID, userID, -1, "not_reached", epoch, rev); err != nil || result != RequestLifecycleFinished {
-		t.Fatalf("finish no transport: result=%s err=%v", result, err)
-	}
-	if used := s.client.Get(context.Background(), tpmKey).Val(); used != "0" {
-		t.Fatalf("no-transport TPM=%q, want 0", used)
-	}
-}
-
-func TestReserveRequestTokensEpochFenceLeavesTPMUnchanged(t *testing.T) {
-	s, _, _ := newTestStore(t)
-	epoch, revision := seedAdmissionEnvWithControls(
-		t, s, `{"rpm":0,"tpm":100,"rpd":0}`, `{"key_limit":0,"channel_limit":0}`, testConfig(),
-	)
-	const requestID = "reserve-epoch-fence"
-	const routeID int64 = 41
-	const userID int64 = 42
-	if result, err := s.AcquireRequestAdmission(context.Background(), raInput(requestID, routeID, userID, epoch, revision)); err != nil || result.Outcome != RequestAllowed {
-		t.Fatalf("acquire: result=%+v err=%v", result, err)
-	}
-	tokenKey := s.keys.admissionRequest(requestID)
-	tpmKey := s.keys.requestTPMBucket(routeID, userID, minuteBucket(time.Now()))
-
-	if result, err := s.ReserveRequestTokens(context.Background(), requestID, routeID, userID, 10, "wrong-epoch", revision); err != nil || result != ReserveStaleEpoch {
-		t.Fatalf("marker mismatch reserve: result=%s err=%v", result, err)
-	}
-	if exists, _ := s.client.Exists(context.Background(), tpmKey).Result(); exists != 0 {
-		t.Fatal("marker mismatch must not create a TPM bucket")
-	}
-	if state, _ := s.client.HGet(context.Background(), tokenKey, "tpm_state").Result(); state != "none" {
-		t.Fatalf("marker mismatch mutated TPM state to %q", state)
-	}
-
-	if err := s.client.HSet(context.Background(), tokenKey, "runtime_integrity_epoch", "token-wrong-epoch").Err(); err != nil {
-		t.Fatal(err)
-	}
-	if result, err := s.ReserveRequestTokens(context.Background(), requestID, routeID, userID, 10, epoch, revision); err != nil || result != ReserveStaleEpoch {
-		t.Fatalf("token mismatch reserve: result=%s err=%v", result, err)
-	}
-	if exists, _ := s.client.Exists(context.Background(), tpmKey).Result(); exists != 0 {
-		t.Fatal("token mismatch must not create a TPM bucket")
 	}
 }

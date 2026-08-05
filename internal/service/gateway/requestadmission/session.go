@@ -25,21 +25,19 @@ const (
 	defaultRenewInterval    = 10 * time.Second
 	minimumRenewInterval    = 10 * time.Millisecond
 	requestTerminalTries    = 2
-	maxLuaExactInteger      = int64(9007199254740991)
 )
 
 var (
 	ErrInvalidIdentity  = errors.New("request admission identity is invalid")
-	ErrReserveConflict  = errors.New("request admission token reserve conflicts with its first result")
+	ErrBindConflict     = errors.New("attempt binding conflicts with its request admission token")
 	ErrUnknownAdmission = errors.New("request admission token is unknown")
 )
 
 // Store is the narrow BreakerStore contract owned by an ingress request session.
 type Store interface {
 	AcquireRequestAdmission(context.Context, breakerstore.RequestAdmissionInput) (breakerstore.RequestAdmissionResult, error)
-	ReserveRequestTokens(context.Context, string, int64, int64, int64, string, int64) (breakerstore.ReserveResult, error)
 	RenewRequestAdmission(context.Context, string, int64, int64, string, int64) (breakerstore.RequestAdmissionLifecycleOutcome, error)
-	FinishRequestAdmission(context.Context, string, int64, int64, int64, string, string, int64) (breakerstore.RequestAdmissionLifecycleOutcome, error)
+	FinishRequestAdmission(context.Context, string, int64, int64, string, int64) (breakerstore.RequestAdmissionLifecycleOutcome, error)
 	SnapshotMany(context.Context, breakerstore.SnapshotManyInput) (breakerstore.SnapshotManyResult, error)
 	AggregateChannelSamples(context.Context, []int64) (map[int64]breakerstore.ChannelSampleWindow, error)
 }
@@ -58,15 +56,16 @@ type MetricsRecorder interface {
 	AddRequestAdmissionActive(delta float64)
 }
 
-// UsageSession is the only request-admission capability exposed to gateway services.
-// Finalization deliberately is not part of this interface.
-type UsageSession interface {
-	Reserve(context.Context, int64) error
-	PublishAuthoritativeUsage(int64) bool
-	MarkUpstreamReached() bool
+// RequestSession is the only request-admission capability exposed to gateway services.
+// Finalization deliberately is not part of it: only the HTTP route wrapper may close a token.
+//
+// 这里没有任何 token 用量方法：TPM 不参与准入，观测走独立的 obs:tpm 分钟桶（§8）。
+type RequestSession interface {
+	AttemptTokenSession
+	CandidateSnapshotSession
 }
 
-// AttemptTokenSession lets the future lifecycle permit manager bind the opaque request token
+// AttemptTokenSession lets the lifecycle permit manager bind the opaque request token
 // without exposing a raw request-admission ID getter to protocol services.
 type AttemptTokenSession interface {
 	BindAttempt(*breakerstore.AcquireAttemptInput) error
@@ -82,7 +81,7 @@ type CandidateSnapshotSession interface {
 
 // AcquiredSession is retained only by the HTTP route wrapper.
 type AcquiredSession interface {
-	Usage() UsageSession
+	Request() RequestSession
 	StopRenewer()
 	Finalize(context.Context) error
 }
@@ -96,7 +95,6 @@ type Identity struct {
 	Scope   string
 
 	RPMLimitOverride         *int64
-	TPMLimitOverride         *int64
 	RPDLimitOverride         *int64
 	ConcurrencyLimitOverride *int64
 }
@@ -185,7 +183,6 @@ func (m *Manager) Acquire(ctx context.Context, identity Identity) (AcquireResult
 		RouteRateRevision:         admission.RouteRateLimits,
 		GlobalConcurrencyRevision: admission.Concurrency,
 		RPMLimitOverride:          cloneLimit(identity.RPMLimitOverride),
-		TPMLimitOverride:          cloneLimit(identity.TPMLimitOverride),
 		RPDLimitOverride:          cloneLimit(identity.RPDLimitOverride),
 		ConcurrencyLimitOverride:  cloneLimit(identity.ConcurrencyLimitOverride),
 	}
@@ -285,38 +282,26 @@ type session struct {
 	stop        chan struct{}
 	renewerDone chan struct{}
 
-	reserveMu       sync.Mutex
-	reserveObserved bool
-	reserveEstimate int64
-	reserveErr      error
-
-	usageMu          sync.Mutex
-	authoritativeTPM *int64
-	upstreamReached  bool
-	finalized        bool
+	stateMu   sync.Mutex
+	finalized bool
 
 	finalizeOnce sync.Once
 	finalizeErr  error
 }
 
-func (s *session) Usage() UsageSession { return s }
+func (s *session) Request() RequestSession { return s }
 
 func (s *session) StopRenewer() { s.stopRenewer() }
 
-// BindAttempt injects the opaque request token only after TPM Reserve succeeded with the same
-// conservative estimate. It does not perform candidate admission itself.
+// BindAttempt injects the opaque request token into one candidate admission.
+// 它只校验 token 未终态且没有绑到别的请求上：输入估算不再需要预占，因此也不再比较。
 func (s *session) BindAttempt(input *breakerstore.AcquireAttemptInput) error {
 	if input == nil {
-		return reserveConflictError()
+		return bindConflictError()
 	}
-	s.reserveMu.Lock()
-	defer s.reserveMu.Unlock()
-	if !s.reserveObserved || s.reserveErr != nil || input.InputEstimate > s.reserveEstimate {
-		return reserveConflictError()
-	}
-	s.usageMu.Lock()
+	s.stateMu.Lock()
 	finalized := s.finalized
-	s.usageMu.Unlock()
+	s.stateMu.Unlock()
 	if finalized {
 		return failure.Wrap(
 			failure.CodeGatewayRuntimeSyncRequired,
@@ -325,7 +310,7 @@ func (s *session) BindAttempt(input *breakerstore.AcquireAttemptInput) error {
 		)
 	}
 	if input.RequestAdmissionID != "" && input.RequestAdmissionID != s.requestID {
-		return reserveConflictError()
+		return bindConflictError()
 	}
 	input.RequestAdmissionID = s.requestID
 	input.RouteID = s.routeID
@@ -372,129 +357,6 @@ func (s *session) AggregateChannelSamples(ctx context.Context, channelIDs []int6
 	return s.store.AggregateChannelSamples(ctx, channelIDs)
 }
 
-// Reserve performs the request-level TPM reservation once. The first observed result is
-// retained locally as well as by Redis so a service cannot reinterpret limited as allowed.
-func (s *session) Reserve(ctx context.Context, estimatedTokens int64) error {
-	s.reserveMu.Lock()
-	defer s.reserveMu.Unlock()
-
-	if estimatedTokens < 0 {
-		return failure.Wrap(
-			failure.CodeGatewayRuntimeSyncRequired,
-			ErrReserveConflict,
-			failure.WithMessage("request admission token estimate is invalid"),
-		)
-	}
-	if s.reserveObserved {
-		if s.reserveEstimate != estimatedTokens {
-			return reserveConflictError()
-		}
-		return s.reserveErr
-	}
-
-	integrity, err := s.facts.Integrity(ctx)
-	if err != nil {
-		s.recordOperation("reserve", admissionErrorResult(err))
-		s.reserveObserved = true
-		s.reserveEstimate = estimatedTokens
-		s.reserveErr = err
-		return err
-	}
-	result, err := s.store.ReserveRequestTokens(ctx, s.requestID, s.routeID, s.userID,
-		estimatedTokens, integrity.Epoch, integrity.Revision)
-	s.reserveObserved = true
-	s.reserveEstimate = estimatedTokens
-	if err != nil {
-		s.recordOperation("reserve", admissionErrorResult(err))
-		s.reserveErr = err
-		return err
-	}
-	s.recordOperation("reserve", string(result))
-
-	switch result {
-	case breakerstore.ReserveReserved:
-		logging.Debug(s.logger, "admission", "token_reservation", "request token reservation completed",
-			s.logData(zap.Int64("estimated_tokens", estimatedTokens), zap.String("outcome", "reserved"))...,
-		)
-		return nil
-	case breakerstore.ReserveLimited:
-		s.reserveErr = failure.New(
-			failure.CodeRateLimitExceeded,
-			failure.WithMessage("request token rate limit exceeded"),
-			failure.WithField("dimension", "tpm"),
-		)
-	case breakerstore.ReserveConflict:
-		s.reserveErr = reserveConflictError()
-	case breakerstore.ReserveUnknown:
-		s.reserveErr = failure.Wrap(
-			failure.CodeGatewayRuntimeSyncRequired,
-			ErrUnknownAdmission,
-			failure.WithMessage("request admission token is unavailable"),
-		)
-	case breakerstore.ReserveStoreUnavailable:
-		s.reserveErr = failure.New(
-			failure.CodeGatewayBreakerStoreUnavailable,
-			failure.WithMessage("request admission store is unavailable"),
-		)
-	case breakerstore.ReserveRuntimeStateLost:
-		s.reserveErr = failure.New(
-			failure.CodeGatewayRuntimeStateLost,
-			failure.WithMessage("request admission runtime state is unavailable"),
-		)
-	case breakerstore.ReserveStaleEpoch:
-		s.reserveErr = failure.Wrap(
-			failure.CodeGatewayRuntimeSyncRequired,
-			breakerstore.ErrStaleIntegrityEpoch,
-			failure.WithMessage("request admission token integrity epoch is stale"),
-		)
-	default:
-		s.reserveErr = failure.Wrap(
-			failure.CodeGatewayRuntimeSyncRequired,
-			ErrUnknownAdmission,
-			failure.WithMessage("request admission reserve returned an invalid outcome"),
-		)
-	}
-	logging.Warn(s.logger, "admission", "token_reservation", "request token reservation rejected",
-		s.logData(
-			zap.Int64("route_id", s.routeID), zap.Int64("user_id", s.userID),
-			zap.Int64("estimated_tokens", estimatedTokens), zap.String("outcome", string(result)),
-			zap.String("limited_dimension", "tpm"),
-		)...,
-	)
-	return s.reserveErr
-}
-
-// PublishAuthoritativeUsage records the first non-negative, non-partial cache-aware TPM
-// value published after durable settlement. Later publications cannot replace it.
-func (s *session) PublishAuthoritativeUsage(actualTPM int64) bool {
-	if actualTPM < 0 || actualTPM > maxLuaExactInteger {
-		return false
-	}
-	s.usageMu.Lock()
-	defer s.usageMu.Unlock()
-	if s.finalized || s.authoritativeTPM != nil {
-		return false
-	}
-	actual := actualTPM
-	s.authoritativeTPM = &actual
-	return true
-}
-
-// MarkUpstreamReached records that at least one attempt may have consumed upstream quota.
-// It controls retain-versus-release only; it never guesses output usage.
-func (s *session) MarkUpstreamReached() bool {
-	s.usageMu.Lock()
-	defer s.usageMu.Unlock()
-	if s.finalized {
-		return false
-	}
-	if s.upstreamReached {
-		return false
-	}
-	s.upstreamReached = true
-	return true
-}
-
 // Finalize stops and joins the renewer before invoking the token's only terminal API.
 // sync.Once makes duplicate route cleanup return the first terminal result without another Store call.
 func (s *session) Finalize(ctx context.Context) error {
@@ -504,20 +366,9 @@ func (s *session) Finalize(ctx context.Context) error {
 			defer s.metrics.AddRequestAdmissionActive(-1)
 		}
 
-		actualTotal := int64(-1)
-		terminalReason := "empty"
-		s.usageMu.Lock()
+		s.stateMu.Lock()
 		s.finalized = true
-		if s.authoritativeTPM != nil {
-			actualTotal = *s.authoritativeTPM
-			terminalReason = "actual"
-		} else if s.reserveObserved && s.reserveErr == nil {
-			terminalReason = "not_reached"
-			if s.upstreamReached {
-				terminalReason = "reached_without_usage"
-			}
-		}
-		s.usageMu.Unlock()
+		s.stateMu.Unlock()
 
 		var outcome breakerstore.RequestAdmissionLifecycleOutcome
 		var terminalErr error
@@ -526,8 +377,7 @@ func (s *session) Finalize(ctx context.Context) error {
 			integrity, err := s.facts.Integrity(ctx)
 			if err == nil {
 				outcome, err = s.store.FinishRequestAdmission(
-					ctx, s.requestID, s.routeID, s.userID, actualTotal, terminalReason,
-					integrity.Epoch, integrity.Revision,
+					ctx, s.requestID, s.routeID, s.userID, integrity.Epoch, integrity.Revision,
 				)
 				if err != nil && retryableLifecycleError(err) {
 					storeResultUnknown = true
@@ -557,13 +407,13 @@ func (s *session) Finalize(ctx context.Context) error {
 			logging.Error(s.logger, "admission", "request", "request admission finalize rejected",
 				s.logData(
 					zap.Int64("route_id", s.routeID), zap.Int64("user_id", s.userID),
-					zap.String("outcome", string(outcome)), zap.String("terminal_reason", terminalReason),
+					zap.String("outcome", string(outcome)),
 				)...,
 			)
 			return
 		}
 		logging.Debug(s.logger, "admission", "request", "request admission finalized",
-			s.logData(zap.String("outcome", string(outcome)), zap.String("terminal_reason", terminalReason), zap.Int64("actual_total_tokens", actualTotal))...,
+			s.logData(zap.String("outcome", string(outcome)))...,
 		)
 	})
 	return s.finalizeErr
@@ -679,7 +529,6 @@ func admissionFingerprint(in breakerstore.RequestAdmissionInput, scope string) s
 		in.RequestAdmissionID, in.RouteID, in.UserID, scope, in.IntegrityEpoch, in.IntegrityRevision,
 		in.RouteRateRevision, in.GlobalConcurrencyRevision)
 	writeLimitFingerprint(h, "rpm", in.RPMLimitOverride)
-	writeLimitFingerprint(h, "tpm", in.TPMLimitOverride)
 	writeLimitFingerprint(h, "rpd", in.RPDLimitOverride)
 	writeLimitFingerprint(h, "concurrency", in.ConcurrencyLimitOverride)
 	return fmt.Sprintf("%x", h.Sum(nil))
@@ -705,11 +554,11 @@ func cloneLimit(value *int64) *int64 {
 	return &cloned
 }
 
-func reserveConflictError() error {
+func bindConflictError() error {
 	return failure.Wrap(
 		failure.CodeGatewayBreakerPermitConflict,
-		ErrReserveConflict,
-		failure.WithMessage("request admission token reserve conflicts with its first result"),
+		ErrBindConflict,
+		failure.WithMessage("attempt binding conflicts with its request admission token"),
 	)
 }
 
@@ -730,39 +579,27 @@ func requestLifecycleError(operation string, outcome breakerstore.RequestAdmissi
 	)
 }
 
-type usageSessionContextKey struct{}
+type requestSessionContextKey struct{}
 
 type contextSessions struct {
-	usage    UsageSession
 	attempt  AttemptTokenSession
 	snapshot CandidateSnapshotSession
 }
 
-// ContextWithUsageSession exposes only Reserve/Publish to downstream services.
-func ContextWithUsageSession(ctx context.Context, usageSession UsageSession) context.Context {
-	if usageSession == nil {
+// ContextWithRequestSession exposes only attempt binding and candidate snapshot to downstream services.
+func ContextWithRequestSession(ctx context.Context, requestSession RequestSession) context.Context {
+	if requestSession == nil {
 		return ctx
 	}
-	bundle := contextSessions{usage: usageSession}
-	if attempt, ok := usageSession.(AttemptTokenSession); ok {
-		bundle.attempt = attempt
-	}
-	if snapshot, ok := usageSession.(CandidateSnapshotSession); ok {
-		bundle.snapshot = snapshot
-	}
-	return context.WithValue(ctx, usageSessionContextKey{}, bundle)
+	return context.WithValue(ctx, requestSessionContextKey{}, contextSessions{
+		attempt:  requestSession,
+		snapshot: requestSession,
+	})
 }
 
-// UsageSessionFromContext returns the narrow request-admission service capability.
-func UsageSessionFromContext(ctx context.Context) (UsageSession, bool) {
-	bundle, ok := ctx.Value(usageSessionContextKey{}).(contextSessions)
-	return bundle.usage, ok && bundle.usage != nil
-}
-
-// BindAttemptInput is reserved for the lifecycle permit manager. It supplies the opaque request
-// token and validates the request-level Reserve invariant without exposing an ID getter.
+// BindAttemptInput is the lifecycle permit manager's only way to supply the opaque request token.
 func BindAttemptInput(ctx context.Context, input *breakerstore.AcquireAttemptInput) error {
-	bundle, ok := ctx.Value(usageSessionContextKey{}).(contextSessions)
+	bundle, ok := ctx.Value(requestSessionContextKey{}).(contextSessions)
 	if !ok || bundle.attempt == nil {
 		return failure.Wrap(
 			failure.CodeGatewayRuntimeSyncRequired,
@@ -776,7 +613,7 @@ func BindAttemptInput(ctx context.Context, input *breakerstore.AcquireAttemptInp
 // SnapshotManyIfPresent lets shared candidate preparation consume the request-owned snapshot
 // capability. present=false is reserved for direct unit tests and maintenance callers.
 func SnapshotManyIfPresent(ctx context.Context, modelID int64, candidates []breakerstore.SnapshotCandidateInput) (breakerstore.SnapshotManyResult, bool, error) {
-	bundle, ok := ctx.Value(usageSessionContextKey{}).(contextSessions)
+	bundle, ok := ctx.Value(requestSessionContextKey{}).(contextSessions)
 	if !ok || bundle.snapshot == nil {
 		return breakerstore.SnapshotManyResult{}, false, nil
 	}
@@ -785,9 +622,9 @@ func SnapshotManyIfPresent(ctx context.Context, modelID int64, candidates []brea
 }
 
 // AggregateChannelSamplesIfPresent 读取候选渠道最近 30 分钟评分样本聚合（§12）。
-// 观测是 best-effort：读失败或无 session 时返回空聚合，评分按“无样本得满分”处理，不阻断选路。
+// 观测是 best-effort：读失败或无 session 时返回空聚合，评分按「无样本得满分」处理，不阻断选路。
 func AggregateChannelSamplesIfPresent(ctx context.Context, channelIDs []int64) map[int64]breakerstore.ChannelSampleWindow {
-	bundle, ok := ctx.Value(usageSessionContextKey{}).(contextSessions)
+	bundle, ok := ctx.Value(requestSessionContextKey{}).(contextSessions)
 	if !ok || bundle.snapshot == nil || len(channelIDs) == 0 {
 		return nil
 	}
@@ -796,33 +633,4 @@ func AggregateChannelSamplesIfPresent(ctx context.Context, channelIDs []int64) m
 		return nil
 	}
 	return windows
-}
-
-// ReserveIfPresent keeps direct service unit tests and non-HTTP maintenance callers neutral;
-// every production generation route installs the session before reaching the service.
-func ReserveIfPresent(ctx context.Context, estimatedTokens int64) error {
-	s, ok := UsageSessionFromContext(ctx)
-	if !ok {
-		return nil
-	}
-	return s.Reserve(ctx, estimatedTokens)
-}
-
-// PublishAuthoritativeUsage publishes settlement usage when a session exists. Recovery
-// workers legitimately run without the original HTTP request session and are a no-op here.
-func PublishAuthoritativeUsage(ctx context.Context, actualTPM int64) bool {
-	s, ok := UsageSessionFromContext(ctx)
-	if !ok {
-		return false
-	}
-	return s.PublishAuthoritativeUsage(actualTPM)
-}
-
-// MarkUpstreamReached marks that at least one attempt cannot be proven untransmitted.
-func MarkUpstreamReached(ctx context.Context) bool {
-	s, ok := UsageSessionFromContext(ctx)
-	if !ok {
-		return false
-	}
-	return s.MarkUpstreamReached()
 }

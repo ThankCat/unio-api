@@ -325,11 +325,7 @@ JOIN request_records r ON r.id = lr.request_record_id
 WHERE lr.status = 'authorized'
   AND lr.created_at < $1
   AND r.status = 'running'
-  AND NOT EXISTS (
-        SELECT 1 FROM request_attempts a
-        WHERE a.request_record_id = lr.request_record_id
-          AND a.status = 'running'
-    )
+  AND r.delivery_status = 'not_started'
   AND NOT EXISTS (
         SELECT 1 FROM settlement_recovery_jobs j
         WHERE j.request_record_id = lr.request_record_id
@@ -343,9 +339,9 @@ type ListOrphanAuthorizedReservationsParams struct {
 	BatchLimit    int32
 }
 
-// ListOrphanAuthorizedReservations 扫描「孤儿」预授权：进程崩溃后请求永久停留 running、冻结余额永不释放。
-// 仅命中 status='authorized' 且超过阈值、请求仍 running、没有 running attempt、且没有任何 settlement
-// 补偿任务的预授权。running attempt 可能是仍在正常输出的长流，不能仅按 reservation 年龄判为孤儿。
+// ListOrphanAuthorizedReservations 扫描「孤儿」预授权候选：进程崩溃后请求永久停留 running、冻结余额永不释放。
+// 仅命中尚未向客户交付内容、超过阈值、没有 settlement 补偿任务的 authorized 请求。
+// running attempt 由 worker 结合 Redis permit 存活状态判断，不能仅按 reservation 年龄判为孤儿。
 // 与 settlement_recovery worker 严格互补（有补偿任务的预授权由该 worker 负责 capture/finalize，绝不在此释放，
 // 避免上游已成功却被误释放导致白嫖）。走部分索引 idx_ledger_reservations_authorized_created_at。
 func (q *Queries) ListOrphanAuthorizedReservations(ctx context.Context, arg ListOrphanAuthorizedReservationsParams) ([]LedgerReservation, error) {
@@ -374,6 +370,88 @@ func (q *Queries) ListOrphanAuthorizedReservations(ctx context.Context, arg List
 			&i.UpdatedAt,
 			&i.CapturedAt,
 			&i.ReleasedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRunningRequestAttemptPermits = `-- name: ListRunningRequestAttemptPermits :many
+SELECT id, permit_id, upstream_started_at, gateway_first_token_at
+FROM request_attempts
+WHERE request_record_id = $1
+  AND status = 'running'
+ORDER BY id
+`
+
+type ListRunningRequestAttemptPermitsRow struct {
+	ID                  int64
+	PermitID            pgtype.Text
+	UpstreamStartedAt   pgtype.Timestamptz
+	GatewayFirstTokenAt pgtype.Timestamptz
+}
+
+// ListRunningRequestAttemptPermits 读取孤儿候选当前全部 running attempt 的 permit 与交付边界。
+func (q *Queries) ListRunningRequestAttemptPermits(ctx context.Context, requestRecordID int64) ([]ListRunningRequestAttemptPermitsRow, error) {
+	rows, err := q.db.Query(ctx, listRunningRequestAttemptPermits, requestRecordID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRunningRequestAttemptPermitsRow
+	for rows.Next() {
+		var i ListRunningRequestAttemptPermitsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PermitID,
+			&i.UpstreamStartedAt,
+			&i.GatewayFirstTokenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRunningRequestAttemptPermitsForUpdate = `-- name: ListRunningRequestAttemptPermitsForUpdate :many
+SELECT id, permit_id, upstream_started_at, gateway_first_token_at
+FROM request_attempts
+WHERE request_record_id = $1
+  AND status = 'running'
+FOR UPDATE
+`
+
+type ListRunningRequestAttemptPermitsForUpdateRow struct {
+	ID                  int64
+	PermitID            pgtype.Text
+	UpstreamStartedAt   pgtype.Timestamptz
+	GatewayFirstTokenAt pgtype.Timestamptz
+}
+
+// ListRunningRequestAttemptPermitsForUpdate 在收口事务中锁定并重查 running attempt 集合。
+func (q *Queries) ListRunningRequestAttemptPermitsForUpdate(ctx context.Context, requestRecordID int64) ([]ListRunningRequestAttemptPermitsForUpdateRow, error) {
+	rows, err := q.db.Query(ctx, listRunningRequestAttemptPermitsForUpdate, requestRecordID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRunningRequestAttemptPermitsForUpdateRow
+	for rows.Next() {
+		var i ListRunningRequestAttemptPermitsForUpdateRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PermitID,
+			&i.UpstreamStartedAt,
+			&i.GatewayFirstTokenAt,
 		); err != nil {
 			return nil, err
 		}
@@ -466,6 +544,40 @@ func (q *Queries) ListStrandedAuthorizedReservations(ctx context.Context, arg Li
 		return nil, err
 	}
 	return items, nil
+}
+
+const markRunningRequestAttemptsOrphaned = `-- name: MarkRunningRequestAttemptsOrphaned :execrows
+UPDATE request_attempts
+SET status = 'failed',
+    error_code = $1,
+    error_message = $2,
+    internal_error_detail = $3,
+    completed_at = $4
+WHERE request_record_id = $5
+  AND status = 'running'
+`
+
+type MarkRunningRequestAttemptsOrphanedParams struct {
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	CompletedAt         pgtype.Timestamptz
+	RequestRecordID     int64
+}
+
+// MarkRunningRequestAttemptsOrphaned 将进程退出遗留的 running attempt 收口为平台失败，不进入渠道错误样本。
+func (q *Queries) MarkRunningRequestAttemptsOrphaned(ctx context.Context, arg MarkRunningRequestAttemptsOrphanedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markRunningRequestAttemptsOrphaned,
+		arg.ErrorCode,
+		arg.ErrorMessage,
+		arg.InternalErrorDetail,
+		arg.CompletedAt,
+		arg.RequestRecordID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const releaseLedgerReservation = `-- name: ReleaseLedgerReservation :one

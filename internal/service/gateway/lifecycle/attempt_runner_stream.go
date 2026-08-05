@@ -16,7 +16,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
-	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
 // StreamUpstream 执行一次 timed 上游流式调用。
@@ -409,6 +408,7 @@ scan:
 				index,
 				candidate,
 				l.upstreamEndpoint(),
+				permitOwner.PermitID(),
 			)
 			if err != nil {
 				if permitOwner != nil {
@@ -458,10 +458,11 @@ scan:
 			streamEventCount := 0
 			streamBytes := 0
 
+			tpmScope := l.newTPMAttemptScope(requestRecord, attemptRecord, candidate, permitOwner, candidateInputTokens)
 			timingObserver := newAttemptTimingObserverWithHooks(
 				true,
 				time.Now,
-				l.attemptTimingHooks(ctx, requestRecord, attemptRecord, candidate, true),
+				l.attemptTimingHooks(ctx, requestRecord, attemptRecord, candidate, true, tpmScope),
 			)
 			attemptCtx := adapter.WithAttemptTimingObserver(ctx, timingObserver)
 			firstTokenPersisted := false
@@ -605,6 +606,16 @@ scan:
 			}
 
 			emitChunk := func(chunk C, meta StreamChunkMeta) (bool, bool, error) {
+				// 只分词一次：TPM 观测与 partial settlement 必须共用同一个输出口径，
+				// 而且 tokenest 没有缓存，重复调用会把 tokenizer 开销翻倍。
+				chunkOutputTokens := int64(0)
+				if params.CountOutputTokens != nil && meta.VisibleText != "" {
+					chunkOutputTokens = params.CountOutputTokens(candidate.UpstreamModel, meta.VisibleText)
+				}
+				// Channel 输出在上游 chunk 解析完成时就成立，与客户是否收到无关。
+				chunkObservedAt := time.Now()
+				l.ObserveChannelOutput(tpmScope, chunkObservedAt, chunkOutputTokens)
+
 				frameAcked := false
 				firstTokenAcked := false
 				err := params.EmitChunk(chunk, StreamWriteAcks{
@@ -620,8 +631,10 @@ scan:
 						acknowledgeWrite()
 					},
 				})
-				if firstTokenAcked && params.CountOutputTokens != nil && meta.VisibleText != "" {
-					partialOutputTokens += params.CountOutputTokens(candidate.UpstreamModel, meta.VisibleText)
+				if firstTokenAcked && chunkOutputTokens > 0 {
+					partialOutputTokens += chunkOutputTokens
+					// Route 输出以客户写入确认为准：客户端提前断开时 Channel 会比 Route 多记一点。
+					l.ObserveRouteOutput(tpmScope, time.Now(), chunkOutputTokens)
 				}
 				return frameAcked, firstTokenAcked, err
 			}
@@ -746,9 +759,6 @@ scan:
 			l.RecordAttemptTiming(ctx, attemptRecord, timingFacts)
 			// 流式超时可能卡在响应头、首字或首字之后的 idle（§11.2/§11.4）；非超时失败是 no-op。
 			l.RecordAttemptTimeoutPhase(ctx, attemptRecord, timingFacts, true, err)
-			if timingFacts.HasChannelUsageEvidence() {
-				requestadmission.MarkUpstreamReached(ctx)
-			}
 			outcomeErr := err
 			if panicValue != nil {
 				outcomeErr = errAttemptInvokePanic
@@ -819,6 +829,17 @@ scan:
 
 			l.RecordAttemptRuntimeMetrics(candidate, attemptRecord.UpstreamEndpoint, true, timingFacts, finishOutcome, outcomeErr)
 			l.RecordAttemptSample(ctx, candidate, attemptRecord, true, timingFacts, finishOutcome, outcomeErr)
+			if timingFacts.HasChannelUsageEvidence() {
+				if timingFacts.UpstreamStartedAt != nil {
+					// 响应头从未到达时，这里是输入观测的唯一记录机会；已记过的 scope 会被忽略。
+					l.ObserveAttemptInput(tpmScope, *timingFacts.UpstreamStartedAt)
+				}
+				completedAt := time.Now()
+				if timingFacts.UpstreamCompletedAt != nil {
+					completedAt = *timingFacts.UpstreamCompletedAt
+				}
+				l.FinalizeTPMObservation(tpmScope, completedAt, streamFacts)
+			}
 			l.RecordUpstream(candidate.ProviderID, candidate.Channel.ID, time.Since(upstreamStart), err)
 			l.RecordCredentialResult(candidate, err)
 			attemptResultLogged := false
@@ -863,6 +884,19 @@ scan:
 			if err != nil {
 				// 有 final usage 时优先结算：上游已给出准确 token 用量，即使尾部出错也不能让已产生成本的请求免费。
 				if streamFacts != nil {
+					streamEvent := metrics.StreamEventInterrupted
+					if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+						settledRequestStatus = requestlog.RequestStatusCanceled
+						settledAttemptStatus = requestlog.AttemptStatusCanceled
+						settledErrorCode, settledErrorMessage, settledInternalErrorDetail = l.requestLogCancelFacts(err)
+						result.Outcome = metrics.ChatOutcomeCanceled
+						streamEvent = metrics.StreamEventCanceled
+					} else {
+						settledRequestStatus = requestlog.RequestStatusFailed
+						settledAttemptStatus = requestlog.AttemptStatusFailed
+						settledErrorCode, settledErrorMessage, settledInternalErrorDetail = l.requestLogErrorFacts("stream_adapter_error", err)
+						result.Outcome = metrics.ChatOutcomeFailed
+					}
 					logAttemptResult(err, false)
 					if settleErr := settleStreamFacts(); settleErr != nil {
 						if !IsChatSettlementRecoveryScheduled(settleErr) {
@@ -881,10 +915,13 @@ scan:
 							return result, settleErr
 						}
 					}
-					// 账务已收口，但调用方仍需知道流尾发生过错误；HTTP 层若已写出 SSE 只能中断连接。
-					// 已 emit 后尾部出错：客户未拿到完整响应，交付标 interrupted。
+					// 账务按真实 usage 收口，但请求/attempt 仍按尾部错误保存 failed/canceled，避免数据库成功、
+					// 外层失败的矛盾。调用方继续收到原错误；HTTP 层若已写出 SSE 只能中断连接。
 					if emitted {
 						l.MarkDeliveryInterrupted(ctx, requestRecord, firstTokenDelivered, err)
+						l.RecordStreamEvent(streamEvent)
+					} else if streamEvent == metrics.StreamEventCanceled {
+						l.RecordStreamEvent(streamEvent)
 					}
 					return result, err
 				}
@@ -921,7 +958,7 @@ scan:
 						return finishPartial(PartialReasonInterrupted, metrics.ChatOutcomeFailed, metrics.StreamEventInterrupted, false, err)
 					}
 					// 已 emit 帧但无可用输出内容（仅控制帧/空内容后上游中断）：视同「上游流中断、无可用输出」——
-					// 一分钱不扣、全额释放预扣（对齐 new-api PR #4199）；入口 TPM 由 RequestAdmission 收口。
+					// 一分钱不扣、全额释放预扣（对齐 new-api PR #4199）。
 					l.MarkAttemptFailed(ctx, attemptRecord, "stream_adapter_error", err)
 					// 客户侧不扣费，但 bill-on-disconnect 上游已开始生成、大概率照常计费：记平台成本敞口（阶段一）。
 					l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, err)
@@ -1131,11 +1168,6 @@ func streamFinishOutcome(facts *adapter.ResponseFacts, timing AttemptTimingFacts
 	out := breakerstore.FinishOutcome{
 		ProviderOutcome: breakerstore.OutcomeIgnored,
 		ChannelOutcome:  breakerstore.OutcomeIgnored,
-	}
-	if facts != nil && !facts.UsageSource.IsPartialEstimate() {
-		if actual, reliable := actualTotalTokens(facts.Usage); reliable {
-			out.ActualTotalTokens = &actual
-		}
 	}
 	if err == nil && facts != nil {
 		out.ProviderOutcome = breakerstore.OutcomeEligibleSuccess

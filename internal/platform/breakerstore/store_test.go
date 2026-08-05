@@ -128,7 +128,7 @@ func seedAttemptControlsWithRoutingBalance(
 ) {
 	t.Helper()
 	seedAttemptIntegrity(t, s)
-	ensureTestControlAtRevision(t, s, s.RouteRateLimitControl(), testRouteRateRevision, `{"rpm":97,"tpm":9700,"rpd":970}`)
+	ensureTestControlAtRevision(t, s, s.RouteRateLimitControl(), testRouteRateRevision, `{"rpm":97,"rpd":970}`)
 	ensureTestControl(t, s, s.GlobalConcurrencyControl(), `{"key_limit":0,"channel_limit":0}`)
 	ensureTestControl(t, s, s.SettingControl("gateway.circuit_breaker"), testCircuitBreakerPayload(cfg))
 	ensureTestControl(t, s, s.SettingControl("gateway.routing_balance"), routingBalancePayload)
@@ -151,7 +151,9 @@ func seedAttemptIntegrity(t *testing.T, s *Store) {
 	}
 }
 
-func seedReservedRequestAdmission(t *testing.T, s *Store, in AcquireAttemptInput) {
+// seedActiveRequestAdmission 造一个 active request token 供 attempt acquire 绑定。
+// 它不再冻结任何 TPM 状态：attempt 准入只要求 token active 且属于同一 integrity epoch。
+func seedActiveRequestAdmission(t *testing.T, s *Store, in AcquireAttemptInput) {
 	t.Helper()
 	if err := s.client.HSet(
 		context.Background(),
@@ -159,8 +161,6 @@ func seedReservedRequestAdmission(t *testing.T, s *Store, in AcquireAttemptInput
 		"status", "active",
 		"runtime_integrity_epoch", in.IntegrityEpoch,
 		"runtime_integrity_revision", in.IntegrityRevision,
-		"tpm_state", "held",
-		"tpm_input_estimate", in.InputEstimate,
 		"route_id", in.RouteID,
 	).Err(); err != nil {
 		t.Fatalf("seed reserved request admission: %v", err)
@@ -169,7 +169,7 @@ func seedReservedRequestAdmission(t *testing.T, s *Store, in AcquireAttemptInput
 
 func acquireAttempt(t *testing.T, s *Store, in AcquireAttemptInput) (AttemptAdmission, error) {
 	t.Helper()
-	seedReservedRequestAdmission(t, s, in)
+	seedActiveRequestAdmission(t, s, in)
 	return s.AcquireAttempt(context.Background(), in)
 }
 
@@ -309,9 +309,9 @@ func TestAttemptLifecycleIntegrityFencesAreZeroWrite(t *testing.T) {
 			wantCode: failure.CodeGatewayBreakerPermitConflict, wantFinish: DispositionTerminalConflict,
 		},
 		{
-			name: "server permit tpm state tampered",
+			name: "server permit input estimate tampered",
 			mutate: func(ctx context.Context, s *Store, client *redis.Client, permit *AttemptPermit) error {
-				return client.HSet(ctx, s.keys.permit(permit.PermitID), "tpm_state", "settled").Err()
+				return client.HSet(ctx, s.keys.permit(permit.PermitID), "input_estimate", "not-a-number").Err()
 			},
 			wantError: ErrRuntimeSyncRequired, wantCode: failure.CodeGatewayRuntimeSyncRequired,
 			wantFinish: DispositionRuntimeSyncReq,
@@ -1345,7 +1345,6 @@ func TestAcquireAndFinishRejectInvalidInputBeforeRedisWrite(t *testing.T) {
 	if err != nil || adm.Mode != AdmissionPermit {
 		t.Fatalf("valid acquire: mode=%s reason=%s err=%v", adm.Mode, adm.Reason, err)
 	}
-	negative := int64(-1)
 	finishCases := []struct {
 		name    string
 		outcome FinishOutcome
@@ -1353,7 +1352,6 @@ func TestAcquireAndFinishRejectInvalidInputBeforeRedisWrite(t *testing.T) {
 		{name: "outcome enum", outcome: FinishOutcome{ProviderOutcome: Outcome("invalid"), ChannelOutcome: OutcomeEligibleFailure}},
 		{name: "evidence enum", outcome: FinishOutcome{ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleFailure, ProviderEvidence: ProviderEvidenceCategory("invalid")}},
 		{name: "evidence requires channel failure", outcome: FinishOutcome{ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, ProviderEvidence: ProviderEvidenceHTTP500}},
-		{name: "negative actual tokens", outcome: FinishOutcome{ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeIgnored, ActualTotalTokens: &negative}},
 	}
 	for _, tc := range finishCases {
 		if _, err := s.Finish(context.Background(), *adm.Permit, tc.outcome); failure.CodeOf(err) != failure.CodeConfigInvalid {

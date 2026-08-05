@@ -34,7 +34,6 @@ type routeOpsRowDTO struct {
 	Description      string `json:"description"`
 	PriceRatio       string `json:"price_ratio"`
 	RpmLimit         *int32 `json:"rpm_limit"`
-	TpmLimit         *int32 `json:"tpm_limit"`
 	RpdLimit         *int32 `json:"rpd_limit"`
 	ConcurrencyLimit *int32 `json:"concurrency_limit"`
 	CreatedAt        string `json:"created_at"`
@@ -147,7 +146,6 @@ func (h *routeOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			Description:      row.Description,
 			PriceRatio:       row.PriceRatio,
 			RpmLimit:         row.RpmLimit,
-			TpmLimit:         row.TpmLimit,
 			RpdLimit:         row.RpdLimit,
 			ConcurrencyLimit: row.ConcurrencyLimit,
 			CreatedAt:        adminhttp.RFC3339(row.CreatedAt),

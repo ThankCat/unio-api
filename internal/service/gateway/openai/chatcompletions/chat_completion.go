@@ -2,6 +2,7 @@ package chatcompletions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -14,7 +15,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
-	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
 // CreateChatCompletion 编排非流式 chat completion 请求，并返回公开 DTO 与内部交付 finalizer。
@@ -92,17 +92,6 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 			Sticky: stickySession.Audit(), Status: lifecycle.TraceStatusPartial,
 		})
 	}
-	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
-		if principal.RouteID != nil {
-			s.lifecycle.CompleteRoutingTrace(ctx, lifecycle.RoutingDecisionTraceInput{
-				Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
-				PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
-				Sticky: stickySession.Audit(),
-			}, lifecycle.RunResult{}, err)
-		}
-		s.markRequestRecordFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
-		return nil, err
-	}
 
 	authorization, err := s.lifecycle.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
@@ -141,7 +130,15 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		RequestedModelID: req.Model,
 		ResponseProtocol: requestlog.ProtocolOpenAI,
 		EstimatedTokens:  candidatePlan.ConservativeInputTokens,
-		Sticky:           stickySession,
+		UpstreamCostWithoutUsage: func(err error) bool {
+			return errors.Is(err, chatcompletionsadapter.ErrChatUnreliableUsage)
+		},
+		Codes: lifecycle.RunNonStreamCodes{
+			UpstreamCostWithoutUsageCode:       "chat_cost_without_usage",
+			UpstreamCostWithoutUsageReasonCode: "chat_missing_usage",
+			UpstreamCostWithoutUsageReason:     "openai chat completion returned 2xx without reliable usage; upstream cost may have been incurred",
+		},
+		Sticky: stickySession,
 		ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
 			adapter, ok := s.registry.Chat(candidate.AdapterKey)
 			if !ok {

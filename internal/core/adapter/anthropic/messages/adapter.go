@@ -94,6 +94,18 @@ func (a *Adapter) Messages(ctx context.Context, ch channel.Runtime, req MessageR
 		)
 	}
 
+	if wire.Usage == nil || wire.Usage.InputTokens == nil || wire.Usage.OutputTokens == nil {
+		return nil, newUpstreamProtocolError(
+			httpResp.StatusCode,
+			requestID,
+			body,
+			failure.Wrap(
+				failure.CodeAdapterInvalidResponse,
+				ErrMessagesMissingUsage,
+				failure.WithMessage("anthropic adapter messages response missing required usage"),
+			),
+		)
+	}
 	if wire.ID == "" || len(wire.Content) == 0 {
 		return nil, newUpstreamProtocolError(
 			httpResp.StatusCode,
@@ -106,7 +118,7 @@ func (a *Adapter) Messages(ctx context.Context, ch channel.Runtime, req MessageR
 		)
 	}
 
-	usage := messageUsageFromWire(wire.Usage)
+	usage := messageUsageFromWire(*wire.Usage)
 	meta := adapter.UpstreamMetadata{
 		StatusCode: httpResp.StatusCode,
 		RequestID:  requestID,

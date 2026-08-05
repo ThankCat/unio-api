@@ -221,7 +221,7 @@ func TestCircuitBreakerSettingsRejectsInvalid(t *testing.T) {
 }
 
 func TestRateLimitDefaultsRoundTrip(t *testing.T) {
-	want := RateLimitDefaultsSettings{RPM: 120, TPM: 90000, RPD: 5000}
+	want := RateLimitDefaultsSettings{RPM: 120, RPD: 5000}
 	got, err := DecodeRateLimitDefaultsSettings(encodeRateLimitDefaultsSettings(want))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
@@ -233,7 +233,7 @@ func TestRateLimitDefaultsRoundTrip(t *testing.T) {
 
 func TestRateLimitDefaultsDefaultIsUnlimited(t *testing.T) {
 	got := DefaultRateLimitDefaultsSettings()
-	want := RateLimitDefaultsSettings{RPM: 0, TPM: 0, RPD: 0}
+	want := RateLimitDefaultsSettings{RPM: 0, RPD: 0}
 	if got != want {
 		t.Fatalf("defaults = %+v, want %+v", got, want)
 	}
@@ -241,10 +241,12 @@ func TestRateLimitDefaultsDefaultIsUnlimited(t *testing.T) {
 
 func TestRateLimitDefaultsRejectsInvalid(t *testing.T) {
 	cases := map[string]string{
-		"negative rpm":  `{"rpm":-1,"tpm":0,"rpd":0}`,
-		"negative tpm":  `{"rpm":60,"tpm":-1,"rpd":0}`,
-		"negative rpd":  `{"rpm":60,"tpm":0,"rpd":-1}`,
-		"legacy policy": `{"rpm":60,"tpm":0,"rpd":0,"failure_policy":"fail_open"}`,
+		"negative rpm":  `{"rpm":-1,"rpd":0}`,
+		"negative rpd":  `{"rpm":60,"rpd":-1}`,
+		"legacy policy": `{"rpm":60,"rpd":0,"failure_policy":"fail_open"}`,
+		// TPM 已经不是准入维度：payload 里出现 tpm 必须当成未知字段拒绝，
+		// 否则旧值会被静默忽略、看起来像还在生效。
+		"legacy tpm": `{"rpm":60,"tpm":9000,"rpd":0}`,
 	}
 	for name, raw := range cases {
 		if _, err := DecodeRateLimitDefaultsSettings([]byte(raw)); err == nil {

@@ -32,15 +32,9 @@ CREATE TABLE public.api_keys (
     spend_limit numeric(20,10),
     spent_total numeric(20,10) DEFAULT 0 NOT NULL,
     route_id bigint NOT NULL,
-    rpm_limit integer,
-    tpm_limit integer,
-    rpd_limit integer,
     user_id bigint NOT NULL,
-    CONSTRAINT api_keys_rpd_limit_check CHECK (((rpd_limit IS NULL) OR (rpd_limit >= 0))),
-    CONSTRAINT api_keys_rpm_limit_check CHECK (((rpm_limit IS NULL) OR (rpm_limit >= 0))),
     CONSTRAINT api_keys_spend_limit_check CHECK (((spend_limit IS NULL) OR (spend_limit >= (0)::numeric))),
-    CONSTRAINT api_keys_spent_total_check CHECK ((spent_total >= (0)::numeric)),
-    CONSTRAINT api_keys_tpm_limit_check CHECK (((tpm_limit IS NULL) OR (tpm_limit >= 0)))
+    CONSTRAINT api_keys_spent_total_check CHECK ((spent_total >= (0)::numeric))
 );
 
 ALTER SEQUENCE public.api_keys_id_seq OWNED BY public.api_keys.id;
@@ -78,9 +72,8 @@ ALTER TABLE ONLY public.api_keys
 --
 -- api_keys.route_id：该 Key 选定的线路，NULL 表示回落项目默认 / 内置经济。
 -- [000052_add_api_keys_rate_limits]
--- 为 API Key 增加令牌级限流上限（P2-8）：RPM 每分钟请求数、TPM 每分钟 token 数、RPD 每日请求数。
--- 三列均可空：NULL 表示「继承全局默认」，0 表示「显式不限」，>0 表示具体上限。
--- 限流计数在 Redis 滑动窗口完成，这里只持久化每把 Key 的策略上限。
+-- 曾为 API Key 增加过 rpm_limit / tpm_limit / rpd_limit 三列（P2-8）。
+-- DEC-027 之后限流全部归线路、按 (线路, 用户) 计数，这三列再没有被写入或读取过，已随本次改造删除。
 -- [000058_collapse_projects_into_users]
 -- 折叠 user → project → api_key 三级为 user → api_key 两级，彻底移除 projects 概念。
 -- API Key、模型策略与请求归属全部直接挂在用户上。

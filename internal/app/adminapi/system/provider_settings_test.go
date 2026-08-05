@@ -43,7 +43,7 @@ func TestPutSettingReturnsRuntimeActivationState(t *testing.T) {
 	router := chi.NewRouter()
 	router.Put("/settings/{key}", (&providerSettingsHandler{service: service}).putSetting)
 
-	req := httptest.NewRequest(http.MethodPut, "/settings/"+appsettings.GatewayRouteRateLimitDefaultsKey, strings.NewReader(`{"rpm":60,"tpm":0,"rpd":0}`))
+	req := httptest.NewRequest(http.MethodPut, "/settings/"+appsettings.GatewayRouteRateLimitDefaultsKey, strings.NewReader(`{"rpm":60,"rpd":0}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)

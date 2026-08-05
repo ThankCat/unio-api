@@ -1,6 +1,7 @@
 # 上线前检查报告（源码复核版）
 
 - 检查日期：2026-08-04
+- 最新复核：2026-08-05
 - 复核范围：`unio-gateway`、`unio-admin`、`unio-blueprint` 当前工作树
 - 状态说明：本报告按后续处置持续更新；已关闭项以当前代码、测试和 Blueprint 为准
 
@@ -13,92 +14,73 @@
 - C-11 的 Dashboard 已能拆开显示缓存读取和缓存写入，问题只剩模型详情页仍把两者合称“缓存命中率”。
 - 请求列表已经先分页再补充详情，`COUNT(*) OVER()` 的风险明显降低，不应继续列为首要慢查询。
 - 服务商级共享熔断已经写入 Blueprint，不属于文档缺口。
-- `000040` 已恢复为正式迁移，不再有“版本从 40 回退到 39”的问题；当前真正的问题是只有 up、没有 down。
-- B-1R 已修复：孤儿扫描与收口都排除 running attempt，收口事务重查 recovery job，任务创建与清扫使用
-  同一 request 行锁串行化。
+- C-13 已消除：原 `000040_admin_query_indexes` 的六个索引已并回各自建表基线（request_records /
+  request_attempts / usage_records / cost_snapshots / ledger_entries / ledger_billing_exceptions），原迁移文件
+  不再存在。当前新 `000040_request_attempt_permit_id` 是另一项独立改造，带有完整 down；现有 40 个 up 与
+  40 个 down 全部配平。
+- B-1R 已修复：attempt 保存 Redis permit ID。孤儿 worker 会保留 permit 仍 active 的正常长请求；permit
+  已失效且客户尚未收到内容时，才在事务内重查 recovery job 和 attempt 死亡证明，收口 request/attempt 并
+  释放冻结。旧 attempt 没有 permit ID 时，只自动处理尚未开始上游、也未交付首 Token 的记录。
 - C-8 / B-11 已修复：recovery job 保存目标 request/attempt 终态、错误事实和独立长上下文策略；worker
-  按 job 原样重放，并接受与目标终态一致的 partial 幂等重放。`000041` 无法可靠回填旧活动 job，升级前必须
-  先排空 pending/running recovery 队列；迁移会对未排空环境明确报错。
+  按 job 原样重放，并接受与目标终态一致的 partial 幂等重放。这批重放事实列已并回
+  `000032_settlement_recovery_jobs` 建表基线；原迁移里"升级前排空 pending/running job"的守卫随之删除——
+  基线建的是空表，守卫恒真通过，留着只会误导。
+- A-5 已修复：登录入口使用 Redis 共享同来源和同账号两层失败窗口，超限返回 429 与 `Retry-After`；
+  Redis 故障时返回 503，不会绕过限速继续登录。
+- B-8 已修复：Anthropic 非流式响应必须带有完整的输入、输出用量；缺失时不会再按 0 元成功，也不会
+  换另一条渠道重复请求。
+- B-5 已修复：流式请求取得可靠最终 usage 后再发生尾部错误，仍按真实 usage 结算，但 request/attempt
+  会按普通错误或客户端取消分别收为 failed/canceled，metrics、路由 trace 和数据库不再互相矛盾。
+- B-6 已修复：启用长上下文价格时，预授权会把普通价和长上下文价都算一遍并取较高金额，不再等本地
+  输入估算先越过门槛才提高冻结金额；最终结算仍按上游可靠 usage 决定实际价格档位。
+- B-7 已消除：TPM 硬限制整体删除，`finish_request_admission.lua` 不再做任何 token 对账，
+  "分钟桶过期导致计数偏低" 这个失效模式随之不存在。新的分钟级观测器按真实 chunk 时间记账，
+  并且明确规定目标桶过期即放弃修正、绝不重建，不让同一个问题在观测侧复现。
+- C-1 已消除：`ReserveIfPresent` 连同整条 TPM Reserve 链路一起删除，不再有"session 缺失就静默
+  跳过"的路径。`UsageSession` 收敛为 `RequestSession`，只暴露 attempt 绑定与候选快照。
+- C-2 已修复：Provider 成本的七个分项先分别保留 10 位小数，总额再由这些已舍入分项相加，
+  不会再因两边分别四舍五入而违反成本快照约束。
+- 线路和 Dashboard 的历史统计已经改用请求创建时保存的 Route；API Key 后续改绑不会再移动旧请求。
 
-同时发现几项原报告没有充分说明的风险：
+仍需特别注意的验证缺口：
 
-- A-3 已经移除硬编码 token，会话实现本身合理；但公开登录入口没有失败次数限制，仍可被高速反复猜口令。
 - 删除整个 `internal/blackbox` 虽然让 B-3/C-6 的失败消失了，也同时删除了真实上游和运行态故障演练，不能把“删测试”当成“功能已再次证明正常”。
 
 ## 二、已完成改造复核
 
 | 原编号 | 当前结论 | 复核说明 |
 | --- | --- | --- |
-| A-1 依赖漏洞 | 已修复 | `toolchain go1.26.5` 已生效；本轮 `govulncheck` 可达漏洞为 0。`DEVELOPMENT.md` 仍只写“固定为 1.25.5”，建议顺手改准。 |
+| A-1 依赖漏洞 | 已修复 | 项目语言基线已统一为 `go 1.26.5`；本轮 `govulncheck` 可达漏洞为 0，`DEVELOPMENT.md` 已同步更新。 |
 | A-2 指标未采集 | 风险接受 | 代码保留指标但暂不采集，属于明确的产品决定，不是这轮代码修复。 |
-| A-3 硬编码 admin token | 主问题已修，仍有残留 | 已改为用户名口令换取随机 Redis 会话，token 可过期、可吊销；登录防猜测问题见 A-5。 |
+| A-3 硬编码 admin token | 已修复 | 已改为用户名口令换取随机 Redis 会话，token 可过期、可吊销；旧静态 token 不再被后端接受。 |
+| A-5 Admin 登录防猜测 | 已修复 | Redis 共享两层固定窗口：默认同一来源与用户名 15 分钟 5 次、同一用户名跨来源 20 次；超限返回 429 和等待时间，成功登录清除计数，Redis 故障返回 503。 |
 | A-4 三表排序 400 | 已修复 | routes、channels、sync-jobs 的允许排序字段与 SQL 已对齐，Admin 当前检查通过。 |
-| B-1 预扣搁浅泄漏 | 已修复 | stranded sweeper 已回收失败/取消请求的搁浅冻结；orphan sweeper 排除 running attempt，并在 request 行锁内重查 recovery job 与 attempt。recovery job 创建使用同一行锁，不能在清扫提交后迟到插入。 |
+| B-1 预扣搁浅泄漏 | 已修复 | stranded sweeper 已回收失败/取消请求的搁浅冻结。orphan sweeper 使用 attempt permit 区分正常长请求与重启遗留：active 保留，失效且尚未交付内容时收口；事务内重查 recovery job 和完整 attempt 证明。attempt 创建与 recovery job 创建都受同一 request 行锁保护，不能在清扫提交后迟到插入。 |
 | B-2 reservation 缺失时提前返回 | 源码已修 | reservation 缺失后会继续把 running 请求收为 failed；但目前没有直接覆盖 finalizer 数据库事务的回归测试，建议补一条。 |
 | B-3/C-6 blackbox 失败 | 测试文件已删除，不等于功能修复 | 过期断言确实不存在了，但真实上游与故障演练也一起消失，见 B-3R。 |
 | B-4 `breakdown_ledger_test` | 已修复 | 渠道优先级已从 1 改为 10；本轮在隔离 PostgreSQL 16 中实际执行并通过。 |
-| C-8 partial recovery 终态丢失 | 已修复 | recovery job 保存 request/attempt 目标终态和错误事实；恢复与幂等校验都保留 partial 的 `final_usage_received=false`。取消、中断、正常缺 usage 三种数据库测试通过；`000041` 要求升级前排空旧活动 job。 |
+| B-5 流式尾部错误终态不一致 | 已修复 | 最终 usage 后的普通尾部错误按真实 usage 结算并把 request/attempt 收为 failed；客户端取消收为 canceled。两者都保留错误事实、交付记 interrupted、不 fallback、不绑定 Sticky，外层 outcome 和流事件与数据库一致。 |
+| B-6 长上下文预授权档位不足 | 已修复 | 每个候选都用同一份 token 估算分别计算普通价和长上下文价，再取全体结果中的最高金额冻结。本地估算与真实 usage 分处门槛两侧时，不会再额外产生价格档位差额；token 数量本身估少、或余额只能部分冻结，仍按既有补扣/核销机制处理。Admin 已能汇总计费异常数量和金额，并按 `authorization_underfunded` 查看明细。 |
+| B-8 Anthropic 非流式缺 usage | 已修复 | usage 不存在、为 null，或缺少输入/输出任一字段时都会失败；不再继续换渠道，不向客户扣费，并留下上游可能已经收费的风险记录。明确返回 0 输入、0 输出仍按正常响应处理。 |
+| B-7 长请求 TPM 分钟桶过期 | 已消除 | TPM 硬限制整体删除：`reserve_request_tokens.lua` 与 finish 侧的 token 对账都不复存在，桶过期不再影响任何计数。TPM 改为纯观测，`obs:tpm:v1:*` 分钟桶按真实 chunk 时间记账，可靠 usage 到达后按分钟权重修正；目标桶过期或超出回溯窗口时放弃修正并计 `expired_correction`，绝不重建。 |
+| C-1 `ReserveIfPresent` 静默跳过 | 已消除 | 整条 Reserve 链路（含六条协议路径的调用）删除，不存在「session 缺失就跳过」的分支。`UsageSession` 收敛为 `RequestSession`，只保留 `BindAttempt` / `SnapshotMany` / `AggregateChannelSamples`。 |
+| C-2 Provider 成本舍入不一致 | 已修复 | 七个成本分项先分别按数据库的 10 位小数精度四舍五入，`total_cost_amount` 再直接汇总这些最终分项。两个分项同时在进位边缘，以及原始总额会进位但分项分别舍为零的测试均已覆盖。 |
+| C-8 partial recovery 终态丢失 | 已修复 | recovery job 保存 request/attempt 目标终态和错误事实；恢复与幂等校验都保留 partial 的 `final_usage_received=false`。取消、中断、正常缺 usage 三种数据库测试通过；重放事实列已并回建表基线，不再需要升级前排空活动 job。 |
 | B-11 recovery 长上下文倍率丢失 | 已修复 | recovery job 独立保存长上下文开关、门槛和输入/输出倍率，不再通过成本来源 ID 推断。绝对成本覆盖路径的恢复测试证明售价和 Provider 成本都应用倍率；旧活动 job 不做不可靠回填。 |
 | 死代码清理 | 源码改造存在 | 相关读取器、查询和占位目录已删除；本机没有 `deadcode` / `staticcheck`，本轮没有重新声明“当前全仓干净”。 |
 | 长上下文结算 | 已修复 | 普通结算和 recovery 重放都按同一份结算时策略及真实输入量判断阶梯价。 |
 
 ## 三、仍待处置：高风险
 
-### A-5 Admin 登录没有防止反复猜密码
+### B-3R 删除通用端到端 blackbox 后，关键上线能力失去自动验证
 
-**是否存在：存在。** `/admin/v1/login` 只有用户名口令比较，没有按 IP 或用户名限制失败次数，也没有逐步延迟或临时锁定。口令只做一次快速 SHA-256 比较，公开入口可以被高速尝试。
-
-**影响：** 如果 Admin 暴露在公网，弱口令或重复使用的口令更容易被猜中。登录成功后权限很大，还能读取当前列表接口返回的明文凭据。
-
-**建议怎么改：** 上线前至少在反向代理和应用两层选一层加登录限速，例如同一 IP 和用户名连续失败后逐步延迟，短时间失败过多就临时拒绝，并记录告警。口令应足够长且独立使用。后续再考虑使用专门的慢哈希保存口令摘要。
-
-### B-3R 删除整套 blackbox 后，关键上线能力失去自动验证
-
-**是否存在：存在。** `internal/blackbox` 已整树删除，原来的 OpenAI、Anthropic、真实上游、Redis 状态丢失、AOF/RDB 恢复、half-open、Sticky 和长流演练都不在当前仓库中。
+**是否存在：存在，但范围需要说准。** `internal/blackbox` 已整树删除，公开接口到路由、Redis、数据库和账务的
+完整发布检查，以及真实 Redis 状态丢失、AOF/RDB 恢复、half-open、Sticky 和长流演练不再存在。仓库仍保留
+OpenAI 官方与 DeepSeek OpenAI/Anthropic 的 adapter 级真实上游 blackbox，不能说“真实上游测试全部删除”。
 
 **影响：** 当前单元测试全绿只能证明局部逻辑正常，不能再次证明完整请求、账务、Redis 恢复和真实供应商仍能连起来工作。以后相关行为退化时，更可能在上线后才发现。
 
 **建议怎么改：** 不必恢复全部旧套件，但应保留一组小而稳定的发布检查：三种公开接口各一条完整请求、一次 settlement recovery、一次 Redis 状态丢失恢复、一次 Sticky/fallback、一次真实上游冒烟。真实密钥仍由显式开关和环境变量注入，不能写入仓库。
-
-### B-5 流式尾部报错后，数据库和运行结果说法不一致
-
-**是否存在：存在。** 已取得最终 usage 并完成结算后，如果流尾再报错，代码仍返回原错误，`RunResult` 默认保持 Failed，也不会执行 `Sticky.BindSuccess`；结算事务却可能已把请求和 attempt 写成 succeeded。
-
-**影响：** 同一请求可能在数据库里显示成功，在 metrics 和路由 trace 里显示失败，客户也可能在已扣费后看到连接异常。运维会很难判断它到底算成功还是失败。
-
-**建议怎么改：** 先确定产品口径，再让所有记录保持一致。如果“拿到终态 usage 就算完整成功”，应返回成功并正常绑定 Sticky；如果“流尾错误仍算交付失败”，结算时也应把请求/attempt 按失败收口，只保留已经发生的计费事实，不能数据库写成功、外层又报失败。
-
-### B-6 长上下文预授权与最终结算使用不同 token 数量
-
-**是否存在：存在。** 预授权按本地估算判断是否超过长上下文门槛，最终扣费按上游真实 usage 判断。估算没有超过、真实值超过时，冻结的是普通价格，结算用的是阶梯价格。
-
-**影响：** 差额会走二次补扣；余额不足时平台核销。上游可能额外加入系统提示，真实输入量会明显高于客户看到的内容，因此这不是纯理论情况。
-
-**建议怎么改：** 预授权接近门槛时增加安全余量，或直接按长上下文价格冻结；同时监控 `authorization_underfunded` 的数量和金额。若产品决定继续接受低估，也应把它写成明确的资金风险，而不是只依赖事后核销。
-
-### B-7 长请求结束时，TPM 分钟桶可能已经过期
-
-**是否存在：存在。** 请求完成时如果原分钟桶已经过期，`finish_request_admission.lua` 会直接跳过调整。大约超过 7 分钟的请求就可能遇到。
-
-**影响：** 请求明明消耗了 token，TPM 计数却偏低，长请求多时可能绕过限制。
-
-**建议怎么改：** 请求续租时同步延长对应桶的保留时间，或在 Finish 时按保存的桶身份重建并补差额。增加“请求跨过桶过期时间后再返回真实 usage”的 Redis 测试。
-
-### B-8 Anthropic 非流式缺 usage 时会按 0 结算
-
-**是否存在：存在，但只限明确路径。** Anthropic 非流式响应里的 `usage` 不是可空结构，字段缺失或为 null 后，输入和输出会变成已知的 0。OpenAI Chat 和 Responses 非流式已经会拒绝缺失 usage；流式缺 usage 也已有 partial settlement 或释放/失败路径，不应再笼统算在这里。
-
-**影响：** 上游可能已经计费，平台却把客户费用和平台成本都记为 0。
-
-**建议怎么改：** 把 Anthropic 非流式 usage 改为可判断“有没有返回”的结构，并要求 input/output 两个必需字段存在。缺失时按“上游可能有成本但无可靠 usage”收口，不能按 0 元成功。
-
-### B-9 Admin 列表接口批量返回完整凭据
-
-**是否存在：存在。** 渠道运维列表返回完整 `credential`，请求列表返回完整 `api_key_plaintext`。
-
-**影响：** 只要一个 Admin 会话被窃取，就能一次拿到大量可直接使用的密钥。明文存储是已接受的产品决定，但不代表每个列表都需要把明文带回浏览器。
-
-**建议怎么改：** 列表只返回掩码或前缀；确实需要复制时，放到单条详情接口并要求明确点击，可再加一次权限确认和操作日志。请求记录列表没有展示完整 API Key 的必要，应直接删掉该字段。
 
 ## 四、仍待处置：中风险
 
@@ -107,18 +89,6 @@
 **是否存在：存在，但现在是前端展示问题。** API 已返回 `provider_breaker_state`、`channel_breaker_state` 和 `eligibility.status=probe_only`。前端仍把 half-open 总分显示为 0，同时保留各项加分；详情页又把 `probe_only` 统一显示成“有候选资格”。
 
 **建议怎么改：** `probe_only` 单独显示“仅允许探测”，不要归到普通“有资格”；half-open 时隐藏普通总分等式，或明确写“探测状态，总分不参与普通排序”。
-
-### C-1 `ReserveIfPresent` 会在 session 缺失时静默跳过 TPM
-
-**是否存在：存在。** 六条生产生成路径都使用 `ReserveIfPresent`，session 未安装时直接当作不需要预留。
-
-**建议怎么改：** 生产生成接口改为“必须存在 session”，缺失就返回内部错误并告警；仅测试或明确不计入 TPM 的路径才允许可选模式。
-
-### C-2 成本分项和总额分别四舍五入
-
-**是否存在：存在。** 分项逐个保留 10 位小数，总额却从未舍入的原值相加后再舍入，极小数位可能进位不同，数据库又要求总额严格等于分项之和。
-
-**建议怎么改：** 先得到各个已经舍入的分项，再用这些分项相加生成总额；增加一组刚好落在进位边缘的价格测试。
 
 ### C-3 账户级 403 只能按“渠道 + 模型”逐个暂停
 
@@ -168,14 +138,6 @@
 
 **建议怎么改：** 优先改为 `HttpOnly + Secure + SameSite` Cookie，并把 CORS 收窄到实际 Admin 域名；增加 CSP，至少限制脚本来源和接口连接目标。短期做不到时，先缩短会话时间并限制 Admin 网络入口。
 
-### C-13 `000040` 迁移缺少 down 文件
-
-**是否存在：存在。** 当前有 41 个 `.up.sql`，只有 40 个 `.down.sql`；新增 `000041` 有完整 down，缺口仍是
-`000040_admin_query_indexes.up.sql` 没有对应 down。
-
-**建议怎么改：** 补回只删除这 6 个索引的 down 文件，并在隔离 PostgreSQL 中验证对应版本的 up、down、再 up。
-当前最大迁移号是 41，不应通过删除或回退已发布迁移号处理这个缺口。
-
 ### C-14 Sticky TTL 的设置说明写反了
 
 **是否存在：存在。** 实现和 Blueprint 都是“原绑定渠道完整成功后滑动续期”，但 `gateway_settings.go` 的注释仍写“绝对过期、命中不刷新”；Admin 可见的设置说明同时写了“绝对过期”和“滑动续期”，前后矛盾。
@@ -192,7 +154,8 @@
 4. `ChannelsOpsTable` 仍在分页前聚合全部匹配 attempt，数据增长后应先缩小渠道页或预聚合指标。
 5. 请求列表已经在 `filtered_page` 先分页，再只对当前页补充 usage、成本和渠道信息。`COUNT(*) OVER()` 现在只作用于基础请求表，风险已降低，先用大数据量 EXPLAIN 观察，不必优先改。
 6. 两个缺失索引仍存在：`request_attempts(provider_id, created_at)`、`request_records(route_id, created_at)`。
-7. 部分线路和 Dashboard 聚合仍使用 `api_keys.route_id` 当前绑定，而不是 `request_records.route_id` 请求快照。API Key 换线路后，旧请求会被算到新线路，这是统计口径错误，应优先修正。
+7. 线路和 Dashboard 聚合已经改用 `request_records.route_id` 请求快照；只有没有快照的旧请求才回退
+   `api_keys.route_id` 当前绑定。API Key 换线路后，已有快照的旧请求不会再移动到新线路。
 
 在已有大表上补索引建议使用 `CREATE INDEX CONCURRENTLY`，避免长时间阻塞写入。多个历史 down 迁移使用 `DROP TABLE ... CASCADE`，生产回滚前必须人工确认影响范围。
 
@@ -209,13 +172,15 @@
 已经补齐或原报告误判的内容：
 
 - Provider 公共故障域、两层 breaker 和多 Gateway 共享状态已经在 `resilience-circuit-breakers.md` 与 ADR-0014 中写清楚，不需要再列为缺口。
-- 孤儿、搁浅、recovery 三方边界、默认参数和巡检脚本已经由当前 Blueprint 未提交改动补充。本轮没有覆盖这些用户已有修改。
+- 孤儿、搁浅、recovery 三方边界、permit 存活判断、默认参数和巡检边界已经同步到 Blueprint。
 - Sticky 滑动续期在 Blueprint 中是正确的，错误在 Gateway 设置说明，见 C-14。
 
 ## 七、风险接受项
 
-- 渠道 credential 和客户 API Key 在数据库中保留明文，是现有产品决定；B-9 只要求减少列表接口的批量暴露。
-- 预授权不足时允许 overage debit，仍不足时由平台核销，是现有账务机制；B-6 要求降低和监控这种情况，而不是否定该机制。
+- 渠道 credential 和客户 API Key 在数据库中保留明文是现有产品决定；B-9 的列表批量暴露问题也明确决定
+  本轮不处理，作为已接受风险保留。
+- 预授权不足时允许 overage debit，仍不足时由平台核销，是现有账务机制。B-6 已消除长上下文价格档位切换
+  造成的额外差额；输入数量本身估少或余额只能部分冻结时，这套补扣、核销和异常明细仍然保留。
 - DeepSeek 无法转换的部分字段静默丢弃，属于 DEC-012 的已接受行为。
 - 指标暂不采集、告警暂不投递，属于 A-2 的风险接受；这意味着上线后很多问题只能靠日志和数据库事后发现。
 - 普通请求审计不保存上游错误正文是安全边界，不建议为了排错直接放开。
@@ -223,10 +188,13 @@
 ## 八、上线前运维清单
 
 - 必配：`DATABASE_URL`（生产建议启用 TLS）、`ADMIN_USERNAME`、强 `ADMIN_PASSWORD`、`ADMIN_SESSION_TTL`、`REDIS_*`、`GATEWAY_ENV=production`、`UNIO_SKIP_DOTENV=true`。
-- Admin 没有应用内登录限速前，至少在反向代理限制 `/admin/v1/login` 的失败频率，并限制 Admin 的公网访问范围。
+- Admin 登录限制默认按同一来源与用户名 5 次、同一用户名跨来源 20 次、窗口 15 分钟执行；可用
+  `ADMIN_LOGIN_SOURCE_FAILURE_LIMIT`、`ADMIN_LOGIN_ACCOUNT_FAILURE_LIMIT`、`ADMIN_LOGIN_FAILURE_WINDOW`
+  调整。修改后需要重启 Admin。反向代理仍建议增加独立限速并限制 Admin 的公网访问范围。
 - 前端生产构建必须提供非 localhost、HTTPS 的 `VITE_ADMIN_API_BASE`；重新构建并部署 `dist/`，确保旧硬编码 token 产物不再对外。
 - 如果旧 token 曾经提交或部署，仍应清理历史和旧制品；新后端上线后确认旧 token 已不能访问 Admin API。
-- 迁移由外部工具执行，服务启动不会校验 schema 版本。补齐 `000040` down 后，在隔离库验证 up/down，再安排生产迁移。
+- 迁移由外部工具执行，服务启动不会校验 schema 版本。当前 40 个 up/down 全部配平，最大迁移号 40；
+  `request_attempts.permit_id` 本轮先放在独立迁移中，发布前整理历史基线时再并回建表 SQL。
 - 探针：Gateway 有 `/healthz` 和 `/readyz`；Admin 只有 `/healthz`；Worker 没有 HTTP 探针，需要用进程存活、任务心跳或日志监控。
 - Redis 不支持 Cluster；生产应使用受支持的单节点、主从或 Sentinel 方案，并开启持久化。
 - 原状态丢失演练曾经通过 15/15，但当前套件已删除。重新建立可重复演练前，不应把旧结果当作当前版本的自动保证。
@@ -238,18 +206,31 @@
 
 | 验证项 | 当前结果 |
 | --- | --- |
-| Gateway `go test -count=1 ./...`（显式移除 DB/Redis 环境变量） | 通过；依赖 PostgreSQL/Redis 的用例按设计跳过 |
+| Gateway `go test -count=1 ./...` | 通过；本轮连接一次性 PostgreSQL 16 与隔离 Redis，数据库和 Redis 用例未跳过 |
 | Gateway `go vet ./...` | 通过 |
 | Gateway `go build ./cmd/...` | 通过 |
 | B-4 专项数据库测试 | 一次性 PostgreSQL 16 全迁移后通过；临时容器已删除 |
-| B-1R 孤儿清扫专项数据库测试 | 一次性 PostgreSQL 16 全迁移后通过：活跃长流保护、列表后 recovery 重查、迟到 recovery 插入拒绝 |
-| C-8 / B-11 recovery 专项数据库测试 | PostgreSQL 16 全迁移至 41、回退 41、再升级 41 均通过；取消、中断、正常缺 usage、绝对成本覆盖长上下文恢复均通过；旧活动 job 的迁移拒绝路径通过 |
+| B-1R 孤儿清扫专项数据库测试 | 一次性 PostgreSQL 16 全迁移后通过：active permit 长流保护、失效 permit 收口、旧记录安全回收、Redis 读取失败保守停止、recovery 重查、迟到 attempt/recovery 插入拒绝、重复执行幂等 |
+| C-8 / B-11 recovery 专项数据库测试 | 一次性 PostgreSQL 16 全迁移后通过：取消、中断、正常缺 usage、绝对成本覆盖长上下文恢复均通过。重放事实列并回建表基线后，原「旧活动 job 迁移拒绝」路径已不存在 |
+| A-5 Admin 登录限速测试 | 通过：同来源上限、跨来源上限、多实例共享、成功清除、窗口过期、429 等待时间、Redis 故障 503 |
+| B-8 Anthropic 非流式 usage 测试 | 通过：usage 缺失、null、缺输入、缺输出均失败；明确 0/0 合法；失败后不换渠道、不结算并记录资金风险 |
+| B-5 流式尾部错误终态测试 | 通过：最终 usage 后普通错误按真实 usage 结算并收为 failed；客户端取消收为 canceled；outcome 与流事件同步，均不 fallback |
+| B-6 长上下文预授权测试 | 通过：门槛以下估算仍覆盖长上下文价格；倍率低于普通价格时仍取较高的普通价格，不会减少冻结 |
+| B-7 / C-1 TPM 观测改造 | 通过：一次性 PostgreSQL 16（改后历史迁移全量重建至 39）与隔离 Redis 上跑完整套件。观测专项覆盖跨分钟权重分配与整数余数、批次 operation id 幂等、队列溢出丢弃、usage 缺失只计 missing、过期桶放弃修正且不重建、字段夹 0、跨进程重放不二次修正、观测写入不置位基础设施故障 latch。临时容器已删除 |
+| C-2 Provider 成本舍入测试 | 通过：两组进位边缘单测通过；一次性 PostgreSQL 16 全迁移后，成本快照以两个 `0.0000000001` 分项成功保存为 `0.0000000002` 总额 |
+| 线路历史归因修复 | 通过：一次性 PostgreSQL 16 全迁移后模拟 API Key 从线路 A 改绑到线路 B；Dashboard、线路概览、趋势、模型和请求列表仍把旧请求保留在线路 A。临时容器已删除 |
 | `govulncheck ./...` | 可达漏洞 0；依赖模块中另有 4 条不可达漏洞提示 |
 | Admin `typecheck` / `eslint` / `vitest` | 通过；15 个测试文件、53 个测试用例 |
 | Blueprint `make validate` | 通过；140 个 Markdown 文件、41 个目录 |
-| blackbox / 运行态故障演练 / 真实上游 | 当前源码已删除对应套件，本轮未执行；旧手工结果不作为当前自动验证 |
+| blackbox / 运行态故障演练 / 真实上游 | 通用端到端与真实 Redis 故障演练套件已删除，本轮未执行；adapter 级 OpenAI/DeepSeek 真实上游 blackbox 仍在，但本轮未执行。旧手工结果不作为当前自动验证 |
+| 旧索引与 recovery 事实迁移基线回写 | 通过：两个旧增量迁移并回建表基线后，在两台一次性 PostgreSQL 16 上分别按回写前、回写后全量建库，`pg_dump --schema-only` 逐行 diff 仅剩本次 TPM 改造有意删除的列与约束，索引和重放事实列完全一致。当前新 `000040_request_attempt_permit_id` 不属于该次回写。 |
 | `deadcode` / `staticcheck` | 本机未安装，本轮未重新执行 |
 
-结论：当前代码可以正常构建，普通单测、Admin 检查和文档校验均通过；B-1R、C-8 和 B-11 已关闭，
-但登录防猜测、长请求 TPM 和凭据批量暴露仍不适合仅靠运维规避，建议优先按本报告其余高风险项处理后
-再做上线确认。
+结论：当前代码可以正常构建，普通单测、Admin 检查和文档校验均通过；B-1R、B-5、B-6、B-7、B-8、C-1、
+C-2、C-8、B-11 和线路历史归因问题已关闭。B-9 已转为风险接受；剩余高风险是 B-3R（缺少完整端到端发布验证），
+建议处理后再做上线确认。
+
+注意：本轮改造直接修改了 `000002` / `000004` 历史迁移并删除了 `routes.tpm_limit` 与 `api_keys` 的三列
+废弃限额。任何已有开发库都必须 drop 重建——`app_settings` 里旧的 `{"rpm":0,"tpm":0,"rpd":0}` 不会被
+seed 覆盖，而新的解码器拒绝未知字段，不重建会让 Gateway 与 Admin 在 runtime-control reconciliation
+阶段直接启动失败。

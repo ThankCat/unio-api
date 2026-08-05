@@ -38,7 +38,6 @@ type RequestAdmissionInput struct {
 
 	RPMLimitOverride         *int64
 	RPDLimitOverride         *int64
-	TPMLimitOverride         *int64
 	ConcurrencyLimitOverride *int64
 }
 
@@ -86,7 +85,6 @@ func (s *Store) AcquireRequestAdmission(ctx context.Context, in RequestAdmission
 		strconv.FormatInt(in.RouteRateRevision, 10), strconv.FormatInt(in.GlobalConcurrencyRevision, 10),
 		requestLimitOverrideArg(in.RPMLimitOverride),
 		requestLimitOverrideArg(in.RPDLimitOverride),
-		requestLimitOverrideArg(in.TPMLimitOverride),
 		requestLimitOverrideArg(in.ConcurrencyLimitOverride),
 	}
 	res, err := s.acquireRequest.Run(ctx, s.client, keys, argv...).Result()
@@ -129,68 +127,6 @@ func requestLimitOverrideArg(limit *int64) string {
 		return "inherit"
 	}
 	return strconv.FormatInt(*limit, 10)
-}
-
-// ReserveResult 是 TPM 预占的稳定结果。
-type ReserveResult string
-
-const (
-	ReserveReserved         ReserveResult = "reserved"
-	ReserveLimited          ReserveResult = "limited"
-	ReserveConflict         ReserveResult = "conflict"
-	ReserveUnknown          ReserveResult = "unknown_request_admission"
-	ReserveRuntimeStateLost ReserveResult = "runtime_state_lost"
-	ReserveStaleEpoch       ReserveResult = "stale_integrity_epoch"
-	ReserveStoreUnavailable ReserveResult = "store_unavailable"
-)
-
-// ReserveRequestTokens 对已签发 request token 一次性幂等预占 route-user TPM（§2.14.11）。
-// 实际限额只从 request token 内由 Acquire 冻结的 effective TPM 读取；expected epoch 必须来自
-// 本次调用前的 PostgreSQL 强一致读取，Lua 与 Redis marker、token 冻结 epoch 三方校验后才允许写入。
-func (s *Store) ReserveRequestTokens(
-	ctx context.Context,
-	requestAdmissionID string,
-	routeID, userID, estimatedTokens int64,
-	integrityEpoch string,
-	integrityRevision int64,
-) (result ReserveResult, err error) {
-	done := s.beginOperation(ctx, operationReserveRequest)
-	defer func() { done(string(result), err) }()
-
-	if err := validateReserveRequestTokensInput(requestAdmissionID, routeID, userID, estimatedTokens); err != nil {
-		return "", err
-	}
-	if err := validateRequestLifecycleInput(requestAdmissionID, routeID, userID, integrityEpoch, integrityRevision); err != nil {
-		return "", err
-	}
-	if s.localRuntimeInfrastructureFault(ctx) {
-		return ReserveStoreUnavailable, nil
-	}
-	now := time.Now()
-	keys := []string{
-		s.keys.stateIntegrityMarker(),
-		s.keys.admissionRequest(requestAdmissionID),
-		s.keys.requestTPMBucket(routeID, userID, minuteBucket(now)),
-		s.keys.runtimeInfrastructureFault(),
-		s.keys.runtimeReconciliationProof(),
-	}
-	res, err := s.reserveRequest.Run(ctx, s.client, keys,
-		strconv.FormatInt(estimatedTokens, 10),
-		strconv.FormatInt(routeID, 10), strconv.FormatInt(userID, 10),
-		integrityEpoch, strconv.FormatInt(integrityRevision, 10)).Result()
-	if err != nil {
-		return "", storeUnavailable(err, "breakerstore reserve request tokens")
-	}
-	arr, ok := res.([]interface{})
-	if !ok || len(arr) == 0 {
-		return "", storeUnavailable(errors.New("unexpected reserve reply"), "breakerstore reserve request tokens")
-	}
-	code, _ := arr[0].(string)
-	if code == runtimeRedisInstanceChanged {
-		s.ensureRuntimeInfrastructureFault(ctx)
-		code = string(ReserveStoreUnavailable)
-	}
-	return ReserveResult(code), nil
 }
 
 // RequestAdmissionLifecycleOutcome 是 request token 续租/终态的稳定结果。
@@ -241,16 +177,14 @@ func (s *Store) RenewRequestAdmission(
 	return parseRequestLifecycleReply(res, "breakerstore renew request admission")
 }
 
-// FinishRequestAdmission 唯一终态：释放并发、保留 RPM/RPD，并按可靠 actual 或交互事实收口 TPM。
-// actualTotal<0 表示没有可靠 usage；terminalReason 必须明确说明释放、保留或没有 TPM 占用。
+// FinishRequestAdmission 唯一终态：释放 route-user 并发并关闭 token。RPM/RPD 作为已接收请求保留。
+// 它不再接收任何 token 用量：TPM 不是准入维度，观测由独立的 obs:tpm 分钟桶承担（§8）。
 // expected epoch 必须来自本次调用前的
 // PostgreSQL 强一致读取；marker/token epoch mismatch 时 Lua 保证零写入。
 func (s *Store) FinishRequestAdmission(
 	ctx context.Context,
 	requestAdmissionID string,
 	routeID, userID int64,
-	actualTotal int64,
-	terminalReason string,
 	integrityEpoch string,
 	integrityRevision int64,
 ) (outcome RequestAdmissionLifecycleOutcome, err error) {
@@ -259,13 +193,6 @@ func (s *Store) FinishRequestAdmission(
 
 	if err := validateRequestLifecycleInput(requestAdmissionID, routeID, userID, integrityEpoch, integrityRevision); err != nil {
 		return "", err
-	}
-	if !validRequestTPMTerminalReason(terminalReason, actualTotal) {
-		return "", configInvalid("invalid request TPM terminal reason")
-	}
-	actual := ""
-	if actualTotal >= 0 {
-		actual = strconv.FormatInt(actualTotal, 10)
 	}
 	keys := []string{
 		s.keys.stateIntegrityMarker(),
@@ -276,8 +203,6 @@ func (s *Store) FinishRequestAdmission(
 		requestAdmissionID,
 		strconv.FormatInt(routeID, 10),
 		strconv.FormatInt(userID, 10),
-		actual,
-		terminalReason,
 		integrityEpoch,
 		strconv.FormatInt(integrityRevision, 10),
 	).Result()

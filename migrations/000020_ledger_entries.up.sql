@@ -47,6 +47,8 @@ ALTER TABLE ONLY public.ledger_entries
 
 CREATE INDEX idx_ledger_entries_request_record_id ON public.ledger_entries USING btree (request_record_id) WHERE (request_record_id IS NOT NULL);
 
+CREATE INDEX idx_ledger_entries_type_created_at_id ON public.ledger_entries USING btree (entry_type, created_at DESC, id DESC);
+
 CREATE INDEX idx_ledger_entries_user_created_at ON public.ledger_entries USING btree (user_id, created_at DESC, id DESC);
 
 ALTER TABLE ONLY public.ledger_entries

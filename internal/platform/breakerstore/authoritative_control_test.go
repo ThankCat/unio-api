@@ -8,6 +8,8 @@ import (
 
 func limitOverride(value int64) *int64 { return &value }
 
+// assertNoRequestResources 断言被拒绝的入口准入没有留下任何部分写入。
+// ru-tpm 已经没有任何生产者，这里保留它是回归护栏：TPM 桶重新出现即视为退化。
 func assertNoRequestResources(t *testing.T, s *Store, requestID string, routeID, userID int64) {
 	t.Helper()
 	patterns := []string{
@@ -28,6 +30,8 @@ func assertNoRequestResources(t *testing.T, s *Store, requestID string, routeID,
 	}
 }
 
+// assertNoAttemptResources 同理：ch-rpm/ch-rpd/ch-tpm 三个渠道桶都已不存在，
+// 并发是唯一的渠道级硬门槛，这里只作为回归护栏保留。
 func assertNoAttemptResources(t *testing.T, s *Store, permitID string, providerID, channelID int64) {
 	t.Helper()
 	patterns := []string{
@@ -71,33 +75,39 @@ func TestRequestAdmissionMergesTrustedOverridesWithRedisDefaults(t *testing.T) {
 	epoch, revision := seedAdmissionEnvWithControls(
 		t,
 		s,
-		`{"rpm":1,"tpm":100,"rpd":33}`,
+		`{"rpm":1,"rpd":33}`,
 		`{"key_limit":1,"channel_limit":0}`,
 		testConfig(),
 	)
 
 	in := raInput("override-merge", 81, 82, epoch, revision)
 	in.RPMLimitOverride = limitOverride(0)
-	in.TPMLimitOverride = limitOverride(55)
 	in.ConcurrencyLimitOverride = limitOverride(2)
 	result, err := s.AcquireRequestAdmission(context.Background(), in)
 	if err != nil || result.Outcome != RequestAllowed {
 		t.Fatalf("override acquire want allowed, got %+v err=%v", result, err)
 	}
 	values, err := s.client.HMGet(context.Background(), s.keys.admissionRequest(in.RequestAdmissionID),
-		"eff_rpm", "eff_rpd", "eff_tpm", "eff_concurrency").Result()
+		"eff_rpm", "eff_rpd", "eff_concurrency").Result()
 	if err != nil {
 		t.Fatalf("read frozen effective limits: %v", err)
 	}
-	want := []interface{}{"0", "33", "55", "2"}
+	want := []interface{}{"0", "33", "2"}
 	for index := range want {
 		if values[index] != want[index] {
 			t.Fatalf("frozen effective limits want %v, got %v", want, values)
 		}
 	}
-	if reserve, err := s.ReserveRequestTokens(context.Background(), in.RequestAdmissionID, 81, 82, 56,
-		in.IntegrityEpoch, in.IntegrityRevision); err != nil || reserve != ReserveLimited {
-		t.Fatalf("trusted TPM override must be enforced, got %s err=%v", reserve, err)
+	// token 上不得再冻结任何 TPM 事实：TPM 不是准入维度（§8）。
+	if leftover, err := s.client.HMGet(context.Background(), s.keys.admissionRequest(in.RequestAdmissionID),
+		"eff_tpm", "tpm_override", "tpm_state").Result(); err != nil {
+		t.Fatalf("read token tpm residue: %v", err)
+	} else {
+		for _, value := range leftover {
+			if value != nil {
+				t.Fatalf("request token still carries TPM state: %v", leftover)
+			}
+		}
 	}
 
 	second := raInput("override-concurrency-2", 81, 82, epoch, revision)
@@ -121,7 +131,7 @@ func TestRequestAdmissionFreezesCommittedLifecycleWhileBreakerUpdateIsPending(t 
 	epoch, revision := seedAdmissionEnvWithControls(
 		t,
 		s,
-		`{"rpm":0,"tpm":0,"rpd":0}`,
+		`{"rpm":0,"rpd":0}`,
 		`{"key_limit":0,"channel_limit":0}`,
 		active,
 	)
@@ -210,7 +220,7 @@ func TestRequestAdmissionControlFailuresLeaveNoResources(t *testing.T) {
 			mutate: func(t *testing.T, s *Store, _ *RequestAdmissionInput) {
 				t.Helper()
 				code, _, err := s.PrepareControl(context.Background(), s.RouteRateLimitControl(), "pending-route-rate",
-					testRouteRateRevision, testRouteRateRevision+1, `{"rpm":2,"tpm":0,"rpd":0}`)
+					testRouteRateRevision, testRouteRateRevision+1, `{"rpm":2,"rpd":0}`)
 				if err != nil || code != ControlPrepared {
 					t.Fatalf("prepare pending route rate: %s %v", code, err)
 				}

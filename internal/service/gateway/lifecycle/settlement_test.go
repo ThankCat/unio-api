@@ -302,6 +302,7 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 
 	attemptRecord, err := d.queries.CreateRequestAttempt(d.ctx, sqlc.CreateRequestAttemptParams{
 		RequestRecordID:        requestRecord.ID,
+		PermitID:               pgtype.Text{String: fmt.Sprintf("chat-settlement-permit-%d", suffix), Valid: true},
 		AttemptIndex:           0,
 		ProviderID:             d.providerID,
 		ChannelID:              d.channelID,
@@ -748,6 +749,45 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 	if v, ok := costUsage.ReasoningOutputTokens.BillableValue(); !ok || v != 2 {
 		t.Fatalf("expected provider cost reasoning usage 2, got %d (ok=%v)", v, ok)
 	}
+}
+
+func TestChatSettlementPersistsTotalFromRoundedCostComponents(t *testing.T) {
+	deps := newChatSettlementDBDeps(t)
+	tinyCost := testNumeric(6, -5)
+	if _, err := deps.pool.Exec(deps.ctx, `
+		UPDATE channel_prices
+		SET uncached_input_cost = $1,
+		    output_cost = $1
+		WHERE id = $2
+	`, tinyCost, deps.channelPriceID); err != nil {
+		t.Fatalf("set rounding-edge channel price: %v", err)
+	}
+
+	params := deps.params()
+	params.ChannelPriceID = deps.channelPriceID
+	params.Facts.Usage = adapter.ChatUsage{
+		PromptTokens:     1,
+		CompletionTokens: 1,
+		TotalTokens:      2,
+	}.ToUsageFacts()
+
+	service := NewChatSettlementService(
+		deps.pool,
+		deps.queries,
+		billing.Service{},
+		ledger.NewService(deps.pool, deps.queries),
+	)
+	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
+		t.Fatalf("settle rounding-edge chat: %v", err)
+	}
+
+	costSnapshot, err := deps.queries.GetCostSnapshotByRequest(deps.ctx, deps.requestRecord.ID)
+	if err != nil {
+		t.Fatalf("get rounding-edge cost snapshot: %v", err)
+	}
+	assertNumericEqual(t, costSnapshot.UncachedInputCostAmount, testNumeric(1, -10))
+	assertNumericEqual(t, costSnapshot.OutputCostAmount, testNumeric(1, -10))
+	assertNumericEqual(t, costSnapshot.TotalCostAmount, testNumeric(2, -10))
 }
 
 func TestChatSettlementSettlesClientCanceledPartialAsCanceled(t *testing.T) {

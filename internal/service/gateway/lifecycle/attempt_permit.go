@@ -313,6 +313,15 @@ type AttemptPermitOwner struct {
 	terminalErr    error
 }
 
+// RouteID 返回本次 attempt 绑定的线路。它由 request admission token 注入 permit，
+// 是 TPM 观测里 Route 维度的唯一可信归属来源。
+func (o *AttemptPermitOwner) RouteID() int64 {
+	if o == nil {
+		return 0
+	}
+	return o.permit.RouteID
+}
+
 func newAttemptPermitOwner(
 	store AttemptPermitStore,
 	facts AttemptPermitRuntimeFactsReader,
@@ -349,6 +358,14 @@ func newAttemptPermitOwnerWithFeedback(
 
 func (o *AttemptPermitOwner) Finish(ctx context.Context, outcome breakerstore.FinishOutcome) (breakerstore.FinishResult, error) {
 	return o.finish(ctx, outcome, nil)
+}
+
+// PermitID 返回本次 attempt 的跨进程运行凭证 ID，仅用于持久化审计和孤儿收口。
+func (o *AttemptPermitOwner) PermitID() string {
+	if o == nil {
+		return ""
+	}
+	return o.permit.PermitID
 }
 
 // FinishTransport 终结一次已开始的真实 transport，并在 permit Finish 可确认后反馈 429/403 运行态。
@@ -753,9 +770,6 @@ func nonStreamFinishOutcome(success AttemptSuccess, timing AttemptTimingFacts, e
 	if err == nil {
 		out.ProviderOutcome = breakerstore.OutcomeEligibleSuccess
 		out.ChannelOutcome = breakerstore.OutcomeEligibleSuccess
-		if actual, reliable := actualTotalTokens(success.Facts.Usage); reliable {
-			out.ActualTotalTokens = &actual
-		}
 		return out
 	}
 	if nonStreamChannelFailureEligible(err) {
@@ -835,12 +849,14 @@ func (r *AttemptRunner) invokeNonStreamAttempt(
 	candidate routing.ChatRouteCandidate,
 	attempt requestlog.AttemptRecord,
 	owner *AttemptPermitOwner,
+	inputEstimate int64,
 	invoke NonStreamInvoke,
 ) (success AttemptSuccess, timing AttemptTimingFacts, err error) {
+	tpmScope := r.lifecycle.newTPMAttemptScope(request, attempt, candidate, owner, inputEstimate)
 	observer := newAttemptTimingObserverWithHooks(
 		false,
 		time.Now,
-		r.lifecycle.attemptTimingHooks(ctx, request, attempt, candidate, false),
+		r.lifecycle.attemptTimingHooks(ctx, request, attempt, candidate, false, tpmScope),
 	)
 	attemptCtx := adapter.WithAttemptTimingObserver(ctx, observer)
 	var panicValue any
@@ -855,12 +871,25 @@ func (r *AttemptRunner) invokeNonStreamAttempt(
 	adapter.MarkTransportCompleted(attemptCtx)
 	facts := observer.Snapshot()
 	timing = facts
+	// 非流式看不到中间输出，不做无法证明的跨分钟分摊：输入归 transport 开始分钟，
+	// 输出整体归完整响应被 Gateway 收到的分钟（§8.6）。
+	completedAt := time.Now()
+	if facts.UpstreamCompletedAt != nil {
+		completedAt = *facts.UpstreamCompletedAt
+	}
+	if facts.HasChannelUsageEvidence() && facts.UpstreamStartedAt != nil {
+		// 响应头从未到达（例如写完请求体后超时）时，这里是输入观测的唯一记录机会。
+		r.lifecycle.ObserveAttemptInput(tpmScope, *facts.UpstreamStartedAt)
+	}
+	if err == nil {
+		if output, ok := success.Facts.Usage.ObservedOutputTokens(); ok {
+			r.lifecycle.ObserveChannelOutput(tpmScope, completedAt, output)
+			r.lifecycle.ObserveRouteOutput(tpmScope, completedAt, output)
+		}
+	}
 	r.lifecycle.RecordAttemptTiming(ctx, attempt, facts)
 	// 非流式超时只可能卡在响应头或响应体（§11.1/§11.4）；非超时失败是 no-op。
 	r.lifecycle.RecordAttemptTimeoutPhase(ctx, attempt, facts, false, err)
-	if facts.HasChannelUsageEvidence() {
-		requestadmission.MarkUpstreamReached(ctx)
-	}
 	outcomeErr := err
 	if panicValue != nil {
 		outcomeErr = errAttemptInvokePanic
@@ -930,6 +959,13 @@ func (r *AttemptRunner) invokeNonStreamAttempt(
 	}
 	r.lifecycle.RecordAttemptRuntimeMetrics(candidate, attempt.UpstreamEndpoint, false, facts, finishOutcome, outcomeErr)
 	r.lifecycle.RecordAttemptSample(ctx, candidate, attempt, false, facts, finishOutcome, outcomeErr)
+	if facts.HasChannelUsageEvidence() {
+		var responseFacts *adapter.ResponseFacts
+		if outcomeErr == nil {
+			responseFacts = &success.Facts
+		}
+		r.lifecycle.FinalizeTPMObservation(tpmScope, completedAt, responseFacts)
+	}
 	if panicValue != nil {
 		panic(panicValue)
 	}

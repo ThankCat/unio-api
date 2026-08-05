@@ -51,13 +51,13 @@ local function valid_payload_hash(value)
   return type(value) == 'string' and #value == 64 and string.match(value, '[^0-9a-f]') == nil
 end
 
+-- 线路默认限流只有 RPM 与 RPD：TPM 不是准入维度（§8），payload 里出现 tpm 一律视为非法。
 local function parse_rate_limit_defaults_payload(payload)
-  local value = exact_object(payload, { rpm = true, tpm = true, rpd = true })
+  local value = exact_object(payload, { rpm = true, rpd = true })
   if value == nil then return nil end
   value.rpm = nonnegative_integer(value.rpm)
-  value.tpm = nonnegative_integer(value.tpm)
   value.rpd = nonnegative_integer(value.rpd)
-  if value.rpm == nil or value.tpm == nil or value.rpd == nil then return nil end
+  if value.rpm == nil or value.rpd == nil then return nil end
   return value
 end
 

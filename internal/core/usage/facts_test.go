@@ -84,3 +84,44 @@ func TestSourceValid(t *testing.T) {
 		t.Fatal("expected unregistered source to be invalid")
 	}
 }
+
+func TestObservedInputAndOutputSplitEveryCategoryOnce(t *testing.T) {
+	facts := Facts{
+		UncachedInputTokens:      KnownTokens(1_000),
+		CacheReadInputTokens:     KnownTokens(80_000),
+		CacheWrite5mInputTokens:  KnownTokens(200),
+		CacheWrite30mInputTokens: KnownTokens(400),
+		CacheWrite1hInputTokens:  KnownTokens(300),
+		OutputTokensTotal:        KnownTokens(500),
+		ReasoningOutputTokens:    KnownTokens(100),
+	}
+
+	input, inputOK := facts.ObservedInputTokens()
+	if want := int64(81_900); !inputOK || input != want {
+		t.Fatalf("ObservedInputTokens = (%d, %v), want (%d, true)", input, inputOK, want)
+	}
+	output, outputOK := facts.ObservedOutputTokens()
+	if !outputOK || output != 500 {
+		t.Fatalf("ObservedOutputTokens = (%d, %v), want (500, true)", output, outputOK)
+	}
+	// 观测拆分必须与账单合计严格一致，否则 TPM 与账单会各说各话。
+	total, totalOK := facts.ActualTotalTokens()
+	if !totalOK || total != input+output {
+		t.Fatalf("ActualTotalTokens = (%d, %v), want %d", total, totalOK, input+output)
+	}
+}
+
+func TestObservedInputRejectsUnknownCategory(t *testing.T) {
+	facts := Facts{
+		UncachedInputTokens:      KnownTokens(0),
+		CacheReadInputTokens:     KnownTokens(90_000),
+		CacheWrite5mInputTokens:  NotApplicableTokens(),
+		CacheWrite30mInputTokens: UnknownTokens(),
+		CacheWrite1hInputTokens:  NotApplicableTokens(),
+		OutputTokensTotal:        KnownTokens(42),
+		ReasoningOutputTokens:    NotApplicableTokens(),
+	}
+	if got, ok := facts.ObservedInputTokens(); ok || got != 0 {
+		t.Fatalf("ObservedInputTokens = (%d, %v), want (0, false)", got, ok)
+	}
+}

@@ -14,13 +14,13 @@ import (
 
 type acquiredSessionStub struct {
 	mu             sync.Mutex
-	usage          usageSessionStub
+	session        requestSessionStub
 	finalizeCalls  int
 	handlerDone    bool
 	renewerStopped bool
 }
 
-func (s *acquiredSessionStub) Usage() requestadmission.UsageSession { return &s.usage }
+func (s *acquiredSessionStub) Request() requestadmission.RequestSession { return &s.session }
 
 func (s *acquiredSessionStub) StopRenewer() {
 	s.mu.Lock()
@@ -41,11 +41,17 @@ func (s *acquiredSessionStub) Finalize(context.Context) error {
 	return nil
 }
 
-type usageSessionStub struct{}
+type requestSessionStub struct{}
 
-func (*usageSessionStub) Reserve(context.Context, int64) error { return nil }
-func (*usageSessionStub) PublishAuthoritativeUsage(int64) bool { return true }
-func (*usageSessionStub) MarkUpstreamReached() bool            { return true }
+func (*requestSessionStub) BindAttempt(*breakerstore.AcquireAttemptInput) error { return nil }
+
+func (*requestSessionStub) SnapshotMany(context.Context, int64, []breakerstore.SnapshotCandidateInput) (breakerstore.SnapshotManyResult, error) {
+	return breakerstore.SnapshotManyResult{}, nil
+}
+
+func (*requestSessionStub) AggregateChannelSamples(context.Context, []int64) (map[int64]breakerstore.ChannelSampleWindow, error) {
+	return nil, nil
+}
 
 type acquirerStub struct {
 	mu       sync.Mutex
@@ -96,7 +102,7 @@ func TestRequestAdmissionCurrentRouteMatrix(t *testing.T) {
 			}}
 			handler := RequestAdmission(acquirer, RequestAdmissionOptions{Scope: tt.scope, Protocol: tt.protocol})(
 				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if _, ok := requestadmission.UsageSessionFromContext(r.Context()); !ok {
+					if err := requestadmission.BindAttemptInput(r.Context(), &breakerstore.AcquireAttemptInput{}); err != nil {
 						t.Fatal("usage session is missing from handler context")
 					}
 					session.mu.Lock()

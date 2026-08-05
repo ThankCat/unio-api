@@ -212,7 +212,7 @@ func TestRedisInstanceProofMismatchBlocksEveryNewAdmissionBeforeResourceWrite(t 
 		OriginRevision: 1, ProviderStatusRevision: 1, ChannelConfigRevision: 1,
 		ModelID: 99, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
 	})
-	seedReservedRequestAdmission(t, attemptStore, attempt)
+	seedActiveRequestAdmission(t, attemptStore, attempt)
 	attemptResult, err := attemptStore.AcquireAttempt(ctx, attempt)
 	if err != nil || attemptResult.Mode != AdmissionDenied || attemptResult.Reason != ReasonBreakerStoreUnavailable {
 		t.Fatalf("attempt mismatch result=%+v err=%v", attemptResult, err)
@@ -221,20 +221,6 @@ func TestRedisInstanceProofMismatchBlocksEveryNewAdmissionBeforeResourceWrite(t 
 		t.Fatalf("instance mismatch wrote %d attempt permit resources", got)
 	}
 
-	if err := client.Del(ctx, store.keys.runtimeInfrastructureFault()).Err(); err != nil {
-		t.Fatal(err)
-	}
-	reserveStore := NewStore(client, namespace)
-	reserveResult, err := reserveStore.ReserveRequestTokens(
-		ctx, attempt.RequestAdmissionID, routeID, userID, 10,
-		testAttemptIntegrityEpoch, testAttemptIntegrityRevision,
-	)
-	if err != nil || reserveResult != ReserveStoreUnavailable {
-		t.Fatalf("reserve mismatch result=%s err=%v", reserveResult, err)
-	}
-	if got := client.Exists(ctx, reserveStore.keys.requestTPMBucket(routeID, userID, minuteBucket(time.Now()))).Val(); got != 0 {
-		t.Fatalf("instance mismatch wrote %d request TPM resources", got)
-	}
 }
 
 func TestRuntimeFaultClearKeepsSharedLatchWhenLocalGenerationChanges(t *testing.T) {

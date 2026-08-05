@@ -2,6 +2,7 @@ package responses
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
@@ -14,7 +15,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
-	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
 // CreateResponse 编排非流式 Responses 请求，并返回公开 DTO 与内部交付 finalizer。
@@ -91,6 +91,15 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 	)
 	delivery, err := s.runNonStream(ctx, req, nonStreamStrategy{
 		allowDirect: allowDirect,
+		upstreamCostWithoutUsage: func(err error) bool {
+			return errors.Is(err, responsesadapter.ErrResponsesUnreliableUsage) ||
+				errors.Is(err, chatcompletionsadapter.ErrChatUnreliableUsage)
+		},
+		codes: lifecycle.RunNonStreamCodes{
+			UpstreamCostWithoutUsageCode:       "responses_cost_without_usage",
+			UpstreamCostWithoutUsageReasonCode: "responses_missing_usage",
+			UpstreamCostWithoutUsageReason:     "openai responses returned 2xx without reliable usage; upstream cost may have been incurred",
+		},
 		resolve: func(candidate routing.ChatRouteCandidate) error {
 			if allowDirect && s.registry.HasResponses(candidate.AdapterKey) {
 				adapter, ok := s.registry.Responses(candidate.AdapterKey)
@@ -229,17 +238,6 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
 			Sticky: stickySession.Audit(), Status: lifecycle.TraceStatusPartial,
 		})
-	}
-	if err := requestadmission.ReserveIfPresent(ctx, candidatePlan.ConservativeInputTokens); err != nil {
-		if principal.RouteID != nil {
-			s.lifecycle.CompleteRoutingTrace(ctx, lifecycle.RoutingDecisionTraceInput{
-				Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
-				PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
-				Sticky: stickySession.Audit(),
-			}, lifecycle.RunResult{}, err)
-		}
-		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
-		return nil, err
 	}
 
 	authorization, err := s.lifecycle.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{

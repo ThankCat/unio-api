@@ -73,11 +73,11 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 	delivery, err := s.runNonStream(ctx, req, nonStreamStrategy{
 		allowDirect: false,
 		// 原生 2xx 缺 usage（上游很可能已计费）：runner 释放冻结 + 记 risk_exposure，不重复白嫖（P0-3）。
-		upstreamCostWithoutUsage: isNativeCompactMissingUsage,
+		upstreamCostWithoutUsage: isCompactMissingUsage,
 		codes: lifecycle.RunNonStreamCodes{
 			UpstreamCostWithoutUsageCode:       "responses_compact_cost_without_usage",
 			UpstreamCostWithoutUsageReasonCode: "responses_compact_missing_usage",
-			UpstreamCostWithoutUsageReason:     "native /responses/compact returned 2xx without billable usage; upstream cost may have been incurred",
+			UpstreamCostWithoutUsageReason:     "responses compact returned 2xx without reliable usage; upstream cost may have been incurred",
 		},
 		endpointForCandidate: func(candidate routing.ChatRouteCandidate) requestlog.UpstreamEndpoint {
 			if s.registry.HasResponsesCompact(candidate.AdapterKey) {

@@ -23,8 +23,7 @@ local expected_route_rate_rev = tonumber(ARGV[7])
 local expected_conc_rev = tonumber(ARGV[8])
 local rpm_override = ARGV[9]
 local rpd_override = ARGV[10]
-local tpm_override = ARGV[11]
-local concurrency_override = ARGV[12]
+local concurrency_override = ARGV[11]
 
 if redis.call('EXISTS', fault_latch) == 1 then return { 'store_unavailable' } end
 local instance_matches = redis_instance_proof_matches(instance_proof)
@@ -52,7 +51,6 @@ if token_type == 'hash' then
     or redis.call('HGET', token_key, 'global_concurrency_revision') ~= ARGV[8]
     or redis.call('HGET', token_key, 'rpm_override') ~= rpm_override
     or redis.call('HGET', token_key, 'rpd_override') ~= rpd_override
-    or redis.call('HGET', token_key, 'tpm_override') ~= tpm_override
     or redis.call('HGET', token_key, 'concurrency_override') ~= concurrency_override
   then
     return { 'conflict' }
@@ -76,15 +74,14 @@ if breaker == nil then return { 'runtime_sync_required', 'circuit_breaker' } end
 
 local eff_rpm = resolve_request_limit_override(rpm_override, route_rate.rpm)
 local eff_rpd = resolve_request_limit_override(rpd_override, route_rate.rpd)
-local eff_tpm = resolve_request_limit_override(tpm_override, route_rate.tpm)
 local eff_conc = resolve_request_limit_override(concurrency_override, concurrency.key_limit)
-if eff_rpm == nil or eff_rpd == nil or eff_tpm == nil or eff_conc == nil then
+if eff_rpm == nil or eff_rpd == nil or eff_conc == nil then
   return { 'runtime_sync_required', 'request_overrides' }
 end
 local lease_ttl_ms = breaker.attempt_permit_ttl_ms
 local renew_ms = breaker.attempt_permit_renew_interval_ms
 local terminal_ttl_ms = breaker.attempt_permit_terminal_ttl_ms
--- 分钟窗口桶（RPM/TPM，按分钟号分桶）：TTL 只需覆盖分钟窗口 + permit 生命周期余量即可安全计数。
+-- 分钟窗口桶（RPM，按分钟号分桶）：TTL 只需覆盖分钟窗口 + permit 生命周期余量即可安全计数。
 local bucket_ttl_ms = lease_ttl_ms + terminal_ttl_ms + 120000
 -- 日窗口桶（RPD，按 UTC 日号分桶）：TTL 必须覆盖整个日窗口，否则静默过期会把当日计数清零、限额失效。
 -- 与 Go 侧 dayBucket = now.Unix()/86400（86400s=一日）一致，额外叠加分钟桶余量兜底时钟偏移。
@@ -137,16 +134,12 @@ redis.call(
   rpm_override,
   'rpd_override',
   rpd_override,
-  'tpm_override',
-  tpm_override,
   'concurrency_override',
   concurrency_override,
   'eff_rpm',
   eff_rpm,
   'eff_rpd',
   eff_rpd,
-  'eff_tpm',
-  eff_tpm,
   'eff_concurrency',
   eff_conc,
   'rpm_bucket',
@@ -155,8 +148,6 @@ redis.call(
   rpd_key,
   'conc_key',
   conc_key,
-  'tpm_state',
-  'none',
   'lease_ttl_ms',
   lease_ttl_ms,
   'renew_ms',

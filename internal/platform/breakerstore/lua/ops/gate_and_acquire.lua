@@ -67,13 +67,6 @@ if
 then
   return { 'denied', 'stale_integrity_epoch' }
 end
-if
-  redis.call('HGET', request_admission_key, 'tpm_state') ~= 'held'
-  or (tonumber(redis.call('HGET', request_admission_key, 'tpm_input_estimate')) or 0) < input_estimate
-then
-  return { 'denied', 'unknown_request_admission' }
-end
-
 -- 幂等：已存在 permit。
 if redis.call('EXISTS', permit_key) == 1 then
   local existing_fp = redis.call('HGET', permit_key, 'fingerprint')
@@ -96,7 +89,7 @@ if redis.call('EXISTS', permit_key) == 1 then
 end
 
 -- 新 permit 要求三个候选级 control 均 active、revision 一致且严格可解码。
--- Channel RPM/RPD/TPM 已不再是准入门槛（§1.2/§8）：并发是唯一的渠道级硬门槛，
+-- Channel RPM/RPD/TPM 都不是准入门槛（§1.2/§8）：并发是唯一的渠道级硬门槛，
 -- 因此不再读取 channel-rate control，也不再占用/结算这三个计数。
 local global_concurrency, global_concurrency_state =
   read_new_admission_control(global_conc_ctl, expected_global_conc_rev, parse_global_concurrency_payload)
@@ -405,10 +398,8 @@ redis.call(
   expected_global_conc_rev,
   'circuit_breaker_revision',
   expected_breaker_rev,
-  'tpm_input_estimate',
+  'input_estimate',
   input_estimate,
-  'tpm_state',
-  'held',
   'request_write_state',
   'not_started',
   'response_headers_received',

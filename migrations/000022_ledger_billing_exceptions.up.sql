@@ -54,6 +54,8 @@ ALTER TABLE ONLY public.ledger_billing_exceptions
 ALTER TABLE ONLY public.ledger_billing_exceptions
     ADD CONSTRAINT ledger_billing_exceptions_reservation_id_key UNIQUE (reservation_id);
 
+CREATE INDEX idx_ledger_billing_exceptions_created_at_id ON public.ledger_billing_exceptions USING btree (created_at DESC, id DESC);
+
 CREATE INDEX idx_ledger_billing_exceptions_user_created_at ON public.ledger_billing_exceptions USING btree (user_id, created_at DESC, id DESC);
 
 ALTER TABLE ONLY public.ledger_billing_exceptions

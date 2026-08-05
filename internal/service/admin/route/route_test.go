@@ -7,13 +7,13 @@ func TestValidateRateLimitsIncludesConcurrency(t *testing.T) {
 	positive := int64(4)
 	negative := int64(-1)
 
-	if err := validateRateLimits(nil, nil, nil, nil); err != nil {
+	if err := validateRateLimits(nil, nil, nil); err != nil {
 		t.Fatalf("inherit limits: %v", err)
 	}
-	if err := validateRateLimits(&zero, &zero, &zero, &positive); err != nil {
+	if err := validateRateLimits(&zero, &zero, &positive); err != nil {
 		t.Fatalf("valid limits: %v", err)
 	}
-	if err := validateRateLimits(nil, nil, nil, &negative); err == nil {
+	if err := validateRateLimits(nil, nil, &negative); err == nil {
 		t.Fatal("negative concurrency limit unexpectedly accepted")
 	}
 }

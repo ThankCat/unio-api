@@ -64,6 +64,9 @@ type fakeBreakerSnapshotter struct {
 	sampleWindows   map[int64]breakerstore.ChannelSampleWindow
 	sampleErr       error
 	sampleCalls     int
+	tpmObservations map[breakerstore.TPMObservationKind]map[int64]breakerstore.TPMObservationSnapshot
+	tpmErr          error
+	tpmCalls        int
 }
 
 func (f *fakeBreakerSnapshotter) SnapshotMany(_ context.Context, input breakerstore.SnapshotManyInput) (breakerstore.SnapshotManyResult, error) {
@@ -80,6 +83,16 @@ func (f *fakeBreakerSnapshotter) AggregateRouteUsage(_ context.Context, _ int64)
 func (f *fakeBreakerSnapshotter) AggregateChannelSamples(_ context.Context, _ []int64) (map[int64]breakerstore.ChannelSampleWindow, error) {
 	f.sampleCalls++
 	return f.sampleWindows, f.sampleErr
+}
+
+func (f *fakeBreakerSnapshotter) TPMObservations(
+	_ context.Context,
+	kind breakerstore.TPMObservationKind,
+	_ []int64,
+	_ int64,
+) (map[int64]breakerstore.TPMObservationSnapshot, error) {
+	f.tpmCalls++
+	return f.tpmObservations[kind], f.tpmErr
 }
 
 // objectiveRoutingBalance 返回 objective_v1 五项评分的 canonical 配置快照（§7/§14.6 默认值）。
@@ -109,10 +122,15 @@ func TestRuntimeUsesAuthoritativeSnapshotAndObjectiveScore(t *testing.T) {
 	store.pool[1].ProviderStatus = "disabled"
 	facts := readyRuntimeFacts()
 	breakers := &fakeBreakerSnapshotter{
-		routeUsage: breakerstore.RouteUsage{Concurrency: 4, RPM: 12, RPD: 40, TPM: 900, ActiveUsers: 2},
+		routeUsage: breakerstore.RouteUsage{Concurrency: 4, RPM: 12, RPD: 40, ActiveUsers: 2},
+		// TPM 只有观测值：Route 当前分钟 900，Channel 7 当前分钟 25 且 3 个 attempt 里 2 个拿到可靠 usage。
+		tpmObservations: map[breakerstore.TPMObservationKind]map[int64]breakerstore.TPMObservationSnapshot{
+			breakerstore.TPMScopeRoute:   {3: {InputTokens: 600, OutputTokens: 300}},
+			breakerstore.TPMScopeChannel: {7: {InputTokens: 20, OutputTokens: 5, ObservedAttempts: 3, MissingUsageCount: 1}},
+		},
 		// 30 分钟样本：平均 TTFT 1000ms、错误率 10%（§12 分钟桶聚合）。
 		sampleWindows: map[int64]breakerstore.ChannelSampleWindow{
-			7: {TTFTSumMs: 18_000, TTFTCount: 18, ErrorAttemptCount: 20, ErrorCount: 2, RPM: 3, RPD: 30, TPM: 25, TokenCoveredCount: 2},
+			7: {TTFTSumMs: 18_000, TTFTCount: 18, ErrorAttemptCount: 20, ErrorCount: 2, RPM: 3, RPD: 30},
 		},
 		result: breakerstore.SnapshotManyResult{
 			RoutingBalance: objectiveRoutingBalance(5),
@@ -160,7 +178,7 @@ func TestRuntimeUsesAuthoritativeSnapshotAndObjectiveScore(t *testing.T) {
 	}
 	if breakers.routeUsageCalls != 1 || got.RouteUsage == nil ||
 		got.RouteUsage.Concurrency != 4 || got.RouteUsage.RPM != 12 ||
-		got.RouteUsage.RPD != 40 || got.RouteUsage.TPM != 900 || got.RouteUsage.ActiveUsers != 2 {
+		got.RouteUsage.RPD != 40 || got.RouteUsage.ObservedTPM != 900 || got.RouteUsage.ActiveUsers != 2 {
 		t.Fatalf("unexpected route usage: calls=%d usage=%+v", breakers.routeUsageCalls, got.RouteUsage)
 	}
 	if got.PoolSize != 2 || got.CandidateCount != 1 || !got.NoRedundancy {
@@ -178,11 +196,11 @@ func TestRuntimeUsesAuthoritativeSnapshotAndObjectiveScore(t *testing.T) {
 
 	primary := got.Channels[0]
 	if !primary.Eligible || primary.ConcurrencyUsed != 2 || primary.ConcurrencyLimit != 4 ||
-		primary.RPMUsed != 3 || primary.RPDUsed != 30 || primary.GlobalRPDUsed != 30 || primary.TPMUsed != 25 ||
+		primary.RPMUsed != 3 || primary.RPDUsed != 30 || primary.GlobalRPDUsed != 30 || primary.ObservedTPM != 25 ||
 		primary.TokenCoveredCount != 2 || math.Abs(primary.TokenCoveragePct-66.66666666666667) > 1e-9 {
 		t.Fatalf("unexpected concurrency or observed traffic: %+v", primary)
 	}
-	if primary.RPMRemaining != nil || primary.RPDRemaining != nil || primary.TPMRemaining != nil ||
+	if primary.RPMRemaining != nil || primary.RPDRemaining != nil ||
 		primary.CooldownRemainingMs != 2500 || !primary.ModelPermissionPaused ||
 		primary.ModelPermissionRecheckState != "queued" {
 		t.Fatalf("cooldown, permission, or observation semantics missing: %+v", primary)
@@ -618,9 +636,9 @@ func currentCostCandidate(channelID, originID int64) breakerstore.CandidateSnaps
 func TestSortChannels(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
 	base := []Channel{
-		{ChannelID: 1, Eligible: true, CurrentOrder: 2, FinalScore: 30, RPDRemaining: nil, GlobalRPDRemaining: f(0.8), TPMRemaining: f(0.9)},
+		{ChannelID: 1, Eligible: true, CurrentOrder: 2, FinalScore: 30, RPDRemaining: nil, GlobalRPDRemaining: f(0.8)},
 		{ChannelID: 2, Eligible: false, CurrentOrder: 0, FinalScore: 0},
-		{ChannelID: 3, Eligible: true, CurrentOrder: 1, FinalScore: 70, RPDRemaining: nil, GlobalRPDRemaining: f(0.1), TPMRemaining: f(0.2)},
+		{ChannelID: 3, Eligible: true, CurrentOrder: 1, FinalScore: 70, RPDRemaining: nil, GlobalRPDRemaining: f(0.1)},
 	}
 	ids := func(chs []Channel) string {
 		parts := make([]string, len(chs))
@@ -640,8 +658,6 @@ func TestSortChannels(t *testing.T) {
 		{"weight desc ranks by final weight", "weight", true, "3,1,2"},
 		{"capacity asc ranks by tightest headroom", "capacity", false, "3,1,2"},
 		{"capacity desc ranks by tightest headroom", "capacity", true, "1,3,2"},
-		{"tpm asc ranks by tpm remaining", "tpm", false, "3,1,2"},
-		{"tpm desc ranks by tpm remaining", "tpm", true, "1,3,2"},
 		{"rpd asc ranks by global rpd remaining", "rpd", false, "3,1,2"},
 		{"rpd desc ranks by global rpd remaining", "rpd", true, "1,3,2"},
 		{"unknown field falls back to order", "nope", false, "3,1,2"},

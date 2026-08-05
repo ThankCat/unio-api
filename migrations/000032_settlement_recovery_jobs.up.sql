@@ -89,12 +89,27 @@ CREATE TABLE public.settlement_recovery_jobs (
     cost_base_model_price_id bigint,
     channel_cost_multiplier_id bigint,
     channel_recharge_factor_id bigint,
+    -- 重放事实：worker 必须按 job 原样恢复首次结算的终态与错误，不依赖默认值或成本来源 ID 推断。--
+    request_final_status text NOT NULL,
+    attempt_final_status text NOT NULL,
+    settlement_error_code text NOT NULL,
+    settlement_error_message text NOT NULL,
+    settlement_internal_error_detail text NOT NULL,
+    -- 长上下文策略独立快照：售价与 Provider 成本都要按结算当时的门槛和倍率复算。--
+    long_context_enabled boolean NOT NULL,
+    long_context_threshold bigint,
+    long_context_input_multiplier numeric(20,10),
+    long_context_output_multiplier numeric(20,10),
     CONSTRAINT ck_settlement_recovery_jobs_attempt_count CHECK ((attempt_count <= max_attempts)),
+    CONSTRAINT ck_settlement_recovery_jobs_attempt_final_status CHECK ((attempt_final_status = ANY (ARRAY['succeeded'::text, 'failed'::text, 'canceled'::text]))),
     CONSTRAINT ck_settlement_recovery_jobs_authorized_not_above_estimated CHECK ((authorized_amount <= estimated_amount)),
     CONSTRAINT ck_settlement_recovery_jobs_completed_at CHECK ((((status = ANY (ARRAY['succeeded'::text, 'dead'::text])) AND (completed_at IS NOT NULL)) OR ((status = ANY (ARRAY['pending'::text, 'running'::text])) AND (completed_at IS NULL)))),
+    CONSTRAINT ck_settlement_recovery_jobs_error_facts CHECK ((((request_final_status = 'succeeded'::text) AND (attempt_final_status = 'succeeded'::text) AND (settlement_error_code = ''::text) AND (settlement_error_message = ''::text) AND (settlement_internal_error_detail = ''::text)) OR (((request_final_status <> 'succeeded'::text) OR (attempt_final_status <> 'succeeded'::text)) AND (settlement_error_code <> ''::text) AND (settlement_error_message <> ''::text)))),
     CONSTRAINT ck_settlement_recovery_jobs_lock_state CHECK ((((status = 'running'::text) AND (locked_by IS NOT NULL) AND (locked_until IS NOT NULL)) OR ((status = ANY (ARRAY['pending'::text, 'succeeded'::text, 'dead'::text])) AND (locked_by IS NULL) AND (locked_until IS NULL)))),
+    CONSTRAINT ck_settlement_recovery_jobs_long_context CHECK (((NOT long_context_enabled) OR ((long_context_threshold IS NOT NULL) AND (long_context_threshold > 0) AND (long_context_input_multiplier IS NOT NULL) AND (long_context_input_multiplier > (0)::numeric) AND (long_context_output_multiplier IS NOT NULL) AND (long_context_output_multiplier > (0)::numeric)))),
     CONSTRAINT ck_settlement_recovery_jobs_non_known_values_zero CHECK ((((usage_uncached_input_tokens_state = 'known'::text) OR (usage_uncached_input_tokens = 0)) AND ((usage_cache_read_input_tokens_state = 'known'::text) OR (usage_cache_read_input_tokens = 0)) AND ((usage_cache_write_5m_input_tokens_state = 'known'::text) OR (usage_cache_write_5m_input_tokens = 0)) AND ((usage_cache_write_1h_input_tokens_state = 'known'::text) OR (usage_cache_write_1h_input_tokens = 0)) AND ((usage_cache_write_30m_input_tokens_state = 'known'::text) OR (usage_cache_write_30m_input_tokens = 0)) AND ((usage_output_tokens_total_state = 'known'::text) OR (usage_output_tokens_total = 0)) AND ((usage_reasoning_output_tokens_state = 'known'::text) OR (usage_reasoning_output_tokens = 0)))),
     CONSTRAINT ck_settlement_recovery_jobs_reasoning_not_above_output CHECK (((usage_reasoning_output_tokens_state <> 'known'::text) OR (usage_output_tokens_total_state <> 'known'::text) OR (usage_reasoning_output_tokens <= usage_output_tokens_total))),
+    CONSTRAINT ck_settlement_recovery_jobs_request_final_status CHECK ((request_final_status = ANY (ARRAY['succeeded'::text, 'failed'::text, 'canceled'::text]))),
     CONSTRAINT settlement_recovery_jobs_attempt_count_check CHECK ((attempt_count >= 0)),
     CONSTRAINT settlement_recovery_jobs_authorized_amount_check CHECK ((authorized_amount > (0)::numeric)),
     CONSTRAINT settlement_recovery_jobs_cache_read_input_price_check CHECK (((cache_read_input_price IS NULL) OR (cache_read_input_price >= (0)::numeric))),
@@ -246,6 +261,16 @@ ALTER TABLE ONLY public.settlement_recovery_jobs
 -- 只存 pin id（不存倍率标量）：这些行金额/倍率不可改，replay 时按 id 重取即得同值，标量存了也是冗余。
 --
 -- 放开 price_id NOT NULL：倍率路径无 channel_prices 行可指，写 NULL（FK 对 NULL 自动豁免）。
+-- [000041_settlement_recovery_facts]
+-- recovery job 必须携带与首次结算相同的终态、错误事实和长上下文策略，不能在 worker 重放时依赖
+-- 默认值，也不能通过成本来源 ID 间接推断。取消、中断、正常缺 usage 三条 partial 路径的
+-- final_usage_received=false 也随之保真。
+--
+-- 约束成对出现：终态全 succeeded 时错误三列必须为空串；任一终态非 succeeded 时 code 与 message
+-- 必须非空。长上下文开关打开时，门槛与输入/输出倍率三项必须同时具备且为正。
+--
+-- 原迁移带有「升级前必须排空 pending/running job」的守卫，因为存量活动 job 无法可靠回填。
+-- 并入建表基线后表恒为空，守卫失去意义，已随之删除。
 -- [DEC-031 / squash]
 -- 成本基数 pin 直接建为 cost_base_model_price_id（无 FK）；不再创建/退役 model_reference_costs。
 -- Migration renumbered after merging Provider Origin into Provider.

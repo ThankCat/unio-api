@@ -26,8 +26,9 @@ type adminHTTPDeps struct {
 	Logger        *zap.Logger
 	Authenticator middleware.AdminAuthenticator
 
-	// CredentialAuthenticator 校验登录口令，Sessions 签发与吊销会话 token。
+	// CredentialAuthenticator 校验登录口令，LoginAttemptLimiter 限制失败尝试，Sessions 签发与吊销会话 token。
 	CredentialAuthenticator adminapi.CredentialAuthenticator
+	LoginAttemptLimiter     adminapi.LoginAttemptLimiter
 	Sessions                adminapi.SessionIssuer
 	SessionTTLSeconds       int64
 
@@ -92,6 +93,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		Logger:                  deps.Logger,
 		AdminAuthenticator:      deps.Authenticator,
 		CredentialAuthenticator: deps.CredentialAuthenticator,
+		LoginAttemptLimiter:     deps.LoginAttemptLimiter,
 		Sessions:                deps.Sessions,
 		SessionTTLSeconds:       deps.SessionTTLSeconds,
 

@@ -13,7 +13,7 @@ local lifecycle_guard = validate_attempt_permit_lifecycle()
 if lifecycle_guard ~= nil then return { lifecycle_guard } end
 if redis.call('HGET', permit_key, 'status') ~= 'active' then return { 'terminal_conflict' } end
 
--- Channel 并发是唯一需要归还的渠道级资源；RPM/RPD/TPM 已不再占用（§1.2/§8），无需精确归还。
+-- Channel 并发是唯一需要归还的渠道级资源；RPM/RPD/TPM 都不占用（§1.2/§8），无需精确归还。
 if conc_key ~= '' then redis.call('ZREM', conc_key, permit_id) end
 
 -- 释放本 permit 仍持有的 half-open 租约（不释放后来 permit 的租约）。
@@ -35,8 +35,6 @@ redis.call(
   'aborted',
   'terminal_at_ms',
   now,
-  'tpm_state',
-  'released',
   'request_write_state',
   'not_started',
   'response_headers_received',

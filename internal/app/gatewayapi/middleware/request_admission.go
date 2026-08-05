@@ -41,7 +41,8 @@ type RequestAdmissionOptions struct {
 }
 
 // RequestAdmission acquires one ingress token after API key authentication, exposes only the
-// usage capability to services, and uniquely finalizes after the handler has finished writing.
+// attempt-binding and candidate-snapshot capabilities to services, and uniquely finalizes
+// after the handler has finished writing.
 func RequestAdmission(acquirer RequestAdmissionAcquirer, opts RequestAdmissionOptions) func(http.Handler) http.Handler {
 	if opts.Logger == nil {
 		opts.Logger = zap.NewNop()
@@ -66,7 +67,6 @@ func RequestAdmission(acquirer RequestAdmissionAcquirer, opts RequestAdmissionOp
 				UserID:                   principal.UserID,
 				Scope:                    r.Method + " " + opts.Scope,
 				RPMLimitOverride:         principal.RPMLimit,
-				TPMLimitOverride:         principal.TPMLimit,
 				RPDLimitOverride:         principal.RPDLimit,
 				ConcurrencyLimitOverride: principal.ConcurrencyLimit,
 			})
@@ -97,7 +97,7 @@ func RequestAdmission(acquirer RequestAdmissionAcquirer, opts RequestAdmissionOp
 				}
 			}()
 
-			ctx := requestadmission.ContextWithUsageSession(r.Context(), result.Session.Usage())
+			ctx := requestadmission.ContextWithRequestSession(r.Context(), result.Session.Request())
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

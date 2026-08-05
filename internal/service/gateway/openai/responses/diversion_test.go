@@ -16,6 +16,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
@@ -27,9 +28,11 @@ type fakeResponsesAdapter struct {
 	err     error
 }
 
-func (a *fakeResponsesAdapter) CreateResponse(_ context.Context, _ channel.Runtime, req responsesadapter.Request) (*responsesadapter.Response, error) {
+func (a *fakeResponsesAdapter) CreateResponse(ctx context.Context, _ channel.Runtime, req responsesadapter.Request) (*responsesadapter.Response, error) {
 	a.called++
 	a.gotBody = req.Body
+	adapter.MarkTransportStarted(ctx)
+	adapter.MarkRequestWritten(ctx, nil)
 	if a.err != nil {
 		return nil, a.err
 	}
@@ -205,6 +208,101 @@ func TestCreateResponse_DirectPassthrough(t *testing.T) {
 	}
 	if got["id"] != "resp_up" || got["status"] != "completed" {
 		t.Fatalf("raw passthrough lost fields: %v", got)
+	}
+}
+
+func TestCreateResponse_DirectMissingUsageStopsFallbackAndRecordsRiskExposure(t *testing.T) {
+	missingUsageErr := adapter.NewUpstreamError(
+		adapter.UpstreamErrorServer,
+		adapter.UpstreamMetadata{StatusCode: http.StatusOK, RequestID: "req-responses-missing-usage"},
+		failure.Wrap(
+			failure.CodeAdapterInvalidResponse,
+			responsesadapter.ErrResponsesUnreliableUsage,
+			failure.WithMessage("simulated responses result without reliable usage"),
+		),
+	)
+	firstAdapter := &fakeResponsesAdapter{err: missingUsageErr}
+	secondAdapter := &fakeResponsesAdapter{resp: directResponse()}
+	registry := &fakeRegistry{
+		responsesAdapters: map[string]responsesadapter.ResponsesAdapter{
+			"openai-primary":   firstAdapter,
+			"openai-secondary": secondAdapter,
+		},
+	}
+	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{
+		candidate("openai-primary", 1, "gpt-5.5-upstream"),
+		candidate("openai-secondary", 2, "gpt-5.5-upstream"),
+	}}}
+	settlement := &fakeSettlement{}
+	authorizer := &fakeAuthorizer{}
+	svc := NewResponsesService(
+		router, registry, passthroughPreparer{}, alwaysRetryClassifier{},
+		newFakeRequestLog(), settlement, authorizer, nil, nil,
+	)
+
+	_, err := svc.CreateResponse(ctxWithPrincipal(), directRequest())
+	if !errors.Is(err, responsesadapter.ErrResponsesUnreliableUsage) {
+		t.Fatalf("expected unreliable usage error, got %v", err)
+	}
+	if firstAdapter.called != 1 || secondAdapter.called != 0 {
+		t.Fatalf("adapter calls first=%d second=%d, want 1/0", firstAdapter.called, secondAdapter.called)
+	}
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected no customer settlement, got %d", len(settlement.params))
+	}
+	if len(authorizer.billingExceptions) != 1 {
+		t.Fatalf("expected one risk exposure release, got %d", len(authorizer.billingExceptions))
+	}
+	if authorizer.billingExceptions[0].ReasonCode != "responses_missing_usage" {
+		t.Fatalf("risk exposure reason code = %q, want responses_missing_usage", authorizer.billingExceptions[0].ReasonCode)
+	}
+	if authorizer.releaseCount != 0 {
+		t.Fatalf("expected no plain authorization release, got %d", authorizer.releaseCount)
+	}
+}
+
+func TestCreateResponse_BridgeMissingUsageStopsFallbackAndRecordsRiskExposure(t *testing.T) {
+	missingUsageErr := adapter.NewUpstreamError(
+		adapter.UpstreamErrorServer,
+		adapter.UpstreamMetadata{StatusCode: http.StatusOK, RequestID: "req-bridge-missing-usage"},
+		failure.Wrap(
+			failure.CodeAdapterInvalidResponse,
+			chatcompletionsadapter.ErrChatUnreliableUsage,
+			failure.WithMessage("simulated bridge result without reliable usage"),
+		),
+	)
+	firstAdapter := &fakeChatAdapter{err: missingUsageErr}
+	secondAdapter := &fakeChatAdapter{resp: okChatResponse()}
+	registry := &fakeRegistry{
+		adapters: map[string]chatcompletionsadapter.ChatAdapter{
+			"bridge-primary":   firstAdapter,
+			"bridge-secondary": secondAdapter,
+		},
+	}
+	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{
+		candidate("bridge-primary", 1, "deepseek-v4"),
+		candidate("bridge-secondary", 2, "deepseek-v4"),
+	}}}
+	settlement := &fakeSettlement{}
+	authorizer := &fakeAuthorizer{}
+	svc := NewResponsesService(
+		router, registry, passthroughPreparer{}, alwaysRetryClassifier{},
+		newFakeRequestLog(), settlement, authorizer, nil, nil,
+	)
+
+	_, err := svc.CreateResponse(ctxWithPrincipal(), directRequest())
+	if !errors.Is(err, chatcompletionsadapter.ErrChatUnreliableUsage) {
+		t.Fatalf("expected unreliable bridge usage error, got %v", err)
+	}
+	if firstAdapter.called != 1 || secondAdapter.called != 0 {
+		t.Fatalf("adapter calls first=%d second=%d, want 1/0", firstAdapter.called, secondAdapter.called)
+	}
+	if len(settlement.params) != 0 || len(authorizer.billingExceptions) != 1 || authorizer.releaseCount != 0 {
+		t.Fatalf("settlements=%d risk releases=%d plain releases=%d, want 0/1/0",
+			len(settlement.params), len(authorizer.billingExceptions), authorizer.releaseCount)
+	}
+	if authorizer.billingExceptions[0].ReasonCode != "responses_missing_usage" {
+		t.Fatalf("risk exposure reason code = %q, want responses_missing_usage", authorizer.billingExceptions[0].ReasonCode)
 	}
 }
 

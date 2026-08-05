@@ -165,6 +165,7 @@ type MarkRequestCanceledParams struct {
 // CreateAttemptParams 表示创建 request attempt 所需的上游尝试事实。
 type CreateAttemptParams struct {
 	RequestRecordID        int64
+	PermitID               string
 	AttemptIndex           int
 	ProviderID             int64
 	ChannelID              int64
@@ -183,6 +184,7 @@ type CreateAttemptParams struct {
 type AttemptRecord struct {
 	ID                         int64
 	RequestRecordID            int64
+	PermitID                   *string
 	AttemptIndex               int
 	ProviderID                 int64
 	ChannelID                  int64

@@ -107,7 +107,7 @@ func TestSetRejectsUnknownKey(t *testing.T) {
 
 func TestSettingsStoreRejectsCriticalSettingDirectWrite(t *testing.T) {
 	store := newTestStore(newFakeQueries())
-	err := store.Set(context.Background(), GatewayRouteRateLimitDefaultsKey, json.RawMessage(`{"rpm":60,"tpm":0,"rpd":0}`))
+	err := store.Set(context.Background(), GatewayRouteRateLimitDefaultsKey, json.RawMessage(`{"rpm":60,"rpd":0}`))
 	if err == nil {
 		t.Fatal("critical setting must require durable runtime-control publisher")
 	}

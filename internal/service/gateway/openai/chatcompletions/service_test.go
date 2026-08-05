@@ -19,6 +19,7 @@ import (
 	coreusage "github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	observabilitymetrics "github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
@@ -73,6 +74,28 @@ type fakeRetryClassifier struct {
 	retryable bool
 	called    int
 }
+
+type fakeChatMetricsRecorder struct {
+	requests     []observabilitymetrics.ChatOutcome
+	streamEvents []observabilitymetrics.StreamEvent
+}
+
+func (m *fakeChatMetricsRecorder) IncChatRequest(_ bool, outcome observabilitymetrics.ChatOutcome) {
+	m.requests = append(m.requests, outcome)
+}
+
+func (*fakeChatMetricsRecorder) IncRoutingSelected(string, string, string) {}
+func (*fakeChatMetricsRecorder) ObserveUpstream(string, string, bool, string, time.Duration) {
+}
+func (*fakeChatMetricsRecorder) IncSettlement(observabilitymetrics.SettlementOutcome) {}
+func (m *fakeChatMetricsRecorder) IncStreamEvent(event observabilitymetrics.StreamEvent) {
+	m.streamEvents = append(m.streamEvents, event)
+}
+func (*fakeChatMetricsRecorder) IncPartialSettlement(string)               {}
+func (*fakeChatMetricsRecorder) IncRetryableFallback(string)               {}
+func (*fakeChatMetricsRecorder) IncZeroPriceServed(string, string, string) {}
+func (*fakeChatMetricsRecorder) IncRoutingSkip(string)                     {}
+func (*fakeChatMetricsRecorder) ObserveRoutingCapacityWait(time.Duration)  {}
 
 // IsRetryable 记录调用次数，并返回测试预设的 retry 判断结果。
 func (c *fakeRetryClassifier) IsRetryable(err error) bool {
@@ -1231,6 +1254,65 @@ func TestChatCompletionServiceCreateChatCompletionFallsBackOnRetryableAdapterErr
 	}
 }
 
+func TestChatCompletionServiceMissingUsageStopsFallbackAndRecordsRiskExposure(t *testing.T) {
+	missingUsageErr := adapter.NewUpstreamError(
+		adapter.UpstreamErrorServer,
+		adapter.UpstreamMetadata{StatusCode: http.StatusOK, RequestID: "req-chat-missing-usage"},
+		failure.Wrap(
+			failure.CodeAdapterInvalidResponse,
+			chatcompletionsadapter.ErrChatUnreliableUsage,
+			failure.WithMessage("simulated chat response without reliable usage"),
+		),
+	)
+	firstAdapter := &fakeChatAdapter{chatErr: missingUsageErr}
+	secondAdapter := &fakeChatAdapter{chatResp: chatResponse("fallback response")}
+	classifier := &fakeRetryClassifier{retryable: true}
+	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
+	authorizer := &fakeChatAuthorizer{
+		authorization: lifecycle.ChatAuthorization{ReservationID: 7804},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
+		&fakeChatRouter{plan: routePlan(
+			routeCandidate("openai-primary", 101, "gpt-4.1"),
+			routeCandidate("openai-secondary", 102, "gpt-4.1"),
+		)},
+		&fakeAdapterRegistry{
+			chatAdapters: map[string]chatcompletionsadapter.ChatAdapter{
+				"openai-primary":   firstAdapter,
+				"openai-secondary": secondAdapter,
+			},
+		},
+		classifier,
+		requestLog,
+		settlement,
+		authorizer,
+	)
+
+	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
+	if !errors.Is(err, chatcompletionsadapter.ErrChatUnreliableUsage) {
+		t.Fatalf("expected unreliable usage error, got %v", err)
+	}
+	if firstAdapter.chatCalled != 1 || secondAdapter.chatCalled != 0 {
+		t.Fatalf("adapter calls first=%d second=%d, want 1/0", firstAdapter.chatCalled, secondAdapter.chatCalled)
+	}
+	if classifier.called != 0 {
+		t.Fatalf("retry classifier must not run for missing usage, got %d calls", classifier.called)
+	}
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected no customer settlement, got %d", len(settlement.params))
+	}
+	if len(authorizer.releaseBillingExceptionParams) != 1 {
+		t.Fatalf("expected one risk exposure release, got %d", len(authorizer.releaseBillingExceptionParams))
+	}
+	if authorizer.releaseBillingExceptionParams[0].ReasonCode != "chat_missing_usage" {
+		t.Fatalf("risk exposure reason code = %q, want chat_missing_usage", authorizer.releaseBillingExceptionParams[0].ReasonCode)
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no plain authorization release, got %d", len(authorizer.releaseParams))
+	}
+}
+
 func TestChatCompletionServiceCreateChatCompletionFallsBackOnExplicitPermission403(t *testing.T) {
 	permissionErr := adapter.NewUpstreamError(
 		adapter.UpstreamErrorPermission,
@@ -2190,17 +2272,20 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithAdap
 	authorizer := &fakeChatAuthorizer{
 		authorization: lifecycle.ChatAuthorization{ReservationID: 8840},
 	}
-	service := newChatCompletionServiceForTestWithAuthorizer(
+	metricsRecorder := &fakeChatMetricsRecorder{}
+	service := NewChatCompletionService(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
 			streamChatAdapters: map[string]chatcompletionsadapter.StreamChatAdapter{
 				"openai": fakeAdapter,
 			},
 		},
+		passthroughCandidatePreparer{inputTokens: 1},
 		nil,
 		requestLog,
 		settlement,
 		authorizer,
+		metricsRecorder,
 	)
 
 	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
@@ -2223,6 +2308,19 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithAdap
 	if settlement.params[0].Authorization.ReservationID != 8840 {
 		t.Fatalf("expected settlement reservation id %d, got %d", int64(8840), settlement.params[0].Authorization.ReservationID)
 	}
+	if settlement.params[0].RequestFinalStatus != requestlog.RequestStatusFailed {
+		t.Fatalf("expected settled request status failed, got %q", settlement.params[0].RequestFinalStatus)
+	}
+	if settlement.params[0].AttemptFinalStatus != requestlog.AttemptStatusFailed {
+		t.Fatalf("expected settled attempt status failed, got %q", settlement.params[0].AttemptFinalStatus)
+	}
+	if settlement.params[0].ErrorCode != "stream_adapter_error" {
+		t.Fatalf("expected settlement error code stream_adapter_error, got %q", settlement.params[0].ErrorCode)
+	}
+	if settlement.params[0].ErrorMessage == "" || settlement.params[0].InternalErrorDetail == "" {
+		t.Fatalf("expected settlement to preserve safe and internal error facts, got message=%q detail=%q",
+			settlement.params[0].ErrorMessage, settlement.params[0].InternalErrorDetail)
+	}
 	if len(authorizer.releaseParams) != 0 {
 		t.Fatalf("expected no authorization release after final usage settlement, got %d", len(authorizer.releaseParams))
 	}
@@ -2237,6 +2335,12 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithAdap
 	}
 	if len(requestLog.markRequestFailedArgs) != 0 {
 		t.Fatalf("expected no direct failed request after final usage settlement, got %d", len(requestLog.markRequestFailedArgs))
+	}
+	if len(metricsRecorder.requests) != 1 || metricsRecorder.requests[0] != observabilitymetrics.ChatOutcomeFailed {
+		t.Fatalf("request outcomes = %v, want [failed]", metricsRecorder.requests)
+	}
+	if len(metricsRecorder.streamEvents) == 0 || metricsRecorder.streamEvents[len(metricsRecorder.streamEvents)-1] != observabilitymetrics.StreamEventInterrupted {
+		t.Fatalf("stream events = %v, want final interrupted", metricsRecorder.streamEvents)
 	}
 }
 
@@ -2259,7 +2363,8 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithClie
 	authorizer := &fakeChatAuthorizer{
 		authorization: lifecycle.ChatAuthorization{ReservationID: 8850},
 	}
-	service := newChatCompletionServiceForTestWithAuthorizer(
+	metricsRecorder := &fakeChatMetricsRecorder{}
+	service := NewChatCompletionService(
 		&fakeChatRouter{plan: routePlan(
 			routeCandidate("openai-primary", 101, "gpt-4.1"),
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
@@ -2275,10 +2380,12 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithClie
 				},
 			},
 		},
+		passthroughCandidatePreparer{inputTokens: 1},
 		classifier,
 		requestLog,
 		settlement,
 		authorizer,
+		metricsRecorder,
 	)
 
 	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
@@ -2299,6 +2406,15 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithClie
 	if settlement.params[0].Authorization.ReservationID != 8850 {
 		t.Fatalf("expected settlement reservation id %d, got %d", int64(8850), settlement.params[0].Authorization.ReservationID)
 	}
+	if settlement.params[0].RequestFinalStatus != requestlog.RequestStatusCanceled {
+		t.Fatalf("expected settled request status canceled, got %q", settlement.params[0].RequestFinalStatus)
+	}
+	if settlement.params[0].AttemptFinalStatus != requestlog.AttemptStatusCanceled {
+		t.Fatalf("expected settled attempt status canceled, got %q", settlement.params[0].AttemptFinalStatus)
+	}
+	if settlement.params[0].ErrorCode != "client_canceled" {
+		t.Fatalf("expected settlement error code client_canceled, got %q", settlement.params[0].ErrorCode)
+	}
 	if len(authorizer.releaseParams) != 0 {
 		t.Fatalf("expected no authorization release after final usage settlement, got %d", len(authorizer.releaseParams))
 	}
@@ -2316,6 +2432,12 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithClie
 	}
 	if len(requestLog.markRequestFailedArgs) != 0 {
 		t.Fatalf("expected no direct failed request after final usage settlement, got %d", len(requestLog.markRequestFailedArgs))
+	}
+	if len(metricsRecorder.requests) != 1 || metricsRecorder.requests[0] != observabilitymetrics.ChatOutcomeCanceled {
+		t.Fatalf("request outcomes = %v, want [canceled]", metricsRecorder.requests)
+	}
+	if len(metricsRecorder.streamEvents) == 0 || metricsRecorder.streamEvents[len(metricsRecorder.streamEvents)-1] != observabilitymetrics.StreamEventCanceled {
+		t.Fatalf("stream events = %v, want final canceled", metricsRecorder.streamEvents)
 	}
 }
 

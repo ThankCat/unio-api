@@ -483,7 +483,7 @@ func (q *Queries) DashboardBreakdownProvider(ctx context.Context, arg DashboardB
 const dashboardBreakdownRoute = `-- name: DashboardBreakdownRoute :many
 WITH per_request AS (
     SELECT
-        ak.route_id AS route_id,
+        COALESCE(r.route_id, ak.route_id) AS route_id,
         rt.name AS route_name,
         rt.status AS route_status,
         r.status,
@@ -508,7 +508,7 @@ WITH per_request AS (
         END AS latency_ms
     FROM request_records r
     JOIN api_keys ak ON ak.id = r.api_key_id
-    LEFT JOIN routes rt ON rt.id = ak.route_id
+    LEFT JOIN routes rt ON rt.id = COALESCE(r.route_id, ak.route_id)
     LEFT JOIN usage_records ur ON ur.request_record_id = r.id
     LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
     LEFT JOIN LATERAL (
@@ -566,7 +566,7 @@ type DashboardBreakdownRouteRow struct {
 	RecentErrorCode pgtype.Text
 }
 
-// DashboardBreakdownRoute 按 API Key 绑定线路聚合区间请求（§3.1.8）：归属 = api_keys.route_id（线路必填，无默认回落）。
+// DashboardBreakdownRoute 按请求创建时的线路快照聚合；旧请求没有快照时回退 API Key 当前绑定。
 // 附 token 合计 / 成本(USD) / P95 延迟；usage_records、cost_snapshots 与请求 1:1，LEFT JOIN 不放大行数。
 func (q *Queries) DashboardBreakdownRoute(ctx context.Context, arg DashboardBreakdownRouteParams) ([]DashboardBreakdownRouteRow, error) {
 	rows, err := q.db.Query(ctx, dashboardBreakdownRoute, arg.FromTime, arg.ToTime)

@@ -38,6 +38,9 @@ const (
 	operationRuntimeReadiness       = "runtime_readiness"
 	operationBeginRuntimeReconcile  = "begin_runtime_reconcile"
 	operationClearRuntimeFault      = "clear_runtime_fault"
+	operationRecordTPMObservation   = "record_tpm_observation"
+	operationCorrectTPMObservation  = "correct_tpm_observation"
+	operationReadTPMObservation     = "read_tpm_observation"
 )
 
 const (
@@ -75,6 +78,23 @@ func (s *Store) beginOperation(ctx context.Context, operation string) func(strin
 		s.observer.ObserveBreakerStoreOperation(
 			operation,
 			boundedResult,
+			time.Since(startedAt),
+		)
+	}
+}
+
+// beginObservationOperation 是 best-effort 观测写入的指标钩子（§8/§10）。
+// 与 beginOperation 的唯一区别：Redis 故障只上报指标，绝不置位共享基础设施故障 latch。
+// 观测桶不参与准入，一次观测写失败不允许 fence 掉整个 namespace 的请求。
+func (s *Store) beginObservationOperation(operation string) func(string, error) {
+	startedAt := time.Now()
+	return func(result string, err error) {
+		if s.observer == nil {
+			return
+		}
+		s.observer.ObserveBreakerStoreOperation(
+			operation,
+			boundedOperationResult(result, err),
 			time.Since(startedAt),
 		)
 	}

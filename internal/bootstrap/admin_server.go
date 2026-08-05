@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/capability"
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/core/runtimecontrol"
+	"github.com/ThankCat/unio-gateway/internal/platform/adminlogin"
 	"github.com/ThankCat/unio-gateway/internal/platform/adminsession"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
@@ -111,6 +112,13 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 	// 会话存储：登录后签发的随机 token 存于 Redis，可吊销、到期自动失效。
 	sessions := adminsession.NewStore(deps.Redis, deps.Config.Redis.KeyNamespace, deps.Config.Admin.SessionTTL)
+	loginAttemptLimiter := adminlogin.NewLimiter(
+		deps.Redis,
+		deps.Config.Redis.KeyNamespace,
+		deps.Config.Admin.LoginSourceFailureLimit,
+		deps.Config.Admin.LoginAccountFailureLimit,
+		deps.Config.Admin.LoginFailureWindow,
+	)
 
 	authenticator, err := adminauth.NewSessionAuthenticator(sessions)
 	if err != nil {
@@ -263,6 +271,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		Logger:                  deps.Logger,
 		Authenticator:           authenticator,
 		CredentialAuthenticator: credentialAuthenticator,
+		LoginAttemptLimiter:     loginAttemptLimiter,
 		Sessions:                sessions,
 		SessionTTLSeconds:       int64(deps.Config.Admin.SessionTTL.Seconds()),
 

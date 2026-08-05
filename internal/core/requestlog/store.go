@@ -254,6 +254,7 @@ func (s *Store) CreateAttempt(ctx context.Context, params CreateAttemptParams) (
 	}
 	row, err := s.queries.CreateRequestAttempt(ctx, sqlc.CreateRequestAttemptParams{
 		RequestRecordID:        params.RequestRecordID,
+		PermitID:               optionalNonEmptyText(params.PermitID),
 		AttemptIndex:           int32(params.AttemptIndex),
 		ProviderID:             params.ProviderID,
 		ChannelID:              params.ChannelID,
@@ -507,6 +508,7 @@ func attemptRecordFromSQLC(row sqlc.RequestAttempt) AttemptRecord {
 	return AttemptRecord{
 		ID:                         row.ID,
 		RequestRecordID:            row.RequestRecordID,
+		PermitID:                   textPtr(row.PermitID),
 		AttemptIndex:               int(row.AttemptIndex),
 		ProviderID:                 row.ProviderID,
 		ChannelID:                  row.ChannelID,

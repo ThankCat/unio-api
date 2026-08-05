@@ -19,7 +19,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
 // ChatTxBeginner 定义 chat settlement 开启数据库事务所需能力。
@@ -585,7 +584,6 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 				failure.WithMessage("commit idempotent chat settlement replay"),
 			)
 		}
-		publishRequestAdmissionUsage(ctx, params.Facts)
 		return nil
 
 	default:
@@ -898,7 +896,6 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 			failure.WithMessage("commit chat settlement transaction"),
 		)
 	}
-	publishRequestAdmissionUsage(ctx, params.Facts)
 	publishSettlementLogSummary(ctx, params.Facts, charge.Amount, charge.Currency)
 
 	return nil
@@ -922,15 +919,6 @@ func publishSettlementLogSummary(ctx context.Context, facts adapter.ResponseFact
 		ChargedAmount:         numericLogString(chargedAmount),
 		Currency:              currency,
 	})
-}
-
-func publishRequestAdmissionUsage(ctx context.Context, facts adapter.ResponseFacts) {
-	if facts.UsageSource.IsPartialEstimate() {
-		return
-	}
-	if actual, reliable := actualTotalTokens(facts.Usage); reliable {
-		requestadmission.PublishAuthoritativeUsage(ctx, actual)
-	}
 }
 
 // FinalizeDeadChatSettlement 收口一条「补偿任务已 dead、但请求仍停留在 running」的资金/状态残留。
@@ -1045,18 +1033,30 @@ func (s *ChatSettlementService) releaseDeadSettlementReservation(ctx context.Con
 // FinalizeOrphanReservation 收口一条「进程崩溃遗留的孤儿预授权」：请求永久停留 running、冻结余额永不释放。
 //
 // 这类残留发生在 gateway 在 PreAuthorize 之后、settlement/补偿任务建立之前崩溃：既没有正常结算路径，
-// 也没有 settlement_recovery_job 兜底（扫描查询和本事务都会排除有补偿任务或 running attempt 的请求）。
+// 也没有 settlement_recovery_job 兜底。running attempt 只有在 worker 已确认其 permit 失效后才会传入收口。
 // 本方法在单事务内：
 //  1. 锁请求记录，仅当其仍为 running 才继续（幂等闸门：已被其他路径收口则直接返回）；
-//  2. 重新确认没有 recovery job 和 running attempt；
-//  3. 释放冻结余额（用户不扣费），并记一条 risk_exposure 异常作为「可能已产生上游成本」的上界敞口；
-//  4. 把请求原子推进到 failed。
+//  2. 重新确认没有 recovery job，且 running attempt 集合仍与 worker 的死亡证明完全一致；
+//  3. 把遗留 attempt 收口为平台失败；
+//  4. 释放冻结余额（用户不扣费），并记一条 risk_exposure 异常作为「可能已产生上游成本」的上界敞口；
+//  5. 把请求原子推进到 failed。
 //
 // 以「请求仍为 running」为闸门，崩溃后下个 tick 安全重放；多 worker 并发由请求记录行锁串行化。
-func (s *ChatSettlementService) FinalizeOrphanReservation(ctx context.Context, reservation sqlc.LedgerReservation) error {
+func (s *ChatSettlementService) FinalizeOrphanReservation(
+	ctx context.Context,
+	reservation sqlc.LedgerReservation,
+	attemptIDs []int64,
+	permitIDs []string,
+) (bool, error) {
+	if len(attemptIDs) != len(permitIDs) {
+		return false, failure.New(
+			failure.CodeGatewayRequestOrphanReclaimed,
+			failure.WithMessage("orphan attempt permit proof is malformed"),
+		)
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return failure.Wrap(
+		return false, failure.Wrap(
 			failure.CodeGatewayRequestOrphanReclaimed,
 			err,
 			failure.WithMessage("begin orphan reservation finalize transaction"),
@@ -1070,7 +1070,7 @@ func (s *ChatSettlementService) FinalizeOrphanReservation(ctx context.Context, r
 
 	lockedRequest, err := txQueries.GetRequestRecordForUpdate(ctx, reservation.RequestRecordID)
 	if err != nil {
-		return failure.Wrap(
+		return false, failure.Wrap(
 			failure.CodeGatewayRequestOrphanReclaimed,
 			err,
 			failure.WithMessage("lock request record for orphan reservation finalize"),
@@ -1079,33 +1079,81 @@ func (s *ChatSettlementService) FinalizeOrphanReservation(ctx context.Context, r
 
 	// 幂等闸门：只有仍停留在 running 的请求才需要收口；其余终态说明已被其他路径处理。
 	if requestlog.RequestStatus(lockedRequest.Status) != requestlog.RequestStatusRunning {
-		return nil
+		return false, nil
+	}
+	if requestlog.DeliveryStatus(lockedRequest.DeliveryStatus) != requestlog.DeliveryStatusNotStarted {
+		return false, nil
 	}
 
 	// 扫描候选到事务收口之间可能已经建立 recovery job。创建任务也先锁同一条 request，因而这里在锁内
 	// 重查后，不会出现“检查无任务后释放，任务再迟到插入”的窗口。
 	if _, err := txQueries.GetSettlementRecoveryJobByRequest(ctx, reservation.RequestRecordID); err == nil {
-		return nil
+		return false, nil
 	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return failure.Wrap(
+		return false, failure.Wrap(
 			failure.CodeGatewayRequestOrphanReclaimed,
 			err,
 			failure.WithMessage("recheck settlement recovery job for orphan reservation finalize"),
 		)
 	}
 
-	// running attempt 可能是已经持续超过清扫阈值的正常长流。缺少跨进程可靠的死亡证明时宁可保留冻结，
-	// 也不能按 reservation 年龄释放客户仍在使用的请求。
-	hasRunningAttempt, err := txQueries.HasRunningRequestAttempt(ctx, reservation.RequestRecordID)
+	// request 行锁与 CreateRequestAttempt 的 FOR KEY SHARE 互斥；锁内重查可以防止 worker 判断完成后
+	// 又迟到插入新的 attempt。集合或 permit 任一变化都说明死亡证明已过期，本轮不处理。
+	runningAttempts, err := txQueries.ListRunningRequestAttemptPermitsForUpdate(ctx, reservation.RequestRecordID)
 	if err != nil {
-		return failure.Wrap(
+		return false, failure.Wrap(
 			failure.CodeGatewayRequestOrphanReclaimed,
 			err,
-			failure.WithMessage("recheck running attempt for orphan reservation finalize"),
+			failure.WithMessage("lock running attempts for orphan reservation finalize"),
 		)
 	}
-	if hasRunningAttempt {
-		return nil
+	if len(runningAttempts) != len(attemptIDs) {
+		return false, nil
+	}
+	proofs := make(map[int64]string, len(attemptIDs))
+	for i, attemptID := range attemptIDs {
+		if attemptID <= 0 {
+			return false, nil
+		}
+		if _, exists := proofs[attemptID]; exists {
+			return false, nil
+		}
+		proofs[attemptID] = permitIDs[i]
+	}
+	for _, attempt := range runningAttempts {
+		currentPermitID := ""
+		if attempt.PermitID.Valid {
+			currentPermitID = attempt.PermitID.String
+		} else if attempt.UpstreamStartedAt.Valid || attempt.GatewayFirstTokenAt.Valid {
+			return false, nil
+		}
+		if proofPermitID, ok := proofs[attempt.ID]; !ok || currentPermitID != proofPermitID {
+			return false, nil
+		}
+	}
+
+	if len(runningAttempts) > 0 {
+		completedAt := time.Now()
+		updated, err := txQueries.MarkRunningRequestAttemptsOrphaned(ctx, sqlc.MarkRunningRequestAttemptsOrphanedParams{
+			ErrorCode:           pgtype.Text{String: string(failure.CodeGatewayRequestOrphanReclaimed), Valid: true},
+			ErrorMessage:        pgtype.Text{String: BaseSafeRequestLogErrorMessage(string(failure.CodeGatewayRequestOrphanReclaimed)), Valid: true},
+			InternalErrorDetail: pgtype.Text{String: "gateway process exited before the running attempt reached a terminal state", Valid: true},
+			CompletedAt:         pgtype.Timestamptz{Time: completedAt, Valid: true},
+			RequestRecordID:     reservation.RequestRecordID,
+		})
+		if err != nil {
+			return false, failure.Wrap(
+				failure.CodeGatewayRequestOrphanReclaimed,
+				err,
+				failure.WithMessage("mark orphan request attempts failed"),
+			)
+		}
+		if updated != int64(len(runningAttempts)) {
+			return false, failure.New(
+				failure.CodeGatewayRequestOrphanReclaimed,
+				failure.WithMessage("orphan request attempt set changed during finalize"),
+			)
+		}
 	}
 
 	reservationID := reservation.ID
@@ -1125,7 +1173,7 @@ func (s *ChatSettlementService) FinalizeOrphanReservation(ctx context.Context, r
 			Reason:          "process crash left an authorized reservation with a stuck running request; frozen balance released and request finalized as failed",
 		})
 		if err != nil {
-			return failure.Wrap(
+			return false, failure.Wrap(
 				failure.CodeGatewayRequestOrphanReclaimed,
 				err,
 				failure.WithMessage("record risk exposure for orphan reservation finalize"),
@@ -1137,7 +1185,7 @@ func (s *ChatSettlementService) FinalizeOrphanReservation(ctx context.Context, r
 		// 而扫描查询以 reservation 为起点，请求将永久卡在 running 且无人再看见它。
 	default:
 		// 其余（如已 captured 冲突）上抛由 worker 记日志；下一轮扫描按 reservation 现状自然不再命中。
-		return failure.Wrap(
+		return false, failure.Wrap(
 			failure.CodeGatewayRequestOrphanReclaimed,
 			err,
 			failure.WithMessage("release orphan reservation"),
@@ -1153,7 +1201,7 @@ func (s *ChatSettlementService) FinalizeOrphanReservation(ctx context.Context, r
 		CompletedAt:         time.Now(),
 	})
 	if err != nil {
-		return failure.Wrap(
+		return false, failure.Wrap(
 			failure.CodeGatewayRequestOrphanReclaimed,
 			err,
 			failure.WithMessage("mark request failed for orphan reservation finalize"),
@@ -1161,14 +1209,14 @@ func (s *ChatSettlementService) FinalizeOrphanReservation(ctx context.Context, r
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return failure.Wrap(
+		return false, failure.Wrap(
 			failure.CodeGatewayRequestOrphanReclaimed,
 			err,
 			failure.WithMessage("commit orphan reservation finalize transaction"),
 		)
 	}
 
-	return nil
+	return true, nil
 }
 
 // FinalizeStrandedReservation 回收一条「搁浅」预授权：请求已进入 failed/canceled 终态，冻结余额却仍停留在

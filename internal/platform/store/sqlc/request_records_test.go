@@ -99,6 +99,7 @@ func createRequestRecordForTest(t *testing.T, ctx context.Context, queries *sqlc
 		ResponseCompletedAt: pgtype.Timestamptz{Valid: false},
 		StartedAt:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		CompletedAt:         pgtype.Timestamptz{Valid: false},
+		RouteID:             pgtype.Int8{Int64: identity.apiKey.RouteID, Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("create request record: %v", err)
@@ -382,6 +383,9 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("request-attempt-provider-%d", suffix), "enabled")
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("request-attempt-channel-%d", suffix), "enabled", 10, nil)
 	record := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("request-attempt-%d", suffix))
+	if _, err := queries.MarkRequestRunning(ctx, record.ID); err != nil {
+		t.Fatalf("mark request running: %v", err)
+	}
 
 	secondAttempt, err := queries.CreateRequestAttempt(ctx, withRequestAttemptRuntimeIdentity(t, ctx, tx, channelID, sqlc.CreateRequestAttemptParams{
 		RequestRecordID:       record.ID,
@@ -511,6 +515,9 @@ func TestRequestAttemptStateMachineKeepsTerminalFacts(t *testing.T) {
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("attempt-state-provider-%d", suffix), "enabled")
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("attempt-state-channel-%d", suffix), "enabled", 10, nil)
 	record := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("attempt-state-%d", suffix))
+	if _, err := queries.MarkRequestRunning(ctx, record.ID); err != nil {
+		t.Fatalf("mark request running: %v", err)
+	}
 
 	attempt, err := queries.CreateRequestAttempt(ctx, withRequestAttemptRuntimeIdentity(t, ctx, tx, channelID, sqlc.CreateRequestAttemptParams{
 		RequestRecordID:       record.ID,
@@ -613,6 +620,9 @@ func TestRequestAttemptResponseStartedCanBeRecordedBeforeTerminal(t *testing.T) 
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("attempt-start-provider-%d", suffix), "enabled")
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("attempt-start-channel-%d", suffix), "enabled", 10, nil)
 	record := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("attempt-start-%d", suffix))
+	if _, err := queries.MarkRequestRunning(ctx, record.ID); err != nil {
+		t.Fatalf("mark request running: %v", err)
+	}
 
 	attempt, err := queries.CreateRequestAttempt(ctx, withRequestAttemptRuntimeIdentity(t, ctx, tx, channelID, sqlc.CreateRequestAttemptParams{
 		RequestRecordID:       record.ID,

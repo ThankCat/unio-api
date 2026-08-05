@@ -160,6 +160,42 @@ func (f Facts) ActualTotalTokens() (int64, bool) {
 	return total, true
 }
 
+// ObservedInputTokens 返回与账单口径一致的可靠输入合计：uncached + cache read + 三档 cache write。
+// TPM 观测用它把「实际输入」与请求前的输入估算对齐（§8.2/§8.4）；输入各档互斥，不会重复计数。
+func (f Facts) ObservedInputTokens() (int64, bool) {
+	if !f.Valid() {
+		return 0, false
+	}
+	counts := []TokenCount{
+		f.UncachedInputTokens,
+		f.CacheReadInputTokens,
+		f.CacheWrite5mInputTokens,
+		f.CacheWrite30mInputTokens,
+		f.CacheWrite1hInputTokens,
+	}
+	total := int64(0)
+	for _, count := range counts {
+		value, ok := count.BillableValue()
+		if !ok || value < 0 || total > maxLuaExactInteger-value {
+			return 0, false
+		}
+		total += value
+	}
+	return total, true
+}
+
+// ObservedOutputTokens 返回可靠的 authoritative 输出总量（已包含 reasoning）。
+func (f Facts) ObservedOutputTokens() (int64, bool) {
+	if !f.Valid() {
+		return 0, false
+	}
+	value, ok := f.OutputTokensTotal.BillableValue()
+	if !ok || value < 0 {
+		return 0, false
+	}
+	return value, true
+}
+
 // Valid 判断 usage facts 是否满足持久化和计费前置约束。
 //
 // unknown 是合法审计状态，因此这里不会拒绝 unknown；billing 会进一步要求每个参与

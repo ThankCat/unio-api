@@ -261,6 +261,50 @@ func TestCalculateProviderCostReturnsCostBreakdown(t *testing.T) {
 	assertNumeric(t, cost.TotalCostAmount, 30_400000, -10)
 }
 
+func TestCalculateProviderCostTotalsPersistedRoundedComponents(t *testing.T) {
+	tests := []struct {
+		name         string
+		unitCostInt  int64
+		wantPartInt  int64
+		wantTotalInt int64
+	}{
+		{
+			name:         "each component rounds up",
+			unitCostInt:  6,
+			wantPartInt:  1,
+			wantTotalInt: 2,
+		},
+		{
+			name:         "exact total would round up but components round down",
+			unitCostInt:  4,
+			wantPartInt:  0,
+			wantTotalInt: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			costSnapshot := defaultProviderCostSnapshot()
+			// 1 token x 0.0000N / 1M 位于 NUMERIC(20,10) 的半个最小单位附近。
+			costSnapshot.UncachedInputCost = numeric(tt.unitCostInt, -5)
+			costSnapshot.OutputCost = numeric(tt.unitCostInt, -5)
+
+			cost, err := (Service{}).CalculateProviderCost(testUsageFacts(testUsage{
+				PromptTokens:     1,
+				CompletionTokens: 1,
+				TotalTokens:      2,
+			}), costSnapshot)
+			if err != nil {
+				t.Fatalf("calculate provider cost: %v", err)
+			}
+
+			assertNumeric(t, cost.UncachedInputCostAmount, tt.wantPartInt, -10)
+			assertNumeric(t, cost.OutputCostAmount, tt.wantPartInt, -10)
+			assertNumeric(t, cost.TotalCostAmount, tt.wantTotalInt, -10)
+		})
+	}
+}
+
 // TestCalculateProviderCostFallsBackToBaseCostsForNullSpecialCosts 验证特殊成本未配置时回退到普通输入/输出成本。
 func TestCalculateProviderCostFallsBackToBaseCostsForNullSpecialCosts(t *testing.T) {
 	costSnapshot := defaultProviderCostSnapshot()

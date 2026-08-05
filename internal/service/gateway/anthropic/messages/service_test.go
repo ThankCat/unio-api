@@ -482,6 +482,62 @@ func TestCreateMessageReleasesAuthorizationOnNonRetryableAdapterError(t *testing
 	}
 }
 
+func TestCreateMessageMissingUsageStopsFallbackAndRecordsRiskExposure(t *testing.T) {
+	missingUsageErr := adapter.NewUpstreamError(
+		adapter.UpstreamErrorServer,
+		adapter.UpstreamMetadata{StatusCode: 200, RequestID: "req-messages-missing-usage"},
+		failure.Wrap(
+			failure.CodeAdapterInvalidResponse,
+			messagesadapter.ErrMessagesMissingUsage,
+			failure.WithMessage("simulated messages response without usage"),
+		),
+	)
+	adapterFake := &fakeMessagesAdapter{messagesErr: missingUsageErr}
+	registry := &fakeMessagesRegistry{
+		messages:   map[string]messagesadapter.MessagesAdapter{"deepseek": adapterFake},
+		tokenizers: map[string]messagesadapter.MessagesInputTokenizer{"deepseek": adapterFake},
+	}
+	settlement := &fakeMessagesSettlement{}
+	authorizer := &fakeMessagesAuthorizer{}
+	requestLog := newFakeMessagesRequestLog()
+	service := NewMessagesService(
+		&fakeMessagesRouter{plan: routePlan(
+			routeCandidate("deepseek", 123, "deepseek-v4-flash"),
+			routeCandidate("deepseek", 124, "deepseek-v4-flash"),
+		)},
+		registry,
+		passthroughCandidatePreparer{inputTokens: 1},
+		lifecycle.ProviderErrorClassifier{},
+		requestLog,
+		settlement,
+		authorizer,
+		nil,
+	)
+
+	_, err := service.CreateMessage(contextWithPrincipal(42), messageRequest())
+	if !errors.Is(err, messagesadapter.ErrMessagesMissingUsage) {
+		t.Fatalf("expected missing usage error, got %v", err)
+	}
+	if adapterFake.messagesCalled != 1 {
+		t.Fatalf("expected fallback to stop after one upstream call, got %d", adapterFake.messagesCalled)
+	}
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected no settlement without reliable usage, got %d", len(settlement.params))
+	}
+	if len(authorizer.releaseBillingExceptionParams) != 1 {
+		t.Fatalf("expected one risk exposure release, got %d", len(authorizer.releaseBillingExceptionParams))
+	}
+	if authorizer.releaseBillingExceptionParams[0].ReasonCode != "messages_missing_usage" {
+		t.Fatalf("risk exposure reason code = %q, want messages_missing_usage", authorizer.releaseBillingExceptionParams[0].ReasonCode)
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no plain authorization release, got %d", len(authorizer.releaseParams))
+	}
+	if len(requestLog.markRequestFailedArgs) != 1 || requestLog.markRequestFailedArgs[0].ErrorCode != string(failure.CodeAdapterInvalidResponse) {
+		t.Fatalf("request failure args = %+v, want %q", requestLog.markRequestFailedArgs, failure.CodeAdapterInvalidResponse)
+	}
+}
+
 func TestStreamMessageEmitsNativeEventsAndStopThenSettles(t *testing.T) {
 	finalUsage := &messagesadapter.MessageUsage{InputTokens: 10, OutputTokens: 11}
 	upstream := &adapter.UpstreamMetadata{StatusCode: 200, RequestID: "req-msg-stream"}

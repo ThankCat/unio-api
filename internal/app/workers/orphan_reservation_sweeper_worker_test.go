@@ -6,14 +6,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
 type fakeOrphanReservationStore struct {
-	rows []sqlc.LedgerReservation
-	err  error
+	rows        []sqlc.LedgerReservation
+	attempts    map[int64][]sqlc.ListRunningRequestAttemptPermitsRow
+	err         error
+	attemptsErr error
 
 	listCalls []sqlc.ListOrphanAuthorizedReservationsParams
 }
@@ -29,17 +32,36 @@ func (s *fakeOrphanReservationStore) ListOrphanAuthorizedReservations(ctx contex
 	return rows, nil
 }
 
+func (s *fakeOrphanReservationStore) ListRunningRequestAttemptPermits(_ context.Context, requestRecordID int64) ([]sqlc.ListRunningRequestAttemptPermitsRow, error) {
+	if s.attemptsErr != nil {
+		return nil, s.attemptsErr
+	}
+	return s.attempts[requestRecordID], nil
+}
+
 type fakeOrphanReservationFinalizer struct {
 	finalized []int64
 	failIDs   map[int64]error
 }
 
-func (f *fakeOrphanReservationFinalizer) FinalizeOrphanReservation(ctx context.Context, reservation sqlc.LedgerReservation) error {
+func (f *fakeOrphanReservationFinalizer) FinalizeOrphanReservation(_ context.Context, reservation sqlc.LedgerReservation, _ []int64, _ []string) (bool, error) {
 	if err, ok := f.failIDs[reservation.ID]; ok {
-		return err
+		return false, err
 	}
 	f.finalized = append(f.finalized, reservation.ID)
-	return nil
+	return true, nil
+}
+
+type fakeOrphanAttemptPermitReader struct {
+	active map[string]bool
+	err    error
+}
+
+func (r *fakeOrphanAttemptPermitReader) IsAttemptPermitActive(_ context.Context, permitID string) (bool, error) {
+	if r.err != nil {
+		return false, r.err
+	}
+	return r.active[permitID], nil
 }
 
 func discardLogger() *zap.Logger {
@@ -54,7 +76,7 @@ func TestOrphanReservationSweeperFinalizesBatch(t *testing.T) {
 		},
 	}
 	finalizer := &fakeOrphanReservationFinalizer{}
-	worker := NewOrphanReservationSweeperWorker(store, finalizer, discardLogger(), 15*time.Minute, 100)
+	worker := NewOrphanReservationSweeperWorker(store, finalizer, &fakeOrphanAttemptPermitReader{}, discardLogger(), 15*time.Minute, 100)
 
 	worked, err := worker.RunOnce(context.Background())
 	if err != nil {
@@ -94,7 +116,7 @@ func TestOrphanReservationSweeperContinuesPastSingleFailure(t *testing.T) {
 		},
 	}
 	finalizer := &fakeOrphanReservationFinalizer{failIDs: map[int64]error{2: boom}}
-	worker := NewOrphanReservationSweeperWorker(store, finalizer, discardLogger(), 15*time.Minute, 100)
+	worker := NewOrphanReservationSweeperWorker(store, finalizer, &fakeOrphanAttemptPermitReader{}, discardLogger(), 15*time.Minute, 100)
 
 	worked, err := worker.RunOnce(context.Background())
 	if err != nil {
@@ -112,7 +134,7 @@ func TestOrphanReservationSweeperContinuesPastSingleFailure(t *testing.T) {
 func TestOrphanReservationSweeperNoRowsReturnsIdle(t *testing.T) {
 	store := &fakeOrphanReservationStore{}
 	finalizer := &fakeOrphanReservationFinalizer{}
-	worker := NewOrphanReservationSweeperWorker(store, finalizer, discardLogger(), 0, 0)
+	worker := NewOrphanReservationSweeperWorker(store, finalizer, &fakeOrphanAttemptPermitReader{}, discardLogger(), 0, 0)
 
 	worked, err := worker.RunOnce(context.Background())
 	if err != nil {
@@ -130,10 +152,88 @@ func TestOrphanReservationSweeperNoRowsReturnsIdle(t *testing.T) {
 func TestOrphanReservationSweeperListErrorSurfaces(t *testing.T) {
 	store := &fakeOrphanReservationStore{err: errors.New("db down")}
 	finalizer := &fakeOrphanReservationFinalizer{}
-	worker := NewOrphanReservationSweeperWorker(store, finalizer, discardLogger(), 15*time.Minute, 100)
+	worker := NewOrphanReservationSweeperWorker(store, finalizer, &fakeOrphanAttemptPermitReader{}, discardLogger(), 15*time.Minute, 100)
 
 	_, err := worker.RunOnce(context.Background())
 	if err == nil {
 		t.Fatal("expected list error to surface")
+	}
+}
+
+func TestOrphanReservationSweeperKeepsActivePermit(t *testing.T) {
+	store := &fakeOrphanReservationStore{
+		rows: []sqlc.LedgerReservation{{ID: 1, RequestRecordID: 11}},
+		attempts: map[int64][]sqlc.ListRunningRequestAttemptPermitsRow{
+			11: {{ID: 101, PermitID: pgtype.Text{String: "permit-active", Valid: true}}},
+		},
+	}
+	finalizer := &fakeOrphanReservationFinalizer{}
+	reader := &fakeOrphanAttemptPermitReader{active: map[string]bool{"permit-active": true}}
+	worker := NewOrphanReservationSweeperWorker(store, finalizer, reader, discardLogger(), time.Minute, 100)
+
+	worked, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	if worked || len(finalizer.finalized) != 0 {
+		t.Fatalf("active permit must be preserved: worked=%v finalized=%v", worked, finalizer.finalized)
+	}
+}
+
+func TestOrphanReservationSweeperKeepsRequestWhenPermitReadFails(t *testing.T) {
+	store := &fakeOrphanReservationStore{
+		rows: []sqlc.LedgerReservation{{ID: 1, RequestRecordID: 11}},
+		attempts: map[int64][]sqlc.ListRunningRequestAttemptPermitsRow{
+			11: {{ID: 101, PermitID: pgtype.Text{String: "permit-unknown", Valid: true}}},
+		},
+	}
+	finalizer := &fakeOrphanReservationFinalizer{}
+	reader := &fakeOrphanAttemptPermitReader{err: errors.New("redis unavailable")}
+	worker := NewOrphanReservationSweeperWorker(store, finalizer, reader, discardLogger(), time.Minute, 100)
+
+	worked, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	if worked || len(finalizer.finalized) != 0 {
+		t.Fatalf("unknown permit state must be preserved: worked=%v finalized=%v", worked, finalizer.finalized)
+	}
+}
+
+func TestOrphanReservationSweeperFinalizesExpiredPermit(t *testing.T) {
+	store := &fakeOrphanReservationStore{
+		rows: []sqlc.LedgerReservation{{ID: 1, RequestRecordID: 11}},
+		attempts: map[int64][]sqlc.ListRunningRequestAttemptPermitsRow{
+			11: {{ID: 101, PermitID: pgtype.Text{String: "permit-expired", Valid: true}}},
+		},
+	}
+	finalizer := &fakeOrphanReservationFinalizer{}
+	worker := NewOrphanReservationSweeperWorker(store, finalizer, &fakeOrphanAttemptPermitReader{}, discardLogger(), time.Minute, 100)
+
+	worked, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	if !worked || len(finalizer.finalized) != 1 {
+		t.Fatalf("expired permit must be finalized: worked=%v finalized=%v", worked, finalizer.finalized)
+	}
+}
+
+func TestOrphanReservationSweeperKeepsUnsafeLegacyAttempt(t *testing.T) {
+	store := &fakeOrphanReservationStore{
+		rows: []sqlc.LedgerReservation{{ID: 1, RequestRecordID: 11}},
+		attempts: map[int64][]sqlc.ListRunningRequestAttemptPermitsRow{
+			11: {{ID: 101, UpstreamStartedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}}},
+		},
+	}
+	finalizer := &fakeOrphanReservationFinalizer{}
+	worker := NewOrphanReservationSweeperWorker(store, finalizer, &fakeOrphanAttemptPermitReader{}, discardLogger(), time.Minute, 100)
+
+	worked, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	if worked || len(finalizer.finalized) != 0 {
+		t.Fatalf("legacy attempt with transport facts must be preserved: worked=%v finalized=%v", worked, finalizer.finalized)
 	}
 }

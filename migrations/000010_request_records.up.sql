@@ -70,6 +70,8 @@ ALTER TABLE ONLY public.request_records
 
 CREATE INDEX idx_request_records_api_key_created_at ON public.request_records USING btree (api_key_id, created_at DESC);
 
+CREATE INDEX idx_request_records_created_at_id ON public.request_records USING btree (created_at DESC, id DESC);
+
 CREATE INDEX idx_request_records_status_created_at ON public.request_records USING btree (status, created_at DESC);
 
 CREATE INDEX idx_request_records_user_created_at ON public.request_records USING btree (user_id, created_at DESC);

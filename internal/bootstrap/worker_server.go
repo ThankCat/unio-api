@@ -46,6 +46,7 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 		return nil, fmt.Errorf("worker-server: redis is required")
 	}
 	queries := sqlc.New(deps.DB)
+	permitStore := breakerstore.NewStore(deps.Redis, deps.Config.Redis.KeyNamespace)
 	ledgerService := ledger.NewService(deps.DB, queries)
 	chatSettlementService := lifecycle.NewChatSettlementService(
 		deps.DB,
@@ -69,6 +70,7 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 	orphanReservationSweeperWorker := workers.NewOrphanReservationSweeperWorker(
 		queries,
 		chatSettlementService,
+		permitStore,
 		deps.Logger,
 		deps.Config.Worker.OrphanReservationSweepAgeThreshold,
 		deps.Config.Worker.OrphanReservationSweepBatchSize,
@@ -110,7 +112,7 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 	)
 	_ = settingsStore.SeedDefaults(ctx)
 	channelTestService := channeltest.NewService(queries, adapterRegistry, settingsStore)
-	permissionStore := breakerstore.NewStore(deps.Redis, deps.Config.Redis.KeyNamespace)
+	permissionStore := permitStore
 	if err := permissionStore.VerifySingleNodeDeployment(ctx); err != nil {
 		return nil, err
 	}

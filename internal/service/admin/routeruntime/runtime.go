@@ -49,6 +49,9 @@ type BreakerSnapshotter interface {
 	AggregateRouteUsage(context.Context, int64) (breakerstore.RouteUsage, error)
 	// AggregateChannelSamples 提供 30 分钟评分样本聚合（§12），与 Gateway 选路同源。
 	AggregateChannelSamples(context.Context, []int64) (map[int64]breakerstore.ChannelSampleWindow, error)
+	// TPMObservations 读取当前分钟的 TPM 观测桶（§8）。它是纯观测：读失败只让展示变成未知，
+	// 不允许回退到请求记录再伪装成实时 TPM。
+	TPMObservations(context.Context, breakerstore.TPMObservationKind, []int64, int64) (map[int64]breakerstore.TPMObservationSnapshot, error)
 }
 
 type RouteChannelRPDReader interface {
@@ -56,11 +59,12 @@ type RouteChannelRPDReader interface {
 }
 
 // RouteUsage 是线路级全用户入口用量合计（只读展示；不含总上限）。
+// ObservedTPM 来自独立的 TPM 观测桶，不是入口限流桶：它没有上限，也不参与准入。
 type RouteUsage struct {
 	Concurrency int64
 	RPM         int64
 	RPD         int64
-	TPM         int64
+	ObservedTPM int64
 	ActiveUsers int64
 }
 
@@ -124,30 +128,31 @@ type Channel struct {
 	GlobalRPDUsed                  int64
 	GlobalRPDLimit                 int64
 	GlobalRPDRemaining             *float64
-	TPMUsed                        int64
-	TPMLimit                       int64
-	TPMRemaining                   *float64
-	TokenCoveredCount              int64
-	TokenCoveragePct               float64
-	AlgorithmVersion               string
-	CostScore                      float64
-	ConcurrencyScore               float64
-	TTFTScore                      float64
-	ErrorScore                     float64
-	PriorityScore                  float64
-	FinalScore                     float64
-	CostWeightPct                  int
-	ConcurrencyWeightPct           int
-	TTFTWeightPct                  int
-	ErrorRateWeightPct             int
-	PriorityWeightPct              int
-	CostRatio                      *float64
-	CapacityUnknown                bool
-	CapacityReadFailed             bool
-	ProviderBreakerState           *string
-	ProviderOpenRemainingMs        *int64
-	ChannelBreakerState            *string
-	ChannelOpenRemainingMs         *int64
+	// ObservedTPM 是当前分钟观测到的输入 + 输出 token。它没有上限也没有剩余量：
+	// Unio 不限制 TPM，上游容量只由真实 429 冷却表达。
+	ObservedTPM int64
+	// TokenCoveredCount / TokenCoveragePct 是当前分钟拿到可靠 usage 的 attempt 数与占比。
+	TokenCoveredCount       int64
+	TokenCoveragePct        float64
+	AlgorithmVersion        string
+	CostScore               float64
+	ConcurrencyScore        float64
+	TTFTScore               float64
+	ErrorScore              float64
+	PriorityScore           float64
+	FinalScore              float64
+	CostWeightPct           int
+	ConcurrencyWeightPct    int
+	TTFTWeightPct           int
+	ErrorRateWeightPct      int
+	PriorityWeightPct       int
+	CostRatio               *float64
+	CapacityUnknown         bool
+	CapacityReadFailed      bool
+	ProviderBreakerState    *string
+	ProviderOpenRemainingMs *int64
+	ChannelBreakerState     *string
+	ChannelOpenRemainingMs  *int64
 	// 30 分钟评分样本观测（§12）：无样本时指针为 nil，对应指标分按 100 计。
 	AvgTTFTMs                   *float64
 	TTFTSampleCount             int64
@@ -370,6 +375,7 @@ func (s *Service) Get(ctx context.Context, params Params) (Runtime, error) {
 	}
 	s.fillRouteChannelRPD(ctx, &runtime)
 	s.fillRouteUsage(ctx, &runtime)
+	s.fillChannelTPMObservation(ctx, &runtime)
 	runtime.Sources = healthySources(now)
 	return runtime, nil
 }
@@ -404,8 +410,53 @@ func (s *Service) fillRouteUsage(ctx context.Context, runtime *Runtime) {
 		Concurrency: usage.Concurrency,
 		RPM:         usage.RPM,
 		RPD:         usage.RPD,
-		TPM:         usage.TPM,
 		ActiveUsers: usage.ActiveUsers,
+	}
+	// Route TPM 来自独立观测桶，不再从入口限流桶推断。读失败保持 0：调用方按 unknown 展示。
+	minute := breakerstore.TPMObservationMinute(time.Now())
+	observations, obsErr := s.breakers.TPMObservations(
+		ctx, breakerstore.TPMScopeRoute, []int64{runtime.RouteID}, minute,
+	)
+	if obsErr != nil {
+		return
+	}
+	runtime.RouteUsage.ObservedTPM = observations[runtime.RouteID].TPM()
+}
+
+// fillChannelTPMObservation 读取候选渠道当前分钟的 TPM 观测与 usage 覆盖率（§8/§9）。
+// 覆盖率分母是这一分钟真实发出的 attempt 数，分子是其中拿到可靠 usage 的部分。
+func (s *Service) fillChannelTPMObservation(ctx context.Context, runtime *Runtime) {
+	if len(runtime.Channels) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(runtime.Channels))
+	for _, channel := range runtime.Channels {
+		if channel.ChannelID > 0 {
+			ids = append(ids, channel.ChannelID)
+		}
+	}
+	observations, err := s.breakers.TPMObservations(
+		ctx, breakerstore.TPMScopeChannel, ids, breakerstore.TPMObservationMinute(time.Now()),
+	)
+	if err != nil {
+		return
+	}
+	for index := range runtime.Channels {
+		channel := &runtime.Channels[index]
+		snapshot, ok := observations[channel.ChannelID]
+		if !ok {
+			continue
+		}
+		channel.ObservedTPM = snapshot.TPM()
+		if snapshot.ObservedAttempts <= 0 {
+			continue
+		}
+		covered := snapshot.ObservedAttempts - snapshot.MissingUsageCount
+		if covered < 0 {
+			covered = 0
+		}
+		channel.TokenCoveredCount = covered
+		channel.TokenCoveragePct = float64(covered) / float64(snapshot.ObservedAttempts) * 100
 	}
 }
 
@@ -509,11 +560,7 @@ func applySnapshot(
 		channel.ModelPermissionRecheckState = candidate.ModelPermissionRecheckState
 		// TTFT 与错误率来自 30 分钟分钟桶聚合（§12），与 breaker 自身计数解耦。
 		window := sampleWindows[channel.ChannelID]
-		channel.RPMUsed, channel.RPDUsed, channel.GlobalRPDUsed, channel.TPMUsed = window.RPM, window.RPD, window.RPD, window.TPM
-		channel.TokenCoveredCount = window.TokenCoveredCount
-		if window.RPM > 0 {
-			channel.TokenCoveragePct = float64(window.TokenCoveredCount) / float64(window.RPM) * 100
-		}
+		channel.RPMUsed, channel.RPDUsed, channel.GlobalRPDUsed = window.RPM, window.RPD, window.RPD
 		scoreInputs := lifecycle.ChannelScoreInputs{
 			Concurrency:       lifecycle.CapacitySignal{Used: candidate.Concurrency.Used, Limit: candidate.Concurrency.Limit, Known: true},
 			TTFTSumMs:         window.TTFTSumMs,
@@ -833,7 +880,6 @@ func denyRuntime(runtime *Runtime, state string, postgresAvailable, breakerAvail
 		channel.ConcurrencyRemaining = nil
 		channel.RPMRemaining = nil
 		channel.RPDRemaining = nil
-		channel.TPMRemaining = nil
 		channel.ProviderBreakerState = nil
 		channel.ProviderOpenRemainingMs = nil
 		channel.ChannelBreakerState = nil
@@ -873,7 +919,8 @@ func healthySources(now time.Time) []Source {
 }
 
 // SortChannels 就地按给定字段排序运行态渠道（Admin 只读展示用）。
-// 支持 order / weight / capacity（最紧余量）/ concurrency / rpm / rpd / tpm，未知字段按 order。
+// 支持 order / weight / capacity（最紧余量）/ concurrency / rpm / rpd，未知字段按 order。
+// 没有 tpm：TPM 只有观测值、没有上限，排「剩余量」无从谈起。
 // 不可路由渠道恒沉底、内部保持稳定池顺序，避免把「被排除」的渠道排进 ranking。
 func SortChannels(channels []Channel, field string, desc bool) {
 	rank := func(c Channel) float64 {
@@ -888,8 +935,6 @@ func SortChannels(channels []Channel, field string, desc bool) {
 			return remainingOrOne(c.RPMRemaining)
 		case "rpd":
 			return remainingOrOne(channelGlobalRPDRemaining(c))
-		case "tpm":
-			return remainingOrOne(c.TPMRemaining)
 		default:
 			return float64(c.CurrentOrder)
 		}
@@ -913,11 +958,12 @@ func SortChannels(channels []Channel, field string, desc bool) {
 	})
 }
 
-// tightestRemaining 取四维限流里最紧的一维余量（不限=1，与前端容量条口径一致）。
+// tightestRemaining 取三维限流里最紧的一维余量（不限=1，与前端容量条口径一致）。
+// TPM 不在其中：它只是观测值，没有可以计算余量的上限。
 func tightestRemaining(c Channel) float64 {
 	remaining := 1.0
 	for _, v := range []*float64{
-		c.ConcurrencyRemaining, c.RPMRemaining, channelGlobalRPDRemaining(c), c.TPMRemaining,
+		c.ConcurrencyRemaining, c.RPMRemaining, channelGlobalRPDRemaining(c),
 	} {
 		if r := remainingOrOne(v); r < remaining {
 			remaining = r

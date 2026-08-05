@@ -35,11 +35,11 @@ func (s *Store) RouteChannelRPDUsage(ctx context.Context, routeID, channelID int
 
 // RouteUsage 是一条线路上所有 (route,user) 入口桶的只读合计（admin 展示用）。
 // 不含线路总上限：准入仍按 (route,user) 分桶执行。
+// 这里没有 TPM：TPM 不是准入维度，它的观测值来自独立的 obs:tpm 分钟桶（§8）。
 type RouteUsage struct {
 	Concurrency int64
 	RPM         int64
 	RPD         int64
-	TPM         int64
 	ActiveUsers int64 // 参与并发合计的用户桶数（含仅有过期租约的空 ZSET）
 }
 
@@ -83,11 +83,6 @@ func (s *Store) AggregateRouteUsage(ctx context.Context, routeID int64) (RouteUs
 		return RouteUsage{}, err
 	}
 	usage.RPD = rpd
-	tpm, err := s.sumCounterKeys(ctx, s.keys.requestTPMBucketRoutePattern(routeID, minute))
-	if err != nil {
-		return RouteUsage{}, err
-	}
-	usage.TPM = tpm
 	return usage, nil
 }
 

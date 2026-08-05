@@ -29,11 +29,10 @@ type ChannelSampleInput struct {
 	ErrorEligible   bool   // 计入错误率分母（真实发出上游且结果可归因于 Channel）
 	IsError         bool   // 计入错误率分子（要求 ErrorEligible）
 	ObservedRequest bool   // 真实发起上游调用（计入 RPM/RPD）
-	TokenCount      *int64 // 可靠 usage 的 token 总量（TPM）；nil 表示无可靠 usage
-	TokenCovered    bool   // 有可靠 usage（coverage）
 }
 
-// ChannelSampleWindow 是渠道最近 30 分钟评分聚合与当前观测（RPM/TPM/RPD）。
+// ChannelSampleWindow 是渠道最近 30 分钟评分聚合与当前观测（RPM/RPD）。
+// 这里没有 TPM：token 观测走独立的 obs:tpm 分钟桶（§8），与评分样本彻底分离。
 type ChannelSampleWindow struct {
 	// 30 分钟评分聚合（分钟对齐窗口）。
 	TTFTSumMs         int64
@@ -41,14 +40,12 @@ type ChannelSampleWindow struct {
 	ErrorAttemptCount int64
 	ErrorCount        int64
 	// 当前分钟观测。
-	RPM               int64
-	TPM               int64
-	TokenCoveredCount int64
+	RPM int64
 	// 当前 UTC 日观测。
 	RPD int64
 }
 
-// RecordChannelSample 幂等写入一次 attempt 终态的评分样本与观测（§12.5）。
+// RecordChannelSample 幂等写入一次 attempt 终态的评分样本与 RPM/RPD 观测（§12.5）。
 // 与 admission 解耦：不占用限额、不触发 breaker 硬门槛、写失败不 latch 基础设施故障。
 func (s *Store) RecordChannelSample(ctx context.Context, in ChannelSampleInput) error {
 	return s.recordChannelSampleAt(ctx, in, time.Now())
@@ -72,12 +69,10 @@ func (s *Store) recordChannelSampleAt(ctx context.Context, in ChannelSampleInput
 		sampleMarkerTTL.Milliseconds(),
 		sampleMinuteTTL.Milliseconds(),
 		sampleDayTTL.Milliseconds(),
-		sampleOptionalInt(in.TTFTMs, true),
+		sampleOptionalInt(in.TTFTMs),
 		sampleFlagArg(in.ErrorEligible),
 		sampleFlagArg(in.IsError && in.ErrorEligible),
 		sampleFlagArg(in.ObservedRequest),
-		sampleOptionalInt(in.TokenCount, false),
-		sampleFlagArg(in.TokenCovered),
 	}
 	if err := s.recordSample.Run(ctx, s.client, keys, argv...).Err(); err != nil && !errors.Is(err, redis.Nil) {
 		return storeUnavailable(err, "breakerstore record channel sample")
@@ -141,8 +136,6 @@ func (s *Store) aggregateChannelSamplesAt(ctx context.Context, channelIDs []int6
 			w.ErrorCount += sampleHashInt(fields, "error_count")
 			if j == 0 {
 				w.RPM = sampleHashInt(fields, "observed_request_count")
-				w.TPM = sampleHashInt(fields, "observed_token_count")
-				w.TokenCoveredCount = sampleHashInt(fields, "observed_token_covered_attempt_count")
 			}
 		}
 		if raw, err := cc.day.Result(); err == nil {
@@ -164,15 +157,9 @@ func sampleFlagArg(v bool) string {
 	return "0"
 }
 
-// sampleOptionalInt 编码可选整数参数：允许零表示 ttft=0（allowZero=true），token 只在 >0 时写入。
-func sampleOptionalInt(v *int64, allowZero bool) interface{} {
-	if v == nil {
-		return ""
-	}
-	if *v < 0 {
-		return ""
-	}
-	if *v == 0 && !allowZero {
+// sampleOptionalInt 编码可选整数参数；nil 或负值表示「本次没有样本」。
+func sampleOptionalInt(v *int64) interface{} {
+	if v == nil || *v < 0 {
 		return ""
 	}
 	return *v

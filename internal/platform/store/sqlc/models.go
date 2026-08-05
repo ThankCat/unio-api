@@ -23,9 +23,6 @@ type ApiKey struct {
 	SpendLimit   pgtype.Numeric
 	SpentTotal   pgtype.Numeric
 	RouteID      int64
-	RpmLimit     pgtype.Int4
-	TpmLimit     pgtype.Int4
-	RpdLimit     pgtype.Int4
 	UserID       int64
 }
 
@@ -428,6 +425,7 @@ type RequestAttempt struct {
 	ErrorScoringSample         bool
 	ErrorScoringFailure        bool
 	FaultParty                 pgtype.Text
+	PermitID                   pgtype.Text
 }
 
 type RequestRecord struct {
@@ -471,7 +469,6 @@ type Route struct {
 	UpdatedAt        pgtype.Timestamptz
 	PriceRatio       pgtype.Numeric
 	RpmLimit         pgtype.Int4
-	TpmLimit         pgtype.Int4
 	RpdLimit         pgtype.Int4
 	ConcurrencyLimit pgtype.Int4
 	ArchivedAt       pgtype.Timestamptz

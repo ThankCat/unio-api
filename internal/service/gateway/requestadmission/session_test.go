@@ -18,8 +18,6 @@ type storeStub struct {
 	acquireInput   breakerstore.RequestAdmissionInput
 	acquireResult  breakerstore.RequestAdmissionResult
 	acquireErr     error
-	reserveResult  breakerstore.ReserveResult
-	reserveErr     error
 	renewOutcome   breakerstore.RequestAdmissionLifecycleOutcome
 	renewErr       error
 	renewCalls     int
@@ -29,8 +27,6 @@ type storeStub struct {
 	finishErr      error
 	finishErrs     []error
 	finishCalls    int
-	finishActual   int64
-	finishReason   string
 	finishEpoch    string
 	finishRevision int64
 	snapshotInput  breakerstore.SnapshotManyInput
@@ -49,12 +45,6 @@ func (s *storeStub) AcquireRequestAdmission(_ context.Context, input breakerstor
 	return s.acquireResult, s.acquireErr
 }
 
-func (s *storeStub) ReserveRequestTokens(context.Context, string, int64, int64, int64, string, int64) (breakerstore.ReserveResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.reserveResult, s.reserveErr
-}
-
 func (s *storeStub) RenewRequestAdmission(_ context.Context, _ string, _, _ int64, epoch string, revision int64) (breakerstore.RequestAdmissionLifecycleOutcome, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -68,12 +58,10 @@ func (s *storeStub) RenewRequestAdmission(_ context.Context, _ string, _, _ int6
 	return outcome, s.renewErr
 }
 
-func (s *storeStub) FinishRequestAdmission(_ context.Context, _ string, _, _ int64, actual int64, reason, epoch string, revision int64) (breakerstore.RequestAdmissionLifecycleOutcome, error) {
+func (s *storeStub) FinishRequestAdmission(_ context.Context, _ string, _, _ int64, epoch string, revision int64) (breakerstore.RequestAdmissionLifecycleOutcome, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.finishCalls++
-	s.finishActual = actual
-	s.finishReason = reason
 	s.finishEpoch = epoch
 	s.finishRevision = revision
 	outcome := s.finishOutcome
@@ -184,15 +172,14 @@ func readyFacts() *factsStub {
 	}
 }
 
-func TestSessionOwnsRenewReserveBindAndUniqueFinish(t *testing.T) {
+func TestSessionOwnsRenewBindAndUniqueFinish(t *testing.T) {
 	store := &storeStub{
 		acquireResult: breakerstore.RequestAdmissionResult{
 			Outcome:      breakerstore.RequestAllowed,
 			LeaseUntilMs: time.Now().Add(time.Minute).UnixMilli(),
 		},
-		reserveResult: breakerstore.ReserveReserved,
 	}
-	rpm, tpm, rpd := int64(10), int64(0), int64(20)
+	rpm, rpd := int64(10), int64(20)
 	facts := readyFacts()
 	manager := NewManager(store, facts, ManagerOptions{
 		RenewInterval:    5 * time.Millisecond,
@@ -202,31 +189,22 @@ func TestSessionOwnsRenewReserveBindAndUniqueFinish(t *testing.T) {
 
 	result, err := manager.Acquire(context.Background(), Identity{
 		RouteID: 11, UserID: 22, Scope: "POST /v1/responses",
-		RPMLimitOverride: &rpm, TPMLimitOverride: &tpm, RPDLimitOverride: &rpd,
+		RPMLimitOverride: &rpm, RPDLimitOverride: &rpd,
 	})
 	if err != nil || result.Outcome != breakerstore.RequestAllowed || result.Session == nil {
 		t.Fatalf("acquire result=%+v err=%v", result, err)
 	}
 	if got := store.acquireInput; got.Fingerprint == "" || got.RPMLimitOverride == nil || *got.RPMLimitOverride != 10 ||
-		got.TPMLimitOverride == nil || *got.TPMLimitOverride != 0 || got.RPDLimitOverride == nil || *got.RPDLimitOverride != 20 ||
+		got.RPDLimitOverride == nil || *got.RPDLimitOverride != 20 ||
 		got.RouteRateRevision != 3 || got.GlobalConcurrencyRevision != 4 {
 		t.Fatalf("unexpected acquire input: %+v", got)
 	}
 
-	usage := result.Session.Usage()
-	if err := usage.Reserve(context.Background(), 123); err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-	ctx := ContextWithUsageSession(context.Background(), usage)
+	ctx := ContextWithRequestSession(context.Background(), result.Session.Request())
+	// 绑定不再要求先预占，也不再比较输入估算：TPM 不是准入维度。
 	attempt := breakerstore.AcquireAttemptInput{InputEstimate: 123}
 	if err := BindAttemptInput(ctx, &attempt); err != nil || attempt.RequestAdmissionID != "request-admission-1" {
 		t.Fatalf("bind attempt id=%q err=%v", attempt.RequestAdmissionID, err)
-	}
-	if usage.PublishAuthoritativeUsage(maxLuaExactInteger + 1) {
-		t.Fatal("Lua-inexact authoritative usage must be rejected")
-	}
-	if !usage.PublishAuthoritativeUsage(77) || usage.PublishAuthoritativeUsage(88) {
-		t.Fatal("authoritative usage must be first-write-wins")
 	}
 
 	deadline := time.Now().Add(200 * time.Millisecond)
@@ -250,17 +228,18 @@ func TestSessionOwnsRenewReserveBindAndUniqueFinish(t *testing.T) {
 		t.Fatalf("duplicate finalize: %v", err)
 	}
 	store.mu.Lock()
-	if store.finishCalls != 1 || store.finishActual != 77 ||
+	if store.finishCalls != 1 ||
 		store.renewEpoch != facts.integrity.Epoch || store.renewRevision != facts.integrity.Revision ||
 		store.finishEpoch != facts.integrity.Epoch || store.finishRevision != facts.integrity.Revision {
-		t.Fatalf("unexpected lifecycle calls: renew=%d epoch=%s/%d finish=%d actual=%d epoch=%s/%d",
+		t.Fatalf("unexpected lifecycle calls: renew=%d epoch=%s/%d finish=%d epoch=%s/%d",
 			store.renewCalls, store.renewEpoch, store.renewRevision,
-			store.finishCalls, store.finishActual, store.finishEpoch, store.finishRevision)
+			store.finishCalls, store.finishEpoch, store.finishRevision)
 	}
 	store.mu.Unlock()
 	facts.mu.Lock()
 	defer facts.mu.Unlock()
-	if facts.admissionCalls != 1 || facts.integrityCalls < 3 {
+	// acquire 读一次 admission revision；renew 与 finish 各自强读 integrity。
+	if facts.admissionCalls != 1 || facts.integrityCalls < 2 {
 		t.Fatalf("expected only acquire to read admission facts and lifecycle writes to read integrity: admission=%d integrity=%d",
 			facts.admissionCalls, facts.integrityCalls)
 	}
@@ -295,7 +274,7 @@ func TestSessionSnapshotInjectsFrozenAdmissionAndFreshRoutingRevisions(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := ContextWithUsageSession(context.Background(), result.Session.Usage())
+	ctx := ContextWithRequestSession(context.Background(), result.Session.Request())
 	candidates := []breakerstore.SnapshotCandidateInput{{
 		ProviderID: 30, ChannelID: 40, OriginRevision: 2, ProviderStatusRevision: 3,
 		ChannelConfigRevision: 4, ChannelCapacityRevision: 5,
@@ -463,28 +442,6 @@ func TestSessionFinalizeRecordsUnknownAfterStoreRetriesExhausted(t *testing.T) {
 	}
 }
 
-func TestSessionReserveRetainsFirstLimitedResult(t *testing.T) {
-	store := &storeStub{
-		acquireResult: breakerstore.RequestAdmissionResult{Outcome: breakerstore.RequestAllowed, LeaseUntilMs: time.Now().Add(time.Minute).UnixMilli()},
-		reserveResult: breakerstore.ReserveLimited,
-	}
-	manager := NewManager(store, readyFacts(), ManagerOptions{RenewInterval: time.Hour})
-	result, err := manager.Acquire(context.Background(), Identity{RouteID: 1, UserID: 2, Scope: "POST /v1/messages"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := result.Session.Usage().Reserve(context.Background(), 50); failure.CodeOf(err) != failure.CodeRateLimitExceeded {
-		t.Fatalf("limited reserve code=%q err=%v", failure.CodeOf(err), err)
-	}
-	if err := result.Session.Usage().Reserve(context.Background(), 50); failure.CodeOf(err) != failure.CodeRateLimitExceeded {
-		t.Fatalf("replayed limited reserve code=%q err=%v", failure.CodeOf(err), err)
-	}
-	if err := result.Session.Usage().Reserve(context.Background(), 51); !errors.Is(err, ErrReserveConflict) {
-		t.Fatalf("different estimate err=%v", err)
-	}
-	_ = result.Session.Finalize(context.Background())
-}
-
 func TestRequestAdmissionMetricsFollowTokenOwnership(t *testing.T) {
 	metrics := &metricsStub{}
 	store := &storeStub{
@@ -492,7 +449,6 @@ func TestRequestAdmissionMetricsFollowTokenOwnership(t *testing.T) {
 			Outcome:      breakerstore.RequestAllowed,
 			LeaseUntilMs: time.Now().Add(time.Minute).UnixMilli(),
 		},
-		reserveResult: breakerstore.ReserveReserved,
 	}
 	manager := NewManager(store, readyFacts(), ManagerOptions{
 		Metrics:       metrics,
@@ -506,11 +462,8 @@ func TestRequestAdmissionMetricsFollowTokenOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
-	if err := result.Session.Usage().Reserve(context.Background(), 12); err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
 	operations, active := metrics.snapshot()
-	if active != 1 || operations["acquire/allowed"] != 1 || operations["reserve/reserved"] != 1 {
+	if active != 1 || operations["acquire/allowed"] != 1 {
 		t.Fatalf("active=%v operations=%v", active, operations)
 	}
 

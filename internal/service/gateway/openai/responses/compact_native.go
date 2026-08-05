@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 )
 
@@ -17,7 +18,7 @@ import (
 // 据此决定安全回落 SyntheticCompact（Q2）。
 //
 // 触发条件：adapter 收敛的 sentinel ErrCompactUnsupported（仅 404/405），或 error 链上的上游 404/405 状态。
-// 注意：原生 2xx 但缺 usage 不再归此类（见 isNativeCompactMissingUsage），因为那种情形上游很可能已计费，
+// 注意：原生 2xx 但缺 usage 不再归此类（见 isCompactMissingUsage），因为那种情形上游很可能已计费，
 // 静默回落会白嫖。其余上游错误（鉴权/限流/超时/5xx）也不视为「不支持」，按正常上游错误处理。
 func isNativeCompactUnsupported(err error) bool {
 	if errors.Is(err, responsesadapter.ErrCompactUnsupported) {
@@ -30,10 +31,11 @@ func isNativeCompactUnsupported(err error) bool {
 	return false
 }
 
-// isNativeCompactMissingUsage 判断原生 compact 是否返回 2xx 却拿不到可计费 usage（上游很可能已产生成本）。
+// isCompactMissingUsage 判断 compact 的原生或 Synthetic 路径是否返回 2xx 却拿不到可靠 usage。
 //
-// 命中时绝不静默回落 Synthetic（会「双调上游、只收一次费」白嫖），而是上抛交由 lifecycle 记 risk_exposure
-// 并报错（P0-3）。与 isNativeCompactUnsupported（真 404/405、无成本）互斥。
-func isNativeCompactMissingUsage(err error) bool {
-	return errors.Is(err, responsesadapter.ErrCompactMissingUsage)
+// 命中时绝不继续 fallback，而是上抛交由 lifecycle 记 risk_exposure 并报错（P0-3）。
+// 原生路径的该错误与 isNativeCompactUnsupported（真 404/405、无成本）互斥。
+func isCompactMissingUsage(err error) bool {
+	return errors.Is(err, responsesadapter.ErrCompactMissingUsage) ||
+		errors.Is(err, chatcompletionsadapter.ErrChatUnreliableUsage)
 }

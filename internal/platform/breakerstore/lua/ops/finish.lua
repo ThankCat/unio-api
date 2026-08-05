@@ -21,11 +21,10 @@ local evidence_models_key = KEYS[9]
 local permit_id = ARGV[1]
 local ep_outcome = ARGV[18]
 local ch_outcome = ARGV[19]
-local tpm_actual = ARGV[20] -- '' 表示无权威 usage；此时至少保留输入估算
-local origin_evidence = ARGV[21]
-local request_write_state = ARGV[22]
-local response_headers_received = ARGV[23]
-local first_token_eligible = ARGV[24]
+local origin_evidence = ARGV[20]
+local request_write_state = ARGV[21]
+local response_headers_received = ARGV[22]
+local first_token_eligible = ARGV[23]
 local interaction_evidence = request_write_state == 'completed'
   or request_write_state == 'uncertain'
   or response_headers_received == 'true'
@@ -43,15 +42,6 @@ if redis.call('HGET', permit_key, 'status') ~= 'active' then
     redis.call('HGET', permit_key, 'origin_disposition') or 'terminal_conflict',
     redis.call('HGET', permit_key, 'channel_disposition') or 'terminal_conflict',
   }
-end
-
--- Channel TPM 已不再是准入门槛（§1.2/§8），无需结算算术校验；仍在 permit 上记录终态口径。
-if tpm_actual ~= '' then
-  if string.match(tpm_actual, '^%d+$') == nil then return { 'runtime_sync_required', 'runtime_sync_required' } end
-  local actual = tonumber(tpm_actual)
-  if actual == nil or actual > MAX_EXACT_INTEGER or actual ~= math.floor(actual) then
-    return { 'runtime_sync_required', 'runtime_sync_required' }
-  end
 end
 
 -- 归因桶只记录已经进入真实上游交互的 attempt。它不参与 Channel 全局 RPD 限制，
@@ -90,15 +80,6 @@ end
 
 -- 资源收口：释放并发租约（first-terminal-wins，始终执行）。
 if conc_key ~= '' then redis.call('ZREM', conc_key, permit_id) end
-
--- Channel TPM 不再占用限额，只在 permit 上冻结终态口径供审计（settled=有可靠 actual；retained=仅输入估算）。
-if redis.call('HGET', permit_key, 'admission_enforced') == '1' then
-  if tpm_actual == '' then
-    redis.call('HSET', permit_key, 'tpm_state', 'retained')
-  else
-    redis.call('HSET', permit_key, 'tpm_actual_total', tonumber(tpm_actual) or 0, 'tpm_state', 'settled')
-  end
-end
 
 redis.call(
   'HSET',

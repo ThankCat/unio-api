@@ -1,5 +1,5 @@
 // Package routeops 提供线路路由作战台（§3.5）的只读运维聚合。
-// 归因：每条请求按其 API Key 绑定的 api_keys.route_id 计入线路（线路必填，无默认回落）。
+// 归因：每条请求按创建时保存的 Route 快照计入线路；旧请求没有快照时回退 API Key 当前绑定。
 package routeops
 
 import (
@@ -44,7 +44,6 @@ type Row struct {
 	Description      string
 	PriceRatio       string
 	RpmLimit         *int32
-	TpmLimit         *int32
 	RpdLimit         *int32
 	ConcurrencyLimit *int32
 	CreatedAt        time.Time
@@ -161,7 +160,6 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			Description:      opsutil.TextValue(r.Description),
 			PriceRatio:       opsutil.NumericString(r.PriceRatio),
 			RpmLimit:         opsutil.Int4Value(r.RpmLimit),
-			TpmLimit:         opsutil.Int4Value(r.TpmLimit),
 			RpdLimit:         opsutil.Int4Value(r.RpdLimit),
 			ConcurrencyLimit: opsutil.Int4Value(r.ConcurrencyLimit),
 			CreatedAt:        r.CreatedAt.Time,

@@ -29,7 +29,6 @@ func validateRequestAdmissionInput(in RequestAdmissionInput) error {
 	for _, limit := range []*int64{
 		in.RPMLimitOverride,
 		in.RPDLimitOverride,
-		in.TPMLimitOverride,
 		in.ConcurrencyLimitOverride,
 	} {
 		if limit != nil && (*limit < 0 || *limit > maxLuaExactInteger) {
@@ -50,30 +49,6 @@ func validateRequestLifecycleInput(requestAdmissionID string, routeID, userID in
 		return configInvalid("request admission integrity epoch and revision are required")
 	}
 	return nil
-}
-
-func validateReserveRequestTokensInput(requestAdmissionID string, routeID, userID, estimatedTokens int64) error {
-	if strings.TrimSpace(requestAdmissionID) == "" {
-		return configInvalid("request admission id is required")
-	}
-	if routeID <= 0 || userID <= 0 {
-		return configInvalid("request admission route and user ids must be positive")
-	}
-	if estimatedTokens < 0 || estimatedTokens > maxLuaExactInteger {
-		return configInvalid("estimated request tokens must not be negative")
-	}
-	return nil
-}
-
-func validRequestTPMTerminalReason(reason string, actualTotal int64) bool {
-	switch reason {
-	case "actual":
-		return actualTotal >= 0 && actualTotal <= maxLuaExactInteger
-	case "not_reached", "reached_without_usage", "uncertain", "empty":
-		return actualTotal == -1
-	default:
-		return false
-	}
 }
 
 func validateAcquireAttemptInput(in AcquireAttemptInput) error {
@@ -130,9 +105,6 @@ func validateFinishInput(permit AttemptPermit, outcome FinishOutcome) error {
 	}
 	if outcome.RequestWriteState == RequestWriteNotStarted && !outcome.ResponseHeadersReceived && !outcome.FirstTokenEligible {
 		return configInvalid("finish requires upstream interaction evidence")
-	}
-	if outcome.ActualTotalTokens != nil && (*outcome.ActualTotalTokens < 0 || *outcome.ActualTotalTokens > maxLuaExactInteger) {
-		return configInvalid("actual channel token usage must be a non-negative Lua-exact integer")
 	}
 	return nil
 }

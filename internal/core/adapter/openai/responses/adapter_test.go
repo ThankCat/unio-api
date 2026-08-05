@@ -120,19 +120,54 @@ func TestCreateResponseForwardsBodyAndParsesFacts(t *testing.T) {
 	}
 }
 
-func TestCreateResponseMissingUsageReturnsInvalidResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_1","status":"completed","model":"gpt-5.5"}`))
-	}))
-	defer server.Close()
-
-	_, err := NewAdapter(server.Client()).CreateResponse(context.Background(), testChannel(server.URL), Request{Body: json.RawMessage(`{"model":"gpt-5.5"}`)})
-	if err == nil {
-		t.Fatal("expected error for missing usage")
+func TestCreateResponseRequiresCompleteUsage(t *testing.T) {
+	tests := []struct {
+		name    string
+		usage   string
+		wantErr bool
+	}{
+		{name: "usage missing", wantErr: true},
+		{name: "usage null", usage: `,"usage":null`, wantErr: true},
+		{name: "input missing", usage: `,"usage":{"output_tokens":2,"total_tokens":2}`, wantErr: true},
+		{name: "output missing", usage: `,"usage":{"input_tokens":3,"total_tokens":3}`, wantErr: true},
+		{name: "total missing", usage: `,"usage":{"input_tokens":3,"output_tokens":2}`, wantErr: true},
+		{name: "negative input", usage: `,"usage":{"input_tokens":-1,"output_tokens":2,"total_tokens":1}`, wantErr: true},
+		{name: "inconsistent total", usage: `,"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":4}`, wantErr: true},
+		{name: "explicit zero", usage: `,"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}`},
 	}
-	if failure.CodeOf(err) != failure.CodeAdapterInvalidResponse {
-		t.Fatalf("code = %q, want %q", failure.CodeOf(err), failure.CodeAdapterInvalidResponse)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"resp_1","status":"completed","model":"gpt-5.5"` + tt.usage + `}`))
+			}))
+			defer server.Close()
+
+			resp, err := NewAdapter(server.Client()).CreateResponse(context.Background(), testChannel(server.URL), Request{Body: json.RawMessage(`{"model":"gpt-5.5"}`)})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error for unreliable usage")
+				}
+				if failure.CodeOf(err) != failure.CodeAdapterInvalidResponse {
+					t.Fatalf("code = %q, want %q", failure.CodeOf(err), failure.CodeAdapterInvalidResponse)
+				}
+				if !errors.Is(err, ErrResponsesUnreliableUsage) {
+					t.Fatalf("expected ErrResponsesUnreliableUsage, got %v", err)
+				}
+				if meta, ok := adapter.UpstreamMetadataOf(err); !ok || meta.StatusCode != http.StatusOK {
+					t.Fatalf("upstream metadata = %+v ok=%v, want status 200", meta, ok)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("explicit zero usage must be accepted: %v", err)
+			}
+			if resp.Usage.PromptTokens != 0 || resp.Usage.CompletionTokens != 0 || resp.Usage.TotalTokens != 0 {
+				t.Fatalf("usage = %+v, want explicit 0/0/0", resp.Usage)
+			}
+		})
 	}
 }
 
@@ -303,28 +338,55 @@ func TestCompactResponseUnsupportedPreservesStatus(t *testing.T) {
 	}
 }
 
-// TestCompactResponseMissingUsageReturnsMissingUsage 验证压缩响应返回 2xx 但缺少可计费 usage 时收敛为
+// TestCompactResponseRequiresCompleteUsage 验证压缩响应返回 2xx 但缺少可靠 usage 时收敛为
 // ErrCompactMissingUsage（区别于 404/405 的 ErrCompactUnsupported）：上游很可能已计费，service 不得静默
 // 回落白嫖，须记 risk_exposure 并报错（P0-3）。错误同时带 server_error 上游分类，供 handler 映射 502。
-func TestCompactResponseMissingUsageReturnsMissingUsage(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"output":[{"type":"compaction"}]}`))
-	}))
-	defer server.Close()
+func TestCompactResponseRequiresCompleteUsage(t *testing.T) {
+	tests := []struct {
+		name    string
+		usage   string
+		wantErr bool
+	}{
+		{name: "usage missing", wantErr: true},
+		{name: "input missing", usage: `,"usage":{"output_tokens":2,"total_tokens":2}`, wantErr: true},
+		{name: "output missing", usage: `,"usage":{"input_tokens":3,"total_tokens":3}`, wantErr: true},
+		{name: "total missing", usage: `,"usage":{"input_tokens":3,"output_tokens":2}`, wantErr: true},
+		{name: "inconsistent total", usage: `,"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":4}`, wantErr: true},
+		{name: "explicit zero", usage: `,"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}`},
+	}
 
-	_, err := NewAdapter(server.Client()).CompactResponse(context.Background(), testChannel(server.URL), Request{Body: json.RawMessage(`{"model":"gpt-5.5"}`)})
-	if err == nil {
-		t.Fatal("expected error for missing usage")
-	}
-	if !errors.Is(err, ErrCompactMissingUsage) {
-		t.Fatalf("expected ErrCompactMissingUsage, got %v", err)
-	}
-	if errors.Is(err, ErrCompactUnsupported) {
-		t.Fatalf("missing-usage must not be classified as unsupported (404/405): %v", err)
-	}
-	if category, ok := adapter.UpstreamCategoryOf(err); !ok || category != adapter.UpstreamErrorServer {
-		t.Fatalf("expected server_error upstream category, got %q ok=%v", category, ok)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"output":[{"type":"compaction"}]` + tt.usage + `}`))
+			}))
+			defer server.Close()
+
+			resp, err := NewAdapter(server.Client()).CompactResponse(context.Background(), testChannel(server.URL), Request{Body: json.RawMessage(`{"model":"gpt-5.5"}`)})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error for unreliable usage")
+				}
+				if !errors.Is(err, ErrCompactMissingUsage) {
+					t.Fatalf("expected ErrCompactMissingUsage, got %v", err)
+				}
+				if errors.Is(err, ErrCompactUnsupported) {
+					t.Fatalf("missing-usage must not be classified as unsupported (404/405): %v", err)
+				}
+				if category, ok := adapter.UpstreamCategoryOf(err); !ok || category != adapter.UpstreamErrorServer {
+					t.Fatalf("expected server_error upstream category, got %q ok=%v", category, ok)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("explicit zero usage must be accepted: %v", err)
+			}
+			if resp.Usage.PromptTokens != 0 || resp.Usage.CompletionTokens != 0 || resp.Usage.TotalTokens != 0 {
+				t.Fatalf("usage = %+v, want explicit 0/0/0", resp.Usage)
+			}
+		})
 	}
 }
 
@@ -861,9 +923,9 @@ func TestChatUsageFromWire(t *testing.T) {
 	}
 
 	u, ok := chatUsageFromWire(&wireUsage{
-		InputTokens:         10,
-		OutputTokens:        4,
-		TotalTokens:         14,
+		InputTokens:         testInt64Ptr(10),
+		OutputTokens:        testInt64Ptr(4),
+		TotalTokens:         testInt64Ptr(14),
 		InputTokensDetails:  &wireInputTokenDetail{CachedTokens: 3},
 		OutputTokensDetails: &wireOutputTokenDetail{ReasoningTokens: 2},
 	})
@@ -889,26 +951,26 @@ func TestChatUsageFromWireCacheWriteAliases(t *testing.T) {
 	}{
 		{
 			name: "official cache_write_tokens",
-			wire: &wireUsage{InputTokens: 100, OutputTokens: 5, TotalTokens: 105,
+			wire: &wireUsage{InputTokens: testInt64Ptr(100), OutputTokens: testInt64Ptr(5), TotalTokens: testInt64Ptr(105),
 				InputTokensDetails: &wireInputTokenDetail{CachedTokens: 10, CacheWriteTokens: 30}},
 			want: 30,
 		},
 		{
 			name: "sub2api detail cache_creation_tokens alias",
-			wire: &wireUsage{InputTokens: 100, OutputTokens: 5, TotalTokens: 105,
+			wire: &wireUsage{InputTokens: testInt64Ptr(100), OutputTokens: testInt64Ptr(5), TotalTokens: testInt64Ptr(105),
 				InputTokensDetails: &wireInputTokenDetail{CachedTokens: 10, CacheCreationTokens: 25}},
 			want: 25,
 		},
 		{
 			name: "sub2api top-level cache_creation_input_tokens alias",
-			wire: &wireUsage{InputTokens: 100, OutputTokens: 5, TotalTokens: 105,
+			wire: &wireUsage{InputTokens: testInt64Ptr(100), OutputTokens: testInt64Ptr(5), TotalTokens: testInt64Ptr(105),
 				CacheCreationInputTokens: 40,
 				InputTokensDetails:       &wireInputTokenDetail{CachedTokens: 10}},
 			want: 40,
 		},
 		{
 			name: "prefer cache_write_tokens over aliases",
-			wire: &wireUsage{InputTokens: 100, OutputTokens: 5, TotalTokens: 105,
+			wire: &wireUsage{InputTokens: testInt64Ptr(100), OutputTokens: testInt64Ptr(5), TotalTokens: testInt64Ptr(105),
 				CacheCreationInputTokens: 40,
 				InputTokensDetails:       &wireInputTokenDetail{CacheWriteTokens: 30, CacheCreationTokens: 25}},
 			want: 30,
@@ -925,6 +987,10 @@ func TestChatUsageFromWireCacheWriteAliases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func testInt64Ptr(value int64) *int64 {
+	return &value
 }
 
 func TestResponsesFinishClassAndRawFinish(t *testing.T) {

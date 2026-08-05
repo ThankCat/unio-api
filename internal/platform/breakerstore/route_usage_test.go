@@ -45,9 +45,6 @@ func TestAggregateRouteUsageSumsCurrentBuckets(t *testing.T) {
 	mustSet(t, client, s.keys.requestRPMBucket(routeID, 1, minute-1), "100") // previous minute
 	mustSet(t, client, s.keys.requestRPDBucket(routeID, 1, day), "20")
 	mustSet(t, client, s.keys.requestRPDBucket(routeID, 2, day), "7")
-	mustSet(t, client, s.keys.requestTPMBucket(routeID, 1, minute), "1000")
-	mustSet(t, client, s.keys.requestTPMBucket(routeID, 2, minute), "250")
-	mustSet(t, client, s.keys.requestTPMBucket(routeID, 3, minute), "bad")
 	mustSet(t, client, s.keys.requestRPMBucket(routeID, 3, minute), "-3")
 
 	usage, err := s.AggregateRouteUsage(ctx, routeID)
@@ -62,9 +59,6 @@ func TestAggregateRouteUsageSumsCurrentBuckets(t *testing.T) {
 	}
 	if usage.RPD != 27 {
 		t.Fatalf("rpd=%d want 27", usage.RPD)
-	}
-	if usage.TPM != 1250 {
-		t.Fatalf("tpm=%d want 1250", usage.TPM)
 	}
 	// conc keys for users 1 and 2 only (user 3 has no conc key)
 	if usage.ActiveUsers != 2 {

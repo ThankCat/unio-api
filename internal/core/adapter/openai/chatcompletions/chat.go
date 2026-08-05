@@ -148,7 +148,7 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 
 	usage, err := chatUsageFromOpenAI(upstreamRespBody.Usage)
 	if err != nil {
-		return nil, err
+		return nil, newUpstreamProtocolError(upstreamResp.StatusCode, requestID, body, err)
 	}
 
 	toolCalls, err := wireToolCallsToAdapter(upstreamRespBody.Choices[0].Message.ToolCalls)
@@ -414,29 +414,33 @@ func isSkippableStreamDelta(choice chatStreamChoice) bool {
 // 非流式成功响应和 stream final usage 都必须提供完整 usage，避免缺字段被当成 0 元请求。
 func chatUsageFromOpenAI(usage *chatCompletionUsage) (adapter.ChatUsage, error) {
 	if usage == nil {
-		return adapter.ChatUsage{}, failure.New(
+		return adapter.ChatUsage{}, failure.Wrap(
 			failure.CodeAdapterInvalidResponse,
+			ErrChatUnreliableUsage,
 			failure.WithMessage("openai adapter missing chat completion usage"),
 		)
 	}
 
 	if usage.PromptTokens == nil || usage.CompletionTokens == nil || usage.TotalTokens == nil {
-		return adapter.ChatUsage{}, failure.New(
+		return adapter.ChatUsage{}, failure.Wrap(
 			failure.CodeAdapterInvalidResponse,
+			ErrChatUnreliableUsage,
 			failure.WithMessage("openai adapter missing required chat completion usage token fields"),
 		)
 	}
 
-	if *usage.PromptTokens <= 0 || *usage.CompletionTokens < 0 || *usage.TotalTokens <= 0 {
-		return adapter.ChatUsage{}, failure.New(
+	if *usage.PromptTokens < 0 || *usage.CompletionTokens < 0 || *usage.TotalTokens < 0 {
+		return adapter.ChatUsage{}, failure.Wrap(
 			failure.CodeAdapterInvalidResponse,
+			ErrChatUnreliableUsage,
 			failure.WithMessage("openai adapter invalid chat completion usage token counts"),
 		)
 	}
 
 	if *usage.TotalTokens != *usage.PromptTokens+*usage.CompletionTokens {
-		return adapter.ChatUsage{}, failure.New(
+		return adapter.ChatUsage{}, failure.Wrap(
 			failure.CodeAdapterInvalidResponse,
+			ErrChatUnreliableUsage,
 			failure.WithMessage("openai adapter inconsistent chat completion usage token counts"),
 		)
 	}

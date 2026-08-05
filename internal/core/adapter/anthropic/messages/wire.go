@@ -40,7 +40,7 @@ type messagesResponse struct {
 	Content      []json.RawMessage `json:"content"`
 	StopReason   *string           `json:"stop_reason"`
 	StopSequence *string           `json:"stop_sequence"`
-	Usage        usageWire         `json:"usage"`
+	Usage        *usageWire        `json:"usage"`
 }
 
 // usageWire 是 Anthropic usage 的 wire DTO；可选维度用指针区分上游"未提供"与"为 0"。

@@ -10,6 +10,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/tpmobserver"
 )
 
 // MessagesRouter 定义 gateway 为 Anthropic Messages 请求生成有序 route plan 所需能力。
@@ -129,9 +130,14 @@ func (s *MessagesService) SetRoutingTraceRecorder(recorder *lifecycle.RoutingTra
 	s.lifecycle.SetRoutingTraceRecorder(recorder)
 }
 
-// SetChannelSampleRecorder 注入 30 分钟评分样本/观测记录器（§12）；nil 表示不启用。
+// SetChannelSampleRecorder 注入 30 分钟评分样本记录器（§12）；nil 表示不启用。
 func (s *MessagesService) SetChannelSampleRecorder(recorder lifecycle.ChannelSampleRecorder) {
 	s.lifecycle.SetChannelSampleRecorder(recorder)
+}
+
+// SetTPMObserver 注入分钟级 TPM 观测器（§8）；nil 表示不启用观测。
+func (s *MessagesService) SetTPMObserver(observer *tpmobserver.Observer) {
+	s.lifecycle.SetTPMObserver(observer)
 }
 
 // messagesSafeMessage 把 messages 编排专用 ad-hoc string code 映射成可展示文案；
@@ -150,6 +156,8 @@ func messagesSafeMessage(code string) string {
 		return "Request settlement failed."
 	case "messages_settlement_failed", "stream_messages_settlement_failed":
 		return "Request settlement failed."
+	case "messages_cost_without_usage":
+		return "Upstream response did not include usage information."
 	}
 	return ""
 }

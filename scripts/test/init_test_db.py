@@ -205,6 +205,11 @@ def validate_topology_config(cfg: dict[str, Any]) -> None:
                 f"{path}.sticky_enabled",
                 "Route Sticky 已废弃，请在各 Channel 配置 Sticky",
             )
+        if "tpm_limit" in route:
+            config_error(
+                f"{path}.tpm_limit",
+                "Unio 不限制 TPM，该字段已删除；token 吞吐只做观测，不参与准入",
+            )
 
 
 def append_test_user_sql(parts: list[str], cfg: dict[str, Any]) -> None:
@@ -548,7 +553,7 @@ ON CONFLICT (channel_id, model_id) DO UPDATE SET
             f"""
 INSERT INTO routes (
     name, mode, status, description, price_ratio,
-    rpm_limit, tpm_limit, rpd_limit, concurrency_limit
+    rpm_limit, rpd_limit, concurrency_limit
 ) VALUES (
     {sql_quote(r['name'])},
     {sql_quote(r.get('mode', 'balanced'))},
@@ -556,7 +561,6 @@ INSERT INTO routes (
     {sql_quote(r.get('description') or None)},
     {sql_quote(str(r.get('price_ratio', '1.0')))}::numeric,
     {sql_quote(r.get('rpm_limit'))},
-    {sql_quote(r.get('tpm_limit'))},
     {sql_quote(r.get('rpd_limit'))},
     {sql_quote(r.get('concurrency_limit'))}
 )
@@ -566,7 +570,6 @@ ON CONFLICT (name) DO UPDATE SET
     description = EXCLUDED.description,
     price_ratio = EXCLUDED.price_ratio,
     rpm_limit = EXCLUDED.rpm_limit,
-    tpm_limit = EXCLUDED.tpm_limit,
     rpd_limit = EXCLUDED.rpd_limit,
     concurrency_limit = {concurrency_update},
     updated_at = now();
@@ -721,7 +724,6 @@ SELECT json_build_object(
           'description', coalesce(r.description, ''),
           'price_ratio', r.price_ratio::text,
           'rpm_limit', r.rpm_limit,
-          'tpm_limit', r.tpm_limit,
           'rpd_limit', r.rpd_limit,
           'concurrency_limit', r.concurrency_limit,
           'channels', (

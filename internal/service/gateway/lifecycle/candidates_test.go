@@ -556,7 +556,7 @@ func TestExecutorPrepareCandidatesReturnsNoAvailableChannelAfterFiltering(t *tes
 
 func TestExecutorPrepareCandidatesAggregatesCooldownOnlyAsRateLimit(t *testing.T) {
 	executor := NewExecutor(candidateCapabilityRegistry{allowed: map[int64]bool{1: true, 2: true}})
-	ctx := requestadmission.ContextWithUsageSession(context.Background(), &candidateSnapshotSession{
+	ctx := requestadmission.ContextWithRequestSession(context.Background(), &candidateSnapshotSession{
 		result: breakerstore.SnapshotManyResult{Candidates: []breakerstore.CandidateSnapshot{
 			{Status: breakerstore.CandidateSnapshotRateLimited, CooldownRemainingMs: 2_001},
 			{Status: breakerstore.CandidateSnapshotRateLimited, CooldownRemainingMs: 1_001},
@@ -588,7 +588,7 @@ func TestExecutorPrepareCandidatesAggregatesCooldownOnlyAsRateLimit(t *testing.T
 
 func TestExecutorPrepareCandidatesKeepsMixedExclusionsUnavailable(t *testing.T) {
 	executor := NewExecutor(candidateCapabilityRegistry{allowed: map[int64]bool{1: true, 2: true}})
-	ctx := requestadmission.ContextWithUsageSession(context.Background(), &candidateSnapshotSession{
+	ctx := requestadmission.ContextWithRequestSession(context.Background(), &candidateSnapshotSession{
 		result: breakerstore.SnapshotManyResult{Candidates: []breakerstore.CandidateSnapshot{
 			{Status: breakerstore.CandidateSnapshotRateLimited, CooldownRemainingMs: 1_000},
 			{Status: breakerstore.CandidateSnapshotOpen},
@@ -612,9 +612,8 @@ type candidateSnapshotSession struct {
 	windows map[int64]breakerstore.ChannelSampleWindow
 }
 
-func (*candidateSnapshotSession) Reserve(context.Context, int64) error { return nil }
-func (*candidateSnapshotSession) PublishAuthoritativeUsage(int64) bool { return true }
-func (*candidateSnapshotSession) MarkUpstreamReached() bool            { return true }
+func (*candidateSnapshotSession) BindAttempt(*breakerstore.AcquireAttemptInput) error { return nil }
+
 func (s *candidateSnapshotSession) SnapshotMany(context.Context, int64, []breakerstore.SnapshotCandidateInput) (breakerstore.SnapshotManyResult, error) {
 	return s.result, nil
 }

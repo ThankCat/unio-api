@@ -195,6 +195,81 @@ func TestChatAuthorizationPrefersClientMaxOutputTokens(t *testing.T) {
 	}
 }
 
+// TestChatAuthorizationCoversLongContextPriceBelowThreshold 验证本地输入估算尚未过门槛时，
+// 授权仍会覆盖可能由上游真实 usage 触发的长上下文价格。
+func TestChatAuthorizationCoversLongContextPriceBelowThreshold(t *testing.T) {
+	price := billing.CustomerPriceSnapshot{
+		Currency:           "USD",
+		PricingUnit:        billing.PricingUnitPer1MTokens,
+		UncachedInputPrice: gatewayTestNumeric(1, 0),
+		OutputPrice:        gatewayTestNumeric(5, 0),
+		FormulaVersion:     billing.FormulaVersionV1,
+	}
+	billingService := &chatAuthorizationBilling{}
+	ledgerService := &chatAuthorizationLedger{reservation: ledger.Reservation{ID: 1, RequestRecordID: 9, Currency: "USD"}}
+	service := NewChatAuthorizationService(billingService, ledgerService, 0)
+
+	_, err := service.AuthorizeChat(context.Background(), ChatAuthorizeParams{
+		RequestRecord:       requestlog.RequestRecord{ID: 9},
+		Principal:           &auth.APIKeyPrincipal{UserID: 3},
+		CandidatePrices:     []billing.CustomerPriceSnapshot{price},
+		InputTokens:         90,
+		MaxCompletionTokens: 10,
+		LongContextPolicy: billing.LongContextPolicy{
+			Enabled:          true,
+			Threshold:        100,
+			InputMultiplier:  gatewayTestNumeric(2, 0),
+			OutputMultiplier: gatewayTestNumeric(3, 0),
+		},
+	})
+	if err != nil {
+		t.Fatalf("AuthorizeChat returned error: %v", err)
+	}
+
+	if billingService.calls != 2 {
+		t.Fatalf("expected standard and long-context estimates, got %d calls", billingService.calls)
+	}
+	if !chatSettlementSameNumeric(ledgerService.preAuthorizeParams.EstimatedAmount, gatewayTestNumeric(15, 0)) {
+		t.Fatalf("expected long-context authorization amount 15, got %#v", ledgerService.preAuthorizeParams.EstimatedAmount)
+	}
+}
+
+// TestChatAuthorizationKeepsHigherStandardPrice 验证配置中的长上下文倍率小于 1 时，
+// 授权仍取普通价和阶梯价中较高的一项，不会因阶梯配置而减少冻结。
+func TestChatAuthorizationKeepsHigherStandardPrice(t *testing.T) {
+	price := billing.CustomerPriceSnapshot{
+		Currency:           "USD",
+		PricingUnit:        billing.PricingUnitPer1MTokens,
+		UncachedInputPrice: gatewayTestNumeric(1, 0),
+		OutputPrice:        gatewayTestNumeric(5, 0),
+		FormulaVersion:     billing.FormulaVersionV1,
+	}
+	billingService := &chatAuthorizationBilling{}
+	ledgerService := &chatAuthorizationLedger{reservation: ledger.Reservation{ID: 1, RequestRecordID: 9, Currency: "USD"}}
+	service := NewChatAuthorizationService(billingService, ledgerService, 0)
+
+	_, err := service.AuthorizeChat(context.Background(), ChatAuthorizeParams{
+		RequestRecord:       requestlog.RequestRecord{ID: 9},
+		Principal:           &auth.APIKeyPrincipal{UserID: 3},
+		CandidatePrices:     []billing.CustomerPriceSnapshot{price},
+		InputTokens:         90,
+		MaxCompletionTokens: 10,
+		LongContextPolicy: billing.LongContextPolicy{
+			Enabled:          true,
+			Threshold:        100,
+			InputMultiplier:  gatewayTestNumeric(5, -1),
+			OutputMultiplier: gatewayTestNumeric(5, -1),
+		},
+	})
+	if err != nil {
+		t.Fatalf("AuthorizeChat returned error: %v", err)
+	}
+
+	if !chatSettlementSameNumeric(ledgerService.preAuthorizeParams.EstimatedAmount, gatewayTestNumeric(5, 0)) {
+		t.Fatalf("expected standard authorization amount 5, got %#v", ledgerService.preAuthorizeParams.EstimatedAmount)
+	}
+}
+
 // TestChatAuthorizationRequiresCandidatePrices 验证无候选售价时拒绝冻结。
 func TestChatAuthorizationRequiresCandidatePrices(t *testing.T) {
 	service := NewChatAuthorizationService(&chatAuthorizationBilling{}, &chatAuthorizationLedger{}, 0)

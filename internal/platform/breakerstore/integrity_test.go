@@ -130,7 +130,7 @@ func readinessControlFixtures() []readinessControlFixture {
 	return []readinessControlFixture{
 		{
 			name: "route rate", target: func(store *Store) ControlTarget { return store.RouteRateLimitControl() },
-			revision: 2, payload: `{"rpm":11,"tpm":1100,"rpd":111}`,
+			revision: 2, payload: `{"rpm":11,"rpd":111}`,
 			setExpected: func(input *RuntimeReadinessInput, revision int64) { input.RouteRateLimitRevision = revision },
 		},
 		{

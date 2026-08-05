@@ -81,11 +81,10 @@ local function validate_attempt_permit_lifecycle()
   end
 
   if redis.call('HGET', permit_key, 'admission_enforced') ~= '1' then return 'runtime_sync_required' end
-  -- Channel RPM/RPD/TPM 桶已不再被 permit 冻结（§1.2/§8：并发是唯一渠道级硬门槛），
-  -- 因此没有三维容量事实需要在终态前校验。
-  local input_estimate = redis.call('HGET', permit_key, 'tpm_input_estimate')
-  local tpm_state = redis.call('HGET', permit_key, 'tpm_state')
-  if type(input_estimate) ~= 'string' or string.match(input_estimate, '^%d+$') == nil or tpm_state ~= 'held' then
+  -- permit 只冻结 Channel 并发（§1.2/§8：并发是唯一渠道级硬门槛）。
+  -- RPM/RPD/TPM 都不占额度，因此终态前没有容量事实需要校验。
+  local input_estimate = redis.call('HGET', permit_key, 'input_estimate')
+  if type(input_estimate) ~= 'string' or string.match(input_estimate, '^%d+$') == nil then
     return 'runtime_sync_required'
   end
   return nil

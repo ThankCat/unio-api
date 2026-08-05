@@ -13,7 +13,7 @@ func TestRouteRuntimeDTOUsesPartitionedObjectiveContract(t *testing.T) {
 	value := routeruntime.Runtime{
 		RouteID: 9, Mode: "balanced", RouteStatus: "enabled", ModelID: "openai/gpt", Protocol: "openai",
 		ObservedAt: now, RuntimeSyncState: "active", BreakerStoreAdmission: "normal",
-		RouteUsage: &routeruntime.RouteUsage{Concurrency: 3, RPM: 15, RPD: 40, TPM: 1200, ActiveUsers: 2},
+		RouteUsage: &routeruntime.RouteUsage{Concurrency: 3, RPM: 15, RPD: 40, ObservedTPM: 1200, ActiveUsers: 2},
 		Sources:    []routeruntime.Source{{Name: "breaker_store", Available: true, ObservedAt: now}},
 		ScoreConfig: routeruntime.ScoreConfig{
 			AlgorithmVersion: "objective_v1", Revision: 7,
@@ -30,7 +30,7 @@ func TestRouteRuntimeDTOUsesPartitionedObjectiveContract(t *testing.T) {
 			ProviderID: 4, ProviderName: "provider", ProviderStatus: "enabled",
 			Eligible: true, RuntimeRevisionCurrent: true, RuntimeSyncState: "active", BreakerStoreAdmission: "normal",
 			ConcurrencyUsed: 2, ConcurrencyLimit: 10, ConcurrencyRemaining: float64Pointer(0.8),
-			RPMUsed: 12, GlobalRPDUsed: 80, TPMUsed: 900, TokenCoveredCount: 10, TokenCoveragePct: 83.33,
+			RPMUsed: 12, GlobalRPDUsed: 80, ObservedTPM: 900, TokenCoveredCount: 10, TokenCoveragePct: 83.33,
 			AlgorithmVersion: "objective_v1", CostRatio: float64Pointer(0.4), Priority: 10,
 			CostScore: 60, ConcurrencyScore: 80, TTFTScore: 97.5, ErrorScore: 100, PriorityScore: 90,
 			CostWeightPct: 25, ConcurrencyWeightPct: 20, TTFTWeightPct: 25,

@@ -393,9 +393,14 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create request: %v", err)
 	}
+	record, err = store.MarkRequestRunning(ctx, record.ID)
+	if err != nil {
+		t.Fatalf("mark request running: %v", err)
+	}
 
 	attempt, err := store.CreateAttempt(ctx, CreateAttemptParams{
 		RequestRecordID:        record.ID,
+		PermitID:               "requestlog-attempt-permit-0",
 		AttemptIndex:           0,
 		ProviderID:             providerID,
 		ChannelID:              channelID,
@@ -415,6 +420,9 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 
 	if attempt.Status != AttemptStatusRunning {
 		t.Fatalf("expected running status, got %q", attempt.Status)
+	}
+	if attempt.PermitID == nil || *attempt.PermitID != "requestlog-attempt-permit-0" {
+		t.Fatalf("expected persisted permit id, got %v", attempt.PermitID)
 	}
 	if attempt.UpstreamResponseModel != nil || attempt.UpstreamStatusCode != nil || attempt.InternalErrorDetail != nil || attempt.CompletedAt != nil {
 		t.Fatalf("expected nullable attempt fields to be nil on create, got model=%v status=%v internal=%v completed=%v", attempt.UpstreamResponseModel, attempt.UpstreamStatusCode, attempt.InternalErrorDetail, attempt.CompletedAt)
@@ -474,6 +482,7 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 	// 失败字段映射在一个独立的 running attempt 上验证。
 	failingAttempt, err := store.CreateAttempt(ctx, CreateAttemptParams{
 		RequestRecordID:        record.ID,
+		PermitID:               "requestlog-attempt-permit-1",
 		AttemptIndex:           1,
 		ProviderID:             providerID,
 		ChannelID:              channelID,
@@ -511,6 +520,34 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 	}
 	if failed.InternalErrorDetail == nil || *failed.InternalErrorDetail != "provider returned 502 bad gateway" {
 		t.Fatalf("expected internal error detail, got %v", failed.InternalErrorDetail)
+	}
+
+	if _, err := store.MarkRequestFailed(ctx, MarkRequestFailedParams{
+		ID:                  record.ID,
+		ErrorCode:           "gateway_process_lost",
+		ErrorMessage:        "Request failed.",
+		InternalErrorDetail: "test terminal request guard",
+		CompletedAt:         time.Now(),
+	}); err != nil {
+		t.Fatalf("mark request failed: %v", err)
+	}
+	if _, err := store.CreateAttempt(ctx, CreateAttemptParams{
+		RequestRecordID:        record.ID,
+		PermitID:               "requestlog-attempt-permit-late",
+		AttemptIndex:           2,
+		ProviderID:             providerID,
+		ChannelID:              channelID,
+		AdapterKey:             "openai",
+		UpstreamModel:          "deepseek-v4-pro",
+		UpstreamProtocol:       ProtocolOpenAI,
+		OriginRevision:         int64ValuePtr(1),
+		ProviderStatusRevision: int64ValuePtr(1),
+		ChannelConfigRevision:  int64ValuePtr(1),
+		RoutingCandidateIndex:  intValuePtr(2),
+		UpstreamEndpoint:       UpstreamEndpointChatCompletions,
+		StartedAt:              time.Now(),
+	}); err == nil {
+		t.Fatal("terminal request must reject a late attempt")
 	}
 }
 

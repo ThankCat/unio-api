@@ -405,6 +405,12 @@ const (
 	// 不区分「用户名错」与「口令错」，避免向调用方泄露哪一项有效。
 	CodeAdminAuthInvalidCredentials Code = "adminauth_invalid_credentials"
 
+	// CodeAdminAuthLoginRateLimited 表示 admin 登录尝试超过失败窗口上限。
+	CodeAdminAuthLoginRateLimited Code = "adminauth_login_rate_limited"
+
+	// CodeAdminAuthLoginRateLimitStoreFailed 表示 admin 登录失败计数的 Redis 读写失败。
+	CodeAdminAuthLoginRateLimitStoreFailed Code = "adminauth_login_rate_limit_store_failed"
+
 	// CodeAdminAuthSessionExpired 表示会话 token 不存在或已过期，需要重新登录。
 	CodeAdminAuthSessionExpired Code = "adminauth_session_expired"
 

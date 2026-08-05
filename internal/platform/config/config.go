@@ -89,6 +89,14 @@ type AdminConfig struct {
 	Password string
 	// SessionTTL 来自 ADMIN_SESSION_TTL；登录会话在 Redis 中的有效期，默认 12h。
 	SessionTTL time.Duration
+	// LoginSourceFailureLimit 来自 ADMIN_LOGIN_SOURCE_FAILURE_LIMIT；同一来源地址与用户名组合在窗口内
+	// 允许的登录尝试次数，默认 5。
+	LoginSourceFailureLimit int
+	// LoginAccountFailureLimit 来自 ADMIN_LOGIN_ACCOUNT_FAILURE_LIMIT；同一用户名跨来源在窗口内
+	// 允许的登录尝试次数，默认 20。
+	LoginAccountFailureLimit int
+	// LoginFailureWindow 来自 ADMIN_LOGIN_FAILURE_WINDOW；登录尝试计数的固定窗口，默认 15m。
+	LoginFailureWindow time.Duration
 
 	// GatewayInternalURLs 来自 GATEWAY_INTERNAL_URLS（逗号分隔）；admin 拉取熔断快照的 gateway 基址列表。
 	// 空且 InternalToken 非空时，若 GATEWAY_HTTP_ADDR 形如 ":port" 则默认 http://127.0.0.1:port。
@@ -524,6 +532,36 @@ func Load() (Config, error) {
 			failure.WithMessage("ADMIN_SESSION_TTL must be greater than zero"),
 		)
 	}
+	adminLoginSourceFailureLimit, err := getEnvInt("ADMIN_LOGIN_SOURCE_FAILURE_LIMIT", 5)
+	if err != nil {
+		return Config{}, err
+	}
+	if adminLoginSourceFailureLimit <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("ADMIN_LOGIN_SOURCE_FAILURE_LIMIT must be greater than zero"),
+		)
+	}
+	adminLoginAccountFailureLimit, err := getEnvInt("ADMIN_LOGIN_ACCOUNT_FAILURE_LIMIT", 20)
+	if err != nil {
+		return Config{}, err
+	}
+	if adminLoginAccountFailureLimit <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("ADMIN_LOGIN_ACCOUNT_FAILURE_LIMIT must be greater than zero"),
+		)
+	}
+	adminLoginFailureWindow, err := getEnvDuration("ADMIN_LOGIN_FAILURE_WINDOW", 15*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	if adminLoginFailureWindow <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("ADMIN_LOGIN_FAILURE_WINDOW must be greater than zero"),
+		)
+	}
 
 	partialAssumedCacheReadRatio, err := getEnvFloat("PARTIAL_ASSUMED_CACHE_READ_RATIO", 0.6)
 	if err != nil {
@@ -665,13 +703,16 @@ func Load() (Config, error) {
 			MaxUpstreamResponseBytes:     int64(gatewayMaxUpstreamResponseMB) << 20,
 		},
 		Admin: AdminConfig{
-			HTTPAddr:             getEnv("ADMIN_HTTP_ADDR", ":8521"),
-			Username:             getEnv("ADMIN_USERNAME", "admin"),
-			Password:             getEnv("ADMIN_PASSWORD", ""),
-			SessionTTL:           adminSessionTTL,
-			GatewayInternalURLs:  resolveGatewayInternalURLs(),
-			GatewayInternalToken: getEnv("GATEWAY_INTERNAL_TOKEN", ""),
-			LokiURL:              getEnv("LOKI_URL", "http://127.0.0.1:3100"),
+			HTTPAddr:                 getEnv("ADMIN_HTTP_ADDR", ":8521"),
+			Username:                 getEnv("ADMIN_USERNAME", "admin"),
+			Password:                 getEnv("ADMIN_PASSWORD", ""),
+			SessionTTL:               adminSessionTTL,
+			LoginSourceFailureLimit:  adminLoginSourceFailureLimit,
+			LoginAccountFailureLimit: adminLoginAccountFailureLimit,
+			LoginFailureWindow:       adminLoginFailureWindow,
+			GatewayInternalURLs:      resolveGatewayInternalURLs(),
+			GatewayInternalToken:     getEnv("GATEWAY_INTERNAL_TOKEN", ""),
+			LokiURL:                  getEnv("LOKI_URL", "http://127.0.0.1:3100"),
 		},
 		TokenEstimate: TokenEstimateConfig{
 			CountMedia:        tokenEstimateCountMedia,

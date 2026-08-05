@@ -25,6 +25,9 @@ func TestRoutingDecisionTraceQueryCompletionAndRequestCascade(t *testing.T) {
 	}
 	requestID := fmt.Sprintf("routing-trace-request-%d", suffix)
 	record := createRequestRecordForTest(t, ctx, queries, identity, requestID)
+	if _, err := queries.MarkRequestRunning(ctx, record.ID); err != nil {
+		t.Fatalf("mark request running: %v", err)
+	}
 	attempt, err := queries.CreateRequestAttempt(ctx, withRequestAttemptRuntimeIdentity(t, ctx, tx, channelID, sqlc.CreateRequestAttemptParams{
 		RequestRecordID: record.ID, AttemptIndex: 0, ProviderID: providerID, ChannelID: channelID,
 		AdapterKey: "openai", UpstreamModel: "deepseek-v4-pro", UpstreamProtocol: "openai",

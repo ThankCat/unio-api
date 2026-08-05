@@ -193,16 +193,21 @@ func (s attemptRuntimeFactsStub) Routing(context.Context) (runtimefacts.RoutingR
 	return s.routing, nil
 }
 
-type attemptUsageSessionStub struct {
+type attemptRequestSessionStub struct {
 	requestID string
 }
 
-func (s *attemptUsageSessionStub) Reserve(context.Context, int64) error { return nil }
-func (s *attemptUsageSessionStub) PublishAuthoritativeUsage(int64) bool { return true }
-func (s *attemptUsageSessionStub) MarkUpstreamReached() bool            { return true }
-func (s *attemptUsageSessionStub) BindAttempt(in *breakerstore.AcquireAttemptInput) error {
+func (s *attemptRequestSessionStub) BindAttempt(in *breakerstore.AcquireAttemptInput) error {
 	in.RequestAdmissionID = s.requestID
 	return nil
+}
+
+func (*attemptRequestSessionStub) SnapshotMany(context.Context, int64, []breakerstore.SnapshotCandidateInput) (breakerstore.SnapshotManyResult, error) {
+	return breakerstore.SnapshotManyResult{}, nil
+}
+
+func (*attemptRequestSessionStub) AggregateChannelSamples(context.Context, []int64) (map[int64]breakerstore.ChannelSampleWindow, error) {
+	return nil, nil
 }
 
 func TestAttemptPermitManagerRequiresOneIntegrityEpoch(t *testing.T) {
@@ -243,7 +248,7 @@ func TestAttemptPermitManagerBuildsBoundAuthoritativeInput(t *testing.T) {
 		routing: runtimefacts.RoutingRevisions{Integrity: integrity, CircuitBreaker: 5, RoutingBalance: 6},
 	}, AttemptPermitManagerOptions{})
 	manager.newPermitID = func() string { return "permit-1" }
-	ctx := requestadmission.ContextWithUsageSession(context.Background(), &attemptUsageSessionStub{requestID: "request-token"})
+	ctx := requestadmission.ContextWithRequestSession(context.Background(), &attemptRequestSessionStub{requestID: "request-token"})
 	candidate := routing.ChatRouteCandidate{
 		ModelDBID: 11, ProviderID: 12, OriginRevision: 13,
 		ProviderStatusRevision: 14, ChannelConfigRevision: 15,
@@ -298,7 +303,7 @@ func TestAttemptPermitMetricsFollowPermitOwnershipAndStaleFinish(t *testing.T) {
 		routing: runtimefacts.RoutingRevisions{Integrity: integrity, CircuitBreaker: 5, RoutingBalance: 6},
 	}, AttemptPermitManagerOptions{Metrics: metrics})
 	manager.newPermitID = func() string { return "permit-metrics" }
-	ctx := requestadmission.ContextWithUsageSession(context.Background(), &attemptUsageSessionStub{requestID: "request-token"})
+	ctx := requestadmission.ContextWithRequestSession(context.Background(), &attemptRequestSessionStub{requestID: "request-token"})
 	_, owner, err := manager.Acquire(ctx, AttemptPermitAcquireParams{
 		Candidate: routing.ChatRouteCandidate{
 			ModelDBID: 11, ProviderID: 12, OriginRevision: 13,
@@ -686,6 +691,7 @@ func TestInvokeNonStreamAttemptUsesTransportBoundary(t *testing.T) {
 				routing.ChatRouteCandidate{Channel: channel.Runtime{ID: 17}},
 				requestlog.AttemptRecord{ID: 42},
 				owner,
+				0,
 				func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 					if tc.start {
 						adapter.MarkTransportStarted(ctx)
@@ -724,6 +730,7 @@ func TestInvokeNonStreamAttemptDoesNotFeedbackBeforeTransport(t *testing.T) {
 		routing.ChatRouteCandidate{Channel: channel.Runtime{ID: 17}},
 		requestlog.AttemptRecord{ID: 42},
 		owner,
+		0,
 		func(context.Context, routing.ChatRouteCandidate) (AttemptSuccess, error) {
 			return AttemptSuccess{}, rateErr
 		},
@@ -756,6 +763,7 @@ func TestInvokeNonStreamAttemptFailsClosedOnRuntimeFeedbackError(t *testing.T) {
 		routing.ChatRouteCandidate{Channel: channel.Runtime{ID: 17}},
 		requestlog.AttemptRecord{ID: 42},
 		owner,
+		0,
 		func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 			adapter.MarkTransportStarted(ctx)
 			adapter.MarkRequestWritten(ctx, nil)
@@ -792,6 +800,7 @@ func TestInvokeNonStreamAttemptAuditsUnknownFinishResult(t *testing.T) {
 		routing.ChatRouteCandidate{Channel: channel.Runtime{ID: 17}},
 		requestlog.AttemptRecord{ID: 42},
 		owner,
+		0,
 		func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 			adapter.MarkTransportStarted(ctx)
 			adapter.MarkRequestWritten(ctx, nil)
@@ -829,6 +838,7 @@ func TestInvokeNonStreamAttemptStopsFallbackWhenFailedTransportFinishIsUnknown(t
 		routing.ChatRouteCandidate{Channel: channel.Runtime{ID: 17}},
 		requestlog.AttemptRecord{ID: 42},
 		owner,
+		0,
 		func(ctx context.Context, _ routing.ChatRouteCandidate) (AttemptSuccess, error) {
 			adapter.MarkTransportStarted(ctx)
 			adapter.MarkRequestWritten(ctx, nil)
@@ -936,7 +946,7 @@ func TestStreamFinishTimeoutEvidenceUsesFirstTokenTiming(t *testing.T) {
 	}
 }
 
-func TestStreamFinishUsesAuthoritativeTPMWhenTailFails(t *testing.T) {
+func TestStreamFinishKeepsPlainTailErrorOutOfUpstreamAttribution(t *testing.T) {
 	facts := &adapter.ResponseFacts{
 		Usage: usage.Facts{
 			UncachedInputTokens:      usage.KnownTokens(11),
@@ -950,10 +960,7 @@ func TestStreamFinishUsesAuthoritativeTPMWhenTailFails(t *testing.T) {
 		UsageSource: usage.SourceUpstreamStream,
 	}
 	got := streamFinishOutcome(facts, AttemptTimingFacts{}, errors.New("stream tail failed"))
-	if got.ActualTotalTokens == nil || *got.ActualTotalTokens != 23 {
-		t.Fatalf("authoritative TPM was not reconciled: %+v", got)
-	}
-	if got.ChannelOutcome != breakerstore.OutcomeIgnored {
+	if got.ChannelOutcome != breakerstore.OutcomeIgnored || got.ProviderOutcome != breakerstore.OutcomeIgnored {
 		t.Fatalf("plain local tail error must not become an upstream failure: %+v", got)
 	}
 }

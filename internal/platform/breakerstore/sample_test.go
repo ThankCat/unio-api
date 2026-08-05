@@ -26,7 +26,7 @@ func TestRecordChannelSampleAggregatesArithmeticMean(t *testing.T) {
 		}
 	}
 	// 三个 attempt：当前分钟 / 5 分钟前 / 10 分钟前，TTFT 1000/3000/2000（均值 2000）。
-	mustRecord(ChannelSampleInput{ChannelID: ch, AttemptID: 1, TTFTMs: sampleInt(1000), ErrorEligible: true, ObservedRequest: true, TokenCount: sampleInt(120), TokenCovered: true}, now)
+	mustRecord(ChannelSampleInput{ChannelID: ch, AttemptID: 1, TTFTMs: sampleInt(1000), ErrorEligible: true, ObservedRequest: true}, now)
 	mustRecord(ChannelSampleInput{ChannelID: ch, AttemptID: 2, TTFTMs: sampleInt(3000), ErrorEligible: true, ObservedRequest: true}, now.Add(-5*time.Minute))
 	mustRecord(ChannelSampleInput{ChannelID: ch, AttemptID: 3, TTFTMs: sampleInt(2000), ErrorEligible: true, IsError: true, ObservedRequest: true}, now.Add(-10*time.Minute))
 
@@ -46,9 +46,6 @@ func TestRecordChannelSampleAggregatesArithmeticMean(t *testing.T) {
 	}
 	if w.RPD != 3 {
 		t.Fatalf("RPD (utc day) = %d, want 3", w.RPD)
-	}
-	if w.TPM != 120 || w.TokenCoveredCount != 1 {
-		t.Fatalf("TPM/covered = %d/%d, want 120/1", w.TPM, w.TokenCoveredCount)
 	}
 }
 
@@ -109,7 +106,7 @@ func TestAggregateChannelSamplesNoSampleIsZero(t *testing.T) {
 		t.Fatalf("aggregate: %v", err)
 	}
 	w := windows[ch]
-	if w.TTFTCount != 0 || w.ErrorAttemptCount != 0 || w.RPM != 0 || w.RPD != 0 || w.TPM != 0 {
+	if w.TTFTCount != 0 || w.ErrorAttemptCount != 0 || w.RPM != 0 || w.RPD != 0 {
 		t.Fatalf("no-sample window must be zero: %+v", w)
 	}
 }

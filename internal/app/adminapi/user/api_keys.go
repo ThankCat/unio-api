@@ -81,11 +81,7 @@ type apiKeyDTO struct {
 	SpentTotal string  `json:"spent_total"`
 	// RouteID 线路必填、恒有值（DB NOT NULL），故非空整型；前端按 number 读取。
 	RouteID int64 `json:"route_id"`
-	// RPMLimit/TPMLimit/RPDLimit：已废弃（DEC-027 限流已归线路，改由 route 决定、按 (线路,用户) 计数）。
-	// 保留字段仅为兼容旧响应，恒为 null；限流请在线路上配置。
-	RPMLimit   *int64  `json:"rpm_limit"`
-	TPMLimit   *int64  `json:"tpm_limit"`
-	RPDLimit   *int64  `json:"rpd_limit"`
+	// 这里没有 Key 级限流字段：DEC-027 之后限流全部归线路，按 (线路, 用户) 计数。
 	LastUsedAt *string `json:"last_used_at"`
 	ExpiresAt  *string `json:"expires_at"`
 	DisabledAt *string `json:"disabled_at"`
@@ -254,9 +250,6 @@ func toAPIKeyDTO(k customer.APIKey) apiKeyDTO {
 		SpendLimit: k.SpendLimit,
 		SpentTotal: k.SpentTotal,
 		RouteID:    int64Value(k.RouteID),
-		RPMLimit:   k.RPMLimit,
-		TPMLimit:   k.TPMLimit,
-		RPDLimit:   k.RPDLimit,
 		LastUsedAt: adminhttp.RFC3339Ptr(k.LastUsedAt),
 		ExpiresAt:  adminhttp.RFC3339Ptr(k.ExpiresAt),
 		DisabledAt: adminhttp.RFC3339Ptr(k.DisabledAt),

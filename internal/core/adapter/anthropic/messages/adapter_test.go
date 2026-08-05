@@ -2,6 +2,7 @@ package messages
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,61 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
+
+func TestAdapterMessagesRequiresCompleteUsage(t *testing.T) {
+	tests := []struct {
+		name    string
+		usage   string
+		wantErr bool
+	}{
+		{name: "usage missing", wantErr: true},
+		{name: "usage null", usage: `,"usage":null`, wantErr: true},
+		{name: "input tokens missing", usage: `,"usage":{"output_tokens":2}`, wantErr: true},
+		{name: "output tokens missing", usage: `,"usage":{"input_tokens":3}`, wantErr: true},
+		{name: "explicit zero tokens", usage: `,"usage":{"input_tokens":0,"output_tokens":0}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("request-id", "req-anthropic-usage")
+				_, _ = w.Write([]byte(`{"id":"msg_usage","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"ok"}]` + tt.usage + `}`))
+			}))
+			defer server.Close()
+
+			resp, err := NewAdapter(server.Client()).Messages(
+				context.Background(),
+				channel.Runtime{Origin: server.URL, APIKey: "test-secret"},
+				MessageRequest{
+					Model:     "claude-test",
+					MaxTokens: intPtr(16),
+					Messages:  []Message{{Role: "user", Content: []byte(`"hello"`)}},
+				},
+			)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected missing usage error")
+				}
+				if !errors.Is(err, ErrMessagesMissingUsage) {
+					t.Fatalf("expected ErrMessagesMissingUsage, got %v", err)
+				}
+				if failure.CodeOf(err) != failure.CodeAdapterInvalidResponse {
+					t.Fatalf("failure code = %q, want %q", failure.CodeOf(err), failure.CodeAdapterInvalidResponse)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Messages returned err for explicit zero usage: %v", err)
+			}
+			if resp == nil || resp.Usage.InputTokens != 0 || resp.Usage.OutputTokens != 0 {
+				t.Fatalf("explicit zero usage = %+v, want 0 input and 0 output", resp)
+			}
+		})
+	}
+}
 
 func TestAdapterStreamMessagesWithholdsMessageStopAndReturnsFacts(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

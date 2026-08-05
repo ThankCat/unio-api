@@ -291,6 +291,36 @@ func TestAdapterChatCompletionsReturnsErrorForMissingUsage(t *testing.T) {
 				}
 			}`,
 		},
+		{
+			name: "negative usage token count",
+			body: `{
+				"id": "chatcmpl_negative_usage",
+				"model": "gpt-4.1",
+				"choices": [
+					{"message": {"role": "assistant", "content": "hello"}}
+				],
+				"usage": {
+					"prompt_tokens": -1,
+					"completion_tokens": 2,
+					"total_tokens": 1
+				}
+			}`,
+		},
+		{
+			name: "inconsistent total usage",
+			body: `{
+				"id": "chatcmpl_inconsistent_usage",
+				"model": "gpt-4.1",
+				"choices": [
+					{"message": {"role": "assistant", "content": "hello"}}
+				],
+				"usage": {
+					"prompt_tokens": 3,
+					"completion_tokens": 2,
+					"total_tokens": 4
+				}
+			}`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -323,7 +353,33 @@ func TestAdapterChatCompletionsReturnsErrorForMissingUsage(t *testing.T) {
 			if failure.CodeOf(err) != failure.CodeAdapterInvalidResponse {
 				t.Fatalf("expected failure code %q, got %q", failure.CodeAdapterInvalidResponse, failure.CodeOf(err))
 			}
+			if !errors.Is(err, ErrChatUnreliableUsage) {
+				t.Fatalf("expected ErrChatUnreliableUsage, got %v", err)
+			}
 		})
+	}
+}
+
+func TestAdapterChatCompletionsAcceptsExplicitZeroUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl_zero_usage",
+			"model":"gpt-4.1",
+			"choices":[{"message":{"role":"assistant","content":""},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}
+		}`))
+	}))
+	defer server.Close()
+
+	resp, err := newTestAdapter(server.Client()).ChatCompletions(context.Background(), channel.Runtime{
+		Origin: server.URL, APIKey: "test-secret", ResponseTimeout: 30 * time.Second,
+	}, ChatRequest{Model: "gpt-4.1", Messages: []ChatMessage{{Role: "user", Content: jsonContent("hello")}}})
+	if err != nil {
+		t.Fatalf("explicit zero usage must be accepted: %v", err)
+	}
+	if resp.Usage.PromptTokens != 0 || resp.Usage.CompletionTokens != 0 || resp.Usage.TotalTokens != 0 {
+		t.Fatalf("usage = %+v, want explicit 0/0/0", resp.Usage)
 	}
 }
 

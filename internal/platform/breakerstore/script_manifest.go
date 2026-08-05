@@ -23,8 +23,10 @@ var luaScriptManifest = []luaScriptSpec{
 	{name: "permission.recheck_claim", main: "lua/ops/permission_recheck_claim.lua"},
 	{name: "permission.recheck_complete", main: "lua/ops/permission_recheck_complete.lua"},
 
+	{name: "observation.record_tpm", main: "lua/ops/record_tpm_observation.lua"},
+	{name: "observation.correct_tpm", main: "lua/ops/correct_tpm_observation.lua"},
+
 	{name: "request.acquire", helpers: []string{luaRedisInstancePath, luaAuthoritativePath}, main: "lua/ops/acquire_request_admission.lua"},
-	{name: "request.reserve_tpm", helpers: []string{luaRedisInstancePath}, main: "lua/ops/reserve_request_tokens.lua"},
 	{name: "request.renew", main: "lua/ops/renew_request_admission.lua"},
 	{name: "request.finish", main: "lua/ops/finish_request_admission.lua"},
 

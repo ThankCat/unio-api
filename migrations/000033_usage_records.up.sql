@@ -60,6 +60,8 @@ ALTER TABLE ONLY public.usage_records
 ALTER TABLE ONLY public.usage_records
     ADD CONSTRAINT usage_records_request_record_id_key UNIQUE (request_record_id);
 
+CREATE INDEX idx_usage_records_created_at_id ON public.usage_records USING btree (created_at DESC, id DESC);
+
 ALTER TABLE ONLY public.usage_records
     ADD CONSTRAINT usage_records_request_record_id_fkey FOREIGN KEY (request_record_id) REFERENCES public.request_records(id);
 

@@ -291,6 +291,15 @@ func TestLoadInfrastructureDefaults(t *testing.T) {
 	if cfg.Admin.HTTPAddr != ":8521" {
 		t.Fatalf("expected admin http addr %q, got %q", ":8521", cfg.Admin.HTTPAddr)
 	}
+	if cfg.Admin.LoginSourceFailureLimit != 5 {
+		t.Fatalf("expected admin login source failure limit %d, got %d", 5, cfg.Admin.LoginSourceFailureLimit)
+	}
+	if cfg.Admin.LoginAccountFailureLimit != 20 {
+		t.Fatalf("expected admin login account failure limit %d, got %d", 20, cfg.Admin.LoginAccountFailureLimit)
+	}
+	if cfg.Admin.LoginFailureWindow != 15*time.Minute {
+		t.Fatalf("expected admin login failure window %v, got %v", 15*time.Minute, cfg.Admin.LoginFailureWindow)
+	}
 	if cfg.DB.MaxConns != 10 {
 		t.Fatalf("expected postgres max conns %d, got %d", 10, cfg.DB.MaxConns)
 	}
@@ -361,6 +370,9 @@ func TestLoadInfrastructureOverrides(t *testing.T) {
 
 	t.Setenv("GATEWAY_HTTP_ADDR", ":9520")
 	t.Setenv("ADMIN_HTTP_ADDR", ":9521")
+	t.Setenv("ADMIN_LOGIN_SOURCE_FAILURE_LIMIT", "7")
+	t.Setenv("ADMIN_LOGIN_ACCOUNT_FAILURE_LIMIT", "30")
+	t.Setenv("ADMIN_LOGIN_FAILURE_WINDOW", "25m")
 	t.Setenv("HTTP_READ_TIMEOUT", "3s")
 	t.Setenv("HTTP_WRITE_TIMEOUT", "4s")
 	t.Setenv("HTTP_IDLE_TIMEOUT", "5s")
@@ -418,6 +430,15 @@ func TestLoadInfrastructureOverrides(t *testing.T) {
 	}
 	if cfg.Admin.HTTPAddr != ":9521" {
 		t.Fatalf("expected admin http addr %q, got %q", ":9521", cfg.Admin.HTTPAddr)
+	}
+	if cfg.Admin.LoginSourceFailureLimit != 7 {
+		t.Fatalf("expected admin login source failure limit %d, got %d", 7, cfg.Admin.LoginSourceFailureLimit)
+	}
+	if cfg.Admin.LoginAccountFailureLimit != 30 {
+		t.Fatalf("expected admin login account failure limit %d, got %d", 30, cfg.Admin.LoginAccountFailureLimit)
+	}
+	if cfg.Admin.LoginFailureWindow != 25*time.Minute {
+		t.Fatalf("expected admin login failure window %v, got %v", 25*time.Minute, cfg.Admin.LoginFailureWindow)
 	}
 	if cfg.DB.MaxConns != 20 {
 		t.Fatalf("expected postgres max conns %d, got %d", 20, cfg.DB.MaxConns)
@@ -494,6 +515,28 @@ func TestLoadInvalidDuration(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 	assertConfigFailure(t, err, failure.CodeConfigInvalid)
+}
+
+func TestLoadRejectsInvalidAdminLoginLimits(t *testing.T) {
+	for _, tc := range []struct {
+		key   string
+		value string
+	}{
+		{key: "ADMIN_LOGIN_SOURCE_FAILURE_LIMIT", value: "0"},
+		{key: "ADMIN_LOGIN_ACCOUNT_FAILURE_LIMIT", value: "-1"},
+		{key: "ADMIN_LOGIN_FAILURE_WINDOW", value: "0s"},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			clearInfrastructureEnv(t)
+			t.Setenv(tc.key, tc.value)
+
+			_, err := Load()
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			assertConfigFailure(t, err, failure.CodeConfigInvalid)
+		})
+	}
 }
 
 func TestLoadInvalidMaxJSONBodyMB(t *testing.T) {
@@ -580,6 +623,9 @@ func clearInfrastructureEnv(t *testing.T) {
 	for _, key := range []string{
 		"GATEWAY_HTTP_ADDR",
 		"ADMIN_HTTP_ADDR",
+		"ADMIN_LOGIN_SOURCE_FAILURE_LIMIT",
+		"ADMIN_LOGIN_ACCOUNT_FAILURE_LIMIT",
+		"ADMIN_LOGIN_FAILURE_WINDOW",
 		"HTTP_READ_TIMEOUT",
 		"HTTP_WRITE_TIMEOUT",
 		"HTTP_IDLE_TIMEOUT",

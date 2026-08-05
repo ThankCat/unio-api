@@ -82,6 +82,21 @@ func ratToNumeric(value *big.Rat, scale int32) pgtype.Numeric {
 	}
 }
 
+// sumRoundedNumerics 汇总一组由 ratToNumeric 生成、已经具有相同固定精度的金额。
+// 成本总额必须由最终持久化的分项相加，不能再次从未舍入原值独立计算。
+func sumRoundedNumerics(scale int32, values ...pgtype.Numeric) pgtype.Numeric {
+	total := new(big.Int)
+	for _, value := range values {
+		total.Add(total, value.Int)
+	}
+
+	return pgtype.Numeric{
+		Int:   total,
+		Exp:   -scale,
+		Valid: true,
+	}
+}
+
 // roundHalfUp 对非负有理数执行四舍五入。
 func roundHalfUp(value *big.Rat) *big.Int {
 	quotient, remainder := new(big.Int), new(big.Int)

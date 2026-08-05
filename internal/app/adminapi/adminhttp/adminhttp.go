@@ -99,6 +99,8 @@ func adminErrorStatus(code failure.Code) int {
 		return http.StatusNotFound
 	case failure.CodeAdminConflict:
 		return http.StatusConflict
+	case failure.CodeAdminAuthLoginRateLimited:
+		return http.StatusTooManyRequests
 	// M7 手工调额经由 ledger：把账本业务错误映射成可读的 4xx，而非笼统 500。
 	case failure.CodeLedgerInvalidAmount:
 		return http.StatusBadRequest
@@ -116,7 +118,9 @@ func adminErrorStatus(code failure.Code) int {
 	// Redis/BreakerStore 基础设施故障 → 503（准入/运行态数据源不可用），与普通 500 区分。
 	case failure.CodeGatewayBreakerStoreUnavailable,
 		failure.CodeDependencyRedisUnavailable,
-		failure.CodeDependencyLokiUnavailable:
+		failure.CodeDependencyLokiUnavailable,
+		failure.CodeAdminSessionStoreFailed,
+		failure.CodeAdminAuthLoginRateLimitStoreFailed:
 		return http.StatusServiceUnavailable
 	}
 

@@ -44,18 +44,34 @@ func (s Service) CalculateProviderCost(facts usage.Facts, cost ProviderCostSnaps
 	}
 
 	amounts := calculateTokenAmountBreakdown(billableUsage, rates)
+	uncachedInputCostAmount := ratToNumeric(amounts.UncachedInputAmount, amountDecimalScale)
+	cacheReadInputCostAmount := ratToNumeric(amounts.CacheReadInputAmount, amountDecimalScale)
+	cacheWrite5mInputCostAmount := ratToNumeric(amounts.CacheWrite5mInputAmount, amountDecimalScale)
+	cacheWrite1hInputCostAmount := ratToNumeric(amounts.CacheWrite1hInputAmount, amountDecimalScale)
+	cacheWrite30mInputCostAmount := ratToNumeric(amounts.CacheWrite30mInputAmount, amountDecimalScale)
+	outputCostAmount := ratToNumeric(amounts.OutputAmount, amountDecimalScale)
+	reasoningOutputCostAmount := ratToNumeric(amounts.ReasoningOutputAmount, amountDecimalScale)
 
 	return ProviderCost{
-		UncachedInputCostAmount:      ratToNumeric(amounts.UncachedInputAmount, amountDecimalScale),
-		CacheReadInputCostAmount:     ratToNumeric(amounts.CacheReadInputAmount, amountDecimalScale),
-		CacheWrite5mInputCostAmount:  ratToNumeric(amounts.CacheWrite5mInputAmount, amountDecimalScale),
-		CacheWrite1hInputCostAmount:  ratToNumeric(amounts.CacheWrite1hInputAmount, amountDecimalScale),
-		CacheWrite30mInputCostAmount: ratToNumeric(amounts.CacheWrite30mInputAmount, amountDecimalScale),
-		OutputCostAmount:             ratToNumeric(amounts.OutputAmount, amountDecimalScale),
-		ReasoningOutputCostAmount:    ratToNumeric(amounts.ReasoningOutputAmount, amountDecimalScale),
-		TotalCostAmount:              ratToNumeric(amounts.TotalAmount, amountDecimalScale),
-		Currency:                     rates.Currency,
-		FormulaVersion:               rates.FormulaVersion,
+		UncachedInputCostAmount:      uncachedInputCostAmount,
+		CacheReadInputCostAmount:     cacheReadInputCostAmount,
+		CacheWrite5mInputCostAmount:  cacheWrite5mInputCostAmount,
+		CacheWrite1hInputCostAmount:  cacheWrite1hInputCostAmount,
+		CacheWrite30mInputCostAmount: cacheWrite30mInputCostAmount,
+		OutputCostAmount:             outputCostAmount,
+		ReasoningOutputCostAmount:    reasoningOutputCostAmount,
+		TotalCostAmount: sumRoundedNumerics(
+			amountDecimalScale,
+			uncachedInputCostAmount,
+			cacheReadInputCostAmount,
+			cacheWrite5mInputCostAmount,
+			cacheWrite1hInputCostAmount,
+			cacheWrite30mInputCostAmount,
+			outputCostAmount,
+			reasoningOutputCostAmount,
+		),
+		Currency:       rates.Currency,
+		FormulaVersion: rates.FormulaVersion,
 	}, nil
 }
 

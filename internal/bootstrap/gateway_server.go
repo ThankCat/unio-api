@@ -27,6 +27,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/readiness"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/runtimefacts"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/tpmobserver"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -51,10 +52,14 @@ type GatewayServerApp struct {
 
 	tracer      *tracing.Provider
 	stopApplier context.CancelFunc
+	tpmObserver *tpmobserver.Observer
 }
 
 // Shutdown 停止后台配置 applier/runtime-control reconciler，并释放可观测性资源。
 // 未启用 tracing 时为安全空操作。
+//
+// TPM 观测器在 cancel 之后要等它退出：最后一个 flush 周期里的 provisional 观测只存在内存中，
+// 不等就会白丢一秒的数据。等待本身受 ctx 约束，不会拖长关停。
 func (a *GatewayServerApp) Shutdown(ctx context.Context) error {
 	if a == nil {
 		return nil
@@ -62,6 +67,7 @@ func (a *GatewayServerApp) Shutdown(ctx context.Context) error {
 	if a.stopApplier != nil {
 		a.stopApplier()
 	}
+	a.tpmObserver.Wait(ctx)
 
 	return a.tracer.Shutdown(ctx)
 }
@@ -274,10 +280,18 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	chatCompletionService.SetRoutingTraceRecorder(routingTraceRecorder)
 	responsesService.SetRoutingTraceRecorder(routingTraceRecorder)
 	messagesService.SetRoutingTraceRecorder(routingTraceRecorder)
-	// 30 分钟评分样本 / RPM/RPD/TPM 观测记录器（§12）：与 admission 解耦的 best-effort 写入，共用 breaker store。
+	// 30 分钟评分样本记录器（§12）：与 admission 解耦的 best-effort 写入，共用 breaker store。
 	chatCompletionService.SetChannelSampleRecorder(breakerStore)
 	responsesService.SetChannelSampleRecorder(breakerStore)
 	messagesService.SetChannelSampleRecorder(breakerStore)
+	// 分钟级 TPM 观测器（§8）：只描述已观察到的输入/输出 token，不参与准入、评分或计费。
+	tpmObserver := tpmobserver.New(breakerStore, tpmobserver.Options{
+		Logger:  deps.Logger,
+		Metrics: metricsRecorder,
+	})
+	chatCompletionService.SetTPMObserver(tpmObserver)
+	responsesService.SetTPMObserver(tpmObserver)
+	messagesService.SetTPMObserver(tpmObserver)
 	// 成本敞口记录器：bill-on-disconnect 渠道的失败/取消路径
 	// 记平台成本敞口；假定输出兜底与 authorization 的进程级兜底同源，保证敞口与冻结上界口径一致。
 	costExposureRecorder := newCostExposureStore(queries)
@@ -334,6 +348,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	applierCtx, stopApplier := context.WithCancel(context.Background())
 	applier.safeApply(applierCtx)
 	go applier.run(applierCtx, settingsApplyInterval)
+	go tpmObserver.Run(applierCtx)
 	if runtimeControlPool != nil {
 		go runRuntimeControlReconciler(
 			applierCtx, runtimeControlPool, settingsStore, sharedBreakerStore, runtimeTelemetry,
@@ -364,5 +379,6 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		Handler:     handler,
 		tracer:      tracerProvider,
 		stopApplier: stopApplier,
+		tpmObserver: tpmObserver,
 	}, nil
 }

@@ -1,7 +1,7 @@
 // Package adminapi 组装 admin 管理端（/admin/v1）的 HTTP 路由。
 //
-// admin 表面只服务平台管理员，认证走 admin 静态 token（core/adminauth），与客户 Gateway（/v1）
-// 严格隔离。各业务模块的 handler / DTO / service 接口按模块拆到子包（overview/provider/channel/
+// admin 表面只服务平台管理员，登录使用固定用户名口令换取 Redis 会话 token，与客户 Gateway（/v1）
+// 认证严格隔离。各业务模块的 handler / DTO / service 接口按模块拆到子包（overview/provider/channel/
 // model/route/capability/user/requests/ledger/system，镜像 internal/service/admin 的目录结构），
 // 共用的响应/请求/分页/排序小工具在 adminapi/adminhttp 叶子包。本文件只做依赖聚合与路由编排。
 package adminapi
@@ -37,8 +37,9 @@ type RouterDeps struct {
 	Logger             *zap.Logger
 	AdminAuthenticator middleware.AdminAuthenticator
 
-	// CredentialAuthenticator 校验登录口令，Sessions 签发与吊销会话 token。
+	// CredentialAuthenticator 校验登录口令，LoginAttemptLimiter 限制失败尝试，Sessions 签发与吊销会话 token。
 	CredentialAuthenticator CredentialAuthenticator
+	LoginAttemptLimiter     LoginAttemptLimiter
 	Sessions                SessionIssuer
 	SessionTTLSeconds       int64
 
@@ -141,7 +142,12 @@ func NewRouter(deps RouterDeps) http.Handler {
 		// login 是 admin 表面唯一不需要 token 的端点：没有它就无法取得 token。
 		// 单独分组挂载，确保 AdminAuth 只作用于其余全部端点。
 		r.Group(func(r chi.Router) {
-			r.Post("/login", handleLogin(deps.CredentialAuthenticator, deps.Sessions, deps.SessionTTLSeconds))
+			r.Post("/login", handleLogin(
+				deps.CredentialAuthenticator,
+				deps.LoginAttemptLimiter,
+				deps.Sessions,
+				deps.SessionTTLSeconds,
+			))
 		})
 
 		r.Group(func(r chi.Router) {

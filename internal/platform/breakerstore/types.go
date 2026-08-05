@@ -250,9 +250,6 @@ type FinishOutcome struct {
 	// ProviderEvidence 表示本次 Channel failure 需要满足短窗 distinct Channel + model 门槛后，
 	// 才能在同一个 Redis Finish 中原子升级为 Provider eligible_failure。
 	ProviderEvidence ProviderEvidenceCategory
-
-	// ActualTotalTokens 是完整、可靠且包含 cache read/write 的实际总量；nil 时保留输入估算。
-	ActualTotalTokens *int64
 }
 
 type RequestWriteState string

@@ -47,6 +47,9 @@ type Store struct {
 	permissionRecheckClaim    *redis.Script
 	permissionRecheckComplete *redis.Script
 
+	recordTPMObservation  *redis.Script
+	correctTPMObservation *redis.Script
+
 	controlPrepare          *redis.Script
 	controlCommit           *redis.Script
 	controlAbort            *redis.Script
@@ -57,7 +60,6 @@ type Store struct {
 	controlRecoverAborted   *redis.Script
 
 	acquireRequest *redis.Script
-	reserveRequest *redis.Script
 	renewRequest   *redis.Script
 	finishRequest  *redis.Script
 
@@ -115,6 +117,9 @@ func NewStore(client redis.Cmdable, keyNamespace string, observers ...OperationO
 		permissionRecheckClaim:    redis.NewScript(luaScript("permission.recheck_claim")),
 		permissionRecheckComplete: redis.NewScript(luaScript("permission.recheck_complete")),
 
+		recordTPMObservation:  redis.NewScript(luaScript("observation.record_tpm")),
+		correctTPMObservation: redis.NewScript(luaScript("observation.correct_tpm")),
+
 		controlPrepare:          redis.NewScript(luaScript("runtime.control_prepare")),
 		controlCommit:           redis.NewScript(luaScript("runtime.control_commit")),
 		controlAbort:            redis.NewScript(luaScript("runtime.control_abort")),
@@ -125,7 +130,6 @@ func NewStore(client redis.Cmdable, keyNamespace string, observers ...OperationO
 		controlRecoverAborted:   redis.NewScript(luaScript("runtime.control_recover_aborted")),
 
 		acquireRequest: redis.NewScript(luaScript("request.acquire")),
-		reserveRequest: redis.NewScript(luaScript("request.reserve_tpm")),
 		renewRequest:   redis.NewScript(luaScript("request.renew")),
 		finishRequest:  redis.NewScript(luaScript("request.finish")),
 
@@ -464,12 +468,8 @@ func (s *Store) Finish(ctx context.Context, permit AttemptPermit, outcome Finish
 	if err := validateFinishInput(permit, outcome); err != nil {
 		return FinishResult{}, err
 	}
-	tpmActual := ""
-	if outcome.ActualTotalTokens != nil {
-		tpmActual = strconv.FormatInt(*outcome.ActualTotalTokens, 10)
-	}
 	// Finish 只收口资源与 breaker 状态机。TTFT 样本走独立的 30 分钟分钟桶（§12），
-	// 因此不再需要 routing-balance 控制，也不再向 breaker 状态写 TTFT。
+	// TPM 走独立的观测桶（§8）：两者都不经过 permit。
 	keys := append(s.attemptLifecycleKeys(permit),
 		s.keys.runtimeControlSetting("gateway.circuit_breaker"),
 	)
@@ -477,7 +477,6 @@ func (s *Store) Finish(ctx context.Context, permit AttemptPermit, outcome Finish
 	argv := append(attemptLifecycleArgs(permit),
 		string(outcome.ProviderOutcome),
 		string(outcome.ChannelOutcome),
-		tpmActual,
 		string(outcome.ProviderEvidence),
 		string(outcome.RequestWriteState),
 		strconv.FormatBool(outcome.ResponseHeadersReceived),

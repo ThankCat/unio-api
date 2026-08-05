@@ -17,6 +17,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/tpmobserver"
 )
 
 // RequestLifecycle 把双协议 service 编排骨架共享的协议无关基础设施集中到一处。
@@ -43,6 +44,9 @@ type RequestLifecycle struct {
 	// costExposures 是可选的成本敞口记录器；nil 表示不启用。
 	costExposures              CostExposureRecorder
 	costExposureOutputFallback int64
+
+	// tpmObserver 是可选的分钟级 TPM 观测器（§8）；nil 表示不观测。
+	tpmObserver *tpmobserver.Observer
 }
 
 func (l *RequestLifecycle) SetLogger(logger *zap.Logger) {
@@ -451,7 +455,7 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 
 // CreateAttempt 创建一次上游 channel 尝试记录。
 // attempt 记录 fallback 链路中的单次 provider/channel 调用，必须先于 adapter 调用创建。
-func (l *RequestLifecycle) CreateAttempt(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate) (requestlog.AttemptRecord, error) {
+func (l *RequestLifecycle) CreateAttempt(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate, permitID string) (requestlog.AttemptRecord, error) {
 	return l.CreateAttemptForEndpoint(
 		ctx,
 		requestRecord,
@@ -459,6 +463,7 @@ func (l *RequestLifecycle) CreateAttempt(ctx context.Context, requestRecord requ
 		attemptIndex,
 		candidate,
 		l.upstreamEndpoint(),
+		permitID,
 	)
 }
 
@@ -472,6 +477,7 @@ func (l *RequestLifecycle) CreateAttemptForEndpoint(
 	routingCandidateIndex int,
 	candidate routing.ChatRouteCandidate,
 	endpoint requestlog.UpstreamEndpoint,
+	permitID string,
 ) (requestlog.AttemptRecord, error) {
 	// 覆盖为当前尝试；失败停在某次 attempt 时访问日志即显示最后打过的渠道。
 	logfields.SetUpstreamAttempt(ctx, logfields.UpstreamAttempt{
@@ -485,6 +491,7 @@ func (l *RequestLifecycle) CreateAttemptForEndpoint(
 
 	attempt, err := l.requestLog.CreateAttempt(ctx, requestlog.CreateAttemptParams{
 		RequestRecordID:        requestRecord.ID,
+		PermitID:               permitID,
 		AttemptIndex:           attemptIndex,
 		ProviderID:             candidate.ProviderID,
 		ChannelID:              candidate.Channel.ID,

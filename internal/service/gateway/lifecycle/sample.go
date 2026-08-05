@@ -32,7 +32,8 @@ func (l *RequestLifecycle) SetChannelSampleRecorder(recorder ChannelSampleRecord
 	}
 }
 
-// RecordAttemptSample 在 attempt 终态写一次评分样本与 RPM/RPD/TPM 观测（§12）。
+// RecordAttemptSample 在 attempt 终态写一次评分样本与 RPM/RPD 观测（§12）。
+// TPM 不在这里：它由独立的分钟级观测器按真实 chunk 时间记录（§8）。
 // 仅当真实发起过上游调用（transport 已开始）才产生观测；写入幂等、best-effort。
 func (l *RequestLifecycle) RecordAttemptSample(
 	ctx context.Context,
@@ -73,8 +74,6 @@ func (l *RequestLifecycle) RecordAttemptSample(
 		ErrorEligible:   eligible,
 		IsError:         isError,
 		ObservedRequest: true,
-		TokenCount:      outcome.ActualTotalTokens,
-		TokenCovered:    outcome.ActualTotalTokens != nil,
 	}
 	// 脱离客户端取消：观测写入不应因下游断开而丢失当前 attempt 事实。
 	if recErr := l.sampleRecorder.RecordChannelSample(context.WithoutCancel(ctx), in); recErr != nil {

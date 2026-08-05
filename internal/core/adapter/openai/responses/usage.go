@@ -1,9 +1,15 @@
 package responses
 
 import (
+	"errors"
+
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 )
+
+// ErrResponsesUnreliableUsage 表示非流式 Responses 已返回 2xx，但 usage 必需字段缺失或数值不可信。
+// 调用方据此停止 fallback、释放冻结并记录平台可能已经产生的上游成本。
+var ErrResponsesUnreliableUsage = errors.New("openai responses response missing reliable usage")
 
 // usageMappingVersionResponses 标记 Responses usage→facts 映射规则版本，用于历史账务复算与回归。
 // v2：新增解析 input_tokens_details.cache_write_tokens（GPT-5.6+），拆入 30m 缓存写维度。
@@ -23,9 +29,9 @@ type wireResponse struct {
 
 // wireUsage 是上游 Responses usage 对象。
 type wireUsage struct {
-	InputTokens         int64                  `json:"input_tokens"`
-	OutputTokens        int64                  `json:"output_tokens"`
-	TotalTokens         int64                  `json:"total_tokens"`
+	InputTokens         *int64                 `json:"input_tokens"`
+	OutputTokens        *int64                 `json:"output_tokens"`
+	TotalTokens         *int64                 `json:"total_tokens"`
 	InputTokensDetails  *wireInputTokenDetail  `json:"input_tokens_details"`
 	OutputTokensDetails *wireOutputTokenDetail `json:"output_tokens_details"`
 	// CacheCreationInputTokens 是部分 OpenAI 兼容上游（如 sub2api）在顶层回传的缓存写入 token
@@ -61,14 +67,20 @@ type wireError struct {
 // 与桥接侧 mapResponsesUsage 反向：input/output/total + cached/reasoning 分解项一一对应。
 // usage 为 nil 时返回 (零值, false)，由调用方按「缺失 usage」处理，绝不当成 0 元请求。
 func chatUsageFromWire(u *wireUsage) (adapter.ChatUsage, bool) {
-	if u == nil {
+	if u == nil || u.InputTokens == nil || u.OutputTokens == nil || u.TotalTokens == nil {
+		return adapter.ChatUsage{}, false
+	}
+	if *u.InputTokens < 0 || *u.OutputTokens < 0 || *u.TotalTokens < 0 {
+		return adapter.ChatUsage{}, false
+	}
+	if *u.TotalTokens != *u.InputTokens+*u.OutputTokens {
 		return adapter.ChatUsage{}, false
 	}
 
 	result := adapter.ChatUsage{
-		PromptTokens:     int(u.InputTokens),
-		CompletionTokens: int(u.OutputTokens),
-		TotalTokens:      int(u.TotalTokens),
+		PromptTokens:     int(*u.InputTokens),
+		CompletionTokens: int(*u.OutputTokens),
+		TotalTokens:      int(*u.TotalTokens),
 	}
 	if u.InputTokensDetails != nil {
 		result.CachedTokens = int(u.InputTokensDetails.CachedTokens)

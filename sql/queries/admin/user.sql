@@ -14,7 +14,7 @@ RETURNING *;
 
 -- name: ListAPIKeysByUserPage :many
 -- ListAPIKeysByUserPage 供 admin 按用户分页倒序列出 API Key（返回明文 key 供复制，不返回 key_hash）。
-SELECT id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at
+SELECT id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, created_at, updated_at
 FROM api_keys
 WHERE user_id = sqlc.arg(user_id)
 ORDER BY created_at DESC, id DESC
@@ -26,7 +26,7 @@ SELECT COUNT(*) FROM api_keys WHERE user_id = sqlc.arg(user_id);
 
 -- name: GetAPIKeyByID :one
 -- GetAPIKeyByID 供 admin 按 id 读取单把 API Key（带所属用户 ID 与 Key 绑定线路；返回明文 key 供复制）。
-SELECT k.id, k.user_id, k.name, k.key_prefix, k.key_plaintext, k.last_used_at, k.expires_at, k.disabled_at, k.revoked_at, k.spend_limit, k.spent_total, k.route_id, k.rpm_limit, k.tpm_limit, k.rpd_limit, k.created_at, k.updated_at
+SELECT k.id, k.user_id, k.name, k.key_prefix, k.key_plaintext, k.last_used_at, k.expires_at, k.disabled_at, k.revoked_at, k.spend_limit, k.spent_total, k.route_id, k.created_at, k.updated_at
 FROM api_keys k
 WHERE k.id = sqlc.arg(id)
 LIMIT 1;
@@ -36,14 +36,14 @@ LIMIT 1;
 UPDATE api_keys
 SET disabled_at = sqlc.narg(disabled_at), updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at;
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, created_at, updated_at;
 
 -- name: RevokeAPIKey :one
 -- RevokeAPIKey 永久吊销 API Key（revoked_at 置 now()，不可逆）。
 UPDATE api_keys
 SET revoked_at = now(), updated_at = now()
 WHERE id = sqlc.arg(id) AND revoked_at IS NULL
-RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at;
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, created_at, updated_at;
 
 -- name: DeleteAPIKey :execrows
 -- DeleteAPIKey 物理删除 API Key，用于清理误建/未使用的 Key。
@@ -56,28 +56,28 @@ DELETE FROM api_keys WHERE id = sqlc.arg(id);
 UPDATE api_keys
 SET spend_limit = sqlc.narg(spend_limit), updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at;
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, created_at, updated_at;
 
 -- name: SetAPIKeyRoute :one
 -- SetAPIKeyRoute 改绑 API Key 的线路；route_id 必填（线路不可清空，必须指向一条线路）。
 UPDATE api_keys
 SET route_id = sqlc.arg(route_id), updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at;
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, created_at, updated_at;
 
 -- name: SetAPIKeyName :one
 -- SetAPIKeyName 更新 API Key 名称。
 UPDATE api_keys
 SET name = sqlc.arg(name), updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at;
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, created_at, updated_at;
 
 -- name: SetAPIKeyExpiresAt :one
 -- SetAPIKeyExpiresAt 设置/清除 API Key 过期时间；expires_at 为 NULL 表示永不过期。
 UPDATE api_keys
 SET expires_at = sqlc.narg(expires_at), updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, rpm_limit, tpm_limit, rpd_limit, created_at, updated_at;
+RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, route_id, created_at, updated_at;
 
 -- §3.7 客户中心（用户/API Key）只读运维聚合。金额仅 USD。
 -- 用户余额来自 user_balances（USD）；消费来自 ledger_entries(debit, USD)；

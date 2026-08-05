@@ -169,30 +169,26 @@ func (compactRuntimeFacts) Routing(context.Context) (runtimefacts.RoutingRevisio
 	return runtimefacts.RoutingRevisions{Integrity: integrity, CircuitBreaker: 10, RoutingBalance: 11}, nil
 }
 
-type compactUsageSession struct {
+type compactRequestSession struct {
 	requestID string
-	reserved  int64
 }
 
-func (s *compactUsageSession) Reserve(_ context.Context, tokens int64) error {
-	s.reserved = tokens
-	return nil
-}
-
-func (*compactUsageSession) PublishAuthoritativeUsage(int64) bool { return true }
-func (*compactUsageSession) MarkUpstreamReached() bool            { return true }
-
-func (s *compactUsageSession) BindAttempt(in *breakerstore.AcquireAttemptInput) error {
-	if in.InputEstimate != s.reserved {
-		return errors.New("attempt estimate differs from request reservation")
-	}
+func (s *compactRequestSession) BindAttempt(in *breakerstore.AcquireAttemptInput) error {
 	in.RequestAdmissionID = s.requestID
 	return nil
 }
 
-func compactPermitContext() (context.Context, *compactUsageSession) {
-	session := &compactUsageSession{requestID: "request-admission-compact"}
-	return requestadmission.ContextWithUsageSession(ctxWithPrincipal(), session), session
+func (*compactRequestSession) SnapshotMany(context.Context, int64, []breakerstore.SnapshotCandidateInput) (breakerstore.SnapshotManyResult, error) {
+	return breakerstore.SnapshotManyResult{}, nil
+}
+
+func (*compactRequestSession) AggregateChannelSamples(context.Context, []int64) (map[int64]breakerstore.ChannelSampleWindow, error) {
+	return nil, nil
+}
+
+func compactPermitContext() (context.Context, *compactRequestSession) {
+	session := &compactRequestSession{requestID: "request-admission-compact"}
+	return requestadmission.ContextWithRequestSession(ctxWithPrincipal(), session), session
 }
 
 func setCompactPermitManager(svc *ResponsesService, store *compactPermitStore) {
@@ -354,9 +350,6 @@ func TestCompactHistory_NativeFallbackToSynthetic(t *testing.T) {
 	if len(settlement.params) != 1 {
 		t.Fatalf("expected 1 settlement, got %d", len(settlement.params))
 	}
-	if session.reserved != 16 {
-		t.Fatalf("request admission reserved tokens = %d, want 16 once for both transports", session.reserved)
-	}
 	if len(permitStore.acquireInputs) != 2 {
 		t.Fatalf("attempt permit acquire count = %d, want 2", len(permitStore.acquireInputs))
 	}
@@ -374,11 +367,12 @@ func TestCompactHistory_NativeFallbackToSynthetic(t *testing.T) {
 		t.Fatalf("permit finishes = %d/%d, want 2/2", len(permitStore.finishPermits), len(permitStore.finishOutcomes))
 	}
 	firstOutcome := permitStore.finishOutcomes[0]
-	if firstOutcome.ProviderOutcome != breakerstore.OutcomeIgnored || firstOutcome.ChannelOutcome != breakerstore.OutcomeIgnored || firstOutcome.ActualTotalTokens != nil {
-		t.Fatalf("native 404 finish must be breaker-ignored and release TPM estimate: %+v", firstOutcome)
+	if firstOutcome.ProviderOutcome != breakerstore.OutcomeIgnored || firstOutcome.ChannelOutcome != breakerstore.OutcomeIgnored {
+		t.Fatalf("native 404 finish must be breaker-ignored: %+v", firstOutcome)
 	}
-	if permitStore.finishOutcomes[1].ActualTotalTokens == nil {
-		t.Fatalf("synthetic success must finish with authoritative TPM actual: %+v", permitStore.finishOutcomes[1])
+	secondOutcome := permitStore.finishOutcomes[1]
+	if secondOutcome.ProviderOutcome != breakerstore.OutcomeEligibleSuccess || secondOutcome.ChannelOutcome != breakerstore.OutcomeEligibleSuccess {
+		t.Fatalf("synthetic success must finish as eligible success: %+v", secondOutcome)
 	}
 	if len(requestLog.createAttempts) != 2 {
 		t.Fatalf("attempt count = %d, want 2", len(requestLog.createAttempts))
@@ -536,10 +530,10 @@ func TestCompactHistory_NativeFallbackToSyntheticLocalUpstream(t *testing.T) {
 				t.Fatalf("request terminal audit failed=%+v delivery_completed=%+v", requestLog.markFailed, requestLog.deliveryCompleted)
 			}
 
-			if session.reserved != 16 || len(permitStore.acquireInputs) != 2 ||
+			if len(permitStore.acquireInputs) != 2 ||
 				len(permitStore.finishPermits) != 2 || len(permitStore.abortPermits) != 0 {
-				t.Fatalf("request/permit counts reserved=%d acquire=%d finish=%d abort=%d",
-					session.reserved, len(permitStore.acquireInputs), len(permitStore.finishPermits), len(permitStore.abortPermits))
+				t.Fatalf("permit counts acquire=%d finish=%d abort=%d",
+					len(permitStore.acquireInputs), len(permitStore.finishPermits), len(permitStore.abortPermits))
 			}
 			firstPermit, secondPermit := permitStore.acquireInputs[0], permitStore.acquireInputs[1]
 			if firstPermit.PermitID == secondPermit.PermitID ||
@@ -551,11 +545,8 @@ func TestCompactHistory_NativeFallbackToSyntheticLocalUpstream(t *testing.T) {
 			if len(permitStore.finishOutcomes) != 2 ||
 				permitStore.finishOutcomes[0].ProviderOutcome != breakerstore.OutcomeIgnored ||
 				permitStore.finishOutcomes[0].ChannelOutcome != breakerstore.OutcomeIgnored ||
-				permitStore.finishOutcomes[0].ActualTotalTokens != nil ||
 				permitStore.finishOutcomes[1].ProviderOutcome != breakerstore.OutcomeEligibleSuccess ||
-				permitStore.finishOutcomes[1].ChannelOutcome != breakerstore.OutcomeEligibleSuccess ||
-				permitStore.finishOutcomes[1].ActualTotalTokens == nil ||
-				*permitStore.finishOutcomes[1].ActualTotalTokens != 20 {
+				permitStore.finishOutcomes[1].ChannelOutcome != breakerstore.OutcomeEligibleSuccess {
 				t.Fatalf("breaker attribution = %+v", permitStore.finishOutcomes)
 			}
 
@@ -758,6 +749,66 @@ func TestCompactHistory_NativeMissingUsageRecordsRiskExposure(t *testing.T) {
 	// 普通释放不应发生（走的是账务异常释放）。
 	if authorizer.releaseCount != 0 {
 		t.Fatalf("expected no plain release on missing-usage, got %d", authorizer.releaseCount)
+	}
+}
+
+func TestCompactHistory_SyntheticMissingUsageStopsCandidateFallbackAndRecordsRiskExposure(t *testing.T) {
+	syntheticMissingUsageErr := adapter.NewUpstreamError(
+		adapter.UpstreamErrorServer,
+		adapter.UpstreamMetadata{StatusCode: http.StatusOK, RequestID: "req-synthetic-missing-usage"},
+		failure.Wrap(
+			failure.CodeAdapterInvalidResponse,
+			chatcompletionsadapter.ErrChatUnreliableUsage,
+			failure.WithMessage("simulated synthetic compact response without reliable usage"),
+		),
+	)
+	compactAdapter := &fakeCompactAdapter{err: compactUnsupportedError(http.StatusNotFound)}
+	firstChatAdapter := &fakeChatAdapter{err: syntheticMissingUsageErr}
+	secondChatAdapter := &fakeChatAdapter{resp: okChatResponse()}
+	registry := &fakeRegistry{
+		adapters: map[string]chatcompletionsadapter.ChatAdapter{
+			"openai-primary":   firstChatAdapter,
+			"openai-secondary": secondChatAdapter,
+		},
+		tokenizers: map[string]chatcompletionsadapter.ChatInputTokenizer{
+			"openai-primary":   fakeTokenizer{},
+			"openai-secondary": fakeTokenizer{},
+		},
+		responsesCompactAdapters: map[string]responsesadapter.ResponsesCompactAdapter{
+			"openai-primary": compactAdapter,
+		},
+	}
+	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{
+		candidate("openai-primary", 1, "gpt-5.5-upstream"),
+		candidate("openai-secondary", 2, "gpt-5.5-upstream"),
+	}}}
+	authorizer := &fakeAuthorizer{}
+	settlement := &fakeSettlement{}
+	svc := NewResponsesService(
+		router, registry, passthroughPreparer{}, alwaysRetryClassifier{},
+		newFakeRequestLog(), settlement, authorizer, nil, nil,
+	)
+	svc.compactNativeFallback = true
+
+	_, err := svc.CompactHistory(ctxWithPrincipal(), compactNativeRequest())
+	if !errors.Is(err, chatcompletionsadapter.ErrChatUnreliableUsage) {
+		t.Fatalf("expected unreliable synthetic usage error, got %v", err)
+	}
+	if compactAdapter.called != 1 || firstChatAdapter.called != 1 || secondChatAdapter.called != 0 {
+		t.Fatalf("transport calls native=%d first synthetic=%d second candidate=%d, want 1/1/0",
+			compactAdapter.called, firstChatAdapter.called, secondChatAdapter.called)
+	}
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected no customer settlement, got %d", len(settlement.params))
+	}
+	if len(authorizer.billingExceptions) != 1 {
+		t.Fatalf("expected one risk exposure release, got %d", len(authorizer.billingExceptions))
+	}
+	if authorizer.billingExceptions[0].ReasonCode != "responses_compact_missing_usage" {
+		t.Fatalf("risk exposure reason code = %q, want responses_compact_missing_usage", authorizer.billingExceptions[0].ReasonCode)
+	}
+	if authorizer.releaseCount != 0 {
+		t.Fatalf("expected no plain authorization release, got %d", authorizer.releaseCount)
 	}
 }
 

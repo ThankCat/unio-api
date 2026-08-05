@@ -176,6 +176,14 @@ type Metrics struct {
 	routingTracePersistFailure   prometheus.Counter
 	routingSampleAggFailure      prometheus.Counter
 
+	tpmObservationFlushFailure      prometheus.Counter
+	tpmObservationDropped           *prometheus.CounterVec
+	tpmObservationQueueDepth        prometheus.Gauge
+	tpmObservationProvisionalToken  prometheus.Counter
+	tpmObservationMissingUsage      prometheus.Counter
+	tpmObservationFinalCorrection   *prometheus.CounterVec
+	tpmObservationExpiredCorrection prometheus.Counter
+
 	breakerState                         *prometheus.GaugeVec
 	breakerTransitionTotal               *prometheus.CounterVec
 	breakerSkipTotal                     *prometheus.CounterVec
@@ -371,6 +379,37 @@ func New() *Metrics {
 			Help: "30-minute scoring sample aggregation write failures (observation is best-effort).",
 		}),
 
+		// TPM 观测指标（§8/§10）：全部 best-effort，标签里绝不出现 request/attempt ID。
+		tpmObservationFlushFailure: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "unio_gateway_tpm_observation_flush_failure_total",
+			Help: "TPM observation batch flush failures; the same batch is retried with a stable operation id.",
+		}),
+		tpmObservationDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_tpm_observation_dropped_total",
+			Help: "TPM observations dropped by bounded reason; dropping never blocks client delivery.",
+		}, []string{"reason"}),
+		tpmObservationQueueDepth: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "unio_gateway_tpm_observation_queue_depth",
+			Help: "Current depth of the in-process TPM observation queue.",
+		}),
+		tpmObservationProvisionalToken: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "unio_gateway_tpm_observation_provisional_tokens_total",
+			Help: "Tokens written to TPM buckets as gateway estimates before reliable usage arrives.",
+		}),
+		tpmObservationMissingUsage: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "unio_gateway_tpm_observation_missing_usage_total",
+			Help: "Finalized observation scopes that reached upstream without reliable usage.",
+		}),
+		tpmObservationFinalCorrection: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_tpm_observation_final_correction_total",
+			Help: "Final TPM corrections by result (applied|duplicate|error).",
+		}, []string{"result"}),
+		tpmObservationExpiredCorrection: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "unio_gateway_tpm_observation_expired_correction_total",
+			// 观测桶已过保留期或超出回溯窗口时放弃修正，绝不重建桶（§8.4）。
+			Help: "Minute buckets whose final correction was abandoned because the bucket is gone or out of the lookback window.",
+		}),
+
 		breakerState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "unio_gateway_breaker_state",
 			Help: "Current breaker state; exactly one state is 1 for each scope and business ID.",
@@ -532,6 +571,13 @@ func New() *Metrics {
 		m.routingTraceWrite,
 		m.routingTracePersistFailure,
 		m.routingSampleAggFailure,
+		m.tpmObservationFlushFailure,
+		m.tpmObservationDropped,
+		m.tpmObservationQueueDepth,
+		m.tpmObservationProvisionalToken,
+		m.tpmObservationMissingUsage,
+		m.tpmObservationFinalCorrection,
+		m.tpmObservationExpiredCorrection,
 		m.breakerState,
 		m.breakerTransitionTotal,
 		m.breakerSkipTotal,
@@ -740,6 +786,55 @@ func (m *Metrics) IncRoutingTraceWrite(result string) {
 // IncRoutingSampleAggregationFailure 记录一次 30 分钟评分样本聚合写失败（观测 best-effort，§12.5/§18）。
 func (m *Metrics) IncRoutingSampleAggregationFailure() {
 	m.routingSampleAggFailure.Inc()
+}
+
+// ---- TPM 观测（§8/§10）。全部 best-effort：这些指标上升不代表客户请求受影响。----
+
+func (m *Metrics) IncTPMObservationFlushFailure() { m.tpmObservationFlushFailure.Inc() }
+
+func (m *Metrics) IncTPMObservationDropped(reason string) {
+	m.tpmObservationDropped.WithLabelValues(boundedTPMDropReason(reason)).Inc()
+}
+
+func (m *Metrics) SetTPMObservationQueueDepth(depth float64) {
+	m.tpmObservationQueueDepth.Set(depth)
+}
+
+func (m *Metrics) AddTPMObservationProvisionalTokens(tokens float64) {
+	if tokens > 0 {
+		m.tpmObservationProvisionalToken.Add(tokens)
+	}
+}
+
+func (m *Metrics) IncTPMObservationMissingUsage() { m.tpmObservationMissingUsage.Inc() }
+
+func (m *Metrics) IncTPMObservationFinalCorrection(result string) {
+	m.tpmObservationFinalCorrection.WithLabelValues(boundedTPMCorrectionResult(result)).Inc()
+}
+
+func (m *Metrics) AddTPMObservationExpiredCorrection(buckets float64) {
+	if buckets > 0 {
+		m.tpmObservationExpiredCorrection.Add(buckets)
+	}
+}
+
+// boundedTPMDropReason 是 drop 原因标签的基数边界。
+func boundedTPMDropReason(reason string) string {
+	switch reason {
+	case "queue_full", "correction_queue_full", "tracking_full", "flush_retries_exhausted":
+		return reason
+	default:
+		return "other"
+	}
+}
+
+func boundedTPMCorrectionResult(result string) string {
+	switch result {
+	case "applied", "duplicate", "error":
+		return result
+	default:
+		return "error"
+	}
 }
 
 // SetBreakerState exposes one-hot state for a Provider or Channel breaker.

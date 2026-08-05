@@ -220,27 +220,26 @@ func circuitBreakerDefinition() Definition {
 
 // ---- 线路/渠道限流默认 ----
 
-// RateLimitDefaultsSettings 是线路或渠道使用的 RPM/TPM/RPD 默认。
-// RPM/TPM/RPD 为 0 表示该维度默认不限；具体主体可在 routes/channels 行覆盖。
+// RateLimitDefaultsSettings 是线路使用的 RPM/RPD 默认。
+// 为 0 表示该维度默认不限；具体线路可在 routes 行覆盖。
+// 这里没有 TPM：Unio 不限制 TPM，token 吞吐只做观测（§8）。
 type RateLimitDefaultsSettings struct {
 	RPM int64
-	TPM int64
 	RPD int64
 }
 
-// DefaultRateLimitDefaultsSettings 按 DEC-053/DEC-054 默认三维均不限；显式线路或渠道限额仍可覆盖。
+// DefaultRateLimitDefaultsSettings 按 DEC-053/DEC-054 默认两维均不限；显式线路限额仍可覆盖。
 func DefaultRateLimitDefaultsSettings() RateLimitDefaultsSettings {
-	return RateLimitDefaultsSettings{RPM: 0, TPM: 0, RPD: 0}
+	return RateLimitDefaultsSettings{RPM: 0, RPD: 0}
 }
 
 type rateLimitDefaultsDoc struct {
 	RPM int64 `json:"rpm"`
-	TPM int64 `json:"tpm"`
 	RPD int64 `json:"rpd"`
 }
 
 func encodeRateLimitDefaultsSettings(s RateLimitDefaultsSettings) json.RawMessage {
-	raw, err := json.Marshal(rateLimitDefaultsDoc{RPM: s.RPM, TPM: s.TPM, RPD: s.RPD})
+	raw, err := json.Marshal(rateLimitDefaultsDoc{RPM: s.RPM, RPD: s.RPD})
 	if err != nil {
 		panic(fmt.Sprintf("appsettings: encode rate limit defaults: %v", err))
 	}
@@ -253,9 +252,9 @@ func DecodeRateLimitDefaultsSettings(raw []byte) (RateLimitDefaultsSettings, err
 	if err := strictUnmarshal(raw, &doc); err != nil {
 		return RateLimitDefaultsSettings{}, err
 	}
-	s := RateLimitDefaultsSettings{RPM: doc.RPM, TPM: doc.TPM, RPD: doc.RPD}
-	if s.RPM < 0 || s.TPM < 0 || s.RPD < 0 {
-		return RateLimitDefaultsSettings{}, errors.New("rpm/tpm/rpd must be zero or positive")
+	s := RateLimitDefaultsSettings{RPM: doc.RPM, RPD: doc.RPD}
+	if s.RPM < 0 || s.RPD < 0 {
+		return RateLimitDefaultsSettings{}, errors.New("rpm/rpd must be zero or positive")
 	}
 	return s, nil
 }
@@ -264,7 +263,7 @@ func routeRateLimitDefaultsDefinition() Definition {
 	return Definition{
 		Key:      GatewayRouteRateLimitDefaultsKey,
 		Category: "gateway",
-		Label:    "线路默认限流(RPM/TPM/RPD)",
+		Label:    "线路默认限流(RPM/RPD)",
 		Description: "线路未单独配置时，按(线路,用户)生效的默认上限，0=该维度不限。" +
 			"Redis revisioned control 是执行权威；Redis 或 BreakerStore 故障固定拒绝准入，不提供绕过开关。",
 		HotReload: true,

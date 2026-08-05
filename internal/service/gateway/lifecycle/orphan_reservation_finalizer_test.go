@@ -15,7 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
-func TestFinalizeOrphanReservationKeepsLongRunningAttempt(t *testing.T) {
+func TestFinalizeOrphanReservationRejectsMissingAttemptProof(t *testing.T) {
 	d := newChatSettlementDBDeps(t)
 	makeReservationOldEnoughForOrphanSweep(t, d)
 
@@ -26,8 +26,8 @@ func TestFinalizeOrphanReservationKeepsLongRunningAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list orphan reservations: %v", err)
 	}
-	if len(rows) != 0 {
-		t.Fatalf("running attempt must not be listed as orphan: %+v", rows)
+	if len(rows) != 1 || rows[0].ID != d.reservationID {
+		t.Fatalf("expected reservation %d as permit-check candidate, got %+v", d.reservationID, rows)
 	}
 
 	reservation, err := d.queries.GetLedgerReservationByRequestRecordID(d.ctx, d.requestRecord.ID)
@@ -35,8 +35,10 @@ func TestFinalizeOrphanReservationKeepsLongRunningAttempt(t *testing.T) {
 		t.Fatalf("get reservation: %v", err)
 	}
 	service := NewChatSettlementService(d.pool, d.queries, billing.Service{}, ledger.NewService(d.pool, d.queries))
-	if err := service.FinalizeOrphanReservation(d.ctx, reservation); err != nil {
+	if finalized, err := service.FinalizeOrphanReservation(d.ctx, reservation, nil, nil); err != nil {
 		t.Fatalf("finalize orphan reservation: %v", err)
+	} else if finalized {
+		t.Fatal("missing attempt proof must not finalize the request")
 	}
 
 	assertRequestAndReservationStatus(t, d, "running", "authorized")
@@ -64,11 +66,78 @@ func TestFinalizeOrphanReservationRechecksRecoveryJobAfterListing(t *testing.T) 
 	}
 
 	service := NewChatSettlementService(d.pool, d.queries, billing.Service{}, ledger.NewService(d.pool, d.queries))
-	if err := service.FinalizeOrphanReservation(d.ctx, rows[0]); err != nil {
+	if finalized, err := service.FinalizeOrphanReservation(d.ctx, rows[0], nil, nil); err != nil {
 		t.Fatalf("finalize stale orphan candidate: %v", err)
+	} else if finalized {
+		t.Fatal("recovery job must prevent orphan finalization")
 	}
 
 	assertRequestAndReservationStatus(t, d, "running", "authorized")
+}
+
+func TestFinalizeOrphanReservationClosesExpiredRunningAttempt(t *testing.T) {
+	d := newChatSettlementDBDeps(t)
+	makeReservationOldEnoughForOrphanSweep(t, d)
+
+	reservation, err := d.queries.GetLedgerReservationByRequestRecordID(d.ctx, d.requestRecord.ID)
+	if err != nil {
+		t.Fatalf("get reservation: %v", err)
+	}
+	service := NewChatSettlementService(d.pool, d.queries, billing.Service{}, ledger.NewService(d.pool, d.queries))
+	if finalized, err := service.FinalizeOrphanReservation(
+		d.ctx,
+		reservation,
+		[]int64{d.attemptRecord.ID},
+		[]string{d.attemptRecord.PermitID.String},
+	); err != nil {
+		t.Fatalf("finalize expired running attempt: %v", err)
+	} else if !finalized {
+		t.Fatal("expired running attempt must be finalized")
+	}
+
+	assertRequestAndReservationStatus(t, d, "failed", "released")
+	var status string
+	var errorCode, faultParty pgtype.Text
+	var errorScoringSample, errorScoringFailure bool
+	if err := d.pool.QueryRow(d.ctx, `
+		SELECT status, error_code, fault_party, error_scoring_sample, error_scoring_failure
+		FROM request_attempts
+		WHERE id = $1
+	`, d.attemptRecord.ID).Scan(&status, &errorCode, &faultParty, &errorScoringSample, &errorScoringFailure); err != nil {
+		t.Fatalf("get finalized attempt: %v", err)
+	}
+	if status != "failed" || !errorCode.Valid || errorCode.String != string(failure.CodeGatewayRequestOrphanReclaimed) {
+		t.Fatalf("unexpected finalized attempt: status=%q error_code=%v", status, errorCode)
+	}
+	if errorScoringSample || errorScoringFailure || !faultParty.Valid || faultParty.String != "platform" {
+		t.Fatalf("orphaned gateway attempt must not count against channel: sample=%v failure=%v fault=%v", errorScoringSample, errorScoringFailure, faultParty)
+	}
+}
+
+func TestFinalizeOrphanReservationClosesSafeLegacyRunningAttempt(t *testing.T) {
+	d := newChatSettlementDBDeps(t)
+	makeReservationOldEnoughForOrphanSweep(t, d)
+	if _, err := d.pool.Exec(d.ctx, `UPDATE request_attempts SET permit_id = NULL WHERE id = $1`, d.attemptRecord.ID); err != nil {
+		t.Fatalf("clear legacy permit id: %v", err)
+	}
+
+	reservation, err := d.queries.GetLedgerReservationByRequestRecordID(d.ctx, d.requestRecord.ID)
+	if err != nil {
+		t.Fatalf("get reservation: %v", err)
+	}
+	service := NewChatSettlementService(d.pool, d.queries, billing.Service{}, ledger.NewService(d.pool, d.queries))
+	if finalized, err := service.FinalizeOrphanReservation(
+		d.ctx,
+		reservation,
+		[]int64{d.attemptRecord.ID},
+		[]string{""},
+	); err != nil {
+		t.Fatalf("finalize safe legacy running attempt: %v", err)
+	} else if !finalized {
+		t.Fatal("safe legacy running attempt must be finalized")
+	}
+
+	assertRequestAndReservationStatus(t, d, "failed", "released")
 }
 
 func TestCreateRecoveryJobRejectsInsertAfterOrphanFinalizeLock(t *testing.T) {

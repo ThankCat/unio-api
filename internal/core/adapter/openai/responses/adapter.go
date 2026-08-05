@@ -120,10 +120,7 @@ func (a *Adapter) CreateResponse(ctx context.Context, ch channel.Runtime, req Re
 
 	chatUsage, ok := chatUsageFromWire(parsed.Usage)
 	if !ok {
-		return nil, failure.New(
-			failure.CodeAdapterInvalidResponse,
-			failure.WithMessage("openai responses adapter missing usage in response"),
-		)
+		return nil, responsesUnreliableUsageError(meta, "openai responses adapter missing or invalid usage in response")
 	}
 
 	facts := responsesFacts(parsed, chatUsage, meta, usage.SourceUpstreamResponse)
@@ -135,6 +132,19 @@ func (a *Adapter) CreateResponse(ctx context.Context, ch channel.Runtime, req Re
 		Upstream:   meta,
 		Facts:      facts,
 	}, nil
+}
+
+// responsesUnreliableUsageError 构造「Responses 返回 2xx 但没有可靠 usage」的结构化上游错误。
+func responsesUnreliableUsageError(meta adapter.UpstreamMetadata, detail string) error {
+	return adapter.NewUpstreamError(
+		adapter.UpstreamErrorServer,
+		meta,
+		failure.Wrap(
+			failure.CodeAdapterInvalidResponse,
+			ErrResponsesUnreliableUsage,
+			failure.WithMessage(detail),
+		),
+	)
 }
 
 // newUpstreamRequest 构造打到 <base>/responses 的上游 HTTP 请求。
