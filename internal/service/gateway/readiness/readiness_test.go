@@ -223,33 +223,6 @@ func TestCheckerRefusesClearWhileDurableEndpointIsPending(t *testing.T) {
 	}
 }
 
-func TestCheckerClearsFaultForMaintenanceSmokeWithoutOpeningReadiness(t *testing.T) {
-	row := readyRow(t)
-	row.RuntimeOperationsReconciled = false
-	row.RuntimeMaintenanceSmokeAllowed = true
-	store := &storeStub{
-		result:      breakerstore.RuntimeReadinessResult{Ready: true, Reason: "ready"},
-		clearResult: breakerstore.RuntimeReadinessResult{Ready: true, Reason: "ready"},
-	}
-	recorder := &metricsStub{}
-	checker := readiness.NewCheckerWithObservability(queryStub{row: row}, store, nil, recorder)
-
-	reconciled, reason := checker.ClearStoreFaultAfterReconciliation(
-		t.Context(), breakerstore.RuntimeReconciliationProof{},
-	)
-	if !reconciled || reason != "maintenance_smoke_ready" || store.clearCalls != 1 {
-		t.Fatalf("reconciled=%v reason=%q clear_calls=%d", reconciled, reason, store.clearCalls)
-	}
-	if recorder.ready || recorder.unavailable || recorder.integrity != "ready" {
-		t.Fatalf("maintenance smoke reconciliation opened readiness metrics: %+v", recorder)
-	}
-
-	ready, reason := checker.Check(t.Context())
-	if ready || reason != "runtime_operation_pending" {
-		t.Fatalf("ordinary readiness during maintenance smoke: ready=%v reason=%q", ready, reason)
-	}
-}
-
 func readyRow(t *testing.T) sqlc.GetGatewayRuntimeReadinessSnapshotRow {
 	t.Helper()
 	activatedAt := time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC)

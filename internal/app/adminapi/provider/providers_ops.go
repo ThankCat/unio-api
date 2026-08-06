@@ -27,20 +27,24 @@ type providerOpsHandler struct {
 }
 
 type providerOpsRowDTO struct {
-	ID             int64  `json:"id"`
-	Slug           string `json:"slug"`
-	Name           string `json:"name"`
-	Origin         string `json:"origin"`
-	OriginRevision int64  `json:"origin_revision"`
-	Status         string `json:"status"`
-	StatusRevision int64  `json:"status_revision"`
-	CreatedAt      string `json:"created_at"`
-	ChannelTotal   int64  `json:"channel_total"`
-	ModelsCount    int64  `json:"models_count"`
-	RoutesCount    int64  `json:"routes_count"`
+	ID             int64   `json:"id"`
+	Slug           string  `json:"slug"`
+	Name           string  `json:"name"`
+	Origin         string  `json:"origin"`
+	OriginRevision int64   `json:"origin_revision"`
+	Status         string  `json:"status"`
+	StatusRevision int64   `json:"status_revision"`
+	CreatedAt      string  `json:"created_at"`
+	BalanceUSD     *string `json:"balance_usd"`
+	BalanceStatus  string  `json:"balance_status"`
+	ChannelTotal   int64   `json:"channel_total"`
+	ModelsCount    int64   `json:"models_count"`
+	RoutesCount    int64   `json:"routes_count"`
 }
 
 type providerOpsDetailDTO struct {
+	BalanceUSD       *string                   `json:"balance_usd"`
+	BalanceStatus    string                    `json:"balance_status"`
 	ChannelTotal     int64                     `json:"channel_total"`
 	ChannelEnabled   int64                     `json:"channel_enabled"`
 	AttemptTotal     int64                     `json:"attempt_total"`
@@ -116,12 +120,13 @@ func (h *providerOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 	}
 	field, desc := sort.SQLParams()
 	rows, total, err := h.service.Table(r.Context(), providerops.TableParams{
-		Status:    adminhttp.ListStatus(r),
-		Search:    adminhttp.QueryString(r, "search"),
-		SortField: field,
-		SortDesc:  desc,
-		Limit:     page.Limit(),
-		Offset:    page.Offset(),
+		Status:     adminhttp.ListStatus(r),
+		Search:     adminhttp.QueryString(r, "search"),
+		LowBalance: adminhttp.QueryString(r, "low_balance") == "true",
+		SortField:  field,
+		SortDesc:   desc,
+		Limit:      page.Limit(),
+		Offset:     page.Offset(),
 	})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -139,6 +144,7 @@ func providerOpsRowDTOFrom(row providerops.Row) providerOpsRowDTO {
 		ID: row.ID, Slug: row.Slug, Name: row.Name, Origin: row.Origin,
 		OriginRevision: row.OriginRevision, Status: row.Status, StatusRevision: row.StatusRevision,
 		CreatedAt: adminhttp.RFC3339(row.CreatedAt), ChannelTotal: row.ChannelTotal,
+		BalanceUSD: row.BalanceUSD, BalanceStatus: row.BalanceStatus,
 		ModelsCount: row.ModelsCount, RoutesCount: row.RoutesCount,
 	}
 }
@@ -160,6 +166,8 @@ func (h *providerOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminhttp.WriteData(w, http.StatusOK, providerOpsDetailDTO{
+		BalanceUSD:       d.BalanceUSD,
+		BalanceStatus:    d.BalanceStatus,
 		ChannelTotal:     d.ChannelTotal,
 		ChannelEnabled:   d.ChannelEnabled,
 		AttemptTotal:     d.AttemptTotal,

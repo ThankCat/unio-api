@@ -122,6 +122,8 @@ type BreakdownRow struct {
 	Label          string
 	RefID          *int64 // route_id / channel_id / provider_id（model 维度为 nil）
 	Status         string // enabled/disabled（provider/channel/route）
+	BalanceUSD     *string
+	BalanceStatus  string
 	Terminal       int64
 	Succeeded      int64
 	Failed         int64
@@ -136,6 +138,16 @@ type BreakdownRow struct {
 	RecentError    string
 	ChannelCount   int64           // provider 维度：命中渠道数
 	SuccessBuckets []SuccessBucket // channel 维度：最近 10 分钟 attempt 成功率桶
+}
+
+// LowBalanceProviderCount 返回当前低余额及负余额的未归档 Provider 数量。
+// 这是时点值，不受 Dashboard 查询时间范围影响。
+func (s *Service) LowBalanceProviderCount(ctx context.Context) (int64, error) {
+	total, err := s.store.CountLowBalanceProviders(ctx)
+	if err != nil {
+		return 0, storeFailed(err, "count low balance providers")
+	}
+	return total, nil
 }
 
 // SuccessBucket 是渠道表现中按小时聚合的 attempt 成功率。
@@ -291,7 +303,9 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 		out := make([]BreakdownRow, 0, len(rows))
 		for _, r := range rows {
 			br := BreakdownRow{
-				Tokens: r.TokensTotal,
+				BalanceUSD:    numericStringPtr(r.BalanceUsd),
+				BalanceStatus: r.BalanceStatus,
+				Tokens:        r.TokensTotal,
 				Latency: requestLatencyStats(
 					r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 					r.LatencySample, r.SucceededTotal,

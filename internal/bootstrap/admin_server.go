@@ -14,6 +14,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
 	"github.com/ThankCat/unio-gateway/internal/core/capability"
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
+	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
 	"github.com/ThankCat/unio-gateway/internal/core/runtimecontrol"
 	"github.com/ThankCat/unio-gateway/internal/platform/adminlogin"
 	"github.com/ThankCat/unio-gateway/internal/platform/adminsession"
@@ -40,6 +41,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelops"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelprice"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/provider"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/providerbalance"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/providerops"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
 	adminroute "github.com/ThankCat/unio-gateway/internal/service/admin/route"
@@ -153,6 +155,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 	providerService := provider.NewService(queries)
 	providerOpsService := providerops.NewService(queries)
+	providerLedgerService := providerledger.NewService(deps.DB, queries)
+	providerBalanceService := providerbalance.NewService(queries, providerLedgerService)
 	var providerBreakerRuntime *breakerstore.Store
 	var channelBreakerRuntime apichannel.BreakerRuntime
 	var settingsRuntimePublisher appsettings.RuntimeControlPublisher
@@ -196,7 +200,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	}
 	// 渠道检测复用 gateway adapter registry（同一份 adapter/HTTP 链路，检测结果=真实行为）。
 	// 探测超时取自运行时配置 admin_backend.channel_test（与用户请求渠道超时正交）。
-	channelTestService := channeltest.NewService(queries, adapterRegistry, settingsStore)
+	channelTestService := channeltest.NewService(queries, adapterRegistry, settingsStore, providerLedgerService)
 	channelTestService.SetMetrics(metricsRecorder)
 	channelService.WithCredentialRotator(channelTestService)
 	channelOpsService := channelops.NewService(queries)
@@ -275,18 +279,19 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		Sessions:                sessions,
 		SessionTTLSeconds:       int64(deps.Config.Admin.SessionTTL.Seconds()),
 
-		ProviderService:     providerService,
-		ProviderOpsService:  providerOpsService,
-		ProviderBreaker:     providerBreakerRuntime,
-		ChannelService:      channelService,
-		ChannelBreaker:      channelBreakerRuntime,
-		ChannelTestService:  channelTestService,
-		ChannelOpsService:   channelOpsService,
-		ModelService:        modelService,
-		ModelOpsService:     modelOpsService,
-		ChannelModelService: channelModelService,
-		ChannelPriceService: channelPriceService,
-		ModelPriceService:   modelPriceService,
+		ProviderService:        providerService,
+		ProviderOpsService:     providerOpsService,
+		ProviderBalanceService: providerBalanceService,
+		ProviderBreaker:        providerBreakerRuntime,
+		ChannelService:         channelService,
+		ChannelBreaker:         channelBreakerRuntime,
+		ChannelTestService:     channelTestService,
+		ChannelOpsService:      channelOpsService,
+		ModelService:           modelService,
+		ModelOpsService:        modelOpsService,
+		ChannelModelService:    channelModelService,
+		ChannelPriceService:    channelPriceService,
+		ModelPriceService:      modelPriceService,
 
 		ChannelCostMultiplierService: channelCostMultiplierService,
 		ChannelRechargeFactorService: channelRechargeFactorService,

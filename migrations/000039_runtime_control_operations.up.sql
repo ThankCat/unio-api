@@ -3,8 +3,8 @@
 -- circuit_breaker / routing_balance），以及维护专用
 -- 完整性 epoch（gateway.runtime_state_epoch）。Origin/Provider 批量围栏走 provider_routing_operations，
 -- 二者不合表（计划 §4.5）。普通状态机：preparing -> prepared -> db_committed -> committed；
--- 非 bootstrap epoch 在 ready 数据态后保持 db_committed -> awaiting_release，真实 Gateway smoke 通过后才 committed；
--- 普通 control 仅业务 revision 未提交时 preparing|prepared -> aborted；runtime_state_epoch 任何阶段不允许 Abort。
+-- runtime_state_epoch 也自动推进到 committed；awaiting_release 与 evidence 字段仅保留用于兼容旧记录，
+-- 新流程不会写入。普通 control 仅业务 revision 未提交时 preparing|prepared -> aborted；runtime_state_epoch 任何阶段不允许 Abort。
 CREATE FUNCTION public.runtime_control_epoch_transition_valid(
     transition jsonb,
     current_revision bigint,
@@ -85,6 +85,9 @@ DECLARE
     recorded_at timestamptz;
     checked_at timestamptz;
 BEGIN
+    IF evidence IS NULL THEN
+        RETURN TRUE;
+    END IF;
     IF transition ->> 'reason' = 'bootstrap' THEN
         RETURN evidence IS NULL;
     END IF;
@@ -175,6 +178,7 @@ EXCEPTION WHEN OTHERS THEN
 END;
 $$;
 
+-- 仅校验历史人工恢复记录；自动恢复流程始终写入 NULL。
 CREATE FUNCTION public.runtime_control_release_evidence_valid(
     evidence jsonb,
     transition jsonb,
@@ -183,6 +187,9 @@ CREATE FUNCTION public.runtime_control_release_evidence_valid(
     LANGUAGE plpgsql IMMUTABLE
 AS $$
 BEGIN
+    IF evidence IS NULL THEN
+        RETURN TRUE;
+    END IF;
     IF transition ->> 'reason' = 'bootstrap' OR operation_state <> 'committed' THEN
         RETURN evidence IS NULL;
     END IF;
@@ -231,9 +238,9 @@ CREATE TABLE public.runtime_control_operations (
     epoch_transition jsonb,
     -- expected_marker_hash: epoch 恢复所需的 observed marker 期望摘要（absent 或 canonical hash）。--
     expected_marker_hash text,
-    -- recovery_evidence: epoch 恢复证据 JSONB（drain/窗口/breaker/permission/control/probe 摘要）。--
+    -- recovery_evidence: 旧人工恢复流程的兼容字段；新流程保持 NULL。--
     recovery_evidence jsonb,
-    -- release_evidence: post-commit Gateway smoke 摘要；仅非 bootstrap epoch released 终态非空。--
+    -- release_evidence: 旧人工放流流程的兼容字段；新流程保持 NULL。--
     release_evidence jsonb,
     -- state: 操作状态机当前值。--
     state text NOT NULL,
@@ -322,8 +329,7 @@ BEGIN
     IF NEW.state IS DISTINCT FROM OLD.state AND NOT (
         (OLD.state = 'preparing' AND NEW.state IN ('prepared', 'aborted'))
         OR (OLD.state = 'prepared' AND NEW.state IN ('db_committed', 'aborted'))
-        OR (OLD.state = 'db_committed' AND NEW.state = 'committed' AND NEW.kind <> 'runtime_state_epoch')
-        OR (OLD.state = 'db_committed' AND NEW.state = 'committed' AND NEW.kind = 'runtime_state_epoch' AND NEW.epoch_transition ->> 'reason' = 'bootstrap')
+        OR (OLD.state = 'db_committed' AND NEW.state = 'committed')
         OR (OLD.state = 'db_committed' AND NEW.state = 'awaiting_release' AND NEW.kind = 'runtime_state_epoch' AND NEW.epoch_transition ->> 'reason' IN ('state_loss', 'restore'))
         OR (OLD.state = 'awaiting_release' AND NEW.state = 'committed' AND NEW.kind = 'runtime_state_epoch')
     ) THEN
@@ -347,7 +353,7 @@ BEGIN
         AND OLD.state = 'awaiting_release'
         AND NEW.state = 'committed'
         AND OLD.release_evidence IS NULL
-        AND NEW.release_evidence IS NOT NULL
+        AND (NEW.release_evidence IS NULL OR public.runtime_control_release_evidence_valid(NEW.release_evidence, NEW.epoch_transition, NEW.state))
     ) THEN
         RAISE EXCEPTION 'invalid runtime state epoch release evidence transition';
     END IF;
@@ -357,19 +363,11 @@ BEGIN
         INTO epoch_value, epoch_revision
         FROM public.app_settings
         WHERE key = 'gateway.runtime_state_epoch';
-        epoch_activated_at := (epoch_value ->> 'activated_at')::timestamptz;
-        evidence_time := (NEW.release_evidence ->> 'checked_at')::timestamptz;
         IF epoch_revision <> NEW.next_revision THEN
             RAISE EXCEPTION 'state epoch release revision does not match ready epoch';
         ELSIF epoch_value ->> 'epoch' <> NEW.epoch_transition ->> 'new_epoch'
            OR epoch_value ->> 'state' <> 'ready' THEN
             RAISE EXCEPTION 'state epoch release identity does not match ready epoch';
-        ELSIF evidence_time < epoch_activated_at THEN
-            RAISE EXCEPTION 'state epoch release smoke predates ready epoch';
-        ELSIF evidence_time > clock_timestamp() THEN
-            RAISE EXCEPTION 'state epoch release smoke timestamp is in the future';
-        ELSIF evidence_time < clock_timestamp() - interval '15 minutes' THEN
-            RAISE EXCEPTION 'state epoch release smoke evidence is stale';
         END IF;
     END IF;
     RETURN NEW;

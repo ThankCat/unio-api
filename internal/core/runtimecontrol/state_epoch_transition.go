@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -162,6 +163,22 @@ func newStateEpochOperationToken() (string, error) {
 		return "", fmt.Errorf("runtimecontrol: generate state epoch operation token: %w", err)
 	}
 	return hex.EncodeToString(raw[:]), nil
+}
+
+func validRecoveryID(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for index, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') {
+			continue
+		}
+		if index > 0 && strings.ContainsRune("._:/@-", char) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func ensureTransitionJSONEOF(decoder *json.Decoder) error {

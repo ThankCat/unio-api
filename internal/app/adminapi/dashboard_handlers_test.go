@@ -44,6 +44,10 @@ func (s *fakeDashboardService) Breakdown(_ context.Context, dimension string, _,
 	}
 }
 
+func (s *fakeDashboardService) LowBalanceProviderCount(context.Context) (int64, error) {
+	return 0, nil
+}
+
 func (s *fakeDashboardService) PerformanceTimeseries(_ context.Context, interval string, _, _ time.Time) ([]dashboard.PerformancePoint, error) {
 	if !validDashboardTestInterval(interval) {
 		return nil, failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("bad interval"))

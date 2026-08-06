@@ -87,6 +87,20 @@ func (q *Queries) ApplyRuntime401CredentialInvalidation(ctx context.Context, arg
 	return i, err
 }
 
+const getChannelName = `-- name: GetChannelName :one
+SELECT name
+FROM channels
+WHERE id = $1
+`
+
+// GetChannelName 返回结算流水需要保存的 Channel 名称快照。
+func (q *Queries) GetChannelName(ctx context.Context, channelID int64) (string, error) {
+	row := q.db.QueryRow(ctx, getChannelName, channelID)
+	var name string
+	err := row.Scan(&name)
+	return name, err
+}
+
 const listChannelsForCredentialTest = `-- name: ListChannelsForCredentialTest :many
 SELECT c.id, c.provider_id, c.name, c.protocol, c.adapter_key, p.origin, c.credential,
        c.status, c.priority, c.created_at, c.updated_at, c.last_tested_at,

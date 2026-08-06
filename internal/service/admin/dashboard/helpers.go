@@ -52,6 +52,14 @@ func numericString(n pgtype.Numeric) string {
 	return trimDecimalString(formatted)
 }
 
+func numericStringPtr(n pgtype.Numeric) *string {
+	if !n.Valid || n.NaN || n.InfinityModifier != pgtype.Finite || n.Int == nil {
+		return nil
+	}
+	value := numericString(n)
+	return &value
+}
+
 // subtractDecimal 用 big.Rat 精确相减两个十进制字符串（毛利 = 收入 − 成本），避免 float 误差。
 // 非法输入按 0 处理；结果保留至 10 位小数（与 NUMERIC(20,10) 一致）后去尾零。
 func subtractDecimal(a, b string) string {

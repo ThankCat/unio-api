@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
+	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	coreusage "github.com/ThankCat/unio-gateway/internal/core/usage"
@@ -42,6 +43,25 @@ type fakeChatLedgerCapturer struct {
 	releaseParams []ledger.ReleaseParams
 	queries       []*sqlc.Queries
 	err           error
+}
+
+type fakeChatProviderLedger struct {
+	params     []providerledger.UsageDebitParams
+	riskParams []providerledger.RequestCostRiskParams
+	queries    []*sqlc.Queries
+	err        error
+}
+
+func (l *fakeChatProviderLedger) RecordRequestCostRiskWithQueries(_ context.Context, queries *sqlc.Queries, params providerledger.RequestCostRiskParams) error {
+	l.queries = append(l.queries, queries)
+	l.riskParams = append(l.riskParams, params)
+	return l.err
+}
+
+func (l *fakeChatProviderLedger) DebitUsageWithQueries(_ context.Context, queries *sqlc.Queries, params providerledger.UsageDebitParams) (providerledger.Entry, error) {
+	l.queries = append(l.queries, queries)
+	l.params = append(l.params, params)
+	return providerledger.Entry{}, l.err
 }
 
 // CalculateCustomerCharge 记录 billing 入参，并返回测试预设客户扣费结果。
@@ -639,7 +659,8 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 	deps := newChatSettlementDBDeps(t)
 	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))
 	ledgerService := ledger.NewService(deps.pool, deps.queries)
-	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerService)
+	providerLedger := &fakeChatProviderLedger{}
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerService, providerLedger)
 
 	if err := service.SettleSuccessfulChat(deps.ctx, deps.params()); err != nil {
 		t.Fatalf("settle successful chat: %v", err)
@@ -705,6 +726,14 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 	assertNumericEqual(t, costSnapshot.CacheReadInputCostAmount, chatSettlementProviderCost().CacheReadInputCostAmount)
 	assertNumericEqual(t, costSnapshot.ReasoningOutputCostAmount, chatSettlementProviderCost().ReasoningOutputCostAmount)
 	assertNumericEqual(t, costSnapshot.TotalCostAmount, chatSettlementProviderCost().TotalCostAmount)
+	if len(providerLedger.params) != 1 {
+		t.Fatalf("expected one provider usage debit, got %d", len(providerLedger.params))
+	}
+	providerDebit := providerLedger.params[0]
+	if providerDebit.ProviderID != deps.providerID || providerDebit.ChannelID != deps.channelID || providerDebit.RequestAttemptID != deps.attemptRecord.ID || providerDebit.CostSnapshotID != costSnapshot.ID {
+		t.Fatalf("unexpected provider debit source: %+v", providerDebit)
+	}
+	assertNumericEqual(t, providerDebit.Amount, costSnapshot.TotalCostAmount)
 
 	entry, err := deps.queries.GetLedgerEntryByIdempotencyKey(deps.ctx, fmt.Sprintf("chat:settle:%d", deps.requestRecord.ID))
 	if err != nil {
@@ -794,7 +823,8 @@ func TestChatSettlementSettlesClientCanceledPartialAsCanceled(t *testing.T) {
 	deps := newChatSettlementDBDeps(t)
 	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))
 	ledgerService := ledger.NewService(deps.pool, deps.queries)
-	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerService)
+	providerLedger := &fakeChatProviderLedger{}
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerService, providerLedger)
 	params := deps.params()
 	params.RequestFinalStatus = requestlog.RequestStatusCanceled
 	params.AttemptFinalStatus = requestlog.AttemptStatusCanceled
@@ -820,6 +850,9 @@ func TestChatSettlementSettlesClientCanceledPartialAsCanceled(t *testing.T) {
 
 	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
 		t.Fatalf("settle client-canceled partial chat: %v", err)
+	}
+	if len(providerLedger.params) != 0 {
+		t.Fatalf("partial usage must not debit provider balance, got %d calls", len(providerLedger.params))
 	}
 
 	if status := requestStatus(t, deps.ctx, deps.pool, deps.requestRecord.ID); status != string(requestlog.RequestStatusCanceled) {
@@ -868,7 +901,8 @@ func TestChatSettlementSettlesInterruptedPartialAsFailed(t *testing.T) {
 	deps := newChatSettlementDBDeps(t)
 	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))
 	ledgerService := ledger.NewService(deps.pool, deps.queries)
-	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerService)
+	providerLedger := &fakeChatProviderLedger{}
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerService, providerLedger)
 	params := deps.params()
 	params.RequestFinalStatus = requestlog.RequestStatusFailed
 	params.AttemptFinalStatus = requestlog.AttemptStatusFailed
@@ -894,6 +928,9 @@ func TestChatSettlementSettlesInterruptedPartialAsFailed(t *testing.T) {
 
 	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
 		t.Fatalf("settle interrupted partial chat: %v", err)
+	}
+	if len(providerLedger.params) != 0 {
+		t.Fatalf("partial usage must not debit provider balance, got %d calls", len(providerLedger.params))
 	}
 
 	if status := requestStatus(t, deps.ctx, deps.pool, deps.requestRecord.ID); status != string(requestlog.RequestStatusFailed) {
@@ -1296,7 +1333,8 @@ func TestChatSettlementReleasesReservationForZeroAmount(t *testing.T) {
 	deps := newChatSettlementDBDeps(t)
 	billingCalculator := chatSettlementBilling(testNumeric(0, -10))
 	ledgerCapturer := &fakeChatLedgerCapturer{}
-	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerCapturer)
+	providerLedger := &fakeChatProviderLedger{}
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerCapturer, providerLedger)
 
 	if err := service.SettleSuccessfulChat(deps.ctx, deps.params()); err != nil {
 		t.Fatalf("settle successful chat: %v", err)
@@ -1307,6 +1345,9 @@ func TestChatSettlementReleasesReservationForZeroAmount(t *testing.T) {
 	}
 	if len(ledgerCapturer.releaseParams) != 1 {
 		t.Fatalf("expected one ledger release for zero amount, got %d", len(ledgerCapturer.releaseParams))
+	}
+	if len(providerLedger.params) != 1 {
+		t.Fatalf("zero customer charge must still debit nonzero provider cost, got %d calls", len(providerLedger.params))
 	}
 	if status := requestStatus(t, deps.ctx, deps.pool, deps.requestRecord.ID); status != string(requestlog.RequestStatusSucceeded) {
 		t.Fatalf("expected request succeeded, got %q", status)
@@ -1319,6 +1360,50 @@ func TestChatSettlementReleasesReservationForZeroAmount(t *testing.T) {
 	}
 	if _, err := deps.queries.GetCostSnapshotByRequest(deps.ctx, deps.requestRecord.ID); err != nil {
 		t.Fatalf("expected committed cost snapshot: %v", err)
+	}
+}
+
+func TestChatSettlementSkipsZeroProviderCost(t *testing.T) {
+	deps := newChatSettlementDBDeps(t)
+	billingCalculator := chatSettlementBilling(testNumeric(1, -10))
+	zero := testNumeric(0, -10)
+	billingCalculator.cost = billing.ProviderCost{
+		UncachedInputCostAmount: zero, CacheReadInputCostAmount: zero,
+		CacheWrite5mInputCostAmount: zero, CacheWrite1hInputCostAmount: zero,
+		CacheWrite30mInputCostAmount: zero, OutputCostAmount: zero,
+		ReasoningOutputCostAmount: zero, TotalCostAmount: zero,
+		Currency: "USD", FormulaVersion: billing.FormulaVersionV1,
+	}
+	providerLedger := &fakeChatProviderLedger{}
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, &fakeChatLedgerCapturer{}, providerLedger)
+	if err := service.SettleSuccessfulChat(deps.ctx, deps.params()); err != nil {
+		t.Fatalf("settle zero provider cost: %v", err)
+	}
+	if len(providerLedger.params) != 0 {
+		t.Fatalf("zero provider cost must not create ledger debit, got %d calls", len(providerLedger.params))
+	}
+}
+
+func TestChatSettlementRollsBackWhenProviderLedgerFails(t *testing.T) {
+	deps := newChatSettlementDBDeps(t)
+	providerErr := errors.New("provider ledger failed")
+	providerLedger := &fakeChatProviderLedger{err: providerErr}
+	service := NewChatSettlementService(
+		deps.pool, deps.queries, chatSettlementBilling(testNumeric(61_000000, -10)),
+		&fakeChatLedgerCapturer{}, providerLedger,
+	)
+	err := service.SettleSuccessfulChat(deps.ctx, deps.params())
+	if !errors.Is(err, providerErr) {
+		t.Fatalf("expected provider ledger error, got %v", err)
+	}
+	if len(providerLedger.params) != 1 {
+		t.Fatalf("expected one provider ledger call, got %d", len(providerLedger.params))
+	}
+	if _, err := deps.queries.GetCostSnapshotByRequest(deps.ctx, deps.requestRecord.ID); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected cost snapshot rollback, got %v", err)
+	}
+	if _, err := deps.queries.GetUsageRecordByRequest(deps.ctx, deps.requestRecord.ID); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected usage rollback, got %v", err)
 	}
 }
 

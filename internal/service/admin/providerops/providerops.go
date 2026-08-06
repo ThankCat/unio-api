@@ -8,6 +8,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/opsutil"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // Store 是服务商运维聚合所需的只读存储能力（由 *sqlc.Queries 满足）。
@@ -44,6 +45,8 @@ type Row struct {
 	OriginRevision int64
 	StatusRevision int64
 	CreatedAt      time.Time
+	BalanceUSD     *string
+	BalanceStatus  string
 	ChannelTotal   int64
 	ModelsCount    int64
 	RoutesCount    int64
@@ -51,6 +54,8 @@ type Row struct {
 
 // Detail 是详情页概览（含 attempt/延迟/Token/利润/TPS 等运维指标）。
 type Detail struct {
+	BalanceUSD       *string
+	BalanceStatus    string
 	ChannelTotal     int64
 	ChannelEnabled   int64
 	AttemptTotal     int64
@@ -118,19 +123,25 @@ type ErrorRow struct {
 
 // TableParams 主表入参。
 type TableParams struct {
-	Status    string
-	Search    string
-	SortField string
-	SortDesc  bool
-	Limit     int32
-	Offset    int32
+	Status     string
+	Search     string
+	LowBalance bool
+	SortField  string
+	SortDesc   bool
+	Limit      int32
+	Offset     int32
 }
 
 // Table 返回服务商运维主表（分页）。
 func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error) {
+	lowBalance := pgtype.Bool{}
+	if p.LowBalance {
+		lowBalance = pgtype.Bool{Bool: true, Valid: true}
+	}
 	rows, err := s.store.ProvidersOpsTable(ctx, sqlc.ProvidersOpsTableParams{
 		Status:     opsutil.TextNarg(p.Status),
 		Search:     opsutil.TextNarg(p.Search),
+		LowBalance: lowBalance,
 		SortField:  opsutil.TextNarg(p.SortField),
 		SortDesc:   opsutil.BoolNarg(p.SortDesc),
 		PageLimit:  p.Limit,
@@ -140,8 +151,9 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 		return nil, 0, opsutil.StoreFailed(err, "list provider ops table")
 	}
 	total, err := s.store.ProvidersOpsTableCount(ctx, sqlc.ProvidersOpsTableCountParams{
-		Status: opsutil.TextNarg(p.Status),
-		Search: opsutil.TextNarg(p.Search),
+		Status:     opsutil.TextNarg(p.Status),
+		Search:     opsutil.TextNarg(p.Search),
+		LowBalance: lowBalance,
 	})
 	if err != nil {
 		return nil, 0, opsutil.StoreFailed(err, "count provider ops table")
@@ -157,6 +169,8 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			OriginRevision: r.OriginRevision,
 			StatusRevision: r.StatusRevision,
 			CreatedAt:      r.CreatedAt.Time,
+			BalanceUSD:     opsutil.NumericStringPtr(r.BalanceUsd),
+			BalanceStatus:  r.BalanceStatus,
 			ChannelTotal:   r.ChannelTotal,
 			ModelsCount:    r.ModelsCount,
 			RoutesCount:    r.RoutesCount,
@@ -174,6 +188,8 @@ func (s *Service) Detail(ctx context.Context, providerID int64, from, to time.Ti
 	revenue := opsutil.NumericString(r.RevenueUsd)
 	cost := opsutil.NumericString(r.CostUsd)
 	return Detail{
+		BalanceUSD:       opsutil.NumericStringPtr(r.BalanceUsd),
+		BalanceStatus:    r.BalanceStatus,
 		ChannelTotal:     r.ChannelTotal,
 		ChannelEnabled:   r.ChannelEnabled,
 		AttemptTotal:     r.AttemptTotal,

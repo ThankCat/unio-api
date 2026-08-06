@@ -5,6 +5,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
+	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
@@ -32,11 +33,13 @@ func NewChatGateway(
 
 	requestLogStore := requestlog.NewStore(queries)
 	ledgerService := ledger.NewService(db, queries)
+	providerLedgerService := providerledger.NewService(db, queries)
 	chatSettlementService := lifecycle.NewChatSettlementService(
 		db,
 		queries,
 		billing.Service{},
 		ledgerService,
+		providerLedgerService,
 	)
 	chatSettlementRecoveryStore := lifecycle.NewChatSettlementRecoveryStore(
 		queries,
@@ -96,11 +99,13 @@ func NewResponsesGateway(
 
 	requestLogStore := requestlog.NewStore(queries)
 	ledgerService := ledger.NewService(db, queries)
+	providerLedgerService := providerledger.NewService(db, queries)
 	chatSettlementService := lifecycle.NewChatSettlementService(
 		db,
 		queries,
 		billing.Service{},
 		ledgerService,
+		providerLedgerService,
 	)
 	chatSettlementRecoveryStore := lifecycle.NewChatSettlementRecoveryStore(
 		queries,
@@ -154,11 +159,13 @@ func NewMessagesGateway(
 
 	requestLogStore := requestlog.NewStore(queries)
 	ledgerService := ledger.NewService(db, queries)
+	providerLedgerService := providerledger.NewService(db, queries)
 	chatSettlementService := lifecycle.NewChatSettlementService(
 		db,
 		queries,
 		billing.Service{},
 		ledgerService,
+		providerLedgerService,
 	)
 	chatSettlementRecoveryStore := lifecycle.NewChatSettlementRecoveryStore(
 		queries,

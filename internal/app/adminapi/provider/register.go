@@ -4,9 +4,10 @@ import "github.com/go-chi/chi/v5"
 
 // Deps 是服务商模块的路由依赖。
 type Deps struct {
-	Service    ProviderService
-	OpsService ProviderOpsService
-	Breaker    BreakerRuntime
+	Service        ProviderService
+	OpsService     ProviderOpsService
+	BalanceService ProviderBalanceService
+	Breaker        BreakerRuntime
 }
 
 // Register 注册服务商模块路由（CRUD + §3.2 服务商聚合视图）。
@@ -22,6 +23,13 @@ func Register(r chi.Router, d Deps) {
 		r.Get("/providers/{id}/ops/channels", poh.channels)
 		r.Get("/providers/{id}/ops/performance", poh.performance)
 		r.Get("/providers/{id}/ops/errors", poh.errors)
+	}
+	if d.BalanceService != nil {
+		pbh := &providerBalanceHandler{service: d.BalanceService}
+		r.Post("/providers/{id}/balance-adjustments", pbh.adjust)
+		r.Get("/providers/{id}/ledger-entries", pbh.ledgerEntries)
+		r.Get("/providers/{id}/cost-risks", pbh.costRisks)
+		r.Get("/providers/{id}/cost-risks/summary", pbh.costRiskSummary)
 	}
 
 	if d.Service != nil {

@@ -56,7 +56,7 @@ func NewCheckerWithObservability(queries Queries, store Store, logger *zap.Logge
 
 // Check 只返回稳定的内部 reason code；HTTP 层不向外暴露 epoch、revision 或 payload。
 func (c *Checker) Check(ctx context.Context) (bool, string) {
-	in, reason, integrity, _, ok := c.expectedRuntime(ctx, false)
+	in, reason, integrity, ok := c.expectedRuntime(ctx)
 	if !ok {
 		return c.finish(false, reason, false, integrity)
 	}
@@ -85,7 +85,7 @@ func (c *Checker) ClearStoreFaultAfterReconciliation(
 	ctx context.Context,
 	proof breakerstore.RuntimeReconciliationProof,
 ) (bool, string) {
-	in, reason, integrity, maintenanceSmoke, ok := c.expectedRuntime(ctx, true)
+	in, reason, integrity, ok := c.expectedRuntime(ctx)
 	if !ok {
 		return c.finish(false, reason, false, integrity)
 	}
@@ -104,35 +104,26 @@ func (c *Checker) ClearStoreFaultAfterReconciliation(
 		unavailable := reason == breakerstore.RuntimeReadinessReasonStoreFaultLatched || reason == "fault_changed"
 		return c.finish(false, reason, unavailable, runtimeIntegrityForReason(reason))
 	}
-	if maintenanceSmoke {
-		// The reconciliation proof is sufficient to clear the infrastructure latch so an
-		// ingress-isolated post-commit smoke can run. The durable awaiting_release lock
-		// still keeps ordinary /readyz probes closed until ReleaseRecovery succeeds.
-		c.finish(false, "runtime_operation_pending", false, "ready")
-		return true, "maintenance_smoke_ready"
-	}
 	return c.finish(true, "ready", false, "ready")
 }
 
 func (c *Checker) expectedRuntime(
 	ctx context.Context,
-	allowMaintenanceSmoke bool,
-) (breakerstore.RuntimeReadinessInput, string, string, bool, bool) {
+) (breakerstore.RuntimeReadinessInput, string, string, bool) {
 	row, err := c.queries.GetGatewayRuntimeReadinessSnapshot(ctx)
 	if err != nil {
-		return breakerstore.RuntimeReadinessInput{}, "postgres_unavailable", "lost", false, false
+		return breakerstore.RuntimeReadinessInput{}, "postgres_unavailable", "lost", false
 	}
 	epoch, err := runtimecontrol.DecodeStateEpoch(row.RuntimeStateEpochValue)
 	if err != nil || epoch.State != runtimecontrol.StateEpochReady || row.RuntimeStateEpochRevision < 1 {
-		return breakerstore.RuntimeReadinessInput{}, "epoch_not_ready", "lost", false, false
+		return breakerstore.RuntimeReadinessInput{}, "epoch_not_ready", "lost", false
 	}
 	if row.RouteRateLimitDefaultsRevision < 1 || row.ConcurrencyDefaultsRevision < 1 ||
 		row.CircuitBreakerRevision < 1 || row.RoutingBalanceRevision < 1 {
-		return breakerstore.RuntimeReadinessInput{}, "control_revision_invalid", "ready", false, false
+		return breakerstore.RuntimeReadinessInput{}, "control_revision_invalid", "ready", false
 	}
-	maintenanceSmoke := !row.RuntimeOperationsReconciled && row.RuntimeMaintenanceSmokeAllowed
-	if !row.RuntimeOperationsReconciled && (!allowMaintenanceSmoke || !maintenanceSmoke) {
-		return breakerstore.RuntimeReadinessInput{}, "runtime_operation_pending", "ready", false, false
+	if !row.RuntimeOperationsReconciled {
+		return breakerstore.RuntimeReadinessInput{}, "runtime_operation_pending", "ready", false
 	}
 	return breakerstore.RuntimeReadinessInput{
 		Epoch:                  epoch.Epoch,
@@ -141,7 +132,7 @@ func (c *Checker) expectedRuntime(
 		ConcurrencyRevision:    row.ConcurrencyDefaultsRevision,
 		CircuitBreakerRevision: row.CircuitBreakerRevision,
 		RoutingBalanceRevision: row.RoutingBalanceRevision,
-	}, "", "", maintenanceSmoke, true
+	}, "", "", true
 }
 
 func (c *Checker) finish(ready bool, reason string, unavailable bool, integrity string) (bool, string) {

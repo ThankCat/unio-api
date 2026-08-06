@@ -1,3 +1,9 @@
+-- name: GetChannelName :one
+-- GetChannelName 返回结算流水需要保存的 Channel 名称快照。
+SELECT name
+FROM channels
+WHERE id = sqlc.arg(channel_id);
+
 -- name: ApplyRuntime401CredentialInvalidation :one
 -- ApplyRuntime401CredentialInvalidation 将达到阈值的运行时 401 按当次 Channel config 与 Origin
 -- Provider origin/status 与 Channel config 三类 expected revision 做原子 CAS。只有三类 revision 仍匹配且 credential_valid=true

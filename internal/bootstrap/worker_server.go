@@ -13,6 +13,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
+	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
@@ -48,11 +49,13 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 	queries := sqlc.New(deps.DB)
 	permitStore := breakerstore.NewStore(deps.Redis, deps.Config.Redis.KeyNamespace)
 	ledgerService := ledger.NewService(deps.DB, queries)
+	providerLedgerService := providerledger.NewService(deps.DB, queries)
 	chatSettlementService := lifecycle.NewChatSettlementService(
 		deps.DB,
 		queries,
 		billing.Service{},
 		ledgerService,
+		providerLedgerService,
 	)
 	chatSettlementRecoveryService := lifecycle.NewChatSettlementRecoveryService(queries, chatSettlementService)
 
@@ -111,7 +114,7 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 		queries, deps.Redis, deps.Config.Redis.KeyNamespace, appsettings.DefaultRegistry(), deps.Logger,
 	)
 	_ = settingsStore.SeedDefaults(ctx)
-	channelTestService := channeltest.NewService(queries, adapterRegistry, settingsStore)
+	channelTestService := channeltest.NewService(queries, adapterRegistry, settingsStore, providerLedgerService)
 	permissionStore := permitStore
 	if err := permissionStore.VerifySingleNodeDeployment(ctx); err != nil {
 		return nil, err

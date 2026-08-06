@@ -18,11 +18,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	corechannel "github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	adminchannel "github.com/ThankCat/unio-gateway/internal/service/admin/channel"
@@ -59,7 +61,12 @@ type Store interface {
 // Prober 向渠道真实上游发一次最小请求（复用与网关一致的 adapter/HTTP 链路）。
 // 由 gateway lifecycle 的 AdapterRegistry 实现，bootstrap 注入；此处以接口解耦，便于测试替身。
 type Prober interface {
-	ProbeChannel(ctx context.Context, protocol, adapterKey string, rt corechannel.Runtime, upstreamModel string) (int, error)
+	ProbeChannel(ctx context.Context, protocol, adapterKey string, rt corechannel.Runtime, upstreamModel string) (adapter.ProbeResult, error)
+}
+
+// ProbeAccountant 记录真实探测事实，并在 usage 可靠时扣 Provider 内部余额。
+type ProbeAccountant interface {
+	AccountProbe(ctx context.Context, params providerledger.ProbeParams) error
 }
 
 // 检测事件来源（写入 channel_test_logs.source）。
@@ -89,6 +96,8 @@ type TestResult struct {
 	Message       string // 成功为空；失败为可读原因（归类后的中文说明）
 	UpstreamError string // 失败时上游返回的原始错误体截断快照；成功/无响应体（连不上/超时）时为空
 	TestedAt      time.Time
+	facts         *adapter.ResponseFacts
+	accountingErr error
 }
 
 // PermissionRecheckInput 固化 403 发生时的内部绑定身份与三类 revision。
@@ -110,10 +119,11 @@ type PermissionRecheckResult struct {
 
 // Service 编排渠道主动检测：选模型 → 构造 Runtime → 发探测请求 → 归类 → 落库。
 type Service struct {
-	store    Store
-	prober   Prober
-	settings *appsettings.SettingsStore
-	metrics  CredentialRotationMetrics
+	store      Store
+	prober     Prober
+	settings   *appsettings.SettingsStore
+	metrics    CredentialRotationMetrics
+	accountant ProbeAccountant
 }
 
 // CredentialRotationMetrics records only the bounded five-state verification result.
@@ -122,12 +132,16 @@ type CredentialRotationMetrics interface {
 }
 
 // NewService 创建渠道检测服务。settings 可为 nil（单测），此时探测超时回代码默认。
-func NewService(store Store, prober Prober, settings *appsettings.SettingsStore) *Service {
-	return &Service{
+func NewService(store Store, prober Prober, settings *appsettings.SettingsStore, accountants ...ProbeAccountant) *Service {
+	service := &Service{
 		store:    store,
 		prober:   prober,
 		settings: settings,
 	}
+	if len(accountants) > 0 {
+		service.accountant = accountants[0]
+	}
+	return service
 }
 
 // SetMetrics attaches optional credential-rotation telemetry.
@@ -139,6 +153,7 @@ func (s *Service) SetMetrics(recorder CredentialRotationMetrics) {
 
 type probeSnapshot struct {
 	ChannelID              int64
+	ProviderID             int64
 	Protocol               string
 	AdapterKey             string
 	Credential             string
@@ -167,9 +182,12 @@ func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 	workCtx, cancel := s.detachedOperationContext(ctx)
 	defer cancel()
 
-	result, err := s.executeProbe(workCtx, snapshot, strings.TrimSpace(in.Model))
+	result, err := s.executeProbe(workCtx, snapshot, strings.TrimSpace(in.Model), in.Source)
 	if err != nil {
 		return TestResult{}, err
+	}
+	if result.accountingErr != nil {
+		return TestResult{}, result.accountingErr
 	}
 	if _, err := s.applyProbeResult(workCtx, snapshot, in.Source, result); err != nil {
 		return TestResult{}, storeFailed(err, "persist channel probe result")
@@ -202,8 +220,11 @@ func (s *Service) RecheckPermission(ctx context.Context, in PermissionRecheckInp
 
 	probeTimeout := appsettings.AdminBackendChannelTestProbeTimeout(ctx, s.settings)
 	workCtx, cancel := context.WithTimeout(ctx, probeTimeout+10*time.Second)
-	probe := s.executeProbeCandidates(workCtx, snapshot, []string{binding.UpstreamModel})
+	probe := s.executeProbeCandidates(workCtx, snapshot, []probeCandidate{{ModelID: binding.ModelID, UpstreamModel: binding.UpstreamModel}}, SourcePermissionRecheck)
 	cancel()
+	if probe.accountingErr != nil {
+		return PermissionRecheckResult{}, probe.accountingErr
+	}
 	// permission_recheck 审计禁止持久化/向 worker 暴露上游响应 body；只保留稳定归类与状态码。
 	probe.UpstreamError = ""
 
@@ -264,9 +285,13 @@ func (s *Service) RotateCredentialAndTest(ctx context.Context, in adminchannel.R
 	workCtx, cancel := s.detachedOperationContext(ctx)
 	defer cancel()
 
-	probeResult, err := s.executeProbe(workCtx, snapshot, "")
+	probeResult, err := s.executeProbe(workCtx, snapshot, "", SourceCredentialRotate)
 	if err != nil {
 		s.populateExecutionFailed(workCtx, &result, snapshot, nil)
+		return result, nil
+	}
+	if probeResult.accountingErr != nil {
+		s.populateExecutionFailed(workCtx, &result, snapshot, &probeResult)
 		return result, nil
 	}
 	result.Verification.Result = credentialProbeResult(probeResult)
@@ -298,7 +323,7 @@ func (s *Service) RotateCredentialAndTest(ctx context.Context, in adminchannel.R
 
 func probeSnapshotFromRow(row sqlc.GetChannelProbeSnapshotRow) probeSnapshot {
 	return probeSnapshot{
-		ChannelID: row.ChannelID, Protocol: row.Protocol, AdapterKey: row.AdapterKey,
+		ChannelID: row.ChannelID, ProviderID: row.ProviderID, Protocol: row.Protocol, AdapterKey: row.AdapterKey,
 		Credential: row.Credential, CredentialValid: row.CredentialValid, ConfigRevision: row.ConfigRevision,
 		ProviderSlug: row.ProviderSlug, Origin: row.Origin,
 		OriginRevision: row.OriginRevision, ProviderStatusRevision: row.StatusRevision,
@@ -307,7 +332,7 @@ func probeSnapshotFromRow(row sqlc.GetChannelProbeSnapshotRow) probeSnapshot {
 
 func probeSnapshotFromRotation(row sqlc.PrepareChannelCredentialRotationRow) probeSnapshot {
 	return probeSnapshot{
-		ChannelID: row.ChannelID, Protocol: row.Protocol, AdapterKey: row.AdapterKey,
+		ChannelID: row.ChannelID, ProviderID: row.ProviderID, Protocol: row.Protocol, AdapterKey: row.AdapterKey,
 		Credential: row.Credential, CredentialValid: row.CredentialValid, ConfigRevision: row.ConfigRevision,
 		ProviderSlug: row.ProviderSlug, Origin: row.Origin,
 		OriginRevision: row.OriginRevision, ProviderStatusRevision: row.StatusRevision,
@@ -319,15 +344,23 @@ func (s *Service) detachedOperationContext(ctx context.Context) (context.Context
 	return context.WithTimeout(context.WithoutCancel(ctx), probeTimeout+10*time.Second)
 }
 
-func (s *Service) executeProbe(ctx context.Context, snapshot probeSnapshot, model string) (TestResult, error) {
+func (s *Service) executeProbe(ctx context.Context, snapshot probeSnapshot, model, source string) (TestResult, error) {
 	candidates, err := s.resolveUpstreamCandidates(ctx, snapshot.ChannelID, model)
 	if err != nil {
 		return TestResult{}, err
 	}
-	return s.executeProbeCandidates(ctx, snapshot, candidates), nil
+	return s.executeProbeCandidates(ctx, snapshot, candidates, source), nil
 }
 
-func (s *Service) executeProbeCandidates(ctx context.Context, snapshot probeSnapshot, candidates []string) TestResult {
+type probeCandidate struct {
+	ModelID       int64
+	UpstreamModel string
+}
+
+func (s *Service) executeProbeCandidates(ctx context.Context, snapshot probeSnapshot, candidates []probeCandidate, source string) TestResult {
+	if source == "" {
+		source = SourceManual
+	}
 	probeTimeout := appsettings.AdminBackendChannelTestProbeTimeout(ctx, s.settings)
 	runtime := corechannel.Runtime{
 		ID: snapshot.ChannelID, Origin: snapshot.Origin,
@@ -336,26 +369,39 @@ func (s *Service) executeProbeCandidates(ctx context.Context, snapshot probeSnap
 		ResponseTimeout: probeTimeout,
 	}
 	var result TestResult
-	for i, upstreamModel := range candidates {
+	for i, candidate := range candidates {
+		upstreamModel := candidate.UpstreamModel
 		start := time.Now()
 		probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
-		status, probeErr := s.prober.ProbeChannel(probeCtx, snapshot.Protocol, snapshot.AdapterKey, runtime, upstreamModel)
+		probeResult, probeErr := s.prober.ProbeChannel(probeCtx, snapshot.Protocol, snapshot.AdapterKey, runtime, upstreamModel)
 		latency := time.Since(start)
 		probeCancel()
 
 		result = TestResult{
 			LatencyMs: latency.Milliseconds(), TestedModel: upstreamModel,
-			HTTPStatus: status, TestedAt: time.Now().UTC(),
+			HTTPStatus: probeResult.StatusCode, TestedAt: time.Now().UTC(), facts: probeResult.Facts,
 		}
 		if probeErr == nil {
 			result.Success = true
-			break
+		} else {
+			result.ErrorCode, result.Message = classifyProbeError(probeErr, probeTimeout, latency)
+			if meta, ok := adapter.UpstreamMetadataOf(probeErr); ok {
+				result.UpstreamError = meta.ResponseSnippet
+			}
 		}
-		result.ErrorCode, result.Message = classifyProbeError(probeErr, probeTimeout, latency)
-		if meta, ok := adapter.UpstreamMetadataOf(probeErr); ok {
-			result.UpstreamError = meta.ResponseSnippet
+		if s.accountant != nil {
+			result.accountingErr = s.accountant.AccountProbe(ctx, providerledger.ProbeParams{
+				ProviderID: snapshot.ProviderID, ChannelID: snapshot.ChannelID, ModelID: candidate.ModelID,
+				Protocol: snapshot.Protocol, Source: source, UpstreamModel: upstreamModel,
+				Success: result.Success, HTTPStatus: result.HTTPStatus, ErrorCode: result.ErrorCode, Message: result.Message,
+				LatencyMs: result.LatencyMs, StartedAt: start.UTC(), Facts: probeResult.Facts,
+				IdempotencyKey: fmt.Sprintf("probe:%s", uuid.NewString()),
+			})
+			if result.accountingErr != nil {
+				return result
+			}
 		}
-		if result.ErrorCode != ErrCodeModelUnavailable || i == len(candidates)-1 {
+		if probeErr == nil || result.ErrorCode != ErrCodeModelUnavailable || i == len(candidates)-1 {
 			break
 		}
 	}
@@ -568,7 +614,7 @@ func (s *Service) ListLogs(ctx context.Context, channelID int64, limit, offset i
 //   - 入参指定 model：映射校验后只返回该模型（不顺延——尊重管理员显式选择）。
 //   - 未指定：返回全部启用绑定的上游模型（按绑定顺序、去重），供 Test 在命中「模型不可用」时
 //     依次顺延，直到某个模型通得过或全部试完。
-func (s *Service) resolveUpstreamCandidates(ctx context.Context, channelID int64, model string) ([]string, error) {
+func (s *Service) resolveUpstreamCandidates(ctx context.Context, channelID int64, model string) ([]probeCandidate, error) {
 	bindings, err := s.store.ListChannelModelsByChannel(ctx, channelID)
 	if err != nil {
 		return nil, storeFailed(err, "list channel models")
@@ -578,13 +624,13 @@ func (s *Service) resolveUpstreamCandidates(ctx context.Context, channelID int64
 		// 允许前端传 Unio 对外模型 ID（下拉展示值）或直接的上游模型名。
 		for _, b := range bindings {
 			if b.ModelExternalID == model || b.UpstreamModel == model {
-				return []string{b.UpstreamModel}, nil
+				return []probeCandidate{{ModelID: b.ModelID, UpstreamModel: b.UpstreamModel}}, nil
 			}
 		}
 		return nil, invalidArgument("model", "model is not bound to this channel")
 	}
 
-	candidates := make([]string, 0, len(bindings))
+	candidates := make([]probeCandidate, 0, len(bindings))
 	seen := make(map[string]struct{}, len(bindings))
 	for _, b := range bindings {
 		if b.Status != channelModelStatusEnabled {
@@ -594,7 +640,7 @@ func (s *Service) resolveUpstreamCandidates(ctx context.Context, channelID int64
 			continue
 		}
 		seen[b.UpstreamModel] = struct{}{}
-		candidates = append(candidates, b.UpstreamModel)
+		candidates = append(candidates, probeCandidate{ModelID: b.ModelID, UpstreamModel: b.UpstreamModel})
 	}
 	if len(candidates) == 0 {
 		return nil, invalidArgument("model", "channel has no enabled model binding to test")

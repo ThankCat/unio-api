@@ -1,7 +1,7 @@
 -- runtime_control_operations 的可恢复发布状态机查询。
 -- Admin 与 Worker 共用同一套生成的 sqlc 查询，不各写一套状态机。
 -- 普通状态机：preparing -> prepared -> db_committed -> committed；普通 control 允许 preparing|prepared -> aborted；
--- 非 bootstrap epoch 使用 db_committed -> awaiting_release -> committed，任何阶段不允许 Abort。
+-- runtime_state_epoch 同样自动推进到 committed，任何阶段不允许 Abort；旧 awaiting_release 记录只做兼容收口。
 
 -- name: CreateBootstrapRuntimeStateEpoch :one
 -- CreateBootstrapRuntimeStateEpoch 在同一 PostgreSQL statement/事务中建立 revision=1/recovering
@@ -75,18 +75,6 @@ WHERE kind = 'runtime_state_epoch'
 ORDER BY created_at, id
 LIMIT 1;
 
--- name: GetLatestCommittedRuntimeStateEpochOperation :one
--- 维护 Commit 响应丢失后的无 token 幂等读取；application 仍须严格核对 provided
--- evidence、latest transition new identity 与当前 PostgreSQL ready epoch，不能仅凭 ready 返回成功。
-SELECT id, token, kind, channel_id, setting_key, current_revision, next_revision, payload_hash,
-    epoch_transition, expected_marker_hash, recovery_evidence, release_evidence, state, created_at, updated_at, completed_at
-FROM runtime_control_operations
-WHERE kind = 'runtime_state_epoch'
-  AND setting_key = 'gateway.runtime_state_epoch'
-  AND state = 'committed'
-ORDER BY completed_at DESC, id DESC
-LIMIT 1;
-
 -- name: CompareAndSetRuntimeStateEpochExpectedMarkerHash :execrows
 -- 只有 application 严格分类为 absent 或 durable old ready 后才可 CAS 记录 observed marker。
 -- 冲突 marker 不得调用本查询；并发变化也因 current hash 不匹配而零更新。
@@ -97,17 +85,6 @@ WHERE token = sqlc.arg(token)
   AND kind = 'runtime_state_epoch'
   AND state IN ('preparing', 'prepared', 'db_committed')
   AND expected_marker_hash IS NOT DISTINCT FROM sqlc.narg(current_expected_marker_hash)::text;
-
--- name: CompareAndSetRuntimeStateEpochRecoveryEvidence :execrows
--- 非 bootstrap epoch 只有在 db_committed 隔离态才可 CAS approved evidence；首次批准和
--- 因依赖故障而过期后的 fresh evidence 都走同一 old-value CAS，异 evidence 并发不得覆盖。
-UPDATE runtime_control_operations
-SET recovery_evidence = sqlc.arg(next_recovery_evidence)::jsonb, updated_at = now()
-WHERE token = sqlc.arg(token)
-  AND payload_hash = sqlc.arg(payload_hash)
-  AND kind = 'runtime_state_epoch'
-  AND state = 'db_committed'
-  AND recovery_evidence = sqlc.arg(current_recovery_evidence)::jsonb;
 
 -- name: MarkRuntimeControlOperationPrepared :execrows
 -- preparing -> prepared（Redis Prepare 成功后，token/payload_hash CAS）。
@@ -144,31 +121,11 @@ WHERE key = 'gateway.runtime_state_epoch'
   AND value = sqlc.arg(recovering_value)::jsonb;
 
 -- name: MarkRuntimeControlOperationCommitted :execrows
--- db_committed -> committed（Redis Commit 成功后终结）。
+-- db_committed/legacy awaiting_release -> committed（Redis Commit 成功后终结）。
 UPDATE runtime_control_operations
 SET state = 'committed', completed_at = now(), updated_at = now()
-WHERE token = sqlc.arg(token) AND payload_hash = sqlc.arg(payload_hash) AND state = 'db_committed'
-  AND (kind <> 'runtime_state_epoch' OR epoch_transition ->> 'reason' = 'bootstrap');
-
--- name: MarkRuntimeStateEpochAwaitingRelease :execrows
--- MarkRuntimeStateEpochAwaitingRelease 在新 epoch/Redis marker ready 后保留非终态维护锁。
-UPDATE runtime_control_operations
-SET state = 'awaiting_release', updated_at = now()
 WHERE token = sqlc.arg(token) AND payload_hash = sqlc.arg(payload_hash)
-  AND kind = 'runtime_state_epoch'
-  AND epoch_transition ->> 'reason' IN ('state_loss', 'restore')
-  AND state = 'db_committed'
-  AND recovery_evidence ->> 'status' = 'approved';
-
--- name: MarkRuntimeStateEpochReleased :execrows
--- MarkRuntimeStateEpochReleased 仅从 awaiting_release 原子记录 post-commit smoke 证据并解除维护锁。
-UPDATE runtime_control_operations
-SET release_evidence = sqlc.arg(release_evidence)::jsonb,
-    state = 'committed', completed_at = now(), updated_at = now()
-WHERE token = sqlc.arg(token) AND payload_hash = sqlc.arg(payload_hash)
-  AND kind = 'runtime_state_epoch'
-  AND state = 'awaiting_release'
-  AND release_evidence IS NULL;
+  AND state IN ('db_committed', 'awaiting_release');
 
 -- name: MarkRuntimeControlOperationAborted :execrows
 -- preparing|prepared -> aborted（仅业务 revision 未提交；epoch kind 不允许 abort，由应用层拦截）。

@@ -107,6 +107,13 @@ SELECT
     p.origin_revision,
     p.status_revision,
     p.created_at,
+    pb.balance AS balance_usd,
+    CASE
+        WHEN pb.balance IS NULL THEN 'unconfigured'
+        WHEN pb.balance < 0 THEN 'negative'
+        WHEN pb.balance < 10 THEN 'low'
+        ELSE 'normal'
+    END AS balance_status,
     (SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id) AS channel_total,
     (
         SELECT COUNT(DISTINCT cm.model_id)
@@ -122,8 +129,14 @@ SELECT
         WHERE c.provider_id = p.id
     ) AS routes_count
 FROM providers p
+LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = 'USD'
 WHERE (sqlc.narg('status')::text IS NULL OR p.status = sqlc.narg('status')::text)
   AND (sqlc.narg('search')::text IS NULL OR p.name ILIKE '%' || sqlc.narg('search')::text || '%' OR p.slug ILIKE '%' || sqlc.narg('search')::text || '%')
+  AND (
+      sqlc.narg('low_balance')::bool IS NULL
+      OR NOT sqlc.narg('low_balance')::bool
+      OR (pb.balance IS NOT NULL AND pb.balance < 10)
+  )
 ORDER BY
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'name') IN ('', 'name') AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN p.name END DESC NULLS LAST,
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'name') IN ('', 'name') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN p.name END ASC NULLS LAST,
@@ -169,8 +182,14 @@ LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 -- name: ProvidersOpsTableCount :one
 SELECT COUNT(*) AS total
 FROM providers p
+LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = 'USD'
 WHERE (sqlc.narg('status')::text IS NULL OR p.status = sqlc.narg('status')::text)
-  AND (sqlc.narg('search')::text IS NULL OR p.name ILIKE '%' || sqlc.narg('search')::text || '%' OR p.slug ILIKE '%' || sqlc.narg('search')::text || '%');
+  AND (sqlc.narg('search')::text IS NULL OR p.name ILIKE '%' || sqlc.narg('search')::text || '%' OR p.slug ILIKE '%' || sqlc.narg('search')::text || '%')
+  AND (
+      sqlc.narg('low_balance')::bool IS NULL
+      OR NOT sqlc.narg('low_balance')::bool
+      OR (pb.balance IS NOT NULL AND pb.balance < 10)
+  );
 
 -- name: ProviderOpsDetail :one
 -- ProviderOpsDetail 单服务商详情概览：渠道数 + attempt 聚合 + Token/利润/TPS。
@@ -191,6 +210,12 @@ WITH money AS (
     WHERE r.final_provider_id = sqlc.arg('provider_id')
       AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
+),
+balance AS (
+    SELECT balance
+    FROM provider_balances
+    WHERE provider_id = sqlc.arg('provider_id')
+      AND currency = 'USD'
 ),
 tps AS (
     SELECT COALESCE(
@@ -217,6 +242,13 @@ attempts AS (
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR a.created_at < sqlc.narg('to_time')::timestamptz)
 )
 SELECT
+    (SELECT balance FROM balance) AS balance_usd,
+    CASE
+        WHEN (SELECT balance FROM balance) IS NULL THEN 'unconfigured'
+        WHEN (SELECT balance FROM balance) < 0 THEN 'negative'
+        WHEN (SELECT balance FROM balance) < 10 THEN 'low'
+        ELSE 'normal'
+    END AS balance_status,
     (SELECT COUNT(*) FROM channels c WHERE c.provider_id = sqlc.arg('provider_id')) AS channel_total,
     (SELECT COUNT(*) FROM channels c WHERE c.provider_id = sqlc.arg('provider_id') AND c.status = 'enabled') AS channel_enabled,
     (SELECT COUNT(*) FROM attempts WHERE status = 'succeeded' OR fault_party = 'upstream') AS attempt_total,

@@ -1,13 +1,14 @@
 # 上线前检查报告（源码复核版）
 
 - 检查日期：2026-08-04
-- 最新复核：2026-08-05
+- 最新复核：2026-08-06
 - 复核范围：`unio-gateway`、`unio-admin`、`unio-blueprint` 当前工作树
 - 状态说明：本报告按后续处置持续更新；已关闭项以当前代码、测试和 Blueprint 为准
 
 ## 一、复核结论
 
-原报告的大多数待修问题已按当前代码、测试和迁移基线复核；本轮直接修复项已关闭，剩余代码风险集中在 C-3，发布执行风险仍是 B-3R：
+原报告的大多数待修问题已按当前代码、测试和迁移基线复核；本轮直接修复项已关闭，剩余发布执行风险是 B-3R。
+C-3 已按产品决定关闭：本次不做账号级或 Provider 级 403 自动冻结：
 
 - B-4 已修好，并已在一次性 PostgreSQL 16 数据库中实际跑过对应测试，应移入已关闭项。
 - B-10 已关闭：Admin 主表、详情和评分提示统一显示 `probe_only` 为“仅探测”，不再展示普通排序总分等式。
@@ -16,7 +17,7 @@
 - 服务商级共享熔断已经写入 Blueprint，不属于文档缺口。
 - C-13 已消除，且本轮完成数据库整理：历史索引、`request_attempts(provider_id, created_at)`、
   `request_records(route_id, created_at)` 和 `permit_id` 事实均已并入建表基线；独立 `000040` 已删除，
-  当前 up/down 最大迁移号为 39。
+  后续已重新使用 `000040-000043` 增加 Provider 余额、探测、账本和待对账成本风险，当前 up/down 最大迁移号为 43。
 - B-1R 已修复：attempt 保存 Redis permit ID。孤儿 worker 会保留 permit 仍 active 的正常长请求；permit
   已失效且客户尚未收到内容时，才在事务内重查 recovery job 和 attempt 死亡证明，收口 request/attempt 并
   释放冻结。旧 attempt 没有 permit ID 时，只自动处理尚未开始上游、也未交付首 Token 的记录。
@@ -40,6 +41,9 @@
 - C-2 已修复：Provider 成本的七个分项先分别保留 10 位小数，总额再由这些已舍入分项相加，
   不会再因两边分别四舍五入而违反成本快照约束。
 - 线路和 Dashboard 的历史统计已经改用请求创建时保存的 Route；API Key 后续改绑不会再移动旧请求。
+- 运行态恢复的时间误差问题已消除：Redis 运行态改为可丢弃，删除人工 begin/commit/release、恢复证据、
+  冒烟证明和时间校验。Redis 完整重启后同时重启 Gateway，启动流程按 PostgreSQL 自动重建可恢复 control，
+  全量核对成功后直接恢复流量。
 
 仍需特别注意的发布验证：
 
@@ -77,7 +81,9 @@
 | C-10 排除原因与毛利检查 | 已修复 | 稳定排除原因补齐中文映射；`not_evaluated` 不再伪造 margin 检查失败。 |
 | C-11 模型缓存命中率 | 已修复 | 模型详情改为 `cache_read_tokens / input_tokens`，不再把 cache write 合并进命中率。 |
 | C-14 Sticky 设置说明 | 已修复 | Gateway 注释、设置定义和 Admin 提示统一为“读取命中不续期，原绑定渠道完整成功后重新延长 TTL”。 |
-| 数据库基线与索引 | 已完成 | 隔离 PostgreSQL 16 以 100 万请求/attempt 验证执行计划，并从零执行 39 个迁移；本地 `unio` 开发库已备份后重建。 |
+| C-3 账号级 403 自动冻结 | 产品决定暂不实施 | 继续只暂停精确 Channel-Model；不根据 403 冻结 Provider 或整个 Channel 账号。Provider 内部余额只供人工排查，后续可靠识别方案另行评审。 |
+| 数据库基线与索引 | 已完成 | 隔离 PostgreSQL 16 以 100 万请求/attempt 验证执行计划；Provider 余额改造后又从零执行 43 个迁移，并验证 `040-043` down/up。 |
+| Redis 运行态自动恢复 | 已简化 | Redis 完整重启后由 Gateway 启动流程按 PostgreSQL 重建 marker、Provider、Channel capacity、关键 control 和未终结 operation；核对成功后自动放流。限流桶、并发租约、Sticky、breaker、cooldown 等临时状态不补回。人工维护 CLI、evidence、maintenance smoke 和 15 分钟时间校验已删除。 |
 
 ## 三、仍待处置：高风险
 
@@ -96,11 +102,11 @@ Redis 恢复和真实供应商链路的当次运行证据。
 
 ## 四、仍待处置：中风险
 
-### C-3 账户级 403 只能按“渠道 + 模型”逐个暂停
+### C-3 账户级 403 自动冻结
 
-**是否存在：存在。** 当前暂停键绑定具体模型。欠费、账号停用这类影响整个渠道账号的 403，需要每个模型各失败一次。
-
-**建议怎么改：** 只有能确认是账号级错误时才增加渠道级暂停；不确定的 403 继续保持模型级，避免一次误判停掉整条渠道。
+**产品决定：本次不做。** 当前仍按精确的 Channel、Model 和 revision 组合暂停，不升级为 Provider 冻结或整个 Channel
+账号冻结。原因是当前没有可靠方法从 403 判断是单模型权限问题，还是整个服务商账号失效；误停会让其他仍可用的模型和渠道一起中断。
+Provider 内部余额只作为 Admin 人工排查 403 的辅助信息，不参与自动冻结、路由或 fallback。后续找到可靠识别方案后另行设计和评审。
 
 ## 五、SQL 与性能
 
@@ -158,7 +164,9 @@ Redis 恢复和真实供应商链路的当次运行证据。
   `request_attempts.permit_id`、两个索引均已写入建表基线。本地 `unio` 开发库已备份后从零重建。
 - 探针：Gateway 有 `/healthz` 和 `/readyz`；Admin 只有 `/healthz`；Worker 没有 HTTP 探针，需要用进程存活、任务心跳或日志监控。
 - Redis 不支持 Cluster；生产应使用受支持的单节点、主从或 Sentinel 方案，并开启持久化。
-- 原状态丢失演练曾经通过 15/15，但当前套件已删除。重新建立可重复演练前，不应把旧结果当作当前版本的自动保证。
+- Redis 完整丢失时直接重启 Redis 和 Gateway。Gateway 会在启动时保持准入关闭，自动重建可恢复 control；
+  全量核对成功后恢复流量。RPM/RPD 桶、并发租约、request token、Sticky、breaker、cooldown、permission 和
+  TPM 观测桶不会从历史补回，会从新请求重新累计。
 - `HTTP_SHUTDOWN_TIMEOUT` 默认 10 秒，可能截断长流；按可接受的发布等待时间调大。
 - 每条线路至少放入两个不同 Provider 的渠道，避免一个 Provider breaker 打开后整条线路没有候选。
 - 增加账务巡检：终态请求仍有 authorized 冻结、余额 reserved 与冻结合计不一致、dead recovery job、超过阈值仍 running 的请求都应告警。
@@ -170,6 +178,7 @@ Redis 恢复和真实供应商链路的当次运行证据。
 | Gateway `go test -count=1 ./...` | 通过；本轮连接一次性 PostgreSQL 16 与隔离 Redis，数据库和 Redis 用例未跳过 |
 | Gateway `go vet ./...` | 通过 |
 | Gateway `go build ./cmd/...` | 通过 |
+| Redis 运行态自动恢复 | 通过：一次性 PostgreSQL 16 从零执行 39 个迁移，并配合隔离 Redis 验证首次 bootstrap、ready marker 丢失自动重建、旧 state-loss operation 自动收口、冲突 marker 保持 fail closed；临时容器已删除 |
 | B-4 专项数据库测试 | 一次性 PostgreSQL 16 全迁移后通过；临时容器已删除 |
 | B-1R 孤儿清扫专项数据库测试 | 一次性 PostgreSQL 16 全迁移后通过：active permit 长流保护、失效 permit 收口、旧记录安全回收、Redis 读取失败保守停止、recovery 重查、迟到 attempt/recovery 插入拒绝、重复执行幂等 |
 | C-8 / B-11 recovery 专项数据库测试 | 一次性 PostgreSQL 16 全迁移后通过：取消、中断、正常缺 usage、绝对成本覆盖长上下文恢复均通过。重放事实列并回建表基线后，原「旧活动 job 迁移拒绝」路径已不存在 |
@@ -183,13 +192,14 @@ Redis 恢复和真实供应商链路的当次运行证据。
 | `govulncheck ./...` | 可达漏洞 0；依赖模块中另有 4 条不可达漏洞提示 |
 | Admin `typecheck` / `eslint` / `vitest` | 通过；16 个测试文件、59 个测试用例；覆盖 probe_only、排除原因、全分页和首屏无逐渠道倍率请求 |
 | Blueprint `make validate` | 通过；140 个 Markdown 文件、41 个目录 |
+| Provider 余额、账本与成本风险 | 通过：可靠请求和模型探测扣减 Provider 余额；已收到 2xx 但 usage 不完整的模型探测进入待对账风险，明确失败的探测只保留探测事实；目标余额调额会收口此前风险。隔离 PostgreSQL 16 已验证负余额、并发连续性、幂等以及 `040-043` down/up；Admin 检查与构建通过 |
 | CLI 端到端 / 运行态故障演练 / 真实上游 | 本轮未执行；adapter 级 OpenAI/DeepSeek 真实上游测试仍在，但不能代替本次 CLI 发布直测。旧执行结果不作为本次发布证据 |
-| 索引执行计划与迁移基线 | 通过：隔离 PostgreSQL 16 装载 100 万 request/attempt；Provider 索引使用 Index Only Scan，Route 改写谓词使用 Route 索引，旧/新 Route 归因逐线路计数差异为 0；空库 39 个迁移成功，`permit_id` 约束和唯一索引存在。 |
+| 索引执行计划与迁移基线 | 通过：隔离 PostgreSQL 16 装载 100 万 request/attempt；Provider 索引使用 Index Only Scan，Route 改写谓词使用 Route 索引，旧/新 Route 归因逐线路计数差异为 0；当前空库 43 个迁移成功，`permit_id`、Provider 账本和成本风险约束存在。 |
 | `deadcode` / `staticcheck` | 本机未安装，本轮未重新执行 |
 
-结论：当前代码可以正常构建，Gateway 全量测试/vet、Admin 检查/构建和文档校验均通过；本轮 B-10、C-4、C-5、
-C-7、C-9、C-10、C-11、C-14 与数据库基线整理已关闭。B-9 已转为风险接受；剩余代码风险是 C-3，
-剩余发布执行风险是 B-3R（本次 CLI 端到端发布检查尚未执行），建议两项分别处理后再做上线确认。
+结论：当前代码可以正常构建，Gateway 全量测试、Admin 检查/构建和文档校验均通过；本轮 B-10、C-3、C-4、C-5、
+C-7、C-9、C-10、C-11、C-14、数据库基线整理、Redis 运行态自动恢复以及 Provider 余额与成本对账改造已关闭。
+B-9 已转为风险接受；剩余发布执行风险是 B-3R（本次 CLI 端到端发布检查尚未执行），完成发布直测后再做上线确认。
 
 注意：本轮改造直接修改了 `000002` / `000004` 历史迁移并删除了 `routes.tpm_limit` 与 `api_keys` 的三列
 废弃限额。任何已有开发库都必须 drop 重建——`app_settings` 里旧的 `{"rpm":0,"tpm":0,"rpd":0}` 不会被

@@ -93,14 +93,10 @@ func observeRuntimeStateEpochEnsure(
 }
 
 func stateEpochRecoveryResult(state runtimecontrol.StateEpochEnsureState) string {
-	switch state {
-	case runtimecontrol.StateEpochEnsureReady:
+	if state == runtimecontrol.StateEpochEnsureReady {
 		return "committed"
-	case runtimecontrol.StateEpochEnsureAwaitingMaintenance:
-		return "awaiting_maintenance"
-	default:
-		return "not_ready"
 	}
+	return "not_ready"
 }
 
 func (t *runtimeControlTelemetry) capture(

@@ -402,6 +402,12 @@ WITH money AS (
       AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
       AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 ),
+balance AS (
+    SELECT balance
+    FROM provider_balances
+    WHERE provider_id = $1
+      AND currency = 'USD'
+),
 tps AS (
     SELECT COALESCE(
         SUM(u.output_tokens_total)::float8 / NULLIF(SUM(
@@ -427,6 +433,13 @@ attempts AS (
       AND ($3::timestamptz IS NULL OR a.created_at < $3::timestamptz)
 )
 SELECT
+    (SELECT balance FROM balance) AS balance_usd,
+    CASE
+        WHEN (SELECT balance FROM balance) IS NULL THEN 'unconfigured'
+        WHEN (SELECT balance FROM balance) < 0 THEN 'negative'
+        WHEN (SELECT balance FROM balance) < 10 THEN 'low'
+        ELSE 'normal'
+    END AS balance_status,
     (SELECT COUNT(*) FROM channels c WHERE c.provider_id = $1) AS channel_total,
     (SELECT COUNT(*) FROM channels c WHERE c.provider_id = $1 AND c.status = 'enabled') AS channel_enabled,
     (SELECT COUNT(*) FROM attempts WHERE status = 'succeeded' OR fault_party = 'upstream') AS attempt_total,
@@ -460,6 +473,8 @@ type ProviderOpsDetailParams struct {
 }
 
 type ProviderOpsDetailRow struct {
+	BalanceUsd       pgtype.Numeric
+	BalanceStatus    string
 	ChannelTotal     int64
 	ChannelEnabled   int64
 	AttemptTotal     int64
@@ -483,6 +498,8 @@ func (q *Queries) ProviderOpsDetail(ctx context.Context, arg ProviderOpsDetailPa
 	row := q.db.QueryRow(ctx, providerOpsDetail, arg.ProviderID, arg.FromTime, arg.ToTime)
 	var i ProviderOpsDetailRow
 	err := row.Scan(
+		&i.BalanceUsd,
+		&i.BalanceStatus,
 		&i.ChannelTotal,
 		&i.ChannelEnabled,
 		&i.AttemptTotal,
@@ -744,6 +761,13 @@ SELECT
     p.origin_revision,
     p.status_revision,
     p.created_at,
+    pb.balance AS balance_usd,
+    CASE
+        WHEN pb.balance IS NULL THEN 'unconfigured'
+        WHEN pb.balance < 0 THEN 'negative'
+        WHEN pb.balance < 10 THEN 'low'
+        ELSE 'normal'
+    END AS balance_status,
     (SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id) AS channel_total,
     (
         SELECT COUNT(DISTINCT cm.model_id)
@@ -759,54 +783,61 @@ SELECT
         WHERE c.provider_id = p.id
     ) AS routes_count
 FROM providers p
+LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = 'USD'
 WHERE ($1::text IS NULL OR p.status = $1::text)
   AND ($2::text IS NULL OR p.name ILIKE '%' || $2::text || '%' OR p.slug ILIKE '%' || $2::text || '%')
+  AND (
+      $3::bool IS NULL
+      OR NOT $3::bool
+      OR (pb.balance IS NOT NULL AND pb.balance < 10)
+  )
 ORDER BY
-  CASE WHEN COALESCE($3::text, 'name') IN ('', 'name') AND COALESCE($4::bool, false) THEN p.name END DESC NULLS LAST,
-  CASE WHEN COALESCE($3::text, 'name') IN ('', 'name') AND NOT COALESCE($4::bool, false) THEN p.name END ASC NULLS LAST,
-  CASE WHEN $3::text = 'created_at' AND COALESCE($4::bool, false) THEN p.created_at END DESC NULLS LAST,
-  CASE WHEN $3::text = 'created_at' AND NOT COALESCE($4::bool, false) THEN p.created_at END ASC NULLS LAST,
-  CASE WHEN $3::text = 'channels' AND COALESCE($4::bool, false) THEN (
+  CASE WHEN COALESCE($4::text, 'name') IN ('', 'name') AND COALESCE($5::bool, false) THEN p.name END DESC NULLS LAST,
+  CASE WHEN COALESCE($4::text, 'name') IN ('', 'name') AND NOT COALESCE($5::bool, false) THEN p.name END ASC NULLS LAST,
+  CASE WHEN $4::text = 'created_at' AND COALESCE($5::bool, false) THEN p.created_at END DESC NULLS LAST,
+  CASE WHEN $4::text = 'created_at' AND NOT COALESCE($5::bool, false) THEN p.created_at END ASC NULLS LAST,
+  CASE WHEN $4::text = 'channels' AND COALESCE($5::bool, false) THEN (
         SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id
     ) END DESC NULLS LAST,
-  CASE WHEN $3::text = 'channels' AND NOT COALESCE($4::bool, false) THEN (
+  CASE WHEN $4::text = 'channels' AND NOT COALESCE($5::bool, false) THEN (
         SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id
     ) END ASC NULLS LAST,
-  CASE WHEN $3::text = 'models' AND COALESCE($4::bool, false) THEN (
+  CASE WHEN $4::text = 'models' AND COALESCE($5::bool, false) THEN (
         SELECT COUNT(DISTINCT cm.model_id)
         FROM channel_models cm
         JOIN channels c ON c.id = cm.channel_id
         WHERE c.provider_id = p.id AND cm.status = 'enabled'
     ) END DESC NULLS LAST,
-  CASE WHEN $3::text = 'models' AND NOT COALESCE($4::bool, false) THEN (
+  CASE WHEN $4::text = 'models' AND NOT COALESCE($5::bool, false) THEN (
         SELECT COUNT(DISTINCT cm.model_id)
         FROM channel_models cm
         JOIN channels c ON c.id = cm.channel_id
         WHERE c.provider_id = p.id AND cm.status = 'enabled'
     ) END ASC NULLS LAST,
-  CASE WHEN $3::text = 'routes' AND COALESCE($4::bool, false) THEN (
+  CASE WHEN $4::text = 'routes' AND COALESCE($5::bool, false) THEN (
         SELECT COUNT(DISTINCT rt.id)
         FROM routes rt
         JOIN route_channels rc ON rc.route_id = rt.id
         JOIN channels c ON c.id = rc.channel_id
         WHERE c.provider_id = p.id
     ) END DESC NULLS LAST,
-  CASE WHEN $3::text = 'routes' AND NOT COALESCE($4::bool, false) THEN (
+  CASE WHEN $4::text = 'routes' AND NOT COALESCE($5::bool, false) THEN (
         SELECT COUNT(DISTINCT rt.id)
         FROM routes rt
         JOIN route_channels rc ON rc.route_id = rt.id
         JOIN channels c ON c.id = rc.channel_id
         WHERE c.provider_id = p.id
     ) END ASC NULLS LAST,
-  CASE WHEN $3::text = 'status' AND COALESCE($4::bool, false) THEN p.status END DESC NULLS LAST,
-  CASE WHEN $3::text = 'status' AND NOT COALESCE($4::bool, false) THEN p.status END ASC NULLS LAST,
+  CASE WHEN $4::text = 'status' AND COALESCE($5::bool, false) THEN p.status END DESC NULLS LAST,
+  CASE WHEN $4::text = 'status' AND NOT COALESCE($5::bool, false) THEN p.status END ASC NULLS LAST,
   p.name
-LIMIT $6 OFFSET $5
+LIMIT $7 OFFSET $6
 `
 
 type ProvidersOpsTableParams struct {
 	Status     pgtype.Text
 	Search     pgtype.Text
+	LowBalance pgtype.Bool
 	SortField  pgtype.Text
 	SortDesc   pgtype.Bool
 	PageOffset int32
@@ -822,6 +853,8 @@ type ProvidersOpsTableRow struct {
 	OriginRevision int64
 	StatusRevision int64
 	CreatedAt      pgtype.Timestamptz
+	BalanceUsd     pgtype.Numeric
+	BalanceStatus  string
 	ChannelTotal   int64
 	ModelsCount    int64
 	RoutesCount    int64
@@ -835,6 +868,7 @@ func (q *Queries) ProvidersOpsTable(ctx context.Context, arg ProvidersOpsTablePa
 	rows, err := q.db.Query(ctx, providersOpsTable,
 		arg.Status,
 		arg.Search,
+		arg.LowBalance,
 		arg.SortField,
 		arg.SortDesc,
 		arg.PageOffset,
@@ -856,6 +890,8 @@ func (q *Queries) ProvidersOpsTable(ctx context.Context, arg ProvidersOpsTablePa
 			&i.OriginRevision,
 			&i.StatusRevision,
 			&i.CreatedAt,
+			&i.BalanceUsd,
+			&i.BalanceStatus,
 			&i.ChannelTotal,
 			&i.ModelsCount,
 			&i.RoutesCount,
@@ -873,17 +909,24 @@ func (q *Queries) ProvidersOpsTable(ctx context.Context, arg ProvidersOpsTablePa
 const providersOpsTableCount = `-- name: ProvidersOpsTableCount :one
 SELECT COUNT(*) AS total
 FROM providers p
+LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = 'USD'
 WHERE ($1::text IS NULL OR p.status = $1::text)
   AND ($2::text IS NULL OR p.name ILIKE '%' || $2::text || '%' OR p.slug ILIKE '%' || $2::text || '%')
+  AND (
+      $3::bool IS NULL
+      OR NOT $3::bool
+      OR (pb.balance IS NOT NULL AND pb.balance < 10)
+  )
 `
 
 type ProvidersOpsTableCountParams struct {
-	Status pgtype.Text
-	Search pgtype.Text
+	Status     pgtype.Text
+	Search     pgtype.Text
+	LowBalance pgtype.Bool
 }
 
 func (q *Queries) ProvidersOpsTableCount(ctx context.Context, arg ProvidersOpsTableCountParams) (int64, error) {
-	row := q.db.QueryRow(ctx, providersOpsTableCount, arg.Status, arg.Search)
+	row := q.db.QueryRow(ctx, providersOpsTableCount, arg.Status, arg.Search, arg.LowBalance)
 	var total int64
 	err := row.Scan(&total)
 	return total, err

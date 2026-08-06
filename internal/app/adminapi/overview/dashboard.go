@@ -20,6 +20,7 @@ type DashboardService interface {
 	// §3.1 概览重构：雷达 / 分组表现 / 性能时序。
 	Radar(ctx context.Context, from, to time.Time) (dashboard.RadarReport, error)
 	Breakdown(ctx context.Context, dimension string, from, to time.Time) ([]dashboard.BreakdownRow, error)
+	LowBalanceProviderCount(ctx context.Context) (int64, error)
 	PerformanceTimeseries(ctx context.Context, interval string, from, to time.Time) ([]dashboard.PerformancePoint, error)
 	TopErrors(ctx context.Context, from, to time.Time) ([]dashboard.ErrorGroup, error)
 }
@@ -219,6 +220,8 @@ type breakdownRowDTO struct {
 	Label          string                    `json:"label"`
 	RefID          *int64                    `json:"ref_id"`
 	Status         string                    `json:"status"`
+	BalanceUSD     *string                   `json:"balance_usd"`
+	BalanceStatus  string                    `json:"balance_status"`
 	Terminal       int64                     `json:"terminal"`
 	Succeeded      int64                     `json:"succeeded"`
 	Failed         int64                     `json:"failed"`
@@ -243,8 +246,9 @@ type successBucketDTO struct {
 }
 
 type breakdownDTO struct {
-	Dimension string            `json:"dimension"`
-	Rows      []breakdownRowDTO `json:"rows"`
+	Dimension               string            `json:"dimension"`
+	Rows                    []breakdownRowDTO `json:"rows"`
+	LowBalanceProviderCount *int64            `json:"low_balance_provider_count,omitempty"`
 }
 
 type errorGroupDTO struct {
@@ -309,17 +313,19 @@ func (h *dashboardHandler) breakdown(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		out = append(out, breakdownRowDTO{
-			Label:       row.Label,
-			RefID:       row.RefID,
-			Status:      row.Status,
-			Terminal:    row.Terminal,
-			Succeeded:   row.Succeeded,
-			Failed:      row.Failed,
-			SuccessRate: row.SuccessRate,
-			Tokens:      row.Tokens,
-			RevenueUSD:  row.RevenueUSD,
-			CostUSD:     row.CostUSD,
-			MarginUSD:   row.MarginUSD,
+			Label:         row.Label,
+			RefID:         row.RefID,
+			Status:        row.Status,
+			BalanceUSD:    row.BalanceUSD,
+			BalanceStatus: row.BalanceStatus,
+			Terminal:      row.Terminal,
+			Succeeded:     row.Succeeded,
+			Failed:        row.Failed,
+			SuccessRate:   row.SuccessRate,
+			Tokens:        row.Tokens,
+			RevenueUSD:    row.RevenueUSD,
+			CostUSD:       row.CostUSD,
+			MarginUSD:     row.MarginUSD,
 			Latency: adminhttp.LatencyStatsDTO{
 				Avg:      row.Latency.Avg,
 				P50:      row.Latency.P50,
@@ -336,7 +342,16 @@ func (h *dashboardHandler) breakdown(w http.ResponseWriter, r *http.Request) {
 			SuccessBuckets: successBuckets,
 		})
 	}
-	adminhttp.WriteData(w, http.StatusOK, breakdownDTO{Dimension: dimension, Rows: out})
+	response := breakdownDTO{Dimension: dimension, Rows: out}
+	if dimension == dashboard.BreakdownProvider {
+		count, err := h.service.LowBalanceProviderCount(r.Context())
+		if err != nil {
+			adminhttp.WriteServiceError(w, err)
+			return
+		}
+		response.LowBalanceProviderCount = &count
+	}
+	adminhttp.WriteData(w, http.StatusOK, response)
 }
 
 func (h *dashboardHandler) topErrors(w http.ResponseWriter, r *http.Request) {

@@ -873,6 +873,7 @@ scan:
 				streamFacts == nil && !emitted {
 				logAttemptResult(err, false)
 				l.MarkAttemptFailed(ctx, attemptRecord, FailureCodeOrFallback(err, string(failure.CodeGatewayBreakerStoreUnavailable)), err)
+				l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, err)
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 					return result, releaseErr
@@ -1018,7 +1019,7 @@ scan:
 				if emitted {
 					// 仅前导帧已交付但没有有效 Token：不进入 partial settlement。
 					l.MarkAttemptFailed(ctx, attemptRecord, "stream_usage_missing", failure.New(failure.CodeGatewayStreamUsageMissing))
-					l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, failure.New(failure.CodeGatewayStreamUsageMissing))
+					l.RecordUsageMissingCostRisk(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, "stream_final_usage_missing")
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 						return result, releaseErr
@@ -1032,6 +1033,7 @@ scan:
 					failure.CodeGatewayStreamUsageMissing,
 					failure.WithMessage("gateway stream final usage is missing"),
 				)
+				l.RecordUsageMissingCostRisk(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, "stream_final_usage_missing")
 
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)

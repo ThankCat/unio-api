@@ -43,16 +43,17 @@ type RouterDeps struct {
 	Sessions                SessionIssuer
 	SessionTTLSeconds       int64
 
-	ProviderService     provider.ProviderService
-	ProviderOpsService  provider.ProviderOpsService
-	ProviderBreaker     provider.BreakerRuntime
-	ChannelService      channel.ChannelService
-	ChannelBreaker      channel.BreakerRuntime
-	ChannelTestService  channel.ChannelTestService
-	ChannelOpsService   channel.ChannelOpsService
-	ModelService        model.ModelService
-	ModelOpsService     model.ModelOpsService
-	ChannelModelService channel.ChannelModelService
+	ProviderService        provider.ProviderService
+	ProviderOpsService     provider.ProviderOpsService
+	ProviderBalanceService provider.ProviderBalanceService
+	ProviderBreaker        provider.BreakerRuntime
+	ChannelService         channel.ChannelService
+	ChannelBreaker         channel.BreakerRuntime
+	ChannelTestService     channel.ChannelTestService
+	ChannelOpsService      channel.ChannelOpsService
+	ModelService           model.ModelService
+	ModelOpsService        model.ModelOpsService
+	ChannelModelService    channel.ChannelModelService
 
 	// 渠道-模型成本价（绝对覆盖）+ 线路（渠道商品）。
 	ChannelPriceService channel.ChannelPriceService
@@ -162,9 +163,10 @@ func NewRouter(deps RouterDeps) http.Handler {
 			// 各业务模块自注册路由（chi 按静态优先于通配匹配，模块注册顺序不影响正确性）。
 			overview.Register(r, overview.Deps{Service: deps.DashboardService})
 			provider.Register(r, provider.Deps{
-				Service:    deps.ProviderService,
-				OpsService: deps.ProviderOpsService,
-				Breaker:    deps.ProviderBreaker,
+				Service:        deps.ProviderService,
+				OpsService:     deps.ProviderOpsService,
+				BalanceService: deps.ProviderBalanceService,
+				Breaker:        deps.ProviderBreaker,
 			})
 			channel.Register(r, channel.Deps{
 				Service:               deps.ChannelService,

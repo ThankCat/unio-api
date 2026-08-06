@@ -372,6 +372,76 @@ type Provider struct {
 	ArchivedAt     pgtype.Timestamptz
 }
 
+type ProviderBalance struct {
+	ID         int64
+	ProviderID int64
+	Currency   string
+	Balance    pgtype.Numeric
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type ProviderCostRisk struct {
+	ID                          int64
+	ProviderID                  int64
+	RequestRecordID             pgtype.Int8
+	RequestAttemptID            pgtype.Int8
+	ProviderProbeRecordID       pgtype.Int8
+	SourceType                  string
+	EstimatedAmount             pgtype.Numeric
+	Currency                    pgtype.Text
+	ReasonCode                  string
+	Reason                      string
+	Status                      string
+	ReconciliationLedgerEntryID pgtype.Int8
+	CreatedAt                   pgtype.Timestamptz
+	ReconciledAt                pgtype.Timestamptz
+}
+
+type ProviderLedgerEntry struct {
+	ID                    int64
+	ProviderID            int64
+	RequestRecordID       pgtype.Int8
+	RequestAttemptID      pgtype.Int8
+	ProviderProbeRecordID pgtype.Int8
+	CostSnapshotID        pgtype.Int8
+	ChannelID             pgtype.Int8
+	RequestID             pgtype.Text
+	ChannelName           pgtype.Text
+	UpstreamModel         pgtype.Text
+	EntryType             string
+	Amount                pgtype.Numeric
+	Currency              string
+	BalanceBefore         pgtype.Numeric
+	BalanceAfter          pgtype.Numeric
+	IdempotencyKey        string
+	Reason                string
+	CreatedAt             pgtype.Timestamptz
+}
+
+type ProviderProbeRecord struct {
+	ID             int64
+	ProviderID     int64
+	ChannelID      int64
+	ModelID        pgtype.Int8
+	Protocol       string
+	Source         string
+	UpstreamModel  string
+	Success        bool
+	HttpStatus     int32
+	ErrorCode      pgtype.Text
+	Message        pgtype.Text
+	LatencyMs      pgtype.Int8
+	UsageSource    pgtype.Text
+	UsageFacts     []byte
+	UsageReliable  bool
+	CostAmount     pgtype.Numeric
+	Currency       pgtype.Text
+	FormulaVersion pgtype.Text
+	IdempotencyKey string
+	CreatedAt      pgtype.Timestamptz
+}
+
 type ProviderRoutingOperation struct {
 	ID          int64
 	Token       string

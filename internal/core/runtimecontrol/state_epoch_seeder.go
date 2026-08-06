@@ -31,10 +31,8 @@ type StateEpochStore interface {
 type StateEpochEnsureState string
 
 const (
-	StateEpochEnsureReady               StateEpochEnsureState = "ready"
-	StateEpochEnsureNotReady            StateEpochEnsureState = "not_ready"
-	StateEpochEnsureAwaitingMaintenance StateEpochEnsureState = "awaiting_maintenance"
-	StateEpochEnsureAwaitingRelease     StateEpochEnsureState = "awaiting_release"
+	StateEpochEnsureReady    StateEpochEnsureState = "ready"
+	StateEpochEnsureNotReady StateEpochEnsureState = "not_ready"
 )
 
 type StateEpochRecord struct {
@@ -154,10 +152,6 @@ func (c *StateEpochCoordinator) reconcileOperation(ctx context.Context, op sqlc.
 		return StateEpochEnsureResult{}, err
 	}
 	_ = canonicalTransition
-	if op.State == "awaiting_release" {
-		return c.validateAwaitingRelease(ctx, op, transition, op.RecoveryEvidence)
-	}
-
 	marker, err := c.store.StateIntegrity(ctx)
 	if err != nil {
 		return StateEpochEnsureResult{}, err
@@ -236,20 +230,10 @@ func (c *StateEpochCoordinator) reconcileOperation(ctx context.Context, op sqlc.
 		return StateEpochEnsureResult{}, epochConflict("epoch operation failed to reach db_committed")
 	}
 
-	// Bootstrap 是无外部流量时的安全例外，可在 not_before 到达后自动 Commit。
-	// state_loss/restore 必须由维护 use-case 完成 drain/window/permission/evidence 授权，
-	// 启动 coordinator 只恢复 pending fence，不擅自放流。
-	if transition.Reason != StateEpochReasonBootstrap || c.now().Before(transition.NotBefore) {
-		row, rowErr := q.GetAppSettingRecord(ctx, RuntimeStateEpochKey)
-		if rowErr != nil {
-			return StateEpochEnsureResult{}, wrapEpochStoreError(rowErr, "read recovering epoch")
-		}
-		record, decodeErr := decodeStateEpochRecord(row.Value, row.Revision)
-		return StateEpochEnsureResult{
-			State: StateEpochEnsureAwaitingMaintenance, Record: record, OperationToken: op.Token,
-		}, decodeErr
-	}
-
+	// Redis runtime state is disposable. Once the durable PostgreSQL transition and
+	// Redis fence agree, every recovery reason follows the same automatic commit path.
+	// Full durable-control reconciliation runs immediately after this method during
+	// Gateway bootstrap; readiness stays closed until that proof succeeds.
 	committed, err := c.store.CommitRuntimeStateEpoch(ctx, fence)
 	if err != nil {
 		return StateEpochEnsureResult{}, err
@@ -378,23 +362,24 @@ func (c *StateEpochCoordinator) finalizeReadyTx(
 	if err != nil {
 		return StateEpochEnsureResult{}, epochConflict("recovering epoch payload is invalid")
 	}
-	if transition.Reason != StateEpochReasonBootstrap {
-		evidence, evidenceErr := DecodeStateEpochRecoveryEvidence(lockedOp.RecoveryEvidence)
-		if evidenceErr != nil || evidence.ValidateDurableBinding(transition, evidence.OperatorRef) != nil {
-			return StateEpochEnsureResult{}, epochConflict("approved recovery evidence is required before epoch finalize")
-		}
-	}
 	if (lockedOp.State == "awaiting_release" || lockedOp.State == "committed") && current.State == StateEpochReady &&
 		current.Epoch == transition.NewEpoch && row.Revision == transition.NewRevision {
+		if lockedOp.State == "awaiting_release" {
+			rows, markErr := q.MarkRuntimeControlOperationCommitted(ctx, sqlc.MarkRuntimeControlOperationCommittedParams{
+				Token: lockedOp.Token, PayloadHash: lockedOp.PayloadHash,
+			})
+			if markErr != nil {
+				return StateEpochEnsureResult{}, wrapEpochStoreError(markErr, "auto-finalize legacy epoch operation")
+			}
+			if rows != 1 {
+				return StateEpochEnsureResult{}, epochConflict("legacy epoch operation auto-finalize CAS failed")
+			}
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return StateEpochEnsureResult{}, wrapEpochStoreError(err, "commit idempotent epoch finalize")
 		}
-		state := StateEpochEnsureReady
-		if lockedOp.State == "awaiting_release" {
-			state = StateEpochEnsureAwaitingRelease
-		}
 		return StateEpochEnsureResult{
-			State:          state,
+			State:          StateEpochEnsureReady,
 			Record:         StateEpochRecord{Value: current, Revision: row.Revision},
 			OperationToken: op.Token,
 		}, nil
@@ -420,28 +405,20 @@ func (c *StateEpochCoordinator) finalizeReadyTx(
 	if rows != 1 {
 		return StateEpochEnsureResult{}, epochConflict("state epoch ready CAS failed")
 	}
-	state := StateEpochEnsureReady
-	if transition.Reason == StateEpochReasonBootstrap {
-		rows, err = q.MarkRuntimeControlOperationCommitted(ctx, sqlc.MarkRuntimeControlOperationCommittedParams{
-			Token: op.Token, PayloadHash: op.PayloadHash,
-		})
-	} else {
-		rows, err = q.MarkRuntimeStateEpochAwaitingRelease(ctx, sqlc.MarkRuntimeStateEpochAwaitingReleaseParams{
-			Token: op.Token, PayloadHash: op.PayloadHash,
-		})
-		state = StateEpochEnsureAwaitingRelease
-	}
+	rows, err = q.MarkRuntimeControlOperationCommitted(ctx, sqlc.MarkRuntimeControlOperationCommittedParams{
+		Token: op.Token, PayloadHash: op.PayloadHash,
+	})
 	if err != nil {
-		return StateEpochEnsureResult{}, wrapEpochStoreError(err, "mark epoch operation ready for release")
+		return StateEpochEnsureResult{}, wrapEpochStoreError(err, "mark epoch operation committed")
 	}
 	if rows != 1 {
-		return StateEpochEnsureResult{}, epochConflict("epoch operation release-state CAS failed")
+		return StateEpochEnsureResult{}, epochConflict("epoch operation commit CAS failed")
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return StateEpochEnsureResult{}, wrapEpochStoreError(err, "commit epoch finalize transaction")
 	}
 	return StateEpochEnsureResult{
-		State:          state,
+		State:          StateEpochEnsureReady,
 		Record:         StateEpochRecord{Value: ready, Revision: transition.NewRevision},
 		OperationToken: op.Token,
 	}, nil
@@ -468,6 +445,19 @@ func validateEpochOperation(op sqlc.RuntimeControlOperation) (StateEpochTransiti
 		return StateEpochTransition{}, nil, epochConflict("state epoch operation revision mismatch")
 	}
 	return transition, canonical, nil
+}
+
+func stateEpochFence(op sqlc.RuntimeControlOperation, transition StateEpochTransition) breakerstore.StateEpochFenceInput {
+	oldEpoch, oldRevision := transition.OldIdentity()
+	return breakerstore.StateEpochFenceInput{
+		Token:              op.Token,
+		TransitionHash:     op.PayloadHash,
+		ExpectedMarkerHash: op.ExpectedMarkerHash.String,
+		OldEpoch:           oldEpoch,
+		OldRevision:        oldRevision,
+		NewEpoch:           transition.NewEpoch,
+		NewRevision:        transition.NewRevision,
+	}
 }
 
 func classifyExpectedMarker(marker breakerstore.StateIntegritySnapshot, op sqlc.RuntimeControlOperation, transition StateEpochTransition) (string, bool, error) {

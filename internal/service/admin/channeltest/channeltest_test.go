@@ -82,10 +82,10 @@ func (m *credentialMetricsStub) IncChannelCredentialRotationVerification(state s
 	m.states = append(m.states, state)
 }
 
-func (p *fakeProber) ProbeChannel(_ context.Context, _, _ string, _ corechannel.Runtime, model string) (int, error) {
+func (p *fakeProber) ProbeChannel(_ context.Context, _, _ string, _ corechannel.Runtime, model string) (adapter.ProbeResult, error) {
 	p.calls++
 	p.model = model
-	return p.status, p.err
+	return adapter.ProbeResult{StatusCode: p.status}, p.err
 }
 
 func rotationFixture() sqlc.PrepareChannelCredentialRotationRow {

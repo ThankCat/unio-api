@@ -66,53 +66,7 @@ SELECT
         SELECT 1
         FROM provider_routing_operations AS operation
         WHERE operation.state <> ALL (ARRAY['committed'::text, 'aborted'::text])
-    ) THEN TRUE ELSE FALSE END AS runtime_operations_reconciled,
-    CASE WHEN
-        epoch.value ->> 'state' = 'ready'
-        AND EXISTS (
-            SELECT 1
-            FROM runtime_control_operations AS operation
-            WHERE operation.kind = 'runtime_state_epoch'
-              AND operation.state = 'awaiting_release'
-              AND operation.next_revision = epoch.revision
-              AND operation.epoch_transition ->> 'new_epoch' = epoch.value ->> 'epoch'
-              AND operation.epoch_transition ->> 'reason' IN ('state_loss', 'restore')
-              AND operation.recovery_evidence ->> 'status' = 'approved'
-              AND operation.release_evidence IS NULL
-        )
-        AND NOT EXISTS (
-            SELECT 1
-            FROM runtime_control_operations AS operation
-            WHERE operation.state <> ALL (ARRAY['committed'::text, 'aborted'::text])
-              AND (
-                  operation.kind = 'runtime_state_epoch'
-                  OR operation.kind = 'channel_capacity'
-                  OR (
-                      operation.kind = 'app_setting'
-                      AND operation.setting_key = ANY (ARRAY[
-                          'gateway.route_rate_limit_defaults'::text,
-                          'gateway.concurrency_defaults'::text,
-                          'gateway.circuit_breaker'::text,
-                          'gateway.routing_balance'::text
-                      ])
-                  )
-              )
-              AND NOT (
-                  operation.kind = 'runtime_state_epoch'
-                  AND operation.state = 'awaiting_release'
-                  AND operation.next_revision = epoch.revision
-                  AND operation.epoch_transition ->> 'new_epoch' = epoch.value ->> 'epoch'
-                  AND operation.epoch_transition ->> 'reason' IN ('state_loss', 'restore')
-                  AND operation.recovery_evidence ->> 'status' = 'approved'
-                  AND operation.release_evidence IS NULL
-              )
-        )
-        AND NOT EXISTS (
-            SELECT 1
-            FROM provider_routing_operations AS operation
-            WHERE operation.state <> ALL (ARRAY['committed'::text, 'aborted'::text])
-        )
-    THEN TRUE ELSE FALSE END AS runtime_maintenance_smoke_allowed
+    ) THEN TRUE ELSE FALSE END AS runtime_operations_reconciled
 FROM app_settings AS epoch
 JOIN app_settings AS route_rate_limit
   ON route_rate_limit.key = 'gateway.route_rate_limit_defaults'

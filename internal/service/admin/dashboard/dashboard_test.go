@@ -32,18 +32,19 @@ type fakeStore struct {
 	costTS     []sqlc.DashboardCostTimeseriesRow
 
 	// §3.1 雷达重构。
-	perfRow        sqlc.DashboardRadarRequestPerfRow
-	throughput     sqlc.DashboardRadarThroughputRow
-	radarTokens    sqlc.DashboardRadarTokensRow
-	backlog        sqlc.DashboardRadarSettlementBacklogRow
-	badChannels    []sqlc.DashboardRadarBadChannelsRow
-	providerBD     []sqlc.DashboardBreakdownProviderRow
-	routeBD        []sqlc.DashboardBreakdownRouteRow
-	channelBD      []sqlc.DashboardBreakdownChannelRow
-	channelBuckets []sqlc.DashboardChannelSuccessBucketsRow
-	modelBD        []sqlc.DashboardBreakdownModelRow
-	perfTS         []sqlc.DashboardPerformanceTimeseriesRow
-	topErrors      []sqlc.DashboardTopErrorsRow
+	perfRow             sqlc.DashboardRadarRequestPerfRow
+	throughput          sqlc.DashboardRadarThroughputRow
+	radarTokens         sqlc.DashboardRadarTokensRow
+	backlog             sqlc.DashboardRadarSettlementBacklogRow
+	badChannels         []sqlc.DashboardRadarBadChannelsRow
+	providerBD          []sqlc.DashboardBreakdownProviderRow
+	routeBD             []sqlc.DashboardBreakdownRouteRow
+	channelBD           []sqlc.DashboardBreakdownChannelRow
+	channelBuckets      []sqlc.DashboardChannelSuccessBucketsRow
+	modelBD             []sqlc.DashboardBreakdownModelRow
+	perfTS              []sqlc.DashboardPerformanceTimeseriesRow
+	topErrors           []sqlc.DashboardTopErrorsRow
+	lowBalanceProviders int64
 
 	gotUnit string
 }
@@ -90,6 +91,9 @@ func (s *fakeStore) DashboardRadarBadChannels(context.Context, sqlc.DashboardRad
 }
 func (s *fakeStore) DashboardBreakdownProvider(context.Context, sqlc.DashboardBreakdownProviderParams) ([]sqlc.DashboardBreakdownProviderRow, error) {
 	return s.providerBD, nil
+}
+func (s *fakeStore) CountLowBalanceProviders(context.Context) (int64, error) {
+	return s.lowBalanceProviders, nil
 }
 func (s *fakeStore) DashboardBreakdownRoute(context.Context, sqlc.DashboardBreakdownRouteParams) ([]sqlc.DashboardBreakdownRouteRow, error) {
 	return s.routeBD, nil
@@ -184,6 +188,28 @@ func TestBreakdownInvalidDimension(t *testing.T) {
 	_, err := NewService(&fakeStore{}).Breakdown(context.Background(), "bogus", time.Time{}, time.Now())
 	if err == nil {
 		t.Fatal("expected error for invalid dimension")
+	}
+}
+
+func TestProviderBreakdownIncludesCurrentBalanceAndIndependentLowBalanceCount(t *testing.T) {
+	store := &fakeStore{
+		providerBD: []sqlc.DashboardBreakdownProviderRow{{
+			ProviderID: 7, ProviderName: "OpenAI", ProviderStatus: "enabled",
+			BalanceUsd: mustNumeric(t, "9.5"), BalanceStatus: "low", TerminalTotal: 2, SucceededTotal: 1,
+		}},
+		lowBalanceProviders: 4,
+	}
+	service := NewService(store)
+	rows, err := service.Breakdown(context.Background(), BreakdownProvider, time.Now().Add(-time.Hour), time.Now())
+	if err != nil {
+		t.Fatalf("provider breakdown: %v", err)
+	}
+	if len(rows) != 1 || rows[0].BalanceUSD == nil || *rows[0].BalanceUSD != "9.5" || rows[0].BalanceStatus != "low" {
+		t.Fatalf("unexpected provider balance mapping: %+v", rows)
+	}
+	count, err := service.LowBalanceProviderCount(context.Background())
+	if err != nil || count != 4 {
+		t.Fatalf("low balance count=%d err=%v", count, err)
 	}
 }
 

@@ -76,38 +76,6 @@ func (q *Queries) CompareAndSetRuntimeStateEpochExpectedMarkerHash(ctx context.C
 	return result.RowsAffected(), nil
 }
 
-const compareAndSetRuntimeStateEpochRecoveryEvidence = `-- name: CompareAndSetRuntimeStateEpochRecoveryEvidence :execrows
-UPDATE runtime_control_operations
-SET recovery_evidence = $1::jsonb, updated_at = now()
-WHERE token = $2
-  AND payload_hash = $3
-  AND kind = 'runtime_state_epoch'
-  AND state = 'db_committed'
-  AND recovery_evidence = $4::jsonb
-`
-
-type CompareAndSetRuntimeStateEpochRecoveryEvidenceParams struct {
-	NextRecoveryEvidence    []byte
-	Token                   string
-	PayloadHash             string
-	CurrentRecoveryEvidence []byte
-}
-
-// 非 bootstrap epoch 只有在 db_committed 隔离态才可 CAS approved evidence；首次批准和
-// 因依赖故障而过期后的 fresh evidence 都走同一 old-value CAS，异 evidence 并发不得覆盖。
-func (q *Queries) CompareAndSetRuntimeStateEpochRecoveryEvidence(ctx context.Context, arg CompareAndSetRuntimeStateEpochRecoveryEvidenceParams) (int64, error) {
-	result, err := q.db.Exec(ctx, compareAndSetRuntimeStateEpochRecoveryEvidence,
-		arg.NextRecoveryEvidence,
-		arg.Token,
-		arg.PayloadHash,
-		arg.CurrentRecoveryEvidence,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const createBootstrapRuntimeStateEpoch = `-- name: CreateBootstrapRuntimeStateEpoch :one
 
 WITH inserted_epoch AS (
@@ -148,7 +116,7 @@ type CreateBootstrapRuntimeStateEpochParams struct {
 // runtime_control_operations 的可恢复发布状态机查询。
 // Admin 与 Worker 共用同一套生成的 sqlc 查询，不各写一套状态机。
 // 普通状态机：preparing -> prepared -> db_committed -> committed；普通 control 允许 preparing|prepared -> aborted；
-// 非 bootstrap epoch 使用 db_committed -> awaiting_release -> committed，任何阶段不允许 Abort。
+// runtime_state_epoch 同样自动推进到 committed，任何阶段不允许 Abort；旧 awaiting_release 记录只做兼容收口。
 // CreateBootstrapRuntimeStateEpoch 在同一 PostgreSQL statement/事务中建立 revision=1/recovering
 // 保留行与 preparing durable operation。已有保留行时返回 no rows，绝不覆盖。
 func (q *Queries) CreateBootstrapRuntimeStateEpoch(ctx context.Context, arg CreateBootstrapRuntimeStateEpochParams) (RuntimeControlOperation, error) {
@@ -223,43 +191,6 @@ func (q *Queries) CreateRuntimeControlOperation(ctx context.Context, arg CreateR
 		arg.ExpectedMarkerHash,
 		arg.RecoveryEvidence,
 	)
-	var i RuntimeControlOperation
-	err := row.Scan(
-		&i.ID,
-		&i.Token,
-		&i.Kind,
-		&i.ChannelID,
-		&i.SettingKey,
-		&i.CurrentRevision,
-		&i.NextRevision,
-		&i.PayloadHash,
-		&i.EpochTransition,
-		&i.ExpectedMarkerHash,
-		&i.RecoveryEvidence,
-		&i.ReleaseEvidence,
-		&i.State,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.CompletedAt,
-	)
-	return i, err
-}
-
-const getLatestCommittedRuntimeStateEpochOperation = `-- name: GetLatestCommittedRuntimeStateEpochOperation :one
-SELECT id, token, kind, channel_id, setting_key, current_revision, next_revision, payload_hash,
-    epoch_transition, expected_marker_hash, recovery_evidence, release_evidence, state, created_at, updated_at, completed_at
-FROM runtime_control_operations
-WHERE kind = 'runtime_state_epoch'
-  AND setting_key = 'gateway.runtime_state_epoch'
-  AND state = 'committed'
-ORDER BY completed_at DESC, id DESC
-LIMIT 1
-`
-
-// 维护 Commit 响应丢失后的无 token 幂等读取；application 仍须严格核对 provided
-// evidence、latest transition new identity 与当前 PostgreSQL ready epoch，不能仅凭 ready 返回成功。
-func (q *Queries) GetLatestCommittedRuntimeStateEpochOperation(ctx context.Context) (RuntimeControlOperation, error) {
-	row := q.db.QueryRow(ctx, getLatestCommittedRuntimeStateEpochOperation)
 	var i RuntimeControlOperation
 	err := row.Scan(
 		&i.ID,
@@ -454,8 +385,8 @@ func (q *Queries) MarkRuntimeControlOperationAborted(ctx context.Context, arg Ma
 const markRuntimeControlOperationCommitted = `-- name: MarkRuntimeControlOperationCommitted :execrows
 UPDATE runtime_control_operations
 SET state = 'committed', completed_at = now(), updated_at = now()
-WHERE token = $1 AND payload_hash = $2 AND state = 'db_committed'
-  AND (kind <> 'runtime_state_epoch' OR epoch_transition ->> 'reason' = 'bootstrap')
+WHERE token = $1 AND payload_hash = $2
+  AND state IN ('db_committed', 'awaiting_release')
 `
 
 type MarkRuntimeControlOperationCommittedParams struct {
@@ -463,7 +394,7 @@ type MarkRuntimeControlOperationCommittedParams struct {
 	PayloadHash string
 }
 
-// db_committed -> committed（Redis Commit 成功后终结）。
+// db_committed/legacy awaiting_release -> committed（Redis Commit 成功后终结）。
 func (q *Queries) MarkRuntimeControlOperationCommitted(ctx context.Context, arg MarkRuntimeControlOperationCommittedParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markRuntimeControlOperationCommitted, arg.Token, arg.PayloadHash)
 	if err != nil {
@@ -512,30 +443,6 @@ func (q *Queries) MarkRuntimeControlOperationPrepared(ctx context.Context, arg M
 	return result.RowsAffected(), nil
 }
 
-const markRuntimeStateEpochAwaitingRelease = `-- name: MarkRuntimeStateEpochAwaitingRelease :execrows
-UPDATE runtime_control_operations
-SET state = 'awaiting_release', updated_at = now()
-WHERE token = $1 AND payload_hash = $2
-  AND kind = 'runtime_state_epoch'
-  AND epoch_transition ->> 'reason' IN ('state_loss', 'restore')
-  AND state = 'db_committed'
-  AND recovery_evidence ->> 'status' = 'approved'
-`
-
-type MarkRuntimeStateEpochAwaitingReleaseParams struct {
-	Token       string
-	PayloadHash string
-}
-
-// MarkRuntimeStateEpochAwaitingRelease 在新 epoch/Redis marker ready 后保留非终态维护锁。
-func (q *Queries) MarkRuntimeStateEpochAwaitingRelease(ctx context.Context, arg MarkRuntimeStateEpochAwaitingReleaseParams) (int64, error) {
-	result, err := q.db.Exec(ctx, markRuntimeStateEpochAwaitingRelease, arg.Token, arg.PayloadHash)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const markRuntimeStateEpochReady = `-- name: MarkRuntimeStateEpochReady :execrows
 UPDATE app_settings
 SET value = $1::jsonb,
@@ -555,31 +462,6 @@ type MarkRuntimeStateEpochReadyParams struct {
 // 必须与 operation db_committed->committed 同事务。
 func (q *Queries) MarkRuntimeStateEpochReady(ctx context.Context, arg MarkRuntimeStateEpochReadyParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markRuntimeStateEpochReady, arg.ReadyValue, arg.Revision, arg.RecoveringValue)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const markRuntimeStateEpochReleased = `-- name: MarkRuntimeStateEpochReleased :execrows
-UPDATE runtime_control_operations
-SET release_evidence = $1::jsonb,
-    state = 'committed', completed_at = now(), updated_at = now()
-WHERE token = $2 AND payload_hash = $3
-  AND kind = 'runtime_state_epoch'
-  AND state = 'awaiting_release'
-  AND release_evidence IS NULL
-`
-
-type MarkRuntimeStateEpochReleasedParams struct {
-	ReleaseEvidence []byte
-	Token           string
-	PayloadHash     string
-}
-
-// MarkRuntimeStateEpochReleased 仅从 awaiting_release 原子记录 post-commit smoke 证据并解除维护锁。
-func (q *Queries) MarkRuntimeStateEpochReleased(ctx context.Context, arg MarkRuntimeStateEpochReleasedParams) (int64, error) {
-	result, err := q.db.Exec(ctx, markRuntimeStateEpochReleased, arg.ReleaseEvidence, arg.Token, arg.PayloadHash)
 	if err != nil {
 		return 0, err
 	}

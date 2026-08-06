@@ -128,11 +128,11 @@ func TestRuntimeStateEpochEnsurePublishesStateLossOutcome(t *testing.T) {
 	recorder := metrics.New()
 	core, logs := observer.New(zap.DebugLevel)
 	observeRuntimeStateEpochEnsure(recorder, zap.New(core), runtimecontrol.StateEpochEnsureResult{
-		State:          runtimecontrol.StateEpochEnsureAwaitingMaintenance,
+		State:          runtimecontrol.StateEpochEnsureReady,
 		OperationToken: "state-loss-operation",
 		Record: runtimecontrol.StateEpochRecord{
 			Value: runtimecontrol.StateEpoch{
-				State:  runtimecontrol.StateEpochRecovering,
+				State:  runtimecontrol.StateEpochReady,
 				Reason: runtimecontrol.StateEpochReasonStateLoss,
 			},
 			Revision: 2,
@@ -141,15 +141,15 @@ func TestRuntimeStateEpochEnsurePublishesStateLossOutcome(t *testing.T) {
 
 	body := scrapeRuntimeControlMetrics(t, recorder)
 	for _, want := range []string{
-		`unio_gateway_runtime_state_integrity{state="lost"} 1`,
-		`unio_gateway_runtime_state_loss_recovery_total{result="awaiting_maintenance"} 1`,
+		`unio_gateway_runtime_state_integrity{state="ready"} 1`,
+		`unio_gateway_runtime_state_loss_recovery_total{result="committed"} 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("state-loss metrics missing %q\n%s", want, body)
 		}
 	}
-	if logs.FilterMessage("runtime state epoch not ready").Len() != 1 {
-		t.Fatalf("missing state-loss structured log: %+v", logs.All())
+	if logs.FilterMessage("runtime state epoch ensured").Len() != 1 {
+		t.Fatalf("missing state-loss success log: %+v", logs.All())
 	}
 }
 

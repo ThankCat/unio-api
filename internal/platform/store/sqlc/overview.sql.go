@@ -395,6 +395,13 @@ SELECT
     a.provider_id,
     a.provider_name,
     a.provider_status,
+    pb.balance AS balance_usd,
+    CASE
+        WHEN pb.balance IS NULL THEN 'unconfigured'
+        WHEN pb.balance < 0 THEN 'negative'
+        WHEN pb.balance < 10 THEN 'low'
+        ELSE 'normal'
+    END AS balance_status,
     a.terminal_total,
     a.succeeded_total,
     a.failed_total,
@@ -410,6 +417,7 @@ SELECT
     a.latency_p99,
     COALESCE(t.avg_tps, 0)::float8 AS avg_tps
 FROM attempt_agg a
+LEFT JOIN provider_balances pb ON pb.provider_id = a.provider_id AND pb.currency = 'USD'
 LEFT JOIN money_agg m ON m.provider_id = a.provider_id
 LEFT JOIN tps_agg t ON t.provider_id = a.provider_id
 ORDER BY a.terminal_total DESC
@@ -425,6 +433,8 @@ type DashboardBreakdownProviderRow struct {
 	ProviderID     int64
 	ProviderName   string
 	ProviderStatus string
+	BalanceUsd     pgtype.Numeric
+	BalanceStatus  string
 	TerminalTotal  int64
 	SucceededTotal int64
 	FailedTotal    int64
@@ -455,6 +465,8 @@ func (q *Queries) DashboardBreakdownProvider(ctx context.Context, arg DashboardB
 			&i.ProviderID,
 			&i.ProviderName,
 			&i.ProviderStatus,
+			&i.BalanceUsd,
+			&i.BalanceStatus,
 			&i.TerminalTotal,
 			&i.SucceededTotal,
 			&i.FailedTotal,

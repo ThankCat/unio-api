@@ -18,7 +18,6 @@ Gateway 的产品边界、公开契约、协议兼容、Provider 适配、请求
 | `cmd/gateway-server` | 提供 `/v1/*` 公开 Gateway API 和已配置的内部只读端点。 |
 | `cmd/admin-server` | 提供 `/admin/v1/*` Admin API。 |
 | `cmd/worker-server` | 运行后台任务；`sync-models` 子命令执行一次 models.dev 目录同步。 |
-| `cmd/runtime-state-maintenance` | 执行运行态 epoch 恢复的 begin、commit 和 release 操作。 |
 
 ## 本地启动
 

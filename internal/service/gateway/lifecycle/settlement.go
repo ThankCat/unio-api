@@ -14,6 +14,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
+	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
@@ -32,6 +33,12 @@ type ChatLedgerCapturer interface {
 	ReleaseWithQueries(ctx context.Context, queries *sqlc.Queries, params ledger.ReleaseParams) (ledger.Reservation, error)
 }
 
+// ChatProviderLedger 定义结算事务内写入 Provider 消费流水所需的最小能力。
+type ChatProviderLedger interface {
+	DebitUsageWithQueries(ctx context.Context, queries *sqlc.Queries, params providerledger.UsageDebitParams) (providerledger.Entry, error)
+	RecordRequestCostRiskWithQueries(ctx context.Context, queries *sqlc.Queries, params providerledger.RequestCostRiskParams) error
+}
+
 // ChatBillingCalculator 定义 chat settlement 计算请求金额所需能力。
 type ChatBillingCalculator interface {
 	CalculateCustomerCharge(facts usage.Facts, price billing.CustomerPriceSnapshot) (billing.CustomerCharge, error)
@@ -44,10 +51,11 @@ type ChatSettlementService struct {
 	queries           *sqlc.Queries
 	billingCalculator ChatBillingCalculator
 	ledgerCapturer    ChatLedgerCapturer
+	providerLedger    ChatProviderLedger
 }
 
 // NewChatSettlementService 创建 chat 请求结算 service。
-func NewChatSettlementService(db ChatTxBeginner, queries *sqlc.Queries, billingCalculator ChatBillingCalculator, ledgerCapturer ChatLedgerCapturer) *ChatSettlementService {
+func NewChatSettlementService(db ChatTxBeginner, queries *sqlc.Queries, billingCalculator ChatBillingCalculator, ledgerCapturer ChatLedgerCapturer, providerLedgers ...ChatProviderLedger) *ChatSettlementService {
 	if db == nil {
 		panic("gateway: chat settlement tx beginner is required")
 	}
@@ -61,11 +69,16 @@ func NewChatSettlementService(db ChatTxBeginner, queries *sqlc.Queries, billingC
 		panic("gateway: chat ledger capturer is required")
 	}
 
+	var providerLedger ChatProviderLedger
+	if len(providerLedgers) > 0 {
+		providerLedger = providerLedgers[0]
+	}
 	return &ChatSettlementService{
 		db:                db,
 		queries:           queries,
 		billingCalculator: billingCalculator,
 		ledgerCapturer:    ledgerCapturer,
+		providerLedger:    providerLedger,
 	}
 }
 
@@ -760,7 +773,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	}
 
 	// 写入成本快照：覆盖路径 cost_price_id 置位、倍率列 NULL；倍率路径反之（cost_price_id NULL + 来源 id/标量置位）。
-	_, err = txQueries.CreateCostSnapshot(ctx, sqlc.CreateCostSnapshotParams{
+	costSnapshotRow, err := txQueries.CreateCostSnapshot(ctx, sqlc.CreateCostSnapshotParams{
 		RequestRecordID:              params.RequestRecord.ID,
 		CostPriceID:                  nullableInt8(cost.channelPriceID),
 		CostBaseModelPriceID:         nullableInt8(cost.costBaseModelPriceID),
@@ -798,6 +811,53 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 			err,
 			failure.WithMessage("create chat cost snapshot"),
 		)
+	}
+
+	// Provider 内部余额只记录可靠的上游 usage。流式断点使用的是平台估算事实，
+	// 即使已经生成客户侧成本快照，也不能把估算金额当作 Provider 实际成本扣入账本。
+	if s.providerLedger != nil && !facts.UsageSource.IsPartialEstimate() && !numericIsZero(providerCost.TotalCostAmount) {
+		channelName, err := txQueries.GetChannelName(ctx, params.FinalChannelID)
+		if err != nil {
+			return failure.Wrap(
+				failure.CodeGatewayChatSettlementFailed,
+				err,
+				failure.WithMessage("load channel name for provider ledger"),
+			)
+		}
+		if _, err := s.providerLedger.DebitUsageWithQueries(ctx, txQueries, providerledger.UsageDebitParams{
+			ProviderID:       params.FinalProviderID,
+			RequestRecordID:  params.RequestRecord.ID,
+			RequestAttemptID: params.AttemptRecord.ID,
+			CostSnapshotID:   costSnapshotRow.ID,
+			ChannelID:        params.FinalChannelID,
+			RequestID:        params.RequestRecord.RequestID,
+			ChannelName:      channelName,
+			UpstreamModel:    params.AttemptRecord.UpstreamModel,
+			Amount:           providerCost.TotalCostAmount,
+			Currency:         costSnapshotRow.Currency,
+			IdempotencyKey:   fmt.Sprintf("provider:usage:%d", costSnapshotRow.ID),
+			Reason:           "请求产生的服务商成本",
+		}); err != nil {
+			return failure.Wrap(
+				failure.CodeGatewayChatSettlementFailed,
+				err,
+				failure.WithMessage("write provider usage ledger"),
+			)
+		}
+	}
+	if s.providerLedger != nil && facts.UsageSource.IsPartialEstimate() && !numericIsZero(providerCost.TotalCostAmount) {
+		if err := s.providerLedger.RecordRequestCostRiskWithQueries(ctx, txQueries, providerledger.RequestCostRiskParams{
+			ProviderID: params.FinalProviderID, RequestRecordID: params.RequestRecord.ID,
+			RequestAttemptID: params.AttemptRecord.ID, EstimatedAmount: providerCost.TotalCostAmount,
+			Currency: costSnapshotRow.Currency, ReasonCode: "partial_stream_estimate",
+			Reason: "已向客户交付部分内容，但上游没有返回完整用量，需要人工核对",
+		}); err != nil {
+			return failure.Wrap(
+				failure.CodeGatewayChatSettlementFailed,
+				err,
+				failure.WithMessage("write provider partial stream cost risk"),
+			)
+		}
 	}
 
 	reservationID := params.Authorization.ReservationID

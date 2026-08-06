@@ -28,9 +28,9 @@ var probeUserContent = json.RawMessage(`"hi"`)
 //   - err!=nil：检测失败，错误链上携带 *adapter.UpstreamError（稳定分类 + 元信息），
 //     调用方据此把失败归类为凭据无效 / 模型不可用 / 超时 / 连不上等；此时状态码取自 UpstreamError
 //     元信息（连接失败/超时未拿到响应时为 0）。
-func (r *AdapterRegistry) ProbeChannel(ctx context.Context, protocol, adapterKey string, rt channel.Runtime, upstreamModel string) (int, error) {
+func (r *AdapterRegistry) ProbeChannel(ctx context.Context, protocol, adapterKey string, rt channel.Runtime, upstreamModel string) (adapter.ProbeResult, error) {
 	if r == nil {
-		return 0, failure.New(
+		return adapter.ProbeResult{}, failure.New(
 			failure.CodeAdapterInvalidRegistration,
 			failure.WithMessage("adapter registry is nil"),
 		)
@@ -39,11 +39,11 @@ func (r *AdapterRegistry) ProbeChannel(ctx context.Context, protocol, adapterKey
 	switch protocol {
 	case routing.ProtocolOpenAI:
 		if r.OpenAI == nil {
-			return 0, errProbeUnsupported(protocol, adapterKey)
+			return adapter.ProbeResult{}, errProbeUnsupported(protocol, adapterKey)
 		}
 		chat, ok := r.OpenAI.Chat(adapterKey)
 		if !ok {
-			return 0, errProbeUnsupported(protocol, adapterKey)
+			return adapter.ProbeResult{}, errProbeUnsupported(protocol, adapterKey)
 		}
 		maxTokens := probeMaxTokens
 		resp, err := chat.ChatCompletions(ctx, rt, chatadapter.ChatRequest{
@@ -52,17 +52,17 @@ func (r *AdapterRegistry) ProbeChannel(ctx context.Context, protocol, adapterKey
 			MaxTokens: &maxTokens,
 		})
 		if err != nil {
-			return probeStatusFromError(err), err
+			return adapter.ProbeResult{StatusCode: probeStatusFromError(err)}, err
 		}
-		return resp.Upstream.StatusCode, nil
+		return adapter.ProbeResult{StatusCode: resp.Upstream.StatusCode, Facts: &resp.Facts}, nil
 
 	case routing.ProtocolAnthropic:
 		if r.Anthropic == nil {
-			return 0, errProbeUnsupported(protocol, adapterKey)
+			return adapter.ProbeResult{}, errProbeUnsupported(protocol, adapterKey)
 		}
 		msg, ok := r.Anthropic.Messages(adapterKey)
 		if !ok {
-			return 0, errProbeUnsupported(protocol, adapterKey)
+			return adapter.ProbeResult{}, errProbeUnsupported(protocol, adapterKey)
 		}
 		maxTokens := probeMaxTokens
 		resp, err := msg.Messages(ctx, rt, messagesadapter.MessageRequest{
@@ -71,12 +71,12 @@ func (r *AdapterRegistry) ProbeChannel(ctx context.Context, protocol, adapterKey
 			MaxTokens: &maxTokens,
 		})
 		if err != nil {
-			return probeStatusFromError(err), err
+			return adapter.ProbeResult{StatusCode: probeStatusFromError(err)}, err
 		}
-		return resp.Upstream.StatusCode, nil
+		return adapter.ProbeResult{StatusCode: resp.Upstream.StatusCode, Facts: &resp.Facts}, nil
 
 	default:
-		return 0, errProbeUnsupported(protocol, adapterKey)
+		return adapter.ProbeResult{}, errProbeUnsupported(protocol, adapterKey)
 	}
 }
 
