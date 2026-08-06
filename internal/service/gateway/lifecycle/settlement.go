@@ -983,12 +983,13 @@ func publishSettlementLogSummary(ctx context.Context, facts adapter.ResponseFact
 
 // FinalizeDeadChatSettlement 收口一条「补偿任务已 dead、但请求仍停留在 running」的资金/状态残留。
 //
-// settlement 永久失败、补偿任务耗尽自动重试后会进入 dead，但此前没有任何路径把请求从 running 推进到
-// 终态，也没有释放冻结余额——请求会永远显示「进行中」，用户余额也被永久冻结。本方法在单事务内：
+// settlement 永久失败、补偿任务耗尽自动重试后会进入 dead。此前的收口会释放冻结余额并把 request
+// 推进到 failed，但 request_attempt 是独立记录，仍会保持 running。本方法在单事务内：
 //  1. 锁请求记录，仅当其仍为 running 才继续（幂等闸门：已被正常结算或其他路径收口则直接返回）；
 //  2. 释放冻结余额并记平台风险敞口异常（与 stream_settlement_failed_after_upstream_success 同语义：
 //     上游可能已产生成本但无可靠结算，平台承担、不向用户扣费）；
-//  3. 把请求原子推进到 failed。
+//  3. 把关联的上游 attempt 原子推进到 failed，同时保留 job 固化的上游成功事实；
+//  4. 把请求原子推进到 failed。
 //
 // 以「请求仍为 running」为闸门，崩溃后由 worker 下个 tick 安全重放。
 func (s *ChatSettlementService) FinalizeDeadChatSettlement(ctx context.Context, job sqlc.SettlementRecoveryJob) error {
@@ -1025,12 +1026,43 @@ func (s *ChatSettlementService) FinalizeDeadChatSettlement(ctx context.Context, 
 	}
 
 	txRequestLog := requestlog.NewStore(txQueries)
+	completedAt := time.Now()
+	// request 和 attempt 是独立的状态记录；request 的失败更新不会级联收口 attempt。
+	// dead job 代表上游事实已经落盘但最终结算无法可靠完成，因此保留这些事实并将 attempt
+	// 记为 settlement failure，避免请求已终态而 attempt 永久 running。
+	_, err = txRequestLog.MarkSettledAttemptFailed(ctx, requestlog.MarkSettledAttemptFailedParams{
+		MarkAttemptSucceededParams: requestlog.MarkAttemptSucceededParams{
+			ID:                    job.AttemptID,
+			UpstreamResponseID:    job.UpstreamResponseID,
+			UpstreamResponseModel: job.UpstreamModel,
+			UpstreamFinishReason:  job.UpstreamFinishReason,
+			FinishClass:           job.FinishClass,
+			UpstreamStatusCode:    int(job.UpstreamStatusCode),
+			UpstreamRequestID:     UpstreamRequestIDPtr(chatSettlementText(job.UpstreamRequestID)),
+			// MarkSettledRequestAttemptFailed 使用 COALESCE 保留 attempt 已记录的 first-token 时间；
+			// dead recovery job 本身不重复保存该时间点。
+			FinalUsageReceived:  !usage.Source(job.UsageSource).IsPartialEstimate(),
+			UsageMappingVersion: job.UsageMappingVersion,
+			CompletedAt:         completedAt,
+		},
+		ErrorCode:           string(failure.CodeGatewayChatSettlementFailed),
+		ErrorMessage:        BaseSafeRequestLogErrorMessage(string(failure.CodeGatewayChatSettlementFailed)),
+		InternalErrorDetail: "settlement recovery job exhausted retries; upstream attempt finalized as failed",
+	})
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("mark attempt failed for dead chat settlement finalize"),
+		)
+	}
+
 	_, err = txRequestLog.MarkRequestFailed(ctx, requestlog.MarkRequestFailedParams{
 		ID:                  job.RequestRecordID,
 		ErrorCode:           string(failure.CodeGatewayChatSettlementFailed),
 		ErrorMessage:        BaseSafeRequestLogErrorMessage(string(failure.CodeGatewayChatSettlementFailed)),
 		InternalErrorDetail: "settlement recovery job exhausted retries; frozen balance released and request finalized as failed",
-		CompletedAt:         time.Now(),
+		CompletedAt:         completedAt,
 	})
 	if err != nil {
 		return failure.Wrap(
