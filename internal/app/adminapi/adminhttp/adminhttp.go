@@ -142,13 +142,18 @@ func InvalidRequestField(field, message string) error {
 
 // PathID 解析路径参数 {id}，非法或非正整数时返回 admin_invalid_argument。
 func PathID(r *http.Request) (int64, error) {
-	raw := chi.URLParam(r, "id")
+	return PathInt64(r, "id")
+}
+
+// PathInt64 解析指定名称的路径参数，非法或非正整数时返回 admin_invalid_argument。
+func PathInt64(r *http.Request, name string) (int64, error) {
+	raw := chi.URLParam(r, name)
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || id <= 0 {
 		return 0, failure.New(
 			failure.CodeAdminInvalidArgument,
-			failure.WithMessage("id path parameter must be a positive integer"),
-			failure.WithField("field", "id"),
+			failure.WithMessage(name+" path parameter must be a positive integer"),
+			failure.WithField("field", name),
 		)
 	}
 	return id, nil

@@ -88,6 +88,7 @@ func DefaultRegistry() *Registry {
 		capacityWaitTimeoutDefinition(),
 		gatewayLoggingDebugSessionDefinition(),
 		channelTestDefinition(),
+		channelModelDiscoveryDefinition(),
 		dashboardThresholdsDefinition(),
 	)
 }

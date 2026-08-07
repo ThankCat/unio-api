@@ -28,7 +28,9 @@ const (
 // BuildUpstreamURL 从 Origin BaseURL（root）与标准/自定义相对 operation 路径拼接最终上游 URL。
 //
 // 语义：保留 base 已有 path 段（如 provider-specific 前缀），把 operationPath 追加其后，
-// 用 url.JoinPath 归一多余斜杠，避免出现 `//` 或丢段。base 为空、非法或非 http(s) 时返回配置错误。
+// 用 url.JoinPath 归一多余斜杠，避免出现 `//` 或丢段。若 base 已以 `/v1` 结尾且标准
+// operationPath 也以 `/v1` 开头，只保留一份版本段，使 Admin API Root 可兼容带或不带末尾 `/v1`。
+// base 为空、非法或非 http(s) 时返回配置错误。
 func BuildUpstreamURL(baseRoot, operationPath string) (string, error) {
 	trimmed := strings.TrimSpace(baseRoot)
 	if trimmed == "" {
@@ -59,7 +61,13 @@ func BuildUpstreamURL(baseRoot, operationPath string) (string, error) {
 		)
 	}
 
-	joined, err := url.JoinPath(trimmed, operationPath)
+	operation := strings.TrimSpace(operationPath)
+	if strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/v1") &&
+		(operation == "/v1" || strings.HasPrefix(operation, "/v1/")) {
+		operation = strings.TrimPrefix(operation, "/v1")
+	}
+
+	joined, err := url.JoinPath(trimmed, operation)
 	if err != nil {
 		return "", failure.Wrap(
 			failure.CodeConfigInvalid,

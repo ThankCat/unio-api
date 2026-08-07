@@ -18,6 +18,10 @@ import (
 // AdminBackendChannelTestKey 是渠道检测/自动巡检的聚合配置(开关、间隔、探测超时、日志保留)。
 const AdminBackendChannelTestKey = "admin_backend.channel_test"
 
+// AdminBackendChannelModelDiscoveryKey 是上游模型发现 worker 的独立配置。
+// 它只控制快照发现，不复用会修改 credential_valid 的渠道巡检开关。
+const AdminBackendChannelModelDiscoveryKey = "admin_backend.channel_model_discovery"
+
 // DefaultChannelTestProbeTimeoutSetting 是渠道检测超时的代码默认(60s)。
 // 与迁移前 CHANNEL_TEST_PROBE_TIMEOUT_MAX 对齐:给慢上游足够响应时间,又不让坏渠道拖垮巡检。
 const DefaultChannelTestProbeTimeoutSetting = 60 * time.Second
@@ -144,4 +148,83 @@ func AdminBackendChannelTestWorkerInterval(ctx context.Context, store *SettingsS
 // AdminBackendChannelTestLogRetention 读取日志保留条数(聚合配置的便捷访问器)。
 func AdminBackendChannelTestLogRetention(ctx context.Context, store *SettingsStore) int {
 	return AdminBackendChannelTest(ctx, store).LogRetentionPerChannel
+}
+
+// ChannelModelDiscoverySettings 是渠道上游模型发现的热更新配置。
+type ChannelModelDiscoverySettings struct {
+	Enabled             bool
+	Interval            time.Duration
+	Timeout             time.Duration
+	RetentionPerChannel int
+}
+
+// DefaultChannelModelDiscoverySettings 返回发现 worker 的保守默认值。
+func DefaultChannelModelDiscoverySettings() ChannelModelDiscoverySettings {
+	return ChannelModelDiscoverySettings{
+		Enabled: true, Interval: 6 * time.Hour, Timeout: 15 * time.Second, RetentionPerChannel: 30,
+	}
+}
+
+type channelModelDiscoveryDoc struct {
+	Enabled             bool  `json:"enabled"`
+	IntervalMs          int64 `json:"interval_ms"`
+	TimeoutMs           int64 `json:"timeout_ms"`
+	RetentionPerChannel int   `json:"retention_per_channel"`
+}
+
+func encodeChannelModelDiscoverySettings(s ChannelModelDiscoverySettings) json.RawMessage {
+	raw, err := json.Marshal(channelModelDiscoveryDoc{
+		Enabled: s.Enabled, IntervalMs: durationToMs(s.Interval), TimeoutMs: durationToMs(s.Timeout),
+		RetentionPerChannel: s.RetentionPerChannel,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("appsettings: encode channel model discovery settings: %v", err))
+	}
+	return raw
+}
+
+// DecodeChannelModelDiscoverySettings 解码并校验模型发现配置。
+func DecodeChannelModelDiscoverySettings(raw []byte) (ChannelModelDiscoverySettings, error) {
+	var doc channelModelDiscoveryDoc
+	if err := strictUnmarshal(raw, &doc); err != nil {
+		return ChannelModelDiscoverySettings{}, err
+	}
+	if doc.IntervalMs <= 0 {
+		return ChannelModelDiscoverySettings{}, errors.New("interval_ms must be > 0")
+	}
+	if doc.TimeoutMs <= 0 {
+		return ChannelModelDiscoverySettings{}, errors.New("timeout_ms must be > 0")
+	}
+	if doc.RetentionPerChannel <= 0 {
+		return ChannelModelDiscoverySettings{}, errors.New("retention_per_channel must be > 0")
+	}
+	return ChannelModelDiscoverySettings{
+		Enabled: doc.Enabled, Interval: msToDuration(doc.IntervalMs), Timeout: msToDuration(doc.TimeoutMs),
+		RetentionPerChannel: doc.RetentionPerChannel,
+	}, nil
+}
+
+func channelModelDiscoveryDefinition() Definition {
+	defaults := DefaultChannelModelDiscoverySettings()
+	return Definition{
+		Key: AdminBackendChannelModelDiscoveryKey, Category: "admin_backend", Label: "渠道模型发现",
+		Description: "周期读取启用渠道的上游模型列表并保存成功快照。发现失败不会修改 credential_valid、渠道、模型或绑定状态。时长单位毫秒，保存后约 3 秒内生效。",
+		HotReload:   true, Default: encodeChannelModelDiscoverySettings(defaults),
+		Validate: func(raw json.RawMessage) error {
+			_, err := DecodeChannelModelDiscoverySettings(raw)
+			return err
+		},
+	}
+}
+
+// AdminBackendChannelModelDiscovery 读取当前生效的上游模型发现配置。
+func AdminBackendChannelModelDiscovery(ctx context.Context, store *SettingsStore) ChannelModelDiscoverySettings {
+	if store == nil {
+		return DefaultChannelModelDiscoverySettings()
+	}
+	settings, err := DecodeChannelModelDiscoverySettings(store.Raw(ctx, AdminBackendChannelModelDiscoveryKey))
+	if err != nil {
+		return DefaultChannelModelDiscoverySettings()
+	}
+	return settings
 }

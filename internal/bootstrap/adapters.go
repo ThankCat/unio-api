@@ -8,6 +8,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic"
 	anthropicdeepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/deepseek/messages"
 	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter/modeldiscovery"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter/openai"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	openaideepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/deepseek/chatcompletions"
@@ -41,10 +42,13 @@ func NewAdapterRegistry(client *http.Client, logger *zap.Logger) (*lifecycle.Ada
 	openAIDeepSeekAdapter := openaideepseek.NewAdapter(client, logger)
 	openAIOfficialAdapter := chatcompletionsadapter.NewAdapter(client)
 	openAIResponsesAdapter := openairesponses.NewAdapter(client)
+	openAIModelLister := modeldiscovery.NewOpenAICompatible(client)
+	anthropicModelLister := modeldiscovery.NewAnthropic(client)
 
 	openAIRegistry, err := openai.NewRegistry(
 		openai.Registration{
 			Key:                "deepseek",
+			Models:             openAIModelLister,
 			Chat:               openAIDeepSeekAdapter,
 			StreamChat:         openAIDeepSeekAdapter,
 			ChatInputTokenizer: openAIDeepSeekAdapter,
@@ -54,6 +58,7 @@ func NewAdapterRegistry(client *http.Client, logger *zap.Logger) (*lifecycle.Ada
 		// 走 responses 直传、/chat/completions 走 chat 直传）。
 		openai.Registration{
 			Key:                     "openai",
+			Models:                  openAIModelLister,
 			Chat:                    openAIOfficialAdapter,
 			StreamChat:              openAIOfficialAdapter,
 			ChatInputTokenizer:      openAIOfficialAdapter,
@@ -72,13 +77,16 @@ func NewAdapterRegistry(client *http.Client, logger *zap.Logger) (*lifecycle.Ada
 
 	anthropicRegistry, err := anthropic.NewRegistry(
 		anthropic.Registration{
-			Key:                    "deepseek",
+			Key: "deepseek",
+			// DeepSeek 的模型目录仍是 OpenAI-compatible Bearer `/v1/models`。
+			Models:                 openAIModelLister,
 			Messages:               anthropicDeepSeekAdapter,
 			StreamMessages:         anthropicDeepSeekAdapter,
 			MessagesInputTokenizer: anthropicDeepSeekAdapter,
 		},
 		anthropic.Registration{
 			Key:                    "anthropic",
+			Models:                 anthropicModelLister,
 			Messages:               anthropicOfficialAdapter,
 			StreamMessages:         anthropicOfficialAdapter,
 			MessagesInputTokenizer: anthropicOfficialAdapter,

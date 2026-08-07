@@ -28,6 +28,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channel"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelcostmultiplier"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelmodel"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/channelmodelinventory"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelops"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelprice"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelrechargefactor"
@@ -207,6 +208,9 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	modelService := model.NewService(queries)
 	modelOpsService := modelops.NewService(queries)
 	channelModelService := channelmodel.NewService(queries)
+	channelModelInventoryService := channelmodelinventory.NewService(
+		deps.DB, queries, adapterRegistry, adapterRegistry, providerLedgerService, settingsStore,
+	)
 	channelPriceService := channelprice.NewService(queries)
 	modelPriceService := modelprice.NewService(queries)
 	// DEC-027 渠道成本倍率：渠道价格倍率 / 渠道充值倍率，均复用同一 sqlc Queries。
@@ -243,6 +247,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	})
 	// 阶段 14 模型目录：浏览 models.dev 目录 + 从目录采纳/刷新/更新提醒（采纳/刷新需事务，复用 deps.DB）。
 	modelCatalogAdminService := modelcatalogadmin.NewService(deps.DB, queries)
+	channelModelInventoryService.WithCatalogAdopter(modelCatalogAdminService)
 
 	// M9 工作台看板：复用同一 sqlc Queries 做只读聚合（KPI 概览 + 时间序列）。
 	dashboardService := dashboard.NewService(queries)
@@ -279,19 +284,20 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		Sessions:                sessions,
 		SessionTTLSeconds:       int64(deps.Config.Admin.SessionTTL.Seconds()),
 
-		ProviderService:        providerService,
-		ProviderOpsService:     providerOpsService,
-		ProviderBalanceService: providerBalanceService,
-		ProviderBreaker:        providerBreakerRuntime,
-		ChannelService:         channelService,
-		ChannelBreaker:         channelBreakerRuntime,
-		ChannelTestService:     channelTestService,
-		ChannelOpsService:      channelOpsService,
-		ModelService:           modelService,
-		ModelOpsService:        modelOpsService,
-		ChannelModelService:    channelModelService,
-		ChannelPriceService:    channelPriceService,
-		ModelPriceService:      modelPriceService,
+		ProviderService:              providerService,
+		ProviderOpsService:           providerOpsService,
+		ProviderBalanceService:       providerBalanceService,
+		ProviderBreaker:              providerBreakerRuntime,
+		ChannelService:               channelService,
+		ChannelBreaker:               channelBreakerRuntime,
+		ChannelTestService:           channelTestService,
+		ChannelOpsService:            channelOpsService,
+		ModelService:                 modelService,
+		ModelOpsService:              modelOpsService,
+		ChannelModelService:          channelModelService,
+		ChannelModelInventoryService: channelModelInventoryService,
+		ChannelPriceService:          channelPriceService,
+		ModelPriceService:            modelPriceService,
 
 		ChannelCostMultiplierService: channelCostMultiplierService,
 		ChannelRechargeFactorService: channelRechargeFactorService,

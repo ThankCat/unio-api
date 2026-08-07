@@ -10,6 +10,7 @@ type Deps struct {
 	OpsService            ChannelOpsService
 	TestService           ChannelTestService
 	ModelService          ChannelModelService
+	ModelInventoryService ChannelModelInventoryService
 	PriceService          ChannelPriceService
 	CostMultiplierService ChannelCostMultiplierService
 	RechargeFactorService ChannelRechargeFactorService
@@ -67,6 +68,18 @@ func Register(r chi.Router, d Deps) {
 		r.Post("/channels/{id}/models", cmh.create)
 		r.Patch("/channels/{id}/models/{modelId}", cmh.update)
 		r.Delete("/channels/{id}/models/{modelId}", cmh.delete)
+	}
+
+	if d.ModelInventoryService != nil {
+		cmih := &channelModelInventoryHandler{service: d.ModelInventoryService}
+		r.Post("/channels/{id}/model-discoveries", cmih.createDiscovery)
+		r.Get("/channels/{id}/model-discoveries", cmih.listDiscoveries)
+		r.Get("/channels/{id}/model-discoveries/{runId}", cmih.getDiscovery)
+		r.Get("/channels/{id}/model-inventory", cmih.inventory)
+		r.Post("/channels/{id}/model-verifications", cmih.createVerification)
+		r.Get("/channels/{id}/model-verifications/{runId}", cmih.getVerification)
+		r.Post("/channels/{id}/models/batch", cmih.bindBatch)
+		r.Post("/channels/{id}/models/adopt-and-bind", cmih.adoptAndBind)
 	}
 
 	if d.PriceService != nil {

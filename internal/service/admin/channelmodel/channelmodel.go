@@ -34,6 +34,7 @@ type Store interface {
 	GetChannelModel(ctx context.Context, arg sqlc.GetChannelModelParams) (sqlc.ChannelModel, error)
 	CreateChannelModel(ctx context.Context, arg sqlc.CreateChannelModelParams) (sqlc.ChannelModel, error)
 	UpdateChannelModel(ctx context.Context, arg sqlc.UpdateChannelModelParams) (sqlc.ChannelModel, error)
+	GetCurrentChannelModelVerificationEvidence(ctx context.Context, arg sqlc.GetCurrentChannelModelVerificationEvidenceParams) (sqlc.ChannelModelVerificationItem, error)
 	DeleteChannelModel(ctx context.Context, arg sqlc.DeleteChannelModelParams) (int64, error)
 }
 
@@ -64,6 +65,8 @@ type UpdateInput struct {
 	ModelID       int64
 	UpstreamModel string
 	Status        string
+	// VerificationItemID 是启用绑定或替换 upstream_model 时必须提交的当前成功验证证据。
+	VerificationItemID *int64
 }
 
 // Service 编排 channel↔model 绑定读写。
@@ -113,6 +116,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Binding, error) {
 	if err := validateStatus(in.Status); err != nil {
 		return Binding{}, err
 	}
+	// 新绑定一律先进入“已绑定、未启用”，验证成功后再由 Update 显式启用。
+	in.Status = StatusDisabled
 
 	if err := s.ensureChannel(ctx, in.ChannelID); err != nil {
 		return Binding{}, err
@@ -154,6 +159,28 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Binding, error) {
 	}
 	if err := validateStatus(in.Status); err != nil {
 		return Binding{}, err
+	}
+	current, err := s.store.GetChannelModel(ctx, sqlc.GetChannelModelParams{ChannelID: in.ChannelID, ModelID: in.ModelID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Binding{}, notFound("channel model binding not found")
+		}
+		return Binding{}, storeFailed(err, "get channel model binding")
+	}
+	requiresVerification := current.UpstreamModel != upstreamModel ||
+		(current.Status == StatusDisabled && in.Status == StatusEnabled)
+	if requiresVerification {
+		if in.VerificationItemID == nil || *in.VerificationItemID <= 0 {
+			return Binding{}, conflict("a current successful model verification is required before enabling or remapping the binding")
+		}
+		if _, err := s.store.GetCurrentChannelModelVerificationEvidence(ctx, sqlc.GetCurrentChannelModelVerificationEvidenceParams{
+			ItemID: *in.VerificationItemID, ChannelID: in.ChannelID, ModelID: in.ModelID, UpstreamModel: upstreamModel,
+		}); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return Binding{}, conflict("model verification is missing, failed, stale, or belongs to another binding")
+			}
+			return Binding{}, storeFailed(err, "validate channel model verification evidence")
+		}
 	}
 
 	row, err := s.store.UpdateChannelModel(ctx, sqlc.UpdateChannelModelParams{

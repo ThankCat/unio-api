@@ -113,6 +113,67 @@ type ChannelModel struct {
 	UpdatedAt     pgtype.Timestamptz
 }
 
+type ChannelModelDiscoveryItem struct {
+	RunID             int64
+	UpstreamModel     string
+	OwnedBy           pgtype.Text
+	UpstreamCreatedAt pgtype.Timestamptz
+	CreatedAt         pgtype.Timestamptz
+}
+
+type ChannelModelDiscoveryRun struct {
+	ID                     int64
+	ChannelID              int64
+	Source                 string
+	Status                 string
+	ChannelConfigRevision  int64
+	ProviderOriginRevision int64
+	ProviderStatusRevision int64
+	AttemptCount           int32
+	NextAttemptAt          pgtype.Timestamptz
+	ModelCount             int32
+	WarningCode            pgtype.Text
+	ErrorCode              pgtype.Text
+	Message                pgtype.Text
+	CreatedAt              pgtype.Timestamptz
+	StartedAt              pgtype.Timestamptz
+	CompletedAt            pgtype.Timestamptz
+}
+
+type ChannelModelVerificationItem struct {
+	ID                    int64
+	RunID                 int64
+	ModelID               int64
+	UpstreamModel         string
+	Status                string
+	Success               pgtype.Bool
+	HttpStatus            int32
+	ErrorCode             pgtype.Text
+	Message               pgtype.Text
+	LatencyMs             pgtype.Int8
+	ProviderProbeRecordID pgtype.Int8
+	CreatedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+}
+
+type ChannelModelVerificationRun struct {
+	ID                     int64
+	ChannelID              int64
+	Source                 string
+	Status                 string
+	ChannelConfigRevision  int64
+	ProviderOriginRevision int64
+	ProviderStatusRevision int64
+	TotalCount             int32
+	SucceededCount         int32
+	FailedCount            int32
+	ErrorCode              pgtype.Text
+	Message                pgtype.Text
+	CreatedAt              pgtype.Timestamptz
+	StartedAt              pgtype.Timestamptz
+	CompletedAt            pgtype.Timestamptz
+}
+
 type ChannelPrice struct {
 	ID                     int64
 	ChannelID              int64

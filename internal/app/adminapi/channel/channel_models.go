@@ -44,8 +44,9 @@ type createChannelModelRequest struct {
 }
 
 type updateChannelModelRequest struct {
-	UpstreamModel string `json:"upstream_model"`
-	Status        string `json:"status"`
+	UpstreamModel      string `json:"upstream_model"`
+	Status             string `json:"status"`
+	VerificationItemID *int64 `json:"verification_item_id"`
 }
 
 type channelModelsHandler struct {
@@ -119,10 +120,11 @@ func (h *channelModelsHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	b, err := h.service.Update(r.Context(), channelmodel.UpdateInput{
-		ChannelID:     channelID,
-		ModelID:       modelID,
-		UpstreamModel: req.UpstreamModel,
-		Status:        req.Status,
+		ChannelID:          channelID,
+		ModelID:            modelID,
+		UpstreamModel:      req.UpstreamModel,
+		Status:             req.Status,
+		VerificationItemID: req.VerificationItemID,
 	})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)

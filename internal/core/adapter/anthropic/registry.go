@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
@@ -22,6 +23,7 @@ var (
 // SQL 先按 protocol=anthropic 筛选 channel，lifecycle 再按 registry capability 过滤。
 type Registration struct {
 	Key                    string
+	Models                 adapter.ModelLister
 	Messages               messagesadapter.MessagesAdapter
 	StreamMessages         messagesadapter.StreamMessagesAdapter
 	MessagesInputTokenizer messagesadapter.MessagesInputTokenizer
@@ -29,6 +31,7 @@ type Registration struct {
 
 // Registry 根据 adapter key 查找 Anthropic 协议族 adapter 能力。
 type Registry struct {
+	models         map[string]adapter.ModelLister
 	messages       map[string]messagesadapter.MessagesAdapter
 	streamMessages map[string]messagesadapter.StreamMessagesAdapter
 	tokenizer      map[string]messagesadapter.MessagesInputTokenizer
@@ -37,6 +40,7 @@ type Registry struct {
 // NewRegistry 创建 Anthropic 协议族 adapter registry。
 func NewRegistry(registrations ...Registration) (*Registry, error) {
 	r := &Registry{
+		models:         make(map[string]adapter.ModelLister),
 		messages:       make(map[string]messagesadapter.MessagesAdapter),
 		streamMessages: make(map[string]messagesadapter.StreamMessagesAdapter),
 		tokenizer:      make(map[string]messagesadapter.MessagesInputTokenizer),
@@ -51,7 +55,7 @@ func NewRegistry(registrations ...Registration) (*Registry, error) {
 			)
 		}
 
-		if reg.Messages == nil && reg.StreamMessages == nil && reg.MessagesInputTokenizer == nil {
+		if reg.Models == nil && reg.Messages == nil && reg.StreamMessages == nil && reg.MessagesInputTokenizer == nil {
 			return nil, failure.Wrap(
 				failure.CodeAdapterInvalidRegistration,
 				ErrInvalidAdapterRegistration,
@@ -68,6 +72,13 @@ func NewRegistry(registrations ...Registration) (*Registry, error) {
 }
 
 func registerCapabilities(reg Registration, r *Registry) error {
+	if reg.Models != nil {
+		if _, exists := r.models[reg.Key]; exists {
+			return duplicateKey("model lister", reg.Key)
+		}
+		r.models[reg.Key] = reg.Models
+	}
+
 	if reg.Messages != nil {
 		if _, exists := r.messages[reg.Key]; exists {
 			return duplicateKey("messages adapter", reg.Key)
@@ -104,6 +115,9 @@ func duplicateKey(capability, key string) error {
 // admin 据此把可选 adapter_key 暴露成枚举，供前端下拉而非手填。
 func (r *Registry) Keys() []string {
 	seen := make(map[string]struct{})
+	for key := range r.models {
+		seen[key] = struct{}{}
+	}
 	for key := range r.messages {
 		seen[key] = struct{}{}
 	}
@@ -120,6 +134,12 @@ func (r *Registry) Keys() []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// Models 根据 adapter key 返回上游模型枚举能力。
+func (r *Registry) Models(adapterKey string) (adapter.ModelLister, bool) {
+	lister, ok := r.models[adapterKey]
+	return lister, ok
 }
 
 // Messages 根据 adapter key 返回非流式 Messages adapter。

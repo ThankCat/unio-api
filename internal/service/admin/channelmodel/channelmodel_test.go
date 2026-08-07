@@ -25,6 +25,9 @@ type fakeStore struct {
 	createCalls int
 	updateRow   sqlc.ChannelModel
 	updateErr   error
+	getRow      sqlc.ChannelModel
+	getErr      error
+	evidenceErr error
 	deleteRows  int64
 	deleteErr   error
 	deleteCalls int
@@ -42,8 +45,18 @@ func (s *fakeStore) ListChannelModelsByChannel(context.Context, int64) ([]sqlc.L
 	return s.listRows, nil
 }
 
-func (s *fakeStore) GetChannelModel(context.Context, sqlc.GetChannelModelParams) (sqlc.ChannelModel, error) {
-	return sqlc.ChannelModel{}, nil
+func (s *fakeStore) GetChannelModel(_ context.Context, arg sqlc.GetChannelModelParams) (sqlc.ChannelModel, error) {
+	if s.getErr != nil {
+		return sqlc.ChannelModel{}, s.getErr
+	}
+	if s.getRow.ModelID != 0 {
+		return s.getRow, nil
+	}
+	return sqlc.ChannelModel{ChannelID: arg.ChannelID, ModelID: arg.ModelID, UpstreamModel: "gpt-4", Status: channelmodel.StatusDisabled}, nil
+}
+
+func (s *fakeStore) GetCurrentChannelModelVerificationEvidence(context.Context, sqlc.GetCurrentChannelModelVerificationEvidenceParams) (sqlc.ChannelModelVerificationItem, error) {
+	return sqlc.ChannelModelVerificationItem{}, s.evidenceErr
 }
 
 func (s *fakeStore) CreateChannelModel(_ context.Context, arg sqlc.CreateChannelModelParams) (sqlc.ChannelModel, error) {
@@ -132,8 +145,38 @@ func TestCreateSuccessTrimsAndMaps(t *testing.T) {
 	if store.createParam.UpstreamModel != "gpt-4o" {
 		t.Fatalf("expected trimmed upstream_model, got %q", store.createParam.UpstreamModel)
 	}
+	if store.createParam.Status != channelmodel.StatusDisabled {
+		t.Fatalf("new binding must be disabled, got %q", store.createParam.Status)
+	}
 	if got.ID != 7 || got.UpstreamModel != "gpt-4o" {
 		t.Fatalf("unexpected mapped binding: %+v", got)
+	}
+}
+
+func TestUpdateEnableRequiresCurrentVerification(t *testing.T) {
+	store := &fakeStore{getRow: sqlc.ChannelModel{
+		ChannelID: 1, ModelID: 1, UpstreamModel: "gpt-4", Status: channelmodel.StatusDisabled,
+	}}
+	_, err := channelmodel.NewService(store).Update(context.Background(), channelmodel.UpdateInput{
+		ChannelID: 1, ModelID: 1, UpstreamModel: "gpt-4", Status: channelmodel.StatusEnabled,
+	})
+	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
+		t.Fatalf("expected verification conflict, got %q", got)
+	}
+}
+
+func TestUpdateEnableAcceptsCurrentVerification(t *testing.T) {
+	verificationID := int64(42)
+	store := &fakeStore{
+		getRow:    sqlc.ChannelModel{ChannelID: 1, ModelID: 1, UpstreamModel: "gpt-4", Status: channelmodel.StatusDisabled},
+		updateRow: sqlc.ChannelModel{ChannelID: 1, ModelID: 1, UpstreamModel: "gpt-4", Status: channelmodel.StatusEnabled},
+	}
+	got, err := channelmodel.NewService(store).Update(context.Background(), channelmodel.UpdateInput{
+		ChannelID: 1, ModelID: 1, UpstreamModel: "gpt-4", Status: channelmodel.StatusEnabled,
+		VerificationItemID: &verificationID,
+	})
+	if err != nil || got.Status != channelmodel.StatusEnabled {
+		t.Fatalf("update with verification: got=%+v err=%v", got, err)
 	}
 }
 

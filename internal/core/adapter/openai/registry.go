@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletions "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
@@ -24,6 +25,7 @@ var (
 // 也可两组都注册；responses service 据候选 adapter 是否有 responses 直传能力分流（直传 vs 桥接）。
 type Registration struct {
 	Key                string
+	Models             adapter.ModelLister
 	Chat               chatcompletions.ChatAdapter
 	StreamChat         chatcompletions.StreamChatAdapter
 	ChatInputTokenizer chatcompletions.ChatInputTokenizer
@@ -36,6 +38,7 @@ type Registration struct {
 
 // Registry 根据 adapter key 查找对应 adapter 能力。
 type Registry struct {
+	models             map[string]adapter.ModelLister
 	chat               map[string]chatcompletions.ChatAdapter
 	streamChat         map[string]chatcompletions.StreamChatAdapter
 	chatInputTokenizer map[string]chatcompletions.ChatInputTokenizer
@@ -49,6 +52,7 @@ type Registry struct {
 // NewRegistry 创建 adapter registry。
 func NewRegistry(registrations ...Registration) (*Registry, error) {
 	r := &Registry{
+		models:                  make(map[string]adapter.ModelLister),
 		chat:                    make(map[string]chatcompletions.ChatAdapter),
 		streamChat:              make(map[string]chatcompletions.StreamChatAdapter),
 		chatInputTokenizer:      make(map[string]chatcompletions.ChatInputTokenizer),
@@ -67,7 +71,7 @@ func NewRegistry(registrations ...Registration) (*Registry, error) {
 			)
 		}
 
-		if reg.Chat == nil && reg.StreamChat == nil && reg.ChatInputTokenizer == nil &&
+		if reg.Models == nil && reg.Chat == nil && reg.StreamChat == nil && reg.ChatInputTokenizer == nil &&
 			reg.Responses == nil && reg.StreamResponses == nil && reg.ResponsesInputTokenizer == nil &&
 			reg.ResponsesCompact == nil {
 			return nil, failure.Wrap(
@@ -86,6 +90,17 @@ func NewRegistry(registrations ...Registration) (*Registry, error) {
 }
 
 func registerCapabilities(reg Registration, r *Registry) error {
+	if reg.Models != nil {
+		if _, exists := r.models[reg.Key]; exists {
+			return failure.Wrap(
+				failure.CodeAdapterDuplicateKey,
+				ErrDuplicateAdapterKey,
+				failure.WithMessage(fmt.Sprintf("duplicate model lister key %q", reg.Key)),
+			)
+		}
+		r.models[reg.Key] = reg.Models
+	}
+
 	if reg.Chat != nil {
 		if _, exists := r.chat[reg.Key]; exists {
 			return failure.Wrap(
@@ -170,6 +185,9 @@ func registerCapabilities(reg Registration, r *Registry) error {
 // admin 据此把可选 adapter_key 暴露成枚举，供前端下拉而非手填。
 func (r *Registry) Keys() []string {
 	seen := make(map[string]struct{})
+	for key := range r.models {
+		seen[key] = struct{}{}
+	}
 	for key := range r.chat {
 		seen[key] = struct{}{}
 	}
@@ -198,6 +216,12 @@ func (r *Registry) Keys() []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// Models 根据 adapter key 返回上游模型枚举能力。
+func (r *Registry) Models(adapterKey string) (adapter.ModelLister, bool) {
+	lister, ok := r.models[adapterKey]
+	return lister, ok
 }
 
 // Chat 根据 adapter key 返回非流式聊天 adapter。

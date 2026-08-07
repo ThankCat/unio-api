@@ -32,19 +32,20 @@ type adminHTTPDeps struct {
 	Sessions                adminapi.SessionIssuer
 	SessionTTLSeconds       int64
 
-	ProviderService        provider.ProviderService
-	ProviderOpsService     provider.ProviderOpsService
-	ProviderBalanceService provider.ProviderBalanceService
-	ProviderBreaker        provider.BreakerRuntime
-	ChannelService         channel.ChannelService
-	ChannelBreaker         channel.BreakerRuntime
-	ChannelTestService     channel.ChannelTestService
-	ChannelOpsService      channel.ChannelOpsService
-	ModelService           model.ModelService
-	ModelOpsService        model.ModelOpsService
-	ChannelModelService    channel.ChannelModelService
-	ChannelPriceService    channel.ChannelPriceService
-	ModelPriceService      model.ModelPriceService
+	ProviderService              provider.ProviderService
+	ProviderOpsService           provider.ProviderOpsService
+	ProviderBalanceService       provider.ProviderBalanceService
+	ProviderBreaker              provider.BreakerRuntime
+	ChannelService               channel.ChannelService
+	ChannelBreaker               channel.BreakerRuntime
+	ChannelTestService           channel.ChannelTestService
+	ChannelOpsService            channel.ChannelOpsService
+	ModelService                 model.ModelService
+	ModelOpsService              model.ModelOpsService
+	ChannelModelService          channel.ChannelModelService
+	ChannelModelInventoryService channel.ChannelModelInventoryService
+	ChannelPriceService          channel.ChannelPriceService
+	ModelPriceService            model.ModelPriceService
 
 	// DEC-027 渠道成本倍率。
 	ChannelCostMultiplierService channel.ChannelCostMultiplierService
@@ -98,19 +99,20 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		Sessions:                deps.Sessions,
 		SessionTTLSeconds:       deps.SessionTTLSeconds,
 
-		ProviderService:        deps.ProviderService,
-		ProviderOpsService:     deps.ProviderOpsService,
-		ProviderBalanceService: deps.ProviderBalanceService,
-		ProviderBreaker:        deps.ProviderBreaker,
-		ChannelService:         deps.ChannelService,
-		ChannelBreaker:         deps.ChannelBreaker,
-		ChannelTestService:     deps.ChannelTestService,
-		ChannelOpsService:      deps.ChannelOpsService,
-		ModelService:           deps.ModelService,
-		ModelOpsService:        deps.ModelOpsService,
-		ChannelModelService:    deps.ChannelModelService,
-		ChannelPriceService:    deps.ChannelPriceService,
-		ModelPriceService:      deps.ModelPriceService,
+		ProviderService:              deps.ProviderService,
+		ProviderOpsService:           deps.ProviderOpsService,
+		ProviderBalanceService:       deps.ProviderBalanceService,
+		ProviderBreaker:              deps.ProviderBreaker,
+		ChannelService:               deps.ChannelService,
+		ChannelBreaker:               deps.ChannelBreaker,
+		ChannelTestService:           deps.ChannelTestService,
+		ChannelOpsService:            deps.ChannelOpsService,
+		ModelService:                 deps.ModelService,
+		ModelOpsService:              deps.ModelOpsService,
+		ChannelModelService:          deps.ChannelModelService,
+		ChannelModelInventoryService: deps.ChannelModelInventoryService,
+		ChannelPriceService:          deps.ChannelPriceService,
+		ModelPriceService:            deps.ModelPriceService,
 
 		ChannelCostMultiplierService: deps.ChannelCostMultiplierService,
 		ChannelRechargeFactorService: deps.ChannelRechargeFactorService,

@@ -17,6 +17,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/channelmodelinventory"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channeltest"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
@@ -115,6 +116,9 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 	)
 	_ = settingsStore.SeedDefaults(ctx)
 	channelTestService := channeltest.NewService(queries, adapterRegistry, settingsStore, providerLedgerService)
+	channelModelInventoryService := channelmodelinventory.NewService(
+		deps.DB, queries, adapterRegistry, adapterRegistry, providerLedgerService, settingsStore,
+	)
 	permissionStore := permitStore
 	if err := permissionStore.VerifySingleNodeDeployment(ctx); err != nil {
 		return nil, err
@@ -135,6 +139,10 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 		settingsStore,
 		deps.Logger,
 	))
+	units = append(units,
+		workers.NewChannelModelDiscoveryWorker(channelModelInventoryService, settingsStore, deps.Logger),
+		workers.NewChannelModelVerificationWorker(channelModelInventoryService),
+	)
 	channelTestCfg := appsettings.AdminBackendChannelTest(ctx, settingsStore)
 	deps.Logger.Info("channel test worker registered",
 		zap.Bool("enabled", channelTestCfg.Enabled),

@@ -392,6 +392,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	if err := validateStatus(status); err != nil {
 		return Channel{}, err
 	}
+	// 新建渠道必须先完成模型发现、绑定和验证，创建时固定为 disabled。
+	status = StatusDisabled
 	if err := validatePriority(in.Priority); err != nil {
 		return Channel{}, err
 	}

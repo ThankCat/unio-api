@@ -43,17 +43,18 @@ type RouterDeps struct {
 	Sessions                SessionIssuer
 	SessionTTLSeconds       int64
 
-	ProviderService        provider.ProviderService
-	ProviderOpsService     provider.ProviderOpsService
-	ProviderBalanceService provider.ProviderBalanceService
-	ProviderBreaker        provider.BreakerRuntime
-	ChannelService         channel.ChannelService
-	ChannelBreaker         channel.BreakerRuntime
-	ChannelTestService     channel.ChannelTestService
-	ChannelOpsService      channel.ChannelOpsService
-	ModelService           model.ModelService
-	ModelOpsService        model.ModelOpsService
-	ChannelModelService    channel.ChannelModelService
+	ProviderService              provider.ProviderService
+	ProviderOpsService           provider.ProviderOpsService
+	ProviderBalanceService       provider.ProviderBalanceService
+	ProviderBreaker              provider.BreakerRuntime
+	ChannelService               channel.ChannelService
+	ChannelBreaker               channel.BreakerRuntime
+	ChannelTestService           channel.ChannelTestService
+	ChannelOpsService            channel.ChannelOpsService
+	ModelService                 model.ModelService
+	ModelOpsService              model.ModelOpsService
+	ChannelModelService          channel.ChannelModelService
+	ChannelModelInventoryService channel.ChannelModelInventoryService
 
 	// 渠道-模型成本价（绝对覆盖）+ 线路（渠道商品）。
 	ChannelPriceService channel.ChannelPriceService
@@ -173,6 +174,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 				OpsService:            deps.ChannelOpsService,
 				TestService:           deps.ChannelTestService,
 				ModelService:          deps.ChannelModelService,
+				ModelInventoryService: deps.ChannelModelInventoryService,
 				PriceService:          deps.ChannelPriceService,
 				CostMultiplierService: deps.ChannelCostMultiplierService,
 				RechargeFactorService: deps.ChannelRechargeFactorService,

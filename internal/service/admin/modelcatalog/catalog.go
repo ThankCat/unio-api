@@ -99,6 +99,32 @@ type AdoptInput struct {
 	Capabilities             []CapabilityHint
 }
 
+// AdoptAndBindInput 在渠道上下文中原子完成目录采纳与绑定；新模型和新绑定均固定为 disabled。
+type AdoptAndBindInput struct {
+	ChannelID     int64
+	UpstreamModel string
+	Adopt         AdoptInput
+}
+
+// AdoptAndBindResult 返回采纳或复用的模型与最终绑定事实。
+type AdoptAndBindResult struct {
+	ModelID int64
+	Binding sqlc.ChannelModel
+}
+
+type preparedAdopt struct {
+	input       AdoptInput
+	canonicalID string
+	modelID     string
+	displayName string
+	ownedBy     string
+	status      string
+	caps        []CapabilityHint
+	inputPrice  pgtype.Numeric
+	outputPrice pgtype.Numeric
+	entry       sqlc.GetModelCatalogEntryRow
+}
+
 // ReminderAction 是更新提醒动作。
 type ReminderAction string
 
@@ -212,97 +238,181 @@ func (s *Service) listCapabilityHints(ctx context.Context, canonicalID string) (
 // Adopt 在单事务内从目录采纳创建模型：建 model（source=catalog）+ 批量能力 + 目录关联（基线=当前指纹）。
 // 返回新建模型的内部 ID，供上层回读完整模型。
 func (s *Service) Adopt(ctx context.Context, in AdoptInput) (int64, error) {
-	canonicalID := strings.TrimSpace(in.CanonicalID)
-	if canonicalID == "" {
-		return 0, invalidArgument("canonical_id", "canonical_id is required")
-	}
-	modelID := strings.TrimSpace(in.ModelID)
-	if !modelIDPattern.MatchString(modelID) {
-		return 0, invalidArgument("model_id", "model_id must match ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-	}
-	displayName := strings.TrimSpace(in.DisplayName)
-	if displayName == "" {
-		return 0, invalidArgument("display_name", "display_name is required")
-	}
-	ownedBy := strings.TrimSpace(in.OwnedBy)
-	if ownedBy == "" {
-		return 0, invalidArgument("owned_by", "owned_by is required")
-	}
-	status := strings.TrimSpace(in.Status)
-	if status != "enabled" && status != "disabled" {
-		return 0, invalidArgument("status", "status must be enabled or disabled")
-	}
-	caps, err := s.validateCapabilities(ctx, in.Capabilities)
+	prepared, err := s.prepareAdopt(ctx, in)
 	if err != nil {
 		return 0, err
 	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return 0, storeFailed(err, "begin adopt transaction")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	model, err := s.adoptWithQueries(ctx, s.queries.WithTx(tx), prepared)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, storeFailed(err, "commit adopt transaction")
+	}
+	return model.ID, nil
+}
+
+// AdoptAndBind 原子执行“采纳或复用已采纳模型 + 创建 disabled 渠道绑定”。
+func (s *Service) AdoptAndBind(ctx context.Context, in AdoptAndBindInput) (AdoptAndBindResult, error) {
+	if in.ChannelID <= 0 {
+		return AdoptAndBindResult{}, invalidArgument("channel_id", "channel id must be positive")
+	}
+	upstreamModel := strings.TrimSpace(in.UpstreamModel)
+	if upstreamModel == "" {
+		return AdoptAndBindResult{}, invalidArgument("upstream_model", "upstream_model is required")
+	}
+	in.Adopt.Status = "disabled"
+	prepared, err := s.prepareAdopt(ctx, in.Adopt)
+	if err != nil {
+		return AdoptAndBindResult{}, err
+	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return AdoptAndBindResult{}, storeFailed(err, "begin adopt and bind transaction")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+	channel, err := q.GetChannel(ctx, in.ChannelID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AdoptAndBindResult{}, notFound("channel not found")
+		}
+		return AdoptAndBindResult{}, storeFailed(err, "get channel for adopt and bind")
+	}
+	if channel.Status == "archived" {
+		return AdoptAndBindResult{}, conflict("archived channel cannot bind models")
+	}
+
+	model, err := q.LookupModelByModelID(ctx, prepared.modelID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		model, err = s.adoptWithQueries(ctx, q, prepared)
+		if err != nil {
+			return AdoptAndBindResult{}, err
+		}
+	} else if err != nil {
+		return AdoptAndBindResult{}, storeFailed(err, "lookup adopted model for reuse")
+	} else {
+		link, linkErr := q.GetModelCatalogLink(ctx, model.ID)
+		if linkErr != nil || link.CanonicalID != prepared.canonicalID {
+			return AdoptAndBindResult{}, conflict("model_id already exists and is not adopted from the selected catalog entry")
+		}
+	}
+
+	binding, err := q.GetChannelModel(ctx, sqlc.GetChannelModelParams{ChannelID: in.ChannelID, ModelID: model.ID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		binding, err = q.CreateChannelModel(ctx, sqlc.CreateChannelModelParams{
+			ChannelID: in.ChannelID, ModelID: model.ID, UpstreamModel: upstreamModel, Status: "disabled",
+		})
+		if err != nil {
+			if isUniqueViolation(err) {
+				return AdoptAndBindResult{}, conflict("channel is already bound to the model")
+			}
+			return AdoptAndBindResult{}, storeFailed(err, "create adopted model binding")
+		}
+	} else if err != nil {
+		return AdoptAndBindResult{}, storeFailed(err, "lookup adopted model binding")
+	} else if binding.UpstreamModel != upstreamModel {
+		return AdoptAndBindResult{}, conflict("channel model binding already uses a different upstream model")
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return AdoptAndBindResult{}, storeFailed(err, "commit adopt and bind transaction")
+	}
+	return AdoptAndBindResult{ModelID: model.ID, Binding: binding}, nil
+}
+
+func (s *Service) prepareAdopt(ctx context.Context, in AdoptInput) (preparedAdopt, error) {
+	canonicalID := strings.TrimSpace(in.CanonicalID)
+	if canonicalID == "" {
+		return preparedAdopt{}, invalidArgument("canonical_id", "canonical_id is required")
+	}
+	modelID := strings.TrimSpace(in.ModelID)
+	if !modelIDPattern.MatchString(modelID) {
+		return preparedAdopt{}, invalidArgument("model_id", "model_id must match ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+	}
+	displayName := strings.TrimSpace(in.DisplayName)
+	if displayName == "" {
+		return preparedAdopt{}, invalidArgument("display_name", "display_name is required")
+	}
+	ownedBy := strings.TrimSpace(in.OwnedBy)
+	if ownedBy == "" {
+		return preparedAdopt{}, invalidArgument("owned_by", "owned_by is required")
+	}
+	status := strings.TrimSpace(in.Status)
+	if status != "enabled" && status != "disabled" {
+		return preparedAdopt{}, invalidArgument("status", "status must be enabled or disabled")
+	}
+	caps, err := s.validateCapabilities(ctx, in.Capabilities)
+	if err != nil {
+		return preparedAdopt{}, err
+	}
 	inputPrice, err := numericParam(in.InputPriceUSDPerMTokens)
 	if err != nil {
-		return 0, invalidArgument("input_price_usd_per_million_tokens", "input price must be a non-negative decimal")
+		return preparedAdopt{}, invalidArgument("input_price_usd_per_million_tokens", "input price must be a non-negative decimal")
 	}
 	outputPrice, err := numericParam(in.OutputPriceUSDPerMTokens)
 	if err != nil {
-		return 0, invalidArgument("output_price_usd_per_million_tokens", "output price must be a non-negative decimal")
+		return preparedAdopt{}, invalidArgument("output_price_usd_per_million_tokens", "output price must be a non-negative decimal")
 	}
 
 	// 采纳基线 = 目录条目当前指纹（采纳后目录再变才提示更新）。
 	entry, err := s.queries.GetModelCatalogEntry(ctx, canonicalID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return 0, notFound("catalog entry not found")
+			return preparedAdopt{}, notFound("catalog entry not found")
 		}
-		return 0, storeFailed(err, "get catalog entry for adopt")
+		return preparedAdopt{}, storeFailed(err, "get catalog entry for adopt")
 	}
+	return preparedAdopt{
+		input: in, canonicalID: canonicalID, modelID: modelID, displayName: displayName, ownedBy: ownedBy,
+		status: status, caps: caps, inputPrice: inputPrice, outputPrice: outputPrice, entry: entry,
+	}, nil
+}
 
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return 0, storeFailed(err, "begin adopt transaction")
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	q := s.queries.WithTx(tx)
-
+func (s *Service) adoptWithQueries(ctx context.Context, q *sqlc.Queries, in preparedAdopt) (sqlc.Model, error) {
 	model, err := q.CreateModelFromCatalog(ctx, sqlc.CreateModelFromCatalogParams{
-		ModelID:                        modelID,
-		DisplayName:                    displayName,
-		OwnedBy:                        ownedBy,
-		Status:                         status,
-		MaxOutputTokens:                int8Param(in.MaxOutputTokens),
-		ContextWindowTokens:            int8Param(in.ContextWindowTokens),
-		InputPriceUsdPerMillionTokens:  inputPrice,
-		OutputPriceUsdPerMillionTokens: outputPrice,
-		ReleaseDate:                    dateParam(in.ReleaseDate),
+		ModelID:                        in.modelID,
+		DisplayName:                    in.displayName,
+		OwnedBy:                        in.ownedBy,
+		Status:                         in.status,
+		MaxOutputTokens:                int8Param(in.input.MaxOutputTokens),
+		ContextWindowTokens:            int8Param(in.input.ContextWindowTokens),
+		InputPriceUsdPerMillionTokens:  in.inputPrice,
+		OutputPriceUsdPerMillionTokens: in.outputPrice,
+		ReleaseDate:                    dateParam(in.input.ReleaseDate),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
-			return 0, conflict("model_id already exists")
+			return sqlc.Model{}, conflict("model_id already exists")
 		}
-		return 0, storeFailed(err, "create model from catalog")
+		return sqlc.Model{}, storeFailed(err, "create model from catalog")
 	}
 
-	for _, c := range caps {
+	for _, c := range in.caps {
 		if _, err := q.UpsertModelCapability(ctx, sqlc.UpsertModelCapabilityParams{
 			ModelID:       model.ID,
 			CapabilityKey: c.Key,
 			SupportLevel:  c.SupportLevel,
 			Limits:        limitsBytes(c.Limits),
 		}); err != nil {
-			return 0, storeFailed(err, "write adopted capability")
+			return sqlc.Model{}, storeFailed(err, "write adopted capability")
 		}
 	}
 
 	if _, err := q.CreateModelCatalogLink(ctx, sqlc.CreateModelCatalogLinkParams{
 		ModelID:            model.ID,
-		CanonicalID:        canonicalID,
-		AdoptedFingerprint: entry.Fingerprint,
+		CanonicalID:        in.canonicalID,
+		AdoptedFingerprint: in.entry.Fingerprint,
 	}); err != nil {
-		return 0, storeFailed(err, "create catalog link")
+		return sqlc.Model{}, storeFailed(err, "create catalog link")
 	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return 0, storeFailed(err, "commit adopt transaction")
-	}
-
-	return model.ID, nil
+	return model, nil
 }
 
 // Refresh 在单事务内用目录最新值覆盖采纳模型的元数据 + 能力，并把基线指纹更新为最新（model_id 不变）。
