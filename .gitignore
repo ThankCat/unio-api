@@ -1,6 +1,10 @@
 .env
 .venv/
 
+# 部署环境实际值不入库；只提交 .example 模板。
+/deploy/env/.env.*
+!/deploy/env/.env.*.example
+
 # 本地测试库初始化配置（含真实 credential），不入库；示例见 scripts/test/test_db/config.local.example.json
 scripts/test/test_db/config.local.json
 .venv-*/

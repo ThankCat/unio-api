@@ -37,6 +37,46 @@
   读取查询。
 - `internal/platform/store/sqlc` 是生成目录，修改 Schema 或查询后运行 `sqlc generate`。
 
+## Test Docker 部署
+
+Test 部署使用 `deploy/compose.test.yml`，与根目录的本地开发 Compose 分离。首次使用时从
+`deploy/env/.env.docker.example` 和 `deploy/env/.env.test.example` 分别创建实际环境文件并替换占位密码。
+实际的 `.env.docker`、`.env.test` 已由 `.gitignore` 排除；包含 Test 凭据的文件权限应设置为 `600`。
+
+Compose 变量按顺序加载，后面的 Test 文件可以覆盖 Docker 构建默认值：
+
+```bash
+docker compose \
+  --env-file deploy/env/.env.docker \
+  --env-file deploy/env/.env.test \
+  -f deploy/compose.test.yml \
+  config
+```
+
+先构建版本相同的四个独立镜像，再启动整套 Test 服务：
+
+```bash
+docker compose --env-file deploy/env/.env.docker --env-file deploy/env/.env.test \
+  -f deploy/compose.test.yml build gateway admin worker migrate
+docker compose --env-file deploy/env/.env.docker --env-file deploy/env/.env.test \
+  -f deploy/compose.test.yml up -d --no-build --wait
+```
+
+`migrate` 是一次性容器；迁移成功退出后 Gateway、Admin 和 Worker 才会启动，使用 `docker compose ... logs migrate`
+可以检查迁移结果。Gateway、Admin、Worker、migration 是同一个 Dockerfile 的四个独立 target，共用版本和
+revision，但每个 runtime 镜像只包含自己的二进制。Test 在一台服务器运行全部服务，构建制品边界与未来
+Production 保持一致。Test PostgreSQL、Redis、network 和 volume 由 `COMPOSE_PROJECT_NAME` 隔离，不连接本地
+开发数据。停止环境时使用 `down` 保留 Test 数据卷；仅在确认不再需要 Test 数据时才使用 `down --volumes`。
+
+Nginx 是 Test 环境唯一映射到宿主机的 HTTP 入口，默认地址为 `http://127.0.0.1:18080`。`/v1/*` 转发到
+Gateway，`/admin/v1/*` 转发到 Admin；`/nginx-healthz` 检查代理本身，`/healthz` 与 `/readyz` 检查 Gateway。
+Gateway 和 Admin 的容器端口仅在 Compose backend 网络内可见。
+
+Test 日志分为两条独立路径：所有容器 stdout/stderr 使用 Docker `json-file` driver，并由 `.env.docker` 中的
+`DOCKER_LOG_MAX_SIZE`、`DOCKER_LOG_MAX_FILE` 控制轮转；Gateway 的结构化 `gateway.jsonl` 写入
+`gateway_logs` volume，由 Alloy 只读采集并发送到 Loki。Alloy 不采集 Gateway stdout，避免 Loki 中重复日志。
+Loki 默认保留 14 天，Admin 通过 Compose 内网地址 `http://loki:3100` 查询。
+
 ## 目录
 
 | 路径 | 当前职责 |

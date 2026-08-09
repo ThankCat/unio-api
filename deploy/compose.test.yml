@@ -1,0 +1,239 @@
+# 固定 Test 项目名，使 network 和 volume 与其他环境隔离。
+name: ${COMPOSE_PROJECT_NAME:-unio-test}
+
+# x-* 是 Compose 扩展模板，不会创建容器。
+x-docker-logging: &docker-logging
+  driver: json-file
+  options:
+    max-size: "${DOCKER_LOG_MAX_SIZE:-50m}"
+    max-file: "${DOCKER_LOG_MAX_FILE:-5}"
+
+# 三个应用镜像共用的运行策略。
+x-app-common: &app-common
+  pull_policy: never
+  env_file:
+    - ./env/.env.test
+  restart: unless-stopped
+  stop_grace_period: ${APP_STOP_GRACE_PERIOD:-75s}
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=128m,mode=1777
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  logging: *docker-logging
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+  networks:
+    - backend
+
+# 三个 runtime target 共用同一 builder 和构建元数据。
+x-app-build: &app-build
+  context: ..
+  dockerfile: deploy/Dockerfile
+  args:
+    GO_BUILD_IMAGE: ${GO_BUILD_IMAGE}
+    APP_RUNTIME_IMAGE: ${APP_RUNTIME_IMAGE}
+    IMAGE_VERSION: ${IMAGE_VERSION}
+    IMAGE_REVISION: ${IMAGE_REVISION}
+    IMAGE_CREATED: ${IMAGE_CREATED}
+
+services:
+  # 数据服务只加入 backend 网络，不直接暴露宿主机端口。
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    restart: unless-stopped
+    logging: *docker-logging
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - backend
+
+  redis:
+    image: ${REDIS_IMAGE}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command:
+      - /bin/sh
+      - -ec
+      - exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+    restart: unless-stopped
+    logging: *docker-logging
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    networks:
+      - backend
+
+  # 一次性迁移任务；成功退出后常驻应用才会启动。
+  migrate:
+    image: ${MIGRATION_IMAGE_REPOSITORY}:${IMAGE_TAG}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: migration
+      args:
+        MIGRATE_TOOL_IMAGE: ${MIGRATE_TOOL_IMAGE}
+        IMAGE_VERSION: ${IMAGE_VERSION}
+        IMAGE_REVISION: ${IMAGE_REVISION}
+        IMAGE_CREATED: ${IMAGE_CREATED}
+    pull_policy: never
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - exec migrate -path=/migrations -database "$$DATABASE_URL" up
+    restart: "no"
+    logging: *docker-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+
+  # 单机 Test 同时运行三个独立镜像，对齐未来 Prod 制品边界。
+  gateway:
+    <<: *app-common
+    image: ${GATEWAY_IMAGE_REPOSITORY}:${IMAGE_TAG}
+    build:
+      <<: *app-build
+      target: gateway
+    expose:
+      - "8521"
+    # JSONL 持久化；stdout 仍由 Docker 单独记录。
+    volumes:
+      - gateway_logs:/var/log/unio
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8521/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+  admin:
+    <<: *app-common
+    image: ${ADMIN_IMAGE_REPOSITORY}:${IMAGE_TAG}
+    build:
+      <<: *app-build
+      target: admin
+    expose:
+      - "8522"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8522/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    <<: *app-common
+    image: ${WORKER_IMAGE_REPOSITORY}:${IMAGE_TAG}
+    build:
+      <<: *app-build
+      target: worker
+
+  # Test 唯一宿主机 HTTP 入口。
+  nginx:
+    image: ${NGINX_IMAGE}
+    restart: unless-stopped
+    logging: *docker-logging
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=64m
+      - /var/run:size=1m
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./nginx/test.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - ${TEST_BIND_ADDRESS:-127.0.0.1}:${NGINX_PUBLISHED_PORT:-18080}:8080
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/nginx-healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    depends_on:
+      gateway:
+        condition: service_healthy
+      admin:
+        condition: service_healthy
+    networks:
+      - backend
+
+  # Loki 保存查询数据，Alloy 只采集 Gateway JSONL 文件。
+  loki:
+    image: ${LOKI_IMAGE}
+    command:
+      - -config.file=/etc/loki/config.yaml
+    restart: unless-stopped
+    logging: *docker-logging
+    volumes:
+      - ../deployments/observability/loki/config.yaml:/etc/loki/config.yaml:ro
+      - ../deployments/observability/loki/rules:/etc/loki/rules:ro
+      - loki_data:/loki
+    networks:
+      - backend
+
+  alloy:
+    image: ${ALLOY_IMAGE}
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m
+    security_opt:
+      - no-new-privileges:true
+    logging: *docker-logging
+    volumes:
+      - ./alloy/test.alloy:/etc/alloy/config.alloy:ro
+      - gateway_logs:/var/log/unio:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      gateway:
+        condition: service_started
+      loki:
+        condition: service_started
+    networks:
+      - backend
+
+networks:
+  # 服务间通信专用网络。
+  backend:
+
+volumes:
+  # `down` 保留；只有 `down --volumes` 才删除。
+  postgres_data:
+  redis_data:
+  gateway_logs:
+  loki_data:
+  alloy_data:

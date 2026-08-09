@@ -1,0 +1,64 @@
+local.file_match "gateway" {
+  path_targets = [{
+    __path__ = "/var/log/unio/gateway.jsonl",
+  }]
+
+  sync_period = "250ms"
+}
+
+loki.source.file "gateway" {
+  targets       = local.file_match.gateway.targets
+  forward_to    = [loki.process.gateway.receiver]
+  tail_from_end = false
+}
+
+loki.process "gateway" {
+  stage.json {
+    expressions = {
+      environment = "environment",
+      event       = "event",
+      instance    = "instance",
+      level       = "level",
+      server      = "server",
+      timestamp   = "timestamp",
+      type        = "type",
+    }
+  }
+
+  stage.timestamp {
+    source = "timestamp"
+    format = "RFC3339Nano"
+  }
+
+  stage.labels {
+    values = {
+      environment = "",
+      event       = "",
+      instance    = "",
+      level       = "",
+      server      = "",
+      type        = "",
+    }
+  }
+
+  stage.label_drop {
+    values = ["filename"]
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  wal {
+    enabled         = true
+    drain_timeout   = "1m"
+    max_segment_age = "24h"
+  }
+
+  endpoint {
+    url                 = "http://loki:3100/loki/api/v1/push"
+    min_backoff_period  = "500ms"
+    max_backoff_period  = "5m"
+    max_backoff_retries = 100000
+  }
+}
