@@ -280,3 +280,26 @@ SELECT
     client_ip
 FROM request_records
 WHERE request_id = sqlc.arg(request_id);
+
+-- name: ListAdminRequestAttemptsByRequest :many
+-- ListAdminRequestAttemptsByRequest 为 Admin 请求详情关联当前渠道名称，并把本请求冻结的成本倍率
+-- 只归到最终一次真实尝试。未形成成本快照的尝试保持倍率为空，禁止用当前配置冒充历史结算事实。
+SELECT
+    a.*,
+    c.name AS channel_name,
+    cs.cost_multiplier AS channel_cost_multiplier,
+    cs.recharge_factor
+FROM request_attempts a
+JOIN channels c ON c.id = a.channel_id
+LEFT JOIN cost_snapshots cs
+  ON cs.request_record_id = a.request_record_id
+ AND cs.channel_id = a.channel_id
+ AND a.id = (
+      SELECT final_attempt.id
+      FROM request_attempts final_attempt
+      WHERE final_attempt.request_record_id = a.request_record_id
+      ORDER BY final_attempt.attempt_index DESC, final_attempt.id DESC
+      LIMIT 1
+ )
+WHERE a.request_record_id = sqlc.arg(request_record_id)
+ORDER BY a.attempt_index;

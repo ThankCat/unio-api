@@ -17,7 +17,7 @@ type RequestStore interface {
 	ListRequestRecordsPage(ctx context.Context, arg sqlc.ListRequestRecordsPageParams) ([]sqlc.ListRequestRecordsPageRow, error)
 	CountRequestRecords(ctx context.Context, arg sqlc.CountRequestRecordsParams) (int64, error)
 	GetRequestRecordByRequestID(ctx context.Context, requestID string) (sqlc.RequestRecord, error)
-	ListRequestAttemptsByRequest(ctx context.Context, requestRecordID int64) ([]sqlc.RequestAttempt, error)
+	ListAdminRequestAttemptsByRequest(ctx context.Context, requestRecordID int64) ([]sqlc.ListAdminRequestAttemptsByRequestRow, error)
 	GetUsageRecordByRequest(ctx context.Context, requestRecordID int64) (sqlc.UsageRecord, error)
 	ListLedgerEntriesByRequest(ctx context.Context, requestRecordID pgtype.Int8) ([]sqlc.LedgerEntry, error)
 	GetLedgerBillingExceptionByRequest(ctx context.Context, requestRecordID int64) (sqlc.LedgerBillingException, error)
@@ -168,6 +168,9 @@ type Attempt struct {
 	AttemptIndex          int32
 	ProviderID            int64
 	ChannelID             int64
+	ChannelName           string
+	ChannelCostMultiplier *string
+	RechargeFactor        *string
 	AdapterKey            string
 	UpstreamModel         string
 	UpstreamProtocol      string
@@ -378,7 +381,7 @@ func (s *RequestService) Get(ctx context.Context, requestID string, includeInter
 		detail.InternalErrorDetail = textPtr(record.InternalErrorDetail)
 	}
 
-	attemptRows, err := s.store.ListRequestAttemptsByRequest(ctx, record.ID)
+	attemptRows, err := s.store.ListAdminRequestAttemptsByRequest(ctx, record.ID)
 	if err != nil {
 		return RequestDetail{}, storeFailed(err, "list request attempts")
 	}
@@ -639,12 +642,15 @@ func summaryFromRecord(r sqlc.RequestRecord) RequestSummary {
 	}
 }
 
-func toAttempt(a sqlc.RequestAttempt, includeInternal, stream bool) Attempt {
+func toAttempt(a sqlc.ListAdminRequestAttemptsByRequestRow, includeInternal, stream bool) Attempt {
 	out := Attempt{
 		ID:                    a.ID,
 		AttemptIndex:          a.AttemptIndex,
 		ProviderID:            a.ProviderID,
 		ChannelID:             a.ChannelID,
+		ChannelName:           a.ChannelName,
+		ChannelCostMultiplier: opsutil.NumericStringPtr(a.ChannelCostMultiplier),
+		RechargeFactor:        opsutil.NumericStringPtr(a.RechargeFactor),
 		AdapterKey:            a.AdapterKey,
 		UpstreamModel:         a.UpstreamModel,
 		UpstreamProtocol:      a.UpstreamProtocol,

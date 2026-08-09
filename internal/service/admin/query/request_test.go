@@ -16,7 +16,7 @@ import (
 type fakeRequestStore struct {
 	record       sqlc.RequestRecord
 	recordErr    error
-	attempts     []sqlc.RequestAttempt
+	attempts     []sqlc.ListAdminRequestAttemptsByRequestRow
 	attemptsErr  error
 	usage        sqlc.UsageRecord
 	usageErr     error
@@ -50,7 +50,7 @@ func (f *fakeRequestStore) CountRequestRecords(_ context.Context, params sqlc.Co
 func (f *fakeRequestStore) GetRequestRecordByRequestID(context.Context, string) (sqlc.RequestRecord, error) {
 	return f.record, f.recordErr
 }
-func (f *fakeRequestStore) ListRequestAttemptsByRequest(context.Context, int64) ([]sqlc.RequestAttempt, error) {
+func (f *fakeRequestStore) ListAdminRequestAttemptsByRequest(context.Context, int64) ([]sqlc.ListAdminRequestAttemptsByRequestRow, error) {
 	return f.attempts, f.attemptsErr
 }
 func (f *fakeRequestStore) GetUsageRecordByRequest(context.Context, int64) (sqlc.UsageRecord, error) {
@@ -95,19 +95,22 @@ func baseRecord() sqlc.RequestRecord {
 func newFakeStoreWithDetail() *fakeRequestStore {
 	return &fakeRequestStore{
 		record: baseRecord(),
-		attempts: []sqlc.RequestAttempt{{
-			ID:                  10,
-			RequestRecordID:     1,
-			AttemptIndex:        0,
-			ProviderID:          2,
-			ChannelID:           4,
-			AdapterKey:          "deepseek",
-			UpstreamModel:       "deepseek-chat",
-			UpstreamProtocol:    "openai",
-			Status:              "failed",
-			InternalErrorDetail: pgtype.Text{String: "attempt raw error", Valid: true},
-			StartedAt:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
-			CreatedAt:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		attempts: []sqlc.ListAdminRequestAttemptsByRequestRow{{
+			ID:                    10,
+			RequestRecordID:       1,
+			AttemptIndex:          0,
+			ProviderID:            2,
+			ChannelID:             4,
+			ChannelName:           "DeepSeek 主渠道",
+			ChannelCostMultiplier: numeric("1.25"),
+			RechargeFactor:        numeric("0.8"),
+			AdapterKey:            "deepseek",
+			UpstreamModel:         "deepseek-chat",
+			UpstreamProtocol:      "openai",
+			Status:                "failed",
+			InternalErrorDetail:   pgtype.Text{String: "attempt raw error", Valid: true},
+			StartedAt:             pgtype.Timestamptz{Time: time.Now(), Valid: true},
+			CreatedAt:             pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		}},
 		usageErr:     pgx.ErrNoRows,
 		exceptionErr: pgx.ErrNoRows,
@@ -153,6 +156,18 @@ func TestRequestServiceGetIncludeInternal(t *testing.T) {
 	}
 	if detail.Attempts[0].InternalErrorDetail == nil || *detail.Attempts[0].InternalErrorDetail != "attempt raw error" {
 		t.Fatalf("expected attempt internal detail surfaced, got %v", detail.Attempts[0].InternalErrorDetail)
+	}
+}
+
+func TestRequestServiceGetMapsAttemptChannelMetadata(t *testing.T) {
+	detail, err := query.NewRequestService(newFakeStoreWithDetail()).Get(context.Background(), "req_1", false)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	attempt := detail.Attempts[0]
+	if attempt.ChannelName != "DeepSeek 主渠道" || attempt.ChannelCostMultiplier == nil ||
+		*attempt.ChannelCostMultiplier != "1.25" || attempt.RechargeFactor == nil || *attempt.RechargeFactor != "0.8" {
+		t.Fatalf("attempt channel metadata = %+v", attempt)
 	}
 }
 

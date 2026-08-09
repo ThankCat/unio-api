@@ -39,11 +39,16 @@ func TestRequestListItemDTOIncludesRoutingSampleLocation(t *testing.T) {
 
 func TestAttemptDTOIncludesTimeoutAndScoringFacts(t *testing.T) {
 	phase := "first_token"
+	channelCostMultiplier := "1.25"
+	rechargeFactor := "0.8"
 	dto := toAttemptDTO(query.Attempt{
-		UpstreamTimeoutPhase: &phase,
-		TTFTScoringSample:    false,
-		ErrorScoringSample:   true,
-		ErrorScoringFailure:  true,
+		ChannelName:           "DeepSeek 主渠道",
+		ChannelCostMultiplier: &channelCostMultiplier,
+		RechargeFactor:        &rechargeFactor,
+		UpstreamTimeoutPhase:  &phase,
+		TTFTScoringSample:     false,
+		ErrorScoringSample:    true,
+		ErrorScoringFailure:   true,
 	})
 
 	payload, err := json.Marshal(dto)
@@ -57,5 +62,9 @@ func TestAttemptDTOIncludesTimeoutAndScoringFacts(t *testing.T) {
 	if got["upstream_timeout_phase"] != phase || got["ttft_scoring_sample"] != false ||
 		got["error_scoring_sample"] != true || got["error_scoring_failure"] != true {
 		t.Fatalf("attempt timeout/scoring facts = %#v", got)
+	}
+	if got["channel_name"] != "DeepSeek 主渠道" || got["channel_cost_multiplier"] != channelCostMultiplier ||
+		got["recharge_factor"] != rechargeFactor {
+		t.Fatalf("attempt channel metadata = %#v", got)
 	}
 }

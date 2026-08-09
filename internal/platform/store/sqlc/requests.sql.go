@@ -146,6 +146,140 @@ func (q *Queries) GetRequestRecordByRequestID(ctx context.Context, requestID str
 	return i, err
 }
 
+const listAdminRequestAttemptsByRequest = `-- name: ListAdminRequestAttemptsByRequest :many
+SELECT
+    a.id, a.request_record_id, a.attempt_index, a.provider_id, a.channel_id, a.adapter_key, a.upstream_model, a.upstream_protocol, a.upstream_response_id, a.upstream_response_model, a.upstream_finish_reason, a.finish_class, a.status, a.upstream_status_code, a.upstream_request_id, a.error_code, a.error_message, a.internal_error_detail, a.upstream_timeout_phase, a.gateway_first_token_at, a.final_usage_received, a.usage_mapping_version, a.started_at, a.completed_at, a.created_at, a.upstream_started_at, a.upstream_first_token_at, a.upstream_completed_at, a.provider_origin_revision, a.provider_status_revision, a.channel_config_revision, a.routing_candidate_index, a.upstream_endpoint, a.breaker_provider_disposition, a.breaker_channel_disposition, a.ttft_scoring_sample, a.error_scoring_sample, a.error_scoring_failure, a.fault_party, a.permit_id,
+    c.name AS channel_name,
+    cs.cost_multiplier AS channel_cost_multiplier,
+    cs.recharge_factor
+FROM request_attempts a
+JOIN channels c ON c.id = a.channel_id
+LEFT JOIN cost_snapshots cs
+  ON cs.request_record_id = a.request_record_id
+ AND cs.channel_id = a.channel_id
+ AND a.id = (
+      SELECT final_attempt.id
+      FROM request_attempts final_attempt
+      WHERE final_attempt.request_record_id = a.request_record_id
+      ORDER BY final_attempt.attempt_index DESC, final_attempt.id DESC
+      LIMIT 1
+ )
+WHERE a.request_record_id = $1
+ORDER BY a.attempt_index
+`
+
+type ListAdminRequestAttemptsByRequestRow struct {
+	ID                         int64
+	RequestRecordID            int64
+	AttemptIndex               int32
+	ProviderID                 int64
+	ChannelID                  int64
+	AdapterKey                 string
+	UpstreamModel              string
+	UpstreamProtocol           string
+	UpstreamResponseID         pgtype.Text
+	UpstreamResponseModel      pgtype.Text
+	UpstreamFinishReason       pgtype.Text
+	FinishClass                pgtype.Text
+	Status                     string
+	UpstreamStatusCode         pgtype.Int4
+	UpstreamRequestID          pgtype.Text
+	ErrorCode                  pgtype.Text
+	ErrorMessage               pgtype.Text
+	InternalErrorDetail        pgtype.Text
+	UpstreamTimeoutPhase       pgtype.Text
+	GatewayFirstTokenAt        pgtype.Timestamptz
+	FinalUsageReceived         bool
+	UsageMappingVersion        pgtype.Text
+	StartedAt                  pgtype.Timestamptz
+	CompletedAt                pgtype.Timestamptz
+	CreatedAt                  pgtype.Timestamptz
+	UpstreamStartedAt          pgtype.Timestamptz
+	UpstreamFirstTokenAt       pgtype.Timestamptz
+	UpstreamCompletedAt        pgtype.Timestamptz
+	ProviderOriginRevision     int64
+	ProviderStatusRevision     int64
+	ChannelConfigRevision      int64
+	RoutingCandidateIndex      int32
+	UpstreamEndpoint           string
+	BreakerProviderDisposition pgtype.Text
+	BreakerChannelDisposition  pgtype.Text
+	TtftScoringSample          bool
+	ErrorScoringSample         bool
+	ErrorScoringFailure        bool
+	FaultParty                 pgtype.Text
+	PermitID                   pgtype.Text
+	ChannelName                string
+	ChannelCostMultiplier      pgtype.Numeric
+	RechargeFactor             pgtype.Numeric
+}
+
+// ListAdminRequestAttemptsByRequest 为 Admin 请求详情关联当前渠道名称，并把本请求冻结的成本倍率
+// 只归到最终一次真实尝试。未形成成本快照的尝试保持倍率为空，禁止用当前配置冒充历史结算事实。
+func (q *Queries) ListAdminRequestAttemptsByRequest(ctx context.Context, requestRecordID int64) ([]ListAdminRequestAttemptsByRequestRow, error) {
+	rows, err := q.db.Query(ctx, listAdminRequestAttemptsByRequest, requestRecordID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAdminRequestAttemptsByRequestRow
+	for rows.Next() {
+		var i ListAdminRequestAttemptsByRequestRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RequestRecordID,
+			&i.AttemptIndex,
+			&i.ProviderID,
+			&i.ChannelID,
+			&i.AdapterKey,
+			&i.UpstreamModel,
+			&i.UpstreamProtocol,
+			&i.UpstreamResponseID,
+			&i.UpstreamResponseModel,
+			&i.UpstreamFinishReason,
+			&i.FinishClass,
+			&i.Status,
+			&i.UpstreamStatusCode,
+			&i.UpstreamRequestID,
+			&i.ErrorCode,
+			&i.ErrorMessage,
+			&i.InternalErrorDetail,
+			&i.UpstreamTimeoutPhase,
+			&i.GatewayFirstTokenAt,
+			&i.FinalUsageReceived,
+			&i.UsageMappingVersion,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CreatedAt,
+			&i.UpstreamStartedAt,
+			&i.UpstreamFirstTokenAt,
+			&i.UpstreamCompletedAt,
+			&i.ProviderOriginRevision,
+			&i.ProviderStatusRevision,
+			&i.ChannelConfigRevision,
+			&i.RoutingCandidateIndex,
+			&i.UpstreamEndpoint,
+			&i.BreakerProviderDisposition,
+			&i.BreakerChannelDisposition,
+			&i.TtftScoringSample,
+			&i.ErrorScoringSample,
+			&i.ErrorScoringFailure,
+			&i.FaultParty,
+			&i.PermitID,
+			&i.ChannelName,
+			&i.ChannelCostMultiplier,
+			&i.RechargeFactor,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRequestRecordsPage = `-- name: ListRequestRecordsPage :many
 WITH filtered_page AS (
     SELECT

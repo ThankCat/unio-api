@@ -158,6 +158,9 @@ type attemptDTO struct {
 	AttemptIndex          int32   `json:"attempt_index"`
 	ProviderID            int64   `json:"provider_id"`
 	ChannelID             int64   `json:"channel_id"`
+	ChannelName           string  `json:"channel_name"`
+	ChannelCostMultiplier *string `json:"channel_cost_multiplier"`
+	RechargeFactor        *string `json:"recharge_factor"`
 	AdapterKey            string  `json:"adapter_key"`
 	UpstreamModel         string  `json:"upstream_model"`
 	UpstreamProtocol      string  `json:"upstream_protocol"`
@@ -512,6 +515,9 @@ func toAttemptDTO(a query.Attempt) attemptDTO {
 		AttemptIndex:          a.AttemptIndex,
 		ProviderID:            a.ProviderID,
 		ChannelID:             a.ChannelID,
+		ChannelName:           a.ChannelName,
+		ChannelCostMultiplier: a.ChannelCostMultiplier,
+		RechargeFactor:        a.RechargeFactor,
 		AdapterKey:            a.AdapterKey,
 		UpstreamModel:         a.UpstreamModel,
 		UpstreamProtocol:      a.UpstreamProtocol,
