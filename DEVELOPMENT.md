@@ -43,6 +43,17 @@ Test 部署使用 `deploy/compose.test.yml`，与根目录的本地开发 Compos
 `deploy/env/.env.docker.example` 和 `deploy/env/.env.test.example` 分别创建实际环境文件并替换占位密码。
 实际的 `.env.docker`、`.env.test` 已由 `.gitignore` 排除；包含 Test 凭据的文件权限应设置为 `600`。
 
+构建前使用脚本从当前 Git HEAD 写入镜像版本信息：
+
+```bash
+./deploy/prepare-image-env.sh  # develop 自动识别为 Test，main 自动识别为 Production
+```
+
+脚本只允许在 `develop` 或 `main` 分支执行，并要求工作树干净，且 HEAD 恰好存在一个合法的 Git tag。
+`develop` 自动生成 Test 配置，`main` 自动生成 Production 配置。该 tag 同时作为 `IMAGE_TAG` 和
+`IMAGE_VERSION`，完整 commit 写入 `IMAGE_REVISION`，脚本执行时间写入 `IMAGE_CREATED`。脚本不会切换、拉取或
+合并分支。
+
 Compose 变量按顺序加载，后面的 Test 文件可以覆盖 Docker 构建默认值：
 
 ```bash
