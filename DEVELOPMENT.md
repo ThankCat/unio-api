@@ -82,7 +82,20 @@ Production 保持一致。Test PostgreSQL、Redis、network 和 volume 由 `COMP
 Nginx 是 Test 环境唯一映射到宿主机的 HTTP 入口，默认地址为 `http://127.0.0.1:18080`。按 Host 分流：
 `test.api.unioapi.com/v1/*` 转发到 Gateway，`test.admin.unioapi.com/v1/*` 转发到 Admin（同域还托管
 `/var/www/admin` 静态前端）；`/nginx-healthz` 检查代理本身，`/healthz` 与 `/readyz` 检查 Gateway。
-Gateway 和 Admin 的容器端口仅在 Compose backend 网络内可见。
+Gateway 和 Admin 的容器端口仅在 Compose 网络内可见。
+
+公网访问时，由宿主机 Caddy 监听 80，再反代到 `127.0.0.1:18080`（Cloudflare Flexible 场景下源站用 HTTP）。
+配置见 `deploy/caddy/Caddyfile.test`：
+
+```bash
+sudo apt update && sudo apt install -y caddy
+sudo cp deploy/caddy/Caddyfile.test /etc/caddy/Caddyfile
+sudo systemctl enable --now caddy
+sudo systemctl reload caddy
+```
+
+Admin 前端静态文件放在宿主机 `/var/www/admin`（compose 只读挂载进容器）。部署前请 `mkdir -p` 并保证部署用户可写，或用
+`rsync` 同步 `unio-admin` 的 `dist/`。
 
 Test 日志分为两条独立路径：所有容器 stdout/stderr 使用 Docker `json-file` driver，并由 `.env.docker` 中的
 `DOCKER_LOG_MAX_SIZE`、`DOCKER_LOG_MAX_FILE` 控制轮转；Gateway 的结构化 `gateway.jsonl` 写入

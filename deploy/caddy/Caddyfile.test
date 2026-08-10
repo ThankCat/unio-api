@@ -1,0 +1,15 @@
+# 宿主机 Caddy 入口（Cloudflare Flexible → :80 → compose nginx :18080）。
+# 与 deploy/nginx/test.conf（容器内按 Host 分流）分工不同：本文件只做大门转发。
+#
+# 安装示例（Ubuntu）：
+#   sudo apt update && sudo apt install -y caddy
+#   sudo cp deploy/caddy/Caddyfile.test /etc/caddy/Caddyfile
+#   sudo systemctl enable --now caddy
+#   sudo systemctl reload caddy
+#
+# 不要与宿主机 Nginx 或其他占用 :80 的服务同时启用。
+# reverse_proxy 默认会保留客户端 Host，容器内 nginx 才能区分 test.api / test.admin。
+
+http://test.api.unioapi.com, http://test.admin.unioapi.com {
+	reverse_proxy 127.0.0.1:18080
+}
