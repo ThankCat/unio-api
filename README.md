@@ -15,8 +15,8 @@ Gateway 的产品边界、公开契约、协议兼容、Provider 适配、请求
 
 | 入口 | 当前用途 |
 | --- | --- |
-| `cmd/gateway-server` | 提供 `/v1/*` 公开 Gateway API 和已配置的内部只读端点。 |
-| `cmd/admin-server` | 提供 `/admin/v1/*` Admin API。 |
+| `cmd/gateway-server` | 提供 `/v1/*` 公开 Gateway API 和已配置的内部只读端点（默认 `:8520`）。 |
+| `cmd/admin-server` | 提供 `/v1/*` Admin API（默认 `:8521`；与 Gateway 分端口/分域名，路径同为 `/v1`）。 |
 | `cmd/worker-server` | 运行后台任务；`sync-models` 子命令执行一次 models.dev 目录同步。 |
 
 ## 本地启动

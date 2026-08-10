@@ -73,7 +73,7 @@ func performLoginRequest(t *testing.T, handler http.Handler) *httptest.ResponseR
 	if err != nil {
 		t.Fatalf("marshal login request: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/admin/v1/login", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/login", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "192.0.2.10:1234"
 	rec := httptest.NewRecorder()

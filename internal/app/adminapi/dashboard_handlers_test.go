@@ -67,7 +67,7 @@ func TestDashboardTimeseriesReturns200(t *testing.T) {
 	svc := &fakeDashboardService{}
 	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: svc})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/timeseries?metric=spend&interval=day", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/dashboard/timeseries?metric=spend&interval=day", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -79,7 +79,7 @@ func TestDashboardTimeseriesReturns200(t *testing.T) {
 func TestDashboardTimeseriesInvalidMetricReturns400(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: &fakeDashboardService{}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/timeseries?metric=bogus&interval=day", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/dashboard/timeseries?metric=bogus&interval=day", "", true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
@@ -88,7 +88,7 @@ func TestDashboardTimeseriesInvalidMetricReturns400(t *testing.T) {
 func TestDashboardTimeseriesInvalidIntervalReturns400(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: &fakeDashboardService{}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/timeseries?metric=requests&interval=week", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/dashboard/timeseries?metric=requests&interval=week", "", true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
@@ -97,7 +97,7 @@ func TestDashboardTimeseriesInvalidIntervalReturns400(t *testing.T) {
 func TestDashboardRequiresToken(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: &fakeDashboardService{}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/radar", "", false)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/dashboard/radar", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
@@ -106,7 +106,7 @@ func TestDashboardRequiresToken(t *testing.T) {
 func TestDashboardBreakdownProviderDimensionReturns200(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{DashboardService: &fakeDashboardService{}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/dashboard/breakdown?dimension=provider&range=24h", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/dashboard/breakdown?dimension=provider&range=24h", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}

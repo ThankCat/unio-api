@@ -49,7 +49,7 @@ LABEL org.opencontainers.image.title="Unio Gateway"
 
 COPY --from=builder --chown=unio:unio /out/gateway-server /app/gateway-server
 
-EXPOSE 8521
+EXPOSE 8520
 
 CMD ["/app/gateway-server"]
 
@@ -59,7 +59,7 @@ LABEL org.opencontainers.image.title="Unio Admin"
 
 COPY --from=builder --chown=unio:unio /out/admin-server /app/admin-server
 
-EXPOSE 8522
+EXPOSE 8521
 
 CMD ["/app/admin-server"]
 

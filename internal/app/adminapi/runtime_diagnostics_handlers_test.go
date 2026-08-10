@@ -34,7 +34,7 @@ func TestGetRuntimeDiagnosticsReturnsRedactedMaintenanceView(t *testing.T) {
 	}}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RuntimeDiagnosticsService: service})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/system/runtime-diagnostics", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/system/runtime-diagnostics", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -87,7 +87,7 @@ func TestGetRuntimeDiagnosticsReturnsServiceError(t *testing.T) {
 		RuntimeDiagnosticsService: &fakeRuntimeDiagnosticsService{err: errors.New("postgres unavailable")},
 	})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/system/runtime-diagnostics", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/system/runtime-diagnostics", "", true)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusInternalServerError, rec.Code, rec.Body.String())
 	}
@@ -98,7 +98,7 @@ func TestRuntimeDiagnosticsRequiresAdminToken(t *testing.T) {
 		RuntimeDiagnosticsService: &fakeRuntimeDiagnosticsService{},
 	})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/system/runtime-diagnostics", "", false)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/system/runtime-diagnostics", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}

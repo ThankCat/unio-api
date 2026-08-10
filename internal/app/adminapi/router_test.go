@@ -57,7 +57,7 @@ func newTestRouter(t *testing.T) http.Handler {
 func TestPingRequiresToken(t *testing.T) {
 	handler := newTestRouter(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/v1/ping", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/ping", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -69,7 +69,7 @@ func TestPingRequiresToken(t *testing.T) {
 func TestPingRejectsInvalidToken(t *testing.T) {
 	handler := newTestRouter(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/v1/ping", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/ping", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -82,7 +82,7 @@ func TestPingRejectsInvalidToken(t *testing.T) {
 func TestPingAcceptsValidToken(t *testing.T) {
 	handler := newTestRouter(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/v1/ping", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/ping", nil)
 	req.Header.Set("Authorization", "Bearer "+testAdminToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

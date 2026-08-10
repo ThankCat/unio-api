@@ -7,7 +7,7 @@ import (
 )
 
 // 本文件登记 admin_frontend 域(admin 前端消费)的运行时配置。
-// 后端职责仅存储+校验+seed+面板下发,**没有 Go 消费方**——前端经 GET /admin/v1/settings
+// 后端职责仅存储+校验+seed+面板下发,**没有 Go 消费方**——前端经 GET /v1/settings
 // 拉取该域 value 使用(见 unio-admin 的 useMetricThresholds hook)。
 // 前端侧保留一份与本默认值同源同值的 fallback 常量(拉取失败回退);改默认须两处同步。
 

@@ -109,7 +109,7 @@ func TestChannelBreakerRuntimeAndReset(t *testing.T) {
 		ChannelBreaker: breaker,
 	})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/channels/17/ops/runtime", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/channels/17/ops/runtime", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("runtime want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -169,7 +169,7 @@ func TestChannelBreakerRuntimeAndReset(t *testing.T) {
 		t.Fatalf("runtime snapshot called with wrong target: calls=%d scope=%q id=%d", breaker.snapshotCalls, breaker.snapshotScope, breaker.snapshotID)
 	}
 
-	rec = doAdmin(t, handler, http.MethodDelete, "/admin/v1/channels/17/ops/circuit-breaker", "", true)
+	rec = doAdmin(t, handler, http.MethodDelete, "/v1/channels/17/ops/circuit-breaker", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reset want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -204,8 +204,8 @@ func TestChannelBreakerRuntimeUnavailable(t *testing.T) {
 			method string
 			path   string
 		}{
-			{method: http.MethodGet, path: "/admin/v1/channels/17/ops/runtime"},
-			{method: http.MethodDelete, path: "/admin/v1/channels/17/ops/circuit-breaker"},
+			{method: http.MethodGet, path: "/v1/channels/17/ops/runtime"},
+			{method: http.MethodDelete, path: "/v1/channels/17/ops/circuit-breaker"},
 		} {
 			rec := doAdmin(t, handler, methodAndPath.method, methodAndPath.path, "", true)
 			if rec.Code != http.StatusServiceUnavailable {
@@ -220,7 +220,7 @@ func TestChannelBreakerRuntimeUnavailable(t *testing.T) {
 			ChannelService: &fakeChannelService{getOut: channel.Channel{ID: 17}},
 			ChannelBreaker: breaker,
 		})
-		rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/channels/17/ops/runtime", "", true)
+		rec := doAdmin(t, handler, http.MethodGet, "/v1/channels/17/ops/runtime", "", true)
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("want 503, got %d body=%s", rec.Code, rec.Body.String())
 		}
@@ -232,7 +232,7 @@ func TestChannelBreakerRuntimeUnavailable(t *testing.T) {
 			ChannelService: &fakeChannelService{getOut: channel.Channel{ID: 17}},
 			ChannelBreaker: breaker,
 		})
-		rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/channels/17/ops/circuit-breaker", "", true)
+		rec := doAdmin(t, handler, http.MethodDelete, "/v1/channels/17/ops/circuit-breaker", "", true)
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("want 503, got %d body=%s", rec.Code, rec.Body.String())
 		}
@@ -263,7 +263,7 @@ func TestChannelRuntimeDoesNotExposeStaleBreakerSamples(t *testing.T) {
 		}},
 		ChannelBreaker: breaker,
 	})
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/channels/17/ops/runtime", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/channels/17/ops/runtime", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("runtime want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -298,7 +298,7 @@ func TestChannelRuntimeTreatsMissingStateAsNoSample(t *testing.T) {
 		ChannelService: &fakeChannelService{getOut: channel.Channel{ID: 17, CapacityRevision: 7}},
 		ChannelBreaker: breaker,
 	})
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/channels/17/ops/runtime", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/channels/17/ops/runtime", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("runtime want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -322,7 +322,7 @@ func TestChannelBreakerRejectsInvalidIDBeforeRedis(t *testing.T) {
 	breaker := &fakeChannelBreaker{}
 	handler := newChannelBreakerRouter(t, adminapi.RouterDeps{ChannelBreaker: breaker})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/channels/not-an-id/ops/runtime", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/channels/not-an-id/ops/runtime", "", true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
 	}

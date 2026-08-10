@@ -42,7 +42,7 @@ func TestListRecoveryJobsReturns200AndOmitsInternalDetail(t *testing.T) {
 	}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RecoveryJobQueryService: svc})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/system/settlement-recovery-jobs?status=dead", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/system/settlement-recovery-jobs?status=dead", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -59,7 +59,7 @@ func TestListRecoveryJobsForwardsUserIDFilter(t *testing.T) {
 	svc := &fakeRecoveryJobService{}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RecoveryJobQueryService: svc})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/system/settlement-recovery-jobs?user_id=7", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/system/settlement-recovery-jobs?user_id=7", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -71,7 +71,7 @@ func TestListRecoveryJobsForwardsUserIDFilter(t *testing.T) {
 func TestListRecoveryJobsInvalidUserIDReturns400(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{RecoveryJobQueryService: &fakeRecoveryJobService{}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/system/settlement-recovery-jobs?user_id=abc", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/system/settlement-recovery-jobs?user_id=abc", "", true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
@@ -81,7 +81,7 @@ func TestGetRecoveryJobDefaultHidesInternalDetail(t *testing.T) {
 	svc := &fakeRecoveryJobService{getOut: query.RecoveryJobDetail{RecoveryJobSummary: query.RecoveryJobSummary{ID: 11, Status: "dead"}}}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RecoveryJobQueryService: svc})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/system/settlement-recovery-jobs/11", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/system/settlement-recovery-jobs/11", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -94,7 +94,7 @@ func TestGetRecoveryJobIncludeInternalForwarded(t *testing.T) {
 	svc := &fakeRecoveryJobService{getOut: query.RecoveryJobDetail{RecoveryJobSummary: query.RecoveryJobSummary{ID: 11}}}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RecoveryJobQueryService: svc})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/system/settlement-recovery-jobs/11?include_internal=true", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/system/settlement-recovery-jobs/11?include_internal=true", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -106,7 +106,7 @@ func TestGetRecoveryJobIncludeInternalForwarded(t *testing.T) {
 func TestGetRecoveryJobInvalidIDReturns400(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{RecoveryJobQueryService: &fakeRecoveryJobService{}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/system/settlement-recovery-jobs/not-an-int", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/system/settlement-recovery-jobs/not-an-int", "", true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
@@ -116,7 +116,7 @@ func TestGetRecoveryJobNotFoundReturns404(t *testing.T) {
 	svc := &fakeRecoveryJobService{getErr: failure.New(failure.CodeAdminNotFound, failure.WithMessage("not found"))}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RecoveryJobQueryService: svc})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/system/settlement-recovery-jobs/999", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/system/settlement-recovery-jobs/999", "", true)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusNotFound, rec.Code, rec.Body.String())
 	}
@@ -125,7 +125,7 @@ func TestGetRecoveryJobNotFoundReturns404(t *testing.T) {
 func TestRecoveryJobsRequireToken(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{RecoveryJobQueryService: &fakeRecoveryJobService{}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/system/settlement-recovery-jobs", "", false)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/system/settlement-recovery-jobs", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}

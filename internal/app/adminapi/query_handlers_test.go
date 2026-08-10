@@ -72,7 +72,7 @@ func TestListRequestsOmitsInternalErrorDetail(t *testing.T) {
 	rqs := &fakeRequestQueryService{listOut: []query.RequestListItem{{RequestSummary: query.RequestSummary{ID: 1, RequestID: "req_1", Status: "failed"}}}}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -86,7 +86,7 @@ func TestListRequestsForwardsRequestIDFilter(t *testing.T) {
 	rqs := &fakeRequestQueryService{}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests?request_id=req_abc", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests?request_id=req_abc", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -99,7 +99,7 @@ func TestListRequestsForwardsRoutingSampleFilters(t *testing.T) {
 	rqs := &fakeRequestQueryService{}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests?route_id=7&channel_id=4&attempt_id=19&scoring_sample=any", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests?route_id=7&channel_id=4&attempt_id=19&scoring_sample=any", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -113,7 +113,7 @@ func TestListRequestsForwardsRoutingSampleFilters(t *testing.T) {
 func TestListRequestsRejectsInvalidScoringSample(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: &fakeRequestQueryService{}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests?scoring_sample=unknown", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests?scoring_sample=unknown", "", true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
@@ -123,7 +123,7 @@ func TestGetRequestDefaultHidesInternalDetail(t *testing.T) {
 	rqs := &fakeRequestQueryService{getOut: query.RequestDetail{RequestSummary: query.RequestSummary{ID: 1, RequestID: "req_1", Status: "failed"}}}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests/req_1", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests/req_1", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -139,7 +139,7 @@ func TestGetRequestIncludeInternalReturnsDetail(t *testing.T) {
 	rqs := &fakeRequestQueryService{getOut: query.RequestDetail{RequestSummary: query.RequestSummary{ID: 1, RequestID: "req_1", Status: "failed"}}}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests/req_1?include_internal=true", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests/req_1?include_internal=true", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -160,7 +160,7 @@ func TestGetRequestReturnsUpstreamAttemptTimings(t *testing.T) {
 	}}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests/req_1", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests/req_1", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -194,7 +194,7 @@ func TestGetRequestReturnsAuthoritativeRequestTimings(t *testing.T) {
 	}}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests/req_1", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests/req_1", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -219,7 +219,7 @@ func TestGetRequestNotFoundReturns404(t *testing.T) {
 	rqs := &fakeRequestQueryService{getErr: failure.New(failure.CodeAdminNotFound, failure.WithMessage("request not found"))}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests/missing", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests/missing", "", true)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusNotFound, rec.Code, rec.Body.String())
 	}
@@ -228,7 +228,7 @@ func TestGetRequestNotFoundReturns404(t *testing.T) {
 func TestListRequestsInvalidUserIDReturns400(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: &fakeRequestQueryService{}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests?user_id=abc", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests?user_id=abc", "", true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
@@ -237,7 +237,7 @@ func TestListRequestsInvalidUserIDReturns400(t *testing.T) {
 func TestListRequestsInvalidTimeReturns400(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: &fakeRequestQueryService{}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests?from=not-a-time", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests?from=not-a-time", "", true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
@@ -246,7 +246,7 @@ func TestListRequestsInvalidTimeReturns400(t *testing.T) {
 func TestRequestsRequireToken(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: &fakeRequestQueryService{}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests", "", false)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
@@ -255,7 +255,7 @@ func TestRequestsRequireToken(t *testing.T) {
 func TestListLedgerEntriesReturns200(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{LedgerQueryService: &fakeLedgerQueryService{entries: []query.LedgerEntry{{ID: 1, EntryType: "debit", Amount: "1.5", Currency: "USD"}}}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/ledger/entries", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/ledger/entries", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -264,7 +264,7 @@ func TestListLedgerEntriesReturns200(t *testing.T) {
 func TestListBillingExceptionsReturns200(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{LedgerQueryService: &fakeLedgerQueryService{exceptions: []query.BillingException{{ID: 1, EventType: "write_off", PlatformAmount: "0.5", Currency: "USD"}}}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/ledger/billing-exceptions", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/ledger/billing-exceptions", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}

@@ -44,11 +44,11 @@ func TestGetRequestRoutingDecisionAndAuth(t *testing.T) {
 	}}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RoutingTraceService: svc})
 
-	unauthorized := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests/req-9/routing-decision", "", false)
+	unauthorized := doAdmin(t, handler, http.MethodGet, "/v1/requests/req-9/routing-decision", "", false)
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", unauthorized.Code)
 	}
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests/req-9/routing-decision", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests/req-9/routing-decision", "", true)
 	if rec.Code != http.StatusOK || svc.getID != "req-9" {
 		t.Fatalf("unexpected response/code: id=%q code=%d body=%s", svc.getID, rec.Code, rec.Body.String())
 	}
@@ -76,7 +76,7 @@ func TestGetRequestRoutingDecisionAndAuth(t *testing.T) {
 func TestGetRequestRoutingDecisionNotFound(t *testing.T) {
 	svc := &fakeRoutingTraceService{getErr: failure.New(failure.CodeAdminNotFound, failure.WithMessage("routing decision trace not found"))}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RoutingTraceService: svc})
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/requests/missing/routing-decision", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests/missing/routing-decision", "", true)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -91,7 +91,7 @@ func TestGetRouteRuntime(t *testing.T) {
 		Channels: []routeruntime.Channel{{ChannelID: 7, Eligible: true, FinalScore: 87.5}},
 	}}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RouteRuntimeService: svc})
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/routes/42/ops/runtime?model_id=openai%2Fgpt&protocol=openai", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/routes/42/ops/runtime?model_id=openai%2Fgpt&protocol=openai", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}

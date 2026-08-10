@@ -79,7 +79,7 @@ dev: check-env check-air infra ## 一键启动全部服务（热加载，Ctrl+C 
 	@set -a; source "$(ENV_FILE)"; set +a; \
 	trap 'kill 0' INT TERM EXIT; \
 	echo "==> gateway  http://localhost$${GATEWAY_HTTP_ADDR}  /v1/*"; \
-	echo "==> admin    http://localhost$${ADMIN_HTTP_ADDR}  /admin/v1/*"; \
+	echo "==> admin    http://localhost$${ADMIN_HTTP_ADDR}  /v1/*"; \
 	echo "==> worker   (无 HTTP)"; \
 	air -c .air.gateway.toml & \
 	air -c .air.admin.toml & \
@@ -90,7 +90,7 @@ dev-gateway: check-env check-air ## 热加载 gateway-server（GATEWAY_HTTP_ADDR
 	@set -a; source "$(ENV_FILE)"; set +a; \
 	air -c .air.gateway.toml
 
-dev-admin: check-env check-air ## 热加载 admin-server（ADMIN_HTTP_ADDR，/admin/v1/*）
+dev-admin: check-env check-air ## 热加载 admin-server（ADMIN_HTTP_ADDR，/v1/*）
 	@set -a; source "$(ENV_FILE)"; set +a; \
 	air -c .air.admin.toml
 

@@ -87,7 +87,7 @@ func newCapabilityRouter(
 func TestListCapabilityKeysReturns200(t *testing.T) {
 	handler := newCapabilityRouter(t, &fakeCapabilityService{keys: []corecap.CapabilityKey{{Key: "text.input"}}}, nil, nil)
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/capability/keys", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/capability/keys", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -96,7 +96,7 @@ func TestListCapabilityKeysReturns200(t *testing.T) {
 func TestCapabilityKeysRequireToken(t *testing.T) {
 	handler := newCapabilityRouter(t, &fakeCapabilityService{}, nil, nil)
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/capability/keys", "", false)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/capability/keys", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
@@ -105,7 +105,7 @@ func TestCapabilityKeysRequireToken(t *testing.T) {
 func TestTriggerSyncReturns200(t *testing.T) {
 	handler := newCapabilityRouter(t, nil, fakeCapabilitySyncService{}, nil)
 
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/capability/sync-jobs", `{"dry_run":true}`, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/capability/sync-jobs", `{"dry_run":true}`, true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -114,7 +114,7 @@ func TestTriggerSyncReturns200(t *testing.T) {
 func TestListSyncJobsReturns200(t *testing.T) {
 	handler := newCapabilityRouter(t, nil, fakeCapabilitySyncService{}, nil)
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/capability/sync-jobs", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/capability/sync-jobs", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -123,7 +123,7 @@ func TestListSyncJobsReturns200(t *testing.T) {
 func TestSyncJobsPreflightReturns204(t *testing.T) {
 	handler := newCapabilityRouter(t, nil, fakeCapabilitySyncService{}, nil)
 
-	rec := doAdmin(t, handler, http.MethodOptions, "/admin/v1/capability/sync-jobs", "", false)
+	rec := doAdmin(t, handler, http.MethodOptions, "/v1/capability/sync-jobs", "", false)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusNoContent, rec.Code, rec.Body.String())
 	}
@@ -132,7 +132,7 @@ func TestSyncJobsPreflightReturns204(t *testing.T) {
 func TestListAdapterProfilesReturns200(t *testing.T) {
 	handler := newCapabilityRouter(t, nil, nil, fakeCapabilitySeedService{})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/capability/adapter-profiles", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/capability/adapter-profiles", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -141,7 +141,7 @@ func TestListAdapterProfilesReturns200(t *testing.T) {
 func TestMaterializeAdapterSeedReturns200(t *testing.T) {
 	handler := newCapabilityRouter(t, nil, nil, fakeCapabilitySeedService{})
 
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/capability/adapter-seed-jobs", `{"model_id":1,"profile_key":"deepseek:openai"}`, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/capability/adapter-seed-jobs", `{"model_id":1,"profile_key":"deepseek:openai"}`, true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}

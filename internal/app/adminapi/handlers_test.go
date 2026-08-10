@@ -298,7 +298,7 @@ func TestCreateProviderReturns201(t *testing.T) {
 		Status: "enabled", StatusRevision: 1,
 	}}, nil)
 
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers", `{"slug":"openai","name":"OpenAI","origin":"https://api.openai.com","status":"enabled"}`, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/providers", `{"slug":"openai","name":"OpenAI","origin":"https://api.openai.com","status":"enabled"}`, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
 	}
@@ -307,7 +307,7 @@ func TestCreateProviderReturns201(t *testing.T) {
 func TestProvidersRequireToken(t *testing.T) {
 	handler := newServicesRouter(t, &fakeProviderService{}, nil)
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/providers", "", false)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/providers", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
@@ -319,7 +319,7 @@ func TestUpdateProviderReturnsProvider(t *testing.T) {
 		Status: "disabled", StatusRevision: 3,
 	}}, nil)
 
-	rec := doAdmin(t, handler, http.MethodPatch, "/admin/v1/providers/7", `{"name":"OpenAI"}`, true)
+	rec := doAdmin(t, handler, http.MethodPatch, "/v1/providers/7", `{"name":"OpenAI"}`, true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -334,7 +334,7 @@ func TestUpdateProviderReturnsProvider(t *testing.T) {
 func TestDeleteProviderReturns204(t *testing.T) {
 	handler := newServicesRouter(t, &fakeProviderService{}, nil)
 
-	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/providers/9", "", true)
+	rec := doAdmin(t, handler, http.MethodDelete, "/v1/providers/9", "", true)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusNoContent, rec.Code, rec.Body.String())
 	}
@@ -346,7 +346,7 @@ func TestDeleteProviderConflictReturns409(t *testing.T) {
 		deleteErr: failure.New(failure.CodeAdminConflict, failure.WithMessage("still referenced")),
 	}, nil)
 
-	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/providers/9", "", true)
+	rec := doAdmin(t, handler, http.MethodDelete, "/v1/providers/9", "", true)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusConflict, rec.Code, rec.Body.String())
 	}
@@ -357,7 +357,7 @@ func TestArchiveProviderReturnsRuntimeSummary(t *testing.T) {
 		RuntimeSyncPending: true,
 	}}
 	handler := newServicesRouter(t, svc, nil)
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers/7/archive", "", true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/providers/7/archive", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -377,7 +377,7 @@ func TestArchiveProviderReturnsRuntimeSummary(t *testing.T) {
 func TestRestoreProviderReturnsCommittedRuntimeSummary(t *testing.T) {
 	handler := newServicesRouter(t, &fakeProviderService{restoreOut: provider.StatusChangeResult{}}, nil)
 
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/providers/7/restore", "", true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/providers/7/restore", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -392,7 +392,7 @@ func TestRestoreProviderReturnsCommittedRuntimeSummary(t *testing.T) {
 func TestArchiveChannelReturns204(t *testing.T) {
 	svc := &fakeChannelService{}
 	handler := newServicesRouter(t, nil, svc)
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/9/archive", "", true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/channels/9/archive", "", true)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -402,7 +402,7 @@ func TestCreateChannelUnsupportedBindingReturns422(t *testing.T) {
 	handler := newServicesRouter(t, nil, &fakeChannelService{createErr: failure.New(failure.CodeAdminAdapterBindingUnsupported, failure.WithMessage("unsupported"))})
 
 	body := `{"provider_id":1,"name":"primary","protocol":"openai","adapter_key":"x","base_url":"https://a.test/v1","credential":"sk","status":"enabled","priority":0}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels", body, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/channels", body, true)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
 	}
@@ -414,7 +414,7 @@ func TestListAdapterKeysReturnsOptions(t *testing.T) {
 		{Protocol: "openai", AdapterKey: "deepseek"},
 	}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/channels/adapter-keys", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/channels/adapter-keys", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -437,7 +437,7 @@ func TestRotateChannelCredentialReturnsVerificationResult(t *testing.T) {
 		},
 	}})
 
-	rec := doAdmin(t, handler, http.MethodPut, "/admin/v1/channels/5/credential", `{"credential":"sk-new"}`, true)
+	rec := doAdmin(t, handler, http.MethodPut, "/v1/channels/5/credential", `{"credential":"sk-new"}`, true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
@@ -452,7 +452,7 @@ func TestRotateChannelCredentialReturnsVerificationResult(t *testing.T) {
 func TestCreateModelReturns201(t *testing.T) {
 	handler := newModelRouter(t, &fakeModelService{createOut: model.Model{ID: 1, ModelID: "deepseek-chat", DisplayName: "DeepSeek Chat", OwnedBy: "deepseek", Status: "enabled", Source: "manual"}})
 
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/models", `{"model_id":"deepseek-chat","display_name":"DeepSeek Chat","owned_by":"deepseek","status":"enabled"}`, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/models", `{"model_id":"deepseek-chat","display_name":"DeepSeek Chat","owned_by":"deepseek","status":"enabled"}`, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
 	}
@@ -461,7 +461,7 @@ func TestCreateModelReturns201(t *testing.T) {
 func TestGetModelInvalidIDReturns400(t *testing.T) {
 	handler := newModelRouter(t, &fakeModelService{})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/models/abc", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/models/abc", "", true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d", http.StatusBadRequest, rec.Code)
 	}
@@ -470,7 +470,7 @@ func TestGetModelInvalidIDReturns400(t *testing.T) {
 func TestGetModelNotFoundReturns404(t *testing.T) {
 	handler := newModelRouter(t, &fakeModelService{getErr: failure.New(failure.CodeAdminNotFound, failure.WithMessage("model not found"))})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/models/9", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/models/9", "", true)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected %d, got %d", http.StatusNotFound, rec.Code)
 	}
@@ -479,7 +479,7 @@ func TestGetModelNotFoundReturns404(t *testing.T) {
 func TestModelsRequireToken(t *testing.T) {
 	handler := newModelRouter(t, &fakeModelService{})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/models", "", false)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/models", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
@@ -488,7 +488,7 @@ func TestModelsRequireToken(t *testing.T) {
 func TestDeleteModelReturns204(t *testing.T) {
 	handler := newModelRouter(t, &fakeModelService{})
 
-	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/models/9", "", true)
+	rec := doAdmin(t, handler, http.MethodDelete, "/v1/models/9", "", true)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusNoContent, rec.Code, rec.Body.String())
 	}
@@ -499,7 +499,7 @@ func TestDeleteModelConflictReturns409(t *testing.T) {
 		deleteErr: failure.New(failure.CodeAdminConflict, failure.WithMessage("referenced by billing history")),
 	})
 
-	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/models/9", "", true)
+	rec := doAdmin(t, handler, http.MethodDelete, "/v1/models/9", "", true)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusConflict, rec.Code, rec.Body.String())
 	}
@@ -508,7 +508,7 @@ func TestDeleteModelConflictReturns409(t *testing.T) {
 func TestCreateChannelModelReturns201(t *testing.T) {
 	handler := newChannelModelRouter(t, &fakeChannelModelService{createOut: channelmodel.Binding{ID: 1, ChannelID: 5, ModelID: 2, UpstreamModel: "gpt-4o", Status: "enabled"}})
 
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/models", `{"model_id":2,"upstream_model":"gpt-4o","status":"enabled"}`, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/channels/5/models", `{"model_id":2,"upstream_model":"gpt-4o","status":"enabled"}`, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
 	}
@@ -517,7 +517,7 @@ func TestCreateChannelModelReturns201(t *testing.T) {
 func TestDeleteChannelModelConflictReturns409(t *testing.T) {
 	handler := newChannelModelRouter(t, &fakeChannelModelService{deleteErr: failure.New(failure.CodeAdminConflict, failure.WithMessage("referenced by billing history"))})
 
-	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/channels/5/models/2", "", true)
+	rec := doAdmin(t, handler, http.MethodDelete, "/v1/channels/5/models/2", "", true)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusConflict, rec.Code, rec.Body.String())
 	}
@@ -526,7 +526,7 @@ func TestDeleteChannelModelConflictReturns409(t *testing.T) {
 func TestUpdateChannelModelInvalidModelIDReturns400(t *testing.T) {
 	handler := newChannelModelRouter(t, &fakeChannelModelService{})
 
-	rec := doAdmin(t, handler, http.MethodPatch, "/admin/v1/channels/5/models/abc", `{"upstream_model":"gpt-4o","status":"enabled"}`, true)
+	rec := doAdmin(t, handler, http.MethodPatch, "/v1/channels/5/models/abc", `{"upstream_model":"gpt-4o","status":"enabled"}`, true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
@@ -535,7 +535,7 @@ func TestUpdateChannelModelInvalidModelIDReturns400(t *testing.T) {
 func TestChannelModelsRequireToken(t *testing.T) {
 	handler := newChannelModelRouter(t, &fakeChannelModelService{})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/channels/5/models", "", false)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/channels/5/models", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
@@ -545,7 +545,7 @@ func TestCreateChannelPriceReturns201(t *testing.T) {
 	handler := newChannelPriceRouter(t, &fakeChannelPriceService{createOut: channelprice.ChannelPrice{ID: 1, ChannelID: 5, ModelID: 2, Currency: "USD", PricingUnit: "per_1m_tokens", UncachedInputCost: "1.25", OutputCost: "2.5", Status: "enabled"}})
 
 	body := `{"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_cost":"1.25","output_cost":"2.5","status":"enabled","effective_from":"2026-01-01T00:00:00Z"}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/models/2/prices", body, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/channels/5/models/2/prices", body, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
 	}
@@ -555,7 +555,7 @@ func TestCreateChannelPriceBadEffectiveFromReturns400(t *testing.T) {
 	handler := newChannelPriceRouter(t, &fakeChannelPriceService{})
 
 	body := `{"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_price":"3","output_price":"9","status":"enabled","effective_from":"not-a-time"}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/models/2/prices", body, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/channels/5/models/2/prices", body, true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
@@ -565,7 +565,7 @@ func TestCreateChannelPriceOverlapReturns422(t *testing.T) {
 	handler := newChannelPriceRouter(t, &fakeChannelPriceService{createErr: failure.New(failure.CodeAdminPricingWindowOverlap, failure.WithMessage("overlap"))})
 
 	body := `{"currency":"USD","pricing_unit":"per_1m_tokens","uncached_input_price":"3","output_price":"9","status":"enabled","effective_from":"2026-01-01T00:00:00Z"}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/channels/5/models/2/prices", body, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/channels/5/models/2/prices", body, true)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
 	}
@@ -574,7 +574,7 @@ func TestCreateChannelPriceOverlapReturns422(t *testing.T) {
 func TestUpdateChannelPriceInvalidIDReturns400(t *testing.T) {
 	handler := newChannelPriceRouter(t, &fakeChannelPriceService{})
 
-	rec := doAdmin(t, handler, http.MethodPatch, "/admin/v1/channel-prices/abc", `{"status":"disabled"}`, true)
+	rec := doAdmin(t, handler, http.MethodPatch, "/v1/channel-prices/abc", `{"status":"disabled"}`, true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
@@ -583,7 +583,7 @@ func TestUpdateChannelPriceInvalidIDReturns400(t *testing.T) {
 func TestChannelPricesRequireToken(t *testing.T) {
 	handler := newChannelPriceRouter(t, &fakeChannelPriceService{})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/channels/5/prices", "", false)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/channels/5/prices", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
@@ -593,7 +593,7 @@ func TestCreateRouteReturns201(t *testing.T) {
 	handler := newRouteRouter(t, &fakeRouteService{createOut: route.Route{ID: 3, Name: "C-line", Mode: "fixed", Status: "enabled"}})
 
 	body := `{"name":"C-line","mode":"fixed","status":"enabled","channel_ids":[5]}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/routes", body, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/routes", body, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
 	}
@@ -603,7 +603,7 @@ func TestCreateRouteFixedValidationReturns400(t *testing.T) {
 	handler := newRouteRouter(t, &fakeRouteService{createErr: failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("fixed route must list exactly one channel"), failure.WithField("field", "channel_ids"))})
 
 	body := `{"name":"C-line","mode":"fixed","status":"enabled","channel_ids":[]}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/routes", body, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/routes", body, true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
 	}
@@ -612,7 +612,7 @@ func TestCreateRouteFixedValidationReturns400(t *testing.T) {
 func TestRoutesRequireToken(t *testing.T) {
 	handler := newRouteRouter(t, &fakeRouteService{})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/routes", "", false)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/routes", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}

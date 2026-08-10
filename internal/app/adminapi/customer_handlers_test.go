@@ -71,7 +71,7 @@ func TestGetUserReturnsBalances(t *testing.T) {
 		},
 	}})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/admin/v1/users/7", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/users/7", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -87,7 +87,7 @@ func TestCreateAdjustmentReturns201(t *testing.T) {
 	})
 
 	body := `{"direction":"credit","amount":"10","currency":"USD","reason":"top up"}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/users/7/balance-adjustments", body, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/users/7/balance-adjustments", body, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -100,7 +100,7 @@ func TestCreateAdjustmentInsufficientBalanceReturns422(t *testing.T) {
 	})
 
 	body := `{"direction":"debit","amount":"10","currency":"USD","reason":"deduct"}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/users/7/balance-adjustments", body, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/users/7/balance-adjustments", body, true)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -116,7 +116,7 @@ func TestCreateAPIKeyReturnsPlaintext(t *testing.T) {
 
 	// 线路必填：创建请求必须带 route_id（fake service 不校验，这里以真实契约填写）。
 	body := `{"name":"ci","route_id":3}`
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/users/100/api-keys", body, true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/users/100/api-keys", body, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -134,7 +134,7 @@ func TestUpdateAPIKeyReturns200(t *testing.T) {
 	}})
 
 	body := `{"disabled":true}`
-	rec := doAdmin(t, handler, http.MethodPatch, "/admin/v1/api-keys/5", body, true)
+	rec := doAdmin(t, handler, http.MethodPatch, "/v1/api-keys/5", body, true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -145,7 +145,7 @@ func TestRevokeAPIKeyReturns200(t *testing.T) {
 		revoked: customer.APIKey{ID: 5, Status: "revoked", SpentTotal: "0"},
 	}})
 
-	rec := doAdmin(t, handler, http.MethodPost, "/admin/v1/api-keys/5/revoke", "", true)
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/api-keys/5/revoke", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -154,7 +154,7 @@ func TestRevokeAPIKeyReturns200(t *testing.T) {
 func TestDeleteAPIKeyReturns204(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{APIKeyService: &fakeAPIKeyService{}})
 
-	rec := doAdmin(t, handler, http.MethodDelete, "/admin/v1/api-keys/5", "", true)
+	rec := doAdmin(t, handler, http.MethodDelete, "/v1/api-keys/5", "", true)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d (%s)", rec.Code, rec.Body.String())
 	}

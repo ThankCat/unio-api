@@ -79,8 +79,9 @@ revision，但每个 runtime 镜像只包含自己的二进制。Test 在一台�
 Production 保持一致。Test PostgreSQL、Redis、network 和 volume 由 `COMPOSE_PROJECT_NAME` 隔离，不连接本地
 开发数据。停止环境时使用 `down` 保留 Test 数据卷；仅在确认不再需要 Test 数据时才使用 `down --volumes`。
 
-Nginx 是 Test 环境唯一映射到宿主机的 HTTP 入口，默认地址为 `http://127.0.0.1:18080`。`/v1/*` 转发到
-Gateway，`/admin/v1/*` 转发到 Admin；`/nginx-healthz` 检查代理本身，`/healthz` 与 `/readyz` 检查 Gateway。
+Nginx 是 Test 环境唯一映射到宿主机的 HTTP 入口，默认地址为 `http://127.0.0.1:18080`。按 Host 分流：
+`test.api.unioapi.com/v1/*` 转发到 Gateway，`test.admin.unioapi.com/v1/*` 转发到 Admin（同域还托管
+`/var/www/admin` 静态前端）；`/nginx-healthz` 检查代理本身，`/healthz` 与 `/readyz` 检查 Gateway。
 Gateway 和 Admin 的容器端口仅在 Compose backend 网络内可见。
 
 Test 日志分为两条独立路径：所有容器 stdout/stderr 使用 Docker `json-file` driver，并由 `.env.docker` 中的
