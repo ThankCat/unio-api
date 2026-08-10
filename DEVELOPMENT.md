@@ -39,7 +39,10 @@
 
 ## Test Docker 部署
 
-Test 部署使用 `deploy/compose.test.yml`，与根目录的本地开发 Compose 分离。首次使用时从
+完整步骤（架构、Cloudflare、Caddy、环境变量、前端发布与排障）见
+**[deploy/TEST-DEPLOY.md](./deploy/TEST-DEPLOY.md)**。
+
+以下为摘要。Test 部署使用 `deploy/compose.test.yml`，与根目录的本地开发 Compose 分离。首次使用时从
 `deploy/env/.env.docker.example` 和 `deploy/env/.env.test.example` 分别创建实际环境文件并替换占位密码。
 实际的 `.env.docker`、`.env.test` 已由 `.gitignore` 排除；包含 Test 凭据的文件权限应设置为 `600`。
 

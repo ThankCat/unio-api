@@ -8,7 +8,7 @@
 #   sudo systemctl reload caddy
 #
 # 不要与宿主机 Nginx 或其他占用 :80 的服务同时启用。
-# reverse_proxy 默认会保留客户端 Host，容器内 nginx 才能区分 test.api / test.admin。
+# reverse_proxy 默认会保留客户端 Host，容器内 nginx 才能区分 test-api / test-admin。
 
 http://test-api.unioapi.com, http://test-admin.unioapi.com {
 	reverse_proxy 127.0.0.1:18080
