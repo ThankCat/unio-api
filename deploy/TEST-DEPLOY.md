@@ -36,8 +36,8 @@ Compose 内 nginx（唯一映射到宿主机的业务入口）
 | gateway | 公开 API | 容器内 `:8520`，路径 `/v1` |
 | admin | Admin API | 容器内 `:8521`，路径 `/v1` |
 | Admin 前端 | 静态 SPA，与 Admin API 同域 | 宿主机 `/var/www/admin` |
-| postgres | 数据库 | 容器 `5432`；宿主机 `POSTGRES_BIND_ADDRESS:15432`（可 `0.0.0.0`，须限源 IP） |
-| redis | 缓存 | 容器 `6379`；宿主机 `REDIS_BIND_ADDRESS:16379`（可 `0.0.0.0`，须限源 IP） |
+| postgres | 数据库 | 容器 `5432`；宿主机默认 `127.0.0.1:15432`（经 SSH 隧道给本机工具用） |
+| redis | 缓存 | 容器 `6379`；宿主机默认 `127.0.0.1:16379`（经 SSH 隧道给本机工具用） |
 | worker / loki / alloy | 后台与可观测 | 仅 Compose 网络内 |
 
 **设计取舍（为何不让容器直接占 80）：**  
@@ -72,14 +72,9 @@ Cloudflare 免费 Universal SSL 覆盖 `*.unioapi.com`（一层），**不覆盖
 
 ### 2.3 防火墙 / 安全组
 
-- 放行 **80**（供 Cloudflare 回源）
-- **不要**对外放行 `18080`、`8520`、`8521`
-- 若 `POSTGRES_BIND_ADDRESS` / `REDIS_BIND_ADDRESS` 为 `0.0.0.0`（Navicat / TinyRDM 直连）：
-  - 云安全组放行 **TCP 15432、16379**
-  - **来源只填你的公网 IP**，禁止 `0.0.0.0/0`
-  - 系统若启用 `ufw`，同样放行并限源，例如：  
-    `sudo ufw allow from <你的IP> to any port 15432 proto tcp`  
-    `sudo ufw allow from <你的IP> to any port 16379 proto tcp`
+- 放行 **80**（供 Cloudflare 回源）与 **22**（SSH，供管理工具隧道）
+- **不要**对外放行 `18080`、`15432`、`16379`、`8520`、`8521`
+- Postgres / Redis 默认只绑 `127.0.0.1`，用 Navicat / TinyRDM 的 **SSH 隧道** 连接（见第 9.3 节）
 
 ---
 
@@ -138,8 +133,8 @@ openssl rand -hex 32
 ```bash
 COMPOSE_PROJECT_NAME=unio_test
 NGINX_BIND_ADDRESS=127.0.0.1
-POSTGRES_BIND_ADDRESS=0.0.0.0
-REDIS_BIND_ADDRESS=0.0.0.0
+POSTGRES_BIND_ADDRESS=127.0.0.1
+REDIS_BIND_ADDRESS=127.0.0.1
 NGINX_PUBLISHED_PORT=18080
 POSTGRES_PUBLISHED_PORT=15432
 REDIS_PUBLISHED_PORT=16379
@@ -314,22 +309,27 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://test-admin.unioapi.com/
 
 Gateway API 示例：`https://test-api.unioapi.com/v1/...`
 
-### 9.3 本机管理工具连接 Postgres / Redis（直连）
+### 9.3 本机管理工具连接 Postgres / Redis（SSH 隧道）
 
-当前默认 Postgres/Redis 各自 `*_BIND_ADDRESS=0.0.0.0`，宿主机映射：
+宿主机映射（仅本机）：
 
-| 服务 | 地址 |
-|------|------|
-| Postgres | `<服务器公网IP>:15432` → 容器 `5432` |
-| Redis | `<服务器公网IP>:16379` → 容器 `6379` |
+| 服务 | 服务器地址 |
+|------|------------|
+| Postgres | `127.0.0.1:15432` → 容器 `5432` |
+| Redis | `127.0.0.1:16379` → 容器 `6379` |
 
-Navicat / TinyRDM **不必开 SSH**，直接填公网 IP + 端口；认证用 `.env.test` 的 `POSTGRES_*` / `REDIS_PASSWORD`。
+#### Navicat（PostgreSQL）
 
-上线前务必：
+1. **常规**：主机 `127.0.0.1`，端口 `15432`，库名 `unio_test`（以下划线为准），用户/密码用 `.env.test`
+2. **SSH**：启用；主机填服务器公网 IP，端口 `22`，用户 `ubuntu`，密码或密钥
+3. SSL 可先禁用；测试连接
 
-1. 云安全组放行 `15432`、`16379`，来源 **仅你的 IP**
-2. 系统防火墙（若启用）同样限源放行
-3. recreate 数据容器使绑定生效：
+#### TinyRDM（Redis）
+
+1. Redis：主机 `127.0.0.1`，端口 `16379`，密码 `REDIS_PASSWORD`
+2. SSH 隧道：同上（服务器 IP / `ubuntu`）
+
+#### 服务器确认端口
 
 ```bash
 docker compose \
@@ -339,12 +339,10 @@ docker compose \
   up -d --force-recreate --no-deps postgres redis
 
 ss -tlnp | grep -E '15432|16379'
-# 期望看到 0.0.0.0:15432 / 0.0.0.0:16379（或 *:15432）
+# 期望：127.0.0.1:15432 与 127.0.0.1:16379
 ```
 
-Nginx 仍由 `NGINX_BIND_ADDRESS=127.0.0.1` 控制，**不要**为了数据库去改它，否则 `18080` 会对公网裸露。
-
-若某个服务只想本机访问，把对应的 `POSTGRES_BIND_ADDRESS` 或 `REDIS_BIND_ADDRESS` 改回 `127.0.0.1` 即可。
+云安全组里若曾放行 `15432`/`16379`，可删掉，只保留 `22` 与 `80`。
 
 ---
 

@@ -46,7 +46,7 @@ x-app-build: &app-build
     IMAGE_CREATED: ${IMAGE_CREATED}
 
 services:
-  # Postgres/Redis 各自用 BIND_ADDRESS（可 0.0.0.0）；务必在云安全组/防火墙限制来源 IP，勿对 0.0.0.0/0 开放。
+  # Postgres/Redis 默认绑 127.0.0.1，供 Navicat/TinyRDM 经 SSH 隧道连接；若改 0.0.0.0 必须在安全组限制来源 IP。
   postgres:
     image: ${POSTGRES_IMAGE}
     environment:
