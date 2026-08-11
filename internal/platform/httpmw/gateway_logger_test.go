@@ -20,8 +20,13 @@ func TestGatewayRequestProtocol(t *testing.T) {
 		{path: "/internal/v1/logging/status", want: "http"},
 		{path: "/healthz", want: "http"},
 		{path: "/v1/responses", want: "openai"},
+		{path: "/responses", want: "openai"},
+		{path: "/responses/compact", want: "openai"},
 		{path: "/v1/chat/completions", want: "openai"},
+		{path: "/chat/completions", want: "openai"},
+		{path: "/models", want: "openai"},
 		{path: "/v1/messages", want: "anthropic"},
+		{path: "/messages", want: "anthropic"},
 	}
 	for _, test := range tests {
 		if got := requestProtocol(test.path); got != test.want {

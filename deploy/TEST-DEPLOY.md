@@ -19,7 +19,8 @@ Cloudflare（橙云代理，SSL 模式：Flexible）
   ▼
 Compose 内 nginx（唯一映射到宿主机的业务入口）
   ├─ Host: test-api.unioapi.com
-  │     /v1/*           → gateway:8520
+  │     常规请求         → gateway:8520（Gateway Router 负责 /v1 兼容）
+  │     /metrics,/internal/* → 404
   │     /healthz,/readyz→ gateway:8520
   │     /nginx-healthz  → 探活
   └─ Host: test-admin.unioapi.com
@@ -307,7 +308,25 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://test-admin.unioapi.com/
 - 登录请求应为 `POST https://test-admin.unioapi.com/v1/login`
 - 账号：`.env.test` 中的 `ADMIN_USERNAME` / `ADMIN_PASSWORD`
 
-Gateway API 示例：`https://test-api.unioapi.com/v1/...`
+Gateway 客户端可使用以下两种 BaseURL：
+
+- `https://test-api.unioapi.com`
+- `https://test-api.unioapi.com/v1`
+
+API authority 下除 `/metrics` 和 `/internal/*` 外的常规请求统一进入 Gateway，Gateway Router 再将已知业务
+路径规范化为单个 `/v1` 前缀。未携带 API Key 时，以下两个请求都应返回 `401`，而不是 Nginx 的 `404`：
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' https://test-api.unioapi.com/v1/models
+curl -sS -o /dev/null -w '%{http_code}\n' https://test-api.unioapi.com/models
+```
+
+以下非公开入口应继续返回 `404`：
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' https://test-api.unioapi.com/metrics
+curl -sS -o /dev/null -w '%{http_code}\n' https://test-api.unioapi.com/internal/v1/logging/status
+```
 
 ### 9.3 本机管理工具连接 Postgres / Redis（SSH 隧道）
 

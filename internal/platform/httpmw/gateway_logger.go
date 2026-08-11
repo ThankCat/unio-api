@@ -162,6 +162,9 @@ func requestProtocol(path string) string {
 	if strings.HasSuffix(path, "/messages") {
 		return "anthropic"
 	}
+	if path == "/models" || path == "/chat/completions" || path == "/responses" || strings.HasPrefix(path, "/responses/") {
+		return "openai"
+	}
 	if strings.HasPrefix(path, "/v1") || strings.Contains(path, "/v1/") {
 		return "openai"
 	}

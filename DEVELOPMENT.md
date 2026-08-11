@@ -83,9 +83,11 @@ Production 保持一致。Test PostgreSQL、Redis、network 和 volume 由 `COMP
 开发数据。停止环境时使用 `down` 保留 Test 数据卷；仅在确认不再需要 Test 数据时才使用 `down --volumes`。
 
 Nginx 是 Test 环境唯一映射到宿主机的 HTTP 入口，默认地址为 `http://127.0.0.1:18080`。按 Host 分流：
-`test-api.unioapi.com/v1/*` 转发到 Gateway，`test-admin.unioapi.com/v1/*` 转发到 Admin（同域还托管
-`/var/www/admin` 静态前端）；`/nginx-healthz` 检查代理本身，`/healthz` 与 `/readyz` 检查 Gateway。
-Gateway 和 Admin 的容器端口仅在 Compose 网络内可见。
+`test-api.unioapi.com` 除 `/metrics` 和 `/internal/*` 外统一转发到 Gateway，由 Gateway Router 负责业务路径和
+`/v1` 前缀兼容；`test-admin.unioapi.com/v1/*` 转发到 Admin（同域还托管 `/var/www/admin` 静态前端）。因此
+Gateway 客户端 BaseURL 填 `https://test-api.unioapi.com` 或 `https://test-api.unioapi.com/v1` 均可。
+`/nginx-healthz` 检查代理本身，`/healthz` 与 `/readyz` 检查 Gateway。Gateway 和 Admin 的容器端口仅在
+Compose 网络内可见。
 
 公网访问时，由宿主机 Caddy 监听 80，再反代到 `127.0.0.1:18080`（Cloudflare Flexible 场景下源站用 HTTP）。
 配置见 `deploy/caddy/Caddyfile.test`：
