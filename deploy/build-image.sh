@@ -97,7 +97,11 @@ while IFS= read -r required_key; do
   [[ "$key_count" -eq 1 ]] || fail "$env_file must contain exactly one $required_key"
   required_value="$(sed -n "s/^${required_key}=//p" "$env_file")"
   [[ -n "$required_value" ]] || fail "$required_key must not be empty"
-  export "$required_key=$required_value"
+  if [[ "$required_key" == *_IMAGE_TAG && "$required_value" =~ ^\<[^\<\>]+\>$ ]]; then
+    export "$required_key=unconfigured"
+  else
+    export "$required_key=$required_value"
+  fi
 done <<<"$required_keys"
 
 repository_key="${env_prefix}_IMAGE_REPOSITORY"

@@ -34,13 +34,13 @@ EOF
 
 cat >"$repo/deploy/env/.env.docker" <<'EOF'
 GATEWAY_IMAGE_REPOSITORY=unio-gateway
-GATEWAY_IMAGE_TAG=0.0.2
+GATEWAY_IMAGE_TAG=<current-gateway-tag>
 ADMIN_IMAGE_REPOSITORY=unio-admin
 ADMIN_IMAGE_TAG=0.0.3
 WORKER_IMAGE_REPOSITORY=unio-worker
-WORKER_IMAGE_TAG=0.0.1
+WORKER_IMAGE_TAG=<current-worker-tag>
 MIGRATION_IMAGE_REPOSITORY=unio-migration
-MIGRATION_IMAGE_TAG=0.0.1
+MIGRATION_IMAGE_TAG=<current-migration-tag>
 GO_BUILD_IMAGE=golang:test
 APP_RUNTIME_IMAGE=alpine:test
 MIGRATE_TOOL_IMAGE=migrate:test
@@ -60,6 +60,7 @@ if [[ "$1" == "compose" ]]; then
   [[ "${FAKE_DOCKER_FAIL_BUILD:-0}" != "1" ]] || exit 42
   printf '%s|%s|%s\n' "$IMAGE_VERSION" "$IMAGE_REVISION" "$IMAGE_CREATED" >"$FAKE_DOCKER_STATE"
   printf '%s\n' "${ADMIN_IMAGE_TAG:-}" >"${FAKE_DOCKER_STATE}.admin-tag"
+  printf '%s\n' "${GATEWAY_IMAGE_TAG:-}" >"${FAKE_DOCKER_STATE}.gateway-tag"
   exit 0
 fi
 
@@ -84,11 +85,12 @@ FAKE_DOCKER_LOG="$fake_log" \
   "$repo/deploy/build-image.sh" admin 0.0.4 >/dev/null
 
 env_file="$repo/deploy/env/.env.docker"
-assert_line "GATEWAY_IMAGE_TAG=0.0.2" "$env_file"
+assert_line "GATEWAY_IMAGE_TAG=<current-gateway-tag>" "$env_file"
 assert_line "ADMIN_IMAGE_TAG=0.0.4" "$env_file"
-assert_line "WORKER_IMAGE_TAG=0.0.1" "$env_file"
-assert_line "MIGRATION_IMAGE_TAG=0.0.1" "$env_file"
+assert_line "WORKER_IMAGE_TAG=<current-worker-tag>" "$env_file"
+assert_line "MIGRATION_IMAGE_TAG=<current-migration-tag>" "$env_file"
 assert_line "0.0.4" "${fake_state}.admin-tag"
+assert_line "unconfigured" "${fake_state}.gateway-tag"
 grep -Fq "build admin" "$fake_log" || fail "admin build was not selected"
 grep -Fq "image inspect" "$fake_log" || fail "built image metadata was not inspected"
 grep -Fq "unio-admin:0.0.4" "$fake_log" || fail "unexpected image reference"
@@ -106,7 +108,7 @@ if PATH="$fake_bin:$PATH" \
   "$repo/deploy/build-image.sh" gateway 0.0.3 >/dev/null 2>&1; then
   fail "failed build unexpectedly succeeded"
 fi
-assert_line "GATEWAY_IMAGE_TAG=0.0.2" "$env_file"
+assert_line "GATEWAY_IMAGE_TAG=<current-gateway-tag>" "$env_file"
 
 if PATH="$fake_bin:$PATH" \
   FAKE_DOCKER_STATE="$fake_state" \

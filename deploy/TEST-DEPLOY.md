@@ -114,7 +114,7 @@ chmod 600 deploy/env/.env.docker deploy/env/.env.test
 
 ### 4.2 `.env.test` —— 必须修改的密钥
 
-将所有 `replace-with-...` 换成强随机值，且 **`DATABASE_URL` 中的密码必须与 `POSTGRES_PASSWORD` 完全一致**：
+将所有 `<...>` 占位值换成强随机值，且 **`DATABASE_URL` 中的密码必须与 `POSTGRES_PASSWORD` 完全一致**：
 
 | 变量 | 说明 |
 |------|------|
