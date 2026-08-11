@@ -4,7 +4,7 @@ ARG GO_BUILD_IMAGE=golang:1.26.5-alpine
 ARG APP_RUNTIME_IMAGE=alpine:3.22
 ARG MIGRATE_TOOL_IMAGE=migrate/migrate:v4.18.3
 
-FROM ${GO_BUILD_IMAGE} AS builder
+FROM ${GO_BUILD_IMAGE} AS builder-base
 
 WORKDIR /src
 
@@ -15,10 +15,22 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY cmd ./cmd
 COPY internal ./internal
 
+FROM builder-base AS gateway-builder
+
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gateway-server ./cmd/gateway-server && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/admin-server ./cmd/admin-server && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gateway-server ./cmd/gateway-server
+
+FROM builder-base AS admin-builder
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/admin-server ./cmd/admin-server
+
+FROM builder-base AS worker-builder
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/worker-server ./cmd/worker-server
 
 FROM ${APP_RUNTIME_IMAGE} AS runtime-base
@@ -47,7 +59,7 @@ FROM runtime-base AS gateway
 
 LABEL org.opencontainers.image.title="Unio Gateway"
 
-COPY --from=builder --chown=unio:unio /out/gateway-server /app/gateway-server
+COPY --from=gateway-builder --chown=unio:unio /out/gateway-server /app/gateway-server
 
 EXPOSE 8520
 
@@ -57,7 +69,7 @@ FROM runtime-base AS admin
 
 LABEL org.opencontainers.image.title="Unio Admin"
 
-COPY --from=builder --chown=unio:unio /out/admin-server /app/admin-server
+COPY --from=admin-builder --chown=unio:unio /out/admin-server /app/admin-server
 
 EXPOSE 8521
 
@@ -67,7 +79,7 @@ FROM runtime-base AS worker
 
 LABEL org.opencontainers.image.title="Unio Worker"
 
-COPY --from=builder --chown=unio:unio /out/worker-server /app/worker-server
+COPY --from=worker-builder --chown=unio:unio /out/worker-server /app/worker-server
 
 CMD ["/app/worker-server"]
 

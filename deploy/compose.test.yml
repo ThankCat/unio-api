@@ -34,16 +34,16 @@ x-app-common: &app-common
   networks:
     - network
 
-# 三个 runtime target 共用同一 builder 和构建元数据。
+# 三个 runtime target 共用同一 builder；构建元数据由单服务构建脚本临时注入。
 x-app-build: &app-build
   context: ..
   dockerfile: deploy/Dockerfile
   args:
     GO_BUILD_IMAGE: ${GO_BUILD_IMAGE}
     APP_RUNTIME_IMAGE: ${APP_RUNTIME_IMAGE}
-    IMAGE_VERSION: ${IMAGE_VERSION}
-    IMAGE_REVISION: ${IMAGE_REVISION}
-    IMAGE_CREATED: ${IMAGE_CREATED}
+    IMAGE_VERSION: ${IMAGE_VERSION:-dev}
+    IMAGE_REVISION: ${IMAGE_REVISION:-unknown}
+    IMAGE_CREATED: ${IMAGE_CREATED:-unknown}
 
 services:
   # Postgres/Redis 默认绑 127.0.0.1，供 Navicat/TinyRDM 经 SSH 隧道连接；若改 0.0.0.0 必须在安全组限制来源 IP。
@@ -93,16 +93,16 @@ services:
 
   # 一次性迁移任务；成功退出后常驻应用才会启动。
   migrate:
-    image: ${MIGRATION_IMAGE_REPOSITORY}:${IMAGE_TAG}
+    image: ${MIGRATION_IMAGE_REPOSITORY}:${MIGRATION_IMAGE_TAG}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
       target: migration
       args:
         MIGRATE_TOOL_IMAGE: ${MIGRATE_TOOL_IMAGE}
-        IMAGE_VERSION: ${IMAGE_VERSION}
-        IMAGE_REVISION: ${IMAGE_REVISION}
-        IMAGE_CREATED: ${IMAGE_CREATED}
+        IMAGE_VERSION: ${IMAGE_VERSION:-dev}
+        IMAGE_REVISION: ${IMAGE_REVISION:-unknown}
+        IMAGE_CREATED: ${IMAGE_CREATED:-unknown}
     pull_policy: never
     environment:
       DATABASE_URL: ${DATABASE_URL}
@@ -122,7 +122,7 @@ services:
   # 单机 Test 同时运行三个独立镜像，对齐未来 Prod 制品边界。
   gateway:
     <<: *app-common
-    image: ${GATEWAY_IMAGE_REPOSITORY}:${IMAGE_TAG}
+    image: ${GATEWAY_IMAGE_REPOSITORY}:${GATEWAY_IMAGE_TAG}
     build:
       <<: *app-build
       target: gateway
@@ -140,7 +140,7 @@ services:
 
   admin:
     <<: *app-common
-    image: ${ADMIN_IMAGE_REPOSITORY}:${IMAGE_TAG}
+    image: ${ADMIN_IMAGE_REPOSITORY}:${ADMIN_IMAGE_TAG}
     build:
       <<: *app-build
       target: admin
@@ -155,7 +155,7 @@ services:
 
   worker:
     <<: *app-common
-    image: ${WORKER_IMAGE_REPOSITORY}:${IMAGE_TAG}
+    image: ${WORKER_IMAGE_REPOSITORY}:${WORKER_IMAGE_TAG}
     build:
       <<: *app-build
       target: worker

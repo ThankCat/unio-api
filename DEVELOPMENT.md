@@ -46,16 +46,15 @@
 `deploy/env/.env.docker.example` 和 `deploy/env/.env.test.example` 分别创建实际环境文件并替换占位密码。
 实际的 `.env.docker`、`.env.test` 已由 `.gitignore` 排除；包含 Test 凭据的文件权限应设置为 `600`。
 
-构建前使用脚本从当前 Git HEAD 写入镜像版本信息：
+四个发布镜像独立维护 tag。构建单个服务时显式提供新 tag：
 
 ```bash
-./deploy/prepare-image-env.sh  # develop 自动识别为 Test，main 自动识别为 Production
+./deploy/build-image.sh admin 0.0.4
 ```
 
-脚本只允许在 `develop` 或 `main` 分支执行，并要求工作树干净，且 HEAD 恰好存在一个合法的 Git tag。
-`develop` 自动生成 Test 配置，`main` 自动生成 Production 配置。该 tag 同时作为 `IMAGE_TAG` 和
-`IMAGE_VERSION`，完整 commit 写入 `IMAGE_REVISION`，脚本执行时间写入 `IMAGE_CREATED`。脚本不会切换、拉取或
-合并分支。
+脚本只允许在 `develop` 或 `main` 分支和干净工作树执行，不要求 Git tag。它只构建指定服务，使用服务 tag
+作为镜像 `version`，把当前完整 Git commit 和 UTC 构建时间写入镜像 Label；镜像及 Label 校验成功后，才原子
+更新 `.env.docker` 中对应的 `*_IMAGE_TAG`。脚本不会切换、拉取、合并分支或重启容器。
 
 Compose 变量按顺序加载，后面的 Test 文件可以覆盖 Docker 构建默认值：
 
@@ -67,18 +66,22 @@ docker compose \
   config
 ```
 
-先构建版本相同的四个独立镜像，再启动整套 Test 服务：
+首次部署时分别构建四个镜像，再启动整套 Test 服务：
 
 ```bash
-docker compose --env-file deploy/env/.env.docker --env-file deploy/env/.env.test \
-  -f deploy/compose.test.yml build gateway admin worker migrate
+./deploy/build-image.sh gateway 0.0.1
+./deploy/build-image.sh admin 0.0.1
+./deploy/build-image.sh worker 0.0.1
+./deploy/build-image.sh migration 0.0.1
+
 docker compose --env-file deploy/env/.env.docker --env-file deploy/env/.env.test \
   -f deploy/compose.test.yml up -d --no-build --wait
 ```
 
 `migrate` 是一次性容器；迁移成功退出后 Gateway、Admin 和 Worker 才会启动，使用 `docker compose ... logs migrate`
-可以检查迁移结果。Gateway、Admin、Worker、migration 是同一个 Dockerfile 的四个独立 target，共用版本和
-revision，但每个 runtime 镜像只包含自己的二进制。Test 在一台服务器运行全部服务，构建制品边界与未来
+可以检查迁移结果。Gateway、Admin、Worker、migration 是同一个 Dockerfile 的四个独立 target，各自维护版本
+和构建 provenance；每个 runtime 镜像只包含自己的二进制。同一 Git 仓库不要求四个制品同步升级，修改共享
+代码时则必须按实际依赖范围构建全部受影响服务。Test 在一台服务器运行全部服务，构建制品边界与未来
 Production 保持一致。Test PostgreSQL、Redis、network 和 volume 由 `COMPOSE_PROJECT_NAME` 隔离，不连接本地
 开发数据。停止环境时使用 `down` 保留 Test 数据卷；仅在确认不再需要 Test 数据时才使用 `down --volumes`。
 

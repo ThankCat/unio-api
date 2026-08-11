@@ -85,10 +85,11 @@ Cloudflare 免费 Universal SSL 覆盖 `*.unioapi.com`（一层），**不覆盖
 
 - 建议目录：`/srv/unio-gateway`
 - 分支：`develop`（Test）
-- `./deploy/prepare-image-env.sh` 要求：
+- `./deploy/build-image.sh <service> <image-tag>` 要求：
   - 当前分支为 `develop` 或 `main`
   - 工作区干净
-  - **HEAD 恰好有一个**合法 Git tag（同时作为 `IMAGE_TAG` / `IMAGE_VERSION`）
+  - tag 是合法且不同于该服务当前版本的 Docker tag
+  - Git tag 不是构建前提；当前完整 commit 会自动写入镜像 Label
 
 ### 3.2 unio-admin（构建机，通常是本机）
 
@@ -146,16 +147,20 @@ GATEWAY_INTERNAL_URLS=http://gateway:8520
 
 域名写在 nginx / Caddy 配置里，**不必**写进 `.env.test`。
 
-### 4.4 `.env.docker` —— 镜像版本用脚本生成
+### 4.4 `.env.docker` —— 四个服务独立镜像版本
 
-不要手填、也不要死抄本机旧的 `IMAGE_*`：
+`.env.docker` 分别保存四个服务当前应运行的镜像 tag：
 
 ```bash
-cd /srv/unio-gateway
-./deploy/prepare-image-env.sh
+GATEWAY_IMAGE_TAG=0.0.2
+ADMIN_IMAGE_TAG=0.0.3
+WORKER_IMAGE_TAG=0.0.1
+MIGRATION_IMAGE_TAG=0.0.1
 ```
 
-脚本会写入：`IMAGE_TAG`、`IMAGE_VERSION`、`IMAGE_REVISION`、`IMAGE_CREATED`。
+不要在构建前手工前移这些值。`build-image.sh` 构建并校验指定镜像后，只更新对应服务的 tag。
+`IMAGE_VERSION`、`IMAGE_REVISION`、`IMAGE_CREATED` 不在文件中长期维护；脚本在每次构建时分别使用目标 tag、
+当前 Git commit 和 UTC 时间生成，并固化到该镜像的 OCI Label。
 
 校验：
 
@@ -164,8 +169,10 @@ docker compose \
   --env-file deploy/env/.env.docker \
   --env-file deploy/env/.env.test \
   -f deploy/compose.test.yml \
-  config >/dev/null && echo OK
+  config --images
 ```
+
+输出中的四个 Unio 镜像应分别等于 `.env.docker` 记录的版本。
 
 ---
 
@@ -186,11 +193,10 @@ Compose 将 `/var/www/admin` **只读**挂进 nginx 容器。目录不存在时 
 ```bash
 cd /srv/unio-gateway
 
-docker compose \
-  --env-file deploy/env/.env.docker \
-  --env-file deploy/env/.env.test \
-  -f deploy/compose.test.yml \
-  build gateway admin worker migrate
+./deploy/build-image.sh gateway 0.0.1
+./deploy/build-image.sh admin 0.0.1
+./deploy/build-image.sh worker 0.0.1
+./deploy/build-image.sh migration 0.0.1
 
 docker compose \
   --env-file deploy/env/.env.docker \
@@ -369,24 +375,25 @@ ss -tlnp | grep -E '15432|16379'
 
 ### 10.1 只更新后端镜像
 
+先根据代码影响范围确定需要发布的服务。同一仓库不等于同步版本：只修改 Admin 私有代码时只发布 Admin；
+修改公共包、`go.mod`、Dockerfile 或其他共享构建输入时，必须构建全部受影响服务。
+
 ```bash
 cd /srv/unio-gateway
-git pull
-# 工作区干净且 HEAD 有 tag 时：
-./deploy/prepare-image-env.sh
+git pull --ff-only
 
+# 示例：Admin 从当前版本升级到 0.0.4。
+./deploy/build-image.sh admin 0.0.4
 docker compose \
   --env-file deploy/env/.env.docker \
   --env-file deploy/env/.env.test \
+  -p unio_test \
   -f deploy/compose.test.yml \
-  build gateway admin worker migrate
-
-docker compose \
-  --env-file deploy/env/.env.docker \
-  --env-file deploy/env/.env.test \
-  -f deploy/compose.test.yml \
-  up -d --no-build --wait
+  up -d --no-build --no-deps --force-recreate --wait admin
 ```
+
+构建脚本不会重启容器。发布多个服务时，逐个使用各自的新 tag 构建，然后按 migration 和依赖顺序仅重建受
+影响服务。不得为了让显示版本一致而重建未受影响容器。
 
 ### 10.2 只更新 nginx / Caddy 配置
 
@@ -439,7 +446,7 @@ docker compose \
 | `deploy/caddy/Caddyfile.test` | 宿主机 Caddy 模板 → 复制到 `/etc/caddy/Caddyfile` |
 | `deploy/env/.env.test` | 业务 / 密钥（gitignore） |
 | `deploy/env/.env.docker` | 镜像名与版本（gitignore） |
-| `deploy/prepare-image-env.sh` | 从 Git tag 写入 `IMAGE_*` |
+| `deploy/build-image.sh` | 构建指定服务、写入镜像 provenance 并更新该服务 tag |
 | `/var/www/admin` | Admin 前端静态文件 |
 | `unio-admin/.env.test` | 前端 Test 构建 API 基址 |
 | `unio-admin`：`bun run build:test` | 产出部署用 `dist/` |
@@ -456,7 +463,8 @@ docker compose \
 | 请求仍打 `test.admin.unioapi.com` | 浏览器缓存了旧 JS | 重新 `build:test` + rsync + 强刷 |
 | 页面空白且 `index.html` 为 0 或缺文件 | `/var/www/admin` 未同步或权限不对 | `chown ubuntu` 后 rsync |
 | rsync Permission denied | 目录属 root | `sudo chown -R ubuntu:ubuntu /var/www/admin` |
-| `prepare-image-env.sh` 失败 | 非 develop/main、脏工作区、或 HEAD 无唯一 tag | 按脚本报错处理 |
+| `build-image.sh` 拒绝执行 | 非 develop/main、脏工作区、tag 非法或与当前服务版本相同 | 按脚本报错处理，使用该服务的新 tag |
+| Compose 目标 tag 与运行容器不同 | `.env.docker` 已前移，但对应容器尚未按发布流程重建 | 确认镜像 Label 后，只重建该受影响服务 |
 | 本机 curl HTTPS 异常但他人正常 | 本机代理 fake-ip（如 `198.18.x`） | 用手机流量或服务器侧验证；非服务端故障 |
 
 分层探测顺序：
