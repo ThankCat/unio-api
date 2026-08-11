@@ -72,6 +72,7 @@ func (s *fakeProviderService) Restore(context.Context, int64) (provider.StatusCh
 type fakeChannelService struct {
 	getOut            channel.Channel
 	getErr            error
+	createIn          channel.CreateInput
 	createOut         channel.Channel
 	createErr         error
 	rotateOut         channel.RotateCredentialResult
@@ -86,7 +87,8 @@ func (s *fakeChannelService) List(context.Context, channel.ListParams) (channel.
 func (s *fakeChannelService) Get(context.Context, int64) (channel.Channel, error) {
 	return s.getOut, s.getErr
 }
-func (s *fakeChannelService) Create(context.Context, channel.CreateInput) (channel.Channel, error) {
+func (s *fakeChannelService) Create(_ context.Context, in channel.CreateInput) (channel.Channel, error) {
+	s.createIn = in
 	return s.createOut, s.createErr
 }
 func (s *fakeChannelService) Update(context.Context, channel.UpdateInput) (channel.Channel, error) {
@@ -405,6 +407,25 @@ func TestCreateChannelUnsupportedBindingReturns422(t *testing.T) {
 	rec := doAdmin(t, handler, http.MethodPost, "/v1/channels", body, true)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateChannelForwardsRequestedStatus(t *testing.T) {
+	svc := &fakeChannelService{createOut: channel.Channel{
+		ID: 9, ProviderID: 1, Name: "primary", Protocol: "openai", AdapterKey: "openai", Status: "enabled",
+	}}
+	handler := newServicesRouter(t, nil, svc)
+
+	body := `{"provider_id":1,"name":"primary","protocol":"openai","adapter_key":"openai","credential":"test-credential","status":"enabled","priority":0}`
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/channels", body, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	if svc.createIn.Status != channel.StatusEnabled {
+		t.Fatalf("service status = %q, want %q", svc.createIn.Status, channel.StatusEnabled)
+	}
+	if response := rec.Body.String(); !strings.Contains(response, `"status":"enabled"`) {
+		t.Fatalf("response does not preserve enabled status: %s", response)
 	}
 }
 

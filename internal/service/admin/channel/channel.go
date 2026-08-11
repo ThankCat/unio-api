@@ -367,7 +367,7 @@ func (s *Service) Get(ctx context.Context, id int64) (Channel, error) {
 	return s.enrichProviderName(ctx, ch)
 }
 
-// Create 创建 channel：校验复合键在 registry 注册、provider 存在，再加密凭据落库。
+// Create 创建 channel：校验复合键在 registry 注册、provider 与请求状态合法，再保存凭据和配置。
 func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	name := strings.TrimSpace(in.Name)
 	protocol := strings.TrimSpace(in.Protocol)
@@ -392,8 +392,6 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	if err := validateStatus(status); err != nil {
 		return Channel{}, err
 	}
-	// 新建渠道必须先完成模型发现、绑定和验证，创建时固定为 disabled。
-	status = StatusDisabled
 	if err := validatePriority(in.Priority); err != nil {
 		return Channel{}, err
 	}
