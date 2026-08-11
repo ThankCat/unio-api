@@ -36,7 +36,9 @@ Compose 内 nginx（唯一映射到宿主机的业务入口）
 | gateway | 公开 API | 容器内 `:8520`，路径 `/v1` |
 | admin | Admin API | 容器内 `:8521`，路径 `/v1` |
 | Admin 前端 | 静态 SPA，与 Admin API 同域 | 宿主机 `/var/www/admin` |
-| postgres / redis / worker / loki / alloy | 数据与可观测 | 仅 Compose 网络内 |
+| postgres | 数据库 | 容器 `5432`；宿主机默认 `127.0.0.1:15432` |
+| redis | 缓存 | 容器 `6379`；宿主机默认 `127.0.0.1:16379` |
+| worker / loki / alloy | 后台与可观测 | 仅 Compose 网络内 |
 
 **设计取舍（为何不让容器直接占 80）：**  
 同一台机器后续还会跑 website、console 等。Compose 栈只占用本机高位端口 `18080`，由宿主机统一占 80/443，避免多栈抢端口。
@@ -71,7 +73,8 @@ Cloudflare 免费 Universal SSL 覆盖 `*.unioapi.com`（一层），**不覆盖
 ### 2.3 防火墙
 
 - 放行 **80**（供 Cloudflare 回源）
-- **不要**对外放行 `18080`、`8520`、`8521`、5432、6379
+- **不要**对外放行 `18080`、`15432`、`16379`、`8520`、`8521`
+- Postgres / Redis 默认只绑 `127.0.0.1`，本机管理工具用 **SSH 隧道** 连接（见第 9.3 节）
 
 ---
 
@@ -131,6 +134,8 @@ openssl rand -hex 32
 COMPOSE_PROJECT_NAME=unio_test
 TEST_BIND_ADDRESS=127.0.0.1
 NGINX_PUBLISHED_PORT=18080
+POSTGRES_PUBLISHED_PORT=15432
+REDIS_PUBLISHED_PORT=16379
 GATEWAY_HTTP_ADDR=:8520
 ADMIN_HTTP_ADDR=:8521
 GATEWAY_INTERNAL_URLS=http://gateway:8520
@@ -301,6 +306,40 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://test-admin.unioapi.com/
 - 账号：`.env.test` 中的 `ADMIN_USERNAME` / `ADMIN_PASSWORD`
 
 Gateway API 示例：`https://test-api.unioapi.com/v1/...`
+
+### 9.3 本机管理工具连接 Postgres / Redis（SSH 隧道）
+
+Compose 将数据端口映射到服务器本机：
+
+| 服务 | 服务器本机地址 |
+|------|----------------|
+| Postgres | `127.0.0.1:15432` → 容器 `5432` |
+| Redis | `127.0.0.1:16379` → 容器 `6379` |
+
+在你的 Mac 上开隧道（保持终端不关）：
+
+```bash
+ssh -N \
+  -L 15432:127.0.0.1:15432 \
+  -L 16379:127.0.0.1:16379 \
+  ubuntu@<服务器公网IP>
+```
+
+然后管理工具连本机：
+
+| | Host | Port | 认证 |
+|--|------|------|------|
+| Postgres（TablePlus / DBeaver 等） | `127.0.0.1` | `15432` | 用户/库/密码见 `.env.test` 的 `POSTGRES_*` |
+| Redis（Another Redis Desktop Manager 等） | `127.0.0.1` | `16379` | 密码为 `REDIS_PASSWORD` |
+
+服务器上快速自检：
+
+```bash
+ss -tlnp | grep -E '15432|16379'
+# 应看到 127.0.0.1:15432 与 127.0.0.1:16379
+```
+
+**不要**把 `TEST_BIND_ADDRESS` 改成 `0.0.0.0` 并把 15432/16379 对公网开放；数据库被扫到的风险很高。
 
 ---
 
