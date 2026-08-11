@@ -61,33 +61,18 @@ type Channel struct {
 	// NULL=inherit gateway.routing_sticky; true=enabled with channel TTL; false=disabled
 	StickyEnabled pgtype.Bool
 	// Channel sticky TTL in milliseconds; required only when sticky_enabled=true
-	StickyTtlMs               pgtype.Int8
-	ResponseTimeoutMs         pgtype.Int4
-	FirstTokenTimeoutMs       pgtype.Int4
-	CreatedAt                 pgtype.Timestamptz
-	UpdatedAt                 pgtype.Timestamptz
-	LastTestedAt              pgtype.Timestamptz
-	LastTestOk                pgtype.Bool
-	LastTestLatencyMs         pgtype.Int4
-	LastTestError             pgtype.Text
-	CredentialValid           bool
-	ArchivedAt                pgtype.Timestamptz
-	ConcurrencyLimit          pgtype.Int4
-	UpstreamBillsOnDisconnect bool
-}
-
-type ChannelCostExposure struct {
-	ID                   int64
-	RequestRecordID      int64
-	AttemptID            int64
-	ChannelID            int64
-	ProviderID           int64
-	Reason               string
-	EstimatedInputTokens int64
-	AssumedOutputTokens  int64
-	EstimatedCostAmount  pgtype.Numeric
-	Currency             string
-	CreatedAt            pgtype.Timestamptz
+	StickyTtlMs         pgtype.Int8
+	ResponseTimeoutMs   pgtype.Int4
+	FirstTokenTimeoutMs pgtype.Int4
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+	LastTestedAt        pgtype.Timestamptz
+	LastTestOk          pgtype.Bool
+	LastTestLatencyMs   pgtype.Int4
+	LastTestError       pgtype.Text
+	CredentialValid     bool
+	ArchivedAt          pgtype.Timestamptz
+	ConcurrencyLimit    pgtype.Int4
 }
 
 type ChannelCostMultiplier struct {
@@ -442,23 +427,6 @@ type ProviderBalance struct {
 	UpdatedAt  pgtype.Timestamptz
 }
 
-type ProviderCostRisk struct {
-	ID                          int64
-	ProviderID                  int64
-	RequestRecordID             pgtype.Int8
-	RequestAttemptID            pgtype.Int8
-	ProviderProbeRecordID       pgtype.Int8
-	SourceType                  string
-	EstimatedAmount             pgtype.Numeric
-	Currency                    pgtype.Text
-	ReasonCode                  string
-	Reason                      string
-	Status                      string
-	ReconciliationLedgerEntryID pgtype.Int8
-	CreatedAt                   pgtype.Timestamptz
-	ReconciledAt                pgtype.Timestamptz
-}
-
 type ProviderLedgerEntry struct {
 	ID                    int64
 	ProviderID            int64
@@ -478,6 +446,7 @@ type ProviderLedgerEntry struct {
 	IdempotencyKey        string
 	Reason                string
 	CreatedAt             pgtype.Timestamptz
+	UsageSource           pgtype.Text
 }
 
 type ProviderProbeRecord struct {

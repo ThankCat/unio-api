@@ -43,7 +43,6 @@ SELECT
     c.first_token_timeout_ms,
     c.priority,
     c.concurrency_limit AS channel_concurrency_limit,
-    c.upstream_bills_on_disconnect AS channel_bills_on_disconnect,
     c.sticky_enabled AS channel_sticky_enabled,
     c.sticky_ttl_ms AS channel_sticky_ttl_ms,
     cm.upstream_model,
@@ -204,7 +203,6 @@ type FindRouteCandidatesRow struct {
 	FirstTokenTimeoutMs             pgtype.Int4
 	Priority                        int32
 	ChannelConcurrencyLimit         pgtype.Int4
-	ChannelBillsOnDisconnect        bool
 	ChannelStickyEnabled            pgtype.Bool
 	ChannelStickyTtlMs              pgtype.Int8
 	UpstreamModel                   string
@@ -283,7 +281,6 @@ func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidat
 			&i.FirstTokenTimeoutMs,
 			&i.Priority,
 			&i.ChannelConcurrencyLimit,
-			&i.ChannelBillsOnDisconnect,
 			&i.ChannelStickyEnabled,
 			&i.ChannelStickyTtlMs,
 			&i.UpstreamModel,

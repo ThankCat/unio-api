@@ -7,8 +7,8 @@ import (
 	"errors"
 	"math/big"
 	"strings"
-	"time"
 
+	"github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
@@ -44,6 +44,7 @@ type Entry struct {
 	ChannelName           *string
 	UpstreamModel         *string
 	ProviderProbeRecordID *int64
+	UsageSource           usage.Source
 	EntryType             string
 	Amount                pgtype.Numeric
 	Currency              string
@@ -63,6 +64,7 @@ type UsageDebitParams struct {
 	RequestID        string
 	ChannelName      string
 	UpstreamModel    string
+	UsageSource      usage.Source
 	Amount           pgtype.Numeric
 	Currency         string
 	IdempotencyKey   string
@@ -119,6 +121,7 @@ func (s *Service) DebitUsageWithQueries(ctx context.Context, queries *sqlc.Queri
 		requestID:        params.RequestID,
 		channelName:      params.ChannelName,
 		upstreamModel:    params.UpstreamModel,
+		usageSource:      params.UsageSource,
 	})
 }
 
@@ -137,8 +140,6 @@ func (s *Service) SetTargetBalance(ctx context.Context, params TargetParams) (En
 	if err := validateTarget(params); err != nil {
 		return Entry{}, err
 	}
-	// 只收口调额开始前已经存在的风险，避免把调额事务期间新产生的请求误判为已对账。
-	riskCutoff := time.Now().UTC()
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Entry{}, storeFailed(err, "begin provider target balance transaction")
@@ -186,12 +187,6 @@ func (s *Service) SetTargetBalance(ctx context.Context, params TargetParams) (En
 	})
 	if err != nil {
 		return Entry{}, storeFailed(err, "create provider target adjustment ledger entry")
-	}
-	if _, err := txQueries.ReconcileProviderCostRisks(ctx, sqlc.ReconcileProviderCostRisksParams{
-		ReconciliationLedgerEntryID: pgtype.Int8{Int64: created.ID, Valid: true}, ProviderID: params.ProviderID,
-		Currency: pgtype.Text{String: params.Currency, Valid: true}, Cutoff: pgtype.Timestamptz{Time: riskCutoff, Valid: true},
-	}); err != nil {
-		return Entry{}, storeFailed(err, "reconcile provider cost risks")
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Entry{}, storeFailed(err, "commit provider target balance transaction")
@@ -289,6 +284,7 @@ func (s *Service) debitWithQueries(ctx context.Context, queries *sqlc.Queries, e
 		arg.RequestID = pgtype.Text{String: src.requestID, Valid: true}
 		arg.ChannelName = pgtype.Text{String: src.channelName, Valid: true}
 		arg.UpstreamModel = pgtype.Text{String: src.upstreamModel, Valid: true}
+		arg.UsageSource = pgtype.Text{String: string(src.usageSource), Valid: true}
 	}
 	created, err := queries.CreateProviderLedgerEntry(ctx, arg)
 	if err != nil {
@@ -297,12 +293,12 @@ func (s *Service) debitWithQueries(ctx context.Context, queries *sqlc.Queries, e
 	return entryFromSQLC(created), nil
 }
 
-func (s *Service) debitProbeWithQueries(ctx context.Context, queries *sqlc.Queries, providerID, probeRecordID int64, amount pgtype.Numeric, currency, idempotencyKey, reason string) (Entry, error) {
+func (s *Service) debitProbeWithQueries(ctx context.Context, queries *sqlc.Queries, providerID, probeRecordID int64, usageSource usage.Source, amount pgtype.Numeric, currency, idempotencyKey, reason string) (Entry, error) {
 	if err := lockIdempotency(ctx, queries, idempotencyKey); err != nil {
 		return Entry{}, err
 	}
 	if existing, err := queries.GetProviderLedgerEntryByIdempotencyKey(ctx, idempotencyKey); err == nil {
-		if existing.ProviderID != providerID || existing.EntryType != EntryTypeProbeDebit || existing.Currency != currency || !sameNumeric(existing.Amount, amount) || !existing.ProviderProbeRecordID.Valid || existing.ProviderProbeRecordID.Int64 != probeRecordID || existing.Reason != reason {
+		if existing.ProviderID != providerID || existing.EntryType != EntryTypeProbeDebit || existing.Currency != currency || !sameNumeric(existing.Amount, amount) || !existing.ProviderProbeRecordID.Valid || existing.ProviderProbeRecordID.Int64 != probeRecordID || existing.UsageSource.String != string(usageSource) || existing.Reason != reason {
 			return Entry{}, failure.New(failure.CodeLedgerIdempotencyConflict, failure.WithMessage("provider probe ledger idempotency key conflict"))
 		}
 		return entryFromSQLC(existing), nil
@@ -322,7 +318,8 @@ func (s *Service) debitProbeWithQueries(ctx context.Context, queries *sqlc.Queri
 	}
 	created, err := queries.CreateProviderLedgerEntry(ctx, sqlc.CreateProviderLedgerEntryParams{
 		ProviderID: providerID, ProviderProbeRecordID: pgtype.Int8{Int64: probeRecordID, Valid: true},
-		EntryType: EntryTypeProbeDebit, Amount: amount, Currency: currency,
+		UsageSource: pgtype.Text{String: string(usageSource), Valid: true},
+		EntryType:   EntryTypeProbeDebit, Amount: amount, Currency: currency,
 		BalanceBefore: before.Balance, BalanceAfter: after.Balance, IdempotencyKey: idempotencyKey, Reason: reason,
 	})
 	if err != nil {
@@ -334,6 +331,7 @@ func (s *Service) debitProbeWithQueries(ctx context.Context, queries *sqlc.Queri
 type source struct {
 	requestRecordID, requestAttemptID, costSnapshotID, channelID int64
 	requestID, channelName, upstreamModel                        string
+	usageSource                                                  usage.Source
 }
 
 func validateUsage(p UsageDebitParams) error {
@@ -342,6 +340,9 @@ func validateUsage(p UsageDebitParams) error {
 	}
 	if strings.TrimSpace(p.RequestID) == "" || strings.TrimSpace(p.ChannelName) == "" || strings.TrimSpace(p.UpstreamModel) == "" {
 		return invalidArgument("usage source labels are incomplete")
+	}
+	if !p.UsageSource.Valid() {
+		return invalidArgument("usage source is invalid")
 	}
 	return validateCommon(p.Amount, p.Currency, p.IdempotencyKey, p.Reason)
 }
@@ -387,7 +388,7 @@ func idempotentEntry(row sqlc.ProviderLedgerEntry, providerID int64, entryType s
 	if row.ProviderID != providerID || row.EntryType != entryType || row.Currency != currency || !sameNumeric(row.Amount, amount) || row.Reason != reason {
 		return Entry{}, failure.New(failure.CodeLedgerIdempotencyConflict, failure.WithMessage("provider ledger idempotency key conflict"))
 	}
-	if src != nil && (row.RequestRecordID.Int64 != src.requestRecordID || row.RequestAttemptID.Int64 != src.requestAttemptID || row.CostSnapshotID.Int64 != src.costSnapshotID || row.ChannelID.Int64 != src.channelID || row.RequestID.String != src.requestID || row.ChannelName.String != src.channelName || row.UpstreamModel.String != src.upstreamModel) {
+	if src != nil && (row.RequestRecordID.Int64 != src.requestRecordID || row.RequestAttemptID.Int64 != src.requestAttemptID || row.CostSnapshotID.Int64 != src.costSnapshotID || row.ChannelID.Int64 != src.channelID || row.RequestID.String != src.requestID || row.ChannelName.String != src.channelName || row.UpstreamModel.String != src.upstreamModel || row.UsageSource.String != string(src.usageSource)) {
 		return Entry{}, failure.New(failure.CodeLedgerIdempotencyConflict, failure.WithMessage("provider ledger source conflict"))
 	}
 	return entryFromSQLC(row), nil
@@ -400,6 +401,7 @@ func entryFromSQLC(row sqlc.ProviderLedgerEntry) Entry {
 		CostSnapshotID: optionalInt64(row.CostSnapshotID), ChannelID: optionalInt64(row.ChannelID),
 		RequestID: optionalString(row.RequestID), ChannelName: optionalString(row.ChannelName), UpstreamModel: optionalString(row.UpstreamModel),
 		ProviderProbeRecordID: optionalInt64(row.ProviderProbeRecordID),
+		UsageSource:           usage.Source(row.UsageSource.String),
 		EntryType:             row.EntryType, Amount: row.Amount, Currency: row.Currency, BalanceBefore: row.BalanceBefore, BalanceAfter: row.BalanceAfter,
 		IdempotencyKey: row.IdempotencyKey, Reason: row.Reason,
 	}

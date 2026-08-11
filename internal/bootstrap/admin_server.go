@@ -223,7 +223,6 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 	// M6 只读查询台：请求记录 / 账本，只读 service 共用同一 sqlc Queries。
 	requestQueryService := query.NewRequestService(queries)
-	costExposureQueryService := query.NewCostExposureService(queries)
 	ledgerQueryService := query.NewLedgerService(queries)
 
 	// M7 客户管理：用户/项目只读 + API Key 管理；手工调额经由 ledger 写 adjustment_* 流水。
@@ -309,11 +308,10 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		RequestQueryService: requestQueryService,
 		LedgerQueryService:  ledgerQueryService,
 
-		CostExposureQueryService: costExposureQueryService,
-		UserService:              userService,
-		APIKeyService:            apiKeyService,
-		AdjustmentService:        adjustmentService,
-		CustomerOpsService:       customerOpsService,
+		UserService:        userService,
+		APIKeyService:      apiKeyService,
+		AdjustmentService:  adjustmentService,
+		CustomerOpsService: customerOpsService,
 
 		CapabilityService:     capabilityService,
 		CapabilitySyncService: capabilitySyncService,

@@ -105,7 +105,7 @@ const listChannelsForCredentialTest = `-- name: ListChannelsForCredentialTest :m
 SELECT c.id, c.provider_id, c.name, c.protocol, c.adapter_key, p.origin, c.credential,
        c.status, c.priority, c.created_at, c.updated_at, c.last_tested_at,
        c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
-       c.archived_at, c.concurrency_limit, c.upstream_bills_on_disconnect,
+       c.archived_at, c.concurrency_limit,
        c.response_timeout_ms, c.first_token_timeout_ms,
        c.config_revision, c.capacity_revision,
        p.origin_revision AS provider_origin_revision,
@@ -117,31 +117,30 @@ ORDER BY c.credential_valid ASC, c.priority, c.id
 `
 
 type ListChannelsForCredentialTestRow struct {
-	ID                        int64
-	ProviderID                int64
-	Name                      string
-	Protocol                  string
-	AdapterKey                string
-	Origin                    string
-	Credential                string
-	Status                    string
-	Priority                  int32
-	CreatedAt                 pgtype.Timestamptz
-	UpdatedAt                 pgtype.Timestamptz
-	LastTestedAt              pgtype.Timestamptz
-	LastTestOk                pgtype.Bool
-	LastTestLatencyMs         pgtype.Int4
-	LastTestError             pgtype.Text
-	CredentialValid           bool
-	ArchivedAt                pgtype.Timestamptz
-	ConcurrencyLimit          pgtype.Int4
-	UpstreamBillsOnDisconnect bool
-	ResponseTimeoutMs         pgtype.Int4
-	FirstTokenTimeoutMs       pgtype.Int4
-	ConfigRevision            int64
-	CapacityRevision          int64
-	ProviderOriginRevision    int64
-	ProviderStatusRevision    int64
+	ID                     int64
+	ProviderID             int64
+	Name                   string
+	Protocol               string
+	AdapterKey             string
+	Origin                 string
+	Credential             string
+	Status                 string
+	Priority               int32
+	CreatedAt              pgtype.Timestamptz
+	UpdatedAt              pgtype.Timestamptz
+	LastTestedAt           pgtype.Timestamptz
+	LastTestOk             pgtype.Bool
+	LastTestLatencyMs      pgtype.Int4
+	LastTestError          pgtype.Text
+	CredentialValid        bool
+	ArchivedAt             pgtype.Timestamptz
+	ConcurrencyLimit       pgtype.Int4
+	ResponseTimeoutMs      pgtype.Int4
+	FirstTokenTimeoutMs    pgtype.Int4
+	ConfigRevision         int64
+	CapacityRevision       int64
+	ProviderOriginRevision int64
+	ProviderStatusRevision int64
 }
 
 // ListChannelsForCredentialTest 供渠道自动检测 worker 巡检：所有启用渠道（含 credential_valid=false 以便恢复），
@@ -174,7 +173,6 @@ func (q *Queries) ListChannelsForCredentialTest(ctx context.Context) ([]ListChan
 			&i.CredentialValid,
 			&i.ArchivedAt,
 			&i.ConcurrencyLimit,
-			&i.UpstreamBillsOnDisconnect,
 			&i.ResponseTimeoutMs,
 			&i.FirstTokenTimeoutMs,
 			&i.ConfigRevision,

@@ -4,7 +4,7 @@
 SELECT c.id, c.provider_id, c.name, c.protocol, c.adapter_key, p.origin, c.credential,
        c.status, c.priority, c.created_at, c.updated_at, c.last_tested_at,
        c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
-       c.archived_at, c.concurrency_limit, c.upstream_bills_on_disconnect,
+       c.archived_at, c.concurrency_limit,
        c.response_timeout_ms, c.first_token_timeout_ms,
        c.config_revision, c.capacity_revision,
        p.origin_revision AS provider_origin_revision,

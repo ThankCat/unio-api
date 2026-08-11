@@ -2,21 +2,13 @@ package ledger
 
 import "github.com/go-chi/chi/v5"
 
-// Deps 是账本模块的路由依赖（账本流水/计费异常 + bill-on-cancel 渠道成本敞口）。
+// Deps 是账本模块的路由依赖。
 type Deps struct {
-	Service             LedgerQueryService
-	CostExposureService CostExposureQueryService
+	Service LedgerQueryService
 }
 
-// Register 注册账本模块路由。静态 /channels/cost-exposures/summary 在 /channels/{id} 之前注册。
+// Register 注册账本模块路由。
 func Register(r chi.Router, d Deps) {
-	// bill-on-cancel 渠道成本敞口：静态 summary 在 /channels/{id} 之前注册。
-	if d.CostExposureService != nil {
-		ceh := &costExposuresHandler{service: d.CostExposureService}
-		r.Get("/channels/cost-exposures/summary", ceh.summary)
-		r.Get("/channels/{id}/cost-exposures", ceh.list)
-	}
-
 	// M6 只读查询台：账本流水、计费异常。全部只读。
 	if d.Service != nil {
 		lh := &ledgerHandler{service: d.Service}

@@ -54,25 +54,6 @@ func (q *Queries) CountLowBalanceProviders(ctx context.Context) (int64, error) {
 	return total, err
 }
 
-const countProviderCostRisks = `-- name: CountProviderCostRisks :one
-SELECT COUNT(*) AS total
-FROM provider_cost_risks r
-WHERE r.provider_id = $1
-  AND ($2::text IS NULL OR r.status = $2::text)
-`
-
-type CountProviderCostRisksParams struct {
-	ProviderID int64
-	Status     pgtype.Text
-}
-
-func (q *Queries) CountProviderCostRisks(ctx context.Context, arg CountProviderCostRisksParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countProviderCostRisks, arg.ProviderID, arg.Status)
-	var total int64
-	err := row.Scan(&total)
-	return total, err
-}
-
 const countProviderLedgerEntries = `-- name: CountProviderLedgerEntries :one
 SELECT COUNT(*) AS total
 FROM provider_ledger_entries e
@@ -104,64 +85,6 @@ func (q *Queries) CountProviderLedgerEntries(ctx context.Context, arg CountProvi
 	return total, err
 }
 
-const createProviderCostRisk = `-- name: CreateProviderCostRisk :one
-INSERT INTO provider_cost_risks (
-    provider_id, request_record_id, request_attempt_id, provider_probe_record_id,
-    source_type, estimated_amount, currency, reason_code, reason
-)
-VALUES (
-    $1, $2, $3,
-    $4, $5, $6,
-    $7, $8, $9
-)
-ON CONFLICT DO NOTHING
-RETURNING id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, source_type, estimated_amount, currency, reason_code, reason, status, reconciliation_ledger_entry_id, created_at, reconciled_at
-`
-
-type CreateProviderCostRiskParams struct {
-	ProviderID            int64
-	RequestRecordID       pgtype.Int8
-	RequestAttemptID      pgtype.Int8
-	ProviderProbeRecordID pgtype.Int8
-	SourceType            string
-	EstimatedAmount       pgtype.Numeric
-	Currency              pgtype.Text
-	ReasonCode            string
-	Reason                string
-}
-
-func (q *Queries) CreateProviderCostRisk(ctx context.Context, arg CreateProviderCostRiskParams) (ProviderCostRisk, error) {
-	row := q.db.QueryRow(ctx, createProviderCostRisk,
-		arg.ProviderID,
-		arg.RequestRecordID,
-		arg.RequestAttemptID,
-		arg.ProviderProbeRecordID,
-		arg.SourceType,
-		arg.EstimatedAmount,
-		arg.Currency,
-		arg.ReasonCode,
-		arg.Reason,
-	)
-	var i ProviderCostRisk
-	err := row.Scan(
-		&i.ID,
-		&i.ProviderID,
-		&i.RequestRecordID,
-		&i.RequestAttemptID,
-		&i.ProviderProbeRecordID,
-		&i.SourceType,
-		&i.EstimatedAmount,
-		&i.Currency,
-		&i.ReasonCode,
-		&i.Reason,
-		&i.Status,
-		&i.ReconciliationLedgerEntryID,
-		&i.CreatedAt,
-		&i.ReconciledAt,
-	)
-	return i, err
-}
-
 const createProviderLedgerEntry = `-- name: CreateProviderLedgerEntry :one
 INSERT INTO provider_ledger_entries (
     provider_id,
@@ -173,6 +96,7 @@ INSERT INTO provider_ledger_entries (
     channel_name,
     upstream_model,
     provider_probe_record_id,
+    usage_source,
     entry_type,
     amount,
     currency,
@@ -197,9 +121,10 @@ VALUES (
     $13,
     $14,
     $15,
-    $16
+    $16,
+    $17
 )
-RETURNING id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at
+RETURNING id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at, usage_source
 `
 
 type CreateProviderLedgerEntryParams struct {
@@ -212,6 +137,7 @@ type CreateProviderLedgerEntryParams struct {
 	ChannelName           pgtype.Text
 	UpstreamModel         pgtype.Text
 	ProviderProbeRecordID pgtype.Int8
+	UsageSource           pgtype.Text
 	EntryType             string
 	Amount                pgtype.Numeric
 	Currency              string
@@ -232,6 +158,7 @@ func (q *Queries) CreateProviderLedgerEntry(ctx context.Context, arg CreateProvi
 		arg.ChannelName,
 		arg.UpstreamModel,
 		arg.ProviderProbeRecordID,
+		arg.UsageSource,
 		arg.EntryType,
 		arg.Amount,
 		arg.Currency,
@@ -260,6 +187,7 @@ func (q *Queries) CreateProviderLedgerEntry(ctx context.Context, arg CreateProvi
 		&i.IdempotencyKey,
 		&i.Reason,
 		&i.CreatedAt,
+		&i.UsageSource,
 	)
 	return i, err
 }
@@ -416,85 +344,8 @@ func (q *Queries) GetProviderBalanceForUpdate(ctx context.Context, arg GetProvid
 	return i, err
 }
 
-const getProviderCostRiskByProbeRecordID = `-- name: GetProviderCostRiskByProbeRecordID :one
-SELECT id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, source_type, estimated_amount, currency, reason_code, reason, status, reconciliation_ledger_entry_id, created_at, reconciled_at FROM provider_cost_risks
-WHERE provider_probe_record_id = $1
-`
-
-func (q *Queries) GetProviderCostRiskByProbeRecordID(ctx context.Context, providerProbeRecordID pgtype.Int8) (ProviderCostRisk, error) {
-	row := q.db.QueryRow(ctx, getProviderCostRiskByProbeRecordID, providerProbeRecordID)
-	var i ProviderCostRisk
-	err := row.Scan(
-		&i.ID,
-		&i.ProviderID,
-		&i.RequestRecordID,
-		&i.RequestAttemptID,
-		&i.ProviderProbeRecordID,
-		&i.SourceType,
-		&i.EstimatedAmount,
-		&i.Currency,
-		&i.ReasonCode,
-		&i.Reason,
-		&i.Status,
-		&i.ReconciliationLedgerEntryID,
-		&i.CreatedAt,
-		&i.ReconciledAt,
-	)
-	return i, err
-}
-
-const getProviderCostRiskByRequestAttemptID = `-- name: GetProviderCostRiskByRequestAttemptID :one
-SELECT id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, source_type, estimated_amount, currency, reason_code, reason, status, reconciliation_ledger_entry_id, created_at, reconciled_at FROM provider_cost_risks
-WHERE request_attempt_id = $1
-`
-
-func (q *Queries) GetProviderCostRiskByRequestAttemptID(ctx context.Context, requestAttemptID pgtype.Int8) (ProviderCostRisk, error) {
-	row := q.db.QueryRow(ctx, getProviderCostRiskByRequestAttemptID, requestAttemptID)
-	var i ProviderCostRisk
-	err := row.Scan(
-		&i.ID,
-		&i.ProviderID,
-		&i.RequestRecordID,
-		&i.RequestAttemptID,
-		&i.ProviderProbeRecordID,
-		&i.SourceType,
-		&i.EstimatedAmount,
-		&i.Currency,
-		&i.ReasonCode,
-		&i.Reason,
-		&i.Status,
-		&i.ReconciliationLedgerEntryID,
-		&i.CreatedAt,
-		&i.ReconciledAt,
-	)
-	return i, err
-}
-
-const getProviderCostRiskSummary = `-- name: GetProviderCostRiskSummary :one
-SELECT
-    COUNT(*) AS unresolved_count,
-    COALESCE(SUM(estimated_amount) FILTER (WHERE currency = 'USD'), 0)::numeric AS estimated_amount_usd,
-    COUNT(*) FILTER (WHERE estimated_amount IS NULL) AS unknown_amount_count
-FROM provider_cost_risks
-WHERE provider_id = $1
-  AND status = 'unresolved'
-`
-
-type GetProviderCostRiskSummaryRow struct {
-	UnresolvedCount    int64
-	EstimatedAmountUsd pgtype.Numeric
-	UnknownAmountCount int64
-}
-
-func (q *Queries) GetProviderCostRiskSummary(ctx context.Context, providerID int64) (GetProviderCostRiskSummaryRow, error) {
-	row := q.db.QueryRow(ctx, getProviderCostRiskSummary, providerID)
-	var i GetProviderCostRiskSummaryRow
-	err := row.Scan(&i.UnresolvedCount, &i.EstimatedAmountUsd, &i.UnknownAmountCount)
-	return i, err
-}
-
 const getProviderLedgerEntryByCostSnapshotID = `-- name: GetProviderLedgerEntryByCostSnapshotID :one
-SELECT id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at
+SELECT id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at, usage_source
 FROM provider_ledger_entries
 WHERE cost_snapshot_id = $1
 `
@@ -521,12 +372,13 @@ func (q *Queries) GetProviderLedgerEntryByCostSnapshotID(ctx context.Context, co
 		&i.IdempotencyKey,
 		&i.Reason,
 		&i.CreatedAt,
+		&i.UsageSource,
 	)
 	return i, err
 }
 
 const getProviderLedgerEntryByIdempotencyKey = `-- name: GetProviderLedgerEntryByIdempotencyKey :one
-SELECT id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at
+SELECT id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at, usage_source
 FROM provider_ledger_entries
 WHERE idempotency_key = $1
 `
@@ -553,12 +405,13 @@ func (q *Queries) GetProviderLedgerEntryByIdempotencyKey(ctx context.Context, id
 		&i.IdempotencyKey,
 		&i.Reason,
 		&i.CreatedAt,
+		&i.UsageSource,
 	)
 	return i, err
 }
 
 const getProviderLedgerEntryByProbeRecordID = `-- name: GetProviderLedgerEntryByProbeRecordID :one
-SELECT id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at
+SELECT id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at, usage_source
 FROM provider_ledger_entries
 WHERE provider_probe_record_id = $1
 `
@@ -585,6 +438,7 @@ func (q *Queries) GetProviderLedgerEntryByProbeRecordID(ctx context.Context, pro
 		&i.IdempotencyKey,
 		&i.Reason,
 		&i.CreatedAt,
+		&i.UsageSource,
 	)
 	return i, err
 }
@@ -622,109 +476,6 @@ func (q *Queries) GetProviderProbeRecordByIdempotencyKey(ctx context.Context, id
 	return i, err
 }
 
-const listProviderCostRisksPage = `-- name: ListProviderCostRisksPage :many
-SELECT
-    r.id,
-    r.provider_id,
-    r.request_record_id,
-    r.request_attempt_id,
-    r.provider_probe_record_id,
-    r.source_type,
-    r.estimated_amount,
-    r.currency,
-    r.reason_code,
-    r.reason,
-    r.status,
-    r.reconciliation_ledger_entry_id,
-    r.created_at,
-    r.reconciled_at,
-    rr.request_id,
-    rpr.upstream_model AS probe_upstream_model,
-    ra.upstream_model AS request_upstream_model,
-    ch.name AS channel_name
-FROM provider_cost_risks r
-LEFT JOIN request_records rr ON rr.id = r.request_record_id
-LEFT JOIN request_attempts ra ON ra.id = r.request_attempt_id AND ra.request_record_id = r.request_record_id
-LEFT JOIN provider_probe_records rpr ON rpr.id = r.provider_probe_record_id
-LEFT JOIN channels ch ON ch.id = COALESCE(rpr.channel_id, ra.channel_id)
-WHERE r.provider_id = $1
-  AND ($2::text IS NULL OR r.status = $2::text)
-ORDER BY r.created_at DESC, r.id DESC
-LIMIT $4 OFFSET $3
-`
-
-type ListProviderCostRisksPageParams struct {
-	ProviderID int64
-	Status     pgtype.Text
-	PageOffset int32
-	PageLimit  int32
-}
-
-type ListProviderCostRisksPageRow struct {
-	ID                          int64
-	ProviderID                  int64
-	RequestRecordID             pgtype.Int8
-	RequestAttemptID            pgtype.Int8
-	ProviderProbeRecordID       pgtype.Int8
-	SourceType                  string
-	EstimatedAmount             pgtype.Numeric
-	Currency                    pgtype.Text
-	ReasonCode                  string
-	Reason                      string
-	Status                      string
-	ReconciliationLedgerEntryID pgtype.Int8
-	CreatedAt                   pgtype.Timestamptz
-	ReconciledAt                pgtype.Timestamptz
-	RequestID                   pgtype.Text
-	ProbeUpstreamModel          pgtype.Text
-	RequestUpstreamModel        pgtype.Text
-	ChannelName                 pgtype.Text
-}
-
-func (q *Queries) ListProviderCostRisksPage(ctx context.Context, arg ListProviderCostRisksPageParams) ([]ListProviderCostRisksPageRow, error) {
-	rows, err := q.db.Query(ctx, listProviderCostRisksPage,
-		arg.ProviderID,
-		arg.Status,
-		arg.PageOffset,
-		arg.PageLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListProviderCostRisksPageRow
-	for rows.Next() {
-		var i ListProviderCostRisksPageRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.ProviderID,
-			&i.RequestRecordID,
-			&i.RequestAttemptID,
-			&i.ProviderProbeRecordID,
-			&i.SourceType,
-			&i.EstimatedAmount,
-			&i.Currency,
-			&i.ReasonCode,
-			&i.Reason,
-			&i.Status,
-			&i.ReconciliationLedgerEntryID,
-			&i.CreatedAt,
-			&i.ReconciledAt,
-			&i.RequestID,
-			&i.ProbeUpstreamModel,
-			&i.RequestUpstreamModel,
-			&i.ChannelName,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listProviderLedgerEntriesPage = `-- name: ListProviderLedgerEntriesPage :many
 SELECT
     e.id,
@@ -736,7 +487,8 @@ SELECT
     e.request_id,
     e.channel_name,
     e.upstream_model,
-    e.provider_probe_record_id,
+	e.provider_probe_record_id,
+	e.usage_source,
     probe.channel_id AS probe_channel_id,
     probe_channel.name AS probe_channel_name,
     probe.upstream_model AS probe_upstream_model,
@@ -781,6 +533,7 @@ type ListProviderLedgerEntriesPageRow struct {
 	ChannelName           pgtype.Text
 	UpstreamModel         pgtype.Text
 	ProviderProbeRecordID pgtype.Int8
+	UsageSource           pgtype.Text
 	ProbeChannelID        pgtype.Int8
 	ProbeChannelName      pgtype.Text
 	ProbeUpstreamModel    pgtype.Text
@@ -822,6 +575,7 @@ func (q *Queries) ListProviderLedgerEntriesPage(ctx context.Context, arg ListPro
 			&i.ChannelName,
 			&i.UpstreamModel,
 			&i.ProviderProbeRecordID,
+			&i.UsageSource,
 			&i.ProbeChannelID,
 			&i.ProbeChannelName,
 			&i.ProbeUpstreamModel,
@@ -854,36 +608,6 @@ SELECT pg_advisory_xact_lock(
 func (q *Queries) LockProviderLedgerIdempotencyKey(ctx context.Context, idempotencyKey string) error {
 	_, err := q.db.Exec(ctx, lockProviderLedgerIdempotencyKey, idempotencyKey)
 	return err
-}
-
-const reconcileProviderCostRisks = `-- name: ReconcileProviderCostRisks :execrows
-UPDATE provider_cost_risks
-SET status = 'reconciled', reconciliation_ledger_entry_id = $1, reconciled_at = now()
-WHERE provider_id = $2
-  AND currency = $3
-  AND status = 'unresolved'
-  AND created_at <= $4
-  AND reconciliation_ledger_entry_id IS NULL
-`
-
-type ReconcileProviderCostRisksParams struct {
-	ReconciliationLedgerEntryID pgtype.Int8
-	ProviderID                  int64
-	Currency                    pgtype.Text
-	Cutoff                      pgtype.Timestamptz
-}
-
-func (q *Queries) ReconcileProviderCostRisks(ctx context.Context, arg ReconcileProviderCostRisksParams) (int64, error) {
-	result, err := q.db.Exec(ctx, reconcileProviderCostRisks,
-		arg.ReconciliationLedgerEntryID,
-		arg.ProviderID,
-		arg.Currency,
-		arg.Cutoff,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const subtractProviderBalance = `-- name: SubtractProviderBalance :one

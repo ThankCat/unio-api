@@ -30,9 +30,6 @@ type Store interface {
 	GetProviderBalance(ctx context.Context, arg sqlc.GetProviderBalanceParams) (sqlc.ProviderBalance, error)
 	ListProviderLedgerEntriesPage(ctx context.Context, arg sqlc.ListProviderLedgerEntriesPageParams) ([]sqlc.ListProviderLedgerEntriesPageRow, error)
 	CountProviderLedgerEntries(ctx context.Context, arg sqlc.CountProviderLedgerEntriesParams) (int64, error)
-	ListProviderCostRisksPage(ctx context.Context, arg sqlc.ListProviderCostRisksPageParams) ([]sqlc.ListProviderCostRisksPageRow, error)
-	CountProviderCostRisks(ctx context.Context, arg sqlc.CountProviderCostRisksParams) (int64, error)
-	GetProviderCostRiskSummary(ctx context.Context, providerID int64) (sqlc.GetProviderCostRiskSummaryRow, error)
 }
 
 type Ledger interface {
@@ -172,6 +169,7 @@ type Entry struct {
 	ChannelName           *string
 	UpstreamModel         *string
 	ProviderProbeRecordID *int64
+	UsageSource           *string
 	EntryType             string
 	Amount                string
 	Currency              string
@@ -237,103 +235,10 @@ func (s *Service) List(ctx context.Context, params ListParams) ([]Entry, int64, 
 			CostSnapshotID: opsutil.Int8Value(row.CostSnapshotID), ChannelID: opsutil.Int8Value(channelID),
 			RequestID: textPtr(row.RequestID), ChannelName: textPtr(channelName), UpstreamModel: textPtr(upstreamModel),
 			ProviderProbeRecordID: opsutil.Int8Value(row.ProviderProbeRecordID),
+			UsageSource:           textPtr(row.UsageSource),
 			EntryType:             row.EntryType, Amount: opsutil.NumericString(row.Amount), Currency: row.Currency,
 			BalanceBefore: opsutil.NumericString(row.BalanceBefore), BalanceAfter: opsutil.NumericString(row.BalanceAfter),
 			IdempotencyKey: row.IdempotencyKey, Reason: row.Reason, CreatedAt: row.CreatedAt.Time,
-		})
-	}
-	return out, total, nil
-}
-
-type RiskListParams struct {
-	ProviderID int64
-	Status     string
-	Limit      int32
-	Offset     int32
-}
-
-type CostRisk struct {
-	ID                    int64
-	ProviderID            int64
-	RequestRecordID       *int64
-	RequestAttemptID      *int64
-	ProviderProbeRecordID *int64
-	SourceType            string
-	EstimatedAmount       *string
-	Currency              *string
-	ReasonCode            string
-	Reason                string
-	Status                string
-	ReconciliationEntryID *int64
-	RequestID             *string
-	UpstreamModel         *string
-	ChannelName           *string
-	CreatedAt             time.Time
-	ReconciledAt          *time.Time
-}
-
-type CostRiskSummary struct {
-	UnresolvedCount    int64
-	EstimatedAmountUSD string
-	UnknownAmountCount int64
-}
-
-func (s *Service) RiskSummary(ctx context.Context, providerID int64) (CostRiskSummary, error) {
-	if providerID <= 0 {
-		return CostRiskSummary{}, invalidArgument("provider_id", "provider_id must be greater than zero")
-	}
-	if err := s.ensureProvider(ctx, providerID); err != nil {
-		return CostRiskSummary{}, err
-	}
-	row, err := s.store.GetProviderCostRiskSummary(ctx, providerID)
-	if err != nil {
-		return CostRiskSummary{}, storeFailed(err, "get provider cost risk summary")
-	}
-	return CostRiskSummary{
-		UnresolvedCount: row.UnresolvedCount, EstimatedAmountUSD: opsutil.NumericString(row.EstimatedAmountUsd),
-		UnknownAmountCount: row.UnknownAmountCount,
-	}, nil
-}
-
-func (s *Service) ListRisks(ctx context.Context, params RiskListParams) ([]CostRisk, int64, error) {
-	if params.ProviderID <= 0 {
-		return nil, 0, invalidArgument("provider_id", "provider_id must be greater than zero")
-	}
-	if err := s.ensureProvider(ctx, params.ProviderID); err != nil {
-		return nil, 0, err
-	}
-	params.Status = strings.TrimSpace(params.Status)
-	if params.Status != "" && params.Status != providerledger.RiskStatusUnresolved && params.Status != providerledger.RiskStatusReconciled {
-		return nil, 0, invalidArgument("status", "status is invalid")
-	}
-	if params.Limit <= 0 {
-		params.Limit = 20
-	}
-	query := sqlc.ListProviderCostRisksPageParams{
-		ProviderID: params.ProviderID, Status: opsutil.TextNarg(params.Status), PageLimit: params.Limit, PageOffset: params.Offset,
-	}
-	rows, err := s.store.ListProviderCostRisksPage(ctx, query)
-	if err != nil {
-		return nil, 0, storeFailed(err, "list provider cost risks")
-	}
-	total, err := s.store.CountProviderCostRisks(ctx, sqlc.CountProviderCostRisksParams{ProviderID: params.ProviderID, Status: query.Status})
-	if err != nil {
-		return nil, 0, storeFailed(err, "count provider cost risks")
-	}
-	out := make([]CostRisk, 0, len(rows))
-	for _, row := range rows {
-		upstreamModel := row.ProbeUpstreamModel
-		if !upstreamModel.Valid {
-			upstreamModel = row.RequestUpstreamModel
-		}
-		out = append(out, CostRisk{
-			ID: row.ID, ProviderID: row.ProviderID, RequestRecordID: opsutil.Int8Value(row.RequestRecordID),
-			RequestAttemptID: opsutil.Int8Value(row.RequestAttemptID), ProviderProbeRecordID: opsutil.Int8Value(row.ProviderProbeRecordID),
-			SourceType: row.SourceType, EstimatedAmount: numericPtr(row.EstimatedAmount), Currency: textPtr(row.Currency),
-			ReasonCode: row.ReasonCode, Reason: row.Reason, Status: row.Status,
-			ReconciliationEntryID: opsutil.Int8Value(row.ReconciliationLedgerEntryID), RequestID: textPtr(row.RequestID),
-			UpstreamModel: textPtr(upstreamModel), ChannelName: textPtr(row.ChannelName),
-			CreatedAt: row.CreatedAt.Time, ReconciledAt: timePtr(row.ReconciledAt),
 		})
 	}
 	return out, total, nil
@@ -395,20 +300,6 @@ func textPtr(v pgtype.Text) *string {
 	}
 	s := v.String
 	return &s
-}
-func numericPtr(v pgtype.Numeric) *string {
-	if !v.Valid {
-		return nil
-	}
-	value := opsutil.NumericString(v)
-	return &value
-}
-func timePtr(v pgtype.Timestamptz) *time.Time {
-	if !v.Valid {
-		return nil
-	}
-	value := v.Time
-	return &value
 }
 func invalidArgument(field, message string) error {
 	return failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage(message), failure.WithField("field", field))

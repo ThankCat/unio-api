@@ -59,9 +59,6 @@ type adminHTTPDeps struct {
 	RequestQueryService requests.RequestQueryService
 	LedgerQueryService  ledger.LedgerQueryService
 
-	// bill-on-cancel 渠道成本敞口只读视图。
-	CostExposureQueryService ledger.CostExposureQueryService
-
 	UserService        user.UserService
 	APIKeyService      user.APIKeyService
 	AdjustmentService  user.AdjustmentService
@@ -124,11 +121,10 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		RequestQueryService: deps.RequestQueryService,
 		LedgerQueryService:  deps.LedgerQueryService,
 
-		CostExposureQueryService: deps.CostExposureQueryService,
-		UserService:              deps.UserService,
-		APIKeyService:            deps.APIKeyService,
-		AdjustmentService:        deps.AdjustmentService,
-		CustomerOpsService:       deps.CustomerOpsService,
+		UserService:        deps.UserService,
+		APIKeyService:      deps.APIKeyService,
+		AdjustmentService:  deps.AdjustmentService,
+		CustomerOpsService: deps.CustomerOpsService,
 
 		CapabilityService:     deps.CapabilityService,
 		CapabilitySyncService: deps.CapabilitySyncService,

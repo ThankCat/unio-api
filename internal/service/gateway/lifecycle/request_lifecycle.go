@@ -41,10 +41,6 @@ type RequestLifecycle struct {
 	safeMessage     func(code string) string
 	logger          *zap.Logger
 
-	// costExposures 是可选的成本敞口记录器；nil 表示不启用。
-	costExposures              CostExposureRecorder
-	costExposureOutputFallback int64
-
 	// tpmObserver 是可选的分钟级 TPM 观测器（§8）；nil 表示不观测。
 	tpmObserver *tpmobserver.Observer
 }

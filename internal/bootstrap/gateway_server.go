@@ -292,13 +292,6 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	chatCompletionService.SetTPMObserver(tpmObserver)
 	responsesService.SetTPMObserver(tpmObserver)
 	messagesService.SetTPMObserver(tpmObserver)
-	// 成本敞口记录器：bill-on-disconnect 渠道的失败/取消路径
-	// 记平台成本敞口；假定输出兜底与 authorization 的进程级兜底同源，保证敞口与冻结上界口径一致。
-	costExposureRecorder := newCostExposureStore(queries)
-	chatCompletionService.SetCostExposureRecorder(costExposureRecorder, deps.Config.Gateway.MaxOutputTokensFallback)
-	responsesService.SetCostExposureRecorder(costExposureRecorder, deps.Config.Gateway.MaxOutputTokensFallback)
-	messagesService.SetCostExposureRecorder(costExposureRecorder, deps.Config.Gateway.MaxOutputTokensFallback)
-
 	// 凭据失效闸门（阶段二）：三上游源站共享一份进程内「连续 401」计数器；达阈值时异步把
 	// channels.credential_valid 翻 false + 写 runtime_401 日志，后续请求在路由候选层直接跳过该渠道。
 	credentialGate := lifecycle.NewChannelCredentialGate(

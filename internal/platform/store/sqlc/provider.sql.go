@@ -129,7 +129,7 @@ DELETE FROM providers WHERE providers.id = $1
 // DeleteProvider 物理删除 provider，用于清理录错且从未使用的脏数据。
 // 终态 provider_routing_operations 随 Provider 清理；非终态操作通过 RESTRICT 阻止删除。
 // Provider 本身不做请求/账务级联：一旦名下仍有 channel，或 provider 被请求/账务历史
-// （request_records/request_attempts/cost_snapshots/channel_cost_exposures/settlement_recovery_jobs
+// （request_records/request_attempts/cost_snapshots/settlement_recovery_jobs
 // 等 NO ACTION 外键）引用，整条语句报 23503 全部回滚，上层降级为 conflict，提示先删渠道或改用停用。
 // 数据修改型 CTE 保证三段各执行一次、外键在语句末统一校验，故清子表 + 删主体在单语句内原子完成。
 func (q *Queries) DeleteProvider(ctx context.Context, id int64) (int64, error) {

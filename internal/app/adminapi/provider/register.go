@@ -28,8 +28,6 @@ func Register(r chi.Router, d Deps) {
 		pbh := &providerBalanceHandler{service: d.BalanceService}
 		r.Post("/providers/{id}/balance-adjustments", pbh.adjust)
 		r.Get("/providers/{id}/ledger-entries", pbh.ledgerEntries)
-		r.Get("/providers/{id}/cost-risks", pbh.costRisks)
-		r.Get("/providers/{id}/cost-risks/summary", pbh.costRiskSummary)
 	}
 
 	if d.Service != nil {

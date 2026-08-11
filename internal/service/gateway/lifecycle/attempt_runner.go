@@ -389,7 +389,6 @@ scan:
 			if errors.Is(err, ErrAttemptRuntimeFeedback) || errors.Is(err, errAttemptPermitFinish) {
 				l.LogUpstreamAttemptResult(ctx, requestRecord, attemptRecord, candidate, false, timingFacts, responseFacts, AttemptStreamStats{}, err, false, false)
 				l.MarkAttemptFailed(ctx, attemptRecord, FailureCodeOrFallback(err, string(failure.CodeGatewayBreakerStoreUnavailable)), err)
-				l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.EstimatedTokens, err)
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 					return result, releaseErr
@@ -409,7 +408,6 @@ scan:
 					FailureCodeOrFallback(err, "transparent_fallback"), true, false, true, fallback.UpstreamEndpoint,
 				)
 				l.MarkAttemptFailed(ctx, attemptRecord, "adapter_error", err)
-				l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.EstimatedTokens, err)
 
 				if fallback.ResolveAdapter != nil {
 					if resolveErr := fallback.ResolveAdapter(candidate); resolveErr != nil {
@@ -507,7 +505,6 @@ scan:
 				if errors.Is(err, ErrAttemptRuntimeFeedback) || errors.Is(err, errAttemptPermitFinish) {
 					l.LogUpstreamAttemptResult(ctx, requestRecord, attemptRecord, candidate, false, timingFacts, responseFacts, AttemptStreamStats{}, err, false, false)
 					l.MarkAttemptFailed(ctx, attemptRecord, FailureCodeOrFallback(err, string(failure.CodeGatewayBreakerStoreUnavailable)), err)
-					l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.EstimatedTokens, err)
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 						return result, releaseErr
@@ -520,8 +517,6 @@ scan:
 				// 客户端取消不是上游失败，也不触发 fallback；此时还没进入 settlement，不写账务。
 				if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 					l.LogUpstreamAttemptResult(ctx, requestRecord, attemptRecord, candidate, false, timingFacts, nil, AttemptStreamStats{}, err, false, false)
-					// bill-on-disconnect 渠道：请求已发出、上游照常生成并计费，记平台成本敞口（阶段一）。
-					l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.EstimatedTokens, err)
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 						return result, releaseErr
@@ -534,15 +529,7 @@ scan:
 				l.MarkAttemptFailed(ctx, attemptRecord, "adapter_error", err)
 
 				costWithoutUsage := params.UpstreamCostWithoutUsage != nil && params.UpstreamCostWithoutUsage(err)
-				if costWithoutUsage {
-					l.RecordUsageMissingCostRisk(ctx, requestRecord, attemptRecord, candidate, params.EstimatedTokens, codes.UpstreamCostWithoutUsageReasonCode)
-				} else {
-					// timeout/5xx/取消等真实上游调用失败会形成 Provider 待对账风险；特殊渠道另记旧成本敞口。
-					l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.EstimatedTokens, err)
-				}
-
-				// 上游可能已产生成本但无可靠 usage（如原生 compact 2xx 缺 usage，P0-3）：不重试、不普通释放，
-				// 而是释放冻结并记 risk_exposure，保留「平台可能承担成本」的审计事实，杜绝静默白嫖。
+				// 上游返回 2xx 但没有可靠 usage 时不重试，并释放客户冻结；客户侧异常事实仍保留。
 				// 该分支优先于 retry 分类——再尝试只会在另一渠道叠加成本。
 				if costWithoutUsage {
 					l.LogUpstreamResponseMissingBillableUsage(ctx, requestRecord, attemptRecord, candidate, timingFacts)

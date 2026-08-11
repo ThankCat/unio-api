@@ -74,9 +74,6 @@ type RouterDeps struct {
 	RequestQueryService requests.RequestQueryService
 	LedgerQueryService  ledger.LedgerQueryService
 
-	// bill-on-cancel 渠道成本敞口只读视图。
-	CostExposureQueryService ledger.CostExposureQueryService
-
 	// M7 客户管理：用户（只读）/API Key（费用上限 + 必填线路）/手工调额
 	UserService        user.UserService
 	APIKeyService      user.APIKeyService
@@ -206,10 +203,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 				Service:             deps.RequestQueryService,
 				RoutingTraceService: deps.RoutingTraceService,
 			})
-			ledger.Register(r, ledger.Deps{
-				Service:             deps.LedgerQueryService,
-				CostExposureService: deps.CostExposureQueryService,
-			})
+			ledger.Register(r, ledger.Deps{Service: deps.LedgerQueryService})
 			system.Register(r, system.Deps{
 				RecoveryJobService:        deps.RecoveryJobQueryService,
 				ProviderSettingsService:   deps.ProviderSettingsService,

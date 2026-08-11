@@ -46,16 +46,9 @@ type fakeChatLedgerCapturer struct {
 }
 
 type fakeChatProviderLedger struct {
-	params     []providerledger.UsageDebitParams
-	riskParams []providerledger.RequestCostRiskParams
-	queries    []*sqlc.Queries
-	err        error
-}
-
-func (l *fakeChatProviderLedger) RecordRequestCostRiskWithQueries(_ context.Context, queries *sqlc.Queries, params providerledger.RequestCostRiskParams) error {
-	l.queries = append(l.queries, queries)
-	l.riskParams = append(l.riskParams, params)
-	return l.err
+	params  []providerledger.UsageDebitParams
+	queries []*sqlc.Queries
+	err     error
 }
 
 func (l *fakeChatProviderLedger) DebitUsageWithQueries(_ context.Context, queries *sqlc.Queries, params providerledger.UsageDebitParams) (providerledger.Entry, error) {
@@ -180,6 +173,7 @@ func (d *chatSettlementDBDeps) cleanup() {
 		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_billing_exceptions WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_reservations WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_entries WHERE request_record_id = $1`, d.requestRecord.ID)
+		_, _ = d.pool.Exec(ctx, `DELETE FROM provider_ledger_entries WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM cost_snapshots WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM price_snapshots WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM usage_records WHERE request_record_id = $1`, d.requestRecord.ID)
@@ -196,6 +190,7 @@ func (d *chatSettlementDBDeps) cleanup() {
 		_, _ = d.pool.Exec(ctx, `DELETE FROM channels WHERE id = $1`, d.channelID)
 	}
 	if d.providerID != 0 {
+		_, _ = d.pool.Exec(ctx, `DELETE FROM provider_balances WHERE provider_id = $1`, d.providerID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM providers WHERE id = $1`, d.providerID)
 	}
 	if d.modelID != 0 {
@@ -381,6 +376,7 @@ func (d *chatSettlementDBDeps) params() ChatSettlementParams {
 	return ChatSettlementParams{
 		RequestRecord: requestlog.RequestRecord{
 			ID:               d.requestRecord.ID,
+			RequestID:        d.requestRecord.RequestID,
 			UserID:           d.userID,
 			APIKeyID:         d.apiKeyID,
 			RequestedModelID: d.requestRecord.RequestedModelID,
@@ -730,7 +726,7 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 		t.Fatalf("expected one provider usage debit, got %d", len(providerLedger.params))
 	}
 	providerDebit := providerLedger.params[0]
-	if providerDebit.ProviderID != deps.providerID || providerDebit.ChannelID != deps.channelID || providerDebit.RequestAttemptID != deps.attemptRecord.ID || providerDebit.CostSnapshotID != costSnapshot.ID {
+	if providerDebit.ProviderID != deps.providerID || providerDebit.ChannelID != deps.channelID || providerDebit.RequestAttemptID != deps.attemptRecord.ID || providerDebit.CostSnapshotID != costSnapshot.ID || providerDebit.UsageSource != coreusage.SourceUpstreamResponse {
 		t.Fatalf("unexpected provider debit source: %+v", providerDebit)
 	}
 	assertNumericEqual(t, providerDebit.Amount, costSnapshot.TotalCostAmount)
@@ -851,8 +847,8 @@ func TestChatSettlementSettlesClientCanceledPartialAsCanceled(t *testing.T) {
 	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
 		t.Fatalf("settle client-canceled partial chat: %v", err)
 	}
-	if len(providerLedger.params) != 0 {
-		t.Fatalf("partial usage must not debit provider balance, got %d calls", len(providerLedger.params))
+	if len(providerLedger.params) != 1 || providerLedger.params[0].UsageSource != coreusage.SourcePartialStreamEstimate {
+		t.Fatalf("partial cost must create one estimated provider debit, got %+v", providerLedger.params)
 	}
 
 	if status := requestStatus(t, deps.ctx, deps.pool, deps.requestRecord.ID); status != string(requestlog.RequestStatusCanceled) {
@@ -897,6 +893,70 @@ func TestChatSettlementSettlesClientCanceledPartialAsCanceled(t *testing.T) {
 	}
 }
 
+func TestChatSettlementPersistsPartialProviderDebitWithEstimatedSource(t *testing.T) {
+	deps := newChatSettlementDBDeps(t)
+	providerLedger := providerledger.NewService(deps.pool, deps.queries)
+	service := NewChatSettlementService(
+		deps.pool,
+		deps.queries,
+		chatSettlementBilling(testNumeric(61_000000, -10)),
+		ledger.NewService(deps.pool, deps.queries),
+		providerLedger,
+	)
+	params := deps.params()
+	params.RequestFinalStatus = requestlog.RequestStatusCanceled
+	params.AttemptFinalStatus = requestlog.AttemptStatusCanceled
+	params.ErrorCode = "client_canceled"
+	params.ErrorMessage = "client canceled request"
+	params.InternalErrorDetail = "context canceled"
+	params.ResponseID = "partial-provider-ledger"
+	params.Facts = BuildPartialStreamFacts(PartialStreamFactsParams{
+		Candidate: routing.ChatRouteCandidate{
+			ProviderID:    deps.providerID,
+			ModelDBID:     deps.modelID,
+			Protocol:      string(requestlog.ProtocolOpenAI),
+			AdapterKey:    "openai",
+			Channel:       channel.Runtime{ID: deps.channelID},
+			UpstreamModel: "gpt-4.1",
+		},
+		StreamResponseID: "partial-provider-ledger",
+		RequestRecordID:  deps.requestRecord.ID,
+		InputTokens:      10,
+		OutputTokens:     5,
+		Reason:           PartialReasonClientCanceled,
+	})
+
+	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
+		t.Fatalf("settle partial chat with provider ledger: %v", err)
+	}
+	costSnapshot, err := deps.queries.GetCostSnapshotByRequest(deps.ctx, deps.requestRecord.ID)
+	if err != nil {
+		t.Fatalf("get partial cost snapshot: %v", err)
+	}
+	entry, err := deps.queries.GetProviderLedgerEntryByCostSnapshotID(
+		deps.ctx,
+		pgtype.Int8{Int64: costSnapshot.ID, Valid: true},
+	)
+	if err != nil {
+		t.Fatalf("get partial provider ledger entry: %v", err)
+	}
+	if entry.EntryType != providerledger.EntryTypeUsageDebit ||
+		!entry.UsageSource.Valid || entry.UsageSource.String != string(coreusage.SourcePartialStreamEstimate) {
+		t.Fatalf("unexpected partial provider ledger entry: %+v", entry)
+	}
+	assertNumericEqual(t, entry.Amount, costSnapshot.TotalCostAmount)
+
+	balance, err := deps.queries.GetProviderBalance(deps.ctx, sqlc.GetProviderBalanceParams{
+		ProviderID: deps.providerID,
+		Currency:   costSnapshot.Currency,
+	})
+	if err != nil {
+		t.Fatalf("get provider balance after partial debit: %v", err)
+	}
+	wantBalance := pgtype.Numeric{Int: new(big.Int).Neg(costSnapshot.TotalCostAmount.Int), Exp: costSnapshot.TotalCostAmount.Exp, Valid: true}
+	assertNumericEqual(t, balance.Balance, wantBalance)
+}
+
 func TestChatSettlementSettlesInterruptedPartialAsFailed(t *testing.T) {
 	deps := newChatSettlementDBDeps(t)
 	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))
@@ -929,8 +989,8 @@ func TestChatSettlementSettlesInterruptedPartialAsFailed(t *testing.T) {
 	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
 		t.Fatalf("settle interrupted partial chat: %v", err)
 	}
-	if len(providerLedger.params) != 0 {
-		t.Fatalf("partial usage must not debit provider balance, got %d calls", len(providerLedger.params))
+	if len(providerLedger.params) != 1 || providerLedger.params[0].UsageSource != coreusage.SourcePartialStreamEstimate {
+		t.Fatalf("partial cost must create one estimated provider debit, got %+v", providerLedger.params)
 	}
 
 	if status := requestStatus(t, deps.ctx, deps.pool, deps.requestRecord.ID); status != string(requestlog.RequestStatusFailed) {

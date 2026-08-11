@@ -35,6 +35,7 @@ INSERT INTO provider_ledger_entries (
     channel_name,
     upstream_model,
     provider_probe_record_id,
+    usage_source,
     entry_type,
     amount,
     currency,
@@ -53,6 +54,7 @@ VALUES (
     sqlc.narg(channel_name),
     sqlc.narg(upstream_model),
     sqlc.narg(provider_probe_record_id),
+    sqlc.narg(usage_source),
     sqlc.arg(entry_type),
     sqlc.arg(amount),
     sqlc.arg(currency),
@@ -95,36 +97,6 @@ VALUES (
     sqlc.narg(cost_amount), sqlc.narg(currency), sqlc.narg(formula_version), sqlc.arg(idempotency_key)
 )
 RETURNING *;
-
--- name: CreateProviderCostRisk :one
-INSERT INTO provider_cost_risks (
-    provider_id, request_record_id, request_attempt_id, provider_probe_record_id,
-    source_type, estimated_amount, currency, reason_code, reason
-)
-VALUES (
-    sqlc.arg(provider_id), sqlc.narg(request_record_id), sqlc.narg(request_attempt_id),
-    sqlc.narg(provider_probe_record_id), sqlc.arg(source_type), sqlc.narg(estimated_amount),
-    sqlc.narg(currency), sqlc.arg(reason_code), sqlc.arg(reason)
-)
-ON CONFLICT DO NOTHING
-RETURNING *;
-
--- name: GetProviderCostRiskByRequestAttemptID :one
-SELECT * FROM provider_cost_risks
-WHERE request_attempt_id = sqlc.arg(request_attempt_id);
-
--- name: GetProviderCostRiskByProbeRecordID :one
-SELECT * FROM provider_cost_risks
-WHERE provider_probe_record_id = sqlc.arg(provider_probe_record_id);
-
--- name: ReconcileProviderCostRisks :execrows
-UPDATE provider_cost_risks
-SET status = 'reconciled', reconciliation_ledger_entry_id = sqlc.arg(reconciliation_ledger_entry_id), reconciled_at = now()
-WHERE provider_id = sqlc.arg(provider_id)
-  AND currency = sqlc.arg(currency)
-  AND status = 'unresolved'
-  AND created_at <= sqlc.arg(cutoff)
-  AND reconciliation_ledger_entry_id IS NULL;
 
 -- name: LockProviderLedgerIdempotencyKey :exec
 SELECT pg_advisory_xact_lock(

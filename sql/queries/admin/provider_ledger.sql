@@ -15,7 +15,8 @@ SELECT
     e.request_id,
     e.channel_name,
     e.upstream_model,
-    e.provider_probe_record_id,
+	e.provider_probe_record_id,
+	e.usage_source,
     probe.channel_id AS probe_channel_id,
     probe_channel.name AS probe_channel_name,
     probe.upstream_model AS probe_upstream_model,
@@ -46,51 +47,6 @@ WHERE e.provider_id = sqlc.arg(provider_id)
   AND (sqlc.narg(request_id)::text IS NULL OR e.request_id = sqlc.narg(request_id)::text)
   AND (sqlc.narg(from_time)::timestamptz IS NULL OR e.created_at >= sqlc.narg(from_time)::timestamptz)
   AND (sqlc.narg(to_time)::timestamptz IS NULL OR e.created_at < sqlc.narg(to_time)::timestamptz);
-
--- name: ListProviderCostRisksPage :many
-SELECT
-    r.id,
-    r.provider_id,
-    r.request_record_id,
-    r.request_attempt_id,
-    r.provider_probe_record_id,
-    r.source_type,
-    r.estimated_amount,
-    r.currency,
-    r.reason_code,
-    r.reason,
-    r.status,
-    r.reconciliation_ledger_entry_id,
-    r.created_at,
-    r.reconciled_at,
-    rr.request_id,
-    rpr.upstream_model AS probe_upstream_model,
-    ra.upstream_model AS request_upstream_model,
-    ch.name AS channel_name
-FROM provider_cost_risks r
-LEFT JOIN request_records rr ON rr.id = r.request_record_id
-LEFT JOIN request_attempts ra ON ra.id = r.request_attempt_id AND ra.request_record_id = r.request_record_id
-LEFT JOIN provider_probe_records rpr ON rpr.id = r.provider_probe_record_id
-LEFT JOIN channels ch ON ch.id = COALESCE(rpr.channel_id, ra.channel_id)
-WHERE r.provider_id = sqlc.arg(provider_id)
-  AND (sqlc.narg(status)::text IS NULL OR r.status = sqlc.narg(status)::text)
-ORDER BY r.created_at DESC, r.id DESC
-LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
-
--- name: CountProviderCostRisks :one
-SELECT COUNT(*) AS total
-FROM provider_cost_risks r
-WHERE r.provider_id = sqlc.arg(provider_id)
-  AND (sqlc.narg(status)::text IS NULL OR r.status = sqlc.narg(status)::text);
-
--- name: GetProviderCostRiskSummary :one
-SELECT
-    COUNT(*) AS unresolved_count,
-    COALESCE(SUM(estimated_amount) FILTER (WHERE currency = 'USD'), 0)::numeric AS estimated_amount_usd,
-    COUNT(*) FILTER (WHERE estimated_amount IS NULL) AS unknown_amount_count
-FROM provider_cost_risks
-WHERE provider_id = sqlc.arg(provider_id)
-  AND status = 'unresolved';
 
 -- name: CountLowBalanceProviders :one
 SELECT COUNT(*) AS total

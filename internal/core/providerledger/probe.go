@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
@@ -35,8 +36,7 @@ type ProbeParams struct {
 	IdempotencyKey string
 }
 
-// AccountProbe 先保存不可变探测事实，再在同一事务中按可靠成本写 probe_debit；
-// 只有上游已返回 2xx、但 usage 不可靠时才写成本风险，明确失败只保留探测事实。
+// AccountProbe 先保存不可变探测事实，再在同一事务中按可靠 usage 和明确价格写 probe_debit。
 func (s *Service) AccountProbe(ctx context.Context, p ProbeParams) error {
 	if err := validateProbe(p); err != nil {
 		return err
@@ -62,16 +62,13 @@ func (s *Service) AccountProbe(ctx context.Context, p ProbeParams) error {
 	}
 	var cost billing.ProviderCost
 	snapshot, pricingErr := s.resolveProbeCost(ctx, q, p.ChannelID, p.ModelID, pricingAt)
-	responseMayHaveCost := p.Success || (p.HTTPStatus >= 200 && p.HTTPStatus < 300)
 	usageReliable := p.Success && p.Facts != nil && p.Facts.UsageSource != usage.SourcePartialStreamEstimate && p.Facts.Usage.Valid()
-	if usageReliable {
-		if pricingErr == nil {
-			cost, err = (billing.Service{}).CalculateProviderCost(p.Facts.Usage, snapshot)
-		} else {
-			err = pricingErr
-		}
-		if err != nil {
-			usageReliable = false
+	costKnown := false
+	if usageReliable && pricingErr == nil {
+		calculated, calculateErr := (billing.Service{}).CalculateProviderCost(p.Facts.Usage, snapshot)
+		if calculateErr == nil {
+			cost = calculated
+			costKnown = true
 		}
 	}
 	var usageJSON []byte
@@ -83,30 +80,19 @@ func (s *Service) AccountProbe(ctx context.Context, p ProbeParams) error {
 		Protocol: p.Protocol, Source: p.Source, UpstreamModel: p.UpstreamModel, Success: p.Success,
 		HttpStatus: int32(clampStatus(p.HTTPStatus)), ErrorCode: textNarg(p.ErrorCode), Message: textNarg(p.Message),
 		LatencyMs: pgtype.Int8{Int64: p.LatencyMs, Valid: p.LatencyMs >= 0}, UsageSource: usageSource(p.Facts), UsageFacts: usageJSON,
-		UsageReliable: usageReliable, CostAmount: costAmount(cost, usageReliable), Currency: textNarg(snapshot.Currency),
-		FormulaVersion: textNarg(snapshot.FormulaVersion), IdempotencyKey: p.IdempotencyKey,
+		UsageReliable: usageReliable, CostAmount: costAmount(cost, costKnown), Currency: costText(snapshot.Currency, costKnown),
+		FormulaVersion: costText(snapshot.FormulaVersion, costKnown), IdempotencyKey: p.IdempotencyKey,
 	})
 	if err != nil {
 		return storeFailed(err, "create provider probe record")
 	}
-	if usageReliable && !numericIsZero(cost.TotalCostAmount) {
-		entry, err := s.debitProbeWithQueries(ctx, q, p.ProviderID, probe.ID, cost.TotalCostAmount, snapshot.Currency,
+	if costKnown && !numericIsZero(cost.TotalCostAmount) {
+		entry, err := s.debitProbeWithQueries(ctx, q, p.ProviderID, probe.ID, p.Facts.UsageSource, cost.TotalCostAmount, snapshot.Currency,
 			fmt.Sprintf("provider:probe:%d", probe.ID), "模型探测产生的服务商成本")
 		if err != nil {
 			return err
 		}
 		_ = entry
-	} else if responseMayHaveCost && !usageReliable {
-		reason := "模型探测没有返回完整用量，实际费用需要人工核对"
-		if p.Facts != nil && p.Facts.UsageSource == usage.SourcePartialStreamEstimate {
-			reason = "模型探测只得到估算用量，实际费用需要人工核对"
-		}
-		if err := s.RecordProbeCostRiskWithQueries(ctx, q, ProbeCostRiskParams{
-			ProviderID: p.ProviderID, ProviderProbeID: probe.ID, Currency: snapshot.Currency,
-			ReasonCode: "probe_usage_unreliable", Reason: reason,
-		}); err != nil {
-			return err
-		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return storeFailed(err, "commit provider probe accounting transaction")
@@ -118,8 +104,16 @@ func (s *Service) ensureProbeAccountingIdempotent(ctx context.Context, q *sqlc.Q
 	if row.ProviderID != p.ProviderID || row.ChannelID != p.ChannelID || row.Source != p.Source || row.UpstreamModel != p.UpstreamModel || row.Success != p.Success {
 		return failure.New(failure.CodeLedgerIdempotencyConflict, failure.WithMessage("provider probe idempotency key conflict"))
 	}
-	if _, err := q.GetProviderLedgerEntryByProbeRecordID(ctx, pgtype.Int8{Int64: row.ID, Valid: true}); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return storeFailed(err, "lookup provider probe ledger entry")
+	_, ledgerErr := q.GetProviderLedgerEntryByProbeRecordID(ctx, pgtype.Int8{Int64: row.ID, Valid: true})
+	expectsDebit := row.CostAmount.Valid && isPositive(row.CostAmount)
+	if expectsDebit && errors.Is(ledgerErr, pgx.ErrNoRows) {
+		return failure.New(failure.CodeLedgerIdempotencyConflict, failure.WithMessage("provider probe debit is missing"))
+	}
+	if !expectsDebit && ledgerErr == nil {
+		return failure.New(failure.CodeLedgerIdempotencyConflict, failure.WithMessage("provider probe has unexpected debit"))
+	}
+	if ledgerErr != nil && !errors.Is(ledgerErr, pgx.ErrNoRows) {
+		return storeFailed(ledgerErr, "lookup provider probe ledger entry")
 	}
 	return nil
 }
@@ -141,11 +135,26 @@ func usageSource(facts *adapter.ResponseFacts) pgtype.Text {
 	return pgtype.Text{String: string(facts.UsageSource), Valid: true}
 }
 
-func costAmount(cost billing.ProviderCost, reliable bool) pgtype.Numeric {
-	if !reliable {
+func costAmount(cost billing.ProviderCost, known bool) pgtype.Numeric {
+	if !known {
 		return pgtype.Numeric{}
 	}
 	return cost.TotalCostAmount
+}
+
+func costText(value string, known bool) pgtype.Text {
+	if !known {
+		return pgtype.Text{}
+	}
+	return textNarg(value)
+}
+
+func textNarg(value string) pgtype.Text {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: value, Valid: true}
 }
 
 func clampStatus(v int) int {

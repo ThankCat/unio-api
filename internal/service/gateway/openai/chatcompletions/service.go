@@ -101,11 +101,6 @@ func (s *ChatCompletionService) SetAttemptPermitManager(manager *lifecycle.Attem
 	s.attemptRunner.SetAttemptPermitManager(manager)
 }
 
-// SetCostExposureRecorder 注入成本敞口记录器；nil 表示不启用。
-func (s *ChatCompletionService) SetCostExposureRecorder(recorder lifecycle.CostExposureRecorder, assumedOutputFallback int64) {
-	s.lifecycle.SetCostExposureRecorder(recorder, assumedOutputFallback)
-}
-
 // SetCredentialGate 注入凭据失效闸门（连续 401 翻 credential_valid=false，阶段二）；nil 表示不启用。
 func (s *ChatCompletionService) SetCredentialGate(gate lifecycle.CredentialGate) {
 	s.lifecycle.SetCredentialGate(gate)

@@ -55,7 +55,6 @@ func providerLedgerDeps(t *testing.T) (context.Context, *pgxpool.Pool, *Service,
 	}
 	cleanup := func() {
 		cleanupCtx := context.Background()
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM provider_cost_risks WHERE provider_id = $1`, providerID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM provider_ledger_entries WHERE provider_id = $1`, providerID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM provider_probe_records WHERE provider_id = $1`, providerID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM provider_balances WHERE provider_id = $1`, providerID)
@@ -97,7 +96,7 @@ func TestProviderLedgerSetsExactTargetBalance(t *testing.T) {
 	assertProviderLedgerNumeric(t, entry.BalanceAfter, "-0.25")
 }
 
-func TestProviderProbeAccountingSeparatesReliableUsageFailureAndMissingUsage(t *testing.T) {
+func TestProviderProbeAccountingOnlyDebitsKnownCost(t *testing.T) {
 	ctx, pool, service, providerID := providerLedgerDeps(t)
 	suffix := time.Now().UnixNano()
 	var modelID, channelID int64
@@ -128,7 +127,6 @@ func TestProviderProbeAccountingSeparatesReliableUsageFailureAndMissingUsage(t *
 	}
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM provider_cost_risks WHERE provider_id = $1`, providerID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM provider_ledger_entries WHERE provider_id = $1`, providerID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM provider_probe_records WHERE provider_id = $1`, providerID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM channel_prices WHERE channel_id = $1`, channelID)
@@ -166,49 +164,57 @@ func TestProviderProbeAccountingSeparatesReliableUsageFailureAndMissingUsage(t *
 	}); err != nil {
 		t.Fatalf("account failed probe: %v", err)
 	}
-	var probeDebits, risks int64
+	var probeDebits int64
 	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM provider_ledger_entries WHERE provider_id = $1 AND entry_type = 'probe_debit'`, providerID).Scan(&probeDebits); err != nil {
 		t.Fatalf("count probe debits: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM provider_cost_risks WHERE provider_id = $1 AND source_type = 'probe' AND status = 'unresolved'`, providerID).Scan(&risks); err != nil {
-		t.Fatalf("count probe risks: %v", err)
-	}
-	if probeDebits != 1 || risks != 0 {
-		t.Fatalf("expected failed probe to keep one debit and no risk, got debits=%d risks=%d", probeDebits, risks)
+	if probeDebits != 1 {
+		t.Fatalf("expected failed probe to keep one debit, got %d", probeDebits)
 	}
 
 	if err := service.AccountProbe(ctx, ProbeParams{
 		ProviderID: providerID, ChannelID: channelID, ModelID: modelID, Protocol: "openai", Source: "manual",
 		UpstreamModel: "probe-upstream-model", Success: false, HTTPStatus: 200, ErrorCode: "protocol_error",
-		Message: "upstream response missing required usage",
+		Message:   "upstream response missing required usage",
 		LatencyMs: 15, IdempotencyKey: fmt.Sprintf("provider-probe-missing-usage-%d", suffix),
 	}); err != nil {
 		t.Fatalf("account 2xx probe without usage: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM provider_cost_risks WHERE provider_id = $1 AND source_type = 'probe' AND status = 'unresolved'`, providerID).Scan(&risks); err != nil {
-		t.Fatalf("count 2xx probe risks: %v", err)
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM provider_ledger_entries WHERE provider_id = $1 AND entry_type = 'probe_debit'`, providerID).Scan(&probeDebits); err != nil {
+		t.Fatalf("count probe debits after missing usage: %v", err)
 	}
-	if risks != 1 {
-		t.Fatalf("expected 2xx probe without usage to create one risk, got %d", risks)
+	if probeDebits != 1 {
+		t.Fatalf("missing usage must not create a probe debit, got %d", probeDebits)
 	}
-	adjustment, err := service.SetTargetBalance(ctx, TargetParams{
-		ProviderID: providerID, TargetBalance: providerLedgerNumeric(t, "1.79"), Currency: "USD",
-		IdempotencyKey: fmt.Sprintf("provider-probe-reconcile-%d", suffix), Reason: "核对上游余额",
-	})
-	if err != nil {
-		t.Fatalf("reconcile probe risk with target balance: %v", err)
+
+	if _, err := pool.Exec(ctx, `DELETE FROM channel_prices WHERE channel_id = $1`, channelID); err != nil {
+		t.Fatalf("remove probe pricing: %v", err)
 	}
-	var riskStatus string
-	var reconciliationEntryID int64
+	noPriceKey := fmt.Sprintf("provider-probe-no-price-%d", suffix)
+	if err := service.AccountProbe(ctx, ProbeParams{
+		ProviderID: providerID, ChannelID: channelID, ModelID: modelID, Protocol: "openai", Source: "manual",
+		UpstreamModel: "probe-upstream-model", Success: true, HTTPStatus: 200, LatencyMs: 12,
+		Facts: facts, IdempotencyKey: noPriceKey,
+	}); err != nil {
+		t.Fatalf("account reliable probe without pricing: %v", err)
+	}
+	var usageReliable bool
+	var costAmount pgtype.Numeric
 	if err := pool.QueryRow(ctx, `
-		SELECT status, reconciliation_ledger_entry_id
-		FROM provider_cost_risks
-		WHERE provider_id = $1 AND source_type = 'probe'
-	`, providerID).Scan(&riskStatus, &reconciliationEntryID); err != nil {
-		t.Fatalf("get reconciled probe risk: %v", err)
+		SELECT usage_reliable, cost_amount
+		FROM provider_probe_records
+		WHERE idempotency_key = $1
+	`, noPriceKey).Scan(&usageReliable, &costAmount); err != nil {
+		t.Fatalf("get reliable probe without pricing: %v", err)
 	}
-	if riskStatus != RiskStatusReconciled || reconciliationEntryID != adjustment.ID {
-		t.Fatalf("expected probe risk reconciled by entry %d, got status=%q entry=%d", adjustment.ID, riskStatus, reconciliationEntryID)
+	if !usageReliable || costAmount.Valid {
+		t.Fatalf("expected reliable usage with unknown cost, got reliable=%v cost=%+v", usageReliable, costAmount)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM provider_ledger_entries WHERE provider_id = $1 AND entry_type = 'probe_debit'`, providerID).Scan(&probeDebits); err != nil {
+		t.Fatalf("count probe debits after unknown cost: %v", err)
+	}
+	if probeDebits != 1 {
+		t.Fatalf("unknown probe cost must not create a debit, got %d", probeDebits)
 	}
 }
 

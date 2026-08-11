@@ -276,7 +276,7 @@ ORDER BY id;
 SELECT
     c.id, c.provider_id, c.name, c.protocol, c.adapter_key, p.origin,
     c.credential, c.status, c.priority, c.created_at, c.updated_at,
-    c.concurrency_limit, c.upstream_bills_on_disconnect,
+    c.concurrency_limit,
     c.response_timeout_ms, c.first_token_timeout_ms,
     c.sticky_enabled, c.sticky_ttl_ms,
     c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
@@ -505,13 +505,13 @@ JOIN logged ON logged.channel_id = current_state.id;
 INSERT INTO channels (
     provider_id, name, protocol, adapter_key, credential, status, priority,
     response_timeout_ms, first_token_timeout_ms, concurrency_limit,
-    upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms
+    sticky_enabled, sticky_ttl_ms
 )
 VALUES (
     sqlc.arg(provider_id), sqlc.arg(name), sqlc.arg(protocol), sqlc.arg(adapter_key),
     sqlc.arg(credential), sqlc.arg(status), sqlc.arg(priority),
     sqlc.narg(response_timeout_ms), sqlc.narg(first_token_timeout_ms), sqlc.narg(concurrency_limit),
-    sqlc.arg(upstream_bills_on_disconnect), sqlc.narg(sticky_enabled), sqlc.narg(sticky_ttl_ms)
+    sqlc.narg(sticky_enabled), sqlc.narg(sticky_ttl_ms)
 )
 RETURNING *;
 
@@ -553,14 +553,6 @@ WHERE id = sqlc.arg(id)
   AND concurrency_limit IS DISTINCT FROM sqlc.narg(concurrency_limit)
 RETURNING *;
 
--- name: SetChannelBillingBehavior :one
--- SetChannelBillingBehavior 设置渠道「断开仍计费」标记。
--- true 表示上游在连接断开后仍会完成生成并计费（sub2api 类中转）；打开后失败/取消路径会记成本敞口。
-UPDATE channels
-SET upstream_bills_on_disconnect = sqlc.arg(upstream_bills_on_disconnect), updated_at = now()
-WHERE id = sqlc.arg(id)
-RETURNING *;
-
 -- name: UpdateChannelCredential :execrows
 -- UpdateChannelCredential 更新 channel 的明文上游凭据；返回受影响行数用于判定 channel 是否存在。
 UPDATE channels
@@ -598,7 +590,7 @@ WHERE id = sqlc.arg(id) AND status = 'archived';
 -- 这四张都是「渠道自身配置」（无请求/账务事实），随渠道硬删一并清理；channel_test_logs 走 ON DELETE CASCADE 自动清。
 -- 外键均为默认 NO ACTION（约束在语句末校验），故 CTE 删子表 + 删主体在单条语句内原子完成：
 -- 子配置先删除，语句末 channels 的删除不会留下悬挂引用。若 channel 仍被请求/账务历史
--- （request_attempts/request_records/cost_snapshots/settlement_recovery_jobs/channel_cost_exposures）引用，
+-- （request_attempts/request_records/cost_snapshots/settlement_recovery_jobs）引用，
 -- 整条语句报 23503 全部回滚，上层降级为 conflict，提示改用停用/保持归档。返回值为 channels 行的受影响数（0 表示 channel 不存在）。
 -- 注：归档时已从 route_channels 线路池移除（ArchiveChannelCascade），故此处无需再清线路池。
 WITH deleted_channel_prices AS (

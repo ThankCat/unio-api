@@ -36,7 +36,6 @@ type ChatLedgerCapturer interface {
 // ChatProviderLedger 定义结算事务内写入 Provider 消费流水所需的最小能力。
 type ChatProviderLedger interface {
 	DebitUsageWithQueries(ctx context.Context, queries *sqlc.Queries, params providerledger.UsageDebitParams) (providerledger.Entry, error)
-	RecordRequestCostRiskWithQueries(ctx context.Context, queries *sqlc.Queries, params providerledger.RequestCostRiskParams) error
 }
 
 // ChatBillingCalculator 定义 chat settlement 计算请求金额所需能力。
@@ -813,9 +812,9 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		)
 	}
 
-	// Provider 内部余额只记录可靠的上游 usage。流式断点使用的是平台估算事实，
-	// 即使已经生成客户侧成本快照，也不能把估算金额当作 Provider 实际成本扣入账本。
-	if s.providerLedger != nil && !facts.UsageSource.IsPartialEstimate() && !numericIsZero(providerCost.TotalCostAmount) {
+	// 只要形成非零 Provider 成本快照，就在同一事务中写入唯一消费流水。
+	// usage_source 明确区分上游真实 usage 与 Gateway partial estimate。
+	if s.providerLedger != nil && !numericIsZero(providerCost.TotalCostAmount) {
 		channelName, err := txQueries.GetChannelName(ctx, params.FinalChannelID)
 		if err != nil {
 			return failure.Wrap(
@@ -833,6 +832,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 			RequestID:        params.RequestRecord.RequestID,
 			ChannelName:      channelName,
 			UpstreamModel:    params.AttemptRecord.UpstreamModel,
+			UsageSource:      facts.UsageSource,
 			Amount:           providerCost.TotalCostAmount,
 			Currency:         costSnapshotRow.Currency,
 			IdempotencyKey:   fmt.Sprintf("provider:usage:%d", costSnapshotRow.ID),
@@ -842,20 +842,6 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 				failure.CodeGatewayChatSettlementFailed,
 				err,
 				failure.WithMessage("write provider usage ledger"),
-			)
-		}
-	}
-	if s.providerLedger != nil && facts.UsageSource.IsPartialEstimate() && !numericIsZero(providerCost.TotalCostAmount) {
-		if err := s.providerLedger.RecordRequestCostRiskWithQueries(ctx, txQueries, providerledger.RequestCostRiskParams{
-			ProviderID: params.FinalProviderID, RequestRecordID: params.RequestRecord.ID,
-			RequestAttemptID: params.AttemptRecord.ID, EstimatedAmount: providerCost.TotalCostAmount,
-			Currency: costSnapshotRow.Currency, ReasonCode: "partial_stream_estimate",
-			Reason: "已向客户交付部分内容，但上游没有返回完整用量，需要人工核对",
-		}); err != nil {
-			return failure.Wrap(
-				failure.CodeGatewayChatSettlementFailed,
-				err,
-				failure.WithMessage("write provider partial stream cost risk"),
 			)
 		}
 	}

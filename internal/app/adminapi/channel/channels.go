@@ -51,13 +51,10 @@ type channelDTO struct {
 	StickyEnabled       *bool  `json:"sticky_enabled"`
 	StickyTTLms         *int64 `json:"sticky_ttl_ms"`
 	// ConcurrencyLimit：渠道在途并发上限（DEC-029）。null=继承并发默认 channel_limit，0=不限，>0=具体上限。
-	ConcurrencyLimit *int64 `json:"concurrency_limit"`
-	// BillsOnDisconnect：上游「断开仍计费」标记。
-	// true 时失败/取消路径记平台成本敞口，纯观测不影响路由与客户计费。
-	BillsOnDisconnect bool    `json:"upstream_bills_on_disconnect"`
-	CreatedAt         string  `json:"created_at"`
-	UpdatedAt         string  `json:"updated_at"`
-	ArchivedAt        *string `json:"archived_at"`
+	ConcurrencyLimit *int64  `json:"concurrency_limit"`
+	CreatedAt        string  `json:"created_at"`
+	UpdatedAt        string  `json:"updated_at"`
+	ArchivedAt       *string `json:"archived_at"`
 	// LastTest*：最近一次主动检测结果（渠道检测，阶段一）。全 null 表示从未检测。
 	LastTestedAt      *string `json:"last_tested_at"`
 	LastTestOK        *bool   `json:"last_test_ok"`
@@ -117,8 +114,6 @@ type createChannelRequest struct {
 	StickyEnabled       *bool         `json:"sticky_enabled"`
 	StickyTTLms         *int64        `json:"sticky_ttl_ms"`
 	ConcurrencyLimit    optionalInt64 `json:"concurrency_limit"`
-	// BillsOnDisconnect 可选：上游「断开仍计费」标记；缺省=false（正常上游）。
-	BillsOnDisconnect *bool `json:"upstream_bills_on_disconnect"`
 }
 
 type updateChannelRequest struct {
@@ -131,8 +126,6 @@ type updateChannelRequest struct {
 	StickyEnabled       *bool         `json:"sticky_enabled"`
 	StickyTTLms         *int64        `json:"sticky_ttl_ms"`
 	ConcurrencyLimit    optionalInt64 `json:"concurrency_limit"`
-	// BillsOnDisconnect 可选：上游「断开仍计费」标记；缺省=不变。
-	BillsOnDisconnect *bool `json:"upstream_bills_on_disconnect"`
 }
 
 type rotateChannelCredentialRequest struct {
@@ -254,8 +247,6 @@ func (h *channelsHandler) create(w http.ResponseWriter, r *http.Request) {
 		StickyTTLms:         req.StickyTTLms,
 		ConcurrencyLimit:    req.ConcurrencyLimit.Value,
 	}
-	in.BillsOnDisconnect = req.BillsOnDisconnect
-
 	c, err := h.service.Create(r.Context(), in)
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -296,8 +287,6 @@ func (h *channelsHandler) update(w http.ResponseWriter, r *http.Request) {
 		CapacityProvided:    req.ConcurrencyLimit.Set,
 		ConcurrencyLimit:    req.ConcurrencyLimit.Value,
 	}
-	in.BillsOnDisconnect = req.BillsOnDisconnect
-
 	c, err := h.service.Update(r.Context(), in)
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -421,7 +410,6 @@ func toChannelDTO(c channel.Channel) channelDTO {
 		StickyEnabled:       c.StickyEnabled,
 		StickyTTLms:         c.StickyTTLms,
 		ConcurrencyLimit:    c.ConcurrencyLimit,
-		BillsOnDisconnect:   c.BillsOnDisconnect,
 		CreatedAt:           c.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:           c.UpdatedAt.UTC().Format(time.RFC3339),
 		ArchivedAt:          formatOptionalTime(c.ArchivedAt),

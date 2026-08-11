@@ -51,10 +51,6 @@ func (s *createStore) UpdateChannel(context.Context, sqlc.UpdateChannelParams) (
 	return sqlc.Channel{}, nil
 }
 
-func (s *createStore) SetChannelBillingBehavior(context.Context, sqlc.SetChannelBillingBehaviorParams) (sqlc.Channel, error) {
-	return sqlc.Channel{}, nil
-}
-
 func (s *createStore) DeleteChannelCascade(context.Context, int64) (int64, error) {
 	return 0, nil
 }

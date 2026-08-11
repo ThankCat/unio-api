@@ -21,7 +21,6 @@ type providerBalanceStoreStub struct {
 	balanceErr  error
 	ledgerRows  []sqlc.ListProviderLedgerEntriesPageRow
 	ledgerArg   sqlc.ListProviderLedgerEntriesPageParams
-	riskRows    []sqlc.ListProviderCostRisksPageRow
 }
 
 func (s *providerBalanceStoreStub) GetProvider(context.Context, int64) (sqlc.Provider, error) {
@@ -45,14 +44,6 @@ func (s *providerBalanceStoreStub) ListProviderLedgerEntriesPage(_ context.Conte
 
 func (s *providerBalanceStoreStub) CountProviderLedgerEntries(context.Context, sqlc.CountProviderLedgerEntriesParams) (int64, error) {
 	return int64(len(s.ledgerRows)), nil
-}
-
-func (s *providerBalanceStoreStub) ListProviderCostRisksPage(context.Context, sqlc.ListProviderCostRisksPageParams) ([]sqlc.ListProviderCostRisksPageRow, error) {
-	return s.riskRows, nil
-}
-
-func (s *providerBalanceStoreStub) CountProviderCostRisks(context.Context, sqlc.CountProviderCostRisksParams) (int64, error) {
-	return int64(len(s.riskRows)), nil
 }
 
 type providerBalanceLedgerStub struct {
@@ -152,7 +143,7 @@ func TestListSupportsProbeDebitAndUsesProbeLabels(t *testing.T) {
 		ledgerRows: []sqlc.ListProviderLedgerEntriesPageRow{{
 			ID: 11, ProviderID: 7, ProviderProbeRecordID: pgtype.Int8{Int64: 31, Valid: true},
 			ProbeChannelID: pgtype.Int8{Int64: 9, Valid: true}, ProbeChannelName: pgtype.Text{String: "Aihub", Valid: true},
-			ProbeUpstreamModel: pgtype.Text{String: "gpt-test", Valid: true}, EntryType: providerledger.EntryTypeProbeDebit,
+			ProbeUpstreamModel: pgtype.Text{String: "gpt-test", Valid: true}, UsageSource: pgtype.Text{String: "upstream_response", Valid: true}, EntryType: providerledger.EntryTypeProbeDebit,
 			Amount: testBalanceNumeric(t, "0.001"), Currency: CurrencyUSD,
 			BalanceBefore: testBalanceNumeric(t, "2"), BalanceAfter: testBalanceNumeric(t, "1.999"),
 			IdempotencyKey: "probe-entry", Reason: "模型探测产生的服务商成本", CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
@@ -166,32 +157,11 @@ func TestListSupportsProbeDebitAndUsesProbeLabels(t *testing.T) {
 	}
 	if total != 1 || len(items) != 1 || items[0].ChannelID == nil || *items[0].ChannelID != 9 ||
 		items[0].ChannelName == nil || *items[0].ChannelName != "Aihub" ||
-		items[0].UpstreamModel == nil || *items[0].UpstreamModel != "gpt-test" {
+		items[0].UpstreamModel == nil || *items[0].UpstreamModel != "gpt-test" ||
+		items[0].UsageSource == nil || *items[0].UsageSource != "upstream_response" {
 		t.Fatalf("probe ledger labels were not merged: total=%d items=%+v", total, items)
 	}
 	if !store.ledgerArg.EntryType.Valid || store.ledgerArg.EntryType.String != providerledger.EntryTypeProbeDebit {
 		t.Fatalf("probe debit filter was not passed through: %+v", store.ledgerArg.EntryType)
-	}
-}
-
-func TestListRisksUsesRequestAttemptModel(t *testing.T) {
-	store := &providerBalanceStoreStub{
-		provider: sqlc.Provider{ID: 7},
-		riskRows: []sqlc.ListProviderCostRisksPageRow{{
-			ID: 12, ProviderID: 7, RequestRecordID: pgtype.Int8{Int64: 21, Valid: true},
-			RequestAttemptID: pgtype.Int8{Int64: 22, Valid: true}, SourceType: providerledger.RiskSourceRequest,
-			ReasonCode: "upstream_timeout", Reason: "上游请求超时，可能已经产生费用，需要人工核对",
-			Status: providerledger.RiskStatusUnresolved, RequestUpstreamModel: pgtype.Text{String: "gpt-request", Valid: true},
-			ChannelName: pgtype.Text{String: "Aihub", Valid: true}, CreatedAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
-		}},
-	}
-	items, total, err := NewService(store, &providerBalanceLedgerStub{}).ListRisks(context.Background(), RiskListParams{
-		ProviderID: 7, Status: providerledger.RiskStatusUnresolved, Limit: 20,
-	})
-	if err != nil {
-		t.Fatalf("list request cost risks: %v", err)
-	}
-	if total != 1 || len(items) != 1 || items[0].UpstreamModel == nil || *items[0].UpstreamModel != "gpt-request" {
-		t.Fatalf("request attempt model was not exposed: total=%d items=%+v", total, items)
 	}
 }

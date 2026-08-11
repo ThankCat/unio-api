@@ -24,13 +24,6 @@ func (s *providerBalanceHandlerStub) Adjust(context.Context, providerbalance.Adj
 func (s *providerBalanceHandlerStub) List(context.Context, providerbalance.ListParams) ([]providerbalance.Entry, int64, error) {
 	return s.entries, int64(len(s.entries)), nil
 }
-func (s *providerBalanceHandlerStub) ListRisks(context.Context, providerbalance.RiskListParams) ([]providerbalance.CostRisk, int64, error) {
-	return nil, 0, nil
-}
-func (s *providerBalanceHandlerStub) RiskSummary(context.Context, int64) (providerbalance.CostRiskSummary, error) {
-	return providerbalance.CostRiskSummary{}, nil
-}
-
 func TestProviderBalanceAdjustmentAndLedgerRoutes(t *testing.T) {
 	created := time.Date(2026, 8, 6, 1, 2, 3, 0, time.UTC)
 	service := &providerBalanceHandlerStub{

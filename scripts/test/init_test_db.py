@@ -439,7 +439,7 @@ WHERE m.model_id = {sql_quote(model_key)}
 INSERT INTO channels (
     provider_id, name, protocol, adapter_key, credential, status, priority,
 	response_timeout_ms, first_token_timeout_ms, concurrency_limit,
-    upstream_bills_on_disconnect, sticky_enabled, sticky_ttl_ms
+    sticky_enabled, sticky_ttl_ms
 )
 SELECT
     p.id,
@@ -452,7 +452,6 @@ SELECT
 	{sql_quote(c.get('response_timeout_ms'))},
 	{sql_quote(c.get('first_token_timeout_ms'))},
     {sql_quote(c.get('concurrency_limit'))},
-    {sql_quote(bool(c.get('upstream_bills_on_disconnect', False)))},
     {sticky_enabled_sql},
     {sticky_ttl_sql}
 FROM providers p
@@ -466,7 +465,6 @@ ON CONFLICT (provider_id, name) DO UPDATE SET
 	response_timeout_ms = EXCLUDED.response_timeout_ms,
 	first_token_timeout_ms = EXCLUDED.first_token_timeout_ms,
     concurrency_limit = EXCLUDED.concurrency_limit,
-    upstream_bills_on_disconnect = EXCLUDED.upstream_bills_on_disconnect,
     sticky_enabled = {sticky_enabled_update},
     sticky_ttl_ms = {sticky_ttl_update},
     config_revision = channels.config_revision + CASE WHEN ROW(
@@ -651,7 +649,6 @@ SELECT json_build_object(
           'concurrency_limit', c.concurrency_limit,
           'sticky_enabled', c.sticky_enabled,
           'sticky_ttl_ms', c.sticky_ttl_ms,
-          'upstream_bills_on_disconnect', c.upstream_bills_on_disconnect,
           'cost_multiplier', (
               SELECT ccm.multiplier::text
               FROM channel_cost_multipliers ccm

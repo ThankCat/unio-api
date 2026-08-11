@@ -873,7 +873,6 @@ scan:
 				streamFacts == nil && !emitted {
 				logAttemptResult(err, false)
 				l.MarkAttemptFailed(ctx, attemptRecord, FailureCodeOrFallback(err, string(failure.CodeGatewayBreakerStoreUnavailable)), err)
-				l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, err)
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 					return result, releaseErr
@@ -936,9 +935,6 @@ scan:
 						return finishPartial(PartialReasonClientCanceled, metrics.ChatOutcomeCanceled, metrics.StreamEventCanceled, false, err)
 					}
 
-					// 有效 Token 交付前取消 + bill-on-disconnect 渠道：上游照常生成并计费，记平台成本敞口（阶段一）。
-					l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, err)
-
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 						return result, releaseErr
@@ -961,8 +957,6 @@ scan:
 					// 已 emit 帧但无可用输出内容（仅控制帧/空内容后上游中断）：视同「上游流中断、无可用输出」——
 					// 一分钱不扣、全额释放预扣（对齐 new-api PR #4199）。
 					l.MarkAttemptFailed(ctx, attemptRecord, "stream_adapter_error", err)
-					// 客户侧不扣费，但 bill-on-disconnect 上游已开始生成、大概率照常计费：记平台成本敞口（阶段一）。
-					l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, err)
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 						return result, releaseErr
@@ -976,10 +970,6 @@ scan:
 
 				// 首 token 前失败：attempt 记失败；客户端还没看到上游内容，只有这时允许同模型 fallback。
 				l.MarkAttemptFailed(ctx, attemptRecord, "stream_adapter_error", err)
-
-				// bill-on-disconnect 渠道的 timeout/5xx：上游可能已生成并计费，记平台成本敞口（阶段一）。
-				// 注意在 fallback 判定之前记录：即使换渠道成功，本渠道的敞口已经产生。
-				l.RecordCostExposure(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, err)
 
 				retryable := r.retryClassifier.IsRetryable(err)
 				logAttemptResult(err, retryable)
@@ -1019,7 +1009,6 @@ scan:
 				if emitted {
 					// 仅前导帧已交付但没有有效 Token：不进入 partial settlement。
 					l.MarkAttemptFailed(ctx, attemptRecord, "stream_usage_missing", failure.New(failure.CodeGatewayStreamUsageMissing))
-					l.RecordUsageMissingCostRisk(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, "stream_final_usage_missing")
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 						return result, releaseErr
@@ -1033,8 +1022,6 @@ scan:
 					failure.CodeGatewayStreamUsageMissing,
 					failure.WithMessage("gateway stream final usage is missing"),
 				)
-				l.RecordUsageMissingCostRisk(ctx, requestRecord, attemptRecord, candidate, params.ConservativeInputTokens, "stream_final_usage_missing")
-
 				if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 					l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
 					return result, releaseErr

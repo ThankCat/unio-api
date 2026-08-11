@@ -45,7 +45,6 @@ type Store interface {
 	GetChannel(ctx context.Context, id int64) (sqlc.Channel, error)
 	CreateChannel(ctx context.Context, arg sqlc.CreateChannelParams) (sqlc.Channel, error)
 	UpdateChannel(ctx context.Context, arg sqlc.UpdateChannelParams) (sqlc.Channel, error)
-	SetChannelBillingBehavior(ctx context.Context, arg sqlc.SetChannelBillingBehaviorParams) (sqlc.Channel, error)
 	DeleteChannelCascade(ctx context.Context, id int64) (int64, error)
 	ArchiveChannel(ctx context.Context, id int64) (int64, error)
 	ListRoutesReferencingChannel(ctx context.Context, channelID int64) ([]sqlc.ListRoutesReferencingChannelRow, error)
@@ -110,12 +109,9 @@ type Channel struct {
 	StickyTTLms         *int64
 	// ConcurrencyLimit 是渠道在途并发上限（DEC-029）：nil=继承并发默认 channel_limit，0=不限，>0=具体上限。
 	ConcurrencyLimit *int64
-	// BillsOnDisconnect 标记上游「断开仍计费」：
-	// true 时失败/取消路径会记平台成本敞口，纯观测不影响路由与客户计费。
-	BillsOnDisconnect bool
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	ArchivedAt        *time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	ArchivedAt       *time.Time
 	// LastTested* 是最近一次主动检测结果（渠道检测，阶段一）：全 nil 表示从未检测。
 	// 仅由检测上游源站写入，不参与路由/计费，也不改渠道启停状态。
 	LastTestedAt      *time.Time
@@ -184,8 +180,6 @@ type CreateInput struct {
 	StickyEnabled       *bool
 	StickyTTLms         *int64
 	ConcurrencyLimit    *int64
-	// BillsOnDisconnect 非 nil 时设置「断开仍计费」标记。
-	BillsOnDisconnect *bool
 }
 
 // UpdateInput 是更新 channel 的入参；protocol、adapter_key 与凭据不在此修改。
@@ -202,8 +196,6 @@ type UpdateInput struct {
 	// CapacityProvided 区分「字段缺省=保持不变」与「显式 null=继承全局默认」。
 	CapacityProvided bool
 	ConcurrencyLimit *int64
-	// BillsOnDisconnect 非 nil 时设置「断开仍计费」标记。
-	BillsOnDisconnect *bool
 }
 
 // RotateCredentialInput 是轮换 channel 上游凭据的入参。
@@ -438,24 +430,19 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		return Channel{}, conflict("enabled channel requires an enabled provider")
 	}
 
-	billsOnDisconnect := false
-	if in.BillsOnDisconnect != nil {
-		billsOnDisconnect = *in.BillsOnDisconnect
-	}
 	row, err := s.store.CreateChannel(ctx, sqlc.CreateChannelParams{
-		ProviderID:                in.ProviderID,
-		Name:                      name,
-		Protocol:                  protocol,
-		AdapterKey:                adapterKey,
-		Credential:                strings.TrimSpace(in.Credential),
-		Status:                    status,
-		Priority:                  in.Priority,
-		ResponseTimeoutMs:         timeoutParam(in.ResponseTimeoutMs),
-		FirstTokenTimeoutMs:       timeoutParam(in.FirstTokenTimeoutMs),
-		ConcurrencyLimit:          rateLimitParam(capacity.Concurrency),
-		UpstreamBillsOnDisconnect: billsOnDisconnect,
-		StickyEnabled:             boolParam(in.StickyEnabled),
-		StickyTtlMs:               nullableInt8Param(in.StickyTTLms),
+		ProviderID:          in.ProviderID,
+		Name:                name,
+		Protocol:            protocol,
+		AdapterKey:          adapterKey,
+		Credential:          strings.TrimSpace(in.Credential),
+		Status:              status,
+		Priority:            in.Priority,
+		ResponseTimeoutMs:   timeoutParam(in.ResponseTimeoutMs),
+		FirstTokenTimeoutMs: timeoutParam(in.FirstTokenTimeoutMs),
+		ConcurrencyLimit:    rateLimitParam(capacity.Concurrency),
+		StickyEnabled:       boolParam(in.StickyEnabled),
+		StickyTtlMs:         nullableInt8Param(in.StickyTTLms),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -557,20 +544,6 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 		return Channel{}, storeFailed(err, "update channel")
 	}
 
-	if in.BillsOnDisconnect != nil {
-		flagged, err := s.store.SetChannelBillingBehavior(ctx, sqlc.SetChannelBillingBehaviorParams{
-			ID:                        in.ID,
-			UpstreamBillsOnDisconnect: *in.BillsOnDisconnect,
-		})
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return Channel{}, notFound("channel not found")
-			}
-			return Channel{}, storeFailed(err, "set channel billing behavior")
-		}
-		row = flagged
-	}
-
 	ch := toChannel(row)
 	if payload, payloadErr := CanonicalCapacityPayloadFromChannel(row); payloadErr == nil {
 		ch.RuntimeSyncPending = !s.capacityControlIsActive(ctx, row.ID, row.CapacityRevision, payload)
@@ -638,14 +611,6 @@ func (s *Service) updateWithPublishedCapacity(
 					return conflict("channel capacity changed during publish; retry with current state")
 				}
 				return storeFailed(updateErr, "commit channel capacity")
-			}
-			if in.BillsOnDisconnect != nil {
-				row, updateErr = qtx.SetChannelBillingBehavior(ctx, sqlc.SetChannelBillingBehaviorParams{
-					ID: channelID, UpstreamBillsOnDisconnect: *in.BillsOnDisconnect,
-				})
-				if updateErr != nil {
-					return channelUpdateError(updateErr)
-				}
 			}
 			committedRow = row
 			return nil
@@ -838,7 +803,6 @@ func toChannel(c sqlc.Channel) Channel {
 		ResponseTimeoutMs:   timeoutResult(c.ResponseTimeoutMs),
 		FirstTokenTimeoutMs: timeoutResult(c.FirstTokenTimeoutMs),
 		ConcurrencyLimit:    rateLimitResult(c.ConcurrencyLimit),
-		BillsOnDisconnect:   c.UpstreamBillsOnDisconnect,
 		StickyEnabled:       boolResult(c.StickyEnabled),
 		StickyTTLms:         int8Result(c.StickyTtlMs),
 		CreatedAt:           c.CreatedAt.Time,
@@ -887,7 +851,6 @@ func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 		ResponseTimeoutMs:   timeoutResult(c.ResponseTimeoutMs),
 		FirstTokenTimeoutMs: timeoutResult(c.FirstTokenTimeoutMs),
 		ConcurrencyLimit:    rateLimitResult(c.ConcurrencyLimit),
-		BillsOnDisconnect:   c.UpstreamBillsOnDisconnect,
 		StickyEnabled:       boolResult(c.StickyEnabled),
 		StickyTTLms:         int8Result(c.StickyTtlMs),
 		CreatedAt:           c.CreatedAt.Time,
