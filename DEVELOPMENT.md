@@ -15,7 +15,7 @@
 | 命令 | 行为 |
 | --- | --- |
 | `make help` | 显示 Makefile 中的命令。 |
-| `make infra` | 启动并等待本地 PostgreSQL、Redis、Loki、Alloy 与 Prometheus。 |
+| `make infra` | 启动并等待本地 PostgreSQL、Redis、Loki 与 Alloy。 |
 | `make infra-down` | 停止 Compose 服务；外部命名 volume 保留。 |
 | `make infra-logs` | 跟踪本地基础设施日志。 |
 | `make dev` | 启动 Gateway、Admin、Worker 的热加载进程。 |

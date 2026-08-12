@@ -447,6 +447,8 @@ docker compose \
 | `deploy/env/.env.test` | 业务 / 密钥（gitignore） |
 | `deploy/env/.env.docker` | 镜像名与版本（gitignore） |
 | `deploy/build-image.sh` | 构建指定服务、写入镜像 provenance 并更新该服务 tag |
+| `observability/alloy/config.alloy` | Dev/Test 共用的 Gateway JSONL 采集与 Loki 写入配置 |
+| `observability/loki/` | Dev/Test 共用的 Loki 配置与单租户告警规则 |
 | `/var/www/admin` | Admin 前端静态文件 |
 | `unio-admin/.env.test` | 前端 Test 构建 API 基址 |
 | `unio-admin`：`bun run build:test` | 产出部署用 `dist/` |

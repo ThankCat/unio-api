@@ -200,8 +200,8 @@ services:
     restart: unless-stopped
     logging: *docker-logging
     volumes:
-      - ./loki/config.yaml:/etc/loki/config.yaml:ro
-      - ./loki/rules:/etc/loki/rules:ro
+      - ../observability/loki/config.yaml:/etc/loki/config.yaml:ro
+      - ../observability/loki/rules:/etc/loki/rules:ro
       - loki_data:/loki
     networks:
       - network
@@ -221,7 +221,7 @@ services:
       - no-new-privileges:true
     logging: *docker-logging
     volumes:
-      - ./alloy/test.alloy:/etc/alloy/config.alloy:ro
+      - ../observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
       - gateway_logs:/var/log/unio:ro
       - alloy_data:/var/lib/alloy/data
     depends_on:
