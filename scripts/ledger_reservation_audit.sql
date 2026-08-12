@@ -4,7 +4,8 @@
 --
 -- 用法：
 --   psql "$DATABASE_URL" -f scripts/ledger_reservation_audit.sql
---   docker exec -i unio-postgres psql -U unio -d unio < scripts/ledger_reservation_audit.sql
+--   docker compose --env-file deploy/env/.env.dev -f deploy/compose.dev.yml exec -T postgres \
+--     psql -U unio -d unio < scripts/ledger_reservation_audit.sql
 --
 -- 全部查询只读，走部分索引 idx_ledger_reservations_authorized_created_at，代价与在途请求数同阶。
 --

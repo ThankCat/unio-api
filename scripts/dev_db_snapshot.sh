@@ -7,8 +7,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKUP_DIR="${UNIO_DB_BACKUP_DIR:-$REPO_ROOT/tmp/db-snapshots}"
 COMPOSE_FILE="${UNIO_COMPOSE_FILE:-$REPO_ROOT/deploy/compose.dev.yml}"
 ENV_FILE="${UNIO_ENV_FILE:-$REPO_ROOT/deploy/env/.env.dev}"
-POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-unio-postgres}"
-REDIS_CONTAINER="${REDIS_CONTAINER:-unio-redis}"
+POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-}"
+REDIS_CONTAINER="${REDIS_CONTAINER:-}"
 
 usage() {
   cat <<'EOF'
@@ -46,8 +46,12 @@ require_command() {
 }
 
 compose_up() {
-  ensure_dev_volumes
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d "$@" >/dev/null
+}
+
+compose_container() {
+  local service="$1"
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps -q "$service" | tail -n 1
 }
 
 env_value() {
@@ -60,18 +64,6 @@ load_dev_env_defaults() {
   POSTGRES_DB="${POSTGRES_DB:-$(env_value POSTGRES_DB)}"
   REDIS_PASSWORD="${REDIS_PASSWORD:-$(env_value REDIS_PASSWORD)}"
   REDIS_DB="${REDIS_DB:-$(env_value REDIS_DB)}"
-}
-
-ensure_dev_volumes() {
-  local volume
-  local volume_names=()
-  while IFS= read -r volume; do
-    [[ -n "$volume" ]] && volume_names+=("$volume")
-  done < <(sed -nE 's/^(POSTGRES|REDIS|LOKI|ALLOY|PROMETHEUS)_VOLUME_NAME=(.+)$/\2/p' "$ENV_FILE")
-  ((${#volume_names[@]} == 5)) || fail "Dev 环境文件必须配置 5 个 *_VOLUME_NAME：$ENV_FILE"
-  for volume in "${volume_names[@]}"; do
-    docker volume inspect "$volume" >/dev/null 2>&1 || docker volume create "$volume" >/dev/null
-  done
 }
 
 redis_cli() {
@@ -106,7 +98,20 @@ wait_for_redis() {
 
 ensure_postgres() {
   compose_up postgres
+  if [[ -z "$POSTGRES_CONTAINER" ]]; then
+    POSTGRES_CONTAINER="$(compose_container postgres)"
+  fi
+  [[ -n "$POSTGRES_CONTAINER" ]] || fail "没有找到 Compose postgres 容器"
   wait_for_postgres
+}
+
+ensure_redis() {
+  compose_up redis
+  if [[ -z "$REDIS_CONTAINER" ]]; then
+    REDIS_CONTAINER="$(compose_container redis)"
+  fi
+  [[ -n "$REDIS_CONTAINER" ]] || fail "没有找到 Compose redis 容器"
+  wait_for_redis
 }
 
 validate_config() {
@@ -264,8 +269,7 @@ restore_database() {
     fail "数据库 $POSTGRES_DB 仍有 $connection_count 个活动连接。请停止 Gateway、Admin 和 Worker 后重试"
   fi
 
-  compose_up redis
-  wait_for_redis
+  ensure_redis
 
   restore_db="${POSTGRES_DB}_restore_$(date '+%s')_$$"
   cleanup_restore_db() {

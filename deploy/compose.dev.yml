@@ -1,10 +1,9 @@
-# 固定 Dev 项目名；显式命名的历史容器和 volume 保持不变，避免迁移本地数据。
-name: ${COMPOSE_PROJECT_NAME:-unio_dev}
+# 固定 Dev 项目名；容器由 Compose 自动命名，network 和 volume 使用显式资源名。
+name: ${COMPOSE_PROJECT_NAME:-unio-dev}
 
 services:
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:16-alpine}
-    container_name: unio-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -13,7 +12,7 @@ services:
       - ${POSTGRES_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PUBLISHED_PORT:-5432}:5432
     volumes:
       # 本地开发数据持久化，避免容器重启后数据丢失。
-      - postgres_data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
@@ -22,7 +21,6 @@ services:
 
   redis:
     image: ${REDIS_IMAGE:-redis:7-alpine}
-    container_name: unio-redis
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     command:
@@ -37,7 +35,7 @@ services:
       - ${REDIS_BIND_ADDRESS:-127.0.0.1}:${REDIS_PUBLISHED_PORT:-6380}:6379
     volumes:
       # Redis AOF 数据持久化；计费最终事实仍然不能依赖 Redis。
-      - redis_data:/data
+      - redis-data:/data
     healthcheck:
       test:
         - CMD-SHELL
@@ -53,19 +51,23 @@ services:
 
   loki:
     image: ${LOKI_IMAGE:-grafana/loki:3.5.3}
-    container_name: unio-loki
     command: ["-config.file=/etc/loki/config.yaml"]
+    healthcheck:
+      test: ["CMD", "/busybox/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3100/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
     ports:
       - "127.0.0.1:3100:3100"
     volumes:
       - ../observability/loki/config.yaml:/etc/loki/config.yaml:ro
       - ../observability/loki/rules:/etc/loki/rules:ro
-      - loki_data:/loki
+      - loki-data:/loki
     restart: unless-stopped
 
   alloy:
     image: ${ALLOY_IMAGE:-grafana/alloy:v1.10.2}
-    container_name: unio-alloy
     command:
       - run
       - --server.http.listen-addr=0.0.0.0:12345
@@ -77,21 +79,36 @@ services:
     volumes:
       - ../observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
       - ../logs:/var/log/unio:ro
-      - alloy_data:/var/lib/alloy/data
+      - alloy-data:/var/lib/alloy/data
+    healthcheck:
+      test:
+        - CMD
+        - /usr/bin/bash
+        - -ec
+        - |
+          exec 3<>/dev/tcp/127.0.0.1/12345
+          printf 'GET /-/ready HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3
+          IFS= read -r status <&3
+          [[ "$$status" == "HTTP/1.0 200"* || "$$status" == "HTTP/1.1 200"* ]]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
     depends_on:
-      - loki
+      loki:
+        condition: service_healthy
     restart: unless-stopped
 
+networks:
+  default:
+    name: unio-dev-network
+
 volumes:
-  postgres_data:
-    external: true
-    name: ${POSTGRES_VOLUME_NAME:-unio_postgres_data}
-  redis_data:
-    external: true
-    name: ${REDIS_VOLUME_NAME:-unio_redis_data}
-  alloy_data:
-    external: true
-    name: ${ALLOY_VOLUME_NAME:-unio_alloy_data}
-  loki_data:
-    external: true
-    name: ${LOKI_VOLUME_NAME:-unio_loki_data}
+  postgres-data:
+    name: unio-dev-postgres-data
+  redis-data:
+    name: unio-dev-redis-data
+  alloy-data:
+    name: unio-dev-alloy-data
+  loki-data:
+    name: unio-dev-loki-data

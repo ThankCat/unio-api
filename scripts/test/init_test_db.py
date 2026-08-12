@@ -39,7 +39,7 @@ ROOT = Path(__file__).resolve().parents[2]  # unio-gateway/
 TEST_DB_DIR = Path(__file__).resolve().parent / "test_db"
 DEFAULT_CONFIG = TEST_DB_DIR / "config.local.json"
 EXAMPLE_CONFIG = TEST_DB_DIR / "config.local.example.json"
-DEFAULT_CONTAINER = os.environ.get("POSTGRES_CONTAINER", "unio-postgres")
+DEFAULT_CONTAINER = os.environ.get("POSTGRES_CONTAINER", "unio-dev-postgres-1")
 ALLOWED_PRIORITIES = tuple(range(0, 101, 10))
 
 

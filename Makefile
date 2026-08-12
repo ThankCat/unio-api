@@ -30,7 +30,7 @@ LUA_DIR := internal/platform/breakerstore/lua
 LUACHECK_VERSION := 1.2.0
 STYLUA_VERSION := 2.5.2
 
-.PHONY: help dev dev-gateway dev-admin dev-worker infra infra-down infra-logs ensure-dev-volumes build tidy clean check-env check-air check-lua check-lua-tools
+.PHONY: help dev dev-gateway dev-admin dev-worker infra infra-down infra-logs build tidy clean check-env check-air check-lua check-lua-tools
 
 help: ## 显示可用命令
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-13s\033[0m %s\n", $$1, $$2}'
@@ -73,24 +73,10 @@ check-lua: check-lua-tools ## 检查外置 Redis Lua 的静态错误与格式
 	UNIO_LUA_STATIC_CHECK=1 go test ./internal/platform/breakerstore -run '^TestAssembledLuaScriptsPassLuacheck$$' -count=1
 	stylua --check $(LUA_DIR)
 
-ensure-dev-volumes: check-env
-	@set -a; source "$(DEV_ENV_FILE)"; set +a; \
-	for volume in \
-		"$$POSTGRES_VOLUME_NAME" \
-		"$$REDIS_VOLUME_NAME" \
-		"$$LOKI_VOLUME_NAME" \
-		"$$ALLOY_VOLUME_NAME"; do \
-		if [ -z "$$volume" ]; then \
-			echo "Dev volume name must not be empty"; \
-			exit 1; \
-		fi; \
-		docker volume inspect "$$volume" >/dev/null 2>&1 || docker volume create "$$volume" >/dev/null; \
-	done
-
-infra: ensure-dev-volumes ## 启动本地基础设施（等待 healthy）
+infra: check-env ## 启动本地基础设施（等待 healthy）
 	$(DEV_COMPOSE) up -d --wait
 
-infra-down: ## 停止本地基础设施（保留外部卷）
+infra-down: ## 停止本地基础设施（保留数据卷）
 	$(DEV_COMPOSE) down
 
 infra-logs: ## 跟踪本地基础设施日志

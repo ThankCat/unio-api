@@ -16,7 +16,7 @@
 | --- | --- |
 | `make help` | 显示 Makefile 中的命令。 |
 | `make infra` | 启动并等待本地 PostgreSQL、Redis、Loki 与 Alloy。 |
-| `make infra-down` | 停止 Compose 服务；外部命名 volume 保留。 |
+| `make infra-down` | 停止 Compose 服务；命名 volume 保留。 |
 | `make infra-logs` | 跟踪本地基础设施日志。 |
 | `make dev` | 启动 Gateway、Admin、Worker 的热加载进程。 |
 | `make dev-gateway` | 只启动 Gateway 热加载进程。 |
@@ -83,7 +83,7 @@ docker compose --env-file deploy/env/.env.docker --env-file deploy/env/.env.test
 可以检查迁移结果。Gateway、Admin、Worker、migration 是同一个 Dockerfile 的四个独立 target，各自维护版本
 和构建 provenance；每个 runtime 镜像只包含自己的二进制。同一 Git 仓库不要求四个制品同步升级，修改共享
 代码时则必须按实际依赖范围构建全部受影响服务。Test 在一台服务器运行全部服务，构建制品边界与未来
-Production 保持一致。Test PostgreSQL、Redis、network 和 volume 由 `COMPOSE_PROJECT_NAME` 隔离，不连接本地
+Production 保持一致。Test 使用固定的 `unio-test` 项目、network 和 volume 名称与 Dev 隔离，不连接本地
 开发数据。停止环境时使用 `down` 保留 Test 数据卷；仅在确认不再需要 Test 数据时才使用 `down --volumes`。
 
 Nginx 是 Test 环境唯一映射到宿主机的 HTTP 入口，默认地址为 `http://127.0.0.1:18080`。按 Host 分流：
@@ -108,7 +108,7 @@ Admin 前端静态文件放在宿主机 `/var/www/admin`（compose 只读挂载�
 
 Test 日志分为两条独立路径：所有容器 stdout/stderr 使用 Docker `json-file` driver，并由 `.env.docker` 中的
 `DOCKER_LOG_MAX_SIZE`、`DOCKER_LOG_MAX_FILE` 控制轮转；Gateway 的结构化 `gateway.jsonl` 写入
-`gateway_logs` volume，由 Alloy 只读采集并发送到 Loki。Alloy 不采集 Gateway stdout，避免 Loki 中重复日志。
+Dev 的 `unio-dev-gateway-logs` volume、Test 的 `unio-test-gateway-logs` volume 均由 Alloy 只读采集并发送到 Loki。Alloy 不采集 Gateway stdout，避免 Loki 中重复日志。
 Loki 默认保留 14 天，Admin 通过 Compose 内网地址 `http://loki:3100` 查询。
 
 ## 目录

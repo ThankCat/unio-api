@@ -47,7 +47,7 @@ MIGRATE_TOOL_IMAGE=migrate:test
 EOF
 
 cat >"$repo/deploy/env/.env.test" <<'EOF'
-COMPOSE_PROJECT_NAME=unio_test
+COMPOSE_PROJECT_NAME=unio-test
 EOF
 
 cat >"$fake_bin/docker" <<'EOF'

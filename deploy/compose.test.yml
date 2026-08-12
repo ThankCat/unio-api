@@ -1,5 +1,5 @@
-# 固定 Test 项目名，使 network 和 volume 与其他环境隔离。
-name: ${COMPOSE_PROJECT_NAME:-unio_test}
+# 固定 Test 项目名；容器由 Compose 自动命名，network 和 volume 使用显式资源名。
+name: ${COMPOSE_PROJECT_NAME:-unio-test}
 
 # x-* 是 Compose 扩展模板，不会创建容器。
 x-docker-logging: &docker-logging
@@ -56,11 +56,11 @@ services:
     restart: unless-stopped
     logging: *docker-logging
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
     ports:
       - ${POSTGRES_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PUBLISHED_PORT:-15432}:5432
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 5s
       timeout: 3s
       retries: 20
@@ -79,11 +79,15 @@ services:
     restart: unless-stopped
     logging: *docker-logging
     volumes:
-      - redis_data:/data
+      - redis-data:/data
     ports:
       - ${REDIS_BIND_ADDRESS:-127.0.0.1}:${REDIS_PUBLISHED_PORT:-16379}:6379
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      test:
+        [
+          "CMD-SHELL",
+          'redis-cli --no-auth-warning -a "$$REDIS_PASSWORD" ping | grep -q PONG',
+        ]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -130,9 +134,10 @@ services:
       - "8520"
     # JSONL 持久化；stdout 仍由 Docker 单独记录。
     volumes:
-      - gateway_logs:/var/log/unio
+      - gateway-logs:/var/log/unio
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8520/readyz"]
+      test:
+        ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8520/readyz"]
       interval: 10s
       timeout: 3s
       retries: 12
@@ -147,7 +152,15 @@ services:
     expose:
       - "8521"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8521/healthz"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "http://127.0.0.1:8521/healthz",
+        ]
       interval: 10s
       timeout: 3s
       retries: 12
@@ -179,7 +192,15 @@ services:
     ports:
       - ${NGINX_BIND_ADDRESS:-127.0.0.1}:${NGINX_PUBLISHED_PORT:-18080}:8080
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/nginx-healthz"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "http://127.0.0.1:8080/nginx-healthz",
+        ]
       interval: 10s
       timeout: 3s
       retries: 12
@@ -197,12 +218,18 @@ services:
     image: ${LOKI_IMAGE}
     command:
       - -config.file=/etc/loki/config.yaml
+    healthcheck:
+      test: ["CMD", "/busybox/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3100/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
     restart: unless-stopped
     logging: *docker-logging
     volumes:
       - ../observability/loki/config.yaml:/etc/loki/config.yaml:ro
       - ../observability/loki/rules:/etc/loki/rules:ro
-      - loki_data:/loki
+      - loki-data:/loki
     networks:
       - network
 
@@ -222,24 +249,44 @@ services:
     logging: *docker-logging
     volumes:
       - ../observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
-      - gateway_logs:/var/log/unio:ro
-      - alloy_data:/var/lib/alloy/data
+      - gateway-logs:/var/log/unio:ro
+      - alloy-data:/var/lib/alloy/data
+    healthcheck:
+      test:
+        - CMD
+        - /usr/bin/bash
+        - -ec
+        - |
+          exec 3<>/dev/tcp/127.0.0.1/12345
+          printf 'GET /-/ready HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3
+          IFS= read -r status <&3
+          [[ "$$status" == "HTTP/1.0 200"* || "$$status" == "HTTP/1.1 200"* ]]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
     depends_on:
       gateway:
         condition: service_started
       loki:
-        condition: service_started
+        condition: service_healthy
     networks:
       - network
 
 networks:
   # 服务间通信专用网络。
   network:
+    name: unio-test-network
 
 volumes:
   # `down` 保留；只有 `down --volumes` 才删除。
-  postgres_data:
-  redis_data:
-  gateway_logs:
-  loki_data:
-  alloy_data:
+  postgres-data:
+    name: unio-test-postgres-data
+  redis-data:
+    name: unio-test-redis-data
+  gateway-logs:
+    name: unio-test-gateway-logs
+  loki-data:
+    name: unio-test-loki-data
+  alloy-data:
+    name: unio-test-alloy-data

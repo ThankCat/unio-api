@@ -133,7 +133,7 @@ openssl rand -hex 32
 ### 4.3 `.env.test` —— 保持默认即可（与当前架构一致）
 
 ```bash
-COMPOSE_PROJECT_NAME=unio_test
+COMPOSE_PROJECT_NAME=unio-test
 NGINX_BIND_ADDRESS=127.0.0.1
 POSTGRES_BIND_ADDRESS=127.0.0.1
 REDIS_BIND_ADDRESS=127.0.0.1
@@ -225,7 +225,7 @@ docker compose \
   ps
 ```
 
-预期：`nginx` / `gateway` / `admin` / `postgres` / `redis` 为 healthy；网络名形如 `unio_test_network`；nginx 端口为 `127.0.0.1:18080->8080`。
+预期：`nginx` / `gateway` / `admin` / `postgres` / `redis` 为 healthy；网络名为 `unio-test-network`；nginx 端口为 `127.0.0.1:18080->8080`。
 
 ---
 
@@ -387,7 +387,7 @@ git pull --ff-only
 docker compose \
   --env-file deploy/env/.env.docker \
   --env-file deploy/env/.env.test \
-  -p unio_test \
+  -p unio-test \
   -f deploy/compose.test.yml \
   up -d --no-build --no-deps --force-recreate --wait admin
 ```
@@ -485,6 +485,6 @@ docker compose \
 | Admin API | `:8521`，路径 `/v1` | 同左，经 `test-admin` 暴露 |
 | Admin 前端 | Vite dev，`.env.local` → `http://127.0.0.1:8521` | 静态托管，`.env.test` → `https://test-admin.unioapi.com` |
 | 入口 | 直连端口 | Cloudflare → Caddy → compose nginx |
-| 数据 | 本地 Compose / 本机 DB | `COMPOSE_PROJECT_NAME=unio_test` 隔离卷 |
+| 数据 | 本地 Compose / 本机 DB | `COMPOSE_PROJECT_NAME=unio-test` 隔离卷 |
 
 本地开发继续用仓库根目录 `.env` 与 `make dev` / `bun dev`；Test 只使用 `deploy/env/*` 与 `build:test` 产物。
