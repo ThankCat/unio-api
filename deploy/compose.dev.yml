@@ -80,23 +80,6 @@ services:
       - alloy_data:/var/lib/alloy/data
     depends_on:
       - loki
-      - prometheus
-    restart: unless-stopped
-
-  prometheus:
-    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.5.0}
-    container_name: unio-prometheus
-    command:
-      - --config.file=/etc/prometheus/prometheus.yaml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=14d
-      - --web.enable-remote-write-receiver
-    ports:
-      - "127.0.0.1:9090:9090"
-    volumes:
-      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
-      - ./prometheus/rules:/etc/prometheus/rules:ro
-      - prometheus_data:/prometheus
     restart: unless-stopped
 
 volumes:
@@ -112,6 +95,3 @@ volumes:
   loki_data:
     external: true
     name: ${LOKI_VOLUME_NAME:-unio_loki_data}
-  prometheus_data:
-    external: true
-    name: ${PROMETHEUS_VOLUME_NAME:-unio_prometheus_data}

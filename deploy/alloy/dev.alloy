@@ -62,29 +62,3 @@ loki.write "local" {
 		max_backoff_retries = 100000
 	}
 }
-
-prometheus.exporter.unix "log_filesystem" {
-	set_collectors = ["filesystem"]
-}
-
-prometheus.scrape "observability" {
-	targets = array.concat(
-		[{
-			__address__ = "127.0.0.1:12345",
-			job         = "alloy",
-		}, {
-			__address__ = "loki:3100",
-			job         = "loki",
-		}],
-		prometheus.exporter.unix.log_filesystem.targets,
-	)
-
-	forward_to      = [prometheus.remote_write.local.receiver]
-	scrape_interval = "15s"
-}
-
-prometheus.remote_write "local" {
-	endpoint {
-		url = "http://prometheus:9090/api/v1/write"
-	}
-}

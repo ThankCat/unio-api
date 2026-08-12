@@ -79,8 +79,7 @@ ensure-dev-volumes: check-env
 		"$$POSTGRES_VOLUME_NAME" \
 		"$$REDIS_VOLUME_NAME" \
 		"$$LOKI_VOLUME_NAME" \
-		"$$ALLOY_VOLUME_NAME" \
-		"$$PROMETHEUS_VOLUME_NAME"; do \
+		"$$ALLOY_VOLUME_NAME"; do \
 		if [ -z "$$volume" ]; then \
 			echo "Dev volume name must not be empty"; \
 			exit 1; \
