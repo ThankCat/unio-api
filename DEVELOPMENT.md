@@ -3,20 +3,21 @@
 ## 环境
 
 - `go.mod` 声明项目使用 Go `1.26.5`。
-- 本地 PostgreSQL 与 Redis 可由 Docker Compose 启动。
+- 本地 PostgreSQL、Redis 与观测组件可由 `deploy/compose.dev.yml` 启动。
 - 热加载命令需要 `air`：`go install github.com/air-verse/air@latest`。
 - 重新生成数据库访问代码时使用 sqlc；当前生成文件标记的版本为 `1.31.1`。
 
-复制 `.env.example` 为 `.env` 并填写本地配置。Makefile 在启动进程前把该文件加载为环境变量。
+复制 `deploy/env/.env.dev.example` 为 `deploy/env/.env.dev` 并填写本地配置。Makefile 在启动进程前把该文件加载为环境变量。
+仓库根目录不提供默认 Compose 文件；Dev 和 Test 命令都必须显式选择对应配置，避免在服务器误启动开发栈。
 
 ## 常用命令
 
 | 命令 | 行为 |
 | --- | --- |
 | `make help` | 显示 Makefile 中的命令。 |
-| `make infra` | 启动并等待本地 PostgreSQL 16 与 Redis 7。 |
-| `make infra-down` | 停止 Compose 服务；命名 volume 保留。 |
-| `make infra-logs` | 跟踪 PostgreSQL 与 Redis 日志。 |
+| `make infra` | 启动并等待本地 PostgreSQL、Redis、Loki、Alloy 与 Prometheus。 |
+| `make infra-down` | 停止 Compose 服务；外部命名 volume 保留。 |
+| `make infra-logs` | 跟踪本地基础设施日志。 |
 | `make dev` | 启动 Gateway、Admin、Worker 的热加载进程。 |
 | `make dev-gateway` | 只启动 Gateway 热加载进程。 |
 | `make dev-admin` | 只启动 Admin 热加载进程。 |
@@ -42,9 +43,9 @@
 完整步骤（架构、Cloudflare、Caddy、环境变量、前端发布与排障）见
 **[deploy/TEST-DEPLOY.md](./deploy/TEST-DEPLOY.md)**。
 
-以下为摘要。Test 部署使用 `deploy/compose.test.yml`，与根目录的本地开发 Compose 分离。首次使用时从
+以下为摘要。Test 部署使用 `deploy/compose.test.yml`，与 `deploy/compose.dev.yml` 的本地开发 Compose 分离。首次使用时从
 `deploy/env/.env.docker.example` 和 `deploy/env/.env.test.example` 分别创建实际环境文件并替换占位密码。
-实际的 `.env.docker`、`.env.test` 已由 `.gitignore` 排除；包含 Test 凭据的文件权限应设置为 `600`。
+实际的 `.env.dev`、`.env.docker`、`.env.test` 已由 `.gitignore` 排除；包含凭据的文件权限应设置为 `600`。
 
 四个发布镜像独立维护 tag。构建单个服务时显式提供新 tag：
 

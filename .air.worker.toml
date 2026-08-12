@@ -1,5 +1,5 @@
 # air 热加载配置：worker-server（后台任务，不服务公网 HTTP）。
-# 不需要 HTTP 端口；DATABASE_URL 等由 Makefile 从 .env 注入。
+# 不需要 HTTP 端口；DATABASE_URL 等由 Makefile 从 deploy/env/.env.dev 注入。
 root = "."
 tmp_dir = "tmp"
 

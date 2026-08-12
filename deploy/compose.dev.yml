@@ -1,0 +1,117 @@
+# 固定 Dev 项目名；显式命名的历史容器和 volume 保持不变，避免迁移本地数据。
+name: ${COMPOSE_PROJECT_NAME:-unio_dev}
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    container_name: unio-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - ${POSTGRES_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PUBLISHED_PORT:-5432}:5432
+    volumes:
+      # 本地开发数据持久化，避免容器重启后数据丢失。
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: ${REDIS_IMAGE:-redis:7-alpine}
+    container_name: unio-redis
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+        fi
+        exec redis-server --appendonly yes
+    ports:
+      - ${REDIS_BIND_ADDRESS:-127.0.0.1}:${REDIS_PUBLISHED_PORT:-6380}:6379
+    volumes:
+      # Redis AOF 数据持久化；计费最终事实仍然不能依赖 Redis。
+      - redis_data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          if [ -n "$$REDIS_PASSWORD" ]; then
+            redis-cli --no-auth-warning -a "$$REDIS_PASSWORD" ping | grep -q PONG
+          else
+            redis-cli ping | grep -q PONG
+          fi
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  loki:
+    image: ${LOKI_IMAGE:-grafana/loki:3.5.3}
+    container_name: unio-loki
+    command: ["-config.file=/etc/loki/config.yaml"]
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - ./loki/config.yaml:/etc/loki/config.yaml:ro
+      - ./loki/rules:/etc/loki/rules:ro
+      - loki_data:/loki
+    restart: unless-stopped
+
+  alloy:
+    image: ${ALLOY_IMAGE:-grafana/alloy:v1.10.2}
+    container_name: unio-alloy
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - --stability.level=experimental
+      - /etc/alloy/config.alloy
+    ports:
+      - "127.0.0.1:12345:12345"
+    volumes:
+      - ./alloy/dev.alloy:/etc/alloy/config.alloy:ro
+      - ../logs:/var/log/unio:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      - loki
+      - prometheus
+    restart: unless-stopped
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.5.0}
+    container_name: unio-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=14d
+      - --web.enable-remote-write-receiver
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    external: true
+    name: ${POSTGRES_VOLUME_NAME:-unio_postgres_data}
+  redis_data:
+    external: true
+    name: ${REDIS_VOLUME_NAME:-unio_redis_data}
+  alloy_data:
+    external: true
+    name: ${ALLOY_VOLUME_NAME:-unio_alloy_data}
+  loki_data:
+    external: true
+    name: ${LOKI_VOLUME_NAME:-unio_loki_data}
+  prometheus_data:
+    external: true
+    name: ${PROMETHEUS_VOLUME_NAME:-unio_prometheus_data}

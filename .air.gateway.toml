@@ -1,6 +1,6 @@
 # air 热加载配置：gateway-server（服务 /v1/*）。
-# 监听端口来自 .env 的 GATEWAY_HTTP_ADDR；DATABASE_URL、REDIS_ADDR 等也由 Makefile
-# 在启动 air 前 source .env 注入，air 子进程继承这些环境变量，这里不重复声明。
+# 监听端口来自 deploy/env/.env.dev 的 GATEWAY_HTTP_ADDR；DATABASE_URL、REDIS_ADDR 等
+# 也由 Makefile 在启动 air 前注入，air 子进程继承这些环境变量，这里不重复声明。
 root = "."
 tmp_dir = "tmp"
 

@@ -22,7 +22,7 @@ Gateway 的产品边界、公开契约、协议兼容、Provider 适配、请求
 ## 本地启动
 
 ```bash
-cp .env.example .env
+cp deploy/env/.env.dev.example deploy/env/.env.dev
 make infra
 make dev
 ```

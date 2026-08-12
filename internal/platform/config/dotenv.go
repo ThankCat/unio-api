@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// loadDotEnvIfNeeded 在本地开发时自动 merge 工作区 .env（仅填充尚未设置的环境变量）。
+// loadDotEnvIfNeeded 在本地开发时自动 merge deploy/env/.env.dev（仅填充尚未设置的环境变量）。
 // 避免 VS Code/Cursor Go 调试在 integratedTerminal 下把 envFile 展开成超长 /usr/bin/env 命令而被截断。
 // 生产环境应通过真实环境变量注入；设 UNIO_SKIP_DOTENV=true 可显式关闭。
 func loadDotEnvIfNeeded() {
@@ -14,7 +14,11 @@ func loadDotEnvIfNeeded() {
 		return
 	}
 
-	for _, path := range []string{".env", "../.env", "../../.env"} {
+	for _, path := range []string{
+		"deploy/env/.env.dev",
+		"../deploy/env/.env.dev",
+		"../../deploy/env/.env.dev",
+	} {
 		if mergeDotEnvFile(path) {
 			return
 		}

@@ -5,12 +5,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKUP_DIR="${UNIO_DB_BACKUP_DIR:-$REPO_ROOT/tmp/db-snapshots}"
-COMPOSE_FILE="${UNIO_COMPOSE_FILE:-$REPO_ROOT/docker-compose.yml}"
+COMPOSE_FILE="${UNIO_COMPOSE_FILE:-$REPO_ROOT/deploy/compose.dev.yml}"
+ENV_FILE="${UNIO_ENV_FILE:-$REPO_ROOT/deploy/env/.env.dev}"
 POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-unio-postgres}"
-POSTGRES_USER="${POSTGRES_USER:-unio}"
-POSTGRES_DB="${POSTGRES_DB:-unio}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-unio-redis}"
-REDIS_DB="${REDIS_DB:-0}"
 
 usage() {
   cat <<'EOF'
@@ -32,7 +30,7 @@ usage() {
   - restore 前必须停止 Gateway、Admin 和 Worker；检测到活动连接时脚本会拒绝执行。
 
 可选环境变量：
-  UNIO_DB_BACKUP_DIR, UNIO_COMPOSE_FILE,
+  UNIO_DB_BACKUP_DIR, UNIO_COMPOSE_FILE, UNIO_ENV_FILE,
   POSTGRES_CONTAINER, POSTGRES_USER, POSTGRES_DB,
   REDIS_CONTAINER, REDIS_DB
 EOF
@@ -48,7 +46,40 @@ require_command() {
 }
 
 compose_up() {
-  docker compose -f "$COMPOSE_FILE" up -d "$@" >/dev/null
+  ensure_dev_volumes
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d "$@" >/dev/null
+}
+
+env_value() {
+  local key="$1"
+  sed -n "s/^${key}=//p" "$ENV_FILE" | tail -n 1
+}
+
+load_dev_env_defaults() {
+  POSTGRES_USER="${POSTGRES_USER:-$(env_value POSTGRES_USER)}"
+  POSTGRES_DB="${POSTGRES_DB:-$(env_value POSTGRES_DB)}"
+  REDIS_PASSWORD="${REDIS_PASSWORD:-$(env_value REDIS_PASSWORD)}"
+  REDIS_DB="${REDIS_DB:-$(env_value REDIS_DB)}"
+}
+
+ensure_dev_volumes() {
+  local volume
+  local volume_names=()
+  while IFS= read -r volume; do
+    [[ -n "$volume" ]] && volume_names+=("$volume")
+  done < <(sed -nE 's/^(POSTGRES|REDIS|LOKI|ALLOY|PROMETHEUS)_VOLUME_NAME=(.+)$/\2/p' "$ENV_FILE")
+  ((${#volume_names[@]} == 5)) || fail "Dev 环境文件必须配置 5 个 *_VOLUME_NAME：$ENV_FILE"
+  for volume in "${volume_names[@]}"; do
+    docker volume inspect "$volume" >/dev/null 2>&1 || docker volume create "$volume" >/dev/null
+  done
+}
+
+redis_cli() {
+  local args=(docker exec "$REDIS_CONTAINER" redis-cli --no-auth-warning)
+  if [[ -n "$REDIS_PASSWORD" ]]; then
+    args+=(-a "$REDIS_PASSWORD")
+  fi
+  "${args[@]}" -n "$REDIS_DB" "$@"
 }
 
 wait_for_postgres() {
@@ -65,7 +96,7 @@ wait_for_postgres() {
 wait_for_redis() {
   local attempt
   for attempt in {1..30}; do
-    if docker exec "$REDIS_CONTAINER" redis-cli -n "$REDIS_DB" PING 2>/dev/null | grep -qx PONG; then
+    if redis_cli PING 2>/dev/null | grep -qx PONG; then
       return 0
     fi
     sleep 1
@@ -79,6 +110,9 @@ ensure_postgres() {
 }
 
 validate_config() {
+  [[ -f "$COMPOSE_FILE" ]] || fail "Dev Compose 文件不存在：$COMPOSE_FILE"
+  [[ -f "$ENV_FILE" ]] || fail "Dev 环境文件不存在：$ENV_FILE"
+  load_dev_env_defaults
   [[ "$POSTGRES_USER" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fail "POSTGRES_USER 不是安全的 PostgreSQL 标识符"
   [[ "$POSTGRES_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fail "POSTGRES_DB 不是安全的 PostgreSQL 标识符"
   [[ "$REDIS_DB" =~ ^[0-9]+$ ]] || fail "REDIS_DB 必须是非负整数"
@@ -278,7 +312,7 @@ restore_database() {
   trap - EXIT
 
   printf '正在清空 Redis DB %s 的旧运行态\n' "$REDIS_DB"
-  docker exec "$REDIS_CONTAINER" redis-cli -n "$REDIS_DB" FLUSHDB >/dev/null
+  redis_cli FLUSHDB >/dev/null
 
   printf '恢复完成：%s\n' "$backup_file"
   printf '恢复后数据库大小：%s\n' "$restored_size"

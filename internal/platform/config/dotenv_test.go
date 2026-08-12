@@ -54,3 +54,25 @@ func TestLoadDotEnvIfNeededSkipsWhenDisabled(t *testing.T) {
 		t.Fatalf("expected skip, got DATABASE_URL=%q", got)
 	}
 }
+
+func TestLoadDotEnvIfNeededLoadsDevEnvFromRepositoryRoot(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, "deploy", "env")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, ".env.dev"), []byte("DATABASE_URL=postgres://dev/unio\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(dir)
+	t.Setenv("UNIO_SKIP_DOTENV", "false")
+	t.Setenv("DATABASE_URL", "")
+	os.Unsetenv("DATABASE_URL")
+
+	loadDotEnvIfNeeded()
+
+	if got := os.Getenv("DATABASE_URL"); got != "postgres://dev/unio" {
+		t.Fatalf("expected Dev env to load, got %q", got)
+	}
+}

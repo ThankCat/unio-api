@@ -200,8 +200,8 @@ services:
     restart: unless-stopped
     logging: *docker-logging
     volumes:
-      - ../deployments/observability/loki/config.yaml:/etc/loki/config.yaml:ro
-      - ../deployments/observability/loki/rules:/etc/loki/rules:ro
+      - ./loki/config.yaml:/etc/loki/config.yaml:ro
+      - ./loki/rules:/etc/loki/rules:ro
       - loki_data:/loki
     networks:
       - network
