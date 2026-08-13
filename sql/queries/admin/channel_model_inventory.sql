@@ -266,13 +266,19 @@ SELECT * FROM channel_model_verification_items
 WHERE run_id = sqlc.arg(run_id)
 ORDER BY id;
 
+-- name: StartChannelModelVerificationItem :one
+UPDATE channel_model_verification_items
+SET status = 'running'
+WHERE id = sqlc.arg(item_id) AND status = 'queued'
+RETURNING *;
+
 -- name: CompleteChannelModelVerificationItem :one
 UPDATE channel_model_verification_items
 SET status = CASE WHEN sqlc.arg(success)::boolean THEN 'succeeded' ELSE 'failed' END,
     success = sqlc.arg(success), http_status = sqlc.arg(http_status),
     error_code = sqlc.narg(error_code), message = sqlc.narg(message), latency_ms = sqlc.arg(latency_ms),
     provider_probe_record_id = sqlc.narg(provider_probe_record_id), completed_at = now()
-WHERE id = sqlc.arg(item_id) AND status = 'queued'
+WHERE id = sqlc.arg(item_id) AND status = 'running'
 RETURNING *;
 
 -- name: SkipRemainingChannelModelVerificationItems :execrows

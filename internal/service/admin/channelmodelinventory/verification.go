@@ -20,7 +20,10 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 )
 
-const maxVerificationBatch = 50
+const (
+	maxVerificationBatch    = 50
+	verificationConcurrency = 5
+)
 
 const (
 	VerificationErrorCredentialInvalid = "credential_invalid"
@@ -59,6 +62,12 @@ type VerificationItem struct {
 	ProviderProbeRecordID *int64
 	CreatedAt             time.Time
 	CompletedAt           *time.Time
+}
+
+type verificationExecutionResult struct {
+	errorCode string
+	message   string
+	err       error
 }
 
 func (s *Service) CreateVerification(
@@ -172,8 +181,10 @@ func (s *Service) ExecuteNextVerification(ctx context.Context) (bool, error) {
 		ID: snapshot.ChannelID, Origin: snapshot.Origin, APIKey: strings.TrimSpace(snapshot.Credential),
 		ProviderSlug: snapshot.ProviderSlug, ResponseTimeout: probeTimeout,
 	}
-	var terminalCode, terminalMessage string
-	for _, item := range items {
+	execute := func(item sqlc.ChannelModelVerificationItem) verificationExecutionResult {
+		if _, startErr := s.queries.StartChannelModelVerificationItem(ctx, item.ID); startErr != nil {
+			return verificationExecutionResult{err: storeFailed(startErr, "start channel model verification item")}
+		}
 		start := time.Now()
 		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 		probeResult, probeErr := s.prober.ProbeChannel(probeCtx, snapshot.Protocol, snapshot.AdapterKey, runtime, item.UpstreamModel)
@@ -213,15 +224,25 @@ func (s *Service) ExecuteNextVerification(ctx context.Context) (bool, error) {
 			ProviderProbeRecordID: probeID, ItemID: item.ID,
 		})
 		if completeErr != nil {
-			return true, storeFailed(completeErr, "complete channel model verification item")
+			return verificationExecutionResult{err: storeFailed(completeErr, "complete channel model verification item")}
 		}
 		if accountErr != nil || verificationFailureStopsBatch(errorCode) {
-			terminalCode, terminalMessage = errorCode, message
-			_, _ = s.queries.SkipRemainingChannelModelVerificationItems(ctx, sqlc.SkipRemainingChannelModelVerificationItemsParams{
-				ErrorCode: textParam(errorCode), Message: textParam("因渠道级失败停止后续模型验证：" + message), RunID: run.ID,
-			})
-			break
+			return verificationExecutionResult{errorCode: errorCode, message: message}
 		}
+		return verificationExecutionResult{}
+	}
+
+	executionResult := runVerificationWork(len(items), func(index int) verificationExecutionResult {
+		return execute(items[index])
+	})
+	if executionResult.err != nil {
+		return true, executionResult.err
+	}
+	terminalCode, terminalMessage := executionResult.errorCode, executionResult.message
+	if terminalCode != "" {
+		_, _ = s.queries.SkipRemainingChannelModelVerificationItems(ctx, sqlc.SkipRemainingChannelModelVerificationItemsParams{
+			ErrorCode: textParam(terminalCode), Message: textParam("因渠道级失败停止后续模型验证：" + terminalMessage), RunID: run.ID,
+		})
 	}
 	_, err = s.queries.FinishChannelModelVerificationRun(ctx, sqlc.FinishChannelModelVerificationRunParams{
 		ErrorCode: textParam(terminalCode), Message: textParam(terminalMessage), RunID: run.ID,
@@ -230,6 +251,36 @@ func (s *Service) ExecuteNextVerification(ctx context.Context) (bool, error) {
 		return true, storeFailed(err, "finish channel model verification")
 	}
 	return true, nil
+}
+
+func runVerificationWork(itemCount int, execute func(index int) verificationExecutionResult) verificationExecutionResult {
+	results := make(chan verificationExecutionResult, verificationConcurrency)
+	next, active := 0, 0
+	launch := func(index int) {
+		active++
+		go func() { results <- execute(index) }()
+	}
+	for active < verificationConcurrency && next < itemCount {
+		launch(next)
+		next++
+	}
+
+	var terminal verificationExecutionResult
+	for active > 0 {
+		result := <-results
+		active--
+		if result.err != nil && terminal.err == nil {
+			terminal.err = result.err
+		}
+		if result.errorCode != "" && terminal.errorCode == "" {
+			terminal.errorCode, terminal.message = result.errorCode, result.message
+		}
+		if terminal.err == nil && terminal.errorCode == "" && next < itemCount {
+			launch(next)
+			next++
+		}
+	}
+	return terminal
 }
 
 func verificationSnapshotStale(row sqlc.GetChannelModelVerificationExecutionSnapshotRow) bool {

@@ -95,7 +95,7 @@ SET status = CASE WHEN $1::boolean THEN 'succeeded' ELSE 'failed' END,
     success = $1, http_status = $2,
     error_code = $3, message = $4, latency_ms = $5,
     provider_probe_record_id = $6, completed_at = now()
-WHERE id = $7 AND status = 'queued'
+WHERE id = $7 AND status = 'running'
 RETURNING id, run_id, model_id, upstream_model, status, success, http_status, error_code, message, latency_ms, provider_probe_record_id, created_at, completed_at
 `
 
@@ -1312,4 +1312,32 @@ func (q *Queries) SkipRemainingChannelModelVerificationItems(ctx context.Context
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const startChannelModelVerificationItem = `-- name: StartChannelModelVerificationItem :one
+UPDATE channel_model_verification_items
+SET status = 'running'
+WHERE id = $1 AND status = 'queued'
+RETURNING id, run_id, model_id, upstream_model, status, success, http_status, error_code, message, latency_ms, provider_probe_record_id, created_at, completed_at
+`
+
+func (q *Queries) StartChannelModelVerificationItem(ctx context.Context, itemID int64) (ChannelModelVerificationItem, error) {
+	row := q.db.QueryRow(ctx, startChannelModelVerificationItem, itemID)
+	var i ChannelModelVerificationItem
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.ModelID,
+		&i.UpstreamModel,
+		&i.Status,
+		&i.Success,
+		&i.HttpStatus,
+		&i.ErrorCode,
+		&i.Message,
+		&i.LatencyMs,
+		&i.ProviderProbeRecordID,
+		&i.CreatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
 }
