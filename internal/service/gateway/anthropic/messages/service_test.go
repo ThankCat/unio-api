@@ -22,9 +22,15 @@ import (
 
 // fakeMessagesRouter 是 messages 测试使用的 routing 替身。
 type fakeMessagesRouter struct {
-	req  routing.ChatRouteRequest
-	plan routing.ChatRoutePlan
-	err  error
+	req         routing.ChatRouteRequest
+	plan        routing.ChatRoutePlan
+	err         error
+	validateErr error
+}
+
+func (r *fakeMessagesRouter) ValidateChat(ctx context.Context, req routing.ChatRouteRequest) error {
+	r.req = req
+	return r.validateErr
 }
 
 func (r *fakeMessagesRouter) PlanChat(ctx context.Context, req routing.ChatRouteRequest) (routing.ChatRoutePlan, error) {

@@ -13,6 +13,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelmodel"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
 )
 
 // ChannelModelService 定义 adminapi 操作 channel↔model 绑定所需的最小能力。
@@ -20,7 +21,7 @@ type ChannelModelService interface {
 	List(ctx context.Context, channelID int64) ([]channelmodel.Binding, error)
 	Create(ctx context.Context, in channelmodel.CreateInput) (channelmodel.Binding, error)
 	Update(ctx context.Context, in channelmodel.UpdateInput) (channelmodel.Binding, error)
-	Delete(ctx context.Context, channelID, modelID int64) error
+	Delete(ctx context.Context, channelID, modelID int64, confirmation supply.Confirmation) error
 }
 
 // channelModelDTO 是 channel↔model 绑定的 admin API 响应体。
@@ -47,6 +48,10 @@ type updateChannelModelRequest struct {
 	UpstreamModel      string `json:"upstream_model"`
 	Status             string `json:"status"`
 	VerificationItemID *int64 `json:"verification_item_id"`
+	// ConfirmSupplyImpact + ExpectedImpactFingerprint 是停用触发 Offering 联动时的
+	// 二次确认参数（ADR-0018）；首次请求缺省，收到 409 影响预览后携带指纹重试。
+	ConfirmSupplyImpact       bool   `json:"confirm_supply_impact"`
+	ExpectedImpactFingerprint string `json:"expected_impact_fingerprint"`
 }
 
 type channelModelsHandler struct {
@@ -125,6 +130,10 @@ func (h *channelModelsHandler) update(w http.ResponseWriter, r *http.Request) {
 		UpstreamModel:      req.UpstreamModel,
 		Status:             req.Status,
 		VerificationItemID: req.VerificationItemID,
+		Confirmation: supply.Confirmation{
+			Confirm:             req.ConfirmSupplyImpact,
+			ExpectedFingerprint: req.ExpectedImpactFingerprint,
+		},
 	})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -146,7 +155,13 @@ func (h *channelModelsHandler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.Delete(r.Context(), channelID, modelID); err != nil {
+	// DELETE 无请求体，确认参数经 query 传递：
+	// ?confirm_supply_impact=true&expected_impact_fingerprint=...
+	confirmation := supply.Confirmation{
+		Confirm:             adminhttp.BoolQuery(r, "confirm_supply_impact"),
+		ExpectedFingerprint: adminhttp.QueryString(r, "expected_impact_fingerprint"),
+	}
+	if err := h.service.Delete(r.Context(), channelID, modelID, confirmation); err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}

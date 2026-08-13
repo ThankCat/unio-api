@@ -17,6 +17,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
 )
 
 const (
@@ -36,6 +37,12 @@ type Store interface {
 	UpdateChannelModel(ctx context.Context, arg sqlc.UpdateChannelModelParams) (sqlc.ChannelModel, error)
 	GetCurrentChannelModelVerificationEvidence(ctx context.Context, arg sqlc.GetCurrentChannelModelVerificationEvidenceParams) (sqlc.ChannelModelVerificationItem, error)
 	DeleteChannelModel(ctx context.Context, arg sqlc.DeleteChannelModelParams) (int64, error)
+}
+
+// TxBeginner 提供事务能力（由 pgxpool 满足），用于停用/解除/启用 Binding 时的
+// 结构支撑串行化与 Offering 联动（ADR-0018）。
+type TxBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 // Binding 是 admin 视角的 channel↔model 绑定事实；连带 Unio 侧模型的对外 ID 与展示名（列表场景）。
@@ -67,16 +74,21 @@ type UpdateInput struct {
 	Status        string
 	// VerificationItemID 是启用绑定或替换 upstream_model 时必须提交的当前成功验证证据。
 	VerificationItemID *int64
+	// Confirmation 是停用触发 Offering 联动时的二次确认参数（ADR-0018 影响指纹契约）。
+	Confirmation supply.Confirmation
 }
 
 // Service 编排 channel↔model 绑定读写。
 type Service struct {
-	store Store
+	store   Store
+	db      TxBeginner
+	queries *sqlc.Queries
 }
 
-// NewService 创建绑定管理服务。
-func NewService(store Store) *Service {
-	return &Service{store: store}
+// NewService 创建绑定管理服务。db/queries 用于停用、解除与启用路径的
+// 结构支撑串行化事务；只读与创建路径继续走 store。
+func NewService(store Store, db TxBeginner, queries *sqlc.Queries) *Service {
+	return &Service{store: store, db: db, queries: queries}
 }
 
 // List 列出某 channel 的全部模型绑定；channel 不存在返回 not_found。
@@ -146,6 +158,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Binding, error) {
 }
 
 // Update 更新绑定的上游模型名与状态；目标不存在返回 not_found。
+//
+// 状态转换按 ADR-0018 联动：enabled→disabled 在事务内锁定 Model、反查失去最后结构支撑的
+// Offering（需影响指纹确认），全局最后一条 enabled Binding 时自动停用 Model；
+// disabled→enabled 在事务内锁定 Model 并要求 Model 当前 enabled（服务端护栏）。
 func (s *Service) Update(ctx context.Context, in UpdateInput) (Binding, error) {
 	if in.ChannelID <= 0 {
 		return Binding{}, invalidArgument("channel_id", "channel id must be positive")
@@ -183,6 +199,14 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Binding, error) {
 		}
 	}
 
+	switch {
+	case current.Status == StatusEnabled && in.Status == StatusDisabled:
+		return s.disableBinding(ctx, in, upstreamModel)
+	case current.Status == StatusDisabled && in.Status == StatusEnabled:
+		return s.enableBinding(ctx, in, upstreamModel)
+	}
+
+	// 无状态转换（同状态改 upstream 或幂等重放）：不改变结构支撑，不触发联动。
 	row, err := s.store.UpdateChannelModel(ctx, sqlc.UpdateChannelModelParams{
 		ChannelID:     in.ChannelID,
 		ModelID:       in.ModelID,
@@ -199,9 +223,124 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Binding, error) {
 	return toBinding(row), nil
 }
 
+// disableBinding 在一个事务内完成 Binding 停用与 Offering/Model 联动（ADR-0018 收缩操作）。
+func (s *Service) disableBinding(ctx context.Context, in UpdateInput, upstreamModel string) (Binding, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Binding{}, storeFailed(err, "begin binding disable transaction")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	// 结构支撑串行化：先锁 Model，锁内重读绑定并计算影响，不复用锁外预检结果。
+	if err := supply.LockModels(ctx, q, []int64{in.ModelID}); err != nil {
+		return Binding{}, storeFailed(err, "lock model for binding disable")
+	}
+	current, err := q.GetChannelModel(ctx, sqlc.GetChannelModelParams{ChannelID: in.ChannelID, ModelID: in.ModelID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Binding{}, notFound("channel model binding not found")
+		}
+		return Binding{}, storeFailed(err, "get channel model binding in transaction")
+	}
+
+	var impact supply.Impact
+	if current.Status == StatusEnabled {
+		impact, err = supply.BindingImpact(ctx, q, in.ChannelID, in.ModelID)
+		if err != nil {
+			return Binding{}, storeFailed(err, "compute binding disable impact")
+		}
+		if err := supply.Authorize(impact,
+			"channel_model_disable_confirmation_required",
+			"disabling this binding removes the last structural support for some route offerings; confirm with the impact fingerprint",
+			in.Confirmation,
+		); err != nil {
+			return Binding{}, err
+		}
+	}
+
+	row, err := q.UpdateChannelModel(ctx, sqlc.UpdateChannelModelParams{
+		ChannelID:     in.ChannelID,
+		ModelID:       in.ModelID,
+		UpstreamModel: upstreamModel,
+		Status:        StatusDisabled,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Binding{}, notFound("channel model binding not found")
+		}
+		return Binding{}, storeFailed(err, "update channel model")
+	}
+
+	if current.Status == StatusEnabled {
+		if impact.ModelWillDisable {
+			// 全局最后一条 enabled Binding：同一事务停用 Model、全部 enabled Binding 与
+			// 全部 enabled Offering（原因统一 model_disabled）。
+			if err := supply.CascadeModelDisable(ctx, q, in.ModelID); err != nil {
+				return Binding{}, storeFailed(err, "cascade model disable")
+			}
+		} else if err := supply.DisableOfferings(ctx, q, impact.AffectedOfferings, supply.ReasonBindingDisabled); err != nil {
+			return Binding{}, storeFailed(err, "disable offerings losing support")
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Binding{}, storeFailed(err, "commit binding disable transaction")
+	}
+	return toBinding(row), nil
+}
+
+// enableBinding 在一个事务内启用 Binding：锁定 Model 并要求 Model 当前 enabled。
+// 启用不自动恢复任何 Offering（ADR-0018：重新售卖必须经 Route 重新勾选或批量恢复）。
+func (s *Service) enableBinding(ctx context.Context, in UpdateInput, upstreamModel string) (Binding, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Binding{}, storeFailed(err, "begin binding enable transaction")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	// 扩张侧串行化：锁 Model 后校验其状态，防与 Model 停用并发产生
+	// 「Model disabled 且 Binding enabled」的写偏斜。
+	if err := supply.LockModels(ctx, q, []int64{in.ModelID}); err != nil {
+		return Binding{}, storeFailed(err, "lock model for binding enable")
+	}
+	model, err := q.LookupModelByID(ctx, in.ModelID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Binding{}, invalidArgument("model_id", "model not found")
+		}
+		return Binding{}, storeFailed(err, "load model for binding enable")
+	}
+	if model.Status != StatusEnabled {
+		return Binding{}, conflict("model is globally disabled; enable the model before enabling its bindings")
+	}
+
+	row, err := q.UpdateChannelModel(ctx, sqlc.UpdateChannelModelParams{
+		ChannelID:     in.ChannelID,
+		ModelID:       in.ModelID,
+		UpstreamModel: upstreamModel,
+		Status:        StatusEnabled,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Binding{}, notFound("channel model binding not found")
+		}
+		return Binding{}, storeFailed(err, "update channel model")
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Binding{}, storeFailed(err, "commit binding enable transaction")
+	}
+	return toBinding(row), nil
+}
+
 // Delete 删除绑定，并级联清掉该边自身的 channel_prices（追加式成本价配置）；仅当该边确有计费/审计历史
 // 引用时才被 DB 拒绝（23503），降级为 conflict 提示改用停用。
-func (s *Service) Delete(ctx context.Context, channelID, modelID int64) error {
+//
+// 解除 enabled Binding 与停用使用相同影响预览与联动（ADR-0018）：失去最后结构支撑的
+// Offering 自动停用（binding_disabled），全局最后一条 enabled Binding 时自动停用 Model。
+func (s *Service) Delete(ctx context.Context, channelID, modelID int64, confirmation supply.Confirmation) error {
 	if channelID <= 0 {
 		return invalidArgument("channel_id", "channel id must be positive")
 	}
@@ -209,7 +348,41 @@ func (s *Service) Delete(ctx context.Context, channelID, modelID int64) error {
 		return invalidArgument("model_id", "model_id must be positive")
 	}
 
-	affected, err := s.store.DeleteChannelModel(ctx, sqlc.DeleteChannelModelParams{
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return storeFailed(err, "begin binding unbind transaction")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	// 结构支撑串行化：先锁 Model，锁内读取绑定状态并计算影响。
+	if err := supply.LockModels(ctx, q, []int64{modelID}); err != nil {
+		return storeFailed(err, "lock model for binding unbind")
+	}
+	current, err := q.GetChannelModel(ctx, sqlc.GetChannelModelParams{ChannelID: channelID, ModelID: modelID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notFound("channel model binding not found")
+		}
+		return storeFailed(err, "get channel model binding in transaction")
+	}
+
+	var impact supply.Impact
+	if current.Status == StatusEnabled {
+		impact, err = supply.BindingImpact(ctx, q, channelID, modelID)
+		if err != nil {
+			return storeFailed(err, "compute binding unbind impact")
+		}
+		if err := supply.Authorize(impact,
+			"channel_model_disable_confirmation_required",
+			"unbinding removes the last structural support for some route offerings; confirm with the impact fingerprint",
+			confirmation,
+		); err != nil {
+			return err
+		}
+	}
+
+	affected, err := q.DeleteChannelModel(ctx, sqlc.DeleteChannelModelParams{
 		ChannelID: channelID,
 		ModelID:   modelID,
 	})
@@ -223,6 +396,19 @@ func (s *Service) Delete(ctx context.Context, channelID, modelID int64) error {
 		return notFound("channel model binding not found")
 	}
 
+	if current.Status == StatusEnabled {
+		if impact.ModelWillDisable {
+			if err := supply.CascadeModelDisable(ctx, q, modelID); err != nil {
+				return storeFailed(err, "cascade model disable")
+			}
+		} else if err := supply.DisableOfferings(ctx, q, impact.AffectedOfferings, supply.ReasonBindingDisabled); err != nil {
+			return storeFailed(err, "disable offerings losing support")
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return storeFailed(err, "commit binding unbind transaction")
+	}
 	return nil
 }
 

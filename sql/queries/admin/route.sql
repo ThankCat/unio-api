@@ -24,6 +24,8 @@ SELECT COUNT(*) FROM route_channels WHERE route_id = sqlc.arg(route_id);
 -- DeleteRouteChannels 清空某线路的渠道池（设置渠道池前先清空，整体在事务内重建）。
 DELETE FROM route_channels WHERE route_id = sqlc.arg(route_id);
 
+-- Offering 的读取、差异更新与联动查询见 sql/queries/admin/supply.sql（ADR-0018）。
+
 -- name: CreateRoute :one
 -- CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
 -- rpm/rpd/concurrency_limit 是线路级限流上限（按线路+用户计数；NULL=继承默认，0=不限，>0=上限）；
@@ -122,35 +124,9 @@ SELECT
     rt.created_at,
     (SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id) AS bound_keys,
     (SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id) AS pool_channels,
-    -- models_count（DEC-031）：池内可达且可解析成本的 distinct 模型（绝对覆盖 OR 基准价+价格倍率）。
-    (
-        SELECT COUNT(DISTINCT m.id)
-        FROM models m
-        JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
-        JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled'
-        WHERE (
-            EXISTS (
-                SELECT 1 FROM channel_prices p
-                WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
-                  AND p.effective_from <= now() AND (p.effective_to IS NULL OR p.effective_to > now())
-            )
-            OR (
-                EXISTS (
-                    SELECT 1 FROM model_prices mp
-                    WHERE mp.model_id = cm.model_id AND mp.status = 'enabled'
-                      AND mp.effective_from <= now() AND (mp.effective_to IS NULL OR mp.effective_to > now())
-                )
-                AND EXISTS (
-                    SELECT 1 FROM channel_cost_multipliers ccm
-                    WHERE ccm.channel_id = cm.channel_id
-                      AND (ccm.model_id = cm.model_id OR ccm.model_id IS NULL)
-                      AND ccm.status = 'enabled'
-                      AND ccm.effective_from <= now() AND (ccm.effective_to IS NULL OR ccm.effective_to > now())
-                )
-            )
-        )
-        AND cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
-    ) AS models_count
+    -- 售卖模型统计（ADR-0018）：统一 Offering 口径，不再按价格/成本计算运行时"可达模型"。
+    (SELECT COUNT(*) FROM route_model_offerings o WHERE o.route_id = rt.id) AS offerings_total,
+    (SELECT COUNT(*) FROM route_model_offerings o WHERE o.route_id = rt.id AND o.status = 'enabled') AS offerings_enabled
 FROM routes rt
 WHERE (sqlc.narg('status')::text IS NULL OR rt.status = sqlc.narg('status')::text)
   AND (sqlc.narg('search')::text IS NULL OR rt.name ILIKE '%' || sqlc.narg('search')::text || '%')
@@ -176,60 +152,10 @@ ORDER BY
         SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id
     ) END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'models' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (
-        SELECT COUNT(DISTINCT m.id)
-        FROM models m
-        JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
-        JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled'
-        WHERE (
-            EXISTS (
-                SELECT 1 FROM channel_prices p
-                WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
-                  AND p.effective_from <= now() AND (p.effective_to IS NULL OR p.effective_to > now())
-            )
-            OR (
-                EXISTS (
-                    SELECT 1 FROM model_prices mp
-                    WHERE mp.model_id = cm.model_id AND mp.status = 'enabled'
-                      AND mp.effective_from <= now() AND (mp.effective_to IS NULL OR mp.effective_to > now())
-                )
-                AND EXISTS (
-                    SELECT 1 FROM channel_cost_multipliers ccm
-                    WHERE ccm.channel_id = cm.channel_id
-                      AND (ccm.model_id = cm.model_id OR ccm.model_id IS NULL)
-                      AND ccm.status = 'enabled'
-                      AND ccm.effective_from <= now() AND (ccm.effective_to IS NULL OR ccm.effective_to > now())
-                )
-            )
-        )
-        AND cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
+        SELECT COUNT(*) FROM route_model_offerings o WHERE o.route_id = rt.id
     ) END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'models' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (
-        SELECT COUNT(DISTINCT m.id)
-        FROM models m
-        JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
-        JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled'
-        WHERE (
-            EXISTS (
-                SELECT 1 FROM channel_prices p
-                WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
-                  AND p.effective_from <= now() AND (p.effective_to IS NULL OR p.effective_to > now())
-            )
-            OR (
-                EXISTS (
-                    SELECT 1 FROM model_prices mp
-                    WHERE mp.model_id = cm.model_id AND mp.status = 'enabled'
-                      AND mp.effective_from <= now() AND (mp.effective_to IS NULL OR mp.effective_to > now())
-                )
-                AND EXISTS (
-                    SELECT 1 FROM channel_cost_multipliers ccm
-                    WHERE ccm.channel_id = cm.channel_id
-                      AND (ccm.model_id = cm.model_id OR ccm.model_id IS NULL)
-                      AND ccm.status = 'enabled'
-                      AND ccm.effective_from <= now() AND (ccm.effective_to IS NULL OR ccm.effective_to > now())
-                )
-            )
-        )
-        AND cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
+        SELECT COUNT(*) FROM route_model_offerings o WHERE o.route_id = rt.id
     ) END ASC NULLS LAST,
   rt.name
 LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');

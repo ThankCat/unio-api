@@ -10,6 +10,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/model"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
 )
 
 // ModelService 定义 adminapi 操作 model 所需的最小能力。
@@ -18,6 +19,8 @@ type ModelService interface {
 	Get(ctx context.Context, id int64) (model.Model, error)
 	Create(ctx context.Context, in model.CreateInput) (model.Model, error)
 	Update(ctx context.Context, in model.UpdateInput) (model.Model, error)
+	ListDisabledOfferings(ctx context.Context, modelID int64, ingressProtocol string) ([]model.ModelOffering, error)
+	RestoreOfferings(ctx context.Context, modelID int64, items []model.OfferingRestoreItem, confirmation supply.Confirmation) (int, error)
 	Delete(ctx context.Context, id int64) error
 }
 
@@ -78,6 +81,10 @@ type updateModelRequest struct {
 	OwnedBy     string `json:"owned_by"`
 	Status      string `json:"status"`
 	modelMetadataRequest
+	// ConfirmSupplyImpact + ExpectedImpactFingerprint 是全局停用触发 Binding/Offering 级联时的
+	// 二次确认参数（ADR-0018）；首次请求缺省，收到 409 影响预览后携带指纹重试。
+	ConfirmSupplyImpact       bool   `json:"confirm_supply_impact"`
+	ExpectedImpactFingerprint string `json:"expected_impact_fingerprint"`
 }
 
 type modelsHandler struct {
@@ -176,6 +183,10 @@ func (h *modelsHandler) update(w http.ResponseWriter, r *http.Request) {
 		OwnedBy:     req.OwnedBy,
 		Status:      req.Status,
 		Metadata:    meta,
+		Confirmation: supply.Confirmation{
+			Confirm:             req.ConfirmSupplyImpact,
+			ExpectedFingerprint: req.ExpectedImpactFingerprint,
+		},
 	})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -183,6 +194,87 @@ func (h *modelsHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	adminhttp.WriteData(w, http.StatusOK, toModelDTO(m))
+}
+
+// modelOfferingDTO 是该 Model 一条 disabled 售卖组合（批量恢复入口）。
+type modelOfferingDTO struct {
+	RouteID          int64   `json:"route_id"`
+	RouteName        string  `json:"route_name"`
+	RouteStatus      string  `json:"route_status"`
+	IngressProtocol  string  `json:"ingress_protocol"`
+	DisabledReason   *string `json:"disabled_reason"`
+	DisabledAt       *string `json:"disabled_at"`
+	SupportAvailable bool    `json:"support_available"`
+}
+
+type restoreOfferingsRequest struct {
+	Items []struct {
+		RouteID         int64  `json:"route_id"`
+		IngressProtocol string `json:"ingress_protocol"`
+	} `json:"items"`
+	ConfirmSupplyImpact       bool   `json:"confirm_supply_impact"`
+	ExpectedImpactFingerprint string `json:"expected_impact_fingerprint"`
+}
+
+type restoreOfferingsResponse struct {
+	Restored int `json:"restored"`
+}
+
+// listOfferings 列出该 Model 的 disabled Offering（可按 ?ingress_protocol= 过滤）。
+func (h *modelsHandler) listOfferings(w http.ResponseWriter, r *http.Request) {
+	id, err := adminhttp.PathID(r)
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	offerings, err := h.service.ListDisabledOfferings(r.Context(), id, adminhttp.QueryString(r, "ingress_protocol"))
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	dtos := make([]modelOfferingDTO, 0, len(offerings))
+	for _, o := range offerings {
+		dtos = append(dtos, modelOfferingDTO{
+			RouteID:          o.RouteID,
+			RouteName:        o.RouteName,
+			RouteStatus:      o.RouteStatus,
+			IngressProtocol:  o.IngressProtocol,
+			DisabledReason:   o.DisabledReason,
+			DisabledAt:       adminhttp.RFC3339Ptr(o.DisabledAt),
+			SupportAvailable: o.SupportAvailable,
+		})
+	}
+	adminhttp.WriteData(w, http.StatusOK, dtos)
+}
+
+// restoreOfferings 批量恢复勾选的 disabled Offering；首次请求返回 409 影响预览与指纹。
+func (h *modelsHandler) restoreOfferings(w http.ResponseWriter, r *http.Request) {
+	id, err := adminhttp.PathID(r)
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	var req restoreOfferingsRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	items := make([]model.OfferingRestoreItem, 0, len(req.Items))
+	for _, item := range req.Items {
+		items = append(items, model.OfferingRestoreItem{
+			RouteID:         item.RouteID,
+			IngressProtocol: item.IngressProtocol,
+		})
+	}
+	restored, err := h.service.RestoreOfferings(r.Context(), id, items, supply.Confirmation{
+		Confirm:             req.ConfirmSupplyImpact,
+		ExpectedFingerprint: req.ExpectedImpactFingerprint,
+	})
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	adminhttp.WriteData(w, http.StatusOK, restoreOfferingsResponse{Restored: restored})
 }
 
 func (h *modelsHandler) delete(w http.ResponseWriter, r *http.Request) {

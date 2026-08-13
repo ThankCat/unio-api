@@ -81,8 +81,8 @@ func (l *RequestLifecycle) RecordRoutingDecisionFailure(ctx context.Context, in 
 }
 
 // RecordRoutingFailure 保存「已经参与选渠」后的路由失败（如无可用渠道、负毛利全摘除）。
-// 模型不存在 / 用户无权 / 线路未配置 / 协议非法 / 存储故障等尚未进入候选选择的失败不落库——
-// 它们没有路由决策可回顾，只留在 request_records。
+// 模型不存在 / 用户无权 / 线路未配置 / 协议非法 / 存储故障等资格失败发生在 request_records
+// 创建之前，没有持久请求或路由决策可回顾，只通过 trace、日志与拒绝指标观察。
 func (l *RequestLifecycle) RecordRoutingFailure(ctx context.Context, request requestlog.RequestRecord, routeID *int64, err error) {
 	if l == nil || routeID == nil || err == nil {
 		return

@@ -15,6 +15,7 @@ import (
 
 // MessagesRouter 定义 gateway 为 Anthropic Messages 请求生成有序 route plan 所需能力。
 type MessagesRouter interface {
+	ValidateChat(ctx context.Context, req routing.ChatRouteRequest) error
 	PlanChat(ctx context.Context, req routing.ChatRouteRequest) (routing.ChatRoutePlan, error)
 }
 

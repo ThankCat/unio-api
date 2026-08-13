@@ -17,6 +17,7 @@ func Register(r chi.Router, d Deps) {
 		r.Get("/routes/ops", roh.table)
 		r.Get("/routes/{id}/ops/detail", roh.detail)
 		r.Get("/routes/{id}/ops/reachable-models", roh.reachableModels)
+		r.Get("/routes/{id}/ops/offerings", roh.offerings)
 		r.Get("/routes/{id}/ops/channel-pool", roh.channelPool)
 		r.Get("/routes/{id}/ops/bindings", roh.bindings)
 		r.Get("/routes/{id}/ops/performance", roh.performance)
@@ -33,6 +34,9 @@ func Register(r chi.Router, d Deps) {
 		// 线路（渠道商品）CRUD + 渠道池设置。
 		r.Get("/routes", rh.list)
 		r.Post("/routes", rh.create)
+		// 售卖组合候选（ADR-0018）：按 ?channel_ids=1,2 计算可勾选的 Model+协议组合。
+		// 静态路径必须在 /routes/{id} 之前注册。
+		r.Get("/routes/offering-candidates", rh.offeringCandidates)
 		r.Post("/routes/{id}/archive", rh.archive)
 		r.Post("/routes/{id}/restore", rh.restore)
 		r.Get("/routes/{id}", rh.get)

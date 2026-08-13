@@ -77,7 +77,7 @@ func TestCreateRejectsInvalidArguments(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &fakeModelStore{}
-			_, err := model.NewService(store).Create(context.Background(), tc.in)
+			_, err := model.NewService(store, nil, nil).Create(context.Background(), tc.in)
 			if got := failure.CodeOf(err); got != failure.CodeAdminInvalidArgument {
 				t.Fatalf("expected %q, got %q", failure.CodeAdminInvalidArgument, got)
 			}
@@ -90,7 +90,7 @@ func TestCreateRejectsInvalidArguments(t *testing.T) {
 
 func TestCreateConflictOnUniqueViolation(t *testing.T) {
 	store := &fakeModelStore{createErr: &pgconn.PgError{Code: "23505"}}
-	_, err := model.NewService(store).Create(context.Background(), model.CreateInput{
+	_, err := model.NewService(store, nil, nil).Create(context.Background(), model.CreateInput{
 		ModelID: "deepseek-chat", DisplayName: "DeepSeek Chat", OwnedBy: "deepseek", Status: model.StatusEnabled,
 	})
 	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
@@ -107,7 +107,7 @@ func TestCreateSuccessTrimsAndMaps(t *testing.T) {
 		UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true},
 	}}
 
-	got, err := model.NewService(store).Create(context.Background(), model.CreateInput{
+	got, err := model.NewService(store, nil, nil).Create(context.Background(), model.CreateInput{
 		ModelID: "  deepseek-chat  ", DisplayName: "  DeepSeek Chat  ", OwnedBy: "  deepseek  ",
 		Status: model.StatusEnabled, Metadata: model.Metadata{MaxOutputTokens: ptr(int64(8192))},
 	})
@@ -127,7 +127,7 @@ func TestCreateSuccessTrimsAndMaps(t *testing.T) {
 
 func TestGetNotFound(t *testing.T) {
 	store := &fakeModelStore{lookupErr: pgx.ErrNoRows}
-	_, err := model.NewService(store).Get(context.Background(), 5)
+	_, err := model.NewService(store, nil, nil).Get(context.Background(), 5)
 	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
 		t.Fatalf("expected %q, got %q", failure.CodeAdminNotFound, got)
 	}
@@ -135,7 +135,7 @@ func TestGetNotFound(t *testing.T) {
 
 func TestUpdateNotFound(t *testing.T) {
 	store := &fakeModelStore{updateErr: pgx.ErrNoRows}
-	_, err := model.NewService(store).Update(context.Background(), model.UpdateInput{
+	_, err := model.NewService(store, nil, nil).Update(context.Background(), model.UpdateInput{
 		ID: 5, DisplayName: "DeepSeek Chat", OwnedBy: "deepseek", Status: model.StatusDisabled,
 	})
 	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
@@ -145,7 +145,7 @@ func TestUpdateNotFound(t *testing.T) {
 
 func TestDeleteRejectsInvalidID(t *testing.T) {
 	store := &fakeModelStore{}
-	err := model.NewService(store).Delete(context.Background(), 0)
+	err := model.NewService(store, nil, nil).Delete(context.Background(), 0)
 	if got := failure.CodeOf(err); got != failure.CodeAdminInvalidArgument {
 		t.Fatalf("expected %q, got %q", failure.CodeAdminInvalidArgument, got)
 	}
@@ -157,7 +157,7 @@ func TestDeleteRejectsInvalidID(t *testing.T) {
 // 录错且无引用的模型可真删；级联清理由 DB CTE 完成，受影响行 0 仅当 model 不存在。
 func TestDeleteSuccess(t *testing.T) {
 	store := &fakeModelStore{deleteAff: 1}
-	if err := model.NewService(store).Delete(context.Background(), 9); err != nil {
+	if err := model.NewService(store, nil, nil).Delete(context.Background(), 9); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if store.deleteID != 9 {
@@ -167,7 +167,7 @@ func TestDeleteSuccess(t *testing.T) {
 
 func TestDeleteNotFoundWhenNoRows(t *testing.T) {
 	store := &fakeModelStore{deleteAff: 0}
-	err := model.NewService(store).Delete(context.Background(), 9)
+	err := model.NewService(store, nil, nil).Delete(context.Background(), 9)
 	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
 		t.Fatalf("expected %q, got %q", failure.CodeAdminNotFound, got)
 	}
@@ -176,7 +176,7 @@ func TestDeleteNotFoundWhenNoRows(t *testing.T) {
 // 已被请求/账务历史引用时，DB 报外键冲突（23503），降级为 conflict 提示改用停用。
 func TestDeleteConflictOnForeignKeyViolation(t *testing.T) {
 	store := &fakeModelStore{deleteErr: &pgconn.PgError{Code: "23503"}}
-	err := model.NewService(store).Delete(context.Background(), 9)
+	err := model.NewService(store, nil, nil).Delete(context.Background(), 9)
 	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
 		t.Fatalf("expected %q, got %q", failure.CodeAdminConflict, got)
 	}

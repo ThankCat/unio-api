@@ -141,6 +141,7 @@ type Metrics struct {
 	httpRequestDuration *prometheus.HistogramVec
 
 	chatRequestsTotal *prometheus.CounterVec
+	requestRejections *prometheus.CounterVec
 	routingSelected   *prometheus.CounterVec
 
 	upstreamRequestsTotal *prometheus.CounterVec
@@ -249,6 +250,11 @@ func New() *Metrics {
 			Name: "unio_gateway_chat_requests_total",
 			Help: "Gateway chat 请求总数，按是否流式和最终结果聚合。",
 		}, []string{"stream", "outcome"}),
+
+		requestRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_request_rejections_total",
+			Help: "Gateway 在创建 request_records 前拒绝的请求总数，按入口协议与有界原因聚合。",
+		}, []string{"protocol", "reason"}),
 
 		routingSelected: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "unio_gateway_routing_selected_total",
@@ -545,6 +551,7 @@ func New() *Metrics {
 		m.httpRequestsTotal,
 		m.httpRequestDuration,
 		m.chatRequestsTotal,
+		m.requestRejections,
 		m.routingSelected,
 		m.upstreamRequestsTotal,
 		m.upstreamDuration,
@@ -635,6 +642,11 @@ func (m *Metrics) ObserveHTTPRequest(method string, route string, status int, du
 // IncChatRequest 记录一次 gateway chat 请求的最终结果。
 func (m *Metrics) IncChatRequest(stream bool, outcome ChatOutcome) {
 	m.chatRequestsTotal.WithLabelValues(streamLabel(stream), string(outcome)).Inc()
+}
+
+// IncRequestRejected 记录一次未进入持久请求生命周期的资格拒绝。
+func (m *Metrics) IncRequestRejected(protocol string, reason string) {
+	m.requestRejections.WithLabelValues(protocol, reason).Inc()
 }
 
 // IncRoutingSelected 记录 gateway 实际选中的 provider/channel/model。

@@ -22,6 +22,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/listquery"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/dashboard"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/opsutil"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
 )
 
 type routingMarginMetrics interface {
@@ -55,6 +56,12 @@ func WriteData(w http.ResponseWriter, status int, data any) {
 // 只回显 4xx 的安全摘要（failure.Error() 不含 cause 细节），5xx 一律返回通用文案，
 // 不向客户端透传内部实现或上游原始信息。
 func WriteServiceError(w http.ResponseWriter, err error) {
+	var confirmErr *supply.ConfirmationRequired
+	if errors.As(err, &confirmErr) {
+		WriteConfirmationRequired(w, confirmErr)
+		return
+	}
+
 	code := failure.CodeOf(err)
 	messageOverride := ""
 	var pgErr *pgconn.PgError
@@ -82,6 +89,35 @@ func WriteServiceError(w http.ResponseWriter, err error) {
 	}
 
 	_ = httpx.WriteError(w, status, codeStr, message)
+}
+
+// WriteConfirmationRequired 渲染 ADR-0018 供给影响二次确认（409）：结构化影响预览与
+// impact_fingerprint；确认请求需携带 confirm_supply_impact=true 和 expected_impact_fingerprint 重试。
+func WriteConfirmationRequired(w http.ResponseWriter, e *supply.ConfirmationRequired) {
+	routes := make([]map[string]any, 0, len(e.Impact.AffectedOfferings))
+	for _, ao := range e.Impact.AffectedOfferings {
+		routes = append(routes, map[string]any{
+			"route_id":           ao.RouteID,
+			"route_name":         ao.RouteName,
+			"route_status":       ao.RouteStatus,
+			"model_id":           ao.PublicModelID,
+			"model_display_name": ao.ModelDisplayName,
+			"ingress_protocol":   ao.IngressProtocol,
+		})
+	}
+	_ = httpx.WriteJSON(w, http.StatusConflict, map[string]any{
+		"error": map[string]any{
+			"code":                       e.Code,
+			"message":                    e.Message,
+			"impact_fingerprint":         e.Impact.Fingerprint(),
+			"model_will_disable":         e.Impact.ModelWillDisable,
+			"remaining_enabled_bindings": e.Impact.RemainingEnabledBindings,
+			"cascade_enabled_bindings":   e.Impact.CascadeEnabledBindings,
+			"cascade_channels":           e.Impact.CascadeChannels,
+			"cascade_providers":          e.Impact.CascadeProviders,
+			"affected_routes":            routes,
+		},
+	})
 }
 
 // adminErrorStatus 把内部错误码映射为 HTTP 状态码。

@@ -157,10 +157,87 @@ type ChatRoutePlan struct {
 // Store 定义 routing 查询候选渠道所需的最小数据库能力。
 type Store interface {
 	ModelExistsByID(ctx context.Context, requestedModelID string) (bool, error)
+	RouteOffersModel(ctx context.Context, arg sqlc.RouteOffersModelParams) (bool, error)
 	UserCanUseModel(ctx context.Context, arg sqlc.UserCanUseModelParams) (bool, error)
 	FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteCandidatesParams) ([]sqlc.FindRouteCandidatesRow, error)
 	GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error)
 	CountRouteChannels(ctx context.Context, routeID int64) (int64, error)
+}
+
+// ValidateChat 在持久 request 生命周期开始前校验模型产品资格。
+// 它不读取运行时 Channel 健康或容量：通过后即表示 Route 已向该用户承诺该模型。
+func (r *Router) ValidateChat(ctx context.Context, req ChatRouteRequest) error {
+	if !IsSupportedProtocol(req.IngressProtocol) {
+		return failure.Wrap(
+			failure.CodeRoutingProtocolInvalid,
+			ErrIngressProtocolInvalid,
+			failure.WithMessage(ErrIngressProtocolInvalid.Error()),
+			failure.WithField("ingress_protocol", req.IngressProtocol),
+		)
+	}
+
+	route, err := r.resolveRoute(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	exists, err := r.store.ModelExistsByID(ctx, req.ModelID)
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeRoutingStoreFailed,
+			err,
+			failure.WithMessage("check model exists"),
+		)
+	}
+	if !exists {
+		return failure.Wrap(
+			failure.CodeRoutingModelNotFound,
+			ErrModelNotFound,
+			failure.WithMessage(ErrModelNotFound.Error()),
+		)
+	}
+
+	offered, err := r.store.RouteOffersModel(ctx, sqlc.RouteOffersModelParams{
+		RouteID:          route.ID,
+		RequestedModelID: req.ModelID,
+		IngressProtocol:  req.IngressProtocol,
+	})
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeRoutingStoreFailed,
+			err,
+			failure.WithMessage("check route model offering"),
+		)
+	}
+	if !offered {
+		return failure.Wrap(
+			failure.CodeRoutingModelNotAvailable,
+			ErrModelNotAvailable,
+			failure.WithMessage(ErrModelNotAvailable.Error()),
+			failure.WithField("route_id", route.ID),
+		)
+	}
+
+	allowed, err := r.store.UserCanUseModel(ctx, sqlc.UserCanUseModelParams{
+		UserID:           req.UserID,
+		RequestedModelID: req.ModelID,
+	})
+	if err != nil {
+		return failure.Wrap(
+			failure.CodeRoutingStoreFailed,
+			err,
+			failure.WithMessage("check user model policy"),
+		)
+	}
+	if !allowed {
+		return failure.Wrap(
+			failure.CodeRoutingModelNotAvailable,
+			ErrModelNotAvailable,
+			failure.WithMessage(ErrModelNotAvailable.Error()),
+		)
+	}
+
+	return nil
 }
 
 // resolvedRoute 是线路解析后的最小事实（策略 + 价格倍率）。
@@ -387,51 +464,11 @@ func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest, ro
 		)
 	}
 
-	// 1 有候选 channel，正常返回。
+	// 模型产品资格已在 request_records 创建前由 ValidateChat 判定。此处只表达运行时供给：
+	// 即使模型、Offering 或用户策略随后并发变化，已接受的请求也按无可用 Channel 收口并保留审计。
 	if len(rows) > 0 {
 		return rows, nil
 	}
-
-	// 2.1 没候选，先问模型是否存在。
-	exists, err := r.store.ModelExistsByID(ctx, req.ModelID)
-	if err != nil {
-		return nil, failure.Wrap(
-			failure.CodeRoutingStoreFailed,
-			err,
-			failure.WithMessage("check model exists"),
-		)
-	}
-	// 2.2 模型不存在，返回 ErrModelNotFound。
-	if !exists {
-		return nil, failure.Wrap(
-			failure.CodeRoutingModelNotFound,
-			ErrModelNotFound,
-			failure.WithMessage(ErrModelNotFound.Error()),
-		)
-	}
-
-	// 3.1 模型存在，再问 user 是否允许
-	allowed, err := r.store.UserCanUseModel(ctx, sqlc.UserCanUseModelParams{
-		UserID:           req.UserID,
-		RequestedModelID: req.ModelID,
-	})
-	if err != nil {
-		return nil, failure.Wrap(
-			failure.CodeRoutingStoreFailed,
-			err,
-			failure.WithMessage("check user model policy"),
-		)
-	}
-	// 3.2 user 不允许，返回 ErrModelNotAvailable。
-	if !allowed {
-		return nil, failure.Wrap(
-			failure.CodeRoutingModelNotAvailable,
-			ErrModelNotAvailable,
-			failure.WithMessage(ErrModelNotAvailable.Error()),
-		)
-	}
-
-	// 4 都没问题但还是没候选，才是 ErrNoAvailableChannel。
 	return nil, failure.Wrap(
 		failure.CodeRoutingNoAvailableChannel,
 		ErrNoAvailableChannel,

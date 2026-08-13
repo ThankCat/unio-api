@@ -581,6 +581,17 @@ type RouteChannel struct {
 	ChannelID int64
 }
 
+type RouteModelOffering struct {
+	RouteID         int64
+	ModelID         int64
+	IngressProtocol string
+	Status          string
+	DisabledReason  pgtype.Text
+	DisabledAt      pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+}
+
 type RoutingDecisionTrace struct {
 	ID               int64
 	RequestRecordID  int64

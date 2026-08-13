@@ -59,6 +59,10 @@ func (s *createStore) ArchiveChannel(context.Context, int64) (int64, error) {
 	return 0, nil
 }
 
+func (s *createStore) CountEnabledBindingsByChannel(context.Context, int64) (int64, error) {
+	return 0, nil
+}
+
 func (s *createStore) ListRoutesReferencingChannel(context.Context, int64) ([]sqlc.ListRoutesReferencingChannelRow, error) {
 	return nil, nil
 }

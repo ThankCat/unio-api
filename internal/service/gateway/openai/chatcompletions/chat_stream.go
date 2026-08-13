@@ -38,7 +38,19 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 		)
 	}
 
-	// 先创建 request_records，并标记为 running。
+	routeRequest := routing.ChatRouteRequest{
+		UserID:          principal.UserID,
+		ModelID:         req.Model,
+		IngressProtocol: routing.ProtocolOpenAI,
+		Endpoint:        routing.EndpointChatCompletions,
+		RouteID:         principal.RouteID,
+	}
+	if err := s.router.ValidateChat(ctx, routeRequest); err != nil {
+		s.lifecycle.RecordRequestRejected(err)
+		return err
+	}
+
+	// 模型产品资格通过后创建 request_records，并标记为 running。
 	requestRecord, err := s.createRequestRecord(ctx, principal, req, true)
 	if err != nil {
 		return err
@@ -54,13 +66,7 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 	defer span.End()
 
 	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
-	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
-		UserID:          principal.UserID,
-		ModelID:         req.Model,
-		IngressProtocol: routing.ProtocolOpenAI,
-		Endpoint:        routing.EndpointChatCompletions,
-		RouteID:         principal.RouteID,
-	})
+	plan, err := s.router.PlanChat(planCtx, routeRequest)
 	lifecycle.EndGatewaySpan(planSpan, err)
 	if err != nil {
 		s.lifecycle.RecordRoutingFailure(ctx, requestRecord, principal.RouteID, err)

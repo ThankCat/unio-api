@@ -196,6 +196,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		)
 	}
 	channelService := channel.NewService(queries, adapterRegistry)
+	channelService.WithSupplyLinkage(deps.DB, queries)
 	if channelRuntimePublisher != nil && channelRuntimeStore != nil {
 		channelService.WithRuntimeControl(channelRuntimePublisher, channelRuntimeStore)
 	}
@@ -205,9 +206,9 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	channelTestService.SetMetrics(metricsRecorder)
 	channelService.WithCredentialRotator(channelTestService)
 	channelOpsService := channelops.NewService(queries)
-	modelService := model.NewService(queries)
+	modelService := model.NewService(queries, deps.DB, queries)
 	modelOpsService := modelops.NewService(queries)
-	channelModelService := channelmodel.NewService(queries)
+	channelModelService := channelmodel.NewService(queries, deps.DB, queries)
 	channelModelInventoryService := channelmodelinventory.NewService(
 		deps.DB, queries, adapterRegistry, adapterRegistry, providerLedgerService, settingsStore,
 	)

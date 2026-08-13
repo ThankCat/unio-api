@@ -17,6 +17,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
 )
 
 const (
@@ -24,6 +25,11 @@ const (
 	ModeBalanced = "balanced"
 	// ModeFixed 锁定单条渠道。
 	ModeFixed = "fixed"
+
+	// ProtocolOpenAI / ProtocolAnthropic 是 Offering 的 ingress protocol 取值，
+	// 与 route_model_offerings.ingress_protocol 的 DB 约束一致。
+	ProtocolOpenAI    = "openai"
+	ProtocolAnthropic = "anthropic"
 
 	// StatusEnabled 线路启用。
 	StatusEnabled = "enabled"
@@ -64,6 +70,7 @@ type Route struct {
 	ConcurrencyLimit *int64
 	Description      *string
 	Channels         []RouteChannel
+	Offerings        []RouteOffering
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	ArchivedAt       *time.Time
@@ -84,8 +91,39 @@ type RouteChannel struct {
 	ProviderSlug string
 }
 
+// RouteOffering 是线路的一条 Model+协议售卖组合（ADR-0018 Offering 口径）：
+// enabled 表示当前售卖；disabled 保留历史关系、停用原因与时间。
+type RouteOffering struct {
+	ModelID         int64
+	PublicModelID   string
+	DisplayName     string
+	ModelStatus     string
+	IngressProtocol string
+	Status          string
+	DisabledReason  *string
+	DisabledAt      *time.Time
+	// SupportAvailable 表示当前渠道池是否仍有结构支撑（enabled Channel 承载的 enabled Binding）。
+	SupportAvailable bool
+}
+
+// OfferingSelection 是管理员在 Route 表单勾选的一条售卖组合（Model + ingress protocol）。
+type OfferingSelection struct {
+	ModelID         int64
+	IngressProtocol string
+}
+
+// OfferingCandidate 是按渠道池计算出的可勾选售卖组合候选。
+type OfferingCandidate struct {
+	ModelID            int64
+	PublicModelID      string
+	DisplayName        string
+	IngressProtocol    string
+	SupportingChannels int64
+}
+
 // CreateInput 创建线路入参。PriceRatio 为客户售价倍率（十进制字符串，空=默认 1.0）。
 // RPM/TPM/RPD/ConcurrencyLimit 为线路级限流上限（nil=继承默认，0=不限，>0=上限）。
+// Offerings 是显式勾选的售卖组合（ADR-0018）：创建必须至少勾选一个。
 type CreateInput struct {
 	Name             string
 	Mode             string
@@ -96,10 +134,14 @@ type CreateInput struct {
 	ConcurrencyLimit *int64
 	Description      *string
 	ChannelIDs       []int64
+	Offerings        []OfferingSelection
+	// Confirmation 是保存触发 Offering 联动（route_channel_removed）时的二次确认参数。
+	Confirmation supply.Confirmation
 }
 
 // UpdateInput 更新线路入参（含渠道池整体替换）。PriceRatio 为客户售价倍率（十进制字符串，空=默认 1.0）。
 // RPM/TPM/RPD/ConcurrencyLimit 为线路级限流上限（nil=继承默认，0=不限，>0=上限）。
+// Offerings 是显式勾选的售卖组合；编辑允许勾选为空（线路暂无售卖由 Offering 状态表达）。
 type UpdateInput struct {
 	ID               int64
 	Name             string
@@ -111,6 +153,9 @@ type UpdateInput struct {
 	ConcurrencyLimit *int64
 	Description      *string
 	ChannelIDs       []int64
+	Offerings        []OfferingSelection
+	// Confirmation 是保存触发 Offering 联动（route_channel_removed）时的二次确认参数。
+	Confirmation supply.Confirmation
 }
 
 // List 列出全部线路及各自渠道池。
@@ -127,6 +172,11 @@ func (s *Service) List(ctx context.Context) ([]Route, error) {
 			return nil, err
 		}
 		r.Channels = channels
+		offerings, err := s.listOfferings(ctx, row.ID)
+		if err != nil {
+			return nil, err
+		}
+		r.Offerings = offerings
 		out = append(out, r)
 	}
 	return out, nil
@@ -150,14 +200,58 @@ func (s *Service) Get(ctx context.Context, id int64) (Route, error) {
 		return Route{}, err
 	}
 	r.Channels = channels
+	offerings, err := s.listOfferings(ctx, id)
+	if err != nil {
+		return Route{}, err
+	}
+	r.Offerings = offerings
 	return r, nil
 }
 
-// Create 创建自定义线路（事务内建线路 + 渠道池）。
+// OfferingCandidates 按给定渠道池计算可勾选的 Model+协议售卖组合候选（ADR-0018）：
+// enabled Channel 承载的 enabled Binding 且 Model enabled；不读取 breaker、容量、凭据或价格。
+func (s *Service) OfferingCandidates(ctx context.Context, channelIDs []int64) ([]OfferingCandidate, error) {
+	unique := make(map[int64]struct{}, len(channelIDs))
+	ids := make([]int64, 0, len(channelIDs))
+	for _, id := range channelIDs {
+		if id <= 0 {
+			return nil, invalidArgument("channel_ids", "channel id must be positive")
+		}
+		if _, dup := unique[id]; dup {
+			continue
+		}
+		unique[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return []OfferingCandidate{}, nil
+	}
+	rows, err := s.queries.ListOfferingCandidatesForChannels(ctx, ids)
+	if err != nil {
+		return nil, storeFailed(err, "list offering candidates")
+	}
+	out := make([]OfferingCandidate, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, OfferingCandidate{
+			ModelID:            row.ModelID,
+			PublicModelID:      row.PublicModelID,
+			DisplayName:        row.DisplayName,
+			IngressProtocol:    row.IngressProtocol,
+			SupportingChannels: row.SupportingChannels,
+		})
+	}
+	return out, nil
+}
+
+// Create 创建自定义线路（事务内建线路 + 渠道池 + 显式售卖组合）。
 func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 	name := strings.TrimSpace(in.Name)
 	if err := validateRouteShape(name, in.Mode, in.Status, in.ChannelIDs); err != nil {
 		return Route{}, err
+	}
+	// 创建必须至少勾选一个售卖组合；编辑允许为空（ADR-0018）。
+	if len(in.Offerings) == 0 {
+		return Route{}, invalidArgument("offerings", "route must offer at least one model+protocol combination")
 	}
 	priceRatio, err := parsePriceRatio(in.PriceRatio)
 	if err != nil {
@@ -194,6 +288,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 	if err := addRouteChannels(ctx, q, row.ID, in.ChannelIDs); err != nil {
 		return Route{}, err
 	}
+	if err := applyOfferingSelections(ctx, q, row, in.Offerings, in.ChannelIDs, in.Confirmation); err != nil {
+		return Route{}, err
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return Route{}, storeFailed(err, "commit create route transaction")
@@ -202,7 +299,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 	return s.Get(ctx, row.ID)
 }
 
-// Update 更新线路（事务内改线路 + 整体替换渠道池）。
+// Update 更新线路（事务内改线路 + 整体替换渠道池 + 按组合差异更新售卖）。
 func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 	if in.ID <= 0 {
 		return Route{}, invalidArgument("id", "id must be positive")
@@ -233,7 +330,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := s.queries.WithTx(tx)
 
-	if _, err := q.UpdateRoute(ctx, sqlc.UpdateRouteParams{
+	row, err := q.UpdateRoute(ctx, sqlc.UpdateRouteParams{
 		ID:               in.ID,
 		Name:             name,
 		Mode:             in.Mode,
@@ -243,7 +340,8 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 		RpdLimit:         int4Narg(in.RPDLimit),
 		ConcurrencyLimit: int4Narg(in.ConcurrencyLimit),
 		Description:      textParam(in.Description),
-	}); err != nil {
+	})
+	if err != nil {
 		if isUniqueViolation(err) {
 			return Route{}, conflict("route name already exists")
 		}
@@ -256,6 +354,9 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 	if err := addRouteChannels(ctx, q, in.ID, in.ChannelIDs); err != nil {
 		return Route{}, err
 	}
+	if err := applyOfferingSelections(ctx, q, row, in.Offerings, in.ChannelIDs, in.Confirmation); err != nil {
+		return Route{}, err
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return Route{}, storeFailed(err, "commit update route transaction")
@@ -264,8 +365,9 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 	return s.Get(ctx, in.ID)
 }
 
-// SetChannels 整体替换线路渠道池（事务内 delete + insert）。
-func (s *Service) SetChannels(ctx context.Context, id int64, channelIDs []int64) (Route, error) {
+// SetChannels 整体替换线路渠道池（事务内 delete + insert）。既有 enabled 售卖组合视为
+// 保持勾选：因换池失去最后结构支撑的组合经影响指纹确认后置 disabled(route_channel_removed)。
+func (s *Service) SetChannels(ctx context.Context, id int64, channelIDs []int64, confirmation supply.Confirmation) (Route, error) {
 	if id <= 0 {
 		return Route{}, invalidArgument("id", "id must be positive")
 	}
@@ -280,6 +382,19 @@ func (s *Service) SetChannels(ctx context.Context, id int64, channelIDs []int64)
 	if err := validatePoolCount(existing.Mode, channelIDs); err != nil {
 		return Route{}, err
 	}
+	current, err := s.listOfferings(ctx, id)
+	if err != nil {
+		return Route{}, err
+	}
+	selections := make([]OfferingSelection, 0, len(current))
+	for _, offering := range current {
+		if offering.Status == supply.OfferingEnabled {
+			selections = append(selections, OfferingSelection{
+				ModelID:         offering.ModelID,
+				IngressProtocol: offering.IngressProtocol,
+			})
+		}
+	}
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -292,6 +407,9 @@ func (s *Service) SetChannels(ctx context.Context, id int64, channelIDs []int64)
 		return Route{}, storeFailed(err, "reset route channels")
 	}
 	if err := addRouteChannels(ctx, q, id, channelIDs); err != nil {
+		return Route{}, err
+	}
+	if err := applyOfferingSelections(ctx, q, existing, selections, channelIDs, confirmation); err != nil {
 		return Route{}, err
 	}
 
@@ -441,6 +559,35 @@ func (s *Service) listChannels(ctx context.Context, routeID int64) ([]RouteChann
 	return out, nil
 }
 
+func (s *Service) listOfferings(ctx context.Context, routeID int64) ([]RouteOffering, error) {
+	rows, err := s.queries.ListRouteOfferingDetails(ctx, routeID)
+	if err != nil {
+		return nil, storeFailed(err, "list route offerings")
+	}
+	out := make([]RouteOffering, 0, len(rows))
+	for _, row := range rows {
+		offering := RouteOffering{
+			ModelID:          row.ModelID,
+			PublicModelID:    row.PublicModelID,
+			DisplayName:      row.DisplayName,
+			ModelStatus:      row.ModelStatus,
+			IngressProtocol:  row.IngressProtocol,
+			Status:           row.Status,
+			SupportAvailable: row.SupportAvailable,
+		}
+		if row.DisabledReason.Valid {
+			reason := row.DisabledReason.String
+			offering.DisabledReason = &reason
+		}
+		if row.DisabledAt.Valid {
+			at := row.DisabledAt.Time
+			offering.DisabledAt = &at
+		}
+		out = append(out, offering)
+	}
+	return out, nil
+}
+
 func addRouteChannels(ctx context.Context, q *sqlc.Queries, routeID int64, channelIDs []int64) error {
 	seen := make(map[int64]struct{}, len(channelIDs))
 	for _, channelID := range channelIDs {
@@ -459,6 +606,168 @@ func addRouteChannels(ctx context.Context, q *sqlc.Queries, routeID int64, chann
 		}
 	}
 	return nil
+}
+
+// comboKey 是 Offering 差异计算的 Model+协议组合键。
+type comboKey struct {
+	modelID  int64
+	protocol string
+}
+
+// applyOfferingSelections 在保存事务内按 Model+协议组合差异更新 Offering（ADR-0018）：
+//
+//   - 结构支撑与影响计算一律按提交后的最终 Channel 池（finalChannelIDs）聚合评估，
+//     同一次保存移除并加入 Channel（含 fixed 换渠道）不误停仍受支撑的组合；
+//   - 新勾选或重新勾选的组合必须有结构支撑且 Model enabled，否则拒绝保存；
+//   - 保持勾选但因本次渠道调整失去支撑的 enabled 组合，经影响指纹确认后置
+//     disabled(route_channel_removed)；
+//   - 未勾选的 enabled 组合是显式取消，置 disabled(manual_unselected)，不需要确认；
+//   - 其余 disabled 组合保持不动（不删除、不恢复、不导致保存失败）。
+func applyOfferingSelections(
+	ctx context.Context,
+	q *sqlc.Queries,
+	routeRow sqlc.Route,
+	selections []OfferingSelection,
+	finalChannelIDs []int64,
+	confirmation supply.Confirmation,
+) error {
+	selected := make(map[comboKey]struct{}, len(selections))
+	orderedKeys := make([]comboKey, 0, len(selections))
+	modelIDs := make([]int64, 0, len(selections))
+	for _, sel := range selections {
+		if sel.ModelID <= 0 {
+			return invalidArgument("offerings", "model id must be positive")
+		}
+		if sel.IngressProtocol != ProtocolOpenAI && sel.IngressProtocol != ProtocolAnthropic {
+			return invalidArgument("offerings", "ingress_protocol must be openai or anthropic")
+		}
+		key := comboKey{modelID: sel.ModelID, protocol: sel.IngressProtocol}
+		if _, dup := selected[key]; dup {
+			continue
+		}
+		selected[key] = struct{}{}
+		orderedKeys = append(orderedKeys, key)
+		modelIDs = append(modelIDs, sel.ModelID)
+	}
+
+	pool := dedupeChannelIDs(finalChannelIDs)
+
+	// 结构支撑串行化（ADR-0018）：锁定本次勾选与既有 Offering 涉及的全部 Model，
+	// 锁内重读既有 Offering 作为差异计算的权威事实，不复用锁外读数。
+	existingPre, err := q.ListRouteOfferingDetails(ctx, routeRow.ID)
+	if err != nil {
+		return storeFailed(err, "list route offerings for lock set")
+	}
+	for _, row := range existingPre {
+		modelIDs = append(modelIDs, row.ModelID)
+	}
+	if err := supply.LockModels(ctx, q, modelIDs); err != nil {
+		return storeFailed(err, "lock models for route save")
+	}
+	existing, err := q.ListRouteOfferingDetails(ctx, routeRow.ID)
+	if err != nil {
+		return storeFailed(err, "list route offerings in lock")
+	}
+	existingByKey := make(map[comboKey]sqlc.ListRouteOfferingDetailsRow, len(existing))
+	for _, row := range existing {
+		existingByKey[comboKey{modelID: row.ModelID, protocol: row.IngressProtocol}] = row
+	}
+
+	losing := make([]supply.AffectedOffering, 0)
+	toEnable := make([]comboKey, 0)
+	for _, key := range orderedKeys {
+		row, exists := existingByKey[key]
+		supported, err := q.OfferingComboSupportedByPool(ctx, sqlc.OfferingComboSupportedByPoolParams{
+			ChannelIds:      pool,
+			IngressProtocol: key.protocol,
+			ModelID:         key.modelID,
+		})
+		if err != nil {
+			return storeFailed(err, "check offering structural support")
+		}
+		if exists && row.Status == supply.OfferingEnabled {
+			if !supported {
+				losing = append(losing, supply.AffectedOffering{
+					RouteID:          routeRow.ID,
+					RouteName:        routeRow.Name,
+					RouteStatus:      routeRow.Status,
+					ModelID:          key.modelID,
+					PublicModelID:    row.PublicModelID,
+					ModelDisplayName: row.DisplayName,
+					IngressProtocol:  key.protocol,
+				})
+			}
+			continue
+		}
+		// 新勾选或重新勾选 disabled 组合：必须有最终池结构支撑且 Model enabled（并发停用在锁内可见）。
+		if !supported {
+			return invalidArgument("offerings",
+				"selected model+protocol combination has no structural support in the submitted channel pool or its model is disabled")
+		}
+		toEnable = append(toEnable, key)
+	}
+
+	// 保持勾选但失去支撑：按最终池聚合确认后置 route_channel_removed。
+	if len(losing) > 0 {
+		impact := supply.Impact{Kind: "route_channel_removed", AffectedOfferings: losing}
+		if err := supply.Authorize(impact,
+			"route_channel_removed_confirmation_required",
+			"the submitted channel pool leaves kept offerings without structural support; confirm with the impact fingerprint",
+			confirmation,
+		); err != nil {
+			return err
+		}
+		if err := supply.DisableOfferings(ctx, q, losing, supply.ReasonRouteChannelRemoved); err != nil {
+			return storeFailed(err, "disable offerings losing support")
+		}
+	}
+
+	for _, key := range toEnable {
+		if err := q.EnableRouteModelOffering(ctx, sqlc.EnableRouteModelOfferingParams{
+			RouteID:         routeRow.ID,
+			ModelID:         key.modelID,
+			IngressProtocol: key.protocol,
+		}); err != nil {
+			return storeFailed(err, "enable route model offering")
+		}
+	}
+
+	// 未勾选的 enabled 组合 → 主动取消售卖。
+	for _, row := range existing {
+		key := comboKey{modelID: row.ModelID, protocol: row.IngressProtocol}
+		if _, keep := selected[key]; keep {
+			continue
+		}
+		if row.Status != supply.OfferingEnabled {
+			continue
+		}
+		unselected := []supply.AffectedOffering{{
+			RouteID:         routeRow.ID,
+			ModelID:         row.ModelID,
+			IngressProtocol: row.IngressProtocol,
+		}}
+		if err := supply.DisableOfferings(ctx, q, unselected, supply.ReasonManualUnselected); err != nil {
+			return storeFailed(err, "unselect route model offering")
+		}
+	}
+
+	return nil
+}
+
+func dedupeChannelIDs(channelIDs []int64) []int64 {
+	seen := make(map[int64]struct{}, len(channelIDs))
+	out := make([]int64, 0, len(channelIDs))
+	for _, id := range channelIDs {
+		if id <= 0 {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func validateRouteShape(name, mode, status string, channelIDs []int64) error {

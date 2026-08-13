@@ -19,6 +19,10 @@ func (s *fakeChatRouteStore) ModelExistsByID(ctx context.Context, requestedModel
 	return true, nil
 }
 
+func (s *fakeChatRouteStore) RouteOffersModel(context.Context, sqlc.RouteOffersModelParams) (bool, error) {
+	return true, nil
+}
+
 func (s *fakeChatRouteStore) UserCanUseModel(ctx context.Context, arg sqlc.UserCanUseModelParams) (bool, error) {
 	return true, nil
 }

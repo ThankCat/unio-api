@@ -8,6 +8,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 )
 
@@ -29,6 +30,37 @@ type MetricsRecorder interface {
 	IncRoutingSkip(reason string)
 	// ObserveRoutingCapacityWait 记录全池并发短等实际等待时长（§9.4）。
 	ObserveRoutingCapacityWait(duration time.Duration)
+}
+
+type requestRejectionMetricsRecorder interface {
+	IncRequestRejected(protocol string, reason string)
+}
+
+// RecordRequestRejected records a bounded qualification outcome that happened before request_records creation.
+func (l *RequestLifecycle) RecordRequestRejected(err error) {
+	if l == nil || err == nil {
+		return
+	}
+	m, ok := l.metrics.(requestRejectionMetricsRecorder)
+	if !ok {
+		return
+	}
+	m.IncRequestRejected(string(l.ingressProtocol), requestRejectionReason(err))
+}
+
+func requestRejectionReason(err error) string {
+	switch failure.CodeOf(err) {
+	case failure.CodeRoutingModelNotFound:
+		return "model_not_found"
+	case failure.CodeRoutingModelNotAvailable:
+		return "model_not_available"
+	case failure.CodeRoutingRouteNotConfigured:
+		return "route_not_configured"
+	case failure.CodeRoutingProtocolInvalid:
+		return "protocol_invalid"
+	default:
+		return "qualification_error"
+	}
 }
 
 type routingBalanceMetricsRecorder interface {

@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	observabilitymetrics "github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 )
 
@@ -21,6 +23,7 @@ type routingMetricsSpy struct {
 	timings                 []timingObservation
 	providerFailures        []string
 	channelFailures         []string
+	rejections              []string
 }
 
 type timingObservation struct {
@@ -44,6 +47,9 @@ func (s *routingMetricsSpy) IncRetryableFallback(string)                        
 func (s *routingMetricsSpy) IncZeroPriceServed(string, string, string)            {}
 func (s *routingMetricsSpy) IncRoutingSkip(string)                                {}
 func (s *routingMetricsSpy) ObserveRoutingCapacityWait(time.Duration)             {}
+func (s *routingMetricsSpy) IncRequestRejected(protocol, reason string) {
+	s.rejections = append(s.rejections, protocol+"/"+reason)
+}
 
 func (s *routingMetricsSpy) ObserveRoutingBalance(string, string, int, int, float64) {}
 func (s *routingMetricsSpy) IncRoutingBalanceSelected(string, string)                {}
@@ -82,6 +88,32 @@ func (s *routingMetricsSpy) IncProviderFailure(originID, category string) {
 }
 func (s *routingMetricsSpy) IncChannelFailure(channelID, category string) {
 	s.channelFailures = append(s.channelFailures, channelID+"/"+category)
+}
+
+func TestRecordRequestRejectedUsesBoundedReasons(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "model not found", err: failure.New(failure.CodeRoutingModelNotFound), want: "openai/model_not_found"},
+		{name: "model not available", err: failure.New(failure.CodeRoutingModelNotAvailable), want: "openai/model_not_available"},
+		{name: "route not configured", err: failure.New(failure.CodeRoutingRouteNotConfigured), want: "openai/route_not_configured"},
+		{name: "protocol invalid", err: failure.New(failure.CodeRoutingProtocolInvalid), want: "openai/protocol_invalid"},
+		{name: "store failure", err: failure.New(failure.CodeRoutingStoreFailed), want: "openai/qualification_error"},
+		{name: "unknown", err: errors.New("plain error"), want: "openai/qualification_error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spy := &routingMetricsSpy{}
+			lifecycle := &RequestLifecycle{metrics: spy, ingressProtocol: requestlog.ProtocolOpenAI}
+			lifecycle.RecordRequestRejected(tt.err)
+			if len(spy.rejections) != 1 || spy.rejections[0] != tt.want {
+				t.Fatalf("rejections = %#v, want %q", spy.rejections, tt.want)
+			}
+		})
+	}
 }
 
 func TestRecordRoutingPlanPublishesWeightsAndBreakerFacts(t *testing.T) {

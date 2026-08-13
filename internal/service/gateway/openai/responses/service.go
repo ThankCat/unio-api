@@ -20,6 +20,7 @@ import (
 //
 // Responses 复用 OpenAI Chat routing：客户模型名（方案 A，DEC-014）按 ProtocolOpenAI 解析候选。
 type ChatRouter interface {
+	ValidateChat(ctx context.Context, req routing.ChatRouteRequest) error
 	PlanChat(ctx context.Context, req routing.ChatRouteRequest) (routing.ChatRoutePlan, error)
 }
 

@@ -19,6 +19,7 @@ type RouteOpsService interface {
 	PerformanceTimeseries(ctx context.Context, routeID int64, interval string, from, to time.Time) ([]routeops.PerfPoint, error)
 	Models(ctx context.Context, routeID int64, from, to time.Time) ([]routeops.ModelRow, error)
 	ReachableModels(ctx context.Context, routeID int64) ([]routeops.ReachableModel, error)
+	Offerings(ctx context.Context, routeID int64) ([]routeops.Offering, error)
 	Requests(ctx context.Context, routeID int64, from, to time.Time, limit, offset int32) ([]routeops.RequestRow, int64, error)
 }
 
@@ -39,7 +40,21 @@ type routeOpsRowDTO struct {
 	CreatedAt        string `json:"created_at"`
 	BoundKeys        int64  `json:"bound_keys"`
 	PoolChannels     int64  `json:"pool_channels"`
-	ModelsCount      int64  `json:"models_count"`
+	// 售卖模型统计（ADR-0018 Offering 口径）：总数与 enabled/disabled 分布。
+	OfferingsTotal    int64 `json:"offerings_total"`
+	OfferingsEnabled  int64 `json:"offerings_enabled"`
+	OfferingsDisabled int64 `json:"offerings_disabled"`
+}
+
+// routeOpsOfferingDTO 是线路一条售卖组合（列表悬浮/详情）。
+type routeOpsOfferingDTO struct {
+	ModelID          string  `json:"model_id"`
+	DisplayName      string  `json:"display_name"`
+	ModelStatus      string  `json:"model_status"`
+	IngressProtocol  string  `json:"ingress_protocol"`
+	Status           string  `json:"status"`
+	DisabledReason   *string `json:"disabled_reason"`
+	SupportAvailable bool    `json:"support_available"`
 }
 
 type routeOpsDetailDTO struct {
@@ -148,10 +163,12 @@ func (h *routeOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			RpmLimit:         row.RpmLimit,
 			RpdLimit:         row.RpdLimit,
 			ConcurrencyLimit: row.ConcurrencyLimit,
-			CreatedAt:        adminhttp.RFC3339(row.CreatedAt),
-			BoundKeys:        row.BoundKeys,
-			PoolChannels:     row.PoolChannels,
-			ModelsCount:      row.ModelsCount,
+			CreatedAt:         adminhttp.RFC3339(row.CreatedAt),
+			BoundKeys:         row.BoundKeys,
+			PoolChannels:      row.PoolChannels,
+			OfferingsTotal:    row.OfferingsTotal,
+			OfferingsEnabled:  row.OfferingsEnabled,
+			OfferingsDisabled: row.OfferingsDisabled,
 		})
 	}
 	adminhttp.WriteList(w, http.StatusOK, out, page, total)
@@ -200,6 +217,33 @@ func (h *routeOpsHandler) reachableModels(w http.ResponseWriter, r *http.Request
 	out := make([]routeOpsReachableModelDTO, 0, len(rows))
 	for _, m := range rows {
 		out = append(out, routeOpsReachableModelDTO{ModelID: m.ModelID, DisplayName: m.DisplayName})
+	}
+	adminhttp.WriteData(w, http.StatusOK, out)
+}
+
+// offerings 返回线路全部售卖组合（Offering 口径，列表悬浮/详情展示）。
+func (h *routeOpsHandler) offerings(w http.ResponseWriter, r *http.Request) {
+	id, err := adminhttp.PathID(r)
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	rows, err := h.service.Offerings(r.Context(), id)
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	out := make([]routeOpsOfferingDTO, 0, len(rows))
+	for _, o := range rows {
+		out = append(out, routeOpsOfferingDTO{
+			ModelID:          o.ModelID,
+			DisplayName:      o.DisplayName,
+			ModelStatus:      o.ModelStatus,
+			IngressProtocol:  o.IngressProtocol,
+			Status:           o.Status,
+			DisabledReason:   o.DisabledReason,
+			SupportAvailable: o.SupportAvailable,
+		})
 	}
 	adminhttp.WriteData(w, http.StatusOK, out)
 }

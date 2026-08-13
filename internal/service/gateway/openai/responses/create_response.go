@@ -176,6 +176,18 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	if req.Reasoning != nil && req.Reasoning.Effort != nil {
 		effort = *req.Reasoning.Effort
 	}
+	routeRequest := routing.ChatRouteRequest{
+		UserID:          principal.UserID,
+		ModelID:         req.Model,
+		IngressProtocol: routing.ProtocolOpenAI,
+		Endpoint:        routing.EndpointResponses,
+		RouteID:         principal.RouteID,
+	}
+	if err := s.router.ValidateChat(ctx, routeRequest); err != nil {
+		s.lifecycle.RecordRequestRejected(err)
+		return nil, err
+	}
+
 	requestRecord, err := s.lifecycle.CreateRequest(ctx, principal, req.Model, false, lifecycle.NormalizeOpenAIEffort(effort, req.Model))
 	if err != nil {
 		return nil, err
@@ -191,13 +203,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	defer span.End()
 
 	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
-	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
-		UserID:          principal.UserID,
-		ModelID:         req.Model,
-		IngressProtocol: routing.ProtocolOpenAI,
-		Endpoint:        routing.EndpointResponses,
-		RouteID:         principal.RouteID,
-	})
+	plan, err := s.router.PlanChat(planCtx, routeRequest)
 	lifecycle.EndGatewaySpan(planSpan, err)
 	if err != nil {
 		s.lifecycle.RecordRoutingFailure(ctx, requestRecord, principal.RouteID, err)

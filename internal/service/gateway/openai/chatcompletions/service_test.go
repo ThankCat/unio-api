@@ -25,10 +25,16 @@ import (
 
 // fakeChatRouter 是 gateway 测试使用的 routing 替身。
 type fakeChatRouter struct {
-	called bool
-	req    routing.ChatRouteRequest
-	plan   routing.ChatRoutePlan
-	err    error
+	called      bool
+	req         routing.ChatRouteRequest
+	plan        routing.ChatRoutePlan
+	err         error
+	validateErr error
+}
+
+func (r *fakeChatRouter) ValidateChat(ctx context.Context, req routing.ChatRouteRequest) error {
+	r.req = req
+	return r.validateErr
 }
 
 // PlanChat 记录 gateway 传入的 routing 请求，并返回测试预设计划。
@@ -78,6 +84,7 @@ type fakeRetryClassifier struct {
 type fakeChatMetricsRecorder struct {
 	requests     []observabilitymetrics.ChatOutcome
 	streamEvents []observabilitymetrics.StreamEvent
+	rejections   []string
 }
 
 func (m *fakeChatMetricsRecorder) IncChatRequest(_ bool, outcome observabilitymetrics.ChatOutcome) {
@@ -96,6 +103,9 @@ func (*fakeChatMetricsRecorder) IncRetryableFallback(string)               {}
 func (*fakeChatMetricsRecorder) IncZeroPriceServed(string, string, string) {}
 func (*fakeChatMetricsRecorder) IncRoutingSkip(string)                     {}
 func (*fakeChatMetricsRecorder) ObserveRoutingCapacityWait(time.Duration)  {}
+func (m *fakeChatMetricsRecorder) IncRequestRejected(protocol, reason string) {
+	m.rejections = append(m.rejections, protocol+"/"+reason)
+}
 
 // IsRetryable 记录调用次数，并返回测试预设的 retry 判断结果。
 func (c *fakeRetryClassifier) IsRetryable(err error) bool {
@@ -899,6 +909,43 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotCallAdapterOnRoutingErr
 	}
 	if requestLog.markRequestFailedArgs[0].InternalErrorDetail != routingErr.Error() {
 		t.Fatalf("expected internal error detail %q, got %q", routingErr.Error(), requestLog.markRequestFailedArgs[0].InternalErrorDetail)
+	}
+}
+
+func TestChatCompletionServiceQualificationFailureDoesNotCreateRequestRecord(t *testing.T) {
+	qualificationErr := failure.Wrap(
+		failure.CodeRoutingModelNotAvailable,
+		routing.ErrModelNotAvailable,
+		failure.WithMessage(routing.ErrModelNotAvailable.Error()),
+	)
+	requestLog := newFakeRequestLogService()
+	metricsRecorder := &fakeChatMetricsRecorder{}
+	service := NewChatCompletionService(
+		&fakeChatRouter{validateErr: qualificationErr},
+		&fakeAdapterRegistry{},
+		passthroughCandidatePreparer{inputTokens: 1},
+		lifecycle.NeverRetryClassifier{},
+		requestLog,
+		newChatCompletionSettlementForTest(),
+		newChatCompletionAuthorizerForTest(),
+		metricsRecorder,
+	)
+
+	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
+	if !errors.Is(err, routing.ErrModelNotAvailable) {
+		t.Fatalf("expected qualification error, got %v", err)
+	}
+	if len(requestLog.createRequests) != 0 {
+		t.Fatalf("qualification rejection must not create request record, got %d", len(requestLog.createRequests))
+	}
+	if len(requestLog.markRequestFailedArgs) != 0 {
+		t.Fatalf("qualification rejection must not mark request failed, got %d", len(requestLog.markRequestFailedArgs))
+	}
+	if len(metricsRecorder.requests) != 0 {
+		t.Fatalf("qualification rejection must not count as chat request failure, got %#v", metricsRecorder.requests)
+	}
+	if len(metricsRecorder.rejections) != 1 || metricsRecorder.rejections[0] != "openai/model_not_available" {
+		t.Fatalf("qualification rejection metric = %#v", metricsRecorder.rejections)
 	}
 }
 

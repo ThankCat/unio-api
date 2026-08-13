@@ -24,8 +24,13 @@ import (
 // --- 替身 ---
 
 type fakeRouter struct {
-	plan routing.ChatRoutePlan
-	err  error
+	plan        routing.ChatRoutePlan
+	err         error
+	validateErr error
+}
+
+func (r *fakeRouter) ValidateChat(_ context.Context, _ routing.ChatRouteRequest) error {
+	return r.validateErr
 }
 
 func (r *fakeRouter) PlanChat(_ context.Context, _ routing.ChatRouteRequest) (routing.ChatRoutePlan, error) {

@@ -18,6 +18,10 @@ func (db fakeChatGatewayDB) Begin(ctx context.Context) (pgx.Tx, error) {
 
 type fakeChatGatewayRouter struct{}
 
+func (r fakeChatGatewayRouter) ValidateChat(context.Context, routing.ChatRouteRequest) error {
+	return nil
+}
+
 func (r fakeChatGatewayRouter) PlanChat(ctx context.Context, req routing.ChatRouteRequest) (routing.ChatRoutePlan, error) {
 	return routing.ChatRoutePlan{}, nil
 }

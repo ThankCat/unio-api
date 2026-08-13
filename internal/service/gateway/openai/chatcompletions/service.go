@@ -15,6 +15,7 @@ import (
 
 // ChatRouter 定义 gateway 为 chat 请求生成有序 route plan 所需的 routing 能力。
 type ChatRouter interface {
+	ValidateChat(ctx context.Context, req routing.ChatRouteRequest) error
 	PlanChat(ctx context.Context, req routing.ChatRouteRequest) (routing.ChatRoutePlan, error)
 }
 

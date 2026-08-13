@@ -27,6 +27,18 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 		)
 	}
 
+	routeRequest := routing.ChatRouteRequest{
+		UserID:          principal.UserID,
+		ModelID:         req.Model,
+		IngressProtocol: routing.ProtocolAnthropic,
+		Endpoint:        routing.EndpointMessages,
+		RouteID:         principal.RouteID,
+	}
+	if err := s.router.ValidateChat(ctx, routeRequest); err != nil {
+		s.lifecycle.RecordRequestRejected(err)
+		return nil, err
+	}
+
 	requestRecord, err := s.createMessageRequestRecord(ctx, principal, req, false)
 	if err != nil {
 		return nil, err
@@ -41,13 +53,7 @@ func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.Mess
 	defer span.End()
 
 	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
-	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
-		UserID:          principal.UserID,
-		ModelID:         req.Model,
-		IngressProtocol: routing.ProtocolAnthropic,
-		Endpoint:        routing.EndpointMessages,
-		RouteID:         principal.RouteID,
-	})
+	plan, err := s.router.PlanChat(planCtx, routeRequest)
 	lifecycle.EndGatewaySpan(planSpan, err)
 	if err != nil {
 		s.lifecycle.RecordRoutingFailure(ctx, requestRecord, principal.RouteID, err)

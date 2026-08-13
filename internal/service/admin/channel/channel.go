@@ -23,6 +23,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
 )
 
 const (
@@ -48,7 +49,14 @@ type Store interface {
 	DeleteChannelCascade(ctx context.Context, id int64) (int64, error)
 	ArchiveChannel(ctx context.Context, id int64) (int64, error)
 	ListRoutesReferencingChannel(ctx context.Context, channelID int64) ([]sqlc.ListRoutesReferencingChannelRow, error)
+	CountEnabledBindingsByChannel(ctx context.Context, channelID int64) (int64, error)
 	RestoreChannel(ctx context.Context, id int64) (int64, error)
+}
+
+// TxBeginner 提供事务能力（由 pgxpool 满足），用于 Channel 实体停用时的
+// 结构支撑串行化与 Offering 联动（ADR-0018）。
+type TxBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 // RuntimeControlPublisher 是 Channel 并发容量的 durable publisher。
@@ -196,6 +204,8 @@ type UpdateInput struct {
 	// CapacityProvided 区分「字段缺省=保持不变」与「显式 null=继承全局默认」。
 	CapacityProvided bool
 	ConcurrencyLimit *int64
+	// Confirmation 是停用 Channel 触发 Offering 联动时的二次确认参数（ADR-0018）。
+	Confirmation supply.Confirmation
 }
 
 // RotateCredentialInput 是轮换 channel 上游凭据的入参。
@@ -257,11 +267,23 @@ type Service struct {
 	credentialRotator CredentialRotator
 	runtimePublisher  RuntimeControlPublisher
 	runtimeStore      CapacityControlStore
+	db                TxBeginner
+	queries           *sqlc.Queries
 }
 
 // NewService 创建 channel 管理服务。
 func NewService(store Store, registry AdapterRegistry) *Service {
 	return &Service{store: store, registry: registry}
+}
+
+// WithSupplyLinkage 注入 Channel 实体停用联动所需的事务能力（ADR-0018）；
+// 生产 bootstrap 必须注入，缺失时停用转换 fail-closed。
+func (s *Service) WithSupplyLinkage(db TxBeginner, queries *sqlc.Queries) *Service {
+	if s != nil {
+		s.db = db
+		s.queries = queries
+	}
+	return s
 }
 
 // WithRuntimeControl 注入 Channel 并发容量的 durable publisher 与 Redis control store。
@@ -509,6 +531,9 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	if status == StatusEnabled && provider.Status != StatusEnabled {
 		return Channel{}, conflict("enabled channel requires an enabled provider")
 	}
+	// Channel 实体停用是结构供给收缩（ADR-0018）：需要 Model 锁、影响预览与指纹确认联动。
+	disabling := cur.Status == StatusEnabled && status == StatusDisabled
+
 	if in.CapacityProvided {
 		desiredCapacity := ChannelCapacity{Concurrency: in.ConcurrencyLimit}
 		desiredPayload, payloadErr := CanonicalCapacityPayload(desiredCapacity)
@@ -520,8 +545,12 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 			return Channel{}, storeFailed(payloadErr, "encode current channel capacity")
 		}
 		if currentPayload != desiredPayload {
-			return s.updateWithPublishedCapacity(ctx, in, cur, desiredCapacity, desiredPayload)
+			return s.updateWithPublishedCapacity(ctx, in, cur, desiredCapacity, desiredPayload, disabling)
 		}
+	}
+
+	if disabling {
+		return s.disableChannelWithLinkage(ctx, in, name)
 	}
 
 	row, err := s.store.UpdateChannel(ctx, sqlc.UpdateChannelParams{
@@ -553,12 +582,73 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	return s.enrichProviderName(ctx, ch)
 }
 
+// disableChannelWithLinkage 在一个事务内停用 Channel 实体并联动暂停失去最后结构支撑的
+// Offering（原因 channel_disabled）。Binding 行不改写、Model 不自动停用（ADR-0018 全局影响
+// 计算只读取 Binding 行）；重新启用 Channel 后 Offering 不自动恢复。
+func (s *Service) disableChannelWithLinkage(ctx context.Context, in UpdateInput, name string) (Channel, error) {
+	if s.db == nil || s.queries == nil {
+		return Channel{}, storeFailed(errors.New("supply linkage dependencies are unavailable"), "disable channel")
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Channel{}, storeFailed(err, "begin channel disable transaction")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	// 结构支撑串行化：聚合该 Channel 全部 enabled Binding 的 Model 并按稳定顺序锁定，
+	// 锁内计算影响，不复用锁外预检结果。
+	if _, err := supply.LockModelsForChannel(ctx, q, in.ID); err != nil {
+		return Channel{}, storeFailed(err, "lock models for channel disable")
+	}
+	impact, err := supply.ChannelImpact(ctx, q, in.ID)
+	if err != nil {
+		return Channel{}, storeFailed(err, "compute channel disable impact")
+	}
+	if err := supply.Authorize(impact,
+		"channel_disable_confirmation_required",
+		"disabling this channel removes the last structural support for some route offerings; confirm with the impact fingerprint",
+		in.Confirmation,
+	); err != nil {
+		return Channel{}, err
+	}
+
+	row, err := q.UpdateChannel(ctx, sqlc.UpdateChannelParams{
+		ID:                  in.ID,
+		Name:                name,
+		Status:              StatusDisabled,
+		Priority:            in.Priority,
+		ResponseTimeoutMs:   timeoutParam(in.ResponseTimeoutMs),
+		FirstTokenTimeoutMs: timeoutParam(in.FirstTokenTimeoutMs),
+		StickyEnabled:       boolParam(in.StickyEnabled),
+		StickyTtlMs:         nullableInt8Param(in.StickyTTLms),
+	})
+	if err != nil {
+		return Channel{}, channelUpdateError(err)
+	}
+	if err := supply.DisableOfferings(ctx, q, impact.AffectedOfferings, supply.ReasonChannelDisabled); err != nil {
+		return Channel{}, storeFailed(err, "disable offerings losing support")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Channel{}, storeFailed(err, "commit channel disable transaction")
+	}
+
+	ch := toChannel(row)
+	if payload, payloadErr := CanonicalCapacityPayloadFromChannel(row); payloadErr == nil {
+		ch.RuntimeSyncPending = !s.capacityControlIsActive(ctx, row.ID, row.CapacityRevision, payload)
+	} else {
+		ch.RuntimeSyncPending = true
+	}
+	return s.enrichProviderName(ctx, ch)
+}
+
 func (s *Service) updateWithPublishedCapacity(
 	ctx context.Context,
 	in UpdateInput,
 	current sqlc.Channel,
 	capacity ChannelCapacity,
 	payload string,
+	disabling bool,
 ) (Channel, error) {
 	if s.runtimePublisher == nil || s.runtimeStore == nil {
 		return Channel{}, failure.New(
@@ -588,6 +678,25 @@ func (s *Service) updateWithPublishedCapacity(
 		ChannelID:       &channelID,
 		BusinessCommit: func(ctx context.Context, tx pgx.Tx) error {
 			qtx := sqlc.New(tx)
+			// Channel 实体停用联动（ADR-0018）：与容量提交同事务，锁内重算影响并确认。
+			var linkageOfferings []supply.AffectedOffering
+			if disabling {
+				if _, lockErr := supply.LockModelsForChannel(ctx, qtx, channelID); lockErr != nil {
+					return storeFailed(lockErr, "lock models for channel disable")
+				}
+				impact, impactErr := supply.ChannelImpact(ctx, qtx, channelID)
+				if impactErr != nil {
+					return storeFailed(impactErr, "compute channel disable impact")
+				}
+				if authErr := supply.Authorize(impact,
+					"channel_disable_confirmation_required",
+					"disabling this channel removes the last structural support for some route offerings; confirm with the impact fingerprint",
+					in.Confirmation,
+				); authErr != nil {
+					return authErr
+				}
+				linkageOfferings = impact.AffectedOfferings
+			}
 			if _, updateErr := qtx.UpdateChannel(ctx, sqlc.UpdateChannelParams{
 				ID:                  in.ID,
 				Name:                strings.TrimSpace(in.Name),
@@ -611,6 +720,11 @@ func (s *Service) updateWithPublishedCapacity(
 					return conflict("channel capacity changed during publish; retry with current state")
 				}
 				return storeFailed(updateErr, "commit channel capacity")
+			}
+			if disabling {
+				if linkErr := supply.DisableOfferings(ctx, qtx, linkageOfferings, supply.ReasonChannelDisabled); linkErr != nil {
+					return storeFailed(linkErr, "disable offerings losing support")
+				}
 			}
 			committedRow = row
 			return nil
@@ -743,6 +857,15 @@ func (s *Service) Archive(ctx context.Context, id int64) error {
 			"remove channel from route %q (%d) before archiving it",
 			affectedRoutes[0].Name, affectedRoutes[0].ID,
 		))
+	}
+	// 归档前置（ADR-0018）：archived Channel 下不得存在 enabled Binding；
+	// 先经影响预览停用全部 enabled Binding，再归档。
+	enabledBindings, err := s.store.CountEnabledBindingsByChannel(ctx, id)
+	if err != nil {
+		return storeFailed(err, "check channel archive binding impact")
+	}
+	if enabledBindings > 0 {
+		return conflict("disable all enabled model bindings on this channel before archiving it")
 	}
 	affected, err := s.store.ArchiveChannel(ctx, id)
 	if err != nil {

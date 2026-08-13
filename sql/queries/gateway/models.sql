@@ -7,6 +7,20 @@ SELECT EXISTS (
     AND m.status = 'enabled'
 ) AS exists;
 
+-- name: RouteOffersModel :one
+-- RouteOffersModel 判断 API Key 所在线路是否明确向客户提供该模型与入口协议。
+-- 只承认 enabled Offering（ADR-0018）：disabled Offering 保留历史关系，但按未提供处理（404）。
+SELECT EXISTS (
+    SELECT 1
+    FROM route_model_offerings o
+    JOIN models m ON m.id = o.model_id
+    WHERE o.route_id = sqlc.arg(route_id)
+      AND m.model_id = sqlc.arg(requested_model_id)
+      AND m.status = 'enabled'
+      AND o.status = 'enabled'
+      AND o.ingress_protocol = sqlc.arg(ingress_protocol)
+) AS offered;
+
 -- name: ListAvailableModelsForUser :many
 -- ListAvailableModelsForUser 列出指定用户在 API Key 当前线路内可见且可路由的模型，并附带该模型已声明的
 -- cap-tags（能力架构 Layer 2，support_level<>'unsupported' 的 capability_key 去重升序）。
@@ -34,46 +48,14 @@ SELECT
         '{}'
     )::text[] AS capability_keys
 FROM models m
-JOIN channel_models cm ON cm.model_id = m.id
-JOIN channels c ON c.id = cm.channel_id
-JOIN providers p ON p.id = c.provider_id
-JOIN route_channels rc ON rc.channel_id = c.id AND rc.route_id = sqlc.arg(route_id)
-JOIN routes rt ON rt.id = rc.route_id AND rt.status = 'enabled'
+JOIN route_model_offerings o ON o.model_id = m.id
+    AND o.route_id = sqlc.arg(route_id)
+    AND o.status = 'enabled'
+    AND o.ingress_protocol = 'openai'
+JOIN routes rt ON rt.id = o.route_id AND rt.status = 'enabled'
 LEFT JOIN model_capabilities mc ON mc.model_id = m.id
 JOIN user_scope us ON us.user_id > 0
 WHERE m.status = 'enabled'
-    AND cm.status = 'enabled'
-    AND c.status = 'enabled'
-    AND c.credential_valid
-    AND p.status = 'enabled'
-    AND EXISTS (
-        SELECT 1
-        FROM model_prices mp
-        WHERE mp.model_id = m.id
-          AND mp.status = 'enabled'
-          AND mp.effective_from <= now()
-          AND (mp.effective_to IS NULL OR mp.effective_to > now())
-    )
-    AND (
-        EXISTS (
-            SELECT 1
-            FROM channel_prices cp
-            WHERE cp.channel_id = c.id
-              AND cp.model_id = m.id
-              AND cp.status = 'enabled'
-              AND cp.effective_from <= now()
-              AND (cp.effective_to IS NULL OR cp.effective_to > now())
-        )
-        OR EXISTS (
-            SELECT 1
-            FROM channel_cost_multipliers ccm
-            WHERE ccm.channel_id = c.id
-              AND (ccm.model_id = m.id OR ccm.model_id IS NULL)
-              AND ccm.status = 'enabled'
-              AND ccm.effective_from <= now()
-              AND (ccm.effective_to IS NULL OR ccm.effective_to > now())
-        )
-    )
     AND NOT EXISTS (
         SELECT 1
         FROM user_model_policies denied

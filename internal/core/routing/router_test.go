@@ -27,6 +27,9 @@ type fakeStore struct {
 	modelExistsID     string
 	modelExists       bool
 	modelExistsErr    error
+	routeOffersParams sqlc.RouteOffersModelParams
+	routeOffers       bool
+	routeOffersErr    error
 	userCanUseParams  sqlc.UserCanUseModelParams
 	userCanUse        bool
 	userCanUseErr     error
@@ -68,6 +71,11 @@ func (s *fakeStore) FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteC
 func (s *fakeStore) ModelExistsByID(ctx context.Context, requestedModelID string) (bool, error) {
 	s.modelExistsID = requestedModelID
 	return s.modelExists, s.modelExistsErr
+}
+
+func (s *fakeStore) RouteOffersModel(ctx context.Context, arg sqlc.RouteOffersModelParams) (bool, error) {
+	s.routeOffersParams = arg
+	return s.routeOffers, s.routeOffersErr
 }
 
 // UserCanUseModel 记录 user 模型可用性诊断参数，并返回测试预设结果。
@@ -330,10 +338,7 @@ func TestRouterSetDefaultTimeoutTakesEffect(t *testing.T) {
 }
 
 func TestRouterPlanChatReturnsNoAvailableChannel(t *testing.T) {
-	store := &fakeStore{
-		modelExists: true,
-		userCanUse:  true,
-	}
+	store := &fakeStore{}
 	router := NewRouter(store, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
@@ -345,22 +350,16 @@ func TestRouterPlanChatReturnsNoAvailableChannel(t *testing.T) {
 	if !errors.Is(err, ErrNoAvailableChannel) {
 		t.Fatalf("expected ErrNoAvailableChannel, got %v", err)
 	}
-	if store.modelExistsID != "openai/gpt-4.1" {
-		t.Fatalf("expected model exists check for %q, got %q", "openai/gpt-4.1", store.modelExistsID)
-	}
-	if store.userCanUseParams.UserID != 42 {
-		t.Fatalf("expected user can use check for user %d, got %d", int64(42), store.userCanUseParams.UserID)
-	}
-	if store.userCanUseParams.RequestedModelID != "openai/gpt-4.1" {
-		t.Fatalf("expected user can use check for model %q, got %q", "openai/gpt-4.1", store.userCanUseParams.RequestedModelID)
+	if store.modelExistsID != "" || store.userCanUseParams.UserID != 0 {
+		t.Fatalf("PlanChat must not repeat qualification checks: model=%q user=%#v", store.modelExistsID, store.userCanUseParams)
 	}
 }
 
-func TestRouterPlanChatReturnsModelNotFound(t *testing.T) {
+func TestRouterValidateChatReturnsModelNotFound(t *testing.T) {
 	store := &fakeStore{modelExists: false}
 	router := NewRouter(store, 30*time.Second)
 
-	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
+	err := router.ValidateChat(context.Background(), ChatRouteRequest{
 		UserID:          42,
 		ModelID:         "openai/missing",
 		IngressProtocol: ProtocolOpenAI,
@@ -374,14 +373,14 @@ func TestRouterPlanChatReturnsModelNotFound(t *testing.T) {
 	}
 }
 
-func TestRouterPlanChatReturnsModelNotAvailable(t *testing.T) {
+func TestRouterValidateChatReturnsRouteModelNotAvailable(t *testing.T) {
 	store := &fakeStore{
 		modelExists: true,
-		userCanUse:  false,
+		routeOffers: false,
 	}
 	router := NewRouter(store, 30*time.Second)
 
-	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
+	err := router.ValidateChat(context.Background(), ChatRouteRequest{
 		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
@@ -389,6 +388,27 @@ func TestRouterPlanChatReturnsModelNotAvailable(t *testing.T) {
 	})
 	if !errors.Is(err, ErrModelNotAvailable) {
 		t.Fatalf("expected ErrModelNotAvailable, got %v", err)
+	}
+	if store.routeOffersParams.RouteID != 1 || store.routeOffersParams.IngressProtocol != ProtocolOpenAI {
+		t.Fatalf("unexpected offering params: %#v", store.routeOffersParams)
+	}
+	if store.userCanUseParams.UserID != 0 {
+		t.Fatalf("user policy must be skipped for unoffered model: %#v", store.userCanUseParams)
+	}
+}
+
+func TestRouterValidateChatReturnsUserModelNotAvailable(t *testing.T) {
+	store := &fakeStore{modelExists: true, routeOffers: true, userCanUse: false}
+	router := NewRouter(store, 30*time.Second)
+
+	err := router.ValidateChat(context.Background(), ChatRouteRequest{
+		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI, RouteID: testRouteID(),
+	})
+	if !errors.Is(err, ErrModelNotAvailable) {
+		t.Fatalf("expected ErrModelNotAvailable, got %v", err)
+	}
+	if store.userCanUseParams.UserID != 42 || store.userCanUseParams.RequestedModelID != "openai/gpt-4.1" {
+		t.Fatalf("unexpected user policy params: %#v", store.userCanUseParams)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channel"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
 )
 
 // ChannelService 定义 adminapi 操作 channel 所需的最小能力。
@@ -126,6 +127,10 @@ type updateChannelRequest struct {
 	StickyEnabled       *bool         `json:"sticky_enabled"`
 	StickyTTLms         *int64        `json:"sticky_ttl_ms"`
 	ConcurrencyLimit    optionalInt64 `json:"concurrency_limit"`
+	// ConfirmSupplyImpact + ExpectedImpactFingerprint 是停用 Channel 触发 Offering 联动时的
+	// 二次确认参数（ADR-0018）；首次请求缺省，收到 409 影响预览后携带指纹重试。
+	ConfirmSupplyImpact       bool   `json:"confirm_supply_impact"`
+	ExpectedImpactFingerprint string `json:"expected_impact_fingerprint"`
 }
 
 type rotateChannelCredentialRequest struct {
@@ -286,6 +291,10 @@ func (h *channelsHandler) update(w http.ResponseWriter, r *http.Request) {
 		StickyTTLms:         req.StickyTTLms,
 		CapacityProvided:    req.ConcurrencyLimit.Set,
 		ConcurrencyLimit:    req.ConcurrencyLimit.Value,
+		Confirmation: supply.Confirmation{
+			Confirm:             req.ConfirmSupplyImpact,
+			ExpectedFingerprint: req.ExpectedImpactFingerprint,
+		},
 	}
 	c, err := h.service.Update(r.Context(), in)
 	if err != nil {

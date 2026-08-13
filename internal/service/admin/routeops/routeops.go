@@ -16,6 +16,7 @@ type Store interface {
 	RoutesOpsTableCount(ctx context.Context, arg sqlc.RoutesOpsTableCountParams) (int64, error)
 	RouteOpsDetail(ctx context.Context, arg sqlc.RouteOpsDetailParams) (sqlc.RouteOpsDetailRow, error)
 	RouteOpsReachableModels(ctx context.Context, routeID int64) ([]sqlc.RouteOpsReachableModelsRow, error)
+	ListRouteOfferingDetails(ctx context.Context, routeID int64) ([]sqlc.ListRouteOfferingDetailsRow, error)
 	RouteOpsChannelPool(ctx context.Context, routeID int64) ([]sqlc.RouteOpsChannelPoolRow, error)
 	RouteOpsBoundUsers(ctx context.Context, routeID int64) ([]sqlc.RouteOpsBoundUsersRow, error)
 	RouteOpsBoundKeys(ctx context.Context, routeID int64) ([]sqlc.RouteOpsBoundKeysRow, error)
@@ -36,20 +37,34 @@ func NewService(store Store) *Service {
 }
 
 // Row 是线路运维主表行（静态配置；请求指标在详情页聚合）。
+// 售卖模型统计使用 Offering 口径（ADR-0018）：总数与 enabled/disabled 分布。
 type Row struct {
-	ID               int64
-	Name             string
-	Mode             string
+	ID                int64
+	Name              string
+	Mode              string
+	Status            string
+	Description       string
+	PriceRatio        string
+	RpmLimit          *int32
+	RpdLimit          *int32
+	ConcurrencyLimit  *int32
+	CreatedAt         time.Time
+	BoundKeys         int64
+	PoolChannels      int64
+	OfferingsTotal    int64
+	OfferingsEnabled  int64
+	OfferingsDisabled int64
+}
+
+// Offering 是线路一条 Model+协议售卖组合（列表悬浮/详情展示）。
+type Offering struct {
+	ModelID          string
+	DisplayName      string
+	ModelStatus      string
+	IngressProtocol  string
 	Status           string
-	Description      string
-	PriceRatio       string
-	RpmLimit         *int32
-	RpdLimit         *int32
-	ConcurrencyLimit *int32
-	CreatedAt        time.Time
-	BoundKeys        int64
-	PoolChannels     int64
-	ModelsCount      int64
+	DisabledReason   *string
+	SupportAvailable bool
 }
 
 // Detail 是详情页概览（含请求/延迟等区间运维指标；不含主观「可服务/异常」标签）。
@@ -165,10 +180,42 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			CreatedAt:        r.CreatedAt.Time,
 			BoundKeys:        r.BoundKeys,
 			PoolChannels:     r.PoolChannels,
-			ModelsCount:      r.ModelsCount,
+			OfferingsTotal:   r.OfferingsTotal,
+			OfferingsEnabled: r.OfferingsEnabled,
+			OfferingsDisabled: func() int64 {
+				if r.OfferingsTotal > r.OfferingsEnabled {
+					return r.OfferingsTotal - r.OfferingsEnabled
+				}
+				return 0
+			}(),
 		})
 	}
 	return out, total, nil
+}
+
+// Offerings 返回线路全部售卖组合（Offering 口径，列表悬浮/详情用）。
+func (s *Service) Offerings(ctx context.Context, routeID int64) ([]Offering, error) {
+	rows, err := s.store.ListRouteOfferingDetails(ctx, routeID)
+	if err != nil {
+		return nil, opsutil.StoreFailed(err, "route ops offerings")
+	}
+	out := make([]Offering, 0, len(rows))
+	for _, r := range rows {
+		o := Offering{
+			ModelID:          r.PublicModelID,
+			DisplayName:      r.DisplayName,
+			ModelStatus:      r.ModelStatus,
+			IngressProtocol:  r.IngressProtocol,
+			Status:           r.Status,
+			SupportAvailable: r.SupportAvailable,
+		}
+		if r.DisabledReason.Valid {
+			reason := r.DisabledReason.String
+			o.DisabledReason = &reason
+		}
+		out = append(out, o)
+	}
+	return out, nil
 }
 
 // Detail 返回单线路详情概览。

@@ -93,6 +93,7 @@ func (q *Queries) CountRouteChannels(ctx context.Context, routeID int64) (int64,
 }
 
 const createRoute = `-- name: CreateRoute :one
+
 INSERT INTO routes (name, mode, status, description, price_ratio, rpm_limit, rpd_limit, concurrency_limit)
 VALUES (
     $1,
@@ -118,6 +119,7 @@ type CreateRouteParams struct {
 	ConcurrencyLimit pgtype.Int4
 }
 
+// Offering 的读取、差异更新与联动查询见 sql/queries/admin/supply.sql（ADR-0018）。
 // CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
 // rpm/rpd/concurrency_limit 是线路级限流上限（按线路+用户计数；NULL=继承默认，0=不限，>0=上限）；
 // balanced/fixed 的渠道数量约束由 service 层校验。
@@ -1106,35 +1108,9 @@ SELECT
     rt.created_at,
     (SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id) AS bound_keys,
     (SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id) AS pool_channels,
-    -- models_count（DEC-031）：池内可达且可解析成本的 distinct 模型（绝对覆盖 OR 基准价+价格倍率）。
-    (
-        SELECT COUNT(DISTINCT m.id)
-        FROM models m
-        JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
-        JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled'
-        WHERE (
-            EXISTS (
-                SELECT 1 FROM channel_prices p
-                WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
-                  AND p.effective_from <= now() AND (p.effective_to IS NULL OR p.effective_to > now())
-            )
-            OR (
-                EXISTS (
-                    SELECT 1 FROM model_prices mp
-                    WHERE mp.model_id = cm.model_id AND mp.status = 'enabled'
-                      AND mp.effective_from <= now() AND (mp.effective_to IS NULL OR mp.effective_to > now())
-                )
-                AND EXISTS (
-                    SELECT 1 FROM channel_cost_multipliers ccm
-                    WHERE ccm.channel_id = cm.channel_id
-                      AND (ccm.model_id = cm.model_id OR ccm.model_id IS NULL)
-                      AND ccm.status = 'enabled'
-                      AND ccm.effective_from <= now() AND (ccm.effective_to IS NULL OR ccm.effective_to > now())
-                )
-            )
-        )
-        AND cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
-    ) AS models_count
+    -- 售卖模型统计（ADR-0018）：统一 Offering 口径，不再按价格/成本计算运行时"可达模型"。
+    (SELECT COUNT(*) FROM route_model_offerings o WHERE o.route_id = rt.id) AS offerings_total,
+    (SELECT COUNT(*) FROM route_model_offerings o WHERE o.route_id = rt.id AND o.status = 'enabled') AS offerings_enabled
 FROM routes rt
 WHERE ($1::text IS NULL OR rt.status = $1::text)
   AND ($2::text IS NULL OR rt.name ILIKE '%' || $2::text || '%')
@@ -1160,60 +1136,10 @@ ORDER BY
         SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id
     ) END ASC NULLS LAST,
   CASE WHEN $3::text = 'models' AND COALESCE($4::bool, false) THEN (
-        SELECT COUNT(DISTINCT m.id)
-        FROM models m
-        JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
-        JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled'
-        WHERE (
-            EXISTS (
-                SELECT 1 FROM channel_prices p
-                WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
-                  AND p.effective_from <= now() AND (p.effective_to IS NULL OR p.effective_to > now())
-            )
-            OR (
-                EXISTS (
-                    SELECT 1 FROM model_prices mp
-                    WHERE mp.model_id = cm.model_id AND mp.status = 'enabled'
-                      AND mp.effective_from <= now() AND (mp.effective_to IS NULL OR mp.effective_to > now())
-                )
-                AND EXISTS (
-                    SELECT 1 FROM channel_cost_multipliers ccm
-                    WHERE ccm.channel_id = cm.channel_id
-                      AND (ccm.model_id = cm.model_id OR ccm.model_id IS NULL)
-                      AND ccm.status = 'enabled'
-                      AND ccm.effective_from <= now() AND (ccm.effective_to IS NULL OR ccm.effective_to > now())
-                )
-            )
-        )
-        AND cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
+        SELECT COUNT(*) FROM route_model_offerings o WHERE o.route_id = rt.id
     ) END DESC NULLS LAST,
   CASE WHEN $3::text = 'models' AND NOT COALESCE($4::bool, false) THEN (
-        SELECT COUNT(DISTINCT m.id)
-        FROM models m
-        JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
-        JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled'
-        WHERE (
-            EXISTS (
-                SELECT 1 FROM channel_prices p
-                WHERE p.channel_id = cm.channel_id AND p.model_id = cm.model_id AND p.status = 'enabled'
-                  AND p.effective_from <= now() AND (p.effective_to IS NULL OR p.effective_to > now())
-            )
-            OR (
-                EXISTS (
-                    SELECT 1 FROM model_prices mp
-                    WHERE mp.model_id = cm.model_id AND mp.status = 'enabled'
-                      AND mp.effective_from <= now() AND (mp.effective_to IS NULL OR mp.effective_to > now())
-                )
-                AND EXISTS (
-                    SELECT 1 FROM channel_cost_multipliers ccm
-                    WHERE ccm.channel_id = cm.channel_id
-                      AND (ccm.model_id = cm.model_id OR ccm.model_id IS NULL)
-                      AND ccm.status = 'enabled'
-                      AND ccm.effective_from <= now() AND (ccm.effective_to IS NULL OR ccm.effective_to > now())
-                )
-            )
-        )
-        AND cm.channel_id IN (SELECT channel_id FROM route_channels WHERE route_id = rt.id)
+        SELECT COUNT(*) FROM route_model_offerings o WHERE o.route_id = rt.id
     ) END ASC NULLS LAST,
   rt.name
 LIMIT $6 OFFSET $5
@@ -1241,7 +1167,8 @@ type RoutesOpsTableRow struct {
 	CreatedAt        pgtype.Timestamptz
 	BoundKeys        int64
 	PoolChannels     int64
-	ModelsCount      int64
+	OfferingsTotal   int64
+	OfferingsEnabled int64
 }
 
 // §3.5 线路路由作战台只读运维聚合。
@@ -1277,7 +1204,8 @@ func (q *Queries) RoutesOpsTable(ctx context.Context, arg RoutesOpsTableParams) 
 			&i.CreatedAt,
 			&i.BoundKeys,
 			&i.PoolChannels,
-			&i.ModelsCount,
+			&i.OfferingsTotal,
+			&i.OfferingsEnabled,
 		); err != nil {
 			return nil, err
 		}

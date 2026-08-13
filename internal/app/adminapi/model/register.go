@@ -30,6 +30,9 @@ func Register(r chi.Router, d Deps) {
 		r.Patch("/models/{id}", mh.update)
 		// DELETE 物理删除录错的脏数据，级联清理自身价格/绑定/能力；已被请求/账务引用时返回 409。
 		r.Delete("/models/{id}", mh.delete)
+		// 批量恢复（ADR-0018）：按 Model 聚合列出 disabled Offering 并原子恢复勾选子集。
+		r.Get("/models/{id}/offerings", mh.listOfferings)
+		r.Post("/models/{id}/offerings/restore", mh.restoreOfferings)
 	}
 
 	if d.PriceService != nil {

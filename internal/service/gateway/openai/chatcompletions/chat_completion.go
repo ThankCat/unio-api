@@ -28,6 +28,18 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		)
 	}
 
+	routeRequest := routing.ChatRouteRequest{
+		UserID:          principal.UserID,
+		ModelID:         req.Model,
+		IngressProtocol: routing.ProtocolOpenAI,
+		Endpoint:        routing.EndpointChatCompletions,
+		RouteID:         principal.RouteID,
+	}
+	if err := s.router.ValidateChat(ctx, routeRequest); err != nil {
+		s.lifecycle.RecordRequestRejected(err)
+		return nil, err
+	}
+
 	requestRecord, err := s.createRequestRecord(ctx, principal, req, false)
 	if err != nil {
 		return nil, err
@@ -44,13 +56,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 	defer span.End()
 
 	planCtx, planSpan := lifecycle.StartGatewaySpan(ctx, "gateway.routing")
-	plan, err := s.router.PlanChat(planCtx, routing.ChatRouteRequest{
-		UserID:          principal.UserID,
-		ModelID:         req.Model,
-		IngressProtocol: routing.ProtocolOpenAI,
-		Endpoint:        routing.EndpointChatCompletions,
-		RouteID:         principal.RouteID,
-	})
+	plan, err := s.router.PlanChat(planCtx, routeRequest)
 	lifecycle.EndGatewaySpan(planSpan, err)
 	if err != nil {
 		s.lifecycle.RecordRoutingFailure(ctx, requestRecord, principal.RouteID, err)

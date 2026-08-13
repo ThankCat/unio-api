@@ -22,6 +22,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/model"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/provider"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/route"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
 )
 
 type fakeProviderService struct {
@@ -132,6 +133,12 @@ func (s *fakeModelService) Update(context.Context, model.UpdateInput) (model.Mod
 func (s *fakeModelService) Delete(context.Context, int64) error {
 	return s.deleteErr
 }
+func (s *fakeModelService) ListDisabledOfferings(context.Context, int64, string) ([]model.ModelOffering, error) {
+	return nil, nil
+}
+func (s *fakeModelService) RestoreOfferings(context.Context, int64, []model.OfferingRestoreItem, supply.Confirmation) (int, error) {
+	return 0, nil
+}
 
 type fakeChannelModelService struct {
 	listOut   []channelmodel.Binding
@@ -151,7 +158,7 @@ func (s *fakeChannelModelService) Create(context.Context, channelmodel.CreateInp
 func (s *fakeChannelModelService) Update(context.Context, channelmodel.UpdateInput) (channelmodel.Binding, error) {
 	return s.updateOut, s.updateErr
 }
-func (s *fakeChannelModelService) Delete(context.Context, int64, int64) error {
+func (s *fakeChannelModelService) Delete(context.Context, int64, int64, supply.Confirmation) error {
 	return s.deleteErr
 }
 
@@ -207,13 +214,15 @@ type fakeRouteService struct {
 	listOut   []route.Route
 	createOut route.Route
 	createErr error
+	createIn  route.CreateInput
 }
 
 func (s *fakeRouteService) List(context.Context) ([]route.Route, error) { return s.listOut, nil }
 func (s *fakeRouteService) Get(context.Context, int64) (route.Route, error) {
 	return s.createOut, nil
 }
-func (s *fakeRouteService) Create(context.Context, route.CreateInput) (route.Route, error) {
+func (s *fakeRouteService) Create(_ context.Context, in route.CreateInput) (route.Route, error) {
+	s.createIn = in
 	return s.createOut, s.createErr
 }
 func (s *fakeRouteService) Update(context.Context, route.UpdateInput) (route.Route, error) {
@@ -225,8 +234,11 @@ func (s *fakeRouteService) Archive(context.Context, int64, *int64) ([]route.Empt
 }
 func (s *fakeRouteService) Restore(context.Context, int64) error                     { return nil }
 func (s *fakeRouteService) MigrateKeys(context.Context, int64, int64) (int64, error) { return 0, nil }
-func (s *fakeRouteService) SetChannels(context.Context, int64, []int64) (route.Route, error) {
+func (s *fakeRouteService) SetChannels(context.Context, int64, []int64, supply.Confirmation) (route.Route, error) {
 	return s.createOut, nil
+}
+func (s *fakeRouteService) OfferingCandidates(context.Context, []int64) ([]route.OfferingCandidate, error) {
+	return nil, nil
 }
 
 func newRouteRouter(t *testing.T, rs aroute.RouteService) http.Handler {
@@ -611,19 +623,25 @@ func TestChannelPricesRequireToken(t *testing.T) {
 }
 
 func TestCreateRouteReturns201(t *testing.T) {
-	handler := newRouteRouter(t, &fakeRouteService{createOut: route.Route{ID: 3, Name: "C-line", Mode: "fixed", Status: "enabled"}})
+	service := &fakeRouteService{createOut: route.Route{ID: 3, Name: "C-line", Mode: "fixed", Status: "enabled"}}
+	handler := newRouteRouter(t, service)
 
-	body := `{"name":"C-line","mode":"fixed","status":"enabled","channel_ids":[5]}`
+	body := `{"name":"C-line","mode":"fixed","status":"enabled","channel_ids":[5],"offerings":[{"model_id":7,"ingress_protocol":"openai"}]}`
 	rec := doAdmin(t, handler, http.MethodPost, "/v1/routes", body, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	if len(service.createIn.Offerings) != 1 ||
+		service.createIn.Offerings[0].ModelID != 7 ||
+		service.createIn.Offerings[0].IngressProtocol != "openai" {
+		t.Fatalf("create offerings = %#v, want [{7 openai}]", service.createIn.Offerings)
 	}
 }
 
 func TestCreateRouteFixedValidationReturns400(t *testing.T) {
 	handler := newRouteRouter(t, &fakeRouteService{createErr: failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("fixed route must list exactly one channel"), failure.WithField("field", "channel_ids"))})
 
-	body := `{"name":"C-line","mode":"fixed","status":"enabled","channel_ids":[]}`
+	body := `{"name":"C-line","mode":"fixed","status":"enabled","channel_ids":[],"offerings":[{"model_id":7,"ingress_protocol":"openai"}]}`
 	rec := doAdmin(t, handler, http.MethodPost, "/v1/routes", body, true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())

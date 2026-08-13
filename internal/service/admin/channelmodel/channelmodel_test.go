@@ -88,7 +88,7 @@ func TestCreateRejectsInvalidArguments(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &fakeStore{}
-			_, err := channelmodel.NewService(store).Create(context.Background(), tc.in)
+			_, err := channelmodel.NewService(store, nil, nil).Create(context.Background(), tc.in)
 			if got := failure.CodeOf(err); got != failure.CodeAdminInvalidArgument {
 				t.Fatalf("expected %q, got %q", failure.CodeAdminInvalidArgument, got)
 			}
@@ -101,7 +101,7 @@ func TestCreateRejectsInvalidArguments(t *testing.T) {
 
 func TestCreateChannelNotFound(t *testing.T) {
 	store := &fakeStore{channelErr: pgx.ErrNoRows}
-	_, err := channelmodel.NewService(store).Create(context.Background(), channelmodel.CreateInput{
+	_, err := channelmodel.NewService(store, nil, nil).Create(context.Background(), channelmodel.CreateInput{
 		ChannelID: 1, ModelID: 1, UpstreamModel: "gpt-4", Status: channelmodel.StatusEnabled,
 	})
 	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
@@ -111,7 +111,7 @@ func TestCreateChannelNotFound(t *testing.T) {
 
 func TestCreateModelNotFound(t *testing.T) {
 	store := &fakeStore{modelErr: pgx.ErrNoRows}
-	_, err := channelmodel.NewService(store).Create(context.Background(), channelmodel.CreateInput{
+	_, err := channelmodel.NewService(store, nil, nil).Create(context.Background(), channelmodel.CreateInput{
 		ChannelID: 1, ModelID: 99, UpstreamModel: "gpt-4", Status: channelmodel.StatusEnabled,
 	})
 	if got := failure.CodeOf(err); got != failure.CodeAdminInvalidArgument {
@@ -121,7 +121,7 @@ func TestCreateModelNotFound(t *testing.T) {
 
 func TestCreateConflictOnUniqueViolation(t *testing.T) {
 	store := &fakeStore{createErr: &pgconn.PgError{Code: "23505"}}
-	_, err := channelmodel.NewService(store).Create(context.Background(), channelmodel.CreateInput{
+	_, err := channelmodel.NewService(store, nil, nil).Create(context.Background(), channelmodel.CreateInput{
 		ChannelID: 1, ModelID: 1, UpstreamModel: "gpt-4", Status: channelmodel.StatusEnabled,
 	})
 	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
@@ -136,7 +136,7 @@ func TestCreateSuccessTrimsAndMaps(t *testing.T) {
 		UpdatedAt: pgtype.Timestamptz{Valid: true},
 	}}
 
-	got, err := channelmodel.NewService(store).Create(context.Background(), channelmodel.CreateInput{
+	got, err := channelmodel.NewService(store, nil, nil).Create(context.Background(), channelmodel.CreateInput{
 		ChannelID: 1, ModelID: 2, UpstreamModel: "  gpt-4o  ", Status: channelmodel.StatusEnabled,
 	})
 	if err != nil {
@@ -157,7 +157,7 @@ func TestUpdateEnableRequiresCurrentVerification(t *testing.T) {
 	store := &fakeStore{getRow: sqlc.ChannelModel{
 		ChannelID: 1, ModelID: 1, UpstreamModel: "gpt-4", Status: channelmodel.StatusDisabled,
 	}}
-	_, err := channelmodel.NewService(store).Update(context.Background(), channelmodel.UpdateInput{
+	_, err := channelmodel.NewService(store, nil, nil).Update(context.Background(), channelmodel.UpdateInput{
 		ChannelID: 1, ModelID: 1, UpstreamModel: "gpt-4", Status: channelmodel.StatusEnabled,
 	})
 	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
@@ -165,24 +165,9 @@ func TestUpdateEnableRequiresCurrentVerification(t *testing.T) {
 	}
 }
 
-func TestUpdateEnableAcceptsCurrentVerification(t *testing.T) {
-	verificationID := int64(42)
-	store := &fakeStore{
-		getRow:    sqlc.ChannelModel{ChannelID: 1, ModelID: 1, UpstreamModel: "gpt-4", Status: channelmodel.StatusDisabled},
-		updateRow: sqlc.ChannelModel{ChannelID: 1, ModelID: 1, UpstreamModel: "gpt-4", Status: channelmodel.StatusEnabled},
-	}
-	got, err := channelmodel.NewService(store).Update(context.Background(), channelmodel.UpdateInput{
-		ChannelID: 1, ModelID: 1, UpstreamModel: "gpt-4", Status: channelmodel.StatusEnabled,
-		VerificationItemID: &verificationID,
-	})
-	if err != nil || got.Status != channelmodel.StatusEnabled {
-		t.Fatalf("update with verification: got=%+v err=%v", got, err)
-	}
-}
-
 func TestUpdateNotFound(t *testing.T) {
 	store := &fakeStore{updateErr: pgx.ErrNoRows}
-	_, err := channelmodel.NewService(store).Update(context.Background(), channelmodel.UpdateInput{
+	_, err := channelmodel.NewService(store, nil, nil).Update(context.Background(), channelmodel.UpdateInput{
 		ChannelID: 1, ModelID: 1, UpstreamModel: "gpt-4", Status: channelmodel.StatusDisabled,
 	})
 	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
@@ -190,28 +175,6 @@ func TestUpdateNotFound(t *testing.T) {
 	}
 }
 
-func TestDeleteForeignKeyDegradesToConflict(t *testing.T) {
-	store := &fakeStore{deleteErr: &pgconn.PgError{Code: "23503"}}
-	err := channelmodel.NewService(store).Delete(context.Background(), 1, 1)
-	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
-		t.Fatalf("expected %q, got %q", failure.CodeAdminConflict, got)
-	}
-}
-
-func TestDeleteNotFoundWhenNoRows(t *testing.T) {
-	store := &fakeStore{deleteRows: 0}
-	err := channelmodel.NewService(store).Delete(context.Background(), 1, 1)
-	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
-		t.Fatalf("expected %q, got %q", failure.CodeAdminNotFound, got)
-	}
-}
-
-func TestDeleteSuccess(t *testing.T) {
-	store := &fakeStore{deleteRows: 1}
-	if err := channelmodel.NewService(store).Delete(context.Background(), 1, 1); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	if store.deleteCalls != 1 {
-		t.Fatalf("expected delete called once, got %d", store.deleteCalls)
-	}
-}
+// 启用成功（含 Model disabled 护栏）、停用/解除的 Offering 联动、全局最后供给自动停用 Model
+// 等进入事务与 Model 锁的路径由 supply 联动 DB 测试覆盖（需 DATABASE_URL），
+// 见 internal/platform/store/sqlc/supply_linkage_db_test.go。

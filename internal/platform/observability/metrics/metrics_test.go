@@ -32,6 +32,7 @@ func TestMetricsExposesRecordedSeries(t *testing.T) {
 	m.ObserveHTTPRequest(http.MethodPost, "/v1/chat/completions", http.StatusOK, 120*time.Millisecond)
 	m.IncChatRequest(false, ChatOutcomeSuccess)
 	m.IncChatRequest(true, ChatOutcomeCanceled)
+	m.IncRequestRejected("openai", "model_not_found")
 	m.IncRoutingSelected("9123", "123", "openai/gpt-4.1")
 	m.ObserveUpstream("9123", "123", true, "", 800*time.Millisecond)
 	m.ObserveUpstream("9123", "123", false, "rate_limit", 50*time.Millisecond)
@@ -51,6 +52,7 @@ func TestMetricsExposesRecordedSeries(t *testing.T) {
 		`unio_http_requests_total{method="POST",route="/v1/chat/completions",status="200"} 1`,
 		`unio_gateway_chat_requests_total{outcome="success",stream="false"} 1`,
 		`unio_gateway_chat_requests_total{outcome="canceled",stream="true"} 1`,
+		`unio_gateway_request_rejections_total{protocol="openai",reason="model_not_found"} 1`,
 		`unio_gateway_routing_selected_total{channel="123",model="openai/gpt-4.1",provider="9123"} 1`,
 		`unio_gateway_upstream_requests_total{channel="123",error_category="none",outcome="success",provider="9123"} 1`,
 		`unio_gateway_upstream_requests_total{channel="123",error_category="rate_limit",outcome="error",provider="9123"} 1`,
