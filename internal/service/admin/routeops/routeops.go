@@ -37,7 +37,7 @@ func NewService(store Store) *Service {
 }
 
 // Row 是线路运维主表行（静态配置；请求指标在详情页聚合）。
-// 售卖模型统计使用 Offering 口径（ADR-0018）：总数与 enabled/disabled 分布。
+// 售卖模型统计使用 Offering 口径（ADR-0019）：总数与 enabled/disabled 分布。
 type Row struct {
 	ID                int64
 	Name              string
@@ -56,15 +56,16 @@ type Row struct {
 	OfferingsDisabled int64
 }
 
-// Offering 是线路一条 Model+协议售卖组合（列表悬浮/详情展示）。
+// Offering 是线路一条 Model+协议售卖组合及当前供给事实（列表悬浮/详情展示）。
 type Offering struct {
-	ModelID          string
-	DisplayName      string
-	ModelStatus      string
-	IngressProtocol  string
-	Status           string
-	DisabledReason   *string
-	SupportAvailable bool
+	ModelID                string
+	DisplayName            string
+	ModelStatus            string
+	IngressProtocol        string
+	Status                 string
+	DisabledReason         *string
+	ConfiguredSupportCount int64
+	RuntimeCandidateCount  int64
 }
 
 // Detail 是详情页概览（含请求/延迟等区间运维指标；不含主观「可服务/异常」标签）。
@@ -193,7 +194,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 	return out, total, nil
 }
 
-// Offerings 返回线路全部售卖组合（Offering 口径，列表悬浮/详情用）。
+// Offerings 返回线路全部售卖组合及当前配置支撑/基础运行候选（列表悬浮/详情用）。
 func (s *Service) Offerings(ctx context.Context, routeID int64) ([]Offering, error) {
 	rows, err := s.store.ListRouteOfferingDetails(ctx, routeID)
 	if err != nil {
@@ -202,12 +203,13 @@ func (s *Service) Offerings(ctx context.Context, routeID int64) ([]Offering, err
 	out := make([]Offering, 0, len(rows))
 	for _, r := range rows {
 		o := Offering{
-			ModelID:          r.PublicModelID,
-			DisplayName:      r.DisplayName,
-			ModelStatus:      r.ModelStatus,
-			IngressProtocol:  r.IngressProtocol,
-			Status:           r.Status,
-			SupportAvailable: r.SupportAvailable,
+			ModelID:                r.PublicModelID,
+			DisplayName:            r.DisplayName,
+			ModelStatus:            r.ModelStatus,
+			IngressProtocol:        r.IngressProtocol,
+			Status:                 r.Status,
+			ConfiguredSupportCount: r.ConfiguredSupportCount,
+			RuntimeCandidateCount:  r.RuntimeCandidateCount,
 		}
 		if r.DisabledReason.Valid {
 			reason := r.DisabledReason.String

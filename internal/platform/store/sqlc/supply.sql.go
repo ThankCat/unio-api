@@ -39,43 +39,12 @@ type CountOtherEnabledBindingsForModelParams struct {
 }
 
 // CountOtherEnabledBindingsForModel 全局判断：排除目标 Channel 后，该 Model 是否仍有任意
-// enabled Binding。只读取 Binding 行状态，不读取 Channel/Provider 实体状态（ADR-0018）。
+// enabled Binding。只读取 Binding 行状态，不读取 Channel/Provider 实体状态（ADR-0019）。
 func (q *Queries) CountOtherEnabledBindingsForModel(ctx context.Context, arg CountOtherEnabledBindingsForModelParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countOtherEnabledBindingsForModel, arg.ModelID, arg.ExcludeChannelID)
 	var remaining int64
 	err := row.Scan(&remaining)
 	return remaining, err
-}
-
-const disableEnabledBindingsForModel = `-- name: DisableEnabledBindingsForModel :execrows
-UPDATE channel_models
-SET status = 'disabled', updated_at = now()
-WHERE model_id = $1 AND status = 'enabled'
-`
-
-// DisableEnabledBindingsForModel 把该 Model 全部 enabled Binding 置 disabled（Model 停用级联，
-// 维持「Model disabled 不得存在 enabled Binding」不变量）。
-func (q *Queries) DisableEnabledBindingsForModel(ctx context.Context, modelID int64) (int64, error) {
-	result, err := q.db.Exec(ctx, disableEnabledBindingsForModel, modelID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const disableEnabledOfferingsForModel = `-- name: DisableEnabledOfferingsForModel :execrows
-UPDATE route_model_offerings
-SET status = 'disabled', disabled_reason = 'model_disabled', disabled_at = now(), updated_at = now()
-WHERE model_id = $1 AND status = 'enabled'
-`
-
-// DisableEnabledOfferingsForModel 把该 Model 全部 enabled Offering 置 disabled（Model 停用级联）。
-func (q *Queries) DisableEnabledOfferingsForModel(ctx context.Context, modelID int64) (int64, error) {
-	result, err := q.db.Exec(ctx, disableEnabledOfferingsForModel, modelID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const disableModelSupply = `-- name: DisableModelSupply :execrows
@@ -84,7 +53,7 @@ SET status = 'disabled', updated_at = now()
 WHERE id = $1 AND status = 'enabled'
 `
 
-// DisableModelSupply 停用 Model 行（手动停用或全局最后供给自动停用），只改状态不动其他资料。
+// DisableModelSupply 暂停 Model 行，只改全局许可状态，不改 Binding 或 Offering。
 func (q *Queries) DisableModelSupply(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, disableModelSupply, id)
 	if err != nil {
@@ -136,7 +105,7 @@ type EnableRouteModelOfferingParams struct {
 	IngressProtocol string
 }
 
-// EnableRouteModelOffering 创建或重新启用一条 Offering；重新启用时清空停用原因和时间（ADR-0018）。
+// EnableRouteModelOffering 创建或重新启用一条 Offering；重新启用时清空停用原因和时间（ADR-0019）。
 // 结构支撑必须由调用方在同一事务、同一 Model 锁内先行校验。
 func (q *Queries) EnableRouteModelOffering(ctx context.Context, arg EnableRouteModelOfferingParams) error {
 	_, err := q.db.Exec(ctx, enableRouteModelOffering, arg.RouteID, arg.ModelID, arg.IngressProtocol)
@@ -156,7 +125,6 @@ SELECT o.route_id,
            JOIN channels c ON c.id = rc.channel_id
            JOIN channel_models cm ON cm.channel_id = c.id AND cm.model_id = o.model_id
            WHERE rc.route_id = o.route_id
-             AND c.status = 'enabled'
              AND c.protocol = o.ingress_protocol
              AND cm.status = 'enabled'
        ) AS support_available
@@ -267,7 +235,7 @@ type ListEnabledOfferingsForModelRow struct {
 	IngressProtocol  string
 }
 
-// ListEnabledOfferingsForModel 列出该 Model 全部 enabled Offering（Model 手动/自动停用预览）。
+// ListEnabledOfferingsForModel 列出该 Model 全部 enabled Offering（全局暂停/下架影响预览）。
 func (q *Queries) ListEnabledOfferingsForModel(ctx context.Context, modelID int64) ([]ListEnabledOfferingsForModelRow, error) {
 	rows, err := q.db.Query(ctx, listEnabledOfferingsForModel, modelID)
 	if err != nil {
@@ -300,15 +268,15 @@ const listOfferingCandidatesForChannels = `-- name: ListOfferingCandidatesForCha
 SELECT cm.model_id,
        m.model_id AS public_model_id,
        m.display_name,
+       m.status AS model_status,
        c.protocol AS ingress_protocol,
        COUNT(DISTINCT c.id) AS supporting_channels
 FROM channels c
 JOIN channel_models cm ON cm.channel_id = c.id AND cm.status = 'enabled'
-JOIN models m ON m.id = cm.model_id AND m.status = 'enabled'
+JOIN models m ON m.id = cm.model_id
 WHERE c.id = ANY($1::bigint[])
-  AND c.status = 'enabled'
   AND c.protocol IN ('openai', 'anthropic')
-GROUP BY cm.model_id, m.model_id, m.display_name, c.protocol
+GROUP BY cm.model_id, m.model_id, m.display_name, m.status, c.protocol
 ORDER BY m.model_id, c.protocol
 `
 
@@ -316,12 +284,13 @@ type ListOfferingCandidatesForChannelsRow struct {
 	ModelID            int64
 	PublicModelID      string
 	DisplayName        string
+	ModelStatus        string
 	IngressProtocol    string
 	SupportingChannels int64
 }
 
-// ListOfferingCandidatesForChannels 按给定 Channel 池计算可售卖的 Model+协议组合候选：
-// enabled Channel 承载的 enabled Binding 且 Model enabled；不读取 breaker、容量、凭据或价格。
+// ListOfferingCandidatesForChannels 按给定 Channel 池计算配置支撑候选：
+// enabled Binding 按 Model+协议去重；不读取 Channel、Provider 或 Model 当前状态。
 func (q *Queries) ListOfferingCandidatesForChannels(ctx context.Context, channelIds []int64) ([]ListOfferingCandidatesForChannelsRow, error) {
 	rows, err := q.db.Query(ctx, listOfferingCandidatesForChannels, channelIds)
 	if err != nil {
@@ -335,8 +304,91 @@ func (q *Queries) ListOfferingCandidatesForChannels(ctx context.Context, channel
 			&i.ModelID,
 			&i.PublicModelID,
 			&i.DisplayName,
+			&i.ModelStatus,
 			&i.IngressProtocol,
 			&i.SupportingChannels,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOfferingsLosingRuntimeChannel = `-- name: ListOfferingsLosingRuntimeChannel :many
+SELECT o.route_id,
+       rt.name AS route_name,
+       rt.status AS route_status,
+       o.model_id,
+       m.model_id AS public_model_id,
+       m.display_name AS model_display_name,
+       o.ingress_protocol
+FROM route_model_offerings o
+JOIN routes rt ON rt.id = o.route_id
+JOIN models m ON m.id = o.model_id
+WHERE o.status = 'enabled'
+  AND m.status = 'enabled'
+  AND EXISTS (
+      SELECT 1
+      FROM route_channels rc
+      JOIN channels c ON c.id = rc.channel_id
+      JOIN providers p ON p.id = c.provider_id
+      JOIN channel_models cm ON cm.channel_id = c.id AND cm.model_id = o.model_id
+      WHERE rc.route_id = o.route_id
+        AND c.id = $1
+        AND c.status = 'enabled'
+        AND p.status = 'enabled'
+        AND c.protocol = o.ingress_protocol
+        AND cm.status = 'enabled'
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM route_channels rc2
+      JOIN channels c2 ON c2.id = rc2.channel_id
+      JOIN providers p2 ON p2.id = c2.provider_id
+      JOIN channel_models cm2 ON cm2.channel_id = c2.id AND cm2.model_id = o.model_id
+      WHERE rc2.route_id = o.route_id
+        AND c2.id <> $1
+        AND c2.status = 'enabled'
+        AND p2.status = 'enabled'
+        AND c2.protocol = o.ingress_protocol
+        AND cm2.status = 'enabled'
+  )
+ORDER BY o.model_id, o.route_id, o.ingress_protocol
+`
+
+type ListOfferingsLosingRuntimeChannelRow struct {
+	RouteID          int64
+	RouteName        string
+	RouteStatus      string
+	ModelID          int64
+	PublicModelID    string
+	ModelDisplayName string
+	IngressProtocol  string
+}
+
+// ListOfferingsLosingRuntimeChannel 返回暂停目标 Channel 后，按 Channel/Provider 当前启用状态
+// 已无其他基础运行候选的 enabled Offering。它只用于客户结果预览，不改变配置支撑定义。
+func (q *Queries) ListOfferingsLosingRuntimeChannel(ctx context.Context, channelID int64) ([]ListOfferingsLosingRuntimeChannelRow, error) {
+	rows, err := q.db.Query(ctx, listOfferingsLosingRuntimeChannel, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOfferingsLosingRuntimeChannelRow
+	for rows.Next() {
+		var i ListOfferingsLosingRuntimeChannelRow
+		if err := rows.Scan(
+			&i.RouteID,
+			&i.RouteName,
+			&i.RouteStatus,
+			&i.ModelID,
+			&i.PublicModelID,
+			&i.ModelDisplayName,
+			&i.IngressProtocol,
 		); err != nil {
 			return nil, err
 		}
@@ -368,7 +420,6 @@ WHERE o.status = 'enabled'
       JOIN channel_models cm ON cm.channel_id = c.id AND cm.model_id = o.model_id
       WHERE rc.route_id = o.route_id
         AND c.id = $2
-        AND c.status = 'enabled'
         AND c.protocol = o.ingress_protocol
         AND cm.status = 'enabled'
   )
@@ -379,7 +430,6 @@ WHERE o.status = 'enabled'
       JOIN channel_models cm2 ON cm2.channel_id = c2.id AND cm2.model_id = o.model_id
       WHERE rc2.route_id = o.route_id
         AND c2.id <> $2
-        AND c2.status = 'enabled'
         AND c2.protocol = o.ingress_protocol
         AND cm2.status = 'enabled'
   )
@@ -403,7 +453,7 @@ type ListOfferingsLosingSupportRow struct {
 
 // ListOfferingsLosingSupport 返回「排除目标 Channel 上将失效的 enabled Binding 后，失去最后
 // 结构支撑」的 enabled Offering。model_id 为空表示该 Channel 全部 enabled Binding 同时失效
-// （Channel 实体停用），否则只针对单条 Binding（停用/解除）。
+// 否则只针对单条 Binding（停用/解除）。Channel 状态不属于配置支撑。
 // 反查覆盖所有未硬删除 Route（含 disabled 与 archived），确认信息按 Route 状态分组展示。
 func (q *Queries) ListOfferingsLosingSupport(ctx context.Context, arg ListOfferingsLosingSupportParams) ([]ListOfferingsLosingSupportRow, error) {
 	rows, err := q.db.Query(ctx, listOfferingsLosingSupport, arg.ModelID, arg.ChannelID)
@@ -447,7 +497,6 @@ WHERE o.route_id = $1
       FROM channels c
       JOIN channel_models cm ON cm.channel_id = c.id AND cm.model_id = o.model_id
       WHERE c.id = ANY($2::bigint[])
-        AND c.status = 'enabled'
         AND c.protocol = o.ingress_protocol
         AND cm.status = 'enabled'
   )
@@ -466,8 +515,8 @@ type ListRouteEnabledOfferingsUnsupportedByPoolRow struct {
 	IngressProtocol string
 }
 
-// ListRouteEnabledOfferingsUnsupportedByPool 返回该 Route 当前 enabled、但按给定（保存后最终）
-// Channel 池已无结构支撑的 Offering；Route 保存按最终池聚合评估（ADR-0018）。
+// ListRouteEnabledOfferingsUnsupportedByPool 返回该 Route 当前 enabled、但按给定最终 Channel 池
+// 已无配置支撑的 Offering。仅用于告警，不得自动修改 Offering。
 func (q *Queries) ListRouteEnabledOfferingsUnsupportedByPool(ctx context.Context, arg ListRouteEnabledOfferingsUnsupportedByPoolParams) ([]ListRouteEnabledOfferingsUnsupportedByPoolRow, error) {
 	rows, err := q.db.Query(ctx, listRouteEnabledOfferingsUnsupportedByPool, arg.RouteID, arg.ChannelIds)
 	if err != nil {
@@ -498,41 +547,67 @@ SELECT o.model_id,
        m.model_id AS public_model_id,
        m.display_name,
        m.status AS model_status,
+       rt.status AS route_status,
        o.ingress_protocol,
        o.status,
        o.disabled_reason,
        o.disabled_at,
        o.updated_at,
+       (
+           SELECT COUNT(*)
+           FROM route_channels rc
+           JOIN channels c ON c.id = rc.channel_id
+           JOIN channel_models cm ON cm.channel_id = c.id AND cm.model_id = o.model_id
+           WHERE rc.route_id = o.route_id
+             AND c.protocol = o.ingress_protocol
+             AND cm.status = 'enabled'
+       ) AS configured_support_count,
+       (
+           SELECT COUNT(*)
+           FROM route_channels rc
+           JOIN channels c ON c.id = rc.channel_id
+           JOIN providers p ON p.id = c.provider_id
+           JOIN channel_models cm ON cm.channel_id = c.id AND cm.model_id = o.model_id
+           WHERE rc.route_id = o.route_id
+             AND c.status = 'enabled'
+             AND p.status = 'enabled'
+             AND c.credential_valid
+             AND c.protocol = o.ingress_protocol
+             AND cm.status = 'enabled'
+       ) AS runtime_candidate_count,
        EXISTS (
            SELECT 1
            FROM route_channels rc
            JOIN channels c ON c.id = rc.channel_id
            JOIN channel_models cm ON cm.channel_id = c.id AND cm.model_id = o.model_id
            WHERE rc.route_id = o.route_id
-             AND c.status = 'enabled'
              AND c.protocol = o.ingress_protocol
              AND cm.status = 'enabled'
        ) AS support_available
 FROM route_model_offerings o
 JOIN models m ON m.id = o.model_id
+JOIN routes rt ON rt.id = o.route_id
 WHERE o.route_id = $1
 ORDER BY m.model_id, o.ingress_protocol
 `
 
 type ListRouteOfferingDetailsRow struct {
-	ModelID          int64
-	PublicModelID    string
-	DisplayName      string
-	ModelStatus      string
-	IngressProtocol  string
-	Status           string
-	DisabledReason   pgtype.Text
-	DisabledAt       pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
-	SupportAvailable bool
+	ModelID                int64
+	PublicModelID          string
+	DisplayName            string
+	ModelStatus            string
+	RouteStatus            string
+	IngressProtocol        string
+	Status                 string
+	DisabledReason         pgtype.Text
+	DisabledAt             pgtype.Timestamptz
+	UpdatedAt              pgtype.Timestamptz
+	ConfiguredSupportCount int64
+	RuntimeCandidateCount  int64
+	SupportAvailable       bool
 }
 
-// ListRouteOfferingDetails 返回线路全部 Offering（逐 Model+协议组合），含状态、原因与当前结构支撑。
+// ListRouteOfferingDetails 返回线路全部 Offering，含配置支撑数与基础运行候选数。
 func (q *Queries) ListRouteOfferingDetails(ctx context.Context, routeID int64) ([]ListRouteOfferingDetailsRow, error) {
 	rows, err := q.db.Query(ctx, listRouteOfferingDetails, routeID)
 	if err != nil {
@@ -547,11 +622,14 @@ func (q *Queries) ListRouteOfferingDetails(ctx context.Context, routeID int64) (
 			&i.PublicModelID,
 			&i.DisplayName,
 			&i.ModelStatus,
+			&i.RouteStatus,
 			&i.IngressProtocol,
 			&i.Status,
 			&i.DisabledReason,
 			&i.DisabledAt,
 			&i.UpdatedAt,
+			&i.ConfiguredSupportCount,
+			&i.RuntimeCandidateCount,
 			&i.SupportAvailable,
 		); err != nil {
 			return nil, err
@@ -572,8 +650,9 @@ ORDER BY id
 FOR UPDATE
 `
 
-// 模型供给与线路售卖联动（ADR-0018）。
-// 结构支撑定义：Route 池内、同 ingress protocol、enabled Channel 承载的 enabled Channel-Model Binding。
+// 模型供给与线路售卖状态归属（ADR-0019）。
+// 配置支撑定义：Route 池内、同 ingress protocol、enabled Channel-Model Binding；
+// 不读取 Channel、Provider 或 Model 的当前状态。
 // 本文件的影响计算查询必须在「结构支撑串行化」的 Model 行锁内执行（LockModelsForSupplyChange 先行）。
 // LockModelsForSupplyChange 按 model_id 升序锁定 Model 行，作为结构支撑图的串行化点。
 // 收缩侧（停用/解除 Binding、停用 Channel、删除 Route Channel、停用 Model）与扩张侧
@@ -613,7 +692,7 @@ type ModelDisableImpactCountsRow struct {
 	Providers       int64
 }
 
-// ModelDisableImpactCounts 统计 Model 手动停用将级联停用的 enabled Binding 及其 Channel/Provider 数。
+// ModelDisableImpactCounts 统计 Model 全局暂停影响范围内的 enabled Binding 及其 Channel/Provider 数。
 func (q *Queries) ModelDisableImpactCounts(ctx context.Context, modelID int64) (ModelDisableImpactCountsRow, error) {
 	row := q.db.QueryRow(ctx, modelDisableImpactCounts, modelID)
 	var i ModelDisableImpactCountsRow
@@ -626,9 +705,7 @@ SELECT EXISTS (
     SELECT 1
     FROM channels c
     JOIN channel_models cm ON cm.channel_id = c.id
-    JOIN models m ON m.id = cm.model_id AND m.status = 'enabled'
     WHERE c.id = ANY($1::bigint[])
-      AND c.status = 'enabled'
       AND c.protocol = $2
       AND cm.model_id = $3
       AND cm.status = 'enabled'
@@ -641,8 +718,8 @@ type OfferingComboSupportedByPoolParams struct {
 	ModelID         int64
 }
 
-// OfferingComboSupportedByPool 校验一个 Model+协议组合能否被给定 Channel 池结构支撑，
-// 且 Model 全局 enabled（勾选/重新勾选售卖组合的保存校验）。
+// OfferingComboSupportedByPool 判断一个 Model+协议组合是否有配置支撑；这是保存警告事实，
+// Model 或 Channel 当前状态不阻止保存 Route 售卖意图。
 func (q *Queries) OfferingComboSupportedByPool(ctx context.Context, arg OfferingComboSupportedByPoolParams) (bool, error) {
 	row := q.db.QueryRow(ctx, offeringComboSupportedByPool, arg.ChannelIds, arg.IngressProtocol, arg.ModelID)
 	var supported bool
@@ -657,7 +734,6 @@ SELECT EXISTS (
     JOIN channels c ON c.id = rc.channel_id
     JOIN channel_models cm ON cm.channel_id = c.id
     WHERE rc.route_id = $1
-      AND c.status = 'enabled'
       AND c.protocol = $2
       AND cm.model_id = $3
       AND cm.status = 'enabled'

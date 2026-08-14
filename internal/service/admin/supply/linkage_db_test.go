@@ -1,8 +1,8 @@
-// ADR-0018 供给联动 DB 级测试矩阵（需 DATABASE_URL，缺省跳过）。
+// ADR-0019 状态归属与显式联合操作 DB 级测试矩阵（需 DATABASE_URL，缺省跳过）。
 //
 // 覆盖：Binding 停用（有替代 / Route 内最后 / 全局最后）、解除绑定、Channel 实体停用、
-// Model 手动停用级联、启用护栏、Route 保存差异更新（取消勾选 / 无关保存 / 原子换渠道 /
-// 失去支撑确认）、批量恢复、影响指纹漂移和 Model 锁串行化。
+// Model 全局暂停/下架、启用护栏、Route 保存差异更新（取消勾选 / 无关保存 / 原子换渠道 /
+// 保留无支撑意图）、批量恢复、影响指纹漂移和 Model 锁串行化。
 package supply_test
 
 import (
@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -250,7 +249,7 @@ func confirmationFrom(t *testing.T, err error) *supply.ConfirmationRequired {
 	return confirm
 }
 
-// registryStub 满足 channel.AdapterRegistry（联动测试不校验 adapter 组合）。
+// registryStub 满足 channel.AdapterRegistry（状态归属测试不校验 adapter 组合）。
 type registryStub struct{}
 
 func (registryStub) HasAny(string, string) bool  { return true }
@@ -300,7 +299,7 @@ func TestBindingDisableKeepsOfferingWithAlternative(t *testing.T) {
 }
 
 // TestBindingDisableLastRouteSupport：Route 内最后一条同协议支撑停用需要指纹确认；
-// 确认后 Offering 停用为 binding_disabled，全局仍有供给时 Model 保持 enabled。
+// 空 Offering 选择只停用 Binding，Offering 与 Model 均保持 enabled。
 func TestBindingDisableLastRouteSupport(t *testing.T) {
 	f := newFixture(t)
 	providerID := f.provider(uniqueName("sup-last"), "enabled")
@@ -320,8 +319,8 @@ func TestBindingDisableLastRouteSupport(t *testing.T) {
 	if confirm.Code != "channel_model_disable_confirmation_required" {
 		t.Fatalf("confirmation code = %s", confirm.Code)
 	}
-	if confirm.Impact.ModelWillDisable {
-		t.Fatal("model must not auto-disable while another enabled binding exists")
+	if confirm.Impact.RemainingEnabledBindings != 1 {
+		t.Fatalf("remaining bindings = %d, want 1", confirm.Impact.RemainingEnabledBindings)
 	}
 	if len(confirm.Impact.AffectedOfferings) != 1 || confirm.Impact.AffectedOfferings[0].RouteID != routeID {
 		t.Fatalf("affected offerings = %+v", confirm.Impact.AffectedOfferings)
@@ -335,17 +334,17 @@ func TestBindingDisableLastRouteSupport(t *testing.T) {
 	}
 
 	status, reason := f.offeringState(routeID, modelID, "openai")
-	if status != "disabled" || reason == nil || *reason != supply.ReasonBindingDisabled {
-		t.Fatalf("offering = %s/%v, want disabled/binding_disabled", status, reason)
+	if status != "enabled" || reason != nil {
+		t.Fatalf("offering = %s/%v, want enabled/nil", status, reason)
 	}
 	if got := f.modelStatus(modelID); got != "enabled" {
 		t.Fatalf("model status = %s, want enabled", got)
 	}
 }
 
-// TestBindingDisableGlobalLastCascadesModel：全局最后一条 enabled Binding 停用经确认后，
-// Model、Binding 与全部 Offering 原子停用（原因统一 model_disabled）。
-func TestBindingDisableGlobalLastCascadesModel(t *testing.T) {
+// TestBindingDisableGlobalLastKeepsModel：全局最后一条 enabled Binding 停用经确认后，
+// 只停用 Binding；Model 与未选择的 Offering 保持 enabled。
+func TestBindingDisableGlobalLastKeepsModel(t *testing.T) {
 	f := newFixture(t)
 	providerID := f.provider(uniqueName("sup-glast"), "enabled")
 	chA := f.channel(providerID, uniqueName("sup-glast-a"), "openai", "enabled")
@@ -359,8 +358,8 @@ func TestBindingDisableGlobalLastCascadesModel(t *testing.T) {
 		ChannelID: chA, ModelID: modelID, UpstreamModel: "upstream-model", Status: channelmodel.StatusDisabled,
 	})
 	confirm := confirmationFrom(t, err)
-	if !confirm.Impact.ModelWillDisable {
-		t.Fatal("expected model_will_disable for the global last enabled binding")
+	if confirm.Impact.RemainingEnabledBindings != 0 {
+		t.Fatalf("remaining bindings = %d, want 0", confirm.Impact.RemainingEnabledBindings)
 	}
 
 	if _, err := svc.Update(f.ctx, channelmodel.UpdateInput{
@@ -370,19 +369,19 @@ func TestBindingDisableGlobalLastCascadesModel(t *testing.T) {
 		t.Fatalf("confirmed disable: %v", err)
 	}
 
-	if got := f.modelStatus(modelID); got != "disabled" {
-		t.Fatalf("model status = %s, want disabled", got)
+	if got := f.modelStatus(modelID); got != "enabled" {
+		t.Fatalf("model status = %s, want enabled", got)
 	}
 	if got := f.bindingStatus(chA, modelID); got != "disabled" {
 		t.Fatalf("binding status = %s, want disabled", got)
 	}
 	status, reason := f.offeringState(routeID, modelID, "openai")
-	if status != "disabled" || reason == nil || *reason != supply.ReasonModelDisabled {
-		t.Fatalf("offering = %s/%v, want disabled/model_disabled", status, reason)
+	if status != "enabled" || reason != nil {
+		t.Fatalf("offering = %s/%v, want enabled/nil", status, reason)
 	}
 }
 
-// TestUnbindUsesSameLinkage：解除 enabled Binding 与停用使用相同影响预览与联动。
+// TestUnbindUsesSameLinkage：解除 enabled Binding 与停用使用相同影响预览和显式 Offering 选择。
 func TestUnbindUsesSameLinkage(t *testing.T) {
 	f := newFixture(t)
 	providerID := f.provider(uniqueName("sup-unbind"), "enabled")
@@ -400,6 +399,9 @@ func TestUnbindUsesSameLinkage(t *testing.T) {
 
 	if err := svc.Delete(f.ctx, chA, modelID, supply.Confirmation{
 		Confirm: true, ExpectedFingerprint: confirm.Impact.Fingerprint(),
+		SelectedOfferings: []supply.OfferingSelection{{
+			RouteID: routeID, ModelID: modelID, IngressProtocol: "openai",
+		}},
 	}); err != nil {
 		t.Fatalf("confirmed unbind: %v", err)
 	}
@@ -409,9 +411,9 @@ func TestUnbindUsesSameLinkage(t *testing.T) {
 	}
 }
 
-// TestChannelDisableSuspendsOfferings：Channel 实体停用聚合确认后暂停失去支撑的 Offering
-// （channel_disabled），Binding 行不改写、Model 不自动停用；重新启用 Channel 不恢复 Offering。
-func TestChannelDisableSuspendsOfferings(t *testing.T) {
+// TestChannelDisableKeepsSupplyIntent：Channel 暂停经影响确认后只修改 Channel；
+// Binding、Model 与 Offering 均保留配置意图，恢复流量后无需逐层恢复。
+func TestChannelDisableKeepsSupplyIntent(t *testing.T) {
 	f := newFixture(t)
 	providerID := f.provider(uniqueName("sup-chd"), "enabled")
 	chA := f.channel(providerID, uniqueName("sup-chd-a"), "openai", "enabled")
@@ -436,8 +438,8 @@ func TestChannelDisableSuspendsOfferings(t *testing.T) {
 	}
 
 	status, reason := f.offeringState(routeID, modelID, "openai")
-	if status != "disabled" || reason == nil || *reason != supply.ReasonChannelDisabled {
-		t.Fatalf("offering = %s/%v, want disabled/channel_disabled", status, reason)
+	if status != "enabled" || reason != nil {
+		t.Fatalf("offering = %s/%v, want enabled/nil", status, reason)
 	}
 	if got := f.bindingStatus(chA, modelID); got != "enabled" {
 		t.Fatalf("binding status = %s, want enabled (channel disable must not rewrite binding rows)", got)
@@ -446,20 +448,20 @@ func TestChannelDisableSuspendsOfferings(t *testing.T) {
 		t.Fatalf("model status = %s, want enabled (channel disable must not cascade the model)", got)
 	}
 
-	// 重新启用 Channel：只恢复结构支撑，不自动恢复 Offering。
+	// 重新启用 Channel：恢复运行候选资格，其他层配置状态始终未变。
 	update.Status = adminchannel.StatusEnabled
 	update.Confirmation = supply.Confirmation{}
 	if _, err := svc.Update(f.ctx, update); err != nil {
 		t.Fatalf("re-enable channel: %v", err)
 	}
-	if status, _ := f.offeringState(routeID, modelID, "openai"); status != "disabled" {
-		t.Fatalf("offering status after channel re-enable = %s, want disabled", status)
+	if status, _ := f.offeringState(routeID, modelID, "openai"); status != "enabled" {
+		t.Fatalf("offering status after channel re-enable = %s, want enabled", status)
 	}
 }
 
-// TestModelManualDisableCascades：Model 手动停用经确认后级联全部 enabled Binding 与 Offering；
-// 重新启用 Model 不自动恢复任何一层。
-func TestModelManualDisableCascades(t *testing.T) {
+// TestModelPausePreservesIntent：Model 全局暂停经确认后只修改 Model；
+// 重新启用后既有 enabled Binding 与 Offering 重新生效。
+func TestModelPausePreservesIntent(t *testing.T) {
 	f := newFixture(t)
 	providerID := f.provider(uniqueName("sup-mdl"), "enabled")
 	chA := f.channel(providerID, uniqueName("sup-mdl-a"), "openai", "enabled")
@@ -477,38 +479,107 @@ func TestModelManualDisableCascades(t *testing.T) {
 	if confirm.Code != "model_disable_confirmation_required" {
 		t.Fatalf("confirmation code = %s", confirm.Code)
 	}
-	if confirm.Impact.CascadeEnabledBindings != 1 {
-		t.Fatalf("cascade bindings = %d, want 1", confirm.Impact.CascadeEnabledBindings)
+	if confirm.Impact.EnabledBindings != 1 {
+		t.Fatalf("enabled bindings = %d, want 1", confirm.Impact.EnabledBindings)
 	}
 
 	update.Confirmation = supply.Confirmation{Confirm: true, ExpectedFingerprint: confirm.Impact.Fingerprint()}
 	if _, err := svc.Update(f.ctx, update); err != nil {
 		t.Fatalf("confirmed model disable: %v", err)
 	}
-	if got := f.bindingStatus(chA, modelID); got != "disabled" {
-		t.Fatalf("binding status = %s, want disabled", got)
+	if got := f.bindingStatus(chA, modelID); got != "enabled" {
+		t.Fatalf("binding status = %s, want enabled", got)
 	}
 	status, reason := f.offeringState(routeID, modelID, "openai")
-	if status != "disabled" || reason == nil || *reason != supply.ReasonModelDisabled {
-		t.Fatalf("offering = %s/%v, want disabled/model_disabled", status, reason)
+	if status != "enabled" || reason != nil {
+		t.Fatalf("offering = %s/%v, want enabled/nil", status, reason)
 	}
 
-	// 重新启用 Model：Binding 与 Offering 均不自动恢复。
+	// 重新启用 Model：保留的 Binding 与 Offering 配置意图重新生效。
 	update.Status = adminmodel.StatusEnabled
 	update.Confirmation = supply.Confirmation{}
 	if _, err := svc.Update(f.ctx, update); err != nil {
 		t.Fatalf("re-enable model: %v", err)
 	}
-	if got := f.bindingStatus(chA, modelID); got != "disabled" {
-		t.Fatalf("binding status after model re-enable = %s, want disabled", got)
+	if got := f.bindingStatus(chA, modelID); got != "enabled" {
+		t.Fatalf("binding status after model re-enable = %s, want enabled", got)
 	}
-	if status, _ := f.offeringState(routeID, modelID, "openai"); status != "disabled" {
-		t.Fatalf("offering status after model re-enable = %s, want disabled", status)
+	if status, _ := f.offeringState(routeID, modelID, "openai"); status != "enabled" {
+		t.Fatalf("offering status after model re-enable = %s, want enabled", status)
 	}
 }
 
-// TestBindingEnableRequiresEnabledModel：Model disabled 时服务端拒绝启用 Binding（锁内护栏）。
-func TestBindingEnableRequiresEnabledModel(t *testing.T) {
+// TestModelDelistChangesOnlySelectedOfferings 验证全局下架是显式联合操作：Model 暂停，
+// 只停止管理员选择的 Offering，Binding 与未选择 Offering 保持原配置；非法选择整笔回滚。
+func TestModelDelistChangesOnlySelectedOfferings(t *testing.T) {
+	f := newFixture(t)
+	providerID := f.provider(uniqueName("sup-delist"), "enabled")
+	chA := f.channel(providerID, uniqueName("sup-delist-a"), "openai", "enabled")
+	modelID := f.model(uniqueName("sup-delist-model"), "enabled")
+	f.binding(chA, modelID, "enabled")
+	routeA := f.route(uniqueName("sup-delist-r1"), chA)
+	routeB := f.route(uniqueName("sup-delist-r2"), chA)
+	f.offering(routeA, modelID, "openai")
+	f.offering(routeB, modelID, "openai")
+
+	svc := newModelService(f)
+	_, err := svc.Delist(f.ctx, modelID, supply.Confirmation{})
+	confirm := confirmationFrom(t, err)
+	if confirm.Code != "model_delist_confirmation_required" {
+		t.Fatalf("confirmation code = %s", confirm.Code)
+	}
+	if len(confirm.Impact.AffectedOfferings) != 2 {
+		t.Fatalf("affected offerings = %d, want 2", len(confirm.Impact.AffectedOfferings))
+	}
+
+	// 选择不在影响范围内的 Offering 必须拒绝，且 Model/Offering 不发生部分提交。
+	_, err = svc.Delist(f.ctx, modelID, supply.Confirmation{
+		Confirm: true, ExpectedFingerprint: confirm.Impact.Fingerprint(),
+		SelectedOfferings: []supply.OfferingSelection{{
+			RouteID: routeA + routeB + 1000, ModelID: modelID, IngressProtocol: "openai",
+		}},
+	})
+	confirmationFrom(t, err)
+	if got := f.modelStatus(modelID); got != "enabled" {
+		t.Fatalf("model status after rejected delist = %s, want enabled", got)
+	}
+	if status, _ := f.offeringState(routeA, modelID, "openai"); status != "enabled" {
+		t.Fatalf("route A offering after rejected delist = %s, want enabled", status)
+	}
+	if status, _ := f.offeringState(routeB, modelID, "openai"); status != "enabled" {
+		t.Fatalf("route B offering after rejected delist = %s, want enabled", status)
+	}
+
+	disabled, err := svc.Delist(f.ctx, modelID, supply.Confirmation{
+		Confirm: true, ExpectedFingerprint: confirm.Impact.Fingerprint(),
+		SelectedOfferings: []supply.OfferingSelection{{
+			RouteID: routeA, ModelID: modelID, IngressProtocol: "openai",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("delist selected offering: %v", err)
+	}
+	if disabled != 1 {
+		t.Fatalf("disabled offerings = %d, want 1", disabled)
+	}
+	if got := f.modelStatus(modelID); got != "disabled" {
+		t.Fatalf("model status = %s, want disabled", got)
+	}
+	if got := f.bindingStatus(chA, modelID); got != "enabled" {
+		t.Fatalf("binding status = %s, want enabled", got)
+	}
+	status, reason := f.offeringState(routeA, modelID, "openai")
+	if status != "disabled" || reason == nil || *reason != supply.ReasonModelDelisted {
+		t.Fatalf("route A offering = %s/%v, want disabled/model_delisted", status, reason)
+	}
+	status, reason = f.offeringState(routeB, modelID, "openai")
+	if status != "enabled" || reason != nil {
+		t.Fatalf("route B offering = %s/%v, want enabled/nil", status, reason)
+	}
+}
+
+// TestBindingEnableUnderPausedModel：Model 暂停时仍允许保存 enabled Binding 配置意图。
+func TestBindingEnableUnderPausedModel(t *testing.T) {
 	f := newFixture(t)
 	providerID := f.provider(uniqueName("sup-guard"), "enabled")
 	chA := f.channel(providerID, uniqueName("sup-guard-a"), "openai", "enabled")
@@ -520,20 +591,17 @@ func TestBindingEnableRequiresEnabledModel(t *testing.T) {
 		ChannelID: chA, ModelID: modelID, UpstreamModel: "upstream-model", Status: channelmodel.StatusEnabled,
 		VerificationItemID: &itemID,
 	})
-	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
-		t.Fatalf("expected conflict, got %v (%v)", got, err)
+	if err != nil {
+		t.Fatalf("enable binding under paused model: %v", err)
 	}
-	if err == nil || !strings.Contains(err.Error(), "globally disabled") {
-		t.Fatalf("expected model guard message, got %v", err)
-	}
-	if got := f.bindingStatus(chA, modelID); got != "disabled" {
-		t.Fatalf("binding status = %s, want disabled", got)
+	if got := f.bindingStatus(chA, modelID); got != "enabled" {
+		t.Fatalf("binding status = %s, want enabled", got)
 	}
 }
 
 // TestRouteSaveDiffUpdate：Route 保存按组合差异更新——取消勾选记 manual_unselected、
-// 无关字段保存保留 disabled 关系、重新勾选恢复 enabled、原子换渠道不误停、
-// 保持勾选失去支撑经确认停用为 route_channel_removed。
+// 无关字段保存保留 disabled 关系、重新勾选恢复 enabled、原子换渠道不误停，
+// 保持勾选失去支撑时仍保留 Route 售卖意图。
 func TestRouteSaveDiffUpdate(t *testing.T) {
 	f := newFixture(t)
 	providerID := f.provider(uniqueName("sup-rsv"), "enabled")
@@ -608,25 +676,20 @@ func TestRouteSaveDiffUpdate(t *testing.T) {
 		t.Fatalf("offering Y after re-select = %s/%v, want enabled/nil", status, reason)
 	}
 
-	// 移除 Y 的唯一支撑（池只剩 B）但保持勾选 → 需确认 → route_channel_removed。
+	// 移除 Y 的唯一支撑（池只剩 B）但保持勾选：Offering 仍保持 enabled。
 	update.ChannelIDs = []int64{chB}
-	_, err = svc.Update(f.ctx, update)
-	confirm := confirmationFrom(t, err)
-	if confirm.Code != "route_channel_removed_confirmation_required" {
-		t.Fatalf("confirmation code = %s", confirm.Code)
-	}
-	update.Confirmation = supply.Confirmation{Confirm: true, ExpectedFingerprint: confirm.Impact.Fingerprint()}
 	if _, err := svc.Update(f.ctx, update); err != nil {
-		t.Fatalf("confirmed channel removal: %v", err)
+		t.Fatalf("save route without configured support: %v", err)
 	}
 	status, reason = f.offeringState(created.ID, modelY, "openai")
-	if status != "disabled" || reason == nil || *reason != supply.ReasonRouteChannelRemoved {
-		t.Fatalf("offering Y = %s/%v, want disabled/route_channel_removed", status, reason)
+	if status != "enabled" || reason != nil {
+		t.Fatalf("offering Y = %s/%v, want enabled/nil", status, reason)
 	}
 }
 
-// TestRouteCreateRequiresSupportedSelection：创建必须至少勾选一个组合，且组合必须有结构支撑。
-func TestRouteCreateRequiresSupportedSelection(t *testing.T) {
+// TestRouteCreateAllowsUnsupportedSelection：创建仍必须至少勾选一个组合，但允许保存
+// 暂无配置支撑的 Offering 意图。
+func TestRouteCreateAllowsUnsupportedSelection(t *testing.T) {
 	f := newFixture(t)
 	providerID := f.provider(uniqueName("sup-rcr"), "enabled")
 	chA := f.channel(providerID, uniqueName("sup-rcr-a"), "openai", "enabled")
@@ -642,16 +705,19 @@ func TestRouteCreateRequiresSupportedSelection(t *testing.T) {
 		t.Fatalf("expected invalid argument for empty selection, got %v", err)
 	}
 
-	if _, err := svc.Create(f.ctx, adminroute.CreateInput{
+	created, err := svc.Create(f.ctx, adminroute.CreateInput{
 		Name: uniqueName("sup-rcr-route"), Mode: adminroute.ModeBalanced, Status: adminroute.StatusEnabled,
 		ChannelIDs: []int64{chA},
 		Offerings:  []adminroute.OfferingSelection{{ModelID: modelX, IngressProtocol: "openai"}},
-	}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
-		t.Fatalf("expected invalid argument for unsupported combo, got %v", err)
+	})
+	if err != nil {
+		t.Fatalf("create route with unsupported offering intent: %v", err)
 	}
+	f.routeIDs = append(f.routeIDs, created.ID)
 }
 
-// TestOfferingRestoreBatch：批量恢复需指纹确认并整批原子提交；无支撑条目整批拒绝。
+// TestOfferingRestoreBatch：批量恢复需指纹确认并整批原子提交；无支撑或 Model 暂停
+// 是恢复警告，不阻止保存 Offering 意图。
 func TestOfferingRestoreBatch(t *testing.T) {
 	f := newFixture(t)
 	providerID := f.provider(uniqueName("sup-rst"), "enabled")
@@ -691,7 +757,7 @@ func TestOfferingRestoreBatch(t *testing.T) {
 		t.Fatalf("offering = %s/%v, want enabled/nil", status, reason)
 	}
 
-	// 无支撑条目：先停用绑定（走确认），再尝试恢复 → 整批拒绝。
+	// 无支撑条目：停用 Binding 只改 Binding；随后手工停止并恢复 Offering 仍可成功。
 	cmSvc := newChannelModelService(f)
 	_, err = cmSvc.Update(f.ctx, channelmodel.UpdateInput{
 		ChannelID: chA, ModelID: modelID, UpstreamModel: "upstream-model", Status: channelmodel.StatusDisabled,
@@ -703,9 +769,17 @@ func TestOfferingRestoreBatch(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("disable binding: %v", err)
 	}
-	// 全局最后供给已停用 → Model 已自动停用；恢复应被 Model 状态拒绝。
-	if _, err := svc.RestoreOfferings(f.ctx, modelID, items, supply.Confirmation{}); failure.CodeOf(err) != failure.CodeAdminConflict {
-		t.Fatalf("expected conflict restoring without support, got %v", err)
+	if _, err := f.queries.DisableRouteModelOffering(f.ctx, sqlc.DisableRouteModelOfferingParams{
+		Reason: textParam(supply.ReasonManualUnselected), RouteID: routeID, ModelID: modelID, IngressProtocol: "openai",
+	}); err != nil {
+		t.Fatalf("disable unsupported offering: %v", err)
+	}
+	_, err = svc.RestoreOfferings(f.ctx, modelID, items, supply.Confirmation{})
+	restoreWarning := confirmationFrom(t, err)
+	if _, err := svc.RestoreOfferings(f.ctx, modelID, items, supply.Confirmation{
+		Confirm: true, ExpectedFingerprint: restoreWarning.Impact.Fingerprint(),
+	}); err != nil {
+		t.Fatalf("restore offering without configured support: %v", err)
 	}
 }
 

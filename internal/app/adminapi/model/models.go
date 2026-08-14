@@ -19,6 +19,7 @@ type ModelService interface {
 	Get(ctx context.Context, id int64) (model.Model, error)
 	Create(ctx context.Context, in model.CreateInput) (model.Model, error)
 	Update(ctx context.Context, in model.UpdateInput) (model.Model, error)
+	Delist(ctx context.Context, modelID int64, confirmation supply.Confirmation) (int, error)
 	ListDisabledOfferings(ctx context.Context, modelID int64, ingressProtocol string) ([]model.ModelOffering, error)
 	RestoreOfferings(ctx context.Context, modelID int64, items []model.OfferingRestoreItem, confirmation supply.Confirmation) (int, error)
 	Delete(ctx context.Context, id int64) error
@@ -81,8 +82,8 @@ type updateModelRequest struct {
 	OwnedBy     string `json:"owned_by"`
 	Status      string `json:"status"`
 	modelMetadataRequest
-	// ConfirmSupplyImpact + ExpectedImpactFingerprint 是全局停用触发 Binding/Offering 级联时的
-	// 二次确认参数（ADR-0018）；首次请求缺省，收到 409 影响预览后携带指纹重试。
+	// ConfirmSupplyImpact + ExpectedImpactFingerprint 是全局暂停前的客户影响确认；
+	// 暂停动作不允许借此修改 Binding 或 Offering。
 	ConfirmSupplyImpact       bool   `json:"confirm_supply_impact"`
 	ExpectedImpactFingerprint string `json:"expected_impact_fingerprint"`
 }
@@ -198,13 +199,16 @@ func (h *modelsHandler) update(w http.ResponseWriter, r *http.Request) {
 
 // modelOfferingDTO 是该 Model 一条 disabled 售卖组合（批量恢复入口）。
 type modelOfferingDTO struct {
-	RouteID          int64   `json:"route_id"`
-	RouteName        string  `json:"route_name"`
-	RouteStatus      string  `json:"route_status"`
-	IngressProtocol  string  `json:"ingress_protocol"`
-	DisabledReason   *string `json:"disabled_reason"`
-	DisabledAt       *string `json:"disabled_at"`
-	SupportAvailable bool    `json:"support_available"`
+	RouteID          int64    `json:"route_id"`
+	RouteName        string   `json:"route_name"`
+	RouteStatus      string   `json:"route_status"`
+	IngressProtocol  string   `json:"ingress_protocol"`
+	DisabledReason   *string  `json:"disabled_reason"`
+	DisabledAt       *string  `json:"disabled_at"`
+	SupportAvailable bool     `json:"support_available"`
+	Restorable       bool     `json:"restorable"`
+	RestoreBlockers  []string `json:"restore_blockers"`
+	RestoreWarnings  []string `json:"restore_warnings"`
 }
 
 type restoreOfferingsRequest struct {
@@ -218,6 +222,40 @@ type restoreOfferingsRequest struct {
 
 type restoreOfferingsResponse struct {
 	Restored int `json:"restored"`
+}
+
+type delistModelRequest struct {
+	ConfirmSupplyImpact       bool                                       `json:"confirm_supply_impact"`
+	ExpectedImpactFingerprint string                                     `json:"expected_impact_fingerprint"`
+	SelectedOfferings         []adminhttp.SupplyOfferingSelectionRequest `json:"selected_offerings"`
+}
+
+type delistModelResponse struct {
+	DisabledOfferings int `json:"disabled_offerings"`
+}
+
+// delist 执行显式全局下架：暂停 Model，并只停止管理员选择的 Offering。
+func (h *modelsHandler) delist(w http.ResponseWriter, r *http.Request) {
+	id, err := adminhttp.PathID(r)
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	var req delistModelRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	disabled, err := h.service.Delist(r.Context(), id, supply.Confirmation{
+		Confirm:             req.ConfirmSupplyImpact,
+		ExpectedFingerprint: req.ExpectedImpactFingerprint,
+		SelectedOfferings:   adminhttp.SupplyOfferingSelections(req.SelectedOfferings),
+	})
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	adminhttp.WriteData(w, http.StatusOK, delistModelResponse{DisabledOfferings: disabled})
 }
 
 // listOfferings 列出该 Model 的 disabled Offering（可按 ?ingress_protocol= 过滤）。
@@ -242,6 +280,9 @@ func (h *modelsHandler) listOfferings(w http.ResponseWriter, r *http.Request) {
 			DisabledReason:   o.DisabledReason,
 			DisabledAt:       adminhttp.RFC3339Ptr(o.DisabledAt),
 			SupportAvailable: o.SupportAvailable,
+			Restorable:       o.Restorable,
+			RestoreBlockers:  o.RestoreBlockers,
+			RestoreWarnings:  o.RestoreWarnings,
 		})
 	}
 	adminhttp.WriteData(w, http.StatusOK, dtos)

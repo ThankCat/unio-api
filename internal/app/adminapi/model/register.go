@@ -28,9 +28,10 @@ func Register(r chi.Router, d Deps) {
 		r.Post("/models", mh.create)
 		r.Get("/models/{id}", mh.get)
 		r.Patch("/models/{id}", mh.update)
+		r.Post("/models/{id}/delist", mh.delist)
 		// DELETE 物理删除录错的脏数据，级联清理自身价格/绑定/能力；已被请求/账务引用时返回 409。
 		r.Delete("/models/{id}", mh.delete)
-		// 批量恢复（ADR-0018）：按 Model 聚合列出 disabled Offering 并原子恢复勾选子集。
+		// 批量恢复（ADR-0019）：按 Model 聚合列出 disabled Offering 并原子恢复勾选子集。
 		r.Get("/models/{id}/offerings", mh.listOfferings)
 		r.Post("/models/{id}/offerings/restore", mh.restoreOfferings)
 	}

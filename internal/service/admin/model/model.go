@@ -44,7 +44,7 @@ type Store interface {
 }
 
 // TxBeginner 提供事务能力（由 pgxpool 满足），用于 Model 手动停用时的
-// 结构支撑串行化与 Binding/Offering 级联（ADR-0018）。
+// ADR-0019 影响预览、显式联合操作与 Offering 恢复所需事务能力。
 type TxBeginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
@@ -119,7 +119,7 @@ type UpdateInput struct {
 	OwnedBy     string
 	Status      string
 	Metadata
-	// Confirmation 是全局停用触发 Binding/Offering 级联时的二次确认参数（ADR-0018）。
+	// Confirmation 是全局暂停前的客户影响确认参数；不允许借此修改 Offering。
 	Confirmation supply.Confirmation
 }
 
@@ -130,7 +130,7 @@ type Service struct {
 	queries *sqlc.Queries
 }
 
-// NewService 创建 model 管理服务。db/queries 用于全局停用路径的级联事务；
+// NewService 创建 model 管理服务。db/queries 用于全局暂停、下架和 Offering 恢复事务；
 // 其余读写继续走 store。
 func NewService(store Store, db TxBeginner, queries *sqlc.Queries) *Service {
 	return &Service{store: store, db: db, queries: queries}
@@ -253,9 +253,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Model, error) {
 
 // Update 更新 model 的展示元数据与状态；目标不存在返回 not_found。
 //
-// enabled→disabled 是全局停用（ADR-0018）：在一个事务内锁定 Model、计算影响并经指纹确认后，
-// 级联停用该 Model 全部 enabled Binding 与 enabled Offering（原因 model_disabled）。
-// disabled→enabled 不自动恢复任何 Binding 或 Offering。
+// enabled→disabled 是全局暂停：在一个事务内锁定 Model、计算影响并经指纹确认后只修改
+// Model 自身。disabled→enabled 会让既有 enabled Binding/Offering 意图重新生效。
 func (s *Service) Update(ctx context.Context, in UpdateInput) (Model, error) {
 	if in.ID <= 0 {
 		return Model{}, invalidArgument("id", "model id must be positive")
@@ -299,7 +298,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Model, error) {
 	}
 
 	if current.Status == StatusEnabled && status == StatusDisabled {
-		return s.disableModelWithCascade(ctx, in.ID, params, in.Confirmation)
+		return s.pauseModel(ctx, in.ID, params, in.Confirmation)
 	}
 
 	row, err := s.store.UpdateModel(ctx, params)
@@ -313,10 +312,8 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Model, error) {
 	return toModel(row), nil
 }
 
-// disableModelWithCascade 在一个事务内手动全局停用 Model：锁定 Model 行，锁内计算
-// 受影响 Binding/Offering 并经影响指纹确认，然后原子完成 Model、全部 enabled Binding
-// 与全部 enabled Offering 的停用（ADR-0018「Model 全局停用与恢复」）。
-func (s *Service) disableModelWithCascade(ctx context.Context, modelID int64, params sqlc.UpdateModelParams, confirmation supply.Confirmation) (Model, error) {
+// pauseModel 在一个事务内全局暂停 Model。Binding 与 Offering 配置状态保持不变。
+func (s *Service) pauseModel(ctx context.Context, modelID int64, params sqlc.UpdateModelParams, confirmation supply.Confirmation) (Model, error) {
 	if s.db == nil || s.queries == nil {
 		return Model{}, storeFailed(errors.New("supply linkage dependencies are unavailable"), "disable model")
 	}
@@ -336,10 +333,13 @@ func (s *Service) disableModelWithCascade(ctx context.Context, modelID int64, pa
 	}
 	if err := supply.Authorize(impact,
 		"model_disable_confirmation_required",
-		"disabling this model stops all routes from offering it and disables all enabled bindings; confirm with the impact fingerprint",
+		"pausing this model blocks the affected route offerings without changing their saved intent; confirm with the impact fingerprint",
 		confirmation,
 	); err != nil {
 		return Model{}, err
+	}
+	if len(confirmation.SelectedOfferings) > 0 {
+		return Model{}, invalidArgument("selected_offerings", "global model pause cannot modify route offerings; use the model delist action")
 	}
 
 	row, err := q.UpdateModel(ctx, params)
@@ -349,17 +349,62 @@ func (s *Service) disableModelWithCascade(ctx context.Context, modelID int64, pa
 		}
 		return Model{}, storeFailed(err, "update model")
 	}
-	if _, err := q.DisableEnabledBindingsForModel(ctx, modelID); err != nil {
-		return Model{}, storeFailed(err, "disable model bindings")
-	}
-	if _, err := q.DisableEnabledOfferingsForModel(ctx, modelID); err != nil {
-		return Model{}, storeFailed(err, "disable model offerings")
-	}
-
 	if err := tx.Commit(ctx); err != nil {
 		return Model{}, storeFailed(err, "commit model disable transaction")
 	}
 	return toModel(row), nil
+}
+
+// Delist 全局下架 Model，并只停止管理员在最新影响预览中明确选择的 Offering。
+// Binding 配置保持不变；未选择的 Offering 继续保存 enabled 售卖意图，但受 Model 暂停阻断。
+func (s *Service) Delist(ctx context.Context, modelID int64, confirmation supply.Confirmation) (int, error) {
+	if modelID <= 0 {
+		return 0, invalidArgument("id", "model id must be positive")
+	}
+	if s.db == nil || s.queries == nil {
+		return 0, storeFailed(errors.New("supply linkage dependencies are unavailable"), "delist model")
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return 0, storeFailed(err, "begin model delist transaction")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	if err := supply.LockModels(ctx, q, []int64{modelID}); err != nil {
+		return 0, storeFailed(err, "lock model for delist")
+	}
+	if _, err := q.LookupModelByID(ctx, modelID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, notFound("model not found")
+		}
+		return 0, storeFailed(err, "load model for delist")
+	}
+	impact, err := supply.ModelImpact(ctx, q, modelID)
+	if err != nil {
+		return 0, storeFailed(err, "compute model delist impact")
+	}
+	impact.Kind = "model_delist"
+	if err := supply.Authorize(impact,
+		"model_delist_confirmation_required",
+		"delisting pauses the model and stops only the route offerings selected below; confirm with the latest impact fingerprint",
+		confirmation,
+	); err != nil {
+		return 0, err
+	}
+	if len(confirmation.SelectedOfferings) == 0 {
+		return 0, invalidArgument("selected_offerings", "select at least one route offering to delist")
+	}
+	if _, err := q.DisableModelSupply(ctx, modelID); err != nil {
+		return 0, storeFailed(err, "pause model during delist")
+	}
+	if err := supply.DisableSelectedOfferings(ctx, q, impact, confirmation, supply.ReasonModelDelisted); err != nil {
+		return 0, storeFailed(err, "disable selected model offerings")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, storeFailed(err, "commit model delist transaction")
+	}
+	return len(confirmation.SelectedOfferings), nil
 }
 
 // ModelOffering 是该 Model 在某条 Route 上的一条 disabled 售卖组合（批量恢复入口）。
@@ -372,6 +417,9 @@ type ModelOffering struct {
 	DisabledAt      *time.Time
 	// SupportAvailable 表示该 Route 当前池内结构支撑是否已恢复（可勾选恢复的前提）。
 	SupportAvailable bool
+	Restorable       bool
+	RestoreBlockers  []string
+	RestoreWarnings  []string
 }
 
 // OfferingRestoreItem 是批量恢复请求中勾选的一条组合。
@@ -381,12 +429,13 @@ type OfferingRestoreItem struct {
 }
 
 // ListDisabledOfferings 按 Model 聚合列出 disabled Offering（可按协议过滤），
-// 附结构支撑恢复状态，供批量恢复入口展示（ADR-0018「批量恢复」）。
+// 附配置支撑与恢复状态，供批量恢复入口展示（ADR-0019）。
 func (s *Service) ListDisabledOfferings(ctx context.Context, modelID int64, ingressProtocol string) ([]ModelOffering, error) {
 	if modelID <= 0 {
 		return nil, invalidArgument("id", "model id must be positive")
 	}
-	if _, err := s.store.LookupModelByID(ctx, modelID); err != nil {
+	m, err := s.store.LookupModelByID(ctx, modelID)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, notFound("model not found")
 		}
@@ -411,6 +460,16 @@ func (s *Service) ListDisabledOfferings(ctx context.Context, modelID int64, ingr
 			RouteStatus:      row.RouteStatus,
 			IngressProtocol:  row.IngressProtocol,
 			SupportAvailable: row.SupportAvailable,
+			Restorable:       row.RouteStatus != "archived",
+		}
+		if row.RouteStatus == "archived" {
+			o.RestoreBlockers = append(o.RestoreBlockers, "route_archived")
+		}
+		if m.Status != StatusEnabled {
+			o.RestoreWarnings = append(o.RestoreWarnings, "model_disabled")
+		}
+		if !row.SupportAvailable {
+			o.RestoreWarnings = append(o.RestoreWarnings, "no_configured_support")
 		}
 		if row.DisabledReason.Valid {
 			reason := row.DisabledReason.String
@@ -425,9 +484,9 @@ func (s *Service) ListDisabledOfferings(ctx context.Context, modelID int64, ingr
 	return out, nil
 }
 
-// RestoreOfferings 批量恢复该 Model 的 disabled Offering（ADR-0018「批量恢复」）：
-// 在一个事务内锁定 Model，逐条重新校验（Offering 存在且 disabled、Model enabled、
-// 结构支撑已恢复），经影响指纹确认后把全部通过的条目置 enabled 并清空停用原因和时间；
+// RestoreOfferings 批量恢复该 Model 的 disabled Offering（ADR-0019）：
+// 在一个事务内锁定 Model，逐条重新校验（Offering 存在且 disabled、Route 未归档），
+// 经影响指纹确认后把全部通过的条目置 enabled 并清空停用原因和时间；
 // 任一条目校验失败则整批拒绝，不部分提交。
 func (s *Service) RestoreOfferings(ctx context.Context, modelID int64, items []OfferingRestoreItem, confirmation supply.Confirmation) (int, error) {
 	if modelID <= 0 {
@@ -458,10 +517,6 @@ func (s *Service) RestoreOfferings(ctx context.Context, modelID int64, items []O
 		}
 		return 0, storeFailed(err, "load model for offering restore")
 	}
-	if m.Status != StatusEnabled {
-		return 0, conflict("model is globally disabled; enable the model before restoring offerings")
-	}
-
 	disabled, err := q.ListDisabledOfferingsForModel(ctx, sqlc.ListDisabledOfferingsForModelParams{ModelID: modelID})
 	if err != nil {
 		return 0, storeFailed(err, "list disabled offerings in lock")
@@ -490,8 +545,14 @@ func (s *Service) RestoreOfferings(ctx context.Context, modelID int64, items []O
 		if !ok {
 			return 0, conflict("selected offering is missing or already enabled; refresh and retry")
 		}
-		if !row.SupportAvailable {
-			return 0, conflict("selected offering has no structural support yet; restore its channel or binding first")
+		if row.RouteStatus == "archived" {
+			return 0, conflict("selected offering belongs to an archived route; restore the route first")
+		}
+		result := "available"
+		if m.Status != StatusEnabled {
+			result = "404"
+		} else if !row.SupportAvailable {
+			result = "503"
 		}
 		affected = append(affected, supply.AffectedOffering{
 			RouteID:          row.RouteID,
@@ -501,6 +562,8 @@ func (s *Service) RestoreOfferings(ctx context.Context, modelID int64, items []O
 			PublicModelID:    m.ModelID,
 			ModelDisplayName: m.DisplayName,
 			IngressProtocol:  row.IngressProtocol,
+			KeptResult:       "404",
+			SelectedResult:   result,
 		})
 	}
 

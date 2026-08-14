@@ -34,7 +34,7 @@ func Register(r chi.Router, d Deps) {
 		// 线路（渠道商品）CRUD + 渠道池设置。
 		r.Get("/routes", rh.list)
 		r.Post("/routes", rh.create)
-		// 售卖组合候选（ADR-0018）：按 ?channel_ids=1,2 计算可勾选的 Model+协议组合。
+		// 售卖组合候选（ADR-0019）：按 ?channel_ids=1,2 计算配置支撑的 Model+协议组合。
 		// 静态路径必须在 /routes/{id} 之前注册。
 		r.Get("/routes/offering-candidates", rh.offeringCandidates)
 		r.Post("/routes/{id}/archive", rh.archive)

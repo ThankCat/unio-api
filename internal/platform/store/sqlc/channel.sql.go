@@ -1421,7 +1421,8 @@ SELECT
     ccm.created_at,
     ccm.updated_at,
     m.model_id AS model_external_id,
-    m.display_name AS model_display_name
+    m.display_name AS model_display_name,
+    m.status AS model_status
 FROM channel_cost_multipliers ccm
 LEFT JOIN models m ON m.id = ccm.model_id
 WHERE ccm.channel_id = $1
@@ -1440,6 +1441,7 @@ type ListChannelCostMultipliersByChannelRow struct {
 	UpdatedAt        pgtype.Timestamptz
 	ModelExternalID  pgtype.Text
 	ModelDisplayName pgtype.Text
+	ModelStatus      pgtype.Text
 }
 
 // ListChannelCostMultipliersByChannel 列出某 channel 的全部价格倍率（默认 + 逐模型覆盖，含历史与停用），
@@ -1465,6 +1467,7 @@ func (q *Queries) ListChannelCostMultipliersByChannel(ctx context.Context, chann
 			&i.UpdatedAt,
 			&i.ModelExternalID,
 			&i.ModelDisplayName,
+			&i.ModelStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -1486,7 +1489,8 @@ SELECT
     cm.created_at,
     cm.updated_at,
     m.model_id AS model_external_id,
-    m.display_name AS model_display_name
+    m.display_name AS model_display_name,
+    m.status AS model_status
 FROM channel_models cm
 JOIN models m ON m.id = cm.model_id
 WHERE cm.channel_id = $1
@@ -1503,6 +1507,7 @@ type ListChannelModelsByChannelRow struct {
 	UpdatedAt        pgtype.Timestamptz
 	ModelExternalID  string
 	ModelDisplayName string
+	ModelStatus      string
 }
 
 // ListChannelModelsByChannel 列出某 channel 的全部模型绑定，连带 Unio 侧模型的对外 ID 与展示名，供 admin 管理台展示。
@@ -1525,6 +1530,7 @@ func (q *Queries) ListChannelModelsByChannel(ctx context.Context, channelID int6
 			&i.UpdatedAt,
 			&i.ModelExternalID,
 			&i.ModelDisplayName,
+			&i.ModelStatus,
 		); err != nil {
 			return nil, err
 		}

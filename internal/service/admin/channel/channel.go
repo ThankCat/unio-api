@@ -54,7 +54,7 @@ type Store interface {
 }
 
 // TxBeginner 提供事务能力（由 pgxpool 满足），用于 Channel 实体停用时的
-// 结构支撑串行化与 Offering 联动（ADR-0018）。
+// ADR-0019 Channel 暂停影响预览所需的串行化事务能力。
 type TxBeginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
@@ -204,7 +204,7 @@ type UpdateInput struct {
 	// CapacityProvided 区分「字段缺省=保持不变」与「显式 null=继承全局默认」。
 	CapacityProvided bool
 	ConcurrencyLimit *int64
-	// Confirmation 是停用 Channel 触发 Offering 联动时的二次确认参数（ADR-0018）。
+	// Confirmation 是暂停 Channel 流量前的客户影响确认；不允许借此修改 Offering。
 	Confirmation supply.Confirmation
 }
 
@@ -276,7 +276,7 @@ func NewService(store Store, registry AdapterRegistry) *Service {
 	return &Service{store: store, registry: registry}
 }
 
-// WithSupplyLinkage 注入 Channel 实体停用联动所需的事务能力（ADR-0018）；
+// WithSupplyLinkage 注入 Channel 暂停影响预览所需的事务能力（ADR-0019）；
 // 生产 bootstrap 必须注入，缺失时停用转换 fail-closed。
 func (s *Service) WithSupplyLinkage(db TxBeginner, queries *sqlc.Queries) *Service {
 	if s != nil {
@@ -531,7 +531,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	if status == StatusEnabled && provider.Status != StatusEnabled {
 		return Channel{}, conflict("enabled channel requires an enabled provider")
 	}
-	// Channel 实体停用是结构供给收缩（ADR-0018）：需要 Model 锁、影响预览与指纹确认联动。
+	// 暂停 Channel 只改变运行流量状态；影响预览用于说明哪些 Offering 可能转为 503。
 	disabling := cur.Status == StatusEnabled && status == StatusDisabled
 
 	if in.CapacityProvided {
@@ -582,9 +582,8 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	return s.enrichProviderName(ctx, ch)
 }
 
-// disableChannelWithLinkage 在一个事务内停用 Channel 实体并联动暂停失去最后结构支撑的
-// Offering（原因 channel_disabled）。Binding 行不改写、Model 不自动停用（ADR-0018 全局影响
-// 计算只读取 Binding 行）；重新启用 Channel 后 Offering 不自动恢复。
+// disableChannelWithLinkage 在一个事务内暂停 Channel 流量。Binding、Model 与 Offering
+// 配置状态都保持不变；重新启用后既有配置意图自动重新参与运行候选计算。
 func (s *Service) disableChannelWithLinkage(ctx context.Context, in UpdateInput, name string) (Channel, error) {
 	if s.db == nil || s.queries == nil {
 		return Channel{}, storeFailed(errors.New("supply linkage dependencies are unavailable"), "disable channel")
@@ -607,10 +606,13 @@ func (s *Service) disableChannelWithLinkage(ctx context.Context, in UpdateInput,
 	}
 	if err := supply.Authorize(impact,
 		"channel_disable_confirmation_required",
-		"disabling this channel removes the last structural support for some route offerings; confirm with the impact fingerprint",
+		"pausing this channel may leave affected route offerings with no runtime candidate and return 503; confirm with the impact fingerprint",
 		in.Confirmation,
 	); err != nil {
 		return Channel{}, err
+	}
+	if len(in.Confirmation.SelectedOfferings) > 0 {
+		return Channel{}, invalidArgument("selected_offerings", "pausing channel traffic cannot modify route offerings")
 	}
 
 	row, err := q.UpdateChannel(ctx, sqlc.UpdateChannelParams{
@@ -625,9 +627,6 @@ func (s *Service) disableChannelWithLinkage(ctx context.Context, in UpdateInput,
 	})
 	if err != nil {
 		return Channel{}, channelUpdateError(err)
-	}
-	if err := supply.DisableOfferings(ctx, q, impact.AffectedOfferings, supply.ReasonChannelDisabled); err != nil {
-		return Channel{}, storeFailed(err, "disable offerings losing support")
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Channel{}, storeFailed(err, "commit channel disable transaction")
@@ -678,8 +677,7 @@ func (s *Service) updateWithPublishedCapacity(
 		ChannelID:       &channelID,
 		BusinessCommit: func(ctx context.Context, tx pgx.Tx) error {
 			qtx := sqlc.New(tx)
-			// Channel 实体停用联动（ADR-0018）：与容量提交同事务，锁内重算影响并确认。
-			var linkageOfferings []supply.AffectedOffering
+			// Channel 暂停与容量提交同事务，锁内重算客户影响并确认。
 			if disabling {
 				if _, lockErr := supply.LockModelsForChannel(ctx, qtx, channelID); lockErr != nil {
 					return storeFailed(lockErr, "lock models for channel disable")
@@ -690,12 +688,14 @@ func (s *Service) updateWithPublishedCapacity(
 				}
 				if authErr := supply.Authorize(impact,
 					"channel_disable_confirmation_required",
-					"disabling this channel removes the last structural support for some route offerings; confirm with the impact fingerprint",
+					"pausing this channel may leave affected route offerings with no runtime candidate and return 503; confirm with the impact fingerprint",
 					in.Confirmation,
 				); authErr != nil {
 					return authErr
 				}
-				linkageOfferings = impact.AffectedOfferings
+				if len(in.Confirmation.SelectedOfferings) > 0 {
+					return invalidArgument("selected_offerings", "pausing channel traffic cannot modify route offerings")
+				}
 			}
 			if _, updateErr := qtx.UpdateChannel(ctx, sqlc.UpdateChannelParams{
 				ID:                  in.ID,
@@ -720,11 +720,6 @@ func (s *Service) updateWithPublishedCapacity(
 					return conflict("channel capacity changed during publish; retry with current state")
 				}
 				return storeFailed(updateErr, "commit channel capacity")
-			}
-			if disabling {
-				if linkErr := supply.DisableOfferings(ctx, qtx, linkageOfferings, supply.ReasonChannelDisabled); linkErr != nil {
-					return storeFailed(linkErr, "disable offerings losing support")
-				}
 			}
 			committedRow = row
 			return nil
@@ -858,7 +853,7 @@ func (s *Service) Archive(ctx context.Context, id int64) error {
 			affectedRoutes[0].Name, affectedRoutes[0].ID,
 		))
 	}
-	// 归档前置（ADR-0018）：archived Channel 下不得存在 enabled Binding；
+	// 归档前置（ADR-0019）：archived Channel 下不得存在 enabled Binding；
 	// 先经影响预览停用全部 enabled Binding，再归档。
 	enabledBindings, err := s.store.CountEnabledBindingsByChannel(ctx, id)
 	if err != nil {

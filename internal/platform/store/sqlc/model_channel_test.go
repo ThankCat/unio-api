@@ -196,7 +196,7 @@ func insertRouteWithChannels(t *testing.T, ctx context.Context, tx pgx.Tx, chann
 	return routeID
 }
 
-// insertRouteOffering 写入一条 Offering 行，模拟 ADR-0018 联动后的终态：
+// insertRouteOffering 写入一条显式 Offering 配置状态：
 // status=enabled 表示当前售卖；disabled 时 reason/disabled_at 必填（受 DB 约束）。
 func insertRouteOffering(t *testing.T, ctx context.Context, tx pgx.Tx, routeID, modelID int64, protocol, status, reason string) {
 	t.Helper()
@@ -249,8 +249,8 @@ func listContainsModel(rows []sqlc.ListAvailableModelsForUserRow, modelID string
 	return false
 }
 
-// TestOfferingStructuralSupportAndStatusGate 验证 ADR-0018 语义：
-// disabled Channel/Binding 不构成结构支撑；只有 enabled Offering 进入请求资格；
+// TestOfferingStructuralSupportAndStatusGate 验证 ADR-0019 语义：
+// disabled Binding 不构成配置支撑，Channel 暂停不影响配置支撑；只有 enabled Offering 进入请求资格；
 // Offering 停用后保留行与原因，但按未提供处理。
 func TestOfferingStructuralSupportAndStatusGate(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
@@ -264,7 +264,7 @@ func TestOfferingStructuralSupportAndStatusGate(t *testing.T) {
 	insertChannelModel(t, ctx, tx, channelID, modelID, "upstream-model", "disabled")
 	routeID := insertRouteWithChannels(t, ctx, tx, channelID)
 
-	// disabled Channel + disabled Binding：无结构支撑，不能勾选售卖。
+	// Binding disabled：无配置支撑；Channel 状态不影响该结论。
 	supported, err := queries.OfferingComboSupportedByPool(ctx, sqlc.OfferingComboSupportedByPoolParams{
 		ChannelIds:      []int64{channelID},
 		IngressProtocol: "openai",
@@ -274,13 +274,10 @@ func TestOfferingStructuralSupportAndStatusGate(t *testing.T) {
 		t.Fatalf("check combo support: %v", err)
 	}
 	if supported {
-		t.Fatal("disabled channel/binding must not provide structural support")
+		t.Fatal("disabled binding must not provide configured support")
 	}
 
-	// 启用 Channel 与 Binding 后恢复结构支撑。
-	if _, err := tx.Exec(ctx, `UPDATE channels SET status = 'enabled' WHERE id = $1`, channelID); err != nil {
-		t.Fatalf("enable channel: %v", err)
-	}
+	// 只启用 Binding、保持 Channel 暂停：仍应恢复配置支撑。
 	if _, err := tx.Exec(ctx, `UPDATE channel_models SET status = 'enabled' WHERE channel_id = $1 AND model_id = $2`, channelID, modelID); err != nil {
 		t.Fatalf("enable binding: %v", err)
 	}
@@ -293,7 +290,7 @@ func TestOfferingStructuralSupportAndStatusGate(t *testing.T) {
 		t.Fatalf("recheck combo support: %v", err)
 	}
 	if !supported {
-		t.Fatal("enabled channel+binding must provide structural support")
+		t.Fatal("enabled binding on a paused channel must provide configured support")
 	}
 
 	// 勾选售卖：enabled Offering 进入请求资格。
@@ -487,8 +484,8 @@ func TestListAvailableModelsForProjectFiltersDisabledRelations(t *testing.T) {
 	createChannelPriceForTest(t, ctx, queries, disabledChannelID, disabledChannelModelID, now)
 	createChannelPriceForTest(t, ctx, queries, disabledProviderChannelID, disabledProviderModelID, now)
 	routeID := insertRouteWithChannels(t, ctx, tx, enabledChannelID, duplicateChannelID, disabledChannelID, disabledProviderChannelID)
-	// Offering 终态（ADR-0018 联动结果）：只有可见模型保持 enabled；
-	// Model/Binding/Channel 停用的组合分别以对应原因处于 disabled，不进入客户目录。
+	// 构造显式 Offering 配置状态：只有 visibleModel 的 Offering enabled；其余历史 Offering
+	// 保持 disabled，不进入客户目录。disabled_reason 只作为历史原因保存。
 	insertRouteOffering(t, ctx, tx, routeID, visibleModelID, "openai", "enabled", "")
 	insertRouteOffering(t, ctx, tx, routeID, disabledModelID, "openai", "disabled", "model_disabled")
 	insertRouteOffering(t, ctx, tx, routeID, disabledMappingModelID, "openai", "disabled", "binding_disabled")

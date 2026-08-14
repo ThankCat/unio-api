@@ -36,7 +36,7 @@ type modelOpsRowDTO struct {
 	BindingsAvailable         int64  `json:"bindings_available"`
 	CapabilitiesDeclaredCount int64  `json:"capabilities_declared_count"`
 	HasPrice                  bool   `json:"has_price"`
-	Sellable                  bool   `json:"sellable"`
+	SupplyAvailable           bool   `json:"supply_available"`
 	// 基准售价（DEC-026 model_prices，每 1M tokens；无基准价时为 null）。
 	BaseCurrency                *string `json:"base_currency"`
 	BaseUncachedInputPrice      *string `json:"base_uncached_input_price"`
@@ -67,7 +67,7 @@ type modelOpsDetailDTO struct {
 	RevenueUSD        string  `json:"revenue_usd"`
 	MarginUSD         string  `json:"margin_usd"`
 	MarginRate        float64 `json:"margin_rate"`
-	Sellable          bool    `json:"sellable"`
+	SupplyAvailable   bool    `json:"supply_available"`
 	BindingsTotal     int64   `json:"bindings_total"`
 	BindingsAvailable int64   `json:"bindings_available"`
 	ModelStatus       string  `json:"model_status"`
@@ -153,7 +153,7 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			BindingsAvailable:               row.BindingsAvailable,
 			CapabilitiesDeclaredCount:       row.CapabilitiesDeclaredCount,
 			HasPrice:                        row.HasPrice,
-			Sellable:                        row.Sellable,
+			SupplyAvailable:                 row.SupplyAvailable,
 			BaseCurrency:                    row.BaseCurrency,
 			BaseUncachedInputPrice:          row.BaseUncachedInputPrice,
 			BaseCacheReadInputPrice:         row.BaseCacheReadInputPrice,
@@ -201,7 +201,7 @@ func (h *modelOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		RevenueUSD:        d.RevenueUSD,
 		MarginUSD:         d.MarginUSD,
 		MarginRate:        d.MarginRate,
-		Sellable:          d.Sellable,
+		SupplyAvailable:   d.SupplyAvailable,
 		BindingsTotal:     d.BindingsTotal,
 		BindingsAvailable: d.BindingsAvailable,
 		ModelStatus:       d.ModelStatus,

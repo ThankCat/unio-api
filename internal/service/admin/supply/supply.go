@@ -1,11 +1,11 @@
-// Package supply 实现 ADR-0018 的结构供给联动基础设施：
+// Package supply 实现 ADR-0019 的供给影响预览与显式联合操作基础设施：
 //
 //   - 结构支撑串行化：所有改变某个 Model 结构支撑事实的写事务，先按 model_id 升序
 //     FOR UPDATE 锁定 Model 行，再在锁内计算影响或校验支撑；
-//   - 影响计算：收缩操作（停用/解除 Binding、停用 Channel 实体、移除 Route Channel、
-//     手动停用 Model）反查失去最后结构支撑的 enabled Offering；
+//   - 影响计算：状态变化前反查可能失去配置支撑或运行候选的 enabled Offering；
 //   - 影响指纹：由影响预览的相关状态集合计算 sha256 指纹，确认请求必须携带一致指纹；
-//   - 确认契约：需要二次确认的操作返回 ConfirmationRequired（HTTP 层渲染为 409）。
+//   - 确认契约：需要二次确认的操作返回 ConfirmationRequired（HTTP 层渲染为 409），
+//     确认请求必须明确携带需要跨层修改的 Offering；空选择合法且是默认值。
 package supply
 
 import (
@@ -21,22 +21,25 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
-// route_model_offerings.disabled_reason 受控枚举（ADR-0018 按触发操作细分）。
+// route_model_offerings.disabled_reason 受控枚举。ADR-0018 遗留原因仅用于历史解释，
+// 新联合操作使用 manual_unselected、binding_disabled 或 model_delisted。
 const (
 	// ReasonManualUnselected 管理员在 Route 中主动取消勾选该 Model 与协议组合。
 	ReasonManualUnselected = "manual_unselected"
-	// ReasonModelDisabled Model 被手动或自动全局停用。
+	// ReasonModelDisabled 旧版 Model 级联停用留下的历史原因。
 	ReasonModelDisabled = "model_disabled"
 	// ReasonBindingDisabled Route 内最后一条同模型、同协议 enabled Binding 被停用或解除。
 	ReasonBindingDisabled = "binding_disabled"
-	// ReasonChannelDisabled 承载 Route 内最后结构支撑的 Channel 实体被停用。
+	// ReasonChannelDisabled 旧版 Channel 级联停用留下的历史原因。
 	ReasonChannelDisabled = "channel_disabled"
-	// ReasonRouteChannelRemoved Channel 被移出 Route 池，使 Offering 失去最后结构支撑。
+	// ReasonRouteChannelRemoved 旧版 Route 换池级联留下的历史原因。
 	ReasonRouteChannelRemoved = "route_channel_removed"
-	// ReasonChannelProtocolChanged Channel protocol 修改使 Offering 失去最后同协议结构支撑。
+	// ReasonChannelProtocolChanged 旧版 Channel 协议变更级联留下的历史原因。
 	ReasonChannelProtocolChanged = "channel_protocol_changed"
 	// ReasonMigrationBackfill 一次切换迁移按当时事实回填。
 	ReasonMigrationBackfill = "migration_backfill"
+	// ReasonModelDelisted 管理员通过全局下架联合操作明确停止该 Offering。
+	ReasonModelDelisted = "model_delisted"
 )
 
 // Offering 状态。
@@ -54,29 +57,38 @@ type AffectedOffering struct {
 	PublicModelID    string
 	ModelDisplayName string
 	IngressProtocol  string
+	// KeptResult 是只执行目标层操作、保留 Offering 时对新请求的预期结果。
+	KeptResult string
+	// SelectedResult 是同时停止该 Offering 时对新请求的预期结果。
+	SelectedResult string
 }
 
-// Impact 是一次供给写操作在 Model 锁内计算出的影响预览。
+// OfferingSelection 是联合操作中由管理员明确选择的一条 Offering。
+type OfferingSelection struct {
+	RouteID         int64
+	ModelID         int64
+	IngressProtocol string
+}
+
+// Impact 是一次供给写操作在 Model 锁内计算出的影响预览。AffectedOfferings 只表示
+// 潜在影响范围，不表示这些 Offering 会被自动修改。
 type Impact struct {
 	// Kind 标识操作类型，参与指纹计算，避免同一影响集合跨操作复用指纹。
 	Kind string
-	// AffectedOfferings 是将被自动停用（或批量恢复时将启用）的 Offering 集合。
+	// AffectedOfferings 是本次操作可能改变客户结果的 Offering 集合。
 	AffectedOfferings []AffectedOffering
-	// ModelWillDisable 表示目标是全局最后一条 enabled Binding，Model 将自动停用。
-	ModelWillDisable bool
 	// RemainingEnabledBindings 是排除本次失效目标后全局剩余的 enabled Binding 数
 	// （仅 Binding 层操作有意义）。
 	RemainingEnabledBindings int64
-	// CascadeEnabledBindings/CascadeChannels/CascadeProviders 是 Model 停用级联预览计数。
-	CascadeEnabledBindings int64
-	CascadeChannels        int64
-	CascadeProviders       int64
+	// EnabledBindings/Channels/Providers 是当前影响范围的只读统计，不代表会被级联修改。
+	EnabledBindings int64
+	Channels        int64
+	Providers       int64
 }
 
-// RequiresConfirmation 判断影响是否达到 ADR-0018 的二次确认门槛：
-// 至少一条 Offering 将被自动停用，或 Model 将自动停用。
+// RequiresConfirmation 判断是否存在需要管理员确认的客户影响。
 func (im Impact) RequiresConfirmation() bool {
-	return len(im.AffectedOfferings) > 0 || im.ModelWillDisable
+	return len(im.AffectedOfferings) > 0
 }
 
 // Fingerprint 由影响预览的相关状态集合计算稳定指纹。指纹只覆盖预览内容本身：
@@ -85,24 +97,25 @@ func (im Impact) Fingerprint() string {
 	lines := make([]string, 0, len(im.AffectedOfferings))
 	for _, ao := range im.AffectedOfferings {
 		lines = append(lines, fmt.Sprintf(
-			"offering|%d|%s|%d|%s|%s",
+			"offering|%d|%s|%d|%s|%s|%s|%s",
 			ao.RouteID, ao.RouteStatus, ao.ModelID, ao.IngressProtocol, ao.PublicModelID,
+			ao.KeptResult, ao.SelectedResult,
 		))
 	}
 	sort.Strings(lines)
 	header := fmt.Sprintf(
-		"kind=%s|model_will_disable=%t|remaining_enabled_bindings=%d|cascade_bindings=%d|cascade_channels=%d|cascade_providers=%d",
-		im.Kind, im.ModelWillDisable, im.RemainingEnabledBindings,
-		im.CascadeEnabledBindings, im.CascadeChannels, im.CascadeProviders,
+		"kind=%s|remaining_enabled_bindings=%d|enabled_bindings=%d|channels=%d|providers=%d",
+		im.Kind, im.RemainingEnabledBindings, im.EnabledBindings, im.Channels, im.Providers,
 	)
 	sum := sha256.Sum256([]byte(header + "\n" + strings.Join(lines, "\n")))
 	return hex.EncodeToString(sum[:])
 }
 
-// Confirmation 是写请求携带的二次确认参数（confirm_supply_impact + expected_impact_fingerprint）。
+// Confirmation 是写请求携带的二次确认参数。SelectedOfferings 为空表示只修改目标层。
 type Confirmation struct {
 	Confirm             bool
 	ExpectedFingerprint string
+	SelectedOfferings   []OfferingSelection
 }
 
 // ConfirmationRequired 表示操作需要管理员携带影响指纹二次确认；HTTP 层渲染为 409。
@@ -121,10 +134,19 @@ func Authorize(im Impact, code, message string, c Confirmation) error {
 	if !im.RequiresConfirmation() {
 		return nil
 	}
-	if c.Confirm && c.ExpectedFingerprint == im.Fingerprint() {
-		return nil
+	if !c.Confirm || c.ExpectedFingerprint != im.Fingerprint() {
+		return &ConfirmationRequired{Code: code, Message: message, Impact: im}
 	}
-	return &ConfirmationRequired{Code: code, Message: message, Impact: im}
+	allowed := make(map[offeringKey]struct{}, len(im.AffectedOfferings))
+	for _, ao := range im.AffectedOfferings {
+		allowed[offeringKey{ao.RouteID, ao.ModelID, ao.IngressProtocol}] = struct{}{}
+	}
+	for _, selected := range c.SelectedOfferings {
+		if _, ok := allowed[offeringKey{selected.RouteID, selected.ModelID, selected.IngressProtocol}]; !ok {
+			return &ConfirmationRequired{Code: code, Message: message, Impact: im}
+		}
+	}
+	return nil
 }
 
 // LockModels 按 model_id 升序对给定 Model 行取得 FOR UPDATE 锁（结构支撑串行化）。
@@ -174,28 +196,24 @@ func BindingImpact(ctx context.Context, q *sqlc.Queries, channelID, modelID int6
 	return Impact{
 		Kind:                     "channel_model_disable",
 		AffectedOfferings:        affectedFromLosingSupport(rows),
-		ModelWillDisable:         remaining == 0,
 		RemainingEnabledBindings: remaining,
 	}, nil
 }
 
-// ChannelImpact 在锁内计算停用 Channel 实体的影响：该 Channel 全部 enabled Binding 承载的
-// 结构支撑同时失效。Binding 行不改写，不参与 Model 自动停用判断（ADR-0018 全局影响计算）。
+// ChannelImpact 在锁内计算暂停 Channel 流量后可能失去最后基础运行候选的 Offering。
+// Binding、Model 与 Offering 配置行均不改写。
 func ChannelImpact(ctx context.Context, q *sqlc.Queries, channelID int64) (Impact, error) {
-	rows, err := q.ListOfferingsLosingSupport(ctx, sqlc.ListOfferingsLosingSupportParams{
-		ChannelID: channelID,
-		ModelID:   pgtype.Int8{},
-	})
+	rows, err := q.ListOfferingsLosingRuntimeChannel(ctx, channelID)
 	if err != nil {
 		return Impact{}, fmt.Errorf("compute channel route impact: %w", err)
 	}
 	return Impact{
 		Kind:              "channel_disable",
-		AffectedOfferings: affectedFromLosingSupport(rows),
+		AffectedOfferings: affectedFromLosingRuntime(rows),
 	}, nil
 }
 
-// ModelImpact 在锁内计算手动停用 Model 的影响：全部 enabled Offering 与级联 Binding 计数。
+// ModelImpact 在锁内计算全局暂停 Model 的客户影响：全部 enabled Offering 与供给范围统计。
 func ModelImpact(ctx context.Context, q *sqlc.Queries, modelID int64) (Impact, error) {
 	offerings, err := q.ListEnabledOfferingsForModel(ctx, modelID)
 	if err != nil {
@@ -215,22 +233,37 @@ func ModelImpact(ctx context.Context, q *sqlc.Queries, modelID int64) (Impact, e
 			PublicModelID:    row.PublicModelID,
 			ModelDisplayName: row.ModelDisplayName,
 			IngressProtocol:  row.IngressProtocol,
+			KeptResult:       "404",
+			SelectedResult:   "404",
 		})
 	}
 	return Impact{
-		Kind:                   "model_disable",
-		AffectedOfferings:      affected,
-		ModelWillDisable:       true,
-		CascadeEnabledBindings: counts.EnabledBindings,
-		CascadeChannels:        counts.Channels,
-		CascadeProviders:       counts.Providers,
+		Kind:              "model_disable",
+		AffectedOfferings: affected,
+		EnabledBindings:   counts.EnabledBindings,
+		Channels:          counts.Channels,
+		Providers:         counts.Providers,
 	}, nil
 }
 
-// DisableOfferings 把影响集合内的 Offering 逐条置 disabled 并记录原因。
+// DisableSelectedOfferings 只把管理员明确选择且属于最新影响范围的 Offering 置 disabled。
 // 必须与影响计算处于同一事务、同一 Model 锁内；锁保证集合在提交前不会漂移。
-func DisableOfferings(ctx context.Context, q *sqlc.Queries, offerings []AffectedOffering, reason string) error {
-	for _, ao := range offerings {
+func DisableSelectedOfferings(ctx context.Context, q *sqlc.Queries, im Impact, c Confirmation, reason string) error {
+	available := make(map[offeringKey]AffectedOffering, len(im.AffectedOfferings))
+	for _, ao := range im.AffectedOfferings {
+		available[offeringKey{ao.RouteID, ao.ModelID, ao.IngressProtocol}] = ao
+	}
+	seen := make(map[offeringKey]struct{}, len(c.SelectedOfferings))
+	for _, selected := range c.SelectedOfferings {
+		key := offeringKey{selected.RouteID, selected.ModelID, selected.IngressProtocol}
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		ao, ok := available[key]
+		if !ok {
+			return fmt.Errorf("selected offering is outside the current impact")
+		}
 		affected, err := q.DisableRouteModelOffering(ctx, sqlc.DisableRouteModelOfferingParams{
 			Reason:          pgtype.Text{String: reason, Valid: true},
 			RouteID:         ao.RouteID,
@@ -248,21 +281,6 @@ func DisableOfferings(ctx context.Context, q *sqlc.Queries, offerings []Affected
 	return nil
 }
 
-// CascadeModelDisable 在锁内执行 Model 停用级联：Model 行、全部 enabled Binding 与
-// 全部 enabled Offering（原因统一 model_disabled）在同一事务内原子完成。
-func CascadeModelDisable(ctx context.Context, q *sqlc.Queries, modelID int64) error {
-	if _, err := q.DisableModelSupply(ctx, modelID); err != nil {
-		return fmt.Errorf("disable model: %w", err)
-	}
-	if _, err := q.DisableEnabledBindingsForModel(ctx, modelID); err != nil {
-		return fmt.Errorf("disable model bindings: %w", err)
-	}
-	if _, err := q.DisableEnabledOfferingsForModel(ctx, modelID); err != nil {
-		return fmt.Errorf("disable model offerings: %w", err)
-	}
-	return nil
-}
-
 func affectedFromLosingSupport(rows []sqlc.ListOfferingsLosingSupportRow) []AffectedOffering {
 	out := make([]AffectedOffering, 0, len(rows))
 	for _, row := range rows {
@@ -274,9 +292,35 @@ func affectedFromLosingSupport(rows []sqlc.ListOfferingsLosingSupportRow) []Affe
 			PublicModelID:    row.PublicModelID,
 			ModelDisplayName: row.ModelDisplayName,
 			IngressProtocol:  row.IngressProtocol,
+			KeptResult:       "503",
+			SelectedResult:   "404",
 		})
 	}
 	return out
+}
+
+func affectedFromLosingRuntime(rows []sqlc.ListOfferingsLosingRuntimeChannelRow) []AffectedOffering {
+	out := make([]AffectedOffering, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, AffectedOffering{
+			RouteID:          row.RouteID,
+			RouteName:        row.RouteName,
+			RouteStatus:      row.RouteStatus,
+			ModelID:          row.ModelID,
+			PublicModelID:    row.PublicModelID,
+			ModelDisplayName: row.ModelDisplayName,
+			IngressProtocol:  row.IngressProtocol,
+			KeptResult:       "503",
+			SelectedResult:   "404",
+		})
+	}
+	return out
+}
+
+type offeringKey struct {
+	routeID  int64
+	modelID  int64
+	protocol string
 }
 
 func dedupeSorted(ids []int64) []int64 {

@@ -37,15 +37,15 @@ type routeDTO struct {
 	PriceRatio string `json:"price_ratio"`
 	// RPM/RPD/ConcurrencyLimit 线路级限流上限（按 (线路,用户) 计数）；null=继承默认，0=不限，>0=上限。
 	// 没有 TPM：Unio 不限制 token 吞吐，只做观测。
-	RPMLimit         *int64            `json:"rpm_limit"`
-	RPDLimit         *int64            `json:"rpd_limit"`
-	ConcurrencyLimit *int64            `json:"concurrency_limit"`
-	Description      *string             `json:"description"`
-	Channels         []routeChannelDTO   `json:"channels"`
-	Offerings        []routeOfferingDTO  `json:"offerings"`
-	CreatedAt        string              `json:"created_at"`
-	UpdatedAt        string              `json:"updated_at"`
-	ArchivedAt       *string             `json:"archived_at"`
+	RPMLimit         *int64             `json:"rpm_limit"`
+	RPDLimit         *int64             `json:"rpd_limit"`
+	ConcurrencyLimit *int64             `json:"concurrency_limit"`
+	Description      *string            `json:"description"`
+	Channels         []routeChannelDTO  `json:"channels"`
+	Offerings        []routeOfferingDTO `json:"offerings"`
+	CreatedAt        string             `json:"created_at"`
+	UpdatedAt        string             `json:"updated_at"`
+	ArchivedAt       *string            `json:"archived_at"`
 }
 
 // archiveRouteRequest 归档线路入参：migrate_keys_to 非空时先把该线路全部 key 迁到目标线路再归档。
@@ -70,17 +70,22 @@ type routeChannelDTO struct {
 	ProviderSlug string `json:"provider_slug"`
 }
 
-// routeOfferingDTO 是线路一条 Model+协议售卖组合（ADR-0018 Offering 口径）。
+// routeOfferingDTO 是线路一条 Model+协议售卖组合（ADR-0019 Offering 口径）。
 type routeOfferingDTO struct {
-	ModelID          int64   `json:"model_id"`
-	PublicModelID    string  `json:"public_model_id"`
-	DisplayName      string  `json:"display_name"`
-	ModelStatus      string  `json:"model_status"`
-	IngressProtocol  string  `json:"ingress_protocol"`
-	Status           string  `json:"status"`
-	DisabledReason   *string `json:"disabled_reason"`
-	DisabledAt       *string `json:"disabled_at"`
-	SupportAvailable bool    `json:"support_available"`
+	ModelID                int64    `json:"model_id"`
+	PublicModelID          string   `json:"public_model_id"`
+	DisplayName            string   `json:"display_name"`
+	ModelStatus            string   `json:"model_status"`
+	IngressProtocol        string   `json:"ingress_protocol"`
+	Status                 string   `json:"status"`
+	DisabledReason         *string  `json:"disabled_reason"`
+	DisabledAt             *string  `json:"disabled_at"`
+	ConfiguredSupportCount int64    `json:"configured_support_count"`
+	RuntimeCandidateCount  int64    `json:"runtime_candidate_count"`
+	EffectiveBlockers      []string `json:"effective_blockers"`
+	Restorable             bool     `json:"restorable"`
+	RestoreBlockers        []string `json:"restore_blockers"`
+	RestoreWarnings        []string `json:"restore_warnings"`
 }
 
 // offeringSelectionRequest 是保存时勾选的一条售卖组合。
@@ -94,6 +99,7 @@ type offeringCandidateDTO struct {
 	ModelID            int64  `json:"model_id"`
 	PublicModelID      string `json:"public_model_id"`
 	DisplayName        string `json:"display_name"`
+	ModelStatus        string `json:"model_status"`
 	IngressProtocol    string `json:"ingress_protocol"`
 	SupportingChannels int64  `json:"supporting_channels"`
 }
@@ -110,24 +116,24 @@ type createRouteRequest struct {
 	ChannelIDs       []int64                    `json:"channel_ids"`
 	Offerings        []offeringSelectionRequest `json:"offerings"`
 	// ConfirmSupplyImpact + ExpectedImpactFingerprint 是保存触发 Offering 联动时的
-	// 二次确认参数（ADR-0018）；首次请求缺省，收到 409 影响预览后携带指纹重试。
+	// 旧版影响确认字段保留兼容；Route 保存以 offerings 显式选择为唯一售卖修改来源。
 	ConfirmSupplyImpact       bool   `json:"confirm_supply_impact"`
 	ExpectedImpactFingerprint string `json:"expected_impact_fingerprint"`
 }
 
 type updateRouteRequest struct {
-	Name             string                     `json:"name"`
-	Mode             string                     `json:"mode"`
-	Status           string                     `json:"status"`
-	PriceRatio       string                     `json:"price_ratio"` // 客户售价倍率（十进制字符串，空=默认 1.0）
-	RPMLimit         *int64                     `json:"rpm_limit"`   // 线路级限流（null=继承默认，0=不限，>0=上限）
-	RPDLimit         *int64                     `json:"rpd_limit"`
-	ConcurrencyLimit *int64                     `json:"concurrency_limit"`
-	Description      *string                    `json:"description"`
-	ChannelIDs       []int64                    `json:"channel_ids"`
-	Offerings        []offeringSelectionRequest `json:"offerings"`
-	ConfirmSupplyImpact       bool   `json:"confirm_supply_impact"`
-	ExpectedImpactFingerprint string `json:"expected_impact_fingerprint"`
+	Name                      string                     `json:"name"`
+	Mode                      string                     `json:"mode"`
+	Status                    string                     `json:"status"`
+	PriceRatio                string                     `json:"price_ratio"` // 客户售价倍率（十进制字符串，空=默认 1.0）
+	RPMLimit                  *int64                     `json:"rpm_limit"`   // 线路级限流（null=继承默认，0=不限，>0=上限）
+	RPDLimit                  *int64                     `json:"rpd_limit"`
+	ConcurrencyLimit          *int64                     `json:"concurrency_limit"`
+	Description               *string                    `json:"description"`
+	ChannelIDs                []int64                    `json:"channel_ids"`
+	Offerings                 []offeringSelectionRequest `json:"offerings"`
+	ConfirmSupplyImpact       bool                       `json:"confirm_supply_impact"`
+	ExpectedImpactFingerprint string                     `json:"expected_impact_fingerprint"`
 }
 
 type routesHandler struct {
@@ -294,6 +300,7 @@ func (h *routesHandler) offeringCandidates(w http.ResponseWriter, r *http.Reques
 			ModelID:            c.ModelID,
 			PublicModelID:      c.PublicModelID,
 			DisplayName:        c.DisplayName,
+			ModelStatus:        c.ModelStatus,
 			IngressProtocol:    c.IngressProtocol,
 			SupportingChannels: c.SupportingChannels,
 		})
@@ -347,15 +354,20 @@ func toRouteDTO(rt route.Route) routeDTO {
 	offerings := make([]routeOfferingDTO, 0, len(rt.Offerings))
 	for _, o := range rt.Offerings {
 		offerings = append(offerings, routeOfferingDTO{
-			ModelID:          o.ModelID,
-			PublicModelID:    o.PublicModelID,
-			DisplayName:      o.DisplayName,
-			ModelStatus:      o.ModelStatus,
-			IngressProtocol:  o.IngressProtocol,
-			Status:           o.Status,
-			DisabledReason:   o.DisabledReason,
-			DisabledAt:       adminhttp.RFC3339Ptr(o.DisabledAt),
-			SupportAvailable: o.SupportAvailable,
+			ModelID:                o.ModelID,
+			PublicModelID:          o.PublicModelID,
+			DisplayName:            o.DisplayName,
+			ModelStatus:            o.ModelStatus,
+			IngressProtocol:        o.IngressProtocol,
+			Status:                 o.Status,
+			DisabledReason:         o.DisabledReason,
+			DisabledAt:             adminhttp.RFC3339Ptr(o.DisabledAt),
+			ConfiguredSupportCount: o.ConfiguredSupportCount,
+			RuntimeCandidateCount:  o.RuntimeCandidateCount,
+			EffectiveBlockers:      o.EffectiveBlockers,
+			Restorable:             o.Restorable,
+			RestoreBlockers:        o.RestoreBlockers,
+			RestoreWarnings:        o.RestoreWarnings,
 		})
 	}
 	return routeDTO{

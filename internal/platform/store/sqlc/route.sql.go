@@ -119,7 +119,7 @@ type CreateRouteParams struct {
 	ConcurrencyLimit pgtype.Int4
 }
 
-// Offering 的读取、差异更新与联动查询见 sql/queries/admin/supply.sql（ADR-0018）。
+// Offering 的读取、差异更新与影响查询见 sql/queries/admin/supply.sql（ADR-0019）。
 // CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
 // rpm/rpd/concurrency_limit 是线路级限流上限（按线路+用户计数；NULL=继承默认，0=不限，>0=上限）；
 // balanced/fixed 的渠道数量约束由 service 层校验。
@@ -1108,7 +1108,7 @@ SELECT
     rt.created_at,
     (SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id) AS bound_keys,
     (SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id) AS pool_channels,
-    -- 售卖模型统计（ADR-0018）：统一 Offering 口径，不再按价格/成本计算运行时"可达模型"。
+    -- 售卖模型统计（ADR-0019）：统一 Offering 口径，不再按价格/成本计算运行时"可达模型"。
     (SELECT COUNT(*) FROM route_model_offerings o WHERE o.route_id = rt.id) AS offerings_total,
     (SELECT COUNT(*) FROM route_model_offerings o WHERE o.route_id = rt.id AND o.status = 'enabled') AS offerings_enabled
 FROM routes rt

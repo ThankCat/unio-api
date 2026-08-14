@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -27,15 +28,17 @@ type ChannelModelService interface {
 // channelModelDTO 是 channel↔model 绑定的 admin API 响应体。
 // ModelExternalID / ModelDisplayName 仅列表场景有值；单条写入返回为空。
 type channelModelDTO struct {
-	ID               int64  `json:"id"`
-	ChannelID        int64  `json:"channel_id"`
-	ModelID          int64  `json:"model_id"`
-	ModelExternalID  string `json:"model_external_id"`
-	ModelDisplayName string `json:"model_display_name"`
-	UpstreamModel    string `json:"upstream_model"`
-	Status           string `json:"status"`
-	CreatedAt        string `json:"created_at"`
-	UpdatedAt        string `json:"updated_at"`
+	ID                int64    `json:"id"`
+	ChannelID         int64    `json:"channel_id"`
+	ModelID           int64    `json:"model_id"`
+	ModelExternalID   string   `json:"model_external_id"`
+	ModelDisplayName  string   `json:"model_display_name"`
+	ModelStatus       string   `json:"model_status"`
+	UpstreamModel     string   `json:"upstream_model"`
+	Status            string   `json:"status"`
+	EffectiveBlockers []string `json:"effective_blockers"`
+	CreatedAt         string   `json:"created_at"`
+	UpdatedAt         string   `json:"updated_at"`
 }
 
 type createChannelModelRequest struct {
@@ -49,9 +52,16 @@ type updateChannelModelRequest struct {
 	Status             string `json:"status"`
 	VerificationItemID *int64 `json:"verification_item_id"`
 	// ConfirmSupplyImpact + ExpectedImpactFingerprint 是停用触发 Offering 联动时的
-	// 二次确认参数（ADR-0018）；首次请求缺省，收到 409 影响预览后携带指纹重试。
-	ConfirmSupplyImpact       bool   `json:"confirm_supply_impact"`
-	ExpectedImpactFingerprint string `json:"expected_impact_fingerprint"`
+	// ADR-0019 影响确认与显式 Offering 选择；首次请求缺省，收到 409 后携带最新指纹重试。
+	ConfirmSupplyImpact       bool                                       `json:"confirm_supply_impact"`
+	ExpectedImpactFingerprint string                                     `json:"expected_impact_fingerprint"`
+	SelectedOfferings         []adminhttp.SupplyOfferingSelectionRequest `json:"selected_offerings"`
+}
+
+type deleteChannelModelRequest struct {
+	ConfirmSupplyImpact       bool                                       `json:"confirm_supply_impact"`
+	ExpectedImpactFingerprint string                                     `json:"expected_impact_fingerprint"`
+	SelectedOfferings         []adminhttp.SupplyOfferingSelectionRequest `json:"selected_offerings"`
 }
 
 type channelModelsHandler struct {
@@ -133,6 +143,7 @@ func (h *channelModelsHandler) update(w http.ResponseWriter, r *http.Request) {
 		Confirmation: supply.Confirmation{
 			Confirm:             req.ConfirmSupplyImpact,
 			ExpectedFingerprint: req.ExpectedImpactFingerprint,
+			SelectedOfferings:   adminhttp.SupplyOfferingSelections(req.SelectedOfferings),
 		},
 	})
 	if err != nil {
@@ -155,11 +166,19 @@ func (h *channelModelsHandler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// DELETE 无请求体，确认参数经 query 传递：
-	// ?confirm_supply_impact=true&expected_impact_fingerprint=...
+	var req deleteChannelModelRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil && !errors.Is(err, httpx.ErrEmptyJSONBody) {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	// 兼容旧客户端的 query 确认参数；新客户端使用 JSON body 传递显式 Offering 选择。
 	confirmation := supply.Confirmation{
-		Confirm:             adminhttp.BoolQuery(r, "confirm_supply_impact"),
-		ExpectedFingerprint: adminhttp.QueryString(r, "expected_impact_fingerprint"),
+		Confirm:             req.ConfirmSupplyImpact || adminhttp.BoolQuery(r, "confirm_supply_impact"),
+		ExpectedFingerprint: req.ExpectedImpactFingerprint,
+		SelectedOfferings:   adminhttp.SupplyOfferingSelections(req.SelectedOfferings),
+	}
+	if confirmation.ExpectedFingerprint == "" {
+		confirmation.ExpectedFingerprint = adminhttp.QueryString(r, "expected_impact_fingerprint")
 	}
 	if err := h.service.Delete(r.Context(), channelID, modelID, confirmation); err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -171,15 +190,17 @@ func (h *channelModelsHandler) delete(w http.ResponseWriter, r *http.Request) {
 
 func toChannelModelDTO(b channelmodel.Binding) channelModelDTO {
 	return channelModelDTO{
-		ID:               b.ID,
-		ChannelID:        b.ChannelID,
-		ModelID:          b.ModelID,
-		ModelExternalID:  b.ModelExternalID,
-		ModelDisplayName: b.ModelDisplayName,
-		UpstreamModel:    b.UpstreamModel,
-		Status:           b.Status,
-		CreatedAt:        b.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:        b.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:                b.ID,
+		ChannelID:         b.ChannelID,
+		ModelID:           b.ModelID,
+		ModelExternalID:   b.ModelExternalID,
+		ModelDisplayName:  b.ModelDisplayName,
+		ModelStatus:       b.ModelStatus,
+		UpstreamModel:     b.UpstreamModel,
+		Status:            b.Status,
+		EffectiveBlockers: b.EffectiveBlockers,
+		CreatedAt:         b.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:         b.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
 

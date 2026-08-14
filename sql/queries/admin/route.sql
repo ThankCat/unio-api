@@ -24,7 +24,7 @@ SELECT COUNT(*) FROM route_channels WHERE route_id = sqlc.arg(route_id);
 -- DeleteRouteChannels 清空某线路的渠道池（设置渠道池前先清空，整体在事务内重建）。
 DELETE FROM route_channels WHERE route_id = sqlc.arg(route_id);
 
--- Offering 的读取、差异更新与联动查询见 sql/queries/admin/supply.sql（ADR-0018）。
+-- Offering 的读取、差异更新与影响查询见 sql/queries/admin/supply.sql（ADR-0019）。
 
 -- name: CreateRoute :one
 -- CreateRoute 创建线路；price_ratio 是客户售价倍率（DEC-026：客户售价 = 模型基准价 × 倍率）；
@@ -124,7 +124,7 @@ SELECT
     rt.created_at,
     (SELECT COUNT(*) FROM api_keys kk WHERE kk.route_id = rt.id) AS bound_keys,
     (SELECT COUNT(*) FROM route_channels rc WHERE rc.route_id = rt.id) AS pool_channels,
-    -- 售卖模型统计（ADR-0018）：统一 Offering 口径，不再按价格/成本计算运行时"可达模型"。
+    -- 售卖模型统计（ADR-0019）：统一 Offering 口径，不再按价格/成本计算运行时"可达模型"。
     (SELECT COUNT(*) FROM route_model_offerings o WHERE o.route_id = rt.id) AS offerings_total,
     (SELECT COUNT(*) FROM route_model_offerings o WHERE o.route_id = rt.id AND o.status = 'enabled') AS offerings_enabled
 FROM routes rt

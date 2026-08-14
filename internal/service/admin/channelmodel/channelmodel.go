@@ -40,22 +40,24 @@ type Store interface {
 }
 
 // TxBeginner 提供事务能力（由 pgxpool 满足），用于停用/解除/启用 Binding 时的
-// 结构支撑串行化与 Offering 联动（ADR-0018）。
+// ADR-0019 配置支撑串行化、影响预览与显式 Offering 联合操作。
 type TxBeginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 // Binding 是 admin 视角的 channel↔model 绑定事实；连带 Unio 侧模型的对外 ID 与展示名（列表场景）。
 type Binding struct {
-	ID               int64
-	ChannelID        int64
-	ModelID          int64
-	ModelExternalID  string
-	ModelDisplayName string
-	UpstreamModel    string
-	Status           string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID                int64
+	ChannelID         int64
+	ModelID           int64
+	ModelExternalID   string
+	ModelDisplayName  string
+	ModelStatus       string
+	UpstreamModel     string
+	Status            string
+	EffectiveBlockers []string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // CreateInput 是创建绑定的入参。
@@ -74,7 +76,7 @@ type UpdateInput struct {
 	Status        string
 	// VerificationItemID 是启用绑定或替换 upstream_model 时必须提交的当前成功验证证据。
 	VerificationItemID *int64
-	// Confirmation 是停用触发 Offering 联动时的二次确认参数（ADR-0018 影响指纹契约）。
+	// Confirmation 是停用或解绑前的影响确认与显式 Offering 选择（ADR-0019）。
 	Confirmation supply.Confirmation
 }
 
@@ -159,9 +161,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Binding, error) {
 
 // Update 更新绑定的上游模型名与状态；目标不存在返回 not_found。
 //
-// 状态转换按 ADR-0018 联动：enabled→disabled 在事务内锁定 Model、反查失去最后结构支撑的
-// Offering（需影响指纹确认），全局最后一条 enabled Binding 时自动停用 Model；
-// disabled→enabled 在事务内锁定 Model 并要求 Model 当前 enabled（服务端护栏）。
+// 状态转换按 ADR-0019：enabled→disabled 在事务内锁定 Model、反查可能失去配置支撑的
+// Offering（需影响指纹确认），只停止管理员明确选择的 Offering；Model 永不自动停用。
+// disabled→enabled 允许在 Model 全局暂停时保存供给意图，运行时由 Model 状态阻断。
 func (s *Service) Update(ctx context.Context, in UpdateInput) (Binding, error) {
 	if in.ChannelID <= 0 {
 		return Binding{}, invalidArgument("channel_id", "channel id must be positive")
@@ -223,7 +225,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Binding, error) {
 	return toBinding(row), nil
 }
 
-// disableBinding 在一个事务内完成 Binding 停用与 Offering/Model 联动（ADR-0018 收缩操作）。
+// disableBinding 在一个事务内停用 Binding，并可选停止管理员明确选择的 Offering。
 func (s *Service) disableBinding(ctx context.Context, in UpdateInput, upstreamModel string) (Binding, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -252,7 +254,7 @@ func (s *Service) disableBinding(ctx context.Context, in UpdateInput, upstreamMo
 		}
 		if err := supply.Authorize(impact,
 			"channel_model_disable_confirmation_required",
-			"disabling this binding removes the last structural support for some route offerings; confirm with the impact fingerprint",
+			"disabling this binding may leave route offerings without configured support; confirm whether to keep or explicitly stop each offering",
 			in.Confirmation,
 		); err != nil {
 			return Binding{}, err
@@ -273,14 +275,8 @@ func (s *Service) disableBinding(ctx context.Context, in UpdateInput, upstreamMo
 	}
 
 	if current.Status == StatusEnabled {
-		if impact.ModelWillDisable {
-			// 全局最后一条 enabled Binding：同一事务停用 Model、全部 enabled Binding 与
-			// 全部 enabled Offering（原因统一 model_disabled）。
-			if err := supply.CascadeModelDisable(ctx, q, in.ModelID); err != nil {
-				return Binding{}, storeFailed(err, "cascade model disable")
-			}
-		} else if err := supply.DisableOfferings(ctx, q, impact.AffectedOfferings, supply.ReasonBindingDisabled); err != nil {
-			return Binding{}, storeFailed(err, "disable offerings losing support")
+		if err := supply.DisableSelectedOfferings(ctx, q, impact, in.Confirmation, supply.ReasonBindingDisabled); err != nil {
+			return Binding{}, storeFailed(err, "disable selected offerings")
 		}
 	}
 
@@ -290,8 +286,8 @@ func (s *Service) disableBinding(ctx context.Context, in UpdateInput, upstreamMo
 	return toBinding(row), nil
 }
 
-// enableBinding 在一个事务内启用 Binding：锁定 Model 并要求 Model 当前 enabled。
-// 启用不自动恢复任何 Offering（ADR-0018：重新售卖必须经 Route 重新勾选或批量恢复）。
+// enableBinding 在一个事务内启用 Binding。Model 可以处于全局暂停状态；该状态只阻断
+// Binding 生效，不改写 Binding 的配置意图。启用 Binding 不自动修改 Offering。
 func (s *Service) enableBinding(ctx context.Context, in UpdateInput, upstreamModel string) (Binding, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -300,22 +296,17 @@ func (s *Service) enableBinding(ctx context.Context, in UpdateInput, upstreamMod
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := s.queries.WithTx(tx)
 
-	// 扩张侧串行化：锁 Model 后校验其状态，防与 Model 停用并发产生
-	// 「Model disabled 且 Binding enabled」的写偏斜。
+	// 与 Model/Offering 联合操作使用同一锁顺序，避免影响预览与配置写入漂移。
 	if err := supply.LockModels(ctx, q, []int64{in.ModelID}); err != nil {
 		return Binding{}, storeFailed(err, "lock model for binding enable")
 	}
-	model, err := q.LookupModelByID(ctx, in.ModelID)
+	_, err = q.LookupModelByID(ctx, in.ModelID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Binding{}, invalidArgument("model_id", "model not found")
 		}
 		return Binding{}, storeFailed(err, "load model for binding enable")
 	}
-	if model.Status != StatusEnabled {
-		return Binding{}, conflict("model is globally disabled; enable the model before enabling its bindings")
-	}
-
 	row, err := q.UpdateChannelModel(ctx, sqlc.UpdateChannelModelParams{
 		ChannelID:     in.ChannelID,
 		ModelID:       in.ModelID,
@@ -338,8 +329,8 @@ func (s *Service) enableBinding(ctx context.Context, in UpdateInput, upstreamMod
 // Delete 删除绑定，并级联清掉该边自身的 channel_prices（追加式成本价配置）；仅当该边确有计费/审计历史
 // 引用时才被 DB 拒绝（23503），降级为 conflict 提示改用停用。
 //
-// 解除 enabled Binding 与停用使用相同影响预览与联动（ADR-0018）：失去最后结构支撑的
-// Offering 自动停用（binding_disabled），全局最后一条 enabled Binding 时自动停用 Model。
+// 解除 enabled Binding 与停用使用相同影响预览：只修改 Binding，自选 Offering 才会
+// 在同一事务中停止售卖；Model 永不自动停用。
 func (s *Service) Delete(ctx context.Context, channelID, modelID int64, confirmation supply.Confirmation) error {
 	if channelID <= 0 {
 		return invalidArgument("channel_id", "channel id must be positive")
@@ -375,7 +366,7 @@ func (s *Service) Delete(ctx context.Context, channelID, modelID int64, confirma
 		}
 		if err := supply.Authorize(impact,
 			"channel_model_disable_confirmation_required",
-			"unbinding removes the last structural support for some route offerings; confirm with the impact fingerprint",
+			"unbinding may leave route offerings without configured support; confirm whether to keep or explicitly stop each offering",
 			confirmation,
 		); err != nil {
 			return err
@@ -397,12 +388,8 @@ func (s *Service) Delete(ctx context.Context, channelID, modelID int64, confirma
 	}
 
 	if current.Status == StatusEnabled {
-		if impact.ModelWillDisable {
-			if err := supply.CascadeModelDisable(ctx, q, modelID); err != nil {
-				return storeFailed(err, "cascade model disable")
-			}
-		} else if err := supply.DisableOfferings(ctx, q, impact.AffectedOfferings, supply.ReasonBindingDisabled); err != nil {
-			return storeFailed(err, "disable offerings losing support")
+		if err := supply.DisableSelectedOfferings(ctx, q, impact, confirmation, supply.ReasonBindingDisabled); err != nil {
+			return storeFailed(err, "disable selected offerings")
 		}
 	}
 
@@ -445,17 +432,25 @@ func toBinding(c sqlc.ChannelModel) Binding {
 }
 
 func toBindingFromRow(c sqlc.ListChannelModelsByChannelRow) Binding {
-	return Binding{
+	b := Binding{
 		ID:               c.ID,
 		ChannelID:        c.ChannelID,
 		ModelID:          c.ModelID,
 		ModelExternalID:  c.ModelExternalID,
 		ModelDisplayName: c.ModelDisplayName,
+		ModelStatus:      c.ModelStatus,
 		UpstreamModel:    c.UpstreamModel,
 		Status:           c.Status,
 		CreatedAt:        c.CreatedAt.Time,
 		UpdatedAt:        c.UpdatedAt.Time,
 	}
+	if c.Status != StatusEnabled {
+		b.EffectiveBlockers = append(b.EffectiveBlockers, "binding_disabled")
+	}
+	if c.ModelStatus != "enabled" {
+		b.EffectiveBlockers = append(b.EffectiveBlockers, "model_disabled")
+	}
+	return b
 }
 
 func validateStatus(status string) error {

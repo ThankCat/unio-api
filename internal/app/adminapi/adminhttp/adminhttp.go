@@ -51,6 +51,24 @@ func WriteData(w http.ResponseWriter, status int, data any) {
 	_ = httpx.WriteJSON(w, status, map[string]any{"data": data})
 }
 
+// SupplyOfferingSelectionRequest 是供给联合操作中明确选择的一条 Route Offering。
+type SupplyOfferingSelectionRequest struct {
+	RouteID         int64  `json:"route_id"`
+	ModelID         int64  `json:"model_db_id"`
+	IngressProtocol string `json:"ingress_protocol"`
+}
+
+// SupplyOfferingSelections 转换 HTTP DTO 为领域确认选择。
+func SupplyOfferingSelections(items []SupplyOfferingSelectionRequest) []supply.OfferingSelection {
+	out := make([]supply.OfferingSelection, 0, len(items))
+	for _, item := range items {
+		out = append(out, supply.OfferingSelection{
+			RouteID: item.RouteID, ModelID: item.ModelID, IngressProtocol: item.IngressProtocol,
+		})
+	}
+	return out
+}
+
 // WriteServiceError 把 service / 解码层的内部 failure 映射为安全的 admin 错误响应。
 //
 // 只回显 4xx 的安全摘要（failure.Error() 不含 cause 细节），5xx 一律返回通用文案，
@@ -91,8 +109,8 @@ func WriteServiceError(w http.ResponseWriter, err error) {
 	_ = httpx.WriteError(w, status, codeStr, message)
 }
 
-// WriteConfirmationRequired 渲染 ADR-0018 供给影响二次确认（409）：结构化影响预览与
-// impact_fingerprint；确认请求需携带 confirm_supply_impact=true 和 expected_impact_fingerprint 重试。
+// WriteConfirmationRequired 渲染 ADR-0019 供给影响确认（409）。affected_routes 是潜在
+// 影响范围，不代表会被自动修改；跨层修改必须在确认请求中逐项选择。
 func WriteConfirmationRequired(w http.ResponseWriter, e *supply.ConfirmationRequired) {
 	routes := make([]map[string]any, 0, len(e.Impact.AffectedOfferings))
 	for _, ao := range e.Impact.AffectedOfferings {
@@ -101,8 +119,11 @@ func WriteConfirmationRequired(w http.ResponseWriter, e *supply.ConfirmationRequ
 			"route_name":         ao.RouteName,
 			"route_status":       ao.RouteStatus,
 			"model_id":           ao.PublicModelID,
+			"model_db_id":        ao.ModelID,
 			"model_display_name": ao.ModelDisplayName,
 			"ingress_protocol":   ao.IngressProtocol,
+			"kept_result":        ao.KeptResult,
+			"selected_result":    ao.SelectedResult,
 		})
 	}
 	_ = httpx.WriteJSON(w, http.StatusConflict, map[string]any{
@@ -110,11 +131,10 @@ func WriteConfirmationRequired(w http.ResponseWriter, e *supply.ConfirmationRequ
 			"code":                       e.Code,
 			"message":                    e.Message,
 			"impact_fingerprint":         e.Impact.Fingerprint(),
-			"model_will_disable":         e.Impact.ModelWillDisable,
 			"remaining_enabled_bindings": e.Impact.RemainingEnabledBindings,
-			"cascade_enabled_bindings":   e.Impact.CascadeEnabledBindings,
-			"cascade_channels":           e.Impact.CascadeChannels,
-			"cascade_providers":          e.Impact.CascadeProviders,
+			"enabled_bindings":           e.Impact.EnabledBindings,
+			"channels":                   e.Impact.Channels,
+			"providers":                  e.Impact.Providers,
 			"affected_routes":            routes,
 		},
 	})

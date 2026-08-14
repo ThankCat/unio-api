@@ -45,7 +45,8 @@ type Row struct {
 	BindingsAvailable         int64
 	CapabilitiesDeclaredCount int64
 	HasPrice                  bool
-	Sellable                  bool
+	// SupplyAvailable 表示当前是否存在可计费的基础渠道候选；它不表示任何 Route 是否售卖该模型。
+	SupplyAvailable bool
 	// 基准售价（DEC-026 model_prices 当前生效行，每 1M tokens）；无基准价时全部为 nil。
 	BaseCurrency                *string
 	BaseUncachedInputPrice      *string
@@ -64,20 +65,21 @@ type Row struct {
 
 // Detail 是模型详情页概览（含请求/延迟/毛利等运维指标）。
 type Detail struct {
-	RequestTotal      int64
-	RequestSucceeded  int64
-	SuccessRate       float64
-	LatencyAvg        float64
-	LatencyP50        float64
-	LatencyP95        float64
-	OutputTokens      int64
-	InputTokens       int64
-	CacheReadRate     float64
-	TPS               float64
-	RevenueUSD        string
-	MarginUSD         string
-	MarginRate        float64
-	Sellable          bool
+	RequestTotal     int64
+	RequestSucceeded int64
+	SuccessRate      float64
+	LatencyAvg       float64
+	LatencyP50       float64
+	LatencyP95       float64
+	OutputTokens     int64
+	InputTokens      int64
+	CacheReadRate    float64
+	TPS              float64
+	RevenueUSD       string
+	MarginUSD        string
+	MarginRate       float64
+	// SupplyAvailable 表示当前是否存在可计费的基础渠道候选；它不表示任何 Route 是否售卖该模型。
+	SupplyAvailable   bool
 	BindingsTotal     int64
 	BindingsAvailable int64
 	ModelStatus       string
@@ -170,7 +172,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			BindingsAvailable:               r.BindingsAvailable,
 			CapabilitiesDeclaredCount:       r.CapabilitiesDeclaredCount,
 			HasPrice:                        r.HasPrice,
-			Sellable:                        r.Status == "enabled" && r.BindingsAvailable > 0,
+			SupplyAvailable:                 r.Status == "enabled" && r.BindingsAvailable > 0,
 			BaseCurrency:                    baseCurrency,
 			BaseUncachedInputPrice:          opsutil.NumericStringPtr(r.BaseUncachedInputPrice),
 			BaseCacheReadInputPrice:         opsutil.NumericStringPtr(r.BaseCacheReadInputPrice),
@@ -210,7 +212,7 @@ func (s *Service) Detail(ctx context.Context, modelID int64, from, to time.Time)
 		RevenueUSD:        revenue,
 		MarginUSD:         marginAmt,
 		MarginRate:        opsutil.Ratio(marginAmt, revenue),
-		Sellable:          r.ModelStatus == "enabled" && r.BindingsAvailable > 0,
+		SupplyAvailable:   r.ModelStatus == "enabled" && r.BindingsAvailable > 0,
 		BindingsTotal:     r.BindingsTotal,
 		BindingsAvailable: r.BindingsAvailable,
 		ModelStatus:       r.ModelStatus,

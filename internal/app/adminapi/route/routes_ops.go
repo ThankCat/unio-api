@@ -40,7 +40,7 @@ type routeOpsRowDTO struct {
 	CreatedAt        string `json:"created_at"`
 	BoundKeys        int64  `json:"bound_keys"`
 	PoolChannels     int64  `json:"pool_channels"`
-	// 售卖模型统计（ADR-0018 Offering 口径）：总数与 enabled/disabled 分布。
+	// 售卖模型统计（ADR-0019 Offering 口径）：总数与 enabled/disabled 分布。
 	OfferingsTotal    int64 `json:"offerings_total"`
 	OfferingsEnabled  int64 `json:"offerings_enabled"`
 	OfferingsDisabled int64 `json:"offerings_disabled"`
@@ -48,13 +48,14 @@ type routeOpsRowDTO struct {
 
 // routeOpsOfferingDTO 是线路一条售卖组合（列表悬浮/详情）。
 type routeOpsOfferingDTO struct {
-	ModelID          string  `json:"model_id"`
-	DisplayName      string  `json:"display_name"`
-	ModelStatus      string  `json:"model_status"`
-	IngressProtocol  string  `json:"ingress_protocol"`
-	Status           string  `json:"status"`
-	DisabledReason   *string `json:"disabled_reason"`
-	SupportAvailable bool    `json:"support_available"`
+	ModelID                string  `json:"model_id"`
+	DisplayName            string  `json:"display_name"`
+	ModelStatus            string  `json:"model_status"`
+	IngressProtocol        string  `json:"ingress_protocol"`
+	Status                 string  `json:"status"`
+	DisabledReason         *string `json:"disabled_reason"`
+	ConfiguredSupportCount int64   `json:"configured_support_count"`
+	RuntimeCandidateCount  int64   `json:"runtime_candidate_count"`
 }
 
 type routeOpsDetailDTO struct {
@@ -154,15 +155,15 @@ func (h *routeOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 	out := make([]routeOpsRowDTO, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, routeOpsRowDTO{
-			ID:               row.ID,
-			Name:             row.Name,
-			Mode:             row.Mode,
-			Status:           row.Status,
-			Description:      row.Description,
-			PriceRatio:       row.PriceRatio,
-			RpmLimit:         row.RpmLimit,
-			RpdLimit:         row.RpdLimit,
-			ConcurrencyLimit: row.ConcurrencyLimit,
+			ID:                row.ID,
+			Name:              row.Name,
+			Mode:              row.Mode,
+			Status:            row.Status,
+			Description:       row.Description,
+			PriceRatio:        row.PriceRatio,
+			RpmLimit:          row.RpmLimit,
+			RpdLimit:          row.RpdLimit,
+			ConcurrencyLimit:  row.ConcurrencyLimit,
 			CreatedAt:         adminhttp.RFC3339(row.CreatedAt),
 			BoundKeys:         row.BoundKeys,
 			PoolChannels:      row.PoolChannels,
@@ -236,13 +237,14 @@ func (h *routeOpsHandler) offerings(w http.ResponseWriter, r *http.Request) {
 	out := make([]routeOpsOfferingDTO, 0, len(rows))
 	for _, o := range rows {
 		out = append(out, routeOpsOfferingDTO{
-			ModelID:          o.ModelID,
-			DisplayName:      o.DisplayName,
-			ModelStatus:      o.ModelStatus,
-			IngressProtocol:  o.IngressProtocol,
-			Status:           o.Status,
-			DisabledReason:   o.DisabledReason,
-			SupportAvailable: o.SupportAvailable,
+			ModelID:                o.ModelID,
+			DisplayName:            o.DisplayName,
+			ModelStatus:            o.ModelStatus,
+			IngressProtocol:        o.IngressProtocol,
+			Status:                 o.Status,
+			DisabledReason:         o.DisabledReason,
+			ConfiguredSupportCount: o.ConfiguredSupportCount,
+			RuntimeCandidateCount:  o.RuntimeCandidateCount,
 		})
 	}
 	adminhttp.WriteData(w, http.StatusOK, out)

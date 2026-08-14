@@ -91,19 +91,23 @@ type RouteChannel struct {
 	ProviderSlug string
 }
 
-// RouteOffering 是线路的一条 Model+协议售卖组合（ADR-0018 Offering 口径）：
+// RouteOffering 是线路的一条 Model+协议售卖组合（ADR-0019 Offering 口径）：
 // enabled 表示当前售卖；disabled 保留历史关系、停用原因与时间。
 type RouteOffering struct {
-	ModelID         int64
-	PublicModelID   string
-	DisplayName     string
-	ModelStatus     string
-	IngressProtocol string
-	Status          string
-	DisabledReason  *string
-	DisabledAt      *time.Time
-	// SupportAvailable 表示当前渠道池是否仍有结构支撑（enabled Channel 承载的 enabled Binding）。
-	SupportAvailable bool
+	ModelID                int64
+	PublicModelID          string
+	DisplayName            string
+	ModelStatus            string
+	IngressProtocol        string
+	Status                 string
+	DisabledReason         *string
+	DisabledAt             *time.Time
+	ConfiguredSupportCount int64
+	RuntimeCandidateCount  int64
+	EffectiveBlockers      []string
+	Restorable             bool
+	RestoreBlockers        []string
+	RestoreWarnings        []string
 }
 
 // OfferingSelection 是管理员在 Route 表单勾选的一条售卖组合（Model + ingress protocol）。
@@ -117,13 +121,14 @@ type OfferingCandidate struct {
 	ModelID            int64
 	PublicModelID      string
 	DisplayName        string
+	ModelStatus        string
 	IngressProtocol    string
 	SupportingChannels int64
 }
 
 // CreateInput 创建线路入参。PriceRatio 为客户售价倍率（十进制字符串，空=默认 1.0）。
 // RPM/TPM/RPD/ConcurrencyLimit 为线路级限流上限（nil=继承默认，0=不限，>0=上限）。
-// Offerings 是显式勾选的售卖组合（ADR-0018）：创建必须至少勾选一个。
+// Offerings 是显式勾选的售卖组合（ADR-0019）：创建必须至少勾选一个。
 type CreateInput struct {
 	Name             string
 	Mode             string
@@ -135,7 +140,7 @@ type CreateInput struct {
 	Description      *string
 	ChannelIDs       []int64
 	Offerings        []OfferingSelection
-	// Confirmation 是保存触发 Offering 联动（route_channel_removed）时的二次确认参数。
+	// Confirmation 为兼容旧 Admin 请求保留；Route 保存只按 Offerings 显式选择修改售卖状态。
 	Confirmation supply.Confirmation
 }
 
@@ -154,7 +159,7 @@ type UpdateInput struct {
 	Description      *string
 	ChannelIDs       []int64
 	Offerings        []OfferingSelection
-	// Confirmation 是保存触发 Offering 联动（route_channel_removed）时的二次确认参数。
+	// Confirmation 为兼容旧 Admin 请求保留；Route 保存只按 Offerings 显式选择修改售卖状态。
 	Confirmation supply.Confirmation
 }
 
@@ -208,8 +213,8 @@ func (s *Service) Get(ctx context.Context, id int64) (Route, error) {
 	return r, nil
 }
 
-// OfferingCandidates 按给定渠道池计算可勾选的 Model+协议售卖组合候选（ADR-0018）：
-// enabled Channel 承载的 enabled Binding 且 Model enabled；不读取 breaker、容量、凭据或价格。
+// OfferingCandidates 按给定渠道池计算当前配置支撑组合。Channel/Provider/Model 当前状态
+// 不参与候选集合，ModelStatus 单独返回供管理端展示阻断警告。
 func (s *Service) OfferingCandidates(ctx context.Context, channelIDs []int64) ([]OfferingCandidate, error) {
 	unique := make(map[int64]struct{}, len(channelIDs))
 	ids := make([]int64, 0, len(channelIDs))
@@ -236,6 +241,7 @@ func (s *Service) OfferingCandidates(ctx context.Context, channelIDs []int64) ([
 			ModelID:            row.ModelID,
 			PublicModelID:      row.PublicModelID,
 			DisplayName:        row.DisplayName,
+			ModelStatus:        row.ModelStatus,
 			IngressProtocol:    row.IngressProtocol,
 			SupportingChannels: row.SupportingChannels,
 		})
@@ -249,7 +255,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Route, error) {
 	if err := validateRouteShape(name, in.Mode, in.Status, in.ChannelIDs); err != nil {
 		return Route{}, err
 	}
-	// 创建必须至少勾选一个售卖组合；编辑允许为空（ADR-0018）。
+	// 创建必须至少勾选一个售卖组合；编辑允许为空（ADR-0019）。
 	if len(in.Offerings) == 0 {
 		return Route{}, invalidArgument("offerings", "route must offer at least one model+protocol combination")
 	}
@@ -365,8 +371,8 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Route, error) {
 	return s.Get(ctx, in.ID)
 }
 
-// SetChannels 整体替换线路渠道池（事务内 delete + insert）。既有 enabled 售卖组合视为
-// 保持勾选：因换池失去最后结构支撑的组合经影响指纹确认后置 disabled(route_channel_removed)。
+// SetChannels 整体替换线路渠道池（事务内 delete + insert）。既有 enabled Offering 保持不变；
+// 换池只重算配置支撑和运行候选，不自动修改售卖意图。
 func (s *Service) SetChannels(ctx context.Context, id int64, channelIDs []int64, confirmation supply.Confirmation) (Route, error) {
 	if id <= 0 {
 		return Route{}, invalidArgument("id", "id must be positive")
@@ -567,13 +573,36 @@ func (s *Service) listOfferings(ctx context.Context, routeID int64) ([]RouteOffe
 	out := make([]RouteOffering, 0, len(rows))
 	for _, row := range rows {
 		offering := RouteOffering{
-			ModelID:          row.ModelID,
-			PublicModelID:    row.PublicModelID,
-			DisplayName:      row.DisplayName,
-			ModelStatus:      row.ModelStatus,
-			IngressProtocol:  row.IngressProtocol,
-			Status:           row.Status,
-			SupportAvailable: row.SupportAvailable,
+			ModelID:                row.ModelID,
+			PublicModelID:          row.PublicModelID,
+			DisplayName:            row.DisplayName,
+			ModelStatus:            row.ModelStatus,
+			IngressProtocol:        row.IngressProtocol,
+			Status:                 row.Status,
+			ConfiguredSupportCount: row.ConfiguredSupportCount,
+			RuntimeCandidateCount:  row.RuntimeCandidateCount,
+			Restorable:             row.RouteStatus != StatusArchived,
+		}
+		if row.RouteStatus == StatusArchived {
+			offering.EffectiveBlockers = append(offering.EffectiveBlockers, "route_archived")
+			offering.RestoreBlockers = append(offering.RestoreBlockers, "route_archived")
+		} else if row.RouteStatus != StatusEnabled {
+			offering.EffectiveBlockers = append(offering.EffectiveBlockers, "route_disabled")
+		}
+		if row.ModelStatus != StatusEnabled {
+			offering.EffectiveBlockers = append(offering.EffectiveBlockers, "model_disabled")
+			offering.RestoreWarnings = append(offering.RestoreWarnings, "model_disabled")
+		}
+		if row.Status != supply.OfferingEnabled {
+			offering.EffectiveBlockers = append(offering.EffectiveBlockers, "offering_disabled")
+		}
+		if row.ConfiguredSupportCount == 0 {
+			offering.EffectiveBlockers = append(offering.EffectiveBlockers, "no_configured_support")
+			offering.RestoreWarnings = append(offering.RestoreWarnings, "no_configured_support")
+		}
+		if row.RuntimeCandidateCount == 0 {
+			offering.EffectiveBlockers = append(offering.EffectiveBlockers, "no_runtime_candidate")
+			offering.RestoreWarnings = append(offering.RestoreWarnings, "no_runtime_candidate")
 		}
 		if row.DisabledReason.Valid {
 			reason := row.DisabledReason.String
@@ -614,13 +643,10 @@ type comboKey struct {
 	protocol string
 }
 
-// applyOfferingSelections 在保存事务内按 Model+协议组合差异更新 Offering（ADR-0018）：
+// applyOfferingSelections 在保存事务内按 Model+协议组合差异更新 Offering（ADR-0019）：
 //
-//   - 结构支撑与影响计算一律按提交后的最终 Channel 池（finalChannelIDs）聚合评估，
-//     同一次保存移除并加入 Channel（含 fixed 换渠道）不误停仍受支撑的组合；
-//   - 新勾选或重新勾选的组合必须有结构支撑且 Model enabled，否则拒绝保存；
-//   - 保持勾选但因本次渠道调整失去支撑的 enabled 组合，经影响指纹确认后置
-//     disabled(route_channel_removed)；
+//   - 管理员勾选直接表达 Route 售卖意图；Model 暂停、零配置支撑或零运行候选只产生警告，
+//     不阻止保存也不自动停止 Offering；
 //   - 未勾选的 enabled 组合是显式取消，置 disabled(manual_unselected)，不需要确认；
 //   - 其余 disabled 组合保持不动（不删除、不恢复、不导致保存失败）。
 func applyOfferingSelections(
@@ -628,8 +654,8 @@ func applyOfferingSelections(
 	q *sqlc.Queries,
 	routeRow sqlc.Route,
 	selections []OfferingSelection,
-	finalChannelIDs []int64,
-	confirmation supply.Confirmation,
+	_ []int64,
+	_ supply.Confirmation,
 ) error {
 	selected := make(map[comboKey]struct{}, len(selections))
 	orderedKeys := make([]comboKey, 0, len(selections))
@@ -650,9 +676,7 @@ func applyOfferingSelections(
 		modelIDs = append(modelIDs, sel.ModelID)
 	}
 
-	pool := dedupeChannelIDs(finalChannelIDs)
-
-	// 结构支撑串行化（ADR-0018）：锁定本次勾选与既有 Offering 涉及的全部 Model，
+	// 锁定本次勾选与既有 Offering 涉及的全部 Model，
 	// 锁内重读既有 Offering 作为差异计算的权威事实，不复用锁外读数。
 	existingPre, err := q.ListRouteOfferingDetails(ctx, routeRow.ID)
 	if err != nil {
@@ -673,53 +697,19 @@ func applyOfferingSelections(
 		existingByKey[comboKey{modelID: row.ModelID, protocol: row.IngressProtocol}] = row
 	}
 
-	losing := make([]supply.AffectedOffering, 0)
 	toEnable := make([]comboKey, 0)
 	for _, key := range orderedKeys {
 		row, exists := existingByKey[key]
-		supported, err := q.OfferingComboSupportedByPool(ctx, sqlc.OfferingComboSupportedByPoolParams{
-			ChannelIds:      pool,
-			IngressProtocol: key.protocol,
-			ModelID:         key.modelID,
-		})
-		if err != nil {
-			return storeFailed(err, "check offering structural support")
-		}
 		if exists && row.Status == supply.OfferingEnabled {
-			if !supported {
-				losing = append(losing, supply.AffectedOffering{
-					RouteID:          routeRow.ID,
-					RouteName:        routeRow.Name,
-					RouteStatus:      routeRow.Status,
-					ModelID:          key.modelID,
-					PublicModelID:    row.PublicModelID,
-					ModelDisplayName: row.DisplayName,
-					IngressProtocol:  key.protocol,
-				})
-			}
 			continue
 		}
-		// 新勾选或重新勾选 disabled 组合：必须有最终池结构支撑且 Model enabled（并发停用在锁内可见）。
-		if !supported {
-			return invalidArgument("offerings",
-				"selected model+protocol combination has no structural support in the submitted channel pool or its model is disabled")
+		if _, err := q.LookupModelByID(ctx, key.modelID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return invalidArgument("offerings", "selected model does not exist")
+			}
+			return storeFailed(err, "load selected offering model")
 		}
 		toEnable = append(toEnable, key)
-	}
-
-	// 保持勾选但失去支撑：按最终池聚合确认后置 route_channel_removed。
-	if len(losing) > 0 {
-		impact := supply.Impact{Kind: "route_channel_removed", AffectedOfferings: losing}
-		if err := supply.Authorize(impact,
-			"route_channel_removed_confirmation_required",
-			"the submitted channel pool leaves kept offerings without structural support; confirm with the impact fingerprint",
-			confirmation,
-		); err != nil {
-			return err
-		}
-		if err := supply.DisableOfferings(ctx, q, losing, supply.ReasonRouteChannelRemoved); err != nil {
-			return storeFailed(err, "disable offerings losing support")
-		}
 	}
 
 	for _, key := range toEnable {
@@ -746,28 +736,16 @@ func applyOfferingSelections(
 			ModelID:         row.ModelID,
 			IngressProtocol: row.IngressProtocol,
 		}}
-		if err := supply.DisableOfferings(ctx, q, unselected, supply.ReasonManualUnselected); err != nil {
+		impact := supply.Impact{Kind: "route_manual_unselected", AffectedOfferings: unselected}
+		confirmation := supply.Confirmation{SelectedOfferings: []supply.OfferingSelection{{
+			RouteID: routeRow.ID, ModelID: row.ModelID, IngressProtocol: row.IngressProtocol,
+		}}}
+		if err := supply.DisableSelectedOfferings(ctx, q, impact, confirmation, supply.ReasonManualUnselected); err != nil {
 			return storeFailed(err, "unselect route model offering")
 		}
 	}
 
 	return nil
-}
-
-func dedupeChannelIDs(channelIDs []int64) []int64 {
-	seen := make(map[int64]struct{}, len(channelIDs))
-	out := make([]int64, 0, len(channelIDs))
-	for _, id := range channelIDs {
-		if id <= 0 {
-			continue
-		}
-		if _, dup := seen[id]; dup {
-			continue
-		}
-		seen[id] = struct{}{}
-		out = append(out, id)
-	}
-	return out
 }
 
 func validateRouteShape(name, mode, status string, channelIDs []int64) error {

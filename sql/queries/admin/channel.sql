@@ -33,7 +33,8 @@ SELECT
     ccm.created_at,
     ccm.updated_at,
     m.model_id AS model_external_id,
-    m.display_name AS model_display_name
+    m.display_name AS model_display_name,
+    m.status AS model_status
 FROM channel_cost_multipliers ccm
 LEFT JOIN models m ON m.id = ccm.model_id
 WHERE ccm.channel_id = sqlc.arg(channel_id)
@@ -69,7 +70,8 @@ SELECT
     cm.created_at,
     cm.updated_at,
     m.model_id AS model_external_id,
-    m.display_name AS model_display_name
+    m.display_name AS model_display_name,
+    m.status AS model_status
 FROM channel_models cm
 JOIN models m ON m.id = cm.model_id
 WHERE cm.channel_id = sqlc.arg(channel_id)

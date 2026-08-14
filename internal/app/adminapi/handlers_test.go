@@ -115,6 +115,10 @@ type fakeModelService struct {
 	createErr error
 	updateOut model.Model
 	updateErr error
+	delistOut int
+	delistErr error
+	delistID  int64
+	delistIn  supply.Confirmation
 	deleteErr error
 }
 
@@ -129,6 +133,11 @@ func (s *fakeModelService) Create(context.Context, model.CreateInput) (model.Mod
 }
 func (s *fakeModelService) Update(context.Context, model.UpdateInput) (model.Model, error) {
 	return s.updateOut, s.updateErr
+}
+func (s *fakeModelService) Delist(_ context.Context, id int64, confirmation supply.Confirmation) (int, error) {
+	s.delistID = id
+	s.delistIn = confirmation
+	return s.delistOut, s.delistErr
 }
 func (s *fakeModelService) Delete(context.Context, int64) error {
 	return s.deleteErr
@@ -535,6 +544,26 @@ func TestDeleteModelConflictReturns409(t *testing.T) {
 	rec := doAdmin(t, handler, http.MethodDelete, "/v1/models/9", "", true)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusConflict, rec.Code, rec.Body.String())
+	}
+}
+
+func TestDelistModelMapsExplicitOfferingSelection(t *testing.T) {
+	service := &fakeModelService{delistOut: 1}
+	handler := newModelRouter(t, service)
+	body := `{"confirm_supply_impact":true,"expected_impact_fingerprint":"fp-1","selected_offerings":[{"route_id":9,"model_db_id":7,"ingress_protocol":"openai"}]}`
+	rec := doAdmin(t, handler, http.MethodPost, "/v1/models/7/delist", body, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if service.delistID != 7 || !service.delistIn.Confirm || service.delistIn.ExpectedFingerprint != "fp-1" {
+		t.Fatalf("delist request = id:%d confirmation:%+v", service.delistID, service.delistIn)
+	}
+	if len(service.delistIn.SelectedOfferings) != 1 ||
+		service.delistIn.SelectedOfferings[0] != (supply.OfferingSelection{RouteID: 9, ModelID: 7, IngressProtocol: "openai"}) {
+		t.Fatalf("selected offerings = %+v", service.delistIn.SelectedOfferings)
+	}
+	if !strings.Contains(rec.Body.String(), `"disabled_offerings":1`) {
+		t.Fatalf("response = %s", rec.Body.String())
 	}
 }
 

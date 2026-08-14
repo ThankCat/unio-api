@@ -128,7 +128,7 @@ type updateChannelRequest struct {
 	StickyTTLms         *int64        `json:"sticky_ttl_ms"`
 	ConcurrencyLimit    optionalInt64 `json:"concurrency_limit"`
 	// ConfirmSupplyImpact + ExpectedImpactFingerprint 是停用 Channel 触发 Offering 联动时的
-	// 二次确认参数（ADR-0018）；首次请求缺省，收到 409 影响预览后携带指纹重试。
+	// ADR-0019 Channel 暂停影响确认；首次请求缺省，收到 409 后携带最新指纹重试。
 	ConfirmSupplyImpact       bool   `json:"confirm_supply_impact"`
 	ExpectedImpactFingerprint string `json:"expected_impact_fingerprint"`
 }

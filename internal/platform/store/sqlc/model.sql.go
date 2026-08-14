@@ -1566,7 +1566,7 @@ SELECT
         FROM channel_models cm
         JOIN channels c ON c.id = cm.channel_id
         WHERE cm.model_id = m.id AND cm.status = 'enabled' AND c.status = 'enabled'
-          -- DEC-031 可售对齐路由：有 channel_prices 绝对覆盖 OR （模型有生效基准价 AND 该渠道对本模型有生效价格倍率——含默认 model_id IS NULL）。
+          -- DEC-031 成本可解析：有 channel_prices 绝对覆盖 OR （模型有生效基准价 AND 该渠道对本模型有生效价格倍率——含默认 model_id IS NULL）。
           AND (
               EXISTS (
                   SELECT 1 FROM channel_prices p
@@ -1595,7 +1595,7 @@ SELECT
         WHERE mc.model_id = m.id
           AND mc.support_level IN ('full', 'limited')
     ) AS capabilities_declared_count,
-    -- has_price（DEC-031）：模型有生效基准价 AND 至少一条 enabled 绑定可解析成本（绝对覆盖 或 价格倍率）；与路由「可卖」对齐，消灭假「不可售」。
+    -- has_price（DEC-031）：模型有生效基准价 AND 至少一条 enabled 绑定可解析成本（绝对覆盖或价格倍率）。
     -- 外层 EXISTS (SELECT 1 WHERE <复合布尔>) 让 sqlc 推断为非空 bool（裸复合布尔默认可空 pgtype.Bool）。
     EXISTS (SELECT 1 WHERE
         EXISTS (
@@ -1765,7 +1765,7 @@ type ModelsOpsTableRow struct {
 // §3.4 模型商品控制台只读运维聚合。
 // 模型口径：request_records.requested_model_id(文本) = models.model_id。请求/性能为 request 粒度。
 // 成本按 cost_snapshots.model_id（数值 FK）归因；收入按 ledger_entries(debit) JOIN request 归因；仅 USD。
-// 可售/可用渠道：enabled 绑定 + 渠道 enabled + 有 enabled 价格（§3.4.8）。
+// 基础供给候选：enabled 绑定 + 渠道 enabled + 可解析成本；不代表任何 Route 正在售卖（§3.4.8）。
 // ModelsOpsTable 模型商品运维主表（分页）：静态元数据 + 渠道/基准价；请求/毛利等指标在详情页聚合。
 func (q *Queries) ModelsOpsTable(ctx context.Context, arg ModelsOpsTableParams) ([]ModelsOpsTableRow, error) {
 	rows, err := q.db.Query(ctx, modelsOpsTable,

@@ -141,7 +141,7 @@ type RouteOffersModelParams struct {
 }
 
 // RouteOffersModel 判断 API Key 所在线路是否明确向客户提供该模型与入口协议。
-// 只承认 enabled Offering（ADR-0018）：disabled Offering 保留历史关系，但按未提供处理（404）。
+// 只承认 enabled Offering（ADR-0019）：disabled Offering 保留历史关系，但按未提供处理（404）。
 func (q *Queries) RouteOffersModel(ctx context.Context, arg RouteOffersModelParams) (bool, error) {
 	row := q.db.QueryRow(ctx, routeOffersModel, arg.RouteID, arg.RequestedModelID, arg.IngressProtocol)
 	var offered bool
