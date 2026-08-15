@@ -29,6 +29,14 @@ func TestFieldsZapFieldsOmitUnset(t *testing.T) {
 	SetAttemptID(ctx, 88)
 	SetModel(ctx, "openai/gpt-4.1")
 	SetRouteID(ctx, 2)
+	SetJSONDecodeSummary(ctx, JSONDecodeSummary{
+		Kind:          "type_mismatch",
+		Field:         "input",
+		Offset:        42,
+		BytesRead:     128,
+		ContentLength: 128,
+		UserAgent:     "Codex Desktop/test",
+	})
 	SetUpstreamAttempt(ctx, UpstreamAttempt{
 		ModelID:    99,
 		Router:     "default-route",
@@ -40,19 +48,26 @@ func TestFieldsZapFieldsOmitUnset(t *testing.T) {
 
 	got := fieldMap(fields.ZapFields())
 	cases := map[string]any{
-		"trace_id":      "corr-1",
-		"request_id":    "req_abc",
-		"attempt_id":    int64(88),
-		"user_id":       int64(7),
-		"api_key_id":    int64(100),
-		"model":         "openai/gpt-4.1",
-		"model_id":      int64(99),
-		"route_id":      int64(2),
-		"route_name":    "default-route",
-		"provider_id":   int64(9123),
-		"provider_slug": "openai",
-		"channel_id":    int64(123),
-		"channel_name":  "main",
+		"trace_id":          "corr-1",
+		"request_id":        "req_abc",
+		"attempt_id":        int64(88),
+		"user_id":           int64(7),
+		"api_key_id":        int64(100),
+		"model":             "openai/gpt-4.1",
+		"model_id":          int64(99),
+		"route_id":          int64(2),
+		"route_name":        "default-route",
+		"provider_id":       int64(9123),
+		"provider_slug":     "openai",
+		"channel_id":        int64(123),
+		"channel_name":      "main",
+		"rejection_reason":  "invalid_json",
+		"decode_error_kind": "type_mismatch",
+		"json_field":        "input",
+		"json_offset":       int64(42),
+		"body_bytes_read":   int64(128),
+		"content_length":    int64(128),
+		"user_agent":        "Codex Desktop/test",
 	}
 	for key, want := range cases {
 		if got[key] != want {
@@ -70,6 +85,7 @@ func TestContextHelpersNoopWithoutHolder(t *testing.T) {
 	SetAttemptID(ctx, 1)
 	SetModel(ctx, "m")
 	SetRouteID(ctx, 1)
+	SetJSONDecodeSummary(ctx, JSONDecodeSummary{Kind: "syntax"})
 	SetUpstreamAttempt(ctx, UpstreamAttempt{Provider: "p", Channel: "c"})
 
 	if _, ok := FromContext(ctx); ok {
@@ -86,6 +102,7 @@ func TestNilFieldsSettersSafe(t *testing.T) {
 	f.SetModel("m")
 	f.SetModelID(1)
 	f.SetRouteID(1)
+	f.SetJSONDecodeSummary(JSONDecodeSummary{Kind: "syntax"})
 	f.SetRouter("r")
 	f.SetUpstreamAttempt(UpstreamAttempt{Provider: "p", Channel: "c"})
 	if f.ZapFields() != nil {

@@ -54,6 +54,43 @@ var (
 	ErrTrailingJSONToken = errors.New("trailing json token")
 )
 
+// InvalidJSONDiagnostic 是 JSON 请求体解码失败时可安全写入日志的结构化诊断。
+// 它不包含请求正文、字段值或原始 decoder 错误文本。
+type InvalidJSONDiagnostic struct {
+	Kind      string
+	Field     string
+	Offset    int64
+	BytesRead int64
+}
+
+type invalidJSONError struct {
+	cause      error
+	diagnostic InvalidJSONDiagnostic
+}
+
+func (e *invalidJSONError) Error() string { return "invalid json body" }
+func (e *invalidJSONError) Unwrap() error { return e.cause }
+
+// InvalidJSONDiagnosticOf 从 DecodeJSON 错误链中读取脱敏诊断。
+func InvalidJSONDiagnosticOf(err error) (InvalidJSONDiagnostic, bool) {
+	var decodeErr *invalidJSONError
+	if !errors.As(err, &decodeErr) {
+		return InvalidJSONDiagnostic{}, false
+	}
+	return decodeErr.diagnostic, true
+}
+
+type countingReader struct {
+	reader io.Reader
+	read   int64
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.read += int64(n)
+	return n, err
+}
+
 // DecodeJSON 从 HTTP 请求体读取 JSON，并解码到 dst。
 func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	if !isJSONContentType(r.Header.Get("Content-Type")) {
@@ -66,10 +103,11 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 
 	r.Body = http.MaxBytesReader(w, r.Body, MaxJSONBodyBytes())
 
-	decoder := json.NewDecoder(r.Body)
+	countedBody := &countingReader{reader: r.Body}
+	decoder := json.NewDecoder(countedBody)
 
 	if err := decoder.Decode(dst); err != nil {
-		return normalizeJSONDecodeError(err)
+		return normalizeJSONDecodeError(err, countedBody.read)
 	}
 
 	var trailing any
@@ -102,7 +140,7 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 }
 
 // normalizeJSONDecodeError 将底层 JSON decode 错误收敛成 HTTP 层可稳定识别的错误。
-func normalizeJSONDecodeError(err error) error {
+func normalizeJSONDecodeError(err error, bytesRead int64) error {
 	var maxBytesErr *http.MaxBytesError
 	if errors.As(err, &maxBytesErr) {
 		return failure.Wrap(
@@ -120,9 +158,27 @@ func normalizeJSONDecodeError(err error) error {
 		)
 	}
 
+	diagnostic := InvalidJSONDiagnostic{
+		Kind:      "decode_error",
+		BytesRead: bytesRead,
+	}
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	switch {
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		diagnostic.Kind = "unexpected_eof"
+	case errors.As(err, &syntaxErr):
+		diagnostic.Kind = "syntax"
+		diagnostic.Offset = syntaxErr.Offset
+	case errors.As(err, &typeErr):
+		diagnostic.Kind = "type_mismatch"
+		diagnostic.Field = typeErr.Field
+		diagnostic.Offset = typeErr.Offset
+	}
+
 	return failure.Wrap(
 		failure.CodeHTTPInvalidJSONBody,
-		err,
+		&invalidJSONError{cause: err, diagnostic: diagnostic},
 		failure.WithMessage("invalid json body"),
 	)
 }

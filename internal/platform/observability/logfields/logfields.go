@@ -74,6 +74,8 @@ type Fields struct {
 	currency              string
 	errorCode             string
 	completionLevel       string
+	jsonDecode            JSONDecodeSummary
+	hasJSONDecode         bool
 }
 
 // NewContext 在 ctx 中安装一个携带 traceID 的 Fields，并返回该 Fields 指针。
@@ -225,6 +227,29 @@ type UsageSummary struct {
 	TotalTokens           int64
 	ChargedAmount         string
 	Currency              string
+}
+
+// JSONDecodeSummary 是公开 Gateway JSON 解码拒绝写入请求完成日志的脱敏诊断。
+type JSONDecodeSummary struct {
+	Kind             string
+	Field            string
+	Offset           int64
+	BytesRead        int64
+	ContentLength    int64
+	ContentEncoding  string
+	TransferEncoding string
+	UserAgent        string
+}
+
+// SetJSONDecodeSummary 记录一次 invalid JSON 拒绝的脱敏诊断。
+func (f *Fields) SetJSONDecodeSummary(summary JSONDecodeSummary) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.jsonDecode = summary
+	f.hasJSONDecode = true
 }
 
 func (f *Fields) SetUsageSummary(summary UsageSummary) {
@@ -438,6 +463,31 @@ func (f *Fields) ZapFields() []zap.Field {
 	if f.errorCode != "" {
 		fields = append(fields, zap.String("error_code", f.errorCode))
 	}
+	if f.hasJSONDecode {
+		fields = append(fields,
+			zap.String("rejection_reason", "invalid_json"),
+			zap.String("decode_error_kind", f.jsonDecode.Kind),
+			zap.Int64("body_bytes_read", f.jsonDecode.BytesRead),
+		)
+		if f.jsonDecode.Field != "" {
+			fields = append(fields, zap.String("json_field", f.jsonDecode.Field))
+		}
+		if f.jsonDecode.Offset > 0 {
+			fields = append(fields, zap.Int64("json_offset", f.jsonDecode.Offset))
+		}
+		if f.jsonDecode.ContentLength >= 0 {
+			fields = append(fields, zap.Int64("content_length", f.jsonDecode.ContentLength))
+		}
+		if f.jsonDecode.ContentEncoding != "" {
+			fields = append(fields, zap.String("content_encoding", f.jsonDecode.ContentEncoding))
+		}
+		if f.jsonDecode.TransferEncoding != "" {
+			fields = append(fields, zap.String("transfer_encoding", f.jsonDecode.TransferEncoding))
+		}
+		if f.jsonDecode.UserAgent != "" {
+			fields = append(fields, zap.String("user_agent", f.jsonDecode.UserAgent))
+		}
+	}
 
 	return fields
 }
@@ -519,6 +569,13 @@ func SetSettlementStatus(ctx context.Context, value string) {
 func SetUsageSummary(ctx context.Context, summary UsageSummary) {
 	if f, ok := FromContext(ctx); ok {
 		f.SetUsageSummary(summary)
+	}
+}
+
+// SetJSONDecodeSummary 在 ctx 存在 Fields 时记录 invalid JSON 脱敏诊断。
+func SetJSONDecodeSummary(ctx context.Context, summary JSONDecodeSummary) {
+	if f, ok := FromContext(ctx); ok {
+		f.SetJSONDecodeSummary(summary)
 	}
 }
 

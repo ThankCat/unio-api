@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/ingresslog"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
@@ -45,6 +46,7 @@ func (h *responsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(sessionhint.WithClientSessionID(r.Context(), r.Header.Get("session-id")))
 
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		ingresslog.RecordInvalidJSON(r, err)
 		writeResponsesDecodeError(w, err)
 		return
 	}

@@ -81,6 +81,57 @@ func TestDecodeJSONReturnsErrorForInvalidJSON(t *testing.T) {
 	assertDecodeJSONFailure(t, err, failure.CodeHTTPInvalidJSONBody)
 }
 
+func TestDecodeJSONClassifiesInvalidJSONWithoutBodyValues(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantKind   string
+		wantField  string
+		wantOffset bool
+	}{
+		{name: "unexpected eof", body: `{"value":"secret`, wantKind: "unexpected_eof"},
+		{name: "syntax", body: `{"value":invalid}`, wantKind: "syntax", wantOffset: true},
+		{name: "type mismatch", body: `{"value":123}`, wantKind: "type_mismatch", wantField: "value", wantOffset: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(tt.body))
+			rec := httptest.NewRecorder()
+
+			var body decodeJSONTestBody
+			err := DecodeJSON(rec, req, &body)
+			assertDecodeJSONFailure(t, err, failure.CodeHTTPInvalidJSONBody)
+
+			diagnostic, ok := InvalidJSONDiagnosticOf(err)
+			if !ok {
+				t.Fatal("expected invalid JSON diagnostic")
+			}
+			if diagnostic.Kind != tt.wantKind || diagnostic.Field != tt.wantField {
+				t.Fatalf("diagnostic kind=%q field=%q, want kind=%q field=%q", diagnostic.Kind, diagnostic.Field, tt.wantKind, tt.wantField)
+			}
+			if (diagnostic.Offset > 0) != tt.wantOffset {
+				t.Fatalf("diagnostic offset=%d, want positive=%v", diagnostic.Offset, tt.wantOffset)
+			}
+			if diagnostic.BytesRead != int64(len(tt.body)) {
+				t.Fatalf("diagnostic bytes_read=%d, want %d", diagnostic.BytesRead, len(tt.body))
+			}
+			if strings.Contains(diagnostic.Kind, "secret") || strings.Contains(diagnostic.Field, "secret") {
+				t.Fatalf("diagnostic leaked body value: %#v", diagnostic)
+			}
+		})
+	}
+}
+
+func TestInvalidJSONDiagnosticOfRejectsOtherDecodeFailures(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(""))
+	var body decodeJSONTestBody
+	err := DecodeJSON(httptest.NewRecorder(), req, &body)
+	if _, ok := InvalidJSONDiagnosticOf(err); ok {
+		t.Fatal("empty body must not be classified as invalid JSON")
+	}
+}
+
 func TestDecodeJSONReturnsErrorForTrailingJSONToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(`{"value":"hello"} {"value":"second"}`))
 	rec := httptest.NewRecorder()

@@ -3,6 +3,7 @@ package responses
 import (
 	"net/http"
 
+	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/ingresslog"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
 
@@ -28,6 +29,7 @@ func NewResponsesCompactHandler(service ResponsesService) http.Handler {
 func (h *compactHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var req ResponsesRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		ingresslog.RecordInvalidJSON(r, err)
 		writeResponsesDecodeError(w, err)
 		return
 	}
@@ -61,6 +63,7 @@ func NewResponsesInputTokensHandler(service ResponsesService) http.Handler {
 func (h *inputTokensHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var req ResponsesRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		ingresslog.RecordInvalidJSON(r, err)
 		writeResponsesDecodeError(w, err)
 		return
 	}
