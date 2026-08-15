@@ -33,6 +33,18 @@ type routerTestAPIKeyAuthenticator struct {
 	token     string
 }
 
+type routerTestPositiveBalanceChecker struct {
+	positive bool
+	calls    int
+	userIDs  []int64
+}
+
+func (c *routerTestPositiveBalanceChecker) HasPositiveAvailableBalance(_ context.Context, userID int64) (bool, error) {
+	c.calls++
+	c.userIDs = append(c.userIDs, userID)
+	return c.positive, nil
+}
+
 // AuthenticateAPIKey 记录收到的 token，并返回测试预设的认证结果。
 func (a *routerTestAPIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext string) (*auth.APIKeyPrincipal, error) {
 	a.token = plaintext
@@ -396,6 +408,71 @@ func TestRouterResponsesCompactAndInputTokensRegistered(t *testing.T) {
 		if code := decodeRouterError(t, rec); code != "invalid_request" {
 			t.Fatalf("%s: expected invalid_request, got %q", path, code)
 		}
+	}
+}
+
+func TestRouterPositiveBalanceGateCoversOnlyBillableGenerationRoutes(t *testing.T) {
+	authenticator := &routerTestAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 42, KeyPrefix: "unio_sk_test"},
+	}
+	checker := &routerTestPositiveBalanceChecker{}
+	handler := NewRouter(RouterDeps{
+		Logger:              zap.NewNop(),
+		APIKeyAuthenticator: authenticator,
+		PositiveBalance:     checker,
+	})
+
+	tests := []struct {
+		name     string
+		path     string
+		wantType string
+	}{
+		{name: "chat completions", path: "/v1/chat/completions", wantType: "insufficient_quota"},
+		{name: "responses", path: "/v1/responses", wantType: "insufficient_quota"},
+		{name: "responses compact", path: "/v1/responses/compact", wantType: "insufficient_quota"},
+		{name: "anthropic messages", path: "/v1/messages", wantType: "invalid_request_error"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(`{`))
+			req.Header.Set("Authorization", "Bearer unio_sk_test")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusPaymentRequired {
+				t.Fatalf("status=%d, want 402 body=%s", rec.Code, rec.Body.String())
+			}
+			var body struct {
+				Error struct {
+					Type string `json:"type"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error.Type != tt.wantType {
+				t.Fatalf("error type=%q, want %q", body.Error.Type, tt.wantType)
+			}
+		})
+	}
+	if checker.calls != len(tests) {
+		t.Fatalf("balance checker calls=%d, want %d", checker.calls, len(tests))
+	}
+	for _, userID := range checker.userIDs {
+		if userID != 42 {
+			t.Fatalf("balance checker user_id=%d, want 42", userID)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses/input_tokens", strings.NewReader(`{`))
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("input_tokens status=%d, want 400 body=%s", rec.Code, rec.Body.String())
+	}
+	if checker.calls != len(tests) {
+		t.Fatalf("non-billable input_tokens called balance checker; calls=%d", checker.calls)
 	}
 }
 

@@ -136,6 +136,45 @@ func TestUserBalanceLifecycleAndUniqueness(t *testing.T) {
 	}
 }
 
+func TestHasPositiveAvailableUserBalance(t *testing.T) {
+	ctx, _, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	identity := createRequestRecordIdentity(t, ctx, queries)
+	assertPositive := func(want bool) {
+		t.Helper()
+		got, err := queries.HasPositiveAvailableUserBalance(ctx, identity.user.ID)
+		if err != nil {
+			t.Fatalf("check positive available balance: %v", err)
+		}
+		if got != want {
+			t.Fatalf("positive available balance=%v, want %v", got, want)
+		}
+	}
+
+	assertPositive(false)
+	if _, err := queries.CreateUserBalance(ctx, sqlc.CreateUserBalanceParams{
+		UserID: identity.user.ID, Currency: "USD", Balance: numeric(0),
+	}); err != nil {
+		t.Fatalf("create zero USD balance: %v", err)
+	}
+	assertPositive(false)
+
+	if _, err := queries.CreateUserBalance(ctx, sqlc.CreateUserBalanceParams{
+		UserID: identity.user.ID, Currency: "EUR", Balance: numeric(5),
+	}); err != nil {
+		t.Fatalf("create positive EUR balance: %v", err)
+	}
+	assertPositive(true)
+
+	if _, err := queries.ReserveUserBalance(ctx, sqlc.ReserveUserBalanceParams{
+		UserID: identity.user.ID, Currency: "EUR", Amount: numeric(5),
+	}); err != nil {
+		t.Fatalf("reserve all EUR balance: %v", err)
+	}
+	assertPositive(false)
+}
+
 func TestEnsureAddAndSubtractUserBalance(t *testing.T) {
 	ctx, _, queries, cleanup := newModelChannelTestTx(t)
 	defer cleanup()

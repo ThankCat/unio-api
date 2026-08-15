@@ -320,6 +320,23 @@ func (q *Queries) GetUserBalanceForUpdate(ctx context.Context, arg GetUserBalanc
 	return i, err
 }
 
+const hasPositiveAvailableUserBalance = `-- name: HasPositiveAvailableUserBalance :one
+SELECT EXISTS (
+    SELECT 1
+    FROM user_balances
+    WHERE user_id = $1
+      AND balance - reserved_balance > 0
+)::boolean AS has_positive_available_balance
+`
+
+// HasPositiveAvailableUserBalance 判断用户任一币种是否仍有正可用余额，不参与授权金额或冻结计算。
+func (q *Queries) HasPositiveAvailableUserBalance(ctx context.Context, userID int64) (bool, error) {
+	row := q.db.QueryRow(ctx, hasPositiveAvailableUserBalance, userID)
+	var has_positive_available_balance bool
+	err := row.Scan(&has_positive_available_balance)
+	return has_positive_available_balance, err
+}
+
 const releaseUserReservedBalance = `-- name: ReleaseUserReservedBalance :one
 UPDATE user_balances
 SET

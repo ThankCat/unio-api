@@ -33,6 +33,15 @@ WHERE
     user_id = sqlc.arg (user_id)
   AND currency = sqlc.arg (currency);
 
+-- name: HasPositiveAvailableUserBalance :one
+-- HasPositiveAvailableUserBalance 判断用户任一币种是否仍有正可用余额，不参与授权金额或冻结计算。
+SELECT EXISTS (
+    SELECT 1
+    FROM user_balances
+    WHERE user_id = sqlc.arg (user_id)
+      AND balance - reserved_balance > 0
+)::boolean AS has_positive_available_balance;
+
 -- name: GetUserBalanceForUpdate :one
 -- GetUserBalanceForUpdate 锁定用户余额投影用于事务内余额变更。
 SELECT

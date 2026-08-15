@@ -10,6 +10,7 @@ import (
 	gatewayopenai "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	gatewayresponses "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
 	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
@@ -31,12 +32,14 @@ func NewHTTPHandler(
 	loggingStatus *logging.GatewayRuntime,
 ) http.Handler {
 	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
+	balanceEligibilityService := ledger.NewBalanceEligibilityService(queries)
 	modelCatalogService := modelcatalog.NewService(queries)
 
 	deps := gatewayapi.RouterDeps{
 		Logger:              logger,
 		APIKeyAuthenticator: apiKeyAuthenticator,
 		RequestAdmission:    requestAdmission,
+		PositiveBalance:     balanceEligibilityService,
 		Readiness:           readiness,
 		InternalToken:       internalToken,
 		LoggingStatus:       loggingStatus,
@@ -48,6 +51,7 @@ func NewHTTPHandler(
 	}
 
 	if metricsRecorder != nil {
+		deps.PositiveBalanceMetrics = metricsRecorder
 		deps.HTTPMetrics = metricsRecorder
 		deps.MetricsHandler = metricsRecorder.Handler()
 	}

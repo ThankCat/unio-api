@@ -644,7 +644,7 @@ func (m *Metrics) IncChatRequest(stream bool, outcome ChatOutcome) {
 	m.chatRequestsTotal.WithLabelValues(streamLabel(stream), string(outcome)).Inc()
 }
 
-// IncRequestRejected 记录一次未进入持久请求生命周期的资格拒绝。
+// IncRequestRejected 记录一次未进入持久请求生命周期的有界业务拒绝。
 func (m *Metrics) IncRequestRejected(protocol string, reason string) {
 	m.requestRejections.WithLabelValues(protocol, reason).Inc()
 }
