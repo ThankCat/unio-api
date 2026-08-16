@@ -69,6 +69,13 @@ INSERT INTO settlement_recovery_jobs (
     long_context_threshold,
     long_context_input_multiplier,
     long_context_output_multiplier,
+    requested_service_tier,
+    actual_service_tier,
+    settled_service_tier,
+    upstream_service_tier,
+    service_tier_resolution,
+    model_price_service_tier_id,
+    channel_price_service_tier_id,
     estimated_amount,
     authorized_amount,
     max_attempts,
@@ -135,6 +142,13 @@ SELECT
            sqlc.narg(long_context_threshold),
            sqlc.narg(long_context_input_multiplier),
            sqlc.narg(long_context_output_multiplier),
+           sqlc.narg(requested_service_tier),
+           sqlc.narg(actual_service_tier),
+           sqlc.narg(settled_service_tier),
+           sqlc.narg(upstream_service_tier),
+           sqlc.narg(service_tier_resolution),
+           sqlc.narg(model_price_service_tier_id),
+           sqlc.narg(channel_price_service_tier_id),
            sqlc.arg(estimated_amount),
            sqlc.arg(authorized_amount),
            sqlc.arg(max_attempts),
@@ -201,6 +215,13 @@ WHERE settlement_recovery_jobs.user_id = EXCLUDED.user_id
   AND settlement_recovery_jobs.long_context_threshold IS NOT DISTINCT FROM EXCLUDED.long_context_threshold
   AND settlement_recovery_jobs.long_context_input_multiplier IS NOT DISTINCT FROM EXCLUDED.long_context_input_multiplier
   AND settlement_recovery_jobs.long_context_output_multiplier IS NOT DISTINCT FROM EXCLUDED.long_context_output_multiplier
+  AND settlement_recovery_jobs.requested_service_tier IS NOT DISTINCT FROM EXCLUDED.requested_service_tier
+  AND settlement_recovery_jobs.actual_service_tier IS NOT DISTINCT FROM EXCLUDED.actual_service_tier
+  AND settlement_recovery_jobs.settled_service_tier IS NOT DISTINCT FROM EXCLUDED.settled_service_tier
+  AND settlement_recovery_jobs.upstream_service_tier IS NOT DISTINCT FROM EXCLUDED.upstream_service_tier
+  AND settlement_recovery_jobs.service_tier_resolution IS NOT DISTINCT FROM EXCLUDED.service_tier_resolution
+  AND settlement_recovery_jobs.model_price_service_tier_id IS NOT DISTINCT FROM EXCLUDED.model_price_service_tier_id
+  AND settlement_recovery_jobs.channel_price_service_tier_id IS NOT DISTINCT FROM EXCLUDED.channel_price_service_tier_id
   AND settlement_recovery_jobs.estimated_amount = EXCLUDED.estimated_amount
   AND settlement_recovery_jobs.authorized_amount = EXCLUDED.authorized_amount
 RETURNING *;

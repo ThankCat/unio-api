@@ -3,6 +3,8 @@ package responses
 import (
 	"fmt"
 	"strings"
+
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 )
 
 const (
@@ -27,6 +29,12 @@ const (
 func validateResponsesRequest(req ResponsesRequest) *responsesValidationError {
 	if strings.TrimSpace(req.Model) == "" {
 		return &responsesValidationError{param: "model", message: "model is required"}
+	}
+	if _, err := servicetier.NormalizeOpenAIRequest(req.ServiceTier); err != nil {
+		return &responsesValidationError{
+			param:   "service_tier",
+			message: "service_tier must be one of auto, default, fast, or priority",
+		}
 	}
 
 	// background:true 是异步任务模式；Unio 无状态承诺下不支持，明确 400 拒绝（不静默转同步）。

@@ -14,7 +14,9 @@ INSERT INTO price_snapshots (
     reasoning_output_price,
     formula_version,
     price_ratio,
-    long_context_applied
+    long_context_applied,
+    service_tier,
+    model_price_service_tier_id
 )
 VALUES (
     sqlc.arg(request_record_id),
@@ -30,6 +32,8 @@ VALUES (
     sqlc.arg(reasoning_output_price),
     sqlc.arg(formula_version),
     sqlc.arg(price_ratio),
-    sqlc.arg(long_context_applied)
+    sqlc.arg(long_context_applied),
+    sqlc.arg(service_tier),
+    sqlc.narg(model_price_service_tier_id)
 )
 RETURNING *;

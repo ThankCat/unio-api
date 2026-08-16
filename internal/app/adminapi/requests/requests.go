@@ -21,29 +21,34 @@ type RequestQueryService interface {
 
 // requestSummaryDTO 是请求列表项响应体；不含 internal_error_detail。
 type requestSummaryDTO struct {
-	ID                  int64   `json:"id"`
-	RequestID           string  `json:"request_id"`
-	UserID              int64   `json:"user_id"`
-	APIKeyID            int64   `json:"api_key_id"`
-	RequestedModelID    string  `json:"requested_model_id"`
-	IngressProtocol     string  `json:"ingress_protocol"`
-	Endpoint            string  `json:"endpoint"`
-	ResponseModelID     *string `json:"response_model_id"`
-	ResponseProtocol    *string `json:"response_protocol"`
-	ResponseID          *string `json:"response_id"`
-	Stream              bool    `json:"stream"`
-	Status              string  `json:"status"`
-	FinalProviderID     *int64  `json:"final_provider_id"`
-	FinalChannelID      *int64  `json:"final_channel_id"`
-	ErrorCode           *string `json:"error_code"`
-	ErrorMessage        *string `json:"error_message"`
-	DeliveryStatus      string  `json:"delivery_status"`
-	GatewayFirstTokenAt *string `json:"gateway_first_token_at"`
-	ResponseCompletedAt *string `json:"response_completed_at"`
-	StartedAt           string  `json:"started_at"`
-	CompletedAt         *string `json:"completed_at"`
-	CreatedAt           string  `json:"created_at"`
-	UpdatedAt           string  `json:"updated_at"`
+	ID                    int64   `json:"id"`
+	RequestID             string  `json:"request_id"`
+	UserID                int64   `json:"user_id"`
+	APIKeyID              int64   `json:"api_key_id"`
+	RequestedModelID      string  `json:"requested_model_id"`
+	IngressProtocol       string  `json:"ingress_protocol"`
+	Endpoint              string  `json:"endpoint"`
+	ResponseModelID       *string `json:"response_model_id"`
+	ResponseProtocol      *string `json:"response_protocol"`
+	ResponseID            *string `json:"response_id"`
+	Stream                bool    `json:"stream"`
+	Status                string  `json:"status"`
+	FinalProviderID       *int64  `json:"final_provider_id"`
+	FinalChannelID        *int64  `json:"final_channel_id"`
+	ErrorCode             *string `json:"error_code"`
+	ErrorMessage          *string `json:"error_message"`
+	DeliveryStatus        string  `json:"delivery_status"`
+	GatewayFirstTokenAt   *string `json:"gateway_first_token_at"`
+	ResponseCompletedAt   *string `json:"response_completed_at"`
+	StartedAt             string  `json:"started_at"`
+	CompletedAt           *string `json:"completed_at"`
+	CreatedAt             string  `json:"created_at"`
+	UpdatedAt             string  `json:"updated_at"`
+	RequestedServiceTier  *string `json:"requested_service_tier"`
+	ActualServiceTier     *string `json:"actual_service_tier"`
+	SettledServiceTier    *string `json:"settled_service_tier"`
+	ServiceTierResolution *string `json:"service_tier_resolution"`
+	ServiceTierDowngraded bool    `json:"service_tier_downgraded"`
 }
 
 // requestListItemDTO 是请求列表项（富化）：请求事实 + 用量/成本/扣费 + 线路/渠道链 + 时延。
@@ -137,8 +142,12 @@ type costSnapshotDTO struct {
 	ReasoningOutputCostAmount    *string `json:"reasoning_output_cost_amount"`
 	TotalCostAmount              *string `json:"total_cost_amount"`
 	// DEC-027 成本来源倍率（倍率路径有值，覆盖/旧数据为 null）：价格倍率 + 充值倍率，供费用处展示新旧倍率。
-	ChannelCostMultiplier *string `json:"channel_cost_multiplier"`
-	RechargeFactor        *string `json:"recharge_factor"`
+	ChannelCostMultiplier     *string `json:"channel_cost_multiplier"`
+	RechargeFactor            *string `json:"recharge_factor"`
+	ServiceTier               *string `json:"service_tier"`
+	ModelPriceServiceTierID   *int64  `json:"model_price_service_tier_id"`
+	ChannelPriceServiceTierID *int64  `json:"channel_price_service_tier_id"`
+	TierCostSource            *string `json:"tier_cost_source"`
 }
 
 // priceSnapshotDTO 是客户售价快照（单价 per_1m_tokens，USD 字符串）。
@@ -150,6 +159,8 @@ type priceSnapshotDTO struct {
 	CacheWrite30mInputPrice *string `json:"cache_write_30m_input_price"`
 	OutputPrice             *string `json:"output_price"`
 	ReasoningOutputPrice    *string `json:"reasoning_output_price"`
+	ServiceTier             *string `json:"service_tier"`
+	ModelPriceServiceTierID *int64  `json:"model_price_service_tier_id"`
 }
 
 // attemptDTO 是请求详情中的一次上游尝试；internal_error_detail 仅在 ?include_internal=true 时出现。
@@ -183,6 +194,8 @@ type attemptDTO struct {
 	ErrorScoringSample    bool    `json:"error_scoring_sample"`
 	ErrorScoringFailure   bool    `json:"error_scoring_failure"`
 	FinalUsageReceived    bool    `json:"final_usage_received"`
+	RequestedServiceTier  *string `json:"requested_service_tier"`
+	UpstreamServiceTier   *string `json:"upstream_service_tier"`
 	StartedAt             string  `json:"started_at"`
 	CompletedAt           *string `json:"completed_at"`
 	CreatedAt             string  `json:"created_at"`
@@ -335,29 +348,34 @@ func (h *requestsHandler) get(w http.ResponseWriter, r *http.Request) {
 
 func toRequestSummaryDTO(s query.RequestSummary) requestSummaryDTO {
 	return requestSummaryDTO{
-		ID:                  s.ID,
-		RequestID:           s.RequestID,
-		UserID:              s.UserID,
-		APIKeyID:            s.APIKeyID,
-		RequestedModelID:    s.RequestedModelID,
-		IngressProtocol:     s.IngressProtocol,
-		Endpoint:            s.Endpoint,
-		ResponseModelID:     s.ResponseModelID,
-		ResponseProtocol:    s.ResponseProtocol,
-		ResponseID:          s.ResponseID,
-		Stream:              s.Stream,
-		Status:              s.Status,
-		FinalProviderID:     s.FinalProviderID,
-		FinalChannelID:      s.FinalChannelID,
-		ErrorCode:           s.ErrorCode,
-		ErrorMessage:        s.ErrorMessage,
-		DeliveryStatus:      s.DeliveryStatus,
-		GatewayFirstTokenAt: adminhttp.RFC3339Ptr(s.GatewayFirstTokenAt),
-		ResponseCompletedAt: adminhttp.RFC3339Ptr(s.ResponseCompletedAt),
-		StartedAt:           adminhttp.RFC3339(s.StartedAt),
-		CompletedAt:         adminhttp.RFC3339Ptr(s.CompletedAt),
-		CreatedAt:           adminhttp.RFC3339(s.CreatedAt),
-		UpdatedAt:           adminhttp.RFC3339(s.UpdatedAt),
+		ID:                    s.ID,
+		RequestID:             s.RequestID,
+		UserID:                s.UserID,
+		APIKeyID:              s.APIKeyID,
+		RequestedModelID:      s.RequestedModelID,
+		IngressProtocol:       s.IngressProtocol,
+		Endpoint:              s.Endpoint,
+		ResponseModelID:       s.ResponseModelID,
+		ResponseProtocol:      s.ResponseProtocol,
+		ResponseID:            s.ResponseID,
+		Stream:                s.Stream,
+		Status:                s.Status,
+		FinalProviderID:       s.FinalProviderID,
+		FinalChannelID:        s.FinalChannelID,
+		ErrorCode:             s.ErrorCode,
+		ErrorMessage:          s.ErrorMessage,
+		DeliveryStatus:        s.DeliveryStatus,
+		GatewayFirstTokenAt:   adminhttp.RFC3339Ptr(s.GatewayFirstTokenAt),
+		ResponseCompletedAt:   adminhttp.RFC3339Ptr(s.ResponseCompletedAt),
+		StartedAt:             adminhttp.RFC3339(s.StartedAt),
+		CompletedAt:           adminhttp.RFC3339Ptr(s.CompletedAt),
+		CreatedAt:             adminhttp.RFC3339(s.CreatedAt),
+		UpdatedAt:             adminhttp.RFC3339(s.UpdatedAt),
+		RequestedServiceTier:  s.RequestedServiceTier,
+		ActualServiceTier:     s.ActualServiceTier,
+		SettledServiceTier:    s.SettledServiceTier,
+		ServiceTierResolution: s.ServiceTierResolution,
+		ServiceTierDowngraded: s.ServiceTierDowngraded,
 	}
 }
 
@@ -453,6 +471,10 @@ func toCostSnapshotDTO(c query.CostSnapshotView) costSnapshotDTO {
 		TotalCostAmount:              c.TotalCostAmount,
 		ChannelCostMultiplier:        c.ChannelCostMultiplier,
 		RechargeFactor:               c.RechargeFactor,
+		ServiceTier:                  c.ServiceTier,
+		ModelPriceServiceTierID:      c.ModelPriceServiceTierID,
+		ChannelPriceServiceTierID:    c.ChannelPriceServiceTierID,
+		TierCostSource:               c.TierCostSource,
 	}
 }
 
@@ -465,6 +487,8 @@ func toPriceSnapshotDTO(p query.PriceSnapshotView) priceSnapshotDTO {
 		CacheWrite30mInputPrice: p.CacheWrite30mInputPrice,
 		OutputPrice:             p.OutputPrice,
 		ReasoningOutputPrice:    p.ReasoningOutputPrice,
+		ServiceTier:             p.ServiceTier,
+		ModelPriceServiceTierID: p.ModelPriceServiceTierID,
 	}
 }
 
@@ -540,6 +564,8 @@ func toAttemptDTO(a query.Attempt) attemptDTO {
 		ErrorScoringSample:    a.ErrorScoringSample,
 		ErrorScoringFailure:   a.ErrorScoringFailure,
 		FinalUsageReceived:    a.FinalUsageReceived,
+		RequestedServiceTier:  a.RequestedServiceTier,
+		UpstreamServiceTier:   a.UpstreamServiceTier,
 		StartedAt:             adminhttp.RFC3339(a.StartedAt),
 		CompletedAt:           adminhttp.RFC3339Ptr(a.CompletedAt),
 		CreatedAt:             adminhttp.RFC3339(a.CreatedAt),

@@ -26,7 +26,9 @@ INSERT INTO price_snapshots (
     reasoning_output_price,
     formula_version,
     price_ratio,
-    long_context_applied
+    long_context_applied,
+    service_tier,
+    model_price_service_tier_id
 )
 VALUES (
     $1,
@@ -42,9 +44,11 @@ VALUES (
     $11,
     $12,
     $13,
-    $14
+    $14,
+    $15,
+    $16
 )
-RETURNING id, request_record_id, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, created_at, price_ratio, cache_write_30m_input_price, long_context_applied
+RETURNING id, request_record_id, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, created_at, price_ratio, cache_write_30m_input_price, long_context_applied, service_tier, model_price_service_tier_id
 `
 
 type CreatePriceSnapshotParams struct {
@@ -62,6 +66,8 @@ type CreatePriceSnapshotParams struct {
 	FormulaVersion          string
 	PriceRatio              pgtype.Numeric
 	LongContextApplied      bool
+	ServiceTier             pgtype.Text
+	ModelPriceServiceTierID pgtype.Int8
 }
 
 // CreatePriceSnapshot 创建一次请求结算使用的客户售价快照。
@@ -81,6 +87,8 @@ func (q *Queries) CreatePriceSnapshot(ctx context.Context, arg CreatePriceSnapsh
 		arg.FormulaVersion,
 		arg.PriceRatio,
 		arg.LongContextApplied,
+		arg.ServiceTier,
+		arg.ModelPriceServiceTierID,
 	)
 	var i PriceSnapshot
 	err := row.Scan(
@@ -100,12 +108,14 @@ func (q *Queries) CreatePriceSnapshot(ctx context.Context, arg CreatePriceSnapsh
 		&i.PriceRatio,
 		&i.CacheWrite30mInputPrice,
 		&i.LongContextApplied,
+		&i.ServiceTier,
+		&i.ModelPriceServiceTierID,
 	)
 	return i, err
 }
 
 const getPriceSnapshotByRequest = `-- name: GetPriceSnapshotByRequest :one
-SELECT id, request_record_id, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, created_at, price_ratio, cache_write_30m_input_price, long_context_applied
+SELECT id, request_record_id, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, created_at, price_ratio, cache_write_30m_input_price, long_context_applied, service_tier, model_price_service_tier_id
 FROM price_snapshots
 WHERE request_record_id = $1
 `
@@ -131,6 +141,8 @@ func (q *Queries) GetPriceSnapshotByRequest(ctx context.Context, requestRecordID
 		&i.PriceRatio,
 		&i.CacheWrite30mInputPrice,
 		&i.LongContextApplied,
+		&i.ServiceTier,
+		&i.ModelPriceServiceTierID,
 	)
 	return i, err
 }

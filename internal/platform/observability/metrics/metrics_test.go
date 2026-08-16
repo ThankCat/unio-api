@@ -37,6 +37,7 @@ func TestMetricsExposesRecordedSeries(t *testing.T) {
 	m.ObserveUpstream("9123", "123", true, "", 800*time.Millisecond)
 	m.ObserveUpstream("9123", "123", false, "rate_limit", 50*time.Millisecond)
 	m.IncSettlement(SettlementOutcomeSuccess)
+	m.IncServiceTier("fast", "standard", "standard", "upstream_response")
 	m.IncStreamEvent(StreamEventCompleted)
 	m.IncRateLimitDecision(RateLimitDecisionLimited)
 	m.ObserveRoutingBalance("balanced", "planned", 3, 2, 0.25)
@@ -57,6 +58,7 @@ func TestMetricsExposesRecordedSeries(t *testing.T) {
 		`unio_gateway_upstream_requests_total{channel="123",error_category="none",outcome="success",provider="9123"} 1`,
 		`unio_gateway_upstream_requests_total{channel="123",error_category="rate_limit",outcome="error",provider="9123"} 1`,
 		`unio_gateway_settlement_total{outcome="success"} 1`,
+		`unio_gateway_service_tier_total{actual="standard",requested="fast",resolution="upstream_response",settled="standard"} 1`,
 		`unio_gateway_stream_events_total{event="completed"} 1`,
 		`unio_ratelimit_decisions_total{decision="limited"} 1`,
 		`unio_gateway_routing_balance_total{mode="balanced",result="planned"} 1`,

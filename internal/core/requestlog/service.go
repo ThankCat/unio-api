@@ -3,6 +3,8 @@ package requestlog
 import (
 	"context"
 	"time"
+
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 )
 
 // RequestStatus 表示用户可见请求的生命周期状态。
@@ -80,46 +82,54 @@ type CreateRequestParams struct {
 	ReasoningEffort       *string
 	ReasoningBudgetTokens *int32
 	ClientIP              *string
+	RequestedServiceTier  servicetier.Tier
 }
 
 // RequestRecord 表示一次用户可见请求记录。
 type RequestRecord struct {
-	ID                  int64
-	RequestID           string
-	UserID              int64
-	APIKeyID            int64
-	RequestedModelID    string
-	IngressProtocol     Protocol
-	Endpoint            Endpoint
-	ResponseModelID     *string
-	ResponseProtocol    *string
-	ResponseID          *string
-	Stream              bool
-	Status              RequestStatus
-	FinalProviderID     *int64
-	FinalChannelID      *int64
-	ErrorCode           *string
-	ErrorMessage        *string
-	InternalErrorDetail *string
-	DeliveryStatus      DeliveryStatus
-	GatewayFirstTokenAt *time.Time
-	ResponseCompletedAt *time.Time
-	StartedAt           time.Time
-	CompletedAt         *time.Time
+	ID                    int64
+	RequestID             string
+	UserID                int64
+	APIKeyID              int64
+	RequestedModelID      string
+	IngressProtocol       Protocol
+	Endpoint              Endpoint
+	ResponseModelID       *string
+	ResponseProtocol      *string
+	ResponseID            *string
+	Stream                bool
+	Status                RequestStatus
+	FinalProviderID       *int64
+	FinalChannelID        *int64
+	ErrorCode             *string
+	ErrorMessage          *string
+	InternalErrorDetail   *string
+	DeliveryStatus        DeliveryStatus
+	GatewayFirstTokenAt   *time.Time
+	ResponseCompletedAt   *time.Time
+	StartedAt             time.Time
+	CompletedAt           *time.Time
+	RequestedServiceTier  servicetier.Tier
+	ActualServiceTier     servicetier.Tier
+	SettledServiceTier    servicetier.Tier
+	ServiceTierResolution string
 }
 
 // MarkRequestSucceededParams 表示标记请求成功所需的最终事实。
 // response_completed_at 不在此处写入：它归属交付状态机（delivery_status='completed' 时落地），
 // 结算阶段交付尚未完成，强写会违反 ck_request_records_delivery_completed_at。
 type MarkRequestSucceededParams struct {
-	ID                  int64
-	ResponseModelID     string
-	ResponseProtocol    Protocol
-	ResponseID          string
-	FinalProviderID     int64
-	FinalChannelID      int64
-	GatewayFirstTokenAt *time.Time
-	CompletedAt         time.Time
+	ID                    int64
+	ResponseModelID       string
+	ResponseProtocol      Protocol
+	ResponseID            string
+	FinalProviderID       int64
+	FinalChannelID        int64
+	GatewayFirstTokenAt   *time.Time
+	CompletedAt           time.Time
+	ActualServiceTier     servicetier.Tier
+	SettledServiceTier    servicetier.Tier
+	ServiceTierResolution servicetier.Resolution
 }
 
 // MarkSettledRequestCanceledParams 表示已结算但客户取消的请求终态事实。
@@ -178,6 +188,7 @@ type CreateAttemptParams struct {
 	RoutingCandidateIndex  *int
 	UpstreamEndpoint       UpstreamEndpoint
 	StartedAt              time.Time
+	RequestedServiceTier   servicetier.Tier
 }
 
 // AttemptRecord 表示一次上游 channel 尝试记录。
@@ -216,6 +227,8 @@ type AttemptRecord struct {
 	UsageMappingVersion        *string
 	StartedAt                  time.Time
 	CompletedAt                *time.Time
+	RequestedServiceTier       servicetier.Tier
+	UpstreamServiceTier        *string
 }
 
 // MarkAttemptSucceededParams 表示标记上游尝试成功所需的最终事实。
@@ -233,6 +246,7 @@ type MarkAttemptSucceededParams struct {
 	FinalUsageReceived  bool
 	UsageMappingVersion string
 	CompletedAt         time.Time
+	UpstreamServiceTier *string
 }
 
 // MarkSettledAttemptCanceledParams 表示已结算但客户取消的 attempt 终态事实。

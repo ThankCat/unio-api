@@ -24,7 +24,7 @@ import (
 func encodeUpstreamResponsesBody(req gatewayapi.ResponsesRequest, upstreamModel string, stream bool) (json.RawMessage, error) {
 	base := req.RawBody()
 	if len(base) > 0 {
-		body, err := rewriteUpstreamResponsesRequest(base, upstreamModel, stream)
+		body, err := rewriteUpstreamResponsesRequest(base, upstreamModel, stream, req.ServiceTier)
 		if err != nil {
 			return nil, failure.Wrap(
 				failure.CodeAdapterEncodeRequestFailed,
@@ -73,6 +73,13 @@ func encodeUpstreamResponsesBody(req gatewayapi.ResponsesRequest, upstreamModel 
 		return nil, failure.Wrap(failure.CodeAdapterEncodeRequestFailed, err, failure.WithMessage("encode upstream stream flag"))
 	}
 	obj["stream"] = streamBytes
+	if req.ServiceTier != nil {
+		serviceTierBytes, marshalErr := json.Marshal(*req.ServiceTier)
+		if marshalErr != nil {
+			return nil, failure.Wrap(failure.CodeAdapterEncodeRequestFailed, marshalErr, failure.WithMessage("encode upstream service tier"))
+		}
+		obj["service_tier"] = serviceTierBytes
+	}
 	body, err := json.Marshal(obj)
 	if err != nil {
 		return nil, failure.Wrap(
@@ -90,7 +97,7 @@ type jsonReplacement struct {
 	value []byte
 }
 
-func rewriteUpstreamResponsesRequest(base json.RawMessage, upstreamModel string, stream bool) (json.RawMessage, error) {
+func rewriteUpstreamResponsesRequest(base json.RawMessage, upstreamModel string, stream bool, serviceTier *string) (json.RawMessage, error) {
 	modelBytes, err := json.Marshal(upstreamModel)
 	if err != nil {
 		return nil, err
@@ -99,11 +106,18 @@ func rewriteUpstreamResponsesRequest(base json.RawMessage, upstreamModel string,
 	if stream {
 		streamBytes = []byte("true")
 	}
+	var serviceTierBytes []byte
+	if serviceTier != nil {
+		serviceTierBytes, err = json.Marshal(*serviceTier)
+		if err != nil {
+			return nil, err
+		}
+	}
 
-	var modelReplacement, streamReplacement *jsonReplacement
+	var modelReplacement, streamReplacement, serviceTierReplacement *jsonReplacement
 	err = jsonparser.ObjectEach(base, func(key, value []byte, valueType jsonparser.ValueType, end int) error {
 		name := string(key)
-		if name != "model" && name != "stream" {
+		if name != "model" && name != "stream" && name != "service_tier" {
 			return nil
 		}
 		start := end - len(value)
@@ -114,9 +128,12 @@ func rewriteUpstreamResponsesRequest(base json.RawMessage, upstreamModel string,
 		if name == "model" {
 			replacement.value = modelBytes
 			modelReplacement = replacement
-		} else {
+		} else if name == "stream" {
 			replacement.value = streamBytes
 			streamReplacement = replacement
+		} else if serviceTier != nil {
+			replacement.value = serviceTierBytes
+			serviceTierReplacement = replacement
 		}
 		return nil
 	})
@@ -131,7 +148,10 @@ func rewriteUpstreamResponsesRequest(base json.RawMessage, upstreamModel string,
 	if streamReplacement != nil {
 		replacements = append(replacements, *streamReplacement)
 	}
-	if modelReplacement == nil || streamReplacement == nil {
+	if serviceTierReplacement != nil {
+		replacements = append(replacements, *serviceTierReplacement)
+	}
+	if modelReplacement == nil || streamReplacement == nil || (serviceTier != nil && serviceTierReplacement == nil) {
 		closeOffset := len(bytes.TrimRight(base, " \t\r\n")) - 1
 		if closeOffset < 0 || base[closeOffset] != '}' {
 			return nil, jsonparser.MalformedObjectError
@@ -142,16 +162,23 @@ func rewriteUpstreamResponsesRequest(base json.RawMessage, upstreamModel string,
 			prefix = nil
 		}
 		insert := append([]byte(nil), prefix...)
-		if modelReplacement == nil {
-			insert = append(insert, `"model":`...)
-			insert = append(insert, modelBytes...)
-		}
-		if streamReplacement == nil {
-			if modelReplacement == nil {
+		appendField := func(name string, value []byte) {
+			if len(insert) > len(prefix) {
 				insert = append(insert, ',')
 			}
-			insert = append(insert, `"stream":`...)
-			insert = append(insert, streamBytes...)
+			insert = append(insert, '"')
+			insert = append(insert, name...)
+			insert = append(insert, '"', ':')
+			insert = append(insert, value...)
+		}
+		if modelReplacement == nil {
+			appendField("model", modelBytes)
+		}
+		if streamReplacement == nil {
+			appendField("stream", streamBytes)
+		}
+		if serviceTier != nil && serviceTierReplacement == nil {
+			appendField("service_tier", serviceTierBytes)
 		}
 		replacements = append(replacements, jsonReplacement{start: closeOffset, end: closeOffset, value: insert})
 	}

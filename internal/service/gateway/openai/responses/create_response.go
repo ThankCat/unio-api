@@ -11,6 +11,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
@@ -25,6 +26,11 @@ import (
 //
 // 两条路径产出统一 adapter.ResponseFacts，资金关键循环、attempt 审计与终态写入由共享 AttemptRunner 承担。
 func (s *ResponsesService) CreateResponse(ctx context.Context, req gatewayapi.ResponsesRequest) (*lifecycle.NonStreamResult[*gatewayapi.ResponsesResponse], error) {
+	tierRequest, err := servicetier.NormalizeOpenAIRequest(req.ServiceTier)
+	if err != nil {
+		return nil, err
+	}
+	req.ServiceTier = &tierRequest.UpstreamRaw
 	result, delivery, err := s.executeResponse(ctx, req, true)
 	if err != nil {
 		return nil, err
@@ -188,7 +194,11 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		return nil, err
 	}
 
-	requestRecord, err := s.lifecycle.CreateRequest(ctx, principal, req.Model, false, lifecycle.NormalizeOpenAIEffort(effort, req.Model))
+	tierRequest, err := servicetier.NormalizeOpenAIRequest(req.ServiceTier)
+	if err != nil {
+		return nil, err
+	}
+	requestRecord, err := s.lifecycle.CreateRequestWithServiceTier(ctx, principal, req.Model, false, lifecycle.NormalizeOpenAIEffort(effort, req.Model), tierRequest.Tier)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +259,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	authorization, err := s.lifecycle.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
 		Principal:                principal,
-		CandidatePrices:          candidatePlan.CandidateSalePrices(),
+		CandidatePrices:          candidatePlan.CandidateSalePricesForTier(requestRecord.RequestedServiceTier),
 		LongContextPolicy:        candidatePlan.LongContextPolicy(),
 		InputTokens:              candidatePlan.ConservativeInputTokens,
 		MaxCompletionTokens:      estimateMaxCompletionTokens(req),

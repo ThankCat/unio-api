@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
@@ -341,6 +342,7 @@ func (l *RequestLifecycle) LogSettlementResult(
 	err error,
 ) {
 	partial := facts.UsageSource.IsPartialEstimate()
+	tierFacts := resolveServiceTierObservation(request, candidate, facts)
 	fields := l.completeAttemptLogContext(ctx, request, attempt, candidate, request.Stream)
 	fields = append(fields,
 		zap.Int64("reservation_id", authorization.ReservationID),
@@ -348,6 +350,17 @@ func (l *RequestLifecycle) LogSettlementResult(
 		zap.String("authorized_amount", numericLogString(authorization.AuthorizedAmount)),
 		zap.String("finish_class", string(facts.Finish.Class)),
 	)
+	if tierFacts.present {
+		fields = append(fields,
+			zap.String("requested_service_tier", string(tierFacts.requested)),
+			zap.String("actual_service_tier", string(tierFacts.actual)),
+			zap.String("settled_service_tier", string(tierFacts.settled)),
+			zap.String("service_tier_resolution", string(tierFacts.resolution)),
+			zap.String("upstream_service_tier", tierFacts.upstreamRaw),
+			zap.Bool("service_tier_downgraded", tierFacts.downgraded),
+		)
+		l.recordServiceTierMetric(tierFacts)
+	}
 	fields = append(fields, usageLogFields(facts.Usage, facts.UsageSource)...)
 	if err != nil {
 		recoveryScheduled := IsChatSettlementRecoveryScheduled(err)
@@ -383,6 +396,48 @@ func (l *RequestLifecycle) LogSettlementResult(
 	}
 	fields = append(fields, zap.String("mode", mode))
 	logging.Debug(l.logger, "billing", "settlement", "billing settlement completed", nonEmptyLogFields(fields)...)
+}
+
+type serviceTierObservation struct {
+	present     bool
+	requested   servicetier.Tier
+	actual      servicetier.Tier
+	settled     servicetier.Tier
+	resolution  servicetier.Resolution
+	upstreamRaw string
+	downgraded  bool
+}
+
+// resolveServiceTierObservation reuses settlement's pinned-price selection so logs and metrics
+// report the tier actually written to the request and billing snapshots, not only the upstream value.
+func resolveServiceTierObservation(
+	request requestlog.RequestRecord,
+	candidate routing.ChatRouteCandidate,
+	facts adapter.ResponseFacts,
+) serviceTierObservation {
+	selection := resolveSettlementTierSelection(ChatSettlementParams{
+		RequestRecord:                 request,
+		Facts:                         facts,
+		ChannelPriceID:                candidate.ChannelPriceID,
+		CostBaseModelPriceID:          candidate.CostBaseModelPriceID,
+		ChannelCostMultiplierID:       candidate.ChannelCostMultiplierID,
+		FastModelPriceServiceTierID:   candidate.FastModelPriceServiceTierID,
+		FastChannelPriceServiceTierID: candidate.FastChannelPriceServiceTierID,
+	})
+	observation := serviceTierObservation{
+		present:     selection.requested != "" || selection.settled != "",
+		requested:   selection.requested,
+		actual:      selection.actual,
+		settled:     selection.settled,
+		resolution:  selection.resolution,
+		upstreamRaw: selection.upstreamRaw,
+	}
+	if !observation.present {
+		return observation
+	}
+	observation.downgraded = observation.requested == servicetier.TierFast &&
+		observation.actual == servicetier.TierStandard
+	return observation
 }
 
 func (l *RequestLifecycle) safeErrorLogFields(err error, fallbackCode string, stream bool, timing AttemptTimingFacts) []zap.Field {

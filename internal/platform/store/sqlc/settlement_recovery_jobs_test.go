@@ -19,7 +19,7 @@ type settlementRecoveryFixture struct {
 	request      sqlc.RequestRecord
 	attempt      sqlc.RequestAttempt
 	reservation  sqlc.LedgerReservation
-	channelPrice sqlc.ChannelPrice
+	channelPrice sqlc.CreateChannelPriceRow
 	modelID      int64
 	providerID   int64
 	channelID    int64

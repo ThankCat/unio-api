@@ -16,6 +16,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
@@ -119,6 +120,11 @@ type ChatSettlementParams struct {
 	// SalePrice 是客户最终售价快照 = 模型基准价 × 线路倍率（DEC-026），路由时算好并透传到结算；
 	// 同一请求所有候选共享、不随命中哪条渠道变。此处为短上下文牌价；若 LongContextPolicy 触发则结算前再缩放。
 	SalePrice billing.CustomerPriceSnapshot
+	// FastModelPriceServiceTierID/FastSalePrice 是请求前从同一模型价格窗口锁定的 Fast 售价。
+	// FastChannelPriceServiceTierID 仅用于绝对成本覆盖；倍率路径复用 Fast 模型价格子记录和现有倍率 pin。
+	FastModelPriceServiceTierID   int64
+	FastChannelPriceServiceTierID int64
+	FastSalePrice                 billing.CustomerPriceSnapshot
 	// PriceRatio 是算 SalePrice 用的线路倍率（routes.price_ratio），随 SalePrice 一起快照进 price_snapshots，
 	// 供请求详情/列表恒显示结算当时的倍率与倒推基准价（不随后续改倍率漂移）。
 	PriceRatio pgtype.Numeric
@@ -127,12 +133,70 @@ type ChatSettlementParams struct {
 	Facts             adapter.ResponseFacts
 }
 
+type settlementTierSelection struct {
+	requested                 servicetier.Tier
+	actual                    servicetier.Tier
+	settled                   servicetier.Tier
+	billingTier               servicetier.Tier
+	resolution                servicetier.Resolution
+	upstreamRaw               string
+	salePrice                 billing.CustomerPriceSnapshot
+	modelPriceServiceTierID   int64
+	channelPriceServiceTierID int64
+}
+
+func resolveSettlementTierSelection(params ChatSettlementParams) settlementTierSelection {
+	response := params.Facts.ServiceTier
+	selection := settlementTierSelection{
+		requested:   params.RequestRecord.RequestedServiceTier,
+		actual:      response.Actual,
+		settled:     response.Settled,
+		billingTier: servicetier.TierStandard,
+		resolution:  response.Resolution,
+		upstreamRaw: response.UpstreamRaw,
+		salePrice:   params.SalePrice,
+	}
+
+	// 非 OpenAI 等尚未接入服务档位的协议保持空审计字段，但计费仍走原 Standard 路径。
+	if selection.requested == "" && response.Settled == "" {
+		selection.settled = ""
+		selection.resolution = ""
+		return selection
+	}
+
+	if response.Actual != servicetier.TierFast {
+		selection.settled = servicetier.TierStandard
+		return selection
+	}
+
+	fastCostConfigured := params.ChannelPriceID > 0 && params.FastChannelPriceServiceTierID > 0
+	if params.ChannelPriceID == 0 {
+		fastCostConfigured = params.CostBaseModelPriceID > 0 && params.ChannelCostMultiplierID > 0
+	}
+	if params.FastModelPriceServiceTierID <= 0 || !fastCostConfigured {
+		selection.settled = servicetier.TierStandard
+		selection.resolution = servicetier.ResolutionFastPriceMissing
+		return selection
+	}
+
+	selection.settled = servicetier.TierFast
+	selection.billingTier = servicetier.TierFast
+	selection.salePrice = params.FastSalePrice
+	selection.modelPriceServiceTierID = params.FastModelPriceServiceTierID
+	if params.ChannelPriceID > 0 {
+		selection.channelPriceServiceTierID = params.FastChannelPriceServiceTierID
+	}
+	return selection
+}
+
 // settlementCostPins 是结算成本来源 pin（DEC-031）：路由/授权锁定的行 id，透传到结算/恢复。
 type settlementCostPins struct {
-	ChannelPriceID          int64 // 覆盖路径 >0
-	CostBaseModelPriceID    int64 // 倍率路径 >0（成本基数 = model_prices.id，DEC-031）
-	ChannelCostMultiplierID int64 // 倍率路径 >0
-	ChannelRechargeFactorID int64 // 倍率路径且已配 >0（未配按 1.0）
+	ChannelPriceID            int64 // 覆盖路径 >0
+	ChannelPriceServiceTierID int64 // Fast 覆盖路径 >0
+	CostBaseModelPriceID      int64 // 倍率路径 >0（成本基数 = model_prices.id，DEC-031）
+	ModelPriceServiceTierID   int64 // Fast 倍率路径 >0
+	ChannelCostMultiplierID   int64 // 倍率路径 >0
+	ChannelRechargeFactorID   int64 // 倍率路径且已配 >0（未配按 1.0）
 }
 
 // resolvedSettlementCost 是结算解析出的真实成本快照 + 来源事实（供写 cost_snapshots / recovery job）。
@@ -140,12 +204,15 @@ type resolvedSettlementCost struct {
 	// snapshot 是真实成本单价快照：必填分项已归一；可选分项可为 NULL（计费时回退基价）。
 	snapshot billing.ProviderCostSnapshot
 	// 覆盖路径：channelPriceID>0，其余为 0 / 无效。倍率路径：三个来源 id + 两个标量置位。
-	channelPriceID          int64
-	costBaseModelPriceID    int64
-	channelCostMultiplierID int64
-	costMultiplier          pgtype.Numeric
-	channelRechargeFactorID int64
-	rechargeFactor          pgtype.Numeric
+	channelPriceID            int64
+	modelPriceServiceTierID   int64
+	channelPriceServiceTierID int64
+	costBaseModelPriceID      int64
+	channelCostMultiplierID   int64
+	costMultiplier            pgtype.Numeric
+	channelRechargeFactorID   int64
+	rechargeFactor            pgtype.Numeric
+	tierCostSource            string
 }
 
 // resolveSettlementCost 解析 settlement 计费应使用的真实成本（DEC-027 倍率 + DEC-031 单基数），优先级：
@@ -160,8 +227,13 @@ func resolveSettlementCost(
 	channelID int64,
 	modelID int64,
 	pins settlementCostPins,
+	tier servicetier.Tier,
 	atTime time.Time,
 ) (resolvedSettlementCost, error) {
+	if tier == servicetier.TierFast {
+		return resolveFastSettlementCost(ctx, queries, channelID, modelID, pins)
+	}
+
 	// 1. 覆盖 pin。
 	if pins.ChannelPriceID > 0 {
 		pinned, err := queries.GetChannelPrice(ctx, pins.ChannelPriceID)
@@ -201,7 +273,85 @@ func overrideResolvedCost(price sqlc.ChannelPrice) resolvedSettlementCost {
 	return resolvedSettlementCost{
 		snapshot:       channelPriceCostSnapshot(price),
 		channelPriceID: price.ID,
+		tierCostSource: "absolute",
 	}
+}
+
+func resolveFastSettlementCost(
+	ctx context.Context,
+	queries *sqlc.Queries,
+	channelID, modelID int64,
+	pins settlementCostPins,
+) (resolvedSettlementCost, error) {
+	if pins.ChannelPriceID > 0 && pins.ChannelPriceServiceTierID > 0 {
+		parent, err := queries.GetChannelPrice(ctx, pins.ChannelPriceID)
+		if err != nil {
+			return resolvedSettlementCost{}, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("load pinned Fast channel price parent"))
+		}
+		child, err := queries.GetChannelPriceServiceTier(ctx, pins.ChannelPriceServiceTierID)
+		if err != nil {
+			return resolvedSettlementCost{}, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("load pinned Fast channel price"))
+		}
+		if parent.ChannelID != channelID || parent.ModelID != modelID || child.ChannelPriceID != parent.ID || child.ServiceTier != string(servicetier.TierFast) {
+			return resolvedSettlementCost{}, failure.New(failure.CodeGatewayChatSettlementFailed, failure.WithMessage("pinned Fast channel price identity mismatch"))
+		}
+		return resolvedSettlementCost{
+			snapshot:                  channelPriceServiceTierCostSnapshot(parent, child),
+			channelPriceID:            parent.ID,
+			channelPriceServiceTierID: child.ID,
+			tierCostSource:            "absolute",
+		}, nil
+	}
+
+	if pins.CostBaseModelPriceID <= 0 || pins.ModelPriceServiceTierID <= 0 || pins.ChannelCostMultiplierID <= 0 {
+		return resolvedSettlementCost{}, failure.New(failure.CodeGatewayChatSettlementFailed, failure.WithMessage("Fast provider cost pins are incomplete"))
+	}
+	base, err := queries.GetModelPrice(ctx, pins.CostBaseModelPriceID)
+	if err != nil {
+		return resolvedSettlementCost{}, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("load pinned Fast cost base model price"))
+	}
+	fastBase, err := queries.GetModelPriceServiceTier(ctx, pins.ModelPriceServiceTierID)
+	if err != nil {
+		return resolvedSettlementCost{}, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("load pinned Fast model price"))
+	}
+	mult, err := queries.GetChannelCostMultiplier(ctx, pins.ChannelCostMultiplierID)
+	if err != nil {
+		return resolvedSettlementCost{}, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("load pinned Fast channel cost multiplier"))
+	}
+	if base.ModelID != modelID || fastBase.ModelPriceID != base.ID || fastBase.ServiceTier != string(servicetier.TierFast) ||
+		mult.ChannelID != channelID || (mult.ModelID.Valid && mult.ModelID.Int64 != modelID) {
+		return resolvedSettlementCost{}, failure.New(failure.CodeGatewayChatSettlementFailed, failure.WithMessage("pinned Fast multiplier cost identity mismatch"))
+	}
+
+	rechargeFactor := oneNumeric()
+	rechargeFactorID := int64(0)
+	if pins.ChannelRechargeFactorID > 0 {
+		crf, err := queries.GetChannelRechargeFactor(ctx, pins.ChannelRechargeFactorID)
+		if err != nil {
+			return resolvedSettlementCost{}, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("load pinned Fast channel recharge factor"))
+		}
+		if crf.ChannelID != channelID {
+			return resolvedSettlementCost{}, failure.New(failure.CodeGatewayChatSettlementFailed, failure.WithMessage("pinned Fast recharge factor identity mismatch"))
+		}
+		rechargeFactor = crf.Factor
+		rechargeFactorID = crf.ID
+	}
+
+	fastPrice := modelPriceServiceTierSnapshot(base, fastBase)
+	snapshot, err := billing.ScaleProviderCostByFactors(billing.ModelPriceToProviderCost(fastPrice), mult.Multiplier, rechargeFactor)
+	if err != nil {
+		return resolvedSettlementCost{}, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("scale Fast provider cost"))
+	}
+	return resolvedSettlementCost{
+		snapshot:                normalizeCostSnapshotRequiredRates(snapshot),
+		modelPriceServiceTierID: fastBase.ID,
+		costBaseModelPriceID:    base.ID,
+		channelCostMultiplierID: mult.ID,
+		costMultiplier:          mult.Multiplier,
+		channelRechargeFactorID: rechargeFactorID,
+		rechargeFactor:          rechargeFactor,
+		tierCostSource:          "derived",
+	}, nil
 }
 
 // resolvePinnedMultiplierCost 按 pin 行取成本基数（model_prices）+ 价格倍率 + 充值倍率并算真实成本；pin 行缺失返回 ok=false 供回退。
@@ -259,6 +409,7 @@ func resolvePinnedMultiplierCost(
 		costMultiplier:          mult.Multiplier,
 		channelRechargeFactorID: rechargeFactorID,
 		rechargeFactor:          rechargeFactor,
+		tierCostSource:          "derived",
 	}, true, nil
 }
 
@@ -319,7 +470,38 @@ func resolveActiveSettlementCost(
 		costMultiplier:          mult.Multiplier,
 		channelRechargeFactorID: rechargeFactorID,
 		rechargeFactor:          rechargeFactor,
+		tierCostSource:          "derived",
 	}, nil
+}
+
+func modelPriceServiceTierSnapshot(parent sqlc.ModelPrice, tier sqlc.ModelPriceServiceTier) billing.CustomerPriceSnapshot {
+	return billing.CustomerPriceSnapshot{
+		Currency:                parent.Currency,
+		PricingUnit:             parent.PricingUnit,
+		UncachedInputPrice:      tier.UncachedInputPrice,
+		CacheReadInputPrice:     tier.CacheReadInputPrice,
+		CacheWrite5mInputPrice:  tier.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:  tier.CacheWrite1hInputPrice,
+		CacheWrite30mInputPrice: tier.CacheWrite30mInputPrice,
+		OutputPrice:             tier.OutputPrice,
+		ReasoningOutputPrice:    tier.ReasoningOutputPrice,
+		FormulaVersion:          billing.FormulaVersionV1,
+	}
+}
+
+func channelPriceServiceTierCostSnapshot(parent sqlc.ChannelPrice, tier sqlc.ChannelPriceServiceTier) billing.ProviderCostSnapshot {
+	return billing.ProviderCostSnapshot{
+		Currency:               parent.Currency,
+		PricingUnit:            parent.PricingUnit,
+		UncachedInputCost:      numericOrZero(tier.UncachedInputCost),
+		CacheReadInputCost:     tier.CacheReadInputCost,
+		CacheWrite5mInputCost:  tier.CacheWrite5mInputCost,
+		CacheWrite1hInputCost:  tier.CacheWrite1hInputCost,
+		CacheWrite30mInputCost: tier.CacheWrite30mInputCost,
+		OutputCost:             numericOrZero(tier.OutputCost),
+		ReasoningOutputCost:    tier.ReasoningOutputCost,
+		FormulaVersion:         billing.FormulaVersionV1,
+	}
 }
 
 // scaledMultiplierCostSnapshot 基准价（model_prices）× 价格倍率 × 充值倍率 → 真实成本单价。
@@ -608,6 +790,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 
 	txRequestLog := requestlog.NewStore(txQueries)
 	facts := params.Facts
+	tierSelection := resolveSettlementTierSelection(params)
 
 	// 从 adapter response metadata 写入真实 upstream status code 和 request id，
 	// 用于渠道审计和 observability，而不是固定写 200/NULL。
@@ -624,6 +807,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		FinalUsageReceived:  !facts.UsageSource.IsPartialEstimate(),
 		UsageMappingVersion: facts.UsageMappingVersion,
 		CompletedAt:         now,
+		UpstreamServiceTier: UpstreamRequestIDPtr(tierSelection.upstreamRaw),
 	}
 	switch attemptFinalStatus {
 	case requestlog.AttemptStatusSucceeded:
@@ -678,11 +862,14 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		params.FinalChannelID,
 		params.ModelDBID,
 		settlementCostPins{
-			ChannelPriceID:          params.ChannelPriceID,
-			CostBaseModelPriceID:    params.CostBaseModelPriceID,
-			ChannelCostMultiplierID: params.ChannelCostMultiplierID,
-			ChannelRechargeFactorID: params.ChannelRechargeFactorID,
+			ChannelPriceID:            params.ChannelPriceID,
+			ChannelPriceServiceTierID: tierSelection.channelPriceServiceTierID,
+			CostBaseModelPriceID:      params.CostBaseModelPriceID,
+			ModelPriceServiceTierID:   tierSelection.modelPriceServiceTierID,
+			ChannelCostMultiplierID:   params.ChannelCostMultiplierID,
+			ChannelRechargeFactorID:   params.ChannelRechargeFactorID,
 		},
+		tierSelection.billingTier,
 		params.AttemptRecord.StartedAt,
 	)
 	if err != nil {
@@ -694,7 +881,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	// 长上下文：按真实 usage 输入合计判定是否放大售价/成本（与上游 GPT-5.4+ / sub2api 对齐）。
 	inputTokenSum := billing.LongContextInputTokenSum(facts.Usage)
 	salePrice, longContextApplied, err := billing.ApplyLongContextToCustomerPrice(
-		params.SalePrice,
+		tierSelection.salePrice,
 		params.LongContextPolicy,
 		inputTokenSum,
 	)
@@ -720,6 +907,8 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		FormulaVersion:          billing.FormulaVersionV1,
 		PriceRatio:              params.PriceRatio,
 		LongContextApplied:      longContextApplied,
+		ServiceTier:             pgtype.Text{String: string(tierSelection.settled), Valid: tierSelection.settled != ""},
+		ModelPriceServiceTierID: nullableInt8(tierSelection.modelPriceServiceTierID),
 	})
 	if err != nil {
 		return err
@@ -770,6 +959,16 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 			failure.WithMessage("calculate provider cost for chat settlement"),
 		)
 	}
+	if err := s.recordProviderServiceTierCostRisk(
+		ctx,
+		txQueries,
+		params,
+		tierSelection,
+		providerCost,
+		inputTokenSum,
+	); err != nil {
+		return err
+	}
 
 	// 写入成本快照：覆盖路径 cost_price_id 置位、倍率列 NULL；倍率路径反之（cost_price_id NULL + 来源 id/标量置位）。
 	costSnapshotRow, err := txQueries.CreateCostSnapshot(ctx, sqlc.CreateCostSnapshotParams{
@@ -803,6 +1002,10 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		TotalCostAmount:              providerCost.TotalCostAmount,
 		FormulaVersion:               providerCost.FormulaVersion,
 		LongContextApplied:           longContextApplied,
+		ServiceTier:                  pgtype.Text{String: string(tierSelection.settled), Valid: tierSelection.settled != ""},
+		ModelPriceServiceTierID:      nullableInt8(cost.modelPriceServiceTierID),
+		ChannelPriceServiceTierID:    nullableInt8(tierSelection.channelPriceServiceTierID),
+		TierCostSource:               pgtype.Text{String: cost.tierCostSource, Valid: tierSelection.settled != ""},
 	})
 	if err != nil {
 		return failure.Wrap(
@@ -898,14 +1101,17 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	}
 
 	requestSuccessParams := requestlog.MarkRequestSucceededParams{
-		ID:                  params.RequestRecord.ID,
-		ResponseModelID:     params.ResponseModelID,
-		ResponseProtocol:    params.ResponseProtocol,
-		ResponseID:          params.ResponseID,
-		FinalProviderID:     params.FinalProviderID,
-		FinalChannelID:      params.FinalChannelID,
-		GatewayFirstTokenAt: params.GatewayFirstTokenAt,
-		CompletedAt:         now,
+		ID:                    params.RequestRecord.ID,
+		ResponseModelID:       params.ResponseModelID,
+		ResponseProtocol:      params.ResponseProtocol,
+		ResponseID:            params.ResponseID,
+		FinalProviderID:       params.FinalProviderID,
+		FinalChannelID:        params.FinalChannelID,
+		GatewayFirstTokenAt:   params.GatewayFirstTokenAt,
+		CompletedAt:           now,
+		ActualServiceTier:     tierSelection.actual,
+		SettledServiceTier:    tierSelection.settled,
+		ServiceTierResolution: tierSelection.resolution,
 	}
 	switch requestFinalStatus {
 	case requestlog.RequestStatusSucceeded:
@@ -945,6 +1151,108 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	publishSettlementLogSummary(ctx, params.Facts, charge.Amount, charge.Currency)
 
 	return nil
+}
+
+func (s *ChatSettlementService) recordProviderServiceTierCostRisk(
+	ctx context.Context,
+	queries *sqlc.Queries,
+	params ChatSettlementParams,
+	selection settlementTierSelection,
+	settledCost billing.ProviderCost,
+	inputTokenSum int64,
+) error {
+	if selection.requested != servicetier.TierFast || selection.settled != servicetier.TierStandard {
+		return nil
+	}
+
+	reasonCode := ""
+	reason := ""
+	switch selection.resolution {
+	case servicetier.ResolutionStandardFallbackMissing:
+		reasonCode = "upstream_service_tier_missing"
+		reason = "Fast request response omitted service_tier; Provider cost settled at Standard"
+	case servicetier.ResolutionStandardFallbackUnknown:
+		reasonCode = "upstream_service_tier_unknown"
+		reason = "Fast request response returned an unknown service_tier; Provider cost settled at Standard"
+	case servicetier.ResolutionFastPriceMissing:
+		reasonCode = "fast_price_configuration_missing"
+		reason = "upstream confirmed Fast processing but a complete Fast price or cost source was unavailable; Provider cost settled at Standard"
+	default:
+		return nil
+	}
+
+	estimatedIncrement := pgtype.Numeric{Valid: false}
+	if fastProviderCostPinsComplete(params) {
+		fastCost, err := resolveSettlementCost(
+			ctx,
+			queries,
+			params.FinalChannelID,
+			params.ModelDBID,
+			settlementCostPins{
+				ChannelPriceID:            params.ChannelPriceID,
+				ChannelPriceServiceTierID: params.FastChannelPriceServiceTierID,
+				CostBaseModelPriceID:      params.CostBaseModelPriceID,
+				ModelPriceServiceTierID:   params.FastModelPriceServiceTierID,
+				ChannelCostMultiplierID:   params.ChannelCostMultiplierID,
+				ChannelRechargeFactorID:   params.ChannelRechargeFactorID,
+			},
+			servicetier.TierFast,
+			params.AttemptRecord.StartedAt,
+		)
+		if err != nil {
+			return err
+		}
+		fastSnapshot, _, err := billing.ApplyLongContextToProviderCost(fastCost.snapshot, params.LongContextPolicy, inputTokenSum)
+		if err != nil {
+			return failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("apply long-context multiplier to Fast risk estimate"))
+		}
+		fastProviderCost, err := s.billingCalculator.CalculateProviderCost(params.Facts.Usage, fastSnapshot)
+		if err != nil {
+			return failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("calculate Fast Provider cost risk estimate"))
+		}
+		estimatedIncrement = chatSettlementNonNegativeDifference(fastProviderCost.TotalCostAmount, settledCost.TotalCostAmount)
+	}
+
+	_, err := queries.CreateProviderServiceTierCostRisk(ctx, sqlc.CreateProviderServiceTierCostRiskParams{
+		ProviderID:            params.FinalProviderID,
+		RequestRecordID:       params.RequestRecord.ID,
+		RequestAttemptID:      params.AttemptRecord.ID,
+		EstimatedAmount:       estimatedIncrement,
+		SettledAmount:         settledCost.TotalCostAmount,
+		Currency:              settledCost.Currency,
+		ReasonCode:            reasonCode,
+		Reason:                reason,
+		UpstreamServiceTier:   pgtype.Text{String: selection.upstreamRaw, Valid: selection.upstreamRaw != ""},
+		SettledServiceTier:    string(servicetier.TierStandard),
+		ServiceTierResolution: string(selection.resolution),
+	})
+	if err != nil {
+		return failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("record Provider service tier cost risk"))
+	}
+	return nil
+}
+
+func fastProviderCostPinsComplete(params ChatSettlementParams) bool {
+	if params.ChannelPriceID > 0 {
+		return params.FastChannelPriceServiceTierID > 0
+	}
+	return params.CostBaseModelPriceID > 0 && params.FastModelPriceServiceTierID > 0 && params.ChannelCostMultiplierID > 0
+}
+
+func chatSettlementNonNegativeDifference(left, right pgtype.Numeric) pgtype.Numeric {
+	if !left.Valid || left.Int == nil || !right.Valid || right.Int == nil {
+		return pgtype.Numeric{Valid: false}
+	}
+	negativeRight := right
+	negativeRight.Int = new(big.Int).Neg(new(big.Int).Set(right.Int))
+	difference := chatSettlementAddNumeric(left, negativeRight)
+	if !difference.Valid || difference.Int == nil {
+		return pgtype.Numeric{Valid: false}
+	}
+	if difference.Int.Sign() < 0 {
+		return pgtype.Numeric{Int: big.NewInt(0), Exp: difference.Exp, Valid: true}
+	}
+	return difference
 }
 
 func publishSettlementLogSummary(ctx context.Context, facts adapter.ResponseFacts, chargedAmount pgtype.Numeric, currency string) {
@@ -1375,11 +1683,12 @@ func (s *ChatSettlementService) FinalizeStrandedReservation(ctx context.Context,
 
 // ensureIdempotentChatSettlement 校验重复 settlement 是否等价于第一次终态结算。
 func (s *ChatSettlementService) ensureIdempotentChatSettlement(ctx context.Context, queries *sqlc.Queries, request sqlc.RequestRecord, params ChatSettlementParams) error {
-	if err := ensureSettlementRequestMatches(request, params); err != nil {
+	tierSelection := resolveSettlementTierSelection(params)
+	if err := ensureSettlementRequestMatches(request, params, tierSelection); err != nil {
 		return err
 	}
 
-	if err := ensureSettlementAttemptMatches(ctx, queries, params); err != nil {
+	if err := ensureSettlementAttemptMatches(ctx, queries, params, tierSelection); err != nil {
 		return err
 	}
 
@@ -1391,7 +1700,6 @@ func (s *ChatSettlementService) ensureIdempotentChatSettlement(ctx context.Conte
 			failure.WithMessage("lookup idempotent chat settlement usage"),
 		)
 	}
-
 	if err := ensureSettlementUsageMatches(usageRecord, params.Facts); err != nil {
 		return err
 	}
@@ -1417,6 +1725,9 @@ func (s *ChatSettlementService) ensureIdempotentChatSettlement(ctx context.Conte
 			err,
 			failure.WithMessage("lookup idempotent chat settlement price snapshot"),
 		)
+	}
+	if err := ensureSettlementPriceSnapshotTierMatches(snapshot, tierSelection); err != nil {
+		return err
 	}
 
 	billingUsage := settlementUsageFactsFromRecord(usageRecord, lineItems)
@@ -1470,7 +1781,7 @@ func (s *ChatSettlementService) ensureIdempotentChatSettlement(ctx context.Conte
 		)
 	}
 
-	if err := ensureSettlementCostSnapshotMatches(costSnapshot, params, providerCost); err != nil {
+	if err := ensureSettlementCostSnapshotMatches(costSnapshot, params, tierSelection, providerCost); err != nil {
 		return err
 	}
 
@@ -1495,7 +1806,7 @@ func (s *ChatSettlementService) ensureIdempotentChatSettlement(ctx context.Conte
 }
 
 // ensureSettlementRequestMatches 校验 request 终态是否属于本次 settlement 参数。
-func ensureSettlementRequestMatches(request sqlc.RequestRecord, params ChatSettlementParams) error {
+func ensureSettlementRequestMatches(request sqlc.RequestRecord, params ChatSettlementParams, tierSelection settlementTierSelection) error {
 	requestFinalStatus, _ := chatSettlementFinalStatuses(params)
 	if request.ID != params.RequestRecord.ID ||
 		request.UserID != params.RequestRecord.UserID ||
@@ -1524,6 +1835,12 @@ func ensureSettlementRequestMatches(request sqlc.RequestRecord, params ChatSettl
 	}
 	if !requiredInt8Matches(request.FinalChannelID, params.FinalChannelID) {
 		return ChatSettlementIdempotencyConflict("final channel mismatch")
+	}
+	if !settlementTextMatches(request.RequestedServiceTier, string(tierSelection.requested)) ||
+		!settlementTextMatches(request.ActualServiceTier, string(tierSelection.actual)) ||
+		!settlementTextMatches(request.SettledServiceTier, string(tierSelection.settled)) ||
+		!settlementTextMatches(request.ServiceTierResolution, string(tierSelection.resolution)) {
+		return ChatSettlementIdempotencyConflict("request service tier facts mismatch")
 	}
 
 	return nil
@@ -1572,7 +1889,15 @@ func int8OrZero(v pgtype.Int8) int64 {
 }
 
 // ensureSettlementCostSnapshotMatches 校验请求级成本快照是否和本次 settlement 参数、自身重算金额一致。
-func ensureSettlementCostSnapshotMatches(snapshot sqlc.CostSnapshot, params ChatSettlementParams, cost billing.ProviderCost) error {
+func ensureSettlementPriceSnapshotTierMatches(snapshot sqlc.PriceSnapshot, selection settlementTierSelection) error {
+	if !settlementTextMatches(snapshot.ServiceTier, string(selection.settled)) ||
+		!optionalInt8Matches(snapshot.ModelPriceServiceTierID, selection.modelPriceServiceTierID) {
+		return ChatSettlementIdempotencyConflict("price snapshot service tier mismatch")
+	}
+	return nil
+}
+
+func ensureSettlementCostSnapshotMatches(snapshot sqlc.CostSnapshot, params ChatSettlementParams, selection settlementTierSelection, cost billing.ProviderCost) error {
 	if snapshot.RequestRecordID != params.RequestRecord.ID ||
 		snapshot.ProviderID != params.FinalProviderID ||
 		snapshot.ChannelID != params.FinalChannelID ||
@@ -1590,6 +1915,30 @@ func ensureSettlementCostSnapshotMatches(snapshot sqlc.CostSnapshot, params Chat
 		snapshot.ChannelCostMultiplierID.Valid && snapshot.ChannelCostMultiplierID.Int64 > 0
 	if !hasOverride && !hasMultiplier {
 		return ChatSettlementIdempotencyConflict("cost snapshot source mismatch")
+	}
+	if !settlementTextMatches(snapshot.ServiceTier, string(selection.settled)) {
+		return ChatSettlementIdempotencyConflict("cost snapshot service tier mismatch")
+	}
+	wantModelTierID := int64(0)
+	wantChannelTierID := int64(0)
+	wantTierCostSource := ""
+	if selection.settled != "" {
+		if selection.billingTier == servicetier.TierFast && hasMultiplier {
+			wantModelTierID = selection.modelPriceServiceTierID
+		}
+		if selection.billingTier == servicetier.TierFast && hasOverride {
+			wantChannelTierID = selection.channelPriceServiceTierID
+		}
+		if hasOverride {
+			wantTierCostSource = "absolute"
+		} else {
+			wantTierCostSource = "derived"
+		}
+	}
+	if !optionalInt8Matches(snapshot.ModelPriceServiceTierID, wantModelTierID) ||
+		!optionalInt8Matches(snapshot.ChannelPriceServiceTierID, wantChannelTierID) ||
+		!settlementTextMatches(snapshot.TierCostSource, wantTierCostSource) {
+		return ChatSettlementIdempotencyConflict("cost snapshot service tier source mismatch")
 	}
 
 	if snapshot.Currency != cost.Currency ||
@@ -1761,6 +2110,13 @@ func requiredInt8Matches(value pgtype.Int8, want int64) bool {
 	return value.Valid && value.Int64 == want
 }
 
+func optionalInt8Matches(value pgtype.Int8, want int64) bool {
+	if want == 0 {
+		return !value.Valid
+	}
+	return value.Valid && value.Int64 == want
+}
+
 func settlementTextMatches(value pgtype.Text, want string) bool {
 	if want == "" {
 		return !value.Valid || value.String == ""
@@ -1769,7 +2125,7 @@ func settlementTextMatches(value pgtype.Text, want string) bool {
 }
 
 // ensureSettlementAttemptMatches 校验已收口 attempt 是否和本次 settlement 参数一致。
-func ensureSettlementAttemptMatches(ctx context.Context, queries *sqlc.Queries, params ChatSettlementParams) error {
+func ensureSettlementAttemptMatches(ctx context.Context, queries *sqlc.Queries, params ChatSettlementParams, tierSelection settlementTierSelection) error {
 	_, attemptFinalStatus := chatSettlementFinalStatuses(params)
 	attempts, err := queries.ListRequestAttemptsByRequest(ctx, params.RequestRecord.ID)
 	if err != nil {
@@ -1822,6 +2178,10 @@ func ensureSettlementAttemptMatches(ctx context.Context, queries *sqlc.Queries, 
 		if attempt.FinalUsageReceived != !params.Facts.UsageSource.IsPartialEstimate() ||
 			!requiredTextMatches(attempt.UsageMappingVersion, params.Facts.UsageMappingVersion) {
 			return ChatSettlementIdempotencyConflict("attempt usage mapping mismatch")
+		}
+		if !settlementTextMatches(attempt.RequestedServiceTier, string(tierSelection.requested)) ||
+			!settlementTextMatches(attempt.UpstreamServiceTier, tierSelection.upstreamRaw) {
+			return ChatSettlementIdempotencyConflict("attempt service tier facts mismatch")
 		}
 
 		return nil

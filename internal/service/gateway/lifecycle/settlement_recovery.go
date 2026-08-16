@@ -12,6 +12,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
@@ -127,6 +128,7 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 	// P1-3 + DEC-027：补偿任务持久化成本来源 pin（覆盖 price_id 或 倍率三来源 id）+ 售价向量。
 	// worker 重放 settlement 时按这些不可改行确定性复算成本/售价，避免改价/改倍率竞态导致重放漂移。
 	facts := params.Facts
+	tierSelection := resolveSettlementTierSelection(params)
 	requestFinalStatus, attemptFinalStatus := chatSettlementFinalStatuses(params)
 	serverWebSearchRequests, serverWebFetchRequests := settlementRecoveryServerToolQuantities(facts.Usage.ServerToolUsage)
 	job, err := s.queries.CreateSettlementRecoveryJob(ctx, sqlc.CreateSettlementRecoveryJobParams{
@@ -174,21 +176,28 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 		CostBaseModelPriceID:               nullableInt8(params.CostBaseModelPriceID),
 		ChannelCostMultiplierID:            nullableInt8(params.ChannelCostMultiplierID),
 		ChannelRechargeFactorID:            nullableInt8(params.ChannelRechargeFactorID),
-		Currency:                           params.SalePrice.Currency,
-		PricingUnit:                        params.SalePrice.PricingUnit,
-		UncachedInputPrice:                 params.SalePrice.UncachedInputPrice,
-		CacheReadInputPrice:                params.SalePrice.CacheReadInputPrice,
-		CacheWrite5mInputPrice:             params.SalePrice.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:             params.SalePrice.CacheWrite1hInputPrice,
-		CacheWrite30mInputPrice:            params.SalePrice.CacheWrite30mInputPrice,
-		OutputPrice:                        params.SalePrice.OutputPrice,
-		ReasoningOutputPrice:               params.SalePrice.ReasoningOutputPrice,
+		Currency:                           tierSelection.salePrice.Currency,
+		PricingUnit:                        tierSelection.salePrice.PricingUnit,
+		UncachedInputPrice:                 tierSelection.salePrice.UncachedInputPrice,
+		CacheReadInputPrice:                tierSelection.salePrice.CacheReadInputPrice,
+		CacheWrite5mInputPrice:             tierSelection.salePrice.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:             tierSelection.salePrice.CacheWrite1hInputPrice,
+		CacheWrite30mInputPrice:            tierSelection.salePrice.CacheWrite30mInputPrice,
+		OutputPrice:                        tierSelection.salePrice.OutputPrice,
+		ReasoningOutputPrice:               tierSelection.salePrice.ReasoningOutputPrice,
 		FormulaVersion:                     billing.FormulaVersionV1,
 		PriceRatio:                         params.PriceRatio,
 		LongContextEnabled:                 params.LongContextPolicy.Enabled,
 		LongContextThreshold:               settlementRecoveryLongContextThreshold(params.LongContextPolicy),
 		LongContextInputMultiplier:         params.LongContextPolicy.InputMultiplier,
 		LongContextOutputMultiplier:        params.LongContextPolicy.OutputMultiplier,
+		RequestedServiceTier:               chatSettlementTierText(tierSelection.requested),
+		ActualServiceTier:                  chatSettlementTierText(tierSelection.actual),
+		SettledServiceTier:                 chatSettlementTierText(tierSelection.settled),
+		UpstreamServiceTier:                chatSettlementOptionalText(UpstreamRequestIDPtr(tierSelection.upstreamRaw)),
+		ServiceTierResolution:              chatSettlementResolutionText(tierSelection.resolution),
+		ModelPriceServiceTierID:            nullableInt8(params.FastModelPriceServiceTierID),
+		ChannelPriceServiceTierID:          nullableInt8(params.FastChannelPriceServiceTierID),
 		EstimatedAmount:                    params.Authorization.EstimatedAmount,
 		AuthorizedAmount:                   params.Authorization.AuthorizedAmount,
 		MaxAttempts:                        s.maxAttempts,
@@ -342,11 +351,25 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 		FinalChannelID:      job.ChannelID,
 		// 重放 settlement 沿用 job 落库时锁定的成本来源 pin（覆盖 price_id 或 倍率三来源 id，P1-3 + DEC-027）；
 		// 客户售价用 job 落库时算好的售价向量（= 基准 × 倍率，DEC-026），保证重放账单与首次一致、不受改价/改倍率竞态影响。
-		ChannelPriceID:          int8OrZero(job.PriceID),
-		CostBaseModelPriceID:    int8OrZero(job.CostBaseModelPriceID),
-		ChannelCostMultiplierID: int8OrZero(job.ChannelCostMultiplierID),
-		ChannelRechargeFactorID: int8OrZero(job.ChannelRechargeFactorID),
+		ChannelPriceID:                int8OrZero(job.PriceID),
+		FastModelPriceServiceTierID:   int8OrZero(job.ModelPriceServiceTierID),
+		FastChannelPriceServiceTierID: int8OrZero(job.ChannelPriceServiceTierID),
+		CostBaseModelPriceID:          int8OrZero(job.CostBaseModelPriceID),
+		ChannelCostMultiplierID:       int8OrZero(job.ChannelCostMultiplierID),
+		ChannelRechargeFactorID:       int8OrZero(job.ChannelRechargeFactorID),
 		SalePrice: billing.CustomerPriceSnapshot{
+			Currency:                job.Currency,
+			PricingUnit:             job.PricingUnit,
+			UncachedInputPrice:      job.UncachedInputPrice,
+			CacheReadInputPrice:     job.CacheReadInputPrice,
+			CacheWrite5mInputPrice:  job.CacheWrite5mInputPrice,
+			CacheWrite1hInputPrice:  job.CacheWrite1hInputPrice,
+			CacheWrite30mInputPrice: job.CacheWrite30mInputPrice,
+			OutputPrice:             job.OutputPrice,
+			ReasoningOutputPrice:    job.ReasoningOutputPrice,
+			FormulaVersion:          job.FormulaVersion,
+		},
+		FastSalePrice: billing.CustomerPriceSnapshot{
 			Currency:                job.Currency,
 			PricingUnit:             job.PricingUnit,
 			UncachedInputPrice:      job.UncachedInputPrice,
@@ -428,6 +451,12 @@ func chatSettlementRecoveryFactsFromJob(job sqlc.SettlementRecoveryJob) adapter.
 		},
 		UsageSource:         usage.Source(job.UsageSource),
 		UsageMappingVersion: job.UsageMappingVersion,
+		ServiceTier: servicetier.Response{
+			Actual:      servicetier.Tier(chatSettlementText(job.ActualServiceTier)),
+			Settled:     servicetier.Tier(chatSettlementText(job.SettledServiceTier)),
+			UpstreamRaw: chatSettlementText(job.UpstreamServiceTier),
+			Resolution:  servicetier.Resolution(chatSettlementText(job.ServiceTierResolution)),
+		},
 		Metadata: adapter.UpstreamMetadata{
 			StatusCode: int(job.UpstreamStatusCode),
 			RequestID:  chatSettlementText(job.UpstreamRequestID),
@@ -437,28 +466,32 @@ func chatSettlementRecoveryFactsFromJob(job sqlc.SettlementRecoveryJob) adapter.
 
 func chatSettlementRecoveryRequestRecordFromSQLC(row sqlc.RequestRecord) requestlog.RequestRecord {
 	return requestlog.RequestRecord{
-		ID:                  row.ID,
-		RequestID:           row.RequestID,
-		UserID:              row.UserID,
-		APIKeyID:            row.ApiKeyID,
-		RequestedModelID:    row.RequestedModelID,
-		IngressProtocol:     requestlog.Protocol(row.IngressProtocol),
-		Endpoint:            requestlog.Endpoint(row.Endpoint),
-		ResponseModelID:     chatSettlementTextPtr(row.ResponseModelID),
-		ResponseProtocol:    chatSettlementTextPtr(row.ResponseProtocol),
-		ResponseID:          chatSettlementTextPtr(row.ResponseID),
-		Stream:              row.Stream,
-		Status:              requestlog.RequestStatus(row.Status),
-		FinalProviderID:     chatSettlementInt64Ptr(row.FinalProviderID),
-		FinalChannelID:      chatSettlementInt64Ptr(row.FinalChannelID),
-		ErrorCode:           chatSettlementTextPtr(row.ErrorCode),
-		ErrorMessage:        chatSettlementTextPtr(row.ErrorMessage),
-		InternalErrorDetail: chatSettlementTextPtr(row.InternalErrorDetail),
-		DeliveryStatus:      requestlog.DeliveryStatus(row.DeliveryStatus),
-		GatewayFirstTokenAt: chatSettlementTimePtr(row.GatewayFirstTokenAt),
-		ResponseCompletedAt: chatSettlementTimePtr(row.ResponseCompletedAt),
-		StartedAt:           row.StartedAt.Time,
-		CompletedAt:         chatSettlementTimePtr(row.CompletedAt),
+		ID:                    row.ID,
+		RequestID:             row.RequestID,
+		UserID:                row.UserID,
+		APIKeyID:              row.ApiKeyID,
+		RequestedModelID:      row.RequestedModelID,
+		IngressProtocol:       requestlog.Protocol(row.IngressProtocol),
+		Endpoint:              requestlog.Endpoint(row.Endpoint),
+		ResponseModelID:       chatSettlementTextPtr(row.ResponseModelID),
+		ResponseProtocol:      chatSettlementTextPtr(row.ResponseProtocol),
+		ResponseID:            chatSettlementTextPtr(row.ResponseID),
+		Stream:                row.Stream,
+		Status:                requestlog.RequestStatus(row.Status),
+		FinalProviderID:       chatSettlementInt64Ptr(row.FinalProviderID),
+		FinalChannelID:        chatSettlementInt64Ptr(row.FinalChannelID),
+		ErrorCode:             chatSettlementTextPtr(row.ErrorCode),
+		ErrorMessage:          chatSettlementTextPtr(row.ErrorMessage),
+		InternalErrorDetail:   chatSettlementTextPtr(row.InternalErrorDetail),
+		DeliveryStatus:        requestlog.DeliveryStatus(row.DeliveryStatus),
+		GatewayFirstTokenAt:   chatSettlementTimePtr(row.GatewayFirstTokenAt),
+		ResponseCompletedAt:   chatSettlementTimePtr(row.ResponseCompletedAt),
+		StartedAt:             row.StartedAt.Time,
+		CompletedAt:           chatSettlementTimePtr(row.CompletedAt),
+		RequestedServiceTier:  servicetier.Tier(chatSettlementText(row.RequestedServiceTier)),
+		ActualServiceTier:     servicetier.Tier(chatSettlementText(row.ActualServiceTier)),
+		SettledServiceTier:    servicetier.Tier(chatSettlementText(row.SettledServiceTier)),
+		ServiceTierResolution: chatSettlementText(row.ServiceTierResolution),
 	}
 }
 
@@ -487,7 +520,17 @@ func chatSettlementRecoveryAttemptRecordFromSQLC(row sqlc.RequestAttempt) reques
 		UsageMappingVersion:   chatSettlementTextPtr(row.UsageMappingVersion),
 		StartedAt:             row.StartedAt.Time,
 		CompletedAt:           chatSettlementTimePtr(row.CompletedAt),
+		RequestedServiceTier:  servicetier.Tier(chatSettlementText(row.RequestedServiceTier)),
+		UpstreamServiceTier:   chatSettlementTextPtr(row.UpstreamServiceTier),
 	}
+}
+
+func chatSettlementTierText(tier servicetier.Tier) pgtype.Text {
+	return pgtype.Text{String: string(tier), Valid: tier != ""}
+}
+
+func chatSettlementResolutionText(resolution servicetier.Resolution) pgtype.Text {
+	return pgtype.Text{String: string(resolution), Valid: resolution != ""}
 }
 
 // IsChatSettlementRecoveryScheduled 判断 settlement 失败是否已经由 recovery job 接管。

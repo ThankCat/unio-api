@@ -52,6 +52,14 @@ SELECT
     base.cache_write_30m_input_price,
     base.output_price,
     base.reasoning_output_price,
+    COALESCE(fast_base.id, 0)::bigint AS fast_model_price_service_tier_id,
+    fast_base.uncached_input_price AS fast_uncached_input_price,
+    fast_base.cache_read_input_price AS fast_cache_read_input_price,
+    fast_base.cache_write_5m_input_price AS fast_cache_write_5m_input_price,
+    fast_base.cache_write_1h_input_price AS fast_cache_write_1h_input_price,
+    fast_base.cache_write_30m_input_price AS fast_cache_write_30m_input_price,
+    fast_base.output_price AS fast_output_price,
+    fast_base.reasoning_output_price AS fast_reasoning_output_price,
     base.long_context_enabled AS base_long_context_enabled,
     base.long_context_threshold AS base_long_context_threshold,
     base.long_context_input_multiplier AS base_long_context_input_multiplier,
@@ -68,6 +76,14 @@ SELECT
     cost.cache_write_30m_input_cost,
     cost.output_cost,
     cost.reasoning_output_cost,
+    COALESCE(fast_cost.id, 0)::bigint AS fast_channel_price_service_tier_id,
+    fast_cost.uncached_input_cost AS fast_uncached_input_cost,
+    fast_cost.cache_read_input_cost AS fast_cache_read_input_cost,
+    fast_cost.cache_write_5m_input_cost AS fast_cache_write_5m_input_cost,
+    fast_cost.cache_write_1h_input_cost AS fast_cache_write_1h_input_cost,
+    fast_cost.cache_write_30m_input_cost AS fast_cache_write_30m_input_cost,
+    fast_cost.output_cost AS fast_output_cost,
+    fast_cost.reasoning_output_cost AS fast_reasoning_output_cost,
     COALESCE(mult.id, 0)::bigint AS channel_cost_multiplier_id,
     mult.multiplier AS cost_multiplier,
     COALESCE(recharge.id, 0)::bigint AS channel_recharge_factor_id,
@@ -95,6 +111,8 @@ JOIN LATERAL (
     ORDER BY mp.effective_from DESC, mp.id DESC
     LIMIT 1
 ) base ON TRUE
+LEFT JOIN model_price_service_tiers fast_base
+    ON fast_base.model_price_id = base.id AND fast_base.service_tier = 'fast'
 LEFT JOIN LATERAL (
     -- cost: 命中渠道当前生效的绝对成本覆盖（channel_prices，优先级最高，可空）。
     SELECT cp.id, cp.currency, cp.pricing_unit,
@@ -111,6 +129,8 @@ LEFT JOIN LATERAL (
     ORDER BY cp.effective_from DESC, cp.id DESC
     LIMIT 1
 ) cost ON TRUE
+LEFT JOIN channel_price_service_tiers fast_cost
+    ON fast_cost.channel_price_id = cost.id AND fast_cost.service_tier = 'fast'
 LEFT JOIN LATERAL (
     -- mult: 渠道当前生效的价格倍率，优先逐模型覆盖、回退渠道默认（可空）。
     SELECT ccm.id, ccm.multiplier

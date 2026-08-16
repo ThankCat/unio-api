@@ -47,29 +47,34 @@ type RequestListParams struct {
 
 // RequestSummary 是请求列表项（不含 internal_error_detail）。
 type RequestSummary struct {
-	ID                  int64
-	RequestID           string
-	UserID              int64
-	APIKeyID            int64
-	RequestedModelID    string
-	IngressProtocol     string
-	Endpoint            string
-	ResponseModelID     *string
-	ResponseProtocol    *string
-	ResponseID          *string
-	Stream              bool
-	Status              string
-	FinalProviderID     *int64
-	FinalChannelID      *int64
-	ErrorCode           *string
-	ErrorMessage        *string
-	DeliveryStatus      string
-	GatewayFirstTokenAt *time.Time
-	ResponseCompletedAt *time.Time
-	StartedAt           time.Time
-	CompletedAt         *time.Time
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                    int64
+	RequestID             string
+	UserID                int64
+	APIKeyID              int64
+	RequestedModelID      string
+	IngressProtocol       string
+	Endpoint              string
+	ResponseModelID       *string
+	ResponseProtocol      *string
+	ResponseID            *string
+	Stream                bool
+	Status                string
+	FinalProviderID       *int64
+	FinalChannelID        *int64
+	ErrorCode             *string
+	ErrorMessage          *string
+	DeliveryStatus        string
+	GatewayFirstTokenAt   *time.Time
+	ResponseCompletedAt   *time.Time
+	StartedAt             time.Time
+	CompletedAt           *time.Time
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	RequestedServiceTier  *string
+	ActualServiceTier     *string
+	SettledServiceTier    *string
+	ServiceTierResolution *string
+	ServiceTierDowngraded bool
 }
 
 // RequestListItem 是富化后的请求列表项：请求事实 + 用量/成本/扣费 + 线路/渠道链 + 计算出的时延。
@@ -191,14 +196,16 @@ type Attempt struct {
 	// UpstreamTotalMs 只由 upstream_completed_at - upstream_started_at 派生。
 	UpstreamTotalMs *int64
 	// UpstreamTTFTMs 只对流式请求由 upstream_first_token_at - upstream_started_at 派生。
-	UpstreamTTFTMs      *int64
-	TTFTScoringSample   bool
-	ErrorScoringSample  bool
-	ErrorScoringFailure bool
-	FinalUsageReceived  bool
-	StartedAt           time.Time
-	CompletedAt         *time.Time
-	CreatedAt           time.Time
+	UpstreamTTFTMs       *int64
+	TTFTScoringSample    bool
+	ErrorScoringSample   bool
+	ErrorScoringFailure  bool
+	FinalUsageReceived   bool
+	RequestedServiceTier *string
+	UpstreamServiceTier  *string
+	StartedAt            time.Time
+	CompletedAt          *time.Time
+	CreatedAt            time.Time
 }
 
 // RequestDetail 是请求详情聚合：请求事实 + 上游尝试链 + usage + 账本流水 + 计费异常。
@@ -243,8 +250,12 @@ type CostSnapshotView struct {
 	ReasoningOutputCostAmount    *string
 	TotalCostAmount              *string
 	// DEC-027 成本来源倍率（倍率路径有值，覆盖/旧数据为 null）：价格倍率 + 充值倍率，供请求详情费用处展示新旧倍率。
-	ChannelCostMultiplier *string
-	RechargeFactor        *string
+	ChannelCostMultiplier     *string
+	RechargeFactor            *string
+	ServiceTier               *string
+	ModelPriceServiceTierID   *int64
+	ChannelPriceServiceTierID *int64
+	TierCostSource            *string
 }
 
 // PriceSnapshotView 是客户售价快照的展示视图：每分项售价单价（per_1m_tokens，USD 字符串）。
@@ -256,6 +267,8 @@ type PriceSnapshotView struct {
 	CacheWrite30mInputPrice *string
 	OutputPrice             *string
 	ReasoningOutputPrice    *string
+	ServiceTier             *string
+	ModelPriceServiceTierID *int64
 }
 
 func toCostSnapshotView(c sqlc.CostSnapshot) CostSnapshotView {
@@ -277,6 +290,10 @@ func toCostSnapshotView(c sqlc.CostSnapshot) CostSnapshotView {
 		TotalCostAmount:              opsutil.NumericStringPtr(c.TotalCostAmount),
 		ChannelCostMultiplier:        opsutil.NumericStringPtr(c.CostMultiplier),
 		RechargeFactor:               opsutil.NumericStringPtr(c.RechargeFactor),
+		ServiceTier:                  textPtr(c.ServiceTier),
+		ModelPriceServiceTierID:      int8Ptr(c.ModelPriceServiceTierID),
+		ChannelPriceServiceTierID:    int8Ptr(c.ChannelPriceServiceTierID),
+		TierCostSource:               textPtr(c.TierCostSource),
 	}
 }
 
@@ -289,6 +306,8 @@ func toPriceSnapshotView(p sqlc.PriceSnapshot) PriceSnapshotView {
 		CacheWrite30mInputPrice: opsutil.NumericStringPtr(p.CacheWrite30mInputPrice),
 		OutputPrice:             opsutil.NumericStringPtr(p.OutputPrice),
 		ReasoningOutputPrice:    opsutil.NumericStringPtr(p.ReasoningOutputPrice),
+		ServiceTier:             textPtr(p.ServiceTier),
+		ModelPriceServiceTierID: int8Ptr(p.ModelPriceServiceTierID),
 	}
 }
 
@@ -476,29 +495,34 @@ func (s *RequestService) Get(ctx context.Context, requestID string, includeInter
 func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 	item := RequestListItem{
 		RequestSummary: RequestSummary{
-			ID:                  r.ID,
-			RequestID:           r.RequestID,
-			UserID:              r.UserID,
-			APIKeyID:            r.ApiKeyID,
-			RequestedModelID:    r.RequestedModelID,
-			IngressProtocol:     r.IngressProtocol,
-			Endpoint:            r.Endpoint,
-			ResponseModelID:     textPtr(r.ResponseModelID),
-			ResponseProtocol:    textPtr(r.ResponseProtocol),
-			ResponseID:          textPtr(r.ResponseID),
-			Stream:              r.Stream,
-			Status:              r.Status,
-			FinalProviderID:     int8Ptr(r.FinalProviderID),
-			FinalChannelID:      int8Ptr(r.FinalChannelID),
-			ErrorCode:           textPtr(r.ErrorCode),
-			ErrorMessage:        textPtr(r.ErrorMessage),
-			DeliveryStatus:      r.DeliveryStatus,
-			GatewayFirstTokenAt: timePtr(r.GatewayFirstTokenAt),
-			ResponseCompletedAt: timePtr(r.ResponseCompletedAt),
-			StartedAt:           r.StartedAt.Time,
-			CompletedAt:         timePtr(r.CompletedAt),
-			CreatedAt:           r.CreatedAt.Time,
-			UpdatedAt:           r.UpdatedAt.Time,
+			ID:                    r.ID,
+			RequestID:             r.RequestID,
+			UserID:                r.UserID,
+			APIKeyID:              r.ApiKeyID,
+			RequestedModelID:      r.RequestedModelID,
+			IngressProtocol:       r.IngressProtocol,
+			Endpoint:              r.Endpoint,
+			ResponseModelID:       textPtr(r.ResponseModelID),
+			ResponseProtocol:      textPtr(r.ResponseProtocol),
+			ResponseID:            textPtr(r.ResponseID),
+			Stream:                r.Stream,
+			Status:                r.Status,
+			FinalProviderID:       int8Ptr(r.FinalProviderID),
+			FinalChannelID:        int8Ptr(r.FinalChannelID),
+			ErrorCode:             textPtr(r.ErrorCode),
+			ErrorMessage:          textPtr(r.ErrorMessage),
+			DeliveryStatus:        r.DeliveryStatus,
+			GatewayFirstTokenAt:   timePtr(r.GatewayFirstTokenAt),
+			ResponseCompletedAt:   timePtr(r.ResponseCompletedAt),
+			StartedAt:             r.StartedAt.Time,
+			CompletedAt:           timePtr(r.CompletedAt),
+			CreatedAt:             r.CreatedAt.Time,
+			UpdatedAt:             r.UpdatedAt.Time,
+			RequestedServiceTier:  textPtr(r.RequestedServiceTier),
+			ActualServiceTier:     textPtr(r.ActualServiceTier),
+			SettledServiceTier:    textPtr(r.SettledServiceTier),
+			ServiceTierResolution: textPtr(r.ServiceTierResolution),
+			ServiceTierDowngraded: serviceTierDowngraded(r.RequestedServiceTier, r.ActualServiceTier),
 		},
 		UncachedInputTokens:      r.UncachedInputTokens,
 		CacheReadInputTokens:     r.CacheReadInputTokens,
@@ -616,29 +640,34 @@ func deriveRequestTiming(
 
 func summaryFromRecord(r sqlc.RequestRecord) RequestSummary {
 	return RequestSummary{
-		ID:                  r.ID,
-		RequestID:           r.RequestID,
-		UserID:              r.UserID,
-		APIKeyID:            r.ApiKeyID,
-		RequestedModelID:    r.RequestedModelID,
-		IngressProtocol:     r.IngressProtocol,
-		Endpoint:            r.Endpoint,
-		ResponseModelID:     textPtr(r.ResponseModelID),
-		ResponseProtocol:    textPtr(r.ResponseProtocol),
-		ResponseID:          textPtr(r.ResponseID),
-		Stream:              r.Stream,
-		Status:              r.Status,
-		FinalProviderID:     int8Ptr(r.FinalProviderID),
-		FinalChannelID:      int8Ptr(r.FinalChannelID),
-		ErrorCode:           textPtr(r.ErrorCode),
-		ErrorMessage:        textPtr(r.ErrorMessage),
-		DeliveryStatus:      r.DeliveryStatus,
-		GatewayFirstTokenAt: timePtr(r.GatewayFirstTokenAt),
-		ResponseCompletedAt: timePtr(r.ResponseCompletedAt),
-		StartedAt:           r.StartedAt.Time,
-		CompletedAt:         timePtr(r.CompletedAt),
-		CreatedAt:           r.CreatedAt.Time,
-		UpdatedAt:           r.UpdatedAt.Time,
+		ID:                    r.ID,
+		RequestID:             r.RequestID,
+		UserID:                r.UserID,
+		APIKeyID:              r.ApiKeyID,
+		RequestedModelID:      r.RequestedModelID,
+		IngressProtocol:       r.IngressProtocol,
+		Endpoint:              r.Endpoint,
+		ResponseModelID:       textPtr(r.ResponseModelID),
+		ResponseProtocol:      textPtr(r.ResponseProtocol),
+		ResponseID:            textPtr(r.ResponseID),
+		Stream:                r.Stream,
+		Status:                r.Status,
+		FinalProviderID:       int8Ptr(r.FinalProviderID),
+		FinalChannelID:        int8Ptr(r.FinalChannelID),
+		ErrorCode:             textPtr(r.ErrorCode),
+		ErrorMessage:          textPtr(r.ErrorMessage),
+		DeliveryStatus:        r.DeliveryStatus,
+		GatewayFirstTokenAt:   timePtr(r.GatewayFirstTokenAt),
+		ResponseCompletedAt:   timePtr(r.ResponseCompletedAt),
+		StartedAt:             r.StartedAt.Time,
+		CompletedAt:           timePtr(r.CompletedAt),
+		CreatedAt:             r.CreatedAt.Time,
+		UpdatedAt:             r.UpdatedAt.Time,
+		RequestedServiceTier:  textPtr(r.RequestedServiceTier),
+		ActualServiceTier:     textPtr(r.ActualServiceTier),
+		SettledServiceTier:    textPtr(r.SettledServiceTier),
+		ServiceTierResolution: textPtr(r.ServiceTierResolution),
+		ServiceTierDowngraded: serviceTierDowngraded(r.RequestedServiceTier, r.ActualServiceTier),
 	}
 }
 
@@ -670,6 +699,8 @@ func toAttempt(a sqlc.ListAdminRequestAttemptsByRequestRow, includeInternal, str
 		ErrorScoringSample:    a.ErrorScoringSample,
 		ErrorScoringFailure:   a.ErrorScoringFailure,
 		FinalUsageReceived:    a.FinalUsageReceived,
+		RequestedServiceTier:  textPtr(a.RequestedServiceTier),
+		UpstreamServiceTier:   textPtr(a.UpstreamServiceTier),
 		StartedAt:             a.StartedAt.Time,
 		CompletedAt:           timePtr(a.CompletedAt),
 		CreatedAt:             a.CreatedAt.Time,
@@ -690,4 +721,8 @@ func toAttempt(a sqlc.ListAdminRequestAttemptsByRequestRow, includeInternal, str
 		out.InternalErrorDetail = textPtr(a.InternalErrorDetail)
 	}
 	return out
+}
+
+func serviceTierDowngraded(requested, actual pgtype.Text) bool {
+	return requested.Valid && requested.String == "fast" && actual.Valid && actual.String == "standard"
 }

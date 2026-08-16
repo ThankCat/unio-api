@@ -11,6 +11,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/ingresslog"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
@@ -334,6 +335,12 @@ type chatValidationError struct {
 func validateChatCompletionRequest(req ChatCompletionRequest) *chatValidationError {
 	if strings.TrimSpace(req.Model) == "" {
 		return &chatValidationError{param: "model", message: "model is required"}
+	}
+	if _, err := servicetier.NormalizeOpenAIRequest(req.ServiceTier); err != nil {
+		return &chatValidationError{
+			param:   "service_tier",
+			message: "service_tier must be one of auto, default, fast, or priority",
+		}
 	}
 
 	if len(req.Messages) == 0 {

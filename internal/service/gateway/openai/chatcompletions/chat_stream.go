@@ -11,6 +11,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
@@ -37,6 +38,11 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 			failure.WithMessage(auth.ErrMissingAPIKey.Error()),
 		)
 	}
+	tierRequest, err := servicetier.NormalizeOpenAIRequest(req.ServiceTier)
+	if err != nil {
+		return err
+	}
+	req.ServiceTier = &tierRequest.UpstreamRaw
 
 	routeRequest := routing.ChatRouteRequest{
 		UserID:          principal.UserID,
@@ -51,7 +57,7 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 	}
 
 	// 模型产品资格通过后创建 request_records，并标记为 running。
-	requestRecord, err := s.createRequestRecord(ctx, principal, req, true)
+	requestRecord, err := s.createRequestRecord(ctx, principal, req, true, tierRequest.Tier)
 	if err != nil {
 		return err
 	}
@@ -112,7 +118,7 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 	authorization, err := s.lifecycle.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
 		Principal:                principal,
-		CandidatePrices:          candidatePlan.CandidateSalePrices(),
+		CandidatePrices:          candidatePlan.CandidateSalePricesForTier(requestRecord.RequestedServiceTier),
 		LongContextPolicy:        candidatePlan.LongContextPolicy(),
 		InputTokens:              candidatePlan.ConservativeInputTokens,
 		MaxCompletionTokens:      estimateMaxCompletionTokens(req),

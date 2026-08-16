@@ -25,7 +25,8 @@ INSERT INTO request_records (
     route_id,
     reasoning_effort,
     reasoning_budget_tokens,
-    client_ip
+    client_ip,
+    requested_service_tier
 )
 VALUES (
            sqlc.arg(request_id),
@@ -52,7 +53,8 @@ VALUES (
            sqlc.narg(route_id),
            sqlc.narg(reasoning_effort),
            sqlc.narg(reasoning_budget_tokens),
-           sqlc.narg(client_ip)
+           sqlc.narg(client_ip),
+           sqlc.narg(requested_service_tier)
        )
 RETURNING
     id,
@@ -82,7 +84,11 @@ RETURNING
     route_id,
     reasoning_effort,
     reasoning_budget_tokens,
-    client_ip;
+    client_ip,
+    requested_service_tier,
+    actual_service_tier,
+    settled_service_tier,
+    service_tier_resolution;
 
 -- name: GetRequestRecordForUpdate :one
 -- GetRequestRecordForUpdate 锁定请求记录，串行化同一个 request 的并发结算。
@@ -115,7 +121,11 @@ SELECT
     route_id,
     reasoning_effort,
     reasoning_budget_tokens,
-    client_ip
+    client_ip,
+    requested_service_tier,
+    actual_service_tier,
+    settled_service_tier,
+    service_tier_resolution
 FROM request_records
 WHERE id = sqlc.arg(request_record_id)
     FOR UPDATE;
@@ -248,6 +258,9 @@ WITH updated AS (
             response_id = sqlc.arg(response_id),
             final_provider_id = sqlc.arg(final_provider_id),
             final_channel_id = sqlc.arg(final_channel_id),
+            actual_service_tier = sqlc.narg(actual_service_tier),
+            settled_service_tier = sqlc.arg(settled_service_tier),
+            service_tier_resolution = sqlc.arg(service_tier_resolution),
             gateway_first_token_at = COALESCE(request_records.gateway_first_token_at, sqlc.narg(gateway_first_token_at)),
             completed_at = sqlc.arg(completed_at),
             updated_at = now()
@@ -302,6 +315,9 @@ WITH updated AS (
             response_id = sqlc.arg(response_id),
             final_provider_id = sqlc.arg(final_provider_id),
             final_channel_id = sqlc.arg(final_channel_id),
+            actual_service_tier = sqlc.narg(actual_service_tier),
+            settled_service_tier = sqlc.arg(settled_service_tier),
+            service_tier_resolution = sqlc.arg(service_tier_resolution),
             error_code = sqlc.arg(error_code),
             error_message = sqlc.arg(error_message),
             internal_error_detail = sqlc.arg(internal_error_detail),
@@ -360,6 +376,9 @@ WITH updated AS (
             response_id = sqlc.arg(response_id),
             final_provider_id = sqlc.arg(final_provider_id),
             final_channel_id = sqlc.arg(final_channel_id),
+            actual_service_tier = sqlc.narg(actual_service_tier),
+            settled_service_tier = sqlc.arg(settled_service_tier),
+            service_tier_resolution = sqlc.arg(service_tier_resolution),
             error_code = sqlc.arg(error_code),
             error_message = sqlc.arg(error_message),
             internal_error_detail = sqlc.arg(internal_error_detail),

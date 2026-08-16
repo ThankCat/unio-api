@@ -114,8 +114,9 @@ WHERE channel_models.channel_id = sqlc.arg(channel_id)
   AND channel_models.model_id = sqlc.arg(model_id);
 
 -- name: CreateChannelPrice :one
--- CreateChannelPrice 创建一条渠道-模型成本价（DEC-026：渠道只录成本，售价取 model_prices × 线路倍率）。
+-- CreateChannelPrice 创建 Standard 绝对成本覆盖与可选 Fast 精确成本子记录，单条语句保证原子性。
 -- 启用窗口重叠由 ex_channel_prices_enabled_window 保证，违反报 23P01。
+WITH created_price AS (
 INSERT INTO channel_prices (
     channel_id,
     model_id,
@@ -148,7 +149,45 @@ VALUES (
     sqlc.arg(effective_from),
     sqlc.arg(effective_to)
 )
-RETURNING *;
+RETURNING *
+), created_fast AS (
+INSERT INTO channel_price_service_tiers (
+    channel_price_id,
+    service_tier,
+    uncached_input_cost,
+    cache_read_input_cost,
+    cache_write_5m_input_cost,
+    cache_write_1h_input_cost,
+    cache_write_30m_input_cost,
+    output_cost,
+    reasoning_output_cost
+)
+SELECT
+    created_price.id,
+    'fast',
+    sqlc.arg(fast_uncached_input_cost),
+    sqlc.narg(fast_cache_read_input_cost),
+    sqlc.narg(fast_cache_write_5m_input_cost),
+    sqlc.narg(fast_cache_write_1h_input_cost),
+    sqlc.narg(fast_cache_write_30m_input_cost),
+    sqlc.arg(fast_output_cost),
+    sqlc.narg(fast_reasoning_output_cost)
+FROM created_price
+WHERE sqlc.arg(fast_configured)::boolean
+RETURNING *
+)
+SELECT
+    created_price.*,
+    COALESCE(created_fast.id, 0)::bigint AS fast_service_tier_id,
+    created_fast.uncached_input_cost AS fast_uncached_input_cost,
+    created_fast.cache_read_input_cost AS fast_cache_read_input_cost,
+    created_fast.cache_write_5m_input_cost AS fast_cache_write_5m_input_cost,
+    created_fast.cache_write_1h_input_cost AS fast_cache_write_1h_input_cost,
+    created_fast.cache_write_30m_input_cost AS fast_cache_write_30m_input_cost,
+    created_fast.output_cost AS fast_output_cost,
+    created_fast.reasoning_output_cost AS fast_reasoning_output_cost
+FROM created_price
+LEFT JOIN created_fast ON created_fast.channel_price_id = created_price.id;
 
 -- name: ListChannelPricesByChannel :many
 -- ListChannelPricesByChannel 列出某 channel 下全部渠道-模型成本价（含历史与停用），连带模型对外 ID/展示名，供 admin 管理台展示成本。
@@ -170,10 +209,20 @@ SELECT
     cp.effective_to,
     cp.created_at,
     cp.updated_at,
+    COALESCE(fast.id, 0)::bigint AS fast_service_tier_id,
+    fast.uncached_input_cost AS fast_uncached_input_cost,
+    fast.cache_read_input_cost AS fast_cache_read_input_cost,
+    fast.cache_write_5m_input_cost AS fast_cache_write_5m_input_cost,
+    fast.cache_write_1h_input_cost AS fast_cache_write_1h_input_cost,
+    fast.cache_write_30m_input_cost AS fast_cache_write_30m_input_cost,
+    fast.output_cost AS fast_output_cost,
+    fast.reasoning_output_cost AS fast_reasoning_output_cost,
     m.model_id AS model_external_id,
     m.display_name AS model_display_name
 FROM channel_prices cp
 JOIN models m ON m.id = cp.model_id
+LEFT JOIN channel_price_service_tiers fast
+    ON fast.channel_price_id = cp.id AND fast.service_tier = 'fast'
 WHERE cp.channel_id = sqlc.arg(channel_id)
 ORDER BY m.model_id, cp.effective_from DESC, cp.id DESC;
 

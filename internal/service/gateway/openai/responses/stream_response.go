@@ -12,6 +12,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
@@ -51,6 +52,11 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 			failure.WithMessage(auth.ErrMissingAPIKey.Error()),
 		)
 	}
+	tierRequest, err := servicetier.NormalizeOpenAIRequest(req.ServiceTier)
+	if err != nil {
+		return err
+	}
+	req.ServiceTier = &tierRequest.UpstreamRaw
 
 	var effort string
 	if req.Reasoning != nil && req.Reasoning.Effort != nil {
@@ -68,7 +74,7 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		return err
 	}
 
-	requestRecord, err := s.lifecycle.CreateRequest(ctx, principal, req.Model, true, lifecycle.NormalizeOpenAIEffort(effort, req.Model))
+	requestRecord, err := s.lifecycle.CreateRequestWithServiceTier(ctx, principal, req.Model, true, lifecycle.NormalizeOpenAIEffort(effort, req.Model), tierRequest.Tier)
 	if err != nil {
 		return err
 	}
@@ -129,7 +135,7 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 	authorization, err := s.lifecycle.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
 		Principal:                principal,
-		CandidatePrices:          candidatePlan.CandidateSalePrices(),
+		CandidatePrices:          candidatePlan.CandidateSalePricesForTier(requestRecord.RequestedServiceTier),
 		LongContextPolicy:        candidatePlan.LongContextPolicy(),
 		InputTokens:              candidatePlan.ConservativeInputTokens,
 		MaxCompletionTokens:      estimateMaxCompletionTokens(req),

@@ -30,7 +30,11 @@ INSERT INTO cost_snapshots (
     reasoning_output_cost_amount,
     total_cost_amount,
     formula_version,
-    long_context_applied
+    long_context_applied,
+    service_tier,
+    model_price_service_tier_id,
+    channel_price_service_tier_id,
+    tier_cost_source
 )
 VALUES (
     sqlc.arg(request_record_id),
@@ -62,6 +66,10 @@ VALUES (
     sqlc.arg(reasoning_output_cost_amount),
     sqlc.arg(total_cost_amount),
     sqlc.arg(formula_version),
-    sqlc.arg(long_context_applied)
+    sqlc.arg(long_context_applied),
+    sqlc.arg(service_tier),
+    sqlc.narg(model_price_service_tier_id),
+    sqlc.narg(channel_price_service_tier_id),
+    sqlc.arg(tier_cost_source)
 )
 RETURNING *;

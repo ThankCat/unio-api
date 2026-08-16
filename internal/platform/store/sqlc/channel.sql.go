@@ -1082,6 +1082,7 @@ func (q *Queries) CreateChannelModel(ctx context.Context, arg CreateChannelModel
 }
 
 const createChannelPrice = `-- name: CreateChannelPrice :one
+WITH created_price AS (
 INSERT INTO channel_prices (
     channel_id,
     model_id,
@@ -1115,28 +1116,102 @@ VALUES (
     $14
 )
 RETURNING id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_cost
+), created_fast AS (
+INSERT INTO channel_price_service_tiers (
+    channel_price_id,
+    service_tier,
+    uncached_input_cost,
+    cache_read_input_cost,
+    cache_write_5m_input_cost,
+    cache_write_1h_input_cost,
+    cache_write_30m_input_cost,
+    output_cost,
+    reasoning_output_cost
+)
+SELECT
+    created_price.id,
+    'fast',
+    $15,
+    $16,
+    $17,
+    $18,
+    $19,
+    $20,
+    $21
+FROM created_price
+WHERE $22::boolean
+RETURNING id, channel_price_id, service_tier, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, cache_write_30m_input_cost, output_cost, reasoning_output_cost, created_at
+)
+SELECT
+    created_price.id, created_price.channel_id, created_price.model_id, created_price.currency, created_price.pricing_unit, created_price.uncached_input_cost, created_price.cache_read_input_cost, created_price.cache_write_5m_input_cost, created_price.cache_write_1h_input_cost, created_price.output_cost, created_price.reasoning_output_cost, created_price.status, created_price.effective_from, created_price.effective_to, created_price.created_at, created_price.updated_at, created_price.cache_write_30m_input_cost,
+    COALESCE(created_fast.id, 0)::bigint AS fast_service_tier_id,
+    created_fast.uncached_input_cost AS fast_uncached_input_cost,
+    created_fast.cache_read_input_cost AS fast_cache_read_input_cost,
+    created_fast.cache_write_5m_input_cost AS fast_cache_write_5m_input_cost,
+    created_fast.cache_write_1h_input_cost AS fast_cache_write_1h_input_cost,
+    created_fast.cache_write_30m_input_cost AS fast_cache_write_30m_input_cost,
+    created_fast.output_cost AS fast_output_cost,
+    created_fast.reasoning_output_cost AS fast_reasoning_output_cost
+FROM created_price
+LEFT JOIN created_fast ON created_fast.channel_price_id = created_price.id
 `
 
 type CreateChannelPriceParams struct {
-	ChannelID              int64
-	ModelID                int64
-	Currency               string
-	PricingUnit            string
-	UncachedInputCost      pgtype.Numeric
-	CacheReadInputCost     pgtype.Numeric
-	CacheWrite5mInputCost  pgtype.Numeric
-	CacheWrite1hInputCost  pgtype.Numeric
-	CacheWrite30mInputCost pgtype.Numeric
-	OutputCost             pgtype.Numeric
-	ReasoningOutputCost    pgtype.Numeric
-	Status                 string
-	EffectiveFrom          pgtype.Timestamptz
-	EffectiveTo            pgtype.Timestamptz
+	ChannelID                  int64
+	ModelID                    int64
+	Currency                   string
+	PricingUnit                string
+	UncachedInputCost          pgtype.Numeric
+	CacheReadInputCost         pgtype.Numeric
+	CacheWrite5mInputCost      pgtype.Numeric
+	CacheWrite1hInputCost      pgtype.Numeric
+	CacheWrite30mInputCost     pgtype.Numeric
+	OutputCost                 pgtype.Numeric
+	ReasoningOutputCost        pgtype.Numeric
+	Status                     string
+	EffectiveFrom              pgtype.Timestamptz
+	EffectiveTo                pgtype.Timestamptz
+	FastUncachedInputCost      pgtype.Numeric
+	FastCacheReadInputCost     pgtype.Numeric
+	FastCacheWrite5mInputCost  pgtype.Numeric
+	FastCacheWrite1hInputCost  pgtype.Numeric
+	FastCacheWrite30mInputCost pgtype.Numeric
+	FastOutputCost             pgtype.Numeric
+	FastReasoningOutputCost    pgtype.Numeric
+	FastConfigured             bool
 }
 
-// CreateChannelPrice 创建一条渠道-模型成本价（DEC-026：渠道只录成本，售价取 model_prices × 线路倍率）。
+type CreateChannelPriceRow struct {
+	ID                         int64
+	ChannelID                  int64
+	ModelID                    int64
+	Currency                   string
+	PricingUnit                string
+	UncachedInputCost          pgtype.Numeric
+	CacheReadInputCost         pgtype.Numeric
+	CacheWrite5mInputCost      pgtype.Numeric
+	CacheWrite1hInputCost      pgtype.Numeric
+	OutputCost                 pgtype.Numeric
+	ReasoningOutputCost        pgtype.Numeric
+	Status                     string
+	EffectiveFrom              pgtype.Timestamptz
+	EffectiveTo                pgtype.Timestamptz
+	CreatedAt                  pgtype.Timestamptz
+	UpdatedAt                  pgtype.Timestamptz
+	CacheWrite30mInputCost     pgtype.Numeric
+	FastServiceTierID          int64
+	FastUncachedInputCost      pgtype.Numeric
+	FastCacheReadInputCost     pgtype.Numeric
+	FastCacheWrite5mInputCost  pgtype.Numeric
+	FastCacheWrite1hInputCost  pgtype.Numeric
+	FastCacheWrite30mInputCost pgtype.Numeric
+	FastOutputCost             pgtype.Numeric
+	FastReasoningOutputCost    pgtype.Numeric
+}
+
+// CreateChannelPrice 创建 Standard 绝对成本覆盖与可选 Fast 精确成本子记录，单条语句保证原子性。
 // 启用窗口重叠由 ex_channel_prices_enabled_window 保证，违反报 23P01。
-func (q *Queries) CreateChannelPrice(ctx context.Context, arg CreateChannelPriceParams) (ChannelPrice, error) {
+func (q *Queries) CreateChannelPrice(ctx context.Context, arg CreateChannelPriceParams) (CreateChannelPriceRow, error) {
 	row := q.db.QueryRow(ctx, createChannelPrice,
 		arg.ChannelID,
 		arg.ModelID,
@@ -1152,8 +1227,16 @@ func (q *Queries) CreateChannelPrice(ctx context.Context, arg CreateChannelPrice
 		arg.Status,
 		arg.EffectiveFrom,
 		arg.EffectiveTo,
+		arg.FastUncachedInputCost,
+		arg.FastCacheReadInputCost,
+		arg.FastCacheWrite5mInputCost,
+		arg.FastCacheWrite1hInputCost,
+		arg.FastCacheWrite30mInputCost,
+		arg.FastOutputCost,
+		arg.FastReasoningOutputCost,
+		arg.FastConfigured,
 	)
-	var i ChannelPrice
+	var i CreateChannelPriceRow
 	err := row.Scan(
 		&i.ID,
 		&i.ChannelID,
@@ -1172,6 +1255,14 @@ func (q *Queries) CreateChannelPrice(ctx context.Context, arg CreateChannelPrice
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.CacheWrite30mInputCost,
+		&i.FastServiceTierID,
+		&i.FastUncachedInputCost,
+		&i.FastCacheReadInputCost,
+		&i.FastCacheWrite5mInputCost,
+		&i.FastCacheWrite1hInputCost,
+		&i.FastCacheWrite30mInputCost,
+		&i.FastOutputCost,
+		&i.FastReasoningOutputCost,
 	)
 	return i, err
 }
@@ -1561,34 +1652,52 @@ SELECT
     cp.effective_to,
     cp.created_at,
     cp.updated_at,
+    COALESCE(fast.id, 0)::bigint AS fast_service_tier_id,
+    fast.uncached_input_cost AS fast_uncached_input_cost,
+    fast.cache_read_input_cost AS fast_cache_read_input_cost,
+    fast.cache_write_5m_input_cost AS fast_cache_write_5m_input_cost,
+    fast.cache_write_1h_input_cost AS fast_cache_write_1h_input_cost,
+    fast.cache_write_30m_input_cost AS fast_cache_write_30m_input_cost,
+    fast.output_cost AS fast_output_cost,
+    fast.reasoning_output_cost AS fast_reasoning_output_cost,
     m.model_id AS model_external_id,
     m.display_name AS model_display_name
 FROM channel_prices cp
 JOIN models m ON m.id = cp.model_id
+LEFT JOIN channel_price_service_tiers fast
+    ON fast.channel_price_id = cp.id AND fast.service_tier = 'fast'
 WHERE cp.channel_id = $1
 ORDER BY m.model_id, cp.effective_from DESC, cp.id DESC
 `
 
 type ListChannelPricesByChannelRow struct {
-	ID                     int64
-	ChannelID              int64
-	ModelID                int64
-	Currency               string
-	PricingUnit            string
-	UncachedInputCost      pgtype.Numeric
-	CacheReadInputCost     pgtype.Numeric
-	CacheWrite5mInputCost  pgtype.Numeric
-	CacheWrite1hInputCost  pgtype.Numeric
-	CacheWrite30mInputCost pgtype.Numeric
-	OutputCost             pgtype.Numeric
-	ReasoningOutputCost    pgtype.Numeric
-	Status                 string
-	EffectiveFrom          pgtype.Timestamptz
-	EffectiveTo            pgtype.Timestamptz
-	CreatedAt              pgtype.Timestamptz
-	UpdatedAt              pgtype.Timestamptz
-	ModelExternalID        string
-	ModelDisplayName       string
+	ID                         int64
+	ChannelID                  int64
+	ModelID                    int64
+	Currency                   string
+	PricingUnit                string
+	UncachedInputCost          pgtype.Numeric
+	CacheReadInputCost         pgtype.Numeric
+	CacheWrite5mInputCost      pgtype.Numeric
+	CacheWrite1hInputCost      pgtype.Numeric
+	CacheWrite30mInputCost     pgtype.Numeric
+	OutputCost                 pgtype.Numeric
+	ReasoningOutputCost        pgtype.Numeric
+	Status                     string
+	EffectiveFrom              pgtype.Timestamptz
+	EffectiveTo                pgtype.Timestamptz
+	CreatedAt                  pgtype.Timestamptz
+	UpdatedAt                  pgtype.Timestamptz
+	FastServiceTierID          int64
+	FastUncachedInputCost      pgtype.Numeric
+	FastCacheReadInputCost     pgtype.Numeric
+	FastCacheWrite5mInputCost  pgtype.Numeric
+	FastCacheWrite1hInputCost  pgtype.Numeric
+	FastCacheWrite30mInputCost pgtype.Numeric
+	FastOutputCost             pgtype.Numeric
+	FastReasoningOutputCost    pgtype.Numeric
+	ModelExternalID            string
+	ModelDisplayName           string
 }
 
 // ListChannelPricesByChannel 列出某 channel 下全部渠道-模型成本价（含历史与停用），连带模型对外 ID/展示名，供 admin 管理台展示成本。
@@ -1619,6 +1728,14 @@ func (q *Queries) ListChannelPricesByChannel(ctx context.Context, channelID int6
 			&i.EffectiveTo,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.FastServiceTierID,
+			&i.FastUncachedInputCost,
+			&i.FastCacheReadInputCost,
+			&i.FastCacheWrite5mInputCost,
+			&i.FastCacheWrite1hInputCost,
+			&i.FastCacheWrite30mInputCost,
+			&i.FastOutputCost,
+			&i.FastReasoningOutputCost,
 			&i.ModelExternalID,
 			&i.ModelDisplayName,
 		); err != nil {

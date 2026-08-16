@@ -797,10 +797,10 @@ func TestProjectModelPolicyAllowedEnablesAllowListMode(t *testing.T) {
 
 // createChannelPriceForTest 创建一条 enabled 渠道-模型成本价（成本 1/4），供路由「已配成本」过滤与计费测试（DEC-026）。
 // effective_from 取 at-1h、effective_to 为空，保证在 at（及之后）时刻生效。
-func createChannelPriceForTest(t *testing.T, ctx context.Context, queries *sqlc.Queries, channelID, modelID int64, at time.Time) sqlc.ChannelPrice {
+func createChannelPriceForTest(t *testing.T, ctx context.Context, queries *sqlc.Queries, channelID, modelID int64, at time.Time) sqlc.CreateChannelPriceRow {
 	t.Helper()
 
-	price, err := queries.CreateChannelPrice(ctx, sqlc.CreateChannelPriceParams{
+	created, err := queries.CreateChannelPrice(ctx, sqlc.CreateChannelPriceParams{
 		ChannelID:         channelID,
 		ModelID:           modelID,
 		Currency:          "USD",
@@ -814,7 +814,7 @@ func createChannelPriceForTest(t *testing.T, ctx context.Context, queries *sqlc.
 	if err != nil {
 		t.Fatalf("create channel price: %v", err)
 	}
-	return price
+	return created
 }
 
 // createModelPriceForTest 创建一条 enabled 模型基准售价（model_prices，2/8），供 DEC-026 路由

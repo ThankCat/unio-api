@@ -139,8 +139,9 @@ SET reminder_snooze_until = sqlc.narg(reminder_snooze_until),
 WHERE model_id = sqlc.arg(model_id);
 
 -- name: CreateModelPrice :one
--- CreateModelPrice 创建一条模型基准售价（DEC-026）。客户最终售价 = 本基准价 × 线路倍率。
+-- CreateModelPrice 创建 Standard 基准售价与可选 Fast 精确价格子记录，单条语句保证原子性。
 -- 启用窗口重叠由 ex_model_prices_enabled_window 保证，违反报 23P01。
+WITH created_price AS (
 INSERT INTO model_prices (
     model_id,
     currency,
@@ -179,7 +180,51 @@ VALUES (
     sqlc.arg(long_context_input_multiplier),
     sqlc.arg(long_context_output_multiplier)
 )
-RETURNING *;
+RETURNING *
+), created_fast AS (
+INSERT INTO model_price_service_tiers (
+    model_price_id,
+    service_tier,
+    uncached_input_price,
+    cache_read_input_price,
+    cache_write_5m_input_price,
+    cache_write_1h_input_price,
+    cache_write_30m_input_price,
+    output_price,
+    reasoning_output_price,
+    reference_source,
+    reference_checked_at
+)
+SELECT
+    created_price.id,
+    'fast',
+    sqlc.arg(fast_uncached_input_price),
+    sqlc.narg(fast_cache_read_input_price),
+    sqlc.narg(fast_cache_write_5m_input_price),
+    sqlc.narg(fast_cache_write_1h_input_price),
+    sqlc.narg(fast_cache_write_30m_input_price),
+    sqlc.arg(fast_output_price),
+    sqlc.narg(fast_reasoning_output_price),
+    sqlc.narg(fast_reference_source),
+    sqlc.narg(fast_reference_checked_at)
+FROM created_price
+WHERE sqlc.arg(fast_configured)::boolean
+RETURNING *
+)
+SELECT
+    created_price.*,
+    COALESCE(created_fast.id, 0)::bigint AS fast_service_tier_id,
+    created_fast.uncached_input_price AS fast_uncached_input_price,
+    created_fast.cache_read_input_price AS fast_cache_read_input_price,
+    created_fast.cache_write_5m_input_price AS fast_cache_write_5m_input_price,
+    created_fast.cache_write_1h_input_price AS fast_cache_write_1h_input_price,
+    created_fast.cache_write_30m_input_price AS fast_cache_write_30m_input_price,
+    created_fast.output_price AS fast_output_price,
+    created_fast.reasoning_output_price AS fast_reasoning_output_price,
+    created_fast.reference_source AS fast_reference_source,
+    created_fast.reference_checked_at AS fast_reference_checked_at
+FROM created_price
+LEFT JOIN created_fast ON created_fast.model_price_id = created_price.id;
 
 -- name: GetModelPrice :one
 -- GetModelPrice 按主键读取单条模型基准售价。
@@ -208,10 +253,22 @@ SELECT
     mp.long_context_threshold,
     mp.long_context_input_multiplier,
     mp.long_context_output_multiplier,
+    COALESCE(fast.id, 0)::bigint AS fast_service_tier_id,
+    fast.uncached_input_price AS fast_uncached_input_price,
+    fast.cache_read_input_price AS fast_cache_read_input_price,
+    fast.cache_write_5m_input_price AS fast_cache_write_5m_input_price,
+    fast.cache_write_1h_input_price AS fast_cache_write_1h_input_price,
+    fast.cache_write_30m_input_price AS fast_cache_write_30m_input_price,
+    fast.output_price AS fast_output_price,
+    fast.reasoning_output_price AS fast_reasoning_output_price,
+    fast.reference_source AS fast_reference_source,
+    fast.reference_checked_at AS fast_reference_checked_at,
     m.model_id AS model_external_id,
     m.display_name AS model_display_name
 FROM model_prices mp
 JOIN models m ON m.id = mp.model_id
+LEFT JOIN model_price_service_tiers fast
+    ON fast.model_price_id = mp.id AND fast.service_tier = 'fast'
 WHERE mp.model_id = sqlc.arg(model_id)
 ORDER BY mp.effective_from DESC, mp.id DESC;
 

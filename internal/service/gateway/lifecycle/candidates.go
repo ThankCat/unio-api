@@ -6,6 +6,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
@@ -117,6 +118,20 @@ type CandidateExclusion struct {
 func (p CandidatePlan) CandidateSalePrices() []billing.CustomerPriceSnapshot {
 	prices := make([]billing.CustomerPriceSnapshot, 0, len(p.Candidates))
 	for _, c := range p.Candidates {
+		prices = append(prices, c.Route.SalePrice)
+	}
+	return prices
+}
+
+// CandidateSalePricesForTier 为预授权选择请求前可锁定的售价上界。
+// Fast 精确售价缺失时回落 Standard，且不改变候选集合或顺序。
+func (p CandidatePlan) CandidateSalePricesForTier(tier servicetier.Tier) []billing.CustomerPriceSnapshot {
+	prices := make([]billing.CustomerPriceSnapshot, 0, len(p.Candidates))
+	for _, c := range p.Candidates {
+		if tier == servicetier.TierFast && c.Route.FastModelPriceServiceTierID > 0 {
+			prices = append(prices, c.Route.FastSalePrice)
+			continue
+		}
 		prices = append(prices, c.Route.SalePrice)
 	}
 	return prices

@@ -188,7 +188,7 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 		Audio:             cloneRawMessage(choice.Message.Audio),
 		Logprobs:          cloneRawMessage(choice.Logprobs),
 		Upstream:          meta,
-		Facts:             responseFactsNonStream(upstreamRespBody.ID, upstreamRespBody.Model, finishReason, usage, meta),
+		Facts:             responseFactsNonStream(upstreamRespBody.ID, upstreamRespBody.Model, finishReason, upstreamRespBody.ServiceTier, usage, meta),
 	}, nil
 }
 
@@ -273,6 +273,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	var responseID string
 	var upstreamModel string
 	var rawFinish string
+	var serviceTier *string
 	var finalUsage *adapter.ChatUsage
 	terminalReceived := false
 
@@ -291,7 +292,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 
 		var streamResp chatCompletionStreamResponse
 		if err := json.Unmarshal(payload, &streamResp); err != nil {
-			return streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta), failure.Wrap(
+			return streamOutcome(responseID, upstreamModel, rawFinish, serviceTier, finalUsage, meta), failure.Wrap(
 				failure.CodeAdapterDecodeResponseFailed,
 				err,
 				failure.WithMessage("openai adapter decode stream chunk"),
@@ -300,7 +301,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 
 		chunks, err := streamChunksFromResponse(streamResp, meta)
 		if err != nil {
-			return streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta), err
+			return streamOutcome(responseID, upstreamModel, rawFinish, serviceTier, finalUsage, meta), err
 		}
 
 		for _, chunk := range chunks {
@@ -317,13 +318,23 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 			if chunk.FinishReason != nil {
 				rawFinish = *chunk.FinishReason
 			}
+			if chunk.ServiceTier != nil {
+				if serviceTier != nil && *serviceTier != *chunk.ServiceTier {
+					return streamOutcome(responseID, upstreamModel, rawFinish, serviceTier, finalUsage, meta), failure.New(
+						failure.CodeAdapterInvalidResponse,
+						failure.WithMessage("openai adapter stream service_tier changed across chunks"),
+					)
+				}
+				value := *chunk.ServiceTier
+				serviceTier = &value
+			}
 			if chunk.Usage != nil {
 				usage := *chunk.Usage
 				finalUsage = &usage
 			}
 
 			if err := emit(chunk); err != nil {
-				return streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta), failure.Wrap(
+				return streamOutcome(responseID, upstreamModel, rawFinish, serviceTier, finalUsage, meta), failure.Wrap(
 					failure.CodeAdapterEmitFailed,
 					err,
 					failure.WithMessage("openai adapter send stream chunk"),
@@ -333,11 +344,11 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	}
 
 	if err := streamReader.Err(); err != nil {
-		return streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta),
+		return streamOutcome(responseID, upstreamModel, rawFinish, serviceTier, finalUsage, meta),
 			newUpstreamStreamReadError(err, context.Cause(streamCtx), "openai adapter read stream event")
 	}
 
-	outcome := streamOutcome(responseID, upstreamModel, rawFinish, finalUsage, meta)
+	outcome := streamOutcome(responseID, upstreamModel, rawFinish, serviceTier, finalUsage, meta)
 	if !terminalReceived {
 		return outcome, newUpstreamStreamIncompleteError("openai adapter stream ended before [DONE]")
 	}

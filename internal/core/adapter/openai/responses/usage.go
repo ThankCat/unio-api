@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 )
 
@@ -25,6 +26,7 @@ type wireResponse struct {
 	Usage             *wireUsage             `json:"usage"`
 	IncompleteDetails *wireIncompleteDetails `json:"incomplete_details"`
 	Error             *wireError             `json:"error"`
+	ServiceTier       *string                `json:"service_tier"`
 }
 
 // wireUsage 是上游 Responses usage 对象。
@@ -170,6 +172,7 @@ func responsesFacts(resp wireResponse, u adapter.ChatUsage, meta adapter.Upstrea
 		Usage:               u.ToUsageFacts(),
 		UsageSource:         source,
 		UsageMappingVersion: usageMappingVersionResponses,
+		ServiceTier:         servicetier.ResolveOpenAIResponse(resp.ServiceTier),
 		Metadata:            meta,
 	}
 }

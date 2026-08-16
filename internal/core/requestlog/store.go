@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
@@ -50,6 +51,7 @@ func (s *Store) CreateRequest(ctx context.Context, params CreateRequestParams) (
 		ReasoningEffort:       textOrNull(params.ReasoningEffort),
 		ReasoningBudgetTokens: int4OrNull(params.ReasoningBudgetTokens),
 		ClientIp:              textOrNull(params.ClientIP),
+		RequestedServiceTier:  pgtype.Text{String: string(params.RequestedServiceTier), Valid: params.RequestedServiceTier != ""},
 	})
 	if err != nil {
 		return RequestRecord{}, requestLogStoreFailure(err, "create request record")
@@ -133,14 +135,17 @@ func (s *Store) MarkRequestDeliveryInterrupted(ctx context.Context, id int64) (R
 // MarkRequestSucceeded 将 request record 标记为 succeeded。
 func (s *Store) MarkRequestSucceeded(ctx context.Context, params MarkRequestSucceededParams) (RequestRecord, error) {
 	row, err := s.queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
-		ResponseModelID:     pgtype.Text{String: params.ResponseModelID, Valid: true},
-		ResponseProtocol:    pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
-		ResponseID:          pgtype.Text{String: params.ResponseID, Valid: true},
-		FinalProviderID:     pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
-		FinalChannelID:      pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
-		GatewayFirstTokenAt: optionalTimestamptz(params.GatewayFirstTokenAt),
-		CompletedAt:         timestamptz(params.CompletedAt),
-		RequestRecordID:     params.ID,
+		ResponseModelID:       pgtype.Text{String: params.ResponseModelID, Valid: true},
+		ResponseProtocol:      pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
+		ResponseID:            pgtype.Text{String: params.ResponseID, Valid: true},
+		FinalProviderID:       pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
+		FinalChannelID:        pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
+		ActualServiceTier:     pgtype.Text{String: string(params.ActualServiceTier), Valid: params.ActualServiceTier != ""},
+		SettledServiceTier:    pgtype.Text{String: string(params.SettledServiceTier), Valid: params.SettledServiceTier != ""},
+		ServiceTierResolution: pgtype.Text{String: string(params.ServiceTierResolution), Valid: params.ServiceTierResolution != ""},
+		GatewayFirstTokenAt:   optionalTimestamptz(params.GatewayFirstTokenAt),
+		CompletedAt:           timestamptz(params.CompletedAt),
+		RequestRecordID:       params.ID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -155,17 +160,20 @@ func (s *Store) MarkRequestSucceeded(ctx context.Context, params MarkRequestSucc
 // MarkSettledRequestCanceled 将 request record 标记为已结算的 canceled。
 func (s *Store) MarkSettledRequestCanceled(ctx context.Context, params MarkSettledRequestCanceledParams) (RequestRecord, error) {
 	row, err := s.queries.MarkSettledRequestCanceled(ctx, sqlc.MarkSettledRequestCanceledParams{
-		ResponseModelID:     pgtype.Text{String: params.ResponseModelID, Valid: true},
-		ResponseProtocol:    pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
-		ResponseID:          pgtype.Text{String: params.ResponseID, Valid: true},
-		FinalProviderID:     pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
-		FinalChannelID:      pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
-		ErrorCode:           pgtype.Text{String: params.ErrorCode, Valid: true},
-		ErrorMessage:        pgtype.Text{String: params.ErrorMessage, Valid: true},
-		InternalErrorDetail: nullableText(params.InternalErrorDetail),
-		GatewayFirstTokenAt: optionalTimestamptz(params.GatewayFirstTokenAt),
-		CompletedAt:         timestamptz(params.CompletedAt),
-		RequestRecordID:     params.ID,
+		ResponseModelID:       pgtype.Text{String: params.ResponseModelID, Valid: true},
+		ResponseProtocol:      pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
+		ResponseID:            pgtype.Text{String: params.ResponseID, Valid: true},
+		FinalProviderID:       pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
+		FinalChannelID:        pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
+		ActualServiceTier:     pgtype.Text{String: string(params.ActualServiceTier), Valid: params.ActualServiceTier != ""},
+		SettledServiceTier:    pgtype.Text{String: string(params.SettledServiceTier), Valid: params.SettledServiceTier != ""},
+		ServiceTierResolution: pgtype.Text{String: string(params.ServiceTierResolution), Valid: params.ServiceTierResolution != ""},
+		ErrorCode:             pgtype.Text{String: params.ErrorCode, Valid: true},
+		ErrorMessage:          pgtype.Text{String: params.ErrorMessage, Valid: true},
+		InternalErrorDetail:   nullableText(params.InternalErrorDetail),
+		GatewayFirstTokenAt:   optionalTimestamptz(params.GatewayFirstTokenAt),
+		CompletedAt:           timestamptz(params.CompletedAt),
+		RequestRecordID:       params.ID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -180,17 +188,20 @@ func (s *Store) MarkSettledRequestCanceled(ctx context.Context, params MarkSettl
 // MarkSettledRequestFailed 将 request record 标记为已结算的 failed。
 func (s *Store) MarkSettledRequestFailed(ctx context.Context, params MarkSettledRequestFailedParams) (RequestRecord, error) {
 	row, err := s.queries.MarkSettledRequestFailed(ctx, sqlc.MarkSettledRequestFailedParams{
-		ResponseModelID:     pgtype.Text{String: params.ResponseModelID, Valid: true},
-		ResponseProtocol:    pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
-		ResponseID:          pgtype.Text{String: params.ResponseID, Valid: true},
-		FinalProviderID:     pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
-		FinalChannelID:      pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
-		ErrorCode:           pgtype.Text{String: params.ErrorCode, Valid: true},
-		ErrorMessage:        pgtype.Text{String: params.ErrorMessage, Valid: true},
-		InternalErrorDetail: nullableText(params.InternalErrorDetail),
-		GatewayFirstTokenAt: optionalTimestamptz(params.GatewayFirstTokenAt),
-		CompletedAt:         timestamptz(params.CompletedAt),
-		RequestRecordID:     params.ID,
+		ResponseModelID:       pgtype.Text{String: params.ResponseModelID, Valid: true},
+		ResponseProtocol:      pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
+		ResponseID:            pgtype.Text{String: params.ResponseID, Valid: true},
+		FinalProviderID:       pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
+		FinalChannelID:        pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
+		ActualServiceTier:     pgtype.Text{String: string(params.ActualServiceTier), Valid: params.ActualServiceTier != ""},
+		SettledServiceTier:    pgtype.Text{String: string(params.SettledServiceTier), Valid: params.SettledServiceTier != ""},
+		ServiceTierResolution: pgtype.Text{String: string(params.ServiceTierResolution), Valid: params.ServiceTierResolution != ""},
+		ErrorCode:             pgtype.Text{String: params.ErrorCode, Valid: true},
+		ErrorMessage:          pgtype.Text{String: params.ErrorMessage, Valid: true},
+		InternalErrorDetail:   nullableText(params.InternalErrorDetail),
+		GatewayFirstTokenAt:   optionalTimestamptz(params.GatewayFirstTokenAt),
+		CompletedAt:           timestamptz(params.CompletedAt),
+		RequestRecordID:       params.ID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -281,6 +292,7 @@ func (s *Store) CreateAttempt(ctx context.Context, params CreateAttemptParams) (
 		UsageMappingVersion:    pgtype.Text{Valid: false},
 		StartedAt:              timestamptz(params.StartedAt),
 		CompletedAt:            pgtype.Timestamptz{Valid: false},
+		RequestedServiceTier:   pgtype.Text{String: string(params.RequestedServiceTier), Valid: params.RequestedServiceTier != ""},
 	})
 	if err != nil {
 		return AttemptRecord{}, requestLogStoreFailure(err, "create request attempt")
@@ -366,6 +378,7 @@ func (s *Store) MarkAttemptSucceeded(ctx context.Context, params MarkAttemptSucc
 		GatewayFirstTokenAt:   optionalTimestamptz(params.GatewayFirstTokenAt),
 		FinalUsageReceived:    params.FinalUsageReceived,
 		UsageMappingVersion:   pgtype.Text{String: params.UsageMappingVersion, Valid: true},
+		UpstreamServiceTier:   optionalText(params.UpstreamServiceTier),
 		CompletedAt:           timestamptz(params.CompletedAt),
 		AttemptID:             params.ID,
 	})
@@ -394,6 +407,7 @@ func (s *Store) MarkSettledAttemptCanceled(ctx context.Context, params MarkSettl
 		GatewayFirstTokenAt:   optionalTimestamptz(params.GatewayFirstTokenAt),
 		FinalUsageReceived:    params.FinalUsageReceived,
 		UsageMappingVersion:   pgtype.Text{String: params.UsageMappingVersion, Valid: true},
+		UpstreamServiceTier:   optionalText(params.UpstreamServiceTier),
 		CompletedAt:           timestamptz(params.CompletedAt),
 		AttemptID:             params.ID,
 	})
@@ -422,6 +436,7 @@ func (s *Store) MarkSettledAttemptFailed(ctx context.Context, params MarkSettled
 		GatewayFirstTokenAt:   optionalTimestamptz(params.GatewayFirstTokenAt),
 		FinalUsageReceived:    params.FinalUsageReceived,
 		UsageMappingVersion:   pgtype.Text{String: params.UsageMappingVersion, Valid: true},
+		UpstreamServiceTier:   optionalText(params.UpstreamServiceTier),
 		CompletedAt:           timestamptz(params.CompletedAt),
 		AttemptID:             params.ID,
 	})
@@ -478,28 +493,32 @@ func (s *Store) MarkAttemptCanceled(ctx context.Context, params MarkAttemptCance
 // requestRecordFromSQLC 将 sqlc request row 转成 requestlog 领域 DTO。
 func requestRecordFromSQLC(row sqlc.RequestRecord) RequestRecord {
 	return RequestRecord{
-		ID:                  row.ID,
-		RequestID:           row.RequestID,
-		UserID:              row.UserID,
-		APIKeyID:            row.ApiKeyID,
-		RequestedModelID:    row.RequestedModelID,
-		IngressProtocol:     Protocol(row.IngressProtocol),
-		Endpoint:            Endpoint(row.Endpoint),
-		ResponseModelID:     textPtr(row.ResponseModelID),
-		ResponseProtocol:    textPtr(row.ResponseProtocol),
-		ResponseID:          textPtr(row.ResponseID),
-		Stream:              row.Stream,
-		Status:              RequestStatus(row.Status),
-		FinalProviderID:     int64Ptr(row.FinalProviderID),
-		FinalChannelID:      int64Ptr(row.FinalChannelID),
-		ErrorCode:           textPtr(row.ErrorCode),
-		ErrorMessage:        textPtr(row.ErrorMessage),
-		InternalErrorDetail: textPtr(row.InternalErrorDetail),
-		DeliveryStatus:      DeliveryStatus(row.DeliveryStatus),
-		GatewayFirstTokenAt: timePtr(row.GatewayFirstTokenAt),
-		ResponseCompletedAt: timePtr(row.ResponseCompletedAt),
-		StartedAt:           row.StartedAt.Time,
-		CompletedAt:         timePtr(row.CompletedAt),
+		ID:                    row.ID,
+		RequestID:             row.RequestID,
+		UserID:                row.UserID,
+		APIKeyID:              row.ApiKeyID,
+		RequestedModelID:      row.RequestedModelID,
+		IngressProtocol:       Protocol(row.IngressProtocol),
+		Endpoint:              Endpoint(row.Endpoint),
+		ResponseModelID:       textPtr(row.ResponseModelID),
+		ResponseProtocol:      textPtr(row.ResponseProtocol),
+		ResponseID:            textPtr(row.ResponseID),
+		Stream:                row.Stream,
+		Status:                RequestStatus(row.Status),
+		FinalProviderID:       int64Ptr(row.FinalProviderID),
+		FinalChannelID:        int64Ptr(row.FinalChannelID),
+		ErrorCode:             textPtr(row.ErrorCode),
+		ErrorMessage:          textPtr(row.ErrorMessage),
+		InternalErrorDetail:   textPtr(row.InternalErrorDetail),
+		DeliveryStatus:        DeliveryStatus(row.DeliveryStatus),
+		GatewayFirstTokenAt:   timePtr(row.GatewayFirstTokenAt),
+		ResponseCompletedAt:   timePtr(row.ResponseCompletedAt),
+		StartedAt:             row.StartedAt.Time,
+		CompletedAt:           timePtr(row.CompletedAt),
+		RequestedServiceTier:  servicetier.Tier(row.RequestedServiceTier.String),
+		ActualServiceTier:     servicetier.Tier(row.ActualServiceTier.String),
+		SettledServiceTier:    servicetier.Tier(row.SettledServiceTier.String),
+		ServiceTierResolution: row.ServiceTierResolution.String,
 	}
 }
 
@@ -540,6 +559,8 @@ func attemptRecordFromSQLC(row sqlc.RequestAttempt) AttemptRecord {
 		UsageMappingVersion:        textPtr(row.UsageMappingVersion),
 		StartedAt:                  row.StartedAt.Time,
 		CompletedAt:                timePtr(row.CompletedAt),
+		RequestedServiceTier:       servicetier.Tier(row.RequestedServiceTier.String),
+		UpstreamServiceTier:        textPtr(row.UpstreamServiceTier),
 	}
 }
 

@@ -36,6 +36,26 @@ type requestRejectionMetricsRecorder interface {
 	IncRequestRejected(protocol string, reason string)
 }
 
+type serviceTierMetricsRecorder interface {
+	IncServiceTier(requested, actual, settled, resolution string)
+}
+
+func (l *RequestLifecycle) recordServiceTierMetric(facts serviceTierObservation) {
+	if l == nil || !facts.present {
+		return
+	}
+	m, ok := l.metrics.(serviceTierMetricsRecorder)
+	if !ok {
+		return
+	}
+	m.IncServiceTier(
+		string(facts.requested),
+		string(facts.actual),
+		string(facts.settled),
+		string(facts.resolution),
+	)
+}
+
 // RecordRequestRejected records a bounded qualification outcome that happened before request_records creation.
 func (l *RequestLifecycle) RecordRequestRejected(err error) {
 	if l == nil || err == nil {

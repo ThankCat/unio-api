@@ -110,6 +110,10 @@ type ChatRouteCandidate struct {
 	// 供保守预授权上界与结算扣费，不随命中哪条渠道变化。
 	// 注意：此处为短上下文牌价；长上下文阶梯在授权/结算时按 LongContextPolicy + 输入合计再缩放。
 	SalePrice billing.CustomerPriceSnapshot
+	// FastModelPriceServiceTierID/FastSalePrice 是同一模型价格窗口下可选的 Fast 精确售价。
+	// 缺失只表示无法按 Fast 计费，绝不影响候选资格或排序。
+	FastModelPriceServiceTierID int64
+	FastSalePrice               billing.CustomerPriceSnapshot
 
 	// LongContextPolicy 来自计算 SalePrice 所用的 model_prices 窗口；启用时输入合计超过阈值则整单输入/输出单价按倍率放大。
 	LongContextPolicy billing.LongContextPolicy
@@ -126,6 +130,9 @@ type ChatRouteCandidate struct {
 	ChannelRechargeFactorID int64
 	// ChannelCost 是命中渠道当前生效的上游真实成本快照（覆盖值 或 基准价×价格倍率×充值倍率）；毛利 = SalePrice − ChannelCost。
 	ChannelCost billing.ProviderCostSnapshot
+	// FastChannelPriceServiceTierID 是绝对成本覆盖路径的 Fast 子记录；倍率路径为 0，
+	// Fast 成本基数由 FastModelPriceServiceTierID 与现有倍率 pin 确定。
+	FastChannelPriceServiceTierID int64
 	// CostRatio 是七个归一化计价分项中最大的 provider 成本/客户售价比率。
 	// routing 在负毛利校验后冻结该值，balanced 调度只消费该不可变事实。
 	CostRatio float64
@@ -534,6 +541,33 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 			failure.WithMessage("scale customer price by route price_ratio"),
 		)
 	}
+	fastModelPriceServiceTierID := int64(0)
+	fastSalePrice := billing.CustomerPriceSnapshot{}
+	fastBasePrice := billing.CustomerPriceSnapshot{}
+	if row.FastModelPriceServiceTierID > 0 {
+		fastBasePrice = billing.CustomerPriceSnapshot{
+			Currency:                row.BaseCurrency,
+			PricingUnit:             row.BasePricingUnit,
+			UncachedInputPrice:      row.FastUncachedInputPrice,
+			CacheReadInputPrice:     row.FastCacheReadInputPrice,
+			CacheWrite5mInputPrice:  row.FastCacheWrite5mInputPrice,
+			CacheWrite1hInputPrice:  row.FastCacheWrite1hInputPrice,
+			CacheWrite30mInputPrice: row.FastCacheWrite30mInputPrice,
+			OutputPrice:             row.FastOutputPrice,
+			ReasoningOutputPrice:    row.FastReasoningOutputPrice,
+			FormulaVersion:          billing.FormulaVersionV1,
+		}
+		if scaled, scaleErr := billing.ScaleCustomerPrice(fastBasePrice, route.PriceRatio); scaleErr == nil {
+			fastModelPriceServiceTierID = row.FastModelPriceServiceTierID
+			fastSalePrice = scaled
+		} else {
+			logging.Warn(r.logger, "routing", "candidate", "fast sale price ignored because it is invalid",
+				zap.Int64("channel_id", row.ChannelID),
+				zap.Int64("model_price_service_tier_id", row.FastModelPriceServiceTierID),
+				zap.Error(scaleErr),
+			)
+		}
+	}
 
 	// 超时只读新列（§11.3/§11.5）：NULL 继承全局默认，正数覆盖；0/负数不表示「无限」，
 	// 因此非正值一律按继承处理，绝不关闭保护。
@@ -557,6 +591,12 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 	channelCost, costBaseModelPriceID, channelCostMultiplierID, channelRechargeFactorID, err := resolveCandidateCost(row, basePrice)
 	if err != nil {
 		return ChatRouteCandidate{}, err
+	}
+	fastChannelPriceServiceTierID := int64(0)
+	if fastModelPriceServiceTierID > 0 || row.FastChannelPriceServiceTierID > 0 {
+		if _, fastCostID, ok := resolveFastCandidateCost(row, fastBasePrice); ok {
+			fastChannelPriceServiceTierID = fastCostID
+		}
 	}
 	violations, err := billing.ValidateNonNegativeMargin(salePrice, channelCost)
 	if err != nil || len(violations) > 0 {
@@ -608,18 +648,53 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 			FirstTokenTimeout: firstTokenTimeout,
 			ProviderSlug:      row.ProviderSlug,
 		},
-		UpstreamModel:           row.UpstreamModel,
-		ModelPriceID:            row.ModelPriceID,
-		PriceRatio:              route.PriceRatio,
-		SalePrice:               salePrice,
-		LongContextPolicy:       longContextPolicyFromRouteRow(row),
-		ChannelPriceID:          row.ChannelPriceID,
-		CostBaseModelPriceID:    costBaseModelPriceID,
-		ChannelCostMultiplierID: channelCostMultiplierID,
-		ChannelRechargeFactorID: channelRechargeFactorID,
-		ChannelCost:             channelCost,
-		CostRatio:               costRatio,
+		UpstreamModel:                 row.UpstreamModel,
+		ModelPriceID:                  row.ModelPriceID,
+		PriceRatio:                    route.PriceRatio,
+		SalePrice:                     salePrice,
+		FastModelPriceServiceTierID:   fastModelPriceServiceTierID,
+		FastSalePrice:                 fastSalePrice,
+		LongContextPolicy:             longContextPolicyFromRouteRow(row),
+		ChannelPriceID:                row.ChannelPriceID,
+		CostBaseModelPriceID:          costBaseModelPriceID,
+		ChannelCostMultiplierID:       channelCostMultiplierID,
+		ChannelRechargeFactorID:       channelRechargeFactorID,
+		ChannelCost:                   channelCost,
+		FastChannelPriceServiceTierID: fastChannelPriceServiceTierID,
+		CostRatio:                     costRatio,
 	}, nil
+}
+
+// resolveFastCandidateCost 只验证候选是否具备可锁定的 Fast Provider 成本来源。
+// 返回结果不参与路由过滤、排序或负毛利守卫。
+func resolveFastCandidateCost(row sqlc.FindRouteCandidatesRow, fastBasePrice billing.CustomerPriceSnapshot) (billing.ProviderCostSnapshot, int64, bool) {
+	if row.ChannelPriceID != 0 {
+		if row.FastChannelPriceServiceTierID == 0 {
+			return billing.ProviderCostSnapshot{}, 0, false
+		}
+		return billing.ProviderCostSnapshot{
+			Currency:               row.CostCurrency,
+			PricingUnit:            row.CostPricingUnit,
+			UncachedInputCost:      row.FastUncachedInputCost,
+			CacheReadInputCost:     row.FastCacheReadInputCost,
+			CacheWrite5mInputCost:  row.FastCacheWrite5mInputCost,
+			CacheWrite1hInputCost:  row.FastCacheWrite1hInputCost,
+			CacheWrite30mInputCost: row.FastCacheWrite30mInputCost,
+			OutputCost:             row.FastOutputCost,
+			ReasoningOutputCost:    row.FastReasoningOutputCost,
+			FormulaVersion:         billing.FormulaVersionV1,
+		}, row.FastChannelPriceServiceTierID, true
+	}
+
+	if row.FastModelPriceServiceTierID == 0 {
+		return billing.ProviderCostSnapshot{}, 0, false
+	}
+	reference := billing.ModelPriceToProviderCost(fastBasePrice)
+	scaled, err := billing.ScaleProviderCostByFactors(reference, row.CostMultiplier, rechargeFactorOrDefault(row.RechargeFactor))
+	if err != nil {
+		return billing.ProviderCostSnapshot{}, 0, false
+	}
+	return scaled, 0, true
 }
 
 // resolveCandidateCost 从候选行解析渠道真实成本与来源 pin（DEC-027 倍率 + DEC-031 单基数）。

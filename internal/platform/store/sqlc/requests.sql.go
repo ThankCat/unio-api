@@ -103,7 +103,11 @@ SELECT
     route_id,
     reasoning_effort,
     reasoning_budget_tokens,
-    client_ip
+    client_ip,
+    requested_service_tier,
+    actual_service_tier,
+    settled_service_tier,
+    service_tier_resolution
 FROM request_records
 WHERE request_id = $1
 `
@@ -142,13 +146,17 @@ func (q *Queries) GetRequestRecordByRequestID(ctx context.Context, requestID str
 		&i.ReasoningEffort,
 		&i.ReasoningBudgetTokens,
 		&i.ClientIp,
+		&i.RequestedServiceTier,
+		&i.ActualServiceTier,
+		&i.SettledServiceTier,
+		&i.ServiceTierResolution,
 	)
 	return i, err
 }
 
 const listAdminRequestAttemptsByRequest = `-- name: ListAdminRequestAttemptsByRequest :many
 SELECT
-    a.id, a.request_record_id, a.attempt_index, a.provider_id, a.channel_id, a.adapter_key, a.upstream_model, a.upstream_protocol, a.upstream_response_id, a.upstream_response_model, a.upstream_finish_reason, a.finish_class, a.status, a.upstream_status_code, a.upstream_request_id, a.error_code, a.error_message, a.internal_error_detail, a.upstream_timeout_phase, a.gateway_first_token_at, a.final_usage_received, a.usage_mapping_version, a.started_at, a.completed_at, a.created_at, a.upstream_started_at, a.upstream_first_token_at, a.upstream_completed_at, a.provider_origin_revision, a.provider_status_revision, a.channel_config_revision, a.routing_candidate_index, a.upstream_endpoint, a.breaker_provider_disposition, a.breaker_channel_disposition, a.ttft_scoring_sample, a.error_scoring_sample, a.error_scoring_failure, a.fault_party, a.permit_id,
+    a.id, a.request_record_id, a.attempt_index, a.provider_id, a.channel_id, a.adapter_key, a.upstream_model, a.upstream_protocol, a.upstream_response_id, a.upstream_response_model, a.upstream_finish_reason, a.finish_class, a.status, a.upstream_status_code, a.upstream_request_id, a.error_code, a.error_message, a.internal_error_detail, a.upstream_timeout_phase, a.gateway_first_token_at, a.final_usage_received, a.usage_mapping_version, a.started_at, a.completed_at, a.created_at, a.upstream_started_at, a.upstream_first_token_at, a.upstream_completed_at, a.provider_origin_revision, a.provider_status_revision, a.channel_config_revision, a.routing_candidate_index, a.upstream_endpoint, a.breaker_provider_disposition, a.breaker_channel_disposition, a.ttft_scoring_sample, a.error_scoring_sample, a.error_scoring_failure, a.fault_party, a.permit_id, a.requested_service_tier, a.upstream_service_tier,
     c.name AS channel_name,
     cs.cost_multiplier AS channel_cost_multiplier,
     cs.recharge_factor
@@ -209,6 +217,8 @@ type ListAdminRequestAttemptsByRequestRow struct {
 	ErrorScoringFailure        bool
 	FaultParty                 pgtype.Text
 	PermitID                   pgtype.Text
+	RequestedServiceTier       pgtype.Text
+	UpstreamServiceTier        pgtype.Text
 	ChannelName                string
 	ChannelCostMultiplier      pgtype.Numeric
 	RechargeFactor             pgtype.Numeric
@@ -266,6 +276,8 @@ func (q *Queries) ListAdminRequestAttemptsByRequest(ctx context.Context, request
 			&i.ErrorScoringFailure,
 			&i.FaultParty,
 			&i.PermitID,
+			&i.RequestedServiceTier,
+			&i.UpstreamServiceTier,
 			&i.ChannelName,
 			&i.ChannelCostMultiplier,
 			&i.RechargeFactor,
@@ -349,6 +361,10 @@ SELECT
     r.completed_at,
     r.created_at,
     r.updated_at,
+    r.requested_service_tier,
+    r.actual_service_tier,
+    r.settled_service_tier,
+    r.service_tier_resolution,
     ak.name AS api_key_name,
     ak.key_prefix AS api_key_prefix,
     ak.key_plaintext AS api_key_plaintext,
@@ -533,6 +549,10 @@ type ListRequestRecordsPageRow struct {
 	CompletedAt                  pgtype.Timestamptz
 	CreatedAt                    pgtype.Timestamptz
 	UpdatedAt                    pgtype.Timestamptz
+	RequestedServiceTier         pgtype.Text
+	ActualServiceTier            pgtype.Text
+	SettledServiceTier           pgtype.Text
+	ServiceTierResolution        pgtype.Text
 	ApiKeyName                   pgtype.Text
 	ApiKeyPrefix                 pgtype.Text
 	ApiKeyPlaintext              pgtype.Text
@@ -654,6 +674,10 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.CompletedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RequestedServiceTier,
+			&i.ActualServiceTier,
+			&i.SettledServiceTier,
+			&i.ServiceTierResolution,
 			&i.ApiKeyName,
 			&i.ApiKeyPrefix,
 			&i.ApiKeyPlaintext,

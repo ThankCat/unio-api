@@ -1,6 +1,9 @@
 package adapter
 
-import "github.com/ThankCat/unio-gateway/internal/core/usage"
+import (
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
+	"github.com/ThankCat/unio-gateway/internal/core/usage"
+)
 
 // FinishClass 是协议无关的稳定结束分类。
 //
@@ -65,6 +68,10 @@ type ResponseFacts struct {
 
 	// UsageMappingVersion 标记 usage 映射规则版本，便于历史账务复算与回归。
 	UsageMappingVersion string
+
+	// ServiceTier 是同一次上游响应解析得到的实际档位及 Standard 回落来源。
+	// 它绝不从客户请求意图推断；Fast 价格缺失导致的最终回落由 settlement 在副本上补充。
+	ServiceTier servicetier.Response
 
 	// Metadata 是本次上游调用的可审计元信息（HTTP 状态码、上游 request id）。
 	Metadata UpstreamMetadata

@@ -10,6 +10,7 @@ import (
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
@@ -36,6 +37,11 @@ type compactResult struct {
 // 缺省 instructions 时注入兜底压缩指令（Codex 通常自带；缺省时直发历史会让模型续写而非压缩）。
 // 注入对 Native 透传无害（instructions 是 compact 合法字段，且原始 RawBody 透传优先），对 Synthetic 必要。
 func (s *ResponsesService) CompactHistory(ctx context.Context, req gatewayapi.ResponsesRequest) (*lifecycle.NonStreamResult[*gatewayapi.CompactHistoryResponse], error) {
+	tierRequest, err := servicetier.NormalizeOpenAIRequest(req.ServiceTier)
+	if err != nil {
+		return nil, err
+	}
+	req.ServiceTier = &tierRequest.UpstreamRaw
 	if req.Instructions == nil || strings.TrimSpace(*req.Instructions) == "" {
 		def := defaultCompactionInstruction
 		req.Instructions = &def

@@ -12,6 +12,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/platform/logging"
@@ -383,6 +384,11 @@ func (l *RequestLifecycle) RecordZeroPriceServed(providerID int64, channelID int
 // reasoning 为归一后的推理强度（协议编排从请求 DTO 提取）；线路快照取自 principal.RouteID，
 // 客户端 IP 取自 ctx（gateway ClientIP 中间件写入）。
 func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.APIKeyPrincipal, requestedModelID string, stream bool, reasoning ReasoningInfo) (requestlog.RequestRecord, error) {
+	return l.CreateRequestWithServiceTier(ctx, principal, requestedModelID, stream, reasoning, "")
+}
+
+// CreateRequestWithServiceTier creates a request record with the normalized customer tier intent.
+func (l *RequestLifecycle) CreateRequestWithServiceTier(ctx context.Context, principal *auth.APIKeyPrincipal, requestedModelID string, stream bool, reasoning ReasoningInfo, requestedTier servicetier.Tier) (requestlog.RequestRecord, error) {
 	requestID, err := requestlog.GenerateRequestID()
 	if err != nil {
 		return requestlog.RequestRecord{}, err
@@ -421,6 +427,7 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 		ReasoningEffort:       reasoning.Effort,
 		ReasoningBudgetTokens: reasoning.BudgetTokens,
 		ClientIP:              clientIP,
+		RequestedServiceTier:  requestedTier,
 	})
 	if err != nil {
 		return requestlog.RequestRecord{}, err

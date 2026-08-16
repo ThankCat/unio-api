@@ -6,6 +6,7 @@ import (
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
@@ -15,12 +16,12 @@ import (
 // 在 lifecycle 包共享，OpenAI 与 Anthropic 两侧 service 调用同一份实现，避免逐字复制。
 // 协议族 ad-hoc string code 文案映射通过 service.go 注入的 chatCompletionsSafeMessage 闭包提供。
 
-func (s *ChatCompletionService) createRequestRecord(ctx context.Context, principal *auth.APIKeyPrincipal, req gatewayapi.ChatCompletionRequest, stream bool) (requestlog.RequestRecord, error) {
+func (s *ChatCompletionService) createRequestRecord(ctx context.Context, principal *auth.APIKeyPrincipal, req gatewayapi.ChatCompletionRequest, stream bool, tier servicetier.Tier) (requestlog.RequestRecord, error) {
 	var effort string
 	if req.ReasoningEffort != nil {
 		effort = *req.ReasoningEffort
 	}
-	return s.lifecycle.CreateRequest(ctx, principal, req.Model, stream, lifecycle.NormalizeOpenAIEffort(effort, req.Model))
+	return s.lifecycle.CreateRequestWithServiceTier(ctx, principal, req.Model, stream, lifecycle.NormalizeOpenAIEffort(effort, req.Model), tier)
 }
 
 func (s *ChatCompletionService) markRequestRecordFailed(ctx context.Context, requestRecord requestlog.RequestRecord, code string, err error) {

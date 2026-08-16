@@ -3,10 +3,12 @@ package model
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelprice"
 )
@@ -23,47 +25,90 @@ type ModelPriceService interface {
 // uncached_input_price/output_price 必填恒有值；其余可空（*string，未配置时为 null）。
 // model_external_id / model_display_name 仅列表场景有值；单条写入返回为空。
 type modelPriceDTO struct {
-	ID                          int64   `json:"id"`
-	ModelID                     int64   `json:"model_id"`
-	ModelExternalID             string  `json:"model_external_id"`
-	ModelDisplayName            string  `json:"model_display_name"`
-	Currency                    string  `json:"currency"`
-	PricingUnit                 string  `json:"pricing_unit"`
-	UncachedInputPrice          string  `json:"uncached_input_price"`
-	CacheReadInputPrice         *string `json:"cache_read_input_price"`
-	CacheWrite5mInputPrice      *string `json:"cache_write_5m_input_price"`
-	CacheWrite1hInputPrice      *string `json:"cache_write_1h_input_price"`
-	CacheWrite30mInputPrice     *string `json:"cache_write_30m_input_price"`
-	OutputPrice                 string  `json:"output_price"`
-	ReasoningOutputPrice        *string `json:"reasoning_output_price"`
-	LongContextEnabled          bool    `json:"long_context_enabled"`
-	LongContextThreshold        *int64  `json:"long_context_threshold"`
-	LongContextInputMultiplier  *string `json:"long_context_input_multiplier"`
-	LongContextOutputMultiplier *string `json:"long_context_output_multiplier"`
-	Status                      string  `json:"status"`
-	EffectiveFrom               string  `json:"effective_from"`
-	EffectiveTo                 *string `json:"effective_to"`
-	CreatedAt                   string  `json:"created_at"`
-	UpdatedAt                   string  `json:"updated_at"`
+	ID                          int64                  `json:"id"`
+	ModelID                     int64                  `json:"model_id"`
+	ModelExternalID             string                 `json:"model_external_id"`
+	ModelDisplayName            string                 `json:"model_display_name"`
+	Currency                    string                 `json:"currency"`
+	PricingUnit                 string                 `json:"pricing_unit"`
+	UncachedInputPrice          string                 `json:"uncached_input_price"`
+	CacheReadInputPrice         *string                `json:"cache_read_input_price"`
+	CacheWrite5mInputPrice      *string                `json:"cache_write_5m_input_price"`
+	CacheWrite1hInputPrice      *string                `json:"cache_write_1h_input_price"`
+	CacheWrite30mInputPrice     *string                `json:"cache_write_30m_input_price"`
+	OutputPrice                 string                 `json:"output_price"`
+	ReasoningOutputPrice        *string                `json:"reasoning_output_price"`
+	LongContextEnabled          bool                   `json:"long_context_enabled"`
+	LongContextThreshold        *int64                 `json:"long_context_threshold"`
+	LongContextInputMultiplier  *string                `json:"long_context_input_multiplier"`
+	LongContextOutputMultiplier *string                `json:"long_context_output_multiplier"`
+	FastPriceStatus             string                 `json:"fast_price_status"`
+	FastPrices                  *fastPriceDTO          `json:"fast_prices"`
+	FastPriceReference          *fastPriceReferenceDTO `json:"fast_price_reference"`
+	Status                      string                 `json:"status"`
+	EffectiveFrom               string                 `json:"effective_from"`
+	EffectiveTo                 *string                `json:"effective_to"`
+	CreatedAt                   string                 `json:"created_at"`
+	UpdatedAt                   string                 `json:"updated_at"`
+}
+
+type fastPriceDTO struct {
+	ServiceTierID           int64   `json:"service_tier_id"`
+	UncachedInputPrice      string  `json:"uncached_input_price"`
+	CacheReadInputPrice     *string `json:"cache_read_input_price"`
+	CacheWrite5mInputPrice  *string `json:"cache_write_5m_input_price"`
+	CacheWrite1hInputPrice  *string `json:"cache_write_1h_input_price"`
+	CacheWrite30mInputPrice *string `json:"cache_write_30m_input_price"`
+	OutputPrice             string  `json:"output_price"`
+	ReasoningOutputPrice    *string `json:"reasoning_output_price"`
+	ReferenceSource         *string `json:"reference_source"`
+	ReferenceCheckedAt      *string `json:"reference_checked_at"`
+}
+
+type fastPriceReferenceDTO struct {
+	Currency                string  `json:"currency"`
+	PricingUnit             string  `json:"pricing_unit"`
+	UncachedInputPrice      string  `json:"uncached_input_price"`
+	CacheReadInputPrice     *string `json:"cache_read_input_price"`
+	CacheWrite5mInputPrice  *string `json:"cache_write_5m_input_price"`
+	CacheWrite1hInputPrice  *string `json:"cache_write_1h_input_price"`
+	CacheWrite30mInputPrice *string `json:"cache_write_30m_input_price"`
+	OutputPrice             string  `json:"output_price"`
+	ReasoningOutputPrice    *string `json:"reasoning_output_price"`
+	Source                  string  `json:"source"`
+	CheckedAt               string  `json:"checked_at"`
+}
+
+type fastPriceRequest struct {
+	UncachedInputPrice      string  `json:"uncached_input_price"`
+	CacheReadInputPrice     *string `json:"cache_read_input_price"`
+	CacheWrite5mInputPrice  *string `json:"cache_write_5m_input_price"`
+	CacheWrite1hInputPrice  *string `json:"cache_write_1h_input_price"`
+	CacheWrite30mInputPrice *string `json:"cache_write_30m_input_price"`
+	OutputPrice             string  `json:"output_price"`
+	ReasoningOutputPrice    *string `json:"reasoning_output_price"`
+	ReferenceSource         *string `json:"reference_source"`
+	ReferenceCheckedAt      *string `json:"reference_checked_at"`
 }
 
 type createModelPriceRequest struct {
-	Currency                    string  `json:"currency"`
-	PricingUnit                 string  `json:"pricing_unit"`
-	UncachedInputPrice          string  `json:"uncached_input_price"`
-	CacheReadInputPrice         *string `json:"cache_read_input_price"`
-	CacheWrite5mInputPrice      *string `json:"cache_write_5m_input_price"`
-	CacheWrite1hInputPrice      *string `json:"cache_write_1h_input_price"`
-	CacheWrite30mInputPrice     *string `json:"cache_write_30m_input_price"`
-	OutputPrice                 string  `json:"output_price"`
-	ReasoningOutputPrice        *string `json:"reasoning_output_price"`
-	LongContextEnabled          bool    `json:"long_context_enabled"`
-	LongContextThreshold        *int64  `json:"long_context_threshold"`
-	LongContextInputMultiplier  *string `json:"long_context_input_multiplier"`
-	LongContextOutputMultiplier *string `json:"long_context_output_multiplier"`
-	Status                      string  `json:"status"`
-	EffectiveFrom               string  `json:"effective_from"`
-	EffectiveTo                 *string `json:"effective_to"`
+	Currency                    string            `json:"currency"`
+	PricingUnit                 string            `json:"pricing_unit"`
+	UncachedInputPrice          string            `json:"uncached_input_price"`
+	CacheReadInputPrice         *string           `json:"cache_read_input_price"`
+	CacheWrite5mInputPrice      *string           `json:"cache_write_5m_input_price"`
+	CacheWrite1hInputPrice      *string           `json:"cache_write_1h_input_price"`
+	CacheWrite30mInputPrice     *string           `json:"cache_write_30m_input_price"`
+	OutputPrice                 string            `json:"output_price"`
+	ReasoningOutputPrice        *string           `json:"reasoning_output_price"`
+	LongContextEnabled          bool              `json:"long_context_enabled"`
+	LongContextThreshold        *int64            `json:"long_context_threshold"`
+	LongContextInputMultiplier  *string           `json:"long_context_input_multiplier"`
+	LongContextOutputMultiplier *string           `json:"long_context_output_multiplier"`
+	FastPrices                  *fastPriceRequest `json:"fast_prices"`
+	Status                      string            `json:"status"`
+	EffectiveFrom               string            `json:"effective_from"`
+	EffectiveTo                 *string           `json:"effective_to"`
 }
 
 type updateModelPriceRequest struct {
@@ -119,6 +164,11 @@ func (h *modelPricesHandler) create(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
+	fastPrices, err := parseFastPriceRequest(req.FastPrices)
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
 
 	p, err := h.service.Create(r.Context(), modelprice.CreateInput{
 		ModelID:                     modelID,
@@ -135,6 +185,7 @@ func (h *modelPricesHandler) create(w http.ResponseWriter, r *http.Request) {
 		LongContextThreshold:        req.LongContextThreshold,
 		LongContextInputMultiplier:  req.LongContextInputMultiplier,
 		LongContextOutputMultiplier: req.LongContextOutputMultiplier,
+		FastPrices:                  fastPrices,
 		Status:                      req.Status,
 		EffectiveFrom:               from,
 		EffectiveTo:                 to,
@@ -198,14 +249,77 @@ func toModelPriceDTO(p modelprice.ModelPrice) modelPriceDTO {
 		LongContextThreshold:        p.LongContextThreshold,
 		LongContextInputMultiplier:  p.LongContextInputMultiplier,
 		LongContextOutputMultiplier: p.LongContextOutputMultiplier,
+		FastPriceStatus:             p.FastPriceStatus,
 		Status:                      p.Status,
 		EffectiveFrom:               p.EffectiveFrom.UTC().Format(time.RFC3339),
 		CreatedAt:                   p.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:                   p.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+	if p.FastPrices != nil {
+		fast := fastPriceDTO{
+			ServiceTierID:           p.FastPrices.ServiceTierID,
+			UncachedInputPrice:      p.FastPrices.UncachedInputPrice,
+			CacheReadInputPrice:     p.FastPrices.CacheReadInputPrice,
+			CacheWrite5mInputPrice:  p.FastPrices.CacheWrite5mInputPrice,
+			CacheWrite1hInputPrice:  p.FastPrices.CacheWrite1hInputPrice,
+			CacheWrite30mInputPrice: p.FastPrices.CacheWrite30mInputPrice,
+			OutputPrice:             p.FastPrices.OutputPrice,
+			ReasoningOutputPrice:    p.FastPrices.ReasoningOutputPrice,
+			ReferenceSource:         p.FastPrices.ReferenceSource,
+		}
+		if p.FastPrices.ReferenceCheckedAt != nil {
+			value := p.FastPrices.ReferenceCheckedAt.UTC().Format(time.DateOnly)
+			fast.ReferenceCheckedAt = &value
+		}
+		dto.FastPrices = &fast
+	}
+	if p.FastPriceReference != nil {
+		dto.FastPriceReference = &fastPriceReferenceDTO{
+			Currency:                p.FastPriceReference.Currency,
+			PricingUnit:             p.FastPriceReference.PricingUnit,
+			UncachedInputPrice:      p.FastPriceReference.UncachedInputPrice,
+			CacheReadInputPrice:     p.FastPriceReference.CacheReadInputPrice,
+			CacheWrite5mInputPrice:  p.FastPriceReference.CacheWrite5mInputPrice,
+			CacheWrite1hInputPrice:  p.FastPriceReference.CacheWrite1hInputPrice,
+			CacheWrite30mInputPrice: p.FastPriceReference.CacheWrite30mInputPrice,
+			OutputPrice:             p.FastPriceReference.OutputPrice,
+			ReasoningOutputPrice:    p.FastPriceReference.ReasoningOutputPrice,
+			Source:                  p.FastPriceReference.Source,
+			CheckedAt:               p.FastPriceReference.CheckedAt.UTC().Format(time.DateOnly),
+		}
 	}
 	if p.EffectiveTo != nil {
 		s := p.EffectiveTo.UTC().Format(time.RFC3339)
 		dto.EffectiveTo = &s
 	}
 	return dto
+}
+
+func parseFastPriceRequest(req *fastPriceRequest) (*modelprice.FastPriceInput, error) {
+	if req == nil {
+		return nil, nil
+	}
+	var checkedAt *time.Time
+	if req.ReferenceCheckedAt != nil && strings.TrimSpace(*req.ReferenceCheckedAt) != "" {
+		parsed, err := time.Parse(time.DateOnly, strings.TrimSpace(*req.ReferenceCheckedAt))
+		if err != nil {
+			return nil, failure.New(
+				failure.CodeAdminInvalidArgument,
+				failure.WithMessage("must be YYYY-MM-DD"),
+				failure.WithField("field", "fast_prices.reference_checked_at"),
+			)
+		}
+		checkedAt = &parsed
+	}
+	return &modelprice.FastPriceInput{
+		UncachedInputPrice:      req.UncachedInputPrice,
+		CacheReadInputPrice:     req.CacheReadInputPrice,
+		CacheWrite5mInputPrice:  req.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:  req.CacheWrite1hInputPrice,
+		CacheWrite30mInputPrice: req.CacheWrite30mInputPrice,
+		OutputPrice:             req.OutputPrice,
+		ReasoningOutputPrice:    req.ReasoningOutputPrice,
+		ReferenceSource:         req.ReferenceSource,
+		ReferenceCheckedAt:      checkedAt,
+	}, nil
 }

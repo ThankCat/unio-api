@@ -12,23 +12,42 @@
 
 ## 常用命令
 
-| 命令 | 行为 |
-| --- | --- |
-| `make help` | 显示 Makefile 中的命令。 |
-| `make infra` | 启动并等待本地 PostgreSQL、Redis、Loki 与 Alloy。 |
-| `make infra-down` | 停止 Compose 服务；命名 volume 保留。 |
-| `make infra-logs` | 跟踪本地基础设施日志。 |
-| `make dev` | 启动 Gateway、Admin、Worker 的热加载进程。 |
-| `make dev-gateway` | 只启动 Gateway 热加载进程。 |
-| `make dev-admin` | 只启动 Admin 热加载进程。 |
-| `make dev-worker` | 只启动 Worker 热加载进程。 |
-| `make build` | 编译三个常驻程序到 `tmp/`。 |
-| `go test ./...` | 运行 Go 测试。 |
-| `sqlc generate` | 按 `sqlc.yaml` 重新生成 `internal/platform/store/sqlc`。 |
+| 命令               | 行为                                                     |
+| ------------------ | -------------------------------------------------------- |
+| `make help`        | 显示 Makefile 中的命令。                                 |
+| `make infra`       | 启动并等待本地 PostgreSQL、Redis、Loki 与 Alloy。        |
+| `make infra-down`  | 停止 Compose 服务；命名 volume 保留。                    |
+| `make infra-logs`  | 跟踪本地基础设施日志。                                   |
+| `make dev`         | 启动 Gateway、Admin、Worker 的热加载进程。               |
+| `make dev-gateway` | 只启动 Gateway 热加载进程。                              |
+| `make dev-admin`   | 只启动 Admin 热加载进程。                                |
+| `make dev-worker`  | 只启动 Worker 热加载进程。                               |
+| `make build`       | 编译三个常驻程序到 `tmp/`。                              |
+| `go test ./...`    | 运行 Go 测试。                                           |
+| `sqlc generate`    | 按 `sqlc.yaml` 重新生成 `internal/platform/store/sqlc`。 |
 
 依赖 PostgreSQL 或 Redis 的测试从 `DATABASE_URL`、`REDIS_ADDR` 读取连接信息；未提供所需变量的用例会
 跳过。直连真实上游的用例还需要各自的显式开关。执行这些测试时使用隔离的测试资源，不使用本地
 业务数据。
+
+## Test 数据库快照恢复到本地 Dev
+
+在测试站仓库中执行在线备份；该命令只读取正在运行的 Test PostgreSQL，不会启动、停止或重启服务：
+
+```bash
+./scripts/db_snapshot.sh backup --profile test
+```
+
+将生成的 `.dump` 和同名 `.dump.sha256` 一起复制到本地。停止本地 Gateway、Admin 和 Worker 后，先校验再恢复：
+
+```bash
+./scripts/db_snapshot.sh verify /path/to/unio-test-YYYYmmdd-HHMMSS.dump
+./scripts/db_snapshot.sh restore /path/to/unio-test-YYYYmmdd-HHMMSS.dump --confirm-replace
+```
+
+恢复只允许写入 `unio-dev` Compose 项目，会先完整恢复到临时数据库，成功后替换本地 Dev 数据库，并清空本地
+Dev Redis 当前 DB。快照包含完整 Schema 和业务数据，本地代码应与 Test Schema 兼容，并按敏感数据保存和传输。
+如果本地与 Test 使用不同的凭据主密钥，恢复后的加密凭据不能直接使用，应在 Admin 中重新填写本地测试凭据。
 
 ## 数据库与 sqlc
 
@@ -113,16 +132,16 @@ Loki 默认保留 14 天，Admin 通过 Compose 内网地址 `http://loki:3100` 
 
 ## 目录
 
-| 路径 | 当前职责 |
-| --- | --- |
-| `cmd/` | 进程和命令行入口。 |
-| `internal/app/` | HTTP 与 Worker 入口装配。 |
-| `internal/service/` | 业务编排。 |
-| `internal/core/` | 领域能力。 |
+| 路径                 | 当前职责                                        |
+| -------------------- | ----------------------------------------------- |
+| `cmd/`               | 进程和命令行入口。                              |
+| `internal/app/`      | HTTP 与 Worker 入口装配。                       |
+| `internal/service/`  | 业务编排。                                      |
+| `internal/core/`     | 领域能力。                                      |
 | `internal/platform/` | 配置、存储、Redis、HTTP、日志与可观测基础设施。 |
-| `migrations/` | PostgreSQL Schema。 |
-| `sql/queries/` | sqlc 查询源。 |
-| `scripts/` | 本地种子脚本。 |
+| `migrations/`        | PostgreSQL Schema。                             |
+| `sql/queries/`       | sqlc 查询源。                                   |
+| `scripts/`           | 本地种子脚本。                                  |
 
 ## 文档交接
 

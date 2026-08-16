@@ -24,6 +24,7 @@ type routingMetricsSpy struct {
 	providerFailures        []string
 	channelFailures         []string
 	rejections              []string
+	serviceTiers            []string
 }
 
 type timingObservation struct {
@@ -49,6 +50,9 @@ func (s *routingMetricsSpy) IncRoutingSkip(string)                              
 func (s *routingMetricsSpy) ObserveRoutingCapacityWait(time.Duration)             {}
 func (s *routingMetricsSpy) IncRequestRejected(protocol, reason string) {
 	s.rejections = append(s.rejections, protocol+"/"+reason)
+}
+func (s *routingMetricsSpy) IncServiceTier(requested, actual, settled, resolution string) {
+	s.serviceTiers = append(s.serviceTiers, requested+"/"+actual+"/"+settled+"/"+resolution)
 }
 
 func (s *routingMetricsSpy) ObserveRoutingBalance(string, string, int, int, float64) {}

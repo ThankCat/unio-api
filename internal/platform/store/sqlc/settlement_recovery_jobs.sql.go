@@ -40,7 +40,7 @@ SET
     last_attempted_at = $3,
     updated_at = $3
 WHERE settlement_recovery_jobs.id = (SELECT candidate.id FROM candidate)
-RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier
+RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, requested_service_tier, actual_service_tier, settled_service_tier, upstream_service_tier, service_tier_resolution, model_price_service_tier_id, channel_price_service_tier_id
 `
 
 type ClaimNextSettlementRecoveryJobParams struct {
@@ -129,6 +129,13 @@ func (q *Queries) ClaimNextSettlementRecoveryJob(ctx context.Context, arg ClaimN
 		&i.LongContextThreshold,
 		&i.LongContextInputMultiplier,
 		&i.LongContextOutputMultiplier,
+		&i.RequestedServiceTier,
+		&i.ActualServiceTier,
+		&i.SettledServiceTier,
+		&i.UpstreamServiceTier,
+		&i.ServiceTierResolution,
+		&i.ModelPriceServiceTierID,
+		&i.ChannelPriceServiceTierID,
 	)
 	return i, err
 }
@@ -201,6 +208,13 @@ INSERT INTO settlement_recovery_jobs (
     long_context_threshold,
     long_context_input_multiplier,
     long_context_output_multiplier,
+    requested_service_tier,
+    actual_service_tier,
+    settled_service_tier,
+    upstream_service_tier,
+    service_tier_resolution,
+    model_price_service_tier_id,
+    channel_price_service_tier_id,
     estimated_amount,
     authorized_amount,
     max_attempts,
@@ -270,8 +284,15 @@ SELECT
            $60,
            $61,
            $62,
+           $63,
+           $64,
+           $65,
+           $66,
+           $67,
+           $68,
+           $69,
            'pending',
-           $63
+           $70
 FROM locked_request
 ON CONFLICT (request_record_id) DO UPDATE
 SET updated_at = settlement_recovery_jobs.updated_at
@@ -333,9 +354,16 @@ WHERE settlement_recovery_jobs.user_id = EXCLUDED.user_id
   AND settlement_recovery_jobs.long_context_threshold IS NOT DISTINCT FROM EXCLUDED.long_context_threshold
   AND settlement_recovery_jobs.long_context_input_multiplier IS NOT DISTINCT FROM EXCLUDED.long_context_input_multiplier
   AND settlement_recovery_jobs.long_context_output_multiplier IS NOT DISTINCT FROM EXCLUDED.long_context_output_multiplier
+  AND settlement_recovery_jobs.requested_service_tier IS NOT DISTINCT FROM EXCLUDED.requested_service_tier
+  AND settlement_recovery_jobs.actual_service_tier IS NOT DISTINCT FROM EXCLUDED.actual_service_tier
+  AND settlement_recovery_jobs.settled_service_tier IS NOT DISTINCT FROM EXCLUDED.settled_service_tier
+  AND settlement_recovery_jobs.upstream_service_tier IS NOT DISTINCT FROM EXCLUDED.upstream_service_tier
+  AND settlement_recovery_jobs.service_tier_resolution IS NOT DISTINCT FROM EXCLUDED.service_tier_resolution
+  AND settlement_recovery_jobs.model_price_service_tier_id IS NOT DISTINCT FROM EXCLUDED.model_price_service_tier_id
+  AND settlement_recovery_jobs.channel_price_service_tier_id IS NOT DISTINCT FROM EXCLUDED.channel_price_service_tier_id
   AND settlement_recovery_jobs.estimated_amount = EXCLUDED.estimated_amount
   AND settlement_recovery_jobs.authorized_amount = EXCLUDED.authorized_amount
-RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier
+RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, requested_service_tier, actual_service_tier, settled_service_tier, upstream_service_tier, service_tier_resolution, model_price_service_tier_id, channel_price_service_tier_id
 `
 
 type CreateSettlementRecoveryJobParams struct {
@@ -398,6 +426,13 @@ type CreateSettlementRecoveryJobParams struct {
 	LongContextThreshold               pgtype.Int8
 	LongContextInputMultiplier         pgtype.Numeric
 	LongContextOutputMultiplier        pgtype.Numeric
+	RequestedServiceTier               pgtype.Text
+	ActualServiceTier                  pgtype.Text
+	SettledServiceTier                 pgtype.Text
+	UpstreamServiceTier                pgtype.Text
+	ServiceTierResolution              pgtype.Text
+	ModelPriceServiceTierID            pgtype.Int8
+	ChannelPriceServiceTierID          pgtype.Int8
 	EstimatedAmount                    pgtype.Numeric
 	AuthorizedAmount                   pgtype.Numeric
 	MaxAttempts                        int32
@@ -468,6 +503,13 @@ func (q *Queries) CreateSettlementRecoveryJob(ctx context.Context, arg CreateSet
 		arg.LongContextThreshold,
 		arg.LongContextInputMultiplier,
 		arg.LongContextOutputMultiplier,
+		arg.RequestedServiceTier,
+		arg.ActualServiceTier,
+		arg.SettledServiceTier,
+		arg.UpstreamServiceTier,
+		arg.ServiceTierResolution,
+		arg.ModelPriceServiceTierID,
+		arg.ChannelPriceServiceTierID,
 		arg.EstimatedAmount,
 		arg.AuthorizedAmount,
 		arg.MaxAttempts,
@@ -550,12 +592,19 @@ func (q *Queries) CreateSettlementRecoveryJob(ctx context.Context, arg CreateSet
 		&i.LongContextThreshold,
 		&i.LongContextInputMultiplier,
 		&i.LongContextOutputMultiplier,
+		&i.RequestedServiceTier,
+		&i.ActualServiceTier,
+		&i.SettledServiceTier,
+		&i.UpstreamServiceTier,
+		&i.ServiceTierResolution,
+		&i.ModelPriceServiceTierID,
+		&i.ChannelPriceServiceTierID,
 	)
 	return i, err
 }
 
 const getDeadSettlementRecoveryJobWithRunningRequest = `-- name: GetDeadSettlementRecoveryJobWithRunningRequest :one
-SELECT j.id, j.user_id, j.request_record_id, j.attempt_id, j.reservation_id, j.response_protocol, j.response_id, j.response_model_id, j.model_id, j.provider_id, j.channel_id, j.upstream_protocol, j.upstream_response_id, j.upstream_model, j.finish_class, j.upstream_finish_reason, j.upstream_status_code, j.upstream_request_id, j.usage_uncached_input_tokens, j.usage_uncached_input_tokens_state, j.usage_cache_read_input_tokens, j.usage_cache_read_input_tokens_state, j.usage_cache_write_5m_input_tokens, j.usage_cache_write_5m_input_tokens_state, j.usage_cache_write_1h_input_tokens, j.usage_cache_write_1h_input_tokens_state, j.usage_output_tokens_total, j.usage_output_tokens_total_state, j.usage_reasoning_output_tokens, j.usage_reasoning_output_tokens_state, j.usage_server_web_search_requests, j.usage_server_web_fetch_requests, j.usage_source, j.usage_mapping_version, j.price_id, j.currency, j.pricing_unit, j.uncached_input_price, j.cache_read_input_price, j.cache_write_5m_input_price, j.cache_write_1h_input_price, j.output_price, j.reasoning_output_price, j.formula_version, j.estimated_amount, j.authorized_amount, j.status, j.attempt_count, j.max_attempts, j.next_run_at, j.locked_by, j.locked_until, j.last_error_code, j.last_error_message, j.last_internal_error_detail, j.last_attempted_at, j.completed_at, j.created_at, j.updated_at, j.price_ratio, j.usage_cache_write_30m_input_tokens, j.usage_cache_write_30m_input_tokens_state, j.cache_write_30m_input_price, j.cost_base_model_price_id, j.channel_cost_multiplier_id, j.channel_recharge_factor_id, j.request_final_status, j.attempt_final_status, j.settlement_error_code, j.settlement_error_message, j.settlement_internal_error_detail, j.long_context_enabled, j.long_context_threshold, j.long_context_input_multiplier, j.long_context_output_multiplier
+SELECT j.id, j.user_id, j.request_record_id, j.attempt_id, j.reservation_id, j.response_protocol, j.response_id, j.response_model_id, j.model_id, j.provider_id, j.channel_id, j.upstream_protocol, j.upstream_response_id, j.upstream_model, j.finish_class, j.upstream_finish_reason, j.upstream_status_code, j.upstream_request_id, j.usage_uncached_input_tokens, j.usage_uncached_input_tokens_state, j.usage_cache_read_input_tokens, j.usage_cache_read_input_tokens_state, j.usage_cache_write_5m_input_tokens, j.usage_cache_write_5m_input_tokens_state, j.usage_cache_write_1h_input_tokens, j.usage_cache_write_1h_input_tokens_state, j.usage_output_tokens_total, j.usage_output_tokens_total_state, j.usage_reasoning_output_tokens, j.usage_reasoning_output_tokens_state, j.usage_server_web_search_requests, j.usage_server_web_fetch_requests, j.usage_source, j.usage_mapping_version, j.price_id, j.currency, j.pricing_unit, j.uncached_input_price, j.cache_read_input_price, j.cache_write_5m_input_price, j.cache_write_1h_input_price, j.output_price, j.reasoning_output_price, j.formula_version, j.estimated_amount, j.authorized_amount, j.status, j.attempt_count, j.max_attempts, j.next_run_at, j.locked_by, j.locked_until, j.last_error_code, j.last_error_message, j.last_internal_error_detail, j.last_attempted_at, j.completed_at, j.created_at, j.updated_at, j.price_ratio, j.usage_cache_write_30m_input_tokens, j.usage_cache_write_30m_input_tokens_state, j.cache_write_30m_input_price, j.cost_base_model_price_id, j.channel_cost_multiplier_id, j.channel_recharge_factor_id, j.request_final_status, j.attempt_final_status, j.settlement_error_code, j.settlement_error_message, j.settlement_internal_error_detail, j.long_context_enabled, j.long_context_threshold, j.long_context_input_multiplier, j.long_context_output_multiplier, j.requested_service_tier, j.actual_service_tier, j.settled_service_tier, j.upstream_service_tier, j.service_tier_resolution, j.model_price_service_tier_id, j.channel_price_service_tier_id
 FROM settlement_recovery_jobs j
 JOIN request_records r ON r.id = j.request_record_id
 WHERE j.status = 'dead'
@@ -646,12 +695,19 @@ func (q *Queries) GetDeadSettlementRecoveryJobWithRunningRequest(ctx context.Con
 		&i.LongContextThreshold,
 		&i.LongContextInputMultiplier,
 		&i.LongContextOutputMultiplier,
+		&i.RequestedServiceTier,
+		&i.ActualServiceTier,
+		&i.SettledServiceTier,
+		&i.UpstreamServiceTier,
+		&i.ServiceTierResolution,
+		&i.ModelPriceServiceTierID,
+		&i.ChannelPriceServiceTierID,
 	)
 	return i, err
 }
 
 const getSettlementRecoveryJobByRequest = `-- name: GetSettlementRecoveryJobByRequest :one
-SELECT id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier
+SELECT id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, requested_service_tier, actual_service_tier, settled_service_tier, upstream_service_tier, service_tier_resolution, model_price_service_tier_id, channel_price_service_tier_id
 FROM settlement_recovery_jobs
 WHERE request_record_id = $1
 `
@@ -736,6 +792,13 @@ func (q *Queries) GetSettlementRecoveryJobByRequest(ctx context.Context, request
 		&i.LongContextThreshold,
 		&i.LongContextInputMultiplier,
 		&i.LongContextOutputMultiplier,
+		&i.RequestedServiceTier,
+		&i.ActualServiceTier,
+		&i.SettledServiceTier,
+		&i.UpstreamServiceTier,
+		&i.ServiceTierResolution,
+		&i.ModelPriceServiceTierID,
+		&i.ChannelPriceServiceTierID,
 	)
 	return i, err
 }
@@ -771,7 +834,7 @@ SET
     completed_at = $4,
     updated_at = $4
 WHERE settlement_recovery_jobs.id = (SELECT candidate.id FROM candidate)
-RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier
+RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, requested_service_tier, actual_service_tier, settled_service_tier, upstream_service_tier, service_tier_resolution, model_price_service_tier_id, channel_price_service_tier_id
 `
 
 type MarkExhaustedSettlementRecoveryJobDeadParams struct {
@@ -868,6 +931,13 @@ func (q *Queries) MarkExhaustedSettlementRecoveryJobDead(ctx context.Context, ar
 		&i.LongContextThreshold,
 		&i.LongContextInputMultiplier,
 		&i.LongContextOutputMultiplier,
+		&i.RequestedServiceTier,
+		&i.ActualServiceTier,
+		&i.SettledServiceTier,
+		&i.UpstreamServiceTier,
+		&i.ServiceTierResolution,
+		&i.ModelPriceServiceTierID,
+		&i.ChannelPriceServiceTierID,
 	)
 	return i, err
 }
@@ -888,7 +958,7 @@ WHERE settlement_recovery_jobs.id = $5
   AND settlement_recovery_jobs.locked_by = $6
   AND settlement_recovery_jobs.locked_until = $7
   AND settlement_recovery_jobs.attempt_count = $8
-RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier
+RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, requested_service_tier, actual_service_tier, settled_service_tier, upstream_service_tier, service_tier_resolution, model_price_service_tier_id, channel_price_service_tier_id
 `
 
 type MarkSettlementRecoveryJobDeadParams struct {
@@ -991,6 +1061,13 @@ func (q *Queries) MarkSettlementRecoveryJobDead(ctx context.Context, arg MarkSet
 		&i.LongContextThreshold,
 		&i.LongContextInputMultiplier,
 		&i.LongContextOutputMultiplier,
+		&i.RequestedServiceTier,
+		&i.ActualServiceTier,
+		&i.SettledServiceTier,
+		&i.UpstreamServiceTier,
+		&i.ServiceTierResolution,
+		&i.ModelPriceServiceTierID,
+		&i.ChannelPriceServiceTierID,
 	)
 	return i, err
 }
@@ -1012,7 +1089,7 @@ WHERE settlement_recovery_jobs.id = $6
   AND settlement_recovery_jobs.locked_until = $8
   AND settlement_recovery_jobs.attempt_count = $9
   AND settlement_recovery_jobs.attempt_count < settlement_recovery_jobs.max_attempts
-RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier
+RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, requested_service_tier, actual_service_tier, settled_service_tier, upstream_service_tier, service_tier_resolution, model_price_service_tier_id, channel_price_service_tier_id
 `
 
 type MarkSettlementRecoveryJobRetryParams struct {
@@ -1117,6 +1194,13 @@ func (q *Queries) MarkSettlementRecoveryJobRetry(ctx context.Context, arg MarkSe
 		&i.LongContextThreshold,
 		&i.LongContextInputMultiplier,
 		&i.LongContextOutputMultiplier,
+		&i.RequestedServiceTier,
+		&i.ActualServiceTier,
+		&i.SettledServiceTier,
+		&i.UpstreamServiceTier,
+		&i.ServiceTierResolution,
+		&i.ModelPriceServiceTierID,
+		&i.ChannelPriceServiceTierID,
 	)
 	return i, err
 }
@@ -1132,14 +1216,14 @@ WITH updated AS (
         updated_at = $1
     WHERE settlement_recovery_jobs.id = $2
       AND settlement_recovery_jobs.status IN ('pending', 'running')
-    RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier
+    RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, requested_service_tier, actual_service_tier, settled_service_tier, upstream_service_tier, service_tier_resolution, model_price_service_tier_id, channel_price_service_tier_id
 )
-SELECT id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier
+SELECT id, user_id, request_record_id, attempt_id, reservation_id, response_protocol, response_id, response_model_id, model_id, provider_id, channel_id, upstream_protocol, upstream_response_id, upstream_model, finish_class, upstream_finish_reason, upstream_status_code, upstream_request_id, usage_uncached_input_tokens, usage_uncached_input_tokens_state, usage_cache_read_input_tokens, usage_cache_read_input_tokens_state, usage_cache_write_5m_input_tokens, usage_cache_write_5m_input_tokens_state, usage_cache_write_1h_input_tokens, usage_cache_write_1h_input_tokens_state, usage_output_tokens_total, usage_output_tokens_total_state, usage_reasoning_output_tokens, usage_reasoning_output_tokens_state, usage_server_web_search_requests, usage_server_web_fetch_requests, usage_source, usage_mapping_version, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at, price_ratio, usage_cache_write_30m_input_tokens, usage_cache_write_30m_input_tokens_state, cache_write_30m_input_price, cost_base_model_price_id, channel_cost_multiplier_id, channel_recharge_factor_id, request_final_status, attempt_final_status, settlement_error_code, settlement_error_message, settlement_internal_error_detail, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, requested_service_tier, actual_service_tier, settled_service_tier, upstream_service_tier, service_tier_resolution, model_price_service_tier_id, channel_price_service_tier_id
 FROM updated
 
 UNION ALL
 
-SELECT settlement_recovery_jobs.id, settlement_recovery_jobs.user_id, settlement_recovery_jobs.request_record_id, settlement_recovery_jobs.attempt_id, settlement_recovery_jobs.reservation_id, settlement_recovery_jobs.response_protocol, settlement_recovery_jobs.response_id, settlement_recovery_jobs.response_model_id, settlement_recovery_jobs.model_id, settlement_recovery_jobs.provider_id, settlement_recovery_jobs.channel_id, settlement_recovery_jobs.upstream_protocol, settlement_recovery_jobs.upstream_response_id, settlement_recovery_jobs.upstream_model, settlement_recovery_jobs.finish_class, settlement_recovery_jobs.upstream_finish_reason, settlement_recovery_jobs.upstream_status_code, settlement_recovery_jobs.upstream_request_id, settlement_recovery_jobs.usage_uncached_input_tokens, settlement_recovery_jobs.usage_uncached_input_tokens_state, settlement_recovery_jobs.usage_cache_read_input_tokens, settlement_recovery_jobs.usage_cache_read_input_tokens_state, settlement_recovery_jobs.usage_cache_write_5m_input_tokens, settlement_recovery_jobs.usage_cache_write_5m_input_tokens_state, settlement_recovery_jobs.usage_cache_write_1h_input_tokens, settlement_recovery_jobs.usage_cache_write_1h_input_tokens_state, settlement_recovery_jobs.usage_output_tokens_total, settlement_recovery_jobs.usage_output_tokens_total_state, settlement_recovery_jobs.usage_reasoning_output_tokens, settlement_recovery_jobs.usage_reasoning_output_tokens_state, settlement_recovery_jobs.usage_server_web_search_requests, settlement_recovery_jobs.usage_server_web_fetch_requests, settlement_recovery_jobs.usage_source, settlement_recovery_jobs.usage_mapping_version, settlement_recovery_jobs.price_id, settlement_recovery_jobs.currency, settlement_recovery_jobs.pricing_unit, settlement_recovery_jobs.uncached_input_price, settlement_recovery_jobs.cache_read_input_price, settlement_recovery_jobs.cache_write_5m_input_price, settlement_recovery_jobs.cache_write_1h_input_price, settlement_recovery_jobs.output_price, settlement_recovery_jobs.reasoning_output_price, settlement_recovery_jobs.formula_version, settlement_recovery_jobs.estimated_amount, settlement_recovery_jobs.authorized_amount, settlement_recovery_jobs.status, settlement_recovery_jobs.attempt_count, settlement_recovery_jobs.max_attempts, settlement_recovery_jobs.next_run_at, settlement_recovery_jobs.locked_by, settlement_recovery_jobs.locked_until, settlement_recovery_jobs.last_error_code, settlement_recovery_jobs.last_error_message, settlement_recovery_jobs.last_internal_error_detail, settlement_recovery_jobs.last_attempted_at, settlement_recovery_jobs.completed_at, settlement_recovery_jobs.created_at, settlement_recovery_jobs.updated_at, settlement_recovery_jobs.price_ratio, settlement_recovery_jobs.usage_cache_write_30m_input_tokens, settlement_recovery_jobs.usage_cache_write_30m_input_tokens_state, settlement_recovery_jobs.cache_write_30m_input_price, settlement_recovery_jobs.cost_base_model_price_id, settlement_recovery_jobs.channel_cost_multiplier_id, settlement_recovery_jobs.channel_recharge_factor_id, settlement_recovery_jobs.request_final_status, settlement_recovery_jobs.attempt_final_status, settlement_recovery_jobs.settlement_error_code, settlement_recovery_jobs.settlement_error_message, settlement_recovery_jobs.settlement_internal_error_detail, settlement_recovery_jobs.long_context_enabled, settlement_recovery_jobs.long_context_threshold, settlement_recovery_jobs.long_context_input_multiplier, settlement_recovery_jobs.long_context_output_multiplier
+SELECT settlement_recovery_jobs.id, settlement_recovery_jobs.user_id, settlement_recovery_jobs.request_record_id, settlement_recovery_jobs.attempt_id, settlement_recovery_jobs.reservation_id, settlement_recovery_jobs.response_protocol, settlement_recovery_jobs.response_id, settlement_recovery_jobs.response_model_id, settlement_recovery_jobs.model_id, settlement_recovery_jobs.provider_id, settlement_recovery_jobs.channel_id, settlement_recovery_jobs.upstream_protocol, settlement_recovery_jobs.upstream_response_id, settlement_recovery_jobs.upstream_model, settlement_recovery_jobs.finish_class, settlement_recovery_jobs.upstream_finish_reason, settlement_recovery_jobs.upstream_status_code, settlement_recovery_jobs.upstream_request_id, settlement_recovery_jobs.usage_uncached_input_tokens, settlement_recovery_jobs.usage_uncached_input_tokens_state, settlement_recovery_jobs.usage_cache_read_input_tokens, settlement_recovery_jobs.usage_cache_read_input_tokens_state, settlement_recovery_jobs.usage_cache_write_5m_input_tokens, settlement_recovery_jobs.usage_cache_write_5m_input_tokens_state, settlement_recovery_jobs.usage_cache_write_1h_input_tokens, settlement_recovery_jobs.usage_cache_write_1h_input_tokens_state, settlement_recovery_jobs.usage_output_tokens_total, settlement_recovery_jobs.usage_output_tokens_total_state, settlement_recovery_jobs.usage_reasoning_output_tokens, settlement_recovery_jobs.usage_reasoning_output_tokens_state, settlement_recovery_jobs.usage_server_web_search_requests, settlement_recovery_jobs.usage_server_web_fetch_requests, settlement_recovery_jobs.usage_source, settlement_recovery_jobs.usage_mapping_version, settlement_recovery_jobs.price_id, settlement_recovery_jobs.currency, settlement_recovery_jobs.pricing_unit, settlement_recovery_jobs.uncached_input_price, settlement_recovery_jobs.cache_read_input_price, settlement_recovery_jobs.cache_write_5m_input_price, settlement_recovery_jobs.cache_write_1h_input_price, settlement_recovery_jobs.output_price, settlement_recovery_jobs.reasoning_output_price, settlement_recovery_jobs.formula_version, settlement_recovery_jobs.estimated_amount, settlement_recovery_jobs.authorized_amount, settlement_recovery_jobs.status, settlement_recovery_jobs.attempt_count, settlement_recovery_jobs.max_attempts, settlement_recovery_jobs.next_run_at, settlement_recovery_jobs.locked_by, settlement_recovery_jobs.locked_until, settlement_recovery_jobs.last_error_code, settlement_recovery_jobs.last_error_message, settlement_recovery_jobs.last_internal_error_detail, settlement_recovery_jobs.last_attempted_at, settlement_recovery_jobs.completed_at, settlement_recovery_jobs.created_at, settlement_recovery_jobs.updated_at, settlement_recovery_jobs.price_ratio, settlement_recovery_jobs.usage_cache_write_30m_input_tokens, settlement_recovery_jobs.usage_cache_write_30m_input_tokens_state, settlement_recovery_jobs.cache_write_30m_input_price, settlement_recovery_jobs.cost_base_model_price_id, settlement_recovery_jobs.channel_cost_multiplier_id, settlement_recovery_jobs.channel_recharge_factor_id, settlement_recovery_jobs.request_final_status, settlement_recovery_jobs.attempt_final_status, settlement_recovery_jobs.settlement_error_code, settlement_recovery_jobs.settlement_error_message, settlement_recovery_jobs.settlement_internal_error_detail, settlement_recovery_jobs.long_context_enabled, settlement_recovery_jobs.long_context_threshold, settlement_recovery_jobs.long_context_input_multiplier, settlement_recovery_jobs.long_context_output_multiplier, settlement_recovery_jobs.requested_service_tier, settlement_recovery_jobs.actual_service_tier, settlement_recovery_jobs.settled_service_tier, settlement_recovery_jobs.upstream_service_tier, settlement_recovery_jobs.service_tier_resolution, settlement_recovery_jobs.model_price_service_tier_id, settlement_recovery_jobs.channel_price_service_tier_id
 FROM settlement_recovery_jobs
 WHERE settlement_recovery_jobs.id = $2
   AND settlement_recovery_jobs.status = 'succeeded'
@@ -1227,6 +1311,13 @@ type MarkSettlementRecoveryJobSucceededRow struct {
 	LongContextThreshold               pgtype.Int8
 	LongContextInputMultiplier         pgtype.Numeric
 	LongContextOutputMultiplier        pgtype.Numeric
+	RequestedServiceTier               pgtype.Text
+	ActualServiceTier                  pgtype.Text
+	SettledServiceTier                 pgtype.Text
+	UpstreamServiceTier                pgtype.Text
+	ServiceTierResolution              pgtype.Text
+	ModelPriceServiceTierID            pgtype.Int8
+	ChannelPriceServiceTierID          pgtype.Int8
 }
 
 // MarkSettlementRecoveryJobSucceeded 将 pending/running recovery job 标记为 succeeded。
@@ -1309,6 +1400,13 @@ func (q *Queries) MarkSettlementRecoveryJobSucceeded(ctx context.Context, arg Ma
 		&i.LongContextThreshold,
 		&i.LongContextInputMultiplier,
 		&i.LongContextOutputMultiplier,
+		&i.RequestedServiceTier,
+		&i.ActualServiceTier,
+		&i.SettledServiceTier,
+		&i.UpstreamServiceTier,
+		&i.ServiceTierResolution,
+		&i.ModelPriceServiceTierID,
+		&i.ChannelPriceServiceTierID,
 	)
 	return i, err
 }

@@ -148,6 +148,7 @@ type Metrics struct {
 	upstreamDuration      *prometheus.HistogramVec
 
 	settlementTotal  *prometheus.CounterVec
+	serviceTierTotal *prometheus.CounterVec
 	streamEventTotal *prometheus.CounterVec
 
 	partialSettlementTotal *prometheus.CounterVec
@@ -276,6 +277,11 @@ func New() *Metrics {
 			Name: "unio_gateway_settlement_total",
 			Help: "Gateway 结算调用总数，按结果聚合。",
 		}, []string{"outcome"}),
+
+		serviceTierTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "unio_gateway_service_tier_total",
+			Help: "Gateway 成功上游响应的服务档位事实，按请求、实际、结算档位和解析来源聚合。",
+		}, []string{"requested", "actual", "settled", "resolution"}),
 
 		streamEventTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "unio_gateway_stream_events_total",
@@ -556,6 +562,7 @@ func New() *Metrics {
 		m.upstreamRequestsTotal,
 		m.upstreamDuration,
 		m.settlementTotal,
+		m.serviceTierTotal,
 		m.streamEventTotal,
 		m.partialSettlementTotal,
 		m.retryableFallbackTotal,
@@ -676,6 +683,24 @@ func (m *Metrics) ObserveUpstream(provider string, channel string, success bool,
 // IncSettlement 记录一次结算调用的结果。
 func (m *Metrics) IncSettlement(outcome SettlementOutcome) {
 	m.settlementTotal.WithLabelValues(string(outcome)).Inc()
+}
+
+// IncServiceTier 记录一次成功上游响应的归一化服务档位事实。所有标签均为有界内部枚举；
+// actual 为空时使用 unknown，避免把上游原始未知值放入 Prometheus 标签。
+func (m *Metrics) IncServiceTier(requested, actual, settled, resolution string) {
+	if requested == "" {
+		return
+	}
+	if actual == "" {
+		actual = "unknown"
+	}
+	if settled == "" {
+		settled = "unknown"
+	}
+	if resolution == "" {
+		resolution = "unknown"
+	}
+	m.serviceTierTotal.WithLabelValues(requested, actual, settled, resolution).Inc()
 }
 
 // IncStreamEvent 记录一次流式请求生命周期事件。

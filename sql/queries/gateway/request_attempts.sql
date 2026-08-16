@@ -36,7 +36,8 @@ INSERT INTO request_attempts (
     provider_status_revision,
     channel_config_revision,
     routing_candidate_index,
-    upstream_endpoint
+    upstream_endpoint,
+    requested_service_tier
 )
 SELECT request_guard.guarded_request_record_id,
            sqlc.arg(permit_id),
@@ -65,7 +66,8 @@ SELECT request_guard.guarded_request_record_id,
            sqlc.arg(provider_status_revision),
            sqlc.arg(channel_config_revision),
            sqlc.arg(routing_candidate_index),
-           sqlc.arg(upstream_endpoint)
+           sqlc.arg(upstream_endpoint),
+           sqlc.narg(requested_service_tier)
 FROM request_guard
 RETURNING request_attempts.*;
 
@@ -138,6 +140,7 @@ WITH updated AS (
             finish_class = sqlc.arg(finish_class),
             upstream_status_code = sqlc.arg(upstream_status_code),
             upstream_request_id = sqlc.arg(upstream_request_id),
+            upstream_service_tier = sqlc.narg(upstream_service_tier),
             gateway_first_token_at = COALESCE(request_attempts.gateway_first_token_at, sqlc.narg(gateway_first_token_at)),
             final_usage_received = sqlc.arg(final_usage_received),
             usage_mapping_version = sqlc.arg(usage_mapping_version),
@@ -165,6 +168,7 @@ WITH updated AS (
         SET status = 'failed',
             upstream_status_code = sqlc.arg(upstream_status_code),
             upstream_request_id = sqlc.arg(upstream_request_id),
+            upstream_service_tier = sqlc.narg(upstream_service_tier),
             error_code = sqlc.arg(error_code),
             error_message = sqlc.arg(error_message),
             internal_error_detail = sqlc.arg(internal_error_detail),
@@ -195,6 +199,7 @@ WITH updated AS (
             finish_class = sqlc.arg(finish_class),
             upstream_status_code = sqlc.arg(upstream_status_code),
             upstream_request_id = sqlc.arg(upstream_request_id),
+            upstream_service_tier = sqlc.narg(upstream_service_tier),
             error_code = sqlc.arg(error_code),
             error_message = sqlc.arg(error_message),
             internal_error_detail = sqlc.arg(internal_error_detail),
@@ -253,6 +258,7 @@ WITH updated AS (
             finish_class = sqlc.arg(finish_class),
             upstream_status_code = sqlc.arg(upstream_status_code),
             upstream_request_id = sqlc.arg(upstream_request_id),
+            upstream_service_tier = sqlc.narg(upstream_service_tier),
             error_code = sqlc.arg(error_code),
             error_message = sqlc.arg(error_message),
             internal_error_detail = sqlc.arg(internal_error_detail),

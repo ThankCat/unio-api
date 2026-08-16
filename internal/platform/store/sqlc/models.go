@@ -179,6 +179,20 @@ type ChannelPrice struct {
 	CacheWrite30mInputCost pgtype.Numeric
 }
 
+type ChannelPriceServiceTier struct {
+	ID                     int64
+	ChannelPriceID         int64
+	ServiceTier            string
+	UncachedInputCost      pgtype.Numeric
+	CacheReadInputCost     pgtype.Numeric
+	CacheWrite5mInputCost  pgtype.Numeric
+	CacheWrite1hInputCost  pgtype.Numeric
+	CacheWrite30mInputCost pgtype.Numeric
+	OutputCost             pgtype.Numeric
+	ReasoningOutputCost    pgtype.Numeric
+	CreatedAt              pgtype.Timestamptz
+}
+
 type ChannelRechargeFactor struct {
 	ID            int64
 	ChannelID     int64
@@ -242,6 +256,10 @@ type CostSnapshot struct {
 	ChannelRechargeFactorID      pgtype.Int8
 	RechargeFactor               pgtype.Numeric
 	LongContextApplied           bool
+	ServiceTier                  pgtype.Text
+	ModelPriceServiceTierID      pgtype.Int8
+	ChannelPriceServiceTierID    pgtype.Int8
+	TierCostSource               pgtype.Text
 }
 
 type LedgerBillingException struct {
@@ -386,6 +404,22 @@ type ModelPrice struct {
 	LongContextOutputMultiplier pgtype.Numeric
 }
 
+type ModelPriceServiceTier struct {
+	ID                      int64
+	ModelPriceID            int64
+	ServiceTier             string
+	UncachedInputPrice      pgtype.Numeric
+	CacheReadInputPrice     pgtype.Numeric
+	CacheWrite5mInputPrice  pgtype.Numeric
+	CacheWrite1hInputPrice  pgtype.Numeric
+	CacheWrite30mInputPrice pgtype.Numeric
+	OutputPrice             pgtype.Numeric
+	ReasoningOutputPrice    pgtype.Numeric
+	ReferenceSource         pgtype.Text
+	ReferenceCheckedAt      pgtype.Date
+	CreatedAt               pgtype.Timestamptz
+}
+
 type PriceSnapshot struct {
 	ID                      int64
 	RequestRecordID         int64
@@ -403,6 +437,8 @@ type PriceSnapshot struct {
 	PriceRatio              pgtype.Numeric
 	CacheWrite30mInputPrice pgtype.Numeric
 	LongContextApplied      bool
+	ServiceTier             pgtype.Text
+	ModelPriceServiceTierID pgtype.Int8
 }
 
 type Provider struct {
@@ -485,6 +521,22 @@ type ProviderRoutingOperation struct {
 	CompletedAt pgtype.Timestamptz
 }
 
+type ProviderServiceTierCostRisk struct {
+	ID                       int64
+	ProviderID               int64
+	RequestRecordID          int64
+	RequestAttemptID         int64
+	EstimatedIncrementAmount pgtype.Numeric
+	SettledAmount            pgtype.Numeric
+	Currency                 string
+	ReasonCode               string
+	Reason                   string
+	UpstreamServiceTier      pgtype.Text
+	SettledServiceTier       string
+	ServiceTierResolution    string
+	CreatedAt                pgtype.Timestamptz
+}
+
 type RequestAttempt struct {
 	ID                         int64
 	RequestRecordID            int64
@@ -526,6 +578,8 @@ type RequestAttempt struct {
 	ErrorScoringFailure        bool
 	FaultParty                 pgtype.Text
 	PermitID                   pgtype.Text
+	RequestedServiceTier       pgtype.Text
+	UpstreamServiceTier        pgtype.Text
 }
 
 type RequestRecord struct {
@@ -557,6 +611,10 @@ type RequestRecord struct {
 	ReasoningEffort       pgtype.Text
 	ReasoningBudgetTokens pgtype.Int4
 	ClientIp              pgtype.Text
+	RequestedServiceTier  pgtype.Text
+	ActualServiceTier     pgtype.Text
+	SettledServiceTier    pgtype.Text
+	ServiceTierResolution pgtype.Text
 }
 
 type Route struct {
@@ -733,6 +791,13 @@ type SettlementRecoveryJob struct {
 	LongContextThreshold               pgtype.Int8
 	LongContextInputMultiplier         pgtype.Numeric
 	LongContextOutputMultiplier        pgtype.Numeric
+	RequestedServiceTier               pgtype.Text
+	ActualServiceTier                  pgtype.Text
+	SettledServiceTier                 pgtype.Text
+	UpstreamServiceTier                pgtype.Text
+	ServiceTierResolution              pgtype.Text
+	ModelPriceServiceTierID            pgtype.Int8
+	ChannelPriceServiceTierID          pgtype.Int8
 }
 
 type UsageLineItem struct {

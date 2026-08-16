@@ -18,6 +18,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	coreusage "github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
@@ -170,6 +171,7 @@ func (d *chatSettlementDBDeps) cleanup() {
 
 	if d.requestRecord.ID != 0 {
 		_, _ = d.pool.Exec(ctx, `DELETE FROM settlement_recovery_jobs WHERE request_record_id = $1`, d.requestRecord.ID)
+		_, _ = d.pool.Exec(ctx, `DELETE FROM provider_service_tier_cost_risks WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_billing_exceptions WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_reservations WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_entries WHERE request_record_id = $1`, d.requestRecord.ID)
@@ -181,6 +183,7 @@ func (d *chatSettlementDBDeps) cleanup() {
 		_, _ = d.pool.Exec(ctx, `DELETE FROM request_records WHERE id = $1`, d.requestRecord.ID)
 	}
 	if d.channelPriceID != 0 {
+		_, _ = d.pool.Exec(ctx, `DELETE FROM channel_price_service_tiers WHERE channel_price_id IN (SELECT id FROM channel_prices WHERE channel_id = $1 AND model_id = $2)`, d.channelID, d.modelID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM channel_prices WHERE channel_id = $1 AND model_id = $2`, d.channelID, d.modelID)
 	}
 	if d.channelID != 0 && d.modelID != 0 {
@@ -195,6 +198,7 @@ func (d *chatSettlementDBDeps) cleanup() {
 	}
 	if d.modelID != 0 {
 		// model_prices 以 model_id 外键引用 models（无级联），倍率路径测试会为该模型建基准价行，删模型前先清。
+		_, _ = d.pool.Exec(ctx, `DELETE FROM model_price_service_tiers WHERE model_price_id IN (SELECT id FROM model_prices WHERE model_id = $1)`, d.modelID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM model_prices WHERE model_id = $1`, d.modelID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM models WHERE id = $1`, d.modelID)
 	}
@@ -1183,6 +1187,188 @@ func TestChatSettlementReturnsIdempotentSuccessAfterRequestSucceeded(t *testing.
 	}
 	if status := requestStatus(t, deps.ctx, deps.pool, deps.requestRecord.ID); status != string(requestlog.RequestStatusSucceeded) {
 		t.Fatalf("expected request succeeded after replay, got %q", status)
+	}
+}
+
+func TestResolveSettlementTierSelection(t *testing.T) {
+	standardPrice := billing.CustomerPriceSnapshot{
+		Currency:           "USD",
+		PricingUnit:        billing.PricingUnitPer1MTokens,
+		UncachedInputPrice: testNumeric(1, 0),
+		OutputPrice:        testNumeric(2, 0),
+		FormulaVersion:     billing.FormulaVersionV1,
+	}
+	fastPrice := billing.CustomerPriceSnapshot{
+		Currency:           "USD",
+		PricingUnit:        billing.PricingUnitPer1MTokens,
+		UncachedInputPrice: testNumeric(3, 0),
+		OutputPrice:        testNumeric(4, 0),
+		FormulaVersion:     billing.FormulaVersionV1,
+	}
+
+	tests := []struct {
+		name              string
+		params            ChatSettlementParams
+		wantActual        servicetier.Tier
+		wantSettled       servicetier.Tier
+		wantBilling       servicetier.Tier
+		wantResolution    servicetier.Resolution
+		wantModelTierID   int64
+		wantChannelTierID int64
+		wantFastPrice     bool
+	}{
+		{
+			name: "upstream default settles standard",
+			params: ChatSettlementParams{
+				RequestRecord: requestlog.RequestRecord{RequestedServiceTier: servicetier.TierFast},
+				SalePrice:     standardPrice,
+				Facts: adapter.ResponseFacts{ServiceTier: servicetier.Response{
+					Actual: servicetier.TierStandard, Settled: servicetier.TierStandard,
+					UpstreamRaw: "default", Resolution: servicetier.ResolutionUpstreamResponse,
+				}},
+			},
+			wantActual: servicetier.TierStandard, wantSettled: servicetier.TierStandard,
+			wantBilling: servicetier.TierStandard, wantResolution: servicetier.ResolutionUpstreamResponse,
+		},
+		{
+			name: "complete fast override settles fast",
+			params: ChatSettlementParams{
+				RequestRecord:  requestlog.RequestRecord{RequestedServiceTier: servicetier.TierFast},
+				ChannelPriceID: 10, FastChannelPriceServiceTierID: 11,
+				FastModelPriceServiceTierID: 12, SalePrice: standardPrice, FastSalePrice: fastPrice,
+				Facts: adapter.ResponseFacts{ServiceTier: servicetier.Response{
+					Actual: servicetier.TierFast, Settled: servicetier.TierFast,
+					UpstreamRaw: "priority", Resolution: servicetier.ResolutionUpstreamResponse,
+				}},
+			},
+			wantActual: servicetier.TierFast, wantSettled: servicetier.TierFast,
+			wantBilling: servicetier.TierFast, wantResolution: servicetier.ResolutionUpstreamResponse,
+			wantModelTierID: 12, wantChannelTierID: 11, wantFastPrice: true,
+		},
+		{
+			name: "complete fast multiplier settles fast",
+			params: ChatSettlementParams{
+				RequestRecord:        requestlog.RequestRecord{RequestedServiceTier: servicetier.TierFast},
+				CostBaseModelPriceID: 20, ChannelCostMultiplierID: 21,
+				FastModelPriceServiceTierID: 22, SalePrice: standardPrice, FastSalePrice: fastPrice,
+				Facts: adapter.ResponseFacts{ServiceTier: servicetier.Response{
+					Actual: servicetier.TierFast, Settled: servicetier.TierFast,
+					UpstreamRaw: "priority", Resolution: servicetier.ResolutionUpstreamResponse,
+				}},
+			},
+			wantActual: servicetier.TierFast, wantSettled: servicetier.TierFast,
+			wantBilling: servicetier.TierFast, wantResolution: servicetier.ResolutionUpstreamResponse,
+			wantModelTierID: 22, wantFastPrice: true,
+		},
+		{
+			name: "missing fast sale price falls back standard",
+			params: ChatSettlementParams{
+				RequestRecord:  requestlog.RequestRecord{RequestedServiceTier: servicetier.TierFast},
+				ChannelPriceID: 30, FastChannelPriceServiceTierID: 31,
+				SalePrice: standardPrice,
+				Facts: adapter.ResponseFacts{ServiceTier: servicetier.Response{
+					Actual: servicetier.TierFast, Settled: servicetier.TierFast,
+					UpstreamRaw: "priority", Resolution: servicetier.ResolutionUpstreamResponse,
+				}},
+			},
+			wantActual: servicetier.TierFast, wantSettled: servicetier.TierStandard,
+			wantBilling: servicetier.TierStandard, wantResolution: servicetier.ResolutionFastPriceMissing,
+		},
+		{
+			name: "missing fast override cost falls back standard",
+			params: ChatSettlementParams{
+				RequestRecord:  requestlog.RequestRecord{RequestedServiceTier: servicetier.TierFast},
+				ChannelPriceID: 40, FastModelPriceServiceTierID: 41,
+				SalePrice: standardPrice, FastSalePrice: fastPrice,
+				Facts: adapter.ResponseFacts{ServiceTier: servicetier.Response{
+					Actual: servicetier.TierFast, Settled: servicetier.TierFast,
+					UpstreamRaw: "priority", Resolution: servicetier.ResolutionUpstreamResponse,
+				}},
+			},
+			wantActual: servicetier.TierFast, wantSettled: servicetier.TierStandard,
+			wantBilling: servicetier.TierStandard, wantResolution: servicetier.ResolutionFastPriceMissing,
+		},
+		{
+			name: "missing upstream tier preserves unknown actual",
+			params: ChatSettlementParams{
+				RequestRecord: requestlog.RequestRecord{RequestedServiceTier: servicetier.TierFast},
+				SalePrice:     standardPrice,
+				Facts: adapter.ResponseFacts{ServiceTier: servicetier.Response{
+					Settled: servicetier.TierStandard, Resolution: servicetier.ResolutionStandardFallbackMissing,
+				}},
+			},
+			wantSettled: servicetier.TierStandard, wantBilling: servicetier.TierStandard,
+			wantResolution: servicetier.ResolutionStandardFallbackMissing,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveSettlementTierSelection(tt.params)
+			if got.actual != tt.wantActual || got.settled != tt.wantSettled || got.billingTier != tt.wantBilling ||
+				got.resolution != tt.wantResolution || got.modelPriceServiceTierID != tt.wantModelTierID ||
+				got.channelPriceServiceTierID != tt.wantChannelTierID {
+				t.Fatalf("unexpected tier selection: %+v", got)
+			}
+			wantPrice := standardPrice
+			if tt.wantFastPrice {
+				wantPrice = fastPrice
+			}
+			if !chatSettlementSameNumeric(got.salePrice.UncachedInputPrice, wantPrice.UncachedInputPrice) ||
+				!chatSettlementSameNumeric(got.salePrice.OutputPrice, wantPrice.OutputPrice) {
+				t.Fatalf("unexpected sale price: %+v", got.salePrice)
+			}
+		})
+	}
+}
+
+func TestSettlementTierIdempotencyChecks(t *testing.T) {
+	selection := settlementTierSelection{
+		requested:               servicetier.TierFast,
+		actual:                  servicetier.TierFast,
+		settled:                 servicetier.TierFast,
+		billingTier:             servicetier.TierFast,
+		resolution:              servicetier.ResolutionUpstreamResponse,
+		upstreamRaw:             "priority",
+		modelPriceServiceTierID: 101,
+	}
+	params := ChatSettlementParams{
+		RequestRecord:    requestlog.RequestRecord{ID: 1, UserID: 2, APIKeyID: 3},
+		FinalProviderID:  4,
+		FinalChannelID:   5,
+		ResponseModelID:  "openai/gpt-4.1",
+		ResponseProtocol: requestlog.ProtocolOpenAI,
+		ResponseID:       "resp_1",
+	}
+	request := sqlc.RequestRecord{
+		ID: 1, UserID: 2, ApiKeyID: 3, Status: string(requestlog.RequestStatusSucceeded),
+		ResponseModelID:  pgtype.Text{String: params.ResponseModelID, Valid: true},
+		ResponseProtocol: pgtype.Text{String: string(params.ResponseProtocol), Valid: true},
+		ResponseID:       pgtype.Text{String: params.ResponseID, Valid: true},
+		FinalProviderID:  pgtype.Int8{Int64: 4, Valid: true}, FinalChannelID: pgtype.Int8{Int64: 5, Valid: true},
+		RequestedServiceTier:  pgtype.Text{String: "fast", Valid: true},
+		ActualServiceTier:     pgtype.Text{String: "fast", Valid: true},
+		SettledServiceTier:    pgtype.Text{String: "fast", Valid: true},
+		ServiceTierResolution: pgtype.Text{String: "upstream_response", Valid: true},
+	}
+	if err := ensureSettlementRequestMatches(request, params, selection); err != nil {
+		t.Fatalf("matching request tier facts rejected: %v", err)
+	}
+	request.SettledServiceTier = pgtype.Text{String: "standard", Valid: true}
+	if err := ensureSettlementRequestMatches(request, params, selection); failure.CodeOf(err) != failure.CodeGatewayChatSettlementIdempotencyConflict {
+		t.Fatalf("expected request tier conflict, got %v", err)
+	}
+
+	priceSnapshot := sqlc.PriceSnapshot{
+		ServiceTier:             pgtype.Text{String: "fast", Valid: true},
+		ModelPriceServiceTierID: pgtype.Int8{Int64: 101, Valid: true},
+	}
+	if err := ensureSettlementPriceSnapshotTierMatches(priceSnapshot, selection); err != nil {
+		t.Fatalf("matching price tier facts rejected: %v", err)
+	}
+	priceSnapshot.ModelPriceServiceTierID = pgtype.Int8{Int64: 102, Valid: true}
+	if err := ensureSettlementPriceSnapshotTierMatches(priceSnapshot, selection); failure.CodeOf(err) != failure.CodeGatewayChatSettlementIdempotencyConflict {
+		t.Fatalf("expected price tier conflict, got %v", err)
 	}
 }
 

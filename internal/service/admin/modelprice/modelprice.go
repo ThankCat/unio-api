@@ -38,7 +38,7 @@ type Store interface {
 	GetModelPrice(ctx context.Context, id int64) (sqlc.ModelPrice, error)
 	ListModelPricesByModel(ctx context.Context, modelID int64) ([]sqlc.ListModelPricesByModelRow, error)
 	ListEnabledModelPriceWindows(ctx context.Context, arg sqlc.ListEnabledModelPriceWindowsParams) ([]sqlc.ListEnabledModelPriceWindowsRow, error)
-	CreateModelPrice(ctx context.Context, arg sqlc.CreateModelPriceParams) (sqlc.ModelPrice, error)
+	CreateModelPrice(ctx context.Context, arg sqlc.CreateModelPriceParams) (sqlc.CreateModelPriceRow, error)
 	UpdateModelPriceWindow(ctx context.Context, arg sqlc.UpdateModelPriceWindowParams) (sqlc.ModelPrice, error)
 }
 
@@ -61,11 +61,56 @@ type ModelPrice struct {
 	LongContextThreshold        *int64
 	LongContextInputMultiplier  *string
 	LongContextOutputMultiplier *string
+	FastPriceStatus             string
+	FastPrices                  *FastPrice
+	FastPriceReference          *FastPriceReference
 	Status                      string
 	EffectiveFrom               time.Time
 	EffectiveTo                 *time.Time
 	CreatedAt                   time.Time
 	UpdatedAt                   time.Time
+}
+
+// FastPrice 是同一模型价格窗口下已经持久化的 Fast 精确售价。
+type FastPrice struct {
+	ServiceTierID           int64
+	UncachedInputPrice      string
+	CacheReadInputPrice     *string
+	CacheWrite5mInputPrice  *string
+	CacheWrite1hInputPrice  *string
+	CacheWrite30mInputPrice *string
+	OutputPrice             string
+	ReasoningOutputPrice    *string
+	ReferenceSource         *string
+	ReferenceCheckedAt      *time.Time
+}
+
+// FastPriceReference 是版本化的 OpenAI 官方参考价，只用于 Admin 填表，不参与运行时计费。
+type FastPriceReference struct {
+	Currency                string
+	PricingUnit             string
+	UncachedInputPrice      string
+	CacheReadInputPrice     *string
+	CacheWrite5mInputPrice  *string
+	CacheWrite1hInputPrice  *string
+	CacheWrite30mInputPrice *string
+	OutputPrice             string
+	ReasoningOutputPrice    *string
+	Source                  string
+	CheckedAt               time.Time
+}
+
+// FastPriceInput 是新价格窗口可选的 Fast 精确售价。
+type FastPriceInput struct {
+	UncachedInputPrice      string
+	CacheReadInputPrice     *string
+	CacheWrite5mInputPrice  *string
+	CacheWrite1hInputPrice  *string
+	CacheWrite30mInputPrice *string
+	OutputPrice             string
+	ReasoningOutputPrice    *string
+	ReferenceSource         *string
+	ReferenceCheckedAt      *time.Time
 }
 
 // CreateInput 是创建模型基准价的入参；uncached_input/output 必填，其余可空，金额为十进制字符串。
@@ -84,6 +129,7 @@ type CreateInput struct {
 	LongContextThreshold        *int64
 	LongContextInputMultiplier  *string
 	LongContextOutputMultiplier *string
+	FastPrices                  *FastPriceInput
 	Status                      string
 	EffectiveFrom               time.Time
 	EffectiveTo                 *time.Time
@@ -161,9 +207,14 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ModelPrice, error
 	if err != nil {
 		return ModelPrice{}, err
 	}
+	fastPrice, err := parseFastPriceConfig(in.FastPrices)
+	if err != nil {
+		return ModelPrice{}, err
+	}
 
 	// 基准价必须挂在已存在的 model 上（DB 也有同名外键，这里给清晰 400）。
-	if _, err := s.store.LookupModelByID(ctx, in.ModelID); err != nil {
+	model, err := s.store.LookupModelByID(ctx, in.ModelID)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ModelPrice{}, invalidArgument("model_id", "model not found")
 		}
@@ -191,6 +242,16 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ModelPrice, error
 		LongContextThreshold:        longContext.threshold,
 		LongContextInputMultiplier:  longContext.inputMultiplier,
 		LongContextOutputMultiplier: longContext.outputMultiplier,
+		FastUncachedInputPrice:      fastPrice.uncachedInputPrice,
+		FastCacheReadInputPrice:     fastPrice.cacheReadInputPrice,
+		FastCacheWrite5mInputPrice:  fastPrice.cacheWrite5mInputPrice,
+		FastCacheWrite1hInputPrice:  fastPrice.cacheWrite1hInputPrice,
+		FastCacheWrite30mInputPrice: fastPrice.cacheWrite30mInputPrice,
+		FastOutputPrice:             fastPrice.outputPrice,
+		FastReasoningOutputPrice:    fastPrice.reasoningOutputPrice,
+		FastReferenceSource:         fastPrice.referenceSource,
+		FastReferenceCheckedAt:      fastPrice.referenceCheckedAt,
+		FastConfigured:              fastPrice.configured,
 		Status:                      in.Status,
 		EffectiveFrom:               tsParam(&in.EffectiveFrom),
 		EffectiveTo:                 tsParam(in.EffectiveTo),
@@ -199,7 +260,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ModelPrice, error
 		return ModelPrice{}, storeFailed(err, "create model price")
 	}
 
-	return toModelPrice(row), nil
+	result := toModelPriceFromCreateRow(row)
+	result.ModelExternalID = model.ModelID
+	result.ModelDisplayName = model.DisplayName
+	result.FastPriceReference = officialFastPriceReference(model.ModelID)
+	return result, nil
 }
 
 // Update 调整窗口/启停：改 effective_to（关闭窗口）与 status；金额不可改。重新启用或延长窗口时复查重叠。
@@ -241,7 +306,16 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (ModelPrice, error
 		return ModelPrice{}, storeFailed(err, "update model price")
 	}
 
-	return toModelPrice(row), nil
+	rows, listErr := s.store.ListModelPricesByModel(ctx, row.ModelID)
+	if listErr != nil {
+		return ModelPrice{}, storeFailed(listErr, "reload model price")
+	}
+	for _, candidate := range rows {
+		if candidate.ID == row.ID {
+			return toModelPriceFromRow(candidate), nil
+		}
+	}
+	return ModelPrice{}, storeFailed(pgx.ErrNoRows, "reload model price")
 }
 
 // ensureNoOverlap 校验目标窗口与同一 model 现有启用窗口不重叠（半开区间 [from, to)）。
@@ -287,6 +361,64 @@ type modelPriceAmounts struct {
 	cacheWrite30mInputPrice pgtype.Numeric
 	outputPrice             pgtype.Numeric
 	reasoningOutputPrice    pgtype.Numeric
+}
+
+type fastPriceConfig struct {
+	configured              bool
+	uncachedInputPrice      pgtype.Numeric
+	cacheReadInputPrice     pgtype.Numeric
+	cacheWrite5mInputPrice  pgtype.Numeric
+	cacheWrite1hInputPrice  pgtype.Numeric
+	cacheWrite30mInputPrice pgtype.Numeric
+	outputPrice             pgtype.Numeric
+	reasoningOutputPrice    pgtype.Numeric
+	referenceSource         pgtype.Text
+	referenceCheckedAt      pgtype.Date
+}
+
+func parseFastPriceConfig(in *FastPriceInput) (fastPriceConfig, error) {
+	if in == nil {
+		return fastPriceConfig{}, nil
+	}
+	var out fastPriceConfig
+	out.configured = true
+	var err error
+	if out.uncachedInputPrice, err = parseMoney("fast_prices.uncached_input_price", in.UncachedInputPrice); err != nil {
+		return fastPriceConfig{}, err
+	}
+	if out.outputPrice, err = parseMoney("fast_prices.output_price", in.OutputPrice); err != nil {
+		return fastPriceConfig{}, err
+	}
+	if out.cacheReadInputPrice, err = parseOptionalMoney("fast_prices.cache_read_input_price", in.CacheReadInputPrice); err != nil {
+		return fastPriceConfig{}, err
+	}
+	if out.cacheWrite5mInputPrice, err = parseOptionalMoney("fast_prices.cache_write_5m_input_price", in.CacheWrite5mInputPrice); err != nil {
+		return fastPriceConfig{}, err
+	}
+	if out.cacheWrite1hInputPrice, err = parseOptionalMoney("fast_prices.cache_write_1h_input_price", in.CacheWrite1hInputPrice); err != nil {
+		return fastPriceConfig{}, err
+	}
+	if out.cacheWrite30mInputPrice, err = parseOptionalMoney("fast_prices.cache_write_30m_input_price", in.CacheWrite30mInputPrice); err != nil {
+		return fastPriceConfig{}, err
+	}
+	if out.reasoningOutputPrice, err = parseOptionalMoney("fast_prices.reasoning_output_price", in.ReasoningOutputPrice); err != nil {
+		return fastPriceConfig{}, err
+	}
+
+	var source string
+	if in.ReferenceSource != nil {
+		source = strings.TrimSpace(*in.ReferenceSource)
+	}
+	hasSource := source != ""
+	hasDate := in.ReferenceCheckedAt != nil
+	if hasSource != hasDate {
+		return fastPriceConfig{}, invalidArgument("fast_prices.reference_source", "reference_source and reference_checked_at must be provided together")
+	}
+	if hasSource {
+		out.referenceSource = pgtype.Text{String: source, Valid: true}
+		out.referenceCheckedAt = pgtype.Date{Time: *in.ReferenceCheckedAt, Valid: true}
+	}
+	return out, nil
 }
 
 func parseModelPriceAmounts(in CreateInput) (modelPriceAmounts, error) {
@@ -335,6 +467,7 @@ func toModelPrice(c sqlc.ModelPrice) ModelPrice {
 		LongContextThreshold:        int64Ptr(c.LongContextThreshold),
 		LongContextInputMultiplier:  numericPtr(c.LongContextInputMultiplier),
 		LongContextOutputMultiplier: numericPtr(c.LongContextOutputMultiplier),
+		FastPriceStatus:             "missing",
 		Status:                      c.Status,
 		EffectiveFrom:               c.EffectiveFrom.Time,
 		EffectiveTo:                 timePtr(c.EffectiveTo),
@@ -343,8 +476,47 @@ func toModelPrice(c sqlc.ModelPrice) ModelPrice {
 	}
 }
 
+func toModelPriceFromCreateRow(c sqlc.CreateModelPriceRow) ModelPrice {
+	result := ModelPrice{
+		ID:                          c.ID,
+		ModelID:                     c.ModelID,
+		Currency:                    c.Currency,
+		PricingUnit:                 c.PricingUnit,
+		UncachedInputPrice:          numericString(c.UncachedInputPrice),
+		CacheReadInputPrice:         numericPtr(c.CacheReadInputPrice),
+		CacheWrite5mInputPrice:      numericPtr(c.CacheWrite5mInputPrice),
+		CacheWrite1hInputPrice:      numericPtr(c.CacheWrite1hInputPrice),
+		CacheWrite30mInputPrice:     numericPtr(c.CacheWrite30mInputPrice),
+		OutputPrice:                 numericString(c.OutputPrice),
+		ReasoningOutputPrice:        numericPtr(c.ReasoningOutputPrice),
+		LongContextEnabled:          c.LongContextEnabled,
+		LongContextThreshold:        int64Ptr(c.LongContextThreshold),
+		LongContextInputMultiplier:  numericPtr(c.LongContextInputMultiplier),
+		LongContextOutputMultiplier: numericPtr(c.LongContextOutputMultiplier),
+		FastPriceStatus:             fastPriceStatus(c.FastServiceTierID),
+		Status:                      c.Status,
+		EffectiveFrom:               c.EffectiveFrom.Time,
+		EffectiveTo:                 timePtr(c.EffectiveTo),
+		CreatedAt:                   c.CreatedAt.Time,
+		UpdatedAt:                   c.UpdatedAt.Time,
+	}
+	result.FastPrices = fastPriceFromValues(
+		c.FastServiceTierID,
+		c.FastUncachedInputPrice,
+		c.FastCacheReadInputPrice,
+		c.FastCacheWrite5mInputPrice,
+		c.FastCacheWrite1hInputPrice,
+		c.FastCacheWrite30mInputPrice,
+		c.FastOutputPrice,
+		c.FastReasoningOutputPrice,
+		c.FastReferenceSource,
+		c.FastReferenceCheckedAt,
+	)
+	return result
+}
+
 func toModelPriceFromRow(c sqlc.ListModelPricesByModelRow) ModelPrice {
-	return ModelPrice{
+	result := ModelPrice{
 		ID:                          c.ID,
 		ModelID:                     c.ModelID,
 		ModelExternalID:             c.ModelExternalID,
@@ -362,11 +534,56 @@ func toModelPriceFromRow(c sqlc.ListModelPricesByModelRow) ModelPrice {
 		LongContextThreshold:        int64Ptr(c.LongContextThreshold),
 		LongContextInputMultiplier:  numericPtr(c.LongContextInputMultiplier),
 		LongContextOutputMultiplier: numericPtr(c.LongContextOutputMultiplier),
+		FastPriceStatus:             fastPriceStatus(c.FastServiceTierID),
+		FastPriceReference:          officialFastPriceReference(c.ModelExternalID),
 		Status:                      c.Status,
 		EffectiveFrom:               c.EffectiveFrom.Time,
 		EffectiveTo:                 timePtr(c.EffectiveTo),
 		CreatedAt:                   c.CreatedAt.Time,
 		UpdatedAt:                   c.UpdatedAt.Time,
+	}
+	result.FastPrices = fastPriceFromValues(
+		c.FastServiceTierID,
+		c.FastUncachedInputPrice,
+		c.FastCacheReadInputPrice,
+		c.FastCacheWrite5mInputPrice,
+		c.FastCacheWrite1hInputPrice,
+		c.FastCacheWrite30mInputPrice,
+		c.FastOutputPrice,
+		c.FastReasoningOutputPrice,
+		c.FastReferenceSource,
+		c.FastReferenceCheckedAt,
+	)
+	return result
+}
+
+func fastPriceStatus(serviceTierID int64) string {
+	if serviceTierID > 0 {
+		return "configured"
+	}
+	return "missing"
+}
+
+func fastPriceFromValues(
+	serviceTierID int64,
+	uncached, cacheRead, cacheWrite5m, cacheWrite1h, cacheWrite30m, output, reasoning pgtype.Numeric,
+	referenceSource pgtype.Text,
+	referenceCheckedAt pgtype.Date,
+) *FastPrice {
+	if serviceTierID <= 0 {
+		return nil
+	}
+	return &FastPrice{
+		ServiceTierID:           serviceTierID,
+		UncachedInputPrice:      numericString(uncached),
+		CacheReadInputPrice:     numericPtr(cacheRead),
+		CacheWrite5mInputPrice:  numericPtr(cacheWrite5m),
+		CacheWrite1hInputPrice:  numericPtr(cacheWrite1h),
+		CacheWrite30mInputPrice: numericPtr(cacheWrite30m),
+		OutputPrice:             numericString(output),
+		ReasoningOutputPrice:    numericPtr(reasoning),
+		ReferenceSource:         textValuePtr(referenceSource),
+		ReferenceCheckedAt:      dateValuePtr(referenceCheckedAt),
 	}
 }
 
@@ -433,6 +650,22 @@ func int64Ptr(v pgtype.Int8) *int64 {
 		return nil
 	}
 	out := v.Int64
+	return &out
+}
+
+func textValuePtr(v pgtype.Text) *string {
+	if !v.Valid {
+		return nil
+	}
+	out := v.String
+	return &out
+}
+
+func dateValuePtr(v pgtype.Date) *time.Time {
+	if !v.Valid {
+		return nil
+	}
+	out := v.Time
 	return &out
 }
 

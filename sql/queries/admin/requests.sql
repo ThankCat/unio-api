@@ -77,6 +77,10 @@ SELECT
     r.completed_at,
     r.created_at,
     r.updated_at,
+    r.requested_service_tier,
+    r.actual_service_tier,
+    r.settled_service_tier,
+    r.service_tier_resolution,
     ak.name AS api_key_name,
     ak.key_prefix AS api_key_prefix,
     ak.key_plaintext AS api_key_plaintext,
@@ -277,7 +281,11 @@ SELECT
     route_id,
     reasoning_effort,
     reasoning_budget_tokens,
-    client_ip
+    client_ip,
+    requested_service_tier,
+    actual_service_tier,
+    settled_service_tier,
+    service_tier_resolution
 FROM request_records
 WHERE request_id = sqlc.arg(request_id);
 

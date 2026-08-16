@@ -11,6 +11,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
@@ -27,6 +28,11 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 			failure.WithMessage(auth.ErrMissingAPIKey.Error()),
 		)
 	}
+	tierRequest, err := servicetier.NormalizeOpenAIRequest(req.ServiceTier)
+	if err != nil {
+		return nil, err
+	}
+	req.ServiceTier = &tierRequest.UpstreamRaw
 
 	routeRequest := routing.ChatRouteRequest{
 		UserID:          principal.UserID,
@@ -40,7 +46,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		return nil, err
 	}
 
-	requestRecord, err := s.createRequestRecord(ctx, principal, req, false)
+	requestRecord, err := s.createRequestRecord(ctx, principal, req, false, tierRequest.Tier)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +108,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 	authorization, err := s.lifecycle.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
 		RequestRecord:            requestRecord,
 		Principal:                principal,
-		CandidatePrices:          candidatePlan.CandidateSalePrices(),
+		CandidatePrices:          candidatePlan.CandidateSalePricesForTier(requestRecord.RequestedServiceTier),
 		LongContextPolicy:        candidatePlan.LongContextPolicy(),
 		InputTokens:              candidatePlan.ConservativeInputTokens,
 		MaxCompletionTokens:      estimateMaxCompletionTokens(req),
