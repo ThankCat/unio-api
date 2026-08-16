@@ -115,6 +115,11 @@ SELECT
     ps.cache_write_30m_input_price,
     ps.output_price,
     ps.reasoning_output_price,
+    ps.service_tier AS price_service_tier,
+    cs.service_tier AS cost_service_tier,
+    ps.model_price_service_tier_id,
+    cs.channel_price_service_tier_id,
+    cs.tier_cost_source,
     (
         SELECT COALESCE(SUM(
             CASE

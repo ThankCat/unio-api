@@ -130,6 +130,7 @@ type CreateInput struct {
 	LongContextInputMultiplier  *string
 	LongContextOutputMultiplier *string
 	FastPrices                  *FastPriceInput
+	ReplaceOverlappingEnabled   bool
 	Status                      string
 	EffectiveFrom               time.Time
 	EffectiveTo                 *time.Time
@@ -192,6 +193,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ModelPrice, error
 	if err := validateStatus(in.Status); err != nil {
 		return ModelPrice{}, err
 	}
+	if in.ReplaceOverlappingEnabled && in.Status != StatusEnabled {
+		return ModelPrice{}, invalidArgument("replace_overlapping_enabled", "replacement requires enabled status")
+	}
 	if in.EffectiveFrom.IsZero() {
 		return ModelPrice{}, invalidArgument("effective_from", "effective_from is required")
 	}
@@ -221,7 +225,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ModelPrice, error
 		return ModelPrice{}, storeFailed(err, "load model")
 	}
 
-	if in.Status == StatusEnabled {
+	if in.Status == StatusEnabled && !in.ReplaceOverlappingEnabled {
 		if err := s.ensureNoOverlap(ctx, in.ModelID, 0, in.EffectiveFrom, in.EffectiveTo); err != nil {
 			return ModelPrice{}, err
 		}
@@ -252,6 +256,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ModelPrice, error
 		FastReferenceSource:         fastPrice.referenceSource,
 		FastReferenceCheckedAt:      fastPrice.referenceCheckedAt,
 		FastConfigured:              fastPrice.configured,
+		ReplaceOverlappingEnabled:   in.ReplaceOverlappingEnabled,
 		Status:                      in.Status,
 		EffectiveFrom:               tsParam(&in.EffectiveFrom),
 		EffectiveTo:                 tsParam(in.EffectiveTo),

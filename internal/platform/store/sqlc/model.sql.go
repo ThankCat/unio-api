@@ -258,7 +258,33 @@ func (q *Queries) CreateModelFromCatalog(ctx context.Context, arg CreateModelFro
 }
 
 const createModelPrice = `-- name: CreateModelPrice :one
-WITH created_price AS (
+WITH locked_model AS (
+SELECT models.id AS locked_model_id
+FROM models
+WHERE models.id = $1
+FOR UPDATE
+), replaced_prices AS (
+UPDATE model_prices mp
+SET status = 'disabled',
+    effective_to = CASE
+        WHEN mp.effective_from < $2::timestamptz
+            THEN $2::timestamptz
+        ELSE mp.effective_to
+    END,
+    updated_at = now()
+FROM locked_model
+WHERE $3::boolean
+  AND $4::text = 'enabled'
+  AND mp.model_id = locked_model.locked_model_id
+  AND mp.currency = $5::text
+  AND mp.pricing_unit = $6::text
+  AND mp.status = 'enabled'
+  AND mp.effective_from < COALESCE($7::timestamptz, 'infinity'::timestamptz)
+  AND $2::timestamptz < COALESCE(mp.effective_to, 'infinity'::timestamptz)
+RETURNING mp.id AS replaced_price_id
+), replacement_barrier AS (
+SELECT count(replaced_price_id) AS replaced_count FROM replaced_prices
+), created_price AS (
 INSERT INTO model_prices (
     model_id,
     currency,
@@ -278,14 +304,10 @@ INSERT INTO model_prices (
     long_context_input_multiplier,
     long_context_output_multiplier
 )
-VALUES (
+SELECT
     $1,
-    $2,
-    $3,
-    $4,
     $5,
     $6,
-    $7,
     $8,
     $9,
     $10,
@@ -293,10 +315,15 @@ VALUES (
     $12,
     $13,
     $14,
+    $4,
+    $2,
+    $7,
     $15,
     $16,
-    $17
-)
+    $17,
+    $18
+FROM locked_model
+CROSS JOIN replacement_barrier
 RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier
 ), created_fast AS (
 INSERT INTO model_price_service_tiers (
@@ -315,7 +342,6 @@ INSERT INTO model_price_service_tiers (
 SELECT
     created_price.id,
     'fast',
-    $18,
     $19,
     $20,
     $21,
@@ -323,9 +349,10 @@ SELECT
     $23,
     $24,
     $25,
-    $26
+    $26,
+    $27
 FROM created_price
-WHERE $27::boolean
+WHERE $28::boolean
 RETURNING id, model_price_id, service_tier, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, cache_write_30m_input_price, output_price, reasoning_output_price, reference_source, reference_checked_at, created_at
 )
 SELECT
@@ -346,8 +373,12 @@ LEFT JOIN created_fast ON created_fast.model_price_id = created_price.id
 
 type CreateModelPriceParams struct {
 	ModelID                     int64
+	EffectiveFrom               pgtype.Timestamptz
+	ReplaceOverlappingEnabled   bool
+	Status                      string
 	Currency                    string
 	PricingUnit                 string
+	EffectiveTo                 pgtype.Timestamptz
 	UncachedInputPrice          pgtype.Numeric
 	CacheReadInputPrice         pgtype.Numeric
 	CacheWrite5mInputPrice      pgtype.Numeric
@@ -355,9 +386,6 @@ type CreateModelPriceParams struct {
 	CacheWrite30mInputPrice     pgtype.Numeric
 	OutputPrice                 pgtype.Numeric
 	ReasoningOutputPrice        pgtype.Numeric
-	Status                      string
-	EffectiveFrom               pgtype.Timestamptz
-	EffectiveTo                 pgtype.Timestamptz
 	LongContextEnabled          bool
 	LongContextThreshold        pgtype.Int8
 	LongContextInputMultiplier  pgtype.Numeric
@@ -408,12 +436,17 @@ type CreateModelPriceRow struct {
 }
 
 // CreateModelPrice 创建 Standard 基准售价与可选 Fast 精确价格子记录，单条语句保证原子性。
-// 启用窗口重叠由 ex_model_prices_enabled_window 保证，违反报 23P01。
+// replace_overlapping_enabled=true 时先锁定 model，并停用同币种/单位下所有重叠启用窗口；
+// 已经开始的旧窗口截断到新窗口起点，未来窗口保留原时间但停用。未确认替换时仍由排斥约束拒绝重叠。
 func (q *Queries) CreateModelPrice(ctx context.Context, arg CreateModelPriceParams) (CreateModelPriceRow, error) {
 	row := q.db.QueryRow(ctx, createModelPrice,
 		arg.ModelID,
+		arg.EffectiveFrom,
+		arg.ReplaceOverlappingEnabled,
+		arg.Status,
 		arg.Currency,
 		arg.PricingUnit,
+		arg.EffectiveTo,
 		arg.UncachedInputPrice,
 		arg.CacheReadInputPrice,
 		arg.CacheWrite5mInputPrice,
@@ -421,9 +454,6 @@ func (q *Queries) CreateModelPrice(ctx context.Context, arg CreateModelPricePara
 		arg.CacheWrite30mInputPrice,
 		arg.OutputPrice,
 		arg.ReasoningOutputPrice,
-		arg.Status,
-		arg.EffectiveFrom,
-		arg.EffectiveTo,
 		arg.LongContextEnabled,
 		arg.LongContextThreshold,
 		arg.LongContextInputMultiplier,
@@ -1778,7 +1808,15 @@ SELECT
     COALESCE(base.long_context_enabled, false) AS base_long_context_enabled,
     base.long_context_threshold AS base_long_context_threshold,
     base.long_context_input_multiplier AS base_long_context_input_multiplier,
-    base.long_context_output_multiplier AS base_long_context_output_multiplier
+    base.long_context_output_multiplier AS base_long_context_output_multiplier,
+    COALESCE(base.fast_price_configured, false)::boolean AS base_fast_price_configured,
+    base.fast_uncached_input_price AS base_fast_uncached_input_price,
+    base.fast_cache_read_input_price AS base_fast_cache_read_input_price,
+    base.fast_cache_write_5m_input_price AS base_fast_cache_write_5m_input_price,
+    base.fast_cache_write_1h_input_price AS base_fast_cache_write_1h_input_price,
+    base.fast_cache_write_30m_input_price AS base_fast_cache_write_30m_input_price,
+    base.fast_output_price AS base_fast_output_price,
+    base.fast_reasoning_output_price AS base_fast_reasoning_output_price
 FROM models m
 LEFT JOIN LATERAL (
     -- base: 模型当前生效的基准售价（mirror FindRouteCandidates 的 base LATERAL）；LEFT 保证无基准价的模型仍出现在列表。
@@ -1787,8 +1825,18 @@ LEFT JOIN LATERAL (
         mp.cache_write_30m_input_price,
         mp.output_price, mp.reasoning_output_price,
         mp.long_context_enabled, mp.long_context_threshold,
-        mp.long_context_input_multiplier, mp.long_context_output_multiplier
+        mp.long_context_input_multiplier, mp.long_context_output_multiplier,
+        fast.id IS NOT NULL AS fast_price_configured,
+        fast.uncached_input_price AS fast_uncached_input_price,
+        fast.cache_read_input_price AS fast_cache_read_input_price,
+        fast.cache_write_5m_input_price AS fast_cache_write_5m_input_price,
+        fast.cache_write_1h_input_price AS fast_cache_write_1h_input_price,
+        fast.cache_write_30m_input_price AS fast_cache_write_30m_input_price,
+        fast.output_price AS fast_output_price,
+        fast.reasoning_output_price AS fast_reasoning_output_price
     FROM model_prices mp
+    LEFT JOIN model_price_service_tiers fast
+      ON fast.model_price_id = mp.id AND fast.service_tier = 'fast'
     WHERE mp.model_id = m.id
       AND mp.status = 'enabled'
       AND mp.effective_from <= now()
@@ -1900,6 +1948,14 @@ type ModelsOpsTableRow struct {
 	BaseLongContextThreshold        pgtype.Int8
 	BaseLongContextInputMultiplier  pgtype.Numeric
 	BaseLongContextOutputMultiplier pgtype.Numeric
+	BaseFastPriceConfigured         bool
+	BaseFastUncachedInputPrice      pgtype.Numeric
+	BaseFastCacheReadInputPrice     pgtype.Numeric
+	BaseFastCacheWrite5mInputPrice  pgtype.Numeric
+	BaseFastCacheWrite1hInputPrice  pgtype.Numeric
+	BaseFastCacheWrite30mInputPrice pgtype.Numeric
+	BaseFastOutputPrice             pgtype.Numeric
+	BaseFastReasoningOutputPrice    pgtype.Numeric
 }
 
 // §3.4 模型商品控制台只读运维聚合。
@@ -1948,6 +2004,14 @@ func (q *Queries) ModelsOpsTable(ctx context.Context, arg ModelsOpsTableParams) 
 			&i.BaseLongContextThreshold,
 			&i.BaseLongContextInputMultiplier,
 			&i.BaseLongContextOutputMultiplier,
+			&i.BaseFastPriceConfigured,
+			&i.BaseFastUncachedInputPrice,
+			&i.BaseFastCacheReadInputPrice,
+			&i.BaseFastCacheWrite5mInputPrice,
+			&i.BaseFastCacheWrite1hInputPrice,
+			&i.BaseFastCacheWrite30mInputPrice,
+			&i.BaseFastOutputPrice,
+			&i.BaseFastReasoningOutputPrice,
 		); err != nil {
 			return nil, err
 		}

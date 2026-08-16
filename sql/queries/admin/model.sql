@@ -140,8 +140,35 @@ WHERE model_id = sqlc.arg(model_id);
 
 -- name: CreateModelPrice :one
 -- CreateModelPrice 创建 Standard 基准售价与可选 Fast 精确价格子记录，单条语句保证原子性。
--- 启用窗口重叠由 ex_model_prices_enabled_window 保证，违反报 23P01。
-WITH created_price AS (
+-- replace_overlapping_enabled=true 时先锁定 model，并停用同币种/单位下所有重叠启用窗口；
+-- 已经开始的旧窗口截断到新窗口起点，未来窗口保留原时间但停用。未确认替换时仍由排斥约束拒绝重叠。
+WITH locked_model AS (
+SELECT models.id AS locked_model_id
+FROM models
+WHERE models.id = sqlc.arg(model_id)
+FOR UPDATE
+), replaced_prices AS (
+UPDATE model_prices mp
+SET status = 'disabled',
+    effective_to = CASE
+        WHEN mp.effective_from < sqlc.arg(effective_from)::timestamptz
+            THEN sqlc.arg(effective_from)::timestamptz
+        ELSE mp.effective_to
+    END,
+    updated_at = now()
+FROM locked_model
+WHERE sqlc.arg(replace_overlapping_enabled)::boolean
+  AND sqlc.arg(status)::text = 'enabled'
+  AND mp.model_id = locked_model.locked_model_id
+  AND mp.currency = sqlc.arg(currency)::text
+  AND mp.pricing_unit = sqlc.arg(pricing_unit)::text
+  AND mp.status = 'enabled'
+  AND mp.effective_from < COALESCE(sqlc.narg(effective_to)::timestamptz, 'infinity'::timestamptz)
+  AND sqlc.arg(effective_from)::timestamptz < COALESCE(mp.effective_to, 'infinity'::timestamptz)
+RETURNING mp.id AS replaced_price_id
+), replacement_barrier AS (
+SELECT count(replaced_price_id) AS replaced_count FROM replaced_prices
+), created_price AS (
 INSERT INTO model_prices (
     model_id,
     currency,
@@ -161,7 +188,7 @@ INSERT INTO model_prices (
     long_context_input_multiplier,
     long_context_output_multiplier
 )
-VALUES (
+SELECT
     sqlc.arg(model_id),
     sqlc.arg(currency),
     sqlc.arg(pricing_unit),
@@ -179,7 +206,8 @@ VALUES (
     sqlc.arg(long_context_threshold),
     sqlc.arg(long_context_input_multiplier),
     sqlc.arg(long_context_output_multiplier)
-)
+FROM locked_model
+CROSS JOIN replacement_barrier
 RETURNING *
 ), created_fast AS (
 INSERT INTO model_price_service_tiers (
@@ -614,7 +642,15 @@ SELECT
     COALESCE(base.long_context_enabled, false) AS base_long_context_enabled,
     base.long_context_threshold AS base_long_context_threshold,
     base.long_context_input_multiplier AS base_long_context_input_multiplier,
-    base.long_context_output_multiplier AS base_long_context_output_multiplier
+    base.long_context_output_multiplier AS base_long_context_output_multiplier,
+    COALESCE(base.fast_price_configured, false)::boolean AS base_fast_price_configured,
+    base.fast_uncached_input_price AS base_fast_uncached_input_price,
+    base.fast_cache_read_input_price AS base_fast_cache_read_input_price,
+    base.fast_cache_write_5m_input_price AS base_fast_cache_write_5m_input_price,
+    base.fast_cache_write_1h_input_price AS base_fast_cache_write_1h_input_price,
+    base.fast_cache_write_30m_input_price AS base_fast_cache_write_30m_input_price,
+    base.fast_output_price AS base_fast_output_price,
+    base.fast_reasoning_output_price AS base_fast_reasoning_output_price
 FROM models m
 LEFT JOIN LATERAL (
     -- base: 模型当前生效的基准售价（mirror FindRouteCandidates 的 base LATERAL）；LEFT 保证无基准价的模型仍出现在列表。
@@ -623,8 +659,18 @@ LEFT JOIN LATERAL (
         mp.cache_write_30m_input_price,
         mp.output_price, mp.reasoning_output_price,
         mp.long_context_enabled, mp.long_context_threshold,
-        mp.long_context_input_multiplier, mp.long_context_output_multiplier
+        mp.long_context_input_multiplier, mp.long_context_output_multiplier,
+        fast.id IS NOT NULL AS fast_price_configured,
+        fast.uncached_input_price AS fast_uncached_input_price,
+        fast.cache_read_input_price AS fast_cache_read_input_price,
+        fast.cache_write_5m_input_price AS fast_cache_write_5m_input_price,
+        fast.cache_write_1h_input_price AS fast_cache_write_1h_input_price,
+        fast.cache_write_30m_input_price AS fast_cache_write_30m_input_price,
+        fast.output_price AS fast_output_price,
+        fast.reasoning_output_price AS fast_reasoning_output_price
     FROM model_prices mp
+    LEFT JOIN model_price_service_tiers fast
+      ON fast.model_price_id = mp.id AND fast.service_tier = 'fast'
     WHERE mp.model_id = m.id
       AND mp.status = 'enabled'
       AND mp.effective_from <= now()

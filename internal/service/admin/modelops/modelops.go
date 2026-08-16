@@ -61,6 +61,14 @@ type Row struct {
 	BaseLongContextThreshold        *int64
 	BaseLongContextInputMultiplier  *string
 	BaseLongContextOutputMultiplier *string
+	BaseFastPriceConfigured         bool
+	BaseFastUncachedInputPrice      *string
+	BaseFastCacheReadInputPrice     *string
+	BaseFastCacheWrite5mInputPrice  *string
+	BaseFastCacheWrite1hInputPrice  *string
+	BaseFastCacheWrite30mInputPrice *string
+	BaseFastOutputPrice             *string
+	BaseFastReasoningOutputPrice    *string
 }
 
 // Detail 是模型详情页概览（含请求/延迟/毛利等运维指标）。
@@ -185,6 +193,14 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			BaseLongContextThreshold:        opsutil.Int8Value(r.BaseLongContextThreshold),
 			BaseLongContextInputMultiplier:  opsutil.NumericStringPtr(r.BaseLongContextInputMultiplier),
 			BaseLongContextOutputMultiplier: opsutil.NumericStringPtr(r.BaseLongContextOutputMultiplier),
+			BaseFastPriceConfigured:         r.BaseFastPriceConfigured,
+			BaseFastUncachedInputPrice:      opsutil.NumericStringPtr(r.BaseFastUncachedInputPrice),
+			BaseFastCacheReadInputPrice:     opsutil.NumericStringPtr(r.BaseFastCacheReadInputPrice),
+			BaseFastCacheWrite5mInputPrice:  opsutil.NumericStringPtr(r.BaseFastCacheWrite5mInputPrice),
+			BaseFastCacheWrite1hInputPrice:  opsutil.NumericStringPtr(r.BaseFastCacheWrite1hInputPrice),
+			BaseFastCacheWrite30mInputPrice: opsutil.NumericStringPtr(r.BaseFastCacheWrite30mInputPrice),
+			BaseFastOutputPrice:             opsutil.NumericStringPtr(r.BaseFastOutputPrice),
+			BaseFastReasoningOutputPrice:    opsutil.NumericStringPtr(r.BaseFastReasoningOutputPrice),
 		})
 	}
 	return out, total, nil

@@ -106,6 +106,7 @@ type createModelPriceRequest struct {
 	LongContextInputMultiplier  *string           `json:"long_context_input_multiplier"`
 	LongContextOutputMultiplier *string           `json:"long_context_output_multiplier"`
 	FastPrices                  *fastPriceRequest `json:"fast_prices"`
+	ReplaceOverlappingEnabled   bool              `json:"replace_overlapping_enabled"`
 	Status                      string            `json:"status"`
 	EffectiveFrom               string            `json:"effective_from"`
 	EffectiveTo                 *string           `json:"effective_to"`
@@ -186,6 +187,7 @@ func (h *modelPricesHandler) create(w http.ResponseWriter, r *http.Request) {
 		LongContextInputMultiplier:  req.LongContextInputMultiplier,
 		LongContextOutputMultiplier: req.LongContextOutputMultiplier,
 		FastPrices:                  fastPrices,
+		ReplaceOverlappingEnabled:   req.ReplaceOverlappingEnabled,
 		Status:                      req.Status,
 		EffectiveFrom:               from,
 		EffectiveTo:                 to,

@@ -254,7 +254,17 @@ func TestRequestServiceGetEmptyIDInvalid(t *testing.T) {
 func TestRequestServiceListMapsTotal(t *testing.T) {
 	store := &fakeRequestStore{
 		listRows: []sqlc.ListRequestRecordsPageRow{
-			{TotalCount: 42, ID: 1, RequestID: "req_1", Status: "succeeded"},
+			{
+				TotalCount:                42,
+				ID:                        1,
+				RequestID:                 "req_1",
+				Status:                    "succeeded",
+				PriceServiceTier:          pgtype.Text{String: "fast", Valid: true},
+				CostServiceTier:           pgtype.Text{String: "fast", Valid: true},
+				ModelPriceServiceTierID:   pgtype.Int8{Int64: 8, Valid: true},
+				ChannelPriceServiceTierID: pgtype.Int8{Int64: 11, Valid: true},
+				TierCostSource:            pgtype.Text{String: "derived", Valid: true},
+			},
 			{TotalCount: 42, ID: 2, RequestID: "req_2", Status: "failed"},
 		},
 	}
@@ -269,6 +279,13 @@ func TestRequestServiceListMapsTotal(t *testing.T) {
 	}
 	if len(items) != 2 || items[0].RequestID != "req_1" {
 		t.Fatalf("unexpected items: %+v", items)
+	}
+	if items[0].PriceServiceTier == nil || *items[0].PriceServiceTier != "fast" ||
+		items[0].CostServiceTier == nil || *items[0].CostServiceTier != "fast" ||
+		items[0].ModelPriceServiceTierID == nil || *items[0].ModelPriceServiceTierID != 8 ||
+		items[0].ChannelPriceServiceTierID == nil || *items[0].ChannelPriceServiceTierID != 11 ||
+		items[0].TierCostSource == nil || *items[0].TierCostSource != "derived" {
+		t.Fatalf("service tier snapshots = %+v", items[0])
 	}
 	if store.counted {
 		t.Fatal("CountRequestRecords should not run for a non-empty page")

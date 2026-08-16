@@ -51,6 +51,14 @@ type modelOpsRowDTO struct {
 	BaseLongContextThreshold        *int64  `json:"base_long_context_threshold"`
 	BaseLongContextInputMultiplier  *string `json:"base_long_context_input_multiplier"`
 	BaseLongContextOutputMultiplier *string `json:"base_long_context_output_multiplier"`
+	BaseFastPriceConfigured         bool    `json:"base_fast_price_configured"`
+	BaseFastUncachedInputPrice      *string `json:"base_fast_uncached_input_price"`
+	BaseFastCacheReadInputPrice     *string `json:"base_fast_cache_read_input_price"`
+	BaseFastCacheWrite5mInputPrice  *string `json:"base_fast_cache_write_5m_input_price"`
+	BaseFastCacheWrite1hInputPrice  *string `json:"base_fast_cache_write_1h_input_price"`
+	BaseFastCacheWrite30mInputPrice *string `json:"base_fast_cache_write_30m_input_price"`
+	BaseFastOutputPrice             *string `json:"base_fast_output_price"`
+	BaseFastReasoningOutputPrice    *string `json:"base_fast_reasoning_output_price"`
 }
 
 type modelOpsDetailDTO struct {
@@ -166,6 +174,14 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			BaseLongContextThreshold:        row.BaseLongContextThreshold,
 			BaseLongContextInputMultiplier:  row.BaseLongContextInputMultiplier,
 			BaseLongContextOutputMultiplier: row.BaseLongContextOutputMultiplier,
+			BaseFastPriceConfigured:         row.BaseFastPriceConfigured,
+			BaseFastUncachedInputPrice:      row.BaseFastUncachedInputPrice,
+			BaseFastCacheReadInputPrice:     row.BaseFastCacheReadInputPrice,
+			BaseFastCacheWrite5mInputPrice:  row.BaseFastCacheWrite5mInputPrice,
+			BaseFastCacheWrite1hInputPrice:  row.BaseFastCacheWrite1hInputPrice,
+			BaseFastCacheWrite30mInputPrice: row.BaseFastCacheWrite30mInputPrice,
+			BaseFastOutputPrice:             row.BaseFastOutputPrice,
+			BaseFastReasoningOutputPrice:    row.BaseFastReasoningOutputPrice,
 		})
 	}
 	adminhttp.WriteList(w, http.StatusOK, out, page, total)

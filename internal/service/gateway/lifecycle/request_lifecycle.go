@@ -507,6 +507,7 @@ func (l *RequestLifecycle) CreateAttemptForEndpoint(
 		RoutingCandidateIndex:  nonNegativeIntPtr(routingCandidateIndex),
 		UpstreamEndpoint:       endpoint,
 		StartedAt:              time.Now(),
+		RequestedServiceTier:   requestRecord.RequestedServiceTier,
 	})
 	if err != nil {
 		return requestlog.AttemptRecord{}, err

@@ -117,6 +117,11 @@ type RequestListItem struct {
 	CacheWrite30mInputPriceUnitUSD *string
 	OutputPriceUnitUSD             *string
 	ReasoningOutputPriceUnitUSD    *string
+	PriceServiceTier               *string
+	CostServiceTier                *string
+	ModelPriceServiceTierID        *int64
+	ChannelPriceServiceTierID      *int64
+	TierCostSource                 *string
 
 	// DEC-027 成本来源倍率快照（倍率路径有值，覆盖/旧数据为 nil）：价格倍率 + 充值倍率。
 	ChannelCostMultiplier *string
@@ -556,6 +561,11 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 		CacheWrite30mInputPriceUnitUSD: opsutil.NumericStringPtr(r.CacheWrite30mInputPrice),
 		OutputPriceUnitUSD:             opsutil.NumericStringPtr(r.OutputPrice),
 		ReasoningOutputPriceUnitUSD:    opsutil.NumericStringPtr(r.ReasoningOutputPrice),
+		PriceServiceTier:               textPtr(r.PriceServiceTier),
+		CostServiceTier:                textPtr(r.CostServiceTier),
+		ModelPriceServiceTierID:        int8Ptr(r.ModelPriceServiceTierID),
+		ChannelPriceServiceTierID:      int8Ptr(r.ChannelPriceServiceTierID),
+		TierCostSource:                 textPtr(r.TierCostSource),
 
 		ChannelCostMultiplier: opsutil.NumericStringPtr(r.ChannelCostMultiplier),
 		RechargeFactor:        opsutil.NumericStringPtr(r.RechargeFactor),

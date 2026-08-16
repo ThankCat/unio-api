@@ -86,6 +86,11 @@ type requestListItemDTO struct {
 	CacheWrite30mInputPriceUnitUsd *string `json:"cache_write_30m_input_price_unit_usd"`
 	OutputPriceUnitUsd             *string `json:"output_price_unit_usd"`
 	ReasoningOutputPriceUnitUsd    *string `json:"reasoning_output_price_unit_usd"`
+	PriceServiceTier               *string `json:"price_service_tier"`
+	CostServiceTier                *string `json:"cost_service_tier"`
+	ModelPriceServiceTierID        *int64  `json:"model_price_service_tier_id"`
+	ChannelPriceServiceTierID      *int64  `json:"channel_price_service_tier_id"`
+	TierCostSource                 *string `json:"tier_cost_source"`
 	// DEC-027 成本来源倍率（倍率路径有值，覆盖/旧数据为 null）：价格倍率 + 充值倍率。
 	ChannelCostMultiplier *string `json:"channel_cost_multiplier"`
 	RechargeFactor        *string `json:"recharge_factor"`
@@ -413,6 +418,11 @@ func toRequestListItemDTO(item query.RequestListItem) requestListItemDTO {
 		CacheWrite30mInputPriceUnitUsd: item.CacheWrite30mInputPriceUnitUSD,
 		OutputPriceUnitUsd:             item.OutputPriceUnitUSD,
 		ReasoningOutputPriceUnitUsd:    item.ReasoningOutputPriceUnitUSD,
+		PriceServiceTier:               item.PriceServiceTier,
+		CostServiceTier:                item.CostServiceTier,
+		ModelPriceServiceTierID:        item.ModelPriceServiceTierID,
+		ChannelPriceServiceTierID:      item.ChannelPriceServiceTierID,
+		TierCostSource:                 item.TierCostSource,
 
 		ChannelCostMultiplier: item.ChannelCostMultiplier,
 		RechargeFactor:        item.RechargeFactor,

@@ -399,6 +399,11 @@ SELECT
     ps.cache_write_30m_input_price,
     ps.output_price,
     ps.reasoning_output_price,
+    ps.service_tier AS price_service_tier,
+    cs.service_tier AS cost_service_tier,
+    ps.model_price_service_tier_id,
+    cs.channel_price_service_tier_id,
+    cs.tier_cost_source,
     (
         SELECT COALESCE(SUM(
             CASE
@@ -587,6 +592,11 @@ type ListRequestRecordsPageRow struct {
 	CacheWrite30mInputPrice      pgtype.Numeric
 	OutputPrice                  pgtype.Numeric
 	ReasoningOutputPrice         pgtype.Numeric
+	PriceServiceTier             pgtype.Text
+	CostServiceTier              pgtype.Text
+	ModelPriceServiceTierID      pgtype.Int8
+	ChannelPriceServiceTierID    pgtype.Int8
+	TierCostSource               pgtype.Text
 	UserChargeAmount             pgtype.Numeric
 	ReasoningEffort              pgtype.Text
 	ReasoningBudgetTokens        pgtype.Int4
@@ -712,6 +722,11 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.CacheWrite30mInputPrice,
 			&i.OutputPrice,
 			&i.ReasoningOutputPrice,
+			&i.PriceServiceTier,
+			&i.CostServiceTier,
+			&i.ModelPriceServiceTierID,
+			&i.ChannelPriceServiceTierID,
+			&i.TierCostSource,
 			&i.UserChargeAmount,
 			&i.ReasoningEffort,
 			&i.ReasoningBudgetTokens,
