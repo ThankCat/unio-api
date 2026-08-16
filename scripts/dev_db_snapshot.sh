@@ -5,34 +5,50 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKUP_DIR="${UNIO_DB_BACKUP_DIR:-$REPO_ROOT/tmp/db-snapshots}"
-COMPOSE_FILE="${UNIO_COMPOSE_FILE:-$REPO_ROOT/deploy/compose.dev.yml}"
-ENV_FILE="${UNIO_ENV_FILE:-$REPO_ROOT/deploy/env/.env.dev}"
+DB_PROFILE="dev"
+COMPOSE_FILE=""
+ENV_FILE=""
+EXPECTED_COMPOSE_PROJECT=""
+BACKUP_NAME_PREFIX=""
+COMPOSE_ARGS=()
+REQUESTED_FILE=""
 POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-}"
 
 usage() {
   cat <<'EOF'
-备份或恢复 Unio 本地开发数据库。
+备份 Unio Dev/Test PostgreSQL，或将备份恢复到本地 Dev 数据库。
 
 用法：
-  scripts/dev_db_snapshot.sh backup [备份文件]
-  scripts/dev_db_snapshot.sh verify [备份文件]
-  scripts/dev_db_snapshot.sh restore [备份文件] --confirm-replace
-  scripts/dev_db_snapshot.sh list
+  scripts/db_snapshot.sh backup [--profile dev|test] [备份文件]
+  scripts/db_snapshot.sh verify [--profile dev|test] [备份文件]
+  scripts/db_snapshot.sh restore [备份文件] --confirm-replace
+  scripts/db_snapshot.sh list
+
+典型流程：
+  # 在测试站执行；只读取正在运行的 Test PostgreSQL，不启动或重启服务
+  scripts/db_snapshot.sh backup --profile test
+
+  # 将 .dump 和同名 .sha256 文件复制到本地后执行
+  scripts/db_snapshot.sh verify /path/to/unio-test-YYYYmmdd-HHMMSS.dump
+  scripts/db_snapshot.sh restore /path/to/unio-test-YYYYmmdd-HHMMSS.dump --confirm-replace
 
 默认目录：
   tmp/db-snapshots/（已被 Git 忽略）
 
 说明：
   - backup 使用 PostgreSQL custom format，并生成同名 .sha256 校验文件。
+  - profile 默认为 dev；test 从 .env.test 读取数据库配置，并按 unio-test/postgres 标签查找容器。
+  - Test backup 不停止 Gateway/Admin/Worker；pg_dump 会生成事务一致的在线备份。
   - verify 未指定文件时校验默认目录中最新的备份。
-  - restore 会覆盖本地 unio 数据库，并清空 Redis 当前 DB 的运行态。
+  - restore 固定使用 Dev profile，拒绝 Test 容器，会覆盖本地 Dev PostgreSQL 并清空本地 Dev Redis 当前 DB。
   - restore 前必须停止 Gateway、Admin 和 Worker；检测到活动连接时脚本会拒绝执行。
+  - Test 备份包含完整业务数据，复制、保存和删除时应按敏感数据处理。
+  - 快照包含 Schema；本地代码需与 Test Schema 兼容。不同凭据主密钥下的加密字段需在本地重新配置。
 
 可选环境变量：
   UNIO_DB_BACKUP_DIR, UNIO_COMPOSE_FILE, UNIO_ENV_FILE,
-  POSTGRES_CONTAINER, POSTGRES_USER, POSTGRES_DB,
-  REDIS_CONTAINER, REDIS_DB
+  POSTGRES_CONTAINER, POSTGRES_USER, POSTGRES_DB, REDIS_CONTAINER, REDIS_DB
 EOF
 }
 
@@ -45,13 +61,56 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "缺少命令：$1"
 }
 
+configure_profile() {
+  case "$DB_PROFILE" in
+    dev)
+      COMPOSE_FILE="${UNIO_COMPOSE_FILE:-$REPO_ROOT/deploy/compose.dev.yml}"
+      ENV_FILE="${UNIO_ENV_FILE:-$REPO_ROOT/deploy/env/.env.dev}"
+      EXPECTED_COMPOSE_PROJECT="unio-dev"
+      BACKUP_NAME_PREFIX="unio-dev"
+      COMPOSE_ARGS=(--env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+      ;;
+    test)
+      COMPOSE_FILE="${UNIO_COMPOSE_FILE:-$REPO_ROOT/deploy/compose.test.yml}"
+      ENV_FILE="${UNIO_ENV_FILE:-$REPO_ROOT/deploy/env/.env.test}"
+      EXPECTED_COMPOSE_PROJECT="unio-test"
+      BACKUP_NAME_PREFIX="unio-test"
+      COMPOSE_ARGS=()
+      ;;
+    *)
+      fail "profile 只能是 dev 或 test：$DB_PROFILE"
+      ;;
+  esac
+}
+
+configure_restore_profile() {
+  if [[ -n "${UNIO_COMPOSE_FILE:-}" || -n "${UNIO_ENV_FILE:-}" ]]; then
+    fail "restore 不允许覆盖 Compose 或环境文件；目标固定为仓库内的本地 Dev 配置"
+  fi
+  DB_PROFILE="dev"
+  configure_profile
+}
+
+compose() {
+  docker compose "${COMPOSE_ARGS[@]}" "$@"
+}
+
 compose_up() {
-  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d "$@" >/dev/null
+  compose up -d "$@" >/dev/null
 }
 
 compose_container() {
   local service="$1"
-  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps -q "$service" | tail -n 1
+  compose ps -q "$service" | tail -n 1
+}
+
+running_profile_container() {
+  local service="$1"
+  docker ps \
+    --filter "status=running" \
+    --filter "label=com.docker.compose.project=$EXPECTED_COMPOSE_PROJECT" \
+    --filter "label=com.docker.compose.service=$service" \
+    --format '{{.ID}}' | tail -n 1
 }
 
 env_value() {
@@ -59,11 +118,28 @@ env_value() {
   sed -n "s/^${key}=//p" "$ENV_FILE" | tail -n 1
 }
 
-load_dev_env_defaults() {
+load_env_defaults() {
   POSTGRES_USER="${POSTGRES_USER:-$(env_value POSTGRES_USER)}"
   POSTGRES_DB="${POSTGRES_DB:-$(env_value POSTGRES_DB)}"
   REDIS_PASSWORD="${REDIS_PASSWORD:-$(env_value REDIS_PASSWORD)}"
   REDIS_DB="${REDIS_DB:-$(env_value REDIS_DB)}"
+}
+
+container_compose_project() {
+  local container="$1"
+  docker inspect \
+    --format '{{ index .Config.Labels "com.docker.compose.project" }}' \
+    "$container"
+}
+
+assert_expected_container() {
+  local service="$1"
+  local container="$2"
+  local actual_project
+  actual_project="$(container_compose_project "$container")"
+  [[ "$actual_project" == "$EXPECTED_COMPOSE_PROJECT" ]] || {
+    fail "$service 容器 $container 属于 Compose 项目 ${actual_project:-<unknown>}，预期为 $EXPECTED_COMPOSE_PROJECT"
+  }
 }
 
 redis_cli() {
@@ -97,11 +173,23 @@ wait_for_redis() {
 }
 
 ensure_postgres() {
-  compose_up postgres
-  if [[ -z "$POSTGRES_CONTAINER" ]]; then
-    POSTGRES_CONTAINER="$(compose_container postgres)"
+  if [[ "$DB_PROFILE" == "dev" ]]; then
+    compose_up postgres
   fi
-  [[ -n "$POSTGRES_CONTAINER" ]] || fail "没有找到 Compose postgres 容器"
+  if [[ -z "$POSTGRES_CONTAINER" ]]; then
+    if [[ "$DB_PROFILE" == "test" ]]; then
+      POSTGRES_CONTAINER="$(running_profile_container postgres)"
+    else
+      POSTGRES_CONTAINER="$(compose_container postgres)"
+    fi
+  fi
+  if [[ -z "$POSTGRES_CONTAINER" ]]; then
+    if [[ "$DB_PROFILE" == "test" ]]; then
+      fail "没有找到正在运行的 Test postgres 容器；Test backup 不会自动启动服务"
+    fi
+    fail "没有找到 Compose postgres 容器"
+  fi
+  assert_expected_container postgres "$POSTGRES_CONTAINER"
   wait_for_postgres
 }
 
@@ -111,25 +199,37 @@ ensure_redis() {
     REDIS_CONTAINER="$(compose_container redis)"
   fi
   [[ -n "$REDIS_CONTAINER" ]] || fail "没有找到 Compose redis 容器"
+  assert_expected_container redis "$REDIS_CONTAINER"
   wait_for_redis
 }
 
 validate_config() {
-  [[ -f "$COMPOSE_FILE" ]] || fail "Dev Compose 文件不存在：$COMPOSE_FILE"
-  [[ -f "$ENV_FILE" ]] || fail "Dev 环境文件不存在：$ENV_FILE"
-  load_dev_env_defaults
+  local require_redis="${1:-false}"
+  if [[ "$DB_PROFILE" == "dev" ]]; then
+    [[ -f "$COMPOSE_FILE" ]] || fail "Dev Compose 文件不存在：$COMPOSE_FILE"
+  fi
+  [[ -f "$ENV_FILE" ]] || fail "$DB_PROFILE 环境文件不存在：$ENV_FILE"
+  load_env_defaults
   [[ "$POSTGRES_USER" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fail "POSTGRES_USER 不是安全的 PostgreSQL 标识符"
   [[ "$POSTGRES_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fail "POSTGRES_DB 不是安全的 PostgreSQL 标识符"
-  [[ "$REDIS_DB" =~ ^[0-9]+$ ]] || fail "REDIS_DB 必须是非负整数"
+  if [[ "$require_redis" == "true" ]]; then
+    [[ "$REDIS_DB" =~ ^[0-9]+$ ]] || fail "REDIS_DB 必须是非负整数"
+  fi
 }
 
 latest_backup() {
   local files=()
+  local file latest=""
   shopt -s nullglob
-  files=("$BACKUP_DIR"/unio-dev-*.dump)
+  files=("$BACKUP_DIR"/unio-*.dump)
   shopt -u nullglob
-  ((${#files[@]} > 0)) || fail "没有找到备份：$BACKUP_DIR/unio-dev-*.dump"
-  printf '%s\n' "${files[${#files[@]} - 1]}"
+  ((${#files[@]} > 0)) || fail "没有找到备份：$BACKUP_DIR/unio-*.dump"
+  for file in "${files[@]}"; do
+    if [[ -z "$latest" || "$file" -nt "$latest" ]]; then
+      latest="$file"
+    fi
+  done
+  printf '%s\n' "$latest"
 }
 
 resolve_backup_file() {
@@ -207,7 +307,7 @@ backup_database() {
   umask 077
 
   if [[ -z "$output_file" ]]; then
-    output_file="$BACKUP_DIR/unio-dev-$(date '+%Y%m%d-%H%M%S').dump"
+    output_file="$BACKUP_DIR/$BACKUP_NAME_PREFIX-$(date '+%Y%m%d-%H%M%S').dump"
   elif [[ "$output_file" != /* ]]; then
     output_file="$PWD/$output_file"
   fi
@@ -217,7 +317,7 @@ backup_database() {
   temp_file="$(mktemp "$(dirname "$output_file")/.unio-db-backup.XXXXXX")"
   trap 'rm -f "$temp_file"' EXIT
 
-  printf '正在备份 PostgreSQL：%s/%s\n' "$POSTGRES_CONTAINER" "$POSTGRES_DB"
+  printf '正在备份 %s PostgreSQL：%s/%s\n' "$DB_PROFILE" "$POSTGRES_CONTAINER" "$POSTGRES_DB"
   docker exec "$POSTGRES_CONTAINER" pg_dump \
     -U "$POSTGRES_USER" \
     -d "$POSTGRES_DB" \
@@ -259,6 +359,7 @@ restore_database() {
   local confirmed="$2"
   local connection_count restore_db restored_size
 
+  [[ "$DB_PROFILE" == "dev" ]] || fail "restore 只允许使用 Dev profile"
   [[ "$confirmed" == "true" ]] || fail "restore 必须添加 --confirm-replace，确认覆盖本地开发库"
   ensure_postgres
   verify_archive "$backup_file"
@@ -326,7 +427,7 @@ restore_database() {
 list_backups() {
   local files=()
   shopt -s nullglob
-  files=("$BACKUP_DIR"/unio-dev-*.dump)
+  files=("$BACKUP_DIR"/unio-*.dump)
   shopt -u nullglob
   if ((${#files[@]} == 0)); then
     printf '没有备份：%s\n' "$BACKUP_DIR"
@@ -334,6 +435,38 @@ list_backups() {
   fi
   printf '备份目录：%s\n' "$BACKUP_DIR"
   du -h "${files[@]}"
+}
+
+parse_profile_file_args() {
+  local action="$1"
+  shift
+  DB_PROFILE="dev"
+  REQUESTED_FILE=""
+  while (($# > 0)); do
+    case "$1" in
+      --profile)
+        shift
+        (($# > 0)) || fail "--profile 后必须指定 dev 或 test"
+        DB_PROFILE="$1"
+        ;;
+      --profile=*)
+        DB_PROFILE="${1#--profile=}"
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      --*)
+        fail "未知参数：$1"
+        ;;
+      *)
+        [[ -z "$REQUESTED_FILE" ]] || fail "$action 只能指定一个备份文件"
+        REQUESTED_FILE="$1"
+        ;;
+    esac
+    shift
+  done
+  [[ "$DB_PROFILE" == "dev" || "$DB_PROFILE" == "test" ]] || fail "profile 只能是 dev 或 test：$DB_PROFILE"
 }
 
 parse_restore_args() {
@@ -364,19 +497,26 @@ parse_restore_args() {
 }
 
 main() {
-  require_command docker
-  validate_config
   local command="${1:-help}"
   case "$command" in
     backup)
-      (($# <= 2)) || fail "backup 只能指定一个输出文件"
-      backup_database "${2:-}"
+      parse_profile_file_args backup "${@:2}"
+      configure_profile
+      validate_config false
+      require_command docker
+      backup_database "$REQUESTED_FILE"
       ;;
     verify)
-      (($# <= 2)) || fail "verify 只能指定一个备份文件"
-      verify_backup "${2:-}"
+      parse_profile_file_args verify "${@:2}"
+      configure_profile
+      validate_config false
+      require_command docker
+      verify_backup "$REQUESTED_FILE"
       ;;
     restore)
+      configure_restore_profile
+      validate_config true
+      require_command docker
       parse_restore_args "$@"
       ;;
     list)
@@ -392,4 +532,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
