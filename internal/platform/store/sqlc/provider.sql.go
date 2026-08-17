@@ -362,6 +362,13 @@ WITH cache AS (
       AND u.usage_source IN ('upstream_response', 'upstream_stream')
       AND ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
       AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
+      AND NOT EXISTS (
+          SELECT 1
+          FROM routing_decision_traces rdt
+          WHERE rdt.request_record_id = r.id
+            AND rdt.sticky_before_channel_id IS NOT NULL
+            AND rdt.sticky_before_channel_id <> r.final_channel_id
+      )
     GROUP BY r.final_channel_id
 )
 SELECT
@@ -439,6 +446,7 @@ type ProviderOpsChannelsRow struct {
 }
 
 // ProviderOpsChannels 单服务商下渠道精简子列表 + attempt 指标（抽屉渠道 Tab）。
+// 逐 Channel 缓存画像排除 Sticky 跨渠道切换 usage；ProviderOpsDetail 汇总仍保留真实消耗。
 func (q *Queries) ProviderOpsChannels(ctx context.Context, arg ProviderOpsChannelsParams) ([]ProviderOpsChannelsRow, error) {
 	rows, err := q.db.Query(ctx, providerOpsChannels, arg.FromTime, arg.ToTime, arg.ProviderID)
 	if err != nil {

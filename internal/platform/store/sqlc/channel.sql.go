@@ -186,6 +186,13 @@ WITH cache_usage AS (
       AND u.usage_source IN ('upstream_response', 'upstream_stream')
       AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
       AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
+      AND NOT EXISTS (
+          SELECT 1
+          FROM routing_decision_traces rdt
+          WHERE rdt.request_record_id = r.id
+            AND rdt.sticky_before_channel_id IS NOT NULL
+            AND rdt.sticky_before_channel_id <> r.final_channel_id
+      )
 ),
 cache AS (
     SELECT
@@ -821,6 +828,7 @@ type ChannelsOpsTableRow struct {
 // §3.3 渠道作战台只读运维聚合。全部只读。
 // 口径：渠道性能/成功率/错误以 request_attempts（attempt 粒度，每次尝试命中一条渠道）为准；
 // TPS/token 因无 per-attempt usage，按 request_records.final_channel_id 归因（最终成功渠道）。
+// Channel 缓存画像额外排除请求开始已有 Sticky 绑定、但最终成功落到其他 Channel 的整条 usage。
 // 区间 [from,to) 半开；narg 可空（NULL 不过滤）。延迟由 completed_at-started_at 推导（毫秒）。
 // ChannelsOpsTable 渠道运维主表（分页）：每渠道 attempt 指标 + 绑定模型数 + 最近错误，默认最需处理优先。
 func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTableParams) ([]ChannelsOpsTableRow, error) {
