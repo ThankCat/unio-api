@@ -825,7 +825,7 @@ WHERE id = $3
   AND capacity_revision = $4
   AND $2 = $4 + 1
   AND concurrency_limit IS DISTINCT FROM $1
-RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit
+RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast
 `
 
 type CommitChannelCapacityAtRevisionParams struct {
@@ -870,6 +870,7 @@ func (q *Queries) CommitChannelCapacityAtRevision(ctx context.Context, arg Commi
 		&i.CredentialValid,
 		&i.ArchivedAt,
 		&i.ConcurrencyLimit,
+		&i.SupportsOpenaiFast,
 	)
 	return i, err
 }
@@ -918,16 +919,18 @@ func (q *Queries) CountChannels(ctx context.Context, arg CountChannelsParams) (i
 const createChannel = `-- name: CreateChannel :one
 INSERT INTO channels (
     provider_id, name, protocol, adapter_key, credential, status, priority,
+    supports_openai_fast,
     response_timeout_ms, first_token_timeout_ms, concurrency_limit,
     sticky_enabled, sticky_ttl_ms
 )
 VALUES (
     $1, $2, $3, $4,
     $5, $6, $7,
-    $8, $9, $10,
-    $11, $12
+    $8,
+    $9, $10, $11,
+    $12, $13
 )
-RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit
+RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast
 `
 
 type CreateChannelParams struct {
@@ -938,6 +941,7 @@ type CreateChannelParams struct {
 	Credential          string
 	Status              string
 	Priority            int32
+	SupportsOpenaiFast  bool
 	ResponseTimeoutMs   pgtype.Int4
 	FirstTokenTimeoutMs pgtype.Int4
 	ConcurrencyLimit    pgtype.Int4
@@ -956,6 +960,7 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		arg.Credential,
 		arg.Status,
 		arg.Priority,
+		arg.SupportsOpenaiFast,
 		arg.ResponseTimeoutMs,
 		arg.FirstTokenTimeoutMs,
 		arg.ConcurrencyLimit,
@@ -987,6 +992,7 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		&i.CredentialValid,
 		&i.ArchivedAt,
 		&i.ConcurrencyLimit,
+		&i.SupportsOpenaiFast,
 	)
 	return i, err
 }
@@ -1381,7 +1387,7 @@ func (q *Queries) DeleteChannelModel(ctx context.Context, arg DeleteChannelModel
 }
 
 const getChannel = `-- name: GetChannel :one
-SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit
+SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast
 FROM channels
 WHERE id = $1
 LIMIT 1
@@ -1415,6 +1421,7 @@ func (q *Queries) GetChannel(ctx context.Context, id int64) (Channel, error) {
 		&i.CredentialValid,
 		&i.ArchivedAt,
 		&i.ConcurrencyLimit,
+		&i.SupportsOpenaiFast,
 	)
 	return i, err
 }
@@ -1847,7 +1854,7 @@ func (q *Queries) ListChannelTestLogsByChannel(ctx context.Context, arg ListChan
 }
 
 const listChannelsByProvider = `-- name: ListChannelsByProvider :many
-SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit
+SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast
 FROM channels
 WHERE provider_id = $1
 ORDER BY priority, id
@@ -1887,6 +1894,7 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 			&i.CredentialValid,
 			&i.ArchivedAt,
 			&i.ConcurrencyLimit,
+			&i.SupportsOpenaiFast,
 		); err != nil {
 			return nil, err
 		}
@@ -1899,7 +1907,7 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 }
 
 const listChannelsForRuntimeControlRestore = `-- name: ListChannelsForRuntimeControlRestore :many
-SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit
+SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast
 FROM channels
 ORDER BY id
 `
@@ -1938,6 +1946,7 @@ func (q *Queries) ListChannelsForRuntimeControlRestore(ctx context.Context) ([]C
 			&i.CredentialValid,
 			&i.ArchivedAt,
 			&i.ConcurrencyLimit,
+			&i.SupportsOpenaiFast,
 		); err != nil {
 			return nil, err
 		}
@@ -1953,6 +1962,7 @@ const listChannelsPage = `-- name: ListChannelsPage :many
 SELECT
     c.id, c.provider_id, c.name, c.protocol, c.adapter_key, p.origin,
     c.credential, c.status, c.priority, c.created_at, c.updated_at,
+    c.supports_openai_fast,
     c.concurrency_limit,
     c.response_timeout_ms, c.first_token_timeout_ms,
     c.sticky_enabled, c.sticky_ttl_ms,
@@ -1992,6 +2002,7 @@ type ListChannelsPageRow struct {
 	Priority            int32
 	CreatedAt           pgtype.Timestamptz
 	UpdatedAt           pgtype.Timestamptz
+	SupportsOpenaiFast  bool
 	ConcurrencyLimit    pgtype.Int4
 	ResponseTimeoutMs   pgtype.Int4
 	FirstTokenTimeoutMs pgtype.Int4
@@ -2036,6 +2047,7 @@ func (q *Queries) ListChannelsPage(ctx context.Context, arg ListChannelsPagePara
 			&i.Priority,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SupportsOpenaiFast,
 			&i.ConcurrencyLimit,
 			&i.ResponseTimeoutMs,
 			&i.FirstTokenTimeoutMs,
@@ -2349,28 +2361,31 @@ UPDATE channels
 SET name = $1,
     status = $2,
     priority = $3,
-    response_timeout_ms = $4,
-    first_token_timeout_ms = $5,
-    sticky_enabled = $6,
-    sticky_ttl_ms = $7,
+    supports_openai_fast = $4,
+    response_timeout_ms = $5,
+    first_token_timeout_ms = $6,
+    sticky_enabled = $7,
+    sticky_ttl_ms = $8,
     config_revision = config_revision + (
         CASE WHEN (
             status IS DISTINCT FROM $2
-            OR response_timeout_ms IS DISTINCT FROM $4
-            OR first_token_timeout_ms IS DISTINCT FROM $5
-            OR sticky_enabled IS DISTINCT FROM $6
-            OR sticky_ttl_ms IS DISTINCT FROM $7
+            OR supports_openai_fast IS DISTINCT FROM $4
+            OR response_timeout_ms IS DISTINCT FROM $5
+            OR first_token_timeout_ms IS DISTINCT FROM $6
+            OR sticky_enabled IS DISTINCT FROM $7
+            OR sticky_ttl_ms IS DISTINCT FROM $8
         ) THEN 1 ELSE 0 END
     ),
     updated_at = now()
-WHERE id = $8
-RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit
+WHERE id = $9
+RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast
 `
 
 type UpdateChannelParams struct {
 	Name                string
 	Status              string
 	Priority            int32
+	SupportsOpenaiFast  bool
 	ResponseTimeoutMs   pgtype.Int4
 	FirstTokenTimeoutMs pgtype.Int4
 	StickyEnabled       pgtype.Bool
@@ -2385,6 +2400,7 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		arg.Name,
 		arg.Status,
 		arg.Priority,
+		arg.SupportsOpenaiFast,
 		arg.ResponseTimeoutMs,
 		arg.FirstTokenTimeoutMs,
 		arg.StickyEnabled,
@@ -2416,6 +2432,7 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		&i.CredentialValid,
 		&i.ArchivedAt,
 		&i.ConcurrencyLimit,
+		&i.SupportsOpenaiFast,
 	)
 	return i, err
 }

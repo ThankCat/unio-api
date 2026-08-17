@@ -189,6 +189,7 @@ type CreateAttemptParams struct {
 	UpstreamEndpoint       UpstreamEndpoint
 	StartedAt              time.Time
 	RequestedServiceTier   servicetier.Tier
+	ForwardedServiceTier   servicetier.Tier
 }
 
 // AttemptRecord 表示一次上游 channel 尝试记录。
@@ -228,6 +229,7 @@ type AttemptRecord struct {
 	StartedAt                  time.Time
 	CompletedAt                *time.Time
 	RequestedServiceTier       servicetier.Tier
+	ForwardedServiceTier       servicetier.Tier
 	UpstreamServiceTier        *string
 }
 

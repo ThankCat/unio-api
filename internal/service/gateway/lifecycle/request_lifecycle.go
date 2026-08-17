@@ -482,6 +482,14 @@ func (l *RequestLifecycle) CreateAttemptForEndpoint(
 	endpoint requestlog.UpstreamEndpoint,
 	permitID string,
 ) (requestlog.AttemptRecord, error) {
+	var forwardedServiceTier servicetier.Tier
+	if candidate.Protocol == routing.ProtocolOpenAI && requestRecord.RequestedServiceTier != "" {
+		forwardedServiceTier = servicetier.ResolveOpenAIForwardRequest(
+			requestRecord.RequestedServiceTier,
+			candidate.SupportsOpenAIFast,
+		).Tier
+	}
+
 	// 覆盖为当前尝试；失败停在某次 attempt 时访问日志即显示最后打过的渠道。
 	logfields.SetUpstreamAttempt(ctx, logfields.UpstreamAttempt{
 		ModelID:    candidate.ModelDBID,
@@ -508,6 +516,7 @@ func (l *RequestLifecycle) CreateAttemptForEndpoint(
 		UpstreamEndpoint:       endpoint,
 		StartedAt:              time.Now(),
 		RequestedServiceTier:   requestRecord.RequestedServiceTier,
+		ForwardedServiceTier:   forwardedServiceTier,
 	})
 	if err != nil {
 		return requestlog.AttemptRecord{}, err
@@ -523,6 +532,8 @@ func (l *RequestLifecycle) CreateAttemptForEndpoint(
 		zap.Int64("provider_id", candidate.ProviderID),
 		zap.String("provider_slug", candidate.Channel.ProviderSlug),
 		zap.Int64("channel_id", candidate.Channel.ID),
+		zap.String("requested_service_tier", string(requestRecord.RequestedServiceTier)),
+		zap.String("forwarded_service_tier", string(forwardedServiceTier)),
 		zap.String("channel_name", candidate.Channel.Name),
 		zap.String("upstream_model", candidate.UpstreamModel),
 		zap.String("adapter_key", candidate.AdapterKey),

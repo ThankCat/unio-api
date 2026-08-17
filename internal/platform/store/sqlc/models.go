@@ -73,6 +73,7 @@ type Channel struct {
 	CredentialValid     bool
 	ArchivedAt          pgtype.Timestamptz
 	ConcurrencyLimit    pgtype.Int4
+	SupportsOpenaiFast  bool
 }
 
 type ChannelCostMultiplier struct {
@@ -580,6 +581,7 @@ type RequestAttempt struct {
 	PermitID                   pgtype.Text
 	RequestedServiceTier       pgtype.Text
 	UpstreamServiceTier        pgtype.Text
+	ForwardedServiceTier       pgtype.Text
 }
 
 type RequestRecord struct {

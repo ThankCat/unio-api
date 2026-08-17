@@ -211,6 +211,47 @@ func TestCreateResponse_DirectPassthrough(t *testing.T) {
 	}
 }
 
+func TestCreateResponseResolvesFastTierPerChannel(t *testing.T) {
+	tests := []struct {
+		name         string
+		supportsFast bool
+		wantWire     string
+	}{
+		{name: "unsupported channel", wantWire: "default"},
+		{name: "supported channel", supportsFast: true, wantWire: "priority"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			directAdapter := &fakeResponsesAdapter{resp: directResponse()}
+			registry := &fakeRegistry{responsesAdapters: map[string]responsesadapter.ResponsesAdapter{"openai": directAdapter}}
+			candidate := candidate("openai", 1, "gpt-5.5-upstream")
+			candidate.Protocol = routing.ProtocolOpenAI
+			candidate.SupportsOpenAIFast = tt.supportsFast
+			svc := newServiceForTest(
+				&fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate}}},
+				registry, &fakeSettlement{}, &fakeAuthorizer{}, newFakeRequestLog(),
+			)
+
+			fast := "priority"
+			req := directRequest()
+			req.ServiceTier = &fast
+			if _, err := svc.CreateResponse(ctxWithPrincipal(), req); err != nil {
+				t.Fatalf("CreateResponse() error = %v", err)
+			}
+			var wire struct {
+				ServiceTier string `json:"service_tier"`
+			}
+			if err := json.Unmarshal(directAdapter.gotBody, &wire); err != nil {
+				t.Fatalf("decode upstream body: %v", err)
+			}
+			if wire.ServiceTier != tt.wantWire {
+				t.Fatalf("upstream service_tier = %q, want %q", wire.ServiceTier, tt.wantWire)
+			}
+		})
+	}
+}
+
 func TestCreateResponse_DirectMissingUsageStopsFallbackAndRecordsRiskExposure(t *testing.T) {
 	missingUsageErr := adapter.NewUpstreamError(
 		adapter.UpstreamErrorServer,

@@ -55,6 +55,15 @@ func NormalizeOpenAIRequest(raw *string) (Request, error) {
 	}
 }
 
+// ResolveOpenAIForwardRequest maps normalized customer intent to the value sent to one Channel.
+// Fast is opt-in per Channel; unsupported Channels receive the OpenAI Standard wire value.
+func ResolveOpenAIForwardRequest(requested Tier, supportsFast bool) Request {
+	if requested == TierFast && supportsFast {
+		return Request{Tier: TierFast, UpstreamRaw: "priority"}
+	}
+	return Request{Tier: TierStandard, UpstreamRaw: "default"}
+}
+
 // ResolveOpenAIResponse maps the upstream response value without inferring it from the request.
 func ResolveOpenAIResponse(raw *string) Response {
 	if raw == nil || *raw == "" {

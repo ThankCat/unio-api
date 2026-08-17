@@ -293,6 +293,7 @@ func (s *Store) CreateAttempt(ctx context.Context, params CreateAttemptParams) (
 		StartedAt:              timestamptz(params.StartedAt),
 		CompletedAt:            pgtype.Timestamptz{Valid: false},
 		RequestedServiceTier:   pgtype.Text{String: string(params.RequestedServiceTier), Valid: params.RequestedServiceTier != ""},
+		ForwardedServiceTier:   pgtype.Text{String: string(params.ForwardedServiceTier), Valid: params.ForwardedServiceTier != ""},
 	})
 	if err != nil {
 		return AttemptRecord{}, requestLogStoreFailure(err, "create request attempt")
@@ -560,6 +561,7 @@ func attemptRecordFromSQLC(row sqlc.RequestAttempt) AttemptRecord {
 		StartedAt:                  row.StartedAt.Time,
 		CompletedAt:                timePtr(row.CompletedAt),
 		RequestedServiceTier:       servicetier.Tier(row.RequestedServiceTier.String),
+		ForwardedServiceTier:       servicetier.Tier(row.ForwardedServiceTier.String),
 		UpstreamServiceTier:        textPtr(row.UpstreamServiceTier),
 	}
 }

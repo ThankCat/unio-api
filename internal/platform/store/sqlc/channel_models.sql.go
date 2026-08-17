@@ -39,6 +39,7 @@ SELECT
     c.config_revision AS channel_config_revision,
     c.capacity_revision AS channel_capacity_revision,
     c.credential,
+    c.supports_openai_fast,
     c.response_timeout_ms,
     c.first_token_timeout_ms,
     c.priority,
@@ -219,6 +220,7 @@ type FindRouteCandidatesRow struct {
 	ChannelConfigRevision           int64
 	ChannelCapacityRevision         int64
 	Credential                      string
+	SupportsOpenaiFast              bool
 	ResponseTimeoutMs               pgtype.Int4
 	FirstTokenTimeoutMs             pgtype.Int4
 	Priority                        int32
@@ -313,6 +315,7 @@ func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidat
 			&i.ChannelConfigRevision,
 			&i.ChannelCapacityRevision,
 			&i.Credential,
+			&i.SupportsOpenaiFast,
 			&i.ResponseTimeoutMs,
 			&i.FirstTokenTimeoutMs,
 			&i.Priority,

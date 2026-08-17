@@ -207,6 +207,7 @@ type Attempt struct {
 	ErrorScoringFailure  bool
 	FinalUsageReceived   bool
 	RequestedServiceTier *string
+	ForwardedServiceTier *string
 	UpstreamServiceTier  *string
 	StartedAt            time.Time
 	CompletedAt          *time.Time
@@ -710,6 +711,7 @@ func toAttempt(a sqlc.ListAdminRequestAttemptsByRequestRow, includeInternal, str
 		ErrorScoringFailure:   a.ErrorScoringFailure,
 		FinalUsageReceived:    a.FinalUsageReceived,
 		RequestedServiceTier:  textPtr(a.RequestedServiceTier),
+		ForwardedServiceTier:  textPtr(a.ForwardedServiceTier),
 		UpstreamServiceTier:   textPtr(a.UpstreamServiceTier),
 		StartedAt:             a.StartedAt.Time,
 		CompletedAt:           timePtr(a.CompletedAt),

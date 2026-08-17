@@ -41,13 +41,12 @@ func (s *ResponsesService) CompactHistory(ctx context.Context, req gatewayapi.Re
 	if err != nil {
 		return nil, err
 	}
-	req.ServiceTier = &tierRequest.UpstreamRaw
 	if req.Instructions == nil || strings.TrimSpace(*req.Instructions) == "" {
 		def := defaultCompactionInstruction
 		req.Instructions = &def
 	}
 
-	result, delivery, err := s.executeCompact(ctx, req)
+	result, delivery, err := s.executeCompact(ctx, req, tierRequest.Tier)
 	if err != nil {
 		return nil, err
 	}
@@ -70,13 +69,13 @@ func (s *ResponsesService) CompactHistory(ctx context.Context, req gatewayapi.Re
 //
 // 候选过滤/估算复用 chat 桥接口径（allowDirect=false，与历史 compact 行为一致，零回归）。Native
 // 404/405 回落由 lifecycle 作为同候选的第二次独立 transport 执行，拥有新的 permit 和 attempt。
-func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.ResponsesRequest) (compactResult, lifecycle.DeliveryFinalizer, error) {
+func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.ResponsesRequest, requestedTier servicetier.Tier) (compactResult, lifecycle.DeliveryFinalizer, error) {
 	var (
 		compactAdapter responsesadapter.ResponsesCompactAdapter
 		chatAdapter    chatcompletionsadapter.ChatAdapter
 		result         compactResult
 	)
-	delivery, err := s.runNonStream(ctx, req, nonStreamStrategy{
+	delivery, err := s.runNonStream(ctx, req, requestedTier, nonStreamStrategy{
 		allowDirect: false,
 		// 原生 2xx 缺 usage（上游很可能已计费）：runner 释放冻结 + 记 risk_exposure，不重复白嫖（P0-3）。
 		upstreamCostWithoutUsage: isCompactMissingUsage,
@@ -114,8 +113,9 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 			return nil
 		},
 		invoke: func(ctx context.Context, candidate routing.ChatRouteCandidate) (lifecycle.AttemptSuccess, error) {
+			attemptReq := requestForOpenAIChannel(req, requestedTier, candidate)
 			if compactAdapter != nil && s.registry.HasResponsesCompact(candidate.AdapterKey) {
-				body, err := encodeUpstreamResponsesBody(req, candidate.UpstreamModel, false)
+				body, err := encodeUpstreamResponsesBody(attemptReq, candidate.UpstreamModel, false)
 				if err != nil {
 					return lifecycle.AttemptSuccess{}, err
 				}
@@ -130,7 +130,7 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 				result = compactResult{native: resp}
 				return lifecycle.AttemptSuccess{ResponseID: resp.ResponseID, Facts: resp.Facts}, nil
 			}
-			return s.invokeSyntheticCompact(ctx, candidate, req, chatAdapter, &result)
+			return s.invokeSyntheticCompact(ctx, candidate, attemptReq, chatAdapter, &result)
 		},
 		transparentFallback: &lifecycle.NonStreamTransparentFallback{
 			Match: func(candidate routing.ChatRouteCandidate, err error) bool {
@@ -152,7 +152,8 @@ func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.Re
 				return nil
 			},
 			Invoke: func(ctx context.Context, candidate routing.ChatRouteCandidate) (lifecycle.AttemptSuccess, error) {
-				return s.invokeSyntheticCompact(ctx, candidate, req, chatAdapter, &result)
+				attemptReq := requestForOpenAIChannel(req, requestedTier, candidate)
+				return s.invokeSyntheticCompact(ctx, candidate, attemptReq, chatAdapter, &result)
 			},
 		},
 	})

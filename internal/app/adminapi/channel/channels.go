@@ -40,6 +40,7 @@ type channelDTO struct {
 	Protocol           string `json:"protocol"`
 	AdapterKey         string `json:"adapter_key"`
 	Origin             string `json:"origin"`
+	SupportsOpenAIFast bool   `json:"supports_openai_fast"`
 	ConfigRevision     int64  `json:"config_revision"`
 	CapacityRevision   int64  `json:"capacity_revision"`
 	RuntimeSyncPending bool   `json:"runtime_sync_pending"`
@@ -115,6 +116,7 @@ type createChannelRequest struct {
 	StickyEnabled       *bool         `json:"sticky_enabled"`
 	StickyTTLms         *int64        `json:"sticky_ttl_ms"`
 	ConcurrencyLimit    optionalInt64 `json:"concurrency_limit"`
+	SupportsOpenAIFast  bool          `json:"supports_openai_fast"`
 }
 
 type updateChannelRequest struct {
@@ -127,6 +129,7 @@ type updateChannelRequest struct {
 	StickyEnabled       *bool         `json:"sticky_enabled"`
 	StickyTTLms         *int64        `json:"sticky_ttl_ms"`
 	ConcurrencyLimit    optionalInt64 `json:"concurrency_limit"`
+	SupportsOpenAIFast  *bool         `json:"supports_openai_fast"`
 	// ConfirmSupplyImpact + ExpectedImpactFingerprint 是停用 Channel 触发 Offering 联动时的
 	// ADR-0019 Channel 暂停影响确认；首次请求缺省，收到 409 后携带最新指纹重试。
 	ConfirmSupplyImpact       bool   `json:"confirm_supply_impact"`
@@ -251,6 +254,7 @@ func (h *channelsHandler) create(w http.ResponseWriter, r *http.Request) {
 		StickyEnabled:       req.StickyEnabled,
 		StickyTTLms:         req.StickyTTLms,
 		ConcurrencyLimit:    req.ConcurrencyLimit.Value,
+		SupportsOpenAIFast:  req.SupportsOpenAIFast,
 	}
 	c, err := h.service.Create(r.Context(), in)
 	if err != nil {
@@ -291,6 +295,7 @@ func (h *channelsHandler) update(w http.ResponseWriter, r *http.Request) {
 		StickyTTLms:         req.StickyTTLms,
 		CapacityProvided:    req.ConcurrencyLimit.Set,
 		ConcurrencyLimit:    req.ConcurrencyLimit.Value,
+		SupportsOpenAIFast:  req.SupportsOpenAIFast,
 		Confirmation: supply.Confirmation{
 			Confirm:             req.ConfirmSupplyImpact,
 			ExpectedFingerprint: req.ExpectedImpactFingerprint,
@@ -411,6 +416,7 @@ func toChannelDTO(c channel.Channel) channelDTO {
 		Protocol:            c.Protocol,
 		AdapterKey:          c.AdapterKey,
 		Origin:              c.Origin,
+		SupportsOpenAIFast:  c.SupportsOpenAIFast,
 		Credential:          c.Credential,
 		Status:              c.Status,
 		Priority:            c.Priority,

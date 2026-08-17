@@ -35,6 +35,7 @@ SELECT
     c.config_revision AS channel_config_revision,
     c.capacity_revision AS channel_capacity_revision,
     c.credential,
+    c.supports_openai_fast,
     c.response_timeout_ms,
     c.first_token_timeout_ms,
     c.priority,

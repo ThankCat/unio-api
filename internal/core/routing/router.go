@@ -91,6 +91,7 @@ type ChatRouteCandidate struct {
 	ChannelCapacityRevision int64
 	AdapterKey              string
 	Protocol                string
+	SupportsOpenAIFast      bool
 	Channel                 channel.Runtime
 	UpstreamModel           string
 
@@ -633,6 +634,7 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		ChannelCapacityRevision: row.ChannelCapacityRevision,
 		AdapterKey:              row.AdapterKey,
 		Protocol:                row.Protocol,
+		SupportsOpenAIFast:      row.SupportsOpenaiFast,
 		MaxOutputTokens:         maxOutputTokens,
 		ConcurrencyLimit:        int4LimitPtr(row.ChannelConcurrencyLimit),
 		Priority:                row.Priority,

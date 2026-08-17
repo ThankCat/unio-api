@@ -11,8 +11,11 @@ import (
 
 type createStore struct {
 	provider    sqlc.Provider
+	channel     sqlc.Channel
 	createParam sqlc.CreateChannelParams
 	createCalls int
+	updateParam sqlc.UpdateChannelParams
+	updateCalls int
 }
 
 func (s *createStore) GetProvider(context.Context, int64) (sqlc.Provider, error) {
@@ -28,27 +31,35 @@ func (s *createStore) CountChannels(context.Context, sqlc.CountChannelsParams) (
 }
 
 func (s *createStore) GetChannel(context.Context, int64) (sqlc.Channel, error) {
-	return sqlc.Channel{}, nil
+	return s.channel, nil
 }
 
 func (s *createStore) CreateChannel(_ context.Context, arg sqlc.CreateChannelParams) (sqlc.Channel, error) {
 	s.createParam = arg
 	s.createCalls++
 	return sqlc.Channel{
-		ID:               7,
-		ProviderID:       arg.ProviderID,
-		Name:             arg.Name,
-		Protocol:         arg.Protocol,
-		AdapterKey:       arg.AdapterKey,
-		Credential:       arg.Credential,
-		CapacityRevision: 1,
-		Status:           arg.Status,
-		Priority:         arg.Priority,
+		ID:                 7,
+		ProviderID:         arg.ProviderID,
+		Name:               arg.Name,
+		Protocol:           arg.Protocol,
+		AdapterKey:         arg.AdapterKey,
+		Credential:         arg.Credential,
+		CapacityRevision:   1,
+		Status:             arg.Status,
+		Priority:           arg.Priority,
+		SupportsOpenaiFast: arg.SupportsOpenaiFast,
 	}, nil
 }
 
-func (s *createStore) UpdateChannel(context.Context, sqlc.UpdateChannelParams) (sqlc.Channel, error) {
-	return sqlc.Channel{}, nil
+func (s *createStore) UpdateChannel(_ context.Context, arg sqlc.UpdateChannelParams) (sqlc.Channel, error) {
+	s.updateParam = arg
+	s.updateCalls++
+	updated := s.channel
+	updated.Name = arg.Name
+	updated.Status = arg.Status
+	updated.Priority = arg.Priority
+	updated.SupportsOpenaiFast = arg.SupportsOpenaiFast
+	return updated, nil
 }
 
 func (s *createStore) DeleteChannelCascade(context.Context, int64) (int64, error) {
@@ -133,4 +144,107 @@ func TestCreateEnabledRequiresEnabledProvider(t *testing.T) {
 	if store.createCalls != 0 {
 		t.Fatalf("CreateChannel calls = %d, want 0", store.createCalls)
 	}
+}
+
+func TestCreateOpenAIFastCapability(t *testing.T) {
+	store := &createStore{provider: sqlc.Provider{
+		ID: 1, Name: "Provider", Origin: "https://example.test", Status: channel.StatusEnabled,
+	}}
+	svc := channel.NewService(store, createRegistry{})
+
+	created, err := svc.Create(context.Background(), channel.CreateInput{
+		ProviderID: 1, Name: "fast", Protocol: channel.ProtocolOpenAI,
+		AdapterKey: channel.ProtocolOpenAI, SupportsOpenAIFast: true,
+		Credential: "test-credential", Status: channel.StatusDisabled,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if !store.createParam.SupportsOpenaiFast || !created.SupportsOpenAIFast {
+		t.Fatalf("supports_openai_fast stored/returned = %v/%v, want true/true", store.createParam.SupportsOpenaiFast, created.SupportsOpenAIFast)
+	}
+}
+
+func TestCreateRejectsOpenAIFastOnAnthropicChannel(t *testing.T) {
+	store := &createStore{provider: sqlc.Provider{
+		ID: 1, Name: "Provider", Origin: "https://example.test", Status: channel.StatusEnabled,
+	}}
+	svc := channel.NewService(store, createRegistry{})
+
+	_, err := svc.Create(context.Background(), channel.CreateInput{
+		ProviderID: 1, Name: "anthropic-fast", Protocol: channel.ProtocolAnthropic,
+		AdapterKey: channel.ProtocolAnthropic, SupportsOpenAIFast: true,
+		Credential: "test-credential", Status: channel.StatusDisabled,
+	})
+	if got := failure.CodeOf(err); got != failure.CodeAdminInvalidArgument {
+		t.Fatalf("error code = %q, want %q (err=%v)", got, failure.CodeAdminInvalidArgument, err)
+	}
+	if store.createCalls != 0 {
+		t.Fatalf("CreateChannel calls = %d, want 0", store.createCalls)
+	}
+}
+
+func TestUpdateOpenAIFastCapabilityPatchSemantics(t *testing.T) {
+	tests := []struct {
+		name        string
+		provided    *bool
+		wantEnabled bool
+	}{
+		{name: "omitted preserves enabled", wantEnabled: true},
+		{name: "explicit false disables", provided: boolPointer(false), wantEnabled: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &createStore{
+				provider: sqlc.Provider{ID: 1, Name: "Provider", Status: channel.StatusEnabled},
+				channel: sqlc.Channel{
+					ID: 7, ProviderID: 1, Name: "primary", Protocol: channel.ProtocolOpenAI,
+					AdapterKey: channel.ProtocolOpenAI, Status: channel.StatusDisabled,
+					CapacityRevision: 1, SupportsOpenaiFast: true,
+				},
+			}
+			svc := channel.NewService(store, createRegistry{})
+
+			updated, err := svc.Update(context.Background(), channel.UpdateInput{
+				ID: 7, ProviderID: 1, Name: "primary", Status: channel.StatusDisabled,
+				SupportsOpenAIFast: tt.provided,
+			})
+			if err != nil {
+				t.Fatalf("Update() error = %v", err)
+			}
+			if store.updateCalls != 1 {
+				t.Fatalf("UpdateChannel calls = %d, want 1", store.updateCalls)
+			}
+			if store.updateParam.SupportsOpenaiFast != tt.wantEnabled || updated.SupportsOpenAIFast != tt.wantEnabled {
+				t.Fatalf("supports_openai_fast stored/returned = %v/%v, want %v", store.updateParam.SupportsOpenaiFast, updated.SupportsOpenAIFast, tt.wantEnabled)
+			}
+		})
+	}
+}
+
+func TestUpdateRejectsOpenAIFastOnAnthropicChannel(t *testing.T) {
+	store := &createStore{
+		provider: sqlc.Provider{ID: 1, Name: "Provider", Status: channel.StatusEnabled},
+		channel: sqlc.Channel{
+			ID: 7, ProviderID: 1, Name: "anthropic", Protocol: channel.ProtocolAnthropic,
+			AdapterKey: channel.ProtocolAnthropic, Status: channel.StatusDisabled, CapacityRevision: 1,
+		},
+	}
+	svc := channel.NewService(store, createRegistry{})
+
+	_, err := svc.Update(context.Background(), channel.UpdateInput{
+		ID: 7, ProviderID: 1, Name: "anthropic", Status: channel.StatusDisabled,
+		SupportsOpenAIFast: boolPointer(true),
+	})
+	if got := failure.CodeOf(err); got != failure.CodeAdminInvalidArgument {
+		t.Fatalf("error code = %q, want %q (err=%v)", got, failure.CodeAdminInvalidArgument, err)
+	}
+	if store.updateCalls != 0 {
+		t.Fatalf("UpdateChannel calls = %d, want 0", store.updateCalls)
+	}
+}
+
+func boolPointer(value bool) *bool {
+	return &value
 }

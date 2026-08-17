@@ -30,8 +30,7 @@ func (s *ResponsesService) CreateResponse(ctx context.Context, req gatewayapi.Re
 	if err != nil {
 		return nil, err
 	}
-	req.ServiceTier = &tierRequest.UpstreamRaw
-	result, delivery, err := s.executeResponse(ctx, req, true)
+	result, delivery, err := s.executeResponse(ctx, req, tierRequest.Tier, true)
 	if err != nil {
 		return nil, err
 	}
@@ -89,13 +88,13 @@ func multiAgentBridgeUnsupported() error {
 //
 // allowDirect=false 时强制全部走桥接（与 CompactHistory 的 synthetic 估算口径一致）。协议差异（直传/
 // 桥接调用与响应捕获）由 resolve/invoke 闭包按候选注入，scaffold 复用 runNonStream。
-func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.ResponsesRequest, allowDirect bool) (responseResult, lifecycle.DeliveryFinalizer, error) {
+func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.ResponsesRequest, requestedTier servicetier.Tier, allowDirect bool) (responseResult, lifecycle.DeliveryFinalizer, error) {
 	var (
 		chatAdapter   chatcompletionsadapter.ChatAdapter
 		directAdapter responsesadapter.ResponsesAdapter
 		result        responseResult
 	)
-	delivery, err := s.runNonStream(ctx, req, nonStreamStrategy{
+	delivery, err := s.runNonStream(ctx, req, requestedTier, nonStreamStrategy{
 		allowDirect: allowDirect,
 		upstreamCostWithoutUsage: func(err error) bool {
 			return errors.Is(err, responsesadapter.ErrResponsesUnreliableUsage) ||
@@ -129,8 +128,9 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 			return nil
 		},
 		invoke: func(ctx context.Context, candidate routing.ChatRouteCandidate) (lifecycle.AttemptSuccess, error) {
+			attemptReq := requestForOpenAIChannel(req, requestedTier, candidate)
 			if allowDirect && s.registry.HasResponses(candidate.AdapterKey) {
-				body, err := encodeUpstreamResponsesBody(req, candidate.UpstreamModel, false)
+				body, err := encodeUpstreamResponsesBody(attemptReq, candidate.UpstreamModel, false)
 				if err != nil {
 					return lifecycle.AttemptSuccess{}, err
 				}
@@ -148,7 +148,7 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 			if req.MultiAgentEnabled() {
 				return lifecycle.AttemptSuccess{}, multiAgentBridgeUnsupported()
 			}
-			chatReq, _ := mapResponsesRequestToChat(req, candidate.UpstreamModel)
+			chatReq, _ := mapResponsesRequestToChat(attemptReq, candidate.UpstreamModel)
 			adapterCtx, adapterSpan := lifecycle.StartGatewaySpan(ctx, "adapter.chat_completions", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 			resp, err := chatAdapter.ChatCompletions(adapterCtx, candidate.Channel, chatReq)
 			lifecycle.EndGatewaySpan(adapterSpan, err)
@@ -168,7 +168,7 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 // 本方法承担 routing、authorization、共享候选循环、metrics outcome 与终态写入；协议/路径差异（候选能力
 // 过滤口径、per-candidate 上游调用与响应捕获）由 strat 注入。CreateResponse（直传/桥接）与 CompactHistory
 // （native/synthetic）共用本 scaffold，资金关键链路只此一份。
-func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.ResponsesRequest, strat nonStreamStrategy) (lifecycle.DeliveryFinalizer, error) {
+func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.ResponsesRequest, requestedTier servicetier.Tier, strat nonStreamStrategy) (lifecycle.DeliveryFinalizer, error) {
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
 		return nil, failure.Wrap(
@@ -194,11 +194,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		return nil, err
 	}
 
-	tierRequest, err := servicetier.NormalizeOpenAIRequest(req.ServiceTier)
-	if err != nil {
-		return nil, err
-	}
-	requestRecord, err := s.lifecycle.CreateRequestWithServiceTier(ctx, principal, req.Model, false, lifecycle.NormalizeOpenAIEffort(effort, req.Model), tierRequest.Tier)
+	requestRecord, err := s.lifecycle.CreateRequestWithServiceTier(ctx, principal, req.Model, false, lifecycle.NormalizeOpenAIEffort(effort, req.Model), requestedTier)
 	if err != nil {
 		return nil, err
 	}

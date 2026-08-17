@@ -200,6 +200,7 @@ type attemptDTO struct {
 	ErrorScoringFailure   bool    `json:"error_scoring_failure"`
 	FinalUsageReceived    bool    `json:"final_usage_received"`
 	RequestedServiceTier  *string `json:"requested_service_tier"`
+	ForwardedServiceTier  *string `json:"forwarded_service_tier"`
 	UpstreamServiceTier   *string `json:"upstream_service_tier"`
 	StartedAt             string  `json:"started_at"`
 	CompletedAt           *string `json:"completed_at"`
@@ -575,6 +576,7 @@ func toAttemptDTO(a query.Attempt) attemptDTO {
 		ErrorScoringFailure:   a.ErrorScoringFailure,
 		FinalUsageReceived:    a.FinalUsageReceived,
 		RequestedServiceTier:  a.RequestedServiceTier,
+		ForwardedServiceTier:  a.ForwardedServiceTier,
 		UpstreamServiceTier:   a.UpstreamServiceTier,
 		StartedAt:             adminhttp.RFC3339(a.StartedAt),
 		CompletedAt:           adminhttp.RFC3339Ptr(a.CompletedAt),

@@ -32,8 +32,6 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 	if err != nil {
 		return nil, err
 	}
-	req.ServiceTier = &tierRequest.UpstreamRaw
-
 	routeRequest := routing.ChatRouteRequest{
 		UserID:          principal.UserID,
 		ModelID:         req.Model,
@@ -163,9 +161,10 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 			return nil
 		},
 		Invoke: func(ctx context.Context, candidate routing.ChatRouteCandidate) (lifecycle.AttemptSuccess, error) {
+			attemptReq := requestForOpenAIChannel(req, tierRequest.Tier, candidate)
 			adapterCtx, adapterSpan := lifecycle.StartGatewaySpan(ctx, "adapter.chat_completions", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 			resp, err := chatAdapter.ChatCompletions(adapterCtx, candidate.Channel,
-				mapGatewayRequestToAdapter(req, candidate.UpstreamModel))
+				mapGatewayRequestToAdapter(attemptReq, candidate.UpstreamModel))
 			lifecycle.EndGatewaySpan(adapterSpan, err)
 			if err != nil {
 				return lifecycle.AttemptSuccess{}, err

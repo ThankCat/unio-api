@@ -327,6 +327,7 @@ ORDER BY id;
 SELECT
     c.id, c.provider_id, c.name, c.protocol, c.adapter_key, p.origin,
     c.credential, c.status, c.priority, c.created_at, c.updated_at,
+    c.supports_openai_fast,
     c.concurrency_limit,
     c.response_timeout_ms, c.first_token_timeout_ms,
     c.sticky_enabled, c.sticky_ttl_ms,
@@ -555,12 +556,14 @@ JOIN logged ON logged.channel_id = current_state.id;
 -- 并发容量随业务行一次写入，初始 capacity_revision 固定使用表默认值 1；随后同步安装 revision=1 Redis control。
 INSERT INTO channels (
     provider_id, name, protocol, adapter_key, credential, status, priority,
+    supports_openai_fast,
     response_timeout_ms, first_token_timeout_ms, concurrency_limit,
     sticky_enabled, sticky_ttl_ms
 )
 VALUES (
     sqlc.arg(provider_id), sqlc.arg(name), sqlc.arg(protocol), sqlc.arg(adapter_key),
     sqlc.arg(credential), sqlc.arg(status), sqlc.arg(priority),
+    sqlc.arg(supports_openai_fast),
     sqlc.narg(response_timeout_ms), sqlc.narg(first_token_timeout_ms), sqlc.narg(concurrency_limit),
     sqlc.narg(sticky_enabled), sqlc.narg(sticky_ttl_ms)
 )
@@ -573,6 +576,7 @@ UPDATE channels
 SET name = sqlc.arg(name),
     status = sqlc.arg(status),
     priority = sqlc.arg(priority),
+    supports_openai_fast = sqlc.arg(supports_openai_fast),
     response_timeout_ms = sqlc.narg(response_timeout_ms),
     first_token_timeout_ms = sqlc.narg(first_token_timeout_ms),
     sticky_enabled = sqlc.narg(sticky_enabled),
@@ -580,6 +584,7 @@ SET name = sqlc.arg(name),
     config_revision = config_revision + (
         CASE WHEN (
             status IS DISTINCT FROM sqlc.arg(status)
+            OR supports_openai_fast IS DISTINCT FROM sqlc.arg(supports_openai_fast)
             OR response_timeout_ms IS DISTINCT FROM sqlc.narg(response_timeout_ms)
             OR first_token_timeout_ms IS DISTINCT FROM sqlc.narg(first_token_timeout_ms)
             OR sticky_enabled IS DISTINCT FROM sqlc.narg(sticky_enabled)

@@ -32,6 +32,30 @@ func TestNormalizeOpenAIRequest(t *testing.T) {
 	}
 }
 
+func TestResolveOpenAIForwardRequest(t *testing.T) {
+	tests := []struct {
+		name         string
+		requested    Tier
+		supportsFast bool
+		wantTier     Tier
+		wantUpstream string
+	}{
+		{name: "standard unsupported", requested: TierStandard, wantTier: TierStandard, wantUpstream: "default"},
+		{name: "standard supported", requested: TierStandard, supportsFast: true, wantTier: TierStandard, wantUpstream: "default"},
+		{name: "fast unsupported", requested: TierFast, wantTier: TierStandard, wantUpstream: "default"},
+		{name: "fast supported", requested: TierFast, supportsFast: true, wantTier: TierFast, wantUpstream: "priority"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResolveOpenAIForwardRequest(tt.requested, tt.supportsFast)
+			if got.Tier != tt.wantTier || got.UpstreamRaw != tt.wantUpstream {
+				t.Fatalf("ResolveOpenAIForwardRequest() = %+v, want tier=%q upstream=%q", got, tt.wantTier, tt.wantUpstream)
+			}
+		})
+	}
+}
+
 func TestResolveOpenAIResponse(t *testing.T) {
 	tests := []struct {
 		name           string

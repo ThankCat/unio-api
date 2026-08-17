@@ -108,6 +108,7 @@ type Channel struct {
 	Protocol            string
 	AdapterKey          string
 	Origin              string
+	SupportsOpenAIFast  bool
 	Credential          string
 	Status              string
 	Priority            int32
@@ -180,6 +181,7 @@ type CreateInput struct {
 	Name                string
 	Protocol            string
 	AdapterKey          string
+	SupportsOpenAIFast  bool
 	Credential          string
 	Status              string
 	Priority            int32
@@ -201,6 +203,8 @@ type UpdateInput struct {
 	FirstTokenTimeoutMs *int32
 	StickyEnabled       *bool
 	StickyTTLms         *int64
+	// SupportsOpenAIFast nil 表示保持当前值；显式 false 表示关闭。
+	SupportsOpenAIFast *bool
 	// CapacityProvided 区分「字段缺省=保持不变」与「显式 null=继承全局默认」。
 	CapacityProvided bool
 	ConcurrencyLimit *int64
@@ -397,6 +401,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	if err := validateProtocol(protocol); err != nil {
 		return Channel{}, err
 	}
+	if in.SupportsOpenAIFast && protocol != ProtocolOpenAI {
+		return Channel{}, invalidArgument("supports_openai_fast", "OpenAI Fast is only available for OpenAI channels")
+	}
 	// adapter_key 可选：留空默认为该协议的忠实透传 adapter。忠实 adapter 的注册键与协议同名
 	// （openai→"openai"、anthropic→"anthropic"），故普通 OpenAI/Anthropic 兼容上游免填即可；
 	// 仅需特殊方言/Drop 策略（如直连 DeepSeek 原厂）的上游才显式指定 adapter_key。
@@ -460,6 +467,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		Credential:          strings.TrimSpace(in.Credential),
 		Status:              status,
 		Priority:            in.Priority,
+		SupportsOpenaiFast:  in.SupportsOpenAIFast,
 		ResponseTimeoutMs:   timeoutParam(in.ResponseTimeoutMs),
 		FirstTokenTimeoutMs: timeoutParam(in.FirstTokenTimeoutMs),
 		ConcurrencyLimit:    rateLimitParam(capacity.Concurrency),
@@ -521,6 +529,14 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	if in.ProviderID != 0 && in.ProviderID != cur.ProviderID {
 		return Channel{}, invalidArgument("provider_id", "channel provider cannot be changed")
 	}
+	desiredSupportsOpenAIFast := cur.SupportsOpenaiFast
+	if in.SupportsOpenAIFast != nil {
+		desiredSupportsOpenAIFast = *in.SupportsOpenAIFast
+	}
+	if desiredSupportsOpenAIFast && cur.Protocol != ProtocolOpenAI {
+		return Channel{}, invalidArgument("supports_openai_fast", "OpenAI Fast is only available for OpenAI channels")
+	}
+	in.SupportsOpenAIFast = &desiredSupportsOpenAIFast
 	provider, err := s.store.GetProvider(ctx, cur.ProviderID)
 	if err != nil {
 		return Channel{}, storeFailed(err, "load provider for channel")
@@ -558,6 +574,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 		Name:                name,
 		Status:              status,
 		Priority:            in.Priority,
+		SupportsOpenaiFast:  desiredSupportsOpenAIFast,
 		ResponseTimeoutMs:   timeoutParam(in.ResponseTimeoutMs),
 		FirstTokenTimeoutMs: timeoutParam(in.FirstTokenTimeoutMs),
 		StickyEnabled:       boolParam(in.StickyEnabled),
@@ -620,6 +637,7 @@ func (s *Service) disableChannelWithLinkage(ctx context.Context, in UpdateInput,
 		Name:                name,
 		Status:              StatusDisabled,
 		Priority:            in.Priority,
+		SupportsOpenaiFast:  *in.SupportsOpenAIFast,
 		ResponseTimeoutMs:   timeoutParam(in.ResponseTimeoutMs),
 		FirstTokenTimeoutMs: timeoutParam(in.FirstTokenTimeoutMs),
 		StickyEnabled:       boolParam(in.StickyEnabled),
@@ -702,6 +720,7 @@ func (s *Service) updateWithPublishedCapacity(
 				Name:                strings.TrimSpace(in.Name),
 				Status:              strings.TrimSpace(in.Status),
 				Priority:            in.Priority,
+				SupportsOpenaiFast:  *in.SupportsOpenAIFast,
 				ResponseTimeoutMs:   timeoutParam(in.ResponseTimeoutMs),
 				FirstTokenTimeoutMs: timeoutParam(in.FirstTokenTimeoutMs),
 				StickyEnabled:       boolParam(in.StickyEnabled),
@@ -915,6 +934,7 @@ func toChannel(c sqlc.Channel) Channel {
 		Name:                c.Name,
 		Protocol:            c.Protocol,
 		AdapterKey:          c.AdapterKey,
+		SupportsOpenAIFast:  c.SupportsOpenaiFast,
 		Credential:          c.Credential,
 		Status:              c.Status,
 		Priority:            c.Priority,
@@ -962,6 +982,7 @@ func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 		Name:                c.Name,
 		Protocol:            c.Protocol,
 		AdapterKey:          c.AdapterKey,
+		SupportsOpenAIFast:  c.SupportsOpenaiFast,
 		Origin:              c.Origin,
 		Credential:          c.Credential,
 		Status:              c.Status,

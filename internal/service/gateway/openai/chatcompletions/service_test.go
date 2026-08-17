@@ -16,6 +16,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	coreusage "github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
@@ -233,24 +234,30 @@ func (s *fakeRequestLogService) CreateRequest(ctx context.Context, params reques
 	s.nextRequestID++
 
 	return requestlog.RequestRecord{
-		ID:               id,
-		RequestID:        params.RequestID,
-		UserID:           params.UserID,
-		APIKeyID:         params.APIKeyID,
-		RequestedModelID: params.RequestedModelID,
-		Stream:           params.Stream,
-		Status:           requestlog.RequestStatusPending,
-		StartedAt:        params.StartedAt,
+		ID:                   id,
+		RequestID:            params.RequestID,
+		UserID:               params.UserID,
+		APIKeyID:             params.APIKeyID,
+		RequestedModelID:     params.RequestedModelID,
+		Stream:               params.Stream,
+		Status:               requestlog.RequestStatusPending,
+		StartedAt:            params.StartedAt,
+		RequestedServiceTier: params.RequestedServiceTier,
 	}, nil
 }
 
 // MarkRequestRunning 记录 request running 状态变更。
 func (s *fakeRequestLogService) MarkRequestRunning(ctx context.Context, id int64) (requestlog.RequestRecord, error) {
 	s.markRequestRunningIDs = append(s.markRequestRunningIDs, id)
+	var requestedServiceTier servicetier.Tier
+	if len(s.createRequests) > 0 {
+		requestedServiceTier = s.createRequests[len(s.createRequests)-1].RequestedServiceTier
+	}
 
 	return requestlog.RequestRecord{
-		ID:     id,
-		Status: requestlog.RequestStatusRunning,
+		ID:                   id,
+		Status:               requestlog.RequestStatusRunning,
+		RequestedServiceTier: requestedServiceTier,
 	}, nil
 }
 
@@ -346,15 +353,17 @@ func (s *fakeRequestLogService) CreateAttempt(ctx context.Context, params reques
 	s.nextAttemptID++
 
 	return requestlog.AttemptRecord{
-		ID:              id,
-		RequestRecordID: params.RequestRecordID,
-		AttemptIndex:    params.AttemptIndex,
-		ProviderID:      params.ProviderID,
-		ChannelID:       params.ChannelID,
-		AdapterKey:      params.AdapterKey,
-		UpstreamModel:   params.UpstreamModel,
-		Status:          requestlog.AttemptStatusRunning,
-		StartedAt:       params.StartedAt,
+		ID:                   id,
+		RequestRecordID:      params.RequestRecordID,
+		AttemptIndex:         params.AttemptIndex,
+		ProviderID:           params.ProviderID,
+		ChannelID:            params.ChannelID,
+		AdapterKey:           params.AdapterKey,
+		UpstreamModel:        params.UpstreamModel,
+		Status:               requestlog.AttemptStatusRunning,
+		StartedAt:            params.StartedAt,
+		RequestedServiceTier: params.RequestedServiceTier,
+		ForwardedServiceTier: params.ForwardedServiceTier,
 	}, nil
 }
 
@@ -1298,6 +1307,53 @@ func TestChatCompletionServiceCreateChatCompletionFallsBackOnRetryableAdapterErr
 	}
 	if len(requestLog.markRequestFailedArgs) != 0 {
 		t.Fatalf("expected request not to fail, got %#v", requestLog.markRequestFailedArgs)
+	}
+}
+
+func TestChatCompletionServiceResolvesFastTierPerFallbackChannel(t *testing.T) {
+	firstAdapter := &fakeChatAdapter{chatErr: errors.New("temporary upstream error")}
+	secondAdapter := &fakeChatAdapter{chatResp: chatResponse("fallback response")}
+	requestLog := newFakeRequestLogService()
+	firstCandidate := routeCandidate("openai-primary", 101, "gpt-4.1")
+	firstCandidate.Protocol = routing.ProtocolOpenAI
+	secondCandidate := routeCandidate("openai-secondary", 102, "gpt-4.1")
+	secondCandidate.Protocol = routing.ProtocolOpenAI
+	secondCandidate.SupportsOpenAIFast = true
+
+	service := newChatCompletionServiceForTestWithAuthorizer(
+		&fakeChatRouter{plan: routePlan(firstCandidate, secondCandidate)},
+		&fakeAdapterRegistry{chatAdapters: map[string]chatcompletionsadapter.ChatAdapter{
+			"openai-primary": firstAdapter, "openai-secondary": secondAdapter,
+		}},
+		&fakeRetryClassifier{retryable: true},
+		requestLog,
+		newChatCompletionSettlementForTest(),
+		&fakeChatAuthorizer{authorization: lifecycle.ChatAuthorization{ReservationID: 7800}},
+	)
+
+	fast := "fast"
+	req := chatRequest()
+	req.ServiceTier = &fast
+	if _, err := service.CreateChatCompletion(contextWithPrincipal(42), req); err != nil {
+		t.Fatalf("CreateChatCompletion returned err: %v", err)
+	}
+
+	if firstAdapter.chatReq.ServiceTier == nil || *firstAdapter.chatReq.ServiceTier != "default" {
+		t.Fatalf("unsupported channel service_tier = %#v, want default", firstAdapter.chatReq.ServiceTier)
+	}
+	if secondAdapter.chatReq.ServiceTier == nil || *secondAdapter.chatReq.ServiceTier != "priority" {
+		t.Fatalf("supported channel service_tier = %#v, want priority", secondAdapter.chatReq.ServiceTier)
+	}
+	if len(requestLog.createAttempts) != 2 {
+		t.Fatalf("attempt count = %d, want 2", len(requestLog.createAttempts))
+	}
+	if requestLog.createAttempts[0].RequestedServiceTier != servicetier.TierFast ||
+		requestLog.createAttempts[1].RequestedServiceTier != servicetier.TierFast {
+		t.Fatalf("requested attempt tiers = %q/%q, want fast/fast", requestLog.createAttempts[0].RequestedServiceTier, requestLog.createAttempts[1].RequestedServiceTier)
+	}
+	if requestLog.createAttempts[0].ForwardedServiceTier != servicetier.TierStandard ||
+		requestLog.createAttempts[1].ForwardedServiceTier != servicetier.TierFast {
+		t.Fatalf("forwarded attempt tiers = %q/%q, want standard/fast", requestLog.createAttempts[0].ForwardedServiceTier, requestLog.createAttempts[1].ForwardedServiceTier)
 	}
 }
 

@@ -156,7 +156,7 @@ func (q *Queries) GetRequestRecordByRequestID(ctx context.Context, requestID str
 
 const listAdminRequestAttemptsByRequest = `-- name: ListAdminRequestAttemptsByRequest :many
 SELECT
-    a.id, a.request_record_id, a.attempt_index, a.provider_id, a.channel_id, a.adapter_key, a.upstream_model, a.upstream_protocol, a.upstream_response_id, a.upstream_response_model, a.upstream_finish_reason, a.finish_class, a.status, a.upstream_status_code, a.upstream_request_id, a.error_code, a.error_message, a.internal_error_detail, a.upstream_timeout_phase, a.gateway_first_token_at, a.final_usage_received, a.usage_mapping_version, a.started_at, a.completed_at, a.created_at, a.upstream_started_at, a.upstream_first_token_at, a.upstream_completed_at, a.provider_origin_revision, a.provider_status_revision, a.channel_config_revision, a.routing_candidate_index, a.upstream_endpoint, a.breaker_provider_disposition, a.breaker_channel_disposition, a.ttft_scoring_sample, a.error_scoring_sample, a.error_scoring_failure, a.fault_party, a.permit_id, a.requested_service_tier, a.upstream_service_tier,
+    a.id, a.request_record_id, a.attempt_index, a.provider_id, a.channel_id, a.adapter_key, a.upstream_model, a.upstream_protocol, a.upstream_response_id, a.upstream_response_model, a.upstream_finish_reason, a.finish_class, a.status, a.upstream_status_code, a.upstream_request_id, a.error_code, a.error_message, a.internal_error_detail, a.upstream_timeout_phase, a.gateway_first_token_at, a.final_usage_received, a.usage_mapping_version, a.started_at, a.completed_at, a.created_at, a.upstream_started_at, a.upstream_first_token_at, a.upstream_completed_at, a.provider_origin_revision, a.provider_status_revision, a.channel_config_revision, a.routing_candidate_index, a.upstream_endpoint, a.breaker_provider_disposition, a.breaker_channel_disposition, a.ttft_scoring_sample, a.error_scoring_sample, a.error_scoring_failure, a.fault_party, a.permit_id, a.requested_service_tier, a.upstream_service_tier, a.forwarded_service_tier,
     c.name AS channel_name,
     cs.cost_multiplier AS channel_cost_multiplier,
     cs.recharge_factor
@@ -219,6 +219,7 @@ type ListAdminRequestAttemptsByRequestRow struct {
 	PermitID                   pgtype.Text
 	RequestedServiceTier       pgtype.Text
 	UpstreamServiceTier        pgtype.Text
+	ForwardedServiceTier       pgtype.Text
 	ChannelName                string
 	ChannelCostMultiplier      pgtype.Numeric
 	RechargeFactor             pgtype.Numeric
@@ -278,6 +279,7 @@ func (q *Queries) ListAdminRequestAttemptsByRequest(ctx context.Context, request
 			&i.PermitID,
 			&i.RequestedServiceTier,
 			&i.UpstreamServiceTier,
+			&i.ForwardedServiceTier,
 			&i.ChannelName,
 			&i.ChannelCostMultiplier,
 			&i.RechargeFactor,

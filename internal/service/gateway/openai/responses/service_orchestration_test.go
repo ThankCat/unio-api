@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	coreusage "github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
@@ -183,19 +184,27 @@ func (s *fakeRequestLog) CreateRequest(_ context.Context, params requestlog.Crea
 	id := s.nextRequestID
 	s.nextRequestID++
 	return requestlog.RequestRecord{
-		ID:              id,
-		RequestID:       params.RequestID,
-		UserID:          params.UserID,
-		APIKeyID:        params.APIKeyID,
-		IngressProtocol: params.IngressProtocol,
-		Endpoint:        params.Endpoint,
-		Status:          requestlog.RequestStatusPending,
-		StartedAt:       params.StartedAt,
+		ID:                   id,
+		RequestID:            params.RequestID,
+		UserID:               params.UserID,
+		APIKeyID:             params.APIKeyID,
+		IngressProtocol:      params.IngressProtocol,
+		Endpoint:             params.Endpoint,
+		Status:               requestlog.RequestStatusPending,
+		StartedAt:            params.StartedAt,
+		RequestedServiceTier: params.RequestedServiceTier,
 	}, nil
 }
 
 func (s *fakeRequestLog) MarkRequestRunning(_ context.Context, id int64) (requestlog.RequestRecord, error) {
-	return requestlog.RequestRecord{ID: id, Status: requestlog.RequestStatusRunning}, nil
+	var requestedServiceTier servicetier.Tier
+	if len(s.createRequests) > 0 {
+		requestedServiceTier = s.createRequests[len(s.createRequests)-1].RequestedServiceTier
+	}
+	return requestlog.RequestRecord{
+		ID: id, Status: requestlog.RequestStatusRunning,
+		RequestedServiceTier: requestedServiceTier,
+	}, nil
 }
 
 // MarkRequestDeliveryStarted 只推进 delivery 状态；Gateway 首字是独立事实。
@@ -256,6 +265,8 @@ func (s *fakeRequestLog) CreateAttempt(_ context.Context, params requestlog.Crea
 		UpstreamEndpoint:      params.UpstreamEndpoint,
 		Status:                requestlog.AttemptStatusRunning,
 		StartedAt:             params.StartedAt,
+		RequestedServiceTier:  params.RequestedServiceTier,
+		ForwardedServiceTier:  params.ForwardedServiceTier,
 	}, nil
 }
 

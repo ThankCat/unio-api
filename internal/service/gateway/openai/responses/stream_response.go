@@ -56,8 +56,6 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 	if err != nil {
 		return err
 	}
-	req.ServiceTier = &tierRequest.UpstreamRaw
-
 	var effort string
 	if req.Reasoning != nil && req.Reasoning.Effort != nil {
 		effort = *req.Reasoning.Effort
@@ -219,8 +217,9 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 			return nil
 		},
 		Stream: func(ctx context.Context, candidate routing.ChatRouteCandidate, onChunk func(responsesStreamCarrier) error) (*adapter.ResponseFacts, error) {
+			attemptReq := requestForOpenAIChannel(req, tierRequest.Tier, candidate)
 			if s.registry.HasStreamResponses(candidate.AdapterKey) {
-				body, bodyErr := encodeUpstreamResponsesBody(req, candidate.UpstreamModel, true)
+				body, bodyErr := encodeUpstreamResponsesBody(attemptReq, candidate.UpstreamModel, true)
 				if bodyErr != nil {
 					return nil, bodyErr
 				}
@@ -242,7 +241,7 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 			if req.MultiAgentEnabled() {
 				return nil, multiAgentBridgeUnsupported()
 			}
-			chatReq, _ := mapResponsesRequestToChat(req, candidate.UpstreamModel)
+			chatReq, _ := mapResponsesRequestToChat(attemptReq, candidate.UpstreamModel)
 			streamCtx, streamSpan := lifecycle.StartGatewaySpan(ctx, "adapter.stream_chat_completions", lifecycle.UpstreamSpanAttrs(candidate.ProviderID, candidate.Channel.ID, candidate.UpstreamModel)...)
 			streamOutcome, streamErr := streamAdapter.StreamChatCompletions(streamCtx, candidate.Channel, chatReq, func(chunk chatcompletionsadapter.ChatStreamChunk) error {
 				delta := chunk
