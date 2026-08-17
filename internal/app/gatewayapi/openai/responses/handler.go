@@ -156,6 +156,14 @@ func mapResponsesServiceError(req ResponsesRequest, err error, fallbackCode stri
 			errorType: "insufficient_quota",
 			param:     nil,
 		}
+	case failure.CodeOf(err) == failure.CodeLedgerBalanceTemporarilyReserved:
+		return responsesServiceErrorResponse{
+			status:    http.StatusTooManyRequests,
+			code:      "rate_limit_exceeded",
+			message:   "Your balance is temporarily reserved by in-flight requests. Please retry shortly.",
+			errorType: "rate_limit_error",
+			param:     nil,
+		}
 	case failure.CodeOf(err) == failure.CodeRateLimitExceeded, failure.CodeOf(err) == failure.CodeGatewayChannelRateLimited:
 		// Key 级 TPM 或上游真实 429 冷却命中：统一 429，不泄露具体维度阈值。
 		return responsesServiceErrorResponse{

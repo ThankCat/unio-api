@@ -160,7 +160,74 @@ WHERE r.status = 'succeeded'
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz);
 
 -- name: DashboardRadarTokens :one
--- DashboardRadarTokens 在区间内汇总 token 分项（供缓存命中率与 token 总量卡）。
+-- DashboardRadarTokens 在区间内汇总 token 分项（供缓存率与 token 总量卡）。
+WITH cache_usage AS (
+    SELECT *
+    FROM usage_records
+    WHERE usage_source IN ('upstream_response', 'upstream_stream')
+      AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
+      AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
+),
+cache AS (
+    SELECT
+        COALESCE(SUM(uncached_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS metric_uncached_input,
+        COALESCE(SUM(cache_read_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS metric_cache_read_input,
+        COALESCE(SUM(cache_write_5m_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS metric_cache_write_5m_input,
+        COALESCE(SUM(cache_write_1h_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS metric_cache_write_1h_input,
+        COALESCE(SUM(cache_write_30m_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS metric_cache_write_30m_input,
+        COUNT(*) AS cache_usage_records,
+        COUNT(*) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ) AS cache_evaluable_records,
+        COUNT(*) FILTER (WHERE cache_read_input_tokens_state = 'not_applicable') AS cache_read_not_applicable_records
+    FROM cache_usage
+)
 SELECT
     COALESCE(SUM(uncached_input_tokens), 0)::bigint AS uncached_input,
     COALESCE(SUM(cache_read_input_tokens), 0)::bigint AS cache_read_input,
@@ -168,7 +235,15 @@ SELECT
     COALESCE(SUM(cache_write_1h_input_tokens), 0)::bigint AS cache_write_1h_input,
     COALESCE(SUM(cache_write_30m_input_tokens), 0)::bigint AS cache_write_30m_input,
     COALESCE(SUM(cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens), 0)::bigint AS cache_write_input,
-    COALESCE(SUM(output_tokens_total), 0)::bigint AS output_tokens
+    COALESCE(SUM(output_tokens_total), 0)::bigint AS output_tokens,
+    (SELECT metric_uncached_input FROM cache) AS cache_metric_uncached_input,
+    (SELECT metric_cache_read_input FROM cache) AS cache_metric_read_input,
+    (SELECT metric_cache_write_5m_input FROM cache) AS cache_metric_write_5m_input,
+    (SELECT metric_cache_write_1h_input FROM cache) AS cache_metric_write_1h_input,
+    (SELECT metric_cache_write_30m_input FROM cache) AS cache_metric_write_30m_input,
+    (SELECT cache_usage_records FROM cache) AS cache_usage_records,
+    (SELECT cache_evaluable_records FROM cache) AS cache_evaluable_records,
+    (SELECT cache_read_not_applicable_records FROM cache) AS cache_read_not_applicable_records
 FROM usage_records
 WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz);

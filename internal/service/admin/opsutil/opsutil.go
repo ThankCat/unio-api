@@ -177,6 +177,74 @@ type LatencyStats struct {
 	Coverage float64
 }
 
+// CacheStatus 表示缓存率是否有可计算的上游事实。
+type CacheStatus string
+
+const (
+	CacheStatusAvailable     CacheStatus = "available"
+	CacheStatusNoData        CacheStatus = "no_data"
+	CacheStatusUnknown       CacheStatus = "unknown"
+	CacheStatusNotApplicable CacheStatus = "not_applicable"
+)
+
+// CacheAggregate 是 SQL 聚合后的缓存事实。
+// 只有 input/token 字段状态完整的 usage 才进入对应 token 汇总；unknown 不会被当作 0。
+type CacheAggregate struct {
+	UncachedInput            int64
+	CacheReadInput           int64
+	CacheWrite5mInput        int64
+	CacheWrite1hInput        int64
+	CacheWrite30mInput       int64
+	UsageRecords             int64
+	EvaluableRecords         int64
+	ReadNotApplicableRecords int64
+}
+
+// CacheStats 是管理面缓存率展示事实。
+// ReadRate 是“缓存率”的唯一含义：缓存读取 token / 输入 token；写入率单独表达缓存写入。
+type CacheStats struct {
+	Status              CacheStatus
+	ReadRate            *float64
+	WriteRate           *float64
+	InputTokens         int64
+	UncachedTokens      int64
+	CacheReadTokens     int64
+	CacheWrite5mTokens  int64
+	CacheWrite1hTokens  int64
+	CacheWrite30mTokens int64
+}
+
+// CacheStatsFrom 从缓存事实计算展示比例；不对无数据、未知或不适用样本伪造 0%。
+func CacheStatsFrom(a CacheAggregate) CacheStats {
+	stats := CacheStats{
+		Status:              CacheStatusNoData,
+		UncachedTokens:      a.UncachedInput,
+		CacheReadTokens:     a.CacheReadInput,
+		CacheWrite5mTokens:  a.CacheWrite5mInput,
+		CacheWrite1hTokens:  a.CacheWrite1hInput,
+		CacheWrite30mTokens: a.CacheWrite30mInput,
+	}
+	stats.InputTokens = a.UncachedInput + a.CacheReadInput + a.CacheWrite5mInput + a.CacheWrite1hInput + a.CacheWrite30mInput
+
+	if a.UsageRecords <= 0 {
+		return stats
+	}
+	if a.EvaluableRecords > 0 && stats.InputTokens > 0 {
+		stats.Status = CacheStatusAvailable
+		readRate := float64(a.CacheReadInput) / float64(stats.InputTokens)
+		writeRate := float64(a.CacheWrite5mInput+a.CacheWrite1hInput+a.CacheWrite30mInput) / float64(stats.InputTokens)
+		stats.ReadRate = &readRate
+		stats.WriteRate = &writeRate
+		return stats
+	}
+	if a.ReadNotApplicableRecords == a.UsageRecords {
+		stats.Status = CacheStatusNotApplicable
+		return stats
+	}
+	stats.Status = CacheStatusUnknown
+	return stats
+}
+
 // AttemptLatency 从 SQL 聚合字段组装延迟画像。
 func AttemptLatency(avg, p50, p90, p95, p99 float64, sample, succeeded int64) LatencyStats {
 	s := LatencyStats{Avg: avg, P50: p50, P90: p90, P95: p95, P99: p99, Sample: sample}

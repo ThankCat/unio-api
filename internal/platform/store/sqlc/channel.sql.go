@@ -178,6 +178,75 @@ func (q *Queries) ArchiveChannel(ctx context.Context, id int64) (int64, error) {
 }
 
 const channelOpsDetail = `-- name: ChannelOpsDetail :one
+WITH cache_usage AS (
+    SELECT u.id, u.request_record_id, u.uncached_input_tokens, u.uncached_input_tokens_state, u.cache_read_input_tokens, u.cache_read_input_tokens_state, u.cache_write_5m_input_tokens, u.cache_write_5m_input_tokens_state, u.cache_write_1h_input_tokens, u.cache_write_1h_input_tokens_state, u.output_tokens_total, u.output_tokens_total_state, u.reasoning_output_tokens, u.reasoning_output_tokens_state, u.usage_source, u.usage_mapping_version, u.created_at, u.cache_write_30m_input_tokens, u.cache_write_30m_input_tokens_state
+    FROM request_records r
+    JOIN usage_records u ON u.request_record_id = r.id
+    WHERE r.final_channel_id = $1
+      AND u.usage_source IN ('upstream_response', 'upstream_stream')
+      AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
+      AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
+),
+cache AS (
+    SELECT
+        COALESCE(SUM(uncached_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS cache_uncached_input,
+        COALESCE(SUM(cache_read_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS cache_read_input,
+        COALESCE(SUM(cache_write_5m_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS cache_write_5m_input,
+        COALESCE(SUM(cache_write_1h_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS cache_write_1h_input,
+        COALESCE(SUM(cache_write_30m_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS cache_write_30m_input,
+        COUNT(*) AS cache_usage_records,
+        COUNT(*) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ) AS cache_evaluable_records,
+        COUNT(*) FILTER (WHERE cache_read_input_tokens_state = 'not_applicable') AS cache_read_not_applicable_records
+    FROM cache_usage
+)
 SELECT
     COUNT(*) FILTER (WHERE status = 'succeeded' OR fault_party = 'upstream') AS attempt_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS attempt_succeeded,
@@ -198,7 +267,15 @@ SELECT
         CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
     (MAX(completed_at) FILTER (WHERE status = 'succeeded'))::timestamptz AS last_success_at,
-    (MAX(completed_at) FILTER (WHERE status = 'failed' AND fault_party = 'upstream'))::timestamptz AS last_failure_at
+    (MAX(completed_at) FILTER (WHERE status = 'failed' AND fault_party = 'upstream'))::timestamptz AS last_failure_at,
+    (SELECT cache_uncached_input FROM cache) AS cache_uncached_input,
+    (SELECT cache_read_input FROM cache) AS cache_read_input,
+    (SELECT cache_write_5m_input FROM cache) AS cache_write_5m_input,
+    (SELECT cache_write_1h_input FROM cache) AS cache_write_1h_input,
+    (SELECT cache_write_30m_input FROM cache) AS cache_write_30m_input,
+    (SELECT cache_usage_records FROM cache) AS cache_usage_records,
+    (SELECT cache_evaluable_records FROM cache) AS cache_evaluable_records,
+    (SELECT cache_read_not_applicable_records FROM cache) AS cache_read_not_applicable_records
 FROM request_attempts
 WHERE channel_id = $1
   AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
@@ -212,17 +289,25 @@ type ChannelOpsDetailParams struct {
 }
 
 type ChannelOpsDetailRow struct {
-	AttemptTotal     int64
-	AttemptSucceeded int64
-	TimeoutTotal     int64
-	LatencySample    int64
-	LatencyAvg       float64
-	LatencyP50       float64
-	LatencyP90       float64
-	LatencyP95       float64
-	LatencyP99       float64
-	LastSuccessAt    pgtype.Timestamptz
-	LastFailureAt    pgtype.Timestamptz
+	AttemptTotal                  int64
+	AttemptSucceeded              int64
+	TimeoutTotal                  int64
+	LatencySample                 int64
+	LatencyAvg                    float64
+	LatencyP50                    float64
+	LatencyP90                    float64
+	LatencyP95                    float64
+	LatencyP99                    float64
+	LastSuccessAt                 pgtype.Timestamptz
+	LastFailureAt                 pgtype.Timestamptz
+	CacheUncachedInput            int64
+	CacheReadInput                int64
+	CacheWrite5mInput             int64
+	CacheWrite1hInput             int64
+	CacheWrite30mInput            int64
+	CacheUsageRecords             int64
+	CacheEvaluableRecords         int64
+	CacheReadNotApplicableRecords int64
 }
 
 // ChannelOpsDetail 单渠道（抽屉概览）attempt 指标。attempt_total 口径同上：合格 attempt（succeeded+failed）。
@@ -241,6 +326,14 @@ func (q *Queries) ChannelOpsDetail(ctx context.Context, arg ChannelOpsDetailPara
 		&i.LatencyP99,
 		&i.LastSuccessAt,
 		&i.LastFailureAt,
+		&i.CacheUncachedInput,
+		&i.CacheReadInput,
+		&i.CacheWrite5mInput,
+		&i.CacheWrite1hInput,
+		&i.CacheWrite30mInput,
+		&i.CacheUsageRecords,
+		&i.CacheEvaluableRecords,
+		&i.CacheReadNotApplicableRecords,
 	)
 	return i, err
 }

@@ -8,17 +8,18 @@ import (
 	"testing"
 
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 )
 
 type positiveBalanceCheckerStub struct {
-	positive bool
-	err      error
-	calls    int
-	userID   int64
-	onCheck  func()
+	eligibility ledger.BalanceEligibility
+	err         error
+	calls       int
+	userID      int64
+	onCheck     func()
 }
 
 type positiveBalanceMetricsSpy struct {
@@ -33,38 +34,42 @@ func (s *positiveBalanceMetricsSpy) IncRequestRejected(protocol string, reason s
 	s.reason = reason
 }
 
-func (s *positiveBalanceCheckerStub) HasPositiveAvailableBalance(_ context.Context, userID int64) (bool, error) {
+func (s *positiveBalanceCheckerStub) GetBalanceEligibility(_ context.Context, userID int64) (ledger.BalanceEligibility, error) {
 	s.calls++
 	s.userID = userID
 	if s.onCheck != nil {
 		s.onCheck()
 	}
-	return s.positive, s.err
+	return s.eligibility, s.err
 }
 
 func TestPositiveBalanceGateProtocolResponses(t *testing.T) {
 	tests := []struct {
-		name          string
-		protocol      RequestAdmissionProtocol
-		positive      bool
-		checkerErr    error
-		withPrincipal bool
-		wantStatus    int
-		wantCode      string
-		wantType      string
-		wantNext      bool
+		name           string
+		protocol       RequestAdmissionProtocol
+		eligibility    ledger.BalanceEligibility
+		checkerErr     error
+		withPrincipal  bool
+		wantStatus     int
+		wantCode       string
+		wantType       string
+		wantRetryAfter string
+		wantNext       bool
 	}{
-		{name: "positive passes", protocol: RequestAdmissionOpenAI, positive: true, withPrincipal: true, wantStatus: http.StatusNoContent, wantNext: true},
-		{name: "openai zero balance", protocol: RequestAdmissionOpenAI, withPrincipal: true, wantStatus: http.StatusPaymentRequired, wantCode: "insufficient_quota", wantType: "insufficient_quota"},
-		{name: "anthropic zero balance", protocol: RequestAdmissionAnthropic, withPrincipal: true, wantStatus: http.StatusPaymentRequired, wantType: "invalid_request_error"},
+		{name: "positive passes", protocol: RequestAdmissionOpenAI, eligibility: ledger.BalanceEligibilityPositiveAvailable, withPrincipal: true, wantStatus: http.StatusNoContent, wantNext: true},
+		{name: "openai zero balance", protocol: RequestAdmissionOpenAI, eligibility: ledger.BalanceEligibilityInsufficient, withPrincipal: true, wantStatus: http.StatusPaymentRequired, wantCode: "insufficient_quota", wantType: "insufficient_quota"},
+		{name: "anthropic zero balance", protocol: RequestAdmissionAnthropic, eligibility: ledger.BalanceEligibilityInsufficient, withPrincipal: true, wantStatus: http.StatusPaymentRequired, wantType: "invalid_request_error"},
+		{name: "openai temporarily reserved passes to currency-aware authorization", protocol: RequestAdmissionOpenAI, eligibility: ledger.BalanceEligibilityTemporarilyReserved, withPrincipal: true, wantStatus: http.StatusNoContent, wantNext: true},
+		{name: "anthropic temporarily reserved passes to currency-aware authorization", protocol: RequestAdmissionAnthropic, eligibility: ledger.BalanceEligibilityTemporarilyReserved, withPrincipal: true, wantStatus: http.StatusNoContent, wantNext: true},
 		{name: "openai store failure", protocol: RequestAdmissionOpenAI, checkerErr: failure.New(failure.CodeLedgerStoreFailed), withPrincipal: true, wantStatus: http.StatusServiceUnavailable, wantCode: "service_unavailable", wantType: "api_error"},
 		{name: "anthropic store failure", protocol: RequestAdmissionAnthropic, checkerErr: failure.New(failure.CodeLedgerStoreFailed), withPrincipal: true, wantStatus: http.StatusServiceUnavailable, wantType: "api_error"},
-		{name: "missing principal", protocol: RequestAdmissionOpenAI, positive: true, wantStatus: http.StatusServiceUnavailable, wantCode: "service_unavailable", wantType: "api_error"},
+		{name: "unknown eligibility", protocol: RequestAdmissionOpenAI, eligibility: "unexpected", withPrincipal: true, wantStatus: http.StatusServiceUnavailable, wantCode: "service_unavailable", wantType: "api_error"},
+		{name: "missing principal", protocol: RequestAdmissionOpenAI, eligibility: ledger.BalanceEligibilityPositiveAvailable, wantStatus: http.StatusServiceUnavailable, wantCode: "service_unavailable", wantType: "api_error"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			checker := &positiveBalanceCheckerStub{positive: tt.positive, err: tt.checkerErr}
+			checker := &positiveBalanceCheckerStub{eligibility: tt.eligibility, err: tt.checkerErr}
 			nextCalled := false
 			handler := PositiveBalanceGate(checker, PositiveBalanceOptions{Protocol: tt.protocol})(
 				http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -85,6 +90,9 @@ func TestPositiveBalanceGateProtocolResponses(t *testing.T) {
 			}
 			if nextCalled != tt.wantNext {
 				t.Fatalf("next called=%v, want %v", nextCalled, tt.wantNext)
+			}
+			if got := rec.Header().Get("Retry-After"); got != tt.wantRetryAfter {
+				t.Fatalf("Retry-After=%q, want %q", got, tt.wantRetryAfter)
 			}
 			if tt.withPrincipal {
 				if checker.calls != 1 || checker.userID != 42 {
@@ -117,7 +125,10 @@ func TestPositiveBalanceGateRunsAfterAdmissionAndFinalizesRejection(t *testing.T
 	events := make([]string, 0, 4)
 	session := &orderedAdmissionSession{events: &events}
 	acquirer := &orderedAdmissionAcquirer{events: &events, session: session}
-	checker := &positiveBalanceCheckerStub{onCheck: func() { events = append(events, "balance") }}
+	checker := &positiveBalanceCheckerStub{
+		eligibility: ledger.BalanceEligibilityInsufficient,
+		onCheck:     func() { events = append(events, "balance") },
+	}
 
 	handler := RequestAdmission(acquirer, RequestAdmissionOptions{
 		Scope: "/v1/chat/completions", Protocol: RequestAdmissionOpenAI,
@@ -146,13 +157,13 @@ func TestPositiveBalanceGateRunsAfterAdmissionAndFinalizesRejection(t *testing.T
 }
 
 func TestPositiveBalanceGateRecordsBoundedRejectionMetric(t *testing.T) {
-	checker := &positiveBalanceCheckerStub{}
+	checker := &positiveBalanceCheckerStub{eligibility: ledger.BalanceEligibilityInsufficient}
 	metrics := &positiveBalanceMetricsSpy{}
 	handler := PositiveBalanceGate(checker, PositiveBalanceOptions{
 		Protocol: RequestAdmissionAnthropic,
 		Metrics:  metrics,
 	})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Fatal("zero balance reached downstream handler")
+		t.Fatal("balance rejection reached downstream handler")
 	}))
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{UserID: 42}))

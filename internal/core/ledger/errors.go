@@ -11,6 +11,9 @@ var (
 	// ErrInsufficientBalance 表示用户余额不足，不能完成扣费。
 	ErrInsufficientBalance = errors.New("ledger: insufficient balance")
 
+	// ErrBalanceTemporarilyReserved 表示用户仍有总余额，但当前余额都被在途请求冻结。
+	ErrBalanceTemporarilyReserved = errors.New("ledger: balance temporarily reserved")
+
 	// ErrIdempotencyConflict 表示同一个幂等键被不同账本参数复用。
 	ErrIdempotencyConflict = errors.New("ledger: idempotency key conflict")
 

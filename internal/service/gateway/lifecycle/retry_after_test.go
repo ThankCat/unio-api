@@ -29,4 +29,8 @@ func TestProvableRetryAfter(t *testing.T) {
 	if got := ProvableRetryAfter(failure.New(failure.CodeGatewayChannelRateLimited)); got != 0 {
 		t.Fatalf("unproven retry after = %v", got)
 	}
+
+	if got := ProvableRetryAfter(failure.New(failure.CodeLedgerBalanceTemporarilyReserved)); got != time.Second {
+		t.Fatalf("temporarily reserved balance retry after = %v, want 1s", got)
+	}
 }

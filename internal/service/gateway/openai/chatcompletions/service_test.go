@@ -21,7 +21,9 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	observabilitymetrics "github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"go.uber.org/zap"
 )
 
 // fakeChatRouter 是 gateway 测试使用的 routing 替身。
@@ -88,6 +90,15 @@ type fakeChatMetricsRecorder struct {
 	rejections   []string
 }
 
+type fakeChatRoutingTraceStore struct {
+	upserts []sqlc.UpsertRoutingDecisionTraceParams
+}
+
+func (s *fakeChatRoutingTraceStore) UpsertRoutingDecisionTrace(_ context.Context, params sqlc.UpsertRoutingDecisionTraceParams) error {
+	s.upserts = append(s.upserts, params)
+	return nil
+}
+
 func (m *fakeChatMetricsRecorder) IncChatRequest(_ bool, outcome observabilitymetrics.ChatOutcome) {
 	m.requests = append(m.requests, outcome)
 }
@@ -150,13 +161,14 @@ type fakeChatSettlementExecutor struct {
 
 // fakeChatAuthorizer 是 gateway 测试使用的 chat authorization 替身。
 type fakeChatAuthorizer struct {
-	authorizeParams               []lifecycle.ChatAuthorizeParams
+	authorizeParams               []lifecycle.ChatAuthorizeNewRequestParams
 	releaseParams                 []lifecycle.ChatReleaseAuthorizationParams
 	releaseBillingExceptionParams []lifecycle.ChatReleaseBillingExceptionParams
 	authorization                 lifecycle.ChatAuthorization
 	authorizeErr                  error
 	releaseErr                    error
 	releaseBillingExceptionErr    error
+	requestLog                    requestlog.Service
 }
 
 // passthroughCandidatePreparer 是通用 service 测试使用的候选计划替身。
@@ -195,23 +207,52 @@ func (s *fakeChatSettlementExecutor) SettleSuccessfulChat(ctx context.Context, p
 	return s.err
 }
 
-// AuthorizeChat 记录冻结余额参数，并返回测试预设授权。
-func (a *fakeChatAuthorizer) AuthorizeChat(ctx context.Context, params lifecycle.ChatAuthorizeParams) (lifecycle.ChatAuthorization, error) {
+// AuthorizeNewChat 模拟生产原子边界：授权失败不写 request，成功时同时返回 running request。
+func (a *fakeChatAuthorizer) AuthorizeNewChat(ctx context.Context, params lifecycle.ChatAuthorizeNewRequestParams) (lifecycle.ChatAuthorizedRequest, error) {
 	a.authorizeParams = append(a.authorizeParams, params)
 	if a.authorizeErr != nil {
-		return lifecycle.ChatAuthorization{}, a.authorizeErr
+		return lifecycle.ChatAuthorizedRequest{}, a.authorizeErr
+	}
+
+	record := requestRecordFromCreateParams(params.Request, 1)
+	if a.requestLog != nil {
+		created, err := a.requestLog.CreateRequest(ctx, params.Request)
+		if err != nil {
+			return lifecycle.ChatAuthorizedRequest{}, err
+		}
+		if _, err := a.requestLog.MarkRequestRunning(ctx, created.ID); err != nil {
+			return lifecycle.ChatAuthorizedRequest{}, err
+		}
+		record = created
+		record.Status = requestlog.RequestStatusRunning
 	}
 
 	authorization := a.authorization
 	if authorization.ReservationID == 0 {
 		authorization.ReservationID = 7000 + int64(len(a.authorizeParams))
 	}
-	authorization.RequestRecordID = params.RequestRecord.ID
+	authorization.RequestRecordID = record.ID
 	if authorization.Currency == "" {
 		authorization.Currency = "USD"
 	}
 
-	return authorization, nil
+	return lifecycle.ChatAuthorizedRequest{RequestRecord: record, Authorization: authorization}, nil
+}
+
+func requestRecordFromCreateParams(params requestlog.CreateRequestParams, id int64) requestlog.RequestRecord {
+	return requestlog.RequestRecord{
+		ID:                   id,
+		RequestID:            params.RequestID,
+		UserID:               params.UserID,
+		APIKeyID:             params.APIKeyID,
+		RequestedModelID:     params.RequestedModelID,
+		IngressProtocol:      params.IngressProtocol,
+		Endpoint:             params.Endpoint,
+		Stream:               params.Stream,
+		Status:               requestlog.RequestStatusRunning,
+		StartedAt:            params.StartedAt,
+		RequestedServiceTier: params.RequestedServiceTier,
+	}
 }
 
 // ReleaseChat 记录释放冻结余额参数，并返回测试预设错误。
@@ -684,6 +725,9 @@ func newChatCompletionServiceForTest(router ChatRouter, registry AdapterRegistry
 
 // newChatCompletionServiceForTestWithAuthorizer 创建可注入授权替身的 gateway service。
 func newChatCompletionServiceForTestWithAuthorizer(router ChatRouter, registry AdapterRegistry, retryClassifier lifecycle.RetryClassifier, requestLog requestlog.Service, settlement lifecycle.ChatSettlementExecutor, authorizer lifecycle.ChatAuthorizer) *ChatCompletionService {
+	if fake, ok := authorizer.(*fakeChatAuthorizer); ok {
+		fake.requestLog = requestLog
+	}
 	return NewChatCompletionService(
 		router,
 		registry,
@@ -1071,6 +1115,8 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotCallAdapterWhenAuthoriz
 		settlement,
 		authorizer,
 	)
+	traceStore := &fakeChatRoutingTraceStore{}
+	service.SetRoutingTraceRecorder(lifecycle.NewRoutingTraceRecorder(traceStore, zap.NewNop()))
 
 	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
 	if !errors.Is(err, authorizationErr) {
@@ -1079,8 +1125,8 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotCallAdapterWhenAuthoriz
 	if len(authorizer.authorizeParams) != 1 {
 		t.Fatalf("expected one authorization attempt, got %d", len(authorizer.authorizeParams))
 	}
-	if authorizer.authorizeParams[0].RequestRecord.ID != 1 {
-		t.Fatalf("expected authorization request record id 1, got %d", authorizer.authorizeParams[0].RequestRecord.ID)
+	if authorizer.authorizeParams[0].Request.UserID != 42 {
+		t.Fatalf("expected authorization request user id 42, got %d", authorizer.authorizeParams[0].Request.UserID)
 	}
 	if len(authorizer.authorizeParams[0].CandidatePrices) == 0 {
 		t.Fatalf("expected authorization to receive candidate prices, got none")
@@ -1100,11 +1146,14 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotCallAdapterWhenAuthoriz
 	if len(requestLog.markAttemptFailedArgs) != 0 {
 		t.Fatalf("expected no failed attempt before authorization succeeds, got %d", len(requestLog.markAttemptFailedArgs))
 	}
-	if len(requestLog.markRequestFailedArgs) != 1 {
-		t.Fatalf("expected request to fail once, got %d", len(requestLog.markRequestFailedArgs))
+	if len(requestLog.createRequests) != 0 || len(requestLog.markRequestRunningIDs) != 0 {
+		t.Fatalf("authorization rejection must not create a request, create=%d running=%d", len(requestLog.createRequests), len(requestLog.markRequestRunningIDs))
 	}
-	if requestLog.markRequestFailedArgs[0].ErrorCode != "chat_authorization_failed" {
-		t.Fatalf("expected request error code %q, got %q", "chat_authorization_failed", requestLog.markRequestFailedArgs[0].ErrorCode)
+	if len(requestLog.markRequestFailedArgs) != 0 {
+		t.Fatalf("authorization rejection must not mark a request failed, got %d", len(requestLog.markRequestFailedArgs))
+	}
+	if len(traceStore.upserts) != 0 {
+		t.Fatalf("authorization rejection must not write a routing trace, got %d", len(traceStore.upserts))
 	}
 }
 
@@ -2021,6 +2070,8 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotCallAdapterWhenAuthoriz
 		settlement,
 		authorizer,
 	)
+	traceStore := &fakeChatRoutingTraceStore{}
+	service.SetRoutingTraceRecorder(lifecycle.NewRoutingTraceRecorder(traceStore, zap.NewNop()))
 
 	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
 		t.Fatalf("expected no stream chunk after authorization failure, got %#v", chunk)
@@ -2047,11 +2098,14 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotCallAdapterWhenAuthoriz
 	if len(requestLog.markAttemptFailedArgs) != 0 {
 		t.Fatalf("expected no failed stream attempt before authorization succeeds, got %d", len(requestLog.markAttemptFailedArgs))
 	}
-	if len(requestLog.markRequestFailedArgs) != 1 {
-		t.Fatalf("expected stream request to fail once, got %d", len(requestLog.markRequestFailedArgs))
+	if len(requestLog.createRequests) != 0 || len(requestLog.markRequestRunningIDs) != 0 {
+		t.Fatalf("stream authorization rejection must not create a request, create=%d running=%d", len(requestLog.createRequests), len(requestLog.markRequestRunningIDs))
 	}
-	if requestLog.markRequestFailedArgs[0].ErrorCode != "chat_authorization_failed" {
-		t.Fatalf("expected request error code %q, got %q", "chat_authorization_failed", requestLog.markRequestFailedArgs[0].ErrorCode)
+	if len(requestLog.markRequestFailedArgs) != 0 {
+		t.Fatalf("stream authorization rejection must not mark a request failed, got %d", len(requestLog.markRequestFailedArgs))
+	}
+	if len(traceStore.upserts) != 0 {
+		t.Fatalf("stream authorization rejection must not write a routing trace, got %d", len(traceStore.upserts))
 	}
 }
 

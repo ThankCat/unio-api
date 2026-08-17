@@ -795,6 +795,75 @@ WHERE (sqlc.narg('status')::text IS NULL OR c.status = sqlc.narg('status')::text
 
 -- name: ChannelOpsDetail :one
 -- ChannelOpsDetail 单渠道（抽屉概览）attempt 指标。attempt_total 口径同上：合格 attempt（succeeded+failed）。
+WITH cache_usage AS (
+    SELECT u.*
+    FROM request_records r
+    JOIN usage_records u ON u.request_record_id = r.id
+    WHERE r.final_channel_id = sqlc.arg('channel_id')
+      AND u.usage_source IN ('upstream_response', 'upstream_stream')
+      AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
+      AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
+),
+cache AS (
+    SELECT
+        COALESCE(SUM(uncached_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS cache_uncached_input,
+        COALESCE(SUM(cache_read_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS cache_read_input,
+        COALESCE(SUM(cache_write_5m_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS cache_write_5m_input,
+        COALESCE(SUM(cache_write_1h_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS cache_write_1h_input,
+        COALESCE(SUM(cache_write_30m_input_tokens) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ), 0)::bigint AS cache_write_30m_input,
+        COUNT(*) AS cache_usage_records,
+        COUNT(*) FILTER (WHERE
+            uncached_input_tokens_state = 'known'
+            AND cache_read_input_tokens_state = 'known'
+            AND cache_write_5m_input_tokens_state <> 'unknown'
+            AND cache_write_1h_input_tokens_state <> 'unknown'
+            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND uncached_input_tokens + cache_read_input_tokens
+                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+        ) AS cache_evaluable_records,
+        COUNT(*) FILTER (WHERE cache_read_input_tokens_state = 'not_applicable') AS cache_read_not_applicable_records
+    FROM cache_usage
+)
 SELECT
     COUNT(*) FILTER (WHERE status = 'succeeded' OR fault_party = 'upstream') AS attempt_total,
     COUNT(*) FILTER (WHERE status = 'succeeded') AS attempt_succeeded,
@@ -815,7 +884,15 @@ SELECT
         CASE WHEN status = 'succeeded' AND completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
     (MAX(completed_at) FILTER (WHERE status = 'succeeded'))::timestamptz AS last_success_at,
-    (MAX(completed_at) FILTER (WHERE status = 'failed' AND fault_party = 'upstream'))::timestamptz AS last_failure_at
+    (MAX(completed_at) FILTER (WHERE status = 'failed' AND fault_party = 'upstream'))::timestamptz AS last_failure_at,
+    (SELECT cache_uncached_input FROM cache) AS cache_uncached_input,
+    (SELECT cache_read_input FROM cache) AS cache_read_input,
+    (SELECT cache_write_5m_input FROM cache) AS cache_write_5m_input,
+    (SELECT cache_write_1h_input FROM cache) AS cache_write_1h_input,
+    (SELECT cache_write_30m_input FROM cache) AS cache_write_30m_input,
+    (SELECT cache_usage_records FROM cache) AS cache_usage_records,
+    (SELECT cache_evaluable_records FROM cache) AS cache_evaluable_records,
+    (SELECT cache_read_not_applicable_records FROM cache) AS cache_read_not_applicable_records
 FROM request_attempts
 WHERE channel_id = sqlc.arg('channel_id')
   AND (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)

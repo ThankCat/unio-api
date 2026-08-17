@@ -15,10 +15,10 @@ import (
 // 两侧 service 调用同一份实现，避免逐字复制。协议族 ad-hoc string code 文案映射通过 service.go
 // 注入的 messagesSafeMessage 闭包提供。
 
-func (s *MessagesService) createMessageRequestRecord(ctx context.Context, principal *auth.APIKeyPrincipal, req gatewayapi.MessageRequest, stream bool) (requestlog.RequestRecord, error) {
+func (s *MessagesService) prepareMessageRequestRecord(ctx context.Context, principal *auth.APIKeyPrincipal, req gatewayapi.MessageRequest, stream bool) (requestlog.CreateRequestParams, error) {
 	// 推理强度优先取 output_config.effort（官方档位，透传在 Extensions 里），缺失再退回 thinking.budget_tokens。
 	reasoning := lifecycle.NormalizeAnthropicReasoning(req.Extensions["output_config"], req.Thinking)
-	return s.lifecycle.CreateRequest(ctx, principal, req.Model, stream, reasoning)
+	return s.lifecycle.PrepareRequest(ctx, principal, req.Model, stream, reasoning, "")
 }
 
 func (s *MessagesService) markRequestRecordFailed(ctx context.Context, requestRecord requestlog.RequestRecord, code string, err error) {

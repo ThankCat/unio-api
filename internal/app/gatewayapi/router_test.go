@@ -14,6 +14,7 @@ import (
 	gatewaychat "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	gatewaymodels "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/models"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/platform/logging"
@@ -34,15 +35,15 @@ type routerTestAPIKeyAuthenticator struct {
 }
 
 type routerTestPositiveBalanceChecker struct {
-	positive bool
-	calls    int
-	userIDs  []int64
+	eligibility ledger.BalanceEligibility
+	calls       int
+	userIDs     []int64
 }
 
-func (c *routerTestPositiveBalanceChecker) HasPositiveAvailableBalance(_ context.Context, userID int64) (bool, error) {
+func (c *routerTestPositiveBalanceChecker) GetBalanceEligibility(_ context.Context, userID int64) (ledger.BalanceEligibility, error) {
 	c.calls++
 	c.userIDs = append(c.userIDs, userID)
-	return c.positive, nil
+	return c.eligibility, nil
 }
 
 // AuthenticateAPIKey 记录收到的 token，并返回测试预设的认证结果。
@@ -415,7 +416,7 @@ func TestRouterPositiveBalanceGateCoversOnlyBillableGenerationRoutes(t *testing.
 	authenticator := &routerTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 42, KeyPrefix: "unio_sk_test"},
 	}
-	checker := &routerTestPositiveBalanceChecker{}
+	checker := &routerTestPositiveBalanceChecker{eligibility: ledger.BalanceEligibilityInsufficient}
 	handler := NewRouter(RouterDeps{
 		Logger:              zap.NewNop(),
 		APIKeyAuthenticator: authenticator,

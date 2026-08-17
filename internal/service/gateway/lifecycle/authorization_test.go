@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"math/big"
+	"reflect"
 	"testing"
 
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
@@ -25,14 +26,21 @@ func (b *chatAuthorizationBilling) EstimateAuthorizationAmount(estimate billing.
 }
 
 type chatAuthorizationLedger struct {
-	preAuthorizeParams ledger.PreAuthorizeParams
-	reservation        ledger.Reservation
-	err                error
+	preAuthorizeParams                 ledger.PreAuthorizeParams
+	createRequestAndPreAuthorizeParams ledger.CreateRequestAndPreAuthorizeParams
+	reservation                        ledger.Reservation
+	authorizedRequest                  ledger.AuthorizedRequest
+	err                                error
 }
 
 func (l *chatAuthorizationLedger) PreAuthorize(ctx context.Context, params ledger.PreAuthorizeParams) (ledger.Reservation, error) {
 	l.preAuthorizeParams = params
 	return l.reservation, l.err
+}
+
+func (l *chatAuthorizationLedger) CreateRequestAndPreAuthorize(_ context.Context, params ledger.CreateRequestAndPreAuthorizeParams) (ledger.AuthorizedRequest, error) {
+	l.createRequestAndPreAuthorizeParams = params
+	return l.authorizedRequest, l.err
 }
 
 func (l *chatAuthorizationLedger) Release(ctx context.Context, params ledger.ReleaseParams) (ledger.Reservation, error) {
@@ -41,6 +49,82 @@ func (l *chatAuthorizationLedger) Release(ctx context.Context, params ledger.Rel
 
 func (l *chatAuthorizationLedger) ReleaseWithBillingException(ctx context.Context, params ledger.ReleaseWithBillingExceptionParams) (ledger.Reservation, error) {
 	return ledger.Reservation{}, nil
+}
+
+func TestChatAuthorizationAuthorizesNewRequest(t *testing.T) {
+	price := billing.CustomerPriceSnapshot{
+		Currency:           "USD",
+		PricingUnit:        billing.PricingUnitPer1MTokens,
+		UncachedInputPrice: gatewayTestNumeric(1, 0),
+		OutputPrice:        gatewayTestNumeric(12, 0),
+		FormulaVersion:     billing.FormulaVersionV1,
+	}
+	requestParams := requestlog.CreateRequestParams{
+		RequestID:        "req_atomic_authorization",
+		UserID:           12,
+		APIKeyID:         34,
+		RequestedModelID: "gpt-test",
+		IngressProtocol:  requestlog.ProtocolOpenAI,
+		Endpoint:         requestlog.EndpointChatCompletions,
+		Stream:           true,
+	}
+	requestRecord := requestlog.RequestRecord{
+		ID:               44,
+		RequestID:        requestParams.RequestID,
+		UserID:           requestParams.UserID,
+		APIKeyID:         requestParams.APIKeyID,
+		RequestedModelID: requestParams.RequestedModelID,
+		IngressProtocol:  requestParams.IngressProtocol,
+		Endpoint:         requestParams.Endpoint,
+		Stream:           requestParams.Stream,
+		Status:           requestlog.RequestStatusRunning,
+	}
+	reservation := ledger.Reservation{
+		ID:               7001,
+		UserID:           requestParams.UserID,
+		RequestRecordID:  requestRecord.ID,
+		Currency:         "USD",
+		EstimatedAmount:  gatewayTestNumeric(12, 0),
+		AuthorizedAmount: gatewayTestNumeric(7, 0),
+	}
+	ledgerService := &chatAuthorizationLedger{
+		authorizedRequest: ledger.AuthorizedRequest{
+			Request:     requestRecord,
+			Reservation: reservation,
+		},
+	}
+	service := NewChatAuthorizationService(&chatAuthorizationBilling{}, ledgerService, 0)
+
+	result, err := service.AuthorizeNewChat(context.Background(), ChatAuthorizeNewRequestParams{
+		Request:             requestParams,
+		CandidatePrices:     []billing.CustomerPriceSnapshot{price},
+		InputTokens:         321,
+		MaxCompletionTokens: 128,
+	})
+	if err != nil {
+		t.Fatalf("AuthorizeNewChat returned error: %v", err)
+	}
+
+	gotParams := ledgerService.createRequestAndPreAuthorizeParams
+	if !reflect.DeepEqual(gotParams.Request, requestParams) {
+		t.Fatalf("request params mismatch: got %#v, want %#v", gotParams.Request, requestParams)
+	}
+	if !chatSettlementSameNumeric(gotParams.EstimatedAmount, gatewayTestNumeric(12, 0)) || gotParams.Currency != "USD" {
+		t.Fatalf("unexpected authorization amount: %#v", gotParams)
+	}
+	if gotParams.IdempotencyKeyPrefix != "chat:authorize:" || gotParams.Reason != "chat completion authorization" {
+		t.Fatalf("unexpected ledger metadata: %#v", gotParams)
+	}
+	if !reflect.DeepEqual(result.RequestRecord, requestRecord) {
+		t.Fatalf("request record mismatch: got %#v, want %#v", result.RequestRecord, requestRecord)
+	}
+	if result.Authorization.ReservationID != reservation.ID ||
+		result.Authorization.RequestRecordID != reservation.RequestRecordID ||
+		result.Authorization.Currency != reservation.Currency ||
+		!chatSettlementSameNumeric(result.Authorization.EstimatedAmount, reservation.EstimatedAmount) ||
+		!chatSettlementSameNumeric(result.Authorization.AuthorizedAmount, reservation.AuthorizedAmount) {
+		t.Fatalf("authorization mismatch: got %#v, reservation %#v", result.Authorization, reservation)
+	}
 }
 
 // TestChatAuthorizationFreezesOnMostExpensiveCandidate 验证阶段 15：渠道未定时按候选池里

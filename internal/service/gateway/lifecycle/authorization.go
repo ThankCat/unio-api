@@ -22,13 +22,30 @@ const DefaultAuthorizationMaxCompletionTokens int64 = 4096
 // ChatAuthorizer 定义 chat 请求调用上游前冻结余额、失败后释放冻结余额的能力。
 // gateway 只依赖这个边界，不直接知道 price snapshot 和 ledger reservation 的内部写法。
 type ChatAuthorizer interface {
-	// AuthorizeChat 在调用上游前为本次 chat 请求冻结余额。
-	AuthorizeChat(ctx context.Context, params ChatAuthorizeParams) (ChatAuthorization, error)
+	// AuthorizeNewChat 原子创建持久请求并在调用上游前冻结余额。
+	AuthorizeNewChat(ctx context.Context, params ChatAuthorizeNewRequestParams) (ChatAuthorizedRequest, error)
 	// ReleaseChat 在请求没有进入可扣费成功语义时释放冻结余额。
 	ReleaseChat(ctx context.Context, params ChatReleaseAuthorizationParams) error
 	// ReleaseChatForBillingException 释放冻结余额，并记录平台账务异常事实。
 	// 它用于上游可能已经产生成本、但本次请求没有可靠 usage、不能向用户扣费的场景。
 	ReleaseChatForBillingException(ctx context.Context, params ChatReleaseBillingExceptionParams) error
+}
+
+// ChatAuthorizeNewRequestParams 表示原子创建 request record 与余额预授权所需事实。
+type ChatAuthorizeNewRequestParams struct {
+	Request requestlog.CreateRequestParams
+
+	CandidatePrices          []billing.CustomerPriceSnapshot
+	LongContextPolicy        billing.LongContextPolicy
+	InputTokens              int64
+	MaxCompletionTokens      int64
+	CandidateMaxOutputTokens int64
+}
+
+// ChatAuthorizedRequest 是已经提交的持久请求与余额预授权。
+type ChatAuthorizedRequest struct {
+	RequestRecord requestlog.RequestRecord
+	Authorization ChatAuthorization
 }
 
 // ChatAuthorizeParams 表示一次 chat 请求冻结余额所需的业务事实。
@@ -94,6 +111,7 @@ type ChatAuthorizationBilling interface {
 // ChatAuthorizationLedger 定义创建和释放余额冻结的账本能力。
 type ChatAuthorizationLedger interface {
 	PreAuthorize(ctx context.Context, params ledger.PreAuthorizeParams) (ledger.Reservation, error)
+	CreateRequestAndPreAuthorize(ctx context.Context, params ledger.CreateRequestAndPreAuthorizeParams) (ledger.AuthorizedRequest, error)
 	Release(ctx context.Context, params ledger.ReleaseParams) (ledger.Reservation, error)
 	// ReleaseWithBillingException 在释放冻结余额的同时记录平台账务异常。
 	// gateway 通过它保留“没有扣用户钱，但平台可能承担成本”的审计事实。
@@ -142,40 +160,15 @@ func (s *ChatAuthorizationService) resolveAuthorizationMaxOutputTokens(clientMax
 // AuthorizeChat 在调用上游前冻结本次请求的预估费用。
 // 最终扣费仍以 settlement 阶段的真实 usage + 实际命中渠道售价为准。
 func (s *ChatAuthorizationService) AuthorizeChat(ctx context.Context, params ChatAuthorizeParams) (ChatAuthorization, error) {
-	if len(params.CandidatePrices) == 0 {
-		return ChatAuthorization{}, failure.New(
-			failure.CodeGatewayChatAuthorizationFailed,
-			failure.WithMessage("chat authorization requires at least one candidate price"),
-		)
-	}
-
-	// 客户未给出输出上限时，用候选模型 max_output_tokens（取最大值）做保守冻结上界，
-	// 候选也缺失才回退进程级兜底；不会改写转发给上游的请求体，仅影响预冻结额度。
-	estimate := billing.AuthorizationEstimate{
-		InputTokens:         params.InputTokens,
-		MaxCompletionTokens: s.resolveAuthorizationMaxOutputTokens(params.MaxCompletionTokens, params.CandidateMaxOutputTokens),
-	}
-
-	// 保守上界：在候选池里取「按本次 token 估算」最贵的一条售价做冻结。
-	// 启用长上下文阶梯时，同时估算普通价和阶梯价并取较高值，避免本地输入估算未过门槛、
-	// 上游真实 usage 过门槛后才发现冻结金额不足。最终是否应用阶梯价仍由结算按真实 usage 决定。
-	var worst billing.CustomerCharge
-	found := false
-	for _, price := range params.CandidatePrices {
-		prices, err := authorizationPriceScenarios(price, params.LongContextPolicy)
-		if err != nil {
-			return ChatAuthorization{}, err
-		}
-		for _, priced := range prices {
-			charge, err := s.billing.EstimateAuthorizationAmount(estimate, priced)
-			if err != nil {
-				return ChatAuthorization{}, err
-			}
-			if !found || chatSettlementNumericGreaterThan(charge.Amount, worst.Amount) {
-				worst = charge
-				found = true
-			}
-		}
+	worst, err := s.estimateAuthorizationAmount(
+		params.CandidatePrices,
+		params.LongContextPolicy,
+		params.InputTokens,
+		params.MaxCompletionTokens,
+		params.CandidateMaxOutputTokens,
+	)
+	if err != nil {
+		return ChatAuthorization{}, err
 	}
 
 	// 用 request_record_id 做幂等边界，避免同一请求重复冻结余额。
@@ -191,13 +184,92 @@ func (s *ChatAuthorizationService) AuthorizeChat(ctx context.Context, params Cha
 		return ChatAuthorization{}, err
 	}
 
+	return chatAuthorizationFromReservation(reservation), nil
+}
+
+// AuthorizeNewChat 在一个 PostgreSQL 事务内创建 running request record 与余额 reservation。
+func (s *ChatAuthorizationService) AuthorizeNewChat(ctx context.Context, params ChatAuthorizeNewRequestParams) (ChatAuthorizedRequest, error) {
+	worst, err := s.estimateAuthorizationAmount(
+		params.CandidatePrices,
+		params.LongContextPolicy,
+		params.InputTokens,
+		params.MaxCompletionTokens,
+		params.CandidateMaxOutputTokens,
+	)
+	if err != nil {
+		return ChatAuthorizedRequest{}, err
+	}
+
+	result, err := s.ledger.CreateRequestAndPreAuthorize(ctx, ledger.CreateRequestAndPreAuthorizeParams{
+		Request:              params.Request,
+		EstimatedAmount:      worst.Amount,
+		Currency:             worst.Currency,
+		IdempotencyKeyPrefix: "chat:authorize:",
+		Reason:               "chat completion authorization",
+	})
+	if err != nil {
+		return ChatAuthorizedRequest{}, err
+	}
+
+	return ChatAuthorizedRequest{
+		RequestRecord: result.Request,
+		Authorization: chatAuthorizationFromReservation(result.Reservation),
+	}, nil
+}
+
+func (s *ChatAuthorizationService) estimateAuthorizationAmount(
+	candidatePrices []billing.CustomerPriceSnapshot,
+	longContextPolicy billing.LongContextPolicy,
+	inputTokens int64,
+	maxCompletionTokens int64,
+	candidateMaxOutputTokens int64,
+) (billing.CustomerCharge, error) {
+	if len(candidatePrices) == 0 {
+		return billing.CustomerCharge{}, failure.New(
+			failure.CodeGatewayChatAuthorizationFailed,
+			failure.WithMessage("chat authorization requires at least one candidate price"),
+		)
+	}
+
+	// 客户未给出输出上限时，用候选模型 max_output_tokens（取最大值）做保守冻结上界，
+	// 候选也缺失才回退进程级兜底；不会改写转发给上游的请求体，仅影响预冻结额度。
+	estimate := billing.AuthorizationEstimate{
+		InputTokens:         inputTokens,
+		MaxCompletionTokens: s.resolveAuthorizationMaxOutputTokens(maxCompletionTokens, candidateMaxOutputTokens),
+	}
+
+	// 保守上界：在候选池里取「按本次 token 估算」最贵的一条售价做冻结。
+	// 启用长上下文阶梯时，同时估算普通价和阶梯价并取较高值，避免本地输入估算未过门槛、
+	// 上游真实 usage 过门槛后才发现冻结金额不足。最终是否应用阶梯价仍由结算按真实 usage 决定。
+	var worst billing.CustomerCharge
+	found := false
+	for _, price := range candidatePrices {
+		prices, err := authorizationPriceScenarios(price, longContextPolicy)
+		if err != nil {
+			return billing.CustomerCharge{}, err
+		}
+		for _, priced := range prices {
+			charge, err := s.billing.EstimateAuthorizationAmount(estimate, priced)
+			if err != nil {
+				return billing.CustomerCharge{}, err
+			}
+			if !found || chatSettlementNumericGreaterThan(charge.Amount, worst.Amount) {
+				worst = charge
+				found = true
+			}
+		}
+	}
+	return worst, nil
+}
+
+func chatAuthorizationFromReservation(reservation ledger.Reservation) ChatAuthorization {
 	return ChatAuthorization{
 		ReservationID:    reservation.ID,
 		RequestRecordID:  reservation.RequestRecordID,
 		EstimatedAmount:  reservation.EstimatedAmount,
 		AuthorizedAmount: reservation.AuthorizedAmount,
 		Currency:         reservation.Currency,
-	}, nil
+	}
 }
 
 // authorizationPriceScenarios 返回授权必须覆盖的普通价和长上下文价。

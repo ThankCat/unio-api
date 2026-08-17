@@ -573,6 +573,67 @@ func TestRouterV1ChatCompletionMapsInsufficientQuota(t *testing.T) {
 	}
 }
 
+func TestRouterV1ChatCompletionMapsTemporarilyReservedBalance(t *testing.T) {
+	tests := []struct {
+		name   string
+		stream bool
+	}{
+		{name: "non-stream"},
+		{name: "stream before first chunk", stream: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := &fakeChatCompletionService{
+				err: failure.New(failure.CodeLedgerBalanceTemporarilyReserved),
+			}
+			handler := newTestRouter(&fakeAPIKeyAuthenticator{
+				principal: &auth.APIKeyPrincipal{
+					APIKeyID:  1,
+					UserID:    1,
+					KeyPrefix: "unio_sk_test",
+				},
+			}, service, nil)
+
+			stream := tt.stream
+			reqBody := ChatCompletionRequest{
+				Model: "openai/gpt-4.1",
+				Messages: []ChatMessage{
+					{Role: "user", Content: jsonContent("Hello")},
+				},
+				Stream: &stream,
+			}
+			buf := new(bytes.Buffer)
+			if err := json.NewEncoder(buf).Encode(reqBody); err != nil {
+				t.Fatalf("encode request body: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
+			req.Header.Set("Authorization", "Bearer unio_sk_test")
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("status=%d, want 429 body=%s", rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("Retry-After"); got != "1" {
+				t.Fatalf("Retry-After=%q, want 1", got)
+			}
+			if strings.Contains(rec.Body.String(), "data:") {
+				t.Fatalf("pre-first-chunk failure must use JSON body, got %q", rec.Body.String())
+			}
+
+			var body httpx.ErrorResponse
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response body: %v", err)
+			}
+			if body.Error.Code != "rate_limit_exceeded" || body.Error.Type != "rate_limit_error" {
+				t.Fatalf("error code=%q type=%q", body.Error.Code, body.Error.Type)
+			}
+		})
+	}
+}
+
 func TestRouterV1ChatCompletionPreservesExplicitZeroTemperature(t *testing.T) {
 	authenticator := &fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{

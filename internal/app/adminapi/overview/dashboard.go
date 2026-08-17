@@ -149,17 +149,6 @@ type gatewayTtftStatsDTO struct {
 	HasData  bool    `json:"has_data"`
 }
 
-type cacheStatsDTO struct {
-	ReadRate            float64 `json:"read_rate"`
-	WriteRate           float64 `json:"write_rate"`
-	InputTokens         int64   `json:"input_tokens"`
-	UncachedTokens      int64   `json:"uncached_tokens"`
-	CacheReadTokens     int64   `json:"cache_read_tokens"`
-	CacheWrite5mTokens  int64   `json:"cache_write_5m_tokens"`
-	CacheWrite1hTokens  int64   `json:"cache_write_1h_tokens"`
-	CacheWrite30mTokens int64   `json:"cache_write_30m_tokens"`
-}
-
 type radarRequestsDTO struct {
 	Total       int64   `json:"total"`
 	Succeeded   int64   `json:"succeeded"`
@@ -206,7 +195,7 @@ type radarDTO struct {
 	GatewayTtft       gatewayTtftStatsDTO       `json:"gateway_ttft"`
 	TPS               float64                   `json:"tps"`
 	Tokens            dashboardTokensDTO        `json:"tokens"`
-	Cache             cacheStatsDTO             `json:"cache"`
+	Cache             adminhttp.CacheStatsDTO   `json:"cache"`
 	RevenueUSD        string                    `json:"revenue_usd"`
 	CostUSD           string                    `json:"cost_usd"`
 	MarginUSD         string                    `json:"margin_usd"`
@@ -431,16 +420,7 @@ func toRadarDTO(r dashboard.RadarReport) radarDTO {
 		},
 		TPS:    r.TPS,
 		Tokens: dashboardTokensDTO{Input: r.Tokens.Input, Output: r.Tokens.Output, Total: r.Tokens.Total},
-		Cache: cacheStatsDTO{
-			ReadRate:            r.Cache.ReadRate,
-			WriteRate:           r.Cache.WriteRate,
-			InputTokens:         r.Cache.InputTokens,
-			UncachedTokens:      r.Cache.UncachedTokens,
-			CacheReadTokens:     r.Cache.CacheReadTokens,
-			CacheWrite5mTokens:  r.Cache.CacheWrite5mTokens,
-			CacheWrite1hTokens:  r.Cache.CacheWrite1hTokens,
-			CacheWrite30mTokens: r.Cache.CacheWrite30mTokens,
-		},
+		Cache:  adminhttp.CacheStatsFrom(r.Cache),
 
 		RevenueUSD:        r.RevenueUSD,
 		CostUSD:           r.CostUSD,

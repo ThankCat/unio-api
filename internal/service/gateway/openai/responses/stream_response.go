@@ -72,7 +72,7 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		return err
 	}
 
-	requestRecord, err := s.lifecycle.CreateRequestWithServiceTier(ctx, principal, req.Model, true, lifecycle.NormalizeOpenAIEffort(effort, req.Model), tierRequest.Tier)
+	requestParams, err := s.lifecycle.PrepareRequest(ctx, principal, req.Model, true, lifecycle.NormalizeOpenAIEffort(effort, req.Model), tierRequest.Tier)
 	if err != nil {
 		return err
 	}
@@ -90,6 +90,10 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 	plan, err := s.router.PlanChat(planCtx, routeRequest)
 	lifecycle.EndGatewaySpan(planSpan, err)
 	if err != nil {
+		requestRecord, createErr := s.lifecycle.CreatePreparedRequest(ctx, requestParams)
+		if createErr != nil {
+			return createErr
+		}
 		s.lifecycle.RecordRoutingFailure(ctx, requestRecord, principal.RouteID, err)
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
@@ -111,6 +115,10 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 
 	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, plan.RouteMode, true, true, stickySession.BoundChannelID())
 	if err != nil {
+		requestRecord, createErr := s.lifecycle.CreatePreparedRequest(ctx, requestParams)
+		if createErr != nil {
+			return createErr
+		}
 		if principal.RouteID != nil {
 			s.lifecycle.RecordRoutingDecisionFailure(ctx, lifecycle.RoutingDecisionTraceInput{
 				Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
@@ -121,6 +129,20 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return err
 	}
+
+	authorized, err := s.lifecycle.AuthorizeNewChat(ctx, lifecycle.ChatAuthorizeNewRequestParams{
+		Request:                  requestParams,
+		CandidatePrices:          candidatePlan.CandidateSalePricesForTier(requestParams.RequestedServiceTier),
+		LongContextPolicy:        candidatePlan.LongContextPolicy(),
+		InputTokens:              candidatePlan.ConservativeInputTokens,
+		MaxCompletionTokens:      estimateMaxCompletionTokens(req),
+		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),
+	})
+	if err != nil {
+		return err
+	}
+	requestRecord := authorized.RequestRecord
+	authorization := authorized.Authorization
 	stickySession.ApplyPlanOutcome(ctx, candidatePlan)
 	if principal.RouteID != nil {
 		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
@@ -128,27 +150,6 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
 			Sticky: stickySession.Audit(), Status: lifecycle.TraceStatusPartial,
 		})
-	}
-
-	authorization, err := s.lifecycle.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
-		RequestRecord:            requestRecord,
-		Principal:                principal,
-		CandidatePrices:          candidatePlan.CandidateSalePricesForTier(requestRecord.RequestedServiceTier),
-		LongContextPolicy:        candidatePlan.LongContextPolicy(),
-		InputTokens:              candidatePlan.ConservativeInputTokens,
-		MaxCompletionTokens:      estimateMaxCompletionTokens(req),
-		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),
-	})
-	if err != nil {
-		if principal.RouteID != nil {
-			s.lifecycle.CompleteRoutingTrace(ctx, lifecycle.RoutingDecisionTraceInput{
-				Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
-				PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
-				Sticky: stickySession.Audit(),
-			}, lifecycle.RunResult{}, err)
-		}
-		s.lifecycle.MarkRequestFailed(ctx, requestRecord, "chat_authorization_failed", err)
-		return err
 	}
 
 	var (

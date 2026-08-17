@@ -110,6 +110,7 @@ type fakeMessagesRequestLog struct {
 	nextAttemptID int64
 
 	createRequests        []requestlog.CreateRequestParams
+	markRequestRunning    []int64
 	markRequestFailedArgs []requestlog.MarkRequestFailedParams
 	markRequestCanceled   []requestlog.MarkRequestCanceledParams
 	deliveryStarted       []int64
@@ -136,6 +137,7 @@ func (s *fakeMessagesRequestLog) CreateRequest(ctx context.Context, params reque
 }
 
 func (s *fakeMessagesRequestLog) MarkRequestRunning(ctx context.Context, id int64) (requestlog.RequestRecord, error) {
+	s.markRequestRunning = append(s.markRequestRunning, id)
 	return requestlog.RequestRecord{ID: id, Status: requestlog.RequestStatusRunning}, nil
 }
 
@@ -225,27 +227,45 @@ func (s *fakeMessagesSettlement) SettleSuccessfulChat(ctx context.Context, param
 
 // fakeMessagesAuthorizer 是 messages 测试使用的授权替身。
 type fakeMessagesAuthorizer struct {
-	authorizeParams               []lifecycle.ChatAuthorizeParams
+	authorizeParams               []lifecycle.ChatAuthorizeNewRequestParams
 	releaseParams                 []lifecycle.ChatReleaseAuthorizationParams
 	releaseBillingExceptionParams []lifecycle.ChatReleaseBillingExceptionParams
 	authorization                 lifecycle.ChatAuthorization
 	authorizeErr                  error
 }
 
-func (a *fakeMessagesAuthorizer) AuthorizeChat(ctx context.Context, params lifecycle.ChatAuthorizeParams) (lifecycle.ChatAuthorization, error) {
+func (a *fakeMessagesAuthorizer) AuthorizeNewChat(_ context.Context, params lifecycle.ChatAuthorizeNewRequestParams) (lifecycle.ChatAuthorizedRequest, error) {
 	a.authorizeParams = append(a.authorizeParams, params)
 	if a.authorizeErr != nil {
-		return lifecycle.ChatAuthorization{}, a.authorizeErr
+		return lifecycle.ChatAuthorizedRequest{}, a.authorizeErr
+	}
+
+	requestRecord := requestlog.RequestRecord{
+		ID:                   int64(len(a.authorizeParams)),
+		RequestID:            params.Request.RequestID,
+		UserID:               params.Request.UserID,
+		APIKeyID:             params.Request.APIKeyID,
+		RequestedModelID:     params.Request.RequestedModelID,
+		IngressProtocol:      params.Request.IngressProtocol,
+		Endpoint:             params.Request.Endpoint,
+		Stream:               params.Request.Stream,
+		Status:               requestlog.RequestStatusRunning,
+		DeliveryStatus:       requestlog.DeliveryStatusNotStarted,
+		StartedAt:            params.Request.StartedAt,
+		RequestedServiceTier: params.Request.RequestedServiceTier,
 	}
 	authorization := a.authorization
 	if authorization.ReservationID == 0 {
 		authorization.ReservationID = 7000 + int64(len(a.authorizeParams))
 	}
-	authorization.RequestRecordID = params.RequestRecord.ID
+	authorization.RequestRecordID = requestRecord.ID
 	if authorization.Currency == "" {
 		authorization.Currency = "USD"
 	}
-	return authorization, nil
+	return lifecycle.ChatAuthorizedRequest{
+		RequestRecord: requestRecord,
+		Authorization: authorization,
+	}, nil
 }
 
 func (a *fakeMessagesAuthorizer) ReleaseChat(ctx context.Context, params lifecycle.ChatReleaseAuthorizationParams) error {
@@ -347,6 +367,69 @@ func newMessagesServiceForTest(router MessagesRouter, registry AdapterRegistry, 
 		authorizer,
 		nil,
 	)
+}
+
+func TestMessageAuthorizationFailedBeforePersistenceOrUpstream(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stream bool
+	}{
+		{name: "non-stream"},
+		{name: "stream", stream: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapterFake := &fakeMessagesAdapter{messagesResp: messageResponse()}
+			registry := &fakeMessagesRegistry{
+				tokenizers: map[string]messagesadapter.MessagesInputTokenizer{"deepseek": adapterFake},
+			}
+			if tc.stream {
+				registry.streamMessages = map[string]messagesadapter.StreamMessagesAdapter{"deepseek": adapterFake}
+			} else {
+				registry.messages = map[string]messagesadapter.MessagesAdapter{"deepseek": adapterFake}
+			}
+
+			authorizeErr := errors.New("authorize messages boom")
+			authorizer := &fakeMessagesAuthorizer{authorizeErr: authorizeErr}
+			settlement := &fakeMessagesSettlement{}
+			service := newMessagesServiceForTest(
+				&fakeMessagesRouter{plan: routePlan(routeCandidate("deepseek", 123, "deepseek-v4-flash"))},
+				registry,
+				settlement,
+				authorizer,
+			)
+			requestLog := service.requestLog.(*fakeMessagesRequestLog)
+
+			emitCalls := 0
+			var err error
+			if tc.stream {
+				err = service.StreamMessage(contextWithPrincipal(42), messageRequest(), func(gatewayapi.StreamFrame) error {
+					emitCalls++
+					return nil
+				})
+			} else {
+				_, err = service.CreateMessage(contextWithPrincipal(42), messageRequest())
+			}
+
+			if !errors.Is(err, authorizeErr) {
+				t.Fatalf("expected authorization error, got %v", err)
+			}
+			if adapterFake.messagesCalled != 0 || adapterFake.streamCalled != 0 || emitCalls != 0 {
+				t.Fatalf("authorization rejection reached downstream: messages=%d stream=%d emit=%d",
+					adapterFake.messagesCalled, adapterFake.streamCalled, emitCalls)
+			}
+			if len(requestLog.createRequests) != 0 || len(requestLog.markRequestRunning) != 0 || len(requestLog.markRequestFailedArgs) != 0 {
+				t.Fatalf("authorization rejection persisted a request: create=%d running=%d failed=%+v",
+					len(requestLog.createRequests), len(requestLog.markRequestRunning), requestLog.markRequestFailedArgs)
+			}
+			if len(requestLog.createAttempts) != 0 {
+				t.Fatalf("authorization rejection created an upstream attempt: %+v", requestLog.createAttempts)
+			}
+			if len(settlement.params) != 0 || len(authorizer.releaseParams) != 0 || len(authorizer.releaseBillingExceptionParams) != 0 {
+				t.Fatalf("authorization rejection must not settle or release: settlements=%d releases=%d billing_exceptions=%d",
+					len(settlement.params), len(authorizer.releaseParams), len(authorizer.releaseBillingExceptionParams))
+			}
+		})
+	}
 }
 
 func TestCreateMessageReturnsResponseAndSettlesWithAnthropicFacts(t *testing.T) {

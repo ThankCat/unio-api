@@ -213,6 +213,8 @@ func mapMessageServiceError(req MessageRequest, err error) (status int, errorTyp
 		// 402：与限流 429 / rate_limit_error 区分，避免客户端把余额不足当成限速重试。
 		// Anthropic 无官方 billing type，用 invalid_request_error + 余额文案。
 		return http.StatusPaymentRequired, "invalid_request_error", "Your credit balance is too low to access the API. Please go to Plans & Billing to upgrade or purchase credits."
+	case failure.CodeOf(err) == failure.CodeLedgerBalanceTemporarilyReserved:
+		return http.StatusTooManyRequests, "rate_limit_error", "Your credit balance is temporarily reserved by in-flight requests. Please retry shortly."
 	case failure.CodeOf(err) == failure.CodeRateLimitExceeded, failure.CodeOf(err) == failure.CodeGatewayChannelRateLimited:
 		// Key 级 TPM 或上游真实 429 冷却命中：统一 429，不泄露具体维度阈值。
 		return http.StatusTooManyRequests, "rate_limit_error", "You have exceeded the rate limit. Please slow down and retry later."

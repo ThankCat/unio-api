@@ -16,6 +16,15 @@ type providerOpsTableStore struct {
 	total int64
 }
 
+type providerOpsDetailStore struct {
+	Store
+	row sqlc.ProviderOpsDetailRow
+}
+
+func (store *providerOpsDetailStore) ProviderOpsDetail(context.Context, sqlc.ProviderOpsDetailParams) (sqlc.ProviderOpsDetailRow, error) {
+	return store.row, nil
+}
+
 func (store *providerOpsTableStore) ProvidersOpsTable(context.Context, sqlc.ProvidersOpsTableParams) ([]sqlc.ProvidersOpsTableRow, error) {
 	return store.rows, nil
 }
@@ -44,5 +53,26 @@ func TestTableReturnsProviderOriginFact(t *testing.T) {
 	}
 	if rows[0].Origin != "https://api.example.com/v1" || rows[0].OriginRevision != 3 || rows[0].StatusRevision != 4 {
 		t.Fatalf("unexpected provider origin fact: %+v", rows[0])
+	}
+}
+
+func TestDetailMapsCacheRates(t *testing.T) {
+	store := &providerOpsDetailStore{row: sqlc.ProviderOpsDetailRow{
+		CacheUncachedInput:    380,
+		CacheReadInput:        100,
+		CacheWrite30mInput:    20,
+		CacheUsageRecords:     4,
+		CacheEvaluableRecords: 4,
+	}}
+
+	detail, err := NewService(store).Detail(context.Background(), 7, time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("Detail returned error: %v", err)
+	}
+	if detail.Cache.ReadRate == nil || *detail.Cache.ReadRate != 0.2 {
+		t.Fatalf("cache read rate = %v, want 0.2", detail.Cache.ReadRate)
+	}
+	if detail.Cache.WriteRate == nil || *detail.Cache.WriteRate != 0.04 {
+		t.Fatalf("cache write rate = %v, want 0.04", detail.Cache.WriteRate)
 	}
 }

@@ -68,6 +68,7 @@ type Detail struct {
 	CostUSD          string
 	MarginUSD        string
 	AvgTPS           float64
+	Cache            opsutil.CacheStats
 }
 
 // ChannelCatalogRow 是列表 Tip 渠道行。
@@ -101,6 +102,7 @@ type ChannelRow struct {
 	AttemptSucceeded int64
 	SuccessRate      float64
 	Latency          opsutil.LatencyStats
+	Cache            opsutil.CacheStats
 }
 
 // PerfPoint 是抽屉性能 Tab 时序点。
@@ -205,6 +207,16 @@ func (s *Service) Detail(ctx context.Context, providerID int64, from, to time.Ti
 		CostUSD:    cost,
 		MarginUSD:  opsutil.SubtractDecimal(revenue, cost),
 		AvgTPS:     r.AvgTps,
+		Cache: opsutil.CacheStatsFrom(opsutil.CacheAggregate{
+			UncachedInput:            r.CacheUncachedInput,
+			CacheReadInput:           r.CacheReadInput,
+			CacheWrite5mInput:        r.CacheWrite5mInput,
+			CacheWrite1hInput:        r.CacheWrite1hInput,
+			CacheWrite30mInput:       r.CacheWrite30mInput,
+			UsageRecords:             r.CacheUsageRecords,
+			EvaluableRecords:         r.CacheEvaluableRecords,
+			ReadNotApplicableRecords: r.CacheReadNotApplicableRecords,
+		}),
 	}, nil
 }
 
@@ -267,6 +279,16 @@ func (s *Service) Channels(ctx context.Context, providerID int64, from, to time.
 				r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 				r.LatencySample, r.AttemptSucceeded,
 			),
+			Cache: opsutil.CacheStatsFrom(opsutil.CacheAggregate{
+				UncachedInput:            r.CacheUncachedInput,
+				CacheReadInput:           r.CacheReadInput,
+				CacheWrite5mInput:        r.CacheWrite5mInput,
+				CacheWrite1hInput:        r.CacheWrite1hInput,
+				CacheWrite30mInput:       r.CacheWrite30mInput,
+				UsageRecords:             r.CacheUsageRecords,
+				EvaluableRecords:         r.CacheEvaluableRecords,
+				ReadNotApplicableRecords: r.CacheReadNotApplicableRecords,
+			}),
 		})
 	}
 	return out, nil

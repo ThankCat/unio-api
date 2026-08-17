@@ -57,6 +57,7 @@ type providerOpsDetailDTO struct {
 	CostUSD          string                    `json:"cost_usd"`
 	MarginUSD        string                    `json:"margin_usd"`
 	AvgTPS           float64                   `json:"avg_tps"`
+	Cache            adminhttp.CacheStatsDTO   `json:"cache"`
 }
 
 type providerOpsChannelCatalogDTO struct {
@@ -86,6 +87,7 @@ type providerOpsChannelDTO struct {
 	AttemptSucceeded int64                     `json:"attempt_succeeded"`
 	SuccessRate      float64                   `json:"success_rate"`
 	Latency          adminhttp.LatencyStatsDTO `json:"latency"`
+	Cache            adminhttp.CacheStatsDTO   `json:"cache"`
 }
 
 type providerOpsPerfPointDTO struct {
@@ -180,6 +182,7 @@ func (h *providerOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		CostUSD:          d.CostUSD,
 		MarginUSD:        d.MarginUSD,
 		AvgTPS:           d.AvgTPS,
+		Cache:            adminhttp.CacheStatsFrom(d.Cache),
 	})
 }
 
@@ -264,6 +267,7 @@ func (h *providerOpsHandler) channels(w http.ResponseWriter, r *http.Request) {
 			AttemptSucceeded: c.AttemptSucceeded,
 			SuccessRate:      c.SuccessRate,
 			Latency:          adminhttp.LatencyStatsFrom(c.Latency),
+			Cache:            adminhttp.CacheStatsFrom(c.Cache),
 		})
 	}
 	adminhttp.WriteData(w, http.StatusOK, out)

@@ -194,7 +194,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		return nil, err
 	}
 
-	requestRecord, err := s.lifecycle.CreateRequestWithServiceTier(ctx, principal, req.Model, false, lifecycle.NormalizeOpenAIEffort(effort, req.Model), requestedTier)
+	requestParams, err := s.lifecycle.PrepareRequest(ctx, principal, req.Model, false, lifecycle.NormalizeOpenAIEffort(effort, req.Model), requestedTier)
 	if err != nil {
 		return nil, err
 	}
@@ -212,6 +212,10 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	plan, err := s.router.PlanChat(planCtx, routeRequest)
 	lifecycle.EndGatewaySpan(planSpan, err)
 	if err != nil {
+		requestRecord, createErr := s.lifecycle.CreatePreparedRequest(ctx, requestParams)
+		if createErr != nil {
+			return nil, createErr
+		}
 		s.lifecycle.RecordRoutingFailure(ctx, requestRecord, principal.RouteID, err)
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return nil, err
@@ -233,6 +237,10 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 
 	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, plan.RouteMode, false, strat.allowDirect, stickySession.BoundChannelID())
 	if err != nil {
+		requestRecord, createErr := s.lifecycle.CreatePreparedRequest(ctx, requestParams)
+		if createErr != nil {
+			return nil, createErr
+		}
 		if principal.RouteID != nil {
 			s.lifecycle.RecordRoutingDecisionFailure(ctx, lifecycle.RoutingDecisionTraceInput{
 				Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
@@ -243,6 +251,20 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return nil, err
 	}
+
+	authorized, err := s.lifecycle.AuthorizeNewChat(ctx, lifecycle.ChatAuthorizeNewRequestParams{
+		Request:                  requestParams,
+		CandidatePrices:          candidatePlan.CandidateSalePricesForTier(requestParams.RequestedServiceTier),
+		LongContextPolicy:        candidatePlan.LongContextPolicy(),
+		InputTokens:              candidatePlan.ConservativeInputTokens,
+		MaxCompletionTokens:      estimateMaxCompletionTokens(req),
+		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	requestRecord := authorized.RequestRecord
+	authorization := authorized.Authorization
 	stickySession.ApplyPlanOutcome(ctx, candidatePlan)
 	if principal.RouteID != nil {
 		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
@@ -250,27 +272,6 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
 			Sticky: stickySession.Audit(), Status: lifecycle.TraceStatusPartial,
 		})
-	}
-
-	authorization, err := s.lifecycle.AuthorizeChat(ctx, lifecycle.ChatAuthorizeParams{
-		RequestRecord:            requestRecord,
-		Principal:                principal,
-		CandidatePrices:          candidatePlan.CandidateSalePricesForTier(requestRecord.RequestedServiceTier),
-		LongContextPolicy:        candidatePlan.LongContextPolicy(),
-		InputTokens:              candidatePlan.ConservativeInputTokens,
-		MaxCompletionTokens:      estimateMaxCompletionTokens(req),
-		CandidateMaxOutputTokens: candidatePlan.CandidateMaxOutputTokens(),
-	})
-	if err != nil {
-		if principal.RouteID != nil {
-			s.lifecycle.CompleteRoutingTrace(ctx, lifecycle.RoutingDecisionTraceInput{
-				Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
-				PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
-				Sticky: stickySession.Audit(),
-			}, lifecycle.RunResult{}, err)
-		}
-		s.lifecycle.MarkRequestFailed(ctx, requestRecord, "chat_authorization_failed", err)
-		return nil, err
 	}
 
 	runResult, err := s.attemptRunner.RunNonStream(ctx, lifecycle.RunNonStreamParams{

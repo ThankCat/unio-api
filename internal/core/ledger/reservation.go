@@ -3,10 +3,12 @@ package ledger
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
@@ -42,6 +44,22 @@ type PreAuthorizeParams struct {
 	Currency        string
 	IdempotencyKey  string
 	Reason          string
+}
+
+// CreateRequestAndPreAuthorizeParams 表示在同一事务内创建请求并冻结余额所需参数。
+// IdempotencyKeyPrefix 会与事务内生成的 request_records.id 拼接形成最终账务幂等键。
+type CreateRequestAndPreAuthorizeParams struct {
+	Request              requestlog.CreateRequestParams
+	EstimatedAmount      pgtype.Numeric
+	Currency             string
+	IdempotencyKeyPrefix string
+	Reason               string
+}
+
+// AuthorizedRequest 是已经原子提交的持久请求与余额预授权。
+type AuthorizedRequest struct {
+	Request     requestlog.RequestRecord
+	Reservation Reservation
 }
 
 // CaptureParams 表示把预授权转换为真实扣费所需参数。
@@ -130,6 +148,67 @@ func (s *Service) PreAuthorize(ctx context.Context, params PreAuthorizeParams) (
 	}
 
 	return reservationFromSQLC(created), nil
+}
+
+// CreateRequestAndPreAuthorize 原子创建 running request record 与对应余额 reservation。
+// 任一步失败都会回滚，因此余额拒绝不会留下 request_records 或冻结余额。
+func (s *Service) CreateRequestAndPreAuthorize(ctx context.Context, params CreateRequestAndPreAuthorizeParams) (AuthorizedRequest, error) {
+	if !isPositiveNumeric(params.EstimatedAmount) {
+		return AuthorizedRequest{}, ledgerFailure(failure.CodeLedgerInvalidAmount, ErrInvalidAmount, ErrInvalidAmount.Error())
+	}
+	if params.IdempotencyKeyPrefix == "" {
+		return AuthorizedRequest{}, ledgerFailure(failure.CodeLedgerInvalidAmount, ErrInvalidAmount, "ledger: empty reservation idempotency prefix")
+	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return AuthorizedRequest{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "begin request authorization transaction")
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	txQueries := s.queries.WithTx(tx)
+	txRequestLog := requestlog.NewStore(txQueries)
+	record, err := txRequestLog.CreateRequest(ctx, params.Request)
+	if err != nil {
+		return AuthorizedRequest{}, err
+	}
+	record, err = txRequestLog.MarkRequestRunning(ctx, record.ID)
+	if err != nil {
+		return AuthorizedRequest{}, err
+	}
+
+	reserved, err := txQueries.ReserveAvailableUserBalance(ctx, sqlc.ReserveAvailableUserBalanceParams{
+		UserID:          record.UserID,
+		Currency:        params.Currency,
+		EstimatedAmount: params.EstimatedAmount,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AuthorizedRequest{}, reservationUnavailableWithQueries(ctx, txQueries, record.UserID, params.Currency)
+		}
+		return AuthorizedRequest{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "reserve available user balance")
+	}
+
+	created, err := txQueries.CreateLedgerReservation(ctx, sqlc.CreateLedgerReservationParams{
+		UserID:           record.UserID,
+		RequestRecordID:  record.ID,
+		Currency:         params.Currency,
+		EstimatedAmount:  params.EstimatedAmount,
+		AuthorizedAmount: reserved.AuthorizedAmount,
+		IdempotencyKey:   fmt.Sprintf("%s%d", params.IdempotencyKeyPrefix, record.ID),
+		Reason:           params.Reason,
+	})
+	if err != nil {
+		return AuthorizedRequest{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "create ledger reservation")
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return AuthorizedRequest{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "commit request authorization transaction")
+	}
+
+	return AuthorizedRequest{Request: record, Reservation: reservationFromSQLC(created)}, nil
 }
 
 // Capture 将已预授权请求结算为真实扣费，并自行管理事务。
@@ -528,7 +607,44 @@ func (s *Service) resolveReservationUnavailable(ctx context.Context, tx pgx.Tx, 
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lookup committed reservation idempotency key")
 	}
 
-	return Reservation{}, ledgerFailure(failure.CodeLedgerInsufficientBalance, ErrInsufficientBalance, ErrInsufficientBalance.Error())
+	balance, err := s.queries.GetUserBalance(ctx, sqlc.GetUserBalanceParams{
+		UserID:   params.UserID,
+		Currency: params.Currency,
+	})
+	if err == nil {
+		return Reservation{}, reservationUnavailableFailure(isPositiveNumeric(balance.Balance))
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lookup unavailable user balance")
+	}
+
+	return Reservation{}, reservationUnavailableFailure(false)
+}
+
+func reservationUnavailableWithQueries(ctx context.Context, queries *sqlc.Queries, userID int64, currency string) error {
+	balance, err := queries.GetUserBalanceForUpdate(ctx, sqlc.GetUserBalanceForUpdateParams{
+		UserID:   userID,
+		Currency: currency,
+	})
+	if err == nil {
+		return reservationUnavailableFailure(isPositiveNumeric(balance.Balance))
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return reservationUnavailableFailure(false)
+	}
+	return ledgerFailure(failure.CodeLedgerStoreFailed, err, "lock unavailable user balance")
+}
+
+func reservationUnavailableFailure(hasPositiveBalance bool) error {
+	if hasPositiveBalance {
+		return failure.Wrap(
+			failure.CodeLedgerBalanceTemporarilyReserved,
+			ErrBalanceTemporarilyReserved,
+			failure.WithMessage(ErrBalanceTemporarilyReserved.Error()),
+			failure.WithField("retry_after_ms", int64(1000)),
+		)
+	}
+	return ledgerFailure(failure.CodeLedgerInsufficientBalance, ErrInsufficientBalance, ErrInsufficientBalance.Error())
 }
 
 // reservationFromSQLC 将 sqlc 预扣除记录转换为 ledger 领域 DTO。

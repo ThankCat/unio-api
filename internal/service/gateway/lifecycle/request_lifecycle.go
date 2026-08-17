@@ -194,10 +194,11 @@ func (l *RequestLifecycle) RecordCredentialResult(candidate routing.ChatRouteCan
 // authorization release：脱离客户端取消 context，给冻结余额释放留补偿窗口。
 // ---------------------------------------------------------------------------
 
-// AuthorizeChat executes request-level balance authorization and emits the stable billing event.
-func (l *RequestLifecycle) AuthorizeChat(ctx context.Context, params ChatAuthorizeParams) (ChatAuthorization, error) {
-	authorization, err := l.authorizer.AuthorizeChat(ctx, params)
-	fields := l.requestLogContext(ctx, params.RequestRecord)
+// AuthorizeNewChat 原子创建 running request record、冻结余额并发布稳定账务日志。
+// 授权拒绝时事务整体回滚，因此不会发布 request_id，也不会留下持久请求记录。
+func (l *RequestLifecycle) AuthorizeNewChat(ctx context.Context, params ChatAuthorizeNewRequestParams) (ChatAuthorizedRequest, error) {
+	result, err := l.authorizer.AuthorizeNewChat(ctx, params)
+	fields := l.requestParamsLogFields(ctx, params.Request)
 	fields = append(fields,
 		zap.Int64("estimated_input_tokens", params.InputTokens),
 		zap.Int64("max_output_tokens", params.MaxCompletionTokens),
@@ -205,20 +206,25 @@ func (l *RequestLifecycle) AuthorizeChat(ctx context.Context, params ChatAuthori
 	if err != nil {
 		fields = append(fields, l.safeErrorLogFields(err, string(failure.CodeGatewayChatAuthorizationFailed), false, AttemptTimingFacts{})...)
 		switch failure.CodeOf(err) {
-		case failure.CodeLedgerInsufficientBalance, failure.CodeBillingInvalidPrice:
+		case failure.CodeLedgerInsufficientBalance,
+			failure.CodeLedgerBalanceTemporarilyReserved,
+			failure.CodeBillingInvalidPrice:
 			logging.Warn(l.logger, "billing", "authorization", "billing authorization rejected", fields...)
 		default:
 			logging.Error(l.logger, "billing", "authorization", "billing authorization failed", fields...)
 		}
-		return ChatAuthorization{}, err
+		return ChatAuthorizedRequest{}, err
 	}
+
+	l.publishRequestRecord(ctx, result.RequestRecord, params.Request.RouteID)
 	fields = append(fields,
-		zap.Int64("reservation_id", authorization.ReservationID),
-		zap.String("currency", authorization.Currency),
-		zap.String("authorized_amount", numericLogString(authorization.AuthorizedAmount)),
+		zap.String("request_id", result.RequestRecord.RequestID),
+		zap.Int64("reservation_id", result.Authorization.ReservationID),
+		zap.String("currency", result.Authorization.Currency),
+		zap.String("authorized_amount", numericLogString(result.Authorization.AuthorizedAmount)),
 	)
 	logging.Debug(l.logger, "billing", "authorization", "billing authorization completed", nonEmptyLogFields(fields)...)
-	return authorization, nil
+	return result, nil
 }
 
 // ReleaseAuthorization 脱离客户端取消上下文释放冻结余额。
@@ -389,9 +395,26 @@ func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.AP
 
 // CreateRequestWithServiceTier creates a request record with the normalized customer tier intent.
 func (l *RequestLifecycle) CreateRequestWithServiceTier(ctx context.Context, principal *auth.APIKeyPrincipal, requestedModelID string, stream bool, reasoning ReasoningInfo, requestedTier servicetier.Tier) (requestlog.RequestRecord, error) {
-	requestID, err := requestlog.GenerateRequestID()
+	params, err := l.PrepareRequest(ctx, principal, requestedModelID, stream, reasoning, requestedTier)
 	if err != nil {
 		return requestlog.RequestRecord{}, err
+	}
+	return l.CreatePreparedRequest(ctx, params)
+}
+
+// PrepareRequest 生成 request_records 创建参数并初始化入口日志字段，但不写数据库。
+// 调用方可先完成 routing/candidate preparation，再把同一参数交给原子授权事务。
+func (l *RequestLifecycle) PrepareRequest(ctx context.Context, principal *auth.APIKeyPrincipal, requestedModelID string, stream bool, reasoning ReasoningInfo, requestedTier servicetier.Tier) (requestlog.CreateRequestParams, error) {
+	if principal == nil {
+		return requestlog.CreateRequestParams{}, failure.New(
+			failure.CodeAuthMissingAPIKey,
+			failure.WithMessage("request lifecycle requires authenticated principal"),
+		)
+	}
+
+	requestID, err := requestlog.GenerateRequestID()
+	if err != nil {
+		return requestlog.CreateRequestParams{}, err
 	}
 
 	// 访问日志：入口即可确定的维度先写入；request_id 只能在持久记录
@@ -414,7 +437,7 @@ func (l *RequestLifecycle) CreateRequestWithServiceTier(ctx context.Context, pri
 		clientIP = &ip
 	}
 
-	record, err := l.requestLog.CreateRequest(ctx, requestlog.CreateRequestParams{
+	return requestlog.CreateRequestParams{
 		RequestID:             requestID,
 		UserID:                principal.UserID,
 		APIKeyID:              principal.APIKeyID,
@@ -428,25 +451,17 @@ func (l *RequestLifecycle) CreateRequestWithServiceTier(ctx context.Context, pri
 		ReasoningBudgetTokens: reasoning.BudgetTokens,
 		ClientIP:              clientIP,
 		RequestedServiceTier:  requestedTier,
-	})
+	}, nil
+}
+
+// CreatePreparedRequest 持久化已准备的 request 参数并推进到 running。
+// 它只用于需要保留审计事实的非余额拒绝路径，例如 routing 失败。
+func (l *RequestLifecycle) CreatePreparedRequest(ctx context.Context, params requestlog.CreateRequestParams) (requestlog.RequestRecord, error) {
+	record, err := l.requestLog.CreateRequest(ctx, params)
 	if err != nil {
 		return requestlog.RequestRecord{}, err
 	}
-	logfields.SetRequestID(ctx, record.RequestID)
-	fields := []zap.Field{
-		zap.String("trace_id", httpx.RequestID(ctx)),
-		zap.String("request_id", record.RequestID),
-		zap.Int64("user_id", record.UserID),
-		zap.Int64("api_key_id", record.APIKeyID),
-		zap.String("model", record.RequestedModelID),
-		zap.String("protocol", string(l.ingressProtocol)),
-		zap.String("endpoint", string(l.endpoint)),
-		zap.Bool("stream", stream),
-	}
-	if routeID != nil {
-		fields = append(fields, zap.Int64("route_id", *routeID))
-	}
-	logging.Debug(l.logger, "http", "request", "request record created", fields...)
+	l.publishRequestRecord(ctx, record, params.RouteID)
 
 	record, err = l.requestLog.MarkRequestRunning(ctx, record.ID)
 	if err != nil {
@@ -454,6 +469,44 @@ func (l *RequestLifecycle) CreateRequestWithServiceTier(ctx context.Context, pri
 	}
 
 	return record, nil
+}
+
+func (l *RequestLifecycle) publishRequestRecord(ctx context.Context, record requestlog.RequestRecord, routeID *int64) {
+	logfields.SetRequestID(ctx, record.RequestID)
+	logging.Debug(l.logger, "http", "request", "request record created", l.requestRecordLogFields(ctx, record, routeID)...)
+}
+
+func (l *RequestLifecycle) requestRecordLogFields(ctx context.Context, record requestlog.RequestRecord, routeID *int64) []zap.Field {
+	fields := []zap.Field{
+		zap.String("trace_id", httpx.RequestID(ctx)),
+		zap.String("request_id", record.RequestID),
+		zap.Int64("user_id", record.UserID),
+		zap.Int64("api_key_id", record.APIKeyID),
+		zap.String("model", record.RequestedModelID),
+		zap.String("protocol", string(record.IngressProtocol)),
+		zap.String("endpoint", string(record.Endpoint)),
+		zap.Bool("stream", record.Stream),
+	}
+	if routeID != nil {
+		fields = append(fields, zap.Int64("route_id", *routeID))
+	}
+	return fields
+}
+
+func (l *RequestLifecycle) requestParamsLogFields(ctx context.Context, params requestlog.CreateRequestParams) []zap.Field {
+	fields := []zap.Field{
+		zap.String("trace_id", httpx.RequestID(ctx)),
+		zap.Int64("user_id", params.UserID),
+		zap.Int64("api_key_id", params.APIKeyID),
+		zap.String("model", params.RequestedModelID),
+		zap.String("protocol", string(params.IngressProtocol)),
+		zap.String("endpoint", string(params.Endpoint)),
+		zap.Bool("stream", params.Stream),
+	}
+	if params.RouteID != nil {
+		fields = append(fields, zap.Int64("route_id", *params.RouteID))
+	}
+	return fields
 }
 
 // CreateAttempt 创建一次上游 channel 尝试记录。

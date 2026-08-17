@@ -365,6 +365,10 @@ const (
 	// CodeLedgerInsufficientBalance 表示余额不足。
 	CodeLedgerInsufficientBalance Code = "ledger_insufficient_balance"
 
+	// CodeLedgerBalanceTemporarilyReserved 表示总余额为正但当前可用余额被在途请求全部冻结。
+	// 客户端可在短暂等待后重试，HTTP 层映射为 429 并附带 Retry-After: 1。
+	CodeLedgerBalanceTemporarilyReserved Code = "ledger_balance_temporarily_reserved"
+
 	// CodeLedgerInvalidAmount 表示账本金额参数非法。
 	CodeLedgerInvalidAmount Code = "ledger_invalid_amount"
 

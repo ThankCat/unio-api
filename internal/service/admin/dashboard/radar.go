@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/opsutil"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -38,17 +39,8 @@ type GatewayTtftStats struct {
 	HasData  bool
 }
 
-// CacheStats 是缓存命中画像。ReadRate = 缓存命中率 = 缓存重量 / 输入 token。
-type CacheStats struct {
-	ReadRate            float64
-	WriteRate           float64
-	InputTokens         int64
-	UncachedTokens      int64
-	CacheReadTokens     int64
-	CacheWrite5mTokens  int64
-	CacheWrite1hTokens  int64
-	CacheWrite30mTokens int64
-}
+// CacheStats 是管理面统一的缓存率画像；缓存率仅表示缓存读取率。
+type CacheStats = opsutil.CacheStats
 
 // SettlementBacklog 是结算补偿积压（时点值）。
 type SettlementBacklog struct {
@@ -260,19 +252,16 @@ func (s *Service) Radar(ctx context.Context, from, to time.Time) (RadarReport, e
 		Output: tok.OutputTokens,
 	}
 	report.Tokens.Total = report.Tokens.Input + report.Tokens.Output
-	report.Cache = CacheStats{
-		InputTokens:         report.Tokens.Input,
-		UncachedTokens:      tok.UncachedInput,
-		CacheReadTokens:     tok.CacheReadInput,
-		CacheWrite5mTokens:  tok.CacheWrite5mInput,
-		CacheWrite1hTokens:  tok.CacheWrite1hInput,
-		CacheWrite30mTokens: tok.CacheWrite30mInput,
-	}
-	if report.Tokens.Input > 0 {
-		cacheWeight := tok.CacheReadInput + tok.CacheWriteInput
-		report.Cache.ReadRate = float64(cacheWeight) / float64(report.Tokens.Input)
-		report.Cache.WriteRate = float64(tok.CacheWriteInput) / float64(report.Tokens.Input)
-	}
+	report.Cache = opsutil.CacheStatsFrom(opsutil.CacheAggregate{
+		UncachedInput:            tok.CacheMetricUncachedInput,
+		CacheReadInput:           tok.CacheMetricReadInput,
+		CacheWrite5mInput:        tok.CacheMetricWrite5mInput,
+		CacheWrite1hInput:        tok.CacheMetricWrite1hInput,
+		CacheWrite30mInput:       tok.CacheMetricWrite30mInput,
+		UsageRecords:             tok.CacheUsageRecords,
+		EvaluableRecords:         tok.CacheEvaluableRecords,
+		ReadNotApplicableRecords: tok.CacheReadNotApplicableRecords,
+	})
 
 	// 金额仅 USD。
 	report.RevenueUSD = pickCurrency(moneyByCurrency(revenueRows), displayCurrency)

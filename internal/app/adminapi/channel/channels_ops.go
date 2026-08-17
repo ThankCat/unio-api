@@ -64,6 +64,7 @@ type channelOpsDetailDTO struct {
 	Latency          adminhttp.LatencyStatsDTO `json:"latency"`
 	LastSuccessAt    *string                   `json:"last_success_at"`
 	LastFailureAt    *string                   `json:"last_failure_at"`
+	Cache            adminhttp.CacheStatsDTO   `json:"cache"`
 }
 
 type channelOpsPerfPointDTO struct {
@@ -210,6 +211,7 @@ func (h *channelOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		Latency:          adminhttp.LatencyStatsFrom(d.Latency),
 		LastSuccessAt:    adminhttp.RFC3339Ptr(d.LastSuccessAt),
 		LastFailureAt:    adminhttp.RFC3339Ptr(d.LastFailureAt),
+		Cache:            adminhttp.CacheStatsFrom(d.Cache),
 	}
 	adminhttp.WriteData(w, http.StatusOK, dto)
 }

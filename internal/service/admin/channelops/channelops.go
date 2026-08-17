@@ -84,6 +84,7 @@ type Detail struct {
 	Latency          opsutil.LatencyStats
 	LastSuccessAt    *time.Time
 	LastFailureAt    *time.Time
+	Cache            opsutil.CacheStats
 }
 
 // PerfPoint 是抽屉性能 Tab 时序点。
@@ -224,6 +225,16 @@ func (s *Service) Detail(ctx context.Context, channelID int64, from, to time.Tim
 		),
 		LastSuccessAt: timeValue(r.LastSuccessAt),
 		LastFailureAt: timeValue(r.LastFailureAt),
+		Cache: opsutil.CacheStatsFrom(opsutil.CacheAggregate{
+			UncachedInput:            r.CacheUncachedInput,
+			CacheReadInput:           r.CacheReadInput,
+			CacheWrite5mInput:        r.CacheWrite5mInput,
+			CacheWrite1hInput:        r.CacheWrite1hInput,
+			CacheWrite30mInput:       r.CacheWrite30mInput,
+			UsageRecords:             r.CacheUsageRecords,
+			EvaluableRecords:         r.CacheEvaluableRecords,
+			ReadNotApplicableRecords: r.CacheReadNotApplicableRecords,
+		}),
 	}
 	if r.AttemptTotal > 0 {
 		d.SuccessRate = float64(r.AttemptSucceeded) / float64(r.AttemptTotal)

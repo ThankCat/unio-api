@@ -364,6 +364,36 @@ func TestRouterV1MessagesMapsInsufficientBalance(t *testing.T) {
 	}
 }
 
+func TestRouterV1MessagesMapsTemporarilyReservedBalance(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		name := "non-stream"
+		if stream {
+			name = "stream before first event"
+		}
+		t.Run(name, func(t *testing.T) {
+			service := &fakeMessagesService{err: failure.New(failure.CodeLedgerBalanceTemporarilyReserved)}
+			handler := newMessagesTestRouter(newMessagesAuthenticator(), service, nil)
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, newMessagesRequest(encodeMessageBody(t, stream)))
+
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("status=%d, want 429 body=%s", rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("Retry-After"); got != "1" {
+				t.Fatalf("Retry-After=%q, want 1", got)
+			}
+			if strings.Contains(rec.Body.String(), "event:") {
+				t.Fatalf("pre-first-event failure must use JSON body, got %q", rec.Body.String())
+			}
+			body := decodeAnthropicError(t, rec.Body)
+			if body.Error.Type != "rate_limit_error" {
+				t.Fatalf("error type=%q, want rate_limit_error", body.Error.Type)
+			}
+		})
+	}
+}
+
 func TestRouterV1MessagesStreamWritesSSE(t *testing.T) {
 	service := &fakeMessagesService{}
 	handler := newMessagesTestRouter(newMessagesAuthenticator(), service, nil)

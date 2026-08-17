@@ -13,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
@@ -98,13 +100,12 @@ func createLedgerTestUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	return userID
 }
 
-// createLedgerTestRequestRecord 创建 ledger service 预授权测试需要的 request record。
-func createLedgerTestRequestRecord(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID int64) int64 {
+// createLedgerTestAPIKey 创建 ledger service 请求测试需要的线路和 API Key。
+func createLedgerTestAPIKey(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID int64) (int64, int64) {
 	t.Helper()
 
 	suffix := time.Now().UnixNano()
 
-	// 线路必填：先建一条线路供 API Key 绑定（route_id 现为 NOT NULL）。
 	var routeID int64
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO routes (name, mode, status, price_ratio)
@@ -124,8 +125,18 @@ func createLedgerTestRequestRecord(t *testing.T, ctx context.Context, pool *pgxp
 		t.Fatalf("insert ledger test api key: %v", err)
 	}
 
+	return apiKeyID, routeID
+}
+
+// createLedgerTestRequestRecord 创建 ledger service 预授权测试需要的 request record。
+func createLedgerTestRequestRecord(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID int64) int64 {
+	t.Helper()
+
+	suffix := time.Now().UnixNano()
+	apiKeyID, _ := createLedgerTestAPIKey(t, ctx, pool, userID)
+
 	var requestRecordID int64
-	err = pool.QueryRow(ctx, `
+	err := pool.QueryRow(ctx, `
 		INSERT INTO request_records (
 			request_id,
 			user_id,
@@ -507,6 +518,296 @@ func TestConcurrentSamePreAuthorizeIdempotencyKeyDoesNotDoubleReserve(t *testing
 	}
 	assertNumericEquals(t, balance.Balance, 100)
 	assertNumericEquals(t, balance.ReservedBalance, 40)
+}
+
+func TestConcurrentCreateRequestAndPreAuthorizeRollsBackTemporarilyReservedLoser(t *testing.T) {
+	tests := []struct {
+		name                     string
+		initialBalance           int64
+		finalize                 string
+		balanceAfterFinalization int64
+	}{
+		{
+			name:                     "release restores availability",
+			initialBalance:           1,
+			finalize:                 "release",
+			balanceAfterFinalization: 1,
+		},
+		{
+			name:                     "capture leaves available remainder",
+			initialBalance:           2,
+			finalize:                 "capture",
+			balanceAfterFinalization: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, pool, queries, service, cleanup := newServiceTestDeps(t)
+			defer cleanup()
+
+			userID := createLedgerTestUser(t, ctx, pool)
+			apiKeyID, routeID := createLedgerTestAPIKey(t, ctx, pool, userID)
+			defer func() {
+				cleanupLedgerTestUser(t, context.Background(), pool, userID)
+				if _, err := pool.Exec(context.Background(), `DELETE FROM routes WHERE id = $1`, routeID); err != nil {
+					t.Errorf("delete ledger test route: %v", err)
+				}
+			}()
+
+			if _, err := service.Credit(ctx, CreditParams{
+				UserID:         userID,
+				Amount:         numeric(tt.initialBalance),
+				Currency:       "USD",
+				IdempotencyKey: fmt.Sprintf("atomic-authorization-credit-%d", time.Now().UnixNano()),
+				Reason:         "seed atomic authorization balance",
+			}); err != nil {
+				t.Fatalf("seed credit: %v", err)
+			}
+
+			suffix := time.Now().UnixNano()
+			newParams := func(requestID string) CreateRequestAndPreAuthorizeParams {
+				return CreateRequestAndPreAuthorizeParams{
+					Request: requestlog.CreateRequestParams{
+						RequestID:            requestID,
+						UserID:               userID,
+						APIKeyID:             apiKeyID,
+						RequestedModelID:     "deepseek-v4-pro",
+						IngressProtocol:      requestlog.ProtocolOpenAI,
+						Endpoint:             requestlog.EndpointChatCompletions,
+						StartedAt:            time.Now().UTC(),
+						RouteID:              &routeID,
+						RequestedServiceTier: servicetier.TierStandard,
+					},
+					EstimatedAmount:      numeric(2),
+					Currency:             "USD",
+					IdempotencyKeyPrefix: fmt.Sprintf("atomic-authorization-%d-", suffix),
+					Reason:               "test concurrent atomic authorization",
+				}
+			}
+			params := []CreateRequestAndPreAuthorizeParams{
+				newParams(fmt.Sprintf("req_atomic_authorization_a_%d", suffix)),
+				newParams(fmt.Sprintf("req_atomic_authorization_b_%d", suffix)),
+			}
+
+			type authorizationResult struct {
+				params     CreateRequestAndPreAuthorizeParams
+				authorized AuthorizedRequest
+				err        error
+			}
+
+			start := make(chan struct{})
+			results := make(chan authorizationResult, len(params))
+			var wg sync.WaitGroup
+			for _, params := range params {
+				params := params
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					authorized, err := service.CreateRequestAndPreAuthorize(ctx, params)
+					results <- authorizationResult{params: params, authorized: authorized, err: err}
+				}()
+			}
+
+			close(start)
+			wg.Wait()
+			close(results)
+
+			var winner authorizationResult
+			var loser authorizationResult
+			winnerCount := 0
+			loserCount := 0
+			for result := range results {
+				switch {
+				case result.err == nil:
+					winner = result
+					winnerCount++
+				case errors.Is(result.err, ErrBalanceTemporarilyReserved):
+					loser = result
+					loserCount++
+					if got := failure.CodeOf(result.err); got != failure.CodeLedgerBalanceTemporarilyReserved {
+						t.Fatalf("expected failure code %q, got %q", failure.CodeLedgerBalanceTemporarilyReserved, got)
+					}
+				default:
+					t.Fatalf("unexpected concurrent authorization error: %v", result.err)
+				}
+			}
+			if winnerCount != 1 || loserCount != 1 {
+				t.Fatalf("expected one authorized request and one temporarily reserved rejection, got winners=%d losers=%d", winnerCount, loserCount)
+			}
+
+			if winner.authorized.Request.Status != requestlog.RequestStatusRunning {
+				t.Fatalf("expected winner request to be running, got %q", winner.authorized.Request.Status)
+			}
+			assertNumericEquals(t, winner.authorized.Reservation.AuthorizedAmount, tt.initialBalance)
+
+			var loserRequestCount int
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM request_records WHERE request_id = $1`, loser.params.Request.RequestID).Scan(&loserRequestCount); err != nil {
+				t.Fatalf("count loser request records: %v", err)
+			}
+			if loserRequestCount != 0 {
+				t.Fatalf("expected loser request transaction to roll back, found %d request records", loserRequestCount)
+			}
+
+			var reservationCount int
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM ledger_reservations WHERE user_id = $1`, userID).Scan(&reservationCount); err != nil {
+				t.Fatalf("count reservations after concurrent authorization: %v", err)
+			}
+			if reservationCount != 1 {
+				t.Fatalf("expected only the winner reservation, got %d reservations", reservationCount)
+			}
+
+			balance, err := queries.GetUserBalance(ctx, sqlc.GetUserBalanceParams{UserID: userID, Currency: "USD"})
+			if err != nil {
+				t.Fatalf("get balance after concurrent authorization: %v", err)
+			}
+			assertNumericEquals(t, balance.Balance, tt.initialBalance)
+			assertNumericEquals(t, balance.ReservedBalance, tt.initialBalance)
+
+			reservationID := winner.authorized.Reservation.ID
+			switch tt.finalize {
+			case "release":
+				if _, err := service.Release(ctx, ReleaseParams{
+					RequestRecordID: winner.authorized.Request.ID,
+					ReservationID:   &reservationID,
+				}); err != nil {
+					t.Fatalf("release winner reservation: %v", err)
+				}
+			case "capture":
+				if _, err := service.Capture(ctx, CaptureParams{
+					RequestRecordID: winner.authorized.Request.ID,
+					ReservationID:   &reservationID,
+					ActualAmount:    numeric(1),
+					IdempotencyKey:  fmt.Sprintf("atomic-authorization-capture-%d", suffix),
+					Reason:          "settle concurrent authorization winner",
+				}); err != nil {
+					t.Fatalf("capture winner reservation: %v", err)
+				}
+			default:
+				t.Fatalf("unknown finalization mode %q", tt.finalize)
+			}
+
+			balance, err = queries.GetUserBalance(ctx, sqlc.GetUserBalanceParams{UserID: userID, Currency: "USD"})
+			if err != nil {
+				t.Fatalf("get balance after winner finalization: %v", err)
+			}
+			assertNumericEquals(t, balance.Balance, tt.balanceAfterFinalization)
+			assertNumericEquals(t, balance.ReservedBalance, 0)
+
+			retried, err := service.CreateRequestAndPreAuthorize(ctx, loser.params)
+			if err != nil {
+				t.Fatalf("retry loser authorization after %s: %v", tt.finalize, err)
+			}
+			if retried.Request.RequestID != loser.params.Request.RequestID {
+				t.Fatalf("expected retry request id %q, got %q", loser.params.Request.RequestID, retried.Request.RequestID)
+			}
+			if retried.Request.Status != requestlog.RequestStatusRunning {
+				t.Fatalf("expected retried request to be running, got %q", retried.Request.Status)
+			}
+			assertNumericEquals(t, retried.Reservation.AuthorizedAmount, 1)
+
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM request_records WHERE request_id = $1`, loser.params.Request.RequestID).Scan(&loserRequestCount); err != nil {
+				t.Fatalf("count retried request records: %v", err)
+			}
+			if loserRequestCount != 1 {
+				t.Fatalf("expected one persisted retried request, got %d", loserRequestCount)
+			}
+		})
+	}
+}
+
+func TestCreateRequestAndPreAuthorizeRollsBackInsufficientBalance(t *testing.T) {
+	tests := []struct {
+		name             string
+		createBalanceRow bool
+		wantBalanceRows  int
+	}{
+		{name: "missing balance row"},
+		{name: "zero balance row", createBalanceRow: true, wantBalanceRows: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, pool, queries, service, cleanup := newServiceTestDeps(t)
+			defer cleanup()
+
+			userID := createLedgerTestUser(t, ctx, pool)
+			apiKeyID, routeID := createLedgerTestAPIKey(t, ctx, pool, userID)
+			defer func() {
+				cleanupLedgerTestUser(t, context.Background(), pool, userID)
+				if _, err := pool.Exec(context.Background(), `DELETE FROM routes WHERE id = $1`, routeID); err != nil {
+					t.Errorf("delete ledger test route: %v", err)
+				}
+			}()
+
+			if tt.createBalanceRow {
+				if _, err := queries.CreateUserBalance(ctx, sqlc.CreateUserBalanceParams{
+					UserID:   userID,
+					Currency: "USD",
+					Balance:  numeric(0),
+				}); err != nil {
+					t.Fatalf("create zero balance row: %v", err)
+				}
+			}
+
+			suffix := time.Now().UnixNano()
+			requestID := fmt.Sprintf("req_atomic_insufficient_%d", suffix)
+			_, err := service.CreateRequestAndPreAuthorize(ctx, CreateRequestAndPreAuthorizeParams{
+				Request: requestlog.CreateRequestParams{
+					RequestID:            requestID,
+					UserID:               userID,
+					APIKeyID:             apiKeyID,
+					RequestedModelID:     "deepseek-v4-pro",
+					IngressProtocol:      requestlog.ProtocolOpenAI,
+					Endpoint:             requestlog.EndpointChatCompletions,
+					StartedAt:            time.Now().UTC(),
+					RouteID:              &routeID,
+					RequestedServiceTier: servicetier.TierStandard,
+				},
+				EstimatedAmount:      numeric(1),
+				Currency:             "USD",
+				IdempotencyKeyPrefix: fmt.Sprintf("atomic-insufficient-%d-", suffix),
+				Reason:               "test insufficient atomic authorization",
+			})
+			if !errors.Is(err, ErrInsufficientBalance) {
+				t.Fatalf("expected ErrInsufficientBalance, got %v", err)
+			}
+			if got := failure.CodeOf(err); got != failure.CodeLedgerInsufficientBalance {
+				t.Fatalf("expected failure code %q, got %q", failure.CodeLedgerInsufficientBalance, got)
+			}
+
+			var requestCount int
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM request_records WHERE request_id = $1`, requestID).Scan(&requestCount); err != nil {
+				t.Fatalf("count rolled back request records: %v", err)
+			}
+			if requestCount != 0 {
+				t.Fatalf("expected insufficient authorization to leave no request record, got %d", requestCount)
+			}
+
+			var reservationCount int
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM ledger_reservations WHERE user_id = $1`, userID).Scan(&reservationCount); err != nil {
+				t.Fatalf("count rolled back reservations: %v", err)
+			}
+			if reservationCount != 0 {
+				t.Fatalf("expected insufficient authorization to leave no reservation, got %d", reservationCount)
+			}
+
+			var balanceRows int
+			var reservedTotal pgtype.Numeric
+			if err := pool.QueryRow(ctx, `
+				SELECT count(*), COALESCE(sum(reserved_balance), 0)::numeric
+				FROM user_balances
+				WHERE user_id = $1
+			`, userID).Scan(&balanceRows, &reservedTotal); err != nil {
+				t.Fatalf("read balance state after rejected authorization: %v", err)
+			}
+			if balanceRows != tt.wantBalanceRows {
+				t.Fatalf("balance rows=%d, want %d", balanceRows, tt.wantBalanceRows)
+			}
+			assertNumericEquals(t, reservedTotal, 0)
+		})
+	}
 }
 
 func TestCaptureWritesOffActualAmountAboveAuthorization(t *testing.T) {

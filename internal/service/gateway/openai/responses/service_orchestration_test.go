@@ -133,17 +133,57 @@ type fakeAuthorizer struct {
 	authorizeErr      error
 	releaseCount      int
 	billingExceptions []lifecycle.ChatReleaseBillingExceptionParams
+	requestLog        requestlog.Service
+	nextRequestID     int64
 }
 
-func (a *fakeAuthorizer) AuthorizeChat(_ context.Context, params lifecycle.ChatAuthorizeParams) (lifecycle.ChatAuthorization, error) {
+// AuthorizeNewChat 模拟生产原子边界：授权失败不写 request，成功时同时返回 running request。
+func (a *fakeAuthorizer) AuthorizeNewChat(ctx context.Context, params lifecycle.ChatAuthorizeNewRequestParams) (lifecycle.ChatAuthorizedRequest, error) {
 	if a.authorizeErr != nil {
-		return lifecycle.ChatAuthorization{}, a.authorizeErr
+		return lifecycle.ChatAuthorizedRequest{}, a.authorizeErr
 	}
-	return lifecycle.ChatAuthorization{
-		RequestRecordID: params.RequestRecord.ID,
-		ReservationID:   42,
-		Currency:        "USD",
+
+	if a.nextRequestID == 0 {
+		a.nextRequestID = 1
+	}
+	requestRecord := responsesRequestRecordFromCreateParams(params.Request, a.nextRequestID)
+	a.nextRequestID++
+	if a.requestLog != nil {
+		created, err := a.requestLog.CreateRequest(ctx, params.Request)
+		if err != nil {
+			return lifecycle.ChatAuthorizedRequest{}, err
+		}
+		if _, err := a.requestLog.MarkRequestRunning(ctx, created.ID); err != nil {
+			return lifecycle.ChatAuthorizedRequest{}, err
+		}
+		requestRecord = responsesRequestRecordFromCreateParams(params.Request, created.ID)
+	}
+
+	return lifecycle.ChatAuthorizedRequest{
+		RequestRecord: requestRecord,
+		Authorization: lifecycle.ChatAuthorization{
+			RequestRecordID: requestRecord.ID,
+			ReservationID:   42,
+			Currency:        "USD",
+		},
 	}, nil
+}
+
+func responsesRequestRecordFromCreateParams(params requestlog.CreateRequestParams, id int64) requestlog.RequestRecord {
+	return requestlog.RequestRecord{
+		ID:                   id,
+		RequestID:            params.RequestID,
+		UserID:               params.UserID,
+		APIKeyID:             params.APIKeyID,
+		RequestedModelID:     params.RequestedModelID,
+		IngressProtocol:      params.IngressProtocol,
+		Endpoint:             params.Endpoint,
+		Stream:               params.Stream,
+		Status:               requestlog.RequestStatusRunning,
+		DeliveryStatus:       requestlog.DeliveryStatusNotStarted,
+		StartedAt:            params.StartedAt,
+		RequestedServiceTier: params.RequestedServiceTier,
+	}
 }
 
 func (a *fakeAuthorizer) ReleaseChat(_ context.Context, _ lifecycle.ChatReleaseAuthorizationParams) error {
@@ -159,6 +199,7 @@ func (a *fakeAuthorizer) ReleaseChatForBillingException(_ context.Context, param
 type fakeRequestLog struct {
 	createRequests      []requestlog.CreateRequestParams
 	createAttempts      []requestlog.CreateAttemptParams
+	markRunning         []int64
 	markFailed          []requestlog.MarkRequestFailedParams
 	markAttemptFailed   []requestlog.MarkAttemptFailedParams
 	deliveryStarted     []int64
@@ -188,15 +229,19 @@ func (s *fakeRequestLog) CreateRequest(_ context.Context, params requestlog.Crea
 		RequestID:            params.RequestID,
 		UserID:               params.UserID,
 		APIKeyID:             params.APIKeyID,
+		RequestedModelID:     params.RequestedModelID,
 		IngressProtocol:      params.IngressProtocol,
 		Endpoint:             params.Endpoint,
+		Stream:               params.Stream,
 		Status:               requestlog.RequestStatusPending,
+		DeliveryStatus:       requestlog.DeliveryStatusNotStarted,
 		StartedAt:            params.StartedAt,
 		RequestedServiceTier: params.RequestedServiceTier,
 	}, nil
 }
 
 func (s *fakeRequestLog) MarkRequestRunning(_ context.Context, id int64) (requestlog.RequestRecord, error) {
+	s.markRunning = append(s.markRunning, id)
 	var requestedServiceTier servicetier.Tier
 	if len(s.createRequests) > 0 {
 		requestedServiceTier = s.createRequests[len(s.createRequests)-1].RequestedServiceTier
@@ -386,6 +431,9 @@ func ctxWithPrincipal() context.Context {
 }
 
 func newServiceForTest(router ChatRouter, registry AdapterRegistry, settlement lifecycle.ChatSettlementExecutor, authorizer lifecycle.ChatAuthorizer, requestLog requestlog.Service) *ResponsesService {
+	if fake, ok := authorizer.(*fakeAuthorizer); ok {
+		fake.requestLog = requestLog
+	}
 	return NewResponsesService(
 		router,
 		registry,
@@ -568,16 +616,69 @@ func TestCreateResponse_AuthorizationFailed(t *testing.T) {
 	}
 	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}}}
 	// 用无 failure.Code 的裸错误，触发 lifecycle 兜底 code（FailureCodeOrFallback）。
-	authorizer := &fakeAuthorizer{authorizeErr: errors.New("authorize boom")}
+	authorizeErr := errors.New("authorize boom")
+	authorizer := &fakeAuthorizer{authorizeErr: authorizeErr}
+	settlement := &fakeSettlement{}
 	requestLog := newFakeRequestLog()
 
-	svc := newServiceForTest(router, registry, &fakeSettlement{}, authorizer, requestLog)
+	svc := newServiceForTest(router, registry, settlement, authorizer, requestLog)
 
 	_, err := svc.CreateResponse(ctxWithPrincipal(), instructionsRequest())
-	if err == nil {
-		t.Fatal("expected authorization error")
+	if !errors.Is(err, authorizeErr) {
+		t.Fatalf("expected authorization error, got %v", err)
 	}
-	if len(requestLog.markFailed) != 1 || requestLog.markFailed[0].ErrorCode != "chat_authorization_failed" {
-		t.Fatalf("expected chat_authorization_failed, got %+v", requestLog.markFailed)
+	if chatAdapter.called != 0 {
+		t.Fatalf("authorization rejection must not call adapter, got %d calls", chatAdapter.called)
+	}
+	if len(requestLog.createRequests) != 0 || len(requestLog.markRunning) != 0 {
+		t.Fatalf("authorization rejection must not create or run a request, create=%d running=%d",
+			len(requestLog.createRequests), len(requestLog.markRunning))
+	}
+	if len(requestLog.markFailed) != 0 {
+		t.Fatalf("authorization rejection must not mark a request failed, got %+v", requestLog.markFailed)
+	}
+	if len(requestLog.createAttempts) != 0 {
+		t.Fatalf("authorization rejection must not create an upstream attempt, got %+v", requestLog.createAttempts)
+	}
+	if len(settlement.params) != 0 || authorizer.releaseCount != 0 || len(authorizer.billingExceptions) != 0 {
+		t.Fatalf("authorization rejection must not settle or release: settlements=%d releases=%d billing_exceptions=%d",
+			len(settlement.params), authorizer.releaseCount, len(authorizer.billingExceptions))
+	}
+}
+
+func TestStreamResponse_AuthorizationFailed(t *testing.T) {
+	streamAdapter := &fakeBridgeStreamChatAdapter{}
+	registry := &fakeRegistry{
+		streamAdapters: map[string]chatcompletionsadapter.StreamChatAdapter{"deepseek": streamAdapter},
+		tokenizers:     map[string]chatcompletionsadapter.ChatInputTokenizer{"deepseek": fakeTokenizer{}},
+	}
+	router := &fakeRouter{plan: routing.ChatRoutePlan{Candidates: []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}}}
+	authorizeErr := errors.New("authorize stream boom")
+	authorizer := &fakeAuthorizer{authorizeErr: authorizeErr}
+	settlement := &fakeSettlement{}
+	requestLog := newFakeRequestLog()
+	svc := newServiceForTest(router, registry, settlement, authorizer, requestLog)
+
+	emitCalls := 0
+	err := svc.StreamResponse(ctxWithPrincipal(), instructionsRequest(), func(gatewayapi.ResponsesStreamEvent) error {
+		emitCalls++
+		return nil
+	})
+	if !errors.Is(err, authorizeErr) {
+		t.Fatalf("expected authorization error, got %v", err)
+	}
+	if streamAdapter.called != 0 || emitCalls != 0 {
+		t.Fatalf("authorization rejection must not call adapter or emit: adapter=%d emit=%d", streamAdapter.called, emitCalls)
+	}
+	if len(requestLog.createRequests) != 0 || len(requestLog.markRunning) != 0 || len(requestLog.markFailed) != 0 {
+		t.Fatalf("authorization rejection must not persist a request: create=%d running=%d failed=%+v",
+			len(requestLog.createRequests), len(requestLog.markRunning), requestLog.markFailed)
+	}
+	if len(requestLog.createAttempts) != 0 {
+		t.Fatalf("authorization rejection must not create an upstream attempt, got %+v", requestLog.createAttempts)
+	}
+	if len(settlement.params) != 0 || authorizer.releaseCount != 0 || len(authorizer.billingExceptions) != 0 {
+		t.Fatalf("authorization rejection must not settle or release: settlements=%d releases=%d billing_exceptions=%d",
+			len(settlement.params), authorizer.releaseCount, len(authorizer.billingExceptions))
 	}
 }

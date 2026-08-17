@@ -458,6 +458,7 @@ func TestCompactHistory_NativeFallbackToSyntheticLocalUpstream(t *testing.T) {
 			settlement := &fakeSettlement{}
 			metricsRecorder := &compactMetricsRecorder{}
 			permitStore := &compactPermitStore{}
+			authorizer := &fakeAuthorizer{requestLog: requestLog}
 			svc := NewResponsesService(
 				router,
 				registry,
@@ -465,7 +466,7 @@ func TestCompactHistory_NativeFallbackToSyntheticLocalUpstream(t *testing.T) {
 				lifecycle.NeverRetryClassifier{},
 				requestLog,
 				settlement,
-				&fakeAuthorizer{},
+				authorizer,
 				metricsRecorder,
 				zap.NewNop(),
 			)

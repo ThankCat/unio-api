@@ -170,6 +170,39 @@ func TestResponsesHandler_InsufficientQuota(t *testing.T) {
 	}
 }
 
+func TestResponsesHandler_TemporarilyReservedBalance(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "non-stream", body: `{"model":"m","input":"hi"}`},
+		{name: "stream before first event", body: `{"model":"m","input":"hi","stream":true}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeResponsesService{err: failure.New(failure.CodeLedgerBalanceTemporarilyReserved)}
+			handler := NewResponsesHandler(svc)
+
+			rec := postJSON(t, handler, tt.body)
+
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("status=%d, want 429 body=%s", rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("Retry-After"); got != "1" {
+				t.Fatalf("Retry-After=%q, want 1", got)
+			}
+			if strings.Contains(rec.Body.String(), "event:") {
+				t.Fatalf("pre-first-event failure must use JSON body, got %q", rec.Body.String())
+			}
+			errType, code, _ := decodeErrorBody(t, rec)
+			if errType != "rate_limit_error" || code != "rate_limit_exceeded" {
+				t.Fatalf("error type=%q code=%q", errType, code)
+			}
+		})
+	}
+}
+
 // TestUpstreamErrorResponseKeepsSanitizedUpstreamIdentity 冻结：流式首字前失败时内联 response.failed
 // 事件会被丢弃（首字前不向客户暴露失败渠道事件），因此上游真实 code/message 必须由最终错误响应带出，
 // 否则客户只能看到一句通用文案、SDK 也拿不到上游原本的 error.code。

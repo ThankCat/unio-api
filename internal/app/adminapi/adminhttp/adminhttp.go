@@ -430,6 +430,34 @@ func LatencyStatsFrom(s opsutil.LatencyStats) LatencyStatsDTO {
 	}
 }
 
+// CacheStatsDTO 是 Provider、Channel 与 Dashboard 共用的缓存率响应体。
+type CacheStatsDTO struct {
+	Status              string   `json:"status"`
+	ReadRate            *float64 `json:"read_rate"`
+	WriteRate           *float64 `json:"write_rate"`
+	InputTokens         int64    `json:"input_tokens"`
+	UncachedTokens      int64    `json:"uncached_tokens"`
+	CacheReadTokens     int64    `json:"cache_read_tokens"`
+	CacheWrite5mTokens  int64    `json:"cache_write_5m_tokens"`
+	CacheWrite1hTokens  int64    `json:"cache_write_1h_tokens"`
+	CacheWrite30mTokens int64    `json:"cache_write_30m_tokens"`
+}
+
+// CacheStatsFrom 从 service 层缓存画像组装响应 DTO。
+func CacheStatsFrom(s opsutil.CacheStats) CacheStatsDTO {
+	return CacheStatsDTO{
+		Status:              string(s.Status),
+		ReadRate:            s.ReadRate,
+		WriteRate:           s.WriteRate,
+		InputTokens:         s.InputTokens,
+		UncachedTokens:      s.UncachedTokens,
+		CacheReadTokens:     s.CacheReadTokens,
+		CacheWrite5mTokens:  s.CacheWrite5mTokens,
+		CacheWrite1hTokens:  s.CacheWrite1hTokens,
+		CacheWrite30mTokens: s.CacheWrite30mTokens,
+	}
+}
+
 // ---- 审计身份 ----
 
 // AdminActor 从 admin 认证身份取调用者标识，用于写入审计的 updated_by；缺失回退空串。

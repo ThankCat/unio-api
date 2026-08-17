@@ -124,8 +124,12 @@ func TestRadarAggregates(t *testing.T) {
 			LatencySample:  96,
 			GatewayTtftAvg: 1200, GatewayTtftP50: 900, GatewayTtftP90: 1500, GatewayTtftP95: 1600, GatewayTtftP99: 2200, GatewayTtftSample: 84,
 		},
-		throughput:  sqlc.DashboardRadarThroughputRow{OutputTokens: 5000, GenerationSeconds: 100},
-		radarTokens: sqlc.DashboardRadarTokensRow{UncachedInput: 600, CacheReadInput: 300, CacheWriteInput: 100, OutputTokens: 5000},
+		throughput: sqlc.DashboardRadarThroughputRow{OutputTokens: 5000, GenerationSeconds: 100},
+		radarTokens: sqlc.DashboardRadarTokensRow{
+			UncachedInput: 600, CacheReadInput: 300, CacheWriteInput: 100, OutputTokens: 5000,
+			CacheMetricUncachedInput: 600, CacheMetricReadInput: 300, CacheMetricWrite5mInput: 100,
+			CacheUsageRecords: 10, CacheEvaluableRecords: 10,
+		},
 		backlog:     sqlc.DashboardRadarSettlementBacklogRow{ActiveTotal: 2, DeadTotal: 1},
 		revenueRows: []sqlc.DashboardRevenueByCurrencyRow{{Currency: "USD", Total: mustNumeric(t, "20.00")}},
 		costRows:    []sqlc.DashboardCostByCurrencyRow{{Currency: "USD", Total: mustNumeric(t, "8.00")}},
@@ -151,8 +155,11 @@ func TestRadarAggregates(t *testing.T) {
 	if out.TPS != 50 { // 5000 / 100
 		t.Fatalf("tps = %v, want 50", out.TPS)
 	}
-	if out.Cache.ReadRate < 0.39 || out.Cache.ReadRate > 0.41 { // (300+100)/1000
-		t.Fatalf("cache hit rate = %v, want ~0.4", out.Cache.ReadRate)
+	if out.Cache.ReadRate == nil || *out.Cache.ReadRate < 0.29 || *out.Cache.ReadRate > 0.31 { // 300/1000
+		t.Fatalf("cache rate = %v, want ~0.3", out.Cache.ReadRate)
+	}
+	if out.Cache.WriteRate == nil || *out.Cache.WriteRate < 0.09 || *out.Cache.WriteRate > 0.11 { // 100/1000
+		t.Fatalf("cache write rate = %v, want ~0.1", out.Cache.WriteRate)
 	}
 	if out.Latency.Sample != 96 {
 		t.Fatalf("latency sample = %d, want 96", out.Latency.Sample)
