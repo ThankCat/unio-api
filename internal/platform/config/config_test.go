@@ -264,8 +264,11 @@ func TestLoadInfrastructureDefaults(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	if cfg.HTTP.ReadTimeout != 10*time.Second {
-		t.Fatalf("expected HTTP read timeout %v, got %v", 10*time.Second, cfg.HTTP.ReadTimeout)
+	if cfg.HTTP.ReadHeaderTimeout != 30*time.Second {
+		t.Fatalf("expected HTTP read header timeout %v, got %v", 30*time.Second, cfg.HTTP.ReadHeaderTimeout)
+	}
+	if cfg.HTTP.AdminReadTimeout != 10*time.Second {
+		t.Fatalf("expected admin HTTP read timeout %v, got %v", 10*time.Second, cfg.HTTP.AdminReadTimeout)
 	}
 	if cfg.HTTP.WriteTimeout != 30*time.Second {
 		t.Fatalf("expected HTTP write timeout %v, got %v", 30*time.Second, cfg.HTTP.WriteTimeout)
@@ -276,8 +279,11 @@ func TestLoadInfrastructureDefaults(t *testing.T) {
 	if cfg.HTTP.ShutdownTimeout != 10*time.Second {
 		t.Fatalf("expected HTTP shutdown timeout %v, got %v", 10*time.Second, cfg.HTTP.ShutdownTimeout)
 	}
-	if cfg.HTTP.GatewayMaxJSONBodyBytes != 32<<20 {
-		t.Fatalf("expected gateway max json body bytes %d, got %d", int64(32<<20), cfg.HTTP.GatewayMaxJSONBodyBytes)
+	if cfg.HTTP.GatewayMaxJSONBodyBytes != 256<<20 {
+		t.Fatalf("expected gateway max json body bytes %d, got %d", int64(256<<20), cfg.HTTP.GatewayMaxJSONBodyBytes)
+	}
+	if cfg.HTTP.GatewayTextMaxJSONBodyBytes != 32<<20 {
+		t.Fatalf("expected gateway text max json body bytes %d, got %d", int64(32<<20), cfg.HTTP.GatewayTextMaxJSONBodyBytes)
 	}
 	if cfg.HTTP.AdminMaxJSONBodyBytes != 4<<20 {
 		t.Fatalf("expected admin max json body bytes %d, got %d", int64(4<<20), cfg.HTTP.AdminMaxJSONBodyBytes)
@@ -373,12 +379,14 @@ func TestLoadInfrastructureOverrides(t *testing.T) {
 	t.Setenv("ADMIN_LOGIN_SOURCE_FAILURE_LIMIT", "7")
 	t.Setenv("ADMIN_LOGIN_ACCOUNT_FAILURE_LIMIT", "30")
 	t.Setenv("ADMIN_LOGIN_FAILURE_WINDOW", "25m")
-	t.Setenv("HTTP_READ_TIMEOUT", "3s")
+	t.Setenv("HTTP_READ_HEADER_TIMEOUT", "12s")
+	t.Setenv("ADMIN_HTTP_READ_TIMEOUT", "3s")
 	t.Setenv("HTTP_WRITE_TIMEOUT", "4s")
 	t.Setenv("HTTP_IDLE_TIMEOUT", "5s")
 	t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "6s")
 	t.Setenv("HTTP_MAX_JSON_BODY_MB", "8")
 	t.Setenv("GATEWAY_MAX_JSON_BODY_MB", "16")
+	t.Setenv("GATEWAY_TEXT_MAX_JSON_BODY_MB", "8")
 	t.Setenv("ADMIN_MAX_JSON_BODY_MB", "2")
 	t.Setenv("POSTGRES_MAX_CONNS", "20")
 	t.Setenv("POSTGRES_MIN_CONNS", "2")
@@ -407,8 +415,11 @@ func TestLoadInfrastructureOverrides(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	if cfg.HTTP.ReadTimeout != 3*time.Second {
-		t.Fatalf("expected HTTP read timeout %v, got %v", 3*time.Second, cfg.HTTP.ReadTimeout)
+	if cfg.HTTP.ReadHeaderTimeout != 12*time.Second {
+		t.Fatalf("expected HTTP read header timeout %v, got %v", 12*time.Second, cfg.HTTP.ReadHeaderTimeout)
+	}
+	if cfg.HTTP.AdminReadTimeout != 3*time.Second {
+		t.Fatalf("expected admin HTTP read timeout %v, got %v", 3*time.Second, cfg.HTTP.AdminReadTimeout)
 	}
 	if cfg.HTTP.WriteTimeout != 4*time.Second {
 		t.Fatalf("expected HTTP write timeout %v, got %v", 4*time.Second, cfg.HTTP.WriteTimeout)
@@ -421,6 +432,9 @@ func TestLoadInfrastructureOverrides(t *testing.T) {
 	}
 	if cfg.HTTP.GatewayMaxJSONBodyBytes != 16<<20 {
 		t.Fatalf("expected gateway max json body bytes %d, got %d", int64(16<<20), cfg.HTTP.GatewayMaxJSONBodyBytes)
+	}
+	if cfg.HTTP.GatewayTextMaxJSONBodyBytes != 8<<20 {
+		t.Fatalf("expected gateway text max json body bytes %d, got %d", int64(8<<20), cfg.HTTP.GatewayTextMaxJSONBodyBytes)
 	}
 	if cfg.HTTP.AdminMaxJSONBodyBytes != 2<<20 {
 		t.Fatalf("expected admin max json body bytes %d, got %d", int64(2<<20), cfg.HTTP.AdminMaxJSONBodyBytes)
@@ -506,15 +520,18 @@ func TestLoadInfrastructureOverrides(t *testing.T) {
 }
 
 func TestLoadInvalidDuration(t *testing.T) {
-	clearInfrastructureEnv(t)
+	for _, key := range []string{"HTTP_READ_HEADER_TIMEOUT", "ADMIN_HTTP_READ_TIMEOUT"} {
+		t.Run(key, func(t *testing.T) {
+			clearInfrastructureEnv(t)
+			t.Setenv(key, "not-a-duration")
 
-	t.Setenv("HTTP_READ_TIMEOUT", "not-a-duration")
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected error, got nil")
+			_, err := Load()
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			assertConfigFailure(t, err, failure.CodeConfigInvalid)
+		})
 	}
-	assertConfigFailure(t, err, failure.CodeConfigInvalid)
 }
 
 func TestLoadRejectsInvalidAdminLoginLimits(t *testing.T) {
@@ -559,13 +576,13 @@ func TestLoadLegacyMaxJSONBodyMBAppliesToBothServers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if cfg.HTTP.GatewayMaxJSONBodyBytes != 8<<20 || cfg.HTTP.AdminMaxJSONBodyBytes != 8<<20 {
-		t.Fatalf("legacy JSON body limit = gateway %d, admin %d; want both %d", cfg.HTTP.GatewayMaxJSONBodyBytes, cfg.HTTP.AdminMaxJSONBodyBytes, int64(8<<20))
+	if cfg.HTTP.GatewayMaxJSONBodyBytes != 8<<20 || cfg.HTTP.GatewayTextMaxJSONBodyBytes != 8<<20 || cfg.HTTP.AdminMaxJSONBodyBytes != 8<<20 {
+		t.Fatalf("legacy JSON body limit = gateway %d, text %d, admin %d; want all %d", cfg.HTTP.GatewayMaxJSONBodyBytes, cfg.HTTP.GatewayTextMaxJSONBodyBytes, cfg.HTTP.AdminMaxJSONBodyBytes, int64(8<<20))
 	}
 }
 
 func TestLoadRejectsNonPositivePerServerMaxJSONBodyMB(t *testing.T) {
-	for _, key := range []string{"GATEWAY_MAX_JSON_BODY_MB", "ADMIN_MAX_JSON_BODY_MB"} {
+	for _, key := range []string{"GATEWAY_MAX_JSON_BODY_MB", "GATEWAY_TEXT_MAX_JSON_BODY_MB", "ADMIN_MAX_JSON_BODY_MB"} {
 		t.Run(key, func(t *testing.T) {
 			clearInfrastructureEnv(t)
 			t.Setenv(key, "0")
@@ -576,6 +593,18 @@ func TestLoadRejectsNonPositivePerServerMaxJSONBodyMB(t *testing.T) {
 			assertConfigFailure(t, err, failure.CodeConfigInvalid)
 		})
 	}
+}
+
+func TestLoadRejectsTextBodyLimitAboveGatewayLimit(t *testing.T) {
+	clearInfrastructureEnv(t)
+	t.Setenv("GATEWAY_MAX_JSON_BODY_MB", "32")
+	t.Setenv("GATEWAY_TEXT_MAX_JSON_BODY_MB", "64")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	assertConfigFailure(t, err, failure.CodeConfigInvalid)
 }
 
 func TestLoadInvalidPostgresMaxConns(t *testing.T) {
@@ -626,12 +655,14 @@ func clearInfrastructureEnv(t *testing.T) {
 		"ADMIN_LOGIN_SOURCE_FAILURE_LIMIT",
 		"ADMIN_LOGIN_ACCOUNT_FAILURE_LIMIT",
 		"ADMIN_LOGIN_FAILURE_WINDOW",
-		"HTTP_READ_TIMEOUT",
+		"HTTP_READ_HEADER_TIMEOUT",
+		"ADMIN_HTTP_READ_TIMEOUT",
 		"HTTP_WRITE_TIMEOUT",
 		"HTTP_IDLE_TIMEOUT",
 		"HTTP_SHUTDOWN_TIMEOUT",
 		"HTTP_MAX_JSON_BODY_MB",
 		"GATEWAY_MAX_JSON_BODY_MB",
+		"GATEWAY_TEXT_MAX_JSON_BODY_MB",
 		"ADMIN_MAX_JSON_BODY_MB",
 		"LOG_LEVEL",
 		"LOG_FORMAT",

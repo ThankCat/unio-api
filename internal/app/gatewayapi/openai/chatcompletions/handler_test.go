@@ -164,7 +164,11 @@ func TestRouterV1ChatCompletionWithTrailingJSONToken(t *testing.T) {
 }
 
 func TestRouterV1ChatCompletionWithTooLargeBody(t *testing.T) {
-	largeContent := strings.Repeat("a", int(httpx.DefaultMaxJSONBodyBytes)+1)
+	originalLimit := httpx.MaxJSONBodyBytes()
+	httpx.SetMaxJSONBodyBytes(1024)
+	t.Cleanup(func() { httpx.SetMaxJSONBodyBytes(originalLimit) })
+
+	largeContent := strings.Repeat("a", 2048)
 	body := `{"model":"openai/gpt-4.1","messages":[{"role":"user","content":"` + largeContent + `"}]}`
 
 	assertChatCompletionDecodeError(
@@ -174,6 +178,38 @@ func TestRouterV1ChatCompletionWithTooLargeBody(t *testing.T) {
 		http.StatusRequestEntityTooLarge,
 		"request body too large",
 	)
+}
+
+func TestWriteJSONDecodeErrorClassifiesBodyTransportFailures(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantStatus  int
+		wantCode    string
+		wantMessage string
+	}{
+		{name: "timeout", err: httpx.ErrRequestBodyTimeout, wantStatus: http.StatusRequestTimeout, wantCode: "request_body_timeout", wantMessage: "request body read timed out"},
+		{name: "incomplete", err: httpx.ErrRequestBodyIncomplete, wantStatus: http.StatusBadRequest, wantCode: "request_body_incomplete", wantMessage: "request body is incomplete"},
+		{name: "disconnected", err: httpx.ErrClientDisconnected, wantStatus: http.StatusBadRequest, wantCode: "request_body_incomplete", wantMessage: "request body is incomplete"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeJSONDecodeError(rec, tt.err)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status=%d, want %d", rec.Code, tt.wantStatus)
+			}
+			var body httpx.ErrorResponse
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error.Code != tt.wantCode || body.Error.Message != tt.wantMessage {
+				t.Fatalf("error=%#v, want code=%q message=%q", body.Error, tt.wantCode, tt.wantMessage)
+			}
+		})
+	}
 }
 
 func assertChatCompletionDecodeError(t *testing.T, reqBody string, contentType string, wantStatus int, wantMessage string) {

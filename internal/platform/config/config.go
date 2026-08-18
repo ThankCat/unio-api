@@ -134,15 +134,23 @@ type TracingConfig struct {
 // HTTPConfig 保存所有 HTTP server 共享的超时配置；监听地址按服务独立配置，
 // 见 GatewayConfig / AdminConfig 的 HTTPAddr。
 type HTTPConfig struct {
-	ReadTimeout     time.Duration
-	WriteTimeout    time.Duration
-	IdleTimeout     time.Duration
-	ShutdownTimeout time.Duration
+	// ReadHeaderTimeout bounds slow request headers on both HTTP services.
+	ReadHeaderTimeout time.Duration
+	// AdminReadTimeout is retained for the small, non-streaming Admin ingress.
+	// Gateway deliberately has no absolute request-body ReadTimeout because
+	// Codex and other clients may upload large JSON bodies slowly.
+	AdminReadTimeout time.Duration
+	WriteTimeout     time.Duration
+	IdleTimeout      time.Duration
+	ShutdownTimeout  time.Duration
 
-	// GatewayMaxJSONBodyBytes / AdminMaxJSONBodyBytes 分别限制两个 ingress 的单个 JSON 请求体。
+	// GatewayMaxJSONBodyBytes is the absolute Gateway JSON body limit. The
+	// route-level text limit is kept separately for future text-only endpoints.
+	// AdminMaxJSONBodyBytes limits the separate Admin ingress.
 	// 这是防 OOM 的资源边界，与业务计费无关；超限返回 413。前置代理的 body 上限应与之匹配。
-	GatewayMaxJSONBodyBytes int64
-	AdminMaxJSONBodyBytes   int64
+	GatewayMaxJSONBodyBytes     int64
+	GatewayTextMaxJSONBodyBytes int64
+	AdminMaxJSONBodyBytes       int64
 }
 
 // 日志输出格式（LOG_FORMAT）。
@@ -330,9 +338,26 @@ func Load() (Config, error) {
 		)
 	}
 
-	httpReadTimeout, err := getEnvDuration("HTTP_READ_TIMEOUT", 10*time.Second)
+	httpReadHeaderTimeout, err := getEnvDuration("HTTP_READ_HEADER_TIMEOUT", 30*time.Second)
 	if err != nil {
 		return Config{}, err
+	}
+
+	adminReadTimeout, err := getEnvDuration("ADMIN_HTTP_READ_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	if httpReadHeaderTimeout <= 0 || httpReadHeaderTimeout > 60*time.Second {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("HTTP_READ_HEADER_TIMEOUT must be between 1s and 60s"),
+		)
+	}
+	if adminReadTimeout <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("ADMIN_HTTP_READ_TIMEOUT must be a positive duration"),
+		)
 	}
 
 	httpWriteTimeout, err := getEnvDuration("HTTP_WRITE_TIMEOUT", 30*time.Second)
@@ -351,7 +376,10 @@ func Load() (Config, error) {
 	}
 
 	// 旧 HTTP_MAX_JSON_BODY_MB 继续作为两个服务的兼容回退；独立配置优先。
-	gatewayMaxJSONBodyDefaultMB := 32
+	// The legacy value also seeds the text limit so old single-limit deployments
+	// retain their explicitly chosen behavior until they migrate.
+	gatewayMaxJSONBodyDefaultMB := 256
+	gatewayTextMaxJSONBodyDefaultMB := 32
 	adminMaxJSONBodyDefaultMB := 4
 	if os.Getenv("HTTP_MAX_JSON_BODY_MB") != "" {
 		legacyMaxJSONBodyMB, err := getEnvInt("HTTP_MAX_JSON_BODY_MB", 0)
@@ -365,9 +393,14 @@ func Load() (Config, error) {
 			)
 		}
 		gatewayMaxJSONBodyDefaultMB = legacyMaxJSONBodyMB
+		gatewayTextMaxJSONBodyDefaultMB = legacyMaxJSONBodyMB
 		adminMaxJSONBodyDefaultMB = legacyMaxJSONBodyMB
 	}
 	gatewayMaxJSONBodyMB, err := getEnvInt("GATEWAY_MAX_JSON_BODY_MB", gatewayMaxJSONBodyDefaultMB)
+	if err != nil {
+		return Config{}, err
+	}
+	gatewayTextMaxJSONBodyMB, err := getEnvInt("GATEWAY_TEXT_MAX_JSON_BODY_MB", gatewayTextMaxJSONBodyDefaultMB)
 	if err != nil {
 		return Config{}, err
 	}
@@ -375,10 +408,18 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if !validJSONBodyLimitMB(gatewayMaxJSONBodyMB) || !validJSONBodyLimitMB(adminMaxJSONBodyMB) {
+	if !validJSONBodyLimitMB(gatewayMaxJSONBodyMB) ||
+		!validJSONBodyLimitMB(gatewayTextMaxJSONBodyMB) ||
+		!validJSONBodyLimitMB(adminMaxJSONBodyMB) {
 		return Config{}, failure.New(
 			failure.CodeConfigInvalid,
-			failure.WithMessage("gateway and admin JSON body limits must be between 1 and 256"),
+			failure.WithMessage("gateway, gateway text, and admin JSON body limits must be between 1 and 256"),
+		)
+	}
+	if gatewayTextMaxJSONBodyMB > gatewayMaxJSONBodyMB {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("gateway text JSON body limit must not exceed gateway JSON body limit"),
 		)
 	}
 
@@ -627,12 +668,14 @@ func Load() (Config, error) {
 
 	return Config{
 		HTTP: HTTPConfig{
-			ReadTimeout:             httpReadTimeout,
-			WriteTimeout:            httpWriteTimeout,
-			IdleTimeout:             httpIdleTimeout,
-			ShutdownTimeout:         httpShutdownTimeout,
-			GatewayMaxJSONBodyBytes: int64(gatewayMaxJSONBodyMB) << 20,
-			AdminMaxJSONBodyBytes:   int64(adminMaxJSONBodyMB) << 20,
+			ReadHeaderTimeout:           httpReadHeaderTimeout,
+			AdminReadTimeout:            adminReadTimeout,
+			WriteTimeout:                httpWriteTimeout,
+			IdleTimeout:                 httpIdleTimeout,
+			ShutdownTimeout:             httpShutdownTimeout,
+			GatewayMaxJSONBodyBytes:     int64(gatewayMaxJSONBodyMB) << 20,
+			GatewayTextMaxJSONBodyBytes: int64(gatewayTextMaxJSONBodyMB) << 20,
+			AdminMaxJSONBodyBytes:       int64(adminMaxJSONBodyMB) << 20,
 		},
 		Log: LogConfig{
 			Level:  logLevel,

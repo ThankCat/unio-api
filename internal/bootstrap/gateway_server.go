@@ -92,8 +92,10 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	// P2-6：生产构建不读结算故障注入 env；若运维误设则启动期显式告警（构建标签 billing_e2e 时为激活提示）。
 	lifecycle.WarnIfSettlementFaultInjectionConfigured(deps.Logger)
 
-	// JSON 请求体上限为进程级网关 ingress 安全配置（防 OOM / zip bomb）；启动期设置一次，全 DecodeJSON 生效。
+	// JSON 请求体上限为进程级网关 ingress 安全配置（防 OOM / zip bomb）；启动期设置一次。
+	// 当前多模态接口使用绝对上限，未来 embeddings/search 使用独立纯文本上限。
 	httpx.SetMaxJSONBodyBytes(deps.Config.HTTP.GatewayMaxJSONBodyBytes)
+	httpx.SetTextMaxJSONBodyBytes(deps.Config.HTTP.GatewayTextMaxJSONBodyBytes)
 	httpx.SetResponseWriteTimeout(deps.Config.HTTP.WriteTimeout)
 
 	// 非流式上游响应体上限为进程级 egress 安全配置（防 OOM）；启动期设置一次，全 adapter 非流式读 body 生效。

@@ -69,16 +69,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	server := &http.Server{
-		Addr:    cfg.Admin.HTTPAddr,
-		Handler: app.Handler,
-
-		ReadTimeout: cfg.HTTP.ReadTimeout,
-		// 普通 Admin 请求使用绝对写超时；渠道手动检测 handler 会清除绝对 deadline，改由 probe
-		// context 管理执行时长，最终 JSON 写出仍受 httpx 单次写窗口限制。
-		WriteTimeout: cfg.HTTP.WriteTimeout,
-		IdleTimeout:  cfg.HTTP.IdleTimeout,
-	}
+	server := newAdminHTTPServer(cfg.Admin.HTTPAddr, app.Handler, cfg.HTTP)
 
 	errCh := make(chan error, 1)
 
@@ -119,4 +110,17 @@ func main() {
 	}
 
 	logger.Info("admin server stopped")
+}
+
+func newAdminHTTPServer(addr string, handler http.Handler, httpConfig config.HTTPConfig) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: httpConfig.ReadHeaderTimeout,
+		ReadTimeout:       httpConfig.AdminReadTimeout,
+		// 普通 Admin 请求使用绝对写超时；渠道手动检测 handler 会清除绝对 deadline，改由 probe
+		// context 管理执行时长，最终 JSON 写出仍受 httpx 单次写窗口限制。
+		WriteTimeout: httpConfig.WriteTimeout,
+		IdleTimeout:  httpConfig.IdleTimeout,
+	}
 }

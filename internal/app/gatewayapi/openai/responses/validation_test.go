@@ -118,18 +118,34 @@ func TestWriteResponsesValidationError(t *testing.T) {
 }
 
 func TestWriteResponsesDecodeError(t *testing.T) {
-	rec := httptest.NewRecorder()
-	writeResponsesDecodeError(rec, httpx.ErrEmptyJSONBody)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d", rec.Code)
+	tests := []struct {
+		name        string
+		err         error
+		wantStatus  int
+		wantCode    string
+		wantMessage string
+	}{
+		{name: "empty", err: httpx.ErrEmptyJSONBody, wantStatus: http.StatusBadRequest, wantCode: errorCodeInvalidRequest, wantMessage: "request body is required"},
+		{name: "timeout", err: httpx.ErrRequestBodyTimeout, wantStatus: http.StatusRequestTimeout, wantCode: "request_body_timeout", wantMessage: "request body read timed out"},
+		{name: "incomplete", err: httpx.ErrRequestBodyIncomplete, wantStatus: http.StatusBadRequest, wantCode: "request_body_incomplete", wantMessage: "request body is incomplete"},
 	}
 
-	var body httpx.ErrorResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode error body: %v", err)
-	}
-	if body.Error.Type != errorTypeInvalidRequest || body.Error.Message != "request body is required" {
-		t.Fatalf("error body = %#v", body.Error)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeResponsesDecodeError(rec, tt.err)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status=%d, want %d", rec.Code, tt.wantStatus)
+			}
+
+			var body httpx.ErrorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode error body: %v", err)
+			}
+			if body.Error.Type != errorTypeInvalidRequest || body.Error.Code != tt.wantCode || body.Error.Message != tt.wantMessage {
+				t.Fatalf("error body=%#v, want code=%q message=%q", body.Error, tt.wantCode, tt.wantMessage)
+			}
+		})
 	}
 }

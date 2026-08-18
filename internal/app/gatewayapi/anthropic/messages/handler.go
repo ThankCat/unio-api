@@ -68,7 +68,7 @@ func (h *messagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var req MessageRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		ingresslog.RecordInvalidJSON(r, err)
+		ingresslog.RecordRequestBodyFailure(r, err)
 		writeJSONDecodeError(w, err)
 		return
 	}
@@ -192,6 +192,11 @@ func writeJSONDecodeError(w http.ResponseWriter, err error) {
 		status = http.StatusRequestEntityTooLarge
 		errorType = "request_too_large"
 		message = "request body too large"
+	case errors.Is(err, httpx.ErrRequestBodyTimeout):
+		status = http.StatusRequestTimeout
+		message = "request body read timed out"
+	case errors.Is(err, httpx.ErrRequestBodyIncomplete), errors.Is(err, httpx.ErrClientDisconnected):
+		message = "request body is incomplete"
 	case errors.Is(err, httpx.ErrEmptyJSONBody):
 		message = "request body is required"
 	case errors.Is(err, httpx.ErrTrailingJSONToken):

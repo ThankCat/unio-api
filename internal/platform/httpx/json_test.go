@@ -1,7 +1,9 @@
 package httpx
 
 import (
+	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -145,13 +147,13 @@ func TestDecodeJSONReturnsErrorForTrailingJSONToken(t *testing.T) {
 }
 
 func TestDecodeJSONReturnsErrorForTooLargeBody(t *testing.T) {
-	largeValue := strings.Repeat("a", int(DefaultMaxJSONBodyBytes)+1)
+	largeValue := strings.Repeat("a", 64)
 	reqBody := `{"value":"` + largeValue + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
 	rec := httptest.NewRecorder()
 
 	var body decodeJSONTestBody
-	err := DecodeJSON(rec, req, &body)
+	err := DecodeJSONWithLimit(rec, req, &body, 32)
 	if !errors.Is(err, ErrRequestBodyTooLarge) {
 		t.Fatalf("expected ErrRequestBodyTooLarge, got %v", err)
 	}
@@ -169,14 +171,30 @@ func TestMaxJSONBodyBytesDefaultsWhenUnset(t *testing.T) {
 	if got := MaxJSONBodyBytes(); got != DefaultMaxJSONBodyBytes {
 		t.Fatalf("expected default %d for negative limit, got %d", DefaultMaxJSONBodyBytes, got)
 	}
+
+	SetTextMaxJSONBodyBytes(0)
+	if got := TextMaxJSONBodyBytes(); got != DefaultTextMaxJSONBodyBytes {
+		t.Fatalf("expected text default %d, got %d", DefaultTextMaxJSONBodyBytes, got)
+	}
+}
+
+func TestDecodeTextJSONHonorsTextLimit(t *testing.T) {
+	t.Cleanup(func() { SetTextMaxJSONBodyBytes(0) })
+	SetTextMaxJSONBodyBytes(32)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{"value":"`+strings.Repeat("a", 64)+`"}`))
+	var body decodeJSONTestBody
+	err := DecodeTextJSON(httptest.NewRecorder(), req, &body)
+	if !errors.Is(err, ErrRequestBodyTooLarge) {
+		t.Fatalf("error=%v, want ErrRequestBodyTooLarge", err)
+	}
 }
 
 func TestDecodeJSONHonorsConfiguredLimit(t *testing.T) {
 	t.Cleanup(func() { SetMaxJSONBodyBytes(0) })
 
-	// 抬高上限到 4MB：原本超过默认 1MB 的 body 现在应能正常解码。
-	SetMaxJSONBodyBytes(4 << 20)
-	largeValue := strings.Repeat("a", int(DefaultMaxJSONBodyBytes)+1024)
+	SetMaxJSONBodyBytes(4 << 10)
+	largeValue := strings.Repeat("a", 1024)
 	reqBody := `{"value":"` + largeValue + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
 	rec := httptest.NewRecorder()
@@ -196,6 +214,95 @@ func TestDecodeJSONHonorsConfiguredLimit(t *testing.T) {
 	}
 	assertDecodeJSONFailure(t, err, failure.CodeHTTPRequestBodyTooLarge)
 }
+
+func TestDecodeJSONClassifiesRequestBodyReadFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		readErr    error
+		contextErr error
+		wantErr    error
+		wantCode   failure.Code
+		wantReason string
+		wantKind   string
+	}{
+		{
+			name:       "timeout",
+			readErr:    requestBodyTimeoutError{},
+			wantErr:    ErrRequestBodyTimeout,
+			wantCode:   failure.CodeHTTPRequestBodyTimeout,
+			wantReason: "request_body_timeout",
+			wantKind:   "read_timeout",
+		},
+		{
+			name:       "unexpected eof",
+			readErr:    io.ErrUnexpectedEOF,
+			wantErr:    ErrRequestBodyIncomplete,
+			wantCode:   failure.CodeHTTPRequestBodyIncomplete,
+			wantReason: "request_body_incomplete",
+			wantKind:   "incomplete_body",
+		},
+		{
+			name:       "client disconnected",
+			readErr:    context.Canceled,
+			contextErr: context.Canceled,
+			wantErr:    ErrClientDisconnected,
+			wantCode:   failure.CodeHTTPClientDisconnected,
+			wantReason: "client_disconnected",
+			wantKind:   "client_disconnected",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := &requestBodyFailingReader{payload: []byte(`{"value":"partial`), err: tt.readErr}
+			req := httptest.NewRequest(http.MethodPost, "/test", reader)
+			req.ContentLength = int64(len(reader.payload) + 64)
+			if tt.contextErr != nil {
+				ctx, cancel := context.WithCancel(req.Context())
+				cancel()
+				req = req.WithContext(ctx)
+			}
+
+			var body decodeJSONTestBody
+			err := DecodeJSONWithLimit(httptest.NewRecorder(), req, &body, 1024)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("error=%v, want %v", err, tt.wantErr)
+			}
+			assertDecodeJSONFailure(t, err, tt.wantCode)
+
+			diagnostic, ok := RequestBodyDiagnosticOf(err)
+			if !ok {
+				t.Fatal("expected request body diagnostic")
+			}
+			if diagnostic.Reason != tt.wantReason || diagnostic.Kind != tt.wantKind {
+				t.Fatalf("diagnostic reason=%q kind=%q, want reason=%q kind=%q", diagnostic.Reason, diagnostic.Kind, tt.wantReason, tt.wantKind)
+			}
+			if diagnostic.Limit != 1024 {
+				t.Fatalf("diagnostic limit=%d, want 1024", diagnostic.Limit)
+			}
+		})
+	}
+}
+
+type requestBodyFailingReader struct {
+	payload []byte
+	err     error
+}
+
+func (r *requestBodyFailingReader) Read(p []byte) (int, error) {
+	if len(r.payload) > 0 {
+		n := copy(p, r.payload)
+		r.payload = r.payload[n:]
+		return n, nil
+	}
+	return 0, r.err
+}
+
+type requestBodyTimeoutError struct{}
+
+func (requestBodyTimeoutError) Error() string   { return "read timeout" }
+func (requestBodyTimeoutError) Timeout() bool   { return true }
+func (requestBodyTimeoutError) Temporary() bool { return true }
 
 func assertDecodeJSONFailure(t *testing.T, err error, wantCode failure.Code) {
 	t.Helper()

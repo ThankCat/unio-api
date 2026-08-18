@@ -46,7 +46,7 @@ func (h *responsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(sessionhint.WithClientSessionID(r.Context(), r.Header.Get("session-id")))
 
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		ingresslog.RecordInvalidJSON(r, err)
+		ingresslog.RecordRequestBodyFailure(r, err)
 		writeResponsesDecodeError(w, err)
 		return
 	}

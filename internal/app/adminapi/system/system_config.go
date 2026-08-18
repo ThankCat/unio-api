@@ -94,11 +94,13 @@ func (h *systemConfigHandler) get(w http.ResponseWriter, _ *http.Request) {
 			{
 				Title: "HTTP 服务",
 				Entries: []systemConfigEntryDTO{
-					{Label: "读超时", Value: h.http.ReadTimeout.String(), Env: "HTTP_READ_TIMEOUT"},
+					{Label: "请求头读取超时", Value: h.http.ReadHeaderTimeout.String(), Env: "HTTP_READ_HEADER_TIMEOUT"},
+					{Label: "Admin 请求读取超时", Value: h.http.AdminReadTimeout.String(), Env: "ADMIN_HTTP_READ_TIMEOUT"},
 					{Label: "写超时", Value: h.http.WriteTimeout.String(), Env: "HTTP_WRITE_TIMEOUT"},
 					{Label: "空闲超时", Value: h.http.IdleTimeout.String(), Env: "HTTP_IDLE_TIMEOUT"},
 					{Label: "优雅关闭超时", Value: h.http.ShutdownTimeout.String(), Env: "HTTP_SHUTDOWN_TIMEOUT"},
-					{Label: "Gateway JSON 体上限(字节)", Value: strconv.FormatInt(h.http.GatewayMaxJSONBodyBytes, 10), Env: "GATEWAY_MAX_JSON_BODY_MB"},
+					{Label: "Gateway JSON 体绝对上限(字节)", Value: strconv.FormatInt(h.http.GatewayMaxJSONBodyBytes, 10), Env: "GATEWAY_MAX_JSON_BODY_MB"},
+					{Label: "Gateway 纯文本 JSON 体上限(字节)", Value: strconv.FormatInt(h.http.GatewayTextMaxJSONBodyBytes, 10), Env: "GATEWAY_TEXT_MAX_JSON_BODY_MB"},
 					{Label: "Admin JSON 体上限(字节)", Value: strconv.FormatInt(h.http.AdminMaxJSONBodyBytes, 10), Env: "ADMIN_MAX_JSON_BODY_MB"},
 				},
 			},

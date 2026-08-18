@@ -62,6 +62,7 @@ func writeResponsesStatelessUnsupported(w http.ResponseWriter, message string) {
 // writeResponsesDecodeError 将 JSON decode 错误转换成 Responses 原生 400 / 4xx。
 func writeResponsesDecodeError(w http.ResponseWriter, err error) {
 	status := http.StatusBadRequest
+	code := errorCodeInvalidRequest
 	message := "invalid json body"
 
 	switch {
@@ -71,6 +72,13 @@ func writeResponsesDecodeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, httpx.ErrRequestBodyTooLarge):
 		status = http.StatusRequestEntityTooLarge
 		message = "request body too large"
+	case errors.Is(err, httpx.ErrRequestBodyTimeout):
+		status = http.StatusRequestTimeout
+		code = "request_body_timeout"
+		message = "request body read timed out"
+	case errors.Is(err, httpx.ErrRequestBodyIncomplete), errors.Is(err, httpx.ErrClientDisconnected):
+		code = "request_body_incomplete"
+		message = "request body is incomplete"
 	case errors.Is(err, httpx.ErrEmptyJSONBody):
 		message = "request body is required"
 	case errors.Is(err, httpx.ErrTrailingJSONToken):
@@ -80,7 +88,7 @@ func writeResponsesDecodeError(w http.ResponseWriter, err error) {
 	_ = httpx.WriteOpenAIError(
 		w,
 		status,
-		errorCodeInvalidRequest,
+		code,
 		message,
 		errorTypeInvalidRequest,
 		nil,

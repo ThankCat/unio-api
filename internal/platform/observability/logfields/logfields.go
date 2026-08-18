@@ -231,13 +231,17 @@ type UsageSummary struct {
 
 // JSONDecodeSummary 是公开 Gateway JSON 解码拒绝写入请求完成日志的脱敏诊断。
 type JSONDecodeSummary struct {
+	Reason           string
 	Kind             string
 	Field            string
 	Offset           int64
 	BytesRead        int64
 	ContentLength    int64
+	BodyLimit        int64
+	CompletionStatus string
 	ContentEncoding  string
 	TransferEncoding string
+	HTTPVersion      string
 	UserAgent        string
 }
 
@@ -464,11 +468,18 @@ func (f *Fields) ZapFields() []zap.Field {
 		fields = append(fields, zap.String("error_code", f.errorCode))
 	}
 	if f.hasJSONDecode {
+		reason := f.jsonDecode.Reason
+		if reason == "" {
+			reason = "invalid_json"
+		}
 		fields = append(fields,
-			zap.String("rejection_reason", "invalid_json"),
-			zap.String("decode_error_kind", f.jsonDecode.Kind),
+			zap.String("rejection_reason", reason),
+			zap.String("request_body_error_kind", f.jsonDecode.Kind),
 			zap.Int64("body_bytes_read", f.jsonDecode.BytesRead),
 		)
+		if reason == "invalid_json" {
+			fields = append(fields, zap.String("decode_error_kind", f.jsonDecode.Kind))
+		}
 		if f.jsonDecode.Field != "" {
 			fields = append(fields, zap.String("json_field", f.jsonDecode.Field))
 		}
@@ -478,11 +489,20 @@ func (f *Fields) ZapFields() []zap.Field {
 		if f.jsonDecode.ContentLength >= 0 {
 			fields = append(fields, zap.Int64("content_length", f.jsonDecode.ContentLength))
 		}
+		if f.jsonDecode.BodyLimit > 0 {
+			fields = append(fields, zap.Int64("request_body_limit", f.jsonDecode.BodyLimit))
+		}
+		if f.jsonDecode.CompletionStatus != "" {
+			fields = append(fields, zap.String("body_completion_status", f.jsonDecode.CompletionStatus))
+		}
 		if f.jsonDecode.ContentEncoding != "" {
 			fields = append(fields, zap.String("content_encoding", f.jsonDecode.ContentEncoding))
 		}
 		if f.jsonDecode.TransferEncoding != "" {
 			fields = append(fields, zap.String("transfer_encoding", f.jsonDecode.TransferEncoding))
+		}
+		if f.jsonDecode.HTTPVersion != "" {
+			fields = append(fields, zap.String("http_version", f.jsonDecode.HTTPVersion))
 		}
 		if f.jsonDecode.UserAgent != "" {
 			fields = append(fields, zap.String("user_agent", f.jsonDecode.UserAgent))

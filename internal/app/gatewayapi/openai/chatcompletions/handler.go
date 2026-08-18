@@ -50,7 +50,7 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	r = r.WithContext(sessionhint.WithClientSessionID(r.Context(), r.Header.Get("session-id")))
 
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		ingresslog.RecordInvalidJSON(r, err)
+		ingresslog.RecordRequestBodyFailure(r, err)
 		writeJSONDecodeError(w, err)
 		return
 	}
@@ -308,6 +308,7 @@ func chatErrorFieldParam(err error) *string {
 // writeJSONDecodeError 将 JSON decode 错误转换成 OpenAI-compatible 错误响应。
 func writeJSONDecodeError(w http.ResponseWriter, err error) {
 	status := http.StatusBadRequest
+	code := "invalid_request"
 	message := "invalid json body"
 
 	switch {
@@ -317,6 +318,13 @@ func writeJSONDecodeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, httpx.ErrRequestBodyTooLarge):
 		status = http.StatusRequestEntityTooLarge
 		message = "request body too large"
+	case errors.Is(err, httpx.ErrRequestBodyTimeout):
+		status = http.StatusRequestTimeout
+		code = "request_body_timeout"
+		message = "request body read timed out"
+	case errors.Is(err, httpx.ErrRequestBodyIncomplete), errors.Is(err, httpx.ErrClientDisconnected):
+		code = "request_body_incomplete"
+		message = "request body is incomplete"
 	case errors.Is(err, httpx.ErrEmptyJSONBody):
 		message = "request body is required"
 	case errors.Is(err, httpx.ErrTrailingJSONToken):
@@ -326,7 +334,7 @@ func writeJSONDecodeError(w http.ResponseWriter, err error) {
 	_ = httpx.WriteOpenAIError(
 		w,
 		status,
-		"invalid_request",
+		code,
 		message,
 		"invalid_request_error",
 		nil,

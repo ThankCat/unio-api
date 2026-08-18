@@ -145,6 +145,12 @@ const (
 	// CodeHTTPRequestBodyTooLarge 表示请求体超过允许大小。
 	CodeHTTPRequestBodyTooLarge Code = "http_request_body_too_large"
 
+	// CodeHTTPRequestBodyTimeout 表示读取请求体时发生超时。
+	CodeHTTPRequestBodyTimeout Code = "http_request_body_timeout"
+
+	// CodeHTTPRequestBodyIncomplete 表示请求体在传输过程中不完整。
+	CodeHTTPRequestBodyIncomplete Code = "http_request_body_incomplete"
+
 	// CodeHTTPEmptyJSONBody 表示 JSON 请求体为空。
 	CodeHTTPEmptyJSONBody Code = "http_empty_json_body"
 

@@ -18,6 +18,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
@@ -324,6 +325,33 @@ func TestRouterV1MessagesInvalidBody(t *testing.T) {
 	body := decodeAnthropicError(t, rec.Body)
 	if body.Error.Type != "invalid_request_error" {
 		t.Fatalf("expected error type %q, got %q", "invalid_request_error", body.Error.Type)
+	}
+}
+
+func TestWriteJSONDecodeErrorClassifiesBodyTransportFailures(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantStatus  int
+		wantMessage string
+	}{
+		{name: "timeout", err: httpx.ErrRequestBodyTimeout, wantStatus: http.StatusRequestTimeout, wantMessage: "request body read timed out"},
+		{name: "incomplete", err: httpx.ErrRequestBodyIncomplete, wantStatus: http.StatusBadRequest, wantMessage: "request body is incomplete"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeJSONDecodeError(rec, tt.err)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status=%d, want %d", rec.Code, tt.wantStatus)
+			}
+			body := decodeAnthropicError(t, rec.Body)
+			if body.Error.Type != "invalid_request_error" || body.Error.Message != tt.wantMessage {
+				t.Fatalf("error=%#v, want message=%q", body.Error, tt.wantMessage)
+			}
+		})
 	}
 }
 
