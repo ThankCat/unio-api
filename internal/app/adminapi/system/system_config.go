@@ -64,8 +64,8 @@ func (h *systemConfigHandler) get(w http.ResponseWriter, _ *http.Request) {
 				Title: "上游响应与流式",
 				Entries: []systemConfigEntryDTO{
 					{
-						Label: "非流式响应体上限(字节)",
-						Value: strconv.FormatInt(h.gateway.MaxUpstreamResponseBytes, 10),
+						Label: "非流式响应体上限",
+						Value: formatMiB(h.gateway.MaxUpstreamResponseBytes),
 						Env:   "GATEWAY_MAX_UPSTREAM_RESPONSE_MB",
 					},
 				},
@@ -99,13 +99,19 @@ func (h *systemConfigHandler) get(w http.ResponseWriter, _ *http.Request) {
 					{Label: "写超时", Value: h.http.WriteTimeout.String(), Env: "HTTP_WRITE_TIMEOUT"},
 					{Label: "空闲超时", Value: h.http.IdleTimeout.String(), Env: "HTTP_IDLE_TIMEOUT"},
 					{Label: "优雅关闭超时", Value: h.http.ShutdownTimeout.String(), Env: "HTTP_SHUTDOWN_TIMEOUT"},
-					{Label: "Gateway JSON 体绝对上限(字节)", Value: strconv.FormatInt(h.http.GatewayMaxJSONBodyBytes, 10), Env: "GATEWAY_MAX_JSON_BODY_MB"},
-					{Label: "Gateway 纯文本 JSON 体上限(字节)", Value: strconv.FormatInt(h.http.GatewayTextMaxJSONBodyBytes, 10), Env: "GATEWAY_TEXT_MAX_JSON_BODY_MB"},
-					{Label: "Admin JSON 体上限(字节)", Value: strconv.FormatInt(h.http.AdminMaxJSONBodyBytes, 10), Env: "ADMIN_MAX_JSON_BODY_MB"},
+					{Label: "Gateway JSON 体绝对上限", Value: formatMiB(h.http.GatewayMaxJSONBodyBytes), Env: "GATEWAY_MAX_JSON_BODY_MB"},
+					{Label: "Gateway 纯文本 JSON 体上限", Value: formatMiB(h.http.GatewayTextMaxJSONBodyBytes), Env: "GATEWAY_TEXT_MAX_JSON_BODY_MB"},
+					{Label: "Admin JSON 体上限", Value: formatMiB(h.http.AdminMaxJSONBodyBytes), Env: "ADMIN_MAX_JSON_BODY_MB"},
 				},
 			},
 		},
 	}
 
 	adminhttp.WriteData(w, http.StatusOK, dto)
+}
+
+func formatMiB(bytes int64) string {
+	const bytesPerMiB = 1 << 20
+
+	return strconv.FormatFloat(float64(bytes)/bytesPerMiB, 'f', -1, 64) + " MiB"
 }
