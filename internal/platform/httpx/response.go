@@ -34,6 +34,22 @@ type ErrorBody struct {
 	Code    string  `json:"code"`
 }
 
+// ConsoleErrorResponse 是 Console API 错误响应的外层结构。
+//
+// 该类型与 OpenAI-compatible 错误类型分开定义，避免 Console 协议意外依赖
+// Gateway 的 OpenAI 兼容契约。
+type ConsoleErrorResponse struct {
+	Error ConsoleErrorBody `json:"error"`
+}
+
+// ConsoleErrorBody 描述 Console API 的稳定错误字段。
+type ConsoleErrorBody struct {
+	Code    string  `json:"code"`
+	Message string  `json:"message"`
+	Type    string  `json:"type"`
+	Param   *string `json:"param"`
+}
+
 // WriteJSON 将 v 以 JSON 格式写入响应，并设置 HTTP 状态码。
 func WriteJSON(w http.ResponseWriter, status int, v any) error {
 	if err := RefreshResponseWriteDeadline(w, 0); err != nil {
@@ -73,4 +89,22 @@ func WriteOpenAIError(w http.ResponseWriter, status int, code string, message st
 	}
 
 	return WriteJSON(w, status, errBody)
+}
+
+// WriteConsoleError 写入 Console API 专用的 JSON 错误响应。
+//
+// message 是面向 API 调用方的英文安全摘要；详细内部错误只能写入服务端日志。
+func WriteConsoleError(w http.ResponseWriter, status int, code string, message string, param *string) error {
+	errorType := "request_error"
+	if status >= http.StatusInternalServerError {
+		errorType = "server_error"
+	}
+	return WriteJSON(w, status, ConsoleErrorResponse{
+		Error: ConsoleErrorBody{
+			Code:    code,
+			Message: message,
+			Type:    errorType,
+			Param:   param,
+		},
+	})
 }

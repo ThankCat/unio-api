@@ -269,7 +269,7 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (Api
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash, display_name)
 VALUES ($1, $2, $3)
-RETURNING id, email, password_hash, display_name, created_at, updated_at
+RETURNING id, email, password_hash, display_name, created_at, updated_at, status, uid
 `
 
 type CreateUserParams struct {
@@ -289,6 +289,8 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.DisplayName,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Status,
+		&i.Uid,
 	)
 	return i, err
 }

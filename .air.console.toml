@@ -1,0 +1,18 @@
+# air 热加载配置：console-server（服务 /v1/auth/*）。
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/console-server ./cmd/console-server"
+  bin = "./tmp/console-server"
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "docs", "migrations", "sql", ".git", ".idea"]
+  exclude_regex = ["_test\\.go"]
+  delay = 800
+  kill_delay = "3s"
+  send_interrupt = true
+  stop_on_error = true
+  log = "build-errors-console.log"
+
+[misc]
+  clean_on_exit = false

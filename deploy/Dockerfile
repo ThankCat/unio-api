@@ -27,6 +27,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/admin-server ./cmd/admin-server
 
+FROM builder-base AS console-builder
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/console-server ./cmd/console-server
+
 FROM builder-base AS worker-builder
 
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -82,6 +88,16 @@ LABEL org.opencontainers.image.title="Unio Worker"
 COPY --from=worker-builder --chown=unio:unio /out/worker-server /app/worker-server
 
 CMD ["/app/worker-server"]
+
+FROM runtime-base AS console
+
+LABEL org.opencontainers.image.title="Unio Console Server"
+
+COPY --from=console-builder --chown=unio:unio /out/console-server /app/console-server
+
+EXPOSE 8522
+
+CMD ["/app/console-server"]
 
 FROM ${MIGRATE_TOOL_IMAGE} AS migration
 

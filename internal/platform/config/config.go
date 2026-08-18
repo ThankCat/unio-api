@@ -29,6 +29,7 @@ type Config struct {
 	ModelCatalogSync ModelCatalogSyncConfig
 	Gateway          GatewayConfig
 	Admin            AdminConfig
+	Console          ConsoleConfig
 	TokenEstimate    TokenEstimateConfig
 }
 
@@ -105,6 +106,20 @@ type AdminConfig struct {
 	GatewayInternalToken string
 	// LokiURL 来自 LOKI_URL；只供 admin-server 服务端查询，不暴露给浏览器。
 	LokiURL string
+}
+
+// ConsoleConfig 保存 console-server 的监听、认证密钥和浏览器 Cookie 配置。
+type ConsoleConfig struct {
+	HTTPAddr              string
+	Environment           string
+	AuthSecret            string
+	FixedVerificationCode string
+	CookieSecure          bool
+	CookieDomain          string
+	AllowedOrigins        []string
+	TrustedProxyCIDRs     []string
+	AccessTokenTTL        time.Duration
+	RefreshTokenTTL       time.Duration
 }
 
 // ModelCatalogSyncConfig 保存 models.dev 模型目录同步参数；默认关闭（opt-in），
@@ -604,6 +619,55 @@ func Load() (Config, error) {
 		)
 	}
 
+	consoleCookieSecure, err := getEnvBool(
+		"CONSOLE_COOKIE_SECURE",
+		gatewayEnvironment == GatewayEnvironmentProduction,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	consoleAccessTokenTTL, err := getEnvDuration("CONSOLE_ACCESS_TOKEN_TTL", 15*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	consoleRefreshTokenTTL, err := getEnvDuration("CONSOLE_REFRESH_TOKEN_TTL", 30*24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	if consoleAccessTokenTTL <= 0 || consoleRefreshTokenTTL <= 0 || consoleRefreshTokenTTL <= consoleAccessTokenTTL {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("console token TTLs must be positive and refresh TTL must exceed access TTL"),
+		)
+	}
+	fixedVerificationCodeDefault := ""
+	consoleAuthSecretDefault := ""
+	if gatewayEnvironment == GatewayEnvironmentDevelopment || gatewayEnvironment == GatewayEnvironmentTest {
+		fixedVerificationCodeDefault = "123456"
+		consoleAuthSecretDefault = "unio-console-development-secret-change-me-2026"
+	}
+	fixedVerificationCode := getEnv("CONSOLE_FIXED_VERIFICATION_CODE", fixedVerificationCodeDefault)
+	if fixedVerificationCode != "" && len(fixedVerificationCode) != 6 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("CONSOLE_FIXED_VERIFICATION_CODE must contain exactly 6 digits"),
+		)
+	}
+	for _, ch := range fixedVerificationCode {
+		if ch < '0' || ch > '9' {
+			return Config{}, failure.New(
+				failure.CodeConfigInvalid,
+				failure.WithMessage("CONSOLE_FIXED_VERIFICATION_CODE must contain exactly 6 digits"),
+			)
+		}
+	}
+	if gatewayEnvironment == GatewayEnvironmentProduction && fixedVerificationCode != "" {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("CONSOLE_FIXED_VERIFICATION_CODE is forbidden in production"),
+		)
+	}
+
 	partialAssumedCacheReadRatio, err := getEnvFloat("PARTIAL_ASSUMED_CACHE_READ_RATIO", 0.6)
 	if err != nil {
 		return Config{}, err
@@ -757,6 +821,18 @@ func Load() (Config, error) {
 			GatewayInternalToken:     getEnv("GATEWAY_INTERNAL_TOKEN", ""),
 			LokiURL:                  getEnv("LOKI_URL", "http://127.0.0.1:3100"),
 		},
+		Console: ConsoleConfig{
+			HTTPAddr:              getEnv("CONSOLE_HTTP_ADDR", ":8522"),
+			Environment:           gatewayEnvironment,
+			AuthSecret:            getEnv("CONSOLE_AUTH_SECRET", consoleAuthSecretDefault),
+			FixedVerificationCode: fixedVerificationCode,
+			CookieSecure:          consoleCookieSecure,
+			CookieDomain:          strings.TrimSpace(os.Getenv("CONSOLE_COOKIE_DOMAIN")),
+			AllowedOrigins:        splitCommaSeparated(os.Getenv("CONSOLE_ALLOWED_ORIGINS")),
+			TrustedProxyCIDRs:     splitCommaSeparated(os.Getenv("CONSOLE_TRUSTED_PROXY_CIDRS")),
+			AccessTokenTTL:        consoleAccessTokenTTL,
+			RefreshTokenTTL:       consoleRefreshTokenTTL,
+		},
 		TokenEstimate: TokenEstimateConfig{
 			CountMedia:        tokenEstimateCountMedia,
 			FetchRemoteImages: tokenEstimateFetchRemoteImages,
@@ -764,6 +840,17 @@ func Load() (Config, error) {
 			FetchMaxBytes:     int64(tokenEstimateFetchMaxMB) << 20,
 		},
 	}, nil
+}
+
+func splitCommaSeparated(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value := strings.TrimSpace(part); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func validJSONBodyLimitMB(value int) bool {

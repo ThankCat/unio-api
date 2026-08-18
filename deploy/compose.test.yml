@@ -8,7 +8,7 @@ x-docker-logging: &docker-logging
     max-size: "${DOCKER_LOG_MAX_SIZE:-50m}"
     max-file: "${DOCKER_LOG_MAX_FILE:-5}"
 
-# 三个应用镜像共用的运行策略。
+# 四个应用镜像共用的运行策略。
 x-app-common: &app-common
   pull_policy: never
   env_file:
@@ -34,7 +34,7 @@ x-app-common: &app-common
   networks:
     - network
 
-# 三个 runtime target 共用同一 builder；构建元数据由单服务构建脚本临时注入。
+# 四个 runtime target 共用同一 builder；构建元数据由单服务构建脚本临时注入。
 x-app-build: &app-build
   context: ..
   dockerfile: deploy/Dockerfile
@@ -123,7 +123,7 @@ services:
     networks:
       - network
 
-  # 单机 Test 同时运行三个独立镜像，对齐未来 Prod 制品边界。
+  # 单机 Test 同时运行四个独立镜像，对齐未来 Prod 制品边界。
   gateway:
     <<: *app-common
     image: ${GATEWAY_IMAGE_REPOSITORY}:${GATEWAY_IMAGE_TAG}
@@ -166,6 +166,29 @@ services:
       retries: 12
       start_period: 20s
 
+  console:
+    <<: *app-common
+    image: ${CONSOLE_IMAGE_REPOSITORY:-unio-console-server}:${CONSOLE_IMAGE_TAG:-unconfigured}
+    build:
+      <<: *app-build
+      target: console
+    expose:
+      - "8522"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "http://127.0.0.1:8522/healthz",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
   worker:
     <<: *app-common
     image: ${WORKER_IMAGE_REPOSITORY}:${WORKER_IMAGE_TAG}
@@ -189,6 +212,8 @@ services:
       - ./nginx/test.conf:/etc/nginx/conf.d/default.conf:ro
       # 宿主机放置 unio-admin 构建产物；目录不存在时请先: mkdir -p /var/www/admin
       - /var/www/admin:/var/www/admin:ro
+      # 宿主机放置 unio-console 构建产物。
+      - /var/www/console:/var/www/console:ro
     ports:
       - ${NGINX_BIND_ADDRESS:-127.0.0.1}:${NGINX_PUBLISHED_PORT:-18080}:8080
     healthcheck:
@@ -209,6 +234,8 @@ services:
       gateway:
         condition: service_healthy
       admin:
+        condition: service_healthy
+      console:
         condition: service_healthy
     networks:
       - network

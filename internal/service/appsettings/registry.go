@@ -71,9 +71,10 @@ func (r *Registry) List() []Definition {
 //
 // 新配置在此追加 Definition 即可(启动 seed 会把缺行的默认值写入 DB,admin 面板自动出现)。
 // 域约定:Category 必须与 key 前缀(首个 "." 之前)一致——gateway / anthropic /
-// admin_backend / admin_frontend 四域,消费方互不加载对方的域(单测断言此约定)。
+// admin_backend / admin_frontend / auth 五域,消费方互不加载对方的域(单测断言此约定)。
 func DefaultRegistry() *Registry {
 	return NewRegistry(
+		authVerificationRateLimitsDefinition(),
 		betaPolicyDefinition(),
 		circuitBreakerDefinition(),
 		routeRateLimitDefaultsDefinition(),

@@ -839,6 +839,8 @@ type User struct {
 	DisplayName  string
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
+	Status       string
+	Uid          pgtype.UUID
 }
 
 type UserBalance struct {

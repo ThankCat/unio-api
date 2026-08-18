@@ -556,6 +556,60 @@ func TestLoadRejectsInvalidAdminLoginLimits(t *testing.T) {
 	}
 }
 
+func TestLoadConsoleDevelopmentDefaults(t *testing.T) {
+	clearInfrastructureEnv(t)
+	t.Setenv("GATEWAY_ENV", GatewayEnvironmentDevelopment)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Console.FixedVerificationCode != "123456" {
+		t.Fatalf("expected development fixed code, got %q", cfg.Console.FixedVerificationCode)
+	}
+	if len(cfg.Console.AuthSecret) < 32 {
+		t.Fatal("expected a development authentication secret")
+	}
+	if cfg.Console.AccessTokenTTL != 15*time.Minute || cfg.Console.RefreshTokenTTL != 30*24*time.Hour {
+		t.Fatalf("unexpected console token TTLs: access=%v refresh=%v", cfg.Console.AccessTokenTTL, cfg.Console.RefreshTokenTTL)
+	}
+}
+
+func TestLoadRejectsProductionFixedVerificationCode(t *testing.T) {
+	clearInfrastructureEnv(t)
+	t.Setenv("GATEWAY_ENV", GatewayEnvironmentProduction)
+	t.Setenv("CONSOLE_FIXED_VERIFICATION_CODE", "123456")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected production fixed verification code to fail")
+	}
+	assertConfigFailure(t, err, failure.CodeConfigInvalid)
+}
+
+func TestLoadRejectsInvalidConsoleTokenTTLs(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		accessTTL  string
+		refreshTTL string
+	}{
+		{name: "non-positive access", accessTTL: "0s", refreshTTL: "1h"},
+		{name: "refresh not longer", accessTTL: "1h", refreshTTL: "1h"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearInfrastructureEnv(t)
+			t.Setenv("CONSOLE_ACCESS_TOKEN_TTL", tc.accessTTL)
+			t.Setenv("CONSOLE_REFRESH_TOKEN_TTL", tc.refreshTTL)
+
+			_, err := Load()
+			if err == nil {
+				t.Fatal("expected invalid console token TTLs to fail")
+			}
+			assertConfigFailure(t, err, failure.CodeConfigInvalid)
+		})
+	}
+}
+
 func TestLoadInvalidMaxJSONBodyMB(t *testing.T) {
 	clearInfrastructureEnv(t)
 
@@ -652,6 +706,15 @@ func clearInfrastructureEnv(t *testing.T) {
 	for _, key := range []string{
 		"GATEWAY_HTTP_ADDR",
 		"ADMIN_HTTP_ADDR",
+		"CONSOLE_HTTP_ADDR",
+		"CONSOLE_AUTH_SECRET",
+		"CONSOLE_FIXED_VERIFICATION_CODE",
+		"CONSOLE_COOKIE_SECURE",
+		"CONSOLE_COOKIE_DOMAIN",
+		"CONSOLE_ALLOWED_ORIGINS",
+		"CONSOLE_TRUSTED_PROXY_CIDRS",
+		"CONSOLE_ACCESS_TOKEN_TTL",
+		"CONSOLE_REFRESH_TOKEN_TTL",
 		"ADMIN_LOGIN_SOURCE_FAILURE_LIMIT",
 		"ADMIN_LOGIN_ACCOUNT_FAILURE_LIMIT",
 		"ADMIN_LOGIN_FAILURE_WINDOW",

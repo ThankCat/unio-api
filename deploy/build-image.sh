@@ -4,7 +4,7 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: ./deploy/build-image.sh <gateway|admin|worker|migration> <image-tag>
+Usage: ./deploy/build-image.sh <gateway|admin|console|worker|migration> <image-tag>
 EOF
 }
 
@@ -29,6 +29,10 @@ case "$service" in
   admin)
     env_prefix="ADMIN"
     compose_service="admin"
+    ;;
+  console)
+    env_prefix="CONSOLE"
+    compose_service="console"
     ;;
   worker)
     env_prefix="WORKER"
