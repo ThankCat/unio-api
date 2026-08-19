@@ -24,7 +24,7 @@ type tokenClaims struct {
 	jwt.RegisteredClaims
 }
 
-// TokenPair is an access/refresh JWT pair written to secure browser cookies.
+// TokenPair 是写入安全浏览器 Cookie 的访问与刷新 JWT 令牌对。
 type TokenPair struct {
 	AccessToken  string
 	RefreshToken string
@@ -34,7 +34,7 @@ type TokenPair struct {
 	UserUID      string
 }
 
-// SessionManager creates, rotates, and revokes Console sessions in Redis.
+// SessionManager 在 Redis 中创建、轮换和吊销 Console 会话。
 type SessionManager struct {
 	redis      redis.Cmdable
 	keyNS      string
@@ -44,7 +44,7 @@ type SessionManager struct {
 	now        func() time.Time
 }
 
-// NewSessionManager creates a JWT session manager backed by Redis.
+// NewSessionManager 创建基于 Redis 的 JWT 会话管理器。
 func NewSessionManager(redisClient redis.Cmdable, keyNS, secret string, accessTTL, refreshTTL time.Duration) (*SessionManager, error) {
 	if redisClient == nil {
 		return nil, errors.New("console sessions require redis")
@@ -62,7 +62,7 @@ func NewSessionManager(redisClient redis.Cmdable, keyNS, secret string, accessTT
 	}, nil
 }
 
-// Create stores a refresh session and returns its first token pair.
+// Create 存储刷新会话并返回首个令牌对。
 func (m *SessionManager) Create(ctx context.Context, userUID string) (TokenPair, *consoleservice.Error) {
 	if _, err := uuid.Parse(userUID); err != nil {
 		return TokenPair{}, &consoleservice.Error{Code: CodeSessionInvalid, Message: "The user identifier is invalid.", Status: 401, Cause: err}
@@ -88,8 +88,7 @@ func (m *SessionManager) Create(ctx context.Context, userUID string) (TokenPair,
 	return m.issuePair(userUID, sid, refreshJTI)
 }
 
-// rotateRefreshScript accepts each refresh JTI once and extends the matching
-// Redis session in the same atomic operation.
+// rotateRefreshScript 保证每个刷新 JTI 仅使用一次，并在同一原子操作中延长对应 Redis 会话。
 var rotateRefreshScript = redis.NewScript(`
 local current = redis.call('HGET', KEYS[1], 'refresh_jti')
 local user_uid = redis.call('HGET', KEYS[1], 'user_uid')
@@ -101,7 +100,7 @@ redis.call('PEXPIRE', KEYS[1], ARGV[4])
 return 1
 `)
 
-// Refresh atomically rotates a refresh token and extends the Redis session.
+// Refresh 原子轮换刷新令牌并延长 Redis 会话。
 func (m *SessionManager) Refresh(ctx context.Context, rawToken string) (TokenPair, *consoleservice.Error) {
 	claims, err := m.parse(rawToken, refreshTokenType)
 	if err != nil {
@@ -130,7 +129,27 @@ func (m *SessionManager) Refresh(ctx context.Context, rawToken string) (TokenPai
 	return m.issuePair(claims.Subject, claims.SessionID, newJTI)
 }
 
-// Logout revokes one refresh session. Malformed tokens are treated as already logged out.
+// Authenticate 校验访问令牌，并确认其 Redis 会话仍处于活跃状态。
+// 用户退出或会话被吊销后，仅凭有效的 JWT 也不能通过认证。
+func (m *SessionManager) Authenticate(ctx context.Context, rawToken string) (string, *consoleservice.Error) {
+	claims, err := m.parse(rawToken, accessTokenType)
+	if err != nil {
+		return "", sessionInvalid(err)
+	}
+	if _, err := uuid.Parse(claims.Subject); err != nil {
+		return "", sessionInvalid(err)
+	}
+	userUID, err := m.redis.HGet(ctx, m.sessionKey(claims.SessionID), "user_uid").Result()
+	if errors.Is(err, redis.Nil) || (err == nil && userUID != claims.Subject) {
+		return "", sessionInvalid(nil)
+	}
+	if err != nil {
+		return "", requestUnavailable("read authenticated session", err)
+	}
+	return claims.Subject, nil
+}
+
+// Logout 吊销一个刷新会话；格式错误的令牌按已退出处理。
 func (m *SessionManager) Logout(ctx context.Context, rawToken string) *consoleservice.Error {
 	claims, err := m.parse(rawToken, refreshTokenType)
 	if err != nil {
@@ -147,7 +166,7 @@ func (m *SessionManager) Logout(ctx context.Context, rawToken string) *consolese
 	return nil
 }
 
-// LogoutAll revokes every session belonging to the access-token subject.
+// LogoutAll 吊销访问令牌主体名下的所有会话。
 func (m *SessionManager) LogoutAll(ctx context.Context, rawAccessToken string) *consoleservice.Error {
 	claims, err := m.parse(rawAccessToken, accessTokenType)
 	if err != nil {
@@ -159,7 +178,7 @@ func (m *SessionManager) LogoutAll(ctx context.Context, rawAccessToken string) *
 	return m.RevokeUser(ctx, claims.Subject)
 }
 
-// RevokeUser removes all Redis sessions indexed for a public user ID.
+// RevokeUser 删除公开用户 ID 索引的全部 Redis 会话。
 func (m *SessionManager) RevokeUser(ctx context.Context, userUID string) *consoleservice.Error {
 	sessions, err := m.redis.SMembers(ctx, m.userSessionsKey(userUID)).Result()
 	if err != nil {
@@ -240,4 +259,13 @@ func (m *SessionManager) sessionKey(sid string) string {
 
 func (m *SessionManager) userSessionsKey(userUID string) string {
 	return fmt.Sprintf("%s:console:auth:user_sessions:%s", m.keyNS, userUID)
+}
+
+func sessionInvalid(cause error) *consoleservice.Error {
+	return &consoleservice.Error{
+		Code:    CodeSessionInvalid,
+		Message: "The current session is invalid.",
+		Status:  401,
+		Cause:   cause,
+	}
 }

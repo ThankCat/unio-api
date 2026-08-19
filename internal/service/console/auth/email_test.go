@@ -56,13 +56,37 @@ func TestRandomEmailCheckDelayStaysWithinReservedRange(t *testing.T) {
 	}
 }
 
-func TestCheckEmailValidatesLoginEmailWithoutAccountLookup(t *testing.T) {
-	service := &Service{emailCheckDelay: func() time.Duration { return 0 }}
+func TestCheckEmailRequiresActiveAccount(t *testing.T) {
+	service := &Service{
+		queries:         sqlc.New(registrationEmailDB{exists: true}),
+		emailCheckDelay: func() time.Duration { return 0 },
+	}
 	if err := service.CheckEmail(context.Background(), "invalid"); err == nil || err.Code != CodeInvalidEmail {
 		t.Fatalf("expected invalid email error, got %v", err)
 	}
 	if err := service.CheckEmail(context.Background(), "user@example.com"); err != nil {
-		t.Fatalf("expected valid email check, got %v", err)
+		t.Fatalf("expected active email check, got %v", err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		exists   bool
+		queryErr error
+		wantCode string
+	}{
+		{name: "unknown account", wantCode: CodeInvalidCredentials},
+		{name: "database failure", queryErr: errors.New("database unavailable"), wantCode: consoleservice.CodeRequestUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &Service{
+				queries:         sqlc.New(registrationEmailDB{exists: tc.exists, err: tc.queryErr}),
+				emailCheckDelay: func() time.Duration { return 0 },
+			}
+			err := service.CheckEmail(context.Background(), "user@example.com")
+			if err == nil || err.Code != tc.wantCode {
+				t.Fatalf("expected error code %q, got %v", tc.wantCode, err)
+			}
+		})
 	}
 }
 

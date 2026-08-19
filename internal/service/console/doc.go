@@ -1,3 +1,2 @@
-// Package console contains contracts shared by Console-facing application
-// services. Domain behavior remains in child packages such as auth.
+// Package console 提供面向 Console 的应用服务公共契约；领域行为保留在 auth 等子包中。
 package console

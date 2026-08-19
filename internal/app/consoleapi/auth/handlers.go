@@ -75,12 +75,33 @@ func (h *handler) passwordSession(w http.ResponseWriter, r *http.Request) {
 		h.errorWriter.Write(w, err)
 		return
 	}
-	user, pair, err := h.service.PasswordLogin(r.Context(), request.Email, request.Password)
+	user, pair, err := h.service.PasswordLogin(
+		r.Context(), request.Email, request.Password,
+		consolemiddleware.ClientIPFromContext(r.Context()),
+	)
 	if err != nil {
 		h.errorWriter.Write(w, err)
 		return
 	}
 	h.writeTokenCookies(w, pair)
+	_ = transport.WriteData(w, http.StatusOK, userData{User: user})
+}
+
+func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie(accessCookieName)
+	if err != nil || cookie.Value == "" {
+		h.errorWriter.Write(w, &consoleservice.Error{
+			Code:    serviceauth.CodeSessionInvalid,
+			Message: "The current session is invalid.",
+			Status:  http.StatusUnauthorized,
+		})
+		return
+	}
+	user, currentErr := h.service.CurrentUser(r.Context(), cookie.Value)
+	if currentErr != nil {
+		h.errorWriter.Write(w, currentErr)
+		return
+	}
 	_ = transport.WriteData(w, http.StatusOK, userData{User: user})
 }
 
@@ -102,16 +123,30 @@ func (h *handler) emailCodeSession(w http.ResponseWriter, r *http.Request) {
 	_ = transport.WriteData(w, http.StatusOK, userData{User: user})
 }
 
+func (h *handler) passwordResetVerification(w http.ResponseWriter, r *http.Request) {
+	var request passwordResetVerificationRequest
+	if err := transport.DecodeJSON(w, r, &request); err != nil {
+		h.errorWriter.Write(w, err)
+		return
+	}
+	grant, err := h.service.VerifyPasswordResetCode(
+		r.Context(), request.Email, request.ChallengeID, request.Code,
+		consolemiddleware.ClientIPFromContext(r.Context()),
+	)
+	if err != nil {
+		h.errorWriter.Write(w, err)
+		return
+	}
+	_ = transport.WriteData(w, http.StatusOK, grant)
+}
+
 func (h *handler) passwordReset(w http.ResponseWriter, r *http.Request) {
 	var request passwordResetRequest
 	if err := transport.DecodeJSON(w, r, &request); err != nil {
 		h.errorWriter.Write(w, err)
 		return
 	}
-	if err := h.service.ResetPassword(
-		r.Context(), request.Email, request.NewPassword, request.ChallengeID, request.Code,
-		consolemiddleware.ClientIPFromContext(r.Context()),
-	); err != nil {
+	if err := h.service.ResetPassword(r.Context(), request.ResetToken, request.NewPassword); err != nil {
 		h.errorWriter.Write(w, err)
 		return
 	}

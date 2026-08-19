@@ -14,17 +14,27 @@ const (
 	emailCheckDelayRange   = time.Second
 )
 
-// CheckEmail validates login-flow email syntax without looking up an account.
-// The fixed delay preserves the endpoint as a timing-safe extension point.
+// CheckEmail 检查邮箱是否属于可登录账户，同时保持统一响应延迟和不透明凭据错误。
 func (s *Service) CheckEmail(ctx context.Context, rawEmail string) *consoleservice.Error {
-	if _, err := NormalizeEmail(rawEmail); err != nil {
+	email, err := NormalizeEmail(rawEmail)
+	if err != nil {
 		return err
 	}
-	return waitForEmailCheck(ctx, time.NewTimer(s.emailCheckDelay()))
+	timer := time.NewTimer(s.emailCheckDelay())
+	exists, queryErr := s.queries.ConsoleActiveEmailExists(ctx, email)
+	if waitErr := waitForEmailCheck(ctx, timer); waitErr != nil {
+		return waitErr
+	}
+	if queryErr != nil {
+		return requestUnavailable("check login email availability", queryErr)
+	}
+	if !exists {
+		return invalidCredentials()
+	}
+	return nil
 }
 
-// CheckRegistrationEmail reports whether an email can enter registration
-// without disclosing why an unavailable address was rejected.
+// CheckRegistrationEmail 检查邮箱能否进入注册流程，但不暴露地址被拒绝的原因。
 func (s *Service) CheckRegistrationEmail(ctx context.Context, rawEmail string) *consoleservice.Error {
 	email, err := NormalizeEmail(rawEmail)
 	if err != nil {
@@ -54,7 +64,7 @@ func waitForEmailCheck(ctx context.Context, timer *time.Timer) *consoleservice.E
 	}
 }
 
-// randomEmailCheckDelay returns a uniform delay in the range [1s, 2s).
+// randomEmailCheckDelay 返回 [1s, 2s) 范围内的均匀随机延迟。
 func randomEmailCheckDelay() time.Duration {
 	n, err := rand.Int(rand.Reader, big.NewInt(int64(emailCheckDelayRange)))
 	if err != nil {

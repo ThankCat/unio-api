@@ -2,8 +2,7 @@ package auth
 
 import serviceauth "github.com/ThankCat/unio-gateway/internal/service/console/auth"
 
-// Authentication request and response DTOs live separately from handler
-// control flow so the wire contract remains easy to review and extend.
+// 认证请求与响应 DTO 独立于处理器控制流，便于审查和扩展传输协议。
 type emailCheckRequest struct {
 	Email string `json:"email"`
 }
@@ -35,11 +34,15 @@ type emailCodeSessionRequest struct {
 	Code        string `json:"code"`
 }
 
-type passwordResetRequest struct {
+type passwordResetVerificationRequest struct {
 	Email       string `json:"email"`
-	NewPassword string `json:"new_password"`
 	ChallengeID string `json:"challenge_id"`
 	Code        string `json:"code"`
+}
+
+type passwordResetRequest struct {
+	ResetToken  string `json:"reset_token"`
+	NewPassword string `json:"new_password"`
 }
 
 type userData struct {

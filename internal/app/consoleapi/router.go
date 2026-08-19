@@ -15,14 +15,14 @@ import (
 	consoleservice "github.com/ThankCat/unio-gateway/internal/service/console"
 )
 
-// Deps contains the infrastructure required by the Console HTTP router.
+// Deps 包含 Console HTTP 路由所需的基础设施依赖。
 type Deps struct {
 	Logger      *zap.Logger
 	Config      config.ConsoleConfig
 	AuthService consoleauth.Service
 }
 
-// NewRouter builds the public Console API router and its shared middleware.
+// NewRouter 构建公开的 Console API 路由及其公共中间件。
 func NewRouter(deps Deps) (http.Handler, error) {
 	ipResolver, err := consolemiddleware.NewClientIPResolver(deps.Config.TrustedProxyCIDRs)
 	if err != nil {

@@ -12,7 +12,7 @@ const (
 	refreshCookieName = "unio_refresh_token"
 )
 
-// writeTokenCookies replaces both browser tokens after login or refresh.
+// writeTokenCookies 在登录或刷新后替换浏览器中的两个令牌 Cookie。
 func (h *handler) writeTokenCookies(w http.ResponseWriter, pair serviceauth.TokenPair) {
 	now := time.Now()
 	http.SetCookie(w, &http.Cookie{
@@ -27,7 +27,7 @@ func (h *handler) writeTokenCookies(w http.ResponseWriter, pair serviceauth.Toke
 	})
 }
 
-// clearTokenCookies expires both browser tokens with the original attributes.
+// clearTokenCookies 使用原始属性使两个浏览器令牌 Cookie 立即过期。
 func (h *handler) clearTokenCookies(w http.ResponseWriter) {
 	for _, cookie := range []*http.Cookie{
 		{Name: accessCookieName, Path: "/"},

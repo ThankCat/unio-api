@@ -43,3 +43,25 @@ func TestErrorWriterSeparatesPublicMessageFromInternalCause(t *testing.T) {
 		t.Fatalf("expected internal cause in server log, got %+v", entries)
 	}
 }
+
+func TestErrorWriterIncludesRemainingVerificationAttempts(t *testing.T) {
+	writer := NewErrorWriter(zap.NewNop())
+	recorder := httptest.NewRecorder()
+	remaining := 4
+
+	writer.Write(recorder, &consoleservice.Error{
+		Code:              "auth_verification_code_invalid",
+		Message:           "The verification code is incorrect.",
+		Param:             "code",
+		Status:            http.StatusUnprocessableEntity,
+		RemainingAttempts: &remaining,
+	})
+
+	var response httpx.ConsoleErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error.RemainingAttempts == nil || *response.Error.RemainingAttempts != remaining {
+		t.Fatalf("unexpected remaining attempts: %+v", response.Error)
+	}
+}

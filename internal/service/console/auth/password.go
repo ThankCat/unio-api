@@ -20,10 +20,13 @@ const (
 	argonKeyLength   = 32
 )
 
-// ValidatePassword validates the Console password policy without hashing the value.
+// ValidatePassword 校验 Console 密码策略，但不计算密码哈希。
 func ValidatePassword(password string) *consoleservice.Error {
-	if len(password) < 8 || len(password) > 128 {
-		return &consoleservice.Error{Code: CodeInvalidPassword, Message: "The password must contain between 8 and 128 characters.", Param: "password", Status: 422}
+	if len(password) > 128 {
+		return &consoleservice.Error{Code: CodePasswordTooLong, Message: "The password exceeds the maximum length.", Param: "password", Status: 422}
+	}
+	if len(password) < 8 {
+		return &consoleservice.Error{Code: CodeInvalidPassword, Message: "The password must contain at least 8 characters.", Param: "password", Status: 422}
 	}
 	var hasLetter, hasDigit, hasSymbol bool
 	for _, r := range password {
@@ -44,7 +47,7 @@ func ValidatePassword(password string) *consoleservice.Error {
 	return nil
 }
 
-// HashPassword creates an Argon2id encoded password hash with a random salt.
+// HashPassword 使用随机盐生成 Argon2id 编码的密码哈希。
 func HashPassword(password string) (string, error) {
 	salt := make([]byte, argonSaltLength)
 	if _, err := rand.Read(salt); err != nil {
@@ -61,7 +64,7 @@ func HashPassword(password string) (string, error) {
 	), nil
 }
 
-// VerifyPassword compares a password with a bounded Argon2id encoded hash.
+// VerifyPassword 将密码与参数受限的 Argon2id 编码哈希进行比较。
 func VerifyPassword(encoded, password string) bool {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[1] != "argon2id" || parts[2] != "v=19" {

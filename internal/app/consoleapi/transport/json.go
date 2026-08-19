@@ -12,14 +12,13 @@ import (
 )
 
 const (
-	// CodeInvalidJSONBody identifies an invalid Console JSON request body.
+	// CodeInvalidJSONBody 表示 Console JSON 请求体无效。
 	CodeInvalidJSONBody = "http_invalid_json_body"
 	maxRequestBodyBytes = 1 << 20
 )
 
-// DecodeJSON decodes one strict JSON object with a one-megabyte body limit.
-// Unknown fields and trailing JSON values are rejected so API contract mistakes
-// fail at the transport boundary.
+// DecodeJSON 严格解码单个 JSON 对象，并将请求体限制为 1 MiB。
+// 未知字段和尾随 JSON 值会在传输边界被拒绝，避免错误协议继续进入业务层。
 func DecodeJSON(w http.ResponseWriter, r *http.Request, target any) *consoleservice.Error {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != httpx.ContentTypeJSON {

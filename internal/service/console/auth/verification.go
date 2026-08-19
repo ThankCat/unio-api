@@ -27,19 +27,19 @@ const (
 	maxCodeAttempts = 5
 )
 
-// Purpose identifies the workflow allowed to consume a verification challenge.
+// Purpose 标识允许消费验证码挑战的业务流程。
 type Purpose string
 
 const (
-	// PurposeRegister verifies ownership during account registration.
+	// PurposeRegister 用于注册账户时验证邮箱所有权。
 	PurposeRegister Purpose = "register"
-	// PurposeLogin verifies ownership during email-code login.
+	// PurposeLogin 用于邮箱验证码登录时验证所有权。
 	PurposeLogin Purpose = "login"
-	// PurposePasswordReset verifies ownership during password reset.
+	// PurposePasswordReset 用于重置密码时验证邮箱所有权。
 	PurposePasswordReset Purpose = "password_reset"
 )
 
-// ParsePurpose validates a public verification-purpose value.
+// ParsePurpose 校验公开的验证码用途值。
 func ParsePurpose(raw string) (Purpose, *consoleservice.Error) {
 	purpose := Purpose(raw)
 	switch purpose {
@@ -50,14 +50,14 @@ func ParsePurpose(raw string) (Purpose, *consoleservice.Error) {
 	}
 }
 
-// Challenge is the public metadata returned after issuing a verification code.
+// Challenge 是签发验证码后返回的公开元数据。
 type Challenge struct {
 	ID          string `json:"challenge_id"`
 	ExpiresIn   int64  `json:"expires_in"`
 	ResendAfter int64  `json:"resend_after"`
 }
 
-// Reservation identifies an atomically reserved verification challenge.
+// Reservation 标识被原子预占的验证码挑战。
 type Reservation struct {
 	ChallengeID   string
 	ReservationID string
@@ -68,7 +68,7 @@ type watchRedis interface {
 	Watch(ctx context.Context, fn func(*redis.Tx) error, keys ...string) error
 }
 
-// VerificationStore persists verification challenges and rolling counters in Redis.
+// VerificationStore 在 Redis 中持久化验证码挑战和滚动窗口计数器。
 type VerificationStore struct {
 	redis     watchRedis
 	keyNS     string
@@ -78,7 +78,7 @@ type VerificationStore struct {
 	now       func() time.Time
 }
 
-// NewVerificationStore creates a Redis-backed verification store.
+// NewVerificationStore 创建基于 Redis 的验证码存储。
 func NewVerificationStore(
 	redisClient watchRedis,
 	keyNS string,
@@ -102,8 +102,8 @@ func NewVerificationStore(
 	}, nil
 }
 
-// rollingWindowScript checks every applicable window before recording the event,
-// so one request is either admitted to all counters or rejected by all of them.
+// rollingWindowScript 在记录事件前检查所有适用窗口，确保一次请求要么写入全部计数器，
+// 要么被全部计数器拒绝。
 var rollingWindowScript = redis.NewScript(`
 local now = tonumber(ARGV[1])
 local member = ARGV[2]
@@ -169,8 +169,7 @@ func (s *VerificationStore) applyLimits(ctx context.Context, rules []counterRule
 	}
 }
 
-// issueChallengeScript supersedes the previous challenge and publishes its
-// replacement without exposing an interval in which both are current.
+// issueChallengeScript 替换旧挑战并发布新挑战，避免出现两者同时有效的时间窗口。
 var issueChallengeScript = redis.NewScript(`
 local old = redis.call('GET', KEYS[1])
 if old then
@@ -188,7 +187,7 @@ redis.call('SET', KEYS[1], ARGV[7], 'PX', ARGV[6])
 return old or ''
 `)
 
-// Issue applies send limits and stores a new purpose-bound challenge.
+// Issue 应用发送限流，并存储与用途绑定的新挑战。
 func (s *VerificationStore) Issue(ctx context.Context, email string, purpose Purpose, ip string) (Challenge, *consoleservice.Error) {
 	limits := appsettings.AuthVerificationRateLimits(ctx, s.settings)
 	emailID := s.identifier("email", email)
@@ -230,7 +229,7 @@ func (s *VerificationStore) Issue(ctx context.Context, email string, purpose Pur
 	return Challenge{ID: challengeID, ExpiresIn: int64(challengeTTL.Seconds()), ResendAfter: 30}, nil
 }
 
-// Reserve validates a code and atomically reserves its challenge for one workflow.
+// Reserve 校验验证码，并为单个业务流程原子预占对应挑战。
 func (s *VerificationStore) Reserve(
 	ctx context.Context,
 	email string,
@@ -318,7 +317,7 @@ func (s *VerificationStore) Reserve(
 				if attemptCount >= maxCodeAttempts {
 					resultErr = &consoleservice.Error{Code: CodeVerificationAttemptsExhausted, Message: "The verification challenge has no attempts remaining.", Status: 409}
 				} else {
-					resultErr = &consoleservice.Error{Code: CodeVerificationCodeInvalid, Message: "The verification code is incorrect.", Param: "code", Status: 422}
+					resultErr = verificationCodeInvalid(maxCodeAttempts - attemptCount)
 				}
 				return nil
 			}
@@ -346,8 +345,7 @@ func (s *VerificationStore) Reserve(
 	return Reservation{}, requestUnavailable("reserve verification challenge", redis.TxFailedErr)
 }
 
-// finishReservationScript applies a reservation result only when its owner still
-// matches, preventing an expired worker from consuming a newer reservation.
+// finishReservationScript 仅在预占所有者仍匹配时应用结果，避免过期任务消费较新的预占。
 var finishReservationScript = redis.NewScript(`
 if redis.call('HGET', KEYS[1], 'status') ~= 'reserved' then return 0 end
 if redis.call('HGET', KEYS[1], 'reservation_id') ~= ARGV[1] then return 0 end
@@ -359,12 +357,12 @@ end
 return 1
 `)
 
-// Commit marks a reserved challenge as consumed.
+// Commit 将已预占的挑战标记为已消费。
 func (s *VerificationStore) Commit(ctx context.Context, email string, purpose Purpose, reservation Reservation) *consoleservice.Error {
 	return s.finishReservation(ctx, email, purpose, reservation, "consumed")
 }
 
-// Release returns a reserved challenge to the active state after a failed workflow.
+// Release 在业务流程失败后将已预占挑战恢复为活跃状态。
 func (s *VerificationStore) Release(ctx context.Context, email string, purpose Purpose, reservation Reservation) *consoleservice.Error {
 	return s.finishReservation(ctx, email, purpose, reservation, "active")
 }

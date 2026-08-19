@@ -94,8 +94,8 @@ Cloudflare 免费 Universal SSL 覆盖 `*.unioapi.com`（一层），**不覆盖
 ### 3.2 unio-admin（构建机，通常是本机）
 
 - 使用 `bun run build:test`（`--mode test`）
-- 读取 `.env.test`：`VITE_ADMIN_API_BASE=https://test-admin.unioapi.com`
-- **不要**用 `bun run build:local` 或带 `.env.local` 本机地址的产物部署到服务器
+- 读取 `.env.test`：`VITE_API_BASE_URL=https://test-admin.unioapi.com`
+- **不要**用 `bun run build:dev` 或带 `.env.dev` 本机地址的产物部署到服务器
 
 ---
 
@@ -483,7 +483,7 @@ docker compose \
 |--|-----------------|-----------|
 | Gateway | `:8520`，路径 `/v1` | 同左，经 `test-api` 暴露 |
 | Admin API | `:8521`，路径 `/v1` | 同左，经 `test-admin` 暴露 |
-| Admin 前端 | Vite dev，`.env.local` → `http://127.0.0.1:8521` | 静态托管，`.env.test` → `https://test-admin.unioapi.com` |
+| Admin 前端 | Vite dev，`.env.dev` → `http://127.0.0.1:8521` | 静态托管，`.env.test` → `https://test-admin.unioapi.com` |
 | 入口 | 直连端口 | Cloudflare → Caddy → compose nginx |
 | 数据 | 本地 Compose / 本机 DB | `COMPOSE_PROJECT_NAME=unio-test` 隔离卷 |
 

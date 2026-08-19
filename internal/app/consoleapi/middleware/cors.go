@@ -7,7 +7,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
 
-// CORS restricts credentialed browser requests to explicitly allowed origins.
+// CORS 仅允许显式配置的来源发起携带凭据的浏览器请求。
 func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 	allowed := make(map[string]struct{}, len(allowedOrigins))
 	for _, origin := range allowedOrigins {
@@ -32,7 +32,7 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 				w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, Retry-After")
 				w.Header().Add("Vary", "Origin")
 			}
-			w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Request-ID")
 			w.Header().Set("Access-Control-Max-Age", "300")
 			if r.Method == http.MethodOptions {

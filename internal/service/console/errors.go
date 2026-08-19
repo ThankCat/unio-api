@@ -3,22 +3,23 @@ package console
 import "fmt"
 
 const (
-	// CodeRequestUnavailable identifies an operation that cannot complete temporarily.
+	// CodeRequestUnavailable 表示操作暂时无法完成。
 	CodeRequestUnavailable = "request_unavailable"
 )
 
-// Error is a stable Console application error that is safe to map to HTTP.
-// Cause is retained for server-side diagnostics and is never serialized.
+// Error 是可安全映射到 HTTP 的稳定 Console 应用错误。
+// Cause 仅用于服务端诊断，永远不会序列化到响应中。
 type Error struct {
-	Code       string
-	Message    string
-	Param      string
-	Status     int
-	RetryAfter int
-	Cause      error
+	Code              string
+	Message           string
+	Param             string
+	Status            int
+	RetryAfter        int
+	RemainingAttempts *int
+	Cause             error
 }
 
-// Error returns the safe public message, falling back to the stable code.
+// Error 返回安全的公开消息；消息为空时回退到稳定错误码。
 func (e *Error) Error() string {
 	if e == nil {
 		return ""
@@ -29,7 +30,7 @@ func (e *Error) Error() string {
 	return e.Code
 }
 
-// Unwrap exposes the internal cause for errors.Is and errors.As.
+// Unwrap 向 errors.Is 和 errors.As 暴露内部原因。
 func (e *Error) Unwrap() error {
 	if e == nil {
 		return nil
@@ -37,7 +38,7 @@ func (e *Error) Unwrap() error {
 	return e.Cause
 }
 
-// RequestUnavailable wraps an internal failure without exposing its source.
+// RequestUnavailable 包装内部故障，但不暴露故障来源。
 func RequestUnavailable(operation string, cause error) *Error {
 	return &Error{
 		Code:    CodeRequestUnavailable,

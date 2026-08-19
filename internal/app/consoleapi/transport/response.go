@@ -10,22 +10,22 @@ import (
 	consoleservice "github.com/ThankCat/unio-gateway/internal/service/console"
 )
 
-// DataResponse is the success envelope shared by Console API endpoints.
+// DataResponse 是 Console API 接口共用的成功响应结构。
 type DataResponse[T any] struct {
 	Data T `json:"data"`
 }
 
-// WriteData writes a typed Console success envelope.
+// WriteData 写入带类型的 Console 成功响应结构。
 func WriteData[T any](w http.ResponseWriter, status int, data T) error {
 	return httpx.WriteJSON(w, status, DataResponse[T]{Data: data})
 }
 
-// ErrorWriter maps Console service errors to the public HTTP error envelope.
+// ErrorWriter 将 Console 服务错误映射为公开的 HTTP 错误响应结构。
 type ErrorWriter struct {
 	logger *zap.Logger
 }
 
-// NewErrorWriter creates a Console error writer with server-side diagnostics.
+// NewErrorWriter 创建支持服务端诊断日志的 Console 错误写入器。
 func NewErrorWriter(logger *zap.Logger) ErrorWriter {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -33,7 +33,7 @@ func NewErrorWriter(logger *zap.Logger) ErrorWriter {
 	return ErrorWriter{logger: logger}
 }
 
-// Write serializes a Console error and logs internal failures without exposing causes.
+// Write 序列化 Console 错误，并记录内部故障但不向客户端暴露原因。
 func (e ErrorWriter) Write(w http.ResponseWriter, err *consoleservice.Error) {
 	if err == nil {
 		return
@@ -58,5 +58,12 @@ func (e ErrorWriter) Write(w http.ResponseWriter, err *consoleservice.Error) {
 	if err.Param != "" {
 		param = &err.Param
 	}
-	_ = httpx.WriteConsoleError(w, err.Status, err.Code, message, param)
+	_ = httpx.WriteConsoleErrorDetails(
+		w,
+		err.Status,
+		err.Code,
+		message,
+		param,
+		err.RemainingAttempts,
+	)
 }

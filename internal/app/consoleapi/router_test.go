@@ -25,6 +25,12 @@ type fakeAuthService struct {
 	checkedEmail             string
 	registrationCheckedEmail string
 	loginCalled              bool
+	loginIP                  string
+	currentAccessToken       string
+	resetVerificationEmail   string
+	resetVerificationCode    string
+	resetToken               string
+	resetPassword            string
 }
 
 func (s *fakeAuthService) CheckEmail(_ context.Context, email string) *consoleservice.Error {
@@ -46,18 +52,35 @@ func (s *fakeAuthService) Register(context.Context, string, string, string, stri
 	return serviceauth.User{}, serviceauth.TokenPair{}, nil
 }
 
-func (s *fakeAuthService) PasswordLogin(context.Context, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
+func (s *fakeAuthService) PasswordLogin(_ context.Context, _, _, ip string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
 	s.loginCalled = true
+	s.loginIP = ip
 	return serviceauth.User{UID: testUserUID, Email: "user@example.com", DisplayName: "user"}, serviceauth.TokenPair{
 		AccessToken: "access", RefreshToken: "refresh", AccessTTL: 15 * time.Minute, RefreshTTL: 24 * time.Hour,
 	}, nil
+}
+
+func (s *fakeAuthService) CurrentUser(_ context.Context, accessToken string) (serviceauth.User, *consoleservice.Error) {
+	s.currentAccessToken = accessToken
+	return serviceauth.User{UID: testUserUID, Email: "user@example.com", DisplayName: "user"}, nil
 }
 
 func (s *fakeAuthService) EmailCodeLogin(context.Context, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
 	return serviceauth.User{}, serviceauth.TokenPair{}, nil
 }
 
-func (s *fakeAuthService) ResetPassword(context.Context, string, string, string, string, string) *consoleservice.Error {
+func (s *fakeAuthService) VerifyPasswordResetCode(
+	_ context.Context,
+	email, _, code, _ string,
+) (serviceauth.PasswordResetGrant, *consoleservice.Error) {
+	s.resetVerificationEmail = email
+	s.resetVerificationCode = code
+	return serviceauth.PasswordResetGrant{Token: "prt_test", ExpiresIn: 600}, nil
+}
+
+func (s *fakeAuthService) ResetPassword(_ context.Context, resetToken, password string) *consoleservice.Error {
+	s.resetToken = resetToken
+	s.resetPassword = password
 	return nil
 }
 
@@ -121,6 +144,45 @@ func TestPasswordLoginReturnsPublicIDAndSecureCookies(t *testing.T) {
 		if !cookie.HttpOnly || !cookie.Secure || cookie.Domain != "unioapi.com" {
 			t.Fatalf("unexpected cookie attributes: %+v", cookie)
 		}
+	}
+}
+
+func TestCurrentUserRequiresAndPassesAccessCookie(t *testing.T) {
+	service := &fakeAuthService{}
+	handler := newTestRouter(t, service)
+
+	missingRequest := httptest.NewRequest(http.MethodGet, "/v1/auth/me", nil)
+	missingRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(missingRecorder, missingRequest)
+	if missingRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected missing access cookie to return 401, got %d", missingRecorder.Code)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/auth/me", nil)
+	request.AddCookie(&http.Cookie{Name: "unio_access_token", Value: "access-token"})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected current user 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if service.currentAccessToken != "access-token" {
+		t.Fatalf("expected access token to reach service, got %q", service.currentAccessToken)
+	}
+}
+
+func TestPasswordLoginReceivesResolvedClientIP(t *testing.T) {
+	service := &fakeAuthService{}
+	handler := newTestRouter(t, service)
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/sessions/password", strings.NewReader(`{"email":"user@example.com","password":"Password1!"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.RemoteAddr = "10.0.0.3:443"
+	request.Header.Set("X-Forwarded-For", "198.51.100.8, 10.0.0.2")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK || service.loginIP != "198.51.100.8" {
+		t.Fatalf("expected resolved login IP, status=%d ip=%q", recorder.Code, service.loginIP)
 	}
 }
 
@@ -204,6 +266,52 @@ func TestRegistrationEmailCheckUsesDedicatedEndpoint(t *testing.T) {
 	}
 }
 
+func TestPasswordResetUsesVerificationThenOneTimeCredential(t *testing.T) {
+	service := &fakeAuthService{}
+	handler := newTestRouter(t, service)
+	verifyRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/auth/password-reset-verifications",
+		strings.NewReader(`{"email":"user@example.com","challenge_id":"vch_test","code":"123456"}`),
+	)
+	verifyRequest.Header.Set("Content-Type", "application/json")
+	verifyRecorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(verifyRecorder, verifyRequest)
+
+	if verifyRecorder.Code != http.StatusOK {
+		t.Fatalf("expected password reset verification 200, got %d body=%s", verifyRecorder.Code, verifyRecorder.Body.String())
+	}
+	if service.resetVerificationEmail != "user@example.com" || service.resetVerificationCode != "123456" {
+		t.Fatalf("unexpected reset verification input: email=%q code=%q", service.resetVerificationEmail, service.resetVerificationCode)
+	}
+	var verificationPayload struct {
+		Data serviceauth.PasswordResetGrant `json:"data"`
+	}
+	if err := json.Unmarshal(verifyRecorder.Body.Bytes(), &verificationPayload); err != nil {
+		t.Fatal(err)
+	}
+	if verificationPayload.Data.Token != "prt_test" || verificationPayload.Data.ExpiresIn != 600 {
+		t.Fatalf("unexpected reset grant response: %+v", verificationPayload.Data)
+	}
+
+	resetRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/auth/password-resets",
+		strings.NewReader(`{"reset_token":"prt_test","new_password":"Password1!"}`),
+	)
+	resetRequest.Header.Set("Content-Type", "application/json")
+	resetRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(resetRecorder, resetRequest)
+
+	if resetRecorder.Code != http.StatusOK {
+		t.Fatalf("expected password reset 200, got %d body=%s", resetRecorder.Code, resetRecorder.Body.String())
+	}
+	if service.resetToken != "prt_test" || service.resetPassword != "Password1!" {
+		t.Fatalf("unexpected password reset input: token=%q password=%q", service.resetToken, service.resetPassword)
+	}
+}
+
 func TestDisallowedOriginIsRejectedBeforeAuthentication(t *testing.T) {
 	service := &fakeAuthService{}
 	handler := newTestRouter(t, service)
@@ -216,6 +324,23 @@ func TestDisallowedOriginIsRejectedBeforeAuthentication(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden || service.loginCalled {
 		t.Fatalf("expected rejected origin before service call, status=%d", rec.Code)
+	}
+}
+
+func TestCORSPreflightAllowsAuthenticatedGet(t *testing.T) {
+	handler := newTestRouter(t, &fakeAuthService{})
+	req := httptest.NewRequest(http.MethodOptions, "/v1/auth/me", nil)
+	req.Header.Set("Origin", "https://console.unioapi.com")
+	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected preflight 204, got %d", rec.Code)
+	}
+	if methods := rec.Header().Get("Access-Control-Allow-Methods"); methods != "GET, POST, OPTIONS" {
+		t.Fatalf("unexpected allowed methods %q", methods)
 	}
 }
 

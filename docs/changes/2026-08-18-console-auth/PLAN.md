@@ -15,12 +15,19 @@ Implemented on 2026-08-19 across `unio-gateway`, `unio-admin`, and
 - Add the verification rate-limit runtime setting to the existing Admin settings registry.
 - Update `unio-admin` to edit the authentication setting.
 - Update `unio-console` authentication pages to call the API using secure cookies.
+- Add `GET /v1/auth/me` to validate the access-token session and return the
+  current active user.
+- Restore browser sessions on Console startup, protect application routes, and
+  refresh an expired access token once before returning to sign-in.
+- Rate-limit password login failures by email plus IP and by IP without adding
+  an account-wide lockout that another user could trigger.
 
 ## Verification
 
 - Gateway: `gofmt`, `sqlc generate`, `go mod tidy`, and `go test ./...` pass.
 - Admin: typecheck, lint, 121 tests, and production build pass.
-- Console: typecheck, lint, 19 tests, and production build pass.
+- Console: typecheck, lint, 37 tests, and production build pass.
 - Browser verification covers login and registration email-check loading plus
-  password show/hide behavior against the running local services.
+  password show/hide behavior, unauthenticated route protection, and the live
+  `/v1/auth/me` plus CORS contract against the running local services.
 - `git diff --check` passes in all three repositories.

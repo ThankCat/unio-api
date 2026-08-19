@@ -75,6 +75,7 @@ func (r *Registry) List() []Definition {
 func DefaultRegistry() *Registry {
 	return NewRegistry(
 		authVerificationRateLimitsDefinition(),
+		authPasswordLoginRateLimitsDefinition(),
 		betaPolicyDefinition(),
 		circuitBreakerDefinition(),
 		routeRateLimitDefaultsDefinition(),

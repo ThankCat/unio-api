@@ -18,12 +18,12 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ConsoleServerAppDB is the database contract required by console-server.
+// ConsoleServerAppDB 定义 console-server 所需的数据库能力。
 type ConsoleServerAppDB interface {
 	consoleservice.DB
 }
 
-// ConsoleServerAppDeps contains console-server startup dependencies.
+// ConsoleServerAppDeps 包含 console-server 的启动依赖。
 type ConsoleServerAppDeps struct {
 	Logger *zap.Logger
 	Config config.Config
@@ -31,13 +31,13 @@ type ConsoleServerAppDeps struct {
 	Redis  *redis.Client
 }
 
-// ConsoleServerApp owns the Console HTTP handler and tracing lifecycle.
+// ConsoleServerApp 管理 Console HTTP 处理器和链路追踪生命周期。
 type ConsoleServerApp struct {
 	Handler http.Handler
 	tracer  *tracing.Provider
 }
 
-// Shutdown flushes Console tracing resources.
+// Shutdown 刷新并释放 Console 链路追踪资源。
 func (a *ConsoleServerApp) Shutdown(ctx context.Context) error {
 	if a == nil || a.tracer == nil {
 		return nil
@@ -45,7 +45,7 @@ func (a *ConsoleServerApp) Shutdown(ctx context.Context) error {
 	return a.tracer.Shutdown(ctx)
 }
 
-// NewConsoleServerApp wires Console settings, authentication, and HTTP routing.
+// NewConsoleServerApp 装配 Console 配置、认证服务和 HTTP 路由。
 func NewConsoleServerApp(ctx context.Context, deps ConsoleServerAppDeps) (*ConsoleServerApp, error) {
 	if deps.Config.Console.Environment == config.GatewayEnvironmentProduction && deps.Config.Console.FixedVerificationCode == "" {
 		return nil, errors.New("console email delivery is not configured for production")
@@ -96,10 +96,21 @@ func NewConsoleServerApp(ctx context.Context, deps ConsoleServerAppDeps) (*Conso
 		_ = tracerProvider.Shutdown(ctx)
 		return nil, err
 	}
+	loginLimiter, err := consoleauth.NewPasswordLoginLimiter(
+		deps.Redis,
+		deps.Config.Redis.KeyNamespace,
+		deps.Config.Console.AuthSecret,
+		settingsStore,
+	)
+	if err != nil {
+		_ = tracerProvider.Shutdown(ctx)
+		return nil, err
+	}
 	authService, err := consoleauth.NewService(
 		deps.DB,
 		verificationStore,
 		sessions,
+		loginLimiter,
 		deps.Logger,
 	)
 	if err != nil {

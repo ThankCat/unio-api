@@ -11,6 +11,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const consoleActiveEmailExists = `-- name: ConsoleActiveEmailExists :one
+SELECT EXISTS (
+    SELECT 1
+    FROM users
+    WHERE lower(email) = lower($1)
+      AND status = 'active'
+)
+`
+
+func (q *Queries) ConsoleActiveEmailExists(ctx context.Context, email string) (bool, error) {
+	row := q.db.QueryRow(ctx, consoleActiveEmailExists, email)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const consoleRegistrationEmailExists = `-- name: ConsoleRegistrationEmailExists :one
 SELECT EXISTS (
     SELECT 1

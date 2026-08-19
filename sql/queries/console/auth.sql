@@ -16,6 +16,14 @@ SELECT EXISTS (
     WHERE lower(email) = lower(sqlc.arg(email))
 );
 
+-- name: ConsoleActiveEmailExists :one
+SELECT EXISTS (
+    SELECT 1
+    FROM users
+    WHERE lower(email) = lower(sqlc.arg(email))
+      AND status = 'active'
+);
+
 -- name: GetConsoleUserByUID :one
 SELECT id, uid, email, password_hash, display_name, status, created_at, updated_at
 FROM users

@@ -17,31 +17,32 @@ import (
 	consoleservice "github.com/ThankCat/unio-gateway/internal/service/console"
 )
 
-// User is the public Console user view. UID is serialized as id, while the
-// internal auto-increment database key is never exposed.
+// User 是 Console 的公开用户视图。UID 序列化为 id，内部自增数据库主键永不暴露。
 type User struct {
 	UID         string `json:"id"`
 	Email       string `json:"email"`
 	DisplayName string `json:"display_name"`
 }
 
-// Service coordinates Console authentication across PostgreSQL and Redis.
+// Service 编排横跨 PostgreSQL 和 Redis 的 Console 认证流程。
 type Service struct {
 	queries         *sqlc.Queries
 	verification    *VerificationStore
 	sessions        *SessionManager
+	loginLimiter    *PasswordLoginLimiter
 	logger          *zap.Logger
 	emailCheckDelay func() time.Duration
 }
 
-// NewService creates the Console authentication service.
+// NewService 创建 Console 认证服务。
 func NewService(
 	db consoleservice.DB,
 	verification *VerificationStore,
 	sessions *SessionManager,
+	loginLimiter *PasswordLoginLimiter,
 	logger *zap.Logger,
 ) (*Service, error) {
-	if db == nil || verification == nil || sessions == nil {
+	if db == nil || verification == nil || sessions == nil || loginLimiter == nil {
 		return nil, errors.New("console authentication dependencies are incomplete")
 	}
 	if logger == nil {
@@ -51,12 +52,13 @@ func NewService(
 		queries:         sqlc.New(db),
 		verification:    verification,
 		sessions:        sessions,
+		loginLimiter:    loginLimiter,
 		logger:          logger,
 		emailCheckDelay: randomEmailCheckDelay,
 	}, nil
 }
 
-// SendChallenge issues a purpose-bound email verification challenge.
+// SendChallenge 签发与指定用途绑定的邮箱验证码挑战。
 func (s *Service) SendChallenge(
 	ctx context.Context,
 	rawEmail string,
@@ -74,7 +76,7 @@ func (s *Service) SendChallenge(
 	return s.verification.Issue(ctx, email, purpose, ip)
 }
 
-// Register verifies an email challenge, creates the user, and starts a session.
+// Register 验证邮箱挑战、创建用户并建立会话。
 func (s *Service) Register(
 	ctx context.Context,
 	rawEmail string,
@@ -132,22 +134,55 @@ func (s *Service) Register(
 	return user, pair, sessionErr
 }
 
-// PasswordLogin authenticates a user with an email address and password.
-func (s *Service) PasswordLogin(ctx context.Context, rawEmail, password string) (User, TokenPair, *consoleservice.Error) {
+// PasswordLogin 使用邮箱和密码认证用户。
+func (s *Service) PasswordLogin(ctx context.Context, rawEmail, password, ip string) (User, TokenPair, *consoleservice.Error) {
 	email, err := NormalizeEmail(rawEmail)
 	if err != nil {
 		return User{}, TokenPair{}, invalidCredentials()
 	}
+	if limitErr := s.loginLimiter.Check(ctx, email, ip); limitErr != nil {
+		return User{}, TokenPair{}, limitErr
+	}
 	row, queryErr := s.queries.GetConsoleUserByEmail(ctx, email)
-	if queryErr != nil || row.Status != "active" || !VerifyPassword(row.PasswordHash, password) {
+	if queryErr != nil && !errors.Is(queryErr, pgx.ErrNoRows) {
+		return User{}, TokenPair{}, requestUnavailable("read password login user", queryErr)
+	}
+	if errors.Is(queryErr, pgx.ErrNoRows) || row.Status != "active" || !VerifyPassword(row.PasswordHash, password) {
+		if limitErr := s.loginLimiter.RecordFailure(ctx, email, ip); limitErr != nil {
+			return User{}, TokenPair{}, limitErr
+		}
 		return User{}, TokenPair{}, invalidCredentials()
+	}
+	if limitErr := s.loginLimiter.ResetEmailIP(ctx, email, ip); limitErr != nil {
+		return User{}, TokenPair{}, limitErr
 	}
 	user := userFromEmailRow(row)
 	pair, sessionErr := s.sessions.Create(ctx, user.UID)
 	return user, pair, sessionErr
 }
 
-// EmailCodeLogin authenticates a user with a purpose-bound email challenge.
+// CurrentUser 返回已认证访问令牌会话对应的活跃用户。
+func (s *Service) CurrentUser(ctx context.Context, accessToken string) (User, *consoleservice.Error) {
+	userUID, sessionErr := s.sessions.Authenticate(ctx, accessToken)
+	if sessionErr != nil {
+		return User{}, sessionErr
+	}
+	uid, parseErr := uuid.Parse(userUID)
+	if parseErr != nil {
+		return User{}, sessionInvalid(parseErr)
+	}
+	row, queryErr := s.queries.GetConsoleUserByUID(ctx, pgUUID(uid))
+	if errors.Is(queryErr, pgx.ErrNoRows) || (queryErr == nil && row.Status != "active") {
+		_ = s.sessions.RevokeUser(ctx, userUID)
+		return User{}, sessionInvalid(nil)
+	}
+	if queryErr != nil {
+		return User{}, requestUnavailable("read current console user", queryErr)
+	}
+	return userFromUIDRow(row), nil
+}
+
+// EmailCodeLogin 使用与用途绑定的邮箱挑战认证用户。
 func (s *Service) EmailCodeLogin(
 	ctx context.Context,
 	rawEmail, challengeID, code, ip string,
@@ -181,22 +216,18 @@ func (s *Service) EmailCodeLogin(
 	return user, pair, sessionErr
 }
 
-// ResetPassword verifies a reset challenge, updates the hash, and revokes sessions.
-func (s *Service) ResetPassword(
+// VerifyPasswordResetCode 消费密码重置挑战，并为密码更新步骤签发一次性凭证。
+func (s *Service) VerifyPasswordResetCode(
 	ctx context.Context,
-	rawEmail, newPassword, challengeID, code, ip string,
-) *consoleservice.Error {
+	rawEmail, challengeID, code, ip string,
+) (PasswordResetGrant, *consoleservice.Error) {
 	email, err := NormalizeEmail(rawEmail)
 	if err != nil {
-		return err
-	}
-	if err := ValidatePassword(newPassword); err != nil {
-		err.Param = "new_password"
-		return err
+		return PasswordResetGrant{}, err
 	}
 	reservation, reserveErr := s.verification.Reserve(ctx, email, PurposePasswordReset, ip, challengeID, code)
 	if reserveErr != nil {
-		return reserveErr
+		return PasswordResetGrant{}, reserveErr
 	}
 	release := true
 	defer func() {
@@ -205,10 +236,49 @@ func (s *Service) ResetPassword(
 		}
 	}()
 	row, queryErr := s.queries.GetConsoleUserByEmail(ctx, email)
-	if errors.Is(queryErr, pgx.ErrNoRows) {
+	if errors.Is(queryErr, pgx.ErrNoRows) || (queryErr == nil && row.Status != "active") {
 		release = false
 		_ = s.verification.Commit(ctx, email, PurposePasswordReset, reservation)
-		return nil
+		return PasswordResetGrant{}, invalidCredentials()
+	}
+	if queryErr != nil {
+		return PasswordResetGrant{}, requestUnavailable("read password reset user", queryErr)
+	}
+	grant, grantErr := s.verification.IssuePasswordResetGrant(ctx, email, reservation, uuidString(row.Uid))
+	if grantErr != nil {
+		return PasswordResetGrant{}, grantErr
+	}
+	release = false
+	return grant, nil
+}
+
+// ResetPassword 消费一次性重置凭证、更新密码哈希，并吊销该账户的全部现有会话。
+func (s *Service) ResetPassword(ctx context.Context, resetToken, newPassword string) *consoleservice.Error {
+	if err := ValidatePassword(newPassword); err != nil {
+		err.Param = "new_password"
+		return err
+	}
+	reservation, reserveErr := s.verification.ReservePasswordResetGrant(ctx, resetToken)
+	if reserveErr != nil {
+		return reserveErr
+	}
+	release := true
+	defer func() {
+		if release {
+			_ = s.verification.ReleasePasswordResetGrant(context.Background(), reservation)
+		}
+	}()
+	uid, parseErr := uuid.Parse(reservation.UserUID)
+	if parseErr != nil {
+		release = false
+		_ = s.verification.CommitPasswordResetGrant(ctx, reservation)
+		return passwordResetTokenUnavailable()
+	}
+	row, queryErr := s.queries.GetConsoleUserByUID(ctx, pgUUID(uid))
+	if errors.Is(queryErr, pgx.ErrNoRows) || (queryErr == nil && row.Status != "active") {
+		release = false
+		_ = s.verification.CommitPasswordResetGrant(ctx, reservation)
+		return passwordResetTokenUnavailable()
 	}
 	if queryErr != nil {
 		return requestUnavailable("read password reset user", queryErr)
@@ -220,16 +290,16 @@ func (s *Service) ResetPassword(
 	if _, updateErr := s.queries.UpdateConsolePassword(ctx, sqlc.UpdateConsolePasswordParams{PasswordHash: hash, ID: row.ID}); updateErr != nil {
 		return requestUnavailable("update console password", updateErr)
 	}
-	release = false
 	userUID := uuidString(row.Uid)
 	_ = s.sessions.RevokeUser(ctx, userUID)
-	if commitErr := s.verification.Commit(ctx, email, PurposePasswordReset, reservation); commitErr != nil {
-		s.logger.Warn("password reset challenge finalization failed", zap.Error(commitErr), zap.String("user_uid", userUID))
+	release = false
+	if commitErr := s.verification.CommitPasswordResetGrant(ctx, reservation); commitErr != nil {
+		s.logger.Warn("password reset credential finalization failed", zap.Error(commitErr), zap.String("user_uid", userUID))
 	}
 	return nil
 }
 
-// Refresh rotates a refresh token and issues a new token pair.
+// Refresh 轮换刷新令牌并签发新令牌对。
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, *consoleservice.Error) {
 	pair, err := s.sessions.Refresh(ctx, refreshToken)
 	if err != nil {
@@ -248,17 +318,17 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 	return pair, nil
 }
 
-// Logout revokes the session identified by a refresh token.
+// Logout 吊销刷新令牌标识的会话。
 func (s *Service) Logout(ctx context.Context, refreshToken string) *consoleservice.Error {
 	return s.sessions.Logout(ctx, refreshToken)
 }
 
-// LogoutAll revokes every active session for the access-token subject.
+// LogoutAll 吊销访问令牌主体名下的所有活跃会话。
 func (s *Service) LogoutAll(ctx context.Context, accessToken string) *consoleservice.Error {
 	return s.sessions.LogoutAll(ctx, accessToken)
 }
 
-// NormalizeEmail validates and canonicalizes an email address for lookup.
+// NormalizeEmail 校验并规范化用于查询的邮箱地址。
 func NormalizeEmail(raw string) (string, *consoleservice.Error) {
 	email := strings.ToLower(strings.TrimSpace(raw))
 	if email == "" || len(email) > 254 || strings.ContainsAny(email, "\r\n") {
@@ -295,5 +365,9 @@ func userFromCreateRow(row sqlc.CreateConsoleUserRow) User {
 }
 
 func userFromEmailRow(row sqlc.GetConsoleUserByEmailRow) User {
+	return User{UID: uuidString(row.Uid), Email: row.Email, DisplayName: row.DisplayName}
+}
+
+func userFromUIDRow(row sqlc.GetConsoleUserByUIDRow) User {
 	return User{UID: uuidString(row.Uid), Email: row.Email, DisplayName: row.DisplayName}
 }

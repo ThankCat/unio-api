@@ -8,7 +8,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
 
-// Recoverer converts panics into the Console-specific error envelope.
+// Recoverer 将 panic 转换为 Console 专用错误响应结构。
 func Recoverer(logger *zap.Logger) func(http.Handler) http.Handler {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -27,11 +27,11 @@ func Recoverer(logger *zap.Logger) func(http.Handler) http.Handler {
 					zap.String("path", r.URL.Path),
 					zap.String("request_id", httpx.RequestID(r.Context())),
 				)
-					_ = httpx.WriteConsoleError(
-						w,
-						http.StatusInternalServerError,
-						"request_failed",
-						"The request could not be completed.",
+				_ = httpx.WriteConsoleError(
+					w,
+					http.StatusInternalServerError,
+					"request_failed",
+					"The request could not be completed.",
 					nil,
 				)
 			}()

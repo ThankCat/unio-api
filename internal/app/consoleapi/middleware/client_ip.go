@@ -11,12 +11,12 @@ import (
 
 type clientIPContextKey struct{}
 
-// ClientIPResolver extracts client addresses only from trusted proxy chains.
+// ClientIPResolver 仅从可信代理链中提取客户端地址。
 type ClientIPResolver struct {
 	trusted []netip.Prefix
 }
 
-// NewClientIPResolver parses the configured trusted proxy CIDRs.
+// NewClientIPResolver 解析配置的可信代理 CIDR。
 func NewClientIPResolver(cidrs []string) (*ClientIPResolver, error) {
 	resolver := &ClientIPResolver{}
 	for _, raw := range cidrs {
@@ -29,7 +29,7 @@ func NewClientIPResolver(cidrs []string) (*ClientIPResolver, error) {
 	return resolver, nil
 }
 
-// ClientIP stores the resolved client address in the request context.
+// ClientIP 将解析后的客户端地址写入请求上下文。
 func ClientIP(resolver *ClientIPResolver) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +39,7 @@ func ClientIP(resolver *ClientIPResolver) func(http.Handler) http.Handler {
 	}
 }
 
-// ClientIPFromContext returns the trusted client address or "unknown".
+// ClientIPFromContext 返回可信客户端地址；无法识别时返回 "unknown"。
 func ClientIPFromContext(ctx context.Context) string {
 	if value, ok := ctx.Value(clientIPContextKey{}).(string); ok && value != "" {
 		return value
@@ -47,7 +47,7 @@ func ClientIPFromContext(ctx context.Context) string {
 	return "unknown"
 }
 
-// Resolve walks X-Forwarded-For from the trusted peer toward the client.
+// Resolve 从可信对端开始反向遍历 X-Forwarded-For，定位真实客户端。
 func (r *ClientIPResolver) Resolve(request *http.Request) string {
 	remote := request.RemoteAddr
 	if host, _, err := net.SplitHostPort(remote); err == nil {

@@ -44,10 +44,11 @@ type ConsoleErrorResponse struct {
 
 // ConsoleErrorBody 描述 Console API 的稳定错误字段。
 type ConsoleErrorBody struct {
-	Code    string  `json:"code"`
-	Message string  `json:"message"`
-	Type    string  `json:"type"`
-	Param   *string `json:"param"`
+	Code              string  `json:"code"`
+	Message           string  `json:"message"`
+	Type              string  `json:"type"`
+	Param             *string `json:"param"`
+	RemainingAttempts *int    `json:"remaining_attempts,omitempty"`
 }
 
 // WriteJSON 将 v 以 JSON 格式写入响应，并设置 HTTP 状态码。
@@ -95,16 +96,29 @@ func WriteOpenAIError(w http.ResponseWriter, status int, code string, message st
 //
 // message 是面向 API 调用方的英文安全摘要；详细内部错误只能写入服务端日志。
 func WriteConsoleError(w http.ResponseWriter, status int, code string, message string, param *string) error {
+	return WriteConsoleErrorDetails(w, status, code, message, param, nil)
+}
+
+// WriteConsoleErrorDetails 写入可带结构化详情的 Console 错误响应。
+func WriteConsoleErrorDetails(
+	w http.ResponseWriter,
+	status int,
+	code string,
+	message string,
+	param *string,
+	remainingAttempts *int,
+) error {
 	errorType := "request_error"
 	if status >= http.StatusInternalServerError {
 		errorType = "server_error"
 	}
 	return WriteJSON(w, status, ConsoleErrorResponse{
 		Error: ConsoleErrorBody{
-			Code:    code,
-			Message: message,
-			Type:    errorType,
-			Param:   param,
+			Code:              code,
+			Message:           message,
+			Type:              errorType,
+			Param:             param,
+			RemainingAttempts: remainingAttempts,
 		},
 	})
 }
