@@ -9,6 +9,7 @@ import (
 
 	consoleauth "github.com/ThankCat/unio-gateway/internal/app/consoleapi/auth"
 	consolemiddleware "github.com/ThankCat/unio-gateway/internal/app/consoleapi/middleware"
+	consolerequests "github.com/ThankCat/unio-gateway/internal/app/consoleapi/requests"
 	"github.com/ThankCat/unio-gateway/internal/app/consoleapi/transport"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpmw"
@@ -17,9 +18,10 @@ import (
 
 // Deps 包含 Console HTTP 路由所需的基础设施依赖。
 type Deps struct {
-	Logger      *zap.Logger
-	Config      config.ConsoleConfig
-	AuthService consoleauth.Service
+	Logger         *zap.Logger
+	Config         config.ConsoleConfig
+	AuthService    consoleauth.Service
+	RequestService consolerequests.Service
 }
 
 // NewRouter 构建公开的 Console API 路由及其公共中间件。
@@ -62,6 +64,15 @@ func NewRouter(deps Deps) (http.Handler, error) {
 			Service:      deps.AuthService,
 			ErrorWriter:  errorWriter,
 		})
+		if deps.RequestService != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(consoleauth.RequireAuth(deps.AuthService, errorWriter))
+				consolerequests.Register(r, consolerequests.Deps{
+					Service:     deps.RequestService,
+					ErrorWriter: errorWriter,
+				})
+			})
+		}
 	})
 	return r, nil
 }

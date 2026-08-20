@@ -11,6 +11,90 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countConsoleBilledRequests = `-- name: CountConsoleBilledRequests :one
+SELECT COUNT(*)::bigint AS total
+FROM request_records r
+JOIN usage_records ur ON ur.request_record_id = r.id
+LEFT JOIN api_keys ak ON ak.id = r.api_key_id
+WHERE r.user_id = $1
+  AND (
+      COALESCE(cardinality($2::bigint[]), 0) = 0
+      OR COALESCE(r.route_id, ak.route_id) = ANY($2::bigint[])
+  )
+  AND (
+      COALESCE(cardinality($3::bigint[]), 0) = 0
+      OR r.api_key_id = ANY($3::bigint[])
+  )
+  AND (
+      COALESCE(cardinality($4::text[]), 0) = 0
+      OR r.endpoint = ANY($4::text[])
+  )
+  AND (
+      COALESCE(cardinality($5::text[]), 0) = 0
+      OR (r.stream AND 'stream' = ANY($5::text[]))
+      OR ((NOT r.stream) AND 'sync' = ANY($5::text[]))
+  )
+  AND (
+      COALESCE(cardinality($6::text[]), 0) = 0
+      OR (
+          CASE
+              WHEN r.status = 'succeeded' THEN '2xx'
+              WHEN r.status = 'canceled' THEN '4xx'
+              WHEN lower(COALESCE(r.error_code, '')) IN (
+                  'invalid_request',
+                  'invalid_api_key',
+                  'authentication_error',
+                  'permission_denied',
+                  'not_found',
+                  'rate_limit_exceeded',
+                  'insufficient_quota',
+                  'context_length_exceeded'
+              ) THEN '4xx'
+              WHEN COALESCE(r.error_code, '') LIKE '4%' THEN '4xx'
+              ELSE '5xx'
+          END
+      ) = ANY($6::text[])
+  )
+  AND (
+      $7::text IS NULL
+      OR btrim($7::text) = ''
+      OR r.requested_model_id ILIKE '%' || btrim($7::text) || '%'
+      OR r.request_id ILIKE '%' || btrim($7::text) || '%'
+      OR COALESCE(r.client_ip, '') ILIKE '%' || btrim($7::text) || '%'
+  )
+  AND ($8::timestamptz IS NULL OR r.created_at >= $8::timestamptz)
+  AND ($9::timestamptz IS NULL OR r.created_at < $9::timestamptz)
+`
+
+type CountConsoleBilledRequestsParams struct {
+	UserID        int64
+	RouteIds      []int64
+	ApiKeyIds     []int64
+	Endpoints     []string
+	StreamTypes   []string
+	StatusClasses []string
+	Q             pgtype.Text
+	FromTime      pgtype.Timestamptz
+	ToTime        pgtype.Timestamptz
+}
+
+func (q *Queries) CountConsoleBilledRequests(ctx context.Context, arg CountConsoleBilledRequestsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countConsoleBilledRequests,
+		arg.UserID,
+		arg.RouteIds,
+		arg.ApiKeyIds,
+		arg.Endpoints,
+		arg.StreamTypes,
+		arg.StatusClasses,
+		arg.Q,
+		arg.FromTime,
+		arg.ToTime,
+	)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const countRequestRecords = `-- name: CountRequestRecords :one
 SELECT COUNT(*) AS total
 FROM request_records
@@ -283,6 +367,340 @@ func (q *Queries) ListAdminRequestAttemptsByRequest(ctx context.Context, request
 			&i.ChannelName,
 			&i.ChannelCostMultiplier,
 			&i.RechargeFactor,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConsoleBilledRequestAPIKeys = `-- name: ListConsoleBilledRequestAPIKeys :many
+SELECT DISTINCT
+    r.api_key_id AS id,
+    ak.name AS name
+FROM request_records r
+JOIN usage_records ur ON ur.request_record_id = r.id
+JOIN api_keys ak ON ak.id = r.api_key_id
+WHERE r.user_id = $1
+ORDER BY ak.name, r.api_key_id
+`
+
+type ListConsoleBilledRequestAPIKeysRow struct {
+	ID   int64
+	Name string
+}
+
+func (q *Queries) ListConsoleBilledRequestAPIKeys(ctx context.Context, userID int64) ([]ListConsoleBilledRequestAPIKeysRow, error) {
+	rows, err := q.db.Query(ctx, listConsoleBilledRequestAPIKeys, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListConsoleBilledRequestAPIKeysRow
+	for rows.Next() {
+		var i ListConsoleBilledRequestAPIKeysRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConsoleBilledRequestEndpoints = `-- name: ListConsoleBilledRequestEndpoints :many
+SELECT DISTINCT r.endpoint
+FROM request_records r
+JOIN usage_records ur ON ur.request_record_id = r.id
+WHERE r.user_id = $1
+ORDER BY r.endpoint
+`
+
+func (q *Queries) ListConsoleBilledRequestEndpoints(ctx context.Context, userID int64) ([]string, error) {
+	rows, err := q.db.Query(ctx, listConsoleBilledRequestEndpoints, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var endpoint string
+		if err := rows.Scan(&endpoint); err != nil {
+			return nil, err
+		}
+		items = append(items, endpoint)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConsoleBilledRequestRoutes = `-- name: ListConsoleBilledRequestRoutes :many
+SELECT DISTINCT
+    COALESCE(r.route_id, ak.route_id)::bigint AS id,
+    rt.name AS name
+FROM request_records r
+JOIN usage_records ur ON ur.request_record_id = r.id
+LEFT JOIN api_keys ak ON ak.id = r.api_key_id
+JOIN routes rt ON rt.id = COALESCE(r.route_id, ak.route_id)
+WHERE r.user_id = $1
+  AND COALESCE(r.route_id, ak.route_id) IS NOT NULL
+ORDER BY rt.name, COALESCE(r.route_id, ak.route_id)
+`
+
+type ListConsoleBilledRequestRoutesRow struct {
+	ID   int64
+	Name string
+}
+
+func (q *Queries) ListConsoleBilledRequestRoutes(ctx context.Context, userID int64) ([]ListConsoleBilledRequestRoutesRow, error) {
+	rows, err := q.db.Query(ctx, listConsoleBilledRequestRoutes, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListConsoleBilledRequestRoutesRow
+	for rows.Next() {
+		var i ListConsoleBilledRequestRoutesRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConsoleBilledRequests = `-- name: ListConsoleBilledRequests :many
+
+WITH filtered_page AS (
+    SELECT
+        r.id,
+        COUNT(*) OVER()::bigint AS total_count
+    FROM request_records r
+    JOIN usage_records ur ON ur.request_record_id = r.id
+    LEFT JOIN api_keys ak ON ak.id = r.api_key_id
+    WHERE r.user_id = $3
+      AND (
+          COALESCE(cardinality($4::bigint[]), 0) = 0
+          OR COALESCE(r.route_id, ak.route_id) = ANY($4::bigint[])
+      )
+      AND (
+          COALESCE(cardinality($5::bigint[]), 0) = 0
+          OR r.api_key_id = ANY($5::bigint[])
+      )
+      AND (
+          COALESCE(cardinality($6::text[]), 0) = 0
+          OR r.endpoint = ANY($6::text[])
+      )
+      AND (
+          COALESCE(cardinality($7::text[]), 0) = 0
+          OR (r.stream AND 'stream' = ANY($7::text[]))
+          OR ((NOT r.stream) AND 'sync' = ANY($7::text[]))
+      )
+      AND (
+          COALESCE(cardinality($8::text[]), 0) = 0
+          OR (
+              CASE
+                  WHEN r.status = 'succeeded' THEN '2xx'
+                  WHEN r.status = 'canceled' THEN '4xx'
+                  WHEN lower(COALESCE(r.error_code, '')) IN (
+                      'invalid_request',
+                      'invalid_api_key',
+                      'authentication_error',
+                      'permission_denied',
+                      'not_found',
+                      'rate_limit_exceeded',
+                      'insufficient_quota',
+                      'context_length_exceeded'
+                  ) THEN '4xx'
+                  WHEN COALESCE(r.error_code, '') LIKE '4%' THEN '4xx'
+                  ELSE '5xx'
+              END
+          ) = ANY($8::text[])
+      )
+      AND (
+          $9::text IS NULL
+          OR btrim($9::text) = ''
+          OR r.requested_model_id ILIKE '%' || btrim($9::text) || '%'
+          OR r.request_id ILIKE '%' || btrim($9::text) || '%'
+          OR COALESCE(r.client_ip, '') ILIKE '%' || btrim($9::text) || '%'
+      )
+      AND ($10::timestamptz IS NULL OR r.created_at >= $10::timestamptz)
+      AND ($11::timestamptz IS NULL OR r.created_at < $11::timestamptz)
+    ORDER BY
+      CASE WHEN COALESCE($1::text, 'created_at') IN ('', 'created_at') AND COALESCE($2::bool, true) THEN r.created_at END DESC NULLS LAST,
+      CASE WHEN COALESCE($1::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($2::bool, true) THEN r.created_at END ASC NULLS LAST,
+      CASE WHEN $1::text = 'model' AND COALESCE($2::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
+      CASE WHEN $1::text = 'model' AND NOT COALESCE($2::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
+      CASE WHEN $1::text = 'reasoning' AND COALESCE($2::bool, false) THEN r.reasoning_effort END DESC NULLS LAST,
+      CASE WHEN $1::text = 'reasoning' AND NOT COALESCE($2::bool, false) THEN r.reasoning_effort END ASC NULLS LAST,
+      CASE WHEN $1::text = 'stream' AND COALESCE($2::bool, false) THEN r.stream END DESC NULLS LAST,
+      CASE WHEN $1::text = 'stream' AND NOT COALESCE($2::bool, false) THEN r.stream END ASC NULLS LAST,
+      r.id DESC
+    LIMIT $13 OFFSET $12
+)
+SELECT
+    fp.total_count,
+    r.id,
+    r.request_id,
+    r.created_at,
+    r.client_ip,
+    rt.id AS route_id,
+    rt.name AS route_name,
+    r.api_key_id,
+    ak.name AS api_key_name,
+    r.endpoint,
+    r.stream,
+    r.requested_model_id,
+    r.reasoning_effort,
+    (
+        COALESCE(ur.uncached_input_tokens, 0)
+        + COALESCE(ur.cache_read_input_tokens, 0)
+        + COALESCE(ur.cache_write_5m_input_tokens, 0)
+        + COALESCE(ur.cache_write_1h_input_tokens, 0)
+        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+    )::bigint AS input_tokens,
+    COALESCE(ur.output_tokens_total, 0)::bigint AS output_tokens,
+    r.started_at,
+    r.completed_at,
+    (
+        SELECT COALESCE(SUM(
+            CASE
+                WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+                WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+                ELSE 0
+            END
+        ), 0)
+        FROM ledger_entries le
+        WHERE le.request_record_id = r.id AND le.currency = 'USD'
+    )::numeric AS user_charge_usd,
+    CASE
+        WHEN r.status = 'succeeded' THEN '2xx'
+        WHEN r.status = 'canceled' THEN '4xx'
+        WHEN lower(COALESCE(r.error_code, '')) IN (
+            'invalid_request',
+            'invalid_api_key',
+            'authentication_error',
+            'permission_denied',
+            'not_found',
+            'rate_limit_exceeded',
+            'insufficient_quota',
+            'context_length_exceeded'
+        ) THEN '4xx'
+        WHEN COALESCE(r.error_code, '') LIKE '4%' THEN '4xx'
+        ELSE '5xx'
+    END AS status
+FROM filtered_page fp
+JOIN request_records r ON r.id = fp.id
+JOIN usage_records ur ON ur.request_record_id = r.id
+LEFT JOIN api_keys ak ON ak.id = r.api_key_id
+LEFT JOIN routes rt ON rt.id = COALESCE(r.route_id, ak.route_id)
+ORDER BY
+  CASE WHEN COALESCE($1::text, 'created_at') IN ('', 'created_at') AND COALESCE($2::bool, true) THEN r.created_at END DESC NULLS LAST,
+  CASE WHEN COALESCE($1::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($2::bool, true) THEN r.created_at END ASC NULLS LAST,
+  CASE WHEN $1::text = 'model' AND COALESCE($2::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
+  CASE WHEN $1::text = 'model' AND NOT COALESCE($2::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
+  CASE WHEN $1::text = 'reasoning' AND COALESCE($2::bool, false) THEN r.reasoning_effort END DESC NULLS LAST,
+  CASE WHEN $1::text = 'reasoning' AND NOT COALESCE($2::bool, false) THEN r.reasoning_effort END ASC NULLS LAST,
+  CASE WHEN $1::text = 'stream' AND COALESCE($2::bool, false) THEN r.stream END DESC NULLS LAST,
+  CASE WHEN $1::text = 'stream' AND NOT COALESCE($2::bool, false) THEN r.stream END ASC NULLS LAST,
+  r.id DESC
+`
+
+type ListConsoleBilledRequestsParams struct {
+	SortField     pgtype.Text
+	SortDesc      pgtype.Bool
+	UserID        int64
+	RouteIds      []int64
+	ApiKeyIds     []int64
+	Endpoints     []string
+	StreamTypes   []string
+	StatusClasses []string
+	Q             pgtype.Text
+	FromTime      pgtype.Timestamptz
+	ToTime        pgtype.Timestamptz
+	PageOffset    int32
+	PageLimit     int32
+}
+
+type ListConsoleBilledRequestsRow struct {
+	TotalCount       int64
+	ID               int64
+	RequestID        string
+	CreatedAt        pgtype.Timestamptz
+	ClientIp         pgtype.Text
+	RouteID          pgtype.Int8
+	RouteName        pgtype.Text
+	ApiKeyID         int64
+	ApiKeyName       pgtype.Text
+	Endpoint         string
+	Stream           bool
+	RequestedModelID string
+	ReasoningEffort  pgtype.Text
+	InputTokens      int64
+	OutputTokens     int64
+	StartedAt        pgtype.Timestamptz
+	CompletedAt      pgtype.Timestamptz
+	UserChargeUsd    pgtype.Numeric
+	Status           string
+}
+
+// Console 客户请求日志：只查当前用户、且已进入计费（存在 usage_records）的请求。
+// 不返回渠道、服务商、平台成本、密钥明文或内部错误。
+// 先过滤分页，再只对当前页 JOIN 展示字段。
+func (q *Queries) ListConsoleBilledRequests(ctx context.Context, arg ListConsoleBilledRequestsParams) ([]ListConsoleBilledRequestsRow, error) {
+	rows, err := q.db.Query(ctx, listConsoleBilledRequests,
+		arg.SortField,
+		arg.SortDesc,
+		arg.UserID,
+		arg.RouteIds,
+		arg.ApiKeyIds,
+		arg.Endpoints,
+		arg.StreamTypes,
+		arg.StatusClasses,
+		arg.Q,
+		arg.FromTime,
+		arg.ToTime,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListConsoleBilledRequestsRow
+	for rows.Next() {
+		var i ListConsoleBilledRequestsRow
+		if err := rows.Scan(
+			&i.TotalCount,
+			&i.ID,
+			&i.RequestID,
+			&i.CreatedAt,
+			&i.ClientIp,
+			&i.RouteID,
+			&i.RouteName,
+			&i.ApiKeyID,
+			&i.ApiKeyName,
+			&i.Endpoint,
+			&i.Stream,
+			&i.RequestedModelID,
+			&i.ReasoningEffort,
+			&i.InputTokens,
+			&i.OutputTokens,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.UserChargeUsd,
+			&i.Status,
 		); err != nil {
 			return nil, err
 		}
@@ -763,4 +1181,58 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 		return nil, err
 	}
 	return items, nil
+}
+
+const summarizeConsoleBilledRequests = `-- name: SummarizeConsoleBilledRequests :one
+SELECT
+    COUNT(*)::bigint AS request_count,
+    COALESCE(SUM(
+        COALESCE(ur.uncached_input_tokens, 0)
+        + COALESCE(ur.cache_read_input_tokens, 0)
+        + COALESCE(ur.cache_write_5m_input_tokens, 0)
+        + COALESCE(ur.cache_write_1h_input_tokens, 0)
+        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.output_tokens_total, 0)
+    ), 0)::bigint AS token_count,
+    COALESCE((
+        SELECT SUM(
+            CASE
+                WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+                WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+                ELSE 0
+            END
+        )
+        FROM ledger_entries le
+        JOIN request_records billed ON billed.id = le.request_record_id
+        JOIN usage_records billed_usage ON billed_usage.request_record_id = billed.id
+        WHERE billed.user_id = $1 AND le.currency = 'USD'
+    ), 0)::numeric AS charge_usd,
+    COALESCE(
+        AVG(EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)
+            FILTER (WHERE r.completed_at IS NOT NULL AND r.started_at IS NOT NULL),
+        0
+    )::float8 AS average_latency_ms
+FROM request_records r
+JOIN usage_records ur ON ur.request_record_id = r.id
+WHERE r.user_id = $1
+`
+
+type SummarizeConsoleBilledRequestsRow struct {
+	RequestCount     int64
+	TokenCount       int64
+	ChargeUsd        pgtype.Numeric
+	AverageLatencyMs float64
+}
+
+// 账户累计，不受列表时间筛选影响。
+func (q *Queries) SummarizeConsoleBilledRequests(ctx context.Context, userID int64) (SummarizeConsoleBilledRequestsRow, error) {
+	row := q.db.QueryRow(ctx, summarizeConsoleBilledRequests, userID)
+	var i SummarizeConsoleBilledRequestsRow
+	err := row.Scan(
+		&i.RequestCount,
+		&i.TokenCount,
+		&i.ChargeUsd,
+		&i.AverageLatencyMs,
+	)
+	return i, err
 }

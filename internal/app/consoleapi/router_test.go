@@ -16,6 +16,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	consoleservice "github.com/ThankCat/unio-gateway/internal/service/console"
 	serviceauth "github.com/ThankCat/unio-gateway/internal/service/console/auth"
+	consolerequests "github.com/ThankCat/unio-gateway/internal/service/console/requests"
 )
 
 const testUserUID = "0198c9d7-0af1-7c42-a063-91d2922af371"
@@ -73,6 +74,11 @@ func (s *fakeAuthService) CurrentUser(_ context.Context, accessToken string) (se
 			Available: "10.25",
 		},
 	}, nil
+}
+
+func (s *fakeAuthService) AuthenticatePrincipal(_ context.Context, accessToken string) (serviceauth.Principal, *consoleservice.Error) {
+	s.currentAccessToken = accessToken
+	return serviceauth.Principal{UserID: 42, UID: testUserUID}, nil
 }
 
 func (s *fakeAuthService) EmailCodeLogin(context.Context, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
@@ -247,6 +253,59 @@ func TestInvalidJSONUsesStableErrorEnvelope(t *testing.T) {
 	if payload.Error.Type != "request_error" {
 		t.Fatalf("unexpected error type %q", payload.Error.Type)
 	}
+}
+
+func TestRequestSummaryRequiresAccessCookieWhenRegistered(t *testing.T) {
+	service := &fakeAuthService{}
+	handler, err := consoleapi.NewRouter(consoleapi.Deps{
+		Logger: zap.NewNop(),
+		Config: config.ConsoleConfig{
+			AllowedOrigins:    []string{"https://console.unioapi.com"},
+			TrustedProxyCIDRs: []string{"10.0.0.0/8"},
+			CookieSecure:      true,
+			CookieDomain:      ".unioapi.com",
+		},
+		AuthService:    service,
+		RequestService: stubRequestService{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	missing := httptest.NewRecorder()
+	handler.ServeHTTP(missing, httptest.NewRequest(http.MethodGet, "/v1/requests/summary", nil))
+	if missing.Code != http.StatusUnauthorized {
+		t.Fatalf("expected missing cookie 401, got %d", missing.Code)
+	}
+
+	ok := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/requests/summary", nil)
+	req.AddCookie(&http.Cookie{Name: "unio_access_token", Value: "access-token"})
+	handler.ServeHTTP(ok, req)
+	if ok.Code != http.StatusOK {
+		t.Fatalf("expected summary 200, got %d body=%s", ok.Code, ok.Body.String())
+	}
+	if service.currentAccessToken != "access-token" {
+		t.Fatalf("expected access token to reach principal lookup, got %q", service.currentAccessToken)
+	}
+}
+
+type stubRequestService struct{}
+
+func (stubRequestService) List(context.Context, consolerequests.ListParams) ([]consolerequests.Item, int64, *consoleservice.Error) {
+	return []consolerequests.Item{}, 0, nil
+}
+
+func (stubRequestService) Summary(context.Context, int64) (consolerequests.Summary, *consoleservice.Error) {
+	return consolerequests.Summary{}, nil
+}
+
+func (stubRequestService) Filters(context.Context, int64) (consolerequests.Filters, *consoleservice.Error) {
+	return consolerequests.Filters{
+		Routes:    []consolerequests.FilterOption{},
+		APIKeys:   []consolerequests.FilterOption{},
+		Endpoints: []string{},
+	}, nil
 }
 
 func TestEmailCheckUsesReservedEndpoint(t *testing.T) {

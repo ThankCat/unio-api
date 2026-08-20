@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	consoleservice "github.com/ThankCat/unio-gateway/internal/service/console"
 	consoleauth "github.com/ThankCat/unio-gateway/internal/service/console/auth"
+	consolerequests "github.com/ThankCat/unio-gateway/internal/service/console/requests"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -118,9 +119,10 @@ func NewConsoleServerApp(ctx context.Context, deps ConsoleServerAppDeps) (*Conso
 		return nil, err
 	}
 	handler, err := consoleapi.NewRouter(consoleapi.Deps{
-		Logger:      deps.Logger,
-		Config:      deps.Config.Console,
-		AuthService: authService,
+		Logger:         deps.Logger,
+		Config:         deps.Config.Console,
+		AuthService:    authService,
+		RequestService: consolerequests.NewService(queries),
 	})
 	if err != nil {
 		_ = tracerProvider.Shutdown(ctx)

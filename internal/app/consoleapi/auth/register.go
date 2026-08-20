@@ -20,6 +20,7 @@ type Service interface {
 	PasswordLogin(context.Context, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error)
 	EmailCodeLogin(context.Context, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error)
 	CurrentUser(context.Context, string) (serviceauth.User, *consoleservice.Error)
+	AuthenticatePrincipal(context.Context, string) (serviceauth.Principal, *consoleservice.Error)
 	VerifyPasswordResetCode(context.Context, string, string, string, string) (serviceauth.PasswordResetGrant, *consoleservice.Error)
 	ResetPassword(context.Context, string, string) *consoleservice.Error
 	Refresh(context.Context, string) (serviceauth.TokenPair, *consoleservice.Error)

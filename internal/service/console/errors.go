@@ -5,6 +5,8 @@ import "fmt"
 const (
 	// CodeRequestUnavailable 表示操作暂时无法完成。
 	CodeRequestUnavailable = "request_unavailable"
+	// CodeInvalidArgument 表示查询或请求参数无效。
+	CodeInvalidArgument = "invalid_argument"
 )
 
 // Error 是可安全映射到 HTTP 的稳定 Console 应用错误。
@@ -45,5 +47,15 @@ func RequestUnavailable(operation string, cause error) *Error {
 		Message: "The request could not be completed. Please try again later.",
 		Status:  503,
 		Cause:   fmt.Errorf("%s: %w", operation, cause),
+	}
+}
+
+// InvalidArgument 表示公开查询或请求参数无法解析。
+func InvalidArgument(param, message string) *Error {
+	return &Error{
+		Code:    CodeInvalidArgument,
+		Message: message,
+		Param:   param,
+		Status:  400,
 	}
 }

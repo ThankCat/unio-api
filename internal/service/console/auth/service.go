@@ -25,6 +25,12 @@ type User struct {
 	Balance     Balance `json:"balance"`
 }
 
+// Principal 是已认证会话对应的内部主体。UserID 只用于服务端查询，不得写入公开 JSON。
+type Principal struct {
+	UserID int64
+	UID    string
+}
+
 // Balance 是用户钱包快照。后续币种、冻结明细等字段都加在这里，不摊到 User 上。
 type Balance struct {
 	Currency  string `json:"currency"`
@@ -175,25 +181,42 @@ func (s *Service) PasswordLogin(ctx context.Context, rawEmail, password, ip stri
 	return user, pair, sessionErr
 }
 
+// AuthenticatePrincipal 校验访问令牌并返回内部用户主键，不加载钱包。
+func (s *Service) AuthenticatePrincipal(ctx context.Context, accessToken string) (Principal, *consoleservice.Error) {
+	row, err := s.lookupActiveUser(ctx, accessToken)
+	if err != nil {
+		return Principal{}, err
+	}
+	return Principal{UserID: row.ID, UID: uuidString(row.Uid)}, nil
+}
+
 // CurrentUser 返回已认证访问令牌会话对应的活跃用户。
 func (s *Service) CurrentUser(ctx context.Context, accessToken string) (User, *consoleservice.Error) {
+	row, err := s.lookupActiveUser(ctx, accessToken)
+	if err != nil {
+		return User{}, err
+	}
+	return s.loadUSDWallet(ctx, userFromUIDRow(row), row.ID)
+}
+
+func (s *Service) lookupActiveUser(ctx context.Context, accessToken string) (sqlc.GetConsoleUserByUIDRow, *consoleservice.Error) {
 	userUID, sessionErr := s.sessions.Authenticate(ctx, accessToken)
 	if sessionErr != nil {
-		return User{}, sessionErr
+		return sqlc.GetConsoleUserByUIDRow{}, sessionErr
 	}
 	uid, parseErr := uuid.Parse(userUID)
 	if parseErr != nil {
-		return User{}, sessionInvalid(parseErr)
+		return sqlc.GetConsoleUserByUIDRow{}, sessionInvalid(parseErr)
 	}
 	row, queryErr := s.queries.GetConsoleUserByUID(ctx, pgUUID(uid))
 	if errors.Is(queryErr, pgx.ErrNoRows) || (queryErr == nil && row.Status != "active") {
 		_ = s.sessions.RevokeUser(ctx, userUID)
-		return User{}, sessionInvalid(nil)
+		return sqlc.GetConsoleUserByUIDRow{}, sessionInvalid(nil)
 	}
 	if queryErr != nil {
-		return User{}, requestUnavailable("read current console user", queryErr)
+		return sqlc.GetConsoleUserByUIDRow{}, requestUnavailable("read current console user", queryErr)
 	}
-	return s.loadUSDWallet(ctx, userFromUIDRow(row), row.ID)
+	return row, nil
 }
 
 // EmailCodeLogin 使用与用途绑定的邮箱挑战认证用户。

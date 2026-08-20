@@ -23,3 +23,10 @@ func TestRequestUnavailableKeepsDependencyDetailsInternal(t *testing.T) {
 		t.Fatal("expected the internal cause to remain available to server logs")
 	}
 }
+
+func TestInvalidArgumentIsPublicClientError(t *testing.T) {
+	err := InvalidArgument("sort", "sort must be created_at, model, reasoning, or stream.")
+	if err.Code != CodeInvalidArgument || err.Status != 400 || err.Param != "sort" {
+		t.Fatalf("unexpected public error: %+v", err)
+	}
+}
