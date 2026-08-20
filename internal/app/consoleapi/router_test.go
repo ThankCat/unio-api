@@ -62,7 +62,17 @@ func (s *fakeAuthService) PasswordLogin(_ context.Context, _, _, ip string) (ser
 
 func (s *fakeAuthService) CurrentUser(_ context.Context, accessToken string) (serviceauth.User, *consoleservice.Error) {
 	s.currentAccessToken = accessToken
-	return serviceauth.User{UID: testUserUID, Email: "user@example.com", DisplayName: "user"}, nil
+	return serviceauth.User{
+		UID:         testUserUID,
+		Email:       "user@example.com",
+		DisplayName: "user",
+		Balance: serviceauth.Balance{
+			Currency:  "USD",
+			Total:     "12.5",
+			Reserved:  "2.25",
+			Available: "10.25",
+		},
+	}, nil
 }
 
 func (s *fakeAuthService) EmailCodeLogin(context.Context, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
@@ -167,6 +177,27 @@ func TestCurrentUserRequiresAndPassesAccessCookie(t *testing.T) {
 	}
 	if service.currentAccessToken != "access-token" {
 		t.Fatalf("expected access token to reach service, got %q", service.currentAccessToken)
+	}
+	var payload struct {
+		Data struct {
+			User struct {
+				ID      string `json:"id"`
+				Balance struct {
+					Currency  string `json:"currency"`
+					Total     string `json:"total"`
+					Reserved  string `json:"reserved"`
+					Available string `json:"available"`
+				} `json:"balance"`
+			} `json:"user"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Data.User.ID != testUserUID ||
+		payload.Data.User.Balance.Currency != "USD" ||
+		payload.Data.User.Balance.Available != "10.25" {
+		t.Fatalf("unexpected current user payload: %+v body=%s", payload.Data.User, recorder.Body.String())
 	}
 }
 

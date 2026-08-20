@@ -19,9 +19,18 @@ import (
 
 // User 是 Console 的公开用户视图。UID 序列化为 id，内部自增数据库主键永不暴露。
 type User struct {
-	UID         string `json:"id"`
-	Email       string `json:"email"`
-	DisplayName string `json:"display_name"`
+	UID         string  `json:"id"`
+	Email       string  `json:"email"`
+	DisplayName string  `json:"display_name"`
+	Balance     Balance `json:"balance"`
+}
+
+// Balance 是用户钱包快照。后续币种、冻结明细等字段都加在这里，不摊到 User 上。
+type Balance struct {
+	Currency  string `json:"currency"`
+	Total     string `json:"total"`
+	Reserved  string `json:"reserved"`
+	Available string `json:"available"`
 }
 
 // Service 编排横跨 PostgreSQL 和 Redis 的 Console 认证流程。
@@ -126,6 +135,7 @@ func (s *Service) Register(
 		return User{}, TokenPair{}, requestUnavailable("create console user", createErr)
 	}
 	user := userFromCreateRow(row)
+	user.Balance = zeroUSDBalance()
 	release = false
 	if commitChallengeErr := s.verification.Commit(ctx, email, PurposeRegister, reservation); commitChallengeErr != nil {
 		s.logger.Warn("registration committed but challenge finalization failed", zap.Error(commitChallengeErr), zap.String("user_uid", user.UID))
@@ -157,6 +167,10 @@ func (s *Service) PasswordLogin(ctx context.Context, rawEmail, password, ip stri
 		return User{}, TokenPair{}, limitErr
 	}
 	user := userFromEmailRow(row)
+	user, walletErr := s.loadUSDWallet(ctx, user, row.ID)
+	if walletErr != nil {
+		return User{}, TokenPair{}, walletErr
+	}
 	pair, sessionErr := s.sessions.Create(ctx, user.UID)
 	return user, pair, sessionErr
 }
@@ -179,7 +193,7 @@ func (s *Service) CurrentUser(ctx context.Context, accessToken string) (User, *c
 	if queryErr != nil {
 		return User{}, requestUnavailable("read current console user", queryErr)
 	}
-	return userFromUIDRow(row), nil
+	return s.loadUSDWallet(ctx, userFromUIDRow(row), row.ID)
 }
 
 // EmailCodeLogin 使用与用途绑定的邮箱挑战认证用户。
@@ -208,6 +222,10 @@ func (s *Service) EmailCodeLogin(
 		return User{}, TokenPair{}, invalidCredentials()
 	}
 	user := userFromEmailRow(row)
+	user, walletErr := s.loadUSDWallet(ctx, user, row.ID)
+	if walletErr != nil {
+		return User{}, TokenPair{}, walletErr
+	}
 	release = false
 	if commitErr := s.verification.Commit(ctx, email, PurposeLogin, reservation); commitErr != nil {
 		s.logger.Warn("email-code login challenge finalization failed", zap.Error(commitErr), zap.String("user_uid", user.UID))
