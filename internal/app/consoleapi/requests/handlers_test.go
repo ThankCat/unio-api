@@ -62,9 +62,9 @@ func (s *fakeAuthService) Logout(context.Context, string) *consoleservice.Error 
 func (s *fakeAuthService) LogoutAll(context.Context, string) *consoleservice.Error { return nil }
 
 type fakeRequestService struct {
-	listParams consolerequests.ListParams
-	summaryID  int64
-	filtersID  int64
+	listParams    consolerequests.ListParams
+	summaryParams consolerequests.SummaryParams
+	filtersID     int64
 }
 
 func (s *fakeRequestService) List(_ context.Context, params consolerequests.ListParams) ([]consolerequests.Item, int64, *consoleservice.Error) {
@@ -89,15 +89,16 @@ func (s *fakeRequestService) List(_ context.Context, params consolerequests.List
 		OutputTokens:     20,
 		LatencyMs:        &latency,
 		UserChargeUSD:    "0.15",
-		Status:           "2xx",
 	}}, 1, nil
 }
 
-func (s *fakeRequestService) Summary(_ context.Context, userID int64) (consolerequests.Summary, *consoleservice.Error) {
-	s.summaryID = userID
+func (s *fakeRequestService) Summary(_ context.Context, params consolerequests.SummaryParams) (consolerequests.Summary, *consoleservice.Error) {
+	s.summaryParams = params
 	return consolerequests.Summary{
 		RequestCount:     4,
 		TokenCount:       180,
+		InputTokenCount:  120,
+		OutputTokenCount: 60,
 		ChargeUSD:        "1.25",
 		AverageLatencyMs: 750,
 	}, nil
@@ -150,13 +151,18 @@ func TestRequestSummaryUsesAuthenticatedUserID(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if auth.accessToken != "access-token" || service.summaryID != 42 {
-		t.Fatalf("token=%q user=%d", auth.accessToken, service.summaryID)
+	if auth.accessToken != "access-token" || service.summaryParams.UserID != 42 {
+		t.Fatalf("token=%q user=%d", auth.accessToken, service.summaryParams.UserID)
+	}
+	if service.summaryParams.From != nil || service.summaryParams.To != nil {
+		t.Fatalf("all-time summary should omit time window: %+v", service.summaryParams)
 	}
 	var payload struct {
 		Data struct {
 			RequestCount     int64   `json:"request_count"`
 			TokenCount       int64   `json:"token_count"`
+			InputTokenCount  int64   `json:"input_token_count"`
+			OutputTokenCount int64   `json:"output_token_count"`
 			ChargeUSD        string  `json:"charge_usd"`
 			AverageLatencyMs float64 `json:"average_latency_ms"`
 		} `json:"data"`
@@ -164,8 +170,25 @@ func TestRequestSummaryUsesAuthenticatedUserID(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Data.RequestCount != 4 || payload.Data.ChargeUSD != "1.25" {
+	if payload.Data.RequestCount != 4 || payload.Data.ChargeUSD != "1.25" || payload.Data.InputTokenCount != 120 || payload.Data.OutputTokenCount != 60 {
 		t.Fatalf("payload = %+v", payload.Data)
+	}
+}
+
+func TestRequestSummaryForwardsOptionalTimeWindow(t *testing.T) {
+	service := &fakeRequestService{}
+	handler := newRequestHandler(t, &fakeAuthService{}, service)
+	req := httptest.NewRequest(http.MethodGet, "/v1/requests/summary?from=2026-08-19T16:00:00Z&to=2026-08-20T16:00:00Z", nil)
+	req.AddCookie(&http.Cookie{Name: "unio_access_token", Value: "access-token"})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if service.summaryParams.From == nil || service.summaryParams.To == nil {
+		t.Fatalf("optional time window not forwarded: %+v", service.summaryParams)
 	}
 }
 
@@ -174,7 +197,7 @@ func TestRequestListOmitsInternalFieldsAndScopesToUser(t *testing.T) {
 	handler := newRequestHandler(t, &fakeAuthService{}, service)
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/v1/requests?page=1&page_size=20&route_id=3&endpoint=/v1/chat/completions&status=2xx&sort=-created_at",
+		"/v1/requests?page=1&page_size=20&route_id=3&endpoint=/v1/chat/completions&sort=-created_at",
 		nil,
 	)
 	req.AddCookie(&http.Cookie{Name: "unio_access_token", Value: "access-token"})
@@ -195,6 +218,7 @@ func TestRequestListOmitsInternalFieldsAndScopesToUser(t *testing.T) {
 		"channel_chain",
 		"error_code",
 		"internal_error",
+		`"status"`,
 	} {
 		if strings.Contains(body, leaked) {
 			t.Fatalf("response leaked %s: %s", leaked, body)
@@ -214,7 +238,10 @@ func TestRequestListOmitsInternalFieldsAndScopesToUser(t *testing.T) {
 		t.Fatalf("list = %+v", payload.Data)
 	}
 	item := payload.Data.Items[0]
-	if item["status"] != "2xx" || item["endpoint"] != "/v1/chat/completions" || item["api_key_name"] != "prod" {
+	if _, ok := item["status"]; ok {
+		t.Fatalf("status should be omitted: %#v", item)
+	}
+	if item["endpoint"] != "/v1/chat/completions" || item["api_key_name"] != "prod" {
 		t.Fatalf("item = %#v", item)
 	}
 }
@@ -235,7 +262,7 @@ func TestRequestFiltersUsesAuthenticatedUserID(t *testing.T) {
 
 func TestRequestListRejectsInvalidSort(t *testing.T) {
 	handler := newRequestHandler(t, &fakeAuthService{}, &fakeRequestService{})
-	req := httptest.NewRequest(http.MethodGet, "/v1/requests?sort=cost", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/requests?sort=unknown", nil)
 	req.AddCookie(&http.Cookie{Name: "unio_access_token", Value: "access-token"})
 	rec := httptest.NewRecorder()
 

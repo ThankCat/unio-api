@@ -18,6 +18,17 @@ JOIN usage_records ur ON ur.request_record_id = r.id
 LEFT JOIN api_keys ak ON ak.id = r.api_key_id
 WHERE r.user_id = $1
   AND (
+      SELECT COALESCE(SUM(
+          CASE
+              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+              ELSE 0
+          END
+      ), 0)
+      FROM ledger_entries le
+      WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) > 0
+  AND (
       COALESCE(cardinality($2::bigint[]), 0) = 0
       OR COALESCE(r.route_id, ak.route_id) = ANY($2::bigint[])
   )
@@ -35,47 +46,25 @@ WHERE r.user_id = $1
       OR ((NOT r.stream) AND 'sync' = ANY($5::text[]))
   )
   AND (
-      COALESCE(cardinality($6::text[]), 0) = 0
-      OR (
-          CASE
-              WHEN r.status = 'succeeded' THEN '2xx'
-              WHEN r.status = 'canceled' THEN '4xx'
-              WHEN lower(COALESCE(r.error_code, '')) IN (
-                  'invalid_request',
-                  'invalid_api_key',
-                  'authentication_error',
-                  'permission_denied',
-                  'not_found',
-                  'rate_limit_exceeded',
-                  'insufficient_quota',
-                  'context_length_exceeded'
-              ) THEN '4xx'
-              WHEN COALESCE(r.error_code, '') LIKE '4%' THEN '4xx'
-              ELSE '5xx'
-          END
-      ) = ANY($6::text[])
+      $6::text IS NULL
+      OR btrim($6::text) = ''
+      OR r.requested_model_id ILIKE '%' || btrim($6::text) || '%'
+      OR r.request_id ILIKE '%' || btrim($6::text) || '%'
+      OR COALESCE(r.client_ip, '') ILIKE '%' || btrim($6::text) || '%'
   )
-  AND (
-      $7::text IS NULL
-      OR btrim($7::text) = ''
-      OR r.requested_model_id ILIKE '%' || btrim($7::text) || '%'
-      OR r.request_id ILIKE '%' || btrim($7::text) || '%'
-      OR COALESCE(r.client_ip, '') ILIKE '%' || btrim($7::text) || '%'
-  )
-  AND ($8::timestamptz IS NULL OR r.created_at >= $8::timestamptz)
-  AND ($9::timestamptz IS NULL OR r.created_at < $9::timestamptz)
+  AND ($7::timestamptz IS NULL OR r.created_at >= $7::timestamptz)
+  AND ($8::timestamptz IS NULL OR r.created_at < $8::timestamptz)
 `
 
 type CountConsoleBilledRequestsParams struct {
-	UserID        int64
-	RouteIds      []int64
-	ApiKeyIds     []int64
-	Endpoints     []string
-	StreamTypes   []string
-	StatusClasses []string
-	Q             pgtype.Text
-	FromTime      pgtype.Timestamptz
-	ToTime        pgtype.Timestamptz
+	UserID      int64
+	RouteIds    []int64
+	ApiKeyIds   []int64
+	Endpoints   []string
+	StreamTypes []string
+	Q           pgtype.Text
+	FromTime    pgtype.Timestamptz
+	ToTime      pgtype.Timestamptz
 }
 
 func (q *Queries) CountConsoleBilledRequests(ctx context.Context, arg CountConsoleBilledRequestsParams) (int64, error) {
@@ -85,7 +74,6 @@ func (q *Queries) CountConsoleBilledRequests(ctx context.Context, arg CountConso
 		arg.ApiKeyIds,
 		arg.Endpoints,
 		arg.StreamTypes,
-		arg.StatusClasses,
 		arg.Q,
 		arg.FromTime,
 		arg.ToTime,
@@ -386,6 +374,17 @@ FROM request_records r
 JOIN usage_records ur ON ur.request_record_id = r.id
 JOIN api_keys ak ON ak.id = r.api_key_id
 WHERE r.user_id = $1
+  AND (
+      SELECT COALESCE(SUM(
+          CASE
+              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+              ELSE 0
+          END
+      ), 0)
+      FROM ledger_entries le
+      WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) > 0
 ORDER BY ak.name, r.api_key_id
 `
 
@@ -419,6 +418,17 @@ SELECT DISTINCT r.endpoint
 FROM request_records r
 JOIN usage_records ur ON ur.request_record_id = r.id
 WHERE r.user_id = $1
+  AND (
+      SELECT COALESCE(SUM(
+          CASE
+              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+              ELSE 0
+          END
+      ), 0)
+      FROM ledger_entries le
+      WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) > 0
 ORDER BY r.endpoint
 `
 
@@ -452,6 +462,17 @@ LEFT JOIN api_keys ak ON ak.id = r.api_key_id
 JOIN routes rt ON rt.id = COALESCE(r.route_id, ak.route_id)
 WHERE r.user_id = $1
   AND COALESCE(r.route_id, ak.route_id) IS NOT NULL
+  AND (
+      SELECT COALESCE(SUM(
+          CASE
+              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+              ELSE 0
+          END
+      ), 0)
+      FROM ledger_entries le
+      WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) > 0
 ORDER BY rt.name, COALESCE(r.route_id, ak.route_id)
 `
 
@@ -491,6 +512,17 @@ WITH filtered_page AS (
     LEFT JOIN api_keys ak ON ak.id = r.api_key_id
     WHERE r.user_id = $3
       AND (
+          SELECT COALESCE(SUM(
+              CASE
+                  WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+                  WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+                  ELSE 0
+              END
+          ), 0)
+          FROM ledger_entries le
+          WHERE le.request_record_id = r.id AND le.currency = 'USD'
+      ) > 0
+      AND (
           COALESCE(cardinality($4::bigint[]), 0) = 0
           OR COALESCE(r.route_id, ak.route_id) = ANY($4::bigint[])
       )
@@ -508,35 +540,14 @@ WITH filtered_page AS (
           OR ((NOT r.stream) AND 'sync' = ANY($7::text[]))
       )
       AND (
-          COALESCE(cardinality($8::text[]), 0) = 0
-          OR (
-              CASE
-                  WHEN r.status = 'succeeded' THEN '2xx'
-                  WHEN r.status = 'canceled' THEN '4xx'
-                  WHEN lower(COALESCE(r.error_code, '')) IN (
-                      'invalid_request',
-                      'invalid_api_key',
-                      'authentication_error',
-                      'permission_denied',
-                      'not_found',
-                      'rate_limit_exceeded',
-                      'insufficient_quota',
-                      'context_length_exceeded'
-                  ) THEN '4xx'
-                  WHEN COALESCE(r.error_code, '') LIKE '4%' THEN '4xx'
-                  ELSE '5xx'
-              END
-          ) = ANY($8::text[])
+          $8::text IS NULL
+          OR btrim($8::text) = ''
+          OR r.requested_model_id ILIKE '%' || btrim($8::text) || '%'
+          OR r.request_id ILIKE '%' || btrim($8::text) || '%'
+          OR COALESCE(r.client_ip, '') ILIKE '%' || btrim($8::text) || '%'
       )
-      AND (
-          $9::text IS NULL
-          OR btrim($9::text) = ''
-          OR r.requested_model_id ILIKE '%' || btrim($9::text) || '%'
-          OR r.request_id ILIKE '%' || btrim($9::text) || '%'
-          OR COALESCE(r.client_ip, '') ILIKE '%' || btrim($9::text) || '%'
-      )
-      AND ($10::timestamptz IS NULL OR r.created_at >= $10::timestamptz)
-      AND ($11::timestamptz IS NULL OR r.created_at < $11::timestamptz)
+      AND ($9::timestamptz IS NULL OR r.created_at >= $9::timestamptz)
+      AND ($10::timestamptz IS NULL OR r.created_at < $10::timestamptz)
     ORDER BY
       CASE WHEN COALESCE($1::text, 'created_at') IN ('', 'created_at') AND COALESCE($2::bool, true) THEN r.created_at END DESC NULLS LAST,
       CASE WHEN COALESCE($1::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($2::bool, true) THEN r.created_at END ASC NULLS LAST,
@@ -546,8 +557,48 @@ WITH filtered_page AS (
       CASE WHEN $1::text = 'reasoning' AND NOT COALESCE($2::bool, false) THEN r.reasoning_effort END ASC NULLS LAST,
       CASE WHEN $1::text = 'stream' AND COALESCE($2::bool, false) THEN r.stream END DESC NULLS LAST,
       CASE WHEN $1::text = 'stream' AND NOT COALESCE($2::bool, false) THEN r.stream END ASC NULLS LAST,
+      CASE WHEN $1::text = 'latency' AND COALESCE($2::bool, false) THEN EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) END DESC NULLS LAST,
+      CASE WHEN $1::text = 'latency' AND NOT COALESCE($2::bool, false) THEN EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) END ASC NULLS LAST,
+      CASE WHEN $1::text = 'cost' AND COALESCE($2::bool, false) THEN (
+        SELECT COALESCE(SUM(
+            CASE
+                WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+                WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+                ELSE 0
+            END
+        ), 0)
+        FROM ledger_entries le
+        WHERE le.request_record_id = r.id AND le.currency = 'USD'
+      ) END DESC NULLS LAST,
+      CASE WHEN $1::text = 'cost' AND NOT COALESCE($2::bool, false) THEN (
+        SELECT COALESCE(SUM(
+            CASE
+                WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+                WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+                ELSE 0
+            END
+        ), 0)
+        FROM ledger_entries le
+        WHERE le.request_record_id = r.id AND le.currency = 'USD'
+      ) END ASC NULLS LAST,
+      CASE WHEN $1::text = 'tokens' AND COALESCE($2::bool, false) THEN (
+        COALESCE(ur.uncached_input_tokens, 0)
+        + COALESCE(ur.cache_read_input_tokens, 0)
+        + COALESCE(ur.cache_write_5m_input_tokens, 0)
+        + COALESCE(ur.cache_write_1h_input_tokens, 0)
+        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.output_tokens_total, 0)
+      ) END DESC NULLS LAST,
+      CASE WHEN $1::text = 'tokens' AND NOT COALESCE($2::bool, false) THEN (
+        COALESCE(ur.uncached_input_tokens, 0)
+        + COALESCE(ur.cache_read_input_tokens, 0)
+        + COALESCE(ur.cache_write_5m_input_tokens, 0)
+        + COALESCE(ur.cache_write_1h_input_tokens, 0)
+        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.output_tokens_total, 0)
+      ) END ASC NULLS LAST,
       r.id DESC
-    LIMIT $13 OFFSET $12
+    LIMIT $12 OFFSET $11
 )
 SELECT
     fp.total_count,
@@ -583,23 +634,7 @@ SELECT
         ), 0)
         FROM ledger_entries le
         WHERE le.request_record_id = r.id AND le.currency = 'USD'
-    )::numeric AS user_charge_usd,
-    CASE
-        WHEN r.status = 'succeeded' THEN '2xx'
-        WHEN r.status = 'canceled' THEN '4xx'
-        WHEN lower(COALESCE(r.error_code, '')) IN (
-            'invalid_request',
-            'invalid_api_key',
-            'authentication_error',
-            'permission_denied',
-            'not_found',
-            'rate_limit_exceeded',
-            'insufficient_quota',
-            'context_length_exceeded'
-        ) THEN '4xx'
-        WHEN COALESCE(r.error_code, '') LIKE '4%' THEN '4xx'
-        ELSE '5xx'
-    END AS status
+    )::numeric AS user_charge_usd
 FROM filtered_page fp
 JOIN request_records r ON r.id = fp.id
 JOIN usage_records ur ON ur.request_record_id = r.id
@@ -614,23 +649,62 @@ ORDER BY
   CASE WHEN $1::text = 'reasoning' AND NOT COALESCE($2::bool, false) THEN r.reasoning_effort END ASC NULLS LAST,
   CASE WHEN $1::text = 'stream' AND COALESCE($2::bool, false) THEN r.stream END DESC NULLS LAST,
   CASE WHEN $1::text = 'stream' AND NOT COALESCE($2::bool, false) THEN r.stream END ASC NULLS LAST,
+  CASE WHEN $1::text = 'latency' AND COALESCE($2::bool, false) THEN EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) END DESC NULLS LAST,
+  CASE WHEN $1::text = 'latency' AND NOT COALESCE($2::bool, false) THEN EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) END ASC NULLS LAST,
+  CASE WHEN $1::text = 'cost' AND COALESCE($2::bool, false) THEN (
+    SELECT COALESCE(SUM(
+        CASE
+            WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+            WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+            ELSE 0
+        END
+    ), 0)
+    FROM ledger_entries le
+    WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) END DESC NULLS LAST,
+  CASE WHEN $1::text = 'cost' AND NOT COALESCE($2::bool, false) THEN (
+    SELECT COALESCE(SUM(
+        CASE
+            WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+            WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+            ELSE 0
+        END
+    ), 0)
+    FROM ledger_entries le
+    WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) END ASC NULLS LAST,
+  CASE WHEN $1::text = 'tokens' AND COALESCE($2::bool, false) THEN (
+    COALESCE(ur.uncached_input_tokens, 0)
+    + COALESCE(ur.cache_read_input_tokens, 0)
+    + COALESCE(ur.cache_write_5m_input_tokens, 0)
+    + COALESCE(ur.cache_write_1h_input_tokens, 0)
+    + COALESCE(ur.cache_write_30m_input_tokens, 0)
+    + COALESCE(ur.output_tokens_total, 0)
+  ) END DESC NULLS LAST,
+  CASE WHEN $1::text = 'tokens' AND NOT COALESCE($2::bool, false) THEN (
+    COALESCE(ur.uncached_input_tokens, 0)
+    + COALESCE(ur.cache_read_input_tokens, 0)
+    + COALESCE(ur.cache_write_5m_input_tokens, 0)
+    + COALESCE(ur.cache_write_1h_input_tokens, 0)
+    + COALESCE(ur.cache_write_30m_input_tokens, 0)
+    + COALESCE(ur.output_tokens_total, 0)
+  ) END ASC NULLS LAST,
   r.id DESC
 `
 
 type ListConsoleBilledRequestsParams struct {
-	SortField     pgtype.Text
-	SortDesc      pgtype.Bool
-	UserID        int64
-	RouteIds      []int64
-	ApiKeyIds     []int64
-	Endpoints     []string
-	StreamTypes   []string
-	StatusClasses []string
-	Q             pgtype.Text
-	FromTime      pgtype.Timestamptz
-	ToTime        pgtype.Timestamptz
-	PageOffset    int32
-	PageLimit     int32
+	SortField   pgtype.Text
+	SortDesc    pgtype.Bool
+	UserID      int64
+	RouteIds    []int64
+	ApiKeyIds   []int64
+	Endpoints   []string
+	StreamTypes []string
+	Q           pgtype.Text
+	FromTime    pgtype.Timestamptz
+	ToTime      pgtype.Timestamptz
+	PageOffset  int32
+	PageLimit   int32
 }
 
 type ListConsoleBilledRequestsRow struct {
@@ -652,11 +726,10 @@ type ListConsoleBilledRequestsRow struct {
 	StartedAt        pgtype.Timestamptz
 	CompletedAt      pgtype.Timestamptz
 	UserChargeUsd    pgtype.Numeric
-	Status           string
 }
 
-// Console 客户请求日志：只查当前用户、且已进入计费（存在 usage_records）的请求。
-// 不返回渠道、服务商、平台成本、密钥明文或内部错误。
+// Console 客户请求日志：只查当前用户、且账本 USD 净扣费大于 0 的请求。
+// 不返回状态、渠道、服务商、平台成本、密钥明文或内部错误。
 // 先过滤分页，再只对当前页 JOIN 展示字段。
 func (q *Queries) ListConsoleBilledRequests(ctx context.Context, arg ListConsoleBilledRequestsParams) ([]ListConsoleBilledRequestsRow, error) {
 	rows, err := q.db.Query(ctx, listConsoleBilledRequests,
@@ -667,7 +740,6 @@ func (q *Queries) ListConsoleBilledRequests(ctx context.Context, arg ListConsole
 		arg.ApiKeyIds,
 		arg.Endpoints,
 		arg.StreamTypes,
-		arg.StatusClasses,
 		arg.Q,
 		arg.FromTime,
 		arg.ToTime,
@@ -700,7 +772,6 @@ func (q *Queries) ListConsoleBilledRequests(ctx context.Context, arg ListConsole
 			&i.StartedAt,
 			&i.CompletedAt,
 			&i.UserChargeUsd,
-			&i.Status,
 		); err != nil {
 			return nil, err
 		}
@@ -1194,19 +1265,25 @@ SELECT
         + COALESCE(ur.cache_write_30m_input_tokens, 0)
         + COALESCE(ur.output_tokens_total, 0)
     ), 0)::bigint AS token_count,
-    COALESCE((
-        SELECT SUM(
+    COALESCE(SUM(
+        COALESCE(ur.uncached_input_tokens, 0)
+        + COALESCE(ur.cache_read_input_tokens, 0)
+        + COALESCE(ur.cache_write_5m_input_tokens, 0)
+        + COALESCE(ur.cache_write_1h_input_tokens, 0)
+        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+    ), 0)::bigint AS input_token_count,
+    COALESCE(SUM(COALESCE(ur.output_tokens_total, 0)), 0)::bigint AS output_token_count,
+    COALESCE(SUM((
+        SELECT COALESCE(SUM(
             CASE
                 WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
                 WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
                 ELSE 0
             END
-        )
+        ), 0)
         FROM ledger_entries le
-        JOIN request_records billed ON billed.id = le.request_record_id
-        JOIN usage_records billed_usage ON billed_usage.request_record_id = billed.id
-        WHERE billed.user_id = $1 AND le.currency = 'USD'
-    ), 0)::numeric AS charge_usd,
+        WHERE le.request_record_id = r.id AND le.currency = 'USD'
+    )), 0)::numeric AS charge_usd,
     COALESCE(
         AVG(EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)
             FILTER (WHERE r.completed_at IS NOT NULL AND r.started_at IS NOT NULL),
@@ -1215,22 +1292,45 @@ SELECT
 FROM request_records r
 JOIN usage_records ur ON ur.request_record_id = r.id
 WHERE r.user_id = $1
+  AND (
+      SELECT COALESCE(SUM(
+          CASE
+              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+              ELSE 0
+          END
+      ), 0)
+      FROM ledger_entries le
+      WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) > 0
+  AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
+  AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 `
+
+type SummarizeConsoleBilledRequestsParams struct {
+	UserID   int64
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
+}
 
 type SummarizeConsoleBilledRequestsRow struct {
 	RequestCount     int64
 	TokenCount       int64
+	InputTokenCount  int64
+	OutputTokenCount int64
 	ChargeUsd        pgtype.Numeric
 	AverageLatencyMs float64
 }
 
-// 账户累计，不受列表时间筛选影响。
-func (q *Queries) SummarizeConsoleBilledRequests(ctx context.Context, userID int64) (SummarizeConsoleBilledRequestsRow, error) {
-	row := q.db.QueryRow(ctx, summarizeConsoleBilledRequests, userID)
+// 账户累计实际扣费请求。from_time/to_time 可空（narg，NULL = 不过滤时间）。
+func (q *Queries) SummarizeConsoleBilledRequests(ctx context.Context, arg SummarizeConsoleBilledRequestsParams) (SummarizeConsoleBilledRequestsRow, error) {
+	row := q.db.QueryRow(ctx, summarizeConsoleBilledRequests, arg.UserID, arg.FromTime, arg.ToTime)
 	var i SummarizeConsoleBilledRequestsRow
 	err := row.Scan(
 		&i.RequestCount,
 		&i.TokenCount,
+		&i.InputTokenCount,
+		&i.OutputTokenCount,
 		&i.ChargeUsd,
 		&i.AverageLatencyMs,
 	)

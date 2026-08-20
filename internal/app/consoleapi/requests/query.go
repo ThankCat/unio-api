@@ -21,17 +21,14 @@ var allowedSortFields = map[string]struct{}{
 	"model":      {},
 	"reasoning":  {},
 	"stream":     {},
+	"latency":    {},
+	"cost":       {},
+	"tokens":     {},
 }
 
 var allowedStreamTypes = map[string]struct{}{
 	"stream": {},
 	"sync":   {},
-}
-
-var allowedStatusClasses = map[string]struct{}{
-	"2xx": {},
-	"4xx": {},
-	"5xx": {},
 }
 
 type parsedListQuery struct {
@@ -76,28 +73,23 @@ func parseListQuery(r *http.Request) (parsedListQuery, *consoleservice.Error) {
 	if err != nil {
 		return parsedListQuery{}, err
 	}
-	statusClasses, err := parseAllowedValues(r, "status", allowedStatusClasses)
-	if err != nil {
-		return parsedListQuery{}, err
-	}
 	sort, sortErr := listquery.ParseSort(r, allowedSortFields, "created_at", true)
 	if sortErr != nil {
-		return parsedListQuery{}, consoleservice.InvalidArgument("sort", "sort must be created_at, model, reasoning, or stream.")
+		return parsedListQuery{}, consoleservice.InvalidArgument("sort", "sort must be created_at, model, reasoning, stream, latency, cost, or tokens.")
 	}
 	return parsedListQuery{
 		params: consolerequests.ListParams{
-			RouteIDs:      routeIDs,
-			APIKeyIDs:     apiKeyIDs,
-			Endpoints:     endpoints,
-			StreamTypes:   streamTypes,
-			StatusClasses: statusClasses,
-			Q:             strings.TrimSpace(r.URL.Query().Get("q")),
-			From:          from,
-			To:            to,
-			SortField:     sort.Field,
-			SortDesc:      sort.Desc,
-			Limit:         int32(pageSize),
-			Offset:        int32((page - 1) * pageSize),
+			RouteIDs:    routeIDs,
+			APIKeyIDs:   apiKeyIDs,
+			Endpoints:   endpoints,
+			StreamTypes: streamTypes,
+			Q:           strings.TrimSpace(r.URL.Query().Get("q")),
+			From:        from,
+			To:          to,
+			SortField:   sort.Field,
+			SortDesc:    sort.Desc,
+			Limit:       int32(pageSize),
+			Offset:      int32((page - 1) * pageSize),
 		},
 		page:     page,
 		pageSize: pageSize,

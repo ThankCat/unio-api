@@ -296,7 +296,7 @@ func (stubRequestService) List(context.Context, consolerequests.ListParams) ([]c
 	return []consolerequests.Item{}, 0, nil
 }
 
-func (stubRequestService) Summary(context.Context, int64) (consolerequests.Summary, *consoleservice.Error) {
+func (stubRequestService) Summary(context.Context, consolerequests.SummaryParams) (consolerequests.Summary, *consoleservice.Error) {
 	return consolerequests.Summary{}, nil
 }
 

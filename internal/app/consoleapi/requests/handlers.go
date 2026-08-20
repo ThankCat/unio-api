@@ -39,7 +39,22 @@ func (h *handler) summary(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	summary, err := h.service.Summary(r.Context(), principal.UserID)
+	// from/to 可空；缺省时统计账户全部实际扣费历史。
+	from, fromErr := parseTimeQuery(r, "from")
+	if fromErr != nil {
+		h.errorWriter.Write(w, fromErr)
+		return
+	}
+	to, toErr := parseTimeQuery(r, "to")
+	if toErr != nil {
+		h.errorWriter.Write(w, toErr)
+		return
+	}
+	summary, err := h.service.Summary(r.Context(), consolerequests.SummaryParams{
+		UserID: principal.UserID,
+		From:   from,
+		To:     to,
+	})
 	if err != nil {
 		h.errorWriter.Write(w, err)
 		return
@@ -47,6 +62,8 @@ func (h *handler) summary(w http.ResponseWriter, r *http.Request) {
 	_ = transport.WriteData(w, http.StatusOK, summaryData{
 		RequestCount:     summary.RequestCount,
 		TokenCount:       summary.TokenCount,
+		InputTokenCount:  summary.InputTokenCount,
+		OutputTokenCount: summary.OutputTokenCount,
 		ChargeUSD:        summary.ChargeUSD,
 		AverageLatencyMs: summary.AverageLatencyMs,
 	})

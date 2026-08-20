@@ -13,7 +13,7 @@ import (
 // Service 定义 HTTP 适配层依赖的客户请求日志查询能力。
 type Service interface {
 	List(context.Context, consolerequests.ListParams) ([]consolerequests.Item, int64, *consoleservice.Error)
-	Summary(context.Context, int64) (consolerequests.Summary, *consoleservice.Error)
+	Summary(context.Context, consolerequests.SummaryParams) (consolerequests.Summary, *consoleservice.Error)
 	Filters(context.Context, int64) (consolerequests.Filters, *consoleservice.Error)
 }
 

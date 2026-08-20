@@ -15,30 +15,29 @@ import (
 type Store interface {
 	ListConsoleBilledRequests(context.Context, sqlc.ListConsoleBilledRequestsParams) ([]sqlc.ListConsoleBilledRequestsRow, error)
 	CountConsoleBilledRequests(context.Context, sqlc.CountConsoleBilledRequestsParams) (int64, error)
-	SummarizeConsoleBilledRequests(context.Context, int64) (sqlc.SummarizeConsoleBilledRequestsRow, error)
+	SummarizeConsoleBilledRequests(context.Context, sqlc.SummarizeConsoleBilledRequestsParams) (sqlc.SummarizeConsoleBilledRequestsRow, error)
 	ListConsoleBilledRequestRoutes(context.Context, int64) ([]sqlc.ListConsoleBilledRequestRoutesRow, error)
 	ListConsoleBilledRequestAPIKeys(context.Context, int64) ([]sqlc.ListConsoleBilledRequestAPIKeysRow, error)
 	ListConsoleBilledRequestEndpoints(context.Context, int64) ([]string, error)
 }
 
-// ListParams 是当前用户计费请求列表的查询条件。
+// ListParams 是当前用户实际扣费请求列表的查询条件。
 type ListParams struct {
-	UserID        int64
-	RouteIDs      []int64
-	APIKeyIDs     []int64
-	Endpoints     []string
-	StreamTypes   []string
-	StatusClasses []string
-	Q             string
-	From          *time.Time
-	To            *time.Time
-	SortField     string
-	SortDesc      bool
-	Limit         int32
-	Offset        int32
+	UserID      int64
+	RouteIDs    []int64
+	APIKeyIDs   []int64
+	Endpoints   []string
+	StreamTypes []string
+	Q           string
+	From        *time.Time
+	To          *time.Time
+	SortField   string
+	SortDesc    bool
+	Limit       int32
+	Offset      int32
 }
 
-// Item 是客户可见的计费请求列表项。
+// Item 是客户可见的实际扣费请求列表项。
 type Item struct {
 	ID               int64
 	RequestID        string
@@ -56,13 +55,21 @@ type Item struct {
 	OutputTokens     int64
 	LatencyMs        *int64
 	UserChargeUSD    string
-	Status           string
 }
 
-// Summary 是当前用户全部计费请求的累计指标，不受列表时间筛选影响。
+// SummaryParams 是账户累计汇总条件。From/To 可空；均为空时统计全部实际扣费历史。
+type SummaryParams struct {
+	UserID int64
+	From   *time.Time
+	To     *time.Time
+}
+
+// Summary 是当前用户实际扣费请求的累计指标。
 type Summary struct {
 	RequestCount     int64
 	TokenCount       int64
+	InputTokenCount  int64
+	OutputTokenCount int64
 	ChargeUSD        string
 	AverageLatencyMs float64
 }
@@ -73,7 +80,7 @@ type FilterOption struct {
 	Name string `json:"name"`
 }
 
-// Filters 是当前用户计费请求上出现过的线路、密钥和端点。
+// Filters 是当前用户实际扣费请求上出现过的线路、密钥和端点。
 type Filters struct {
 	Routes    []FilterOption
 	APIKeys   []FilterOption
@@ -92,12 +99,12 @@ func NewService(store Store) *Service {
 
 var _ Store = (*sqlc.Queries)(nil)
 
-// List 返回当前用户的计费请求分页列表。
+// List 返回当前用户的实际扣费请求分页列表。
 func (s *Service) List(ctx context.Context, params ListParams) ([]Item, int64, *consoleservice.Error) {
 	listParams := toListSQL(params)
 	rows, err := s.store.ListConsoleBilledRequests(ctx, listParams)
 	if err != nil {
-		return nil, 0, consoleservice.RequestUnavailable("list billed requests", err)
+		return nil, 0, consoleservice.RequestUnavailable("list charged requests", err)
 	}
 	total := int64(0)
 	if len(rows) > 0 {
@@ -105,7 +112,7 @@ func (s *Service) List(ctx context.Context, params ListParams) ([]Item, int64, *
 	} else if params.Offset > 0 {
 		total, err = s.store.CountConsoleBilledRequests(ctx, toCountSQL(params))
 		if err != nil {
-			return nil, 0, consoleservice.RequestUnavailable("count billed requests", err)
+			return nil, 0, consoleservice.RequestUnavailable("count charged requests", err)
 		}
 	}
 	items := make([]Item, 0, len(rows))
@@ -115,21 +122,27 @@ func (s *Service) List(ctx context.Context, params ListParams) ([]Item, int64, *
 	return items, total, nil
 }
 
-// Summary 返回当前用户全部计费请求的累计指标。
-func (s *Service) Summary(ctx context.Context, userID int64) (Summary, *consoleservice.Error) {
-	row, err := s.store.SummarizeConsoleBilledRequests(ctx, userID)
+// Summary 返回当前用户实际扣费请求的累计指标；From/To 为空时不过滤时间。
+func (s *Service) Summary(ctx context.Context, params SummaryParams) (Summary, *consoleservice.Error) {
+	row, err := s.store.SummarizeConsoleBilledRequests(ctx, sqlc.SummarizeConsoleBilledRequestsParams{
+		UserID:   params.UserID,
+		FromTime: tsNarg(params.From),
+		ToTime:   tsNarg(params.To),
+	})
 	if err != nil {
-		return Summary{}, consoleservice.RequestUnavailable("summarize billed requests", err)
+		return Summary{}, consoleservice.RequestUnavailable("summarize charged requests", err)
 	}
 	return Summary{
 		RequestCount:     row.RequestCount,
 		TokenCount:       row.TokenCount,
+		InputTokenCount:  row.InputTokenCount,
+		OutputTokenCount: row.OutputTokenCount,
 		ChargeUSD:        opsutil.NumericString(row.ChargeUsd),
 		AverageLatencyMs: row.AverageLatencyMs,
 	}, nil
 }
 
-// Filters 返回当前用户计费请求上可用于下拉的线路、密钥和端点。
+// Filters 返回当前用户实际扣费请求上可用于下拉的线路、密钥和端点。
 func (s *Service) Filters(ctx context.Context, userID int64) (Filters, *consoleservice.Error) {
 	routes, err := s.store.ListConsoleBilledRequestRoutes(ctx, userID)
 	if err != nil {
@@ -178,7 +191,6 @@ func toItem(row sqlc.ListConsoleBilledRequestsRow) Item {
 		OutputTokens:     row.OutputTokens,
 		LatencyMs:        latencyMs(row.StartedAt, row.CompletedAt),
 		UserChargeUSD:    opsutil.NumericString(row.UserChargeUsd),
-		Status:           row.Status,
 	}
 	return item
 }
@@ -189,33 +201,31 @@ func toListSQL(params ListParams) sqlc.ListConsoleBilledRequestsParams {
 		limit = 20
 	}
 	return sqlc.ListConsoleBilledRequestsParams{
-		UserID:        params.UserID,
-		RouteIds:      emptyInts(params.RouteIDs),
-		ApiKeyIds:     emptyInts(params.APIKeyIDs),
-		Endpoints:     emptyStrings(InternalEndpoints(params.Endpoints)),
-		StreamTypes:   emptyStrings(params.StreamTypes),
-		StatusClasses: emptyStrings(params.StatusClasses),
-		Q:             textNarg(params.Q),
-		FromTime:      tsNarg(params.From),
-		ToTime:        tsNarg(params.To),
-		SortField:     textNarg(params.SortField),
-		SortDesc:      pgtype.Bool{Bool: params.SortDesc, Valid: true},
-		PageLimit:     limit,
-		PageOffset:    params.Offset,
+		UserID:      params.UserID,
+		RouteIds:    emptyInts(params.RouteIDs),
+		ApiKeyIds:   emptyInts(params.APIKeyIDs),
+		Endpoints:   emptyStrings(InternalEndpoints(params.Endpoints)),
+		StreamTypes: emptyStrings(params.StreamTypes),
+		Q:           textNarg(params.Q),
+		FromTime:    tsNarg(params.From),
+		ToTime:      tsNarg(params.To),
+		SortField:   textNarg(params.SortField),
+		SortDesc:    pgtype.Bool{Bool: params.SortDesc, Valid: true},
+		PageLimit:   limit,
+		PageOffset:  params.Offset,
 	}
 }
 
 func toCountSQL(params ListParams) sqlc.CountConsoleBilledRequestsParams {
 	return sqlc.CountConsoleBilledRequestsParams{
-		UserID:        params.UserID,
-		RouteIds:      emptyInts(params.RouteIDs),
-		ApiKeyIds:     emptyInts(params.APIKeyIDs),
-		Endpoints:     emptyStrings(InternalEndpoints(params.Endpoints)),
-		StreamTypes:   emptyStrings(params.StreamTypes),
-		StatusClasses: emptyStrings(params.StatusClasses),
-		Q:             textNarg(params.Q),
-		FromTime:      tsNarg(params.From),
-		ToTime:        tsNarg(params.To),
+		UserID:      params.UserID,
+		RouteIds:    emptyInts(params.RouteIDs),
+		ApiKeyIds:   emptyInts(params.APIKeyIDs),
+		Endpoints:   emptyStrings(InternalEndpoints(params.Endpoints)),
+		StreamTypes: emptyStrings(params.StreamTypes),
+		Q:           textNarg(params.Q),
+		FromTime:    tsNarg(params.From),
+		ToTime:      tsNarg(params.To),
 	}
 }
 

@@ -18,7 +18,7 @@ type fakeStore struct {
 	countTotal    int64
 	countCalled   bool
 	summary       sqlc.SummarizeConsoleBilledRequestsRow
-	summaryUserID int64
+	summaryParams sqlc.SummarizeConsoleBilledRequestsParams
 	routes        []sqlc.ListConsoleBilledRequestRoutesRow
 	keys          []sqlc.ListConsoleBilledRequestAPIKeysRow
 	endpoints     []string
@@ -34,8 +34,8 @@ func (f *fakeStore) CountConsoleBilledRequests(context.Context, sqlc.CountConsol
 	return f.countTotal, nil
 }
 
-func (f *fakeStore) SummarizeConsoleBilledRequests(_ context.Context, userID int64) (sqlc.SummarizeConsoleBilledRequestsRow, error) {
-	f.summaryUserID = userID
+func (f *fakeStore) SummarizeConsoleBilledRequests(_ context.Context, arg sqlc.SummarizeConsoleBilledRequestsParams) (sqlc.SummarizeConsoleBilledRequestsRow, error) {
+	f.summaryParams = arg
 	return f.summary, nil
 }
 
@@ -74,7 +74,6 @@ func TestListMapsCustomerSafeFieldsAndScopesToUser(t *testing.T) {
 			StartedAt:        pgtype.Timestamptz{Time: started, Valid: true},
 			CompletedAt:      pgtype.Timestamptz{Time: completed, Valid: true},
 			UserChargeUsd:    mustNumeric(t, "0.15"),
-			Status:           "2xx",
 		}},
 	}
 
@@ -102,7 +101,7 @@ func TestListMapsCustomerSafeFieldsAndScopesToUser(t *testing.T) {
 	if item.Endpoint != "/v1/chat/completions" {
 		t.Fatalf("endpoint = %q", item.Endpoint)
 	}
-	if item.Status != "2xx" || item.APIKeyName != "prod" || item.RouteName != "Claude" {
+	if item.APIKeyName != "prod" || item.RouteName != "Claude" {
 		t.Fatalf("item = %+v", item)
 	}
 	if item.LatencyMs == nil || *item.LatencyMs != 1500 {
@@ -113,25 +112,59 @@ func TestListMapsCustomerSafeFieldsAndScopesToUser(t *testing.T) {
 	}
 }
 
-func TestSummaryUsesUserIDOnly(t *testing.T) {
+func TestSummaryUsesAllTimeWhenBoundsOmitted(t *testing.T) {
 	store := &fakeStore{
 		summary: sqlc.SummarizeConsoleBilledRequestsRow{
 			RequestCount:     4,
 			TokenCount:       180,
+			InputTokenCount:  120,
+			OutputTokenCount: 60,
 			ChargeUsd:        mustNumeric(t, "1.25"),
 			AverageLatencyMs: 750,
 		},
 	}
 
-	summary, err := requests.NewService(store).Summary(context.Background(), 7)
+	summary, err := requests.NewService(store).Summary(context.Background(), requests.SummaryParams{
+		UserID: 7,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store.summaryUserID != 7 {
-		t.Fatalf("summary user id = %d", store.summaryUserID)
+	if store.summaryParams.UserID != 7 || store.summaryParams.FromTime.Valid || store.summaryParams.ToTime.Valid {
+		t.Fatalf("summary params = %+v", store.summaryParams)
 	}
-	if summary.RequestCount != 4 || summary.TokenCount != 180 || summary.ChargeUSD != "1.25" || summary.AverageLatencyMs != 750 {
+	if summary.RequestCount != 4 || summary.TokenCount != 180 || summary.InputTokenCount != 120 || summary.OutputTokenCount != 60 || summary.ChargeUSD != "1.25" || summary.AverageLatencyMs != 750 {
 		t.Fatalf("summary = %+v", summary)
+	}
+}
+
+func TestSummaryForwardsOptionalTimeBounds(t *testing.T) {
+	store := &fakeStore{
+		summary: sqlc.SummarizeConsoleBilledRequestsRow{
+			RequestCount:     4,
+			TokenCount:       180,
+			InputTokenCount:  120,
+			OutputTokenCount: 60,
+			ChargeUsd:        mustNumeric(t, "1.25"),
+			AverageLatencyMs: 750,
+		},
+	}
+
+	from := time.Date(2026, 8, 19, 16, 0, 0, 0, time.UTC)
+	to := from.Add(24 * time.Hour)
+	_, err := requests.NewService(store).Summary(context.Background(), requests.SummaryParams{
+		UserID: 7,
+		From:   &from,
+		To:     &to,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.summaryParams.UserID != 7 || !store.summaryParams.FromTime.Valid || !store.summaryParams.ToTime.Valid {
+		t.Fatalf("summary params = %+v", store.summaryParams)
+	}
+	if !store.summaryParams.FromTime.Time.Equal(from) || !store.summaryParams.ToTime.Time.Equal(to) {
+		t.Fatalf("time bounds = from=%v to=%v", store.summaryParams.FromTime.Time, store.summaryParams.ToTime.Time)
 	}
 }
 

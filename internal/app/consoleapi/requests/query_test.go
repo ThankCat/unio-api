@@ -19,7 +19,6 @@ func TestParseListQueryDefaultsAndFilters(t *testing.T) {
 	values.Set("api_key_id", "9")
 	values.Set("endpoint", "/v1/chat/completions")
 	values.Set("stream", "stream")
-	values.Set("status", "2xx")
 	values.Set("sort", "-model")
 	values.Set("from", from.Format(time.RFC3339))
 	req := &http.Request{URL: &url.URL{RawQuery: values.Encode()}}
@@ -66,8 +65,7 @@ func TestParseListQueryRejectsInvalidValues(t *testing.T) {
 		"route_id=abc",
 		"endpoint=/v1/models",
 		"stream=true",
-		"status=succeeded",
-		"sort=cost",
+		"sort=unknown",
 	}
 	for _, raw := range cases {
 		req := &http.Request{URL: &url.URL{RawQuery: raw}}

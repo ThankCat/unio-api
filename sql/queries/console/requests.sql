@@ -1,5 +1,5 @@
--- Console 客户请求日志：只查当前用户、且已进入计费（存在 usage_records）的请求。
--- 不返回渠道、服务商、平台成本、密钥明文或内部错误。
+-- Console 客户请求日志：只查当前用户、且账本 USD 净扣费大于 0 的请求。
+-- 不返回状态、渠道、服务商、平台成本、密钥明文或内部错误。
 
 -- name: ListConsoleBilledRequests :many
 -- 先过滤分页，再只对当前页 JOIN 展示字段。
@@ -11,6 +11,17 @@ WITH filtered_page AS (
     JOIN usage_records ur ON ur.request_record_id = r.id
     LEFT JOIN api_keys ak ON ak.id = r.api_key_id
     WHERE r.user_id = sqlc.arg(user_id)
+      AND (
+          SELECT COALESCE(SUM(
+              CASE
+                  WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+                  WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+                  ELSE 0
+              END
+          ), 0)
+          FROM ledger_entries le
+          WHERE le.request_record_id = r.id AND le.currency = 'USD'
+      ) > 0
       AND (
           COALESCE(cardinality(sqlc.narg(route_ids)::bigint[]), 0) = 0
           OR COALESCE(r.route_id, ak.route_id) = ANY(sqlc.narg(route_ids)::bigint[])
@@ -27,27 +38,6 @@ WITH filtered_page AS (
           COALESCE(cardinality(sqlc.narg(stream_types)::text[]), 0) = 0
           OR (r.stream AND 'stream' = ANY(sqlc.narg(stream_types)::text[]))
           OR ((NOT r.stream) AND 'sync' = ANY(sqlc.narg(stream_types)::text[]))
-      )
-      AND (
-          COALESCE(cardinality(sqlc.narg(status_classes)::text[]), 0) = 0
-          OR (
-              CASE
-                  WHEN r.status = 'succeeded' THEN '2xx'
-                  WHEN r.status = 'canceled' THEN '4xx'
-                  WHEN lower(COALESCE(r.error_code, '')) IN (
-                      'invalid_request',
-                      'invalid_api_key',
-                      'authentication_error',
-                      'permission_denied',
-                      'not_found',
-                      'rate_limit_exceeded',
-                      'insufficient_quota',
-                      'context_length_exceeded'
-                  ) THEN '4xx'
-                  WHEN COALESCE(r.error_code, '') LIKE '4%' THEN '4xx'
-                  ELSE '5xx'
-              END
-          ) = ANY(sqlc.narg(status_classes)::text[])
       )
       AND (
           sqlc.narg(q)::text IS NULL
@@ -67,6 +57,46 @@ WITH filtered_page AS (
       CASE WHEN sqlc.narg(sort_field)::text = 'reasoning' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.reasoning_effort END ASC NULLS LAST,
       CASE WHEN sqlc.narg(sort_field)::text = 'stream' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.stream END DESC NULLS LAST,
       CASE WHEN sqlc.narg(sort_field)::text = 'stream' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.stream END ASC NULLS LAST,
+      CASE WHEN sqlc.narg(sort_field)::text = 'latency' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) END DESC NULLS LAST,
+      CASE WHEN sqlc.narg(sort_field)::text = 'latency' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) END ASC NULLS LAST,
+      CASE WHEN sqlc.narg(sort_field)::text = 'cost' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN (
+        SELECT COALESCE(SUM(
+            CASE
+                WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+                WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+                ELSE 0
+            END
+        ), 0)
+        FROM ledger_entries le
+        WHERE le.request_record_id = r.id AND le.currency = 'USD'
+      ) END DESC NULLS LAST,
+      CASE WHEN sqlc.narg(sort_field)::text = 'cost' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN (
+        SELECT COALESCE(SUM(
+            CASE
+                WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+                WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+                ELSE 0
+            END
+        ), 0)
+        FROM ledger_entries le
+        WHERE le.request_record_id = r.id AND le.currency = 'USD'
+      ) END ASC NULLS LAST,
+      CASE WHEN sqlc.narg(sort_field)::text = 'tokens' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN (
+        COALESCE(ur.uncached_input_tokens, 0)
+        + COALESCE(ur.cache_read_input_tokens, 0)
+        + COALESCE(ur.cache_write_5m_input_tokens, 0)
+        + COALESCE(ur.cache_write_1h_input_tokens, 0)
+        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.output_tokens_total, 0)
+      ) END DESC NULLS LAST,
+      CASE WHEN sqlc.narg(sort_field)::text = 'tokens' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN (
+        COALESCE(ur.uncached_input_tokens, 0)
+        + COALESCE(ur.cache_read_input_tokens, 0)
+        + COALESCE(ur.cache_write_5m_input_tokens, 0)
+        + COALESCE(ur.cache_write_1h_input_tokens, 0)
+        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.output_tokens_total, 0)
+      ) END ASC NULLS LAST,
       r.id DESC
     LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset)
 )
@@ -104,23 +134,7 @@ SELECT
         ), 0)
         FROM ledger_entries le
         WHERE le.request_record_id = r.id AND le.currency = 'USD'
-    )::numeric AS user_charge_usd,
-    CASE
-        WHEN r.status = 'succeeded' THEN '2xx'
-        WHEN r.status = 'canceled' THEN '4xx'
-        WHEN lower(COALESCE(r.error_code, '')) IN (
-            'invalid_request',
-            'invalid_api_key',
-            'authentication_error',
-            'permission_denied',
-            'not_found',
-            'rate_limit_exceeded',
-            'insufficient_quota',
-            'context_length_exceeded'
-        ) THEN '4xx'
-        WHEN COALESCE(r.error_code, '') LIKE '4%' THEN '4xx'
-        ELSE '5xx'
-    END AS status
+    )::numeric AS user_charge_usd
 FROM filtered_page fp
 JOIN request_records r ON r.id = fp.id
 JOIN usage_records ur ON ur.request_record_id = r.id
@@ -135,6 +149,46 @@ ORDER BY
   CASE WHEN sqlc.narg(sort_field)::text = 'reasoning' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.reasoning_effort END ASC NULLS LAST,
   CASE WHEN sqlc.narg(sort_field)::text = 'stream' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.stream END DESC NULLS LAST,
   CASE WHEN sqlc.narg(sort_field)::text = 'stream' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.stream END ASC NULLS LAST,
+  CASE WHEN sqlc.narg(sort_field)::text = 'latency' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg(sort_field)::text = 'latency' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg(sort_field)::text = 'cost' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN (
+    SELECT COALESCE(SUM(
+        CASE
+            WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+            WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+            ELSE 0
+        END
+    ), 0)
+    FROM ledger_entries le
+    WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg(sort_field)::text = 'cost' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN (
+    SELECT COALESCE(SUM(
+        CASE
+            WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+            WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+            ELSE 0
+        END
+    ), 0)
+    FROM ledger_entries le
+    WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) END ASC NULLS LAST,
+  CASE WHEN sqlc.narg(sort_field)::text = 'tokens' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN (
+    COALESCE(ur.uncached_input_tokens, 0)
+    + COALESCE(ur.cache_read_input_tokens, 0)
+    + COALESCE(ur.cache_write_5m_input_tokens, 0)
+    + COALESCE(ur.cache_write_1h_input_tokens, 0)
+    + COALESCE(ur.cache_write_30m_input_tokens, 0)
+    + COALESCE(ur.output_tokens_total, 0)
+  ) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg(sort_field)::text = 'tokens' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN (
+    COALESCE(ur.uncached_input_tokens, 0)
+    + COALESCE(ur.cache_read_input_tokens, 0)
+    + COALESCE(ur.cache_write_5m_input_tokens, 0)
+    + COALESCE(ur.cache_write_1h_input_tokens, 0)
+    + COALESCE(ur.cache_write_30m_input_tokens, 0)
+    + COALESCE(ur.output_tokens_total, 0)
+  ) END ASC NULLS LAST,
   r.id DESC;
 
 -- name: CountConsoleBilledRequests :one
@@ -143,6 +197,17 @@ FROM request_records r
 JOIN usage_records ur ON ur.request_record_id = r.id
 LEFT JOIN api_keys ak ON ak.id = r.api_key_id
 WHERE r.user_id = sqlc.arg(user_id)
+  AND (
+      SELECT COALESCE(SUM(
+          CASE
+              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+              ELSE 0
+          END
+      ), 0)
+      FROM ledger_entries le
+      WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) > 0
   AND (
       COALESCE(cardinality(sqlc.narg(route_ids)::bigint[]), 0) = 0
       OR COALESCE(r.route_id, ak.route_id) = ANY(sqlc.narg(route_ids)::bigint[])
@@ -161,27 +226,6 @@ WHERE r.user_id = sqlc.arg(user_id)
       OR ((NOT r.stream) AND 'sync' = ANY(sqlc.narg(stream_types)::text[]))
   )
   AND (
-      COALESCE(cardinality(sqlc.narg(status_classes)::text[]), 0) = 0
-      OR (
-          CASE
-              WHEN r.status = 'succeeded' THEN '2xx'
-              WHEN r.status = 'canceled' THEN '4xx'
-              WHEN lower(COALESCE(r.error_code, '')) IN (
-                  'invalid_request',
-                  'invalid_api_key',
-                  'authentication_error',
-                  'permission_denied',
-                  'not_found',
-                  'rate_limit_exceeded',
-                  'insufficient_quota',
-                  'context_length_exceeded'
-              ) THEN '4xx'
-              WHEN COALESCE(r.error_code, '') LIKE '4%' THEN '4xx'
-              ELSE '5xx'
-          END
-      ) = ANY(sqlc.narg(status_classes)::text[])
-  )
-  AND (
       sqlc.narg(q)::text IS NULL
       OR btrim(sqlc.narg(q)::text) = ''
       OR r.requested_model_id ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
@@ -192,7 +236,7 @@ WHERE r.user_id = sqlc.arg(user_id)
   AND (sqlc.narg(to_time)::timestamptz IS NULL OR r.created_at < sqlc.narg(to_time)::timestamptz);
 
 -- name: SummarizeConsoleBilledRequests :one
--- 账户累计，不受列表时间筛选影响。
+-- 账户累计实际扣费请求。from_time/to_time 可空（narg，NULL = 不过滤时间）。
 SELECT
     COUNT(*)::bigint AS request_count,
     COALESCE(SUM(
@@ -203,19 +247,25 @@ SELECT
         + COALESCE(ur.cache_write_30m_input_tokens, 0)
         + COALESCE(ur.output_tokens_total, 0)
     ), 0)::bigint AS token_count,
-    COALESCE((
-        SELECT SUM(
+    COALESCE(SUM(
+        COALESCE(ur.uncached_input_tokens, 0)
+        + COALESCE(ur.cache_read_input_tokens, 0)
+        + COALESCE(ur.cache_write_5m_input_tokens, 0)
+        + COALESCE(ur.cache_write_1h_input_tokens, 0)
+        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+    ), 0)::bigint AS input_token_count,
+    COALESCE(SUM(COALESCE(ur.output_tokens_total, 0)), 0)::bigint AS output_token_count,
+    COALESCE(SUM((
+        SELECT COALESCE(SUM(
             CASE
                 WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
                 WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
                 ELSE 0
             END
-        )
+        ), 0)
         FROM ledger_entries le
-        JOIN request_records billed ON billed.id = le.request_record_id
-        JOIN usage_records billed_usage ON billed_usage.request_record_id = billed.id
-        WHERE billed.user_id = sqlc.arg(user_id) AND le.currency = 'USD'
-    ), 0)::numeric AS charge_usd,
+        WHERE le.request_record_id = r.id AND le.currency = 'USD'
+    )), 0)::numeric AS charge_usd,
     COALESCE(
         AVG(EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)
             FILTER (WHERE r.completed_at IS NOT NULL AND r.started_at IS NOT NULL),
@@ -223,7 +273,20 @@ SELECT
     )::float8 AS average_latency_ms
 FROM request_records r
 JOIN usage_records ur ON ur.request_record_id = r.id
-WHERE r.user_id = sqlc.arg(user_id);
+WHERE r.user_id = sqlc.arg(user_id)
+  AND (
+      SELECT COALESCE(SUM(
+          CASE
+              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+              ELSE 0
+          END
+      ), 0)
+      FROM ledger_entries le
+      WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) > 0
+  AND (sqlc.narg(from_time)::timestamptz IS NULL OR r.created_at >= sqlc.narg(from_time)::timestamptz)
+  AND (sqlc.narg(to_time)::timestamptz IS NULL OR r.created_at < sqlc.narg(to_time)::timestamptz);
 
 -- name: ListConsoleBilledRequestRoutes :many
 SELECT DISTINCT
@@ -235,6 +298,17 @@ LEFT JOIN api_keys ak ON ak.id = r.api_key_id
 JOIN routes rt ON rt.id = COALESCE(r.route_id, ak.route_id)
 WHERE r.user_id = sqlc.arg(user_id)
   AND COALESCE(r.route_id, ak.route_id) IS NOT NULL
+  AND (
+      SELECT COALESCE(SUM(
+          CASE
+              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+              ELSE 0
+          END
+      ), 0)
+      FROM ledger_entries le
+      WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) > 0
 ORDER BY rt.name, COALESCE(r.route_id, ak.route_id);
 
 -- name: ListConsoleBilledRequestAPIKeys :many
@@ -245,6 +319,17 @@ FROM request_records r
 JOIN usage_records ur ON ur.request_record_id = r.id
 JOIN api_keys ak ON ak.id = r.api_key_id
 WHERE r.user_id = sqlc.arg(user_id)
+  AND (
+      SELECT COALESCE(SUM(
+          CASE
+              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+              ELSE 0
+          END
+      ), 0)
+      FROM ledger_entries le
+      WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) > 0
 ORDER BY ak.name, r.api_key_id;
 
 -- name: ListConsoleBilledRequestEndpoints :many
@@ -252,4 +337,15 @@ SELECT DISTINCT r.endpoint
 FROM request_records r
 JOIN usage_records ur ON ur.request_record_id = r.id
 WHERE r.user_id = sqlc.arg(user_id)
+  AND (
+      SELECT COALESCE(SUM(
+          CASE
+              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+              ELSE 0
+          END
+      ), 0)
+      FROM ledger_entries le
+      WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) > 0
 ORDER BY r.endpoint;

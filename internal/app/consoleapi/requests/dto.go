@@ -23,7 +23,6 @@ type itemDTO struct {
 	OutputTokens     int64   `json:"output_tokens"`
 	LatencyMs        *int64  `json:"latency_ms"`
 	UserChargeUSD    string  `json:"user_charge_usd"`
-	Status           string  `json:"status"`
 }
 
 type listData struct {
@@ -36,6 +35,8 @@ type listData struct {
 type summaryData struct {
 	RequestCount     int64   `json:"request_count"`
 	TokenCount       int64   `json:"token_count"`
+	InputTokenCount  int64   `json:"input_token_count"`
+	OutputTokenCount int64   `json:"output_token_count"`
 	ChargeUSD        string  `json:"charge_usd"`
 	AverageLatencyMs float64 `json:"average_latency_ms"`
 }
@@ -68,7 +69,6 @@ func toItemDTO(item consolerequests.Item) itemDTO {
 		OutputTokens:     item.OutputTokens,
 		LatencyMs:        item.LatencyMs,
 		UserChargeUSD:    item.UserChargeUSD,
-		Status:           item.Status,
 	}
 }
 
