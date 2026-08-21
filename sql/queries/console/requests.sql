@@ -10,6 +10,7 @@ WITH filtered_page AS (
     FROM request_records r
     JOIN usage_records ur ON ur.request_record_id = r.id
     LEFT JOIN api_keys ak ON ak.id = r.api_key_id
+    LEFT JOIN models m ON m.model_id = r.requested_model_id
     WHERE r.user_id = sqlc.arg(user_id)
       AND (
           SELECT COALESCE(SUM(
@@ -43,6 +44,7 @@ WITH filtered_page AS (
           sqlc.narg(q)::text IS NULL
           OR btrim(sqlc.narg(q)::text) = ''
           OR r.requested_model_id ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
+          OR COALESCE(m.display_name, '') ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
           OR r.request_id ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
           OR COALESCE(r.client_ip, '') ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
       )
@@ -51,8 +53,8 @@ WITH filtered_page AS (
     ORDER BY
       CASE WHEN COALESCE(sqlc.narg(sort_field)::text, 'created_at') IN ('', 'created_at') AND COALESCE(sqlc.narg(sort_desc)::bool, true) THEN r.created_at END DESC NULLS LAST,
       CASE WHEN COALESCE(sqlc.narg(sort_field)::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE(sqlc.narg(sort_desc)::bool, true) THEN r.created_at END ASC NULLS LAST,
-      CASE WHEN sqlc.narg(sort_field)::text = 'model' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
-      CASE WHEN sqlc.narg(sort_field)::text = 'model' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
+      CASE WHEN sqlc.narg(sort_field)::text = 'model' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN COALESCE(m.display_name, r.requested_model_id) END DESC NULLS LAST,
+      CASE WHEN sqlc.narg(sort_field)::text = 'model' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN COALESCE(m.display_name, r.requested_model_id) END ASC NULLS LAST,
       CASE WHEN sqlc.narg(sort_field)::text = 'reasoning' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.reasoning_effort END DESC NULLS LAST,
       CASE WHEN sqlc.narg(sort_field)::text = 'reasoning' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.reasoning_effort END ASC NULLS LAST,
       CASE WHEN sqlc.narg(sort_field)::text = 'stream' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.stream END DESC NULLS LAST,
@@ -110,10 +112,27 @@ SELECT
     rt.name AS route_name,
     r.api_key_id,
     ak.name AS api_key_name,
+    ak.key_prefix AS api_key_prefix,
+    ak.key_plaintext AS api_key_plaintext,
     r.endpoint,
     r.stream,
     r.requested_model_id,
+    m.display_name AS model_display_name,
+    r.ingress_protocol,
+    ps.uncached_input_price AS input_price_per_1m,
+    ps.output_price AS output_price_per_1m,
+    ps.cache_read_input_price AS cache_read_price_per_1m,
+    ps.cache_write_5m_input_price AS cache_write_5m_price_per_1m,
+    ps.cache_write_1h_input_price AS cache_write_1h_price_per_1m,
+    ps.cache_write_30m_input_price AS cache_write_30m_price_per_1m,
+    ps.reasoning_output_price AS reasoning_output_price_per_1m,
+    ps.service_tier AS price_service_tier,
     r.reasoning_effort,
+    COALESCE(ur.uncached_input_tokens, 0)::bigint AS uncached_input_tokens,
+    COALESCE(ur.cache_read_input_tokens, 0)::bigint AS cache_read_input_tokens,
+    COALESCE(ur.cache_write_5m_input_tokens, 0)::bigint AS cache_write_5m_input_tokens,
+    COALESCE(ur.cache_write_1h_input_tokens, 0)::bigint AS cache_write_1h_input_tokens,
+    COALESCE(ur.cache_write_30m_input_tokens, 0)::bigint AS cache_write_30m_input_tokens,
     (
         COALESCE(ur.uncached_input_tokens, 0)
         + COALESCE(ur.cache_read_input_tokens, 0)
@@ -122,8 +141,10 @@ SELECT
         + COALESCE(ur.cache_write_30m_input_tokens, 0)
     )::bigint AS input_tokens,
     COALESCE(ur.output_tokens_total, 0)::bigint AS output_tokens,
+    COALESCE(ur.reasoning_output_tokens, 0)::bigint AS reasoning_output_tokens,
     r.started_at,
     r.completed_at,
+    r.gateway_first_token_at,
     (
         SELECT COALESCE(SUM(
             CASE
@@ -140,11 +161,13 @@ JOIN request_records r ON r.id = fp.id
 JOIN usage_records ur ON ur.request_record_id = r.id
 LEFT JOIN api_keys ak ON ak.id = r.api_key_id
 LEFT JOIN routes rt ON rt.id = COALESCE(r.route_id, ak.route_id)
+LEFT JOIN models m ON m.model_id = r.requested_model_id
+LEFT JOIN price_snapshots ps ON ps.request_record_id = r.id
 ORDER BY
   CASE WHEN COALESCE(sqlc.narg(sort_field)::text, 'created_at') IN ('', 'created_at') AND COALESCE(sqlc.narg(sort_desc)::bool, true) THEN r.created_at END DESC NULLS LAST,
   CASE WHEN COALESCE(sqlc.narg(sort_field)::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE(sqlc.narg(sort_desc)::bool, true) THEN r.created_at END ASC NULLS LAST,
-  CASE WHEN sqlc.narg(sort_field)::text = 'model' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.requested_model_id END DESC NULLS LAST,
-  CASE WHEN sqlc.narg(sort_field)::text = 'model' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.requested_model_id END ASC NULLS LAST,
+  CASE WHEN sqlc.narg(sort_field)::text = 'model' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN COALESCE(m.display_name, r.requested_model_id) END DESC NULLS LAST,
+  CASE WHEN sqlc.narg(sort_field)::text = 'model' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN COALESCE(m.display_name, r.requested_model_id) END ASC NULLS LAST,
   CASE WHEN sqlc.narg(sort_field)::text = 'reasoning' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.reasoning_effort END DESC NULLS LAST,
   CASE WHEN sqlc.narg(sort_field)::text = 'reasoning' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.reasoning_effort END ASC NULLS LAST,
   CASE WHEN sqlc.narg(sort_field)::text = 'stream' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN r.stream END DESC NULLS LAST,
@@ -196,6 +219,7 @@ SELECT COUNT(*)::bigint AS total
 FROM request_records r
 JOIN usage_records ur ON ur.request_record_id = r.id
 LEFT JOIN api_keys ak ON ak.id = r.api_key_id
+LEFT JOIN models m ON m.model_id = r.requested_model_id
 WHERE r.user_id = sqlc.arg(user_id)
   AND (
       SELECT COALESCE(SUM(
@@ -229,6 +253,7 @@ WHERE r.user_id = sqlc.arg(user_id)
       sqlc.narg(q)::text IS NULL
       OR btrim(sqlc.narg(q)::text) = ''
       OR r.requested_model_id ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
+      OR COALESCE(m.display_name, '') ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
       OR r.request_id ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
       OR COALESCE(r.client_ip, '') ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
   )
@@ -288,49 +313,18 @@ WHERE r.user_id = sqlc.arg(user_id)
   AND (sqlc.narg(from_time)::timestamptz IS NULL OR r.created_at >= sqlc.narg(from_time)::timestamptz)
   AND (sqlc.narg(to_time)::timestamptz IS NULL OR r.created_at < sqlc.narg(to_time)::timestamptz);
 
--- name: ListConsoleBilledRequestRoutes :many
-SELECT DISTINCT
-    COALESCE(r.route_id, ak.route_id)::bigint AS id,
-    rt.name AS name
-FROM request_records r
-JOIN usage_records ur ON ur.request_record_id = r.id
-LEFT JOIN api_keys ak ON ak.id = r.api_key_id
-JOIN routes rt ON rt.id = COALESCE(r.route_id, ak.route_id)
-WHERE r.user_id = sqlc.arg(user_id)
-  AND COALESCE(r.route_id, ak.route_id) IS NOT NULL
-  AND (
-      SELECT COALESCE(SUM(
-          CASE
-              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
-              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
-              ELSE 0
-          END
-      ), 0)
-      FROM ledger_entries le
-      WHERE le.request_record_id = r.id AND le.currency = 'USD'
-  ) > 0
-ORDER BY rt.name, COALESCE(r.route_id, ak.route_id);
+-- name: ListConsoleFilterRoutes :many
+-- 线路筛选项来自线路目录全量，不按用户历史请求聚合。
+SELECT rt.id, rt.name
+FROM routes rt
+ORDER BY rt.name, rt.id;
 
--- name: ListConsoleBilledRequestAPIKeys :many
-SELECT DISTINCT
-    r.api_key_id AS id,
-    ak.name AS name
-FROM request_records r
-JOIN usage_records ur ON ur.request_record_id = r.id
-JOIN api_keys ak ON ak.id = r.api_key_id
-WHERE r.user_id = sqlc.arg(user_id)
-  AND (
-      SELECT COALESCE(SUM(
-          CASE
-              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
-              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
-              ELSE 0
-          END
-      ), 0)
-      FROM ledger_entries le
-      WHERE le.request_record_id = r.id AND le.currency = 'USD'
-  ) > 0
-ORDER BY ak.name, r.api_key_id;
+-- name: ListConsoleFilterAPIKeys :many
+-- 密钥筛选项来自当前用户的 API Key 目录，不按请求历史聚合。
+SELECT ak.id, ak.name
+FROM api_keys ak
+WHERE ak.user_id = sqlc.arg(user_id)
+ORDER BY ak.name, ak.id;
 
 -- name: ListConsoleBilledRequestEndpoints :many
 SELECT DISTINCT r.endpoint
@@ -349,3 +343,22 @@ WHERE r.user_id = sqlc.arg(user_id)
       WHERE le.request_record_id = r.id AND le.currency = 'USD'
   ) > 0
 ORDER BY r.endpoint;
+
+-- name: ListConsoleBilledRequestStreamTypes :many
+-- 类型筛选项来自当前用户实际扣费请求上出现过的 stream，不写死流式/非流式。
+SELECT DISTINCT r.stream
+FROM request_records r
+JOIN usage_records ur ON ur.request_record_id = r.id
+WHERE r.user_id = sqlc.arg(user_id)
+  AND (
+      SELECT COALESCE(SUM(
+          CASE
+              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+              ELSE 0
+          END
+      ), 0)
+      FROM ledger_entries le
+      WHERE le.request_record_id = r.id AND le.currency = 'USD'
+  ) > 0
+ORDER BY r.stream DESC;

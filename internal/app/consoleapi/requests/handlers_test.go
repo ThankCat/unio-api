@@ -72,23 +72,37 @@ func (s *fakeRequestService) List(_ context.Context, params consolerequests.List
 	routeID := int64(3)
 	reasoning := "medium"
 	latency := int64(1500)
+	firstToken := int64(400)
+	tps := 18.1818
 	return []consolerequests.Item{{
-		ID:               11,
-		RequestID:        "req_safe",
-		CreatedAt:        time.Date(2026, 8, 20, 8, 0, 0, 0, time.UTC),
-		ClientIP:         "203.0.113.10",
-		RouteID:          &routeID,
-		RouteName:        "Claude",
-		APIKeyID:         9,
-		APIKeyName:       "prod",
-		Endpoint:         "/v1/chat/completions",
-		Stream:           true,
-		RequestedModelID: "claude-sonnet-4-5",
-		ReasoningEffort:  &reasoning,
-		InputTokens:      100,
-		OutputTokens:     20,
-		LatencyMs:        &latency,
-		UserChargeUSD:    "0.15",
+		ID:                      11,
+		RequestID:               "req_safe",
+		CreatedAt:               time.Date(2026, 8, 20, 8, 0, 0, 0, time.UTC),
+		ClientIP:                "203.0.113.10",
+		RouteID:                 &routeID,
+		RouteName:               "Claude",
+		APIKeyID:                9,
+		APIKeyName:              "prod",
+		APIKeyPrefix:            "unio_sk_XhE8wL5D",
+		APIKeyPlaintext:         strPtr("unio_sk_XhE8wL5Dabcdefghijklmnopqrstuvwxyz012345"),
+		Endpoint:                "/chat/completions",
+		Stream:                  true,
+		RequestedModelID:        "claude-sonnet-4-5",
+		ModelDisplayName:        "Claude Sonnet 4.5",
+		IngressProtocol:         "anthropic",
+		InputPricePer1M:         strPtr("3"),
+		OutputPricePer1M:        strPtr("15"),
+		ReasoningEffort:         &reasoning,
+		UncachedInputTokens:     80,
+		CacheReadInputTokens:    10,
+		CacheWrite5mInputTokens: 10,
+		InputTokens:             100,
+		OutputTokens:            20,
+		ReasoningOutputTokens:   5,
+		LatencyMs:               &latency,
+		FirstTokenMs:            &firstToken,
+		TPS:                     &tps,
+		UserChargeUSD:           "0.15",
 	}}, 1, nil
 }
 
@@ -107,9 +121,10 @@ func (s *fakeRequestService) Summary(_ context.Context, params consolerequests.S
 func (s *fakeRequestService) Filters(_ context.Context, userID int64) (consolerequests.Filters, *consoleservice.Error) {
 	s.filtersID = userID
 	return consolerequests.Filters{
-		Routes:    []consolerequests.FilterOption{{ID: 3, Name: "Claude"}},
-		APIKeys:   []consolerequests.FilterOption{{ID: 9, Name: "prod"}},
-		Endpoints: []string{"/v1/chat/completions"},
+		Routes:      []consolerequests.FilterOption{{ID: 3, Name: "Claude"}},
+		APIKeys:     []consolerequests.FilterOption{{ID: 9, Name: "prod"}},
+		Endpoints:   []string{"/chat/completions"},
+		StreamTypes: []string{"stream"},
 	}, nil
 }
 
@@ -197,7 +212,7 @@ func TestRequestListOmitsInternalFieldsAndScopesToUser(t *testing.T) {
 	handler := newRequestHandler(t, &fakeAuthService{}, service)
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/v1/requests?page=1&page_size=20&route_id=3&endpoint=/v1/chat/completions&sort=-created_at",
+		"/v1/requests?page=1&page_size=20&route_id=3&endpoint=/chat/completions&sort=-created_at",
 		nil,
 	)
 	req.AddCookie(&http.Cookie{Name: "unio_access_token", Value: "access-token"})
@@ -213,7 +228,6 @@ func TestRequestListOmitsInternalFieldsAndScopesToUser(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, leaked := range []string{
-		"api_key_plaintext",
 		"total_cost",
 		"channel_chain",
 		"error_code",
@@ -241,9 +255,31 @@ func TestRequestListOmitsInternalFieldsAndScopesToUser(t *testing.T) {
 	if _, ok := item["status"]; ok {
 		t.Fatalf("status should be omitted: %#v", item)
 	}
-	if item["endpoint"] != "/v1/chat/completions" || item["api_key_name"] != "prod" {
+	if item["endpoint"] != "/chat/completions" || item["api_key_name"] != "prod" {
 		t.Fatalf("item = %#v", item)
 	}
+	if item["api_key_prefix"] != "unio_sk_XhE8wL5D" {
+		t.Fatalf("api_key_prefix = %#v", item["api_key_prefix"])
+	}
+	if item["model_display_name"] != "Claude Sonnet 4.5" {
+		t.Fatalf("model_display_name = %#v", item["model_display_name"])
+	}
+	if item["ingress_protocol"] != "anthropic" {
+		t.Fatalf("ingress_protocol = %#v", item["ingress_protocol"])
+	}
+	if item["input_price_per_1m"] != "3" || item["output_price_per_1m"] != "15" {
+		t.Fatalf("prices = %#v", item)
+	}
+	if item["uncached_input_tokens"] != float64(80) || item["cache_write_5m_input_tokens"] != float64(10) {
+		t.Fatalf("token breakdown = %#v", item)
+	}
+	if item["first_token_ms"] != float64(400) || item["tps"] == nil {
+		t.Fatalf("timing = %#v", item)
+	}
+}
+
+func strPtr(value string) *string {
+	return &value
 }
 
 func TestRequestFiltersUsesAuthenticatedUserID(t *testing.T) {
@@ -257,6 +293,25 @@ func TestRequestFiltersUsesAuthenticatedUserID(t *testing.T) {
 
 	if rec.Code != http.StatusOK || service.filtersID != 42 {
 		t.Fatalf("status=%d user=%d body=%s", rec.Code, service.filtersID, rec.Body.String())
+	}
+	var payload struct {
+		Data struct {
+			APIKeys     []map[string]any `json:"api_keys"`
+			Endpoints   []string         `json:"endpoints"`
+			StreamTypes []string         `json:"stream_types"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Data.APIKeys) != 1 || payload.Data.APIKeys[0]["name"] != "prod" {
+		t.Fatalf("api_keys = %#v", payload.Data.APIKeys)
+	}
+	if len(payload.Data.Endpoints) != 1 || payload.Data.Endpoints[0] != "/chat/completions" {
+		t.Fatalf("endpoints = %#v", payload.Data.Endpoints)
+	}
+	if len(payload.Data.StreamTypes) != 1 || payload.Data.StreamTypes[0] != "stream" {
+		t.Fatalf("stream_types = %#v", payload.Data.StreamTypes)
 	}
 }
 

@@ -80,9 +80,10 @@ func (h *handler) filters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = transport.WriteData(w, http.StatusOK, filtersData{
-		Routes:    emptyOptions(filters.Routes),
-		APIKeys:   emptyOptions(filters.APIKeys),
-		Endpoints: emptyStrings(filters.Endpoints),
+		Routes:      emptyOptions(filters.Routes),
+		APIKeys:     emptyOptions(filters.APIKeys),
+		Endpoints:   emptyStrings(filters.Endpoints),
+		StreamTypes: emptyStrings(filters.StreamTypes),
 	})
 }
 

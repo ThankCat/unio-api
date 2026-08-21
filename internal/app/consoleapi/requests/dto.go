@@ -7,22 +7,42 @@ import (
 )
 
 type itemDTO struct {
-	ID               int64   `json:"id"`
-	RequestID        string  `json:"request_id"`
-	CreatedAt        string  `json:"created_at"`
-	ClientIP         string  `json:"client_ip"`
-	RouteID          *int64  `json:"route_id"`
-	RouteName        string  `json:"route_name"`
-	APIKeyID         int64   `json:"api_key_id"`
-	APIKeyName       string  `json:"api_key_name"`
-	Endpoint         string  `json:"endpoint"`
-	Stream           bool    `json:"stream"`
-	RequestedModelID string  `json:"requested_model_id"`
-	ReasoningEffort  *string `json:"reasoning_effort"`
-	InputTokens      int64   `json:"input_tokens"`
-	OutputTokens     int64   `json:"output_tokens"`
-	LatencyMs        *int64  `json:"latency_ms"`
-	UserChargeUSD    string  `json:"user_charge_usd"`
+	ID                       int64    `json:"id"`
+	RequestID                string   `json:"request_id"`
+	CreatedAt                string   `json:"created_at"`
+	ClientIP                 string   `json:"client_ip"`
+	RouteID                  *int64   `json:"route_id"`
+	RouteName                string   `json:"route_name"`
+	APIKeyID                 int64    `json:"api_key_id"`
+	APIKeyName               string   `json:"api_key_name"`
+	APIKeyPrefix             string   `json:"api_key_prefix"`
+	APIKeyPlaintext          *string  `json:"api_key_plaintext,omitempty"`
+	Endpoint                 string   `json:"endpoint"`
+	Stream                   bool     `json:"stream"`
+	RequestedModelID         string   `json:"requested_model_id"`
+	ModelDisplayName         string   `json:"model_display_name"`
+	IngressProtocol          string   `json:"ingress_protocol"`
+	InputPricePer1M              *string  `json:"input_price_per_1m,omitempty"`
+	OutputPricePer1M             *string  `json:"output_price_per_1m,omitempty"`
+	CacheReadPricePer1M          *string  `json:"cache_read_price_per_1m,omitempty"`
+	CacheWrite5mPricePer1M       *string  `json:"cache_write_5m_price_per_1m,omitempty"`
+	CacheWrite1hPricePer1M       *string  `json:"cache_write_1h_price_per_1m,omitempty"`
+	CacheWrite30mPricePer1M      *string  `json:"cache_write_30m_price_per_1m,omitempty"`
+	ReasoningOutputPricePer1M    *string `json:"reasoning_output_price_per_1m,omitempty"`
+	PriceServiceTier             *string `json:"price_service_tier,omitempty"`
+	ReasoningEffort          *string  `json:"reasoning_effort"`
+	UncachedInputTokens      int64    `json:"uncached_input_tokens"`
+	CacheReadInputTokens     int64    `json:"cache_read_input_tokens"`
+	CacheWrite5mInputTokens  int64    `json:"cache_write_5m_input_tokens"`
+	CacheWrite1hInputTokens  int64    `json:"cache_write_1h_input_tokens"`
+	CacheWrite30mInputTokens int64    `json:"cache_write_30m_input_tokens"`
+	InputTokens              int64    `json:"input_tokens"`
+	OutputTokens             int64    `json:"output_tokens"`
+	ReasoningOutputTokens    int64    `json:"reasoning_output_tokens"`
+	LatencyMs                *int64   `json:"latency_ms"`
+	FirstTokenMs             *int64   `json:"first_token_ms,omitempty"`
+	TPS                      *float64 `json:"tps,omitempty"`
+	UserChargeUSD            string   `json:"user_charge_usd"`
 }
 
 type listData struct {
@@ -42,9 +62,10 @@ type summaryData struct {
 }
 
 type filtersData struct {
-	Routes    []consolerequests.FilterOption `json:"routes"`
-	APIKeys   []consolerequests.FilterOption `json:"api_keys"`
-	Endpoints []string                       `json:"endpoints"`
+	Routes      []consolerequests.FilterOption `json:"routes"`
+	APIKeys     []consolerequests.FilterOption `json:"api_keys"`
+	Endpoints   []string                       `json:"endpoints"`
+	StreamTypes []string                       `json:"stream_types"`
 }
 
 func toItemDTO(item consolerequests.Item) itemDTO {
@@ -53,22 +74,42 @@ func toItemDTO(item consolerequests.Item) itemDTO {
 		createdAt = item.CreatedAt.UTC().Format(time.RFC3339Nano)
 	}
 	return itemDTO{
-		ID:               item.ID,
-		RequestID:        item.RequestID,
-		CreatedAt:        createdAt,
-		ClientIP:         item.ClientIP,
-		RouteID:          item.RouteID,
-		RouteName:        item.RouteName,
-		APIKeyID:         item.APIKeyID,
-		APIKeyName:       item.APIKeyName,
-		Endpoint:         item.Endpoint,
-		Stream:           item.Stream,
-		RequestedModelID: item.RequestedModelID,
-		ReasoningEffort:  item.ReasoningEffort,
-		InputTokens:      item.InputTokens,
-		OutputTokens:     item.OutputTokens,
-		LatencyMs:        item.LatencyMs,
-		UserChargeUSD:    item.UserChargeUSD,
+		ID:                       item.ID,
+		RequestID:                item.RequestID,
+		CreatedAt:                createdAt,
+		ClientIP:                 item.ClientIP,
+		RouteID:                  item.RouteID,
+		RouteName:                item.RouteName,
+		APIKeyID:                 item.APIKeyID,
+		APIKeyName:               item.APIKeyName,
+		APIKeyPrefix:             item.APIKeyPrefix,
+		APIKeyPlaintext:          item.APIKeyPlaintext,
+		Endpoint:                 item.Endpoint,
+		Stream:                   item.Stream,
+		RequestedModelID:         item.RequestedModelID,
+		ModelDisplayName:         item.ModelDisplayName,
+		IngressProtocol:          item.IngressProtocol,
+		InputPricePer1M:           item.InputPricePer1M,
+		OutputPricePer1M:          item.OutputPricePer1M,
+		CacheReadPricePer1M:       item.CacheReadPricePer1M,
+		CacheWrite5mPricePer1M:    item.CacheWrite5mPricePer1M,
+		CacheWrite1hPricePer1M:    item.CacheWrite1hPricePer1M,
+		CacheWrite30mPricePer1M:   item.CacheWrite30mPricePer1M,
+		ReasoningOutputPricePer1M: item.ReasoningOutputPricePer1M,
+		PriceServiceTier:          item.PriceServiceTier,
+		ReasoningEffort:          item.ReasoningEffort,
+		UncachedInputTokens:      item.UncachedInputTokens,
+		CacheReadInputTokens:     item.CacheReadInputTokens,
+		CacheWrite5mInputTokens:  item.CacheWrite5mInputTokens,
+		CacheWrite1hInputTokens:  item.CacheWrite1hInputTokens,
+		CacheWrite30mInputTokens: item.CacheWrite30mInputTokens,
+		InputTokens:              item.InputTokens,
+		OutputTokens:             item.OutputTokens,
+		ReasoningOutputTokens:    item.ReasoningOutputTokens,
+		LatencyMs:                item.LatencyMs,
+		FirstTokenMs:             item.FirstTokenMs,
+		TPS:                      item.TPS,
+		UserChargeUSD:            item.UserChargeUSD,
 	}
 }
 

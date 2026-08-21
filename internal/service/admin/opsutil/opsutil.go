@@ -116,6 +116,20 @@ func NumericStringPtr(n pgtype.Numeric) *string {
 	return &s
 }
 
+// DivideDecimal 用 big.Rat 精确相除两个十进制字符串；分母非法或 ≤ 0 时返回 nil。
+func DivideDecimal(a, b string) *string {
+	ra, ok := new(big.Rat).SetString(a)
+	if !ok {
+		return nil
+	}
+	rb, ok := new(big.Rat).SetString(b)
+	if !ok || rb.Sign() <= 0 {
+		return nil
+	}
+	s := trimDecimalString(new(big.Rat).Quo(ra, rb).FloatString(10))
+	return &s
+}
+
 // SubtractDecimal 用 big.Rat 精确相减两个十进制字符串，保留 10 位小数后去尾零。
 func SubtractDecimal(a, b string) string {
 	ra, ok := new(big.Rat).SetString(a)

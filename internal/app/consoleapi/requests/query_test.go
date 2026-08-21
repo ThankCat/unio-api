@@ -17,7 +17,7 @@ func TestParseListQueryDefaultsAndFilters(t *testing.T) {
 	values.Add("route_id", "3")
 	values.Add("route_id", "5")
 	values.Set("api_key_id", "9")
-	values.Set("endpoint", "/v1/chat/completions")
+	values.Set("endpoint", "/chat/completions")
 	values.Set("stream", "stream")
 	values.Set("sort", "-model")
 	values.Set("from", from.Format(time.RFC3339))
@@ -36,7 +36,7 @@ func TestParseListQueryDefaultsAndFilters(t *testing.T) {
 	if len(parsed.params.RouteIDs) != 2 || parsed.params.RouteIDs[0] != 3 || parsed.params.RouteIDs[1] != 5 {
 		t.Fatalf("route ids = %#v", parsed.params.RouteIDs)
 	}
-	if len(parsed.params.Endpoints) != 1 || parsed.params.Endpoints[0] != "/v1/chat/completions" {
+	if len(parsed.params.Endpoints) != 1 || parsed.params.Endpoints[0] != "/chat/completions" {
 		t.Fatalf("endpoints = %#v", parsed.params.Endpoints)
 	}
 	if parsed.params.From == nil || !parsed.params.From.Equal(from) {
